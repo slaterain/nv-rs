@@ -2308,9 +2308,11 @@ pub fn fn_00452530(e: &mut Engine) {
 
 // Translated from 00452540 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Whether textures may be purged: true unless the byte at `011c70e9` is set
-/// and `005d4a40(this)` says no.
-pub fn fn_00452540(e: &mut Engine, this: Ptr<TES>) -> u8 {
-    if e.global::<u8>(PURGE_ALLOWED) != 0 && !e.call(0x005d_4a40, &args![this]).bool() {
+/// and `005d4a40` says no. `this` is only the ECX the caller left; the code
+/// never reads it, and `005d4a40` takes no word (`MOV AL,1; RET`).
+pub fn fn_00452540(e: &mut Engine, _this: Ptr<TES>) -> u8 {
+    // 0045254f: CALL 005d4a40 with nothing pushed.
+    if e.global::<u8>(PURGE_ALLOWED) != 0 && !e.call(0x005d_4a40, &args![]).bool() {
         return 0;
     }
     1
@@ -5191,7 +5193,9 @@ pub(crate) fn adjust_rounded_position(rounded: i32, value: f32) -> i32 {
         remainder = (remainder.wrapping_sub(1) | 0xffff_f000).wrapping_add(1);
     }
     if remainder == 0 && (value as f64) < rounded as f64 {
-        rounded - 1
+        // 0045733a/0045736c: `SUB ECX,1` wraps (the integer indefinite 0x80000000 of an
+        // out-of-range value becomes 0x7fffffff).
+        rounded.wrapping_sub(1)
     } else {
         rounded
     }
@@ -8686,6 +8690,16 @@ mod tests {
         }
     }
 
+    /// 0045254f: `005d4a40` is called with no word pushed.
+    #[test]
+    fn purge_check_passes_no_word() {
+        let (mut e, tes) = cleanup_engine(1, 1);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2540, &args![tes]);
+        });
+        assert_eq!(calls_to(&log, 0x005d_4a40), vec![Vec::<u32>::new()]);
+    }
+
     #[test]
     fn grid_update_stops_without_a_data_handler() {
         let (mut e, tes, _, _) = update_engine(5);
@@ -11112,6 +11126,23 @@ mod tests {
         // Rounds up to the border from below: still cell 7, outside the grid.
         let below = position(&mut e, 8.0 * 4096.0 - 0.25, 18.0 * 4096.0 + 1.0);
         assert!(!e.call(0x0045_72e0, &args![tes, below, out]).bool());
+    }
+
+    #[test]
+    fn a_position_below_the_integer_range_wraps_on_the_border_fix() {
+        // 004572e0: `FISTP` gives 0x80000000 for -inf, a multiple of 4096 the exact value is
+        // below, so `SUB ECX,1` (0045733a) wraps it to 0x7fffffff: outside the grid, no land.
+        let (mut e, tes, _) = land_engine(1.0);
+        let out = e.mem.alloc(4);
+        let pos = position(&mut e, f32::NEG_INFINITY, 18.0 * 4096.0 + 1.0);
+        assert!(!e.call(0x0045_72e0, &args![tes, pos, out]).bool());
+        assert_eq!(e.mem.f32(out), -2048.0);
+        assert_eq!(
+            adjust_rounded_position(i32::MIN, f32::NEG_INFINITY),
+            i32::MAX
+        );
+        // NaN compares unordered (`TEST AH,5` / `JP` taken): no step down.
+        assert_eq!(adjust_rounded_position(i32::MIN, f32::NAN), i32::MIN);
     }
 
     #[test]

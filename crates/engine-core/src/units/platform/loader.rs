@@ -127,6 +127,19 @@ pub fn load_library_a(e: &mut Engine, name: Ptr) -> u32 {
     panic!("LoadLibraryA({text:?}) is not provided");
 }
 
+// Platform: replaces KERNEL32.DLL FreeLibrary (import)
+/// `FreeLibrary(module)` for a module [`load_library_a`] handed out (`D3D9.DLL`, `nvapi.dll`):
+/// nonzero, as Windows answers when the module's load count goes down. Nothing is unloaded: those
+/// modules are the platform's own layers, whose objects the game releases itself. The renderer
+/// frees its `D3D9.DLL` this way when the game exits (`00e6ec6d`). Another module is not
+/// provided.
+pub fn free_library(_e: &mut Engine, module: u32) -> u32 {
+    if module == super::d3d9::D3D9_MODULE || module == super::nvapi::NVAPI_MODULE {
+        return 1;
+    }
+    panic!("FreeLibrary({module:#x}) is not provided");
+}
+
 // Platform: replaces KERNEL32.DLL GetProcAddress (import)
 /// `GetProcAddress(module, name)`: a KERNEL32 procedure of [`PROCS`] by name, its platform code
 /// address, a `D3D9.DLL` one of [`super::d3d9::PROCS`], or `nvapi.dll`'s `nvapi_QueryInterface`
@@ -236,6 +249,17 @@ mod tests {
         let mut e = Engine::new();
         e.mem.map(0x1000, 0x1000);
         e
+    }
+
+    /// The renderer frees the `D3D9.DLL` it loaded when the game exits (00e6ec6d): the module
+    /// handle the loader gave it is freed with a nonzero answer.
+    #[test]
+    fn free_library_answers_for_the_modules_the_loader_handed_out() {
+        let mut e = engine();
+        e.mem.write(0x1000, b"d3d9.dll\0");
+        let module = load_library_a(&mut e, Ptr::new(0x1000));
+        assert_eq!(free_library(&mut e, module), 1);
+        assert_eq!(free_library(&mut e, super::super::nvapi::NVAPI_MODULE), 1);
     }
 
     fn put_wide(e: &mut Engine, at: u32, text: &str) {

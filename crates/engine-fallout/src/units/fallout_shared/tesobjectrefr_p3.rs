@@ -1405,7 +1405,8 @@ pub fn tes_object_refr_init_havok_for_placeable_water(e: &mut Engine, this: Ptr<
         e.call(LIST_ITEM_SLOT, &args![extents_vector]);
         e.call(0x004a_3e00, &args![extents_vector, extents]);
         let raw = e.call(0x0056_d280, &args![0x30u32]).u32();
-        let radius = e.global::<f32>(0x011b_153c);
+        // 0056ca11: FLD dword / FSTP dword, which quiets a signalling NaN.
+        let radius = x87_quiet(e.global::<f32>(0x011b_153c));
         let box_shape = if raw != 0 {
             e.call(0x00c9_ddb0, &args![raw, extents_vector, radius])
                 .u32()
@@ -1446,8 +1447,10 @@ pub fn tes_object_refr_init_havok_for_placeable_water(e: &mut Engine, this: Ptr<
         e.mem.set_f32(position + 4, y as f32);
         let cell = e.call(GET_PARENT_CELL, &args![me]).u32();
         let water_height = e.call(0x0054_71e0, &args![cell]).f64();
-        let z = water_height - e.global::<f64>(0x0103_01a8);
-        e.mem.set_f32(position + 8, z as f32);
+        // 0056cba2: FSUB qword at the control word's precision and rounding,
+        // then FSTP dword.
+        let z = x87_sub(water_height, e.global::<f64>(0x0103_01a8));
+        e.mem.set_u32(position + 8, x87_store32(z));
         e.call(0x004a_3e00, &args![position_vector, position]);
         e.call(0x0056_d300, &args![cinfo, position_vector]);
         e.call(0x0056_d320, &args![cinfo, rotation]);
@@ -4614,6 +4617,38 @@ mod tests {
         // the holder
         assert_eq!(find(0x0056_d2c0), vec![s.holder, body]);
         assert_eq!(calls_to(&log, 0x00fe_00e4), vec![vec![body, 1]]);
+    }
+
+    #[test]
+    fn init_havok_box_water_follows_the_fpu_for_its_height_and_radius() {
+        let mut s = havok_scene(true);
+        stub(&mut s.e, &[0x00fe_00e4]);
+        s.e.register(0x0056_d380, |e, a| {
+            let vtable = e.mem.alloc(0x200);
+            e.mem.set_u32(vtable + 0xe4, 0x00fe_00e4);
+            e.mem.set_u32(a[0], vtable);
+            a[0].into_ret()
+        });
+        s.e.register(0x0054_4c30, |_, _| 0u32.into_ret());
+        s.e.register(0x0054_4c60, |_, _| 0u32.into_ret());
+        // 2^27 - 500 needs a 25th bit: 24-bit precision rounding down gives
+        // 134217224, not the nearest float 134217232.
+        returns_float(&mut s.e, 0x0054_71e0, 134_217_728.0);
+        // a signalling NaN radius, quieted by 0056ca11's FLD / FSTP dword
+        s.e.set_global(0x011b_153c, f32::from_bits(0x7f80_0001));
+        let heights = Rc::new(RefCell::new(Vec::new()));
+        let probe = heights.clone();
+        s.e.register_double(0x004a_3e00, move |e, a| {
+            probe.borrow_mut().push(e.mem.u32(a[1] + 8));
+            Ret::default()
+        });
+        s.e.call_log = Some(vec![]);
+        crate::x87::set_control_word(0x047f);
+        s.e.call(0x0056_c8f0, &args![s.this]);
+        crate::x87::set_control_word(crate::x87::DEFAULT_CONTROL_WORD);
+        let log = s.e.call_log.take().unwrap();
+        assert_eq!(heights.borrow()[1], 134_217_224.0f32.to_bits());
+        assert_eq!(calls_to(&log, 0x00c9_ddb0)[0][2], 0x7fc0_0001);
     }
 
     #[test]

@@ -100,12 +100,17 @@ fn same_as_compare_object(e: &mut Engine) -> bool {
 
 /// Calls `00866da0` on the owner's element, then when it equals the result
 /// of `0040fc90` clears it with `00866dc0` and `00866de0`: the body of one
-/// of the two blocks of levels 7 and 8.
-fn reset_array_element(e: &mut Engine, owner: u32, index: u32) {
+/// of the two blocks of levels 7 and 8. Each of the three calls loads the
+/// owner from `01202d98` again (`00866c49`, `00866c61`, `00866c6e` for
+/// element 0; `00866c7b`, `00866c93`, `00866ca0` for element 1).
+fn reset_array_element(e: &mut Engine, index: u32) {
+    let owner = e.global::<u32>(ARRAY_OWNER);
     let current = fn_00866da0(e, Ptr::new(owner), index);
     let expected = e.call(0x0040_fc90, &[]).u32();
     if current == expected {
+        let owner = e.global::<u32>(ARRAY_OWNER);
         fn_00866dc0(e, Ptr::new(owner), index);
+        let owner = e.global::<u32>(ARRAY_OWNER);
         fn_00866de0(e, Ptr::new(owner), index);
     }
 }
@@ -117,9 +122,8 @@ fn reset_array_element(e: &mut Engine, owner: u32, index: u32) {
 fn unsynchronized_round(e: &mut Engine, this: Ptr, level: u32, flag: Ptr) -> u32 {
     e.mem.set_u32(this.addr().wrapping_add(MANAGER_STATE), 6);
     if e.global::<u32>(ROUNDS) < MAX_ROUNDS {
-        let owner = e.global::<u32>(ARRAY_OWNER);
-        reset_array_element(e, owner, 0);
-        reset_array_element(e, owner, 1);
+        reset_array_element(e, 0);
+        reset_array_element(e, 1);
         e.call(0x0040_fca0, &args![1u32]);
         let rounds = e.global::<u32>(ROUNDS);
         e.set_global(ROUNDS, rounds.wrapping_add(1));
@@ -198,12 +202,16 @@ pub fn fn_00866a90(e: &mut Engine, this: Ptr, _unused_0: u32, mut level: u32, fl
         5 => {
             if same {
                 e.call(0x0086_9190, &args![0u32]);
+                // 00866b67, 00866b88, 00866b95: each call loads the object
+                // from `011dea10` again.
                 let object = e.global::<u32>(LEVEL_OBJECT);
                 if e.call(0x0045_3a80, &args![object]).u8() != 0 {
                     level = level.wrapping_sub(1);
                 } else {
+                    let object = e.global::<u32>(LEVEL_OBJECT);
                     e.call(0x0045_39a0, &args![object, 1u32, 0u32]);
                 }
+                let object = e.global::<u32>(LEVEL_OBJECT);
                 e.call(0x0045_2490, &args![object, 0u32]);
                 e.call(0x0086_9190, &args![1u32]);
                 e.call(0x0086_8d70, &args![1u32]);
@@ -508,6 +516,75 @@ mod tests {
         let (result, _) = run_level(&mut e, manager, flag, 8);
         assert_eq!(result, 9);
         assert_eq!(e.global::<u32>(ROUNDS), MAX_ROUNDS);
+    }
+
+    #[test]
+    fn levels_load_the_global_objects_again_for_every_call() {
+        // Level 5 (00866b67, 00866b88, 00866b95): `011dea10` is read before
+        // each of the three calls on it.
+        let (mut e, manager, flag) = level_engine();
+        e.register(0x0045_3a80, |e, _| {
+            e.set_global(LEVEL_OBJECT, 0x0aaa_0003u32);
+            word_ret(0)
+        });
+        e.register(0x0045_39a0, |e, _| {
+            e.set_global(LEVEL_OBJECT, 0x0aaa_0004u32);
+            word_ret(0)
+        });
+        let (_, log) = run_level(&mut e, manager, flag, 5);
+        let on_object: Vec<(u32, Vec<u32>)> = log
+            .into_iter()
+            .filter(|c| [0x0045_3a80, 0x0045_39a0, 0x0045_2490].contains(&c.0))
+            .collect();
+        assert_eq!(
+            on_object,
+            vec![
+                (0x0045_3a80, vec![0x0aaa_0002]),
+                (0x0045_39a0, vec![0x0aaa_0003, 1, 0]),
+                (0x0045_2490, vec![0x0aaa_0004, 0]),
+            ]
+        );
+        // Levels 7/8 (00866c49 ... 00866ca0): `01202d98` is read before each
+        // of the six element calls.
+        let (mut e, manager, flag) = level_engine();
+        e.register(0x0040_fc90, |_, _| word_ret(0));
+        e.register(0x0044_edb0, |_, _| word_ret(9));
+        for (owner, array, first) in [
+            (0x0bcd_0000u32, 0x0bce_0000u32, 0xa0u32),
+            (0x0bdd_0000, 0x0bde_0000, 0xb0),
+        ] {
+            e.map(owner, 0x100);
+            e.mem.set_u32(owner + 0x50, array);
+            e.map(array, 8);
+            e.mem.set_u32(array, first);
+            e.mem.set_u32(array + 4, first + 1);
+        }
+        e.set_global(ARRAY_OWNER, 0x0bcd_0000u32);
+        e.register(0x0044_ddc0, |e, _| {
+            e.set_global(ARRAY_OWNER, 0x0bdd_0000u32);
+            word_ret(0)
+        });
+        e.register(0x0044_2530, |e, _| {
+            e.set_global(ARRAY_OWNER, 0x0bcd_0000u32);
+            word_ret(0)
+        });
+        let (result, log) = run_level(&mut e, manager, flag, 8);
+        assert_eq!(result, 8);
+        let on_elements: Vec<(u32, Vec<u32>)> = log
+            .into_iter()
+            .filter(|c| [0x0044_ddc0, 0x0044_2530, 0x0044_24c0].contains(&c.0))
+            .collect();
+        assert_eq!(
+            on_elements,
+            vec![
+                (0x0044_ddc0, vec![0xa0]),
+                (0x0044_2530, vec![0xb0]),
+                (0x0044_24c0, vec![0xa0]),
+                (0x0044_ddc0, vec![0xa1]),
+                (0x0044_2530, vec![0xb1]),
+                (0x0044_24c0, vec![0xa1]),
+            ]
+        );
     }
 
     #[test]

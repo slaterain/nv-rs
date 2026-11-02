@@ -15,7 +15,9 @@
 //! 3D angles and distances), `DSMIX_DENSE` (every 7th volume), `DSMIX_3D` (a 3D position grid),
 //! `DSMIX_MULTI` (several voices at once: the order of the sum), `DSMIX_EXACT` (the exact 3D stage
 //! and distortion: turned listeners, the game's distances, the effect's formats and edges),
-//! `DSMIX_SRC` (the sample-rate converter: see `src_cases`).
+//! `DSMIX_SRC` (the sample-rate converter: see `src_cases`), `DSMIX_SETPOS` with `DSMIX_HOOK`
+//! (`SetCurrentPosition` while a buffer plays: see `setpos`; `DSMIX_SETPOS_ORDER`: the sum order
+//! after it, see `setpos_order`).
 use std::ffi::c_void;
 use std::io::Write;
 
@@ -31,6 +33,14 @@ extern "system" {
 #[link(name = "kernel32")]
 extern "system" {
     fn Sleep(ms: u32);
+    fn QueryPerformanceCounter(out: *mut i64) -> i32;
+    fn QueryPerformanceFrequency(out: *mut i64) -> i32;
+}
+
+fn qpc() -> i64 {
+    let mut c = 0i64;
+    unsafe { QueryPerformanceCounter(&mut c) };
+    c
 }
 #[link(name = "user32")]
 extern "system" {
@@ -461,6 +471,16 @@ fn main() {
             slot::<Fn0>(client, 0x2c)(client);
             return;
         }
+        if std::env::var_os("DSMIX_SETPOS_ORDER").is_some() {
+            setpos_order(ds, cap, frame_bytes, &dir, &mut tsv);
+            slot::<Fn0>(client, 0x2c)(client);
+            return;
+        }
+        if std::env::var_os("DSMIX_SETPOS").is_some() {
+            setpos(ds, cap, frame_bytes, &dir, &mut tsv);
+            slot::<Fn0>(client, 0x2c)(client);
+            return;
+        }
         for c in cases() {
             let dense = c.name.starts_with("sweep_dense");
             let frames = c.frames.unwrap_or(if dense { 2400 } else { (c.rate / 2) as usize }); // half a second
@@ -586,6 +606,270 @@ fn main() {
             Sleep(100);
         }
         slot::<Fn0>(client, 0x2c)(client);
+    }
+}
+
+/// `DSMIX_SETPOS` (with `DSMIX_HOOK`): `SetCurrentPosition` while a buffer plays, as the game
+/// calls it (`00aed080`: a byte, then `Play(DSBPLAY_LOOPING)`). Each case: a one-second buffer of
+/// the test signal, `Play` (looping or not), the mix drained every 10 ms; at about 100 ms the
+/// cursors, the call, the cursors again, optionally `Play(0, 0, flags)`; then about 400 ms more.
+/// Writes `<case>.f32` (DirectSound's mix as it handed it to Windows), `<case>.times` (each packet
+/// released: microseconds from `Play` and frames) and a line in cases.tsv: the case, its
+/// settings, the call's clock (us from `Play`, before and after), its answer, the cursors
+/// before and after, and the frames captured.
+unsafe fn setpos(
+    ds: *mut Obj,
+    cap: *mut Obj,
+    frame_bytes: usize,
+    dir: &std::path::Path,
+    tsv: &mut std::fs::File,
+) {
+    let mut freq = 0i64;
+    QueryPerformanceFrequency(&mut freq);
+    let us = |c: i64, origin: i64| (c - origin) * 1_000_000 / freq;
+    // (name, channels, rate, bits, looping, frame, extra byte, Play flags after the call)
+    type SetposCase = (&'static str, u16, u32, u16, bool, u32, u32, Option<u32>);
+    let cases: [SetposCase; 14] = [
+        ("s48fx_loop_half", 1, 48000, 16, true, 24000, 0, None),
+        (
+            "s22fx_loop_half_play",
+            1,
+            22050,
+            16,
+            true,
+            11025,
+            0,
+            Some(1),
+        ),
+        ("s48_loop_half", 1, 48000, 16, true, 24000, 0, None),
+        ("s48_loop_half_play", 1, 48000, 16, true, 24000, 0, Some(1)),
+        ("s48_loop_odd_play", 1, 48000, 16, true, 24000, 1, Some(1)),
+        ("s48_loop_near_end", 1, 48000, 16, true, 47999, 0, None),
+        ("s48_once_late", 1, 48000, 16, false, 36000, 0, None),
+        ("s48_once_back", 1, 48000, 16, false, 0, 0, None),
+        ("s22_loop_half", 1, 22050, 16, true, 11025, 0, None),
+        ("s22_loop_half_play", 1, 22050, 16, true, 11025, 0, Some(1)),
+        ("s22_once_late", 1, 22050, 16, false, 16537, 0, None),
+        ("s22_loop_near_end", 1, 22050, 16, true, 22049, 0, None),
+        ("s44s_loop_half", 2, 44100, 16, true, 22050, 0, None),
+        ("s44s_loop_half_play", 2, 44100, 16, true, 22050, 0, Some(1)),
+    ];
+    let read = |b: *mut Obj| {
+        let (mut p, mut w, mut s) = (0u32, 0u32, 0u32);
+        slot::<Fn2>(b, 0x10)(b, &mut p as *mut _ as usize, &mut w as *mut _ as usize);
+        slot::<Fn1>(b, 0x24)(b, &mut s as *mut _ as usize);
+        format!("{p:x}:{w:x}:{s:x}")
+    };
+    for (name, channels, rate, bits, looping, frame, extra, then) in cases {
+        let frames = rate as usize;
+        let align = channels * bits / 8;
+        let mut wf = [0u8; 18];
+        wf[0..2].copy_from_slice(&1u16.to_le_bytes());
+        wf[2..4].copy_from_slice(&channels.to_le_bytes());
+        wf[4..8].copy_from_slice(&rate.to_le_bytes());
+        wf[8..12].copy_from_slice(&(rate * u32::from(align)).to_le_bytes());
+        wf[12..14].copy_from_slice(&align.to_le_bytes());
+        wf[14..16].copy_from_slice(&bits.to_le_bytes());
+        let bytes = frames as u32 * u32::from(align);
+        // The game's 2D flags with `DSBCAPS_GLOBALFOCUS`: the capture's window never has the
+        // focus, and without it DirectSound mutes the buffer.
+        let flags = 0x82e0u32;
+        let d: [u32; 9] = [0x24, flags, bytes, 0, wf.as_ptr() as u32, 0, 0, 0, 0];
+        let mut b: *mut Obj = std::ptr::null_mut();
+        let r = slot::<Fn3>(ds, 0xc)(ds, d.as_ptr() as usize, &mut b as *mut _ as usize, 0);
+        if b.is_null() {
+            writeln!(tsv, "{name}\tcreate {r:x}").unwrap();
+            continue;
+        }
+        let data = signal(frames, channels as usize, bits);
+        let (mut p, mut n) = (std::ptr::null_mut::<u8>(), 0u32);
+        slot::<Fn7>(b, 0x2c)(
+            b,
+            0,
+            bytes as usize,
+            &mut p as *mut _ as usize,
+            &mut n as *mut _ as usize,
+            0,
+            0,
+            0,
+        );
+        std::ptr::copy_nonoverlapping(data.as_ptr(), p, n as usize);
+        slot::<Fn4>(b, 0x4c)(b, p as usize, n as usize, 0, 0);
+        // The distortion as the game sets it (its parameters as in `exact_cases`).
+        let mut fx_results = Vec::new();
+        if name.contains("fx") {
+            let b8 = qi(b, &guid("6825a449-7524-4d82-920f-50e36ab3ab1e"));
+            let mut ed = [0u32; 8];
+            ed[0] = 0x20;
+            let g = guid("ef114c90-cd1d-484e-96e5-09cfaf912a21");
+            std::ptr::copy_nonoverlapping(g.as_ptr(), ed.as_mut_ptr().add(2) as *mut u8, 16);
+            let mut code = 0u32;
+            fx_results.push(slot::<Fn3>(b8, 0x54)(
+                b8,
+                1,
+                ed.as_ptr() as usize,
+                &mut code as *mut _ as usize,
+            ));
+            let iid = guid("8ecf4326-455f-4d8b-bda9-8d5d3e9e3e0b");
+            let mut fx: *mut Obj = std::ptr::null_mut();
+            fx_results.push(slot::<Fn4>(b8, 0x5c)(
+                b8,
+                g.as_ptr() as usize,
+                0,
+                iid.as_ptr() as usize,
+                &mut fx as *mut _ as usize,
+            ));
+            if !fx.is_null() {
+                let game = [-18.2f32, 0.0, 5000.0, 1135.0, 5000.0];
+                fx_results.push(slot::<Fn1>(fx, 0xc)(fx, game.as_ptr() as usize));
+                slot::<Fn0>(fx, 8)(fx);
+            }
+            slot::<Fn0>(b8, 8)(b8);
+        }
+        let mut discard = Vec::new();
+        drain(cap, frame_bytes, &mut discard);
+        let mut discard_times = Vec::new();
+        hook::take_times(&mut discard_times);
+        let at = frame * u32::from(align) + extra;
+        let mut out = Vec::new();
+        let origin = qpc();
+        let play = slot::<Fn3>(b, 0x30)(b, 0, 0, looping as usize);
+        let mut call = String::new();
+        let mut done = false;
+        loop {
+            Sleep(10);
+            drain(cap, frame_bytes, &mut out);
+            let t = us(qpc(), origin);
+            if !done && t >= 95_000 {
+                done = true;
+                let before = read(b);
+                let t0 = us(qpc(), origin);
+                let r = slot::<Fn1>(b, 0x34)(b, at as usize);
+                let t1 = us(qpc(), origin);
+                let after = read(b);
+                let replay = match then {
+                    Some(f) => format!(
+                        "{:x} {}",
+                        slot::<Fn3>(b, 0x30)(b, 0, 0, f as usize),
+                        read(b)
+                    ),
+                    None => "- -".to_string(),
+                };
+                call = format!("call {t0} {t1} at {at:x} answer {r:x} before {before} after {after} play {replay}");
+            }
+            if t >= 500_000 {
+                break;
+            }
+        }
+        slot::<Fn0>(b, 0x48)(b);
+        drain(cap, frame_bytes, &mut out);
+        let mut times = Vec::new();
+        hook::take_times(&mut times);
+        let times: Vec<String> = times
+            .iter()
+            .map(|&(c, f)| format!("{} {f}", us(c, origin)))
+            .collect();
+        std::fs::write(dir.join(format!("{name}.f32")), &out).unwrap();
+        std::fs::write(dir.join(format!("{name}.times")), times.join("\n")).unwrap();
+        writeln!(
+            tsv,
+            "{name}\t{channels} {rate} {bits} {flags:x} looping {looping} frame {frame} extra {extra} then {then:?} fx {fx_results:x?}\tplay {play:x} {call}\tframes {} of 2 channels",
+            out.len() / frame_bytes
+        )
+        .unwrap();
+        slot::<Fn0>(b, 8)(b);
+        Sleep(100);
+    }
+}
+
+/// `DSMIX_SETPOS_ORDER` (with `DSMIX_HOOK`): where a buffer moved by `SetCurrentPosition` while it
+/// plays is added in the sum. Three looping one-second 48 kHz mono 16-bit buffers of the test
+/// signal (seeds 1, 2, 3) at their own volume and pan, played one right after the other (A, B,
+/// C); at about 100 ms one of them is moved to its frame 24000; 400 ms more. Writes
+/// `<case>.f32` and a line in cases.tsv: the case, the voices' volumes and pans, which one moved,
+/// the call's answer and clock.
+unsafe fn setpos_order(
+    ds: *mut Obj,
+    cap: *mut Obj,
+    frame_bytes: usize,
+    dir: &std::path::Path,
+    tsv: &mut std::fs::File,
+) {
+    let mut freq = 0i64;
+    QueryPerformanceFrequency(&mut freq);
+    let us = |c: i64, origin: i64| (c - origin) * 1_000_000 / freq;
+    let voices: [(i32, i32); 3] = [(-100, 0), (-600, -1000), (-2000, 3000)];
+    for (name, moved) in [
+        ("order_move_b", 1usize),
+        ("order_move_a", 0),
+        ("order_move_c", 2),
+        ("order_move_b2", 1),
+    ] {
+        let frames = 48000usize;
+        let mut wf = [0u8; 18];
+        wf[0..2].copy_from_slice(&1u16.to_le_bytes());
+        wf[2..4].copy_from_slice(&1u16.to_le_bytes());
+        wf[4..8].copy_from_slice(&48000u32.to_le_bytes());
+        wf[8..12].copy_from_slice(&96000u32.to_le_bytes());
+        wf[12..14].copy_from_slice(&2u16.to_le_bytes());
+        wf[14..16].copy_from_slice(&16u16.to_le_bytes());
+        let bytes = frames as u32 * 2;
+        let d: [u32; 9] = [0x24, 0x82e0, bytes, 0, wf.as_ptr() as u32, 0, 0, 0, 0];
+        let mut bs = Vec::new();
+        for (k, &(volume, pan)) in voices.iter().enumerate() {
+            let mut b: *mut Obj = std::ptr::null_mut();
+            slot::<Fn3>(ds, 0xc)(ds, d.as_ptr() as usize, &mut b as *mut _ as usize, 0);
+            let data = signal_seeded(frames, 1, 16, k as u32 + 1);
+            let (mut p, mut n) = (std::ptr::null_mut::<u8>(), 0u32);
+            slot::<Fn7>(b, 0x2c)(
+                b,
+                0,
+                bytes as usize,
+                &mut p as *mut _ as usize,
+                &mut n as *mut _ as usize,
+                0,
+                0,
+                0,
+            );
+            std::ptr::copy_nonoverlapping(data.as_ptr(), p, n as usize);
+            slot::<Fn4>(b, 0x4c)(b, p as usize, n as usize, 0, 0);
+            slot::<Fn1>(b, 0x3c)(b, volume as usize);
+            slot::<Fn1>(b, 0x40)(b, pan as usize);
+            bs.push(b);
+        }
+        let mut discard = Vec::new();
+        drain(cap, frame_bytes, &mut discard);
+        let mut out = Vec::new();
+        let origin = qpc();
+        for &b in &bs {
+            slot::<Fn3>(b, 0x30)(b, 0, 0, 1);
+        }
+        let started = us(qpc(), origin);
+        let mut call = String::new();
+        loop {
+            Sleep(10);
+            drain(cap, frame_bytes, &mut out);
+            let t = us(qpc(), origin);
+            if call.is_empty() && t >= 95_000 {
+                let b = bs[moved];
+                let t0 = us(qpc(), origin);
+                let r = slot::<Fn1>(b, 0x34)(b, 2 * 24000);
+                call = format!("call {t0} answer {r:x}");
+            }
+            if t >= 500_000 {
+                break;
+            }
+        }
+        for &b in &bs {
+            slot::<Fn0>(b, 0x48)(b);
+        }
+        drain(cap, frame_bytes, &mut out);
+        std::fs::write(dir.join(format!("{name}.f32")), &out).unwrap();
+        writeln!(tsv, "{name}	voices {voices:?} moved {moved}	played by {started} {call}	frames {} of 2 channels", out.len() / frame_bytes).unwrap();
+        for b in bs {
+            slot::<Fn0>(b, 8)(b);
+        }
+        Sleep(100);
     }
 }
 
@@ -770,6 +1054,8 @@ mod hook {
     use std::sync::Mutex;
     pub static ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     static TAKEN: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+    /// Each released packet: the clock (`QueryPerformanceCounter`) and its frames.
+    static TIMES: Mutex<Vec<(i64, u32)>> = Mutex::new(Vec::new());
     static LAST: AtomicUsize = AtomicUsize::new(0);
     static FRAME: AtomicUsize = AtomicUsize::new(8);
     static GET: AtomicUsize = AtomicUsize::new(0);
@@ -791,6 +1077,7 @@ mod hook {
     unsafe extern "system" fn release(this: *mut Obj, frames: u32, flags: u32) -> u32 {
         let at = LAST.load(Ordering::SeqCst);
         if at != 0 {
+            TIMES.lock().unwrap().push((super::qpc(), frames));
             let n = frames as usize * FRAME.load(Ordering::SeqCst);
             let mut t = TAKEN.lock().unwrap();
             if flags & 2 != 0 {
@@ -827,5 +1114,9 @@ mod hook {
     /// What DirectSound released since the last call.
     pub fn take(out: &mut Vec<u8>) {
         out.append(&mut TAKEN.lock().unwrap());
+    }
+    /// The packets' clocks and frames since the last call.
+    pub fn take_times(out: &mut Vec<(i64, u32)>) {
+        out.append(&mut TIMES.lock().unwrap());
     }
 }

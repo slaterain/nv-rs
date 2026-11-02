@@ -59,6 +59,8 @@
 #![cfg_attr(test, allow(clippy::useless_vec))]
 
 pub mod abi;
+#[cfg(test)]
+pub(crate) mod alloc_count;
 pub mod call_trace;
 mod engine;
 pub mod exe;

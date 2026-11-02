@@ -135,6 +135,96 @@ counters' rebasing), all bit-exact.
 
 Nothing in the resampling is approximate now.
 
+**Moving a playing buffer** (`SetCurrentPosition`; the game does it in `00aed080`, a looping
+sound started at a random byte then `Play(DSBPLAY_LOOPING)` even when it already plays, and in
+`00aee580` to keep a sound in time). Measured 2026-10-31 with `scripts/dsound-capture setpos`
+(the cursors: 412 calls in four runs, 272 of them on playing buffers; with `endphase`, 162 more
+cases of `Play` after an end or a `Stop`) and `scripts/dsmix-measure` `DSMIX_SETPOS` with
+`DSMIX_HOOK` (what is heard: 42 captures, three runs, 48000, 22050 and 44100 Hz, mono and
+stereo, looping and not, two with the distortion, every sample). The cursors are in
+`dsound.rs`. What is heard: what was mixed up to the write cursor plays out, then the next
+period mixes from the new place through the buffer's converter as it was, history and all (a
+new converter matches none of the captures at 22050 or 44100 Hz); a buffer with the distortion
+has the effect started over there as at `Play` (cleared, from 32 frames before).
+`mixer::Voice::move_to`; the voice moves at its next period. The moved voice keeps its place in
+the sum (`DSMIX_SETPOS_ORDER`: three voices, one moved; the oldest stays last whichever moved).
+Not measured: a voice the output has already played to its end (it runs up to 100 ms ahead of
+the platform clock) while its buffer still plays starts again at the new place with a new
+converter, in its place in the sum.
+
+**The cursors' steps** (`dsound-capture endphase`, `freqphase` and `endstop`, 2026-10-31, and
+`endstop more`, 2026-11-01): the write cursor is the frames the buffer's converter has taken.
+Through the first converter that is the buffer's position, kept in hundredths of a frame (each
+10 ms period adding the frequency) through `Stop`, the end, `SetCurrentPosition` and
+`SetFrequency`, rounded up, and a first `Play` leads by 33 frames; at the device's own rate (the
+converter passes the samples through) there is no lead. Through the second converter it is
+exactly what that converter's `CalcInputFrames` (`dsound` `100636a0`) takes, in its own `f32`
+arithmetic (`resampler::AplFrames`, checked against `Apl` period by period), counted from a new
+converter at the buffer's first `Play` and kept by the buffer through `Stop`, the end and
+`SetFrequency` (measured) and `SetCurrentPosition` (on the DLL's word: `dsound` `100580b0` only
+moves the source and sets the cursor fields; no measured case moves a buffer with it on). No
+rule of hundredths fits that one everywhere: a 22050 Hz 16-bit mono buffer reads 221, 442, 663
+after 1, 2, 3 periods, the same buffer at 11025 Hz 111, 221, 331, 441, a 48000 Hz one 481, 961.
+When the second converter turns on, every buffer playing goes on from its write cursor with a
+new converter, both cursors there, the play cursor held until the write cursor is three periods
+past (`dsound` `1005713d` sets both cursor fields to the write cursor, as `Play` and
+`SetCurrentPosition` do; not measured). A `SetFrequency` to the frequency the buffer has
+changes nothing (`loopoff_f`). (`dsound.rs`.)
+
+The layer's replay of every measured line (`measured_replay` in `dsound.rs`, ignored; the
+programs and the comparison are `tools/programs.pl` and `tools/cmp2.pl` in the private
+`build43-scratch/measure/dss1-work`): the same calls after the same number of periods, the
+cursors read at every period and compared with DirectSound's, the first `Play` included. Lines
+that match at every read:
+
+| Data set (`dsound-capture`) | Lines | Main (`8dda88cf`) | Now | Main, from the first call on | Now, from the first call on |
+| --- | --- | --- | --- | --- | --- |
+| `replays` (2026-10-30) | 4 | 4 | 4 | 4 | 4 |
+| `replays`, second set | 12 | 8 | 12 | 8 | 12 |
+| `endphase` | 162 | 0 | 162 | 30 | 162 |
+| `endstop` | 168 | 15 | 168 | 45 | 168 |
+| `endstop more` | 144 | 42 | 144 | 75 | 144 |
+| `freqphase` | 156 | 12 | 114 | 30 | 120 |
+| `setpos` | 412 | 24 | 408 | 32 | 408 |
+| All | 1,058 | 105 | 1,012 | 224 | 1,018 |
+
+No line matches on main and not now. ("From the first call on" leaves out the reads before the
+first call after `Play`, as the earlier reviews compared.)
+
+The lines that still differ:
+
+- `freqphase` with the first converter at a frequency other than the format's rate (`dmo` at
+  11040 or 22071 Hz: `steady`, `retune_stop`, `stop_retune` and `retune_end`, 14 cases in all
+  three runs, 42 lines): there the write cursor is `RESAMPLEDMO`'s own
+  `GetRequiredInputFrames`, one frame off the rule of hundredths at some periods, and a change
+  of 1/500 or less reaches it a period late (its `SetRate`). Following it would need the
+  converter's filter design from the player's DLL, which the cursors must not wait for; the
+  layer keeps the rule of hundredths there. Deliberately not modelled.
+- `setpos` `5622 1 10 ac44 302b0 loop_odd 100000` (run 2), `5622 1 10 ac44 2e0 loop_half 103300`
+  (run 3), `ac44 2 10 2b110 102e0 loop_half_play 106600` and `ac44 2 10 2b110 102e0
+  loop_odd_play 100000` (run 4): `SetCurrentPosition` raced DirectSound's period (three came 5
+  to 24 us after a period began, one 53 us before the next): the cursors read the new place
+  right after the call (in three the old ones again until the next period), then the play
+  cursor ran three periods behind the write cursor, behind the new place, for two periods. A
+  race inside DirectSound; the layer leaves it out (`dsound.rs`).
+
+Not measured, and where the layer may differ:
+
+- DirectSound caps the play cursor's lag at half the buffer (`dsound` `10056d3e`..`10056d53`,
+  read by the review); the layer's three periods at the format's rate have no cap. Only a
+  buffer shorter than six periods' frames is touched, and none was measured; the cap's exact
+  arithmetic (bytes or frames, rounding) is not read yet.
+- The cursors' counter for the second converter is kept through `Stop` and `Play`, but the
+  output gives a voice a new converter at every `Play` (`mixer::Voice::start`). Whether the
+  converter's own samples and fraction survive a `Stop` is not measured; a `DSMIX` capture of a
+  stopped and replayed buffer at another rate would show it.
+- A buffer playing when the second converter turns on (above).
+
+**The end** (`dsound-capture endstop`, 2026-10-31): a buffer that does not loop never reads its
+write cursor at its length while it plays; it ends in the period the write cursor would reach
+it. Stopped in the period before, `Play` plays the rest. A looping buffer turned not looping
+plays out the lap it is in.
+
 ## 3D and the distortion: translated from the player's DLLs
 
 With the maintainer's leave (2026-10-28, "sound must match exactly"), the 32-bit `dsound.dll`
@@ -227,6 +317,10 @@ the device-period tail every capture loses (Mixer above). Without the 32-frame s
 - The DLL's effect runs about 100 ms ahead of the play cursor (its write-ahead, 10 ms ticks);
   here it runs just ahead of what the mixer reads. Data the game writes into a playing buffer
   with the effect inside those 100 ms is processed here and unprocessed in Windows.
+- The cursors of a buffer with the effect set are not those of `dsound.rs`: the `DSMIX_SETPOS`
+  captures read the write cursor 130 to 140 ms ahead of the play cursor (not three periods),
+  and right after `SetCurrentPosition` 140 ms less 32 frames past the new place. Not measured
+  further yet.
 - Not provided (the game does not use them): cones, `SetMode`, other effects, a device with
   other than two channels.
 - No loopback capture yet of turned listeners, the game's 1e9 distances, or the effect on

@@ -595,31 +595,44 @@ fn get_device_data(
     let peek = flags & 1 != 0;
     let overflowed = std::mem::replace(&mut d.overflowed, false);
     let wanted = e.mem.u32(count.addr());
-    let d = device(e, this);
-    let taken: Vec<[u32; 4]> = if records.is_null() {
+    // The oldest `taken` events, written straight from the buffer (no list of them made); taken
+    // out of it as they are written, a drain that a stop on the way still empties whole.
+    let (mem, d) = (
+        &mut e.mem,
+        e.kernel
+            .input
+            .devices
+            .get_mut(&this.addr())
+            .expect("a call on an IDirectInputDevice8A this layer did not make"),
+    );
+    let taken = if records.is_null() {
         if wanted == u32::MAX && !peek {
-            d.events.drain(..).collect()
+            d.events.len()
         } else {
-            Vec::new()
+            0
         }
     } else {
-        let n = (wanted as usize).min(d.events.len());
-        if peek {
-            d.events.iter().take(n).copied().collect()
-        } else {
-            d.events.drain(..n).collect()
-        }
+        (wanted as usize).min(d.events.len())
     };
-    if !records.is_null() {
-        for (i, event) in taken.iter().enumerate() {
-            let at = records.addr() + OBJECT_DATA_SIZE * i as u32;
-            for (k, word) in event.iter().enumerate() {
-                e.mem.set_u32(at + 4 * k as u32, *word);
-            }
-            e.mem.set_u32(at + 0x10, 0);
+    let write = |mem: &mut crate::Mem, i: usize, event: [u32; 4]| {
+        let at = records.addr() + OBJECT_DATA_SIZE * i as u32;
+        for (k, word) in event.iter().enumerate() {
+            mem.set_u32(at + 4 * k as u32, *word);
+        }
+        mem.set_u32(at + 0x10, 0);
+    };
+    if records.is_null() {
+        d.events.drain(..taken);
+    } else if peek {
+        for (i, &event) in d.events.iter().take(taken).enumerate() {
+            write(mem, i, event);
+        }
+    } else {
+        for (i, event) in d.events.drain(..taken).enumerate() {
+            write(mem, i, event);
         }
     }
-    e.mem.set_u32(count.addr(), taken.len() as u32);
+    e.mem.set_u32(count.addr(), taken as u32);
     if overflowed {
         DI_BUFFEROVERFLOW
     } else {

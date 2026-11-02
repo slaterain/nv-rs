@@ -170,7 +170,12 @@ pub fn fn_006b9940(e: &mut Engine, point: Ptr, start: Ptr, end: Ptr) -> f64 {
         e.call(VECTOR_SUBTRACT, &args![point, offset, start]);
         let along = dot(e, offset, direction) as f32;
         let squared = dot(e, direction, direction) as f32;
-        let ratio = (f64::from(along) / f64::from(squared)) as f32;
+        // 006b9984: `FLD along; FDIV float ptr [squared]; FSTP ratio` (the x87
+        // NaN choice and the control word's precision).
+        let ratio = f32::from_bits(x87_store32(x87_div(
+            x87_load32(along.to_bits()),
+            x87_m32(squared.to_bits()),
+        )));
         let projection = e.call(VECTOR_SCALE, &args![scaled, ratio, direction]).u32();
         e.call(VECTOR_ADD, &args![start, foot, projection]);
         e.call(VECTOR_SUBTRACT, &args![point, difference, foot]);
@@ -230,7 +235,12 @@ pub fn fn_006b9a10(
                 0
             };
         }
-        let t = (f64::from(n2) / f64::from(n1)) as f32;
+        // 006b9a97: `FLD n2; FDIV float ptr [n1]; FSTP t` (the x87 NaN choice
+        // and the control word's precision).
+        let t = f32::from_bits(x87_store32(x87_div(
+            x87_load32(n2.to_bits()),
+            x87_m32(n1.to_bits()),
+        )));
         if f64::from(t) < e.global::<f64>(ZERO) || f64::from(t) > e.global::<f64>(ONE) {
             return 0;
         }
@@ -290,7 +300,11 @@ pub fn fn_006b9b10(e: &mut Engine, point: Ptr, start: Ptr, end: Ptr, inside: Ptr
                 set_inside(e, 0);
                 end.addr()
             } else {
-                let ratio = (along / squared) as f32;
+                // 006b9bba: `FLD along; FDIV double ptr [squared]; FSTP double;
+                // FLD double; FSTP float` (the x87 NaN choice and the control
+                // word's precision; the double round trip is exact here).
+                let ratio =
+                    f32::from_bits(x87_store32(x87_div(x87_load64(along.to_bits()), squared)));
                 let projection = e.call(VECTOR_SCALE, &args![scaled, ratio, direction]).u32();
                 e.call(VECTOR_ADD, &args![start, foot, projection]);
                 set_inside(e, 1);
@@ -325,7 +339,9 @@ pub fn fn_006b9c20(e: &mut Engine, out: Ptr, point: Ptr, start: Ptr, end: Ptr) -
             copy_words(e, out.addr(), end.addr(), 3);
             return out;
         }
-        let ratio = (along / squared) as f32;
+        // 006b9cb3: `FLD along; FDIV double ptr [squared]; FSTP double; FLD
+        // double; FSTP float`, as in 006b9b10.
+        let ratio = f32::from_bits(x87_store32(x87_div(x87_load64(along.to_bits()), squared)));
         let projection = e.call(VECTOR_SCALE, &args![scaled, ratio, direction]).u32();
         e.call(VECTOR_ADD, &args![start, out, projection]);
         out
@@ -447,18 +463,29 @@ pub fn fn_006b9e90(e: &mut Engine, p1: Ptr, p2: Ptr, p3: Ptr, p4: Ptr, out: Ptr)
 
 /// The two area tests [`fn_006ba010`] and [`fn_006ba100`] share: `a * b <=
 /// 0` and then `c * (c + b - a) < 0` (each area a `float`). Returns `c` and
-/// `c + b - a` when both pass.
-fn segments_cross(e: &mut Engine, p1: u32, p2: u32, p3: u32, p4: u32) -> Option<(f32, f32)> {
+/// `c + b - a` (their bits) when both pass. Every operation is the x87's
+/// (006ba016..006ba0d1 / 006ba106..006ba1c5), rounded at the control word's
+/// precision: at 24 bits a product or difference rounds before the next
+/// one, which plain `f64` does not do.
+fn segments_cross(e: &mut Engine, p1: u32, p2: u32, p3: u32, p4: u32) -> Option<(u32, u32)> {
     let zero = e.global::<f64>(ZERO);
-    let first = cross(e, p4, p1, p2) as f32;
-    let second = cross(e, p3, p1, p2) as f32;
-    let not_same_side = f64::from(first) * f64::from(second) <= zero;
+    // 006ba106..006ba16d: `a` (EBP-4) and `b` (EBP-8) stored as floats.
+    let first = x87_store32(cross_x87(e, p4, p1, p2));
+    let second = x87_store32(cross_x87(e, p3, p1, p2));
+    // 006ba170..006ba181: FLD a, FMUL b, FCOMP 0.0, TEST AH,0x41 / JP (`<=`).
+    let not_same_side = x87_mul(x87_load32(first), x87_m32(second)) <= zero;
     if !not_same_side {
         return None;
     }
-    let third = cross(e, p1, p3, p4) as f32;
-    let fourth = (f64::from(third) + f64::from(second) - f64::from(first)) as f32;
-    if f64::from(third) * f64::from(fourth) < zero {
+    // 006ba187..006ba1b9: `c` (EBP-0x10).
+    let third = x87_store32(cross_x87(e, p1, p3, p4));
+    // 006ba1bc..006ba1c5: FLD c, FADD b, FSUB a, FSTP `d` (EBP-0xC).
+    let fourth = x87_store32(x87_sub(
+        x87_add(x87_load32(third), x87_m32(second)),
+        x87_m32(first),
+    ));
+    // 006ba1c8..006ba1d9: FLD c, FMUL d, FCOMP 0.0, TEST AH,5 / JP (`<`).
+    if x87_mul(x87_load32(third), x87_m32(fourth)) < zero {
         Some((third, fourth))
     } else {
         None
@@ -483,12 +510,17 @@ pub fn fn_006ba100(e: &mut Engine, p1: Ptr, p2: Ptr, p3: Ptr, p4: Ptr, out: Ptr)
     else {
         return false;
     };
-    let t = (f64::from(third) / (f64::from(third) - f64::from(fourth))) as f32;
+    // 006ba1db..006ba1e4: FLD c, FSUB d, FDIVR c, FSTP `t` (EBP-0x14).
+    let t = x87_store32(x87_div(
+        x87_m32(third),
+        x87_sub(x87_load32(third), x87_m32(fourth)),
+    ));
     e.with_stack(0x24, |e, stack| {
         let s = stack.addr();
         let direction = e.call(VECTOR_SUBTRACT, &args![p2, s, p1]).u32();
+        // 006ba1f9..006ba1fc: `t` pushed through FLD/FSTP.
         let along = e
-            .call(VECTOR_SCALE, &args![s + 0xc, x87_quiet(t), direction])
+            .call(VECTOR_SCALE, &args![s + 0xc, x87_quiet_bits(t), direction])
             .u32();
         let point = e.call(VECTOR_ADD, &args![p1, s + 0x18, along]).u32();
         copy_words(e, out.addr(), point, 3);
@@ -745,6 +777,98 @@ mod tests {
         );
     }
 
+    /// 006b9a97: `t = n2 / n1` is an x87 `FDIV`: with two NaNs the one with
+    /// the larger significand (here `n1`) comes out, where an `f64` division
+    /// would keep the dividend's (`n2`).
+    #[test]
+    fn segment_plane_divides_with_the_x87_nan_choice() {
+        let mut e = geometry_engine();
+        // n1 = 0x7fff_0000; n2 = -(0x7fc0_0001) = 0xffc0_0001.
+        let mut dots = [0x7fff_0000u32, 0x7fc0_0001].into_iter();
+        e.register_double(DOT, move |_, _| {
+            f64::from(f32::from_bits(dots.next().unwrap())).into_ret()
+        });
+        let start = p3(&mut e, 0.0, 0.0, -1.0);
+        let end = p3(&mut e, 2.0, 0.0, 1.0);
+        let origin = p3(&mut e, 0.0, 0.0, 0.0);
+        let up = p3(&mut e, 0.0, 0.0, 1.0);
+        let out = p3(&mut e, 9.0, 9.0, 9.0);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x006b9a10, &args![start, end, origin, up, out])
+                .i32(),
+            1
+        );
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, FABS), vec![vec![0x7fff_0000]]);
+        assert_eq!(calls(&log, VECTOR_SCALE)[0][1], 0x7fff_0000);
+    }
+
+    /// 006b9984: `ratio = along / squared` is an x87 `FDIV` of two floats:
+    /// with two quiet NaNs the one with the larger significand (here
+    /// `squared`) comes out, where an `f64` division would keep the
+    /// dividend's (`along`).
+    #[test]
+    fn distance_to_line_divides_with_the_x87_nan_choice() {
+        let mut e = geometry_engine();
+        // along = 0xffc0_0001, squared = 0x7fff_0000, then the squared
+        // distance 16.
+        let mut dots = [x87_m32(0xffc0_0001), x87_m32(0x7fff_0000), 16.0].into_iter();
+        e.register_double(DOT, move |_, _| dots.next().unwrap().into_ret());
+        let point = p3(&mut e, 5.0, 4.0, 0.0);
+        let start = p3(&mut e, 0.0, 0.0, 0.0);
+        let end = p3(&mut e, 10.0, 0.0, 0.0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x006b9940, &args![point, start, end]).f64(), 4.0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, VECTOR_SCALE)[0][1], 0x7fff_0000);
+        assert_eq!(calls(&log, ROOT), vec![vec![16.0f32.to_bits()]]);
+    }
+
+    /// 006b9bba: the ratio is an x87 `FDIV` of two doubles: with two quiet
+    /// NaNs the divisor's (the larger significand) comes out, where an `f64`
+    /// division would keep the dividend's. A NaN `along` compares unordered,
+    /// so `TEST AH,1` at 006b9b4c and 006b9b90 takes both jumps to the ratio
+    /// case.
+    #[test]
+    fn distance_to_segment_divides_with_the_x87_nan_choice() {
+        let mut e = geometry_engine();
+        let mut dots = [x87_m32(0xffc0_0001), x87_m32(0x7fff_0000)].into_iter();
+        e.register_double(DOT, move |_, _| dots.next().unwrap().into_ret());
+        let point = p3(&mut e, 4.0, 3.0, 0.0);
+        let start = p3(&mut e, 0.0, 0.0, 0.0);
+        let end = p3(&mut e, 10.0, 0.0, 0.0);
+        let flag = e.mem.alloc(4);
+        e.mem.set_u8(flag, 7);
+        e.call_log = Some(vec![]);
+        e.call(0x006b9b10, &args![point, start, end, flag]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, VECTOR_SCALE)[0][1], 0x7fff_0000);
+        assert_eq!(e.mem.u8(flag), 1);
+    }
+
+    /// 006b9cb3: the same `FDIV` of two doubles as 006b9b10's, reached by a
+    /// NaN `along` through the unordered compares at 006b9c5c and 006b9c93.
+    #[test]
+    fn closest_point_divides_with_the_x87_nan_choice() {
+        let mut e = geometry_engine();
+        let mut dots = [x87_m32(0xffc0_0001), x87_m32(0x7fff_0000)].into_iter();
+        e.register_double(DOT, move |_, _| dots.next().unwrap().into_ret());
+        let point = p3(&mut e, 4.0, 3.0, 0.0);
+        let start = p3(&mut e, 0.0, 0.0, 0.0);
+        let end = p3(&mut e, 10.0, 0.0, 0.0);
+        let out = p3(&mut e, 9.0, 9.0, 9.0);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x006b9c20, &args![out, point, start, end]).u32(),
+            out
+        );
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, VECTOR_SCALE)[0][1], 0x7fff_0000);
+        // `out = start + ratio * (end - start)` by 00439e90.
+        assert_eq!(&calls(&log, VECTOR_ADD)[0][..2], &[start, out]);
+    }
+
     #[test]
     fn distance_to_segment_and_closest_point() {
         let mut e = geometry_engine();
@@ -847,5 +971,38 @@ mod tests {
         let t4 = p3(&mut e, 2.0, 0.0, 0.0);
         assert!(!e.call(0x006b9e90, &args![p1, p2, t3, t4, out]).bool());
         assert!(e.call(0x006ba010, &args![p1, p2, t3, t4]).bool());
+    }
+
+    /// 006ba100 (and 006ba010, whose test it shares) at the main thread's
+    /// 24-bit precision (0x007F): each `FSUB`/`FMUL` of an area rounds to 24
+    /// bits before the next. With p4 on the line p1..p2 up to a product's
+    /// last bits, `a = p1.x * p2.y - p2.x * p1.y = (-2 + 2^-45) - (-2)`: at
+    /// 53 bits 2^-45, so with `b = 9` the test `a * b <= 0` (006ba181) fails;
+    /// at 24 bits the product rounds to -2 and `a = 0` passes it. Then
+    /// `c = -(3 + 3 eps)` rounds (a tie, to even) to `-(3 + 4 eps)`,
+    /// `d = c + b - a = 6 - 4 eps`, and `t = c / (c - d) = (3 + 4 eps) / 9`
+    /// goes to the scale (006ba203).
+    #[test]
+    fn segment_crossing_rounds_each_area_operation_at_24_bit_precision() {
+        let mut e = geometry_engine();
+        let eps = f32::EPSILON;
+        let p1 = p3(&mut e, -(1.0 + eps), -1.0, 0.0);
+        let p2 = p3(&mut e, 2.0, 2.0 - 2.0 * eps, 0.0);
+        let p3_ = p3(&mut e, 0.0, 3.0, 0.0);
+        let p4 = p3(&mut e, 0.0, 0.0, 0.0);
+        let out = p3(&mut e, 9.0, 9.0, 9.0);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x006ba010, &args![p1, p2, p3_, p4]).bool());
+        assert!(!e.call(0x006ba100, &args![p1, p2, p3_, p4, out]).bool());
+        assert!(calls(e.call_log.as_ref().unwrap(), VECTOR_SCALE).is_empty());
+        crate::units::crt::set_x87_control_word(&mut e, 0x007f);
+        assert!(e.call(0x006ba010, &args![p1, p2, p3_, p4]).bool());
+        assert!(e.call(0x006ba100, &args![p1, p2, p3_, p4, out]).bool());
+        crate::units::crt::set_x87_control_word(&mut e, 0x027f);
+        let log = e.call_log.take().unwrap();
+        let t = ((3.0 + 4.0 * f64::from(eps)) / 9.0) as f32;
+        let scaled = calls(&log, VECTOR_SCALE);
+        assert_eq!(scaled.len(), 1);
+        assert_eq!(scaled[0][1], t.to_bits());
     }
 }

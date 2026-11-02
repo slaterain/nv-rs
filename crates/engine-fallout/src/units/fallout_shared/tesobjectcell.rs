@@ -4093,22 +4093,23 @@ pub fn tes_object_cell_get_land(e: &mut Engine, this: Ptr<TESObjectCELL>) -> Ptr
         return Ptr::NULL;
     }
     if e.get(this, TESObjectCELL::pCellLand).is_null() {
-        let scope = Ptr::<()>::new(e.mem.alloc(4));
-        e.call(
-            SCOPE_ENTER,
-            &args![scope, 0x1bu32, 1u32, SOURCE_FILE, 0xfb6u32],
-        );
-        let block = e.call(ALLOCATE, &args![0x2cu32]).ptr::<()>();
-        let land = if block.is_null() {
-            Ptr::NULL
-        } else {
-            e.call(LAND_CONSTRUCT, &args![block]).ptr::<()>()
-        };
-        e.set(this, TESObjectCELL::pCellLand, land);
-        let land = e.get(this, TESObjectCELL::pCellLand);
-        e.call(LAND_SET_CELL, &args![land, this]);
-        e.call(SCOPE_LEAVE, &args![scope]);
-        e.mem.free(scope.addr());
+        // 00547014: the scope guard is the 4-byte local at EBP-0x10.
+        e.with_stack(4, |e, scope| {
+            e.call(
+                SCOPE_ENTER,
+                &args![scope, 0x1bu32, 1u32, SOURCE_FILE, 0xfb6u32],
+            );
+            let block = e.call(ALLOCATE, &args![0x2cu32]).ptr::<()>();
+            let land = if block.is_null() {
+                Ptr::NULL
+            } else {
+                e.call(LAND_CONSTRUCT, &args![block]).ptr::<()>()
+            };
+            e.set(this, TESObjectCELL::pCellLand, land);
+            let land = e.get(this, TESObjectCELL::pCellLand);
+            e.call(LAND_SET_CELL, &args![land, this]);
+            e.call(SCOPE_LEAVE, &args![scope]);
+        });
     }
     e.get(this, TESObjectCELL::pCellLand)
 }
@@ -9942,6 +9943,23 @@ mod tests {
         e.mem.set_u32(persistent.addr() + 8, 0x400);
         assert_eq!(e.call(0x0054_6fb0, &args![persistent]).u32(), 0);
         assert_eq!(e.get(persistent, TESObjectCELL::pCellLand), Ptr::NULL);
+    }
+
+    #[test]
+    fn the_land_scope_guard_is_a_local_of_the_frame() {
+        // 00547014/00547077: the guard is the stack local at EBP-0x10, not a heap block.
+        let mut e = scene_engine();
+        e.register(LAND_CONSTRUCT, |_, a| a[0].into_ret());
+        quiet(&mut e, &[SCOPE_ENTER, SCOPE_LEAVE, LAND_SET_CELL]);
+        let exterior = cell(&mut e, false);
+        let guard = e.next_stack_local(4);
+        e.call_log = Some(vec![]);
+        let land = tes_object_cell_get_land(&mut e, exterior);
+        let log = take_log(&mut e);
+        assert!(!land.is_null());
+        assert_eq!(calls_to(&log, SCOPE_ENTER)[0][0], guard);
+        assert_eq!(calls_to(&log, SCOPE_LEAVE), vec![vec![guard]]);
+        assert_eq!(e.mem.block_size(guard), None);
     }
 
     #[test]

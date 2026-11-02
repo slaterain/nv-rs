@@ -1686,9 +1686,12 @@ fn wait_for_multiple_objects(
     }
     // A blocking call: a turn that used up its time slice ends first.
     crate::thread_host::blocking_call(e);
-    let list: Vec<u32> = (0..count)
-        .map(|i| e.mem.u32(handles.addr() + 4 * i))
-        .collect();
+    // At most 64 handles (checked above): on the stack.
+    let mut handles_read = [0u32; 64];
+    for (i, h) in handles_read[..count as usize].iter_mut().enumerate() {
+        *h = e.mem.u32(handles.addr() + 4 * i as u32);
+    }
+    let list = &handles_read[..count as usize];
     if list
         .iter()
         .any(|&h| !e.kernel.objects.contains_key(&h) && h != CURRENT_THREAD)
@@ -1701,7 +1704,7 @@ fn wait_for_multiple_objects(
     loop {
         if all {
             if list.iter().all(|&h| signalled(e, h)) {
-                for &h in &list {
+                for &h in list {
                     take(e, h);
                 }
                 return WAIT_OBJECT_0;
@@ -1710,7 +1713,7 @@ fn wait_for_multiple_objects(
             take(e, list[i]);
             return WAIT_OBJECT_0 + i as u32;
         }
-        if crate::thread_host::host().block(e, &list, all, deadline, signalled) {
+        if crate::thread_host::host().block(e, list, all, deadline, signalled) {
             continue;
         }
         if finite {
@@ -2243,6 +2246,7 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "LoadLibraryA",
             entry!(0, loader::load_library_a(Ptr) -> u32).1,
         ),
+        (k, "FreeLibrary", entry!(0, loader::free_library(u32) -> u32).1),
         (
             "d3dx9_38.dll",
             "D3DXMatrixMultiply",
@@ -3490,6 +3494,56 @@ mod tests {
         e
     }
 
+    /// A worker for [`allocations_per_operation_of_a_thread_switch`]: for ever, waits on the
+    /// semaphore in 0x2f20, keeps its OS thread's allocation count in 0x2f28, sets the event in
+    /// 0x2f24.
+    fn ping_thread(e: &mut Engine, _: &[u32]) -> Ret {
+        loop {
+            let start = e.mem.u32(0x2f20);
+            assert_eq!(wait_for_single_object(e, start, INFINITE), WAIT_OBJECT_0);
+            e.mem.set_u64(0x2f28, crate::alloc_count::made());
+            let done = e.mem.u32(0x2f24);
+            set_event(e, done);
+        }
+    }
+
+    /// Not a check: the host heap allocations of one round of a worker thread kicked by the main
+    /// thread and waited for (two switches), on each side, for the frame-rate work (`cargo test
+    /// --release -p engine-core --lib allocations_per -- --ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn allocations_per_operation_of_a_thread_switch() {
+        use crate::alloc_count::{per_run, row, Per};
+        let mut e = thread_engine();
+        e.register(0x00ab_0900, ping_thread);
+        let start = call(&mut e, CREATE_SEMAPHORE_A, &[0, 0, 1, 0]);
+        let done = call(&mut e, CREATE_EVENT_A, &[0, 0, 0, 0]);
+        e.mem.set_u32(0x2f20, start);
+        e.mem.set_u32(0x2f24, done);
+        call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0900, 0, 0, 0]);
+        let round = |e: &mut Engine| {
+            assert_eq!(call(e, RELEASE_SEMAPHORE, &[start, 1, 0]), 1);
+            assert_eq!(
+                call(e, WAIT_FOR_SINGLE_OBJECT, &[done, INFINITE]),
+                WAIT_OBJECT_0
+            );
+        };
+        for _ in 0..100 {
+            round(&mut e);
+        }
+        let before = e.mem.u64(0x2f28);
+        let main = per_run(1000, || round(&mut e));
+        let worker = Per {
+            allocations: (e.mem.u64(0x2f28) - before) as f64 / 1001.0,
+            ns: main.ns,
+        };
+        row("thread switch round, main thread's side", main);
+        row(
+            "thread switch round, worker thread's side (same round)",
+            worker,
+        );
+    }
+
     /// A thread that takes the critical section at 0x2e00, gives up its turn while it holds
     /// it, then leaves it.
     fn locking_thread(e: &mut Engine, a: &[u32]) -> Ret {
@@ -4691,5 +4745,91 @@ mod tests_counted_semaphore {
                 (COUNT_UP, vec![record]),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_allocations {
+    use super::*;
+
+    /// Not a check: the host heap allocations of the kernel imports a frame calls most (on the
+    /// main thread, nothing to wait for), for the frame-rate work (`cargo test --release -p
+    /// engine-core --lib allocations_per -- --ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn allocations_per_operation_of_the_kernel() {
+        use crate::alloc_count::{per_run, row};
+        let mut e = Engine::new();
+        let table = imports();
+        let slot = |name: &str| {
+            0x7f00_0000 + 4 * table.iter().position(|(_, n, _)| *n == name).unwrap() as u32
+        };
+        for (i, (_, _, f)) in table.iter().enumerate() {
+            e.register(0x7f00_0000 + 4 * i as u32, *f);
+        }
+        let word = e.mem.alloc(0x40);
+        let section = e.mem.alloc(0x18);
+        e.call(slot("InitializeCriticalSection"), &[section]);
+        let events = e.mem.alloc(8);
+        for i in 0..2 {
+            let h = e.call(slot("CreateEventA"), &[0, 1, 1, 0]).u32();
+            e.mem.set_u32(events + 4 * i, h);
+        }
+        let event = e.mem.u32(events);
+        let tls = e.call(slot("TlsAlloc"), &[]).u32();
+        let message = e.mem.alloc(0x1c);
+        for (what, name, args) in [
+            ("InterlockedIncrement", "InterlockedIncrement", vec![word]),
+            (
+                "InterlockedCompareExchange",
+                "InterlockedCompareExchange",
+                vec![word, 0, 0],
+            ),
+            (
+                "EnterCriticalSection",
+                "EnterCriticalSection",
+                vec![section],
+            ),
+            (
+                "LeaveCriticalSection",
+                "LeaveCriticalSection",
+                vec![section],
+            ),
+            ("TlsSetValue", "TlsSetValue", vec![tls, 5]),
+            ("TlsGetValue", "TlsGetValue", vec![tls]),
+            ("GetCurrentThreadId", "GetCurrentThreadId", vec![]),
+            (
+                "QueryPerformanceCounter",
+                "QueryPerformanceCounter",
+                vec![word],
+            ),
+            ("timeGetTime", "timeGetTime", vec![]),
+            ("GetTickCount", "GetTickCount", vec![]),
+            ("SetEvent (manual reset)", "SetEvent", vec![event]),
+            (
+                "WaitForSingleObject, signalled",
+                "WaitForSingleObject",
+                vec![event, 0],
+            ),
+            (
+                "WaitForMultipleObjects of 2, signalled",
+                "WaitForMultipleObjects",
+                vec![2, events, 0, 0],
+            ),
+            ("GetAsyncKeyState", "GetAsyncKeyState", vec![0x09]),
+            (
+                "PeekMessageA, none",
+                "PeekMessageA",
+                vec![message, 0, 0, 0, 1],
+            ),
+        ] {
+            let f = slot(name);
+            row(
+                &format!("kernel {what}"),
+                per_run(1000, || {
+                    e.call(f, &args);
+                }),
+            );
+        }
     }
 }

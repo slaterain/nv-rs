@@ -2564,19 +2564,25 @@ pub fn hkp_world_remove_entity_batch(
     let end = entities.wrapping_add((count as u32).wrapping_mul(4));
     let mut at = entities;
     while at != end {
+        // 00c95424..00c9545f: the entity is loaded from the array again for each call.
         let entity = e.mem.u32(at);
         e.call(FIRE_WORLD_ENTITY_REMOVED, &args![this, entity]);
+        let entity = e.mem.u32(at);
         e.call(FIRE_ENTITY_REMOVED, &args![entity]);
+        let entity = e.mem.u32(at);
         e.call(REMOVE_ENTITY_BP, &args![this, entity]);
-        if e.mem.u32(entity + 0x54) != 0 {
+        let entity = e.mem.u32(at);
+        if e.mem.u32(entity.wrapping_add(0x54)) != 0 {
             e.call(
                 ENTITY_RELEASE_BOUNDING_DATA,
-                &args![entity + ENTITY_BOUNDING_DATA],
+                &args![entity.wrapping_add(ENTITY_BOUNDING_DATA)],
             );
         }
-        if e.mem.u16(entity + 4) == 0 {
+        let entity = e.mem.u32(at);
+        if e.mem.u16(entity.wrapping_add(4)) == 0 {
             e.vcall(entity, 0x14, &args![]);
         }
+        let entity = e.mem.u32(at);
         e.call(REMOVE_REFERENCE, &args![entity]);
         at = at.wrapping_add(4);
     }
@@ -8698,6 +8704,47 @@ mod tests {
                 PROFILE_SECTION_END
             ]
         );
+    }
+
+    #[test]
+    fn remove_entity_batch_loads_the_entity_again_for_every_call() {
+        // 00c95424..00c9545f: a callback that rewrites the array slot redirects the later
+        // calls of the same pass.
+        let mut rig = rig();
+        silent(&mut rig.e, &REMOVE_BATCH_CALLEES);
+        let simulation = object_with_vtable(&mut rig.e, 0x20, &[(0x20, FAKE_2)]);
+        silent(&mut rig.e, &[FAKE_2]);
+        let entity = rig.e.mem.alloc(0x240);
+        rig.e.mem.set_u16(entity + 4, 0x40);
+        let replacement = rig.e.mem.alloc(0x240);
+        rig.e.mem.set_u16(replacement + 4, 0x40);
+        rig.e.mem.set_u32(replacement + 0x54, 1);
+        let world = rig.world.addr();
+        rig.e.mem.set_u32(world + 8, simulation);
+        let entities = array_of(&mut rig.e, &[entity]);
+        rig.e
+            .register_double(FIRE_WORLD_ENTITY_REMOVED, move |e, _| {
+                e.mem.set_u32(entities, replacement);
+                Ret::default()
+            });
+        rig.e.call(0x00c9_51b0, &args![rig.world, entities, 1i32]);
+        assert_eq!(
+            calls_to(&rig.e, FIRE_WORLD_ENTITY_REMOVED),
+            vec![vec![world, entity]]
+        );
+        assert_eq!(
+            calls_to(&rig.e, FIRE_ENTITY_REMOVED),
+            vec![vec![replacement]]
+        );
+        assert_eq!(
+            calls_to(&rig.e, REMOVE_ENTITY_BP),
+            vec![vec![world, replacement]]
+        );
+        assert_eq!(
+            calls_to(&rig.e, ENTITY_RELEASE_BOUNDING_DATA),
+            vec![vec![replacement + 0x30]]
+        );
+        assert_eq!(calls_to(&rig.e, REMOVE_REFERENCE), vec![vec![replacement]]);
     }
 
     #[test]

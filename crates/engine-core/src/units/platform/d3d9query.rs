@@ -216,9 +216,18 @@ fn write_result(e: &mut Engine, data: Ptr, size: u32, value: u32) {
     if data.is_null() {
         return;
     }
-    let mut bytes = value.to_le_bytes().to_vec();
-    bytes.resize(size as usize, 0);
-    e.mem.write(data.addr(), &bytes[..size as usize]);
+    // The bytes on the stack for the sizes the game asks (4, 8).
+    let mut inline = [0u8; 16];
+    let mut heap = Vec::new();
+    let bytes: &mut [u8] = if size as usize <= inline.len() {
+        &mut inline[..size as usize]
+    } else {
+        heap.resize(size as usize, 0);
+        &mut heap
+    };
+    let n = bytes.len().min(4);
+    bytes[..n].copy_from_slice(&value.to_le_bytes()[..n]);
+    e.mem.write(data.addr(), bytes);
 }
 
 // Platform: replaces D3D9.DLL IDirect3DQuery9::GetData (vtable +0x1C)

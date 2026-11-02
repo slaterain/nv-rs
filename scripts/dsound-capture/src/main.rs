@@ -30,6 +30,14 @@
 //! - `DsCursor<TAB>rate channels bits bytes looping frequency<TAB>samples` where the samples are
 //!   `microseconds:play:write` at each change, from `Play`.
 //! - `DsEnd`.
+//!
+//! With `replays`, `setpos`, `endphase`, `freqphase` or `endstop` as the argument, only those
+//! cases (`replays`: `Play` again after the end, `Stop`, `SetCurrentPosition`; `setpos`:
+//! `SetCurrentPosition` while a buffer plays, after its end and when stopped; `endphase`: `Play`
+//! again after ends and stops at period counts of every remainder; `freqphase`: the steps around
+//! `SetFrequency`; `endstop`: a buffer stopped at its end, and a looping one turned not looping;
+//! `DsReplay`, `DsSetPos`, `DsEndPhase`, `DsFreqPhase` and `DsEndStop` lines, see the
+//! functions).
 use std::ffi::c_void;
 use std::io::Write;
 
@@ -656,9 +664,711 @@ unsafe fn replays(o: &mut impl Write, ds: *mut Obj) {
     }
 }
 
+/// `SetCurrentPosition` while a buffer plays (and after it played to its end), as the game calls
+/// it: `00aed080` a random byte then `Play(DSBPLAY_LOOPING)`, `00aee580` a byte while it plays.
+/// Each case: a buffer of `ms` ms with `flags`, `Play` (looping or not), at `when` us after it the
+/// cursors (`before`), `SetCurrentPosition(at)` (its answer; the clock before and after the call),
+/// at once the cursors again (`after`), optionally `Play(0, 0, flags)` (its answer) and the cursors
+/// (`replay`), then every change of the cursors and status from `Play` on for `when` + 450 ms.
+/// Lines: `DsSetPos<TAB>rate channels bits bytes flags variant when<TAB>at answer play-answer
+/// <TAB>before after replay<TAB>scp-t0 scp-t1<TAB>samples` (samples `t:play:write:status`).
+unsafe fn setpos(o: &mut impl Write, ds: *mut Obj) {
+    let mut freq = 0i64;
+    QueryPerformanceFrequency(&mut freq);
+    let read = |b: *mut Obj| {
+        let (mut p, mut w, mut s) = (0u32, 0u32, 0u32);
+        slot::<Fn2>(b, 0x10)(b, &mut p as *mut _ as usize, &mut w as *mut _ as usize);
+        slot::<Fn1>(b, 0x24)(b, &mut s as *mut _ as usize);
+        (p, w, s)
+    };
+    let show = |c: (u32, u32, u32)| format!("{:x}:{:x}:{:x}", c.0, c.1, c.2);
+    // (variant, looping, at as a function of (bytes, align), Play after it (flags), when)
+    type At = fn(u32, u32) -> u32;
+    let half: At = |b, a| b / 2 / a * a;
+    let half_odd: At = |b, a| b / 2 / a * a + 1;
+    let quarter3: At = |b, a| b * 3 / 4 / a * a;
+    let zero: At = |_, _| 0;
+    let near_end: At = |b, a| b - a;
+    let last_byte: At = |b, _| b - 1;
+    let end: At = |b, _| b;
+    let past: At = |b, a| b + a;
+    let low: At = |_, a| 100 * a;
+    let mut cases: Vec<(&str, bool, At, Option<u32>, u32)> = Vec::new();
+    for when in [100_000u32, 103_300, 106_600] {
+        cases.push(("loop_half", true, half, None, when));
+        cases.push(("loop_half_play", true, half, Some(1), when));
+    }
+    for (name, looping, at, then) in [
+        ("loop_odd", true, half_odd, None),
+        ("loop_odd_play", true, half_odd, Some(1)),
+        ("loop_zero", true, zero, None),
+        ("loop_low", true, low, None),
+        ("loop_near_end", true, near_end, None),
+        ("loop_last_byte", true, last_byte, None),
+        ("loop_end", true, end, None),
+        ("loop_past", true, past, None),
+        ("loop_half_play_once", true, half, Some(0)),
+        ("once_late", false, quarter3, None),
+        ("once_late_play", false, quarter3, Some(0)),
+        ("once_late_play_loop", false, quarter3, Some(1)),
+        ("once_back", false, zero, None),
+        ("once_near_end", false, near_end, None),
+        ("once_end", false, end, None),
+        ("once_past", false, past, None),
+    ] {
+        cases.push((name, looping, at, then, 100_000));
+    }
+    for (channels, rate, bits, flags, all) in [
+        (1u16, 22050u32, 16u16, 0x102e0u32, true),
+        (2, 44100, 16, 0x102e0, true),
+        (1, 11025, 8, 0x102e0, false),
+        (1, 22050, 16, 0x2e0, false),
+        (1, 22050, 16, 0x302b0, false),
+    ] {
+        let f = format(channels, rate, bits);
+        let a = f.align as u32;
+        let bytes = f.avg / a * a; // one second
+        for &(variant, looping, at_of, then, when) in &cases {
+            if !all
+                && !matches!(
+                    variant,
+                    "loop_half" | "loop_half_play" | "once_late" | "loop_odd"
+                )
+            {
+                continue;
+            }
+            let (_, b) = create(ds, flags, false, &f, bytes);
+            if b.is_null() {
+                writeln!(o, "DsSetPos\t{rate:x} {channels:x} {bits:x} {bytes:x} {flags:x} {variant} {when}\tcreate failed").unwrap();
+                continue;
+            }
+            let at = at_of(bytes, a);
+            let mut origin = 0i64;
+            QueryPerformanceCounter(&mut origin);
+            slot::<Fn3>(b, 0x30)(b, 0, 0, looping as usize);
+            let mut samples = Vec::new();
+            let mut last = (u32::MAX, u32::MAX, u32::MAX);
+            let sample = |samples: &mut Vec<String>, last: &mut (u32, u32, u32), t: i64| {
+                let now = read(b);
+                if now != *last {
+                    samples.push(format!("{t}:{}", show(now)));
+                    *last = now;
+                }
+            };
+            loop {
+                let t = now_us(freq, origin);
+                if t >= i64::from(when) {
+                    break;
+                }
+                sample(&mut samples, &mut last, t);
+            }
+            let before = read(b);
+            let t0 = now_us(freq, origin);
+            let hr = slot::<Fn1>(b, 0x34)(b, at as usize);
+            let t1 = now_us(freq, origin);
+            let after = read(b);
+            let (play_hr, replay) = match then {
+                Some(pf) => {
+                    let r = slot::<Fn3>(b, 0x30)(b, 0, 0, pf as usize);
+                    (format!("{r:x}"), show(read(b)))
+                }
+                None => ("-".to_string(), "-".to_string()),
+            };
+            samples.push(format!("|scp{t0}"));
+            last = (u32::MAX, u32::MAX, u32::MAX);
+            loop {
+                let t = now_us(freq, origin);
+                if t > i64::from(when) + 450_000 {
+                    break;
+                }
+                sample(&mut samples, &mut last, t);
+            }
+            writeln!(
+                o,
+                "DsSetPos\t{rate:x} {channels:x} {bits:x} {bytes:x} {flags:x} {variant} {when}\t{at:x} {hr:x} {play_hr}\t{} {} {replay}\t{t0} {t1}\t{}",
+                show(before),
+                show(after),
+                samples.join(" ")
+            )
+            .unwrap();
+            slot::<Fn0>(b, 0x48)(b);
+            release(b);
+            Sleep(50);
+        }
+        // After the buffer played to its end (a 200 ms buffer, not looping): SetCurrentPosition,
+        // the cursors for 50 ms, then Play and every change for 400 ms. And a stopped buffer
+        // that never played set to an odd byte, then played.
+        for (variant, at_of) in [
+            ("ended_half", half),
+            ("ended_odd", half_odd),
+            ("ended_zero", zero),
+            ("ended_end", end),
+            ("fresh_odd", half_odd),
+            ("fresh_last_byte", last_byte),
+            ("fresh_end", end),
+            ("fresh_past", past),
+            ("stopped_end", end),
+            ("stopped_half", half),
+        ] {
+            let bytes = f.avg * 200 / 1000 / a * a;
+            let (_, b) = create(ds, flags, false, &f, bytes);
+            if variant.starts_with("stopped") {
+                slot::<Fn3>(b, 0x30)(b, 0, 0, 0);
+                Sleep(50);
+                slot::<Fn0>(b, 0x48)(b);
+            }
+            if variant.starts_with("ended") {
+                slot::<Fn3>(b, 0x30)(b, 0, 0, 0);
+                let mut origin = 0i64;
+                QueryPerformanceCounter(&mut origin);
+                while read(b).2 & 1 != 0 && now_us(freq, origin) < 2_000_000 {}
+                Sleep(20);
+            }
+            let at = at_of(bytes, a);
+            let before = read(b);
+            let hr = slot::<Fn1>(b, 0x34)(b, at as usize);
+            let after = read(b);
+            Sleep(50);
+            let later = read(b);
+            let mut origin = 0i64;
+            QueryPerformanceCounter(&mut origin);
+            let play_hr = slot::<Fn3>(b, 0x30)(b, 0, 0, 0);
+            let mut samples = Vec::new();
+            let mut last = (u32::MAX, u32::MAX, u32::MAX);
+            loop {
+                let t = now_us(freq, origin);
+                if t > 400_000 {
+                    break;
+                }
+                let now = read(b);
+                if now != last {
+                    samples.push(format!("{t}:{}", show(now)));
+                    last = now;
+                }
+            }
+            writeln!(
+                o,
+                "DsSetPos\t{rate:x} {channels:x} {bits:x} {bytes:x} {flags:x} {variant} 0\t{at:x} {hr:x} {play_hr:x}\t{} {} {}\t-\t{}",
+                show(before),
+                show(after),
+                show(later),
+                samples.join(" ")
+            )
+            .unwrap();
+            slot::<Fn0>(b, 0x48)(b);
+            release(b);
+            Sleep(50);
+        }
+    }
+}
+
+/// `Play` again after a buffer played to its end or was stopped, after a number of periods that
+/// is not a multiple of 4 (11025 Hz, 110.25 frames a period) or of 2 (22050 Hz): does the next
+/// `Play`'s write cursor go on in the steps the buffer was taking, or start them over?
+/// - `ended`, `ended_setpos`, `again`: buffers of several lengths played to their end (every
+///   change written, `first`), `again` once more to its end (`second`); `ended_setpos` then
+///   moved to its middle; then `Play` and every change for 300 ms (`replay`).
+/// - `stopped`: a one-second buffer stopped after `k` periods (counted from its write cursor's
+///   changes), then `Play` and every change for 300 ms.
+///
+/// Lines: `DsEndPhase<TAB>rate channels bits bytes variant k<TAB>first<TAB>second<TAB>before
+/// <TAB>replay` (samples `t:play:write:status`, `-` for none).
+unsafe fn endphase(o: &mut impl Write, ds: *mut Obj) {
+    let mut freq = 0i64;
+    QueryPerformanceFrequency(&mut freq);
+    let read = |b: *mut Obj| {
+        let (mut p, mut w, mut s) = (0u32, 0u32, 0u32);
+        slot::<Fn2>(b, 0x10)(b, &mut p as *mut _ as usize, &mut w as *mut _ as usize);
+        slot::<Fn1>(b, 0x24)(b, &mut s as *mut _ as usize);
+        (p, w, s)
+    };
+    let show = |c: (u32, u32, u32)| format!("{:x}:{:x}:{:x}", c.0, c.1, c.2);
+    // Every change from now until `until` says stop (or `limit` us), with times from `origin`.
+    let watch = |b: *mut Obj, limit: i64, until: &dyn Fn((u32, u32, u32)) -> bool| {
+        let mut origin = 0i64;
+        QueryPerformanceCounter(&mut origin);
+        let mut samples = Vec::new();
+        let mut last = (u32::MAX, u32::MAX, u32::MAX);
+        loop {
+            let t = now_us(freq, origin);
+            let now = read(b);
+            if now != last {
+                samples.push(format!("{t}:{}", show(now)));
+                last = now;
+            }
+            if until(now) || t > limit {
+                break;
+            }
+        }
+        samples
+    };
+    let join = |s: &[String]| {
+        if s.is_empty() {
+            "-".to_string()
+        } else {
+            s.join(" ")
+        }
+    };
+    for (channels, rate, bits, lengths) in [
+        (
+            1u16,
+            11025u32,
+            8u16,
+            &[2205u32, 2260, 2300, 2350, 2400, 2450, 2500, 2550][..],
+        ),
+        (1, 22050, 16, &[4300, 4350, 4410, 4450, 4500, 4600][..]),
+    ] {
+        let f = format(channels, rate, bits);
+        let a = f.align as u32;
+        for &frames in lengths {
+            for variant in ["ended", "ended_setpos", "again"] {
+                let bytes = frames * a;
+                let (_, b) = create(ds, 0x102e0, false, &f, bytes);
+                slot::<Fn3>(b, 0x30)(b, 0, 0, 0);
+                let first = watch(b, 2_000_000, &|c| c.2 & 1 == 0);
+                let mut second = Vec::new();
+                if variant == "again" {
+                    slot::<Fn3>(b, 0x30)(b, 0, 0, 0);
+                    second = watch(b, 2_000_000, &|c| c.2 & 1 == 0);
+                }
+                Sleep(20);
+                if variant == "ended_setpos" {
+                    slot::<Fn1>(b, 0x34)(b, (bytes / 2 / a * a) as usize);
+                }
+                let before = read(b);
+                slot::<Fn3>(b, 0x30)(b, 0, 0, 0);
+                let replay = watch(b, 300_000, &|_| false);
+                writeln!(
+                    o,
+                    "DsEndPhase\t{rate:x} {channels:x} {bits:x} {bytes:x} {variant} -\t{}\t{}\t{}\t{}",
+                    join(&first),
+                    join(&second),
+                    show(before),
+                    join(&replay)
+                )
+                .unwrap();
+                slot::<Fn0>(b, 0x48)(b);
+                release(b);
+                Sleep(30);
+            }
+        }
+        for k in [3usize, 5, 6, 7, 9, 10] {
+            let bytes = f.avg / a * a;
+            let (_, b) = create(ds, 0x102e0, false, &f, bytes);
+            slot::<Fn3>(b, 0x30)(b, 0, 0, 0);
+            // Until the write cursor has changed k times.
+            let changes = std::cell::Cell::new(0usize);
+            let last = std::cell::Cell::new(0u32);
+            let first = watch(b, 1_000_000, &|c| {
+                if c.1 != last.get() {
+                    last.set(c.1);
+                    changes.set(changes.get() + 1);
+                }
+                changes.get() >= k
+            });
+            slot::<Fn0>(b, 0x48)(b);
+            let before = read(b);
+            slot::<Fn3>(b, 0x30)(b, 0, 0, 0);
+            let replay = watch(b, 300_000, &|_| false);
+            writeln!(
+                o,
+                "DsEndPhase\t{rate:x} {channels:x} {bits:x} {bytes:x} stopped {k}\t{}\t-\t{}\t{}",
+                join(&first),
+                show(before),
+                join(&replay)
+            )
+            .unwrap();
+            slot::<Fn0>(b, 0x48)(b);
+            release(b);
+            Sleep(30);
+        }
+    }
+}
+
+/// The write cursor's steps around `SetFrequency` (and after an end then `Stop`), at 11025 Hz
+/// 8-bit and 22050 Hz 16-bit and frequencies whose frames per period are not whole. Every case
+/// records every change of the cursors and status from its first `Play`, with markers `|f`
+/// (`SetFrequency`), `|stop`, `|end` (the status read 0) and `|play` (`Play` again), each with
+/// its time:
+/// - `steady`: the frequency set before the first `Play`;
+/// - `retune_stop m1 m2`: `SetFrequency` after `m1` periods (write cursor changes), `Stop` after
+///   `m2` more, `Play`;
+/// - `retune_end m1`: a 300 ms buffer, `SetFrequency` after `m1` periods, played to its end,
+///   `Play`;
+/// - `stop_retune m1`: `Stop` after `m1` periods, `SetFrequency`, `Play`;
+/// - `ended_stop`: no new frequency; a buffer of the given length played to its end, `Stop`,
+///   `Play`;
+/// - `stopped m1`: no new frequency; `Stop` after `m1` periods, `Play`.
+///
+/// The first frequency change of more than 1/500 of the rate turns on DirectSound's second
+/// converter for the device (`dsound` `100581e0`); the cases run in three parts: before it
+/// (`dmo`), the large changes (`big`), and after it (`apl`). Lines: `DsFreqPhase<TAB>rate
+/// channels bits bytes variant frequency m1 m2 part<TAB>answers<TAB>samples`.
+unsafe fn freqphase(o: &mut impl Write, ds: *mut Obj) {
+    let mut freq = 0i64;
+    QueryPerformanceFrequency(&mut freq);
+    let read = |b: *mut Obj| {
+        let (mut p, mut w, mut s) = (0u32, 0u32, 0u32);
+        slot::<Fn2>(b, 0x10)(b, &mut p as *mut _ as usize, &mut w as *mut _ as usize);
+        slot::<Fn1>(b, 0x24)(b, &mut s as *mut _ as usize);
+        (p, w, s)
+    };
+    // Every change into `s` (us from `origin`) until `until(write changes, cursors)` or `limit`.
+    let watch = |b: *mut Obj,
+                 origin: i64,
+                 s: &mut Vec<String>,
+                 limit: i64,
+                 until: &dyn Fn(usize, (u32, u32, u32)) -> bool| {
+        let (mut last, mut changes) = ((u32::MAX, u32::MAX, u32::MAX), 0usize);
+        loop {
+            let t = now_us(freq, origin);
+            let now = read(b);
+            if now != last {
+                if last.0 != u32::MAX && now.1 != last.1 {
+                    changes += 1;
+                }
+                s.push(format!("{t}:{:x}:{:x}:{:x}", now.0, now.1, now.2));
+                last = now;
+            }
+            if until(changes, now) || t > limit {
+                break;
+            }
+        }
+    };
+    let mark = |s: &mut Vec<String>, what: &str, origin: i64| {
+        s.push(format!("|{what}@{}", now_us(freq, origin)));
+    };
+    let fmt11 = (1u16, 11025u32, 8u16);
+    let fmt22 = (1u16, 22050u32, 16u16);
+    type Case = (
+        (u16, u32, u16),
+        &'static str,
+        u32,
+        usize,
+        usize,
+        u32,
+        &'static str,
+    );
+    let mut cases: Vec<Case> = Vec::new();
+    // (format, variant, frequency, m1, m2, length in ms (0: the frames given in m2), part)
+    for frames in [2260usize, 2350, 2450, 2550] {
+        cases.push((fmt11, "ended_stop", 0, 0, frames, 0, "dmo"));
+    }
+    for part in ["dmo", "big", "apl"] {
+        let pairs: &[((u16, u32, u16), u32)] = match part {
+            "dmo" => &[(fmt11, 11040), (fmt22, 22071)],
+            "big" => &[(fmt11, 16537), (fmt22, 11025)],
+            _ => &[(fmt11, 11040), (fmt22, 22071)],
+        };
+        if part == "apl" {
+            for f in [fmt11, fmt22] {
+                cases.push((f, "steady", 0, 0, 0, 1000, part));
+                cases.push((f, "stopped", 0, 5, 0, 1000, part));
+            }
+            for frames in [2260usize, 2350] {
+                cases.push((fmt11, "ended_stop", 0, 0, frames, 0, part));
+            }
+        }
+        for &(f, to) in pairs {
+            cases.push((f, "steady", to, 0, 0, 1000, part));
+            cases.push((f, "retune_stop", to, 5, 3, 1000, part));
+            cases.push((f, "retune_stop", to, 6, 1, 1000, part));
+            cases.push((f, "retune_stop", to, 3, 4, 1000, part));
+            cases.push((f, "retune_end", to, 5, 0, 300, part));
+            cases.push((f, "stop_retune", to, 5, 0, 1000, part));
+            cases.push((f, "stop_retune", to, 6, 0, 1000, part));
+        }
+    }
+    for ((channels, rate, bits), variant, to, m1, m2, ms, part) in cases {
+        let f = format(channels, rate, bits);
+        let a = f.align as u32;
+        let bytes = if ms == 0 {
+            m2 as u32 * a
+        } else {
+            f.avg * ms / 1000 / a * a
+        };
+        let (_, b) = create(ds, 0x102e0, false, &f, bytes);
+        let mut answers = Vec::new();
+        let mut s = Vec::new();
+        let setf = |answers: &mut Vec<String>| {
+            answers.push(format!("{:x}", slot::<Fn1>(b, 0x44)(b, to as usize)));
+        };
+        if variant == "steady" && to != 0 {
+            setf(&mut answers);
+        }
+        let mut origin = 0i64;
+        QueryPerformanceCounter(&mut origin);
+        slot::<Fn3>(b, 0x30)(b, 0, 0, 0);
+        let ended = |_: usize, c: (u32, u32, u32)| c.2 & 1 == 0;
+        match variant {
+            "steady" => watch(b, origin, &mut s, 300_000, &|_, _| false),
+            "retune_stop" => {
+                watch(b, origin, &mut s, 1_000_000, &|n, _| n >= m1);
+                setf(&mut answers);
+                mark(&mut s, "f", origin);
+                watch(b, origin, &mut s, 1_000_000, &|n, _| n >= m2);
+                slot::<Fn0>(b, 0x48)(b);
+                mark(&mut s, "stop", origin);
+            }
+            "retune_end" => {
+                watch(b, origin, &mut s, 1_000_000, &|n, _| n >= m1);
+                setf(&mut answers);
+                mark(&mut s, "f", origin);
+                watch(b, origin, &mut s, 2_000_000, &ended);
+                mark(&mut s, "end", origin);
+                Sleep(20);
+            }
+            "stop_retune" | "stopped" => {
+                watch(b, origin, &mut s, 1_000_000, &|n, _| n >= m1);
+                slot::<Fn0>(b, 0x48)(b);
+                mark(&mut s, "stop", origin);
+                if to != 0 {
+                    setf(&mut answers);
+                    mark(&mut s, "f", origin);
+                }
+            }
+            _ => {
+                // ended_stop
+                watch(b, origin, &mut s, 2_000_000, &ended);
+                mark(&mut s, "end", origin);
+                Sleep(20);
+                slot::<Fn0>(b, 0x48)(b);
+                mark(&mut s, "stop", origin);
+            }
+        }
+        if variant != "steady" {
+            let t = now_us(freq, origin);
+            slot::<Fn3>(b, 0x30)(b, 0, 0, 0);
+            mark(&mut s, "play", origin);
+            watch(b, origin, &mut s, t + 300_000, &|_, _| false);
+        }
+        writeln!(
+            o,
+            "DsFreqPhase\t{rate:x} {channels:x} {bits:x} {bytes:x} {variant} {to} {m1} {m2} {part}\t{}\t{}",
+            if answers.is_empty() { "-".to_string() } else { answers.join(",") },
+            s.join(" ")
+        )
+        .unwrap();
+        slot::<Fn0>(b, 0x48)(b);
+        release(b);
+        Sleep(30);
+    }
+}
+
+/// A buffer that does not loop, at its end: can its write cursor read its length while it plays,
+/// and what do `Stop` and `Play` do there? Also a looping buffer turned not looping after it
+/// went round (`Play(0, 0, 0)` while it plays, with and without a `SetFrequency` to the same
+/// frequency just before). 22050 Hz 16-bit and 11025 Hz 8-bit, lengths around 20 periods'
+/// frames (plus the first `Play`'s lead), first with DirectSound's first converter (`dmo`),
+/// then with the second turned on by a large change on another buffer (`apl`). Cases:
+/// - `atend`: `Play`; if a read shows the status playing with the write cursor at the length,
+///   `Stop` there, then `Play`;
+/// - `last`: `Play`; `Stop` at the first read with the write cursor less than one period's frames
+///   from the length, then `Play`;
+/// - `loopoff`, `loopoff_f`: a looping buffer played 1.5 times round, then `Play(0, 0, 0)` (after
+///   `SetFrequency` to its own rate for `loopoff_f`).
+///
+/// With `more` as a second argument: 44100 and 22050 Hz stereo 16-bit and 48000 Hz mono 16-bit
+/// (the device's rate here) instead.
+///
+/// Every change of the cursors and status from the first `Play` is written, with markers `|stop`,
+/// `|play`, `|loopoff`, `|f` and `|end` (the status read 0). Lines: `DsEndStop<TAB>rate
+/// channels bits bytes variant part<TAB>samples`.
+unsafe fn endstop(o: &mut impl Write, ds: *mut Obj) {
+    let mut freq = 0i64;
+    QueryPerformanceFrequency(&mut freq);
+    let read = |b: *mut Obj| {
+        let (mut p, mut w, mut s) = (0u32, 0u32, 0u32);
+        slot::<Fn2>(b, 0x10)(b, &mut p as *mut _ as usize, &mut w as *mut _ as usize);
+        slot::<Fn1>(b, 0x24)(b, &mut s as *mut _ as usize);
+        (p, w, s)
+    };
+    let watch = |b: *mut Obj,
+                 origin: i64,
+                 s: &mut Vec<String>,
+                 limit: i64,
+                 until: &dyn Fn((u32, u32, u32)) -> bool| {
+        let mut last = (u32::MAX, u32::MAX, u32::MAX);
+        loop {
+            let t = now_us(freq, origin);
+            let now = read(b);
+            if now != last {
+                s.push(format!("{t}:{:x}:{:x}:{:x}", now.0, now.1, now.2));
+                last = now;
+            }
+            if until(now) || t > limit {
+                return now;
+            }
+        }
+    };
+    let mark = |s: &mut Vec<String>, what: &str, origin: i64| {
+        s.push(format!("|{what}@{}", now_us(freq, origin)));
+    };
+    for part in ["dmo", "apl"] {
+        if part == "apl" {
+            // A large frequency change on another buffer turns the second converter on.
+            let f = format(1, 22050, 16);
+            let (_, x) = create(ds, 0x102e0, false, &f, f.avg);
+            slot::<Fn1>(x, 0x44)(x, 30000);
+            slot::<Fn3>(x, 0x30)(x, 0, 0, 0);
+            Sleep(30);
+            slot::<Fn0>(x, 0x48)(x);
+            release(x);
+        }
+        // `endstop more`: stereo 16-bit and the device's own rate (48000 Hz here) instead.
+        let more = std::env::args().nth(2).as_deref() == Some("more");
+        let leads: &[i32] = match (part, more) {
+            ("dmo", false) => &[30, 31, 32, 33, 34, 35, 36],
+            (_, false) => &[-1, 0, 1, 2, 3],
+            ("dmo", true) => &[0, 1, 33],
+            _ => &[0, 1, 2],
+        };
+        let formats: &[(u16, u32, u16, i32)] = if more {
+            &[
+                (2, 44100, 16, 8820),
+                (2, 22050, 16, 4410),
+                (1, 48000, 16, 9600),
+            ]
+        } else {
+            &[(1, 22050, 16, 4410), (1, 11025, 8, 2205)]
+        };
+        for &(channels, rate, bits, frames20) in formats {
+            let f = format(channels, rate, bits);
+            let a = f.align as u32;
+            let step = rate / 100 + 1;
+            let mut cases: Vec<(&str, u32)> = Vec::new();
+            for &d in leads {
+                cases.push(("atend", (frames20 + d) as u32));
+                cases.push(("last", (frames20 + d) as u32));
+            }
+            cases.push(("loopoff", frames20 as u32));
+            cases.push(("loopoff_f", frames20 as u32));
+            for (variant, frames) in cases {
+                let bytes = frames * a;
+                let (_, b) = create(ds, 0x102e0, false, &f, bytes);
+                let mut s = Vec::new();
+                let mut origin = 0i64;
+                QueryPerformanceCounter(&mut origin);
+                let looping = variant.starts_with("loopoff") as usize;
+                slot::<Fn3>(b, 0x30)(b, 0, 0, looping);
+                match variant {
+                    "atend" => {
+                        let c = watch(b, origin, &mut s, 2_000_000, &|c| {
+                            c.2 & 1 == 0 || c.1 == bytes
+                        });
+                        if c.2 & 1 != 0 {
+                            slot::<Fn0>(b, 0x48)(b);
+                            mark(&mut s, "stop", origin);
+                        } else {
+                            mark(&mut s, "end", origin);
+                        }
+                    }
+                    "last" => {
+                        let c = watch(b, origin, &mut s, 2_000_000, &|c| {
+                            c.2 & 1 == 0 || c.1 + step * a >= bytes
+                        });
+                        if c.2 & 1 != 0 {
+                            slot::<Fn0>(b, 0x48)(b);
+                            mark(&mut s, "stop", origin);
+                        } else {
+                            mark(&mut s, "end", origin);
+                        }
+                    }
+                    _ => {
+                        watch(b, origin, &mut s, 300_000, &|_| false);
+                        if variant == "loopoff_f" {
+                            slot::<Fn1>(b, 0x44)(b, rate as usize);
+                            mark(&mut s, "f", origin);
+                        }
+                        slot::<Fn3>(b, 0x30)(b, 0, 0, 0);
+                        mark(&mut s, "loopoff", origin);
+                        let t = now_us(freq, origin);
+                        watch(b, origin, &mut s, t + 400_000, &|_| false);
+                    }
+                }
+                if !variant.starts_with("loopoff") {
+                    let c = read(b);
+                    s.push(format!(
+                        "{}:{:x}:{:x}:{:x}",
+                        now_us(freq, origin),
+                        c.0,
+                        c.1,
+                        c.2
+                    ));
+                    let t = now_us(freq, origin);
+                    slot::<Fn3>(b, 0x30)(b, 0, 0, 0);
+                    mark(&mut s, "play", origin);
+                    watch(b, origin, &mut s, t + 150_000, &|_| false);
+                }
+                writeln!(
+                    o,
+                    "DsEndStop\t{rate:x} {channels:x} {bits:x} {bytes:x} {variant} {part}\t{}",
+                    s.join(" ")
+                )
+                .unwrap();
+                slot::<Fn0>(b, 0x48)(b);
+                release(b);
+                Sleep(30);
+            }
+        }
+    }
+}
+
 fn main() {
     let mut o = std::io::stdout().lock();
+    if std::env::args().nth(1).as_deref() == Some("endstop") {
+        unsafe {
+            let window = window();
+            let mut ds: *mut Obj = std::ptr::null_mut();
+            let hr = DirectSoundCreate8(std::ptr::null(), &mut ds, std::ptr::null_mut());
+            writeln!(o, "DsCreate\t\t{hr:x}\t").unwrap();
+            if ds.is_null() {
+                return;
+            }
+            let hr = slot::<Fn2>(ds, 0x18)(ds, window as usize, 2);
+            writeln!(o, "DsCooperativeLevel\t2\t{hr:x}\t").unwrap();
+            endstop(&mut o, ds);
+            release(ds);
+            writeln!(o, "DsEnd").unwrap();
+        }
+        return;
+    }
     let only_replays = std::env::args().nth(1).as_deref() == Some("replays");
+    let only_setpos = std::env::args().nth(1).as_deref() == Some("setpos");
+    if std::env::args().nth(1).as_deref() == Some("freqphase") {
+        unsafe {
+            let window = window();
+            let mut ds: *mut Obj = std::ptr::null_mut();
+            let hr = DirectSoundCreate8(std::ptr::null(), &mut ds, std::ptr::null_mut());
+            writeln!(o, "DsCreate\t\t{hr:x}\t").unwrap();
+            if ds.is_null() {
+                return;
+            }
+            let hr = slot::<Fn2>(ds, 0x18)(ds, window as usize, 2);
+            writeln!(o, "DsCooperativeLevel\t2\t{hr:x}\t").unwrap();
+            freqphase(&mut o, ds);
+            release(ds);
+            writeln!(o, "DsEnd").unwrap();
+        }
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("endphase") {
+        unsafe {
+            let window = window();
+            let mut ds: *mut Obj = std::ptr::null_mut();
+            let hr = DirectSoundCreate8(std::ptr::null(), &mut ds, std::ptr::null_mut());
+            writeln!(o, "DsCreate\t\t{hr:x}\t").unwrap();
+            if ds.is_null() {
+                return;
+            }
+            let hr = slot::<Fn2>(ds, 0x18)(ds, window as usize, 2);
+            writeln!(o, "DsCooperativeLevel\t2\t{hr:x}\t").unwrap();
+            endphase(&mut o, ds);
+            release(ds);
+            writeln!(o, "DsEnd").unwrap();
+        }
+        return;
+    }
     unsafe {
         let window = window();
         let mut ds: *mut Obj = std::ptr::null_mut();
@@ -670,6 +1380,12 @@ fn main() {
         }
         let hr = slot::<Fn2>(ds, 0x18)(ds, window as usize, 2);
         writeln!(o, "DsCooperativeLevel\t2\t{hr:x}\t").unwrap();
+        if only_setpos {
+            setpos(&mut o, ds);
+            release(ds);
+            writeln!(o, "DsEnd").unwrap();
+            return;
+        }
         if only_replays {
             replays(&mut o, ds);
             release(ds);

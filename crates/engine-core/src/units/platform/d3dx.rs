@@ -149,7 +149,35 @@ fn matrix(e: &Engine, at: u32) -> [u32; 16] {
 /// - rows 0, 1 and 2 multiply `m1[i][k] * m2[k][j]`; row 3 multiplies `m2[k][j] * m1[i][k]`
 ///   (which NaN wins when both are NaNs);
 /// - rows 0 and 3 add `(p0 + p1) + (p2 + p3)`; rows 1 and 2 add `((p0 + p1) + p2) + p3`.
+///
+/// Worked out first with plain single-precision arithmetic in the same order: a NaN anywhere
+/// in a word's working (a NaN input, or an invalid product or sum) makes that word NaN, so
+/// when no word comes out NaN, every product and sum had ordinary operands and an ordinary
+/// result, and each is the same IEEE operation the NaN rules wrap (a product of two ordinary
+/// floats is the same either way round): the same bits. Otherwise the NaN rules decide which
+/// NaN comes out ([`multiply_exact`]).
 pub fn multiply(a: &[u32; 16], b: &[u32; 16]) -> [u32; 16] {
+    let f = |w: u32| f32::from_bits(w);
+    let mut out = [0u32; 16];
+    for i in 0..4 {
+        for j in 0..4 {
+            let p: [f32; 4] = std::array::from_fn(|k| f(a[4 * i + k]) * f(b[4 * k + j]));
+            let sum = if i == 0 || i == 3 {
+                (p[0] + p[1]) + (p[2] + p[3])
+            } else {
+                ((p[0] + p[1]) + p[2]) + p[3]
+            };
+            out[4 * i + j] = sum.to_bits();
+        }
+    }
+    if out.iter().any(|&w| w & 0x7fff_ffff > 0x7f80_0000) {
+        return multiply_exact(a, b);
+    }
+    out
+}
+
+/// [`multiply`] with the NaN rules of the SSE instructions at each product and sum.
+fn multiply_exact(a: &[u32; 16], b: &[u32; 16]) -> [u32; 16] {
     let mut out = [0u32; 16];
     for i in 0..4 {
         for j in 0..4 {
@@ -1264,6 +1292,100 @@ mod tests {
                 (f[1].to_string(), words(f[3]), words(f[4]), words(f[5]))
             })
             .collect()
+    }
+
+    /// The cost of the matrix helpers the renderer calls per object (`D3DXMatrixMultiply`,
+    /// `D3DXMatrixMultiplyTranspose`, `D3DXMatrixTranspose`), per call, on matrices of ordinary
+    /// floats in engine memory (TEST DATA). `cargo test --release -p engine-core --lib
+    /// cost_of_d3dx -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn cost_of_d3dx_matrix_helpers() {
+        let mut e = Engine::new();
+        let n = 256u32;
+        let block = e.mem.alloc(64 * n + 64);
+        let mut x = 0x1234_5678u32;
+        for i in 0..16 * n {
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let f = (x >> 8) as f32 / 16_777_216.0 * 8.0 - 4.0;
+            e.mem.set_u32(block + 4 * i, f.to_bits());
+        }
+        let out = block + 64 * n;
+        let calls = 2_000_000u32;
+        let mut time = |f: fn(&mut Engine, Ptr, Ptr, Ptr) -> u32| {
+            let mut best = f64::MAX;
+            for _ in 0..3 {
+                let t = std::time::Instant::now();
+                for i in 0..calls {
+                    let a = block + 64 * (i % n);
+                    let b = block + 64 * ((i * 7 + 3) % n);
+                    f(&mut e, Ptr::new(out), Ptr::new(a), Ptr::new(b));
+                }
+                best = best.min(t.elapsed().as_nanos() as f64 / f64::from(calls));
+            }
+            best
+        };
+        let multiply_ns = time(matrix_multiply);
+        let transpose_product_ns = time(matrix_multiply_transpose);
+        let transpose_ns = time(|e, out, m, _| matrix_transpose(e, out, m));
+        eprintln!(
+            "cost of D3DX: MatrixMultiply {multiply_ns:.1} ns, MatrixMultiplyTranspose \
+             {transpose_product_ns:.1} ns, MatrixTranspose {transpose_ns:.1} ns ({:08x})",
+            e.mem.u32(out)
+        );
+    }
+
+    /// The plain-arithmetic product answers what the NaN rules answer, word for word, on
+    /// ordinary floats and on every kind of special one (TEST DATA: pseudo-random matrices
+    /// whose words are drawn from zeros, denormals, infinities, quiet and signalling NaNs with
+    /// payloads, huge and tiny values and random words).
+    #[test]
+    fn the_plain_product_is_the_product_with_the_nan_rules() {
+        const SPECIAL: [u32; 14] = [
+            0x0000_0000,
+            0x8000_0000,
+            0x0000_0001,
+            0x807f_ffff,
+            0x7f80_0000,
+            0xff80_0000,
+            0x7fc0_0000,
+            0xffc0_0001,
+            0x7f80_0001,
+            0xffa0_0123,
+            0x7f7f_ffff,
+            0xff7f_ffff,
+            0x0080_0000,
+            0x3f80_0000,
+        ];
+        let mut x = 0x9e37_79b9u32;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x
+        };
+        for case in 0..200_000 {
+            // Some matrices of ordinary floats only, others with a few special words.
+            let specials = case % 4;
+            let mut m = || -> [u32; 16] {
+                std::array::from_fn(|_| {
+                    let r = next();
+                    if specials > 0 && r % 16 < specials {
+                        SPECIAL[(r >> 8) as usize % SPECIAL.len()]
+                    } else if r % 7 == 0 {
+                        next()
+                    } else {
+                        ((r >> 9) as f32 / 4_194_304.0 * 2.0 - 1.0).to_bits()
+                    }
+                })
+            };
+            let (a, b) = (m(), m());
+            assert_eq!(
+                multiply(&a, &b),
+                multiply_exact(&a, &b),
+                "{a:08x?} * {b:08x?}"
+            );
+        }
     }
 
     #[test]

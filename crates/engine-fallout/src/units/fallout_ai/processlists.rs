@@ -6413,14 +6413,16 @@ pub fn fn_00978400(e: &mut Engine, this: Ptr) -> u8 {
 
 // Translated from 00978420 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Calls the actor vtable slot 0x268 with `delta` on every actor of process
-/// level 0. The second stack word is never read.
+/// level 0. The second stack word is never read. The delta goes out through
+/// `FLD`/`FSTP` (a signalling NaN arrives quieted).
 pub fn fn_00978420(e: &mut Engine, this: Ptr<ProcessLists>, delta: f32, _unused_0: u32) {
     let array = mob_process_array(this);
     let mut index = array_head(e, array, 0);
     while index < array_tail(e, array, 0) {
         let object = array_object(e, array, index);
         if object != 0 && is_actor(e, object) {
-            e.vcall(object, 0x268, &args![delta]);
+            // 0097849a: FLD float ptr [EBP+0x8]; FSTP float ptr [ESP]
+            e.vcall(object, 0x268, &args![x87_quiet(delta)]);
         }
         index = index.wrapping_add(1);
     }
@@ -13821,6 +13823,17 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x0097_8420, &args![lists, 0.5f32, 99u32]);
         assert_eq!(calls(&e, slot(0x268)), vec![vec![actor, 0.5f32.to_bits()]]);
+    }
+
+    #[test]
+    fn slot_0x268_gets_a_signalling_nan_delta_quieted_00978420() {
+        // 0097849a: the delta is copied with FLD/FSTP, which quiets an SNaN.
+        let mut e = fixture();
+        let (lists, actor, _) = actor_world(&mut e);
+        stubs(&mut e, &[slot(0x268)]);
+        e.call_log = Some(vec![]);
+        e.call(0x0097_8420, &args![lists, 0x7f80_0001u32, 99u32]);
+        assert_eq!(calls(&e, slot(0x268)), vec![vec![actor, 0x7fc0_0001]]);
     }
 
     #[test]

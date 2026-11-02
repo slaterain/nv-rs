@@ -617,8 +617,9 @@ pub fn fn_00c4cf80(e: &mut Engine, this: Ptr) {
         };
         let mut current_position: u32 = 2;
         copy_point(e, current, 2);
+        // 00c4d029: the first point is copied once, before the loop (whose head is 00c4d04c).
+        copy_point(e, first, 0);
         loop {
-            copy_point(e, first, 0);
             if e.call(POINT_EQUALS, &args![current, first]).u8() != 0 {
                 break;
             }
@@ -2069,5 +2070,75 @@ mod n069_tests {
             assert_eq!(e.mem.u32(this + field), 0);
         }
         assert_eq!(calls_to(&log, ORDER_ARRAY_DESTRUCTOR).len(), 1);
+    }
+
+    #[test]
+    fn the_first_point_is_copied_once_before_the_ear_loop() {
+        // 00c4d029: the loop (head 00c4d04c) compares with the copy made before it, so a
+        // first point that changes while ears are clipped does not end the loop early.
+        let mut e = engine();
+        let log: Log = Default::default();
+        let order_buffer = e.mem.alloc(0x20);
+        e.register_double(ORDER_ARRAY_SET_UP, move |e, a| {
+            e.mem.set_u32(a[0] + 4, order_buffer);
+            e.mem.set_u32(a[0] + 8, 0);
+            e.mem.set_u32(a[0] + 0xc, 8);
+            Ret::default()
+        });
+        e.register(ORDER_ARRAY_APPEND, |e, a| {
+            let size = e.mem.u32(a[0] + 8);
+            let buffer = e.mem.u32(a[0] + 4);
+            let value = e.mem.u32(a[1]);
+            e.mem.set_u32(buffer + 4 * size, value);
+            e.mem.set_u32(a[0] + 8, size + 1);
+            Ret::default()
+        });
+        record(
+            &mut e,
+            &log,
+            &[INDEX_ARRAY_SET_UP, ORDER_ARRAY_DESTRUCTOR, MEMCPY],
+            0,
+        );
+        record(&mut e, &log, &[NI_NEW], 0x7000);
+        record(&mut e, &log, &[TRI_SHAPE_DATA_CONSTRUCTOR], 0x7100);
+        record(&mut e, &log, &[TRI_SHAPE_CONSTRUCTOR], 0x7200);
+        let node = e.mem.alloc(8);
+        record(&mut e, &log, &[NODE_CONSTRUCTOR], node);
+        let mut slots = vec![0u32; 0x38];
+        slots[0xdc / 4] = 0x00ee_d000;
+        e.put_vtable(0x0300_a000, &slots);
+        e.mem.set_u32(node, 0x0300_a000);
+        record(&mut e, &log, &[0x00ee_d000], 0);
+        e.register(ASSIGN_POINTER, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        let this = polygon(
+            &mut e,
+            &[
+                (0.0, 0.0, 5.0),
+                (1.0, 0.0, 5.0),
+                (2.0, 1.0, 5.0),
+                (1.0, 2.0, 5.0),
+                (0.0, 1.0, 5.0),
+            ],
+        );
+        let points = e.mem.u32(e.mem.u32(this + POINTS) + 4);
+        // After the first ear, point 0 becomes equal to point 3, the next current point.
+        let added = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let inner = added.clone();
+        e.register_double(INDEX_ARRAY_ADD, move |e, a| {
+            inner.borrow_mut().push(e.mem.u16(a[1]));
+            if inner.borrow().len() == 3 {
+                let words = point_words(e, points + 3 * 0xc);
+                for (k, word) in words.iter().enumerate() {
+                    e.mem.set_u32(points + 4 * k as u32, *word);
+                }
+            }
+            Ret::default()
+        });
+        e.call(0x00c4_cf80, &args![this]);
+        assert_eq!(*added.borrow(), vec![2, 1, 0, 3, 2, 0, 4, 3, 0]);
+        assert_eq!(e.mem.u32(this + TRIANGLE_COUNT), 3);
     }
 }

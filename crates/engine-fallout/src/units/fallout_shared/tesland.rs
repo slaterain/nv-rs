@@ -4662,8 +4662,12 @@ pub fn fn_0053a940(e: &mut Engine, this: Ptr<TESObjectLAND>) {
                 row_sum = sum_f32(row_sum, opacity);
             }
             if (row_sum as f64) < e.global::<f64>(F64_ONE) {
-                let rest = (1.0 - row_sum as f64) + e.mem.f32(sums + 4 * count) as f64;
-                e.mem.set_f32(sums + 4 * count, rest as f32);
+                // 0053ab06: `FLD1; FSUBRP; FADD dword [sums + 4 * count]` on
+                // the x87 stack, each step rounded to the control word's
+                // precision, one `FSTP dword` at the end.
+                let share = x87_sub(1.0, f64::from(row_sum));
+                let rest = x87_add(share, x87_m32(e.mem.u32(sums + 4 * count)));
+                e.mem.set_u32(sums + 4 * count, x87_store32(rest));
             }
         }
         let mut best = None;
@@ -4848,8 +4852,10 @@ pub fn fn_0053aeb0(e: &mut Engine, this: Ptr<TESObjectLAND>) {
                 let row = percent_row(e, percent, vertex);
                 let mut sum = 0.0f32;
                 for slot in (1..=6u32).rev() {
+                    // 0053b324: the opacity moves through the x87 stack
+                    // (`FLD dword; FSTP dword`), which quiets a signalling NaN.
                     let lower = e.mem.u32(row + 4 * (slot - 1));
-                    e.mem.set_u32(row + 4 * slot, lower);
+                    e.mem.set_u32(row + 4 * slot, x87_quiet_bits(lower));
                     sum = sum_f32(sum, e.mem.f32(row + 4 * slot));
                 }
                 let rest = (1.0 - sum as f64) as f32;
@@ -5023,7 +5029,10 @@ pub fn tes_object_land_get_coord_data(
             e.set(out, CoordData::OddBlock, 1u8);
             e.set(out, CoordData::TriangleVertex0, first.wrapping_add(1));
             e.set(out, CoordData::TriangleVertex1, next_row);
-            if block_offset_x as f64 + block_offset_y as f64 > e.global::<f64>(F64_128) {
+            // 0053b9c3: `FLD; FADD dword` rounds the sum to the control word's
+            // precision before `FCOMP` with 128.
+            let offset_sum = x87_add(f64::from(block_offset_x), f64::from(block_offset_y));
+            if offset_sum > e.global::<f64>(F64_128) {
                 e.set(out, CoordData::TriangleVertex2, next_row.wrapping_add(1));
                 e.set(out, CoordData::SecondTriangle, 1u8);
             } else {
@@ -5042,7 +5051,11 @@ pub fn tes_object_land_get_coord_data(
             let mut nearest_distance = 0.0f32;
             let mut nearest = 0u32;
             e.with_stack(8, |e, target| {
-                e.call(NI_POINT2_CONSTRUCT, &args![target, x, y]);
+                // 0053bab1: both pass through `FLD dword; FSTP dword [ESP]`.
+                e.call(
+                    NI_POINT2_CONSTRUCT,
+                    &args![target, x87_quiet(x), x87_quiet(y)],
+                );
                 for candidate in 0..3u32 {
                     let index = e
                         .mem
@@ -5138,7 +5151,9 @@ fn clear_weak_samples(e: &mut Engine, record: u32, threshold: f32) {
     for sample in 0..9u32 {
         sum = sum_f32(sum, e.mem.f32(record + 0x20 + 4 * sample));
     }
-    if (threshold as f64) > sum as f64 / e.global::<f64>(F64_NINE) {
+    // 0053c27c / 0053c977: the mean stays on the x87 stack (`FDIV qword`,
+    // rounded to the control word's precision) for the compare.
+    if (threshold as f64) > x87_div(f64::from(sum), e.global::<f64>(F64_NINE)) {
         for sample in 0..9u32 {
             e.mem.set_f32(record + 0x20 + 4 * sample, 0.0);
         }
@@ -6273,33 +6288,49 @@ pub fn fn_0053f1e0(
         fn_00534240(e, this, quadrant, vertex_b, second);
         let vertex_c = e.get(info, CoordData::TriangleVertex1);
         fn_00534240(e, this, quadrant, vertex_c, third);
-        let a = e.mem.f32(first.addr() + 8) as f64;
-        let b = e.mem.f32(second.addr() + 8) as f64;
-        let c = e.mem.f32(third.addr() + 8) as f64;
+        // 0053f24f: the heights are copied through the x87 stack (`FLD dword;
+        // FSTP dword`); every step below runs on the stack in exe order,
+        // rounded to the control word's precision, and only the slopes and
+        // the result are stored as floats.
+        let a = f64::from(x87_quiet(e.mem.f32(first.addr() + 8)));
+        let b = f64::from(x87_quiet(e.mem.f32(second.addr() + 8)));
+        let c = f64::from(x87_quiet(e.mem.f32(third.addr() + 8)));
         let block = e.global::<f64>(F64_128);
-        let x = e.get(info, CoordData::BlockOffsetX) as f64;
-        let y = e.get(info, CoordData::BlockOffsetY) as f64;
+        let x_bits = e.get(info, CoordData::BlockOffsetX).to_bits();
+        let y_bits = e.get(info, CoordData::BlockOffsetY).to_bits();
+        // The offsets as `FMUL dword` operands.
+        let (x, y) = (x87_m32(x_bits), x87_m32(y_bits));
         let odd = e.get(info, CoordData::OddBlock) != 0;
         let second_triangle = e.get(info, CoordData::SecondTriangle) != 0;
-        let slope = |from: f64, to: f64| ((to - from) / block) as f32 as f64;
+        // `FLD to; FSUB from; FDIV qword 128; FSTP dword`, loaded again.
+        let slope = |from: f64, to: f64| {
+            f64::from(f32::from_bits(x87_store32(x87_div(
+                x87_sub(to, from),
+                block,
+            ))))
+        };
         let height = if !odd {
             let s = slope(b, a);
             let t = slope(a, c);
             if !second_triangle {
-                (s * x + b) + t * y
+                x87_add(x87_add(x87_mul(s, x), b), x87_mul(t, y))
             } else {
-                (s * y + b) + t * x
+                x87_add(x87_add(x87_mul(s, y), b), x87_mul(t, x))
             }
         } else if !second_triangle {
             let s = slope(a, b);
             let t = slope(a, c);
-            (s * x + a) + t * y
+            x87_add(x87_add(x87_mul(s, x), a), x87_mul(t, y))
         } else {
             let s = slope(c, a);
             let t = slope(b, a);
-            a - ((block - x) * s + (block - y) * t)
+            // 0053f31e: `FLD dword x; FSUBR qword 128; FMUL dword s`, the
+            // same for y and t, `FADDP; FSUBR dword a`.
+            let across_x = x87_mul(x87_sub(block, x87_load32(x_bits)), s);
+            let across_y = x87_mul(x87_sub(block, x87_load32(y_bits)), t);
+            x87_sub(a, x87_add(across_x, across_y))
         };
-        e.mem.set_f32(out.addr(), height as f32);
+        e.mem.set_u32(out.addr(), x87_store32(height));
         true
     })
 }
@@ -6767,14 +6798,19 @@ pub fn tes_object_land_init_distant_texture_blending(e: &mut Engine, this: Ptr<T
             let cell_y = e.get(data, LoadedLandData::iCellY);
             let along_x = (cell_x as f64 - first_short as f64) as f32;
             let along_y = (cell_y as f64 - second_short as f64) as f32;
-            let sum_x = along_x as f64 + offset[0] as f64;
+            // 0054040f: `FLD dword; FADD dword; FSTP qword`, then the word
+            // (`FILD qword`, zero-extended) divides it (`FDIVR qword`), each
+            // rounded to the control word's precision; `FSTP dword`.
+            let sum_x = x87_add(f64::from(along_x), x87_m32(offset[0].to_bits()));
             let target = e.call(SMART_POINTER_GET, &args![object]).u32();
             let divisor_x = e.call(DATA_HANDLER_WORD_AT_4, &args![target]).u32();
-            let mut fraction_x = (sum_x / divisor_x as f64) as f32;
-            let sum_y = along_y as f64 + offset[1] as f64;
+            let quotient_x = x87_div(sum_x, f64::from(divisor_x));
+            let mut fraction_x = f32::from_bits(x87_store32(quotient_x));
+            let sum_y = x87_add(f64::from(along_y), x87_m32(offset[1].to_bits()));
             let target = e.call(SMART_POINTER_GET, &args![object]).u32();
             let divisor_y = e.call(DATA_HANDLER_WORD_AT_4, &args![target]).u32();
-            let mut fraction_y = (sum_y / divisor_y as f64) as f32;
+            let quotient_y = x87_div(sum_y, f64::from(divisor_y));
+            let mut fraction_y = f32::from_bits(x87_store32(quotient_y));
             let one = e.global::<f64>(F64_ONE);
             let zero = e.global::<f64>(F64_ZERO);
             while fraction_x as f64 > one {
@@ -12038,6 +12074,42 @@ mod tests {
         e.call(0x0053_a940, &args![bare]);
     }
 
+    #[test]
+    fn default_share_of_weak_layers_rounds_at_the_control_words_precision() {
+        // 0053ab06: `(1 - sum) + share` stays on the x87 stack. Vertex 0
+        // leaves 0.5 + 2^-23 to the default texture, vertex 1 leaves
+        // 1 - 0.75 * 2^-24: at 24-bit precision that is 1 - 2^-24 first and
+        // the sum 1.5 + 2^-24 rounds to even (1.5); at 53-bit the exact
+        // 1.5 + 1.25 * 2^-24 rounds up to 1.5 + 2^-23.
+        fn default_share(word: u16) -> u32 {
+            let mut e = engine();
+            let (this, data) = percent_land(&mut e);
+            set_layers(&mut e, data, 0, &[0x500, 0, 0, 0, 0, 0]);
+            set_opacities(&mut e, data, 0, 0, &[0.5 - f32::EPSILON]);
+            set_opacities(&mut e, data, 0, 1, &[3.0 / 67_108_864.0]);
+            for vertex in 2..0x121 {
+                set_opacities(&mut e, data, 0, vertex, &[1.0]);
+            }
+            // The scratch array of quadrant 0 is the first block freed:
+            // (layer total, default share).
+            let freed = recorder::<u32>();
+            let sink = freed.clone();
+            e.register_double(DEALLOCATE, move |e, a| {
+                if sink.borrow().is_empty() {
+                    sink.borrow_mut().push(e.mem.u32(a[0] + 4));
+                }
+                e.mem.free(a[0]);
+                Ret::default()
+            });
+            crate::units::crt::set_x87_control_word(&mut e, word);
+            e.call(0x0053_a940, &args![this]);
+            crate::units::crt::set_x87_control_word(&mut e, 0x027f);
+            freed.take()[0]
+        }
+        assert_eq!(default_share(0x007f), 1.5f32.to_bits());
+        assert_eq!(default_share(0x027f), 1.5f32.to_bits() + 1);
+    }
+
     /// Float helpers for the doubles of the layer merge.
     fn merge_doubles(e: &mut Engine) {
         // The texture groups are the top nibble of the 16-bit value: textures
@@ -12084,6 +12156,23 @@ mod tests {
         // Quadrant 1: the layer shares the default's group: dropped.
         assert_eq!(layers(&e, data, 1), vec![0; 6]);
         assert_eq!(opacities(&e, data, 1, 1)[..2], [1.0, 0.0]);
+    }
+
+    #[test]
+    fn opacities_move_up_through_the_x87_stack() {
+        let mut e = engine();
+        merge_doubles(&mut e);
+        let (this, data) = percent_land(&mut e);
+        // One layer, of another group than the default texture; vertex 5
+        // holds a signalling NaN in its first opacity.
+        set_default_texture(&mut e, data, 0, 0x1000);
+        set_layers(&mut e, data, 0, &[0x2000, 0, 0, 0, 0, 0]);
+        let row = opacity_row(&e, data, 0, 5);
+        e.mem.set_u32(row, 0x7f80_0001);
+        e.call(0x0053_aeb0, &args![this]);
+        // 0053b324 copies it with `FLD dword; FSTP dword`: quieted.
+        assert_eq!(e.mem.u32(row + 4), 0x7fc0_0001);
+        assert_eq!(layers(&e, data, 0), vec![0x2000, 0, 0, 0, 0, 0]);
     }
 
     /// Whether the call log has a call to `address`.
@@ -12442,6 +12531,26 @@ mod tests {
     }
 
     #[test]
+    fn coord_data_odd_block_sum_rounds_at_the_control_words_precision() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, _data) = terrain(&mut e);
+        // Block (0, 1), odd; offsets 64 + 2^-17 and 64. 0053b9c3 adds them
+        // on the x87 stack: at 24-bit precision 128 + 2^-17 rounds to 128
+        // (not above 128: the first triangle), at 53-bit it stays above.
+        let at = position(&mut e, f32::from_bits(0x4280_0001), 192.0);
+        let info = coord_info(&mut e);
+        for (word, second, vertex) in [(0x007fu16, 0u8, 17), (0x027f, 1, 35)] {
+            crate::units::crt::set_x87_control_word(&mut e, word);
+            e.call(0x0053_b550, &args![this, info, at, 0u32]);
+            assert_eq!(e.get(info, CoordData::OddBlock), 1);
+            assert_eq!(e.get(info, CoordData::SecondTriangle), second, "{word:#x}");
+            assert_eq!(e.get(info, CoordData::TriangleVertex2), vertex, "{word:#x}");
+        }
+        crate::units::crt::set_x87_control_word(&mut e, 0x027f);
+    }
+
+    #[test]
     fn coord_data_can_look_up_the_vertex_position_again() {
         let mut e = engine();
         vector_doubles(&mut e);
@@ -12624,6 +12733,43 @@ mod tests {
         let record = e.mem.u32(table);
         assert_eq!(e.mem.u32(record + 4), 0x444);
         assert_eq!(floats(&e, record + 0x20, 9), vec![0.0; 9]);
+    }
+
+    #[test]
+    fn grass_sample_mean_rounds_at_the_control_words_precision() {
+        // The threshold is 1/3 rounded to a float (just above 1/3); three
+        // samples of nine pass. 0053c27c compares it with 3 / 9 on the x87
+        // stack: at 24-bit precision the mean is that same float (kept), at
+        // 53-bit it is below the threshold (cleared).
+        fn samples(word: u16) -> Vec<f32> {
+            let mut e = engine();
+            grass_doubles(&mut e);
+            e.set_global(GRASS_SETTING_THRESHOLD + 4, f32::from_bits(0x3eaa_aaab));
+            e.set_global(GRASS_SETTING_MAXIMUM + 4, 0i32);
+            e.set_global(GRASS_SETTING_STEP + 4, 8i32);
+            let (this, data) = terrain(&mut e);
+            let form = grass_form(&mut e, 0x555);
+            let layer = grass_texture(&mut e, &[form]);
+            set_layers(&mut e, data, 2, &[layer]);
+            for vertex in [126, 127, 128] {
+                set_opacities(&mut e, data, 2, vertex, &[0.9]);
+            }
+            let sets = recorder::<u32>();
+            let sink = sets.clone();
+            e.register_double(GRASS_MAP_SET_AT, move |_, a| {
+                sink.borrow_mut().push(a[2]);
+                Ret::default()
+            });
+            crate::units::crt::set_x87_control_word(&mut e, word);
+            e.call(0x0053_bc10, &args![this]);
+            crate::units::crt::set_x87_control_word(&mut e, 0x027f);
+            let record = e.mem.u32(sets.take()[0]);
+            floats(&e, record + 0x20, 9)
+        }
+        let mut kept = vec![1.0f32; 3];
+        kept.extend([0.0; 6]);
+        assert_eq!(samples(0x007f), kept);
+        assert_eq!(samples(0x027f), vec![0.0; 9]);
     }
 
     #[test]
@@ -13562,6 +13708,28 @@ mod tests {
     }
 
     #[test]
+    fn triangle_height_rounds_each_step_at_the_control_words_precision() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, data) = terrain(&mut e);
+        // (a, b, c) = (2^24 + 2, 2^24, 2^24 + 4): both slopes are 1/64 and
+        // the offsets 48 give 0.75 each. At 24-bit precision b + 0.75 rounds
+        // back to 2^24, and so does the second 0.75; at 53-bit the sum
+        // 2^24 + 1.5 rounds to 2^24 + 2 when stored.
+        for (vertex, height) in [(1, 16_777_218.0), (2, 16_777_216.0), (3, 16_777_220.0)] {
+            set_vertex_height(&mut e, data, 0, vertex, height);
+        }
+        let out = e.mem.alloc(4);
+        let info = triangle_info(&mut e, (1, 2, 3), (48.0, 48.0), false, false);
+        for (word, expected) in [(0x007fu16, 16_777_216.0f32), (0x027f, 16_777_218.0)] {
+            crate::units::crt::set_x87_control_word(&mut e, word);
+            e.call(0x0053_f1e0, &args![this, info, out]);
+            assert_eq!(e.mem.f32(out), expected, "{word:#x}");
+        }
+        crate::units::crt::set_x87_control_word(&mut e, 0x027f);
+    }
+
+    #[test]
     fn quadrant_extents_are_the_lowest_and_highest_vertex() {
         let mut e = engine();
         vector_doubles(&mut e);
@@ -14113,6 +14281,30 @@ mod tests {
             blend_block(&e, blending.properties[0]),
             vec![1.0f32.to_bits(), 0.25f32.to_bits(), 0x1234, 0x5678]
         );
+    }
+
+    #[test]
+    fn blending_fractions_round_at_the_control_words_precision() {
+        let mut e = engine();
+        let (this, blending) = blending_setup(&mut e);
+        let object = e.mem.alloc(8);
+        let target = e.mem.alloc(8);
+        e.mem.set_u32(object, target);
+        blending.object.set(object);
+        // Cell x 2^24 and the word 25 * 2^20. Quadrant 1 adds 0.5: at 24-bit
+        // precision 0054040f rounds 2^24 + 0.5 back to 2^24 and the quotient
+        // 0.64 rounds down to the float below it; at 53-bit (2^24 + 0.5) /
+        // (25 * 2^20) rounds up to the float above.
+        let data = loaded_data(&e, this);
+        e.set(data, LoadedLandData::iCellX, 1 << 24);
+        e.register(DATA_HANDLER_WORD_AT_4, |_, _| ret(25 << 20));
+        for (word, expected) in [(0x007fu16, 0x3f23_d70au32), (0x027f, 0x3f23_d70b)] {
+            crate::units::crt::set_x87_control_word(&mut e, word);
+            e.call(0x0054_00e0, &args![this]);
+            let block = blend_block(&e, blending.properties[1]);
+            assert_eq!(block[0], expected, "{word:#x}");
+        }
+        crate::units::crt::set_x87_control_word(&mut e, 0x027f);
     }
 
     #[test]

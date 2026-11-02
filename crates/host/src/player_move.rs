@@ -1195,6 +1195,16 @@ impl PlayerMovement {
             match engine::thread_host::finish_main_frame(e, &mut main) {
                 engine::thread_host::MainTurn::Frame => Ok(()),
                 engine::thread_host::MainTurn::Finished(code) => {
+                    // The exe's startup (`00ecc35d`, which the host stands in for by calling
+                    // main itself) hands main's answer to `exit` (`00ecc479`), which ends the
+                    // process: with the game's own window (the play build, `NV_D3D9=real`) the
+                    // run ends here too, as when its window is closed. Without that window (tests,
+                    // the viewer's own renderer) it is reported as main's end.
+                    #[cfg(windows)]
+                    if engine::units::platform::d3d9real::wanted() {
+                        eprintln!("The game's main returned {code}: the run ends");
+                        std::process::exit(code as i32);
+                    }
                     Err(format!("main returned {code}"))
                 }
                 engine::thread_host::MainTurn::Stopped(why) => Err(why),

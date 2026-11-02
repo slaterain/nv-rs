@@ -104,9 +104,11 @@ pub fn fn_00c3dfa0(e: &mut Engine, this: Ptr, priority: i32) {
     let mut remaining = total;
     let mut processed = false;
     while remaining != 0 || !processed {
+        // 00c3e0a9: both counts loaded exactly (`FILD qword`), `FDIVP` and `FMUL` by the
+        // double at 01017a40 rounded to the thread's precision control, `FSTP` to a float.
         let progress_scale: f64 = e.global(0x0101_7a40);
-        let progress =
-            ((total.wrapping_sub(remaining) as f64 / total as f64) * progress_scale) as f32;
+        let fraction = x87_div(f64::from(total.wrapping_sub(remaining)), f64::from(total));
+        let progress = x87_store32(x87_mul(fraction, progress_scale));
         let progress_callback = word(e, this, 0x78);
         if progress_callback != 0 {
             e.call(progress_callback, &args![progress]);
@@ -2422,6 +2424,54 @@ mod tests {
             progress,
             vec![0.0f32.to_bits(), 18.5f32.to_bits(), 100.0f32.to_bits()]
         );
+    }
+
+    #[test]
+    fn loading_progress_rounds_at_the_thread_precision() {
+        // 00c3e0bc: under 24-bit precision (the main thread once Direct3D has its device)
+        // `FDIVP` and `FMUL` each round to 24 bits; 1/3 and 2/3 of 100.0 come out one float
+        // above the plain double result (0x42055555, 0x42855555).
+        let mut e = Engine::new();
+        crate::x87::set_control_word(0x007f);
+        let manager = block(&mut e, 0x84);
+        let queue = block(&mut e, 4);
+        let counts = block(&mut e, 16);
+        let left = block(&mut e, 4);
+        e.put_vtable(0x7a00_0000, &[0, 0, 0, 0x7a00_000c]);
+        set_word(&mut e, queue, 0, 0x7a00_0000);
+        set_word(&mut e, manager, 0x64, queue.addr());
+        set_word(&mut e, manager, 0x54, counts.addr());
+        set_word(&mut e, manager, 0x78, 0x7c00_0000);
+        set_word(&mut e, left, 0, 3);
+        e.map(0x0101_7a40, 8);
+        e.set_global(0x0101_7a40, 100.0f64);
+        e.map(0x0101_6410, 4);
+        e.set_global(0x0101_6410, 100.0f32);
+        e.map(0x011a_f70c, 1);
+        let cell = left.addr();
+        e.register_double(0x7a00_000c, move |e, _| e.mem.u32(cell).into_ret());
+        e.register_double(0x00c3_dbf0, move |e, _| {
+            let value = e.mem.u32(cell).wrapping_sub(1);
+            e.mem.set_u32(cell, value);
+            1u32.into_ret()
+        });
+        e.register(0x7c00_0000, no_op);
+        e.call_log = Some(vec![]);
+        fn_00c3dfa0(&mut e, manager, 0);
+        crate::x87::set_control_word(crate::x87::DEFAULT_CONTROL_WORD);
+        let progress: Vec<u32> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(addr, _)| *addr == 0x7c00_0000)
+            .map(|(_, args)| args[0])
+            .collect();
+        assert_eq!(
+            progress,
+            vec![0, 0x4205_5556, 0x4285_5556, 100.0f32.to_bits()]
+        );
+        assert_eq!(word(&e, manager, 0x68), 6);
     }
 
     #[test]

@@ -17,20 +17,33 @@ pub fn fn_0049db30(e: &mut Engine, this: Ptr) -> Ptr {
 
 // Translated from 0049da80 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Classifies a point against a plane as negative, on-plane, or positive.
+/// Each x87 instruction of the distance (0049da8c-0049dab8) rounds at the
+/// running thread's precision; the distance is stored to a `float` local.
 pub fn fn_0049da80(e: &mut Engine, plane: Ptr, point: Ptr) -> u32 {
-    let dot = (0..3)
-        .map(|axis| {
-            e.mem.f32(plane.addr().wrapping_add(axis * 4)) as f64
-                * e.mem.f32(point.addr().wrapping_add(axis * 4)) as f64
-        })
-        .sum::<f64>();
-    let distance = (dot - e.mem.f32(plane.addr().wrapping_add(12)) as f64) as f32;
+    let p = plane.addr();
+    let q = point.addr();
+    // 0049da8c-0049da9f: FLD/FMUL x, FLD/FMUL y, FADDP.
+    let x = x87_mul(x87_load32(e.mem.u32(p)), x87_m32(e.mem.u32(q)));
+    let y = x87_mul(
+        x87_load32(e.mem.u32(p.wrapping_add(4))),
+        x87_m32(e.mem.u32(q.wrapping_add(4))),
+    );
+    let sum = x87_add(x, y);
+    // 0049daa4-0049daad: FLD/FMUL z, FADDP.
+    let z = x87_mul(
+        x87_load32(e.mem.u32(p.wrapping_add(8))),
+        x87_m32(e.mem.u32(q.wrapping_add(8))),
+    );
+    let sum = x87_add(sum, z);
+    // 0049dab2-0049dab8: FSUB the plane's +0xc, FSTP/FLD the float local.
+    let distance = x87_store32(x87_sub(sum, x87_m32(e.mem.u32(p.wrapping_add(0xc)))));
+    let distance = x87_load32(distance);
     let first_zero = e.global::<f64>(0x0101_2060);
-    if (distance as f64) < first_zero {
+    if distance < first_zero {
         return 2;
     }
     let second_zero = e.global::<f64>(0x0101_2060);
-    if (distance as f64) > second_zero {
+    if distance > second_zero {
         1
     } else {
         0
@@ -45,7 +58,8 @@ pub fn fn_0049db00(e: &mut Engine, this: Ptr) -> f32 {
     if land == 0 {
         0.0
     } else {
-        e.mem.f32(land.wrapping_add(0xa0))
+        // 0049db18-0049db28: FLD float, FSTP float local, FLD (a signalling NaN is quieted).
+        x87_quiet(e.mem.f32(land.wrapping_add(0xa0)))
     }
 }
 
@@ -759,8 +773,10 @@ pub fn fn_0049eed0(e: &mut Engine, collection: Ptr, target: Ptr) -> bool {
                 e.mem.set_u32(scratch.addr().wrapping_add(offset), word);
             }
             let pair: Ptr = Ptr::new(scratch.addr().wrapping_add(0xc));
-            let x = e.mem.f32(scratch.addr());
-            let y = e.mem.f32(scratch.addr().wrapping_add(4));
+            // 0049ef1a-0049ef24: y and x go out through FLD/FSTP float (a
+            // signalling NaN is quieted).
+            let x = x87_quiet_bits(e.mem.u32(scratch.addr()));
+            let y = x87_quiet_bits(e.mem.u32(scratch.addr().wrapping_add(4)));
             e.call(0x0045_2dc0, &args![pair, x, y]);
             let x_word = e.mem.u32(pair.addr());
             let y_word = e.mem.u32(pair.addr().wrapping_add(4));
@@ -2138,6 +2154,29 @@ mod tests {
         assert_eq!(fn_0049da80(&mut e, Ptr::new(0x1000), Ptr::new(0x2000)), 2);
     }
 
+    /// 0049da80 at the main thread's 24-bit precision: the FADDP of
+    /// `1 * 1` and `1 * 2^-30` (0049da9f) rounds to 1, so the distance to the
+    /// plane at 1 is 0 (on the plane); at 53 bits it stays 2^-30 (positive).
+    #[test]
+    fn plane_side_classifier_rounds_each_x87_operation_at_24_bit_precision() {
+        let mut e = Engine::new();
+        e.map(0x1000, 16);
+        e.map(0x2000, 12);
+        e.map(0x0101_2060, 8);
+        e.mem.set_f64(0x0101_2060, 0.0);
+        for (offset, value) in [(0u32, 1.0f32), (4, 1.0), (8, 0.0), (0xc, 1.0)] {
+            e.mem.set_f32(0x1000 + offset, value);
+        }
+        for (offset, value) in [(0u32, 1.0f32), (4, 2f32.powi(-30)), (8, 0.0)] {
+            e.mem.set_f32(0x2000 + offset, value);
+        }
+        assert_eq!(fn_0049da80(&mut e, Ptr::new(0x1000), Ptr::new(0x2000)), 1);
+        crate::units::crt::set_x87_control_word(&mut e, 0x007f);
+        let at_24_bits = fn_0049da80(&mut e, Ptr::new(0x1000), Ptr::new(0x2000));
+        crate::units::crt::set_x87_control_word(&mut e, 0x027f);
+        assert_eq!(at_24_bits, 0);
+    }
+
     #[test]
     fn cell_water_height_reads_land_field_or_returns_zero() {
         let mut e = Engine::new();
@@ -2148,6 +2187,19 @@ mod tests {
         assert_eq!(fn_0049db00(&mut e, Ptr::new(0x1000)), 42.5);
         e.mem.set_u32(0x1028, 0);
         assert_eq!(fn_0049db00(&mut e, Ptr::new(0x1000)), 0.0);
+    }
+
+    /// 0049db00 (0049db18-0049db28): the land's +0xa0 float goes through
+    /// `FLD`, `FSTP float` to the local and `FLD` back, so a signalling NaN
+    /// comes back quieted.
+    #[test]
+    fn land_float_getter_quiets_a_signalling_nan_through_fld_fstp() {
+        let mut e = Engine::new();
+        e.map(0x1000, 0x30);
+        e.map(0x2000, 0xa4);
+        e.mem.set_u32(0x1028, 0x2000);
+        e.mem.set_u32(0x20a0, 0x7f80_0001);
+        assert_eq!(fn_0049db00(&mut e, Ptr::new(0x1000)).to_bits(), 0x7fc0_0001);
     }
 
     #[test]
@@ -2363,6 +2415,47 @@ mod tests {
         e.call_log = Some(vec![]);
         assert!(!fn_0049eed0(&mut e, Ptr::new(0x1000), Ptr::new(0x4000)));
         assert_eq!(e.call_log.as_ref().unwrap(), &[(0x0059_bb30, vec![0x1000])]);
+    }
+
+    /// 0049eed0 (0049ef1a-0049ef24): the point's x and y reach `00452dc0`
+    /// through `FLD`/`FSTP float`, so a signalling NaN arrives quieted.
+    #[test]
+    fn indexed_point_predicate_quiets_a_signalling_nan_through_fld_fstp() {
+        let mut e = Engine::new();
+        e.map(0x3000, 12);
+        e.mem.set_u32(0x3000, 0x7f80_0001);
+        e.mem.set_f32(0x3004, 2.0);
+        e.mem.set_f32(0x3008, 3.0);
+        e.register(0x0059_bb30, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register(0x0055_9450, |_, _| Ret {
+            eax: 0x2000,
+            ..Ret::default()
+        });
+        e.register(0x006a_7af0, |_, _| Ret {
+            eax: 0x3000,
+            ..Ret::default()
+        });
+        e.register(0x0045_2dc0, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            e.mem.set_u32(a[0] + 4, a[2]);
+            Ret::default()
+        });
+        e.register(0x00c4_e0a0, |_, a| Ret {
+            eax: u32::from(a[1..] == [0x7fc0_0001, 2.0f32.to_bits()]),
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert!(fn_0049eed0(&mut e, Ptr::new(0x1000), Ptr::new(0x4000)));
+        let log = e.call_log.take().unwrap();
+        let construct: Vec<_> = log
+            .iter()
+            .filter(|(address, _)| *address == 0x0045_2dc0)
+            .collect();
+        assert_eq!(construct.len(), 1);
+        assert_eq!(construct[0].1[1..], [0x7fc0_0001, 2.0f32.to_bits()]);
     }
 
     #[test]
