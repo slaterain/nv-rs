@@ -1273,6 +1273,15 @@ impl PlayerMovement {
                 // after `Failed` no frame is handed over again.
                 let line = format!("Game's main stopped in frame {}: {why}", self.main_frames);
                 eprintln!("{line}");
+                // With the game's own window (the play build, `NV_D3D9=real`) nothing can go on
+                // after this: the window would sit on its last frame for good. The host ends the
+                // run with exit status 3, so the game closes and the line above is the log's last.
+                // This is the host's handling of a stop (a fault, a function not translated, a
+                // call the platform does not provide), not something the exe does.
+                #[cfg(windows)]
+                if engine::units::platform::d3d9real::wanted() {
+                    std::process::exit(3);
+                }
                 self.main_stop = Some(line);
                 self.main_stage = Stage::Failed(why);
                 false
