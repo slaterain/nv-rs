@@ -334,9 +334,13 @@ impl Heap {
     /// [`Heap::take`] past the quick stacks: the bins, then the top. When both fail, the whole
     /// of the request's own bin is searched (a fitting block can sit behind more than
     /// [`OWN_BIN_LOOK`] newer, smaller ones), then the waiting blocks go to the bins,
-    /// [`FLUSH_STEP`] at a time, the bins and the top tried again after each batch (so a request
-    /// one batch serves moves no more), and the whole of the bin once more when none wait. A
-    /// request that fails notes what the quick stacks held ([`Heap::failed_flush`]).
+    /// [`FLUSH_STEP`] at a time, the bins and the top tried again after each batch. Nothing in
+    /// the bins fitted before the batches, so a block that fits after one is one a release in
+    /// the batches made (the largest is noted): when one did and the usual look does not find
+    /// it (newer, smaller blocks of its bin in front of it), the whole bin is searched. So the
+    /// first batch that makes a fitting block, or lowers the top far enough, serves the request
+    /// and the rest still wait; once none wait and none was made, nothing fits. A request that
+    /// fails notes what the quick stacks held ([`Heap::failed_flush`]).
     fn take_free(&mut self, size: u32) -> Option<u32> {
         if let Some(n) = self.fit(size, OWN_BIN_LOOK) {
             return Some(self.carve(n, size));
@@ -353,13 +357,13 @@ impl Heap {
             return None;
         }
         loop {
-            let mut moved = 0;
+            let (mut moved, mut made) = (0, 0);
             while moved < FLUSH_STEP {
                 let Some(i) = self.next_waiting() else {
                     break;
                 };
                 self.spill_from = i;
-                self.spill_oldest(i);
+                made = made.max(self.spill_oldest(i));
                 moved += 1;
             }
             if let Some(n) = self.fit(size, OWN_BIN_LOOK) {
@@ -368,12 +372,17 @@ impl Heap {
             if let Some(a) = self.grow(size) {
                 return Some(a);
             }
+            if made >= size {
+                // It still fits: blocks in bins only grow by merging, and one merged into the
+                // top would have let the top serve the request.
+                let n = self
+                    .fit(size, u32::MAX)
+                    .expect("the block a batch made fits");
+                return Some(self.carve(n, size));
+            }
             if moved < FLUSH_STEP || self.quick_bytes == 0 {
                 break;
             }
-        }
-        if let Some(n) = self.fit(size, u32::MAX) {
-            return Some(self.carve(n, size));
         }
         self.failed_flush = waiting;
         None
@@ -525,21 +534,24 @@ impl Heap {
             .map(|w| w * 64 + self.waiting[w].trailing_zeros() as usize)
     }
 
-    /// Moves the oldest block of quick stack `i` (if it holds one) on to the bins.
-    fn spill_oldest(&mut self, i: usize) {
-        if let Some(a) = self.quick[i].pop_front() {
-            if self.quick[i].is_empty() {
-                self.waiting[i / 64] &= !(1 << (i % 64));
-            }
-            let size = (i as u32) << 3;
-            self.quick_bytes -= u64::from(size);
-            self.release(a, size);
+    /// Moves the oldest block of quick stack `i` (if it holds one) on to the bins; answers the
+    /// size of the free block that made in a bin ([`Heap::release`]; 0 for none).
+    fn spill_oldest(&mut self, i: usize) -> u32 {
+        let Some(a) = self.quick[i].pop_front() else {
+            return 0;
+        };
+        if self.quick[i].is_empty() {
+            self.waiting[i / 64] &= !(1 << (i % 64));
         }
+        let size = (i as u32) << 3;
+        self.quick_bytes -= u64::from(size);
+        self.release(a, size)
     }
 
     /// Puts the block `[addr, addr + size)` into the bins, merged with the free blocks on
-    /// either side; a block that reaches the top lowers the top instead.
-    pub(super) fn release(&mut self, addr: u32, size: u32) {
+    /// either side, and answers the size of the free block that makes; a block that reaches the
+    /// top lowers the top instead (answering 0).
+    pub(super) fn release(&mut self, addr: u32, size: u32) -> u32 {
         let end = addr + size;
         if end == self.top {
             // No free block in a bin ends at the top, so only the left one can merge.
@@ -553,7 +565,7 @@ impl Heap {
                 start = left.start;
             }
             self.top = start;
-            return;
+            return 0;
         }
         self.free_bytes += u64::from(size);
         let left = self.by_end.remove(&addr);
@@ -595,6 +607,7 @@ impl Heap {
             }
         };
         self.link(n);
+        self.nodes[n as usize].size
     }
 
     fn new_node(&mut self, start: u32, size: u32) -> u32 {
@@ -1064,6 +1077,61 @@ mod tests {
             ((n - FLUSH_STEP) as u64 * 16, n - FLUSH_STEP)
         );
         h.check([(blocks[0], 32), (last, rest)]);
+    }
+
+    /// A full heap whose quick stacks hold a 592-byte block X and the 8-byte block right after
+    /// it (the oldest of their sizes, so the first batch moves them first and they merge into a
+    /// 600-byte free block), then `smaller` more 592-byte blocks (the bin of 600) and `tiny`
+    /// more 8-byte ones, each apart. Answers how many blocks `take(600)` moved to the bins,
+    /// where it was served, and X. No 600-byte block waits, so the request goes to the bins.
+    fn buried_fit(smaller: usize, tiny: usize) -> (usize, Option<u32>, u32) {
+        let mut h = Heap::new();
+        let mut held = Vec::new();
+        assert_eq!(bin_of(592), bin_of(600));
+        let x = h.take(592).unwrap();
+        let y = take_apart(&mut h, 8, &mut held);
+        assert_eq!(y, x + 592);
+        let small: Vec<u32> = (0..smaller)
+            .map(|_| take_apart(&mut h, 592, &mut held))
+            .collect();
+        let little: Vec<u32> = (0..tiny)
+            .map(|_| take_apart(&mut h, 8, &mut held))
+            .collect();
+        let rest = HEAP_END - h.top();
+        held.push((h.take(rest).unwrap(), rest));
+        h.give(y, 8);
+        h.give(x, 592);
+        for &a in &small {
+            h.give(a, 592);
+        }
+        for &a in &little {
+            h.give(a, 8);
+        }
+        assert_eq!(h.quick_blocks(), 2 + smaller + tiny, "none moved yet");
+        assert_eq!(h.free_blocks(), 0);
+        let before = h.quick_blocks();
+        let got = h.take(600);
+        if got == Some(x) {
+            held.push((x, 600));
+        }
+        h.check(held);
+        (before - h.quick_blocks(), got, x)
+    }
+
+    /// The first batch that makes a block a request fits serves it, even when the batch also
+    /// puts more than [`OWN_BIN_LOOK`] newer, smaller blocks of its bin in front of that block:
+    /// a 4096-byte block moved from the quick stacks lands in the bin of a 4104-byte request
+    /// the same way. (With only the usual look after each batch, every waiting block moved
+    /// before a last look at the whole bin found it: in the review, with the stacks full of
+    /// 8-byte blocks, 1,047,846 blocks in 66-76 ms.)
+    #[test]
+    fn a_fit_behind_newer_blocks_of_its_bin_is_served_by_the_first_batch() {
+        let tiny = 3 * FLUSH_STEP;
+        for smaller in [OWN_BIN_LOOK as usize - 1, OWN_BIN_LOOK as usize + 1, 100] {
+            let (moved, got, fitting) = buried_fit(smaller, tiny);
+            assert_eq!(got, Some(fitting), "{smaller} smaller");
+            assert_eq!(moved, FLUSH_STEP, "{smaller} smaller: one batch");
+        }
     }
 
     /// Free blocks that never merge (each with a live block after it) fill the tables of their

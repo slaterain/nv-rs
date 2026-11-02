@@ -54,8 +54,10 @@ progress three (Main::OnIdle's, `HUDMainMenu::DoIdle`'s, `MessageMenu::DoIdle`'s
     then has the native functions by inclusive time, the callers of the 15 busiest native
     functions by self time, how the walks ended (the thread's start, the frame limit, unknown
     code, a bad frame) and how long the thread stood suspended (about 51 us a walk of 51 frames
-    in Doc's room). Raise `NV_PROFILE_STACK` when many walks end at the frame limit: the
-    inclusive times of functions near the thread's root are then lower bounds.
+    in Doc's room, measured before the walk checked its stack reads; on a thread 56 frames of
+    plain functions deep the checks took a walk from 12.9-14.6 us to 14.4-15.3 us). Raise
+    `NV_PROFILE_STACK` when many walks end at the frame limit: the inclusive times of functions
+    near the thread's root are then lower bounds.
   - **Call targets.** Every call through `Engine::call` and `Engine::vcall` is counted by exe
     address; the table lists the top `NV_PROFILE_CALLS` (default 60) with calls a frame, their
     share, and self time a frame and a call. The count costs the profiled run about 1 ms a frame;

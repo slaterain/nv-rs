@@ -32,6 +32,9 @@
 //!   a walk (before the read checks): the thread stood suspended
 //!   67 us a walk without the kept lookups, 51 us with them, and 36 us with one frame
 //!   (`NV_PROFILE_STACK=1`: suspending it and reading its registers, which every sample pays).
+//!   Not measured in Doc's room since; on a thread 56 frames of plain functions deep
+//!   (2026-11-02, a standalone build of this module, three runs) a walk with the read checks kept
+//!   it suspended 14.4-15.3 us (median) against 12.9-14.6 us without them.
 //!
 //! Every call through `Engine::call` (and `Engine::vcall`, which dispatches through the same body)
 //! is also counted by its exe address ([`count_target`]: an open-addressed table hashed like the
@@ -1156,6 +1159,13 @@ mod native {
             bytes: u32,
             needed: *mut u32,
         ) -> i32;
+        fn ReadProcessMemory(
+            process: Handle,
+            base: *const c_void,
+            buffer: *mut c_void,
+            size: usize,
+            read: *mut usize,
+        ) -> i32;
         #[allow(clippy::too_many_arguments)]
         fn RtlVirtualUnwind(
             handler_type: u32,
@@ -1189,29 +1199,53 @@ mod native {
         len: usize,
     }
 
+    /// `N` bytes of this process's memory at `at`, `None` where any of them is not readable
+    /// (`ReadProcessMemory`, which answers a failure there instead of faulting).
+    fn read_bytes<const N: usize>(at: u64) -> Option<[u8; N]> {
+        let mut bytes = [0u8; N];
+        let mut read = 0usize;
+        // SAFETY: the buffer is ours and `N` bytes long; the system checks the source range.
+        let ok = unsafe {
+            ReadProcessMemory(
+                GetCurrentProcess(),
+                at as *const c_void,
+                bytes.as_mut_ptr() as *mut c_void,
+                N,
+                &mut read,
+            )
+        };
+        (ok != 0 && read == N).then_some(bytes)
+    }
+
     /// The image at `base` (a module handle), read from its PE headers; `None` when they are not
-    /// a 64-bit image's.
-    ///
-    /// # Safety
-    /// `base` is a loaded module's handle (its headers are mapped).
-    unsafe fn image_at(base: u64) -> Option<Image> {
-        let p = base as *const u8;
-        let u16_at = |at: usize| std::ptr::read_unaligned(p.add(at) as *const u16);
-        let u32_at = |at: usize| std::ptr::read_unaligned(p.add(at) as *const u32);
-        if u16_at(0) != 0x5a4d {
+    /// a 64-bit image's, or cannot be read: a module listed by `K32EnumProcessModules` can be
+    /// unloaded before its headers are read (another thread's `FreeLibrary`), and reading them
+    /// in place then faulted (in a probe, once in 10^4 to 10^5 listings while a thread loaded
+    /// and freed a DLL in a loop). Its unwind table is read in place later, by walks of code
+    /// inside it, which a thread runs only while the image is loaded.
+    fn image_at(base: u64) -> Option<Image> {
+        let dos = read_bytes::<0x40>(base)?;
+        let u16_in = |b: &[u8], at: usize| u16::from_le_bytes([b[at], b[at + 1]]);
+        let u32_in =
+            |b: &[u8], at: usize| u32::from_le_bytes(b[at..at + 4].try_into().expect("4 bytes"));
+        if u16_in(&dos, 0) != 0x5a4d {
             return None;
         }
-        let nt = u32_at(0x3c) as usize;
-        // "PE\0\0", then the optional header of a PE32+ image after the 20-byte file header.
-        if u32_at(nt) != 0x4550 || u16_at(nt + 24) != 0x20b {
+        let nt = u32_in(&dos, 0x3c);
+        // "PE\0\0", the 20-byte file header, then the optional header of a PE32+ image up to
+        // the exception directory (data directory 3, at 136 in it).
+        let headers = read_bytes::<{ 24 + 144 }>(base + u64::from(nt))?;
+        if u32_in(&headers, 0) != 0x4550 || u16_in(&headers, 24) != 0x20b {
             return None;
         }
-        let optional = nt + 24;
-        let size = u64::from(u32_at(optional + 56));
-        let directories = u32_at(optional + 108);
-        // Data directory 3: the exception directory.
+        let optional = 24;
+        let size = u64::from(u32_in(&headers, optional + 56));
+        let directories = u32_in(&headers, optional + 108);
         let (rva, bytes) = if directories > 3 {
-            (u32_at(optional + 136), u32_at(optional + 140))
+            (
+                u32_in(&headers, optional + 136),
+                u32_in(&headers, optional + 140),
+            )
         } else {
             (0, 0)
         };
@@ -1997,7 +2031,8 @@ mod native {
         /// (an id of this process's thread that ended before it was first opened, since given
         /// to a thread elsewhere) is not opened: its TEB would be read as this process's memory.
         /// A refusal is not kept, so the id is tried again when it comes back (given to a thread
-        /// of this process).
+        /// of this process). A name kept under the id is dropped when it is opened: the id was
+        /// free (no handle of ours held it), so the name may be an ended thread's.
         fn thread(&mut self, id: u32) -> Option<Handle> {
             if let Some(&handle) = self.threads.get(&id) {
                 return Some(handle);
@@ -2019,17 +2054,22 @@ mod native {
                 }
                 handle
             };
+            self.thread_names.remove(&id);
             self.threads.insert(id, handle);
             Some(handle)
         }
 
         /// Closes the handle to OS thread `id` (one that has ended, or that a listing of the
         /// process no longer shows), unless the thread was walked: its TEB is kept by id, so its
-        /// handle stays open and the id stays its own.
+        /// handle stays open and the id stays its own. Its name is read first, while the handle
+        /// still holds the id (measured: an ended thread's name reads through it, and once the
+        /// handle is closed the id opens no more), and kept for the table that holds its
+        /// samples; [`Sampler::thread`] drops it if the id is opened again.
         fn forget(&mut self, id: u32) {
-            if self.tebs.contains_key(&id) {
+            if self.tebs.contains_key(&id) || !self.threads.contains_key(&id) {
                 return;
             }
+            self.thread_name(id);
             if let Some(handle) = self.threads.remove(&id) {
                 // SAFETY: the handle was opened by `thread` and is closed once.
                 unsafe { CloseHandle(handle) };
@@ -2085,8 +2125,9 @@ mod native {
             // An image unloaded since may have left lookups into its unwind table.
             self.found.slots.fill(Found::EMPTY);
             let mut handles: Vec<Handle> = vec![std::ptr::null_mut(); 512];
-            // SAFETY: the buffer's size in bytes is passed; the handles listed are loaded
-            // modules (an image unloaded in between is a risk this diagnostic takes).
+            // SAFETY: the buffer's size in bytes is passed. A module listed may be unloaded
+            // before its headers are read: `image_at` reads them through `ReadProcessMemory`
+            // and skips one it cannot read.
             unsafe {
                 loop {
                     let bytes = (handles.len() * std::mem::size_of::<Handle>()) as u32;
@@ -2288,7 +2329,8 @@ mod native {
             ids
         }
 
-        /// A thread's name (`GetThreadDescription`), empty without one.
+        /// A thread's name (`GetThreadDescription`), empty without one; kept by id until the id
+        /// is opened afresh ([`Sampler::thread`]).
         pub fn thread_name(&mut self, id: u32) -> String {
             if let Some(name) = self.thread_names.get(&id) {
                 return name.clone();
@@ -2864,6 +2906,10 @@ mod native {
         fn a_walk_at_a_tail_call_never_waits_on_the_loader() {
             use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
             use std::sync::Arc;
+            // The images are listed before the loader starts: the walk needs only this
+            // program's.
+            let mut s = Sampler::new();
+            s.refresh_images();
             let stop = Arc::new(AtomicBool::new(false));
             let (tx, rx) = std::sync::mpsc::channel();
             let loader = {
@@ -2882,9 +2928,7 @@ mod native {
                 })
             };
             let id = rx.recv().expect("the loader's id");
-            let mut s = Sampler::new();
             let handle = s.thread(id).expect("a thread of this program");
-            s.refresh_images();
             let mut stack = vec![0u64; 0x40];
             let low = stack.as_mut_ptr() as u64;
             let rsp = low + 0x80;
@@ -2984,6 +3028,59 @@ mod native {
                 }
                 assert_eq!(s.threads.contains_key(&id), how == "walked", "{how}");
             }
+        }
+
+        /// A thread whose handle is closed once it has ended keeps its name for the table that
+        /// holds its samples (read before the close: the id opens no more after it). Its id is
+        /// then free, so a thread later given it is named afresh when the sampler opens it,
+        /// not under the ended thread's name (as happened once the handles were closed: in a
+        /// probe the 641st to 656th thread started got the id and was named as the ended one).
+        #[test]
+        fn a_closed_threads_name_is_kept_until_its_id_is_opened_again() {
+            let named = |name: &str| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let (end_tx, end_rx) = std::sync::mpsc::channel::<()>();
+                let t = std::thread::Builder::new()
+                    .name(name.into())
+                    .spawn(move || {
+                        tx.send(current_thread_id()).expect("the test waits");
+                        let _ = end_rx.recv();
+                    })
+                    .expect("a thread");
+                (rx.recv().expect("the thread's id"), end_tx, t)
+            };
+            let mut s = Sampler::new();
+            let (id, end, t) = named("closed probe");
+            assert!(s.instruction_pointer(id).is_some());
+            end.send(()).expect("the thread waits");
+            t.join().expect("the thread ends");
+            assert!(!s.process_threads().contains(&id));
+            assert!(!s.threads.contains_key(&id), "the handle is closed");
+            assert_eq!(s.thread_name(id), "closed probe");
+            // A thread given an id under which another's name is kept (as the ended thread's
+            // stays under its id) is named afresh once it is opened.
+            let (other, end, t) = named("reused probe");
+            s.thread_names.insert(other, "closed probe".into());
+            assert!(s.instruction_pointer(other).is_some());
+            assert_eq!(s.thread_name(other), "reused probe");
+            end.send(()).expect("the thread waits");
+            t.join().expect("the thread ends");
+        }
+
+        /// Headers that cannot be read are no image, not a fault: a module the listing names
+        /// can be unloaded before they are read (another thread's `FreeLibrary`), its pages
+        /// gone, as the first page of the address space always is. Read in place, this faulted
+        /// and ended the whole test program. This program's own image still reads.
+        #[test]
+        fn headers_that_cannot_be_read_are_no_image() {
+            assert!(image_at(0).is_none());
+            assert!(image_at(0x1000).is_none());
+            // SAFETY: GetModuleHandleA with no name answers this program's own image.
+            let me = unsafe { GetModuleHandleA(std::ptr::null()) } as u64;
+            let image = image_at(me).expect("this program's image");
+            assert!(image.end > me && image.len > 0);
+            let here = headers_that_cannot_be_read_are_no_image as fn() as usize as u64;
+            assert!((me..image.end).contains(&here));
         }
 
         /// The ids of the threads of process `pid` (a Toolhelp snapshot).
