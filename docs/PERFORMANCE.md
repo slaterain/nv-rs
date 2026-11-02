@@ -57,7 +57,10 @@ progress three (Main::OnIdle's, `HUDMainMenu::DoIdle`'s, `MessageMenu::DoIdle`'s
     in Doc's room, measured before the walk checked its stack reads; on a thread 56 frames of
     plain functions deep the checks took a walk from 12.9-14.6 us to 14.4-15.3 us). Raise
     `NV_PROFILE_STACK` when many walks end at the frame limit: the inclusive times of functions
-    near the thread's root are then lower bounds.
+    near the thread's root are then lower bounds. The walks read each loaded image's unwind
+    table in place, so every image the profiler lists (every 5 s while it walks) is held loaded
+    until the next listing: with the profiler walking, a DLL the program frees unloads up to
+    5 s later.
   - **Call targets.** Every call through `Engine::call` and `Engine::vcall` is counted by exe
     address; the table lists the top `NV_PROFILE_CALLS` (default 60) with calls a frame, their
     share, and self time a frame and a call. The count costs the profiled run about 1 ms a frame;

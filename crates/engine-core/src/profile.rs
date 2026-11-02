@@ -1142,6 +1142,7 @@ mod native {
         ) -> i32;
         fn WaitForSingleObject(handle: Handle, ms: u32) -> u32;
         fn LoadLibraryA(name: *const u8) -> Handle;
+        fn FreeLibrary(module: Handle) -> i32;
         fn GetProcAddress(module: Handle, name: *const u8) -> *mut c_void;
         fn GetModuleHandleExA(flags: u32, address: *const u8, module: *mut Handle) -> i32;
         fn GetModuleFileNameA(module: Handle, name: *mut u8, size: u32) -> u32;
@@ -1191,12 +1192,25 @@ mod native {
         unwind: u32,
     }
 
-    /// A loaded image and its unwind table (`.pdata`, sorted by `begin`).
+    /// A loaded image and its unwind table (`.pdata`, sorted by `begin`). A listed image holds a
+    /// reference to its module (`module`, taken by [`listed_image`]; null: none), let go when
+    /// the image is dropped: walks read its unwind table and code in place, so it stays loaded
+    /// while it is listed.
     struct Image {
         base: u64,
         end: u64,
         table: *const RuntimeFunction,
         len: usize,
+        module: Handle,
+    }
+
+    impl Drop for Image {
+        fn drop(&mut self) {
+            if !self.module.is_null() {
+                // SAFETY: the reference `listed_image` took, let go once.
+                unsafe { FreeLibrary(self.module) };
+            }
+        }
     }
 
     /// `N` bytes of this process's memory at `at`, `None` where any of them is not readable
@@ -1221,8 +1235,8 @@ mod native {
     /// a 64-bit image's, or cannot be read: a module listed by `K32EnumProcessModules` can be
     /// unloaded before its headers are read (another thread's `FreeLibrary`), and reading them
     /// in place then faulted (in a probe, once in 10^4 to 10^5 listings while a thread loaded
-    /// and freed a DLL in a loop). Its unwind table is read in place later, by walks of code
-    /// inside it, which a thread runs only while the image is loaded.
+    /// and freed a DLL in a loop). The image holds no reference to its module: walks read its
+    /// unwind table in place, which only [`listed_image`]'s reference keeps loaded.
     fn image_at(base: u64) -> Option<Image> {
         let dos = read_bytes::<0x40>(base)?;
         let u16_in = |b: &[u8], at: usize| u16::from_le_bytes([b[at], b[at + 1]]);
@@ -1258,7 +1272,36 @@ mod native {
             } else {
                 bytes as usize / std::mem::size_of::<RuntimeFunction>()
             },
+            module: std::ptr::null_mut(),
         })
+    }
+
+    /// The image at `base`, a module of a listing, held loaded while the image lives: a
+    /// reference to the module is taken first (`GetModuleHandleExA` by address, the count
+    /// raised), then its headers are read ([`image_at`]). Walks read its unwind table and code
+    /// in place until the next listing; without the reference an image unloaded since the
+    /// listing stayed in it, and a walk read its old unwind table (in a probe, a DLL freed after
+    /// a listing and another loaded at its base: the walk read past the new module's end, an
+    /// access violation in the sampler with the walked thread suspended). `None` when the
+    /// module is gone already, or `base` now lies in another module.
+    fn listed_image(base: u64) -> Option<Image> {
+        let mut module: Handle = std::ptr::null_mut();
+        // SAFETY: a module looked up by an address, its reference count raised; one already
+        // unloaded answers a failure.
+        if unsafe { GetModuleHandleExA(FROM_ADDRESS, base as *const u8, &mut module) } == 0 {
+            return None;
+        }
+        match (module as u64 == base).then(|| image_at(base)).flatten() {
+            Some(mut image) => {
+                image.module = module;
+                Some(image)
+            }
+            None => {
+                // SAFETY: the reference just taken, let go once.
+                unsafe { FreeLibrary(module) };
+                None
+            }
+        }
     }
 
     /// One code address a walk looked up ([`walk_stack`]), kept for the next walks: the stacks of
@@ -1469,6 +1512,11 @@ mod native {
     /// of functions with version 2 unwind information, which the system unwinds by its epilogue
     /// descriptors instead of the code.
     ///
+    /// The epilogue decoder ([`epilogue_at`]) follows ntdll 10.0.26200's (disassembled: the
+    /// unwinder's core at ntdll+0x1F440), down to its skip of one BND prefix (F2) before the
+    /// return or jump. Read as no epilogue, a `bnd jmp` out of its function went to the system,
+    /// which looked the target up (in a probe, 10 walks of 30,163 waited on the loader).
+    ///
     /// # Safety
     /// `f` is the unwind entry `code` names ([`look_up`]); the images are loaded; `low..high` is
     /// committed memory.
@@ -1559,11 +1607,11 @@ mod native {
 
     /// What `RtlVirtualUnwind` makes of the code at `pc` in `f`, read from the same bytes: an
     /// epilogue is an optional `add rsp, imm` or `lea rsp, [frame register + disp]`, any number
-    /// of pops, then a return, or a jump out of the function (a tail call). `None` when a byte it
-    /// would read lies past the image, or a pop is into the stack pointer: the system would read
-    /// the rest of the epilogue from wherever the popped word points. Compilers emit no
-    /// `pop rsp`, but a pc on the second byte of `pop r12` (41 5c) reads as one, and the walk can
-    /// meet such a pc through a stray return address.
+    /// of pops, then a return, or a jump out of the function (a tail call), either with one BND
+    /// prefix (F2) or none. `None` when a byte it would read lies past the image, or a pop is
+    /// into the stack pointer: the system would read the rest of the epilogue from wherever the
+    /// popped word points. Compilers emit no `pop rsp`, but a pc on the second byte of `pop r12`
+    /// (41 5c) reads as one, and the walk can meet such a pc through a stray return address.
     ///
     /// # Safety
     /// As [`unwind_step`].
@@ -1623,6 +1671,11 @@ mod native {
                 return None;
             }
             pops += 1;
+        }
+        // A BND prefix (F2) before the return or jump (`bnd ret`, `bnd jmp`): the system skips
+        // one, as the processor does, then reads the rest as without it.
+        if byte(at)? == 0xf2 {
+            at += 1;
         }
         let b = byte(at)?;
         let begin = code.base + u64::from((*f).begin);
@@ -1968,8 +2021,9 @@ mod native {
         names: HashMap<u64, (String, String)>,
         modules: HashMap<usize, String>,
         thread_names: HashMap<u32, String>,
-        /// The loaded images by base, with their unwind tables ([`Sampler::refresh_images`]),
-        /// when they were last listed, and whether a walk met code in none of them since.
+        /// The loaded images by base, with their unwind tables, each held loaded until the next
+        /// listing ([`Sampler::refresh_images`]), when they were last listed, and whether a walk
+        /// met code in none of them since.
         images: Vec<Image>,
         images_at: Option<Instant>,
         images_missed: bool,
@@ -2107,7 +2161,9 @@ mod native {
 
         /// Lists the loaded images again (`K32EnumProcessModules`) with their unwind tables:
         /// at the first walk, every five seconds (an image unloaded is dropped), and a quarter
-        /// of a second after a walk met code in no known image (one loaded since).
+        /// of a second after a walk met code in no known image (one loaded since). Each listed
+        /// image is held loaded until the next listing ([`listed_image`]): with the profiler
+        /// walking, a DLL the program frees unloads up to five seconds later.
         fn refresh_images(&mut self) {
             let due = match self.images_at {
                 None => true,
@@ -2122,12 +2178,16 @@ mod native {
             }
             self.images_at = Some(Instant::now());
             self.images_missed = false;
-            // An image unloaded since may have left lookups into its unwind table.
+            // The lookups point into the listed images' unwind tables.
             self.found.slots.fill(Found::EMPTY);
+            // The last listing's references are let go before the new ones are taken: an image
+            // its users have freed since is unloaded here (taken again first, it would stay
+            // loaded for good). No thread is suspended meanwhile, so waiting on the loader's
+            // lock, as letting go and taking references do, ends.
+            self.images.clear();
             let mut handles: Vec<Handle> = vec![std::ptr::null_mut(); 512];
             // SAFETY: the buffer's size in bytes is passed. A module listed may be unloaded
-            // before its headers are read: `image_at` reads them through `ReadProcessMemory`
-            // and skips one it cannot read.
+            // before its reference is taken: `listed_image` skips one that is gone.
             unsafe {
                 loop {
                     let bytes = (handles.len() * std::mem::size_of::<Handle>()) as u32;
@@ -2148,7 +2208,10 @@ mod native {
                     }
                     handles.resize(count, std::ptr::null_mut());
                 }
-                self.images = handles.iter().filter_map(|&h| image_at(h as u64)).collect();
+                self.images = handles
+                    .iter()
+                    .filter_map(|&h| listed_image(h as u64))
+                    .collect();
             }
             self.images.sort_by_key(|im| im.base);
         }
@@ -2593,8 +2656,8 @@ mod native {
             ".seh_endproc",
         );
 
-        // A function whose epilogue ends in a tail call: `add rsp, 32`, `pop rbx`, then a jump
-        // to the start of another function.
+        // Functions whose epilogue ends in a tail call: `add rsp, 32`, `pop rbx`, then a jump
+        // to the start of another function (one with a BND prefix, `bnd jmp`).
         std::arch::global_asm!(
             ".globl nv_profile_test_tail",
             ".globl nv_profile_test_tail_epilogue",
@@ -2610,6 +2673,23 @@ mod native {
             "add rsp, 32",
             "pop rbx",
             "jmp nv_profile_test_tail_target",
+            ".seh_endproc",
+            // The same with a BND prefix (F2) on the jump.
+            ".globl nv_profile_test_bnd_tail",
+            ".globl nv_profile_test_bnd_tail_epilogue",
+            ".seh_proc nv_profile_test_bnd_tail",
+            "nv_profile_test_bnd_tail:",
+            "push rbx",
+            ".seh_pushreg rbx",
+            "sub rsp, 32",
+            ".seh_stackalloc 32",
+            ".seh_endprologue",
+            "nop",
+            "nv_profile_test_bnd_tail_epilogue:",
+            "add rsp, 32",
+            "pop rbx",
+            ".byte 0xf2, 0xe9",
+            ".long nv_profile_test_tail_target - . - 4",
             ".seh_endproc",
             ".seh_proc nv_profile_test_tail_target",
             "nv_profile_test_tail_target:",
@@ -2669,15 +2749,11 @@ mod native {
             fn nv_profile_test_big_body();
             fn nv_profile_test_lea_epilogue();
             fn nv_profile_test_tail_epilogue();
+            fn nv_profile_test_bnd_tail_epilogue();
             fn nv_profile_test_split();
             fn nv_profile_test_split_jump();
             fn nv_profile_test_split_cold();
             fn nv_profile_test_r12_pop();
-        }
-
-        #[link(name = "kernel32")]
-        extern "system" {
-            fn FreeLibrary(module: Handle) -> i32;
         }
 
         type Code = unsafe extern "C" fn();
@@ -2823,7 +2899,9 @@ mod native {
         /// and the return, as the processor runs them), not through `RtlVirtualUnwind`, which
         /// would look up the jump's target and can wait there on the loader's lock. Exactly the
         /// frame's words in the stack unwind it; with one word less the walk ends as a bad
-        /// frame.
+        /// frame. The same with a BND prefix on the jump (`bnd jmp`), which the system skips
+        /// as it decodes the epilogue: read as no epilogue, it went to the system, which looked
+        /// the target up.
         #[test]
         fn a_tail_call_epilogue_is_unwound_by_the_walk() {
             let mut s = Sampler::new();
@@ -2835,15 +2913,26 @@ mod native {
             let rsp = low + 0x80;
             stack[(0x80 + 32) / 8] = 0xb0b;
             let high = rsp + 48;
-            let rip = nv_profile_test_tail_epilogue as Code as usize as u64;
-            let (n, end, unwinds, tail_calls, ctx) = walk_at(&mut s, rip, rsp, 0, (low, high));
-            assert_eq!((n, end, unwinds, tail_calls), (1, WalkEnd::Start, 0, 1));
-            assert_eq!((ctx.rsp(), ctx.register(3)), (rsp + 48, 0xb0b));
-            let (n, end, unwinds, tail_calls, ctx) = walk_at(&mut s, rip, rsp, 0, (low, high - 8));
-            assert_eq!(
-                (n, end, unwinds, tail_calls, ctx.rsp()),
-                (1, WalkEnd::Bad, 0, 0, rsp)
-            );
+            for (jump, rip) in [
+                ("jmp", nv_profile_test_tail_epilogue as Code),
+                ("bnd jmp", nv_profile_test_bnd_tail_epilogue),
+            ] {
+                let rip = rip as usize as u64;
+                let (n, end, unwinds, tail_calls, ctx) = walk_at(&mut s, rip, rsp, 0, (low, high));
+                assert_eq!(
+                    (n, end, unwinds, tail_calls),
+                    (1, WalkEnd::Start, 0, 1),
+                    "{jump}"
+                );
+                assert_eq!((ctx.rsp(), ctx.register(3)), (rsp + 48, 0xb0b), "{jump}");
+                let (n, end, unwinds, tail_calls, ctx) =
+                    walk_at(&mut s, rip, rsp, 0, (low, high - 8));
+                assert_eq!(
+                    (n, end, unwinds, tail_calls, ctx.rsp()),
+                    (1, WalkEnd::Bad, 0, 0, rsp),
+                    "{jump}, one word short"
+                );
+            }
         }
 
         /// A jump out of a part of a function (its unwind information chained to the first
@@ -2898,10 +2987,11 @@ mod native {
         }
 
         /// A walk never waits on the loader. A thread of this program loads and frees a DLL in a
-        /// loop and is suspended, as the sampler suspends the engine's thread, while a walk at a
-        /// tail-call epilogue runs: every walk comes back. Through `RtlVirtualUnwind`, a probe of
-        /// the same loop got stuck within 9,000 to 95,000 walks; here a watchdog resumes the
-        /// thread after two seconds without a walk coming back, and the test fails.
+        /// loop and is suspended, as the sampler suspends the engine's thread, while walks at
+        /// tail-call epilogues run (a plain `jmp` and a `bnd jmp` in turn): every walk comes
+        /// back. Through `RtlVirtualUnwind`, a probe of the same loop got stuck within 9,000 to
+        /// 95,000 walks (the `bnd jmp` alone, 10 times in 30,163 walks); here a watchdog resumes
+        /// the thread after two seconds without a walk coming back, and the test fails.
         #[test]
         fn a_walk_at_a_tail_call_never_waits_on_the_loader() {
             use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
@@ -2932,7 +3022,11 @@ mod native {
             let mut stack = vec![0u64; 0x40];
             let low = stack.as_mut_ptr() as u64;
             let rsp = low + 0x80;
-            let rip = nv_profile_test_tail_epilogue as Code as usize as u64;
+            // Walks at the plain and the BND-prefixed tail-call epilogue, in turn.
+            let rips = [
+                nv_profile_test_tail_epilogue as Code as usize as u64,
+                nv_profile_test_bnd_tail_epilogue as Code as usize as u64,
+            ];
             let steps = Arc::new(AtomicU64::new(0));
             let stuck = Arc::new(AtomicBool::new(false));
             // The watchdog must be running before the first suspend: a thread starting up takes
@@ -2968,7 +3062,7 @@ mod native {
             let mut wrong = 0u64;
             let started = Instant::now();
             while started.elapsed() < Duration::from_millis(1500) {
-                ctx.set_word(0xf8, rip);
+                ctx.set_word(0xf8, rips[(steps.load(Relaxed) % 2) as usize]);
                 ctx.set_word(0x98, rsp);
                 // SAFETY: the handle has suspend access; the images are listed and `stack` is
                 // the test's own; only the walk runs between the suspend and the resume.
@@ -3081,6 +3175,77 @@ mod native {
             assert!(image.end > me && image.len > 0);
             let here = headers_that_cannot_be_read_are_no_image as fn() as usize as u64;
             assert!((me..image.end).contains(&here));
+        }
+
+        /// A listed image stays loaded until the next listing: walks read its unwind table and
+        /// code in place, and one unloaded since the listing had them read memory that was gone
+        /// or another module's (in a probe, a DLL freed after a listing and another loaded at
+        /// its base: the walk read the old unwind table past the new module's end, an access
+        /// violation in the sampler with the walked thread suspended). Freed by its user
+        /// meanwhile, it is let go at the next listing, and when the sampler is dropped.
+        #[test]
+        fn a_listed_image_stays_loaded_until_the_next_listing() {
+            // A system DLL nothing else in this program loads.
+            const NAME: &[u8] = b"msdelta.dll\0";
+            let loaded = || {
+                // SAFETY: a module looked up by name; nothing is loaded or freed.
+                !unsafe { GetModuleHandleA(NAME.as_ptr()) }.is_null()
+            };
+            // Whether the DLL, freed by its user, is unloaded within a minute: another test's
+            // sampler that listed it meanwhile holds it until its own next listing or its end,
+            // and `relist` lists again (letting go of what it holds) each time it looks.
+            let unloaded_within_a_minute = |relist: &mut dyn FnMut()| {
+                let started = Instant::now();
+                loop {
+                    relist();
+                    if !loaded() {
+                        return true;
+                    }
+                    if started.elapsed() > Duration::from_secs(60) {
+                        return false;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            };
+            assert!(!loaded(), "not loaded before the test");
+            // SAFETY: a system DLL loaded by name and freed once.
+            let module = unsafe { LoadLibraryA(NAME.as_ptr()) };
+            assert!(!module.is_null());
+            let mut s = Sampler::new();
+            s.refresh_images();
+            let im = s.images.iter().find(|im| im.base == module as u64);
+            let im = im.expect("listed");
+            assert!(im.len > 0);
+            // SAFETY: the first entry of the unwind table of an image just listed.
+            let pc = im.base + u64::from(unsafe { (*im.table).begin });
+            // SAFETY: the reference the test took.
+            unsafe { FreeLibrary(module) };
+            // Checked before its unwind table is read: unloaded, the read would fault.
+            assert!(loaded(), "held loaded while listed");
+            assert_eq!(s.has_unwind_entry(pc), Some(true));
+            // The next listing lets it go: it is unloaded and no longer listed.
+            assert!(
+                unloaded_within_a_minute(&mut || {
+                    s.images_at = None;
+                    s.refresh_images();
+                }),
+                "let go at the next listing"
+            );
+            assert!(s.images.iter().all(|im| im.base != module as u64));
+            // Listed again while loaded, then let go with the sampler.
+            // SAFETY: as above.
+            let module = unsafe { LoadLibraryA(NAME.as_ptr()) };
+            assert!(!module.is_null());
+            s.images_at = None;
+            s.refresh_images();
+            // SAFETY: the reference the test took.
+            unsafe { FreeLibrary(module) };
+            assert!(loaded(), "held loaded while listed");
+            drop(s);
+            assert!(
+                unloaded_within_a_minute(&mut || {}),
+                "let go with the sampler"
+            );
         }
 
         /// The ids of the threads of process `pid` (a Toolhelp snapshot).

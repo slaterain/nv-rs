@@ -112,8 +112,13 @@ const KEEP_SPAN: usize = 1024;
 ///   1 MB table, up to all of it when the kept pages lay behind where the last hand-back
 ///   stopped: 90-130 us for that one unmap.
 /// - Now: the window 1.6-1.7 us a step idle and 2.1-2.3 us busy (a host call per 256 unmaps;
-///   the unmap that makes it, 1 MB handed back, 0.1-0.2 ms); with the kept pages scattered, no
-///   one-page unmap over 6 us; one whose look goes round the space ([`Mem::kept_groups`]) 2-4 us.
+///   the unmap that makes it, 1 MB handed back, 0.1-0.2 ms); one whose look goes round the
+///   space ([`Mem::kept_groups`]) 2-4 us. With the kept pages scattered, a one-page unmap makes
+///   at most [`KEEP_BATCH_RUNS`] host calls. The slowest took 4-6 us on an idle machine (9-14 us
+///   with another build running), but 27-79 us with three other threads busy, which each call
+///   interrupts (the second version, one call per unmap: 30-44 us busy). The idle figure is the
+///   repair's; the others the third review's (600 unmaps past the limit with 4096 kept pages in
+///   4096 runs, three rounds, twice).
 const KEEP_MAX: usize = 4096;
 /// The most kept pages (1 MB) a hand-back at the limit hands back when it needs fewer: a window
 /// of pages sliding forward makes one host call per this many one-page unmaps at the limit, not
@@ -1010,6 +1015,8 @@ impl Mem {
         let (mut done, mut runs) = (0, 0);
         let mut p = self.keep_hand;
         while done < most && (done < need || runs < KEEP_BATCH_RUNS) {
+            // A run that ended at the last page of the space leaves `p` at `PAGES`: the look
+            // goes on from page 0.
             p = self.next_kept(p);
             let run = p;
             while p < PAGES && done < most && self.page_state(p) == KEPT {
@@ -1027,10 +1034,15 @@ impl Mem {
         self.keep_hand = p % PAGES;
     }
 
-    /// The first page at or after `from` (below [`PAGES`]; round the space) that the table marks
-    /// [`KEPT`]; there must be one. Looks at the rest of `from`'s group of [`KEEP_GROUP`] pages,
-    /// then at [`Mem::kept_groups`] for the next group that holds one, and at that group's pages.
+    /// The first page at or after `from` (round the space; `from` at most [`PAGES`], which is
+    /// page 0 again) that the table marks [`KEPT`]; there must be one. Looks at the rest of
+    /// `from`'s group of [`KEEP_GROUP`] pages, then at [`Mem::kept_groups`] for the next group
+    /// that holds one, and at that group's pages. A hand-back's run that ends at the last page
+    /// of the space leaves its next look at [`PAGES`]: read as a group, that was one past the
+    /// end of [`Mem::kept_groups`], and the unmap panicked.
     fn next_kept(&self, from: usize) -> usize {
+        debug_assert!(from <= PAGES);
+        let from = from % PAGES;
         // SAFETY: the table holds a byte for each of the `PAGES` pages and stays committed while
         // the block lives; only `&mut self` writes it.
         let table = unsafe { std::slice::from_raw_parts(self.space.flag(0), PAGES) };
@@ -2843,6 +2855,59 @@ mod tests {
         m.check_pages();
     }
 
+    /// A hand-back whose run of kept pages ends at the last page of the space, short of
+    /// [`KEEP_BATCH`] and with host calls to spare ([`KEEP_BATCH_RUNS`]), goes on from page 0.
+    /// Its next look started at [`PAGES`], one group past the end of [`Mem::kept_groups`], and
+    /// the unmap panicked (index out of bounds). The game can reach it: `units/platform.rs`
+    /// takes a fixed reservation that ends at 4 GB, and a memory pool tries 16 MB slots up to
+    /// 0xFF000000 and decommits single pages.
+    #[test]
+    fn a_hand_back_that_reaches_the_end_of_the_space_goes_on_from_its_start() {
+        let mut m = Mem::new();
+        const LOW: u32 = 0x1000_0000;
+        let page = |a: u32| (a >> PAGE_BITS) as usize;
+        // The last page of the space, then 4095 pages in one run at LOW: 4096 kept.
+        m.map(0xffff_f000, 0x1000);
+        m.unmap(0xffff_f000, 0x1000);
+        let low_pages = KEEP_MAX as u32 - 1;
+        m.map(LOW, low_pages << PAGE_BITS);
+        for at in (0..low_pages).step_by(KEEP_SPAN) {
+            let len = (low_pages - at).min(KEEP_SPAN as u32);
+            m.unmap(LOW + (at << PAGE_BITS), len << PAGE_BITS);
+        }
+        assert_eq!(m.kept, KEEP_MAX);
+        // Unmaps of 1000, 1000, 1000 and 1024 pages below LOW (behind the hand) each hand back
+        // as many kept pages at LOW, one run a call, and keep their own: still 4096 kept.
+        let behind = [
+            (0x0100_0000, 1000),
+            (0x0200_0000, 1000),
+            (0x0300_0000, 1000),
+            (0x0400_0000, 1024),
+        ];
+        for (at, pages) in behind {
+            m.map(at, pages << PAGE_BITS);
+            m.unmap(at, pages << PAGE_BITS);
+        }
+        assert_eq!(m.kept, KEEP_MAX);
+        assert_eq!(m.keep_hand, page(LOW) + 4024);
+        // 71 kept pages are left at LOW, then the last page of the space. A one-page unmap
+        // hands back those 72 (two runs, the second ending at the end of the space), then goes
+        // on round the space: the first 184 of the 1000 pages kept at 0x01000000.
+        const SINGLE: u32 = 0x0500_0000;
+        m.map(SINGLE, 0x1000);
+        let before = m.host_calls();
+        m.unmap(SINGLE, 0x1000);
+        assert_eq!(m.host_calls() - before, 3);
+        assert_eq!(m.kept, KEEP_MAX - KEEP_BATCH + 1);
+        assert_eq!(m.page_state(page(LOW) + low_pages as usize - 1), UNMAPPED);
+        assert_eq!(m.page_state(PAGES - 1), UNMAPPED);
+        let wrapped = page(behind[0].0);
+        assert_eq!(m.page_state(wrapped + 183), UNMAPPED);
+        assert_eq!(m.page_state(wrapped + 184), KEPT);
+        assert_eq!(m.keep_hand, wrapped + 184);
+        m.check_pages();
+    }
+
     /// The look for the next kept page ([`Mem::next_kept`]) goes round the space through the
     /// groups' bits: from any page it finds the first kept page at or after it, in its own group
     /// or a later one, and round from the start to the pages of its own group before it; a
@@ -2884,6 +2949,9 @@ mod tests {
                 "from {from:#x}"
             );
         }
+        // From the end of the space (where a hand-back's run that ends at the last page leaves
+        // its next look): round to the start.
+        assert_eq!(m.next_kept(PAGES), first_kept_from(&m, 0));
         // Only pages 5 and 200 kept: from past them the look goes round the space.
         for &p in &kept[2..] {
             m.map((p << PAGE_BITS) as u32, 0x1000);
@@ -2897,6 +2965,7 @@ mod tests {
         m.map(5 << PAGE_BITS, 0x1000);
         assert_eq!(m.next_kept(201), 200);
         assert_eq!(m.next_kept(0), 200);
+        assert_eq!(m.next_kept(PAGES), 200);
         m.check_pages();
     }
 
