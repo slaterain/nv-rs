@@ -39,7 +39,7 @@ use crate::prelude::*;
 use crate::units::fallout_interface::run_007e6320::TextEditMenu;
 use crate::units::fallout_interface::startmenu::ListBox;
 use crate::units::fallout_interface::tutorialmenu::TutorialMenu;
-use crate::units::fallout_shared::bgsdestructibleobjectform::x87_truncate_i64;
+use crate::x87::fistp_chop64;
 
 /// The allocator, cdecl (size): the block or null.
 const ALLOCATE: u32 = 0x0040_1000;
@@ -1115,7 +1115,7 @@ fn list_box_num_unfiltered(e: &mut Engine, this: Ptr<ListBox>, instance: ListBox
     let filtered = e
         .call(TILE_GET_FLOAT, &args![container, num_filtered])
         .f64();
-    count.wrapping_sub(x87_truncate_i64(filtered) as i32)
+    count.wrapping_sub(fistp_chop64(filtered) as i32)
 }
 
 // Translated from 0071e290 (decompiled, FalloutNV.exe 1.4.0.525)

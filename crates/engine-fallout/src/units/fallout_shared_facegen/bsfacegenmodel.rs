@@ -1840,14 +1840,14 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
 // - `image` lines (0064ceb0): the compressed image's size, channels, byte ranges per channel
 //   and the texture made; with `NV_FACE_CHECK_DIR` the image is also written there as a TGA.
 // ---------------------------------------------------------------------------------------------
-pub(crate) mod face_check {
+pub mod face_check {
     use super::*;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Mutex, OnceLock};
 
     /// Whether `NV_FACE_CHECK` is set (read once).
-    pub(crate) fn enabled() -> bool {
+    pub fn enabled() -> bool {
         static ON: OnceLock<bool> = OnceLock::new();
         *ON.get_or_init(|| std::env::var_os("NV_FACE_CHECK").is_some())
     }
@@ -2044,7 +2044,7 @@ pub(crate) mod face_check {
     /// A shader property's texture arrays (`BSShaderPPLightingProperty`: the count at +0xA8, the
     /// six arrays at +0xAC, each of the count): every entry with its `NiSourceTexture` file name
     /// (+0x34), for a head part as 00655fa0 left it.
-    pub(crate) fn shader_textures(e: &Engine, part: u32, geometry: u32, shader: u32) {
+    pub fn shader_textures(e: &Engine, part: u32, geometry: u32, shader: u32) {
         let count = u32::from(e.mem.u16(shader.wrapping_add(0xa8))).min(8);
         let mut kinds = Vec::new();
         for kind in 0..6u32 {

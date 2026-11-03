@@ -16,7 +16,7 @@
 //! translations compute in `f64` and round to `f32` where the code stores a
 //! `float`. The `FISTP` conversions (after the control word is switched to
 //! round toward zero) give the "integer indefinite" value for an
-//! out-of-range input: [`x87_truncate_i32`].
+//! out-of-range input: [`fistp_chop`], [`fistp_chop64`].
 //!
 //! The compiler's exception-unwinding frames (`FS:[0]` chains) are not
 //! translated.
@@ -27,6 +27,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::x87::{fistp_chop, fistp_chop64};
 
 // ---------------------------------------------------------------------
 // Layouts
@@ -185,26 +186,6 @@ const ARRAY_ELEMENT: u32 = 0x006a_7ad0;
 /// Reads the `float` a setting pointer points at (`ECX` = setting).
 const SETTING_POINTER: u32 = 0x0040_3e20;
 
-/// Maps a `float` to the integer `FISTP` stores after the control word is
-/// switched to truncation: out of range and NaN give `0x80000000`.
-pub(crate) fn x87_truncate_i32(value: f64) -> i32 {
-    if value.is_nan() || value >= 2147483648.0 || value <= -2147483649.0 {
-        i32::MIN
-    } else {
-        value as i32
-    }
-}
-
-/// The same for a 64-bit store (`FISTP qword`): the indefinite value is
-/// `0x8000000000000000`.
-pub(crate) fn x87_truncate_i64(value: f64) -> i64 {
-    if value.is_nan() || value >= 9.223_372_036_854_776e18 || value < -9.223_372_036_854_776e18 {
-        i64::MIN
-    } else {
-        value as i64
-    }
-}
-
 /// The percentage of `max` that `health` is, rounded up and truncated to a
 /// byte: `health * 100 / max` stored as a `float`, then `00476b20`, then
 /// `FISTP`, low byte. Every stage lookup does exactly this.
@@ -212,7 +193,7 @@ pub(crate) fn health_percentage(e: &mut Engine, health: f32, max: u32) -> u8 {
     let hundred: f64 = e.global(HUNDRED);
     let ratio = (health as f64 * hundred / max as f64) as f32;
     let rounded = fn_00476b20(e, ratio);
-    x87_truncate_i32(rounded as f64) as u8
+    fistp_chop(rounded as f64) as u8
 }
 
 /// Reads `count` bytes at `from` and writes them at `to` (the game's
@@ -423,7 +404,7 @@ pub fn fn_00475ab0(e: &mut Engine, this: Ptr<BGSDestructibleObjectForm>, referen
     if e.vcall(reference.addr(), 0x100, &args![]).bool() {
         let interface = reference.addr() + 0xa4;
         let value = e.vcall(interface, 4, &args![0x10u32]).f64();
-        x87_truncate_i64(value) as u32
+        fistp_chop64(value) as u32
     } else {
         let data = e.get(this, BGSDestructibleObjectForm::pData);
         e.get(data, DestructibleObjectData::iHealth)

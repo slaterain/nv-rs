@@ -56,6 +56,16 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     engine_fallout::units::funcs(out);
 }
 
+/// Each engine crate's registered functions, by crate (no address may be in two).
+pub const PARTS: &[(&str, fn(&mut Vec<(u32, crate::AbiFn)>))] = &[
+    ("engine-core", engine_core::units::funcs),
+    ("engine-gamebryo", engine_gamebryo::units::funcs),
+    ("engine-bs", engine_bs::units::funcs),
+    ("engine-havok", engine_havok::units::funcs),
+    ("engine-speedtree", engine_speedtree::units::funcs),
+    ("engine-fallout", engine_fallout::units::funcs),
+];
+
 // The full engine: `Engine::new()` registers the core's functions and every part crate's.
 engine_core::assemble!(
     engine_gamebryo::units::funcs,

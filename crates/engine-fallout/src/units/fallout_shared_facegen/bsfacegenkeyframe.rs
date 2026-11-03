@@ -2209,19 +2209,13 @@ pub mod speech_check {
             stop.downcast_ref::<String>().cloned().unwrap_or_default()
         }
 
-        /// Every translated function, spin locks that do nothing, `operator delete` through
-        /// the platform's `Deallocate`, the keyframe vtable (slot 0: the scalar deleting
-        /// destructor), a pool of 64 free nodes and a face (0x1c0 zeroed bytes: empty lists),
-        /// watched.
+        /// Every translated function (the table `Engine::new()` registers for this crate's
+        /// tests), spin locks that do nothing, `operator delete` through the platform's
+        /// `Deallocate`, the keyframe vtable (slot 0: the scalar deleting destructor), a pool
+        /// of 64 free nodes and a face (0x1c0 zeroed bytes: empty lists), watched.
         fn engine(settings: Settings) -> (Engine, u32) {
             force(settings);
             let mut e = Engine::new();
-            let mut funcs = Vec::new();
-            engine_core::units::funcs(&mut funcs);
-            crate::units::funcs(&mut funcs);
-            for (addr, f) in funcs {
-                e.register(addr, f);
-            }
             e.register(0x0040_fbf0, |_, _| Ret::default());
             e.register(0x0040_fba0, |_, _| Ret::default());
             e.register(0x0040_1030, |e, a| {

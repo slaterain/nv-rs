@@ -2369,13 +2369,13 @@ pub(crate) fn is_big_endian(e: &mut Engine) -> bool {
 
 /// The item of a `BSSimpleList` node (`006815c0` returns the node's own
 /// address, the item is the word there).
-pub(crate) fn list_item(e: &mut Engine, node: u32) -> u32 {
+pub fn list_item(e: &mut Engine, node: u32) -> u32 {
     let slot = e.call(SIMPLE_LIST_ITEM, &args![node]).u32();
     e.mem.u32(slot)
 }
 
 /// The next node of a `BSSimpleList` node (`00726070`).
-pub(crate) fn list_next(e: &mut Engine, node: u32) -> u32 {
+pub fn list_next(e: &mut Engine, node: u32) -> u32 {
     e.call(SIMPLE_LIST_NEXT, &args![node]).u32()
 }
 
