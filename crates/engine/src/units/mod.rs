@@ -50,12 +50,9 @@ pub mod fallout_shared {
     pub use engine_fallout::units::fallout_shared::actorcause;
     pub use engine_fallout::units::fallout_shared::actorvalue;
     pub use engine_fallout::units::fallout_shared::aiformulas;
-    pub use engine_fallout::units::fallout_shared::animation;
-    pub use engine_fallout::units::fallout_shared::audiomarkerdata;
     pub use engine_fallout::units::fallout_shared::bgsacousticspace;
     pub use engine_fallout::units::fallout_shared::bgsaddonnode;
     pub use engine_fallout::units::fallout_shared::bgsammoform;
-    pub use engine_fallout::units::fallout_shared::bgsautowater;
     pub use engine_fallout::units::fallout_shared::bgsbipedmodellist;
     pub use engine_fallout::units::fallout_shared::bgsbodypart;
     pub use engine_fallout::units::fallout_shared::bgsbodypartdata;
@@ -65,8 +62,6 @@ pub mod fallout_shared {
     pub use engine_fallout::units::fallout_shared::bgscliproundsform;
     pub use engine_fallout::units::fallout_shared::bgsconstructibleobject;
     pub use engine_fallout::units::fallout_shared::bgsdebris;
-    pub use engine_fallout::units::fallout_shared::bgsdecalmanager;
-    pub use engine_fallout::units::fallout_shared::bgsdecalnode;
     pub use engine_fallout::units::fallout_shared::bgsdefaultobjectmanager;
     pub use engine_fallout::units::fallout_shared::bgsdestructibleobjectform;
     pub use engine_fallout::units::fallout_shared::bgsencounterzone;
@@ -80,7 +75,6 @@ pub mod fallout_shared {
     pub use engine_fallout::units::fallout_shared::bgsimpactdata;
     pub use engine_fallout::units::fallout_shared::bgsimpactdataset;
     pub use engine_fallout::units::fallout_shared::bgslistform;
-    pub use engine_fallout::units::fallout_shared::bgsloadedreferencecollection;
     pub use engine_fallout::units::fallout_shared::bgsmenuicon;
     pub use engine_fallout::units::fallout_shared::bgsmessage;
     pub use engine_fallout::units::fallout_shared::bgsmessageicon;
@@ -90,7 +84,6 @@ pub mod fallout_shared {
     pub use engine_fallout::units::fallout_shared::bgsperk;
     pub use engine_fallout::units::fallout_shared::bgspickupputdownsounds;
     pub use engine_fallout::units::fallout_shared::bgsplaceablewater;
-    pub use engine_fallout::units::fallout_shared::bgsprimitive;
     pub use engine_fallout::units::fallout_shared::bgsprojectile;
     pub use engine_fallout::units::fallout_shared::bgsquestobjective;
     pub use engine_fallout::units::fallout_shared::bgsradiation;
@@ -105,49 +98,19 @@ pub mod fallout_shared {
     pub use engine_fallout::units::fallout_shared::bgstouchspellform;
     pub use engine_fallout::units::fallout_shared::bgsvoicetype;
     pub use engine_fallout::units::fallout_shared::bgsworldlocation;
-    pub use engine_fallout::units::fallout_shared::bipedanim;
-    pub use engine_fallout::units::fallout_shared::bsanimgroupsequence;
-    pub use engine_fallout::units::fallout_shared::bsanimnotereceiver;
-    pub use engine_fallout::units::fallout_shared::bsbipnode;
-    pub use engine_fallout::units::fallout_shared::bsclonepool;
     pub use engine_fallout::units::fallout_shared::combatformulas;
-    pub use engine_fallout::units::fallout_shared::containeritemextra;
     pub use engine_fallout::units::fallout_shared::creaturesounds;
-    pub use engine_fallout::units::fallout_shared::decaldata;
-    pub use engine_fallout::units::fallout_shared::doorlock;
     pub use engine_fallout::units::fallout_shared::experiencepoints;
     pub use engine_fallout::units::fallout_shared::expression;
-    pub use engine_fallout::units::fallout_shared::exteriorcellloader;
-    pub use engine_fallout::units::fallout_shared::extra_data_support;
-    pub use engine_fallout::units::fallout_shared::extradatacell;
-    pub use engine_fallout::units::fallout_shared::extradatalist;
-    pub use engine_fallout::units::fallout_shared::extradatalist_p2;
-    pub use engine_fallout::units::fallout_shared::extradatalist_p3;
-    pub use engine_fallout::units::fallout_shared::extradatalist_p4;
-    pub use engine_fallout::units::fallout_shared::extradatalist_p5;
-    pub use engine_fallout::units::fallout_shared::extradataobjects;
-    pub use engine_fallout::units::fallout_shared::extradataobjects_p2;
-    pub use engine_fallout::units::fallout_shared::extradataobjects_p3;
     pub use engine_fallout::units::fallout_shared::form_map_support;
     pub use engine_fallout::units::fallout_shared::form_support;
     pub use engine_fallout::units::fallout_shared::formcomponentcollection;
     pub use engine_fallout::units::fallout_shared::gameplayformulas;
     pub use engine_fallout::units::fallout_shared::globalfunc;
-    pub use engine_fallout::units::fallout_shared::gridarray;
-    pub use engine_fallout::units::fallout_shared::gridcell;
-    pub use engine_fallout::units::fallout_shared::imagespacemodifierinstance;
     pub use engine_fallout::units::fallout_shared::inventorychanges;
-    pub use engine_fallout::units::fallout_shared::lipsynchanim;
-    pub use engine_fallout::units::fallout_shared::mapmarkerdata;
     pub use engine_fallout::units::fallout_shared::medialocationcontroller;
     pub use engine_fallout::units::fallout_shared::mediaset;
     pub use engine_fallout::units::fallout_shared::miscstats;
-    pub use engine_fallout::units::fallout_shared::modelloader;
-    pub use engine_fallout::units::fallout_shared::modelloader_p2;
-    pub use engine_fallout::units::fallout_shared::modelloader_p3;
-    pub use engine_fallout::units::fallout_shared::modelloader_p4;
-    pub use engine_fallout::units::fallout_shared::multiboundmarkerdata;
-    pub use engine_fallout::units::fallout_shared::niformarray;
     pub use engine_fallout::units::fallout_shared::package;
     pub use engine_fallout::units::fallout_shared::packagedataambush;
     pub use engine_fallout::units::fallout_shared::packagedatadialogue;
@@ -161,8 +124,6 @@ pub mod fallout_shared {
     pub use engine_fallout::units::fallout_shared::packagelist;
     pub use engine_fallout::units::fallout_shared::packagelocation;
     pub use engine_fallout::units::fallout_shared::packagetarget;
-    pub use engine_fallout::units::fallout_shared::ragdolldata;
-    pub use engine_fallout::units::fallout_shared::renderer;
     pub use engine_fallout::units::fallout_shared::run_0040e920;
     pub use engine_fallout::units::fallout_shared::run_0040ea20;
     pub use engine_fallout::units::fallout_shared::run_0040f6e0;
@@ -229,8 +190,6 @@ pub mod fallout_shared {
     pub use engine_fallout::units::fallout_shared::run_0049c5d0;
     pub use engine_fallout::units::fallout_shared::run_0049f8b0;
     pub use engine_fallout::units::fallout_shared::run_0049faf0;
-    pub use engine_fallout::units::fallout_shared::run_0049fc80;
-    pub use engine_fallout::units::fallout_shared::run_004a3c20;
     pub use engine_fallout::units::fallout_shared::run_004a4460;
     pub use engine_fallout::units::fallout_shared::run_004a4810;
     pub use engine_fallout::units::fallout_shared::run_004a4ba0;
@@ -247,11 +206,8 @@ pub mod fallout_shared {
     pub use engine_fallout::units::fallout_shared::run_004b0aa0;
     pub use engine_fallout::units::fallout_shared::run_004b0cf0;
     pub use engine_fallout::units::fallout_shared::run_004b9e00;
-    pub use engine_fallout::units::fallout_shared::run_004ba280;
     pub use engine_fallout::units::fallout_shared::run_004baf10;
     pub use engine_fallout::units::fallout_shared::run_004bc3d0;
-    pub use engine_fallout::units::fallout_shared::run_004d50e0;
-    pub use engine_fallout::units::fallout_shared::run_004d5930;
     pub use engine_fallout::units::fallout_shared::run_004d60c0;
     pub use engine_fallout::units::fallout_shared::run_004d61b0;
     pub use engine_fallout::units::fallout_shared::run_004da3f0;
@@ -410,19 +366,12 @@ pub mod fallout_shared {
     pub use engine_fallout::units::fallout_shared::run_00680890;
     pub use engine_fallout::units::fallout_shared::run_00680fe0;
     pub use engine_fallout::units::fallout_shared::run_006815c0;
-    pub use engine_fallout::units::fallout_shared::screencustomsplatter;
-    pub use engine_fallout::units::fallout_shared::screensplatter;
-    pub use engine_fallout::units::fallout_shared::teleportdata;
-    pub use engine_fallout::units::fallout_shared::tes;
-    pub use engine_fallout::units::fallout_shared::tes_p2;
-    pub use engine_fallout::units::fallout_shared::tes_p3;
     pub use engine_fallout::units::fallout_shared::tesactorbase;
     pub use engine_fallout::units::fallout_shared::tesactorbasedata;
     pub use engine_fallout::units::fallout_shared::tesaiform;
     pub use engine_fallout::units::fallout_shared::tesammo;
     pub use engine_fallout::units::fallout_shared::tesammoeffect;
     pub use engine_fallout::units::fallout_shared::tesanimation;
-    pub use engine_fallout::units::fallout_shared::tesanimgroup;
     pub use engine_fallout::units::fallout_shared::tesattackdamageform;
     pub use engine_fallout::units::fallout_shared::tesattributes;
     pub use engine_fallout::units::fallout_shared::tesbipedmodelform;
@@ -451,7 +400,6 @@ pub mod fallout_shared {
     pub use engine_fallout::units::fallout_shared::tesimagespace;
     pub use engine_fallout::units::fallout_shared::tesimagespacemodifiableform;
     pub use engine_fallout::units::fallout_shared::tesimagespacemodifier;
-    pub use engine_fallout::units::fallout_shared::tesland;
     pub use engine_fallout::units::fallout_shared::teslandtexture;
     pub use engine_fallout::units::fallout_shared::teslevcreature;
     pub use engine_fallout::units::fallout_shared::tesleveledlist;
@@ -468,21 +416,11 @@ pub mod fallout_shared {
     pub use engine_fallout::units::fallout_shared::tesobjectarma;
     pub use engine_fallout::units::fallout_shared::tesobjectarmo;
     pub use engine_fallout::units::fallout_shared::tesobjectbook;
-    pub use engine_fallout::units::fallout_shared::tesobjectcell;
-    pub use engine_fallout::units::fallout_shared::tesobjectcell_p2;
-    pub use engine_fallout::units::fallout_shared::tesobjectcell_p3;
-    pub use engine_fallout::units::fallout_shared::tesobjectcell_p4;
     pub use engine_fallout::units::fallout_shared::tesobjectclot;
     pub use engine_fallout::units::fallout_shared::tesobjectcont;
     pub use engine_fallout::units::fallout_shared::tesobjectdoor;
     pub use engine_fallout::units::fallout_shared::tesobjectimod;
     pub use engine_fallout::units::fallout_shared::tesobjectmisc;
-    pub use engine_fallout::units::fallout_shared::tesobjectrefr;
-    pub use engine_fallout::units::fallout_shared::tesobjectrefr_p2;
-    pub use engine_fallout::units::fallout_shared::tesobjectrefr_p3;
-    pub use engine_fallout::units::fallout_shared::tesobjectrefr_p4;
-    pub use engine_fallout::units::fallout_shared::tesobjectrefr_p5;
-    pub use engine_fallout::units::fallout_shared::tesobjectrefr_p6;
     pub use engine_fallout::units::fallout_shared::tesobjectstat;
     pub use engine_fallout::units::fallout_shared::tesobjecttree;
     pub use engine_fallout::units::fallout_shared::tesobjectweap;
@@ -501,17 +439,79 @@ pub mod fallout_shared {
     pub use engine_fallout::units::fallout_shared::tessound;
     pub use engine_fallout::units::fallout_shared::tessoundfile;
     pub use engine_fallout::units::fallout_shared::tesspelllist;
-    pub use engine_fallout::units::fallout_shared::testerrainlodmanager;
     pub use engine_fallout::units::fallout_shared::testexture;
     pub use engine_fallout::units::fallout_shared::testopic;
     pub use engine_fallout::units::fallout_shared::testopicinfo;
     pub use engine_fallout::units::fallout_shared::tesvalueform;
-    pub use engine_fallout::units::fallout_shared::teswater;
     pub use engine_fallout::units::fallout_shared::teswaterform;
     pub use engine_fallout::units::fallout_shared::tesweather;
     pub use engine_fallout::units::fallout_shared::tesweatherlist;
     pub use engine_fallout::units::fallout_shared::tesweightform;
-    pub use engine_fallout::units::fallout_shared::tesworldspace;
+    pub use engine_fallout_cell::units::fallout_shared::animation;
+    pub use engine_fallout_cell::units::fallout_shared::audiomarkerdata;
+    pub use engine_fallout_cell::units::fallout_shared::bgsautowater;
+    pub use engine_fallout_cell::units::fallout_shared::bgsdecalmanager;
+    pub use engine_fallout_cell::units::fallout_shared::bgsdecalnode;
+    pub use engine_fallout_cell::units::fallout_shared::bgsloadedreferencecollection;
+    pub use engine_fallout_cell::units::fallout_shared::bgsprimitive;
+    pub use engine_fallout_cell::units::fallout_shared::bipedanim;
+    pub use engine_fallout_cell::units::fallout_shared::bsanimgroupsequence;
+    pub use engine_fallout_cell::units::fallout_shared::bsanimnotereceiver;
+    pub use engine_fallout_cell::units::fallout_shared::bsbipnode;
+    pub use engine_fallout_cell::units::fallout_shared::bsclonepool;
+    pub use engine_fallout_cell::units::fallout_shared::containeritemextra;
+    pub use engine_fallout_cell::units::fallout_shared::decaldata;
+    pub use engine_fallout_cell::units::fallout_shared::doorlock;
+    pub use engine_fallout_cell::units::fallout_shared::exteriorcellloader;
+    pub use engine_fallout_cell::units::fallout_shared::extra_data_support;
+    pub use engine_fallout_cell::units::fallout_shared::extradatacell;
+    pub use engine_fallout_cell::units::fallout_shared::extradatalist;
+    pub use engine_fallout_cell::units::fallout_shared::extradatalist_p2;
+    pub use engine_fallout_cell::units::fallout_shared::extradatalist_p3;
+    pub use engine_fallout_cell::units::fallout_shared::extradatalist_p4;
+    pub use engine_fallout_cell::units::fallout_shared::extradatalist_p5;
+    pub use engine_fallout_cell::units::fallout_shared::extradataobjects;
+    pub use engine_fallout_cell::units::fallout_shared::extradataobjects_p2;
+    pub use engine_fallout_cell::units::fallout_shared::extradataobjects_p3;
+    pub use engine_fallout_cell::units::fallout_shared::gridarray;
+    pub use engine_fallout_cell::units::fallout_shared::gridcell;
+    pub use engine_fallout_cell::units::fallout_shared::imagespacemodifierinstance;
+    pub use engine_fallout_cell::units::fallout_shared::lipsynchanim;
+    pub use engine_fallout_cell::units::fallout_shared::mapmarkerdata;
+    pub use engine_fallout_cell::units::fallout_shared::modelloader;
+    pub use engine_fallout_cell::units::fallout_shared::modelloader_p2;
+    pub use engine_fallout_cell::units::fallout_shared::modelloader_p3;
+    pub use engine_fallout_cell::units::fallout_shared::modelloader_p4;
+    pub use engine_fallout_cell::units::fallout_shared::multiboundmarkerdata;
+    pub use engine_fallout_cell::units::fallout_shared::niformarray;
+    pub use engine_fallout_cell::units::fallout_shared::ragdolldata;
+    pub use engine_fallout_cell::units::fallout_shared::renderer;
+    pub use engine_fallout_cell::units::fallout_shared::run_0049fc80;
+    pub use engine_fallout_cell::units::fallout_shared::run_004a3c20;
+    pub use engine_fallout_cell::units::fallout_shared::run_004ba280;
+    pub use engine_fallout_cell::units::fallout_shared::run_004d50e0;
+    pub use engine_fallout_cell::units::fallout_shared::run_004d5930;
+    pub use engine_fallout_cell::units::fallout_shared::screencustomsplatter;
+    pub use engine_fallout_cell::units::fallout_shared::screensplatter;
+    pub use engine_fallout_cell::units::fallout_shared::teleportdata;
+    pub use engine_fallout_cell::units::fallout_shared::tes;
+    pub use engine_fallout_cell::units::fallout_shared::tes_p2;
+    pub use engine_fallout_cell::units::fallout_shared::tes_p3;
+    pub use engine_fallout_cell::units::fallout_shared::tesanimgroup;
+    pub use engine_fallout_cell::units::fallout_shared::tesland;
+    pub use engine_fallout_cell::units::fallout_shared::tesobjectcell;
+    pub use engine_fallout_cell::units::fallout_shared::tesobjectcell_p2;
+    pub use engine_fallout_cell::units::fallout_shared::tesobjectcell_p3;
+    pub use engine_fallout_cell::units::fallout_shared::tesobjectcell_p4;
+    pub use engine_fallout_cell::units::fallout_shared::tesobjectrefr;
+    pub use engine_fallout_cell::units::fallout_shared::tesobjectrefr_p2;
+    pub use engine_fallout_cell::units::fallout_shared::tesobjectrefr_p3;
+    pub use engine_fallout_cell::units::fallout_shared::tesobjectrefr_p4;
+    pub use engine_fallout_cell::units::fallout_shared::tesobjectrefr_p5;
+    pub use engine_fallout_cell::units::fallout_shared::tesobjectrefr_p6;
+    pub use engine_fallout_cell::units::fallout_shared::testerrainlodmanager;
+    pub use engine_fallout_cell::units::fallout_shared::teswater;
+    pub use engine_fallout_cell::units::fallout_shared::tesworldspace;
     pub use engine_fallout_script::units::fallout_shared::foscriptfunctions;
     pub use engine_fallout_script::units::fallout_shared::run_005b4550;
     pub use engine_fallout_script::units::fallout_shared::run_0060bef0;
@@ -1037,8 +1037,9 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     engine_bs::units::funcs(out);
     engine_havok::units::funcs(out);
     engine_speedtree::units::funcs(out);
-    engine_fallout_env::units::funcs(out);
     engine_fallout_facegen::units::funcs(out);
+    engine_fallout_cell::units::funcs(out);
+    engine_fallout_env::units::funcs(out);
     engine_fallout_pathfinding::units::funcs(out);
     engine_fallout_script::units::funcs(out);
     engine_fallout::units::funcs(out);
@@ -1051,8 +1052,9 @@ pub const PARTS: &[(&str, fn(&mut Vec<(u32, crate::AbiFn)>))] = &[
     ("engine-bs", engine_bs::units::funcs),
     ("engine-havok", engine_havok::units::funcs),
     ("engine-speedtree", engine_speedtree::units::funcs),
-    ("engine-fallout-env", engine_fallout_env::units::funcs),
     ("engine-fallout-facegen", engine_fallout_facegen::units::funcs),
+    ("engine-fallout-cell", engine_fallout_cell::units::funcs),
+    ("engine-fallout-env", engine_fallout_env::units::funcs),
     ("engine-fallout-pathfinding", engine_fallout_pathfinding::units::funcs),
     ("engine-fallout-script", engine_fallout_script::units::funcs),
     ("engine-fallout", engine_fallout::units::funcs),
@@ -1064,8 +1066,9 @@ engine_core::assemble!(
     engine_bs::units::funcs,
     engine_havok::units::funcs,
     engine_speedtree::units::funcs,
-    engine_fallout_env::units::funcs,
     engine_fallout_facegen::units::funcs,
+    engine_fallout_cell::units::funcs,
+    engine_fallout_env::units::funcs,
     engine_fallout_pathfinding::units::funcs,
     engine_fallout_script::units::funcs,
     engine_fallout::units::funcs,

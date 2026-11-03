@@ -84,6 +84,9 @@ opt-level = 1
 [profile.play.package.engine-fallout-env]
 opt-level = 1
 
+[profile.play.package.engine-fallout-cell]
+opt-level = 1
+
 [profile.play.package.engine]
 opt-level = 1
 
@@ -129,6 +132,9 @@ opt-level = 1
 opt-level = 1
 
 [profile.play-fast.package.engine-fallout-env]
+opt-level = 1
+
+[profile.play-fast.package.engine-fallout-cell]
 opt-level = 1
 
 [profile.play-fast.package.engine]

@@ -64,7 +64,7 @@ pub use engine_core::{
 };
 pub use engine_core::{args, entry, layout};
 pub use engine_core::{AbiFn, Engine, Field, Inline, Layout, Mem, OpenHandler, Ptr, Ret, Scalar};
-pub use engine_fallout::{extra_data, reference};
+pub use engine_fallout_cell::{extra_data, reference};
 
 #[cfg(test)]
 mod tests {

@@ -45,8 +45,7 @@
 // Tests build their expected call lists and buffers with `vec!`.
 #![cfg_attr(test, allow(clippy::useless_vec))]
 
-pub mod extra_data;
-pub mod reference;
+pub use engine_fallout_cell::{extra_data, reference};
 pub mod units;
 
 // The core, re-exported so the unit files reach it as `crate::...`, as in the
