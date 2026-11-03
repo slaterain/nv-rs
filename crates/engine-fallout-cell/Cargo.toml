@@ -32,3 +32,4 @@ engine-fallout-magic = { path = "../engine-fallout-magic" }
 engine-fallout-interface = { path = "../engine-fallout-interface" }
 engine-fallout-ai = { path = "../engine-fallout-ai" }
 engine-fallout-unplaced-a = { path = "../engine-fallout-unplaced-a" }
+engine-fallout-unplaced-b = { path = "../engine-fallout-unplaced-b" }

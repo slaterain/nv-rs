@@ -525,4 +525,5 @@ engine_core::assemble!(
     engine_fallout_magic::units::funcs,
     engine_fallout_interface::units::funcs,
     engine_fallout_unplaced_a::units::funcs,
+    engine_fallout_unplaced_b::units::funcs,
 );

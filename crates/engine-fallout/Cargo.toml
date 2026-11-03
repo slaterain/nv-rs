@@ -22,6 +22,7 @@ engine-fallout-magic = { path = "../engine-fallout-magic" }
 engine-fallout-interface = { path = "../engine-fallout-interface" }
 engine-fallout-ai = { path = "../engine-fallout-ai" }
 engine-fallout-unplaced-a = { path = "../engine-fallout-unplaced-a" }
+engine-fallout-unplaced-b = { path = "../engine-fallout-unplaced-b" }
 
 [dev-dependencies]
 # The form-constructor checker of units::crt (ctor_test) for this crate's tests.
