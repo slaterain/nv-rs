@@ -13,13 +13,6 @@ pub use engine_bs::units::bssystem;
 pub use engine_bs::units::bssystemutilities;
 pub use engine_core::units::crt;
 pub use engine_core::units::platform;
-pub use engine_fallout::units::d3dx9;
-pub use engine_fallout::units::fallout_audio;
-pub use engine_fallout::units::fallout_debug;
-pub use engine_fallout::units::fallout_misc;
-pub use engine_fallout::units::fallout_shared_settings;
-pub use engine_fallout::units::remotelog;
-pub use engine_fallout::units::xapilib;
 pub use engine_fallout_ai::units::fallout_ai;
 pub use engine_fallout_env::units::fallout_shared_distant_terrain_system;
 pub use engine_fallout_env::units::fallout_shared_havok;
@@ -33,6 +26,13 @@ pub use engine_fallout_interface::units::fallout_interface;
 pub use engine_fallout_magic::units::fallout_magic;
 pub use engine_fallout_magic::units::fallout_shared_magic;
 pub use engine_fallout_magic::units::fallout_shared_tempeffects;
+pub use engine_fallout_misc::units::d3dx9;
+pub use engine_fallout_misc::units::fallout_audio;
+pub use engine_fallout_misc::units::fallout_debug;
+pub use engine_fallout_misc::units::fallout_misc;
+pub use engine_fallout_misc::units::fallout_shared_settings;
+pub use engine_fallout_misc::units::remotelog;
+pub use engine_fallout_misc::units::xapilib;
 pub use engine_fallout_pathfinding::units::fallout_shared_pathfinding;
 pub use engine_gamebryo::units::nianimation;
 pub use engine_gamebryo::units::nicollision;
@@ -546,7 +546,6 @@ pub mod fallout_shared {
 }
 
 pub mod unplaced {
-    pub use engine_fallout::units::unplaced::run_0070bbe0;
     pub use engine_fallout_ai::units::unplaced::run_008a81e0;
     pub use engine_fallout_ai::units::unplaced::run_00988750;
     pub use engine_fallout_env::units::unplaced::run_006271b0;
@@ -559,6 +558,7 @@ pub mod unplaced {
     pub use engine_fallout_forms::units::unplaced::run_00601750;
     pub use engine_fallout_forms::units::unplaced::run_00854ea0;
     pub use engine_fallout_forms::units::unplaced::run_00856380;
+    pub use engine_fallout_misc::units::unplaced::run_0070bbe0;
     pub use engine_fallout_pathfinding::units::unplaced::run_006f50b0;
     pub use engine_fallout_script::units::unplaced::run_005c8a50;
     pub use engine_fallout_unplaced_a::units::unplaced::run_00401000;
@@ -1045,10 +1045,10 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     engine_fallout_env::units::funcs(out);
     engine_fallout_interface::units::funcs(out);
     engine_fallout_magic::units::funcs(out);
+    engine_fallout_misc::units::funcs(out);
     engine_fallout_script::units::funcs(out);
     engine_fallout_unplaced_a::units::funcs(out);
     engine_fallout_unplaced_b::units::funcs(out);
-    engine_fallout::units::funcs(out);
 }
 
 /// Each engine crate's registered functions, by crate (no address may be in two).
@@ -1066,10 +1066,10 @@ pub const PARTS: &[(&str, fn(&mut Vec<(u32, crate::AbiFn)>))] = &[
     ("engine-fallout-env", engine_fallout_env::units::funcs),
     ("engine-fallout-interface", engine_fallout_interface::units::funcs),
     ("engine-fallout-magic", engine_fallout_magic::units::funcs),
+    ("engine-fallout-misc", engine_fallout_misc::units::funcs),
     ("engine-fallout-script", engine_fallout_script::units::funcs),
     ("engine-fallout-unplaced-a", engine_fallout_unplaced_a::units::funcs),
     ("engine-fallout-unplaced-b", engine_fallout_unplaced_b::units::funcs),
-    ("engine-fallout", engine_fallout::units::funcs),
 ];
 
 // The full engine: `Engine::new()` registers the core's functions and every part crate's.
@@ -1086,8 +1086,8 @@ engine_core::assemble!(
     engine_fallout_env::units::funcs,
     engine_fallout_interface::units::funcs,
     engine_fallout_magic::units::funcs,
+    engine_fallout_misc::units::funcs,
     engine_fallout_script::units::funcs,
     engine_fallout_unplaced_a::units::funcs,
     engine_fallout_unplaced_b::units::funcs,
-    engine_fallout::units::funcs,
 );

@@ -530,7 +530,6 @@ engine_core::assemble!(
     engine_fallout_facegen::units::funcs,
     engine_fallout_cell::units::funcs,
     engine_fallout_forms::units::funcs,
-    engine_fallout::units::funcs,
     engine_fallout_script::units::funcs,
     engine_fallout_pathfinding::units::funcs,
     engine_fallout_env::units::funcs,
@@ -538,4 +537,5 @@ engine_core::assemble!(
     engine_fallout_ai::units::funcs,
     engine_fallout_unplaced_a::units::funcs,
     engine_fallout_unplaced_b::units::funcs,
+    engine_fallout_misc::units::funcs,
 );

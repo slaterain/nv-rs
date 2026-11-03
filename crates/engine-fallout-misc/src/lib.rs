@@ -1,15 +1,15 @@
 //! FalloutNV.exe 1.4.0.525 translated into Rust function by function, on a
-//! model of the game's own memory (ADR-0006, docs/ENGINE_CRATE.md):
-//! the game's own units (`fallout/*`, `fallout shared/*`, FaceGen, `d3dx9`,
-//! `RemoteLog` and the unplaced runs), and the adapters over its classes
-//! ([`extra_data`], [`reference`]; `engine::extra_data` and
-//! `engine::reference`).
+//! model of the game's own memory (ADR-0006, docs/ENGINE_CRATE.md): the main loop, save/load,
+//! audio and small units (`fallout/misc`, `fallout/audio`, `fallout/debug`,
+//! `fallout shared/Settings`, `d3dx9`, `RemoteLog`, `xapilib`).
 //!
 //! One of the engine crates: the model and the CRT and platform units are in
-//! `engine-core`, and the `engine` crate assembles every part and registers
-//! every function. Translations live in `units/<subsystem>/<unit>.rs`, one
-//! file per source unit of the Xbox 360 prototype (Xbox PDB, ADR-0002); each
-//! is marked `// Translated from <addr> (decompiled, FalloutNV.exe 1.4.0.525)`
+//! `engine-core`, the game's own units are split by area between the
+//! `engine-fallout-*` crates (`scripts/ledger/fallout_crates.tsv`), and the
+//! `engine` crate assembles every part and registers every function.
+//! Translations live in `units/<subsystem>/<unit>.rs`, one file per source
+//! unit of the Xbox 360 prototype (Xbox PDB, ADR-0002); each is marked
+//! `// Translated from <addr> (decompiled, FalloutNV.exe 1.4.0.525)`
 //! (ADR-0003); `docs/LEDGER.md` counts them.
 
 // Translation doc comments quote offsets and arithmetic ("+ 0x3c", "+ 1")
@@ -45,7 +45,10 @@
 // Tests build their expected call lists and buffers with `vec!`.
 #![cfg_attr(test, allow(clippy::useless_vec))]
 
+// The adapters over the game's classes (in engine-fallout-cell), at their paths from before
+// the split by area (`fallout_misc/bgssaveformbuffer.rs` reads `crate::extra_data`).
 pub use engine_fallout_cell::{extra_data, reference};
+
 pub mod units;
 
 // The core, re-exported so the unit files reach it as `crate::...`, as in the
