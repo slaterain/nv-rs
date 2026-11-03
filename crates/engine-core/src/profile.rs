@@ -1504,13 +1504,14 @@ mod native {
     /// it loads or frees a DLL: with the engine's thread suspended inside the loader, the
     /// sampler would wait for good (a probe of a thread loading and freeing a DLL in a loop got
     /// stuck 3 times in 3, within 9,000 to 95,000 walks). Such a frame never goes to the system:
-    /// the walk looks the target up in its own tables, unwinds a tail call itself, and ends at a
-    /// jump within the function. Checked against `RtlVirtualUnwind` (2026-11-01, every function
-    /// of 40-odd loaded images at many pcs and stack pointers, nothing suspended): the emulation
-    /// read nothing outside the stack in 445K tail-call frames and gave the system's registers
-    /// in all but 298, all at pcs inside an instruction (an `e9` or `eb` that is a ModRM byte)
-    /// of functions with version 2 unwind information, which the system unwinds by its epilogue
-    /// descriptors instead of the code.
+    /// the walk looks the target up in its own tables, unwinds a tail call itself (a jump to the
+    /// function's own start among them, which the system also takes for one), and ends at a
+    /// jump elsewhere in the function. Checked against `RtlVirtualUnwind` (2026-11-01, every
+    /// function of 40-odd loaded images at many pcs and stack pointers, nothing suspended): the
+    /// emulation read nothing outside the stack in 445K tail-call frames and gave the system's
+    /// registers in all but 298, all at pcs inside an instruction (an `e9` or `eb` that is a
+    /// ModRM byte) of functions with version 2 unwind information, which the system unwinds by
+    /// its epilogue descriptors instead of the code.
     ///
     /// The epilogue decoder ([`epilogue_at`]) follows ntdll 10.0.26200's (disassembled: the
     /// unwinder's core at ntdll+0x1F440), down to its skip of one BND prefix (F2) before the
@@ -1547,13 +1548,19 @@ mod native {
                 pops_at,
                 target,
             }) => {
-                // The system's test: the jump stays in the function when the target's unwind
-                // entry leads (through any chained parts) to the same first part as this one's.
-                // A target with no entry, or in no image the walk knows, is another function.
-                let same = look_up(images, found, target).is_some_and(|t| {
-                    !t.entry.is_null() && t.base == code.base && t.key == code.key
+                // The system's test (ntdll's, disassembled): the jump stays in the
+                // function, and the code is no epilogue, when the target's unwind entry leads
+                // (through any chained parts) to the same first part as this one's and the
+                // target is not that part's start; a jump to the function's own start is a tail
+                // call (recursion). A target with no entry, or in no image the walk knows, is
+                // another function.
+                let within = look_up(images, found, target).is_some_and(|t| {
+                    !t.entry.is_null()
+                        && t.base == code.base
+                        && t.key == code.key
+                        && target != code.key
                 });
-                if same || !epilogue_fits(rsp, pops) {
+                if within || !epilogue_fits(rsp, pops) {
                     Step::Bad
                 } else {
                     Step::TailCall { rsp, pops, pops_at }
@@ -2753,6 +2760,29 @@ mod native {
             ".seh_endproc",
         );
 
+        // A function in two parts whose second (chained) part ends in `pop rbx` and a jump to
+        // the function's own start: a recursive tail call (never called).
+        std::arch::global_asm!(
+            ".globl nv_profile_test_recurse",
+            ".globl nv_profile_test_recurse_pop",
+            ".seh_proc nv_profile_test_recurse",
+            "nv_profile_test_recurse:",
+            "push rbx",
+            ".seh_pushreg rbx",
+            ".seh_endprologue",
+            "pop rbx",
+            "ret",
+            ".seh_startchained",
+            ".seh_endprologue",
+            "nop",
+            "nv_profile_test_recurse_pop:",
+            "pop rbx",
+            ".byte 0xe9",
+            ".long nv_profile_test_recurse - . - 4",
+            ".seh_endchained",
+            ".seh_endproc",
+        );
+
         // A function that saves r12: its epilogue's `pop r12` is 41 5c, and the 5c alone reads
         // as `pop rsp`.
         std::arch::global_asm!(
@@ -2809,6 +2839,8 @@ mod native {
             fn nv_profile_test_split();
             fn nv_profile_test_split_jump();
             fn nv_profile_test_split_cold();
+            fn nv_profile_test_recurse();
+            fn nv_profile_test_recurse_pop();
             fn nv_profile_test_r12_pop();
             fn nv_profile_test_fpreg();
             fn nv_profile_test_fpreg_saved();
@@ -3019,6 +3051,68 @@ mod native {
             let rip = nv_profile_test_split_jump as Code as usize as u64;
             let (n, end, unwinds, tail_calls, _) = walk_at(&mut s, rip, rsp, 0, (low, rsp + 16));
             assert_eq!((n, end, unwinds, tail_calls), (1, WalkEnd::Bad, 0, 0));
+        }
+
+        /// A jump from a chained part to its function's own start is a tail call (recursion):
+        /// `RtlVirtualUnwind` takes a target in the same function for an epilogue when it is the
+        /// first part's start, and only a jump elsewhere in the function for none. The walk
+        /// unwinds such a frame itself, to the registers the system gives (asked here directly,
+        /// with nothing suspended); with one word less the walk ends as a bad frame.
+        #[test]
+        fn a_jump_to_the_functions_own_start_is_a_tail_call() {
+            let mut s = Sampler::new();
+            s.refresh_images();
+            let start = nv_profile_test_recurse as Code as usize as u64;
+            let rip = nv_profile_test_recurse_pop as Code as usize as u64;
+            // SAFETY: the images were just listed.
+            let (first, code) = unsafe {
+                (
+                    look_up(&s.images, &mut s.found, start).expect("in this program"),
+                    look_up(&s.images, &mut s.found, rip).expect("in this program"),
+                )
+            };
+            assert!(!first.entry.is_null() && !code.entry.is_null());
+            assert_ne!(first.entry, code.entry, "the pop is in the chained part");
+            assert_eq!((first.key, code.key), (start, start), "one function");
+            let mut stack = vec![0u64; 0x40];
+            let low = stack.as_mut_ptr() as u64;
+            // The saved rbx, then the return address (0: the thread's start).
+            let rsp = low + 0x80;
+            stack[0x80 / 8] = 0xb0b;
+            let high = rsp + 16;
+            let (n, end, unwinds, tail_calls, ctx) = walk_at(&mut s, rip, rsp, 0, (low, high));
+            assert_eq!((n, end, unwinds, tail_calls), (1, WalkEnd::Start, 0, 1));
+            assert_eq!((ctx.rsp(), ctx.register(3)), (rsp + 16, 0xb0b));
+            let mut system = Box::new(Context([0; 0x4d0]));
+            system.set_word(0xf8, rip);
+            system.set_word(0x98, rsp);
+            let mut handler_data = std::ptr::null_mut();
+            let mut establisher = 0u64;
+            // SAFETY: the frame's words lie in `stack`; no thread is suspended, so the target's
+            // lookup cannot wait on a loader lock this thread needs.
+            unsafe {
+                RtlVirtualUnwind(
+                    0,
+                    code.base,
+                    rip,
+                    code.entry,
+                    &mut *system,
+                    &mut handler_data,
+                    &mut establisher,
+                    std::ptr::null_mut(),
+                );
+            }
+            assert_eq!(
+                (system.rip(), system.rsp(), system.register(3)),
+                (ctx.rip(), ctx.rsp(), ctx.register(3)),
+                "the system's unwind"
+            );
+            let (n, end, unwinds, tail_calls, ctx) = walk_at(&mut s, rip, rsp, 0, (low, high - 8));
+            assert_eq!(
+                (n, end, unwinds, tail_calls, ctx.rsp()),
+                (1, WalkEnd::Bad, 0, 0, rsp),
+                "one word short"
+            );
         }
 
         /// A pc on the second byte of `pop r12` (41 5c) reads as `pop rsp`: `RtlVirtualUnwind`
