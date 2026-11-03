@@ -1941,7 +1941,6 @@ fn get_speaker_config(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
         }
     }
 }
-
 /// The default device's mix layout (`super::sound_out::device_mix`); two channels when Windows
 /// names none, and in the tests.
 fn mix_layout() -> Layout {
@@ -2051,6 +2050,21 @@ fn create_sound_buffer(e: &mut Engine, this: Ptr, desc: Ptr, out: Ptr, outer: u3
         if (result as i32) < 0 {
             return result;
         }
+        // DirectSound's rule by buffer count (`10052857`, `10052af5`..`10052b7b`, before the
+        // buffer joins the device's list): a buffer made while two or more exist turns on the
+        // device's second converter for good, before the lock (when this one locks the layout)
+        // connects the buffers again. Measured under both names (`DSMIX_SURROUND` `w3_three_2d`,
+        // `z_lock_with2d`).
+        let count = e
+            .kernel
+            .sound
+            .buffers
+            .values()
+            .filter(|b| b.flags & DSBCAPS_PRIMARYBUFFER == 0)
+            .count();
+        if count >= 2 {
+            second_converter_by_count(e);
+        }
         // The device's layout follows the buffers made on it (`10052857`, before the buffer joins
         // the device's list).
         layout_made(e, channels, flags & DSBCAPS_CTRL3D != 0);
@@ -2074,6 +2088,36 @@ fn create_sound_buffer(e: &mut Engine, this: Ptr, desc: Ptr, out: Ptr, outer: u3
     DS_OK
 }
 
+/// DirectSound turns on its second converter because a buffer is made while two or more exist
+/// (`10052857`: `count >= 2` against the device's list; when the buffer does not lock the layout,
+/// through `100527c0`, which swaps every listed buffer's converter, `1005713d`; when it does, the
+/// flag is set before the lock connects every buffer again). The voices: each one listed takes
+/// the second converter where it is at its next period (`super::mixer`), what the first one gave
+/// heard first; the cursors as for a large frequency change ([`second_converter_on`]: read from
+/// the DLL, the cursors of a buffer playing when it turns on not measured). Measured in the
+/// mix under both names (`DSMIX_SURROUND`): three 2D buffers made before they play
+/// (`w3_three_2d`), and two playing when a 3D one is made (`z_lock_with2d`, as `FalloutNV.exe`
+/// the lock, under another name not).
+fn second_converter_by_count(e: &mut Engine) {
+    if e.kernel.sound.apl {
+        return;
+    }
+    if let Some(m) = &e.kernel.sound.mix {
+        let mut v = m.voices.lock().expect("the voices");
+        v.apl = true;
+        for (at, b) in &e.kernel.sound.buffers {
+            if b.flags & DSBCAPS_PRIMARYBUFFER == 0 {
+                if let Some(voice) = v.all.get_mut(at) {
+                    voice.apl = true;
+                }
+            }
+        }
+    }
+    tick(e);
+    let now = e.clock_now_us();
+    second_converter_on(e, now);
+}
+
 /// A secondary buffer of `channels` is made (`three_d`: `DSBCAPS_CTRL3D`), before it joins the
 /// device's list: the game's device's layout follows (`super::speakers::DeviceLayout::made`,
 /// `10052857`), and when that changes it, [`relayout`].
@@ -2092,14 +2136,15 @@ fn layout_made(e: &mut Engine, channels: u16, three_d: bool) {
 /// The game's device's layout is locked to the endpoint's (`10053984`): DirectSound stops and
 /// disconnects every buffer, closes its stream, gives the listener the new speakers, connects
 /// every buffer again with its play state, and opens its stream again in the new layout. Here
-/// the game's stream is closed, each of its voices playing goes on from where it is with a new
-/// converter (connected anew: its first period takes its matrix as it is), the 3D voices are
-/// placed again over the new speakers, and the stream opened again starts with a period of
-/// silence. Measured (`k_lock_2d_then_3d` as `FalloutNV.exe`, 2026-11-03): the two-channel
-/// stream's last packet, then the 8-channel stream's first, 480 frames of silence, then a 2D
-/// voice that was playing goes on at the frame where it stopped (nothing skipped or repeated),
-/// now on the centre speaker, and the new 3D buffer from its first frame. `CreateSoundBuffer`
-/// returns after the stream is open again (59.6 ms there).
+/// the game's stream is closed, each of its voices playing goes on with a new converter from
+/// where it is (`super::mixer::Voice::reconnect`: what its old converter gave and the output
+/// has not taken yet first; connected anew, its first period takes its matrix as it is), the 3D
+/// voices are placed again over the new speakers, and the stream opened again ([`reopen`])
+/// starts with a period of silence. Measured (`k_lock_2d_then_3d` as `FalloutNV.exe`,
+/// 2026-11-03): the two-channel stream's last packet, then the 8-channel stream's first, 480
+/// frames of silence, then a 2D voice that was playing goes on at the frame where it stopped
+/// (nothing skipped or repeated), now on the centre speaker, and the new 3D buffer from its first
+/// frame. `CreateSoundBuffer` returns after the stream is open again (59.6 ms there).
 fn relayout(e: &mut Engine, now: Layout) {
     let Some(place) = Place::new(now) else {
         return;
@@ -2123,9 +2168,7 @@ fn relayout(e: &mut Engine, now: Layout) {
         } = &mut *v;
         for at in playing.iter() {
             if let Some(voice) = all.get_mut(at).filter(|x| !*split || !x.stream) {
-                if let Some(p) = voice.position {
-                    voice.start(p);
-                }
+                voice.reconnect();
             }
         }
         if let Some(r) = &mut v.record {
@@ -2141,22 +2184,83 @@ fn relayout(e: &mut Engine, now: Layout) {
     );
     refresh_3d(e);
     if had {
-        let source: Arc<Mutex<dyn super::sound_out::Source>> = Arc::new(Mutex::new(Stream {
-            voices,
-            which: Which::Game,
-        }));
-        match super::sound_out::start(source, Some(now)) {
-            Ok(o) => {
-                if let Some(m) = e.kernel.sound.mix.as_mut() {
-                    m.output = Some(o);
-                }
-            }
-            Err(why) => eprintln!(
+        reopen(e, now, |want| {
+            let source: Arc<Mutex<dyn super::sound_out::Source>> = Arc::new(Mutex::new(Stream {
+                voices: voices.clone(),
+                which: Which::Game,
+            }));
+            super::sound_out::start(source, want)
+        });
+    }
+}
+
+/// Opens the game's stream again at the lock, in `now`, with `open` (`super::sound_out::start`,
+/// which asks the endpoint again). An endpoint that no longer takes `now` (the default device or
+/// its format changed since the output started) gets a stream in its own mix format, and the
+/// game's device takes that layout at once, as DirectSound's device takes a new default format's
+/// channels at once (`10055086`, read only). A stream at a rate other than the one the voices are
+/// converted to is not provided: it is closed, named, and the game's sound is not heard from then
+/// on (no stop).
+fn reopen<F>(e: &mut Engine, now: Layout, mut open: F)
+where
+    F: FnMut(Option<Layout>) -> Result<super::sound_out::Output, super::sound_out::Refused>,
+{
+    use super::sound_out::Refused;
+    let mut got = open(Some(now));
+    if got.as_ref().err() == Some(&Refused::Layout) {
+        got = open(None);
+    }
+    let o = match got {
+        Ok(o) => o,
+        Err(why) => {
+            eprintln!(
                 "sound: the stream in {} channels cannot be opened ({why:?}); the game's sound \
                  is not heard",
                 now.channels
-            ),
+            );
+            return;
         }
+    };
+    let rate = e.kernel.sound.mix.as_ref().map_or(0, |m| m.rate);
+    if o.rate != rate {
+        eprintln!(
+            "sound: the default device now mixes at {} Hz, not {rate} Hz as when the output \
+             started: not provided; the game's sound is not heard",
+            o.rate
+        );
+        return;
+    }
+    if o.layout != now {
+        let Some(place) = Place::new(o.layout) else {
+            eprintln!(
+                "sound: no matrix for the device's layout {:?}; the game's sound is not heard",
+                o.layout
+            );
+            return;
+        };
+        if let Some(d) = e.kernel.sound.layout.as_mut() {
+            d.mix = o.layout;
+            d.lock();
+        }
+        if let Some(m) = &e.kernel.sound.mix {
+            let mut v = m.voices.lock().expect("the voices");
+            v.game.place = place;
+            if let Some(r) = &mut v.record {
+                r.reopened(o.layout);
+            }
+        }
+        note(
+            e,
+            &format!(
+                "the endpoint no longer takes that layout: the game's device mixes its own, {} \
+                 channels, speaker mask {:#x}",
+                o.layout.channels, o.layout.mask
+            ),
+        );
+        refresh_3d(e);
+    }
+    if let Some(m) = e.kernel.sound.mix.as_mut() {
+        m.output = Some(o);
     }
 }
 
@@ -4429,6 +4533,9 @@ mod tests {
                 assert_eq!(position(&mut e, b), (p, w, 5), "{played}: period {}", i + 1);
             }
             e.vcall(b, 0x48, &[]);
+            // Released, as the measuring tool does after each case: a buffer made while two
+            // exist would turn on the second converter (`second_converter_by_count`).
+            e.vcall(b, 8, &[]);
         }
     }
 
@@ -5268,8 +5375,11 @@ mod tests {
     /// frequency other than the format's rate, where the layer keeps the rule of hundredths, and
     /// `plain[2]`'s change to 30000 Hz turns the second converter on while all seven play (not
     /// measured: as the DLL reads, each goes on from its write cursor with a new converter, both
-    /// cursors there), so the combined hash rests on those two there. The samples alone hash as
-    /// before.
+    /// cursors there), so the combined hash rests on those two there. Changed again 2026-11-03:
+    /// the third of these buffers is made while two exist, which turns DirectSound's second
+    /// converter on for the device before anything plays ([`second_converter_by_count`], measured
+    /// in the mix), so every voice goes through it and the cursors step by it; the samples (were
+    /// `4323299cdaf5af1d`) and the whole (`771cdd2d987aadd3`) rest on that rule.
     #[test]
     #[ignore]
     fn output_bits_are_unchanged() {
@@ -5388,8 +5498,8 @@ mod tests {
             }
         }
         println!("output hash {hash:016x} cursors {hc:016x} samples {hs:016x}");
-        assert_eq!(hs, 0x4323_299c_daf5_af1d, "the samples");
-        assert_eq!(hash, 0x771c_dd2d_987a_add3);
+        assert_eq!(hs, 0xaa42_00a0_7f89_e647, "the samples");
+        assert_eq!(hash, 0x7746_f410_a79c_f297);
     }
 
     /// Not a check: the host heap allocations of the buffers' per-frame calls with the output on
@@ -6149,11 +6259,116 @@ mod tests {
         assert!(out.iter().all(|&s| s == 1.0), "nothing is written");
     }
 
+    /// A lock inside a voice's period (the output thread's calls need not end on one): after the
+    /// period of silence the voice goes on at the frame after the last one heard, nothing
+    /// skipped. DirectSound mixes whole periods, so its voice goes on at the frame after its last
+    /// two-channel packet's (measured, `k_lock_2d_then_3d`).
+    #[test]
+    fn a_lock_inside_a_period_skips_nothing() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let _ = listener_of(&mut e, ds);
+        hear_by_hand_on(&mut e, 48000, layout_of_mask(0x63f));
+        let data = signal_seeded(9600, 1, 16, 8);
+        let a = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &data);
+        e.vcall(a, 0x30, &[0, 0, 1]);
+        let s = |i: usize| super::super::mixer::sample(&data, 16, i % 9600);
+        let (gl, _) = super::super::mixer::channel_gains(0, 0);
+        let before = mixed(&e, 313);
+        for (f, pair) in before.chunks(2).enumerate() {
+            assert_eq!(pair[0], s(f) * gl, "frame {f}");
+        }
+        let b = made(&mut e, ds, 0x302b0, false, 1, 48000, 16, &[0; 19200]);
+        assert_ne!(b, 0);
+        assert!(
+            mixed(&e, 480).iter().all(|x| x.to_bits() == 0),
+            "a period of silence"
+        );
+        let centre = channel(&mixed(&e, 960), 8, 2);
+        for (f, &x) in centre.iter().enumerate() {
+            assert_eq!(
+                x.to_bits(),
+                s(313 + f).to_bits(),
+                "frame {f} after the lock"
+            );
+        }
+    }
+
+    /// DirectSound's rule by buffer count (`10052857`; measured, `w3_three_2d`, `z_lock_with2d`):
+    /// a buffer made while two others exist turns on the device's second converter, for good, and
+    /// the voices listed take it; a released buffer no longer counts.
+    #[test]
+    fn a_buffer_made_while_two_exist_turns_on_the_second_converter() {
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        hear_by_hand(&mut e, 48000);
+        let data = signal_seeded(9600, 1, 16, 9);
+        let a = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &data);
+        let b = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &data);
+        e.vcall(a, 0x30, &[0, 0, 1]);
+        let _ = mixed(&e, 480);
+        assert!(!e.kernel.sound.apl, "made while one other exists");
+        e.vcall(b, 8, &[]);
+        let c = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &data);
+        assert!(!e.kernel.sound.apl, "the released buffer does not count");
+        let _ = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &data);
+        assert!(e.kernel.sound.apl, "made while two exist");
+        let m = e.kernel.sound.mix.as_ref().unwrap();
+        let v = m.voices.lock().unwrap();
+        assert!(v.apl && v.all[&a].apl && v.all[&c].apl);
+    }
+
+    /// At the lock the endpoint is asked again: one that no longer takes the layout (another
+    /// default device since the output started) gets a stream in its own mix format and the
+    /// game's device mixes that; a stream at another rate is not provided: none, and no stop.
+    #[test]
+    fn the_lock_follows_an_endpoint_that_changed() {
+        use super::super::sound_out::{Output, Refused};
+        let mut e = engine();
+        let ds = start_up(&mut e);
+        let _ = listener_of(&mut e, ds);
+        let mix = layout_of_mask(0x63f);
+        hear_by_hand_on(&mut e, 48000, mix);
+        let data = signal_seeded(9600, 1, 16, 10);
+        let a = made(&mut e, ds, 0x2e0, false, 1, 48000, 16, &data);
+        e.vcall(a, 0x30, &[0, 0, 1]);
+        let _ = mixed(&e, 480);
+        locked(&mut e, ds);
+        let mut asked = Vec::new();
+        reopen(&mut e, mix, |want| {
+            asked.push(want);
+            match want {
+                Some(_) => Err(Refused::Layout),
+                None => Ok(Output::idle(48000, Layout::STEREO)),
+            }
+        });
+        assert_eq!(asked, [Some(mix), None]);
+        assert_eq!(device_layout(&e), Layout::STEREO);
+        assert!(e.kernel.sound.mix.as_ref().unwrap().output.is_some());
+        let out = mixed(&e, 480);
+        assert_eq!(
+            out.len(),
+            2 * 480,
+            "the game's stream in the endpoint's two channels"
+        );
+        assert!(out.iter().any(|&x| x != 0.0));
+        e.kernel.sound.mix.as_mut().unwrap().output = None;
+        reopen(&mut e, Layout::STEREO, |_| {
+            Ok(Output::idle(44100, Layout::STEREO))
+        });
+        assert!(e.kernel.sound.mix.as_ref().unwrap().output.is_none());
+    }
+
     /// `GetSpeakerConfig` answers from the endpoint's mix format (measured: 8 for 0x63F,
     /// 0x140004 for 0x3); a mask DirectSound does not know is `E_FAIL`.
     #[test]
     fn get_speaker_config_follows_the_mix_format() {
-        for (mask, want, result) in [(0x63f, 8, DS_OK), (0x3, 0x14_0004, DS_OK), (0x7, 0, E_FAIL)] {
+        for (mask, want, result) in [
+            (0x63f, 8, DS_OK),
+            (0x3, 0x14_0004, DS_OK),
+            (0x0, 0, DS_OK),
+            (0x7, 0, E_FAIL),
+        ] {
             let mut e = engine();
             let ds = start_up(&mut e);
             e.kernel.sound.layout = Some(DeviceLayout::new(layout_of_mask(mask)));
@@ -6220,16 +6435,22 @@ mod tests {
         Volume(i32),
         Pan(i32),
         Position([f32; 3]),
-        /// A 3D buffer made and played (seed 11, 3 units right): the lock on a device not locked.
+        /// A 3D buffer made (seed 11, 3 units right, its distances and place set): the lock on a
+        /// device not locked.
         Lock,
+        /// That 3D buffer played (its `Play` comes after `CreateSoundBuffer` returns, which can
+        /// be a packet or more after the stream was opened again).
+        LockPlay,
     }
 
     /// Replays one `DSMIX_SURROUND` case through the layer as `dsmix-measure` made it
     /// (`scripts/dsmix-measure/src/surround.rs` `play`) on an endpoint of `mix` (the game's
     /// device locked first when `lock`, the second converter on when `apl`), packet by packet
     /// from packet `from` (each `packets` entry: microseconds from `Play`, frames, frame bytes),
-    /// each move made before the first packet released after it. Answers each packet's samples
-    /// (each in two calls that are not periods), or why the case is not replayed.
+    /// each move made before the first packet released after it; with `quiet`, the stream opened
+    /// again at the lock starts with that many frames of silence instead of the layer's one
+    /// period. Answers each packet's samples (each in two calls that are not periods), or why the
+    /// case is not replayed.
     #[allow(clippy::too_many_arguments)]
     fn surround_case(
         settings: &str,
@@ -6239,6 +6460,7 @@ mod tests {
         packets: &[(i64, usize, usize)],
         moves: &[(i64, Move)],
         from: usize,
+        quiet: Option<usize>,
     ) -> Result<Vec<Vec<f32>>, &'static str> {
         let w: Vec<&str> = settings.split(' ').collect();
         let (channels, rate, bits): (u16, u32, u16) = (
@@ -6347,7 +6569,7 @@ mod tests {
             e.vcall(o, 0x30, &[0, 0, 0]);
         }
         e.vcall(b, 0x30, &[0, 0, u32::from(looping)]);
-        let mut next = 0;
+        let (mut next, mut lock_buffer) = (0, 0);
         let mut out = Vec::new();
         for &(at, frames, _) in &packets[from..] {
             while let Some((_, m)) = moves.get(next).filter(|(t, _)| *t < at) {
@@ -6373,7 +6595,13 @@ mod tests {
                         e.vcall(o3, 0x44, &[1.0e9f32.to_bits(), 0]);
                         e.vcall(o3, 0x40, &[1.0e9f32.to_bits(), 0]);
                         e.vcall(o3, 0x4c, &[3.0f32.to_bits(), zero, zero, 0]);
-                        e.vcall(o, 0x30, &[0, 0, 1]);
+                        lock_buffer = o;
+                        if let (Some(q), Some(m)) = (quiet, &e.kernel.sound.mix) {
+                            m.voices.lock().unwrap().game.silence = q;
+                        }
+                    }
+                    Move::LockPlay => {
+                        e.vcall(lock_buffer, 0x30, &[0, 0, 1]);
                     }
                 }
                 next += 1;
@@ -6397,10 +6625,10 @@ mod tests {
     /// the case's voice starts in to the last packet captured whole: `cargo test -p engine-core
     /// --lib -- --ignored dsmix_surround --nocapture`. A folder made with `DSMIX_LOCKFIRST` has
     /// the game's device locked before every case; in one made without it the cases after the one
-    /// that locked it. The second converter is on from the case that turned it on in the
-    /// measurement: a large frequency change or Doppler (as in the layer), or a third buffer made
-    /// while two exist (`w3_three_2d`: DirectSound's rule by buffer count, `dsound` `10052b0b`,
-    /// which the layer does not follow yet; the captures show it). Prints each folder's count of
+    /// that locked it. The layer turns the second converter on in a case as DirectSound does (a
+    /// large frequency change, Doppler, or a third buffer made while two exist: `w3_three_2d`,
+    /// `z_lock_with2d`, [`second_converter_by_count`]); the measuring tool keeps its device, so
+    /// the cases after one that turned it on start with it on. Prints each folder's count of
     /// cases that match, the cases not replayed, those whose only difference is the sign of zero
     /// on two channels (the stereo kernels, unchanged here: they add `x * 0` to +0), and every
     /// case that differs otherwise, which fails the test.
@@ -6433,9 +6661,6 @@ mod tests {
             for line in cases.lines() {
                 let f: Vec<&str> = line.split('\t').collect();
                 let (name, settings) = (f[0], f[1]);
-                if setting(settings, "three") == "true" {
-                    apl = true;
-                }
                 let times =
                     std::fs::read_to_string(dir.join(format!("{name}.times"))).unwrap_or_default();
                 let (mut packets, mut moves) = (Vec::new(), Vec::new());
@@ -6446,7 +6671,11 @@ mod tests {
                         "freq" => moves.push((num(1), Move::Frequency(num(3) as u32))),
                         "vol" => moves.push((num(1), Move::Volume(num(4) as i32))),
                         "pan" => moves.push((num(1), Move::Pan(num(4) as i32))),
-                        "lock" => moves.push((num(1), Move::Lock)),
+                        // Made at the call's start, played at the line's last time.
+                        "lock" => {
+                            moves.push((num(1), Move::Lock));
+                            moves.push((num(4), Move::LockPlay));
+                        }
                         "pos" => {
                             let p = |i: usize| w[i].parse::<f32>().unwrap();
                             moves.push((num(1), Move::Position([p(4), p(5), p(6)])));
@@ -6454,6 +6683,7 @@ mod tests {
                         _ => packets.push((num(0), num(1) as usize, num(2) as usize)),
                     }
                 }
+                moves.sort_by_key(|m| m.0);
                 let cap: Vec<f32> = std::fs::read(dir.join(format!("{name}.f32")))
                     .unwrap_or_default()
                     .chunks(4)
@@ -6516,8 +6746,10 @@ mod tests {
                     .collect();
                 let replayed = match from {
                     None => Err("silent"),
-                    Some(from) => surround_case(settings, mix, lock, apl, &packets, &moves, from)
-                        .map(|out| (from, out)),
+                    Some(from) => {
+                        surround_case(settings, mix, lock, apl, &packets, &moves, from, None)
+                            .map(|out| (from, out))
+                    }
                 };
                 match replayed {
                     Ok((from, out)) => {
@@ -6531,19 +6763,48 @@ mod tests {
                             }
                             let mut other = moves.clone();
                             other[i] = *r;
-                            let out =
-                                surround_case(settings, mix, lock, apl, &packets, &other, from)
-                                    .unwrap();
+                            let out = surround_case(
+                                settings, mix, lock, apl, &packets, &other, from, None,
+                            )
+                            .unwrap();
                             let (d, s, f) = compare(from, &out);
                             if f.is_none() {
                                 (differ, sign, first) = (d, s, f);
                                 races.push(format!(
                                     "{}/{name}: the move {} us after Play, {} us before the \
-                                     packet",
+                                     packet: matches with that move in the next packet (a race)",
                                     dir.display(),
                                     m.0,
                                     r.0 - m.0
                                 ));
+                            }
+                        }
+                        // The stream opened again at the lock: DirectSound's reconnect races its
+                        // new stream's first packets (one silent packet in 17 of 18 captures as
+                        // `FalloutNV.exe`, two in `rz/c-fnv8-z_lock_with2d`; the layer gives
+                        // one). A case that differs is tried with the silent packets it has.
+                        let reopen = packets.windows(2).position(|w| w[0].2 != w[1].2);
+                        if let (Some(_), Some(r)) = (first, reopen.map(|i| i + 1)) {
+                            let n = pieces[r..]
+                                .iter()
+                                .take_while(|p| p.iter().all(|s| s.to_bits() & 0x7fff_ffff == 0))
+                                .count();
+                            if n > 1 && r >= from {
+                                let quiet = Some(n * packets[r].1);
+                                let out = surround_case(
+                                    settings, mix, lock, apl, &packets, &moves, from, quiet,
+                                )
+                                .unwrap();
+                                let (d, s, f) = compare(from, &out);
+                                if f.is_none() {
+                                    (differ, sign, first) = (d, s, f);
+                                    races.push(format!(
+                                        "{}/{name}: the stream opened again at the lock starts \
+                                         with {n} silent packets: matches with them (DirectSound's \
+                                         reconnect raced its new stream)",
+                                        dir.display()
+                                    ));
+                                }
                             }
                         }
                         match first {
@@ -6592,7 +6853,10 @@ mod tests {
                 let later_big = moves.iter().any(
                     |(_, m)| matches!(*m, Move::Frequency(f) if f.abs_diff(rate) > rate / 500),
                 );
-                if big || later_big || doppler {
+                // The device keeps its second converter for the cases after this one (the layer
+                // turns it on in the case itself: a large frequency change, Doppler, a third
+                // buffer made while two exist).
+                if big || later_big || doppler || setting(settings, "three") == "true" {
                     apl = true;
                 }
                 if crossed && mix.channels > 2 {
@@ -6612,7 +6876,7 @@ mod tests {
             eprintln!("{z}");
         }
         for r in &races {
-            eprintln!("{r}: matches with that move in the next packet (a race)");
+            eprintln!("{r}");
         }
         for f in &failed {
             eprintln!("{f}");

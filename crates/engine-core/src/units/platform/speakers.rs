@@ -101,10 +101,11 @@ impl Layout {
 /// `mask` (`10053610`: from the mix format, whether or not the device is locked): measured
 /// `DSSPEAKER_7POINT1_SURROUND` (8) for 0x63F (a program named `FalloutNV.exe` on this machine)
 /// and `DSSPEAKER_COMBINED(DSSPEAKER_STEREO, DSSPEAKER_GEOMETRY_WIDE)` (0x140004) for 0x3 (any
-/// other name), the rest as the DLL has them; `None` (`E_FAIL`, nothing written but 0) for a
-/// mask it does not know.
+/// other name), the rest as the DLL has them: a mask of 0 (direct out) answers `DS_OK` with 0;
+/// `None` (`E_FAIL`, nothing written but 0) for a mask it does not know.
 pub fn speaker_config(mask: u32) -> Option<u32> {
     Some(match mask {
+        0x0 => 0,
         0x3 => 0x14_0004,
         0x4 => 2,
         0x33 => 3,
@@ -540,10 +541,13 @@ mod tests {
     }
 
     /// Measured (2026-11-03): an 8-channel endpoint (0x63F) answers 8, a two-channel one 0x140004.
+    /// Read (`10053610`): a mask of 0 (direct out) answers `DS_OK` with 0; one it does not know
+    /// `E_FAIL`.
     #[test]
     fn speaker_configs() {
         assert_eq!(speaker_config(0x63f), Some(8));
         assert_eq!(speaker_config(0x3), Some(0x14_0004));
+        assert_eq!(speaker_config(0x0), Some(0));
         assert_eq!(speaker_config(0x7), None);
     }
 

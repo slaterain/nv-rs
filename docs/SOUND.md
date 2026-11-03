@@ -106,11 +106,12 @@ device's state:
   byte of them is in the repository). With another build of the DLL a buffer that needs them
   is not heard (named once on stderr).
 - **Second: "APL high-performance SRC"**, a 4-point Lagrange interpolator in `dsound.dll`.
-  `SetFrequency` (or Doppler) moving a buffer's rate by more than 1/500 of it turns it on
-  for the whole device, for good, playing buffers included (each gets a new converter from
-  where it is). From then on every buffer goes through it, also those at 48 kHz, whose
-  samples it changes in the last bits. 16-bit mono uses a four-lane kernel whose factors
-  drift between periods; stereo and 8-bit the plain formula.
+  `SetFrequency` (or Doppler) moving a buffer's rate by more than 1/500 of it, or a buffer
+  made while two or more exist ("More than two channels" below), turns it on for the whole
+  device, for good, playing buffers included (each gets a new converter from where it is).
+  From then on every buffer goes through it, also those at 48 kHz, whose samples it changes in
+  the last bits. 16-bit mono uses a four-lane kernel whose factors drift between periods;
+  stereo and 8-bit the plain formula.
 
 Both work in 10 ms periods from the buffer's start. A non-looping buffer ends after the period
 in which the frames handed to its converter reach its length (the first converter is handed
@@ -446,35 +447,62 @@ none of them.
 - `sound_out` opens a stream in the endpoint's mix format as it is, or in another layout at its
   rate (32-bit float, `WAVE_FORMAT_EXTENSIBLE`, `IsFormatSupported` first and only `S_OK`
   opens it, as DirectSound does).
-- On a two-channel endpoint nothing changed: one stream carries every voice, the stereo kernels.
+- On a two-channel endpoint (mask 0x3) one stream carries every voice through the stereo kernels,
+  as before; what changed there is the second converter by buffer count (below), which DirectSound
+  follows under every name.
 - On any other endpoint the game's device and the platform layers' own devices (the movies, the
   music) are a stream each, as in Windows. The game's stream is 2 channels until its first 3D
   buffer; then it is closed, every voice playing goes on from where it is with a new converter,
   the 3D voices are placed over the new speakers, and the stream is opened again in the
-  endpoint's layout, starting with one period of silence. The movies' and the music's stream
+  endpoint's layout, starting with one period of silence. The port's output thread asks for as
+  many frames as the device can take, which need not end on a 10 ms period (DirectSound's packets
+  always do): what a voice's converter gave and was not sent yet is heard first after the
+  silence, then a new converter goes on from the frame after those it was handed, so nothing is
+  skipped. The endpoint is asked again at the lock: one that no longer takes the layout (the
+  default device changed since the output started) gets a stream in its own mix format and the
+  game's device mixes that, as DirectSound's device takes a new default format at once
+  (`10055086`, read only); one at another rate is not provided (named on stderr, no sound from
+  then on, no stop). The movies' and the music's stream
   stays at 2 channels. Two-channel streams are what DirectSound gives Windows too, so what Windows
   and the headset do with them is the same by construction (not measured here, and not needed).
 - A layout other than two channels uses DirectSound's general kernel with its ramp; two channels
   keep the measured stereo kernels (gains changed at once, below).
 - `GetSpeakerConfig` (slot 8, which the game is not seen to call) answers from the endpoint's mix
   mask whether or not the device is locked: 8 for 0x63F and 0x140004 for 0x3 (measured), 2 for
-  0x4, 3 for 0x33, 5 for 0x107, 6 for 0x3F, 7 for 0xFF, 9 for 0x60F (the DLL's table), `E_FAIL`
-  for another. `GetCaps` and the primary buffer are the captured table's (the same under both
-  names).
+  0x4, 3 for 0x33, 5 for 0x107, 6 for 0x3F, 7 for 0xFF, 9 for 0x60F, 0 with `DS_OK` for a mask of
+  0 (the DLL's table, `10053610`), `E_FAIL` for another. `GetCaps` and the primary buffer are the
+  captured table's (the same under both names).
 - A recording (`NV_SOUND_RECORD=FILE.wav`) on such an endpoint writes the game's stream to
   `FILE.wav` (from the lock on `FILE.8ch.wav`, `WAVE_FORMAT_EXTENSIBLE` with the mask) and the
   movies' and the music's to `FILE.own.wav`.
 - A mix format that is not 32-bit float, or a layout DirectSound does not place 3D buffers on
   (not mono, stereo, quad, surround, either 5.1 or either 7.1; in the DLL the first 3D buffer then
   fails with `E_FAIL` and later ones are silent), is not provided: no sound, named once on stderr,
-  and the game goes on.
+  and the game goes on. This holds on two channels too: before this change any two-channel float
+  endpoint played the stereo path whatever its mask. A mask of 0 (direct out, which some USB and
+  virtual devices report) is silent in the original as well: there DirectSound refuses a buffer
+  without the device's channel count (`DSERR_BADFORMAT`) and one with `DSBCAPS_CTRL3D` or
+  `DSBCAPS_CTRLPAN` (`E_INVALIDARG`, `10056ab3`), and every buffer the game makes has one or the
+  other (`00aeb270` in the exe: flags 0x40 for 2D, 0x30010 for 3D, each with 0x2a0). (The
+  layer's `CreateSoundBuffer` still answers as on the measured devices there.) The movies' and
+  the music's own devices there were not read. Another two-channel mask (a side or back pair) is
+  not provided either, and there the port differs from the original (read only, not measured):
+  the listener has no speaker table for it (`1002a8cb`), so the first secondary buffer, which
+  locks the device on a two-channel endpoint, fails with `E_FAIL` as read for the larger layouts
+  above; 3D buffers after it are silent, but 2D buffers after it play through the default matrix.
 
 **Replayed through the layer** (`dsmix_surround_captures` in `dsound.rs`, ignored; the folders in
 `NV_DSMIX_SURROUND`): each case made with the tool's calls, its moves (volume, pan, frequency,
 position, the lock) made before the first packet released after them, every packet compared bit
 for bit from the one its voice starts in (a move whose call began less than 200 us before a
-packet was released raced that packet inside DirectSound; one such move, 35 us before it, is
-taken in the next packet). Results, 2026-11-03:
+packet was released raced that packet inside DirectSound; two such moves, 35 and 21 us before
+it, are taken in the next packet). A lock case's 3D buffer is made at the call's start and
+played when its `Play` was called, which can be a packet or more after the stream was opened
+again. The stream opened at the lock starts with one silent packet in 17 of 18 captures as
+`FalloutNV.exe` and with two in one (`z_lock_with2d`, whose second 8-channel packet was released
+before `CreateSoundBuffer` returned, the voices not yet connected again): the layer gives one
+period, and a case that differs is tried with the silent packets it has (a race inside
+DirectSound). Results, 2026-11-03:
 
 | Run | Cases replayed | Bit for bit | Only the sign of zero differs | Not replayed |
 | --- | --- | --- | --- | --- |
@@ -482,7 +510,8 @@ taken in the next packet). Results, 2026-11-03:
 | `FalloutNV.exe`, natural order: 148 cases on 8 channels, the lock case (2 then 8), 38 on 2 | 183 | **180** (all 149 with 8 channels) | 3 (on 2 channels) | 4 (2-channel ramps) |
 | Another name (2 channels) | 180 | 171 | 9 | 7 (2-channel ramps) |
 | Another name, locked first | 180 | 171 | 9 | 7 |
-| All | 730 | 709 | 21 | 18 |
+| Later captures, both names (28 folders: the lock with one or two 2D voices playing, at 22050, 44100 and 48 kHz, with volume, pan, the distortion; ramps; the lock 11 times more as `FalloutNV.exe`) | 46 | 44 | 2 (on 2 channels) | 0 |
+| All | 776 | 753 | 23 | 18 |
 
 Every case with 8-channel packets matches every sample: 2D mono, stereo, 8-bit, every rate, the
 distortion (the player's edge table), the 3D grid, HRTF, turned listeners, distances, Doppler,
@@ -491,12 +520,20 @@ moving sources (every ramp), and the lock (the 2-channel packets, the silent pac
 going on at its frame on the centre, the 3D voice from its first frame). On two channels the
 only differences are signed zeros: where a gain is 0 (a pan of +-10000, a 3D sound straight to
 one side, a muted one) DirectSound's stereo kernels write `x * 0` (-0 for a negative sample) and
-the port's add it to +0. That path is unchanged here (its hashes); the sound is the same. The
+the port's add it to +0. The stereo kernels are unchanged here (`mix_bits_are_unchanged`); the sound is the same. The
 changes while playing on two channels are not replayed (the stereo kernels' ramp, below).
 
-The captures also settle the second converter by buffer count (read in the DLL, `10052b0b`): the
-case that makes a third buffer while two exist (`w3_three_2d`) and every case after it match only
-with the second converter on, under both names. The port does not do this yet (below).
+The captures also settle the second converter by buffer count (read in the DLL, `10052857`,
+`10052af5`..`10052b7b`): a buffer made while two or more exist turns it on for the device, for
+good, under both names. When the buffer does not lock the layout every listed buffer's converter
+is swapped where it is (`100527c0`, `1005713d`); when it does, the flag is set before the lock
+connects every buffer again. The layer follows it (`second_converter_by_count`): `w3_three_2d`
+(three 2D buffers made, then played) and `z_lock_with2d` (two 2D buffers playing when the first 3D
+buffer is made) match with it, and the cases after `w3_three_2d` start with it on, as the
+measuring tool's device has it. The game makes many buffers, so from its third on the game's
+device converts every voice with the second converter, stereo included; the cursors of buffers
+playing when it turns on follow the DLL's reading (each goes on from its write cursor with a new
+converter), not measured.
 
 **Measured, the layouts above; read only, the rest.** Measured on this machine: 0x63F (8
 channels) and 0x3 (2). One channel, quad, surround, both 5.1 and 7.1 wide would need a change of
@@ -511,16 +548,15 @@ are tested only against it (`speakers.rs`, `dsound.rs` tests).
   as it is (its measured hashes) until that is settled.
 - The general kernel's ramp is measured on 8 channels; on a one-channel endpoint a mono buffer
   goes through DirectSound's diagonal kernel, whose ramp is not read (the general one is used).
-- What is heard during the reopen at the lock (Windows' side), and the lock with several voices
-  or 3D voices playing.
+- What is heard during the reopen at the lock (Windows' side), and the lock with 3D voices or
+  more than two 2D voices playing.
 - The order of a sum of three voices on one speaker below full gain (two-voice sums are
   order-free; the three-voice case summed at unit gains).
-- The second converter by buffer count: DirectSound turns it on for the whole device when a
-  buffer is made while two or more exist (read, `10052b0b`; measured above under both names).
-  The port turns it on only for a frequency change or Doppler. It changes every sample of a
-  buffer at the device's rate (and the cursors), stereo too, and the game makes many buffers, so
-  it is a separate change with its own cursor measurements.
+- The cursors of buffers that play when the second converter turns on by buffer count (read
+  only, as for a large frequency change).
 - The sign of zero on two channels (above): the stereo kernels write, the port adds.
+- A two-channel endpoint with a mask other than 0x3 or 0 (above): no sound in the port, the
+  original's 2D buffers after its first (read only).
 - The game itself was not run as `FalloutNV.exe`: when it makes its first 3D buffer.
 
 ## Vorbis

@@ -44,6 +44,19 @@ pub enum Refused {
     Layout,
 }
 
+#[cfg(test)]
+impl Output {
+    /// A stream that plays nothing (no thread), as an endpoint opened it: the tests'.
+    pub fn idle(rate: u32, layout: Layout) -> Output {
+        Output {
+            stop: Arc::new(AtomicBool::new(false)),
+            thread: None,
+            rate,
+            layout,
+        }
+    }
+}
+
 impl Drop for Output {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -99,6 +112,17 @@ pub fn layout_of(format: &[u8]) -> Option<Layout> {
 
 /// Why a mix layout is not provided, for stderr.
 pub fn not_provided(l: Layout) -> String {
+    if l.mask == 0 {
+        // `10056ab3`: on a device with mask 0 a buffer must have the device's channels and may
+        // not have `DSBCAPS_CTRL3D` or `DSBCAPS_CTRLPAN`; every buffer the game makes has one or
+        // the other (`00aeb270` in the exe: 0x40 or 0x30010, each with 0x2a0).
+        return format!(
+            "the sound device mixes {} channels with speaker mask 0 (direct out): DirectSound \
+             refuses every buffer the game makes there (each is 3D or panned), so the original \
+             is silent on it too",
+            l.channels
+        );
+    }
     format!(
         "the sound device mixes {} channels, speaker mask {:#x}: not provided (DirectSound places \
          3D sound only on mono, stereo, quad, surround, 5.1 and 7.1 layouts)",

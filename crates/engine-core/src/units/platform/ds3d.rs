@@ -1,11 +1,11 @@
 //! DirectSound's software 3D stage, as the player's `dsound.dll` computes it for a 3D buffer
 //! (`CMultiPan3dObject` for every algorithm asked for: `DS3DALG_HRTF_LIGHT` answers
-//! `DS_NO_VIRTUALIZATION`, measured, and is placed the same, measured on 8 channels). Translated from the instructions of the 32-bit
-//! `dsound.dll` the game loads (`SysWOW64`, Windows 11 10.0.26200; read in a private analysis
-//! with the maintainer's leave, 2026-10-28; addresses below are that DLL's, image base
-//! `0x10000000`), and checked against what the DLL sends to the device (`scripts/dsmix-measure`,
-//! docs/SOUND.md). No bytes of the DLL are here: its tables are computed from the formulas they
-//! were made with.
+//! `DS_NO_VIRTUALIZATION`, measured, and is placed the same, measured on 8 channels). Translated
+//! from the instructions of the 32-bit `dsound.dll` the game loads (`SysWOW64`, Windows 11
+//! 10.0.26200; read in a private analysis with the maintainer's leave, 2026-10-28; addresses
+//! below are that DLL's, image base `0x10000000`), and checked against what the DLL sends to the
+//! device (`scripts/dsmix-measure`, docs/SOUND.md). No bytes of the DLL are here: its tables are
+//! computed from the formulas they were made with.
 //!
 //! What the stage does for one buffer (`C3dObject` and `CMultiPan3dObject` in the DLL's log
 //! strings):
@@ -19,12 +19,12 @@
 //!    least 5 dB down.
 //! 3. A pan between the two nearest of the device's speakers (on two channels left at -pi/2,
 //!    right at +pi/2, as `f32` values; other layouts' in `super::speakers::azimuths_3d`) by the
-//!    tangent law, always over pi/2 whatever the speakers' spacing, from the azimuth `atan2(x, z)`. Closer than 2.5 units (`|x|` and `|z|`
-//!    under 2.5 and `sqrt(x^2 + z^2)` under 2.5, whatever the minimum distance) a part
-//!    `0.5 + r / 5` is panned from the azimuth and the rest from the opposite direction. Height
-//!    counts only in the distance. Each speaker's share becomes `trunc(301.03 * log2(share))`
-//!    millibels ([`pan_over`]); at the listener's own position every speaker gets `1 / n`, the
-//!    low-frequency one too.
+//!    tangent law, always over pi/2 whatever the speakers' spacing, from the azimuth
+//!    `atan2(x, z)`. Closer than 2.5 units (`|x|` and `|z|` under 2.5 and `sqrt(x^2 + z^2)` under
+//!    2.5, whatever the minimum distance) a part `0.5 + r / 5` is panned from the azimuth and the
+//!    rest from the opposite direction. Height counts only in the distance. Each speaker's share
+//!    becomes `trunc(301.03 * log2(share))` millibels ([`pan_over`]); at the listener's own
+//!    position every speaker gets `1 / n`, the low-frequency one too.
 //! 4. The device mixes each channel at `gain(volume + distance) * gain(pan)`, two lookups in the
 //!    volume table (`super::mixer::gain`) multiplied as `f32` ([`hear`]).
 //! 5. Doppler: with a velocity on the buffer or the listener, the frequency becomes

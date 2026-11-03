@@ -346,6 +346,22 @@ impl Voice {
         self.position = Some(at);
     }
 
+    /// A playing voice is connected again (the device's layout locked: DirectSound disconnects
+    /// every buffer and connects it again with its play state, `10053984`). DirectSound mixes
+    /// whole periods into each packet, so what its converter gave was all sent before the stream
+    /// closed and the buffer goes on at the frame after those it was handed (measured,
+    /// `k_lock_2d_then_3d`: nothing skipped or repeated). The output here asks for frames that
+    /// need not end on a period: what the converter gave and the output has not taken yet is
+    /// heard first, then a new converter (the one the device chooses now) goes on from the frame
+    /// after those the old one was handed, its first period taking its matrix as it is.
+    pub fn reconnect(&mut self) {
+        if let Some(c) = self.converter.as_mut() {
+            c.restart = true;
+        }
+        self.matrix_now = None;
+        self.ramp = None;
+    }
+
     /// Source frames per output frame.
     pub fn step(&self) -> f64 {
         if self.rate == 0 || self.device == 0 {
@@ -580,6 +596,9 @@ pub struct Converted {
     held: std::collections::VecDeque<(f32, f32)>,
     /// The buffer's end was reached: no period after the held frames.
     ending: bool,
+    /// The voice was connected again ([`Voice::reconnect`]): after the held frames a new
+    /// converter goes on from the frame after those this one was handed.
+    restart: bool,
     /// A period's output by channel, kept from one period to the next (emptied before each,
     /// so a period allocates nothing once it has grown).
     got: Vec<Vec<f32>>,
@@ -588,7 +607,7 @@ pub struct Converted {
 /// Makes the voice's converter if it has none: the second one when the device has turned it on,
 /// else the first one. False when it cannot be made.
 fn converted(v: &mut Voice) -> bool {
-    use super::resampler::{Apl, Converter, Dmo};
+    use super::resampler::{Apl, Converter};
     let Some(at) = v.position else { return false };
     let (rate, device, channels, lanes) = (v.rate, v.device, usize::from(v.channels), v.lanes());
     if let Some(c) = v.converter.as_mut() {
@@ -600,13 +619,8 @@ fn converted(v: &mut Voice) -> bool {
         }
         return true;
     }
-    let converter = if v.apl {
-        Converter::Apl(Apl::new(rate, device, channels, lanes))
-    } else {
-        match Dmo::new(rate, device, channels) {
-            Some(d) => Converter::Dmo(Box::new(d)),
-            None => return false,
-        }
+    let Some(converter) = new_converter(v) else {
+        return false;
     };
     v.converter = Some(Box::new(Converted {
         converter,
@@ -615,9 +629,22 @@ fn converted(v: &mut Voice) -> bool {
         rate,
         held: Default::default(),
         ending: false,
+        restart: false,
         got: Vec::new(),
     }));
     true
+}
+
+/// The converter the device gives the voice now: the second one when it has turned it on, else
+/// the first one (`None` when that cannot be made).
+fn new_converter(v: &Voice) -> Option<super::resampler::Converter> {
+    use super::resampler::{Apl, Converter, Dmo};
+    let (rate, device, channels) = (v.rate, v.device, usize::from(v.channels));
+    Some(if v.apl {
+        Converter::Apl(Apl::new(rate, device, channels, v.lanes()))
+    } else {
+        Converter::Dmo(Box::new(Dmo::new(rate, device, channels)?))
+    })
 }
 
 impl Voice {
@@ -645,6 +672,19 @@ fn render_converted(
             if c.ending || frames == 0 || period == 0 {
                 ended = true;
                 break;
+            }
+            if c.restart {
+                // Connected again ([`Voice::reconnect`]): a new converter from the frame after
+                // those the old one was handed.
+                let Some(converter) = new_converter(v) else {
+                    ended = true;
+                    break;
+                };
+                c.converter = converter;
+                c.origin = v.position.unwrap_or(0);
+                c.base = 0;
+                c.rate = v.rate;
+                c.restart = false;
             }
             if c.rate != v.rate {
                 c.converter.retune(v.rate, v.device);
