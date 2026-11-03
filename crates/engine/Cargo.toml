@@ -16,6 +16,7 @@ engine-bs = { path = "../engine-bs" }
 engine-havok = { path = "../engine-havok" }
 engine-speedtree = { path = "../engine-speedtree" }
 engine-fallout = { path = "../engine-fallout" }
+engine-fallout-facegen = { path = "../engine-fallout-facegen" }
 
 [dev-dependencies]
 # The opt-in real-script run (`tests/real_scda.rs`) reads the player's

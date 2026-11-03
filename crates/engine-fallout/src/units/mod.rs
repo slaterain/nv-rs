@@ -2,7 +2,6 @@
 //! Translated units of `engine-fallout`, one folder per subsystem (docs/ENGINE_CRATE.md).
 
 pub mod d3dx9;
-pub mod facegen;
 pub mod fallout_ai;
 pub mod fallout_audio;
 pub mod fallout_debug;
@@ -12,7 +11,6 @@ pub mod fallout_magic;
 pub mod fallout_misc;
 pub mod fallout_shared;
 pub mod fallout_shared_distant_terrain_system;
-pub mod fallout_shared_facegen;
 pub mod fallout_shared_havok;
 pub mod fallout_shared_magic;
 pub mod fallout_shared_pathfinding;
@@ -37,6 +35,8 @@ pub use engine_bs::units::bssystem;
 pub use engine_bs::units::bssystemutilities;
 pub use engine_core::units::crt;
 pub use engine_core::units::platform;
+pub use engine_fallout_facegen::units::facegen;
+pub use engine_fallout_facegen::units::fallout_shared_facegen;
 pub use engine_gamebryo::units::nianimation;
 pub use engine_gamebryo::units::nicollision;
 pub use engine_gamebryo::units::nimain;
@@ -50,7 +50,6 @@ pub use engine_speedtree::units::speedtree;
 /// Every registered function of this crate's units.
 pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     d3dx9::funcs(out);
-    facegen::funcs(out);
     fallout_ai::funcs(out);
     fallout_audio::funcs(out);
     fallout_debug::funcs(out);
@@ -60,7 +59,6 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     fallout_misc::funcs(out);
     fallout_shared::funcs(out);
     fallout_shared_distant_terrain_system::funcs(out);
-    fallout_shared_facegen::funcs(out);
     fallout_shared_havok::funcs(out);
     fallout_shared_magic::funcs(out);
     fallout_shared_pathfinding::funcs(out);
@@ -83,4 +81,5 @@ engine_core::assemble!(
     engine_bs::units::funcs,
     engine_havok::units::funcs,
     engine_speedtree::units::funcs,
+    engine_fallout_facegen::units::funcs,
 );

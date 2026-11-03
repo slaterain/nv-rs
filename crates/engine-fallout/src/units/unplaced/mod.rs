@@ -152,7 +152,6 @@ pub mod run_00642860;
 pub mod run_00645380;
 pub mod run_00645c60;
 pub mod run_00649530;
-pub mod run_00649ba0;
 pub mod run_006502f0;
 pub mod run_006505d0;
 pub mod run_00650780;
@@ -484,6 +483,9 @@ pub mod static_init_irregular_h;
 pub mod static_init_irregular_i;
 pub mod static_init_irregular_j;
 
+// This folder's units in the crates below this one, so `super::<unit>` reaches them.
+pub use engine_fallout_facegen::units::unplaced::run_00649ba0;
+
 pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(atexit_irregular::funcs());
     out.extend(atexit_irregular_b::funcs());
@@ -636,7 +638,6 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(run_00645380::funcs());
     out.extend(run_00645c60::funcs());
     out.extend(run_00649530::funcs());
-    out.extend(run_00649ba0::funcs());
     out.extend(run_006502f0::funcs());
     out.extend(run_006505d0::funcs());
     out.extend(run_00650780::funcs());
