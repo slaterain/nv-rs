@@ -51,4 +51,5 @@ engine_core::assemble!(
     engine_fallout_pathfinding::units::funcs,
     engine_fallout_env::units::funcs,
     engine_fallout_magic::units::funcs,
+    engine_fallout_interface::units::funcs,
 );

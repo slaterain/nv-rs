@@ -96,6 +96,9 @@ codegen-units = 512
 [profile.play.package.engine-fallout-magic]
 opt-level = 1
 
+[profile.play.package.engine-fallout-interface]
+opt-level = 1
+
 [profile.play.package.engine]
 opt-level = 1
 
@@ -153,6 +156,9 @@ opt-level = 1
 codegen-units = 512
 
 [profile.play-fast.package.engine-fallout-magic]
+opt-level = 1
+
+[profile.play-fast.package.engine-fallout-interface]
 opt-level = 1
 
 [profile.play-fast.package.engine]

@@ -29,3 +29,4 @@ engine-fallout-pathfinding = { path = "../engine-fallout-pathfinding" }
 engine-fallout-env = { path = "../engine-fallout-env" }
 engine-fallout-forms = { path = "../engine-fallout-forms" }
 engine-fallout-magic = { path = "../engine-fallout-magic" }
+engine-fallout-interface = { path = "../engine-fallout-interface" }

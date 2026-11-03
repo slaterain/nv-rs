@@ -5,8 +5,6 @@ pub mod d3dx9;
 pub mod fallout_ai;
 pub mod fallout_audio;
 pub mod fallout_debug;
-pub mod fallout_dialogue;
-pub mod fallout_interface;
 pub mod fallout_misc;
 pub mod fallout_shared_settings;
 pub mod remotelog;
@@ -32,6 +30,8 @@ pub use engine_fallout_env::units::fallout_shared_sky;
 pub use engine_fallout_env::units::fallout_shared_speedtree;
 pub use engine_fallout_facegen::units::facegen;
 pub use engine_fallout_facegen::units::fallout_shared_facegen;
+pub use engine_fallout_interface::units::fallout_dialogue;
+pub use engine_fallout_interface::units::fallout_interface;
 pub use engine_fallout_magic::units::fallout_magic;
 pub use engine_fallout_magic::units::fallout_shared_magic;
 pub use engine_fallout_magic::units::fallout_shared_tempeffects;
@@ -553,8 +553,6 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     fallout_ai::funcs(out);
     fallout_audio::funcs(out);
     fallout_debug::funcs(out);
-    fallout_dialogue::funcs(out);
-    fallout_interface::funcs(out);
     fallout_misc::funcs(out);
     fallout_shared_settings::funcs(out);
     remotelog::funcs(out);
@@ -575,6 +573,7 @@ engine_core::assemble!(
     engine_fallout_cell::units::funcs,
     engine_fallout_env::units::funcs,
     engine_fallout_forms::units::funcs,
+    engine_fallout_interface::units::funcs,
     engine_fallout_magic::units::funcs,
     engine_fallout_pathfinding::units::funcs,
     engine_fallout_script::units::funcs,
