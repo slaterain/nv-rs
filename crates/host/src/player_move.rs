@@ -333,10 +333,14 @@ pub struct PlayerMovement {
     main_thread: Option<engine::thread_host::MainThread>,
     pub main_frames: u64,
     main_stage: Stage<()>,
-    /// The line [`PlayerMovement::finish_main_frame`] printed when main stopped (a fault, an
-    /// untranslated function, a game thread's stop, its return without the game's window):
-    /// `Game's main stopped in frame N: why (in ..)`.
+    /// The line [`PlayerMovement::finish_main_frame`] printed when main's frames ended: it
+    /// stopped (a fault, an untranslated function, a game thread's stop),
+    /// `Game's main stopped in frame N: why (in ..)`, or it returned without the game's own
+    /// window (tests, the viewer's own renderer), `Game's main returned C in frame N`.
     pub main_stop: Option<String>,
+    /// What the game's `main` returned, when it returned without the game's own window (with
+    /// it the run ends there, [`PlayerMovement::finish_main_frame`]): a clean end, not a stop.
+    main_returned: Option<u32>,
     /// When the status line ([`PlayerMovement::summary`]) was last printed from [`PlayerMovement::main_frame`].
     main_reported: Option<std::time::Instant>,
     /// Frames the AI threads (and the world step on thread 2) ran, and
@@ -375,6 +379,7 @@ impl Default for PlayerMovement {
             main_frames: 0,
             main_stage: Stage::NotTried,
             main_stop: None,
+            main_returned: None,
             main_reported: None,
             world_frames: 0,
             world_fallback_frames: 0,
@@ -1196,6 +1201,9 @@ impl PlayerMovement {
         let Some(mut main) = self.main_thread.take() else {
             return false;
         };
+        // What main returned, when it did: its end goes through the stop's bookkeeping below
+        // (the trace, the stops table), but it is reported as a return, not as a stop.
+        let mut returned = None;
         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             match engine::thread_host::finish_main_frame(e, &mut main) {
                 engine::thread_host::MainTurn::Frame => Ok(()),
@@ -1210,6 +1218,7 @@ impl PlayerMovement {
                         eprintln!("The game's main returned {code}: the run ends");
                         std::process::exit(code as i32);
                     }
+                    returned = Some(code);
                     Err(format!("main returned {code}"))
                 }
                 engine::thread_host::MainTurn::Stopped(why) => Err(why),
@@ -1266,20 +1275,30 @@ impl PlayerMovement {
                 true
             }
             Err(why) => {
-                // Main stopped (its coroutine caught the panic, `thread_host::start_main_thread`,
-                // whose message `quiet_game_panics` kept quiet; a game thread's stop reaches main
-                // as one): its frames end here for good. The game's window keeps its last frame,
-                // so the line goes to the log always, not only to `NV_MOVE_TRACE`'s file. Once:
-                // after `Failed` no frame is handed over again.
-                let line = format!("Game's main stopped in frame {}: {why}", self.main_frames);
+                // Main's frames end here for good. Once: after `Failed` no frame is handed over
+                // again.
+                let line = match returned {
+                    // Main returned (only without the game's own window: with it the run ended
+                    // above): a clean end, said as one.
+                    Some(code) => {
+                        self.main_returned = Some(code);
+                        format!("Game's main returned {code} in frame {}", self.main_frames)
+                    }
+                    // Main stopped (its coroutine caught the panic,
+                    // `thread_host::start_main_thread`, whose message `quiet_game_panics` kept
+                    // quiet; a game thread's stop reaches main as one). The game's window keeps
+                    // its last frame, so the line goes to the log always, not only to
+                    // `NV_MOVE_TRACE`'s file.
+                    None => format!("Game's main stopped in frame {}: {why}", self.main_frames),
+                };
                 eprintln!("{line}");
-                // With the game's own window (the play build, `NV_D3D9=real`) nothing can go on
-                // after this: the window would sit on its last frame for good. The host ends the
-                // run with exit status 3, so the game closes and the line above is the log's last.
-                // This is the host's handling of a stop (a fault, a function not translated, a
-                // call the platform does not provide), not something the exe does.
+                // A stop with the game's own window (the play build, `NV_D3D9=real`): nothing can
+                // go on after it, and the window would sit on its last frame for good. The host
+                // ends the run with exit status 3, so the game closes and the line above is the
+                // log's last. This is the host's handling of a stop (a fault, a function not
+                // translated, a call the platform does not provide), not something the exe does.
                 #[cfg(windows)]
-                if engine::units::platform::d3d9real::wanted() {
+                if returned.is_none() && engine::units::platform::d3d9real::wanted() {
                     std::process::exit(3);
                 }
                 self.main_stop = Some(line);
@@ -1307,10 +1326,11 @@ impl PlayerMovement {
             return format!(
                 "Game's movement: main {} frames; {}; {} untranslated addresses reached.",
                 self.main_frames,
-                match &self.main_stage {
-                    Stage::Failed(why) => format!("stopped ({why})"),
-                    Stage::Done(()) => "running".to_string(),
-                    Stage::NotTried => "not started".to_string(),
+                match (&self.main_stage, self.main_returned) {
+                    (_, Some(code)) => format!("returned {code}"),
+                    (Stage::Failed(why), None) => format!("stopped ({why})"),
+                    (Stage::Done(()), None) => "running".to_string(),
+                    (Stage::NotTried, None) => "not started".to_string(),
                 },
                 self.misses.len()
             );
@@ -2109,5 +2129,36 @@ mod tests {
         assert!(!m.begin_main_frame(&mut e));
         assert!(!m.finish_main_frame(&mut e));
         assert_eq!(m.main_stop.as_deref(), Some(line.as_str()));
+    }
+
+    /// A clean return of the game's `main` (here `WinMain` returns 7 in its start-up) without
+    /// the game's own window (tests, the viewer's own renderer) is said as a return, not as a
+    /// stop: one line with what it returned and the frame, and the status line says it
+    /// returned. Its frames end there too, so the line comes once.
+    #[test]
+    fn a_return_of_main_is_reported_as_a_return() {
+        let mut e = Engine::new();
+        e.register(WIN_MAIN, |_, _| Ret {
+            eax: 7,
+            ..Ret::default()
+        });
+        let mut m = PlayerMovement::default();
+        m.start_main(&mut e);
+        assert_eq!(m.main_frames, 0);
+        assert_eq!(
+            m.main_stop.as_deref(),
+            Some("Game's main returned 7 in frame 0")
+        );
+        let summary = m.summary();
+        assert!(summary.contains("main 0 frames; returned 7;"), "{summary}");
+        assert!(!summary.contains("stopped"), "{summary}");
+        // Ended: no frame is handed over again, and nothing more is reported.
+        assert!(!m.main_frame(&mut e));
+        assert!(!m.begin_main_frame(&mut e));
+        assert!(!m.finish_main_frame(&mut e));
+        assert_eq!(
+            m.main_stop.as_deref(),
+            Some("Game's main returned 7 in frame 0")
+        );
     }
 }
