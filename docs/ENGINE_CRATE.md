@@ -114,7 +114,11 @@ the few crates above it. Measured on the laptop with the build queue's settings
 | --- | --- | --- |
 | Play build after the fix (`--profile play`, incremental) | 134-469 s, median 419 s; one rustc at 8.6 GB | 18-52 s, median 30 s; no rustc above 2.8 GB |
 | Unit tests of the fixed unit (`cargo test -p <crate> --lib <unit>`, not incremental), `fallout_ai/highprocess` | 525 s, one rustc at 23.4 GB | 132 s (`engine-fallout-ai`), 5.1 GB |
-| Every unit test of the game's units, built and run | 727 s, 23.6 GB | 767 s, 5.2 GB |
+| Every unit test of the game's units, built and run | 727 s, 23.6 GB | 861 s, 5.2 GB |
+
+Other agents' builds ran beside both series. The before median (419 s) is 2.4 times the 178 s
+median of 16 earlier play builds after an engine-fallout edit (2026-10-23 to 10-29, the queue
+at one job); against that figure the play build is about 6 times faster, not 14.
 
 The crates:
 
@@ -152,11 +156,15 @@ env, magic, misc and the two unplaced crates none.
   crates below it, and a crate that holds none of a split folder gets an
   inline `units::<folder>` module that re-exports them. So `super::<unit>` and
   `crate::units::fallout_shared::<unit>` reach a unit in a crate below, and
-  `engine::units::fallout_shared::<unit>` reaches every one. The translation
-  files did not change; five items became `pub` for a crate above
+  `engine::units::fallout_shared::<unit>` reaches every one. The translations
+  did not change, except that five items became `pub` for a crate above
   (`extradatalist::list_item`, `list_next`; the `bsfacegenmodel::face_check`
-  module, its `enabled` and `shader_textures`), and the `FISTP` helpers
-  `x87_truncate_i32/i64` became `engine_core::x87::fistp_chop`/`fistp_chop64`.
+  module, its `enabled` and `shader_textures`), the `FISTP` helpers
+  `x87_truncate_i32/i64` became `engine_core::x87::fistp_chop`/`fistp_chop64`,
+  and FaceGen's speech check got a redirect for its tests (below: its five
+  hooks called from other crates, `linked`, `removing`, `removed`,
+  `node_freeing` and `node_allocated`, first read a `OnceLock` that only its
+  tests set; diagnostic code only, no effect on the game).
 - **Calls between the crates** go by address through `Engine`, as before; the
   facade registers all twelve (`units::PARTS`; a facade test checks that no
   address is registered by two crates, so the order never matters).
@@ -174,7 +182,8 @@ env, magic, misc and the two unplaced crates none.
   (later) drops the dev-dependencies a crate's tests do not need, so a test
   build compiles its own crate only.
 - **Rebasing a branch from before the split:** `git rebase origin/main`
-  carries edits of existing files (every moved file is an exact rename).
+  carries edits of existing files (every carve commit moves its files as
+  exact renames; five unit files are edited in commits of their own).
   A branch that adds unit files or edits a generated `mod.rs` replays its
   patches with the paths rewritten (`git format-patch`, then the rename map
   `crates/engine-fallout/... -> crates/engine-fallout-<area>/...`, then `git am

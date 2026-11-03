@@ -8,7 +8,8 @@
 After the October split ([ENGINE_CRATE.md](../ENGINE_CRATE.md), "The engine crates"),
 `engine-fallout` still held the game's own units: 1,775 files, 2.1 million lines. Any fix in
 one of them recompiled all of it: a play build after a one-file fix took 134-469 s (median
-419 s, one crate at a time as the build queue runs it) with one rustc at 8.6 GB, and the unit
+419 s, one crate at a time as the build queue runs it, with other agents' builds beside it;
+178 s in 16 such builds of 2026-10-23 to 10-29) with one rustc at 8.6 GB, and the unit
 tests of the fixed unit 525 s with one rustc at 23.4 GB, so the build queue ran it alone and
 agents tested `engine-fallout` units in stand-in crates. The maintainer
 (2026-11-03): checking a fix should not take more than a few minutes.
@@ -31,8 +32,10 @@ cut along areas without changing the code.
 - Paths do not change. Each crate's generated `units` modules re-export, by name, the units of
   a split folder that live in the crates below, so `super::<unit>`,
   `crate::units::<folder>::<unit>` and `engine::units::<folder>::<unit>` keep resolving and
-  no translation file had to change (five items became `pub`, one helper moved to
-  `engine_core::x87`).
+  no translation had to change (five items became `pub`, one helper moved to
+  `engine_core::x87`; FaceGen's speech check, diagnostic code, got a redirect so that its
+  tests see one state: its five hooks called from other crates first read a `OnceLock` that
+  only those tests set).
 - Registration is unchanged: each crate's `units::funcs`, the facade's `assemble!` over all of
   them; a facade test checks that no address is registered by two crates.
 - Tests, phase A: each fallout crate names every other fallout crate under
@@ -40,7 +43,8 @@ cut along areas without changing the code.
   every translated function as before the split. Phase B (later, per crate) drops the ones a
   crate's tests do not need, doubling a callee in the test or moving an integration test to
   the facade.
-- Every moved file is an exact rename (`git mv`), so branches from before the split rebase
+- Every carve commit moves its files as exact renames (`git mv`; the five unit files that
+  had to change are edited in commits of their own), so branches from before the split rebase
   with git's rename detection; a branch that adds unit files replays its patches with the
   rename map.
 
