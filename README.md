@@ -50,9 +50,9 @@ Experimental. Almost all of the original program is translated, and the game's
 own code now runs: it starts a new game, plays the opening in Doc Mitchell's
 house (Doc's speech, character creation, the Vit-o-Matic and his questions),
 and lets you walk around, talk to Doc, use the Pip-Boy and draw, aim and fire
-weapons, with the original graphics and sound. If the game's code stops on
-something not supported yet, the log names where and the game closes, instead of
-leaving a frozen window.
+weapons, with the original graphics and sound. In the play build, if the game's code
+stops on something not supported yet, the log names where and the game closes,
+instead of leaving a frozen window.
 
 <table>
   <tr>
