@@ -21,3 +21,4 @@ engine-core = { path = "../engine-core", features = ["test-support"] }
 # split. Phase B removes the ones no test needs.
 engine-fallout = { path = "../engine-fallout" }
 engine-fallout-facegen = { path = "../engine-fallout-facegen" }
+engine-fallout-pathfinding = { path = "../engine-fallout-pathfinding" }

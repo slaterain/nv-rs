@@ -24,7 +24,6 @@ pub use engine_fallout::units::fallout_misc;
 pub use engine_fallout::units::fallout_shared_distant_terrain_system;
 pub use engine_fallout::units::fallout_shared_havok;
 pub use engine_fallout::units::fallout_shared_magic;
-pub use engine_fallout::units::fallout_shared_pathfinding;
 pub use engine_fallout::units::fallout_shared_region_system;
 pub use engine_fallout::units::fallout_shared_settings;
 pub use engine_fallout::units::fallout_shared_sky;
@@ -34,6 +33,7 @@ pub use engine_fallout::units::remotelog;
 pub use engine_fallout::units::xapilib;
 pub use engine_fallout_facegen::units::facegen;
 pub use engine_fallout_facegen::units::fallout_shared_facegen;
+pub use engine_fallout_pathfinding::units::fallout_shared_pathfinding;
 pub use engine_gamebryo::units::nianimation;
 pub use engine_gamebryo::units::nicollision;
 pub use engine_gamebryo::units::nimain;
@@ -751,7 +751,6 @@ pub mod unplaced {
     pub use engine_fallout::units::unplaced::run_006ecd60;
     pub use engine_fallout::units::unplaced::run_006ed510;
     pub use engine_fallout::units::unplaced::run_006f28a0;
-    pub use engine_fallout::units::unplaced::run_006f50b0;
     pub use engine_fallout::units::unplaced::run_006f7540;
     pub use engine_fallout::units::unplaced::run_006ff380;
     pub use engine_fallout::units::unplaced::run_006ff4c0;
@@ -1027,6 +1026,7 @@ pub mod unplaced {
     pub use engine_fallout::units::unplaced::static_init_irregular_i;
     pub use engine_fallout::units::unplaced::static_init_irregular_j;
     pub use engine_fallout_facegen::units::unplaced::run_00649ba0;
+    pub use engine_fallout_pathfinding::units::unplaced::run_006f50b0;
     pub use engine_fallout_script::units::unplaced::run_005c8a50;
 }
 
@@ -1038,6 +1038,7 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     engine_havok::units::funcs(out);
     engine_speedtree::units::funcs(out);
     engine_fallout_facegen::units::funcs(out);
+    engine_fallout_pathfinding::units::funcs(out);
     engine_fallout_script::units::funcs(out);
     engine_fallout::units::funcs(out);
 }
@@ -1050,6 +1051,7 @@ pub const PARTS: &[(&str, fn(&mut Vec<(u32, crate::AbiFn)>))] = &[
     ("engine-havok", engine_havok::units::funcs),
     ("engine-speedtree", engine_speedtree::units::funcs),
     ("engine-fallout-facegen", engine_fallout_facegen::units::funcs),
+    ("engine-fallout-pathfinding", engine_fallout_pathfinding::units::funcs),
     ("engine-fallout-script", engine_fallout_script::units::funcs),
     ("engine-fallout", engine_fallout::units::funcs),
 ];
@@ -1061,6 +1063,7 @@ engine_core::assemble!(
     engine_havok::units::funcs,
     engine_speedtree::units::funcs,
     engine_fallout_facegen::units::funcs,
+    engine_fallout_pathfinding::units::funcs,
     engine_fallout_script::units::funcs,
     engine_fallout::units::funcs,
 );

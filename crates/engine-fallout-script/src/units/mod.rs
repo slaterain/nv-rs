@@ -44,4 +44,5 @@ engine_core::assemble!(
     engine_speedtree::units::funcs,
     engine_fallout::units::funcs,
     engine_fallout_facegen::units::funcs,
+    engine_fallout_pathfinding::units::funcs,
 );

@@ -18,6 +18,7 @@ engine-speedtree = { path = "../engine-speedtree" }
 engine-fallout = { path = "../engine-fallout" }
 engine-fallout-facegen = { path = "../engine-fallout-facegen" }
 engine-fallout-script = { path = "../engine-fallout-script" }
+engine-fallout-pathfinding = { path = "../engine-fallout-pathfinding" }
 
 [dev-dependencies]
 # The opt-in real-script run (`tests/real_scda.rs`) reads the player's

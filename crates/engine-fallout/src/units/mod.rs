@@ -13,7 +13,6 @@ pub mod fallout_shared;
 pub mod fallout_shared_distant_terrain_system;
 pub mod fallout_shared_havok;
 pub mod fallout_shared_magic;
-pub mod fallout_shared_pathfinding;
 pub mod fallout_shared_region_system;
 pub mod fallout_shared_settings;
 pub mod fallout_shared_sky;
@@ -37,6 +36,7 @@ pub use engine_core::units::crt;
 pub use engine_core::units::platform;
 pub use engine_fallout_facegen::units::facegen;
 pub use engine_fallout_facegen::units::fallout_shared_facegen;
+pub use engine_fallout_pathfinding::units::fallout_shared_pathfinding;
 pub use engine_gamebryo::units::nianimation;
 pub use engine_gamebryo::units::nicollision;
 pub use engine_gamebryo::units::nimain;
@@ -61,7 +61,6 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     fallout_shared_distant_terrain_system::funcs(out);
     fallout_shared_havok::funcs(out);
     fallout_shared_magic::funcs(out);
-    fallout_shared_pathfinding::funcs(out);
     fallout_shared_region_system::funcs(out);
     fallout_shared_settings::funcs(out);
     fallout_shared_sky::funcs(out);
@@ -82,5 +81,6 @@ engine_core::assemble!(
     engine_havok::units::funcs,
     engine_speedtree::units::funcs,
     engine_fallout_facegen::units::funcs,
+    engine_fallout_pathfinding::units::funcs,
     engine_fallout_script::units::funcs,
 );
