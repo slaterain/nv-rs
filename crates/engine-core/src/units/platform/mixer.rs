@@ -30,6 +30,17 @@
 //!   started 2 frames into a device period lost their last 2 frames (they stop on the period
 //!   grid); voices started on a period boundary, as [`render`]'s callers start them, are heard
 //!   whole.
+//!
+//! - On a device layout other than two channels (`super::speakers`: a 5.1 or 7.1 endpoint once
+//!   the game's device has made its first 3D buffer) every voice goes through DirectSound's
+//!   matrix and its general kernel ([`render_voice_on`]), a gain change ramped over 4 ms at the
+//!   next period: what DirectSound hands the audio engine on 8 channels, sample for sample
+//!   (`DSMIX_SURROUND` as `FalloutNV.exe`, 2026-11-03, docs/SOUND.md). The two-channel path
+//!   above is unchanged (its own kernels' ramps are not provided: gains change at once).
+
+use super::speakers::{
+    default_matrix, Layout, Matrix, FRONT_CENTER, FRONT_LEFT, FRONT_RIGHT, MAX_CHANNELS,
+};
 
 /// The amplitude factor for an attenuation of `millibels` (hundredths of a decibel, 0 down to
 /// -10000): exactly 1 for 0, else `floor(65536 * 10^(d / 2000))` as `f32` times `f32(1 / 65535)`
@@ -85,9 +96,19 @@ pub struct Voice {
     /// The converter, made when the voice starts (`super::resampler`); `None` before and on the
     /// exact path.
     pub converter: Option<Box<Converted>>,
-    /// A 3D buffer's left and right multipliers from the 3D stage (`super::ds3d::hear`), in
-    /// place of the volume and pan.
-    pub spatial: Option<(f32, f32)>,
+    /// A 3D buffer's multiplier for each device channel from the 3D stage (`super::ds3d::hear`),
+    /// in place of the volume and pan.
+    pub spatial: Option<[f32; MAX_CHANNELS]>,
+    /// A stream of a platform layer's own DirectSound device (Bink's, DirectShow's: stereo 2D
+    /// buffers only), not the game's device: mixed in a stream of its own on an endpoint that is
+    /// not two channels (`super::dsound`).
+    pub stream: bool,
+    /// On a layout mixed by DirectSound's general kernel ([`render_voice_on`]): the matrix in
+    /// effect (`None` until the first period after the voice is connected, which takes its matrix
+    /// as it is), and the ramp of the period under way to it from the one before (its first
+    /// matrix and its step per frame).
+    pub matrix_now: Option<Matrix>,
+    pub ramp: Option<(Matrix, Matrix)>,
     /// The distortion effect's chain, for a buffer with it: `data` is then its processed copy.
     pub fx: Option<Box<super::dsfx::Chain>>,
     /// A stream whose samples another thread decodes ([`Feed`], `super::dshow`'s music): `data`
@@ -284,6 +305,9 @@ impl Voice {
             apl: false,
             converter: None,
             spatial: None,
+            stream: false,
+            matrix_now: None,
+            ramp: None,
             fx: None,
             feed: None,
             fed: 0..0,
@@ -305,6 +329,8 @@ impl Voice {
     pub fn start(&mut self, at: usize) {
         self.position = Some(at);
         self.converter = None;
+        self.matrix_now = None;
+        self.ramp = None;
     }
 
     /// A playing voice goes on from frame `at` (`SetCurrentPosition`, measured with
@@ -334,10 +360,28 @@ impl Voice {
         self.device == 0
     }
 
-    /// The left and right multipliers: the 3D stage's for a 3D buffer, else the volume and pan's.
+    /// The left and right multipliers on two channels: the 3D stage's for a 3D buffer, else the
+    /// volume and pan's.
     pub fn gains(&self) -> (f32, f32) {
         self.spatial
-            .unwrap_or_else(|| channel_gains(self.volume, self.pan))
+            .map_or_else(|| channel_gains(self.volume, self.pan), |g| (g[0], g[1]))
+    }
+
+    /// The voice's matrix on a device of `place` (`10057d90` for a 2D buffer, `10057be0` for a
+    /// 3D one: each device channel's multiplier, the same for both inputs of a stereo buffer,
+    /// which DirectSound 8 does not make 3D).
+    pub fn matrix(&self, place: &Place) -> Matrix {
+        match self.spatial {
+            Some(g) => g.map(|x| [x, x]),
+            None => {
+                let default = if self.channels == 1 {
+                    &place.mono
+                } else {
+                    &place.stereo
+                };
+                super::speakers::matrix_2d(default, place.layout, self.volume, self.pan)
+            }
+        }
     }
 }
 
@@ -381,6 +425,127 @@ pub fn render(voices: &mut [&mut Voice], out: &mut [f32]) {
 /// One voice of [`render`] added into `out` (each voice's sum is its own: rendering the voices
 /// one after another in the same order is the same mix).
 pub fn render_voice(v: &mut Voice, out: &mut [f32]) {
+    let (gl, gr) = v.gains();
+    render_frames(v, out, 2, |frame, l, r, _, _| {
+        frame[0] += if gl == 1.0 { l } else { l * gl };
+        frame[1] += if gr == 1.0 { r } else { r * gr };
+    });
+}
+
+/// A device's layout and the default matrices of its mono and stereo buffers
+/// (`super::speakers::default_matrix`, made once per layout).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Place {
+    pub layout: Layout,
+    pub mono: Matrix,
+    pub stereo: Matrix,
+}
+
+impl Default for Place {
+    /// Two channels.
+    fn default() -> Place {
+        Place::new(Layout::STEREO).expect("the two-channel matrices")
+    }
+}
+
+impl Place {
+    /// `None` when the DLL cannot make the default matrices for `layout`.
+    pub fn new(layout: Layout) -> Option<Place> {
+        Some(Place {
+            layout,
+            mono: default_matrix(1, FRONT_CENTER, layout).ok()?,
+            stereo: default_matrix(2, FRONT_LEFT | FRONT_RIGHT, layout).ok()?,
+        })
+    }
+}
+
+/// The frames over which DirectSound's general kernel moves a voice to a new matrix at a device
+/// rate of `rate` (`10062b60`: `trunc(f32(rate) * 4) / 1000`, 4 ms: 192 at 48000 Hz), at most a
+/// period's `period` frames.
+pub fn ramp_frames(rate: u32, period: usize) -> usize {
+    (((rate as f32 * 4.0) as i64 / 1000) as usize).min(period)
+}
+
+/// One voice added into `out` on a device of `place` (interleaved, the layout's channels a
+/// frame); answers how many frames of `out` it reached. On two channels [`render_voice`] (the
+/// measured stereo kernels, gains changed at once). On any other layout DirectSound's general
+/// kernel (`10065690`), measured on 8 channels (`DSMIX_SURROUND` as `FalloutNV.exe`,
+/// 2026-11-03): for each device channel `acc = in[0] * m[0]`, then `acc = acc + in[1] * m[1]`
+/// for a stereo buffer, in `f32`, with the voice's [`Voice::matrix`]; the first voice of the
+/// period writes `acc` and the others add it to what is there (`10062b60`; here: the frames
+/// before `covered`, reached by a voice before it, are added to), so a channel the first voice
+/// does not reach holds `in * 0`, -0 for a negative sample. A new matrix is reached at the start
+/// of the voice's next period, over its first [`ramp_frames`] frames: frame `n` of the period
+/// takes `f32(f32(f32(n) * step) + old)`, `step = f32(f32(new - old) / f32(N))`; the first period
+/// after the voice is connected (played, or the device's layout locked) takes its matrix as it
+/// is. A voice on the exact path (the tests', no periods) takes its matrix at once.
+pub fn render_voice_on(v: &mut Voice, out: &mut [f32], place: &Place, covered: usize) -> usize {
+    if place.layout == Layout::STEREO {
+        render_voice(v, out);
+        return out.len() / 2;
+    }
+    let target = v.matrix(place);
+    let width = usize::from(place.layout.channels);
+    let two = v.channels == 2;
+    let n = ramp_frames(v.device, (v.device / 100) as usize);
+    let (mut now, mut ramp) = (v.matrix_now, v.ramp);
+    let mut reached = 0;
+    render_frames(v, out, width, |frame, l, r, i, k| {
+        let along = match k {
+            Some(0) => {
+                // A new period: a matrix set since the last one is ramped to.
+                ramp = match now {
+                    Some(old) if old != target => {
+                        let mut step = [[0f32; 2]; MAX_CHANNELS];
+                        for (s, (o, t)) in step.iter_mut().zip(old.iter().zip(target.iter())) {
+                            *s = [(t[0] - o[0]) / n as f32, (t[1] - o[1]) / n as f32];
+                        }
+                        Some((old, step))
+                    }
+                    _ => None,
+                };
+                now = Some(target);
+                ramp.map(|r| (r, 0))
+            }
+            Some(k) if k < n => ramp.map(|r| (r, k)),
+            Some(_) => None,
+            None => {
+                now = Some(target);
+                None
+            }
+        };
+        // The period's matrix (a change made during it waits for the next one).
+        let m = *now.get_or_insert(target);
+        let write = i >= covered;
+        for (o, x) in frame.iter_mut().enumerate() {
+            let (g0, g1) = match along {
+                Some(((old, step), k)) => {
+                    let k = k as f32;
+                    (k * step[o][0] + old[o][0], k * step[o][1] + old[o][1])
+                }
+                None => (m[o][0], m[o][1]),
+            };
+            let mut acc = l * g0;
+            if two {
+                acc += r * g1;
+            }
+            *x = if write { acc } else { acc + *x };
+        }
+        reached = i + 1;
+    });
+    (v.matrix_now, v.ramp) = (now, ramp);
+    reached
+}
+
+/// Hands `put` each frame the voice gives (its left and right; a mono voice's sample twice) with
+/// the frame of `out` (`width` channels) it goes to, that frame's index in `out`, and its index in
+/// the voice's 10 ms period (`None` on the exact path, which has no periods).
+fn render_frames(
+    v: &mut Voice,
+    out: &mut [f32],
+    width: usize,
+    put: impl FnMut(&mut [f32], f32, f32, usize, Option<usize>),
+) {
     let Some(at) = v.position else {
         return;
     };
@@ -388,15 +553,15 @@ pub fn render_voice(v: &mut Voice, out: &mut [f32]) {
         // What this call reads: its frames at the voice's step, a converter's period ahead,
         // and the filter's span.
         let period = (v.device / 100) as usize;
-        let ahead = ((out.len() / 2 + 2 * period) as f64 * v.step()).ceil() as usize + 160;
+        let ahead = ((out.len() / width + 2 * period) as f64 * v.step()).ceil() as usize + 160;
         if let Some(fx) = v.fx.as_mut() {
             fx.keep_ahead(&mut v.data, at, ahead, v.looping);
         }
     }
     if v.exact() {
-        render_exact(v, out);
+        render_exact(v, out, width, put);
     } else if converted(v) {
-        render_converted(v, out);
+        render_converted(v, out, width, put);
     } else {
         v.position = None;
     }
@@ -462,8 +627,12 @@ impl Voice {
     }
 }
 
-fn render_converted(v: &mut Voice, out: &mut [f32]) {
-    let (gl, gr) = v.gains();
+fn render_converted(
+    v: &mut Voice,
+    out: &mut [f32],
+    width: usize,
+    mut put: impl FnMut(&mut [f32], f32, f32, usize, Option<usize>),
+) {
     let frames = v.frames();
     let period = (v.device / 100) as usize;
     let (channels, looping) = (usize::from(v.channels), v.looping);
@@ -471,7 +640,7 @@ fn render_converted(v: &mut Voice, out: &mut [f32]) {
         return;
     };
     let mut ended = false;
-    for frame in out.chunks_mut(2) {
+    for (i, frame) in out.chunks_mut(width).enumerate() {
         if c.held.is_empty() {
             if c.ending || frames == 0 || period == 0 {
                 ended = true;
@@ -503,10 +672,10 @@ fn render_converted(v: &mut Voice, out: &mut [f32]) {
                 g.clear();
             }
             c.converter.period(period, &mut input, &mut got);
-            for i in 0..period {
-                let l = got[0][i];
+            for j in 0..period {
+                let l = got[0][j];
                 c.held
-                    .push_back((l, if channels == 2 { got[1][i] } else { l }));
+                    .push_back((l, if channels == 2 { got[1][j] } else { l }));
             }
             c.got = got;
             let fed = c.base.wrapping_add(c.converter.fed());
@@ -520,9 +689,9 @@ fn render_converted(v: &mut Voice, out: &mut [f32]) {
                 next.min(frames as u64) as usize
             });
         }
+        let k = period - c.held.len();
         let (l, r) = c.held.pop_front().expect("a converted frame");
-        frame[0] += if gl == 1.0 { l } else { l * gl };
-        frame[1] += if gr == 1.0 { r } else { r * gr };
+        put(frame, l, r, i, Some(k));
     }
     if ended || (c.ending && c.held.is_empty()) {
         v.position = None;
@@ -531,11 +700,15 @@ fn render_converted(v: &mut Voice, out: &mut [f32]) {
     }
 }
 
-fn render_exact(v: &mut Voice, out: &mut [f32]) {
+fn render_exact(
+    v: &mut Voice,
+    out: &mut [f32],
+    width: usize,
+    mut put: impl FnMut(&mut [f32], f32, f32, usize, Option<usize>),
+) {
     let Some(mut at) = v.position else { return };
-    let (gl, gr) = v.gains();
     let frames = v.frames();
-    for frame in out.chunks_mut(2) {
+    for (i, frame) in out.chunks_mut(width).enumerate() {
         if at >= frames {
             if v.looping && frames > 0 {
                 at = 0;
@@ -553,8 +726,7 @@ fn render_exact(v: &mut Voice, out: &mut [f32]) {
                 sample(&v.data, v.bits, 2 * at + 1),
             )
         };
-        frame[0] += if gl == 1.0 { l } else { l * gl };
-        frame[1] += if gr == 1.0 { r } else { r * gr };
+        put(frame, l, r, i, None);
         at += 1;
     }
     v.position = match (at >= frames, v.looping) {
