@@ -23,6 +23,11 @@
 //!   `SetPosition` (`pos` microseconds, step, x y z).
 //!
 //! `DSMIX_REPORT=1 dsmix-measure <dir>` then reads them back (see [`report`]).
+//!
+//! DirectSound mixes two channels on an endpoint of more until the first 3D buffer is made, then
+//! the endpoint's layout for good, closing its stream and opening another: every render client's
+//! packets are kept (each packet's frame size in `<case>.times`). With `DSMIX_LOCKFIRST=1` a 3D
+//! buffer is made and released before the cases, so every case is on the endpoint's layout.
 use super::{guid, qi, qpc, signal_seeded, slot, Fn0, Fn1, Fn2, Fn3, Fn4, Fn7, FnF1, FnF3, Obj};
 use std::ffi::c_void;
 use std::io::Write;
@@ -131,11 +136,13 @@ mod hooks {
     static CLIENTS: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
     /// Render client -> frame size.
     static RENDERS: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
-    /// The packets released by the first render client seen, and their clocks and frames.
+    /// The packets released by DirectSound's render clients (one at a time: the stream is
+    /// closed and opened again when the device's layout is locked), their clocks, frames and
+    /// frame sizes.
     static TAKEN: Mutex<Vec<u8>> = Mutex::new(Vec::new());
-    static TIMES: Mutex<Vec<(i64, u32)>> = Mutex::new(Vec::new());
-    /// The render client whose packets are kept; packets of any other are counted.
-    static FIRST: AtomicUsize = AtomicUsize::new(0);
+    static TIMES: Mutex<Vec<(i64, u32, usize)>> = Mutex::new(Vec::new());
+    /// The render client that released last; a change is logged.
+    static CURRENT: AtomicUsize = AtomicUsize::new(0);
     pub static OTHERS: AtomicUsize = AtomicUsize::new(0);
     /// The frame size used when a render client's format is not known.
     static FALLBACK: AtomicUsize = AtomicUsize::new(0);
@@ -240,19 +247,19 @@ mod hooks {
     }
     unsafe extern "system" fn release(this: *mut Obj, frames: u32, flags: u32) -> u32 {
         if let Some(at) = get(&LAST, this as usize) {
-            let first = FIRST.compare_exchange(0, this as usize, Ordering::SeqCst, Ordering::SeqCst).unwrap_or_else(|x| x);
-            if first == 0 || first == this as usize {
-                let frame = get(&RENDERS, this as usize).filter(|&f| f != 0).unwrap_or_else(|| FALLBACK.load(Ordering::SeqCst));
-                TIMES.lock().unwrap().push((qpc(), frames));
-                let n = frames as usize * frame;
-                let mut t = TAKEN.lock().unwrap();
-                if flags & 2 != 0 {
-                    t.extend(std::iter::repeat(0u8).take(n));
-                } else {
-                    t.extend_from_slice(std::slice::from_raw_parts(at as *const u8, n));
-                }
-            } else {
+            let frame = get(&RENDERS, this as usize).filter(|&f| f != 0).unwrap_or_else(|| FALLBACK.load(Ordering::SeqCst));
+            let before = CURRENT.swap(this as usize, Ordering::SeqCst);
+            if before != this as usize {
                 OTHERS.fetch_add(1, Ordering::SeqCst);
+                log(format!("render client {:x} releases its first packet\tframe bytes {frame}\tqpc {}", this as usize, qpc()));
+            }
+            TIMES.lock().unwrap().push((qpc(), frames, frame));
+            let n = frames as usize * frame;
+            let mut t = TAKEN.lock().unwrap();
+            if flags & 2 != 0 {
+                t.extend(std::iter::repeat(0u8).take(n));
+            } else {
+                t.extend_from_slice(std::slice::from_raw_parts(at as *const u8, n));
             }
         }
         let f: Release = std::mem::transmute(orig(RELEASE));
@@ -308,13 +315,13 @@ mod hooks {
     pub fn take(out: &mut Vec<u8>) {
         out.append(&mut TAKEN.lock().unwrap());
     }
-    pub fn take_times(out: &mut Vec<(i64, u32)>) {
+    pub fn take_times(out: &mut Vec<(i64, u32, usize)>) {
         out.append(&mut TIMES.lock().unwrap());
     }
-    /// The frame size of the kept render client's packets.
+    /// The frame size of the packets of the render client that released last.
     pub fn frame() -> usize {
-        let first = FIRST.load(Ordering::SeqCst);
-        get(&RENDERS, first).filter(|&f| f != 0).unwrap_or_else(|| FALLBACK.load(Ordering::SeqCst))
+        let current = CURRENT.load(Ordering::SeqCst);
+        get(&RENDERS, current).filter(|&f| f != 0).unwrap_or_else(|| FALLBACK.load(Ordering::SeqCst))
     }
 }
 
@@ -366,6 +373,15 @@ struct Case {
     /// A second buffer played with this one (a 2D mono buffer of seed 7 at pan 0, started
     /// first): the sum's order on this layout.
     with_2d: bool,
+    /// Two more 2D mono 48 kHz buffers (seeds 7 and 9, pans -2000 and 3000), made after this
+    /// one (the third made while two exist) and started before it.
+    three: bool,
+    /// A volume or pan set while it plays: after this many 10 ms steps, this value (the ramp).
+    later_volume: Option<(u32, i32)>,
+    later_pan: Option<(u32, i32)>,
+    /// After this many steps a 3D mono buffer (seed 11, 3 units to the right) is made and
+    /// started while this one plays: on a device not locked yet, the moment of the lock.
+    lock_at: Option<u32>,
 }
 
 /// The game's flag sets (`00aeb270`): 2D `0x2e0` (`CTRLFREQUENCY | CTRLPAN | CTRLVOLUME |
@@ -411,6 +427,10 @@ fn cases() -> Vec<Case> {
         looping: false,
         seed: 0x1234_5678,
         with_2d: false,
+        three: false,
+        later_volume: None,
+        later_pan: None,
+        lock_at: None,
     };
     let mut v: Vec<Case> = Vec::new();
     let mut add = |name: String, f: &dyn Fn(&mut Case)| {
@@ -469,6 +489,29 @@ fn cases() -> Vec<Case> {
     add("d2_fx_game_mono48_pan_p3000".into(), &|c| {
         c.pan = 3000;
         c.distortion = Some(GAME_FX)
+    });
+    // A volume and a pan changed while playing (DirectSound's 4 ms ramp to the new gains),
+    // mono and stereo, at 48 kHz (one second, looping).
+    for (n, ch, vol, pan) in [
+        ("r2_mono_vol_later_m600", 1u16, Some(-600), None),
+        ("r2_mono_pan_later_m3000", 1, None, Some(-3000)),
+        ("r2_stereo_vol_later_m600", 2, Some(-600), None),
+        ("r2_stereo_pan_later_p2000", 2, None, Some(2000)),
+    ] {
+        add(n.into(), &move |c| {
+            c.channels = ch;
+            c.frames = 48000;
+            c.looping = true;
+            c.later_volume = vol.map(|v| (12, v));
+            c.later_pan = pan.map(|p| (12, p));
+        });
+    }
+    // A 3D buffer made while a 2D one plays: on a device whose layout is not locked yet (the
+    // first 3D buffer of the run), the lock.
+    add("k_lock_2d_then_3d".into(), &|c| {
+        c.frames = 48000;
+        c.looping = true;
+        c.lock_at = Some(12);
     });
     // 3D, the game's distances (minimum and maximum 1e9, rolloff 1): azimuth every 5 degrees at
     // 3 units (outside the near zone) and every 45 at 1 unit (inside it).
@@ -636,6 +679,17 @@ fn cases() -> Vec<Case> {
         c.later = Some((12, 48050));
         c.three_d = Some(game3d(at(60.0, 3.0, 0.0)));
     });
+    // Three 2D buffers at 48 kHz, the third made while two exist (the DLL's buffer count rule
+    // for the second converter), then a 3D one at 48 kHz after them.
+    add("w3_three_2d".into(), &|c| {
+        c.pan = 1000;
+        c.three = true;
+    });
+    add("w3_after_g3_az60_r3".into(), &|c| {
+        c.flags = FLAGS_3D;
+        c.three_d = Some(game3d(at(60.0, 3.0, 0.0)));
+    });
+    add("w3_after_mono48".into(), &|_| {});
     // The rest turn on DirectSound's second converter for the device, for good: last.
     add("f_big_48000_to_24000".into(), &|c| c.frequency = 24000);
     add("f_big_later_22050_30000".into(), &|c| {
@@ -715,7 +769,19 @@ fn decompose(g: f32, base: i32) -> String {
 fn kind(c: &Case) -> &'static str {
     if c.moving.is_some() {
         "moving"
-    } else if c.rate == 48000 && c.frequency == 0 && c.later.is_none() && c.distortion.is_none() && !c.with_2d && !c.name.starts_with("a_") && !c.name.starts_with("f3_doppler") {
+    } else if c.rate == 48000
+        && c.frequency == 0
+        && c.later.is_none()
+        && c.later_volume.is_none()
+        && c.later_pan.is_none()
+        && c.lock_at.is_none()
+        && c.distortion.is_none()
+        && !c.with_2d
+        && !c.three
+        && !c.name.starts_with("a_")
+        && !c.name.starts_with("w3_after")
+        && !c.name.starts_with("f3_doppler")
+    {
         "exact"
     } else {
         "shape"
@@ -859,6 +925,25 @@ pub fn run(dir: &std::path::Path) {
         writeln!(dev_o, "listener\t{r:x}\t{}", hex(&all)).unwrap();
         // As `00aea230`: the Doppler factor 1.
         slot::<FnF1>(listener, 0x30)(listener, 1.0, 0);
+        // `DSMIX_LOCKFIRST`: a 3D buffer made and released at once, so the device's layout is
+        // locked to the mix format before every case (DirectSound locks it at the first 3D
+        // buffer and keeps it).
+        if std::env::var_os("DSMIX_LOCKFIRST").is_some() {
+            let mut wf = [0u8; 18];
+            wf[0..2].copy_from_slice(&1u16.to_le_bytes());
+            wf[2..4].copy_from_slice(&1u16.to_le_bytes());
+            wf[4..8].copy_from_slice(&48000u32.to_le_bytes());
+            wf[8..12].copy_from_slice(&96000u32.to_le_bytes());
+            wf[12..14].copy_from_slice(&2u16.to_le_bytes());
+            wf[14..16].copy_from_slice(&16u16.to_le_bytes());
+            let d: [u32; 9] = [0x24, FLAGS_3D, 96000, 0, wf.as_ptr() as u32, 0, 0, 0, 0];
+            let mut b: *mut Obj = std::ptr::null_mut();
+            let r = slot::<Fn3>(ds, 0xc)(ds, d.as_ptr() as usize, &mut b as *mut _ as usize, 0);
+            writeln!(dev_o, "lock first\tCreateSoundBuffer 3D {r:x}").unwrap();
+            if !b.is_null() {
+                slot::<Fn0>(b, 8)(b);
+            }
+        }
         let mut freq = 0i64;
         QueryPerformanceFrequency(&mut freq);
         let us = |c: i64, origin: i64| (c - origin) * 1_000_000 / freq;
@@ -874,12 +959,16 @@ pub fn run(dir: &std::path::Path) {
             let (results, created, bcaps, out, times, moves) = play(ds, listener, &c, &us);
             let frame = hooks::frame();
             std::fs::write(dir.join(format!("{}.f32", c.name)), &out).unwrap();
-            let mut t: Vec<String> = times.iter().map(|&(a, f)| format!("{a} {f}")).collect();
+            let sizes: std::collections::BTreeSet<usize> = times.iter().map(|t| t.2).collect();
+            if sizes.len() > 1 {
+                writeln!(dev_o, "layout changed in case {}\tframe bytes {sizes:?}", c.name).unwrap();
+            }
+            let mut t: Vec<String> = times.iter().map(|&(a, f, b)| format!("{a} {f} {b}")).collect();
             t.extend(moves);
             std::fs::write(dir.join(format!("{}.times", c.name)), t.join("\n")).unwrap();
             writeln!(
                 tsv,
-                "{}\t{} {} {} flags {:x} hrtf {} vol {} pan {} freq {} 3d {:?} fx {:?} orientation {:?} later {:?} moving {:?} frames {} looping {} with_2d {}\tcreate {created:x} caps {bcaps:x?}\tresults {results:x?}\tframes {} of {} channels",
+                "{}\t{} {} {} flags {:x} hrtf {} vol {} pan {} freq {} 3d {:?} fx {:?} orientation {:?} later {:?} moving {:?} frames {} looping {} with_2d {} three {} later_volume {:?} later_pan {:?} lock_at {:?}\tcreate {created:x} caps {bcaps:x?}\tresults {results:x?}\tframes {} of {} channels",
                 c.name,
                 c.channels,
                 c.rate,
@@ -897,6 +986,10 @@ pub fn run(dir: &std::path::Path) {
                 c.frames,
                 c.looping,
                 c.with_2d,
+                c.three,
+                c.later_volume,
+                c.later_pan,
+                c.lock_at,
                 out.len() / frame.max(1),
                 frame / 4
             )
@@ -919,7 +1012,7 @@ pub fn run(dir: &std::path::Path) {
     }
 }
 
-type Played = (Vec<u32>, u32, [u32; 5], Vec<u8>, Vec<(i64, u32)>, Vec<String>);
+type Played = (Vec<u32>, u32, [u32; 5], Vec<u8>, Vec<(i64, u32, usize)>, Vec<String>);
 
 /// Makes, fills, sets and plays one case; answers the calls' results, `CreateSoundBuffer`'s
 /// answer, the buffer's caps, the packets, their times (from `Play`) and the moves.
@@ -998,6 +1091,18 @@ unsafe fn play(ds: *mut Obj, listener: *mut Obj, c: &Case, us: &dyn Fn(i64, i64)
         slot::<Fn0>(b8, 8)(b8);
     }
     let other = if c.with_2d { make(1, 48000, 16, FLAGS_2D, false, 12000, 7).1 } else { std::ptr::null_mut() };
+    // Two more 2D buffers made after this one (the third made while two exist).
+    let mut more: Vec<*mut Obj> = Vec::new();
+    if c.three {
+        for (seed, pan) in [(7u32, -2000i32), (9, 3000)] {
+            let (r, o) = make(1, 48000, 16, FLAGS_2D, false, 12000, seed);
+            results.push(r);
+            if !o.is_null() {
+                results.push(slot::<Fn1>(o, 0x40)(o, pan as usize));
+                more.push(o);
+            }
+        }
+    }
     let mut discard = Vec::new();
     hooks::take(&mut discard);
     let mut discard_t = Vec::new();
@@ -1006,8 +1111,12 @@ unsafe fn play(ds: *mut Obj, listener: *mut Obj, c: &Case, us: &dyn Fn(i64, i64)
     if !other.is_null() {
         results.push(slot::<Fn3>(other, 0x30)(other, 0, 0, 0));
     }
+    for &o in &more {
+        results.push(slot::<Fn3>(o, 0x30)(o, 0, 0, 0));
+    }
     results.push(slot::<Fn3>(b, 0x30)(b, 0, 0, c.looping as usize));
     let mut moves = Vec::new();
+    let (mut lock_b, mut lock_3d) = (std::ptr::null_mut::<Obj>(), std::ptr::null_mut::<Obj>());
     for step in 0..c.steps {
         if let Some((at_step, f)) = c.later {
             if step == at_step {
@@ -1015,6 +1124,35 @@ unsafe fn play(ds: *mut Obj, listener: *mut Obj, c: &Case, us: &dyn Fn(i64, i64)
                 results.push(slot::<Fn1>(b, 0x44)(b, f as usize));
                 moves.push(format!("freq {t} {step} {f}"));
             }
+        }
+        if let Some((at_step, v)) = c.later_volume {
+            if step == at_step {
+                let t = us(qpc(), origin);
+                results.push(slot::<Fn1>(b, 0x3c)(b, v as usize));
+                moves.push(format!("vol {t} {} {step} {v}", us(qpc(), origin)));
+            }
+        }
+        if let Some((at_step, p)) = c.later_pan {
+            if step == at_step {
+                let t = us(qpc(), origin);
+                results.push(slot::<Fn1>(b, 0x40)(b, p as usize));
+                moves.push(format!("pan {t} {} {step} {p}", us(qpc(), origin)));
+            }
+        }
+        if c.lock_at == Some(step) {
+            let t = us(qpc(), origin);
+            let (r, o) = make(1, 48000, 16, FLAGS_3D, false, 48000, 11);
+            results.push(r);
+            let t1 = us(qpc(), origin);
+            if !o.is_null() {
+                lock_b = o;
+                lock_3d = qi(o, &guid("279afa86-4981-11ce-a521-0020af0be560"));
+                results.push(slot::<FnF1>(lock_3d, 0x44)(lock_3d, 1.0e9, 0));
+                results.push(slot::<FnF1>(lock_3d, 0x40)(lock_3d, 1.0e9, 0));
+                results.push(slot::<FnF3>(lock_3d, 0x4c)(lock_3d, 3.0, 0.0, 0.0, 0));
+                results.push(slot::<Fn3>(o, 0x30)(o, 0, 0, 1));
+            }
+            moves.push(format!("lock {t} {t1} {step} {} {r:x}", us(qpc(), origin)));
         }
         if let Some(m) = c.moving {
             if step > 0 {
@@ -1032,12 +1170,17 @@ unsafe fn play(ds: *mut Obj, listener: *mut Obj, c: &Case, us: &dyn Fn(i64, i64)
     if !other.is_null() {
         slot::<Fn0>(other, 0x48)(other);
     }
+    for &o in more.iter().chain([lock_b].iter()) {
+        if !o.is_null() {
+            slot::<Fn0>(o, 0x48)(o);
+        }
+    }
     let mut out = Vec::new();
     hooks::take(&mut out);
     let mut times = Vec::new();
     hooks::take_times(&mut times);
-    let times = times.iter().map(|&(t, f)| (us(t, origin), f)).collect();
-    for o in [fx, three_d, other, b] {
+    let times = times.iter().map(|&(t, f, size)| (us(t, origin), f, size)).collect();
+    for o in [fx, three_d, other, lock_3d, lock_b, b].into_iter().chain(more) {
         if !o.is_null() {
             slot::<Fn0>(o, 8)(o);
         }
@@ -1137,13 +1280,107 @@ fn exact_gain(y: &[f32], x: &[f32]) -> (f32, usize) {
     result
 }
 
+/// A case's packets split where the frame size changes (DirectSound closes its stream and opens
+/// another when the device's layout is locked): each run's channels, its first packet's time
+/// (microseconds from `Play`) and its samples. `<case>.times` lines of three numbers are the
+/// packets (time, frames, frame bytes); the other lines are the moves.
+fn segments(dir: &std::path::Path, name: &str, all: &[f32], dch: usize) -> Vec<(usize, i64, Vec<f32>)> {
+    let times = std::fs::read_to_string(dir.join(format!("{name}.times"))).unwrap_or_default();
+    let mut segs: Vec<(usize, i64, Vec<f32>)> = Vec::new();
+    let mut at = 0usize;
+    for l in times.lines() {
+        let f: Vec<&str> = l.split(' ').collect();
+        if f.len() != 3 {
+            continue;
+        }
+        let (Ok(t), Ok(frames), Ok(size)) = (f[0].parse::<i64>(), f[1].parse::<usize>(), f[2].parse::<usize>()) else {
+            continue;
+        };
+        let ch = size / 4;
+        let n = frames * ch;
+        if ch == 0 || at + n > all.len() {
+            break;
+        }
+        match segs.last_mut() {
+            Some(s) if s.0 == ch => s.2.extend_from_slice(&all[at..at + n]),
+            _ => segs.push((ch, t, all[at..at + n].to_vec())),
+        }
+        at += n;
+    }
+    if segs.is_empty() {
+        segs.push((dch, 0, all.to_vec()));
+    }
+    segs
+}
+
+/// Where in the mono source `x` (`len` frames) the samples `y` from `w0` come from: the offset
+/// with the best normalised correlation over 256 frames.
+fn locate(y: &[f32], w0: usize, x: &[f32]) -> (usize, f64) {
+    let win = 256.min(y.len() - w0);
+    let ny: f64 = y[w0..w0 + win].iter().map(|v| f64::from(*v).powi(2)).sum::<f64>().sqrt();
+    let mut best = (0usize, 0f64);
+    for off in 0..x.len() {
+        let (mut c, mut nx) = (0f64, 0f64);
+        for i in 0..win {
+            let xv = f64::from(x[(off + i) % x.len()]);
+            c += f64::from(y[w0 + i]) * xv;
+            nx += xv * xv;
+        }
+        let r = if nx == 0.0 || ny == 0.0 { 0.0 } else { c / (nx.sqrt() * ny) };
+        if r.abs() > best.1.abs() {
+            best = (off, r);
+        }
+    }
+    best
+}
+
+/// One run of packets of a case whose layout changed: per channel, its level, and for a mono
+/// source which of the case's voices it carries (the source of the case's seed, or seed 11, 7
+/// or 9: the lock's 3D buffer and the extra 2D buffers), where in it, and the exact gain.
+fn segment_report(o: &mut impl Write, name: &str, i: usize, seg: &(usize, i64, Vec<f32>), sch: usize, bits: u16, frames: usize, seed: u32, src_rms: f64) {
+    let (dch, t, all) = seg;
+    let n = all.len() / dch;
+    let chan: Vec<Vec<f32>> = (0..*dch).map(|k| (0..n).map(|f| all[f * dch + k]).collect()).collect();
+    let mut parts = Vec::new();
+    for (k, y) in chan.iter().enumerate() {
+        let Some(w0) = y.iter().position(|v| *v != 0.0) else {
+            let neg = y.iter().filter(|v| v.is_sign_negative()).count();
+            parts.push(format!("ch{k} 0 (-0 x{neg})"));
+            continue;
+        };
+        let rms = (y.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / n as f64).sqrt();
+        let mut s = format!("ch{k} {}dB from {w0}", db(rms / src_rms));
+        if sch == 1 && n - w0 >= 64 {
+            let mut best: Option<(u32, usize, f64, Vec<f32>)> = None;
+            for (sd, len) in [(seed, frames), (11, 48000), (7, 12000), (9, 12000)] {
+                let x = source(1, if sd == seed { bits } else { 16 }, len, sd).remove(0);
+                let (off, r) = locate(y, w0, &x);
+                if best.as_ref().map_or(true, |b| r.abs() > b.2.abs()) {
+                    best = Some((sd, off, r, x));
+                }
+            }
+            let (sd, off, r, x) = best.unwrap();
+            // While the source has samples left (no wrap), and the channel goes on.
+            let take = (x.len() - off).min(n - w0);
+            let ys = &y[w0..w0 + take];
+            let xs = &x[off..off + take];
+            let (coef, res) = fit(ys, &[xs]);
+            let (g, bad) = exact_gain(ys, xs);
+            s += &format!(" seed {sd:x} at {off} corr {r:.4} gain {:.7}({}dB) res {res:.2e} over {take} f32 {:08x} misses {bad}", coef[0], db(coef[0]), g.to_bits());
+        }
+        parts.push(s);
+    }
+    writeln!(o, "{name}#{i}\tsegment\t{dch} channels from {t} us, {n} frames\t{}", parts.join("\t")).unwrap();
+}
+
 /// `DSMIX_REPORT=1 dsmix-measure <dir>`: per case, per device channel, what DirectSound sent.
 /// `exact` cases: aligned on the source (the first frame any channel is not 0, then the best
 /// offset within 64 frames), each channel's least-squares gain on the source channels (dB),
 /// the residual (0 for a plain gain), and for a mono source the exact `f32` gain and the
 /// samples it misses. `shape` cases: each channel's level (dB against the source's) and which
-/// channel it is an exact multiple of. `moving` cases: the gains every 10 ms period. Written to
-/// `<dir>/report.txt`.
+/// channel it is an exact multiple of. `moving` cases: the gains every 10 ms period. A case
+/// whose packets change layout is reported per run of packets ([`segment_report`]). Channels
+/// that carry nothing are `0`, with the count of negative zeros. Written to `<dir>/report.txt`.
 pub fn report(dir: &std::path::Path) {
     let list = std::fs::read_to_string(dir.join("cases.txt")).expect("cases.txt");
     let mut o = std::fs::File::create(dir.join("report.txt")).unwrap();
@@ -1162,7 +1399,18 @@ pub fn report(dir: &std::path::Path) {
         if dch == 0 {
             continue;
         }
-        let all = read_f32(&dir.join(format!("{name}.f32")));
+        let raw = read_f32(&dir.join(format!("{name}.f32")));
+        let segs = segments(dir, name, &raw, dch);
+        if segs.len() > 1 {
+            let src = source(sch, bits, frames, seed);
+            let src_rms = (src[0].iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / frames as f64).sqrt();
+            for (i, seg) in segs.iter().enumerate() {
+                segment_report(&mut o, name, i, seg, sch, bits, frames, seed, src_rms);
+            }
+            continue;
+        }
+        let (dch, _, all) = &segs[0];
+        let dch = *dch;
         let n = all.len() / dch;
         let chan: Vec<Vec<f32>> = (0..dch).map(|k| (0..n).map(|i| all[i * dch + k]).collect()).collect();
         let first = (0..n).find(|&i| (0..dch).any(|k| chan[k][i] != 0.0));
@@ -1202,7 +1450,7 @@ pub fn report(dir: &std::path::Path) {
                 for k in 0..dch {
                     let y = &chan[k][off..off + take];
                     if y.iter().all(|v| *v == 0.0) {
-                        parts.push(format!("ch{k} 0"));
+                        parts.push(format!("ch{k} 0 (-0 x{})", chan[k].iter().filter(|v| v.is_sign_negative()).count()));
                         continue;
                     }
                     let (coef, res) = fit(y, &xs);
@@ -1252,7 +1500,7 @@ pub fn report(dir: &std::path::Path) {
                     let y = &chan[k];
                     let rms = (y.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / frames as f64).sqrt();
                     if rms == 0.0 {
-                        parts.push(format!("ch{k} 0"));
+                        parts.push(format!("ch{k} 0 (-0 x{})", y.iter().filter(|v| v.is_sign_negative()).count()));
                         continue;
                     }
                     // An exact multiple of an earlier channel?
