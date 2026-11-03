@@ -1051,8 +1051,11 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     engine_fallout_unplaced_b::units::funcs(out);
 }
 
+/// One engine crate's `units::funcs`.
+pub type Funcs = fn(&mut Vec<(u32, crate::AbiFn)>);
+
 /// Each engine crate's registered functions, by crate (no address may be in two).
-pub const PARTS: &[(&str, fn(&mut Vec<(u32, crate::AbiFn)>))] = &[
+pub const PARTS: &[(&str, Funcs)] = &[
     ("engine-core", engine_core::units::funcs),
     ("engine-gamebryo", engine_gamebryo::units::funcs),
     ("engine-bs", engine_bs::units::funcs),

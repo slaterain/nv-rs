@@ -209,8 +209,8 @@ fn below(all: &[Crate], krate: &str) -> Vec<String> {
     let by: BTreeMap<&str, &Crate> = all.iter().map(|c| (c.dir.as_str(), c)).collect();
     let mut seen = BTreeSet::new();
     let mut order = Vec::new();
-    fn visit<'a>(
-        by: &BTreeMap<&str, &'a Crate>,
+    fn visit(
+        by: &BTreeMap<&str, &Crate>,
         c: &str,
         seen: &mut BTreeSet<String>,
         order: &mut Vec<String>,
@@ -461,12 +461,14 @@ pub fn regenerate(root: &Path) -> Result<usize, String> {
         let _ = writeln!(s, "}}");
         let _ = writeln!(
             s,
-            "\n/// Each engine crate's registered functions, by crate (no address may be in two)."
+            "\n/// One engine crate's `units::funcs`.\n\
+             pub type Funcs = fn(&mut Vec<(u32, crate::AbiFn)>);"
         );
         let _ = writeln!(
             s,
-            "pub const PARTS: &[(&str, fn(&mut Vec<(u32, crate::AbiFn)>))] = &["
+            "\n/// Each engine crate's registered functions, by crate (no address may be in two)."
         );
+        let _ = writeln!(s, "pub const PARTS: &[(&str, Funcs)] = &[");
         for d in &lower {
             // As rustfmt writes it: a tuple whose items are wider than 60 columns
             // (`fn_call_width`) goes one item per line.
