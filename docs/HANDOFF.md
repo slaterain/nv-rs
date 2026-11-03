@@ -1,4 +1,4 @@
-# Handoff: engine port push (updated 2026-11-02)
+# Handoff: engine port push (updated 2026-11-03)
 
 For the next Claude session leading the nv-rs engine port. Read AGENTS.md,
 docs/MILESTONES.md, docs/ENGINE_PORT_PLAN.md, docs/FRAME_SKELETON.md and
@@ -7,7 +7,15 @@ machinery runs.
 
 ## Resume here
 
-### Claude lead, 2026-11-02 (read this first, then 2026-11-01 below)
+### Claude lead, 2026-11-03 (the game's units split by area; read this first, then 2026-11-02 below)
+
+- **`engine-fallout` is now twelve crates** (ADR-0010, docs/ENGINE_CRATE.md, "The fallout crates"): `engine-fallout-facegen`, `-script`, `-pathfinding`, `-env`, `-interface`, `-cell`, `-forms`, `-magic`, `-ai`, `-misc`, `-unplaced-a`, `-unplaced-b`. Every file moved by `git mv` (exact renames); paths inside the code are unchanged (`crate::units::fallout_shared::<unit>`, `engine::units::...`), the generated `mod.rs` files re-export a split folder's units from the crates below. Where a new unit file goes: `scripts/ledger/fallout_crates.tsv` (`ledger scaffold` uses it, `ledger units` refuses a misplaced file).
+- **Measured (one crate at a time, as the queue runs it):** a one-file fix rebuilds the play build in 18-52 s (median 30 s, before 134-469 s, median 419 s) with no rustc above 2.8 GB (before 8.6 GB); `cargo test -p engine-fallout-ai --lib <unit>` after a fix takes 132 s at 5.1 GB (before 525 s at 23.4 GB for `-p engine-fallout`). Same 30,095 test names, same 48,527 registered functions at start-up, the Doc's house save run unchanged.
+- **Agents test their unit in its own crate now** (`-p engine-fallout-<area> --lib <unit>`), no stand-in crates. Phase A: each fallout crate's tests still link every other fallout crate (dev-dependencies), so they see every function as before; Phase B (drop what a crate's tests do not need) is open.
+- **Open branches from before the split:** `git rebase origin/main` carries edits of existing files; a branch that adds unit files replays its patches with the rename map (ENGINE_CRATE.md, "Rebasing a branch from before the split").
+- **Private tooling to update** (not in the repository): `phase0/bin/heavy2.sh` still classes every `*engine-fallout*` command as big (one at a time, not incremental): `-p engine-fallout-<one>` could be a small job now; `check-lead.sh`, `clippy-lead.sh`, `fix-and-gate.sh` name `-p engine-fallout`.
+
+### Claude lead, 2026-11-02 (read this after 2026-11-03 above, then 2026-11-01 below)
 
 - **This PR: #269 fixed.** Six Havok translations kept the other NaN where the exe's SSE keeps the destination's (the #234 class): `getExtents` (`00d10e10`, also its two stores to `high` before `low` is read back), the plane shape's two constructors (`00d55240`, `00d551d0`), `plane_distance` (shared by castRay, castSphere and collideSpheres), `hkCharControllerShape::getAabb` (`00cd7d20`), and collideSpheres' x87 `FSUB` (`00d551b8`, now through `x87_sub`). Plain `+`/`*` on `f32` lets LLVM pick either NaN; these now go through `crate::sse`. The SSE unit tests also pass on the old code in a debug build, so the evidence is the oracle check on this tree (rebased on 273a558b, facts `purity-main.tsv`, the gate's standing exclusions but not #269's): 5,634 functions, 241,552 vectors, and `00d10e10`, `00d55240`, `00d551d0` and `00cd7d20` match on every vector. Every other use of `hkp3axissweep.rs`'s lane helpers was checked against the disassembly: the destination comes first, or the sum goes on to a `MINPS` against the limit, as in `addObjectBatch`. `addObjectBatch` (`00d1866b`) adds in the other order but cannot show it: the next `MINPS` against the limit answers 65532 for any NaN.
 - **Also in this PR: `blend_into_node` (`00c81e30` blend mode 0) gave its rotation buffer 0x10 bytes; `0056dff0` writes a whole hkRotation (0x30). The frame is now 0xd0.** In play the guest stack's 0x40 frame gap absorbed the overrun; under `NV_BLOCK_CHECK` frames are guarded heap blocks, so it wrote the next block's first 16 bytes. That was the outdoor stop at frame 4987 (a garbage vtable call on an AI thread) of the guest-memory branch (the flat guest memory and the good-fit allocator of 2026-11-01 below, not merged yet), only with the check on. A build of that branch with the same fix (`e65ad89b` on `claude/guest-memory-fix1`) ran all eight battery routes under the check with no stop and no report, and a trace of it showed `0056dff0` entered 4,938 times; on this branch the evidence is the unit test under the block check, which fails on the old frame. The blended position (`00c82089`-`00c820a1`: `SUBPS` ones, blend; `MULPS` by the Havok position; `MULPS` the node's position by the blend; `ADDPS`) was host `f32` arithmetic too, the #234 class: now `crate::sse` in the exe's order (a review finding; the oracle does not run this function). Its test fails on the old code in a release build, where lane 0 kept the node's NaN `0x7fc00001` and the exe keeps the blend's `0x7fc00002`; in a debug build the old code passes it. Open: the check gives heap frames a 16-byte guard where play leaves 0x40, so another local 0x11-0x40 bytes too small would show the same way; sweep the `with_stack` frames against the exe's local sizes.
@@ -349,7 +357,8 @@ the batches collected after #221 (see below).
 - **The engine is split** into `engine-core`, `engine-gamebryo`, `engine-bs`,
   `engine-havok`, `engine-speedtree`, `engine-fallout` behind the `engine`
   facade (docs/ENGINE_CRATE.md, "The engine crates"). Same registered addresses
-  and tests; a Havok test build takes 3 minutes instead of 12.
+  and tests; a Havok test build takes 3 minutes instead of 12. On 2026-11-03
+  `engine-fallout` was split again, into twelve crates by area (ADR-0010).
 - **Threads:** the approved thread host runs each game thread's `ThreadProc`
   (BSThread start function 00aa64d0) as a coroutine on the main thread (an OS
   thread used strictly as a coroutine is allowed), with per-thread TLS and x87

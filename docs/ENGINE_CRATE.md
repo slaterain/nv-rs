@@ -104,10 +104,19 @@ double a callee in the game's own units (then `engine-fallout`: `__allshl` in tw
 ### The fallout crates
 
 The game's own units (2.1 million lines, 1,749 files) were one crate,
-`engine-fallout`, until 2026-11-03: any fix in them recompiled all of it
-(about 3 minutes and 10 GB for a play build, 17-25 minutes and 15 GB for its
-unit tests). They are now twelve crates by area, so a fix recompiles its own
-area and re-checks the few crates above it:
+`engine-fallout`, until 2026-11-03: any fix in them recompiled all of it. They
+are now twelve crates by area, so a fix recompiles its own area and re-checks
+the few crates above it. Measured on the laptop with the build queue's settings
+(one crate at a time), one statement added to a function of five typical units,
+2026-11-03:
+
+| | Before (one crate) | After (twelve) |
+| --- | --- | --- |
+| Play build after the fix (`--profile play`, incremental) | 134-469 s, median 419 s; one rustc at 8.6 GB | 18-52 s, median 30 s; no rustc above 2.8 GB |
+| Unit tests of the fixed unit (`cargo test -p <crate> --lib <unit>`, not incremental), `fallout_ai/highprocess` | 525 s, one rustc at 23.4 GB | 132 s (`engine-fallout-ai`), 5.1 GB |
+| Every unit test of the game's units, built and run | 727 s, 23.6 GB | 767 s, 5.2 GB |
+
+The crates:
 
 | Crate | Holds | Fallout crates its code needs |
 | --- | --- | --- |
@@ -158,7 +167,10 @@ env, magic, misc and the two unplaced crates none.
   that depends on the crate under test links that crate a second time (the
   library beside the test build); nothing in these crates is `#[no_mangle]`,
   and calls between them go by address, so that is harmless, except that the
-  test build's statics are not the ones the other crates' code sees. Phase B
+  test build's statics are not the ones the other crates' code sees: FaceGen's
+  speech check (`bsfacegenkeyframe::speech_check`) keeps its state in statics
+  and is called from cell, forms and unplaced-a, so its tests send the library
+  build's hooks to the test build's own (`speech_check::redirect`). Phase B
   (later) drops the dev-dependencies a crate's tests do not need, so a test
   build compiles its own crate only.
 - **Rebasing a branch from before the split:** `git rebase origin/main`
