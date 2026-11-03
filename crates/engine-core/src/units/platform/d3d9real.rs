@@ -166,6 +166,16 @@ fn device(e: &Engine, this: u32) -> Option<std::mem::ManuallyDrop<IDirect3DDevic
     }
 }
 
+/// The real device behind the modelled device `this`, counted (for a caller that hands it to
+/// other code, the D3DX texture loader in `super::d3dxreal`); `None` when the forwarding is off or
+/// the real `CreateDevice` failed.
+pub fn real_device(e: &Engine, this: u32) -> Option<IDirect3DDevice9> {
+    match e.kernel.graphics.real.objects.get(&this) {
+        Some(Object::Device(d)) => Some(d.clone()),
+        _ => None,
+    }
+}
+
 /// Forgets the real counterpart of a modelled object that is destroyed (its address can be
 /// reused). It is not released yet but kept until the frame's `Present`: the model lets go of an
 /// object when the program unbinds it, before the same call reaches the real device, and the

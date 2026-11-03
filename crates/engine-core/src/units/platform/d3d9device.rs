@@ -2004,7 +2004,7 @@ fn surface_get_container(e: &mut Engine, this: Ptr, iid: Ptr, out: Ptr) -> u32 {
 
 /// The block width (1, or 4 for the DXT formats) and the bytes of one block (one pixel for the
 /// others) of a format; `None` for formats this layer doesn't size yet.
-fn format_blocks(format: u32) -> Option<(u32, u32)> {
+pub(crate) fn format_blocks(format: u32) -> Option<(u32, u32)> {
     const DXT1: u32 = u32::from_le_bytes(*b"DXT1");
     const DXT2: u32 = u32::from_le_bytes(*b"DXT2");
     const DXT3: u32 = u32::from_le_bytes(*b"DXT3");
