@@ -7,11 +7,8 @@ pub mod fallout_audio;
 pub mod fallout_debug;
 pub mod fallout_dialogue;
 pub mod fallout_interface;
-pub mod fallout_magic;
 pub mod fallout_misc;
-pub mod fallout_shared_magic;
 pub mod fallout_shared_settings;
-pub mod fallout_shared_tempeffects;
 pub mod remotelog;
 pub mod unplaced;
 pub mod xapilib;
@@ -35,6 +32,9 @@ pub use engine_fallout_env::units::fallout_shared_sky;
 pub use engine_fallout_env::units::fallout_shared_speedtree;
 pub use engine_fallout_facegen::units::facegen;
 pub use engine_fallout_facegen::units::fallout_shared_facegen;
+pub use engine_fallout_magic::units::fallout_magic;
+pub use engine_fallout_magic::units::fallout_shared_magic;
+pub use engine_fallout_magic::units::fallout_shared_tempeffects;
 pub use engine_fallout_pathfinding::units::fallout_shared_pathfinding;
 pub use engine_gamebryo::units::nianimation;
 pub use engine_gamebryo::units::nicollision;
@@ -555,11 +555,8 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     fallout_debug::funcs(out);
     fallout_dialogue::funcs(out);
     fallout_interface::funcs(out);
-    fallout_magic::funcs(out);
     fallout_misc::funcs(out);
-    fallout_shared_magic::funcs(out);
     fallout_shared_settings::funcs(out);
-    fallout_shared_tempeffects::funcs(out);
     remotelog::funcs(out);
     unplaced::funcs(out);
     xapilib::funcs(out);
@@ -578,6 +575,7 @@ engine_core::assemble!(
     engine_fallout_cell::units::funcs,
     engine_fallout_env::units::funcs,
     engine_fallout_forms::units::funcs,
+    engine_fallout_magic::units::funcs,
     engine_fallout_pathfinding::units::funcs,
     engine_fallout_script::units::funcs,
 );

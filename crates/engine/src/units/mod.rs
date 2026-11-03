@@ -19,11 +19,8 @@ pub use engine_fallout::units::fallout_audio;
 pub use engine_fallout::units::fallout_debug;
 pub use engine_fallout::units::fallout_dialogue;
 pub use engine_fallout::units::fallout_interface;
-pub use engine_fallout::units::fallout_magic;
 pub use engine_fallout::units::fallout_misc;
-pub use engine_fallout::units::fallout_shared_magic;
 pub use engine_fallout::units::fallout_shared_settings;
-pub use engine_fallout::units::fallout_shared_tempeffects;
 pub use engine_fallout::units::remotelog;
 pub use engine_fallout::units::xapilib;
 pub use engine_fallout_env::units::fallout_shared_distant_terrain_system;
@@ -33,6 +30,9 @@ pub use engine_fallout_env::units::fallout_shared_sky;
 pub use engine_fallout_env::units::fallout_shared_speedtree;
 pub use engine_fallout_facegen::units::facegen;
 pub use engine_fallout_facegen::units::fallout_shared_facegen;
+pub use engine_fallout_magic::units::fallout_magic;
+pub use engine_fallout_magic::units::fallout_shared_magic;
+pub use engine_fallout_magic::units::fallout_shared_tempeffects;
 pub use engine_fallout_pathfinding::units::fallout_shared_pathfinding;
 pub use engine_gamebryo::units::nianimation;
 pub use engine_gamebryo::units::nicollision;
@@ -1041,6 +1041,7 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     engine_fallout_cell::units::funcs(out);
     engine_fallout_env::units::funcs(out);
     engine_fallout_forms::units::funcs(out);
+    engine_fallout_magic::units::funcs(out);
     engine_fallout_pathfinding::units::funcs(out);
     engine_fallout_script::units::funcs(out);
     engine_fallout::units::funcs(out);
@@ -1057,6 +1058,7 @@ pub const PARTS: &[(&str, fn(&mut Vec<(u32, crate::AbiFn)>))] = &[
     ("engine-fallout-cell", engine_fallout_cell::units::funcs),
     ("engine-fallout-env", engine_fallout_env::units::funcs),
     ("engine-fallout-forms", engine_fallout_forms::units::funcs),
+    ("engine-fallout-magic", engine_fallout_magic::units::funcs),
     ("engine-fallout-pathfinding", engine_fallout_pathfinding::units::funcs),
     ("engine-fallout-script", engine_fallout_script::units::funcs),
     ("engine-fallout", engine_fallout::units::funcs),
@@ -1072,6 +1074,7 @@ engine_core::assemble!(
     engine_fallout_cell::units::funcs,
     engine_fallout_env::units::funcs,
     engine_fallout_forms::units::funcs,
+    engine_fallout_magic::units::funcs,
     engine_fallout_pathfinding::units::funcs,
     engine_fallout_script::units::funcs,
     engine_fallout::units::funcs,

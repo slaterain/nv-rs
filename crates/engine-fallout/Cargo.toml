@@ -18,6 +18,7 @@ engine-fallout-pathfinding = { path = "../engine-fallout-pathfinding" }
 engine-fallout-env = { path = "../engine-fallout-env" }
 engine-fallout-cell = { path = "../engine-fallout-cell" }
 engine-fallout-forms = { path = "../engine-fallout-forms" }
+engine-fallout-magic = { path = "../engine-fallout-magic" }
 
 [dev-dependencies]
 # The form-constructor checker of units::crt (ctor_test) for this crate's tests.
