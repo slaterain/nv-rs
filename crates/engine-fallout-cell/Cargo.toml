@@ -31,3 +31,4 @@ engine-fallout-forms = { path = "../engine-fallout-forms" }
 engine-fallout-magic = { path = "../engine-fallout-magic" }
 engine-fallout-interface = { path = "../engine-fallout-interface" }
 engine-fallout-ai = { path = "../engine-fallout-ai" }
+engine-fallout-unplaced-a = { path = "../engine-fallout-unplaced-a" }

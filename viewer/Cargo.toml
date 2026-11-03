@@ -102,6 +102,9 @@ opt-level = 1
 [profile.play.package.engine-fallout-ai]
 opt-level = 1
 
+[profile.play.package.engine-fallout-unplaced-a]
+opt-level = 1
+
 [profile.play.package.engine]
 opt-level = 1
 
@@ -165,6 +168,9 @@ opt-level = 1
 opt-level = 1
 
 [profile.play-fast.package.engine-fallout-ai]
+opt-level = 1
+
+[profile.play-fast.package.engine-fallout-unplaced-a]
 opt-level = 1
 
 [profile.play-fast.package.engine]

@@ -28,3 +28,4 @@ engine-fallout-pathfinding = { path = "../engine-fallout-pathfinding" }
 engine-fallout-env = { path = "../engine-fallout-env" }
 engine-fallout-interface = { path = "../engine-fallout-interface" }
 engine-fallout-ai = { path = "../engine-fallout-ai" }
+engine-fallout-unplaced-a = { path = "../engine-fallout-unplaced-a" }
