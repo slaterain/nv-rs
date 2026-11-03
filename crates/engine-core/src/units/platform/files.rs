@@ -785,15 +785,31 @@ pub fn compare_file_time(e: &mut Engine, a: Ptr, b: Ptr) -> i32 {
 }
 
 // Platform: replaces KERNEL32.DLL FindClose (import)
-/// `FindClose(handle)` on a search handle from [`find_first_file_a`]: closes it, true. Any other
-/// handle is not provided (stops the run).
+/// `FindClose(handle)`: a search handle from [`find_first_file_a`] is closed, TRUE, the last
+/// error left as it was. `INVALID_HANDLE_VALUE` answers FALSE with `ERROR_INVALID_HANDLE` and
+/// raises nothing: the game passes it after a search that found nothing, closing the search
+/// whatever `FindFirstFileA` answered (`007cbd62` in the start menu's `007cbaf0` on a PC with no
+/// saves, `00846ab0`, `00b00461`, `0085fd34`, `0085fdc4`, `00da2805`). Measured on this machine
+/// (2026-11-02, a 32-bit process, with no debugger and under one,
+/// `build43-scratch/measure/small-fixes/findclose-2026-11-02.tsv`).
+/// Any other number stops the run: Windows reads it as its own search record, so the answer
+/// depends on the memory at that number, which this layer does not model (measured for 0, a
+/// search closed before, a file handle and `0x0ffffff0`: FALSE with `ERROR_NOACCESS` after an
+/// access violation it handles itself; the file stays open). No call of the game's passes one:
+/// the other 16 calls of the import slot `00fdf064` run only on a search handle.
 pub fn find_close(e: &mut Engine, handle: u32) -> u32 {
+    if handle == INVALID_HANDLE_VALUE {
+        e.kernel.last_error = ERROR_INVALID_HANDLE;
+        return 0;
+    }
     assert!(
         matches!(
             e.kernel.objects.get(&handle),
             Some(KernelObject::FindFile(_))
         ),
-        "FindClose({handle:#x}): not a search handle; not provided"
+        "FindClose({handle:#x}): not a search handle; not provided (Windows reads the number as \
+         its search record: FALSE with ERROR_NOACCESS after an access violation it handles, on \
+         this machine)"
     );
     e.kernel.objects.remove(&handle);
     1
@@ -1800,6 +1816,45 @@ mod tests_player_files {
             INVALID_HANDLE_VALUE
         );
         assert_eq!(e.kernel.last_error, ERROR_FILE_NOT_FOUND);
+    }
+
+    /// The game closes a search whether or not `FindFirstFileA` found anything (`007cbd62` in
+    /// the start menu's `007cbaf0`, also `00846ab0`, `00b00461`, `0085fd34`, `0085fdc4`,
+    /// `00da2805`): on a PC with no saves the start menu's check passes `INVALID_HANDLE_VALUE`.
+    /// Windows answers FALSE with `ERROR_INVALID_HANDLE` and raises nothing; on a search handle
+    /// TRUE, the last error left as it was (measured, 32-bit,
+    /// `build43-scratch/measure/small-fixes/findclose-2026-11-02.tsv`).
+    #[test]
+    fn find_close_after_a_search_that_found_nothing_answers_false() {
+        let mut e = Engine::new();
+        let name = e.mem.alloc(0x200);
+        let data = e.mem.alloc(0x140);
+        let none = concat!(env!("CARGO_MANIFEST_DIR"), "/NoSuch*.x");
+        e.mem.set_cstr(name, none.as_bytes());
+        let h = find_first_file_a(&mut e, Ptr::new(name), Ptr::new(data));
+        assert_eq!(h, INVALID_HANDLE_VALUE);
+        assert_eq!(e.kernel.last_error, ERROR_FILE_NOT_FOUND);
+        assert_eq!(find_close(&mut e, h), 0);
+        assert_eq!(e.kernel.last_error, ERROR_INVALID_HANDLE);
+        let pattern = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.*");
+        e.mem.set_cstr(name, pattern.as_bytes());
+        let h = find_first_file_a(&mut e, Ptr::new(name), Ptr::new(data));
+        assert_ne!(h, INVALID_HANDLE_VALUE);
+        e.kernel.last_error = 0x1234_5678;
+        assert_eq!(find_close(&mut e, h), 1);
+        assert_eq!(e.kernel.last_error, 0x1234_5678);
+        assert!(!e.kernel.objects.contains_key(&h));
+    }
+
+    /// Any other number (0, a closed search, a file handle) stops the run: Windows reads it as
+    /// its own search record, so the answer depends on memory this layer does not model (on
+    /// this machine FALSE with `ERROR_NOACCESS` after an access violation it handles itself).
+    /// No call of the game's passes one.
+    #[test]
+    #[should_panic(expected = "not a search handle")]
+    fn find_close_on_a_handle_that_is_no_search_stops() {
+        let mut e = Engine::new();
+        find_close(&mut e, 0);
     }
 
     #[test]
