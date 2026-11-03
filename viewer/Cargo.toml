@@ -75,6 +75,9 @@ opt-level = 1
 [profile.play.package.engine-fallout-facegen]
 opt-level = 1
 
+[profile.play.package.engine-fallout-script]
+opt-level = 1
+
 [profile.play.package.engine]
 opt-level = 1
 
@@ -111,6 +114,9 @@ opt-level = 3
 opt-level = 1
 
 [profile.play-fast.package.engine-fallout-facegen]
+opt-level = 1
+
+[profile.play-fast.package.engine-fallout-script]
 opt-level = 1
 
 [profile.play-fast.package.engine]

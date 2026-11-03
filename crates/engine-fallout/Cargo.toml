@@ -13,6 +13,7 @@ engine-bs = { path = "../engine-bs" }
 engine-havok = { path = "../engine-havok" }
 engine-speedtree = { path = "../engine-speedtree" }
 engine-fallout-facegen = { path = "../engine-fallout-facegen" }
+engine-fallout-script = { path = "../engine-fallout-script" }
 
 [dev-dependencies]
 # The form-constructor checker of units::crt (ctor_test) for this crate's tests.

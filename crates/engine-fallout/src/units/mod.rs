@@ -82,4 +82,5 @@ engine_core::assemble!(
     engine_havok::units::funcs,
     engine_speedtree::units::funcs,
     engine_fallout_facegen::units::funcs,
+    engine_fallout_script::units::funcs,
 );

@@ -20,3 +20,4 @@ engine-core = { path = "../engine-core", features = ["test-support"] }
 # fallout crate, so this crate's tests register every translated function as before the
 # split. Phase B removes the ones no test needs.
 engine-fallout = { path = "../engine-fallout" }
+engine-fallout-script = { path = "../engine-fallout-script" }
