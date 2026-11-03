@@ -10,13 +10,8 @@ pub mod fallout_interface;
 pub mod fallout_magic;
 pub mod fallout_misc;
 pub mod fallout_shared;
-pub mod fallout_shared_distant_terrain_system;
-pub mod fallout_shared_havok;
 pub mod fallout_shared_magic;
-pub mod fallout_shared_region_system;
 pub mod fallout_shared_settings;
-pub mod fallout_shared_sky;
-pub mod fallout_shared_speedtree;
 pub mod fallout_shared_tempeffects;
 pub mod remotelog;
 pub mod unplaced;
@@ -34,6 +29,11 @@ pub use engine_bs::units::bssystem;
 pub use engine_bs::units::bssystemutilities;
 pub use engine_core::units::crt;
 pub use engine_core::units::platform;
+pub use engine_fallout_env::units::fallout_shared_distant_terrain_system;
+pub use engine_fallout_env::units::fallout_shared_havok;
+pub use engine_fallout_env::units::fallout_shared_region_system;
+pub use engine_fallout_env::units::fallout_shared_sky;
+pub use engine_fallout_env::units::fallout_shared_speedtree;
 pub use engine_fallout_facegen::units::facegen;
 pub use engine_fallout_facegen::units::fallout_shared_facegen;
 pub use engine_fallout_pathfinding::units::fallout_shared_pathfinding;
@@ -58,13 +58,8 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     fallout_magic::funcs(out);
     fallout_misc::funcs(out);
     fallout_shared::funcs(out);
-    fallout_shared_distant_terrain_system::funcs(out);
-    fallout_shared_havok::funcs(out);
     fallout_shared_magic::funcs(out);
-    fallout_shared_region_system::funcs(out);
     fallout_shared_settings::funcs(out);
-    fallout_shared_sky::funcs(out);
-    fallout_shared_speedtree::funcs(out);
     fallout_shared_tempeffects::funcs(out);
     remotelog::funcs(out);
     unplaced::funcs(out);
@@ -80,6 +75,7 @@ engine_core::assemble!(
     engine_bs::units::funcs,
     engine_havok::units::funcs,
     engine_speedtree::units::funcs,
+    engine_fallout_env::units::funcs,
     engine_fallout_facegen::units::funcs,
     engine_fallout_pathfinding::units::funcs,
     engine_fallout_script::units::funcs,
