@@ -667,6 +667,30 @@ pub const ERROR_NO_MORE_FILES: u32 = 18;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Search {
     pub rest: std::collections::VecDeque<Found>,
+    /// A search of a folder with a wildcard: the folder's [`Disk`] key and the game's own
+    /// changes in it when the search began ([`folder_state`]). `FindNextFileA` stops the run
+    /// when they changed since: Windows then answers some later entries from the folder as it
+    /// is now and some from what it read before (measured 2026-11-03 on folders of 5 and 202
+    /// files changed after the first and after the third entry,
+    /// `build43-scratch/measure/review-findfile/run1.txt`, `run2.txt`), not modelled. No caller
+    /// read changes the folder inside its loop (`00851330`, `00851680`, `0085f900`).
+    pub folder: Option<(Vec<u8>, FolderState)>,
+}
+
+/// The game's own changes in one folder as a search can see them: each file of the run with
+/// its [`Entry`] (0), each file deleted (1), each directory made (2), by key.
+pub type FolderState = Vec<(u8, Vec<u8>, Option<Entry>)>;
+
+/// The [`FolderState`] of the folder with key `folder`.
+fn folder_state(disk: &Disk, folder: &[u8]) -> FolderState {
+    let files = disk.files.keys().filter(|k| in_folder(k, folder));
+    let deleted = disk.deleted.iter().filter(|k| in_folder(k, folder));
+    let made = disk.directories.iter().filter(|k| in_folder(k, folder));
+    files
+        .map(|k| (0, k.clone(), disk.entries.get(k).cloned()))
+        .chain(deleted.map(|k| (1, k.clone(), None)))
+        .chain(made.map(|k| (2, k.clone(), None)))
+        .collect()
 }
 
 /// Whether the [`Disk`] key `k` is directly in the folder with key `folder`.
@@ -972,7 +996,11 @@ fn find_first_wild(e: &mut Engine, text: &[u8], data: Ptr) -> u32 {
         return INVALID_HANDLE_VALUE;
     };
     write_found(e, data, &first, &shown);
-    e.kernel.insert(KernelObject::FindFile(Search { rest }))
+    let seen = folder_state(&e.kernel.disk, &folder);
+    e.kernel.insert(KernelObject::FindFile(Search {
+        rest,
+        folder: Some((folder, seen)),
+    }))
 }
 
 /// One entry a search found.
@@ -1322,10 +1350,23 @@ mod ntdll {
 // Platform: replaces KERNEL32.DLL FindNextFileA (import)
 /// `FindNextFileA(handle, data)`: the search's next entry written as `FindFirstFileA` writes
 /// one, true; when none is left FALSE with `ERROR_NO_MORE_FILES` (measured). Another handle is
-/// not provided.
+/// not provided, nor a search of a folder the game changed since its `FindFirstFileA`
+/// ([`Search::folder`]).
 pub fn find_next_file_a(e: &mut Engine, handle: u32, data: Ptr) -> u32 {
+    let disk = &e.kernel.disk;
     let next = match e.kernel.objects.get_mut(&handle) {
-        Some(KernelObject::FindFile(search)) => search.rest.pop_front(),
+        Some(KernelObject::FindFile(search)) => {
+            if let Some((folder, seen)) = &search.folder {
+                if folder_state(disk, folder) != *seen {
+                    panic!(
+                        "FindNextFileA({handle:#x}): the game changed the folder \"{}\" since \
+                         FindFirstFileA; not provided",
+                        String::from_utf8_lossy(folder)
+                    );
+                }
+            }
+            search.rest.pop_front()
+        }
         _ => panic!("FindNextFileA({handle:#x}): not a search handle; not provided"),
     };
     let Some(found) = next else {
@@ -1678,7 +1719,12 @@ pub fn write_file(
     data[start..end].copy_from_slice(&bytes);
     if let Some(file) = open_file(e, handle) {
         file.position = end as u64;
-        file.wrote = Some(now);
+        // A write of no bytes changes no time a search shows (measured 2026-11-03: a file
+        // opened again, 0 bytes written, closed: its three times as before,
+        // `build43-scratch/measure/review-findfile/run1.txt`, `zero:`).
+        if count > 0 {
+            file.wrote = Some(now);
+        }
     }
     if written.addr() != 0 {
         e.mem.set_u32(written.addr(), count);
@@ -2980,6 +3026,52 @@ mod tests_changed_directories {
             ("Save 142 x.fos".into(), "SAVE14~3.FOS".into(), later)
         );
         assert_eq!(listed(&mut e, &format!("{dir}\\*.tmp")).len(), 2);
+    }
+
+    /// A write of no bytes, then the close: the size and the three times stay as they were
+    /// (measured, `review-findfile/run1.txt` `zero:`).
+    #[test]
+    fn a_write_of_no_bytes_changes_no_time() {
+        let dir = scratch("zero", &[]);
+        let mut e = Engine::new();
+        let path = format!("{dir}\\z.bin");
+        tick(&mut e);
+        let h = open(&mut e, &path, GENERIC_WRITE, CREATE_ALWAYS);
+        write(&mut e, h, 10);
+        close(&mut e, h);
+        let before = listed(&mut e, &path);
+        assert_eq!(before[0].3, 10);
+        tick(&mut e);
+        let h = open(&mut e, &path, GENERIC_WRITE, OPEN_EXISTING);
+        tick(&mut e);
+        write(&mut e, h, 0);
+        close(&mut e, h);
+        assert_eq!(listed(&mut e, &path), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file made in the folder between `FindFirstFileA` and `FindNextFileA`: Windows answers
+    /// from the folder as it is now or from what it read before, depending on how far the search
+    /// got (measured, `review-findfile/run1.txt`); not modelled, the run stops.
+    #[test]
+    #[should_panic(expected = "since FindFirstFileA; not provided")]
+    fn a_search_whose_folder_changed_since_it_began_stops() {
+        let dir = scratch("midsearch", &[("a.fos", 5), ("b.fos", 5)]);
+        let mut e = Engine::new();
+        let name = text(&mut e, &format!("{dir}\\*.fos"));
+        let data = e.mem.alloc(0x140);
+        let h = find_first_file_a(&mut e, name, Ptr::new(data));
+        assert_ne!(h, INVALID_HANDLE_VALUE);
+        tick(&mut e);
+        let made = open(
+            &mut e,
+            &format!("{dir}\\zz-late.fos"),
+            GENERIC_WRITE,
+            CREATE_NEW,
+        );
+        close(&mut e, made);
+        let _ = std::fs::remove_dir_all(&dir);
+        find_next_file_a(&mut e, h, Ptr::new(data));
     }
 
     /// `.` of a directory the game changed is not listed as Windows would (its times move with
