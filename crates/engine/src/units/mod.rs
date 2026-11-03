@@ -1058,18 +1058,33 @@ pub const PARTS: &[(&str, fn(&mut Vec<(u32, crate::AbiFn)>))] = &[
     ("engine-bs", engine_bs::units::funcs),
     ("engine-havok", engine_havok::units::funcs),
     ("engine-speedtree", engine_speedtree::units::funcs),
-    ("engine-fallout-facegen", engine_fallout_facegen::units::funcs),
+    (
+        "engine-fallout-facegen",
+        engine_fallout_facegen::units::funcs,
+    ),
     ("engine-fallout-cell", engine_fallout_cell::units::funcs),
     ("engine-fallout-forms", engine_fallout_forms::units::funcs),
-    ("engine-fallout-pathfinding", engine_fallout_pathfinding::units::funcs),
+    (
+        "engine-fallout-pathfinding",
+        engine_fallout_pathfinding::units::funcs,
+    ),
     ("engine-fallout-ai", engine_fallout_ai::units::funcs),
     ("engine-fallout-env", engine_fallout_env::units::funcs),
-    ("engine-fallout-interface", engine_fallout_interface::units::funcs),
+    (
+        "engine-fallout-interface",
+        engine_fallout_interface::units::funcs,
+    ),
     ("engine-fallout-magic", engine_fallout_magic::units::funcs),
     ("engine-fallout-misc", engine_fallout_misc::units::funcs),
     ("engine-fallout-script", engine_fallout_script::units::funcs),
-    ("engine-fallout-unplaced-a", engine_fallout_unplaced_a::units::funcs),
-    ("engine-fallout-unplaced-b", engine_fallout_unplaced_b::units::funcs),
+    (
+        "engine-fallout-unplaced-a",
+        engine_fallout_unplaced_a::units::funcs,
+    ),
+    (
+        "engine-fallout-unplaced-b",
+        engine_fallout_unplaced_b::units::funcs,
+    ),
 ];
 
 // The full engine: `Engine::new()` registers the core's functions and every part crate's.

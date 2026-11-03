@@ -468,7 +468,17 @@ pub fn regenerate(root: &Path) -> Result<usize, String> {
             "pub const PARTS: &[(&str, fn(&mut Vec<(u32, crate::AbiFn)>))] = &["
         );
         for d in &lower {
-            let _ = writeln!(s, "    (\"{d}\", {}::units::funcs),", rust_name(d));
+            // As rustfmt writes it: a tuple whose items are wider than 60 columns
+            // (`fn_call_width`) goes one item per line.
+            let (name, funcs) = (
+                format!("\"{d}\""),
+                format!("{}::units::funcs", rust_name(d)),
+            );
+            if name.len() + 2 + funcs.len() > 60 {
+                let _ = writeln!(s, "    (\n        {name},\n        {funcs},\n    ),");
+            } else {
+                let _ = writeln!(s, "    ({name}, {funcs}),");
+            }
         }
         let _ = writeln!(s, "];");
         let parts: Vec<String> = lower

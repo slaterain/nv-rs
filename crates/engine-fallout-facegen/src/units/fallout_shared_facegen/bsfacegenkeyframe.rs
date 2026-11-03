@@ -1225,6 +1225,28 @@ pub mod speech_check {
         settings().on
     }
 
+    /// The hooks the fallout crates above this one call (`linked` from `engine-fallout-cell`,
+    /// `node_allocated` from `-forms`, `removing`, `removed` and `node_freeing` from
+    /// `-unplaced-a`). This crate's own test build also links this crate's library build
+    /// (every other fallout crate is a dev-dependency, docs/ENGINE_CRATE.md, "The fallout
+    /// crates"), and the crates above call the library build's hooks: its tests point them at
+    /// the test build's own ([`redirect`]), so the check keeps one state.
+    #[derive(Clone, Copy)]
+    pub struct Hooks {
+        pub linked: fn(&mut Engine, u32, u32),
+        pub removing: fn(&mut Engine, u32),
+        pub removed: fn(&mut Engine, u32),
+        pub node_freeing: fn(&mut Engine, u32),
+        pub node_allocated: fn(&mut Engine, u32),
+    }
+
+    static REDIRECT: std::sync::OnceLock<Hooks> = std::sync::OnceLock::new();
+
+    /// Sends this build's [`Hooks`] to `hooks` from now on (once per process; tests).
+    pub fn redirect(hooks: Hooks) {
+        let _ = REDIRECT.set(hooks);
+    }
+
     /// Sets the settings for this thread and forgets what was seen (tests; the state is the
     /// process's, so tests that turn the check on must not run beside each other).
     pub fn force(settings: Settings) {
@@ -1731,6 +1753,9 @@ pub mod speech_check {
 
     /// `node` was linked at the tail of `list` (`00559a70`'s end).
     pub fn linked(e: &mut Engine, list: u32, node: u32) {
+        if let Some(hooks) = REDIRECT.get() {
+            return (hooks.linked)(e, list, node);
+        }
         with_state(e, |e, st| {
             if !st.lists.contains_key(&list) {
                 return None;
@@ -1788,6 +1813,9 @@ pub mod speech_check {
 
     /// `RemoveHead` (`007b5390`) starts on `list`.
     pub fn removing(e: &mut Engine, list: u32) {
+        if let Some(hooks) = REDIRECT.get() {
+            return (hooks.removing)(e, list);
+        }
         with_state(e, |e, st| {
             if !st.lists.contains_key(&list) {
                 return None;
@@ -1825,6 +1853,9 @@ pub mod speech_check {
 
     /// `RemoveHead` (`007b5390`) ends on `list`.
     pub fn removed(e: &mut Engine, list: u32) {
+        if let Some(hooks) = REDIRECT.get() {
+            return (hooks.removed)(e, list);
+        }
         with_state(e, |e, st| {
             let l = st.lists.get_mut(&list)?;
             let start = l.busy.take()?;
@@ -2006,6 +2037,9 @@ pub mod speech_check {
 
     /// `0045cee0` starts: `node` goes back to the pool.
     pub fn node_freeing(e: &mut Engine, node: u32) {
+        if let Some(hooks) = REDIRECT.get() {
+            return (hooks.node_freeing)(e, node);
+        }
         with_state(e, |e, st| {
             if !st.node_of.contains_key(&node) {
                 return None;
@@ -2019,6 +2053,9 @@ pub mod speech_check {
 
     /// `0043a010` ends: `node` came from the pool.
     pub fn node_allocated(e: &mut Engine, node: u32) {
+        if let Some(hooks) = REDIRECT.get() {
+            return (hooks.node_allocated)(e, node);
+        }
         with_state(e, |e, st| {
             if !st.node_of.contains_key(&node) {
                 return None;
@@ -2212,8 +2249,18 @@ pub mod speech_check {
         /// Every translated function (the table `Engine::new()` registers for this crate's
         /// tests), spin locks that do nothing, `operator delete` through the platform's
         /// `Deallocate`, the keyframe vtable (slot 0: the scalar deleting destructor), a pool
-        /// of 64 free nodes and a face (0x1c0 zeroed bytes: empty lists), watched.
+        /// of 64 free nodes and a face (0x1c0 zeroed bytes: empty lists), watched. The hooks
+        /// that the list functions of the crates above call go to the library build of this
+        /// crate: they are sent to this build's ([`Hooks`]).
         fn engine(settings: Settings) -> (Engine, u32) {
+            use engine_fallout_cell::units::fallout_shared_facegen::bsfacegenkeyframe::speech_check as library;
+            library::redirect(library::Hooks {
+                linked,
+                removing,
+                removed,
+                node_freeing,
+                node_allocated,
+            });
             force(settings);
             let mut e = Engine::new();
             e.register(0x0040_fbf0, |_, _| Ret::default());
