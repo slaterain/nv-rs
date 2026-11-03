@@ -50,4 +50,5 @@ engine_core::assemble!(
     engine_fallout_cell::units::funcs,
     engine_fallout_forms::units::funcs,
     engine_fallout_magic::units::funcs,
+    engine_fallout_ai::units::funcs,
 );

@@ -2,7 +2,6 @@
 //! Translated units of `engine-fallout`, one folder per subsystem (docs/ENGINE_CRATE.md).
 
 pub mod d3dx9;
-pub mod fallout_ai;
 pub mod fallout_audio;
 pub mod fallout_debug;
 pub mod fallout_misc;
@@ -23,6 +22,7 @@ pub use engine_bs::units::bssystem;
 pub use engine_bs::units::bssystemutilities;
 pub use engine_core::units::crt;
 pub use engine_core::units::platform;
+pub use engine_fallout_ai::units::fallout_ai;
 pub use engine_fallout_env::units::fallout_shared_distant_terrain_system;
 pub use engine_fallout_env::units::fallout_shared_havok;
 pub use engine_fallout_env::units::fallout_shared_region_system;
@@ -550,7 +550,6 @@ pub mod fallout_shared {
 /// Every registered function of this crate's units.
 pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     d3dx9::funcs(out);
-    fallout_ai::funcs(out);
     fallout_audio::funcs(out);
     fallout_debug::funcs(out);
     fallout_misc::funcs(out);
@@ -571,10 +570,11 @@ engine_core::assemble!(
     engine_speedtree::units::funcs,
     engine_fallout_facegen::units::funcs,
     engine_fallout_cell::units::funcs,
-    engine_fallout_env::units::funcs,
     engine_fallout_forms::units::funcs,
+    engine_fallout_pathfinding::units::funcs,
+    engine_fallout_ai::units::funcs,
+    engine_fallout_env::units::funcs,
     engine_fallout_interface::units::funcs,
     engine_fallout_magic::units::funcs,
-    engine_fallout_pathfinding::units::funcs,
     engine_fallout_script::units::funcs,
 );

@@ -14,13 +14,13 @@ pub use engine_bs::units::bssystemutilities;
 pub use engine_core::units::crt;
 pub use engine_core::units::platform;
 pub use engine_fallout::units::d3dx9;
-pub use engine_fallout::units::fallout_ai;
 pub use engine_fallout::units::fallout_audio;
 pub use engine_fallout::units::fallout_debug;
 pub use engine_fallout::units::fallout_misc;
 pub use engine_fallout::units::fallout_shared_settings;
 pub use engine_fallout::units::remotelog;
 pub use engine_fallout::units::xapilib;
+pub use engine_fallout_ai::units::fallout_ai;
 pub use engine_fallout_env::units::fallout_shared_distant_terrain_system;
 pub use engine_fallout_env::units::fallout_shared_havok;
 pub use engine_fallout_env::units::fallout_shared_region_system;
@@ -803,13 +803,11 @@ pub mod unplaced {
     pub use engine_fallout::units::unplaced::run_0088b0a0;
     pub use engine_fallout::units::unplaced::run_0088b0f0;
     pub use engine_fallout::units::unplaced::run_008a8150;
-    pub use engine_fallout::units::unplaced::run_008a81e0;
     pub use engine_fallout::units::unplaced::run_008c71d0;
     pub use engine_fallout::units::unplaced::run_008eea60;
     pub use engine_fallout::units::unplaced::run_0097ce90;
     pub use engine_fallout::units::unplaced::run_0097e490;
     pub use engine_fallout::units::unplaced::run_00987820;
-    pub use engine_fallout::units::unplaced::run_00988750;
     pub use engine_fallout::units::unplaced::run_009a0260;
     pub use engine_fallout::units::unplaced::run_009d9ec0;
     pub use engine_fallout::units::unplaced::run_009d9f00;
@@ -1016,6 +1014,8 @@ pub mod unplaced {
     pub use engine_fallout::units::unplaced::static_init_irregular_h;
     pub use engine_fallout::units::unplaced::static_init_irregular_i;
     pub use engine_fallout::units::unplaced::static_init_irregular_j;
+    pub use engine_fallout_ai::units::unplaced::run_008a81e0;
+    pub use engine_fallout_ai::units::unplaced::run_00988750;
     pub use engine_fallout_env::units::unplaced::run_006271b0;
     pub use engine_fallout_env::units::unplaced::run_00664440;
     pub use engine_fallout_facegen::units::unplaced::run_00649ba0;
@@ -1039,11 +1039,12 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     engine_speedtree::units::funcs(out);
     engine_fallout_facegen::units::funcs(out);
     engine_fallout_cell::units::funcs(out);
-    engine_fallout_env::units::funcs(out);
     engine_fallout_forms::units::funcs(out);
+    engine_fallout_pathfinding::units::funcs(out);
+    engine_fallout_ai::units::funcs(out);
+    engine_fallout_env::units::funcs(out);
     engine_fallout_interface::units::funcs(out);
     engine_fallout_magic::units::funcs(out);
-    engine_fallout_pathfinding::units::funcs(out);
     engine_fallout_script::units::funcs(out);
     engine_fallout::units::funcs(out);
 }
@@ -1057,11 +1058,12 @@ pub const PARTS: &[(&str, fn(&mut Vec<(u32, crate::AbiFn)>))] = &[
     ("engine-speedtree", engine_speedtree::units::funcs),
     ("engine-fallout-facegen", engine_fallout_facegen::units::funcs),
     ("engine-fallout-cell", engine_fallout_cell::units::funcs),
-    ("engine-fallout-env", engine_fallout_env::units::funcs),
     ("engine-fallout-forms", engine_fallout_forms::units::funcs),
+    ("engine-fallout-pathfinding", engine_fallout_pathfinding::units::funcs),
+    ("engine-fallout-ai", engine_fallout_ai::units::funcs),
+    ("engine-fallout-env", engine_fallout_env::units::funcs),
     ("engine-fallout-interface", engine_fallout_interface::units::funcs),
     ("engine-fallout-magic", engine_fallout_magic::units::funcs),
-    ("engine-fallout-pathfinding", engine_fallout_pathfinding::units::funcs),
     ("engine-fallout-script", engine_fallout_script::units::funcs),
     ("engine-fallout", engine_fallout::units::funcs),
 ];
@@ -1074,11 +1076,12 @@ engine_core::assemble!(
     engine_speedtree::units::funcs,
     engine_fallout_facegen::units::funcs,
     engine_fallout_cell::units::funcs,
-    engine_fallout_env::units::funcs,
     engine_fallout_forms::units::funcs,
+    engine_fallout_pathfinding::units::funcs,
+    engine_fallout_ai::units::funcs,
+    engine_fallout_env::units::funcs,
     engine_fallout_interface::units::funcs,
     engine_fallout_magic::units::funcs,
-    engine_fallout_pathfinding::units::funcs,
     engine_fallout_script::units::funcs,
     engine_fallout::units::funcs,
 );
