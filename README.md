@@ -9,7 +9,7 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-purple.svg)](docs/PLAYTESTING.md)
 [![Status](https://img.shields.io/badge/Status-experimental-lightgrey.svg)](docs/MILESTONES.md)
-[![Discord](https://img.shields.io/badge/Discord-join-5865F2.svg?logo=discord&logoColor=white)](https://discord.gg/fzvety9s2)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2.svg?logo=discord&logoColor=white)](https://discord.gg/pn5kjZJJxx)
 
 **Fallout: New Vegas, rebuilt in Rust, aiming to play exactly like the
 original.**
@@ -152,7 +152,7 @@ Contributions are welcome, from people and their AI agents alike:
 The most useful help right now: testing builds and reporting differences from
 the original, platform support and research into how the original behaves.
 
-**Chat with us** on the project's [Discord](https://discord.gg/fzvety9s2).
+**Chat with us** on the project's [Discord](https://discord.gg/pn5kjZJJxx).
 
 **Curious how it works?** Start with
 [docs/ENGINE_PORT_PLAN.md](docs/ENGINE_PORT_PLAN.md) and
