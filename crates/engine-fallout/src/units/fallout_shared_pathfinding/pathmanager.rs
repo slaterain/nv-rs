@@ -238,35 +238,47 @@ pub fn fn_006ea330(e: &mut Engine, this: Ptr) {
     e.mem.set_u8(this.addr() + 4, 1);
 }
 
-// Translated from 006ea350 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Builds pending ray-cast paths until the queue is exhausted or the world
-/// space budget exceeds ten.
+// Translated from 006ea350 (decompiled, FalloutNV.exe 1.4.0.525), read against fnv_decomp.
+// Translation incomplete: 006ea350 - compiler-generated exception cleanup remains unimplemented
+// open: the ray cast is not destroyed (006e62b0) when a callee throws (the FS:[0] frame).
+/// Builds the ray casts of the paths that have no result yet, under the lock at `+0x20`: for
+/// each index below the request array's count (`+0x40`, read again before every pass), an
+/// entry whose path (the array at `+0x50`) has 0 in its word at `+4` gets a ray cast built from
+/// its request and path, until the built count passes ten. Answers the count.
 pub fn fn_006ea350(e: &mut Engine, this: Ptr) -> i32 {
     let mut built = 0i32;
     e.call(0x0040_fbf0, &args![this.addr() + 0x20, 0u32]);
-    let count = e.call(0x0044_ddc0, &args![this.addr() + 0x40]).u32();
     // The ray cast object 006e61a0 builds is 0x94 bytes (its last float at +0x90); the exe
     // keeps it at EBP-0xac (`EBP + 0xffffff54`) of a `SUB ESP,0xa4` frame.
     e.with_stack(0x94, |e, ray_cast| {
-        for index in 0..count {
-            let request_slot = e.call(0x0087_7a30, &args![this.addr() + 0x40, index]).u32();
-            let request = e.mem.u32(request_slot);
-            if e.mem.u32(request + 4) != 0 {
-                continue;
+        let mut index = 0u32;
+        // 006ea3a7..006ea3b8: the count (`0044ddc0` on `+0x40`) is read before every pass and
+        // compared unsigned (`JNC`); the back jump at 006ea460 comes here.
+        while index < e.call(0x0044_ddc0, &args![this.addr() + 0x40]).u32() {
+            // 006ea3be..006ea3d6: the skip test reads entry `index` of the path array (`+0x50`)
+            // and skips it when the path's word at `+4` is not 0.
+            let tested = e.call(0x0087_7a30, &args![this.addr() + 0x50, index]).u32();
+            if e.mem.u32(e.mem.u32(tested) + 4) == 0 {
+                e.call(0x006e_61a0, &args![ray_cast]);
+                // 006ea3ee..006ea41e: the path (the last word pushed) is read first, then the
+                // request (`00877a30`, RET 4, takes the pushed index); `006e6320` (RET 8) takes
+                // the request and the path.
+                let path_slot = e.call(0x0087_7a30, &args![this.addr() + 0x50, index]).u32();
+                let path = e.mem.u32(path_slot);
+                let request_slot = e.call(0x0087_7a30, &args![this.addr() + 0x40, index]).u32();
+                let request = e.mem.u32(request_slot);
+                e.call(0x006e_6320, &args![ray_cast, request, path]);
+                // 006ea42e: `ADD EAX,[EBP-0x10]` (wrapping); 006ea434: signed (`JLE`).
+                built = e
+                    .call(0x004f_d3e0, &args![ray_cast])
+                    .i32()
+                    .wrapping_add(built);
+                e.call(0x006e_62b0, &args![ray_cast]);
+                if built > 10 {
+                    break;
+                }
             }
-            e.call(0x006e_61a0, &args![ray_cast]);
-            let path_slot = e.call(0x0087_7a30, &args![this.addr() + 0x50, index]).u32();
-            let path = e.mem.u32(path_slot);
-            // 006ea410: the request is read again (`00877a30`, RET 4, takes the pushed
-            // index); `006e6320` (RET 8) takes the request and the path.
-            let request_slot = e.call(0x0087_7a30, &args![this.addr() + 0x40, index]).u32();
-            let request = e.mem.u32(request_slot);
-            e.call(0x006e_6320, &args![ray_cast, request, path]);
-            built += e.call(0x004f_d3e0, &args![ray_cast]).i32();
-            e.call(0x006e_62b0, &args![ray_cast]);
-            if built > 10 {
-                break;
-            }
+            index = index.wrapping_add(1);
         }
     });
     e.call(0x0040_fba0, &args![this.addr() + 0x20]);
@@ -2270,21 +2282,30 @@ mod remaining_tests {
         );
     }
 
+    /// `006ea350` with two entries whose request and path words at `+4` disagree: the exe tests
+    /// the path's word (the `+0x50` array, `006ea3c8`..`006ea3d6`), so entry 0 (request `+4`
+    /// set, path `+4` clear) is built and entry 1 (request clear, path set) is skipped. The
+    /// count (`0044ddc0` on `+0x40`) is read before every pass (`006ea3a7`..`006ea3b5`): it
+    /// answers 1 first and 2 afterwards (as if a request were added while building), so the
+    /// exe makes a second pass and reads it three times.
     #[test]
-    fn raycast_builder_reads_the_request_array_and_builds_nonempty_path() {
+    fn raycast_builder_skips_paths_with_a_result_and_rereads_the_count() {
         let mut e = Engine::new();
         let task = 0x7500;
-        let request = 0x7600;
-        let path = 0x7700;
-        let request_slot = 0x7800;
-        let path_slot = 0x7810;
+        let requests = [0x7600, 0x7680];
+        let paths = [0x7700, 0x7740];
+        let slots = 0x7800;
         e.mem.map(task, 0x80);
-        e.mem.map(request, 0x68);
-        e.mem.map(path, 0x18);
-        e.mem.map(request_slot, 4);
-        e.mem.map(path_slot, 4);
-        e.mem.set_u32(request_slot, request);
-        e.mem.set_u32(path_slot, path);
+        e.mem.map(0x7600, 0x100);
+        e.mem.map(0x7700, 0x80);
+        e.mem.map(slots, 0x20);
+        e.mem.set_u32(requests[0] + 4, 1);
+        e.mem.set_u32(paths[1] + 4, 7);
+        // Slots: request i at slots + 4 * i, path i at slots + 0x10 + 4 * i.
+        for (index, (request, path)) in (0u32..).zip(requests.into_iter().zip(paths)) {
+            e.mem.set_u32(slots + 4 * index, request);
+            e.mem.set_u32(slots + 0x10 + 4 * index, path);
+        }
         let lock_entries = Rc::new(Cell::new(0));
         let lock_entries_by_double = lock_entries.clone();
         e.register_double(0x0040_fbf0, move |_, args| {
@@ -2293,33 +2314,36 @@ mod remaining_tests {
             Ret::default()
         });
         e.register(0x0040_fba0, |_, _| Ret::default());
+        let counts = Rc::new(Cell::new(0));
+        let counts_by_double = counts.clone();
         e.register_double(0x0044_ddc0, move |_, args| {
             assert_eq!(args[0], task + 0x40);
-            value(1)
+            counts_by_double.set(counts_by_double.get() + 1);
+            value(if counts_by_double.get() == 1 { 1 } else { 2 })
         });
+        let elements = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let elements_by_double = elements.clone();
         e.register_double(0x0087_7a30, move |_, args| {
-            assert_eq!(args[1], 0);
+            elements_by_double.borrow_mut().push((args[0], args[1]));
             value(if args[0] == task + 0x40 {
-                request_slot
+                slots + 4 * args[1]
             } else {
                 assert_eq!(args[0], task + 0x50);
-                path_slot
+                slots + 0x10 + 4 * args[1]
             })
         });
-        let constructed = Rc::new(Cell::new(false));
+        let constructed = Rc::new(Cell::new(0));
         let constructed_by_double = constructed.clone();
         e.register_double(0x006e_61a0, move |_, args| {
             assert_eq!(args.len(), 1);
-            constructed_by_double.set(true);
+            constructed_by_double.set(constructed_by_double.get() + 1);
             Ret::default()
         });
-        let built = Rc::new(Cell::new(false));
+        let built = Rc::new(std::cell::RefCell::new(Vec::new()));
         let built_by_double = built.clone();
         e.register_double(0x006e_6320, move |_, args| {
             assert_eq!(args.len(), 3);
-            assert_eq!(args[1], request);
-            assert_eq!(args[2], path);
-            built_by_double.set(true);
+            built_by_double.borrow_mut().push((args[1], args[2]));
             Ret::default()
         });
         e.register(0x004f_d3e0, |_, _| value(3));
@@ -2327,8 +2351,20 @@ mod remaining_tests {
 
         assert_eq!(fn_006ea350(&mut e, Ptr::new(task)), 3);
         assert_eq!(lock_entries.get(), 1);
-        assert!(constructed.get());
-        assert!(built.get());
+        assert_eq!(constructed.get(), 1);
+        assert_eq!(*built.borrow(), [(requests[0], paths[0])]);
+        assert_eq!(counts.get(), 3);
+        // Entry 0: the path tested, then the path and the request read for `006e6320`
+        // (`006ea3f8`, `006ea40d`); entry 1: only its path tested.
+        assert_eq!(
+            *elements.borrow(),
+            [
+                (task + 0x50, 0),
+                (task + 0x50, 0),
+                (task + 0x40, 0),
+                (task + 0x50, 1)
+            ]
+        );
     }
 
     #[test]
