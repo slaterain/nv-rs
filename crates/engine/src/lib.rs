@@ -14,7 +14,8 @@
 //! The engine is split into crates so a compile fits the machine
 //! (docs/ENGINE_CRATE.md, "The engine crates"): `engine-core` (the model,
 //! the CRT and platform units) and the part crates `engine-gamebryo`,
-//! `engine-bs`, `engine-havok`, `engine-speedtree` and `engine-fallout`. This
+//! `engine-bs`, `engine-havok`, `engine-speedtree` and the twelve `engine-fallout-*`
+//! crates of the game's own units, by area ("The fallout crates"). This
 //! crate assembles them: everything is reachable as `engine::...` as before
 //! the split, and [`Engine::new`] registers every translated function.
 //!
