@@ -87,6 +87,12 @@ opt-level = 1
 [profile.play.package.engine-fallout-cell]
 opt-level = 1
 
+[profile.play.package.engine-fallout-forms]
+opt-level = 1
+# More modules (412) than the default 256 code-generation units: one unit each, so a
+# one-file fix re-generates one unit.
+codegen-units = 512
+
 [profile.play.package.engine]
 opt-level = 1
 
@@ -136,6 +142,12 @@ opt-level = 1
 
 [profile.play-fast.package.engine-fallout-cell]
 opt-level = 1
+
+[profile.play-fast.package.engine-fallout-forms]
+opt-level = 1
+# More modules (412) than the default 256 code-generation units: one unit each, so a
+# one-file fix re-generates one unit.
+codegen-units = 512
 
 [profile.play-fast.package.engine]
 opt-level = 3

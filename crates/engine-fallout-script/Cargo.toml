@@ -24,3 +24,4 @@ engine-fallout-facegen = { path = "../engine-fallout-facegen" }
 engine-fallout-pathfinding = { path = "../engine-fallout-pathfinding" }
 engine-fallout-env = { path = "../engine-fallout-env" }
 engine-fallout-cell = { path = "../engine-fallout-cell" }
+engine-fallout-forms = { path = "../engine-fallout-forms" }

@@ -21,6 +21,7 @@ engine-fallout-script = { path = "../engine-fallout-script" }
 engine-fallout-pathfinding = { path = "../engine-fallout-pathfinding" }
 engine-fallout-env = { path = "../engine-fallout-env" }
 engine-fallout-cell = { path = "../engine-fallout-cell" }
+engine-fallout-forms = { path = "../engine-fallout-forms" }
 
 [dev-dependencies]
 # The opt-in real-script run (`tests/real_scda.rs`) reads the player's
