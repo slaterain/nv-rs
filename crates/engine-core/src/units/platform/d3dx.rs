@@ -940,8 +940,9 @@ pub fn read_dds(data: &[u8]) -> Result<DdsImage, u32> {
 /// refuses answers its error and writes
 /// nothing (measured). A null info is not provided.
 ///
-/// With the real Direct3D 9 (`NV_D3D9=real`) the player's DLL answers instead, in this process
-/// ([`texture_source`]): it reads every image file format and pixel format D3DX does.
+/// With a real device behind one of the game's (`NV_D3D9=real`, Windows) and the DLL installed,
+/// the player's DLL answers instead, in this process ([`texture_source`], the texture calls' own
+/// rule): it reads every image file format and pixel format D3DX does.
 pub fn get_image_info_from_file_in_memory(e: &mut Engine, data: Ptr, size: u32, info: Ptr) -> u32 {
     assert!(
         !info.is_null(),
@@ -1009,13 +1010,14 @@ pub fn texture_source(real_device: bool, dll: bool) -> TextureSource {
     }
 }
 
-/// [`texture_source`] for a call on the game's `device` (`None`: a call without one, image
-/// info, which needs only `NV_D3D9=real`); each source printed the first time it is used.
+/// [`texture_source`] for a call on the game's `device` (`None`: a call without one, the image
+/// info, for which any of the game's devices with a real one behind it counts); each source
+/// printed the first time it is used.
 fn choose_source(e: &mut Engine, device: Option<u32>) -> TextureSource {
     #[cfg(windows)]
     let real = match device {
         Some(d) => super::d3d9real::real_device(e, d).is_some(),
-        None => super::d3d9real::wanted(),
+        None => super::d3d9real::any_real_device(e),
     };
     #[cfg(not(windows))]
     let real = {
@@ -1046,13 +1048,14 @@ pub fn set_texture_cache(e: &mut Engine, dir: std::path::PathBuf) {
     e.kernel.graphics.d3dx_texture_cache = Some(dir);
 }
 
-/// How to fill the texture cache, for the stop when an entry is missing.
+/// How to fill the texture cache, for the stop when an entry is missing (after the reason the
+/// cache is used, [`TextureSource::Cache`]).
 pub const TEXTURE_CACHE_HINT: &str =
-    "with the real Direct3D 9 (NV_D3D9=real, Windows) the player's d3dx9_38.dll answers every \
-     texture in the game's process and no cache is needed; without it, run \
-     `scripts/d3dx-texture-capture` on this machine (it reads the game's textures and the \
+    "run `scripts/d3dx-texture-capture` on this machine (it reads the game's textures and the \
      player's d3dx9_38.dll and writes the cache NV_D3DX_CACHE names, default \
-     %LOCALAPPDATA%/nv-rs/d3dx-cache)";
+     %LOCALAPPDATA%/nv-rs/d3dx-cache); no cache is needed when the game's device has a real one \
+     behind it (NV_D3D9=real, Windows) and d3dx9_38.dll (the DirectX June 2010 runtime) is in \
+     the system folder: the DLL then answers every texture in the game's process";
 
 /// FNV-1a, 64 bits.
 fn fnv(seed: u64, b: &[u8]) -> u64 {
@@ -1234,17 +1237,21 @@ fn create_from_file(
             .collect();
         return fill_texture(e, device, out, call, &entry, cube, &levels);
     }
-    let _ = source;
+    let TextureSource::Cache(why) = source else {
+        unreachable!("the DLL answers only on Windows, above");
+    };
     let key = texture_key(call, &bytes);
     let Some(dir) = e.kernel.graphics.d3dx_texture_cache.clone() else {
-        panic!("D3DX{call}: no texture cache is set: {TEXTURE_CACHE_HINT}");
+        panic!(
+            "D3DX{call}: no texture cache is set (the cache is used: {why}): {TEXTURE_CACHE_HINT}"
+        );
     };
     let cached = std::fs::read(dir.join(format!("{key}.tex"))).ok();
     let Some(entry) = cached.as_deref().and_then(parse_cached_texture) else {
         let saved = dir.join(format!("missing-{key}.dds"));
         let _ = std::fs::create_dir_all(&dir);
         let _ = std::fs::write(&saved, &bytes);
-        panic!("D3DX{call}: {key} is not in the texture cache (input saved to {}): {TEXTURE_CACHE_HINT}", saved.display());
+        panic!("D3DX{call}: {key} is not in the texture cache (input saved to {}; the cache is used: {why}): {TEXTURE_CACHE_HINT}", saved.display());
     };
     if entry.hr != 0 {
         return entry.hr;

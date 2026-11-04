@@ -96,7 +96,9 @@ Design (`units/platform/d3d9real.rs`):
    accepted. So no machine cache and no 32-bit helper are needed, and a mod's
    new textures load. Without the real device (tests, other platforms) or
    without the DLL the texture cache (`scripts/d3dx-texture-capture`) still
-   answers, and the log says which source is used (`D3DX textures: ...`).
+   answers, and the log says which source is used (`D3DX textures: ...`). The
+   image info, which takes no device, uses the DLL by the same rule over the
+   game's devices, so it never disagrees with the textures' source.
 7. **The switch.** `NV_D3D9=real` turns the forwarding on; unset (tests,
    other platforms) the layer is exactly the model. The viewer's Bevy window
    stays for now.

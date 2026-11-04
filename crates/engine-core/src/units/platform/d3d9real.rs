@@ -176,6 +176,27 @@ pub fn real_device(e: &Engine, this: u32) -> Option<IDirect3DDevice9> {
     }
 }
 
+/// Whether any of the game's modelled devices has a real one behind it (for a D3DX call that
+/// takes no device, the image info).
+pub fn any_real_device(e: &Engine) -> bool {
+    e.kernel
+        .graphics
+        .device_objects
+        .device_addresses()
+        .any(|d| {
+            matches!(
+                e.kernel.graphics.real.objects.get(&d),
+                Some(Object::Device(_))
+            )
+        })
+}
+
+/// Test only: the real counterpart of the modelled texture or cube texture `texture`.
+#[cfg(test)]
+pub(crate) fn real_texture(e: &Engine, texture: u32) -> Option<IDirect3DBaseTexture9> {
+    base_texture(e, texture)
+}
+
 /// Forgets the real counterpart of a modelled object that is destroyed (its address can be
 /// reused). It is not released yet but kept until the frame's `Present`: the model lets go of an
 /// object when the program unbinds it, before the same call reaches the real device, and the
@@ -2795,46 +2816,7 @@ mod tests {
     /// A real device on a hidden window of the window thread, as an engine object at 0x1000
     /// (`behavior`: the creation flags); `None` where Direct3D 9 has no device.
     fn test_device(e: &mut Engine, behavior: u32) -> Option<u32> {
-        let (reply, answer) = std::sync::mpsc::channel();
-        let sent = window_thread()
-            .lock()
-            .map(|tx| {
-                tx.send(Request {
-                    title: b"nv-rs test".to_vec(),
-                    style: 0,
-                    ex_style: 0,
-                    rect: [0, 0, 64, 64],
-                    parent: 0,
-                    reply,
-                })
-                .is_ok()
-            })
-            .unwrap_or(false);
-        let window = answer.recv().ok().filter(|&w| sent && w != 0)?;
-        let d3d = unsafe { Direct3DCreate9(32) }?;
-        let mut pp = D3DPRESENT_PARAMETERS {
-            BackBufferWidth: 64,
-            BackBufferHeight: 64,
-            BackBufferCount: 1,
-            SwapEffect: D3DSWAPEFFECT_DISCARD,
-            hDeviceWindow: HWND(window as *mut _),
-            Windowed: BOOL(1),
-            ..Default::default()
-        };
-        let mut out = None;
-        let made = unsafe {
-            d3d.CreateDevice(
-                0,
-                D3DDEVTYPE_HAL,
-                HWND(window as *mut _),
-                behavior | FPU_PRESERVE,
-                &mut pp,
-                &mut out,
-            )
-        };
-        let device = out.filter(|_| made.is_ok())?;
-        real(e).objects.insert(0x1000, Object::Device(device));
-        Some(0x1000)
+        test_real_device(e, 0x1000, behavior).map(|_| 0x1000)
     }
 
     /// Not a check: the host heap allocations of the forwarded per-frame calls on a real device
@@ -2955,6 +2937,54 @@ mod tests {
             e.kernel.graphics.real.logged
         );
     }
+}
+
+/// Test only: a real device on a hidden window of the window thread (`behavior`: the creation
+/// flags, the game's are 0x54, with `D3DCREATE_FPU_PRESERVE` as the layer adds), made the real
+/// counterpart of the modelled device `at`; `None` where Direct3D 9 has no device (no display
+/// adapter, as on CI).
+#[cfg(test)]
+pub(crate) fn test_real_device(e: &mut Engine, at: u32, behavior: u32) -> Option<IDirect3DDevice9> {
+    let (reply, answer) = std::sync::mpsc::channel();
+    let sent = window_thread()
+        .lock()
+        .map(|tx| {
+            tx.send(Request {
+                title: b"nv-rs test".to_vec(),
+                style: 0,
+                ex_style: 0,
+                rect: [0, 0, 64, 64],
+                parent: 0,
+                reply,
+            })
+            .is_ok()
+        })
+        .unwrap_or(false);
+    let window = answer.recv().ok().filter(|&w| sent && w != 0)?;
+    let d3d = unsafe { Direct3DCreate9(32) }?;
+    let mut pp = D3DPRESENT_PARAMETERS {
+        BackBufferWidth: 64,
+        BackBufferHeight: 64,
+        BackBufferCount: 1,
+        SwapEffect: D3DSWAPEFFECT_DISCARD,
+        hDeviceWindow: HWND(window as *mut _),
+        Windowed: BOOL(1),
+        ..Default::default()
+    };
+    let mut out = None;
+    let made = unsafe {
+        d3d.CreateDevice(
+            0,
+            D3DDEVTYPE_HAL,
+            HWND(window as *mut _),
+            behavior | FPU_PRESERVE,
+            &mut pp,
+            &mut out,
+        )
+    };
+    let device = out.filter(|_| made.is_ok())?;
+    real(e).objects.insert(at, Object::Device(device.clone()));
+    Some(device)
 }
 
 /// Test only: a stand-in for the real device and its objects (COM objects of this module whose
