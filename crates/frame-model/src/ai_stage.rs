@@ -44,7 +44,7 @@
 //! waits is one; which one a frame takes is the machine's timing, the
 //! thread split itself is platform). Both orders split at the render wait.
 //!
-//! **The calls.** [`FUNCTIONS`] holds, the way `world::frame::world_time`
+//! **The calls.** [`FUNCTIONS`] holds, the way `frame_model::world_time`
 //! does for stage 4, the calls doing the work inside the functions the
 //! threads and the main thread call here: `Main::OnIdle_UpdateAnimationsAndEffects`
 //! (`0086fc60`), `TES::UpdateCellAnimations` (`00453550`, the Havok step),
@@ -68,7 +68,7 @@
 //! translation and check its calls against this model ([`follows`]).
 //!
 //! The viewer orders the AI stage's systems by these sets
-//! (`viewer/src/frame_order.rs`, Phase 1 PR 6).
+//! (the removed `viewer/src/frame_order.rs`, Phase 1 PR 6).
 
 // AILinearTaskThreadManager's thread functions 008c7bd0, 008c7da0, 008c7f50:
 // their calls read from the disassembly (FalloutNV.exe 1.4.0.525); no
@@ -1651,7 +1651,7 @@ pub fn from_frame(frame: &super::FrameState, in_dialog: bool, interior_loaded: b
 }
 
 /// Checks a translation's calls (`log`, in order) against `f`'s model with
-/// inputs `s`, as `world::frame::world_time::follows` does: every reached
+/// inputs `s`, as `frame_model::world_time::follows` does: every reached
 /// sub-step without own tests is called, in order, and no call goes to a
 /// callee only unreached sub-steps have. `ignore`: callees the translation
 /// calls as Rust functions (not in its log).
@@ -1691,10 +1691,10 @@ pub fn follows(f: &Function, s: &AiState, log: &[Callee], ignore: &[Callee]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame::{step_of, FrameState, Gate, Stage, STEPS};
+    use crate::{step_of, FrameState, Gate, Stage, STEPS};
 
     /// `research/engine-map/frame.tsv`, the committed call tree.
-    const FRAME_TSV: &str = include_str!("../../../../research/engine-map/frame.tsv");
+    const FRAME_TSV: &str = include_str!("../../../research/engine-map/frame.tsv");
 
     /// The rows of `frame.tsv` as (depth, address).
     fn rows() -> Vec<(u32, u32)> {

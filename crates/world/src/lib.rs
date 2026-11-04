@@ -50,7 +50,7 @@ pub mod face;
 pub mod factions;
 pub mod fatigue;
 pub mod fos_import;
-pub mod frame;
+pub use frame_model as frame;
 pub mod functions;
 pub mod furniture;
 pub mod grass;

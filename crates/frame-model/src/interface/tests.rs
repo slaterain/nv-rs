@@ -1,9 +1,9 @@
 use super::*;
-use crate::frame::ai_stage::{self, ThreadOp};
-use crate::frame::{FrameState, Gate, STEPS};
+use crate::ai_stage::{self, ThreadOp};
+use crate::{FrameState, Gate, STEPS};
 
 /// `research/engine-map/frame.tsv`, the committed call tree.
-const FRAME_TSV: &str = include_str!("../../../../../research/engine-map/frame.tsv");
+const FRAME_TSV: &str = include_str!("../../../../research/engine-map/frame.tsv");
 
 /// The rows of `frame.tsv` as (depth, address).
 fn rows() -> Vec<(u32, u32)> {
@@ -324,7 +324,7 @@ fn sleeping() {
         ..FrameState::default()
     };
     assert!(from_frame(&frame, false).sleep_menu);
-    assert_eq!(SLEEP_WAIT_MENU, crate::frame::SLEEP_WAIT_MENU);
+    assert_eq!(SLEEP_WAIT_MENU, crate::SLEEP_WAIT_MENU);
 }
 
 // `00870190`-`0087027a`, `0086ffa2`, `0087008a`, `0087009e`, `008705a6`.

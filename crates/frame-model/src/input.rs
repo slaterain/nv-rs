@@ -237,10 +237,10 @@ pub fn poll_seen(reader: Reader, frame: &FrameState) -> Option<Poll> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame::Gate;
+    use crate::Gate;
 
     /// `research/engine-map/frame.tsv`, the committed call tree.
-    const FRAME_TSV: &str = include_str!("../../../../research/engine-map/frame.tsv");
+    const FRAME_TSV: &str = include_str!("../../../research/engine-map/frame.tsv");
 
     /// (depth, address) of each row.
     fn rows() -> Vec<(u32, u32)> {
@@ -319,7 +319,7 @@ mod tests {
         }
         // `PlayerCharacter::Update` and the free camera's input are the
         // player step's calls (slot +0x2f8 and `0086f9c7`).
-        use crate::frame::player;
+        use crate::player;
         assert!(player::UPDATE_PLAYER.iter().any(
             |c| c.site == 0x0086_f9c7 && c.callee == player::Callee::Direct(FREE_CAMERA_INPUT)
         ));
@@ -382,7 +382,7 @@ mod tests {
         };
         assert_eq!(poll_seen(Reader::Player, &held), None);
         assert_eq!(poll_seen(Reader::InterfaceIdle, &held), None);
-        assert!(!crate::frame::step_runs(&held, poll_step()));
+        assert!(!crate::step_runs(&held, poll_step()));
     }
 
     /// The buffer's parts don't overlap, each previous copy follows its

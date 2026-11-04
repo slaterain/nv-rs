@@ -36,7 +36,7 @@
 //!   `0043d4d0`): 1 runs the AI work on this thread, more starts the AI
 //!   linear task threads (FRAME_SKELETON.md, "The actor updates").
 //! - **V.A.T.S. playback** (the V.A.T.S. manager's mode, `[011f2250]`+8
-//!   through `0044ddc0`, is 4, [`crate::vats::mode::PLAYBACK`]): the scene
+//!   through `0044ddc0`, is 4, [`crate::VATS_PLAYBACK`]): the scene
 //!   graph's field of view is not set.
 //! - **Loading**: the start menu (`[011daac0]`) with its flag 0x10000
 //!   (`0086efa0`, `004a4080`) skips the loading block; the start menu up
@@ -60,7 +60,7 @@
 //! the function sets to 0 just before (`0086ebbb`), so they are never taken.
 //!
 //! The viewer orders its per-frame systems by these stages and steps and
-//! runs them under these gates (`viewer/src/frame_order.rs`, Phase 1 PR 3).
+//! runs them under these gates (the removed `viewer/src/frame_order.rs`, Phase 1 PR 3).
 //! The player's step, `Main::OnIdle_UpdatePlayer`, is split further in
 //! [`player`] (Phase 1 PR 4); the world and time stage's callees in
 //! [`world_time`] (Phase 1 PR 5); the AI task stage (the AI linear task
@@ -81,6 +81,10 @@ pub mod input;
 pub mod interface;
 pub mod player;
 pub mod world_time;
+
+/// The V.A.T.S. manager's mode while its queue plays (`[011f2250]`+8, read
+/// through `0044ddc0`): 4.
+pub const VATS_PLAYBACK: u8 = 4;
 
 /// FRAME_SKELETON.md's stages, for grouping only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -237,7 +241,7 @@ pub enum Gate {
     /// is `0070ed20`, called with 0 here and by `InterfaceManager::Idle`
     /// (`0070e5d3`).
     ConsoleRequested,
-    /// `00950090` (the byte `[011e07b8]`, docs/CAMERA.md: the view key held)
+    /// `00950090` (the byte `[011e07b8]`, the removed docs/CAMERA.md: the view key held)
     /// is asked when `IsInMenuMode`, asked again, is false (`0086eeb9`) and
     /// the player `[011dea3c]` exists (`0086eec2`).
     AskViewKey,
@@ -293,7 +297,7 @@ pub struct FrameState {
     pub running_cell_tests_2: bool,
     /// `[011f4461]` (`0086ef60`).
     pub purge_textures: bool,
-    /// The V.A.T.S. manager's mode (`[011f2250]`+8, [`crate::vats::mode`]).
+    /// The V.A.T.S. manager's mode (`[011f2250]`+8, [`VATS_PLAYBACK`]).
     pub vats_mode: u32,
     /// `bUseObstacleAvoidance:Pathfinding` (`011d73e4`).
     pub obstacle_avoidance: bool,
@@ -432,7 +436,7 @@ impl Gate {
             Gate::ProcessListsSingleThread => one_thread && s.process_lists(),
             Gate::PurgeTextures => s.purge_textures,
             Gate::InterfaceIdleSingleThread => one_thread,
-            Gate::NotVatsPlayback => s.vats_mode != u32::from(crate::vats::mode::PLAYBACK),
+            Gate::NotVatsPlayback => s.vats_mode != u32::from(crate::VATS_PLAYBACK),
             Gate::AiTasks => s.process_lists(),
             Gate::AiThreadsStart => s.process_lists() && s.threads > 1,
             Gate::AiTaskQueueStart => s.process_lists() && s.threads <= 1,
@@ -571,8 +575,8 @@ const IDLE_WIRING: &str = "interface::DO_INTERFACE_IDLE_STEPS and the interface 
     idle's position after the controls' poll, frame_order::IdleSet; the one-thread and menu-mode \
     fallback positions open)";
 
-/// The controls' poll's wiring (step 33, `world::frame::input`).
-const POLL_WIRING: &str = "world::frame::input; viewer: poll::poll_controls puts the frame's \
+/// The controls' poll's wiring (step 33, `frame_model::input`).
+const POLL_WIRING: &str = "frame_model::input; viewer: poll::poll_controls puts the frame's \
     device read (keys, mouse buttons, mouse motion and wheel; no pad) into the controls' buffer, \
     which the player's step read as the last frame left it";
 
@@ -591,7 +595,7 @@ pub const STEPS: [FrameStep; 143] = [
     step(0x004b_7210, None, Stage::FrameStart, Gate::Always, Wiring::Open),
     step(0x0042_4940, None, Stage::FrameStart, Gate::Always, Wiring::Open),
     step(0x0087_82b0, Some("MemoryLevelManager::RunNonDestructiveFree"), Stage::FrameStart, Gate::FreeMemory, Wiring::Open),
-    step(0x0086_f940, Some("Main::OnIdle_UpdatePlayer"), Stage::Player, Gate::Always, Wiring::Partial("world::frame::player (its calls and PlayerCharacter::Update's sub-steps, in order, with their gates; viewer: frame_order::PlayerSet)")),
+    step(0x0086_f940, Some("Main::OnIdle_UpdatePlayer"), Stage::Player, Gate::Always, Wiring::Partial("frame_model::player (its calls and PlayerCharacter::Update's sub-steps, in order, with their gates; viewer: frame_order::PlayerSet)")),
     step(0x006f_f580, None, Stage::Player, Gate::Always, Wiring::Open),
     step(0x006f_f860, None, Stage::Player, Gate::Always, Wiring::Open),
     step(0x0086_fd90, Some("Main::OnIdle_UpdateImageSpace"), Stage::Player, Gate::Always, Wiring::Open),
@@ -1183,7 +1187,7 @@ mod tests {
     #[test]
     fn vats_playback_keeps_the_fov() {
         let playback = FrameState {
-            vats_mode: u32::from(crate::vats::mode::PLAYBACK),
+            vats_mode: u32::from(crate::VATS_PLAYBACK),
             ..FrameState::default()
         };
         assert!(!runs(&playback, 0x00c5_2020, 0) && !runs(&playback, 0x0071_0ab0, 0));

@@ -38,7 +38,7 @@
 //! lists both call sites.
 //!
 //! The viewer orders its player systems by these sets
-//! (`viewer/src/frame_order.rs`, Phase 1 PR 4).
+//! (the removed `viewer/src/frame_order.rs`, Phase 1 PR 4).
 
 // Translated from 0086f940 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translated from 0093e860 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -699,7 +699,7 @@ mod tests {
     use super::*;
 
     /// `research/engine-map/frame.tsv`, the committed call tree.
-    const FRAME_TSV: &str = include_str!("../../../../research/engine-map/frame.tsv");
+    const FRAME_TSV: &str = include_str!("../../../research/engine-map/frame.tsv");
 
     fn names(indices: &[usize]) -> Vec<u32> {
         indices

@@ -47,7 +47,7 @@
 //! dev-dependency of the engine crate).
 //!
 //! The viewer orders the stage's systems by these sets
-//! (`viewer/src/frame_order.rs`, Phase 1 PR 5).
+//! (the removed `viewer/src/frame_order.rs`, Phase 1 PR 5).
 
 // Translated from 004556d0 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translated from 00867a40 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1619,10 +1619,10 @@ pub fn follows(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame::{step_of, Gate, Stage, STEPS};
+    use crate::{step_of, Gate, Stage, STEPS};
 
     /// `research/engine-map/frame.tsv`, the committed call tree.
-    const FRAME_TSV: &str = include_str!("../../../../research/engine-map/frame.tsv");
+    const FRAME_TSV: &str = include_str!("../../../research/engine-map/frame.tsv");
 
     /// The rows of `frame.tsv` as (depth, address).
     fn rows() -> Vec<(u32, u32)> {
@@ -1918,9 +1918,9 @@ mod tests {
     fn trees() {
         let f = function(0x0066_52e0).unwrap();
         assert_eq!(steps_run(&WorldState::default(), f).len(), 7);
-        let menu = from_frame(&crate::frame::FrameState {
+        let menu = from_frame(&crate::FrameState {
             in_menu_mode: true,
-            ..crate::frame::FrameState::default()
+            ..crate::FrameState::default()
         });
         assert_eq!(reached(f, &menu), [0x0066_539b, 0x0066_54ef, 0x0066_5507]);
         let inside = WorldState {

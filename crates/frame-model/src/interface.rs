@@ -10,7 +10,7 @@
 //! with the tests that decide which of their calls run
 //! (docs/FRAME_SKELETON.md, "PR 7 result").
 //!
-//! As `world::frame::ai_stage` does for stage 6, [`FUNCTIONS`] holds for
+//! As `frame_model::ai_stage` does for stage 6, [`FUNCTIONS`] holds for
 //! each function the calls doing its work (not the queries: getters, the
 //! interface manager's singleton `004b7210`, settings, tile values, the
 //! controls' object `007fdf30`/`00877720`, list nodes), in the order of their
@@ -133,7 +133,7 @@ pub const OPEN_CONSOLE: u32 = 0x0070_3e10;
 pub const POLL_CONTROLS: u32 = 0x0086_f390;
 
 /// The AI linear task threads' functions that call the interface idle
-/// first (`world::frame::ai_stage`).
+/// first (`frame_model::ai_stage`).
 pub const COMBINED_THREAD: u32 = 0x008c_7bd0;
 /// Thread 1 of the pair.
 pub const THREAD_1: u32 = 0x008c_7da0;
@@ -607,7 +607,7 @@ use Wiring::{Open, Partial};
 
 const MENUS_WIRING: Wiring = Partial(
     "viewer: menu behavior in frame_order::IdleSet, at the AI idle's position after the \
-     controls' poll (world::frame::input); idle caller routing and pre/idle/post ordering \
+     controls' poll (frame_model::input); idle caller routing and pre/idle/post ordering \
      remain open",
 );
 
@@ -1895,7 +1895,7 @@ pub const POLL_CONTROLS_STEPS: [SubStep; 3] = [
         Some("Controls::Poll"),
         G::Always,
         &[],
-        Partial("viewer: poll::poll_controls (world::frame::input)"),
+        Partial("viewer: poll::poll_controls (frame_model::input)"),
     ),
     // The frame time handed to the controls.
     sub(
@@ -2117,7 +2117,7 @@ pub fn from_frame(frame: &super::FrameState, in_dialog: bool) -> InterfaceState 
         fader_visible: frame.fader_visible,
         console_visible: frame.console_visible,
         world_frozen: frame.world_frozen,
-        vats_playback: frame.vats_mode == u32::from(crate::vats::mode::PLAYBACK),
+        vats_playback: frame.vats_mode == u32::from(crate::VATS_PLAYBACK),
         pipboy_opening: frame.pipboy_opening,
         sleep_menu: frame.top_menu == SLEEP_WAIT_MENU,
         in_dialog,
@@ -2131,7 +2131,7 @@ pub fn from_frame(frame: &super::FrameState, in_dialog: bool) -> InterfaceState 
 }
 
 /// Checks a translation's calls (`log`, in order) against `f`'s model with
-/// inputs `s`, as `world::frame::world_time::follows` does: every reached
+/// inputs `s`, as `frame_model::world_time::follows` does: every reached
 /// sub-step without own tests is called, in order, and no call goes to a
 /// callee only unreached sub-steps have. `ignore`: callees the translation
 /// calls as Rust functions (not in its log).
