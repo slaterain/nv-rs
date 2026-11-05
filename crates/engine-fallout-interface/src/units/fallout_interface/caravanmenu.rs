@@ -8024,8 +8024,8 @@ fn idle_input(e: &mut Engine, this: Ptr<CaravanMenu>, input: &mut IdleInput) {
 /// (`004b71d0`), a release of the meter (`pim`'s float +0x48 back to 0.0
 /// after a press, `iPrevValue` the value at the press) moves by the
 /// difference (states 5 or 6 for 1 to 4 steps, 8 or 9 for more), and a
-/// press records the value and `00747d00`'s position. In state 0 the
-/// pending key or stick steps the meter by x every 0.25 s.
+/// press records the value and `00747d00`'s position. In state 0, only when
+/// `004b71d0` is false, the pending key or stick steps the meter by x every 0.25 s.
 fn idle_deck_input(e: &mut Engine, this: Ptr<CaravanMenu>, input: &mut IdleInput) {
     let menu = this.addr();
     if input.x != 0 {
