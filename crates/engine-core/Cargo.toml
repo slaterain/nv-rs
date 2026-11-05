@@ -8,7 +8,9 @@ description = "The core of the engine crates: the game's memory model, Engine, t
 
 [features]
 # Test support that other engine crates' unit tests use (the form-constructor
-# checker `units::crt::ctor_test`); they enable it as a dev-dependency.
+# checker `units::crt::ctor_test`, and for `engine-platform` the addresses and helpers of
+# `units::crt::stdio::test_support` and `units::platform::test_support`); they enable it as a
+# dev-dependency.
 test-support = []
 
 # Win32_System_Memory: the guest memory's 4 GB host reservation (mem.rs, VirtualAlloc and

@@ -130,13 +130,15 @@ translation units, so the crate has no `units/` folder for `ledger units` to gen
   both, so `register_imports` finds the same function as before); each engine's
   `Kernel::platform` holds the layer's `State` (the DirectInput, DirectSound and Direct3D 9
   objects, the windows, the run's disk and the process side; `state!(e).sound` in the layer
-  where it was `e.kernel.sound`, `engine_platform::state(&e.kernel.platform)` outside);
+  where it was `e.kernel.sound`, `state_ref!(e).sound` to read it through a shared borrow,
+  `engine_platform::state(&e.kernel.platform)` outside);
   its file and search handles are `KernelObject::File`/`FindFile` holding an `Opaque`
   object, and `CloseHandle` on a file runs the layer's `file_closed`; `GetProcAddress` on
   `D3D9.DLL` or `nvapi.dll` asks the layer's `proc_address`. A program without the layer (a
   part crate's tests) has the core's imports only.
 - **Tests:** the layer's tests are its own (`cargo test -p engine-platform --lib`), with the
-  C runtime's stdio tests that open files (`crt_stdio_tests.rs`, from `crt/stdio.rs`).
+  C runtime's stdio tests that open files (`crt_stdio_tests.rs`, from `crt/stdio.rs`, which reach
+  the core's addresses through `engine-core`'s `test-support` feature).
 
 ### The fallout crates
 
