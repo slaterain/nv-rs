@@ -397,14 +397,17 @@ mod tests {
         assert_eq!(global_memory_status_ex(&mut e, Ptr::new(AT)), 0);
         assert_eq!(e.kernel.last_error, 87);
         assert_eq!(e.mem.u64(AT + 0x28), 0x1234, "nothing written");
-        e.mem.set_u32(AT, 0x40);
-        assert_eq!(global_memory_status_ex(&mut e, Ptr::new(AT)), 1);
-        assert_eq!(e.mem.u32(AT), 0x40);
-        assert!(e.mem.u64(AT + 0x08) > 0, "the machine's physical memory");
-        assert_eq!(e.mem.u64(AT + 0x28), 0xfffe_0000);
-        global_memory_status(&mut e, Ptr::new(AT));
-        assert_eq!(e.mem.u32(AT), 0x20);
-        assert_eq!(e.mem.u32(AT + 0x18), 0xfffe_0000);
+        // The machine's sizes are only read on Windows so far.
+        if cfg!(windows) {
+            e.mem.set_u32(AT, 0x40);
+            assert_eq!(global_memory_status_ex(&mut e, Ptr::new(AT)), 1);
+            assert_eq!(e.mem.u32(AT), 0x40);
+            assert!(e.mem.u64(AT + 0x08) > 0, "the machine's physical memory");
+            assert_eq!(e.mem.u64(AT + 0x28), 0xfffe_0000);
+            global_memory_status(&mut e, Ptr::new(AT));
+            assert_eq!(e.mem.u32(AT), 0x20);
+            assert_eq!(e.mem.u32(AT + 0x18), 0xfffe_0000);
+        }
     }
 
     #[test]
