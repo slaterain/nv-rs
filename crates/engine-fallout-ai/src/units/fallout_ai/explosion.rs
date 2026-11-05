@@ -207,9 +207,10 @@ pub fn fn_009ac5a0(e: &mut Engine, this: Ptr) {
     }
 
     let physics = e.call(0x008d_6f30, &args![this]).u32();
-    if physics != 0 && e.call(0x0045_43c0, &args![physics]).bool() {
+    // 004543c0 answers a pointer, tested whole (009ac669).
+    if physics != 0 && e.call(0x0045_43c0, &args![physics]).u32() != 0 {
         let physics = e.call(0x008d_6f30, &args![this]).u32();
-        if physics != 0 && e.call(0x0045_43c0, &args![physics]).bool() {
+        if physics != 0 && e.call(0x0045_43c0, &args![physics]).u32() != 0 {
             let base = e.call(0x0043_fcd0, &args![this]).u32();
             e.call(0x00c6_9ee0, &args![base, 1u32, 0u32]);
         }
@@ -7843,9 +7844,10 @@ mod tests {
             assert_eq!(a, &[0x1000]);
             0x2100u32.into_ret()
         });
+        // A pointer whose low byte is 0.
         e.register(0x0045_43c0, |_, a| {
             assert_eq!(a, &[0x2100]);
-            true.into_ret()
+            0x0100_0100u32.into_ret()
         });
         e.register(0x00c6_9ee0, |_, a| {
             assert_eq!(a, &[0x2000, 1, 0]);
@@ -7941,7 +7943,9 @@ mod tests {
 
         assert_eq!(e.mem.u32(0x1000), 0x0108_ee04);
         assert_eq!(e.mem.u32(0x1018), 0x0108_edf8);
-        assert!(e.call_log.unwrap().iter().any(|call| call.0 == 0x0049_f590));
+        let log = e.call_log.unwrap();
+        assert!(log.iter().any(|call| call.0 == 0x0049_f590));
+        assert!(log.iter().any(|call| call.0 == 0x00c6_9ee0));
     }
 
     #[test]
