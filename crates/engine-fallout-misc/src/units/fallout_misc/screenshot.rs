@@ -575,7 +575,7 @@ mod tests {
             Options {
                 no_target: false,
                 surface_fails: false,
-                ratio: (2, 1),
+                ratio: (3, 2),
                 path_accepted: true,
                 file_opens: true,
                 camera_test: false,
@@ -822,13 +822,13 @@ mod tests {
         let (mut e, s) = scene(Options::default());
         let image = e.call(0x0087_8f60, &[s.width, s.height, 0]).u32();
         assert_eq!(image, IMAGE);
-        // 2 * 2.0 = 4: written back to the height (0087931a..23); the width stays.
+        // 2 * 1.5 = 3: written back to the height (0087931a..23); the width stays.
         assert_eq!(e.mem.u32(s.width), 4);
-        assert_eq!(e.mem.u32(s.height), 4);
+        assert_eq!(e.mem.u32(s.height), 3);
         let ftol = arguments(&s, FTOL);
         assert_eq!(ftol.len(), 1);
         let value = f64::from_bits(u64::from(ftol[0][0]) | u64::from(ftol[0][1]) << 32);
-        assert_eq!(value, 4.0);
+        assert_eq!(value, 3.0);
         // The render target gets the requested size, not the scaled one.
         let target = &arguments(&s, CREATE_RENDER_TARGET)[0];
         assert_eq!(target[1], 4);
@@ -842,7 +842,7 @@ mod tests {
                 0.0f32.to_bits(),
                 1.0f32.to_bits(),
                 1.0f32.to_bits(),
-                (-1.0f32).to_bits()
+                (-0.5f32).to_bits()
             ]
         );
         assert_eq!(arguments(&s, RESET_FLOATS)[0], vec![FLOAT_OWNER]);
@@ -850,14 +850,15 @@ mod tests {
         // format value.
         let create = &arguments(&s, SLOT_CREATE_SURFACE)[0];
         assert_eq!(create[..5], [DEVICE, 2, 4, 0x16, 2]);
-        // The image is made with the scaled height.
+        // The image is made with the width then the scaled height (00879346..58).
         assert_eq!(
             arguments(&s, IMAGE_CONSTRUCT)[0],
-            vec![IMAGE, 4, 4, IMAGE_DESCRIPTION, 1, 1]
+            vec![IMAGE, 4, 3, IMAGE_DESCRIPTION, 1, 1]
         );
         // Blue, green, red, alpha become red, green, blue.
         assert_eq!(e.mem.bytes(s.pixels, 6), vec![2, 1, 0, 6, 5, 4]);
-        assert_eq!(e.mem.u8(s.pixels + 47), 60);
+        assert_eq!(e.mem.u8(s.pixels + 35), 44);
+        assert_eq!(e.mem.u8(s.pixels + 36), 0);
         // The order of the main steps.
         let order = [
             SLOT_CREATE_SURFACE,
@@ -940,26 +941,26 @@ mod tests {
         assert_eq!(arguments(&s, PATH_PREPARE)[0], vec![path]);
         let writes = s.writes.borrow();
         assert_eq!(writes.len(), 2);
-        // 4 x 4 pixels, 3 bytes each.
+        // 4 x 3 pixels, 3 bytes each.
         let header = &writes[0];
         assert_eq!(header.len(), 0x36);
         assert_eq!(&header[0..2], b"BM");
         let word = |at: usize| u32::from_le_bytes(header[at..at + 4].try_into().unwrap());
-        assert_eq!(word(2), 48 + 0x36);
+        assert_eq!(word(2), 36 + 0x36);
         assert_eq!(word(10), 0x36);
         assert_eq!(word(14), 0x28);
         assert_eq!(word(18), 4);
-        assert_eq!(word(22), 4);
+        assert_eq!(word(22), 3);
         assert_eq!(u16::from_le_bytes(header[26..28].try_into().unwrap()), 1);
         assert_eq!(u16::from_le_bytes(header[28..30].try_into().unwrap()), 24);
-        assert_eq!(word(34), 48);
+        assert_eq!(word(34), 36);
         assert!(header[38..].iter().all(|b| *b == 0));
         // The first pixel written is the first of the last row, with red
         // and blue swapped back.
         let body = &writes[1];
-        assert_eq!(body.len(), 48);
-        let last_row = 3 * 4 * 3;
-        let pixels = e.mem.bytes(s.pixels, 48);
+        assert_eq!(body.len(), 36);
+        let last_row = 2 * 4 * 3;
+        let pixels = e.mem.bytes(s.pixels, 36);
         assert_eq!(body[0], pixels[last_row + 2]);
         assert_eq!(body[1], pixels[last_row + 1]);
         assert_eq!(body[2], pixels[last_row]);

@@ -1349,8 +1349,9 @@ fn start_change_time(e: &mut Engine, base: u32) -> bool {
 /// 0x15, 0x1B, 0x20 and 0x21), not below 0.0; still 0.0, the default
 /// distance setting. The actor's virtual `+0x2CC` (position, distance,
 /// flag, 1) moves it; when it does, the location's change time starts
-/// (extra data 0x51 and 0x6F) if unset, and for procedures 0 to 5 the
-/// duration is recomputed (`006435c0`).
+/// (extra data 0x51 and 0x6F) if unset, and only then, for procedures 0 to 5,
+/// the duration is recomputed (`006435c0`; 009f596d, 009f5980 and 009f599a jump
+/// past it).
 pub fn fn_009f56b0(e: &mut Engine, this: Ptr, actor: Ptr, distance: f32) -> bool {
     let base = this.addr();
     if actor.is_null() {

@@ -5417,8 +5417,8 @@ pub fn fn_004e8e40(e: &mut Engine, this: Ptr<WadingWaterData>) -> Ptr<WadingWate
 /// player moved more than 4.0 from the geometry of the first group that has
 /// one), refreshing the stencil mask and textures of its shader property. It
 /// then publishes the displacement shader constants, fills the two
-/// displacement arrays from the `WadingWaterMap`, advances the timer (or
-/// resets it when no displacement was added) and renders the displacement
+/// displacement arrays from the `WadingWaterMap`, resets the timer when a
+/// displacement was added (else advances it) and renders the displacement
 /// image-space effect. Otherwise it detaches the wading geometry of every
 /// group and gives the height map back.
 pub fn tes_water_system_update_water_displacement_simulation(
@@ -13911,7 +13911,7 @@ mod tests {
                 e.mem.set_u32(a[3], data);
                 Ret::default()
             });
-            // A count of one in the first array advances the timer.
+            // A count of one in the first array restarts the timer (004e93d0).
             w.e.set_global(DISPLACEMENT_POINTS_A + 8, 1u32);
             simulate(&mut w);
             assert_eq!(

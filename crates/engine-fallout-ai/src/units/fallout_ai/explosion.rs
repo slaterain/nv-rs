@@ -207,10 +207,12 @@ pub fn fn_009ac5a0(e: &mut Engine, this: Ptr) {
     }
 
     let physics = e.call(0x008d_6f30, &args![this]).u32();
-    // 004543c0 answers a pointer, tested whole (009ac669).
+    // 004543c0 answers a pointer. The first answer is tested whole (009ac66e); the
+    // second is not tested (009ac688 goes straight on to 009ac68d).
     if physics != 0 && e.call(0x0045_43c0, &args![physics]).u32() != 0 {
         let physics = e.call(0x008d_6f30, &args![this]).u32();
-        if physics != 0 && e.call(0x0045_43c0, &args![physics]).u32() != 0 {
+        if physics != 0 {
+            e.call(0x0045_43c0, &args![physics]);
             let base = e.call(0x0043_fcd0, &args![this]).u32();
             e.call(0x00c6_9ee0, &args![base, 1u32, 0u32]);
         }
@@ -7844,10 +7846,17 @@ mod tests {
             assert_eq!(a, &[0x1000]);
             0x2100u32.into_ret()
         });
-        // A pointer whose low byte is 0.
-        e.register(0x0045_43c0, |_, a| {
+        // First a pointer whose low byte is 0, then nothing: the second answer is not tested.
+        let asked = e.mem.alloc(4);
+        e.register_double(0x0045_43c0, move |e, a| {
             assert_eq!(a, &[0x2100]);
-            0x0100_0100u32.into_ret()
+            let times = e.mem.u32(asked);
+            e.mem.set_u32(asked, times + 1);
+            if times == 0 {
+                0x0100_0100u32.into_ret()
+            } else {
+                0u32.into_ret()
+            }
         });
         e.register(0x00c6_9ee0, |_, a| {
             assert_eq!(a, &[0x2000, 1, 0]);

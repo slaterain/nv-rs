@@ -7850,6 +7850,19 @@ fn fix_default_health(e: &mut Engine, entry: u32) {
     }
 }
 
+/// Whether this very entry is still in the changes (by its address, so another
+/// entry of the same form does not stand in for it).
+fn changes_hold_entry(e: &mut Engine, this: Ptr<InventoryChanges>, entry: u32) -> bool {
+    let mut node = e.get(this, InventoryChanges::pListofChanges).addr();
+    while node != 0 {
+        if list_item(e, node) == entry {
+            return true;
+        }
+        node = list_next(e, node);
+    }
+    false
+}
+
 /// Removes the player ownership from every extra list of an entry of the
 /// changes (the ammunition steps of `fn_004cbbc0` do it when the owner is
 /// the player).
@@ -9260,7 +9273,7 @@ pub fn fn_004ce380(
             // exe reads it even when the removal deleted the entry; that only
             // happens to one whose number is 0, which its destructor (004bc5f0)
             // leaves in place, so a deleted entry shows 0 here without the read.
-            let shown = if inventory_changes_get_object_in_list(e, this, form, 1, 0) == entry {
+            let shown = if changes_hold_entry(e, this, entry) {
                 e.mem.u32(entry + 4) as i32
             } else {
                 0
@@ -16707,6 +16720,22 @@ mod tests {
         transfer_all(&mut e, 0x004ce380, this, owner, PLAYER, [0; 4], -1, 0);
         let formats = calls(&e, FORMAT_STRING);
         assert_eq!(formats[0][1..3], [FORMAT_COUNT_NAME, 0]);
+    }
+
+    #[test]
+    fn a_kept_entry_is_found_by_its_address_behind_another_of_its_form() {
+        let mut e = tx8();
+        let owner = object(&mut e);
+        let this = inventory(&mut e, &[], owner);
+        let item = big_form(&mut e, 0x19, 4);
+        let front = entry(&mut e, item, &[], 0);
+        put_entry(&mut e, this, front);
+        let change = entry(&mut e, item, &[], 2);
+        put_entry(&mut e, this, change);
+        assert!(changes_hold_entry(&mut e, this, change));
+        assert!(changes_hold_entry(&mut e, this, front));
+        let gone = entry(&mut e, item, &[], 2);
+        assert!(!changes_hold_entry(&mut e, this, gone));
     }
 
     #[test]

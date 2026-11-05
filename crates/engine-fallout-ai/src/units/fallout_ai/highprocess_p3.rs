@@ -4316,7 +4316,7 @@ fn detection_state_set(e: &mut Engine, state: u32, level: i32, sight: u8, raw: i
 
 /// The "level is above the threshold" test of `RunDetection`: `FCOMP` of the
 /// setting against the integer level; `TEST AH,5`/`JP`: true when the setting is
-/// below it (8e45aa, 8e4bd3, 8e4c13).
+/// below it (8e4c13).
 fn detection_threshold_below(e: &mut Engine, level: i32) -> bool {
     let setting = e
         .call(SETTING_VALUE, &args![DETECTION_THRESHOLD_SETTING])
