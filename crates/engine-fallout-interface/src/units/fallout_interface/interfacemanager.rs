@@ -13340,7 +13340,7 @@ mod tests {
     fn a_five_by_three_screen_limits_the_string_lists() {
         for (width, height, limited) in [(1280.0, 768.0, true), (1920.0, 1080.0, false)] {
             let mut e = world();
-            e.set_global(WIDESCREEN_RATIO, 1.600_000_023_841_857_9f64);
+            e.set_global(WIDESCREEN_RATIO, f64::from(1.6f32));
             e.set_global(WIDESCREEN_INVERSE_RATIO, 0.600_000_023_841_857_9f64);
             e.register_double(GET_DESKTOP_WIDTH, move |_, _| Ret {
                 st0: width,
