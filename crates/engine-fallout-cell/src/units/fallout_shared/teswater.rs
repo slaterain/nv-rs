@@ -5639,7 +5639,8 @@ pub fn tes_water_system_update_water_displacement_simulation(
                     e.call(POINT2_ARRAY_APPEND, &args![DISPLACEMENT_POINTS_B, data + 8]);
                 }
             });
-            if e.call(LIST_COUNT, &args![DISPLACEMENT_POINTS_A]).u32() == 0 {
+            // Ripples placed restart the timer (004e93ce, 004e93d0).
+            if e.call(LIST_COUNT, &args![DISPLACEMENT_POINTS_A]).u32() != 0 {
                 e.set(this, TESWaterSystem::fTimeSinceLastRipplePlaced, 0.0);
             } else {
                 let step = e.call(FLOAT_TABLE_ENTRY, &args![1u32]).f32();
@@ -13926,19 +13927,19 @@ mod tests {
             );
             assert_eq!(
                 w.e.get(w.system, TESWaterSystem::fTimeSinceLastRipplePlaced),
-                1.5
+                0.0
             );
             let render = calls(&w.e, IMAGE_SPACE_RENDER_DISPLACEMENT);
             assert_eq!(render[0][1], 0x20);
             assert_ne!(render[0][2], 0, "the renderer");
             assert_eq!(render[0][3..], [0x0e00_0100, 0x0e00_0100, 0, 1]);
-            // Without entries the count stays zero and the timer restarts.
+            // Without entries the count stays zero and the timer runs on.
             w.e.register(ZONE_MAP_FIRST, |_, _| ret(0));
             w.e.set_global(DISPLACEMENT_POINTS_A + 8, 0u32);
             simulate(&mut w);
             assert_eq!(
                 w.e.get(w.system, TESWaterSystem::fTimeSinceLastRipplePlaced),
-                0.0
+                0.5
             );
         }
 
