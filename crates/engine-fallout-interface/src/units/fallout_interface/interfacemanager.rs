@@ -1742,7 +1742,7 @@ fn limit_string_lists_on_wide_screens(e: &mut Engine) {
     }
 }
 
-// Translated from 0070adb0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translated from 0070adb0 (decompiled, FalloutNV.exe 1.4.0.525), read against fnv_decomp
 /// `InterfaceManager::Init` (Xbox PDB): first initialization. Optionally
 /// loads the text table, builds the root tile (`MenuRoot`) with the screen
 /// metrics as traits, reads `globals.xml`, creates the debug text root and

@@ -2933,7 +2933,7 @@ fn meter_quotient(e: &mut Engine, width: i32, fraction: f32, scale: i32) -> i32 
     x87_to_int(e, x87_div(product, f64::from(scale)))
 }
 
-// Translated from 007748b0 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translated from 007748b0 (decompiled, FalloutNV.exe 1.4.0.525), read against fnv_decomp
 /// `HUDMainMenu::UpdateMeter` (Xbox PDB): fits the requested fraction into
 /// an integral number of image widths, then positions the meter for its
 /// left-, right- or center-anchored mode.
@@ -3004,7 +3004,7 @@ pub fn hud_main_menu_update_meter(
     hud_trait(e, target.addr(), 0xfa1, position as u32);
 }
 
-// Translated from 00774b00 (decompiled, FalloutNV.exe 1.4.0.525)
+// Translated from 00774b00 (decompiled, FalloutNV.exe 1.4.0.525), read against fnv_decomp
 // Translation incomplete: 00774b00 - the compiler's SEH unwind frame is omitted.
 /// `HUDMainMenu::UpdateMeter_ov2` (Xbox PDB): sizes and positions two
 /// overlapping meter tiles, including the center anchor's child tile and
