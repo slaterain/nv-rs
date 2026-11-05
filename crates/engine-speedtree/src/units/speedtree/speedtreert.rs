@@ -11,9 +11,9 @@
 //! A float copied through the x87 stack (`FLD dword`, `FSTP dword`) goes through
 //! [`x87_quiet_bits`].
 //!
-//! Exceptions (ADR-0013): the 27 public functions the exe gives `catch(std::exception&)` and
-//! `catch(...)` run their exe try states in [`speedtree_try`], and `LoadTree` in its own
-//! `try_catch`; each returns what its continuation returns after a catch. The other functions
+//! Exceptions (ADR-0013): 26 of the public functions the exe gives `catch(std::exception&)` and
+//! `catch(...)` run their exe try states in [`speedtree_try`], the two `LoadTree` forms in their
+//! own `try_catch`; each returns what its continuation returns after a catch. The other functions
 //! that carry an `FS:[0]` exception frame are marked `Translation incomplete` (the frame is not
 //! built: a throw through one skips its destructors).
 
@@ -5512,11 +5512,10 @@ mod tests {
     fn a_throw_below_no_catching_function_stops_naming_the_type() {
         let (mut e, calls) = recording(&[]);
         real_throws(&mut e, &calls);
-        let vtable = what_vtable(&mut e, &calls);
+        // The parse error's message is its `runtime_error` string, inline here.
         let error = e.mem.alloc(0x28);
-        e.mem.set_u32(error, vtable);
-        e.map(WHAT_TEXT, 0x10);
-        e.mem.set_cstr(WHAT_TEXT, b"malformed");
+        e.mem.set_u32(error + 0x24, 0xf);
+        e.mem.set_cstr(error + 0x10, b"malformed");
         let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             e.call(CXX_THROW_EXCEPTION, &args![error, PARSE_THROW_INFO]);
         }))

@@ -39,7 +39,8 @@ Kept, from the exe:
 - `throw;` from a catch block or a function it calls (`ios_base::clear`, `00ac9ff0`): it goes to the
   next open region, the object not destroyed until the catch that ends it.
 - The thrown object where the thrower built it, alive through the catch block, destroyed by the
-  `ThrowInfo`'s destructor when the block ends. The catch block runs on the guest stack below the
+  `ThrowInfo`'s destructor when the block ends or a new throw leaves it (the exe's `__finally` at
+  `00ece76b`); `throw;` passes it on. The catch block runs on the guest stack below the
   thrower's frames, as the exe's funclet runs on the machine stack above them.
 - A throw nothing catches: `terminate` in the exe, a stop here, at the throw, naming the type and
   the message. Every one of the 38 ends in `catch(...)`, so whether any region is open on the OS
@@ -70,7 +71,7 @@ Dropped, and why:
 
 A throw path here is a thrower with a handling catch above it. Read from the exe's direct calls
 (virtual calls not followed): 372 functions lie between a catcher and a thrower, 45 of them with
-rethrowing catch blocks (75 blocks) and 113 with destructor-only frames, 474 distinct unwind actions.
+rethrowing catch blocks (65 blocks) and 113 with destructor-only frames, 474 distinct unwind actions.
 
 | Throw path | What is skipped | Effect |
 | --- | --- | --- |
@@ -110,7 +111,12 @@ a `catch_unwind` with nothing to do and a thread-local count. The busiest are pe
 ## What would show this wrong
 
 - A recording of the real game (`exception:` lines in `rec.log`, research/nv-trace) with a throw the
-  port does not make, or the reverse. Which throws fire in vanilla play is not yet known.
+  port does not make, or the reverse. Which throws fire in vanilla play is not yet known. The port's
+  side is printed: every catch counts, the first 64 go to stderr (`C++ exception <type> "<text>"
+  caught by <function>, thrown in <call stack>`, read from guest memory with no guest call) and the
+  host's summary line says how many. A catch there that the recording does not have is a port bug:
+  `gsext`'s "only read 0 of 0x1af7" in `LoadTree` used to stop, and now gives a tree deleted at
+  `0066ad8f`..`0066af29` with only that line to say why.
 - A catch that fires in play and is then followed by a difference from the original traced to a
   skipped cleanup: then that one cleanup is translated at its catch, as `00b059e0`'s was.
 - A guest heap that fills up because a throw repeats: the leaks above would have to be closed.
@@ -123,6 +129,6 @@ a `catch_unwind` with nothing to do and a thread-local count. The busiest are pe
 - A bad tree file no longer stops the game: `LoadTree` reports through `SetError` and returns 0.
 - The 38 functions lose their `Translation incomplete` markers. The other framed functions keep
   theirs: the frame is not built, by this decision.
-- Port bugs that make a throw (a short read that the original does not have, say) now pass quietly
-  into the failure result instead of stopping. The first thing to check on a missing tree is
-  `CSpeedTreeRT`'s error string and the recording.
+- Port bugs that make a throw (a short read that the original does not have, say) now go into the
+  failure result instead of stopping. The first thing to check on a missing tree is the
+  `C++ exception` lines on stderr and the recording.

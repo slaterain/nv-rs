@@ -25,6 +25,7 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 use crate::Engine;
 
@@ -36,6 +37,17 @@ pub const CXX_EXCEPTION_CODE: u32 = 0xe06d_7363;
 const THROW_MAGIC_NUMBERS: [u32; 4] = [0x1993_0520, 0x1993_0521, 0x1993_0522, 0x0199_4000];
 /// The name `catch(std::exception&)` matches on (its `TypeDescriptor`'s `+8`).
 pub const STD_EXCEPTION_NAME: &[u8] = b".?AVexception@std@@";
+
+/// How many throws have been caught in this process. A caught throw is the exe's behaviour, but a
+/// port bug that makes a throw also ends here (a short read becomes a missing tree), so every
+/// catch is counted and the first [`CAUGHT_LINES`] are printed ([`note_caught`]).
+static CAUGHT_THROWS: AtomicU64 = AtomicU64::new(0);
+const CAUGHT_LINES: u64 = 64;
+
+/// The throws caught so far in this process (the host's summary line).
+pub fn caught_throws() -> u64 {
+    CAUGHT_THROWS.load(Relaxed)
+}
 
 /// What a C++ throw carries: the thrown object (where the thrower built it) and its `ThrowInfo`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,27 +114,147 @@ fn caught<R>(
         Ok(thrown) => *thrown,
         Err(stop) => resume_unwind(stop),
     };
+    note_caught(e, mark.call_stack, thrown);
     // The frames between the throw and here are gone. The guest stack's top stays: the object is
     // up there, and the catch block runs below it as the exe's does.
-    e.call_stack.truncate(mark.call_stack);
-    e.stack_frames.truncate(mark.stack_frames);
-    crate::profile::resync(&e.call_stack);
+    unwound_to(e, mark);
     if e.mem.block_check_on() {
         let running = e.call_stack.last().copied().unwrap_or(0);
         e.mem.set_check_fn(running);
     }
-    let result = {
+    let outcome = {
         let _handling = Handling::begin(thrown);
-        handler(e, thrown)
+        catch_unwind(AssertUnwindSafe(|| handler(e, thrown)))
     };
-    // The catch block ended: its object is destroyed (`__DestructExceptionObject`), unless an
-    // outer catch block is still handling the same object (`_IsExceptionObjectToBeDestroyed`).
+    // The catch block ended: its object is destroyed (`__DestructExceptionObject`, the `__finally`
+    // at `00ece76b`), unless an outer catch block is still handling the same object
+    // (`_IsExceptionObjectToBeDestroyed`).
     let still_used = HANDLING.with(|h| h.borrow().iter().any(|t| t.object == thrown.object));
-    if !still_used {
-        destroy_object(e, thrown);
+    match outcome {
+        Ok(result) => {
+            if !still_used {
+                destroy_object(e, thrown);
+            }
+            e.guest_stack_restore(mark.guest_stack);
+            result
+        }
+        Err(leaving) => {
+            // A new throw leaving the block destroys the object too; `throw;` passes it on (the
+            // exe's filter `00ece4ab` tells them apart). A stop leaves the guest as it is.
+            let new_throw = leaving
+                .downcast_ref::<Thrown>()
+                .is_some_and(|new| new.object != thrown.object);
+            if new_throw && !still_used {
+                unwound_to(e, mark);
+                destroy_object(e, thrown);
+            }
+            resume_unwind(leaving)
+        }
     }
-    e.guest_stack_restore(mark.guest_stack);
-    result
+}
+
+/// The running frames above a region are gone: the engine's copies of the call stack go back.
+fn unwound_to(e: &mut Engine, mark: Mark) {
+    e.call_stack.truncate(mark.call_stack);
+    e.stack_frames.truncate(mark.stack_frames);
+    crate::profile::resync(&e.call_stack);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// This thread's catches: tests run side by side, and the process-wide count is everyone's.
+    static CAUGHT_HERE: Cell<u64> = const { Cell::new(0) };
+}
+
+/// A catch, counted and for the first [`CAUGHT_LINES`] printed. It only reads guest memory, with
+/// no guest call, so the guest, the call log and the trace are as they would be without it.
+fn note_caught(e: &Engine, depth: usize, thrown: Thrown) {
+    #[cfg(test)]
+    CAUGHT_HERE.with(|here| here.set(here.get() + 1));
+    if CAUGHT_THROWS.fetch_add(1, Relaxed) < CAUGHT_LINES {
+        eprintln!("{}", caught_line(e, depth, thrown));
+    }
+}
+
+/// `C++ exception <type chain> "<text>" caught by <catcher>, thrown in <where>`: the catcher is
+/// the function the region's opener was called as (a translation that calls another of its unit
+/// directly is not on the call stack), and where it was thrown the top of the call stack, innermost
+/// first, as a stop's `(in ...)` gives it.
+fn caught_line(e: &Engine, depth: usize, thrown: Thrown) -> String {
+    let catcher = depth
+        .checked_sub(1)
+        .and_then(|top| e.call_stack.get(top))
+        .map_or("the host".to_string(), |addr| format!("{addr:08x}"));
+    let path: Vec<String> = e
+        .call_stack
+        .iter()
+        .rev()
+        .take(6)
+        .map(|addr| format!("{addr:08x}"))
+        .collect();
+    format!(
+        "C++ exception {} caught by {catcher}, thrown in {}",
+        describe(e, thrown),
+        path.join(" < ")
+    )
+}
+
+/// A guest word, or `None` where nothing is mapped.
+fn peek_word(e: &Engine, addr: u32) -> Option<u32> {
+    let mut bytes = [0; 4];
+    e.mem.try_read(addr, &mut bytes).ok()?;
+    Some(u32::from_le_bytes(bytes))
+}
+
+/// A guest C string (the first 512 bytes at most), or `None` where nothing is mapped.
+fn peek_text(e: &Engine, addr: u32) -> Option<Vec<u8>> {
+    let mut text = Vec::new();
+    for offset in 0..512 {
+        let mut byte = [0];
+        e.mem.try_read(addr.wrapping_add(offset), &mut byte).ok()?;
+        if byte[0] == 0 {
+            break;
+        }
+        text.push(byte[0]);
+    }
+    Some(text)
+}
+
+/// The object's message, read and not asked for, by the rule nv-trace's recorder uses
+/// (`nv_trace_core::exceptions::message`): `runtime_error` and what derives from it keep a
+/// `std::string` at `+0xc` (its text inline at `+0x10`, or from a capacity of 0x10 on, the pointer
+/// there; the capacity at `+0x24`), `std::exception` a text pointer at `+4`.
+fn object_text(e: &Engine, object: u32, chain: &[Vec<u8>]) -> Option<String> {
+    let has = |name: &[u8]| chain.iter().any(|n| n == name);
+    let text = if has(b".?AVruntime_error@std@@") {
+        if peek_word(e, object.wrapping_add(0x24))? >= 0x10 {
+            peek_word(e, object.wrapping_add(0x10))?
+        } else {
+            object.wrapping_add(0x10)
+        }
+    } else if has(STD_EXCEPTION_NAME) {
+        peek_word(e, object.wrapping_add(4)).filter(|&text| text != 0)?
+    } else {
+        return None;
+    };
+    peek_text(e, text).map(|text| String::from_utf8_lossy(&text).into_owned())
+}
+
+/// A thrown object in words, from what can be read: its type, the types below it and its message.
+fn describe(e: &Engine, thrown: Thrown) -> String {
+    let chain = type_chain(e, thrown.throw_info);
+    let mut names = chain.iter().map(|name| readable_type(name));
+    let most_derived = names.next().unwrap_or_else(|| "(no type)".to_string());
+    let bases: Vec<String> = names.collect();
+    let bases = if bases.is_empty() {
+        String::new()
+    } else {
+        format!(" (a {})", bases.join(", "))
+    };
+    let text = object_text(e, thrown.object, &chain)
+        .map(|text| format!(" \"{text}\""))
+        .unwrap_or_default();
+    format!("{most_derived}{bases}{text}")
 }
 
 /// A catch block running: what `throw;` finds. Dropped however the block ends (a host-side list,
@@ -194,14 +326,17 @@ pub fn throw_record(e: &Engine, code: u32, count: u32, arguments: u32) -> Option
 /// The `TypeDescriptor` names of a `ThrowInfo`'s catchable types, most derived first
 /// (`+0xc` the array: a count and the `CatchableType`s; `+4` of each the descriptor; its `+8` the
 /// name).
+/// What cannot be read is left out: this runs while a stop or a catch is being reported.
 pub fn type_chain(e: &Engine, throw_info: u32) -> Vec<Vec<u8>> {
-    let array = e.mem.u32(throw_info.wrapping_add(0xc));
-    let count = e.mem.u32(array);
+    let Some(array) = peek_word(e, throw_info.wrapping_add(0xc)) else {
+        return Vec::new();
+    };
+    let count = peek_word(e, array).unwrap_or(0).min(64);
     (0..count)
-        .map(|index| {
-            let catchable = e.mem.u32(array.wrapping_add(4 + 4 * index));
-            let descriptor = e.mem.u32(catchable.wrapping_add(4));
-            e.mem.cstr(descriptor.wrapping_add(8))
+        .filter_map(|index| {
+            let catchable = peek_word(e, array.wrapping_add(4 + 4 * index))?;
+            let descriptor = peek_word(e, catchable.wrapping_add(4))?;
+            peek_text(e, descriptor.wrapping_add(8))
         })
         .collect()
 }
@@ -248,34 +383,15 @@ fn readable_type(name: &[u8]) -> String {
     }
 }
 
-/// The stop's line for a throw nothing catches: the type, the chain below it and the message of
-/// a `std::exception`.
-fn uncaught_message(e: &mut Engine, thrown: Thrown) -> String {
-    let chain = type_chain(e, thrown.throw_info);
-    let mut names = chain.iter().map(|name| readable_type(name));
-    let most_derived = names.next().unwrap_or_else(|| "(no type)".to_string());
-    let bases: Vec<String> = names.collect();
-    let what = match caught_as(e, thrown, STD_EXCEPTION_NAME) {
-        Some(object) => {
-            let text = e.vcall(object, 4, &[]).u32();
-            if text == 0 {
-                String::new()
-            } else {
-                let text = String::from_utf8_lossy(&e.mem.cstr(text)).into_owned();
-                format!(": \"{text}\"")
-            }
-        }
-        None => String::new(),
-    };
-    let bases = if bases.is_empty() {
-        String::new()
-    } else {
-        format!(" (a {})", bases.join(", "))
-    };
+/// The stop's line for a throw nothing catches. Read only, like the catch's line: a guest `what()`
+/// could be untranslated and replace this text, or use up the slice and switch threads here.
+fn uncaught_message(e: &Engine, thrown: Thrown) -> String {
     format!(
-        "uncaught C++ exception {most_derived}{bases}{what}, object {:08x}, ThrowInfo {:08x}: \
-         nothing above catches it, terminate in the exe",
-        thrown.object, thrown.throw_info
+        "uncaught C++ exception {}, object {:08x}, ThrowInfo {:08x}: nothing above catches it, \
+         terminate in the exe",
+        describe(e, thrown),
+        thrown.object,
+        thrown.throw_info
     )
 }
 
@@ -316,19 +432,45 @@ pub(crate) mod tests {
         at
     }
 
-    /// A panic hook (installed once, passing every panic on) counting this thread's calls, so a
-    /// test can see whether its own run reached the hook whichever tests run beside it.
-    fn hook_calls_here() -> u32 {
-        thread_local! { static CALLS: Cell<u32> = const { Cell::new(0) }; }
-        static INSTALLED: std::sync::Once = std::sync::Once::new();
-        INSTALLED.call_once(|| {
-            let before = std::panic::take_hook();
-            std::panic::set_hook(Box::new(move |info| {
-                CALLS.with(|calls| calls.set(calls.get() + 1));
-                before(info);
-            }));
-        });
-        CALLS.with(Cell::get)
+    thread_local! {
+        static HOOK_CALLS: Cell<u32> = const { Cell::new(0) };
+        static PROBING: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Whether a panic on this thread reaches the counting hook now (another test's
+    /// `static_init::run` swaps the hook out for a while, and can put back the one from before
+    /// this hook was installed).
+    fn probe_reaches_the_hook() -> bool {
+        let before = HOOK_CALLS.with(Cell::get);
+        PROBING.with(|probing| probing.set(true));
+        let _ = catch_unwind(|| panic!("a probe of the panic hook"));
+        PROBING.with(|probing| probing.set(false));
+        HOOK_CALLS.with(Cell::get) > before
+    }
+
+    /// The panic hook calls `action` makes on this thread, whichever tests run beside it: the
+    /// count stands only when a panic reached the hook on both sides of `action`.
+    fn hook_calls_during(mut action: impl FnMut()) -> u32 {
+        for _ in 0..10_000 {
+            if probe_reaches_the_hook() {
+                let before = HOOK_CALLS.with(Cell::get);
+                action();
+                let during = HOOK_CALLS.with(Cell::get) - before;
+                if probe_reaches_the_hook() {
+                    return during;
+                }
+            } else {
+                let before = std::panic::take_hook();
+                std::panic::set_hook(Box::new(move |info| {
+                    HOOK_CALLS.with(|calls| calls.set(calls.get() + 1));
+                    if !PROBING.with(Cell::get) {
+                        before(info);
+                    }
+                }));
+            }
+            std::thread::yield_now();
+        }
+        panic!("the counting panic hook never stayed in place");
     }
 
     fn stop_text(payload: Box<dyn Any + Send>) -> String {
@@ -392,20 +534,124 @@ pub(crate) mod tests {
 
     #[test]
     fn a_caught_throw_never_reaches_the_panic_hook() {
-        let before = hook_calls_here();
         let mut e = Engine::new();
         let info = info(&mut e, 0);
         thrower(&mut e, info);
-        let reached = try_catch(
+        let calls = hook_calls_during(|| {
+            let reached = try_catch(
+                &mut e,
+                |e| {
+                    e.call(0x00de_0001, &[]);
+                    false
+                },
+                |_, _| true,
+            );
+            assert!(reached);
+        });
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn a_stop_does_reach_the_panic_hook() {
+        // What the test above would see if a caught throw went the way of a stop.
+        let calls = hook_calls_during(|| {
+            let _ = catch_unwind(|| panic!("a stop"));
+        });
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn every_catch_is_counted_and_a_stop_passing_through_is_not() {
+        let caught_here = || CAUGHT_HERE.with(Cell::get);
+        let mut e = Engine::new();
+        let info = info(&mut e, 0);
+        thrower(&mut e, info);
+        let (here, everyone) = (caught_here(), caught_throws());
+        try_catch(
             &mut e,
             |e| {
                 e.call(0x00de_0001, &[]);
-                false
             },
-            |_, _| true,
+            |_, _| {},
         );
-        assert!(reached);
-        assert_eq!(hook_calls_here(), before);
+        assert_eq!(caught_here(), here + 1);
+        assert!(caught_throws() > everyone);
+        let here = caught_here();
+        let stop = catch_unwind(AssertUnwindSafe(|| {
+            try_catch(
+                &mut e,
+                |_| panic!("a stop"),
+                |_, _: Thrown| panic!("the handler is for C++ throws"),
+            )
+        }));
+        assert!(stop.is_err());
+        assert_eq!(caught_here(), here);
+    }
+
+    #[test]
+    fn the_line_for_a_catch_names_the_exception_and_where_with_no_guest_call() {
+        let mut e = Engine::new();
+        let info = info(&mut e, 0);
+        // A `what` slot that would answer something else, were it called.
+        e.register(0x00de_0015, |_, _| panic!("what() was called"));
+        let vtable = e.mem.alloc(8);
+        e.mem.set_u32(vtable + 4, 0x00de_0015);
+        let text = e.mem.alloc(16);
+        e.mem.set_cstr(text, b"it broke");
+        let object = e.mem.alloc(0xc);
+        e.mem.set_u32(object, vtable);
+        e.mem.set_u32(object + 4, text);
+        e.call_stack
+            .extend_from_slice(&[0x0040_1000, 0x00b0_5420, 0x00de_0001, 0x00de_0002]);
+        e.call_log = Some(vec![]);
+        let thrown = Thrown {
+            object,
+            throw_info: info,
+        };
+        assert_eq!(
+            caught_line(&e, 2, thrown),
+            "C++ exception std::bad_alloc (a std::exception) \"it broke\" caught by 00b05420, \
+             thrown in 00de0002 < 00de0001 < 00b05420 < 00401000"
+        );
+        assert!(e.call_log.as_ref().unwrap().is_empty());
+        // Nothing readable is no fault, and a region the host opened has no catcher to name.
+        e.call_stack.clear();
+        let lost = Thrown {
+            object: 4,
+            throw_info: 8,
+        };
+        assert_eq!(
+            caught_line(&e, 0, lost),
+            "C++ exception (no type) caught by the host, thrown in "
+        );
+    }
+
+    #[test]
+    fn the_text_of_a_runtime_error_is_its_string() {
+        let mut e = Engine::new();
+        let chain: [&[u8]; 2] = [b".?AVruntime_error@std@@", STD_EXCEPTION_NAME];
+        let at = e.mem.alloc(0x10);
+        write_throw_info(&mut e, at, 0, &chain);
+        let object = e.mem.alloc(0x28);
+        let thrown = Thrown {
+            object,
+            throw_info: at,
+        };
+        // Inline below a capacity of 0x10; through the pointer from there on.
+        e.mem.set_u32(object + 0x24, 0xf);
+        e.mem.set_cstr(object + 0x10, b"short");
+        assert_eq!(
+            describe(&e, thrown),
+            "std::runtime_error (a std::exception) \"short\""
+        );
+        let long = e.mem.alloc(32);
+        e.mem.set_cstr(long, b"a longer message");
+        e.mem.set_u32(object + 0x24, 0x1f);
+        e.mem.set_u32(object + 0x10, long);
+        assert_eq!(
+            describe(&e, thrown),
+            "std::runtime_error (a std::exception) \"a longer message\""
+        );
     }
 
     #[test]
@@ -452,17 +698,14 @@ pub(crate) mod tests {
                 STD_EXCEPTION_NAME,
             ],
         );
-        // An object with a `what` (slot 1).
-        let text = e.mem.alloc(8);
-        e.mem.set_cstr(text, b"it broke");
-        e.register_double(0x00de_0020, move |_, _| Ret {
-            eax: text,
-            ..Ret::default()
-        });
+        // A `runtime_error`'s string, and a `what` slot that stops if it is called.
+        e.register(0x00de_0020, |_, _| panic!("what() was called"));
         let vtable = e.mem.alloc(8);
         e.mem.set_u32(vtable + 4, 0x00de_0020);
-        let object = e.mem.alloc(0xc);
+        let object = e.mem.alloc(0x28);
         e.mem.set_u32(object, vtable);
+        e.mem.set_u32(object + 0x24, 0xf);
+        e.mem.set_cstr(object + 0x10, b"it broke");
         let stop = catch_unwind(AssertUnwindSafe(|| throw(&mut e, object, at))).unwrap_err();
         let text = stop_text(stop);
         assert!(
@@ -479,24 +722,62 @@ pub(crate) mod tests {
     #[test]
     fn a_stop_passes_through_a_region_and_leaves_it_closed() {
         let mut e = Engine::new();
+        e.register(0x00de_0031, |_, _| panic!("a stop"));
+        e.register(0x00de_0032, |e, _| e.call(0x00de_0031, &[]));
+        e.call_stack.push(0x0040_1000);
         let stop = catch_unwind(AssertUnwindSafe(|| {
             try_catch(
                 &mut e,
-                |_| panic!("a stop"),
+                |e| {
+                    e.call(0x00de_0032, &[]);
+                },
                 |_, _: Thrown| panic!("the handler is for C++ throws"),
             )
         }))
         .unwrap_err();
         assert_eq!(stop_text(stop), "a stop");
+        // The call stack is as the stop left it: the host's "(in ...)" reads it.
+        assert_eq!(e.call_stack, [0x0040_1000, 0x00de_0032, 0x00de_0031]);
+        e.call_stack.clear();
         // No region is open any more: a throw now stops.
         let info = info(&mut e, 0);
-        let object = e.mem.alloc(4);
-        let vtable = e.mem.alloc(8);
-        e.register(0x00de_0030, |_, _| Ret::default());
-        e.mem.set_u32(vtable + 4, 0x00de_0030);
-        e.mem.set_u32(object, vtable);
+        let object = e.mem.alloc(0xc);
         let stop = catch_unwind(AssertUnwindSafe(|| throw(&mut e, object, info))).unwrap_err();
         assert!(stop_text(stop).starts_with("uncaught"));
+    }
+
+    #[test]
+    fn a_new_throw_out_of_a_catch_block_destroys_the_old_object_before_the_next_catch() {
+        let mut e = Engine::new();
+        let destroyed = std::rc::Rc::new(RefCell::new(Vec::new()));
+        let log = destroyed.clone();
+        e.register_double(0x00de_0035, move |_, a| {
+            log.borrow_mut().push(a[0]);
+            Ret::default()
+        });
+        let info = info(&mut e, 0x00de_0035);
+        let first = e.mem.alloc(0xc);
+        let second = e.mem.alloc(0xc);
+        let saw = destroyed.clone();
+        e.call_stack.push(0x0040_1000);
+        let caught = try_catch(
+            &mut e,
+            |e| {
+                try_catch(
+                    e,
+                    |e| throw(e, first, info),
+                    move |e, _| throw(e, second, info),
+                )
+            },
+            move |e, thrown| {
+                assert_eq!(*saw.borrow(), [first], "the old one is gone already");
+                assert_eq!(e.call_stack, [0x0040_1000]);
+                thrown.object
+            },
+        );
+        assert_eq!(caught, second);
+        assert_eq!(*destroyed.borrow(), [first, second]);
+        e.call_stack.clear();
     }
 
     #[test]
@@ -565,11 +846,7 @@ pub(crate) mod tests {
         let stop = catch_unwind(AssertUnwindSafe(|| throw(&mut e, 0, 0))).unwrap_err();
         assert!(stop_text(stop).contains("no exception being handled"));
         let at = info(&mut e, 0);
-        let object = e.mem.alloc(4);
-        let vtable = e.mem.alloc(8);
-        e.register(0x00de_0060, |_, _| Ret::default());
-        e.mem.set_u32(vtable + 4, 0x00de_0060);
-        e.mem.set_u32(object, vtable);
+        let object = e.mem.alloc(0xc);
         let stop = catch_unwind(AssertUnwindSafe(|| {
             try_catch(&mut e, |e| throw(e, object, at), |e, _| throw(e, 0, 0))
         }))
@@ -671,30 +948,6 @@ pub(crate) mod tests {
             caught_as(&e, thrown, STD_EXCEPTION_NAME),
             Some(object + 8 + 4 + 0x20)
         );
-    }
-
-    #[test]
-    fn a_region_on_another_os_thread_catches_nothing_here() {
-        // The count is the running OS thread's: a thread with no region open sees none, whatever
-        // another thread has open.
-        let mut e = Engine::new();
-        let info = info(&mut e, 0);
-        let object = e.mem.alloc(4);
-        let vtable = e.mem.alloc(8);
-        e.register(0x00de_0090, |_, _| Ret::default());
-        e.mem.set_u32(vtable + 4, 0x00de_0090);
-        e.mem.set_u32(object, vtable);
-        try_catch(
-            &mut e,
-            |_| {
-                let other = std::thread::spawn(|| OPEN_REGIONS.with(Cell::get));
-                assert_eq!(other.join().unwrap(), 0);
-                assert_eq!(OPEN_REGIONS.with(Cell::get), 1);
-            },
-            |_, _| panic!("no throw"),
-        );
-        let stop = catch_unwind(AssertUnwindSafe(|| throw(&mut e, object, info))).unwrap_err();
-        assert!(stop_text(stop).starts_with("uncaught"));
     }
 
     #[test]

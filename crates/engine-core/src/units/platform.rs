@@ -3537,6 +3537,41 @@ mod tests {
     }
 
     #[test]
+    fn a_throw_on_another_game_thread_is_not_caught_by_a_region_open_on_main() {
+        use crate::cxx_exception::{self, try_catch, Thrown};
+        let mut e = thread_engine();
+        // The thread's parameter: the object and its `ThrowInfo`.
+        e.register(0x00ab_0300, |e, a| {
+            let (object, info) = (e.mem.u32(a[0]), e.mem.u32(a[0] + 4));
+            cxx_exception::throw(e, object, info)
+        });
+        let info = e.mem.alloc(0x10);
+        cxx_exception::write_throw_info(&mut e, info, 0, &[cxx_exception::STD_EXCEPTION_NAME]);
+        let object = e.mem.alloc(0xc);
+        let parameter = e.mem.alloc(8);
+        e.mem.set_u32(parameter, object);
+        e.mem.set_u32(parameter + 4, info);
+        let t = call(&mut e, CREATE_THREAD, &[0, 0, 0x00ab_0300, parameter, 0, 0]);
+        // Main waits inside a try region; the thread throws with none open on its own OS thread.
+        let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            try_catch(
+                &mut e,
+                |e| {
+                    call(e, WAIT_FOR_SINGLE_OBJECT, &[t, INFINITE]);
+                },
+                |_, _: Thrown| panic!("main's region took another thread's throw"),
+            )
+        }))
+        .unwrap_err();
+        let text = stop.downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(
+            text.starts_with("uncaught C++ exception std::exception"),
+            "{text}"
+        );
+        assert!(text.contains("in game thread 2, start 00ab0300"), "{text}");
+    }
+
+    #[test]
     fn a_stopped_thread_stops_the_run_that_switched_to_it() {
         let mut e = thread_engine();
         e.register(0x00ab_0200, |e, _| e.call(0x00ab_cdef, &[]));

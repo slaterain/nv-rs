@@ -10501,19 +10501,13 @@ mod n060_tests {
     /// The destructor the throws below name, and a `ThrowInfo` of a `std::exception`.
     const THROWN_DESTRUCTOR: u32 = 0x0420_0000;
 
-    /// A `std::exception`-like object whose `what()` answers a text, and its `ThrowInfo`. The
-    /// doubles the catch needs are registered.
+    /// A `std::exception` with a text (`+4`), and its `ThrowInfo`. The doubles the catch needs are
+    /// registered.
     fn thrown_exception(e: &mut Engine) -> (u32, u32) {
         let text = new_c(e, b"it broke");
-        e.register_double(0x0420_0004, move |_, _| Ret {
-            eax: text,
-            ..Ret::default()
-        });
         e.register(THROWN_DESTRUCTOR, quiet);
-        let vtable = e.mem.alloc(8);
-        e.mem.set_u32(vtable + 4, 0x0420_0004);
         let object = e.mem.alloc(0xc);
-        e.mem.set_u32(object, vtable);
+        e.mem.set_u32(object + 4, text);
         let info = e.mem.alloc(0x10);
         engine_core::cxx_exception::write_throw_info(
             e,
