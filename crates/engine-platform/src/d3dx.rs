@@ -1670,11 +1670,9 @@ mod tests {
 
     #[test]
     fn the_import_slot_is_registered_by_name() {
-        assert!(crate::imports()
-            .iter()
-            .any(|(dll, name, _)| {
-                *dll == "d3dx9_38.dll" && *name == "D3DXMatrixMultiplyTranspose"
-            }));
+        assert!(crate::imports().iter().any(|(dll, name, _)| {
+            *dll == "d3dx9_38.dll" && *name == "D3DXMatrixMultiplyTranspose"
+        }));
         let table = crate::imports();
         assert!(table
             .iter()
@@ -1880,7 +1878,11 @@ mod tests {
             choose_source(&mut e, Some(device)),
             TextureSource::Cache(_)
         ));
-        assert_eq!(state!(e).graphics.d3dx_texture_sources.len(), 1, "said once");
+        assert_eq!(
+            state!(e).graphics.d3dx_texture_sources.len(),
+            1,
+            "said once"
+        );
         choose_source(&mut e, Some(device));
         assert_eq!(state!(e).graphics.d3dx_texture_sources.len(), 1);
     }

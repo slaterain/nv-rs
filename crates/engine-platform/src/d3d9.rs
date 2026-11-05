@@ -470,7 +470,7 @@ pub fn system_metric(e: &mut Engine, index: u32) -> Option<u32> {
 
 /// Whether `object` is an `IDirect3D9` of this layer.
 pub fn is_direct3d(e: &Engine, object: u32) -> bool {
-    state!(e).graphics.objects.contains_key(&object)
+    state_ref!(e).graphics.objects.contains_key(&object)
 }
 
 fn register_code(e: &mut Engine) {

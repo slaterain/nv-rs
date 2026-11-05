@@ -368,7 +368,7 @@ fn hex(b: &[u8]) -> String {
 /// The graph an interface pointer belongs to, from the vtable it holds.
 fn graph_of(e: &Engine, this: Ptr) -> u32 {
     let vtable = e.mem.u32(this.addr());
-    let tables = state!(e).sound.show.vtables;
+    let tables = state_ref!(e).sound.show.vtables;
     let offset = [BUILDER, CONTROL, POSITION, AUDIO, EVENT]
         .into_iter()
         .zip(tables)
@@ -440,7 +440,6 @@ fn release(e: &mut Engine, this: Ptr) -> u32 {
         g.samples.let_go();
         if g.pin != 0 {
             let connected = state!(e)
-                
                 .sound
                 .show
                 .pins
@@ -1576,7 +1575,6 @@ mod tests {
         assert!(samples.runs().is_empty(), "nothing decoded");
         // Released as the game does: the decoder stops without having decoded anything.
         let decode = state!(e)
-            
             .sound
             .show
             .graphs
@@ -1678,7 +1676,6 @@ mod tests {
         assert!(bits(&heard) == bits(&want));
         assert!(want[..2 * 480].iter().any(|&s| s != 0.0), "heard at once");
         let decode = state!(e)
-            
             .sound
             .show
             .graphs

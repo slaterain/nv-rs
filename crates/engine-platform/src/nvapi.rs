@@ -113,7 +113,7 @@ pub struct State {
 }
 
 fn table(e: &Engine) -> &Table {
-    &state!(e).graphics.nvapi.table
+    &state_ref!(e).graphics.nvapi.table
 }
 
 /// `LoadLibraryA("nvapi.dll")`'s answer.

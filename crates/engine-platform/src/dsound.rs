@@ -1326,7 +1326,7 @@ pub fn start_output(e: &mut Engine) -> bool {
     let rate = output.rate;
     {
         let mut v = voices.lock().expect("the voices");
-        for (&at, b) in &state!(e).sound.buffers {
+        for (&at, b) in &state_ref!(e).sound.buffers {
             if b.flags & DSBCAPS_PRIMARYBUFFER == 0 {
                 v.all.insert(at, voice_of(e, b));
             }
@@ -1433,7 +1433,7 @@ fn voice_of(e: &Engine, b: &Buffer) -> Voice {
     v.volume = b.volume;
     v.pan = b.pan;
     v.rate = b.frequency();
-    v.device = state!(e).sound.mix.as_ref().map_or(0, |m| m.rate);
+    v.device = state_ref!(e).sound.mix.as_ref().map_or(0, |m| m.rate);
     if b.effect == Some("distortion") {
         v.fx = Some(Box::new(fx_chain(b, v.data.clone())));
     }
@@ -1572,7 +1572,7 @@ pub fn stream_volume(e: &mut Engine, key: u32, volume: i32) {
 
 /// Whether a stream from [`play_stream`] exists (playing or held).
 pub fn has_stream(e: &Engine, key: u32) -> bool {
-    state!(e)
+    state_ref!(e)
         .sound
         .mix
         .as_ref()
@@ -1644,7 +1644,7 @@ pub(crate) fn mixed(e: &Engine, frames: usize) -> Vec<f32> {
 /// The next `frames` frames of one stream of the tests' output.
 #[cfg(test)]
 fn mixed_of(e: &Engine, which: Which, frames: usize) -> Vec<f32> {
-    let Some(m) = &state!(e).sound.mix else {
+    let Some(m) = &state_ref!(e).sound.mix else {
         return vec![0f32; 2 * frames];
     };
     let mut v = m.voices.lock().expect("the voices");
@@ -2056,7 +2056,6 @@ fn create_sound_buffer(e: &mut Engine, this: Ptr, desc: Ptr, out: Ptr, outer: u3
         // connects the buffers again. Measured under both names (`DSMIX_SURROUND` `w3_three_2d`,
         // `z_lock_with2d`).
         let count = state!(e)
-            
             .sound
             .buffers
             .values()
@@ -2102,10 +2101,10 @@ fn second_converter_by_count(e: &mut Engine) {
     if state!(e).sound.apl {
         return;
     }
-    if let Some(m) = &state!(e).sound.mix {
+    if let Some(m) = &state_ref!(e).sound.mix {
         let mut v = m.voices.lock().expect("the voices");
         v.apl = true;
-        for (at, b) in &state!(e).sound.buffers {
+        for (at, b) in &state_ref!(e).sound.buffers {
             if b.flags & DSBCAPS_PRIMARYBUFFER == 0 {
                 if let Some(voice) = v.all.get_mut(at) {
                     voice.apl = true;
@@ -2330,7 +2329,6 @@ fn buffer_query_interface(e: &mut Engine, this: Ptr, iid: Ptr, out: Ptr) -> u32 
     }
     let listener = if b.listener != 0 {
         let l = state!(e)
-            
             .sound
             .listeners
             .get_mut(&b.listener)
@@ -2386,7 +2384,6 @@ fn buffer_add_ref(e: &mut Engine, this: Ptr) -> u32 {
 /// both counts are 0.
 fn release_buffer(e: &mut Engine, at: u32) -> u32 {
     let b = state!(e)
-        
         .sound
         .buffers
         .get_mut(&at)
@@ -2613,7 +2610,6 @@ fn second_converter_on(e: &mut Engine, now: u64) {
     state!(e).sound.apl = true;
     let device = device_rate(e);
     let playing: Vec<u32> = state!(e)
-        
         .sound
         .buffers
         .iter()
@@ -2682,7 +2678,6 @@ fn heard(e: &mut Engine, this: Ptr, call: &str) {
         )
     };
     let apl = state!(e)
-        
         .sound
         .mix
         .as_ref()
@@ -2788,7 +2783,6 @@ fn refresh_3d(e: &mut Engine) {
     // of the buffers that play).
     let mut from = 0;
     while let Some(at) = state!(e)
-        
         .sound
         .buffers
         .range(from..)
@@ -2806,7 +2800,7 @@ fn refresh_3d(e: &mut Engine) {
 /// The layout the game's device mixes in now (two channels before the output knows the
 /// endpoint's, and in the tests that set none).
 fn device_layout(e: &Engine) -> Layout {
-    state!(e)
+    state_ref!(e)
         .sound
         .layout
         .map_or(Layout::STEREO, |d| d.current())
@@ -2815,7 +2809,12 @@ fn device_layout(e: &Engine) -> Layout {
 /// The listener's settings in effect, as the 3D stage reads them; without a listener the DLL's
 /// defaults (at the origin, facing +z with +y up, factors 1), which leave positions as they are.
 fn listener_now(e: &Engine) -> super::ds3d::Listener {
-    let l = state!(e).sound.listeners.values().next().map(|(_, l)| *l);
+    let l = state_ref!(e)
+        .sound
+        .listeners
+        .values()
+        .next()
+        .map(|(_, l)| *l);
     match l {
         Some(l) => super::ds3d::Listener {
             position: l.position,
@@ -2866,7 +2865,7 @@ fn part_after(part: u32, n: u64, frequency: u32) -> u32 {
 /// (`super::sound_out::device_rate`; the measured device's 48000 when Windows names none, where
 /// DirectSound would make no device); the tests' 48000.
 fn device_rate(e: &Engine) -> u32 {
-    if let Some(m) = &state!(e).sound.mix {
+    if let Some(m) = &state_ref!(e).sound.mix {
         return m.rate;
     }
     #[cfg(test)]
@@ -3492,7 +3491,7 @@ fn distortion_set_all_parameters(e: &mut Engine, this: Ptr, params: Ptr) -> u32 
 
 /// The buffer a 3D interface belongs to.
 fn owner(e: &Engine, this: Ptr) -> u32 {
-    *state!(e)
+    *state_ref!(e)
         .sound
         .buffers3d
         .get(&this.addr())

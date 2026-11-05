@@ -314,8 +314,8 @@ mod tests {
     #[test]
     fn heap_blocks_grow_with_zeros_and_free() {
         let mut e = engine();
-        let heap = super::super::heap_create(&mut e, 0, 0x1000, 0);
-        let block = engine_core::units::crt::crt_alloc(&mut e, 0x20);
+        let heap = engine_core::units::platform::test_support::heap_create(&mut e, 0, 0x1000, 0);
+        let block = engine_core::units::crt::stdio::test_support::crt_alloc(&mut e, 0x20);
         let pattern: Vec<u8> = (1..=0x20).collect();
         e.mem.write(block, &pattern);
         e.kernel.last_error = 0x1234;

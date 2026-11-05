@@ -246,9 +246,9 @@ fn class_name_matches(e: &Engine, class: &Class, name: u32) -> bool {
 /// title, when given); 0 when there is none. Only this process's windows exist here.
 pub fn find_window_a(e: &mut Engine, class: u32, title: Ptr) -> u32 {
     let title = (!title.is_null()).then(|| e.mem.cstr(title.addr()));
-    let found = state!(e).windows.windows.iter().find(|(_, w)| {
+    let found = state_ref!(e).windows.windows.iter().find(|(_, w)| {
         let class_ok = class == 0
-            || state!(e)
+            || state_ref!(e)
                 .windows
                 .classes
                 .iter()
@@ -530,8 +530,7 @@ pub fn create_window_ex_a(
     _instance: u32,
     _parameter: u32,
 ) -> u32 {
-    let Some(atom) = state!(e)
-        
+    let Some(atom) = state_ref!(e)
         .windows
         .classes
         .iter()
@@ -612,7 +611,6 @@ pub fn get_class_long_a(e: &mut Engine, handle: u32, index: i32) -> u32 {
         return 0;
     };
     let class = state!(e)
-        
         .windows
         .classes
         .iter()
@@ -748,7 +746,6 @@ pub fn dispatch_message_a(e: &mut Engine, msg: Ptr) -> u32 {
         return 0;
     };
     let procedure = state!(e)
-        
         .windows
         .classes
         .iter()

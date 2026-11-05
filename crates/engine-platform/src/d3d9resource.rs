@@ -874,7 +874,6 @@ fn set_constants(e: &mut Engine, this: Ptr, kind: u8, start: u32, data: Ptr, cou
     if last.is_some_and(|last| e.mem.is_mapped(data.addr()) && e.mem.is_mapped(last)) {
         let mem = &e.mem;
         let b = state!(e)
-            
             .graphics
             .device_objects
             .resources
@@ -941,8 +940,7 @@ pub(super) fn constant_registers(
     start: u32,
     count: u32,
 ) -> Option<&[[u32; 4]]> {
-    let b = state!(e)
-        
+    let b = state_ref!(e)
         .graphics
         .device_objects
         .resources
@@ -999,7 +997,7 @@ constants!(set_pixel_constant_b, get_pixel_constant_b, 5);
 
 /// Whether the device has a buffer of its own in `D3DPOOL_DEFAULT` alive (`Reset` refuses then).
 pub(super) fn default_pool_alive(e: &Engine, device: u32) -> bool {
-    state!(e)
+    state_ref!(e)
         .graphics
         .device_objects
         .resources

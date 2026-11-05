@@ -1280,7 +1280,6 @@ pub(super) fn device_release(e: &mut Engine, this: Ptr) -> u32 {
     let left = d.references;
     if left == 0 {
         let d = state!(e)
-            
             .graphics
             .device_objects
             .devices
@@ -1296,7 +1295,6 @@ pub(super) fn device_release(e: &mut Engine, this: Ptr) -> u32 {
         }
         super::d3d9resource::release_bindings(e, this.addr());
         let implicit: Vec<u32> = state!(e)
-            
             .graphics
             .device_objects
             .surfaces
@@ -1565,7 +1563,6 @@ fn surface_release(e: &mut Engine, this: Ptr) -> u32 {
     let surface_owner = s.device;
     if left == 0 && !implicit {
         let removed = state!(e)
-            
             .graphics
             .device_objects
             .surfaces
@@ -2182,7 +2179,6 @@ fn create_texture(
             };
             let bits = if lockable { e.mem.alloc(size) } else { 0 };
             let s = state!(e)
-                
                 .graphics
                 .device_objects
                 .surfaces
@@ -2300,7 +2296,6 @@ fn create_cube_texture(
             };
             let bits = if lockable { e.mem.alloc(size) } else { 0 };
             let s = state!(e)
-                
                 .graphics
                 .device_objects
                 .surfaces
@@ -2440,7 +2435,6 @@ fn create_render_target(
         let (pitch, size) = level_layout(format, width, height);
         let bits = e.mem.alloc(size);
         let s = state!(e)
-            
             .graphics
             .device_objects
             .surfaces
@@ -2578,7 +2572,6 @@ fn create_offscreen_plain_surface(
     let (pitch, size) = level_layout(format, width, height);
     let bits = e.mem.alloc(size);
     let s = state!(e)
-        
         .graphics
         .device_objects
         .surfaces
@@ -2617,7 +2610,6 @@ fn rect_inside(e: &Engine, rect: Ptr, width: u32, height: u32) -> Option<[u32; 4
 /// (`NV_D3D9=real`).
 fn color_fill(e: &mut Engine, this: Ptr, surface: u32, rect: Ptr, colour: u32) -> u32 {
     let Some(s) = state!(e)
-        
         .graphics
         .device_objects
         .surfaces
@@ -2693,7 +2685,7 @@ fn get_render_target_data(e: &mut Engine, this: Ptr, source: u32, destination: u
 /// Whether the device has a resource of its own in `D3DPOOL_DEFAULT` alive (a texture, a
 /// surface it did not make itself, a buffer).
 fn default_pool_alive(e: &Engine, device: u32) -> bool {
-    let o = &state!(e).graphics.device_objects;
+    let o = &state_ref!(e).graphics.device_objects;
     o.textures
         .values()
         .any(|t| t.device == device && t.pool == D3DPOOL_DEFAULT)
@@ -2790,7 +2782,6 @@ fn reset(e: &mut Engine, this: Ptr, present: Ptr) -> u32 {
     }
     super::d3d9resource::release_bindings(e, this.addr());
     let implicit: Vec<u32> = state!(e)
-        
         .graphics
         .device_objects
         .surfaces
@@ -2939,7 +2930,6 @@ fn texture_destroy(e: &mut Engine, this: Ptr) {
     note_reference(e, this, "destroyed", 0);
     {
         let t = state!(e)
-            
             .graphics
             .device_objects
             .textures
@@ -2947,7 +2937,6 @@ fn texture_destroy(e: &mut Engine, this: Ptr) {
             .expect("the texture");
         for level in t.levels {
             let s = state!(e)
-                
                 .graphics
                 .device_objects
                 .surfaces
@@ -3213,7 +3202,7 @@ fn surface_unlock_rect(e: &mut Engine, this: Ptr) -> u32 {
 
 /// The present parameters a device took (for the viewer and tests).
 pub fn device_present_parameters(e: &Engine, device: u32) -> Option<Vec<u8>> {
-    state!(e)
+    state_ref!(e)
         .graphics
         .device_objects
         .devices
@@ -3313,7 +3302,7 @@ const D3DPOOL_SYSTEMMEM: u32 = 2;
 /// is not a texture of this layer.
 fn update_texture(e: &mut Engine, _this: Ptr, source: u32, destination: u32) -> u32 {
     let pools = |e: &Engine, t: u32| {
-        state!(e)
+        state_ref!(e)
             .graphics
             .device_objects
             .textures
@@ -3349,7 +3338,7 @@ fn stretch_rect(
     _filter: u32,
 ) -> u32 {
     let desc = |e: &Engine, s: u32| {
-        state!(e)
+        state_ref!(e)
             .graphics
             .device_objects
             .surfaces
@@ -3463,7 +3452,6 @@ pub(crate) mod tests {
         assert_eq!(e.vcall(target, 8, &[]).u32(), 2);
         assert_eq!(e.vcall(target, 8, &[]).u32(), 1);
         assert!(state!(e)
-            
             .graphics
             .device_objects
             .surfaces
@@ -3603,7 +3591,6 @@ pub(crate) mod tests {
         e.vcall(cube, 8, &[]);
         assert_eq!(e.vcall(cube, 8, &[]).u32(), 0);
         assert!(!state!(e)
-            
             .graphics
             .device_objects
             .surfaces
@@ -3683,7 +3670,6 @@ pub(crate) mod tests {
         );
         assert_eq!(e.vcall(surface, 8, &[]).u32(), 0);
         assert!(!state!(e)
-            
             .graphics
             .device_objects
             .surfaces
@@ -4196,7 +4182,7 @@ pub(crate) mod tests {
     }
 
     fn device_state(e: &Engine, device: u32) -> &Device {
-        &state!(e).graphics.device_objects.devices[&device]
+        &state_ref!(e).graphics.device_objects.devices[&device]
     }
 
     /// The test table with what the offscreen, fill and query calls ask: `CheckDeviceFormat` of

@@ -3,7 +3,7 @@
 //! moved here with the files, since the core's own tests have no platform layer.
 
 use crate::prelude::*;
-use engine_core::units::crt::stdio::*;
+use engine_core::units::crt::stdio::test_support::*;
 
 fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
     let log = e.call_log.as_ref().unwrap();
@@ -85,7 +85,7 @@ fn file(e: &mut Engine, name: &str, data: &[u8]) -> u32 {
     let text = format!("C:\\Test\\{name}");
     let path = e.mem.alloc(0x40);
     e.mem.set_cstr(path, text.as_bytes());
-    e.kernel
+    state!(e)
         .disk
         .files
         .insert(text.to_ascii_lowercase().into_bytes(), data.to_vec());

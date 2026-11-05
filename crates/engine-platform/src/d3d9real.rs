@@ -94,7 +94,7 @@ fn real(e: &mut Engine) -> &mut Real {
 
 /// The real window of a modelled window handle, when it has one.
 pub fn real_window(e: &Engine, handle: u32) -> Option<isize> {
-    state!(e).graphics.real.windows.get(&handle).copied()
+    state_ref!(e).graphics.real.windows.get(&handle).copied()
 }
 
 /// `D3DPRESENT_INTERVAL_IMMEDIATE`.
@@ -160,7 +160,7 @@ fn words<const N: usize>(e: &Engine, at: u32) -> [u32; N] {
 /// call, tens of thousands a frame.
 #[inline]
 fn device(e: &Engine, this: u32) -> Option<std::mem::ManuallyDrop<IDirect3DDevice9>> {
-    match state!(e).graphics.real.objects.get(&this) {
+    match state_ref!(e).graphics.real.objects.get(&this) {
         // SAFETY: an interface is one non-null COM pointer; the copy is never released.
         Some(Object::Device(d)) => Some(std::mem::ManuallyDrop::new(unsafe {
             std::mem::transmute_copy(d)
@@ -173,7 +173,7 @@ fn device(e: &Engine, this: u32) -> Option<std::mem::ManuallyDrop<IDirect3DDevic
 /// other code, the D3DX texture loader in `super::d3dxreal`); `None` when the forwarding is off or
 /// the real `CreateDevice` failed.
 pub fn real_device(e: &Engine, this: u32) -> Option<IDirect3DDevice9> {
-    match state!(e).graphics.real.objects.get(&this) {
+    match state_ref!(e).graphics.real.objects.get(&this) {
         Some(Object::Device(d)) => Some(d.clone()),
         _ => None,
     }
@@ -182,13 +182,13 @@ pub fn real_device(e: &Engine, this: u32) -> Option<IDirect3DDevice9> {
 /// Whether any of the game's modelled devices has a real one behind it (for a D3DX call that
 /// takes no device, the image info).
 pub fn any_real_device(e: &Engine) -> bool {
-    state!(e)
+    state_ref!(e)
         .graphics
         .device_objects
         .device_addresses()
         .any(|d| {
             matches!(
-                state!(e).graphics.real.objects.get(&d),
+                state_ref!(e).graphics.real.objects.get(&d),
                 Some(Object::Device(_))
             )
         })
@@ -913,7 +913,7 @@ pub fn present(
 // The device's state.
 
 fn surface_of(e: &Engine, surface: u32) -> Option<IDirect3DSurface9> {
-    match state!(e).graphics.real.objects.get(&surface) {
+    match state_ref!(e).graphics.real.objects.get(&surface) {
         Some(Object::Surface(s)) => Some(s.clone()),
         _ => None,
     }
@@ -1703,7 +1703,7 @@ pub fn draw_primitive_up(
 
 fn base_texture(e: &Engine, texture: u32) -> Option<IDirect3DBaseTexture9> {
     use windows::core::Interface;
-    match state!(e).graphics.real.objects.get(&texture) {
+    match state_ref!(e).graphics.real.objects.get(&texture) {
         Some(Object::Texture(t)) => t.cast().ok(),
         Some(Object::Cube(t)) => t.cast().ok(),
         _ => None,
@@ -1793,7 +1793,7 @@ pub fn query_created(e: &mut Engine, this: u32, query: u32, kind: u32) {
 }
 
 fn query_of(e: &Engine, query: u32) -> Option<IDirect3DQuery9> {
-    match state!(e).graphics.real.objects.get(&query) {
+    match state_ref!(e).graphics.real.objects.get(&query) {
         Some(Object::Query(q)) => Some(q.clone()),
         _ => None,
     }
@@ -3370,6 +3370,6 @@ pub(crate) mod stub {
 
     /// How many differences between the model's and the real answers were printed.
     pub(crate) fn logged(e: &Engine) -> usize {
-        state!(e).graphics.real.logged.len()
+        state_ref!(e).graphics.real.logged.len()
     }
 }

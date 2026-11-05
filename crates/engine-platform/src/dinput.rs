@@ -281,7 +281,6 @@ fn no_interface(e: &mut Engine, _this: Ptr, _interface: Ptr, out: Ptr) -> u32 {
 
 fn direct_input_add_ref(e: &mut Engine, this: Ptr) -> u32 {
     let count = state!(e)
-        
         .input
         .interfaces
         .get_mut(&this.addr())
@@ -292,7 +291,6 @@ fn direct_input_add_ref(e: &mut Engine, this: Ptr) -> u32 {
 
 fn direct_input_release(e: &mut Engine, this: Ptr) -> u32 {
     let count = state!(e)
-        
         .input
         .interfaces
         .get_mut(&this.addr())
@@ -658,7 +656,7 @@ pub fn key(e: &mut Engine, code: u8, down: bool) {
         }
         input.async_pressed[code as usize] = true;
     }
-    let time = super::tick_count(e);
+    let time = crate::tick_count(e);
     let input = &mut state!(e).input;
     input.sequence = input.sequence.wrapping_add(1);
     let event = [

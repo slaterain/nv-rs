@@ -1189,3 +1189,51 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec_997b, fclose_finally(Ptr)),
     ]
 }
+
+/// What the tests of this file that moved with the platform layer's files
+/// (`engine-platform/src/crt_stdio_tests.rs`) use of this file and of `crt.rs`: their addresses,
+/// import slots and helpers, as `use super::*` found them. Behind the `test-support` feature.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
+    pub const DECODE_POINTER: u32 = super::DECODE_POINTER;
+    pub const DOSMAPERR: u32 = super::DOSMAPERR;
+    pub const FILBUF: u32 = super::FILBUF;
+    pub const FSOPEN: u32 = super::FSOPEN;
+    pub const FTBUF: u32 = super::FTBUF;
+    pub const GETPTD_NOEXIT: u32 = super::GETPTD_NOEXIT;
+    pub const GET_FMODE: u32 = super::GET_FMODE;
+    pub const IMPORT_CLOSE_HANDLE: u32 = super::IMPORT_CLOSE_HANDLE;
+    pub const IMPORT_CREATE_FILE_A: u32 = super::IMPORT_CREATE_FILE_A;
+    pub const IMPORT_ENTER_CRITICAL_SECTION: u32 = super::IMPORT_ENTER_CRITICAL_SECTION;
+    pub const IMPORT_GET_FILE_TYPE: u32 = super::IMPORT_GET_FILE_TYPE;
+    pub const IMPORT_GET_LAST_ERROR: u32 = super::IMPORT_GET_LAST_ERROR;
+    pub const IMPORT_INIT_CRITICAL_SECTION_SPIN: u32 = super::IMPORT_INIT_CRITICAL_SECTION_SPIN;
+    pub const IMPORT_LEAVE_CRITICAL_SECTION: u32 = super::IMPORT_LEAVE_CRITICAL_SECTION;
+    pub const IMPORT_MOVE_FILE_A: u32 = super::IMPORT_MOVE_FILE_A;
+    pub const IMPORT_MULTI_BYTE_TO_WIDE_CHAR: u32 = super::IMPORT_MULTI_BYTE_TO_WIDE_CHAR;
+    pub const IMPORT_READ_FILE: u32 = super::IMPORT_READ_FILE;
+    pub const IMPORT_SET_FILE_POINTER: u32 = super::IMPORT_SET_FILE_POINTER;
+    pub const IOB_FUNC: u32 = super::IOB_FUNC;
+    pub const LOCKS_READY: u32 = super::LOCKS_READY;
+    pub const LOCK_TABLE: u32 = super::LOCK_TABLE;
+    pub const NHANDLE: u32 = super::NHANDLE;
+    pub const NSTREAM: u32 = super::NSTREAM;
+    pub const OUTPUT_L: u32 = super::OUTPUT_L;
+    pub const PIOB: u32 = super::PIOB;
+    pub const PIOINFO: u32 = super::PIOINFO;
+    pub const STBUF: u32 = super::STBUF;
+    pub const UNLOCK_FILE: u32 = super::UNLOCK_FILE;
+    pub const UTF8_TRAIL_BYTES: u32 = super::UTF8_TRAIL_BYTES;
+
+    pub use crate::units::crt::errno;
+
+    /// [`crate::units::crt`]'s `ioinfo`.
+    pub fn ioinfo(e: &crate::Engine, handle: u32) -> u32 {
+        super::ioinfo(e, handle)
+    }
+
+    /// [`crate::units::crt`]'s `crt_alloc`.
+    pub fn crt_alloc(e: &mut crate::Engine, n: u32) -> u32 {
+        super::crt_alloc(e, n)
+    }
+}

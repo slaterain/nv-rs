@@ -17,3 +17,8 @@ vorbis = { path = "../vorbis" }
 # the real window, device and resources.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D9", "Win32_Graphics_Gdi", "Foundation_Numerics", "Win32_System_LibraryLoader", "Win32_UI_HiDpi", "Win32_UI_Input", "Win32_UI_WindowsAndMessaging"] }
+
+# The tests of the C runtime's stdio that moved here (crt_stdio_tests.rs) and of the process side
+# use the core's addresses and helpers behind this feature.
+[dev-dependencies]
+engine-core = { path = "../engine-core", features = ["test-support"] }

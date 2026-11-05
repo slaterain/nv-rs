@@ -190,7 +190,6 @@ pub fn write_private_profile_string_a(
     1
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

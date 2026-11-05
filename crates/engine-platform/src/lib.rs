@@ -51,6 +51,13 @@ macro_rules! state {
     };
 }
 
+/// [`state!`] to read, where `$e` is `&Engine` or something else in it is borrowed beside it.
+macro_rules! state_ref {
+    ($e:expr) => {
+        $crate::state(&$e.kernel.platform)
+    };
+}
+
 #[cfg(test)]
 pub(crate) mod alloc_count;
 pub mod bink;
@@ -776,3 +783,67 @@ fn layer_imports() -> Vec<(&'static str, &'static str, AbiFn)> {
 // This crate's unit tests: `Engine::new()` registers the core's functions and this layer's.
 #[cfg(test)]
 engine_core::assemble!(units::funcs);
+
+/// In this crate's tests, the core's `imports` with this layer installed first: a test may ask
+/// for the table before any `Engine::new` has run on any thread. (Outside the tests the table
+/// is only read for an engine that exists, `Engine::register_imports`.)
+#[cfg(test)]
+pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
+    install_layer(&LAYER);
+    engine_core::units::platform::imports()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `register_imports` takes the first entry for a (DLL, name), so the order of the core's
+    /// imports and this layer's cannot matter while no name is in the table twice.
+    #[test]
+    fn every_import_is_answered_by_one_function() {
+        let table = imports();
+        let mut seen = std::collections::HashSet::new();
+        for (dll, name, _) in &table {
+            assert!(
+                seen.insert((dll.to_ascii_lowercase(), *name)),
+                "{dll} {name} is in the import table twice"
+            );
+        }
+        // The 195 of the table before the layer moved out of `engine-core` (6 are Windows only).
+        assert_eq!(table.len(), if cfg!(windows) { 195 } else { 189 });
+    }
+
+    /// Not a check: the rows of `engine-core`'s `allocations_per_operation_of_the_kernel` whose
+    /// imports are this layer's (`cargo test --release -p engine-platform --lib allocations_per
+    /// -- --ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn allocations_per_operation_of_the_message_imports() {
+        use crate::alloc_count::{per_run, row};
+        let mut e = Engine::new();
+        let table = imports();
+        let slot = |name: &str| {
+            0x7f00_0000 + 4 * table.iter().position(|(_, n, _)| *n == name).unwrap() as u32
+        };
+        for (i, (_, _, f)) in table.iter().enumerate() {
+            e.register(0x7f00_0000 + 4 * i as u32, *f);
+        }
+        let message = e.mem.alloc(0x1c);
+        for (what, name, args) in [
+            ("GetAsyncKeyState", "GetAsyncKeyState", vec![0x09]),
+            (
+                "PeekMessageA, none",
+                "PeekMessageA",
+                vec![message, 0, 0, 0, 1],
+            ),
+        ] {
+            let f = slot(name);
+            row(
+                &format!("kernel {what}"),
+                per_run(1000, || {
+                    e.call(f, &args);
+                }),
+            );
+        }
+    }
+}

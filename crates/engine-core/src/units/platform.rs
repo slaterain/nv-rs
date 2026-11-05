@@ -15,6 +15,16 @@ use crate::prelude::*;
 
 pub mod loader;
 
+/// What the platform layer's own tests (`engine-platform`) use of this file. Behind the
+/// `test-support` feature.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
+    /// [`super::heap_create`].
+    pub fn heap_create(e: &mut crate::Engine, options: u32, initial: u32, maximum: u32) -> u32 {
+        super::heap_create(e, options, initial, maximum)
+    }
+}
+
 /// What the platform layer (`engine-platform`) adds to the core, when the program links it:
 /// its imports ([`imports`] answers them after the core's own), a new copy of its state for each
 /// engine ([`Kernel::platform`]), what closing one of its file handles does ([`close_handle`])
@@ -44,7 +54,9 @@ pub fn install_layer(layer: &'static Layer) {
 
 /// [`Layer::proc_address`], `None` without the layer.
 fn layer_proc_address(e: &mut Engine, module: u32, name: &[u8]) -> Option<u32> {
-    LAYER.get().and_then(|layer| (layer.proc_address)(e, module, name))
+    LAYER
+        .get()
+        .and_then(|layer| (layer.proc_address)(e, module, name))
 }
 
 /// A new engine's platform layer state ([`Layer::new_state`]), `None` without the layer.
@@ -934,7 +946,7 @@ fn lstrcat_a(e: &mut Engine, destination: Ptr, source: Ptr) -> u32 {
 // Platform: replaces WINMM.DLL timeGetTime (import): the platform clock in milliseconds. It moved
 // in 1 ms steps on the reference machine (its timer resolution was 1 ms; a29, see
 // [`TICK_INTERVAL_US`]). The platform's own time stamps (DirectInput's) read it too.
-fn tick_count(e: &mut Engine) -> u32 {
+pub fn tick_count(e: &mut Engine) -> u32 {
     e.clock_now_ms()
 }
 
@@ -1067,7 +1079,7 @@ pub struct Region {
 /// The handle table and the `VirtualAlloc` reservations (`Engine::kernel`).
 #[derive(Debug, Default)]
 pub struct Kernel {
-    objects: crate::engine::AddrMap<u32, KernelObject>,
+    pub objects: crate::engine::AddrMap<u32, KernelObject>,
     last_handle: u32,
     /// The game threads and their scheduling (`crate::thread_host`).
     pub threads: crate::thread_host::Threads,
@@ -1104,7 +1116,7 @@ pub struct Kernel {
     /// The critical sections by address: the mutex object standing for each.
     pub critical_sections: crate::engine::AddrMap<u32, u32>,
     /// The thread's last-error code (`GetLastError`/`SetLastError`).
-    last_error: u32,
+    pub last_error: u32,
 }
 
 impl Kernel {
@@ -1113,7 +1125,7 @@ impl Kernel {
         self.objects.get(&handle)
     }
 
-    fn insert(&mut self, object: KernelObject) -> u32 {
+    pub fn insert(&mut self, object: KernelObject) -> u32 {
         self.last_handle += 4;
         self.objects.insert(self.last_handle, object);
         self.last_handle
@@ -2172,7 +2184,11 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "CoInitializeEx",
             entry!(0, co_initialize_ex(u32, u32) -> u32).1,
         ),
-        ("ole32.dll", "CoUninitialize", entry!(0, co_uninitialize()).1),
+        (
+            "ole32.dll",
+            "CoUninitialize",
+            entry!(0, co_uninitialize()).1,
+        ),
         (
             "ole32.dll",
             "CoTaskMemAlloc",
@@ -2298,9 +2314,21 @@ pub fn imports() -> Vec<(&'static str, &'static str, AbiFn)> {
         ),
         (k, "GetStartupInfoA", entry!(0, get_startup_info_a(Ptr)).1),
         (k, "GetStdHandle", entry!(0, get_std_handle(u32) -> u32).1),
-        (k, "SetHandleCount", entry!(0, set_handle_count(u32) -> u32).1),
-        (k, "HeapCreate", entry!(0, heap_create(u32, u32, u32) -> u32).1),
-        (k, "HeapAlloc", entry!(0, heap_alloc(u32, u32, u32) -> u32).1),
+        (
+            k,
+            "SetHandleCount",
+            entry!(0, set_handle_count(u32) -> u32).1,
+        ),
+        (
+            k,
+            "HeapCreate",
+            entry!(0, heap_create(u32, u32, u32) -> u32).1,
+        ),
+        (
+            k,
+            "HeapAlloc",
+            entry!(0, heap_alloc(u32, u32, u32) -> u32).1,
+        ),
     ];
     if let Some(layer) = LAYER.get() {
         imports.extend((layer.imports)());
@@ -4185,7 +4213,8 @@ mod tests_allocations {
 
     /// Not a check: the host heap allocations of the kernel imports a frame calls most (on the
     /// main thread, nothing to wait for), for the frame-rate work (`cargo test --release -p
-    /// engine-core --lib allocations_per -- --ignored --nocapture`).
+    /// engine-core --lib allocations_per -- --ignored --nocapture`). `GetAsyncKeyState` and
+    /// `PeekMessageA` are `engine-platform`'s same measurement.
     #[test]
     #[ignore]
     fn allocations_per_operation_of_the_kernel() {
@@ -4208,7 +4237,6 @@ mod tests_allocations {
         }
         let event = e.mem.u32(events);
         let tls = e.call(slot("TlsAlloc"), &[]).u32();
-        let message = e.mem.alloc(0x1c);
         for (what, name, args) in [
             ("InterlockedIncrement", "InterlockedIncrement", vec![word]),
             (
@@ -4246,12 +4274,6 @@ mod tests_allocations {
                 "WaitForMultipleObjects of 2, signalled",
                 "WaitForMultipleObjects",
                 vec![2, events, 0, 0],
-            ),
-            ("GetAsyncKeyState", "GetAsyncKeyState", vec![0x09]),
-            (
-                "PeekMessageA, none",
-                "PeekMessageA",
-                vec![message, 0, 0, 0, 1],
             ),
         ] {
             let f = slot(name);

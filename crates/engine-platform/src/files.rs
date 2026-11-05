@@ -111,7 +111,7 @@ pub const TUNNEL_TICKS: u64 = 15 * 10_000_000;
 /// that set it, not the finer `GetSystemTimePreciseAsFileTime`), or [`Disk::clock`] when a test
 /// set one.
 pub fn file_clock(e: &Engine) -> u64 {
-    if let Some(now) = state!(e).disk.clock {
+    if let Some(now) = state_ref!(e).disk.clock {
         return now;
     }
     #[cfg(windows)]
@@ -138,10 +138,10 @@ pub fn file_clock(e: &Engine) -> u64 {
 /// The size of the file at `k` (a [`Disk`] key): the run's copy, else the player's file opened
 /// for reading only; 0 for neither.
 fn file_size(e: &Engine, k: &[u8]) -> u64 {
-    if let Some(data) = state!(e).disk.files.get(k) {
+    if let Some(data) = state_ref!(e).disk.files.get(k) {
         return data.len() as u64;
     }
-    state!(e)
+    state_ref!(e)
         .disk
         .player
         .get(k)
@@ -152,12 +152,12 @@ fn file_size(e: &Engine, k: &[u8]) -> u64 {
 /// Up to `count` bytes of the file at `k` from `start` (fewer at the end, none past it): the
 /// run's copy, else the player's file opened for reading only (read from disk).
 fn read_range(e: &Engine, k: &[u8], start: u64, count: u32) -> Vec<u8> {
-    if let Some(data) = state!(e).disk.files.get(k) {
+    if let Some(data) = state_ref!(e).disk.files.get(k) {
         let start = (start as usize).min(data.len());
         let end = start.saturating_add(count as usize).min(data.len());
         return data[start..end].to_vec();
     }
-    let Some(path) = state!(e).disk.player.get(k) else {
+    let Some(path) = state_ref!(e).disk.player.get(k) else {
         return vec![];
     };
     use std::io::{Read, Seek, SeekFrom};
@@ -210,10 +210,10 @@ fn real_path(path: &[u8]) -> std::path::PathBuf {
 /// player's file (read only); `None` when the game deleted it or there is none.
 pub fn read_whole(e: &Engine, path: &[u8]) -> Option<Vec<u8>> {
     let k = key(path);
-    if let Some(data) = state!(e).disk.files.get(&k) {
+    if let Some(data) = state_ref!(e).disk.files.get(&k) {
         return Some(data.clone());
     }
-    if state!(e).disk.deleted.contains(&k) {
+    if state_ref!(e).disk.deleted.contains(&k) {
         return None;
     }
     std::fs::read(real_path(path)).ok()
@@ -225,19 +225,19 @@ pub fn read_whole(e: &Engine, path: &[u8]) -> Option<Vec<u8>> {
 fn attributes(e: &Engine, path: &[u8]) -> Option<u32> {
     let k = key(path);
     let trimmed = key(path.strip_suffix(b"\\").unwrap_or(path));
-    if state!(e).disk.files.contains_key(&k) {
+    if state_ref!(e).disk.files.contains_key(&k) {
         return Some(
-            state!(e)
+            state_ref!(e)
                 .disk
                 .entries
                 .get(&k)
                 .map_or(FILE_ATTRIBUTE_ARCHIVE, |entry| entry.attributes),
         );
     }
-    if state!(e).disk.directories.contains(&trimmed) {
+    if state_ref!(e).disk.directories.contains(&trimmed) {
         return Some(FILE_ATTRIBUTE_DIRECTORY);
     }
-    if state!(e).disk.deleted.contains(&k) {
+    if state_ref!(e).disk.deleted.contains(&k) {
         return None;
     }
     let meta = std::fs::metadata(real_path(path)).ok()?;
@@ -486,10 +486,10 @@ fn directory_exists(e: &Engine, path: &[u8]) -> bool {
     };
     let parent = &trimmed[..cut];
     let k = key(parent);
-    if state!(e).disk.directories.contains(&k) {
+    if state_ref!(e).disk.directories.contains(&k) {
         return true;
     }
-    if state!(e).disk.deleted.contains(&k) {
+    if state_ref!(e).disk.deleted.contains(&k) {
         return false;
     }
     std::fs::metadata(real_path(parent)).is_ok_and(|m| m.is_dir())
@@ -529,7 +529,9 @@ pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
     if state!(e).disk.files.contains_key(&k) {
         let entry = run_entry(e, &k, &shown);
         write_entry(e, data, &entry, &shown);
-        return e.kernel.insert(KernelObject::FindFile(Opaque::new(Search::default())));
+        return e
+            .kernel
+            .insert(KernelObject::FindFile(Opaque::new(Search::default())));
     }
     if state!(e).disk.directories.contains(&k) {
         panic!(
@@ -585,7 +587,8 @@ pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
         "FindFirstFileA(\"{shown}\"): a non-ASCII name is not provided"
     );
     write_find_data(e, data, &meta, &stored, &shown);
-    e.kernel.insert(KernelObject::FindFile(Opaque::new(Search::default())))
+    e.kernel
+        .insert(KernelObject::FindFile(Opaque::new(Search::default())))
 }
 
 /// Writes the `WIN32_FIND_DATAA` at `data` for an entry: attributes, creation, last-access and
@@ -737,13 +740,18 @@ fn last_part(path: &[u8]) -> String {
 /// The [`Entry`] of the file at key `k`, made or changed in this run; a file of the run without
 /// one (`CopyFileA`'s copies: not measured) stops the run.
 fn run_entry(e: &Engine, k: &[u8], shown: &str) -> Entry {
-    state!(e).disk.entries.get(k).cloned().unwrap_or_else(|| {
-        panic!(
+    state_ref!(e)
+        .disk
+        .entries
+        .get(k)
+        .cloned()
+        .unwrap_or_else(|| {
+            panic!(
             "FindFirstFileA(\"{shown}\"): {}, a file of this run whose directory entry was not \
              recorded (CopyFileA's times were not measured), is not provided",
             String::from_utf8_lossy(k)
         )
-    })
+        })
 }
 
 /// The directory entry of the file at the full path `path` now: the run's ([`Disk::entries`]),
@@ -751,8 +759,8 @@ fn run_entry(e: &Engine, k: &[u8], shown: &str) -> Entry {
 /// without one, or a player's file elsewhere than on Windows (times not provided there).
 fn entry_of(e: &Engine, path: &[u8]) -> Option<Entry> {
     let k = key(path);
-    if state!(e).disk.files.contains_key(&k) {
-        return state!(e).disk.entries.get(&k).cloned();
+    if state_ref!(e).disk.files.contains_key(&k) {
+        return state_ref!(e).disk.entries.get(&k).cloned();
     }
     player_entry(path)
 }
@@ -921,7 +929,7 @@ fn find_first_wild(e: &mut Engine, text: &[u8], data: Ptr) -> u32 {
             return INVALID_HANDLE_VALUE;
         }
     };
-    let disk = &state!(e).disk;
+    let disk = &state_ref!(e).disk;
     let changed_here = !changed_keys(disk, &folder, false).is_empty();
     let parent = folder[..folder.iter().rposition(|&b| b == b'\\').unwrap_or(0)].to_vec();
     let mut found: Vec<Found> = Vec::new();
@@ -1255,7 +1263,7 @@ fn short_name(e: &Engine, path: &[u8]) -> Option<String> {
 fn names_in(e: &Engine, directory: &[u8]) -> std::collections::HashSet<String> {
     let folder = key(directory);
     let shown = String::from_utf8_lossy(directory).into_owned();
-    let disk = &state!(e).disk;
+    let disk = &state_ref!(e).disk;
     let mut taken = std::collections::HashSet::new();
     let mut add = |name: &str, short: &str| {
         taken.insert(name.to_ascii_uppercase());
@@ -1478,7 +1486,7 @@ pub fn create_file_a(
                 read: access & GENERIC_READ != 0,
                 write: false,
                 wrote: None,
-            }))));
+            })));
         }
     }
     // A file of the player's (on disk, not deleted in this run, not yet the run's): it exists
@@ -1545,7 +1553,7 @@ pub fn create_file_a(
         read: access & GENERIC_READ != 0,
         write: access & GENERIC_WRITE != 0,
         wrote: None,
-    }))))
+    })))
 }
 
 /// A file of the player's at the full path `name` (key `k`) that a write open takes into the run:
@@ -2103,7 +2111,6 @@ mod tests_wide_and_size {
         assert_eq!((e.mem.u32(size), e.mem.u32(size + 4)), (0x0b, 0));
         assert_eq!(e.kernel.last_error, 0x1234);
         assert!(state!(e)
-            
             .disk
             .files
             .contains_key(b"c:\\some\\measured.bin".as_slice()));
