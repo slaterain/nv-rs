@@ -4946,7 +4946,7 @@ mod tests {
         });
         let parse_chain: [&[u8]; 3] = [
             b".?AVIdvFileError@@",
-            b".?AVruntime_error@@",
+            b".?AVruntime_error@std@@",
             STD_EXCEPTION_NAME,
         ];
         for (at, chain) in [
