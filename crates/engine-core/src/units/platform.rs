@@ -761,16 +761,24 @@ pub const MS_VC_EXCEPTION: u32 = 0x406d_1388;
 
 // Platform: replaces KERNEL32.DLL RaiseException (import)
 /// `RaiseException(code, flags, argument count, arguments)` with no debugger attached. The game
-/// raises only [`MS_VC_EXCEPTION`] (`SetThreadName` `00aa2740`, inside its own `__try`, whose
-/// handler takes it and goes on): that one comes back at once, as the handler would make it.
-/// Any other code stops the engine (structured exceptions are not provided).
-fn raise_exception(_e: &mut Engine, code: u32, flags: u32, count: u32, _arguments: Ptr) {
-    if code != MS_VC_EXCEPTION {
-        panic!(
-            "RaiseException(code {code:#x}, flags {flags:#x}, {count} arguments): \
-             structured exceptions are not provided"
-        );
+/// raises two codes. [`MS_VC_EXCEPTION`] (`SetThreadName` `00aa2740`, `00d87940`, each inside its
+/// own `__try`, whose handler takes it and goes on) comes back at once, as the handler would make
+/// it. A C++ throw (`_CxxThrowException` `00ec7894`) goes to its catch or stops
+/// ([`crate::cxx_exception`]). Any other code stops the engine (structured exceptions are not
+/// provided).
+fn raise_exception(e: &mut Engine, code: u32, flags: u32, count: u32, arguments: Ptr) {
+    if code == MS_VC_EXCEPTION {
+        return;
     }
+    if let Some((object, throw_info)) =
+        crate::cxx_exception::throw_record(e, code, count, arguments.addr())
+    {
+        crate::cxx_exception::throw(e, object, throw_info);
+    }
+    panic!(
+        "RaiseException(code {code:#x}, flags {flags:#x}, {count} arguments): \
+         structured exceptions are not provided"
+    );
 }
 
 // The user-interface and registry calls the game's input start-up makes (`00a22660`): the

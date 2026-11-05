@@ -303,6 +303,61 @@ mod tests {
         e.call(0x00ec_7894, &args![7u32, 0u32]);
     }
 
+    /// The whole way down: `_CxxThrowException`, the `RaiseException` import, the engine's throw.
+    #[test]
+    fn a_throw_through_the_real_functions_reaches_its_catch_and_a_rethrow_the_next() {
+        let mut e = Engine::new();
+        e.register_imports(&[engine_core::exe::Import {
+            slot: RAISE_EXCEPTION,
+            dll: "KERNEL32.dll".into(),
+            name: "RaiseException".into(),
+        }]);
+        e.map(THROW_RECORD_TEMPLATE, 0x20);
+        for (i, word) in [0xe06d_7363u32, 1, 0, 0, 3, 0x1993_0520, 0, 0]
+            .iter()
+            .enumerate()
+        {
+            e.mem.set_u32(THROW_RECORD_TEMPLATE + 4 * i as u32, *word);
+        }
+        let info = e.mem.alloc(0x10);
+        engine_core::cxx_exception::write_throw_info(&mut e, info, 0, &[STD_EXCEPTION_NAME]);
+        let object = e.mem.alloc(0xc);
+        e.with_stack(8, |_, _| {});
+        let mark = e.guest_stack_mark();
+        let outer = try_catch(
+            &mut e,
+            |e| {
+                try_catch(
+                    e,
+                    |e| {
+                        e.call(0x00ec_7894, &args![object, info]);
+                        panic!("a throw does not return");
+                    },
+                    |e, thrown| {
+                        assert_eq!(thrown.object, object);
+                        assert_eq!(caught_as(e, thrown, STD_EXCEPTION_NAME), Some(object));
+                        e.call(0x00ec_7894, &args![0u32, 0u32]);
+                        panic!("a rethrow does not return");
+                    },
+                )
+            },
+            |_, thrown| thrown,
+        );
+        assert_eq!(
+            outer,
+            Thrown {
+                object,
+                throw_info: info
+            }
+        );
+        assert_eq!(e.guest_stack_mark(), mark);
+        // The stack word the record took, and more, are free again.
+        assert_eq!(e.next_stack_local(4), {
+            let local = e.with_stack(4, |_, local| local.addr());
+            local
+        });
+    }
+
     #[test]
     fn default_constructor_clears_the_message() {
         let mut e = Engine::new();
