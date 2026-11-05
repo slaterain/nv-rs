@@ -1421,7 +1421,7 @@ mod tests {
 
     /// The cost of the matrix helpers the renderer calls per object (`D3DXMatrixMultiply`,
     /// `D3DXMatrixMultiplyTranspose`, `D3DXMatrixTranspose`), per call, on matrices of ordinary
-    /// floats in engine memory (TEST DATA). `cargo test --release -p engine-core --lib
+    /// floats in engine memory (TEST DATA). `cargo test --release -p engine-platform --lib
     /// cost_of_d3dx -- --ignored --nocapture`.
     #[test]
     #[ignore]

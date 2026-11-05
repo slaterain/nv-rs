@@ -819,7 +819,7 @@ impl Buffer {
     }
 }
 
-/// The DirectSound objects (`Kernel::sound`).
+/// The DirectSound objects (`State::sound`).
 #[derive(Debug, Default)]
 pub struct Sound {
     sound_vtable: u32,
@@ -4926,7 +4926,7 @@ mod tests {
     /// Every replay program in the file `NV_REPLAY_PROGRAMS` (`tools/programs.pl`) through the
     /// layer, each line `id<TAB>reads` (or `PANIC message`) written to `NV_REPLAY_OUT`, for
     /// `tools/cmp2.pl` to set against the measured reads period by period (`cargo test -p
-    /// engine-core --lib -- --ignored measured_replay`; `cmp2.pl programs out abs 0` compares
+    /// engine-platform --lib -- --ignored measured_replay`; `cmp2.pl programs out abs 0` compares
     /// every read). A second converter turned on in the measurement (the `apl` and `big` parts)
     /// is turned on here by the line's part. The counts per data set and the lines that differ
     /// are in docs/SOUND.md.
@@ -4962,7 +4962,7 @@ mod tests {
     /// the layer: the same calls after the same number of periods (the measured write cursor's
     /// changes), the cursors read at every period. Checks that nothing stops and that right
     /// after `SetFrequency` both cursors read as just before it, as measured in every case
-    /// (`cargo test -p engine-core --lib -- --ignored freqphase_replay --nocapture`).
+    /// (`cargo test -p engine-platform --lib -- --ignored freqphase_replay --nocapture`).
     #[test]
     #[ignore]
     fn freqphase_replay() {
@@ -5364,7 +5364,7 @@ mod tests {
 
     /// The bits the output gets and the cursors the game reads over 2 s of buffers played, moved,
     /// refilled, retuned and stopped through the interface, as one hash; the same as the build
-    /// before the allocation work (`cargo test --release -p engine-core --lib output_bits --
+    /// before the allocation work (`cargo test --release -p engine-platform --lib output_bits --
     /// --ignored --nocapture`), but for the cursors, changed 2026-10-31 and 2026-11-01 (measured,
     /// module documentation): a buffer played again after its end goes on in the steps it was
     /// taking, after `SetFrequency` the play cursor goes on trailing, the buffers here, at the
@@ -5503,7 +5503,7 @@ mod tests {
 
     /// Not a check: the host heap allocations of the buffers' per-frame calls with the output on
     /// (the game's thread) and of the mixer's 10 ms periods (the output's thread), for the
-    /// frame-rate work (`cargo test --release -p engine-core --lib allocations_per -- --ignored
+    /// frame-rate work (`cargo test --release -p engine-platform --lib allocations_per -- --ignored
     /// --nocapture`).
     #[test]
     #[ignore]
@@ -6621,7 +6621,7 @@ mod tests {
     /// sample, as a program named `FalloutNV.exe` on this machine's 8-channel endpoint and under
     /// another name on its two-channel one; the folders in `NV_DSMIX_SURROUND`, separated by `;`)
     /// replayed through the layer and compared bit for bit, packet by packet, from the packet
-    /// the case's voice starts in to the last packet captured whole: `cargo test -p engine-core
+    /// the case's voice starts in to the last packet captured whole: `cargo test -p engine-platform
     /// --lib -- --ignored dsmix_surround --nocapture`. A folder made with `DSMIX_LOCKFIRST` has
     /// the game's device locked before every case; in one made without it the cases after the one
     /// that locked it. The layer turns the second converter on in a case as DirectSound does (a

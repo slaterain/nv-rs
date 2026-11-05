@@ -113,17 +113,24 @@ pub struct State {
 /// The [`State`] in an engine's `Kernel::platform`.
 #[inline]
 pub fn state(slot: &Option<Box<dyn std::any::Any>>) -> &State {
-    slot.as_deref()
-        .and_then(|s| s.downcast_ref())
-        .expect("the engine has the platform layer's state")
+    let any = slot
+        .as_deref()
+        .expect("the engine has the platform layer's state");
+    debug_assert!(any.is::<State>());
+    // SAFETY: only `Engine::new` fills `Kernel::platform`, from the one `LAYER`'s `new_state`,
+    // which makes a `State`. This runs on every platform call, so no `TypeId` check in release.
+    unsafe { &*(any as *const dyn std::any::Any as *const State) }
 }
 
 /// The [`State`] in an engine's `Kernel::platform`, to change.
 #[inline]
 pub fn state_mut(slot: &mut Option<Box<dyn std::any::Any>>) -> &mut State {
-    slot.as_deref_mut()
-        .and_then(|s| s.downcast_mut())
-        .expect("the engine has the platform layer's state")
+    let any = slot
+        .as_deref_mut()
+        .expect("the engine has the platform layer's state");
+    debug_assert!(any.is::<State>());
+    // SAFETY: as in [`state`].
+    unsafe { &mut *(any as *mut dyn std::any::Any as *mut State) }
 }
 
 fn new_state() -> Box<dyn std::any::Any> {

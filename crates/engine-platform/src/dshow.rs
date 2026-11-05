@@ -209,7 +209,7 @@ struct Pin {
     reader: u32,
 }
 
-/// The DirectShow objects (in `Kernel::sound`).
+/// The DirectShow objects (in `State::sound`).
 #[derive(Debug, Default)]
 pub struct Show {
     vtables: [u32; 6],
@@ -1692,7 +1692,7 @@ mod tests {
 
     /// With `NV_MUSIC_MP3` naming an MP3 (one of the game's tracks, read only), the same as
     /// [`the_samples_are_the_same_from_wherever_the_stream_is_played`] on it from 12 places
-    /// through it: `cargo test -p engine-core --lib -- --ignored nv_music_mp3`.
+    /// through it: `cargo test -p engine-platform --lib -- --ignored nv_music_mp3`.
     #[test]
     #[ignore]
     fn nv_music_mp3_is_the_same_from_wherever_it_is_played() {

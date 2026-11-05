@@ -56,7 +56,7 @@ pub struct Window {
     pub rect: [i32; 4],
 }
 
-/// The window side's state (`Kernel::windows`).
+/// The window side's state (`State::windows`).
 #[derive(Debug, Default)]
 pub struct Windows {
     pub classes: Vec<Class>,

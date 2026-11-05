@@ -32,7 +32,7 @@ pub const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
 /// `HEAP_ZERO_MEMORY`.
 pub const HEAP_ZERO_MEMORY: u32 = 8;
 
-/// The process side's state (`Kernel::process`).
+/// The process side's state (`State::process`).
 #[derive(Debug, Default)]
 pub struct Process {
     /// Where `GetCommandLineA`'s text is (0: not made yet).

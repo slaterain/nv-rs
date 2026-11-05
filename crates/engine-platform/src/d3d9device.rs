@@ -388,7 +388,7 @@ struct Surface {
     locked: bool,
 }
 
-/// The devices and their resources (`Kernel::graphics`).
+/// The devices and their resources (`State::graphics`).
 #[derive(Debug, Default)]
 pub struct Objects {
     device_vtable: u32,
@@ -4219,7 +4219,7 @@ pub(crate) mod tests {
     }
 
     /// Not a check: the host heap allocations of the device's per-frame calls as the game makes
-    /// them (through its vtable), for the frame-rate work (`cargo test --release -p engine-core
+    /// them (through its vtable), for the frame-rate work (`cargo test --release -p engine-platform
     /// --lib allocations_per -- --ignored --nocapture`). The real device's side is measured in
     /// `d3d9real`.
     #[test]
@@ -4946,7 +4946,7 @@ pub(crate) mod tests {
     /// slots do nothing), the model alone, and the model forwarding to a stand-in real device
     /// (`d3d9real::stub`); then the forwarded cost by group of calls. The scene has 2048
     /// textures, 1024 vertex and index buffers, 64 shaders of each kind and 32 declarations.
-    /// `cargo test --release -p engine-core --lib cost_of_d3d9 -- --ignored --nocapture`.
+    /// `cargo test --release -p engine-platform --lib cost_of_d3d9 -- --ignored --nocapture`.
     #[cfg(windows)]
     #[test]
     #[ignore]

@@ -2838,7 +2838,7 @@ mod tests {
     }
 
     /// Not a check: the host heap allocations of the forwarded per-frame calls on a real device
-    /// (`cargo test --release -p engine-core --lib allocations_per -- --ignored --nocapture`);
+    /// (`cargo test --release -p engine-platform --lib allocations_per -- --ignored --nocapture`);
     /// nothing is listed where Direct3D 9 has no device.
     #[test]
     #[ignore]

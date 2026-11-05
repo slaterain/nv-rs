@@ -261,7 +261,7 @@ struct Direct3D {
     references: u32,
 }
 
-/// The Direct3D 9 objects (`Kernel::graphics`).
+/// The Direct3D 9 objects (`State::graphics`).
 #[derive(Debug, Default)]
 pub struct Graphics {
     adapter: Option<Adapter>,

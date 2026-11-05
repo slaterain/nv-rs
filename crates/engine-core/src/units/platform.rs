@@ -946,7 +946,7 @@ fn lstrcat_a(e: &mut Engine, destination: Ptr, source: Ptr) -> u32 {
 // Platform: replaces WINMM.DLL timeGetTime (import): the platform clock in milliseconds. It moved
 // in 1 ms steps on the reference machine (its timer resolution was 1 ms; a29, see
 // [`TICK_INTERVAL_US`]). The platform's own time stamps (DirectInput's) read it too.
-pub fn tick_count(e: &mut Engine) -> u32 {
+fn tick_count(e: &mut Engine) -> u32 {
     e.clock_now_ms()
 }
 

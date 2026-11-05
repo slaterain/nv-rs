@@ -167,7 +167,7 @@ struct Bindings {
     drawn_from_memory: bool,
 }
 
-/// The buffers, shaders and declarations (`Kernel::graphics`).
+/// The buffers, shaders and declarations (`State::graphics`).
 #[derive(Debug, Default)]
 pub struct Resources {
     vtables: HashMap<u32, u32>,

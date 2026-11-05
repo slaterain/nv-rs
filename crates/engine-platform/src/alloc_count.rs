@@ -1,6 +1,6 @@
 //! Test builds only: the host heap allocations each thread makes, counted by a global allocator
 //! around the system's, for the `#[ignore]`d measurements of what allocates per operation on the
-//! paths a game frame runs (`cargo test --release -p engine-core --lib allocations_per -- --ignored
+//! paths a game frame runs (`cargo test --release -p engine-platform --lib allocations_per -- --ignored
 //! --nocapture`). The count is the running thread's own, so tests running beside each other do
 //! not mix theirs.
 

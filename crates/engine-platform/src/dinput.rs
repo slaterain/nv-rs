@@ -150,7 +150,7 @@ struct Device {
     overflowed: bool,
 }
 
-/// The input state behind the devices (`Kernel::input`).
+/// The input state behind the devices (`State::input`).
 #[derive(Debug, Default)]
 pub struct Input {
     /// The vtables once made.
@@ -656,7 +656,7 @@ pub fn key(e: &mut Engine, code: u8, down: bool) {
         }
         input.async_pressed[code as usize] = true;
     }
-    let time = crate::tick_count(e);
+    let time = e.clock_now_ms();
     let input = &mut state!(e).input;
     input.sequence = input.sequence.wrapping_add(1);
     let event = [
