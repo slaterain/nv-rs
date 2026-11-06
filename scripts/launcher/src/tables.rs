@@ -108,6 +108,21 @@ pub fn adapter_table_problem(table: &str) -> Option<String> {
     None
 }
 
+/// The first adapter's name in the table (`D3DADAPTER_IDENTIFIER9`'s `Description`, after the 512
+/// bytes of `Driver`), one character per byte, as the game compares it with `sD3DDevice`.
+pub fn adapter_name(table: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(table);
+    let hex = text
+        .lines()
+        .find_map(|l| l.strip_prefix("GetAdapterIdentifier\t0 0\t0\t"))?;
+    let digit = |i: usize| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok();
+    let name: String = (512..1024)
+        .map_while(|at| digit(2 * at).filter(|&b| b != 0))
+        .map(|b| b as char)
+        .collect();
+    (!name.is_empty()).then_some(name)
+}
+
 /// The whole adapter table: `d3d9-capture`, then the `nvapi.dll` answers, then which query types
 /// the device takes (only its `CreateQuery` lines).
 pub fn make_adapter_table(tools: &Path, game_exe: &Path, log: &Path) -> Result<Vec<u8>, String> {
@@ -255,6 +270,19 @@ mod tests {
             "GetACP\t\t4e4\nSHGetFolderPathA\t5 0\t0\t443a5c64\nSHGetFolderPathA\t1a 0\t0\t52\nSHGetFolderPathA\t1c 0\t0\tc3a9\nSHGetFolderPathA\t23 0\t0\t5a\nlast"
         );
         assert!(with_folders(b"GetACP\t\t4e4\n", b"a", b"b", b"c").is_err());
+    }
+
+    #[test]
+    fn the_adapters_name_is_read() {
+        let mut bytes = vec![0u8; 1100];
+        bytes[0..4].copy_from_slice(b"nvld");
+        bytes[512..516].copy_from_slice(b"Card");
+        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        let table = format!(
+            "x\t\t0\nGetAdapterIdentifier\t0 0\t0\t{hex}\nGetAdapterIdentifier\t0 2\t0\t00\n"
+        );
+        assert_eq!(adapter_name(table.as_bytes()).unwrap(), "Card");
+        assert_eq!(adapter_name(b"GetACP\t\t4e4\n"), None);
     }
 
     #[test]

@@ -119,7 +119,9 @@ pub fn exit_process(_e: &mut Engine, code: u32) {
 }
 
 // Platform: replaces SHELL32.DLL ShellExecuteA (import)
-/// `ShellExecuteA`: starting another program (the launcher) is not provided.
+/// `ShellExecuteA`: starting another program is not provided, but for the game's launcher, which
+/// `main` starts when the graphics card isn't the one in `sD3DDevice` (`004da570`). There it answers
+/// that nothing started, and `main` goes on with the game, the settings as they are.
 pub fn shell_execute_a(
     e: &mut Engine,
     _w: u32,
@@ -130,6 +132,15 @@ pub fn shell_execute_a(
     _s: u32,
 ) -> u32 {
     let file = String::from_utf8_lossy(&e.mem.cstr(file.addr())).into_owned();
+    if file
+        .to_ascii_lowercase()
+        .ends_with("\\falloutnvlauncher.exe")
+    {
+        eprintln!(
+            "The game asked for its launcher (a new graphics card or no settings): not started"
+        );
+        return 0;
+    }
     panic!("ShellExecuteA({file:?}) is not provided")
 }
 

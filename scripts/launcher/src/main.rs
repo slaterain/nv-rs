@@ -391,23 +391,45 @@ fn guest_bytes(path: &Path) -> Option<Vec<u8>> {
 
 /// `FalloutPrefs.ini` in the profile: the player's own copied once, read only (the settings the
 /// game's launcher made); then the choices from Settings.cmd over it.
-fn prepare_prefs(package: &Package, profile: &Profile, settings: &Settings) -> std::io::Result<()> {
+///
+/// On a PC where the game's own launcher has never run, this does what it leaves behind: `Fallout.ini`
+/// from the game's `Fallout_default.ini` and `FalloutPrefs.ini` from its High preset (`high.ini`), both
+/// only read from the game's folder. `sD3DDevice` always names this PC's card: the game hands over to
+/// its launcher when it doesn't (`004da570`), and here there is no launcher to hand over to.
+fn prepare_prefs(
+    package: &Package,
+    profile: &Profile,
+    settings: &Settings,
+    game_folder: &Path,
+    device: Option<&str>,
+) -> std::io::Result<()> {
+    let real = real_documents().map(|d| d.join("My Games\\FalloutNV"));
+    let read_real = |name: &str| real.as_ref().and_then(|d| std::fs::read(d.join(name)).ok());
+    let ini = profile.prefs.with_file_name("Fallout.ini");
+    if !ini.is_file() {
+        let bytes = read_real("Fallout.ini")
+            .or_else(|| std::fs::read(game_folder.join("Fallout_default.ini")).ok());
+        if let Some(bytes) = bytes {
+            tables::write_whole(&ini, &bytes)?;
+        }
+    }
     let mut first_time_size = None;
     if !profile.prefs.is_file() {
-        let real = real_documents().map(|d| d.join("My Games\\FalloutNV\\FalloutPrefs.ini"));
-        match real.as_deref().map(std::fs::read) {
-            Some(Ok(bytes)) => {
-                tables::write_whole(&profile.prefs, &bytes)?;
-                package.log("copied the player's FalloutPrefs.ini (read only) for the first start");
-            }
-            _ => {
-                // No launcher settings on this PC: the game's window starts at the desktop's size.
-                first_time_size = Some(ui::desktop_size());
-                package.log("no FalloutPrefs.ini to copy: starting from the game's defaults");
-            }
+        if let Some(bytes) = read_real("FalloutPrefs.ini") {
+            tables::write_whole(&profile.prefs, &bytes)?;
+            package.log("copied the player's FalloutPrefs.ini (read only) for the first start");
+        } else {
+            // The game's window starts at the desktop's size.
+            first_time_size = Some(ui::desktop_size());
+            let preset = std::fs::read(game_folder.join("high.ini")).unwrap_or_default();
+            tables::write_whole(&profile.prefs, &preset)?;
+            package.log("no FalloutPrefs.ini to copy: starting from the game's High preset");
         }
     }
     let mut lines = settings.prefs_lines();
+    if let Some(device) = device {
+        lines.push(("sD3DDevice".into(), format!("\"{device}\"")));
+    }
     if let Some((w, h)) = first_time_size {
         if !lines.iter().any(|(n, _)| n == "iSize W") {
             lines.push(("iSize W".into(), w.to_string()));
@@ -785,6 +807,7 @@ fn play(
             None => return Err(refuse_path(&game.data)),
         },
     };
+    let device = tables::adapter_name(&table);
     let table = tables::with_folders(&table, &documents, &roaming, &local).map_err(|why| Stop {
         code: STOP_TABLES,
         message: format!(
@@ -797,9 +820,11 @@ fn play(
     })?;
 
     let settings = Settings::parse(&std::fs::read_to_string(&package.settings).unwrap_or_default());
-    prepare_prefs(package, profile, &settings).map_err(|e| Stop {
-        code: STOP_LOCATION,
-        message: format!("{}: {e}", profile.prefs.display()),
+    prepare_prefs(package, profile, &settings, &game.folder, device.as_deref()).map_err(|e| {
+        Stop {
+            code: STOP_LOCATION,
+            message: format!("{}: {e}", profile.prefs.display()),
+        }
     })?;
 
     if options.check_only {
