@@ -384,6 +384,38 @@ fn scan(text: &str) -> Vec<(u32, Cite, usize)> {
     out
 }
 
+/// The addresses a file's `entry!`s register.
+fn registered_addresses(text: &str) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(k) = text[from..].find("entry!(") {
+        from += k + 7;
+        let Some(rest) = text[from..].trim_start().strip_prefix("0x") else {
+            continue;
+        };
+        let digits: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_hexdigit() || *c == '_')
+            .filter(|c| *c != '_')
+            .collect();
+        out.extend(u32::from_str_radix(&digits, 16));
+    }
+    out
+}
+
+/// Credits each typed marker to its function, when that address is registered: a marker on a comment
+/// or a function nobody registers counts for nothing.
+fn credit_typed(funcs: &mut [Func], cites: Vec<(u32, String)>, registered: &BTreeSet<u32>) {
+    for (a, loc) in cites {
+        if registered.contains(&a) {
+            let k = funcs.partition_point(|f| f.addr <= a);
+            if let Some(f) = k.checked_sub(1).map(|k| &mut funcs[k]) {
+                f.typed.insert(loc);
+            }
+        }
+    }
+}
+
 /// The generated table of the static initializers
 /// (`crates/engine-core/data/static_initializers.tsv`, research/initgen): each
 /// row runs the `__cinit` entry in its first column through the shape
@@ -1002,6 +1034,8 @@ fn main() {
     rust_files(&root.join("viewer"), &mut files);
     let mut cited = BTreeSet::new();
     let mut unmapped = BTreeSet::new();
+    let mut registered = BTreeSet::new();
+    let mut typed_cites = Vec::new();
     for path in &files {
         let Ok(text) = fs::read_to_string(path) else {
             continue;
@@ -1011,6 +1045,7 @@ fn main() {
             .unwrap_or(path)
             .to_string_lossy()
             .replace('\\', "/");
+        registered.extend(registered_addresses(&text));
         for (a, kind, line) in scan(&text) {
             cited.insert(a);
             let k = funcs.partition_point(|f| f.addr <= a);
@@ -1025,13 +1060,18 @@ fn main() {
             let loc = format!("{rel}:{line}");
             match kind {
                 Cite::Translated => f.translated.insert(loc),
-                Cite::Typed => f.typed.insert(loc),
+                // Counted once every file's registrations are known.
+                Cite::Typed => {
+                    typed_cites.push((a, loc));
+                    true
+                }
                 Cite::Replaced => f.replaced.insert(loc),
                 Cite::Traced => f.traced.insert(loc),
                 Cite::Incomplete => f.incomplete.insert(loc),
             };
         }
     }
+    credit_typed(&mut funcs, typed_cites, &registered);
     for table in TABLES {
         let Ok(text) = fs::read_to_string(root.join(table)) else {
             continue;
@@ -1321,6 +1361,24 @@ mod tests {
             report.contains("| havok | 2 | 0 | 0 | 1 | 1 | 0 | 1 | 0 | 0 | 0 |"),
             "{report}"
         );
+    }
+
+    #[test]
+    fn a_typed_marker_with_no_registration_credits_nothing() {
+        let text = "vec![entry!(0x00c9_0e60, f(u32)), entry!(\n    0x00c90e70,\n    g()\n)]\n";
+        assert_eq!(registered_addresses(text), [0x00c9_0e60, 0x00c9_0e70]);
+        let mut funcs = vec![func(0x00c9_0e60, "havok"), func(0x00c9_0f00, "havok")];
+        let registered: BTreeSet<u32> = registered_addresses(text).into_iter().collect();
+        credit_typed(
+            &mut funcs,
+            vec![
+                (0x00c9_0e60, "crates/engine-typed/src/x.rs:1".to_string()),
+                (0x00c9_0f00, "crates/engine-typed/src/x.rs:9".to_string()),
+            ],
+            &registered,
+        );
+        assert!(funcs[0].typed_in_engine());
+        assert!(!funcs[1].typed_in_engine());
     }
 
     #[test]

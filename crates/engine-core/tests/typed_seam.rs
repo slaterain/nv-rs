@@ -79,3 +79,48 @@ fn the_differential_test_works_from_another_crate() {
         .run();
     assert!(!wrong.is_same());
 }
+
+/// A crate above the core names as many families as its call tree reaches.
+#[test]
+fn two_families_go_direct_from_another_crate() {
+    const CALLER_ID: FamilyId = FamilyId::new(8);
+    const LEAF_ID: FamilyId = FamilyId::new(9);
+    fn leaf(_: &mut Engine, x: u32) -> u32 {
+        x + 1
+    }
+    fn caller(e: &mut Engine, x: u32) -> u32 {
+        let got: u32 = typed_call!(LEAF_ID, 0x00ff_3000, leaf(e, x));
+        got * 2
+    }
+    fn caller_translated(_: &mut Engine, x: u32) -> u32 {
+        (x + 1) * 2
+    }
+    static LEAVES: Family = Family {
+        name: "seam_leaves",
+        id: LEAF_ID,
+        past_gate: false,
+        threads: Threads::Both,
+        funcs: || vec![entry!(0x00ff_3000, leaf(u32) -> u32)],
+    };
+    static CALLERS: Family = Family {
+        name: "seam_callers",
+        id: CALLER_ID,
+        past_gate: false,
+        threads: Threads::Both,
+        funcs: || vec![entry!(0x00ff_3010, caller(u32) -> u32)],
+    };
+    let report = Diff::new(entry!(0x00ff_3010, caller(u32) -> u32))
+        .translation(entry!(0x00ff_3010, caller_translated(u32) -> u32).1)
+        .family(&CALLERS)
+        .family(&LEAVES)
+        .translation_calls_plainly(&[0x00ff_3000])
+        .inputs(&[Input::Word])
+        .setup(|e, case| {
+            let (addr, f) = entry!(0x00ff_3000, leaf(u32) -> u32);
+            e.register(addr, f);
+            case.words().iter().map(|w| w & 0xffff).collect()
+        })
+        .run();
+    report.assert_same();
+    assert_eq!(report.direct_calls, report.runs);
+}

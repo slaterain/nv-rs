@@ -1,6 +1,6 @@
 # ADR-0014: The typed 64-bit migration goes in two stages, per system
 
-**Status:** Proposed (lead, 2026-11-06; for maintainer review)
+**Status:** Accepted (maintainer, 2026-11-06). The questions under "Not decided here" stay open.
 **Date:** 2026-11-06
 **Extends:** [ADR-0012](0012-modern-64-bit-engine.md) (point 2, the typed migration)
 
@@ -34,7 +34,8 @@ was compiled or run for it) looked at what that means for speed and for the 4 GB
    uniform form, so vtables, callback words and untyped callers keep working, and the translation
    stays linked as the fallback and the comparison target until the family is retired.
 3. **One switch, bound before the first frame:** `NV_TYPED`, per family, read once at start-up. With
-   a family off the game runs the translation. Past its gate a family is on by default.
+   a family off the game runs the translation. Past its gate a family is on by default, with the
+   translation kept as a fallback for a while (maintainer, 2026-11-06).
 4. **A diagnostic sees everything.** While any per-call diagnostic is on (a trace, a recording, a
    profile, a hook), typed calls go by address.
 5. **An address a fix or a built-in can override is called by address**, in typed code always
@@ -42,13 +43,14 @@ was compiled or run for it) looked at what that means for speed and for the 4 GB
 6. **Checking.** Every typed function has a differential test against its translation (return
    value, memory written, outgoing calls, both branches of each typed call, on generated inputs that include NaN, zero, denormal and
    huge floats). Above that, by what the family touches: the exe oracle, dual runs, the Direct3D
-   draw comparison and the recording tables. Each step has a go or no-go gate; speed gates use the
-   measured baseline, read where it can resolve them: on the 2026-11-06 baseline Goodsprings (spread
-   0.75% over four runs) can resolve a 3% gain, and Doc Mitchell's house (2.66%) can't.
-7. **Floats.** On the main thread, where the exe uses x87: plain `f32`. On the AI threads, or
-   both: `f64` locals, rounded at each `float` store. In SSE code: `f32` as now. Float to integer
-   never goes through `as`. Where a recording shows it matters the x87 helper stays, and says why.
-   Sound keeps its x87 modelling and its gates (the standing bit-exact decision).
+   draw comparison and the recording tables. Each step has a go or no-go gate. Speed gates are read in
+   Goodsprings, where the baseline can resolve them (spread 0.75% over four runs on 2026-11-06), with
+   Doc Mitchell's house (2.66%) still measured and reported as the named target (maintainer,
+   2026-11-06).
+7. **Floats** (maintainer, 2026-11-06). Code only the main thread runs: plain `f32`. Code on other
+   threads, or both: `f64` locals, rounded at each `float` store. In SSE code: `f32` as now. Float to
+   integer never goes through `as`. The exact x87 helper stays where a recording shows it matters, and
+   says why. Sound keeps its x87 modelling and its gates (the standing bit-exact decision).
 8. **Portable.** Typed code has no `core::arch` and no x86 assumption from the first step on.
 
 The work order and gates are in the plan: the seam and a baseline first, then a census of who

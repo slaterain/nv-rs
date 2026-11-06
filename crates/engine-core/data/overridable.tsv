@@ -104,7 +104,7 @@
 00aa4200	0	HeapReplacer
 00aa42e0	0	HeapReplacer
 00aa44c0	2	HeapReplacer
-00aa4ee0	0	nv-rs uncap
+00aa4ee0	1	nv-rs uncap
 00aa53f0	0	HeapReplacer
 00aa5410	0	HeapReplacer
 00aa5460	0	HeapReplacer

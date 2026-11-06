@@ -5990,7 +5990,7 @@ have explicit incomplete markers and remain `partial` in the task queue.
 
 Game code (functions whose subsystem or unit is neither platform nor library): **45663** functions, of which 45659 (100.0%) are translated, run from the static-initializer table, or traced.
 
-Rust cites 101665 distinct `.text` addresses; 1019 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 101667 distinct `.text` addresses; 1019 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 

@@ -1195,8 +1195,8 @@ const TYPED_ROOTS: &[&str] = &[
 /// Clippy's type-aware form of the float rule: the text rule here reads words, this reads types.
 const DENY_CASTS: &str = "#![deny(clippy::cast_possible_truncation)]";
 
-/// What would lift it for a whole file.
-const ALLOW_CASTS: &str = "#![allow(clippy::cast_possible_truncation)]";
+/// The lint and the group that hold it: an `allow` of either lifts it.
+const CAST_LINTS: &[&str] = &["clippy::cast_possible_truncation", "clippy::pedantic"];
 
 /// Text that only comes from decompiled C++ or a path into a decompilation. Nothing in typed code
 /// needs it: a typed function cites its address and says what it does in plain words.
@@ -1242,9 +1242,13 @@ const FLOAT_CALLS: &[&str] = &[
     "to_degrees",
 ];
 
-/// Whether `rel` is a Rust source of an engine crate.
+/// Whether `rel` is Rust the game runs: an engine crate's source, or the host's or the viewer's, which
+/// can call a translation directly too.
 fn is_engine_source(rel: &str) -> bool {
-    (rel.starts_with("crates/engine/") || rel.starts_with("crates/engine-"))
+    (rel.starts_with("crates/engine/")
+        || rel.starts_with("crates/engine-")
+        || rel.starts_with("crates/host/")
+        || rel.starts_with("viewer/"))
         && rel.contains("/src/")
         && rel.ends_with(".rs")
 }
@@ -1563,6 +1567,20 @@ fn cast_operand(line: &str, at: usize) -> &str {
     &line[i..end]
 }
 
+/// Whether an operand holding floats ends as something else: their bits, a test of one, a compare.
+fn answers_no_float(operand: &str) -> bool {
+    let operand = operand.trim();
+    let ends_as = |suffix: &str| operand.ends_with(suffix);
+    let named_test = operand
+        .rfind("is_")
+        .is_some_and(|at| operand[at..].trim_end_matches(')').find('(').is_some());
+    ends_as(".to_bits()")
+        || named_test
+        || [" < ", " > ", " <= ", " >= ", " == ", " != "]
+            .iter()
+            .any(|compare| operand.contains(compare))
+}
+
 /// The `as` casts from a float to an integer on a line of code: the operands, as written.
 fn float_casts<'a>(line: &'a str, floats: &BTreeSet<String>) -> Vec<&'a str> {
     let mut out = Vec::new();
@@ -1577,7 +1595,7 @@ fn float_casts<'a>(line: &'a str, floats: &BTreeSet<String>) -> Vec<&'a str> {
             .collect();
         if INT_TYPES.contains(&target.as_str()) {
             let operand = cast_operand(line, at);
-            if expr_is_float(operand, floats) {
+            if expr_is_float(operand, floats) && !answers_no_float(operand) {
                 out.push(operand);
             }
         }
@@ -1688,30 +1706,6 @@ fn data_item_lines(raw: &[&str], code: &[&str]) -> Vec<bool> {
     marks
 }
 
-/// The addresses in `entry!(0x...` in `code` outside `skip`, as (address, line index).
-fn entry_addresses(code: &[&str], skip: &[bool]) -> Vec<(u32, usize)> {
-    let mut out = Vec::new();
-    for (i, line) in code.iter().enumerate() {
-        if skip[i] {
-            continue;
-        }
-        let mut from = 0;
-        while let Some(k) = line[from..].find("entry!(") {
-            from += k + 7;
-            // The address may be on the next line, as rustfmt breaks a long entry.
-            let text = if line[from..].trim().is_empty() {
-                code.get(i + 1).copied().unwrap_or("")
-            } else {
-                &line[from..]
-            };
-            if let Some(a) = hex_literal(text.trim_start()) {
-                out.push((a, i));
-            }
-        }
-    }
-    out
-}
-
 /// The value of the `0x...` literal `text` starts with.
 fn hex_literal(text: &str) -> Option<u32> {
     let rest = text.strip_prefix("0x")?;
@@ -1814,14 +1808,15 @@ fn typed_findings(rel: &str, text: &str) -> Vec<(usize, String)> {
                 ));
             }
         }
-        // Each typed folder's root denies truncating casts, type-aware; nothing lifts that for a
-        // whole file but the differential test itself.
-        if in_typed_dir && c.trim_end().starts_with(ALLOW_CASTS) && !rel.ends_with("typed/diff.rs")
-        {
+    }
+    // Each typed folder's root denies truncating casts, type-aware; nothing lifts that for a whole file
+    // or module but the differential test itself.
+    if in_typed_dir && !rel.ends_with("typed/diff.rs") {
+        for line in casts_lifted(&code, &tests) {
             found.push((
-                i + 1,
-                "this lifts the type-aware ban on truncating casts for a whole file (put a local \
-                 `allow` on one named helper)"
+                line + 1,
+                "this lifts the type-aware ban on truncating casts for a whole file or module (put \
+                 a local `allow` on one named helper)"
                     .to_string(),
             ));
         }
@@ -1833,6 +1828,40 @@ fn typed_findings(rel: &str, text: &str) -> Vec<(usize, String)> {
         ));
     }
     found
+}
+
+/// The lines outside test modules that lift the truncating-cast lint for a whole file or module: an
+/// inner `allow` in any form, or an outer one on a `mod`.
+fn casts_lifted(code: &[&str], tests: &[bool]) -> Vec<usize> {
+    let mut out = Vec::new();
+    for (i, line) in code.iter().enumerate() {
+        if tests[i] {
+            continue;
+        }
+        let line = line.trim_start();
+        let inner = line.starts_with("#![allow");
+        let outer = line.starts_with("#[allow");
+        if !inner && !outer {
+            continue;
+        }
+        let close = (i..code.len())
+            .find(|k| code[*k].contains(']'))
+            .unwrap_or(i);
+        let attribute = code[i..=close].join(" ");
+        if !CAST_LINTS.iter().any(|lint| attribute.contains(lint)) {
+            continue;
+        }
+        let on_a_module = (close + 1..code.len())
+            .find(|k| !code[*k].trim().is_empty())
+            .is_some_and(|k| {
+                let next = code[k].trim_start();
+                next.starts_with("mod ") || next.starts_with("pub mod ")
+            });
+        if inner || on_a_module {
+            out.push(i);
+        }
+    }
+    out
 }
 
 /// One row of `crates/engine-core/data/overridable.tsv`.
@@ -1874,13 +1903,47 @@ fn parse_overridable(text: &str) -> Result<Vec<Overridable>, String> {
     Ok(rows)
 }
 
-/// (address, function name) of each registration in `code`: `entry!(0x.., path::name(..)` and
-/// `(0x.., name as AbiFn)`.
-fn registered_names(code: &str) -> Vec<(u32, String)> {
+/// A function registered at an address: what `entry!(0x.., path::name(..)` says, and where.
+#[derive(Clone, Debug)]
+struct Registration {
+    address: u32,
+    name: String,
+    /// The module it is in as far as text can say: the path's last module, else the file's.
+    module: String,
+    rel: String,
+}
+
+/// The module a file is, by its name.
+fn module_of_file(rel: &str) -> &str {
+    let mut parts = rel.rsplit('/');
+    let file = parts.next().unwrap_or(rel);
+    let stem = file.strip_suffix(".rs").unwrap_or(file);
+    if matches!(stem, "mod" | "lib" | "main") {
+        parts.next().unwrap_or(stem)
+    } else {
+        stem
+    }
+}
+
+/// The module a file's `super` is, by its folders.
+fn parent_module(rel: &str) -> &str {
+    let mut parts = rel.rsplit('/');
+    let file = parts.next().unwrap_or(rel);
+    if matches!(file, "mod.rs" | "lib.rs" | "main.rs") {
+        parts.next();
+    }
+    parts.next().unwrap_or("")
+}
+
+/// (address, path as written, line index) of each registration in `code`: `entry!(0x.., path::name(..)`
+/// and `(0x.., name as AbiFn)`.
+fn registered_paths(code: &str) -> Vec<(u32, String, usize)> {
+    let line_of = |at: usize| code[..at].bytes().filter(|c| *c == b'\n').count();
     let mut out = Vec::new();
     let mut from = 0;
     while let Some(k) = code[from..].find("entry!(") {
-        from += k + 7;
+        let at = from + k;
+        from = at + 7;
         let rest = code[from..].trim_start();
         let Some(address) = hex_literal(rest) else {
             continue;
@@ -1894,8 +1957,8 @@ fn registered_names(code: &str) -> Vec<(u32, String)> {
             .take_while(|c| is_ident(*c) || *c == b':')
             .map(char::from)
             .collect();
-        if let Some(name) = path.rsplit("::").next().filter(|n| !n.is_empty()) {
-            out.push((address, name.to_string()));
+        if !path.is_empty() {
+            out.push((address, path, line_of(at)));
         }
     }
     let mut from = 0;
@@ -1906,57 +1969,214 @@ fn registered_names(code: &str) -> Vec<(u32, String)> {
         if let Some(head) = code[..start].trim_end().strip_suffix(',') {
             let open = head.rfind('(').map_or(0, |o| o + 1);
             if let Some(address) = hex_literal(head[open..].trim()) {
-                out.push((address, name.to_string()));
+                out.push((address, name.to_string(), line_of(at)));
             }
         }
     }
     out
 }
 
-/// The renames in a file's `use` lines (`use a::b as h;`, `use a::{b as h};`), as alias to name.
-fn use_aliases(code: &str) -> BTreeMap<String, String> {
-    let mut aliases = BTreeMap::new();
-    for line in code.lines() {
-        let line = line.trim_start();
-        if !(line.starts_with("use ") || line.starts_with("pub use ")) {
-            continue;
-        }
-        let mut from = 0;
-        while let Some(k) = line[from..].find(" as ") {
-            let at = from + k;
-            from = at + 4;
-            let (_, name) = ident_before(line, at);
-            let alias: String = line[from..]
-                .bytes()
-                .take_while(|c| is_ident(*c))
-                .map(char::from)
-                .collect();
-            if !name.is_empty() && !alias.is_empty() && alias != "_" {
-                aliases.insert(alias, name.to_string());
+/// A file's registrations.
+fn registrations(rel: &str, code: &str) -> Vec<Registration> {
+    registered_paths(code)
+        .into_iter()
+        .map(|(address, path, _)| {
+            let mut segments = path.rsplit("::");
+            let name = segments.next().unwrap_or("").to_string();
+            let module = match segments.next() {
+                None | Some("self") => module_of_file(rel).to_string(),
+                Some("super") => parent_module(rel).to_string(),
+                Some(module) => module.to_string(),
+            };
+            Registration {
+                address,
+                name,
+                module,
+                rel: rel.to_string(),
             }
+        })
+        .collect()
+}
+
+/// What a file's `use` lines bring in: each name as the file uses it, with the path it stands for,
+/// and the modules it takes everything from.
+#[derive(Default, Debug)]
+struct Imports {
+    names: BTreeMap<String, Vec<String>>,
+    globs: Vec<String>,
+}
+
+fn file_imports(code: &str) -> Imports {
+    let mut imports = Imports::default();
+    let mut from = 0;
+    while from < code.len() {
+        let end_of_line = code[from..].find('\n').map_or(code.len(), |n| from + n);
+        let line = code[from..end_of_line].trim_start();
+        let statement = ["use ", "pub use ", "pub(crate) use ", "pub(super) use "]
+            .iter()
+            .find_map(|p| line.strip_prefix(p));
+        if statement.is_some() {
+            let start = code[from..].find("use ").map_or(from, |n| from + n + 4);
+            let end = code[start..].find(';').map_or(code.len(), |n| start + n);
+            flatten_use(&mut Vec::new(), &code[start..end], &mut imports);
+            from = end + 1;
+        } else {
+            from = end_of_line + 1;
         }
     }
-    aliases
+    imports
+}
+
+/// One `use` tree under `prefix`: `a::{b, c as d, e::*}`.
+fn flatten_use(prefix: &mut Vec<String>, tree: &str, imports: &mut Imports) {
+    let mut depth = 0;
+    let mut start = 0;
+    let mut items = Vec::new();
+    for (i, c) in tree.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            ',' if depth == 0 => {
+                items.push(&tree[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    items.push(&tree[start..]);
+    for item in items {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        if let Some(open) = item.find('{') {
+            let head: Vec<String> = item[..open]
+                .split("::")
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+            let kept = prefix.len();
+            prefix.extend(head);
+            let close = item.rfind('}').unwrap_or(item.len());
+            flatten_use(prefix, &item[open + 1..close], imports);
+            prefix.truncate(kept);
+            continue;
+        }
+        let (path, alias) = match item.split_once(" as ") {
+            Some((path, alias)) => (path.trim(), Some(alias.trim())),
+            None => (item, None),
+        };
+        let mut segments: Vec<String> = prefix.clone();
+        segments.extend(path.split("::").map(|s| s.trim().to_string()));
+        match segments.last().map(String::as_str) {
+            Some("*") => {
+                if segments.len() >= 2 {
+                    imports.globs.push(segments[segments.len() - 2].clone());
+                }
+            }
+            Some("self") => {
+                segments.pop();
+                if let Some(last) = segments.last().cloned() {
+                    imports
+                        .names
+                        .insert(alias.unwrap_or(&last).to_string(), segments);
+                }
+            }
+            Some(last) => {
+                let name = alias.unwrap_or(last).to_string();
+                if name != "_" {
+                    imports.names.insert(name, segments);
+                }
+            }
+            None => {}
+        }
+    }
+}
+
+/// A function call as far as text can read it.
+#[derive(Debug, PartialEq)]
+struct CalledName {
+    /// Its own name, with any `use .. as ..` undone.
+    name: String,
+    /// The last module on its path, or that its import names.
+    module: Option<String>,
+    /// Written bare and not imported by name: its own module's, or from a glob.
+    bare: bool,
+}
+
+/// What `path` (segments, the function last) names, with `imports`.
+fn called_name(path: &[&str], imports: &Imports) -> Option<CalledName> {
+    let last = *path.last()?;
+    if path.len() == 1 {
+        if let Some(full) = imports.names.get(last) {
+            return Some(CalledName {
+                name: full.last()?.clone(),
+                module: full.len().checked_sub(2).map(|k| full[k].clone()),
+                bare: false,
+            });
+        }
+        return Some(CalledName {
+            name: last.to_string(),
+            module: None,
+            bare: true,
+        });
+    }
+    let module = path[path.len() - 2];
+    let module = if path.len() == 2 {
+        imports
+            .names
+            .get(module)
+            .and_then(|full| full.last())
+            .map_or(module, String::as_str)
+    } else {
+        module
+    };
+    Some(CalledName {
+        name: last.to_string(),
+        module: Some(module.to_string()),
+        bare: false,
+    })
+}
+
+/// Whether a call in `rel` of `called` can be `registration`, as far as text can say.
+fn may_be(called: &CalledName, rel: &str, imports: &Imports, registration: &Registration) -> bool {
+    if called.name != registration.name {
+        return false;
+    }
+    match called.module.as_deref() {
+        None => {
+            registration.rel == rel
+                || registration.module == module_of_file(rel)
+                || imports.globs.iter().any(|g| {
+                    *g == registration.module
+                        || (g == "super" && registration.module == parent_module(rel))
+                        || g == "self"
+                })
+        }
+        Some("self") => registration.module == module_of_file(rel),
+        Some("super") => registration.module == parent_module(rel),
+        Some("crate") => true,
+        Some(module) => registration.module == module,
+    }
 }
 
 /// A call found by [`direct_calls`].
-struct DirectCall<'a> {
+struct DirectCall {
     /// The line, from 0.
     line: usize,
-    /// The function's own name, an alias undone.
-    name: &'a str,
-    /// Written with a path (`a::b::name(`), not bare.
-    qualified: bool,
+    called: CalledName,
 }
 
-/// The calls of the functions in `names` in `code`: an identifier followed by `(`, not a method, not
-/// an associated function (`Thing::name(`), not the `fn` itself, not the standard library's, not the
-/// function an `entry!` or a `typed_call!` names.
-fn direct_calls<'a>(
+/// The calls in `code` of a name in `names`: an identifier followed by `(`, not a method, not an
+/// associated function (`Thing::name(`, `f32::sqrt(`), not the `fn` itself, not the standard
+/// library's, not one on a path into a module that doesn't register that name (`helpers::read(`), not
+/// the function an `entry!` or a `typed_call!` names.
+fn direct_calls(
     code: &str,
-    names: &'a BTreeMap<String, BTreeSet<u32>>,
-    aliases: &BTreeMap<String, String>,
-) -> Vec<DirectCall<'a>> {
+    names: &BTreeMap<String, Vec<Registration>>,
+    imports: &Imports,
+) -> Vec<DirectCall> {
     let mut out = Vec::new();
     let b = code.as_bytes();
     let (mut i, mut line) = (0, 0);
@@ -1999,40 +2219,35 @@ fn direct_calls<'a>(
         if b.get(next) != Some(&b'(') {
             continue;
         }
-        let token = &code[start..i];
-        let target = aliases.get(token).map_or(token, String::as_str);
-        let Some((name, _)) = names.get_key_value(target) else {
-            continue;
-        };
         let mut chain = start;
-        let mut segments: Vec<&str> = Vec::new();
+        let mut path: Vec<&str> = vec![&code[start..i]];
         while chain >= 2 && &b[chain - 2..chain] == b"::" {
             let (s, segment) = ident_before(code, chain - 2);
-            segments.push(segment);
+            path.insert(0, segment);
             chain = s;
         }
+        let Some(called) = called_name(&path, imports) else {
+            continue;
+        };
+        let Some(registered) = names.get(&called.name) else {
+            continue;
+        };
         let before = code[..chain].trim_end();
-        if before.ends_with('.') || before.ends_with("fn") {
+        if before.ends_with('.') || before.ends_with("fn") || names_a_registration(before) {
             continue;
         }
-        // `Thing::name(` is Thing's, and `std::mem::drop(` the library's.
-        let associated = segments
-            .first()
-            .is_some_and(|s| s.starts_with(|c: char| c.is_ascii_uppercase()));
-        let library = segments
-            .last()
-            .is_some_and(|s| matches!(*s, "std" | "core" | "alloc"));
-        if associated || library {
+        if matches!(path[0], "std" | "core" | "alloc") {
             continue;
         }
-        if names_a_registration(before) {
-            continue;
+        if let Some(module) = called.module.as_deref() {
+            let associated = module.starts_with(|c: char| c.is_ascii_uppercase());
+            let known = matches!(module, "self" | "super" | "crate")
+                || registered.iter().any(|r| r.module == module);
+            if associated || !known {
+                continue;
+            }
         }
-        out.push(DirectCall {
-            line,
-            name,
-            qualified: !segments.is_empty(),
-        });
+        out.push(DirectCall { line, called });
     }
     out
 }
@@ -2065,8 +2280,8 @@ struct TypedCallSite {
     line: usize,
     /// Its address: `Err` with the text when that isn't a literal.
     address: Result<u32, String>,
-    /// The name of the function it calls directly.
-    function: Option<String>,
+    /// The path of the function it calls directly.
+    path: Vec<String>,
 }
 
 fn typed_call_sites(code: &str) -> Vec<TypedCallSite> {
@@ -2116,11 +2331,11 @@ fn typed_call_sites(code: &str) -> Vec<TypedCallSite> {
         out.push(TypedCallSite {
             line: code[..at].bytes().filter(|c| *c == b'\n').count(),
             address: hex_literal(address).ok_or_else(|| address.to_string()),
-            function: path
-                .rsplit("::")
-                .next()
-                .filter(|n| !n.is_empty())
-                .map(str::to_string),
+            path: path
+                .split("::")
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect(),
         });
     }
     out
@@ -2156,8 +2371,36 @@ fn defines_locally(code: &str, name: &str) -> bool {
     .any(|p| code.contains(p.as_str()))
 }
 
-/// What the table and the engine sources `files` (relative path, text) say across files: every
-/// finding as (path, line, message).
+/// The functions under typed markers in a file, as (address, name, line index).
+fn marked_functions(text: &str, code: &str) -> Vec<(u32, String, usize)> {
+    if !typed_marker::mentioned(text) {
+        return Vec::new();
+    }
+    let raw: Vec<&str> = text.lines().collect();
+    let lines: Vec<&str> = code.lines().collect();
+    let mut out = Vec::new();
+    for (i, line) in raw.iter().enumerate() {
+        let Some(address) = typed_marker::address(line) else {
+            continue;
+        };
+        let Some(f) = marked_fn_line(&lines, i) else {
+            continue;
+        };
+        let after = lines[f].split("fn ").nth(1).unwrap_or("");
+        let name: String = after
+            .bytes()
+            .take_while(|c| is_ident(*c))
+            .map(char::from)
+            .collect();
+        if !name.is_empty() {
+            out.push((address, name, i));
+        }
+    }
+    out
+}
+
+/// What the table and the sources `files` (relative path, text) say across files: every finding as
+/// (path, line, message).
 fn typed_cross_file_findings(
     table: &str,
     files: &[(String, String)],
@@ -2174,82 +2417,96 @@ fn typed_cross_file_findings(
         .map(|(_, text)| without_test_modules(&code_only(text)))
         .collect();
 
-    // Who is registered, both ways round, and where.
-    let mut by_name: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
-    let mut by_address: BTreeMap<u32, BTreeSet<String>> = BTreeMap::new();
-    let mut defined_in: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
-    for ((rel, _), code) in files.iter().zip(&codes) {
-        for (address, name) in registered_names(code) {
-            by_address
-                .entry(address)
+    // Who is registered, by name and by address; which functions carry a marker for which address.
+    let mut by_name: BTreeMap<String, Vec<Registration>> = BTreeMap::new();
+    let mut by_address: BTreeMap<u32, Vec<Registration>> = BTreeMap::new();
+    let mut marked: BTreeSet<(u32, String)> = BTreeSet::new();
+    for ((rel, text), code) in files.iter().zip(&codes) {
+        for registration in registrations(rel, code) {
+            by_name
+                .entry(registration.name.clone())
                 .or_default()
-                .insert(name.to_string());
-            by_name.entry(name.clone()).or_default().insert(address);
-            defined_in.entry(name).or_default().insert(rel);
+                .push(registration.clone());
+            by_address
+                .entry(registration.address)
+                .or_default()
+                .push(registration);
+        }
+        for (address, name, _) in marked_functions(text, code) {
+            marked.insert((address, name));
         }
     }
-    let overridable_names: BTreeMap<String, BTreeSet<u32>> = by_name
+    let overridable_names: BTreeMap<String, Vec<Registration>> = by_name
         .iter()
-        .filter(|(_, addresses)| addresses.iter().any(|a| overridable.contains(a)))
-        .map(|(name, addresses)| {
-            let listed = addresses
+        .filter_map(|(name, list)| {
+            let listed: Vec<Registration> = list
                 .iter()
-                .copied()
-                .filter(|a| overridable.contains(a))
+                .filter(|r| overridable.contains(&r.address))
+                .cloned()
                 .collect();
-            (name.clone(), listed)
+            (!listed.is_empty()).then(|| (name.clone(), listed))
         })
         .collect();
-
-    // Every function registered in a typed folder has its marker there, in any of its files.
-    let mut typed_markers = BTreeSet::new();
-    for (rel, text) in files {
-        if TYPED_DIRS.iter().any(|d| rel.starts_with(d)) {
-            typed_markers.extend(text.lines().filter_map(typed_marker::address));
-        }
-    }
 
     let mut counts: BTreeMap<u32, usize> = BTreeMap::new();
     let mut where_called: BTreeMap<u32, Vec<String>> = BTreeMap::new();
     for ((rel, text), code) in files.iter().zip(&codes) {
         let in_typed_dir = TYPED_DIRS.iter().any(|d| rel.starts_with(d));
         let lines: Vec<&str> = code.lines().collect();
+        let imports = file_imports(code);
         if in_typed_dir {
-            let skip = vec![false; lines.len()];
-            for (address, line) in entry_addresses(&lines, &skip) {
-                if !typed_markers.contains(&address) {
+            // A function registered in a typed folder has the marker for that address above it.
+            for (address, path, line) in registered_paths(code) {
+                let name = path.rsplit("::").next().unwrap_or("").to_string();
+                if !marked.contains(&(address, name.clone())) {
                     found.push((
                         rel.clone(),
                         line + 1,
-                        format!("typed function {address:08x} registered without its marker"),
+                        format!(
+                            "typed function {address:08x} (`{name}`) registered without its marker"
+                        ),
                     ));
                 }
             }
         }
         for site in typed_call_sites(code) {
-            let message = match site.address {
-                Ok(address) if overridable.contains(&address) => Some(format!(
+            let segments: Vec<&str> = site.path.iter().map(String::as_str).collect();
+            let called = called_name(&segments, &imports);
+            let message = match (&site.address, called) {
+                (Ok(address), _) if overridable.contains(address) => Some(format!(
                     "typed_call! of overridable {address:08x}: call it with e.call (a fix or \
                      built-in may replace it, overridable.tsv)"
                 )),
-                Ok(address) => {
-                    let registered = by_address.get(&address);
-                    let matches = site
-                        .function
-                        .as_ref()
-                        .is_some_and(|f| registered.is_some_and(|names| names.contains(f)));
-                    (!matches).then(|| {
-                        format!(
-                            "typed_call! at {address:08x} calls `{}` directly, but that address \
-                             is registered as {}: the wrong function would run in play",
-                            site.function.as_deref().unwrap_or("?"),
-                            registered.map_or("nothing".to_string(), |names| {
-                                names.iter().cloned().collect::<Vec<_>>().join(", ")
+                (Ok(address), Some(called)) => {
+                    let registered = by_address.get(address);
+                    let resolves = registered
+                        .is_some_and(|list| list.iter().any(|r| may_be(&called, rel, &imports, r)));
+                    if !resolves {
+                        Some(format!(
+                            "typed_call! at {address:08x} calls `{}` directly, but that address is \
+                             registered as {}: the wrong function would run in play",
+                            site.path.join("::"),
+                            registered.map_or("nothing".to_string(), |list| {
+                                list.iter()
+                                    .map(|r| format!("{}::{}", r.module, r.name))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
                             })
-                        )
-                    })
+                        ))
+                    } else if !marked.contains(&(*address, called.name.clone())) {
+                        Some(format!(
+                            "typed_call! at {address:08x} calls `{}` directly, which has no typed \
+                             marker for that address: it would skip the typed version",
+                            called.name
+                        ))
+                    } else {
+                        None
+                    }
                 }
-                Err(word) => Some(format!(
+                (Ok(address), None) => {
+                    Some(format!("typed_call! at {address:08x} names no function"))
+                }
+                (Err(word), _) => Some(format!(
                     "typed_call! of `{word}`: write the address as a literal, so this test can \
                      read it"
                 )),
@@ -2258,18 +2515,22 @@ fn typed_cross_file_findings(
                 found.push((rel.clone(), site.line + 1, message));
             }
         }
-        let aliases = use_aliases(code);
         let raw: Vec<&str> = text.lines().collect();
         let typed = typed_lines(rel, &raw, &lines);
         let has_typed = typed.iter().any(|t| *t);
         // A call of an overridable function, in any file.
-        for call in direct_calls(code, &overridable_names, &aliases) {
-            let same_file = defined_in[call.name].contains(rel.as_str());
-            let imported = aliases.values().any(|name| name == call.name);
-            if !same_file && !call.qualified && !imported && defines_locally(code, call.name) {
+        for call in direct_calls(code, &overridable_names, &imports) {
+            let list = &overridable_names[&call.called.name];
+            let same_file = list.iter().any(|r| r.rel == *rel);
+            if call.called.bare && !same_file && defines_locally(code, &call.called.name) {
                 continue;
             }
-            for address in &overridable_names[call.name] {
+            let addresses: BTreeSet<u32> = list
+                .iter()
+                .filter(|r| call.called.bare || may_be(&call.called, rel, &imports, r))
+                .map(|r| r.address)
+                .collect();
+            for address in addresses {
                 if typed.get(call.line).copied().unwrap_or(false) {
                     found.push((
                         rel.clone(),
@@ -2277,13 +2538,13 @@ fn typed_cross_file_findings(
                         format!(
                             "direct call of overridable {address:08x} (`{}`) in typed code: call \
                              it with e.call (a fix or built-in may replace it, overridable.tsv)",
-                            call.name
+                            call.called.name
                         ),
                     ));
                 } else {
-                    *counts.entry(*address).or_default() += 1;
+                    *counts.entry(address).or_default() += 1;
                     where_called
-                        .entry(*address)
+                        .entry(address)
                         .or_default()
                         .push(format!("{rel}:{}", call.line + 1));
                 }
@@ -2292,18 +2553,14 @@ fn typed_cross_file_findings(
         // In typed code, a plain call of any registered function skips the direct flag, doubles and
         // diagnostics: it is a typed_call! or an e.call.
         if has_typed {
-            for call in direct_calls(code, &by_name, &aliases) {
+            for call in direct_calls(code, &by_name, &imports) {
                 if !typed.get(call.line).copied().unwrap_or(false)
-                    || overridable_names.contains_key(call.name)
+                    || overridable_names.contains_key(&call.called.name)
                 {
                     continue;
                 }
-                let registered_here = defined_in[call.name].contains(rel.as_str());
-                let imported = aliases.values().any(|name| name == call.name);
-                if !registered_here
-                    && !call.qualified
-                    && !imported
-                    && defines_locally(code, call.name)
+                let registered_here = by_name[&call.called.name].iter().any(|r| r.rel == *rel);
+                if call.called.bare && !registered_here && defines_locally(code, &call.called.name)
                 {
                     continue;
                 }
@@ -2313,7 +2570,7 @@ fn typed_cross_file_findings(
                     format!(
                         "plain call of registered `{}` in typed code: use typed_call! or e.call, \
                          or doubles, diagnostics and the switch won't see it",
-                        call.name
+                        call.called.name
                     ),
                 ));
             }
@@ -2342,6 +2599,124 @@ fn typed_cross_file_findings(
                     row.address, row.direct_calls
                 ),
             ));
+        }
+    }
+    found
+}
+
+/// The addresses `Diff::new` names in `code`, test modules included.
+fn diff_test_addresses(code: &str) -> BTreeSet<u32> {
+    let mut out = BTreeSet::new();
+    let mut from = 0;
+    while let Some(k) = code[from..].find("Diff::new(") {
+        from += k + 10;
+        let rest = code[from..].trim_start();
+        let rest = rest.strip_prefix("crate::").unwrap_or(rest);
+        let rest = rest.strip_prefix("engine_core::").unwrap_or(rest);
+        let rest = rest.strip_prefix("entry!(").unwrap_or(rest);
+        let rest = rest.strip_prefix('(').unwrap_or(rest);
+        out.extend(hex_literal(rest.trim_start()));
+    }
+    out
+}
+
+/// A `Diff::new(entry!(.., f(..)))..translation(entry!(.., f(..)).1)` in `code`: the same function on
+/// both sides, each through its own `entry!`, which the harness can't see at run time.
+fn compared_with_itself(code: &str) -> Vec<(usize, String)> {
+    let name_after = |text: &str| -> Option<String> {
+        let rest = text.trim_start();
+        let rest = rest.strip_prefix("crate::").unwrap_or(rest);
+        let rest = rest.strip_prefix("engine_core::").unwrap_or(rest);
+        let rest = rest.strip_prefix("entry!(")?;
+        let (_, after) = rest.split_once(',')?;
+        let path: String = after
+            .trim_start()
+            .bytes()
+            .take_while(|c| is_ident(*c) || *c == b':')
+            .map(char::from)
+            .collect();
+        path.rsplit("::").next().map(str::to_string)
+    };
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(k) = code[from..].find("Diff::new(") {
+        let at = from + k;
+        from = at + 10;
+        let statement = code[from..]
+            .find(';')
+            .map_or(&code[from..], |n| &code[from..from + n]);
+        let Some(typed) = name_after(statement) else {
+            continue;
+        };
+        if let Some(t) = statement.find(".translation(") {
+            if name_after(&statement[t + 13..]).as_deref() == Some(typed.as_str()) {
+                let line = code[..at].bytes().filter(|c| *c == b'\n').count();
+                out.push((line, typed));
+            }
+        }
+    }
+    out
+}
+
+/// What `sources` (relative path, text: the Rust that makes the game) and `tests` (every Rust file
+/// that may hold a differential test) say about each typed function: it is registered, and a
+/// differential test names its address. As (path, line, message).
+fn typed_function_findings(
+    sources: &[(String, String)],
+    tests: &[(String, String)],
+) -> Vec<(String, usize, String)> {
+    let mut found = Vec::new();
+    let mut diffed = BTreeSet::new();
+    for (rel, text) in tests {
+        let code = code_only(text);
+        diffed.extend(diff_test_addresses(&code));
+        if !rel.ends_with("typed/diff.rs") {
+            for (line, name) in compared_with_itself(&code) {
+                found.push((
+                    rel.clone(),
+                    line + 1,
+                    format!("a differential test compares `{name}` with itself"),
+                ));
+            }
+        }
+    }
+    let codes: Vec<String> = sources
+        .iter()
+        .map(|(_, text)| {
+            if typed_marker::mentioned(text) || text.contains("entry!(") {
+                without_test_modules(&code_only(text))
+            } else {
+                String::new()
+            }
+        })
+        .collect();
+    let mut registered: BTreeSet<(u32, String)> = BTreeSet::new();
+    for ((rel, _), code) in sources.iter().zip(&codes) {
+        for registration in registrations(rel, code) {
+            registered.insert((registration.address, registration.name));
+        }
+    }
+    for ((rel, text), code) in sources.iter().zip(&codes) {
+        for (address, name, line) in marked_functions(text, code) {
+            if !registered.contains(&(address, name.clone())) {
+                found.push((
+                    rel.clone(),
+                    line + 1,
+                    format!(
+                        "`{name}` has a typed marker for {address:08x} and isn't registered there"
+                    ),
+                ));
+            }
+            if !diffed.contains(&address) {
+                found.push((
+                    rel.clone(),
+                    line + 1,
+                    format!(
+                        "typed function {address:08x} (`{name}`) has no differential test: no \
+                         `Diff::new` names its address"
+                    ),
+                ));
+            }
         }
     }
     found
@@ -3849,7 +4224,43 @@ mod fixtures {
     }
 }
 
-/// The overridable table against the engine crates' sources.
+/// Each typed function is registered and has its differential test.
+#[test]
+fn typed_functions_are_registered_and_have_a_differential_test() {
+    let root = repo_root();
+    let (mut sources, mut tests) = (Vec::new(), Vec::new());
+    for file in list_files(&root).files {
+        if !file.rel.ends_with(".rs")
+            || !(file.rel.starts_with("crates/") || file.rel.starts_with("viewer/"))
+        {
+            continue;
+        }
+        let text = fs::read(&file.path).map(|b| String::from_utf8_lossy(&b).into_owned());
+        let text = text.unwrap_or_default();
+        if is_engine_source(&file.rel) {
+            sources.push((file.rel.clone(), text.clone()));
+        }
+        // Only what could hold one: every file names it.
+        if text.contains("Diff::new(") {
+            tests.push((file.rel, text));
+        }
+    }
+    assert!(sources.len() > 1000, "only {} sources", sources.len());
+    assert!(!tests.is_empty());
+    let found = typed_function_findings(&sources, &tests);
+    assert!(
+        found.is_empty(),
+        "{} problem(s):\n{}",
+        found.len(),
+        found
+            .iter()
+            .map(|(f, l, m)| format!("{f}:{l}: {m}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+/// The overridable table against the sources.
 #[test]
 fn overridable_addresses_are_called_by_address() {
     let root = repo_root();
@@ -4021,10 +4432,10 @@ mod typed_rules {
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].contains("needs `#![deny(clippy::cast_possible_truncation)]`"));
         assert!(messages(ROOT, &format!("{DENY_CASTS}\n")).is_empty());
-        let lifted = format!("{ALLOW_CASTS}\n");
-        let found = messages(TYPED, &lifted);
+        let lifted = "#![allow(clippy::cast_possible_truncation)]\n";
+        let found = messages(TYPED, lifted);
         assert!(found[0].contains("lifts the type-aware ban"), "{found:?}");
-        assert!(messages("crates/engine-core/src/typed/diff.rs", &lifted).is_empty());
+        assert!(messages("crates/engine-core/src/typed/diff.rs", lifted).is_empty());
         // A local one on a helper is how a meant cut is written.
         assert!(messages(
             TYPED,
@@ -4207,7 +4618,7 @@ mod typed_rules {
         let found = findings("", &[(TABLE_FILE, table), (OTHER_FILE, &functions)]);
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(
-            found[0].contains("typed function 00123460 registered without its marker"),
+            found[0].contains("typed function 00123460 (`b`) registered without its marker"),
             "{found:?}"
         );
         let both = format!(
@@ -4243,7 +4654,7 @@ mod typed_rules {
         assert!(found[0].contains("lower the table's number"), "{found:?}");
         // Another file: a path counts, a bare name it imports, one through a glob or an alias.
         for other in [
-            "fn f(e: &mut Engine) {\n    crate::units::x::hooked(e);\n}\n",
+            "fn f(e: &mut Engine) {\n    crate::units::a::hooked(e);\n}\n",
             "use super::a::hooked;\nfn f(e: &mut Engine) {\n    hooked(e);\n}\n",
             "use super::a::*;\nfn f(e: &mut Engine) {\n    hooked(e);\n}\n",
             "use super::a::hooked as h;\nfn f(e: &mut Engine) {\n    h(e);\n}\n",
@@ -4340,17 +4751,20 @@ mod typed_rules {
 
     #[test]
     fn typed_call_is_tied_to_the_function_registered_there() {
-        let table =
-            "pub fn funcs() -> Vec<(u32, AbiFn)> {\n    vec![entry!(0x0012_3460, other())]\n}\n";
+        let table = format!(
+            "{}\npub fn other(e: &mut Engine) {{}}\npub fn funcs() -> Vec<(u32, AbiFn)> {{\n    vec![entry!(0x0012_3460, other())]\n}}\n",
+            marker("00123460")
+        );
+        let table = table.as_str();
         // Right.
         let right = "fn f(e: &mut Engine) {\n    let y: u32 = typed_call!(LEAF, 0x0012_3460, leaf::other(e));\n}\n";
-        assert_eq!(findings("", &[("t.rs", table), ("a.rs", right)]), NONE);
+        assert_eq!(findings("", &[("leaf.rs", table), ("a.rs", right)]), NONE);
         // The wrong function for the address: it would run in play.
         let wrong = "fn f(e: &mut Engine) {\n    let y: u32 = typed_call!(LEAF, 0x0012_3460, leaf::another(e));\n}\n";
-        let found = findings("", &[("t.rs", table), ("a.rs", wrong)]);
+        let found = findings("", &[("leaf.rs", table), ("a.rs", wrong)]);
         assert_eq!(found.len(), 1, "{found:?}");
-        assert!(found[0].contains("calls `another` directly"), "{found:?}");
-        assert!(found[0].contains("registered as other"), "{found:?}");
+        assert!(found[0].contains("another` directly"), "{found:?}");
+        assert!(found[0].contains("registered as leaf::other"), "{found:?}");
         // An address nothing is registered at.
         let found = findings("", &[("a.rs", right)]);
         assert!(found[0].contains("registered as nothing"), "{found:?}");
@@ -4366,18 +4780,22 @@ mod typed_rules {
             let text = format!(
                 "fn f(e: &mut Engine) {{\n    {form}LEAF, 0x0012_3460, leaf::another(e){close};\n}}\n"
             );
-            let found = findings("", &[("t.rs", table), ("a.rs", &text)]);
+            let found = findings("", &[("leaf.rs", table), ("a.rs", &text)]);
             assert_eq!(found.len(), 1, "{form}: {found:?}");
-            assert!(found[0].contains("calls `another` directly"), "{found:?}");
+            assert!(found[0].contains("another` directly"), "{found:?}");
         }
     }
 
     #[test]
     fn typed_call_of_an_overridable_address_is_banned() {
         let row = "00123450\t0\tJIP\n";
-        let table = "pub fn funcs() -> Vec<(u32, AbiFn)> {\n    vec![entry!(0x0012_3450, get()), entry!(0x0012_3460, other())]\n}\n";
+        let table = format!(
+            "{}\npub fn other(e: &mut Engine) {{}}\npub fn funcs() -> Vec<(u32, AbiFn)> {{\n    vec![entry!(0x0012_3450, get()), entry!(0x0012_3460, other())]\n}}\n",
+            marker("00123460")
+        );
+        let table = table.as_str();
         let site = "fn f(e: &mut Engine) {\n    let x: u32 = typed_call!(LEAF, 0x0012_3450, leaf::get(e, 1));\n    let y: u32 = typed_call!(LEAF, 0x0012_3460, leaf::other(e));\n}\n";
-        let found = findings(row, &[("t.rs", table), ("a.rs", site)]);
+        let found = findings(row, &[("leaf.rs", table), ("a.rs", site)]);
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(
             found[0].starts_with("a.rs:2: typed_call! of overridable 00123450"),
@@ -4388,22 +4806,22 @@ mod typed_rules {
             "typed_call!{LEAF, 0x0012_3450, leaf::get(e)}",
         ] {
             let text = format!("fn f(e: &mut Engine) {{\n    {form};\n}}\n");
-            let found = findings(row, &[("t.rs", table), ("a.rs", &text)]);
+            let found = findings(row, &[("leaf.rs", table), ("a.rs", &text)]);
             assert!(found[0].contains("of overridable 00123450"), "{found:?}");
         }
         // A name for the address hides it from this test.
         let named =
             "fn f(e: &mut Engine) {\n    let x: u32 = typed_call!(LEAF, HOOKED, leaf::get(e));\n}\n";
-        let found = findings(row, &[("t.rs", table), ("a.rs", named)]);
+        let found = findings(row, &[("leaf.rs", table), ("a.rs", named)]);
         assert!(
             found[0].contains("write the address as a literal"),
             "{found:?}"
         );
         // A test module and the macro's own arms are left alone.
         let test = "#[cfg(test)]\nmod tests {\n    fn f(e: &mut Engine) {\n        typed_call!(F, A, g(e));\n    }\n}\n";
-        assert_eq!(findings(row, &[("t.rs", table), ("a.rs", test)]), NONE);
+        assert_eq!(findings(row, &[("leaf.rs", table), ("a.rs", test)]), NONE);
         let arm = "macro_rules! typed_call {\n    ($f:expr, $addr:expr) => { $crate::typed_call!(@bind $f, $addr) };\n}\n";
-        assert_eq!(findings(row, &[("t.rs", table), ("a.rs", arm)]), NONE);
+        assert_eq!(findings(row, &[("leaf.rs", table), ("a.rs", arm)]), NONE);
     }
 
     #[test]
@@ -4440,11 +4858,259 @@ mod typed_rules {
         let code =
             "vec![(0x0012_3450, parse_entry as AbiFn), entry!(0x0012_3460, x::y::name(u32) -> u32)]";
         assert_eq!(
-            registered_names(code),
+            registered_paths(code),
             [
-                (0x0012_3460, "name".to_string()),
-                (0x0012_3450, "parse_entry".to_string())
+                (0x0012_3460, "x::y::name".to_string(), 0),
+                (0x0012_3450, "parse_entry".to_string(), 0)
             ]
+        );
+    }
+
+    // ---- The second review -----------------------------------------------------------------
+
+    /// What is cast and isn't a float any more isn't a finding.
+    #[test]
+    fn the_float_cast_rule_reads_what_the_operand_ends_as() {
+        let floats: BTreeSet<String> = ["x".to_string(), "a".to_string(), "b".to_string()].into();
+        for line in [
+            "let i = x.to_bits() as i32;",
+            "let i = (a < b) as u32;",
+            "let i = (a == b) as u8;",
+            "let i = (a >= b) as u32;",
+            "let i = x.is_nan() as u32;",
+            "let i = f32::is_nan(x) as u32;",
+        ] {
+            assert!(float_casts(line, &floats).is_empty(), "{line}");
+        }
+        for line in ["let i = (x + a) as u32;", "let i = (x - 1.0) as i32;"] {
+            assert_eq!(float_casts(line, &floats).len(), 1, "{line}");
+        }
+    }
+
+    /// However the truncating-cast lint is lifted for a whole file or module: indented, combined with
+    /// others, across lines, through its group, or on a `mod`.
+    #[test]
+    fn lifting_the_cast_lint_is_seen_in_each_form() {
+        for text in [
+            "    #![allow(clippy::cast_possible_truncation)]\n",
+            "#![allow(dead_code, clippy::cast_possible_truncation)]\n",
+            "#![allow(\n    dead_code,\n    clippy::cast_possible_truncation,\n)]\n",
+            "#![allow(clippy::pedantic)]\n",
+            "#[allow(clippy::cast_possible_truncation)]\nmod inner {\n}\n",
+            "#[allow(clippy::cast_possible_truncation)]\npub mod inner {\n}\n",
+        ] {
+            let found = messages(TYPED, text);
+            assert!(
+                found.iter().any(|m| m.contains("lifts the type-aware ban")),
+                "{text}: {found:?}"
+            );
+        }
+        // A test module's own, and a local one on a helper.
+        for text in [
+            "#[cfg(test)]\nmod tests {\n    #![allow(clippy::cast_possible_truncation)]\n}\n",
+            "#[allow(clippy::cast_possible_truncation)]\nfn low(x: u32) -> u8 {\n    x as u8\n}\n",
+        ] {
+            assert!(messages(TYPED, text).is_empty(), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_use_line_is_read_in_every_form() {
+        let imports = file_imports(
+            "use a::b::plain;\npub use c::{d, e as f, g::{h, i::*}};\nuse super::*;\nuse j::k::{self, l as m};\nuse n::o as p;\nuse q::r as _;\nfn not_use() {}\n",
+        );
+        assert_eq!(imports.names["plain"], ["a", "b", "plain"]);
+        assert_eq!(imports.names["d"], ["c", "d"]);
+        assert_eq!(imports.names["f"], ["c", "e"]);
+        assert_eq!(imports.names["h"], ["c", "g", "h"]);
+        assert_eq!(imports.names["k"], ["j", "k"]);
+        assert_eq!(imports.names["m"], ["j", "k", "l"]);
+        assert_eq!(imports.names["p"], ["n", "o"]);
+        assert!(!imports.names.contains_key("_"));
+        assert_eq!(imports.globs, ["i", "super"]);
+    }
+
+    /// The tie reads the path: another module's function of the same name, or a rename, isn't what
+    /// is registered there.
+    #[test]
+    fn typed_call_is_tied_through_paths_and_renames() {
+        let registered = format!(
+            "{}\npub fn construct(e: &mut Engine) {{}}\n{}\npub fn other(e: &mut Engine) {{}}\npub fn funcs() -> Vec<(u32, AbiFn)> {{\n    vec![entry!(0x0012_3460, construct()), entry!(0x0012_3470, other())]\n}}\n",
+            marker("00123460"),
+            marker("00123470")
+        );
+        const FILE: &str = "crates/engine-core/src/typed/leaf.rs";
+        let site = |text: &str| findings("", &[(FILE, &registered), ("a.rs", text)]);
+        for right in [
+            "fn f(e: &mut Engine) {\n    typed_call!(LEAF, 0x0012_3460, leaf::construct(e));\n}\n",
+            "fn f(e: &mut Engine) {\n    typed_call!(LEAF, 0x0012_3460, typed::leaf::construct(e));\n}\n",
+            "use typed::leaf::construct;\nfn f(e: &mut Engine) {\n    typed_call!(LEAF, 0x0012_3460, construct(e));\n}\n",
+            "use typed::leaf::*;\nfn f(e: &mut Engine) {\n    typed_call!(LEAF, 0x0012_3460, construct(e));\n}\n",
+            "use typed::leaf as l;\nfn f(e: &mut Engine) {\n    typed_call!(LEAF, 0x0012_3460, l::construct(e));\n}\n",
+            "use typed::leaf::construct as make;\nfn f(e: &mut Engine) {\n    typed_call!(LEAF, 0x0012_3460, make(e));\n}\n",
+        ] {
+            assert_eq!(site(right), NONE, "{right}");
+        }
+        for wrong in [
+            // Another module's function of the same name: 75 names are registered more than once.
+            "fn f(e: &mut Engine) {\n    typed_call!(LEAF, 0x0012_3460, other_module::construct(e));\n}\n",
+            // A rename hiding another function.
+            "use typed::leaf::other as construct;\nfn f(e: &mut Engine) {\n    typed_call!(LEAF, 0x0012_3460, construct(e));\n}\n",
+            // A bare name this file can't have from there.
+            "fn f(e: &mut Engine) {\n    typed_call!(LEAF, 0x0012_3460, construct(e));\n}\n",
+            // The right module, the wrong function for the address.
+            "fn f(e: &mut Engine) {\n    typed_call!(LEAF, 0x0012_3460, leaf::other(e));\n}\n",
+        ] {
+            let found = site(wrong);
+            assert_eq!(found.len(), 1, "{wrong}: {found:?}");
+            assert!(found[0].contains("the wrong function would run"), "{found:?}");
+        }
+    }
+
+    /// The translation registered at an address, called directly: its name and address agree, and it
+    /// has no typed marker, so the call would silently skip the typed version.
+    #[test]
+    fn typed_call_of_a_translation_is_refused() {
+        let unit = "pub fn fn_00123460(e: &mut Engine) {}\npub fn funcs() -> Vec<(u32, AbiFn)> {\n    vec![entry!(0x0012_3460, fn_00123460())]\n}\n";
+        let caller = "use unit::fn_00123460;\nfn f(e: &mut Engine) {\n    typed_call!(LEAF, 0x0012_3460, fn_00123460(e));\n}\n";
+        let found = findings("", &[("unit.rs", unit), ("a.rs", caller)]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("has no typed marker"), "{found:?}");
+        // With its marker for another address, the same.
+        let marked = unit.replace(
+            "pub fn fn_00123460",
+            &format!("{}\npub fn fn_00123460", marker("00123999")),
+        );
+        let found = findings("", &[("unit.rs", &marked), ("a.rs", caller)]);
+        assert!(found[0].contains("has no typed marker"), "{found:?}");
+    }
+
+    /// A marker anywhere in the folder isn't enough: it has to be for that function.
+    #[test]
+    fn a_registered_typed_function_needs_its_own_marker() {
+        const LEAF: &str = "crates/engine-core/src/typed/leaf.rs";
+        let text = format!(
+            "{}\npub fn a(e: &mut Engine) {{}}\npub fn b(e: &mut Engine) {{}}\npub fn funcs() -> Vec<(u32, AbiFn)> {{\n    vec![entry!(0x0012_3450, b())]\n}}\n",
+            marker("00123450")
+        );
+        let found = findings("", &[(LEAF, &text)]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].contains("(`b`) registered without its marker"),
+            "{found:?}"
+        );
+    }
+
+    /// Helpers named like a registered function aren't it.
+    #[test]
+    fn a_helper_named_like_a_registered_function_is_no_finding() {
+        const LEAF: &str = "crates/engine-core/src/typed/leaf.rs";
+        let elsewhere = "pub fn read(e: &mut Engine) {}\npub fn sqrt(e: &mut Engine) {}\npub fn funcs() -> Vec<(u32, AbiFn)> {\n    vec![entry!(0x0012_3450, read()), entry!(0x0012_3460, sqrt())]\n}\n";
+        for clean in [
+            "fn t(e: &mut Engine) {\n    helpers::read(e);\n}\n",
+            "fn t(x: f32) -> f32 {\n    f32::sqrt(x)\n}\n",
+            "use helpers::read;\nfn t(e: &mut Engine) {\n    read(e);\n}\n",
+            "use helpers::read as get;\nfn t(e: &mut Engine) {\n    get(e);\n}\n",
+        ] {
+            assert_eq!(
+                findings("", &[("unit.rs", elsewhere), (LEAF, clean)]),
+                NONE,
+                "{clean}"
+            );
+        }
+        // From its own module it is the function.
+        let plain = "fn t(e: &mut Engine) {\n    unit::read(e);\n}\n";
+        let found = findings("", &[("unit.rs", elsewhere), (LEAF, plain)]);
+        assert!(
+            found[0].contains("plain call of registered `read`"),
+            "{found:?}"
+        );
+    }
+
+    /// The program around the engine counts too: `crates/host` and `viewer` can make direct calls.
+    #[test]
+    fn the_host_and_the_viewer_are_read() {
+        assert!(is_engine_source("crates/host/src/uncap.rs"));
+        assert!(is_engine_source("viewer/src/main.rs"));
+        assert!(is_engine_source("crates/engine-bs/src/lib.rs"));
+        assert!(!is_engine_source("crates/host/tests/live.rs"));
+        assert!(!is_engine_source("crates/esm/src/lib.rs"));
+    }
+
+    fn typed_function_messages(sources: &[(&str, &str)], tests: &[(&str, &str)]) -> Vec<String> {
+        let list = |l: &[(&str, &str)]| -> Vec<(String, String)> {
+            l.iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect()
+        };
+        typed_function_findings(&list(sources), &list(tests))
+            .into_iter()
+            .map(|(f, l, m)| format!("{f}:{l}: {m}"))
+            .collect()
+    }
+
+    #[test]
+    fn every_typed_function_is_registered_and_has_a_differential_test() {
+        let source = format!(
+            "{}\npub fn get(e: &mut Engine) -> u32 {{\n    0\n}}\npub fn funcs() -> Vec<(u32, AbiFn)> {{\n    vec![entry!(0x0012_3450, get() -> u32)]\n}}\n",
+            marker("00123450")
+        );
+        let source = source.as_str();
+        // No test.
+        let found = typed_function_messages(&[("a.rs", source)], &[]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].contains("00123450 (`get`) has no differential test"),
+            "{found:?}"
+        );
+        // A test in any of the forms the harness is written in.
+        for test in [
+            "Diff::new(entry!(0x0012_3450, get() -> u32)).run().assert_same();",
+            "Diff::new(crate::entry!(0x0012_3450, get() -> u32)).run().assert_same();",
+            "Diff::new(engine_core::entry!(\n    0x00123450,\n    get() -> u32,\n)).run().assert_same();",
+            "Diff::new((0x0012_3450, f)).run().assert_same();",
+        ] {
+            assert_eq!(
+                typed_function_messages(&[("a.rs", source)], &[("t.rs", test)]),
+                NONE,
+                "{test}"
+            );
+        }
+        // A test of something else, or a comment.
+        for test in [
+            "Diff::new(entry!(0x0012_3460, get() -> u32)).run().assert_same();",
+            "// Diff::new(entry!(0x0012_3450, get() -> u32))",
+        ] {
+            let found = typed_function_messages(&[("a.rs", source)], &[("t.rs", test)]);
+            assert_eq!(found.len(), 1, "{test}: {found:?}");
+        }
+        // A marker with no registration credits nothing.
+        let unregistered = format!("{}\npub fn get(e: &mut Engine) {{}}\n", marker("00123450"));
+        let test = "Diff::new((0x0012_3450, f)).run().assert_same();";
+        let found = typed_function_messages(&[("a.rs", &unregistered)], &[("t.rs", test)]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("isn't registered there"), "{found:?}");
+    }
+
+    /// The same function on both sides, each through its own `entry!`: the harness sees two functions.
+    #[test]
+    fn a_test_comparing_a_function_with_itself_is_refused() {
+        let test = "fn t() {\n    Diff::new(entry!(0x0012_3450, get() -> u32))\n        .translation(entry!(0x0012_3450, get() -> u32).1)\n        .run();\n}\n";
+        let found = typed_function_messages(&[], &[("t.rs", test)]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("compares `get` with itself"), "{found:?}");
+        let other = test.replace(
+            ".translation(entry!(0x0012_3450, get()",
+            ".translation(entry!(0x0012_3450, get_translated()",
+        );
+        assert_eq!(typed_function_messages(&[], &[("t.rs", &other)]), NONE);
+        // Two tests in a row are two statements.
+        let two = "fn t() {\n    let _ = Diff::new(entry!(0x0012_3450, a()));\n    let _ = Diff::new(entry!(0x0012_3450, b())).translation(entry!(0x0012_3450, a()).1);\n}\n";
+        assert_eq!(typed_function_messages(&[], &[("t.rs", two)]), NONE);
+        // The harness's own tests do it on purpose.
+        assert_eq!(
+            typed_function_messages(&[], &[("crates/engine-core/src/typed/diff.rs", test)]),
+            NONE
         );
     }
 }
