@@ -410,7 +410,7 @@ mod tests {
         let call = |e: &mut Engine, size: i32| {
             wide_char_to_multi_byte(
                 e,
-                0,
+                1252,
                 0,
                 Ptr::new(wide),
                 -1,
