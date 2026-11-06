@@ -28,7 +28,10 @@ decides on a release: agents build and test locally, and tag, upload and post no
    `./scripts/package-playtest.ps1 -Version YYYY-MM-DD.N -Game '<your FalloutNV.exe>'`.
    It builds with the lockfile, a static C runtime and no build paths in the programs, stages only
    the list below, runs `scripts/package-check` over it and makes the ZIP and its `.sha256`. The 32-bit
-   tools need a toolchain with `i686-pc-windows-msvc` (`-Toolchain32`, default `stable`).
+   tools need a toolchain with `i686-pc-windows-msvc` (`-Toolchain32`, default `stable`). `-Game` is required: the
+   check that none of the game's bytes are in the programs fails the package. The script refuses a
+   release ZIP unless HEAD is on origin (BUILD.txt links to it); `-TestBuild` makes a test package
+   instead, marked "test build, not for release" in BUILD.txt and in its name.
 3. Test the extracted ZIP from a fresh folder, a path with spaces and another drive: first start,
    Save or New Game, a couple of minutes in the world, no game folder, a wrong exe, tables deleted
    (`docs/PREVIEW_TESTERS.md` is the checklist for other PCs). Verify SHA256 and BUILD.txt.
