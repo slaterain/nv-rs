@@ -2217,6 +2217,26 @@ mod tests {
         assert!(!report.is_same(), "an infinity is no NaN: {report}");
     }
 
+    /// The return alone: a payload there differs by default, bit for bit.
+    #[test]
+    fn a_nan_payload_in_the_return_alone_differs_by_default() {
+        fn quiet(_: &mut Engine) -> f64 {
+            f64::from_bits(0x7ff8_0000_0000_0000)
+        }
+        fn payload(_: &mut Engine) -> f64 {
+            f64::from_bits(0x7ff8_0000_0012_3456)
+        }
+        let diff = || {
+            Diff::new(crate::entry!(0x0040_2000, payload() -> f64))
+                .translation(crate::entry!(0x0040_2000, quiet() -> f64).1)
+                .control_words(&[OTHER_THREADS])
+        };
+        let report = diff().run();
+        assert_eq!(report.found, 1, "{report}");
+        assert!(matches!(report.first[0].what, Found::Return { .. }));
+        assert!(diff().allow_nan_payloads().run().is_same());
+    }
+
     /// The values whose rounding shows the difference between x87 and SSE.
     #[test]
     fn the_float_lists_hold_values_that_round() {
