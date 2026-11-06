@@ -106,7 +106,7 @@ try {
     & (Join-Path $x64 'package-check.exe') @checkArguments
     if ($LASTEXITCODE) { throw 'package-check found something that must not be in the package.' }
 
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
     # File by file: entry names need forward slashes, which Windows PowerShell's CreateFromDirectory
     # doesn't give them, and every ZIP tool reads.
     $archive = [IO.Compression.ZipFile]::Open($zip, [IO.Compression.ZipArchiveMode]::Create)
