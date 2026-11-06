@@ -158,11 +158,9 @@ mod load_screen_type_tests {
     #[test]
     fn fn_005a7110_passes_on_the_list_answer() {
         let mut e = Engine::new();
-        e.register(0x0082_56d0, |_, a| Ret {
-            eax: a[0] + 0x100,
-            ..Ret::default()
-        });
-        assert_eq!(e.call(0x005a_7110, &args![0x4000u32]).u32(), 0x412c);
+        // It answers in AL, so the answer has to be a flag.
+        e.register(0x0082_56d0, |_, a| (a[0] == 0x402c).into_ret());
+        assert_eq!(e.call(0x005a_7110, &args![0x4000u32]).u32(), 1);
     }
 
     #[test]

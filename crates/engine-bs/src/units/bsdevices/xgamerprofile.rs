@@ -33,9 +33,10 @@ mod tests {
     #[test]
     fn instance_runs_008256d0_on_the_object_plus_4() {
         let mut e = Engine::new();
-        e.register(FN_008256D0, |_, a| (a[0] ^ 0xff).into_ret());
+        // It answers in AL, so the answer has to be a flag.
+        e.register(FN_008256D0, |_, a| (a[0] == 0x1004).into_ret());
         e.call_log = Some(vec![]);
-        assert_eq!(e.call(0x007d_6e70, &args![0x1000u32]).u32(), 0x1004 ^ 0xff);
+        assert_eq!(e.call(0x007d_6e70, &args![0x1000u32]).u32(), 1);
         let calls: Vec<Vec<u32>> = e
             .call_log
             .as_ref()
