@@ -132,10 +132,7 @@ pub fn shell_execute_a(
     _s: u32,
 ) -> u32 {
     let file = String::from_utf8_lossy(&e.mem.cstr(file.addr())).into_owned();
-    if file
-        .to_ascii_lowercase()
-        .ends_with("\\falloutnvlauncher.exe")
-    {
+    if file.to_ascii_lowercase().ends_with("falloutnvlauncher.exe") {
         eprintln!(
             "The game asked for its launcher (a new graphics card or no settings): not started"
         );
@@ -780,6 +777,15 @@ pub fn get_system_metrics(e: &mut Engine, index: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `main` goes on when its launcher doesn't start; the name comes with no folder in front.
+    #[test]
+    fn the_games_launcher_answers_that_nothing_started() {
+        let mut e = Engine::new();
+        e.mem.map(0x1000, 0x1000);
+        e.mem.write(0x1000, b"FalloutNVLauncher.exe\0");
+        assert_eq!(shell_execute_a(&mut e, 0, 0, Ptr::new(0x1000), 0, 0, 1), 0);
+    }
 
     fn wide_of(text: &str) -> Vec<u16> {
         text.encode_utf16().collect()
