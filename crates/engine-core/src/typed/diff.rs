@@ -364,8 +364,10 @@ impl Diff {
     /// (the harness's own tests, or a translation in a crate above). By default the one registered
     /// at the address.
     pub fn translation(mut self, f: AbiFn) -> Diff {
+        // Only with debug assertions: an optimised build can merge two functions with the same code,
+        // and a typed version may well compile to the same code as its translation.
         assert!(
-            f as usize != self.typed as usize,
+            !cfg!(debug_assertions) || f as usize != self.typed as usize,
             "the translation given is the typed version: the test would compare it with itself"
         );
         self.translation = Some(f);
@@ -655,7 +657,9 @@ impl Diff {
                     e.register(self.addr, f);
                 }
                 assert!(
-                    e.registered_identity(self.addr).map(|(f, _)| f) != Some(self.typed as usize),
+                    !cfg!(debug_assertions)
+                        || e.registered_identity(self.addr).map(|(f, _)| f)
+                            != Some(self.typed as usize),
                     "the translation at {:08x} is the typed version: the test would compare it \
                      with itself",
                     self.addr
@@ -2573,6 +2577,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
     #[should_panic(expected = "the translation given is the typed version")]
     fn the_typed_version_can_not_be_its_own_translation() {
         fn f(_: &mut Engine) {}
@@ -2582,6 +2587,7 @@ mod tests {
 
     /// With no `.translation`, the one registered at the address; the same check holds.
     #[test]
+    #[cfg_attr(not(debug_assertions), ignore)]
     #[should_panic(expected = "is the typed version")]
     fn a_setup_can_not_register_the_typed_version_as_the_translation() {
         fn f(_: &mut Engine) {}
