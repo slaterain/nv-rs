@@ -4398,7 +4398,11 @@ mod level_up_menu_tests {
         e.register(TILE_GET_CHILD_BY_ID, |_, a| eax(a[0] + a[1]));
         e.register(TILE_IS_TRUE, |_, _| eax(1));
         e.call_log = Some(vec![]);
-        assert_eq!(e.call(0x0078_5ed0, &args![this, 3u32, 1.0f32.to_bits()]).u32() as u8, 1);
+        assert_eq!(
+            e.call(0x0078_5ed0, &args![this, 3u32, 1.0f32.to_bits()])
+                .u32() as u8,
+            1
+        );
         assert_eq!(calls_to(&e, TILE_GET_CHILD_BY_ID), vec![vec![0x7a00, 0xe]]);
         assert_eq!(
             calls_to(&e, TILE_PLAY_TILE_SOUND),
@@ -4406,12 +4410,20 @@ mod level_up_menu_tests {
         );
         assert_eq!(calls_to(&e, 0x0000_900c), vec![vec![this, 0xe, 0x7a0e]]);
         e.call_log = Some(vec![]);
-        assert_eq!(e.call(0x0078_5ed0, &args![this, 4u32, 1.0f32.to_bits()]).u32() as u8, 1);
+        assert_eq!(
+            e.call(0x0078_5ed0, &args![this, 4u32, 1.0f32.to_bits()])
+                .u32() as u8,
+            1
+        );
         assert_eq!(calls_to(&e, 0x0000_900c), vec![vec![this, 0xd, 0x7a0d]]);
         // Button 9 on the skills page goes to vtable +0x38.
         e.register(0x0000_9038, |_, _| eax(1));
         e.call_log = Some(vec![]);
-        assert_eq!(e.call(0x0078_5ed0, &args![this, 9u32, 1.0f32.to_bits()]).u32() as u8, 1);
+        assert_eq!(
+            e.call(0x0078_5ed0, &args![this, 9u32, 1.0f32.to_bits()])
+                .u32() as u8,
+            1
+        );
         assert_eq!(
             calls_to(&e, 0x0000_9038),
             vec![vec![this, 3, 1.0f32.to_bits()]]
@@ -4419,18 +4431,34 @@ mod level_up_menu_tests {
         // On the perks page: 9 clicks the highlighted perk, 10 goes back.
         e.mem.set_u32(this + CURRENT_PAGE, 1);
         e.call_log = Some(vec![]);
-        assert_eq!(e.call(0x0078_5ed0, &args![this, 9u32, 1.0f32.to_bits()]).u32() as u8, 1);
+        assert_eq!(
+            e.call(0x0078_5ed0, &args![this, 9u32, 1.0f32.to_bits()])
+                .u32() as u8,
+            1
+        );
         assert_eq!(calls_to(&e, 0x0000_900c), vec![vec![this, 0xc, 0x7a00]]);
         e.call_log = Some(vec![]);
-        assert_eq!(e.call(0x0078_5ed0, &args![this, 10u32, 1.0f32.to_bits()]).u32() as u8, 1);
+        assert_eq!(
+            e.call(0x0078_5ed0, &args![this, 10u32, 1.0f32.to_bits()])
+                .u32() as u8,
+            1
+        );
         assert_eq!(
             calls_to(&e, TILE_PLAY_TILE_SOUND),
             vec![vec![0x6080, 0xfcb]]
         );
         assert_eq!(calls_to(&e, 0x0000_900c), vec![vec![this, 8, 0]]);
         // Arrows on the perks page and other buttons are not handled.
-        assert_eq!(e.call(0x0078_5ed0, &args![this, 3u32, 1.0f32.to_bits()]).u32() as u8, 0);
-        assert_eq!(e.call(0x0078_5ed0, &args![this, 5u32, 1.0f32.to_bits()]).u32() as u8, 0);
+        assert_eq!(
+            e.call(0x0078_5ed0, &args![this, 3u32, 1.0f32.to_bits()])
+                .u32() as u8,
+            0
+        );
+        assert_eq!(
+            e.call(0x0078_5ed0, &args![this, 5u32, 1.0f32.to_bits()])
+                .u32() as u8,
+            0
+        );
     }
 
     #[test]

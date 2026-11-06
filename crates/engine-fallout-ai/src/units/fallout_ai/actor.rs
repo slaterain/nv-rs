@@ -2033,16 +2033,17 @@ pub fn fn_00880580(e: &mut Engine, this: Ptr, index: u32) -> u32 {
 
 // Translated from 008805f0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The `float` counterpart of `00880580`: with a process, its virtual `+0x39c`
-/// result; without, the owner's virtual `+0` (an integer) as a `float`.
-pub fn fn_008805f0(e: &mut Engine, this: Ptr, index: u32) -> f32 {
+/// result; without, the owner's virtual `+0` (an integer, `FILD`). The value stays in `ST0`
+/// unrounded for the caller.
+pub fn fn_008805f0(e: &mut Engine, this: Ptr, index: u32) -> f64 {
     let actor: Ptr<Actor> = Ptr::new(this.addr().wrapping_sub(ACTOR_VALUE_OWNER));
     if !e.get(actor, Actor::pCurrentProcess).is_null() {
         let process = actor_process(e, actor);
         let base = base_form(e, actor);
         e.vcall(process.addr(), 0x39c, &args![base, index, actor])
-            .f32()
+            .f64()
     } else {
-        e.vcall(this.addr(), 0, &args![index]).i32() as f32
+        f64::from(e.vcall(this.addr(), 0, &args![index]).i32())
     }
 }
 
@@ -4414,7 +4415,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00880370, fn_00880370(Ptr, u32) -> i32),
         entry!(0x008803a0, fn_008803a0(Ptr, u32) -> f32),
         entry!(0x00880580, fn_00880580(Ptr, u32) -> u32),
-        entry!(0x008805f0, fn_008805f0(Ptr, u32) -> f32),
+        entry!(0x008805f0, fn_008805f0(Ptr, u32) -> f64),
         entry!(0x00880660, fn_00880660(Ptr<Actor>, u8, u32) -> f32),
         entry!(0x00880690, fn_00880690(Ptr<Actor>, u8, f32)),
         entry!(0x008806d0, fn_008806d0(Ptr<Actor>, u32, i32)),
@@ -6749,6 +6750,9 @@ mod tests_block2 {
         give_base(&mut e, 0x3000);
         assert_eq!(e.call(0x0088_0580, &args![owner, 4u32]).u32(), 9);
         assert_eq!(e.call(0x0088_05f0, &args![owner, 4u32]).f32(), 9.0);
+        // FILD keeps the whole integer in ST0: not rounded to a float here.
+        e.register(slot(OWNER_VTABLE, 0), |_, _| ret(0x0100_0001));
+        assert_eq!(e.call(0x0088_05f0, &args![owner, 4u32]).f64(), 16777217.0);
         let process = give_process(&mut e, actor, &[0x398, 0x39c]);
         let first = record(&mut e, slot(PROCESS_VTABLE, 0x398), ret(77));
         let second = record(&mut e, slot(PROCESS_VTABLE, 0x39c), 1.5f32.into_ret());
