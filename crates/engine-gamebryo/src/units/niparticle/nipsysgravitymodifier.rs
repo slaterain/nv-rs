@@ -1161,6 +1161,20 @@ mod tests {
         assert_eq!(turn[0][2], s.this.addr() + 0x1c);
     }
 
+    /// 00c236b0, 00c23725: a short read leaves the word pushed at entry, `this`.
+    #[test]
+    fn load_binary_short_read_stores_this_in_the_type() {
+        let mut e = Engine::new();
+        e.register(MODIFIER_LOAD_BINARY, |_, _| Ret::default());
+        e.register(READ_LINK_ID, |_, _| Ret::default());
+        e.register(COLOR_LOAD_BINARY, |_, _| Ret::default());
+        let stream = test_stream::new(&mut e, 0x1402_0007, &[]);
+        e.register(test_stream::READ_FN, |_, _| Ret::default());
+        let this = e.new_object::<NiPSysGravityModifier>();
+        e.call(0x00c2_36b0, &args![this, stream]);
+        assert_eq!(e.get(this, NiPSysGravityModifier::m_eType), this.addr());
+    }
+
     #[test]
     fn load_binary_reads_by_version() {
         for (version, bs_version, turbulence, aligned) in [
