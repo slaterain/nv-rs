@@ -3633,7 +3633,7 @@ pub fn fn_00972aa0(e: &mut Engine, this: Ptr<ProcessLists>, actor: u32) {
 /// whose fatigue percentage (`00893530`) is not above 0, whose base data's
 /// embedded object at +0x30 answers slot 0x60 with a non-zero word, and that
 /// has a process, has the process told slot 0x418 with the actor and the
-/// three words of the vector slot 0x1f4 returns for 0.0.
+/// three words of the vector slot 0x1f4 returns, then 0.0.
 pub fn fn_00972bb0(e: &mut Engine, this: Ptr<ProcessLists>) {
     let array = mob_process_array(this);
     let mut index = 0u32;
