@@ -7,6 +7,7 @@
 //! ```ignore
 //! Diff::new(entry!(0x00d87410, typed_version(Ptr<Thing>, f32) -> f32))
 //!     .family(&MY_FAMILY)
+//!     .translation_calls_plainly(&[0x00d87400]) // what the translation calls with no e.call
 //!     .inputs(&[Input::Word, Input::F32])
 //!     .setup(|e, case| {
 //!         // Both engines run this: same objects at the same addresses.
@@ -20,16 +21,18 @@
 //! ```
 //!
 //! The engines hold the translations only ([`Engine::new_untyped`]): whatever `NV_TYPED` says, the
-//! function differs, and with [`Diff::family`] its family, and everything else is the same.
+//! function differs, and with [`Diff::family`] the families named, and everything else is the same.
 //!
 //! Three runs per case:
 //!
 //! 1. The translation.
 //! 2. The typed version with every `typed_call!` by address, against the translation.
-//! 3. The typed version with every `typed_call!` direct (Rust calls, with the call log still seeing
-//!    them), against run 2, call for call. A `typed_call!` naming the wrong function shows here,
-//!    and one whose address isn't in its family stops here. This run needs debug assertions: under
-//!    `--release` it is skipped and [`Report::direct_runs`] says 0.
+//! 3. The typed version with each `typed_call!` into a named family direct (Rust calls, with the call
+//!    log still seeing them), against run 2, call for call. A `typed_call!` naming the wrong function
+//!    shows here, and one whose address is in another family stops here. An address in no named
+//!    family goes by address, as it does in play with that family off, so a real callee or a rewritten
+//!    site in the call tree is no finding; [`Report::direct_calls`] says how many went direct. This run
+//!    needs debug assertions: under `--release` it is skipped and [`Report::direct_runs`] says 0.
 //!
 //! Compared, bit for bit:
 //!
@@ -38,20 +41,26 @@
 //!   outside the stack for locals and the clock, so a store moved across a call shows even when the
 //!   end result is the same;
 //! - a word pointing into the stack for locals, as its offset in its frame, the frame's size and the
-//!   bytes behind it ([`Diff::stack_bytes`]), not by value: a typed version may have fewer frames;
+//!   bytes behind it ([`Diff::stack_bytes`]), not by value; or, for a word [`Diff::local_at`] names,
+//!   as which local it is and that local's own bytes;
 //! - memory after the call, every mapped page, and which pages are mapped;
-//! - whether and how the run stopped: a run where both stop alike fails unless the test says
-//!   [`Diff::expect_stops`], since it compared nothing past the stop;
+//! - whether and how the run stopped: a run where both stop alike fails unless the test says that
+//!   input stops ([`Diff::expect_stops`]), since it compared nothing past the stop;
 //! - the heap's top and free bytes, the control word and the clock after the call.
+//!
+//! A stack address stored in memory, held in the bytes behind a stack word, or returned compares by
+//! value, so it fails when the frames differ. With a [`Diff::local_at`] in the test, the stored ones
+//! compare as "some stack address" instead, whichever local they point at.
 //!
 //! Not compared, so a test of those has to look itself:
 //!
 //! - the stack for locals outside what an outgoing word points at (a local may become native);
-//! - a stack address stored in memory or returned, which compares by value;
 //! - the kernel's objects (events, threads, files) and everything else in [`Engine::kernel`];
 //! - the heap's block map and free bins: only its top and free bytes;
 //! - the time slice and [`Engine::call_stack`], which a direct call doesn't touch by design;
-//! - calls another game thread makes, and a by-address call that runs a row of the `atexit` table.
+//! - calls another game thread makes, and a by-address call that runs a row of the `atexit` table;
+//! - what a translation's plain Rust call does as a call: it isn't logged
+//!   ([`Diff::translation_calls_plainly`]).
 //!
 //! Fresh engines per case, so nothing a case leaves behind reaches the next. That is the harness's
 //! cost: [`Diff::max_cases`] caps it.
@@ -60,7 +69,9 @@
 // `typed` is for what is.
 #![allow(clippy::cast_possible_truncation)]
 
-use super::{apply_families, Family};
+pub use super::{MAIN_THREAD, OTHER_THREADS};
+
+use super::{apply_families, Family, Threads};
 use crate::abi::{AbiFn, Ret};
 use crate::cxx_exception::Thrown;
 use crate::x87;
@@ -70,11 +81,6 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-
-/// The control word of the main thread once Direct3D has made its device: 24-bit precision.
-pub const MAIN_THREAD: u16 = 0x007f;
-/// The control word of the other threads, and of the main thread before that: 53-bit precision.
-pub const OTHER_THREADS: u16 = x87::DEFAULT_CONTROL_WORD;
 
 /// The words tried for an integer or pointer-sized argument, the plainest first.
 pub const WORD_VALUES: &[u32] = &[
@@ -312,18 +318,23 @@ pub fn cases(inputs: &[Input], max_cases: usize) -> Vec<Case> {
 /// its callees, and answers the words of the call.
 type Setup = Box<dyn Fn(&mut Engine, &Case) -> Vec<u32>>;
 
+/// The inputs a test says stop ([`Diff::expect_stops`]).
+type StopCases = Box<dyn Fn(&Case) -> bool>;
+
 /// One function's comparison ([`Diff::run`]).
 pub struct Diff {
     addr: u32,
     typed: AbiFn,
     translation: Option<AbiFn>,
-    family: Option<&'static Family>,
+    families: Vec<&'static Family>,
     inputs: Vec<Input>,
     setup: Option<Setup>,
     ignored_calls: Vec<u32>,
-    control_words: Vec<u16>,
+    plain_callees: Vec<u32>,
+    local_words: Vec<LocalWord>,
+    control_words: Option<Vec<u16>>,
     max_cases: usize,
-    expect_stops: bool,
+    stop_cases: Option<StopCases>,
     stack_bytes: u32,
     nan_payloads: bool,
 }
@@ -335,13 +346,15 @@ impl Diff {
             addr,
             typed,
             translation: None,
-            family: None,
+            families: Vec::new(),
             inputs: Vec::new(),
             setup: None,
             ignored_calls: Vec::new(),
-            control_words: vec![OTHER_THREADS, MAIN_THREAD],
+            plain_callees: Vec::new(),
+            local_words: Vec::new(),
+            control_words: None,
             max_cases: 512,
-            expect_stops: false,
+            stop_cases: None,
             stack_bytes: 64,
             nan_payloads: false,
         }
@@ -351,15 +364,23 @@ impl Diff {
     /// (the harness's own tests, or a translation in a crate above). By default the one registered
     /// at the address.
     pub fn translation(mut self, f: AbiFn) -> Diff {
+        assert!(
+            f as usize != self.typed as usize,
+            "the translation given is the typed version: the test would compare it with itself"
+        );
         self.translation = Some(f);
         self
     }
 
-    /// The family of the function under test. Its members go over their translations on the typed
-    /// runs, after the setup, as they do in play; a function with a `typed_call!` needs this, or its
-    /// direct run stops. The translation run stays translations only.
+    /// A family the typed runs have on, as play would: its members go over their translations, after
+    /// the setup, and each `typed_call!` into it goes direct on the direct run. Call again for another
+    /// family, as many as the call tree reaches. A `typed_call!` into a family nobody names goes by
+    /// address on every run. The translation run stays translations only.
+    ///
+    /// The setup may not put a double over a member ([`Diff::run`] stops): the typed runs would replace
+    /// it, and a double on one side only is no comparison.
     pub fn family(mut self, family: &'static Family) -> Diff {
-        self.family = Some(family);
+        self.families.push(family);
         self
     }
 
@@ -383,22 +404,51 @@ impl Diff {
     /// (`data/overridable.tsv`): a fix replacing it would never run.
     pub fn ignore_calls(mut self, addrs: &[u32]) -> Diff {
         for addr in addrs {
-            let hex = format!("{addr:08x}\t");
-            if include_str!("../../data/overridable.tsv")
-                .lines()
-                .any(|l| l.starts_with(&hex))
-            {
-                panic!("{addr:08x} is overridable: it has to be called, so it can't be ignored");
-            }
+            refuse_overridable(*addr, "it has to be called, so it can't be ignored");
         }
         self.ignored_calls.extend_from_slice(addrs);
         self
     }
 
-    /// The control words to run each case under. By default both [`OTHER_THREADS`] and
+    /// Callees the translation reaches with a plain Rust call, which isn't logged, and the typed
+    /// version with `e.call` or `typed_call!`, which is: left out of the typed version's calls. Their
+    /// own outgoing calls and what they do to memory still compare, but the words of the listed call
+    /// can't, since one side has no record of them: a wrong word shows only by what it changes.
+    ///
+    /// The real function has to run on both sides, so the setup may not replace one that is registered
+    /// ([`Diff::run`] stops): a double would run on the typed side only. An overridable address can't be
+    /// listed: its words have to compare, so its family's step moves the translation's call to `e.call`
+    /// and lowers the frozen count in `data/overridable.tsv`.
+    pub fn translation_calls_plainly(mut self, addrs: &[u32]) -> Diff {
+        for addr in addrs {
+            refuse_overridable(
+                *addr,
+                "its words have to compare: e.call in the translation",
+            );
+        }
+        self.plain_callees.extend_from_slice(addrs);
+        self
+    }
+
+    /// The `word`th word of each call to `callee` is a local the typed version may place differently:
+    /// a smaller frame, or siblings left native. It compares as which local it is (the same one
+    /// as before, or a new one) and that local's own `size` bytes, not by its offset or its frame's
+    /// size. With any of these in the test, a stack address in memory or behind a stack word compares
+    /// as "some stack address".
+    ///
+    /// What it then can't see: a callee reading past `size`, into what the translation had beside the
+    /// local; which local a stored stack address points at; and a new local that a later frame puts
+    /// at the address of one already gone, which reads as the same local.
+    pub fn local_at(mut self, callee: u32, word: usize, size: u32) -> Diff {
+        self.local_words.push(LocalWord { callee, word, size });
+        self
+    }
+
+    /// The control words to run each case under, whatever the family says. By default those of the
+    /// family holding the function ([`Family::threads`]), else both [`OTHER_THREADS`] and
     /// [`MAIN_THREAD`].
     pub fn control_words(mut self, words: &[u16]) -> Diff {
-        self.control_words = words.to_vec();
+        self.control_words = Some(words.to_vec());
         self
     }
 
@@ -408,12 +458,13 @@ impl Diff {
         self
     }
 
-    /// Runs that stop alike are this test's point: a stop is the behaviour being compared. Without
-    /// this, a run where both sides stop is a failure, because it compared nothing after the stop:
-    /// a bad pointer in the setup would otherwise pass. A stop at an untranslated address fails
-    /// either way: that is a double the setup lacks.
-    pub fn expect_stops(mut self) -> Diff {
-        self.expect_stops = true;
+    /// The inputs that stop, which are this test's point: a stop is the behaviour being compared
+    /// there. On any other input a run where both sides stop is a failure, because it compared nothing
+    /// after the stop: a bad pointer in the setup would otherwise pass. An input stated here that
+    /// doesn't stop fails too. A stop at an untranslated address fails either way: that is a double the
+    /// setup lacks.
+    pub fn expect_stops(mut self, on: impl Fn(&Case) -> bool + 'static) -> Diff {
+        self.stop_cases = Some(Box::new(on));
         self
     }
 
@@ -433,11 +484,30 @@ impl Diff {
         self
     }
 
+    /// The control words this runs under, and where they came from.
+    fn words_to_run(&self) -> Vec<u16> {
+        if let Some(words) = &self.control_words {
+            return words.clone();
+        }
+        let holder = self
+            .families
+            .iter()
+            .find(|f| (f.funcs)().iter().any(|(addr, _)| *addr == self.addr));
+        holder
+            .map_or(Threads::Both, |f| f.threads)
+            .control_words()
+            .to_vec()
+    }
+
     /// Runs every case, and compares.
+    #[must_use = "the report says whether they agreed: call `assert_same`"]
     pub fn run(&self) -> Report {
-        let mut report = Report::default();
+        let mut report = Report {
+            control_words: self.words_to_run(),
+            ..Report::default()
+        };
         for case in cases(&self.inputs, self.max_cases) {
-            for &word in &self.control_words {
+            for word in report.control_words.clone() {
                 report.runs += 1;
                 self.run_case(&case, word, &mut report);
             }
@@ -452,10 +522,11 @@ impl Diff {
             translation.words, typed.words,
             "the setup gave the two engines different call words: it must do the same on both"
         );
-        if let (Some(a), Some(b)) = (&translation.stop, &typed.stop) {
-            if a == b {
+        let expected = self.stop_cases.as_ref().is_some_and(|on| on(case));
+        match (&translation.stop, &typed.stop) {
+            (Some(a), Some(b)) if a == b => {
                 report.stopped += 1;
-                if !self.expect_stops || a.starts_with("open function") {
+                if !expected || a.starts_with("open function") {
                     report.note(
                         case,
                         word,
@@ -464,22 +535,37 @@ impl Diff {
                     );
                 }
             }
+            (None, None) if expected => {
+                report.note(case, word, Branch::ByAddress, Found::ExpectedStop);
+            }
+            _ => {}
         }
         self.compare(
             &translation,
             &typed,
             &self.ignored_calls,
+            &self.plain_callees,
             case,
             word,
             Branch::ByAddress,
             report,
         );
-        // The direct branch of each `typed_call!`, against the same function by address. Only where
-        // debug assertions make the macro note its calls, so the logs can match.
+        // Each `typed_call!`'s direct branch, against the same function by address. Only where debug
+        // assertions make the macro note its calls, so the logs can match.
         if cfg!(debug_assertions) {
             report.direct_runs += 1;
             let direct = self.side(case, word, Branch::Direct);
-            self.compare(&typed, &direct, &[], case, word, Branch::Direct, report);
+            report.direct_calls += direct.calls.iter().filter(|c| c.direct).count();
+            self.compare(
+                &typed,
+                &direct,
+                &[],
+                &[],
+                case,
+                word,
+                Branch::Direct,
+                report,
+            );
         }
     }
 
@@ -489,6 +575,7 @@ impl Diff {
         a: &Side,
         b: &Side,
         ignored: &[u32],
+        plain: &[u32],
         case: &Case,
         word: u16,
         branch: Branch,
@@ -507,7 +594,7 @@ impl Diff {
                 typed: b.ret,
             });
         }
-        compare_calls(a, b, ignored, &mut found);
+        compare_calls(a, b, ignored, plain, &mut found);
         if a.control_word != b.control_word {
             found(Found::ControlWord {
                 translation: a.control_word,
@@ -527,7 +614,13 @@ impl Diff {
                 typed: b_heap,
             });
         }
-        compare_memory(a, b, self.nan_payloads, &mut found);
+        compare_memory(
+            a,
+            b,
+            self.nan_payloads,
+            !self.local_words.is_empty(),
+            &mut found,
+        );
     }
 
     /// One engine's run of the case.
@@ -537,19 +630,41 @@ impl Diff {
         // blocks after it: a typed version with native locals may never make them.
         e.with_stack(8, |_, _| ());
         e.tls();
+        // What a setup can't replace: see `translation_calls_plainly` and `family`.
+        let mut watched = self.plain_callees.clone();
+        for family in &self.families {
+            watched.extend((family.funcs)().iter().map(|(addr, _)| *addr));
+        }
+        let before: Vec<_> = watched.iter().map(|a| e.registered_identity(*a)).collect();
         let words = match &self.setup {
             Some(setup) => setup(&mut e, case),
             None => case.words(),
         };
+        for (addr, before) in watched.iter().zip(before) {
+            let now = e.registered_identity(*addr);
+            if now.is_some_and(|(_, double)| double) || (before.is_some() && now != before) {
+                panic!(
+                    "the setup replaced what is registered at {addr:08x}, a family's member or a \
+                     callee the translation reaches plainly: that double would run on one side only"
+                );
+            }
+        }
         match branch {
             Branch::Translation => {
                 if let Some(f) = self.translation {
                     e.register(self.addr, f);
                 }
+                assert!(
+                    e.registered_identity(self.addr).map(|(f, _)| f) != Some(self.typed as usize),
+                    "the translation at {:08x} is the typed version: the test would compare it \
+                     with itself",
+                    self.addr
+                );
             }
             Branch::ByAddress | Branch::Direct => {
-                if let Some(family) = self.family {
-                    apply_families(&mut e, &[family], Some(family.name));
+                if !self.families.is_empty() {
+                    let names: Vec<&str> = self.families.iter().map(|f| f.name).collect();
+                    apply_families(&mut e, &self.families, Some(&names.join(",")));
                 }
                 e.typed_register_under_test(self.addr, self.typed);
             }
@@ -565,6 +680,9 @@ impl Diff {
                 calls: Vec::new(),
                 stack_bytes: self.stack_bytes,
                 nan_payloads: self.nan_payloads,
+                local_words: self.local_words.clone(),
+                locals: Vec::new(),
+                next_local: 0,
             })
         });
         x87::set_control_word(word);
@@ -598,6 +716,17 @@ impl Diff {
     }
 }
 
+/// Stops the test when `addr` is in `data/overridable.tsv`.
+fn refuse_overridable(addr: u32, why: &str) {
+    let hex = format!("{addr:08x}\t");
+    if include_str!("../../data/overridable.tsv")
+        .lines()
+        .any(|l| l.starts_with(&hex))
+    {
+        panic!("{addr:08x} is overridable: {why}");
+    }
+}
+
 /// How many differences a [`Report`] keeps in full.
 const KEEP_FOUND: usize = 16;
 
@@ -619,11 +748,10 @@ fn stop_text(
 ) -> String {
     if let Some(thrown) = payload.downcast_ref::<Thrown>() {
         let object = match stack {
-            Some((_, end)) if stack.is_some_and(|(lo, hi)| (lo..hi).contains(&thrown.object)) => {
-                let len = stack_bytes.min(end - thrown.object);
+            Some((lo, hi)) if (lo..hi).contains(&thrown.object) => {
                 format!(
-                    "on the stack, bytes {:016x}",
-                    hash_bytes(0, &e.mem.bytes(thrown.object, len))
+                    "on the stack, {:?}",
+                    stack_word(e, thrown.object, hi, stack_bytes, None)
                 )
             }
             _ => format!("{:08x}", thrown.object),
@@ -659,6 +787,17 @@ pub enum Word {
     /// size and a hash of the bytes behind it, because a frame's address may differ. A word on the
     /// stack outside every live frame has `frame` 0, with `offset` counted from the stack's end.
     Stack { offset: u32, frame: u32, bytes: u64 },
+    /// A word [`Diff::local_at`] names: which local of the run it is, in order of first appearance,
+    /// and a hash of its own bytes.
+    Local { ordinal: u32, bytes: u64 },
+}
+
+/// A word of a call that is a local the typed version may place differently ([`Diff::local_at`]).
+#[derive(Clone, Copy, Debug)]
+struct LocalWord {
+    callee: u32,
+    word: usize,
+    size: u32,
 }
 
 /// One call by address as it was made.
@@ -668,6 +807,8 @@ struct Seen {
     /// A hash of all mapped memory outside the stack for locals, at the moment of the call.
     memory: u64,
     clock: (u32, u32),
+    /// A direct `typed_call!`, noted, not a call by address.
+    direct: bool,
 }
 
 /// What the running side has seen so far ([`record_call`]).
@@ -675,6 +816,11 @@ struct Recording {
     calls: Vec<Seen>,
     stack_bytes: u32,
     nan_payloads: bool,
+    local_words: Vec<LocalWord>,
+    /// The locals [`Diff::local_at`] words have pointed at, while their frames live, with their
+    /// ordinals.
+    locals: Vec<(u32, u32)>,
+    next_local: u32,
 }
 
 thread_local! {
@@ -700,32 +846,68 @@ fn record_call(e: &mut Engine, addr: u32, returning: bool) {
     });
 }
 
-fn seen_call(e: &Engine, addr: u32, words: &[u32], recording: &Recording) -> Seen {
+fn seen_call(e: &Engine, addr: u32, words: &[u32], recording: &mut Recording) -> Seen {
     let stack = e.guest_stack_region();
     let mut plain = words.to_vec();
     if recording.nan_payloads {
         canonical_nans(&mut plain);
     }
-    let words = plain
-        .iter()
-        .zip(words)
-        .map(|(canonical, word)| match stack {
-            Some((lo, hi)) if (lo..hi).contains(word) => {
-                stack_word(e, *word, hi, recording.stack_bytes)
+    let live = |word: u32| {
+        e.stack_frames
+            .iter()
+            .any(|(base, size)| (*base..base + size).contains(&word))
+    };
+    recording.locals.retain(|(word, _)| live(*word));
+    let loose = !recording.local_words.is_empty();
+    let blur = if loose { stack } else { None };
+    let mut seen_words = Vec::with_capacity(words.len());
+    for (i, (canonical, word)) in plain.iter().zip(words).enumerate() {
+        let on_stack = stack.is_some_and(|(lo, hi)| (lo..hi).contains(word));
+        let local = recording
+            .local_words
+            .iter()
+            .find(|l| l.callee == addr && l.word == i)
+            .copied();
+        seen_words.push(match (on_stack, local) {
+            (true, Some(local)) => {
+                let ordinal = match recording.locals.iter().find(|(w, _)| w == word) {
+                    Some((_, ordinal)) => *ordinal,
+                    None => {
+                        recording.next_local += 1;
+                        recording.locals.push((*word, recording.next_local));
+                        recording.next_local
+                    }
+                };
+                Word::Local {
+                    ordinal,
+                    bytes: bytes_hash(e, *word, local.size, blur),
+                }
             }
-            _ => Word::Plain(*canonical),
-        })
-        .collect();
+            (true, None) => {
+                let end = stack.map_or(0, |(_, hi)| hi);
+                stack_word(e, *word, end, recording.stack_bytes, blur)
+            }
+            (false, _) => Word::Plain(*canonical),
+        });
+    }
     Seen {
         addr,
-        words,
-        memory: memory_hash(e, stack, recording.nan_payloads),
+        words: seen_words,
+        memory: memory_hash(e, stack, recording.nan_payloads, loose),
         clock: (e.clock_ms, e.clock_us),
+        direct: e.typed_noted_direct(),
     }
 }
 
-/// A word on the stack, relative to the live frame that holds it.
-fn stack_word(e: &Engine, word: u32, stack_end: u32, stack_bytes: u32) -> Word {
+/// A word on the stack, relative to the live frame that holds it; `blur` is the stack's range when
+/// stack addresses behind it compare as "some stack address".
+fn stack_word(
+    e: &Engine,
+    word: u32,
+    stack_end: u32,
+    stack_bytes: u32,
+    blur: Option<(u32, u32)>,
+) -> Word {
     let frame = e
         .stack_frames
         .iter()
@@ -739,7 +921,28 @@ fn stack_word(e: &Engine, word: u32, stack_end: u32, stack_bytes: u32) -> Word {
     Word::Stack {
         offset,
         frame,
-        bytes: hash_bytes(0, &e.mem.bytes(word, len)),
+        bytes: bytes_hash(e, word, len, blur),
+    }
+}
+
+/// A hash of `len` bytes at `word`.
+fn bytes_hash(e: &Engine, word: u32, len: u32, blur: Option<(u32, u32)>) -> u64 {
+    let mut bytes = e.mem.bytes(word, len);
+    if let Some(stack) = blur {
+        blur_stack_addresses(&mut bytes, stack);
+    }
+    hash_bytes(0, &bytes)
+}
+
+/// What an aligned word holding an address on the stack compares as, when frames may differ.
+const SOME_STACK_ADDRESS: u32 = 0xdead_57ac;
+
+fn blur_stack_addresses(bytes: &mut [u8], (lo, hi): (u32, u32)) {
+    for chunk in bytes.chunks_exact_mut(4) {
+        let word = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        if (lo..hi).contains(&word) {
+            chunk.copy_from_slice(&SOME_STACK_ADDRESS.to_le_bytes());
+        }
     }
 }
 
@@ -761,14 +964,14 @@ fn hash_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
 }
 
 /// All mapped memory outside the stack for locals, as one hash.
-fn memory_hash(e: &Engine, stack: Option<(u32, u32)>, nan_payloads: bool) -> u64 {
+fn memory_hash(e: &Engine, stack: Option<(u32, u32)>, nan_payloads: bool, loose: bool) -> u64 {
     let mut hash = 0;
     let on_stack = |a: u32| stack.is_some_and(|(lo, hi)| (lo..hi).contains(&a));
     for page in e.mem.mapped_pages() {
         if on_stack(page) && on_stack(page + 0xfff) {
             continue;
         }
-        let bytes = comparable_page(page, e.mem.page_bytes(page), stack, nan_payloads);
+        let bytes = comparable_page(page, e.mem.page_bytes(page), stack, nan_payloads, loose);
         hash = hash_bytes(hash ^ u64::from(page), &bytes);
     }
     hash
@@ -781,12 +984,16 @@ fn comparable_page(
     bytes: &[u8],
     stack: Option<(u32, u32)>,
     nan_payloads: bool,
+    loose: bool,
 ) -> Vec<u8> {
     let mut out = bytes.to_vec();
-    if let Some((lo, hi)) = stack {
-        let (lo, hi) = (lo.max(page), hi.min(page + 0x1000));
+    if let Some((stack_lo, stack_hi)) = stack {
+        let (lo, hi) = (stack_lo.max(page), stack_hi.min(page + 0x1000));
         if lo < hi {
             out[(lo - page) as usize..(hi - page) as usize].fill(0);
+        }
+        if loose {
+            blur_stack_addresses(&mut out, (stack_lo, stack_hi));
         }
     }
     if nan_payloads {
@@ -848,14 +1055,25 @@ impl Side {
 
 /// Compares the two sides' calls, in order: the first that differs in address or words, and the
 /// first with different memory or clock at the moment of the call, before that. `ignored` calls
-/// come out of the first side only, the translation's.
-fn compare_calls(a: &Side, b: &Side, ignored: &[u32], found: &mut impl FnMut(Found)) {
+/// come out of the first side only, the translation's, and `plain` calls out of the second, the typed
+/// version's.
+fn compare_calls(
+    a: &Side,
+    b: &Side,
+    ignored: &[u32],
+    plain: &[u32],
+    found: &mut impl FnMut(Found),
+) {
     let a_calls: Vec<&Seen> = a
         .calls
         .iter()
         .filter(|c| !ignored.contains(&c.addr))
         .collect();
-    let b_calls: Vec<&Seen> = b.calls.iter().collect();
+    let b_calls: Vec<&Seen> = b
+        .calls
+        .iter()
+        .filter(|c| !plain.contains(&c.addr))
+        .collect();
     let same = |x: &Seen, y: &Seen| x.addr == y.addr && x.words == y.words;
     let at = a_calls
         .iter()
@@ -886,7 +1104,13 @@ fn compare_calls(a: &Side, b: &Side, ignored: &[u32], found: &mut impl FnMut(Fou
 
 /// Reports the bytes that differ between the two engines' memories, a run of them at a time,
 /// outside the stack for locals, and the pages only one has.
-fn compare_memory(a: &Side, b: &Side, nan_payloads: bool, found: &mut impl FnMut(Found)) {
+fn compare_memory(
+    a: &Side,
+    b: &Side,
+    nan_payloads: bool,
+    loose: bool,
+    found: &mut impl FnMut(Found),
+) {
     let (mem_a, mem_b) = (&a.engine.mem, &b.engine.mem);
     let (pages_a, pages_b) = (mem_a.mapped_pages(), mem_b.mapped_pages());
     let (mut i, mut j) = (0, 0);
@@ -895,8 +1119,8 @@ fn compare_memory(a: &Side, b: &Side, nan_payloads: bool, found: &mut impl FnMut
             (Some(&pa), Some(&pb)) if pa == pb => {
                 let (bytes_a, bytes_b) = (mem_a.page_bytes(pa), mem_b.page_bytes(pa));
                 if bytes_a != bytes_b {
-                    let bytes_a = comparable_page(pa, bytes_a, a.stack, nan_payloads);
-                    let bytes_b = comparable_page(pa, bytes_b, a.stack, nan_payloads);
+                    let bytes_a = comparable_page(pa, bytes_a, a.stack, nan_payloads, loose);
+                    let bytes_b = comparable_page(pa, bytes_b, a.stack, nan_payloads, loose);
                     compare_page(pa, &bytes_a, &bytes_b, found);
                 }
                 i += 1;
@@ -956,6 +1180,8 @@ pub enum Found {
     /// Both stopped alike where the test didn't expect it ([`Diff::expect_stops`]), or at an
     /// untranslated address: nothing after the stop was compared.
     StoppedAlike { message: String },
+    /// [`Diff::expect_stops`] said this input stops, and neither side did.
+    ExpectedStop,
     /// The return value, bit for bit.
     Return { translation: Ret, typed: Ret },
     /// The `at`th call (the call itself is 0): address and words.
@@ -1024,8 +1250,11 @@ impl fmt::Display for Difference {
             Found::StoppedAlike { message } => write!(
                 f,
                 "both stopped, so nothing after it was compared: {message:?} (a test of the stop \
-                 says `.expect_stops()`; an open function needs a double)"
+                 says `.expect_stops(|_| true)`; an open function needs a double)"
             ),
+            Found::ExpectedStop => {
+                write!(f, "the test says this input stops, and neither side did")
+            }
             Found::Return { translation, typed } => write!(
                 f,
                 "return: translation eax {:08x} edx {:08x} st0 {:?} ({:016x}), \
@@ -1092,14 +1321,20 @@ impl fmt::Display for Difference {
 }
 
 /// What a [`Diff`] found.
+#[must_use = "the report says whether they agreed: call `assert_same`"]
 #[derive(Default, Debug)]
 pub struct Report {
+    /// The control words each case ran under: a family's row can narrow them, and this says so.
+    pub control_words: Vec<u16>,
     /// Cases run, each control word counted.
     pub runs: usize,
     /// Of those, the runs where both sides stopped alike.
     pub stopped: usize,
     /// Of those, the runs whose direct branch ran too (none without debug assertions).
     pub direct_runs: usize,
+    /// The `typed_call!`s that went direct on those runs. 0 for a function with one means no family
+    /// named holds its address, and the direct branch has run nowhere.
+    pub direct_calls: usize,
     /// Differences found.
     pub found: usize,
     /// The first of them in full.
@@ -1136,8 +1371,8 @@ impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "{} difference(s) in {} run(s), {} of them stopped alike:",
-            self.found, self.runs, self.stopped
+            "{} difference(s) in {} run(s), {} of them stopped alike, under control words {:04x?}:",
+            self.found, self.runs, self.stopped, self.control_words
         )?;
         for d in &self.first {
             writeln!(f, "  {d}")?;
@@ -1587,7 +1822,7 @@ mod tests {
         Diff::new(crate::entry!(0x0040_2000, reads(u32) -> u32))
             .translation(crate::entry!(0x0040_2000, reads(u32) -> u32).1)
             .inputs(&[Input::Of(&[0x0300_0000])])
-            .expect_stops()
+            .expect_stops(|_| true)
             .run()
             .assert_same();
     }
@@ -1643,7 +1878,7 @@ mod tests {
         use std::rc::Rc;
         let n = Rc::new(Cell::new(0));
         let shared = n.clone();
-        Diff::new((ADDR, |_, _| Ret::default()))
+        let _ = Diff::new((ADDR, |_, _| Ret::default()))
             .translation(|_, _| Ret::default())
             .inputs(&[Input::Of(&[1])])
             .setup(move |_, _| {
@@ -1673,7 +1908,7 @@ mod tests {
         assert_eq!(report.first.len(), KEEP_FOUND);
         let text = report.to_string();
         assert!(
-            text.starts_with("18 difference(s) in 18 run(s), 0 of them stopped alike:\n"),
+            text.starts_with("18 difference(s) in 18 run(s), 0 of them stopped alike, under control words [027f, 007f]:\n"),
             "{text}"
         );
         assert!(
@@ -1719,7 +1954,7 @@ mod tests {
                 message: "read of unmapped memory at 03000000".to_string()
             }
         );
-        let report = diff().expect_stops().run();
+        let report = diff().expect_stops(|_| true).run();
         assert!(report.is_same(), "{report}");
         assert_eq!(report.stopped, 1);
     }
@@ -1747,7 +1982,7 @@ mod tests {
         }
         let report = Diff::new(crate::entry!(0x0040_2000, calls()))
             .translation(crate::entry!(0x0040_2000, calls()).1)
-            .expect_stops()
+            .expect_stops(|_| true)
             .control_words(&[OTHER_THREADS])
             .run();
         assert!(!report.is_same(), "{report}");
@@ -1774,6 +2009,7 @@ mod tests {
         name: "diff_test_family",
         id: FAMILY_ID,
         past_gate: false,
+        threads: Threads::Both,
         funcs: || vec![crate::entry!(0x0040_2200, member(u32) -> u32)],
     };
 
@@ -1850,6 +2086,7 @@ mod tests {
             name: "diff_test_wrong",
             id: FAMILY_ID,
             past_gate: false,
+            threads: Threads::Both,
             funcs: || vec![crate::entry!(0x0040_2200, wrong_member(u32) -> u32)],
         };
         fn right(e: &mut Engine, x: u32) -> u32 {
@@ -1888,26 +2125,17 @@ mod tests {
         assert_eq!(report.first[0].branch, Branch::Direct);
     }
 
-    /// A function with a `typed_call!` and a test that names no family: the direct branch couldn't
-    /// otherwise run, so it says so.
+    /// A function with a `typed_call!` and a test that names no family: everything goes by address,
+    /// as in play with that family off, and the report says no call went direct.
     #[test]
-    fn a_typed_call_with_no_family_named_stops_the_direct_run() {
+    fn a_typed_call_with_no_family_named_goes_by_address() {
         fn right(e: &mut Engine, x: u32) -> u32 {
             let got: u32 = crate::typed_call!(FAMILY_ID, 0x0040_2200, member(e, x));
             got + 1
         }
         let report = diff_of_caller(crate::entry!(0x0040_2000, right(u32) -> u32)).run();
-        if !cfg!(debug_assertions) {
-            return;
-        }
-        assert!(!report.is_same());
-        let Found::Stop {
-            typed: Some(why), ..
-        } = &report.first[0].what
-        else {
-            panic!("{report}");
-        };
-        assert!(why.contains("in no family that is on"), "{why}");
+        report.assert_same();
+        assert_eq!(report.direct_calls, 0);
     }
 
     // ---- Stack words, memory at each call, the clock ----------------------------------
@@ -2140,7 +2368,7 @@ mod tests {
                 .translation(translation.1)
                 .inputs(&[Input::Of(word)])
                 .control_words(&[OTHER_THREADS])
-                .expect_stops()
+                .expect_stops(|_| true)
                 .setup(|e, case| {
                     e.map(0x0200_0000, 0x100);
                     case.words()
@@ -2290,6 +2518,7 @@ mod tests {
             name: "diff_child_family",
             id: FamilyId::new(13),
             past_gate: false,
+            threads: Threads::Both,
             funcs: || vec![crate::entry!(0x0040_2100, member(u32) -> u32)],
         };
         super::super::provide(&CHILD);
@@ -2301,6 +2530,623 @@ mod tests {
         }
         let report = Diff::new(crate::entry!(0x0040_2000, sees_no_family() -> u32))
             .translation(crate::entry!(0x0040_2000, sees_no_family() -> u32).1)
+            .run();
+        report.assert_same();
+    }
+
+    // ---- What the second review asked ----------------------------------------------------
+
+    /// `expect_stops` covers the inputs it states: a bad pointer outside them still fails, and an
+    /// input it states has to stop.
+    #[test]
+    fn expect_stops_covers_only_the_inputs_it_states() {
+        let diff = |inputs: &'static [u32]| {
+            Diff::new(crate::entry!(0x0040_2000, reads(u32) -> u32))
+                .translation(crate::entry!(0x0040_2000, reads(u32) -> u32).1)
+                .inputs(&[Input::Of(inputs)])
+                .control_words(&[OTHER_THREADS])
+                .expect_stops(|case| case.word(0) == 0x0300_0000)
+                .setup(|e, case| {
+                    e.map(0x0200_0000, 4);
+                    case.words()
+                })
+        };
+        let report = diff(&[0x0200_0000, 0x0300_0000]).run();
+        assert!(report.is_same(), "{report}");
+        assert_eq!(report.stopped, 1);
+        // A stop on another input.
+        let report = diff(&[0x0400_0000]).run();
+        assert_eq!(report.found, 1, "{report}");
+        assert!(matches!(report.first[0].what, Found::StoppedAlike { .. }));
+        // The stated input maps after all: it says it stops, and neither side does.
+        let report = Diff::new(crate::entry!(0x0040_2000, reads(u32) -> u32))
+            .translation(crate::entry!(0x0040_2000, reads(u32) -> u32).1)
+            .inputs(&[Input::Of(&[0x0200_0000])])
+            .control_words(&[OTHER_THREADS])
+            .expect_stops(|_| true)
+            .setup(|e, case| {
+                e.map(0x0200_0000, 4);
+                case.words()
+            })
+            .run();
+        assert_eq!(report.first[0].what, Found::ExpectedStop, "{report}");
+    }
+
+    #[test]
+    #[should_panic(expected = "the translation given is the typed version")]
+    fn the_typed_version_can_not_be_its_own_translation() {
+        fn f(_: &mut Engine) {}
+        let same = crate::entry!(0x0040_2000, f());
+        let _ = Diff::new(same).translation(same.1);
+    }
+
+    /// With no `.translation`, the one registered at the address; the same check holds.
+    #[test]
+    #[should_panic(expected = "is the typed version")]
+    fn a_setup_can_not_register_the_typed_version_as_the_translation() {
+        fn f(_: &mut Engine) {}
+        let same = crate::entry!(0x0040_2000, f());
+        let _ = Diff::new(same)
+            .control_words(&[OTHER_THREADS])
+            .setup(move |e, _| {
+                e.register(same.0, same.1);
+                vec![]
+            })
+            .run();
+    }
+
+    // ---- A non-leaf: a caller whose translation calls a leaf plainly, in two families ------
+
+    const CALLER_ID: FamilyId = FamilyId::new(14);
+    const LEAF_ID: FamilyId = FamilyId::new(15);
+    const LEAF: u32 = 0x0040_2300;
+
+    /// The leaf, translated and typed. It reads a field and stores a count, so a call that goes wrong
+    /// shows in memory as well as in its answer.
+    fn leaf_translated(e: &mut Engine, p: Ptr) -> u32 {
+        let n = e.mem.u32(p.addr() + 4);
+        e.mem.set_u32(p.addr() + 8, n + 1);
+        n
+    }
+    fn leaf_typed(e: &mut Engine, p: Ptr) -> u32 {
+        let n = e.mem.u32(p.addr() + 4);
+        e.mem.set_u32(p.addr() + 8, n + 1);
+        n
+    }
+    /// A leaf of its family that answers wrong.
+    fn leaf_wrong(e: &mut Engine, p: Ptr) -> u32 {
+        e.mem.u32(p.addr() + 4) + 1
+    }
+
+    static LEAF_FAMILY: Family = Family {
+        name: "diff_test_leaf",
+        id: LEAF_ID,
+        past_gate: false,
+        threads: Threads::Both,
+        funcs: || vec![crate::entry!(0x0040_2300, leaf_typed(Ptr) -> u32)],
+    };
+
+    /// The caller as the translation has it: the leaf is in its unit, so it calls it plainly, and
+    /// another function by address.
+    fn non_leaf_translated(e: &mut Engine, p: Ptr) -> u32 {
+        let n = leaf_translated(e, p);
+        e.call(CALLEE, &[n]);
+        n + 1
+    }
+    fn caller_typed(e: &mut Engine, p: Ptr) -> u32 {
+        let n: u32 = crate::typed_call!(LEAF_ID, 0x0040_2300, leaf_typed(e, p));
+        e.call(CALLEE, &[n]);
+        n + 1
+    }
+    /// The wrong function for the address: by address the registered one runs, so only the direct
+    /// branch shows it.
+    fn caller_wrong_function(e: &mut Engine, p: Ptr) -> u32 {
+        let n: u32 = crate::typed_call!(LEAF_ID, 0x0040_2300, leaf_wrong(e, p));
+        e.call(CALLEE, &[n]);
+        n + 1
+    }
+    /// A wrong word to the leaf, with the leaf's own effect showing it.
+    fn caller_wrong_word(e: &mut Engine, p: Ptr) -> u32 {
+        let wrong = Ptr::new(p.addr() + 16);
+        let n: u32 = crate::typed_call!(LEAF_ID, 0x0040_2300, leaf_typed(e, wrong));
+        e.call(CALLEE, &[n]);
+        n + 1
+    }
+    /// A wrong word to the callee the translation calls by address.
+    fn caller_wrong_callee_word(e: &mut Engine, p: Ptr) -> u32 {
+        let n: u32 = crate::typed_call!(LEAF_ID, 0x0040_2300, leaf_typed(e, p));
+        e.call(CALLEE, &[n + 1]);
+        n + 1
+    }
+
+    static CALLER_FAMILY: Family = Family {
+        name: "diff_test_caller",
+        id: CALLER_ID,
+        past_gate: false,
+        threads: Threads::Both,
+        funcs: || vec![crate::entry!(0x0040_2310, caller_typed(Ptr) -> u32)],
+    };
+
+    fn diff_of_non_leaf(typed: (u32, AbiFn)) -> Diff {
+        Diff::new(typed)
+            .translation(crate::entry!(0x0040_2310, non_leaf_translated(Ptr) -> u32).1)
+            .family(&CALLER_FAMILY)
+            .family(&LEAF_FAMILY)
+            .translation_calls_plainly(&[LEAF])
+            .inputs(&[Input::Of(&[3, 0xffff])])
+            .setup(|e, case| {
+                // In this crate's tests nothing assembles the leaf's translation, so the setup
+                // registers it, as a part crate's engine would have it already.
+                let (leaf, f) = crate::entry!(0x0040_2300, leaf_translated(Ptr) -> u32);
+                e.register(leaf, f);
+                e.register(CALLEE, |_, _| Ret::default());
+                let p = e.mem.alloc(0x20);
+                e.mem.set_u32(p + 4, case.word(0));
+                vec![p]
+            })
+    }
+
+    /// The whole path of a non-leaf function through the harness. `--nocapture` prints each report.
+    #[test]
+    fn a_non_leaf_caller_in_two_families_passes_when_right_and_fails_when_wrong() {
+        let show = |name: &str, report: &Report| eprintln!("{name}: {report}");
+        // Right: the plain call in the translation is dropped from the typed side only, and the two
+        // typed runs agree call for call, with the leaf call direct on the third run.
+        let right = diff_of_non_leaf(crate::entry!(0x0040_2310, caller_typed(Ptr) -> u32)).run();
+        show("right", &right);
+        right.assert_same();
+        assert_eq!(right.runs, 4);
+        if cfg!(debug_assertions) {
+            assert_eq!(right.direct_runs, 4);
+            assert_eq!(right.direct_calls, 4, "the leaf, once a run");
+        }
+
+        // Without saying the translation calls it plainly: the typed side has a call the translation
+        // hasn't.
+        let unsaid = Diff::new(crate::entry!(0x0040_2310, caller_typed(Ptr) -> u32))
+            .translation(crate::entry!(0x0040_2310, non_leaf_translated(Ptr) -> u32).1)
+            .family(&CALLER_FAMILY)
+            .family(&LEAF_FAMILY)
+            .inputs(&[Input::Of(&[3])])
+            .control_words(&[OTHER_THREADS])
+            .setup(|e, case| {
+                let (leaf, f) = crate::entry!(0x0040_2300, leaf_translated(Ptr) -> u32);
+                e.register(leaf, f);
+                e.register(CALLEE, |_, _| Ret::default());
+                let p = e.mem.alloc(0x20);
+                e.mem.set_u32(p + 4, case.word(0));
+                vec![p]
+            })
+            .run();
+        show("unsaid", &unsaid);
+        assert!(
+            unsaid.first.iter().any(|d| matches!(
+                &d.what,
+                Found::Call { at: 1, translation: Some((addr, _)), typed: Some((leaf, _)) }
+                    if *addr == CALLEE && *leaf == LEAF
+            )),
+            "{unsaid}"
+        );
+
+        // The wrong function: only the direct branch runs it.
+        let wrong =
+            diff_of_non_leaf(crate::entry!(0x0040_2310, caller_wrong_function(Ptr) -> u32)).run();
+        show("wrong function", &wrong);
+        if cfg!(debug_assertions) {
+            assert!(!wrong.is_same());
+            assert!(wrong.first.iter().all(|d| d.branch == Branch::Direct));
+        }
+
+        // A wrong word to the leaf: its word isn't compared, what it did is.
+        let wrong =
+            diff_of_non_leaf(crate::entry!(0x0040_2310, caller_wrong_word(Ptr) -> u32)).run();
+        show("wrong word to the leaf", &wrong);
+        assert!(wrong
+            .first
+            .iter()
+            .any(|d| d.branch == Branch::ByAddress && matches!(d.what, Found::Memory { .. })));
+
+        // A wrong word to the callee the translation calls by address.
+        let wrong =
+            diff_of_non_leaf(crate::entry!(0x0040_2310, caller_wrong_callee_word(Ptr) -> u32))
+                .run();
+        show("wrong word to the callee", &wrong);
+        assert!(wrong
+            .first
+            .iter()
+            .any(|d| d.branch == Branch::ByAddress && matches!(d.what, Found::Call { at: 1, .. })));
+    }
+
+    /// A caller in one family into a leaf in another, with only the caller's family named: by
+    /// address, no finding, and the report says nothing went direct. Naming the leaf's family as
+    /// well sends it direct.
+    #[test]
+    fn a_family_not_named_goes_by_address_and_naming_it_goes_direct() {
+        let diff = Diff::new(crate::entry!(0x0040_2310, caller_typed(Ptr) -> u32))
+            .translation(crate::entry!(0x0040_2310, non_leaf_translated(Ptr) -> u32).1)
+            .family(&CALLER_FAMILY)
+            .translation_calls_plainly(&[LEAF])
+            .inputs(&[Input::Of(&[3])])
+            .control_words(&[OTHER_THREADS])
+            .setup(|e, case| {
+                let (leaf, f) = crate::entry!(0x0040_2300, leaf_translated(Ptr) -> u32);
+                e.register(leaf, f);
+                e.register(CALLEE, |_, _| Ret::default());
+                let p = e.mem.alloc(0x20);
+                e.mem.set_u32(p + 4, case.word(0));
+                vec![p]
+            });
+        let report = diff.run();
+        report.assert_same();
+        assert_eq!(report.direct_calls, 0);
+        let report = diff.family(&LEAF_FAMILY).run();
+        report.assert_same();
+        assert_eq!(report.direct_calls, usize::from(cfg!(debug_assertions)));
+    }
+
+    /// `translation_calls_plainly` drops the typed side only: the translation logging the call
+    /// (it isn't plain after all) still differs when the typed version doesn't make it.
+    #[test]
+    fn translation_calls_plainly_drops_the_typed_side_only() {
+        fn calls_by_address(e: &mut Engine) {
+            e.call(CALLEE, &[1]);
+        }
+        fn does_not(_: &mut Engine) {}
+        let report = Diff::new(crate::entry!(0x0040_2000, does_not()))
+            .translation(crate::entry!(0x0040_2000, calls_by_address()).1)
+            .translation_calls_plainly(&[CALLEE])
+            .control_words(&[OTHER_THREADS])
+            .setup(|e, _| {
+                e.register(CALLEE, |_, _| Ret::default());
+                vec![]
+            })
+            .run();
+        assert_eq!(report.found, 1, "{report}");
+        assert!(matches!(report.first[0].what, Found::Call { .. }));
+    }
+
+    #[test]
+    #[should_panic(expected = "00aa4ee0 is overridable")]
+    fn translation_calls_plainly_refuses_an_overridable_address() {
+        fn f(_: &mut Engine) {}
+        let _ =
+            Diff::new(crate::entry!(0x0040_2000, f())).translation_calls_plainly(&[0x00aa_4ee0]);
+    }
+
+    /// A double over a callee the translation reaches plainly runs on the typed side only.
+    #[test]
+    #[should_panic(expected = "the setup replaced what is registered at 00402100")]
+    fn a_double_over_a_plain_callee_is_refused() {
+        fn f(_: &mut Engine) {}
+        let _ = Diff::new(crate::entry!(0x0040_2000, f()))
+            .translation(|_, _| Ret::default())
+            .translation_calls_plainly(&[CALLEE])
+            .control_words(&[OTHER_THREADS])
+            .setup(|e, _| {
+                e.register_double(CALLEE, |_, _| Ret::default());
+                vec![]
+            })
+            .run();
+    }
+
+    /// A double over a family's member: the typed runs would replace it.
+    #[test]
+    #[should_panic(expected = "the setup replaced what is registered at 00402200")]
+    fn a_double_over_a_family_member_is_refused() {
+        fn f(_: &mut Engine) {}
+        let _ = Diff::new(crate::entry!(0x0040_2000, f()))
+            .translation(|_, _| Ret::default())
+            .family(&FAMILY)
+            .control_words(&[OTHER_THREADS])
+            .setup(|e, _| {
+                e.register_double(MEMBER, |_, _| Ret::default());
+                vec![]
+            })
+            .run();
+    }
+
+    // ---- A local that reaches a call, where the frames differ ---------------------------------
+
+    /// A translation's shared frame with an out parameter inside it, as the exe's stack layout has it.
+    fn shared_frame(e: &mut Engine) -> u32 {
+        e.with_stack(0x30, |e, frame| {
+            e.mem.set_u32(frame.addr(), 0x1234);
+            let out = frame.addr() + 0x10;
+            e.call(CALLEE, &[out]);
+            e.mem.u32(out)
+        })
+    }
+    /// The typed version: the sibling local is native, the out parameter its own four bytes.
+    fn own_frame(e: &mut Engine) -> u32 {
+        e.with_stack(4, |e, out| {
+            e.call(CALLEE, &[out.addr()]);
+            e.mem.u32(out.addr())
+        })
+    }
+    fn callee_writes_out(e: &mut Engine, a: &[u32]) -> Ret {
+        e.mem.set_u32(a[0], 77);
+        Ret::default()
+    }
+
+    fn diff_of_frames(typed: (u32, AbiFn)) -> Diff {
+        Diff::new(typed)
+            .translation(crate::entry!(0x0040_2000, shared_frame() -> u32).1)
+            .control_words(&[OTHER_THREADS])
+            .setup(|e, _| {
+                e.register(CALLEE, callee_writes_out);
+                vec![]
+            })
+    }
+
+    #[test]
+    fn a_shrunk_frame_needs_local_at_to_pass() {
+        let exact = diff_of_frames(crate::entry!(0x0040_2000, own_frame() -> u32)).run();
+        assert_eq!(exact.found, 1, "{exact}");
+        assert!(matches!(exact.first[0].what, Found::Call { at: 1, .. }));
+        let loose = diff_of_frames(crate::entry!(0x0040_2000, own_frame() -> u32))
+            .local_at(CALLEE, 0, 4)
+            .run();
+        loose.assert_same();
+    }
+
+    /// The looser form still compares the local's own bytes and which local it is.
+    #[test]
+    fn local_at_still_compares_contents_and_identity() {
+        fn wrong_contents(e: &mut Engine) -> u32 {
+            e.with_stack(4, |e, out| {
+                e.mem.set_u32(out.addr(), 1);
+                e.call(CALLEE, &[out.addr()]);
+                e.mem.u32(out.addr())
+            })
+        }
+        let report = diff_of_frames(crate::entry!(0x0040_2000, wrong_contents() -> u32))
+            .local_at(CALLEE, 0, 4)
+            .run();
+        assert_eq!(report.found, 1, "{report}");
+
+        // The same local twice, against two locals with the same contents.
+        fn same_local(e: &mut Engine) {
+            e.with_stack(8, |e, a| {
+                e.call(CALLEE, &[a.addr()]);
+                e.call(CALLEE, &[a.addr()]);
+            });
+        }
+        fn two_locals(e: &mut Engine) {
+            e.with_stack(8, |e, a| {
+                e.with_stack(8, |e, b| {
+                    e.call(CALLEE, &[a.addr()]);
+                    e.call(CALLEE, &[b.addr()]);
+                });
+            });
+        }
+        let report = Diff::new(crate::entry!(0x0040_2000, two_locals()))
+            .translation(crate::entry!(0x0040_2000, same_local()).1)
+            .control_words(&[OTHER_THREADS])
+            .local_at(CALLEE, 0, 8)
+            .setup(|e, _| {
+                e.register(CALLEE, |_, _| Ret::default());
+                vec![]
+            })
+            .run();
+        assert_eq!(report.found, 1, "{report}");
+        let Found::Call {
+            at: 2,
+            translation: Some((_, a)),
+            typed: Some((_, b)),
+        } = &report.first[0].what
+        else {
+            panic!("{report}");
+        };
+        assert!(matches!(a[0], Word::Local { ordinal: 1, .. }));
+        assert!(matches!(b[0], Word::Local { ordinal: 2, .. }));
+    }
+
+    /// A stack address stored in memory or behind a stack word compares by value, so it fails where
+    /// the frames differ; `local_at` lets it through as "some stack address".
+    #[test]
+    fn a_stored_stack_address_fails_on_different_frames_unless_local_at() {
+        fn deeper(e: &mut Engine, p: Ptr) {
+            e.with_stack(0x20, |e, _| stores(e, p));
+        }
+        fn stores(e: &mut Engine, p: Ptr) {
+            e.with_stack(8, |e, local| {
+                e.mem.set_u32(p.addr(), local.addr());
+                e.call(CALLEE, &[local.addr()]);
+                e.mem.set_u32(p.addr(), 0);
+            });
+        }
+        let diff = || {
+            Diff::new(crate::entry!(0x0040_2000, stores(Ptr)))
+                .translation(crate::entry!(0x0040_2000, deeper(Ptr)).1)
+                .inputs(&[Input::Flag])
+                .control_words(&[OTHER_THREADS])
+                .setup(|e, _| {
+                    e.register(CALLEE, |_, _| Ret::default());
+                    vec![e.mem.alloc(8)]
+                })
+        };
+        let report = diff().run();
+        assert!(
+            report
+                .first
+                .iter()
+                .any(|d| matches!(d.what, Found::BeforeCall { memory: true, .. })),
+            "{report}"
+        );
+        diff().local_at(CALLEE, 0, 8).run().assert_same();
+    }
+
+    // ---- The rest ------------------------------------------------------------------------
+
+    /// A family's row picks the control words, and the report says which ran. Only this function's
+    /// family counts, and a test can still ask for others.
+    #[test]
+    fn a_familys_threads_row_picks_the_control_words() {
+        fn as_on_the_main_thread(_: &mut Engine) -> u32 {
+            1
+        }
+        fn depends_on_the_word(_: &mut Engine) -> u32 {
+            u32::from(crate::x87::control_word() != MAIN_THREAD) + 1
+        }
+        static MAIN_ONLY: Family = Family {
+            name: "diff_test_main_only",
+            id: FamilyId::new(16),
+            past_gate: false,
+            threads: Threads::Main,
+            funcs: || vec![crate::entry!(0x0040_2000, as_on_the_main_thread() -> u32)],
+        };
+        let diff = || {
+            Diff::new(crate::entry!(0x0040_2000, as_on_the_main_thread() -> u32))
+                .translation(crate::entry!(0x0040_2000, depends_on_the_word() -> u32).1)
+        };
+        let both = diff().run();
+        assert_eq!(both.control_words, [OTHER_THREADS, MAIN_THREAD]);
+        assert_eq!(both.found, 1, "the other threads' word differs: {both}");
+        let main = diff().family(&MAIN_ONLY).run();
+        assert_eq!(main.control_words, [MAIN_THREAD]);
+        main.assert_same();
+        assert!(main.to_string().contains("007f"), "{main}");
+        let asked = diff()
+            .family(&MAIN_ONLY)
+            .control_words(&[OTHER_THREADS])
+            .run();
+        assert_eq!(asked.found, 1, "{asked}");
+    }
+
+    #[test]
+    fn a_clock_step_moved_across_a_call_is_caught() {
+        fn step_then_call(e: &mut Engine) {
+            e.advance_clock_us(1500);
+            e.call(CALLEE, &[]);
+        }
+        fn call_then_step(e: &mut Engine) {
+            e.call(CALLEE, &[]);
+            e.advance_clock_us(1500);
+        }
+        let report = Diff::new(crate::entry!(0x0040_2000, call_then_step()))
+            .translation(crate::entry!(0x0040_2000, step_then_call()).1)
+            .control_words(&[OTHER_THREADS])
+            .setup(|e, _| {
+                e.register(CALLEE, |_, _| Ret::default());
+                vec![]
+            })
+            .run();
+        assert_eq!(report.found, 1, "the end is the same: {report}");
+        assert_eq!(
+            report.first[0].what,
+            Found::BeforeCall {
+                at: 1,
+                addr: CALLEE,
+                memory: false,
+                clock: true
+            }
+        );
+    }
+
+    /// `stack_bytes` sets how far behind a word contents compare.
+    #[test]
+    fn stack_bytes_sets_how_far_contents_compare() {
+        fn second_word(e: &mut Engine, value: u32) {
+            e.with_stack(16, |e, local| {
+                e.mem.set_u32(local.addr() + 8, value);
+                e.call(CALLEE, &[local.addr()]);
+            });
+        }
+        fn one(e: &mut Engine) {
+            second_word(e, 1);
+        }
+        fn two(e: &mut Engine) {
+            second_word(e, 2);
+        }
+        let diff = || {
+            Diff::new(crate::entry!(0x0040_2000, two()))
+                .translation(crate::entry!(0x0040_2000, one()).1)
+                .control_words(&[OTHER_THREADS])
+                .setup(|e, _| {
+                    e.register(CALLEE, |_, _| Ret::default());
+                    vec![]
+                })
+        };
+        assert_eq!(diff().run().found, 1);
+        assert_eq!(diff().stack_bytes(12).run().found, 1);
+        diff().stack_bytes(8).run().assert_same();
+        diff().stack_bytes(0).run().assert_same();
+    }
+
+    /// A word on the stack outside every live frame: frame 0, counted from the stack's end.
+    #[test]
+    fn a_stale_stack_word_compares_from_the_stacks_end() {
+        fn stale(e: &mut Engine, back: u32) {
+            let gone = e.with_stack(8, |_, local| local.addr());
+            e.call(CALLEE, &[gone - back]);
+        }
+        fn right(e: &mut Engine) {
+            stale(e, 0);
+        }
+        fn wrong(e: &mut Engine) {
+            stale(e, 4);
+        }
+        let run = |typed: (u32, AbiFn)| {
+            Diff::new(typed)
+                .translation(crate::entry!(0x0040_2000, right()).1)
+                .control_words(&[OTHER_THREADS])
+                .setup(|e, _| {
+                    e.register(CALLEE, |_, _| Ret::default());
+                    vec![]
+                })
+                .run()
+        };
+        run(crate::entry!(0x0040_2000, right())).assert_same();
+        let report = run(crate::entry!(0x0040_2000, wrong()));
+        let Found::Call {
+            typed: Some((_, typed)),
+            translation: Some((_, translation)),
+            ..
+        } = &report.first[0].what
+        else {
+            panic!("{report}");
+        };
+        let (
+            Word::Stack {
+                offset: a,
+                frame: 0,
+                ..
+            },
+            Word::Stack {
+                offset: b,
+                frame: 0,
+                ..
+            },
+        ) = (typed[0], translation[0])
+        else {
+            panic!("{report}");
+        };
+        assert_eq!(a, b + 4);
+    }
+
+    /// A thrown object's bytes stop at its frame: what lies past it is the frame gap, never zeroed.
+    #[test]
+    fn a_thrown_objects_bytes_stop_at_its_frame() {
+        fn throw_from(e: &mut Engine, gap: u32) {
+            e.with_stack(16, |e, local| {
+                // Past the local, in the gap above it.
+                e.mem.set_u32(local.addr() + 20, gap);
+                std::panic::resume_unwind(Box::new(Thrown {
+                    object: local.addr(),
+                    throw_info: 0x0101_0000,
+                }));
+            });
+        }
+        fn one(e: &mut Engine) {
+            throw_from(e, 1);
+        }
+        fn two(e: &mut Engine) {
+            throw_from(e, 2);
+        }
+        let report = Diff::new(crate::entry!(0x0040_2000, two()))
+            .translation(crate::entry!(0x0040_2000, one()).1)
+            .control_words(&[OTHER_THREADS])
+            .expect_stops(|_| true)
             .run();
         report.assert_same();
     }

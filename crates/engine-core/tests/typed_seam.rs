@@ -5,7 +5,7 @@
 
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Diff, Input};
-use engine_core::typed::{provide, Family};
+use engine_core::typed::{provide, Family, Threads};
 
 engine_core::assemble!();
 
@@ -26,6 +26,7 @@ static ABOVE: Family = Family {
     name: "above_the_core",
     id: FAMILY,
     past_gate: true,
+    threads: Threads::Both,
     funcs: || vec![entry!(0x00ff_1000, leaf(u32) -> u32)],
 };
 

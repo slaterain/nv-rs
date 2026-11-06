@@ -11,8 +11,9 @@
 //! - **[`apply`]** runs at the end of [`Engine::new`], after every registration: it registers each
 //!   family that is on over the translation, with [`Engine::register`].
 //! - **[`typed_call!`](crate::typed_call)** is a call between typed functions: a Rust call when
-//!   the family's direct flag is set ([`Engine::typed_direct`]), else a call by address. By
-//!   address is always right; the flag only decides what is fastest.
+//!   the family's direct flag is set ([`Engine::typed_direct`]), else a call by address. The two
+//!   agree but for one thing: an `f32` result by address goes through the uniform form's `f64`,
+//!   which quiets a signalling NaN (as the exe's `FLD` does), and a direct one keeps its bits.
 //! - **The direct flag** is per engine (two engines in one test process can differ, and doubles
 //!   and diagnostics belong to one engine). It is clear while [`Engine`] has any per-call
 //!   diagnostic on, so a trace, a hook or a profile sees every call, and for good on a family once
@@ -58,6 +59,37 @@ impl FamilyId {
     }
 }
 
+/// The control word of the main thread once Direct3D has made its device: 24-bit precision.
+pub const MAIN_THREAD: u16 = 0x007f;
+/// The control word of the other threads, and of the main thread before that: 53-bit precision.
+pub const OTHER_THREADS: u16 = crate::x87::DEFAULT_CONTROL_WORD;
+
+/// Which threads a family runs on, as the float rule needs it (ADR-0014, point 7): main-thread-only
+/// code computes in plain `f32`, which matches the exe only at the main thread's 24-bit precision;
+/// other threads' code, or code on both, computes in `f64` locals rounded at each `float` store. The
+/// differential test runs a family under this row's control words, so what a family claims is
+/// stated once, here. Which threads really run it comes from the per-thread call counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Threads {
+    /// Both control words: anything that isn't known to be one or the other.
+    Both,
+    /// The main thread only.
+    Main,
+    /// The other threads only.
+    Other,
+}
+
+impl Threads {
+    /// The control words this runs under.
+    pub const fn control_words(self) -> &'static [u16] {
+        match self {
+            Threads::Both => &[OTHER_THREADS, MAIN_THREAD],
+            Threads::Main => &[MAIN_THREAD],
+            Threads::Other => &[OTHER_THREADS],
+        }
+    }
+}
+
 /// One row of the family table.
 pub struct Family {
     /// What `NV_TYPED` calls it.
@@ -65,6 +97,8 @@ pub struct Family {
     pub id: FamilyId,
     /// Past its gate (the checks of its step passed): on unless the switch says otherwise.
     pub past_gate: bool,
+    /// The threads it runs on ([`Threads`]).
+    pub threads: Threads,
     /// The typed functions by exe address, in the form of a unit's `funcs()`.
     pub funcs: fn() -> Vec<(u32, AbiFn)>,
 }
@@ -199,6 +233,8 @@ pub(crate) struct State {
     /// The differential test's direct run: every `typed_call!` goes direct with the call log on,
     /// and notes itself in the log ([`Engine::typed_note_direct`]).
     forced: bool,
+    /// [`Engine::typed_note_direct`] is running: the call hook is seeing a direct call.
+    noting: bool,
     /// The differential test keeps `with_stack` frames in [`Engine::stack_frames`], to read a stack
     /// word as an offset into its frame.
     #[cfg(any(test, feature = "test-support"))]
@@ -252,16 +288,19 @@ impl Engine {
     /// past an override, and one at an address in no family would never see one.
     #[inline(never)]
     fn typed_direct_checked(&self, family: FamilyId, addr: u32) -> bool {
-        let member = self.typed.members.get(&addr).copied();
-        if member != Some(family.bit()) {
-            panic!(
-                "typed_call! at {addr:08x} names {family:?}, but the address is {} (say the \
-                 family with `Diff::family` in a differential test)",
-                match member {
-                    Some(bit) => format!("in the family with bit {bit:#x}"),
-                    None => "in no family that is on".to_string(),
-                }
-            );
+        match self.typed.members.get(&addr).copied() {
+            Some(bit) if bit == family.bit() => {}
+            // The differential test's direct run, for a family the test doesn't name: by address,
+            // as a play run with that family off goes.
+            None if self.typed.forced => return false,
+            Some(bit) => panic!(
+                "typed_call! at {addr:08x} names {family:?}, but the address is in the family \
+                 with bit {bit:#x}"
+            ),
+            None => panic!(
+                "typed_call! at {addr:08x} names {family:?}, but the address is in no family \
+                 that is on"
+            ),
         }
         self.typed.forced || !self.diagnosing()
     }
@@ -283,13 +322,21 @@ impl Engine {
             log.push((addr, words.to_vec()));
         }
         if let Some(hook) = self.call_hook {
+            self.typed.noting = true;
             hook(self, addr, false);
+            self.typed.noting = false;
         }
     }
 
-    /// The differential test's direct run: from here on every `typed_call!` goes direct, whatever
-    /// the family, with the diagnostics on. A family that doesn't hold the address stops
-    /// ([`Engine::typed_direct_checked`]).
+    /// Whether the call the hook is seeing is a direct one.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn typed_noted_direct(&self) -> bool {
+        self.typed.noting
+    }
+
+    /// The differential test's direct run: from here on a `typed_call!` goes direct when its address
+    /// is in the family it names, with the diagnostics on. An address in no family goes by address,
+    /// and one in another family stops ([`Engine::typed_direct_checked`]).
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn typed_force_direct(&mut self) {
         self.typed.forced = true;
@@ -388,7 +435,8 @@ pub(crate) fn apply_families(e: &mut Engine, families: &[&Family], spec: Option<
 /// `&mut Engine` in scope and `ADDR` the exe address `f` is registered at. A Rust call when the
 /// family's direct flag is set, else [`Engine::call`] with the same words; the result has `f`'s
 /// type either way. The arguments are evaluated once, first, in order, so they may read through
-/// `e`, and their types are `Copy`, as every argument type is.
+/// `e`, and their types are `Copy`, as every argument type is. The branches agree but for a signalling
+/// NaN in an `f32` result, which only the by-address branch quiets.
 ///
 /// Nothing here can check that `ADDR` is `f`'s address at compile time. The repository's hygiene
 /// test does: the literal has to be registered under that name. A test build also stops when `ADDR`
@@ -450,12 +498,14 @@ mod tests {
         name: "stand_in",
         id: FAMILY,
         past_gate: false,
+        threads: Threads::Both,
         funcs,
     };
     static PAST_GATE: Family = Family {
         name: "past_gate",
         id: FamilyId::new(4),
         past_gate: true,
+        threads: Threads::Both,
         funcs: || vec![],
     };
 
@@ -774,6 +824,53 @@ mod tests {
         assert!(why.contains("in no family that is on"), "{why}");
     }
 
+    /// The differential test's direct run: an address in the named family goes direct, one in no
+    /// family by address, and one in another family stops.
+    #[test]
+    fn the_direct_run_goes_by_address_outside_every_family() {
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        let mut e = engine(plain());
+        apply_families(&mut e, &[&STAND_IN, &PAST_GATE], Some("stand_in"));
+        e.typed_force_direct();
+        assert!(e.typed_direct(FAMILY, LEAF));
+        assert!(!e.typed_direct(FAMILY, OTHER));
+        const OTHER_FAMILY: FamilyId = FamilyId::new(4);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.typed_direct(OTHER_FAMILY, LEAF)
+        }));
+        assert!(stopped.is_err());
+    }
+
+    /// What the two branches of a `typed_call!` do with a signalling NaN in an `f32` result: the
+    /// docs say they differ, and this is the difference.
+    #[test]
+    fn an_f32_result_by_address_quiets_a_signalling_nan() {
+        fn signalling(_: &mut Engine) -> f32 {
+            f32::from_bits(0x7f80_0001)
+        }
+        const ADDR: u32 = 0x0040_1060;
+        let run = |e: &mut Engine| -> f32 { crate::typed_call!(FAMILY, ADDR, signalling(e)) };
+        let mut by_address = Engine::new_untyped();
+        let (addr, f) = crate::entry!(0x0040_1060, signalling() -> f32);
+        by_address.register(addr, f);
+        assert_eq!(run(&mut by_address).to_bits(), 0x7fc0_0001);
+        let mut direct = Engine::new_untyped();
+        direct.typed.members.insert(ADDR, FAMILY.bit());
+        direct.typed.allowed = FAMILY.bit();
+        direct.typed_sync();
+        assert_eq!(run(&mut direct).to_bits(), 0x7f80_0001);
+    }
+
+    #[test]
+    fn a_family_states_its_control_words_once() {
+        assert_eq!(Threads::Both.control_words(), [OTHER_THREADS, MAIN_THREAD]);
+        assert_eq!(Threads::Main.control_words(), [MAIN_THREAD]);
+        assert_eq!(Threads::Other.control_words(), [OTHER_THREADS]);
+        assert_eq!(MAIN_THREAD, 0x007f);
+    }
+
     /// A clash in the table stops every start, whichever families the switch has on.
     #[test]
     fn a_number_or_name_used_twice_in_the_table_stops_the_start() {
@@ -781,12 +878,14 @@ mod tests {
             name: "same_id",
             id: FAMILY,
             past_gate: false,
+            threads: Threads::Both,
             funcs: || vec![],
         };
         static SAME_NAME: Family = Family {
             name: "stand_in",
             id: FamilyId::new(9),
             past_gate: false,
+            threads: Threads::Both,
             funcs: || vec![],
         };
         assert!(check_table(&[&STAND_IN, &PAST_GATE]).is_ok());
@@ -841,6 +940,7 @@ mod tests {
             name: "twin",
             id: FamilyId::new(5),
             past_gate: true,
+            threads: Threads::Both,
             funcs,
         };
         let mut e = engine(plain());
@@ -859,6 +959,7 @@ mod tests {
             name: "provided_above",
             id: FamilyId::new(30),
             past_gate: false,
+            threads: Threads::Both,
             funcs: || vec![],
         };
         provide(&ABOVE);
@@ -880,12 +981,14 @@ mod tests {
             name: "clash_first",
             id: FamilyId::new(29),
             past_gate: false,
+            threads: Threads::Both,
             funcs: || vec![],
         };
         static SECOND: Family = Family {
             name: "clash_second",
             id: FamilyId::new(29),
             past_gate: false,
+            threads: Threads::Both,
             funcs: || vec![],
         };
         provide(&FIRST);
@@ -975,6 +1078,7 @@ mod tests {
             name: "child_family",
             id: FamilyId::new(6),
             past_gate: false,
+            threads: Threads::Both,
             funcs: || vec![crate::entry!(0x00ff_0000, typed_leaf(u32) -> u32)],
         };
         provide(&CHILD);

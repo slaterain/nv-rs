@@ -951,6 +951,16 @@ impl Engine {
         }
     }
 
+    /// What is registered at `addr`, as (its identity, it is a double that may keep state): the
+    /// differential test checks what a setup replaced.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn registered_identity(&self, addr: u32) -> Option<(usize, bool)> {
+        self.funcs.get(&addr).map(|f| match f {
+            Callable::Abi(f) => (*f as usize, false),
+            Callable::Double(d) => (Rc::as_ptr(d).cast::<()>() as usize, true),
+        })
+    }
+
     /// The running thread's stack for `with_stack` locals as (lowest address, end), once made.
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn guest_stack_region(&self) -> Option<(u32, u32)> {
