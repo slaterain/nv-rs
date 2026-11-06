@@ -352,10 +352,10 @@ impl Diff {
     }
 
     fn compare(&self, case: &Case, word: u16, report: &mut Report) {
-        let ours = self.side(case, word, self.translation);
-        let theirs = self.side(case, word, Some(self.typed));
+        let translation = self.side(case, word, self.translation);
+        let typed = self.side(case, word, Some(self.typed));
         assert_eq!(
-            ours.words, theirs.words,
+            translation.words, typed.words,
             "the setup gave the two engines different call words: it must do the same on both"
         );
         let mut found = |what: Found| {
@@ -368,47 +368,46 @@ impl Diff {
                 });
             }
         };
-        if ours.stop != theirs.stop {
+        if translation.stop != typed.stop {
             found(Found::Stop {
-                translation: ours.stop.clone(),
-                typed: theirs.stop.clone(),
+                translation: translation.stop.clone(),
+                typed: typed.stop.clone(),
             });
         }
-        if !same_ret(&ours.ret, &theirs.ret) {
+        if !same_ret(&translation.ret, &typed.ret) {
             found(Found::Return {
-                translation: ours.ret,
-                typed: theirs.ret,
+                translation: translation.ret,
+                typed: typed.ret,
             });
         }
-        let (ours_calls, theirs_calls) = (ours.calls(&self.ignored_calls), {
-            theirs.calls(&self.ignored_calls)
-        });
-        if ours_calls != theirs_calls {
-            let at = ours_calls
+        let translation_calls = translation.calls(&self.ignored_calls);
+        let typed_calls = typed.calls(&self.ignored_calls);
+        if translation_calls != typed_calls {
+            let at = translation_calls
                 .iter()
-                .zip(&theirs_calls)
+                .zip(&typed_calls)
                 .position(|(a, b)| a != b)
-                .unwrap_or(ours_calls.len().min(theirs_calls.len()));
+                .unwrap_or(translation_calls.len().min(typed_calls.len()));
             found(Found::Call {
                 at,
-                translation: ours_calls.get(at).cloned(),
-                typed: theirs_calls.get(at).cloned(),
+                translation: translation_calls.get(at).cloned(),
+                typed: typed_calls.get(at).cloned(),
             });
         }
-        if ours.control_word != theirs.control_word {
+        if translation.control_word != typed.control_word {
             found(Found::ControlWord {
-                translation: ours.control_word,
-                typed: theirs.control_word,
+                translation: translation.control_word,
+                typed: typed.control_word,
             });
         }
-        let (ours_heap, theirs_heap) = (ours.heap(), theirs.heap());
-        if ours_heap != theirs_heap {
+        let (translation_heap, typed_heap) = (translation.heap(), typed.heap());
+        if translation_heap != typed_heap {
             found(Found::Heap {
-                translation: ours_heap,
-                typed: theirs_heap,
+                translation: translation_heap,
+                typed: typed_heap,
             });
         }
-        compare_memory(&ours, &theirs, &mut found);
+        compare_memory(&translation, &typed, &mut found);
     }
 
     /// One engine's run of the case.
@@ -507,19 +506,19 @@ impl Side {
 
 /// Reports the bytes that differ between the two engines' memories, a run of them at a time,
 /// outside the stack for locals, and the pages only one has.
-fn compare_memory(ours: &Side, theirs: &Side, found: &mut impl FnMut(Found)) {
-    let (a, b) = (&ours.engine.mem, &theirs.engine.mem);
+fn compare_memory(translation: &Side, typed: &Side, found: &mut impl FnMut(Found)) {
+    let (a, b) = (&translation.engine.mem, &typed.engine.mem);
     let (pages_a, pages_b) = (a.mapped_pages(), b.mapped_pages());
     let (mut i, mut j) = (0, 0);
     while i < pages_a.len() || j < pages_b.len() {
         match (pages_a.get(i), pages_b.get(j)) {
             (Some(&pa), Some(&pb)) if pa == pb => {
-                compare_page(pa, a.page_bytes(pa), b.page_bytes(pa), ours, found);
+                compare_page(pa, a.page_bytes(pa), b.page_bytes(pa), translation, found);
                 i += 1;
                 j += 1;
             }
             (Some(&pa), pb) if pb.map_or(true, |&pb| pa < pb) => {
-                if !ours.on_stack(pa) {
+                if !translation.on_stack(pa) {
                     found(Found::Mapped {
                         page: pa,
                         by_typed: false,
@@ -528,7 +527,7 @@ fn compare_memory(ours: &Side, theirs: &Side, found: &mut impl FnMut(Found)) {
                 i += 1;
             }
             (_, Some(&pb)) => {
-                if !ours.on_stack(pb) {
+                if !translation.on_stack(pb) {
                     found(Found::Mapped {
                         page: pb,
                         by_typed: true,

@@ -3819,7 +3819,10 @@ mod typed_rules {
         let leaf = "use super::a::hooked;\nfn t(e: &mut Engine) {\n    hooked(e);\n}\n";
         let found = findings(
             "00123450\t1\tJIP\n",
-            &[("a.rs", OWNER), ("crates/engine-core/src/typed/leaf.rs", leaf)],
+            &[
+                ("a.rs", OWNER),
+                ("crates/engine-core/src/typed/leaf.rs", leaf),
+            ],
         );
         assert!(found[0].contains("in typed code"), "{found:?}");
     }
