@@ -1544,8 +1544,10 @@ mod tests {
     #[test]
     fn the_first_converter_designs_as_the_dll_does() {
         let Some(t) = tables() else {
-            return; // no RESAMPLEDMO.DLL on this machine
+            eprintln!("SKIPPED: no RESAMPLEDMO.DLL on this machine");
+            return;
         };
+        eprintln!("RAN against RESAMPLEDMO.DLL's tables");
         let d = design(t, 44100.0, 48000.0, 0.0, true, &mut None);
         assert_eq!(
             (d.l, d.m, d.fc, d.taps, 2 * d.span + 500),
@@ -1565,8 +1567,10 @@ mod tests {
     #[test]
     fn the_first_converter_asks_for_what_the_dll_asks_for() {
         let Some(mut c) = Dmo::new(44100, 48000, 1).filter(|_| tables().is_some()) else {
+            eprintln!("SKIPPED: no RESAMPLEDMO.DLL on this machine");
             return;
         };
+        eprintln!("RAN against RESAMPLEDMO.DLL's tables");
         let x = signal(4000);
         let mut out = vec![Vec::new()];
         let mut fed = Vec::new();
@@ -1581,8 +1585,10 @@ mod tests {
     #[test]
     fn the_first_converter_gives_the_measured_samples() {
         let Some(c) = Dmo::new(44100, 48000, 1) else {
+            eprintln!("SKIPPED: no RESAMPLEDMO.DLL on this machine");
             return;
         };
+        eprintln!("RAN against RESAMPLEDMO.DLL's tables");
         let x = signal(22100);
         let out = run(Converter::Dmo(Box::new(c)), &x, 51);
         for (at, bits) in DMO_44100 {
