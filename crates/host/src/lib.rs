@@ -219,7 +219,10 @@ pub fn check_installation(data: &Path) -> Result<Vec<String>, String> {
             if layout.provided() {
                 "provided".to_string()
             } else {
-                format!("not provided: {}", engine_platform::sound_out::not_provided(layout))
+                format!(
+                    "not provided: {}",
+                    engine_platform::sound_out::not_provided(layout)
+                )
             }
         ),
     };

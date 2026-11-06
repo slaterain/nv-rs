@@ -1534,7 +1534,7 @@ mod tests {
         }
         // No block, or one whose tables aren't the curves.
         let mut file = pe_with_tables(0x40);
-        file[0x200 + 0x40 + 0xc] = 0;
+        file[0x200 + 0x40 + 0xc + 2] = 0;
         assert!(Tables::read(&file).is_none());
         let mut file = pe_with_tables(0x40);
         file[0x200 + 0x1000..0x200 + 0x1004].copy_from_slice(&f32::NAN.to_le_bytes());

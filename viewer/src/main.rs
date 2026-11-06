@@ -263,9 +263,11 @@ mod tests {
         assert_eq!(parse(&strings(&["--help"])), Ok(None));
         assert!(parse(&strings(&["--movement-probe"])).is_err());
         assert!(parse(&strings(&["--movement-missing"])).is_err());
-        assert!(parse(&strings(&["--check", "C:\Games\Data"]))
-            .unwrap()
-            .unwrap()
-            .check);
+        assert!(
+            parse(&strings(&["--check", r"C:\Games\Data"]))
+                .unwrap()
+                .unwrap()
+                .check
+        );
     }
 }

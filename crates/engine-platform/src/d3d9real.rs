@@ -2109,7 +2109,8 @@ mod shot {
         use std::io::{Read, Seek, SeekFrom};
         let mut file = std::fs::File::open(path).ok()?;
         let size = file.metadata().ok()?.len();
-        file.seek(SeekFrom::Start(size.saturating_sub(bytes))).ok()?;
+        file.seek(SeekFrom::Start(size.saturating_sub(bytes)))
+            .ok()?;
         let mut text = Vec::new();
         file.read_to_end(&mut text).ok()?;
         if size > bytes {
