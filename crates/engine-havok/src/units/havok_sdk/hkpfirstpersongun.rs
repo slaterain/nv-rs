@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn quit_gun_hands_the_world_to_the_real_reset() {
         let mut e = engine();
-        e.put_vtable(0x0900_0000, &vec![0x00e4_6ea0; 9]);
+        e.put_vtable(0x0900_0000, &[0x00e4_6ea0; 9]);
         let queue = e.mem.alloc(0x20);
         let this = e.mem.alloc(0x60);
         e.mem.set_u32(this, 0x0900_0000);
