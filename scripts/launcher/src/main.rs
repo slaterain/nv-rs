@@ -195,6 +195,20 @@ fn check_location(package: &Package) -> Result<(), Stop> {
             );
         }
     }
+    // The game's own paths (and the tools' start folder) must fit, before anything runs here.
+    let documents = package.userdata.join("game\\Documents");
+    let length = guest_bytes(&package.root).map_or(package.root.as_os_str().len(), |bytes| {
+        bytes.len() + documents.as_os_str().len() - package.root.as_os_str().len()
+    });
+    if path_too_long(length) {
+        return stop(
+            STOP_LOCATION,
+            format!(
+                "This folder's path is too long for the game:\n{}\n\nMove the whole nv-rs folder to a shorter path, for example C:\\Games\\nv-rs.",
+                package.root.display()
+            ),
+        );
+    }
     // Writable: not under Program Files without rights, not on a read-only drive.
     let test = package.root.join(".nv-rs-write-test");
     let written = std::fs::create_dir_all(&package.userdata)
