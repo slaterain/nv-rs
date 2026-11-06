@@ -1304,11 +1304,8 @@ impl PlayerMovement {
                     // thread sleeps, waits or has turns, `thread_host::describe`).
                     if std::env::var_os("NV_MOVE_THREADS").is_some() {
                         println!("threads: {}", engine::thread_host::describe(e));
-                        println!(
-                            "thread calls: {} order: {}",
-                            e.kernel.threads.calls,
-                            engine::thread_host::take_order(e)
-                        );
+                        let order = engine::thread_host::take_order(e);
+                        println!("thread calls: {} order: {order}", e.kernel.threads.calls);
                     }
                     // `NV_SAVE_OUT=DIR` (a test aid): the saves the game wrote, copied out
                     // ([`crate::save_out`]).

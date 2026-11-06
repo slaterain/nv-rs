@@ -388,8 +388,9 @@ $L scaffold "fallout/ai/processlists.cpp" # create its file (lead)
 
 The migration of [ADR-0012](adr/0012-modern-64-bit-engine.md) and
 [ADR-0014](adr/0014-typed-migration-in-two-stages.md) replaces a translation with typed, native
-Rust, a family of functions at a time. `engine_core::typed` is the seam it plugs into. No typed
-game function exists yet and the family table is empty.
+Rust, a family of functions at a time. `engine_core::typed` is the seam it plugs into. The first
+family is `leaves` (`typed/leaf.rs`): the small functions the translations call most, off until its
+speed gate passes (`NV_TYPED=leaves` tries it).
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with
@@ -417,12 +418,15 @@ the differential test read.
   function is registered at its exe address, so vtables and callback words keep exe addresses.
 - From typed code to untyped: `e.call` as ever. A local whose address reaches untyped code stays in
   `with_stack`.
-- Between typed functions: `typed_call!(FAMILY, 0x00abc123, path::f(e, a, b))`, with the address
-  written as a literal. It is a Rust call when the family's direct flag is set, else `e.call` with
-  the same words. Its callee's crate must be the caller's or one below it; a callee above stays
-  `e.call`. The hygiene test checks that the literal is registered as that function, as far as text
-  can read its path and renames, and that the function has the typed marker for that address. A test
-  build stops when the address isn't in the named family.
+- Between typed functions, or from a translation to a typed function: `typed_call!(FAMILY, 0x00abc123,
+  path::f(e, a, b))`, with the address written as a literal. It is a Rust call when the family's direct
+  flag is set, else `e.call` with the same words. Its callee's crate must be the caller's or one below
+  it; a callee above stays `e.call`. The hygiene test checks that the literal is registered as that
+  function, as far as text can read its path and renames, and that the function has the typed marker for
+  that address. A test build stops when the address isn't in the named family.
+- A typed function folded across classes takes its parameters as `impl OneWord`, so a caller passes
+  whichever it holds, a `Ptr<T>` of any class or a plain word. An empty function whose callers push words
+  it never reads takes none, and `typed_call!(FAMILY, ADDR, f(e); words a, b)` passes them by address only.
 - The two forms agree but for one thing: an `f32` result by address goes through the uniform form's
   `f64`, which quiets a signalling NaN, as the exe's `FLD` does, and a direct one keeps its bits. A
   typed function that can return one writes `.allow_nan_payloads()` in its differential test, and

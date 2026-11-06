@@ -427,7 +427,15 @@ fn ctrlfp_sign_extends_the_old_word() {
 fn load_math_control_word() {
     Diff::new(entry!(0x00ed_2795, leaf::load_math_control_word(u32)))
         .family(&leaf::LEAVES)
-        .inputs(&[Input::Of(&[0, 0x7f, 0x27f, 0x37f, 0x0e3e, 0x0c7f, u32::MAX])])
+        .inputs(&[Input::Of(&[
+            0,
+            0x7f,
+            0x27f,
+            0x37f,
+            0x0e3e,
+            0x0c7f,
+            u32::MAX,
+        ])])
         .run()
         .assert_same();
 }
