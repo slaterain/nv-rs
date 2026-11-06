@@ -2150,12 +2150,12 @@ pub fn fn_008808f0(e: &mut Engine, _this: Ptr, index: u32, _unused_1: u32) -> u3
 // Translated from 00880910 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `004bfc80` on the container changes (`00418520`) of the reference's extra
 /// data list; false when it has none.
-pub fn fn_00880910(e: &mut Engine, this: Ptr<Actor>) -> bool {
-    let mut result = false;
+pub fn fn_00880910(e: &mut Engine, this: Ptr<Actor>) -> u8 {
+    let mut result = 0;
     let list = extra_data_list(e, this);
     let changes = e.call(0x0041_8520, &args![list]).u32();
     if changes != 0 {
-        result = e.call(0x004b_fc80, &args![changes]).bool();
+        result = e.call(0x004b_fc80, &args![changes]).u8();
     }
     result
 }
@@ -2806,9 +2806,9 @@ pub fn actor_get_package_set_as_pcurrent(e: &mut Engine, this: Ptr<Actor>) -> Pt
 // Translated from 00881570 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Actor::IsRunningRunOnce` (Xbox PDB): the process's virtual `+0x35c`
 /// (the process is not checked).
-pub fn actor_is_running_run_once(e: &mut Engine, this: Ptr<Actor>) -> bool {
+pub fn actor_is_running_run_once(e: &mut Engine, this: Ptr<Actor>) -> u8 {
     let process = process_of(e, this);
-    e.vcall(process, 0x35c, &args![]).bool()
+    e.vcall(process, 0x35c, &args![]).u8()
 }
 
 // Translated from 008815a0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2822,8 +2822,8 @@ pub fn fn_008815a0(e: &mut Engine, this: Ptr<Actor>) -> Ptr {
         return Ptr::new(0);
     }
     if e.call(ANIMATION_FLAG_TEST, &args![this]).bool() {
-        let use_actor_slot =
-            !actor_is_running_run_once(e, this) || e.call(IS_FLEEING, &args![this, 0u32]).bool();
+        let use_actor_slot = actor_is_running_run_once(e, this) == 0
+            || e.call(IS_FLEEING, &args![this, 0u32]).bool();
         if use_actor_slot {
             let value = e.vcall(this.addr(), 0x42c, &args![]).u32();
             if value != 0 {
@@ -4426,7 +4426,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             actor_difficulty_level_adjust_health_modifier(Ptr<Actor>, f32, u32) -> f32
         ),
         entry!(0x008808f0, fn_008808f0(Ptr, u32, u32) -> u32),
-        entry!(0x00880910, fn_00880910(Ptr<Actor>) -> bool),
+        entry!(0x00880910, fn_00880910(Ptr<Actor>) -> u8),
         entry!(0x00880950, fn_00880950(Ptr<Actor>, u32, i32, Ptr<Actor>)),
         entry!(0x00880ad0, fn_00880ad0(Ptr<Actor>, u32, f32, Ptr<Actor>)),
         entry!(0x00880c70, fn_00880c70(Ptr<Actor>, u32, i32, Ptr<Actor>)),
@@ -4445,7 +4445,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00881510,
             actor_get_package_set_as_pcurrent(Ptr<Actor>) -> Ptr
         ),
-        entry!(0x00881570, actor_is_running_run_once(Ptr<Actor>) -> bool),
+        entry!(0x00881570, actor_is_running_run_once(Ptr<Actor>) -> u8),
         entry!(0x008815a0, fn_008815a0(Ptr<Actor>) -> Ptr),
         entry!(0x00881620, actor_set_current_target(Ptr<Actor>, u32)),
         entry!(
@@ -7430,9 +7430,9 @@ mod tests_block3 {
     fn is_running_run_once_asks_the_process() {
         let mut r = Rig::new();
         let a = r.actor;
-        assert!(!actor_is_running_run_once(&mut r.e, a));
+        assert!(actor_is_running_run_once(&mut r.e, a) == 0);
         r.vslot(PROCESS_VTABLE, 0x35c, ret(1));
-        assert!(actor_is_running_run_once(&mut r.e, a));
+        assert!(actor_is_running_run_once(&mut r.e, a) != 0);
     }
 
     #[test]
