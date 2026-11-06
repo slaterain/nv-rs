@@ -87,7 +87,8 @@ from before 2026-11-03 are of the removed viewer.
 - **The first settings:** the player's `Fallout.ini` and `FalloutPrefs.ini` copied once (read only); where
   the game's own launcher never ran, what it leaves behind: `Fallout_default.ini` and the `high.ini` preset,
   from the game's folder. `sD3DDevice` is set to this PC's card at every start, because `main` asks for
-  `FalloutNVLauncher.exe` when it differs (`004da570`); `ShellExecuteA` answers for it that nothing started.
+  `FalloutNVLauncher.exe` when it differs (`004da570`); `ShellExecuteA` answers for it that nothing started,
+  but after that the game's start-up still stops, in the renderer (a run without `sD3DDevice`): the name must match.
 - **The name:** the program is simply named `FalloutNV.exe` in the package, in `app\`: no link is needed,
   and NVIDIA's driver profile (the white orbs) and Windows' per-program sound go by the name.
 - **Mods:** `Play with mods.cmd` builds `userdata\modgame`: the game's folder as hard links (no copy,
