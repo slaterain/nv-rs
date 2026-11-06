@@ -1,6 +1,6 @@
 # ADR-0014: The typed 64-bit migration goes in two stages, per system
 
-**Status:** Accepted (maintainer, 2026-11-06). The questions under "Not decided here" stay open.
+**Status:** Accepted. The maintainer decided points 3, 6's speed gates and 7 (2026-11-06); the rest is the lead's design under ADR-0012, open to change. The questions under "Not decided here" stay open.
 **Date:** 2026-11-06
 **Extends:** [ADR-0012](0012-modern-64-bit-engine.md) (point 2, the typed migration)
 
@@ -41,7 +41,7 @@ was compiled or run for it) looked at what that means for speed and for the 4 GB
 5. **An address a fix or a built-in can override is called by address**, in typed code always
    (`crates/engine-core/data/overridable.tsv`, enforced by the repository's hygiene test).
 6. **Checking.** Every typed function has a differential test against its translation (return
-   value, memory written, outgoing calls, both branches of each typed call, on generated inputs that include NaN, zero, denormal and
+   value, memory written, outgoing calls, both branches of a typed call in a family the test names, on generated inputs that include NaN, zero, denormal and
    huge floats). Above that, by what the family touches: the exe oracle, dual runs, the Direct3D
    draw comparison and the recording tables. Each step has a go or no-go gate. Speed gates are read in
    Goodsprings, where the baseline can resolve them (spread 0.75% over four runs on 2026-11-06), with
@@ -73,7 +73,7 @@ These are open for the maintainer, and nothing in this record settles them:
 - The game stays playable and switchable at every step, and each family can be rolled back at
   start-up while its translation exists.
 - Stage 1 alone does not remove the 4 GB limit, and the migration alone does not reach 200+ fps:
-  the plan forecasts about 108 fps in Doc's house and 46 in town. Threads and the render thread have
+  the plan forecasts about 108 fps in Doc's house and 46 in town, from older uncapped figures; the 2026-11-06 baseline is already about 103 and 45, so the forecast needs redoing. Threads and the render thread have
   to follow; both get easier on typed code.
 - Direct calls change how the thread host's time slice counts calls, so each batch that adds them
   checks the hand-offs per frame.
