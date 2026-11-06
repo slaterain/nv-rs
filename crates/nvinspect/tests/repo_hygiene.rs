@@ -23,7 +23,14 @@
 //!   helper calls), or a fenced C or C++ block in Markdown (any of the tags
 //!   `c`, `h`, `cc`, `cpp`, `cxx`, `c++`, `hpp` and `hxx`, however the fence
 //!   writes it). Write a function as its address (`00b0d7b0`), a global as
-//!   `[011d8a84]`, and anything else in plain words.
+//!   `[011d8a84]`, and anything else in plain words;
+//! * in typed code (the folders in [`TYPED_DIRS`] and every function under a typed marker,
+//!   docs/ENGINE_CRATE.md): an `as` from a float to an integer, `core::arch` or another x86
+//!   assumption, decompiled text (C++ words, paths into a decompilation, placeholder names
+//!   made from an address), a malformed marker, or a typed function with no marker;
+//! * a direct Rust call to an address in `crates/engine-core/data/overridable.tsv`: none in
+//!   typed code, and the translations' own stay at the count the table holds, so no new one
+//!   appears (`overridable_addresses_are_called_by_address`).
 //!
 //! Which files: the list comes from `git ls-files`, the tracked files plus the
 //! untracked ones git does not ignore, so every ignore source git honours
@@ -1084,6 +1091,9 @@ fn check_text(rel: &str, bytes: &[u8]) -> Vec<(usize, String)> {
             ));
         }
     }
+    if is_engine_source(rel) {
+        found.extend(typed_findings(rel, &text));
+    }
     found.sort();
     found
 }
@@ -1164,6 +1174,844 @@ fn check_listing(listing: Listing) -> Vec<String> {
         }
     }
     findings
+}
+
+// ---------------------------------------------------------------------------
+// Typed code (docs/ENGINE_CRATE.md, "Typed code"). Lexical checks: nothing here knows types.
+// ---------------------------------------------------------------------------
+
+/// Folders that hold only typed code.
+const TYPED_DIRS: &[&str] = &["crates/engine-core/src/typed/", "crates/engine-typed/src/"];
+
+/// The marker of a typed function, without its address. In pieces, so this file holds no marker
+/// for the ledger to read.
+const TYPED_MARKER: &str = concat!("// Typed", " from ");
+
+/// Text that only comes from decompiled C++ or a path into a decompilation. Nothing in typed code
+/// needs it: a typed function cites its address and says what it does in plain words.
+const DECOMP_TEXT: &[&str] = &[
+    "#include",
+    "reinterpret_cast",
+    "static_cast",
+    "const_cast",
+    "dynamic_cast",
+    "this->",
+    "nullptr",
+    "__thiscall",
+    "__fastcall",
+    "__cdecl",
+    "src/staging",
+    "fnv_decomp/",
+    ".cpp",
+    ".hpp",
+];
+
+/// Integer types an `as` may go to.
+const INT_TYPES: &[&str] = &[
+    "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
+];
+
+/// Calls that answer a float, seen inside an `as` operand.
+const FLOAT_CALLS: &[&str] = &[
+    "x87_",
+    ".sqrt(",
+    ".floor(",
+    ".ceil(",
+    ".trunc(",
+    ".round(",
+    ".fract(",
+    ".sin(",
+    ".cos(",
+    ".f32(",
+    ".f64(",
+    "to_radians",
+    "to_degrees",
+];
+
+/// Whether `rel` is a Rust source of an engine crate.
+fn is_engine_source(rel: &str) -> bool {
+    (rel.starts_with("crates/engine/") || rel.starts_with("crates/engine-"))
+        && rel.contains("/src/")
+        && rel.ends_with(".rs")
+}
+
+/// `text` with comments and the contents of strings and character literals blanked (same length
+/// and line breaks), so a scan sees only code.
+fn code_only(text: &str) -> String {
+    let b = text.as_bytes();
+    let mut out = b.to_vec();
+    let blank = |out: &mut Vec<u8>, from: usize, to: usize| {
+        for c in &mut out[from..to] {
+            if *c != b'\n' {
+                *c = b' ';
+            }
+        }
+    };
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'/' if b.get(i + 1) == Some(&b'/') => {
+                let end = b[i..]
+                    .iter()
+                    .position(|c| *c == b'\n')
+                    .map_or(b.len(), |n| i + n);
+                blank(&mut out, i, end);
+                i = end;
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                let (mut depth, mut j) = (1, i + 2);
+                while j < b.len() && depth > 0 {
+                    if b[j] == b'/' && b.get(j + 1) == Some(&b'*') {
+                        depth += 1;
+                        j += 2;
+                    } else if b[j] == b'*' && b.get(j + 1) == Some(&b'/') {
+                        depth -= 1;
+                        j += 2;
+                    } else {
+                        j += 1;
+                    }
+                }
+                let j = j.min(b.len());
+                blank(&mut out, i, j);
+                i = j;
+            }
+            b'"' => {
+                let mut j = i + 1;
+                match raw_string_hashes(b, i) {
+                    Some(n) => {
+                        let close: Vec<u8> = std::iter::once(b'"')
+                            .chain(std::iter::repeat(b'#').take(n))
+                            .collect();
+                        while j < b.len() && !b[j..].starts_with(&close) {
+                            j += 1;
+                        }
+                    }
+                    None => {
+                        while j < b.len() && b[j] != b'"' {
+                            j += if b[j] == b'\\' { 2 } else { 1 };
+                        }
+                    }
+                }
+                let j = j.min(b.len());
+                blank(&mut out, i + 1, j);
+                i = j + 1;
+            }
+            b'\'' => {
+                // A character literal, not a lifetime: an escape, or one character then a quote.
+                let len = if b.get(i + 1) == Some(&b'\\') {
+                    b[i + 2..]
+                        .iter()
+                        .position(|c| *c == b'\'')
+                        .map(|n| n + 2 + 1)
+                } else {
+                    text.get(i + 1..)
+                        .and_then(|s| s.chars().next())
+                        .filter(|c| b.get(i + 1 + c.len_utf8()) == Some(&b'\''))
+                        .map(|c| c.len_utf8() + 1)
+                };
+                if let Some(len) = len {
+                    blank(&mut out, i + 1, i + len);
+                    i += len + 1;
+                } else {
+                    i += 1;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The number of `#` of the raw string whose opening quote is at `quote`, or `None` when it is an
+/// ordinary string.
+fn raw_string_hashes(b: &[u8], quote: usize) -> Option<usize> {
+    let mut k = quote;
+    let mut n = 0;
+    while k > 0 && b[k - 1] == b'#' {
+        k -= 1;
+        n += 1;
+    }
+    let r = k.checked_sub(1)?;
+    if b[r] != b'r' {
+        return None;
+    }
+    match r.checked_sub(1).map(|p| b[p]) {
+        Some(b'b') => {
+            let before = r.checked_sub(2).map(|p| b[p]);
+            (!before.is_some_and(is_ident)).then_some(n)
+        }
+        Some(c) if is_ident(c) => None,
+        _ => Some(n),
+    }
+}
+
+/// The line where the block that opens at or after line `start` of `code` (from [`code_only`])
+/// closes.
+fn block_end(code: &[&str], start: usize) -> usize {
+    let mut depth = 0i32;
+    let mut opened = false;
+    for (i, line) in code.iter().enumerate().skip(start) {
+        for c in line.bytes() {
+            if c == b'{' {
+                depth += 1;
+                opened = true;
+            } else if c == b'}' {
+                depth -= 1;
+            }
+        }
+        if opened && depth <= 0 {
+            return i;
+        }
+    }
+    code.len().saturating_sub(1)
+}
+
+/// Marks the lines of `#[cfg(test)]` modules.
+fn test_module_lines(code: &[&str]) -> Vec<bool> {
+    let mut marks = vec![false; code.len()];
+    let mut i = 0;
+    while i < code.len() {
+        if code[i].trim() == "#[cfg(test)]" {
+            let next = (i + 1..code.len()).find(|k| !code[*k].trim().is_empty());
+            if let Some(next) = next {
+                let line = code[next].trim_start();
+                if line.starts_with("mod ")
+                    || line.starts_with("pub mod ")
+                    || line.starts_with("pub(crate) mod ")
+                {
+                    let end = block_end(code, next);
+                    marks[i..=end].fill(true);
+                    i = end;
+                }
+            }
+        }
+        i += 1;
+    }
+    marks
+}
+
+/// Whether a line of code starts a function.
+fn starts_fn(line: &str) -> bool {
+    let line = line.trim_start();
+    let line = line
+        .strip_prefix("pub(crate) ")
+        .or_else(|| line.strip_prefix("pub(super) "))
+        .or_else(|| line.strip_prefix("pub "))
+        .unwrap_or(line);
+    line.starts_with("fn ") || line.starts_with("const fn ") || line.starts_with("unsafe fn ")
+}
+
+/// The line of the function a marker at line `marker` is for: past doc comments (blank in `code`)
+/// and attributes. `None` when something else comes first.
+fn marked_fn_line(code: &[&str], marker: usize) -> Option<usize> {
+    for (i, line) in code.iter().enumerate().skip(marker + 1) {
+        let line = line.trim_start();
+        if line.is_empty() || line.starts_with("#[") {
+            continue;
+        }
+        return starts_fn(line).then_some(i);
+    }
+    None
+}
+
+/// Marks the lines of typed code in a file: all of it in [`TYPED_DIRS`], else each function under a
+/// typed marker.
+fn typed_lines(rel: &str, raw: &[&str], code: &[&str]) -> Vec<bool> {
+    if TYPED_DIRS.iter().any(|d| rel.starts_with(d)) {
+        return vec![true; raw.len()];
+    }
+    let mut marks = vec![false; raw.len()];
+    for (i, line) in raw.iter().enumerate() {
+        if line.trim_start().starts_with(TYPED_MARKER) {
+            if let Some(f) = marked_fn_line(code, i) {
+                let end = block_end(code, f);
+                marks[i..=end.min(raw.len() - 1)].fill(true);
+            }
+        }
+    }
+    marks
+}
+
+/// Identifiers `code` declares as floats: a parameter or `let` with the type written, or a `let` of
+/// a float literal or a float call.
+fn float_names(code: &[&str]) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for line in code {
+        for ty in [": f32", ": f64"] {
+            let mut from = 0;
+            while let Some(k) = line[from..].find(ty) {
+                let at = from + k;
+                let (_, name) = ident_before(line, at);
+                if !name.is_empty() {
+                    names.insert(name.to_string());
+                }
+                from = at + ty.len();
+            }
+        }
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed
+            .strip_prefix("let mut ")
+            .or_else(|| trimmed.strip_prefix("let "))
+        {
+            if let Some((name, value)) = rest.split_once('=') {
+                if !value.starts_with('=') && expr_is_float(value, &names) {
+                    let name = name.trim();
+                    if name.bytes().all(is_ident) {
+                        names.insert(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    names
+}
+
+/// The identifier that ends just before byte `end` of `line`, as (its start, itself).
+fn ident_before(line: &str, end: usize) -> (usize, &str) {
+    let b = line.as_bytes();
+    let mut start = end;
+    while start > 0 && is_ident(b[start - 1]) {
+        start -= 1;
+    }
+    (start, &line[start..end])
+}
+
+/// Whether an expression shows that it is a float.
+fn expr_is_float(expr: &str, floats: &BTreeSet<String>) -> bool {
+    if FLOAT_CALLS.iter().any(|c| expr.contains(c)) {
+        return true;
+    }
+    let b = expr.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if !is_ident(b[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < b.len() && is_ident(b[i]) {
+            i += 1;
+        }
+        let token = &expr[start..i];
+        if token == "f32" || token == "f64" || floats.contains(token) {
+            return true;
+        }
+        // A number with a fractional part or a float suffix: not a tuple field (`t.0`).
+        let is_number = token.as_bytes()[0].is_ascii_digit();
+        let after_dot = start > 0 && b[start - 1] == b'.';
+        if is_number && !after_dot {
+            if token.ends_with("f32") || token.ends_with("f64") {
+                return true;
+            }
+            if b.get(i) == Some(&b'.') && b.get(i + 1).is_some_and(u8::is_ascii_digit) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// The operand of the `as` at byte `at` of `line`: back over a call or parenthesis group and a
+/// path or field chain.
+fn cast_operand(line: &str, at: usize) -> &str {
+    let b = line.as_bytes();
+    let mut i = at;
+    while i > 0 && b[i - 1] == b' ' {
+        i -= 1;
+    }
+    let end = i;
+    loop {
+        if i > 0 && b[i - 1] == b')' {
+            let mut depth = 0;
+            while i > 0 {
+                i -= 1;
+                if b[i] == b')' {
+                    depth += 1;
+                } else if b[i] == b'(' {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+        let (start, _) = ident_before(line, i);
+        i = start;
+        if i >= 1 && b[i - 1] == b'.' {
+            i -= 1;
+        } else if i >= 2 && &b[i - 2..i] == b"::" {
+            i -= 2;
+        } else {
+            break;
+        }
+    }
+    &line[i..end]
+}
+
+/// The `as` casts from a float to an integer on a line of code: the operands, as written.
+fn float_casts<'a>(line: &'a str, floats: &BTreeSet<String>) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(k) = line[from..].find(" as ") {
+        let at = from + k;
+        from = at + 4;
+        let target: String = line[from..]
+            .bytes()
+            .take_while(|c| is_ident(*c))
+            .map(char::from)
+            .collect();
+        if INT_TYPES.contains(&target.as_str()) {
+            let operand = cast_operand(line, at);
+            if expr_is_float(operand, floats) {
+                out.push(operand);
+            }
+        }
+    }
+    out
+}
+
+/// A name made from an address that a typed function may not adopt: an identifier ending in an exe
+/// address (`00` or `01` first), other than the project's own `fn_<addr>` and `run_<addr>` for
+/// functions and run units with no name yet.
+fn placeholder_names(line: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let b = line.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if !is_ident(b[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < b.len() && is_ident(b[i]) {
+            i += 1;
+        }
+        let token = &line[start..i];
+        if token.as_bytes()[0].is_ascii_digit() || token.len() <= 8 {
+            continue;
+        }
+        let (head, tail) = token.split_at(token.len() - 8);
+        let address = (tail.starts_with("00") || tail.starts_with("01"))
+            && tail.bytes().all(|c| c.is_ascii_hexdigit());
+        if address && head != "fn_" && head != "run_" {
+            out.push(token);
+        }
+    }
+    out
+}
+
+/// Whether a typed marker line is well formed: an address of eight hex digits, then nothing or
+/// `, read against fnv_decomp` (ADR-0009's addition to a marker).
+fn typed_marker_is_well_formed(line: &str) -> bool {
+    let Some(rest) = line.trim_start().strip_prefix(TYPED_MARKER) else {
+        return false;
+    };
+    let (address, tail) = rest.split_at(rest.len().min(8));
+    address.len() == 8
+        && address.bytes().all(|c| c.is_ascii_hexdigit())
+        && matches!(
+            tail.trim_end(),
+            "" | "." | ", read against fnv_decomp" | ", read against fnv_decomp."
+        )
+}
+
+/// The addresses in `entry!(0x...` in `code` outside `skip`, as (address, line index).
+fn entry_addresses(code: &[&str], skip: &[bool]) -> Vec<(u32, usize)> {
+    let mut out = Vec::new();
+    for (i, line) in code.iter().enumerate() {
+        if skip[i] {
+            continue;
+        }
+        let mut from = 0;
+        while let Some(k) = line[from..].find("entry!(") {
+            from += k + 7;
+            // The address may be on the next line, as rustfmt breaks a long entry.
+            let text = if line[from..].trim().is_empty() {
+                code.get(i + 1).copied().unwrap_or("")
+            } else {
+                &line[from..]
+            };
+            if let Some(a) = hex_literal(text.trim_start()) {
+                out.push((a, i));
+            }
+        }
+    }
+    out
+}
+
+/// The value of the `0x...` literal `text` starts with.
+fn hex_literal(text: &str) -> Option<u32> {
+    let rest = text.strip_prefix("0x")?;
+    let digits: String = rest
+        .bytes()
+        .take_while(|c| c.is_ascii_hexdigit() || *c == b'_')
+        .filter(|c| *c != b'_')
+        .map(char::from)
+        .collect();
+    u32::from_str_radix(&digits, 16).ok()
+}
+
+/// The typed-code rules for one engine source.
+fn typed_findings(rel: &str, text: &str) -> Vec<(usize, String)> {
+    let mut found = Vec::new();
+    let in_typed_dir = TYPED_DIRS.iter().any(|d| rel.starts_with(d));
+    if !in_typed_dir && !text.contains(TYPED_MARKER) {
+        return found;
+    }
+    let stripped = code_only(text);
+    let raw: Vec<&str> = text.lines().collect();
+    let code: Vec<&str> = stripped.lines().collect();
+    let tests = test_module_lines(&code);
+    let typed = typed_lines(rel, &raw, &code);
+    let mut floats = BTreeSet::new();
+    let mut marked = BTreeSet::new();
+    for (i, line) in raw.iter().enumerate() {
+        // Names mean what their own function says they mean.
+        if starts_fn(code[i]) {
+            floats = float_names(&code[i..=block_end(&code, i)]);
+        }
+        if line.trim_start().starts_with(TYPED_MARKER) {
+            if typed_marker_is_well_formed(line) {
+                let address = &line.trim_start()[TYPED_MARKER.len()..][..8];
+                marked.extend(u32::from_str_radix(address, 16).ok());
+            } else {
+                found.push((
+                    i + 1,
+                    "malformed typed marker (its address, then at most `, read against \
+                     fnv_decomp`)"
+                        .to_string(),
+                ));
+            }
+            if marked_fn_line(&code, i).is_none() {
+                found.push((
+                    i + 1,
+                    "typed marker not directly above a function".to_string(),
+                ));
+            }
+        }
+        if !typed[i] {
+            continue;
+        }
+        for banned in DECOMP_TEXT {
+            if line.contains(banned) {
+                found.push((
+                    i + 1,
+                    format!("`{banned}` in typed code (decompiled text or a path into one)"),
+                ));
+            }
+        }
+        for name in placeholder_names(line) {
+            found.push((
+                i + 1,
+                format!("placeholder name `{name}` in typed code (write a real name)"),
+            ));
+        }
+        let c = code[i];
+        if ["core::arch", "std::arch", "target_arch"]
+            .iter()
+            .any(|a| c.contains(a))
+        {
+            found.push((
+                i + 1,
+                "an x86 assumption in typed code (it stays portable, docs/ENGINE_CRATE.md)"
+                    .to_string(),
+            ));
+        }
+        if !tests[i] {
+            for operand in float_casts(c, &floats) {
+                found.push((
+                    i + 1,
+                    format!(
+                        "`{operand} as` an integer in typed code: `as` saturates where the exe \
+                         gets the integer indefinite (use x87::fistp_chop)"
+                    ),
+                ));
+            }
+        }
+    }
+    if in_typed_dir {
+        for (address, i) in entry_addresses(&code, &tests) {
+            if !marked.contains(&address) {
+                found.push((
+                    i + 1,
+                    format!("typed function {address:08x} registered without its marker"),
+                ));
+            }
+        }
+    }
+    found
+}
+
+/// One row of `crates/engine-core/data/overridable.tsv`.
+#[derive(Debug, PartialEq)]
+struct Overridable {
+    line: usize,
+    address: u32,
+    direct_calls: usize,
+}
+
+/// The rows of the table, or what is wrong with it.
+fn parse_overridable(text: &str) -> Result<Vec<Overridable>, String> {
+    let mut rows: Vec<Overridable> = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let f: Vec<&str> = line.split('\t').collect();
+        let [address, direct_calls, _source] = f[..] else {
+            return Err(format!("line {}: not three columns: {line:?}", i + 1));
+        };
+        if address.len() != 8 {
+            return Err(format!("line {}: bad address {address:?}", i + 1));
+        }
+        let address = u32::from_str_radix(address, 16)
+            .map_err(|e| format!("line {}: bad address: {e}", i + 1))?;
+        let direct_calls = direct_calls
+            .parse()
+            .map_err(|e| format!("line {}: bad count: {e}", i + 1))?;
+        if rows.last().is_some_and(|r| r.address >= address) {
+            return Err(format!("line {}: addresses must rise", i + 1));
+        }
+        rows.push(Overridable {
+            line: i + 1,
+            address,
+            direct_calls,
+        });
+    }
+    Ok(rows)
+}
+
+/// (address, function name) of each registration in `code`: `entry!(0x.., path::name(..)` and
+/// `(0x.., name as AbiFn)`.
+fn registered_names(code: &str) -> Vec<(u32, String)> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(k) = code[from..].find("entry!(") {
+        from += k + 7;
+        let rest = code[from..].trim_start();
+        let Some(address) = hex_literal(rest) else {
+            continue;
+        };
+        let Some((_, after)) = rest.split_once(',') else {
+            continue;
+        };
+        let path: String = after
+            .trim_start()
+            .bytes()
+            .take_while(|c| is_ident(*c) || *c == b':')
+            .map(char::from)
+            .collect();
+        if let Some(name) = path.rsplit("::").next().filter(|n| !n.is_empty()) {
+            out.push((address, name.to_string()));
+        }
+    }
+    let mut from = 0;
+    while let Some(k) = code[from..].find(" as AbiFn") {
+        let at = from + k;
+        from = at + 9;
+        let (start, name) = ident_before(code, at);
+        if let Some(head) = code[..start].trim_end().strip_suffix(',') {
+            let open = head.rfind('(').map_or(0, |o| o + 1);
+            if let Some(address) = hex_literal(head[open..].trim()) {
+                out.push((address, name.to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// The calls of the functions in `names` in `code`: an identifier followed by `(`, not a method,
+/// not the `fn` itself, not an `entry!` naming it. As (line index, name, its path had `::`).
+fn direct_calls<'a>(
+    code: &str,
+    names: &'a std::collections::BTreeMap<String, u32>,
+) -> Vec<(usize, &'a str, bool)> {
+    let mut out = Vec::new();
+    let b = code.as_bytes();
+    let (mut i, mut line) = (0, 0);
+    while i < b.len() {
+        if b[i] == b'\n' {
+            line += 1;
+            i += 1;
+            continue;
+        }
+        if !is_ident(b[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < b.len() && is_ident(b[i]) {
+            i += 1;
+        }
+        let mut next = i;
+        while next < b.len() && matches!(b[next], b' ' | b'\n' | b'\r') {
+            next += 1;
+        }
+        if b.get(next) != Some(&b'(') {
+            continue;
+        }
+        let Some((name, _)) = names.get_key_value(&code[start..i]) else {
+            continue;
+        };
+        let mut chain = start;
+        let mut qualified = false;
+        while chain >= 2 && &b[chain - 2..chain] == b"::" {
+            qualified = true;
+            let (s, _) = ident_before(code, chain - 2);
+            chain = s;
+        }
+        let before = code[..chain].trim_end();
+        if before.ends_with('.') || before.ends_with("fn") {
+            continue;
+        }
+        // `entry!(0x.., name(types)`: the words before it are an address and a comma.
+        if let Some(head) = before.strip_suffix(',') {
+            let open = head.rfind('(').map_or(0, |o| o + 1);
+            if hex_literal(head[open..].trim()).is_some() {
+                continue;
+            }
+        }
+        out.push((line, name.as_str(), qualified));
+    }
+    out
+}
+
+/// The address word of each `typed_call!` in `code`: `Ok(address)`, or `Err(the text)` when it isn't
+/// a literal, as (line index, that).
+fn typed_call_addresses(code: &str) -> Vec<(usize, Result<u32, String>)> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(k) = code[from..].find("typed_call!(") {
+        let at = from + k;
+        from = at + 12;
+        let line = code[..at].bytes().filter(|c| *c == b'\n').count();
+        let mut parts = code[from..].splitn(3, ',');
+        parts.next();
+        let Some(word) = parts.next().map(str::trim) else {
+            continue;
+        };
+        // The macro's own `@bind` arms pass `$addr` on.
+        if word.starts_with('$') {
+            continue;
+        }
+        out.push((line, hex_literal(word).ok_or_else(|| word.to_string())));
+    }
+    out
+}
+
+/// What the table says against the engine sources `files` (relative path, text): every finding as
+/// (path, line, message).
+fn overridable_findings(table: &str, files: &[(String, String)]) -> Vec<(String, usize, String)> {
+    use std::collections::BTreeMap;
+    const TABLE: &str = "crates/engine-core/data/overridable.tsv";
+    let mut found = Vec::new();
+    let rows = match parse_overridable(table) {
+        Ok(rows) => rows,
+        Err(why) => return vec![(TABLE.to_string(), 1, why)],
+    };
+    let overridable: BTreeSet<u32> = rows.iter().map(|r| r.address).collect();
+    let codes: Vec<String> = files.iter().map(|(_, text)| code_only(text)).collect();
+    // Which name each overridable address is registered as, and where.
+    let mut names: BTreeMap<String, u32> = BTreeMap::new();
+    let mut defined_in: BTreeMap<u32, BTreeSet<&str>> = BTreeMap::new();
+    for ((rel, _), code) in files.iter().zip(&codes) {
+        for (address, name) in registered_names(code) {
+            if overridable.contains(&address) {
+                names.insert(name, address);
+                defined_in.entry(address).or_default().insert(rel);
+            }
+        }
+    }
+    let mut counts: BTreeMap<u32, usize> = BTreeMap::new();
+    let mut where_called: BTreeMap<u32, Vec<String>> = BTreeMap::new();
+    for ((rel, text), code) in files.iter().zip(&codes) {
+        let sites = typed_call_addresses(code);
+        let calls = direct_calls(code, &names);
+        if sites.is_empty() && calls.is_empty() {
+            continue;
+        }
+        let raw: Vec<&str> = text.lines().collect();
+        let lines: Vec<&str> = code.lines().collect();
+        let tests = test_module_lines(&lines);
+        let typed = typed_lines(rel, &raw, &lines);
+        for (line, word) in sites {
+            if tests.get(line).copied().unwrap_or(false) {
+                continue;
+            }
+            match word {
+                Ok(address) if overridable.contains(&address) => found.push((
+                    rel.clone(),
+                    line + 1,
+                    format!(
+                        "typed_call! of overridable {address:08x}: call it with e.call (a fix or \
+                         built-in may replace it, overridable.tsv)"
+                    ),
+                )),
+                Ok(_) => {}
+                Err(word) => found.push((
+                    rel.clone(),
+                    line + 1,
+                    format!(
+                        "typed_call! of `{word}`: write the address as a literal, so this test \
+                         can read it"
+                    ),
+                )),
+            }
+        }
+        for (line, name, qualified) in calls {
+            let address = names[name];
+            let same_file = defined_in[&address].contains(rel.as_str());
+            if tests.get(line).copied().unwrap_or(false) {
+                continue;
+            }
+            // Elsewhere a bare name that nothing imports is another function of that name.
+            if !same_file && !qualified && !code.contains(&format!("::{name}")) {
+                continue;
+            }
+            if typed.get(line).copied().unwrap_or(false) {
+                found.push((
+                    rel.clone(),
+                    line + 1,
+                    format!(
+                        "direct call of overridable {address:08x} (`{name}`) in typed code: call \
+                         it with e.call (a fix or built-in may replace it, overridable.tsv)"
+                    ),
+                ));
+            } else {
+                *counts.entry(address).or_default() += 1;
+                where_called
+                    .entry(address)
+                    .or_default()
+                    .push(format!("{rel}:{}", line + 1));
+            }
+        }
+    }
+    for row in &rows {
+        let n = counts.get(&row.address).copied().unwrap_or(0);
+        if n > row.direct_calls {
+            found.push((
+                TABLE.to_string(),
+                row.line,
+                format!(
+                    "{:08x} has {n} direct call(s), the table allows {} (no new one: a fix or \
+                     built-in replacing the address would miss it; call it with e.call): {}",
+                    row.address,
+                    row.direct_calls,
+                    where_called[&row.address].join(", ")
+                ),
+            ));
+        } else if n < row.direct_calls {
+            found.push((
+                TABLE.to_string(),
+                row.line,
+                format!(
+                    "{:08x} has {n} direct call(s), the table allows {}: lower the table's number",
+                    row.address, row.direct_calls
+                ),
+            ));
+        }
+    }
+    found
 }
 
 fn repo_root() -> PathBuf {
@@ -2665,5 +3513,381 @@ mod fixtures {
         assert_eq!(out.problems.len(), 1);
         assert!(out.problems[0].starts_with("nope:1: cannot read directory"));
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+/// The overridable table against the engine crates' sources.
+#[test]
+fn overridable_addresses_are_called_by_address() {
+    let root = repo_root();
+    let table = fs::read_to_string(root.join("crates/engine-core/data/overridable.tsv"))
+        .expect("the overridable table");
+    let mut files = Vec::new();
+    for file in list_files(&root).files {
+        if is_engine_source(&file.rel) {
+            let text = fs::read(&file.path).map(|b| String::from_utf8_lossy(&b).into_owned());
+            files.push((file.rel, text.unwrap_or_default()));
+        }
+    }
+    assert!(files.len() > 1000, "only {} engine sources", files.len());
+    let found = overridable_findings(&table, &files);
+    assert!(
+        found.is_empty(),
+        "{} problem(s):\n{}",
+        found.len(),
+        found
+            .iter()
+            .map(|(f, l, m)| format!("{f}:{l}: {m}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+mod typed_rules {
+    use super::*;
+
+    const UNIT: &str = "crates/engine-bs/src/units/x/y.rs";
+    const TYPED: &str = "crates/engine-core/src/typed/leaf.rs";
+
+    fn marker(address: &str) -> String {
+        format!("{TYPED_MARKER}{address}")
+    }
+
+    fn messages(rel: &str, text: &str) -> Vec<String> {
+        typed_findings(rel, text)
+            .into_iter()
+            .map(|(line, m)| format!("{line}: {m}"))
+            .collect()
+    }
+
+    #[test]
+    fn code_only_blanks_comments_and_strings_and_keeps_lines() {
+        let text = "let a = \"x as i32 // no\"; // y as u8\n/* z\n as u8 */ let b = 'c';\nlet l: &'a str = r#\"q\" as u32\"#;\n'\\n';";
+        let code = code_only(text);
+        assert_eq!(code.len(), text.len());
+        assert_eq!(code.lines().count(), text.lines().count());
+        assert!(!code.contains("as i32"));
+        assert!(!code.contains("as u8"));
+        assert!(!code.contains("as u32"));
+        assert!(code.contains("let b = ' ';"));
+        assert!(code.contains("&'a str"));
+    }
+
+    #[test]
+    fn the_float_cast_rule_fires_on_each_form() {
+        let floats: BTreeSet<String> = ["x".to_string(), "self_speed".to_string()].into();
+        for line in [
+            "let i = x as i32;",
+            "let i = (x + 1.0) as i32;",
+            "let i = 1.5 as u8;",
+            "let i = 2f32 as i64;",
+            "let i = e.call(a, &w).f32() as u32;",
+            "let i = ret.f64() as i64;",
+            "let i = x87_add(a, b) as i32;",
+            "let i = y.sqrt() as u16;",
+            "let i = f64::from(y) as i32;",
+            "let i = self_speed as usize;",
+            "let i = (y as f64) as i32;",
+        ] {
+            assert_eq!(float_casts(line, &floats).len(), 1, "{line}");
+        }
+        for line in [
+            "let i = n as u32;",
+            "let i = t.0 as u32;",
+            "let i = (n + 1) as u8;",
+            "let i = n.len() as u32;",
+            "let f = n as f32;",
+            "let f = x as f64;",
+            "let i = bits(n) as f32;",
+        ] {
+            assert!(float_casts(line, &floats).is_empty(), "{line}");
+        }
+    }
+
+    #[test]
+    fn float_names_come_from_parameters_and_lets() {
+        let code = [
+            "fn f(e: &mut Engine, speed: f32, n: u32) -> f64 {",
+            "    let half = speed * 0.5;",
+            "    let mut sum: f64 = 0.0;",
+            "    let count = n + 1;",
+            "}",
+        ];
+        let names = float_names(&code);
+        for name in ["speed", "half", "sum"] {
+            assert!(names.contains(name), "{name}");
+        }
+        assert!(!names.contains("n"));
+        assert!(!names.contains("count"));
+    }
+
+    /// In a typed folder and under a marker the rule fires; in a translation next to it it doesn't.
+    #[test]
+    fn a_float_cast_is_banned_in_typed_code_only() {
+        let body = "fn get(e: &mut Engine, x: f32) -> i32 {\n    x as i32\n}\n";
+        assert!(messages(UNIT, body).is_empty(), "a translation may");
+        let found = messages(TYPED, body);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].starts_with("2: `x as` an integer in typed code"));
+
+        let marked = format!(
+            "fn plain(x: f32) -> i32 {{\n    x as i32\n}}\n\n{}\n/// Doc.\n#[inline]\npub fn typed(x: f32) -> i32 {{\n    x as i32\n}}\nfn after(x: f32) -> i32 {{\n    x as i32\n}}\n",
+            marker("00123456")
+        );
+        let found = messages(UNIT, &marked);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].starts_with("9: "), "{found:?}");
+    }
+
+    /// A deliberately wrong stand-in in a test module is how the harness is shown to catch it.
+    #[test]
+    fn test_modules_may_cast() {
+        let body =
+            "#[cfg(test)]\nmod tests {\n    fn wrong(x: f32) -> i32 {\n        x as i32\n    }\n}\n";
+        assert!(messages(TYPED, body).is_empty());
+    }
+
+    #[test]
+    fn x86_assumptions_are_banned_in_typed_code() {
+        for line in [
+            "use core::arch::x86_64::_mm_add_ss;",
+            "use std::arch::x86_64::*;",
+            "#[cfg(target_arch = \"x86_64\")]",
+        ] {
+            let found = messages(TYPED, &format!("{line}\n"));
+            assert!(
+                found.len() == 1 && found[0].contains("x86 assumption"),
+                "{line}: {found:?}"
+            );
+            assert!(messages(UNIT, &format!("{line}\n")).is_empty());
+        }
+    }
+
+    #[test]
+    fn decompiled_text_is_banned_in_typed_code_comments_included() {
+        for text in [
+            "// a #include of something",
+            "// reinterpret_cast<NiNode*>(x)",
+            "// this->m_field",
+            "// see src/staging/run.cpp",
+            "// fnv_decomp/src/fallout",
+            "// nullptr",
+            "// __thiscall",
+        ] {
+            let found = messages(TYPED, &format!("{text}\n"));
+            assert!(
+                !found.is_empty() && found.iter().all(|m| m.contains("in typed code")),
+                "{text}: {found:?}"
+            );
+        }
+        assert!(messages(TYPED, "// read against fnv_decomp\n").is_empty());
+        // A translation's comment is not under this rule (ADR-0009 has its own).
+        assert!(messages(UNIT, "// this->m_field\n").is_empty());
+    }
+
+    #[test]
+    fn placeholder_names_are_banned_in_typed_code() {
+        for (line, name) in [
+            ("let a = fnv_00559450(e);", "fnv_00559450"),
+            ("static g_011dea3c: u32 = 0;", "g_011dea3c"),
+            ("struct GlobalObject_01234567;", "GlobalObject_01234567"),
+            ("struct Holder00abcdef;", "Holder00abcdef"),
+        ] {
+            assert_eq!(placeholder_names(line), [name]);
+            let found = messages(TYPED, &format!("{line}\n"));
+            assert!(found[0].contains("placeholder name"), "{found:?}");
+        }
+        // The project's own, literals and bare addresses are not names from elsewhere.
+        for line in [
+            "pub fn fn_00aa4ee0(e: &mut Engine) {}",
+            "use crate::units::x::run_00a7c9f0::thing;",
+            "e.call(0x00559450, &[]);",
+            "e.call(0x0055_9450, &[]);",
+            "// 00559450 is the getter",
+        ] {
+            assert!(placeholder_names(line).is_empty(), "{line}");
+        }
+    }
+
+    #[test]
+    fn markers_must_be_well_formed_and_above_a_function() {
+        let good = marker("00123456");
+        for ok in [
+            good.clone(),
+            format!("    {good}"),
+            format!("{good}."),
+            format!("{good}, read against fnv_decomp"),
+            format!("{good}, read against fnv_decomp."),
+        ] {
+            assert!(typed_marker_is_well_formed(&ok), "{ok}");
+        }
+        for bad in [
+            marker("0012345"),
+            marker("00123456 (decompiled)"),
+            marker("zzzzzzzz"),
+            format!("{good}, from fnv_decomp"),
+        ] {
+            assert!(!typed_marker_is_well_formed(&bad), "{bad}");
+            let found = messages(UNIT, &format!("{bad}\nfn f() {{}}\n"));
+            assert!(found[0].contains("malformed typed marker"), "{found:?}");
+        }
+        let found = messages(UNIT, &format!("{good}\nconst X: u32 = 1;\n"));
+        assert!(
+            found[0].contains("not directly above a function"),
+            "{found:?}"
+        );
+        assert!(messages(UNIT, &format!("{good}\nfn f() {{}}\n")).is_empty());
+    }
+
+    /// In a typed folder every registered function carries its marker, so the ledger counts it.
+    #[test]
+    fn a_typed_folder_registers_only_marked_functions() {
+        let text = format!(
+            "{}\npub fn a(e: &mut Engine) -> u32 {{\n    0\n}}\npub fn funcs() -> Vec<(u32, AbiFn)> {{\n    vec![\n        entry!(0x0012_3456, a() -> u32),\n        entry!(\n            0x0012_3460,\n            b() -> u32\n        ),\n    ]\n}}\n",
+            marker("00123456")
+        );
+        let found = messages(TYPED, &text);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].contains("typed function 00123460 registered without its marker"),
+            "{found:?}"
+        );
+    }
+
+    fn findings(rows: &str, list: &[(&str, &str)]) -> Vec<String> {
+        let files: Vec<(String, String)> = list
+            .iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect();
+        overridable_findings(&format!("# header\n{rows}"), &files)
+            .into_iter()
+            .map(|(f, l, m)| format!("{f}:{l}: {m}"))
+            .collect()
+    }
+
+    const NONE: Vec<String> = Vec::new();
+
+    const OWNER: &str = "pub fn hooked(e: &mut Engine) {}\npub fn caller(e: &mut Engine) {\n    hooked(e);\n}\npub fn funcs() -> Vec<(u32, AbiFn)> {\n    vec![entry!(0x0012_3450, hooked()), entry!(0x0012_3460, caller())]\n}\n#[cfg(test)]\nmod tests {\n    fn t(e: &mut Engine) { super::hooked(e); }\n}\n";
+
+    #[test]
+    fn the_translations_direct_calls_stay_at_the_tables_count() {
+        const ROW_1: &str = "00123450\t1\tJIP\n";
+        const ROW_2: &str = "00123450\t2\tJIP\n";
+        // One call outside tests, in the same file: the count matches.
+        assert_eq!(findings(ROW_1, &[("a.rs", OWNER)]), NONE);
+        // A new direct call fails and says where.
+        let found = findings("00123450\t0\tJIP\n", &[("a.rs", OWNER)]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].contains("has 1 direct call(s), the table allows 0"),
+            "{found:?}"
+        );
+        assert!(found[0].contains("a.rs:3"), "{found:?}");
+        // Removing one fails until the table is lowered.
+        let found = findings(ROW_2, &[("a.rs", OWNER)]);
+        assert!(found[0].contains("lower the table's number"), "{found:?}");
+        // Another file: a path counts, or a bare name it imports; a method and a bare name it
+        // doesn't import don't.
+        let path = "fn f(e: &mut Engine) {\n    crate::units::x::hooked(e);\n}\n";
+        assert_eq!(findings(ROW_2, &[("a.rs", OWNER), ("b.rs", path)]), NONE);
+        let imported = "use super::a::hooked;\nfn f(e: &mut Engine) {\n    hooked(e);\n}\n";
+        assert_eq!(
+            findings(ROW_2, &[("a.rs", OWNER), ("b.rs", imported)]),
+            NONE
+        );
+        let other = "fn hooked() {}\nfn f(e: &mut Engine) {\n    hooked();\n    e.hooked();\n}\n";
+        assert_eq!(findings(ROW_1, &[("a.rs", OWNER), ("b.rs", other)]), NONE);
+        // A comment or a string isn't a call.
+        let text = "// hooked(e)\nfn f() { let s = \"hooked(e)\"; }\n";
+        assert_eq!(findings(ROW_1, &[("a.rs", OWNER), ("b.rs", text)]), NONE);
+    }
+
+    #[test]
+    fn typed_code_has_no_direct_call_at_all() {
+        let typed = format!(
+            "{}\npub fn t(e: &mut Engine) {{\n    hooked(e);\n}}\n",
+            marker("00123470")
+        );
+        let owner = format!("{typed}{OWNER}");
+        // The count allows the translation's one; the typed caller fails all the same.
+        let found = findings("00123450\t1\tJIP\n", &[("a.rs", &owner)]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].contains("direct call of overridable 00123450 (`hooked`) in typed code"),
+            "{found:?}"
+        );
+        let leaf = "use super::a::hooked;\nfn t(e: &mut Engine) {\n    hooked(e);\n}\n";
+        let found = findings(
+            "00123450\t1\tJIP\n",
+            &[("a.rs", OWNER), ("crates/engine-core/src/typed/leaf.rs", leaf)],
+        );
+        assert!(found[0].contains("in typed code"), "{found:?}");
+    }
+
+    #[test]
+    fn typed_call_of_an_overridable_address_is_banned() {
+        let row = "00123450\t0\tJIP\n";
+        let site = "fn f(e: &mut Engine) {\n    let x: u32 = typed_call!(LEAF, 0x0012_3450, leaf::get(e, 1));\n    let y: u32 = typed_call!(LEAF, 0x0012_3460, leaf::other(e));\n}\n";
+        let found = findings(row, &[("a.rs", site)]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].starts_with("a.rs:2: typed_call! of overridable 00123450"),
+            "{found:?}"
+        );
+        // A name for the address hides it from this test.
+        let named =
+            "fn f(e: &mut Engine) {\n    let x: u32 = typed_call!(LEAF, HOOKED, leaf::get(e));\n}\n";
+        let found = findings(row, &[("a.rs", named)]);
+        assert!(
+            found[0].contains("write the address as a literal"),
+            "{found:?}"
+        );
+        // A test module and the macro's own arms are left alone.
+        let test = "#[cfg(test)]\nmod tests {\n    fn f(e: &mut Engine) {\n        typed_call!(F, A, g(e));\n    }\n}\n";
+        assert_eq!(findings(row, &[("a.rs", test)]), NONE);
+        let arm = "macro_rules! typed_call {\n    ($f:expr, $addr:expr) => { $crate::typed_call!(@bind $f, $addr) };\n}\n";
+        assert_eq!(findings(row, &[("a.rs", arm)]), NONE);
+    }
+
+    #[test]
+    fn the_table_is_checked() {
+        assert_eq!(
+            parse_overridable("# c\n\n00123450\t3\tJIP\n00123460\t0\tJG,kNVSE\n"),
+            Ok(vec![
+                Overridable {
+                    line: 3,
+                    address: 0x0012_3450,
+                    direct_calls: 3
+                },
+                Overridable {
+                    line: 4,
+                    address: 0x0012_3460,
+                    direct_calls: 0
+                },
+            ])
+        );
+        for bad in [
+            "123450\t0\tJIP",
+            "00123450\tx\tJIP",
+            "00123450\t0",
+            "0012345z\t0\tJIP",
+            "00123460\t0\tJIP\n00123450\t0\tJIP",
+            "00123450\t0\tJIP\n00123450\t0\tJIP",
+        ] {
+            assert!(parse_overridable(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn raw_registrations_are_read_too() {
+        let code =
+            "vec![(0x0012_3450, parse_entry as AbiFn), entry!(0x0012_3460, x::y::name(u32) -> u32)]";
+        assert_eq!(
+            registered_names(code),
+            [
+                (0x0012_3460, "name".to_string()),
+                (0x0012_3450, "parse_entry".to_string())
+            ]
+        );
     }
 }
