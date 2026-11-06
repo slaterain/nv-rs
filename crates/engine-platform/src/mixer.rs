@@ -636,11 +636,14 @@ fn converted(v: &mut Voice) -> bool {
 }
 
 /// The converter the device gives the voice now: the second one when it has turned it on, else
-/// the first one (`None` when that cannot be made).
+/// the first one (`None` when that cannot be made). Where the first one's tables are not found
+/// (a build of `RESAMPLEDMO.DLL` laid out unlike any read so far, or none) a voice at another rate
+/// takes the second one, which is `dsound.dll`'s own and needs no tables, so it is heard: not the
+/// same samples as DirectSound's (`dsound::unheard` names it once on stderr).
 fn new_converter(v: &Voice) -> Option<super::resampler::Converter> {
-    use super::resampler::{Apl, Converter, Dmo};
+    use super::resampler::{tables, Apl, Converter, Dmo};
     let (rate, device, channels) = (v.rate, v.device, usize::from(v.channels));
-    Some(if v.apl {
+    Some(if v.apl || (rate != device && tables().is_none()) {
         Converter::Apl(Apl::new(rate, device, channels, v.lanes()))
     } else {
         Converter::Dmo(Box::new(Dmo::new(rate, device, channels)?))
