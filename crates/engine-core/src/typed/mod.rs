@@ -239,6 +239,10 @@ pub(crate) struct State {
     /// word as an offset into its frame.
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) keep_frames: bool,
+    /// The differential test's direct run: each `typed_call!` that went by address because no family
+    /// the test names holds its address, so the function it names has not run.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) unnamed: std::cell::RefCell<Vec<u32>>,
 }
 
 impl State {
@@ -291,8 +295,13 @@ impl Engine {
         match self.typed.members.get(&addr).copied() {
             Some(bit) if bit == family.bit() => {}
             // The differential test's direct run, for a family the test doesn't name: by address,
-            // as a play run with that family off goes.
-            None if self.typed.forced => return false,
+            // as a play run with that family off goes. The function it names hasn't run, which the
+            // report holds against the test.
+            None if self.typed.forced => {
+                #[cfg(any(test, feature = "test-support"))]
+                self.typed.unnamed.borrow_mut().push(addr);
+                return false;
+            }
             Some(bit) => panic!(
                 "typed_call! at {addr:08x} names {family:?}, but the address is in the family \
                  with bit {bit:#x}"

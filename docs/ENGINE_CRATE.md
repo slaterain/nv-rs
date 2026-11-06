@@ -509,12 +509,12 @@ Diff::new(entry!(0x00abc123, typed_version(Ptr<Thing>, f32) -> f32))
   against its by-address run, call for call. The last needs debug assertions (`Report::direct_runs` says
   if it ran). It finds a `typed_call!` naming the wrong function, and it stops on one naming a family
   that doesn't hold the address.
-- **Families:** `.family(..)` once per family the call tree should have on, as many as it reaches. An
-  address in no named family goes by address, as in play with that family off, so a real callee or a
-  rewritten site further down is no finding. `Report::direct_calls` says how many went direct: 0 for a
-  function with a `typed_call!` means its direct branch has run nowhere, so name its family. The
-  control words come from the row of the family holding the function, and `Report::control_words` says
-  which ran; `.control_words(..)` overrides them.
+- **Families:** `.family(..)` once per family the call tree should have on, as many as it reaches. A
+  `typed_call!` at an address in no named family goes by address, as in play with that family off, so
+  the function it names runs nowhere. `assert_same` and `is_same` fail on that (`Report::unnamed`) unless
+  the test lists the address in `.goes_by_address(..)`, for a family another test runs direct.
+  `Report::direct_calls` says how many went direct. The control words come from the row of the family
+  holding the function, and `Report::control_words` says which ran; `.control_words(..)` overrides them.
 - **A non-leaf function:** a translation calls functions of its own unit plainly, which isn't logged,
   and typed code may not. `.translation_calls_plainly(&[addr])` drops those calls from the typed side
   only. Their words can't compare, but their effects do, so a wrong word shows by what it changes. The
@@ -558,6 +558,8 @@ Diff::new(entry!(0x00abc123, typed_version(Ptr<Thing>, f32) -> f32))
   translation's side only, so the typed version calling one still shows, and it refuses an overridable
   address. `allow_nan_payloads` lets NaN payloads differ where the float rule accepts it, in the return
   and in aligned words of memory and calls; an infinity or a number against a NaN still differs.
+- **A function new in the setup:** a setup may register at a family member's or a plain callee's address
+  where nothing was, when every side gets the same function: anything else stops the run.
 - **A double in the setup:** over a family's member, or over a callee the translation calls plainly,
   is refused: it would run on one side only. Over any other callee it is the usual way to stand in.
 - The engines hold translations only, whatever `NV_TYPED` says, so only the function and the families
@@ -586,7 +588,11 @@ marker elsewhere, in the engine crates, `crates/host` and `viewer`. The rules re
   at more than one address), and carries the typed marker for that address, so it can't silently call
   the translation. In typed code, no plain call of a registered function; a helper nothing registers,
   or one in a module that doesn't register that name (`helpers::read`, `f32::sqrt`), is ordinary code.
-- Each marked function is registered at its address, and a `Diff::new` somewhere names that address.
+- Each marked function is registered at its address, and a differential test covers it: a `Diff::new`
+  naming that address and that function, in a `#[test]` with no `#[ignore]`, whose result reaches
+  `.assert_same()` or `.is_same()`, in one statement or through `let report = ..run();`. Names are read
+  with their modules, so a translation of the same name in another module isn't the typed function, here
+  or in a `typed_call!`, and a `Diff` comparing the two isn't a comparison with itself.
 - Markers are well formed and directly above a function; a function registered in a typed folder has
   the marker for that address above it, in any of the folder's files. A marker has one definition, `scripts/ledger/src/typed_marker.rs`,
   which the ledger and this test share: a line this test refuses, the ledger doesn't count.
@@ -598,8 +604,8 @@ marker elsewhere, in the engine crates, `crates/host` and `viewer`. The rules re
   calls the game makes, so it is left for each family's own step.
 - **What stays review-only,** because this reads text: a call through a function pointer or a `let` of
   the function; a call a macro builds; a devirtualised or copied body; a bare name a local of the same
-  name hides; a re-export under another module's name; whether a `Diff::new` that names the address
-  really covers the function's branches; and a `typed_call!`'s family, which only a test build with the
+  name; a re-export under another module's name; whether a `Diff::new` really covers the function's
+  branches; and a `typed_call!`'s family, which only a test build with the
   flag set checks, so a site no test runs that way is only as right as its review.
 
 The ledger counts a typed marker in an engine crate with a registered address like a translation
