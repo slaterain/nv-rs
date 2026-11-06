@@ -204,7 +204,7 @@ fn landing_entry(e: &mut Engine, a: &[u32]) -> Ret {
 /// was in the air falling, is now on the ground, wasn't asked to move and this frame was short.
 fn landing_time(step: f32, before: u32, after: u32, moving: bool, fall_speed: f32) -> Option<f32> {
     let lands = before == STATE_IN_AIR && after == STATE_ON_GROUND && !moving && fall_speed < 0.0;
-    (lands && step > 0.0 && step < SETTLED_FRAME_S).then(|| 2.0 * SETTLED_FRAME_S - step)
+    (lands && step > 0.0 && step < SETTLED_FRAME_S).then_some(2.0 * SETTLED_FRAME_S - step)
 }
 
 /// `00c73170`, then the landing (module documentation).
@@ -434,7 +434,8 @@ mod tests {
         let ground = STATE_ON_GROUND;
         let air = STATE_IN_AIR;
         // A 5 ms frame: the rest of two 16 ms frames.
-        assert_eq!(landing_time(0.005, air, ground, false, -64.0), Some(0.027));
+        let rest = landing_time(0.005, air, ground, false, -64.0).unwrap();
+        assert!((rest - 0.027).abs() < 1e-6, "{rest}");
         // 16 ms frames and longer land as they always did.
         assert_eq!(landing_time(0.016, air, ground, false, -64.0), None);
         assert_eq!(landing_time(0.031, air, ground, false, -64.0), None);
@@ -506,7 +507,8 @@ mod tests {
             e.mem.set_f32(GLOBAL_TIME_MULTIPLIER, 1.0);
             e.mem.set_f32(TIME_MULTIPLIER_TARGET, 0.25);
             e.mem.set_f32(TIME_MULTIPLIER_RATE, 0.1);
-            e.mem.set_f32(MAIN_TIMER + BSTimer::fDeltaUnmodified.off, step);
+            e.mem
+                .set_f32(MAIN_TIMER + BSTimer::fDeltaUnmodified.off, step);
             e
         };
         let mut e = setup(0.016);
