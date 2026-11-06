@@ -32,7 +32,7 @@ machinery runs.
   - Fresh capsule and cylinder cinfos are (1, 0, 0, 0), not all ones (`00cab000`, `00cab1b0`, `00ccd520`, `00ccd6f0`, `00ccd960`; the two `CreateCinfo` ones are live until the shape exists). Dead presets at `00cc4070`. Stack blocks at `00baa850`, `00a92c40`, `00da0010`.
   - Rest: `00eb3230` far-end out slot, `00c5a0f0` arrow head vertex, `00c41ac0` bucket slot read once, `0097e4b0` state object read after `009890e0`.
   - NaN polarity: `00eb4590`, `00b62de0`, `00d83430`, `00e0fec0`, `00d4dcb0`, `00daf540`, `00e52320`.
-  - `004ce380` hangs in the original too: in its first pass, an entry with 2+ extra lists whose head list is worn and can't be removed, on a live actor, restarts from that head forever (`004c0cf0` and `004c37d0` both refuse; 4ce95e..4ce986 has no exit; `remaining` isn't tested). Only script calls reach it (`005b55a0`, `005b5690`). Left as the exe has it; a candidate for the fixes preset. Note for a preset too: `00bdb4a0` writes to address 6 at 00bdbf4e.
+  - `004ce380` hangs in the original too: in its first pass, an entry with 2+ extra lists whose head list is worn and can't be removed, on a live actor, restarts from that head forever (`004c0cf0` and `004c37d0` both refuse; 4ce95e..4ce986 has no exit; `remaining` isn't tested). Script calls reach it (`005b55a0`, `005b5690`), and so does the debug cell test `0054b5b0` (0054b64a, from `00861fc0`). Left as the exe has it; a candidate for the fixes preset. Note for a preset too: `00bdb4a0` writes to address 6 at 00bdbf4e.
 
 
 

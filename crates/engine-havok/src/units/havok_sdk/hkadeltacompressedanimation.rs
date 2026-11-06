@@ -43,7 +43,8 @@ const CALC_QUANTIZED_SIZE: u32 = 0x00e5_1da0;
 /// float count, statistics)`.
 const CALC_DYNAMIC_STATS: u32 = 0x00e4_e610;
 /// The statistics of a track description (`00e4ebb0`, cdecl, the same five arguments), which
-/// also counts the static floats; it adds to the words it is given.
+/// also counts the static floats; it and its callees write all 14 words before reading them, so
+/// the caller's zeroing is the exe's but cannot be seen.
 const CALC_TRACK_STATS: u32 = 0x00e4_ebb0;
 /// `hkaTrackAnalysis::recompose` (`00e4f640`, cdecl): `(description, transforms out, floats out)`.
 const RECOMPOSE: u32 = 0x00e4_f640;

@@ -668,14 +668,14 @@ pub fn bhk_world_scale_solver_info(e: &mut Engine, this: Ptr) {
     }
     // The scale stays on the x87 stack to c66bac: it is the argument of 00cbfef0.
     let scale = x87_load32(scale_bits);
-    // 00c66b41..00c66b6e, with `tau` the old field: `DE C3` adds `tau + (frame / (t * scale) - 1)`.
+    // 00c66b41..00c66b6e, with `tau` the old field: adds `tau + (frame / (t * scale) - 1)`.
     let tau_bits = x87_store32(x87_load32(e.mem.u32(world + 0x1e4)));
     e.mem.set_u32(this.addr() + 0x88, tau_bits);
     let product = x87_mul(x87_load32(t_bits), scale);
     let ratio = x87_div(x87_load32(frame_bits), product);
     let tau_new = x87_add(x87_load32(tau_bits), x87_sub(ratio, 1.0));
     let tau_new_bits = x87_store32(tau_new);
-    // 00c66b72..00c66b94: the same quotient, not stored between: `DE C1` adds
+    // 00c66b72..00c66b94: the same quotient, not stored between: adds
     // `(frame / (t * scale) - 1) + damping`.
     let damping_bits = x87_store32(x87_load32(e.mem.u32(world + 0x1e8)));
     e.mem.set_u32(this.addr() + 0x8c, damping_bits);
@@ -5018,7 +5018,7 @@ mod tests {
             sink.set(a[0]);
             ret(5)
         });
-        // Small damping and large tau: the order of the sums shows in the last place.
+        // Small tau and large damping: only the tau sum can tell where the rounding happens.
         let tau = 0.3f32;
         let damping = 1.0e8f32;
         e.mem.set_f32(world + 0x1e4, tau);
