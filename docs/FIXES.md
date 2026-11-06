@@ -97,6 +97,9 @@ after the other. Real frames with `NV_FRAME_LOG`, the `iFPSClamp` rows with a re
 It holds up to the 199 a second tested. Frames of 16 ms and longer run `Move` untouched. The game's time against the
 real time is 1.001 to 1.005 at every limit.
 
+Frame rate at the maintainer's settings (2560x1440, 8x anti-aliasing, borderless; about two minutes a run,
+2026-11-06): Doc's room 70.2 frames a second on vanilla, 104.7 with the fixes.
+
 ## Credits
 
 Written with the fix plugins' knowledge, by their authors' permission (2026-11-03); no code is
