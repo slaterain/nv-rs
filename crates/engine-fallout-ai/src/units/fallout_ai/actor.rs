@@ -576,7 +576,7 @@ pub fn actor_destructor(e: &mut Engine, this: Ptr<Actor>) {
 /// result), clears the node's `0x800000` bits unless the setting at `011c7664`
 /// is on, and tells `008b7360` about it when `008b7b70` is true. Returns the
 /// node.
-pub fn fn_0087e060(e: &mut Engine, this: Ptr<Actor>, flag: bool) -> Ptr {
+pub fn fn_0087e060(e: &mut Engine, this: Ptr<Actor>, flag: u8) -> Ptr {
     let node: Ptr = e.call(MOBILE_OBJECT_LOAD3D, &args![this, flag]).ptr();
     if !node.is_null() {
         let process = e.get(this, Actor::pCurrentProcess);
@@ -641,7 +641,7 @@ pub fn actor_create_ragdoll_instance(
     if found != 0 {
         let base_again = base_form(e, this);
         if e.call(0x005f_0c80, &args![base_again]).bool() && world_space.is_null() {
-            fn_0087e960(e, this, true);
+            fn_0087e960(e, this, 1);
             return;
         }
     }
@@ -840,8 +840,8 @@ pub fn fn_0087e940(e: &mut Engine, node: Ptr) -> bool {
 
 // Translated from 0087e960 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets `bTurretBehavior` (Xbox PDB `+0x1c0`).
-pub fn fn_0087e960(e: &mut Engine, this: Ptr<Actor>, value: bool) {
-    e.set(this, Actor::bTurretBehavior, value as u8);
+pub fn fn_0087e960(e: &mut Engine, this: Ptr<Actor>, value: u8) {
+    e.set(this, Actor::bTurretBehavior, value);
 }
 
 // Translated from 0087e980 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1564,10 +1564,11 @@ pub fn fn_0087f920(
 }
 
 // Translated from 0087f990 (decompiled, FalloutNV.exe 1.4.0.525)
-/// `005bb4d0` on the base form's component at `+0x90`.
-pub fn fn_0087f990(e: &mut Engine, this: Ptr<Actor>) -> bool {
+/// The byte `005bb4d0` reads from the base form's component at `+0x90`, widened to an int
+/// (`0087f9ab`): a number, which the sandbox duration and the process delay FILD.
+pub fn fn_0087f990(e: &mut Engine, this: Ptr<Actor>) -> u32 {
     let base = base_form(e, this);
-    e.call(0x005b_b4d0, &args![base.byte_add(0x90)]).bool()
+    u32::from(e.call(0x005b_b4d0, &args![base.byte_add(0x90)]).u8())
 }
 
 // Translated from 0087f9c0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1589,7 +1590,7 @@ pub fn fn_0087f9f0(e: &mut Engine, this: Ptr<Actor>) -> u32 {
 
 // Translated from 0087fa10 (decompiled, FalloutNV.exe 1.4.0.525)
 /// With a process: its virtual `+0x118` with `flag`, then its virtual `+0x4a0`.
-pub fn fn_0087fa10(e: &mut Engine, this: Ptr<Actor>, flag: bool) {
+pub fn fn_0087fa10(e: &mut Engine, this: Ptr<Actor>, flag: u8) {
     let process = e.get(this, Actor::pCurrentProcess);
     if !process.is_null() {
         e.vcall(process.addr(), 0x118, &args![flag]);
@@ -1599,7 +1600,7 @@ pub fn fn_0087fa10(e: &mut Engine, this: Ptr<Actor>, flag: bool) {
 
 // Translated from 0087fa60 (decompiled, FalloutNV.exe 1.4.0.525)
 /// With a process: its virtual `+0x120` with `flag`.
-pub fn fn_0087fa60(e: &mut Engine, this: Ptr<Actor>, flag: bool) {
+pub fn fn_0087fa60(e: &mut Engine, this: Ptr<Actor>, flag: u8) {
     let process = e.get(this, Actor::pCurrentProcess);
     if !process.is_null() {
         e.vcall(process.addr(), 0x120, &args![flag]);
@@ -4351,7 +4352,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0087d860, fn_0087d860(Ptr) -> Ptr),
         entry!(0x0087d890, fn_0087d890(Ptr<Actor>, bool)),
         entry!(0x0087dcb0, actor_destructor(Ptr<Actor>)),
-        entry!(0x0087e060, fn_0087e060(Ptr<Actor>, bool) -> Ptr),
+        entry!(0x0087e060, fn_0087e060(Ptr<Actor>, u8) -> Ptr),
         entry!(0x0087e100, fn_0087e100(Ptr, bool)),
         entry!(
             0x0087e130,
@@ -4359,7 +4360,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x0087e920, fn_0087e920(Ptr) -> bool),
         entry!(0x0087e940, fn_0087e940(Ptr) -> bool),
-        entry!(0x0087e960, fn_0087e960(Ptr<Actor>, bool)),
+        entry!(0x0087e960, fn_0087e960(Ptr<Actor>, u8)),
         entry!(0x0087e980, fn_0087e980(Ptr) -> u32),
         entry!(0x0087e9a0, fn_0087e9a0() -> u32),
         entry!(0x0087e9b0, fn_0087e9b0(Ptr)),
@@ -4399,11 +4400,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0087f920,
             fn_0087f920(Ptr<Actor>, Ptr, Ptr, Ptr, u32) -> bool
         ),
-        entry!(0x0087f990, fn_0087f990(Ptr<Actor>) -> bool),
+        entry!(0x0087f990, fn_0087f990(Ptr<Actor>) -> u32),
         entry!(0x0087f9c0, fn_0087f9c0(Ptr<Actor>) -> f32),
         entry!(0x0087f9f0, fn_0087f9f0(Ptr<Actor>) -> u32),
-        entry!(0x0087fa10, fn_0087fa10(Ptr<Actor>, bool)),
-        entry!(0x0087fa60, fn_0087fa60(Ptr<Actor>, bool)),
+        entry!(0x0087fa10, fn_0087fa10(Ptr<Actor>, u8)),
+        entry!(0x0087fa60, fn_0087fa60(Ptr<Actor>, u8)),
         entry!(0x0087faa0, actor_end_movement(Ptr<Actor>)),
         entry!(0x0087fad0, fn_0087fad0(Ptr<Actor>, u32)),
         entry!(0x0087fb40, fn_0087fb40(Ptr<Actor>, Ptr, f32)),
@@ -6354,12 +6355,33 @@ mod tests_block2 {
         let mut e = new_engine();
         let actor = actor(&mut e, &[]);
         give_base(&mut e, 0x3000);
-        let first = record(&mut e, 0x005b_b4d0, ret(1));
+        // Only AL is the byte: 005bb4d0 leaves the rest of EAX as the component address.
+        let first = record(&mut e, 0x005b_b4d0, ret(0x3000_002a));
         let second = record(&mut e, 0x0047_ded0, ret(0x1234));
-        assert!(e.call(0x0087_f990, &args![actor]).bool());
+        assert_eq!(e.call(0x0087_f990, &args![actor]).u32(), 0x2a);
         assert_eq!(first.borrow()[0], vec![0x3090]);
         assert_eq!(e.call(0x0087_f9f0, &args![actor]).u32(), 0x1234);
         assert_eq!(second.borrow()[0], vec![0x3030]);
+    }
+
+    /// 87e069, 87fa20, 87fa70, 87e96a: the argument byte goes on as it is.
+    #[test]
+    fn flag_forwarders_keep_the_byte() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[]);
+        let process = give_process(&mut e, actor, &[0x118, 0x120, 0x4a0]);
+        let first = record(&mut e, slot(PROCESS_VTABLE, 0x118), Ret::default());
+        let second = record(&mut e, slot(PROCESS_VTABLE, 0x120), Ret::default());
+        record(&mut e, slot(PROCESS_VTABLE, 0x4a0), Ret::default());
+        e.call(0x0087_fa10, &args![actor, 0x2au32]);
+        e.call(0x0087_fa60, &args![actor, 0x2au32]);
+        assert_eq!(first.borrow()[0], vec![process.addr(), 0x2a]);
+        assert_eq!(second.borrow()[0], vec![process.addr(), 0x2a]);
+        let load = record(&mut e, MOBILE_OBJECT_LOAD3D, ret(0));
+        e.call(0x0087_e060, &args![actor, 0x2au32]);
+        assert_eq!(load.borrow()[0], vec![actor.addr(), 0x2a]);
+        e.call(0x0087_e960, &args![actor, 0x2au32]);
+        assert_eq!(e.mem.u8(actor.addr() + 0x1b0), 0x2a);
     }
 
     // ---- 0087f9c0 ----

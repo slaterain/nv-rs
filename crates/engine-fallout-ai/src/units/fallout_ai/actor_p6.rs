@@ -1605,7 +1605,7 @@ fn equip_weapon(e: &mut Engine, this: Ptr<Actor>, animation: u32, equipped: u32,
 /// (`ActorMover::RequestRotateActor`), unless the actor cannot move
 /// (`Actor::CanMove`; answers true) or its process has an entry with
 /// `008bb5a0` set (answers true).
-pub fn fn_008bb520(e: &mut Engine, this: Ptr<Actor>, x: f32, y: f32, z: f32, flag: bool) -> bool {
+pub fn fn_008bb520(e: &mut Engine, this: Ptr<Actor>, x: f32, y: f32, z: f32, flag: u8) -> bool {
     if !e.call(ACTOR_CAN_MOVE, &args![this]).bool() {
         return true;
     }
@@ -1641,7 +1641,7 @@ pub fn fn_008bb5a0(e: &mut Engine, this: Ptr) -> u32 {
 // Translated from 008bb5c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Like `008bb520` with an angle instead of a vector:
 /// `ActorMover::RequestRotateActor_ov2`.
-pub fn fn_008bb5c0(e: &mut Engine, this: Ptr<Actor>, angle: f32, flag: bool) -> bool {
+pub fn fn_008bb5c0(e: &mut Engine, this: Ptr<Actor>, angle: f32, flag: u8) -> bool {
     if !e.call(ACTOR_CAN_MOVE, &args![this]).bool() {
         return true;
     }
@@ -4137,10 +4137,10 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x008ba600, fn_008ba600(Ptr<Actor>)),
         entry!(
             0x008bb520,
-            fn_008bb520(Ptr<Actor>, f32, f32, f32, bool) -> bool
+            fn_008bb520(Ptr<Actor>, f32, f32, f32, u8) -> bool
         ),
         entry!(0x008bb5a0, fn_008bb5a0(Ptr) -> u32),
-        entry!(0x008bb5c0, fn_008bb5c0(Ptr<Actor>, f32, bool) -> bool),
+        entry!(0x008bb5c0, fn_008bb5c0(Ptr<Actor>, f32, u8) -> bool),
         entry!(
             0x008bb630,
             actor_set_pathfinding_flee(Ptr<Actor>, u32) -> bool
@@ -6018,7 +6018,10 @@ mod tests {
     fn rotate_request_goes_to_the_actor_mover() {
         let (mut e, actor) = rotate_setup(true, 0, 0);
         e.call_log = Some(vec![]);
-        assert!(fn_008bb520(&mut e, actor, 1.0, 2.0, 3.0, true));
+        // 8bb56f, 8bb60f: the argument byte goes on as it is.
+        assert!(e
+            .call(0x008b_b520, &args![actor, 1.0f32, 2.0f32, 3.0f32, 0x2au32])
+            .bool());
         assert_eq!(
             calls_to(&e, REQUEST_ROTATE_ACTOR),
             [vec![
@@ -6026,13 +6029,13 @@ mod tests {
                 1.0f32.to_bits(),
                 2.0f32.to_bits(),
                 3.0f32.to_bits(),
-                1
+                0x2a
             ]]
         );
-        assert!(!fn_008bb5c0(&mut e, actor, 0.5, false));
+        assert!(!e.call(0x008b_b5c0, &args![actor, 0.5f32, 0x2au32]).bool());
         assert_eq!(
             calls_to(&e, REQUEST_ROTATE_ACTOR_OV2),
-            [vec![0x7700, 0.5f32.to_bits(), 0]]
+            [vec![0x7700, 0.5f32.to_bits(), 0x2a]]
         );
     }
 
@@ -6041,20 +6044,20 @@ mod tests {
         // Cannot move.
         let (mut e, actor) = rotate_setup(false, 0, 0);
         e.call_log = Some(vec![]);
-        assert!(fn_008bb520(&mut e, actor, 1.0, 2.0, 3.0, true));
-        assert!(fn_008bb5c0(&mut e, actor, 0.5, false));
+        assert!(fn_008bb520(&mut e, actor, 1.0, 2.0, 3.0, 1));
+        assert!(fn_008bb5c0(&mut e, actor, 0.5, 0));
         assert!(calls_to(&e, REQUEST_ROTATE_ACTOR).is_empty());
         assert!(calls_to(&e, REQUEST_ROTATE_ACTOR_OV2).is_empty());
         // The process blocks (flag +0x28 clear and word +0x2ac set).
         let (mut e, actor) = rotate_setup(true, 0, 9);
         e.call_log = Some(vec![]);
-        assert!(fn_008bb520(&mut e, actor, 1.0, 2.0, 3.0, true));
-        assert!(fn_008bb5c0(&mut e, actor, 0.5, false));
+        assert!(fn_008bb520(&mut e, actor, 1.0, 2.0, 3.0, 1));
+        assert!(fn_008bb5c0(&mut e, actor, 0.5, 0));
         assert!(calls_to(&e, REQUEST_ROTATE_ACTOR).is_empty());
         // Flag +0x28 set: the request goes through.
         let (mut e, actor) = rotate_setup(true, 1, 9);
         e.call_log = Some(vec![]);
-        assert!(fn_008bb520(&mut e, actor, 1.0, 2.0, 3.0, true));
+        assert!(fn_008bb520(&mut e, actor, 1.0, 2.0, 3.0, 1));
         assert_eq!(calls_to(&e, REQUEST_ROTATE_ACTOR).len(), 1);
     }
 
