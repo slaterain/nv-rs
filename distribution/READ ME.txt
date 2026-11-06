@@ -43,6 +43,10 @@ Your real saves are only read, and only when you run Import my saves.cmd. Saves 
 userdata\game\Documents\My Games\FalloutNV\Saves. They are normal saves; nv-rs doesn't copy them back
 for you.
 
+The first start takes your settings from the game's own launcher if you have run it (it copies them,
+and your real ones stay as they are). If not, it starts on the game's High preset at your desktop's
+size, in a borderless window. Settings.cmd and the game's own menu change them.
+
 
 What works
 ----------
