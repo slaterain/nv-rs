@@ -7,37 +7,70 @@
 //! - The sound table takes about 20 s, so it is made again only when Windows' build or the default
 //!   sound device changed.
 use crate::win;
+use std::io::Read;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// `CREATE_NO_WINDOW`: a console tool without a console window.
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// A tool's standard output, or why not.
-fn run_tool(tool: &Path, args: &[&std::ffi::OsStr], log: &Path) -> Result<Vec<u8>, String> {
+/// How long a graphics tool may take (about a second here) and the sound tool (about 19 s here).
+const GRAPHICS_TOOL_LIMIT: Duration = Duration::from_secs(60);
+const SOUND_TOOL_LIMIT: Duration = Duration::from_secs(240);
+
+/// A tool's standard output, or why not. A tool that hangs (a driver can) is ended after `limit`,
+/// so the player gets a message instead of a window that never goes.
+fn run_tool(
+    tool: &Path,
+    args: &[&std::ffi::OsStr],
+    log: &Path,
+    limit: Duration,
+) -> Result<Vec<u8>, String> {
+    let name = tool.file_name().unwrap_or_default().to_string_lossy();
     let stderr = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(log)
         .map(Stdio::from)
         .unwrap_or_else(|_| Stdio::null());
-    let output = Command::new(tool)
+    let mut child = Command::new(tool)
         .args(args)
         .current_dir(tool.parent().unwrap_or(Path::new(".")))
         .stdin(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(stderr)
         .creation_flags(CREATE_NO_WINDOW)
-        .output()
+        .spawn()
         .map_err(|e| format!("{} could not start: {e}", tool.display()))?;
-    if output.status.success() {
-        Ok(output.stdout)
+    let mut pipe = child.stdout.take().ok_or("no output pipe")?;
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = pipe.read_to_end(&mut bytes);
+        bytes
+    });
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if start.elapsed() >= limit => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "{name} did not finish in {} seconds",
+                    limit.as_secs()
+                ));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => return Err(format!("{name}: {e}")),
+        }
+    };
+    let bytes = reader.join().unwrap_or_default();
+    if status.success() {
+        Ok(bytes)
     } else {
-        Err(format!(
-            "{} ended with status {:?}",
-            tool.file_name().unwrap_or_default().to_string_lossy(),
-            output.status.code()
-        ))
+        Err(format!("{name} ended with status {:?}", status.code()))
     }
 }
 
@@ -79,11 +112,12 @@ pub fn adapter_table_problem(table: &str) -> Option<String> {
 /// the device takes (only its `CreateQuery` lines).
 pub fn make_adapter_table(tools: &Path, game_exe: &Path, log: &Path) -> Result<Vec<u8>, String> {
     let d3d9 = tools.join("d3d9-capture.exe");
-    let mut table = run_tool(&d3d9, &[], log)?;
+    let mut table = run_tool(&d3d9, &[], log, GRAPHICS_TOOL_LIMIT)?;
     table.extend(run_tool(
         &tools.join("nvapi-capture.exe"),
         &[game_exe.as_os_str()],
         log,
+        GRAPHICS_TOOL_LIMIT,
     )?);
     let queries = run_tool(
         &d3d9,
@@ -92,6 +126,7 @@ pub fn make_adapter_table(tools: &Path, game_exe: &Path, log: &Path) -> Result<V
             std::ffi::OsStr::new("queries"),
         ],
         log,
+        GRAPHICS_TOOL_LIMIT,
     )?;
     for line in String::from_utf8_lossy(&queries).lines() {
         if line.starts_with("CreateQuery\t") {
@@ -195,7 +230,12 @@ pub fn make_sound_table(
     if same && table.is_file() {
         return Ok(false);
     }
-    let bytes = run_tool(&tools.join("dsound-capture.exe"), &[], log)?;
+    let bytes = run_tool(
+        &tools.join("dsound-capture.exe"),
+        &[],
+        log,
+        SOUND_TOOL_LIMIT,
+    )?;
     sound_state(&String::from_utf8_lossy(&bytes))?;
     write_whole(table, &bytes).map_err(|e| format!("{}: {e}", table.display()))?;
     write_whole(stamp, fingerprint.as_bytes()).map_err(|e| format!("{}: {e}", stamp.display()))?;
