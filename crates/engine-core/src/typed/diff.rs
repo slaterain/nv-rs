@@ -2782,6 +2782,25 @@ mod tests {
         let report = diff.family(&LEAF_FAMILY).run();
         report.assert_same();
         assert_eq!(report.direct_calls, usize::from(cfg!(debug_assertions)));
+        // In either order: each family named goes on.
+        let report = Diff::new(crate::entry!(0x0040_2310, caller_typed(Ptr) -> u32))
+            .translation(crate::entry!(0x0040_2310, non_leaf_translated(Ptr) -> u32).1)
+            .family(&LEAF_FAMILY)
+            .family(&CALLER_FAMILY)
+            .translation_calls_plainly(&[LEAF])
+            .inputs(&[Input::Of(&[3])])
+            .control_words(&[OTHER_THREADS])
+            .setup(|e, case| {
+                let (leaf, f) = crate::entry!(0x0040_2300, leaf_translated(Ptr) -> u32);
+                e.register(leaf, f);
+                e.register(CALLEE, |_, _| Ret::default());
+                let p = e.mem.alloc(0x20);
+                e.mem.set_u32(p + 4, case.word(0));
+                vec![p]
+            })
+            .run();
+        report.assert_same();
+        assert_eq!(report.direct_calls, usize::from(cfg!(debug_assertions)));
     }
 
     /// `translation_calls_plainly` drops the typed side only: the translation logging the call
