@@ -40,7 +40,7 @@ fn a_family_from_above_goes_direct_until_doubled() {
     let mut e = Engine::new();
     e.map(COUNTER, 4);
     assert!(e.is_registered(LEAF));
-    assert!(e.typed_direct(FAMILY));
+    assert!(e.typed_direct(FAMILY, LEAF));
     assert_eq!(caller(&mut e, 1), 2);
     assert_eq!(e.mem.u32(COUNTER), 1);
     assert_eq!(e.call(LEAF, &[1]).u32(), 2);
@@ -50,7 +50,7 @@ fn a_family_from_above_goes_direct_until_doubled() {
         eax: a[0] + 100,
         ..Ret::default()
     });
-    assert!(!e.typed_direct(FAMILY));
+    assert!(!e.typed_direct(FAMILY, LEAF));
     assert_eq!(caller(&mut e, 1), 101);
     assert_eq!(e.mem.u32(COUNTER), 2);
 }

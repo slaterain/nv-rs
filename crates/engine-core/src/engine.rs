@@ -888,7 +888,7 @@ impl Engine {
         } else {
             self.push_frame(thread, size)
         };
-        let traced = self.call_trace.is_some();
+        let traced = self.call_trace.is_some() || self.typed_keeps_frames();
         if traced {
             self.stack_frames.push((block, size));
         }
@@ -934,6 +934,20 @@ impl Engine {
     pub fn guest_stack_restore(&mut self, (thread, top): (usize, Option<u32>)) {
         if let Some(Some(stack)) = self.guest_stacks.get_mut(thread) {
             stack.1 = top.unwrap_or(stack.0 + GUEST_STACK_SIZE - STACK_TOP_RESERVE);
+        }
+    }
+
+    /// Whether the differential test wants `with_stack` frames kept ([`crate::typed::diff`]); in a
+    /// program built without the core's `test-support` feature, never.
+    #[inline(always)]
+    fn typed_keeps_frames(&self) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            self.typed.keep_frames
+        }
+        #[cfg(not(any(test, feature = "test-support")))]
+        {
+            false
         }
     }
 

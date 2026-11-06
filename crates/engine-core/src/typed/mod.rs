@@ -27,8 +27,14 @@
 //! [`Engine::dispatch`]: crate::Engine
 //! [`Engine::call_full`]: crate::Engine
 
+// Type-aware where the repository's text rule against `as` from a float can only read words. It
+// also stops `u32 as u8` and `f64 as f32`: those go through a named helper with a local `allow`,
+// where the rounding or the cut is what the code means.
+#![deny(clippy::cast_possible_truncation)]
+
 use crate::abi::AbiFn;
 use crate::{AddrMap, Engine};
+use std::ffi::OsString;
 use std::sync::{Mutex, OnceLock};
 
 #[cfg(any(test, feature = "test-support"))]
@@ -93,6 +99,23 @@ pub fn provide(family: &'static Family) {
             family.name, family.id, f.name, f.id
         );
     }
+}
+
+/// A number or a name used twice in the table: `families` must have neither. Checked at every
+/// [`apply`], whichever families the switch has on, so a clash doesn't wait for both to be on.
+pub(crate) fn check_table(families: &[&Family]) -> Result<(), String> {
+    for (i, a) in families.iter().enumerate() {
+        if let Some(b) = families[..i]
+            .iter()
+            .find(|b| b.name == a.name || b.id == a.id)
+        {
+            return Err(format!(
+                "typed family {} ({:?}) clashes with {} ({:?})",
+                a.name, a.id, b.name, b.id
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// What the switch says about one family.
@@ -172,7 +195,14 @@ pub(crate) struct State {
     /// The families the switch put on `dual`.
     dual: u32,
     /// The addresses of the families that are on, with the family's bit.
-    members: AddrMap<u32, u32>,
+    pub(crate) members: AddrMap<u32, u32>,
+    /// The differential test's direct run: every `typed_call!` goes direct with the call log on,
+    /// and notes itself in the log ([`Engine::typed_note_direct`]).
+    forced: bool,
+    /// The differential test keeps `with_stack` frames in [`Engine::stack_frames`], to read a stack
+    /// word as an offset into its frame.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) keep_frames: bool,
 }
 
 impl State {
@@ -199,16 +229,81 @@ impl State {
 }
 
 impl Engine {
-    /// Whether a [`typed_call!`](crate::typed_call) of `family` is a Rust call now. In a play or
-    /// release build one load and one test. A build with debug assertions (the tests) also asks
-    /// [`Engine::diagnosing`] itself, so a test that turns a diagnostic on sees the very next
-    /// typed call by address; the others see it from the next call by address on
+    /// Whether a [`typed_call!`](crate::typed_call) of `family` at `addr` is a Rust call now. In a
+    /// play or release build one load and one test, and `addr` isn't read. A build with debug
+    /// assertions (the tests) also stops when `addr` isn't in `family`, and asks
+    /// [`Engine::diagnosing`] itself, so a test that turns a diagnostic on sees the very next typed
+    /// call by address; the others see it from the next call by address on
     /// ([`Engine::typed_sync`]).
     ///
     /// [`Engine::diagnosing`]: crate::Engine
     #[inline(always)]
-    pub fn typed_direct(&self, family: FamilyId) -> bool {
-        self.typed.direct & family.bit() != 0 && !(cfg!(debug_assertions) && self.diagnosing())
+    pub fn typed_direct(&self, family: FamilyId, addr: u32) -> bool {
+        if self.typed.direct & family.bit() == 0 {
+            return false;
+        }
+        !cfg!(debug_assertions) || self.typed_direct_checked(family, addr)
+    }
+
+    /// [`Engine::typed_direct`]'s checks in a build with debug assertions, with the flag set.
+    ///
+    /// The address has to be in the named family: what is registered over an address clears the
+    /// family that holds it ([`State::replaced`]), so a call naming another family would go on
+    /// past an override, and one at an address in no family would never see one.
+    #[inline(never)]
+    fn typed_direct_checked(&self, family: FamilyId, addr: u32) -> bool {
+        let member = self.typed.members.get(&addr).copied();
+        if member != Some(family.bit()) {
+            panic!(
+                "typed_call! at {addr:08x} names {family:?}, but the address is {} (say the \
+                 family with `Diff::family` in a differential test)",
+                match member {
+                    Some(bit) => format!("in the family with bit {bit:#x}"),
+                    None => "in no family that is on".to_string(),
+                }
+            );
+        }
+        self.typed.forced || !self.diagnosing()
+    }
+
+    /// Whether the differential test's direct run is on: a build with debug assertions asks at each
+    /// direct `typed_call!`.
+    #[doc(hidden)]
+    #[inline]
+    pub fn typed_noting_direct(&self) -> bool {
+        self.typed.forced
+    }
+
+    /// The differential test's direct run: a direct `typed_call!` shows in the call log and the
+    /// call hook as the call by address does, so the two runs compare call for call.
+    #[doc(hidden)]
+    #[cold]
+    pub fn typed_note_direct(&mut self, addr: u32, words: &[u32]) {
+        if let Some(log) = &mut self.call_log {
+            log.push((addr, words.to_vec()));
+        }
+        if let Some(hook) = self.call_hook {
+            hook(self, addr, false);
+        }
+    }
+
+    /// The differential test's direct run: from here on every `typed_call!` goes direct, whatever
+    /// the family, with the diagnostics on. A family that doesn't hold the address stops
+    /// ([`Engine::typed_direct_checked`]).
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn typed_force_direct(&mut self) {
+        self.typed.forced = true;
+        self.typed.direct = u32::MAX;
+    }
+
+    /// Registers over `addr` without clearing its family: the differential test's function under
+    /// test, once its family is on.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn typed_register_under_test(&mut self, addr: u32, f: AbiFn) {
+        let (allowed, direct) = (self.typed.allowed, self.typed.direct);
+        self.register(addr, f);
+        self.typed.allowed = allowed;
+        self.typed.direct = direct;
     }
 
     /// Whether `family` runs with both forms live (`NV_TYPED=<family>:dual`).
@@ -219,6 +314,9 @@ impl Engine {
 
     /// Brings the direct flags up to the diagnostics: clear while any is on.
     pub(crate) fn typed_sync(&mut self) {
+        if self.typed.forced {
+            return;
+        }
         self.typed.direct = if self.diagnosing() {
             0
         } else {
@@ -227,11 +325,24 @@ impl Engine {
     }
 }
 
+/// `NV_TYPED` as text. A value that isn't Unicode can't name a family, so it is refused rather than
+/// read as unset, which would run the default where something else was asked for.
+fn switch_value(value: Option<OsString>) -> Result<Option<String>, String> {
+    value
+        .map(|v| {
+            v.into_string()
+                .map_err(|v| format!("its value {v:?} is not Unicode text"))
+        })
+        .transpose()
+}
+
 /// `NV_TYPED` as the process started with it.
 fn switch_text() -> Option<&'static str> {
     static TEXT: OnceLock<Option<String>> = OnceLock::new();
-    TEXT.get_or_init(|| std::env::var("NV_TYPED").ok())
-        .as_deref()
+    TEXT.get_or_init(|| {
+        switch_value(std::env::var_os("NV_TYPED")).unwrap_or_else(|why| panic!("NV_TYPED: {why}"))
+    })
+    .as_deref()
 }
 
 /// Registers every family the switch has on over the translations ([`Engine::new`], after all
@@ -245,6 +356,7 @@ pub fn apply(e: &mut Engine) {
 
 /// [`apply`] with the table and the switch given.
 pub(crate) fn apply_families(e: &mut Engine, families: &[&Family], spec: Option<&str>) {
+    check_table(families).unwrap_or_else(|why| panic!("{why}"));
     let modes = parse_switch(spec, families).unwrap_or_else(|why| panic!("NV_TYPED: {why}"));
     let (mut allowed, mut dual) = (0, 0);
     for (family, mode) in families.iter().zip(modes) {
@@ -252,11 +364,6 @@ pub(crate) fn apply_families(e: &mut Engine, families: &[&Family], spec: Option<
             continue;
         }
         let bit = family.id.bit();
-        assert!(
-            allowed & bit == 0,
-            "typed family {} has the number of another family that is on",
-            family.name
-        );
         for (addr, f) in (family.funcs)() {
             // One implementation per address (the extender notes' R1).
             if e.typed.members.insert(addr, bit).is_some() {
@@ -281,11 +388,15 @@ pub(crate) fn apply_families(e: &mut Engine, families: &[&Family], spec: Option<
 /// `&mut Engine` in scope and `ADDR` the exe address `f` is registered at. A Rust call when the
 /// family's direct flag is set, else [`Engine::call`] with the same words; the result has `f`'s
 /// type either way. The arguments are evaluated once, first, in order, so they may read through
-/// `e`.
+/// `e`, and their types are `Copy`, as every argument type is.
 ///
-/// Never at an address in `data/overridable.tsv`: there the call stays `e.call` (the repository's
-/// hygiene test enforces it). `f`'s crate must be this crate or one below it, or the name does not
-/// resolve; a callee above stays `e.call`.
+/// Nothing here can check that `ADDR` is `f`'s address at compile time. The repository's hygiene
+/// test does: the literal has to be registered under that name. A test build also stops when `ADDR`
+/// isn't in `FAMILY`, and the differential test runs this direct branch.
+///
+/// Never at an address in `data/overridable.tsv`: there the call stays `e.call` (the hygiene test
+/// enforces that too). `f`'s crate must be this crate or one below it, or the name does not resolve;
+/// a callee above stays `e.call`.
 #[macro_export]
 macro_rules! typed_call {
     ($family:expr, $addr:expr, $($f:ident)::+ ($e:ident $(, $a:expr)* $(,)?)) => {
@@ -297,7 +408,10 @@ macro_rules! typed_call {
         $crate::typed_call!(@bind $family, $addr, [$($f)*], $e, [$($bound)* arg], $($rest,)*)
     }};
     (@bind $family:expr, $addr:expr, [$($f:tt)*], $e:ident, [$($bound:ident)*],) => {
-        if $e.typed_direct($family) {
+        if $e.typed_direct($family, $addr) {
+            if cfg!(debug_assertions) && $e.typed_noting_direct() {
+                $e.typed_note_direct($addr, &$crate::args![$($bound),*]);
+            }
             $($f)*($e, $($bound),*)
         } else {
             $crate::abi::RetVal::from_ret($e.call($addr, &$crate::args![$($bound),*]))
@@ -307,6 +421,9 @@ macro_rules! typed_call {
 
 #[cfg(test)]
 mod tests {
+    // Stand-ins cast freely; the rule is for the functions they stand in for.
+    #![allow(clippy::cast_possible_truncation)]
+
     use super::*;
     use crate::abi::{Ret, RetVal};
     use std::cell::RefCell;
@@ -467,11 +584,12 @@ mod tests {
         let mut e = engine(typed());
         apply_families(&mut e, &[&STAND_IN], Some("stand_in"));
         assert_eq!(e.typed.direct, FAMILY.bit());
-        assert!(e.typed_direct(FAMILY));
+        assert!(e.typed_direct(FAMILY, LEAF));
 
         e.call_hook = Some(hook);
-        // A test build sees it at once; the flag itself moves at the next call by address.
-        assert!(!e.typed_direct(FAMILY));
+        // A test build sees it at once; the flag itself moves at the next call by address. A build
+        // without debug assertions (`cargo test --release`) still reads the flag alone here.
+        assert_eq!(e.typed_direct(FAMILY, LEAF), !cfg!(debug_assertions));
         assert_eq!(e.typed.direct, FAMILY.bit());
         e.call(OTHER, &[1]);
         assert_eq!(e.typed.direct, 0);
@@ -519,11 +637,11 @@ mod tests {
             eax: a[0] + 7,
             ..Ret::default()
         });
-        assert!(!e.typed_direct(FAMILY));
+        assert!(!e.typed_direct(FAMILY, LEAF));
         assert_eq!(e.call(CALLER, &[5]).u32(), 12 + 24);
         // No later trip down the full path brings it back.
         e.typed_sync();
-        assert!(!e.typed_direct(FAMILY));
+        assert!(!e.typed_direct(FAMILY, LEAF));
 
         let mut e = engine(typed());
         apply_families(&mut e, &[&STAND_IN], Some("stand_in"));
@@ -537,7 +655,7 @@ mod tests {
         let mut e = engine(typed());
         apply_families(&mut e, &[&STAND_IN], Some("stand_in"));
         e.register(OTHER, |_, _| Ret::default());
-        assert!(e.typed_direct(FAMILY));
+        assert!(e.typed_direct(FAMILY, LEAF));
     }
 
     /// Two engines in one process don't share flags.
@@ -546,8 +664,8 @@ mod tests {
         let mut on = engine(typed());
         apply_families(&mut on, &[&STAND_IN], Some("stand_in"));
         let off = engine(typed());
-        assert!(on.typed_direct(FAMILY));
-        assert!(!off.typed_direct(FAMILY));
+        assert!(on.typed_direct(FAMILY, LEAF));
+        assert!(!off.typed_direct(FAMILY, LEAF));
     }
 
     /// `typed_call!`: arguments evaluated once and first (they may read through `e`), floats in two
@@ -596,6 +714,8 @@ mod tests {
         assert_eq!(by_address, (42.5, 1, 5));
         let direct = {
             let mut e = Engine::new_untyped();
+            e.typed.members.insert(ADD, FAMILY.bit());
+            e.typed.members.insert(NOTHING, FAMILY.bit());
             e.typed.allowed = FAMILY.bit();
             e.typed_sync();
             // No function registered: a call by address would stop.
@@ -628,6 +748,79 @@ mod tests {
         // With no table only the words stand.
         assert_eq!(parse_switch(Some("off,all"), &[]), Ok(vec![]));
         assert!(parse_switch(Some("leaf"), &[]).is_err());
+    }
+
+    /// Test builds tie the address to the family: what is registered over an address clears the
+    /// family holding it, so a call naming another family, or at an address in no family, would go
+    /// past an override in play.
+    #[test]
+    fn a_typed_call_outside_its_family_stops_a_test_build() {
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        const OTHER_FAMILY: FamilyId = FamilyId::new(4);
+        let run = |family: FamilyId, addr: u32| {
+            let mut e = engine(plain());
+            apply_families(&mut e, &[&STAND_IN, &PAST_GATE], Some("stand_in"));
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.typed_direct(family, addr)
+            }))
+            .map_err(|p| p.downcast_ref::<String>().cloned().unwrap_or_default())
+        };
+        assert_eq!(run(FAMILY, LEAF), Ok(true));
+        let why = run(OTHER_FAMILY, LEAF).unwrap_err();
+        assert!(why.contains("in the family with bit 0x8"), "{why}");
+        let why = run(FAMILY, OTHER).unwrap_err();
+        assert!(why.contains("in no family that is on"), "{why}");
+    }
+
+    /// A clash in the table stops every start, whichever families the switch has on.
+    #[test]
+    fn a_number_or_name_used_twice_in_the_table_stops_the_start() {
+        static SAME_ID: Family = Family {
+            name: "same_id",
+            id: FAMILY,
+            past_gate: false,
+            funcs: || vec![],
+        };
+        static SAME_NAME: Family = Family {
+            name: "stand_in",
+            id: FamilyId::new(9),
+            past_gate: false,
+            funcs: || vec![],
+        };
+        assert!(check_table(&[&STAND_IN, &PAST_GATE]).is_ok());
+        for clash in [&SAME_ID, &SAME_NAME] {
+            let why = check_table(&[&STAND_IN, clash]).unwrap_err();
+            assert!(why.contains("clashes with stand_in"), "{why}");
+            let stopped = std::panic::catch_unwind(|| {
+                // Both off: the clash still stops it.
+                apply_families(&mut Engine::new_untyped(), &[&STAND_IN, clash], Some("off"));
+            });
+            assert!(stopped.is_err());
+        }
+    }
+
+    /// A value that isn't text is refused, not read as unset.
+    #[test]
+    fn a_switch_value_that_is_not_text_is_refused() {
+        assert_eq!(switch_value(None), Ok(None));
+        assert_eq!(
+            switch_value(Some(OsString::from("off"))),
+            Ok(Some("off".to_string()))
+        );
+        #[cfg(windows)]
+        let bad = {
+            use std::os::windows::ffi::OsStringExt;
+            OsString::from_wide(&[0x006f, 0xd800])
+        };
+        #[cfg(unix)]
+        let bad = {
+            use std::os::unix::ffi::OsStringExt;
+            OsString::from_vec(vec![0x6f, 0xff])
+        };
+        let why = switch_value(Some(bad)).unwrap_err();
+        assert!(why.contains("not Unicode"), "{why}");
     }
 
     #[test]
@@ -755,6 +948,7 @@ mod tests {
         e.register(addr, f);
         let this = e.mem.alloc(8);
         e.mem.set_u32(this + 4, 1);
+        e.typed.members.insert(addr, FAMILY.bit());
         let e = &mut e;
         for (name, direct) in [("flag set", FAMILY.bit()), ("flag clear", 0)] {
             e.typed.direct = direct;
@@ -792,7 +986,7 @@ mod tests {
         println!(
             "answer {} direct {}",
             e.call(CHILD_ADDR, &[1]).u32(),
-            e.typed_direct(CHILD.id)
+            e.is_registered(CHILD_ADDR) && e.typed_direct(CHILD.id, CHILD_ADDR)
         );
     }
 }
