@@ -11,11 +11,11 @@ every comparison with the original, gate and recording runs on it (the maintaine
 | `Settings.cmd`'s `settings.ini` | `Preset=fixes` (the default) or `Preset=vanilla`; `FrameLimit=n` (0: none) | The player |
 | `NV_PRESET=fixes` or `vanilla`, `NV_FRAME_LIMIT=n` | Over the file | Tests, scripts |
 | `NV_UNCAP=0` or `1`, and each fix's own variable below | That fix alone; with no `NV_PRESET` the rest of the run is vanilla | Gates, tests |
-| `NV_TRACE_LIST` (a recording) with no `NV_PRESET` | Vanilla | A script that was never told about the preset still measures the original |
+| A recording or scripted run: `NV_TRACE_LIST`, `NV_MOVE_KEYS`, `NV_MOVE_MOUSE`, `NV_SOUND_RECORD`, `NV_SHOT`, `NV_TICK_COUNT`, `NV_FRAME_LOG`, the probes and `*_CHECK` switches (the list is `TEST_VARIABLES` in `fixes.rs`), with no `NV_PRESET` | Vanilla | A script that was never told about the preset still measures the original. `NV_SAVE_OUT` (the preview launcher's) does not pin |
 | `NV_SETTINGS=FILE` | The settings file, when it isn't `settings.ini` beside the program or in the folder above it | Launchers |
 
 It is read once at start-up and bound before the first frame (`fixes::install`): the log's `Preset ...`
-line says what the run is. Anything it can't read stops the start with a message. `Host::start` runs
+line says what the run is. Anything it can't read stops the start with a message. A settings file with a UTF-8 mark or in UTF-16 (PowerShell 5.1's `>`) is decoded; one that exists and can't be read stops the start, unless `NV_PRESET` is set, which beats the file whatever it holds. `Host::start` runs
 vanilla, for tests and tools; the viewer reads the choice and calls `Host::start_with`.
 
 Anything that compares with the original says `NV_PRESET=vanilla`. Speed gates say `NV_PRESET=vanilla
@@ -41,10 +41,12 @@ high frame rate's steps: a trace itself holds the game near 30 frames a second.
 
 ## The fixes
 
+Not done: the menus and logos run at 170+ frames a second with no `FrameLimit` (undecided; a limit that applies in menus only is the maintainer's choice). The game's own `iFPSClamp` ignores `FrameLimit`: a clamp is a fixed step with no wait, which the uncapped step doesn't pace, so a recording with `iFPSClamp` runs as fast as it can.
+
 | Fix | Address | Switch | What it does |
 | --- | --- | --- | --- |
-| Uncapped frame rate | `00aa4ee0` | `NV_UNCAP` | `BSTimer`'s step without its sleep and its 10 ms floor, on the microsecond clock. `FrameLimit` paces it |
-| High-frame-rate landing | `00c73170` | `NV_HF_LANDING` | A character that lands standing still in a frame under 16 ms falls on as far as at 16 ms frames |
+| Uncapped frame rate | `00aa4ee0` | `NV_UNCAP` | `BSTimer`'s step without its sleep and its 10 ms floor, on the microsecond clock. `FrameLimit` paces it. Where the original sleeps (a step under 10 ms by the tick count) the other threads get a `Sleep(0)` pass instead, about one frame in three, and the first step after a disable answers as the original does (10 ms) |
+| High-frame-rate landing | `00c73170` | `NV_HF_LANDING` | The player's character, landing standing still in a frame under 16 ms, falls on as far as at 16 ms frames: one more integration with `Move`'s own velocity, large-creature mode word and step. Measured on the player only, so other characters run `Move` as it is. The extra time is 32 ms minus the frame, so it jumps at 16 ms (15.9 ms gets about 32 ms in all, 16 ms none); the fall stops at the floor either way, and the difference is under half a unit (0.43 at 16 ms frames), not visible, so it is not smoothed |
 | High-frame-rate slow motion | `00aa4e40` | `NV_HF_SLOWMO` | The time multiplier moves to its target by the time passed, not by the frame |
 
 ### What high frame rates do to the original's code

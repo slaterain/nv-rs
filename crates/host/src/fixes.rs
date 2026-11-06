@@ -89,10 +89,30 @@ impl Choice {
     /// `NV_PRESET=vanilla|fixes`, `NV_FRAME_LIMIT=n`, and each [`Fix::env`]. Anything it can't
     /// read stops the start with a message, so a misspelt pin never runs the wrong game.
     pub fn read() -> Result<Choice, String> {
-        let file = settings_file();
-        let text = file.as_deref().and_then(|p| std::fs::read(p).ok());
-        let text = text.map(|t| String::from_utf8_lossy(&t).into_owned());
-        Choice::from_parts(text.as_deref(), |name| std::env::var(name).ok())
+        Choice::from_file(settings_file().as_deref(), |name| std::env::var(name).ok())
+    }
+
+    /// [`Choice::read`] on a given settings file (none: no file) and environment. A file that
+    /// exists and can't be read stops the start, since its `Preset=vanilla` would be lost; an
+    /// explicit `NV_PRESET` makes the file moot, so then it doesn't matter.
+    pub fn from_file(
+        file: Option<&Path>,
+        env: impl Fn(&str) -> Option<String>,
+    ) -> Result<Choice, String> {
+        let text = match file.map(|p| (p, std::fs::read(p))) {
+            None => None,
+            Some((_, Ok(bytes))) => Some(decode_settings(&bytes)),
+            Some((_, Err(e))) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Some((_, Err(_))) if env("NV_PRESET").is_some() => None,
+            Some((path, Err(e))) => {
+                return Err(format!(
+                    "Can't read the settings file {}: {e}. Fix it or remove it (its Preset line \
+                     would be lost), or set NV_PRESET.",
+                    path.display()
+                ))
+            }
+        };
+        Choice::from_parts(text.as_deref(), env)
     }
 
     /// [`Choice::read`] on given text and environment.
@@ -113,9 +133,16 @@ impl Choice {
             if key.starts_with(['#', ';']) {
                 continue;
             }
+            // The environment wins, so a file's line it overrides isn't even read (a test's pin
+            // beats a settings file above the program, whatever that holds).
             if key.eq_ignore_ascii_case("Preset") {
-                choice.preset = parse_preset(value, "settings.ini's Preset")?;
+                if env("NV_PRESET").is_none() {
+                    choice.preset = parse_preset(value, "settings.ini's Preset")?;
+                }
             } else if key.eq_ignore_ascii_case("FrameLimit") {
+                if env("NV_FRAME_LIMIT").is_some() {
+                    continue;
+                }
                 choice.frame_limit = parse_limit(value, "settings.ini's FrameLimit")?;
             }
         }
@@ -130,9 +157,11 @@ impl Choice {
                 Some(other) => return Err(format!("{}={other}: use 0 or 1", fix.env)),
             }
         }
-        // A recording or a single fix's switch is a test: with no NV_PRESET of its own it runs on
-        // vanilla, so a script that was never told about the preset still measures the original.
-        if env("NV_TRACE_LIST").is_some() || !choice.overrides.is_empty() {
+        // A recording, a scripted run, a measurement or a single fix's switch is a test: with no
+        // NV_PRESET of its own it runs on vanilla, so a script that was never told about the preset
+        // still measures the original. Only a plain start (or the launcher, whose NV_SAVE_OUT is a
+        // real player's) gets the fixes.
+        if TEST_VARIABLES.iter().any(|name| env(name).is_some()) || !choice.overrides.is_empty() {
             choice.preset = Preset::Vanilla;
         }
         if let Some(value) = env("NV_PRESET") {
@@ -170,6 +199,67 @@ impl Choice {
                 on.join(", ")
             }
         )
+    }
+}
+
+/// Environment variables that mean a test, a measurement or a scripted run: the host's input
+/// scripts, recordings, probes and logs. Without an `NV_PRESET` they run vanilla. (`NV_SAVE_OUT`,
+/// which the preview launcher sets for real play, and `NV_SOUND`, `NV_THREADS` and the like, which
+/// are run settings, are not here.)
+const TEST_VARIABLES: &[&str] = &[
+    "NV_TRACE_LIST",
+    "NV_MOVE_KEYS",
+    "NV_MOVE_MOUSE",
+    "NV_MOVE_REAL_INPUT",
+    "NV_MOVE_TRACE",
+    "NV_MOVE_PROBE",
+    "NV_MOVE_TSV",
+    "NV_MOVE_WATCH",
+    "NV_MOVE_CALL_PROFILE",
+    "NV_MOVE_CALL_BUDGET",
+    "NV_MOVE_BUDGET_FROM",
+    "NV_SOUND_RECORD",
+    "NV_SHOT",
+    "NV_TICK_COUNT",
+    "NV_FRAME_LOG",
+    "NV_BENCH_CALLS",
+    "NV_BENCH_CALL_COUNTS",
+    "NV_PROFILE",
+    "NV_WATCH",
+    "NV_WORD_CHECK",
+    "NV_SKIN_CHECK",
+    "NV_QUEUE_CHECK",
+    "NV_FACE_CHECK",
+    "NV_SPEECH_CHECK",
+    "NV_LIGHT_CHECK",
+    "NV_HKMEM_CHECK",
+    "NV_HEAD_CHECK",
+    "NV_BLOCK_CHECK",
+    "NV_AUDIO_CHECK",
+    "NV_PASS_CHECK",
+];
+
+/// The settings file's text: a UTF-8 byte order mark is dropped and UTF-16 (what PowerShell 5.1's
+/// `>` writes) is decoded; anything else is read as UTF-8, bad bytes replaced.
+fn decode_settings(bytes: &[u8]) -> String {
+    let utf16 = |rest: &[u8], big: bool| {
+        let units: Vec<u16> = rest
+            .chunks_exact(2)
+            .map(|c| {
+                if big {
+                    u16::from_be_bytes([c[0], c[1]])
+                } else {
+                    u16::from_le_bytes([c[0], c[1]])
+                }
+            })
+            .collect();
+        String::from_utf16_lossy(&units)
+    };
+    match bytes {
+        [0xff, 0xfe, rest @ ..] => utf16(rest, false),
+        [0xfe, 0xff, rest @ ..] => utf16(rest, true),
+        [0xef, 0xbb, 0xbf, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
     }
 }
 
@@ -311,6 +401,100 @@ mod tests {
         assert_eq!(choice.preset, Preset::Fixes);
     }
 
+    /// Scripted input and measurement variables make a test; the preview launcher's save folder
+    /// doesn't.
+    #[test]
+    fn scripted_and_measured_runs_pin_vanilla() {
+        for name in TEST_VARIABLES {
+            let pairs: &'static [(&str, &str)] = Box::leak(Box::new([(*name, "x")]));
+            let choice = Choice::from_parts(Some("Preset=fixes"), env_of(pairs)).unwrap();
+            assert_eq!(choice.preset, Preset::Vanilla, "{name}");
+            let both: &'static [(&str, &str)] =
+                Box::leak(Box::new([(*name, "x"), ("NV_PRESET", "fixes")]));
+            let choice = Choice::from_parts(None, env_of(both)).unwrap();
+            assert_eq!(choice.preset, Preset::Fixes, "{name}");
+        }
+        for name in [
+            "NV_MOVE_KEYS",
+            "NV_MOVE_MOUSE",
+            "NV_SOUND_RECORD",
+            "NV_SHOT",
+            "NV_TICK_COUNT",
+        ] {
+            assert!(TEST_VARIABLES.contains(&name), "{name}");
+        }
+        let choice = Choice::from_parts(None, env_of(&[("NV_SAVE_OUT", "x")])).unwrap();
+        assert_eq!(choice.preset, Preset::Fixes);
+    }
+
+    #[test]
+    fn a_byte_order_mark_or_utf16_doesnt_hide_the_preset() {
+        let text = "Borderless=1\r\nPreset=vanilla\r\n";
+        let mut bom = vec![0xef, 0xbb, 0xbf];
+        bom.extend_from_slice(text.as_bytes());
+        let mut utf16le = vec![0xff, 0xfe];
+        utf16le.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+        let mut utf16be = vec![0xfe, 0xff];
+        utf16be.extend(text.encode_utf16().flat_map(u16::to_be_bytes));
+        for bytes in [text.as_bytes().to_vec(), bom, utf16le, utf16be] {
+            let decoded = decode_settings(&bytes);
+            let choice = Choice::from_parts(Some(&decoded), no_env).unwrap();
+            assert_eq!(choice.preset, Preset::Vanilla, "{bytes:02x?}");
+        }
+        // The very first line, where a mark would hide its key.
+        let mut bom = vec![0xef, 0xbb, 0xbf];
+        bom.extend_from_slice(b"Preset=vanilla\n");
+        let choice = Choice::from_parts(Some(&decode_settings(&bom)), no_env).unwrap();
+        assert_eq!(choice.preset, Preset::Vanilla);
+    }
+
+    #[test]
+    fn a_settings_file_that_cant_be_read_stops_the_start() {
+        let dir = std::env::temp_dir().join(format!("nv-fixes-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A folder where the file should be: it exists, and reading it fails.
+        let err = Choice::from_file(Some(&dir), no_env).unwrap_err();
+        assert!(err.contains("settings file"), "{err}");
+        // An explicit preset makes the file moot.
+        let choice = Choice::from_file(Some(&dir), env_of(&[("NV_PRESET", "vanilla")])).unwrap();
+        assert_eq!(choice.preset, Preset::Vanilla);
+        // No such file: the defaults. A real one is read, UTF-16 included.
+        let missing = dir.join("missing.ini");
+        assert_eq!(
+            Choice::from_file(Some(&missing), no_env).unwrap().preset,
+            Preset::Fixes
+        );
+        let file = dir.join("settings.ini");
+        let mut bytes = vec![0xff, 0xfe];
+        bytes.extend(
+            "Preset=vanilla\r\n"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes),
+        );
+        std::fs::write(&file, bytes).unwrap();
+        assert_eq!(
+            Choice::from_file(Some(&file), no_env).unwrap().preset,
+            Preset::Vanilla
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A test sets NV_PRESET and gets that, whatever a settings file in a folder above the program
+    /// says, even one that doesn't parse.
+    #[test]
+    fn an_explicit_preset_beats_a_settings_file() {
+        let choice = Choice::from_parts(
+            Some("Preset=banana\nFrameLimit=fast\n"),
+            env_of(&[("NV_PRESET", "vanilla"), ("NV_FRAME_LIMIT", "90")]),
+        )
+        .unwrap();
+        assert_eq!(choice.preset, Preset::Vanilla);
+        assert_eq!(choice.frame_limit, 90);
+        let choice =
+            Choice::from_parts(Some("Preset=vanilla"), env_of(&[("NV_PRESET", "fixes")])).unwrap();
+        assert_eq!(choice.preset, Preset::Fixes);
+    }
+
     #[test]
     fn vanilla_and_a_log_line() {
         assert_eq!(Choice::vanilla().describe(), "Preset vanilla: no fix on");
@@ -370,7 +554,8 @@ mod tests {
         };
         assert_eq!(run(&Choice::vanilla()), (vec![6], 0.01));
         let fixes = Choice::from_parts(None, no_env).unwrap();
-        assert_eq!(run(&fixes), (vec![], 0.004));
+        // The first step answers as the original (10 ms); no real sleep, a pass for the other threads.
+        assert_eq!(run(&fixes), (vec![0], 0.01));
     }
 
     /// Vanilla's translation of `Move` is what's registered; the fixes preset's differs only at
