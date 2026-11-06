@@ -48,97 +48,97 @@ fn low_byte(word: u32) -> u8 {
     }
 }
 
-// Typed from 00559450, read against fnv_decomp
+// Typed from 00559450
 /// The word at +0 of whatever `this` is: a list's first element, among many others.
 #[inline(always)]
 pub fn word_at_0(e: &mut Engine, this: impl OneWord) -> u32 {
     e.mem.u32(this.one_word())
 }
 
-// Typed from 00726070, read against fnv_decomp
+// Typed from 00726070
 /// The word at +4: a list node's next pointer, an inventory entry's count.
 #[inline(always)]
 pub fn word_at_4(e: &mut Engine, this: impl OneWord) -> u32 {
     e.mem.u32(this.one_word().wrapping_add(4))
 }
 
-// Typed from 0044ddc0, read against fnv_decomp
+// Typed from 0044ddc0
 /// The word at +8.
 #[inline(always)]
 pub fn word_at_8(e: &mut Engine, this: impl OneWord) -> u32 {
     e.mem.u32(this.one_word().wrapping_add(8))
 }
 
-// Typed from 0084e3a0, read against fnv_decomp
+// Typed from 0084e3a0
 /// The word at +0xc.
 #[inline(always)]
 pub fn word_at_c(e: &mut Engine, this: impl OneWord) -> u32 {
     e.mem.u32(this.one_word().wrapping_add(0xc))
 }
 
-// Typed from 007af430, read against fnv_decomp
+// Typed from 007af430
 /// The word at +0x20.
 #[inline(always)]
 pub fn word_at_20(e: &mut Engine, this: impl OneWord) -> u32 {
     e.mem.u32(this.one_word().wrapping_add(0x20))
 }
 
-// Typed from 0045cd60, read against fnv_decomp
+// Typed from 0045cd60
 /// The word at +0x28.
 #[inline(always)]
 pub fn word_at_28(e: &mut Engine, this: impl OneWord) -> u32 {
     e.mem.u32(this.one_word().wrapping_add(0x28))
 }
 
-// Typed from 00671d10, read against fnv_decomp
+// Typed from 00671d10
 /// The word at +0x30.
 #[inline(always)]
 pub fn word_at_30(e: &mut Engine, this: impl OneWord) -> u32 {
     e.mem.u32(this.one_word().wrapping_add(0x30))
 }
 
-// Typed from 008d8520, read against fnv_decomp
+// Typed from 008d8520
 /// The word at +0x68.
 #[inline(always)]
 pub fn word_at_68(e: &mut Engine, this: impl OneWord) -> u32 {
     e.mem.u32(this.one_word().wrapping_add(0x68))
 }
 
-// Typed from 00437bb0, read against fnv_decomp
+// Typed from 00437bb0
 /// The byte at +0x87.
 #[inline(always)]
 pub fn byte_at_87(e: &mut Engine, this: impl OneWord) -> u8 {
     e.mem.u8(this.one_word().wrapping_add(0x87))
 }
 
-// Typed from 006815c0, read against fnv_decomp
+// Typed from 006815c0
 /// `this` itself.
 #[inline(always)]
 pub fn same_word(_e: &mut Engine, this: impl OneWord) -> u32 {
     this.one_word()
 }
 
-// Typed from 0040fbe0, read against fnv_decomp
+// Typed from 0040fbe0
 /// Nothing at all. Many callers push words (it is the release build's empty error report as well as
 /// other empty functions), and it reads none: `typed_call!`'s `; words` form passes them by address.
 #[inline(always)]
 pub fn nothing(_e: &mut Engine) {}
 
-// Typed from 00acbb70, read against fnv_decomp
+// Typed from 00acbb70
 /// 0, with `this` unread.
 #[inline(always)]
 pub fn zero_of_this(_e: &mut Engine, _this: impl OneWord) -> u32 {
     0
 }
 
-// Typed from 00e7cd40, read against fnv_decomp
+// Typed from 00e7cd40
 /// 0, with the word unread.
 #[inline(always)]
 pub fn zero(_e: &mut Engine, _this: impl OneWord) -> u32 {
     0
 }
 
-// Typed from 00416870, read against fnv_decomp
+// Typed from 00416870
 /// A point's constructor: three floats through the x87 stack to +0, +4 and +8, each `FLD` quieting a
 /// signalling NaN. Returns `this`.
 #[inline(always)]
@@ -158,7 +158,7 @@ pub fn point3_new(
     this
 }
 
-// Typed from 0043d450, read against fnv_decomp
+// Typed from 0043d450
 /// The object's bound (the pointer at +0x20), or the empty bound when it has none. The exe reads the
 /// field twice, with nothing between; one read does the same.
 #[inline(always)]
@@ -173,7 +173,7 @@ pub fn world_bound(e: &mut Engine, this: impl OneWord) -> u32 {
     }
 }
 
-// Typed from 00877a30, read against fnv_decomp
+// Typed from 00877a30
 /// An array's element address: the base at +4, plus `index` words.
 #[inline(always)]
 pub fn array_element(e: &mut Engine, this: impl OneWord, index: impl OneWord) -> u32 {
@@ -181,35 +181,35 @@ pub fn array_element(e: &mut Engine, this: impl OneWord, index: impl OneWord) ->
     base.wrapping_add(index.one_word().wrapping_mul(4))
 }
 
-// Typed from 00440d80, read against fnv_decomp
+// Typed from 00440d80
 /// Whether bit 0x20 of the form flags at +8 is set.
 #[inline(always)]
 pub fn form_flag_20(e: &mut Engine, this: impl OneWord) -> bool {
     e.mem.u32(this.one_word().wrapping_add(8)) & 0x20 != 0
 }
 
-// Typed from 00440da0, read against fnv_decomp
+// Typed from 00440da0
 /// Whether bit 0x800 of the form flags at +8 is set.
 #[inline(always)]
 pub fn form_flag_800(e: &mut Engine, this: impl OneWord) -> bool {
     e.mem.u32(this.one_word().wrapping_add(8)) & 0x800 != 0
 }
 
-// Typed from 00576d30, read against fnv_decomp
+// Typed from 00576d30
 /// Whether bit 0x200000 of the form flags at +8 is set.
 #[inline(always)]
 pub fn form_flag_200000(e: &mut Engine, this: impl OneWord) -> bool {
     e.mem.u32(this.one_word().wrapping_add(8)) & 0x0020_0000 != 0
 }
 
-// Typed from 00456630, read against fnv_decomp
+// Typed from 00456630
 /// Whether the flag word at +0x30 has any bit of `mask`.
 #[inline(always)]
 pub fn flags_at_30_any(e: &mut Engine, this: impl OneWord, mask: impl OneWord) -> bool {
     e.mem.u32(this.one_word().wrapping_add(0x30)) & mask.one_word() != 0
 }
 
-// Typed from 008256d0, read against fnv_decomp
+// Typed from 008256d0
 /// Whether the words at +4 and +0 are both zero, read in that order and the second only when the first
 /// is: an empty list.
 #[inline(always)]
@@ -218,7 +218,7 @@ pub fn both_words_zero(e: &mut Engine, this: impl OneWord) -> bool {
     e.mem.u32(this.wrapping_add(4)) == 0 && e.mem.u32(this) == 0
 }
 
-// Typed from 004e20c0, read against fnv_decomp
+// Typed from 004e20c0
 /// Four words into entry `index` of the 16-byte table of the water's colours.
 #[inline(always)]
 pub fn store_colour(
@@ -238,7 +238,7 @@ pub fn store_colour(
     e.mem.set_u32(entry.wrapping_add(12), alpha.one_word());
 }
 
-// Typed from 004b6190, read against fnv_decomp
+// Typed from 004b6190
 /// Dot product of the points at `this` and `other`: each product and sum rounded as the running thread's
 /// control word says, in the exe's order, stored to a `float` and loaded back. Exact helpers: see the
 /// module's comment.
@@ -258,7 +258,7 @@ pub fn point3_dot(e: &mut Engine, this: impl OneWord, other: impl OneWord) -> f3
     f32::from_bits(x87_store32(x87_add(sum, z)))
 }
 
-// Typed from 0049da80, read against fnv_decomp
+// Typed from 0049da80
 /// Which side of the plane at `plane` the point at `point` is on: 2 behind, 1 in front, else 0, also for
 /// a NaN. The distance rounds as [`point3_dot`]'s sum does and goes through a `float` local; it compares
 /// twice against the double zero the exe keeps in its constants.
@@ -342,7 +342,7 @@ pub fn double_exponent(_e: &mut Engine, _low: impl OneWord, high: impl OneWord) 
     }
 }
 
-// Typed from 00e890c0, read against fnv_decomp
+// Typed from 00e890c0
 /// A renderer state's value, by the slot table at `0126f92c`; slots 5 and up do nothing. `enable` picks
 /// the marked byte, value word and count of its side (+0x80, +0x6c, +0x64 set; +0xa4, +0x90, +0x88
 /// clear). A slot marked there just takes the value and updates the second flag: the count at +0xac goes
