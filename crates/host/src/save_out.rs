@@ -25,10 +25,13 @@ fn out_dir() -> Option<&'static Path> {
     DIR.get_or_init(|| {
         let dir = PathBuf::from(std::env::var_os("NV_SAVE_OUT")?);
         let profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
-        if let Some(why) = refused(&dir, profile.as_deref()) {
-            println!(
-                "NV_SAVE_OUT={}: refused ({why}); saves are not copied.",
-                dir.display()
+        if let Some(why) = refused(&dir, profile.as_deref(), &known_folders()) {
+            warn_visibly(
+                &format!(
+                    "NV_SAVE_OUT={}: refused ({why}); saves are not copied.",
+                    dir.display()
+                ),
+                "Your saves are NOT being kept: they will be lost when the game closes. The save folder the game was given is one it must not write to. Start the game through Play.exe, and report this if you did.",
             );
             return None;
         }
@@ -37,11 +40,108 @@ fn out_dir() -> Option<&'static Path> {
     .as_deref()
 }
 
+/// A warning the player can't miss: a line in the log, and on Windows a message box (from its own
+/// thread, so the game goes on), unless `NV_RS_NO_WINDOWS` is set (scripted runs).
+fn warn_visibly(line: &str, plain: &str) {
+    println!("{line}");
+    #[cfg(windows)]
+    if std::env::var_os("NV_RS_NO_WINDOWS").is_none() {
+        let text: Vec<u16> = format!("{plain}\n\n{line}")
+            .encode_utf16()
+            .chain([0])
+            .collect();
+        let title: Vec<u16> = "nv-rs".encode_utf16().chain([0]).collect();
+        std::thread::spawn(move || {
+            #[link(name = "user32")]
+            extern "system" {
+                fn MessageBoxW(
+                    window: isize,
+                    text: *const u16,
+                    title: *const u16,
+                    kind: u32,
+                ) -> i32;
+            }
+            // MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST
+            // SAFETY: both strings end in a NUL and live through the call.
+            unsafe { MessageBoxW(0, text.as_ptr(), title.as_ptr(), 0x30 | 0x1_0000 | 0x4_0000) };
+        });
+    }
+    #[cfg(not(windows))]
+    let _ = plain;
+}
+
+/// The player's Documents, AppData and Local AppData as Windows answers for them (wherever they
+/// were moved to: OneDrive, another drive); empty off Windows.
+pub fn known_folders() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        #[link(name = "shell32")]
+        extern "system" {
+            fn SHGetFolderPathW(
+                window: isize,
+                csidl: i32,
+                token: isize,
+                flags: u32,
+                path: *mut u16,
+            ) -> i32;
+        }
+        let mut out = Vec::new();
+        for csidl in [0x05, 0x1a, 0x1c] {
+            let mut buffer = vec![0u16; 1024];
+            // SAFETY: the buffer is longer than MAX_PATH, as the call asks.
+            let hr = unsafe { SHGetFolderPathW(0, csidl, 0, 0, buffer.as_mut_ptr()) };
+            if hr == 0 {
+                let end = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+                out.push(PathBuf::from(String::from_utf16_lossy(&buffer[..end])));
+            }
+        }
+        out
+    }
+    #[cfg(not(windows))]
+    Vec::new()
+}
+
+/// The path the system really means: links, junctions, `subst` and short names resolved, a part
+/// that does not exist yet kept after the real path of the longest part that does.
+fn real_path(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut at = path.to_path_buf();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(&at) {
+            let mut out = real;
+            for part in rest.iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        match (at.file_name().map(|n| n.to_owned()), at.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name);
+                at = parent.to_path_buf();
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
 /// Why `dir` may not receive saves: it lies inside one of the player's own folders under
-/// `profile` (Documents, OneDrive's Documents, AppData). Compared without case, `/` read as `\`.
+/// `profile` (Documents, OneDrive's Documents, AppData) or inside one of the `known` folders
+/// (Windows' own answer for Documents and AppData, wherever they were moved to), by its text or by
+/// the real path it leads to (a junction or a drive made with `subst` doesn't get round this).
+/// Compared without case, `/` read as `\`.
 /// The rest of OneDrive is not the game's: a Desktop kept there is where many people unzip things.
-pub fn refused(dir: &Path, profile: Option<&Path>) -> Option<&'static str> {
-    let norm = |p: &Path| p.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
+pub fn refused(dir: &Path, profile: Option<&Path>, known: &[PathBuf]) -> Option<&'static str> {
+    let norm = |p: &Path| {
+        let text = p.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
+        let text = match text.strip_prefix("\\\\?\\unc\\") {
+            Some(rest) => format!("\\\\{rest}"),
+            None => text
+                .strip_prefix("\\\\?\\")
+                .map_or(text.clone(), str::to_owned),
+        };
+        text.trim_end_matches('\\').to_owned()
+    };
+    let real_dir = norm(&real_path(dir));
     let dir = norm(dir);
     if !dir.contains(':') && !dir.starts_with("\\\\") {
         return Some("not a full path");
@@ -53,11 +153,19 @@ pub fn refused(dir: &Path, profile: Option<&Path>) -> Option<&'static str> {
         return Some("USERPROFILE is not set, so the player's folders are unknown");
     };
     let profile = norm(profile);
-    let profile = profile.trim_end_matches('\\');
-    for player in ["documents", "onedrive\\documents", "appdata"] {
-        let root = format!("{profile}\\{player}");
-        if dir == root || dir.starts_with(&format!("{root}\\")) {
-            return Some("inside the player's own folders");
+    let mut roots: Vec<String> = ["documents", "onedrive\\documents", "appdata"]
+        .iter()
+        .map(|player| format!("{profile}\\{player}"))
+        .collect();
+    for folder in known {
+        roots.push(norm(folder));
+        roots.push(norm(&real_path(folder)));
+    }
+    for root in roots {
+        for place in [&dir, &real_dir] {
+            if *place == root || place.starts_with(&format!("{root}\\")) {
+                return Some("inside the player's own folders");
+            }
         }
     }
     None
@@ -84,10 +192,13 @@ fn copy_prefs(e: &Engine) {
         .get_or_init(|| {
             let file = PathBuf::from(std::env::var_os("NV_PREFS_OUT")?);
             let profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
-            if let Some(why) = refused(&file, profile.as_deref()) {
-                println!(
-                    "NV_PREFS_OUT={}: refused ({why}); settings are not copied.",
-                    file.display()
+            if let Some(why) = refused(&file, profile.as_deref(), &known_folders()) {
+                warn_visibly(
+                    &format!(
+                        "NV_PREFS_OUT={}: refused ({why}); settings are not copied.",
+                        file.display()
+                    ),
+                    "Your changed game settings are NOT being kept: they will be lost when the game closes. The settings file the game was given is in a folder it must not write to. Start the game through Play.exe, and report this if you did.",
                 );
                 return None;
             }
@@ -199,16 +310,51 @@ mod tests {
             "relative\\saves",
             r"C:\Users\<name>\nv-re\..\Documents\My Games",
         ] {
-            assert!(refused(Path::new(dir), Some(profile)).is_some(), "{dir}");
+            assert!(refused(Path::new(dir), Some(profile), &[]).is_some(), "{dir}");
         }
-        assert!(refused(Path::new(r"D:\scratch"), None).is_some());
+        assert!(refused(Path::new(r"D:\scratch"), None, &[]).is_some());
         for dir in [
             r"C:\Users\<name>\nv-re\work\build43-scratch\docs-port\My Games\FalloutNV\Saves",
             r"C:\Users\<name>\DocumentsScratch",
             r"C:\Users\<name>\OneDrive\Desktop\nv-rs\userdata\Documents\My Games\FalloutNV\Saves",
             r"D:\scratch",
         ] {
-            assert_eq!(refused(Path::new(dir), Some(profile)), None, "{dir}");
+            assert_eq!(refused(Path::new(dir), Some(profile), &[]), None, "{dir}");
+        }
+    }
+
+    /// Documents moved away from the profile (OneDrive, another drive) is still the player's
+    /// Documents, and so is a junction that leads into it.
+    #[test]
+    fn a_redirected_documents_and_a_junction_into_it_are_refused() {
+        let profile = Path::new(r"C:\Users\<name>");
+        let moved = vec![PathBuf::from(r"D:\Moved\Documents")];
+        let saves = Path::new(r"D:\Moved\Documents\My Games\FalloutNV\Saves");
+        assert!(refused(saves, Some(profile), &moved).is_some());
+        assert!(refused(Path::new("d:/moved/documents"), Some(profile), &moved).is_some());
+        for fine in [r"D:\Moved\DocumentsScratch", r"D:\Moved\Other"] {
+            assert_eq!(refused(Path::new(fine), Some(profile), &moved), None, "{fine}");
+        }
+        #[cfg(windows)]
+        {
+            let base =
+                std::env::temp_dir().join(format!("nv-save-junction-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&base);
+            let documents = base.join("Moved Documents");
+            std::fs::create_dir_all(&documents).unwrap();
+            let link = base.join("innocent");
+            let made = std::process::Command::new("cmd")
+                .args(["/c", "mklink", "/J"])
+                .arg(&link)
+                .arg(&documents)
+                .output()
+                .unwrap();
+            assert!(made.status.success(), "{made:?}");
+            let known = vec![documents.clone()];
+            assert!(refused(&link.join("Saves"), Some(profile), &known).is_some());
+            assert!(refused(&documents.join("Saves"), Some(profile), &known).is_some());
+            assert_eq!(refused(&base.join("elsewhere"), Some(profile), &known), None);
+            let _ = std::fs::remove_dir_all(&base);
         }
     }
 

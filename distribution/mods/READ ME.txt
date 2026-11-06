@@ -6,7 +6,9 @@ its .bsa, and folders such as Meshes, Textures or Sound. Then start "Play with m
 
 Your game folder is never changed. Each start builds a whole game folder in userdata\modgame:
 your game's files linked, not copied, plus these on top. For that the nv-rs folder must be on
-the same drive as the game, on a normal Windows (NTFS) drive.
+the same drive as the game, on a normal Windows (NTFS) drive. A link is another name for the same
+file, so if you uninstall the game while userdata\modgame is still here, the disk space stays used
+until you delete the nv-rs folder (or only userdata\modgame) too.
 
 Which plugins are on: the DLC a mod needs (read from the mod itself), then the mods' .esm files,
 then their .esp files. The game itself orders them by file date, as the original does. To choose

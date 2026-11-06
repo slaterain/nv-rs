@@ -38,6 +38,9 @@ Your files
 nv-rs never writes to your game folder, your Documents or your AppData. Saves, settings, logs and
 reports all stay in the userdata folder here. To go back to the original game, just start it: nothing
 of it has changed. To remove nv-rs, delete this folder (your saves in userdata go with it).
+Playing with mods links your game's files into userdata\modgame rather than copying them. A link is
+another name for the same file, so if you uninstall the game while that folder is still here, the
+disk space stays used until you delete the nv-rs folder too.
 
 Your real saves are only read, and only when you run Import my saves.cmd. Saves you make here are in
 userdata\game\Documents\My Games\FalloutNV\Saves. They are normal saves; nv-rs doesn't copy them back
