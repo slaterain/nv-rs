@@ -76,7 +76,7 @@ crates under it; the graph has no cycles:
 
 | Crate | Holds | Depends on |
 | --- | --- | --- |
-| `engine-core` | `Engine`, `Mem`, `abi`, `ptr`, `x87`, `types`, `exe`, the static initializer and `atexit` tables (`static_init`, `static_exit`, `data/`), the prelude and the `entry!`/`args!`/`layout!` macros; units `crt.rs` and `platform.rs` (the core of the platform layer: kernel objects, threads, `VirtualAlloc`, the memory manager, the clock, the loader's module handles; its `Layer` joins `engine-platform`) | - |
+| `engine-core` | `Engine`, `Mem`, `abi`, `ptr`, `x87`, `types`, `exe`, `typed` (the typed migration's seam, [below](#typed-code)), the static initializer and `atexit` tables (`static_init`, `static_exit`, `data/`), the prelude and the `entry!`/`args!`/`layout!` macros; units `crt.rs` and `platform.rs` (the core of the platform layer: kernel objects, threads, `VirtualAlloc`, the memory manager, the clock, the loader's module handles; its `Layer` joins `engine-platform`) | - |
 | `engine-platform` | the rest of the platform layer, not translation units: the window, Direct3D 9 and D3DX (modelled and real), DirectInput, DirectSound and the mixer, DirectShow, Bink, Ogg Vorbis, `mmio`, files, `LoadLibraryA`, the process, NVAPI (`src/*.rs`, formerly `engine-core`'s `units/platform/`; [below](#the-platform-crate)) | core |
 | `engine-gamebryo` | `nimain`, `nianimation`, `nicollision`, `niparticle`, `nisystem`, `nixenonrenderer` | core |
 | `engine-bs` | `bsaudio`, `bscore`, `bsmain`, `bsmenu`, `bsmovie`, `bsshader`, `bssystem` | core, gamebryo |
@@ -383,6 +383,139 @@ $L scaffold "fallout/ai/processlists.cpp" # create its file (lead)
    incomplete marker only when the documented gap is closed and tested.
    A panic-only placeholder has no translated branch: leave it skipped,
    without a translation marker or a new registry entry.
+
+## Typed code
+
+The migration of [ADR-0012](adr/0012-modern-64-bit-engine.md) and
+[ADR-0014](adr/0014-typed-migration-in-two-stages.md) replaces a translation with typed, native
+Rust, a family of functions at a time. `engine_core::typed` is the seam it plugs into. No typed
+game function exists yet and the family table is empty.
+
+**The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
+all registration: each family that is on is registered over the translations with
+`Engine::register`, so "registered twice" doesn't fire and the translation stays linked. The value
+is a comma-separated list, read left to right:
+
+| Item | Means |
+| --- | --- |
+| (unset or empty) | The default: a family is on when it is past its gate |
+| `off` | Every family off: the game runs the translations |
+| `all` | Back to the default |
+| `<family>` | That family on, past its gate or not |
+| `<family>:dual` | On, with both forms live, for families that keep them (`Engine::typed_dual`) |
+| `<family>:off` | That family off |
+
+Anything else stops the start with a message. A family is a row in `typed::FAMILIES`; a family in a
+crate above the core calls `typed::provide` from its `units::funcs`, as the platform layer installs
+itself.
+
+**Calls.**
+
+- From anywhere to typed code by address (`e.call`, `e.vcall`, a callback word): unchanged. The typed
+  function is registered at its exe address, so vtables and callback words keep exe addresses.
+- From typed code to untyped: `e.call` as ever. A local whose address reaches untyped code stays in
+  `with_stack`.
+- Between typed functions: `typed_call!(FAMILY, 0x00abc123, path::f(e, a, b))`, with the address
+  written as a literal. It is a Rust call when the family's direct flag is set, else `e.call` with
+  the same words. Its callee's crate must be the caller's or one below it; a callee above stays
+  `e.call`.
+
+**The direct flag** lives in the `Engine`, one bit per family, so each engine has its own:
+
+- It is clear while any per-call diagnostic is on (what `Engine::diagnosing` lists: the call log,
+  budget and counts, the hook, nv-trace, the return trace, the block check, `NV_PROFILE`). The
+  full call path, which every call takes while a diagnostic is on, brings it up to date, so a tool
+  sees every call from its first by-address call on. A build with debug assertions (the tests)
+  also asks the diagnostics at each `typed_call!`, so a test sees the very next one.
+- It clears for good on a family once anything is registered over one of its addresses: a test
+  double or a built-in fix. So doubles keep working whichever crate's code makes the call, also
+  a crate below the one under test, which isn't built with `cfg(test)`.
+
+**What it costs.** `Engine::call` gains nothing: its fast path doesn't read the seam, and its machine
+code is the same as before, instruction for instruction, apart from field offsets (the engine grew
+by 48 bytes). The full path, taken on a cache miss or with a diagnostic on, gains one load and one
+branch while no family is on. A `typed_call!` with the flag set is one load and one test before the
+Rust call, in play and release builds. A direct call doesn't count against the thread host's time
+slice and isn't on `call_stack`.
+
+Measured on 2026-11-06 (`spread_dispatch_speed`, 48,000 functions registered, 8,000 called, release
+build, the two builds alternating, 8 runs each):
+
+| | Median | Best | Worst |
+| --- | ---: | ---: | ---: |
+| `Engine::call` before the seam | 4.72 ns | 4.60 ns | 4.77 ns |
+| `Engine::call` with the seam, no family | 4.69 ns | 4.61 ns | 4.73 ns |
+
+**A typed function.**
+
+- Read fnv_decomp for flow and the exe for what decides; the audit's traps still apply. No decompiled
+  text, paths or symbols in the repository, and no placeholder names. The marker goes directly above
+  the function, as for a translation, in its own words: `// Typed from <addr>`, with
+  `, read against fnv_decomp` after the address when it was (ADR-0009).
+- A difference from the translation: the exe and the recordings decide, and a translation bug found
+  this way gets noted.
+- Native locals only where no address reaches untyped code. Layouts are declared once per class.
+- Float to integer goes through `x87::fistp_chop` and its family, never `as`, which saturates where
+  the exe gets the integer indefinite.
+- No `core::arch` and no x86 assumption. The core's check for `aarch64-apple-darwin` runs at each
+  core change, once that target is installed.
+
+**The differential test** (`typed::diff`, in the core's tests and behind its `test-support` feature)
+runs the translation and the typed version on two engines with the same setup, once per generated
+input and control word, and compares exactly:
+
+```rust
+Diff::new(entry!(0x00abc123, typed_version(Ptr<Thing>, f32) -> f32))
+    .inputs(&[Input::Word, Input::F32])
+    .setup(|e, case| {
+        let thing = e.mem.alloc(0x40);
+        e.mem.set_u32(thing + 8, case.word(0));
+        vec![thing, case.f32(1).to_bits()]
+    })
+    .run()
+    .assert_same();
+```
+
+- **Inputs:** `Input::F32` and `F64` hold NaNs (quiet, signalling, with a payload, the x87 default),
+  both zeros, denormals and values around the integer range and past `f32`'s; `Input::Word`, `Flag`
+  and `Of(&[..])` give the integers, one per branch that matters. All combinations up to
+  `max_cases` (512), else every value of each argument and then a fixed pseudo-random sample.
+- **Compared:** the return value by bits, every outgoing call with its words in order, the memory
+  after the call (every mapped page), whether and how the run stopped, the heap's top and free
+  bytes, and the control word. Each case runs under both the main thread's and the other threads'
+  control word, because x87 rounding differs.
+- **Not compared:** the thread's stack for `with_stack` locals, since a local may become native, so
+  an outgoing word pointing into it compares as "a stack address"; a double reads a local's contents
+  itself. Time slice and clock aren't compared either. `ignore_calls` drops callees the typed version
+  inlines.
+- Both engines hold translations only, whatever `NV_TYPED` says, so exactly one function differs. A
+  case has two fresh engines, about 1 ms each in the core's tests and more in a crate with more
+  functions registered; `max_cases` caps it. A crate above the core needs `engine-core`'s
+  `test-support` feature in its dev-dependencies (`engine-gamebryo`, `engine-bs`, `engine-havok`
+  and `engine-speedtree` don't have it yet).
+
+**Hygiene** (`crates/nvinspect/tests/repo_hygiene.rs`). Typed code is everything under
+`crates/engine-core/src/typed/` and `crates/engine-typed/src/`, and every function under a typed
+marker elsewhere. The rules read text, not types:
+
+- In typed code: no `as` from a float to an integer (outside test modules), where the operand shows
+  it is a float: a declared float in the same function, a float literal, or a float call. A float that
+  comes out of `e.get(p, field)` or another helper isn't seen; the differential test's NaN and huge
+  cases catch that instead.
+- In typed code: no `core::arch`, `std::arch` or `target_arch`; no decompiled text, comments included
+  (C++ casts, `this->`, paths into a decompilation, `.cpp`); no identifier ending in an exe address but
+  the project's own `fn_<addr>` and `run_<addr>`.
+- Markers are well formed and directly above a function; a function registered in a typed folder has
+  one.
+- `crates/engine-core/data/overridable.tsv` lists the addresses a fix or a built-in can override: the
+  plugins' hooked function entries (a lower bound: literal addresses only), `NV_UNCAP`'s timer step,
+  and the four fixes-preset guards. `typed_call!` may not name one, and typed code may not call one
+  directly. The translations' direct calls to them (129 today, within units) are frozen by count: a
+  new one fails, and a removed one asks for the number to be lowered. Moving them to calls by address
+  would change the calls the game makes, so it is left for each family's own step.
+
+The ledger counts a typed marker in an engine crate like a translation marker, and `docs/LEDGER.md`
+has a `typed` column.
 
 ## Checking against the real exe
 
