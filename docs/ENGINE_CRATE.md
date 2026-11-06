@@ -454,6 +454,9 @@ branch while no family is on. A `typed_call!` with the flag set is one load and 
 Rust call, in play and release builds, and the checks above exist only with debug assertions on. A
 direct call doesn't count against the thread host's time slice and isn't on `call_stack`.
 
+The thread host keeps a count of calls by address (`Threads::calls`), and `NV_MOVE_THREADS` prints it
+with who ran when, per frame, beside the status line (`thread calls: N order: id:calls .. f ..`).
+
 **A risk for later.** The thread host hands over at calls by address: the time slice counts them and
 its hook runs at them. A typed loop that waits on guest memory for another game thread, making only
 direct calls or none, never reaches that hook, so it hangs where the translation handed off. Such
