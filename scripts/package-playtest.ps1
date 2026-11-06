@@ -46,7 +46,7 @@ try {
         # machine's folders stay out of the programs.
         $registry = Join-Path $(if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE '.cargo' }) 'registry\src'
         $rustup = if ($env:RUSTUP_HOME) { $env:RUSTUP_HOME } else { Join-Path $env:USERPROFILE '.rustup' }
-        $env:CARGO_ENCODED_RUSTFLAGS = @('-Ctarget-feature=+crt-static', "--remap-path-prefix=$root=nv-rs", "--remap-path-prefix=$registry=cargo", "--remap-path-prefix=$rustup=rustup") -join [char]0x1f
+        $env:CARGO_ENCODED_RUSTFLAGS = @('-C', 'target-feature=+crt-static', "--remap-path-prefix=$root=nv-rs", "--remap-path-prefix=$registry=cargo", "--remap-path-prefix=$rustup=rustup") -join [char]0x1f
         $env:CARGO_TARGET_DIR = $Target
         cargo build --release --locked -p nv-viewer
         if ($LASTEXITCODE) { throw 'The game program did not build.' }
@@ -107,7 +107,15 @@ try {
     if ($LASTEXITCODE) { throw 'package-check found something that must not be in the package.' }
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip, [IO.Compression.CompressionLevel]::Optimal, $true)
+    # File by file: entry names need forward slashes, which Windows PowerShell's CreateFromDirectory
+    # doesn't give them, and every ZIP tool reads.
+    $archive = [IO.Compression.ZipFile]::Open($zip, [IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($file in Get-ChildItem -LiteralPath $stage -Recurse -File) {
+            $entry = $name + '/' + ($file.FullName.Substring($stage.TrimEnd('\', '/').Length + 1) -replace '\\', '/')
+            [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, $entry, [IO.Compression.CompressionLevel]::Optimal)
+        }
+    } finally { $archive.Dispose() }
     $zipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
     "$zipHash  $name.zip" | Set-Content -LiteralPath "$zip.sha256" -Encoding ascii
     [pscustomobject]@{ Zip = $zip; Bytes = (Get-Item -LiteralPath $zip).Length; Checksum = "$zip.sha256"; Commit = $commit; ExecutableSHA256 = $sha }
