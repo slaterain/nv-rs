@@ -310,7 +310,10 @@ mod tests {
             "relative\\saves",
             r"C:\Users\<name>\nv-re\..\Documents\My Games",
         ] {
-            assert!(refused(Path::new(dir), Some(profile), &[]).is_some(), "{dir}");
+            assert!(
+                refused(Path::new(dir), Some(profile), &[]).is_some(),
+                "{dir}"
+            );
         }
         assert!(refused(Path::new(r"D:\scratch"), None, &[]).is_some());
         for dir in [
@@ -333,7 +336,11 @@ mod tests {
         assert!(refused(saves, Some(profile), &moved).is_some());
         assert!(refused(Path::new("d:/moved/documents"), Some(profile), &moved).is_some());
         for fine in [r"D:\Moved\DocumentsScratch", r"D:\Moved\Other"] {
-            assert_eq!(refused(Path::new(fine), Some(profile), &moved), None, "{fine}");
+            assert_eq!(
+                refused(Path::new(fine), Some(profile), &moved),
+                None,
+                "{fine}"
+            );
         }
         #[cfg(windows)]
         {
@@ -353,7 +360,10 @@ mod tests {
             let known = vec![documents.clone()];
             assert!(refused(&link.join("Saves"), Some(profile), &known).is_some());
             assert!(refused(&documents.join("Saves"), Some(profile), &known).is_some());
-            assert_eq!(refused(&base.join("elsewhere"), Some(profile), &known), None);
+            assert_eq!(
+                refused(&base.join("elsewhere"), Some(profile), &known),
+                None
+            );
             let _ = std::fs::remove_dir_all(&base);
         }
     }

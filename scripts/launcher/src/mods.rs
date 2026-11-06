@@ -358,7 +358,13 @@ mod tests {
         assert_eq!(classify(Some(33), false), Failure::Locked);
         assert_eq!(classify(Some(5), false), Failure::Denied);
         assert_eq!(classify(Some(112), false), Failure::Full);
-        let text = |kind| ModError { kind, step: "linking X: boom".into() }.player_text();
+        let text = |kind| {
+            ModError {
+                kind,
+                step: "linking X: boom".into(),
+            }
+            .player_text()
+        };
         assert!(text(Failure::OtherDrive).contains("another drive"));
         assert!(text(Failure::NoLinks).contains("NTFS"));
         assert!(text(Failure::Locked).contains("open"));
@@ -388,10 +394,7 @@ mod tests {
         drop(held);
         assert_eq!(error.kind, Failure::Locked, "{}", error.step);
         assert!(error.step.starts_with("removing "));
-        assert_eq!(
-            std::fs::read(game.join("FalloutNV.exe")).unwrap(),
-            b"exe"
-        );
+        assert_eq!(std::fs::read(game.join("FalloutNV.exe")).unwrap(), b"exe");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

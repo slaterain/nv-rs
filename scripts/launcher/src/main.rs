@@ -884,10 +884,12 @@ fn play(
         status.set("Getting the mods ready...");
         let install = package.userdata.join("modgame");
         let plugins = profile.local.join("FalloutNV\\plugins.txt");
-        let built = mods::build_install(&game.folder, &package.root.join("mods"), &install, &plugins).map_err(|e| Stop {
-            code: STOP_MODS,
-            message: e.player_text(),
-        })?;
+        let built =
+            mods::build_install(&game.folder, &package.root.join("mods"), &install, &plugins)
+                .map_err(|e| Stop {
+                    code: STOP_MODS,
+                    message: e.player_text(),
+                })?;
         package.log(&format!(
             "mods: {} files linked, {} mod files",
             built.linked, built.mod_files
@@ -1142,7 +1144,11 @@ fn user_switches(settings: &Settings) -> Vec<(&str, &str)> {
     settings
         .environment()
         .into_iter()
-        .filter(|(name, _)| !OWN_SWITCHES.iter().any(|own| own.eq_ignore_ascii_case(name)))
+        .filter(|(name, _)| {
+            !OWN_SWITCHES
+                .iter()
+                .any(|own| own.eq_ignore_ascii_case(name))
+        })
         .collect()
 }
 
@@ -1276,7 +1282,8 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("nv-rs-launcher-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("nv-rs-launcher-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -1334,14 +1341,21 @@ mod tests {
         }
         package.log("still in memory");
         assert!(!package.writing.get());
-        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0, "nothing written");
+        assert_eq!(
+            std::fs::read_dir(&root).unwrap().count(),
+            0,
+            "nothing written"
+        );
         // Where it is fine, the first write comes after the checks, with the kept lines first.
         let other = dir.join("other game");
         std::fs::create_dir_all(&other).unwrap();
         clear_for_writing(&package, Some(&other)).unwrap();
         package.log("written");
         let log = std::fs::read_to_string(package.logs.join("launcher.log")).unwrap();
-        let lines: Vec<&str> = log.lines().map(|l| l.split_once(' ').unwrap().1.split_once(' ').unwrap().1).collect();
+        let lines: Vec<&str> = log
+            .lines()
+            .map(|l| l.split_once(' ').unwrap().1.split_once(' ').unwrap().1)
+            .collect();
         assert_eq!(lines, ["held in memory", "still in memory", "written"]);
         assert!(!root.join(".nv-rs-write-test").exists());
         let _ = std::fs::remove_dir_all(&dir);
@@ -1367,7 +1381,10 @@ mod tests {
             _ => panic!("did not finish"),
         }
         assert!(matches!(
-            run_limited(&mut Command::new("C:\\no\\such\\program.exe"), Duration::from_secs(5)),
+            run_limited(
+                &mut Command::new("C:\\no\\such\\program.exe"),
+                Duration::from_secs(5)
+            ),
             Limited::Failed(_)
         ));
     }
