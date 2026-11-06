@@ -98,7 +98,7 @@ It holds up to the 199 a second tested. Frames of 16 ms and longer run `Move` un
 real time is 1.001 to 1.005 at every limit.
 
 Frame rate at the maintainer's settings (2560x1440, 8x anti-aliasing, borderless; about two minutes a run,
-2026-11-06): Doc's room 70.2 frames a second on vanilla, 104.7 with the fixes.
+2026-11-06): Doc's room 70.2 frames a second on vanilla, 104.7 with the fixes; Goodsprings about 43 and about 44 (the original never sleeps there; the second from 15 s only).
 
 ## Credits
 
