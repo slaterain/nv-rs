@@ -29,7 +29,10 @@ try {
     $dirty = git status --porcelain --untracked-files=normal
     if ($dirty) { throw 'Commit or remove untracked changes before packaging.' }
     $licenseLock = (Get-Content -LiteralPath (Join-Path $root 'distribution/DEPENDENCY-LOCK.sha256') -Raw).Trim()
-    if ($licenseLock -ne (Get-FileHash -LiteralPath (Join-Path $root 'Cargo.lock')).Hash.ToLowerInvariant()) {
+    # The hash of the file with LF line ends, whichever way this checkout has them.
+    $lockText = [IO.File]::ReadAllText((Join-Path $root 'Cargo.lock')) -replace "`r`n", "`n"
+    $lockHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($lockText))).Replace('-', '').ToLowerInvariant()
+    if ($licenseLock -ne $lockHash) {
         throw 'Dependency lockfile changed. Refresh license notices and their lockfile hash before packaging.'
     }
     $notice = Join-Path $root 'distribution/THIRD-PARTY-NOTICES.txt'
