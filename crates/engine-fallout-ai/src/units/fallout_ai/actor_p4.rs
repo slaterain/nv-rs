@@ -679,12 +679,12 @@ pub fn actor_set_alert(e: &mut Engine, this: Ptr<Actor>, alert: u8) {
 // Translated from 008a5e80 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Actor::GetAlert` (Xbox PDB): the process's virtual method `+0x31c`,
 /// false without a process.
-pub fn actor_get_alert(e: &mut Engine, this: Ptr<Actor>) -> bool {
+pub fn actor_get_alert(e: &mut Engine, this: Ptr<Actor>) -> u8 {
     let proc = process(e, this);
     if proc.is_null() {
-        return false;
+        return 0;
     }
-    e.vcall(proc.addr(), 0x31c, &args![]).bool()
+    e.vcall(proc.addr(), 0x31c, &args![]).u8()
 }
 
 // Translated from 008a5eb0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1111,13 +1111,13 @@ pub fn fn_008a6970(e: &mut Engine, this: Ptr<Actor>) -> bool {
 // Translated from 008a69d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Actor::IsContinuingPackageforPC` (Xbox PDB): the process's virtual
 /// method `+0x4e0`, false without a process.
-pub fn actor_is_continuing_package_for_pc(e: &mut Engine, this: Ptr<Actor>) -> bool {
+pub fn actor_is_continuing_package_for_pc(e: &mut Engine, this: Ptr<Actor>) -> u8 {
     let proc = process(e, this);
     if proc.is_null() {
-        return false;
+        return 0;
     }
     let proc = process(e, this);
-    e.vcall(proc.addr(), 0x4e0, &args![]).bool()
+    e.vcall(proc.addr(), 0x4e0, &args![]).u8()
 }
 
 // Translated from 008a6a00 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -6003,7 +6003,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x008a5cf0, fn_008a5cf0(Ptr<Actor>, u8)),
         entry!(0x008a5d10, fn_008a5d10(Ptr<Actor>, f32)),
         entry!(0x008a5e40, actor_set_alert(Ptr<Actor>, u8)),
-        entry!(0x008a5e80, actor_get_alert(Ptr<Actor>) -> bool),
+        entry!(0x008a5e80, actor_get_alert(Ptr<Actor>) -> u8),
         entry!(0x008a5eb0, actor_set_havok_weapon(Ptr<Actor>) -> u32),
         entry!(
             0x008a5f20,
@@ -6023,7 +6023,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x008a6970, fn_008a6970(Ptr<Actor>) -> bool),
         entry!(
             0x008a69d0,
-            actor_is_continuing_package_for_pc(Ptr<Actor>) -> bool
+            actor_is_continuing_package_for_pc(Ptr<Actor>) -> u8
         ),
         entry!(0x008a6a00, fn_008a6a00(Ptr<Actor>, f32)),
         entry!(0x008a6a40, actor_unlock_lock_doors_procedure(Ptr<Actor>)),

@@ -440,7 +440,7 @@ pub fn processlists_update_animation_scenegraph(e: &mut Engine, this: Ptr<Proces
             if animation != 0 {
                 updated = e.call(0x0049_3930, &args![animation]).bool();
             }
-            if fn_0096c950(e, Ptr::new(actor)) && updated {
+            if fn_0096c950(e, Ptr::new(actor)) != 0 && updated {
                 update_object_lighting(e, actor);
             }
         }
@@ -463,8 +463,8 @@ fn update_object_lighting(e: &mut Engine, actor: u32) {
 
 // Translated from 0096c950 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Actor::bUpdateLighting` (+0x14E) getter.
-pub fn fn_0096c950(e: &mut Engine, this: Ptr<Actor>) -> bool {
-    e.get(this, Actor::bUpdateLighting)
+pub fn fn_0096c950(e: &mut Engine, this: Ptr<Actor>) -> u8 {
+    e.mem.u8(this.addr() + Actor::bUpdateLighting.off)
 }
 
 // Translated from 0096c970 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -503,7 +503,7 @@ pub fn processlists_parallel_update_animation_scenegraph(e: &mut Engine, this: P
                     } else {
                         updated = e.call(0x0049_3930, &args![animation]).bool();
                     }
-                    if fn_0096c950(e, Ptr::new(actor)) && updated {
+                    if fn_0096c950(e, Ptr::new(actor)) != 0 && updated {
                         update_object_lighting(e, actor);
                     }
                 }
@@ -6844,7 +6844,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x0096c860,
             processlists_update_animation_scenegraph(Ptr<ProcessLists>)
         ),
-        entry!(0x0096c950, fn_0096c950(Ptr<Actor>) -> bool),
+        entry!(0x0096c950, fn_0096c950(Ptr<Actor>) -> u8),
         entry!(
             0x0096c970,
             processlists_parallel_update_animation_scenegraph(Ptr<ProcessLists>)
