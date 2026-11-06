@@ -16,6 +16,9 @@
 //!   elsewhere (the older viewer crates `crates/world`, `crates/physics`, ...)
 //!   does not count: the engine still has to translate that function, so it
 //!   is `traced`. This is the rule of the task queue ([`Func::in_engine`]).
+//!   A `// Typed from <addr>` marker (docs/ENGINE_CRATE.md, "Typed code") counts the same
+//!   way, so a typed function stays `translated` once its translation is retired; the `typed`
+//!   column says how many have a typed version.
 //! - `static init (table)`: a static initializer, or an `atexit` destructor,
 //!   run from a generated table (`crates/engine-core/data/static_initializers.tsv`,
 //!   `crates/engine-core/data/atexit_destructors.tsv`; research/initgen): engine
@@ -224,6 +227,8 @@ struct Func {
     subsystem: String,
     placed: String,
     translated: BTreeSet<String>,
+    /// Where its typed version is marked (`// Typed from <addr>`).
+    typed: BTreeSet<String>,
     /// Rows of the static-initializer table that run this function.
     table: BTreeSet<String>,
     replaced: BTreeSet<String>,
@@ -251,6 +256,7 @@ impl Func {
             && self
                 .translated
                 .iter()
+                .chain(&self.typed)
                 .chain(&self.table)
                 .chain(&self.replaced)
                 .any(|l| in_engine_crate(l))
@@ -272,10 +278,15 @@ impl Func {
         }
     }
 
-    /// Whether a translation marker sits in an engine crate. A marker only in
+    /// Whether a translation or typed marker sits in an engine crate. A marker only in
     /// another crate (the older viewer crates) does not count as a translation.
     fn translated_in_engine(&self) -> bool {
-        self.translated.iter().any(|l| in_engine_crate(l))
+        self.translated.iter().any(|l| in_engine_crate(l)) || self.typed_in_engine()
+    }
+
+    /// Whether an engine crate has its typed version.
+    fn typed_in_engine(&self) -> bool {
+        self.typed.iter().any(|l| in_engine_crate(l))
     }
 
     fn status(&self) -> &'static str {
@@ -285,7 +296,7 @@ impl Func {
             TABLE
         } else if !self.replaced.is_empty() {
             "platform"
-        } else if !self.traced.is_empty() || !self.translated.is_empty() {
+        } else if !self.traced.is_empty() || !self.translated.is_empty() || !self.typed.is_empty() {
             // A translation marker outside the engine crates only describes
             // the function: `traced`, the engine still needs it.
             "traced"
@@ -331,6 +342,8 @@ enum Cite {
     Incomplete,
     /// On a translation marker (ADR-0003).
     Translated,
+    /// On a typed marker: `// Typed from <addr>`.
+    Typed,
     /// On a `Platform: replaces <addr>` marker: Rust platform code stands in
     /// for the function (the allocator, file and thread layers).
     Replaced,
@@ -339,6 +352,8 @@ enum Cite {
 fn marker(line: &str) -> Option<Cite> {
     if line.contains("Translation incomplete:") {
         Some(Cite::Incomplete)
+    } else if line.contains("Typed from") {
+        Some(Cite::Typed)
     } else if line.contains("Translated from") || line.contains("decompiled, FalloutNV") {
         Some(Cite::Translated)
     } else if line.contains("Platform: replaces") {
@@ -451,6 +466,7 @@ fn load_map(path: &Path) -> Result<(Vec<Func>, Vec<String>), String> {
             subsystem,
             placed: get("placed"),
             translated: BTreeSet::new(),
+            typed: BTreeSet::new(),
             table: BTreeSet::new(),
             replaced: BTreeSet::new(),
             traced: BTreeSet::new(),
@@ -524,6 +540,7 @@ fn add_gaps(funcs: &mut Vec<Func>, text: &str) -> Result<usize, String> {
             },
             placed: "gap".into(),
             translated: BTreeSet::new(),
+            typed: BTreeSet::new(),
             table: BTreeSet::new(),
             replaced: BTreeSet::new(),
             traced: BTreeSet::new(),
@@ -650,6 +667,7 @@ struct Counts {
     n: usize,
     bytes: u64,
     named: usize,
+    typed: usize,
     by: [usize; 6],
 }
 
@@ -658,6 +676,7 @@ impl Counts {
         self.n += 1;
         self.bytes += f.size as u64;
         self.named += (!f.name.is_empty()) as usize;
+        self.typed += f.typed_in_engine() as usize;
         let i = STATUSES.iter().position(|s| *s == f.status()).unwrap();
         self.by[i] += 1;
     }
@@ -736,6 +755,12 @@ fn render(funcs: &[Func], header: &[String], unmapped: usize, cites: usize) -> S
         );
     }
     let _ = writeln!(s, "| **all** | **{}** | |", total.n);
+    let _ = writeln!(
+        s,
+        "\n**{}** functions have a typed version in an engine crate (`// Typed from <addr>`, \
+         docs/ENGINE_CRATE.md \"Typed code\"); they count among the translated.",
+        total.typed
+    );
     let partials: Vec<_> = funcs.iter().filter(|f| f.partial_in_engine()).collect();
     let _ = writeln!(
         s,
@@ -786,8 +811,8 @@ fn render(funcs: &[Func], header: &[String], unmapped: usize, cites: usize) -> S
     );
     let _ = writeln!(
         s,
-        "| Subsystem | Functions | KB | Named | translated | static init (table) | traced | platform | library | open | done |\n\
-         | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+        "| Subsystem | Functions | KB | Named | translated | typed | static init (table) | traced | platform | library | open | done |\n\
+         | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
     );
     let mut rows: Vec<_> = subs.iter().collect();
     rows.sort_by(|a, b| b.1.n.cmp(&a.1.n).then(a.0.cmp(b.0)));
@@ -796,11 +821,12 @@ fn render(funcs: &[Func], header: &[String], unmapped: usize, cites: usize) -> S
         let base = if base_status(name) == "open" { c.n } else { 0 };
         let _ = writeln!(
             s,
-            "| {name} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            "| {name} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
             c.n,
             c.bytes / 1024,
             c.named,
             c.by[0],
+            c.typed,
             c.by[1],
             c.by[2],
             c.by[3],
@@ -997,6 +1023,7 @@ fn main() {
             let loc = format!("{rel}:{line}");
             match kind {
                 Cite::Translated => f.translated.insert(loc),
+                Cite::Typed => f.typed.insert(loc),
                 Cite::Replaced => f.replaced.insert(loc),
                 Cite::Traced => f.traced.insert(loc),
                 Cite::Incomplete => f.incomplete.insert(loc),
@@ -1099,11 +1126,12 @@ fn main() {
     }
     fs::write(&out, &md).expect("write docs/LEDGER.md");
     if let Some(t) = tsv {
-        let mut s = String::from("address\tsize\tname\tsubsystem\tunit\tstatus\trust\n");
+        let mut s = String::from("address\tsize\tname\tsubsystem\tunit\tstatus\trust\ttyped\n");
         for f in &funcs {
             let locs: Vec<&String> = f
                 .translated
                 .iter()
+                .chain(&f.typed)
                 .chain(&f.table)
                 .chain(&f.replaced)
                 .chain(&f.traced)
@@ -1111,7 +1139,7 @@ fn main() {
                 .collect();
             let _ = writeln!(
                 s,
-                "{:08x}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{:08x}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 f.addr,
                 f.size,
                 f.name,
@@ -1121,7 +1149,8 @@ fn main() {
                 locs.iter()
                     .map(|l| l.as_str())
                     .collect::<Vec<_>>()
-                    .join(",")
+                    .join(","),
+                if f.typed_in_engine() { "yes" } else { "" }
             );
         }
         fs::write(&t, s).expect("write tsv");
@@ -1245,6 +1274,44 @@ mod tests {
     }
 
     #[test]
+    fn typed_markers_count_as_engine_coverage_and_in_their_column() {
+        let text = "// Translated from 00c95a80 (decompiled, FalloutNV.exe 1.4.0.525)\n\
+                    // Typed from 00c90e60, read against fnv_decomp\n\
+                    // cites 00afe220\n";
+        assert_eq!(
+            scan(text),
+            [
+                (0x00c95a80, Cite::Translated, 1),
+                (0x00c90e60, Cite::Typed, 2),
+                (0x00afe220, Cite::Traced, 3),
+            ]
+        );
+        // Beside its translation, or alone once that is retired, it is translated and done.
+        let mut f = func(0x00c90e60, "havok");
+        f.typed.insert("crates/engine-typed/src/x.rs:1".into());
+        assert_eq!(f.status(), "translated");
+        assert_eq!(f.queue_status(), "done");
+        assert!(f.typed_in_engine());
+        f.translated.insert("crates/engine-havok/src/y.rs:1".into());
+        assert_eq!(f.status(), "translated");
+        // A marker outside the engine crates only describes it.
+        let mut g = func(0x00c90e70, "havok");
+        g.typed.insert("crates/world/src/x.rs:1".into());
+        assert_eq!(g.status(), "traced");
+        assert!(!g.typed_in_engine());
+        let report = render(&[f, g], &[], 0, 2);
+        assert!(
+            report.contains("**1** functions have a typed version"),
+            "{report}"
+        );
+        // The subsystem's row: 2 functions, 1 translated, 1 typed, 0 table, 1 traced.
+        assert!(
+            report.contains("| havok | 2 | 0 | 0 | 1 | 1 | 0 | 1 | 0 | 0 | 0 |"),
+            "{report}"
+        );
+    }
+
+    #[test]
     fn every_engine_crate_counts_as_the_engine() {
         assert!(in_engine_crate("crates/engine/src/lib.rs:1"));
         assert!(in_engine_crate(
@@ -1324,6 +1391,7 @@ mod tests {
             subsystem: subsystem.into(),
             placed: String::new(),
             translated: BTreeSet::new(),
+            typed: BTreeSet::new(),
             table: BTreeSet::new(),
             replaced: BTreeSet::new(),
             traced: BTreeSet::new(),
