@@ -6690,7 +6690,7 @@ pub fn fn_00958ec0(e: &mut Engine, this: Ptr<PlayerCharacter>, first: u32, secon
     let player = this.addr();
     e.call(0x008a_a9a0, &args![this, first, second]);
     if e.call(0x0095_0bb0, &args![this, 1u32]).u32() != 0 {
-        let third_person = e.mem.u8(this.addr() + PlayerCharacter::b3rdPerson.off);
+        let third_person = e.get(this, PlayerCharacter::b3rdPerson);
         player_character_set_first_person(e, this, u8::from(!third_person));
         if e.mem.u8(player + 0x64d) != 0 {
             player_character_force_temp_3rd_person(e, this, 1);
