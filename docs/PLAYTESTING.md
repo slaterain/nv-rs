@@ -115,6 +115,12 @@ elsewhere only as far as Windows and drivers behave the same:
   NTFS under an English Windows. Text conversion itself asks the real Windows.
 - `d3d9-capture` covers adapter 0, and only the display modes of that moment. nvapi answers come from
   the DLL, but only an NVIDIA driver has run them.
+- An AMD card: the game asks for the player's 32-bit `ATIMGPUD.dll` and, with Eyefinity on, ADL; this 64-bit
+  process can't load them, so they answer as missing: one GPU, no Eyefinity. The game picks its vendor path
+  from the driver's name. AMD and Intel have only been run as an edited table (the driver's name changed, no
+  nvapi) on this PC's NVIDIA card, so the game's vendor paths ran, but no AMD or Intel driver answered.
+- The first settings on a PC where the game's launcher never ran: its detection isn't translated (it is a separate
+  program), so the High preset stands in for what it would pick.
 
 The game asks for a Windows language's code page, and it reads paths one byte at a time. On a Chinese,
 Japanese or Korean Windows, the package's folder must have a plain-letter path (or an 8.3 name that has
