@@ -23,12 +23,15 @@ mod ui;
 mod win;
 
 use settings::Settings;
-use std::io::Write;
+use std::cell::{Cell, RefCell};
+use std::io::{Read, Write};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 /// Why the launcher stops: what the player reads, and the launcher's exit code.
+#[derive(Debug)]
 struct Stop {
     code: i32,
     message: String,
@@ -49,6 +52,11 @@ const STOP_TABLES: i32 = 6;
 const STOP_GAME_STOPPED: i32 = 7;
 const STOP_MODS: i32 = 8;
 const STOP_BLOCKED: i32 = 9;
+const STOP_HUNG: i32 = 10;
+
+/// How long the game program's `--check` may take (about a second here, a little longer with a
+/// slow sound device query).
+const CHECK_LIMIT: Duration = Duration::from_secs(60);
 
 const ISSUES: &str = "https://github.com/slaterain/nv-rs/issues";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -64,6 +72,10 @@ struct Package {
     reports: PathBuf,
     settings: PathBuf,
     remembered: PathBuf,
+    /// Log lines kept in memory until the package's place is checked ([`clear_for_writing`]): a
+    /// refusal leaves the disk untouched.
+    held: RefCell<Vec<String>>,
+    writing: Cell<bool>,
 }
 
 impl Package {
@@ -77,6 +89,8 @@ impl Package {
             reports: userdata.join("reports"),
             settings: userdata.join("settings.ini"),
             remembered: userdata.join("game-folder.txt"),
+            held: RefCell::new(Vec::new()),
+            writing: Cell::new(false),
             userdata,
             root,
         }
@@ -84,14 +98,32 @@ impl Package {
 
     fn log(&self, text: &str) {
         let (when, _) = win::now();
+        let line = format!("{when} {text}");
+        if self.writing.get() {
+            self.append(&line);
+        } else {
+            self.held.borrow_mut().push(line);
+        }
+    }
+
+    fn append(&self, line: &str) {
         if std::fs::create_dir_all(&self.logs).is_ok() {
             if let Ok(mut file) = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(self.logs.join("launcher.log"))
             {
-                let _ = writeln!(file, "{when} {text}");
+                let _ = writeln!(file, "{line}");
             }
+        }
+    }
+
+    /// From here on the log goes to its file, with what was kept so far first.
+    fn start_writing(&self) {
+        self.writing.set(true);
+        let held = std::mem::take(&mut *self.held.borrow_mut());
+        for line in held {
+            self.append(&line);
         }
     }
 }
@@ -131,9 +163,47 @@ impl Profile {
     }
 }
 
-/// Lower case, `\` only, no trailing `\`: for comparing paths.
+/// `\\?\` taken off the front of what Windows answers for a real path.
+fn without_verbatim(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix("\\\\?\\UNC\\") {
+        PathBuf::from(format!("\\\\{rest}"))
+    } else if let Some(rest) = text.strip_prefix("\\\\?\\") {
+        PathBuf::from(rest)
+    } else {
+        path
+    }
+}
+
+/// The path Windows really means: junctions, symbolic links, `subst` and mapped drives and 8.3
+/// short names resolved. A part that doesn't exist (yet) is kept as it is, after the real path of
+/// the longest part that does.
+fn real_path(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut at = path.to_path_buf();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(&at) {
+            let mut out = without_verbatim(real);
+            for part in rest.iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        match (at.file_name().map(|n| n.to_owned()), at.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name);
+                at = parent.to_path_buf();
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
+/// Lower case, `\` only, no trailing `\`, links and short names resolved ([`real_path`]): for
+/// comparing paths.
 fn folder_key(path: &Path) -> String {
-    path.to_string_lossy()
+    real_path(path)
+        .to_string_lossy()
         .replace('/', "\\")
         .trim_end_matches('\\')
         .to_lowercase()
@@ -185,7 +255,10 @@ fn check_location(package: &Package) -> Result<(), Stop> {
         (win::known_folder(0x1a), "AppData"),
         (win::known_folder(0x1c), "AppData"),
     ] {
-        if folder.is_some_and(|f| is_inside(&root, &folder_key(&f))) {
+        if folder.is_some_and(|f| {
+            let key = folder_key(&f);
+            is_inside(&root, &key) || is_inside(&key, &root)
+        }) {
             return stop(
                 STOP_LOCATION,
                 format!(
@@ -209,6 +282,43 @@ fn check_location(package: &Package) -> Result<(), Stop> {
             ),
         );
     }
+    Ok(())
+}
+
+/// Whether the package's folder is the game's folder or is inside it or the other way round, by
+/// the real paths.
+fn inside_game(root: &Path, game: &Path) -> bool {
+    let (root, game) = (folder_key(root), folder_key(game));
+    is_inside(&root, &game) || is_inside(&game, &root)
+}
+
+/// Every check of where the package is that needs the game's folder, then the first write: the
+/// folder test and the log. Nothing is written before this passes, and a refusal leaves the disk
+/// as it was. `game` is the folder found; with `None` (nothing found, or only saves to import) the
+/// folders the game could be in (the last one used, Steam, GOG and Epic) are compared instead.
+fn clear_for_writing(package: &Package, game: Option<&Path>) -> Result<(), Stop> {
+    let move_it = "Move the whole nv-rs folder somewhere else, for example C:\\Games\\nv-rs, and start Play.exe again.";
+    let mut folders: Vec<PathBuf> = Vec::new();
+    match game {
+        Some(game) => folders.push(game.to_path_buf()),
+        None => {
+            if let Ok(text) = std::fs::read_to_string(&package.remembered) {
+                folders.push(PathBuf::from(text.trim()));
+            }
+            folders.extend(find::candidates().into_iter().map(|(_, place)| place));
+        }
+    }
+    for folder in &folders {
+        if inside_game(&package.root, folder) {
+            return stop(
+                STOP_LOCATION,
+                format!(
+                    "nv-rs is inside your game's folder. It must never write there, so it won't run from there.\n\n{move_it}\n\nThis folder was:\n{}",
+                    package.root.display()
+                ),
+            );
+        }
+    }
     // Writable: not under Program Files without rights, not on a read-only drive.
     let test = package.root.join(".nv-rs-write-test");
     let written = std::fs::create_dir_all(&package.userdata)
@@ -223,6 +333,7 @@ fn check_location(package: &Package) -> Result<(), Stop> {
             ),
         );
     }
+    package.start_writing();
     Ok(())
 }
 
@@ -233,17 +344,92 @@ struct Game {
     data: PathBuf,
 }
 
+/// What a program printed, or why it didn't finish.
+enum Limited {
+    Done(Output),
+    TimedOut,
+    Failed(std::io::Error),
+}
+
+/// Runs `command` to its end, but no longer than `limit`: a program that hangs (a sound or graphics
+/// driver can) is ended, so the player gets a message instead of a window that never goes.
+fn run_limited(command: &mut Command, limit: Duration) -> Limited {
+    let mut child = match command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => return Limited::Failed(e),
+    };
+    fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    }
+    let (out, err) = (drain(child.stdout.take()), drain(child.stderr.take()));
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if start.elapsed() >= limit => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Limited::TimedOut;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Err(e) => return Limited::Failed(e),
+        }
+    };
+    Limited::Done(Output {
+        status,
+        stdout: out.join().unwrap_or_default(),
+        stderr: err.join().unwrap_or_default(),
+    })
+}
+
+/// What the player reads when the game's program can't be opened for reading (a lock or no
+/// access), or `None` when it can.
+fn exe_read_problem(exe: &Path) -> Option<String> {
+    let e = std::fs::File::open(exe).err()?;
+    let why = match e.raw_os_error() {
+        Some(32 | 33) => "Another program has it open: the game or its launcher still running, or an antivirus scanning it. Close them, wait a moment and start Play.exe again.",
+        Some(5) => "Windows does not let this account read it. The folder's permissions may be restrictive, or an antivirus or Windows' \"controlled folder access\" blocks it. Allow Play.exe, or give your account read access to the game's folder.",
+        _ => "Windows can't read it.",
+    };
+    Some(format!(
+        "nv-rs can't read the game's program, FalloutNV.exe ({e}):\n{}\n\n{why}",
+        exe.display()
+    ))
+}
+
 /// What `app\FalloutNV.exe --check` says about this copy of the game: its lines, or why it can't run.
 fn check_game(package: &Package, game: &Game) -> Result<Vec<String>, Stop> {
-    let output = Command::new(&package.game_exe)
-        .arg("--check")
-        .arg(&game.data)
-        .stdin(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
-        .output();
+    let output = run_limited(
+        Command::new(&package.game_exe)
+            .arg("--check")
+            .arg(&game.data),
+        CHECK_LIMIT,
+    );
     let output = match output {
-        Ok(o) => o,
-        Err(e) => {
+        Limited::Done(o) => o,
+        Limited::TimedOut => {
+            package.log("--check: did not finish");
+            return stop(
+                STOP_HUNG,
+                format!(
+                    "nv-rs's check of your game did not finish in {} seconds, so it was ended. This usually means the sound or graphics driver is stuck answering.\n\nRestart the PC and try again. If it happens again, set the sound output to another device (or stereo) in Windows' sound settings, and report it at {ISSUES}.",
+                    CHECK_LIMIT.as_secs()
+                ),
+            );
+        }
+        Limited::Failed(e) => {
             return stop(
                 STOP_BLOCKED,
                 format!(
@@ -270,6 +456,9 @@ fn check_game(package: &Package, game: &Game) -> Result<Vec<String>, Stop> {
                 game.folder.display()
             ),
         );
+    }
+    if let Some(message) = exe_read_problem(&exe) {
+        return stop(STOP_BLOCKED, message);
     }
     if details.contains("error: ") && !details.contains("1.4.0.525") {
         return stop(
@@ -343,7 +532,7 @@ fn find_game(package: &Package, explicit: Option<&Path>) -> Result<(Game, Vec<St
         }
     }
     let first = match problem {
-        Some(why) if why.code == STOP_BLOCKED => return Err(why),
+        Some(why) if why.code == STOP_BLOCKED || why.code == STOP_HUNG => return Err(why),
         Some(why) => {
             ui::error(&why.message);
             Some(why)
@@ -371,7 +560,7 @@ fn find_game(package: &Package, explicit: Option<&Path>) -> Result<(Game, Vec<St
         };
         match check_game(package, &game) {
             Ok(lines) => return Ok((game, lines)),
-            Err(why) if why.code == STOP_BLOCKED => return Err(why),
+            Err(why) if why.code == STOP_BLOCKED || why.code == STOP_HUNG => return Err(why),
             Err(why) => {
                 package.log(&why.message);
                 ui::error(&why.message);
@@ -635,6 +824,7 @@ fn run(package: &Package, options: &Options) -> Result<i32, Stop> {
         if options.mods { "mods" } else { "game" },
     );
     if options.import {
+        clear_for_writing(package, None)?;
         return import_saves(package, &profile, options.from.as_deref());
     }
     if win::another_is_running() {
@@ -656,6 +846,8 @@ fn play(
     status: &ui::Status,
 ) -> Result<i32, Stop> {
     let (mut game, check_lines) = find_game(package, options.game.as_deref())?;
+    // The first write of the run: the game's folder is known and the package is not in it.
+    clear_for_writing(package, Some(&game.folder))?;
     for line in &check_lines {
         package.log(line);
     }
@@ -663,17 +855,6 @@ fn play(
         &package.remembered,
         game.folder.to_string_lossy().as_bytes(),
     );
-    let root = folder_key(&package.root);
-    let game_key = folder_key(&game.folder);
-    if is_inside(&root, &game_key) || is_inside(&game_key, &root) {
-        return stop(
-            STOP_LOCATION,
-            format!(
-                "nv-rs is inside your game's folder. It must never write there, so it won't run from there.\n\nMove the whole nv-rs folder somewhere else, for example C:\\Games\\nv-rs.\n\nThis folder was:\n{}",
-                package.root.display()
-            ),
-        );
-    }
     // DirectX 9's D3DX is not part of Windows; the game's installer adds it.
     let system = std::env::var_os("NV_RS_SYSTEM_FOLDER")
         .map(PathBuf::from)
@@ -705,9 +886,7 @@ fn play(
         let plugins = profile.local.join("FalloutNV\\plugins.txt");
         let built = mods::build_install(&game.folder, &package.root.join("mods"), &install, &plugins).map_err(|e| Stop {
             code: STOP_MODS,
-            message: format!(
-                "nv-rs could not make its own copy of the game's folder for mods ({e}).\n\nFor mods it makes links to the game's files, never copies, so the nv-rs folder must be on the same drive as the game, on a normal Windows (NTFS) drive. Move the nv-rs folder to that drive, or play without mods."
-            ),
+            message: e.player_text(),
         })?;
         package.log(&format!(
             "mods: {} files linked, {} mod files",
@@ -867,6 +1046,10 @@ fn play(
         message: format!("{}: {e}", log_path.display()),
     })?;
     let mut command = Command::new(&package.game_exe);
+    // What settings.ini passes on first, so the launcher's own switches below win over it.
+    for (name, value) in user_switches(&settings) {
+        command.env(name, value);
+    }
     command
         .arg(&data_argument)
         .current_dir(&package.userdata)
@@ -882,15 +1065,14 @@ fn play(
         .env("NV_SAVE_OUT", &profile.saves)
         .env("NV_PREFS_OUT", &profile.prefs)
         .env("NV_REPORT_DIR", &package.reports)
-        .env("NV_REPORT_LOG", &log_path);
+        .env("NV_REPORT_LOG", &log_path)
+        .env("NV_SETTINGS", &package.settings);
     if settings.borderless() {
         command.env("NV_BORDERLESS", "1");
     } else {
         command.env_remove("NV_BORDERLESS");
     }
-    for (name, value) in settings.environment() {
-        command.env(name, value);
-    }
+
     package.log(&format!(
         "starting the game on {}; log {}",
         data_argument.display(),
@@ -939,6 +1121,31 @@ fn play(
     Ok(STOP_GAME_STOPPED)
 }
 
+/// The switches the launcher sets itself: a `NV_` line in settings.ini can't replace them (it
+/// could point the saves or settings anywhere).
+const OWN_SWITCHES: [&str; 11] = [
+    "NV_D3D9",
+    "NV_SOUND",
+    "NV_D3D9_ADAPTER",
+    "NV_DSOUND_TABLE",
+    "NV_D3DX_CACHE",
+    "NV_SAVE_OUT",
+    "NV_PREFS_OUT",
+    "NV_REPORT_DIR",
+    "NV_REPORT_LOG",
+    "NV_BORDERLESS",
+    "NV_SETTINGS",
+];
+
+/// settings.ini's `NV_` lines that go to the game: all but the launcher's own switches.
+fn user_switches(settings: &Settings) -> Vec<(&str, &str)> {
+    settings
+        .environment()
+        .into_iter()
+        .filter(|(name, _)| !OWN_SWITCHES.iter().any(|own| own.eq_ignore_ascii_case(name)))
+        .collect()
+}
+
 /// What the sound table and the game's own check say about sound, once when the table is made.
 fn sound_notes(package: &Package, sound: &Path, check_lines: &[String]) {
     let table = std::fs::read_to_string(sound).unwrap_or_default();
@@ -978,6 +1185,11 @@ fn main() {
     match run(&package, &options) {
         Ok(code) => std::process::exit(code),
         Err(why) => {
+            // A stop before the first write keeps the disk untouched, unless the package's place is
+            // fine (nothing found, wrong version...): then the log is for the player's report.
+            if !package.writing.get() && why.code != STOP_LOCATION {
+                let _ = clear_for_writing(&package, None);
+            }
             package.log(&format!("stopped ({}): {}", why.code, why.message));
             ui::error(&why.message);
             std::process::exit(why.code);
@@ -1061,5 +1273,132 @@ mod tests {
         assert!(dir.join("game-202604.log").exists());
         assert!(dir.join("launcher.log").exists());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("nv-rs-launcher-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// `link` made a junction to `target` (`mklink /J`, no rights needed).
+    fn junction(link: &Path, target: &Path) {
+        let made = Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+    }
+
+    #[test]
+    fn a_junction_and_a_short_name_are_the_same_place() {
+        let dir = scratch("junction");
+        let real = dir.join("Real Game Folder");
+        std::fs::create_dir_all(real.join("nv-rs")).unwrap();
+        let link = dir.join("link");
+        junction(&link, &real);
+        assert_eq!(folder_key(&link), folder_key(&real));
+        assert!(inside_game(&real.join("nv-rs"), &link));
+        assert!(inside_game(&link.join("nv-rs"), &real));
+        assert!(!inside_game(&dir.join("elsewhere"), &real));
+        // The 8.3 name, when this drive has one.
+        if let Some(short) = win::short_path(&real) {
+            assert_eq!(folder_key(&short), folder_key(&real));
+        }
+        // A part that doesn't exist yet follows the real path of the part that does.
+        assert_eq!(
+            folder_key(&link.join("not yet")),
+            format!("{}\\not yet", folder_key(&real))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_refusal_before_the_first_write_leaves_the_disk_untouched() {
+        let dir = scratch("untouched");
+        let game = dir.join("game");
+        let root = game.join("nv-rs");
+        std::fs::create_dir_all(&root).unwrap();
+        let link = dir.join("link");
+        junction(&link, &game);
+        let package = Package::at(root.clone());
+        package.log("held in memory");
+        for found in [game.clone(), link.clone()] {
+            let why = clear_for_writing(&package, Some(&found)).err().unwrap();
+            assert_eq!(why.code, STOP_LOCATION);
+            assert!(why.message.contains("inside your game's folder"));
+        }
+        package.log("still in memory");
+        assert!(!package.writing.get());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0, "nothing written");
+        // Where it is fine, the first write comes after the checks, with the kept lines first.
+        let other = dir.join("other game");
+        std::fs::create_dir_all(&other).unwrap();
+        clear_for_writing(&package, Some(&other)).unwrap();
+        package.log("written");
+        let log = std::fs::read_to_string(package.logs.join("launcher.log")).unwrap();
+        let lines: Vec<&str> = log.lines().map(|l| l.split_once(' ').unwrap().1.split_once(' ').unwrap().1).collect();
+        assert_eq!(lines, ["held in memory", "still in memory", "written"]);
+        assert!(!root.join(".nv-rs-write-test").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_program_that_hangs_is_ended_and_one_that_ends_is_read() {
+        let mut slow = Command::new("cmd");
+        slow.args(["/c", "ping -n 30 127.0.0.1 >nul"]);
+        let start = Instant::now();
+        assert!(matches!(
+            run_limited(&mut slow, Duration::from_millis(700)),
+            Limited::TimedOut
+        ));
+        assert!(start.elapsed() < Duration::from_secs(10));
+        let mut quick = Command::new("cmd");
+        quick.args(["/c", "echo hello"]);
+        match run_limited(&mut quick, Duration::from_secs(30)) {
+            Limited::Done(o) => {
+                assert!(o.status.success());
+                assert!(String::from_utf8_lossy(&o.stdout).contains("hello"));
+            }
+            _ => panic!("did not finish"),
+        }
+        assert!(matches!(
+            run_limited(&mut Command::new("C:\\no\\such\\program.exe"), Duration::from_secs(5)),
+            Limited::Failed(_)
+        ));
+    }
+
+    #[test]
+    fn a_game_program_that_is_locked_says_so() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = scratch("locked");
+        let exe = dir.join("FalloutNV.exe");
+        std::fs::write(&exe, b"x").unwrap();
+        assert!(exe_read_problem(&exe).is_none());
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(&exe)
+            .unwrap();
+        let text = exe_read_problem(&exe).unwrap();
+        assert!(text.contains("Another program has it open"), "{text}");
+        assert!(!text.contains("antivirus blocks nv-rs"));
+        drop(held);
+        let text = exe_read_problem(&dir.join("missing.exe")).unwrap();
+        assert!(text.contains("can't read"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn settings_ini_cannot_redirect_the_launchers_own_switches() {
+        let settings = Settings::parse(
+            "NV_SAVE_OUT=C:\\Elsewhere\nNV_PREFS_OUT=C:\\Elsewhere\\p.ini\nNV_SETTINGS=x\nNV_FIXES=vnv\nNV_BORDERLESS=0\n",
+        );
+        assert_eq!(user_switches(&settings), [("NV_FIXES", "vnv")]);
     }
 }

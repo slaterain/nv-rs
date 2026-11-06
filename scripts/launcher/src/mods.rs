@@ -118,6 +118,59 @@ pub struct Built {
     pub extender_plugins: bool,
 }
 
+/// What stopped the install being made.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Failure {
+    /// Hard links across two drives (`ERROR_NOT_SAME_DEVICE`).
+    OtherDrive,
+    /// A drive that has no hard links (FAT, exFAT, a network share).
+    NoLinks,
+    /// Another program has the file open (sharing or lock violation).
+    Locked,
+    /// Windows refused access: a read-only file or folder, rights, an antivirus.
+    Denied,
+    /// No room on the drive.
+    Full,
+    Other,
+}
+
+/// A failed install: which step and path, and what that means.
+#[derive(Debug)]
+pub struct ModError {
+    pub kind: Failure,
+    pub step: String,
+}
+
+impl ModError {
+    /// What the player reads: the step that failed, then what to do about that kind of failure.
+    pub fn player_text(&self) -> String {
+        let advice = match self.kind {
+            Failure::OtherDrive => "For mods nv-rs makes links to the game's files, never copies, and a link can't reach another drive. Move the nv-rs folder to the drive the game is on, or play without mods.",
+            Failure::NoLinks => "For mods nv-rs makes links to the game's files, never copies, and this drive can't hold links: it needs a normal Windows (NTFS) drive. Move the nv-rs folder to an NTFS drive that the game is on, or play without mods.",
+            Failure::Locked => "Another program has this file open: the game or its launcher still running, a mod manager, or an antivirus scanning it. Close it, wait a moment and try again.",
+            Failure::Denied => "Windows did not allow it: the file or folder may be read-only, or your account lacks the rights, or an antivirus or controlled folder access blocks it. Clear \"Read-only\" in its Properties, or allow Play.exe, and try again.",
+            Failure::Full => "There is no room left on the drive. Free some space, or play without mods: the links take little room, but the mods' files are copied.",
+            Failure::Other => "Please report this if it keeps happening.",
+        };
+        format!(
+            "nv-rs could not make its own copy of the game's folder for mods.\n\nWhat failed: {}\n\n{advice}",
+            self.step
+        )
+    }
+}
+
+/// The kind of failure for a Windows error code, for `linking` a file or any other step.
+pub fn classify(code: Option<i32>, linking: bool) -> Failure {
+    match code {
+        Some(17) => Failure::OtherDrive,
+        Some(1 | 50) if linking => Failure::NoLinks,
+        Some(32 | 33) => Failure::Locked,
+        Some(5) => Failure::Denied,
+        Some(39 | 112) => Failure::Full,
+        _ => Failure::Other,
+    }
+}
+
 /// Makes `install` (removed first) from the game's folder and `mods`, and writes the plugin list
 /// to `plugins_txt`: `mods\plugins.txt` as it is when there is one, else [`plugin_list`].
 pub fn build_install(
@@ -125,9 +178,11 @@ pub fn build_install(
     mods: &Path,
     install: &Path,
     plugins_txt: &Path,
-) -> Result<Built, String> {
-    let describe =
-        |what: &str, path: &Path, e: std::io::Error| format!("{what} {}: {e}", path.display());
+) -> Result<Built, ModError> {
+    let describe = |what: &str, path: &Path, e: std::io::Error| ModError {
+        kind: classify(e.raw_os_error(), what == "linking"),
+        step: format!("{what} {}: {e}", path.display()),
+    };
     if install.exists() {
         std::fs::remove_dir_all(install).map_err(|e| describe("removing", install, e))?;
     }
@@ -291,6 +346,52 @@ mod tests {
         let built = build_install(&game, &mods, &install, &plugins).unwrap();
         assert!(built.extender_plugins);
         assert_eq!(std::fs::read(&plugins).unwrap(), b"Own order.esp\r\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn each_failure_gets_its_own_words() {
+        assert_eq!(classify(Some(17), true), Failure::OtherDrive);
+        assert_eq!(classify(Some(1), true), Failure::NoLinks);
+        assert_eq!(classify(Some(1), false), Failure::Other);
+        assert_eq!(classify(Some(32), false), Failure::Locked);
+        assert_eq!(classify(Some(33), false), Failure::Locked);
+        assert_eq!(classify(Some(5), false), Failure::Denied);
+        assert_eq!(classify(Some(112), false), Failure::Full);
+        let text = |kind| ModError { kind, step: "linking X: boom".into() }.player_text();
+        assert!(text(Failure::OtherDrive).contains("another drive"));
+        assert!(text(Failure::NoLinks).contains("NTFS"));
+        assert!(text(Failure::Locked).contains("open"));
+        assert!(text(Failure::Denied).contains("read-only"));
+        assert!(!text(Failure::Locked).contains("same drive"));
+        assert!(text(Failure::Locked).contains("linking X: boom"));
+    }
+
+    /// A file of the old install held open by another program: the error says locked, not drive.
+    #[test]
+    fn a_locked_file_is_reported_as_locked() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = std::env::temp_dir().join(format!("nv-rs-mods-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (game, mods, install) = (dir.join("game"), dir.join("mods"), dir.join("install"));
+        std::fs::create_dir_all(game.join("Data")).unwrap();
+        std::fs::write(game.join("FalloutNV.exe"), b"exe").unwrap();
+        std::fs::write(game.join("Data\\FalloutNV.esm"), b"esm").unwrap();
+        let plugins = dir.join("plugins.txt");
+        build_install(&game, &mods, &install, &plugins).unwrap();
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(install.join("FalloutNV.exe"))
+            .unwrap();
+        let error = build_install(&game, &mods, &install, &plugins).unwrap_err();
+        drop(held);
+        assert_eq!(error.kind, Failure::Locked, "{}", error.step);
+        assert!(error.step.starts_with("removing "));
+        assert_eq!(
+            std::fs::read(game.join("FalloutNV.exe")).unwrap(),
+            b"exe"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
