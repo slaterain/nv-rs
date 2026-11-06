@@ -40,10 +40,11 @@ was compiled or run for it) looked at what that means for speed and for the 4 GB
 5. **An address a fix or a built-in can override is called by address**, in typed code always
    (`crates/engine-core/data/overridable.tsv`, enforced by the repository's hygiene test).
 6. **Checking.** Every typed function has a differential test against its translation (return
-   value, memory written, outgoing calls, on generated inputs that include NaN, zero, denormal and
+   value, memory written, outgoing calls, both branches of each typed call, on generated inputs that include NaN, zero, denormal and
    huge floats). Above that, by what the family touches: the exe oracle, dual runs, the Direct3D
    draw comparison and the recording tables. Each step has a go or no-go gate; speed gates use the
-   measured baseline.
+   measured baseline, read where it can resolve them: on the 2026-11-06 baseline Goodsprings (spread
+   0.75% over four runs) can resolve a 3% gain, and Doc Mitchell's house (2.66%) can't.
 7. **Floats.** On the main thread, where the exe uses x87: plain `f32`. On the AI threads, or
    both: `f64` locals, rounded at each `float` store. In SSE code: `f32` as now. Float to integer
    never goes through `as`. Where a recording shows it matters the x87 helper stays, and says why.

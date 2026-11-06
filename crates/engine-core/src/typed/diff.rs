@@ -1826,6 +1826,11 @@ mod tests {
         let report = diff_of_caller(crate::entry!(0x0040_2000, wrong(u32) -> u32))
             .family(&FAMILY)
             .run();
+        if !cfg!(debug_assertions) {
+            // No direct run without debug assertions, and by address it is right.
+            assert_eq!(report.direct_runs, 0);
+            return;
+        }
         assert!(!report.is_same());
         assert!(
             report.first.iter().all(|d| d.branch == Branch::Direct),

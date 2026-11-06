@@ -418,7 +418,10 @@ itself.
 - Between typed functions: `typed_call!(FAMILY, 0x00abc123, path::f(e, a, b))`, with the address
   written as a literal. It is a Rust call when the family's direct flag is set, else `e.call` with
   the same words. Its callee's crate must be the caller's or one below it; a callee above stays
-  `e.call`.
+  `e.call`. The hygiene test checks that the literal is registered under that function's name, and a
+  test build stops when the address isn't in the named family.
+- A plain Rust call of a registered function isn't allowed in typed code: it would skip the flag,
+  doubles and diagnostics. A helper nothing registers is ordinary code.
 
 **The direct flag** lives in the `Engine`, one bit per family, so each engine has its own:
 
@@ -429,14 +432,22 @@ itself.
   also asks the diagnostics at each `typed_call!`, so a test sees the very next one.
 - It clears for good on a family once anything is registered over one of its addresses: a test
   double or a built-in fix. So doubles keep working whichever crate's code makes the call, also
-  a crate below the one under test, which isn't built with `cfg(test)`.
+  a crate below the one under test, which isn't built with `cfg(test)`. That only holds if a call
+  names the family that holds its address: what is registered clears that family, not the one the
+  call names. A test build stops on the mismatch; a play build doesn't look.
 
 **What it costs.** `Engine::call` gains nothing: its fast path doesn't read the seam, and its machine
 code is the same as before, instruction for instruction, apart from field offsets (the engine grew
 by 48 bytes). The full path, taken on a cache miss or with a diagnostic on, gains one load and one
 branch while no family is on. A `typed_call!` with the flag set is one load and one test before the
-Rust call, in play and release builds. A direct call doesn't count against the thread host's time
-slice and isn't on `call_stack`.
+Rust call, in play and release builds, and the checks above exist only with debug assertions on. A
+direct call doesn't count against the thread host's time slice and isn't on `call_stack`.
+
+**A risk for later.** The thread host hands over at calls by address: the time slice counts them and
+its hook runs at them. A typed loop that waits on guest memory for another game thread, making only
+direct calls or none, never reaches that hook, so it hangs where the translation handed off. Such
+a loop has to make a call by address, or the platform wait the exe makes, in each pass. The same
+count is why each batch of direct calls checks `WAKE_DELAY_CALLS` and the hand-offs per frame.
 
 Measured on 2026-11-06 (`spread_dispatch_speed`, 48,000 functions registered, 8,000 called, release
 build, the two builds alternating, 8 runs each):
@@ -456,16 +467,20 @@ build, the two builds alternating, 8 runs each):
   this way gets noted.
 - Native locals only where no address reaches untyped code. Layouts are declared once per class.
 - Float to integer goes through `x87::fistp_chop` and its family, never `as`, which saturates where
-  the exe gets the integer indefinite.
+  the exe gets the integer indefinite. A typed folder's root denies clippy's
+  `cast_possible_truncation`, which knows types. It also stops `u32 as u8` and `f64 as f32`: where
+  the cut or the rounding is what the code means, it goes in a small named helper with a local
+  `allow`.
 - No `core::arch` and no x86 assumption. The core's check for `aarch64-apple-darwin` runs at each
   core change, once that target is installed.
 
 **The differential test** (`typed::diff`, in the core's tests and behind its `test-support` feature)
-runs the translation and the typed version on two engines with the same setup, once per generated
-input and control word, and compares exactly:
+compares the translation and the typed version, on fresh engines with the same setup, once per
+generated input and control word:
 
 ```rust
 Diff::new(entry!(0x00abc123, typed_version(Ptr<Thing>, f32) -> f32))
+    .family(&THE_FAMILY)
     .inputs(&[Input::Word, Input::F32])
     .setup(|e, case| {
         let thing = e.mem.alloc(0x40);
@@ -476,43 +491,73 @@ Diff::new(entry!(0x00abc123, typed_version(Ptr<Thing>, f32) -> f32))
     .assert_same();
 ```
 
+- **Three runs per case:** the translation; the typed version with every `typed_call!` by address,
+  against the translation; the typed version with every `typed_call!` direct, against its by-address
+  run, call for call. The last needs debug assertions (`Report::direct_runs` says if it ran); it
+  is what finds a `typed_call!` naming the wrong function or a family that doesn't hold the address.
+  A function with a `typed_call!` needs `.family(..)`, or its direct run stops.
 - **Inputs:** `Input::F32` and `F64` hold NaNs (quiet, signalling, with a payload, the x87 default),
-  both zeros, denormals and values around the integer range and past `f32`'s; `Input::Word`, `Flag`
-  and `Of(&[..])` give the integers, one per branch that matters. All combinations up to
-  `max_cases` (512), else every value of each argument and then a fixed pseudo-random sample.
-- **Compared:** the return value by bits, every outgoing call with its words in order, the memory
-  after the call (every mapped page), whether and how the run stopped, the heap's top and free
-  bytes, and the control word. Each case runs under both the main thread's and the other threads'
-  control word, because x87 rounding differs.
-- **Not compared:** the thread's stack for `with_stack` locals, since a local may become native, so
-  an outgoing word pointing into it compares as "a stack address"; a double reads a local's contents
-  itself. Time slice and clock aren't compared either. `ignore_calls` drops callees the typed version
-  inlines.
-- Both engines hold translations only, whatever `NV_TYPED` says, so exactly one function differs. A
-  case has two fresh engines, about 1 ms each in the core's tests and more in a crate with more
-  functions registered; `max_cases` caps it. A crate above the core needs `engine-core`'s
-  `test-support` feature in its dev-dependencies (`engine-gamebryo`, `engine-bs`, `engine-havok`
-  and `engine-speedtree` don't have it yet).
+  both zeros, denormals, values that round (1/3, 0.1, the next float above 1), and values around the
+  integer range and past `f32`'s; `Input::Word`, `Flag` and `Of(&[..])` give the integers, one per
+  branch that matters. All combinations up to `max_cases` (512), else every value of each argument
+  and then a fixed pseudo-random sample.
+- **Compared, by bits:** the return value; every outgoing call in order with its words and, at its
+  start, a hash of all mapped memory outside the stack for locals and the clock, so a store moved
+  across a call shows; the memory after the call and which pages are mapped; how the run stopped, a
+  thrown object by its type and address or, on the stack, its bytes; the heap's top and free bytes,
+  the control word and the clock after the call. Each case runs under both the main thread's and the
+  other threads' control word, because x87 rounding differs.
+- **Stack words:** a word pointing into the stack for locals compares as its offset in its frame,
+  the frame's size and the bytes behind it (`stack_bytes`, 64), not by value, so a typed version may
+  have fewer frames or native locals.
+- **A comparison that compared nothing fails:** `assert_same` fails when no case ran. A run where both
+  sides stop alike fails unless the test says `expect_stops()`, and a stop at an untranslated address
+  always does: that is a double the setup lacks.
+- **Not compared,** so a test of these has to look itself: the rest of the stack for locals; a stack
+  address stored in memory or returned, which compares by value; the kernel's objects and everything
+  else in `Engine::kernel`; the heap's block map and free bins; the time slice and `call_stack`, which a
+  direct call doesn't touch by design; calls another game thread makes; a by-address call that runs a
+  row of the `atexit` table. The memory hash doesn't say where it differs; a difference that lasts to the
+  end also shows with its address.
+- **Letting something through:** `ignore_calls` is for a callee the translation calls and the typed
+  version doesn't call at all, doing its work in its own body. It drops those calls from the
+  translation's side only, so the typed version calling one still shows, and it refuses an overridable
+  address. `allow_nan_payloads` lets NaN payloads differ where the float rule accepts it, in the return
+  and in aligned words of memory and calls; an infinity or a number against a NaN still differs.
+- The engines hold translations only, whatever `NV_TYPED` says, so only the function and the family
+  named differ. A run costs about 1 ms of engine in the core's tests and more in a crate with more
+  functions registered; `max_cases` caps it. A crate above the core needs `engine-core`'s `test-support`
+  feature in its dev-dependencies (`engine-gamebryo`, `engine-bs`, `engine-havok` and
+  `engine-speedtree` don't have it yet).
 
 **Hygiene** (`crates/nvinspect/tests/repo_hygiene.rs`). Typed code is everything under
 `crates/engine-core/src/typed/` and `crates/engine-typed/src/`, and every function under a typed
 marker elsewhere. The rules read text, not types:
 
 - In typed code: no `as` from a float to an integer (outside test modules), where the operand shows
-  it is a float: a declared float in the same function, a float literal, or a float call. A float that
-  comes out of `e.get(p, field)` or another helper isn't seen; the differential test's NaN and huge
-  cases catch that instead.
+  it is a float: a declared float in the same function, a float literal, or a float call. This is the
+  first catch; the type-aware one is clippy's lint on each typed folder's root, which this test also
+  requires. In a function under a marker in a translation's file only the text rule applies.
 - In typed code: no `core::arch`, `std::arch` or `target_arch`; no decompiled text, comments included
-  (C++ casts, `this->`, paths into a decompilation, `.cpp`); no identifier ending in an exe address but
-  the project's own `fn_<addr>` and `run_<addr>`.
+  (C++ casts, `this->`, the decompilation's annotations, paths with forward or back slashes, `.cpp`,
+  `.h`); no identifier holding an exe address but exactly the project's own `fn_<addr>` and
+  `run_<addr>`. In a file with a typed marker, the layouts and constants get the same reading, with
+  their comments.
+- Each `typed_call!`, in any bracket form, has a literal address that is registered under the name
+  it calls. In typed code, no plain call of a registered function.
 - Markers are well formed and directly above a function; a function registered in a typed folder has
-  one.
+  one, in any of the folder's files. A marker has one definition, `scripts/ledger/src/typed_marker.rs`,
+  which the ledger and this test share: a line this test refuses, the ledger doesn't count.
 - `crates/engine-core/data/overridable.tsv` lists the addresses a fix or a built-in can override: the
   plugins' hooked function entries (a lower bound: literal addresses only), `NV_UNCAP`'s timer step,
   and the four fixes-preset guards. `typed_call!` may not name one, and typed code may not call one
-  directly. The translations' direct calls to them (129 today, within units) are frozen by count: a
-  new one fails, and a removed one asks for the number to be lowered. Moving them to calls by address
-  would change the calls the game makes, so it is left for each family's own step.
+  directly. The translations' direct calls to them (130 today) are frozen by count: a new one fails,
+  and a removed one asks for the number to be lowered. Moving them to calls by address would change the
+  calls the game makes, so it is left for each family's own step.
+- What this can't see, because it reads text: a call through a function pointer or a `let` of the
+  function, a call a macro builds, a devirtualised or copied body, and a bare name that a local of the
+  same name hides. In a play build nothing checks a `typed_call!`'s family, so a call no test runs with
+  the flag set is only as right as its review.
 
 The ledger counts a typed marker in an engine crate like a translation marker, and `docs/LEDGER.md`
 has a `typed` column.
