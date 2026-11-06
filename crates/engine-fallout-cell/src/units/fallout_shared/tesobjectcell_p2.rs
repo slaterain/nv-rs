@@ -15494,8 +15494,8 @@ mod tests {
             .set_u32(node + 0x10 + 4 * children.len() as u32, orphan);
         e.call(0x0055_2390, &args![node]);
         assert_eq!(*syncs.borrow(), vec![vec![good, 2]]);
-        // 005523a8: the count is asked on every pass, so a synchronise that ends the list
-        // ends the walk.
+        // 005523a8: the count is asked on every pass: with an answer of 1 it is asked twice,
+        // before child 0 and before stopping at index 1.
         let walked = std::rc::Rc::new(std::cell::Cell::new(0u32));
         let count = walked.clone();
         e.register_double(NODE_CHILD_COUNT, move |_, _| {
