@@ -97,6 +97,13 @@ fn wait_for_frame_limit(e: &mut Engine, limit: u32) {
     e.call(SLEEP_IMPORT, &args![0u32]);
     let now_us = e.clock_now_us();
     let next = NEXT_FRAME_US.load(Ordering::Relaxed);
+    // A start time more than a frame ahead means the clock's `DWORD` wrapped (every 49.7 days of
+    // uptime): start the count again rather than wait for the old time.
+    let next = if next > now_us + frame_us {
+        now_us
+    } else {
+        next
+    };
     if next > now_us {
         e.wait_clock_until_us(next);
     }
@@ -546,6 +553,12 @@ mod tests {
         // One pass per frame from the wait; the step itself adds one where the original would sleep.
         assert!(slept.borrow().len() >= 5);
         assert!(slept.borrow().iter().all(|&ms| ms == 0));
+        // The clock wraps: the old start time is about 49.7 days ahead, and nothing waits for it.
+        NEXT_FRAME_US.store(u64::from(u32::MAX) * 1000, Ordering::Relaxed);
+        let before = e.clock_now_us();
+        wait_for_frame_limit(&mut e, 100);
+        assert_eq!(e.clock_now_us(), before);
+        assert_eq!(NEXT_FRAME_US.load(Ordering::Relaxed), before + 10_000);
     }
 
     #[test]
