@@ -16,7 +16,7 @@
 //!   elsewhere (the older viewer crates `crates/world`, `crates/physics`, ...)
 //!   does not count: the engine still has to translate that function, so it
 //!   is `traced`. This is the rule of the task queue ([`Func::in_engine`]).
-//!   A `// Typed from <addr>` marker (docs/ENGINE_CRATE.md, "Typed code") counts the same
+//!   A typed marker ([`typed_marker`]; docs/ENGINE_CRATE.md, "Typed code") counts the same
 //!   way, so a typed function stays `translated` once its translation is retired; the `typed`
 //!   column says how many have a typed version.
 //! - `static init (table)`: a static initializer, or an `atexit` destructor,
@@ -52,6 +52,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod typed_marker;
 mod units;
 
 /// `.text` of FalloutNV.exe 1.4.0.525 (image base 0x400000).
@@ -342,7 +343,7 @@ enum Cite {
     Incomplete,
     /// On a translation marker (ADR-0003).
     Translated,
-    /// On a typed marker: `// Typed from <addr>`.
+    /// On a typed marker ([`typed_marker`]).
     Typed,
     /// On a `Platform: replaces <addr>` marker: Rust platform code stands in
     /// for the function (the allocator, file and thread layers).
@@ -352,8 +353,9 @@ enum Cite {
 fn marker(line: &str) -> Option<Cite> {
     if line.contains("Translation incomplete:") {
         Some(Cite::Incomplete)
-    } else if line.contains("Typed from") {
-        Some(Cite::Typed)
+    } else if typed_marker::mentioned(line) {
+        // Only a well-formed one: the hygiene test refuses the rest in engine code.
+        typed_marker::address(line).map(|_| Cite::Typed)
     } else if line.contains("Translated from") || line.contains("decompiled, FalloutNV") {
         Some(Cite::Translated)
     } else if line.contains("Platform: replaces") {
@@ -1278,6 +1280,16 @@ mod tests {
         let text = "// Translated from 00c95a80 (decompiled, FalloutNV.exe 1.4.0.525)\n\
                     // Typed from 00c90e60, read against fnv_decomp\n\
                     // cites 00afe220\n";
+        // A line that isn't a well-formed marker credits nothing: the same definition as the
+        // hygiene test's.
+        for line in [
+            "/// Typed from 00c90e60",
+            "// Typed from 00c90e60 (decompiled)",
+            "//Typed from 00c90e60",
+            "let x = 1; // Typed from 00c90e60",
+        ] {
+            assert_eq!(scan(line), [(0x00c90e60, Cite::Traced, 1)], "{line}");
+        }
         assert_eq!(
             scan(text),
             [
