@@ -2,7 +2,7 @@
 //! answer of a call. A 0 or 1 here would be a different byte for a caller that compares, stores
 //! or counts it.
 
-#![allow(dead_code)]
+#![allow(dead_code, clippy::single_element_loop)]
 
 use crate::prelude::*;
 
