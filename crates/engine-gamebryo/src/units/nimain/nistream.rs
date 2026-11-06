@@ -1443,7 +1443,7 @@ pub fn ni_stream_save_ov3(e: &mut Engine, this: Ptr<NiStream>, path: Ptr) -> boo
 
 // Translated from 00a64160 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Writes a C string: its length (0 for a null pointer), then, when it is
-/// not 0, the characters without the terminator.
+/// not 0 (an unsigned test, 00a641b8), the characters without the terminator.
 pub fn fn_00a64160(e: &mut Engine, this: Ptr<NiStream>, string: u32) {
     let mut length = 0u32;
     if string != 0 {
@@ -1452,7 +1452,7 @@ pub fn fn_00a64160(e: &mut Engine, this: Ptr<NiStream>, string: u32) {
         }
     }
     write_u32(e, this, length);
-    if length as i32 > 0 {
+    if length != 0 {
         write_from(e, this, string, length, 1);
     }
 }

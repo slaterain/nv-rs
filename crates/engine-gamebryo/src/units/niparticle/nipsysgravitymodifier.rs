@@ -594,6 +594,8 @@ pub fn ni_p_sys_gravity_modifier_load_binary(
             4,
             argument_slot,
         );
+        // 00c236b0, 00c23725: the word pushed at entry, `this`, until a read fills it.
+        e.mem.set_u32(local, this.addr());
         stream_read(e, s, local, 4, 4, argument_slot);
         let kind = e.mem.u32(local);
         e.set(this, NiPSysGravityModifier::m_eType, kind);
