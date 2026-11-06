@@ -309,7 +309,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let good = dir.join("good.exe");
         std::fs::write(&good, b"MZ bytes").unwrap();
-        assert_eq!(load_reference(&[good.clone()]).unwrap().len(), 1);
+        assert_eq!(
+            load_reference(std::slice::from_ref(&good)).unwrap().len(),
+            1
+        );
         let missing = dir.join("missing.exe");
         assert!(load_reference(&[good.clone(), missing]).is_err());
         let empty = dir.join("empty.exe");
