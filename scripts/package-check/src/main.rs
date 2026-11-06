@@ -1,9 +1,9 @@
 //! package-check: what a package's files must not hold, checked before the ZIP is made
 //! (`scripts/package-playtest.ps1`). Standalone, no dependencies.
 //!
-//! `package-check FOLDER [--needle TEXT]... [--game FILE]...`
+//! `package-check FOLDER [--needle TEXT]... [--program-needle TEXT]... [--game FILE]...`
 //!
-//! - Every file under FOLDER is searched for each needle, as bytes and as UTF-16, any ASCII case
+//! - Every file under FOLDER (with `--program-needle`, every `.exe`) is searched for each needle, as bytes and as UTF-16, any ASCII case
 //!   (the build machine's user name and folders, private tool names).
 //! - With `--game` (the player's own FalloutNV.exe, or a DLL; only read, on the packager's machine):
 //!   the longest runs of bytes the program files share with it, at least [`MIN_RUN`] long, not
@@ -151,11 +151,12 @@ fn main() {
         eprintln!("usage: package-check FOLDER [--needle TEXT]... [--game FILE]...");
         std::process::exit(2);
     };
-    let (mut needles, mut games) = (Vec::new(), Vec::new());
+    let (mut needles, mut program_needles, mut games) = (Vec::new(), Vec::new(), Vec::new());
     let mut rest = args[1..].iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--needle" => needles.extend(rest.next().cloned()),
+            "--program-needle" => program_needles.extend(rest.next().cloned()),
             "--game" => games.extend(rest.next().map(PathBuf::from)),
             other => {
                 eprintln!("what is {other}?");
@@ -173,7 +174,11 @@ fn main() {
             bad += 1;
             continue;
         };
-        for needle in &needles {
+        let is_program = file
+            .extension()
+            .is_some_and(|x| x.eq_ignore_ascii_case("exe"));
+        let extra: &[String] = if is_program { &program_needles } else { &[] };
+        for needle in needles.iter().chain(extra) {
             for form in forms(needle) {
                 let hits = find_all(&data, &form);
                 if let Some(&first) = hits.first() {

@@ -98,8 +98,10 @@ try {
     $forbidden = '\.(esm|esp|bsa|nif|kf|dds|ogg|mp3|wav|lip|bik|fos|sdp|pdb|tsv|ini|log|dll|sym)$'
     $bad = Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object { $_.Name -match $forbidden }
     if ($bad) { throw "These must not be in the package: $($bad.FullName -join ', ')" }
-    $needles = @($env:USERNAME, $env:USERPROFILE, $root, 'nv-re', 'build43', 'fnv_decomp', '\target\release', '.pdb') | Where-Object { $_ }
-    $checkArguments = @($stage) + ($needles | ForEach-Object { '--needle'; $_ })
+    # (LEGAL.md names fnv_decomp, so that one only counts in the programs.)
+    $needles = @($env:USERNAME, $env:USERPROFILE, $root) | Where-Object { $_ }
+    $programNeedles = @('nv-re', 'build43', 'fnv_decomp', '\target\release')
+    $checkArguments = @($stage) + ($needles | ForEach-Object { '--needle'; $_ }) + ($programNeedles | ForEach-Object { '--program-needle'; $_ })
     if ($Game) { $checkArguments += @('--game', $Game) }
     & (Join-Path $x64 'package-check.exe') @checkArguments
     if ($LASTEXITCODE) { throw 'package-check found something that must not be in the package.' }
