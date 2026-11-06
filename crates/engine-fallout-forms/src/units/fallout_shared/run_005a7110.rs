@@ -32,7 +32,13 @@ pub fn fn_005a72a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
 // Translated from 005a7110 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Whether the list at +0x2C is empty (`008256d0`; its `EAX` passed on).
 pub fn fn_005a7110(e: &mut Engine, this: Ptr) -> u32 {
-    e.call(0x0082_56d0, &args![this.addr() + 0x2c]).u32()
+    typed_call!(
+        leaf::FAMILY,
+        0x0082_56d0,
+        leaf::both_words_zero(e, this.addr() + 0x2c)
+    )
+    .into_ret()
+    .u32()
 }
 
 // Translated from 005a7130 (decompiled, FalloutNV.exe 1.4.0.525)
