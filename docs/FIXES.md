@@ -80,6 +80,23 @@ Goodsprings; real frames 10, 15 and 16 ms):
   200 frames a second, which is the integration's own step, and stays. An NPC at rest after a load stands 0.34 units
   lower than in the real game at 200 frames a second and 0.25 higher at 60; left.
 
+### Before and after
+
+Height above the floor (7360.36 in Doc's hall) where the player rests after three standing jumps, one
+after the other. Real frames with `NV_FRAME_LOG`, the `iFPSClamp` rows with a recording:
+
+| Frames | Uncapped alone | With the landing fix |
+| --- | --- | --- |
+| Limit 60 | 0.69 | 0.69 |
+| Limit 120 (the hall reaches 93 a second here) | 4.57, 3.04, 1.36 | 0.69 |
+| No limit (about 86 in the hall) | 2.83, 3.01, 1.78 | 0.69 |
+| Exactly 120 | 3.96, 5.53, 4.65 | 0.69 |
+| Exactly 199 | 6.98, 6.77, 6.55 | 0.69 |
+| The real game at its own rate | 1.10, 1.90, 2.83 | |
+
+It holds up to the 199 a second tested. Frames of 16 ms and longer run `Move` untouched. The game's time against the
+real time is 1.001 to 1.005 at every limit.
+
 ## Credits
 
 Written with the fix plugins' knowledge, by their authors' permission (2026-11-03); no code is
