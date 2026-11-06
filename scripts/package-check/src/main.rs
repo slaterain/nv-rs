@@ -1,7 +1,7 @@
 //! package-check: what a package's files must not hold, checked before the ZIP is made
 //! (`scripts/package-playtest.ps1`). Standalone, no dependencies.
 //!
-//! `package-check FOLDER [--needle TEXT]... [--program-needle TEXT]... [--game FILE]...`
+//! `package-check FOLDER [--needle TEXT]... [--program-needle TEXT]... [--game FILE]... [--max-run BYTES]`
 //!
 //! - Every file under FOLDER (with `--program-needle`, every `.exe`) is searched for each needle, as bytes and as UTF-16, any ASCII case
 //!   (the build machine's user name and folders, private tool names).
@@ -9,7 +9,12 @@
 //!   the longest runs of bytes the program files share with it, at least [`MIN_RUN`] long, not
 //!   counting runs of one repeated byte or word. A run this long would be data copied from the game.
 //!
-//! Prints what it finds; status 1 when a needle is found.
+//!   Every `--game` file must be readable (one that isn't fails the check, it is never skipped). With
+//!   `--max-run`, a shared run longer than that fails the check too: the C runtime's own tables are
+//!   in both programs (the longest seen is about 2 KB), game data would be more.
+//!
+//! Prints what it finds; status 1 when a needle is found or a shared run is over the limit, 2 when
+//! a `--game` file can't be read.
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -145,6 +150,18 @@ fn shared_runs(
     runs
 }
 
+/// The `--game` files, all of them: a missing or unreadable one is an error, not a skipped check.
+fn load_reference(games: &[PathBuf]) -> Result<Vec<Vec<u8>>, String> {
+    games
+        .iter()
+        .map(|g| match std::fs::read(g) {
+            Ok(data) if !data.is_empty() => Ok(data),
+            Ok(_) => Err(format!("{}: empty", g.display())),
+            Err(e) => Err(format!("{}: {e}", g.display())),
+        })
+        .collect()
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(folder) = args.first().map(PathBuf::from) else {
@@ -152,12 +169,14 @@ fn main() {
         std::process::exit(2);
     };
     let (mut needles, mut program_needles, mut games) = (Vec::new(), Vec::new(), Vec::new());
+    let mut max_run: Option<usize> = None;
     let mut rest = args[1..].iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--needle" => needles.extend(rest.next().cloned()),
             "--program-needle" => program_needles.extend(rest.next().cloned()),
             "--game" => games.extend(rest.next().map(PathBuf::from)),
+            "--max-run" => max_run = rest.next().and_then(|n| n.parse().ok()),
             other => {
                 eprintln!("what is {other}?");
                 std::process::exit(2);
@@ -202,7 +221,13 @@ fn main() {
     );
 
     if !games.is_empty() {
-        let reference: Vec<Vec<u8>> = games.iter().filter_map(|g| std::fs::read(g).ok()).collect();
+        let reference = match load_reference(&games) {
+            Ok(reference) => reference,
+            Err(why) => {
+                eprintln!("--game: {why}");
+                std::process::exit(2);
+            }
+        };
         let mut index: HashMap<u64, Vec<(u32, u32)>> = HashMap::new();
         let mut distinct = HashSet::new();
         for (n, data) in reference.iter().enumerate() {
@@ -247,6 +272,13 @@ fn main() {
                 total,
                 runs.first().map_or(0, |r| r.1)
             );
+            if let Some(limit) = max_run.filter(|&l| runs.first().is_some_and(|r| r.1 > l)) {
+                println!(
+                    "FOUND a run shared with the game longer than {limit} bytes in {}",
+                    file.display()
+                );
+                bad += 1;
+            }
             for &(at, length, n) in runs.iter().take(25) {
                 println!(
                     "  {length} bytes at {at:#x}, with {}: {}",
@@ -269,6 +301,21 @@ mod tests {
         assert_eq!(find_all(b"xx SECRET secret", &bytes), [3, 10]);
         assert_eq!(find_all(b"S\0e\0c\0R\0e\0T\0", &wide), [0]);
         assert!(find_all(b"", &bytes).is_empty());
+    }
+
+    #[test]
+    fn a_game_file_that_cannot_be_read_is_an_error_not_a_skip() {
+        let dir = std::env::temp_dir().join(format!("package-check-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let good = dir.join("good.exe");
+        std::fs::write(&good, b"MZ bytes").unwrap();
+        assert_eq!(load_reference(&[good.clone()]).unwrap().len(), 1);
+        let missing = dir.join("missing.exe");
+        assert!(load_reference(&[good.clone(), missing]).is_err());
+        let empty = dir.join("empty.exe");
+        std::fs::write(&empty, b"").unwrap();
+        assert!(load_reference(&[empty]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

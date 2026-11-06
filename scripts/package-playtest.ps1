@@ -3,7 +3,10 @@
 # files, no saves, no reports, no machine tables, no debug files.
 #
 #   ./scripts/package-playtest.ps1 -Version 2026-11-06.1
-#       [-Game 'path of the game's FalloutNV.exe, only read, to check no data of it is in the programs']
+#       -Game 'path of the game's FalloutNV.exe, only read: the check that no data of it is in the programs'
+#       [-TestBuild]     a package for testing, from a commit that is not on GitHub (yet): its BUILD.txt
+#                        says "test build, not for release" and its name ends in -test. Without this
+#                        flag the script refuses unless HEAD is on origin (BUILD.txt links to it).
 #       [-UseBuilt]      use programs built before (with the flags below), under -Target
 #       [-Target DIR]    the Cargo target folder (default: target)
 #       [-Toolchain32 stable]   the Rust toolchain that has i686-pc-windows-msvc, for the 32-bit tools
@@ -12,7 +15,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][ValidatePattern('^[a-zA-Z0-9][a-zA-Z0-9._-]+$')][string]$Version,
-    [string]$Game,
+    [Parameter(Mandatory)][string]$Game,
+    [switch]$TestBuild,
     [switch]$UseBuilt,
     [string]$Target,
     [string]$Toolchain32 = 'stable',
@@ -28,6 +32,14 @@ try {
     if ($LASTEXITCODE) { throw 'Package from a committed Git checkout.' }
     $dirty = git status --porcelain --untracked-files=normal
     if ($dirty) { throw 'Commit or remove untracked changes before packaging.' }
+    if (!(Test-Path -LiteralPath $Game -PathType Leaf)) { throw "-Game must be the game's FalloutNV.exe, and this file is not there: $Game" }
+    # BUILD.txt links to the commit, so a release package is only made from one GitHub has.
+    if (!$TestBuild) {
+        git fetch --quiet origin
+        if ($LASTEXITCODE) { throw 'Could not ask origin which commits it has. Fix the connection, or use -TestBuild for a package that is not for release.' }
+        $onOrigin = git branch --remotes --contains $commit
+        if (!$onOrigin) { throw "HEAD ($commit) is not on origin, so BUILD.txt's source link would lead nowhere. Push it (the final package is made from main after the merge), or use -TestBuild for a test package." }
+    }
     $licenseLock = (Get-Content -LiteralPath (Join-Path $root 'distribution/DEPENDENCY-LOCK.sha256') -Raw).Trim()
     # The hash of the file with LF line ends, whichever way this checkout has them.
     $lockText = [IO.File]::ReadAllText((Join-Path $root 'Cargo.lock')) -replace "`r`n", "`n"
@@ -61,7 +73,7 @@ try {
         Remove-Item Env:CARGO_ENCODED_RUSTFLAGS
     }
 
-    $name = "nv-rs-preview-$Version-windows-x64"
+    $name = "nv-rs-preview-$Version-windows-x64" + $(if ($TestBuild) { '-test' } else { '' })
     $stage = Join-Path $Out $name
     $zip = "$stage.zip"
     if ((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $zip)) { throw 'This package version already exists. Use a new version.' }
@@ -91,7 +103,8 @@ try {
         [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding($false)))
     }
     $sha = (Get-FileHash -LiteralPath (Join-Path $stage 'app/FalloutNV.exe') -Algorithm SHA256).Hash
-    @("nv-rs Windows preview $Version", "Source commit: $commit", "app\FalloutNV.exe SHA256: $sha", 'Platform: Windows x64', "Source: https://github.com/slaterain/nv-rs/tree/$commit") |
+    $source = if ($TestBuild) { 'test build, not for release' } else { "Source: https://github.com/slaterain/nv-rs/tree/$commit" }
+    @("nv-rs Windows preview $Version", "Source commit: $commit", "app\FalloutNV.exe SHA256: $sha", 'Platform: Windows x64', $source) |
         Set-Content -LiteralPath (Join-Path $stage 'BUILD.txt') -Encoding ascii
 
     # What must not be in it: the file types first, then the build machine's traces and game data.
@@ -100,9 +113,12 @@ try {
     if ($bad) { throw "These must not be in the package: $($bad.FullName -join ', ')" }
     # (LEGAL.md names fnv_decomp, so that one only counts in the programs.)
     $needles = @($env:USERNAME, $env:USERPROFILE, $root) | Where-Object { $_ }
-    $programNeedles = @('nv-re', 'build43', 'fnv_decomp', '\target\release')
+    # FUN_, DAT_ and LAB_ are the names a disassembler gives code and data nobody has named.
+    $programNeedles = @('nv-re', 'build43', 'fnv_decomp', '\target\release', 'FUN_', 'DAT_', 'LAB_')
     $checkArguments = @($stage) + ($needles | ForEach-Object { '--needle'; $_ }) + ($programNeedles | ForEach-Object { '--program-needle'; $_ })
-    if ($Game) { $checkArguments += @('--game', $Game) }
+    # Required: no run of the game's bytes longer than the C runtime's own tables (the longest seen
+    # is about 2 KB) in any program.
+    $checkArguments += @('--game', $Game, '--max-run', '4096')
     & (Join-Path $x64 'package-check.exe') @checkArguments
     if ($LASTEXITCODE) { throw 'package-check found something that must not be in the package.' }
 
