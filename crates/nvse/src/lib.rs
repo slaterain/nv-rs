@@ -20,6 +20,7 @@
 pub mod args;
 pub mod commands;
 pub mod context;
+pub mod mt19937;
 pub mod names;
 pub mod table;
 
@@ -130,6 +131,9 @@ pub struct Nvse {
     pub table: table::State,
     /// The script contexts and the lines being evaluated, per game thread (I-3).
     pub context: context::State,
+    /// The MT19937 generator `Rand` draws from, seeded at install from the clock, as xNVSE seeds
+    /// it with `GetTickCount()` when it loads (`nvse.cpp` (xNVSE)).
+    pub mt: mt19937::Mt19937,
 }
 
 /// Builds xNVSE into the engine, as xNVSE's `CommandTable::Init` and its hooks do at the game's
@@ -140,6 +144,8 @@ pub fn install(e: &mut Engine) {
     if e.ext::<Nvse>().installed {
         return;
     }
+    let seed = e.clock_now_ms();
+    e.ext::<Nvse>().mt.init_genrand(seed);
     table::install(e);
     context::install(e);
     args::install(e);
