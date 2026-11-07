@@ -479,6 +479,57 @@ pub(crate) struct Active {
     depth: usize,
 }
 
+/// The script command table's place as FalloutNV.exe's code reads it (ADR-0016 §2, option A).
+///
+/// xNVSE copies the exe's script command table into its own memory, appends its commands and
+/// its plugins' and writes the new numbers over 19 immediates in 13 exe functions
+/// (`CommandTable.cpp` `kPatch_ScriptCommands_Start`, `_End`, `_MaxIdx` (xNVSE)). The port's
+/// translations read those immediates from here instead: the code is unchanged and only the
+/// numbers move. With no extender installed every read gives the exe's immediate
+/// ([`ScriptTables::EXE`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScriptTables {
+    /// The first `CommandInfo` record (opcode `0x1000`); the exe's immediate `0x01190910`.
+    /// Field addresses are this plus the field's offset (`+0x10` needs a reference, `+0x12`
+    /// the parameter count, `+0x14` the parameters, `+0x20` the eval), as the exe's
+    /// `0x01190920`, `0x01190922`, `0x01190924`, `0x01190930`.
+    pub start: u32,
+    /// One past the last record; the exe reads the opcode word of the record there
+    /// (`end + 8`, the immediate `0x01196d18` at `005AEA59`).
+    pub end: u32,
+    /// One past the highest script opcode: `0x1280` in the exe (`0059390A`, `005AEA5D`,
+    /// `005B115E`; that minus `0x1000` at `005B19A3` and `005BCBE3`).
+    pub max_opcode: u32,
+}
+
+impl ScriptTables {
+    /// FalloutNV.exe 1.4.0.525's own table: 0x280 records of 0x28 bytes from `0x01190910`.
+    pub const EXE: ScriptTables = ScriptTables {
+        start: 0x0119_0910,
+        end: 0x0119_6d10,
+        max_opcode: 0x1280,
+    };
+    /// The size of one `CommandInfo` record.
+    pub const RECORD: u32 = 0x28;
+    /// The first script opcode.
+    pub const FIRST_OPCODE: u32 = 0x1000;
+
+    /// The address of `opcode`'s record (`0x1000` and up; not checked).
+    pub fn record(self, opcode: u32) -> u32 {
+        self.start.wrapping_add(
+            opcode
+                .wrapping_sub(Self::FIRST_OPCODE)
+                .wrapping_mul(Self::RECORD),
+        )
+    }
+}
+
+impl Default for ScriptTables {
+    fn default() -> ScriptTables {
+        ScriptTables::EXE
+    }
+}
+
 /// The extenders' state on an engine (fields of [`Engine`]).
 #[derive(Default)]
 pub(crate) struct ExtendState {
@@ -486,12 +537,25 @@ pub(crate) struct ExtendState {
     pub(crate) chains: crate::engine::AddrMap<u32, Chain>,
     pub(crate) active: Vec<Active>,
     pub(crate) sites: crate::engine::AddrMap<u32, SiteHandlers>,
+    pub(crate) tables: ScriptTables,
 }
 
 /// The handlers at one seam: its table, and a handler or none per owner, in the table's order.
 pub(crate) type SiteHandlers = (&'static [Entry], Box<[Option<SiteFn>]>);
 
 impl Engine {
+    /// Where the script command table is ([`ScriptTables`]): the exe's own unless an extender
+    /// moved it. The translations of the 13 functions whose immediates xNVSE patches read it.
+    #[inline]
+    pub fn script_tables(&self) -> ScriptTables {
+        self.extend.tables
+    }
+
+    /// Moves the script command table (an extender's install, as xNVSE's `ApplyPatch`).
+    pub fn set_script_tables(&mut self, tables: ScriptTables) {
+        self.extend.tables = tables;
+    }
+
     /// The extension slot of type `T` on this engine, made with `T::default()` at first use: a
     /// built-in's state per engine instance (tests run several engines at once; no
     /// thread-locals). Reached only while no other borrow of the engine is held, so no reference
@@ -1079,6 +1143,33 @@ mod tests {
             },
         ];
         assert!(std::panic::catch_unwind(|| check_table(&UNSORTED)).is_err());
+    }
+
+    /// With nothing installed, every read of the descriptor gives the exe's immediates: the table
+    /// start `0x01190910` (`005B1172` and the field addresses `0x01190920`, `0x01190922`,
+    /// `0x01190924`, `0x01190930`), the end marker `0x01196d18` (`005AEA59`), the highest opcode
+    /// `0x1280` (`0059390A`, `005AEA5D`, `005B115E`).
+    #[test]
+    fn the_script_tables_are_the_exes_until_moved() {
+        let mut e = engine();
+        let t = e.script_tables();
+        assert_eq!(t, ScriptTables::EXE);
+        assert_eq!(t.start, 0x0119_0910);
+        assert_eq!(
+            [0x10, 0x12, 0x14, 0x20].map(|f| t.start + f),
+            [0x0119_0920, 0x0119_0922, 0x0119_0924, 0x0119_0930]
+        );
+        assert_eq!(t.end + 8, 0x0119_6d18);
+        assert_eq!(t.max_opcode, 0x1280);
+        assert_eq!(t.record(0x127f), 0x0119_0910 + 0x27f * 0x28);
+        let moved = ScriptTables {
+            start: 0x7f00_0000,
+            end: 0x7f00_0000 + 0x28,
+            max_opcode: 0x1001,
+        };
+        e.set_script_tables(moved);
+        assert_eq!(e.script_tables(), moved);
+        assert_eq!(Engine::new().script_tables(), ScriptTables::EXE);
     }
 
     /// Two engines keep their own extension state; slots are keyed by type.
