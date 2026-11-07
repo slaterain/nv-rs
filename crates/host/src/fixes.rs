@@ -33,6 +33,7 @@ pub static FIXES: &[Fix] = &[
     crate::uncap::FIX,
     crate::uncap::PHYSICS_FIX,
     crate::uncap::SLOW_MOTION_FIX,
+    crate::phys_blend::FIX,
 ];
 
 /// The player's one line: the fixes set, or the original's behaviour.
@@ -222,6 +223,7 @@ const TEST_VARIABLES: &[&str] = &[
     "NV_SHOT",
     "NV_TICK_COUNT",
     "NV_FRAME_LOG",
+    "NV_PHYS_BLEND_LOG",
     "NV_BENCH_CALLS",
     "NV_BENCH_CALL_COUNTS",
     "NV_PROFILE",

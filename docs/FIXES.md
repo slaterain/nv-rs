@@ -39,6 +39,11 @@ without a per-call cost, so the frame rate stays the player's. The game's own `i
 (`[General]`, 1 to 199) gives exact frame steps at any wall rate, which is how a recording sees a
 high frame rate's steps: a trace itself holds the game near 30 frames a second.
 
+`NV_PHYS_BLEND_LOG=FILE`, with the smooth physics drawing on (say `NV_PRESET=fixes`: the variable pins
+vanilla otherwise), writes per drawn frame each free body's node as the original draws it and as the
+fix draws it, with the drawing time and the world's last step end; `NV_SHOT_FRAMES=FROM-TO` limits
+`NV_SHOT` to those presents, so a short stretch can be taken every frame.
+
 ## The fixes
 
 Not done: the menus and logos run at 170+ frames a second with no `FrameLimit` (undecided; a limit that applies in menus only is the maintainer's choice). The game's own `iFPSClamp` ignores `FrameLimit`: a clamp is a fixed step with no wait, which the uncapped step doesn't pace, so a recording with `iFPSClamp` runs as fast as it can.
@@ -48,6 +53,7 @@ Not done: the menus and logos run at 170+ frames a second with no `FrameLimit` (
 | Uncapped frame rate | `00aa4ee0` | `NV_UNCAP` | `BSTimer`'s step without its sleep and its 10 ms floor, on the microsecond clock. `FrameLimit` paces it. Where the original sleeps (a step under 10 ms by the tick count) the other threads get a `Sleep(0)` pass instead, about one frame in three, and the first step after a disable answers as the original does (10 ms) |
 | High-frame-rate landing | `00c73170` | `NV_HF_LANDING` | The player's character, landing standing still in a frame under 16 ms, falls on as far as at 16 ms frames: one more integration with `Move`'s own velocity, large-creature mode word and step. Measured on the player only, so other characters run `Move` as it is. The extra time is 32 ms minus the frame, so it jumps at 16 ms (15.9 ms gets about 32 ms in all, 16 ms none); the fall stops at the floor either way, and the difference is under half a unit (0.43 at 16 ms frames), not visible, so it is not smoothed |
 | High-frame-rate slow motion | `00aa4e40` | `NV_HF_SLOWMO` | The time multiplier moves to its target by the time passed, not by the frame |
+| Smooth physics drawing | `00c65a80`, `008706b0` | `NV_PHYS_BLEND` | Free bodies (dropped and thrown items, ragdolls, debris) are drawn between Havok's 16 ms steps instead of frozen on frames without a step: around the frame's drawing only, each moving body's node shows the body at the game's time minus one step, blended with Havok's own swept-transform formula, and is put back after. The simulation and what game logic reads are the original's. Bodies are drawn one step (16 ms) behind the clock, about 5 ms later than the original on average. Below |
 
 ### What high frame rates do to the original's code
 
@@ -101,6 +107,39 @@ real time is 1.001 to 1.005 at every limit.
 
 Frame rate at the maintainer's settings (2560x1440, 8x anti-aliasing, borderless; about two minutes a run,
 2026-11-06): Doc's room 70.2 frames a second on vanilla, 104.7 with the fixes; Goodsprings about 43 and about 44 (the original never sleeps there; the second from 15 s only).
+
+### Smooth physics drawing
+
+Havok steps the world 16 ms at a time at any frame rate, and the original draws each free body as the
+scene graph's update last set its node (`hktoNiTransform`, `00c65a80`): above 62.5 frames a second many
+frames have no step, so dropped items, ragdolls and debris stand still on them and jump on the next. The
+fix keeps the simulation and every node game logic reads exactly as the original's; only around the
+frame's drawing (`008706b0`) it writes each moving body's node as the body was one step before the game's
+time, blended between the two Havok steps around it with Havok's own swept-transform formula
+(`approxTransformAt`: centre of mass and rotation moved linearly, rotation normalised), refreshes the
+nodes below it, draws, and puts every node and bound back as it was (`crates/host/src/phys_blend.rs`).
+The original's nodes are set before the frame's world step, so they show the body 11 ms behind the game's
+clock on average (0 to 23 ms at 144 frames a second); the fix draws it 16 ms behind, about 5 ms later.
+
+Measured on the hf-motion route in Doc's hall (three dropped items and Doc's ragdoll, 60 to 76 moving
+bodies; `NV_PHYS_BLEND_LOG`, both series from the same frames; 2026-11-07). Frozen: a frame in which the
+body's path moves and the drawn body doesn't. Shown/ideal: the drawn move in a frame against the path's.
+
+| Frames | Frozen, original | Frozen, fix | Over 1.5 times the path's move, original / fix | Shown/ideal p10, p50, p90, original | Fix |
+| --- | --- | --- | --- | --- | --- |
+| Exactly 144 (`iFPSClamp`) | 56.6% | 0.4% | 43.2% / 0.5% | 0.00, 0.00, 2.31 | 0.98, 1.00, 1.02 |
+| Limit 60 (68.5 a second of game time measured) | 7.7% | 0.0% | 9.9% / 1.0% | 0.53, 1.03, 1.50 | 0.99, 1.00, 1.03 |
+
+The fix's frozen frames are bodies that just woke or were moved by the game (a `SetPosition`): they are
+drawn from their first step's start until the drawing time reaches it, one or two frames. Off the path:
+0.04 units (rms) at 144 against the original's 0.75. With `NV_PHYS_BLEND=0` the same route shows 56.5%
+frozen, as before the fix, and the three dropped items settle step for step as with the fix on (same
+steps active, speeds and resting places). Vanilla at exactly 60: one step in 95.8% of frames, two in 4.2%,
+as before.
+
+On screen (`NV_SHOT` every frame at exactly 144, looking down at the dropped shovel): with the fix off every
+second frame of its fall is the same picture as the one before and the next moves twice as far; with the fix
+on the picture changes every frame, by half as much (one frame stays still where the shovel hits the floor).
 
 ## Credits
 
