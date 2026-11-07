@@ -798,7 +798,7 @@ mod tests {
     #[test]
     fn a_destroyed_event_list_gives_up_its_strings_and_arrays() {
         let mut e = engine();
-        let (list, node, local_s, local_a, script) = (
+        let (list, node, string_local, array_local, script) = (
             0x0200_1000,
             0x0200_1100,
             0x0200_1200,
@@ -808,16 +808,16 @@ mod tests {
         e.mem.set_u32(list, script);
         e.mem.set_u32(script + 0xc, 0x0500_0800);
         e.mem.set_u32(list + 0xc, node);
-        e.mem.set_u32(node, local_s);
+        e.mem.set_u32(node, string_local);
         e.mem.set_u32(node + 4, node + 8);
-        e.mem.set_u32(node + 8, local_a);
+        e.mem.set_u32(node + 8, array_local);
         let s = add_string(&mut e, 5, b"text", false);
-        e.mem.set_f64(local_s + 8, f64::from(s));
+        e.mem.set_f64(string_local + 8, f64::from(s));
         let a = create_array(&mut e, KEY_NUMBER, true, 5);
-        e.mem.set_f64(local_a + 8, 0.0);
-        add_reference_double(&mut e, local_a + 8, a, 5);
-        collect(&mut e, list, local_s, VarType::String);
-        collect(&mut e, list, local_a, VarType::Array);
+        e.mem.set_f64(array_local + 8, 0.0);
+        add_reference_double(&mut e, array_local + 8, a, 5);
+        collect(&mut e, list, string_local, VarType::String);
+        collect(&mut e, list, array_local, VarType::Array);
         clean_up_event_list(&mut e, list);
         clean_strings(&mut e);
         clean_arrays(&mut e);
