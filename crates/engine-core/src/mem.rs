@@ -34,29 +34,35 @@
 //! loads and stores.)
 //!
 //! Threads (ADR-0015's real threads, step R1 of the migration): every
-//! guest load and store takes `&self`, so several threads can share one
-//! [`Mem`]. Two rules keep that at no cost to the hot path:
+//! guest load and store takes `&self`, so a later thread host can let
+//! several threads use one [`Mem`]. `Mem` is `Send`, not `Sync`: the one
+//! deliberate sharing point goes in the thread host, with the rules below.
 //! - The table of mapped pages changes only through `&mut self`
-//!   ([`Mem::map`], [`Mem::unmap`], and the heap, which maps). The
-//!   exclusive borrow is the token that no other thread is inside a guest
-//!   access, so the page test stays one plain load folded into its compare.
-//!   With real threads, the thread host may hand out `&mut Mem` only with
-//!   every other game thread parked at a safe point (a stop-the-world for
-//!   each change of the table). The one exception is the touch census, a
-//!   diagnostic that marks pages from a store: like the other diagnostics
-//!   it runs with stepped threads only (`Mem::touch_mark`).
-//! - Guest values are plain host loads and stores, the same instructions as
-//!   the exe's own `mov`s, not atomics: an atomic needs an aligned address,
-//!   and a guest address's alignment is known only at run time, so every
-//!   access would test it (one instruction more on every inlined access,
-//!   measured), and the compiler folds no atomic load into the instruction
-//!   that uses it. Threads are ordered by the game's own synchronisation, as
-//!   in the exe: its interlocked operations, critical sections and waits are
-//!   platform calls the compiler cannot see through (real atomics with real
-//!   threads), so no guest access moves across them, and translated code
-//!   never waits on guest memory without such a call (docs/ENGINE_CRATE.md,
-//!   "A risk for later"). Two game threads racing on the same bytes without
-//!   them race in the exe as well.
+//!   ([`Mem::map`], [`Mem::unmap`], and the heap, which maps), so with
+//!   threads stepped no guest access runs during a change, and the page
+//!   test stays one plain load folded into its compare. The touch census,
+//!   a diagnostic, changes it from a store (`Mem::touch_mark`, through
+//!   `&self`): it runs with stepped threads only. `&mut` is not the
+//!   stop-the-world real threads need: a parked thread still holds its
+//!   `&Engine`, and the compiler keeps `Mem`'s base and diagnostics flag in
+//!   registers across stores. Real threads change the table with raw stores
+//!   through `&self` at a barrier, with `Mem`'s changing fields and the heap
+//!   behind locks.
+//! - Guest values are plain host loads and stores through raw pointers, the
+//!   same instructions as the exe's own `mov`s, not atomics: an atomic needs
+//!   an aligned address, and a guest address's alignment is known only at
+//!   run time, so every access would test it (one instruction more on every
+//!   inlined access, measured), and the compiler folds no atomic load into
+//!   the instruction that uses it. Two threads that access the same bytes
+//!   without synchronisation, one of them writing, are a data race: undefined
+//!   behaviour in Rust's and LLVM's model, where the exe's races were
+//!   defined by the processor. What we rely on: LLVM emits each raw-pointer
+//!   access as a plain move, and moves none across a call it cannot see
+//!   through. The game's interlocked operations, critical sections and waits
+//!   are such calls (real atomics with real threads), and so a loop in typed
+//!   code that waits on guest memory for another thread must contain one
+//!   (docs/ENGINE_CRATE.md, "A risk for later"): without it the compiler may
+//!   read the memory once and loop forever.
 //!
 //! The host calls are `VirtualAlloc` and `VirtualFree` on Windows (the
 //! block starts with no access, and pages are committed as they are mapped
@@ -443,21 +449,19 @@ struct Space {
 }
 
 // SAFETY: a `Space` owns its block alone, as a `Box` owns its allocation: no other value holds
-// `base`, and only `Drop` releases it. The reservation is the process's, not a thread's, so any
-// thread may use and drop it. [`Mem`], its only user, writes the table of mapped pages only
-// through `&mut self` (the touch census aside, a stepped-threads diagnostic), so the borrow
-// rules keep every change of the table apart from every guest access on any thread. It writes
-// guest bytes through `&self` with plain host stores, and no reference into the guest space
-// outlives a call of [`Mem`]: on one thread, accesses follow one another; between threads, the
-// game's own synchronisation orders them, as in the exe (module documentation, "Threads").
+// `base`, and only `Drop` releases it. The reservation is the process's, not a thread's, so the
+// thread that owns the `Space` may use and drop it whichever thread made it (the thread host hands
+// the engine from one OS thread to the next). Not `Sync`: guest stores go through `&self` as plain
+// raw-pointer stores, so two threads sharing one `Mem` could race on guest bytes or on the table,
+// undefined behaviour in Rust's model (module documentation, "Threads"); the thread host is where
+// sharing will be allowed, under its rules.
 unsafe impl Send for Space {}
-// SAFETY: as for `Send` above.
-unsafe impl Sync for Space {}
 
-// Several threads can share one `Mem` (module documentation, "Threads").
+// A `Mem` can move to another thread; sharing one is the thread host's to allow (module
+// documentation, "Threads").
 const _: fn() = || {
-    fn shareable<T: Send + Sync>() {}
-    shareable::<Mem>();
+    fn movable<T: Send>() {}
+    movable::<Mem>();
 };
 
 /// `m` locked; a lock a panic left poisoned is taken as it is (a diagnostic's findings: the panic
@@ -1864,24 +1868,27 @@ impl Mem {
                 self.read_fault(p);
             }
             let n = PAGE - (p as usize & (PAGE - 1));
-            // SAFETY: `[p, p + n)` is the rest of one mapped page, and nothing in this module
-            // writes guest memory while the slice lives (it ends with this pass of the loop). A
-            // plain read (module documentation, "Threads").
-            let bytes = unsafe { std::slice::from_raw_parts(self.host_at(p), n) };
-            let found = bytes.iter().position(|&c| c == 0);
+            let at = self.host_at(p);
+            // Each byte read once, through the raw pointer (no slice into guest memory, which a
+            // store through `&self` may change), up to the NUL or the page's end.
+            let mut found = None;
+            for i in 0..n {
+                // SAFETY: `p + i` lies in the rest of one mapped page. A plain read (module
+                // documentation, "Threads").
+                let c = unsafe { at.add(i).read() };
+                if c == 0 {
+                    found = Some(i);
+                    break;
+                }
+                out.push(c);
+            }
             if self.page_state((p >> PAGE_BITS) as usize) == TOUCH {
                 self.touch_note(p, found.map_or(n, |len| len + 1), false);
             }
-            match found {
-                Some(len) => {
-                    out.extend_from_slice(&bytes[..len]);
-                    return out;
-                }
-                None => {
-                    out.extend_from_slice(bytes);
-                    p = p.wrapping_add(n as u32);
-                }
+            if found.is_some() {
+                return out;
             }
+            p = p.wrapping_add(n as u32);
         }
     }
 

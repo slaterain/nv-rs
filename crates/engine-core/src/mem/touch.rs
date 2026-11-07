@@ -250,8 +250,9 @@ impl Mem {
     }
 
     /// Tags `[addr, addr + len)` with tag `tag` and class `class` (what the spec's rules do; for a
-    /// tool or test that tags by hand). Objects it overlaps lose their tags.
-    pub fn touch_tag(&self, addr: u32, len: u32, tag: u16, class: u32) {
+    /// test that tags by hand). Objects it overlaps lose their tags. Changes the table of mapped pages
+    /// through `&self` ([`Mem::touch_mark`]), so not public: only the census's own paths call it.
+    pub(super) fn touch_tag(&self, addr: u32, len: u32, tag: u16, class: u32) {
         let Some(t) = self.touch.as_deref() else {
             return;
         };
