@@ -390,7 +390,10 @@ The migration of [ADR-0012](adr/0012-modern-64-bit-engine.md) and
 [ADR-0014](adr/0014-typed-migration-in-two-stages.md) replaces a translation with typed, native
 Rust, a family of functions at a time. `engine_core::typed` is the seam it plugs into. The first
 family is `leaves` (`typed/leaf.rs`): the small functions the translations call most, off until its
-speed gate passes (`NV_TYPED=leaves` tries it).
+speed gate passes (`NV_TYPED=leaves` tries it). The second is `lockfree` (`crates/engine-typed`, a crate
+above the core that provides its family): the lock-free maps, their interfaces, iterators and holder,
+stage 1 (objects stay in guest memory), off by default (`NV_TYPED=lockfree` tries it); its differential
+tests are `crates/engine/tests/typed_lockfree.rs`.
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with
@@ -555,16 +558,24 @@ Diff::new(entry!(0x00abc123, typed_version(Ptr<Thing>, f32) -> f32))
   stops, and an input it names that doesn't stop fails too. A stop at an untranslated address always
   fails: that is a double the setup lacks. A function can't be its own translation: the harness refuses
   one pointer on both sides, and hygiene the same name in both `entry!`s.
+- **A run that doesn't end:** past `max_calls` calls (100,000 by default) a run stops with "call budget
+  spent", so a wrong version that loops shows as a stop instead of a log growing without end. A loop
+  that makes no call at all isn't caught this way: run the test binary under a time and memory cap.
 - **Not compared,** so a test of these has to look itself: the rest of the stack for locals; the
   kernel's objects and everything else in `Engine::kernel`; the heap's block map and free bins; the time slice and `call_stack`, which a
   direct call doesn't touch by design; calls another game thread makes; a by-address call that runs a
   row of the `atexit` table. The memory hash doesn't say where it differs; a difference that lasts to the
   end also shows with its address.
 - **Letting something through:** `ignore_calls` is for a callee the translation calls and the typed
-  version doesn't call at all, doing its work in its own body. It drops those calls from the
-  translation's side only, so the typed version calling one still shows, and it refuses an overridable
-  address. `allow_nan_payloads` lets NaN payloads differ where the float rule accepts it, in the return
-  and in aligned words of memory and calls; an infinity or a number against a NaN still differs.
+  version doesn't call at all, doing its work in its own body. It drops those calls, with the calls
+  made under them, from the translation's side at every depth (a typed callee does their work in place
+  too), and from the typed side below the function's own level, so a callee both sides run that calls
+  one compares alike. The typed version's own call to one still shows, and it refuses an overridable
+  address. `translation_calls_plainly` drops the listed call itself (not what it calls) from both sides
+  at every depth, since one translation reaches a function plainly and another by address; a call the
+  typed version lacks then shows only by what the callee does. `allow_nan_payloads` lets NaN payloads
+  differ where the float rule accepts it, in the return and in aligned words of memory and calls; an
+  infinity or a number against a NaN still differs.
 - **A function new in the setup:** a setup may register at a family member's or a plain callee's address
   where nothing was, when every side gets the same function: anything else stops the run.
 - **A double in the setup:** over a family's member, or over a callee the translation calls plainly,
