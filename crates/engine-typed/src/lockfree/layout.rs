@@ -41,7 +41,7 @@ impl Scalar for Marked {
         Marked(m.u32(a))
     }
     #[inline(always)]
-    fn store(self, m: &mut Mem, a: u32) {
+    fn store(self, m: &Mem, a: u32) {
         m.set_u32(a, self.0)
     }
 }
