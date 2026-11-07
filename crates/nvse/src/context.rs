@@ -36,8 +36,9 @@ pub const INIT_ACTION_LIST: WrapSlot = WrapSlot::new(Owner::Nvse, 0x005e_1160);
 pub const PARSE_LINE: WrapSlot = WrapSlot::new(Owner::Nvse, 0x005e_13a0);
 /// `ScriptRunner::EvaluateLine`.
 pub const EVALUATE_LINE: WrapSlot = WrapSlot::new(Owner::Nvse, 0x005e_1550);
-/// The seams before `EvaluateLine`'s block-type handler call (`005E16DC`) and its command handler
-/// call (`005E2345`), and before the operand reader's handler call (`005ac7a0`, at `005ACB9D`).
+/// The seams before `EvaluateLine`'s block-type handler call (at `005E16C3`, the call at
+/// `005E16DC`) and its command handler call (at `005E2329`, the call at `005E2345`), and before
+/// the operand reader's handler call (`005ac7a0`, at `005ACB9D`).
 pub const BLOCK_HANDLER_CALL: SiteSlot = SiteSlot::new(Owner::Nvse, 0x005e_16c3);
 pub const COMMAND_HANDLER_CALL: SiteSlot = SiteSlot::new(Owner::Nvse, 0x005e_2329);
 pub const OPERAND_HANDLER_CALL: SiteSlot = SiteSlot::new(Owner::Nvse, 0x005a_cb9d);
@@ -145,17 +146,38 @@ pub fn set_command(e: &mut Engine, record: u32) {
     }
 }
 
+/// The depths of this thread's context and line stacks.
+fn depths(e: &mut Engine) -> (usize, usize) {
+    (contexts(e).len(), lines(e).len())
+}
+
+/// Calls the next link; when it stops (a panic unwinding through it), this thread's context and
+/// line stacks go back to the depths `saved` before the stop goes on, as `Engine::call_next`
+/// does for its own record, so no entry of the stopped call is left for a later one.
+fn call_restoring(e: &mut Engine, addr: u32, a: &[u32], saved: (usize, usize)) -> Ret {
+    let ret = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| e.call_next(addr, a)));
+    match ret {
+        Ok(ret) => ret,
+        Err(stop) => {
+            contexts(e).truncate(saved.0);
+            lines(e).truncate(saved.1);
+            std::panic::resume_unwind(stop)
+        }
+    }
+}
+
 /// `ScriptRunner::Run` (`005e0d20`), wrapped: xNVSE's `PreScriptExecute` before it,
 /// `PostScriptExecute` after (`Hooks_Other.cpp` (xNVSE)).
 fn run(e: &mut Engine, a: &[u32]) -> Ret {
     let (runner, script, reference) = (a[0], a[1], a[2]);
+    let saved = depths(e);
     contexts(e).push(Context {
         script,
         runner,
         owner_ref: reference,
         ..Context::default()
     });
-    let ret = e.call_next(RUN.addr(), a);
+    let ret = call_restoring(e, RUN.addr(), a, saved);
     if script != 0 {
         contexts(e).pop();
     }
@@ -165,6 +187,7 @@ fn run(e: &mut Engine, a: &[u32]) -> Ret {
 /// `InitActionList` (`005e1160`), wrapped: the push only past the exe's test of the script word.
 fn init_action_list(e: &mut Engine, a: &[u32]) -> Ret {
     let (runner, script, reference) = (a[0], a[1], a[2]);
+    let saved = depths(e);
     if script != 0 {
         contexts(e).push(Context {
             script,
@@ -173,7 +196,7 @@ fn init_action_list(e: &mut Engine, a: &[u32]) -> Ret {
             ..Context::default()
         });
     }
-    let ret = e.call_next(INIT_ACTION_LIST.addr(), a);
+    let ret = call_restoring(e, INIT_ACTION_LIST.addr(), a, saved);
     if script != 0 {
         contexts(e).pop();
     }
@@ -211,8 +234,9 @@ fn evaluate_line(e: &mut Engine, a: &[u32]) -> Ret {
             top.line = line.line;
         }
     }
+    let saved = depths(e);
     lines(e).push(line);
-    let ret = e.call_next(EVALUATE_LINE.addr(), a);
+    let ret = call_restoring(e, EVALUATE_LINE.addr(), a, saved);
     lines(e).pop();
     ret
 }
@@ -345,6 +369,33 @@ mod tests {
             ),
             (0x1400, 0x0300_0108, 7)
         );
+        assert!(current_line(&e).is_none());
+    }
+
+    /// A stop unwinding through `Run` and `EvaluateLine` leaves neither stack deeper than before
+    /// the call: the wraps put them back.
+    #[test]
+    fn a_stop_leaves_the_stacks_as_they_were() {
+        fn stopping_evaluate(_: &mut Engine, _: &[u32]) -> Ret {
+            panic!("stop");
+        }
+        fn run_one_line(e: &mut Engine, a: &[u32]) -> Ret {
+            e.call(
+                EVALUATE_LINE.addr(),
+                &[a[0], a[1], 0x1400, 0, 0, 4, 0, 1, 0, 0],
+            )
+        }
+        let mut e = engine();
+        e.register(EVALUATE_LINE.addr(), stopping_evaluate);
+        e.wrap(EVALUATE_LINE, evaluate_line);
+        e.register(RUN.addr(), run_one_line);
+        e.wrap(RUN, run);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.call(RUN.addr(), &[RUNNER, SCRIPT, 0, 0, 0, 0, 0, 0, 0]);
+        }));
+        assert!(stopped.is_err());
+        e.call_stack.clear();
+        assert!(stack(&e).is_empty());
         assert!(current_line(&e).is_none());
     }
 }

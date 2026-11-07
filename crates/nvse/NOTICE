@@ -7,7 +7,7 @@ Credits, as xNVSE's README gives them:
   The original NVSE was created and maintained by Ian Patterson, Stephen Abel, Paul Connelly,
   and Hugues LE PORS (ianpatt, behippo, scruggsywuggsy the ferret, and hlp).
 
-  xNVSE is developed by korri123 (Kormakur), cnf13 (Confused), jazzisparis, and Demorome.
+  xNVSE is developed by korri123 (Kormákur), cnf13 (Confused), jazzisparis, and Demorome.
 
   xNVSE has contributions from lStewieAl, c6, carxt, Into-The-Rough, Stentorious, and Wall_SoGB.
 
@@ -34,5 +34,7 @@ xNVSE's src/common is under this notice, kept as it is:
      3. This notice may not be removed or altered from any source
      distribution.
 
-Third-party code inside xNVSE keeps its own licence; a translation of it carries that licence
-in a file beside it (the MT19937 generator, BSD 3-clause; Algohol, MIT).
+Third-party code inside xNVSE keeps its own licence. None is translated yet; when it is, its
+translation carries that licence in a file beside it: the MT19937 generator (BSD 3-clause,
+`LICENSE-mt19937`) with `Rand` and `PickOneOf` (batches X19 and X12), Algohol (MIT,
+`LICENSE-algohol`) with batch X20.

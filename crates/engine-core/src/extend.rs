@@ -535,7 +535,10 @@ impl Default for ScriptTables {
 pub(crate) struct ExtendState {
     pub(crate) slots: std::collections::HashMap<std::any::TypeId, Box<dyn std::any::Any>>,
     pub(crate) chains: crate::engine::AddrMap<u32, Chain>,
-    pub(crate) active: Vec<Active>,
+    /// The links running through [`Engine::call_next`], per game thread (`thread_host::current_id`):
+    /// each thread has its own call stack (`thread_host` swaps them), so a link's depth means
+    /// something only on its own thread.
+    pub(crate) active: std::collections::HashMap<u32, Vec<Active>>,
     pub(crate) sites: crate::engine::AddrMap<u32, SiteHandlers>,
     pub(crate) tables: ScriptTables,
 }
@@ -636,10 +639,13 @@ impl Engine {
             panic!("call_next({addr:08x}): nothing is wrapped there");
         };
         let top = chain.links.len() - 1;
+        let thread = crate::thread_host::current_id(self);
         let level = self
             .extend
             .active
-            .iter()
+            .get(&thread)
+            .into_iter()
+            .flatten()
             .rev()
             .find(|a| a.addr == addr && a.depth == depth)
             .map_or(top, |a| a.level);
@@ -648,7 +654,7 @@ impl Engine {
             "call_next({addr:08x}) from its base: there is no next link"
         );
         let next = chain.links[level - 1].1;
-        self.extend.active.push(Active {
+        self.extend.active.entry(thread).or_default().push(Active {
             addr,
             level: level - 1,
             depth,
@@ -656,7 +662,9 @@ impl Engine {
         // A stop (a panic) unwinding through the link must not leave its entry behind: a later
         // call at the same depth would take it for its own.
         let ret = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| next(self, args)));
-        self.extend.active.pop();
+        if let Some(entries) = self.extend.active.get_mut(&thread) {
+            entries.pop();
+        }
         match ret {
             Ok(ret) => ret,
             Err(stop) => std::panic::resume_unwind(stop),
@@ -914,7 +922,7 @@ mod tests {
         e.wrap(NVSE_AT, wrap);
         e.call(0x0000_1100, &[2]);
         assert_eq!(marks(&e), b"nbnbnb");
-        assert!(e.extend.active.is_empty());
+        assert!(e.extend.active.values().all(Vec::is_empty));
     }
 
     /// A stop unwinding through a link leaves no link marked running: the next call at the same
@@ -938,9 +946,32 @@ mod tests {
         }));
         assert!(stopped.is_err());
         e.call_stack.clear();
-        assert!(e.extend.active.is_empty());
+        assert!(e.extend.active.values().all(Vec::is_empty));
         e.call(0x0000_1100, &[1]);
         assert_eq!(marks(&e), b"nbnb");
+    }
+
+    /// A link running on another game thread at the same address and depth is not this thread's:
+    /// each thread has its own call stack, so a call here starts at the outermost link.
+    #[test]
+    fn running_links_are_kept_per_game_thread() {
+        fn wrap(e: &mut Engine, a: &[u32]) -> Ret {
+            mark(e, b'n');
+            e.call_next(0x0000_1100, a)
+        }
+        let mut e = engine();
+        e.register(0x0000_1100, base);
+        e.register(0x0000_1300, callee);
+        e.wrap(NVSE_AT, wrap);
+        let other = crate::thread_host::current_id(&e).wrapping_add(1);
+        e.extend.active.entry(other).or_default().push(Active {
+            addr: 0x0000_1100,
+            level: 0,
+            depth: 1,
+        });
+        e.call(0x0000_1100, &[1]);
+        assert_eq!(marks(&e), b"nb");
+        assert_eq!(e.extend.active[&other].len(), 1);
     }
 
     #[test]

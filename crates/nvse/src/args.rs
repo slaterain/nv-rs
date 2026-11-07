@@ -8,13 +8,13 @@
 //! - The wrap over `005accb0` (`OverrideWithExtractArgsEx`, `Hooks_Script.cpp` (xNVSE)): xNVSE
 //!   jumps from the exe's reader to its own for every call; here that happens for an extender
 //!   opcode (`0x1400` up) in every preset, and a vanilla opcode goes on to the next link (the
-//!   exe's reader, or xNVSE's when the fix row `xnvse.extract_args` is on): the per-opcode rule of
-//!   ADR-0016 §5. Vanilla content calls no extender opcode, so under `vanilla` it reaches only
-//!   the exe's reader.
+//!   exe's reader; xNVSE's once the planned fix row `xnvse.extract_args`, not built yet, is on):
+//!   the per-opcode rule of ADR-0016 §5. Vanilla content calls no extender opcode, so under
+//!   `vanilla` it reaches only the exe's reader.
 //! - [`zero_extender_result`]: the result zeroed before an extender command's handler runs, as
 //!   JIP's always-on patches do at `0x5ACB9D`, `0x5E16C3` and `0x5E2329` (`patches_game.h`
 //!   (JIP LN NVSE)) and xNVSE's evaluator does (`cmdResult = 0`); for vanilla opcodes that is
-//!   JIP's fix row.
+//!   JIP's planned fix row (not built yet).
 //!
 //! Not here yet: an inline expression (a parameter starting `0xFFFF`) and the override path
 //! (an argument count above `0x7FFF`) need xNVSE's expression evaluator (I-6), and a `$name`
