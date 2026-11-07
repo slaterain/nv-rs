@@ -88,7 +88,7 @@ nearly all compiler-made error handling.
 | ✅ | **Graphics:** lighting, weather and effects | Translated, audited and running; the game's own renderer draws on Windows (textures, mods' included, through your own DirectX) |
 | ✅ | **Gameplay:** combat, AI, quests, dialogue, menus, V.A.T.S., perks, crafting | Translated, audited and playable through the whole game, quests included |
 | ✅ | **Saves, the open world and the DLCs** | Translated, audited and playable: the open world, many locations and the DLCs load and play, saves load and are written |
-| ✅ | **Fixes preset:** on by default, the original's behaviour one setting away; first fixes: the frame cap and its landing and slow-motion timing | First version in ([docs/FIXES.md](docs/FIXES.md)) |
+| ✅ | **Fixes preset:** on by default, the original's behaviour one setting away; first fixes: the frame cap and its landing and slow-motion timing, menus at 120 frames a second with loading screens unlimited, dragged bodies pulled the same at any frame rate | First version in ([docs/FIXES.md](docs/FIXES.md)) |
 | 🔨 | **Typed, native 64-bit code:** the main speed work | Started: the 29 small functions the game calls most are typed, on by default: about 7% more fps in Goodsprings and 3% in Doc's house. No game system has moved yet |
 | ⬜ | **Modern systems:** no memory limit, every core in use, wgpu graphics with optional upgrades | Planned, built on the typed code |
 | ⬜ | **Built-in script extender, co-op, more platforms, VR** | Planned |
