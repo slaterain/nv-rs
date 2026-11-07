@@ -398,7 +398,10 @@ struct Surface {
 /// first): not in the game's address space, which holds them only while the game has the level
 /// locked. `LockRect` copies them into a block of the game's memory (the staging block, rows
 /// packed, the pitch unchanged) and answers its address; `UnlockRect` copies the block back
-/// (and to the real level, as before) and frees it. What the game sees through its locks is the
+/// (and to the real level, as before); the block is freed at the next `Present`, so code that
+/// still reads through the lock's address just after the unlock reads the level's bytes, not
+/// freed memory (at most [`KEPT_STAGING_MAX`] bytes wait, the oldest freed first). What the game
+/// sees through its locks is the
 /// same as with the pixels in its memory: the pitch, the bytes (zero until written), the
 /// rectangle's offset; only the block's address changes from lock to lock, as Direct3D leaves
 /// it to the runtime. `NV_D3D9_TEXTURES=guest` keeps the levels in the game's memory instead
@@ -419,10 +422,10 @@ enum Pixels {
 /// address space ([`Pixels`], the default), in it (`guest`, the layer before ADR-0015's step 3,
 /// for comparisons), or outside with checks (`check`, a diagnostic): at each `UnlockRect` the
 /// level is read back from where it keeps its bytes (host memory or the real level) and
-/// compared with the staging block, and the block is kept until the next `Present` and compared
-/// there with what it held at the unlock (a difference is game code writing through a lock's
-/// address after the unlock, which only the guest store would carry to the texture); a summary
-/// is printed every 2,000 unlocks.
+/// compared with the staging block, and when the block is freed (at the next `Present`, or
+/// earlier past [`KEPT_STAGING_MAX`]) it is compared with what it held at the unlock (a
+/// difference is game code writing through a lock's address after the unlock, which only the
+/// guest store would carry to the texture); a summary is printed every 2,000 unlocks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TextureStore {
     Host,
@@ -456,9 +459,11 @@ pub struct Objects {
     pub(super) queries: super::d3d9query::Queries,
     /// Where texture levels keep their pixels: read from `NV_D3D9_TEXTURES` at the first texture.
     texture_store: Option<TextureStore>,
-    /// `NV_D3D9_TEXTURES=check`: the staging blocks unlocked since the last `Present`, with the
-    /// level and the bytes each held at its unlock.
-    unlocked_staging: Vec<(u32, u32, Vec<u8>)>,
+    /// The staging blocks unlocked since the last `Present`, still in the game's memory
+    /// ([`unstage`]): block, level, size, and with `NV_D3D9_TEXTURES=check` the bytes each held
+    /// at its unlock; and their bytes together.
+    unlocked_staging: std::collections::VecDeque<(u32, u32, u32, Vec<u8>)>,
+    unlocked_staging_bytes: u64,
     /// `NV_D3D9_TEXTURES=check`: the levels already reported.
     written_after_unlock: engine_core::AddrSet<u32>,
     /// `NV_D3D9_TEXTURES=check`: the unlocks whose level read back the same as its staging
@@ -1888,8 +1893,8 @@ fn present(e: &mut Engine, this: Ptr, source: u32, dest: u32, window: u32, dirty
         .unlocked_staging
         .is_empty()
     {
-        // Diagnostic only (`NV_D3D9_TEXTURES=check`).
-        check_unlocked_staging(e);
+        // The texture levels' staging blocks unlocked in the frame.
+        free_all_unlocked_staging(e);
     }
     let model = if device(e, this).in_scene || device(e, this).lost {
         D3DERR_INVALIDCALL
@@ -3406,10 +3411,18 @@ fn stage(e: &mut Engine, this: Ptr) -> u32 {
     block
 }
 
+/// The staging blocks' bytes that may wait for the next `Present` after their unlock (16 MB, the
+/// largest level the game makes: 2048 by 2048 A8R8G8B8); past it the oldest are freed first,
+/// the newest block always waits. A load that unlocks many levels in one frame so holds at most
+/// this much more of the game's memory than with each block freed at its unlock.
+const KEPT_STAGING_MAX: u64 = 16 << 20;
+
 /// The unlock of a level kept outside the game's memory: the staging block's bytes are kept
-/// (in host memory, or by the real level when `uploaded` put them there), and the block is
-/// freed (`NV_D3D9_TEXTURES=check`: the store read back and compared with the block, which is
-/// kept until the next `Present`).
+/// (in host memory, or by the real level when `uploaded` put them there), and the block waits
+/// for the next `Present` (or for [`KEPT_STAGING_MAX`]) to be freed, so code reading through the
+/// lock's address just after the unlock still reads the level's bytes
+/// (`NV_D3D9_TEXTURES=check`: the store read back and compared with the block, and the block
+/// compared again when it is freed).
 fn unstage(e: &mut Engine, this: Ptr, staging: u32, uploaded: bool) {
     let size = level_size(surface(e, this));
     let check = texture_store(e) == TextureStore::Check;
@@ -3429,10 +3442,34 @@ fn unstage(e: &mut Engine, this: Ptr, staging: u32, uploaded: bool) {
         }
         None => unreachable!("a staged level"),
     }
-    if !check {
-        e.mem.free(staging);
-        return;
+    let held = if check {
+        check_round_trip(e, this, staging, size)
+    } else {
+        Vec::new()
+    };
+    let objects = &mut state!(e).graphics.device_objects;
+    objects
+        .unlocked_staging
+        .push_back((staging, this.addr(), size, held));
+    objects.unlocked_staging_bytes += u64::from(size);
+    loop {
+        let objects = &mut state!(e).graphics.device_objects;
+        if objects.unlocked_staging_bytes <= KEPT_STAGING_MAX || objects.unlocked_staging.len() < 2
+        {
+            break;
+        }
+        let oldest = objects
+            .unlocked_staging
+            .pop_front()
+            .expect("more than one block");
+        objects.unlocked_staging_bytes -= u64::from(oldest.2);
+        free_unlocked_staging(e, oldest);
     }
+}
+
+/// `NV_D3D9_TEXTURES=check`, at an unlock: the level read back from where it keeps its bytes and
+/// compared with the staging block; the block's bytes, to compare again when it is freed.
+fn check_round_trip(e: &mut Engine, this: Ptr, staging: u32, size: u32) -> Vec<u8> {
     let held = e.mem.bytes(staging, size);
     let kept = stored_bytes(e, this, size);
     let objects = &mut state!(e).graphics.device_objects;
@@ -3456,7 +3493,7 @@ fn unstage(e: &mut Engine, this: Ptr, staging: u32, uploaded: bool) {
             objects.written_after_unlock.len()
         );
     }
-    objects.unlocked_staging.push((staging, this.addr(), held));
+    held
 }
 
 /// `NV_D3D9_TEXTURES=check`: the bytes a level kept outside the game's memory holds, read back
@@ -3482,27 +3519,34 @@ fn stored_bytes(e: &mut Engine, this: Ptr, size: u32) -> Vec<u8> {
     }
 }
 
-/// `NV_D3D9_TEXTURES=check`, at each `Present`: the staging blocks unlocked since the last one
-/// are compared with what they held at their unlock (a difference is printed once per level)
-/// and freed.
-fn check_unlocked_staging(e: &mut Engine) {
-    let kept = std::mem::take(&mut state!(e).graphics.device_objects.unlocked_staging);
-    for (block, level, held) in kept {
-        if e.mem.bytes(block, held.len() as u32) != held
-            && state!(e)
-                .graphics
-                .device_objects
-                .written_after_unlock
-                .insert(level)
-        {
-            eprintln!(
-                "NV_D3D9_TEXTURES=check: the texture level {level:#x} was written through its \
-                 lock's address after UnlockRect (staging block {block:#x}, {} bytes)",
-                held.len()
-            );
-        }
-        e.mem.free(block);
+/// At each `Present`: the staging blocks unlocked since the last one are freed
+/// ([`free_unlocked_staging`]).
+fn free_all_unlocked_staging(e: &mut Engine) {
+    let objects = &mut state!(e).graphics.device_objects;
+    let kept = std::mem::take(&mut objects.unlocked_staging);
+    objects.unlocked_staging_bytes = 0;
+    for block in kept {
+        free_unlocked_staging(e, block);
     }
+}
+
+/// Frees a staging block waiting since its unlock; with `NV_D3D9_TEXTURES=check` it is first
+/// compared with what it held at the unlock (a difference is printed once per level).
+fn free_unlocked_staging(e: &mut Engine, (block, level, size, held): (u32, u32, u32, Vec<u8>)) {
+    if !held.is_empty()
+        && e.mem.bytes(block, size) != held
+        && state!(e)
+            .graphics
+            .device_objects
+            .written_after_unlock
+            .insert(level)
+    {
+        eprintln!(
+            "NV_D3D9_TEXTURES=check: the texture level {level:#x} was written through its lock's \
+             address after UnlockRect (staging block {block:#x}, {size} bytes)"
+        );
+    }
+    e.mem.free(block);
 }
 
 /// The present parameters a device took (for the viewer and tests).
@@ -5466,8 +5510,12 @@ pub(crate) mod tests {
         );
         assert_eq!(e.mem.block_size(at), Some(256 * 1024));
         assert_eq!(unlock(&mut e, texture, None, 0), D3D_OK);
-        assert_eq!(e.mem.block_size(at), None, "freed at the unlock");
+        // Until the next Present the block still holds the level's bytes (code reading through
+        // the lock's address just after the unlock reads them); then it is freed.
+        assert_eq!(e.mem.bytes(at, 256 * 1024), bytes);
         assert_eq!(unlock(&mut e, texture, None, 0), D3DERR_INVALIDCALL);
+        assert_eq!(present(&mut e, device), D3D_OK);
+        assert_eq!(e.mem.block_size(at), None, "freed at the Present");
         assert_eq!(before - e.mem.heap_available(), taken, "nothing kept");
         assert_eq!(read_level(&mut e, texture, None, 0, 256 * 1024), bytes);
         // The other levels are their own.
@@ -5487,7 +5535,47 @@ pub(crate) mod tests {
         assert_eq!(read_level(&mut e, texture, None, 0, 256 * 1024), expected);
         // Released: every block it had is free.
         assert_eq!(e.vcall(texture, 8, &[]).u32(), 0);
+        assert_eq!(present(&mut e, device), D3D_OK);
         assert!(before - e.mem.heap_available() < taken);
+    }
+
+    /// `Present()` on the device (outside a scene).
+    fn present(e: &mut Engine, device: u32) -> u32 {
+        e.vcall(device, 4 * 17, &[0, 0, 0, 0]).u32()
+    }
+
+    #[test]
+    fn unlocked_staging_blocks_wait_for_the_present_up_to_16_mb() {
+        let (mut e, device) = texture_device(TextureStore::Host);
+        // Five 4 MB levels unlocked in one frame: 20 MB, so the oldest goes before the Present.
+        let mut blocks = Vec::new();
+        for i in 0..5 {
+            let texture = new_texture(&mut e, device, [1024, 1024, 1, 0, A8R8G8B8, 1]);
+            let (_, _, at) = lock(&mut e, texture, None, 0, None, 0);
+            e.mem.write(at, &pattern(i, 64));
+            assert_eq!(unlock(&mut e, texture, None, 0), D3D_OK);
+            assert_eq!(e.mem.bytes(at, 64), pattern(i, 64), "readable just after");
+            blocks.push(at);
+        }
+        assert_eq!(
+            e.mem.block_size(blocks[0]),
+            None,
+            "the oldest freed past 16 MB"
+        );
+        for &at in &blocks[1..] {
+            assert_eq!(e.mem.block_size(at), Some(4 << 20));
+        }
+        assert_eq!(present(&mut e, device), D3D_OK);
+        for &at in &blocks {
+            assert_eq!(e.mem.block_size(at), None);
+        }
+        // One level bigger than 16 MB still waits for the Present.
+        let big = new_texture(&mut e, device, [4096, 2048, 1, 0, A8R8G8B8, 1]);
+        let (_, _, at) = lock(&mut e, big, None, 0, None, 0);
+        assert_eq!(unlock(&mut e, big, None, 0), D3D_OK);
+        assert!(e.mem.block_size(at).is_some());
+        assert_eq!(present(&mut e, device), D3D_OK);
+        assert_eq!(e.mem.block_size(at), None);
     }
 
     #[test]
