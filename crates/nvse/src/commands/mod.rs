@@ -20,6 +20,8 @@ pub fn all() -> Vec<&'static Command> {
         .chain(math::COMMANDS)
         .chain(algohol::COMMANDS)
         .chain(scripting::COMMANDS)
+        .chain(crate::functions::COMMANDS)
+        .chain(crate::tick::COMMANDS)
         .collect()
 }
 

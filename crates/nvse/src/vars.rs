@@ -606,6 +606,33 @@ pub fn collect(e: &mut Engine, event_list: u32, local: u32, kind: VarType) {
         .insert(local, kind);
 }
 
+/// The recorded kinds of an event list's locals.
+pub fn collected_kinds(e: &mut Engine, event_list: u32) -> HashMap<u32, VarType> {
+    state(e)
+        .collected
+        .get(&event_list)
+        .cloned()
+        .unwrap_or_default()
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Other.cpp: CleanUpNVSEVar.
+/// One local of a list gives up its string (made temporary) or array reference, and is no
+/// longer recorded.
+pub fn clean_up_local(e: &mut Engine, event_list: u32, local: u32) {
+    let kind = state(e)
+        .collected
+        .get_mut(&event_list)
+        .and_then(|m| m.remove(&local));
+    let modi = script_mod_index(e, e.mem.u32(event_list));
+    match kind {
+        Some(VarType::String) => {
+            let id = crate::args::f64_to_i32(e.mem.f64(local + 8)) as u32;
+            mark_string_temporary(e, id, true);
+        }
+        Some(VarType::Array) => remove_reference_double(e, local + 8, modi),
+        _ => {}
+    }
+}
 /// `ScriptEventList::Destroy` (`0041af70`), wrapped.
 pub const EVENT_LIST_DESTROY: engine_core::extend::WrapSlot =
     engine_core::extend::WrapSlot::new(engine_core::extend::Owner::Nvse, 0x0041_af70);
@@ -649,28 +676,16 @@ pub fn script_mod_index(e: &Engine, script: u32) -> u8 {
 /// `ScriptEventListsDestroyedHook` (xNVSE `Hooks_Other.cpp`) replaces the whole function and
 /// always frees the list; every caller of `0041af70` in the exe passes 1 (`push 1` before each of
 /// its eight calls, Ghidra), so the exe's own body, called here after the clean-up, frees alike.
+/// Before the clean-up, lambdas lose the list as their parent (`DeleteEventList` calls
+/// `LambdaManager::MarkParentAsDeleted`), which keeps a copy for saved lambdas.
 fn event_list_destroy(e: &mut Engine, a: &[u32]) -> Ret {
+    crate::lambda::mark_parent_deleted(e, a[0]);
     clean_up_event_list(e, a[0]);
     e.call_next(EVENT_LIST_DESTROY.addr(), a)
 }
 
-/// The main loop's tick (the seam at `0086B386`, before the renderer getter it replaces in
-/// xNVSE's `HandleMainLoopHook`).
-pub const TICK: engine_core::extend::SiteSlot =
-    engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Nvse, 0x0086_b386);
-
-// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Gameplay.cpp: HandleMainLoopHook
-// (the clean-up part: `g_ArrayMap.Clean(); g_StringMap.Clean();`). The first frame's work, the
-// plugins' messages, the events and the delayed calls around it come with I-8 and I-9.
-fn tick(e: &mut Engine, _: &[u32]) -> Option<u32> {
-    clean_arrays(e);
-    clean_strings(e);
-    None
-}
-
-/// Installs the tick's handler and the event list wrap.
+/// Installs the event list wrap (the tick that cleans the temporaries is [`crate::tick`]).
 pub fn install(e: &mut Engine) {
-    e.on_site(TICK, tick);
     e.wrap(EVENT_LIST_DESTROY, event_list_destroy);
 }
 
@@ -703,7 +718,8 @@ mod tests {
         assert_eq!(add_string(&mut e, 1, b"z", false), 4);
     }
 
-    /// Temporary strings and unreferenced arrays go at the tick; a referenced array stays.
+    /// Temporary strings and unreferenced arrays go at the clean-up (each tick, [`crate::tick`]);
+    /// a referenced array stays.
     #[test]
     fn the_tick_cleans_temporaries() {
         let mut e = engine();
@@ -716,7 +732,8 @@ mod tests {
         e.mem.set_f64(0x0200_0000, 0.0);
         add_reference_double(&mut e, 0x0200_0000, held, 1);
         assert_eq!(e.mem.f64(0x0200_0000), f64::from(held));
-        e.site(TICK.addr(), &[]);
+        clean_arrays(&mut e);
+        clean_strings(&mut e);
         assert!(string(&e, kept).is_some());
         assert!(string(&e, temp).is_none());
         assert!(array_exists(&e, held));
@@ -724,7 +741,8 @@ mod tests {
         // Without its reference the array goes at the next tick.
         remove_reference_double(&mut e, 0x0200_0000, 1);
         assert_eq!(e.mem.f64(0x0200_0000), 0.0);
-        e.site(TICK.addr(), &[]);
+        clean_arrays(&mut e);
+        clean_strings(&mut e);
         assert!(!array_exists(&e, held));
     }
 

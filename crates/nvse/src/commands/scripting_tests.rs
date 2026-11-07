@@ -339,3 +339,33 @@ fn while_loop_and_break() {
         .eax;
     assert_eq!(ok & 0xff, 0);
 }
+
+/// `ForEachAlt arr fVal`: the value variable takes each element; when the loop ends it is
+/// zeroed (the real game: `alt_sum 18 last 0` for 5, 6, 7, `real-results/udf3.txt`).
+#[test]
+fn foreach_alt_passes_values_and_zeroes_the_variable_at_the_end() {
+    let mut e = line_engine();
+    let value = add_local(&mut e, 1, "fVal", 0.0);
+    let arr_local = add_local(&mut e, 2, "aArr", 0.0);
+    let arr = vars::create_array(&mut e, vars::KEY_NUMBER, true, 5);
+    for (i, v) in [5.0, 6.0, 7.0].into_iter().enumerate() {
+        vars::set_element(&mut e, arr, &Key::Number(i as f64), vars::Value::Number(v));
+    }
+    e.mem.set_f64(arr_local + 8, f64::from(arr));
+    e.mem.set_u32(LENGTH, 100);
+    let mut bytes = 0x40u32.to_le_bytes().to_vec();
+    bytes.push(2);
+    bytes.extend(expression(&[var(3, 2)]));
+    bytes.extend(expression(&[var(0, 1)]));
+    run_line(&mut e, 0x1670, &bytes);
+    assert_eq!(e.mem.u32(LENGTH), 100, "not empty: no jump");
+    let mut seen = vec![e.mem.f64(value + 8)];
+    for _ in 0..2 {
+        run_line(&mut e, 0x153c, &[]);
+        seen.push(e.mem.f64(value + 8));
+    }
+    assert_eq!(seen, [5.0, 6.0, 7.0]);
+    run_line(&mut e, 0x153c, &[]);
+    assert!(loops(&mut e).is_empty());
+    assert_eq!(e.mem.f64(value + 8), 0.0);
+}

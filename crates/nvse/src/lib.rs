@@ -17,8 +17,14 @@
 //!   variables given up when the game destroys it (`0041af70`, wrapped).
 //! - I-6 [`expr`]: the expression evaluator (`Let`, `eval`, `testexpr`, parenthesised
 //!   parameters).
-//! - I-7 (part) [`commands::scripting`]: `while`, `ForEach`, `loop`, `continue`, `break`,
-//!   `Label`, `Goto`. User functions and lambdas are not built yet.
+//! - I-7 [`commands::scripting`]: `while`, `ForEach`, `ForEachAlt`, `loop`, `continue`, `break`,
+//!   `Label`, `Goto`; [`functions`]: user functions (`Begin Function`, `Call`,
+//!   `SetFunctionValue`, `GetCallingScript`, `CallFunctionCond`) and the callers events and
+//!   delayed calls use; [`lambda`]: lambdas and the event lists kept for them; [`errors`]:
+//!   xNVSE's run-time error messages.
+//! - I-8 (part) [`tick`]: the main loop's tick (first frame, temporaries, the lists kept for
+//!   lambdas) and the delayed calls (`CallAfterSeconds`, `CallAfterFrames`, `CallForSeconds`,
+//!   `CallWhile`, `CallWhen`, `CallWhilePerSeconds`).
 //! - [`commands`]: the commands built so far, by xNVSE's `Commands_*.cpp` file.
 //!
 //! [`install`] runs once per engine, after the fix rows (`host::Host::start_with`); the engine
@@ -27,10 +33,14 @@
 pub mod args;
 pub mod commands;
 pub mod context;
+pub mod errors;
 pub mod expr;
+pub mod functions;
+pub mod lambda;
 pub mod mt19937;
 pub mod names;
 pub mod table;
+pub mod tick;
 pub mod vars;
 
 use engine_core::prelude::*;
@@ -149,6 +159,23 @@ pub struct Nvse {
     pub expr: expr::State,
     /// The loop stacks and labels (I-7).
     pub loops: commands::scripting::State,
+    /// The user function managers (I-7).
+    pub functions: functions::State,
+    /// The lambdas (I-7).
+    pub lambdas: lambda::State,
+    /// The tick and the delayed calls (I-8).
+    pub tick: tick::State,
+    /// The first frame recorded the main thread (`s_recordedMainThreadID`): xNVSE prints to the
+    /// console from then on.
+    pub main_thread_recorded: bool,
+}
+
+impl Nvse {
+    /// Whether xNVSE prints to the console yet (`s_recordedMainThreadID`, set at the first
+    /// frame): run-time errors are made only then.
+    pub fn prints(e: &Engine) -> bool {
+        e.ext_get::<Nvse>().is_some_and(|n| n.main_thread_recorded)
+    }
 }
 
 /// Builds xNVSE into the engine, as xNVSE's `CommandTable::Init` and its hooks do at the game's
@@ -165,6 +192,8 @@ pub fn install(e: &mut Engine) {
     context::install(e);
     args::install(e);
     vars::install(e);
+    functions::install(e);
+    tick::install(e);
     e.ext::<Nvse>().installed = true;
 }
 

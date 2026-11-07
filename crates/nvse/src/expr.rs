@@ -148,6 +148,13 @@ pub enum Tok {
         local: u32,
         var_type: u8,
     },
+    /// An `F` token's script data (`LambdaScriptData`): its copy and length.
+    LambdaData {
+        data: u32,
+        len: u32,
+    },
+    /// A lambda (`kTokenType_Lambda`): its script.
+    Lambda(u32),
 }
 
 impl Tok {
@@ -167,6 +174,8 @@ impl Tok {
             Tok::Pair(..) => Ty::Pair,
             Tok::OptionalEmpty => Ty::OptionalEmpty,
             Tok::ForEach { .. } => Ty::ForEachContext,
+            Tok::LambdaData { .. } => Ty::LambdaScriptData,
+            Tok::Lambda(_) => Ty::Lambda,
         }
     }
 
@@ -269,6 +278,11 @@ pub struct Eval {
     /// Errors reported (`errorMessages`).
     pub errors: Vec<String>,
     pub suppress_errors: bool,
+    /// `m_baseOffset`: the offset of the command's opcode word; `None` for an inline expression
+    /// (`m_inline`, no command to name).
+    pub base_offset: Option<u32>,
+    /// `m_inline`: a parenthesised parameter, no command named in its errors.
+    pub inline: bool,
 }
 
 /// The per-thread stack of running evaluators' expected return types (`ExpectReturnType`,
@@ -311,10 +325,17 @@ fn push_frame(e: &mut Engine) {
         .push(Returns::Default);
 }
 
+/// `PopFromStack`: the popped evaluator's expected return type passes to its parent, as a
+/// command running its own evaluator (`Call`, or any expression-format command) reports its
+/// result's type to the expression that called it.
 fn pop_frame(e: &mut Engine) {
     let thread = current_id(e);
     if let Some(s) = e.ext::<Nvse>().expr.expected.get_mut(&thread) {
-        s.pop();
+        if let Some(ty) = s.pop() {
+            if let Some(parent) = s.last_mut() {
+                *parent = ty;
+            }
+        }
     }
 }
 
@@ -408,11 +429,29 @@ impl Eval {
             at: a.data.wrapping_add(offset),
             errors: Vec::new(),
             suppress_errors: false,
+            base_offset: Some(offset.wrapping_sub(4)),
+            inline: false,
         }
     }
 
     fn error(&mut self, text: impl Into<String>) {
         self.errors.push(text.into());
+    }
+
+    /// `ExpressionEvaluator::Error`.
+    pub fn error_text(&mut self, text: String) {
+        self.errors.push(text);
+    }
+
+    /// `ReadByte`: the next byte (the read position only moves).
+    pub fn read_byte(&mut self, e: &Engine) -> u8 {
+        self.read8(e)
+    }
+
+    /// `ScriptToken::Read`: one token as it is stored, not evaluated (`Call`'s version 0
+    /// script argument).
+    pub fn read_one_token(&mut self, e: &mut Engine) -> Option<Tok> {
+        self.read_token(e)
     }
 
     fn read8(&mut self, e: &Engine) -> u8 {
@@ -520,11 +559,12 @@ impl Eval {
                 }
             }
             b'F' => {
-                // A lambda's script data: I-7.
+                // A lambda's script data, copied once (xNVSE copies it when it caches the
+                // expression's tokens).
                 let len = self.read32(e);
+                let data = crate::lambda::token_data(e, self.at, len);
                 self.at += len;
-                self.error("Lambdas are not supported yet");
-                return None;
+                Tok::LambdaData { data, len }
             }
             b'K' => Tok::OptionalEmpty,
             c if c < op::MAX => Tok::Op(c),
@@ -639,6 +679,24 @@ impl Eval {
                             from_stack: false, ..
                         } => self.execute_command(e, tok, 0)?,
                         Tok::Var { .. } => self.resolve_variable(e, tok.clone())?,
+                        // One lambda per event list, so it sees that list's locals.
+                        Tok::LambdaData { data, len } => {
+                            let position = crate::functions::script_data(e, self.script)
+                                .wrapping_add(e.mem.u32(self.offset_ptr));
+                            let lambda = crate::lambda::create(
+                                e,
+                                position,
+                                *data,
+                                *len,
+                                self.script,
+                                self.event_list,
+                            );
+                            if lambda == 0 {
+                                self.error("Failed to create lambda script");
+                                return None;
+                            }
+                            Tok::Lambda(lambda)
+                        }
                         _ => tok.clone(),
                     };
                     operands.push(tok);
@@ -942,6 +1000,7 @@ impl Eval {
     pub fn get_form_id(&self, e: &mut Engine, t: &Tok) -> u32 {
         match t {
             Tok::Form(id) => *id,
+            Tok::Lambda(script) => e.mem.u32(script + 0xc),
             Tok::Var {
                 ty: Ty::RefVar,
                 local,
@@ -972,6 +1031,7 @@ impl Eval {
                 let id = self.get_form_id(e, t);
                 lookup_form(e, id)
             }
+            Tok::Lambda(script) => *script,
             Tok::Number {
                 form_or_number: true,
                 v,
@@ -1820,6 +1880,8 @@ pub fn inline_argument(
             at: start,
             errors: Vec::new(),
             suppress_errors: false,
+            base_offset: Some(start.wrapping_sub(data).wrapping_sub(4)),
+            inline: true,
         };
         let tok = with_evaluator(e, |e| ev.evaluate(e));
         let end = data.wrapping_add(e.mem.u32(off));
@@ -2032,18 +2094,32 @@ pub fn with_evaluator<T>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> T) -> T 
     }
 }
 
-/// Reports an evaluator's errors as xNVSE's destructor does (`ShowRuntimeError`): to the
-/// console in console mode; the script error log comes with the rest of I-8.
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptUtils.cpp:
+// ExpressionEvaluator::~ExpressionEvaluator.
+/// Reports an evaluator's errors as xNVSE's destructor does: one `ShowRuntimeError` with the
+/// messages, the mod, the command's offset and its name.
 pub fn report(e: &mut Engine, ev: &Eval) {
-    if ev.errors.is_empty() || ev.suppress_errors {
+    if ev.errors.is_empty() || ev.suppress_errors || !Nvse::prints(e) {
         return;
     }
-    if crate::commands::is_console_mode(e) {
-        for text in &ev.errors {
-            let at = crate::table::guest_str(e, text.as_bytes());
-            crate::commands::console_print(e, "%s", &[at]);
+    let error = ev.errors.join("\n");
+    let modname = String::from_utf8_lossy(&crate::errors::mod_name(e, ev.script)).into_owned();
+    let base = ev.base_offset.unwrap_or(0);
+    let command = match ev.base_offset.filter(|_| !ev.inline) {
+        Some(b) => {
+            let opcode = u32::from(e.mem.u16(ev.data.wrapping_add(b)));
+            let record = record_of(e, opcode);
+            if record != 0 {
+                let name = crate::table::guest_text(e, e.mem.u32(record));
+                String::from_utf8_lossy(&name).into_owned()
+            } else {
+                "<unknown>".to_string()
+            }
         }
-    }
+        None => "<unknown>".to_string(),
+    };
+    let text = format!("{error}\n    File: {modname} Offset: 0x{base:04X} Command: {command}");
+    crate::errors::show(e, ev.script, &text);
 }
 
 #[cfg(test)]

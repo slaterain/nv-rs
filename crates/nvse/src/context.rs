@@ -146,6 +146,16 @@ pub fn set_command(e: &mut Engine, record: u32) {
     }
 }
 
+/// `OtherHooks::PushScriptContext`: a context of xNVSE's own (a single-line lambda's run).
+pub fn push(e: &mut Engine, context: Context) {
+    contexts(e).push(context);
+}
+
+/// `OtherHooks::PopScriptContext`.
+pub fn pop(e: &mut Engine) {
+    contexts(e).pop();
+}
+
 /// The depths of this thread's context and line stacks.
 fn depths(e: &mut Engine) -> (usize, usize) {
     (contexts(e).len(), lines(e).len())
