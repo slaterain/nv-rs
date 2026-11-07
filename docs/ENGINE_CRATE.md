@@ -539,6 +539,14 @@ Diff::new(entry!(0x00abc123, typed_version(Ptr<Thing>, f32) -> f32))
   integer range and past `f32`'s; `Input::Word`, `Flag` and `Of(&[..])` give the integers, one per
   branch that matters. All combinations up to `max_cases` (512), else every value of each argument
   and then a fixed pseudo-random sample.
+- **The float sweep:** those cases vary one float at a time against plain others, so a rounding that
+  only shows with low bits in several operands at once (a sum of products rounded at each step
+  against once) passes them. `float_sweep(n)` adds `n` cases with every float argument at once a
+  random float with all its mantissa bits in play (about one in eight a listed value instead),
+  seeded by the function's address so a failure repeats. `Input::F32Swept(bits)` is a float that
+  is `bits` in the ordinary cases and swept here, so a test can hand every float field the function
+  reads to the sweep without multiplying its ordinary cases. The culling tests sweep 64 cases each;
+  that found batch 2's missed mutant (Merge's squared distance rounded once instead of per step).
 - **Compared, by bits:** the return value; every outgoing call in order with its words and, at its
   start, a hash of all mapped memory outside the stack for locals and the clock, so a store moved
   across a call shows; the memory after the call and which pages are mapped; how the run stopped, a
@@ -573,9 +581,11 @@ Diff::new(entry!(0x00abc123, typed_version(Ptr<Thing>, f32) -> f32))
   made under them, from the translation's side at every depth (a typed callee does their work in place
   too), and from the typed side below the function's own level, so a callee both sides run that calls
   one compares alike. The typed version's own call to one still shows, and it refuses an overridable
-  address. `translation_calls_plainly` drops the listed call itself (not what it calls) from both sides
-  at every depth, since one translation reaches a function plainly and another by address; a call the
-  typed version lacks then shows only by what the callee does. `allow_nan_payloads` lets NaN payloads
+  address. `translation_calls_plainly` drops the listed call itself (not what it calls) from the typed
+  side only, at every depth: the translation's plain Rust call isn't logged. So every translation a
+  test reaches must call a listed callee plainly; where some call it plainly and others by address, the
+  family's step moves the plain sites to `e.call` and lists nothing (the lock-free and culling families
+  did, at 20 sites for 17 callees), so the callee's words compare too. `allow_nan_payloads` lets NaN payloads
   differ where the float rule accepts it, in the return and in aligned words of memory and calls; an
   infinity or a number against a NaN still differs.
 - **A function new in the setup:** a setup may register at a family member's or a plain callee's address

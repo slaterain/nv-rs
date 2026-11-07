@@ -151,11 +151,98 @@ fn funcs() -> Vec<(u32, AbiFn)> {
             map::construct(Ptr<LockFreeMap>, u32, u32, u32) -> Ptr
         ),
         entry!(
+            0x0044_ba10,
+            map::construct_anim_idle_map(Ptr<LockFreeMap>, u32, u32, u32) -> Ptr
+        ),
+        entry!(
+            0x0044_bbe0,
+            map::construct_replacement_kf_list_map(Ptr<LockFreeMap>, u32, u32, u32) -> Ptr
+        ),
+        entry!(
+            0x0044_be80,
+            map::construct_helmet_map(Ptr<LockFreeMap>, u32, u32, u32) -> Ptr
+        ),
+        entry!(
+            0x0044_c040,
+            map::construct_model_map(Ptr<LockFreeMap>, u32, u32, u32) -> Ptr
+        ),
+        entry!(
+            0x0044_c270,
+            map::construct_kf_model_map(Ptr<LockFreeMap>, u32, u32, u32) -> Ptr
+        ),
+        entry!(
+            0x0044_c760,
+            map::construct_texture_map(Ptr<LockFreeMap>, u32, u32, u32) -> Ptr
+        ),
+        entry!(
+            0x0044_c920,
+            map::construct_loaded_file_map(Ptr<LockFreeMap>, u32, u32, u32) -> Ptr
+        ),
+        entry!(
+            0x0052_89e0,
+            map::construct_cell_task_map(Ptr<LockFreeMap>, u32, u32, u32) -> Ptr
+        ),
+        entry!(
+            0x0066_5cb0,
+            map::construct_tree_node_map(Ptr<LockFreeMap>, u32, u32, u32) -> Ptr
+        ),
+        entry!(
+            0x006e_c660,
+            map::construct_pathing_task_map(Ptr<LockFreeMap>, u32, u32, u32) -> Ptr
+        ),
+        entry!(
+            0x0090_6160,
+            map::construct_lip_task_map(Ptr<LockFreeMap>, u32, u32, u32) -> Ptr
+        ),
+        entry!(
             0x0044_b660,
             queue::allocate_interface(Ptr<LockFreeQueue>, u32) -> u32
         ),
         entry!(0x0044_f220, iface::scan_deleted(Ptr<MapInterface>)),
         entry!(0x0044_c3f0, map::destroy(Ptr<LockFreeMap>)),
+        entry!(
+            0x0066_62a0,
+            iface::search_string_map(Ptr<MapInterface>, u32, u32) -> u32
+        ),
+        entry!(
+            0x0066_6080,
+            iface::remove_from_bucket_string_map(Ptr<MapInterface>, u32, u32) -> bool
+        ),
+        entry!(
+            0x0044_9530,
+            map::find_word(Ptr<LockFreeMap>, u32, Ptr<u32>) -> u8
+        ),
+        entry!(
+            0x0090_6570,
+            map::iterate_lip_task_map(
+                Ptr<LockFreeMap>,
+                Ptr<LockFreeMapIterator>,
+                Ptr<u32>,
+                Ptr<u32>,
+                u8,
+            ) -> bool
+        ),
+        entry!(
+            0x0044_f070,
+            iface::scan_deleted_releasing(Ptr<MapInterface>)
+        ),
+        entry!(0x0044_c1e0, map::destroy_model_map(Ptr<LockFreeMap>)),
+        entry!(0x0044_cae0, map::destroy_loaded_file_map(Ptr<LockFreeMap>)),
+        entry!(0x0066_61e0, map::destroy_tree_node_map(Ptr<LockFreeMap>)),
+        entry!(0x006e_c870, map::destroy_pathing_task_map(Ptr<LockFreeMap>)),
+        entry!(
+            0x0044_d8f0,
+            map::destroy_queued_reference_map(Ptr<LockFreeMap>)
+        ),
+        entry!(0x0044_d9b0, map::destroy_anim_idle_map(Ptr<LockFreeMap>)),
+        entry!(
+            0x0044_da70,
+            map::destroy_replacement_kf_list_map(Ptr<LockFreeMap>)
+        ),
+        entry!(0x0044_db30, map::destroy_helmet_map(Ptr<LockFreeMap>)),
+        entry!(0x0044_dc50, map::destroy_texture_map(Ptr<LockFreeMap>)),
+        entry!(0x0052_8be0, map::destroy_cell_task_map(Ptr<LockFreeMap>)),
+        entry!(0x0090_64e0, map::destroy_lip_task_map(Ptr<LockFreeMap>)),
         entry!(0x0044_9f80, map::interface_of(Ptr<LockFreeMap>) -> Ptr),
         entry!(
             0x006c_73b0,

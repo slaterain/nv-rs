@@ -130,8 +130,6 @@ const KEY_EQUAL_SLOT: u32 = 0x38;
 /// A holder set from a plain object pointer (`NiPointer<T>::operator=(T*)`, Xbox PDB name of the
 /// template; `thiscall(holder, object)`).
 const HOLDER_SET: u32 = 0x006f_74f0;
-/// The scan of the nodes waiting to be freed (`thiscall(interface)`), when a batch is full.
-const SCAN_DELETED: u32 = 0x0044_f070;
 /// A key word where the caller keeps it.
 const KEY_WORD: Field<u32, u32> = Field::new(0);
 
@@ -155,6 +153,34 @@ fn step_to_next(e: &mut Engine, this: Ptr<MapInterface>) {
 /// `key` (the map's slot +0x34), answering whether the keys are equal (slot +0x38). The slots are
 /// left as they are: the caller clears them.
 pub fn search(e: &mut Engine, this: Ptr<MapInterface>, bucket: u32, key: u32) -> u32 {
+    search_with::<0x0052_92a0>(e, this, bucket, key)
+}
+
+// Typed from 006662a0
+/// [`search`]'s copy the string maps use (their keys compared by the map's slots as ever): the same
+/// body, retiring with `00666510`.
+pub fn search_string_map(e: &mut Engine, this: Ptr<MapInterface>, bucket: u32, key: u32) -> u32 {
+    search_with::<RETIRE_OTHER>(e, this, bucket, key)
+}
+
+/// Retires `node` with `RETIRE`: [`retire`] (typed) or a copy's own, by address.
+#[inline(always)]
+fn retire_by<const RETIRE: u32>(e: &mut Engine, this: Ptr<MapInterface>, node: Ptr<HashListNode>) {
+    if RETIRE == 0x0052_92a0 {
+        typed_call!(FAMILY, 0x0052_92a0, retire(e, this, node));
+    } else {
+        e.call(RETIRE, &args![this, node]);
+    }
+}
+
+/// [`search`]'s body, retiring with `RETIRE`.
+#[inline(always)]
+fn search_with<const RETIRE: u32>(
+    e: &mut Engine,
+    this: Ptr<MapInterface>,
+    bucket: u32,
+    key: u32,
+) -> u32 {
     let map = e.get(this, MapInterface::map);
     let buckets = e.get(map, LockFreeMap::pBuckets);
     let head_link = LockFreeMap::bucket(buckets, bucket);
@@ -214,7 +240,7 @@ pub fn search(e: &mut Engine, this: Ptr<MapInterface>, bucket: u32, key: u32) ->
                     continue 'start;
                 }
                 let node = e.get(this, MapInterface::current).node();
-                typed_call!(FAMILY, 0x0052_92a0, retire(e, this, node));
+                retire_by::<RETIRE>(e, this, node);
             }
             step_to_next(e, this);
         }
@@ -236,7 +262,7 @@ pub fn retire(e: &mut Engine, this: Ptr<MapInterface>, node: Ptr<HashListNode>) 
     let map = e.get(this, MapInterface::map);
     let batch = e.get(map, LockFreeMap::iDeleteBatchSize);
     if e.get(this, MapInterface::deleted_count) == batch {
-        e.call(SCAN_DELETED, &args![this]);
+        typed_call!(FAMILY, 0x0044_f070, scan_deleted_releasing(e, this));
     }
 }
 
@@ -269,9 +295,6 @@ pub fn next_in_bucket(
     )
 }
 
-/// The search the string maps use (`thiscall(interface, bucket, key)`), as `00529030` answers.
-const SEARCH_STRINGS: u32 = 0x0066_62a0;
-
 // Typed from 0044eb80
 /// [`next_in_bucket`] for a map whose values are plain words and whose search is `006662a0`: the
 /// node's value word goes to `*value_out`, and a node marked after the copy clears it.
@@ -286,7 +309,13 @@ pub fn next_word_in_bucket(
         e,
         this,
         key,
-        |e, wanted| e.call(SEARCH_STRINGS, &args![this, bucket, wanted]).u32(),
+        |e, wanted| {
+            typed_call!(
+                FAMILY,
+                0x0066_62a0,
+                search_string_map(e, this, bucket, wanted)
+            )
+        },
         |e, node| {
             let value = e.get(node, HashListNode::value);
             e.set(value_out, KEY_WORD, value);
@@ -349,8 +378,47 @@ const DECREMENT_COUNT_SLOT: u32 = 0x40;
 /// node is retired (`005292a0`); lost to another thread, a search unlinks it. The map's count goes
 /// down (its slot +0x40) and the answer is true. The slots are cleared at the end.
 pub fn remove_from_bucket(e: &mut Engine, this: Ptr<MapInterface>, bucket: u32, key: u32) -> bool {
+    remove_from_bucket_with::<0x0052_92a0>(e, this, bucket, key)
+}
+
+// Typed from 00666080
+/// [`remove_from_bucket`]'s copy the string maps use: the
+/// same body, searching with their copy of the search (`006662a0`) and retiring with their
+/// `00666510`.
+pub fn remove_from_bucket_string_map(
+    e: &mut Engine,
+    this: Ptr<MapInterface>,
+    bucket: u32,
+    key: u32,
+) -> bool {
+    remove_from_bucket_with::<RETIRE_OTHER>(e, this, bucket, key)
+}
+
+/// The search that goes with retiring by `RETIRE`: [`search`] or [`search_string_map`].
+#[inline(always)]
+fn search_by<const RETIRE: u32>(
+    e: &mut Engine,
+    this: Ptr<MapInterface>,
+    bucket: u32,
+    key: u32,
+) -> u32 {
+    if RETIRE == 0x0052_92a0 {
+        typed_call!(FAMILY, 0x0052_9030, search(e, this, bucket, key))
+    } else {
+        typed_call!(FAMILY, 0x0066_62a0, search_string_map(e, this, bucket, key))
+    }
+}
+
+/// [`remove_from_bucket`]'s body, searching and retiring as `RETIRE` says.
+#[inline(always)]
+fn remove_from_bucket_with<const RETIRE: u32>(
+    e: &mut Engine,
+    this: Ptr<MapInterface>,
+    bucket: u32,
+    key: u32,
+) -> bool {
     let removed = loop {
-        let hit: u32 = typed_call!(FAMILY, 0x0052_9030, search(e, this, bucket, key));
+        let hit: u32 = search_by::<RETIRE>(e, this, bucket, key);
         if hit & 0xff == 0 {
             break false;
         }
@@ -365,9 +433,9 @@ pub fn remove_from_bucket(e: &mut Engine, this: Ptr<MapInterface>, bucket: u32, 
         let previous = e.get(this, MapInterface::previous);
         if e.call(SWAP_LINK, &args![previous, next, current]).bool() {
             let current = e.get(this, MapInterface::current).node();
-            typed_call!(FAMILY, 0x0052_92a0, retire(e, this, current));
+            retire_by::<RETIRE>(e, this, current);
         } else {
-            let _: u32 = typed_call!(FAMILY, 0x0052_9030, search(e, this, bucket, key));
+            let _: u32 = search_by::<RETIRE>(e, this, bucket, key);
         }
         let map = e.get(this, MapInterface::map);
         e.vcall(map.addr(), DECREMENT_COUNT_SLOT, &[]);
@@ -528,7 +596,9 @@ fn insert_node(
         loop {
             let hit = match values {
                 Values::Counted => typed_call!(FAMILY, 0x0052_9030, search(e, this, bucket, key)),
-                Values::Plain => e.call(SEARCH_STRINGS, &args![this, bucket, key]).u32(),
+                Values::Plain => {
+                    typed_call!(FAMILY, 0x0066_62a0, search_string_map(e, this, bucket, key))
+                }
             };
             if hit & 0xff != 0 {
                 // There already: the node made for it goes, and the value replaces the old one or not.
@@ -641,6 +711,23 @@ const SLOTS_PER_THREAD: u32 = 3;
 /// cut loose and deleted (`0044dde0`). The copy is freed, and the new list and its count replace the
 /// old. The list links (`00726070`, `006ecd40`) are read and written in place.
 pub fn scan_deleted(e: &mut Engine, this: Ptr<MapInterface>) {
+    scan_deleted_with(e, this, DELETE_NODE);
+}
+
+/// The deletion of a node that first releases what it holds (`thiscall(map, node)`: the map's slot
+/// +0x28 on the node's first word, then the node deleted).
+const RELEASE_AND_DELETE_NODE: u32 = 0x0044_edd0;
+
+// Typed from 0044f070
+/// [`scan_deleted`]'s copy for maps whose nodes release what they hold: the same body, deleting
+/// with `0044edd0`.
+pub fn scan_deleted_releasing(e: &mut Engine, this: Ptr<MapInterface>) {
+    scan_deleted_with(e, this, RELEASE_AND_DELETE_NODE);
+}
+
+/// [`scan_deleted`]'s body, deleting a node with `delete`.
+#[inline(always)]
+fn scan_deleted_with(e: &mut Engine, this: Ptr<MapInterface>, delete: u32) {
     e.with_stack(4, |e, scope| {
         e.call(
             SCOPE_BEGIN,
@@ -679,7 +766,7 @@ pub fn scan_deleted(e: &mut Engine, this: Ptr<MapInterface>) {
             } else {
                 e.set(node, HashListNode::value, 0);
                 let map = e.get(this, MapInterface::map);
-                e.call(DELETE_NODE, &args![map, node]);
+                e.call(delete, &args![map, node]);
             }
         }
         e.call(OPERATOR_DELETE, &args![copy]);

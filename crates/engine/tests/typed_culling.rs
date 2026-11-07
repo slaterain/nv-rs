@@ -13,7 +13,7 @@
 
 use engine as _;
 use engine_core::prelude::*;
-use engine_core::typed::diff::{Diff, Input};
+use engine_core::typed::diff::{Case, Diff, Input};
 use engine_typed::culling::{self, bound, compound, planes, process, update, visible};
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
@@ -41,17 +41,18 @@ const GEOMETRY_ON_VISIBLE: u32 = 0x00a7_fd90;
 /// `NiPlane::NiPlane(normal, point)`: the typed `NiFrustumPlanes::Set` does its work in place.
 const PLANE_THROUGH: u32 = 0x00a6_9990;
 
-/// Functions some translation reaches with a plain Rust call.
-const PLAIN: &[u32] = &[
-    0x004b_6160,
-    0x00c3_9270,
-    0x00c4_a6e0,
-    0x00c4_a790,
-    0x0054_6890,
-];
-
 /// The most calls one run makes here is a few hundred: a version that loops stops at this many.
 const MAX_CALLS: usize = 5_000;
+
+/// Cases each test adds with every float argument at once a random float with a full mantissa (the
+/// harness's float sweep): the ordinary cases vary one at a time against plain others, which misses a
+/// rounding that only shows when several operands carry low bits (batch 2's Merge mutant).
+const FLOAT_SWEEP: usize = 64;
+
+/// Argument `i` of the case, a float, as its bits.
+fn bits(case: &Case, i: usize) -> u32 {
+    case.f32(i).to_bits()
+}
 
 /// The float bit patterns a scene value takes in the cases that don't sweep all of them: an
 /// ordinary value, zero, a NaN.
@@ -225,6 +226,48 @@ const TWO: u32 = 0x4000_0000;
 const HALF_F: u32 = 0x3f00_0000;
 const MINUS_TEN: u32 = 0xc120_0000;
 
+/// The rotation's entries but `skip`, for the sweep to fill (the ordinary cases keep [`ROTATION`]).
+fn swept_rotation(skip: usize) -> impl Iterator<Item = Input> {
+    ROTATION
+        .into_iter()
+        .enumerate()
+        .filter(move |(i, _)| *i != skip)
+        .map(|(_, b)| Input::F32Swept(b))
+}
+
+/// The rotation from the case: entry `skip` from argument `at`, the other eight from argument `from`
+/// on ([`swept_rotation`]).
+fn rotation_from(case: &Case, skip: usize, at: usize, from: usize) -> [u32; 9] {
+    let mut k = from;
+    std::array::from_fn(|i| {
+        if i == skip {
+            bits(case, at)
+        } else {
+            k += 1;
+            bits(case, k - 1)
+        }
+    })
+}
+
+/// The bound update tests' inputs: the centre's x, the radius, the scale, rotation entry `skip`
+/// (arguments 0-3); swept: the centre's y and z (4, 5), the other rotation entries (6-13), the
+/// translation (14-16).
+fn bound_inputs(skip: usize) -> Vec<Input> {
+    [Input::F32, Input::F32, Input::F32, Input::F32]
+        .into_iter()
+        .chain([TWO, MINUS_TEN].map(Input::F32Swept))
+        .chain(swept_rotation(skip))
+        .chain([ONE, 0x3dcc_cccd, MINUS_TEN].map(Input::F32Swept))
+        .collect()
+}
+
+/// A transform from [`bound_inputs`]' arguments at `t`.
+fn bound_transform_at(e: &mut Engine, t: u32, case: &Case, skip: usize) {
+    let m = rotation_from(case, skip, 3, 6);
+    let translation = [bits(case, 14), bits(case, 15), bits(case, 16)];
+    transform_at(e, t, m, translation, bits(case, 2));
+}
+
 /// An object: `size` bytes, vtable `vt`, world bound `bound`, flags; its local transform the
 /// rotation, its world transform scaled by 2 and moved.
 fn object(e: &mut Engine, size: u32, vt: u32, bound: u32, flags: u32) -> u32 {
@@ -332,7 +375,7 @@ fn scene(e: &mut Engine) -> Scene {
     }
 }
 
-/// What every test adds to its comparison: the families, the call budget, the plain callees.
+/// What every test adds to its comparison: the families and the call budget.
 trait Common {
     fn common(self) -> Diff;
 }
@@ -342,30 +385,39 @@ impl Common for Diff {
         self.family(&culling::CULLING)
             .family(&leaf::LEAVES)
             .max_calls(MAX_CALLS)
-            .translation_calls_plainly(PLAIN)
+            .float_sweep(FLOAT_SWEEP)
     }
 }
 
 #[test]
 fn plane_distance() {
-    // Normal x, the constant, the point's x.
+    // Normal x, the constant, the point's x; the sweep also fills the normal's y and z and the
+    // point's.
     Diff::new(entry!(
         0x004b_6160,
         bound::plane_distance(Ptr<_>, Ptr<_>) -> f32
     ))
     .common()
-    .inputs(&[Input::F32, Input::F32, Input::F32])
+    .inputs(&[
+        Input::F32,
+        Input::F32,
+        Input::F32,
+        Input::F32Swept(HALF_F),
+        Input::F32Swept(0xbfc0_0000),
+        Input::F32Swept(TWO),
+        Input::F32Swept(ONE),
+    ])
     .max_cases(256)
     .setup(|e, case| {
         stand_ins(e);
         let plane = bound_of(
             e,
-            case.f32(0).to_bits(),
-            HALF_F,
-            0xbfc0_0000,
-            case.f32(1).to_bits(),
+            bits(case, 0),
+            bits(case, 3),
+            bits(case, 4),
+            bits(case, 1),
         );
-        let point = bound_of(e, case.f32(2).to_bits(), TWO, ONE, 0);
+        let point = bound_of(e, bits(case, 2), bits(case, 5), bits(case, 6), 0);
         vec![plane, point]
     })
     .run()
@@ -374,18 +426,40 @@ fn plane_distance() {
 
 #[test]
 fn which_side() {
-    // The centre's x, the radius, the plane's constant.
+    // The centre's x, the radius, the plane's constant; the sweep also fills the centre's y and z
+    // and the plane's normal.
     Diff::new(entry!(
         0x004b_6100,
         bound::which_side(Ptr<_>, Ptr<_>) -> u32
     ))
     .common()
-    .inputs(&[Input::F32, Input::F32, Input::F32])
+    .inputs(&[
+        Input::F32,
+        Input::F32,
+        Input::F32,
+        Input::F32Swept(ONE),
+        Input::F32Swept(0),
+        Input::F32Swept(ONE),
+        Input::F32Swept(0),
+        Input::F32Swept(0),
+    ])
     .max_cases(256)
     .setup(|e, case| {
         stand_ins(e);
-        let b = bound_of(e, case.f32(0).to_bits(), ONE, 0, case.f32(1).to_bits());
-        let plane = bound_of(e, ONE, 0, 0, case.f32(2).to_bits());
+        let b = bound_of(
+            e,
+            bits(case, 0),
+            bits(case, 3),
+            bits(case, 4),
+            bits(case, 1),
+        );
+        let plane = bound_of(
+            e,
+            bits(case, 5),
+            bits(case, 6),
+            bits(case, 7),
+            bits(case, 2),
+        );
         vec![b, plane]
     })
     .run()
@@ -394,15 +468,37 @@ fn which_side() {
 
 #[test]
 fn merge() {
-    // This centre's x, this radius, the other's centre x, the other's radius.
+    // This centre's x, this radius, the other's centre x, the other's radius; the sweep also fills
+    // both centres' y and z, so all three differences carry low bits at once.
     Diff::new(entry!(0x00a7_f3f0, bound::merge(Ptr<_>, Ptr<_>)))
         .common()
-        .inputs(&[Input::F32, Input::F32, Input::F32, Input::F32])
+        .inputs(&[
+            Input::F32,
+            Input::F32,
+            Input::F32,
+            Input::F32,
+            Input::F32Swept(ONE),
+            Input::F32Swept(0),
+            Input::F32Swept(0),
+            Input::F32Swept(HALF_F),
+        ])
         .max_cases(384)
         .setup(|e, case| {
             stand_ins(e);
-            let a = bound_of(e, case.f32(0).to_bits(), ONE, 0, case.f32(1).to_bits());
-            let b = bound_of(e, case.f32(2).to_bits(), 0, HALF_F, case.f32(3).to_bits());
+            let a = bound_of(
+                e,
+                bits(case, 0),
+                bits(case, 4),
+                bits(case, 5),
+                bits(case, 1),
+            );
+            let b = bound_of(
+                e,
+                bits(case, 2),
+                bits(case, 6),
+                bits(case, 7),
+                bits(case, 3),
+            );
             vec![a, b]
         })
         .run()
@@ -762,33 +858,26 @@ fn multibound_node_on_visible() {
 
 #[test]
 fn bound_update() {
-    // The source centre's x, its radius, the scale, a matrix entry.
+    // The source centre's x, its radius, the scale, a matrix entry; the sweep fills the rest of the
+    // centre, the matrix and the translation.
     Diff::new(entry!(
         0x00a7_fdd0,
         update::bound_update(Ptr<_>, Ptr<_>, Ptr<_>)
     ))
     .common()
-    .inputs(&[Input::F32, Input::F32, Input::F32, Input::F32])
+    .inputs(&bound_inputs(4))
     .max_cases(384)
     .setup(|e, case| {
         stand_ins(e);
         let from = bound_of(
             e,
-            case.f32(0).to_bits(),
-            TWO,
-            MINUS_TEN,
-            case.f32(1).to_bits(),
+            bits(case, 0),
+            bits(case, 4),
+            bits(case, 5),
+            bits(case, 1),
         );
         let t = e.mem.alloc(0x34);
-        let mut m = ROTATION;
-        m[4] = case.f32(3).to_bits();
-        transform_at(
-            e,
-            t,
-            m,
-            [ONE, 0x3dcc_cccd, MINUS_TEN],
-            case.f32(2).to_bits(),
-        );
+        bound_transform_at(e, t, case, 4);
         let out = bound_of(e, 0, 0, 0, 0);
         vec![out, from, t]
     })
@@ -798,30 +887,23 @@ fn bound_update() {
 
 #[test]
 fn bound_transform() {
-    // The centre's x, the radius, the scale, a matrix entry.
+    // The centre's x, the radius, the scale, a matrix entry; the sweep fills the rest of the
+    // centre, the matrix and the translation.
     Diff::new(entry!(0x00a7_fea0, update::bound_transform(Ptr<_>, Ptr<_>)))
         .common()
-        .inputs(&[Input::F32, Input::F32, Input::F32, Input::F32])
+        .inputs(&bound_inputs(1))
         .max_cases(384)
         .setup(|e, case| {
             stand_ins(e);
             let b = bound_of(
                 e,
-                case.f32(0).to_bits(),
-                TWO,
-                MINUS_TEN,
-                case.f32(1).to_bits(),
+                bits(case, 0),
+                bits(case, 4),
+                bits(case, 5),
+                bits(case, 1),
             );
             let t = e.mem.alloc(0x34);
-            let mut m = ROTATION;
-            m[1] = case.f32(3).to_bits();
-            transform_at(
-                e,
-                t,
-                m,
-                [ONE, 0x3dcc_cccd, MINUS_TEN],
-                case.f32(2).to_bits(),
-            );
+            bound_transform_at(e, t, case, 1);
             vec![b, t]
         })
         .run()
@@ -868,11 +950,16 @@ fn set_center_and_radius() {
         update::set_center_and_radius(Ptr<_>, Ptr<_>, f32)
     ))
     .common()
-    .inputs(&[Input::F32, Input::F32])
+    .inputs(&[
+        Input::F32,
+        Input::F32,
+        Input::F32Swept(ONE),
+        Input::F32Swept(TWO),
+    ])
     .setup(|e, case| {
         stand_ins(e);
         let b = bound_of(e, 0, 0, 0, 0);
-        let c = bound_of(e, case.f32(1).to_bits(), ONE, TWO, 0);
+        let c = bound_of(e, bits(case, 1), bits(case, 2), bits(case, 3), 0);
         vec![b, c, case.f32(0).to_bits()]
     })
     .run()
@@ -970,12 +1057,19 @@ fn plane_through() {
         update::plane_through(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr
     ))
     .common()
-    .inputs(&[Input::F32, Input::F32])
+    .inputs(&[
+        Input::F32,
+        Input::F32,
+        Input::F32Swept(HALF_F),
+        Input::F32Swept(0xbf80_0000),
+        Input::F32Swept(TWO),
+        Input::F32Swept(MINUS_TEN),
+    ])
     .setup(|e, case| {
         stand_ins(e);
         let plane = bound_of(e, 0, 0, 0, 0);
-        let n = bound_of(e, HALF_F, case.f32(0).to_bits(), 0xbf80_0000, 0);
-        let p = bound_of(e, case.f32(1).to_bits(), TWO, MINUS_TEN, 0);
+        let n = bound_of(e, bits(case, 2), bits(case, 0), bits(case, 3), 0);
+        let p = bound_of(e, bits(case, 1), bits(case, 4), bits(case, 5), 0);
         vec![plane, n, p]
     })
     .run()
@@ -1100,35 +1194,48 @@ fn walk_of_the_scene() {
 #[test]
 fn frustum_planes_set() {
     // Orthographic or not; one edge (left, also the near distance); a rotation entry; the
-    // translation's x. The plane constructor is done in place.
+    // translation's x. The plane constructor is done in place. The sweep fills the other edges
+    // (arguments 4-7), the other rotation entries (8-15) and the translation's y and z (16, 17).
     Diff::new(entry!(
         0x00a7_4e10,
         planes::frustum_planes_set(Ptr<_>, Ptr<_>, Ptr<_>)
     ))
     .common()
     .ignore_calls(&[PLANE_THROUGH])
-    .inputs(&[Input::Flag, Input::F32, Input::F32, Input::F32])
+    .inputs(
+        &[Input::Flag, Input::F32, Input::F32, Input::F32]
+            .into_iter()
+            .chain([ONE, 0x3f40_0000, 0xbf40_0000, 0x447a_0000].map(Input::F32Swept))
+            .chain(swept_rotation(0))
+            .chain([TWO, MINUS_TEN].map(Input::F32Swept))
+            .collect::<Vec<_>>(),
+    )
     .max_cases(320)
     .setup(|e, case| {
         stand_ins(e);
         let planes = e.mem.alloc(0x64);
         let frustum = e.mem.alloc(0x1c);
         let edges = [
-            case.f32(1).to_bits(),
-            ONE,
-            0x3f40_0000,
-            0xbf40_0000,
-            case.f32(1).to_bits(),
-            0x447a_0000,
+            bits(case, 1),
+            bits(case, 4),
+            bits(case, 5),
+            bits(case, 6),
+            bits(case, 1),
+            bits(case, 7),
         ];
         for (i, w) in edges.iter().enumerate() {
             e.mem.set_u32(frustum + 4 * i as u32, *w);
         }
         e.mem.set_u8(frustum + 0x18, u8::from(case.word(0) != 0));
         let t = e.mem.alloc(0x34);
-        let mut m = ROTATION;
-        m[0] = case.f32(2).to_bits();
-        transform_at(e, t, m, [case.f32(3).to_bits(), TWO, MINUS_TEN], ONE);
+        let m = rotation_from(case, 0, 2, 8);
+        transform_at(
+            e,
+            t,
+            m,
+            [bits(case, 3), bits(case, 16), bits(case, 17)],
+            ONE,
+        );
         vec![planes, frustum, t]
     })
     .run()

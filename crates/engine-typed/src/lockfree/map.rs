@@ -138,6 +138,42 @@ pub fn iterate_words(
     found
 }
 
+/// The lip-task map's first and next node of a bucket (`thiscall(bucket, last key, value out)`,
+/// bool): its own copies of `0044ea60` and `0044eb80`.
+const LIP_TASK_FIRST: u32 = 0x0090_6af0;
+const LIP_TASK_NEXT: u32 = 0x0090_6c10;
+
+// Typed from 00906570
+/// [`iterate_words`]'s copy for `LockFreeMap<MobileObject*, NiPointer<LipTask>>`: the same body,
+/// the first node through `00906af0` and the next through `00906c10`.
+pub fn iterate_lip_task_map(
+    e: &mut Engine,
+    this: Ptr<LockFreeMap>,
+    it: Ptr<LockFreeMapIterator>,
+    key_out: Ptr<u32>,
+    value_out: Ptr<u32>,
+    keep_going: u8,
+) -> bool {
+    e.call(LOCK_ENTER, &args![lock(this), 0u32]);
+    let found = walk(
+        e,
+        this,
+        it,
+        key_out,
+        keep_going,
+        |e, face, bucket, last_key| {
+            e.call(LIP_TASK_FIRST, &args![face, bucket, last_key, value_out])
+                .bool()
+        },
+        |e, face, bucket, last_key| {
+            e.call(LIP_TASK_NEXT, &args![face, bucket, last_key, value_out])
+                .bool()
+        },
+    );
+    e.call(LOCK_LEAVE, &args![lock(this)]);
+    found
+}
+
 /// The bucket walk of [`iterate`] and [`iterate_words`], under the lock: `first` finds a bucket's
 /// first node, `next` the node after the iterator's last key.
 #[inline(always)]
@@ -193,6 +229,20 @@ pub fn find(e: &mut Engine, this: Ptr<LockFreeMap>, key: u32, value_out: Ptr<Hol
     e.call(LOCK_ENTER, &args![lock(this), 0u32]);
     let face = interface(e, this);
     let found: u8 = typed_call!(FAMILY, 0x0044_c8e0, iface::find(e, face, key, value_out));
+    e.call(LOCK_LEAVE, &args![lock(this)]);
+    found
+}
+
+/// The interface's lookup for maps of plain values (`thiscall(key, value out)`, the found byte).
+const FIND_WORD: u32 = 0x006e_c830;
+
+// Typed from 00449530
+/// [`find`]'s copy, the virtual lookup of the maps of plain values (their slot +8): the same body,
+/// the interface finding the key with `006ec830`.
+pub fn find_word(e: &mut Engine, this: Ptr<LockFreeMap>, key: u32, value_out: Ptr<u32>) -> u8 {
+    e.call(LOCK_ENTER, &args![lock(this), 0u32]);
+    let face = interface(e, this);
+    let found = e.call(FIND_WORD, &args![face, key, value_out]).u8();
     e.call(LOCK_LEAVE, &args![lock(this)]);
     found
 }
@@ -363,6 +413,152 @@ pub fn construct(
     )
 }
 
+// The other map types' constructors: the same body (the exe's code differs only in the vtable
+// written at +0), each a copy at its own address.
+
+// Typed from 0044ba10
+/// The constructor of `LockFreeMap<AnimIdle*, NiPointer<QueuedAnimIdle>>` (RTTI name): [`construct`]'s body with
+/// the vtable `010174cc`.
+pub fn construct_anim_idle_map(
+    e: &mut Engine,
+    this: Ptr<LockFreeMap>,
+    max_threads: u32,
+    buckets: u32,
+    batch: u32,
+) -> Ptr<LockFreeMap> {
+    construct_map(e, this, 0x0101_74cc, max_threads, buckets, batch)
+}
+
+// Typed from 0044bbe0
+/// The constructor of `LockFreeMap<Animation*, NiPointer<QueuedReplacementKFList>>` (RTTI name): [`construct`]'s body with
+/// the vtable `0101751c`.
+pub fn construct_replacement_kf_list_map(
+    e: &mut Engine,
+    this: Ptr<LockFreeMap>,
+    max_threads: u32,
+    buckets: u32,
+    batch: u32,
+) -> Ptr<LockFreeMap> {
+    construct_map(e, this, 0x0101_751c, max_threads, buckets, batch)
+}
+
+// Typed from 0044be80
+/// The constructor of `LockFreeMap<TESObjectREFR*, NiPointer<QueuedHelmet>>` (RTTI name): [`construct`]'s body with
+/// the vtable `0101756c`.
+pub fn construct_helmet_map(
+    e: &mut Engine,
+    this: Ptr<LockFreeMap>,
+    max_threads: u32,
+    buckets: u32,
+    batch: u32,
+) -> Ptr<LockFreeMap> {
+    construct_map(e, this, 0x0101_756c, max_threads, buckets, batch)
+}
+
+// Typed from 0044c040
+/// The constructor of `LockFreeMap<const char*, Model*>` (RTTI name): [`construct`]'s body with
+/// the vtable `010175bc`.
+pub fn construct_model_map(
+    e: &mut Engine,
+    this: Ptr<LockFreeMap>,
+    max_threads: u32,
+    buckets: u32,
+    batch: u32,
+) -> Ptr<LockFreeMap> {
+    construct_map(e, this, 0x0101_75bc, max_threads, buckets, batch)
+}
+
+// Typed from 0044c270
+/// The constructor of `LockFreeMap<const char*, KFModel*>` (RTTI name): [`construct`]'s body with
+/// the vtable `0101760c`.
+pub fn construct_kf_model_map(
+    e: &mut Engine,
+    this: Ptr<LockFreeMap>,
+    max_threads: u32,
+    buckets: u32,
+    batch: u32,
+) -> Ptr<LockFreeMap> {
+    construct_map(e, this, 0x0101_760c, max_threads, buckets, batch)
+}
+
+// Typed from 0044c760
+/// The constructor of `LockFreeMap<BSFileEntry*, NiPointer<QueuedTexture>>` (RTTI name): [`construct`]'s body with
+/// the vtable `0101765c`.
+pub fn construct_texture_map(
+    e: &mut Engine,
+    this: Ptr<LockFreeMap>,
+    max_threads: u32,
+    buckets: u32,
+    batch: u32,
+) -> Ptr<LockFreeMap> {
+    construct_map(e, this, 0x0101_765c, max_threads, buckets, batch)
+}
+
+// Typed from 0044c920
+/// The constructor of `LockFreeMap<const char*, LoadedFile*>` (RTTI name): [`construct`]'s body with
+/// the vtable `010176ac`.
+pub fn construct_loaded_file_map(
+    e: &mut Engine,
+    this: Ptr<LockFreeMap>,
+    max_threads: u32,
+    buckets: u32,
+    batch: u32,
+) -> Ptr<LockFreeMap> {
+    construct_map(e, this, 0x0101_76ac, max_threads, buckets, batch)
+}
+
+// Typed from 005289e0
+/// The constructor of `LockFreeMap<unsigned int, NiPointer<ExteriorCellLoaderTask>>` (RTTI name): [`construct`]'s body with
+/// the vtable `0102d084`.
+pub fn construct_cell_task_map(
+    e: &mut Engine,
+    this: Ptr<LockFreeMap>,
+    max_threads: u32,
+    buckets: u32,
+    batch: u32,
+) -> Ptr<LockFreeMap> {
+    construct_map(e, this, 0x0102_d084, max_threads, buckets, batch)
+}
+
+// Typed from 00665cb0
+/// The constructor of `LockFreeMap<TESObjectREFR*, BSTreeNode*>` (RTTI name): [`construct`]'s body with
+/// the vtable `01066454`.
+pub fn construct_tree_node_map(
+    e: &mut Engine,
+    this: Ptr<LockFreeMap>,
+    max_threads: u32,
+    buckets: u32,
+    batch: u32,
+) -> Ptr<LockFreeMap> {
+    construct_map(e, this, 0x0106_6454, max_threads, buckets, batch)
+}
+
+// Typed from 006ec660
+/// The constructor of `LockFreeMap<PathingRequest*, PathingTaskData*>` (RTTI name): [`construct`]'s body with
+/// the vtable `0106d72c`.
+pub fn construct_pathing_task_map(
+    e: &mut Engine,
+    this: Ptr<LockFreeMap>,
+    max_threads: u32,
+    buckets: u32,
+    batch: u32,
+) -> Ptr<LockFreeMap> {
+    construct_map(e, this, 0x0106_d72c, max_threads, buckets, batch)
+}
+
+// Typed from 00906160
+/// The constructor of `LockFreeMap<MobileObject*, NiPointer<LipTask>>` (RTTI name): [`construct`]'s body with
+/// the vtable `0108864c`.
+pub fn construct_lip_task_map(
+    e: &mut Engine,
+    this: Ptr<LockFreeMap>,
+    max_threads: u32,
+    buckets: u32,
+    batch: u32,
+) -> Ptr<LockFreeMap> {
+    construct_map(e, this, 0x0108_864c, max_threads, buckets, batch)
+}
+
 /// The vtables of `LockFreeMap<const char*, KFModel*>` and of the interfaced base (Xbox PDB).
 const KF_MODEL_MAP_VTABLE: u32 = 0x0101_760c;
 const INTERFACED_BASE_VTABLE: u32 = 0x0101_7458;
@@ -372,11 +568,103 @@ const INTERFACED_BASE_VTABLE: u32 = 0x0101_7458;
 /// map emptied with no interface manager kept (`0044c480`), the buckets and the referenced-node
 /// slots freed, and the interfaced base's vtable (what `0044b4b0` writes).
 pub fn destroy(e: &mut Engine, this: Ptr<LockFreeMap>) {
-    e.set(this, LockFreeMap::vtable, KF_MODEL_MAP_VTABLE);
-    typed_call!(FAMILY, 0x0044_c480, clear(e, this, 1));
+    destroy_map::<0x0044_c480>(e, this, KF_MODEL_MAP_VTABLE);
+}
+
+/// [`destroy`]'s body, which every map destructor shares with its own vtable; `CLEAR` empties the
+/// map: `0044c480` (typed here) for maps of plain values, `00528e40` (by address) for maps of
+/// counted values.
+#[inline(always)]
+fn destroy_map<const CLEAR: u32>(e: &mut Engine, this: Ptr<LockFreeMap>, vtable: u32) {
+    e.set(this, LockFreeMap::vtable, vtable);
+    if CLEAR == 0x0044_c480 {
+        typed_call!(FAMILY, 0x0044_c480, clear(e, this, 1));
+    } else {
+        e.call(CLEAR, &args![this, 1u8]);
+    }
     let buckets = e.get(this, LockFreeMap::pBuckets);
     e.call(OPERATOR_DELETE, &args![buckets]);
     let referenced = e.get(this, LockFreeMap::pReferencedNodes);
     e.call(OPERATOR_DELETE, &args![referenced]);
     e.set(this, LockFreeMap::vtable, INTERFACED_BASE_VTABLE);
+}
+
+// The other map types' destructors: the same body (the exe's code differs only in the vtable and,
+// for maps of counted values, the call that empties the map), each a copy at its own address.
+
+// Typed from 0044c1e0
+/// The destructor of `LockFreeMap<const char*, Model*>` (RTTI name): [`destroy`]'s body with
+/// the vtable `010175bc`, emptied by `0044c480`.
+pub fn destroy_model_map(e: &mut Engine, this: Ptr<LockFreeMap>) {
+    destroy_map::<0x0044_c480>(e, this, 0x0101_75bc);
+}
+
+// Typed from 0044cae0
+/// The destructor of `LockFreeMap<const char*, LoadedFile*>` (RTTI name): [`destroy`]'s body with
+/// the vtable `010176ac`, emptied by `0044c480`.
+pub fn destroy_loaded_file_map(e: &mut Engine, this: Ptr<LockFreeMap>) {
+    destroy_map::<0x0044_c480>(e, this, 0x0101_76ac);
+}
+
+// Typed from 006661e0
+/// The destructor of `LockFreeMap<TESObjectREFR*, BSTreeNode*>` (RTTI name): [`destroy`]'s body with
+/// the vtable `01066454`, emptied by `0044c480`.
+pub fn destroy_tree_node_map(e: &mut Engine, this: Ptr<LockFreeMap>) {
+    destroy_map::<0x0044_c480>(e, this, 0x0106_6454);
+}
+
+// Typed from 006ec870
+/// The destructor of `LockFreeMap<PathingRequest*, PathingTaskData*>` (RTTI name): [`destroy`]'s body with
+/// the vtable `0106d72c`, emptied by `0044c480`.
+pub fn destroy_pathing_task_map(e: &mut Engine, this: Ptr<LockFreeMap>) {
+    destroy_map::<0x0044_c480>(e, this, 0x0106_d72c);
+}
+
+// Typed from 0044d8f0
+/// The destructor of `LockFreeMap<TESObjectREFR*, NiPointer<QueuedReference>>` (RTTI name): [`destroy`]'s body with
+/// the vtable `0101747c`, emptied by `00528e40`.
+pub fn destroy_queued_reference_map(e: &mut Engine, this: Ptr<LockFreeMap>) {
+    destroy_map::<0x0052_8e40>(e, this, 0x0101_747c);
+}
+
+// Typed from 0044d9b0
+/// The destructor of `LockFreeMap<AnimIdle*, NiPointer<QueuedAnimIdle>>` (RTTI name): [`destroy`]'s body with
+/// the vtable `010174cc`, emptied by `00528e40`.
+pub fn destroy_anim_idle_map(e: &mut Engine, this: Ptr<LockFreeMap>) {
+    destroy_map::<0x0052_8e40>(e, this, 0x0101_74cc);
+}
+
+// Typed from 0044da70
+/// The destructor of `LockFreeMap<Animation*, NiPointer<QueuedReplacementKFList>>` (RTTI name): [`destroy`]'s body with
+/// the vtable `0101751c`, emptied by `00528e40`.
+pub fn destroy_replacement_kf_list_map(e: &mut Engine, this: Ptr<LockFreeMap>) {
+    destroy_map::<0x0052_8e40>(e, this, 0x0101_751c);
+}
+
+// Typed from 0044db30
+/// The destructor of `LockFreeMap<TESObjectREFR*, NiPointer<QueuedHelmet>>` (RTTI name): [`destroy`]'s body with
+/// the vtable `0101756c`, emptied by `00528e40`.
+pub fn destroy_helmet_map(e: &mut Engine, this: Ptr<LockFreeMap>) {
+    destroy_map::<0x0052_8e40>(e, this, 0x0101_756c);
+}
+
+// Typed from 0044dc50
+/// The destructor of `LockFreeMap<BSFileEntry*, NiPointer<QueuedTexture>>` (RTTI name): [`destroy`]'s body with
+/// the vtable `0101765c`, emptied by `00528e40`.
+pub fn destroy_texture_map(e: &mut Engine, this: Ptr<LockFreeMap>) {
+    destroy_map::<0x0052_8e40>(e, this, 0x0101_765c);
+}
+
+// Typed from 00528be0
+/// The destructor of `LockFreeMap<unsigned int, NiPointer<ExteriorCellLoaderTask>>` (RTTI name): [`destroy`]'s body with
+/// the vtable `0102d084`, emptied by `00528e40`.
+pub fn destroy_cell_task_map(e: &mut Engine, this: Ptr<LockFreeMap>) {
+    destroy_map::<0x0052_8e40>(e, this, 0x0102_d084);
+}
+
+// Typed from 009064e0
+/// The destructor of `LockFreeMap<MobileObject*, NiPointer<LipTask>>` (RTTI name): [`destroy`]'s body with
+/// the vtable `0108864c`, emptied by `00528e40`.
+pub fn destroy_lip_task_map(e: &mut Engine, this: Ptr<LockFreeMap>) {
+    destroy_map::<0x0052_8e40>(e, this, 0x0108_864c);
 }

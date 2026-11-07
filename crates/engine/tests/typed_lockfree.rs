@@ -67,14 +67,6 @@ const INLINED: &[u32] = &[
     0x0096_a2d0,
 ];
 
-/// The family's functions some translation reaches with a plain Rust call, but the one under test.
-fn plain_except(own: u32) -> Vec<u32> {
-    [0x0052_92a0, 0x0052_8ce0, 0x0044_c480]
-        .into_iter()
-        .filter(|a| *a != own)
-        .collect()
-}
-
 fn ret(eax: u32) -> Ret {
     Ret {
         eax,
@@ -252,28 +244,165 @@ fn holder_of(e: &mut Engine, object: u32) -> u32 {
     h
 }
 
+/// The comparisons of the functions with copies at other addresses, shared by the original and its
+/// copies.
+trait Cases {
+    fn destructor_case(self) -> Diff;
+    fn assign_case(self) -> Diff;
+    fn iterate_words_case(self) -> Diff;
+    fn map_find_case(self) -> Diff;
+    fn remove_from_bucket_case(self) -> Diff;
+    fn scan_deleted_case(self) -> Diff;
+    fn search_case(self) -> Diff;
+}
+
+impl Cases for Diff {
+    // With an interface manager or none.
+    fn destructor_case(self) -> Diff {
+        self.family(&lockfree::LOCKFREE)
+            .family(&leaf::LEAVES)
+            .ignore_calls(INLINED)
+            .max_calls(MAX_CALLS)
+            .inputs(&[Input::Flag])
+            .setup(|e, case| {
+                let w = world(e, true);
+                if case.word(0) == 0 {
+                    e.mem.set_u32(w.map + 0x14, 0);
+                }
+                // The destructor puts the real map's vtable in place, whose functions these engines
+                // don't map: so no node to delete through it, the buckets empty.
+                for k in 0..NUM_BUCKETS {
+                    e.mem.set_u32(w.buckets + k * 4, 0);
+                }
+                vec![w.map]
+            })
+    }
+
+    // 0: null, 1: one object, 2: another.
+    fn assign_case(self) -> Diff {
+        self.family(&lockfree::LOCKFREE)
+            .family(&leaf::LEAVES)
+            .ignore_calls(INLINED)
+            .max_calls(MAX_CALLS)
+            .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(&[0, 1, 2])])
+            .setup(|e, case| {
+                let w = world(e, true);
+                let other = ref_object(e, 7);
+                let pick = |k: u32| match k {
+                    0 => 0,
+                    1 => w.spare,
+                    _ => other,
+                };
+                let this = holder_of(e, pick(case.word(0)));
+                let from = holder_of(e, pick(case.word(1)));
+                vec![this, from]
+            })
+    }
+
+    fn iterate_words_case(self) -> Diff {
+        self.family(&lockfree::LOCKFREE)
+            .family(&leaf::LEAVES)
+            .ignore_calls(INLINED)
+            .max_calls(MAX_CALLS)
+            .inputs(&[
+                Input::Of(&[0, 1, 2, 3]),
+                Input::Of(&[0, 1, 2]),
+                Input::Of(&[1, 2, 5]),
+                Input::Flag,
+            ])
+            .setup(|e, case| {
+                let w = world(e, true);
+                let it = e.mem.alloc(0x10);
+                e.mem.set_u32(it + 4, case.word(0));
+                e.mem.set_u32(it + 8, case.word(2));
+                e.mem.set_u8(it + 0xc, case.word(1) as u8);
+                let key_out = e.mem.alloc(4);
+                let value_out = e.mem.alloc(4);
+                vec![w.map, it, key_out, value_out, case.word(3)]
+            })
+    }
+
+    fn map_find_case(self) -> Diff {
+        self.family(&lockfree::LOCKFREE)
+            .family(&leaf::LEAVES)
+            .ignore_calls(INLINED)
+            .max_calls(MAX_CALLS)
+            .inputs(&[Input::Of(KEYS), Input::Flag])
+            .setup(|e, case| {
+                let w = world(e, case.word(1) != 0);
+                let value_out = holder_of(e, 0);
+                vec![w.map, case.word(0), value_out]
+            })
+    }
+
+    fn remove_from_bucket_case(self) -> Diff {
+        self.family(&lockfree::LOCKFREE)
+            .family(&leaf::LEAVES)
+            .ignore_calls(INLINED)
+            .max_calls(MAX_CALLS)
+            .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(KEYS), Input::Flag])
+            .setup(|e, case| {
+                let w = world(e, true);
+                if case.word(2) != 0 {
+                    e.mem.set_u32(w.face + 0x20, 99);
+                }
+                vec![w.face, case.word(0), case.word(1)]
+            })
+    }
+
+    // A waiting list of three nodes; none, the middle one, or all named by a referenced-node slot.
+    fn scan_deleted_case(self) -> Diff {
+        self.family(&lockfree::LOCKFREE)
+            .family(&leaf::LEAVES)
+            .ignore_calls(INLINED)
+            .max_calls(MAX_CALLS)
+            .inputs(&[Input::Of(&[0, 1, 2])])
+            .setup(|e, case| {
+                let w = world(e, true);
+                let third = node(e, 40, 0);
+                let second = node(e, 41, 0);
+                let first = node(e, 42, 0);
+                // Linked through their value words, as the retirement links them.
+                e.mem.set_u32(first + 4, second);
+                e.mem.set_u32(second + 4, third);
+                e.mem.set_u32(third + 4, 0);
+                e.mem.set_u32(w.face + 0x1c, first);
+                e.mem.set_u32(w.face + 0x20, 3);
+                match case.word(0) {
+                    1 => e.mem.set_u32(w.refs + 4, second),
+                    2 => {
+                        e.mem.set_u32(w.refs, first);
+                        e.mem.set_u32(w.refs + 12, second);
+                        e.mem.set_u32(w.refs + 20, third);
+                    }
+                    _ => {}
+                }
+                vec![w.face]
+            })
+    }
+
+    // Every bucket and key; with the interface's waiting list one short of a full batch, or not, so
+    // the retirement of the deleted node in bucket 3 also scans.
+    fn search_case(self) -> Diff {
+        self.family(&lockfree::LOCKFREE)
+            .family(&leaf::LEAVES)
+            .ignore_calls(INLINED)
+            .max_calls(MAX_CALLS)
+            .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(KEYS), Input::Flag])
+            .setup(|e, case| {
+                let w = world(e, true);
+                if case.word(2) != 0 {
+                    e.mem.set_u32(w.face + 0x20, 99);
+                }
+                vec![w.face, case.word(0), case.word(1)]
+            })
+    }
+}
+
 #[test]
 fn holder_assign() {
-    // 0: null, 1: one object, 2: another.
     Diff::new(entry!(0x0092_c820, holder::assign(Ptr<_>, Ptr<_>) -> Ptr))
-        .family(&lockfree::LOCKFREE)
-        .family(&leaf::LEAVES)
-        .ignore_calls(INLINED)
-        .max_calls(MAX_CALLS)
-        .translation_calls_plainly(&plain_except(0x0092_c820))
-        .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(&[0, 1, 2])])
-        .setup(|e, case| {
-            let w = world(e, true);
-            let other = ref_object(e, 7);
-            let pick = |k: u32| match k {
-                0 => 0,
-                1 => w.spare,
-                _ => other,
-            };
-            let this = holder_of(e, pick(case.word(0)));
-            let from = holder_of(e, pick(case.word(1)));
-            vec![this, from]
-        })
+        .assign_case()
         .run()
         .assert_same();
 }
@@ -289,7 +418,6 @@ fn interface_for_thread() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
-    .translation_calls_plainly(&plain_except(0x0044_d5c0))
     .inputs(&[Input::Flag, Input::Of(&[0, 1, 2, 0xffff_ffff])])
     .setup(|e, case| {
         let w = world(e, case.word(0) != 0);
@@ -310,7 +438,6 @@ fn make_interface() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
-    .translation_calls_plainly(&plain_except(0x0044_e3a0))
     .inputs(&[Input::Of(&[0, 1, 2, 0xffff_ffff]), Input::Of(&[0, 1, 2])])
     .setup(|e, case| {
         let w = world(e, false);
@@ -334,7 +461,6 @@ fn first_in_bucket() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
-    .translation_calls_plainly(&plain_except(0x0044_e550))
     .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(&[0, 1, 2])])
     .setup(|e, case| {
         let w = world(e, true);
@@ -365,7 +491,6 @@ fn iterate() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
-    .translation_calls_plainly(&plain_except(0x0044_b8d0))
     .inputs(&[
         Input::Of(&[0, 1, 2, 3]),
         Input::Of(&[0, 1, 2]),
@@ -391,24 +516,21 @@ const KEYS: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 11, 12];
 
 #[test]
 fn search() {
-    // Every bucket and key; with the interface's waiting list one short of a full batch, or not, so
-    // the retirement of the deleted node in bucket 3 also scans.
     Diff::new(entry!(0x0052_9030, iface::search(Ptr<_>, u32, u32) -> u32))
-        .family(&lockfree::LOCKFREE)
-        .family(&leaf::LEAVES)
-        .ignore_calls(INLINED)
-        .max_calls(MAX_CALLS)
-        .translation_calls_plainly(&plain_except(0x0052_9030))
-        .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(KEYS), Input::Flag])
-        .setup(|e, case| {
-            let w = world(e, true);
-            if case.word(2) != 0 {
-                e.mem.set_u32(w.face + 0x20, 99);
-            }
-            vec![w.face, case.word(0), case.word(1)]
-        })
+        .search_case()
         .run()
         .assert_same();
+}
+
+#[test]
+fn search_string_map() {
+    Diff::new(entry!(
+        0x0066_62a0,
+        iface::search_string_map(Ptr<_>, u32, u32) -> u32
+    ))
+    .search_case()
+    .run()
+    .assert_same();
 }
 
 #[test]
@@ -419,7 +541,6 @@ fn retire() {
         .family(&leaf::LEAVES)
         .ignore_calls(INLINED)
         .max_calls(MAX_CALLS)
-        .translation_calls_plainly(&plain_except(0x0052_92a0))
         .inputs(&[Input::Flag, Input::Of(&[0, 99, 100])])
         .setup(|e, case| {
             let w = world(e, true);
@@ -450,7 +571,6 @@ fn next_in_bucket() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
-    .translation_calls_plainly(&plain_except(0x0044_e680))
     .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(KEYS), Input::Flag])
     .setup(|e, case| {
         let w = world(e, true);
@@ -470,19 +590,18 @@ fn remove_from_bucket() {
         0x0052_8ce0,
         iface::remove_from_bucket(Ptr<_>, u32, u32) -> bool
     ))
-    .family(&lockfree::LOCKFREE)
-    .family(&leaf::LEAVES)
-    .ignore_calls(INLINED)
-    .max_calls(MAX_CALLS)
-    .translation_calls_plainly(&plain_except(0x0052_8ce0))
-    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(KEYS), Input::Flag])
-    .setup(|e, case| {
-        let w = world(e, true);
-        if case.word(2) != 0 {
-            e.mem.set_u32(w.face + 0x20, 99);
-        }
-        vec![w.face, case.word(0), case.word(1)]
-    })
+    .remove_from_bucket_case()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn remove_from_bucket_string_map() {
+    Diff::new(entry!(
+        0x0066_6080,
+        iface::remove_from_bucket_string_map(Ptr<_>, u32, u32) -> bool
+    ))
+    .remove_from_bucket_case()
     .run()
     .assert_same();
 }
@@ -494,7 +613,6 @@ fn remove() {
         .family(&leaf::LEAVES)
         .ignore_calls(INLINED)
         .max_calls(MAX_CALLS)
-        .translation_calls_plainly(&plain_except(0x0052_8bb0))
         .inputs(&[Input::Of(KEYS), Input::Flag])
         .setup(|e, case| {
             let w = world(e, true);
@@ -517,7 +635,6 @@ fn first_word_in_bucket() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
-    .translation_calls_plainly(&plain_except(0x0044_ea60))
     .inputs(&[Input::Of(&[0, 1, 2, 3])])
     .setup(|e, case| {
         let w = world(e, true);
@@ -540,7 +657,6 @@ fn next_word_in_bucket() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
-    .translation_calls_plainly(&plain_except(0x0044_eb80))
     .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(KEYS)])
     .setup(|e, case| {
         let w = world(e, true);
@@ -565,7 +681,6 @@ fn find_value() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
-    .translation_calls_plainly(&plain_except(0x0044_e820))
     .inputs(&[
         Input::Of(&[0, 1, 2, 3]),
         Input::Of(&[0, 1, 2, 3]),
@@ -604,7 +719,6 @@ fn find() {
         .family(&leaf::LEAVES)
         .ignore_calls(INLINED)
         .max_calls(MAX_CALLS)
-        .translation_calls_plainly(&plain_except(0x0044_c8e0))
         .inputs(&[Input::Of(KEYS), Input::Flag])
         .setup(|e, case| {
             let w = world(e, true);
@@ -627,7 +741,6 @@ fn insert() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
-    .translation_calls_plainly(&plain_except(0x0044_c000))
     .local_at(0x0040_4eb0, 0, 4)
     .local_at(0x0040_4ee0, 0, 4)
     .inputs(&[Input::Of(KEYS), Input::Flag, Input::Flag])
@@ -644,19 +757,20 @@ fn insert() {
 #[test]
 fn map_find() {
     Diff::new(entry!(0x0044_bd60, map::find(Ptr<_>, u32, Ptr<_>) -> u8))
-        .family(&lockfree::LOCKFREE)
-        .family(&leaf::LEAVES)
-        .ignore_calls(INLINED)
-        .max_calls(MAX_CALLS)
-        .translation_calls_plainly(&plain_except(0x0044_bd60))
-        .inputs(&[Input::Of(KEYS), Input::Flag])
-        .setup(|e, case| {
-            let w = world(e, case.word(1) != 0);
-            let value_out = holder_of(e, 0);
-            vec![w.map, case.word(0), value_out]
-        })
+        .map_find_case()
         .run()
         .assert_same();
+}
+
+#[test]
+fn map_find_word() {
+    Diff::new(entry!(
+        0x0044_9530,
+        map::find_word(Ptr<_>, u32, Ptr<_>) -> u8
+    ))
+    .map_find_case()
+    .run()
+    .assert_same();
 }
 
 #[test]
@@ -671,7 +785,6 @@ fn insert_in_bucket() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
-    .translation_calls_plainly(&plain_except(0x0044_d070))
     .local_at(0x0040_4eb0, 0, 4)
     .local_at(0x0040_4ee0, 0, 4)
     .inputs(&[Input::Of(KEYS), Input::Flag, Input::Flag])
@@ -701,7 +814,6 @@ fn insert_word_in_bucket() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
-    .translation_calls_plainly(&plain_except(0x0044_d240))
     .local_at(0x0040_4eb0, 0, 4)
     .local_at(0x0040_4ee0, 0, 4)
     .inputs(&[Input::Of(KEYS), Input::Flag])
@@ -727,27 +839,18 @@ fn iterate_words() {
         0x0044_c640,
         map::iterate_words(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, u8) -> bool
     ))
-    .family(&lockfree::LOCKFREE)
-    .family(&leaf::LEAVES)
-    .ignore_calls(INLINED)
-    .max_calls(MAX_CALLS)
-    .translation_calls_plainly(&plain_except(0x0044_c640))
-    .inputs(&[
-        Input::Of(&[0, 1, 2, 3]),
-        Input::Of(&[0, 1, 2]),
-        Input::Of(&[1, 2, 5]),
-        Input::Flag,
-    ])
-    .setup(|e, case| {
-        let w = world(e, true);
-        let it = e.mem.alloc(0x10);
-        e.mem.set_u32(it + 4, case.word(0));
-        e.mem.set_u32(it + 8, case.word(2));
-        e.mem.set_u8(it + 0xc, case.word(1) as u8);
-        let key_out = e.mem.alloc(4);
-        let value_out = e.mem.alloc(4);
-        vec![w.map, it, key_out, value_out, case.word(3)]
-    })
+    .iterate_words_case()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn iterate_lip_task_map() {
+    Diff::new(entry!(
+        0x0090_6570,
+        map::iterate_lip_task_map(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, u8) -> bool
+    ))
+    .iterate_words_case()
     .run()
     .assert_same();
 }
@@ -760,7 +863,6 @@ fn clear() {
         .family(&leaf::LEAVES)
         .ignore_calls(INLINED)
         .max_calls(MAX_CALLS)
-        .translation_calls_plainly(&plain_except(0x0044_c480))
         .inputs(&[Input::Flag, Input::Flag])
         .setup(|e, case| {
             let w = world(e, true);
@@ -780,7 +882,6 @@ fn construct_interface_manager() {
         .family(&leaf::LEAVES)
         .ignore_calls(INLINED)
         .max_calls(MAX_CALLS)
-        .translation_calls_plainly(&plain_except(0x006c_73b0))
         .inputs(&[Input::Of(&[0, 1, 2, 5])])
         .setup(|e, case| {
             register_map_functions(e);
@@ -794,30 +895,165 @@ fn construct_interface_manager() {
         .assert_same();
 }
 
+/// A map constructor's comparison: max threads, buckets and batch size at their edges, over a map
+/// filled with a pattern.
+trait ConstructorCase {
+    fn constructor_case(self) -> Diff;
+}
+
+impl ConstructorCase for Diff {
+    fn constructor_case(self) -> Diff {
+        self.family(&lockfree::LOCKFREE)
+            .family(&leaf::LEAVES)
+            .ignore_calls(INLINED)
+            // The scope object: one translation keeps it in a bigger frame.
+            .local_at(0x0040_4eb0, 0, 4)
+            .local_at(0x0040_4ee0, 0, 4)
+            .max_calls(MAX_CALLS)
+            .inputs(&[
+                Input::Of(&[0, 1, 2]),
+                Input::Of(&[0, 1, 4]),
+                Input::Of(&[0, 100]),
+            ])
+            .setup(|e, case| {
+                register_map_functions(e);
+                let map = e.mem.alloc(0x40);
+                for k in 0..0x10 {
+                    e.mem.set_u32(map + k * 4, 0xdddd_dddd);
+                }
+                vec![map, case.word(0), case.word(1), case.word(2)]
+            })
+    }
+}
+
 #[test]
 fn construct_map() {
     Diff::new(entry!(
         0x0044_b750,
         map::construct(Ptr<_>, u32, u32, u32) -> Ptr
     ))
-    .family(&lockfree::LOCKFREE)
-    .family(&leaf::LEAVES)
-    .ignore_calls(INLINED)
-    .max_calls(MAX_CALLS)
-    .translation_calls_plainly(&plain_except(0x0044_b750))
-    .inputs(&[
-        Input::Of(&[0, 1, 2]),
-        Input::Of(&[0, 1, 4]),
-        Input::Of(&[0, 100]),
-    ])
-    .setup(|e, case| {
-        register_map_functions(e);
-        let map = e.mem.alloc(0x40);
-        for k in 0..0x10 {
-            e.mem.set_u32(map + k * 4, 0xdddd_dddd);
-        }
-        vec![map, case.word(0), case.word(1), case.word(2)]
-    })
+    .constructor_case()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn construct_anim_idle_map() {
+    Diff::new(entry!(
+        0x0044_ba10,
+        map::construct_anim_idle_map(Ptr<_>, u32, u32, u32) -> Ptr
+    ))
+    .constructor_case()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn construct_replacement_kf_list_map() {
+    Diff::new(entry!(
+        0x0044_bbe0,
+        map::construct_replacement_kf_list_map(Ptr<_>, u32, u32, u32) -> Ptr
+    ))
+    .constructor_case()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn construct_helmet_map() {
+    Diff::new(entry!(
+        0x0044_be80,
+        map::construct_helmet_map(Ptr<_>, u32, u32, u32) -> Ptr
+    ))
+    .constructor_case()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn construct_model_map() {
+    Diff::new(entry!(
+        0x0044_c040,
+        map::construct_model_map(Ptr<_>, u32, u32, u32) -> Ptr
+    ))
+    .constructor_case()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn construct_kf_model_map() {
+    Diff::new(entry!(
+        0x0044_c270,
+        map::construct_kf_model_map(Ptr<_>, u32, u32, u32) -> Ptr
+    ))
+    .constructor_case()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn construct_texture_map() {
+    Diff::new(entry!(
+        0x0044_c760,
+        map::construct_texture_map(Ptr<_>, u32, u32, u32) -> Ptr
+    ))
+    .constructor_case()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn construct_loaded_file_map() {
+    Diff::new(entry!(
+        0x0044_c920,
+        map::construct_loaded_file_map(Ptr<_>, u32, u32, u32) -> Ptr
+    ))
+    .constructor_case()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn construct_cell_task_map() {
+    Diff::new(entry!(
+        0x0052_89e0,
+        map::construct_cell_task_map(Ptr<_>, u32, u32, u32) -> Ptr
+    ))
+    .constructor_case()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn construct_tree_node_map() {
+    Diff::new(entry!(
+        0x0066_5cb0,
+        map::construct_tree_node_map(Ptr<_>, u32, u32, u32) -> Ptr
+    ))
+    .constructor_case()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn construct_pathing_task_map() {
+    Diff::new(entry!(
+        0x006e_c660,
+        map::construct_pathing_task_map(Ptr<_>, u32, u32, u32) -> Ptr
+    ))
+    .constructor_case()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn construct_lip_task_map() {
+    Diff::new(entry!(
+        0x0090_6160,
+        map::construct_lip_task_map(Ptr<_>, u32, u32, u32) -> Ptr
+    ))
+    .constructor_case()
     .run()
     .assert_same();
 }
@@ -832,7 +1068,6 @@ fn queue_allocate_interface() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
-    .translation_calls_plainly(&plain_except(0x0044_b660))
     .inputs(&[Input::Of(&[0, 1, 2, 0x8000_0001])])
     .setup(|e, case| {
         let queue = e.mem.alloc(0x1c);
@@ -846,62 +1081,118 @@ fn queue_allocate_interface() {
 
 #[test]
 fn scan_deleted() {
-    // A waiting list of three nodes; none, the middle one, or all named by a referenced-node slot.
     Diff::new(entry!(0x0044_f220, iface::scan_deleted(Ptr<_>)))
-        .family(&lockfree::LOCKFREE)
-        .family(&leaf::LEAVES)
-        .ignore_calls(INLINED)
-        .max_calls(MAX_CALLS)
-        .translation_calls_plainly(&plain_except(0x0044_f220))
-        .inputs(&[Input::Of(&[0, 1, 2])])
-        .setup(|e, case| {
-            let w = world(e, true);
-            let third = node(e, 40, 0);
-            let second = node(e, 41, 0);
-            let first = node(e, 42, 0);
-            // Linked through their value words, as the retirement links them.
-            e.mem.set_u32(first + 4, second);
-            e.mem.set_u32(second + 4, third);
-            e.mem.set_u32(third + 4, 0);
-            e.mem.set_u32(w.face + 0x1c, first);
-            e.mem.set_u32(w.face + 0x20, 3);
-            match case.word(0) {
-                1 => e.mem.set_u32(w.refs + 4, second),
-                2 => {
-                    e.mem.set_u32(w.refs, first);
-                    e.mem.set_u32(w.refs + 12, second);
-                    e.mem.set_u32(w.refs + 20, third);
-                }
-                _ => {}
-            }
-            vec![w.face]
-        })
+        .scan_deleted_case()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn scan_deleted_releasing() {
+    Diff::new(entry!(0x0044_f070, iface::scan_deleted_releasing(Ptr<_>)))
+        .scan_deleted_case()
         .run()
         .assert_same();
 }
 
 #[test]
 fn destroy() {
-    // With an interface manager or none.
     Diff::new(entry!(0x0044_c3f0, map::destroy(Ptr<_>)))
-        .family(&lockfree::LOCKFREE)
-        .family(&leaf::LEAVES)
-        .ignore_calls(INLINED)
-        .max_calls(MAX_CALLS)
-        .translation_calls_plainly(&plain_except(0x0044_c3f0))
-        .inputs(&[Input::Flag])
-        .setup(|e, case| {
-            let w = world(e, true);
-            if case.word(0) == 0 {
-                e.mem.set_u32(w.map + 0x14, 0);
-            }
-            // The destructor puts the real map's vtable in place, whose functions these engines
-            // don't map: so no node to delete through it, the buckets empty.
-            for k in 0..NUM_BUCKETS {
-                e.mem.set_u32(w.buckets + k * 4, 0);
-            }
-            vec![w.map]
-        })
+        .destructor_case()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn destroy_model_map() {
+    Diff::new(entry!(0x0044_c1e0, map::destroy_model_map(Ptr<_>)))
+        .destructor_case()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn destroy_loaded_file_map() {
+    Diff::new(entry!(0x0044_cae0, map::destroy_loaded_file_map(Ptr<_>)))
+        .destructor_case()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn destroy_tree_node_map() {
+    Diff::new(entry!(0x0066_61e0, map::destroy_tree_node_map(Ptr<_>)))
+        .destructor_case()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn destroy_pathing_task_map() {
+    Diff::new(entry!(0x006e_c870, map::destroy_pathing_task_map(Ptr<_>)))
+        .destructor_case()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn destroy_queued_reference_map() {
+    Diff::new(entry!(
+        0x0044_d8f0,
+        map::destroy_queued_reference_map(Ptr<_>)
+    ))
+    .destructor_case()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn destroy_anim_idle_map() {
+    Diff::new(entry!(0x0044_d9b0, map::destroy_anim_idle_map(Ptr<_>)))
+        .destructor_case()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn destroy_replacement_kf_list_map() {
+    Diff::new(entry!(
+        0x0044_da70,
+        map::destroy_replacement_kf_list_map(Ptr<_>)
+    ))
+    .destructor_case()
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn destroy_helmet_map() {
+    Diff::new(entry!(0x0044_db30, map::destroy_helmet_map(Ptr<_>)))
+        .destructor_case()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn destroy_texture_map() {
+    Diff::new(entry!(0x0044_dc50, map::destroy_texture_map(Ptr<_>)))
+        .destructor_case()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn destroy_cell_task_map() {
+    Diff::new(entry!(0x0052_8be0, map::destroy_cell_task_map(Ptr<_>)))
+        .destructor_case()
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn destroy_lip_task_map() {
+    Diff::new(entry!(0x0090_64e0, map::destroy_lip_task_map(Ptr<_>)))
+        .destructor_case()
         .run()
         .assert_same();
 }
@@ -914,7 +1205,6 @@ fn interface_of() {
         .family(&leaf::LEAVES)
         .ignore_calls(INLINED)
         .max_calls(MAX_CALLS)
-        .translation_calls_plainly(&plain_except(0x0044_9f80))
         .inputs(&[Input::Flag])
         .setup(|e, case| {
             let w = world(e, case.word(0) != 0);

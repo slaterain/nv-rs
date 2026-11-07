@@ -192,6 +192,10 @@ pub enum Input {
     F64,
     /// These words: one per branch that matters.
     Of(&'static [u32]),
+    /// An `f32` that is this one (its bits) in the ordinary cases and is filled by the float sweep
+    /// ([`Diff::float_sweep`]): a field a test fixed before can be swept along with the others at no
+    /// cost to the ordinary cases.
+    F32Swept(u32),
 }
 
 impl Input {
@@ -202,6 +206,7 @@ impl Input {
             Input::F32 => F32_VALUES.iter().map(|b| Value::F32(*b)).collect(),
             Input::F64 => F64_VALUES.iter().map(|b| Value::F64(*b)).collect(),
             Input::Of(words) => words.iter().map(|w| Value::Word(*w)).collect(),
+            Input::F32Swept(bits) => vec![Value::F32(bits)],
         }
     }
 }
@@ -315,6 +320,71 @@ pub fn cases(inputs: &[Input], max_cases: usize) -> Vec<Case> {
     out
 }
 
+/// `n` cases for the float sweep ([`Diff::float_sweep`]), none when no argument is a float: each
+/// float argument a random one (about one in eight one of the listed values: NaNs, zeros, denormals,
+/// huge), each other argument a random one of its values. A random float has a random sign, all its
+/// mantissa bits random, and an exponent between 2^-7 and 2^8 (one in sixteen anywhere in the finite
+/// range), so sums and products of several land where rounding at each step and rounding once
+/// differ. A fixed sequence for each `seed`.
+pub fn swept_cases(inputs: &[Input], n: usize, seed: u64) -> Vec<Case> {
+    let floats = |i: &Input| matches!(i, Input::F32 | Input::F64 | Input::F32Swept(_));
+    if n == 0 || !inputs.iter().any(floats) {
+        return Vec::new();
+    }
+    let lists: Vec<Vec<Value>> = inputs.iter().map(|i| i.values()).collect();
+    if lists.iter().any(Vec::is_empty) {
+        return Vec::new();
+    }
+    // xorshift64; the seed mixed so that nearby addresses give unrelated sequences, and never 0.
+    let mut x = (seed ^ 0x9e37_79b9_7f4a_7c15).wrapping_mul(0xbf58_476d_1ce4_e5b9) | 1;
+    let mut next = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    let mut out = Vec::with_capacity(n);
+    while out.len() < n {
+        let case = inputs
+            .iter()
+            .zip(&lists)
+            .map(|(input, list)| {
+                let r = next();
+                let special = r % 8 == 0;
+                let wide = (r >> 3) % 16 == 0;
+                let sign = (r >> 7) & 1;
+                let bits = r >> 8;
+                match input {
+                    Input::F32 | Input::F32Swept(_) if special => {
+                        Value::F32(F32_VALUES[(bits % F32_VALUES.len() as u64) as usize])
+                    }
+                    Input::F64 if special => {
+                        Value::F64(F64_VALUES[(bits % F64_VALUES.len() as u64) as usize])
+                    }
+                    Input::F32 | Input::F32Swept(_) => {
+                        let mantissa = (bits & 0x7f_ffff) as u32;
+                        let exponent = if wide {
+                            1 + ((bits >> 23) % 254) as u32
+                        } else {
+                            120 + ((bits >> 23) % 16) as u32
+                        };
+                        Value::F32((sign as u32) << 31 | exponent << 23 | mantissa)
+                    }
+                    Input::F64 => {
+                        let mantissa = bits & 0x000f_ffff_ffff_ffff;
+                        let r2 = next();
+                        let exponent = if wide { 1 + r2 % 2046 } else { 1016 + r2 % 16 };
+                        Value::F64(sign << 63 | exponent << 52 | mantissa)
+                    }
+                    _ => list[(bits % list.len() as u64) as usize],
+                }
+            })
+            .collect();
+        out.push(Case(case));
+    }
+    out
+}
+
 /// A setup: runs on each engine with the case, makes what the function reads and the doubles of
 /// its callees, and answers the words of the call.
 type Setup = Box<dyn Fn(&mut Engine, &Case) -> Vec<u32>>;
@@ -340,6 +410,7 @@ pub struct Diff {
     stack_bytes: u32,
     nan_payloads: bool,
     max_calls: usize,
+    float_sweep: usize,
 }
 
 impl Diff {
@@ -362,6 +433,7 @@ impl Diff {
             stack_bytes: 64,
             max_calls: DEFAULT_MAX_CALLS,
             nan_payloads: false,
+            float_sweep: 0,
         }
     }
 
@@ -431,11 +503,13 @@ impl Diff {
     }
 
     /// Callees the translation reaches with a plain Rust call, which isn't logged, and the typed
-    /// version with `e.call` or `typed_call!`, which is: left out of both sides' calls at every depth
-    /// (one translation reaches it plainly, another by address). Their own outgoing calls and what
-    /// they do to memory still compare, but the words of the listed call can't, since one side may
-    /// have no record of them: a wrong word, or a call the typed version lacks, shows only by what it
-    /// changes.
+    /// version with `e.call` or `typed_call!`, which is: left out of the typed version's calls, at
+    /// every depth. Their own outgoing calls and what they do to memory still compare, but the words
+    /// of the listed call can't, since one side has no record of them: a wrong word shows only by
+    /// what it changes. Every translation the run reaches has to call a listed callee plainly; one
+    /// calling it by address leaves a call the typed side lacks. So when a family types a callee some
+    /// translations reach plainly and others by address, its step moves the plain sites to `e.call`,
+    /// and the callee needs no listing: its words compare too.
     ///
     /// The real function has to run on both sides, so the setup may not replace one that is registered
     /// ([`Diff::run`] stops): a double would run on the typed side only. An overridable address can't be
@@ -477,6 +551,17 @@ impl Diff {
     /// The most cases to generate (512 by default); each runs under each control word.
     pub fn max_cases(mut self, n: usize) -> Diff {
         self.max_cases = n;
+        self
+    }
+
+    /// `n` more cases (none by default) with every float argument at once a random float with a full
+    /// mantissa, or now and then one of [`F32_VALUES`] or [`F64_VALUES`], and every other argument one
+    /// of its values ([`swept_cases`]). The ordinary cases vary one argument at a time against plain
+    /// others, so a rounding that only shows when several operands carry low bits at once (a sum of
+    /// products rounded at each step, or once) slips through them; these find it. Seeded by the
+    /// function's address, so a failure repeats.
+    pub fn float_sweep(mut self, n: usize) -> Diff {
+        self.float_sweep = n;
         self
     }
 
@@ -536,7 +621,8 @@ impl Diff {
             control_words: self.words_to_run(),
             ..Report::default()
         };
-        for case in cases(&self.inputs, self.max_cases) {
+        let swept = swept_cases(&self.inputs, self.float_sweep, u64::from(self.addr));
+        for case in cases(&self.inputs, self.max_cases).into_iter().chain(swept) {
             for word in report.control_words.clone() {
                 report.runs += 1;
                 self.run_case(&case, word, &mut report);
@@ -1147,8 +1233,8 @@ fn without_subtrees(calls: &[Seen], drop: impl Fn(&Seen) -> bool) -> Vec<&Seen> 
 
 /// Compares the two sides' calls, in order: the first that differs in address or words, and the
 /// first with different memory or clock at the moment of the call, before that. `ignored` calls
-/// come out as [`Diff::ignore_calls`] says, and `plain` calls (not what they call) out of both, at
-/// every depth.
+/// come out as [`Diff::ignore_calls`] says, and `plain` calls (not what they call) out of the
+/// second, the typed version's, at every depth.
 fn compare_calls(
     a: &Side,
     b: &Side,
@@ -1159,13 +1245,10 @@ fn compare_calls(
     // The translation: an ignored call at any depth, with every call made under it (a typed version
     // does a helper's work in place, and a typed callee does too). The typed version: an ignored call
     // below its own level, with what it calls, so a callee both sides run that calls one compares
-    // alike, while its own call to one still shows. A plain callee's call (not what it calls) on both
-    // sides at every depth: one translation reaches it plainly, another by address, and the typed
-    // side by address; what it does still compares.
-    let a_calls: Vec<&Seen> = without_subtrees(&a.calls, |c| ignored.contains(&c.addr))
-        .into_iter()
-        .filter(|c| !plain.contains(&c.addr))
-        .collect();
+    // alike, while its own call to one still shows. A plain callee's call (not what it calls) on the
+    // typed side only, at every depth: the translation's plain Rust call isn't logged and the typed
+    // version's is, so a translation that calls it by address after all still shows.
+    let a_calls = without_subtrees(&a.calls, |c| ignored.contains(&c.addr));
     let b_top = b.calls.first().map_or(0, |c| c.depth);
     let b_calls: Vec<&Seen> = without_subtrees(&b.calls, |c| {
         ignored.contains(&c.addr) && c.depth > b_top + 1
@@ -1555,6 +1638,77 @@ mod tests {
         }
         // The same sequence each time, so a failure repeats.
         assert_eq!(list, cases(&inputs, 200));
+    }
+
+    /// The float sweep: every float argument at once, mostly with all mantissa bits in play, now and
+    /// then a listed value; other arguments from their lists; the same sequence for a seed; nothing
+    /// when no argument is a float.
+    #[test]
+    fn the_float_sweep_fills_every_float_argument_at_once() {
+        let inputs = [
+            Input::F32,
+            Input::F32Swept(0x3f80_0000),
+            Input::Of(&[7, 8]),
+            Input::F64,
+        ];
+        let list = swept_cases(&inputs, 400, 0x0040_2000);
+        assert_eq!(list.len(), 400);
+        assert_eq!(list, swept_cases(&inputs, 400, 0x0040_2000));
+        assert_ne!(list, swept_cases(&inputs, 400, 0x0040_2010));
+        let full = |c: &Case| {
+            let low = |i: usize| match c.0[i] {
+                Value::F32(b) => b & 0xff != 0 && !F32_VALUES.contains(&b),
+                _ => false,
+            };
+            low(0) && low(1) && matches!(c.0[3], Value::F64(b) if b & 0xff_ffff != 0)
+        };
+        // Most cases have every float full at once (7/8 each, so about 2/3 of them all three).
+        assert!(list.iter().filter(|c| full(c)).count() > 200);
+        // Listed values still come.
+        assert!(list
+            .iter()
+            .any(|c| matches!(c.0[0], Value::F32(b) if F32_VALUES.contains(&b))));
+        for c in &list {
+            assert!(matches!(c.0[2], Value::Word(7 | 8)));
+            if let Value::F32(b) = c.0[1] {
+                // Finite unless it is a listed value.
+                assert!(f32::from_bits(b).is_finite() || F32_VALUES.contains(&b));
+            }
+        }
+        assert!(swept_cases(&[Input::Word, Input::Of(&[1])], 10, 1).is_empty());
+        assert!(swept_cases(&inputs, 0, 1).is_empty());
+    }
+
+    /// A sum of products rounded at each step against one rounded once: the ordinary cases vary one
+    /// argument against ones, where the products are exact and both round once; only the sweep, with
+    /// low bits in every operand at once, finds it.
+    #[test]
+    fn the_float_sweep_finds_a_rounding_one_argument_at_a_time_misses() {
+        fn each_step(_: &mut Engine, a: f32, b: f32, c: f32, d: f32) -> f32 {
+            a * b + c * d
+        }
+        fn once(_: &mut Engine, a: f32, b: f32, c: f32, d: f32) -> f32 {
+            (f64::from(a) * f64::from(b) + f64::from(c) * f64::from(d)) as f32
+        }
+        let diff = |sweep: usize| {
+            Diff::new(crate::entry!(0x0040_2000, once(f32, f32, f32, f32) -> f32))
+                .translation(crate::entry!(0x0040_2000, each_step(f32, f32, f32, f32) -> f32).1)
+                .inputs(&[
+                    Input::F32,
+                    Input::F32Swept(0x3f80_0000),
+                    Input::F32Swept(0x3f80_0000),
+                    Input::F32Swept(0x3f80_0000),
+                ])
+                .control_words(&[OTHER_THREADS])
+                .float_sweep(sweep)
+                .run()
+        };
+        let ordinary = diff(0);
+        assert!(ordinary.is_same(), "{ordinary}");
+        assert_eq!(ordinary.runs, F32_VALUES.len());
+        let swept = diff(64);
+        assert!(!swept.is_same(), "{swept}");
+        assert_eq!(swept.runs, F32_VALUES.len() + 64);
     }
 
     #[test]
@@ -3050,10 +3204,10 @@ mod tests {
         assert_eq!(report.direct_calls, usize::from(cfg!(debug_assertions)));
     }
 
-    /// `translation_calls_plainly` drops the call on both sides, at every depth: a typed version that
-    /// doesn't make it still differs by what the callee does.
+    /// `translation_calls_plainly` drops the typed side only: the translation logging the call (it
+    /// isn't plain after all) still differs when the typed version doesn't make it.
     #[test]
-    fn translation_calls_plainly_leaves_what_the_callee_does_compared() {
+    fn translation_calls_plainly_drops_the_typed_side_only() {
         fn calls_by_address(e: &mut Engine) {
             e.call(CALLEE, &[1]);
         }
@@ -3063,9 +3217,33 @@ mod tests {
             .translation_calls_plainly(&[CALLEE])
             .control_words(&[OTHER_THREADS])
             .setup(|e, _| {
+                e.register(CALLEE, |_, _| Ret::default());
+                vec![]
+            })
+            .run();
+        assert_eq!(report.found, 1, "{report}");
+        assert!(matches!(report.first[0].what, Found::Call { .. }));
+    }
+
+    /// A callee the translation reaches plainly that the typed version doesn't call at all: the
+    /// call isn't on either log, and what the callee does still shows.
+    #[test]
+    fn translation_calls_plainly_leaves_what_the_callee_does_compared() {
+        fn callee_body(e: &mut Engine) {
+            e.mem.set_u32(0x0200_0000, 5);
+        }
+        fn calls_plainly(e: &mut Engine) {
+            callee_body(e);
+        }
+        fn does_not(_: &mut Engine) {}
+        let report = Diff::new(crate::entry!(0x0040_2000, does_not()))
+            .translation(crate::entry!(0x0040_2000, calls_plainly()).1)
+            .translation_calls_plainly(&[CALLEE])
+            .control_words(&[OTHER_THREADS])
+            .setup(|e, _| {
                 e.map(0x0200_0000, 0x10);
                 e.register(CALLEE, |e, _| {
-                    e.mem.set_u32(0x0200_0000, 5);
+                    callee_body(e);
                     Ret::default()
                 });
                 vec![]
