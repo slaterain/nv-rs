@@ -30,8 +30,8 @@
 //! as it was, unless something else wrote it in between (then that write stays). Bodies are drawn
 //! one step (16 ms) behind the game's clock, about 5 ms later on average than the original's.
 //!
-//! **Which bodies.** The ones `hktoNiTransform` set (`00c65a80` is registered as itself plus a
-//! note of the node, the body and the state it gave the node), whose node still holds that
+//! **Which bodies.** The ones `hktoNiTransform` set in this frame (`00c65a80` is registered as
+//! itself plus a note of the node, the body and the state it gave the node), whose node still holds that
 //! transform at the drawing and whose body ran the world's last step (a sleeping body is drawn
 //! as it is). Per body a small table keeps the last steps' ends (time, centre, rotation); a step
 //! Havok cut short at a time of impact ends there and holds to the step's end, as the body does
@@ -126,7 +126,7 @@ fn plain_world_update(e: &Engine, object: u32) -> bool {
 /// Kept samples per body: enough to reach two steps back (where T - 16 ms always is) when each
 /// step ended early and holds.
 const KEPT_SAMPLES: usize = 6;
-/// Drawings after which a body or a note nothing refreshed is forgotten.
+/// Drawings after which a body nothing refreshed is forgotten.
 const FORGET_AFTER: u64 = 600;
 
 /// Registers the note at `00c65a80` and the blended drawing at `008706b0`.
@@ -154,17 +154,26 @@ fn hk_to_ni_entry(e: &mut Engine, a: &[u32]) -> Ret {
 }
 
 fn draw_frame_entry(e: &mut Engine, a: &[u32]) -> Ret {
-    let written = blend_for_drawing(e);
-    // The nodes go back even when the drawing unwinds (a stop, or a C++ exception the game
-    // catches further out), which then goes on unwinding.
-    let drawn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    draw_blended(e, |e| {
         fn_008706b0(e, Ptr::new(a[0]), a[1], a[2] as u8, a[3] as u8)
+    });
+    Ret::default()
+}
+
+/// Plans the blend (reads only), then writes it and draws under one guard: whatever was written
+/// goes back after the drawing, and also when the writing or the drawing unwinds (a stop, or a
+/// C++ exception the game catches further out), which then goes on unwinding.
+fn draw_blended(e: &mut Engine, draw: impl FnOnce(&mut Engine)) {
+    let moves = plan_blend(e);
+    let mut written = Vec::new();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        write_moves(e, &moves, &mut written);
+        draw(e);
     }));
     put_back(e, &written);
-    if let Err(unwinding) = drawn {
+    if let Err(unwinding) = result {
         std::panic::resume_unwind(unwinding);
     }
-    Ret::default()
 }
 
 /// What `hktoNiTransform` gave a node.
@@ -173,8 +182,9 @@ struct Note {
     node: u32,
     body: u32,
     havok: u32,
-    /// The vtables of the collision object, the node and the body: an object freed since and
-    /// its memory used again is not taken for the one noted.
+    /// The vtables of the collision object, the node and the body: a cheap check against memory
+    /// used again by another class (not against the same class: a note counts only in the frame
+    /// it was taken, [`plan_blend`]).
     vtables: [u32; 3],
     /// The node's world rotation and translation after it (12 words).
     world: [u32; 12],
@@ -541,20 +551,33 @@ fn moved_world(note: &Note, rotation: [f32; 4], position: [f32; 3], scale: f32) 
     out
 }
 
-/// A node written for the drawing: its world transform and bound before and after.
+/// A node written for the drawing: its world transform and bound before and after. `world_after`
+/// is `None` while the game's world update runs on the node (if that unwinds, the node is put
+/// back whatever it holds).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Written {
     node: u32,
     world_before: [u32; 13],
-    world_after: [u32; 13],
+    world_after: Option<[u32; 13]>,
     bound: u32,
     bound_before: [u32; 4],
     bound_after: [u32; 4],
 }
 
-/// Writes each moving body's blended transform into its node and refreshes the nodes below it.
-/// Answers what it wrote, for [`put_back`].
+/// [`plan_blend`] and [`write_moves`] without the guard (tests).
 pub fn blend_for_drawing(e: &mut Engine) -> Vec<Written> {
+    let moves = plan_blend(e);
+    let mut written = Vec::new();
+    write_moves(e, &moves, &mut written);
+    written
+}
+
+/// Each moving body's node and the world rotation and translation to draw it with; reads only.
+/// A note counts only for the drawing right after it: `hktoNiTransform` ran on that collision
+/// object in this frame's scene update, so it was a live object of the scene in this frame. (An
+/// older note could name memory freed and used again by an object of the same class, which the
+/// pointer and vtable checks below can't tell.)
+fn plan_blend(e: &mut Engine) -> Vec<(u32, [u32; 12])> {
     let mut states = states();
     let Some(state) = states.get_mut(&key(e)) else {
         return Vec::new();
@@ -575,7 +598,7 @@ pub fn blend_for_drawing(e: &mut Engine) -> Vec<Written> {
             && e.mem.u32(note.body + BODY_HAVOK) == note.havok
             && vtables_of(e, collision, note.node, note.body) == note.vtables
             && words::<12>(e, note.node + NODE_WORLD) == note.world;
-        if !valid || drawings > note.taken + FORGET_AFTER {
+        if !valid || note.taken + 1 != drawings {
             state.notes.remove(&collision);
             continue;
         }
@@ -658,13 +681,12 @@ pub fn blend_for_drawing(e: &mut Engine) -> Vec<Written> {
         }
         let _ = log.flush();
     }
-    drop(states);
-    write_moves(e, &moves)
+    moves
 }
 
-/// Writes the bodies' nodes, then refreshes the nodes below each.
-fn write_moves(e: &mut Engine, moves: &[(u32, [u32; 12])]) -> Vec<Written> {
-    let mut written = Vec::new();
+/// Writes the bodies' nodes, then refreshes the nodes below each, recording into `written` before
+/// any of the game's code runs on a node, so [`put_back`] can undo all of it.
+fn write_moves(e: &mut Engine, moves: &[(u32, [u32; 12])], written: &mut Vec<Written>) {
     let mut seen = HashSet::new();
     for (node, after) in moves {
         if !seen.insert(*node) {
@@ -675,9 +697,8 @@ fn write_moves(e: &mut Engine, moves: &[(u32, [u32; 12])]) -> Vec<Written> {
         written.push(moved(e, *node, before));
     }
     for (node, _) in moves {
-        refresh_below(e, *node, &mut written, &mut seen);
+        refresh_below(e, *node, written, &mut seen);
     }
-    written
 }
 
 /// The record of a node whose world transform was `before` and is now what it holds; its bound
@@ -707,7 +728,7 @@ fn moved(e: &mut Engine, node: u32, before: [u32; 13]) -> Written {
     Written {
         node,
         world_before: before,
-        world_after: after,
+        world_after: Some(after),
         bound,
         bound_before,
         bound_after,
@@ -735,16 +756,30 @@ fn refresh_below(e: &mut Engine, node: u32, written: &mut Vec<Written>, seen: &m
             continue;
         }
         let before: [u32; 13] = words(e, child + NODE_WORLD);
+        written.push(Written {
+            node: child,
+            world_before: before,
+            world_after: None,
+            bound: 0,
+            bound_before: [0; 4],
+            bound_after: [0; 4],
+        });
+        let slot = written.len() - 1;
         e.call(NODE_WORLD_UPDATE, &args![child]);
-        written.push(moved(e, child, before));
+        written[slot] = moved(e, child, before);
         refresh_below(e, child, written, seen);
     }
 }
 
-/// Puts back what [`blend_for_drawing`] wrote, where it still holds what was written.
+/// Puts back what [`write_moves`] wrote, where it still holds what was written (a node the game's
+/// world update was running on when it unwound: whatever it holds).
 pub fn put_back(e: &mut Engine, written: &[Written]) {
     for w in written.iter().rev() {
-        if words::<13>(e, w.node + NODE_WORLD) == w.world_after {
+        let ours = match w.world_after {
+            None => true,
+            Some(after) => words::<13>(e, w.node + NODE_WORLD) == after,
+        };
+        if ours {
             set_words(e, w.node + NODE_WORLD, &w.world_before);
         }
         if w.bound != 0
@@ -1198,6 +1233,66 @@ mod tests {
         s.step(collision, havok, 1.0 + STEP, 1.0, 2.0);
         s.e.mem.set_u32(collision, 0x0102_0304);
         assert!(blend_for_drawing(&mut s.e).is_empty());
+    }
+
+    /// A note counts only for the drawing right after it: a body `hktoNiTransform` didn't reach
+    /// in this frame (its object may be gone, its memory used again by the same class) isn't
+    /// written.
+    #[test]
+    fn a_note_from_an_earlier_frame_writes_nothing() {
+        let mut s = Scene::new();
+        let root = s.node(0, true, 0.0);
+        let item = s.node(root, false, 0.0);
+        let (collision, havok) = s.body(item, 0.0);
+        s.step(collision, havok, 1.0, 0.0, 1.0);
+        s.step(collision, havok, 1.0 + STEP, 1.0, 2.0);
+        let written = blend_for_drawing(&mut s.e);
+        assert_eq!(written.len(), 1);
+        put_back(&mut s.e, &written);
+        assert!(blend_for_drawing(&mut s.e).is_empty());
+    }
+
+    /// The nodes go back when the game's world update on a node below the body unwinds, and
+    /// when the drawing does.
+    #[test]
+    fn an_unwind_while_writing_or_drawing_puts_everything_back() {
+        let mut s = Scene::new();
+        let root = s.node(0, true, 0.0);
+        let item = s.node(root, true, 0.0);
+        let mesh = s.node(item, false, 2.0);
+        let (collision, havok) = s.body(item, 0.0);
+        let nodes = [root, item, mesh];
+        let both = |s: &mut Scene| {
+            s.step(collision, havok, 1.0, 0.0, 1.0);
+            s.step(collision, havok, 1.0 + STEP, 1.0, 2.0);
+            s.e.call(NODE_WORLD_UPDATE, &args![mesh]);
+        };
+        both(&mut s);
+        let before: Vec<[u32; 13]> = nodes.iter().map(|n| world_of(&s.e, *n)).collect();
+        // The drawing unwinds.
+        let drew = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            draw_blended(&mut s.e, |e| {
+                assert_ne!(world_of(e, item), before[1]);
+                panic!("the drawing stops");
+            })
+        }));
+        assert!(drew.is_err());
+        for (i, n) in nodes.iter().enumerate() {
+            assert_eq!(world_of(&s.e, *n), before[i], "node {i} after the drawing");
+        }
+        // The world update on the mesh writes half its transform, then unwinds.
+        both(&mut s);
+        s.e.register(NODE_WORLD_UPDATE, |e, a| {
+            e.mem.set_f32(a[0] + NODE_WORLD + 0x24, 1234.0);
+            panic!("the world update stops");
+        });
+        let wrote = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            draw_blended(&mut s.e, |_| unreachable!())
+        }));
+        assert!(wrote.is_err());
+        for (i, n) in nodes.iter().enumerate() {
+            assert_eq!(world_of(&s.e, *n), before[i], "node {i} after the writing");
+        }
     }
 
     /// A node something else wrote during the drawing keeps that write.
