@@ -8,13 +8,15 @@
 //!
 //! Each object lives in engine memory with its vtable pointer at `+0`, each provided slot a
 //! platform function at a code address of its kind (see the `*_CODE` constants); a slot not
-//! provided stops the run as an open function. Buffers keep their contents in the game's
-//! address space (what `Lock` hands out); shaders and declarations keep the bytes the program
+//! provided stops the run as an open function. Dynamic buffers keep their contents in the
+//! game's address space (what `Lock` hands out); static ones keep them outside it and hand out
+//! a staging block while locked ([`Kept`]); shaders and declarations keep the bytes the program
 //! gave. Nothing is drawn yet.
 
 use super::d3d9::{CODE_BASE, D3DERR_INVALIDCALL, D3D_OK, E_NOINTERFACE};
 use super::d3d9device::{
-    device_add_ref, device_release, forwarded, guid, iid_is, in_scene, Word, IID_IUNKNOWN,
+    buffer_store, device_add_ref, device_release, forwarded, guid, iid_is, in_scene,
+    wait_for_present, Store, Word, IID_IUNKNOWN,
 };
 use crate::{Engine, Ptr};
 use std::collections::HashMap;
@@ -98,7 +100,9 @@ const D3DFMT_INDEX32: u32 = 102;
 const D3DRTYPE_VERTEXBUFFER: u32 = 6;
 const D3DRTYPE_INDEXBUFFER: u32 = 7;
 const D3DPOOL_MANAGED: u32 = 1;
+const D3DPOOL_SYSTEMMEM: u32 = 2;
 const D3DUSAGE_DYNAMIC: u32 = 0x200;
+const D3DLOCK_READONLY: u32 = 0x10;
 /// The token that ends a shader's function (`D3DPS_END`/`D3DVS_END`) and the stream number of
 /// `D3DDECL_END`.
 const SHADER_END: u32 = 0x0000_ffff;
@@ -118,16 +122,54 @@ const CONSTANT_SLOTS: usize = 256;
 #[derive(Debug, Clone)]
 enum Kind {
     /// A vertex or index buffer: its description words (vertex: Format, Type, Usage, Pool,
-    /// Size, FVF; index: the first five), its memory and the open locks.
+    /// Size, FVF; index: the first five), its memory in the game's address space (0 when its
+    /// bytes are `kept` outside it) and the open locks.
     Buffer {
         desc: Vec<u32>,
         bits: u32,
         locks: u32,
+        /// A static buffer's bytes kept outside the game's address space ([`Kept`]).
+        kept: Option<Kept>,
+        /// While such a buffer is locked: the staging block its first open lock handed out
+        /// (nested locks share it).
+        staging: u32,
+        /// While it is locked: whether the open locks are one lock of the whole buffer, not
+        /// read-only (its unlock then puts every byte in the real buffer).
+        whole: bool,
     },
     /// A shader's tokens (vertex or pixel by its code base).
     Shader { tokens: Vec<u8> },
     /// A vertex declaration's elements, `D3DDECL_END` included.
     Declaration { elements: Vec<u8> },
+}
+
+/// Where a static buffer (no `D3DUSAGE_DYNAMIC`) keeps its bytes between locks (ADR-0015, as
+/// texture levels do): not in the game's address space, which holds them only while the game
+/// has the buffer locked. Its first open `Lock` copies them into a block of the game's memory
+/// the buffer's size (the staging block) and answers the address of the lock's offset in it;
+/// nested locks answer into the same block; each `Unlock` sends its range to the real buffer
+/// as before, and the last copies the block back. The block is freed at the next `Present`
+/// (`super::d3d9device::wait_for_present`), so code that still reads through the lock's address
+/// just after the unlock reads the buffer's bytes. What the game sees through its locks is the
+/// same as with the bytes in its memory: the bytes (zero until written, also after
+/// `D3DLOCK_DISCARD`), the offset, nested locks, every byte written kept (a read-only lock's
+/// too); only the block's address changes from one first lock to the next, as Direct3D leaves
+/// it to the runtime. Dynamic buffers, locked many times a frame, keep their bytes in the
+/// game's memory. `NV_D3D9_BUFFERS=guest` keeps every buffer there (for comparisons),
+/// `NV_D3D9_BUFFERS=check` reads each buffer back at its last unlock and compares
+/// (`super::d3d9device::Store`).
+#[derive(Debug, Clone)]
+enum Kept {
+    /// In host memory; empty while every byte is 0.
+    Host(Vec<u8>),
+    /// In the real buffer behind this one (`NV_D3D9=real`; a managed or system-memory buffer,
+    /// which Direct3D keeps in system memory and hands back as written); `written` false while
+    /// every byte is 0. It stays here only while the real buffer holds exactly the buffer's
+    /// bytes: a lock of the whole buffer puts them all there at its unlock; after any other
+    /// lock the real buffer is read back and compared, and on a difference (bytes written
+    /// outside the locked ranges, or through a read-only lock) the bytes move to host memory.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Real { written: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +215,10 @@ pub struct Resources {
     vtables: HashMap<u32, u32>,
     objects: engine_core::AddrMap<u32, Object>,
     bindings: engine_core::AddrMap<u32, Bindings>,
+    /// `NV_D3D9_BUFFERS=check`: the last unlocks whose buffer read back the same as its staging
+    /// block, and those that did not; the bytes compared.
+    round_trips: [u64; 2],
+    round_trip_bytes: u64,
 }
 
 fn resources(e: &mut Engine) -> &mut Resources {
@@ -262,9 +308,35 @@ fn is_pool(pool: u32) -> bool {
     pool <= 3
 }
 
+/// A new buffer's bytes (`length`, zero): a block of the game's memory for a dynamic buffer
+/// (or every buffer with `NV_D3D9_BUFFERS=guest`), else kept outside it ([`Kept`]).
+fn buffer_memory(e: &mut Engine, length: u32, usage: u32) -> (u32, Option<Kept>) {
+    if usage & D3DUSAGE_DYNAMIC != 0 || buffer_store(e) == Store::Guest {
+        (e.mem.alloc(length), None)
+    } else {
+        (0, Some(Kept::Host(Vec::new())))
+    }
+}
+
+/// A managed or system-memory buffer kept in host memory, still all zero, whose real buffer
+/// exists (`NV_D3D9=real` made it): from now on the real buffer keeps its bytes.
+#[cfg(windows)]
+fn kept_by_real_buffer(e: &mut Engine, buffer: u32, pool: u32) {
+    if (pool != D3DPOOL_MANAGED && pool != D3DPOOL_SYSTEMMEM)
+        || !super::d3d9real::has_buffer(e, buffer)
+    {
+        return;
+    }
+    if let Kind::Buffer { kept, .. } = &mut object(e, Ptr::new(buffer)).kind {
+        if matches!(kept, Some(Kept::Host(v)) if v.is_empty()) {
+            *kept = Some(Kept::Real { written: false });
+        }
+    }
+}
+
 // Platform: replaces D3D9.DLL IDirect3DDevice9::CreateVertexBuffer (vtable +0x68)
 /// `CreateVertexBuffer(length, usage, FVF, pool, out, shared handle)`: a buffer of `length`
-/// bytes (zero-filled) in the game's address space. A zero length, a null out, a shared handle
+/// bytes (zero-filled), kept as [`buffer_memory`] says. A zero length, a null out, a shared handle
 /// (Direct3D 9Ex only), a pool that is no `D3DPOOL` or `D3DUSAGE_DYNAMIC` in `D3DPOOL_MANAGED`
 /// answer `D3DERR_INVALIDCALL`.
 pub(super) fn create_vertex_buffer(
@@ -283,7 +355,7 @@ pub(super) fn create_vertex_buffer(
     if usage & D3DUSAGE_DYNAMIC != 0 && pool == D3DPOOL_MANAGED {
         return D3DERR_INVALIDCALL;
     }
-    let bits = e.mem.alloc(length);
+    let (bits, kept) = buffer_memory(e, length, usage);
     let desc = vec![
         D3DFMT_VERTEXDATA,
         D3DRTYPE_VERTEXBUFFER,
@@ -300,11 +372,17 @@ pub(super) fn create_vertex_buffer(
             desc,
             bits,
             locks: 0,
+            kept,
+            staging: 0,
+            whole: false,
         },
     );
     e.mem.set_u32(out.addr(), buffer);
     #[cfg(windows)]
-    super::d3d9real::buffer_created(e, this.addr(), buffer, false, length, usage, fvf, pool);
+    {
+        super::d3d9real::buffer_created(e, this.addr(), buffer, false, length, usage, fvf, pool);
+        kept_by_real_buffer(e, buffer, pool);
+    }
     D3D_OK
 }
 
@@ -330,7 +408,7 @@ pub(super) fn create_index_buffer(
     if usage & D3DUSAGE_DYNAMIC != 0 && pool == D3DPOOL_MANAGED {
         return D3DERR_INVALIDCALL;
     }
-    let bits = e.mem.alloc(length);
+    let (bits, kept) = buffer_memory(e, length, usage);
     let desc = vec![format, D3DRTYPE_INDEXBUFFER, usage, pool, length];
     let buffer = make(
         e,
@@ -340,11 +418,17 @@ pub(super) fn create_index_buffer(
             desc,
             bits,
             locks: 0,
+            kept,
+            staging: 0,
+            whole: false,
         },
     );
     e.mem.set_u32(out.addr(), buffer);
     #[cfg(windows)]
-    super::d3d9real::buffer_created(e, this.addr(), buffer, true, length, usage, format, pool);
+    {
+        super::d3d9real::buffer_created(e, this.addr(), buffer, true, length, usage, format, pool);
+        kept_by_real_buffer(e, buffer, pool);
+    }
     D3D_OK
 }
 
@@ -483,8 +567,10 @@ fn destroy(e: &mut Engine, this: Ptr) {
             .objects
             .remove(&this.addr())
             .expect("the object");
-        if let Kind::Buffer { bits, .. } = o.kind {
+        if let Kind::Buffer { bits, staging, .. } = o.kind {
             e.mem.free(bits);
+            // A buffer destroyed while locked: its staging block goes with it.
+            e.mem.free(staging);
         }
         #[cfg(windows)]
         super::d3d9real::forget(e, this.addr());
@@ -518,19 +604,27 @@ fn get_type(e: &mut Engine, this: Ptr) -> u32 {
 /// `Lock(offset, size, data out, flags)`: the address of byte `offset` of the buffer's memory;
 /// size 0 (with offset 0) locks the whole buffer. A range past the end or a null out answers
 /// `D3DERR_INVALIDCALL`. Buffers may be locked more than once; each lock needs its `Unlock`.
-/// The flags (`D3DLOCK_DISCARD`, `D3DLOCK_NOOVERWRITE`, ...) change nothing here: the memory is
-/// the buffer's and stays.
+/// The flags (`D3DLOCK_DISCARD`, `D3DLOCK_NOOVERWRITE`, ...) change nothing here: the bytes are
+/// the buffer's and stay. A buffer kept outside the game's memory ([`Kept`]) is handed out in a
+/// staging block, one for all its open locks.
 fn lock(e: &mut Engine, this: Ptr, offset: u32, size: u32, out: Ptr, flags: u32) -> u32 {
-    let model = lock_model(e, this, offset, size, out);
+    let model = lock_model(e, this, offset, size, out, flags);
     #[cfg(windows)]
     super::d3d9real::buffer_locked(e, this.addr(), offset, size, flags, model);
-    let _ = flags;
     model
 }
 
-fn lock_model(e: &mut Engine, this: Ptr, offset: u32, size: u32, out: Ptr) -> u32 {
+fn lock_model(e: &mut Engine, this: Ptr, offset: u32, size: u32, out: Ptr, flags: u32) -> u32 {
     let o = object(e, this);
-    let Kind::Buffer { desc, bits, locks } = &mut o.kind else {
+    let Kind::Buffer {
+        desc,
+        bits,
+        locks,
+        staging,
+        whole,
+        ..
+    } = &mut o.kind
+    else {
         unreachable!("Lock is a buffer's slot")
     };
     let length = desc[4];
@@ -538,26 +632,220 @@ fn lock_model(e: &mut Engine, this: Ptr, offset: u32, size: u32, out: Ptr) -> u3
         return D3DERR_INVALIDCALL;
     }
     *locks += 1;
-    let at = *bits + offset;
-    e.mem.set_u32(out.addr(), at);
+    let base = if *bits != 0 {
+        *bits
+    } else if *locks > 1 {
+        *whole = false;
+        *staging
+    } else {
+        *whole = flags & D3DLOCK_READONLY == 0 && offset == 0 && (size == 0 || size == length);
+        stage_buffer(e, this, length)
+    };
+    e.mem.set_u32(out.addr(), base + offset);
     D3D_OK
 }
 
-/// `Unlock()`: closes a lock; a buffer not locked answers `D3DERR_INVALIDCALL`.
+/// `Unlock()`: closes a lock; a buffer not locked answers `D3DERR_INVALIDCALL`. (`NV_D3D9=real`)
+/// the lock's range goes to the real buffer; the last unlock of a buffer kept outside the
+/// game's memory takes its staging block's bytes back ([`unstage_buffer`]).
 fn unlock(e: &mut Engine, this: Ptr) -> u32 {
     let o = object(e, this);
-    let Kind::Buffer { locks, bits, desc } = &mut o.kind else {
+    let Kind::Buffer {
+        locks,
+        bits,
+        desc,
+        staging,
+        whole,
+        ..
+    } = &mut o.kind
+    else {
         unreachable!("Unlock is a buffer's slot")
     };
     if *locks == 0 {
         return D3DERR_INVALIDCALL;
     }
     *locks -= 1;
-    let (bits, length) = (*bits, desc[4]);
+    let last = *locks == 0;
+    let block = if last {
+        std::mem::take(staging)
+    } else {
+        *staging
+    };
+    let (memory, length, whole) = (if block != 0 { block } else { *bits }, desc[4], *whole);
     #[cfg(windows)]
-    super::d3d9real::buffer_unlocked(e, this.addr(), bits, length, D3D_OK);
-    let _ = (bits, length);
+    let uploaded = super::d3d9real::buffer_unlocked(e, this.addr(), memory, length, D3D_OK);
+    #[cfg(not(windows))]
+    let uploaded = false;
+    if last && block != 0 {
+        unstage_buffer(e, this, block, length, whole && uploaded);
+    }
+    let _ = (memory, uploaded);
     D3D_OK
+}
+
+/// The buffer at `this` of this module: its stored bytes, mutable.
+fn kept_of(e: &mut Engine, this: Ptr) -> &mut Option<Kept> {
+    match &mut object(e, this).kind {
+        Kind::Buffer { kept, .. } => kept,
+        _ => unreachable!("a buffer"),
+    }
+}
+
+/// The first open lock of a buffer kept outside the game's memory: a staging block of the game's
+/// memory (zeroed, the buffer's `length`) takes the buffer's bytes; its address, kept until the
+/// last unlock.
+fn stage_buffer(e: &mut Engine, this: Ptr, length: u32) -> u32 {
+    let block = e.mem.alloc(length);
+    let o = state!(e)
+        .graphics
+        .device_objects
+        .resources
+        .objects
+        .get_mut(&this.addr())
+        .expect("the buffer");
+    let Kind::Buffer { kept, staging, .. } = &mut o.kind else {
+        unreachable!("a buffer")
+    };
+    *staging = block;
+    let from_real = match kept {
+        Some(Kept::Host(bytes)) => {
+            if !bytes.is_empty() {
+                e.mem.write(block, bytes);
+            }
+            false
+        }
+        Some(Kept::Real { written }) => *written,
+        None => unreachable!("a buffer kept outside"),
+    };
+    #[cfg(windows)]
+    if from_real {
+        let Some(bytes) = super::d3d9real::read_buffer(e, this.addr(), length) else {
+            panic!(
+                "IDirect3DVertexBuffer9/IndexBuffer9::Lock: the real buffer {:#x} could not be \
+                 read back (not provided)",
+                this.addr()
+            );
+        };
+        e.mem.write(block, &bytes);
+    }
+    let _ = from_real;
+    block
+}
+
+/// The last unlock of a buffer kept outside the game's memory: the staging block's bytes are kept
+/// (in host memory, or by the real buffer when it holds exactly them: `whole_uploaded` says
+/// the unlock put the whole block there, otherwise the real buffer is read back and compared),
+/// and the block waits for the next `Present` to be freed
+/// (`super::d3d9device::wait_for_present`). With `NV_D3D9_BUFFERS=check` the store is read back
+/// and compared with the block, and the block compared again when it is freed.
+fn unstage_buffer(e: &mut Engine, this: Ptr, block: u32, length: u32, whole_uploaded: bool) {
+    let check = buffer_store(e) == Store::Check;
+    let o = state!(e)
+        .graphics
+        .device_objects
+        .resources
+        .objects
+        .get_mut(&this.addr())
+        .expect("the buffer");
+    let Kind::Buffer { kept, .. } = &mut o.kind else {
+        unreachable!("a buffer")
+    };
+    let compare = match kept {
+        Some(Kept::Real { written }) if whole_uploaded => {
+            *written = true;
+            None
+        }
+        Some(Kept::Real { written }) => Some(*written),
+        Some(Kept::Host(bytes)) => {
+            bytes.resize(length as usize, 0);
+            e.mem.read(block, bytes);
+            None
+        }
+        None => unreachable!("a staged buffer"),
+    };
+    if let Some(written) = compare {
+        let now = e.mem.bytes(block, length);
+        *kept_of(e, this) = if !written && now.iter().all(|&b| b == 0) {
+            // Still all zero.
+            Some(Kept::Real { written: false })
+        } else if real_bytes(e, this, length).as_deref() == Some(&now[..]) {
+            Some(Kept::Real { written: true })
+        } else {
+            // The real buffer lacks bytes written outside the uploaded ranges: they stay in host
+            // memory from now on.
+            Some(Kept::Host(now))
+        };
+    }
+    let held = if check {
+        check_buffer_round_trip(e, this, block, length)
+    } else {
+        Vec::new()
+    };
+    wait_for_present(e, (block, this.addr(), length, held, true));
+}
+
+/// The bytes of the real buffer behind `this` (none without one).
+#[cfg(windows)]
+fn real_bytes(e: &mut Engine, this: Ptr, length: u32) -> Option<Vec<u8>> {
+    super::d3d9real::read_buffer(e, this.addr(), length)
+}
+
+#[cfg(not(windows))]
+fn real_bytes(_e: &mut Engine, _this: Ptr, _length: u32) -> Option<Vec<u8>> {
+    None
+}
+
+/// `NV_D3D9_BUFFERS=check`, at a last unlock: the buffer read back from where it keeps its bytes
+/// and compared with the staging block; the block's bytes, to compare again when it is freed.
+fn check_buffer_round_trip(e: &mut Engine, this: Ptr, block: u32, length: u32) -> Vec<u8> {
+    let held = e.mem.bytes(block, length);
+    let stored = match kept_of(e, this).clone() {
+        Some(Kept::Host(bytes)) if bytes.is_empty() => vec![0; length as usize],
+        Some(Kept::Host(bytes)) => bytes,
+        Some(Kept::Real { written: false }) => vec![0; length as usize],
+        Some(Kept::Real { written: true }) => real_bytes(e, this, length).unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let same = stored == held;
+    let r = resources(e);
+    r.round_trips[usize::from(!same)] += 1;
+    r.round_trip_bytes += u64::from(length);
+    let [same_count, differ] = r.round_trips;
+    let mb = r.round_trip_bytes >> 20;
+    if !same {
+        eprintln!(
+            "NV_D3D9_BUFFERS=check: the buffer {:#x} kept other bytes than its lock handed back \
+             ({length} bytes)",
+            this.addr()
+        );
+    }
+    if (same_count + differ) % 2000 == 0 {
+        let (mut real, mut host, mut guest) = ([0u64; 2], [0u64; 2], [0u64; 2]);
+        for o in resources(e).objects.values() {
+            if let Kind::Buffer { desc, kept, .. } = &o.kind {
+                let count = match kept {
+                    Some(Kept::Real { .. }) => &mut real,
+                    Some(Kept::Host(_)) => &mut host,
+                    None => &mut guest,
+                };
+                count[0] += 1;
+                count[1] += u64::from(desc[4]);
+            }
+        }
+        eprintln!(
+            "NV_D3D9_BUFFERS=check: {} last unlocks ({mb} MB) read back from where the buffers \
+             keep them: {differ} differ; buffers now kept by real buffers {} ({} MB), in host \
+             memory {} ({} MB), in the game's memory {} ({} MB, dynamic)",
+            same_count + differ,
+            real[0],
+            real[1] >> 20,
+            host[0],
+            host[1] >> 20,
+            guest[0],
+            guest[1] >> 20
+        );
+    }
+    held
 }
 
 /// `GetDesc(out)`: `D3DVERTEXBUFFER_DESC` (6 words) or `D3DINDEXBUFFER_DESC` (5 words).
@@ -1029,6 +1317,29 @@ impl super::d3d9device::Objects {
     #[cfg(test)]
     pub(super) fn resources_hold(&self, object: u32) -> bool {
         self.resources.objects.contains_key(&object)
+    }
+
+    /// Where a buffer keeps its bytes (tests): "guest", "host", "real" or "real, zero"; and
+    /// `NV_D3D9_BUFFERS=check`'s last unlocks read back the same and differing.
+    #[cfg(test)]
+    pub(super) fn buffer_kept(&self, buffer: u32) -> (&'static str, [u64; 2]) {
+        let kept = match &self.resources.objects[&buffer].kind {
+            Kind::Buffer { kept: None, .. } => "guest",
+            Kind::Buffer {
+                kept: Some(Kept::Host(_)),
+                ..
+            } => "host",
+            Kind::Buffer {
+                kept: Some(Kept::Real { written: true }),
+                ..
+            } => "real",
+            Kind::Buffer {
+                kept: Some(Kept::Real { written: false }),
+                ..
+            } => "real, zero",
+            _ => "no buffer",
+        };
+        (kept, self.resources.round_trips)
     }
 }
 
