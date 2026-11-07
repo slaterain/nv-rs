@@ -150,8 +150,44 @@ mod tests {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
-    /// `ItemModMenu::pMe`: left 0, so the menu's rebuild (`InitItemModMenu`) does nothing here.
+    /// `ItemModMenu::pMe`.
     const ITEM_MOD_MENU: u32 = 0x011d_9f54;
+    /// What the menu's rebuild (`InitItemModMenu` with its `Update`) calls, answered 0: the
+    /// item's health, tile traits, the form's type, settings' strings, the armour rating and its
+    /// rounding, the icon, the mod slots, the mod group list, the string comparison, the sort,
+    /// the gamepad test, the interface calls and the tutorial.
+    const REBUILD_STUBS: [u32; 22] = [
+        0x004b_cdb0,
+        0x00a0_12d0,
+        0x0070_0320,
+        0x0040_1170,
+        0x0040_3df0,
+        0x00a0_1350,
+        0x004b_e060,
+        0x00ec_62c0,
+        0x0064_6360,
+        0x0047_6b20,
+        0x004b_e200,
+        0x004b_d820,
+        0x0096_a2d0,
+        0x004d_4ca0,
+        0x0040_8b20,
+        0x0046_ffb0,
+        0x00a0_3da0,
+        0x0073_14c0,
+        0x004b_71d0,
+        0x0070_46f0,
+        0x004b_7210,
+        0x0071_8630,
+    ];
+    /// The menu's and its list's virtual calls in the rebuild (test vtables): the menu's `+0x10`,
+    /// the list's `+0x1c` and `+0x20`.
+    const MENU_SLOT_10: u32 = 0x00c4_0010;
+    const LIST_SLOT_1C: u32 = 0x00c3_001c;
+    const LIST_SLOT_20: u32 = 0x00c3_0020;
+    /// `100.0`, the full health the rebuild divides by.
+    const FULL_HEALTH: u32 = 0x0101_7a40;
+    type Log = Vec<(u32, Vec<u32>)>;
     /// What `ItemModItem` calls on the way to fitting a mod to a single weapon (the translation's
     /// own test, `fitting_a_mod_to_a_single_weapon`).
     const ITEM_OBJECT: u32 = 0x0044_ddc0;
@@ -204,20 +240,30 @@ mod tests {
 
     /// Clicks an enabled mod entry (`0x8000`) of the menu modifying a single weapon (`0x7000`).
     /// The removal deletes the mod's extra list; `GetWorn` reads it, and after the removal answers
-    /// "yes" (a released block taken again). Answers, for each worn question, whether it read the
-    /// released block, and the calls of the equipment update and the inventory rebuild.
-    fn fit(fixes: bool) -> (Vec<bool>, usize, usize) {
+    /// "yes" (a released block taken again), or always `always` when given. Answers, for each worn
+    /// question, whether it read the released block, the calls of the equipment update and the
+    /// inventory rebuild, and every call the click made, in order.
+    fn click(fixes: bool, always: Option<bool>) -> (Vec<bool>, usize, usize, Log) {
         let mut e = Engine::new();
         if fixes {
             install(&mut e);
         }
-        for page in [ITEM_MOD_MENU, PLAYER, ENABLED_ALPHA] {
+        for page in [ITEM_MOD_MENU, PLAYER, ENABLED_ALPHA, FULL_HEALTH] {
             e.map(page & !0xfff, 0x1000);
         }
+        e.mem.set_f64(FULL_HEALTH, 100.0);
         let this = e.mem.alloc(0x90);
+        let menu_vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(this, menu_vtable);
+        e.mem.set_u32(menu_vtable + 0x10, MENU_SLOT_10);
+        e.set_global(ITEM_MOD_MENU, this);
         let list_vtable = e.mem.alloc(0x40);
         e.mem.set_u32(this + MOD_LIST, list_vtable);
         e.mem.set_u32(list_vtable + 4, LIST_HIGHLIGHTED);
+        e.mem.set_u32(list_vtable + 0x1c, LIST_SLOT_1C);
+        e.mem.set_u32(list_vtable + 0x20, LIST_SLOT_20);
+        stub(&mut e, &REBUILD_STUBS);
+        stub(&mut e, &[MENU_SLOT_10, LIST_SLOT_1C, LIST_SLOT_20]);
         let player = e.mem.alloc(0x10);
         let player_vtable = e.mem.alloc(0x400);
         e.mem.set_u32(player, player_vtable);
@@ -268,7 +314,7 @@ mod tests {
             assert_eq!(a[..2], [0x8000, 0]);
             log.borrow_mut().push(r.get());
             Ret {
-                eax: u32::from(r.get()),
+                eax: u32::from(always.unwrap_or(r.get())),
                 ..Ret::default()
             }
         });
@@ -298,7 +344,13 @@ mod tests {
             reads,
             calls_to(&e, PLAYER_UPDATE_EQUIPMENT),
             calls_to(&e, UPDATE_INVENTORY_MENU),
+            e.call_log.take().unwrap(),
         )
+    }
+
+    fn fit(fixes: bool) -> (Vec<bool>, usize, usize) {
+        let (reads, updates, rebuilds, _) = click(fixes, None);
+        (reads, updates, rebuilds)
     }
 
     /// The fixes preset asks before the removal: no released block is read, and the answer, the
@@ -313,6 +365,45 @@ mod tests {
     #[test]
     fn vanilla_asks_after_the_removal() {
         assert_eq!(fit(false), (vec![true], 1, 1));
+    }
+
+    /// The fix's copy of the click makes the translation's calls, addresses and arguments in
+    /// order (the lookups, the fitting, the removal, the sound, the list removal, the menu's
+    /// rebuild and, on a "yes", the equipment update and the inventory rebuild); only the worn
+    /// question moves, to just before the removal.
+    #[test]
+    fn fixes_make_the_translations_calls_with_only_the_question_moved() {
+        let at = |log: &Log, callee: u32| log.iter().position(|(a, _)| *a == callee).unwrap();
+        for worn in [false, true] {
+            let (_, _, _, fixed) = click(true, Some(worn));
+            let (_, _, _, vanilla) = click(false, Some(worn));
+            assert_eq!(at(&fixed, ITEM_GET_WORN) + 1, at(&fixed, PLAYER_REMOVE));
+            assert!(at(&vanilla, ITEM_GET_WORN) > at(&vanilla, LIST_REMOVE_ITEM));
+            let without_question = |log: &Log| {
+                let mut log = log.clone();
+                log.remove(at(&log, ITEM_GET_WORN));
+                log
+            };
+            assert_eq!(without_question(&fixed), without_question(&vanilla));
+            // The whole click is in the sequence.
+            for callee in [
+                WORD_AT_FOUR_007B5370,
+                GET_FLOAT_TRAIT,
+                LIST_SELECTED_ITEM,
+                GET_INVENTORY_CHANGES,
+                PLAYER_REMOVE,
+                SOUND_PLAY,
+                LIST_REMOVE_ITEM,
+                0x0073_14c0,
+                0x0071_8630,
+            ] {
+                at(&vanilla, callee);
+            }
+            assert_eq!(
+                vanilla.iter().any(|(a, _)| *a == UPDATE_INVENTORY_MENU),
+                worn
+            );
+        }
     }
 
     /// The other clicks are the translation's: the close button without a weapon to re-equip
