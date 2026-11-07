@@ -339,6 +339,7 @@ pub struct Diff {
     stop_cases: Option<StopCases>,
     stack_bytes: u32,
     nan_payloads: bool,
+    max_calls: usize,
 }
 
 impl Diff {
@@ -359,6 +360,7 @@ impl Diff {
             max_cases: 512,
             stop_cases: None,
             stack_bytes: 64,
+            max_calls: DEFAULT_MAX_CALLS,
             nan_payloads: false,
         }
     }
@@ -412,8 +414,11 @@ impl Diff {
     }
 
     /// Callees the translation calls and the typed version does not call at all, because it does
-    /// their work in its own body with no call: left out of the translation's calls. The typed
-    /// version calling one still shows, with its words. For a function it reaches as a function,
+    /// their work in its own body with no call: left out of the translation's calls at every depth,
+    /// with the calls made under them (a typed callee does their work in place too). Below the
+    /// function's own level they are left out of the typed version's calls as well, so a callee both
+    /// sides run that calls one compares alike; the typed version's own call to one still shows, with
+    /// its words. For a function it reaches as a function,
     /// write `typed_call!`, which the comparison sees through: the hygiene test bans a plain Rust
     /// call to a registered function in typed code. An overridable address can't be listed
     /// (`data/overridable.tsv`): a fix replacing it would never run.
@@ -426,9 +431,11 @@ impl Diff {
     }
 
     /// Callees the translation reaches with a plain Rust call, which isn't logged, and the typed
-    /// version with `e.call` or `typed_call!`, which is: left out of the typed version's calls. Their
-    /// own outgoing calls and what they do to memory still compare, but the words of the listed call
-    /// can't, since one side has no record of them: a wrong word shows only by what it changes.
+    /// version with `e.call` or `typed_call!`, which is: left out of both sides' calls at every depth
+    /// (one translation reaches it plainly, another by address). Their own outgoing calls and what
+    /// they do to memory still compare, but the words of the listed call can't, since one side may
+    /// have no record of them: a wrong word, or a call the typed version lacks, shows only by what it
+    /// changes.
     ///
     /// The real function has to run on both sides, so the setup may not replace one that is registered
     /// ([`Diff::run`] stops): a double would run on the typed side only. An overridable address can't be
@@ -480,6 +487,14 @@ impl Diff {
     /// setup lacks.
     pub fn expect_stops(mut self, on: impl Fn(&Case) -> bool + 'static) -> Diff {
         self.stop_cases = Some(Box::new(on));
+        self
+    }
+
+    /// The most calls one run may make (100,000 by default, the direct `typed_call!`s noted with
+    /// them): past it the run stops with "call budget spent", so a wrong version that loops for
+    /// good shows as a stop on its side, not as a log that grows until the machine runs out.
+    pub fn max_calls(mut self, n: usize) -> Diff {
+        self.max_calls = n;
         self
     }
 
@@ -704,6 +719,7 @@ impl Diff {
         RECORDING.with(|r| {
             *r.borrow_mut() = Some(Recording {
                 calls: Vec::new(),
+                max_calls: self.max_calls,
                 stack_bytes: self.stack_bytes,
                 nan_payloads: self.nan_payloads,
                 local_words: self.local_words.clone(),
@@ -849,11 +865,19 @@ struct Seen {
     clock: (u32, u32),
     /// A direct `typed_call!`, noted, not a call by address.
     direct: bool,
+    /// How many calls by address were running when it started: the function under test is the
+    /// first call, and its own calls are one deeper.
+    depth: usize,
 }
+
+/// [`Diff::max_calls`]'s default.
+const DEFAULT_MAX_CALLS: usize = 100_000;
 
 /// What the running side has seen so far ([`record_call`]).
 struct Recording {
     calls: Vec<Seen>,
+    /// [`Diff::max_calls`].
+    max_calls: usize,
     stack_bytes: u32,
     nan_payloads: bool,
     local_words: Vec<LocalWord>,
@@ -880,6 +904,10 @@ fn record_call(e: &mut Engine, addr: u32, returning: bool) {
     };
     RECORDING.with(|r| {
         if let Some(recording) = &mut *r.borrow_mut() {
+            if recording.calls.len() >= recording.max_calls {
+                let limit = recording.max_calls;
+                panic!("call budget spent: more than {limit} calls in one run (at {addr:08x})");
+            }
             let seen = seen_call(e, addr, words, recording);
             recording.calls.push(seen);
         }
@@ -936,6 +964,7 @@ fn seen_call(e: &Engine, addr: u32, words: &[u32], recording: &mut Recording) ->
         memory: memory_hash(e, stack, recording.nan_payloads, loose),
         clock: (e.clock_ms, e.clock_us),
         direct: e.typed_noted_direct(),
+        depth: e.call_stack.len(),
     }
 }
 
@@ -1095,10 +1124,31 @@ impl Side {
     }
 }
 
+/// `calls` without each call `drop` names and the calls made under it (the deeper ones that follow
+/// it, up to the next at its depth or above).
+fn without_subtrees(calls: &[Seen], drop: impl Fn(&Seen) -> bool) -> Vec<&Seen> {
+    let mut out = Vec::with_capacity(calls.len());
+    let mut skipping: Option<usize> = None;
+    for c in calls {
+        if let Some(depth) = skipping {
+            if c.depth > depth {
+                continue;
+            }
+            skipping = None;
+        }
+        if drop(c) {
+            skipping = Some(c.depth);
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Compares the two sides' calls, in order: the first that differs in address or words, and the
 /// first with different memory or clock at the moment of the call, before that. `ignored` calls
-/// come out of the first side only, the translation's, and `plain` calls out of the second, the typed
-/// version's.
+/// come out as [`Diff::ignore_calls`] says, and `plain` calls (not what they call) out of both, at
+/// every depth.
 fn compare_calls(
     a: &Side,
     b: &Side,
@@ -1106,16 +1156,23 @@ fn compare_calls(
     plain: &[u32],
     found: &mut impl FnMut(Found),
 ) {
-    let a_calls: Vec<&Seen> = a
-        .calls
-        .iter()
-        .filter(|c| !ignored.contains(&c.addr))
-        .collect();
-    let b_calls: Vec<&Seen> = b
-        .calls
-        .iter()
+    // The translation: an ignored call at any depth, with every call made under it (a typed version
+    // does a helper's work in place, and a typed callee does too). The typed version: an ignored call
+    // below its own level, with what it calls, so a callee both sides run that calls one compares
+    // alike, while its own call to one still shows. A plain callee's call (not what it calls) on both
+    // sides at every depth: one translation reaches it plainly, another by address, and the typed
+    // side by address; what it does still compares.
+    let a_calls: Vec<&Seen> = without_subtrees(&a.calls, |c| ignored.contains(&c.addr))
+        .into_iter()
         .filter(|c| !plain.contains(&c.addr))
         .collect();
+    let b_top = b.calls.first().map_or(0, |c| c.depth);
+    let b_calls: Vec<&Seen> = without_subtrees(&b.calls, |c| {
+        ignored.contains(&c.addr) && c.depth > b_top + 1
+    })
+    .into_iter()
+    .filter(|c| !plain.contains(&c.addr))
+    .collect();
     let same = |x: &Seen, y: &Seen| x.addr == y.addr && x.words == y.words;
     let at = a_calls
         .iter()
@@ -2391,6 +2448,74 @@ mod tests {
         assert!(matches!(report.first[0].what, Found::Clock { .. }));
     }
 
+    /// An ignored callee goes with what it calls: the translation's helper calls an inner function,
+    /// which the typed version, doing the helper's work in place, doesn't call either. Called by a
+    /// callee both sides run, the ignored address is left out on both sides, so they compare alike;
+    /// a deeper call the typed side alone makes still shows.
+    #[test]
+    fn ignore_calls_takes_what_the_callee_calls_and_deeper_calls_on_both_sides() {
+        const MIDDLE: u32 = 0x0040_3010;
+        const INNER: u32 = 0x0040_3020;
+        fn calling(e: &mut Engine, a: u32) {
+            e.call(CALLEE, &[a]);
+            e.call(MIDDLE, &[a]);
+        }
+        fn in_place(e: &mut Engine, a: u32) {
+            e.call(MIDDLE, &[a]);
+        }
+        fn twice(e: &mut Engine, a: u32) {
+            e.call(MIDDLE, &[a]);
+            e.call(MIDDLE, &[a]);
+        }
+        let run = |typed: AbiFn| {
+            Diff::new((0x0040_2000, typed))
+                .translation(crate::entry!(0x0040_2000, calling(u32)).1)
+                .inputs(&[Input::Of(&[1])])
+                .control_words(&[OTHER_THREADS])
+                .setup(|e, case| {
+                    // The helper calls the inner function; the middle one, run by both, the helper.
+                    e.register(CALLEE, |e, a| e.call(INNER, &[a[0] + 2]));
+                    e.register(INNER, |_, _| Ret::default());
+                    e.register(MIDDLE, |e, a| e.call(CALLEE, &[a[0] + 1]));
+                    case.words()
+                })
+                .ignore_calls(&[CALLEE])
+                .run()
+        };
+        let report = run(crate::entry!(0x0040_2000, in_place(u32)).1);
+        assert!(report.is_same(), "{report}");
+        let report = run(crate::entry!(0x0040_2000, twice(u32)).1);
+        assert!(!report.is_same(), "{report}");
+    }
+
+    /// A typed version that never stops calling is stopped by the call budget on its side, and the
+    /// run reports it, rather than growing its log without end.
+    #[test]
+    fn a_runaway_typed_version_is_stopped_by_the_call_budget() {
+        fn calls_once(e: &mut Engine) {
+            e.call(CALLEE, &[1]);
+        }
+        fn calls_for_good(e: &mut Engine) {
+            loop {
+                e.call(CALLEE, &[1]);
+            }
+        }
+        let report = Diff::new(crate::entry!(0x0040_2000, calls_for_good()))
+            .translation(crate::entry!(0x0040_2000, calls_once()).1)
+            .control_words(&[OTHER_THREADS])
+            .max_calls(1000)
+            .setup(|e, _| {
+                e.register(CALLEE, |_, _| Ret::default());
+                vec![]
+            })
+            .run();
+        assert!(!report.is_same(), "{report}");
+        assert!(
+            report.first.iter().any(|d| matches!(&d.what, Found::Stop { typed: Some(s), .. } if s.contains("call budget spent"))),
+            "{report}"
+        );
+    }
+
     /// An ignored callee the typed version still calls shows, with its words.
     #[test]
     fn ignore_calls_does_not_hide_a_callee_still_called() {
@@ -2925,10 +3050,10 @@ mod tests {
         assert_eq!(report.direct_calls, usize::from(cfg!(debug_assertions)));
     }
 
-    /// `translation_calls_plainly` drops the typed side only: the translation logging the call
-    /// (it isn't plain after all) still differs when the typed version doesn't make it.
+    /// `translation_calls_plainly` drops the call on both sides, at every depth: a typed version that
+    /// doesn't make it still differs by what the callee does.
     #[test]
-    fn translation_calls_plainly_drops_the_typed_side_only() {
+    fn translation_calls_plainly_leaves_what_the_callee_does_compared() {
         fn calls_by_address(e: &mut Engine) {
             e.call(CALLEE, &[1]);
         }
@@ -2938,12 +3063,16 @@ mod tests {
             .translation_calls_plainly(&[CALLEE])
             .control_words(&[OTHER_THREADS])
             .setup(|e, _| {
-                e.register(CALLEE, |_, _| Ret::default());
+                e.map(0x0200_0000, 0x10);
+                e.register(CALLEE, |e, _| {
+                    e.mem.set_u32(0x0200_0000, 5);
+                    Ret::default()
+                });
                 vec![]
             })
             .run();
         assert_eq!(report.found, 1, "{report}");
-        assert!(matches!(report.first[0].what, Found::Call { .. }));
+        assert!(matches!(report.first[0].what, Found::Memory { .. }));
     }
 
     #[test]
