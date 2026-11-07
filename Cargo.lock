@@ -381,6 +381,7 @@ dependencies = [
  "engine",
  "engine-platform",
  "esm",
+ "nvse",
  "play-patch",
 ]
 
@@ -398,6 +399,13 @@ dependencies = [
 [[package]]
 name = "nvinspect"
 version = "0.1.0"
+
+[[package]]
+name = "nvse"
+version = "0.1.0"
+dependencies = [
+ "engine-core",
+]
 
 [[package]]
 name = "play-patch"
