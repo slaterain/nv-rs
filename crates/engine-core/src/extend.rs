@@ -909,7 +909,10 @@ mod tests {
         e.ext::<Slot>().0 = 7;
         let mut t = engine();
         t.register(0x0000_1300, callee);
-        t.register(0x0000_1100, e.callable_at(0x0000_1100).and_then(Result::ok).unwrap());
+        t.register(
+            0x0000_1100,
+            e.callable_at(0x0000_1100).and_then(Result::ok).unwrap(),
+        );
         t.extend = e.extend.for_thread();
         assert_eq!(t.call(0x0000_1100, &[3]).eax, 2062);
         assert_eq!(marks(&t), b"jnbNJ");

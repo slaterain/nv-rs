@@ -149,6 +149,16 @@ impl Host {
         // Diagnostics: with `NV_MOVE_PROBE` set, start-up's `__mtinit` and `NiInit` are probe
         // runs too (they go on past misses with zero results and record them all).
         movement.probe = std::env::var_os("NV_MOVE_PROBE").is_some();
+        // `NV_THREADS=real` (off by default): the game's threads run side by side from the C
+        // runtime's start-up on, as on Windows (the game makes one before `main`),
+        // each on its own core (`engine::real_threads`); a diagnostic keeps them stepped. Only
+        // with the game's own `main`.
+        if engine.kernel.threads.scheme.real && engine.is_translated(WIN_MAIN) {
+            match engine::real_threads::start(&mut engine) {
+                Ok(()) => eprintln!("threads: real (NV_THREADS=real)"),
+                Err(why) => eprintln!("{why}"),
+            }
+        }
         start_crt_heap(&mut engine, &mut movement);
         start_crt_threads(&mut engine, &mut movement);
         start_crt_io(&mut engine, &mut movement);
@@ -168,14 +178,6 @@ impl Host {
             // The game's own `main` (`WinMain`, after the CRT start-up above) as its main
             // thread: `NiInit`, the INI files, the window, `Main`, the renderer, the scene
             // graph, the world, then its message loop, one frame per `Host::main_frame`.
-            // `NV_THREADS=real` (off by default): the game's threads run side by side from here,
-            // each on its own core (`engine::real_threads`); a diagnostic keeps them stepped.
-            if engine.kernel.threads.scheme.real {
-                match engine::real_threads::start(&mut engine) {
-                    Ok(()) => eprintln!("threads: real (NV_THREADS=real)"),
-                    Err(why) => eprintln!("{why}"),
-                }
-            }
             movement.start_main(&mut engine);
             None
         } else {

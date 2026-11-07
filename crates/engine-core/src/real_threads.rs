@@ -532,7 +532,9 @@ impl Ctx {
 /// Turns real threads on for `e`, before the game makes its threads (the host, before the
 /// game's `main`): its memory becomes shared, the synchronisation imports become real ones, the
 /// other platform functions go behind the kernel lock, and `e` becomes the main thread's engine.
-/// Refused (stepped threads stay) while a diagnostic is on, or once the game made threads.
+/// Refused (stepped threads stay) while a diagnostic is on, or once a game thread ran stepped; a
+/// thread made earlier that has not run yet starts here, on its own OS thread (one made suspended
+/// starts when resumed).
 pub fn start(e: &mut Engine) -> Result<(), String> {
     if e.real.is_some() {
         return Ok(());
@@ -543,8 +545,14 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
         ));
     }
     crate::thread_host::ensure_main(e);
-    if e.kernel.threads.list.len() > 1 {
-        return Err("NV_THREADS=real: the game made threads already (they run stepped)".into());
+    if let Some(t) = e.kernel.threads.list[1..]
+        .iter()
+        .find(|t| t.state != crate::thread_host::RunState::NotStarted)
+    {
+        return Err(format!(
+            "NV_THREADS=real: game thread {} (start {:08x}) ran stepped already (they run stepped)",
+            t.id, t.start
+        ));
     }
     // No time slices and no wakes: the threads run beside each other.
     e.slice_hook = None;
@@ -586,6 +594,11 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
         e.thread_context(ctx.expect("the main thread's context"))
     };
     *guard(&world.template) = Some(SendEngine(Box::new(template)));
+    for i in 1..e.kernel.threads.list.len() {
+        if e.kernel.threads.list[i].suspend_count == 0 {
+            start_thread(e, i);
+        }
+    }
     Ok(())
 }
 
@@ -1313,6 +1326,34 @@ mod tests {
             assert_eq!(e.mem.u32(code), 1, "thread {k} kept its own values");
         }
         assert_eq!(e.call(slot("GetCurrentThreadId"), &[]).eax, MAIN_THREAD_ID);
+    }
+
+    /// A thread the game made before real threads started, not run yet, starts real with them.
+    #[test]
+    fn a_thread_made_before_the_start_runs_real() {
+        fn mark(e: &mut Engine, a: &[u32]) -> Ret {
+            e.mem.set_u32(a[0], 0x5a5a);
+            Ret {
+                eax: 9,
+                ..Ret::default()
+            }
+        }
+        let (mut e, slot) = engine_with_imports();
+        e.register(0x0040_4000, mark);
+        let p = e.mem.alloc(4);
+        let h = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0040_4000u32, p, 0u32, 0u32],
+            )
+            .eax;
+        assert_ne!(h, 0);
+        start(&mut e).expect("real threads on");
+        let waited = e
+            .call(slot("WaitForSingleObject"), &args![h, 0xffff_ffffu32])
+            .eax;
+        assert_eq!(waited, 0, "the thread ended");
+        assert_eq!(e.mem.u32(p), 0x5a5a);
     }
 
     /// A diagnostic keeps real threads off.
