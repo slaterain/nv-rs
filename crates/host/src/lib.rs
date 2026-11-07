@@ -112,7 +112,8 @@ impl Host {
         // blocking call (a wait or sleep; 50 slices at most) and game threads' timed waits
         // time out. `NV_THREADS=slice` keeps the scheme before; `NV_THREADS=` with any of
         // `nowake`, `platformcall` (slices end at any platform call) or `anycall`, `notimeout`
-        // changes parts.
+        // changes parts; `shuffle:SEED` draws the switch points from a seed (the race tests);
+        // `real` runs the threads side by side instead (started before `main`, below).
         engine.kernel.threads.scheme =
             engine::thread_host::Scheme::from_name(std::env::var("NV_THREADS").ok().as_deref())?;
         if let Some(delay) = std::env::var("NV_WAKE_DELAY")
@@ -167,6 +168,14 @@ impl Host {
             // The game's own `main` (`WinMain`, after the CRT start-up above) as its main
             // thread: `NiInit`, the INI files, the window, `Main`, the renderer, the scene
             // graph, the world, then its message loop, one frame per `Host::main_frame`.
+            // `NV_THREADS=real` (off by default): the game's threads run side by side from here,
+            // each on its own core (`engine::real_threads`); a diagnostic keeps them stepped.
+            if engine.kernel.threads.scheme.real {
+                match engine::real_threads::start(&mut engine) {
+                    Ok(()) => eprintln!("threads: real (NV_THREADS=real)"),
+                    Err(why) => eprintln!("{why}"),
+                }
+            }
             movement.start_main(&mut engine);
             None
         } else {

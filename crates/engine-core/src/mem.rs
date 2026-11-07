@@ -33,10 +33,11 @@
 //! on every access, and measured slower than the old page table on random
 //! loads and stores.)
 //!
-//! Threads (ADR-0015's real threads, step R1 of the migration): every
-//! guest load and store takes `&self`, so a later thread host can let
-//! several threads use one [`Mem`]. `Mem` is `Send`, not `Sync`: the one
-//! deliberate sharing point goes in the thread host, with the rules below.
+//! Threads (ADR-0015's real threads, `crate::real_threads`): every guest
+//! load and store takes `&self`. `Mem` is `Send`, not `Sync`: with real
+//! threads no `Mem` is shared; each thread's engine holds its own view
+//! ([`Mem::start_sharing`], [`Mem::view`]) of one shared guest space, with
+//! the rules below.
 //! - The table of mapped pages changes only through `&mut self`
 //!   ([`Mem::map`], [`Mem::unmap`], and the heap, which maps), so with
 //!   threads stepped no guest access runs during a change, and the page
@@ -45,9 +46,15 @@
 //!   `&self`): it runs with stepped threads only. `&mut` is not the
 //!   stop-the-world real threads need: a parked thread still holds its
 //!   `&Engine`, and the compiler keeps `Mem`'s base and diagnostics flag in
-//!   registers across stores. Real threads change the table with raw stores
-//!   through `&self` at a barrier, with `Mem`'s changing fields and the heap
-//!   behind locks.
+//!   registers across stores. So with real threads a view's own fields
+//!   (`base`, the diagnostics flags) never change after it is made, and
+//!   every change of the table and the heap is made on the shared `Mem`
+//!   (its own fields, through a raw pointer) under one lock. Mapping is
+//!   safe while other threads run (the pages are committed before the table
+//!   says so); handing pages back to the system is not (another thread may
+//!   be between its page test and its access), so the shared `Mem` keeps
+//!   unmapped pages committed and hands them back only at the thread host's
+//!   barrier ([`Mem::hand_back_deferred`]).
 //! - Guest values are plain host loads and stores through raw pointers, the
 //!   same instructions as the exe's own `mov`s, not atomics: an atomic needs
 //!   an aligned address, and a guest address's alignment is known only at
@@ -449,6 +456,9 @@ compile_error!("guest memory: no virtual memory calls for this host");
 struct Space {
     /// The host address of guest address 0.
     base: *mut u8,
+    /// Whether this `Space` releases the block when dropped: false for a real thread's view of
+    /// the shared memory ([`Mem::view`]), whose block the shared `Mem` owns.
+    owned: bool,
 }
 
 // SAFETY: a `Space` owns its block alone, as a `Box` owns its allocation: no other value holds
@@ -485,6 +495,7 @@ impl Space {
         unsafe { host::commit(block, TABLE) };
         Space {
             base: block.wrapping_add(TABLE),
+            owned: true,
         }
     }
 
@@ -498,9 +509,34 @@ impl Space {
 
 impl Drop for Space {
     fn drop(&mut self) {
+        if !self.owned {
+            return;
+        }
         // SAFETY: the block (which starts with the table) is this `Space`'s own, and nothing uses
         // it after this.
         unsafe { host::release(self.base.wrapping_sub(TABLE), TABLE + SPACE) }
+    }
+}
+
+/// Real threads (`crate::real_threads`): the one `Mem` every thread's view shares, with the lock
+/// its heap and page-table changes are made under. Leaked when sharing starts
+/// ([`Mem::start_sharing`]): it lives as long as the process, as the views that point at it may.
+#[derive(Clone, Copy)]
+struct Shared {
+    mem: std::ptr::NonNull<Mem>,
+    lock: &'static Mutex<()>,
+}
+
+// SAFETY: the shared `Mem` is reached only through `Shared::with`, under its lock, so the views on
+// several threads never change it at once; it is never freed (leaked).
+unsafe impl Send for Shared {}
+
+impl Shared {
+    /// `f` on the shared `Mem`, under its lock.
+    fn with<R>(self, f: impl FnOnce(&mut Mem) -> R) -> R {
+        let _held = lock(self.lock);
+        // SAFETY: see `Shared`: the lock is held, and the leaked `Mem` lives for good.
+        f(unsafe { &mut *self.mem.as_ptr() })
     }
 }
 
@@ -584,6 +620,22 @@ pub struct Mem {
     store_diag: bool,
     /// The touch census ([`Mem::enable_touch`], `mem/touch.rs`); `None` in normal runs.
     touch: Option<Box<touch::Touch>>,
+    /// The sizes the C runtime's heap blocks and the game's memory manager's were asked for
+    /// (`malloc`, `realloc`, `__calloc_crt`, `MemoryManager::Allocate`), as `HeapSize` answers
+    /// them for `_msize` ([`Mem::alloc_asked`]). Kept with the heap so one lock covers both
+    /// with real threads.
+    asked: HashMap<u32, u32>,
+    /// Real threads: this `Mem` is a view of the shared one ([`Mem::start_sharing`]): it reads and
+    /// writes guest memory itself, through the same block, and does its heap and page-table
+    /// changes on the shared one under its lock. `None` otherwise (stepped threads, the tests).
+    shared: Option<Shared>,
+    /// Real threads, on the shared `Mem`: [`Mem::unmap`] keeps every page committed (marked
+    /// [`KEPT`]), handing none back to the system: another thread may be between its page test
+    /// and its access. [`Mem::hand_back_deferred`] hands back what is over [`KEEP_MAX`] while
+    /// every game thread is stopped (the thread host's barrier).
+    defer_hand_back: bool,
+    /// The race census (`NV_RACE_CENSUS`, [`Mem::enable_race_census`]); `None` in normal runs.
+    race: Option<Box<crate::race_census::RaceCensus>>,
 }
 
 /// A live heap block as the heap census sees it ([`Mem::for_each_census_block`]).
@@ -854,6 +906,9 @@ impl Mem {
     /// for, running functions and paths come from the block check; without it a block's asked size
     /// is its held size and the rest is unknown.
     pub fn for_each_census_block(&self, mut f: impl FnMut(CensusBlock<'_>)) {
+        if let Some(s) = self.shared {
+            return s.with(|m| m.for_each_census_block(f));
+        }
         let c = self.check.as_deref();
         for (&addr, &entry) in self.live.iter() {
             let size = entry & !ODD_POOL;
@@ -1023,7 +1078,171 @@ impl Mem {
             check_store: false,
             store_diag: false,
             touch: None,
+            asked: HashMap::new(),
+            shared: None,
+            defer_hand_back: false,
+            race: None,
         }
+    }
+
+    /// A `Mem` on the guest space at `base` that doesn't own it (a view, [`Mem::view`]): no heap
+    /// of its own, no diagnostics.
+    fn view_at(base: *mut u8, shared: Shared) -> Self {
+        Mem {
+            space: Space { base, owned: false },
+            kept: 0,
+            keep_hand: 0,
+            kept_groups: Box::new([0; KEEP_GROUP_WORDS]),
+            #[cfg(test)]
+            host_calls: 0,
+            live: Default::default(),
+            heap: heap::Heap::new(),
+            watch: None,
+            check: None,
+            check_store: false,
+            store_diag: false,
+            touch: None,
+            asked: HashMap::new(),
+            shared: Some(shared),
+            defer_hand_back: false,
+            race: None,
+        }
+    }
+
+    /// Real threads (`crate::real_threads`): this `Mem` becomes a view of itself, shared: its
+    /// whole state moves to a `Mem` that lives for good, and this one keeps only the guest space's
+    /// address. Guest loads and stores stay this one's own (the same instructions); the heap
+    /// ([`Mem::alloc`], [`Mem::free`], the asked sizes) and the page table ([`Mem::map`],
+    /// [`Mem::unmap`]) go to the shared one under one lock. Hand-backs to the system are deferred
+    /// from now on ([`Mem::hand_back_deferred`]). No diagnostic may be on (they need stepped
+    /// threads).
+    pub fn start_sharing(&mut self) {
+        assert!(self.shared.is_none(), "this memory is shared already");
+        assert!(
+            !self.store_diag && self.check.is_none() && self.watch.is_none(),
+            "real threads with a memory diagnostic on"
+        );
+        let shared = Shared {
+            mem: std::ptr::NonNull::dangling(),
+            lock: Box::leak(Box::new(Mutex::new(()))),
+        };
+        let view = Mem::view_at(self.space.base, shared);
+        let mut owner = std::mem::replace(self, view);
+        owner.defer_hand_back = true;
+        let owner = std::ptr::NonNull::from(Box::leak(Box::new(owner)));
+        if let Some(s) = &mut self.shared {
+            s.mem = owner;
+        }
+    }
+
+    /// Another view of the shared memory (a new real thread's, [`Mem::start_sharing`]).
+    pub fn view(&self) -> Mem {
+        let shared = self.shared.expect("a view of memory that isn't shared");
+        Mem::view_at(self.space.base, shared)
+    }
+
+    /// Diagnostic, not game behaviour: the race census ([`crate::race_census`]) counts every
+    /// store from now on, writing its report to `path`. Stepped threads only.
+    pub fn enable_race_census(&mut self, path: String) {
+        self.race = Some(Box::new(crate::race_census::RaceCensus::new(path)));
+        self.store_diag = true;
+    }
+
+    /// The race census, when it is on.
+    pub fn race_census(&self) -> Option<&crate::race_census::RaceCensus> {
+        self.race.as_deref()
+    }
+
+    /// Whether a memory diagnostic is on (the write watch, the block check, the touch census):
+    /// they need stepped threads.
+    pub fn diagnostics_on(&self) -> bool {
+        self.store_diag || self.check.is_some() || self.watch.is_some() || self.touch.is_some()
+    }
+
+    /// Whether this is a view of shared memory ([`Mem::start_sharing`]).
+    pub fn is_shared(&self) -> bool {
+        self.shared.is_some()
+    }
+
+    /// Real threads: how many pages the shared memory keeps committed past [`KEEP_MAX`], waiting
+    /// for [`Mem::hand_back_deferred`]. 0 when not shared.
+    pub fn deferred_pages(&self) -> usize {
+        match self.shared {
+            Some(s) => s.with(|m| m.kept.saturating_sub(KEEP_MAX)),
+            None => 0,
+        }
+    }
+
+    /// Real threads: hands back to the system the kept pages over [`KEEP_MAX`] that
+    /// [`Mem::unmap`] deferred. Only while every game thread is stopped (the thread host's
+    /// barrier): none is then between its page test and its access. Answers how many pages went.
+    pub fn hand_back_deferred(&mut self) -> usize {
+        match self.shared {
+            Some(s) => s.with(|m| {
+                let over = m.kept.saturating_sub(KEEP_MAX);
+                if over > 0 {
+                    m.hand_back_kept(over);
+                }
+                over
+            }),
+            None => 0,
+        }
+    }
+
+    /// The word at `a` as an atomic, for the interlocked operations of real threads: `None` when
+    /// `a` is not 4-aligned (the caller serialises those another way) or its page is not mapped
+    /// (the caller's plain access then faults as any access does).
+    pub fn atomic_u32(&self, a: u32) -> Option<&std::sync::atomic::AtomicU32> {
+        if a % 4 != 0 || !self.page_is_mapped((a >> PAGE_BITS) as usize) {
+            return None;
+        }
+        // SAFETY: four bytes of one mapped page (4-aligned), and the guest space's host block is
+        // 64 KB aligned, so the host address is 4-aligned too. Mapped pages stay committed while
+        // any thread may access them (hand-backs wait for the barrier, `Mem::hand_back_deferred`).
+        Some(unsafe { std::sync::atomic::AtomicU32::from_ptr(self.host_at(a).cast()) })
+    }
+
+    /// [`Mem::alloc`], keeping the size asked for (`n`, 1 for 0) for [`Mem::asked_size`].
+    pub fn alloc_asked(&mut self, n: u32) -> u32 {
+        if let Some(s) = self.shared {
+            return s.with(|m| m.alloc_asked(n));
+        }
+        let block = self.alloc(n);
+        self.asked.insert(block, n.max(1));
+        block
+    }
+
+    /// [`Mem::free`] of a block of [`Mem::alloc_asked`], forgetting its asked size.
+    pub fn free_asked(&mut self, addr: u32) {
+        if let Some(s) = self.shared {
+            return s.with(|m| m.free_asked(addr));
+        }
+        self.asked.remove(&addr);
+        self.free(addr)
+    }
+
+    /// The size a block of [`Mem::alloc_asked`] was asked for.
+    pub fn asked_size(&self, addr: u32) -> Option<u32> {
+        match self.shared {
+            Some(s) => s.with(|m| m.asked_size(addr)),
+            None => self.asked.get(&addr).copied(),
+        }
+    }
+
+    /// Keeps `size` as the asked size of `addr` ([`Mem::asked_size`]).
+    pub fn set_asked(&mut self, addr: u32, size: u32) {
+        if let Some(s) = self.shared {
+            return s.with(|m| m.set_asked(addr, size));
+        }
+        self.asked.insert(addr, size);
+    }
+
+    /// Forgets the asked size of `addr`, answering it.
+    pub fn forget_asked(&mut self, addr: u32) -> Option<u32> {
+        if let Some(s) = self.shared {
+            return s.with(|m| m.forget_asked(addr));
+        }
+        self.asked.remove(&addr)
     }
 
     /// Diagnostic, not game behaviour: records events in `[start, start + len)` (stores
@@ -1153,6 +1372,9 @@ impl Mem {
     /// committed with one host call, or, kept by [`Mem::unmap`], zeroed in place); pages already
     /// mapped keep their bytes.
     pub fn map(&mut self, addr: u32, len: u32) {
+        if let Some(s) = self.shared {
+            return s.with(|m| m.map(addr, len));
+        }
         if len == 0 {
             return;
         }
@@ -1202,6 +1424,9 @@ impl Mem {
             addr % PAGE as u32 == 0 && len % PAGE as u32 == 0,
             "unmap of {addr:08x}+{len:x}: not whole pages"
         );
+        if let Some(s) = self.shared {
+            return s.with(|m| m.unmap(addr, len));
+        }
         // Tagged objects in the range lose their tags (the touch census), so its pages are plainly
         // mapped again first.
         if self.touch.is_some() {
@@ -1214,7 +1439,10 @@ impl Mem {
             .filter(|&p| self.page_state(p) == MAPPED)
             .count();
         let over = (self.kept + mapped).saturating_sub(KEEP_MAX);
-        if mapped > KEEP_SPAN || (mapped > 0 && over > 0 && !self.kept_runs_hold(over)) {
+        if self.defer_hand_back {
+            // Real threads: kept, however many (`Mem::defer_hand_back`).
+            self.keep_mapped(first, stop, mapped);
+        } else if mapped > KEEP_SPAN || (mapped > 0 && over > 0 && !self.kept_runs_hold(over)) {
             // Its own pages go back: more than KEEP_SPAN, or more than the next KEEP_BATCH_RUNS
             // runs of kept pages make room for (handing back a kept page per page it went over
             // by cost a 1024-page unmap at the limit, the kept pages scattered, 1024 host calls).
@@ -1223,24 +1451,29 @@ impl Mem {
             if over > 0 {
                 self.hand_back_kept(over);
             }
-            let mut p = first;
-            while p < stop {
-                if self.page_state(p) != MAPPED {
-                    p += 1;
-                    continue;
-                }
-                let run = p;
-                while p < stop && self.page_state(p) == MAPPED {
-                    p += 1;
-                }
-                self.set_state(run, p, KEPT);
-            }
-            self.kept += mapped;
+            self.keep_mapped(first, stop, mapped);
         }
         assert!(
             end <= PAGES,
             "unmap of {addr:08x}+{len:x}: runs past the end of the 4 GB space"
         );
+    }
+
+    /// Marks the [`MAPPED`] pages of `first..stop` (`mapped` of them) [`KEPT`].
+    fn keep_mapped(&mut self, first: usize, stop: usize, mapped: usize) {
+        let mut p = first;
+        while p < stop {
+            if self.page_state(p) != MAPPED {
+                p += 1;
+                continue;
+            }
+            let run = p;
+            while p < stop && self.page_state(p) == MAPPED {
+                p += 1;
+            }
+            self.set_state(run, p, KEPT);
+        }
+        self.kept += mapped;
     }
 
     /// Hands back at least `need` kept pages (all of them when fewer are kept), and, while it
@@ -1779,6 +2012,9 @@ impl Mem {
         if self.watched_page(a, b.len() as u32) {
             self.watch_note(a, b.len() as u32, Some(b), WatchKind::Write);
         }
+        if let Some(r) = &self.race {
+            r.store(a, b.len() as u32, self.check_frame().0);
+        }
     }
 
     /// Writes the `N` bytes `b` at `a`, as [`Mem::load`] reads them.
@@ -1935,12 +2171,18 @@ impl Mem {
     /// fresh address can be lower: it comes down again when the blocks at the top are freed
     /// (`mem/heap.rs`), and this stays at the highest it has been.
     pub fn heap_top(&self) -> u32 {
+        if let Some(s) = self.shared {
+            return s.with(|m| m.heap_top());
+        }
         self.heap.peak()
     }
 
     /// The bytes the heap can still hand out, in both its ranges (`GlobalMemoryStatus`'s
     /// available virtual size).
     pub fn heap_available(&self) -> u64 {
+        if let Some(s) = self.shared {
+            return s.with(|m| m.heap_available());
+        }
         self.heap.available()
     }
 
@@ -1952,6 +2194,9 @@ impl Mem {
     /// freed small block never comes back for another pool's request (a 12-byte object's block
     /// not for a 16-byte one), unless the quick stacks, over their bound, moved it on.
     pub fn alloc(&mut self, size: u32) -> u32 {
+        if let Some(s) = self.shared {
+            return s.with(|m| m.alloc(size));
+        }
         let asked = size;
         let guard = if self.check.is_some() { GUARD } else { 0 };
         let pool = heap::pool_size(size);
@@ -1966,6 +2211,9 @@ impl Mem {
             self.watch_note(addr, size, None, WatchKind::Alloc);
         }
         self.zero_raw(addr, size);
+        if let Some(r) = &self.race {
+            r.forget(addr, size);
+        }
         self.live.insert(addr, size | odd);
         if guard != 0 {
             self.check_guard_block(addr, asked, size);
@@ -1988,6 +2236,9 @@ impl Mem {
     pub fn free(&mut self, addr: u32) {
         if addr == 0 {
             return;
+        }
+        if let Some(s) = self.shared {
+            return s.with(|m| m.free(addr));
         }
         let entry = self
             .live
@@ -2076,6 +2327,9 @@ impl Mem {
 
     /// Size of a live heap block.
     pub fn block_size(&self, addr: u32) -> Option<u32> {
+        if let Some(s) = self.shared {
+            return s.with(|m| m.block_size(addr));
+        }
         if let Some(&(asked, _)) = self.check.as_deref().and_then(|c| c.blocks.get(&addr)) {
             return Some(block_bytes(asked));
         }
