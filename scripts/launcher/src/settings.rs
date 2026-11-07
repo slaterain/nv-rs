@@ -1,8 +1,37 @@
 //! `userdata\settings.ini`, which Settings.cmd writes and the launcher reads: `Name=Value` lines.
 //! Names the launcher doesn't know are kept by Settings.cmd and ignored here, so a new setting can
-//! join without a new launcher. A name starting with `NV_` goes to the game's environment as it is,
-//! which is how a switch of the game's own (a fixes preset, say) can join Settings later.
+//! join without a new launcher. A name starting with `NV_` goes to the game's environment as it is
+//! (but the launcher's own switches: `main.rs`'s `OWN_SWITCHES`), which is how a switch of the
+//! game's own can join Settings later. `Preset` and `FrameLimit` become the game's `NV_PRESET` and
+//! `NV_FRAME_LIMIT` ([`Settings::game_switches`]).
 use std::collections::BTreeMap;
+
+/// The file's text as the game decodes it (host `fixes.rs`): a UTF-8 byte order mark dropped,
+/// UTF-16 (what PowerShell 5.1's `>` writes) decoded, anything else read as UTF-8 with bad bytes
+/// replaced. The launcher passes the preset on, so it must read the same lines the game would.
+pub fn decode(bytes: &[u8]) -> String {
+    let utf16 = |rest: &[u8], big: bool| {
+        let units: Vec<u16> = rest
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| {
+                if big {
+                    u16::from_be_bytes(c)
+                } else {
+                    u16::from_le_bytes(c)
+                }
+            })
+            .collect();
+        String::from_utf16_lossy(&units)
+    };
+    match bytes {
+        [0xff, 0xfe, rest @ ..] => utf16(rest, false),
+        [0xfe, 0xff, rest @ ..] => utf16(rest, true),
+        [0xef, 0xbb, 0xbf, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    }
+}
 
 /// The file's settings.
 #[derive(Debug, Default, PartialEq)]
@@ -30,6 +59,35 @@ impl Settings {
     /// Borderless window: on unless the file says otherwise (the way the game has been played most).
     pub fn borderless(&self) -> bool {
         self.get("Borderless") != "0"
+    }
+
+    /// A setting by its name compared without case, as the game reads `Preset` and `FrameLimit`.
+    fn get_any_case(&self, name: &str) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// The game's fixes preset and frame limit as its switches, `NV_PRESET` (`fixes` or `vanilla`)
+    /// and `NV_FRAME_LIMIT` (frames a second, 0 for no limit), from `Preset=` and `FrameLimit=`:
+    /// the fixes and no limit when a line is missing or empty. Always both, so a test switch in the
+    /// file or the launcher's own environment can't turn the player's game to vanilla unasked. A
+    /// value the game wouldn't take is an error the player reads, never a silent default.
+    pub fn game_switches(&self) -> Result<[(&'static str, String); 2], String> {
+        let preset = match self.get_any_case("Preset").map(str::trim) {
+            None | Some("") => "fixes".to_string(),
+            Some(v) if v.eq_ignore_ascii_case("fixes") => "fixes".to_string(),
+            Some(v) if v.eq_ignore_ascii_case("vanilla") => "vanilla".to_string(),
+            Some(v) => return Err(format!("Preset={v} (it can be fixes or vanilla)")),
+        };
+        let limit = match self.get_any_case("FrameLimit").map(str::trim) {
+            None | Some("") => 0,
+            Some(v) => v
+                .parse::<u32>()
+                .map_err(|_| format!("FrameLimit={v} (it can be a number, 0 for no limit)"))?,
+        };
+        Ok([("NV_PRESET", preset), ("NV_FRAME_LIMIT", limit.to_string())])
     }
 
     /// The game's environment switches from the file (`NV_...=...`).
@@ -155,6 +213,63 @@ mod tests {
         assert!(Settings::parse("Borderless=0\nResolution=Game launcher's")
             .prefs_lines()
             .is_empty());
+    }
+
+    fn switches(text: &str) -> Result<Vec<(&'static str, String)>, String> {
+        Settings::parse(text).game_switches().map(Vec::from)
+    }
+
+    fn pair(preset: &str, limit: &str) -> Vec<(&'static str, String)> {
+        vec![
+            ("NV_PRESET", preset.to_string()),
+            ("NV_FRAME_LIMIT", limit.to_string()),
+        ]
+    }
+
+    #[test]
+    fn preset_and_frame_limit_become_the_games_switches() {
+        // Nothing chosen, or an empty line: the fixes and no limit.
+        assert_eq!(switches(""), Ok(pair("fixes", "0")));
+        assert_eq!(switches("Preset=\nFrameLimit=\n"), Ok(pair("fixes", "0")));
+        // What Settings.cmd writes.
+        assert_eq!(
+            switches("Preset=vanilla\nFrameLimit=144\n"),
+            Ok(pair("vanilla", "144"))
+        );
+        assert_eq!(
+            switches("Preset=fixes\nFrameLimit=0\n"),
+            Ok(pair("fixes", "0"))
+        );
+        // Written by hand: case and spaces as the game takes them.
+        assert_eq!(
+            switches("preset = Vanilla \nframelimit= 60\n"),
+            Ok(pair("vanilla", "60"))
+        );
+        // A value the game would refuse stops here, with the line named.
+        let e = switches("Preset=vanila\n").unwrap_err();
+        assert!(e.contains("Preset=vanila"), "{e}");
+        let e = switches("FrameLimit=60fps\n").unwrap_err();
+        assert!(e.contains("FrameLimit=60fps"), "{e}");
+        assert!(switches("FrameLimit=-1\n").is_err());
+        // A stale NV_FIXES line chooses nothing: the preset stays the fixes.
+        assert_eq!(switches("NV_FIXES=vanilla\n"), Ok(pair("fixes", "0")));
+    }
+
+    #[test]
+    fn the_file_is_decoded_as_the_game_decodes_it() {
+        let text = "Preset=vanilla\r\n";
+        let mut utf16 = vec![0xff, 0xfe];
+        utf16.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+        let mut big = vec![0xfe, 0xff];
+        big.extend(text.encode_utf16().flat_map(u16::to_be_bytes));
+        let mut marked = vec![0xef, 0xbb, 0xbf];
+        marked.extend(text.bytes());
+        for bytes in [utf16, big, marked, text.as_bytes().to_vec()] {
+            assert_eq!(
+                Settings::parse(&decode(&bytes)).game_switches().unwrap()[0].1,
+                "vanilla"
+            );
+        }
     }
 
     #[test]

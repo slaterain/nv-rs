@@ -53,6 +53,7 @@ const STOP_GAME_STOPPED: i32 = 7;
 const STOP_MODS: i32 = 8;
 const STOP_BLOCKED: i32 = 9;
 const STOP_HUNG: i32 = 10;
+const STOP_SETTINGS: i32 = 11;
 
 /// How long the game program's `--check` may take (about a second here, a little longer with a
 /// slow sound device query).
@@ -227,6 +228,27 @@ fn real_documents() -> Option<PathBuf> {
         .or_else(|| win::known_folder(5))
 }
 
+/// The player's folders under `profile` (`%USERPROFILE%`) by their text, wherever Windows says
+/// Documents is: Documents, OneDrive's Documents and AppData. The game refuses to keep saves there
+/// (host `save_out::refused`), so the launcher refuses the same places. The rest of OneDrive is
+/// allowed: a Desktop kept there is where many people unzip things.
+fn profile_folders(profile: &Path) -> [(PathBuf, &'static str); 3] {
+    [
+        (profile.join("Documents"), "Documents"),
+        (profile.join("OneDrive\\Documents"), "Documents"),
+        (profile.join("AppData"), "AppData"),
+    ]
+}
+
+/// Which of the player's `folders` the package's folder `root` is in or holds, by the real paths.
+fn player_folder_of(root: &Path, folders: &[(PathBuf, &'static str)]) -> Option<&'static str> {
+    let root = folder_key(root);
+    folders.iter().find_map(|(folder, what)| {
+        let key = folder_key(folder);
+        (is_inside(&root, &key) || is_inside(&key, &root)).then_some(*what)
+    })
+}
+
 /// Why the package can't run from where it is.
 fn check_location(package: &Package) -> Result<(), Stop> {
     let root = folder_key(&package.root);
@@ -250,23 +272,25 @@ fn check_location(package: &Package) -> Result<(), Stop> {
             ),
         );
     }
-    for (folder, what) in [
+    let mut folders: Vec<(PathBuf, &str)> = [
         (real_documents(), "Documents"),
         (win::known_folder(0x1a), "AppData"),
         (win::known_folder(0x1c), "AppData"),
-    ] {
-        if folder.is_some_and(|f| {
-            let key = folder_key(&f);
-            is_inside(&root, &key) || is_inside(&key, &root)
-        }) {
-            return stop(
-                STOP_LOCATION,
-                format!(
-                    "nv-rs is inside your {what} folder, and it keeps away from the game's own files there.\n\n{move_it}\n\nThis folder was:\n{}",
-                    package.root.display()
-                ),
-            );
-        }
+    ]
+    .into_iter()
+    .filter_map(|(folder, what)| Some((folder?, what)))
+    .collect();
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        folders.extend(profile_folders(Path::new(&profile)));
+    }
+    if let Some(what) = player_folder_of(&package.root, &folders) {
+        return stop(
+            STOP_LOCATION,
+            format!(
+                "nv-rs is inside your {what} folder, and it keeps away from the game's own files there.\n\n{move_it}\n\nThis folder was:\n{}",
+                package.root.display()
+            ),
+        );
     }
     // The game's own paths (and the tools' start folder) must fit, before anything runs here.
     let documents = package.userdata.join("game\\Documents");
@@ -1014,7 +1038,23 @@ fn play(
         message: format!("{}: {e}", profile.table.display()),
     })?;
 
-    let settings = Settings::parse(&std::fs::read_to_string(&package.settings).unwrap_or_default());
+    let settings = Settings::parse(&settings::decode(
+        &std::fs::read(&package.settings).unwrap_or_default(),
+    ));
+    let game_switches = settings.game_switches().map_err(|why| Stop {
+        code: STOP_SETTINGS,
+        message: format!(
+            "nv-rs's settings have a line it can't use: {why}.\n\nOpen Settings.cmd, choose again and click Save. The file is:\n{}",
+            package.settings.display()
+        ),
+    })?;
+    if settings
+        .0
+        .keys()
+        .any(|k| k.eq_ignore_ascii_case("NV_FIXES"))
+    {
+        package.log("settings.ini's NV_FIXES line is not used: Preset= chooses the fixes");
+    }
     prepare_prefs(package, profile, &settings, &game.folder, device.as_deref()).map_err(|e| {
         Stop {
             code: STOP_LOCATION,
@@ -1069,6 +1109,9 @@ fn play(
         .env("NV_REPORT_DIR", &package.reports)
         .env("NV_REPORT_LOG", &log_path)
         .env("NV_SETTINGS", &package.settings);
+    for (name, value) in &game_switches {
+        command.env(name, value);
+    }
     if settings.borderless() {
         command.env("NV_BORDERLESS", "1");
     } else {
@@ -1076,8 +1119,10 @@ fn play(
     }
 
     package.log(&format!(
-        "starting the game on {}; log {}",
+        "starting the game on {}; preset {}, frame limit {}; log {}",
         data_argument.display(),
+        game_switches[0].1,
+        game_switches[1].1,
         log_path.display()
     ));
     let mut child = command.spawn().map_err(|e| Stop {
@@ -1124,8 +1169,14 @@ fn play(
 }
 
 /// The switches the launcher sets itself: a `NV_` line in settings.ini can't replace them (it
-/// could point the saves or settings anywhere).
-const OWN_SWITCHES: [&str; 11] = [
+/// could point the saves or settings anywhere). `NV_PRESET` and `NV_FRAME_LIMIT` come from the
+/// `Preset=` and `FrameLimit=` lines Settings.cmd writes, so a second, raw line can't disagree with
+/// what Settings.cmd shows. `NV_FIXES` was never a switch of the game's (an early name for the
+/// preset, in a test): it is dropped, so a stale line can't look as if it did something.
+const OWN_SWITCHES: [&str; 14] = [
+    "NV_PRESET",
+    "NV_FRAME_LIMIT",
+    "NV_FIXES",
     "NV_D3D9",
     "NV_SOUND",
     "NV_D3D9_ADAPTER",
@@ -1414,8 +1465,54 @@ mod tests {
     #[test]
     fn settings_ini_cannot_redirect_the_launchers_own_switches() {
         let settings = Settings::parse(
-            "NV_SAVE_OUT=C:\\Elsewhere\nNV_PREFS_OUT=C:\\Elsewhere\\p.ini\nNV_SETTINGS=x\nNV_FIXES=vnv\nNV_BORDERLESS=0\n",
+            "NV_SAVE_OUT=C:\\Elsewhere\nNV_PREFS_OUT=C:\\Elsewhere\\p.ini\nNV_SETTINGS=x\nNV_FIXES=vnv\nNV_BORDERLESS=0\nNV_SOMETHING_NEW=1\n",
         );
-        assert_eq!(user_switches(&settings), [("NV_FIXES", "vnv")]);
+        assert_eq!(user_switches(&settings), [("NV_SOMETHING_NEW", "1")]);
+    }
+
+    #[test]
+    fn the_preset_reaches_the_game_only_from_the_preset_line() {
+        // Raw NV_PRESET / NV_FRAME_LIMIT lines and a stale NV_FIXES don't go through; Preset= and
+        // FrameLimit= do, as the game's switches.
+        let settings = Settings::parse(
+            "Preset=vanilla\nFrameLimit=90\nNV_PRESET=fixes\nnv_frame_limit=30\nNV_FIXES=vnv\n",
+        );
+        assert!(user_switches(&settings).is_empty());
+        assert_eq!(
+            settings.game_switches().unwrap(),
+            [
+                ("NV_PRESET", "vanilla".to_string()),
+                ("NV_FRAME_LIMIT", "90".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn onedrive_documents_is_refused_as_the_game_refuses_it() {
+        let profile = scratch("profile");
+        let folders = profile_folders(&profile);
+        let inside = |path: PathBuf| player_folder_of(&path, &folders);
+        assert_eq!(
+            inside(profile.join("OneDrive\\Documents\\nv-rs")),
+            Some("Documents")
+        );
+        assert_eq!(
+            inside(profile.join("onedrive/documents/Games/nv-rs")),
+            Some("Documents")
+        );
+        assert_eq!(inside(profile.join("Documents\\nv-rs")), Some("Documents"));
+        assert_eq!(
+            inside(profile.join("AppData\\Local\\nv-rs")),
+            Some("AppData")
+        );
+        // The rest of OneDrive is not the game's, nor a name that only starts the same.
+        assert_eq!(inside(profile.join("OneDrive\\Desktop\\nv-rs")), None);
+        assert_eq!(inside(profile.join("OneDrive\\Documents2\\nv-rs")), None);
+        assert_eq!(inside(profile.join("Games\\nv-rs")), None);
+        // A junction into OneDrive's Documents is the same place.
+        std::fs::create_dir_all(profile.join("OneDrive\\Documents")).unwrap();
+        junction(&profile.join("link"), &profile.join("OneDrive\\Documents"));
+        assert_eq!(inside(profile.join("link\\nv-rs")), Some("Documents"));
+        let _ = std::fs::remove_dir_all(&profile);
     }
 }

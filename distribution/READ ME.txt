@@ -26,7 +26,8 @@ Windows language or Windows version change, nv-rs notices and reads them again.
 
   Play.exe               the game
   Play with mods.cmd     the game with the mods in the mods folder (see mods\READ ME.txt)
-  Settings.cmd           window or borderless, resolution, anti-aliasing and more (next start)
+  Settings.cmd           window or borderless, resolution, anti-aliasing, game fixes, frame limit
+                         and more (next start)
   Import my saves.cmd    copies your saves from Documents\My Games\FalloutNV. Those stay as they are
 
 Use Exit Game in the game's menu to quit. Saves reach the disk within about 5 seconds of being made,
@@ -51,6 +52,18 @@ and your real ones stay as they are). If not, it starts on the game's High prese
 size, in a borderless window. Settings.cmd and the game's own menu change them.
 
 
+Bug fixes
+---------
+Bug fixes are on by default. With them, the frame rate isn't held to the original's limit, the game's
+time keeps pace with real time at high frame rates (the original runs fast there), and your character
+lands on the floor after a jump instead of hovering a little above it.
+
+To play the original game's behaviour instead, open Settings.cmd and choose "Vanilla (the original
+game)" under Game fixes. Settings.cmd can also set a frame limit (60, 120, 144 and so on) or no limit,
+which is the default. The frame limit only works with the fixes on. Settings.cmd keeps both in
+userdata\settings.ini, as Preset=fixes or Preset=vanilla and FrameLimit=0 (no limit) or a number.
+
+
 What works
 ----------
 The whole game runs on its translated code: the opening, the open world, quests, combat, V.A.T.S.,
@@ -63,8 +76,8 @@ What doesn't yet
 - Mods that need xNVSE, JIP or other plugins (.dll files) don't work yet.
 - Controllers don't work yet: keyboard and mouse only.
 - It is slower than the original. On the maintainer's PC (a laptop with an RTX 5070 Ti, at 2560x1440
-  with 8x anti-aliasing), about 70 frames a second in Doc Mitchell's house and about 45 in Goodsprings.
-  Your numbers will differ. The same place in the original runs at about 120.
+  with 8x anti-aliasing), with the bug fixes on, about 103 frames a second in Doc Mitchell's house and
+  about 44 in Goodsprings. The original runs at about 120 in Doc's house. Your numbers will differ.
 - Memory: the game's code still has the original's 4 GB limit, about 3.2 GB of it for the game's own
   use. A very heavy mod list can run out, as in the original. Removing this limit is planned.
 - Known bugs: fitting a second weapon mod can stop the game. Sound can crackle when frames are slow.
