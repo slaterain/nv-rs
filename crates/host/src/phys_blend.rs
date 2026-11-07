@@ -41,7 +41,9 @@
 //!
 //! What it doesn't do: the bounds of the nodes above a body (a cell's merged bound) keep the
 //! original's, at most one step of motion apart; a node below a body with a collision object
-//! that isn't blended (a keyframed attachment) stays where the original puts it.
+//! that isn't blended (a keyframed attachment), or whose class has its own world update (a
+//! world-space particle system, a fixed-rotation `BSValueNode`), stays where the original puts
+//! it with everything below it; keyframed bodies (motion type 4) are drawn as the original does.
 
 use crate::fixes::Fix;
 use engine::prelude::*;
@@ -111,6 +113,16 @@ const AS_NODE_SLOT: u32 = 0x0c;
 /// The object's own world update without a collision object (`00a68bf0`): the parent's world
 /// transform times its local one.
 const NODE_WORLD_UPDATE: u32 = 0x00a6_8bf0;
+/// `NiAVObject::UpdateWorldData` (`00a68c60`: the collision object's, else `00a68bf0`) and its
+/// vtable slot; a class with another there does more than the parent's transform times its own.
+const AV_UPDATE_WORLD_DATA: u32 = 0x00a6_8c60;
+const UPDATE_WORLD_DATA_SLOT: u32 = 0xb8;
+
+/// Whether the object's world update is `NiAVObject`'s own.
+fn plain_world_update(e: &Engine, object: u32) -> bool {
+    let vtable = e.mem.u32(object);
+    vtable != 0 && e.mem.u32(vtable + UPDATE_WORLD_DATA_SLOT) == AV_UPDATE_WORLD_DATA
+}
 /// Kept samples per body: enough to reach two steps back (where T - 16 ms always is) when each
 /// step ended early and holds.
 const KEPT_SAMPLES: usize = 6;
@@ -143,8 +155,15 @@ fn hk_to_ni_entry(e: &mut Engine, a: &[u32]) -> Ret {
 
 fn draw_frame_entry(e: &mut Engine, a: &[u32]) -> Ret {
     let written = blend_for_drawing(e);
-    fn_008706b0(e, Ptr::new(a[0]), a[1], a[2] as u8, a[3] as u8);
+    // The nodes go back even when the drawing unwinds (a stop, or a C++ exception the game
+    // catches further out), which then goes on unwinding.
+    let drawn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        fn_008706b0(e, Ptr::new(a[0]), a[1], a[2] as u8, a[3] as u8)
+    }));
     put_back(e, &written);
+    if let Err(unwinding) = drawn {
+        std::panic::resume_unwind(unwinding);
+    }
     Ret::default()
 }
 
@@ -154,6 +173,9 @@ struct Note {
     node: u32,
     body: u32,
     havok: u32,
+    /// The vtables of the collision object, the node and the body: an object freed since and
+    /// its memory used again is not taken for the one noted.
+    vtables: [u32; 3],
     /// The node's world rotation and translation after it (12 words).
     world: [u32; 12],
     /// The Havok body's state it came from: rotation (x, y, z, w) and translation.
@@ -214,6 +236,10 @@ fn set_words(e: &mut Engine, at: u32, values: &[u32]) {
     }
 }
 
+fn vtables_of(e: &Engine, collision: u32, node: u32, body: u32) -> [u32; 3] {
+    [collision, node, body].map(|object| e.mem.u32(object))
+}
+
 /// After `hktoNiTransform`: notes the node, the body and the state the node was given.
 fn note(e: &mut Engine, collision: u32) {
     let node = e.mem.u32(collision + COLLISION_NODE);
@@ -222,14 +248,22 @@ fn note(e: &mut Engine, collision: u32) {
         return;
     }
     let havok = e.mem.u32(body + BODY_HAVOK);
-    // `hktoNiTransform` itself gives the node nothing from a body of motion type 5 in a world.
-    if havok == 0 || (e.mem.u8(havok + MOTION_TYPE) == 5 && e.mem.u32(havok + HAVOK_WORLD) != 0) {
+    // `hktoNiTransform` itself gives the node nothing from a body of motion type 5 in a world;
+    // a keyframed body (motion type 4: animation drives it, a ragdoll at full animation blend)
+    // is left as the original draws it.
+    let motion_type = if havok != 0 {
+        e.mem.u8(havok + MOTION_TYPE)
+    } else {
+        0
+    };
+    if havok == 0 || motion_type == 4 || (motion_type == 5 && e.mem.u32(havok + HAVOK_WORLD) != 0) {
         return;
     }
     let note = Note {
         node,
         body,
         havok,
+        vtables: vtables_of(e, collision, node, body),
         world: words(e, node + NODE_WORLD),
         rotation: floats(e, havok + SWEEP_ROTATION_END),
         translation: floats(e, havok + HAVOK_TRANSLATION),
@@ -313,6 +347,37 @@ fn step_samples(sweep: &Sweep, world_step: (f32, f32)) -> Option<Vec<Sample>> {
     Some(samples)
 }
 
+/// Distance (centre of mass, Havok units) and turn (radians) between two samples.
+fn change(a: &Sample, b: &Sample) -> (f32, f32) {
+    let distance = (0..3)
+        .map(|k| (b.centre[k] - a.centre[k]).powi(2))
+        .sum::<f32>()
+        .sqrt();
+    let dot: f32 = (0..4).map(|k| a.rotation[k] * b.rotation[k]).sum();
+    (distance, 2.0 * dot.abs().min(1.0).acos())
+}
+
+/// Whether the steps not seen between the last sample kept and the new step's start can be the
+/// body's own motion: the distance and the turn across them are at most twice what the body's
+/// fastest neighbouring step would cover in that time, plus a little (0.05 Havok units, 0.1
+/// radians).
+fn bridge_is_motion(kept: &[Sample], last: &Sample, start: &Sample, new: &[Sample]) -> bool {
+    let rate = |a: &Sample, b: &Sample| {
+        let (distance, turn) = change(a, b);
+        let time = (b.time - a.time).max(f32::MIN_POSITIVE);
+        (distance / time, turn / time)
+    };
+    let mut rates = vec![rate(&new[0], &new[1])];
+    if let [.., before, _] = kept {
+        rates.push(rate(before, last));
+    }
+    let speed = rates.iter().map(|r| r.0).fold(0.0, f32::max);
+    let spin = rates.iter().map(|r| r.1).fold(0.0, f32::max);
+    let gap = start.time - last.time;
+    let (distance, turn) = change(last, start);
+    distance <= 2.0 * speed * gap + 0.05 && turn <= 2.0 * spin * gap + 0.1
+}
+
 /// Takes the body's last step into its table (`step_samples`). Answers whether the body ran the
 /// world's last step; a body that didn't has no table.
 fn take_step(body: &mut Body, sweep: &Sweep, world_step: (f32, f32)) -> bool {
@@ -336,8 +401,14 @@ fn take_step(body: &mut Body, sweep: &Sweep, world_step: (f32, f32)) -> bool {
                 true
             }
         }
-        // Steps not seen in between (a frame with two or three): their start joins the table.
-        Some(last) if last.time < start.time && start.time - last.time <= 3.5 * step => {
+        // Steps not seen in between (a frame with two or three): their start joins the table,
+        // unless the body got there faster than it moves on either side (a teleport or a
+        // `SetPosition` in that frame), which starts again.
+        Some(last)
+            if last.time < start.time
+                && start.time - last.time <= 3.5 * step
+                && bridge_is_motion(&body.samples, &last, &start, &new) =>
+        {
             let gap = start.time - last.time;
             body.samples.push(Sample {
                 inverse_from_previous: 1.0 / gap,
@@ -502,6 +573,7 @@ pub fn blend_for_drawing(e: &mut Engine) -> Vec<Written> {
         let valid = e.mem.u32(collision + COLLISION_NODE) == note.node
             && e.mem.u32(collision + COLLISION_BODY) == note.body
             && e.mem.u32(note.body + BODY_HAVOK) == note.havok
+            && vtables_of(e, collision, note.node, note.body) == note.vtables
             && words::<12>(e, note.node + NODE_WORLD) == note.world;
         if !valid || drawings > note.taken + FORGET_AFTER {
             state.notes.remove(&collision);
@@ -644,6 +716,10 @@ fn moved(e: &mut Engine, node: u32, before: [u32; 13]) -> Written {
 
 /// The game's world update (`00a68bf0`) on every node below `node` that has no collision object
 /// of its own, depth first.
+///
+/// A node whose class has its own world update (its vtable's `UpdateWorldData` isn't
+/// `NiAVObject`'s `00a68c60`: a particle system in world space, a fixed-rotation `BSValueNode`,
+/// a billboard, ...) is left as the original sets it, with everything below it.
 fn refresh_below(e: &mut Engine, node: u32, written: &mut Vec<Written>, seen: &mut HashSet<u32>) {
     if e.vcall(node, AS_NODE_SLOT, &args![]).u32() == 0 {
         return;
@@ -652,7 +728,10 @@ fn refresh_below(e: &mut Engine, node: u32, written: &mut Vec<Written>, seen: &m
     for index in 0..count {
         let block = e.mem.u32(node + NODE_CHILDREN);
         let child = e.mem.u32(block.wrapping_add(4 * index));
-        if child == 0 || e.mem.u32(child + NODE_COLLISION) != 0 || !seen.insert(child) {
+        if child == 0 || e.mem.u32(child + NODE_COLLISION) != 0 || !plain_world_update(e, child) {
+            continue;
+        }
+        if !seen.insert(child) {
             continue;
         }
         let before: [u32; 13] = words(e, child + NODE_WORLD);
@@ -837,6 +916,19 @@ mod tests {
             panic!()
         };
         assert!((p[0] - 1.5).abs() < 1e-4, "{p:?}");
+        // A teleport in a frame with two steps: no slide across it, the table starts again.
+        take(&mut body, step_sweep(5.0 * STEP, 500.0, 501.0));
+        assert_eq!(
+            body.samples.iter().map(|s| s.centre[0]).collect::<Vec<_>>(),
+            [500.0, 501.0]
+        );
+        // So does a turn the body can't make in that time.
+        let mut turned = step_sweep(7.0 * STEP, 502.0, 503.0);
+        turned.start.rotation = [0.0, 0.0, 1.0, 0.0];
+        turned.end.rotation = [0.0, 0.0, 1.0, 0.0];
+        take(&mut body, turned);
+        assert_eq!(body.samples.len(), 2);
+        assert_eq!(body.samples[0].time, 7.0 * STEP);
     }
 
     /// A body that hit something: Havok stepped it back to the time of impact, so its sweep
@@ -880,6 +972,13 @@ mod tests {
         leaf_vtable: u32,
     }
 
+    /// The state goes with the engine, so a later test's engine at the same address starts clean.
+    impl Drop for Scene {
+        fn drop(&mut self) {
+            states().remove(&key(&self.e));
+        }
+    }
+
     impl Scene {
         fn new() -> Scene {
             let mut e = Box::new(Engine::new());
@@ -916,8 +1015,14 @@ mod tests {
             e.register(NOT_NODE, |_, _| 0u32.into_ret());
             let node_vtable = e.mem.alloc(0x100);
             e.mem.set_u32(node_vtable + AS_NODE_SLOT, IS_NODE);
+            e.mem
+                .set_u32(node_vtable + UPDATE_WORLD_DATA_SLOT, AV_UPDATE_WORLD_DATA);
             let leaf_vtable = e.mem.alloc(0x100);
             e.mem.set_u32(leaf_vtable + AS_NODE_SLOT, NOT_NODE);
+            e.mem
+                .set_u32(leaf_vtable + UPDATE_WORLD_DATA_SLOT, AV_UPDATE_WORLD_DATA);
+            // A run's state left at this address by an engine of an earlier test is not this one's.
+            states().remove(&key(&e));
             let world = e.mem.alloc(0x200);
             let simulation = e.mem.alloc(0x40);
             e.mem.set_u32(world + WORLD_SIMULATION, simulation);
@@ -1052,6 +1157,49 @@ mod tests {
         }
     }
 
+    /// A node with its own world update below a body (a world-space particle system, a
+    /// fixed-rotation `BSValueNode`) is left as the original sets it, and a keyframed body isn't
+    /// blended at all.
+    #[test]
+    fn own_world_updates_and_keyframed_bodies_are_left_alone() {
+        let mut s = Scene::new();
+        let root = s.node(0, true, 0.0);
+        let item = s.node(root, true, 0.0);
+        let particles = s.node(item, false, 2.0);
+        let own = s.e.mem.alloc(0x100);
+        s.e.mem.set_u32(own + AS_NODE_SLOT, NOT_NODE);
+        // `NiParticleSystem::UpdateWorldData`.
+        s.e.mem.set_u32(own + UPDATE_WORLD_DATA_SLOT, 0x00c1_add0);
+        s.e.mem.set_u32(particles, own);
+        let (collision, havok) = s.body(item, 0.0);
+        s.step(collision, havok, 1.0, 0.0, 1.0);
+        s.step(collision, havok, 1.0 + STEP, 1.0, 2.0);
+        let before = world_of(&s.e, particles);
+        let written = blend_for_drawing(&mut s.e);
+        assert_eq!(written.len(), 1);
+        assert_eq!(world_of(&s.e, particles), before);
+        put_back(&mut s.e, &written);
+        // Keyframed: no note, nothing written.
+        let other = s.node(root, false, 0.0);
+        let (collision, havok) = s.body(other, 0.0);
+        s.e.mem.set_u8(havok + MOTION_TYPE, 4);
+        s.step(collision, havok, 1.0 + 2.0 * STEP, 2.0, 3.0);
+        assert!(blend_for_drawing(&mut s.e).iter().all(|w| w.node != other));
+    }
+
+    /// A noted object freed and its memory used again (another vtable) isn't written.
+    #[test]
+    fn a_note_whose_object_changed_is_dropped() {
+        let mut s = Scene::new();
+        let root = s.node(0, true, 0.0);
+        let item = s.node(root, false, 0.0);
+        let (collision, havok) = s.body(item, 0.0);
+        s.step(collision, havok, 1.0, 0.0, 1.0);
+        s.step(collision, havok, 1.0 + STEP, 1.0, 2.0);
+        s.e.mem.set_u32(collision, 0x0102_0304);
+        assert!(blend_for_drawing(&mut s.e).is_empty());
+    }
+
     /// A node something else wrote during the drawing keeps that write.
     #[test]
     fn a_write_during_the_drawing_stays() {
@@ -1103,6 +1251,8 @@ mod tests {
         assert!(!off.is_on(&FIX));
         // Installed vanilla: `hktoNiTransform` notes nothing, there is no state for the engine.
         let mut e = Box::new(Engine::new());
+        // Whatever an earlier test's engine at this address left.
+        states().remove(&key(&e));
         crate::fixes::install(&mut e, &vanilla);
         assert!(!states().contains_key(&key(&e)));
         assert!(blend_for_drawing(&mut e).is_empty());

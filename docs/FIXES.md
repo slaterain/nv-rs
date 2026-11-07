@@ -134,7 +134,10 @@ fix keeps the simulation and every node game logic reads exactly as the original
 frame's drawing (`008706b0`) it writes each moving body's node as the body was one step before the game's
 time, blended between the two Havok steps around it with Havok's own swept-transform formula
 (`approxTransformAt`: centre of mass and rotation moved linearly, rotation normalised), refreshes the
-nodes below it, draws, and puts every node and bound back as it was (`crates/host/src/phys_blend.rs`).
+nodes below it with the game's own world update, draws, and puts every node and bound back as it was
+(`crates/host/src/phys_blend.rs`). Nodes whose class has its own world update (world-space particle systems,
+fixed-rotation `BSValueNode`s, billboards) and everything below them, and keyframed bodies, are drawn as the
+original draws them.
 The original's nodes are set before the frame's world step, so they show the body 11 ms behind the game's
 clock on average (0 to 23 ms at 144 frames a second); the fix draws it 16 ms behind, about 5 ms later.
 
