@@ -29,7 +29,14 @@ each function belongs to.
   and room for reservations at a chosen address. `GetSystemInfo` answers the
   4 GB process's highest address, 0xFFFEFFFF, and `GlobalMemoryStatus(Ex)` its
   total virtual size, 0xFFFE0000. A stopgap: the modern systems lift the limit
-  for good. `mem.rs` has the whole layout.
+  for good. `mem.rs` has the whole layout. Every guest load and store takes
+  `&self`, so threads can share one `Mem` (ADR-0015, R1): guest values are
+  plain host loads and stores, the exe's own `mov`s, ordered between threads
+  by the game's own synchronisation (its interlocked operations, locks and
+  waits, platform calls the compiler cannot see through); the table of
+  mapped pages changes only through `&mut self` (`map`, `unmap`, the heap),
+  which with real threads means every other game thread parked. The
+  diagnostics (write watch, block check, touch census) run stepped only.
 - **The exe's data**: `Engine::with_exe(path)` maps `.rdata`, `.data`,
   `.tls` and `CONST` of the player's installed FalloutNV.exe (checked
   against 1.4.0.525) at their addresses. Constants, strings, vtables and

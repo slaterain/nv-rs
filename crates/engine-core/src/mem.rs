@@ -33,6 +33,31 @@
 //! on every access, and measured slower than the old page table on random
 //! loads and stores.)
 //!
+//! Threads (ADR-0015's real threads, step R1 of the migration): every
+//! guest load and store takes `&self`, so several threads can share one
+//! [`Mem`]. Two rules keep that at no cost to the hot path:
+//! - The table of mapped pages changes only through `&mut self`
+//!   ([`Mem::map`], [`Mem::unmap`], and the heap, which maps). The
+//!   exclusive borrow is the token that no other thread is inside a guest
+//!   access, so the page test stays one plain load folded into its compare.
+//!   With real threads, the thread host may hand out `&mut Mem` only with
+//!   every other game thread parked at a safe point (a stop-the-world for
+//!   each change of the table). The one exception is the touch census, a
+//!   diagnostic that marks pages from a store: like the other diagnostics
+//!   it runs with stepped threads only (`Mem::touch_mark`).
+//! - Guest values are plain host loads and stores, the same instructions as
+//!   the exe's own `mov`s, not atomics: an atomic needs an aligned address,
+//!   and a guest address's alignment is known only at run time, so every
+//!   access would test it (one instruction more on every inlined access,
+//!   measured), and the compiler folds no atomic load into the instruction
+//!   that uses it. Threads are ordered by the game's own synchronisation, as
+//!   in the exe: its interlocked operations, critical sections and waits are
+//!   platform calls the compiler cannot see through (real atomics with real
+//!   threads), so no guest access moves across them, and translated code
+//!   never waits on guest memory without such a call (docs/ENGINE_CRATE.md,
+//!   "A risk for later"). Two game threads racing on the same bytes without
+//!   them race in the exe as well.
+//!
 //! The host calls are `VirtualAlloc` and `VirtualFree` on Windows (the
 //! block starts with no access, and pages are committed as they are mapped
 //! and decommitted as they are handed back), `mmap` on Linux and macOS (the
@@ -79,6 +104,7 @@
 //! vanilla preset (not built yet) goes at `Heap::cross` and at the platform's two answers.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 mod heap;
 mod touch;
@@ -417,16 +443,33 @@ struct Space {
 }
 
 // SAFETY: a `Space` owns its block alone, as a `Box` owns its allocation: no other value holds
-// `base`, and only `Drop` releases it. [`Mem`], its only user, reads the block only through
-// `&self` and writes it only through `&mut self`, so the borrow rules keep every write apart
-// from any other access on any thread, exactly as they did for the boxed pages this replaced
-// (which made `Mem` `Send` and `Sync` by themselves). The thread host hands the engine from one
-// OS thread to the next with only one of them running it at a time (`thread_host`'s `Baton`),
-// which a block of host address space serves as well as boxed pages did: the reservation is
-// the process's, not a thread's.
+// `base`, and only `Drop` releases it. The reservation is the process's, not a thread's, so any
+// thread may use and drop it. [`Mem`], its only user, writes the table of mapped pages only
+// through `&mut self` (the touch census aside, a stepped-threads diagnostic), so the borrow
+// rules keep every change of the table apart from every guest access on any thread. It writes
+// guest bytes through `&self` with plain host stores, and no reference into the guest space
+// outlives a call of [`Mem`]: on one thread, accesses follow one another; between threads, the
+// game's own synchronisation orders them, as in the exe (module documentation, "Threads").
 unsafe impl Send for Space {}
-// SAFETY: as for `Send` above: shared access only ever reads.
+// SAFETY: as for `Send` above.
 unsafe impl Sync for Space {}
+
+// Several threads can share one `Mem` (module documentation, "Threads").
+const _: fn() = || {
+    fn shareable<T: Send + Sync>() {}
+    shareable::<Mem>();
+};
+
+/// `m` locked; a lock a panic left poisoned is taken as it is (a diagnostic's findings: the panic
+/// stops the run anyway).
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// `m`'s value through `&mut` (no locking), as [`lock`] takes it.
+fn unlocked<T>(m: &mut Mutex<T>) -> &mut T {
+    m.get_mut().unwrap_or_else(PoisonError::into_inner)
+}
 
 impl Space {
     fn new() -> Self {
@@ -564,11 +607,12 @@ pub struct WatchHit {
 }
 
 /// The ranges a diagnostic watches (start -> length and whether only frees count), a
-/// count of ranges per page (the store's quick test) and the events not yet taken.
+/// count of ranges per page (the store's quick test) and the events not yet taken (behind a
+/// lock: a store through `&self` records them).
 struct Watch {
     ranges: BTreeMap<u32, (u32, bool)>,
     pages: Vec<u16>,
-    hits: Vec<WatchHit>,
+    hits: Mutex<Vec<WatchHit>>,
 }
 
 /// The most events kept before [`Mem::take_watch_hits`] takes them (later ones dropped).
@@ -598,8 +642,9 @@ struct BlockCheck {
     /// engine keeps them up to date).
     current_fn: u32,
     caller_fn: u32,
-    /// Findings not yet taken ([`Mem::take_block_reports`]).
-    reports: Vec<String>,
+    /// Findings not yet taken ([`Mem::take_block_reports`]); behind a lock, as a store through
+    /// `&self` reports.
+    reports: Mutex<Vec<String>>,
     /// With [`Mem::enable_freed_check`]: freed blocks held back from reuse, oldest first
     /// (address, rounded size), each guarded whole so that a store into it is reported, until
     /// more than `quarantine_limit` bytes ([`QUARANTINE_BYTES`]) wait.
@@ -645,7 +690,7 @@ impl Mem {
             pages: if store { vec![0; PAGES] } else { Vec::new() },
             current_fn: 0,
             caller_fn: 0,
-            reports: Vec::new(),
+            reports: Mutex::new(Vec::new()),
             quarantine: None,
             quarantine_bytes: 0,
             quarantine_limit: QUARANTINE_BYTES,
@@ -801,19 +846,19 @@ impl Mem {
     pub fn take_block_reports(&mut self) -> Vec<String> {
         self.check
             .as_deref_mut()
-            .map(|c| std::mem::take(&mut c.reports))
+            .map(|c| std::mem::take(unlocked(&mut c.reports)))
             .unwrap_or_default()
     }
 
-    fn check_report(&mut self, text: String) {
-        let Some(c) = self.check.as_deref_mut() else {
+    fn check_report(&self, text: String) {
+        let Some(c) = self.check.as_deref() else {
             return;
         };
         eprintln!("NV_BLOCK_CHECK: {text}");
         if c.stop {
             panic!("NV_BLOCK_CHECK: {text}");
         }
-        c.reports.push(text);
+        lock(&c.reports).push(text);
     }
 
     /// After a guarded block of `asked` bytes at `addr` (`total` bytes in all) was handed out.
@@ -880,7 +925,7 @@ impl Mem {
     /// reported with the running function.
     #[cold]
     #[inline(never)]
-    fn check_store_at(&mut self, a: u32, len: u32) {
+    fn check_store_at(&self, a: u32, len: u32) {
         let Some(c) = self.check.as_deref() else {
             return;
         };
@@ -958,7 +1003,7 @@ impl Mem {
             Box::new(Watch {
                 ranges: BTreeMap::new(),
                 pages: vec![0; PAGES],
-                hits: Vec::new(),
+                hits: Mutex::new(Vec::new()),
             })
         });
         w.ranges.insert(start, (len, frees_only));
@@ -986,14 +1031,16 @@ impl Mem {
     /// Whether watched ranges have events not yet taken.
     #[inline]
     pub fn has_watch_hits(&self) -> bool {
-        self.watch.as_deref().is_some_and(|w| !w.hits.is_empty())
+        self.watch
+            .as_deref()
+            .is_some_and(|w| !lock(&w.hits).is_empty())
     }
 
     /// Takes the watched ranges' events, oldest first.
     pub fn take_watch_hits(&mut self) -> Vec<WatchHit> {
         self.watch
             .as_deref_mut()
-            .map(|w| std::mem::take(&mut w.hits))
+            .map(|w| std::mem::take(unlocked(&mut w.hits)))
             .unwrap_or_default()
     }
 
@@ -1014,7 +1061,7 @@ impl Mem {
     /// bytes a store writes (zeros otherwise). Unchanged bytes are not an event.
     #[cold]
     #[inline(never)]
-    fn watch_note(&mut self, a: u32, len: u32, new: Option<&[u8]>, kind: WatchKind) {
+    fn watch_note(&self, a: u32, len: u32, new: Option<&[u8]>, kind: WatchKind) {
         let end = a as u64 + len.max(1) as u64;
         let Some(w) = self.watch.as_deref() else {
             return;
@@ -1053,9 +1100,9 @@ impl Mem {
             if matches!(kind, WatchKind::Write | WatchKind::Zero) && old == fresh {
                 continue;
             }
-            let w = self.watch.as_deref_mut().expect("watch");
-            if w.hits.len() < WATCH_HITS_KEEP {
-                w.hits.push(WatchHit {
+            let mut hits = lock(&w.hits);
+            if hits.len() < WATCH_HITS_KEEP {
+                hits.push(WatchHit {
                     start,
                     addr: from,
                     len: (to - from as u64) as u32,
@@ -1088,8 +1135,8 @@ impl Mem {
             match state {
                 MAPPED | TOUCH => continue,
                 KEPT => {
-                    // SAFETY: pages `run..p` lie inside the block and are committed (kept);
-                    // written under `&mut self`.
+                    // SAFETY: pages `run..p` lie inside the block and are committed (kept); no
+                    // guest access reaches a kept page, and `&mut self` excludes every other.
                     unsafe { std::ptr::write_bytes(at, 0, bytes) };
                     self.kept -= p - run;
                 }
@@ -1229,7 +1276,8 @@ impl Mem {
         debug_assert!(from <= PAGES);
         let from = from % PAGES;
         // SAFETY: the table holds a byte for each of the `PAGES` pages and stays committed while
-        // the block lives; only `&mut self` writes it.
+        // the block lives; it changes only through `&mut self` (module documentation), and
+        // nothing changes it while the slice lives.
         let table = unsafe { std::slice::from_raw_parts(self.space.flag(0), PAGES) };
         let group = from / KEEP_GROUP;
         let end = (group + 1) * KEEP_GROUP;
@@ -1355,7 +1403,8 @@ impl Mem {
     pub(crate) fn mapped_pages(&self) -> Vec<u32> {
         const STRETCH: usize = 1 << 12;
         // SAFETY: the table holds a byte for each of the `PAGES` pages and stays committed while
-        // the block lives; only `&mut self` writes it.
+        // the block lives; it changes only through `&mut self` (module documentation), and
+        // nothing changes it while the slice lives.
         let table = unsafe { std::slice::from_raw_parts(self.space.flag(0).cast_const(), PAGES) };
         let mut out = Vec::new();
         // A compare per stretch: nearly all of the table is zero, and this also runs in test builds.
@@ -1372,17 +1421,12 @@ impl Mem {
         out
     }
 
-    /// The bytes of the mapped page at `page` (an address from [`Mem::mapped_pages`]).
+    /// The bytes of the mapped page at `page` (an address from [`Mem::mapped_pages`]), copied:
+    /// a store through `&self` may change the page while a borrowed slice of it would live.
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn page_bytes(&self, page: u32) -> &[u8] {
+    pub(crate) fn page_bytes(&self, page: u32) -> Vec<u8> {
         assert!(self.is_mapped(page) && page & (PAGE as u32 - 1) == 0);
-        // SAFETY: the page is mapped, and only `&mut self` writes it.
-        unsafe {
-            std::slice::from_raw_parts(
-                self.host_page((page >> PAGE_BITS) as usize).cast_const(),
-                PAGE,
-            )
-        }
+        self.bytes(page, PAGE as u32)
     }
 
     /// Page `p`'s byte in the table of mapped pages ([`MAPPED`], [`KEPT`] or [`UNMAPPED`]; `p`
@@ -1391,7 +1435,7 @@ impl Mem {
     fn page_state(&self, p: usize) -> u8 {
         debug_assert!(p < PAGES);
         // SAFETY: the table holds a byte for each of the `PAGES` pages and stays committed while
-        // the block lives; only `&mut self` writes it.
+        // the block lives; it changes only through `&mut self` (module documentation).
         unsafe { *self.space.flag(p) }
     }
 
@@ -1473,8 +1517,8 @@ impl Mem {
                 }
             }
             // SAFETY: `[a, a + n)` lies in one mapped page; `buf` is host memory of its own (no
-            // reference into the guest space leaves this module), and nothing writes the guest
-            // space while `&self` lives.
+            // reference into the guest space leaves this module). A plain copy (module
+            // documentation, "Threads").
             unsafe {
                 std::ptr::copy_nonoverlapping(self.host_at(a), buf.as_mut_ptr().add(done), n)
             };
@@ -1484,7 +1528,7 @@ impl Mem {
         Ok(())
     }
 
-    pub fn try_write(&mut self, addr: u32, data: &[u8]) -> Result<(), Fault> {
+    pub fn try_write(&self, addr: u32, data: &[u8]) -> Result<(), Fault> {
         if self.check_store {
             self.check_store_at(addr, data.len() as u32);
         }
@@ -1495,7 +1539,7 @@ impl Mem {
     }
 
     /// [`Mem::try_write`] without the write watch.
-    fn try_write_raw(&mut self, addr: u32, data: &[u8]) -> Result<(), Fault> {
+    fn try_write_raw(&self, addr: u32, data: &[u8]) -> Result<(), Fault> {
         let mut a = addr;
         let mut done = 0;
         while done < data.len() {
@@ -1508,8 +1552,8 @@ impl Mem {
                 }
                 self.touch_note(a, n, true);
             }
-            // SAFETY: `[a, a + n)` lies in one mapped page, written under `&mut self`; `data` is
-            // host memory of its own (no reference into the guest space leaves this module).
+            // SAFETY: `[a, a + n)` lies in one mapped page; `data` is host memory of its own (no
+            // reference into the guest space leaves this module). A plain copy, as in `read_pages`.
             unsafe { std::ptr::copy_nonoverlapping(data.as_ptr().add(done), self.host_at(a), n) };
             done += n;
             a = a.wrapping_add(n as u32);
@@ -1520,7 +1564,7 @@ impl Mem {
     /// Zeroes `[addr, addr + len)` page by page (what writing `len` zero bytes does, without
     /// a buffer of them). Panics as [`Mem::write`] does on the first unmapped byte, with the
     /// bytes before it zeroed.
-    pub fn zero(&mut self, addr: u32, len: u32) {
+    pub fn zero(&self, addr: u32, len: u32) {
         if self.check_store {
             self.check_store_at(addr, len);
         }
@@ -1531,7 +1575,7 @@ impl Mem {
     }
 
     /// [`Mem::zero`] without the write watch.
-    fn zero_raw(&mut self, addr: u32, len: u32) {
+    fn zero_raw(&self, addr: u32, len: u32) {
         let mut a = addr;
         let mut left = len as usize;
         while left > 0 {
@@ -1544,7 +1588,7 @@ impl Mem {
                 }
                 self.touch_note(a, n, true);
             }
-            // SAFETY: `[a, a + n)` lies in one mapped page, written under `&mut self`.
+            // SAFETY: `[a, a + n)` lies in one mapped page. A plain write, as in `read_pages`.
             unsafe { std::ptr::write_bytes(self.host_at(a), 0, n) };
             left -= n;
             a = a.wrapping_add(n as u32);
@@ -1602,7 +1646,7 @@ impl Mem {
         })
     }
 
-    pub fn write(&mut self, addr: u32, data: &[u8]) {
+    pub fn write(&self, addr: u32, data: &[u8]) {
         if let Err(Fault(a)) = self.try_write(addr, data) {
             panic!("write to unmapped memory at {a:08x}");
         }
@@ -1623,7 +1667,8 @@ impl Mem {
     #[inline(always)]
     fn fast_at(&self, a: u32) -> bool {
         // SAFETY: the table has a byte for page `PAGES` too (always 0: the space ends there), so
-        // both bytes of the pair lie in it; only `&mut self` writes it.
+        // both bytes of the pair lie in it; it changes only through `&mut self` (module
+        // documentation), so this plain load races no change of it.
         let pair = unsafe {
             std::ptr::read_unaligned(self.space.flag((a >> PAGE_BITS) as usize).cast::<u16>())
         };
@@ -1649,7 +1694,7 @@ impl Mem {
         let p = self.host_at(a);
         if self.fast_at(a) {
             // SAFETY: the `N` bytes start in a mapped page and end in it or in the next one,
-            // also mapped; nothing writes the guest space while `&self` lives.
+            // also mapped. A plain load (module documentation, "Threads").
             return unsafe { std::ptr::read_unaligned(p.cast::<[u8; N]>()) };
         }
         self.load_slow(a)
@@ -1678,8 +1723,7 @@ impl Mem {
     #[inline(never)]
     fn load_slow<const N: usize>(&self, a: u32) -> [u8; N] {
         if self.in_one_mapped_page(a, N) {
-            // SAFETY: the `N` bytes lie in one mapped page; nothing writes the guest space while
-            // `&self` lives.
+            // SAFETY: the `N` bytes lie in one mapped page. A plain load, as in `Mem::load`.
             return unsafe { std::ptr::read_unaligned(self.host_at(a).cast::<[u8; N]>()) };
         }
         let mut b = [0; N];
@@ -1690,7 +1734,7 @@ impl Mem {
     /// The store diagnostics of [`Mem::store`], out of its hot path.
     #[cold]
     #[inline(never)]
-    fn store_diagnostics(&mut self, a: u32, b: &[u8]) {
+    fn store_diagnostics(&self, a: u32, b: &[u8]) {
         if let (true, &[b0, b1, b2, b3]) = (self.touch.is_some(), b) {
             self.touch_store_word(a, u32::from_le_bytes([b0, b1, b2, b3]));
         }
@@ -1704,7 +1748,7 @@ impl Mem {
 
     /// Writes the `N` bytes `b` at `a`, as [`Mem::load`] reads them.
     #[inline(always)]
-    fn store<const N: usize>(&mut self, a: u32, b: [u8; N]) {
+    fn store<const N: usize>(&self, a: u32, b: [u8; N]) {
         // One test for both diagnostics (the write watch, the block check's store mode), so a
         // normal run pays a single predictable branch per store.
         if self.store_diag {
@@ -1714,7 +1758,7 @@ impl Mem {
         let p = self.host_at(a);
         if self.fast_at(a) {
             // SAFETY: the `N` bytes start in a mapped page and end in it or in the next one,
-            // also mapped; written under `&mut self`.
+            // also mapped. A plain store, as `Mem::load` loads.
             unsafe { std::ptr::write_unaligned(p.cast::<[u8; N]>(), b) };
             return;
         }
@@ -1724,9 +1768,9 @@ impl Mem {
     /// [`Mem::store`] off its fast path, as [`Mem::load_slow`] for loads.
     #[cold]
     #[inline(never)]
-    fn store_slow<const N: usize>(&mut self, a: u32, b: [u8; N]) {
+    fn store_slow<const N: usize>(&self, a: u32, b: [u8; N]) {
         if self.in_one_mapped_page(a, N) {
-            // SAFETY: the `N` bytes lie in one mapped page, written under `&mut self`.
+            // SAFETY: the `N` bytes lie in one mapped page. A plain store, as in `Mem::store`.
             unsafe { std::ptr::write_unaligned(self.host_at(a).cast::<[u8; N]>(), b) };
             return;
         }
@@ -1773,39 +1817,39 @@ impl Mem {
     }
 
     #[inline]
-    pub fn set_u8(&mut self, a: u32, v: u8) {
+    pub fn set_u8(&self, a: u32, v: u8) {
         self.store(a, [v]);
     }
     #[inline]
-    pub fn set_u16(&mut self, a: u32, v: u16) {
+    pub fn set_u16(&self, a: u32, v: u16) {
         self.store(a, v.to_le_bytes());
     }
     #[inline]
-    pub fn set_u32(&mut self, a: u32, v: u32) {
+    pub fn set_u32(&self, a: u32, v: u32) {
         self.store(a, v.to_le_bytes());
     }
     #[inline]
-    pub fn set_u64(&mut self, a: u32, v: u64) {
+    pub fn set_u64(&self, a: u32, v: u64) {
         self.store(a, v.to_le_bytes());
     }
     #[inline]
-    pub fn set_i8(&mut self, a: u32, v: i8) {
+    pub fn set_i8(&self, a: u32, v: i8) {
         self.set_u8(a, v as u8);
     }
     #[inline]
-    pub fn set_i16(&mut self, a: u32, v: i16) {
+    pub fn set_i16(&self, a: u32, v: i16) {
         self.set_u16(a, v as u16);
     }
     #[inline]
-    pub fn set_i32(&mut self, a: u32, v: i32) {
+    pub fn set_i32(&self, a: u32, v: i32) {
         self.set_u32(a, v as u32);
     }
     #[inline]
-    pub fn set_f32(&mut self, a: u32, v: f32) {
+    pub fn set_f32(&self, a: u32, v: f32) {
         self.set_u32(a, v.to_bits());
     }
     #[inline]
-    pub fn set_f64(&mut self, a: u32, v: f64) {
+    pub fn set_f64(&self, a: u32, v: f64) {
         self.set_u64(a, v.to_bits());
     }
 
@@ -1820,8 +1864,9 @@ impl Mem {
                 self.read_fault(p);
             }
             let n = PAGE - (p as usize & (PAGE - 1));
-            // SAFETY: `[p, p + n)` is the rest of one mapped page, and nothing writes the guest
-            // space while `&self` lives; the slice ends with this pass of the loop.
+            // SAFETY: `[p, p + n)` is the rest of one mapped page, and nothing in this module
+            // writes guest memory while the slice lives (it ends with this pass of the loop). A
+            // plain read (module documentation, "Threads").
             let bytes = unsafe { std::slice::from_raw_parts(self.host_at(p), n) };
             let found = bytes.iter().position(|&c| c == 0);
             if self.page_state((p >> PAGE_BITS) as usize) == TOUCH {
@@ -1841,7 +1886,7 @@ impl Mem {
     }
 
     /// Writes `s` and a NUL at `a`.
-    pub fn set_cstr(&mut self, a: u32, s: &[u8]) {
+    pub fn set_cstr(&self, a: u32, s: &[u8]) {
         self.write(a, s);
         self.set_u8(a.wrapping_add(s.len() as u32), 0);
     }
@@ -2227,7 +2272,7 @@ mod tests {
         assert!(r.is_err());
         assert_eq!(m.bytes(0x1ffe, 2), [0xdd, 0xcc]);
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut m = Mem::new();
+            let m = Mem::new();
             m.set_u8(0x7000, 1)
         }));
         let why = r.unwrap_err();
