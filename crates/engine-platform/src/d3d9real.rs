@@ -1398,48 +1398,17 @@ pub fn buffer_locked(e: &mut Engine, buffer: u32, offset: u32, size: u32, flags:
         .push((offset, size, flags));
 }
 
-/// Whether the modelled buffer `buffer` has a real counterpart.
-pub fn has_buffer(e: &Engine, buffer: u32) -> bool {
-    matches!(
-        state_ref!(e).graphics.real.objects.get(&buffer),
-        Some(Object::VertexBuffer(_) | Object::IndexBuffer(_))
-    )
-}
-
-/// The first `size` bytes of the real buffer behind the modelled `buffer`, read with
-/// `Lock(D3DLOCK_READONLY)`; none when there is no real buffer or it can't be locked.
-pub fn read_buffer(e: &mut Engine, buffer: u32, size: u32) -> Option<Vec<u8>> {
-    let mut data: *mut core::ffi::c_void = std::ptr::null_mut();
-    let r = match state!(e).graphics.real.objects.get(&buffer) {
-        Some(Object::VertexBuffer(b)) => unsafe { b.Lock(0, size, &mut data, LOCK_READONLY) },
-        Some(Object::IndexBuffer(b)) => unsafe { b.Lock(0, size, &mut data, LOCK_READONLY) },
-        _ => return None,
-    };
-    if r.is_err() || data.is_null() {
-        answer(e, "Lock of the real buffer to read", 0, hr(r));
-        return None;
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(data as *const u8, size as usize) }.to_vec();
-    let _ = match state!(e).graphics.real.objects.get(&buffer) {
-        Some(Object::VertexBuffer(b)) => unsafe { b.Unlock() },
-        Some(Object::IndexBuffer(b)) => unsafe { b.Unlock() },
-        _ => Ok(()),
-    };
-    Some(bytes)
-}
-
 /// The game unlocked the modelled buffer `buffer`, whose memory is `bits` (`length` bytes):
-/// the locked range goes to the real buffer. Whether it did (false without a real buffer, for a
-/// read-only lock, or when the real buffer can't be locked).
-pub fn buffer_unlocked(e: &mut Engine, buffer: u32, bits: u32, length: u32, model: u32) -> bool {
+/// the locked range goes to the real buffer.
+pub fn buffer_unlocked(e: &mut Engine, buffer: u32, bits: u32, length: u32, model: u32) {
     if model != 0 {
-        return false;
+        return;
     }
     let Some((offset, size, flags)) = real(e).locks.get_mut(&buffer).and_then(|l| l.pop()) else {
-        return false;
+        return;
     };
     if flags & LOCK_READONLY != 0 {
-        return false;
+        return;
     }
     let size = if size == 0 { length - offset } else { size };
     let pass = if state!(e).graphics.real.dynamic.contains(&buffer) {
@@ -1451,11 +1420,10 @@ pub fn buffer_unlocked(e: &mut Engine, buffer: u32, bits: u32, length: u32, mode
     let r = match state!(e).graphics.real.objects.get(&buffer) {
         Some(Object::VertexBuffer(b)) => unsafe { b.Lock(offset, size, &mut data, pass) },
         Some(Object::IndexBuffer(b)) => unsafe { b.Lock(offset, size, &mut data, pass) },
-        _ => return false,
+        _ => return,
     };
     if r.is_err() || data.is_null() {
-        answer(e, "Lock of the real buffer", 0, hr(r));
-        return false;
+        return answer(e, "Lock of the real buffer", 0, hr(r));
     }
     let to = unsafe { std::slice::from_raw_parts_mut(data as *mut u8, size as usize) };
     e.mem.read(bits + offset, to);
@@ -1464,7 +1432,6 @@ pub fn buffer_unlocked(e: &mut Engine, buffer: u32, bits: u32, length: u32, mode
         Some(Object::IndexBuffer(b)) => unsafe { b.Unlock() },
         _ => Ok(()),
     };
-    true
 }
 
 fn as_words(bytes: &[u8]) -> Vec<u32> {

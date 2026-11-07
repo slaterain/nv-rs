@@ -6109,94 +6109,57 @@ pub(crate) mod tests {
         assert_eq!(read_buffer_bytes(&mut e, buffer, 64), pattern(1, 64));
     }
 
-    /// On a real device (`NV_D3D9=real`), a managed buffer keeps its bytes in the real buffer
-    /// while the real buffer holds exactly them: a whole-buffer write puts them there, a range
-    /// written inside its lock keeps them there, a byte written outside the locked range (or
-    /// through a read-only lock) moves them to host memory; a default-pool static buffer keeps
-    /// them in host memory. What the game reads back is what it wrote in every case. Skipped
-    /// where Direct3D 9 has no device (no display adapter, as on CI).
+    /// On a real device (`NV_D3D9=real`), static buffers of every pool keep their bytes in host
+    /// memory, never read back from the real buffer (the game's are write-only, whose reads
+    /// Direct3D leaves undefined): what the game wrote comes back through its next locks, a
+    /// whole buffer, a range, nested locks and a write through a read-only lock alike, and
+    /// nothing the real device answered differed. Skipped where Direct3D 9 has no device (no
+    /// display adapter, as on CI).
     #[cfg(windows)]
     #[test]
-    fn real_buffers_keep_the_bytes_of_managed_buffers() {
+    fn static_buffers_on_a_real_device_keep_their_bytes_in_host_memory() {
         let (mut e, device) = device_with("", 0x54);
         set_buffer_store(&mut e, Store::Host);
         if super::super::d3d9real::test_real_device(&mut e, device, 0x54).is_none() {
             return;
         }
         for index in [false, true] {
-            let length = 0x4000;
-            // Write-only and managed, as the game's geometry chips.
-            let buffer = new_buffer(&mut e, device, index, length, WRITEONLY, 1);
-            assert_eq!(buffer_kept(&mut e, buffer), "real, zero");
-            assert_eq!(
-                read_buffer_bytes(&mut e, buffer, length),
-                vec![0; length as usize]
-            );
-            assert_eq!(buffer_kept(&mut e, buffer), "real, zero");
-            let mut expected = pattern(4, length);
-            let (_, at) = lock_buffer(&mut e, buffer, 0, 0, 0);
-            e.mem.write(at, &expected);
-            assert_eq!(unlock_buffer(&mut e, buffer), D3D_OK);
-            assert_eq!(buffer_kept(&mut e, buffer), "real");
-            assert_eq!(
-                super::super::d3d9real::read_buffer(&mut e, buffer, length),
-                Some(expected.clone()),
-                "the real buffer itself"
-            );
-            assert_eq!(read_buffer_bytes(&mut e, buffer, length), expected);
-            // A range written inside its lock: still the real buffer's.
-            let (_, at) = lock_buffer(&mut e, buffer, 0x100, 0x40, 0);
-            e.mem.write(at, &pattern(5, 0x40));
-            assert_eq!(unlock_buffer(&mut e, buffer), D3D_OK);
-            expected[0x100..0x140].copy_from_slice(&pattern(5, 0x40));
-            assert_eq!(buffer_kept(&mut e, buffer), "real");
-            assert_eq!(read_buffer_bytes(&mut e, buffer, length), expected);
-            // A byte written past the locked range: host memory from then on.
-            let (_, at) = lock_buffer(&mut e, buffer, 0x200, 0x10, 0);
-            e.mem.write(at + 0x10, &[0xab]);
-            assert_eq!(unlock_buffer(&mut e, buffer), D3D_OK);
-            expected[0x210] = 0xab;
-            assert_eq!(buffer_kept(&mut e, buffer), "host");
-            assert_eq!(read_buffer_bytes(&mut e, buffer, length), expected);
-            // A first write of a range only: the rest of the real buffer is not known to be zero.
-            let fresh = new_buffer(&mut e, device, index, length, WRITEONLY, 1);
-            let (_, at) = lock_buffer(&mut e, fresh, 0x20, 0x20, 0);
-            e.mem.write(at, &pattern(6, 0x20));
-            assert_eq!(unlock_buffer(&mut e, fresh), D3D_OK);
-            let mut fresh_bytes = vec![0; length as usize];
-            fresh_bytes[0x20..0x40].copy_from_slice(&pattern(6, 0x20));
-            assert_eq!(read_buffer_bytes(&mut e, fresh, length), fresh_bytes);
-            // A write through a read-only lock of a buffer the real one keeps.
-            let ro = new_buffer(&mut e, device, index, 64, 0, 1);
-            let (_, at) = lock_buffer(&mut e, ro, 0, 0, 0);
-            e.mem.write(at, &pattern(8, 64));
-            assert_eq!(unlock_buffer(&mut e, ro), D3D_OK);
-            assert_eq!(buffer_kept(&mut e, ro), "real");
-            let (_, at) = lock_buffer(&mut e, ro, 0, 0, READONLY);
-            assert_eq!(e.mem.bytes(at, 64), pattern(8, 64));
-            assert_eq!(unlock_buffer(&mut e, ro), D3D_OK);
-            assert_eq!(
-                buffer_kept(&mut e, ro),
-                "real",
-                "read only, nothing written"
-            );
-            let (_, at) = lock_buffer(&mut e, ro, 0, 0, READONLY);
-            e.mem.write(at, &[1, 2, 3]);
-            assert_eq!(unlock_buffer(&mut e, ro), D3D_OK);
-            assert_eq!(buffer_kept(&mut e, ro), "host");
-            let mut ro_bytes = pattern(8, 64);
-            ro_bytes[..3].copy_from_slice(&[1, 2, 3]);
-            assert_eq!(read_buffer_bytes(&mut e, ro, 64), ro_bytes);
-            // Default pool: host memory.
-            let default = new_buffer(&mut e, device, index, 64, WRITEONLY, 0);
-            assert_eq!(buffer_kept(&mut e, default), "host");
-            assert_eq!(present(&mut e, device), D3D_OK);
-            assert_eq!(e.vcall(default, 8, &[]).u32(), 0);
+            // Write-only and managed, as the game's geometry chips; system memory; default.
+            for (usage, pool) in [(WRITEONLY, 1), (0, 2), (WRITEONLY, 0)] {
+                let length = 0x4000;
+                let buffer = new_buffer(&mut e, device, index, length, usage, pool);
+                assert_eq!(buffer_kept(&mut e, buffer), "host");
+                assert_eq!(
+                    read_buffer_bytes(&mut e, buffer, length),
+                    vec![0; length as usize]
+                );
+                let mut expected = pattern(4, length);
+                let (_, at) = lock_buffer(&mut e, buffer, 0, 0, 0);
+                e.mem.write(at, &expected);
+                assert_eq!(unlock_buffer(&mut e, buffer), D3D_OK);
+                assert_eq!(read_buffer_bytes(&mut e, buffer, length), expected);
+                let (_, outer) = lock_buffer(&mut e, buffer, 0x100, 0x40, 0);
+                let (_, inner) = lock_buffer(&mut e, buffer, 0x120, 0x10, NOSYSLOCK);
+                assert_eq!(inner, outer + 0x20);
+                e.mem.write(outer, &pattern(5, 0x40));
+                assert_eq!(unlock_buffer(&mut e, buffer), D3D_OK);
+                assert_eq!(unlock_buffer(&mut e, buffer), D3D_OK);
+                expected[0x100..0x140].copy_from_slice(&pattern(5, 0x40));
+                let (_, at) = lock_buffer(&mut e, buffer, 0, 0, READONLY);
+                e.mem.write(at, &[1, 2, 3]);
+                assert_eq!(unlock_buffer(&mut e, buffer), D3D_OK);
+                expected[..3].copy_from_slice(&[1, 2, 3]);
+                assert_eq!(read_buffer_bytes(&mut e, buffer, length), expected);
+                assert_eq!(present(&mut e, device), D3D_OK);
+                assert_eq!(e.vcall(buffer, 8, &[]).u32(), 0);
+            }
         }
-        eprintln!("real_buffers_keep_the_bytes_of_managed_buffers: ran on a real device");
         assert!(
             state!(e).graphics.real.logged_is_empty(),
             "no answer of the real device differed"
+        );
+        eprintln!(
+            "static_buffers_on_a_real_device_keep_their_bytes_in_host_memory: ran on a real device"
         );
     }
 }
