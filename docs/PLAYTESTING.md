@@ -61,7 +61,10 @@ point the table's folders at a scratch copy of Documents; never at a player's ow
 | `NV_SAVE_OUT=DIR` | The saves the game writes, copied out to DIR, and the ones it deletes removed there (`crates/host/src/save_out.rs`) |
 | `NV_PREFS_OUT=FILE` | The `FalloutPrefs.ini` the game writes, copied out to FILE (same file) |
 | `NV_REPORT_DIR=DIR`, `NV_REPORT_LOG=FILE` | F12 in the game's window makes `DIR\NNN\` with the frame, the end of FILE and a `note.txt` for the player (`crates/engine-platform/src/d3d9real.rs`) |
-| `NV_UNCAP=1` | An opt-in fix, not 1:1: the frame limiter's sleep removed (`crates/host/src/uncap.rs`) |
+| `NV_PRESET=fixes` or `vanilla` | What differs from the exe: the fixes set (the default) or the original's behaviour; comparisons and gates pin vanilla ([FIXES.md](FIXES.md)) |
+| `NV_FRAME_LIMIT=n` | Frames a second at most under the fixes preset (0: none) |
+| `NV_UNCAP=0` or `1`, `NV_HF_LANDING=0` or `1` | One fix alone; with no `NV_PRESET` the rest of the run is vanilla |
+| `NV_FRAME_LOG=FILE` | One line per main frame (clock, step, player position), with no per-call cost | 
 
 ## Packages
 
