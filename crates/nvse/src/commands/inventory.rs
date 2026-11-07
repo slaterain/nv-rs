@@ -40,8 +40,10 @@ const TYPE_ID: u32 = 4;
 /// `BGSClipRoundsForm::CopyComponent`).
 const EQUIP_TYPE: u32 = 4;
 const CLIP_ROUNDS: u32 = 4;
+/// `TESAttackDamageForm::damage` (`+4`, a `UInt16`; its `InitializeDataComponent` `0047fe10` clears it).
+const DAMAGE: u32 = 4;
 
-pub static COMMANDS: [Command; 6] = [
+pub static COMMANDS: [Command; 7] = [
     Command {
         opcode: 0x1404,
         name: "GetWeight",
@@ -106,6 +108,17 @@ pub static COMMANDS: [Command; 6] = [
         params: ONE_OPTIONAL_OBJECT_ID,
         execute: get_weapon_clip_rounds_execute,
         eval: Some(get_weapon_clip_rounds_eval),
+        returns: Returns::Default,
+    },
+    Command {
+        opcode: 0x140f,
+        name: "GetAttackDamage",
+        short: "GetDamage",
+        help: "returns the attack damage for the weapon",
+        needs_ref: false,
+        params: ONE_OPTIONAL_OBJECT_ID,
+        execute: get_attack_damage_execute,
+        eval: Some(get_attack_damage_eval),
         returns: Returns::Default,
     },
 ];
@@ -354,6 +367,22 @@ fn get_weapon_clip_rounds_eval(e: &mut Engine, w: &[u32]) -> Ret {
     component_eval(e, w, rtti::BGS_CLIP_ROUNDS_FORM, read_clip_rounds)
 }
 
+fn read_damage(e: &Engine, component: u32) -> f64 {
+    f64::from(e.mem.u16(component + DAMAGE))
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Inventory.cpp:
+// Cmd_GetAttackDamage_Execute.
+fn get_attack_damage_execute(e: &mut Engine, w: &[u32]) -> Ret {
+    component_execute(e, w, rtti::TES_ATTACK_DAMAGE_FORM, read_damage)
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Inventory.cpp:
+// Cmd_GetAttackDamage_Eval.
+fn get_attack_damage_eval(e: &mut Engine, w: &[u32]) -> Ret {
+    component_eval(e, w, rtti::TES_ATTACK_DAMAGE_FORM, read_damage)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_support::engine;
@@ -489,6 +518,12 @@ mod tests {
         assert_eq!(eval(&mut e, 0x140c, 0, WEAPON), 3.0);
         assert_eq!(eval(&mut e, 0x140e, REFERENCE, 0), 30.0);
         assert_eq!(eval(&mut e, 0x140e, 0, 0), 0.0);
+        // The attack damage is 16 bits.
+        e.mem
+            .set_u32(WEAPON + 0x7f0, e.mem.u32(WEAPON + 0x7f0) | 128);
+        e.mem.set_u32(WEAPON + 0x600 + DAMAGE, 0x0007_002a);
+        assert_eq!(run(&mut e, 0x140f, 0, Some(1)), 42.0);
+        assert_eq!(eval(&mut e, 0x140f, REFERENCE, 0), 42.0);
     }
 
     /// A read that fails (a Cell for an inventory object) leaves the result 0 and the line goes

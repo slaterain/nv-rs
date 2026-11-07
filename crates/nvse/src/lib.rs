@@ -149,3 +149,40 @@ pub fn install(e: &mut Engine) {
 // The unit tests' own program: no other crate's functions are linked in.
 #[cfg(test)]
 engine_core::assemble!();
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engine_core::extend::Owner;
+
+    fn base(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+
+    /// Installed over the exe's functions, xNVSE's wraps are all listed in the wrap table (the
+    /// dispatch check of ADR-0016), its seam handlers sit at their seams, and a second install
+    /// changes nothing.
+    #[test]
+    fn install_wraps_only_listed_addresses_once() {
+        let mut e = crate::table::tests::engine_with_exe_tables();
+        for addr in [
+            0x005e_0d20,
+            0x005e_1160,
+            0x005e_13a0,
+            0x005e_1550,
+            0x005a_ccb0,
+        ] {
+            e.register(addr, base);
+        }
+        install(&mut e);
+        assert!(e.unlisted_wraps().is_empty());
+        assert_eq!(e.wrapped().len(), 5);
+        for site in [0x005a_cb9d, 0x005e_16c3, 0x005e_2329] {
+            assert_eq!(e.site_owners(site), [Owner::Nvse], "{site:08x}");
+        }
+        let tables = e.script_tables();
+        install(&mut e);
+        assert_eq!(e.script_tables(), tables);
+        assert_eq!(e.wraps_at(0x005e_0d20), [Owner::Nvse]);
+    }
+}

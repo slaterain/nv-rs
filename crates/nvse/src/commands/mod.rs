@@ -24,6 +24,7 @@ pub mod rtti {
     pub const TES_AMMO: u32 = 0x0118_40c4;
     pub const BGS_EQUIP_TYPE: u32 = 0x0118_3290;
     pub const BGS_CLIP_ROUNDS_FORM: u32 = 0x0118_68d4;
+    pub const TES_ATTACK_DAMAGE_FORM: u32 = 0x0118_6c90;
 }
 
 /// `DYNAMIC_CAST(obj, from, to)` (xNVSE): the exe's `__RTDynamicCast`; 0 for a null object or
@@ -127,6 +128,7 @@ pub(crate) mod test_support {
             rtti::TES_AMMO => (16, 0),
             rtti::BGS_EQUIP_TYPE => (32, 0x400),
             rtti::BGS_CLIP_ROUNDS_FORM => (64, 0x500),
+            rtti::TES_ATTACK_DAMAGE_FORM => (128, 0x600),
             _ => (0, 0),
         }
     }
