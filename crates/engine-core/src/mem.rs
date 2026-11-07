@@ -3596,11 +3596,12 @@ mod tests {
         }
     }
 
-    /// `Mem` stays `Send` and `Sync`, as it was with boxed pages.
+    /// `Mem` stays `Send`, as it was with boxed pages (the thread host moves the engine between OS
+    /// threads); not `Sync` until the thread host shares it (module documentation, "Threads").
     #[test]
-    fn mem_is_send_and_sync() {
-        fn send_sync<T: Send + Sync>() {}
-        send_sync::<Mem>();
+    fn mem_is_send() {
+        fn send<T: Send>() {}
+        send::<Mem>();
     }
 
     /// The page table this module used before the flat block (one boxed page per slot), kept
