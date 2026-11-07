@@ -46,7 +46,10 @@ impl Settings {
                 continue;
             }
             if let Some((name, value)) = line.split_once('=') {
-                map.insert(name.trim().to_string(), value.trim().to_string());
+                // The last line of a name wins, its case aside, as the game and Settings.ps1 read it.
+                let name = name.trim();
+                map.retain(|k: &String, _| !k.eq_ignore_ascii_case(name));
+                map.insert(name.to_string(), value.trim().to_string());
             }
         }
         Settings(map)
@@ -296,5 +299,14 @@ mod tests {
         assert_eq!(out, "[Display]\r\niSize H=600\r\n");
         let out = apply_to_prefs("[Audio]\nfVolume=1", &lines(&[("iSize H", "600")]));
         assert_eq!(out, "[Audio]\nfVolume=1\r\n[Display]\r\niSize H=600\r\n");
+    }
+
+    #[test]
+    fn the_last_line_of_a_name_wins_whatever_its_case() {
+        let s = Settings::parse("Preset=fixes\npreset=vanilla\n");
+        assert_eq!(s.game_switches().unwrap()[0].1, "vanilla");
+        let s = Settings::parse("preset=vanila\nPreset=fixes\nFrameLimit=60\nframelimit=0\n");
+        let sw = s.game_switches().unwrap();
+        assert_eq!((sw[0].1.as_str(), sw[1].1.as_str()), ("fixes", "0"));
     }
 }

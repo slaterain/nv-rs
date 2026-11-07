@@ -1055,6 +1055,13 @@ fn play(
     {
         package.log("settings.ini's NV_FIXES line is not used: Preset= chooses the fixes");
     }
+    for raw in ["NV_PRESET", "NV_FRAME_LIMIT"] {
+        if settings.0.keys().any(|k| k.eq_ignore_ascii_case(raw)) {
+            package.log(&format!(
+                "settings.ini's {raw} line is not used: Preset= and FrameLimit= choose them (Settings.cmd)"
+            ));
+        }
+    }
     prepare_prefs(package, profile, &settings, &game.folder, device.as_deref()).map_err(|e| {
         Stop {
             code: STOP_LOCATION,
