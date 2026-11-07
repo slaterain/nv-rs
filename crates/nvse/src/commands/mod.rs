@@ -4,6 +4,7 @@
 pub mod algohol;
 pub mod inventory;
 pub mod math;
+pub mod scripting;
 pub mod weapons;
 
 use crate::args::{extract_args_ex, Arg};
@@ -18,6 +19,7 @@ pub fn all() -> Vec<&'static Command> {
         .chain(weapons::COMMANDS)
         .chain(math::COMMANDS)
         .chain(algohol::COMMANDS)
+        .chain(scripting::COMMANDS)
         .collect()
 }
 

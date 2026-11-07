@@ -12,6 +12,13 @@
 //! - I-4 [`args`]: xNVSE's argument reader (`ExtractArgsEx`), the one its own commands use and,
 //!   wrapped over `Script::ParseParameters`, the one vanilla handlers use for extender opcodes; the
 //!   result zeroed before an extender command runs.
+//! - I-5 [`vars`]: string and array variables, their ids, references and temporaries; the main
+//!   loop's tick (the seam at `0086B386`) cleaning the temporaries, and an event list's
+//!   variables given up when the game destroys it (`0041af70`, wrapped).
+//! - I-6 [`expr`]: the expression evaluator (`Let`, `eval`, `testexpr`, parenthesised
+//!   parameters).
+//! - I-7 (part) [`commands::scripting`]: `while`, `ForEach`, `loop`, `continue`, `break`,
+//!   `Label`, `Goto`. User functions and lambdas are not built yet.
 //! - [`commands`]: the commands built so far, by xNVSE's `Commands_*.cpp` file.
 //!
 //! [`install`] runs once per engine, after the fix rows (`host::Host::start_with`); the engine
@@ -20,9 +27,11 @@
 pub mod args;
 pub mod commands;
 pub mod context;
+pub mod expr;
 pub mod mt19937;
 pub mod names;
 pub mod table;
+pub mod vars;
 
 use engine_core::prelude::*;
 
@@ -134,6 +143,12 @@ pub struct Nvse {
     /// The MT19937 generator `Rand` draws from, seeded at install from the clock, as xNVSE seeds
     /// it with `GetTickCount()` when it loads (`nvse.cpp` (xNVSE)).
     pub mt: mt19937::Mt19937,
+    /// The string and array variables (I-5).
+    pub vars: vars::State,
+    /// The running evaluators' expected return types (I-6).
+    pub expr: expr::State,
+    /// The loop stacks and labels (I-7).
+    pub loops: commands::scripting::State,
 }
 
 /// Builds xNVSE into the engine, as xNVSE's `CommandTable::Init` and its hooks do at the game's
@@ -149,6 +164,7 @@ pub fn install(e: &mut Engine) {
     table::install(e);
     context::install(e);
     args::install(e);
+    vars::install(e);
     e.ext::<Nvse>().installed = true;
 }
 
@@ -177,13 +193,14 @@ mod tests {
             0x005e_13a0,
             0x005e_1550,
             0x005a_ccb0,
+            0x0041_af70,
         ] {
             e.register(addr, base);
         }
         install(&mut e);
         assert!(e.unlisted_wraps().is_empty());
-        assert_eq!(e.wrapped().len(), 5);
-        for site in [0x005a_cb9d, 0x005e_16c3, 0x005e_2329] {
+        assert_eq!(e.wrapped().len(), 6);
+        for site in [0x005a_cb9d, 0x005e_16c3, 0x005e_2329, 0x0086_b386] {
             assert_eq!(e.site_owners(site), [Owner::Nvse], "{site:08x}");
         }
         let tables = e.script_tables();
