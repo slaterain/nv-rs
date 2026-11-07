@@ -310,7 +310,8 @@ mod tests {
     }
 
     /// Blocks are put on the first function of their allocation path past the allocator's own and
-    /// its caller, split by class; a block with no path on the function running when it was made.
+    /// its caller, split by class; a block with no allocator path on the function running when it was
+    /// made and its caller.
     #[test]
     fn the_heap_census_groups_blocks_by_allocating_function_and_class() {
         let mut e = Engine::new();
@@ -325,7 +326,7 @@ mod tests {
         e.mem.note_path(&path);
         let plain = e.mem.alloc(0x13);
         e.mem.set_u32(plain, 0x0110_0404);
-        e.mem.set_check_frame(0x0070_0000, 0);
+        e.mem.set_check_frame(0x0070_0000, 0x0071_0000);
         e.mem.alloc(0x100);
         let rows = heap_rows(&e.mem);
         let find = |f: u32, v: u32| {
@@ -351,7 +352,7 @@ mod tests {
             ("", 1, 0x13, 0x18)
         );
         let running = find(0x0070_0000, 0);
-        assert_eq!((running.caller, running.bytes), (0, 0x100));
+        assert_eq!((running.caller, running.bytes), (0x0071_0000, 0x100));
         let text = heap_tsv(&e.mem, 42);
         assert!(
             text.starts_with("# heap census at main's frame 42:"),

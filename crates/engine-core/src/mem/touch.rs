@@ -3,7 +3,7 @@
 //! that says whether a family's objects can move out of guest memory: nothing outside the family
 //! may touch them.
 //!
-//! Objects are tagged two ways, both read from a spec file (`NV_TOUCH=<file>`):
+//! Objects are tagged three ways, all read from a spec file (`NV_TOUCH=<file>`):
 //! - `vtable <addr> <size> <tag>`: a store of `addr` as a word tags the `size` bytes it starts
 //!   (the store every constructor makes, and a destructor again; `size` 0: the heap block it
 //!   starts, else 4). So objects of the class are tagged wherever they are made: on the heap,
@@ -11,6 +11,8 @@
 //! - `alloc <addr> <tag>`: a heap block whose allocation the function at `addr` asked for (the
 //!   first function of its path past the allocator's own, [`ALLOC_WRAPPERS`]) is tagged whole: a
 //!   family's buckets and nodes, which have no vtable.
+//! - `made <addr> <tag>`: a heap block not from the game's allocator (a platform object's buffer, a
+//!   `VirtualAlloc`) made while the function or platform entry at `addr` ran.
 //!
 //! The pages that hold a tagged object get the page state [`TOUCH`]: the fast path of every load
 //! and store (`Mem::fast_at`) misses it as it misses an unmapped page, so the access takes the
@@ -56,12 +58,15 @@ pub struct TouchSpec {
     pub vtables: HashMap<u32, (u32, u16)>,
     /// Allocating function -> tag.
     pub allocs: HashMap<u32, u16>,
+    /// Function that ran when a block not from the game's allocator was made -> tag.
+    pub made: HashMap<u32, u16>,
     /// The tags' names, by tag number.
     pub names: Vec<String>,
 }
 
 impl TouchSpec {
-    /// Reads a spec: one rule a line (`vtable <hex> <hex size> <tag>`, `alloc <hex> <tag>`);
+    /// Reads a spec: one rule a line (`vtable <hex> <hex size> <tag>`, `alloc <hex> <tag>`,
+    /// `made <hex> <tag>`);
     /// blank lines and `#` comments are skipped.
     pub fn parse(text: &str) -> Result<TouchSpec, String> {
         let mut spec = TouchSpec::default();
@@ -86,6 +91,10 @@ impl TouchSpec {
                 ["alloc", addr, tag] => {
                     let t = spec.tag(tag);
                     spec.allocs.insert(hex(addr, line)?, t);
+                }
+                ["made", addr, tag] => {
+                    let t = spec.tag(tag);
+                    spec.made.insert(hex(addr, line)?, t);
                 }
                 _ => return Err(format!("line {line}: {raw:?} is not a touch rule")),
             }
@@ -289,8 +298,17 @@ impl Mem {
         let Some(t) = self.touch.as_deref() else {
             return;
         };
-        let f = allocating_function(path);
-        let tag = t.spec.allocs.get(&f).copied();
+        // A block the game's allocator handed out goes by its allocating function (`alloc`); any other
+        // (a `with_stack` local, a platform buffer, a `VirtualAlloc`: the running function and its
+        // caller are its path) by the function that ran (`made`), so a family function's locals
+        // aren't its body.
+        let (f, tag) = if path.iter().any(|f| ALLOC_WRAPPERS.contains(f)) {
+            let f = allocating_function(path);
+            (f, t.spec.allocs.get(&f).copied())
+        } else {
+            let f = path.first().copied().unwrap_or(0);
+            (f, t.spec.made.get(&f).copied())
+        };
         if let Some(tag) = tag {
             self.touch_tag(addr, asked.max(1), tag, f);
         }
@@ -379,6 +397,8 @@ mod tests {
         assert_eq!(s.names, ["lfm", "lfm-body"]);
         assert!(TouchSpec::parse("vtable 01017294 lfm\n").is_err());
         assert!(TouchSpec::parse("ctor 00449940 40 lfm\n").is_err());
+        let made = TouchSpec::parse("made 7e02025c d3d\n").expect("spec");
+        assert_eq!(made.made.get(&0x7e02_025c), Some(&0));
         assert!(TouchSpec::parse("alloc zz lfm\n").is_err());
     }
 
@@ -494,6 +514,38 @@ mod tests {
         assert_eq!(
             (h.tag, h.class, h.offset, h.len, h.write, n),
             (2, ALLOCATOR, 0x2c, 4, true, 1)
+        );
+        // A block made while the listed function runs but not through the allocator (a local): not
+        // its body.
+        m.set_check_frame(ALLOCATOR, 0x0044_2650);
+        let local = m.alloc(0x30);
+        m.set_u32(local, 1);
+        assert_eq!(m.touch_hits().len(), 1);
+    }
+
+    /// A block not from the game's allocator (a platform buffer) is tagged by the function that ran.
+    #[test]
+    fn a_block_made_while_a_listed_function_ran_is_tagged_whole() {
+        let mut m = Mem::new();
+        m.enable_touch(
+            TouchSpec::parse(
+                "made 7e02025c d3d
+",
+            )
+            .expect("spec"),
+        );
+        m.set_check_frame(0x7e02_025c, 0x00e6_8ef0);
+        let buffer = m.alloc(0x100);
+        m.set_check_frame(0x0044_1000, 0);
+        let plain = m.alloc(0x100);
+        m.set_check_frame(0x00e6_9000, 0x00e6_8ef0);
+        m.set_u32(buffer + 0xf0, 1);
+        m.set_u32(plain, 1);
+        let hits = m.touch_hits();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            (hits[0].0.class, hits[0].0.offset, hits[0].0.function),
+            (0x7e02_025c, 0xf0, 0x00e6_9000)
         );
     }
 

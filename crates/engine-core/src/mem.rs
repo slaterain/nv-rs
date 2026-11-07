@@ -829,6 +829,11 @@ impl Mem {
         if !c.pending_path.is_empty() {
             let path = std::mem::take(&mut c.pending_path);
             c.alloc_paths.insert(addr, path);
+        } else if c.current_fn != 0 {
+            // A block the game's allocator didn't hand out (a `VirtualAlloc`, a platform object's
+            // buffer, the C runtime's `malloc`, a `with_stack` local): the running function and its
+            // caller are its path, so the heap census can name who asked for it.
+            c.alloc_paths.insert(addr, vec![c.current_fn, c.caller_fn]);
         }
         c.guards.insert(start, (end, addr));
         if c.store {
