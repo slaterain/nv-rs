@@ -611,7 +611,7 @@ marker elsewhere, in the engine crates, `crates/host` and `viewer`. The rules re
   calls the game makes, so it is left for each family's own step.
 - **What stays review-only,** because this reads text: a call through a function pointer or a `let` of
   the function; a call a macro builds; a devirtualised or copied body; a bare name a local of the same
-  name; a re-export under another module's name; whether a `Diff::new` really covers the function's
+  name hides; a re-export under another module's name; whether a `Diff::new` really covers the function's
   branches; and a `typed_call!`'s family, which only a test build with the
   flag set checks, so a site no test runs that way is only as right as its review.
 
