@@ -630,6 +630,10 @@ turn (`Sleep(1)`) until a batch is ready; the main thread goes on with its frame
 sees only its IO task take time, as on the original. `NV_SOUND_DECODE=inline` decodes inside
 the call as before; the tests and platform-clock runs always do.
 
+Measured on the Goodsprings stutter route (one build, ahead then inline, 2026-11-07): the town's
+p99 frame 27.9 ms (inline 30.5), p99.9 35.1 (56.1), frames over 33 ms 9.8 a minute (18.6), over
+50 ms 1.5 a minute (4.5); the median frame (21.7 ms) and Doc's house (about 112 fps) unchanged.
+
 ## Bink with sound
 
 The game calls `BinkSetSoundSystem(BinkOpenDirectSound, 0)` (`00ec1680`). An
