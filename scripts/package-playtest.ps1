@@ -6,7 +6,7 @@
 #       -Game 'path of the game's FalloutNV.exe, only read: the check that no data of it is in the programs'
 #       [-TestBuild]     a package for testing, from a commit that is not on GitHub (yet): its BUILD.txt
 #                        says "test build, not for release" and its name ends in -test. Without this
-#                        flag the script refuses unless HEAD is on origin (BUILD.txt links to it).
+#                        flag the script refuses unless HEAD is on origin's main (BUILD.txt links to it).
 #       [-UseBuilt]      use programs built before (with the flags below), under -Target
 #       [-Target DIR]    the Cargo target folder (default: target)
 #       [-Toolchain32 stable]   the Rust toolchain that has i686-pc-windows-msvc, for the 32-bit tools
@@ -37,8 +37,11 @@ try {
     if (!$TestBuild) {
         git fetch --quiet origin
         if ($LASTEXITCODE) { throw 'Could not ask origin which commits it has. Fix the connection, or use -TestBuild for a package that is not for release.' }
-        $onOrigin = git branch --remotes --contains $commit
-        if (!$onOrigin) { throw "HEAD ($commit) is not on origin, so BUILD.txt's source link would lead nowhere. Push it (the final package is made from main after the merge), or use -TestBuild for a test package." }
+        # Only origin's main counts: another remote, or a feature branch deleted on GitHub that this
+        # checkout still lists, would let a commit through that GitHub may not keep.
+        git merge-base --is-ancestor $commit refs/remotes/origin/main
+        if ($LASTEXITCODE -eq 1) { throw "HEAD ($commit) is not on origin's main, so BUILD.txt's source link may lead nowhere. The final package is made from main after the merge; use -TestBuild for a test package." }
+        if ($LASTEXITCODE) { throw "Could not compare HEAD with origin/main (git merge-base status $LASTEXITCODE)." }
     }
     $licenseLock = (Get-Content -LiteralPath (Join-Path $root 'distribution/DEPENDENCY-LOCK.sha256') -Raw).Trim()
     # The hash of the file with LF line ends, whichever way this checkout has them.

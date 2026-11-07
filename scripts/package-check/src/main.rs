@@ -14,7 +14,8 @@
 //!   in both programs (the longest seen is about 2 KB), game data would be more.
 //!
 //! Prints what it finds; status 1 when a needle is found or a shared run is over the limit, 2 when
-//! a `--game` file can't be read.
+//! a `--game` file can't be read or the command line is wrong (a `--max-run` that isn't a number
+//! included).
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -162,27 +163,67 @@ fn load_reference(games: &[PathBuf]) -> Result<Vec<Vec<u8>>, String> {
         .collect()
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let Some(folder) = args.first().map(PathBuf::from) else {
-        eprintln!("usage: package-check FOLDER [--needle TEXT]... [--game FILE]...");
-        std::process::exit(2);
+/// What the command line asks for.
+#[derive(Debug, Default, PartialEq)]
+struct Arguments {
+    folder: PathBuf,
+    needles: Vec<String>,
+    program_needles: Vec<String>,
+    games: Vec<PathBuf>,
+    max_run: Option<usize>,
+}
+
+const USAGE: &str = "usage: package-check FOLDER [--needle TEXT]... [--program-needle TEXT]... [--game FILE]... [--max-run BYTES]";
+
+/// The command line after the program's name. A switch without its value, an unknown switch or a
+/// `--max-run` that isn't a number is an error: a limit that was asked for is never dropped.
+fn parse_arguments(args: &[String]) -> Result<Arguments, String> {
+    let Some(folder) = args.first() else {
+        return Err(USAGE.to_string());
     };
-    let (mut needles, mut program_needles, mut games) = (Vec::new(), Vec::new(), Vec::new());
-    let mut max_run: Option<usize> = None;
+    let mut out = Arguments {
+        folder: PathBuf::from(folder),
+        ..Arguments::default()
+    };
     let mut rest = args[1..].iter();
     while let Some(arg) = rest.next() {
+        let value = rest
+            .next()
+            .cloned()
+            .ok_or_else(|| format!("{arg} needs a value. {USAGE}"));
         match arg.as_str() {
-            "--needle" => needles.extend(rest.next().cloned()),
-            "--program-needle" => program_needles.extend(rest.next().cloned()),
-            "--game" => games.extend(rest.next().map(PathBuf::from)),
-            "--max-run" => max_run = rest.next().and_then(|n| n.parse().ok()),
-            other => {
-                eprintln!("what is {other}?");
-                std::process::exit(2);
+            "--needle" => out.needles.push(value?),
+            "--program-needle" => out.program_needles.push(value?),
+            "--game" => out.games.push(PathBuf::from(value?)),
+            "--max-run" => {
+                let n = value?;
+                let limit = n
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("--max-run {n:?}: use a number of bytes"))?;
+                out.max_run = Some(limit);
             }
+            other => return Err(format!("what is {other}? {USAGE}")),
         }
     }
+    Ok(out)
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let Arguments {
+        folder,
+        needles,
+        program_needles,
+        games,
+        max_run,
+    } = match parse_arguments(&args) {
+        Ok(arguments) => arguments,
+        Err(why) => {
+            eprintln!("{why}");
+            std::process::exit(2);
+        }
+    };
     let mut files = Vec::new();
     files_under(&folder, &mut files);
     files.sort();
@@ -301,6 +342,27 @@ mod tests {
         assert_eq!(find_all(b"xx SECRET secret", &bytes), [3, 10]);
         assert_eq!(find_all(b"S\0e\0c\0R\0e\0T\0", &wide), [0]);
         assert!(find_all(b"", &bytes).is_empty());
+    }
+
+    #[test]
+    fn a_max_run_that_is_not_a_number_is_an_error_not_no_limit() {
+        let args = |list: &[&str]| -> Vec<String> { list.iter().map(|s| s.to_string()).collect() };
+        let parsed =
+            parse_arguments(&args(&["pkg", "--max-run", "4096", "--game", "g.exe"])).unwrap();
+        assert_eq!(parsed.max_run, Some(4096));
+        assert_eq!(parsed.games, [PathBuf::from("g.exe")]);
+        assert_eq!(parse_arguments(&args(&["pkg"])).unwrap().max_run, None);
+        for bad in [
+            &["pkg", "--max-run", "4k"][..],
+            &["pkg", "--max-run", "-1"],
+            &["pkg", "--max-run", ""],
+            &["pkg", "--max-run"],
+            &["pkg", "--needle"],
+            &["pkg", "--maxrun", "4096"],
+            &[],
+        ] {
+            assert!(parse_arguments(&args(bad)).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
