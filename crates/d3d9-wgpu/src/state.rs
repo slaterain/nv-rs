@@ -267,12 +267,12 @@ pub fn depth_stencil(s: &[u32; 256], format: wgpu::TextureFormat) -> wgpu::Depth
     };
     wgpu::DepthStencilState {
         format,
-        depth_write_enabled: z && s[rs::ZWRITEENABLE] != 0,
-        depth_compare: if z {
+        depth_write_enabled: Some(z && s[rs::ZWRITEENABLE] != 0),
+        depth_compare: Some(if z {
             compare(s[rs::ZFUNC])
         } else {
             wgpu::CompareFunction::Always
-        },
+        }),
         stencil: if stencil_on {
             wgpu::StencilState {
                 front,
@@ -369,14 +369,15 @@ impl SamplerKey {
         };
         let anisotropic =
             self.filterable && (self.min == 3 || self.mag == 3) && self.anisotropy > 1;
-        let (min_filter, mag_filter, mipmap_filter) = if anisotropic {
-            (
-                wgpu::FilterMode::Linear,
-                wgpu::FilterMode::Linear,
-                wgpu::FilterMode::Linear,
-            )
+        let mip = if anisotropic || (self.mip >= 2 && self.filterable) {
+            wgpu::MipmapFilterMode::Linear
         } else {
-            (filter(self.min), filter(self.mag), filter(self.mip))
+            wgpu::MipmapFilterMode::Nearest
+        };
+        let (min_filter, mag_filter, mipmap_filter) = if anisotropic {
+            (wgpu::FilterMode::Linear, wgpu::FilterMode::Linear, mip)
+        } else {
+            (filter(self.min), filter(self.mag), mip)
         };
         // `D3DTEXF_NONE` as the mip filter: the most detailed level allowed only.
         let base = f32::from(self.max_level);
@@ -432,13 +433,13 @@ mod tests {
     fn depth_defaults_to_less_equal_with_writes() {
         let s = default_render_states(true);
         let d = depth_stencil(&s, wgpu::TextureFormat::Depth24PlusStencil8);
-        assert!(d.depth_write_enabled);
-        assert_eq!(d.depth_compare, wgpu::CompareFunction::LessEqual);
+        assert_eq!(d.depth_write_enabled, Some(true));
+        assert_eq!(d.depth_compare, Some(wgpu::CompareFunction::LessEqual));
         assert_eq!(d.stencil, wgpu::StencilState::default());
         let off = default_render_states(false);
         assert_eq!(
             depth_stencil(&off, wgpu::TextureFormat::Depth24Plus).depth_compare,
-            wgpu::CompareFunction::Always
+            Some(wgpu::CompareFunction::Always)
         );
     }
 

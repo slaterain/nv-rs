@@ -67,7 +67,7 @@ fn on_gpu(device: &wgpu::Device, p: &sm::Program, source: &str) -> Option<String
             s
         }
     };
-    device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let own = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
         source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -92,11 +92,11 @@ fn on_gpu(device: &wgpu::Device, p: &sm::Program, source: &str) -> Option<String
             .collect(),
         Stage::Pixel => Vec::new(),
     };
-    let buffers = [wgpu::VertexBufferLayout {
+    let buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: 16,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &attributes,
-    }];
+    })];
     let targets: Vec<Option<wgpu::ColorTargetState>> = match p.stage {
         Stage::Vertex => vec![Some(wgpu::TextureFormat::Rgba8Unorm.into())],
         Stage::Pixel => {
@@ -121,8 +121,8 @@ fn on_gpu(device: &wgpu::Device, p: &sm::Program, source: &str) -> Option<String
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: sig.depth.then(|| wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Always,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Always),
             stencil: Default::default(),
             bias: Default::default(),
         }),
@@ -133,10 +133,10 @@ fn on_gpu(device: &wgpu::Device, p: &sm::Program, source: &str) -> Option<String
             compilation_options: Default::default(),
             targets: &targets,
         }),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     });
-    block_on(device.pop_error_scope()).map(|e| e.to_string())
+    block_on(scope.pop()).map(|e| e.to_string())
 }
 
 fn main() {
@@ -151,21 +151,20 @@ fn main() {
             Ok("vulkan") => wgpu::Backends::VULKAN,
             _ => wgpu::Backends::PRIMARY,
         };
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends,
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let adapter = block_on(instance.request_adapter(&Default::default())).expect("an adapter");
         println!("on {:?}", adapter.get_info());
-        let (device, _queue) = block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: None,
-                required_features: adapter.features() & wgpu::Features::FLOAT32_FILTERABLE,
-                required_limits: adapter.limits(),
-                memory_hints: Default::default(),
-            },
-            None,
-        ))
+        let (device, _queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: None,
+            required_features: adapter.features() & wgpu::Features::FLOAT32_FILTERABLE,
+            required_limits: adapter.limits(),
+            memory_hints: Default::default(),
+            experimental_features: Default::default(),
+            trace: Default::default(),
+        }))
         .expect("a device");
         device
     });

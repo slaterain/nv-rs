@@ -151,13 +151,13 @@ struct PipeKey {
     index32: bool,
     colours: [Option<(wgpu::TextureFormat, bool)>; 4],
     depth: Option<wgpu::TextureFormat>,
-    states: [u32; 28],
+    states: [u32; 30],
     samples: u32,
     samplers: Vec<(u32, u8, bool)>,
 }
 
 /// The render states a pipeline is made from.
-const PIPELINE_STATES: [usize; 28] = [
+const PIPELINE_STATES: [usize; 30] = [
     rs::ZENABLE,
     rs::ZWRITEENABLE,
     rs::ZFUNC,
@@ -182,6 +182,8 @@ const PIPELINE_STATES: [usize; 28] = [
     rs::STENCILMASK,
     rs::STENCILWRITEMASK,
     rs::TWOSIDEDSTENCILMODE,
+    rs::CCW_STENCILFAIL,
+    rs::CCW_STENCILZFAIL,
     rs::CCW_STENCILFUNC,
     rs::CCW_STENCILPASS,
     rs::DEPTHBIAS,
@@ -319,14 +321,14 @@ impl Device {
         };
         let mut found = None;
         for backends in tries {
-            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends,
                 flags: if std::env::var_os("NV_WGPU_DEBUG").is_some() {
                     wgpu::InstanceFlags::debugging()
                 } else {
                     wgpu::InstanceFlags::empty()
                 },
-                ..Default::default()
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
             });
             let surface = match output {
                 Output::Window if window != 0 => Some(surface_for(&instance, window)?),
@@ -336,7 +338,9 @@ impl Device {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: false,
                 compatible_surface: surface.as_ref(),
-            }));
+                apply_limit_buckets: false,
+            }))
+            .ok();
             if let Some(adapter) = adapter {
                 found = Some((surface, adapter));
                 break;
@@ -349,20 +353,19 @@ impl Device {
             | wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER
             | wgpu::Features::DEPTH32FLOAT_STENCIL8;
         let features = adapter.features() & wanted;
-        let (device, queue) = block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("d3d9-wgpu"),
-                required_features: features,
-                required_limits: adapter.limits(),
-                memory_hints: wgpu::MemoryHints::Performance,
-            },
-            None,
-        ))
+        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("d3d9-wgpu"),
+            required_features: features,
+            required_limits: adapter.limits(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            experimental_features: Default::default(),
+            trace: Default::default(),
+        }))
         .map_err(|e| format!("request_device: {e}"))?;
         let errors = Arc::new(AtomicU64::new(0));
         {
             let errors = errors.clone();
-            device.on_uncaptured_error(Box::new(move |e| {
+            device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
                 if errors.fetch_add(1, Ordering::Relaxed) < 20 {
                     eprintln!("NV_D3D9 wgpu: {e}");
                 }
@@ -486,6 +489,7 @@ impl Device {
                 width: pp.width.max(1),
                 height: pp.height.max(1),
                 present_mode: d.present_mode(&caps),
+                color_space: wgpu::SurfaceColorSpace::Auto,
                 desired_maximum_frame_latency: 2,
                 alpha_mode: caps.alpha_modes[0],
                 view_formats: vec![],
@@ -1211,6 +1215,7 @@ impl Device {
                 c.as_ref()
                     .map(|(view, load)| wgpu::RenderPassColorAttachment {
                         view,
+                        depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: *load,
@@ -1254,6 +1259,7 @@ impl Device {
                 depth_stencil_attachment: depth_attachment,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             })
             .forget_lifetime();
         self.pass = Some(pass);
@@ -1411,8 +1417,8 @@ impl Device {
                 .device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: None,
-                    bind_group_layouts: &[&layout],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout)],
+                    immediate_size: 0,
                 });
             let targets: Vec<Option<wgpu::ColorTargetState>> = colours[..n]
                 .iter()
@@ -1448,8 +1454,8 @@ impl Device {
                     primitive: wgpu::PrimitiveState::default(),
                     depth_stencil: depth.map(|format| wgpu::DepthStencilState {
                         format,
-                        depth_write_enabled: flags & 2 != 0,
-                        depth_compare: wgpu::CompareFunction::Always,
+                        depth_write_enabled: Some(flags & 2 != 0),
+                        depth_compare: Some(wgpu::CompareFunction::Always),
                         stencil: if flags & 4 != 0 && format.has_stencil_aspect() {
                             wgpu::StencilState {
                                 front: stencil_face,
@@ -1472,7 +1478,7 @@ impl Device {
                         compilation_options: Default::default(),
                         targets: &targets,
                     }),
-                    multiview: None,
+                    multiview_mask: None,
                     cache: None,
                 });
             self.clears.insert(key, (pipeline, layout));
@@ -1487,12 +1493,10 @@ impl Device {
             usage: wgpu::BufferUsages::UNIFORM,
             mapped_at_creation: true,
         });
-        ub.slice(..).get_mapped_range_mut().copy_from_slice(
-            &values
-                .iter()
-                .flat_map(|v| v.to_le_bytes())
-                .collect::<Vec<u8>>(),
-        );
+        if let Ok(mut mapped) = ub.slice(..).get_mapped_range_mut() {
+            let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+            mapped.copy_from_slice(&bytes);
+        }
         ub.unmap();
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
@@ -1612,8 +1616,8 @@ impl Device {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
-                bind_group_layouts: &[&self.uniform_layout, &layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&self.uniform_layout), Some(&layout)],
+                immediate_size: 0,
             });
         self.sampler_layouts
             .insert(key.to_vec(), (layout, pipeline_layout.clone()));
@@ -1844,6 +1848,10 @@ impl Device {
             samplers: samplers.iter().map(|(k, _)| *k).collect(),
         };
         if !self.pipelines.contains_key(&key) {
+            // Bounded: render states with continuous values (depth bias) could grow it without end.
+            if self.pipelines.len() >= 4096 {
+                self.pipelines.clear();
+            }
             let pipeline =
                 self.make_pipeline(&key, &vs, &ps, &inputs, &varyings, &attributes, topology);
             self.pipelines.insert(key.clone(), pipeline);
@@ -1900,11 +1908,6 @@ impl Device {
             self.groups.insert(group_key.clone(), group);
         }
         let group = self.groups[&group_key].clone();
-        for &(_, slot) in &samplers {
-            if let Some(t) = &self.st.textures[slot] {
-                t.batch.store(self.batch, Ordering::Relaxed);
-            }
-        }
         // Vertices from DrawPrimitiveUP go into the batch's ring.
         let up_offset = if let Some((bytes, _)) = up {
             if self.up.len() + bytes.len() > UP_RING as usize {
@@ -1966,12 +1969,16 @@ impl Device {
             }
             match &self.st.streams[k].buffer {
                 Some(b) => {
+                    let offset = u64::from(self.st.streams[k].offset);
+                    // An offset past the buffer's end (wgpu would refuse the whole pass): the draw
+                    // is skipped, as a bad call is.
+                    if offset >= b.buffer.size() {
+                        self.warn("a stream offset past its buffer's end: the draw is skipped");
+                        self.skipped += 1;
+                        return;
+                    }
                     b.batch.store(self.batch, Ordering::Relaxed);
-                    streams.push((
-                        k as u32,
-                        b.buffer.clone(),
-                        u64::from(self.st.streams[k].offset),
-                    ));
+                    streams.push((k as u32, b.buffer.clone(), offset));
                 }
                 None => {
                     self.warn("a draw with a stream the declaration uses unbound: skipped");
@@ -1980,9 +1987,17 @@ impl Device {
                 }
             }
         }
+        let n = Self::vertex_count(kind, count);
         let index = if indexed {
             match &self.st.indices {
                 Some(b) => {
+                    // Indices past the buffer's end: skipped (wgpu would refuse the pass).
+                    let size = if b.index32 { 4 } else { 2 };
+                    if (u64::from(start) + u64::from(n)) * size > b.buffer.size() {
+                        self.warn("a draw reading indices past its buffer's end: skipped");
+                        self.skipped += 1;
+                        return;
+                    }
                     b.batch.store(self.batch, Ordering::Relaxed);
                     Some((b.buffer.clone(), b.index32))
                 }
@@ -1994,6 +2009,13 @@ impl Device {
         } else {
             None
         };
+        // The textures are this batch's from here (after any send above), so an upload into one
+        // later in the batch sends the batch first.
+        for &(_, slot) in &samplers {
+            if let Some(t) = &self.st.textures[slot] {
+                t.batch.store(self.batch, Ordering::Relaxed);
+            }
+        }
         let pass = self.pass.as_mut().expect("a pass is open");
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &self.ring_group, &[vs_block, ps_block]);
@@ -2012,7 +2034,6 @@ impl Device {
         for (slot, buffer, offset) in &streams {
             pass.set_vertex_buffer(*slot, buffer.slice(*offset..));
         }
-        let n = Self::vertex_count(kind, count);
         match index {
             Some((buffer, index32)) => {
                 pass.set_index_buffer(
@@ -2069,14 +2090,20 @@ impl Device {
         let vm = self.vs_modules[&vkey].clone()?;
         let pm = self.ps_modules[&pkey].clone()?;
         let layout = self.sampler_layout(&key.samplers);
-        let buffers: Vec<wgpu::VertexBufferLayout> = attributes
+        // One layout per stream slot up to the last used (a slot's index is its stream's number).
+        let last = attributes
+            .iter()
+            .rposition(|a| !a.is_empty())
+            .map_or(0, |i| i + 1);
+        let buffers: Vec<Option<wgpu::VertexBufferLayout>> = attributes[..last]
             .iter()
             .enumerate()
-            .filter(|(_, a)| !a.is_empty())
-            .map(|(k, a)| wgpu::VertexBufferLayout {
-                array_stride: u64::from(key.strides[k]),
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: a,
+            .map(|(k, a)| {
+                (!a.is_empty()).then(|| wgpu::VertexBufferLayout {
+                    array_stride: u64::from(key.strides[k]),
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: a,
+                })
             })
             .collect();
         let s = &self.st.rs;
@@ -2141,12 +2168,12 @@ impl Device {
                 compilation_options: Default::default(),
                 targets: &targets,
             }),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         };
-        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let pipeline = self.device.create_render_pipeline(&desc);
-        match block_on(self.device.pop_error_scope()) {
+        match block_on(scope.pop()) {
             None => Some(pipeline),
             Some(e) => {
                 self.warn(format!("a pipeline wgpu refuses: {e}"));
@@ -2157,9 +2184,10 @@ impl Device {
 
     // Copies.
 
+    /// The copy pipeline into `format` (`opaque`: a target without alpha, whose alpha stays 1).
     fn blit_pipeline(
         &mut self,
-        format: wgpu::TextureFormat,
+        (format, opaque): (wgpu::TextureFormat, bool),
     ) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
         let layout = self
             .blit_layout
@@ -2200,7 +2228,7 @@ impl Device {
                     })
             })
             .clone();
-        if let Some(p) = self.blit.get(&(format, false)) {
+        if let Some(p) = self.blit.get(&(format, opaque)) {
             return (p.clone(), layout);
         }
         let module = self
@@ -2213,8 +2241,8 @@ impl Device {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
-                bind_group_layouts: &[&layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
             });
         let p = self
             .device
@@ -2234,12 +2262,16 @@ impl Device {
                     module: &module,
                     entry_point: Some("fs"),
                     compilation_options: Default::default(),
-                    targets: &[Some(format.into())],
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: state::write_mask(0xF, opaque),
+                    })],
                 }),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
-        self.blit.insert((format, false), p.clone());
+        self.blit.insert((format, opaque), p.clone());
         (p, layout)
     }
 
@@ -2251,7 +2283,7 @@ impl Device {
         source_size: (u32, u32),
         source_rect: [f32; 4],
         target: &wgpu::TextureView,
-        format: wgpu::TextureFormat,
+        format: (wgpu::TextureFormat, bool),
         target_rect: [f32; 4],
         linear: bool,
     ) {
@@ -2281,7 +2313,9 @@ impl Device {
             usage: wgpu::BufferUsages::UNIFORM,
             mapped_at_creation: true,
         });
-        ub.slice(..).get_mapped_range_mut().copy_from_slice(&bytes);
+        if let Ok(mut mapped) = ub.slice(..).get_mapped_range_mut() {
+            mapped.copy_from_slice(&bytes);
+        }
         ub.unmap();
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
@@ -2306,6 +2340,7 @@ impl Device {
             label: Some("blit"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load,
@@ -2315,6 +2350,7 @@ impl Device {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &group, &[]);
@@ -2421,7 +2457,7 @@ impl Device {
             src_size,
             f(sr),
             &dv,
-            dst.format.wgpu,
+            (dst.format.wgpu, dst.format.opaque),
             f(dr),
             filter >= 2,
         );
@@ -2441,6 +2477,7 @@ impl Device {
             label: Some("resolve"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: source,
+                depth_slice: None,
                 resolve_target: Some(target),
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load,
@@ -2450,6 +2487,7 @@ impl Device {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
     }
 
@@ -2457,12 +2495,24 @@ impl Device {
         let (Some(s), Some(d)) = (self.texture_of(source), self.texture_of(destination)) else {
             return;
         };
+        // Direct3D 9 matches the levels by size: a source with more (larger) levels starts at the
+        // one of the destination's top size.
+        let Some(skip) = (0..s.levels)
+            .find(|&l| ((s.width >> l).max(1), (s.height >> l).max(1)) == (d.width, d.height))
+        else {
+            self.warn("UpdateTexture between textures of no common level size: skipped");
+            return;
+        };
+        if s.format.wgpu != d.format.wgpu || s.cube != d.cube {
+            self.warn("UpdateTexture between different formats: skipped");
+            return;
+        }
         self.end_pass();
-        let levels = s.levels.min(d.levels);
+        let levels = (s.levels - skip).min(d.levels);
         let layers = if s.cube { 6 } else { 1 };
         for level in 0..levels {
-            let w = (s.width >> level).max(1);
-            let h = (s.height >> level).max(1);
+            let w = (d.width >> level).max(1);
+            let h = (d.height >> level).max(1);
             let (w, h) = if s.format.block {
                 (w.div_ceil(4) * 4, h.div_ceil(4) * 4)
             } else {
@@ -2471,7 +2521,7 @@ impl Device {
             self.encoder().copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &s.texture,
-                    mip_level: level,
+                    mip_level: level + skip,
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
@@ -2537,8 +2587,26 @@ impl Device {
         }
         let mut frame_texture = None;
         if let (Some((surface, config)), Some(b)) = (&self.surface, &back) {
-            match surface.get_current_texture() {
-                Ok(t) => {
+            // An outdated or lost surface (the window resized, the display changed) is configured
+            // again and asked once more; a frame that cannot be had now (minimised, timed out) is
+            // skipped, as Direct3D 9's Present then shows nothing.
+            let mut acquired = None;
+            for _ in 0..2 {
+                match surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(t) => acquired = Some(t),
+                    wgpu::CurrentSurfaceTexture::Suboptimal(t) => {
+                        acquired = Some(t);
+                    }
+                    wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                        surface.configure(&self.device, config);
+                        continue;
+                    }
+                    _ => {}
+                }
+                break;
+            }
+            match acquired {
+                Some(t) => {
                     let view = t.texture.create_view(&Default::default());
                     let format = config.format;
                     let (w, h) = (config.width as f32, config.height as f32);
@@ -2550,35 +2618,38 @@ impl Device {
                         size,
                         [0.0, 0.0, size.0 as f32, size.1 as f32],
                         &view,
-                        format,
+                        (format, false),
                         [0.0, 0.0, w, h],
                         false,
                     );
                 }
-                Err(e) => self.warn(format!("the window's frame: {e}")),
+                None => self.warn("a frame the window could not take (skipped)"),
             }
         }
         self.flush();
         if let Some(t) = frame_texture {
-            t.present();
+            self.queue.present(t);
         }
         if let Some((buffer, row, width, height, format)) = readback {
             buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-            self.device.poll(wgpu::Maintain::Wait);
-            let data = buffer.slice(..).get_mapped_range();
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
             let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-            for y in 0..height {
-                let r = &data[(y * row) as usize..(y * row + width * 4) as usize];
-                pixels.extend_from_slice(r);
+            match buffer.slice(..).get_mapped_range() {
+                Ok(data) => {
+                    for y in 0..height {
+                        let r = &data[(y * row) as usize..(y * row + width * 4) as usize];
+                        pixels.extend_from_slice(r);
+                    }
+                }
+                Err(e) => eprintln!("NV_SHOT wgpu: frame {frame} not read back: {e}"),
             }
-            drop(data);
             buffer.unmap();
             if format.wgpu == wgpu::TextureFormat::Rgba8Unorm {
                 for p in pixels.chunks_exact_mut(4) {
                     p.swap(0, 2);
                 }
             }
-            if let Some(s) = &self.shots {
+            if let (Some(s), true) = (&self.shots, pixels.len() == (width * height * 4) as usize) {
                 let path = s.path(frame);
                 if let Err(e) = std::fs::write(&path, shot::bmp(width, height, &pixels)) {
                     eprintln!("NV_SHOT wgpu: {} not written: {e}", path.display());
@@ -2601,7 +2672,11 @@ impl Device {
         let s = self.surface_of(surface)?;
         let tex = s.tex.clone()?;
         self.end_pass();
-        let bpp = s.format.bytes;
+        // The texture's own bytes per pixel (16-bit formats are widened; blocks are not read).
+        if s.format.block || s.samples > 1 {
+            return None;
+        }
+        let bpp = s.format.wgpu.block_copy_size(None)?;
         let row = (s.width * bpp).div_ceil(256) * 256;
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -2636,13 +2711,16 @@ impl Device {
         );
         self.flush();
         buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        self.device.poll(wgpu::Maintain::Wait);
-        let data = buffer.slice(..).get_mapped_range();
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
         let mut out = Vec::new();
-        for y in 0..s.height {
-            out.extend_from_slice(&data[(y * row) as usize..(y * row + s.width * bpp) as usize]);
+        {
+            let data = buffer.slice(..).get_mapped_range().ok()?;
+            for y in 0..s.height {
+                out.extend_from_slice(
+                    &data[(y * row) as usize..(y * row + s.width * bpp) as usize],
+                );
+            }
         }
-        drop(data);
         buffer.unmap();
         Some((s.width, s.height, out))
     }
@@ -2654,8 +2732,34 @@ impl Device {
             config.height = pp.height.max(1);
             surface.configure(&self.device, config);
         }
-        self.st.rt = Default::default();
-        self.st.ds = None;
+        // Reset returns the device to its defaults: every state, binding and register; the caches
+        // that hold old resources go.
+        let st = &mut self.st;
+        st.rt = Default::default();
+        st.ds = None;
+        st.rs = state::default_render_states(pp.auto_depth);
+        *st.samplers = [state::default_sampler_states(); 20];
+        st.textures = Default::default();
+        st.vs = None;
+        st.ps = None;
+        st.decl = None;
+        st.streams = Default::default();
+        st.indices = None;
+        *st.vsf = [[0; 4]; 256];
+        st.vsi = [[0; 4]; 16];
+        st.vsb = [0; 16];
+        *st.psf = [[0; 4]; 256];
+        st.psi = [[0; 4]; 16];
+        st.psb = [0; 16];
+        st.dirty = true;
+        self.groups.clear();
+        self.depth_parts.clear();
+        for h in std::mem::take(&mut self.back_buffers) {
+            self.objects.remove(&h);
+        }
+        if self.auto_depth != 0 {
+            self.objects.remove(&self.auto_depth);
+        }
         self.make_back_buffers(pp, back_buffers, depth);
     }
 }
@@ -2792,7 +2896,7 @@ fn surface_for(instance: &wgpu::Instance, window: isize) -> Result<wgpu::Surface
     unsafe {
         instance
             .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle: RawDisplayHandle::Windows(WindowsDisplayHandle::new()),
+                raw_display_handle: Some(RawDisplayHandle::Windows(WindowsDisplayHandle::new())),
                 raw_window_handle: RawWindowHandle::Win32(handle),
             })
             .map_err(|e| format!("create_surface: {e}"))
