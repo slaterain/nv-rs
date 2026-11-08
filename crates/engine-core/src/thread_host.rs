@@ -374,24 +374,16 @@ impl Scheme {
         shuffle: None,
     };
 
-    /// The scheme the host's `NV_THREADS` names: unset or empty, real threads ([`Scheme::real`],
-    /// the default since the race gate, measure/real-threads); `stepped` [`Scheme::WAKE`];
+    /// The scheme the host's `NV_THREADS` names: unset, empty or `stepped`, [`Scheme::WAKE`];
     /// `slice` [`Scheme::SLICE`]; otherwise [`Scheme::WAKE`] changed by the words of a
     /// comma-separated list (`nowake`; `platformcall` or `anycall` for [`Scheme::switch_at`];
-    /// `notimeout`; `wake` and `stepped` change nothing; `real` for real threads;
-    /// `shuffle:SEED` for [`Scheme::shuffle`], the seed a decimal number). Case and spaces are
-    /// ignored; an unknown word is an error. (The engine's own default, [`Scheme::default`],
-    /// stays stepped: tests, recordings and traces run so.)
+    /// `notimeout`; `wake` and `stepped` change nothing; `real` for real threads,
+    /// [`Scheme::real`]; `shuffle:SEED` for [`Scheme::shuffle`], the seed a decimal number).
+    /// Case and spaces are ignored; an unknown word is an error. (The host picks the words when
+    /// `NV_THREADS` names none: `host::fixes::Choice::threads`.)
     pub fn from_name(name: Option<&str>) -> Result<Scheme, String> {
-        let name = name.unwrap_or("").trim();
-        if name.is_empty() {
-            return Ok(Scheme {
-                real: true,
-                ..Scheme::WAKE
-            });
-        }
         let mut scheme = Scheme::WAKE;
-        for word in name.split(',').map(str::trim) {
+        for word in name.unwrap_or("").split(',').map(str::trim) {
             let word = word.to_ascii_lowercase();
             if let Some(seed) = word.strip_prefix("shuffle:") {
                 let seed = seed

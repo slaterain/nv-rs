@@ -3395,12 +3395,8 @@ mod tests {
     #[test]
     fn nv_threads_names_the_scheme() {
         use crate::thread_host::{Scheme, SwitchAt};
-        let real = Scheme {
-            real: true,
-            ..Scheme::WAKE
-        };
-        assert_eq!(Scheme::from_name(None), Ok(real));
-        assert_eq!(Scheme::from_name(Some(" ")), Ok(real));
+        assert_eq!(Scheme::from_name(None), Ok(Scheme::WAKE));
+        assert_eq!(Scheme::from_name(Some(" ")), Ok(Scheme::WAKE));
         assert_eq!(Scheme::from_name(Some("stepped")), Ok(Scheme::WAKE));
         assert_eq!(
             Scheme::default(),

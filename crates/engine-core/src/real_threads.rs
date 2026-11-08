@@ -1,7 +1,7 @@
-//! Real threads (the host's default; ADR-0015, migration steps 5, 7, 8 and 9): the game's threads
-//! run side by side on their own cores, as they do in the original, instead of one at a time on
-//! the stepped host ([`crate::thread_host`]: `NV_THREADS=stepped`, and the engine's own default,
-//! the reference mode for tests, recordings and traces).
+//! Real threads (`NV_THREADS=real`, not yet the host's default; ADR-0015, migration steps 5, 7, 8
+//! and 9): the game's threads run side by side on their own cores, as they do in the original,
+//! instead of one at a time on the stepped host ([`crate::thread_host`]: the default, and the
+//! reference mode for tests, recordings and traces).
 //!
 //! **Per-thread context, shared world (step 5).** Each game thread runs on its own OS thread with
 //! its own [`Engine`]: its registers live in its Rust frames as before, and the engine holds its
