@@ -1915,6 +1915,9 @@ fn change_suspend_count(e: &mut Engine, handle: u32, delta: i32) -> u32 {
         {
             crate::real_threads::start_thread(e, i);
         }
+        if delta > 0 {
+            crate::real_threads::suspend_called(e, handle, previous.saturating_add_signed(delta));
+        }
         crate::real_threads::suspends_changed(e);
     }
     previous

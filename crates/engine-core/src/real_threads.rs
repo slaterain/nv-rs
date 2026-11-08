@@ -501,6 +501,8 @@ pub struct World {
     /// Threads parked by a suspend now, and parks so far ([`park_if_suspended`]).
     parked: AtomicU32,
     parks: AtomicU32,
+    /// `SuspendThread` calls so far ([`suspend_called`]).
+    suspends: AtomicU32,
     /// [`World::stopped`] holds a stop: the main thread's check before each sleep's end is one
     /// load ([`main_stop_check`]).
     any_stop: AtomicBool,
@@ -541,6 +543,7 @@ impl World {
             wakes: AtomicU64::new(0),
             parked: AtomicU32::new(0),
             parks: AtomicU32::new(0),
+            suspends: AtomicU32::new(0),
             any_stop: AtomicBool::new(false),
             held_from_start: AtomicBool::new(false),
             tls_gen: (0..TLS_INDEXES).map(|_| AtomicU32::new(0)).collect(),
@@ -1665,6 +1668,26 @@ fn park_if_suspended(e: &Engine) {
     if parked {
         w.parked.fetch_sub(1, Ordering::SeqCst);
         note_state(e, String::new);
+    }
+}
+
+/// `SuspendThread` with real threads (`units/platform.rs`): a line for the first few calls, so a
+/// run shows the suspend path ran (the game suspends its task threads at quit, `00c42f00`); the
+/// thread then parks at its next platform call, wait or sleep ([`park_if_suspended`]).
+pub(crate) fn suspend_called(e: &Engine, handle: u32, count: u32) {
+    let Some(r) = &e.real else { return };
+    if r.world.suspends.fetch_add(1, Ordering::Relaxed) < PARK_REPORTS {
+        let id = e
+            .kernel
+            .threads
+            .list
+            .iter()
+            .find(|t| t.handle == handle)
+            .map_or(0, |t| t.id);
+        eprintln!(
+            "real threads: SuspendThread on game thread {id} (handle {handle:#x}, count {count}) by thread {}",
+            r.id
+        );
     }
 }
 
