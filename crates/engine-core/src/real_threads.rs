@@ -380,7 +380,10 @@ impl KernelLock {
         if depth > 0 {
             return;
         }
-        if self.dirty.swap(false, Ordering::Relaxed) {
+        // Only the holder sets it, so a plain load answers for the common case (nothing changed)
+        // without an atomic exchange on every release.
+        if self.dirty.load(Ordering::Relaxed) {
+            self.dirty.store(false, Ordering::Relaxed);
             let _g = guard(&self.m);
             self.changed.notify_all();
         }
@@ -1173,9 +1176,8 @@ fn sync_import(name: &str) -> Option<AbiFn> {
         "EnterCriticalSection" => crate::entry!(0, enter_critical_section(Ptr)).1,
         "LeaveCriticalSection" => crate::entry!(0, leave_critical_section(Ptr)).1,
         "TryEnterCriticalSection" => crate::entry!(0, try_enter_critical_section(Ptr) -> i32).1,
-        "InitializeCriticalSection" | "DeleteCriticalSection" => {
-            crate::entry!(0, critical_section_reset(Ptr)).1
-        }
+        "InitializeCriticalSection" => crate::entry!(0, initialize_critical_section(Ptr)).1,
+        "DeleteCriticalSection" => crate::entry!(0, delete_critical_section(Ptr)).1,
         "InitializeCriticalSectionAndSpinCount" => {
             crate::entry!(0, initialize_critical_section_and_spin_count(Ptr, u32) -> i32).1
         }
@@ -1508,7 +1510,9 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
 
 // Real threads: replaces KERNEL32.DLL LeaveCriticalSection (import)
 /// Counts a hold down (as on Windows and the stepped host, whoever calls it); at 0 the section is
-/// free, and the threads waiting for it wake (they try for it again).
+/// free, and one thread waiting for it wakes to try for it again, as Windows wakes one: the first
+/// not woken already (one woken that has not tried yet will try anyway). A waiter that loses the
+/// section to another thread parks again, and that thread's leave wakes the next.
 fn leave_critical_section(e: &mut Engine, section: Ptr) {
     let w = ctx(e).world;
     let a = section.addr();
@@ -1527,11 +1531,13 @@ fn leave_critical_section(e: &mut Engine, section: Ptr) {
             if let Some(stats) = lock_stats() {
                 stats.notifies.fetch_add(1, Ordering::Relaxed);
             }
-            for o in guard(&w.section_parkers).iter() {
-                if o.handles[0] == a {
-                    o.woken.store(true, Ordering::SeqCst);
-                    o.thread.unpark();
-                }
+            let parkers = guard(&w.section_parkers);
+            if let Some(o) = parkers
+                .iter()
+                .find(|o| o.handles[0] == a && !o.woken.load(Ordering::SeqCst))
+            {
+                o.woken.store(true, Ordering::SeqCst);
+                o.thread.unpark();
             }
         }
     }
@@ -1573,13 +1579,25 @@ fn section_reset(e: &mut Engine, section: Ptr, spin: u32) {
     }
 }
 
-// Real threads: replaces KERNEL32.DLL InitializeCriticalSection and DeleteCriticalSection (imports)
-fn critical_section_reset(e: &mut Engine, section: Ptr) {
+/// The spin word Windows writes for a section given no spin count of its own
+/// (`InitializeCriticalSection`, or `InitializeCriticalSectionAndSpinCount` with 0): 2000 tries,
+/// with its dynamic-spin flag in the top byte. Measured on Windows 11, 32- and 64-bit
+/// (measure/real-threads/cs-spin).
+const DEFAULT_SECTION_SPIN: u32 = 0x0200_07d0;
+
+// Real threads: replaces KERNEL32.DLL InitializeCriticalSection (import)
+fn initialize_critical_section(e: &mut Engine, section: Ptr) {
+    section_reset(e, section, DEFAULT_SECTION_SPIN);
+}
+
+// Real threads: replaces KERNEL32.DLL DeleteCriticalSection (import)
+fn delete_critical_section(e: &mut Engine, section: Ptr) {
     section_reset(e, section, 0);
 }
 
 // Real threads: replaces KERNEL32.DLL InitializeCriticalSectionAndSpinCount (import)
 fn initialize_critical_section_and_spin_count(e: &mut Engine, section: Ptr, spin: u32) -> i32 {
+    let spin = if spin == 0 { DEFAULT_SECTION_SPIN } else { spin };
     section_reset(e, section, spin);
     1
 }
@@ -2617,6 +2635,276 @@ mod tests {
             0
         );
         assert_eq!(e.mem.u32(p + 4), 1);
+    }
+
+    /// A wait that should have ended but timed out (a lost wake) shows as `WAIT_TIMEOUT` after
+    /// this long in the stress tests below, not as a hang.
+    const STRESS_TIMEOUT_MS: u32 = 10_000;
+
+    /// Lost wakes: 100,000 round trips of two auto-reset events between the main thread and a
+    /// game thread, every wait with a timeout. Each side sets the other's event and waits for its
+    /// own, so every round needs both wakes; one lost shows as a timed-out wait.
+    #[test]
+    fn event_ping_pong_loses_no_wake() {
+        const ROUNDS: u32 = 100_000;
+        /// The block at `a[0]`: +0 ping, +4 pong, +8 `WaitForSingleObject`, +0xc `SetEvent`;
+        /// it writes +0x10 rounds done and +0x14 timed-out waits.
+        fn pong(e: &mut Engine, a: &[u32]) -> Ret {
+            let p = a[0];
+            let (ping, pong) = (e.mem.u32(p), e.mem.u32(p + 4));
+            let (wait, set) = (e.mem.u32(p + 8), e.mem.u32(p + 0xc));
+            let mut done = 0;
+            for _ in 0..ROUNDS {
+                if e.call(wait, &args![ping, STRESS_TIMEOUT_MS]).eax != 0 {
+                    e.mem.set_u32(p + 0x14, 1);
+                    break;
+                }
+                done += 1;
+                e.call(set, &args![pong]);
+            }
+            e.mem.set_u32(p + 0x10, done);
+            Ret::default()
+        }
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        e.register(0x0040_d000, pong);
+        let create = slot("CreateEventA");
+        // Auto-reset, not set.
+        let ping = e.call(create, &args![0u32, 0u32, 0u32, 0u32]).eax;
+        let pong_event = e.call(create, &args![0u32, 0u32, 0u32, 0u32]).eax;
+        let (wait, set) = (slot("WaitForSingleObject"), slot("SetEvent"));
+        let p = e.mem.alloc(0x20);
+        for (at, word) in [(0, ping), (4, pong_event), (8, wait), (0xc, set)] {
+            e.mem.set_u32(p + at, word);
+        }
+        let h = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0040_d000u32, p, 0u32, 0u32],
+            )
+            .eax;
+        for round in 0..ROUNDS {
+            e.call(set, &args![ping]);
+            let got = e.call(wait, &args![pong_event, STRESS_TIMEOUT_MS]).eax;
+            assert_eq!(got, 0, "round {round}: no pong (a lost wake)");
+        }
+        assert_eq!(e.call(wait, &args![h, STRESS_TIMEOUT_MS]).eax, 0);
+        assert_eq!(e.mem.u32(p + 0x14), 0, "the game thread's wait timed out");
+        assert_eq!(e.mem.u32(p + 0x10), ROUNDS);
+    }
+
+    /// Four game threads taking units from one semaphore, each wait with the block's timeout
+    /// (`STRESS_TIMEOUT_MS` or a short one to retry). The block at `a[0]`: +0 the semaphore, +4
+    /// `WaitForSingleObject`, +8 `InterlockedIncrement`, +0xc the timeout, +0x10 the units it
+    /// takes, +0x14 the shared count of units taken; it writes +0x18 its long waits timed out
+    /// and +0x1c its short ones.
+    fn semaphore_taker(e: &mut Engine, a: &[u32]) -> Ret {
+        let p = a[0];
+        let (sem, wait, increment) = (e.mem.u32(p), e.mem.u32(p + 4), e.mem.u32(p + 8));
+        let (timeout, quota, count) = (e.mem.u32(p + 0xc), e.mem.u32(p + 0x10), e.mem.u32(p + 0x14));
+        let (mut taken, mut short) = (0, 0);
+        while taken < quota {
+            if e.call(wait, &args![sem, timeout]).eax == 0 {
+                taken += 1;
+                e.call(increment, &args![count]);
+            } else if timeout < STRESS_TIMEOUT_MS {
+                short += 1;
+            } else {
+                e.mem.set_u32(p + 0x18, 1);
+                break;
+            }
+        }
+        e.mem.set_u32(p + 0x1c, short);
+        Ret::default()
+    }
+
+    /// Starts four [`semaphore_taker`]s on a new semaphore, `quota` units each, with `timeouts`;
+    /// answers the semaphore, the shared count's address, the threads' blocks and handles.
+    fn semaphore_takers(
+        e: &mut Engine,
+        slot: &impl Fn(&str) -> u32,
+        quota: u32,
+        timeouts: [u32; 4],
+    ) -> (u32, u32, Vec<(u32, u32)>) {
+        e.register(0x0040_e000, semaphore_taker);
+        let sem = e
+            .call(
+                slot("CreateSemaphoreA"),
+                &args![0u32, 0u32, 0x7fff_ffffu32, 0u32],
+            )
+            .eax;
+        let count = e.mem.alloc(4);
+        let threads = timeouts
+            .iter()
+            .map(|&timeout| {
+                let p = e.mem.alloc(0x20);
+                let words = [
+                    sem,
+                    slot("WaitForSingleObject"),
+                    slot("InterlockedIncrement"),
+                    timeout,
+                    quota,
+                    count,
+                ];
+                for (i, word) in words.into_iter().enumerate() {
+                    e.mem.set_u32(p + 4 * i as u32, word);
+                }
+                let h = e
+                    .call(
+                        slot("CreateThread"),
+                        &args![0u32, 0u32, 0x0040_e000u32, p, 0u32, 0u32],
+                    )
+                    .eax;
+                (p, h)
+            })
+            .collect();
+        (sem, count, threads)
+    }
+
+    /// The shared count at `a`, as the other threads left it.
+    fn shared_count(e: &Engine, a: u32) -> u32 {
+        e.mem
+            .atomic_u32(a)
+            .expect("an aligned word")
+            .load(Ordering::SeqCst)
+    }
+
+    /// Lost wakes with several waiters: the main thread releases one or two units at a time to
+    /// four game threads waiting on one semaphore, and each time waits until they are taken. A
+    /// release that wakes nobody leaves its unit untaken (and a waiter's long wait times out).
+    #[test]
+    fn a_semaphore_with_several_waiters_loses_no_wake() {
+        const EACH: u32 = 5_000;
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        let (sem, count, threads) = semaphore_takers(&mut e, &slot, EACH, [STRESS_TIMEOUT_MS; 4]);
+        let release = slot("ReleaseSemaphore");
+        let mut released = 0;
+        while released < 4 * EACH {
+            let units = (if released % 3 == 0 { 2 } else { 1 }).min(4 * EACH - released);
+            e.call(release, &args![sem, units, 0u32]);
+            released += units;
+            let since = std::time::Instant::now();
+            while shared_count(&e, count) < released {
+                assert!(
+                    since.elapsed() < Duration::from_millis(STRESS_TIMEOUT_MS.into()),
+                    "unit {released} never taken (a lost wake)"
+                );
+                std::thread::yield_now();
+            }
+        }
+        let wait = slot("WaitForSingleObject");
+        for (p, h) in threads {
+            assert_eq!(e.call(wait, &args![h, STRESS_TIMEOUT_MS]).eax, 0);
+            assert_eq!(e.mem.u32(p + 0x18), 0, "a long wait timed out");
+        }
+        assert_eq!(shared_count(&e, count), 4 * EACH);
+        assert_eq!(e.call(wait, &args![sem, 0u32]).eax, 0x102, "a unit left over");
+    }
+
+    /// Timed waits racing releases: four game threads retry 1-3 ms waits on one semaphore while
+    /// the main thread releases 20,000 units one at a time without waiting. Each unit is taken
+    /// once: none lost to a wait timing out as it is released, none taken twice.
+    #[test]
+    fn timed_waits_racing_releases_take_each_unit_once() {
+        const EACH: u32 = 5_000;
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        let (sem, count, threads) = semaphore_takers(&mut e, &slot, EACH, [1, 1, 2, 3]);
+        let release = slot("ReleaseSemaphore");
+        for i in 0..4 * EACH {
+            e.call(release, &args![sem, 1u32, 0u32]);
+            if i % 64 == 0 {
+                std::thread::yield_now();
+            }
+        }
+        let wait = slot("WaitForSingleObject");
+        let mut short = 0;
+        for (p, h) in threads {
+            assert_eq!(e.call(wait, &args![h, STRESS_TIMEOUT_MS]).eax, 0, "a thread ended");
+            short += e.mem.u32(p + 0x1c);
+        }
+        assert_eq!(shared_count(&e, count), 4 * EACH);
+        assert_eq!(e.call(wait, &args![sem, 0u32]).eax, 0x102, "a unit left over");
+        eprintln!("timed waits racing releases: {short} short waits timed out");
+    }
+
+    /// Four game threads and the main thread enter and leave one section 20,000 times each,
+    /// adding 1 to a plain word inside it, with a spin count of 1 so most waits park: the sum is
+    /// exact (one holder at a time), and every thread gets through (a leave wakes one waiter, and
+    /// none is left parked while the section is free).
+    #[test]
+    fn a_contended_section_lets_one_in_at_a_time_and_loses_no_waiter() {
+        const EACH: u32 = 20_000;
+        /// The block at `a[0]`: +0 the section, +4 `EnterCriticalSection`, +8
+        /// `LeaveCriticalSection`, +0xc the word it adds to.
+        fn adder(e: &mut Engine, a: &[u32]) -> Ret {
+            let p = a[0];
+            let (section, enter) = (e.mem.u32(p), e.mem.u32(p + 4));
+            let (leave, word) = (e.mem.u32(p + 8), e.mem.u32(p + 0xc));
+            for _ in 0..EACH {
+                e.call(enter, &args![section]);
+                let v = e.mem.u32(word);
+                std::hint::spin_loop();
+                e.mem.set_u32(word, v + 1);
+                e.call(leave, &args![section]);
+            }
+            Ret::default()
+        }
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        e.register(0x0040_f000, adder);
+        let section = e.mem.alloc(0x20);
+        let init = slot("InitializeCriticalSectionAndSpinCount");
+        e.call(init, &args![section, 1u32]);
+        let word = e.mem.alloc(4);
+        let p = e.mem.alloc(0x10);
+        let words = [
+            section,
+            slot("EnterCriticalSection"),
+            slot("LeaveCriticalSection"),
+            word,
+        ];
+        for (i, w) in words.into_iter().enumerate() {
+            e.mem.set_u32(p + 4 * i as u32, w);
+        }
+        let handles: Vec<u32> = (0..4)
+            .map(|_| {
+                e.call(
+                    slot("CreateThread"),
+                    &args![0u32, 0u32, 0x0040_f000u32, p, 0u32, 0u32],
+                )
+                .eax
+            })
+            .collect();
+        adder(&mut e, &[p]);
+        let wait = slot("WaitForSingleObject");
+        for h in handles {
+            assert_eq!(e.call(wait, &args![h, STRESS_TIMEOUT_MS]).eax, 0, "a thread got stuck");
+        }
+        assert_eq!(e.mem.u32(word), 5 * EACH);
+        assert_eq!(e.mem.u32(section + 0xc), 0, "the section is free");
+    }
+
+    /// A section given no spin count of its own gets the one Windows writes: 2000 tries, with the
+    /// dynamic-spin flag (measured, `DEFAULT_SECTION_SPIN`); a spin count given is kept.
+    #[test]
+    fn a_section_without_a_spin_count_gets_the_windows_default() {
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        let section = e.mem.alloc(0x20);
+        e.call(slot("InitializeCriticalSection"), &args![section]);
+        assert_eq!(e.mem.u32(section + 0x14), 0x0200_07d0);
+        let and_spin = slot("InitializeCriticalSectionAndSpinCount");
+        e.call(and_spin, &args![section, 0u32]);
+        assert_eq!(e.mem.u32(section + 0x14), 0x0200_07d0);
+        e.call(and_spin, &args![section, 4000u32]);
+        assert_eq!(e.mem.u32(section + 0x14), 4000);
     }
 
     /// A thread the game made before real threads started, not run yet, starts real with them.
