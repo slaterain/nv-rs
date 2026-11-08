@@ -1169,21 +1169,29 @@ impl Default for KernelRef {
 }
 
 impl KernelRef {
-    /// Another reference to this kernel, for a real thread's engine. The owner must outlive it
-    /// (the main engine lives as long as the game's threads; `crate::real_threads`).
+    /// Another reference to this kernel, for a real thread's engine. Made only after
+    /// [`KernelRef::leak`], so it never outlives the kernel.
     pub(crate) fn alias(&self) -> KernelRef {
         KernelRef {
             kernel: self.kernel,
             owned: false,
         }
     }
+
+    /// Real threads (`crate::real_threads::start`): the kernel lives for good, as the shared
+    /// memory and the threads' world do, since game threads may still use it after the main
+    /// engine is gone.
+    pub(crate) fn leak(&mut self) {
+        self.owned = false;
+    }
 }
 
 impl std::ops::Deref for KernelRef {
     type Target = Kernel;
     fn deref(&self) -> &Kernel {
-        // SAFETY: the kernel lives while its owner does (an alias's owner outlives it, `alias`);
-        // with real threads every thread reaches it only under the kernel lock.
+        // SAFETY: the kernel lives while its owner does, and for good once real threads use it (an
+        // alias is made only after `leak`); with real threads every thread reaches it only under the
+        // kernel lock.
         unsafe { self.kernel.as_ref() }
     }
 }
@@ -1900,11 +1908,14 @@ fn change_suspend_count(e: &mut Engine, handle: u32, delta: i32) -> u32 {
         start = (t.suspend_count == 0 && t.state == crate::thread_host::RunState::NotStarted)
             .then_some(t.id);
     }
-    // Real threads: a thread made suspended starts once resumed to 0, on its own OS thread.
-    if let (Some(id), true) = (start, e.real.is_some()) {
-        if let Some(i) = e.kernel.threads.list.iter().position(|t| t.id == id) {
+    // Real threads: a thread made suspended starts once resumed to 0, on its own OS thread; one
+    // that runs parks at its next platform call, wait or sleep while suspended.
+    if e.real.is_some() {
+        if let Some(i) = start.and_then(|id| e.kernel.threads.list.iter().position(|t| t.id == id))
+        {
             crate::real_threads::start_thread(e, i);
         }
+        crate::real_threads::suspends_changed(e);
     }
     previous
 }
@@ -1919,7 +1930,8 @@ fn resume_thread(e: &mut Engine, handle: u32) -> u32 {
 // Platform: replaces KERNEL32.DLL SuspendThread (import)
 /// Raises a thread's suspend count and returns the previous one. (A thread
 /// suspends another only between switch points here, so it never stops one
-/// in the middle of its work.)
+/// in the middle of its work; with real threads the target stops at its next
+/// platform call, wait or sleep, `crate::real_threads`.)
 fn suspend_thread(e: &mut Engine, handle: u32) -> u32 {
     change_suspend_count(e, handle, 1)
 }

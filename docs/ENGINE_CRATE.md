@@ -88,7 +88,8 @@ each function belongs to.
   device `D3DCREATE_MULTITHREADED`). The host holds the kernel lock between
   frames. A thread-local storage index freed or handed out again reads 0 on
   every thread, as on Windows (the lock-free maps keep per-thread accessors
-  there). Diagnostics keep threads stepped, except the block check
+  there). `SuspendThread` parks a running game thread at its next platform
+  call, wait or sleep until it is resumed. Diagnostics keep threads stepped, except the block check
   (`NV_BLOCK_CHECK`, allocations and frees named with their thread) and
   `NV_REAL_DUMP` (every thread's function, last calls and waits printed when
   one stops; stale thread-local reads reported). The stepped host also has a

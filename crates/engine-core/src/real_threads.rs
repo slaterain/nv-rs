@@ -334,6 +334,13 @@ pub struct World {
     template: Mutex<Option<SendEngine>>,
     /// The first stop of a game thread other than main, for main's next frame end.
     stopped: Mutex<Option<String>>,
+    /// A game thread that has run has a suspend count above 0 (`SuspendThread`): threads look at
+    /// their own at their next platform call, wait or sleep and park there ([`park_if_suspended`]).
+    suspended: AtomicBool,
+    /// [`start`] took the kernel lock on the host's thread for the start-up (the C runtime's, the
+    /// static initializers, the host's own use of the kernel table); the first frame gives it back
+    /// ([`Ctx::frame_begins`]).
+    held_from_start: AtomicBool,
     /// Each thread-local storage index's generation: `TlsAlloc` and `TlsFree` move it on, so a
     /// value a thread set before reads 0 ([`Ctx::tls`]).
     tls_gen: Box<[AtomicU32]>,
@@ -358,6 +365,8 @@ impl World {
             import_names,
             template: Mutex::new(None),
             stopped: Mutex::new(None),
+            suspended: AtomicBool::new(false),
+            held_from_start: AtomicBool::new(false),
             tls_gen: (0..TLS_INDEXES).map(|_| AtomicU32::new(0)).collect(),
             dump: dump_from_env().then(Dump::default),
         }
@@ -541,6 +550,10 @@ impl Ctx {
         if host_holds {
             self.world.kernel.unlock();
         }
+        // The hold [`start`] took for the start-up before the first frame.
+        if self.world.held_from_start.swap(false, Ordering::SeqCst) {
+            self.world.kernel.unlock();
+        }
     }
 
     /// Main's frame ended (`thread_host::finish_main_frame`, on the host's thread): the host takes
@@ -587,6 +600,9 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
     e.slice_left = 0;
     e.kernel.threads.wake_pending = false;
     e.kernel.threads.overrun = false;
+    // The kernel table, the memory and the world below live for good: game threads may still use
+    // them after the main engine is gone.
+    e.kernel.leak();
     e.mem.start_sharing();
     let world: &'static World = Box::leak(Box::new(World::new(e.kernel.import_names.clone())));
     let mut locked = AddrMap::default();
@@ -629,6 +645,10 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
         e.thread_context(ctx.expect("the main thread's context"))
     };
     *guard(&world.template) = Some(SendEngine(Box::new(template)));
+    // The host keeps the kernel table to itself between frames; from here until the first frame
+    // too (threads made at start-up wait for it at their first platform call).
+    world.kernel.lock(world);
+    world.held_from_start.store(true, Ordering::SeqCst);
     for i in 1..e.kernel.threads.list.len() {
         if e.kernel.threads.list[i].suspend_count == 0 {
             start_thread(e, i);
@@ -743,6 +763,9 @@ fn run_thread(engine: SendEngine, world: &'static World, i: usize, start: u32, p
         let line = format!("{why} (in game thread {id}, start {start:08x})");
         eprintln!("real threads: {line}");
         guard(&world.stopped).get_or_insert(line);
+        // Wake the main thread if it waits for a section this thread held.
+        let _sections = guard(&world.sections);
+        world.section_freed.notify_all();
     }
     let t = &mut e.kernel.threads.list[i];
     t.state = state;
@@ -764,6 +787,7 @@ fn locked_call(e: &mut Engine, args: &[u32]) -> Ret {
         .world;
     world.kernel.lock(world);
     let _held = Held(world);
+    park_if_suspended(e);
     if world.late_count.load(Ordering::Acquire) != e.real.as_ref().map_or(0, |r| r.late_seen) {
         sync_registered(e);
     }
@@ -1028,12 +1052,21 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
     let was = w.leave_guest();
     let mut table = guard(&w.sections);
     w.section_waiters.fetch_add(1, Ordering::SeqCst);
+    // The main thread ends the run when a game thread stopped (it may have stopped holding this
+    // section, which then never comes free): the stop wakes the section's waiters.
+    let mut stop = None;
     loop {
         let s = table.entry(section.addr()).or_default();
         if s.owner == 0 {
             s.owner = me;
             s.count = 1;
             break;
+        }
+        if me == MAIN_THREAD_ID {
+            stop = guard(&w.stopped).clone();
+            if stop.is_some() {
+                break;
+            }
         }
         table = wait(&w.section_freed, table);
     }
@@ -1044,16 +1077,19 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
     }
     w.kernel.take_again(w, held);
     note_state(e, String::new);
+    if let Some(why) = stop {
+        panic!("{why}");
+    }
 }
 
 // Real threads: replaces KERNEL32.DLL LeaveCriticalSection (import)
-/// Counts the owner's hold down; at 0 the section is free and a waiter may take it.
+/// Counts a hold down; at 0 the section is free and a waiter may take it.
 fn leave_critical_section(e: &mut Engine, section: Ptr) {
-    let r = ctx(e);
-    let (w, me) = (r.world, r.id);
+    // As on Windows (and the stepped host): a leave counts the hold down whoever calls it.
+    let w = ctx(e).world;
     let mut table = guard(&w.sections);
     if let Some(s) = table.get_mut(&section.addr()) {
-        if s.count > 0 && s.owner == me {
+        if s.count > 0 {
             s.count -= 1;
             if s.count == 0 {
                 s.owner = 0;
@@ -1095,6 +1131,77 @@ fn initialize_critical_section_and_spin_count(e: &mut Engine, section: Ptr, _spi
 /// Sleeps for real (`Sleep(0)` gives the rest of the time slice up); a safe point.
 fn sleep(e: &mut Engine, ms: u32) {
     real_sleep(ctx(e).world, ms);
+    park_after_sleep(e);
+    main_stop_check(e);
+}
+
+/// After a sleep (not under the kernel lock): parks the thread if it was suspended.
+fn park_after_sleep(e: &mut Engine) {
+    let w = ctx(e).world;
+    if w.suspended.load(Ordering::Relaxed) {
+        w.kernel.lock(w);
+        park_if_suspended(e);
+        w.kernel.unlock();
+    }
+}
+
+/// `SuspendThread` and `ResumeThread` with real threads (`units/platform.rs`, under the kernel
+/// lock): whether any game thread that has run is now suspended, and a change, so a parked thread
+/// looks at its count again.
+pub(crate) fn suspends_changed(e: &mut Engine) {
+    let Some(w) = e.real.as_ref().map(|r| r.world) else {
+        return;
+    };
+    let any = e.kernel.threads.list.iter().skip(1).any(|t| {
+        t.suspend_count > 0
+            && !matches!(
+                t.state,
+                RunState::NotStarted | RunState::Finished { .. } | RunState::Stopped(_)
+            )
+    });
+    w.suspended.store(any, Ordering::SeqCst);
+    crate::thread_host::signal(e);
+}
+
+/// Under the kernel lock: while this game thread's suspend count is above 0 (`SuspendThread`),
+/// it waits, not running game code, until `ResumeThread` brings it to 0. Windows stops a
+/// suspended thread wherever it is; here it stops at its next platform call, wait or sleep (the
+/// game suspends its task threads to end them at quit, `00c42f00`, then closes their handles).
+fn park_if_suspended(e: &mut Engine) {
+    let Some(r) = &e.real else { return };
+    let (w, i) = (r.world, r.index);
+    if i == 0 || !w.suspended.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut parked = false;
+    while e
+        .kernel
+        .threads
+        .list
+        .get(i)
+        .is_some_and(|t| t.suspend_count > 0)
+    {
+        if !parked {
+            parked = true;
+            note_state(e, || "suspended (SuspendThread)".to_string());
+        }
+        w.kernel.wait_change(w, None);
+    }
+    if parked {
+        note_state(e, String::new);
+    }
+}
+
+/// On the main thread: a game thread that stopped ends the run now (main's next frame end would,
+/// but a loop waiting for that thread, such as a spin lock it held, never gets there).
+fn main_stop_check(e: &Engine) {
+    if let Some(r) = &e.real {
+        if r.id == MAIN_THREAD_ID {
+            if let Some(why) = guard(&r.world.stopped).clone() {
+                panic!("{why}");
+            }
+        }
+    }
 }
 
 fn real_sleep(w: &World, ms: u32) {
@@ -1138,6 +1245,7 @@ impl ThreadHost for Real {
         };
         let mut waiting = false;
         let ready = loop {
+            park_if_suspended(e);
             if ready(e) {
                 break true;
             }
@@ -1182,6 +1290,8 @@ impl ThreadHost for Real {
 
     fn sleep(&self, e: &mut Engine, ms: u32, _signalled: Signalled) {
         real_sleep(ctx(e).world, ms);
+        park_after_sleep(e);
+        main_stop_check(e);
     }
 
     fn exit(&self, e: &mut Engine, code: u32) {
@@ -1328,14 +1438,12 @@ pub(crate) fn dump_threads(w: &World, why: &str) {
             .join(" ")
     };
     let owner = w.kernel.owner.load(Ordering::Relaxed);
-    let sections: Vec<(u32, Section)> = match w.sections.try_lock() {
-        Ok(table) => table.iter().map(|(&a, &s)| (a, s)).collect(),
-        Err(_) => Vec::new(),
-    };
-    let records: Vec<std::sync::Arc<ThreadRecord>> = match dump.records.try_lock() {
-        Ok(list) => list.clone(),
-        Err(_) => Vec::new(),
-    };
+    let sections: Vec<(u32, Section)> = lock_briefly(&w.sections)
+        .map(|table| table.iter().map(|(&a, &s)| (a, s)).collect())
+        .unwrap_or_default();
+    let records: Vec<std::sync::Arc<ThreadRecord>> = lock_briefly(&dump.records)
+        .map(|list| list.clone())
+        .unwrap_or_default();
     let mut out = format!("real threads: dump ({why})\n");
     for r in &records {
         let depth = r.depth.load(Ordering::Relaxed) as usize;
@@ -1353,7 +1461,9 @@ pub(crate) fn dump_threads(w: &World, why: &str) {
             .filter(|(_, s)| s.owner == r.id && s.count > 0)
             .map(|(a, s)| format!("{a:08x} x{}", s.count))
             .collect();
-        let state = r.state.try_lock().map(|s| s.clone()).unwrap_or_default();
+        let state = lock_briefly(&r.state)
+            .map(|s| s.clone())
+            .unwrap_or_default();
         let kernel = if owner != 0 && owner == r.token.load(Ordering::Relaxed) {
             ", holds the kernel lock"
         } else {
@@ -1374,6 +1484,21 @@ pub(crate) fn dump_threads(w: &World, why: &str) {
         ));
     }
     eprint!("{out}");
+}
+
+/// `m` locked, waiting up to 100 ms for it ([`dump_threads`] runs on a stopping thread: a lock
+/// held by a thread that is stuck must not stop the dump); `None` when it stays held.
+fn lock_briefly<T>(m: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
+    for _ in 0..100 {
+        match m.try_lock() {
+            Ok(g) => return Some(g),
+            Err(std::sync::TryLockError::Poisoned(p)) => return Some(p.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+    None
 }
 
 /// The main thread stopped (`thread_host`'s main coroutine): [`dump_threads`] when the dump is on.
@@ -1694,6 +1819,97 @@ mod tests {
             .unwrap_or_default();
         assert!(
             text.contains(&format!("the freed block {block:08x}")),
+            "{text}"
+        );
+    }
+
+    /// `SuspendThread` parks a running game thread at its next platform call, wait or sleep, and
+    /// `ResumeThread` lets it go on (the game suspends its task threads to end them at quit).
+    #[test]
+    fn a_suspended_thread_parks_until_resumed() {
+        /// Counts the word at +4 up, sleeping 0 ms each time, until the word at +8 is set.
+        fn counter(e: &mut Engine, a: &[u32]) -> Ret {
+            let p = a[0];
+            let sleep = e.mem.u32(p);
+            while e.mem.u32(p + 8) == 0 {
+                let n = e.mem.u32(p + 4);
+                e.mem.set_u32(p + 4, n + 1);
+                e.call(sleep, &args![0u32]);
+            }
+            Ret::default()
+        }
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        // As the host's first frame: the kernel lock the start took goes back.
+        ctx(&e).frame_begins(false);
+        e.register(0x0040_8000, counter);
+        let p = e.mem.alloc(0x10);
+        e.mem.set_u32(p, slot("Sleep"));
+        let h = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0040_8000u32, p, 0u32, 0u32],
+            )
+            .eax;
+        while e.mem.u32(p + 4) < 100 {
+            std::thread::yield_now();
+        }
+        assert_eq!(e.call(slot("SuspendThread"), &args![h]).eax, 0);
+        std::thread::sleep(Duration::from_millis(20));
+        let parked = e.mem.u32(p + 4);
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(
+            e.mem.u32(p + 4),
+            parked,
+            "a suspended thread runs no game code"
+        );
+        assert_eq!(e.call(slot("ResumeThread"), &args![h]).eax, 1);
+        while e.mem.u32(p + 4) <= parked {
+            std::thread::yield_now();
+        }
+        e.mem.set_u32(p + 8, 1);
+        let wait = slot("WaitForSingleObject");
+        assert_eq!(e.call(wait, &args![h, 0xffff_ffffu32]).eax, 0);
+    }
+
+    /// A game thread that stops while it holds a critical section ends the main thread's wait for
+    /// that section with the stop, instead of leaving it waiting for good.
+    #[test]
+    fn a_stop_holding_a_section_ends_mains_wait_for_it() {
+        /// Enters the section at +0, sets the word at +4, sleeps 30 ms, then calls an address
+        /// nothing is registered at (a stop).
+        fn holder(e: &mut Engine, a: &[u32]) -> Ret {
+            let p = a[0];
+            let (enter, sleep) = (e.mem.u32(p + 8), e.mem.u32(p + 12));
+            e.call(enter, &args![p]);
+            e.mem.set_u32(p + 4, 1);
+            e.call(sleep, &args![30u32]);
+            e.call(0x0040_9990, &[]);
+            Ret::default()
+        }
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        e.register(0x0040_9000, holder);
+        let p = e.mem.alloc(0x20);
+        e.mem.set_u32(p + 8, slot("EnterCriticalSection"));
+        e.mem.set_u32(p + 12, slot("Sleep"));
+        e.call(
+            slot("CreateThread"),
+            &args![0u32, 0u32, 0x0040_9000u32, p, 0u32, 0u32],
+        );
+        while e.mem.u32(p + 4) == 0 {
+            std::thread::yield_now();
+        }
+        let enter = slot("EnterCriticalSection");
+        let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.call(enter, &args![p]);
+        }));
+        let text = stop
+            .err()
+            .and_then(|p| p.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        assert!(
+            text.contains("open function 00409990") && text.contains("in game thread 2"),
             "{text}"
         );
     }

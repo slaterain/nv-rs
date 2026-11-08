@@ -154,9 +154,23 @@ impl Host {
         // each on its own core (`engine::real_threads`); a diagnostic keeps them stepped. Only
         // with the game's own `main`.
         if engine.kernel.threads.scheme.real && engine.is_translated(WIN_MAIN) {
-            match engine::real_threads::start(&mut engine) {
-                Ok(()) => eprintln!("threads: real (NV_THREADS=real)"),
-                Err(why) => eprintln!("{why}"),
+            // The movement's per-stage diagnostics go on the main thread's engine only, after
+            // this: they need stepped threads, as the engine's own do.
+            let stepped_only = [
+                "NV_MOVE_TRACE",
+                "NV_MOVE_CALL_PROFILE",
+                "NV_MOVE_CALL_BUDGET",
+            ]
+            .into_iter()
+            .find(|v| std::env::var_os(v).is_some());
+            match stepped_only {
+                Some(v) => {
+                    eprintln!("NV_THREADS=real: {v} needs stepped threads (they run stepped)")
+                }
+                None => match engine::real_threads::start(&mut engine) {
+                    Ok(()) => eprintln!("threads: real (NV_THREADS=real)"),
+                    Err(why) => eprintln!("{why}"),
+                },
             }
         }
         start_crt_heap(&mut engine, &mut movement);

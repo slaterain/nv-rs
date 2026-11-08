@@ -447,13 +447,9 @@ pub trait ThreadHost {
 /// The cooperative host (module documentation).
 pub struct Cooperative;
 
-/// The cooperative host.
-pub fn host() -> &'static dyn ThreadHost {
-    &Cooperative
-}
-
 /// The host the platform imports use for `e`: real threads when `e` is a real thread's engine
-/// ([`Engine::real`]), else the cooperative host.
+/// ([`Engine::real`]), else the cooperative host. The only way to a host: a wait or sleep on the
+/// cooperative host from a real thread would yield from a thread that has no coroutine.
 pub fn host_for(e: &Engine) -> &'static dyn ThreadHost {
     if e.real.is_some() {
         &crate::real_threads::Real
