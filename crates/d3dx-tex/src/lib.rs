@@ -30,8 +30,11 @@
 //! DXT side that is not a multiple of 4; its triangle filter). None of the game's textures needs
 //! them.
 //!
-//! Speed: about the 64-bit DLL's per core; faster with a large level's DXT blocks split across
-//! cores ([`set_max_threads`], a budget shared by every loading thread); the bytes are the same.
+//! Speed (2026-11-08, all the game's textures, `d3dx-tex-verify --time` against the 64-bit DLL
+//! creating on a real device and reading back): on one core about 10% faster than the 64-bit DLL
+//! at single precision and about 15% slower at double (each double-precision store is a
+//! conversion); with a large level's DXT blocks split across cores ([`set_max_threads`], a
+//! budget shared by every loading thread) about twice as fast at either. The bytes are the same.
 //! Malformed files are refused with D3DX's error before anything is allocated from their
 //! headers.
 

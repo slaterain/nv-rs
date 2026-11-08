@@ -11,6 +11,8 @@
 //! `-- blocks` serves `scripts/d3dx-tex-verify`: the DLL's internal DXT block encoders, the one
 //! use of anything but its entry points (`blocks.rs`); `-- control-word` prints the x87 control
 //! word before and after the HAL device `serve` makes.
+//! `-- thread-texture` makes one generated DXT5 texture on the device's thread and on new threads
+//! (as they start, at 0x27f, at 0x7f) and prints each thread's control word and the levels' hash.
 //!
 //! Each `MatrixMultiply` line: `alias<TAB>x87 control word<TAB>M1 (16 words)<TAB>M2 (16 words)
 //! <TAB>result (16 words)<TAB>returned (1 when the answer is the out pointer)`. `alias` says

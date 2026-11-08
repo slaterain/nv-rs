@@ -496,17 +496,6 @@ impl Reg for Z53 {
     fn st(self) -> f32 {
         zst64(self.0)
     }
-    /// Truncation to a float's 24 bits is clearing the low 29 bits of the double's significand
-    /// while the result is a normal float; otherwise the store itself.
-    #[inline(always)]
-    fn round(self) -> Z53 {
-        let a = self.0.abs();
-        if a >= f64::from(f32::MIN_POSITIVE) && a <= f64::from(f32::MAX) {
-            Z53(f64::from_bits(self.0.to_bits() & !((1u64 << 29) - 1)))
-        } else {
-            Z53(f64::from(zst64(self.0)))
-        }
-    }
     #[inline(always)]
     fn trunc(self) -> i32 {
         if self.0.is_nan() || self.0 >= 2_147_483_648.0 || self.0 < -2_147_483_648.0 {
