@@ -99,14 +99,21 @@ pub fn text(e: &mut Engine, script: u32, message: &str) -> String {
     }
 }
 
-/// `ShowRuntimeError(script, ...)`.
+/// `ShowRuntimeError(script, ...)`: the header and the message to the console, then the
+/// message (without the header) to the `RuntimeScriptError` event.
 pub fn show(e: &mut Engine, script: u32, message: &str) {
     // Made only for the console, which takes nothing before the first frame.
-    if !e.ext::<Nvse>().main_thread_recorded {
-        return;
+    if e.ext::<Nvse>().main_thread_recorded {
+        let text = text(e, script, message);
+        print_long(e, text.as_bytes());
     }
-    let text = text(e, script, message);
-    print_long(e, text.as_bytes());
+    if !e.ext::<Nvse>().events.infos.is_empty() {
+        crate::events::message_text(
+            e,
+            crate::events::id::RUNTIME_SCRIPT_ERROR,
+            message.as_bytes(),
+        );
+    }
 }
 
 /// `Console_Print_Str`: below 512 bytes in one line, else `Console_Print_Long`'s pieces.
