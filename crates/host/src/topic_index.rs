@@ -42,7 +42,13 @@
 //! So the walk's tie-break (an info in several topics, a twin id earlier in a topic, the list's
 //! order and end) is kept: a search reads one or two topics' infos and a table, not the list.
 //!
-//! `NV_TOPIC_INDEX_CHECK=1` runs the original's walk (the translation) beside every search and
+//! Registering over `0061a310`, a member of the typed family `topic_search`, turns that family's
+//! direct calls off for the run (a family something is registered over goes by address, so what
+//! was registered runs; `engine_core::typed`): the walk's members are then called by address, and
+//! the index itself calls only `00619e10`, once per noted topic of a search.
+//!
+//! `NV_TOPIC_INDEX_CHECK=1` with `NV_TOPIC_INDEX=1` (alone it is a test variable that makes the
+//! run vanilla) runs the original's walk (the translation) beside every search and
 //! stops the game at the first difference, naming the info and both answers; a line every
 //! 1,000 searches says how many agreed and how often the list was copied. With or without it,
 //! one line at the first sort after searches (the load's end) counts what the searches did: how
@@ -55,6 +61,7 @@ use engine::units::fallout_shared::tesdatahandler::tes_data_handler_clear_data;
 use engine::units::fallout_shared::testopic::{
     fn_0061a380, fn_0061a5a0, tes_topic_get_owner_topic, tes_topic_insert_info,
 };
+use engine::Mem;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -78,7 +85,9 @@ pub const FIX: Fix = Fix {
     install,
 };
 
-/// The switch that runs the original's walk beside every search and stops on a difference.
+/// The switch that runs the original's walk beside every search and stops on a difference. A
+/// test variable ([`crate::fixes`]): set alone it makes the run vanilla, where nothing here runs,
+/// so it goes with `NV_TOPIC_INDEX=1` (or `NV_PRESET=fixes`).
 pub const CHECK_ENV: &str = "NV_TOPIC_INDEX_CHECK";
 
 /// `00619e10` (`ECX` = topic; id, a byte): the first info with that id in the topic, 0 for none.
@@ -109,10 +118,9 @@ struct Index {
     /// Searches the check compared, and copies of the list made.
     checked: u64,
     copies: u64,
-    /// What the searches did, logged at the first sort after searches (the load's end), and
-    /// the searches reported so far.
+    /// What the searches did, logged once, at the first sort after searches (the load's end).
     stats: Stats,
-    reported: u64,
+    reported: bool,
 }
 
 /// Counters of the searches and the order's copies, by reason, with the time spent.
@@ -132,20 +140,18 @@ struct Stats {
     copy_handler: u64,
     copy_head: u64,
     copy_missing: u64,
-    /// Copies dropped: the sort, `ClearData`, an insert of a topic the copy holds.
+    /// Copies dropped: the sort of `listTopics`, `ClearData`, an insert of a topic the copy holds.
     drop_sort: u64,
     drop_clear: u64,
     drop_insert_held: u64,
-    /// Sorted inserts seen (any list).
+    /// Sorted inserts into `listTopics`.
     inserts: u64,
     /// Nanoseconds in searches and in making copies.
     search_ns: u64,
     copy_ns: u64,
 }
 
-/// The run's index, by engine (a run has one, boxed, so its address holds; tests have one each).
-/// What another engine left at the same address only adds topics that are then not found
-/// holding the info, or an order that the next search finds stale or never consults.
+/// The run's index, by its guest memory ([`key`]), behind one lock for every thread.
 fn indexes() -> std::sync::MutexGuard<'static, HashMap<usize, Index>> {
     static INDEXES: std::sync::OnceLock<Mutex<HashMap<usize, Index>>> = std::sync::OnceLock::new();
     INDEXES
@@ -154,8 +160,20 @@ fn indexes() -> std::sync::MutexGuard<'static, HashMap<usize, Index>> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// The guest memory's address: what every game thread of a run shares (ADR-0015 gives each
+/// thread an engine context of its own over the one guest memory), unlike the engine's address.
+/// Through a `&Mem`, so if a context comes to hold the memory by reference this is still the
+/// memory's own address. A run has one engine, boxed; a test's engine is boxed and removes its
+/// entry when made and when dropped, so a later engine at the same address starts clean.
 fn key(e: &Engine) -> usize {
-    e as *const Engine as usize
+    let mem: &Mem = &e.mem;
+    mem as *const Mem as usize
+}
+
+/// Whether `list` is `listTopics` (the data handler's +0x108), or a null list, which the sort
+/// takes as `listTopics`.
+fn is_list_topics(e: &Engine, list: u32) -> bool {
+    list == 0 || list == e.mem.u32(DATA_HANDLER).wrapping_add(TOPIC_LIST)
 }
 
 /// Registers the link, the list's three writers and the search (checked against the walk when
@@ -201,13 +219,18 @@ fn insert_info_entry(e: &mut Engine, a: &[u32]) -> Ret {
     }
 }
 
-/// The sorted insert as translated; the copy of the order stays right for what it holds, but a
-/// topic it doesn't hold may now be in the list. A topic it already holds may now be listed a
-/// second time before its first place (the insert stops at the topic itself only when it meets
-/// it before the insertion point): then the copy is made again.
+/// The sorted insert as translated. Into `listTopics` (a null list inserts nothing; other
+/// lists, such as the player's topics, don't matter here): the copy of the order stays right for
+/// what it holds, but a topic it doesn't hold may now be in the list. A topic it already holds may
+/// now be listed a second time before its first place (the insert stops at the topic itself only
+/// when it meets it before the insertion point): then the copy is made again.
 fn sorted_insert_entry(e: &mut Engine, a: &[u32]) -> Ret {
-    let topic = a[0];
-    fn_0061a380(e, topic, a[1], a[2] as u8);
+    let (topic, list) = (a[0], a[1]);
+    let listed = list != 0 && is_list_topics(e, list);
+    fn_0061a380(e, topic, list, a[2] as u8);
+    if !listed {
+        return Ret::default();
+    }
     if let Some(index) = indexes().get_mut(&key(e)) {
         index.stats.inserts += 1;
         if let Some(order) = index.order.as_mut() {
@@ -222,19 +245,20 @@ fn sorted_insert_entry(e: &mut Engine, a: &[u32]) -> Ret {
     Ret::default()
 }
 
-/// The sort as translated; the order is made again at the next search.
+/// The sort as translated. Of `listTopics`: the order is made again at the next search. Any sort
+/// after searches, the first time: the line that says what the load's searches did (the load's
+/// last steps sort the player's list, not `listTopics`).
 fn sort_entry(e: &mut Engine, a: &[u32]) -> Ret {
+    let listed = is_list_topics(e, a[1]);
     fn_0061a5a0(e, a[0] as u8, a[1]);
     let mut indexes = indexes();
     let engines = indexes.len();
     if let Some(index) = indexes.get_mut(&key(e)) {
-        if index.order.take().is_some() {
+        if listed && index.order.take().is_some() {
             index.stats.drop_sort += 1;
         }
-        // The load's last steps sort the player's list: the first sort after searches not yet
-        // reported says what the load's searches did.
-        if index.stats.searches > index.reported {
-            index.reported = index.stats.searches;
+        if !index.reported && index.stats.searches > 0 {
+            index.reported = true;
             let epoch_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_millis());
@@ -249,10 +273,12 @@ fn sort_entry(e: &mut Engine, a: &[u32]) -> Ret {
     Ret::default()
 }
 
-/// `TESDataHandler::ClearData` as translated; the order is made again at the next search.
+/// `TESDataHandler::ClearData` as translated: every topic and info is gone, so the notes and
+/// the copy of the order go too.
 fn handler_clear_entry(e: &mut Engine, a: &[u32]) -> Ret {
     let cleared = tes_data_handler_clear_data(e, Ptr::new(a[0]));
     if let Some(index) = indexes().get_mut(&key(e)) {
+        index.topics.clear();
         if index.order.take().is_some() {
             index.stats.drop_clear += 1;
         }
@@ -416,14 +442,15 @@ mod tests {
     use super::*;
     use std::cell::Cell;
 
-    /// The array primitives and helpers `InsertInfo` and the entry making call.
+    /// The allocations `InsertInfo` and the entry making call (the arrays' own primitives,
+    /// `0061c120`, `0061bc10`, `0061bd20`, `00864240`, `00864280` and `0061bdc0`, are the
+    /// translations), the link array's constructor and the helpers that keep an info's index.
     const ALLOC: u32 = 0x0040_1000;
-    const ARRAY_BASE: u32 = 0x0061_c120;
+    const MALLOC: u32 = 0x00aa_1070;
+    const FREE: u32 = 0x00aa_10f0;
     const LINK_ARRAY: u32 = 0x006b_3f40;
-    const ARRAY_INSERT: u32 = 0x0061_bc10;
-    const ARRAY_REMOVE: u32 = 0x0061_bd20;
-    const ARRAY_SET_GROW: u32 = 0x0086_4240;
-    const ARRAY_COMPACT: u32 = 0x0061_bdc0;
+    /// `NiTLargeArray::SetAt` (`0061bd20`): the word at an index, no shift.
+    const SET_AT: u32 = 0x0061_bd20;
     const REINDEX: u32 = 0x0061_9fe0;
     const INFO_INDEX: u32 = 0x0061_9a70;
     const INFO_SET_INDEX: u32 = 0x0061_f340;
@@ -458,8 +485,12 @@ mod tests {
             .collect()
     }
 
+    /// Puts `values` into the array as its elements (`NiTLargeArray`: storage +4, capacity +8,
+    /// used size +0xc, non-zero count +0x10), as an array the exe made would hold them.
     fn set_elements(e: &mut Engine, array: u32, values: &[u32]) {
         let n = u32::try_from(values.len()).unwrap();
+        let present = values.iter().filter(|&&v| v != 0).count();
+        e.mem.set_u32(array + 0x10, u32::try_from(present).unwrap());
         if n > e.mem.u32(array + 8) {
             let data = e.mem.alloc(4 * (n + 8));
             e.mem.set_u32(array + 4, data);
@@ -489,23 +520,41 @@ mod tests {
         out
     }
 
-    fn engine(check: bool) -> Engine {
+    /// A test's engine, boxed so that its guest memory's address (the index's [`key`]) holds; its
+    /// index goes when it is made (what an earlier engine left at that address) and when dropped.
+    struct Run(Box<Engine>);
+
+    impl std::ops::Deref for Run {
+        type Target = Engine;
+        fn deref(&self) -> &Engine {
+            &self.0
+        }
+    }
+
+    impl std::ops::DerefMut for Run {
+        fn deref_mut(&mut self) -> &mut Engine {
+            &mut self.0
+        }
+    }
+
+    impl Drop for Run {
+        fn drop(&mut self) {
+            indexes().remove(&key(&self.0));
+        }
+    }
+
+    fn engine(check: bool) -> Run {
         engine_with(Some(check))
     }
 
     /// The engine with the doubles and an empty data handler; the fix installed when `check` is
     /// given (with or without the check).
-    fn engine_with(check: Option<bool>) -> Engine {
-        let mut e = Engine::new();
+    fn engine_with(check: Option<bool>) -> Run {
+        let mut e = Run(Box::new(Engine::new()));
+        indexes().remove(&key(&e));
         e.register(ALLOC, |e, a| ret(e.mem.alloc(a[0])));
-        e.register(ARRAY_BASE, |e, a| {
-            let data = e.mem.alloc(16);
-            e.mem.set_u32(a[0] + 4, data);
-            e.mem.set_u32(a[0] + 8, 4);
-            e.mem.set_u32(a[0] + 0xc, 0);
-            ret(a[0])
-        });
-        for nop in [LINK_ARRAY, ARRAY_COMPACT, PRINT, LIST_DESTROY] {
+        e.register(MALLOC, |e, a| ret(e.mem.alloc(a[0].max(4))));
+        for nop in [FREE, LINK_ARRAY, PRINT, LIST_DESTROY] {
             e.register(nop, |_, _| Ret::default());
         }
         e.register(LIST_CONSTRUCT, |e, a| {
@@ -570,37 +619,6 @@ mod tests {
         e.map(TOPIC_VTABLE, 0x2000);
         e.mem.set_u32(TOPIC_VTABLE + 0x130, TOPIC_NAME_FN);
         e.register(TOPIC_NAME_FN, |e, a| ret(e.mem.u32(a[0] + NAME_AT)));
-        e.register(ARRAY_INSERT, |e, a| {
-            let mut v = elements(e, a[0]);
-            // Past the end: zeros up to it (a position of -1, "not found", appends).
-            let at = (a[1] as usize).min(v.len() + 8);
-            if at > v.len() {
-                v.resize(at, 0);
-            }
-            v.insert(at, a[2]);
-            set_elements(e, a[0], &v);
-            Ret::default()
-        });
-        e.register(ARRAY_SET_GROW, |e, a| {
-            let mut v = elements(e, a[0]);
-            let at = a[1] as usize;
-            if at >= v.len() {
-                v.resize(at + 1, 0);
-            }
-            v[at] = e.mem.u32(a[2]);
-            set_elements(e, a[0], &v);
-            Ret::default()
-        });
-        e.register(ARRAY_REMOVE, |e, a| {
-            let mut v = elements(e, a[0]);
-            let at = a[1] as usize;
-            if at < v.len() {
-                let gone = v.remove(at);
-                e.mem.set_u32(a[2], gone);
-                set_elements(e, a[0], &v);
-            }
-            Ret::default()
-        });
         e.register(REINDEX, |e, a| {
             for (i, info) in elements(e, a[0]).into_iter().enumerate() {
                 if info != 0 {
@@ -692,14 +710,30 @@ mod tests {
         out
     }
 
-    /// Takes the info out of every array of the topic, as `ClearData` takes it out of its owner.
+    /// The info array of the topic's entry for `quest`, when it has one.
+    fn entry_array(e: &Engine, topic: u32, quest: u32) -> Option<u32> {
+        let mut node = topic + 0x2c;
+        while node != 0 && e.mem.u32(node) != 0 {
+            let entry = e.mem.u32(node);
+            if e.mem.u32(entry) == quest {
+                return Some(entry + 4);
+            }
+            node = e.mem.u32(node + 4);
+        }
+        None
+    }
+
+    /// Takes the info out of every array of the topic as the exe takes an info out: its slot set
+    /// to zero (`0061bd20`, no shift); the array's next insert compacts it.
     fn unlink(e: &mut Engine, topic: u32, info: u32) {
+        let zero = e.mem.alloc(4);
+        e.mem.set_u32(zero, 0);
         for array in arrays(e, topic) {
-            let v: Vec<u32> = elements(e, array)
-                .into_iter()
-                .filter(|&x| x != info)
-                .collect();
-            set_elements(e, array, &v);
+            for (at, x) in elements(e, array).into_iter().enumerate() {
+                if x == info {
+                    e.call(SET_AT, &args![array, u32::try_from(at).unwrap(), zero]);
+                }
+            }
         }
     }
 
@@ -836,22 +870,28 @@ mod tests {
                         infos[next(infos.len())]
                     };
                     let topic = topics[next(topics.len())];
+                    let quest = quests[next(quests.len())];
                     let previous = match next(3) {
                         0 => 0,
                         1 => u32::MAX,
                         _ => {
+                            // Only where the exe goes on: an info with no index yet (one with an
+                            // index is first taken out at it, of whatever array this is), and an
+                            // id whose last match in the topic is in this quest's array (else its
+                            // position is -1, `SetAtGrow(-1)`, a write below the array; not found
+                            // at all, the message, which reads the last loaded topic).
                             let other = infos[next(infos.len())];
                             let id = e.mem.u32(other + FORM_ID);
-                            // Only a previous id the topic holds (else the message path, which
-                            // reads the last loaded topic).
-                            if e.call(FIND_INFO, &args![topic, id, 1u32]).u32() != 0 {
+                            let found = e.call(FIND_INFO, &args![topic, id, 1u32]).u32();
+                            let in_entry = entry_array(&e, topic, quest)
+                                .is_some_and(|array| elements(&e, array).contains(&found));
+                            if found != 0 && in_entry && e.mem.u16(info + INDEX_AT) == 0xffff {
                                 id
                             } else {
                                 0
                             }
                         }
                     };
-                    let quest = quests[next(quests.len())];
                     link(&mut e, topic, quest, info, previous);
                 }
                 // ClearData of an override, or a deletion: out of a topic.
@@ -975,14 +1015,29 @@ mod tests {
         }
     }
 
-    /// Vanilla registers nothing: the link and the search are the original's.
+    /// The preset decides, through the fixes' own install: vanilla registers nothing, so the
+    /// search is the walk, which finds an info put into an array other than through
+    /// `InsertInfo`; with `NV_TOPIC_INDEX=1` the index answers, and it doesn't see that info.
     #[test]
-    fn without_the_fix_the_search_is_the_walk() {
-        let mut e = engine_with(None);
-        let topic = listed_topic(&mut e, "T");
-        let info = new_info(&mut e, 0x10);
-        link(&mut e, topic, 0x100, info, 0);
-        assert_eq!(search(&mut e, info), topic);
-        assert_eq!(walk(&mut e, info), topic);
+    fn the_preset_switch_decides_who_answers() {
+        use crate::fixes::Choice;
+        let only_this =
+            Choice::from_parts(None, |name| (name == FIX.env).then(|| "1".to_string())).unwrap();
+        for (choice, indexed) in [(Choice::vanilla(), false), (only_this, true)] {
+            assert_eq!(choice.is_on(&FIX), indexed);
+            let mut e = engine_with(None);
+            crate::fixes::install(&mut e, &choice);
+            let topic = listed_topic(&mut e, "T");
+            let seen = new_info(&mut e, 0x10);
+            link(&mut e, topic, 0x100, seen, 0);
+            let hidden = new_info(&mut e, 0x11);
+            let array = arrays(&e, topic)[0];
+            let mut v = elements(&e, array);
+            v.push(hidden);
+            set_elements(&mut e, array, &v);
+            assert_eq!(search(&mut e, seen), topic);
+            assert_eq!(search(&mut e, hidden), if indexed { 0 } else { topic });
+            assert_eq!(walk(&mut e, hidden), topic);
+        }
     }
 }
