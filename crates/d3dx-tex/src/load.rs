@@ -13,6 +13,7 @@
 use crate::dds::{self, RTYPE_CUBE, RTYPE_TEXTURE};
 use crate::filter::{self, Level};
 use crate::format;
+use crate::num::{Precision, P24, P53};
 
 /// What the device lets D3DX make (`IDirect3DDevice9::GetDeviceCaps` and `CheckDeviceFormat`
 /// answers D3DX asks for).
@@ -126,23 +127,34 @@ pub fn get_image_info_from_file_in_memory(data: &[u8]) -> Result<ImageInfo, Erro
     })
 }
 
-/// `D3DXCreateTextureFromFileInMemory(device, data, size, &texture)`.
-pub fn create_texture_from_file_in_memory(data: &[u8], caps: &Caps) -> Result<Texture, Error> {
-    create(data, caps, RTYPE_TEXTURE)
+/// `D3DXCreateTextureFromFileInMemory(device, data, size, &texture)`, called on a thread at
+/// `precision` (the texture's bytes depend on it: [`Precision`]).
+pub fn create_texture_from_file_in_memory(
+    data: &[u8],
+    caps: &Caps,
+    precision: Precision,
+) -> Result<Texture, Error> {
+    create(data, caps, RTYPE_TEXTURE, precision)
 }
 
-/// `D3DXCreateCubeTextureFromFileInMemory(device, data, size, &texture)`.
-pub fn create_cube_texture_from_file_in_memory(data: &[u8], caps: &Caps) -> Result<Texture, Error> {
-    create(data, caps, RTYPE_CUBE)
+/// `D3DXCreateCubeTextureFromFileInMemory(device, data, size, &texture)`, called on a thread
+/// at `precision`.
+pub fn create_cube_texture_from_file_in_memory(
+    data: &[u8],
+    caps: &Caps,
+    precision: Precision,
+) -> Result<Texture, Error> {
+    create(data, caps, RTYPE_CUBE, precision)
 }
 
-/// The next power of two at or above `v` (D3DX's `D3DX_DEFAULT` sizes).
-fn pow2_up(v: u32) -> u32 {
-    let mut p = 1u32;
-    while p < v {
-        p <<= 1;
+/// A side as `D3DX_DEFAULT` makes it (0x61025e): 0 and 1 give 1, a side up to 2^31 the next
+/// power of two at or above it, a larger one (negative as D3DX's signed test reads it) itself.
+fn default_side(v: u32) -> u32 {
+    if (v as i32) < 0 {
+        v
+    } else {
+        v.max(1).next_power_of_two()
     }
-    p
 }
 
 /// The number of bits in `v` (the mip chain's length for a side).
@@ -155,7 +167,7 @@ fn bit_count(mut v: u32) -> u32 {
     n
 }
 
-fn create(data: &[u8], caps: &Caps, rtype: u32) -> Result<Texture, Error> {
+fn create(data: &[u8], caps: &Caps, rtype: u32, precision: Precision) -> Result<Texture, Error> {
     if data.is_empty() {
         return Err(Error::D3dx(crate::D3DERR_INVALIDCALL));
     }
@@ -187,18 +199,8 @@ fn create(data: &[u8], caps: &Caps, rtype: u32) -> Result<Texture, Error> {
         )));
     }
     // The size: D3DX_DEFAULT rounds the file's up to powers of two; then the requirements.
-    let mut w = if img.width > 1 {
-        pow2_up(img.width)
-    } else {
-        img.width
-    };
-    let mut h = if img.height > 1 {
-        pow2_up(img.height)
-    } else {
-        img.height
-    };
-    w = w.max(1);
-    h = h.max(1);
+    let mut w = default_side(img.width);
+    let mut h = default_side(img.height);
     if rtype == RTYPE_CUBE {
         let s = w.max(h);
         w = s;
@@ -207,12 +209,13 @@ fn create(data: &[u8], caps: &Caps, rtype: u32) -> Result<Texture, Error> {
     w = w.min(caps.max_width);
     h = h.min(caps.max_height);
     if caps.pow2 {
-        w = pow2_up(w);
-        h = pow2_up(h);
+        // Within the caps' limits, which are powers of two (16384 and below).
+        w = default_side(w);
+        h = default_side(h);
     }
     if format::is_dxt(tex_format) {
-        w = (w + 3) & !3;
-        h = (h + 3) & !3;
+        w = w.saturating_add(3) & !3;
+        h = h.saturating_add(3) & !3;
     }
     if (w, h) != (img.width, img.height) {
         return Err(Error::NotProvided(format!(
@@ -225,24 +228,37 @@ fn create(data: &[u8], caps: &Caps, rtype: u32) -> Result<Texture, Error> {
     for face in 0..faces {
         let first = surfaces.len();
         for l in 0..levels {
-            if l < img.mip_levels {
-                let lv = &img.levels[(face * img.mip_levels + l) as usize];
+            if l < img.stored {
+                let lv = &img.levels[(face * img.stored + l) as usize];
                 let size = format::level_size(file_format, lv.width, lv.height);
                 let bytes = &data[lv.offset..lv.offset + size];
                 surfaces.push(Level {
                     format: tex_format,
                     width: lv.width,
                     height: lv.height,
-                    bytes: filter::load_same_size(
-                        file_format,
-                        tex_format,
-                        lv.width,
-                        lv.height,
-                        bytes,
-                    ),
+                    bytes: match precision {
+                        Precision::Single => filter::load_same_size::<P24>(
+                            file_format,
+                            tex_format,
+                            lv.width,
+                            lv.height,
+                            bytes,
+                        ),
+                        Precision::Double => filter::load_same_size::<P53>(
+                            file_format,
+                            tex_format,
+                            lv.width,
+                            lv.height,
+                            bytes,
+                        ),
+                    },
                 });
             } else {
-                let next = filter::box_next(&surfaces[first + l as usize - 1]);
+                let prev = &surfaces[first + l as usize - 1];
+                let next = match precision {
+                    Precision::Single => filter::box_next::<P24>(prev),
+                    Precision::Double => filter::box_next::<P53>(prev),
+                };
                 surfaces.push(next);
             }
         }

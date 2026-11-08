@@ -7,6 +7,7 @@
 //! `cargo run --release --target i686-pc-windows-msvc --manifest-path scripts/d3dx-measure/Cargo.toml -- matrix-multiply [count] > FILE`
 //! `-- functions [count] [D3DXName]` measures the other maths functions (`functions.rs`).
 //! (`-- check FILE` compares a measurement file with the possible orders of the arithmetic.)
+//! `-- serve [thread]` answers `scripts/d3dx-texture-capture` (`texture::serve`).
 //! `-- blocks` serves `scripts/d3dx-tex-verify`: the DLL's internal DXT block encoders, the one
 //! use of anything but its entry points (`blocks.rs`); `-- control-word` prints the x87 control
 //! word before and after the HAL device `serve` makes.
@@ -199,7 +200,7 @@ fn main() {
         unsafe {
             let module = LoadLibraryA(b"d3dx9_38.dll\0".as_ptr());
             assert!(!module.is_null(), "d3dx9_38.dll did not load");
-            texture::serve(module);
+            texture::serve(module, args.get(2).map(String::as_str) == Some("thread"));
         }
         return;
     }
@@ -208,6 +209,14 @@ fn main() {
             let module = LoadLibraryA(b"d3dx9_38.dll\0".as_ptr());
             assert!(!module.is_null(), "d3dx9_38.dll did not load");
             blocks::serve(module);
+        }
+        return;
+    }
+    if what == "thread-texture" {
+        unsafe {
+            let module = LoadLibraryA(b"d3dx9_38.dll\0".as_ptr());
+            assert!(!module.is_null(), "d3dx9_38.dll did not load");
+            texture::thread_texture(module);
         }
         return;
     }

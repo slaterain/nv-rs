@@ -4,7 +4,10 @@
 //! serve`; `index.tsv` names every texture it took).
 //!
 //! `cargo run --release --manifest-path scripts/d3dx-tex-verify/Cargo.toml -- <Data folder>
-//! <cache folder> [--only <path part>] [--threads N] [--worst N] [--list <out.tsv>]`
+//! <cache folder> [--only <path part>] [--threads N] [--worst N] [--list <out.tsv>] [--double]`
+//!
+//! `--double`: the cache was captured on a thread at 53-bit precision (`d3dx-texture-capture ...
+//! thread`), so the textures are made at double precision; also for `--fuzz` and `--probe`.
 //!
 //! The archives are only read. Prints how many textures match exactly, which do not (by
 //! format and level size), and the worst remaining levels by decoded difference (0-255 per
@@ -17,6 +20,26 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+/// The precision the references were captured at (`--double`: on a thread at 53 bits, the
+/// capture's `thread` option; otherwise the device thread's 24 bits).
+static DOUBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn precision() -> d3dx_tex::Precision {
+    if DOUBLE.load(Ordering::Relaxed) {
+        d3dx_tex::Precision::Double
+    } else {
+        d3dx_tex::Precision::Single
+    }
+}
+
+/// The x87 control word of [`precision`] for the DLL's own functions.
+fn control_word() -> u16 {
+    match precision() {
+        d3dx_tex::Precision::Single => 0x7f,
+        d3dx_tex::Precision::Double => 0x27f,
+    }
+}
 
 /// FNV-1a, 64 bits.
 fn fnv(seed: u64, b: &[u8]) -> u64 {
@@ -285,9 +308,17 @@ fn compare(path: &str, data: &[u8], cache: &std::path::Path) -> (Outcome, Durati
     let start = Instant::now();
     let made = std::panic::catch_unwind(|| {
         if cube {
-            d3dx_tex::create_cube_texture_from_file_in_memory(data, &d3dx_tex::Caps::default())
+            d3dx_tex::create_cube_texture_from_file_in_memory(
+                data,
+                &d3dx_tex::Caps::default(),
+                precision(),
+            )
         } else {
-            d3dx_tex::create_texture_from_file_in_memory(data, &d3dx_tex::Caps::default())
+            d3dx_tex::create_texture_from_file_in_memory(
+                data,
+                &d3dx_tex::Caps::default(),
+                precision(),
+            )
         }
     });
     let took = start.elapsed();
@@ -453,9 +484,17 @@ fn time_both(
             let a = s.elapsed();
             let s = Instant::now();
             let ours = if cube {
-                d3dx_tex::create_cube_texture_from_file_in_memory(data, &d3dx_tex::Caps::default())
+                d3dx_tex::create_cube_texture_from_file_in_memory(
+                    data,
+                    &d3dx_tex::Caps::default(),
+                    precision(),
+                )
             } else {
-                d3dx_tex::create_texture_from_file_in_memory(data, &d3dx_tex::Caps::default())
+                d3dx_tex::create_texture_from_file_in_memory(
+                    data,
+                    &d3dx_tex::Caps::default(),
+                    precision(),
+                )
             };
             let b = s.elapsed();
             std::hint::black_box((got, &ours));
@@ -498,16 +537,18 @@ fn time_both(
 /// `--capture-synthetic <out.tsv> --serve <d3dx-measure.exe>`: `d3dx_tex::synthetic`'s files
 /// through the 32-bit DLL (`d3dx-measure serve`: the create call on a HAL device, each level read
 /// back), one line each: name, call, answer, levels, faces, then per surface `format,width,height,
-/// fnv1a64 of the bytes`. `crates/d3dx-tex/data/synthetic_32bit.tsv` is this output.
+/// fnv1a64 of the bytes`. `crates/d3dx-tex/data/synthetic_32bit.tsv` is this output;
+/// `synthetic_32bit_double.tsv` with `--double` (the DLL on a thread at 53 bits).
 fn capture_synthetic(out: &std::path::Path, serve: &str) {
     use std::io::Read;
     let mut child = std::process::Command::new(serve)
         .arg("serve")
+        .args(DOUBLE.load(Ordering::Relaxed).then_some("thread"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("d3dx-measure serve");
-    let mut text = String::from("# d3dx_tex::synthetic::files() through the 32-bit d3dx9_38.dll (d3dx-measure serve): name, call, answer, levels, faces, then per surface format,width,height,fnv1a64\n");
+    let mut text = format!("# d3dx_tex::synthetic::files() through the 32-bit d3dx9_38.dll (d3dx-measure serve, x87 control word {:#x}): name, call, answer, levels, faces, then per surface format,width,height,fnv1a64\n", control_word());
     for f in d3dx_tex::synthetic::files() {
         let stdin = child.stdin.as_mut().unwrap();
         stdin
@@ -548,9 +589,9 @@ fn capture_synthetic(out: &std::path::Path, serve: &str) {
 }
 
 /// `--capture-blocks <out.tsv> --oracle <d3dx-measure.exe>`: blocks of the fuzz kinds through the
-/// 32-bit DLL's DXT encoders at single precision, with and without dither, one line each:
-/// format, dither, the 64 floats' bits, the DLL's block. `crates/d3dx-tex/data/blocks_32bit.tsv`
-/// is this output.
+/// 32-bit DLL's DXT encoders at single precision (`--double`: double), with and without dither,
+/// one line each: format, dither, the 64 floats' bits, the DLL's block.
+/// `crates/d3dx-tex/data/blocks_32bit.tsv` (`blocks_32bit_double.tsv`) is this output.
 fn capture_blocks(out: &std::path::Path, oracle: &mut Oracle) {
     let mut seed = 0x0bad_5eed_1234_5678u64;
     let mut next = move || {
@@ -559,8 +600,14 @@ fn capture_blocks(out: &std::path::Path, oracle: &mut Oracle) {
         seed ^= seed >> 27;
         seed.wrapping_mul(0x2545_f491_4f6c_dd1d)
     };
-    let mut text = String::from("# DXT blocks through the 32-bit d3dx9_38.dll's encoders (d3dx-measure blocks, x87 control word 0x7f): 16 pixels (red, green, blue, alpha float bits), then the DLL's DXT1, DXT3 and DXT5 blocks without and with dither\n");
-    for k in 0..24 {
+    let mut text = format!("# DXT blocks through the 32-bit d3dx9_38.dll's encoders (d3dx-measure blocks, x87 control word {:#x}): 16 pixels (red, green, blue, alpha float bits), then the DLL's DXT1, DXT3 and DXT5 blocks without and with dither\n", control_word());
+    // At double precision only blocks the DLL encodes differently at single precision are kept,
+    // so each one tests what the precision changes.
+    let double = DOUBLE.load(Ordering::Relaxed);
+    let (mut kept, mut next_k) = (0, 0usize);
+    while kept < 24 {
+        let k = next_k;
+        next_k += 1;
         let unit = |r: u64| (r >> 40) as f32 / (1u64 << 24) as f32;
         let base: [f32; 4] = std::array::from_fn(|_| unit(next()));
         let other: [f32; 4] = std::array::from_fn(|_| unit(next()));
@@ -586,16 +633,27 @@ fn capture_blocks(out: &std::path::Path, oracle: &mut Oracle) {
                 ]
             }
         });
+        let mut blocks = Vec::new();
+        let mut differs = false;
+        for f in [0x3154_5844u32, 0x3354_5844, 0x3554_5844] {
+            for dither in [false, true] {
+                let b = oracle.encode(f, control_word(), dither, &px);
+                differs |= double && b != oracle.encode(f, 0x7f, dither, &px);
+                blocks.push(b);
+            }
+        }
+        if double && !differs {
+            continue;
+        }
+        kept += 1;
         let bits: Vec<String> = px
             .iter()
             .flatten()
             .map(|v| format!("{:08x}", v.to_bits()))
             .collect();
         text += &bits.join(" ");
-        for f in [0x3154_5844u32, 0x3354_5844, 0x3554_5844] {
-            for dither in [false, true] {
-                text += &format!("\t{}", hex(&oracle.encode(f, 0x7f, dither, &px)));
-            }
+        for b in &blocks {
+            text += &format!("\t{}", hex(b));
         }
         text += "\n";
     }
@@ -681,8 +739,10 @@ impl Oracle {
 
 /// `--fuzz N --oracle <d3dx-measure.exe>`: N blocks of several kinds (random colours, few
 /// colours, gradients, alpha patterns) through our DXT encoders and the DLL's at single
-/// precision, with and without dither; the endpoint search too. Prints the first differences.
+/// precision (`--double`: at 53 bits, the DLL at control word 0x27f), with and without
+/// dither; the endpoint search too. Prints the first differences.
 fn fuzz(n: usize, oracle: &mut Oracle) {
+    let cw = control_word();
     let mut seed = 0x1234_5678_9abc_def0u64;
     let mut next = move || {
         seed ^= seed >> 12;
@@ -690,7 +750,7 @@ fn fuzz(n: usize, oracle: &mut Oracle) {
         seed ^= seed >> 27;
         seed.wrapping_mul(0x2545_f491_4f6c_dd1d)
     };
-    let mut unit = |next: &mut dyn FnMut() -> u64| (next() >> 40) as f32 / (1u64 << 24) as f32;
+    let unit = |next: &mut dyn FnMut() -> u64| (next() >> 40) as f32 / (1u64 << 24) as f32;
     let (mut same, mut total, mut shown) = ([0usize; 4], [0usize; 4], 0);
     for k in 0..n {
         let kind = k % 4;
@@ -727,8 +787,8 @@ fn fuzz(n: usize, oracle: &mut Oracle) {
             .enumerate()
         {
             for dither in [false, true] {
-                let mine = d3dx_tex::filter::encode_block(f, &px, dither);
-                let theirs = oracle.encode(f, 0x7f, dither, &px);
+                let mine = d3dx_tex::filter::encode_block(f, &px, dither, precision());
+                let theirs = oracle.encode(f, cw, dither, &px);
                 total[fi] += 1;
                 if mine == theirs {
                     same[fi] += 1;
@@ -766,8 +826,8 @@ fn fuzz(n: usize, oracle: &mut Oracle) {
             [r * lum[0], g * lum[1], b * lum[2], 1.0]
         });
         for steps in [3u32, 4] {
-            let (x, y) = d3dx_tex::dxt::optimize_rgb(&q, steps as usize);
-            let theirs = oracle.optimize_rgb(0x7f, steps, &q);
+            let (x, y) = d3dx_tex::dxt::optimize_rgb(&q, steps as usize, precision());
+            let theirs = oracle.optimize_rgb(cw, steps, &q);
             let mine = [x[0], x[1], x[2], y[0], y[1], y[2]];
             total[3] += 1;
             if mine
@@ -826,7 +886,7 @@ fn probe(path: &str, data: &[u8], cache: &std::path::Path, oracle: &mut Oracle) 
             let (face, l) = (i as u32 / r.levels, level);
             let (at, len) = file[(face * stored + l) as usize];
             (
-                d3dx_tex::filter::decode(s.format, w, h, &data[at..at + len]),
+                d3dx_tex::filter::decode(s.format, w, h, &data[at..at + len], precision()),
                 true,
             )
         } else {
@@ -837,7 +897,7 @@ fn probe(path: &str, data: &[u8], cache: &std::path::Path, oracle: &mut Oracle) 
                 height: prev.height,
                 bytes: level_bytes(i - 1),
             };
-            (d3dx_tex::filter::box_colors(&lv), false)
+            (d3dx_tex::filter::box_colors(&lv, precision()), false)
         };
         let theirs = level_bytes(i);
         let bs = if s.format == 0x3154_5844 { 8 } else { 16 };
@@ -848,7 +908,7 @@ fn probe(path: &str, data: &[u8], cache: &std::path::Path, oracle: &mut Oracle) 
                 let px = d3dx_tex::filter::block_pixels(&colors, w, h, bx, by);
                 let o = (by * bw + bx) * bs;
                 let want = &theirs[o..o + bs];
-                let mine = d3dx_tex::filter::encode_block(s.format, &px, dither);
+                let mine = d3dx_tex::filter::encode_block(s.format, &px, dither, precision());
                 let o7 = oracle.encode(s.format, 0x7f, dither, &px);
                 let o27 = oracle.encode(s.format, 0x27f, dither, &px);
                 let o37 = oracle.encode(s.format, 0x37f, dither, &px);
@@ -978,6 +1038,7 @@ fn main() {
                 fuzz_n = Some(args[i + 1].parse().unwrap());
                 i += 1;
             }
+            "--double" => DOUBLE.store(true, Ordering::Relaxed),
             "--oracle" => {
                 oracle_exe = Some(args[i + 1].clone());
                 i += 1;

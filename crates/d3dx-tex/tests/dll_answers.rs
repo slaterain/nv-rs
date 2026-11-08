@@ -3,11 +3,27 @@
 //! i686 `scripts/d3dx-measure`). No game files and no DLL are needed here.
 
 /// `data/blocks_32bit.tsv`: blocks of varied pixels through the DLL's own DXT1, DXT3 and DXT5
-/// encoders (called inside the DLL with the x87 control word the game's thread has), without
-/// and with dither: ours are byte for byte the same.
+/// encoders (called inside the DLL with the x87 control word of the thread that made the device,
+/// 0x7f), without and with dither: ours are byte for byte the same.
 #[test]
 fn dxt_blocks_are_the_32_bit_dlls() {
-    let data = include_str!("../data/blocks_32bit.tsv");
+    blocks(
+        include_str!("../data/blocks_32bit.tsv"),
+        d3dx_tex::Precision::Single,
+    );
+}
+
+/// `data/blocks_32bit_double.tsv`: the same at 0x27f (a loading thread), blocks the DLL encodes
+/// differently at the two precisions.
+#[test]
+fn dxt_blocks_are_the_32_bit_dlls_at_double_precision() {
+    blocks(
+        include_str!("../data/blocks_32bit_double.tsv"),
+        d3dx_tex::Precision::Double,
+    );
+}
+
+fn blocks(data: &str, precision: d3dx_tex::Precision) {
     let mut n = 0;
     for line in data.lines().filter(|l| !l.starts_with('#')) {
         let mut f = line.split('\t');
@@ -26,7 +42,7 @@ fn dxt_blocks_are_the_32_bit_dlls() {
         ] {
             for dither in [false, true] {
                 let theirs = f.next().unwrap();
-                let ours: String = d3dx_tex::filter::encode_block(format, &px, dither)
+                let ours: String = d3dx_tex::filter::encode_block(format, &px, dither, precision)
                     .iter()
                     .map(|b| format!("{b:02x}"))
                     .collect();
@@ -41,10 +57,26 @@ fn dxt_blocks_are_the_32_bit_dlls() {
 /// `data/synthetic_32bit.tsv`: the synthetic DDS files (`d3dx_tex::synthetic`) through the DLL's
 /// `D3DXCreateTextureFromFileInMemory` / `D3DXCreateCubeTextureFromFileInMemory` on a real
 /// device, each level read back: our answer, level and face counts, every surface's format, size
-/// and bytes (their FNV-1a) are the DLL's.
+/// and bytes (their FNV-1a) are the DLL's, on the thread that made the device.
 #[test]
 fn synthetic_textures_are_the_32_bit_dlls() {
-    let data = include_str!("../data/synthetic_32bit.tsv");
+    synthetic(
+        include_str!("../data/synthetic_32bit.tsv"),
+        d3dx_tex::Precision::Single,
+    );
+}
+
+/// `data/synthetic_32bit_double.tsv`: the same with the DLL on a thread at 53-bit precision
+/// (`d3dx-measure serve thread`), as the game's loading threads call it.
+#[test]
+fn synthetic_textures_are_the_32_bit_dlls_at_double_precision() {
+    synthetic(
+        include_str!("../data/synthetic_32bit_double.tsv"),
+        d3dx_tex::Precision::Double,
+    );
+}
+
+fn synthetic(data: &str, precision: d3dx_tex::Precision) {
     let caps = d3dx_tex::Caps::default();
     let files = d3dx_tex::synthetic::files();
     let lines: Vec<&str> = data.lines().filter(|l| !l.starts_with('#')).collect();
@@ -54,9 +86,9 @@ fn synthetic_textures_are_the_32_bit_dlls() {
         assert_eq!(f[0], file.name);
         let hr = u32::from_str_radix(f[2], 16).unwrap();
         let made = if file.cube {
-            d3dx_tex::create_cube_texture_from_file_in_memory(&file.data, &caps)
+            d3dx_tex::create_cube_texture_from_file_in_memory(&file.data, &caps, precision)
         } else {
-            d3dx_tex::create_texture_from_file_in_memory(&file.data, &caps)
+            d3dx_tex::create_texture_from_file_in_memory(&file.data, &caps, precision)
         };
         match made {
             Err(d3dx_tex::Error::D3dx(ours)) => assert_eq!(ours, hr, "{}", file.name),

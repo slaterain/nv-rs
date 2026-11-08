@@ -3,21 +3,26 @@
 //! `D3DXCreateCubeTextureFromFileInMemory` by the image's resource type (`FalloutNV.exe`
 //! 00e68a80), always with D3DX's defaults. This crate gives the texture D3DX makes for those
 //! calls (level count, each level's format, size and bytes, rows packed) without D3DX or any
-//! device, byte for byte as the 32-bit DLL makes it.
+//! device, byte for byte as the 32-bit DLL makes it on the calling thread: the DLL computes in
+//! that thread's x87 precision, and the same file gives other bytes at 24 bits (the thread that
+//! made the Direct3D device, the game's main thread) than at 53 bits (a thread as Windows starts
+//! it: the game's loading threads, `BSTaskThread` 00c42da0, which made about four in five of
+//! the texture calls in the recordings of Doc's house). The caller says which ([`Precision`]).
 //!
-//! The pieces, each translated from the 32-bit DLL:
-//! - [`dds`]: reading a DDS file;
-//! - [`pixel`]: a format's pixels to and from D3DX's working colour (four floats);
-//! - [`dxt`]: D3DX's DXT1/3/5 block decoder and encoder;
-//! - [`filter`]: D3DX's box filter for the mip levels it makes;
-//! - [`load`]: what the create calls do with all of it;
-//! - [`num`]: the DLL's arithmetic (single-precision x87, its operation order, and the
-//!   truncating rounding its encoders run under).
+//! The pieces, each translated from the 32-bit DLL (internal; `dxt`, `filter`, `num` are public
+//! only for the verification tools): reading a DDS file (`dds`), a format's pixels to and from
+//! D3DX's working colour (`pixel`), D3DX's DXT1/3/5 block decoder and encoder (`dxt`), its box
+//! filter for the mip levels it makes (`filter`), what the create calls do with all of it
+//! (`load`), and the DLL's arithmetic: x87 at either precision, what it keeps in registers and
+//! what it stores, its operation order, and the truncating rounding its encoders run under
+//! (`num`).
 //!
-//! Checked (2026-11-08): all 21,776 textures of the game's archives give the 32-bit DLL's bytes
-//! (`scripts/d3dx-tex-verify` against the DLL's answers captured with
-//! `scripts/d3dx-texture-capture`), with the processor's truncation and with the software one.
-//! The tests compare with the DLL's answers for synthetic files and blocks (`data/`).
+//! Checked (2026-11-08): all 21,776 textures of the game's archives give the bytes the 32-bit DLL
+//! gives, at both precisions (`scripts/d3dx-tex-verify` against the DLL's answers captured with
+//! `scripts/d3dx-texture-capture`: on the device's thread, and with `thread` on a new thread at
+//! 53 bits), with the processor's truncation and with the software one. At 53 bits 1,873 of them
+//! differ from the 24-bit bytes. The tests compare with the DLL's answers for synthetic files and
+//! blocks at both precisions (`data/`).
 //!
 //! What D3DX also does and this crate does not (yet) is [`Error::NotProvided`]: image files
 //! other than DDS, volume textures, DDS pixel formats other than DXT1/3/5, A8R8G8B8, X8R8G8B8,
@@ -25,22 +30,29 @@
 //! DXT side that is not a multiple of 4; its triangle filter). None of the game's textures needs
 //! them.
 //!
-//! The blocks of a large DXT level are encoded on several threads ([`filter::set_max_threads`]);
-//! the bytes are the same.
+//! Speed: about the 64-bit DLL's per core; faster with a large level's DXT blocks split across
+//! cores ([`set_max_threads`], a budget shared by every loading thread); the bytes are the same.
+//! Malformed files are refused with D3DX's error before anything is allocated from their
+//! headers.
 
-pub mod dds;
+pub(crate) mod dds;
+#[doc(hidden)]
 pub mod dxt;
+#[doc(hidden)]
 pub mod filter;
 pub mod load;
+#[doc(hidden)]
 pub mod num;
-pub mod pixel;
+pub(crate) mod pixel;
 #[doc(hidden)]
 pub mod synthetic;
 
+pub use filter::set_max_threads;
 pub use load::{
     create_cube_texture_from_file_in_memory, create_texture_from_file_in_memory,
     get_image_info_from_file_in_memory, Caps, Error, ImageInfo, Surface, Texture,
 };
+pub use num::Precision;
 
 /// `D3DXERR_INVALIDDATA`.
 pub const D3DXERR_INVALIDDATA: u32 = 0x8876_0b59;
@@ -97,13 +109,13 @@ pub mod format {
     pub const DXT5: u32 = u32::from_le_bytes(*b"DXT5");
 
     /// Whether `f` is one of the DXT block formats.
-    pub fn is_dxt(f: u32) -> bool {
+    pub(crate) fn is_dxt(f: u32) -> bool {
         matches!(f, DXT1 | DXT2 | DXT3 | DXT4 | DXT5)
     }
 
     /// The block side in pixels and the bytes per block (per pixel for the others), for the
     /// formats this crate reads or makes; `None` for others.
-    pub fn layout(f: u32) -> Option<(u32, u32)> {
+    pub(crate) fn layout(f: u32) -> Option<(u32, u32)> {
         Some(match f {
             DXT1 => (4, 8),
             DXT2 | DXT3 | DXT4 | DXT5 => (4, 16),
@@ -120,8 +132,8 @@ pub mod format {
     }
 
     /// Bytes of a `w` x `h` level of `f`, rows packed.
-    pub fn level_size(f: u32, w: u32, h: u32) -> usize {
+    pub(crate) fn level_size(f: u32, w: u32, h: u32) -> usize {
         let (block, bytes) = layout(f).expect("a format with a known layout");
-        (w.div_ceil(block) * h.div_ceil(block) * bytes) as usize
+        w.div_ceil(block) as usize * h.div_ceil(block) as usize * bytes as usize
     }
 }

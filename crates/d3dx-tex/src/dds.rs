@@ -167,7 +167,10 @@ pub struct Image {
     pub resource_type: u32,
     /// 1, or 6 for a cube map.
     pub faces: u32,
-    /// Face by face, level by level.
+    /// The levels kept per face: the file's, at most down to 1x1 (a mip count past the whole
+    /// chain only adds 1x1 levels D3DX reads but never loads).
+    pub stored: u32,
+    /// Face by face, level by level (`stored` each).
     pub levels: Vec<Level>,
 }
 
@@ -175,34 +178,28 @@ fn word(d: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(d[at..at + 4].try_into().unwrap())
 }
 
-/// The row and slice bytes of a level of `format` (D3DX's DDS loader's sizes).
-fn level_bytes(format: u32, bits: u32, w: u32, h: u32) -> (usize, usize) {
-    let (w, h) = (w as usize, h as usize);
-    match format {
-        format::DXT1 => {
-            let row = w.div_ceil(4) * 8;
-            (row, h.div_ceil(4) * row)
-        }
+/// The row and slice bytes of a `w` x `h` level of `format` (D3DX's DDS loader's sizes), in
+/// 64 bits so a header's size cannot wrap; `None` past that.
+fn level_bytes(format: u32, bits: u32, w: u32, h: u32) -> Option<(u64, u64)> {
+    let (w, h) = (u64::from(w), u64::from(h));
+    let (row, rows) = match format {
+        format::DXT1 => (w.div_ceil(4).checked_mul(8)?, h.div_ceil(4)),
         format::DXT2 | format::DXT3 | format::DXT4 | format::DXT5 => {
-            let row = w.div_ceil(4) * 16;
-            (row, h.div_ceil(4) * row)
+            (w.div_ceil(4).checked_mul(16)?, h.div_ceil(4))
         }
         f if f == u32::from_le_bytes(*b"UYVY")
             || f == u32::from_le_bytes(*b"YUY2")
             || f == u32::from_le_bytes(*b"RGBG")
             || f == u32::from_le_bytes(*b"GRGB") =>
         {
-            let row = w.div_ceil(2) * 4;
-            (row, row * h)
+            (w.div_ceil(2).checked_mul(4)?, h)
         }
-        _ => {
-            let row = (bits as usize >> 3) * w;
-            (row, row * h)
-        }
-    }
+        _ => (u64::from(bits >> 3).checked_mul(w)?, h),
+    };
+    Some((row, row.checked_mul(rows)?))
 }
 
-/// The bits per pixel D3DX's format table gives the formats it reads; 0 for the block formats.
+/// The bits per pixel of the formats in D3DX's DDS table; 0 for the block formats.
 fn format_bits(format: u32) -> u32 {
     match format {
         format::R8G8B8 => 24,
@@ -218,7 +215,8 @@ fn format_bits(format: u32) -> u32 {
         | format::V16U16
         | format::A2W10V10U10
         | format::G16R16F
-        | format::R32F => 32,
+        | format::R32F
+        | 82 => 32,
         format::R5G6B5
         | format::X1R5G5B5
         | format::A1R5G5B5
@@ -232,7 +230,7 @@ fn format_bits(format: u32) -> u32 {
         | format::L16
         | format::R16F
         | 70
-        | 82 => 16,
+        | 117 => 16,
         format::R3G3B2 | format::A8 | format::P8 | format::L8 | format::A4L4 => 8,
         format::A16B16G16R16 | format::Q16W16V16U16 | format::A16B16G16R16F | format::G32R32F => 64,
         format::A32B32G32R32F => 128,
@@ -242,6 +240,11 @@ fn format_bits(format: u32) -> u32 {
 
 /// Reads `data` as D3DX's DDS loader does; `None` when the loader refuses it (D3DX then answers
 /// `D3DXERR_INVALIDDATA`, its other image readers refusing it too).
+///
+/// Every size is checked, in 64 bits, against the data before anything is kept: a header can
+/// ask for no more than the file holds. A level of no bytes (a format this table gives no size)
+/// is refused. A mip count past the whole chain must still have its 1x1 levels in the data, as
+/// D3DX reads them; only the chain's levels are kept.
 pub fn parse(data: &[u8]) -> Option<Image> {
     if data.len() < 4 || word(data, 0) != u32::from_le_bytes(*b"DDS ") || data.len() - 4 < 0x7c {
         return None;
@@ -255,7 +258,7 @@ pub fn parse(data: &[u8]) -> Option<Image> {
         word(data, 24).max(1)
     };
     let caps2 = word(data, 112);
-    let faces = match caps2 & 0xfc00 {
+    let faces: u32 = match caps2 & 0xfc00 {
         0xfc00 => 6,
         0 => 1,
         _ => return None,
@@ -286,8 +289,8 @@ pub fn parse(data: &[u8]) -> Option<Image> {
         RTYPE_TEXTURE
     };
     // A palette of 256 colours follows the header for the palette formats.
-    let mut at = 128usize;
-    let mut left = data.len() - 128;
+    let mut at = 128u64;
+    let mut left = (data.len() - 128) as u64;
     if format == format::P8 || format == format::A8P8 {
         if left < 0x400 {
             return None;
@@ -296,12 +299,28 @@ pub fn parse(data: &[u8]) -> Option<Image> {
         left -= 0x400;
     }
     let bits = format_bits(format);
-    let mut levels = Vec::with_capacity((faces * mips) as usize);
+    // The whole chain: down to 1x1x1.
+    let chain = 32 - width.max(height).max(depth).max(1).leading_zeros();
+    let stored = mips.min(chain);
+    let mut levels = Vec::new();
     for _ in 0..faces {
         let (mut w, mut h, mut d) = (width, height, depth);
-        for _ in 0..mips {
-            let (pitch, slice) = level_bytes(format, bits, w, h);
-            let size = slice * d as usize;
+        for l in 0..mips {
+            let (pitch, slice) = level_bytes(format, bits, w, h)?;
+            let size = slice.checked_mul(u64::from(d))?;
+            if size == 0 {
+                return None;
+            }
+            if l >= stored {
+                // The rest are all this 1x1 level.
+                let rest = size.checked_mul(u64::from(mips - l))?;
+                if left < rest {
+                    return None;
+                }
+                at += rest;
+                left -= rest;
+                break;
+            }
             if left < size {
                 return None;
             }
@@ -309,9 +328,9 @@ pub fn parse(data: &[u8]) -> Option<Image> {
                 width: w,
                 height: h,
                 depth: d,
-                offset: at,
-                pitch,
-                slice,
+                offset: at as usize,
+                pitch: pitch as usize,
+                slice: slice as usize,
             });
             at += size;
             left -= size;
@@ -328,6 +347,55 @@ pub fn parse(data: &[u8]) -> Option<Image> {
         format,
         resource_type,
         faces,
+        stored,
         levels,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn header(w: u32, h: u32, mips: u32, fourcc: &[u8; 4]) -> Vec<u8> {
+        let mut d = vec![0u8; 128];
+        let mut put = |at: usize, v: u32| d[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        put(0, u32::from_le_bytes(*b"DDS "));
+        put(8, 0x1007);
+        put(12, h);
+        put(16, w);
+        put(28, mips);
+        put(76, 32);
+        put(80, 4);
+        put(84, u32::from_le_bytes(*fourcc));
+        d
+    }
+
+    /// A mip count past the chain needs its 1x1 levels in the data, keeps only the chain, and
+    /// costs nothing however large it is.
+    #[test]
+    fn mip_counts_past_the_chain_are_checked_not_kept() {
+        let mut d = header(8, 8, 6, b"DXT1");
+        d.extend(vec![0u8; 32 + 8 + 8 + 8 * 3]);
+        let img = parse(&d).expect("8x8: 4 levels, then 2 more 1x1 ones");
+        assert_eq!((img.mip_levels, img.stored, img.levels.len()), (6, 4, 4));
+        d.pop();
+        assert!(parse(&d).is_none(), "one byte short of the last 1x1 level");
+        let mut d = header(4, 4, u32::MAX, b"DXT1");
+        d.extend([0u8; 64]);
+        assert!(parse(&d).is_none(), "4 billion levels are not in 64 bytes");
+    }
+
+    /// Sizes past 32 bits do not wrap into small ones, and past 64 bits are no size.
+    #[test]
+    fn huge_sizes_are_refused() {
+        let mut d = header(u32::MAX, u32::MAX, 1, b"DXT5");
+        d.extend([0u8; 256]);
+        assert!(parse(&d).is_none());
+        let wide = level_bytes(format::A8R8G8B8, 32, 65536, 65536);
+        assert_eq!(wide, Some((1 << 18, 1 << 34)));
+        assert_eq!(
+            level_bytes(format::A32B32G32R32F, 128, u32::MAX, u32::MAX),
+            None
+        );
+    }
 }
