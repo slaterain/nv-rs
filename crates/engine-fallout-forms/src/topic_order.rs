@@ -27,10 +27,16 @@ use engine_core::x87::{x87_load32, x87_quiet, x87_quiet_bits, x87_store32, x87_s
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(6);
 
-/// `NV_TYPED=topic_order`. Past its gate (2026-11-08, release build, fixes preset, two runs each: the load's
-/// last sort from the process start 3.18-3.46 s off against 2.67-2.96 s on with the five add-ons, 3.53-4.40
-/// against 3.27-3.53 s with YUP and SR556 beside them; the first main frame with the add-ons 4.71-4.90 against
-/// 3.93-4.29 s): on unless `NV_TYPED` says otherwise (`NV_TYPED=off` or `topic_order:off`).
+/// `NV_TYPED=topic_order`. Past its gate (2026-11-08, release build, fixes preset, two runs each): about 0.5 s
+/// off the start-up data load, clear with the five add-ons alone (the load's last sort from the process start
+/// 3.18-3.46 s off against 2.67-2.96 s on; the first main frame 4.71-4.90 against 3.93-4.29 s), with YUP and
+/// SR556 beside them within the noise of two runs (3.53-4.40 against 3.27-3.53 s). On unless `NV_TYPED` says
+/// otherwise (`NV_TYPED=off` or `topic_order:off`).
+///
+/// Its members are game-wide helpers, not the topic list's alone: the case-insensitive compare `00404dc0`
+/// (which animation, scripts, models and AI call too), the float check `0040eb10`, the priority `00526ae0`
+/// and the editor id `00618660` run typed for every caller. So `topic_order:off` changes more than the topic
+/// order, and while the family is on a trace shows no CRT calls (`00ec68e4`, `00ec67d6`) under `00404dc0`.
 pub static TOPIC_ORDER: Family = Family {
     name: "topic_order",
     id: FAMILY,
@@ -231,17 +237,30 @@ mod tests {
         e.mem.set_u32(LOCALE_CHANGED, locale);
     }
 
-    /// The names the tests compare: case and first letters that differ, a prefix, the empty one.
-    const NAMES: [&[u8]; 6] = [
+    /// The names the tests compare: case and first letters that differ, a prefix, the empty one; then
+    /// the fold's edges and bytes it leaves alone, also as the first character: 'Z' folds to 'z', '@'
+    /// (below 'A'), '[' (above 'Z'), '`' and '{' (around the lower case) don't, and neither does a byte
+    /// from 0x80 (as a first character, signed, below every ASCII one).
+    const NAMES: [&[u8]; 12] = [
         b"GREETING",
         b"greeting",
         b"Goodbye",
         b"NVDLC01Topic",
         b"G",
         b"",
+        b"Zebra",
+        b"@home",
+        b"[x",
+        b"`tick",
+        b"{brace",
+        b"\xe9clair",
     ];
 
-    /// A topic with `TESTopic`'s vtable slot, editor id `NAMES[name]` (none for 6) and priority
+    /// Every name's index, and one past them: a topic without an editor id.
+    const NAME_INDEXES: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+    const TOPIC_INDEXES: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+
+    /// A topic with `TESTopic`'s vtable slot, editor id `NAMES[name]` (none past them) and priority
     /// `priority`.
     fn topic(e: &mut Engine, name: usize, priority: f32) -> u32 {
         let t = e.mem.alloc(0x50);
@@ -262,7 +281,7 @@ mod tests {
         Diff::new(entry!(0x0061_8660, editor_id(u32) -> u32))
             .family(&TOPIC_ORDER)
             .family(&leaf::LEAVES)
-            .inputs(&[Input::Of(&[0, 3, 6])])
+            .inputs(&[Input::Of(&[0, 3, 11, 12])])
             .setup(|e, case| {
                 globals(e, 0);
                 let index = usize::try_from(case.word(0)).unwrap();
@@ -292,6 +311,39 @@ mod tests {
             .assert_same();
     }
 
+    /// Every float the harness makes (NaNs, signalling ones too, zeros, denormals, huge values).
+    #[test]
+    fn priority_of_any_float_as_translated() {
+        Diff::new(entry!(0x0052_6ae0, priority(u32) -> f32))
+            .family(&TOPIC_ORDER)
+            .inputs(&[Input::F32])
+            .setup(|e, case| {
+                let t = e.mem.alloc(0x30);
+                e.mem.set_u32(t + 0x28, case.f32(0).to_bits());
+                vec![t]
+            })
+            .run()
+            .assert_same();
+    }
+
+    /// The float check on the harness's floats in every argument.
+    #[test]
+    fn approx_equal_of_any_floats_as_translated() {
+        Diff::new(entry!(0x0040_eb10, approx_equal(f32, f32, f32) -> bool))
+            .family(&TOPIC_ORDER)
+            .inputs(&[Input::F32, Input::F32, Input::F32])
+            .setup(|e, case| {
+                globals(e, 0);
+                vec![
+                    case.f32(0).to_bits(),
+                    case.f32(1).to_bits(),
+                    case.f32(2).to_bits(),
+                ]
+            })
+            .run()
+            .assert_same();
+    }
+
     #[test]
     fn approx_equal_as_translated() {
         let floats = Input::Of(&[
@@ -315,17 +367,13 @@ mod tests {
     }
 
     /// With the locale unchanged and both strings there: the ASCII compare, done in the body (the
-    /// CRT's calls are the translation's only). A changed locale or a null string is the same call by
-    /// address on both sides (the CRT reaches imports these engines don't have).
+    /// CRT's calls are the translation's only).
     #[test]
     fn stricmp_as_translated() {
         Diff::new(entry!(0x0040_4dc0, stricmp(u32, u32) -> i32))
             .family(&TOPIC_ORDER)
             .ignore_calls(&[CRT_STRICMP])
-            .inputs(&[
-                Input::Of(&[0, 1, 2, 3, 4, 5]),
-                Input::Of(&[0, 1, 2, 3, 4, 5]),
-            ])
+            .inputs(&[Input::Of(NAME_INDEXES), Input::Of(NAME_INDEXES)])
             .setup(|e, case| {
                 globals(e, 0);
                 let a = c_string(e, NAMES[usize::try_from(case.word(0)).unwrap()]);
@@ -336,24 +384,86 @@ mod tests {
             .assert_same();
     }
 
+    /// A changed locale, or a null string with the locale changed or not: the CRT's `_stricmp` by
+    /// address on both sides (a double there for both engines: the CRT's own path reaches imports
+    /// these engines don't have), nothing dropped.
     #[test]
-    fn compare_as_translated() {
-        // Priorities: equal, one ahead past the limit, one behind, within the epsilon, a NaN.
-        const PRIORITIES: [(f32, f32); 5] = [
+    fn stricmp_hands_a_changed_locale_and_nulls_to_the_crt() {
+        Diff::new(entry!(0x0040_4dc0, stricmp(u32, u32) -> i32))
+            .family(&TOPIC_ORDER)
+            .inputs(&[Input::Of(&[0, 1, 2, 3, 4])])
+            .setup(|e, case| {
+                let (locale, left, right) = match case.word(0) {
+                    0 => (1, true, true),
+                    1 => (1, false, true),
+                    2 => (1, true, false),
+                    3 => (0, false, true),
+                    _ => (0, true, false),
+                };
+                globals(e, locale);
+                e.register(CRT_STRICMP, |_, a| engine_core::abi::Ret {
+                    eax: a[0] ^ a[1] ^ 0x5a,
+                    ..Default::default()
+                });
+                let a = if left { c_string(e, b"Topic") } else { 0 };
+                let b = if right { c_string(e, b"topic") } else { 0 };
+                vec![a, b]
+            })
+            .run()
+            .assert_same();
+    }
+
+    /// By name: every pair of the names (and a topic without one), the priorities equal, so with
+    /// the flag too the names decide.
+    #[test]
+    fn compare_by_name_as_translated() {
+        Diff::new(entry!(0x0061_a450, compare(u32, u32, u8) -> bool))
+            .family(&TOPIC_ORDER)
+            .family(&leaf::LEAVES)
+            .ignore_calls(&[CRT_STRICMP])
+            // Every combination: 13 x 13 names x 3 flags.
+            .max_cases(1024)
+            .inputs(&[
+                Input::Of(TOPIC_INDEXES),
+                Input::Of(TOPIC_INDEXES),
+                // Only the flag word's low byte counts.
+                Input::Of(&[0, 1, 0x100]),
+            ])
+            .setup(|e, case| {
+                globals(e, 0);
+                let a = topic(e, usize::try_from(case.word(0)).unwrap(), 50.0);
+                let b = topic(e, usize::try_from(case.word(1)).unwrap(), 50.0);
+                vec![a, b, case.word(2)]
+            })
+            .run()
+            .assert_same();
+    }
+
+    /// By priority: each pair of priorities over names that sort either way, alike, by a first
+    /// character from 0x80, or not at all.
+    #[test]
+    fn compare_by_priority_as_translated() {
+        // Priorities: equal, one ahead past the limit, one behind, within the epsilon; near equal
+        // either way, under the limit and within the epsilon, so on to the names; a NaN.
+        const PRIORITIES: [(f32, f32); 7] = [
             (50.0, 50.0),
             (40.0, 60.0),
             (60.0, 40.0),
             (50.0, 50.0005),
+            (50.0005, 50.0),
+            (50.0, 50.00005),
             (50.0, f32::NAN),
         ];
         Diff::new(entry!(0x0061_a450, compare(u32, u32, u8) -> bool))
             .family(&TOPIC_ORDER)
             .family(&leaf::LEAVES)
             .ignore_calls(&[CRT_STRICMP])
+            // Every combination: 4 x 4 names x 7 priority pairs x 3 flags.
+            .max_cases(1024)
             .inputs(&[
+                Input::Of(&[0, 6, 11, 12]),
+                Input::Of(&[0, 6, 11, 12]),
                 Input::Of(&[0, 1, 2, 3, 4, 5, 6]),
-                Input::Of(&[0, 1, 2, 3, 4, 5, 6]),
-                Input::Of(&[0, 1, 2, 3, 4]),
                 // Only the flag word's low byte counts.
                 Input::Of(&[0, 1, 0x100]),
             ])
