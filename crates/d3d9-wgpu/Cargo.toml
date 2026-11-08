@@ -1,13 +1,19 @@
 [package]
 name = "d3d9-wgpu"
 version = "0.1.0"
-description = "Direct3D 9 on wgpu (ADR-0007): the converter of the game's Direct3D 9 shader bytecode to WGSL (the backend of the recorded call stream follows)"
+description = "Direct3D 9 on wgpu (ADR-0007): a backend of the recorded Direct3D 9 call stream (d3d9-stream), and the converter of the game's shader bytecode to WGSL"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish = false
 
 [dependencies]
+# The recorded call stream this crate is a backend of (the render-thread seam).
+d3d9-stream = { path = "../d3d9-stream" }
 # The converter's WGSL is checked with naga's reader and validator: the version wgpu 24.0.5 uses,
 # pinned (ADR-0007).
 naga = { version = "=24.0.0", features = ["wgsl-in"] }
+# Pinned (ADR-0007): Direct3D 12 and Vulkan here, Metal on macOS; no WebGPU or WebGL.
+wgpu = { version = "=24.0.5", default-features = false, features = ["wgsl", "dx12", "metal"] }
+# The game's window as a wgpu surface (the version wgpu 24 takes).
+raw-window-handle = "=0.6.2"
