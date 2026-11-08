@@ -8,7 +8,7 @@
 //! topic whose first info with this info's form id is this very info. Loading a plugin that
 //! changes an existing info clears it first (`TESTopicInfo::ClearData`, which asks for the owner
 //! to take the info out of it), so a dialogue mod's load time grows with the infos it touches
-//! times the topics and infos in the game (YUP and the add-ons: about 5,800 searches). JIP LN
+//! times the topics and infos in the game (YUP and the add-ons: about 5,000 searches). JIP LN
 //! replaces the walk with a word it adds to every info, set where the load links the info into a
 //! topic; that answers the last topic the info was linked into, which is not always the walk's
 //! answer.
@@ -33,9 +33,10 @@
 //!   handler's `ClearData` (`0045dfe0`, which empties it). The insert only adds a node, before a
 //!   node (whose item moves into the new one after it) or at the end: every topic already in the
 //!   list stays in it in the same order. So the copy stays right for every topic it holds; it is
-//!   made again after the sort or `ClearData` (both registered here), when the list's head node
-//!   no longer holds what it held (another writer), or when a possible answer isn't in it and a
-//!   topic was inserted since it was made. A topic not in a fresh copy is not in the list.
+//!   made again after the sort or `ClearData` (both registered here), after an insert of a topic
+//!   it already holds (which can list that topic again, before its first place), when the list's
+//!   head node no longer holds what it held (another writer), or when a possible answer isn't in
+//!   it and a topic was inserted since it was made. A topic not in a fresh copy is not in the list.
 //!
 //! So the walk's tie-break (an info in several topics, a twin id earlier in a topic, the list's
 //! order and end) is kept: a search reads one or two topics' infos and a table, not the list.
@@ -164,14 +165,20 @@ fn insert_info_entry(e: &mut Engine, a: &[u32]) -> Ret {
 }
 
 /// The sorted insert as translated; the copy of the order stays right for what it holds, but a
-/// topic it doesn't hold may now be in the list.
+/// topic it doesn't hold may now be in the list. A topic it already holds may now be listed a
+/// second time before its first place (the insert stops at the topic itself only when it meets
+/// it before the insertion point): then the copy is made again.
 fn sorted_insert_entry(e: &mut Engine, a: &[u32]) -> Ret {
-    fn_0061a380(e, a[0], a[1], a[2] as u8);
-    if let Some(order) = indexes()
-        .get_mut(&key(e))
-        .and_then(|index| index.order.as_mut())
-    {
-        order.fresh = false;
+    let topic = a[0];
+    fn_0061a380(e, topic, a[1], a[2] as u8);
+    if let Some(index) = indexes().get_mut(&key(e)) {
+        if let Some(order) = index.order.as_mut() {
+            if order.place.contains_key(&topic) {
+                index.order = None;
+            } else {
+                order.fresh = false;
+            }
+        }
     }
     Ret::default()
 }
@@ -653,15 +660,16 @@ mod tests {
         };
         assert_eq!(search(&mut e, a), first(&e, base, other));
         // Renamed and sorted: the order changes, and so does the answer.
-        let before = search(&mut e, a);
-        let later = if before == base { other } else { base };
-        // Whichever end of the sort a name puts it at.
-        rename_and_sort(&mut e, later, "000");
-        if first(&e, base, other) != later {
-            rename_and_sort(&mut e, later, "zzz");
-        }
-        assert_eq!(first(&e, base, other), later);
-        assert_eq!(search(&mut e, a), later);
+        // By the compare (`0061a450`: a lower first letter, or else a greater name) the three
+        // inserts list Rumors, NVDLC01Topic, GREETING; renamed N and NZ, the sort lists GREETING's
+        // topic first and Rumors' last.
+        assert_eq!(topics_in_list(&e), [other, dlc, base]);
+        assert_eq!(search(&mut e, a), other);
+        let name = c_string(&mut e, "NZ");
+        e.mem.set_u32(other + NAME_AT, name);
+        rename_and_sort(&mut e, base, "N");
+        assert_eq!(topics_in_list(&e), [base, dlc, other]);
+        assert_eq!(search(&mut e, a), base);
         assert_all(&mut e, &all, "sorted");
 
         // A twin: another info with the same id earlier in a topic hides this one there.
@@ -815,6 +823,28 @@ mod tests {
         e.mem.set_u32(second_node, first);
         assert_eq!(search(&mut e, info), second);
         assert_eq!(walk(&mut e, info), second);
+    }
+
+    /// A listed topic inserted again is listed a second time when the insert point comes before
+    /// it (the insert stops at the topic itself only on the way there): its first place moves
+    /// before a topic the copy put ahead of it, with the head node unchanged. By the compare
+    /// (`0061a450`: a lower first letter, or else a greater name), "A2" then "Q" then "A1" list
+    /// as A1, Q, A2, and A2 inserted again goes before Q.
+    #[test]
+    fn a_topic_listed_again_earlier_makes_the_copy_again() {
+        let mut e = engine(false);
+        let b = listed_topic(&mut e, "A2");
+        let c = listed_topic(&mut e, "Q");
+        let a = listed_topic(&mut e, "A1");
+        assert_eq!(topics_in_list(&e), [a, c, b]);
+        let info = new_info(&mut e, 0x10);
+        link(&mut e, c, 0x100, info, 0);
+        link(&mut e, b, 0x100, info, 0);
+        assert_eq!(search(&mut e, info), c);
+        insert(&mut e, b);
+        assert_eq!(topics_in_list(&e), [a, b, c, b]);
+        assert_eq!(walk(&mut e, info), b);
+        assert_eq!(search(&mut e, info), b);
     }
 
     /// The check stops at an info put into a topic's array other than through `InsertInfo`, which

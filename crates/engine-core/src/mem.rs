@@ -33,6 +33,37 @@
 //! on every access, and measured slower than the old page table on random
 //! loads and stores.)
 //!
+//! Threads (ADR-0015's real threads, step R1 of the migration): every
+//! guest load and store takes `&self`, so a later thread host can let
+//! several threads use one [`Mem`]. `Mem` is `Send`, not `Sync`: the one
+//! deliberate sharing point goes in the thread host, with the rules below.
+//! - The table of mapped pages changes only through `&mut self`
+//!   ([`Mem::map`], [`Mem::unmap`], and the heap, which maps), so with
+//!   threads stepped no guest access runs during a change, and the page
+//!   test stays one plain load folded into its compare. The touch census,
+//!   a diagnostic, changes it from a store (`Mem::touch_mark`, through
+//!   `&self`): it runs with stepped threads only. `&mut` is not the
+//!   stop-the-world real threads need: a parked thread still holds its
+//!   `&Engine`, and the compiler keeps `Mem`'s base and diagnostics flag in
+//!   registers across stores. Real threads change the table with raw stores
+//!   through `&self` at a barrier, with `Mem`'s changing fields and the heap
+//!   behind locks.
+//! - Guest values are plain host loads and stores through raw pointers, the
+//!   same instructions as the exe's own `mov`s, not atomics: an atomic needs
+//!   an aligned address, and a guest address's alignment is known only at
+//!   run time, so every access would test it (one instruction more on every
+//!   inlined access, measured), and the compiler folds no atomic load into
+//!   the instruction that uses it. Two threads that access the same bytes
+//!   without synchronisation, one of them writing, are a data race: undefined
+//!   behaviour in Rust's and LLVM's model, where the exe's races were
+//!   defined by the processor. What we rely on: LLVM emits each raw-pointer
+//!   access as a plain move, and moves none across a call it cannot see
+//!   through. The game's interlocked operations, critical sections and waits
+//!   are such calls (real atomics with real threads), and so a loop in typed
+//!   code that waits on guest memory for another thread must contain one
+//!   (docs/ENGINE_CRATE.md, "A risk for later"): without it the compiler may
+//!   read the memory once and loop forever.
+//!
 //! The host calls are `VirtualAlloc` and `VirtualFree` on Windows (the
 //! block starts with no access, and pages are committed as they are mapped
 //! and decommitted as they are handed back), `mmap` on Linux and macOS (the
@@ -58,7 +89,10 @@
 //!   ([`PLATFORM_AREA`]): the code addresses of its COM objects and procedures (DirectInput,
 //!   DirectSound, DirectShow, Direct3D 9, NVAPI, `GetProcAddress` answers, from 0x7E000000),
 //!   module handles (0x7E100000..0x7E130000), the Bink state page (0x7E140000, mapped) and the
-//!   D3DX handles (from 0x7E300000, never mapped). The heap never comes here, and a
+//!   D3DX handles (from 0x7E300000, never mapped); then the built-in script extenders' code
+//!   addresses ([`EXTENDER_CODE`], 0x7E800000..0x7F000000) and the built-ins' static data
+//!   ([`BUILTIN_DATA`], 0x7F000000..0x80000000: command tables, their strings and parameter
+//!   lists; ADR-0016). The heap never comes here, and a
 //!   `VirtualAlloc` at a chosen address here fails;
 //! - [`HEAP_HIGH_BASE`]`..`[`HEAP_END`]: the heap's upper range, used only once the lower one
 //!   cannot serve a request (`mem/heap.rs`), so a run that fits in the lower range places
@@ -79,6 +113,7 @@
 //! vanilla preset (not built yet) goes at `Heap::cross` and at the platform's two answers.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 mod heap;
 mod touch;
@@ -417,16 +452,31 @@ struct Space {
 }
 
 // SAFETY: a `Space` owns its block alone, as a `Box` owns its allocation: no other value holds
-// `base`, and only `Drop` releases it. [`Mem`], its only user, reads the block only through
-// `&self` and writes it only through `&mut self`, so the borrow rules keep every write apart
-// from any other access on any thread, exactly as they did for the boxed pages this replaced
-// (which made `Mem` `Send` and `Sync` by themselves). The thread host hands the engine from one
-// OS thread to the next with only one of them running it at a time (`thread_host`'s `Baton`),
-// which a block of host address space serves as well as boxed pages did: the reservation is
-// the process's, not a thread's.
+// `base`, and only `Drop` releases it. The reservation is the process's, not a thread's, so the
+// thread that owns the `Space` may use and drop it whichever thread made it (the thread host hands
+// the engine from one OS thread to the next). Not `Sync`: guest stores go through `&self` as plain
+// raw-pointer stores, so two threads sharing one `Mem` could race on guest bytes or on the table,
+// undefined behaviour in Rust's model (module documentation, "Threads"); the thread host is where
+// sharing will be allowed, under its rules.
 unsafe impl Send for Space {}
-// SAFETY: as for `Send` above: shared access only ever reads.
-unsafe impl Sync for Space {}
+
+// A `Mem` can move to another thread; sharing one is the thread host's to allow (module
+// documentation, "Threads").
+const _: fn() = || {
+    fn movable<T: Send>() {}
+    movable::<Mem>();
+};
+
+/// `m` locked; a lock a panic left poisoned is taken as it is (a diagnostic's findings: the panic
+/// stops the run anyway).
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// `m`'s value through `&mut` (no locking), as [`lock`] takes it.
+fn unlocked<T>(m: &mut Mutex<T>) -> &mut T {
+    m.get_mut().unwrap_or_else(PoisonError::into_inner)
+}
 
 impl Space {
     fn new() -> Self {
@@ -469,6 +519,18 @@ pub const HEAP_HIGH_BASE: u32 = 0x8000_0000;
 pub const HEAP_END: u32 = 0xF000_0000;
 /// The platform layer's own addresses, between the heap's two ranges (module documentation).
 pub const PLATFORM_AREA: std::ops::Range<u32> = HEAP_LOW_END..HEAP_HIGH_BASE;
+/// The built-in extenders' code addresses inside [`PLATFORM_AREA`]: their commands' handlers,
+/// evals and routines ([`crate::extend::EXECUTE_BASE`] and the rest; ADR-0016). Above every
+/// platform object address (the D3DX handles count up from 0x7E300000 in steps of 4).
+pub const EXTENDER_CODE: std::ops::Range<u32> = 0x7E80_0000..0x7F00_0000;
+/// The built-ins' static data inside [`PLATFORM_AREA`]: command tables, their strings and
+/// parameter lists, mapped by the extender that installs (ADR-0016).
+pub const BUILTIN_DATA: std::ops::Range<u32> = 0x7F00_0000..HEAP_HIGH_BASE;
+const _: () = assert!(
+    PLATFORM_AREA.start < EXTENDER_CODE.start
+        && EXTENDER_CODE.end == BUILTIN_DATA.start
+        && BUILTIN_DATA.end == PLATFORM_AREA.end
+);
 /// The most bytes one heap block can have: the larger of the heap's two ranges (a block never
 /// spans both).
 pub const HEAP_LARGEST_BLOCK: u32 = {
@@ -506,8 +568,9 @@ pub struct Mem {
     /// hand-back (what the tests count).
     #[cfg(test)]
     host_calls: u32,
-    /// The heap's live blocks (start -> size, rounded and with any guard; a table per region of
-    /// the heap, [`heap::Regions`], so that no allocation rehashes every live block) and its free
+    /// The heap's live blocks (start -> size, rounded and with any guard, with [`ODD_POOL`] set
+    /// for a block of a pool whose size is 4 above a multiple of 8; a table per region of the
+    /// heap, [`heap::Regions`], so that no allocation rehashes every live block) and its free
     /// space.
     live: heap::Regions,
     heap: heap::Heap,
@@ -564,11 +627,12 @@ pub struct WatchHit {
 }
 
 /// The ranges a diagnostic watches (start -> length and whether only frees count), a
-/// count of ranges per page (the store's quick test) and the events not yet taken.
+/// count of ranges per page (the store's quick test) and the events not yet taken (behind a
+/// lock: a store through `&self` records them).
 struct Watch {
     ranges: BTreeMap<u32, (u32, bool)>,
     pages: Vec<u16>,
-    hits: Vec<WatchHit>,
+    hits: Mutex<Vec<WatchHit>>,
 }
 
 /// The most events kept before [`Mem::take_watch_hits`] takes them (later ones dropped).
@@ -578,6 +642,20 @@ const WATCH_HITS_KEEP: usize = 1 << 16;
 pub const GUARD: u32 = 16;
 /// The byte guards are filled with.
 pub const GUARD_BYTE: u8 = 0xFD;
+
+/// Set in a live block's entry (whose size is a multiple of 8) when the block is of one of the
+/// exe's pools whose size is 4 above a multiple of 8 (12, 20, 28, ..): its 8-rounded size is
+/// the next pool's (16, 24, 32, ..), and the free gives it back to its own quick stack, apart
+/// from that pool's.
+const ODD_POOL: u32 = 4;
+
+/// The bytes the heap holds for a request of `asked` bytes (without the block check's guard):
+/// the block size of the exe's memory pool for it, rounded up to 8 (a 12-byte pool's blocks
+/// take 16), or, outside the pools, `asked` rounded up to 8 (`mem/heap.rs`, `pool_size`). So a
+/// request of 0x41 bytes is held as 80, the exe's pool for it.
+pub fn block_bytes(asked: u32) -> u32 {
+    heap::class_bytes(heap::pool_size(asked))
+}
 
 /// The block check (a diagnostic, not game behaviour): every heap block (and so every
 /// `Engine::with_stack` local) gets [`GUARD`] bytes of [`GUARD_BYTE`] right after the size
@@ -598,8 +676,9 @@ struct BlockCheck {
     /// engine keeps them up to date).
     current_fn: u32,
     caller_fn: u32,
-    /// Findings not yet taken ([`Mem::take_block_reports`]).
-    reports: Vec<String>,
+    /// Findings not yet taken ([`Mem::take_block_reports`]); behind a lock, as a store through
+    /// `&self` reports.
+    reports: Mutex<Vec<String>>,
     /// With [`Mem::enable_freed_check`]: freed blocks held back from reuse, oldest first
     /// (address, rounded size), each guarded whole so that a store into it is reported, until
     /// more than `quarantine_limit` bytes ([`QUARANTINE_BYTES`]) wait.
@@ -645,7 +724,7 @@ impl Mem {
             pages: if store { vec![0; PAGES] } else { Vec::new() },
             current_fn: 0,
             caller_fn: 0,
-            reports: Vec::new(),
+            reports: Mutex::new(Vec::new()),
             quarantine: None,
             quarantine_bytes: 0,
             quarantine_limit: QUARANTINE_BYTES,
@@ -776,7 +855,8 @@ impl Mem {
     /// is its held size and the rest is unknown.
     pub fn for_each_census_block(&self, mut f: impl FnMut(CensusBlock<'_>)) {
         let c = self.check.as_deref();
-        for (&addr, &size) in self.live.iter() {
+        for (&addr, &entry) in self.live.iter() {
+            let size = entry & !ODD_POOL;
             let info = c.and_then(|c| c.blocks.get(&addr)).copied();
             let (asked, running) = info.unwrap_or((size, 0));
             let held = if info.is_some() {
@@ -801,19 +881,19 @@ impl Mem {
     pub fn take_block_reports(&mut self) -> Vec<String> {
         self.check
             .as_deref_mut()
-            .map(|c| std::mem::take(&mut c.reports))
+            .map(|c| std::mem::take(unlocked(&mut c.reports)))
             .unwrap_or_default()
     }
 
-    fn check_report(&mut self, text: String) {
-        let Some(c) = self.check.as_deref_mut() else {
+    fn check_report(&self, text: String) {
+        let Some(c) = self.check.as_deref() else {
             return;
         };
         eprintln!("NV_BLOCK_CHECK: {text}");
         if c.stop {
             panic!("NV_BLOCK_CHECK: {text}");
         }
-        c.reports.push(text);
+        lock(&c.reports).push(text);
     }
 
     /// After a guarded block of `asked` bytes at `addr` (`total` bytes in all) was handed out.
@@ -880,7 +960,7 @@ impl Mem {
     /// reported with the running function.
     #[cold]
     #[inline(never)]
-    fn check_store_at(&mut self, a: u32, len: u32) {
+    fn check_store_at(&self, a: u32, len: u32) {
         let Some(c) = self.check.as_deref() else {
             return;
         };
@@ -958,7 +1038,7 @@ impl Mem {
             Box::new(Watch {
                 ranges: BTreeMap::new(),
                 pages: vec![0; PAGES],
-                hits: Vec::new(),
+                hits: Mutex::new(Vec::new()),
             })
         });
         w.ranges.insert(start, (len, frees_only));
@@ -986,14 +1066,16 @@ impl Mem {
     /// Whether watched ranges have events not yet taken.
     #[inline]
     pub fn has_watch_hits(&self) -> bool {
-        self.watch.as_deref().is_some_and(|w| !w.hits.is_empty())
+        self.watch
+            .as_deref()
+            .is_some_and(|w| !lock(&w.hits).is_empty())
     }
 
     /// Takes the watched ranges' events, oldest first.
     pub fn take_watch_hits(&mut self) -> Vec<WatchHit> {
         self.watch
             .as_deref_mut()
-            .map(|w| std::mem::take(&mut w.hits))
+            .map(|w| std::mem::take(unlocked(&mut w.hits)))
             .unwrap_or_default()
     }
 
@@ -1014,7 +1096,7 @@ impl Mem {
     /// bytes a store writes (zeros otherwise). Unchanged bytes are not an event.
     #[cold]
     #[inline(never)]
-    fn watch_note(&mut self, a: u32, len: u32, new: Option<&[u8]>, kind: WatchKind) {
+    fn watch_note(&self, a: u32, len: u32, new: Option<&[u8]>, kind: WatchKind) {
         let end = a as u64 + len.max(1) as u64;
         let Some(w) = self.watch.as_deref() else {
             return;
@@ -1053,9 +1135,9 @@ impl Mem {
             if matches!(kind, WatchKind::Write | WatchKind::Zero) && old == fresh {
                 continue;
             }
-            let w = self.watch.as_deref_mut().expect("watch");
-            if w.hits.len() < WATCH_HITS_KEEP {
-                w.hits.push(WatchHit {
+            let mut hits = lock(&w.hits);
+            if hits.len() < WATCH_HITS_KEEP {
+                hits.push(WatchHit {
                     start,
                     addr: from,
                     len: (to - from as u64) as u32,
@@ -1088,8 +1170,8 @@ impl Mem {
             match state {
                 MAPPED | TOUCH => continue,
                 KEPT => {
-                    // SAFETY: pages `run..p` lie inside the block and are committed (kept);
-                    // written under `&mut self`.
+                    // SAFETY: pages `run..p` lie inside the block and are committed (kept); no
+                    // guest access reaches a kept page, and `&mut self` excludes every other.
                     unsafe { std::ptr::write_bytes(at, 0, bytes) };
                     self.kept -= p - run;
                 }
@@ -1229,7 +1311,8 @@ impl Mem {
         debug_assert!(from <= PAGES);
         let from = from % PAGES;
         // SAFETY: the table holds a byte for each of the `PAGES` pages and stays committed while
-        // the block lives; only `&mut self` writes it.
+        // the block lives; it changes only through `&mut self` (module documentation), and
+        // nothing changes it while the slice lives.
         let table = unsafe { std::slice::from_raw_parts(self.space.flag(0), PAGES) };
         let group = from / KEEP_GROUP;
         let end = (group + 1) * KEEP_GROUP;
@@ -1355,7 +1438,8 @@ impl Mem {
     pub(crate) fn mapped_pages(&self) -> Vec<u32> {
         const STRETCH: usize = 1 << 12;
         // SAFETY: the table holds a byte for each of the `PAGES` pages and stays committed while
-        // the block lives; only `&mut self` writes it.
+        // the block lives; it changes only through `&mut self` (module documentation), and
+        // nothing changes it while the slice lives.
         let table = unsafe { std::slice::from_raw_parts(self.space.flag(0).cast_const(), PAGES) };
         let mut out = Vec::new();
         // A compare per stretch: nearly all of the table is zero, and this also runs in test builds.
@@ -1372,17 +1456,12 @@ impl Mem {
         out
     }
 
-    /// The bytes of the mapped page at `page` (an address from [`Mem::mapped_pages`]).
+    /// The bytes of the mapped page at `page` (an address from [`Mem::mapped_pages`]), copied:
+    /// a store through `&self` may change the page while a borrowed slice of it would live.
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn page_bytes(&self, page: u32) -> &[u8] {
+    pub(crate) fn page_bytes(&self, page: u32) -> Vec<u8> {
         assert!(self.is_mapped(page) && page & (PAGE as u32 - 1) == 0);
-        // SAFETY: the page is mapped, and only `&mut self` writes it.
-        unsafe {
-            std::slice::from_raw_parts(
-                self.host_page((page >> PAGE_BITS) as usize).cast_const(),
-                PAGE,
-            )
-        }
+        self.bytes(page, PAGE as u32)
     }
 
     /// Page `p`'s byte in the table of mapped pages ([`MAPPED`], [`KEPT`] or [`UNMAPPED`]; `p`
@@ -1391,7 +1470,7 @@ impl Mem {
     fn page_state(&self, p: usize) -> u8 {
         debug_assert!(p < PAGES);
         // SAFETY: the table holds a byte for each of the `PAGES` pages and stays committed while
-        // the block lives; only `&mut self` writes it.
+        // the block lives; it changes only through `&mut self` (module documentation).
         unsafe { *self.space.flag(p) }
     }
 
@@ -1473,8 +1552,8 @@ impl Mem {
                 }
             }
             // SAFETY: `[a, a + n)` lies in one mapped page; `buf` is host memory of its own (no
-            // reference into the guest space leaves this module), and nothing writes the guest
-            // space while `&self` lives.
+            // reference into the guest space leaves this module). A plain copy (module
+            // documentation, "Threads").
             unsafe {
                 std::ptr::copy_nonoverlapping(self.host_at(a), buf.as_mut_ptr().add(done), n)
             };
@@ -1484,7 +1563,7 @@ impl Mem {
         Ok(())
     }
 
-    pub fn try_write(&mut self, addr: u32, data: &[u8]) -> Result<(), Fault> {
+    pub fn try_write(&self, addr: u32, data: &[u8]) -> Result<(), Fault> {
         if self.check_store {
             self.check_store_at(addr, data.len() as u32);
         }
@@ -1495,7 +1574,7 @@ impl Mem {
     }
 
     /// [`Mem::try_write`] without the write watch.
-    fn try_write_raw(&mut self, addr: u32, data: &[u8]) -> Result<(), Fault> {
+    fn try_write_raw(&self, addr: u32, data: &[u8]) -> Result<(), Fault> {
         let mut a = addr;
         let mut done = 0;
         while done < data.len() {
@@ -1508,8 +1587,8 @@ impl Mem {
                 }
                 self.touch_note(a, n, true);
             }
-            // SAFETY: `[a, a + n)` lies in one mapped page, written under `&mut self`; `data` is
-            // host memory of its own (no reference into the guest space leaves this module).
+            // SAFETY: `[a, a + n)` lies in one mapped page; `data` is host memory of its own (no
+            // reference into the guest space leaves this module). A plain copy, as in `read_pages`.
             unsafe { std::ptr::copy_nonoverlapping(data.as_ptr().add(done), self.host_at(a), n) };
             done += n;
             a = a.wrapping_add(n as u32);
@@ -1520,7 +1599,7 @@ impl Mem {
     /// Zeroes `[addr, addr + len)` page by page (what writing `len` zero bytes does, without
     /// a buffer of them). Panics as [`Mem::write`] does on the first unmapped byte, with the
     /// bytes before it zeroed.
-    pub fn zero(&mut self, addr: u32, len: u32) {
+    pub fn zero(&self, addr: u32, len: u32) {
         if self.check_store {
             self.check_store_at(addr, len);
         }
@@ -1531,7 +1610,7 @@ impl Mem {
     }
 
     /// [`Mem::zero`] without the write watch.
-    fn zero_raw(&mut self, addr: u32, len: u32) {
+    fn zero_raw(&self, addr: u32, len: u32) {
         let mut a = addr;
         let mut left = len as usize;
         while left > 0 {
@@ -1544,7 +1623,7 @@ impl Mem {
                 }
                 self.touch_note(a, n, true);
             }
-            // SAFETY: `[a, a + n)` lies in one mapped page, written under `&mut self`.
+            // SAFETY: `[a, a + n)` lies in one mapped page. A plain write, as in `read_pages`.
             unsafe { std::ptr::write_bytes(self.host_at(a), 0, n) };
             left -= n;
             a = a.wrapping_add(n as u32);
@@ -1602,7 +1681,7 @@ impl Mem {
         })
     }
 
-    pub fn write(&mut self, addr: u32, data: &[u8]) {
+    pub fn write(&self, addr: u32, data: &[u8]) {
         if let Err(Fault(a)) = self.try_write(addr, data) {
             panic!("write to unmapped memory at {a:08x}");
         }
@@ -1623,7 +1702,8 @@ impl Mem {
     #[inline(always)]
     fn fast_at(&self, a: u32) -> bool {
         // SAFETY: the table has a byte for page `PAGES` too (always 0: the space ends there), so
-        // both bytes of the pair lie in it; only `&mut self` writes it.
+        // both bytes of the pair lie in it; it changes only through `&mut self` (module
+        // documentation), so this plain load races no change of it.
         let pair = unsafe {
             std::ptr::read_unaligned(self.space.flag((a >> PAGE_BITS) as usize).cast::<u16>())
         };
@@ -1649,7 +1729,7 @@ impl Mem {
         let p = self.host_at(a);
         if self.fast_at(a) {
             // SAFETY: the `N` bytes start in a mapped page and end in it or in the next one,
-            // also mapped; nothing writes the guest space while `&self` lives.
+            // also mapped. A plain load (module documentation, "Threads").
             return unsafe { std::ptr::read_unaligned(p.cast::<[u8; N]>()) };
         }
         self.load_slow(a)
@@ -1678,8 +1758,7 @@ impl Mem {
     #[inline(never)]
     fn load_slow<const N: usize>(&self, a: u32) -> [u8; N] {
         if self.in_one_mapped_page(a, N) {
-            // SAFETY: the `N` bytes lie in one mapped page; nothing writes the guest space while
-            // `&self` lives.
+            // SAFETY: the `N` bytes lie in one mapped page. A plain load, as in `Mem::load`.
             return unsafe { std::ptr::read_unaligned(self.host_at(a).cast::<[u8; N]>()) };
         }
         let mut b = [0; N];
@@ -1690,7 +1769,7 @@ impl Mem {
     /// The store diagnostics of [`Mem::store`], out of its hot path.
     #[cold]
     #[inline(never)]
-    fn store_diagnostics(&mut self, a: u32, b: &[u8]) {
+    fn store_diagnostics(&self, a: u32, b: &[u8]) {
         if let (true, &[b0, b1, b2, b3]) = (self.touch.is_some(), b) {
             self.touch_store_word(a, u32::from_le_bytes([b0, b1, b2, b3]));
         }
@@ -1704,7 +1783,7 @@ impl Mem {
 
     /// Writes the `N` bytes `b` at `a`, as [`Mem::load`] reads them.
     #[inline(always)]
-    fn store<const N: usize>(&mut self, a: u32, b: [u8; N]) {
+    fn store<const N: usize>(&self, a: u32, b: [u8; N]) {
         // One test for both diagnostics (the write watch, the block check's store mode), so a
         // normal run pays a single predictable branch per store.
         if self.store_diag {
@@ -1714,7 +1793,7 @@ impl Mem {
         let p = self.host_at(a);
         if self.fast_at(a) {
             // SAFETY: the `N` bytes start in a mapped page and end in it or in the next one,
-            // also mapped; written under `&mut self`.
+            // also mapped. A plain store, as `Mem::load` loads.
             unsafe { std::ptr::write_unaligned(p.cast::<[u8; N]>(), b) };
             return;
         }
@@ -1724,9 +1803,9 @@ impl Mem {
     /// [`Mem::store`] off its fast path, as [`Mem::load_slow`] for loads.
     #[cold]
     #[inline(never)]
-    fn store_slow<const N: usize>(&mut self, a: u32, b: [u8; N]) {
+    fn store_slow<const N: usize>(&self, a: u32, b: [u8; N]) {
         if self.in_one_mapped_page(a, N) {
-            // SAFETY: the `N` bytes lie in one mapped page, written under `&mut self`.
+            // SAFETY: the `N` bytes lie in one mapped page. A plain store, as in `Mem::store`.
             unsafe { std::ptr::write_unaligned(self.host_at(a).cast::<[u8; N]>(), b) };
             return;
         }
@@ -1773,39 +1852,39 @@ impl Mem {
     }
 
     #[inline]
-    pub fn set_u8(&mut self, a: u32, v: u8) {
+    pub fn set_u8(&self, a: u32, v: u8) {
         self.store(a, [v]);
     }
     #[inline]
-    pub fn set_u16(&mut self, a: u32, v: u16) {
+    pub fn set_u16(&self, a: u32, v: u16) {
         self.store(a, v.to_le_bytes());
     }
     #[inline]
-    pub fn set_u32(&mut self, a: u32, v: u32) {
+    pub fn set_u32(&self, a: u32, v: u32) {
         self.store(a, v.to_le_bytes());
     }
     #[inline]
-    pub fn set_u64(&mut self, a: u32, v: u64) {
+    pub fn set_u64(&self, a: u32, v: u64) {
         self.store(a, v.to_le_bytes());
     }
     #[inline]
-    pub fn set_i8(&mut self, a: u32, v: i8) {
+    pub fn set_i8(&self, a: u32, v: i8) {
         self.set_u8(a, v as u8);
     }
     #[inline]
-    pub fn set_i16(&mut self, a: u32, v: i16) {
+    pub fn set_i16(&self, a: u32, v: i16) {
         self.set_u16(a, v as u16);
     }
     #[inline]
-    pub fn set_i32(&mut self, a: u32, v: i32) {
+    pub fn set_i32(&self, a: u32, v: i32) {
         self.set_u32(a, v as u32);
     }
     #[inline]
-    pub fn set_f32(&mut self, a: u32, v: f32) {
+    pub fn set_f32(&self, a: u32, v: f32) {
         self.set_u32(a, v.to_bits());
     }
     #[inline]
-    pub fn set_f64(&mut self, a: u32, v: f64) {
+    pub fn set_f64(&self, a: u32, v: f64) {
         self.set_u64(a, v.to_bits());
     }
 
@@ -1820,28 +1899,32 @@ impl Mem {
                 self.read_fault(p);
             }
             let n = PAGE - (p as usize & (PAGE - 1));
-            // SAFETY: `[p, p + n)` is the rest of one mapped page, and nothing writes the guest
-            // space while `&self` lives; the slice ends with this pass of the loop.
-            let bytes = unsafe { std::slice::from_raw_parts(self.host_at(p), n) };
-            let found = bytes.iter().position(|&c| c == 0);
+            let at = self.host_at(p);
+            // Each byte read once, through the raw pointer (no slice into guest memory, which a
+            // store through `&self` may change), up to the NUL or the page's end.
+            let mut found = None;
+            for i in 0..n {
+                // SAFETY: `p + i` lies in the rest of one mapped page. A plain read (module
+                // documentation, "Threads").
+                let c = unsafe { at.add(i).read() };
+                if c == 0 {
+                    found = Some(i);
+                    break;
+                }
+                out.push(c);
+            }
             if self.page_state((p >> PAGE_BITS) as usize) == TOUCH {
                 self.touch_note(p, found.map_or(n, |len| len + 1), false);
             }
-            match found {
-                Some(len) => {
-                    out.extend_from_slice(&bytes[..len]);
-                    return out;
-                }
-                None => {
-                    out.extend_from_slice(bytes);
-                    p = p.wrapping_add(n as u32);
-                }
+            if found.is_some() {
+                return out;
             }
+            p = p.wrapping_add(n as u32);
         }
     }
 
     /// Writes `s` and a NUL at `a`.
-    pub fn set_cstr(&mut self, a: u32, s: &[u8]) {
+    pub fn set_cstr(&self, a: u32, s: &[u8]) {
         self.write(a, s);
         self.set_u8(a.wrapping_add(s.len() as u32), 0);
     }
@@ -1861,16 +1944,20 @@ impl Mem {
         self.heap.available()
     }
 
-    /// Allocates `size` bytes (8-byte aligned, zero-filled) on the heap. A freed block of the
-    /// same rounded size is reused first, newest first: from its quick stack (up to 4 KB), or
-    /// among the first blocks of its bin; else part of a bigger free block, else fresh memory. A
-    /// fitting block deeper in its bin is used only when the top has no room (`mem/heap.rs` has
-    /// the policy).
+    /// Allocates `size` bytes (8-byte aligned, zero-filled) on the heap, as a block of the exe's
+    /// memory pool for that size ([`block_bytes`]). A freed block of the same pool is reused
+    /// first, newest first: from its quick stack (up to 4 KB), or among the first blocks of its
+    /// bin; else part of a bigger free block, else fresh memory. A fitting block deeper in its bin
+    /// is used only when the top has no room (`mem/heap.rs` has the policy). As in the exe, a
+    /// freed small block never comes back for another pool's request (a 12-byte object's block
+    /// not for a 16-byte one), unless the quick stacks, over their bound, moved it on.
     pub fn alloc(&mut self, size: u32) -> u32 {
         let asked = size;
         let guard = if self.check.is_some() { GUARD } else { 0 };
-        let size = size.max(1).div_ceil(8) * 8 + guard;
-        let addr = match self.heap.take(size) {
+        let pool = heap::pool_size(size);
+        let size = heap::class_bytes(pool) + guard;
+        let odd = pool & ODD_POOL;
+        let addr = match self.heap.take(size - odd) {
             Some(a) => a,
             None => self.heap_exhausted(size),
         };
@@ -1879,7 +1966,7 @@ impl Mem {
             self.watch_note(addr, size, None, WatchKind::Alloc);
         }
         self.zero_raw(addr, size);
-        self.live.insert(addr, size);
+        self.live.insert(addr, size | odd);
         if guard != 0 {
             self.check_guard_block(addr, asked, size);
         }
@@ -1902,10 +1989,11 @@ impl Mem {
         if addr == 0 {
             return;
         }
-        let size = self
+        let entry = self
             .live
             .remove(&addr)
             .unwrap_or_else(|| panic!("free of {addr:08x}, which is not a live heap block"));
+        let size = entry & !ODD_POOL;
         // Tagged objects in the block lose their tags before the freed check fills it.
         if self.touch.is_some() {
             self.touch_forget(addr, size);
@@ -1934,7 +2022,7 @@ impl Mem {
                     self.heap.release(a, s);
                 }
             }
-            None => self.heap.give(addr, size),
+            None => self.heap.give(addr, size - (entry & ODD_POOL)),
         }
     }
 
@@ -1964,7 +2052,7 @@ impl Mem {
             }
             by_size
         };
-        let live: u64 = self.live.values().map(|&s| u64::from(s)).sum();
+        let live: u64 = self.live.values().map(|&s| u64::from(s & !ODD_POOL)).sum();
         let quarantine = self.check.as_deref().map_or(0, |c| c.quarantine_bytes);
         let h = &self.heap;
         let waited = h.failed_flush();
@@ -1981,7 +2069,7 @@ impl Mem {
             waited.1,
             quarantine >> 20,
             h.top(),
-            most(tally(&mut self.live.values().copied())),
+            most(tally(&mut self.live.values().map(|&s| s & !ODD_POOL))),
             most(tally(&mut h.free_sizes()))
         )
     }
@@ -1989,9 +2077,9 @@ impl Mem {
     /// Size of a live heap block.
     pub fn block_size(&self, addr: u32) -> Option<u32> {
         if let Some(&(asked, _)) = self.check.as_deref().and_then(|c| c.blocks.get(&addr)) {
-            return Some(asked.max(1).div_ceil(8) * 8);
+            return Some(block_bytes(asked));
         }
-        self.live.get(&addr).copied()
+        self.live.get(&addr).map(|&s| s & !ODD_POOL)
     }
 
     /// Checks the heap's bookkeeping against the live blocks and those the freed-block check
@@ -2005,8 +2093,12 @@ impl Mem {
             .into_iter()
             .flatten()
             .copied();
-        self.heap
-            .check(self.live.iter().map(|(&a, &s)| (a, s)).chain(held));
+        self.heap.check(
+            self.live
+                .iter()
+                .map(|(&a, &s)| (a, s & !ODD_POOL))
+                .chain(held),
+        );
     }
 
     /// Takes the rest of the heap's lower range as one live block without mapping its pages:
@@ -2034,6 +2126,22 @@ impl Mem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The extenders' code addresses and the built-ins' data lie in the platform's area, above
+    /// the platform's own code and module addresses, so no heap block can be one of them and no
+    /// reservation at a chosen address lands there (ADR-0016).
+    #[test]
+    fn the_extender_ranges_lie_in_the_platform_area() {
+        for code in [
+            crate::units::platform::loader::PROC_CODE,
+            crate::units::platform::loader::KERNEL32_MODULE,
+        ] {
+            assert!(PLATFORM_AREA.contains(&code), "{code:08x}");
+            assert!(code < EXTENDER_CODE.start, "{code:08x}");
+        }
+        assert!(PLATFORM_AREA.contains(&EXTENDER_CODE.start));
+        assert!(PLATFORM_AREA.contains(&(BUILTIN_DATA.end - 1)));
+    }
 
     /// A word written just past a guarded block is found when the block is freed, with the
     /// functions that allocated and freed it; writes inside it are not.
@@ -2227,7 +2335,7 @@ mod tests {
         assert!(r.is_err());
         assert_eq!(m.bytes(0x1ffe, 2), [0xdd, 0xcc]);
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut m = Mem::new();
+            let m = Mem::new();
             m.set_u8(0x7000, 1)
         }));
         let why = r.unwrap_err();
@@ -2250,6 +2358,9 @@ mod tests {
         assert_eq!(&b[0x1c..], &[0xff; 4]);
     }
 
+    /// A freed block comes back zeroed for the next request of its pool. (It was a 16-byte
+    /// request taking the freed 12-byte block; the exe's pools keep those apart:
+    /// `freed_blocks_come_back_only_to_their_exe_pool`.)
     #[test]
     fn heap_reuses_freed_blocks() {
         let mut m = Mem::new();
@@ -2258,7 +2369,7 @@ mod tests {
         assert_eq!(b, a + 16);
         m.set_u32(a, 7);
         m.free(a);
-        let c = m.alloc(16);
+        let c = m.alloc(10);
         assert_eq!(c, a);
         assert_eq!(m.u32(c), 0, "reused blocks are zeroed");
         m.free(0);
@@ -2297,6 +2408,121 @@ mod tests {
             assert_eq!(m.alloc(size), blocks[4] + size);
             m.check_heap();
         }
+    }
+
+    /// The exe's pools (MemoryManager::SpecifyPools 00866770): a freed block comes back only for
+    /// a request of its own pool (12 is not 16, 28 is not 32), newest first. Before, a request of
+    /// 16 bytes took a freed 12-byte block: the inventory entry a 16-byte interface object took
+    /// in the weapon-mod crash, which the exe's Pool 12 and Pool 16 can't do.
+    #[test]
+    fn freed_blocks_come_back_only_to_their_exe_pool() {
+        let mut m = Mem::new();
+        for (freed, other) in [(0xc, 0x10), (0x20, 0x1c), (0x10, 0xc)] {
+            let a = m.alloc(freed);
+            let _fence = m.alloc(0x40);
+            m.free(a);
+            assert_ne!(m.alloc(other), a, "{freed:#x} reused by {other:#x}");
+            assert_eq!(m.alloc(freed), a);
+        }
+        m.check_heap();
+    }
+
+    /// Every pair of the exe's pools whose blocks the heap holds at the same 8-rounded size (12
+    /// and 16, 20 and 24, .., 100 and 104, 596's 600 and none): a freed block of one never serves
+    /// the other, both ways, with the block check's guard too; a request of the same pool takes
+    /// it back.
+    #[test]
+    fn pools_that_share_a_rounded_size_stay_apart() {
+        let pairs = [
+            (12, 16),
+            (20, 24),
+            (28, 32),
+            (36, 40),
+            (44, 48),
+            (52, 56),
+            (76, 80),
+            (92, 96),
+            (100, 104),
+        ];
+        for check in [false, true] {
+            let mut m = Mem::new();
+            if check {
+                m.enable_block_check(false, true);
+            }
+            for (odd, even) in pairs {
+                assert_eq!(block_bytes(odd), block_bytes(even));
+                for (freed, other) in [(odd, even), (even, odd)] {
+                    let a = m.alloc(freed);
+                    let _fence = m.alloc(8);
+                    m.free(a);
+                    let b = m.alloc(other);
+                    assert_ne!(b, a, "{freed} reused by {other} (check {check})");
+                    assert_eq!(m.alloc(freed), a, "{freed} (check {check})");
+                    m.free(b);
+                    assert_eq!(m.alloc(other), b);
+                }
+            }
+            m.check_heap();
+        }
+    }
+
+    /// The pool each request goes to, at every boundary of `MemoryManager::Allocate` (00aa3e40,
+    /// its size rounded up to 4, at least 8, then the pool of exactly that size) and its fallback
+    /// 00aa4960 (below 300 the pool of the size rounded up to 16; below 0x200 that or the one of
+    /// it rounded up to 32; below 0x240 the 576-byte pool; none from there, but the 596-byte
+    /// pool's exact size); the block the heap holds is that pool's size rounded up to 8.
+    #[test]
+    fn requests_go_to_the_exe_pool_for_their_size() {
+        for (asked, pool) in [
+            (0, 8),
+            (1, 8),
+            (8, 8),
+            (9, 12),
+            (12, 12),
+            (13, 16),
+            (0x3d, 64),
+            // 68 has no pool: 80, its size rounded up to 16.
+            (0x41, 80),
+            (0x44, 80),
+            (0x4c, 76),
+            (0x51, 96),
+            (0x59, 92),
+            // 132: no pool of 132 or 144, so the general heap (rounded to 8).
+            (0x84, 136),
+            (0xed, 240),
+            (0xf4, 256),
+            (0x101, 272),
+            (0x120, 288),
+            // From 300 on 00aa4960 tries the size rounded up to 32 as well.
+            (0x12c, 304),
+            (0x154, 344),
+            (0x190, 400),
+            (0x1a0, 416),
+            (0x1c8, 480),
+            (0x1e4, 488),
+            (0x1fc, 508),
+            (0x1fd, 576),
+            (0x23c, 576),
+            (0x240, 576),
+            (0x241, 0x248),
+            (0x254, 596),
+            (0x3fc, 0x400),
+            (0x1000, 0x1000),
+        ] {
+            assert_eq!(heap::pool_size(asked), pool, "{asked:#x}");
+            assert_eq!(block_bytes(asked), heap::class_bytes(pool), "{asked:#x}");
+        }
+        // Requests of one pool share its blocks: a freed 0x41-byte block (Pool 80) serves an
+        // 80-byte request, and a freed 0x204-byte one (Pool 576) a 0x240-byte one.
+        let mut m = Mem::new();
+        for (freed, same) in [(0x41, 0x50), (0x204, 0x240)] {
+            let a = m.alloc(freed);
+            assert_eq!(m.block_size(a), Some(block_bytes(same)));
+            let _fence = m.alloc(8);
+            m.free(a);
+            assert_eq!(m.alloc(same), a);
+        }
+        m.check_heap();
     }
 
     /// A big freed block serves smaller requests from its start, zero-filled, and the rest of it
@@ -2594,7 +2820,7 @@ mod tests {
                     _ => 0x1_0000 + rng.below(big),
                 };
                 let a = m.alloc(asked);
-                let size = *m.live.get(&a).expect("a live block");
+                let size = *m.live.get(&a).expect("a live block") & !ODD_POOL;
                 assert_eq!(a % 8, 0);
                 assert!(
                     a >= HEAP_BASE && a + size <= m.heap.top(),
@@ -3544,11 +3770,12 @@ mod tests {
         }
     }
 
-    /// `Mem` stays `Send` and `Sync`, as it was with boxed pages.
+    /// `Mem` stays `Send`, as it was with boxed pages (the thread host moves the engine between OS
+    /// threads); not `Sync` until the thread host shares it (module documentation, "Threads").
     #[test]
-    fn mem_is_send_and_sync() {
-        fn send_sync<T: Send + Sync>() {}
-        send_sync::<Mem>();
+    fn mem_is_send() {
+        fn send<T: Send>() {}
+        send::<Mem>();
     }
 
     /// The page table this module used before the flat block (one boxed page per slot), kept
