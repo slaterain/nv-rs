@@ -11,7 +11,7 @@
 //! - **`cmp`** selects on `src0 >= 0`, **`cnd`** on `src0 > 0.5`, **`slt`/`sge`** give 1.0 or
 //!   0.0, **`frc`** is `x - floor(x)`, **`sincos`** writes cosine to x and sine to y.
 //! - **Saturation** clamps to [0, 1] (`saturate`, NaN to 0 as the hardware does).
-//! - **Address registers**: `mova` rounds to nearest; shader model 1's `mov a0.x` takes the floor.
+//! - **Address registers**: `mova` rounds to nearest (halves up: `floor(x + 0.5)`); shader model 1's `mov a0.x` takes the floor.
 //!   A constant read outside the register file through an address register reads 0.
 //! - **Pixel centres**: Direct3D 9 puts them on whole coordinates, wgpu half a pixel further. Each
 //!   vertex shader moves its position by half a pixel right and down (`sys[0]`, set by the device
@@ -121,7 +121,9 @@ pub fn signature(p: &Program) -> Signature {
     let mut outputs: BTreeMap<(u8, u32), Semantic> = BTreeMap::new();
     for ins in &p.ins {
         if ins.op == op::DCL {
-            let (d, decl) = (ins.dst.expect("dcl register"), ins.decl.expect("dcl usage"));
+            let (Some(d), Some(decl)) = (ins.dst, ins.decl) else {
+                continue;
+            };
             let semantic = Semantic {
                 usage: decl.usage,
                 index: decl.index,
@@ -172,7 +174,8 @@ pub fn signature(p: &Program) -> Signature {
                 }
             }
             if p.stage == Stage::Pixel {
-                if d.reg.ty == reg::COLOROUT {
+                // oC0 to oC3 (any other number is refused when it is written).
+                if d.reg.ty == reg::COLOROUT && d.reg.n < 4 {
                     sig.colours |= 1 << d.reg.n;
                 }
                 if d.reg.ty == reg::DEPTHOUT {
@@ -284,12 +287,16 @@ fn frc(a: vec4<f32>) -> vec4<f32> {
 ";
 
 /// A texture's sampled value with the components its format does not have filled in as
-/// Direct3D 9 fills them (`fix` mode: 0 as sampled, 1 (r, 1, 1, 1), 2 (r, g, 1, 1), 3 alpha 1).
+/// Direct3D 9 fills them (`fix` mode: 0 as sampled, 1 (r, 1, 1, 1), 2 (r, g, 1, 1), 3 alpha 1,
+/// 4 (0, 0, 0, r) for A8, 5 (r, r, r, 1) for L8 and L16, 6 (r, r, r, g) for A8L8).
 const FIX: &str = "fn fixup(t: vec4<f32>, mode: u32) -> vec4<f32> {
     switch mode {
         case 1u: { return vec4<f32>(t.x, 1.0, 1.0, 1.0); }
         case 2u: { return vec4<f32>(t.x, t.y, 1.0, 1.0); }
         case 3u: { return vec4<f32>(t.xyz, 1.0); }
+        case 4u: { return vec4<f32>(0.0, 0.0, 0.0, t.x); }
+        case 5u: { return vec4<f32>(t.x, t.x, t.x, 1.0); }
+        case 6u: { return vec4<f32>(t.x, t.x, t.x, t.y); }
         default: { return t; }
     }
 }
@@ -334,17 +341,22 @@ pub fn convert(p: &Program, link: &Link) -> Result<String, Error> {
     };
     for ins in &p.ins {
         match ins.op {
-            op::DEF => {
-                g.defs.insert(ins.dst.expect("def").reg.n, ins.values);
-            }
-            op::DEFI => {
-                g.defis.insert(ins.dst.expect("defi").reg.n, ins.values);
-            }
-            op::DEFB => {
-                g.defbs.insert(ins.dst.expect("defb").reg.n, ins.values[0]);
+            op::DEF | op::DEFI | op::DEFB => {
+                let d = ins
+                    .dst
+                    .ok_or_else(|| Error::BadBytecode("a def without its register".into()))?;
+                match ins.op {
+                    op::DEF => g.defs.insert(d.reg.n, ins.values),
+                    op::DEFI => g.defis.insert(d.reg.n, ins.values),
+                    _ => g.defbs.insert(d.reg.n, ins.values[0]).map(|v| [v; 4]),
+                };
             }
             op::LABEL => {
-                g.labels.insert(ins.src[0].reg.n);
+                let l = ins
+                    .src
+                    .first()
+                    .ok_or_else(|| Error::BadBytecode("a label without its number".into()))?;
+                g.labels.insert(l.reg.n);
             }
             _ => {}
         }
@@ -487,7 +499,12 @@ impl Gen<'_> {
             .unwrap_or(ins.len());
         let mut k = main_end;
         while k < ins.len() {
-            let n = ins[k].src[0].reg.n;
+            let n = ins[k]
+                .src
+                .first()
+                .ok_or_else(|| Error::BadBytecode("a label without its number".into()))?
+                .reg
+                .n;
             let end = ins[k + 1..]
                 .iter()
                 .position(|i| i.op == op::LABEL)
@@ -500,6 +517,7 @@ impl Gen<'_> {
                 }
                 self.instruction(x)?;
             }
+            self.closed()?;
             self.depth = 0;
             self.out.push_str("}\n");
             k = end;
@@ -512,6 +530,7 @@ impl Gen<'_> {
             }
             self.instruction(x)?;
         }
+        self.closed()?;
         self.depth = 0;
         self.out.push_str("}\n");
         if self.vertex() {
@@ -597,6 +616,10 @@ impl Gen<'_> {
                 .map(|(r, _)| *r);
             let value = match written {
                 Some(r) if r.ty == reg::RASTOUT && r.n == 0 => "o_pos".into(),
+                // Before vs_3_0 the colour outputs are clamped to [0, 1].
+                Some(r) if r.ty == reg::ATTROUT && self.p.major < 3 => {
+                    format!("saturate({})", out_name(r))
+                }
                 Some(r) => out_name(r),
                 None => "vec4<f32>(0.0)".into(),
             };
@@ -763,7 +786,9 @@ impl Gen<'_> {
 
     /// Writes `value` (a vec4 expression) to the destination, masked, saturated, predicated.
     fn write(&mut self, ins: &Ins, value: String) -> Result<(), Error> {
-        let d = ins.dst.expect("a destination");
+        let d = ins
+            .dst
+            .ok_or_else(|| Error::BadBytecode("an instruction without its destination".into()))?;
         let value = if d.sat {
             format!("saturate({value})")
         } else {
@@ -772,9 +797,10 @@ impl Gen<'_> {
         let target = match d.reg.ty {
             reg::TEMP => format!("r{}", d.reg.n),
             reg::ADDR_TEXTURE if self.vertex() => {
-                // `mova` (and shader model 1's `mov a0.x`).
+                // `mova` rounds to nearest, halves up (floor(x + 0.5)); shader model 1's `mov a0.x`
+                // takes the floor.
                 let rounded = if ins.op == op::MOVA {
-                    format!("vec4<i32>(round({value}))")
+                    format!("vec4<i32>(floor({value} + vec4<f32>(0.5)))")
                 } else {
                     format!("vec4<i32>(floor({value}))")
                 };
@@ -909,8 +935,40 @@ impl Gen<'_> {
         })
     }
 
+    /// The block level one out, or an error for a closing instruction without its opening one.
+    fn outer(&self) -> Result<usize, Error> {
+        self.depth.checked_sub(1).filter(|&d| d > 0).ok_or_else(|| {
+            Error::BadBytecode("an else, endif, endloop or endrep without its start".into())
+        })
+    }
+
+    fn loop_out(&self) -> Result<usize, Error> {
+        self.loops
+            .checked_sub(1)
+            .ok_or_else(|| Error::BadBytecode("an endloop or endrep without its loop".into()))
+    }
+
+    /// At a body's end: every block it opened is closed.
+    fn closed(&self) -> Result<(), Error> {
+        if self.depth != 1 || self.loops != 0 {
+            return Err(Error::BadBytecode(
+                "an if, loop or rep without its end".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn instruction(&mut self, ins: &Ins) -> Result<(), Error> {
         let s = ins.src.clone();
+        // Every instruction has the parameters it reads (malformed bytecode is an error, never a
+        // panic).
+        let (destination, sources) = operands(ins.op);
+        if (destination && ins.dst.is_none()) || ins.src.len() < sources {
+            return Err(Error::BadBytecode(format!(
+                "{} with too few parameters",
+                super::opcode_name(ins.op).unwrap_or("an instruction")
+            )));
+        }
         match ins.op {
             op::NOP | op::DCL | op::DEF | op::DEFI | op::DEFB | op::PHASE => {}
             op::MOV => {
@@ -1089,12 +1147,12 @@ impl Gen<'_> {
                 self.depth += 1;
             }
             op::ELSE => {
-                self.depth -= 1;
+                self.depth = self.outer()?;
                 self.line("} else {");
                 self.depth += 1;
             }
             op::ENDIF => {
-                self.depth -= 1;
+                self.depth = self.outer()?;
                 self.line("}");
             }
             op::REP => {
@@ -1107,8 +1165,8 @@ impl Gen<'_> {
                 self.depth += 1;
             }
             op::ENDREP => {
-                self.loops -= 1;
-                self.depth -= 1;
+                self.loops = self.loop_out()?;
+                self.depth = self.outer()?;
                 self.line("}");
             }
             op::LOOP => {
@@ -1127,13 +1185,13 @@ impl Gen<'_> {
                 self.depth += 1;
             }
             op::ENDLOOP => {
-                self.loops -= 1;
+                self.loops = self.loop_out()?;
                 let k = self.loops;
                 self.line(&format!("aL = aL + li{k}.z;"));
-                self.depth -= 1;
+                self.depth = self.outer()?;
                 self.line("}");
                 self.line(&format!("aL = al{k};"));
-                self.depth -= 1;
+                self.depth = self.outer()?;
                 self.line("}");
             }
             op::BREAK => self.line("break;"),
@@ -1165,6 +1223,54 @@ impl Gen<'_> {
             }
         }
         Ok(())
+    }
+}
+
+/// What an instruction reads: whether it has a destination, and how many sources at least.
+fn operands(code: u16) -> (bool, usize) {
+    match code {
+        op::MOV
+        | op::MOVA
+        | op::RCP
+        | op::RSQ
+        | op::EXP
+        | op::EXPP
+        | op::LOG
+        | op::LOGP
+        | op::FRC
+        | op::ABS
+        | op::SGN
+        | op::NRM
+        | op::SINCOS
+        | op::LIT
+        | op::DSX
+        | op::DSY => (true, 1),
+        op::ADD
+        | op::SUB
+        | op::MUL
+        | op::DP3
+        | op::DP4
+        | op::MIN
+        | op::MAX
+        | op::SLT
+        | op::SGE
+        | op::POW
+        | op::CRS
+        | op::DST
+        | op::M4X4
+        | op::M4X3
+        | op::M3X4
+        | op::M3X3
+        | op::M3X2
+        | op::SETP
+        | op::TEX
+        | op::TEXLDL => (true, 2),
+        op::MAD | op::LRP | op::CMP | op::CND | op::DP2ADD => (true, 3),
+        op::TEXLDD => (true, 4),
+        op::TEXKILL | op::DCL | op::DEF | op::DEFI | op::DEFB => (true, 0),
+        op::IF | op::BREAKP | op::REP | op::CALL | op::LABEL => (false, 1),
+        op::IFC | op::BREAKC | op::LOOP | op::CALLNZ => (false, 2),
+        _ => (false, 0),
     }
 }
 
@@ -1329,7 +1435,10 @@ mod tests {
             "{s}"
         );
         assert!(s.contains("cr(i32(8) + a0.x)"), "{s}");
-        assert!(s.contains("vec4<i32>(round("), "{s}");
+        assert!(
+            s.contains("vec4<i32>(floor((v0).xxxx + vec4<f32>(0.5)))"),
+            "{s}"
+        );
         assert!(s.contains("out.position = o0 + "), "{s}");
     }
 
@@ -1385,6 +1494,59 @@ mod tests {
         assert!(s.contains("/ (t0_in).w"), "{s}");
         assert!(s.contains("dpdx(t0_in)"), "{s}");
         assert!(s.contains("discard"), "{s}");
+    }
+
+    #[test]
+    fn malformed_bytecode_is_an_error_not_a_panic() {
+        let end = super::super::END;
+        // endif without if; mov without its source; if without endif; a label without a number.
+        for t in [
+            vec![0xFFFF_0300, 0x0000_002B, end],
+            vec![0xFFFF_0300, 0x0100_0001, 0x800F_0000, end],
+            vec![0xFFFF_0300, 0x0100_0028, 0xE0E4_0800, end],
+            vec![0xFFFF_0300, 0x0000_001E, end],
+            vec![0xFFFF_0300, 0x0000_001B, 0x0000_001D, end],
+        ] {
+            let p = parse(&t).unwrap();
+            assert!(convert(&p, &Link::default()).is_err(), "{t:x?}");
+        }
+        // Every token of these shaders changed in turn: read or not, converted or not, never a panic.
+        let shaders = [
+            small_vertex_shader(),
+            vec![
+                0xFFFF_0300,
+                0x0500_0030,
+                0xF00F_0000,
+                4,
+                0,
+                0,
+                0,
+                0x0100_0026,
+                0xF0E4_0000,
+                0x0300_0002,
+                0x800F_0000,
+                0x80E4_0000,
+                0xA0E4_0000,
+                0x0000_0027,
+                0x0200_0001,
+                0x800F_0800,
+                0x80E4_0000,
+                end,
+            ],
+        ];
+        let mut seed = 0x1234_5678u32;
+        for shader in &shaders {
+            for at in 1..shader.len() {
+                for _ in 0..16 {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let mut t = shader.clone();
+                    t[at] = seed;
+                    if let Ok(p) = parse(&t) {
+                        let _ = convert(&p, &Link::default());
+                    }
+                }
+            }
+        }
     }
 
     #[test]

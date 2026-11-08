@@ -8,6 +8,6 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-# The converter's WGSL is checked with naga's reader and validator: the version wgpu 24.0.5 uses,
+# The converter's WGSL is checked with naga's reader and validator: the version wgpu 30.0.1 uses,
 # pinned (ADR-0007).
-naga = { version = "=24.0.0", features = ["wgsl-in"] }
+naga = { version = "=30.0.1", features = ["wgsl-in"] }
