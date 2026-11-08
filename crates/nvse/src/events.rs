@@ -1749,6 +1749,16 @@ fn with_texts<R>(
 
 /// `NV_NVSE_EVENT_LOG`: a handler call as one line (event, handler, game thread, arguments).
 fn log_call(e: &mut Engine, at: usize, script: u32, args: &[u32]) {
+    log_line(e, at, "handler", script, args);
+}
+
+/// `NV_NVSE_EVENT_LOG`: a call kept for the main thread's tick, on the thread that raised it
+/// (handler 0: the handlers are found at the tick).
+fn log_kept(e: &mut Engine, at: usize, script: u32, args: &[u32]) {
+    log_line(e, at, "kept for", script, args);
+}
+
+fn log_line(e: &mut Engine, at: usize, what: &str, script: u32, args: &[u32]) {
     if state(e).log.is_none() {
         return;
     }
@@ -1762,10 +1772,7 @@ fn log_call(e: &mut Engine, at: usize, script: u32, args: &[u32]) {
     let s = state(e);
     let name = String::from_utf8_lossy(&s.infos[at].name).into_owned();
     if let Some(f) = s.log.as_mut() {
-        let _ = writeln!(
-            f,
-            "{name} handler {id:08X} thread {thread} args {args:08X?}"
-        );
+        let _ = writeln!(f, "{name} {what} {id:08X} thread {thread} args {args:08X?}");
     }
 }
 
@@ -1853,6 +1860,7 @@ fn handle_classic(
             continue;
         }
         if !on_main_thread(e) {
+            log_kept(e, at, cb.script, &[arg0, arg1]);
             let texts = copy_texts(e, &[arg0, arg1], types);
             state(e).classic.push(Classic {
                 info: at,
@@ -1949,6 +1957,7 @@ pub fn dispatch_raw(
     mut ev: Option<&mut Eval>,
 ) -> Dispatch {
     if defer && !on_main_thread(e) {
+        log_kept(e, at, 0, args);
         let d = Deferred {
             info: at,
             this_obj,
