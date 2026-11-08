@@ -930,3 +930,46 @@ fn errors_and_senders_as_the_real_game_shows_them() {
     assert_eq!(sender.data, Data::Str(Vec::new()));
     assert_eq!(runs[0].event, b"evtest");
 }
+
+/// Review item 3 of #329: a call kept for the tick (off the main thread) keeps its string
+/// argument's text; the string it pointed at (here on the guest stack) is gone by then.
+#[test]
+fn held_messages_keep_their_text() {
+    let mut e = setup();
+    scripts(&mut e, &[(1, 2)]);
+    set_handler(&mut e, b"LoadGame", Callback::new(FN_A), 1, None);
+    e.ext::<Nvse>().tick.main_thread = 0;
+    message_text(&mut e, id::LOAD_GAME, b"Save 3.fos");
+    // The stack the text was on is used again.
+    e.with_stack(64, |e, at| e.mem.write(at.addr(), &[0x55; 64]));
+    tick(&mut e);
+    let runs = log();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(text_of(&e, runs[0].a), b"Save 3.fos");
+}
+
+/// The handler's run counts, and from inside it an error while fewer than five ran.
+fn erring_execute(e: &mut Engine, _: &[u32]) -> Ret {
+    let n = e.mem.u32(AREA + 0x7ff0) + 1;
+    e.mem.set_u32(AREA + 0x7ff0, n);
+    if n < 5 {
+        crate::errors::show(e, FN_A, "inner");
+    }
+    Ret::default()
+}
+
+/// Review item 2 of #329 (the fixes preset's row): an error inside a `RuntimeScriptError`
+/// handler is not dispatched to it again; without the row it is (xNVSE recurses until the
+/// stack runs out; here the stand-in stops after five).
+#[test]
+fn the_error_guard_stops_a_handler_loop() {
+    for (guard, runs) in [(true, 1), (false, 5)] {
+        let mut e = setup();
+        e.register(SCRIPT_EXECUTE, erring_execute);
+        scripts(&mut e, &[(1, 2)]);
+        set_error_guard(&mut e, guard);
+        set_handler(&mut e, b"RuntimeScriptError", Callback::new(FN_A), 1, None);
+        crate::errors::show(&mut e, FN_B, "outer");
+        assert_eq!(e.mem.u32(AREA + 0x7ff0), runs, "guard {guard}");
+    }
+}

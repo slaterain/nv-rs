@@ -531,9 +531,10 @@ impl Default for ScriptTables {
 }
 
 /// The extenders' state on an engine (fields of [`Engine`]).
-#[derive(Default)]
 pub(crate) struct ExtendState {
-    pub(crate) slots: std::collections::HashMap<std::any::TypeId, Box<dyn std::any::Any>>,
+    /// This engine's id (a shared slot's holder names it).
+    pub(crate) id: u64,
+    pub(crate) slots: std::collections::HashMap<std::any::TypeId, Slot>,
     pub(crate) chains: crate::engine::AddrMap<u32, Chain>,
     /// The links running through [`Engine::call_next`], per game thread (`thread_host::current_id`):
     /// each thread has its own call stack (`thread_host` swaps them), so a link's depth means
@@ -543,19 +544,171 @@ pub(crate) struct ExtendState {
     pub(crate) tables: ScriptTables,
 }
 
+impl Default for ExtendState {
+    fn default() -> ExtendState {
+        ExtendState::new()
+    }
+}
+
 impl ExtendState {
+    /// A new engine's state: nothing installed, its own id.
+    pub(crate) fn new() -> ExtendState {
+        ExtendState {
+            id: next_engine_id(),
+            slots: std::collections::HashMap::new(),
+            chains: Default::default(),
+            active: std::collections::HashMap::new(),
+            sites: Default::default(),
+            tables: ScriptTables::default(),
+        }
+    }
+
     /// The state a real thread's engine starts with ([`Engine::thread_context`]): the same wraps, seam
-    /// handlers and script tables (installed before the threads start), its own links running
-    /// and empty extension slots (a built-in's per-engine state does not cross threads).
+    /// handlers and script tables (installed before the threads start), its own links running,
+    /// the shared slots ([`Engine::share_ext`]) and no slot of its own (a built-in's per-engine
+    /// state does not cross threads).
     pub(crate) fn for_thread(&self) -> ExtendState {
         ExtendState {
-            slots: std::collections::HashMap::new(),
+            id: next_engine_id(),
+            slots: self
+                .slots
+                .iter()
+                .filter_map(|(k, s)| match s {
+                    Slot::Shared(s) => Some((*k, Slot::Shared(s.clone()))),
+                    Slot::Own(_) => None,
+                })
+                .collect(),
             chains: self.chains.clone(),
             active: std::collections::HashMap::new(),
             sites: self.sites.clone(),
             tables: self.tables,
         }
     }
+}
+
+/// An extension slot: one engine's own, or one value every engine of a game shares
+/// ([`Engine::share_ext`]).
+pub(crate) enum Slot {
+    Own(Box<dyn std::any::Any>),
+    Shared(std::sync::Arc<Shared>),
+}
+
+/// A value the engines of a game's threads share: a built-in's game-wide state (the script
+/// extender's variables, events and delayed calls), behind one lock. A thread takes it at its
+/// first use and keeps it until it next stops running game code or reaches a safe point
+/// ([`release_held`], called by real threads' waits, sleeps, platform calls and barrier), so a
+/// reference [`Engine::ext`] gives (which borrows the engine) is never live while another thread
+/// holds it. With stepped threads there is one engine and the lock is never contended.
+pub(crate) struct Shared {
+    /// The holder: its OS thread's token and its engine's id; `None` when free.
+    holder: std::sync::Mutex<Option<(u64, u64)>>,
+    freed: std::sync::Condvar,
+    value: std::cell::UnsafeCell<Box<dyn std::any::Any + Send>>,
+}
+
+// The value is reached only by the thread that holds it (`holder`).
+unsafe impl Sync for Shared {}
+
+impl Shared {
+    fn new(value: Box<dyn std::any::Any + Send>) -> Shared {
+        Shared {
+            holder: std::sync::Mutex::new(None),
+            freed: std::sync::Condvar::new(),
+            value: std::cell::UnsafeCell::new(value),
+        }
+    }
+
+    fn release(&self) {
+        let mut h = self
+            .holder
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *h = None;
+        drop(h);
+        self.freed.notify_one();
+    }
+}
+
+thread_local! {
+    /// The shared slots this OS thread holds, with the engine that took each.
+    static HELD: std::cell::RefCell<Vec<(std::sync::Arc<Shared>, u64)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// This OS thread's token (never 0).
+    static THREAD: u64 = {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    };
+}
+
+/// Gives back every shared slot this OS thread holds: real threads call it where a thread stops
+/// running game code (a wait, a sleep, the barrier) and at safe points (platform calls,
+/// interlocked operations), where no reference into a slot can be live.
+pub(crate) fn release_held() {
+    HELD.with(|h| {
+        let mut h = h.borrow_mut();
+        for (s, _) in h.drain(..) {
+            s.release();
+        }
+    });
+}
+
+/// Whether this OS thread holds a shared slot (a cheap test before [`release_held`]).
+#[inline]
+pub(crate) fn holds_shared() -> bool {
+    HELD.with(|h| !h.borrow().is_empty())
+}
+
+
+/// Takes the shared slot `s` for this OS thread (engine `engine`), unless it holds it already;
+/// while another thread holds it, waits as a thread that runs no game code (a barrier does not
+/// wait for it).
+fn hold(
+    s: &std::sync::Arc<Shared>,
+    engine: u64,
+    real: Option<&crate::real_threads::Ctx>,
+) {
+    let held = HELD.with(|h| {
+        h.borrow()
+            .iter()
+            .find(|(x, _)| std::sync::Arc::ptr_eq(x, s))
+            .map(|(_, e)| *e)
+    });
+    match held {
+        Some(e) if e == engine => return,
+        Some(_) => panic!("a shared extension slot used by two engines on one thread"),
+        None => {}
+    }
+    let me = THREAD.with(|t| *t);
+    let take = || {
+        let mut h = s
+            .holder
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while h.is_some() {
+            h = s
+                .freed
+                .wait(h)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        *h = Some((me, engine));
+    };
+    let free = s
+        .holder
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .is_none();
+    if free {
+        take();
+    } else {
+        crate::real_threads::blocking(real, take);
+    }
+    HELD.with(|h| h.borrow_mut().push((s.clone(), engine)));
+}
+
+/// The id of a new engine's extension state (for [`Shared`]'s holder).
+fn next_engine_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The handlers at one seam: its table, and a handler or none per owner, in the table's order.
@@ -577,22 +730,62 @@ impl Engine {
     /// The extension slot of type `T` on this engine, made with `T::default()` at first use: a
     /// built-in's state per engine instance (tests run several engines at once; no
     /// thread-locals). Reached only while no other borrow of the engine is held, so no reference
-    /// to it lives across an [`Engine::call`].
+    /// to it lives across an [`Engine::call`]. A shared slot ([`Engine::share_ext`]) is the one
+    /// value of every engine of the game: this thread takes it here (waiting while another holds
+    /// it) and keeps it until it next stops running game code or reaches a safe point.
     pub fn ext<T: Default + 'static>(&mut self) -> &mut T {
-        self.extend
+        let engine = self.extend.id;
+        let slot = self
+            .extend
             .slots
             .entry(std::any::TypeId::of::<T>())
-            .or_insert_with(|| Box::new(T::default()))
-            .downcast_mut::<T>()
-            .unwrap_or_else(|| unreachable!("a slot holds the type it is keyed by"))
+            .or_insert_with(|| Slot::Own(Box::new(T::default())));
+        match slot {
+            Slot::Own(b) => b
+                .downcast_mut::<T>()
+                .unwrap_or_else(|| unreachable!("a slot holds the type it is keyed by")),
+            Slot::Shared(s) => {
+                hold(s, engine, self.real.as_deref());
+                // SAFETY: this thread holds the slot (`hold`) until its next release point, and
+                // the reference borrows the engine, so it is dead before any engine call.
+                unsafe { (*s.value.get()).downcast_mut::<T>() }
+                    .unwrap_or_else(|| unreachable!("a slot holds the type it is keyed by"))
+            }
+        }
     }
 
     /// The extension slot of type `T` when it was made.
     pub fn ext_get<T: 'static>(&self) -> Option<&T> {
-        self.extend
-            .slots
-            .get(&std::any::TypeId::of::<T>())
-            .and_then(|b| b.downcast_ref::<T>())
+        match self.extend.slots.get(&std::any::TypeId::of::<T>())? {
+            Slot::Own(b) => b.downcast_ref::<T>(),
+            Slot::Shared(s) => {
+                hold(s, self.extend.id, self.real.as_deref());
+                // SAFETY: as in `ext`.
+                unsafe { (*s.value.get()).downcast_ref::<T>() }
+            }
+        }
+    }
+
+    /// Makes the slot of type `T` one value shared by this engine and every real thread's engine
+    /// made from it afterwards ([`ExtendState::for_thread`]), behind one lock: for a built-in's
+    /// game-wide state, installed before the threads start. Its value so far is kept.
+    pub fn share_ext<T: Default + Send + 'static>(&mut self) {
+        let key = std::any::TypeId::of::<T>();
+        let value: Box<dyn std::any::Any + Send> = match self.extend.slots.remove(&key) {
+            Some(Slot::Own(b)) => match b.downcast::<T>() {
+                Ok(t) => t,
+                Err(_) => unreachable!("a slot holds the type it is keyed by"),
+            },
+            Some(shared @ Slot::Shared(_)) => {
+                self.extend.slots.insert(key, shared);
+                return;
+            }
+            None => Box::new(T::default()),
+        };
+        self.extend.slots.insert(
+            key,
+            Slot::Shared(std::sync::Arc::new(Shared::new(value))),
+        );
     }
 
     /// Puts the plain function `f` in front of what is registered at the slot's address: `f`
@@ -892,6 +1085,64 @@ mod tests {
         assert_eq!(marks(&e), b"jnbNJ");
         assert_eq!(e.wraps_at(0x0000_1100), [Owner::Nvse, Owner::Jip]);
         assert_eq!(e.wrapped(), [(0x0000_1100, vec![Owner::Nvse, Owner::Jip])]);
+    }
+
+    /// A shared slot ([`Engine::share_ext`]) keeps its value and is the one value of every engine
+    /// made from it ([`ExtendState::for_thread`]); an engine's own slots are not copied. Two
+    /// engines on one thread take turns only through [`release_held`] (a real thread's release
+    /// point); asking while the other holds it is refused.
+    #[test]
+    fn a_shared_slot_is_one_value_for_every_thread_engine() {
+        #[derive(Default)]
+        struct Game(u32);
+        #[derive(Default)]
+        struct Mine(u32);
+        let mut e = engine();
+        e.ext::<Game>().0 = 5;
+        e.ext::<Mine>().0 = 9;
+        e.share_ext::<Game>();
+        assert_eq!(e.ext::<Game>().0, 5);
+        let mut t = engine();
+        t.extend = e.extend.for_thread();
+        assert_eq!(t.ext::<Mine>().0, 0, "not copied");
+        release_held();
+        t.ext::<Game>().0 += 1;
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.ext::<Game>().0 += 1;
+        }))
+        .is_err());
+        release_held();
+        assert_eq!(e.ext::<Game>().0, 6);
+        release_held();
+    }
+
+    /// The lock across OS threads: a thread that asks while another holds the slot waits until
+    /// the holder gives it back; each increment is made by one holder at a time.
+    #[test]
+    fn a_shared_slot_is_taken_by_one_thread_at_a_time() {
+        let s = std::sync::Arc::new(Shared::new(Box::new(0u32)));
+        let workers: Vec<_> = (0..4)
+            .map(|i| {
+                let s = s.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..1000 {
+                        hold(&s, 100 + i, None);
+                        // SAFETY: held by this thread until the release below.
+                        let v = unsafe { (*s.value.get()).downcast_mut::<u32>().unwrap() };
+                        let seen = *v;
+                        std::thread::yield_now();
+                        *v = seen + 1;
+                        release_held();
+                    }
+                })
+            })
+            .collect();
+        for w in workers {
+            w.join().unwrap();
+        }
+        hold(&s, 1, None);
+        assert_eq!(unsafe { *(*s.value.get()).downcast_ref::<u32>().unwrap() }, 4000);
+        release_held();
     }
 
     /// A real thread's engine starts with the wraps installed before the threads started

@@ -107,13 +107,23 @@ pub fn show(e: &mut Engine, script: u32, message: &str) {
         let text = text(e, script, message);
         print_long(e, text.as_bytes());
     }
-    if !e.ext::<Nvse>().events.infos.is_empty() {
-        crate::events::message_text(
-            e,
-            crate::events::id::RUNTIME_SCRIPT_ERROR,
-            message.as_bytes(),
-        );
+    if e.ext::<Nvse>().events.infos.is_empty() {
+        return;
     }
+    // The fixes preset's row: an error raised while a `RuntimeScriptError` handler runs (the
+    // handler's own, or the call depth limit's when handlers call themselves) is not sent to the
+    // handlers again, which xNVSE does until the stack runs out.
+    let s = &mut e.ext::<Nvse>().events;
+    if s.error_guard && s.in_error_event {
+        return;
+    }
+    let outer = std::mem::replace(&mut s.in_error_event, true);
+    crate::events::message_text(
+        e,
+        crate::events::id::RUNTIME_SCRIPT_ERROR,
+        message.as_bytes(),
+    );
+    e.ext::<Nvse>().events.in_error_event = outer;
 }
 
 /// `Console_Print_Str`: below 512 bytes in one line, else `Console_Print_Long`'s pieces.

@@ -214,6 +214,10 @@ pub fn install(e: &mut Engine) {
     saveload::install(e);
     events::install(e);
     e.ext::<Nvse>().installed = true;
+    // The extender's state is the game's, not one engine's: real threads' engines share it
+    // (engine-core's shared slot, one lock), so an event raised or a variable used on another
+    // game thread is the same one.
+    e.share_ext::<Nvse>();
 }
 
 // The unit tests' own program: no other crate's functions are linked in.

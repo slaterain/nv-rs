@@ -26,6 +26,14 @@
 //!   delete, rename and exit seams ([`crate::saveload`], [`install`]) and from run-time errors
 //!   ([`crate::errors::show`]).
 //!
+//! - **Threads:** the extender's state is the game's: real threads' engines share it (engine-core's
+//!   shared slot, one lock), so an event the game marks on an AI thread finds the handlers and is
+//!   kept for the main thread's next tick as in xNVSE. A kept call copies its string arguments'
+//!   text (the save name or message it pointed at is gone by then).
+//! - **The fixes preset's row** [`set_error_guard`]: an error while a `RuntimeScriptError`
+//!   handler runs is not sent to the handlers again (xNVSE recurses until the stack runs out).
+//! - `NV_NVSE_EVENT_LOG=FILE` (a test variable) writes a line per handler call.
+//!
 //! The order of a dispatch's handlers is kept by priority and a serial, so a handler set or a
 //! game loaded inside a handler cannot invalidate the walk (xNVSE's iterators would be left
 //! dangling by a load's flush there).
@@ -369,6 +377,9 @@ struct Classic {
     arg1: u32,
     types: Vec<u8>,
     cleanup: Option<fn(&mut Engine)>,
+    /// The text of each string argument, copied when the call was kept: the string it pointed
+    /// at (a save's name on the stack, a message) is gone by the tick.
+    texts: Vec<Option<Vec<u8>>>,
 }
 
 /// A newer-path dispatch kept for the tick (`DeferredCallback`).
@@ -378,6 +389,8 @@ struct Deferred {
     this_obj: u32,
     args: Vec<u32>,
     types: Vec<u8>,
+    /// As [`Classic::texts`].
+    texts: Vec<Option<Vec<u8>>>,
 }
 
 /// The event manager's state.
@@ -407,6 +420,19 @@ pub struct State {
     /// `g_inActivateItemInInventory`: set around `Actor::AddWornItem` (its sites come with the
     /// equip hook).
     pub in_activate_item_in_inventory: bool,
+    /// The fixes preset's row [`set_error_guard`], and whether a `RuntimeScriptError`
+    /// dispatch is under way.
+    pub error_guard: bool,
+    pub in_error_event: bool,
+    /// `NV_NVSE_EVENT_LOG`: every handler call, one line each (a test variable).
+    log: Option<std::fs::File>,
+}
+
+/// The fixes preset's row (docs/FIXES.md, "The script extender"): an error raised while a
+/// `RuntimeScriptError` handler runs is not dispatched again (xNVSE recurses until the stack
+/// runs out, as for an error in the handler itself or the call depth limit's).
+pub fn set_error_guard(e: &mut Engine, on: bool) {
+    state(e).error_guard = on;
 }
 
 fn state(e: &mut Engine) -> &mut State {
@@ -1657,6 +1683,15 @@ pub fn clear_flush_on_load(e: &mut Engine) {
 
 // ---- dispatch ----
 
+/// Whether a script has set a handler (one not removed): a save then gets a co-save
+/// ([`crate::saveload::something_to_save`]), so loading it is not a new game for the extender.
+pub fn has_handlers(e: &mut Engine) -> bool {
+    state(e)
+        .infos
+        .iter()
+        .any(|i| i.callbacks.iter().any(|c| !c.callback.removed))
+}
+
 /// `GetCurrentEventName`: the innermost event being handled, empty when none.
 pub fn current_event_name(e: &mut Engine) -> Vec<u8> {
     let s = state(e);
@@ -1671,6 +1706,58 @@ fn on_main_thread(e: &mut Engine) -> bool {
     e.ext::<Nvse>().tick.main_thread == thread
 }
 
+/// The text of each string argument (by the argument types), for a call kept for the tick.
+fn copy_texts(e: &Engine, args: &[u32], types: &[u8]) -> Vec<Option<Vec<u8>>> {
+    args.iter()
+        .enumerate()
+        .map(|(i, &a)| {
+            (types.get(i) == Some(&STRING) && a != 0).then(|| crate::table::guest_text(e, a))
+        })
+        .collect()
+}
+
+/// Runs `f` with the arguments of a kept call, each copied text on the guest stack again.
+fn with_texts<R>(
+    e: &mut Engine,
+    args: &[u32],
+    texts: &[Option<Vec<u8>>],
+    f: impl FnOnce(&mut Engine, Vec<u32>) -> R,
+) -> R {
+    let size: u32 = texts
+        .iter()
+        .flatten()
+        .map(|t| (t.len() as u32 + 1).next_multiple_of(4))
+        .sum();
+    e.with_stack(size.max(4), |e, base| {
+        let mut at = base.addr();
+        let mut words = args.to_vec();
+        for (i, t) in texts.iter().enumerate() {
+            if let (Some(t), Some(w)) = (t, words.get_mut(i)) {
+                e.mem.write(at, t);
+                e.mem.set_u8(at + t.len() as u32, 0);
+                *w = at;
+                at += (t.len() as u32 + 1).next_multiple_of(4);
+            }
+        }
+        f(e, words)
+    })
+}
+
+/// `NV_NVSE_EVENT_LOG`: a handler call as one line (event, handler, game thread, arguments).
+fn log_call(e: &mut Engine, at: usize, script: u32, args: &[u32]) {
+    if state(e).log.is_none() {
+        return;
+    }
+    use std::io::Write;
+    let thread = engine_core::thread_host::current_id(e);
+    let id = if script != 0 { e.mem.u32(script + 0xc) } else { 0 };
+    let s = state(e);
+    let name = String::from_utf8_lossy(&s.infos[at].name).into_owned();
+    if let Some(f) = s.log.as_mut() {
+        let _ = writeln!(f, "{name} handler {id:08X} thread {thread} args {args:08X?}");
+    }
+}
+
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), EventManager.cpp: EventCallback::Invoke
 // (a script's), ClassicEventHandlerCaller.
 fn invoke_classic(e: &mut Engine, at: usize, script: u32, types: &[u8], arg0: u32, arg1: u32) {
@@ -1683,6 +1770,7 @@ fn invoke_classic(e: &mut Engine, at: usize, script: u32, types: &[u8], arg0: u3
     };
     let args = [arg0, arg1][..count].to_vec();
     state(e).stack.push(at);
+    log_call(e, at, script, &args);
     functions::call(
         e,
         Caller::Internal {
@@ -1754,6 +1842,7 @@ fn handle_classic(
             continue;
         }
         if !on_main_thread(e) {
+            let texts = copy_texts(e, &[arg0, arg1], types);
             state(e).classic.push(Classic {
                 info: at,
                 serial: key.1,
@@ -1761,6 +1850,7 @@ fn handle_classic(
                 arg1,
                 types: types.to_vec(),
                 cleanup,
+                texts,
             });
         } else {
             invoke_classic(e, at, cb.script, types, arg0, arg1);
@@ -1853,6 +1943,7 @@ pub fn dispatch_raw(
             this_obj,
             args: args.to_vec(),
             types: types.to_vec(),
+            texts: copy_texts(e, args, types),
         };
         let s = state(e);
         if alt {
@@ -1893,6 +1984,7 @@ pub fn dispatch_raw(
         ) {
             continue;
         }
+        log_call(e, at, cb.script, &args);
         functions::call(
             e,
             Caller::Internal {
@@ -2028,16 +2120,22 @@ pub fn tick(e: &mut Engine) {
             Some(x) if !x.callback.removed => x.callback.script,
             _ => continue,
         };
-        invoke_classic(e, c.info, script, &c.types, c.arg0, c.arg1);
+        with_texts(e, &[c.arg0, c.arg1], &c.texts, |e, w| {
+            invoke_classic(e, c.info, script, &c.types, w[0], w[1]);
+        });
         if let Some(f) = c.cleanup {
             f(e);
         }
     }
     while let Some(d) = state(e).deferred.pop() {
-        dispatch_raw(e, d.info, d.this_obj, &d.args, &d.types, false, false, None);
+        with_texts(e, &d.args, &d.texts, |e, w| {
+            dispatch_raw(e, d.info, d.this_obj, &w, &d.types, false, false, None);
+        });
     }
     while let Some(d) = state(e).deferred_alt.pop() {
-        dispatch_raw(e, d.info, d.this_obj, &d.args, &d.types, false, true, None);
+        with_texts(e, &d.args, &d.texts, |e, w| {
+            dispatch_raw(e, d.info, d.this_obj, &w, &d.types, false, true, None);
+        });
     }
     clear_removals(e);
     let s = state(e);
@@ -2119,6 +2217,9 @@ fn quit_from_menu(e: &mut Engine, _: &[u32]) -> Option<u32> {
 /// Registers the events and installs the mark wrap and the exit seams.
 pub fn install(e: &mut Engine) {
     init(e);
+    if let Some(path) = std::env::var_os("NV_NVSE_EVENT_LOG") {
+        state(e).log = std::fs::File::create(path).ok();
+    }
     e.wrap(SET_ACTION_FLAG, set_action_flag);
     e.on_site(QUIT_CONSOLE, quit_console);
     e.on_site(QUIT_TO_MAIN_MENU, quit_to_main_menu);
