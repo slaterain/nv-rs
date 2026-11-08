@@ -81,3 +81,60 @@ pub mod units {
 // This crate's unit tests: `Engine::new()` registers the core's functions and provides the family.
 #[cfg(test)]
 engine_core::assemble!(units::funcs);
+
+#[cfg(test)]
+mod tests {
+    use engine_core::typed::{parse_switch, Family, Mode};
+
+    /// This crate's families, in the order `units::funcs` provides them.
+    fn families() -> [&'static Family; 6] {
+        [
+            &crate::lockfree::LOCKFREE,
+            &crate::culling::CULLING,
+            &crate::pathing::PATHING,
+            &crate::shader::SHADER,
+            &crate::crt::CRT,
+            &crate::dispatch::DISPATCH,
+        ]
+    }
+
+    /// Which of this crate's families are past their gate, and so on with no switch: all six since
+    /// their speed gate together (2026-11-08); `NV_TYPED=off` or `<family>:off` turns one off.
+    #[test]
+    fn families_past_their_gate_are_on_by_default() {
+        let families = families();
+        let past: Vec<&str> = families
+            .iter()
+            .filter(|f| f.past_gate)
+            .map(|f| f.name)
+            .collect();
+        assert_eq!(
+            past,
+            ["lockfree", "culling", "pathing", "shader", "crt", "dispatch"]
+        );
+        let defaults = parse_switch(None, &families).unwrap();
+        for (f, m) in families.iter().zip(&defaults) {
+            assert_eq!(*m == Mode::On, f.past_gate, "{}", f.name);
+        }
+        let off = parse_switch(Some("off"), &families).unwrap();
+        assert!(off.iter().all(|m| *m == Mode::Off));
+        let one_off = parse_switch(Some("shader:off"), &families).unwrap();
+        assert_eq!(one_off[3], Mode::Off);
+        assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 5);
+    }
+
+    /// With no switch, `Engine::new` registers each family and its calls between typed functions go
+    /// direct. A test process started with `NV_TYPED` set (the differential runs) is not the default.
+    #[test]
+    fn engine_new_has_them_on_with_no_switch() {
+        if std::env::var_os("NV_TYPED").is_some() {
+            return;
+        }
+        let e = engine_core::Engine::new();
+        for f in families() {
+            let (addr, _) = (f.funcs)()[0];
+            assert!(e.is_registered(addr), "{} at {addr:08x}", f.name);
+            assert!(e.typed_direct(f.id, addr), "{} at {addr:08x}", f.name);
+        }
+    }
+}
