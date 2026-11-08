@@ -2862,8 +2862,8 @@ pub fn fn_00ec605d(e: &mut Engine, zf: bool, st0: f64, low: u32, high: u32) -> f
             );
         }
         if high & 0x8000_0000 == 0 {
-            // FSQRT
-            return sqrt_exit(e, saved_control, st0.sqrt(), low, high);
+            // FSQRT, rounded to the precision 00ed2795 loaded (the caller's).
+            return sqrt_exit(e, saved_control, crate::x87::x87_sqrt(st0), low, high);
         }
         // 00ec609b: a negative argument; only -0.0 has no error.
         if high & 0x7ff0_0000 == 0 && high & 0xfffff == 0 && low == 0 {
