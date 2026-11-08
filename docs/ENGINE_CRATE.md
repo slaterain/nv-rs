@@ -75,14 +75,15 @@ each function belongs to.
   order until its object is signalled, a game thread's wait hands back to
   the main thread, `SetEvent`/`ReleaseSemaphore` wake waiters, and a wait no
   thread can satisfy stops the run naming the object. **Real threads**
-  (`NV_THREADS=real`, off by default; `engine_core::real_threads`, ADR-0015):
+  (the default; `NV_THREADS=stepped` runs them one at a time; `engine_core::real_threads`, ADR-0015):
   each game thread runs on its own OS thread with its own `Engine` (call
   stack, call cache, TLS block and values, x87 word, last error, guest stack:
   `Engine::real`), sharing memory, the kernel objects (`KernelRef`) and the
   function table (copied from a template; later registrations reach every
   engine). The interlocked imports are real atomics (the exe has no inline
   `lock` instruction outside the C runtime's exception cache), critical
-  sections a real owner table, `Sleep` a real sleep; waits block on a
+  sections a real owner table, `Sleep` a real sleep, TLS and FLS values
+  per thread off the lock; waits block on a
   condition variable under the re-entrant kernel lock every other platform
   function runs under (Direct3D, sound, files, windows: the exe creates its
   device `D3DCREATE_MULTITHREADED`). The host holds the kernel lock between

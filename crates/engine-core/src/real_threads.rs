@@ -1,7 +1,7 @@
-//! Real threads (`NV_THREADS=real`; ADR-0015, migration steps 5, 7, 8 and 9): the game's threads
+//! Real threads (the host's default; ADR-0015, migration steps 5, 7, 8 and 9): the game's threads
 //! run side by side on their own cores, as they do in the original, instead of one at a time on
-//! the stepped host ([`crate::thread_host`], still the default and the reference mode for tests,
-//! recordings and traces).
+//! the stepped host ([`crate::thread_host`]: `NV_THREADS=stepped`, and the engine's own default,
+//! the reference mode for tests, recordings and traces).
 //!
 //! **Per-thread context, shared world (step 5).** Each game thread runs on its own OS thread with
 //! its own [`Engine`]: its registers live in its Rust frames as before, and the engine holds its
@@ -23,7 +23,8 @@
 //! serialised by a lock of its own). Critical sections are a table of owners with a condition
 //! variable: a contended `EnterCriticalSection` blocks for real. `TlsGetValue`, `TlsSetValue`,
 //! `GetCurrentThreadId`, `GetLastError` and `SetLastError` answer from the calling thread's
-//! context; `Sleep` sleeps for real (`Sleep(0)` yields). Events, semaphores, mutexes and thread
+//! context, and so do `FlsGetValue` and `FlsSetValue` (found by name; off the kernel lock, the C
+//! runtime reads its per-thread data through them on every thread); `Sleep` sleeps for real (`Sleep(0)` yields). Events, semaphores, mutexes and thread
 //! handles stay in the kernel table: a wait checks them under the kernel lock and, when not
 //! signalled, waits on a condition variable that every change of state wakes
 //! (`thread_host::signal`).
@@ -478,8 +479,16 @@ pub struct World {
     /// The first stop of a game thread other than main, for main's next frame end.
     stopped: Mutex<Option<String>>,
     /// A game thread that has run has a suspend count above 0 (`SuspendThread`): threads look at
-    /// their own at their next platform call, wait or sleep and park there ([`park_if_suspended`]).
-    suspended: AtomicBool,
+    /// their own at their next platform call, wait or sleep and park there ([`park_if_suspended`]):
+    /// each thread's flag by its index in the thread host's list ([`Ctx::suspend`]), set under
+    /// the kernel lock ([`suspends_changed`]).
+    suspend_flags: Mutex<Vec<(usize, std::sync::Arc<AtomicBool>)>>,
+    /// Threads parked by a suspend now, and parks so far ([`park_if_suspended`]).
+    parked: AtomicU32,
+    parks: AtomicU32,
+    /// [`World::stopped`] holds a stop: the main thread's check before each sleep's end is one
+    /// load ([`main_stop_check`]).
+    any_stop: AtomicBool,
     /// [`start`] took the kernel lock on the host's thread for the start-up (the C runtime's, the
     /// static initializers, the host's own use of the kernel table); the first frame gives it back
     /// ([`Ctx::frame_begins`]).
@@ -487,6 +496,11 @@ pub struct World {
     /// Each thread-local storage index's generation: `TlsAlloc` and `TlsFree` move it on, so a
     /// value a thread set before reads 0 ([`Ctx::tls`]).
     tls_gen: Box<[AtomicU32]>,
+    /// The same for fiber-local storage (`FlsAlloc`, `FlsFree`), and which indexes are allocated
+    /// (`FlsSetValue` answers 0 for one that is not): real threads keep FLS values per thread too
+    /// ([`Ctx::fls`]), off the kernel lock.
+    fls_gen: Box<[AtomicU32]>,
+    fls_in_use: Box<[AtomicBool]>,
     /// `NV_REAL_DUMP` (a diagnostic): every thread's record, for [`dump_threads`].
     dump: Option<Dump>,
 }
@@ -508,9 +522,14 @@ impl World {
             import_names,
             template: Mutex::new(None),
             stopped: Mutex::new(None),
-            suspended: AtomicBool::new(false),
+            suspend_flags: Mutex::new(Vec::new()),
+            parked: AtomicU32::new(0),
+            parks: AtomicU32::new(0),
+            any_stop: AtomicBool::new(false),
             held_from_start: AtomicBool::new(false),
             tls_gen: (0..TLS_INDEXES).map(|_| AtomicU32::new(0)).collect(),
+            fls_gen: (0..FLS_INDEXES).map(|_| AtomicU32::new(0)).collect(),
+            fls_in_use: (0..FLS_INDEXES).map(|_| AtomicBool::new(false)).collect(),
             dump: dump_from_env().then(Dump::default),
         }
     }
@@ -592,6 +611,7 @@ impl World {
             .expect("the template is a real thread's engine")
             .for_thread(id, index);
         ctx.record = self.new_record(id);
+        guard(&self.suspend_flags).push((index, std::sync::Arc::clone(&ctx.suspend)));
         let mut e = template.thread_context(ctx);
         e.mem.set_view_thread(id);
         if self.dump.is_some() {
@@ -633,8 +653,14 @@ pub struct Ctx {
     /// when it was set ([`World::tls_gen`]): a value from before the index was freed or handed out
     /// again reads 0, as Windows clears an index on every thread.
     tls: Vec<(u32, u32)>,
+    /// Its fiber-local storage values (`FlsGetValue`), as [`Ctx::tls`] (each game thread is one
+    /// fiber).
+    fls: Vec<(u32, u32)>,
     /// `NV_REAL_DUMP`: what this thread is doing, for [`dump_threads`]; `None` otherwise.
     record: Option<std::sync::Arc<ThreadRecord>>,
+    /// This thread is suspended (`SuspendThread`) and parks at its next platform call, wait or
+    /// sleep ([`World::suspend_flags`]).
+    suspend: std::sync::Arc<AtomicBool>,
     /// The platform functions behind the kernel lock, by address: what [`locked_call`] runs.
     locked: AddrMap<u32, AbiFn>,
     /// How many of [`World::late`] this engine has taken.
@@ -650,7 +676,9 @@ impl Ctx {
             index,
             last_error: 0,
             tls: Vec::new(),
+            fls: Vec::new(),
             record: None,
+            suspend: std::sync::Arc::new(AtomicBool::new(false)),
             locked: self.locked.clone(),
             late_seen: self.late_seen,
             world: self.world,
@@ -724,6 +752,12 @@ impl Ctx {
 /// Refused (stepped threads stay) while a diagnostic is on, or once a game thread ran stepped; a
 /// thread made earlier that has not run yet starts here, on its own OS thread (one made suspended
 /// starts when resumed).
+///
+/// Returns holding the kernel lock on the calling (host's) thread: the start-up before the first
+/// frame (the C runtime's, the static initializers, the host's own use of the kernel table) runs
+/// with it, and game threads made then wait for it at their first platform call. The first
+/// `Ctx::frame_begins` (`thread_host::begin_main_frame`) gives it back. A caller that runs no frames
+/// (a test) keeps it: game threads then take it only while the caller waits or sleeps.
 pub fn start(e: &mut Engine) -> Result<(), String> {
     if e.real.is_some() {
         return Ok(());
@@ -764,6 +798,10 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
                 continue;
             }
         }
+        if let Some(f) = real_fls(addr) {
+            e.register_here(addr, f);
+            continue;
+        }
         if world.locked_addr(addr) {
             if let Some(f) = e.registered_fn(addr) {
                 locked.insert(addr, f);
@@ -780,7 +818,9 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
         index: 0,
         last_error: e.kernel.last_error,
         tls,
+        fls: Vec::new(),
         record: world.new_record(MAIN_THREAD_ID),
+        suspend: std::sync::Arc::new(AtomicBool::new(false)),
         locked,
         late_seen: 0,
         world,
@@ -913,6 +953,7 @@ fn run_thread(engine: SendEngine, world: &'static World, i: usize, start: u32, p
         let line = format!("{why} (in game thread {id}, start {start:08x})");
         eprintln!("real threads: {line}");
         guard(&world.stopped).get_or_insert(line);
+        world.any_stop.store(true, Ordering::SeqCst);
         // Wake the main thread if it waits for a section this thread held.
         let _sections = guard(&world.sections);
         world.section_freed.notify_all();
@@ -970,6 +1011,10 @@ impl Drop for Held {
 /// `f` registered at `addr` on `e`, as real threads keep it: behind the kernel lock when it is a
 /// platform function there.
 fn install(e: &mut Engine, addr: u32, f: AbiFn) {
+    if let (Some(real), true) = (real_fls(addr), e.real.is_some()) {
+        e.register_here(addr, real);
+        return;
+    }
     let Some(r) = &mut e.real else { return };
     if r.world.locked_addr(addr) {
         r.locked.insert(addr, f);
@@ -1060,6 +1105,7 @@ fn interlocked(
 ) -> u32 {
     let w = ctx(e).world;
     w.safe_point();
+    park_here(e);
     if let Some(word) = e.mem.atomic_u32(a) {
         return op(word);
     }
@@ -1161,7 +1207,72 @@ fn tls_set_value(e: &mut Engine, index: u32, value: u32) -> i32 {
     1
 }
 
+/// Fiber-local storage indexes (`units/platform/loader.rs`).
+const FLS_INDEXES: usize = crate::units::platform::loader::FLS_INDEX_COUNT;
+
+/// The real version of `FlsGetValue` or `FlsSetValue` at `addr` (the code addresses
+/// `GetProcAddress` gives them), if it is one of them: answered from the calling thread's own
+/// values, off the kernel lock, as TLS is. (The C runtime reads its per-thread data through
+/// `FlsGetValue` on every thread; under the kernel lock that was a large part of the game threads'
+/// waits for it.)
+fn real_fls(addr: u32) -> Option<AbiFn> {
+    use crate::units::platform::loader::{FLS_GET_VALUE, FLS_SET_VALUE};
+    match addr {
+        FLS_GET_VALUE => Some(crate::entry!(0, fls_get_value(u32) -> u32).1),
+        FLS_SET_VALUE => Some(crate::entry!(0, fls_set_value(u32, u32) -> i32).1),
+        _ => None,
+    }
+}
+
+/// `FlsAlloc` (`in_use`) or `FlsFree` of `index` (the platform's, under the kernel lock): with
+/// real threads the index's value on every thread reads 0 from now on, and `FlsSetValue` takes
+/// it only while allocated (as Windows, and the stepped host's table).
+pub(crate) fn fls_index_changed(e: &Engine, index: u32, in_use: bool) {
+    if let Some(r) = &e.real {
+        let w = r.world;
+        if let (Some(g), Some(u)) = (
+            w.fls_gen.get(index as usize),
+            w.fls_in_use.get(index as usize),
+        ) {
+            g.fetch_add(1, Ordering::AcqRel);
+            u.store(in_use, Ordering::Release);
+        }
+    }
+}
+
+// Real threads: replaces KERNEL32.DLL FlsGetValue (found by name)
+fn fls_get_value(e: &mut Engine, index: u32) -> u32 {
+    let r = ctx(e);
+    match (
+        r.fls.get(index as usize),
+        r.world.fls_gen.get(index as usize),
+    ) {
+        (Some(&(value, generation)), Some(g)) if g.load(Ordering::Acquire) == generation => value,
+        _ => 0,
+    }
+}
+
+// Real threads: replaces KERNEL32.DLL FlsSetValue (found by name)
+fn fls_set_value(e: &mut Engine, index: u32, value: u32) -> i32 {
+    let r = ctx_mut(e);
+    let Some(generation) = r
+        .world
+        .fls_in_use
+        .get(index as usize)
+        .filter(|u| u.load(Ordering::Acquire))
+        .map(|_| r.world.fls_gen[index as usize].load(Ordering::Acquire))
+    else {
+        return 0;
+    };
+    if r.fls.len() <= index as usize {
+        r.fls.resize(index as usize + 1, (0, 0));
+    }
+    r.fls[index as usize] = (value, generation);
+    1
+}
+
 // Real threads: replaces KERNEL32.DLL GetCurrentThreadId (import)
+
 fn get_current_thread_id(e: &mut Engine) -> u32 {
     ctx(e).id
 }
@@ -1183,6 +1294,7 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
     let r = ctx(e);
     let (w, me) = (r.world, r.id);
     w.safe_point();
+    park_here(e);
     let mut table = guard(&w.sections);
     let s = table.entry(section.addr()).or_default();
     if s.owner == 0 || s.owner == me {
@@ -1210,6 +1322,14 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
     loop {
         let s = table.entry(section.addr()).or_default();
         if s.owner == 0 {
+            if ctx(e).suspend.load(Ordering::Relaxed) {
+                // Suspended meanwhile: it parks without taking the section.
+                drop(table);
+                park_here(e);
+                table = guard(&w.sections);
+                continue;
+            }
+            let s = table.entry(section.addr()).or_default();
             s.owner = me;
             s.count = 1;
             break;
@@ -1295,18 +1415,8 @@ fn initialize_critical_section_and_spin_count(e: &mut Engine, section: Ptr, _spi
 /// Sleeps for real (`Sleep(0)` gives the rest of the time slice up); a safe point.
 fn sleep(e: &mut Engine, ms: u32) {
     real_sleep(ctx(e).world, ms);
-    park_after_sleep(e);
+    park_here(e);
     main_stop_check(e);
-}
-
-/// After a sleep (not under the kernel lock): parks the thread if it was suspended.
-fn park_after_sleep(e: &mut Engine) {
-    let w = ctx(e).world;
-    if w.suspended.load(Ordering::Relaxed) {
-        w.kernel.lock(w);
-        park_if_suspended(e);
-        w.kernel.unlock();
-    }
 }
 
 /// `SuspendThread` and `ResumeThread` with real threads (`units/platform.rs`, under the kernel
@@ -1316,14 +1426,16 @@ pub(crate) fn suspends_changed(e: &mut Engine) {
     let Some(w) = e.real.as_ref().map(|r| r.world) else {
         return;
     };
-    let any = e.kernel.threads.list.iter().skip(1).any(|t| {
-        t.suspend_count > 0
-            && !matches!(
-                t.state,
-                RunState::NotStarted | RunState::Finished { .. } | RunState::Stopped(_)
-            )
-    });
-    w.suspended.store(any, Ordering::SeqCst);
+    for (i, flag) in guard(&w.suspend_flags).iter() {
+        let on = e.kernel.threads.list.get(*i).is_some_and(|t| {
+            t.suspend_count > 0
+                && !matches!(
+                    t.state,
+                    RunState::NotStarted | RunState::Finished { .. } | RunState::Stopped(_)
+                )
+        });
+        flag.store(on, Ordering::SeqCst);
+    }
     crate::thread_host::signal(e);
 }
 
@@ -1331,10 +1443,10 @@ pub(crate) fn suspends_changed(e: &mut Engine) {
 /// it waits, not running game code, until `ResumeThread` brings it to 0. Windows stops a
 /// suspended thread wherever it is; here it stops at its next platform call, wait or sleep (the
 /// game suspends its task threads to end them at quit, `00c42f00`, then closes their handles).
-fn park_if_suspended(e: &mut Engine) {
+fn park_if_suspended(e: &Engine) {
     let Some(r) = &e.real else { return };
-    let (w, i) = (r.world, r.index);
-    if i == 0 || !w.suspended.load(Ordering::Relaxed) {
+    let (w, i, id) = (r.world, r.index, r.id);
+    if i == 0 || !r.suspend.load(Ordering::Relaxed) {
         return;
     }
     let mut parked = false;
@@ -1348,11 +1460,33 @@ fn park_if_suspended(e: &mut Engine) {
         if !parked {
             parked = true;
             note_state(e, || "suspended (SuspendThread)".to_string());
+            // The suspend path ran (a line for the first few: the game suspends its task
+            // threads at quit).
+            if w.parks.fetch_add(1, Ordering::Relaxed) < PARK_REPORTS {
+                eprintln!("real threads: game thread {id} suspended (SuspendThread), parked");
+            }
+            w.parked.fetch_add(1, Ordering::SeqCst);
         }
         w.kernel.wait_change(w, None);
     }
     if parked {
+        w.parked.fetch_sub(1, Ordering::SeqCst);
         note_state(e, String::new);
+    }
+}
+
+/// How many park lines [`park_if_suspended`] prints at most.
+const PARK_REPORTS: u32 = 16;
+
+/// Not under the kernel lock (an interlocked operation, a section enter, after a sleep): parks
+/// the thread if it was suspended. One load when it is not.
+fn park_here(e: &Engine) {
+    let Some(r) = &e.real else { return };
+    let w = r.world;
+    if r.suspend.load(Ordering::Relaxed) {
+        w.kernel.lock(w);
+        park_if_suspended(e);
+        w.kernel.unlock();
     }
 }
 
@@ -1360,7 +1494,7 @@ fn park_if_suspended(e: &mut Engine) {
 /// but a loop waiting for that thread, such as a spin lock it held, never gets there).
 fn main_stop_check(e: &Engine) {
     if let Some(r) = &e.real {
-        if r.id == MAIN_THREAD_ID {
+        if r.id == MAIN_THREAD_ID && r.world.any_stop.load(Ordering::Relaxed) {
             if let Some(why) = guard(&r.world.stopped).clone() {
                 panic!("{why}");
             }
@@ -1467,7 +1601,7 @@ impl ThreadHost for Real {
 
     fn sleep(&self, e: &mut Engine, ms: u32, _signalled: Signalled) {
         real_sleep(ctx(e).world, ms);
-        park_after_sleep(e);
+        park_here(e);
         main_stop_check(e);
     }
 
@@ -2032,7 +2166,16 @@ mod tests {
             std::thread::yield_now();
         }
         assert_eq!(e.call(slot("SuspendThread"), &args![h]).eax, 0);
-        std::thread::sleep(Duration::from_millis(20));
+        // It parks at its next sleep: wait for that, not for a time.
+        let world = ctx(&e).world;
+        let since = std::time::Instant::now();
+        while world.parked.load(Ordering::SeqCst) == 0 {
+            assert!(
+                since.elapsed() < Duration::from_secs(10),
+                "the thread never parked"
+            );
+            std::thread::yield_now();
+        }
         let parked = e.mem.u32(p + 4);
         std::thread::sleep(Duration::from_millis(30));
         assert_eq!(
@@ -2101,7 +2244,69 @@ mod tests {
         assert_eq!(s.take(), (0, 0, 0));
     }
 
+    /// Fiber-local storage is per thread off the kernel lock, as TLS is: a game thread starts with
+    /// none of main's values, keeps its own, and an index freed and handed out again reads 0.
+    #[test]
+    fn fiber_local_values_are_per_thread() {
+        use crate::units::platform::loader::KERNEL32_MODULE;
+        /// Stores what the index (+0) reads at +4, sets 0x22, stores what it reads then at +8.
+        fn own(e: &mut Engine, a: &[u32]) -> Ret {
+            let p = a[0];
+            let (index, get, set) = (e.mem.u32(p), e.mem.u32(p + 12), e.mem.u32(p + 16));
+            let before = e.call(get, &args![index]).eax;
+            e.mem.set_u32(p + 4, before);
+            e.call(set, &args![index, 0x22u32]);
+            let after = e.call(get, &args![index]).eax;
+            e.mem.set_u32(p + 8, after);
+            Ret::default()
+        }
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        e.register(0x0040_b000, own);
+        let names = e.mem.alloc(0x40);
+        let proc = |e: &mut Engine, name: &str| {
+            e.mem.write(names, name.as_bytes());
+            e.mem.set_u8(names + name.len() as u32, 0);
+            e.call(slot("GetProcAddress"), &args![KERNEL32_MODULE, names])
+                .eax
+        };
+        let (alloc, get, set, free) = (
+            proc(&mut e, "FlsAlloc"),
+            proc(&mut e, "FlsGetValue"),
+            proc(&mut e, "FlsSetValue"),
+            proc(&mut e, "FlsFree"),
+        );
+        let index = e.call(alloc, &args![0u32]).eax;
+        assert_eq!(e.call(set, &args![index, 0x11u32]).eax, 1);
+        let p = e.mem.alloc(0x20);
+        e.mem.set_u32(p, index);
+        e.mem.set_u32(p + 12, get);
+        e.mem.set_u32(p + 16, set);
+        let h = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0040_b000u32, p, 0u32, 0u32],
+            )
+            .eax;
+        e.call(slot("WaitForSingleObject"), &args![h, 0xffff_ffffu32]);
+        assert_eq!(
+            (e.mem.u32(p + 4), e.mem.u32(p + 8)),
+            (0, 0x22),
+            "the thread's own"
+        );
+        assert_eq!(e.call(get, &args![index]).eax, 0x11, "main's own");
+        e.call(free, &args![index]);
+        assert_eq!(
+            e.call(set, &args![index, 5u32]).eax,
+            0,
+            "a freed index takes nothing"
+        );
+        assert_eq!(e.call(alloc, &args![0u32]).eax, index);
+        assert_eq!(e.call(get, &args![index]).eax, 0, "handed out again: 0");
+    }
+
     /// A thread the game made before real threads started, not run yet, starts real with them.
+
     #[test]
     fn a_thread_made_before_the_start_runs_real() {
         fn mark(e: &mut Engine, a: &[u32]) -> Ret {
