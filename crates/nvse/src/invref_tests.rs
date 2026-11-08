@@ -104,7 +104,8 @@ fn add_extra(e: &mut Engine, list: u32, at: u32, kind: u32) {
     e.mem.set_u32(at + 8, e.mem.u32(list + 4));
     e.mem.set_u32(list + 4, at);
     let bits = e.mem.u8(list + 8 + (kind >> 3));
-    e.mem.set_u8(list + 8 + (kind >> 3), bits | (1 << (kind & 7)));
+    e.mem
+        .set_u8(list + 8 + (kind >> 3), bits | (1 << (kind & 7)));
 }
 
 /// The container: a base count of 3 of item A; changes: item A with -1 and two lists (A with an
@@ -123,7 +124,8 @@ fn engine() -> Engine {
     e.register(EXTRA_REMOVE_ALL, free);
     e.mem.set_u32(REF_VTABLE + FORM_DESTROY, AREA + 0xf00);
     e.mem.set_u32(CONTAINER_VTABLE + IS_ACTOR, AREA + 0xf10);
-    e.mem.set_u32(CONTAINER_VTABLE + REFR_REMOVE_ITEM, AREA + 0xf20);
+    e.mem
+        .set_u32(CONTAINER_VTABLE + REFR_REMOVE_ITEM, AREA + 0xf20);
     for (item, id) in [(ITEM_A, 0x0001_0a00u32), (ITEM_B, 0x0001_0b00)] {
         e.mem.set_u32(item, ITEM_VTABLE);
         e.mem.set_u8(item + 4, 0x28);
@@ -136,7 +138,12 @@ fn engine() -> Engine {
     e.mem.set_u32(FORM_COUNTS + 4, ITEM_A);
     e.mem.set_u32(BASE + 0x64 + 4, FORM_COUNTS);
     // The changes.
-    add_extra(&mut e, CONTAINER + REFR_EXTRA, CHANGES, EXTRA_CONTAINER_CHANGES);
+    add_extra(
+        &mut e,
+        CONTAINER + REFR_EXTRA,
+        CHANGES,
+        EXTRA_CONTAINER_CHANGES,
+    );
     e.mem.set_u32(CHANGES + 0xc, DATA);
     let objects = alloc(&mut e, &[8]).eax;
     e.mem.set_u32(DATA, objects);
@@ -171,7 +178,11 @@ fn a_reference_with_an_entry_of_its_own_is_made_and_cleaned_up() {
     let refr = create_entry(&mut e, CONTAINER, ITEM_A, 1, X_A);
     let id = id_of(&e, refr);
     assert_eq!(e.mem.u32(refr + REFR_BASE_FORM), ITEM_A);
-    assert_eq!(e.mem.u32(refr + REFR_EXTRA + 4), COUNT_A, "the list's data copied");
+    assert_eq!(
+        e.mem.u32(refr + REFR_EXTRA + 4),
+        COUNT_A,
+        "the list's data copied"
+    );
     assert!(for_ref_id(&mut e, id));
     let entry = get(&mut e, id).unwrap().data.entry;
     assert_eq!(count(&mut e, id), 1);
@@ -232,7 +243,10 @@ fn a_worn_stacks_removal_is_deferred() {
     // A is not: its list leaves the entry, its count with it (A's entry is the temporary one).
     assert!(remove_from_container(&mut e, a));
     clear(&mut e);
-    let removes: Vec<_> = calls().into_iter().filter(|(n, _)| *n == "remove").collect();
+    let removes: Vec<_> = calls()
+        .into_iter()
+        .filter(|(n, _)| *n == "remove")
+        .collect();
     assert_eq!(
         removes,
         [(
@@ -272,7 +286,8 @@ fn the_sold_item_is_its_first_stack() {
     assert_eq!(sold_item_ref(&mut e), 0);
     set_sold(&mut e, ENTRY_A, CONTAINER);
     let refr = sold_item_ref(&mut e);
-    let r = get(&mut e, id_of(&e, refr)).unwrap().data;
+    let id = id_of(&e, refr);
+    let r = get(&mut e, id).unwrap().data;
     assert_eq!((r.item, r.xdata, e.mem.u32(r.entry + 4)), (ITEM_A, X_A, 1));
     assert_eq!(sold_item_ref(&mut e), refr);
     clear_sold(&mut e);

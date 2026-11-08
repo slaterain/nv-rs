@@ -368,7 +368,13 @@ fn container_loop(e: &mut Engine, container: u32, local: u32) -> (Loop, bool) {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Loops.cpp: ContainerIterLoop::SetIterator.
 /// The inventory reference stands for stack `index` and the variable holds it; past the end
 /// both are cleared.
-fn set_container_iterator(e: &mut Engine, invref: u32, local: u32, elements: &[u32], index: usize) -> bool {
+fn set_container_iterator(
+    e: &mut Engine,
+    invref: u32,
+    local: u32,
+    elements: &[u32],
+    index: usize,
+) -> bool {
     let refr = crate::invref::get_ref(e, invref);
     if index < elements.len() && refr != 0 {
         let entry = elements[index];
@@ -1054,7 +1060,12 @@ pub fn foreach_context(e: &mut Engine, ev: &Eval, lh: &Tok, rh: &Tok) -> Result<
                 form = if e.mem.u32(form + 0xc) == 0x14 {
                     e.global::<u32>(PLAYER_SINGLETON)
                 } else {
-                    super::dynamic_cast(e, form, super::rtti::TES_FORM, super::rtti::TES_OBJECT_REFR)
+                    super::dynamic_cast(
+                        e,
+                        form,
+                        super::rtti::TES_FORM,
+                        super::rtti::TES_OBJECT_REFR,
+                    )
                 };
             }
             if form == 0 || local == 0 {

@@ -267,7 +267,8 @@ fn write_to_extra_list(e: &mut Engine, from: u32, to: u32) {
         e.mem.read(from + EXTRA_DATA, &mut bytes);
         e.mem.write(to + EXTRA_DATA, &bytes);
     } else {
-        e.mem.write(to + EXTRA_DATA, &[0u8; EXTRA_DATA_LEN as usize]);
+        e.mem
+            .write(to + EXTRA_DATA, &[0u8; EXTRA_DATA_LEN as usize]);
     }
 }
 
@@ -328,16 +329,7 @@ pub fn free_temp_entry(e: &mut Engine, entry: u32) {
 /// An inventory reference with a changes entry of its own (freed with it); the temporary reference.
 pub fn create_entry(e: &mut Engine, container: u32, item: u32, count: i32, xdata: u32) -> u32 {
     let entry = create_temp_entry(e, item, count, xdata);
-    let refr = create(
-        e,
-        container,
-        Data {
-            item,
-            entry,
-            xdata,
-        },
-        false,
-    );
+    let refr = create(e, container, Data { item, entry, xdata }, false);
     let id = e.mem.u32(refr + FORM_ID);
     if let Some(r) = state(e).refs.get_mut(&id) {
         r.temp_entry = entry;
@@ -618,7 +610,8 @@ pub fn entry_remove(e: &mut Engine, entry: u32, list: u32, free: bool) -> bool {
     let count = count_for_extra_list(e, list);
     list_remove_nth(e, extend, index);
     let delta = e.mem.u32(entry + ENTRY_COUNT_DELTA) as i32;
-    e.mem.set_u32(entry + ENTRY_COUNT_DELTA, delta.wrapping_sub(count) as u32);
+    e.mem
+        .set_u32(entry + ENTRY_COUNT_DELTA, delta.wrapping_sub(count) as u32);
     if free {
         e.call(EXTRA_REMOVE_ALL, &args![list, 1u32]);
         e.call(FORM_HEAP_FREE, &args![list]);
@@ -755,7 +748,18 @@ fn execute(e: &mut Engine, id: u32, container: u32, action: Deferred) {
             e.vcall(
                 container,
                 REFR_REMOVE_ITEM,
-                &args![data.item, data.xdata, count, 0u32, 0u32, action.target, 0u32, 0u32, 1u32, 0u32],
+                &args![
+                    data.item,
+                    data.xdata,
+                    count,
+                    0u32,
+                    0u32,
+                    action.target,
+                    0u32,
+                    0u32,
+                    1u32,
+                    0u32
+                ],
             );
             if let Some(r) = state(e).refs.get_mut(&id) {
                 r.removed = true;
@@ -775,11 +779,7 @@ pub fn release(e: &mut Engine, id: u32) {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), InventoryReference.cpp:
 // ~InventoryReference.
 fn destroy(e: &mut Engine, id: u32) {
-    if state(e)
-        .refs
-        .get(&id)
-        .is_some_and(|r| r.data.item != 0)
-    {
+    if state(e).refs.get(&id).is_some_and(|r| r.data.item != 0) {
         do_deferred_actions(e, id);
     }
     let Some(r) = state(e).refs.remove(&id) else {
@@ -788,8 +788,10 @@ fn destroy(e: &mut Engine, id: u32) {
     state(e).order.remove(id);
     if r.temp_ref != 0 {
         e.mem.set_u32(r.temp_ref + REFR_BASE_FORM, 0);
-        e.mem
-            .write(r.temp_ref + REFR_EXTRA + EXTRA_DATA, &[0u8; EXTRA_DATA_LEN as usize]);
+        e.mem.write(
+            r.temp_ref + REFR_EXTRA + EXTRA_DATA,
+            &[0u8; EXTRA_DATA_LEN as usize],
+        );
         e.vcall(r.temp_ref, FORM_DESTROY, &args![1u32]);
     }
     if r.temp_entry != 0 {

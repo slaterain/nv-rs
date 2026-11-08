@@ -210,7 +210,13 @@ fn sell(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let item = e.mem.u32(entry + ENTRY_TYPE);
     if seller != 0 && e.vcall(seller, GET_IS_REFERENCE, &[]).bool() && item != 0 {
         crate::invref::set_sold(e, entry, seller);
-        events::handle_event(e, id::ON_SELL, item, seller, Some(crate::invref::clear_sold));
+        events::handle_event(
+            e,
+            id::ON_SELL,
+            item,
+            seller,
+            Some(crate::invref::clear_sold),
+        );
     }
     None
 }
