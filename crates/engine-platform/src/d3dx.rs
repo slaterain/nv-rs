@@ -1075,16 +1075,37 @@ fn note_not_translated(e: &mut Engine, why: String) {
     }
 }
 
-/// `d3dx_tex`'s answer for the create calls, as a texture cache entry with the bytes beside it.
+/// The precision the calling game thread computes in: the precision control of its own x87
+/// control word (`FSTCW`, kept in the game thread's block), since D3DX keeps the thread's
+/// precision and a texture's bytes depend on it. The game's main thread is at 24 bits once it
+/// has made the device (no `D3DCREATE_FPU_PRESERVE`); its loading threads (`BSTaskThread`),
+/// which create most textures, at 53. `None` for 64 bits (and the reserved setting), which
+/// `d3dx_tex` does not translate and the game never uses: the DLL or the cache answers.
+fn calling_precision(e: &mut Engine) -> Option<d3dx_tex::Precision> {
+    match engine_core::units::crt::x87_control_word(e) & 0x0300 {
+        0x0000 => Some(d3dx_tex::Precision::Single),
+        0x0200 => Some(d3dx_tex::Precision::Double),
+        _ => None,
+    }
+}
+
+/// `d3dx_tex`'s answer for the create calls on the calling thread, as a texture cache entry with
+/// the bytes beside it.
 fn translated_texture(
+    e: &mut Engine,
     bytes: &[u8],
     cube: bool,
 ) -> Result<(CachedTexture, Vec<Vec<u8>>), d3dx_tex::Error> {
     let caps = d3dx_tex::Caps::default();
+    let Some(precision) = calling_precision(e) else {
+        return Err(d3dx_tex::Error::NotProvided(
+            "a texture made at an x87 precision other than 24 or 53 bits".into(),
+        ));
+    };
     let t = if cube {
-        d3dx_tex::create_cube_texture_from_file_in_memory(bytes, &caps)
+        d3dx_tex::create_cube_texture_from_file_in_memory(bytes, &caps, precision)
     } else {
-        d3dx_tex::create_texture_from_file_in_memory(bytes, &caps)
+        d3dx_tex::create_texture_from_file_in_memory(bytes, &caps, precision)
     }?;
     let surfaces = t
         .surfaces
@@ -1321,7 +1342,7 @@ fn create_from_file(
         "CreateTextureFromFileInMemory"
     };
     if texture_mode(e) == TextureMode::Translated {
-        match translated_texture(&bytes, cube) {
+        match translated_texture(e, &bytes, cube) {
             Ok((entry, levels)) => {
                 note_source(e, TextureSource::Translated);
                 let levels: Vec<&[u8]> = levels.iter().map(|l| &l[..]).collect();
@@ -2056,11 +2077,12 @@ mod tests {
 
     /// By default the texture calls take `d3dx_tex`: no cache, no DLL. The layer's texture holds
     /// `d3dx_tex`'s levels for the file (the stored one as stored, the ones under a block
-    /// re-encoded); the image info is the header's; a file D3DX refuses answers its error; the
-    /// source is printed once.
+    /// re-encoded), at the calling game thread's precision (a loading thread's, 53 bits, here); the image info is
+    /// the header's; a file D3DX refuses answers its error; the source is printed once.
     #[test]
     fn the_texture_calls_take_the_translation_by_default() {
         let mut e = Engine::new();
+        engine_core::units::crt::set_x87_control_word(&mut e, 0x027f);
         assert_eq!(texture_mode(&mut e), TextureMode::Translated);
         let (device, texture, levels) = texture_doubles(&mut e);
         let mut file = dxt1(8, 4, 4, 40);
@@ -2079,8 +2101,12 @@ mod tests {
         };
         assert_eq!(call(&mut e, file.len() as u32), 0);
         assert_eq!(e.mem.u32(out), texture);
-        let want = d3dx_tex::create_texture_from_file_in_memory(&file, &d3dx_tex::Caps::default())
-            .expect("a DXT1 file");
+        let want = d3dx_tex::create_texture_from_file_in_memory(
+            &file,
+            &d3dx_tex::Caps::default(),
+            d3dx_tex::Precision::Double,
+        )
+        .expect("a DXT1 file");
         assert_eq!(want.levels, 4);
         for (i, at) in [levels, levels + 16, levels + 24, levels + 32]
             .into_iter()
@@ -2118,6 +2144,41 @@ mod tests {
             1,
             "said once"
         );
+    }
+
+    /// The precision comes from the calling game thread's own control word: 24 bits at 0x007f
+    /// (the main thread after the device), 53 at 0x027f (a loading thread); at 64 bits the
+    /// translation steps aside for the DLL or the cache.
+    #[test]
+    fn the_translation_takes_the_game_threads_precision() {
+        let mut e = Engine::new();
+        let mut file = dxt1(8, 4, 4, 40);
+        for (i, b) in file[128..144].iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(73) ^ 0x5a;
+        }
+        let caps = d3dx_tex::Caps::default();
+        for (cw, precision) in [
+            (0x007f, Some(d3dx_tex::Precision::Single)),
+            (0x027f, Some(d3dx_tex::Precision::Double)),
+            (0x037f, None),
+        ] {
+            engine_core::units::crt::set_x87_control_word(&mut e, cw);
+            assert_eq!(calling_precision(&mut e), precision, "{cw:#x}");
+            let ours = translated_texture(&mut e, &file, false).map(|(_, levels)| levels);
+            match precision {
+                Some(p) => {
+                    let want = d3dx_tex::create_texture_from_file_in_memory(&file, &caps, p)
+                        .expect("a DXT1 file");
+                    let want: Vec<Vec<u8>> = want.surfaces.into_iter().map(|s| s.bytes).collect();
+                    assert_eq!(ours.expect("translated"), want, "{cw:#x}");
+                }
+                None => assert!(
+                    matches!(ours, Err(d3dx_tex::Error::NotProvided(_))),
+                    "{cw:#x}"
+                ),
+            }
+        }
+        engine_core::units::crt::set_x87_control_word(&mut e, 0x027f);
     }
 
     /// The device and texture doubles: CreateTexture (of an 8x4 DXT1 texture of 4 levels)
