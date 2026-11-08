@@ -2,9 +2,11 @@
 //! (xNVSE's `GameAPI.cpp`, `GameForms.cpp` helpers they call).
 
 pub mod algohol;
+pub mod array;
 pub mod inventory;
 pub mod math;
 pub mod scripting;
+pub mod string;
 pub mod weapons;
 
 use crate::args::{extract_args_ex, Arg};
@@ -20,6 +22,8 @@ pub fn all() -> Vec<&'static Command> {
         .chain(math::COMMANDS)
         .chain(algohol::COMMANDS)
         .chain(scripting::COMMANDS)
+        .chain(string::COMMANDS)
+        .chain(array::COMMANDS)
         .chain(crate::functions::COMMANDS)
         .chain(crate::tick::COMMANDS)
         .chain(crate::event_commands::COMMANDS)
