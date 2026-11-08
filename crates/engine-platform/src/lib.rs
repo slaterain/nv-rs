@@ -64,6 +64,8 @@ pub mod bink;
 #[cfg(test)]
 mod crt_stdio_tests;
 pub mod d3d9;
+#[cfg(windows)]
+pub mod d3d9backend;
 pub mod d3d9device;
 pub mod d3d9query;
 #[cfg(windows)]
