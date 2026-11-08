@@ -60,6 +60,91 @@ impl VarIds {
     }
 }
 
+/// The order xNVSE's string and array maps list their variables in (`UnorderedMap<UInt32, Var>`,
+/// `containers.h` (xNVSE)), which is the order the co-save stores them in: buckets of a power of
+/// two (8 at first, doubled before an insert finds more entries than buckets, up to 0x40000),
+/// each a chain with the newest entry first; a key's bucket is `(k * 13) ^ (k >> 15)` masked;
+/// a doubling moves the old buckets' chains, bucket by bucket, each entry to the head of its new
+/// chain. Removing an entry unlinks it; a reset (`VarMap::Reset`) removes every entry and keeps
+/// the buckets. Only the keys are kept here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HashOrder {
+    buckets: Vec<Vec<u32>>,
+    num_buckets: u32,
+    entries: u32,
+}
+
+impl Default for HashOrder {
+    fn default() -> HashOrder {
+        HashOrder {
+            buckets: Vec::new(),
+            num_buckets: 8,
+            entries: 0,
+        }
+    }
+}
+
+impl HashOrder {
+    /// `HashKey<UInt32>`.
+    fn hash(key: u32) -> u32 {
+        key.wrapping_mul(0xd) ^ (key >> 0xf)
+    }
+
+    fn bucket(&self, key: u32) -> usize {
+        (Self::hash(key) & (self.num_buckets - 1)) as usize
+    }
+
+    // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), containers.h: UnorderedMap::InsertKey,
+    // ResizeTable.
+    pub fn insert(&mut self, key: u32) {
+        if self.buckets.is_empty() {
+            // `AlignBucketCount(8)`.
+            self.buckets = vec![Vec::new(); self.num_buckets as usize];
+        } else if self.entries > self.num_buckets && self.num_buckets < 0x4_0000 {
+            let count = self.num_buckets << 1;
+            let mut grown = vec![Vec::new(); count as usize];
+            for chain in &self.buckets {
+                for &k in chain {
+                    grown[(Self::hash(k) & (count - 1)) as usize].insert(0, k);
+                }
+            }
+            self.buckets = grown;
+            self.num_buckets = count;
+        }
+        let b = self.bucket(key);
+        if self.buckets[b].contains(&key) {
+            return;
+        }
+        self.entries += 1;
+        self.buckets[b].insert(0, key);
+    }
+
+    // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), containers.h: UnorderedMap::Erase.
+    pub fn remove(&mut self, key: u32) {
+        if self.entries == 0 {
+            return;
+        }
+        let b = self.bucket(key);
+        if let Some(i) = self.buckets[b].iter().position(|&k| k == key) {
+            self.buckets[b].remove(i);
+            self.entries -= 1;
+        }
+    }
+
+    /// `VarMap::Reset`'s removals: no entry left, the buckets kept.
+    pub fn clear(&mut self) {
+        for chain in &mut self.buckets {
+            chain.clear();
+        }
+        self.entries = 0;
+    }
+
+    /// The keys in the map's iteration order (`Iterator`: buckets in order, each chain from its
+    /// head).
+    pub fn keys(&self) -> Vec<u32> {
+        self.buckets.iter().flatten().copied().collect()
+    }
+}
 /// A string variable (`StringVar`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StringVar {
@@ -246,6 +331,9 @@ pub struct State {
     pub string_ids: VarIds,
     pub arrays: HashMap<u32, ArrayVar>,
     pub array_ids: VarIds,
+    /// The maps' iteration orders as xNVSE's hash maps have them (the co-save's order).
+    pub string_order: HashOrder,
+    pub array_order: HashOrder,
     /// The locals recorded per event list (`g_nvseVarGarbageCollectionMap`).
     pub collected: HashMap<u32, HashMap<u32, VarType>>,
     /// The exe's `toupper` for every byte (filled on first use).
@@ -289,6 +377,7 @@ pub fn add_string(e: &mut Engine, owning_mod: u8, data: &[u8], temporary: bool) 
     let s = state(e);
     let id = s.string_ids.unused();
     s.string_ids.used.insert(id);
+    s.string_order.insert(id);
     s.strings.insert(
         id,
         StringVar {
@@ -334,6 +423,7 @@ pub fn delete_string(e: &mut Engine, id: u32) {
     }
     s.strings.remove(&id);
     s.string_ids.free(id);
+    s.string_order.remove(id);
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), StringVar.cpp: StringVarMap::Clean.
@@ -354,6 +444,7 @@ pub fn create_array(e: &mut Engine, key_type: u8, packed: bool, owning_mod: u8) 
     let s = state(e);
     let id = s.array_ids.unused();
     s.array_ids.used.insert(id);
+    s.array_order.insert(id);
     let elements = if key_type == KEY_STRING {
         Container::StrMap(Vec::new())
     } else if packed {
@@ -458,6 +549,7 @@ pub fn delete_array(e: &mut Engine, id: u32) {
     let s = state(e);
     let gone = s.arrays.remove(&id);
     s.array_ids.free(id);
+    s.array_order.remove(id);
     if let Some(a) = gone {
         for i in 0..a.len() {
             unset(e, a.at(i));
@@ -603,6 +695,8 @@ pub fn reset(e: &mut Engine) {
     st.arrays.clear();
     st.string_ids = VarIds::default();
     st.array_ids = VarIds::default();
+    st.string_order.clear();
+    st.array_order.clear();
 }
 
 /// `g_nvseVarGarbageCollectionMap.Clear()`: no event list's locals are recorded any more.
