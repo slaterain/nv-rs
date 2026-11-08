@@ -403,8 +403,10 @@ pub struct State {
     /// `s_eventsInUse`: the masks of the events with handlers.
     pub in_use: u32,
     hooks: u8,
-    /// `s_eventStack`: the events being handled, innermost last.
-    stack: Vec<usize>,
+    /// `s_eventStack`: the events being handled, innermost last, per game thread (xNVSE keeps one
+    /// under the lock it holds for a whole dispatch; here the lock is given back at safe points,
+    /// so each thread keeps its own).
+    stack: HashMap<u32, Vec<usize>>,
     /// `s_deferredRemoveList`.
     removals: Vec<(usize, u64)>,
     classic: Vec<Classic>,
@@ -1685,11 +1687,22 @@ pub fn clear_flush_on_load(e: &mut Engine) {
 
 /// `GetCurrentEventName`: the innermost event being handled, empty when none.
 pub fn current_event_name(e: &mut Engine) -> Vec<u8> {
+    let thread = engine_core::thread_host::current_id(e);
     let s = state(e);
-    s.stack
-        .last()
-        .map(|&at| s.infos[at].name.clone())
-        .unwrap_or_default()
+    let top = s.stack.get(&thread).and_then(|v| v.last()).copied();
+    top.map(|at| s.infos[at].name.clone()).unwrap_or_default()
+}
+
+fn push_event(e: &mut Engine, at: usize) {
+    let thread = engine_core::thread_host::current_id(e);
+    state(e).stack.entry(thread).or_default().push(at);
+}
+
+fn pop_event(e: &mut Engine) {
+    let thread = engine_core::thread_host::current_id(e);
+    if let Some(v) = state(e).stack.get_mut(&thread) {
+        v.pop();
+    }
 }
 
 fn on_main_thread(e: &mut Engine) -> bool {
@@ -1741,11 +1754,18 @@ fn log_call(e: &mut Engine, at: usize, script: u32, args: &[u32]) {
     }
     use std::io::Write;
     let thread = engine_core::thread_host::current_id(e);
-    let id = if script != 0 { e.mem.u32(script + 0xc) } else { 0 };
+    let id = if script != 0 {
+        e.mem.u32(script + 0xc)
+    } else {
+        0
+    };
     let s = state(e);
     let name = String::from_utf8_lossy(&s.infos[at].name).into_owned();
     if let Some(f) = s.log.as_mut() {
-        let _ = writeln!(f, "{name} handler {id:08X} thread {thread} args {args:08X?}");
+        let _ = writeln!(
+            f,
+            "{name} handler {id:08X} thread {thread} args {args:08X?}"
+        );
     }
 }
 
@@ -1760,7 +1780,7 @@ fn invoke_classic(e: &mut Engine, at: usize, script: u32, types: &[u8], arg0: u3
         2
     };
     let args = [arg0, arg1][..count].to_vec();
-    state(e).stack.push(at);
+    push_event(e, at);
     log_call(e, at, script, &args);
     functions::call(
         e,
@@ -1774,7 +1794,7 @@ fn invoke_classic(e: &mut Engine, at: usize, script: u32, types: &[u8], arg0: u3
             event_types: Some(types.to_vec()),
         },
     );
-    state(e).stack.pop();
+    pop_event(e);
 }
 
 /// The validity of the first argument as a reference, read once per dispatch.
@@ -1947,7 +1967,7 @@ pub fn dispatch_raw(
     let name = info(e, at).name.clone();
     let unknown = info(e, at).unknown_arg_types();
     let (has_ptr_arg, params) = (info(e, at).has_ptr_arg, info(e, at).params.clone());
-    state(e).stack.push(at);
+    push_event(e, at);
     let mut cursor = None;
     while let Some(key) = next_after(e, at, cursor) {
         cursor = Some(key);
@@ -1989,7 +2009,7 @@ pub fn dispatch_raw(
             },
         );
     }
-    state(e).stack.pop();
+    pop_event(e);
     Dispatch::Normal
 }
 

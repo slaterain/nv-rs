@@ -534,7 +534,7 @@ impl Default for ScriptTables {
 pub(crate) struct ExtendState {
     /// This engine's id (a shared slot's holder names it).
     pub(crate) id: u64,
-    pub(crate) slots: std::collections::HashMap<std::any::TypeId, Slot>,
+    pub(crate) slots: std::collections::HashMap<std::any::TypeId, ExtSlot>,
     pub(crate) chains: crate::engine::AddrMap<u32, Chain>,
     /// The links running through [`Engine::call_next`], per game thread (`thread_host::current_id`):
     /// each thread has its own call stack (`thread_host` swaps them), so a link's depth means
@@ -574,8 +574,8 @@ impl ExtendState {
                 .slots
                 .iter()
                 .filter_map(|(k, s)| match s {
-                    Slot::Shared(s) => Some((*k, Slot::Shared(s.clone()))),
-                    Slot::Own(_) => None,
+                    ExtSlot::Shared(s) => Some((*k, ExtSlot::Shared(s.clone()))),
+                    ExtSlot::Own(_) => None,
                 })
                 .collect(),
             chains: self.chains.clone(),
@@ -588,7 +588,7 @@ impl ExtendState {
 
 /// An extension slot: one engine's own, or one value every engine of a game shares
 /// ([`Engine::share_ext`]).
-pub(crate) enum Slot {
+pub(crate) enum ExtSlot {
     Own(Box<dyn std::any::Any>),
     Shared(std::sync::Arc<Shared>),
 }
@@ -658,15 +658,10 @@ pub(crate) fn holds_shared() -> bool {
     HELD.with(|h| !h.borrow().is_empty())
 }
 
-
 /// Takes the shared slot `s` for this OS thread (engine `engine`), unless it holds it already;
 /// while another thread holds it, waits as a thread that runs no game code (a barrier does not
 /// wait for it).
-fn hold(
-    s: &std::sync::Arc<Shared>,
-    engine: u64,
-    real: Option<&crate::real_threads::Ctx>,
-) {
+fn hold(s: &std::sync::Arc<Shared>, engine: u64, real: Option<&crate::real_threads::Ctx>) {
     let held = HELD.with(|h| {
         h.borrow()
             .iter()
@@ -739,12 +734,12 @@ impl Engine {
             .extend
             .slots
             .entry(std::any::TypeId::of::<T>())
-            .or_insert_with(|| Slot::Own(Box::new(T::default())));
+            .or_insert_with(|| ExtSlot::Own(Box::new(T::default())));
         match slot {
-            Slot::Own(b) => b
+            ExtSlot::Own(b) => b
                 .downcast_mut::<T>()
                 .unwrap_or_else(|| unreachable!("a slot holds the type it is keyed by")),
-            Slot::Shared(s) => {
+            ExtSlot::Shared(s) => {
                 hold(s, engine, self.real.as_deref());
                 // SAFETY: this thread holds the slot (`hold`) until its next release point, and
                 // the reference borrows the engine, so it is dead before any engine call.
@@ -757,8 +752,8 @@ impl Engine {
     /// The extension slot of type `T` when it was made.
     pub fn ext_get<T: 'static>(&self) -> Option<&T> {
         match self.extend.slots.get(&std::any::TypeId::of::<T>())? {
-            Slot::Own(b) => b.downcast_ref::<T>(),
-            Slot::Shared(s) => {
+            ExtSlot::Own(b) => b.downcast_ref::<T>(),
+            ExtSlot::Shared(s) => {
                 hold(s, self.extend.id, self.real.as_deref());
                 // SAFETY: as in `ext`.
                 unsafe { (*s.value.get()).downcast_ref::<T>() }
@@ -772,11 +767,11 @@ impl Engine {
     pub fn share_ext<T: Default + Send + 'static>(&mut self) {
         let key = std::any::TypeId::of::<T>();
         let value: Box<dyn std::any::Any + Send> = match self.extend.slots.remove(&key) {
-            Some(Slot::Own(b)) => match b.downcast::<T>() {
+            Some(ExtSlot::Own(b)) => match b.downcast::<T>() {
                 Ok(t) => t,
                 Err(_) => unreachable!("a slot holds the type it is keyed by"),
             },
-            Some(shared @ Slot::Shared(_)) => {
+            Some(shared @ ExtSlot::Shared(_)) => {
                 self.extend.slots.insert(key, shared);
                 return;
             }
@@ -784,7 +779,7 @@ impl Engine {
         };
         self.extend.slots.insert(
             key,
-            Slot::Shared(std::sync::Arc::new(Shared::new(value))),
+            ExtSlot::Shared(std::sync::Arc::new(Shared::new(value))),
         );
     }
 
@@ -1141,7 +1136,10 @@ mod tests {
             w.join().unwrap();
         }
         hold(&s, 1, None);
-        assert_eq!(unsafe { *(*s.value.get()).downcast_ref::<u32>().unwrap() }, 4000);
+        assert_eq!(
+            unsafe { *(*s.value.get()).downcast_ref::<u32>().unwrap() },
+            4000
+        );
         release_held();
     }
 
