@@ -2701,7 +2701,10 @@ mod tests {
         // The waits blocked (parked and were woken), so the wakes were exercised.
         let blocked = world.wakes.load(Ordering::SeqCst) - before;
         eprintln!("event ping-pong: {blocked} waits blocked in {ROUNDS} rounds");
-        assert!(blocked > u64::from(ROUNDS) / 10, "only {blocked} waits blocked");
+        assert!(
+            blocked > u64::from(ROUNDS) / 10,
+            "only {blocked} waits blocked"
+        );
     }
 
     /// Four game threads taking units from one semaphore, each wait with the block's timeout
@@ -2915,6 +2918,47 @@ mod tests {
         }
         assert_eq!(e.mem.u32(word), 5 * EACH);
         assert_eq!(e.mem.u32(section + 0xc), 0, "the section is free");
+    }
+
+    /// Every game thread's engine context has the run's one kernel table (`KernelRef::id`), while
+    /// its engine and its memory view are its own: the key the host's fixes keep run-wide state by
+    /// (keyed by the memory view's address, the dialogue topic index answered 0 on other threads).
+    #[test]
+    fn every_thread_has_the_runs_kernel_table_and_a_memory_view_of_its_own() {
+        /// Writes its kernel table's id and its memory view's address at `a[0]`.
+        fn ids(e: &mut Engine, a: &[u32]) -> Ret {
+            let kernel = e.kernel.id() as u64;
+            let view = std::ptr::from_ref(&e.mem) as usize as u64;
+            for (i, word) in [kernel, kernel >> 32, view, view >> 32]
+                .into_iter()
+                .enumerate()
+            {
+                e.mem.set_u32(a[0] + 4 * i as u32, word as u32);
+            }
+            Ret::default()
+        }
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        e.register(0x0040_a000, ids);
+        let p = e.mem.alloc(0x10);
+        let h = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0040_a000u32, p, 0u32, 0u32],
+            )
+            .eax;
+        let wait = slot("WaitForSingleObject");
+        assert_eq!(e.call(wait, &args![h, STRESS_TIMEOUT_MS]).eax, 0);
+        let word = |e: &Engine, at: u32| {
+            u64::from(e.mem.u32(p + at)) | (u64::from(e.mem.u32(p + at + 4)) << 32)
+        };
+        assert_eq!(word(&e, 0), e.kernel.id() as u64, "the run's kernel table");
+        assert_ne!(
+            word(&e, 8),
+            std::ptr::from_ref(&e.mem) as usize as u64,
+            "a memory view of its own"
+        );
     }
 
     /// A section given no spin count of its own gets the one Windows writes: 2000 tries, with the
