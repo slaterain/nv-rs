@@ -144,25 +144,31 @@ thread_local! {
 /// of the slot's place in the thread's environment block, one load through `GS`. The slot holds
 /// the word XOR [`DEFAULT_CONTROL_WORD`], so a thread that never set it (its slot reads 0) reads
 /// the default, as the `thread_local!` did.
+#[cfg(all(windows, target_arch = "x86_64"))]
 #[inline(always)]
 pub fn control_word() -> u16 {
-    #[cfg(all(windows, target_arch = "x86_64"))]
-    {
-        let at = tls::SLOT_AT.load(std::sync::atomic::Ordering::Relaxed);
-        if at != 0 {
-            // SAFETY: `at` is the offset of this thread's slot of the TLS index [`tls::slot`]
-            // allocated (below 64: `TEB.TlsSlots`); the read only loads it.
-            return unsafe { tls::read(at) } ^ DEFAULT_CONTROL_WORD;
-        }
+    let at = tls::SLOT_AT.load(std::sync::atomic::Ordering::Relaxed);
+    if at != 0 {
+        // SAFETY: `at` is the offset of this thread's slot of the TLS index [`tls::slot`]
+        // allocated (below 64: `TEB.TlsSlots`); the read only loads it.
+        return unsafe { tls::read(at) } ^ DEFAULT_CONTROL_WORD;
     }
     control_word_slow()
 }
 
+/// The x87 control word the arithmetic helpers round with: the running game thread's (`FSTCW`).
+/// Other targets keep the `thread_local!`, read here directly.
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+#[inline]
+pub fn control_word() -> u16 {
+    CONTROL_WORD.with(|c| c.get())
+}
+
 /// [`control_word`] before the slot is made (it is made here), and without one.
+#[cfg(all(windows, target_arch = "x86_64"))]
 #[cold]
 #[inline(never)]
 fn control_word_slow() -> u16 {
-    #[cfg(all(windows, target_arch = "x86_64"))]
     if let Some(at) = tls::slot() {
         // SAFETY: as in `control_word`.
         return unsafe { tls::read(at) } ^ DEFAULT_CONTROL_WORD;
