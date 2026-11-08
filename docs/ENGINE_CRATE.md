@@ -445,6 +445,9 @@ lock-free maps, their interfaces, iterators and holder, stage 1 (objects stay in
 default (`NV_TYPED=lockfree` tries it); its differential tests are `crates/engine/tests/typed_lockfree.rs`.
 And `culling` (same crate): the culling walk, stage 1, off by default (`NV_TYPED=culling`);
 its tests are `crates/engine/tests/typed_culling.rs`.
+And `crt` (same crate): the C runtime's square root with the x87 error path every square root takes on
+the main thread, `floor`, the float-to-integer conversions, the 64-bit helpers, and the copy, fill and
+string routines, off by default (`NV_TYPED=crt`); its tests are `crates/engine/tests/typed_crt.rs`.
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with
