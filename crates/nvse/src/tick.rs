@@ -292,14 +292,24 @@ fn remove_while(e: &mut Engine, which: WhileList, serial: u64) {
     }
 }
 
-/// The serials of a list's entries when its pass begins (an entry added by a call during the
-/// pass waits for the next frame).
-fn delayed_serials(e: &mut Engine, which: DelayedList) -> Vec<u64> {
-    delayed_list(e, which).iter().map(|d| d.serial).collect()
+/// The entry after the one with serial `after` (0: the first), and its position. xNVSE keeps
+/// each list as a `std::list` and walks it with an iterator (`Hooks_Gameplay.cpp`), so an entry
+/// a call appends during the pass (`emplace_back`) is reached in the same pass, and one that
+/// reschedules itself with `CallAfterFrames 1` or `CallAfterSeconds 0` runs again and again
+/// within one frame (the game hangs, as with xNVSE). Entries are only appended, with rising
+/// serials, and removed, so each list stays ordered by serial and "the next entry" is the first
+/// with a larger serial: that reaches appended entries and stays right when a call removed or
+/// cleared entries (a load or a new game started by a script).
+fn next_delayed(e: &mut Engine, which: DelayedList, after: u64) -> Option<(usize, u64)> {
+    let list = delayed_list(e, which);
+    let i = list.iter().position(|d| d.serial > after)?;
+    Some((i, list[i].serial))
 }
 
-fn while_serials(e: &mut Engine, which: WhileList) -> Vec<u64> {
-    while_list(e, which).iter().map(|w| w.serial).collect()
+fn next_while(e: &mut Engine, which: WhileList, after: u64) -> Option<(usize, u64)> {
+    let list = while_list(e, which);
+    let i = list.iter().position(|w| w.serial > after)?;
+    Some((i, list[i].serial))
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Gameplay.cpp: HandleDelayedCall,
@@ -310,10 +320,9 @@ fn run_seconds(e: &mut Engine, which: DelayedList, delta: f32, menu: bool) {
         return;
     }
     let paused = is_paused(e);
-    for serial in delayed_serials(e, which) {
-        let Some(i) = delayed_position(e, which, serial) else {
-            continue;
-        };
+    let mut after = 0;
+    while let Some((i, serial)) = next_delayed(e, which, after) {
+        after = serial;
         if !delayed_list(e, which)[i].should_run(menu, paused) {
             delayed_list(e, which)[i].time += delta;
         }
@@ -336,10 +345,9 @@ fn run_after_frames(e: &mut Engine, menu: bool) {
         return;
     }
     let paused = is_paused(e);
-    for serial in delayed_serials(e, which) {
-        let Some(i) = delayed_position(e, which, serial) else {
-            continue;
-        };
+    let mut after = 0;
+    while let Some((i, serial)) = next_delayed(e, which, after) {
+        after = serial;
         if !delayed_list(e, which)[i].should_run(menu, paused) {
             continue;
         }
@@ -371,10 +379,9 @@ fn run_while(e: &mut Engine, which: WhileList, menu: bool) {
         return;
     }
     let paused = is_paused(e);
-    for serial in while_serials(e, which) {
-        let Some(i) = while_position(e, which, serial) else {
-            continue;
-        };
+    let mut after = 0;
+    while let Some((i, serial)) = next_while(e, which, after) {
+        after = serial;
         let w = while_list(e, which)[i].clone();
         if !w.should_run(menu, paused) {
             continue;
@@ -394,10 +401,9 @@ fn run_while_per_seconds(e: &mut Engine, delta: f32, menu: bool) {
         return;
     }
     let paused = is_paused(e);
-    for serial in while_serials(e, which) {
-        let Some(i) = while_position(e, which, serial) else {
-            continue;
-        };
+    let mut after = 0;
+    while let Some((i, serial)) = next_while(e, which, after) {
+        after = serial;
         let w = while_list(e, which)[i].clone();
         if !w.should_run(menu, paused) {
             while_list(e, which)[i].old_time = w.old_time + delta;

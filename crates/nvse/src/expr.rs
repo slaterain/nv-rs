@@ -1551,7 +1551,18 @@ impl Eval {
                     return None;
                 }
                 vars::set_string(e, *string, &text);
-                set_owner(e, *string, modi);
+                // Only the move from another command's result sets the owning mod (as for a
+                // variable on the left, below).
+                if matches!(
+                    rh,
+                    Tok::Var {
+                        ty: Ty::StringVar,
+                        local: 0,
+                        ..
+                    }
+                ) {
+                    set_owner(e, *string, modi);
+                }
                 Some(lh.clone())
             }
             (2, Tok::Var { local, ref_idx, .. }) => {
@@ -2298,6 +2309,19 @@ mod command_string_tests {
         );
         assert!(set.is_some());
         assert_eq!(vars::string(&e, id), Some(b"new".to_vec()));
+        // A plain string on the right keeps the owning mod; another command's result moves
+        // it to the script's (mod 0 here), as `Eval_Assign_String`'s move path does.
+        let owner = |e: &mut Engine| e.ext::<Nvse>().vars.strings[&id].owning_mod;
+        assert_eq!(owner(&mut e), 5);
+        let other = vars::add_string(&mut e, 7, b"other", true);
+        ev.operate(
+            &mut e,
+            op::ASSIGNMENT,
+            command_string(id),
+            Some(command_string(other)),
+        );
+        assert_eq!(vars::string(&e, id), Some(b"other".to_vec()));
+        assert_eq!(owner(&mut e), 0);
         assert!(ev
             .operate(
                 &mut e,

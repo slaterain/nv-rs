@@ -51,11 +51,10 @@ fn nothing(_: &mut Engine, _: &[u32]) -> Ret {
 }
 
 fn lookup(e: &mut Engine, a: &[u32]) -> Ret {
-    let eax = if a[0] != 0 && a[0] == e.mem.u32(FN_SCRIPT + 0xc) {
-        FN_SCRIPT
-    } else {
-        0
-    };
+    let eax = [FN_SCRIPT, FN_B, FN_C]
+        .into_iter()
+        .find(|f| a[0] != 0 && a[0] == e.mem.u32(f + 0xc))
+        .unwrap_or(0);
     Ret {
         eax,
         ..Ret::default()
@@ -237,4 +236,108 @@ fn a_call_that_clears_the_lists_is_safe() {
     frame(&mut e, 0.1);
     assert_eq!(e.mem.u32(RUNS), 1, "the first call cleared the rest");
     assert!(e.ext::<Nvse>().tick.after_frames.is_empty());
+}
+
+/// Two more functions for the pass tests: B (no parameters, body unused) and C, a condition
+/// whose body is `SetFunctionValue 1` (at its data `+0x40`).
+const FN_B: u32 = AREA + 0x1000;
+const FN_C: u32 = AREA + 0x2000;
+/// Runs of A (`FN_SCRIPT`), B and C, and what A registers when it runs (0 nothing, 1
+/// `CallAfterSeconds 0 B`, 2 `CallWhile B C`), once.
+const RUNS_A: u32 = AREA + 0x7f20;
+const RUNS_B: u32 = AREA + 0x7f24;
+const RUNS_C: u32 = AREA + 0x7f28;
+const A_REGISTERS: u32 = AREA + 0x7f2c;
+
+fn no_param_function(e: &mut Engine, script: u32, id: u32, body: &[u8]) {
+    let data = script + 0x100;
+    let mut d = vec![0x1d, 0, 0, 0, 0x10, 0, 8, 0, 0x0d, 0, 0, 0, 0, 0, 1, 0];
+    d.resize(0x40, 0);
+    d.extend_from_slice(body);
+    e.mem.write(data, &d);
+    e.mem.set_u32(script + 0xc, id);
+    e.mem.set_u8(script + 4, 0x11);
+    e.mem.set_u32(script + 0x30, data);
+    e.mem.set_u32(script + 0x20, d.len() as u32);
+}
+
+/// `Script::Execute` for the pass tests: counts each function's runs; A registers once what
+/// `A_REGISTERS` says; C sets its value through `SetFunctionValue`'s record.
+fn execute_abc(e: &mut Engine, a: &[u32]) -> Ret {
+    let (script, list) = (a[0], a[2]);
+    let counter = match script {
+        FN_SCRIPT => RUNS_A,
+        FN_B => RUNS_B,
+        _ => RUNS_C,
+    };
+    let n = e.mem.u32(counter);
+    e.mem.set_u32(counter, n + 1);
+    if script == FN_SCRIPT {
+        match e.mem.u32(A_REGISTERS) {
+            1 => {
+                e.mem.set_u32(A_REGISTERS, 0);
+                run(e, 0x1641, &[num(0.0), vec![b'R', 2, 0]]);
+            }
+            2 => {
+                e.mem.set_u32(A_REGISTERS, 0);
+                run(e, 0x1643, &[vec![b'R', 2, 0], vec![b'R', 3, 0]]);
+            }
+            _ => {}
+        }
+    } else if script == FN_C {
+        let data = e.mem.u32(script + 0x30);
+        let record = crate::table::record_of(e, functions::OP_SET_FUNCTION_VALUE);
+        let (params, handler) = (e.mem.u32(record + 0x14), e.mem.u32(record + 0x18));
+        e.with_stack(12, |e, f| {
+            e.mem.set_u32(f.addr() + 8, 0x40);
+            e.call(
+                handler,
+                &[params, data, 0, 0, script, list, f.addr(), f.addr() + 8],
+            );
+        });
+    }
+    Ret::default()
+}
+
+fn pass_setup() -> Engine {
+    let mut e = setup();
+    e.register(functions::SCRIPT_EXECUTE, execute_abc);
+    no_param_function(&mut e, FN_SCRIPT, 0x0500_0e00, &[]);
+    no_param_function(&mut e, FN_B, 0x0500_0e01, &[]);
+    no_param_function(&mut e, FN_C, 0x0500_0e02, &[1, 4, 0, b'B', 1]);
+    set_script_ref(&mut e, 1, FN_SCRIPT);
+    set_script_ref(&mut e, 2, FN_B);
+    set_script_ref(&mut e, 3, FN_C);
+    e
+}
+
+/// Re-review item 1: `CallAfterSeconds 0 B` registered by a delayed call's function runs B in
+/// the same frame, as xNVSE's `std::list` pass reaches entries appended during it.
+#[test]
+fn a_call_added_during_the_pass_runs_in_the_same_frame() {
+    let mut e = pass_setup();
+    e.mem.set_u32(A_REGISTERS, 1);
+    run(&mut e, 0x1641, &[num(0.0), form(0)]);
+    frame(&mut e, 0.1);
+    assert_eq!(e.mem.u32(RUNS_A), 1);
+    assert_eq!(e.mem.u32(RUNS_B), 1, "B ran in the same frame");
+    assert!(e.ext::<Nvse>().tick.after.is_empty());
+}
+
+/// Re-review item 1: `CallWhile B C` registered from a `CallWhile` callback is reached in the
+/// same pass: C is asked and B runs in that frame.
+#[test]
+fn a_call_while_added_by_a_call_while_runs_in_the_same_frame() {
+    let mut e = pass_setup();
+    e.mem.set_u32(A_REGISTERS, 2);
+    run(&mut e, 0x1643, &[form(0), vec![b'R', 3, 0]]);
+    frame(&mut e, 0.1);
+    assert_eq!(e.mem.u32(RUNS_A), 1);
+    assert_eq!(e.mem.u32(RUNS_B), 1, "B ran in the same frame");
+    assert_eq!(e.mem.u32(RUNS_C), 2, "C asked for both");
+    assert_eq!(
+        e.ext::<Nvse>().tick.while_.len(),
+        2,
+        "both go on while C holds"
+    );
 }

@@ -232,7 +232,15 @@ mod tests {
         install(&mut e);
         assert!(e.unlisted_wraps().is_empty());
         assert_eq!(e.wrapped().len(), 6);
-        for site in [0x005a_cb9d, 0x005e_16c3, 0x005e_2329, 0x0086_b386] {
+        for site in [
+            0x005a_cb9d,
+            0x005e_16c3,
+            0x005e_2329,
+            0x007d_33ce,
+            0x0084_7fd9,
+            0x0086_b386,
+            0x0093_db69,
+        ] {
             assert_eq!(e.site_owners(site), [Owner::Nvse], "{site:08x}");
         }
         let tables = e.script_tables();
