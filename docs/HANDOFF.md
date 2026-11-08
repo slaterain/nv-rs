@@ -7,6 +7,15 @@ machinery runs.
 
 ## Resume here
 
+### Claude, 2026-11-08 (D3DX texture loading translated: crates/d3dx-tex)
+
+- **What it is:** the texture `D3DXCreateTextureFromFileInMemory` / `...CubeTexture...` make for the game's call, from the 32-bit `d3dx9_38.dll`: DDS reading, copied and re-encoded levels, R8G8B8 to X8R8G8B8, the box filter and the DXT1/3/5 encoder. No DLL, no device, any platform.
+- **Checked:** all 21,776 textures of the game's archives byte for byte the 32-bit DLL's (`scripts/d3dx-tex-verify <Data> <cache>`, the cache from `scripts/d3dx-texture-capture`), with the processor's truncation and the software one (`--features software-truncation`); 24,000 fuzzed blocks against the DLL's own encoders (`--fuzz`, `d3dx-measure blocks`). Tests compare with captured DLL answers for synthetic files (`crates/d3dx-tex/data`).
+- **What made it exact:** single-precision x87 (Direct3D 9 sets it at `CreateDevice`; `d3dx-measure control-word`), the DLL's operation order, and the truncating rounding its encoders run under (it ORs 0xC00 into the control word for its conversions, so every operation in those loops truncates; the 64-bit DLL does not, which is where its 3,420 textures differed).
+- **Load time** (`d3dx-tex-verify --time`: one loader thread, all textures, both paths in the same run): the 64-bit DLL path the port uses today (create on the real device, read every level back) 9.1 s against d3dx-tex 8.6 s with one thread per level; 10.4 s against 3.9 s with large levels split over threads (slowest texture 108 ms against 16 ms).
+- **Not translated (answers `NotProvided`, the caller falls back):** non-DDS image files, volume textures, other DDS pixel formats, a top level D3DX resamples (sizes that are not powers of two, DXT sides not multiples of 4).
+- **Not in this PR:** the platform hook (`NV_TEXTURES=translated` default in `engine-platform/src/d3dx.rs`); written as a separate patch while another agent changes those files.
+
 ### Claude, 2026-11-06 (the Windows preview package)
 
 - **What it is:** `scripts/package-playtest.ps1` makes one ZIP: `Play.exe` (`scripts/launcher`), `app\FalloutNV.exe` (nv-viewer `--release`, static C runtime, build paths remapped), the three table tools, launchers, the settings tool, the READ ME and the notices. docs/PLAYTESTING.md says what `Play.exe` does and what the tables can't cover; docs/MAINTAINING.md lists the ZIP's contents and why each is allowed; docs/PREVIEW_TESTERS.md is the checklist for other PCs. Nothing is released: the maintainer decides.

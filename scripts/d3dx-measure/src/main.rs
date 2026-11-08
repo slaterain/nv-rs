@@ -7,12 +7,16 @@
 //! `cargo run --release --target i686-pc-windows-msvc --manifest-path scripts/d3dx-measure/Cargo.toml -- matrix-multiply [count] > FILE`
 //! `-- functions [count] [D3DXName]` measures the other maths functions (`functions.rs`).
 //! (`-- check FILE` compares a measurement file with the possible orders of the arithmetic.)
+//! `-- blocks` serves `scripts/d3dx-tex-verify`: the DLL's internal DXT block encoders, the one
+//! use of anything but its entry points (`blocks.rs`); `-- control-word` prints the x87 control
+//! word before and after the HAL device `serve` makes.
 //!
 //! Each `MatrixMultiply` line: `alias<TAB>x87 control word<TAB>M1 (16 words)<TAB>M2 (16 words)
 //! <TAB>result (16 words)<TAB>returned (1 when the answer is the out pointer)`. `alias` says
 //! which pointers were the same: `none`, `out=m1`, `out=m2`, `m1=m2`, `out=m1=m2` (the inputs
 //! written are the values before the call).
 mod analyze;
+mod blocks;
 mod functions;
 mod image;
 mod texture;
@@ -196,6 +200,24 @@ fn main() {
             let module = LoadLibraryA(b"d3dx9_38.dll\0".as_ptr());
             assert!(!module.is_null(), "d3dx9_38.dll did not load");
             texture::serve(module);
+        }
+        return;
+    }
+    if what == "blocks" {
+        unsafe {
+            let module = LoadLibraryA(b"d3dx9_38.dll\0".as_ptr());
+            assert!(!module.is_null(), "d3dx9_38.dll did not load");
+            blocks::serve(module);
+        }
+        return;
+    }
+    if what == "control-word" {
+        // The x87 control word before and after the HAL device `serve` makes (a device made
+        // without D3DCREATE_FPU_PRESERVE sets single precision).
+        unsafe {
+            println!("before\t{:04x}", x87_control_word());
+            texture::make_device();
+            println!("after\t{:04x}", x87_control_word());
         }
         return;
     }

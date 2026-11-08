@@ -68,7 +68,7 @@ pub unsafe fn create_texture(o: &mut impl Write, module: *mut c_void, dir: &str)
     let create: Create = std::mem::transmute(f);
     // A window and a windowed HAL device with hardware vertex processing.
     let class = b"STATIC\0";
-    let window = CreateWindowExA(0, class.as_ptr(), class.as_ptr(), 0x1000_0000, 0, 0, 640, 480,
+    let window = CreateWindowExA(0, class.as_ptr(), class.as_ptr(), 0, 0, 0, 640, 480,
         std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
     let d3d = Direct3DCreate9(32) as *mut c_void;
     let mut present = [0u32; 14];
@@ -144,10 +144,15 @@ pub unsafe fn create_texture(o: &mut impl Write, module: *mut c_void, dir: &str)
     }
 }
 
+/// The device `serve` makes, for `control-word`.
+pub unsafe fn make_device() -> *mut c_void {
+    device()
+}
+
 /// A window and a windowed HAL device with hardware vertex processing (as `create-texture`).
 unsafe fn device() -> *mut c_void {
     let class = b"STATIC\0";
-    let window = CreateWindowExA(0, class.as_ptr(), class.as_ptr(), 0x1000_0000, 0, 0, 640, 480,
+    let window = CreateWindowExA(0, class.as_ptr(), class.as_ptr(), 0, 0, 0, 640, 480,
         std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
     let d3d = Direct3DCreate9(32) as *mut c_void;
     let mut present = [0u32; 14];
