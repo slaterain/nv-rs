@@ -1416,14 +1416,12 @@ fn compare_exchange() {
 fn lock() {
     Diff::new(entry!(0x0040_fbf0, refs::lock(Ptr<_>, u32)))
         .common(0x0040_fbf0)
-        .max_calls(40_000)
-        .inputs(&[Input::Of(&[0x1234, 0, 0x99, 0x98]), Input::Word])
+        .inputs(&[Input::Of(&[0x1234, 0, 0x99]), Input::Word])
         .setup(|e, case| {
             stand_ins(e);
             let l = block(e, 8, &[case.word(0), case.word(1)]);
-            // `Sleep` lets the other owner go: 0x99 at once, 0x98 only after the 10,000 spins.
+            // `Sleep` lets the other owner go at once (the long wait: `lock_sleeps_a_millisecond_after_ten_thousand_tries`).
             e.mem.set_u32(LOG + 0x3ff0, l);
-            e.mem.set_u32(LOG + 0x3ff4, u32::from(case.word(0) == 0x98));
             vec![l, 0]
         })
         .run()
@@ -1964,4 +1962,38 @@ fn location_on_reference_at_24_bits_rounds_the_rise_once() {
         });
         assert_eq!(got, expected, "typed, control word {word:04x}");
     }
+}
+
+/// The lock's long wait, which the differential test leaves out (10,000 tries, each call compared
+/// with a hash of memory, is too slow there): an owner that lets go only at a `Sleep(1)` gets 10,000
+/// `Sleep(0)`s, then one `Sleep(1)`, then the lock is this thread's with a count of 1. The translation
+/// and the typed version, counted the same way.
+#[test]
+fn lock_sleeps_a_millisecond_after_ten_thousand_tries() {
+    fn run(typed: bool) -> (u32, u32, u32, u32) {
+        let mut e = Engine::new();
+        stand_ins(&mut e);
+        // `Sleep`: counts by its argument; the owner lets go at a `Sleep(1)`.
+        e.register(0x0040_fca0, |e, a| {
+            let at = LOG + 0x3f00 + 4 * a[0].min(1);
+            e.mem.set_u32(at, e.mem.u32(at) + 1);
+            if a[0] == 1 {
+                let lock = e.mem.u32(LOG + 0x3ff0);
+                e.mem.set_u32(lock, 0);
+            }
+            ret(0)
+        });
+        let l = block(&mut e, 8, &[0x98, 5]);
+        e.mem.set_u32(LOG + 0x3ff0, l);
+        if typed {
+            refs::lock(&mut e, Ptr::new(l), 0);
+        } else {
+            e.call(0x0040_fbf0, &engine_core::args![l, 0u32]);
+        }
+        let sleeps = (e.mem.u32(LOG + 0x3f00), e.mem.u32(LOG + 0x3f04));
+        (sleeps.0, sleeps.1, e.mem.u32(l), e.mem.u32(l + 4))
+    }
+    let expected = (10_000, 1, 0x1234, 1);
+    assert_eq!(run(false), expected, "translation");
+    assert_eq!(run(true), expected, "typed");
 }
