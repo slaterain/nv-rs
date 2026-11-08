@@ -8,7 +8,7 @@
 //! topic whose first info with this info's form id is this very info. Loading a plugin that
 //! changes an existing info clears it first (`TESTopicInfo::ClearData`, which asks for the owner
 //! to take the info out of it), so a dialogue mod's load time grows with the infos it touches
-//! times the topics and infos in the game (YUP and the add-ons: about 5,000 searches). JIP LN
+//! times the topics and infos in the game (YUP and the add-ons: 5,837 searches). JIP LN
 //! replaces the walk with a word it adds to every info, set where the load links the info into a
 //! topic; that answers the last topic the info was linked into, which is not always the walk's
 //! answer.
@@ -29,21 +29,25 @@
 //!   the list (each topic's first place in it), made by walking the list once and kept while it
 //!   stays right. Only three functions write `listTopics` (the translations name the field in
 //!   these and read it elsewhere): the sorted insert `0061a380` (`00461780`, as each topic record
-//!   loads), the sort `0061a5a0` (after the load, a null list meaning this one) and the data
-//!   handler's `ClearData` (`0045dfe0`, which empties it). The insert only adds a node, before a
-//!   node (whose item moves into the new one after it) or at the end: every topic already in the
-//!   list stays in it in the same order. So the copy stays right for every topic it holds; it is
-//!   made again after the sort or `ClearData` (both registered here), after an insert of a topic
-//!   it already holds (which can list that topic again, before its first place), when the list's
-//!   head node no longer holds what it held (another writer), or when a possible answer isn't in
-//!   it and a topic was inserted since it was made. A topic not in a fresh copy is not in the list.
+//!   loads), the sort `0061a5a0` (a null list meaning this one; the load's end sorts only the
+//!   player's list) and the data handler's `ClearData` (`0045dfe0`, which empties it). The
+//!   insert only adds a node, before a node (whose item moves into the new one after it) or at
+//!   the end: every topic already in the list stays in it in the same order. So the copy stays
+//!   right for every topic it holds; it is made again after the sort or `ClearData` (both
+//!   registered here), after an insert of a topic it already holds (which can list that topic
+//!   again, before its first place), when the list's head node no longer holds what it held
+//!   (another writer), or when a possible answer isn't in it and a topic was inserted since it
+//!   was made. A topic not in a fresh copy is not in the list.
 //!
 //! So the walk's tie-break (an info in several topics, a twin id earlier in a topic, the list's
 //! order and end) is kept: a search reads one or two topics' infos and a table, not the list.
 //!
 //! `NV_TOPIC_INDEX_CHECK=1` runs the original's walk (the translation) beside every search and
 //! stops the game at the first difference, naming the info and both answers; a line every
-//! 1,000 searches says how many agreed and how often the list was copied.
+//! 1,000 searches says how many agreed and how often the list was copied. With or without it,
+//! one line at the first sort after searches (the load's end) counts what the searches did: how
+//! many topics held the info, the copies made and dropped by reason, and the time spent (YUP and
+//! the add-ons, 2026-11-07: 5,837 searches, each one topic, 3 copies, 54 ms in all).
 
 use crate::fixes::Fix;
 use engine::prelude::*;
@@ -53,6 +57,7 @@ use engine::units::fallout_shared::testopic::{
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::Instant;
 
 /// `TESTopic::GetOwnerTopic` and `TESTopic::InsertInfo` (Xbox PDB).
 pub const OWNER_TOPIC: u32 = 0x0061_a310;
@@ -104,6 +109,38 @@ struct Index {
     /// Searches the check compared, and copies of the list made.
     checked: u64,
     copies: u64,
+    /// What the searches did, logged at the first sort after searches (the load's end), and
+    /// the searches reported so far.
+    stats: Stats,
+    reported: u64,
+}
+
+/// Counters of the searches and the order's copies, by reason, with the time spent.
+#[derive(Default, Debug)]
+struct Stats {
+    searches: u64,
+    /// No topic noted for the info; no noted topic holding it; one holding it; more.
+    unlinked: u64,
+    none_holding: u64,
+    one_holding: u64,
+    several_holding: u64,
+    /// Answers that were a topic (not 0).
+    answered: u64,
+    /// Copies made: none kept, another handler, a changed head node, a holder missing after an
+    /// insert.
+    copy_none: u64,
+    copy_handler: u64,
+    copy_head: u64,
+    copy_missing: u64,
+    /// Copies dropped: the sort, `ClearData`, an insert of a topic the copy holds.
+    drop_sort: u64,
+    drop_clear: u64,
+    drop_insert_held: u64,
+    /// Sorted inserts seen (any list).
+    inserts: u64,
+    /// Nanoseconds in searches and in making copies.
+    search_ns: u64,
+    copy_ns: u64,
 }
 
 /// The run's index, by engine (a run has one, boxed, so its address holds; tests have one each).
@@ -172,9 +209,11 @@ fn sorted_insert_entry(e: &mut Engine, a: &[u32]) -> Ret {
     let topic = a[0];
     fn_0061a380(e, topic, a[1], a[2] as u8);
     if let Some(index) = indexes().get_mut(&key(e)) {
+        index.stats.inserts += 1;
         if let Some(order) = index.order.as_mut() {
             if order.place.contains_key(&topic) {
                 index.order = None;
+                index.stats.drop_insert_held += 1;
             } else {
                 order.fresh = false;
             }
@@ -186,23 +225,41 @@ fn sorted_insert_entry(e: &mut Engine, a: &[u32]) -> Ret {
 /// The sort as translated; the order is made again at the next search.
 fn sort_entry(e: &mut Engine, a: &[u32]) -> Ret {
     fn_0061a5a0(e, a[0] as u8, a[1]);
-    forget_order(e);
+    let mut indexes = indexes();
+    let engines = indexes.len();
+    if let Some(index) = indexes.get_mut(&key(e)) {
+        if index.order.take().is_some() {
+            index.stats.drop_sort += 1;
+        }
+        // The load's last steps sort the player's list: the first sort after searches not yet
+        // reported says what the load's searches did.
+        if index.stats.searches > index.reported {
+            index.reported = index.stats.searches;
+            let epoch_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis());
+            eprintln!(
+                "topic index after the load (epoch_ms {epoch_ms}, {engines} engine(s), {} infos \
+                 noted): {:?}",
+                index.topics.len(),
+                index.stats
+            );
+        }
+    }
     Ret::default()
 }
 
 /// `TESDataHandler::ClearData` as translated; the order is made again at the next search.
 fn handler_clear_entry(e: &mut Engine, a: &[u32]) -> Ret {
     let cleared = tes_data_handler_clear_data(e, Ptr::new(a[0]));
-    forget_order(e);
+    if let Some(index) = indexes().get_mut(&key(e)) {
+        if index.order.take().is_some() {
+            index.stats.drop_clear += 1;
+        }
+    }
     Ret {
         eax: u32::from(cleared),
         ..Ret::default()
-    }
-}
-
-fn forget_order(e: &Engine) {
-    if let Some(index) = indexes().get_mut(&key(e)) {
-        index.order = None;
     }
 }
 
@@ -241,11 +298,34 @@ fn checked_owner_topic_entry(e: &mut Engine, a: &[u32]) -> Ret {
     }
 }
 
-/// The walk's answer from the topics the info was linked into (module documentation).
+/// The walk's answer from the topics the info was linked into (module documentation), counted.
 fn indexed_owner(e: &mut Engine, info: u32) -> u32 {
+    let start = Instant::now();
+    let (found, outcome) = search_index(e, info);
+    let mut indexes = indexes();
+    let stats = &mut indexes.entry(key(e)).or_default().stats;
+    stats.searches += 1;
+    stats.answered += u64::from(found != 0);
+    match outcome {
+        Outcome::Unlinked => stats.unlinked += 1,
+        Outcome::NoneHolding => stats.none_holding += 1,
+        Outcome::Holding(1) => stats.one_holding += 1,
+        Outcome::Holding(_) => stats.several_holding += 1,
+    }
+    stats.search_ns += u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    found
+}
+
+enum Outcome {
+    Unlinked,
+    NoneHolding,
+    Holding(usize),
+}
+
+fn search_index(e: &mut Engine, info: u32) -> (u32, Outcome) {
     let candidates = match indexes().get(&key(e)).and_then(|i| i.topics.get(&info)) {
         Some(topics) => topics.clone(),
-        None => return 0,
+        None => return (0, Outcome::Unlinked),
     };
     let id = e.mem.u32(info.wrapping_add(FORM_ID));
     let holding: Vec<u32> = candidates
@@ -253,28 +333,50 @@ fn indexed_owner(e: &mut Engine, info: u32) -> u32 {
         .filter(|&topic| e.call(FIND_INFO, &args![topic, id, 0u32]).u32() == info)
         .collect();
     if holding.is_empty() {
-        return 0;
+        return (0, Outcome::NoneHolding);
     }
     let handler = e.mem.u32(DATA_HANDLER);
     let head_node = handler.wrapping_add(TOPIC_LIST);
     let head = [e.mem.u32(head_node), e.mem.u32(head_node.wrapping_add(4))];
     let mut indexes = indexes();
     let index = indexes.entry(key(e)).or_default();
-    let right = index.order.as_ref().is_some_and(|order| {
-        order.handler == handler
-            && order.head == head
-            && (order.fresh || holding.iter().all(|t| order.place.contains_key(t)))
-    });
-    if !right {
+    let stale = match index.order.as_ref() {
+        None => Some(Stale::None),
+        Some(order) if order.handler != handler => Some(Stale::Handler),
+        Some(order) if order.head != head => Some(Stale::Head),
+        Some(order) if !order.fresh && !holding.iter().all(|t| order.place.contains_key(t)) => {
+            Some(Stale::Missing)
+        }
+        Some(_) => None,
+    };
+    if let Some(stale) = stale {
+        let start = Instant::now();
         index.order = Some(copy_order(e, handler, head));
         index.copies += 1;
+        let stats = &mut index.stats;
+        match stale {
+            Stale::None => stats.copy_none += 1,
+            Stale::Handler => stats.copy_handler += 1,
+            Stale::Head => stats.copy_head += 1,
+            Stale::Missing => stats.copy_missing += 1,
+        }
+        stats.copy_ns += u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
     }
     let place = &index.order.as_ref().expect("made above").place;
-    holding
+    let found = holding
         .iter()
         .filter_map(|topic| place.get(topic).map(|at| (*at, *topic)))
         .min()
-        .map_or(0, |(_, topic)| topic)
+        .map_or(0, |(_, topic)| topic);
+    (found, Outcome::Holding(holding.len()))
+}
+
+/// Why a copy of the order was made.
+enum Stale {
+    None,
+    Handler,
+    Head,
+    Missing,
 }
 
 /// `listTopics`' order as the walk meets it: from the head node, ending at a null node or one
