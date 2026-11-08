@@ -16,6 +16,7 @@
 #![deny(clippy::cast_possible_truncation)]
 
 pub mod culling;
+pub mod dispatch;
 pub mod lockfree;
 pub mod pathing;
 
@@ -69,6 +70,7 @@ pub mod units {
         engine_core::typed::provide(&crate::lockfree::LOCKFREE);
         engine_core::typed::provide(&crate::culling::CULLING);
         engine_core::typed::provide(&crate::pathing::PATHING);
+        engine_core::typed::provide(&crate::dispatch::DISPATCH);
     }
 }
 
