@@ -444,7 +444,10 @@ Then `lockfree` (`crates/engine-typed`, a crate above the core that provides its
 lock-free maps, their interfaces, iterators and holder, stage 1 (objects stay in guest memory), off by
 default (`NV_TYPED=lockfree` tries it); its differential tests are `crates/engine/tests/typed_lockfree.rs`.
 And `culling` (same crate): the culling walk, stage 1, off by default (`NV_TYPED=culling`);
-its tests are `crates/engine/tests/typed_culling.rs`.
+its tests are `crates/engine/tests/typed_culling.rs`. And `pathing` (same crate): what the AI's pathfinding threads
+run most (navmesh getters, matching edges, the triangle under a point, the search's keys, goal test and
+arrays, the point-of-view geometry, pathing locations, the point helpers), stage 1, off by default
+(`NV_TYPED=pathing`); its tests are `crates/engine/tests/typed_pathing.rs`.
 And `crt` (same crate): the C runtime's square root with the x87 error path every square root takes on
 the main thread, `floor`, the float-to-integer conversions, the 64-bit helpers, and the copy, fill and
 string routines, off by default (`NV_TYPED=crt`); its tests are `crates/engine/tests/typed_crt.rs`.
