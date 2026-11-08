@@ -2514,3 +2514,42 @@ fn restore_states() {
         .run()
         .assert_same();
 }
+
+/// The alpha sort's depth less the radius in the exe's two steps: the sum stored as a float, then the
+/// radius taken off. With the camera along (1, 1, 0) and the 53-bit word, a bound at (1, 2^-30, 0) of
+/// radius 1 sums to 1 + 2^-30, stored as 1.0, so its depth is 0 like (1, 0, 0)'s: the two compare equal.
+/// Without the store the depth would be 2^-30. Both orders; the 24-bit word rounds the sum anyway.
+#[test]
+fn compare_by_depth_stores_before_the_radius() {
+    Diff::new(entry!(0x00b9_8b20, batch::compare_by_depth(u32, u32) -> i32))
+        .common()
+        .control_words(&[0x027f])
+        .inputs(&[Input::Of(TWO_WAYS)])
+        .setup(|e, c| {
+            let w = world(e);
+            set(e, w.camera + 0x68, ONE);
+            set(e, w.camera + 0x74, ONE);
+            set(e, w.camera + 0x80, 0);
+            e.mem.set_u8(0x011f_fe35, 1);
+            set(e, 0x011f_fe38, w.camera);
+            let mut items = [0u32; 2];
+            for (item, y) in items.iter_mut().zip([0x3080_0000, 0]) {
+                let bound = e.mem.alloc(0x10);
+                set(e, bound, ONE);
+                set(e, bound + 4, y);
+                set(e, bound + 0xc, ONE);
+                let geometry = e.mem.alloc(0xc4);
+                set(e, geometry + 0x20, bound);
+                let pass = e.mem.alloc(8);
+                set(e, pass, geometry);
+                *item = e.mem.alloc(4);
+                set(e, *item, pass);
+            }
+            if c.word(0) != 0 {
+                items.swap(0, 1);
+            }
+            vec![items[0], items[1]]
+        })
+        .run()
+        .assert_same();
+}

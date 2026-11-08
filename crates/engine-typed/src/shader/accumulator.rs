@@ -72,8 +72,10 @@ fn renderer_at(
     )))
 }
 
-/// Sets or clears `bit` of a flags word as `on` says, clearing `iLastRenderPassState` (+0x38) and the
-/// render pass list's word +0x10 (the first only for `ulFlags`) when the bit changes.
+/// When `bit` of a flags word isn't what `on` says: clears `iLastRenderPassState` (+0x38) and
+/// the render pass list's word +0x10 (that one only for `ulFlags`), then sets or clears the
+/// bit. When it already is, nothing is written, as in the exe (under real threads a write-back
+/// could lose another thread's change to the word).
 #[inline(always)]
 fn follow_bit(
     e: &mut Engine,
@@ -92,9 +94,9 @@ fn follow_bit(
                 e.set_global(list.wrapping_add(0x10), 0u32);
             }
         }
+        let flags = e.get(property, word);
+        e.set(property, word, if on { flags | bit } else { flags & !bit });
     }
-    let flags = e.get(property, word);
-    e.set(property, word, if on { flags | bit } else { flags & !bit });
 }
 
 /// Registers a pass with the thread's batch renderer in `group`.
