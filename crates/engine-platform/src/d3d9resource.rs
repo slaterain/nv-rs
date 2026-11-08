@@ -1155,19 +1155,13 @@ fn set_constants(e: &mut Engine, this: Ptr, kind: u8, start: u32, data: Ptr, cou
 /// device's first set.
 #[cfg(windows)]
 pub(super) fn constant_registers(
-    e: &Engine,
+    resources: &Resources,
     device: u32,
     kind: u8,
     start: u32,
     count: u32,
 ) -> Option<&[[u32; 4]]> {
-    let (_, b) = state_ref!(e)
-        .graphics
-        .device_objects
-        .resources
-        .bindings
-        .iter()
-        .find(|(d, _)| *d == device)?;
+    let (_, b) = resources.bindings.iter().find(|(d, _)| *d == device)?;
     let first = usize::from(kind) * CONSTANT_SLOTS + start as usize;
     b.constants.get(first..first + count as usize)
 }

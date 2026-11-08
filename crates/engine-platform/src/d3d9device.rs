@@ -5070,13 +5070,19 @@ pub(crate) mod tests {
         }
     }
 
-    /// Gives every object of the scene a stand-in real counterpart (`d3d9real::stub`): the
-    /// device `#0`, textures `#1000..`, vertex buffers `#2000..`, index buffers `#3000..`,
-    /// declarations `#4000..`, vertex shaders `#5000..`, pixel shaders `#6000..`.
+    /// A backend whose objects are stand-ins (`d3d9backend::stub`) for every object of the scene:
+    /// the device `#0`, textures `#1000..`, vertex buffers `#2000..`, index buffers `#3000..`,
+    /// declarations `#4000..`, vertex shaders `#5000..`, pixel shaders `#6000..`, their calls
+    /// noted in `log`; and the scene's objects.
     #[cfg(windows)]
-    fn stand_in(s: &mut Scene) {
-        use super::super::d3d9real::stub::{install, Kind};
-        install(&mut s.e, s.device, Kind::Device, 0);
+    fn stand_ins(
+        s: &Scene,
+        log: &std::sync::Arc<super::super::d3d9backend::stub::Log>,
+    ) -> (super::super::d3d9backend::RealBackend, Vec<u32>) {
+        use super::super::d3d9backend::stub::{install, Kind};
+        let mut b = super::super::d3d9backend::RealBackend::new();
+        install(&mut b, s.device, Kind::Device, 0, log);
+        let mut all = Vec::new();
         for (kind, objects, base) in [
             (Kind::Texture, &s.textures, 1000),
             (Kind::VertexBuffer, &s.vertex_buffers, 2000),
@@ -5086,9 +5092,37 @@ pub(crate) mod tests {
             (Kind::PixelShader, &s.pixel_shaders, 6000),
         ] {
             for (i, &o) in objects.iter().enumerate() {
-                install(&mut s.e, o, kind, base + i as u32);
+                install(&mut b, o, kind, base + i as u32, log);
+                all.push(o);
             }
         }
+        (b, all)
+    }
+
+    /// Gives every object of the scene a stand-in real counterpart ([`stand_ins`]) as the
+    /// engine's forwarding, carried out at once or on the render thread (`threaded`): the log of
+    /// the calls that reach them, and the backend (shared, to look at afterwards).
+    #[cfg(windows)]
+    fn stand_in(
+        s: &mut Scene,
+        threaded: bool,
+    ) -> (
+        std::sync::Arc<super::super::d3d9backend::stub::Log>,
+        std::sync::Arc<std::sync::Mutex<super::super::d3d9backend::RealBackend>>,
+    ) {
+        let log = std::sync::Arc::default();
+        let (b, objects) = stand_ins(s, &log);
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(b));
+        super::super::d3d9real::test_forwarding(
+            &mut s.e,
+            Box::new(super::super::d3d9real::SharedBackend(std::sync::Arc::clone(
+                &shared,
+            ))),
+            threaded,
+            &[s.device],
+            &objects,
+        );
+        (log, shared)
     }
 
     /// The groups of calls a [`draw`] makes, with how many calls each makes.
@@ -5228,14 +5262,29 @@ pub(crate) mod tests {
     #[cfg(windows)]
     #[test]
     fn forwarded_calls_reach_the_real_device_as_given() {
-        use super::super::d3d9real::stub;
+        forwarded_calls_through(false);
+    }
+
+    /// [`forwarded_calls_reach_the_real_device_as_given`] with the render thread: the same calls
+    /// reach the real device in the same order, with the same data (the same digest), and the
+    /// model answers the same.
+    #[cfg(windows)]
+    #[test]
+    fn forwarded_calls_reach_the_real_device_as_given_from_the_render_thread() {
+        forwarded_calls_through(true);
+    }
+
+    #[cfg(windows)]
+    fn forwarded_calls_through(threaded: bool) {
+        use super::super::d3d9real::test_finish;
         let mut s = scene([64, 16, 8, 8]);
-        stand_in(&mut s);
+        let (calls, backend) = stand_in(&mut s, threaded);
         let device = s.device;
-        stub::record();
+        calls.record();
         assert_eq!(s.e.vcall(device, 4 * 41, &[]).u32(), D3D_OK);
         draw(&mut s, device, 0);
-        let log = stub::take();
+        test_finish(&mut s.e);
+        let log = calls.take();
         assert_eq!(log[0], "BeginScene");
         let first: Vec<String> = log[1..]
             .iter()
@@ -5247,7 +5296,7 @@ pub(crate) mod tests {
             .collect();
         assert_eq!(first, expected);
         // Calls the model refuses or takes at their edges, then many draws.
-        stub::record();
+        calls.record();
         let e = &mut s.e;
         let data = s.constants;
         let (t0, t1) = (s.textures[0], s.textures[1]);
@@ -5325,7 +5374,8 @@ pub(crate) mod tests {
             draw(&mut s, device, i);
         }
         assert_eq!(s.e.vcall(device, 4 * 42, &[]).u32(), D3D_OK);
-        let log = stub::take();
+        test_finish(&mut s.e);
+        let log = calls.take();
         assert_eq!(log.len(), 22 + 199 * 28 + 1);
         assert!(!log.iter().any(|l| l.contains("unexpected")));
         let digest = log.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, line| {
@@ -5342,7 +5392,10 @@ pub(crate) mod tests {
             digest, 5_257_225_520_366_858_290,
             "the forwarded calls' digest"
         );
-        assert_eq!(super::super::d3d9real::stub::logged(&s.e), 0);
+        assert_eq!(
+            super::super::d3d9backend::stub::logged(&backend.lock().unwrap()),
+            0
+        );
         // What the model answers the game afterwards: its getters' answers and words, and the
         // objects' counts.
         let answers = model_answers(&mut s);
@@ -5480,15 +5533,35 @@ pub(crate) mod tests {
         let model_groups: Vec<f64> = (0..GROUPS.len())
             .map(|g| run(&mut s, device, Some(g)))
             .collect();
-        let mut s = scene(SIZE);
-        stand_in(&mut s);
+        let log = std::sync::Arc::default();
+        let forwarding = |threaded: bool| {
+            let mut s = scene(SIZE);
+            let (b, objects) = stand_ins(&s, &log);
+            let device = s.device;
+            super::super::d3d9real::test_forwarding(
+                &mut s.e,
+                Box::new(b),
+                threaded,
+                &[device],
+                &objects,
+            );
+            s
+        };
+        // The calls recorded for the render thread, which carries them out on its own core.
+        let mut t = forwarding(true);
+        let device = t.device;
+        let recorded = run(&mut t, device, None);
+        drop(t);
+        let mut s = forwarding(false);
         let device = s.device;
         let forwarded = run(&mut s, device, None);
         eprintln!(
             "cost of a Direct3D 9 call: machinery {floor:.1} ns, model {model:.1} ns, \
              model + forwarding to a stand-in device {forwarded:.1} ns \
-             ({draws} draws x 28 calls a frame: {:.2} ms)",
-            forwarded * f64::from(draws as u32 * 28) / 1e6
+             ({draws} draws x 28 calls a frame: {:.2} ms), model + recording for the render \
+             thread {recorded:.1} ns ({:.2} ms)",
+            forwarded * f64::from(draws as u32 * 28) / 1e6,
+            recorded * f64::from(draws as u32 * 28) / 1e6
         );
         for (g, (name, _)) in GROUPS.iter().enumerate() {
             let ns = run(&mut s, device, Some(g));

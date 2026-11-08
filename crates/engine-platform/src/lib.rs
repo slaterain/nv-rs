@@ -152,6 +152,7 @@ pub static LAYER: Layer = Layer {
     new_state,
     file_closed,
     proc_address: library::proc_address,
+    device_calls: &d3d9::DEVICE_CALLS,
 };
 
 /// This crate's registered functions, as the `engine` facade takes each engine crate's.
