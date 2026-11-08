@@ -2425,7 +2425,7 @@ pub(super) fn face_check_upload(
         desc.Width,
         desc.Height,
         desc.Format.0,
-        face_check::means(&model),
+        face_check::means(model),
         if read.is_ok() { "ok" } else { "failed" },
         face_check::means(&back),
         back == model,
@@ -2722,10 +2722,156 @@ pub(super) fn face_check_draw(
     ));
 }
 
+/// Test only: a hidden window of the window thread (64 by 64), for a real device; `None` when it
+/// could not be made.
+#[cfg(test)]
+pub(crate) fn test_window() -> Option<isize> {
+    let (reply, answer) = std::sync::mpsc::channel();
+    let sent = window_thread()
+        .lock()
+        .map(|tx| {
+            tx.send(Request {
+                title: b"nv-rs test".to_vec(),
+                style: 0,
+                ex_style: 0,
+                rect: [0, 0, 64, 64],
+                parent: 0,
+                reply,
+            })
+            .is_ok()
+        })
+        .unwrap_or(false);
+    answer.recv().ok().filter(|&w| sent && w != 0)
+}
+
+/// Test only: the 64 by 64 windowed `D3DPRESENT_PARAMETERS` words a test device is made with
+/// (one back buffer, `D3DSWAPEFFECT_DISCARD`).
+#[cfg(test)]
+pub(crate) fn test_present() -> [u32; 14] {
+    let mut p = [0u32; 14];
+    p[0] = 64;
+    p[1] = 64;
+    p[3] = 1;
+    p[6] = 1;
+    p[8] = 1;
+    p
+}
+
+/// Test only: a real device on a hidden window of the window thread (`behavior`: the creation
+/// flags, the game's are 0x54, with `D3DCREATE_FPU_PRESERVE` as the backend adds), made the real
+/// counterpart of the modelled device `at` through the engine's stream (a direct one, made here
+/// when the engine has none); `None` where Direct3D 9 has no device (no display adapter, as on
+/// CI).
+#[cfg(test)]
+pub(crate) fn test_real_device(e: &mut Engine, at: u32, behavior: u32) -> Option<IDirect3DDevice9> {
+    test_real_device_on(e, at, behavior, false)
+}
+
+/// Test only: [`test_real_device`], the backend on the render thread with `threaded`.
+#[cfg(test)]
+pub(crate) fn test_real_device_on(
+    e: &mut Engine,
+    at: u32,
+    behavior: u32,
+    threaded: bool,
+) -> Option<IDirect3DDevice9> {
+    let window = test_window()?;
+    if real(e).stream.is_none() {
+        let backend =
+            std::sync::Arc::new(std::sync::Mutex::new(super::d3d9backend::RealBackend::new()));
+        let shared = Box::new(SharedBackend(std::sync::Arc::clone(&backend)));
+        real(e).stream = Some(if threaded {
+            Stream::threaded(shared, d3d9_stream::Settings::default())
+        } else {
+            Stream::direct(shared)
+        });
+        real(e).test_backend = Some(backend);
+    }
+    let present = test_present();
+    let reply = call(
+        e,
+        Cmd::CreateDevice {
+            device: at,
+            focus: window,
+            window,
+            behavior,
+            present: Data::from_words(&present),
+            back_buffers: Data::from_words(&[]),
+            depth_stencil: 0,
+        },
+    );
+    let Some(Reply::Device {
+        created: true,
+        native,
+    }) = reply
+    else {
+        return None;
+    };
+    let device = native?
+        .0
+        .downcast::<super::d3d9backend::SharedDevice>()
+        .ok()?
+        .0;
+    real(e).devices.push((at, Some(device.clone())));
+    Some(device)
+}
+
+/// Test only: `backend` as the engine's forwarding (carried out at once, or on a render thread
+/// with `threaded`), with the modelled `devices` and `objects` given counterparts there (the
+/// stand-ins of `d3d9backend::stub`).
+#[cfg(test)]
+pub(crate) fn test_forwarding(
+    e: &mut Engine,
+    backend: Box<dyn d3d9_stream::Backend>,
+    threaded: bool,
+    devices: &[u32],
+    objects: &[u32],
+) {
+    let r = real(e);
+    r.stream = Some(if threaded {
+        Stream::threaded(backend, d3d9_stream::Settings::default())
+    } else {
+        Stream::direct(backend)
+    });
+    r.devices = devices.iter().map(|&d| (d, None)).collect();
+    r.forwarded = objects.iter().copied().collect();
+}
+
+/// Test only: returns once every command recorded is carried out (the render thread's too).
+#[cfg(test)]
+pub(crate) fn test_finish(e: &mut Engine) {
+    if let Some(s) = real(e).stream.as_mut() {
+        s.finish();
+    }
+}
+
+/// Test only: a backend shared with the test, which looks at it afterwards (its stand-ins' log,
+/// its real objects).
+#[cfg(test)]
+pub(crate) struct SharedBackend(
+    pub(crate) std::sync::Arc<std::sync::Mutex<super::d3d9backend::RealBackend>>,
+);
+
+#[cfg(test)]
+impl d3d9_stream::Backend for SharedBackend {
+    fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+        self.0.lock().unwrap().execute(cmd)
+    }
+}
+
+/// Test only: the real counterpart of the modelled texture or cube texture `texture`, after
+/// [`test_real_device`].
+#[cfg(test)]
+pub(crate) fn real_texture(e: &mut Engine, texture: u32) -> Option<IDirect3DBaseTexture9> {
+    test_finish(e);
+    let backend = real(e).test_backend.clone()?;
+    let b = backend.lock().unwrap();
+    b.test_texture(texture)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     /// An F12 report's `log-start.txt`: the log's first bytes, cut back to a whole line.
     #[test]
@@ -2943,151 +3089,4 @@ mod tests {
             per_run(1000, || set_light(&mut e, device, 0, block, 0)),
         );
     }
-}
-
-/// Test only: a hidden window of the window thread (64 by 64), for a real device; `None` when it
-/// could not be made.
-#[cfg(test)]
-pub(crate) fn test_window() -> Option<isize> {
-    let (reply, answer) = std::sync::mpsc::channel();
-    let sent = window_thread()
-        .lock()
-        .map(|tx| {
-            tx.send(Request {
-                title: b"nv-rs test".to_vec(),
-                style: 0,
-                ex_style: 0,
-                rect: [0, 0, 64, 64],
-                parent: 0,
-                reply,
-            })
-            .is_ok()
-        })
-        .unwrap_or(false);
-    answer.recv().ok().filter(|&w| sent && w != 0)
-}
-
-/// Test only: the 64 by 64 windowed `D3DPRESENT_PARAMETERS` words a test device is made with
-/// (one back buffer, `D3DSWAPEFFECT_DISCARD`).
-#[cfg(test)]
-pub(crate) fn test_present() -> [u32; 14] {
-    let mut p = [0u32; 14];
-    p[0] = 64;
-    p[1] = 64;
-    p[3] = 1;
-    p[6] = 1;
-    p[8] = 1;
-    p
-}
-
-/// Test only: a real device on a hidden window of the window thread (`behavior`: the creation
-/// flags, the game's are 0x54, with `D3DCREATE_FPU_PRESERVE` as the backend adds), made the real
-/// counterpart of the modelled device `at` through the engine's stream (a direct one, made here
-/// when the engine has none); `None` where Direct3D 9 has no device (no display adapter, as on
-/// CI).
-#[cfg(test)]
-pub(crate) fn test_real_device(e: &mut Engine, at: u32, behavior: u32) -> Option<IDirect3DDevice9> {
-    test_real_device_on(e, at, behavior, false)
-}
-
-/// Test only: [`test_real_device`], the backend on the render thread with `threaded`.
-#[cfg(test)]
-pub(crate) fn test_real_device_on(
-    e: &mut Engine,
-    at: u32,
-    behavior: u32,
-    threaded: bool,
-) -> Option<IDirect3DDevice9> {
-    let window = test_window()?;
-    if real(e).stream.is_none() {
-        let backend =
-            std::sync::Arc::new(std::sync::Mutex::new(super::d3d9backend::RealBackend::new()));
-        let shared = Box::new(SharedBackend(std::sync::Arc::clone(&backend)));
-        real(e).stream = Some(if threaded {
-            Stream::threaded(shared, d3d9_stream::Settings::default())
-        } else {
-            Stream::direct(shared)
-        });
-        real(e).test_backend = Some(backend);
-    }
-    let present = test_present();
-    let reply = call(
-        e,
-        Cmd::CreateDevice {
-            device: at,
-            focus: window,
-            window,
-            behavior,
-            present: Data::from_words(&present),
-            back_buffers: Data::from_words(&[]),
-            depth_stencil: 0,
-        },
-    );
-    let Some(Reply::Device {
-        created: true,
-        native,
-    }) = reply
-    else {
-        return None;
-    };
-    let device = native?
-        .0
-        .downcast::<super::d3d9backend::SharedDevice>()
-        .ok()?
-        .0;
-    real(e).devices.push((at, Some(device.clone())));
-    Some(device)
-}
-
-/// Test only: `backend` as the engine's forwarding (carried out at once, or on a render thread
-/// with `threaded`), with the modelled `devices` and `objects` given counterparts there (the
-/// stand-ins of `d3d9backend::stub`).
-#[cfg(test)]
-pub(crate) fn test_forwarding(
-    e: &mut Engine,
-    backend: Box<dyn d3d9_stream::Backend>,
-    threaded: bool,
-    devices: &[u32],
-    objects: &[u32],
-) {
-    let r = real(e);
-    r.stream = Some(if threaded {
-        Stream::threaded(backend, d3d9_stream::Settings::default())
-    } else {
-        Stream::direct(backend)
-    });
-    r.devices = devices.iter().map(|&d| (d, None)).collect();
-    r.forwarded = objects.iter().copied().collect();
-}
-
-/// Test only: returns once every command recorded is carried out (the render thread's too).
-#[cfg(test)]
-pub(crate) fn test_finish(e: &mut Engine) {
-    if let Some(s) = real(e).stream.as_mut() {
-        s.finish();
-    }
-}
-
-/// Test only: a backend shared with the test, which looks at it afterwards (its stand-ins' log,
-/// its real objects).
-#[cfg(test)]
-pub(crate) struct SharedBackend(
-    pub(crate) std::sync::Arc<std::sync::Mutex<super::d3d9backend::RealBackend>>,
-);
-
-#[cfg(test)]
-impl d3d9_stream::Backend for SharedBackend {
-    fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
-        self.0.lock().unwrap().execute(cmd)
-    }
-}
-
-/// Test only: the real counterpart of the modelled texture or cube texture `texture`, after
-/// [`test_real_device`].
-#[cfg(test)]
-pub(crate) fn real_texture(e: &mut Engine, texture: u32) -> Option<IDirect3DBaseTexture9> {
-    test_finish(e);
-    let backend = real(e).test_backend.clone()?;
-    let b = backend.lock().unwrap();
-    b.test_texture(texture)
 }

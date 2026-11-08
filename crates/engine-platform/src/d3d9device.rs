@@ -506,13 +506,6 @@ pub(crate) fn set_texture_store(e: &mut Engine, store: Store) {
     state!(e).graphics.device_objects.texture_store = Some(store);
 }
 
-impl Objects {
-    /// The addresses of the devices that exist.
-    pub(crate) fn device_addresses(&self) -> impl Iterator<Item = u32> + '_ {
-        self.devices.keys().copied()
-    }
-}
-
 fn vtable(e: &mut Engine, base: u32, slots: usize) -> u32 {
     let table = e.mem.alloc(4 * slots as u32);
     for i in 0..slots as u32 {
