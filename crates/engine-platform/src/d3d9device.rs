@@ -5115,9 +5115,9 @@ pub(crate) mod tests {
         let shared = std::sync::Arc::new(std::sync::Mutex::new(b));
         super::super::d3d9real::test_forwarding(
             &mut s.e,
-            Box::new(super::super::d3d9real::SharedBackend(std::sync::Arc::clone(
-                &shared,
-            ))),
+            Box::new(super::super::d3d9real::SharedBackend(
+                std::sync::Arc::clone(&shared),
+            )),
             threaded,
             &[s.device],
             &objects,
@@ -5926,11 +5926,24 @@ pub(crate) mod tests {
     #[cfg(windows)]
     #[test]
     fn real_levels_keep_the_bytes_of_managed_textures() {
+        real_levels_keep_the_bytes(false);
+    }
+
+    /// [`real_levels_keep_the_bytes_of_managed_textures`] with the real device on the render
+    /// thread: the reads wait for the uploads before them.
+    #[cfg(windows)]
+    #[test]
+    fn real_levels_keep_the_bytes_of_managed_textures_from_the_render_thread() {
+        real_levels_keep_the_bytes(true);
+    }
+
+    #[cfg(windows)]
+    fn real_levels_keep_the_bytes(threaded: bool) {
         let extra = "\nDomain\td2\t15,31545844\nCheckDeviceFormat\t0 1 16 0 3\t0\t\td2\
                      \nCheckDeviceFormat\t0 1 16 0 5\t0\t\td2";
         let (mut e, device) = device_with(extra, 0x54);
         set_texture_store(&mut e, Store::Host);
-        if super::super::d3d9real::test_real_device(&mut e, device, 0x54).is_none() {
+        if super::super::d3d9real::test_real_device_on(&mut e, device, 0x54, threaded).is_none() {
             return;
         }
         let texture = new_texture(&mut e, device, [64, 32, 0, 0, A8R8G8B8, 1]);
@@ -6268,9 +6281,21 @@ pub(crate) mod tests {
     #[cfg(windows)]
     #[test]
     fn static_buffers_on_a_real_device_keep_their_bytes_in_host_memory() {
+        static_buffers_keep_their_bytes(false);
+    }
+
+    /// The same with the real device on the render thread.
+    #[cfg(windows)]
+    #[test]
+    fn static_buffers_on_a_real_device_keep_their_bytes_from_the_render_thread() {
+        static_buffers_keep_their_bytes(true);
+    }
+
+    #[cfg(windows)]
+    fn static_buffers_keep_their_bytes(threaded: bool) {
         let (mut e, device) = device_with("", 0x54);
         set_buffer_store(&mut e, Store::Host);
-        if super::super::d3d9real::test_real_device(&mut e, device, 0x54).is_none() {
+        if super::super::d3d9real::test_real_device_on(&mut e, device, 0x54, threaded).is_none() {
             return;
         }
         for index in [false, true] {

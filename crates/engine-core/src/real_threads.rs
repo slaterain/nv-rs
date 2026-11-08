@@ -40,7 +40,12 @@
 //! its Direct3D device with `D3DCREATE_MULTITHREADED` (behaviour flags 0x54, `d3dxreal.rs`'s
 //! `GAME_BEHAVIOR`), so the device itself serialises calls too; the lock keeps the platform's own
 //! bookkeeping right. Pure functions are left outside it: the clock imports and D3DX's matrix,
-//! vector and plane maths.
+//! vector and plane maths. The Direct3D 9 device and its objects (the layer's `device_calls`,
+//! about 7,000 calls a frame) take a lock of their own instead, the device lock
+//! ([`device_call`]); kernel-locked code that reaches the device's state takes it inside the
+//! kernel lock ([`device_guard`]). **Lock order: the kernel lock, then the device lock; never the
+//! kernel lock while the device lock is held.** Device functions touch no kernel object and no
+//! last-error code, so they never need the kernel lock.
 //!
 //! **The host (step 9).** [`start`] turns real threads on for an engine before the game's `main`
 //! runs; from then on `CreateThread` starts a real OS thread at once (or at `ResumeThread` to 0).

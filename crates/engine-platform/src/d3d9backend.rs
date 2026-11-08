@@ -65,7 +65,7 @@ pub struct RealBackend {
     /// bytes last uploaded, for `ReadSurface`.
     kept: engine_core::AddrMap<u32, Vec<u8>>,
     /// The differences already printed: (call, model's answer, real answer).
-    logged: HashSet<(&'static str, u32, u32)>,
+    pub(crate) logged: HashSet<(&'static str, u32, u32)>,
 }
 
 // SAFETY: the real objects are free-threaded COM objects of a `D3DCREATE_MULTITHREADED` device;
@@ -202,7 +202,10 @@ impl RealBackend {
     fn insert(&mut self, at: u32, object: Object) {
         if let Object::Device(d) = &object {
             // SAFETY: as in `device`; the copy goes when the entry does (here and in `destroy`).
-            self.device = Some((at, ManuallyDrop::new(unsafe { std::mem::transmute_copy(d) })));
+            self.device = Some((
+                at,
+                ManuallyDrop::new(unsafe { std::mem::transmute_copy(d) }),
+            ));
         } else if self.device.as_ref().is_some_and(|(d, _)| *d == at) {
             self.device = None;
         }
@@ -852,9 +855,8 @@ impl RealBackend {
                     },
                     Some(Object::Declaration(v)) => unsafe { d.SetVertexDeclaration(v) },
                     _ => {
-                        let _ = unsafe {
-                            d.SetVertexDeclaration(None::<&IDirect3DVertexDeclaration9>)
-                        };
+                        let _ =
+                            unsafe { d.SetVertexDeclaration(None::<&IDirect3DVertexDeclaration9>) };
                         return self.broken(
                             device,
                             DECLARATION,
@@ -1503,9 +1505,7 @@ mod tests {
         assert_eq!(raw(b.device(DEVICE + 8)), table(&b, DEVICE + 8));
         assert_eq!(raw(b.device(DEVICE)), table(&b, DEVICE));
         // Destroyed: none, and none kept.
-        b.execute(Cmd::Destroy {
-            object: DEVICE + 8,
-        });
+        b.execute(Cmd::Destroy { object: DEVICE + 8 });
         assert_eq!(raw(b.device(DEVICE + 8)), None);
         assert!(b.device.is_none());
         assert_eq!(raw(b.device(DEVICE)), table(&b, DEVICE));
@@ -1757,7 +1757,9 @@ pub(crate) mod stub {
         OK
     }
     unsafe extern "system" fn set_material(this: *mut c_void, m: *const D3DMATERIAL9) -> HRESULT {
-        note(this, || format!("SetMaterial([{}])", data(m as *const u32, 17, |w| w)));
+        note(this, || {
+            format!("SetMaterial([{}])", data(m as *const u32, 17, |w| w))
+        });
         OK
     }
     unsafe extern "system" fn set_light(
@@ -1765,7 +1767,9 @@ pub(crate) mod stub {
         index: u32,
         l: *const D3DLIGHT9,
     ) -> HRESULT {
-        note(this, || format!("SetLight({index}, [{}])", data(l as *const u32, 26, |w| w)));
+        note(this, || {
+            format!("SetLight({index}, [{}])", data(l as *const u32, 26, |w| w))
+        });
         OK
     }
     unsafe extern "system" fn draw_primitive_up(
@@ -1805,7 +1809,9 @@ pub(crate) mod stub {
         kind: D3DTEXTURESTAGESTATETYPE,
         value: u32,
     ) -> HRESULT {
-        note(this, || format!("SetTextureStageState({stage}, {}, {value:#x})", kind.0));
+        note(this, || {
+            format!("SetTextureStageState({stage}, {}, {value:#x})", kind.0)
+        });
         OK
     }
     unsafe extern "system" fn set_sampler_state(
@@ -1814,7 +1820,9 @@ pub(crate) mod stub {
         kind: D3DSAMPLERSTATETYPE,
         value: u32,
     ) -> HRESULT {
-        note(this, || format!("SetSamplerState({sampler}, {}, {value:#x})", kind.0));
+        note(this, || {
+            format!("SetSamplerState({sampler}, {}, {value:#x})", kind.0)
+        });
         OK
     }
     unsafe extern "system" fn draw_primitive(
@@ -1823,7 +1831,9 @@ pub(crate) mod stub {
         start: u32,
         count: u32,
     ) -> HRESULT {
-        note(this, || format!("DrawPrimitive({}, {start}, {count})", kind.0));
+        note(this, || {
+            format!("DrawPrimitive({}, {start}, {count})", kind.0)
+        });
         OK
     }
     unsafe extern "system" fn draw_indexed_primitive(
@@ -1843,10 +1853,7 @@ pub(crate) mod stub {
         });
         OK
     }
-    unsafe extern "system" fn set_vertex_declaration(
-        this: *mut c_void,
-        d: *mut c_void,
-    ) -> HRESULT {
+    unsafe extern "system" fn set_vertex_declaration(this: *mut c_void, d: *mut c_void) -> HRESULT {
         note(this, || format!("SetVertexDeclaration({})", id(d)));
         OK
     }
@@ -1896,7 +1903,9 @@ pub(crate) mod stub {
         offset: u32,
         stride: u32,
     ) -> HRESULT {
-        note(this, || format!("SetStreamSource({stream}, {}, {offset}, {stride})", id(b)));
+        note(this, || {
+            format!("SetStreamSource({stream}, {}, {offset}, {stride})", id(b))
+        });
         OK
     }
     unsafe extern "system" fn set_indices(this: *mut c_void, b: *mut c_void) -> HRESULT {

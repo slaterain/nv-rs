@@ -87,6 +87,22 @@ impl std::fmt::Debug for Real {
     }
 }
 
+impl Real {
+    /// Tests: whether no answer of the real device has differed from the model's, once every
+    /// command recorded is carried out.
+    #[cfg(test)]
+    pub(crate) fn logged_is_empty(&mut self) -> bool {
+        if let Some(s) = self.stream.as_mut() {
+            s.finish();
+        }
+        self.logged.is_empty()
+            && self
+                .test_backend
+                .as_ref()
+                .map_or(true, |b| b.lock().unwrap().logged.is_empty())
+    }
+}
+
 fn real(e: &mut Engine) -> &mut Real {
     &mut state!(e).graphics.real
 }
@@ -749,10 +765,7 @@ pub fn direct3d_created(e: &mut Engine) {
     };
     if let Some(path) = std::env::var_os("NV_D3D9_RECORD") {
         let recording = std::fs::File::create(&path).and_then(|file| {
-            stream.record_to(Box::new(std::io::BufWriter::with_capacity(
-                1 << 20,
-                file,
-            )))
+            stream.record_to(Box::new(std::io::BufWriter::with_capacity(1 << 20, file)))
         });
         match recording {
             Ok(()) => eprintln!(
@@ -882,11 +895,25 @@ pub fn device_reset(
 }
 
 pub fn begin_scene(e: &mut Engine, this: u32, model: u32) {
-    record(e, this, Cmd::BeginScene { device: this, model });
+    record(
+        e,
+        this,
+        Cmd::BeginScene {
+            device: this,
+            model,
+        },
+    );
 }
 
 pub fn end_scene(e: &mut Engine, this: u32, model: u32) {
-    record(e, this, Cmd::EndScene { device: this, model });
+    record(
+        e,
+        this,
+        Cmd::EndScene {
+            device: this,
+            model,
+        },
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1274,7 +1301,14 @@ pub fn read_surface(e: &mut Engine, surface: u32, at: u32, size: u32) -> bool {
 
 /// Fills `into` with the bytes from `offset` of `rows` rows of `row` bytes lying `pitch` apart
 /// at `bits` (as if packed).
-fn read_rows(mem: &engine_core::Mem, bits: u32, pitch: u32, row: u32, offset: u32, into: &mut [u8]) {
+fn read_rows(
+    mem: &engine_core::Mem,
+    bits: u32,
+    pitch: u32,
+    row: u32,
+    offset: u32,
+    into: &mut [u8],
+) {
     if pitch == row || row == 0 {
         mem.read(bits + offset, into);
         return;
@@ -1488,8 +1522,13 @@ pub fn set_constants(
     let Some(s) = stream_of(&mut g.real, this) else {
         return;
     };
-    let registers =
-        super::d3d9resource::constant_registers(&g.device_objects.resources, this, kind, start, count);
+    let registers = super::d3d9resource::constant_registers(
+        &g.device_objects.resources,
+        this,
+        kind,
+        start,
+        count,
+    );
     let Some(registers) = registers else {
         return set_constants_as_given(mem, s, this, kind, start, data, count);
     };
@@ -2683,7 +2722,6 @@ pub(super) fn face_check_draw(
     ));
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2949,14 +2987,27 @@ pub(crate) fn test_present() -> [u32; 14] {
 /// CI).
 #[cfg(test)]
 pub(crate) fn test_real_device(e: &mut Engine, at: u32, behavior: u32) -> Option<IDirect3DDevice9> {
+    test_real_device_on(e, at, behavior, false)
+}
+
+/// Test only: [`test_real_device`], the backend on the render thread with `threaded`.
+#[cfg(test)]
+pub(crate) fn test_real_device_on(
+    e: &mut Engine,
+    at: u32,
+    behavior: u32,
+    threaded: bool,
+) -> Option<IDirect3DDevice9> {
     let window = test_window()?;
     if real(e).stream.is_none() {
-        let backend = std::sync::Arc::new(std::sync::Mutex::new(
-            super::d3d9backend::RealBackend::new(),
-        ));
-        real(e).stream = Some(Stream::direct(Box::new(SharedBackend(
-            std::sync::Arc::clone(&backend),
-        ))));
+        let backend =
+            std::sync::Arc::new(std::sync::Mutex::new(super::d3d9backend::RealBackend::new()));
+        let shared = Box::new(SharedBackend(std::sync::Arc::clone(&backend)));
+        real(e).stream = Some(if threaded {
+            Stream::threaded(shared, d3d9_stream::Settings::default())
+        } else {
+            Stream::direct(shared)
+        });
         real(e).test_backend = Some(backend);
     }
     let present = test_present();
