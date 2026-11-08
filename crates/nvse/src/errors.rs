@@ -129,7 +129,10 @@ pub fn show(e: &mut Engine, script: u32, message: &str) {
         message.as_bytes(),
     );
     if !inside {
-        e.ext::<Nvse>().events.in_error_event.retain(|&t| t != thread);
+        e.ext::<Nvse>()
+            .events
+            .in_error_event
+            .retain(|&t| t != thread);
     }
 }
 

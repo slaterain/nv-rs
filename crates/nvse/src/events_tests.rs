@@ -995,9 +995,13 @@ fn the_error_guard_is_per_thread() {
     scripts(&mut e, &[(1, 2)]);
     set_error_guard(&mut e, true);
     set_handler(&mut e, b"RuntimeScriptError", Callback::new(FN_A), 1, None);
-    let other = engine_core::thread_host::current_id(&mut e).wrapping_add(1);
+    let other = engine_core::thread_host::current_id(&e).wrapping_add(1);
     state(&mut e).in_error_event.push(other);
     crate::errors::show(&mut e, FN_B, "outer");
-    assert_eq!(e.mem.u32(AREA + 0x7ff0), 1, "this thread's error ran its handler");
+    assert_eq!(
+        e.mem.u32(AREA + 0x7ff0),
+        1,
+        "this thread's error ran its handler"
+    );
     assert_eq!(state(&mut e).in_error_event, [other]);
 }

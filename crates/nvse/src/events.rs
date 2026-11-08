@@ -1388,7 +1388,11 @@ pub struct MarkMasks(std::sync::atomic::AtomicU32);
 
 fn publish_mark_masks(e: &mut Engine) {
     let s = state(e);
-    let masks = if s.hooks & HOOK_MAIN != 0 { s.in_use } else { 0 };
+    let masks = if s.hooks & HOOK_MAIN != 0 {
+        s.in_use
+    } else {
+        0
+    };
     e.ext_free::<MarkMasks>()
         .0
         .store(masks, std::sync::atomic::Ordering::Relaxed);
