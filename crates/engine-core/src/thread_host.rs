@@ -1359,8 +1359,15 @@ pub fn finish_main_frame(e: &mut Engine, main: &mut MainThread) -> MainTurn {
     // hands back deferred pages while every game thread is stopped. A game thread that stopped
     // ends the run as main's stop does.
     let mut stopped = None;
+    // `NV_LOCK_STATS` notes the clock with each frame (read only then: a reading carries the
+    // part of a microsecond over to the next).
+    let now = if e.real.is_some() && crate::real_threads::lock_stats_on() {
+        e.clock_now_us()
+    } else {
+        0
+    };
     if let Some(r) = &e.real {
-        stopped = r.frame_ended(&mut e.mem);
+        stopped = r.frame_ended(&mut e.mem, now);
         main.host_holds_kernel = true;
     }
     if let Some(r) = e.mem.race_census() {

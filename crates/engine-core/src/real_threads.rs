@@ -42,8 +42,9 @@
 //! A thread that stops (an untranslated function, a fault) ends the run at main's next frame end,
 //! naming the thread. **Diagnostics force stepped threads** (R6): a trace, a recording, a profile,
 //! the heap census, the touch census, a watch, a per-call hook: [`start`] refuses and the run goes
-//! on stepped. Two run with real threads: the block check (`NV_BLOCK_CHECK`; it sees allocations
-//! and frees, each named with its thread, not stores) and `NV_REAL_DUMP` ([`dump_threads`]).
+//! on stepped. Three run with real threads: the block check (`NV_BLOCK_CHECK`; it sees allocations
+//! and frees, each named with its thread, not stores), `NV_REAL_DUMP` ([`dump_threads`]) and
+//! `NV_LOCK_STATS` (each frame's waits for the locks, [`LockStats`]).
 //!
 //! **Page-table changes.** Mapping pages is safe while other threads run (the page is committed
 //! before the table says so). Handing pages back to the system is not: another thread may be
@@ -130,6 +131,139 @@ thread_local! {
     };
     /// Whether this OS thread is counted as running game code ([`World::enter_guest`]).
     static COUNTED: Cell<bool> = const { Cell::new(false) };
+    /// This OS thread runs a game thread other than main ([`run_thread`]); [`LockStats`] counts
+    /// its waits apart from main's (and the host's).
+    static GAME_THREAD: Cell<bool> = const { Cell::new(false) };
+}
+
+/// [`LockStats`]' row for this OS thread: 0 the main thread (or the host's), 1 another game thread.
+fn role() -> usize {
+    usize::from(GAME_THREAD.with(Cell::get))
+}
+
+/// One kind of wait in [`LockStats`]: the time, how many and the longest, since the last frame.
+#[derive(Default)]
+struct WaitSum {
+    ns: AtomicU64,
+    count: AtomicU64,
+    max_ns: AtomicU64,
+}
+
+impl WaitSum {
+    fn add(&self, d: Duration) {
+        let ns = d.as_nanos().min(u128::from(u64::MAX)) as u64;
+        self.ns.fetch_add(ns, Ordering::Relaxed);
+        self.count.fetch_add(1, Ordering::Relaxed);
+        self.max_ns.fetch_max(ns, Ordering::Relaxed);
+    }
+
+    /// The sums since the last take, in microseconds (time, count, longest), and a new start.
+    fn take(&self) -> (u64, u64, u64) {
+        (
+            self.ns.swap(0, Ordering::Relaxed) / 1000,
+            self.count.swap(0, Ordering::Relaxed),
+            self.max_ns.swap(0, Ordering::Relaxed) / 1000,
+        )
+    }
+}
+
+/// `NV_LOCK_STATS=FILE` (a diagnostic of real threads): per main frame, how long the main thread
+/// and the other game threads waited for the kernel lock, for critical sections (all behind one
+/// table and one condition variable), for kernel objects (events, semaphores, threads) and in
+/// sleeps; how many section leaves woke waiters and how many of those waiters found the section
+/// still held; and how long the host held the kernel lock between frames. One line a frame
+/// ([`Ctx::frame_ended`]), in microseconds.
+struct LockStats {
+    kernel: [WaitSum; 2],
+    section: [WaitSum; 2],
+    object: [WaitSum; 2],
+    sleep: [WaitSum; 2],
+    notifies: AtomicU64,
+    spurious: AtomicU64,
+    host_hold: WaitSum,
+    host_since: Mutex<Option<std::time::Instant>>,
+    out: Mutex<std::io::BufWriter<std::fs::File>>,
+    frames: AtomicU64,
+}
+
+/// Whether `NV_LOCK_STATS` is on ([`LockStats`]).
+pub(crate) fn lock_stats_on() -> bool {
+    lock_stats().is_some()
+}
+
+/// [`LockStats`] when `NV_LOCK_STATS` names a file that could be made; read once.
+fn lock_stats() -> Option<&'static LockStats> {
+    static STATS: std::sync::OnceLock<Option<LockStats>> = std::sync::OnceLock::new();
+    STATS
+        .get_or_init(|| {
+            let path = std::env::var_os("NV_LOCK_STATS")?;
+            let file = std::fs::File::create(&path)
+                .map_err(|why| eprintln!("NV_LOCK_STATS: {}: {why}", path.to_string_lossy()))
+                .ok()?;
+            let mut out = std::io::BufWriter::new(file);
+            use std::io::Write;
+            let _ = writeln!(
+                out,
+                "frame\tclock_us\tmain_kernel_us\tmain_kernel_n\tmain_kernel_max_us\tgame_kernel_us\t\
+                 game_kernel_n\tgame_kernel_max_us\tmain_section_us\tmain_section_n\t\
+                 main_section_max_us\tgame_section_us\tgame_section_n\tgame_section_max_us\t\
+                 main_object_us\tmain_object_n\tmain_object_max_us\tgame_object_us\t\
+                 game_object_n\tgame_object_max_us\tmain_sleep_us\tmain_sleep_n\tgame_sleep_us\t\
+                 game_sleep_n\tsection_notifies\tsection_spurious\thost_hold_us"
+            );
+            Some(LockStats {
+                kernel: Default::default(),
+                section: Default::default(),
+                object: Default::default(),
+                sleep: Default::default(),
+                notifies: AtomicU64::new(0),
+                spurious: AtomicU64::new(0),
+                host_hold: WaitSum::default(),
+                host_since: Mutex::new(None),
+                out: Mutex::new(out),
+                frames: AtomicU64::new(0),
+            })
+        })
+        .as_ref()
+}
+
+impl LockStats {
+    /// Main's frame ended (the host took the kernel lock): the frame's line, and the hold starts.
+    fn frame_ended(&self, clock_us: u64) {
+        use std::io::Write;
+        let frame = self.frames.fetch_add(1, Ordering::Relaxed) + 1;
+        let mut line = format!("{frame}\t{clock_us}");
+        for sums in [&self.kernel, &self.section, &self.object] {
+            for s in sums {
+                let (us, n, max) = s.take();
+                line.push_str(&format!("\t{us}\t{n}\t{max}"));
+            }
+        }
+        for s in &self.sleep {
+            let (us, n, _) = s.take();
+            line.push_str(&format!("\t{us}\t{n}"));
+        }
+        let (hold, _, _) = self.host_hold.take();
+        line.push_str(&format!(
+            "\t{}\t{}\t{hold}",
+            self.notifies.swap(0, Ordering::Relaxed),
+            self.spurious.swap(0, Ordering::Relaxed)
+        ));
+        let mut out = guard(&self.out);
+        let _ = writeln!(out, "{line}");
+        if frame % 60 == 0 {
+            let _ = out.flush();
+        }
+        drop(out);
+        *guard(&self.host_since) = Some(std::time::Instant::now());
+    }
+
+    /// The host gives the kernel lock back for main's next frame.
+    fn frame_begins(&self) {
+        if let Some(t) = guard(&self.host_since).take() {
+            self.host_hold.add(t.elapsed());
+        }
+    }
 }
 
 fn token() -> u64 {
@@ -193,9 +327,18 @@ impl KernelLock {
         self.depth.store(1, Ordering::Relaxed);
     }
 
-    /// Waits until it is free and takes it (not held by this thread).
+    /// Waits until it is free and takes it (not held by this thread). With `NV_LOCK_STATS` the
+    /// wait is counted ([`LockStats`]).
     #[cold]
     fn acquire(&self, me: u64) {
+        let started = lock_stats().map(|_| std::time::Instant::now());
+        self.acquire_here(me);
+        if let (Some(s), Some(t)) = (lock_stats(), started) {
+            s.kernel[role()].add(t.elapsed());
+        }
+    }
+
+    fn acquire_here(&self, me: u64) {
         for _ in 0..64 {
             std::hint::spin_loop();
             if self.owner.load(Ordering::Relaxed) == 0
@@ -547,6 +690,9 @@ impl Ctx {
     /// The host hands a frame to main (`thread_host::begin_main_frame`): the kernel lock it took
     /// at the last frame's end goes back.
     pub(crate) fn frame_begins(&self, host_holds: bool) {
+        if let Some(s) = lock_stats() {
+            s.frame_begins();
+        }
         if host_holds {
             self.world.kernel.unlock();
         }
@@ -559,9 +705,12 @@ impl Ctx {
     /// Main's frame ended (`thread_host::finish_main_frame`, on the host's thread): the host takes
     /// the kernel lock while it has the engine, and hands deferred pages back at a barrier when
     /// enough wait. Answers a game thread's stop, if one stopped.
-    pub(crate) fn frame_ended(&self, mem: &mut crate::Mem) -> Option<String> {
+    pub(crate) fn frame_ended(&self, mem: &mut crate::Mem, clock_us: u64) -> Option<String> {
         let w = self.world;
         w.kernel.lock(w);
+        if let Some(s) = lock_stats() {
+            s.frame_ended(clock_us);
+        }
         if mem.deferred_pages() >= HAND_BACK_AT {
             w.barrier(|| mem.hand_back_deferred());
         }
@@ -717,6 +866,7 @@ struct ThreadExit(u32);
 /// host's list.
 fn run_thread(engine: SendEngine, world: &'static World, i: usize, start: u32, parameter: u32) {
     let mut e = engine.0;
+    GAME_THREAD.with(|g| g.set(true));
     // What was registered since the template was made, replacements included (a call finds only
     // a missing function by itself).
     sync_registered(&mut e);
@@ -1055,6 +1205,8 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
     // The main thread ends the run when a game thread stopped (it may have stopped holding this
     // section, which then never comes free): the stop wakes the section's waiters.
     let mut stop = None;
+    let started = lock_stats().map(|_| std::time::Instant::now());
+    let mut woken = false;
     loop {
         let s = table.entry(section.addr()).or_default();
         if s.owner == 0 {
@@ -1062,6 +1214,12 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
             s.count = 1;
             break;
         }
+        if woken {
+            if let Some(stats) = lock_stats() {
+                stats.spurious.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        woken = true;
         if me == MAIN_THREAD_ID {
             stop = guard(&w.stopped).clone();
             if stop.is_some() {
@@ -1072,6 +1230,9 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
     }
     w.section_waiters.fetch_sub(1, Ordering::SeqCst);
     drop(table);
+    if let (Some(stats), Some(t)) = (lock_stats(), started) {
+        stats.section[role()].add(t.elapsed());
+    }
     if was {
         w.enter_guest();
     }
@@ -1094,6 +1255,9 @@ fn leave_critical_section(e: &mut Engine, section: Ptr) {
             if s.count == 0 {
                 s.owner = 0;
                 if w.section_waiters.load(Ordering::SeqCst) > 0 {
+                    if let Some(stats) = lock_stats() {
+                        stats.notifies.fetch_add(1, Ordering::Relaxed);
+                    }
                     w.section_freed.notify_all();
                 }
             }
@@ -1205,6 +1369,14 @@ fn main_stop_check(e: &Engine) {
 }
 
 fn real_sleep(w: &World, ms: u32) {
+    let started = lock_stats().map(|_| std::time::Instant::now());
+    real_sleep_here(w, ms);
+    if let (Some(stats), Some(t)) = (lock_stats(), started) {
+        stats.sleep[role()].add(t.elapsed());
+    }
+}
+
+fn real_sleep_here(w: &World, ms: u32) {
     w.safe_point();
     let held = w.kernel.release_all();
     let was = w.leave_guest();
@@ -1244,6 +1416,7 @@ impl ThreadHost for Real {
             }
         };
         let mut waiting = false;
+        let mut started = None;
         let ready = loop {
             park_if_suspended(e);
             if ready(e) {
@@ -1260,6 +1433,7 @@ impl ThreadHost for Real {
             }
             if !waiting {
                 waiting = true;
+                started = lock_stats().map(|_| std::time::Instant::now());
                 note_state(e, || {
                     let list: Vec<String> = handles.iter().map(|h| format!("{h:x}")).collect();
                     format!(
@@ -1279,6 +1453,9 @@ impl ThreadHost for Real {
             let timeout = deadline.map(|d| Duration::from_micros(d - now));
             w.kernel.wait_change(w, timeout);
         };
+        if let (Some(stats), Some(t)) = (lock_stats(), started) {
+            stats.object[role()].add(t.elapsed());
+        }
         if waiting {
             note_state(e, String::new);
             if let Some(t) = e.kernel.threads.list.get_mut(i) {
@@ -1912,6 +2089,16 @@ mod tests {
             text.contains("open function 00409990") && text.contains("in game thread 2"),
             "{text}"
         );
+    }
+
+    /// `NV_LOCK_STATS`' sums: time, count and longest since the last take, then a new start.
+    #[test]
+    fn wait_sums_add_up_and_start_again() {
+        let s = WaitSum::default();
+        s.add(Duration::from_micros(30));
+        s.add(Duration::from_micros(500));
+        assert_eq!(s.take(), (530, 2, 500));
+        assert_eq!(s.take(), (0, 0, 0));
     }
 
     /// A thread the game made before real threads started, not run yet, starts real with them.

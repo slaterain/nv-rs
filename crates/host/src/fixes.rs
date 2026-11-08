@@ -278,6 +278,8 @@ const TEST_VARIABLES: &[&str] = &[
     "NV_SHOT",
     "NV_TICK_COUNT",
     "NV_FRAME_LOG",
+    "NV_LOCK_STATS",
+    "NV_REAL_DUMP",
     "NV_PHYS_BLEND_LOG",
     "NV_BENCH_CALLS",
     "NV_BENCH_CALL_COUNTS",

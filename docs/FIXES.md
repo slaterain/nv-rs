@@ -39,6 +39,11 @@ without a per-call cost, so the frame rate stays the player's. The game's own `i
 (`[General]`, 1 to 199) gives exact frame steps at any wall rate, which is how a recording sees a
 high frame rate's steps: a trace itself holds the game near 30 frames a second.
 
+`NV_LOCK_STATS=FILE` (real threads only) writes a line per main frame with the game clock and how long
+the main thread and the other game threads waited that frame for the kernel lock, for critical
+sections, for events, semaphores and threads, and in sleeps, how often a section leave woke waiters, and
+how long the host held the kernel lock before the frame (joined with `NV_FRAME_LOG` by the clock).
+
 `NV_PHYS_BLEND_LOG=FILE`, with the smooth physics drawing on (say `NV_PRESET=fixes`: the variable pins
 vanilla otherwise), writes per drawn frame each free body's node as the original draws it and as the
 fix draws it, with the drawing time and the world's last step end; `NV_SHOT_FRAMES=FROM-TO` limits
