@@ -774,6 +774,11 @@ impl Ctx {
     /// An object's state changed (under the kernel lock): its waiters look again when it is
     /// released (`thread_host::signal`).
     pub(crate) fn changed(&self) {
+        // Only the holder sets the flag, which is what lets the release read it plainly.
+        debug_assert!(
+            self.world.kernel.held_here(),
+            "an object changed without the kernel lock"
+        );
         self.world.kernel.dirty.store(true, Ordering::Relaxed);
     }
 
@@ -1437,7 +1442,17 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
         e.mem.set_u32(count_at, 1);
         return;
     }
-    let spins = (e.mem.u32(a.wrapping_add(0x14)) & 0x00ff_ffff).min(SECTION_SPIN_MAX);
+    // The spin count's low 24 bits, capped; Windows' dynamic-spin flag (`0x02000000`, which
+    // `DEFAULT_SECTION_SPIN` carries) is not followed: Windows tunes the count from how often
+    // spinning paid off, in ntdll code that is not the game's and not documented, so the count it
+    // starts with is kept. No spin while this thread holds the kernel lock (inside a platform
+    // call): it would hold up every other thread's platform calls meanwhile, so it parks at once,
+    // giving the lock back.
+    let spins = if w.kernel.held_here() {
+        0
+    } else {
+        (e.mem.u32(a.wrapping_add(0x14)) & 0x00ff_ffff).min(SECTION_SPIN_MAX)
+    };
     for _ in 0..spins {
         std::hint::spin_loop();
         if take_section(owner, me) {
@@ -1473,6 +1488,10 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
             park_here(e);
         }
         parker.woken.store(false, Ordering::SeqCst);
+        // Ordered before the owner word's load below (a Relaxed load may otherwise be read
+        // before the store): a leave that read `woken` as still set, and so woke another
+        // waiter, freed the section before this fence, and the load sees it free.
+        std::sync::atomic::fence(Ordering::SeqCst);
         if take_section(owner, me) {
             break;
         }
@@ -2858,12 +2877,34 @@ mod tests {
         eprintln!("timed waits racing releases: {short} short waits timed out");
     }
 
+    /// Turns a hang of the main thread into a failure: after `secs`, unless the answered flag is
+    /// set, the world is stopped as a game thread's stop stops it, which ends the main thread's
+    /// waits for a section or an object with that stop (a panic in the test).
+    fn watchdog(world: &'static World, secs: u64) -> std::sync::Arc<AtomicBool> {
+        let done = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = std::sync::Arc::clone(&done);
+        std::thread::spawn(move || {
+            let until = std::time::Instant::now() + Duration::from_secs(secs);
+            while std::time::Instant::now() < until {
+                if flag.load(Ordering::SeqCst) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            guard(&world.stopped)
+                .get_or_insert_with(|| "watchdog: a wait that never ended (a lost wake)".into());
+            world.any_stop.store(true, Ordering::SeqCst);
+            world.wake_all_waiters();
+        });
+        done
+    }
+
     /// Four game threads and the main thread enter and leave one section 20,000 times each,
-    /// adding 1 to a plain word inside it, with a spin count of 1 so most waits park: the sum is
-    /// exact (one holder at a time), and every thread gets through (a leave wakes one waiter, and
-    /// none is left parked while the section is free).
-    #[test]
-    fn a_contended_section_lets_one_in_at_a_time_and_loses_no_waiter() {
+    /// adding 1 to a plain word inside it, the section made with `spin` (`None`: plain
+    /// `InitializeCriticalSection`, Windows' 2000): the sum is exact (one holder at a time), and
+    /// every thread gets through (a leave wakes one waiter, and none is left parked while the
+    /// section is free). The main thread left asleep fails the test through [`watchdog`].
+    fn contended_section(spin: Option<u32>) {
         const EACH: u32 = 20_000;
         /// The block at `a[0]`: +0 the section, +4 `EnterCriticalSection`, +8
         /// `LeaveCriticalSection`, +0xc the word it adds to.
@@ -2885,8 +2926,15 @@ mod tests {
         ctx(&e).frame_begins(false);
         e.register(0x0040_f000, adder);
         let section = e.mem.alloc(0x20);
-        let init = slot("InitializeCriticalSectionAndSpinCount");
-        e.call(init, &args![section, 1u32]);
+        match spin {
+            Some(spin) => {
+                let init = slot("InitializeCriticalSectionAndSpinCount");
+                e.call(init, &args![section, spin]);
+            }
+            None => {
+                e.call(slot("InitializeCriticalSection"), &args![section]);
+            }
+        }
         let word = e.mem.alloc(4);
         let p = e.mem.alloc(0x10);
         let words = [
@@ -2907,6 +2955,7 @@ mod tests {
                 .eax
             })
             .collect();
+        let done = watchdog(ctx(&e).world, 30);
         adder(&mut e, &[p]);
         let wait = slot("WaitForSingleObject");
         for h in handles {
@@ -2916,8 +2965,126 @@ mod tests {
                 "a thread got stuck"
             );
         }
+        done.store(true, Ordering::SeqCst);
         assert_eq!(e.mem.u32(word), 5 * EACH);
         assert_eq!(e.mem.u32(section + 0xc), 0, "the section is free");
+    }
+
+    /// [`contended_section`] with a spin count of 1: most waits park.
+    #[test]
+    fn a_contended_section_lets_one_in_at_a_time_and_loses_no_waiter() {
+        contended_section(Some(1));
+    }
+
+    /// [`contended_section`] with Windows' default spin (2000 tries before parking).
+    #[test]
+    fn a_contended_section_with_the_default_spin_loses_no_waiter() {
+        contended_section(None);
+    }
+
+    /// Rounds of the `WaitForMultipleObjects` stress tests. Their block: +0 and +4 two
+    /// auto-reset events (the handle array), +8 the acknowledgement event, +0xc
+    /// `WaitForMultipleObjects`, +0x10 `SetEvent`, +0x14 `WaitForSingleObject`, +0x18 wait-all
+    /// (1) or wait-any (0); the game thread writes +0x1c rounds done, +0x20 wrong answers, +0x24
+    /// 1 when a wait timed out.
+    const MULTI_ROUNDS: u32 = 20_000;
+
+    /// The game thread of the `WaitForMultipleObjects` stress tests ([`MULTI_ROUNDS`] waits): a
+    /// wait-any must answer the event the main thread set this round (alternately the first and
+    /// the second); a wait-all must have taken both (neither still set after it).
+    fn multi_waiter(e: &mut Engine, a: &[u32]) -> Ret {
+        let p = a[0];
+        let (first, second, ack) = (e.mem.u32(p), e.mem.u32(p + 4), e.mem.u32(p + 8));
+        let (wait_many, set) = (e.mem.u32(p + 0xc), e.mem.u32(p + 0x10));
+        let (wait, all) = (e.mem.u32(p + 0x14), e.mem.u32(p + 0x18));
+        let (mut done, mut wrong) = (0, 0);
+        for round in 0..MULTI_ROUNDS {
+            let got = e
+                .call(wait_many, &args![2u32, p, all, STRESS_TIMEOUT_MS])
+                .eax;
+            if got == 0x102 {
+                e.mem.set_u32(p + 0x24, 1);
+                break;
+            }
+            let right = if all != 0 {
+                got == 0
+                    && e.call(wait, &args![first, 0u32]).eax == 0x102
+                    && e.call(wait, &args![second, 0u32]).eax == 0x102
+            } else {
+                got == round % 2
+            };
+            if !right {
+                wrong += 1;
+            }
+            done += 1;
+            e.call(set, &args![ack]);
+        }
+        e.mem.set_u32(p + 0x1c, done);
+        e.mem.set_u32(p + 0x20, wrong);
+        Ret::default()
+    }
+
+    /// Runs [`multi_waiter`] (`all`: wait-all) against the main thread's rounds: wait-any, one
+    /// event set a round; wait-all, the first set, then (the waiter must not have answered yet)
+    /// the second. Every main-thread wait has a timeout, so a lost wake fails.
+    fn wait_for_multiple(all: bool) {
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        e.register(0x0040_a800, multi_waiter);
+        let create = slot("CreateEventA");
+        let p = e.mem.alloc(0x40);
+        for at in [0, 4, 8] {
+            let event = e.call(create, &args![0u32, 0u32, 0u32, 0u32]).eax;
+            e.mem.set_u32(p + at, event);
+        }
+        let (set, wait) = (slot("SetEvent"), slot("WaitForSingleObject"));
+        e.mem.set_u32(p + 0xc, slot("WaitForMultipleObjects"));
+        e.mem.set_u32(p + 0x10, set);
+        e.mem.set_u32(p + 0x14, wait);
+        e.mem.set_u32(p + 0x18, u32::from(all));
+        let h = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0040_a800u32, p, 0u32, 0u32],
+            )
+            .eax;
+        let (first, second, ack) = (e.mem.u32(p), e.mem.u32(p + 4), e.mem.u32(p + 8));
+        let mut early = 0;
+        for round in 0..MULTI_ROUNDS {
+            if all {
+                e.call(set, &args![first]);
+                std::thread::yield_now();
+                if e.call(wait, &args![ack, 0u32]).eax == 0 {
+                    early += 1;
+                }
+                e.call(set, &args![second]);
+            } else {
+                let event = if round % 2 == 0 { first } else { second };
+                e.call(set, &args![event]);
+            }
+            let got = e.call(wait, &args![ack, STRESS_TIMEOUT_MS]).eax;
+            assert_eq!(got, 0, "round {round}: no answer (a lost wake)");
+        }
+        assert_eq!(e.call(wait, &args![h, STRESS_TIMEOUT_MS]).eax, 0);
+        assert_eq!(e.mem.u32(p + 0x24), 0, "the game thread's wait timed out");
+        assert_eq!(e.mem.u32(p + 0x1c), MULTI_ROUNDS);
+        assert_eq!(e.mem.u32(p + 0x20), 0, "wrong answers");
+        assert_eq!(early, 0, "a wait-all ended with one event set");
+    }
+
+    /// `WaitForMultipleObjects` for any of two events, 20,000 rounds: each wakes for the event
+    /// set and names it.
+    #[test]
+    fn waiting_for_any_of_two_events_wakes_for_each_and_names_it() {
+        wait_for_multiple(false);
+    }
+
+    /// `WaitForMultipleObjects` for all of two events, 20,000 rounds: it ends only when both are
+    /// set, and takes both.
+    #[test]
+    fn waiting_for_all_of_two_events_takes_both_at_once() {
+        wait_for_multiple(true);
     }
 
     /// Every game thread's engine context has the run's one kernel table (`KernelRef::id`), while

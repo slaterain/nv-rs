@@ -178,6 +178,10 @@ impl Host {
                 },
             }
         }
+        // Either way the log says how the threads run (an F12 report carries it).
+        if engine.real.is_none() {
+            eprintln!("threads: stepped (NV_THREADS=real runs them side by side)");
+        }
         start_crt_heap(&mut engine, &mut movement);
         start_crt_threads(&mut engine, &mut movement);
         start_crt_io(&mut engine, &mut movement);
