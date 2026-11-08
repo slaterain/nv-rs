@@ -9,9 +9,9 @@
 //!   variables (`ARVS`, an `ARVR` per array with references, `ARVE`) and the string variables
 //!   (`STVS`, `STVR`s, `STVE`), each map cleaned of its temporaries first and listed in its hash
 //!   map's order ([`vars::HashOrder`]); with the fixes preset's row, other plugins' sections
-//!   kept from the loaded game after it. xNVSE writes one on every save; here only when there
-//!   is something in it ([`something_to_save`]; one left from an earlier save of the name is
-//!   removed), so unmodded play leaves no extra file (docs/FIXES.md, "The script extender").
+//!   kept from the loaded game after it, when today's files are the ones they were saved with.
+//!   One is written on every save, an empty one too, as xNVSE does whenever it is installed: a
+//!   save without one loads as a new game for the extender without the reset.
 //! - **Reading** is xNVSE's, with one guard: a count of references or elements larger than the
 //!   bytes left in its chunk is a corrupt file and stops the read as a read past the end does
 //!   (xNVSE would loop or allocate on it); the free ids below a high array id are one run.
@@ -102,6 +102,9 @@ pub struct State {
     pub keep_other_plugins: bool,
     /// The sections of plugins that are not built in, as the last co-save read held them.
     pub kept: Vec<cosave::Kept>,
+    /// That co-save's file list (`MODS`, names as saved), which the kept sections' mod indexes
+    /// refer to.
+    pub kept_mods: Vec<Vec<u8>>,
 }
 
 /// The fixes preset's row (docs/FIXES.md, "The script extender"): a co-save's sections of
@@ -445,17 +448,7 @@ fn element_at(a: &ArrayVar, i: usize) -> &Element {
 pub fn save_game(e: &mut Engine, name: u32) {
     let path = co_save_path(e, name);
     let chunks = core_chunks(e);
-    let kept = if e.ext::<Nvse>().saveload.keep_other_plugins {
-        e.ext::<Nvse>().saveload.kept.clone()
-    } else {
-        Vec::new()
-    };
-    if !something_to_save(e, &chunks, &kept) {
-        // Nothing of the extender's: no co-save (the maintainer, 2026-11-08), and none left
-        // from an earlier save of this name to be read with this one.
-        delete_file(e, &path);
-        return;
-    }
+    let kept = kept_to_write(e);
     let bytes = cosave::write_with(
         &[Plugin {
             opcode_base: cosave::CORE_OPCODE_BASE,
@@ -466,18 +459,20 @@ pub fn save_game(e: &mut Engine, name: u32) {
     write_file(e, &path, &bytes);
 }
 
-/// Whether a save gets a co-save: a variable to write, another plugin's section kept, or a
-/// delayed call waiting. A save without one loads as xNVSE loads a save made without it: a new
-/// game for the extender (its `NewGame` message), the variables, calls and handlers of the game
-/// before not reset. That is only right when the game saved had nothing of the extender's, so
-/// anything that would have made xNVSE's co-save read differently counts. xNVSE writes one on
-/// every save; the port leaves unmodded play without the extra file (both presets).
-pub fn something_to_save(e: &mut Engine, chunks: &[Chunk], kept: &[cosave::Kept]) -> bool {
-    chunks
-        .iter()
-        .any(|c| c.kind == tag(b"ARVR") || c.kind == tag(b"STVR"))
-        || !kept.is_empty()
-        || tick::has_pending(e)
+/// The other plugins' sections to write back (the fixes preset's row): the ones kept, only when
+/// today's files are the ones the co-save they came from listed, in the same order. Their data
+/// holds mod indexes of that list (JIP LN NVSE maps them through the `MODS` it was saved with),
+/// so under another list they would point at other files: then they go, as with xNVSE.
+fn kept_to_write(e: &mut Engine) -> Vec<cosave::Kept> {
+    let st = &e.ext::<Nvse>().saveload;
+    if !st.keep_other_plugins || st.kept.is_empty() {
+        return Vec::new();
+    }
+    let (kept, kept_mods) = (st.kept.clone(), st.kept_mods.clone());
+    if kept_mods != loaded_mods(e) {
+        return Vec::new();
+    }
+    kept
 }
 
 // ---- loading ----
@@ -585,6 +580,7 @@ fn load_mod_list(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
     let count = r.read_data(1)?.first().copied().unwrap_or(0);
     let mut name_len: u16 = 0;
     let mut mods = Vec::with_capacity(usize::from(count));
+    let mut names = Vec::with_capacity(usize::from(count));
     for _ in 0..count {
         let raw = r.read_data(2)?;
         let mut bytes = name_len.to_le_bytes();
@@ -595,8 +591,11 @@ fn load_mod_list(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
             name.truncate(end);
         }
         mods.push(mod_index(e, &name));
+        names.push(name);
     }
-    e.ext::<Nvse>().saveload.preload_mods = mods;
+    let st = &mut e.ext::<Nvse>().saveload;
+    st.preload_mods = mods;
+    st.kept_mods = names;
     Ok(())
 }
 
@@ -627,6 +626,10 @@ fn load_strings(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
         }
         let modi = (resolved >> 24) as u8;
         let id = r.read32()?;
+        if id == u32::MAX {
+            // No id is past it: a corrupt file, the read stops.
+            return Err(OutOfRange);
+        }
         let len = r.read16()?;
         let text = c_text(r.read_data(u32::from(len))?);
         let st = &mut e.ext::<Nvse>().vars;
@@ -667,6 +670,10 @@ fn load_arrays(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
             _ => 0,
         };
         let id = r.read32()?;
+        if id == u32::MAX {
+            // No id is past it: a corrupt file, the read stops.
+            return Err(OutOfRange);
+        }
         let key_type = r.read8()?;
         let packed = r.read8()? != 0;
         let mut refs = Vec::new();
@@ -831,7 +838,9 @@ fn new_game_callback(e: &mut Engine) {
     vars::clean_arrays(e);
     vars::clean_strings(e);
     // A new game holds no other plugin's data.
-    e.ext::<Nvse>().saveload.kept.clear();
+    let st = &mut e.ext::<Nvse>().saveload;
+    st.kept.clear();
+    st.kept_mods.clear();
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_SaveLoad.cpp: NewGameHook.
@@ -844,7 +853,9 @@ pub fn new_game(e: &mut Engine) {
 /// Before the `.fos` (`Serialization::HandlePreLoadGame`).
 pub fn pre_load(e: &mut Engine, name: u32) {
     // The other plugins' sections kept are the loaded game's, or none.
-    e.ext::<Nvse>().saveload.kept.clear();
+    let st = &mut e.ext::<Nvse>().saveload;
+    st.kept.clear();
+    st.kept_mods.clear();
     handle_load(e, name, Pass::PreLoad);
 }
 

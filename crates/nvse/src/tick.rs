@@ -422,17 +422,6 @@ fn run_while_per_seconds(e: &mut Engine, delta: f32, menu: bool) {
     }
 }
 
-/// Whether a delayed call waits (any of the six lists).
-pub fn has_pending(e: &mut Engine) -> bool {
-    let s = state(e);
-    !(s.after.is_empty()
-        && s.after_frames.is_empty()
-        && s.for_seconds.is_empty()
-        && s.while_.is_empty()
-        && s.when.is_empty()
-        && s.while_per_seconds.is_empty())
-}
-
 /// `ClearDelayedCalls`: every delayed call dropped (xNVSE does it on a new game and before a
 /// game is loaded, [`crate::saveload`]).
 pub fn clear_delayed_calls(e: &mut Engine) {

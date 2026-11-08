@@ -48,7 +48,7 @@ pub const KEEP_COSAVE_PLUGINS: Fix = Fix {
     env: "NV_COSAVE_KEEP",
     addresses: &[],
     summary:
-        "a co-save's sections of plugins not built in (JIP LN NVSE's) are written back on each save",
+        "a co-save's sections of plugins not built in (JIP LN NVSE's) are written back while the same files are loaded",
     install: install_keep_cosave_plugins,
 };
 

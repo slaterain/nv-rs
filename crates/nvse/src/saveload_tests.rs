@@ -288,12 +288,38 @@ fn variables_survive_a_save_and_a_load() {
     );
 }
 
-/// No co-save: the load before the `.fos` changes nothing (xNVSE: the game before's variables
-/// stay); the load after it is a new game (temporaries cleaned).
+/// A delayed call as a script queues one.
+fn delayed() -> crate::tick::Delayed {
+    crate::tick::Delayed {
+        script: 0,
+        time: 1.0,
+        this_obj: 0,
+        mode: 0,
+        args: Vec::new(),
+        serial: 1,
+    }
+}
+
+/// Review of #328 (the maintainer reversed the "co-save only when needed" rule, 2026-11-08): a
+/// save with nothing of the extender's still gets its co-save, so loading it resets what the game
+/// played before held: game A's variables and delayed calls do not leak into game B. A save
+/// that really has none (a vanilla save) takes xNVSE's other path: the load before the `.fos`
+/// changes nothing, the load after it is a new game (temporaries cleaned).
 #[test]
-fn no_co_save_keeps_the_variables_and_is_a_new_game_after() {
+fn a_save_with_nothing_in_it_still_resets_the_game_before() {
     let mut e = engine();
     set_files(&mut e, &["FalloutNV.esm"]);
+    // Game B: nothing of the extender's.
+    save_game(&mut e, NAME);
+    assert!(file(CO_SAVE).is_some(), "written though empty");
+    // Game A, played next, then B loaded.
+    let of_a = vars::add_string(&mut e, 0, b"of game a", false);
+    e.ext::<Nvse>().tick.after.push(delayed());
+    pre_load(&mut e, NAME);
+    assert!(vars::string(&e, of_a).is_none(), "reset");
+    assert!(e.ext::<Nvse>().tick.after.is_empty(), "dropped");
+    // A vanilla save: no co-save at all.
+    FILES.with(|f| f.borrow_mut().remove(CO_SAVE.as_bytes()));
     let kept = vars::add_string(&mut e, 0, b"kept", false);
     let temp = vars::add_string(&mut e, 0, b"temp", true);
     pre_load(&mut e, NAME);
@@ -477,6 +503,49 @@ fn corrupt_co_saves_stop_the_read() {
     pre_load(&mut e, NAME);
     assert_eq!(vars::array(&e, 6).map(|a| a.len()), Some(0));
     assert!(!vars::array_exists(&e, 7));
+    // The last id there is (no id after it): corrupt, the read stops; new ids start at 1.
+    put_arrays(
+        vec![map_record(u32::MAX, 1, 0, &[]), map_record(8, 1, 0, &[])],
+        &[],
+    );
+    pre_load(&mut e, NAME);
+    assert!(!vars::array_exists(&e, u32::MAX) && !vars::array_exists(&e, 8));
+    assert_eq!(vars::create_array(&mut e, KEY_NUMBER, true, 1), 1);
+    put_strings(&[(u32::MAX, b"last"), (3, b"after")]);
+    pre_load(&mut e, NAME);
+    assert!(vars::string(&e, u32::MAX).is_none() && vars::string(&e, 3).is_none());
+    assert_eq!(vars::add_string(&mut e, 1, b"new", false), 1);
+}
+
+/// xNVSE's own plugin with the copy's two files and string records of A.esp (id, text), as
+/// the co-save of `Save 7`.
+fn put_strings(strings: &[(u32, &[u8])]) {
+    let mut mods = ChunkWriter::default();
+    mods.u8(2);
+    for n in ["FalloutNV.esm", "A.esp"] {
+        mods.u16(n.len() as u16);
+        mods.bytes(n.as_bytes());
+    }
+    let chunk = |t: &[u8; 4], data: Vec<u8>| Chunk {
+        kind: tag(t),
+        version: 0,
+        data,
+    };
+    let mut chunks = vec![chunk(b"MODS", mods.data), chunk(b"STVS", Vec::new())];
+    for (id, text) in strings {
+        let mut w = ChunkWriter::default();
+        w.u8(1);
+        w.u32(*id);
+        w.u16(text.len() as u16);
+        w.bytes(text);
+        chunks.push(chunk(b"STVR", w.data));
+    }
+    chunks.push(chunk(b"STVE", Vec::new()));
+    let bytes = cosave::write(&[Plugin {
+        opcode_base: 0x1400,
+        chunks,
+    }]);
+    FILES.with(|f| f.borrow_mut().insert(CO_SAVE.as_bytes().to_vec(), bytes));
 }
 
 /// Review item 5 of #328: a file cut in the middle of an array's elements keeps the array with
@@ -518,7 +587,8 @@ fn other_plugins_sections_go_back_with_the_row() {
         ]
         .concat(),
     };
-    for row in [true, false] {
+    // (row, today's files after the load): the files the co-save lists, or another order.
+    for (row, moved) in [(true, false), (false, false), (true, true)] {
         let mut e = engine();
         set_files(&mut e, &["FalloutNV.esm", "A.esp"]);
         set_keep_other_plugins(&mut e, row);
@@ -530,6 +600,9 @@ fn other_plugins_sections_go_back_with_the_row() {
         // The array is held by a variable of A.esp, as in the game.
         let mut held = 0;
         vars::add_reference(&mut e, &mut held, 2, 1);
+        if moved {
+            set_files(&mut e, &["FalloutNV.esm", "B.esp", "A.esp"]);
+        }
         save_game(&mut e, NAME);
         let bytes = file(CO_SAVE).unwrap();
         let mut r = Reader::open(&bytes).unwrap();
@@ -542,15 +615,20 @@ fn other_plugins_sections_go_back_with_the_row() {
             }
             r.end_plugin();
         }
-        let want: &[u32] = if row { &[0x1400, 0x2200] } else { &[0x1400] };
-        assert_eq!(bases, want, "row {row}");
+        // Under another file list the section's mod indexes would name other files: dropped.
+        let want: &[u32] = if row && !moved {
+            &[0x1400, 0x2200]
+        } else {
+            &[0x1400]
+        };
+        assert_eq!(bases, want, "row {row}, files moved {moved}");
     }
 }
 
-/// Review item 4 of #328: a save with nothing of the extender's writes no co-save, and removes
-/// one left from an earlier save of the same name; a delayed call waiting is something.
+/// Every save writes its co-save, as xNVSE does: an empty one is xNVSE's plugin with the file
+/// list and the empty array and string sections, written over one left from an earlier save.
 #[test]
-fn no_co_save_when_there_is_nothing_in_it() {
+fn every_save_writes_a_co_save() {
     let mut e = engine();
     set_files(&mut e, &["FalloutNV.esm"]);
     FILES.with(|f| {
@@ -558,15 +636,13 @@ fn no_co_save_when_there_is_nothing_in_it() {
             .insert(CO_SAVE.as_bytes().to_vec(), b"stale".to_vec())
     });
     save_game(&mut e, NAME);
-    assert!(file(CO_SAVE).is_none());
-    e.ext::<Nvse>().tick.after.push(crate::tick::Delayed {
-        script: 0,
-        time: 1.0,
-        this_obj: 0,
-        mode: 0,
-        args: Vec::new(),
-        serial: 1,
-    });
-    save_game(&mut e, NAME);
-    assert!(file(CO_SAVE).is_some());
+    let bytes = file(CO_SAVE).unwrap();
+    let mut r = Reader::open(&bytes).unwrap();
+    assert_eq!(r.next_plugin().unwrap().unwrap().opcode_base, 0x1400);
+    let mut kinds = Vec::new();
+    while let Some((k, _, _)) = r.next_record().unwrap() {
+        kinds.push(k.to_be_bytes());
+    }
+    assert_eq!(kinds, [*b"MODS", *b"ARVS", *b"ARVE", *b"STVS", *b"STVE"]);
+    assert!(r.next_plugin().unwrap().is_none());
 }

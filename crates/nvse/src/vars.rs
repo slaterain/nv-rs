@@ -113,12 +113,25 @@ pub struct VarIds {
 
 impl VarIds {
     /// `GetUnusedID`: the first freed id (taken out of the free set), else one past the
-    /// largest used, else 1.
+    /// largest used, else 1. The largest is never `u32::MAX` from a file (a co-save naming it
+    /// is corrupt and stops the read); were every id up to it used, the first unused one.
     pub fn unused(&mut self) -> u32 {
         if let Some(first) = self.available.pop_first() {
             return first;
         }
-        self.used.iter().next_back().map_or(1, |last| last + 1)
+        match self.used.iter().next_back() {
+            None => 1,
+            Some(&last) => last.checked_add(1).unwrap_or_else(|| {
+                let mut want = 1u32;
+                for &id in &self.used {
+                    if id != want {
+                        break;
+                    }
+                    want = want.saturating_add(1);
+                }
+                want
+            }),
+        }
     }
 
     /// `Delete`'s bookkeeping: the id is free again.
