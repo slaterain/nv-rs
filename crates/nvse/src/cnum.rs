@@ -231,10 +231,11 @@ pub fn scan_hex(s: &[u8]) -> (u32, bool) {
         }
         _ => false,
     };
-    if s.get(i) == Some(&b'0') && matches!(s.get(i + 1), Some(b'x' | b'X')) {
-        if s.get(i + 2).copied().and_then(hex_value).is_some() {
-            i += 2;
-        }
+    if s.get(i) == Some(&b'0')
+        && matches!(s.get(i + 1), Some(b'x' | b'X'))
+        && s.get(i + 2).copied().and_then(hex_value).is_some()
+    {
+        i += 2;
     }
     // Read as `strtoull` reads (64 bits, held at the maximum when out of range), the low 32 bits
     // stored.
