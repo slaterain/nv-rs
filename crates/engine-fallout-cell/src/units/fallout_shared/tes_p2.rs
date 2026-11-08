@@ -2825,10 +2825,7 @@ pub fn fn_0045bb20(e: &mut Engine, this: Ptr, out: Ptr, scale: f32) -> Ptr {
     // precision, stored as a float.
     let times = |e: &Engine, offset: u32| {
         let axis = e.mem.u32(this.addr() + offset);
-        f32::from_bits(x87_store32(x87_mul(
-            x87_load32(scale.to_bits()),
-            x87_m32(axis),
-        )))
+        f32::from_bits(x87_mul_store32(scale.to_bits(), axis))
     };
     let z = times(e, 8);
     let y = times(e, 4);

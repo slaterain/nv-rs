@@ -1603,12 +1603,10 @@ pub fn fn_004b4500(e: &mut Engine, this: Ptr, out: Ptr, vector: Ptr) -> Ptr {
     // then stored as a float.
     let m = |e: &Engine, i: u32| e.mem.u32(this.addr() + 4 * i);
     let v = |e: &Engine, i: u32| e.mem.u32(vector.addr() + 4 * i);
+    // (`x87_dot3_store32`, exact with a fast path.)
     let row = |e: &Engine, r: u32| {
-        let product = |k: u32| x87_mul(x87_load32(m(e, 3 * r + k)), x87_m32(v(e, k)));
-        f32::from_bits(x87_store32(x87_add(
-            x87_add(product(0), product(1)),
-            product(2),
-        )))
+        let a = [0, 1, 2].map(|k| m(e, 3 * r + k));
+        f32::from_bits(x87_dot3_store32(a, [v(e, 0), v(e, 1), v(e, 2)]))
     };
     let z = row(e, 2);
     let y = row(e, 1);

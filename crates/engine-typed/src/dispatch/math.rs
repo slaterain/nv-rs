@@ -1,13 +1,14 @@
 //! The arithmetic of the transforms, matrices and points the scene graph and the AI compose on every
 //! update, and the small vector helpers around it.
 
-use super::{copy_words, fld, fld_local, fstp, m32, m32_local, FAMILY};
+use super::{copy_words, fld, fld_local, fstp, FAMILY};
 use crate::culling::layout::{BSMultiBoundAABB, NiMatrix3, NiPoint3, NiTransform};
-use crate::pathing::{self, fcom, fld_global, m64_global};
+use crate::pathing::{self, fcom, m64_global};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::x87::{
-    x87_div, x87_load32, x87_m32, x87_mul, x87_quiet, x87_quiet_bits, x87_store32, x87_sub,
+    x87_div, x87_dot3_store32, x87_load32, x87_m32, x87_mul_store32, x87_quiet, x87_quiet_bits,
+    x87_store32, x87_sub,
 };
 use engine_core::{args, typed_call, Engine};
 
@@ -38,15 +39,18 @@ fn axis(e: &Engine, p: Ptr<NiPoint3>, index: u32) -> u32 {
     e.mem.u32(p.addr().wrapping_add(4 * index))
 }
 
-/// `a0*b0 + a1*b1 + a2*b2` as the exe sums three products: each `FLD a; FMUL b` (the second factor a
-/// memory operand), the second and third added with `FADDP`.
+/// `a0*b0 + a1*b1 + a2*b2` as the exe sums three products and stores the sum: each `FLD a; FMUL b`
+/// (the second factor a memory operand), added with `FADDP`, then `FSTP` ([`x87_dot3_store32`],
+/// exact, with a fast path).
 #[inline(always)]
-fn dot3(a: [u32; 3], b: [u32; 3]) -> f64 {
-    let p0 = x87_mul(x87_load32(a[0]), x87_m32(b[0]));
-    let p1 = x87_mul(x87_load32(a[1]), x87_m32(b[1]));
-    let sum = engine_core::x87::x87_add(p0, p1);
-    let p2 = x87_mul(x87_load32(a[2]), x87_m32(b[2]));
-    engine_core::x87::x87_add(sum, p2)
+fn dot3(a: [u32; 3], b: [u32; 3]) -> f32 {
+    f32::from_bits(x87_dot3_store32(a, b))
+}
+
+/// `FLD a; FMUL b` (a memory operand) then `FSTP` ([`x87_mul_store32`], exact, with a fast path).
+#[inline(always)]
+fn mul_store(a: f32, b: f32) -> f32 {
+    f32::from_bits(x87_mul_store32(a.to_bits(), b.to_bits()))
 }
 
 // Typed from 0062c250
@@ -63,10 +67,10 @@ pub fn compose(
         let at = |offset: u32| frame.addr() + 0x80 - offset;
         let product = Ptr::<NiTransform>::new(at(0x34));
         typed_call!(FAMILY, 0x0047_6a80, transform_new(e, product));
-        let scale = fstp(x87_mul(
-            fld(e, this, NiTransform::m_fScale),
-            m32(e, other, NiTransform::m_fScale),
-        ));
+        let scale = mul_store(
+            e.get(this, NiTransform::m_fScale),
+            e.get(other, NiTransform::m_fScale),
+        );
         e.set(product, NiTransform::m_fScale, scale);
         let rotation = typed_call!(
             FAMILY,
@@ -146,9 +150,9 @@ pub fn rotate(
             entry(e, this, 3 * r + 2),
         ]
     };
-    let z = fstp(dot3(row(e, 2), v));
-    let y = fstp(dot3(row(e, 1), v));
-    let x = fstp(dot3(row(e, 0), v));
+    let z = dot3(row(e, 2), v);
+    let y = dot3(row(e, 1), v);
+    let x = dot3(row(e, 0), v);
     typed_call!(leaf::FAMILY, 0x0041_6870, leaf::point3_new(e, out, x, y, z));
     out
 }
@@ -177,7 +181,7 @@ pub fn multiply(
                     entry(e, other, 3 + column),
                     entry(e, other, 6 + column),
                 ];
-                let value = x87_store32(dot3(a, b));
+                let value = dot3(a, b).to_bits();
                 e.mem.set_u32(result.addr() + 4 * (3 * row + column), value);
             }
         }
@@ -259,10 +263,9 @@ pub fn transform_new(e: &mut Engine, this: Ptr<NiTransform>) -> Ptr<NiTransform>
 /// `NiPoint3::operator*(float)` (`thiscall(this, out, scale)`): each axis `scale * this`, z first, into
 /// a new point at `out`.
 pub fn times(e: &mut Engine, this: Ptr<NiPoint3>, out: Ptr<NiPoint3>, scale: f32) -> Ptr<NiPoint3> {
-    let s = fld_local(scale);
-    let z = fstp(x87_mul(s, m32(e, this, NiPoint3::z)));
-    let y = fstp(x87_mul(s, m32(e, this, NiPoint3::y)));
-    let x = fstp(x87_mul(s, m32(e, this, NiPoint3::x)));
+    let z = mul_store(scale, e.get(this, NiPoint3::z));
+    let y = mul_store(scale, e.get(this, NiPoint3::y));
+    let x = mul_store(scale, e.get(this, NiPoint3::x));
     typed_call!(leaf::FAMILY, 0x0041_6870, leaf::point3_new(e, out, x, y, z));
     out
 }
@@ -286,7 +289,7 @@ pub fn normalize(e: &mut Engine, this: Ptr<NiPoint3>) {
     }
     let inverse = fstp(x87_div(1.0, fld_local(length)));
     for f in [NiPoint3::x, NiPoint3::y, NiPoint3::z] {
-        let v = fstp(x87_mul(fld(e, this, f), m32_local(inverse)));
+        let v = mul_store(e.get(this, f), inverse);
         e.set(this, f, v);
     }
 }
@@ -339,7 +342,7 @@ pub fn box_corners(e: &mut Engine, this: Ptr, out: Ptr) {
 /// scale as a memory operand.
 #[inline(always)]
 fn scaled(value: u32, scale: u32) -> u32 {
-    x87_store32(x87_mul(x87_load32(value), x87_m32(scale)))
+    x87_mul_store32(value, scale)
 }
 
 // Typed from 00c4c2d0
@@ -409,7 +412,7 @@ pub fn havok_vector(e: &mut Engine, out: Ptr, point: Ptr<NiPoint3>) -> Ptr {
 /// `value` in Havok's units (`cdecl(value)`): the scale at `011c582c` times the argument (a memory
 /// operand), stored as a float and loaded back.
 pub fn havok_scale(e: &mut Engine, value: f32) -> f32 {
-    fstp(x87_mul(fld_global(e, HAVOK_SCALE), m32_local(value)))
+    mul_store(e.global::<f32>(HAVOK_SCALE), value)
 }
 
 // Typed from 00560d30

@@ -1242,8 +1242,8 @@ pub fn fn_004a0c10(e: &mut Engine, this: Ptr) {
         let inverse = x87_store32(x87_div(1.0, x87_load32(length.to_bits())));
         for offset in [0, 4, 8] {
             let component = e.mem.u32(at + offset);
-            let product = x87_mul(x87_load32(component), x87_m32(inverse));
-            e.mem.set_u32(at + offset, x87_store32(product));
+            e.mem
+                .set_u32(at + offset, x87_mul_store32(component, inverse));
         }
     } else {
         for offset in [0, 4, 8] {

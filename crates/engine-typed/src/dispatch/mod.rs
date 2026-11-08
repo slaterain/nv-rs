@@ -27,7 +27,7 @@ use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
 use crate::culling::layout::{NiAVObject, NiMatrix3, NiNode, NiPoint3, NiTransform};
-pub(crate) use crate::culling::{fld, fld_local, fstp, m32, m32_local};
+pub(crate) use crate::culling::{fld, fld_local, fstp, m32_local};
 
 pub mod layout;
 pub mod math;

@@ -264,10 +264,7 @@ pub fn fn_004a3c20(e: &mut Engine, this: Ptr<BhkPickData>) -> Ptr<BhkPickData> {
 pub fn fn_004a3e90(e: &mut Engine, value: f32) -> f32 {
     let scale = e.global::<f32>(VECTOR_SCALE);
     // 004a3e94..004a3e9d: `FLD scale; FMUL value` (a memory operand) at the thread's precision.
-    f32::from_bits(x87_store32(x87_mul(
-        x87_load32(scale.to_bits()),
-        x87_m32(value.to_bits()),
-    )))
+    f32::from_bits(x87_mul_store32(scale.to_bits(), value.to_bits()))
 }
 
 // Translated from 004a3e00 (decompiled, FalloutNV.exe 1.4.0.525)

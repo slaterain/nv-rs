@@ -4763,18 +4763,16 @@ pub fn ni_matrix3_multiply(e: &mut Engine, this: Ptr, out: Ptr, other: Ptr) -> P
         // Each entry as the exe sums it (0043f8e6..0043fa5d), column by column: `FLD` an entry of
         // `this`, `FMUL` one of `other` (a memory operand), three times, the products added with
         // `FADDP`, each operation at the thread's precision, then stored as a float.
+        // (`x87_dot3_store32`, exact with a fast path.)
         let word = |e: &Engine, m: Ptr, i: u32| e.mem.u32(m.addr() + 4 * i);
         for column in 0..3u32 {
             for row in 0..3u32 {
-                let product = |e: &Engine, k: u32| {
-                    x87_mul(
-                        x87_load32(word(e, this, 3 * row + k)),
-                        x87_m32(word(e, other, 3 * k + column)),
-                    )
-                };
-                let sum = x87_add(x87_add(product(e, 0), product(e, 1)), product(e, 2));
-                e.mem
-                    .set_u32(result.addr() + 4 * (3 * row + column), x87_store32(sum));
+                let a = [0, 1, 2].map(|k| word(e, this, 3 * row + k));
+                let b = [0, 1, 2].map(|k| word(e, other, 3 * k + column));
+                e.mem.set_u32(
+                    result.addr() + 4 * (3 * row + column),
+                    x87_dot3_store32(a, b),
+                );
             }
         }
         for i in 0..9 {

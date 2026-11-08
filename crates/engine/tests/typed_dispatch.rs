@@ -72,7 +72,7 @@ fn block(e: &mut Engine, size: u32, w: &[u32]) -> u32 {
 
 /// The exe's data these functions read, and the stand-ins.
 fn stand_ins(e: &mut Engine) {
-    e.map(LOG, 0x3000);
+    e.map(LOG, 0x4000);
     for page in [
         0x0101_7000,
         0x0101_d000,
@@ -132,10 +132,13 @@ fn stand_ins(e: &mut Engine) {
         e.mem.set_u32(0x0106_b1a4 + slot, VT_FN + slot);
     }
     e.register(0x0040_fca0, |e, a| {
-        log(e, 0xfca0, a[0]);
-        // The owner gives the lock back after a sleep.
-        let lock = e.mem.u32(LOG + 0x2ff0);
-        e.mem.set_u32(lock, 0);
+        // The other owner gives the lock back after a sleep; with `LOG + 0x3ff4` set, only after a
+        // `Sleep(1)`, which comes after 10,000 tries (the calls compare in the harness's own log).
+        if e.mem.u32(LOG + 0x3ff4) == 0 || a[0] == 1 {
+            log(e, 0xfca0, a[0]);
+            let lock = e.mem.u32(LOG + 0x3ff0);
+            e.mem.set_u32(lock, 0);
+        }
         ret(0)
     });
     // The square root (its tables aren't mapped here).
@@ -1413,12 +1416,14 @@ fn compare_exchange() {
 fn lock() {
     Diff::new(entry!(0x0040_fbf0, refs::lock(Ptr<_>, u32)))
         .common(0x0040_fbf0)
-        .inputs(&[Input::Of(&[0x1234, 0, 0x99]), Input::Word])
+        .max_calls(40_000)
+        .inputs(&[Input::Of(&[0x1234, 0, 0x99, 0x98]), Input::Word])
         .setup(|e, case| {
             stand_ins(e);
             let l = block(e, 8, &[case.word(0), case.word(1)]);
-            // `Sleep` lets the other owner go.
-            e.mem.set_u32(LOG + 0x2ff0, l);
+            // `Sleep` lets the other owner go: 0x99 at once, 0x98 only after the 10,000 spins.
+            e.mem.set_u32(LOG + 0x3ff0, l);
+            e.mem.set_u32(LOG + 0x3ff4, u32::from(case.word(0) == 0x98));
             vec![l, 0]
         })
         .run()
@@ -1853,4 +1858,110 @@ fn extra_kind() {
         .setup(|e, case| vec![block(e, 8, &[0, case.word(0)])])
         .run()
         .assert_same();
+}
+
+// ---- Fixed values at the main thread's 24-bit precision ----
+//
+// The differential tests compare the typed versions with their translations, so a reading of the exe
+// both share would pass them. These check the three sums the batch's translation fixes are about
+// against values worked out by hand from the x87's rules: under 24-bit precision each `FADD` and `FMUL`
+// rounds to 24 bits (ties to even) before the next, under 53-bit to 53 bits, and `FSTP` to a float.
+
+/// 2^-24 as a float.
+const TWO_POW_M24: u32 = 0x3380_0000;
+
+/// Runs `f` under the control word `word` (the thread's, as the CRT keeps it), then back to 53 bits.
+fn under(e: &mut Engine, word: u16, f: impl FnOnce(&mut Engine) -> u32) -> u32 {
+    engine_core::units::crt::set_x87_control_word(e, word);
+    let r = f(e);
+    engine_core::units::crt::set_x87_control_word(e, 0x027f);
+    r
+}
+
+/// `(1 + 2^-24) + 2^-24`: at 24 bits each sum is a tie that goes to the even 1.0; at 53 bits the sum
+/// is exact, 1 + 2^-23, the float after 1.0.
+const TIE_SUM: [(u16, u32); 2] = [(0x007f, ONE), (0x027f, ONE + 1)];
+
+#[test]
+fn multiply_at_24_bits_rounds_each_sum() {
+    let mut e = Engine::new();
+    stand_ins(&mut e);
+    let a = block(
+        &mut e,
+        0x24,
+        &[ONE, TWO_POW_M24, TWO_POW_M24, 0, 0, 0, 0, 0, 0],
+    );
+    let b = block(&mut e, 0x24, &[ONE, 0, 0, ONE, 0, 0, ONE, 0, 0]);
+    for (word, expected) in TIE_SUM {
+        let out = e.mem.alloc(0x24);
+        let got = under(&mut e, word, |e| {
+            e.call(0x0043_f8d0, &engine_core::args![a, out, b]);
+            e.mem.u32(out)
+        });
+        assert_eq!(got, expected, "translation, control word {word:04x}");
+        let out = e.mem.alloc(0x24);
+        let got = under(&mut e, word, |e| {
+            math::multiply(e, Ptr::new(a), Ptr::new(out), Ptr::new(b));
+            e.mem.u32(out)
+        });
+        assert_eq!(got, expected, "typed, control word {word:04x}");
+    }
+}
+
+#[test]
+fn rotate_at_24_bits_rounds_each_sum() {
+    let mut e = Engine::new();
+    stand_ins(&mut e);
+    let m = block(
+        &mut e,
+        0x24,
+        &[ONE, TWO_POW_M24, TWO_POW_M24, 0, 0, 0, 0, 0, 0],
+    );
+    let v = block(&mut e, 0xc, &[ONE, ONE, ONE]);
+    for (word, expected) in TIE_SUM {
+        let out = e.mem.alloc(0xc);
+        let got = under(&mut e, word, |e| {
+            e.call(0x004b_4500, &engine_core::args![m, out, v]);
+            e.mem.u32(out)
+        });
+        assert_eq!(got, expected, "translation, control word {word:04x}");
+        let out = e.mem.alloc(0xc);
+        let got = under(&mut e, word, |e| {
+            math::rotate(e, Ptr::new(m), Ptr::new(out), Ptr::new(v));
+            e.mem.u32(out)
+        });
+        assert_eq!(got, expected, "typed, control word {word:04x}");
+    }
+}
+
+/// An actor's height `h = k * 2^-52` with `k = (2^54 + 2^30 + 1) / 3`, so `0.75 * h` is exactly
+/// `1 + 2^-24 + 2^-54`. Under 24 bits `FMUL` rounds that up (above the tie) to 1 + 2^-23; under
+/// 53 bits it rounds to 1 + 2^-24 (a quarter of a unit is dropped) and `FSTP` then breaks the tie to
+/// the even 1.0.
+#[test]
+fn location_on_reference_at_24_bits_rounds_the_rise_once() {
+    let mut e = Engine::new();
+    stand_ins(&mut e);
+    e.register(0x0057_b0a0, |_, _| ret_f(1000.0));
+    e.register(0x0088_53a0, |_, _| {
+        let k = ((1u64 << 54) + (1 << 30) + 1) / 3;
+        ret_f(k as f64 * f64::powi(2.0, -52))
+    });
+    e.register(0x0045_18e0, |_, _| ret(1));
+    let actor = e.mem.alloc(0x160);
+    e.mem.set_u8(actor + 0x14d, 1);
+    let cell = e.mem.alloc(4);
+    e.mem.set_u32(actor + 0x40, cell);
+    for (word, expected) in [(0x007f, ONE + 1), (0x027f, ONE)] {
+        let got = under(&mut e, word, |e| {
+            let slot = e.call(0x008a_e4c0, &engine_core::args![actor]).u32();
+            e.mem.u32(slot + 8)
+        });
+        assert_eq!(got, expected, "translation, control word {word:04x}");
+        let got = under(&mut e, word, |e| {
+            let slot = refs::location_on_reference(e, Ptr::new(actor));
+            e.mem.u32(slot + 8)
+        });
+        assert_eq!(got, expected, "typed, control word {word:04x}");
+    }
 }
