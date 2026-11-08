@@ -48,9 +48,14 @@ const PAGE: u32 = 0x1000;
 pub(crate) const SCAN: usize = 64;
 /// The most bytes a copy moves at once.
 const COPY: usize = 0x1000;
-/// [`SCAN`] and [`COPY`] as words.
+/// The buffers short and middling copies and fills use, so a few bytes don't clear or build a
+/// page-sized one.
+const SHORT: usize = 64;
+const MIDDLE: usize = 0x200;
+const SHORT_WORDS: u32 = 64;
+const MIDDLE_WORDS: u32 = 0x200;
+/// [`SCAN`] as a word.
 const SCAN_WORDS: u32 = 64;
-const COPY_WORDS: u32 = 0x1000;
 
 /// A length below 2^32 (a chunk, a position in one) as a word.
 #[allow(clippy::cast_possible_truncation)]
@@ -123,10 +128,21 @@ pub(crate) fn pair_room(a: u32, b: u32, max: u32) -> usize {
 /// `count` bytes moved from `src` to `dst` from the bottom up, a run at a time: what moves of any
 /// width from the bottom up leave when the destination is not above the source inside its range.
 pub(crate) fn move_up(e: &Engine, dst: u32, src: u32, count: u32) {
-    let mut buf = [0u8; COPY];
+    if count <= SHORT_WORDS {
+        move_up_in::<SHORT>(e, dst, src, count);
+    } else if count <= MIDDLE_WORDS {
+        move_up_in::<MIDDLE>(e, dst, src, count);
+    } else {
+        move_up_in::<COPY>(e, dst, src, count);
+    }
+}
+
+/// [`move_up`] through an `N`-byte buffer.
+fn move_up_in<const N: usize>(e: &Engine, dst: u32, src: u32, count: u32) {
+    let mut buf = [0u8; N];
     let mut done = 0u32;
     while done < count {
-        let n = (count - done).min(COPY_WORDS);
+        let n = (count - done).min(small(N));
         let run = &mut buf[..n as usize];
         e.mem.read(src.wrapping_add(done), run);
         e.mem.write(dst.wrapping_add(done), run);
@@ -137,10 +153,21 @@ pub(crate) fn move_up(e: &Engine, dst: u32, src: u32, count: u32) {
 /// `count` bytes moved from `src` to `dst` from the top down, a run at a time: what moves of any
 /// width from the top down leave when the destination is not below the source inside its range.
 pub(crate) fn move_down(e: &Engine, dst: u32, src: u32, count: u32) {
-    let mut buf = [0u8; COPY];
+    if count <= SHORT_WORDS {
+        move_down_in::<SHORT>(e, dst, src, count);
+    } else if count <= MIDDLE_WORDS {
+        move_down_in::<MIDDLE>(e, dst, src, count);
+    } else {
+        move_down_in::<COPY>(e, dst, src, count);
+    }
+}
+
+/// [`move_down`] through an `N`-byte buffer.
+fn move_down_in<const N: usize>(e: &Engine, dst: u32, src: u32, count: u32) {
+    let mut buf = [0u8; N];
     let mut left = count;
     while left > 0 {
-        let n = left.min(COPY_WORDS);
+        let n = left.min(small(N));
         left -= n;
         let run = &mut buf[..n as usize];
         e.mem.read(src.wrapping_add(left), run);
@@ -161,10 +188,21 @@ pub(crate) fn fill(e: &Engine, at: u32, byte: u8, count: u32) {
         e.mem.zero(at, count);
         return;
     }
-    let run = [byte; COPY];
+    if count <= SHORT_WORDS {
+        fill_in::<SHORT>(e, at, byte, count);
+    } else if count <= MIDDLE_WORDS {
+        fill_in::<MIDDLE>(e, at, byte, count);
+    } else {
+        fill_in::<COPY>(e, at, byte, count);
+    }
+}
+
+/// [`fill`] from an `N`-byte run of the byte.
+fn fill_in<const N: usize>(e: &Engine, at: u32, byte: u8, count: u32) {
+    let run = [byte; N];
     let mut done = 0u32;
     while done < count {
-        let n = (count - done).min(COPY_WORDS);
+        let n = (count - done).min(small(N));
         e.mem.write(at.wrapping_add(done), &run[..n as usize]);
         done += n;
     }

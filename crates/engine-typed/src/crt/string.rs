@@ -6,7 +6,7 @@
 //! that ends them, where the exe reads a byte or an aligned dword at a time: the bytes compared and
 //! the answer are the same.
 
-use super::{chunk, low_byte, move_up, pair_room, signed, small, FAMILY, SCAN};
+use super::{chunk, low_byte, low_half, move_up, pair_room, signed, small, FAMILY, SCAN};
 use engine_core::{args, typed_call, Engine, Ptr};
 
 /// `__locale_changed` (`0126fdf4`): 0 while the C locale is the global one.
@@ -82,24 +82,60 @@ pub fn strcmp(e: &mut Engine, a: u32, b: u32) -> i32 {
 }
 
 // Typed from 00ec6370
-/// `strcpy`, cdecl: destination, source; the source's bytes and their zero copied, the destination
-/// answered. A destination above the source inside the copied bytes takes the exe's byte steps (it
-/// reads bytes it has just written); otherwise one run.
+/// `strcpy`, cdecl: destination, source; the source's bytes and their zero copied (`strcat`'s copy,
+/// `00ec63e5`), the destination answered. The exe copies bytes until the source is 4-aligned, then
+/// dwords, storing exactly the string and its zero: one run gives the same unless the destination is
+/// above the source inside the string, where the exe reads dwords it has just written; there its
+/// steps are kept ([`word_copy`]).
 pub fn strcpy(e: &mut Engine, dst: u32, src: u32) -> u32 {
     let n = length(e, src).wrapping_add(1);
     if !(dst > src && dst < src.wrapping_add(n)) {
         move_up(e, dst, src, n);
-        return dst;
+    } else {
+        word_copy(e, dst, src);
     }
+    dst
+}
+
+/// `00ec63e5`'s steps: bytes until the source is 4-aligned (a zero is stored and ends it), then a
+/// dword at a time, stored whole unless the zero-byte test (`((x + 0x7efefeff) ^ !x) & 0x81010100`)
+/// flags it; a flagged dword ends with its first zero (1, 2, 3 or 4 bytes stored) or, without one,
+/// is stored whole.
+fn word_copy(e: &Engine, dst: u32, src: u32) {
     let (mut d, mut s) = (dst, src);
-    loop {
+    while s & 3 != 0 {
         let b = e.mem.u8(s);
+        s = s.wrapping_add(1);
         e.mem.set_u8(d, b);
         if b == 0 {
-            return dst;
+            return;
         }
         d = d.wrapping_add(1);
-        s = s.wrapping_add(1);
+    }
+    loop {
+        let x = e.mem.u32(s);
+        s = s.wrapping_add(4);
+        if (x.wrapping_add(0x7efe_feff) ^ !x) & 0x8101_0100 != 0 {
+            if x & 0xff == 0 {
+                e.mem.set_u8(d, 0);
+                return;
+            }
+            if x & 0xff00 == 0 {
+                e.mem.set_u16(d, low_half(x));
+                return;
+            }
+            if x & 0xff_0000 == 0 {
+                e.mem.set_u16(d, low_half(x));
+                e.mem.set_u8(d.wrapping_add(2), 0);
+                return;
+            }
+            if x & 0xff00_0000 == 0 {
+                e.mem.set_u32(d, x);
+                return;
+            }
+        }
+        e.mem.set_u32(d, x);
+        d = d.wrapping_add(4);
     }
 }
 

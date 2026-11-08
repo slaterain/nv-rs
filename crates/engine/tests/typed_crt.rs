@@ -1003,7 +1003,18 @@ fn strcpy() {
     Diff::new(entry!(0x00ec_6370, string::strcpy(u32, u32) -> u32))
         .common()
         .inputs(&[
-            Input::Of(&[OUT, OUT + 1, OUT + 0x3f, PAGE + 0xf, PAGE + 0x2f]),
+            // Below, inside and above the sources: just above one, the exe's dword steps smear and stop.
+            Input::Of(&[
+                OUT,
+                OUT + 1,
+                OUT + 0x3f,
+                PAGE + 0xf,
+                PAGE + 0x2f,
+                PAGE + 0x11,
+                PAGE + 0x31,
+                PAGE + 0x33,
+                PAGE + 0x102,
+            ]),
             Input::Of(S),
             Input::Of(&[0]),
         ])
@@ -1365,6 +1376,95 @@ fn memmove_long() {
             let (a, b) = (BIG + 0x1000, BIG + 0x1000 + case.word(0));
             let (dst, src) = if case.word(2) == 1 { (b, a) } else { (a, b) };
             vec![dst, src, case.word(1)]
+        }))
+        .run()
+        .assert_same();
+}
+
+/// Pages around 2 GB: addresses whose signed remainder by 16 differs from their low bits.
+const HIGH: u32 = 0x7fff_f000;
+/// Addresses there: `7ffffff1` and `80000001` have the same low bits and remainders 1 and -15.
+const HIGH_ADDRESSES: &[u32] = &[
+    0x7fff_fff1,
+    0x8000_0001,
+    0x8000_0010,
+    0x8000_0100,
+    0x7fff_ff00,
+    0x8000_000f,
+];
+
+fn high_pages(e: &mut Engine) {
+    e.map(HIGH, 0x3000);
+    let bytes: Vec<u8> = (0..0x3000u32).map(|i| (i * 7 + i / 253) as u8).collect();
+    e.mem.write(HIGH, &bytes);
+}
+
+#[test]
+fn vec_memcpy_high() {
+    Diff::new(entry!(0x00ed_17f4, mem::vec_memcpy(u32, u32, u32) -> u32))
+        .common()
+        .inputs(&[
+            Input::Of(HIGH_ADDRESSES),
+            Input::Of(HIGH_ADDRESSES),
+            Input::Of(&[0x80, 0x100, 0x1f0, 0x203]),
+            Input::Of(&[8]),
+        ])
+        .setup(with(|e, case| {
+            high_pages(e);
+            vec![case.word(0), case.word(1), case.word(2)]
+        }))
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn memcpy_high() {
+    Diff::new(entry!(0x00ec_44d0, mem::memcpy(u32, u32, u32) -> u32))
+        .common()
+        .inputs(&[
+            Input::Of(HIGH_ADDRESSES),
+            Input::Of(HIGH_ADDRESSES),
+            Input::Of(&[0x100, 0x1f0, 0x203, 0x10]),
+            Input::Of(&[8, 0]),
+        ])
+        .setup(with(|e, case| {
+            high_pages(e);
+            vec![case.word(0), case.word(1), case.word(2)]
+        }))
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn vec_memzero_high() {
+    Diff::new(entry!(0x00ed_2cd5, mem::vec_memzero(u32, u32, u32) -> u32))
+        .common()
+        .inputs(&[
+            Input::Of(HIGH_ADDRESSES),
+            Input::Of(&[0x80, 0x101, 0x1f0, 0x100]),
+            Input::Of(&[8]),
+        ])
+        .setup(with(|e, case| {
+            high_pages(e);
+            vec![case.word(0), 0, case.word(1)]
+        }))
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn memset_high() {
+    Diff::new(entry!(0x00ec_61c0, mem::memset(u32, u32, u32) -> u32))
+        .common()
+        .inputs(&[
+            Input::Of(HIGH_ADDRESSES),
+            Input::Of(&[0, 0x5a]),
+            Input::Of(&[0x100, 0x1f0, 0x10]),
+            Input::Of(&[8]),
+        ])
+        .setup(with(|e, case| {
+            high_pages(e);
+            vec![case.word(0), case.word(1), case.word(2)]
         }))
         .run()
         .assert_same();
