@@ -86,7 +86,12 @@ each function belongs to.
   condition variable under the re-entrant kernel lock every other platform
   function runs under (Direct3D, sound, files, windows: the exe creates its
   device `D3DCREATE_MULTITHREADED`). The host holds the kernel lock between
-  frames. Diagnostics keep threads stepped. The stepped host also has a
+  frames. A thread-local storage index freed or handed out again reads 0 on
+  every thread, as on Windows (the lock-free maps keep per-thread accessors
+  there). Diagnostics keep threads stepped, except the block check
+  (`NV_BLOCK_CHECK`, allocations and frees named with their thread) and
+  `NV_REAL_DUMP` (every thread's function, last calls and waits printed when
+  one stops; stale thread-local reads reported). The stepped host also has a
   seeded `NV_THREADS=shuffle:SEED` (each turn's length and wake delay drawn
   at random, so an order-dependent bug reproduces from its seed). So stepped runs are
   deterministic (for one processor count, which `iNumHWThreads` follows).

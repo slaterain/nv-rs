@@ -1279,11 +1279,14 @@ pub fn start_main_thread(start: u32, words: Vec<u32>) -> MainThread {
                         .map(|a| format!("{a:08x}"))
                         .collect();
                     let first = panic_line(payload);
-                    if path.is_empty() {
-                        Yield::Stopped(first)
+                    let why = if path.is_empty() {
+                        first
                     } else {
-                        Yield::Stopped(format!("{first} (in {})", path.join(" < ")))
-                    }
+                        format!("{first} (in {})", path.join(" < "))
+                    };
+                    // `NV_REAL_DUMP`: what every game thread was doing.
+                    crate::real_threads::main_stopped(e, &why);
+                    Yield::Stopped(why)
                 }
             };
             let _ = yields.send(reply);

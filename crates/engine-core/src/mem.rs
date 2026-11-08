@@ -636,6 +636,14 @@ pub struct Mem {
     defer_hand_back: bool,
     /// The race census (`NV_RACE_CENSUS`, [`Mem::enable_race_census`]); `None` in normal runs.
     race: Option<Box<crate::race_census::RaceCensus>>,
+    /// Real threads with the block check on (a diagnostic): this view hands the block check the
+    /// function running on its thread, the allocator's path and the thread with each allocation
+    /// and free ([`Mem::with_shared`]); `view_frame` and `view_path` are what the check would keep
+    /// for this thread.
+    view_check: bool,
+    view_frame: (u32, u32),
+    view_path: Vec<u32>,
+    view_thread: u32,
 }
 
 /// A live heap block as the heap census sees it ([`Mem::for_each_census_block`]).
@@ -746,6 +754,12 @@ struct BlockCheck {
     pending_path: Vec<u32>,
     alloc_paths: HashMap<u32, Vec<u32>>,
     freed_paths: HashMap<u32, (Vec<u32>, Vec<u32>)>,
+    /// Real threads: the game thread a view named for the next allocation or free
+    /// ([`Mem::with_shared`]), the thread that allocated each live block, and the threads that
+    /// allocated and freed each quarantined one (0: not known).
+    thread: u32,
+    alloc_threads: HashMap<u32, u32>,
+    freed_threads: HashMap<u32, (u32, u32)>,
 }
 
 /// Bytes of freed blocks the freed-block check keeps from reuse at most.
@@ -761,6 +775,32 @@ pub fn freed_word(addr: u32) -> u32 {
 /// The base of the freed-block check's words: the heap's end, so that a heap address shifted
 /// down by 4 (at most 0x0EFFFFFF) lands between it and 0xFF000000.
 const FREED_WORDS: u32 = HEAP_END;
+
+/// What the freed-block check knows of the quarantined block `block`: its size asked for, the
+/// functions running when it was allocated and freed with their paths, and (real threads) the
+/// game threads that did each.
+fn describe_freed(c: &BlockCheck, block: u32) -> Option<String> {
+    let &(asked, owner, freer) = c.freed.get(&block)?;
+    let path = |p: &[u32]| {
+        p.iter()
+            .map(|f| format!("{f:08x}"))
+            .collect::<Vec<_>>()
+            .join(" < ")
+    };
+    let (alloc, free) = c.freed_paths.get(&block).cloned().unwrap_or_default();
+    let threads = match c.freed_threads.get(&block) {
+        Some(&(a, f)) if a != 0 || f != 0 => {
+            format!("; allocated on game thread {a}, freed on game thread {f}")
+        }
+        _ => String::new(),
+    };
+    Some(format!(
+        "{asked:#x} bytes, allocated while {owner:08x} ran (in {}), freed while {freer:08x} ran \
+         (in {}){threads}",
+        path(&alloc),
+        path(&free)
+    ))
+}
 const _: () = assert!(FREED_WORDS & 0x0fff_ffff == 0 && FREED_WORDS >= HEAP_END);
 
 impl Mem {
@@ -784,6 +824,9 @@ impl Mem {
             pending_path: Vec::new(),
             alloc_paths: HashMap::new(),
             freed_paths: HashMap::new(),
+            thread: 0,
+            alloc_threads: HashMap::new(),
+            freed_threads: HashMap::new(),
         }));
         self.check_store = store;
         self.store_diag |= store;
@@ -793,6 +836,13 @@ impl Mem {
     /// `Engine::call_stack` holds them) for the next block the game's allocator hands out or its
     /// deallocator frees, kept (the innermost 10) to name where a freed block came from.
     pub fn note_path(&mut self, calls: &[u32]) {
+        if self.view_check {
+            // A view of shared memory: handed to the check with the allocation or free.
+            self.view_path.clear();
+            self.view_path
+                .extend_from_slice(&calls[calls.len().saturating_sub(10)..]);
+            return;
+        }
         if let Some(c) = self.check.as_deref_mut() {
             c.pending_path.clear();
             c.pending_path.extend(calls.iter().rev().take(10));
@@ -840,6 +890,8 @@ impl Mem {
         let alloc_path = c.alloc_paths.remove(&addr).unwrap_or_default();
         let free_path = std::mem::take(&mut c.pending_path);
         c.freed_paths.insert(addr, (alloc_path, free_path));
+        let allocated_on = c.alloc_threads.remove(&addr).unwrap_or(0);
+        c.freed_threads.insert(addr, (allocated_on, c.thread));
         c.guards.insert(addr, (addr + size, addr));
         for p in (addr >> PAGE_BITS)..=((addr + size - 1) >> PAGE_BITS) {
             c.pages[p as usize] = c.pages[p as usize].saturating_add(1);
@@ -852,6 +904,7 @@ impl Mem {
             c.quarantine_bytes -= u64::from(s);
             c.freed.remove(&a);
             c.freed_paths.remove(&a);
+            c.freed_threads.remove(&a);
             c.guards.remove(&a);
             for p in (a >> PAGE_BITS)..=((a + s - 1) >> PAGE_BITS) {
                 c.pages[p as usize] = c.pages[p as usize].saturating_sub(1);
@@ -864,11 +917,14 @@ impl Mem {
     /// Whether the block check is on.
     #[inline(always)]
     pub fn block_check_on(&self) -> bool {
-        self.check.is_some()
+        self.check.is_some() || self.view_check
     }
 
     /// Sets the function the block check names as running; returns the one before.
     pub fn set_check_fn(&mut self, f: u32) -> u32 {
+        if self.view_check {
+            return std::mem::replace(&mut self.view_frame.0, f);
+        }
         match self.check.as_deref_mut() {
             Some(c) => std::mem::replace(&mut c.current_fn, f),
             None => 0,
@@ -878,6 +934,9 @@ impl Mem {
     /// Sets the function the block check names as running and its caller (the touch census names
     /// both); returns the two before.
     pub fn set_check_frame(&mut self, f: u32, caller: u32) -> (u32, u32) {
+        if self.view_check {
+            return std::mem::replace(&mut self.view_frame, (f, caller));
+        }
         match self.check.as_deref_mut() {
             Some(c) => (
                 std::mem::replace(&mut c.current_fn, f),
@@ -961,6 +1020,9 @@ impl Mem {
             return;
         };
         c.blocks.insert(addr, (asked, c.current_fn));
+        if c.thread != 0 {
+            c.alloc_threads.insert(addr, c.thread);
+        }
         if !c.pending_path.is_empty() {
             let path = std::mem::take(&mut c.pending_path);
             c.alloc_paths.insert(addr, path);
@@ -1082,6 +1144,10 @@ impl Mem {
             shared: None,
             defer_hand_back: false,
             race: None,
+            view_check: false,
+            view_frame: (0, 0),
+            view_path: Vec::new(),
+            view_thread: 0,
         }
     }
 
@@ -1106,6 +1172,10 @@ impl Mem {
             shared: Some(shared),
             defer_hand_back: false,
             race: None,
+            view_check: false,
+            view_frame: (0, 0),
+            view_path: Vec::new(),
+            view_thread: 0,
         }
     }
 
@@ -1114,19 +1184,22 @@ impl Mem {
     /// address. Guest loads and stores stay this one's own (the same instructions); the heap
     /// ([`Mem::alloc`], [`Mem::free`], the asked sizes) and the page table ([`Mem::map`],
     /// [`Mem::unmap`]) go to the shared one under one lock. Hand-backs to the system are deferred
-    /// from now on ([`Mem::hand_back_deferred`]). No diagnostic may be on (they need stepped
-    /// threads).
+    /// from now on ([`Mem::hand_back_deferred`]). Of the memory diagnostics only the block check
+    /// may be on (the others need stepped threads); it then sees allocations and frees, which the
+    /// views hand it with their thread's running function ([`Mem::with_shared`]), not stores.
     pub fn start_sharing(&mut self) {
         assert!(self.shared.is_none(), "this memory is shared already");
         assert!(
-            !self.store_diag && self.check.is_none() && self.watch.is_none(),
+            self.watch.is_none() && self.touch.is_none() && self.race.is_none(),
             "real threads with a memory diagnostic on"
         );
+        let checked = self.check.is_some();
         let shared = Shared {
             mem: std::ptr::NonNull::dangling(),
             lock: Box::leak(Box::new(Mutex::new(()))),
         };
-        let view = Mem::view_at(self.space.base, shared);
+        let mut view = Mem::view_at(self.space.base, shared);
+        view.view_check = checked;
         let mut owner = std::mem::replace(self, view);
         owner.defer_hand_back = true;
         let owner = std::ptr::NonNull::from(Box::leak(Box::new(owner)));
@@ -1138,7 +1211,36 @@ impl Mem {
     /// Another view of the shared memory (a new real thread's, [`Mem::start_sharing`]).
     pub fn view(&self) -> Mem {
         let shared = self.shared.expect("a view of memory that isn't shared");
-        Mem::view_at(self.space.base, shared)
+        let mut view = Mem::view_at(self.space.base, shared);
+        view.view_check = self.view_check;
+        view
+    }
+
+    /// Real threads: the game thread this view is (its id), named by the block check.
+    pub fn set_view_thread(&mut self, id: u32) {
+        self.view_thread = id;
+    }
+
+    /// `f` on the shared `Mem`, under its lock; with the block check on, the check first takes
+    /// this view's running function, the allocator's path it was given and its thread, so a block
+    /// allocated or freed in `f` is named with them.
+    fn with_shared<R>(&mut self, s: Shared, f: impl FnOnce(&mut Mem) -> R) -> R {
+        if !self.view_check {
+            return s.with(f);
+        }
+        let (running, caller) = self.view_frame;
+        let path = std::mem::take(&mut self.view_path);
+        let thread = self.view_thread;
+        s.with(|m| {
+            m.set_check_frame(running, caller);
+            if !path.is_empty() {
+                m.note_path(&path);
+            }
+            if let Some(c) = m.check.as_deref_mut() {
+                c.thread = thread;
+            }
+            f(m)
+        })
     }
 
     /// Diagnostic, not game behaviour: the race census ([`crate::race_census`]) counts every
@@ -1153,10 +1255,11 @@ impl Mem {
         self.race.as_deref()
     }
 
-    /// Whether a memory diagnostic is on (the write watch, the block check, the touch census):
-    /// they need stepped threads.
+    /// Whether a memory diagnostic that needs stepped threads is on: the write watch, the touch
+    /// census, the race census. (The block check runs with real threads too, seeing allocations
+    /// and frees: [`Mem::start_sharing`].)
     pub fn diagnostics_on(&self) -> bool {
-        self.store_diag || self.check.is_some() || self.watch.is_some() || self.touch.is_some()
+        self.watch.is_some() || self.touch.is_some() || self.race.is_some()
     }
 
     /// Whether this is a view of shared memory ([`Mem::start_sharing`]).
@@ -1205,7 +1308,7 @@ impl Mem {
     /// [`Mem::alloc`], keeping the size asked for (`n`, 1 for 0) for [`Mem::asked_size`].
     pub fn alloc_asked(&mut self, n: u32) -> u32 {
         if let Some(s) = self.shared {
-            return s.with(|m| m.alloc_asked(n));
+            return self.with_shared(s, |m| m.alloc_asked(n));
         }
         let block = self.alloc(n);
         self.asked.insert(block, n.max(1));
@@ -1215,7 +1318,7 @@ impl Mem {
     /// [`Mem::free`] of a block of [`Mem::alloc_asked`], forgetting its asked size.
     pub fn free_asked(&mut self, addr: u32) {
         if let Some(s) = self.shared {
-            return s.with(|m| m.free_asked(addr));
+            return self.with_shared(s, |m| m.free_asked(addr));
         }
         self.asked.remove(&addr);
         self.free(addr)
@@ -1885,6 +1988,9 @@ impl Mem {
     /// a [`freed_word`] plus less than 64 KB: the block and what the check knows of it.
     #[cold]
     fn freed_block_of(&self, a: u32) -> Option<String> {
+        if let (true, Some(s)) = (self.view_check, self.shared) {
+            return s.with(|m| m.freed_block_of(a));
+        }
         let c = self.check.as_deref()?;
         c.quarantine.as_ref()?;
         if a < FREED_WORDS {
@@ -1894,24 +2000,23 @@ impl Mem {
         (0..0x1_0000u32.min(word + 1)).find_map(|offset| {
             let base = (word - offset) << 4;
             [base, base + 8].into_iter().find_map(|block| {
-                c.freed.get(&block).map(|&(asked, owner, freer)| {
-                    let path = |p: &[u32]| {
-                        p.iter()
-                            .map(|f| format!("{f:08x}"))
-                            .collect::<Vec<_>>()
-                            .join(" < ")
-                    };
-                    let (alloc, free) = c.freed_paths.get(&block).cloned().unwrap_or_default();
+                describe_freed(c, block).map(|what| {
                     format!(
-                        "a pointer read from the freed block {block:08x}, plus {offset:#x}: \
-                         {asked:#x} bytes, allocated while {owner:08x} ran (in {}), freed while \
-                         {freer:08x} ran (in {})",
-                        path(&alloc),
-                        path(&free)
+                        "a pointer read from the freed block {block:08x}, plus {offset:#x}: {what}"
                     )
                 })
             })
         })
+    }
+
+    /// With the freed-block check: what it knows of the freed block that starts at `addr`, while
+    /// it waits (`None` for any other address, or without the check).
+    pub fn freed_block_info(&self, addr: u32) -> Option<String> {
+        if let (true, Some(s)) = (self.view_check, self.shared) {
+            return s.with(|m| m.freed_block_info(addr));
+        }
+        let c = self.check.as_deref()?;
+        describe_freed(c, addr).map(|what| format!("the freed block {addr:08x}: {what}"))
     }
 
     pub fn write(&self, addr: u32, data: &[u8]) {
@@ -2195,7 +2300,7 @@ impl Mem {
     /// not for a 16-byte one), unless the quick stacks, over their bound, moved it on.
     pub fn alloc(&mut self, size: u32) -> u32 {
         if let Some(s) = self.shared {
-            return s.with(|m| m.alloc(size));
+            return self.with_shared(s, |m| m.alloc(size));
         }
         let asked = size;
         let guard = if self.check.is_some() { GUARD } else { 0 };
@@ -2238,7 +2343,7 @@ impl Mem {
             return;
         }
         if let Some(s) = self.shared {
-            return s.with(|m| m.free(addr));
+            return self.with_shared(s, |m| m.free(addr));
         }
         let entry = self
             .live
@@ -2261,6 +2366,7 @@ impl Mem {
             if released.is_none() {
                 if let Some(c) = self.check.as_deref_mut() {
                     c.alloc_paths.remove(&addr);
+                    c.alloc_threads.remove(&addr);
                     c.pending_path.clear();
                 }
             }

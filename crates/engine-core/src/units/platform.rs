@@ -1973,6 +1973,7 @@ fn tls_alloc(e: &mut Engine) -> u32 {
     match used.iter().position(|u| !u) {
         Some(i) => {
             used[i] = true;
+            crate::real_threads::tls_index_reset(e, i as u32);
             i as u32
         }
         None => TLS_OUT_OF_INDEXES,
@@ -1996,6 +1997,7 @@ fn tls_free(e: &mut Engine, index: u32) -> i32 {
     }
     e.kernel.tls_allocated[index as usize] = false;
     e.kernel.tls_values.retain(|&(_, i), _| i != index);
+    crate::real_threads::tls_index_reset(e, index);
     1
 }
 

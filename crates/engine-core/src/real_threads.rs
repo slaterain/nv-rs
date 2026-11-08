@@ -41,8 +41,9 @@
 //! runs; from then on `CreateThread` starts a real OS thread at once (or at `ResumeThread` to 0).
 //! A thread that stops (an untranslated function, a fault) ends the run at main's next frame end,
 //! naming the thread. **Diagnostics force stepped threads** (R6): a trace, a recording, a profile,
-//! the block check, the touch census, a watch, a per-call hook: [`start`] refuses and the run goes
-//! on stepped.
+//! the heap census, the touch census, a watch, a per-call hook: [`start`] refuses and the run goes
+//! on stepped. Two run with real threads: the block check (`NV_BLOCK_CHECK`; it sees allocations
+//! and frees, each named with its thread, not stores) and `NV_REAL_DUMP` ([`dump_threads`]).
 //!
 //! **Page-table changes.** Mapping pages is safe while other threads run (the page is committed
 //! before the table says so). Handing pages back to the system is not: another thread may be
@@ -333,6 +334,11 @@ pub struct World {
     template: Mutex<Option<SendEngine>>,
     /// The first stop of a game thread other than main, for main's next frame end.
     stopped: Mutex<Option<String>>,
+    /// Each thread-local storage index's generation: `TlsAlloc` and `TlsFree` move it on, so a
+    /// value a thread set before reads 0 ([`Ctx::tls`]).
+    tls_gen: Box<[AtomicU32]>,
+    /// `NV_REAL_DUMP` (a diagnostic): every thread's record, for [`dump_threads`].
+    dump: Option<Dump>,
 }
 
 impl World {
@@ -352,6 +358,8 @@ impl World {
             import_names,
             template: Mutex::new(None),
             stopped: Mutex::new(None),
+            tls_gen: (0..TLS_INDEXES).map(|_| AtomicU32::new(0)).collect(),
+            dump: dump_from_env().then(Dump::default),
         }
     }
 
@@ -426,12 +434,26 @@ impl World {
             .as_ref()
             .expect("real threads' template (made by `start`)")
             .0;
-        let ctx = template
+        let mut ctx = template
             .real
             .as_ref()
             .expect("the template is a real thread's engine")
             .for_thread(id, index);
-        template.thread_context(ctx)
+        ctx.record = self.new_record(id);
+        let mut e = template.thread_context(ctx);
+        e.mem.set_view_thread(id);
+        if self.dump.is_some() {
+            e.call_hook = Some(record_call);
+        }
+        e
+    }
+
+    /// `NV_REAL_DUMP`: a new record for thread `id`, listed for [`dump_threads`].
+    fn new_record(&self, id: u32) -> Option<std::sync::Arc<ThreadRecord>> {
+        let dump = self.dump.as_ref()?;
+        let record = std::sync::Arc::new(ThreadRecord::new(id));
+        guard(&dump.records).push(record.clone());
+        Some(record)
     }
 
     /// Whether the platform function at `addr` (not a replaced synchronisation import) runs under
@@ -455,8 +477,12 @@ pub struct Ctx {
     /// Its last-error code (`GetLastError`), swapped into the kernel table around each locked
     /// platform call.
     pub last_error: u32,
-    /// Its thread-local storage values (`TlsGetValue`), by index.
-    tls: Vec<u32>,
+    /// Its thread-local storage values (`TlsGetValue`), by index, each with the index's generation
+    /// when it was set ([`World::tls_gen`]): a value from before the index was freed or handed out
+    /// again reads 0, as Windows clears an index on every thread.
+    tls: Vec<(u32, u32)>,
+    /// `NV_REAL_DUMP`: what this thread is doing, for [`dump_threads`]; `None` otherwise.
+    record: Option<std::sync::Arc<ThreadRecord>>,
     /// The platform functions behind the kernel lock, by address: what [`locked_call`] runs.
     locked: AddrMap<u32, AbiFn>,
     /// How many of [`World::late`] this engine has taken.
@@ -472,6 +498,7 @@ impl Ctx {
             index,
             last_error: 0,
             tls: Vec::new(),
+            record: None,
             locked: self.locked.clone(),
             late_seen: self.late_seen,
             world: self.world,
@@ -579,16 +606,24 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
             }
         }
     }
-    let tls = crate::units::platform::tls_values_of(e, MAIN_THREAD_ID);
+    let tls = crate::units::platform::tls_values_of(e, MAIN_THREAD_ID)
+        .into_iter()
+        .map(|v| (v, 0))
+        .collect();
     e.real = Some(Box::new(Ctx {
         id: MAIN_THREAD_ID,
         index: 0,
         last_error: e.kernel.last_error,
         tls,
+        record: world.new_record(MAIN_THREAD_ID),
         locked,
         late_seen: 0,
         world,
     }));
+    e.mem.set_view_thread(MAIN_THREAD_ID);
+    if world.dump.is_some() {
+        e.call_hook = Some(record_call);
+    }
     let template = {
         let ctx = e.real.as_ref().map(|r| r.for_thread(0, 0));
         e.thread_context(ctx.expect("the main thread's context"))
@@ -621,8 +656,11 @@ fn diagnostic_on(e: &Engine) -> Option<&'static str> {
     {
         return Some("a per-call diagnostic");
     }
+    if crate::census::settings().is_some() {
+        return Some("the heap census (NV_CENSUS)");
+    }
     if e.mem.diagnostics_on() {
-        return Some("a memory diagnostic (NV_BLOCK_CHECK, NV_CENSUS, NV_TOUCH, NV_WATCH)");
+        return Some("a memory diagnostic (NV_TOUCH, NV_WATCH, NV_RACE_CENSUS)");
     }
     if e.kernel.threads.order.is_some() {
         return Some("the thread order (NV_MOVE_THREADS)");
@@ -696,6 +734,9 @@ fn run_thread(engine: SendEngine, world: &'static World, i: usize, start: u32, p
             }
         },
     };
+    if let RunState::Stopped(why) = &state {
+        dump_threads(world, &format!("game thread {id} stopped: {why}"));
+    }
     world.leave_guest();
     world.kernel.lock(world);
     if let RunState::Stopped(why) = &state {
@@ -918,7 +959,18 @@ const TLS_INDEXES: usize = 1088;
 
 // Real threads: replaces KERNEL32.DLL TlsGetValue (import)
 fn tls_get_value(e: &mut Engine, index: u32) -> u32 {
-    ctx(e).tls.get(index as usize).copied().unwrap_or(0)
+    let r = ctx(e);
+    match r.tls.get(index as usize) {
+        Some(&(value, generation)) if value != 0 => {
+            if r.world.tls_gen[index as usize].load(Ordering::Acquire) == generation {
+                value
+            } else {
+                stale_tls(e, index, value);
+                0
+            }
+        }
+        _ => 0,
+    }
 }
 
 // Real threads: replaces KERNEL32.DLL TlsSetValue (import)
@@ -926,11 +978,12 @@ fn tls_set_value(e: &mut Engine, index: u32, value: u32) -> i32 {
     if index as usize >= TLS_INDEXES {
         return 0;
     }
-    let tls = &mut ctx_mut(e).tls;
-    if tls.len() <= index as usize {
-        tls.resize(index as usize + 1, 0);
+    let r = ctx_mut(e);
+    let generation = r.world.tls_gen[index as usize].load(Ordering::Acquire);
+    if r.tls.len() <= index as usize {
+        r.tls.resize(index as usize + 1, (0, 0));
     }
-    tls[index as usize] = value;
+    r.tls[index as usize] = (value, generation);
     1
 }
 
@@ -963,7 +1016,14 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
         s.count += 1;
         return;
     }
+    let owner = s.owner;
     drop(table);
+    note_state(e, || {
+        format!(
+            "waiting for critical section {:08x} (held by thread {owner})",
+            section.addr()
+        )
+    });
     let held = w.kernel.release_all();
     let was = w.leave_guest();
     let mut table = guard(&w.sections);
@@ -983,6 +1043,7 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
         w.enter_guest();
     }
     w.kernel.take_again(w, held);
+    note_state(e, String::new);
 }
 
 // Real threads: replaces KERNEL32.DLL LeaveCriticalSection (import)
@@ -1091,6 +1152,14 @@ impl ThreadHost for Real {
             }
             if !waiting {
                 waiting = true;
+                note_state(e, || {
+                    let list: Vec<String> = handles.iter().map(|h| format!("{h:x}")).collect();
+                    format!(
+                        "waiting on {} of handles [{}]",
+                        if all { "all" } else { "any" },
+                        list.join(", ")
+                    )
+                });
                 if let Some(t) = e.kernel.threads.list.get_mut(i) {
                     t.state = RunState::Waiting {
                         handles: handles.to_vec(),
@@ -1103,6 +1172,7 @@ impl ThreadHost for Real {
             w.kernel.wait_change(w, timeout);
         };
         if waiting {
+            note_state(e, String::new);
             if let Some(t) = e.kernel.threads.list.get_mut(i) {
                 t.state = RunState::Running;
             }
@@ -1120,6 +1190,196 @@ impl ThreadHost for Real {
             "ExitThread on the main thread ends the process (not provided)"
         );
         std::panic::resume_unwind(Box::new(ThreadExit(code)));
+    }
+}
+
+/// `TlsAlloc` or `TlsFree` of `index` (the platform's, under the kernel lock): with real threads
+/// the index's value on every thread reads 0 from now on, as Windows clears it on every thread
+/// (the stepped host's table forgets them, `units/platform.rs`). The lock-free maps
+/// (`0044dfc0`) keep each thread's accessor in an index of their own and free it with the map,
+/// so a later map that gets the same index must not find the old map's freed accessor.
+pub(crate) fn tls_index_reset(e: &Engine, index: u32) {
+    if let Some(r) = &e.real {
+        if let Some(generation) = r.world.tls_gen.get(index as usize) {
+            generation.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+}
+
+/// How many words of a thread's last calls [`ThreadRecord`] keeps, and of its call stack.
+const RECORD_CALLS: usize = 32;
+const RECORD_STACK: usize = 64;
+
+/// `NV_REAL_DUMP` (a diagnostic, set to anything): every game thread keeps a record of what it
+/// does, printed for all threads when one stops ([`dump_threads`]); with it, a value a thread
+/// read from a freed thread-local storage index is reported ([`stale_tls`]). Read once.
+fn dump_from_env() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("NV_REAL_DUMP").is_some())
+}
+
+/// The records of every game thread ([`World::dump`]).
+#[derive(Default)]
+struct Dump {
+    records: Mutex<Vec<std::sync::Arc<ThreadRecord>>>,
+    /// Dumps printed (at most [`DUMPS`]) and stale values reported (at most [`STALE_REPORTS`]).
+    dumps: AtomicU32,
+    stale: AtomicU32,
+}
+
+const DUMPS: u32 = 3;
+const STALE_REPORTS: u32 = 40;
+
+/// What one game thread is doing, written by it and read by [`dump_threads`] on any thread: its
+/// last calls (the functions it entered, oldest overwritten), its call stack, the kernel lock
+/// token of the OS thread it last ran on and what it waits for.
+struct ThreadRecord {
+    id: u32,
+    calls: [AtomicU32; RECORD_CALLS],
+    count: AtomicU32,
+    stack: [AtomicU32; RECORD_STACK],
+    depth: AtomicU32,
+    token: AtomicU64,
+    state: Mutex<String>,
+}
+
+impl ThreadRecord {
+    fn new(id: u32) -> Self {
+        ThreadRecord {
+            id,
+            calls: std::array::from_fn(|_| AtomicU32::new(0)),
+            count: AtomicU32::new(0),
+            stack: std::array::from_fn(|_| AtomicU32::new(0)),
+            depth: AtomicU32::new(0),
+            token: AtomicU64::new(0),
+            state: Mutex::new(String::new()),
+        }
+    }
+}
+
+/// `NV_REAL_DUMP`'s call hook (`Engine::call_hook`): a call entered (its function goes on the
+/// record's last calls and call stack) or left.
+fn record_call(e: &mut Engine, addr: u32, leaving: bool) {
+    let Some(record) = e.real.as_ref().and_then(|r| r.record.as_deref()) else {
+        return;
+    };
+    let depth = e.call_stack.len();
+    if leaving {
+        record.depth.store(depth as u32, Ordering::Relaxed);
+        return;
+    }
+    let n = record.count.fetch_add(1, Ordering::Relaxed);
+    record.calls[n as usize % RECORD_CALLS].store(addr, Ordering::Relaxed);
+    if depth < RECORD_STACK {
+        record.stack[depth].store(addr, Ordering::Relaxed);
+    }
+    record.depth.store(depth as u32 + 1, Ordering::Relaxed);
+    record.token.store(token(), Ordering::Relaxed);
+}
+
+/// `NV_REAL_DUMP`: what the thread of `e` waits for from now on (empty: nothing).
+fn note_state(e: &Engine, state: impl FnOnce() -> String) {
+    if let Some(record) = e.real.as_ref().and_then(|r| r.record.as_deref()) {
+        *guard(&record.state) = state();
+    }
+}
+
+/// `NV_REAL_DUMP`: a thread read a thread-local storage value set before its index was freed or
+/// handed out again (it reads 0, as on Windows): reported with the block the old value pointed
+/// at, when the freed-block check knows it (`NV_BLOCK_CHECK=...,freed`).
+#[cold]
+fn stale_tls(e: &Engine, index: u32, value: u32) {
+    let Some(r) = &e.real else { return };
+    let Some(dump) = &r.world.dump else { return };
+    if dump.stale.fetch_add(1, Ordering::Relaxed) >= STALE_REPORTS {
+        return;
+    }
+    let block = e
+        .mem
+        .freed_block_info(value)
+        .map_or_else(String::new, |b| format!("; {b}"));
+    let at: Vec<String> = e
+        .call_stack
+        .iter()
+        .rev()
+        .take(6)
+        .map(|a| format!("{a:08x}"))
+        .collect();
+    eprintln!(
+        "real threads: thread {} read TLS index {index} after it was freed or handed out again \
+         (in {}): its old value {value:08x} reads 0{block}",
+        r.id,
+        at.join(" < ")
+    );
+}
+
+/// `NV_REAL_DUMP`: prints every game thread's record (the function it is in, its call stack's
+/// top, its last calls, what it waits for), the critical sections each holds and the kernel
+/// lock's holder, headed by `why`. At most [`DUMPS`] times a run.
+pub(crate) fn dump_threads(w: &World, why: &str) {
+    let Some(dump) = &w.dump else { return };
+    if dump.dumps.fetch_add(1, Ordering::Relaxed) >= DUMPS {
+        return;
+    }
+    let hex = |v: &[u32]| {
+        v.iter()
+            .map(|a| format!("{a:08x}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let owner = w.kernel.owner.load(Ordering::Relaxed);
+    let sections: Vec<(u32, Section)> = match w.sections.try_lock() {
+        Ok(table) => table.iter().map(|(&a, &s)| (a, s)).collect(),
+        Err(_) => Vec::new(),
+    };
+    let records: Vec<std::sync::Arc<ThreadRecord>> = match dump.records.try_lock() {
+        Ok(list) => list.clone(),
+        Err(_) => Vec::new(),
+    };
+    let mut out = format!("real threads: dump ({why})\n");
+    for r in &records {
+        let depth = r.depth.load(Ordering::Relaxed) as usize;
+        let stack: Vec<u32> = (0..depth.min(RECORD_STACK))
+            .rev()
+            .take(12)
+            .map(|i| r.stack[i].load(Ordering::Relaxed))
+            .collect();
+        let n = r.count.load(Ordering::Relaxed) as usize;
+        let calls: Vec<u32> = (n.saturating_sub(RECORD_CALLS)..n)
+            .map(|k| r.calls[k % RECORD_CALLS].load(Ordering::Relaxed))
+            .collect();
+        let held: Vec<String> = sections
+            .iter()
+            .filter(|(_, s)| s.owner == r.id && s.count > 0)
+            .map(|(a, s)| format!("{a:08x} x{}", s.count))
+            .collect();
+        let state = r.state.try_lock().map(|s| s.clone()).unwrap_or_default();
+        let kernel = if owner != 0 && owner == r.token.load(Ordering::Relaxed) {
+            ", holds the kernel lock"
+        } else {
+            ""
+        };
+        out.push_str(&format!(
+            "  thread {}: in {} (depth {depth}){kernel}; {}; critical sections held: [{}]\n    \
+             call stack, innermost first: {}\n    last {} calls, oldest first: {}\n",
+            r.id,
+            stack
+                .first()
+                .map_or_else(|| "-".to_string(), |a| format!("{a:08x}")),
+            if state.is_empty() { "running" } else { &state },
+            held.join(", "),
+            hex(&stack),
+            calls.len(),
+            hex(&calls)
+        ));
+    }
+    eprint!("{out}");
+}
+
+/// The main thread stopped (`thread_host`'s main coroutine): [`dump_threads`] when the dump is on.
+pub(crate) fn main_stopped(e: &Engine, why: &str) {
+    if let Some(r) = &e.real {
+        dump_threads(r.world, &format!("main stopped: {why}"));
     }
 }
 
@@ -1326,6 +1586,116 @@ mod tests {
             assert_eq!(e.mem.u32(code), 1, "thread {k} kept its own values");
         }
         assert_eq!(e.call(slot("GetCurrentThreadId"), &[]).eax, MAIN_THREAD_ID);
+    }
+
+    /// A thread-local storage index freed and handed out again reads 0 on every thread, as on
+    /// Windows: a lock-free map keeps each thread's accessor in its own index, so after a map is
+    /// destroyed the next map that gets the index must not find the old map's freed accessor (the
+    /// save-load stop of 2026-11-07: main walked the path manager's request map with a freed
+    /// accessor whose block then held another map).
+    #[test]
+    fn a_freed_tls_index_reads_0_on_every_thread_when_handed_out_again() {
+        /// A game thread: sets its value at the index (word +0) to 0x7777, signals the event at +4,
+        /// waits for the event at +8, then stores what the index reads at +12.
+        fn keeper(e: &mut Engine, a: &[u32]) -> Ret {
+            let p = a[0];
+            let call = |e: &mut Engine, at: u32| e.mem.u32(p + at);
+            let (get, set, signal, wait) = (call(e, 16), call(e, 20), call(e, 24), call(e, 28));
+            let index = e.mem.u32(p);
+            e.call(set, &args![index, 0x7777u32]);
+            e.call(signal, &args![e.mem.u32(p + 4)]);
+            e.call(wait, &args![e.mem.u32(p + 8), 0xffff_ffffu32]);
+            let now = e.call(get, &args![index]).eax;
+            e.mem.set_u32(p + 12, now);
+            Ret::default()
+        }
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        e.register(0x0040_5000, keeper);
+        let index = e.call(slot("TlsAlloc"), &[]).eax;
+        e.call(slot("TlsSetValue"), &args![index, 0x1234u32]);
+        let p = e.mem.alloc(0x20);
+        e.mem.set_u32(p, index);
+        for (at, mapped) in [(4u32, 0u32), (8, 0)] {
+            let event = e
+                .call(slot("CreateEventA"), &args![0u32, mapped, 0u32, 0u32])
+                .eax;
+            e.mem.set_u32(p + at, event);
+        }
+        for (at, name) in [
+            (16u32, "TlsGetValue"),
+            (20, "TlsSetValue"),
+            (24, "SetEvent"),
+            (28, "WaitForSingleObject"),
+        ] {
+            e.mem.set_u32(p + at, slot(name));
+        }
+        let h = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0040_5000u32, p, 0u32, 0u32],
+            )
+            .eax;
+        let set = e.mem.u32(p + 4);
+        e.call(slot("WaitForSingleObject"), &args![set, 0xffff_ffffu32]);
+        // The map goes and the next one gets the same index.
+        e.call(slot("TlsFree"), &args![index]);
+        assert_eq!(e.call(slot("TlsAlloc"), &[]).eax, index);
+        assert_eq!(e.call(slot("TlsGetValue"), &args![index]).eax, 0, "main");
+        e.call(slot("SetEvent"), &args![e.mem.u32(p + 8)]);
+        e.call(slot("WaitForSingleObject"), &args![h, 0xffff_ffffu32]);
+        assert_eq!(e.mem.u32(p + 12), 0, "the game thread");
+        // A value set after the new allocation reads back.
+        e.call(slot("TlsSetValue"), &args![index, 0x5678u32]);
+        assert_eq!(e.call(slot("TlsGetValue"), &args![index]).eax, 0x5678);
+    }
+
+    /// With real threads the freed-block check still names who allocated and freed a block, and
+    /// on which game thread: a game thread frees a block main allocated.
+    #[test]
+    fn the_freed_block_check_names_the_thread_that_freed_a_block() {
+        fn free_it(e: &mut Engine, a: &[u32]) -> Ret {
+            e.mem.set_check_frame(0x0040_6000, 0);
+            e.mem.note_path(&[0x0040_6100, 0x0040_6000]);
+            e.mem.free(a[0]);
+            Ret::default()
+        }
+        let (mut e, slot) = engine_with_imports();
+        e.mem.enable_freed_check(false);
+        start(&mut e).expect("real threads with the block check");
+        e.register(0x0040_6000, free_it);
+        e.mem.set_check_frame(0x0040_7000, 0);
+        let block = e.mem.alloc(0x40);
+        let h = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0040_6000u32, block, 0u32, 0u32],
+            )
+            .eax;
+        e.call(slot("WaitForSingleObject"), &args![h, 0xffff_ffffu32]);
+        let info = e
+            .mem
+            .freed_block_info(block)
+            .expect("the block waits, freed");
+        assert!(
+            info.contains("allocated while 00407000 ran") && info.contains("freed while 00406000"),
+            "{info}"
+        );
+        assert!(
+            info.contains("allocated on game thread 1, freed on game thread 2"),
+            "{info}"
+        );
+        // A pointer read from it leads to unmapped memory, named for the block.
+        let stale = e.mem.u32(block);
+        let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| e.mem.u32(stale)));
+        let text = stop
+            .err()
+            .and_then(|p| p.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        assert!(
+            text.contains(&format!("the freed block {block:08x}")),
+            "{text}"
+        );
     }
 
     /// A thread the game made before real threads started, not run yet, starts real with them.
