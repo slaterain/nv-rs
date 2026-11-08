@@ -1683,15 +1683,6 @@ pub fn clear_flush_on_load(e: &mut Engine) {
 
 // ---- dispatch ----
 
-/// Whether a script has set a handler (one not removed): a save then gets a co-save
-/// ([`crate::saveload::something_to_save`]), so loading it is not a new game for the extender.
-pub fn has_handlers(e: &mut Engine) -> bool {
-    state(e)
-        .infos
-        .iter()
-        .any(|i| i.callbacks.iter().any(|c| !c.callback.removed))
-}
-
 /// `GetCurrentEventName`: the innermost event being handled, empty when none.
 pub fn current_event_name(e: &mut Engine) -> Vec<u8> {
     let s = state(e);
