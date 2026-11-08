@@ -442,6 +442,8 @@ pub struct State {
     /// own, not one raised by a handler.
     pub error_guard: bool,
     pub in_error_event: Vec<u32>,
+    /// The fixes preset's row `crate::call_sites::set_imod_form_check`.
+    pub imod_form_check: bool,
     /// `NV_NVSE_EVENT_LOG`: every handler call, one line each (a test variable).
     log: Option<std::fs::File>,
 }

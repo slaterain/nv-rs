@@ -78,8 +78,13 @@ const ENTRY_TYPE: u32 = 8;
 const MASK_ON_SELL: u32 = 0x4000;
 /// `HackingMenu::pTerminalRef` (`+0x198`).
 const TERMINAL_REF: u32 = 0x198;
-/// The image-space modifier instance's form (`+0x1C`), as xNVSE reads it.
+/// The image-space modifier instance's form (`+0x1C`), as xNVSE reads it; `AsForm` (virtual
+/// `0x94`): the instance as a modifier form's instance, null for the others; `TESForm::refID`.
 const INSTANCE_FORM: u32 = 0x1c;
+const AS_FORM: u32 = 0x94;
+const FORM_ID: u32 = 0xc;
+/// `kFormType_TESObjectCELL`: the form removal hooks look at cells only.
+const FORM_TYPE_CELL: u8 = 0x39;
 /// `TESObjectREFR::renderState` (`+0x64`).
 const RENDER_STATE: u32 = 0x64;
 /// `TESObjectCELL`: `cCellState` (`+0x26`), `iCriticalQueuedRefCount` (`+0xA0`),
@@ -165,12 +170,20 @@ fn actor_equip(e: &mut Engine, a: &[u32]) -> Option<u32> {
 /// Runs `Actor::AddWornItem` with `g_inActivateItemInInventory` set, so the main hook's
 /// OnActorEquip mark during it is not raised again (the equip hook raised it); takes the call.
 fn add_worn_item(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    /// Clears the flag however the call ends (a stop unwinding through it too), so a caught
+    /// stop does not leave this thread's later equip events dropped.
+    struct Clear;
+    impl Drop for Clear {
+        fn drop(&mut self) {
+            events::set_in_add_worn_item(false);
+        }
+    }
     events::set_in_add_worn_item(true);
+    let _clear = Clear;
     let worn = e
         .call(ADD_WORN_ITEM_FN, &args![a[0], a[1], a[2], a[3], a[4]])
         .u32()
         & 0xff;
-    events::set_in_add_worn_item(false);
     Some(worn)
 }
 
@@ -244,13 +257,40 @@ fn remove_imod(e: &mut Engine, a: &[u32]) -> Option<u32> {
     None
 }
 
-/// An instance that ran out: its form, read as xNVSE reads it.
+/// An instance that ran out. xNVSE reads its form at `+0x1C` whatever the instance is; a
+/// depth-of-field or radial blur instance (iron sights, V.A.T.S., `SetGlobalRadialBlur`) has a
+/// float there, and a handler reading that as a form would stop the game. With the fixes
+/// preset's row ([`set_imod_form_check`]) only an instance that is a modifier form's
+/// (`AsForm`, virtual `0x94`, as the game's own `Stop` asks) raises the event, with that form;
+/// without it the word is read as xNVSE reads it, and a word that is no readable form drops
+/// the event (ordinary play never stops).
 fn imod_ran_out(e: &mut Engine, a: &[u32]) -> Option<u32> {
-    if events::has_handlers_lock_free(e, id::ON_REMOVE_IMOD) {
-        let form = e.mem.u32(a[0] + INSTANCE_FORM);
-        events::dispatch(e, b"onremoveimod", 0, &[form]);
+    if !events::has_handlers_lock_free(e, id::ON_REMOVE_IMOD) {
+        return None;
     }
+    let instance = a[0];
+    let form = if e.ext::<crate::Nvse>().events.imod_form_check {
+        let as_form = e.vcall(instance, AS_FORM, &[]).u32();
+        if as_form == 0 {
+            return None;
+        }
+        e.mem.u32(as_form + INSTANCE_FORM)
+    } else {
+        let form = e.mem.u32(instance + INSTANCE_FORM);
+        let mut id = [0u8; 4];
+        if form != 0 && e.mem.try_read(form + FORM_ID, &mut id).is_err() {
+            return None;
+        }
+        form
+    };
+    events::dispatch(e, b"onremoveimod", 0, &[form]);
     None
+}
+
+/// The fixes preset's row (docs/FIXES.md, "The script extender"): OnRemoveIMOD only for a
+/// modifier form's instance that ran out.
+pub fn set_imod_form_check(e: &mut Engine, on: bool) {
+    e.ext::<crate::Nvse>().events.imod_form_check = on;
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Other.cpp: Locks::OnLockBroken,
@@ -359,7 +399,10 @@ fn cell_refs_loaded(e: &mut Engine, a: &[u32]) -> Option<u32> {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), FormExtraData.cpp:
 // RemoveFromAllFormsMapHook (kFormDeletion, kTrashedReference).
 fn form_gone(e: &mut Engine, a: &[u32]) -> Option<u32> {
-    e.ext_free::<CellLoads>().forget(a[0]);
+    // Only cells are kept here: any other form goes by without the set's lock.
+    if e.mem.u8(a[0] + 4) == FORM_TYPE_CELL {
+        e.ext_free::<CellLoads>().forget(a[0]);
+    }
     None
 }
 

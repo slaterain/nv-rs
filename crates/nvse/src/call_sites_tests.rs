@@ -43,6 +43,7 @@ fn sites() -> Engine {
     e.register(0x0088_db20, add_worn_item);
     call_sites::install(&mut e);
     e.mem.set_u32(CELL + 0xc, 0x0001_0300);
+    e.mem.set_u8(CELL + 4, 0x39);
     e.mem.set_u32(MENU + 0x198, REF_1);
     e.mem.set_u32(ENTRY + 8, BASE_1);
     e.mem.set_u32(INSTANCE + 0x1c, REF_2);
@@ -284,6 +285,14 @@ fn cell_refs_loaded_comes_once_per_cell() {
     set_handler(&mut e, b"OnCellRefsLoaded", Callback::new(FN_A), 1, None);
     e.site(0x0055_18a5, &[CELL]);
     assert!(log().is_empty(), "once");
+    // Another form's removal leaves the cells alone.
+    e.mem.set_u8(CELL + 4, 0x3b);
+    e.site(0x0048_3669, &[CELL]);
+    assert!(
+        e.ext_free::<CellLoads>().has(CELL),
+        "not a cell: not looked at"
+    );
+    e.mem.set_u8(CELL + 4, 0x39);
     e.site(0x0048_3669, &[CELL]);
     assert!(!e.ext_free::<CellLoads>().has(CELL));
     e.site(0x0055_18a5, &[CELL]);
@@ -291,6 +300,71 @@ fn cell_refs_loaded_comes_once_per_cell() {
     assert_eq!(first_args(), [(b"oncellrefsloaded".to_vec(), 0x0001_0300)]);
     e.site(0x0086_80a4, &[CELL]);
     assert!(!e.ext_free::<CellLoads>().has(CELL));
+}
+
+/// The review of #340: an instance that runs out with a number where xNVSE reads its form (a
+/// depth-of-field or radial blur instance) drops the event instead of stopping the game; with the
+/// fixes preset's row, only a modifier form's instance (`AsForm`, virtual 0x94) raises it.
+#[test]
+fn an_instance_without_a_form_raises_no_remove_imod() {
+    fn as_form_self(_: &mut Engine, a: &[u32]) -> Ret {
+        Ret {
+            eax: a[0],
+            ..Ret::default()
+        }
+    }
+    fn as_form_none(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+    const BLUR: u32 = AREA + 0x7a00;
+    const VTABLE_FORM: u32 = AREA + 0x7b00;
+    const VTABLE_BLUR: u32 = AREA + 0x7c00;
+    let mut e = sites();
+    scripts(&mut e, &[(1, 4)]);
+    set_handler(&mut e, b"OnRemoveIMOD", Callback::new(FN_A), 1, None);
+    e.register(AREA + 0x7d00, as_form_self);
+    e.register(AREA + 0x7d10, as_form_none);
+    e.mem.set_u32(VTABLE_FORM + 0x94, AREA + 0x7d00);
+    e.mem.set_u32(VTABLE_BLUR + 0x94, AREA + 0x7d10);
+    e.mem.set_u32(INSTANCE, VTABLE_FORM);
+    e.mem.set_u32(BLUR, VTABLE_BLUR);
+    // A blur's duration (1.0) where the form would be: no readable form.
+    e.mem.set_u32(BLUR + 0x1c, 0x3f80_0000);
+    for check in [false, true] {
+        crate::call_sites::set_imod_form_check(&mut e, check);
+        e.site(0x0086_fe75, &[BLUR]);
+        assert!(log().is_empty(), "check {check}");
+        e.site(0x0086_fe75, &[INSTANCE]);
+        assert_eq!(first_args(), [(b"onremoveimod".to_vec(), 0x0001_0002)]);
+    }
+    // A blur whose word happens to be a readable form: vanilla raises it as xNVSE does, the row
+    // does not.
+    e.mem.set_u32(BLUR + 0x1c, REF_1);
+    crate::call_sites::set_imod_form_check(&mut e, false);
+    e.site(0x0086_fe75, &[BLUR]);
+    assert_eq!(log().len(), 1);
+    crate::call_sites::set_imod_form_check(&mut e, true);
+    e.site(0x0086_fe75, &[BLUR]);
+    assert!(log().is_empty());
+}
+
+/// The review of #340: a stop inside `AddWornItem` still clears the flag, so the thread's later
+/// OnActorEquip marks are raised.
+#[test]
+fn a_stop_inside_add_worn_item_clears_the_flag() {
+    fn stopping(_: &mut Engine, _: &[u32]) -> Ret {
+        panic!("a stop inside AddWornItem")
+    }
+    let mut e = sites();
+    scripts(&mut e, &[(1, 4), (2, 4)]);
+    set_handler(&mut e, b"OnActorEquip", Callback::new(FN_B), 1, None);
+    e.register(0x0088_db20, stopping);
+    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        e.site(0x0088_caeb, &[REF_1, BASE_1, 1, 0, 0])
+    }));
+    assert!(stopped.is_err());
+    e.call(SET_ACTION_FLAG.addr(), &args![BASE_1, REF_1 + 0x44, 2u32]);
+    assert_eq!(scripts_run(), [FN_B]);
 }
 
 /// `RuntimeScriptError`'s dispatch that panics still takes the thread's guard entry out.
