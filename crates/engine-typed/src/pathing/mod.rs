@@ -36,7 +36,7 @@ pub mod pov;
 pub mod search;
 
 /// This family's bit: what each `typed_call!` of it names.
-pub const FAMILY: FamilyId = FamilyId::new(6);
+pub const FAMILY: FamilyId = FamilyId::new(7);
 
 /// `NV_TYPED=pathing`. Not past its gate.
 pub static PATHING: Family = Family {
