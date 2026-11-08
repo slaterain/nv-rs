@@ -21,22 +21,101 @@
 
 use crate::Nvse;
 use engine_core::prelude::*;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+/// A sorted set of ids kept as runs (first id to last id), so the free ids a co-save's gap
+/// leaves (every id below the next one read) are one entry however many they are. As a set it
+/// is xNVSE's `availableIDs`.
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
+pub struct IdSet {
+    runs: BTreeMap<u32, u32>,
+}
+
+impl IdSet {
+    pub fn insert(&mut self, id: u32) {
+        self.insert_run(id, id);
+    }
+
+    /// Every id from `first` to `last`, both included.
+    pub fn insert_run(&mut self, mut first: u32, mut last: u32) {
+        if first > last {
+            return;
+        }
+        // A run that ends at or just before `first` joins it.
+        if let Some((&s, &l)) = self.runs.range(..=first).next_back() {
+            if l == u32::MAX || l + 1 >= first {
+                first = s;
+                last = last.max(l);
+                self.runs.remove(&s);
+            }
+        }
+        // Runs that start inside or just after the new one join it.
+        while let Some((&s, &l)) = self
+            .runs
+            .range(first..)
+            .next()
+            .filter(|(&s, _)| last == u32::MAX || s <= last + 1)
+        {
+            last = last.max(l);
+            self.runs.remove(&s);
+        }
+        self.runs.insert(first, last);
+    }
+
+    pub fn remove(&mut self, id: u32) {
+        let Some((&s, &l)) = self.runs.range(..=id).next_back() else {
+            return;
+        };
+        if l < id {
+            return;
+        }
+        self.runs.remove(&s);
+        if s < id {
+            self.runs.insert(s, id - 1);
+        }
+        if id < l {
+            self.runs.insert(id + 1, l);
+        }
+    }
+
+    pub fn contains(&self, id: u32) -> bool {
+        self.runs
+            .range(..=id)
+            .next_back()
+            .is_some_and(|(_, &l)| l >= id)
+    }
+
+    /// The smallest id, taken out.
+    pub fn pop_first(&mut self) -> Option<u32> {
+        let (&s, _) = self.runs.iter().next()?;
+        self.remove(s);
+        Some(s)
+    }
+
+    /// The ids in order (every one of them: for tests and small sets).
+    pub fn iter(&self) -> impl Iterator<Item = u32> + '_ {
+        self.runs.iter().flat_map(|(&s, &l)| s..=l)
+    }
+
+    /// How many runs there are.
+    pub fn runs(&self) -> usize {
+        self.runs.len()
+    }
+}
 
 /// `VarMap`'s id sets (`usedIDs`, `tempIDs`, `availableIDs`, sorted sets in xNVSE).
 #[derive(Default, Clone, Debug)]
 pub struct VarIds {
     pub used: BTreeSet<u32>,
     pub temp: BTreeSet<u32>,
-    pub available: BTreeSet<u32>,
+    pub available: IdSet,
 }
 
 impl VarIds {
     /// `GetUnusedID`: the first freed id (taken out of the free set), else one past the
     /// largest used, else 1.
     pub fn unused(&mut self) -> u32 {
-        if let Some(&first) = self.available.iter().next() {
-            self.available.remove(&first);
+        if let Some(first) = self.available.pop_first() {
             return first;
         }
         self.used.iter().next_back().map_or(1, |last| last + 1)
@@ -809,6 +888,25 @@ mod tests {
             ..Ret::default()
         });
         e
+    }
+
+    /// The free-id set in runs: neighbours join, a removal splits, the smallest comes first.
+    #[test]
+    fn free_ids_are_kept_as_runs() {
+        let mut s = IdSet::default();
+        s.insert_run(5, 9);
+        s.insert(4);
+        s.insert(10);
+        s.insert_run(20, u32::MAX);
+        assert_eq!(s.runs(), 2);
+        s.remove(7);
+        assert_eq!(s.runs(), 3);
+        assert!(s.contains(6) && !s.contains(7) && s.contains(u32::MAX));
+        assert_eq!(s.iter().take(4).collect::<Vec<_>>(), [4, 5, 6, 8]);
+        assert_eq!(s.pop_first(), Some(4));
+        s.insert_run(6, 30);
+        assert_eq!(s.runs(), 1);
+        assert_eq!(s.pop_first(), Some(5));
     }
 
     /// Ids: the smallest freed id comes back first, then one past the largest.

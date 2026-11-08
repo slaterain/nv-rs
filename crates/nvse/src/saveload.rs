@@ -5,10 +5,16 @@
 //!
 //! - **Saving** (the seam at `0x00847C45` in `BGSSaveLoadGame::SaveGame`, before the
 //!   "Finished saving" note, where xNVSE's `SaveGameHook` runs): a co-save is written next to the
-//!   `.fos` on every save (`CREATE_ALWAYS`; the header alone when nothing has data): xNVSE's own
-//!   plugin with the loaded files (`MODS`), the array variables (`ARVS`, an `ARVR` per array with
-//!   references, `ARVE`) and the string variables (`STVS`, `STVR`s, `STVE`), each map cleaned of
-//!   its temporaries first and listed in its hash map's order ([`vars::HashOrder`]).
+//!   `.fos` (`CREATE_ALWAYS`): xNVSE's own plugin with the loaded files (`MODS`), the array
+//!   variables (`ARVS`, an `ARVR` per array with references, `ARVE`) and the string variables
+//!   (`STVS`, `STVR`s, `STVE`), each map cleaned of its temporaries first and listed in its hash
+//!   map's order ([`vars::HashOrder`]); with the fixes preset's row, other plugins' sections
+//!   kept from the loaded game after it. xNVSE writes one on every save; here only when there
+//!   is something in it ([`something_to_save`]; one left from an earlier save of the name is
+//!   removed), so unmodded play leaves no extra file (docs/FIXES.md, "The script extender").
+//! - **Reading** is xNVSE's, with one guard: a count of references or elements larger than the
+//!   bytes left in its chunk is a corrupt file and stops the read as a read past the end does
+//!   (xNVSE would loop or allocate on it); the free ids below a high array id are one run.
 //! - **Before a game is loaded** (`0x00847FD9`, after the call to `00852b60`, xNVSE's
 //!   `PreLoadGameHook`): the co-save is read for each plugin's pre-load callback. xNVSE's own
 //!   (`Core_PreLoadCallback`) forgets the locals recorded per event list, drops the delayed
@@ -85,11 +91,26 @@ const MOD_NAME: u32 = 0x20;
 const ARRAY_VERSION: u32 = 2;
 const STRING_VERSION: u32 = 0;
 
-/// The save's file list as the co-save had it, mapped to today's mod indexes
-/// (`s_preloadModRefIDs`, `s_numPreloadMods`).
+/// The co-save's state between moments.
 #[derive(Default)]
 pub struct State {
+    /// The save's file list as the co-save had it, mapped to today's mod indexes
+    /// (`s_preloadModRefIDs`, `s_numPreloadMods`).
     pub preload_mods: Vec<u8>,
+    /// The fixes preset's row ([`set_keep_other_plugins`]): other plugins' sections are kept
+    /// and written back.
+    pub keep_other_plugins: bool,
+    /// The sections of plugins that are not built in, as the last co-save read held them.
+    pub kept: Vec<cosave::Kept>,
+}
+
+/// The fixes preset's row (docs/FIXES.md, "The script extender"): a co-save's sections of
+/// plugins that are not built in (JIP LN NVSE's and others', until they are) are kept byte for
+/// byte and written back on each save, so a save brought from a real modded installation
+/// keeps them; xNVSE writes only the plugins loaded. Off (vanilla), they are dropped as xNVSE
+/// drops them.
+pub fn set_keep_other_plugins(e: &mut Engine, on: bool) {
+    e.ext::<Nvse>().saveload.keep_other_plugins = on;
 }
 
 // ---- names and files ----
@@ -424,11 +445,39 @@ fn element_at(a: &ArrayVar, i: usize) -> &Element {
 pub fn save_game(e: &mut Engine, name: u32) {
     let path = co_save_path(e, name);
     let chunks = core_chunks(e);
-    let bytes = cosave::write(&[Plugin {
-        opcode_base: cosave::CORE_OPCODE_BASE,
-        chunks,
-    }]);
+    let kept = if e.ext::<Nvse>().saveload.keep_other_plugins {
+        e.ext::<Nvse>().saveload.kept.clone()
+    } else {
+        Vec::new()
+    };
+    if !something_to_save(e, &chunks, &kept) {
+        // Nothing of the extender's: no co-save (the maintainer, 2026-11-08), and none left
+        // from an earlier save of this name to be read with this one.
+        delete_file(e, &path);
+        return;
+    }
+    let bytes = cosave::write_with(
+        &[Plugin {
+            opcode_base: cosave::CORE_OPCODE_BASE,
+            chunks,
+        }],
+        &kept,
+    );
     write_file(e, &path, &bytes);
+}
+
+/// Whether a save gets a co-save: a variable to write, another plugin's section kept, or a
+/// delayed call waiting. A save without one loads as xNVSE loads a save made without it: a new
+/// game for the extender (its `NewGame` message), the variables, calls and handlers of the game
+/// before not reset. That is only right when the game saved had nothing of the extender's, so
+/// anything that would have made xNVSE's co-save read differently counts. xNVSE writes one on
+/// every save; the port leaves unmodded play without the extra file (both presets).
+pub fn something_to_save(e: &mut Engine, chunks: &[Chunk], kept: &[cosave::Kept]) -> bool {
+    chunks
+        .iter()
+        .any(|c| c.kind == tag(b"ARVR") || c.kind == tag(b"STVR"))
+        || !kept.is_empty()
+        || tick::has_pending(e)
 }
 
 // ---- loading ----
@@ -475,8 +524,17 @@ fn read_plugins(e: &mut Engine, r: &mut Reader, pass: Pass) -> Result<(), OutOfR
         if plugin.opcode_base == cosave::CORE_OPCODE_BASE {
             core_had_data = true;
             core_callback(e, r, pass)?;
+        } else if pass == Pass::PreLoad && e.ext::<Nvse>().saveload.keep_other_plugins {
+            // A plugin that is not built in (JIP LN NVSE's chunks come with I-13): kept for
+            // the next save (the fixes preset's row).
+            let data = r.take_plugin(plugin.length)?;
+            e.ext::<Nvse>().saveload.kept.push(cosave::Kept {
+                opcode_base: plugin.opcode_base,
+                chunks: plugin.chunks,
+                data,
+            });
         } else {
-            // A plugin that is not loaded (JIP LN NVSE's chunks come with I-13).
+            // A plugin that is not loaded: xNVSE skips its data.
             r.skip(plugin.length)?;
         }
         let expected = start + plugin.length as usize;
@@ -614,6 +672,10 @@ fn load_arrays(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
         let mut refs = Vec::new();
         if version >= 1 {
             let count = r.read32()?;
+            // A reference takes a byte: more than the chunk has left is a corrupt file.
+            if count > r.left() {
+                return Err(OutOfRange);
+            }
             for _ in 0..count {
                 let m = r.read8()?;
                 if m == 0xff {
@@ -635,14 +697,17 @@ fn load_arrays(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
         if modi == 0 {
             continue;
         }
-        // The ids not read below this one are free (`SetIDAvailable`).
-        last_index_read += 1;
-        let st = &mut e.ext::<Nvse>().vars;
-        while last_index_read < id {
-            if last_index_read != 0 {
-                st.array_ids.available.insert(last_index_read);
-            }
-            last_index_read += 1;
+        // The ids not read below this one are free (`SetIDAvailable`, one at a time in xNVSE;
+        // here as one run, so a corrupt id of any size costs nothing).
+        last_index_read = last_index_read.wrapping_add(1);
+        if last_index_read < id {
+            let first = last_index_read.max(1);
+            e.ext::<Nvse>()
+                .vars
+                .array_ids
+                .available
+                .insert_run(first, id - 1);
+            last_index_read = id;
         }
         let elements = if key_type == vars::KEY_STRING {
             Container::StrMap(Vec::new())
@@ -659,72 +724,12 @@ fn load_arrays(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
             refs,
             elements,
         };
-        let count = r.read32()?;
-        if let Container::Array(v) = &mut arr.elements {
-            v.resize(
-                count as usize,
-                Element {
-                    data: Data::Invalid,
-                    owning_array: id,
-                },
-            );
-        }
-        for i in 0..count as usize {
-            let mut str_key = Vec::new();
-            if key_type == vars::KEY_STRING {
-                let len = r.read16()?;
-                str_key = c_text(r.read_data(u32::from(len))?);
-            } else if !packed || version < 2 {
-                if let Some(v) = r.read64()? {
-                    num_key = v;
-                }
-            }
-            let kind = r.read8()?;
-            let data = match kind {
-                1 => Data::Number(r.read64()?.unwrap_or(0.0)),
-                3 => {
-                    let len = r.read16()?;
-                    if len != 0 {
-                        Data::Str(c_text(r.read_data(u32::from(len))?))
-                    } else {
-                        Data::Str(Vec::new())
-                    }
-                }
-                4 => Data::Array(r.read32()?),
-                2 => {
-                    let form = r.read32()?;
-                    Data::Form(resolve_ref_id(e, form).unwrap_or(0))
-                }
-                _ => Data::Invalid,
-            };
-            let el = Element {
-                data,
-                owning_array: id,
-            };
-            match &mut arr.elements {
-                Container::Array(v) => v[i] = el,
-                Container::NumMap(v) => match v.iter().position(|(k, _)| *k >= num_key) {
-                    Some(p) if v[p].0 == num_key => v[p].1 = el,
-                    Some(p) => v.insert(p, (num_key, el)),
-                    None => v.push((num_key, el)),
-                },
-                Container::StrMap(v) => {
-                    match v
-                        .iter()
-                        .position(|(k, _)| vars::str_compare(&upper, k, &str_key).is_ge())
-                    {
-                        Some(p) if vars::str_compare(&upper, &v[p].0, &str_key).is_eq() => {
-                            v[p].1 = el
-                        }
-                        Some(p) => v.insert(p, (str_key, el)),
-                        None => v.push((str_key, el)),
-                    }
-                }
-            }
-        }
+        // `Add` comes before the elements are read: an array whose elements stop short (a
+        // truncated or corrupt file) is kept with what was read.
+        let read = load_elements(e, r, &mut arr, version, &mut num_key, &upper);
         let st = &mut e.ext::<Nvse>().vars;
         st.array_ids.used.insert(id);
-        st.array_ids.available.remove(&id);
+        st.array_ids.available.remove(id);
         if arr.refs.is_empty() {
             st.array_ids.temp.insert(id);
         }
@@ -732,6 +737,88 @@ fn load_arrays(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
             st.array_order.insert(id);
         }
         st.arrays.insert(id, arr);
+        read?;
+    }
+    Ok(())
+}
+
+/// An array's elements from its record (the rest of `ArrayVarMap::Load`'s loop body).
+fn load_elements(
+    e: &mut Engine,
+    r: &mut Reader,
+    arr: &mut ArrayVar,
+    version: u32,
+    num_key: &mut f64,
+    upper: &[u8; 256],
+) -> Result<(), OutOfRange> {
+    let (id, key_type, packed) = (arr.id, arr.key_type, arr.packed);
+    let count = r.read32()?;
+    // An element takes a byte at least: more than the chunk has left is a corrupt file.
+    if count > r.left() {
+        return Err(OutOfRange);
+    }
+    if let Container::Array(v) = &mut arr.elements {
+        v.resize(
+            count as usize,
+            Element {
+                data: Data::Invalid,
+                owning_array: id,
+            },
+        );
+    }
+    for i in 0..count as usize {
+        let mut str_key = Vec::new();
+        if key_type == vars::KEY_STRING {
+            let len = r.read16()?;
+            str_key = c_text(r.read_data(u32::from(len))?);
+        } else if !packed || version < 2 {
+            if let Some(v) = r.read64()? {
+                *num_key = v;
+            }
+        }
+        let kind = r.read8()?;
+        let data = match kind {
+            1 => Data::Number(r.read64()?.unwrap_or(0.0)),
+            3 => {
+                let len = r.read16()?;
+                if len != 0 {
+                    Data::Str(c_text(r.read_data(u32::from(len))?))
+                } else {
+                    Data::Str(Vec::new())
+                }
+            }
+            4 => Data::Array(r.read32()?),
+            2 => {
+                let form = r.read32()?;
+                Data::Form(resolve_ref_id(e, form).unwrap_or(0))
+            }
+            _ => Data::Invalid,
+        };
+        let el = Element {
+            data,
+            owning_array: id,
+        };
+        // The maps stay sorted: found by binary search, as `vars::set_element` inserts.
+        match &mut arr.elements {
+            Container::Array(v) => v[i] = el,
+            Container::NumMap(v) => {
+                let key = *num_key;
+                let p = v.partition_point(|(k, _)| *k < key);
+                if p < v.len() && v[p].0 == key {
+                    v[p].1 = el;
+                } else {
+                    v.insert(p, (key, el));
+                }
+            }
+            Container::StrMap(v) => {
+                let p = v.partition_point(|(k, _)| vars::str_compare(upper, k, &str_key).is_lt());
+                if p < v.len() && vars::str_compare(upper, &v[p].0, &str_key).is_eq() {
+                    v[p].1 = el;
+                } else {
+                    v.insert(p, (str_key, el));
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -743,6 +830,8 @@ fn load_arrays(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
 fn new_game_callback(e: &mut Engine) {
     vars::clean_arrays(e);
     vars::clean_strings(e);
+    // A new game holds no other plugin's data.
+    e.ext::<Nvse>().saveload.kept.clear();
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_SaveLoad.cpp: NewGameHook.
@@ -754,6 +843,8 @@ pub fn new_game(e: &mut Engine) {
 
 /// Before the `.fos` (`Serialization::HandlePreLoadGame`).
 pub fn pre_load(e: &mut Engine, name: u32) {
+    // The other plugins' sections kept are the loaded game's, or none.
+    e.ext::<Nvse>().saveload.kept.clear();
     handle_load(e, name, Pass::PreLoad);
 }
 

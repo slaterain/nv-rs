@@ -52,10 +52,25 @@ pub struct Plugin {
     pub chunks: Vec<Chunk>,
 }
 
+/// Another plugin's section as a co-save held it: its header's opcode base and chunk count, and
+/// its bytes after the header (chunk headers included), kept as they were.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Kept {
+    pub opcode_base: u32,
+    pub chunks: u32,
+    pub data: Vec<u8>,
+}
+
+/// [`write_with`] with no kept section.
+pub fn write(plugins: &[Plugin]) -> Vec<u8> {
+    write_with(plugins, &[])
+}
+
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Serialization.cpp: HandleSaveGame,
 // OpenRecord, FlushWriteChunk.
-/// The file's bytes: the header, then each plugin that has chunks.
-pub fn write(plugins: &[Plugin]) -> Vec<u8> {
+/// The file's bytes: the header, then each plugin that has chunks, then the kept sections of
+/// other plugins byte for byte (the fixes preset's; xNVSE writes only loaded plugins).
+pub fn write_with(plugins: &[Plugin], kept: &[Kept]) -> Vec<u8> {
     let mut out = vec![0; HEADER_SIZE];
     let mut count = 0u32;
     for p in plugins.iter().filter(|p| !p.chunks.is_empty()) {
@@ -74,6 +89,13 @@ pub fn write(plugins: &[Plugin]) -> Vec<u8> {
             out.extend_from_slice(&(c.data.len() as u32).to_le_bytes());
             out.extend_from_slice(&c.data);
         }
+    }
+    for k in kept {
+        count += 1;
+        out.extend_from_slice(&k.opcode_base.to_le_bytes());
+        out.extend_from_slice(&k.chunks.to_le_bytes());
+        out.extend_from_slice(&(k.data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&k.data);
     }
     out[0..4].copy_from_slice(&SIGNATURE.to_le_bytes());
     out[4..8].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
@@ -208,6 +230,11 @@ impl<'a> Reader<'a> {
         Ok(Some(h))
     }
 
+    /// A plugin's data as it is (for keeping it); the read is checked as `Skip` checks it.
+    pub fn take_plugin(&mut self, n: u32) -> Result<Vec<u8>, OutOfRange> {
+        self.take(n as usize).map(<[u8]>::to_vec)
+    }
+
     /// `Skip(length, true)`: past a plugin's data (the read is checked).
     pub fn skip(&mut self, n: u32) -> Result<(), OutOfRange> {
         self.take(n as usize).map(|_| ())
@@ -244,7 +271,9 @@ impl<'a> Reader<'a> {
         Ok(Some((kind, version, length)))
     }
 
-    fn left(&self) -> u32 {
+    /// The open chunk's bytes not yet read (0 with none open): a count of items that each take
+    /// at least a byte cannot be larger.
+    pub fn left(&self) -> u32 {
         self.chunk_left.unwrap_or(0)
     }
 

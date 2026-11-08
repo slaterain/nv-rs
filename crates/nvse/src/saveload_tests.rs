@@ -355,7 +355,7 @@ fn array_ids_freed_as_xnvse_reads_them() {
     });
     pre_load(&mut e, NAME);
     let ids = &e.ext::<Nvse>().vars.array_ids;
-    assert_eq!(ids.available.iter().copied().collect::<Vec<_>>(), [1, 2, 4]);
+    assert_eq!(ids.available.iter().collect::<Vec<_>>(), [1, 2, 4]);
     assert!(vars::array_exists(&e, 5) && vars::array_exists(&e, 3));
 }
 
@@ -376,4 +376,197 @@ fn delete_and_rename_take_the_co_save_along() {
             "rename C:\\Saves\\Old.nvse C:\\Saves\\Old.nvse.bak"
         ]
     );
+}
+
+/// `Save 7`'s co-save in the stand-in save folder.
+const CO_SAVE: &str = "C:\\Saves\\Save 7.nvse";
+
+/// xNVSE's own plugin with the copy's two files and the given chunks between `ARVS` and
+/// `ARVE`, written as the co-save of `Save 7`.
+fn put_arrays(arrays: Vec<Chunk>, others: &[cosave::Kept]) -> Vec<u8> {
+    let mut mods = ChunkWriter::default();
+    mods.u8(2);
+    for n in ["FalloutNV.esm", "A.esp"] {
+        mods.u16(n.len() as u16);
+        mods.bytes(n.as_bytes());
+    }
+    let marker = |t: &[u8; 4]| Chunk {
+        kind: tag(t),
+        version: 2,
+        data: Vec::new(),
+    };
+    let mut chunks = vec![
+        Chunk {
+            kind: tag(b"MODS"),
+            version: 0,
+            data: mods.data,
+        },
+        marker(b"ARVS"),
+    ];
+    chunks.extend(arrays);
+    chunks.push(marker(b"ARVE"));
+    let bytes = cosave::write_with(
+        &[Plugin {
+            opcode_base: 0x1400,
+            chunks,
+        }],
+        others,
+    );
+    FILES.with(|f| {
+        f.borrow_mut()
+            .insert(CO_SAVE.as_bytes().to_vec(), bytes.clone())
+    });
+    bytes
+}
+
+/// An array record of A.esp: its id, the reference count as written, a number map whose
+/// element count is `count` with `elements` actually there (key, value).
+fn map_record(id: u32, refs: u32, count: u32, elements: &[(f64, f64)]) -> Chunk {
+    let mut w = ChunkWriter::default();
+    w.u8(1);
+    w.u32(id);
+    w.u8(KEY_NUMBER);
+    w.u8(0);
+    w.u32(refs);
+    if refs < 16 {
+        for _ in 0..refs {
+            w.u8(1);
+        }
+    }
+    w.u32(count);
+    for (k, v) in elements {
+        w.f64(*k);
+        w.u8(1);
+        w.f64(*v);
+    }
+    Chunk {
+        kind: tag(b"ARVR"),
+        version: 2,
+        data: w.data,
+    }
+}
+
+/// Review item 1 of #328: counts and ids from a corrupt file. A reference or element count
+/// larger than the bytes left in its chunk stops the read, as a read past the end does (no
+/// loop over it, no allocation); an id of any size marks the ids below it free as one run.
+#[test]
+fn corrupt_co_saves_stop_the_read() {
+    let mut e = engine();
+    set_files(&mut e, &["FalloutNV.esm", "A.esp"]);
+    // A huge id: one run of free ids, the next new array takes 1.
+    put_arrays(vec![map_record(0xffff_fff0, 1, 1, &[(2.0, 3.0)])], &[]);
+    pre_load(&mut e, NAME);
+    assert!(vars::array_exists(&e, 0xffff_fff0));
+    assert_eq!(e.ext::<Nvse>().vars.array_ids.available.runs(), 1);
+    assert_eq!(vars::create_array(&mut e, KEY_NUMBER, true, 1), 1);
+    // A huge reference count: the read stops there; the next array is not read.
+    put_arrays(
+        vec![map_record(4, 0xffff_ffff, 0, &[]), map_record(5, 1, 0, &[])],
+        &[],
+    );
+    pre_load(&mut e, NAME);
+    assert!(!vars::array_exists(&e, 4) && !vars::array_exists(&e, 5));
+    // A huge element count: the array is in (xNVSE adds it first), nothing after it.
+    put_arrays(
+        vec![
+            map_record(6, 1, 0x7fff_ffff, &[(1.0, 1.0)]),
+            map_record(7, 1, 0, &[]),
+        ],
+        &[],
+    );
+    pre_load(&mut e, NAME);
+    assert_eq!(vars::array(&e, 6).map(|a| a.len()), Some(0));
+    assert!(!vars::array_exists(&e, 7));
+}
+
+/// Review item 5 of #328: a file cut in the middle of an array's elements keeps the array with
+/// the elements read (xNVSE adds it before reading them), the elements sorted as the map keeps
+/// them; nothing after it is read.
+#[test]
+fn a_truncated_co_save_keeps_the_partial_array() {
+    let mut e = engine();
+    set_files(&mut e, &["FalloutNV.esm", "A.esp"]);
+    let full = put_arrays(
+        vec![map_record(3, 1, 3, &[(9.0, 1.0), (2.0, 2.0), (5.0, 3.0)])],
+        &[],
+    );
+    // Cut 10 bytes into the third element (a key, a type byte and a value: 17 bytes), which
+    // ends where the `ARVE` chunk header (12 bytes) begins.
+    let cut = full.len() - 12 - 17 + 10;
+    FILES.with(|f| {
+        f.borrow_mut()
+            .insert(CO_SAVE.as_bytes().to_vec(), full[..cut].to_vec())
+    });
+    pre_load(&mut e, NAME);
+    let a = vars::array(&e, 3).expect("kept");
+    assert_eq!(a.keys(), [Key::Number(2.0), Key::Number(9.0)]);
+}
+
+/// Review item 3 of #328 (the fixes preset's row): another plugin's section is kept from the
+/// co-save loaded and written back after xNVSE's own, byte for byte; without the row it goes,
+/// as with xNVSE.
+#[test]
+fn other_plugins_sections_go_back_with_the_row() {
+    let jip = cosave::Kept {
+        opcode_base: 0x2200,
+        chunks: 1,
+        data: [
+            &u32::from_le_bytes(*b"FGPJ").to_le_bytes()[..],
+            &1u32.to_le_bytes(),
+            &8u32.to_le_bytes(),
+            &[0, 0, 0, 0, 0, 0, 0x80, 0x3f],
+        ]
+        .concat(),
+    };
+    for row in [true, false] {
+        let mut e = engine();
+        set_files(&mut e, &["FalloutNV.esm", "A.esp"]);
+        set_keep_other_plugins(&mut e, row);
+        put_arrays(
+            vec![map_record(2, 1, 1, &[(0.0, 4.0)])],
+            std::slice::from_ref(&jip),
+        );
+        pre_load(&mut e, NAME);
+        // The array is held by a variable of A.esp, as in the game.
+        let mut held = 0;
+        vars::add_reference(&mut e, &mut held, 2, 1);
+        save_game(&mut e, NAME);
+        let bytes = file(CO_SAVE).unwrap();
+        let mut r = Reader::open(&bytes).unwrap();
+        let mut bases = Vec::new();
+        while let Some(p) = r.next_plugin().unwrap() {
+            bases.push(p.opcode_base);
+            let section = r.take_plugin(p.length).unwrap();
+            if p.opcode_base == 0x2200 {
+                assert_eq!(section, jip.data);
+            }
+            r.end_plugin();
+        }
+        let want: &[u32] = if row { &[0x1400, 0x2200] } else { &[0x1400] };
+        assert_eq!(bases, want, "row {row}");
+    }
+}
+
+/// Review item 4 of #328: a save with nothing of the extender's writes no co-save, and removes
+/// one left from an earlier save of the same name; a delayed call waiting is something.
+#[test]
+fn no_co_save_when_there_is_nothing_in_it() {
+    let mut e = engine();
+    set_files(&mut e, &["FalloutNV.esm"]);
+    FILES.with(|f| {
+        f.borrow_mut()
+            .insert(CO_SAVE.as_bytes().to_vec(), b"stale".to_vec())
+    });
+    save_game(&mut e, NAME);
+    assert!(file(CO_SAVE).is_none());
+    e.ext::<Nvse>().tick.after.push(crate::tick::Delayed {
+        script: 0,
+        time: 1.0,
+        this_obj: 0,
+        mode: 0,
+        args: Vec::new(),
+        serial: 1,
+    });
+    save_game(&mut e, NAME);
+    assert!(file(CO_SAVE).is_some());
 }
