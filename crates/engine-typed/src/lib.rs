@@ -17,6 +17,7 @@
 
 pub mod culling;
 pub mod lockfree;
+pub mod pathing;
 pub mod shader;
 
 /// Declares a class of the game once: a marker type with its PC size and fields at their PC offsets
@@ -68,6 +69,7 @@ pub mod units {
     pub fn funcs(_out: &mut Vec<(u32, engine_core::AbiFn)>) {
         engine_core::typed::provide(&crate::lockfree::LOCKFREE);
         engine_core::typed::provide(&crate::culling::CULLING);
+        engine_core::typed::provide(&crate::pathing::PATHING);
         engine_core::typed::provide(&crate::shader::SHADER);
     }
 }

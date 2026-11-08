@@ -36,9 +36,14 @@ each function belongs to.
   races are undefined behaviour in Rust's model and the game's own
   synchronisation (interlocked operations, locks, waits: calls the compiler
   cannot see through) must order them; the table of mapped pages changes
-  only through `&mut self` (`map`, `unmap`, the heap). Real threads need a
-  real stop-the-world for it (`mem.rs`, "Threads"). The diagnostics (write
-  watch, block check, touch census) run stepped only.
+  only through `&mut self` (`map`, `unmap`, the heap). With real threads
+  (`NV_THREADS=real`, below) each thread's engine holds a view of one shared
+  `Mem` (`Mem::start_sharing`): loads and stores are its own, the same
+  instructions; the heap, the asked sizes `_msize` reads and the page table
+  change on the shared one under one lock; pages unmapped stay committed and
+  go back to the system only at a barrier with every game thread stopped
+  (`Mem::hand_back_deferred`). The diagnostics (write watch, block check,
+  touch census) run stepped only.
 - **The exe's data**: `Engine::with_exe(path)` maps `.rdata`, `.data`,
   `.tls` and `CONST` of the player's installed FalloutNV.exe (checked
   against 1.4.0.525) at their addresses. Constants, strings, vtables and
@@ -69,7 +74,27 @@ each function belongs to.
   `Sleep`; the main thread's wait runs the runnable threads in creation
   order until its object is signalled, a game thread's wait hands back to
   the main thread, `SetEvent`/`ReleaseSemaphore` wake waiters, and a wait no
-  thread can satisfy stops the run naming the object. So runs are
+  thread can satisfy stops the run naming the object. **Real threads**
+  (`NV_THREADS=real`, off by default; `engine_core::real_threads`, ADR-0015):
+  each game thread runs on its own OS thread with its own `Engine` (call
+  stack, call cache, TLS block and values, x87 word, last error, guest stack:
+  `Engine::real`), sharing memory, the kernel objects (`KernelRef`) and the
+  function table (copied from a template; later registrations reach every
+  engine). The interlocked imports are real atomics (the exe has no inline
+  `lock` instruction outside the C runtime's exception cache), critical
+  sections a real owner table, `Sleep` a real sleep; waits block on a
+  condition variable under the re-entrant kernel lock every other platform
+  function runs under (Direct3D, sound, files, windows: the exe creates its
+  device `D3DCREATE_MULTITHREADED`). The host holds the kernel lock between
+  frames. A thread-local storage index freed or handed out again reads 0 on
+  every thread, as on Windows (the lock-free maps keep per-thread accessors
+  there). `SuspendThread` parks a running game thread at its next platform
+  call, wait or sleep until it is resumed. Diagnostics keep threads stepped, except the block check
+  (`NV_BLOCK_CHECK`, allocations and frees named with their thread) and
+  `NV_REAL_DUMP` (every thread's function, last calls and waits printed when
+  one stops; stale thread-local reads reported). The stepped host also has a
+  seeded `NV_THREADS=shuffle:SEED` (each turn's length and wake delay drawn
+  at random, so an order-dependent bug reproduces from its seed). So stepped runs are
   deterministic (for one processor count, which `iNumHWThreads` follows).
   This avoids unsafe stack switching; it costs an OS thread per game thread
   and a channel round trip per switch.
@@ -406,11 +431,23 @@ its loops call. A plugin that replaces dialogue runs it once per replaced info o
 (YUP: about 4,500 searches of about 68,000 infos each), so it is the bulk of such a plugin's extra
 load. On since its gate (2026-11-07, with YUP: process start to the first main frame 8.0-8.4 s in six
 runs against 9.2-20.9 s off; the menu, which the intro sets, and Continue the same within the spread).
+Then `topic_order` (`crates/engine-fallout-forms/src/topic_order.rs`, same crate): the compare a topic list
+is ordered by (`0061a450`) and what it calls (a topic's editor id, its priority, the float check, the
+case-insensitive compare). The sorted insert asks it of each node it walks, about 21,000 inserts with the
+base game and its add-ons and more with every mod that adds dialogue. On since its gate (2026-11-08: about
+0.5 s off the start-up data load, clear with the add-ons only; YUP within noise over two runs). Its members
+are game-wide helpers (the case-insensitive compare `00404dc0`, which animation, scripts, models and AI call
+too; the float check `0040eb10`; the priority `00526ae0`; `TESTopic`'s editor id `00618660`), so
+`NV_TYPED=topic_order:off` changes more than the topic order, and a trace loses the two CRT calls under each
+`00404dc0` while it is on.
 Then `lockfree` (`crates/engine-typed`, a crate above the core that provides its family): the
 lock-free maps, their interfaces, iterators and holder, stage 1 (objects stay in guest memory), off by
 default (`NV_TYPED=lockfree` tries it); its differential tests are `crates/engine/tests/typed_lockfree.rs`.
 And `culling` (same crate): the culling walk, stage 1, off by default (`NV_TYPED=culling`);
-its tests are `crates/engine/tests/typed_culling.rs`.
+its tests are `crates/engine/tests/typed_culling.rs`. And `pathing` (same crate): what the AI's pathfinding threads
+run most (navmesh getters, matching edges, the triangle under a point, the search's keys, goal test and
+arrays, the point-of-view geometry, pathing locations, the point helpers), stage 1, off by default
+(`NV_TYPED=pathing`); its tests are `crates/engine/tests/typed_pathing.rs`.
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with
