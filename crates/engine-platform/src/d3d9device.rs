@@ -2051,6 +2051,17 @@ fn set_texture(e: &mut Engine, this: Ptr, sampler: u32, texture: u32) -> u32 {
     }
     // The texture and the device are looked up once each (they are apart in `Objects`).
     let objects = &mut state!(e).graphics.device_objects;
+    // The texture the sampler holds already: it is a texture of this layer (a bound texture lives
+    // on), and counting it once more and letting go of it once changes nothing, as below, without
+    // looking it up.
+    if texture != 0
+        && objects
+            .devices
+            .get(&this.addr())
+            .is_some_and(|d| d.textures.get(&sampler) == Some(&texture))
+    {
+        return D3D_OK;
+    }
     let held = if texture != 0 {
         let Some(t) = objects.textures.get_mut(&texture) else {
             panic!(
@@ -4329,6 +4340,71 @@ pub(crate) mod tests {
         // Unbinding releases: the stream's buffer goes.
         assert_eq!(e.vcall(device, 4 * 100, &[0, 0, 0, 0]).u32(), D3D_OK);
         assert!(!state!(e).graphics.device_objects.resources_hold(vb));
+    }
+
+    /// Binding what a stream, the indices, a shader or a sampler holds already (the calls that
+    /// skip looking the object up) changes only a stream's offset and stride: the object stays
+    /// held once, so it goes at the one unbinding after the program let go of it, and a wrong
+    /// kind is still refused.
+    #[test]
+    fn binding_again_what_is_bound_changes_nothing_but_the_stream_offset() {
+        let (mut e, d3d, present) = d3d();
+        let out = e.mem.alloc(4);
+        e.vcall(d3d, CREATE_DEVICE, &[0, 1, 0x11c, 0x40, present, out]);
+        let device = e.mem.u32(out);
+        e.vcall(device, 4 * 26, &[64, 0, 0x142, 1, out, 0]);
+        let vb = e.mem.u32(out);
+        e.vcall(device, 4 * 27, &[12, 0, 101, 1, out, 0]);
+        let ib = e.mem.u32(out);
+        let function = e.mem.alloc(16);
+        for (i, token) in [0xfffe_0300u32, 0x1234, 0x0000_ffff].iter().enumerate() {
+            e.mem.set_u32(function + 4 * i as u32, *token);
+        }
+        e.vcall(device, 4 * 91, &[function, out]);
+        let vs = e.mem.u32(out);
+        let table = test_table() + "\nDomain\td1\t17\nCheckDeviceFormat\t0 1 16 0 3\t0\t\td1";
+        d3d9::load_adapter_table(&mut e, &table);
+        e.vcall(device, 4 * 23, &[4, 4, 1, 0, 0x17, 1, out, 0]);
+        let texture = e.mem.u32(out);
+        for _ in 0..3 {
+            assert_eq!(e.vcall(device, 4 * 100, &[2, vb, 0, 32]).u32(), D3D_OK);
+            assert_eq!(e.vcall(device, 4 * 104, &[ib]).u32(), D3D_OK);
+            assert_eq!(e.vcall(device, 4 * 92, &[vs]).u32(), D3D_OK);
+            assert_eq!(e.vcall(device, 4 * 65, &[1, texture]).u32(), D3D_OK);
+        }
+        // Again with another offset and stride: kept for GetStreamSource.
+        assert_eq!(e.vcall(device, 4 * 100, &[2, vb, 8, 16]).u32(), D3D_OK);
+        let got = e.mem.alloc(12);
+        assert_eq!(
+            e.vcall(device, 4 * 101, &[2, got, got + 4, got + 8]).u32(),
+            D3D_OK
+        );
+        assert_eq!(
+            (e.mem.u32(got), e.mem.u32(got + 4), e.mem.u32(got + 8)),
+            (vb, 8, 16)
+        );
+        assert_eq!(e.vcall(vb, 8, &[]).u32(), 1, "GetStreamSource's reference");
+        // A wrong kind is refused as before, and leaves what is bound.
+        assert_eq!(
+            e.vcall(device, 4 * 100, &[2, ib, 0, 32]).u32(),
+            D3DERR_INVALIDCALL
+        );
+        assert_eq!(e.vcall(device, 4 * 104, &[vb]).u32(), D3DERR_INVALIDCALL);
+        // The program lets go of each: all live on, bound once.
+        for object in [vb, ib, vs, texture] {
+            assert_eq!(e.vcall(object, 8, &[]).u32(), 0, "{object:#x}");
+        }
+        let objects = &state!(e).graphics.device_objects;
+        assert!(objects.resources_hold(vb) && objects.resources_hold(ib));
+        assert!(objects.resources_hold(vs) && !objects.textures.is_empty());
+        // One unbinding each lets go of them.
+        assert_eq!(e.vcall(device, 4 * 100, &[2, 0, 0, 0]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 104, &[0]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 92, &[0]).u32(), D3D_OK);
+        assert_eq!(e.vcall(device, 4 * 65, &[1, 0]).u32(), D3D_OK);
+        let objects = &state!(e).graphics.device_objects;
+        assert!(!objects.resources_hold(vb) && !objects.resources_hold(ib));
+        assert!(!objects.resources_hold(vs) && objects.textures.is_empty());
     }
 
     #[test]

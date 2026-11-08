@@ -59,7 +59,7 @@ enum Object {
 pub struct Real {
     windows: HashMap<u32, isize>,
     d3d: Option<IDirect3D9>,
-    objects: engine_core::AddrMap<u32, Object>,
+    objects: Objects,
     /// Open locks of buffers: (offset, size, flags), innermost last.
     locks: engine_core::AddrMap<u32, Vec<(u32, u32, u32)>>,
     /// The buffers made with `D3DUSAGE_DYNAMIC` (their locks pass `DISCARD`/`NOOVERWRITE` on).
@@ -85,6 +85,66 @@ impl std::fmt::Debug for Real {
             .field("d3d", &self.d3d.is_some())
             .field("objects", &self.objects.len())
             .finish()
+    }
+}
+
+/// The real objects by the modelled object's address, with the last real device kept apart: every
+/// forwarded call looks its device up ([`device`]), and the game has one, so it is found by one
+/// compare instead of a probe of the table of every texture, surface and buffer.
+#[derive(Default)]
+struct Objects {
+    map: engine_core::AddrMap<u32, Object>,
+    /// The modelled device the map holds last made or replaced, and its real device, not counted
+    /// (the map's entry holds the reference): emptied with the entry.
+    device: Option<(u32, std::mem::ManuallyDrop<IDirect3DDevice9>)>,
+}
+
+impl Objects {
+    #[inline]
+    fn get(&self, at: &u32) -> Option<&Object> {
+        self.map.get(at)
+    }
+
+    #[inline]
+    fn contains_key(&self, at: &u32) -> bool {
+        self.map.contains_key(at)
+    }
+
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    fn insert(&mut self, at: u32, object: Object) -> Option<Object> {
+        if let Object::Device(d) = &object {
+            // SAFETY: an interface is one non-null COM pointer; the copy is never released, and it
+            // goes when the map's entry does (below and in `remove`).
+            self.device = Some((
+                at,
+                std::mem::ManuallyDrop::new(unsafe { std::mem::transmute_copy(d) }),
+            ));
+        } else if self.device.as_ref().is_some_and(|(d, _)| *d == at) {
+            self.device = None;
+        }
+        self.map.insert(at, object)
+    }
+
+    fn remove(&mut self, at: &u32) -> Option<Object> {
+        if self.device.as_ref().is_some_and(|(d, _)| d == at) {
+            self.device = None;
+        }
+        self.map.remove(at)
+    }
+
+    /// The real device of the modelled device `at`, borrowed ([`device`]).
+    #[inline]
+    fn device(&self, at: u32) -> Option<&IDirect3DDevice9> {
+        match &self.device {
+            Some((d, device)) if *d == at => Some(device),
+            _ => match self.map.get(&at) {
+                Some(Object::Device(d)) => Some(d),
+                _ => None,
+            },
+        }
     }
 }
 
@@ -168,13 +228,13 @@ fn words<const N: usize>(e: &Engine, at: u32) -> [u32; N] {
 /// call, tens of thousands a frame.
 #[inline]
 fn device(e: &Engine, this: u32) -> Option<std::mem::ManuallyDrop<IDirect3DDevice9>> {
-    match state_ref!(e).graphics.real.objects.get(&this) {
+    state_ref!(e)
+        .graphics
+        .real
+        .objects
+        .device(this)
         // SAFETY: an interface is one non-null COM pointer; the copy is never released.
-        Some(Object::Device(d)) => Some(std::mem::ManuallyDrop::new(unsafe {
-            std::mem::transmute_copy(d)
-        })),
-        _ => None,
-    }
+        .map(|d| std::mem::ManuallyDrop::new(unsafe { std::mem::transmute_copy(d) }))
 }
 
 /// The real device behind the modelled device `this`, counted (for a caller that hands it to
@@ -3062,6 +3122,42 @@ mod tests {
         set_stream_source(&mut e, device, 0, 0, 0, 0, 0);
         present(&mut e, device, 0, 0, 0, 0, 0);
         assert!(state!(e).graphics.real.graveyard.is_empty());
+    }
+
+    /// The device kept apart from the object table answers as the table does: the same real
+    /// device, none once the modelled one is forgotten, and a device at another address found in
+    /// the table. Skipped where there is no Direct3D 9 device.
+    #[test]
+    fn the_kept_device_answers_as_the_object_table() {
+        let mut e = Engine::new();
+        let Some(at) = test_device(&mut e, 0x54) else {
+            return;
+        };
+        let raw = |d: Option<std::mem::ManuallyDrop<IDirect3DDevice9>>| {
+            d.map(|d| windows::core::Interface::as_raw(&*d))
+        };
+        let table = |e: &Engine, at: u32| match state_ref!(e).graphics.real.objects.map.get(&at) {
+            Some(Object::Device(d)) => Some(windows::core::Interface::as_raw(d)),
+            _ => None,
+        };
+        assert!(raw(device(&e, at)).is_some());
+        assert_eq!(raw(device(&e, at)), table(&e, at));
+        // Another address: from the table (none there).
+        assert_eq!(raw(device(&e, at + 8)), None);
+        // The same device at a second address too: the newer is kept, the older found in the table.
+        let real_device = real_device(&e, at).expect("the real device");
+        real(&mut e)
+            .objects
+            .insert(at + 8, Object::Device(real_device));
+        assert_eq!(raw(device(&e, at + 8)), table(&e, at + 8));
+        assert_eq!(raw(device(&e, at)), table(&e, at));
+        // Forgotten: none, and none kept.
+        forget(&mut e, at + 8);
+        assert_eq!(raw(device(&e, at + 8)), None);
+        assert!(state_ref!(e).graphics.real.objects.device.is_none());
+        assert_eq!(raw(device(&e, at)), table(&e, at));
+        forget(&mut e, at);
+        assert_eq!(raw(device(&e, at)), None);
     }
 
     /// A real device on a hidden window of the window thread, as an engine object at 0x1000
