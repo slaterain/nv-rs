@@ -575,6 +575,7 @@ impl ExtendState {
                 .iter()
                 .filter_map(|(k, s)| match s {
                     ExtSlot::Shared(s) => Some((*k, ExtSlot::Shared(s.clone()))),
+                    ExtSlot::Free(v) => Some((*k, ExtSlot::Free(v.clone()))),
                     ExtSlot::Own(_) => None,
                 })
                 .collect(),
@@ -591,6 +592,8 @@ impl ExtendState {
 pub(crate) enum ExtSlot {
     Own(Box<dyn std::any::Any>),
     Shared(std::sync::Arc<Shared>),
+    /// One value every engine of a game shares without a lock ([`Engine::ext_free`]).
+    Free(std::sync::Arc<dyn std::any::Any + Send + Sync>),
 }
 
 /// A value the engines of a game's threads share: a built-in's game-wide state (the script
@@ -676,7 +679,7 @@ fn hold(s: &std::sync::Arc<Shared>, engine: u64, real: Option<&crate::real_threa
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if *h == Some(engine) {
-            // This engine took it on another OS thread (stepped threads).
+            same_engine_on_another_os_thread(real.is_some());
             return;
         }
         if h.is_none() {
@@ -700,6 +703,17 @@ fn hold(s: &std::sync::Arc<Shared>, engine: u64, real: Option<&crate::real_threa
         *h = Some(engine);
     });
     HELD.with(|l| l.borrow_mut().push((s.clone(), engine)));
+}
+
+/// The holding engine takes its slot again on another OS thread. With stepped threads that is
+/// right: their game threads run the one engine one at a time. A real thread's engine is one OS
+/// thread's only, so with real threads it is a second thread running the same engine, which the
+/// lock would not keep apart: stopped here, not left for the barrier to find.
+fn same_engine_on_another_os_thread(real_threads: bool) {
+    assert!(
+        !real_threads,
+        "a real thread's engine used on a second OS thread"
+    );
 }
 
 /// The id of a new engine's extension state (for [`Shared`]'s holder).
@@ -748,6 +762,26 @@ impl Engine {
                 unsafe { (*s.value.get()).downcast_mut::<T>() }
                     .unwrap_or_else(|| unreachable!("a slot holds the type it is keyed by"))
             }
+            ExtSlot::Free(_) => panic!("a lock-free slot is reached through `ext_free`"),
+        }
+    }
+
+    /// The lock-free shared slot of type `T`: one value for this engine and every real thread's
+    /// engine made from it afterwards ([`ExtendState::for_thread`]), read and written without a
+    /// lock, so its type is `Sync` (atomics). For a built-in's checks on paths every thread runs
+    /// often (whether anything of its own is set at all), which must not take the shared slot's
+    /// lock. Made with `T::default()` at first use, which comes before the threads start.
+    pub fn ext_free<T: Default + Send + Sync + 'static>(&mut self) -> &T {
+        let slot = self
+            .extend
+            .slots
+            .entry(std::any::TypeId::of::<T>())
+            .or_insert_with(|| ExtSlot::Free(std::sync::Arc::new(T::default())));
+        match slot {
+            ExtSlot::Free(v) => v
+                .downcast_ref::<T>()
+                .unwrap_or_else(|| unreachable!("a slot holds the type it is keyed by")),
+            _ => panic!("a slot of `ext` or `share_ext` is not lock-free"),
         }
     }
 
@@ -760,6 +794,7 @@ impl Engine {
                 // SAFETY: as in `ext`.
                 unsafe { (*s.value.get()).downcast_ref::<T>() }
             }
+            ExtSlot::Free(v) => v.downcast_ref::<T>(),
         }
     }
 
@@ -777,6 +812,7 @@ impl Engine {
                 self.extend.slots.insert(key, shared);
                 return;
             }
+            Some(ExtSlot::Free(_)) => panic!("a lock-free slot cannot be shared behind a lock"),
             None => Box::new(T::default()),
         };
         self.extend.slots.insert(
@@ -1111,6 +1147,31 @@ mod tests {
         release_held();
         assert_eq!(e.ext::<Game>().0, 6);
         release_held();
+    }
+
+    /// A lock-free slot is the one value of every thread engine, reached without the lock: a
+    /// thread engine sees what the first engine stored, and the other way round.
+    #[test]
+    fn a_lock_free_slot_is_one_value_for_every_thread_engine() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        #[derive(Default)]
+        struct Flags(AtomicU32);
+        let mut e = engine();
+        e.ext_free::<Flags>().0.store(3, Ordering::Relaxed);
+        let mut t = engine();
+        t.extend = e.extend.for_thread();
+        assert_eq!(t.ext_free::<Flags>().0.load(Ordering::Relaxed), 3);
+        t.ext_free::<Flags>().0.store(4, Ordering::Relaxed);
+        assert_eq!(e.ext_free::<Flags>().0.load(Ordering::Relaxed), 4);
+        assert!(!holds_shared(), "no lock taken");
+    }
+
+    /// With real threads an engine is one OS thread's: the same engine taking its slot on a
+    /// second OS thread is stopped.
+    #[test]
+    fn a_real_threads_engine_on_a_second_os_thread_is_stopped() {
+        same_engine_on_another_os_thread(false);
+        assert!(std::panic::catch_unwind(|| same_engine_on_another_os_thread(true)).is_err());
     }
 
     /// Stepped threads run one engine on several OS threads, one at a time: the engine that holds

@@ -422,10 +422,11 @@ pub struct State {
     /// `g_inActivateItemInInventory`: set around `Actor::AddWornItem` (its sites come with the
     /// equip hook).
     pub in_activate_item_in_inventory: bool,
-    /// The fixes preset's row [`set_error_guard`], and whether a `RuntimeScriptError`
-    /// dispatch is under way.
+    /// The fixes preset's row [`set_error_guard`], and the game threads a `RuntimeScriptError`
+    /// dispatch is under way on (`thread_host::current_id`): an error of another thread is its
+    /// own, not one raised by a handler.
     pub error_guard: bool,
-    pub in_error_event: bool,
+    pub in_error_event: Vec<u32>,
     /// `NV_NVSE_EVENT_LOG`: every handler call, one line each (a test variable).
     log: Option<std::fs::File>,
 }
@@ -1378,6 +1379,21 @@ fn should_remove(
 
 // ---- setting and removing ----
 
+/// The masks of the game events the `005ac750` wrap passes on (`s_eventsInUse` once the main
+/// hook is installed, else none), in a lock-free shared slot: the wrap runs on every
+/// `SetActionFlag` of every thread, so it checks this first and takes the extender's state (and
+/// its lock) only for a mask with handlers. Stored under the lock whenever either changes.
+#[derive(Default)]
+pub struct MarkMasks(std::sync::atomic::AtomicU32);
+
+fn publish_mark_masks(e: &mut Engine) {
+    let s = state(e);
+    let masks = if s.hooks & HOOK_MAIN != 0 { s.in_use } else { 0 };
+    e.ext_free::<MarkMasks>()
+        .0
+        .store(masks, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn install_hook(e: &mut Engine, hook: Hook) {
     let s = state(e);
     match hook {
@@ -1386,6 +1402,7 @@ fn install_hook(e: &mut Engine, hook: Hook) {
         Hook::ActorEquip => s.hooks |= HOOK_MAIN | HOOK_EQUIP,
         Hook::Activate => s.hooks |= HOOK_ACTIVATE,
     }
+    publish_mark_masks(e);
 }
 
 /// Whether the hook at `005ac750` is installed (a game event's handler was set once).
@@ -1481,6 +1498,7 @@ fn do_set(e: &mut Engine, at: usize, cb: Callback, priority: i32) -> (bool, Opti
         },
     );
     s.in_use |= s.infos[at].mask;
+    publish_mark_masks(e);
     (true, None)
 }
 
@@ -1638,6 +1656,7 @@ fn erase(e: &mut Engine, at: usize, serial: u64) {
     if s.infos[at].callbacks.is_empty() && s.infos[at].mask != 0 {
         s.in_use &= !s.infos[at].mask;
     }
+    publish_mark_masks(e);
 }
 
 /// `s_deferredRemoveList.Clear()`: the handlers still removed are erased, the others kept.
@@ -1681,6 +1700,7 @@ pub fn clear_flush_on_load(e: &mut Engine) {
             s.in_use &= !s.infos[at].mask;
         }
     }
+    publish_mark_masks(e);
 }
 
 // ---- dispatch ----
@@ -2213,7 +2233,12 @@ pub fn handle_game_event(e: &mut Engine, mask: u32, source: u32, object: u32) {
 /// game's own marking.
 fn set_action_flag(e: &mut Engine, a: &[u32]) -> Ret {
     let (target, extra, mask) = (a[0], a[1], a[2]);
-    if extra != 0 && main_hook_installed(e) && state(e).in_use & mask != 0 {
+    // Lock-free first: no handler for the mask (no extender script at all, by default), no lock.
+    let marked = e
+        .ext_free::<MarkMasks>()
+        .0
+        .load(std::sync::atomic::Ordering::Relaxed);
+    if extra != 0 && marked & mask != 0 && main_hook_installed(e) && state(e).in_use & mask != 0 {
         handle_game_event(e, mask, extra.wrapping_sub(0x44), target);
     }
     e.call_next(SET_ACTION_FLAG.addr(), a)
@@ -2237,6 +2262,8 @@ fn quit_from_menu(e: &mut Engine, _: &[u32]) -> Option<u32> {
 /// Registers the events and installs the mark wrap and the exit seams.
 pub fn install(e: &mut Engine) {
     init(e);
+    // Made before the threads start, so every thread's engine shares it.
+    e.ext_free::<MarkMasks>();
     if let Some(path) = std::env::var_os("NV_NVSE_EVENT_LOG") {
         state(e).log = std::fs::File::create(path).ok();
     }

@@ -113,17 +113,24 @@ pub fn show(e: &mut Engine, script: u32, message: &str) {
     // The fixes preset's row: an error raised while a `RuntimeScriptError` handler runs (the
     // handler's own, or the call depth limit's when handlers call themselves) is not sent to the
     // handlers again, which xNVSE does until the stack runs out.
+    // Kept per game thread: an error on another thread meanwhile is not a handler's.
+    let thread = engine_core::thread_host::current_id(e);
     let s = &mut e.ext::<Nvse>().events;
-    if s.error_guard && s.in_error_event {
+    let inside = s.in_error_event.contains(&thread);
+    if s.error_guard && inside {
         return;
     }
-    let outer = std::mem::replace(&mut s.in_error_event, true);
+    if !inside {
+        s.in_error_event.push(thread);
+    }
     crate::events::message_text(
         e,
         crate::events::id::RUNTIME_SCRIPT_ERROR,
         message.as_bytes(),
     );
-    e.ext::<Nvse>().events.in_error_event = outer;
+    if !inside {
+        e.ext::<Nvse>().events.in_error_event.retain(|&t| t != thread);
+    }
 }
 
 /// `Console_Print_Str`: below 512 bytes in one line, else `Console_Print_Long`'s pieces.

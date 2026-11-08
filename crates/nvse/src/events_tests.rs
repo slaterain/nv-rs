@@ -356,6 +356,13 @@ fn classic_handlers_must_fit_the_event() {
     assert_eq!((runs[0].script, runs[0].a), (FN_A, 0.0));
 }
 
+/// What the `005ac750` wrap reads without the lock.
+fn mark_masks(e: &mut Engine) -> u32 {
+    e.ext_free::<MarkMasks>()
+        .0
+        .load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The game's marks through the wrap at `005ac750`: only once a game event's handler installed
 /// the hook and only for masks in use; the reference is the list's (`- 0x44`); a mark repeated
 /// at once counts once until the tick; the game's own function runs every time.
@@ -368,9 +375,11 @@ fn game_events_come_through_set_action_flag() {
     };
     mark(&mut e, REF_2, REF_1, 0x80);
     assert!(log().is_empty());
+    assert_eq!(mark_masks(&mut e), 0, "nothing for the wrap to pass on");
     assert!(set_handler(&mut e, b"OnHit", Callback::new(FN_A), 1, None));
     assert!(main_hook_installed(&mut e));
     assert_eq!(state(&mut e).in_use, 0x80);
+    assert_eq!(mark_masks(&mut e), 0x80);
     mark(&mut e, REF_2, REF_1, 0x80);
     mark(&mut e, REF_2, REF_1, 0x80);
     let runs = log();
@@ -486,9 +495,11 @@ fn a_load_flushes_the_alt_handlers() {
     set_handler(&mut e, b"OnHit", alt, 1, None);
     set_handler(&mut e, b"OnLoad", Callback::new(FN_B), 1, None);
     assert_eq!(state(&mut e).in_use, 0x80 | 0x1000);
+    assert_eq!(mark_masks(&mut e), 0x80 | 0x1000);
     clear_flush_on_load(&mut e);
     assert!(state_info(&mut e, id::ON_HIT).callbacks.is_empty());
     assert_eq!(state(&mut e).in_use, 0x1000);
+    assert_eq!(mark_masks(&mut e), 0x1000, "the lock-free copy follows");
     // The co-save's new game: the message, then the flush has nothing left to take.
     function_script(&mut e, FN_C, 0x0500_0c00, &[]);
     set_handler(&mut e, b"NewGame", Callback::new(FN_C), 1, None);
@@ -972,4 +983,21 @@ fn the_error_guard_stops_a_handler_loop() {
         crate::errors::show(&mut e, FN_B, "outer");
         assert_eq!(e.mem.u32(AREA + 0x7ff0), runs, "guard {guard}");
     }
+}
+
+/// Review item 6 of #329: the guard is per game thread. An error raised on one thread while
+/// another thread's `RuntimeScriptError` handlers run is that thread's own and reaches the
+/// handlers; the flag is gone after the dispatch.
+#[test]
+fn the_error_guard_is_per_thread() {
+    let mut e = setup();
+    e.register(SCRIPT_EXECUTE, erring_execute);
+    scripts(&mut e, &[(1, 2)]);
+    set_error_guard(&mut e, true);
+    set_handler(&mut e, b"RuntimeScriptError", Callback::new(FN_A), 1, None);
+    let other = engine_core::thread_host::current_id(&mut e).wrapping_add(1);
+    state(&mut e).in_error_event.push(other);
+    crate::errors::show(&mut e, FN_B, "outer");
+    assert_eq!(e.mem.u32(AREA + 0x7ff0), 1, "this thread's error ran its handler");
+    assert_eq!(state(&mut e).in_error_event, [other]);
 }
