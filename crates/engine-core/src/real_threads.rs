@@ -1,7 +1,7 @@
-//! Real threads (`NV_THREADS=real`, not yet the host's default; ADR-0015, migration steps 5, 7, 8
-//! and 9): the game's threads run side by side on their own cores, as they do in the original,
-//! instead of one at a time on the stepped host ([`crate::thread_host`]: the default, and the
-//! reference mode for tests, recordings and traces).
+//! Real threads (the default in play, `NV_THREADS=real`; ADR-0015, migration steps 5, 7, 8 and 9):
+//! the game's threads run side by side on their own cores, as they do in the original, instead
+//! of one at a time on the stepped host ([`crate::thread_host`]: `NV_THREADS=stepped`, the
+//! engine's own default and the reference mode for tests, recordings and traces).
 //!
 //! **Per-thread context, shared world (step 5).** Each game thread runs on its own OS thread with
 //! its own [`Engine`]: its registers live in its Rust frames as before, and the engine holds its
@@ -1597,7 +1597,11 @@ fn delete_critical_section(e: &mut Engine, section: Ptr) {
 
 // Real threads: replaces KERNEL32.DLL InitializeCriticalSectionAndSpinCount (import)
 fn initialize_critical_section_and_spin_count(e: &mut Engine, section: Ptr, spin: u32) -> i32 {
-    let spin = if spin == 0 { DEFAULT_SECTION_SPIN } else { spin };
+    let spin = if spin == 0 {
+        DEFAULT_SECTION_SPIN
+    } else {
+        spin
+    };
     section_reset(e, section, spin);
     1
 }
@@ -2684,6 +2688,8 @@ mod tests {
                 &args![0u32, 0u32, 0x0040_d000u32, p, 0u32, 0u32],
             )
             .eax;
+        let world = ctx(&e).world;
+        let before = world.wakes.load(Ordering::SeqCst);
         for round in 0..ROUNDS {
             e.call(set, &args![ping]);
             let got = e.call(wait, &args![pong_event, STRESS_TIMEOUT_MS]).eax;
@@ -2692,6 +2698,10 @@ mod tests {
         assert_eq!(e.call(wait, &args![h, STRESS_TIMEOUT_MS]).eax, 0);
         assert_eq!(e.mem.u32(p + 0x14), 0, "the game thread's wait timed out");
         assert_eq!(e.mem.u32(p + 0x10), ROUNDS);
+        // The waits blocked (parked and were woken), so the wakes were exercised.
+        let blocked = world.wakes.load(Ordering::SeqCst) - before;
+        eprintln!("event ping-pong: {blocked} waits blocked in {ROUNDS} rounds");
+        assert!(blocked > u64::from(ROUNDS) / 10, "only {blocked} waits blocked");
     }
 
     /// Four game threads taking units from one semaphore, each wait with the block's timeout
@@ -2702,7 +2712,8 @@ mod tests {
     fn semaphore_taker(e: &mut Engine, a: &[u32]) -> Ret {
         let p = a[0];
         let (sem, wait, increment) = (e.mem.u32(p), e.mem.u32(p + 4), e.mem.u32(p + 8));
-        let (timeout, quota, count) = (e.mem.u32(p + 0xc), e.mem.u32(p + 0x10), e.mem.u32(p + 0x14));
+        let (timeout, quota, count) =
+            (e.mem.u32(p + 0xc), e.mem.u32(p + 0x10), e.mem.u32(p + 0x14));
         let (mut taken, mut short) = (0, 0);
         while taken < quota {
             if e.call(wait, &args![sem, timeout]).eax == 0 {
@@ -2801,7 +2812,11 @@ mod tests {
             assert_eq!(e.mem.u32(p + 0x18), 0, "a long wait timed out");
         }
         assert_eq!(shared_count(&e, count), 4 * EACH);
-        assert_eq!(e.call(wait, &args![sem, 0u32]).eax, 0x102, "a unit left over");
+        assert_eq!(
+            e.call(wait, &args![sem, 0u32]).eax,
+            0x102,
+            "a unit left over"
+        );
     }
 
     /// Timed waits racing releases: four game threads retry 1-3 ms waits on one semaphore while
@@ -2824,11 +2839,19 @@ mod tests {
         let wait = slot("WaitForSingleObject");
         let mut short = 0;
         for (p, h) in threads {
-            assert_eq!(e.call(wait, &args![h, STRESS_TIMEOUT_MS]).eax, 0, "a thread ended");
+            assert_eq!(
+                e.call(wait, &args![h, STRESS_TIMEOUT_MS]).eax,
+                0,
+                "a thread ended"
+            );
             short += e.mem.u32(p + 0x1c);
         }
         assert_eq!(shared_count(&e, count), 4 * EACH);
-        assert_eq!(e.call(wait, &args![sem, 0u32]).eax, 0x102, "a unit left over");
+        assert_eq!(
+            e.call(wait, &args![sem, 0u32]).eax,
+            0x102,
+            "a unit left over"
+        );
         eprintln!("timed waits racing releases: {short} short waits timed out");
     }
 
@@ -2884,7 +2907,11 @@ mod tests {
         adder(&mut e, &[p]);
         let wait = slot("WaitForSingleObject");
         for h in handles {
-            assert_eq!(e.call(wait, &args![h, STRESS_TIMEOUT_MS]).eax, 0, "a thread got stuck");
+            assert_eq!(
+                e.call(wait, &args![h, STRESS_TIMEOUT_MS]).eax,
+                0,
+                "a thread got stuck"
+            );
         }
         assert_eq!(e.mem.u32(word), 5 * EACH);
         assert_eq!(e.mem.u32(section + 0xc), 0, "the section is free");

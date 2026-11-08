@@ -82,9 +82,10 @@ const NO_ADDRESS: &[&str] = &[
 pub const DEFAULT_MENU_FRAME_LIMIT: u32 = 120;
 
 /// How the game's threads run in play when `NV_THREADS` names nothing ([`Choice::threads`]):
-/// stepped, one at a time, for now; `NV_THREADS=real` runs them side by side
-/// (`engine::real_threads`). A test never takes this: it runs stepped unless it names threads.
-pub const PLAY_THREADS: &str = "stepped";
+/// real, side by side on their own cores (`engine::real_threads`), since the evidence of
+/// measure/real-threads (the maintainer's gate, 2026-11-08); `NV_THREADS=stepped` runs them one
+/// at a time. A test never takes this: it runs stepped unless it names threads.
+pub const PLAY_THREADS: &str = "real";
 
 /// The player's one line: the fixes set, or the original's behaviour.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
