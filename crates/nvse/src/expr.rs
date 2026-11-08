@@ -1324,8 +1324,8 @@ impl Eval {
                     }
                     op::BITWISE_OR => l | r,
                     op::BITWISE_AND => l & r,
-                    op::LEFT_SHIFT => l.wrapping_shl(r as u32),
-                    _ => l.wrapping_shr(r as u32),
+                    op::LEFT_SHIFT => shift_left(l, r),
+                    _ => shift_right(l, r),
                 };
                 Some(Tok::number(v as f64))
             }
@@ -1358,16 +1358,17 @@ impl Eval {
                 Some(Tok::number(v))
             }
             op::MULTIPLY => {
-                // `Eval_Multiply_String_Number`: the string repeated, a count below 1 empty.
+                // `Eval_Multiply_String_Number`: the string repeated `int` times (`cvttsd2si`:
+                // NaN and out of range give `INT_MIN`, so nothing). xNVSE grows the string until
+                // memory runs out for a huge count; here a result past `MAX_REPEATED` bytes is a
+                // script error instead (a fix: the original stops the game).
                 let s = self.get_string(e, &lh);
-                let n = self.get_number(e, &rh);
-                let mut out = Vec::new();
-                let mut i = 0.0;
-                while i < n {
-                    out.extend_from_slice(&s);
-                    i += 1.0;
+                let n = f64_to_i32(self.get_number(e, &rh));
+                if n > 0 && s.len().saturating_mul(n as usize) > MAX_REPEATED {
+                    self.error("String too long");
+                    return None;
                 }
-                Some(Tok::Str(out))
+                Some(Tok::Str(s.repeat(n.max(0) as usize)))
             }
             op::NEGATION => Some(Tok::number(-self.get_number(e, &lh))),
             op::BITWISE_NOT => {
@@ -1399,7 +1400,7 @@ impl Eval {
                 let v = if rule == 1 {
                     self.get_number(e, &lh)
                 } else {
-                    numeric_representation(&self.get_string(e, &lh))
+                    numeric_representation(&self.get_string(e, &lh), false).0
                 };
                 Some(Tok::number(v))
             }
@@ -1535,6 +1536,24 @@ impl Eval {
                 e.mem.set_f64(local + 8, v);
                 Some(Tok::number(v))
             }
+            (
+                2,
+                Tok::Var {
+                    local: 0, string, ..
+                },
+            ) => {
+                // A command's string result on the left (`Eval_Assign_String` with no local):
+                // xNVSE sets that string when it exists and dereferences null when it does not;
+                // here the latter is the script error xNVSE gives an unusable variable.
+                let text = self.get_string(e, &rh);
+                if vars::string(e, *string).is_none() {
+                    self.error("Invalid variable");
+                    return None;
+                }
+                vars::set_string(e, *string, &text);
+                set_owner(e, *string, modi);
+                Some(lh.clone())
+            }
             (2, Tok::Var { local, ref_idx, .. }) => {
                 let text = self.get_string(e, &rh);
                 let current = f64_to_i32(e.mem.f64(local + 8)) as u32;
@@ -1645,13 +1664,28 @@ impl Eval {
         if o == op::PLUS_EQUALS && (rule == 2 || rule == 3) {
             let add = self.get_string(e, &rh);
             if rule == 2 {
-                let Tok::Var { local, .. } = lh else {
+                // `Eval_PlusEquals_String`: a variable without a string gets a new one. A
+                // command's string result has no variable (xNVSE dereferences null there): the
+                // script error xNVSE gives an unusable variable instead.
+                let Tok::Var { local, ref_idx, .. } = lh else {
                     return None;
                 };
-                let id = f64_to_i32(e.mem.f64(local + 8)) as u32;
-                let Some(mut s) = vars::string(e, id) else {
-                    self.error("String var is uninitialized");
+                if local == 0 {
+                    self.error("Invalid variable");
                     return None;
+                }
+                let mut id = f64_to_i32(e.mem.f64(local + 8)) as u32;
+                let mut s = match vars::string(e, id) {
+                    Some(s) => s,
+                    None => {
+                        if ref_idx == 0 {
+                            vars::collect(e, self.event_list, local, vars::VarType::String);
+                        }
+                        let modi = script_mod(e, self.script);
+                        id = vars::add_string(e, modi, b"", false);
+                        e.mem.set_f64(local + 8, f64::from(id));
+                        Vec::new()
+                    }
                 };
                 s.extend(add);
                 vars::set_string(e, id, &s);
@@ -1770,36 +1804,65 @@ fn to_i64(v: f64) -> i64 {
     }
 }
 
-/// `GetNumericRepresentation(false)` of a string: `0x` hex, `0b` binary, else `strtod`.
-fn numeric_representation(s: &[u8]) -> f64 {
-    let text = String::from_utf8_lossy(s);
-    let t = text.trim_start_matches([' ', '\t', '\r', '\n']);
-    let lower = t.to_ascii_lowercase();
-    if lower.starts_with("0x") {
-        let digits: String = t[2..]
-            .chars()
-            .take_while(|c| c.is_ascii_hexdigit())
-            .collect();
-        return f64::from(u32::from_str_radix(&digits, 16).unwrap_or(0));
+/// The longest string `*` makes (64 MiB; see `Eval_Multiply_String_Number`).
+const MAX_REPEATED: usize = 64 << 20;
+
+/// `SInt64 << SInt64` as 32-bit MSVC compiles it (`_allshl`): the count is the low byte of the
+/// right operand (`cl`), and 64 or more gives 0, so a negative count (its low byte 0x80 and
+/// up) gives 0 as well.
+fn shift_left(l: i64, r: i64) -> i64 {
+    let count = (r as u64 & 0xff) as u32;
+    if count >= 64 {
+        0
+    } else {
+        l << count
     }
-    if lower.starts_with("0b") {
-        let digits: String = t[2..]
-            .chars()
-            .take_while(|c| *c == '0' || *c == '1')
-            .collect();
-        return i64::from_str_radix(&digits, 2).map_or(0.0, |v| {
-            v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as f64
-        });
+}
+
+/// `SInt64 >> SInt64` (`_allshr`): the low byte as the count; 64 or more fills with the sign.
+fn shift_right(l: i64, r: i64) -> i64 {
+    let count = (r as u64 & 0xff) as u32;
+    if count >= 64 {
+        l >> 63
+    } else {
+        l >> count
     }
-    // `strtod`: the longest prefix that parses.
-    let mut best = 0.0;
-    for end in (1..=t.len()).rev() {
-        if let Ok(v) = t[..end].parse::<f64>() {
-            best = v;
-            break;
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptTokens.cpp:
+// ScriptToken::GetNumericRepresentation (the string half).
+/// A string's number: unless `from_hex`, the first token (split at space, tab, CR, LF) decides:
+/// `0x` (any case) reads hex, `0b` binary from two bytes past the string's start, else
+/// `strtod`. On raw bytes ([`crate::cnum`]): a script string need not be UTF-8. Also whether
+/// xNVSE counts it an error (`hasErrorOut`).
+pub fn numeric_representation(s: &[u8], from_hex: bool) -> (f64, bool) {
+    let mut hex = from_hex;
+    let mut bin = false;
+    if !hex {
+        let delim = |b: &u8| matches!(*b, b' ' | b'\t' | b'\r' | b'\n');
+        if let Some(start) = s.iter().position(|b| !delim(b)) {
+            let token = &s[start..];
+            let len = token.iter().position(delim).unwrap_or(token.len());
+            if len >= 2 {
+                match token[..2].to_ascii_uppercase().as_slice() {
+                    b"0X" => hex = true,
+                    b"0B" => bin = true,
+                    _ => {}
+                }
+            }
         }
     }
-    best
+    if hex {
+        let (v, ok) = crate::cnum::scan_hex(s);
+        (f64::from(v), !ok)
+    } else if bin {
+        // `str += 2`: the string's first two bytes, whatever they are.
+        let (v, read, range) = crate::cnum::strtol_binary(s.get(2..).unwrap_or(&[]));
+        (f64::from(v), read == 0 || range)
+    } else {
+        let (v, read, range) = crate::cnum::strtod(s);
+        (v, read == 0 || range)
+    }
 }
 
 /// `GetFullName(form)`'s text (`"<no name>"` for none).
@@ -1944,7 +2007,11 @@ pub fn inline_argument(
             }
         }
         0x2d => match tok {
-            Tok::Var { local, .. } if ev.can_convert(e, &tok, Ty::Variable) => Arg::Var(local),
+            // xNVSE passes a command's string result on as a null `ScriptLocal *`, which the
+            // command then dereferences; here the argument does not convert (the read fails).
+            Tok::Var { local, .. } if local != 0 && ev.can_convert(e, &tok, Ty::Variable) => {
+                Arg::Var(local)
+            }
             _ => return None,
         },
         0x00 => {
@@ -2144,11 +2211,120 @@ mod tests {
         assert!(!float_equal(1.0, 1.0002));
     }
 
+    /// Review item 1: `#` of a string reads raw bytes; a name with an umlaut (byte 0xFC in the
+    /// game's code page, invalid UTF-8) gives 0 and an error, it does not stop the game.
     #[test]
     fn numbers_from_strings() {
-        assert_eq!(numeric_representation(b"0x1F"), 31.0);
-        assert_eq!(numeric_representation(b"0b101"), 5.0);
-        assert_eq!(numeric_representation(b"2.5abc"), 2.5);
-        assert_eq!(numeric_representation(b"x"), 0.0);
+        let n = |s: &[u8]| numeric_representation(s, false);
+        assert_eq!(n(b"0x1F"), (31.0, false));
+        assert_eq!(n(b"  0X1f"), (31.0, false));
+        assert_eq!(n(b"0b101"), (5.0, false));
+        assert_eq!(n(b"2.5abc"), (2.5, false));
+        assert_eq!(n(b"x"), (0.0, true));
+        assert_eq!(n(b"M\xfcller"), (0.0, true));
+        assert_eq!(n(b"12 M\xfcller"), (12.0, false));
+        assert_eq!(n("Jürgen 3".as_bytes()), (0.0, true));
+        // `0b` skips the string's first two bytes, not the token's.
+        assert_eq!(n(b" 0b11"), (0.0, true));
+        assert_eq!(numeric_representation(b"ff", true), (255.0, false));
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+
+    /// Review item 8: shifts as `_allshl`/`_allshr` give them: the count's low byte, 64 and up
+    /// 0 (left) or the sign (right), negative counts the same way.
+    #[test]
+    fn shifts_follow_the_crt_helpers() {
+        assert_eq!(shift_left(1, 3), 8);
+        assert_eq!(shift_left(1, 63), i64::MIN);
+        assert_eq!(shift_left(1, 64), 0);
+        assert_eq!(shift_left(1, 200), 0);
+        assert_eq!(shift_left(1, -1), 0);
+        assert_eq!(shift_left(1, 256 + 2), 4);
+        assert_eq!(shift_right(-8, 1), -4);
+        assert_eq!(shift_right(-8, 100), -1);
+        assert_eq!(shift_right(8, 64), 0);
+        assert_eq!(shift_right(8, -1), 0);
+        assert_eq!(shift_right(-8, -1), -1);
+    }
+}
+
+#[cfg(test)]
+mod command_string_tests {
+    use super::*;
+
+    fn engine_and_eval() -> (Engine, Eval) {
+        let mut e = Engine::new();
+        e.map(0x0200_0000, 0x1_0000);
+        let a = crate::CommandArgs {
+            data: 0x0200_0000,
+            script: 0x0200_1000,
+            event_list: 0x0200_2000,
+            result: 0x0200_0f08,
+            opcode_offset: 0x0200_0f00,
+            ..Default::default()
+        };
+        e.mem.set_u32(a.opcode_offset, 4);
+        let ev = Eval::new(&e, &a);
+        (e, ev)
+    }
+
+    fn command_string(id: u32) -> Tok {
+        Tok::Var {
+            ty: Ty::StringVar,
+            local: 0,
+            var_type: 2,
+            ref_idx: 0,
+            var_idx: 0,
+            string: id,
+        }
+    }
+
+    /// Review item 5: a command's string result (no local) on the left of `:=`, `+=` and `<-`
+    /// is a script error (or, for `:=` on a live string, xNVSE's setting of that string), never
+    /// a read of address 8.
+    #[test]
+    fn command_strings_without_a_local_are_script_errors() {
+        let (mut e, mut ev) = engine_and_eval();
+        let id = vars::add_string(&mut e, 5, b"old", true);
+        let set = ev.operate(
+            &mut e,
+            op::ASSIGNMENT,
+            command_string(id),
+            Some(Tok::Str(b"new".to_vec())),
+        );
+        assert!(set.is_some());
+        assert_eq!(vars::string(&e, id), Some(b"new".to_vec()));
+        assert!(ev
+            .operate(
+                &mut e,
+                op::ASSIGNMENT,
+                command_string(999),
+                Some(Tok::Str(b"x".to_vec()))
+            )
+            .is_none());
+        assert!(ev.errors.iter().any(|m| m == "Invalid variable"));
+        ev.errors.clear();
+        assert!(ev
+            .operate(
+                &mut e,
+                op::PLUS_EQUALS,
+                command_string(id),
+                Some(Tok::Str(b"x".to_vec()))
+            )
+            .is_none());
+        assert!(ev.errors.iter().any(|m| m == "Invalid variable"));
+        let foreach = crate::commands::scripting::foreach_context(
+            &mut e,
+            &ev,
+            &command_string(id),
+            &Tok::Str(b"abc".to_vec()),
+        );
+        assert!(foreach
+            .unwrap_err()
+            .starts_with("Unsupported variable type"));
     }
 }

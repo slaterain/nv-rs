@@ -68,6 +68,8 @@ pub struct Delayed {
     pub this_obj: u32,
     pub mode: u8,
     pub args: Vec<Data>,
+    /// Which entry this is, while lists change under a pass.
+    pub serial: u64,
 }
 
 impl Delayed {
@@ -87,6 +89,8 @@ pub struct While {
     /// game mode; 4: not while paused.
     pub flags: u8,
     pub args: Vec<Data>,
+    /// Which entry this is, while lists change under a pass.
+    pub serial: u64,
     pub interval: f32,
     pub old_time: f32,
 }
@@ -112,6 +116,7 @@ pub struct State {
     pub while_: Vec<While>,
     pub when: Vec<While>,
     pub while_per_seconds: Vec<While>,
+    pub next_serial: u64,
 }
 
 fn state(e: &mut Engine) -> &mut State {
@@ -131,10 +136,10 @@ fn tick(e: &mut Engine, _: &[u32]) -> Option<u32> {
     let delta = seconds * mult as f32;
     let menu = e.call(MENU_MODE, &[]).bool();
     state(e).game_seconds += delta;
-    run_while(e, menu, false);
-    run_while(e, menu, true);
-    run_after(e, delta, menu);
-    run_for(e, delta, menu);
+    run_while(e, WhileList::While, menu);
+    run_while(e, WhileList::When, menu);
+    run_seconds(e, DelayedList::After, delta, menu);
+    run_seconds(e, DelayedList::For, delta, menu);
     run_while_per_seconds(e, delta, menu);
     run_after_frames(e, menu);
     None
@@ -189,35 +194,136 @@ fn truth(t: &Tok) -> bool {
     }
 }
 
-/// Gives up what a call kept for its lambdas (`~LambdaVariableContext`).
+/// The arguments as `SelfOwningArrayElement`s hold them: an array argument keeps a reference
+/// from the array's own mod while the call waits (`SelfOwningArrayElement::SetArray`); a
+/// missing array is 0.
+fn hold_arguments(e: &mut Engine, args: &mut [Data]) {
+    for a in args.iter_mut() {
+        if let Data::Array(id) = a {
+            let to = *id;
+            let mut held = 0;
+            let owner = vars::array_owning_mod(e, to);
+            vars::add_reference(e, &mut held, to, owner);
+            *id = held;
+        }
+    }
+}
+
+/// `~SelfOwningArrayElement`: each array argument's reference given up.
+fn release_arguments(e: &mut Engine, args: &[Data]) {
+    for a in args {
+        if let Data::Array(id) = a {
+            let mut held = *id;
+            let owner = vars::array_owning_mod(e, held);
+            vars::remove_reference(e, &mut held, owner);
+        }
+    }
+}
+
+/// Gives up what a call kept (`~DelayedCallInfo`: its lambda's variables, its arguments).
 fn release_delayed(e: &mut Engine, d: &Delayed) {
     lambda::unsave_variables(e, d.script);
+    release_arguments(e, &d.args);
 }
 
 fn release_while(e: &mut Engine, w: &While) {
     lambda::unsave_variables(e, w.call);
     lambda::unsave_variables(e, w.condition);
+    release_arguments(e, &w.args);
 }
 
-// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Gameplay.cpp: HandleDelayedCall.
-fn run_after(e: &mut Engine, delta: f32, menu: bool) {
-    if state(e).after.is_empty() {
+/// The lists, by kind.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DelayedList {
+    After,
+    AfterFrames,
+    For,
+}
+
+fn delayed_list(e: &mut Engine, which: DelayedList) -> &mut Vec<Delayed> {
+    let st = state(e);
+    match which {
+        DelayedList::After => &mut st.after,
+        DelayedList::AfterFrames => &mut st.after_frames,
+        DelayedList::For => &mut st.for_seconds,
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WhileList {
+    While,
+    When,
+    PerSeconds,
+}
+
+fn while_list(e: &mut Engine, which: WhileList) -> &mut Vec<While> {
+    let st = state(e);
+    match which {
+        WhileList::While => &mut st.while_,
+        WhileList::When => &mut st.when,
+        WhileList::PerSeconds => &mut st.while_per_seconds,
+    }
+}
+
+/// Where the entry with `serial` is now: a function the entry called may have added to or
+/// cleared the lists (a load or a new game started by a script clears them), so positions are
+/// looked up again after every call, never assumed.
+fn delayed_position(e: &mut Engine, which: DelayedList, serial: u64) -> Option<usize> {
+    delayed_list(e, which)
+        .iter()
+        .position(|d| d.serial == serial)
+}
+
+fn while_position(e: &mut Engine, which: WhileList, serial: u64) -> Option<usize> {
+    while_list(e, which).iter().position(|w| w.serial == serial)
+}
+
+fn remove_delayed(e: &mut Engine, which: DelayedList, serial: u64) {
+    if let Some(i) = delayed_position(e, which, serial) {
+        let gone = delayed_list(e, which).remove(i);
+        release_delayed(e, &gone);
+    }
+}
+
+fn remove_while(e: &mut Engine, which: WhileList, serial: u64) {
+    if let Some(i) = while_position(e, which, serial) {
+        let gone = while_list(e, which).remove(i);
+        release_while(e, &gone);
+    }
+}
+
+/// The serials of a list's entries when its pass begins (an entry added by a call during the
+/// pass waits for the next frame).
+fn delayed_serials(e: &mut Engine, which: DelayedList) -> Vec<u64> {
+    delayed_list(e, which).iter().map(|d| d.serial).collect()
+}
+
+fn while_serials(e: &mut Engine, which: WhileList) -> Vec<u64> {
+    while_list(e, which).iter().map(|w| w.serial).collect()
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Gameplay.cpp: HandleDelayedCall,
+// HandleCallForScripts.
+/// `CallAfterSeconds` (runs once when due) and `CallForSeconds` (every frame until due).
+fn run_seconds(e: &mut Engine, which: DelayedList, delta: f32, menu: bool) {
+    if delayed_list(e, which).is_empty() {
         return;
     }
     let paused = is_paused(e);
-    let mut i = 0;
-    while i < state(e).after.len() {
-        let mut d = state(e).after[i].clone();
-        if !d.should_run(menu, paused) {
-            d.time += delta;
-            state(e).after[i].time = d.time;
+    for serial in delayed_serials(e, which) {
+        let Some(i) = delayed_position(e, which, serial) else {
+            continue;
+        };
+        if !delayed_list(e, which)[i].should_run(menu, paused) {
+            delayed_list(e, which)[i].time += delta;
         }
-        if state(e).game_seconds >= d.time {
+        let d = delayed_list(e, which)[i].clone();
+        let due = state(e).game_seconds >= d.time;
+        if due == (which == DelayedList::After) {
             call_with(e, d.script, d.this_obj, Some(d.args.clone()));
-            let gone = state(e).after.remove(i);
-            release_delayed(e, &gone);
-        } else {
-            i += 1;
+        }
+        if due {
+            remove_delayed(e, which, serial);
         }
     }
 }
@@ -225,49 +331,23 @@ fn run_after(e: &mut Engine, delta: f32, menu: bool) {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Gameplay.cpp:
 // HandleCallAfterFramesScripts.
 fn run_after_frames(e: &mut Engine, menu: bool) {
-    if state(e).after_frames.is_empty() {
+    let which = DelayedList::AfterFrames;
+    if delayed_list(e, which).is_empty() {
         return;
     }
     let paused = is_paused(e);
-    let mut i = 0;
-    while i < state(e).after_frames.len() {
-        let d = state(e).after_frames[i].clone();
-        if !d.should_run(menu, paused) {
-            i += 1;
+    for serial in delayed_serials(e, which) {
+        let Some(i) = delayed_position(e, which, serial) else {
+            continue;
+        };
+        if !delayed_list(e, which)[i].should_run(menu, paused) {
             continue;
         }
-        let left = d.time - 1.0;
-        state(e).after_frames[i].time = left;
-        if left <= 0.0 {
+        delayed_list(e, which)[i].time -= 1.0;
+        let d = delayed_list(e, which)[i].clone();
+        if d.time <= 0.0 {
             call_with(e, d.script, d.this_obj, Some(d.args.clone()));
-            let gone = state(e).after_frames.remove(i);
-            release_delayed(e, &gone);
-        } else {
-            i += 1;
-        }
-    }
-}
-
-// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Gameplay.cpp:
-// HandleCallForScripts.
-fn run_for(e: &mut Engine, delta: f32, menu: bool) {
-    if state(e).for_seconds.is_empty() {
-        return;
-    }
-    let paused = is_paused(e);
-    let mut i = 0;
-    while i < state(e).for_seconds.len() {
-        let mut d = state(e).for_seconds[i].clone();
-        if !d.should_run(menu, paused) {
-            d.time += delta;
-            state(e).for_seconds[i].time = d.time;
-        }
-        if state(e).game_seconds < d.time {
-            call_with(e, d.script, d.this_obj, Some(d.args.clone()));
-            i += 1;
-        } else {
-            let gone = state(e).for_seconds.remove(i);
-            release_delayed(e, &gone);
+            remove_delayed(e, which, serial);
         }
     }
 }
@@ -283,35 +363,25 @@ fn condition_then_call(e: &mut Engine, w: &While) -> bool {
     ok
 }
 
-fn while_list(e: &mut Engine, when: bool) -> &mut Vec<While> {
-    if when {
-        &mut state(e).when
-    } else {
-        &mut state(e).while_
-    }
-}
-
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Gameplay.cpp:
 // HandleCallWhileScripts, HandleCallWhenScripts.
 /// `CallWhile` (until the condition fails) and `CallWhen` (once, when it holds).
-fn run_while(e: &mut Engine, menu: bool, when: bool) {
-    if while_list(e, when).is_empty() {
+fn run_while(e: &mut Engine, which: WhileList, menu: bool) {
+    if while_list(e, which).is_empty() {
         return;
     }
     let paused = is_paused(e);
-    let mut i = 0;
-    while i < while_list(e, when).len() {
-        let w = while_list(e, when)[i].clone();
+    for serial in while_serials(e, which) {
+        let Some(i) = while_position(e, which, serial) else {
+            continue;
+        };
+        let w = while_list(e, which)[i].clone();
         if !w.should_run(menu, paused) {
-            i += 1;
             continue;
         }
         let ran = condition_then_call(e, &w);
-        if ran != when {
-            i += 1;
-        } else {
-            let gone = while_list(e, when).remove(i);
-            release_while(e, &gone);
+        if ran == (which == WhileList::When) {
+            remove_while(e, which, serial);
         }
     }
 }
@@ -319,34 +389,35 @@ fn run_while(e: &mut Engine, menu: bool, when: bool) {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Gameplay.cpp:
 // HandleCallWhilePerSecondsScripts.
 fn run_while_per_seconds(e: &mut Engine, delta: f32, menu: bool) {
-    if state(e).while_per_seconds.is_empty() {
+    let which = WhileList::PerSeconds;
+    if while_list(e, which).is_empty() {
         return;
     }
     let paused = is_paused(e);
-    let mut i = 0;
-    while i < state(e).while_per_seconds.len() {
-        let w = state(e).while_per_seconds[i].clone();
+    for serial in while_serials(e, which) {
+        let Some(i) = while_position(e, which, serial) else {
+            continue;
+        };
+        let w = while_list(e, which)[i].clone();
         if !w.should_run(menu, paused) {
-            state(e).while_per_seconds[i].old_time = w.old_time + delta;
-            i += 1;
+            while_list(e, which)[i].old_time = w.old_time + delta;
             continue;
         }
         if state(e).game_seconds - w.old_time >= w.interval {
             if condition_then_call(e, &w) {
                 let now = state(e).game_seconds;
-                state(e).while_per_seconds[i].old_time = now;
+                if let Some(i) = while_position(e, which, serial) {
+                    while_list(e, which)[i].old_time = now;
+                }
             } else {
-                let gone = state(e).while_per_seconds.remove(i);
-                release_while(e, &gone);
-                continue;
+                remove_while(e, which, serial);
             }
         }
-        i += 1;
     }
 }
 
-/// `ClearDelayedCalls`: every delayed call dropped (xNVSE does it when a game is loaded or a
-/// new one started, I-10).
+/// `ClearDelayedCalls`: every delayed call dropped (xNVSE does it on a new game and before a
+/// game is loaded, [`crate::saveload`]).
 pub fn clear_delayed_calls(e: &mut Engine) {
     let st = state(e);
     let delayed: Vec<Delayed> = st
@@ -367,6 +438,13 @@ pub fn clear_delayed_calls(e: &mut Engine) {
     for w in &whiles {
         release_while(e, w);
     }
+}
+
+/// A new entry's serial.
+fn next_serial(e: &mut Engine) -> u64 {
+    let st = state(e);
+    st.next_serial += 1;
+    st.next_serial
 }
 
 // ---- the commands ----
@@ -597,6 +675,8 @@ fn elements(e: &mut Engine, ev: &Eval, toks: &[Tok], from: usize) -> Vec<Data> {
             _ => Data::Invalid,
         });
     }
+    // `BasicTokenToElem` into a `SelfOwningArrayElement`: an array is held.
+    hold_arguments(e, &mut out);
     out
 }
 
@@ -637,6 +717,7 @@ fn add_after(e: &mut Engine, a: &CommandArgs, kind: AfterKind) -> bool {
         script,
         time,
         this_obj: ev.this_obj,
+        serial: next_serial(e),
         mode,
         args,
     };
@@ -668,6 +749,7 @@ fn add_after_old(e: &mut Engine, a: &CommandArgs, for_seconds: bool) -> bool {
         script,
         time: state(e).game_seconds + time,
         this_obj: a.this_obj,
+        serial: next_serial(e),
         mode,
         args: Vec::new(),
     };
@@ -720,6 +802,7 @@ fn add_while(e: &mut Engine, a: &CommandArgs, kind: WhileKind) -> bool {
         call,
         condition,
         this_obj: ev.this_obj,
+        serial: next_serial(e),
         flags,
         args,
         interval,
@@ -752,6 +835,7 @@ fn add_while_old(e: &mut Engine, a: &CommandArgs, when: bool) -> bool {
         call,
         condition,
         this_obj: a.this_obj,
+        serial: next_serial(e),
         flags: 0,
         args: Vec::new(),
         interval: 0.0,

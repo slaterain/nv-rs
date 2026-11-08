@@ -31,6 +31,7 @@
 //! crates' own tests never install it, so they run the exe as it is.
 
 pub mod args;
+pub mod cnum;
 pub mod commands;
 pub mod context;
 pub mod errors;
@@ -39,6 +40,7 @@ pub mod functions;
 pub mod lambda;
 pub mod mt19937;
 pub mod names;
+pub mod saveload;
 pub mod table;
 pub mod tick;
 pub mod vars;
@@ -194,6 +196,7 @@ pub fn install(e: &mut Engine) {
     vars::install(e);
     functions::install(e);
     tick::install(e);
+    saveload::install(e);
     e.ext::<Nvse>().installed = true;
 }
 

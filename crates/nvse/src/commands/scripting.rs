@@ -263,6 +263,8 @@ pub struct LoopInfo {
     pub kind: Loop,
     pub saved: SavedIp,
     pub end_ip: u32,
+    /// The depth of the script context stack when the loop began: the call it belongs to.
+    pub depth: usize,
 }
 
 /// The loop managers (per thread) and the labels (`s_savedIPTable`, by script form id).
@@ -280,11 +282,28 @@ fn loops(e: &mut Engine) -> &mut Vec<LoopInfo> {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Loops.cpp: LoopManager::Add.
 fn add_loop(e: &mut Engine, kind: Loop, runner: u32, start: u32, end: u32) {
     let saved = save_stack(e, runner, start);
+    let depth = crate::context::depth(e);
     loops(e).push(LoopInfo {
         kind,
         saved,
         end_ip: end,
+        depth,
     });
+}
+
+/// A script run ended (the `Run` and `InitActionList` wraps, back at context depth `depth`):
+/// loops it began and never ended (`return` inside a loop, or the script's end) go with it.
+///
+/// xNVSE 6.4.9 never takes such loops off its per-thread stack (nothing but `Break` pops
+/// `LoopManager::m_loops`), so a `loop` or `break` in the calling script would act on the
+/// callee's loop with the callee's offsets. A fix: the loops are tied to the call they began
+/// in.
+pub fn unwind(e: &mut Engine, depth: usize) {
+    while loops(e).last().is_some_and(|l| l.depth > depth) {
+        if let Some(info) = loops(e).pop() {
+            drop_loop(e, &info);
+        }
+    }
 }
 
 /// Ends a loop: `ArrayIterLoop`'s destructor gives up the iterator variable's reference.
@@ -875,45 +894,56 @@ fn goto(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
-/// The `<-` operator's result (`Eval_In`, a `ForEachContext`), made by [`crate::expr`].
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptUtils.cpp: Eval_In.
+/// The `<-` operator's result (a `ForEachContext`), made by [`crate::expr`]. A left side with no
+/// local (a command's string result) falls through to the unsupported-type error, as in xNVSE
+/// (each case tests `GetScriptLocal()` after making what it makes first).
 pub fn foreach_context(e: &mut Engine, ev: &Eval, lh: &Tok, rh: &Tok) -> Result<Tok, &'static str> {
+    const UNSUPPORTED: &str = "Unsupported variable type to iterate over (only array, string and ref variables supported for non-alt ForEach)";
     let Tok::Var {
         local, var_type, ..
     } = lh
     else {
-        return Err("Unsupported variable type to iterate over");
+        return Err(UNSUPPORTED);
     };
+    let local = *local;
     let modi = vars::script_mod_index(e, ev.script);
     match *var_type {
         3 => {
             let iter = vars::create_array(e, vars::KEY_STRING, false, modi);
+            if local == 0 {
+                return Err(UNSUPPORTED);
+            }
             let source = ev.get_array_id(e, rh);
             Ok(Tok::ForEach {
                 source,
                 iter,
-                local: *local,
+                local,
                 var_type: 3,
             })
         }
         2 => {
             let text = ev.get_string(e, rh);
             let source = vars::add_string(e, modi, &text, true);
+            if local == 0 {
+                return Err(UNSUPPORTED);
+            }
             let mut iter = crate::args::f64_to_i32(e.mem.f64(local + 8)) as u32;
             if vars::string(e, iter).is_none() {
-                vars::collect(e, ev.event_list, *local, vars::VarType::String);
+                vars::collect(e, ev.event_list, local, vars::VarType::String);
                 iter = vars::add_string(e, modi, b"", false);
                 e.mem.set_f64(local + 8, f64::from(iter));
             }
             Ok(Tok::ForEach {
                 source,
                 iter,
-                local: *local,
+                local,
                 var_type: 2,
             })
         }
         4 => {
             let form = ev.get_form(e, rh);
-            if form == 0 {
+            if form == 0 || local == 0 {
                 return Err("Source is a base form (must be a reference)");
             }
             if e.mem.u8(form + 4) != 0x55 {
@@ -923,11 +953,11 @@ pub fn foreach_context(e: &mut Engine, ev: &Eval, lh: &Tok, rh: &Tok) -> Result<
             Ok(Tok::ForEach {
                 source: form,
                 iter: 0,
-                local: *local,
+                local,
                 var_type: 4,
             })
         }
-        _ => Err("Unsupported variable type to iterate over (only array, string and ref variables supported for non-alt ForEach)"),
+        _ => Err(UNSUPPORTED),
     }
 }
 

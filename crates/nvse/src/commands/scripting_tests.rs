@@ -369,3 +369,87 @@ fn foreach_alt_passes_values_and_zeroes_the_variable_at_the_end() {
     assert!(loops(&mut e).is_empty());
     assert_eq!(e.mem.f64(value + 8), 0.0);
 }
+
+/// Review item 7: `string * n` repeats an `int` count (`cvttsd2si`); a count past `int` is
+/// `INT_MIN`, nothing; a result past 64 MiB is a script error, nothing allocated.
+#[test]
+fn string_times_number_counts_in_int() {
+    let mut e = setup();
+    let s = add_local(&mut e, 1, "s", 0.0);
+    let repeat = |e: &mut Engine, n: f64| {
+        run_raw(
+            e,
+            0x1539,
+            &line(&[var(2, 1), text("ab"), num(n), op(16), op(0)]),
+        );
+        let id = local_value(e, s) as u32;
+        crate::vars::string(e, id)
+    };
+    assert_eq!(repeat(&mut e, 3.9), Some(b"ababab".to_vec()));
+    assert_eq!(repeat(&mut e, -2.0), Some(Vec::new()));
+    assert_eq!(repeat(&mut e, 1e12), Some(Vec::new()));
+    run_raw(&mut e, 0x1539, &line(&[var(2, 1), text("x"), op(0)]));
+    assert_eq!(
+        repeat(&mut e, 2e9),
+        Some(b"x".to_vec()),
+        "too long: not assigned"
+    );
+}
+
+/// `Run`'s stand-in: a script that begins a loop and returns inside it; the outer one (`a[2]`
+/// 0) also calls an inner one first and notes how many loops are left after it at `RESULT`.
+fn run_leaving_a_loop(e: &mut Engine, a: &[u32]) -> Ret {
+    add_loop(e, Loop::While { expr_offset: 0 }, a[0], 4, 0x40);
+    if a[2] == 0 {
+        e.call(0x005e_0d20, &[RUNNER + 0x100, SCRIPT, 1]);
+        let left = loops(e).len();
+        e.mem.set_u32(RESULT, left as u32);
+    }
+    Ret::default()
+}
+
+/// Review item 4: a loop a called script leaves (`return` inside `ForEach`/`while`) ends with
+/// that call, so the caller's `loop` finds its own loop; the caller's goes when it ends.
+#[test]
+fn a_loop_left_inside_a_call_ends_with_the_call() {
+    let mut e = setup();
+    for addr in [0x005e_1160, 0x005e_13a0, 0x005e_1550] {
+        e.register(addr, nothing);
+    }
+    e.register(0x005e_0d20, run_leaving_a_loop);
+    crate::context::install(&mut e);
+    e.call(0x005e_0d20, &[RUNNER, SCRIPT, 0]);
+    assert_eq!(
+        e.mem.u32(RESULT),
+        1,
+        "only the caller's loop after the inner call"
+    );
+    assert!(loops(&mut e).is_empty());
+}
+
+/// Review item 6, checked against xNVSE 6.4.9: `UpdateForEachAltIterator` stores an inner
+/// array's id in the value variable without a reference (`Loops.cpp`, `kDataType_Array`:
+/// `GetScriptLocal()->data = elem->m_data.arrID`), and the loop's end zeroes it without one.
+/// The port does the same: the inner array's references are the outer element's alone.
+#[test]
+fn foreach_alt_takes_no_reference_to_an_inner_array() {
+    let mut e = line_engine();
+    let value = add_local(&mut e, 1, "aVal", 0.0);
+    let outer_local = add_local(&mut e, 2, "aOuter", 0.0);
+    let outer = vars::create_array(&mut e, vars::KEY_NUMBER, true, 5);
+    let inner = vars::create_array(&mut e, vars::KEY_NUMBER, true, 5);
+    vars::set_element(&mut e, outer, &Key::Number(0.0), vars::Value::Array(inner));
+    e.mem.set_f64(outer_local + 8, f64::from(outer));
+    let refs_before = vars::array(&e, inner).unwrap().refs.clone();
+    e.mem.set_u32(LENGTH, 100);
+    let mut bytes = 0x40u32.to_le_bytes().to_vec();
+    bytes.push(2);
+    bytes.extend(expression(&[var(3, 2)]));
+    bytes.extend(expression(&[var(3, 1)]));
+    run_line(&mut e, 0x1670, &bytes);
+    assert_eq!(e.mem.f64(value + 8), f64::from(inner));
+    assert_eq!(vars::array(&e, inner).unwrap().refs, refs_before);
+    run_line(&mut e, 0x153c, &[]);
+    assert_eq!(e.mem.f64(value + 8), 0.0);
+    assert_eq!(vars::array(&e, inner).unwrap().refs, refs_before);
+}

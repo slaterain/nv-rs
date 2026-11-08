@@ -178,3 +178,63 @@ fn frames_and_for_seconds() {
     assert_eq!(e.mem.u32(RUNS), 4);
     assert!(e.ext::<Nvse>().tick.for_seconds.is_empty());
 }
+
+fn var(var_type: u8, idx: u16) -> Vec<u8> {
+    let mut b = vec![b'V', var_type, 0, 0];
+    b.extend_from_slice(&idx.to_le_bytes());
+    b
+}
+
+/// Review item 3: an array argument is held as `SelfOwningArrayElement` holds it (a reference
+/// from the array's own mod), so the tick's clean-up before the delayed calls keeps it; the
+/// reference goes with the call.
+#[test]
+fn array_arguments_are_held_until_the_call() {
+    let mut e = setup();
+    set_script_ref(&mut e, 1, FN_SCRIPT);
+    // The function takes an array (type 3) as local 1.
+    e.mem.set_u8(FN_DATA + 0x12, 3);
+    let arr = crate::vars::create_array(&mut e, crate::vars::KEY_NUMBER, true, 5);
+    add_local(&mut e, 7, "aArg", f64::from(arr));
+    run(&mut e, 0x1641, &[num(1.0), form(0), num(0.0), var(3, 7)]);
+    frame(&mut e, 0.5);
+    assert!(
+        crate::vars::array_exists(&e, arr),
+        "held across the clean-up"
+    );
+    assert_eq!(crate::vars::array(&e, arr).unwrap().refs, vec![5]);
+    frame(&mut e, 0.5);
+    assert_eq!(e.mem.u32(RUNS), 1);
+    assert_eq!(
+        e.mem.f64(SEEN),
+        f64::from(arr),
+        "the function got the array"
+    );
+    frame(&mut e, 0.1);
+    assert!(
+        !crate::vars::array_exists(&e, arr),
+        "released with the call"
+    );
+}
+
+/// Review item 2 (the passes): a function that clears the delayed calls while the tick walks
+/// them (a load started from a script) leaves the pass safe.
+#[test]
+fn a_call_that_clears_the_lists_is_safe() {
+    fn clearing(e: &mut Engine, _: &[u32]) -> Ret {
+        let n = e.mem.u32(RUNS);
+        e.mem.set_u32(RUNS, n + 1);
+        clear_delayed_calls(e);
+        Ret::default()
+    }
+    let mut e = setup();
+    e.register(functions::SCRIPT_EXECUTE, clearing);
+    set_script_ref(&mut e, 1, FN_SCRIPT);
+    for _ in 0..3 {
+        run(&mut e, 0x164e, &[num(1.0), form(0)]);
+        run(&mut e, 0x1641, &[num(0.0), form(0)]);
+    }
+    frame(&mut e, 0.1);
+    assert_eq!(e.mem.u32(RUNS), 1, "the first call cleared the rest");
+    assert!(e.ext::<Nvse>().tick.after_frames.is_empty());
+}

@@ -385,7 +385,7 @@ pub fn array_exists(e: &Engine, id: u32) -> bool {
 }
 
 /// `GetArrayOwningModIndex`: an array's owning mod, 0 for none.
-fn array_owning_mod(e: &Engine, id: u32) -> u8 {
+pub fn array_owning_mod(e: &Engine, id: u32) -> u8 {
     array(e, id).map_or(0, |a| a.owning_mod)
 }
 
@@ -595,6 +595,20 @@ pub fn erase_all(e: &mut Engine, id: u32) -> u32 {
     old.len() as u32
 }
 
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), VarMap.h: VarMap::Reset (for both maps).
+/// Every string and array variable gone, the id sets emptied (ids start from 1 again).
+pub fn reset(e: &mut Engine) {
+    let st = state(e);
+    st.strings.clear();
+    st.arrays.clear();
+    st.string_ids = VarIds::default();
+    st.array_ids = VarIds::default();
+}
+
+/// `g_nvseVarGarbageCollectionMap.Clear()`: no event list's locals are recorded any more.
+pub fn forget_collected(e: &mut Engine) {
+    state(e).collected.clear();
+}
 // ---- event lists ----
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptTokens.cpp: AddToGarbageCollection.
