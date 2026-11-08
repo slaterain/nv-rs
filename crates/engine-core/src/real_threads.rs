@@ -20,14 +20,18 @@
 //! unpacked exe's code, measure/real-threads): every interlocked operation of the game goes
 //! through the `Interlocked*` imports, which here are real atomic operations on the guest word
 //! (sequentially consistent, as `lock`-prefixed instructions are; a word not 4-aligned is
-//! serialised by a lock of its own). Critical sections are a table of owners with a condition
-//! variable: a contended `EnterCriticalSection` blocks for real. `TlsGetValue`, `TlsSetValue`,
-//! `GetCurrentThreadId`, `GetLastError` and `SetLastError` answer from the calling thread's
-//! context, and so do `FlsGetValue` and `FlsSetValue` (found by name; off the kernel lock, the C
-//! runtime reads its per-thread data through them on every thread); `Sleep` sleeps for real (`Sleep(0)` yields). Events, semaphores, mutexes and thread
-//! handles stay in the kernel table: a wait checks them under the kernel lock and, when not
-//! signalled, waits on a condition variable that every change of state wakes
-//! (`thread_host::signal`).
+//! serialised by a lock of its own). Critical sections keep their owner, holds, waiters and spin
+//! count in their own guest `RTL_CRITICAL_SECTION` words, as Windows does: an uncontended enter
+//! or leave is one atomic operation on the section and touches nothing shared; a contended enter
+//! spins the section's spin count, then parks until the leave wakes it. `TlsGetValue`,
+//! `TlsSetValue`, `GetCurrentThreadId`, `GetLastError` and `SetLastError` answer from the calling
+//! thread's context, and so do `FlsGetValue` and `FlsSetValue` (found by name; the C runtime reads
+//! its per-thread data through them on every thread); none of them takes the kernel lock. `Sleep`
+//! sleeps for real (`Sleep(0)` yields). Events, semaphores and thread handles stay in the kernel
+//! table: a wait checks them under the kernel lock and, when not signalled, the thread parks; a
+//! change of an object (`SetEvent`, `ReleaseSemaphore`, a thread's end:
+//! `thread_host::signal_object`) wakes only the threads waiting on that object, as Windows wakes
+//! them. (Waking every waiter at every change kept about 12 cores busy in Goodsprings.)
 //!
 //! **Allocator and platform locks (step 8).** The heap (and the asked sizes `_msize` reads) is
 //! behind one lock (`Mem`'s shared state). Every other platform function, the Direct3D 9, sound,
@@ -181,6 +185,8 @@ struct LockStats {
     sleep: [WaitSum; 2],
     notifies: AtomicU64,
     spurious: AtomicU64,
+    /// How many times a thread blocked on objects woke ([`World::wait_for_objects`]): main, others.
+    wakes: [AtomicU64; 2],
     host_hold: WaitSum,
     host_since: Mutex<Option<std::time::Instant>>,
     out: Mutex<std::io::BufWriter<std::fs::File>>,
@@ -210,7 +216,7 @@ fn lock_stats() -> Option<&'static LockStats> {
                  main_section_max_us\tgame_section_us\tgame_section_n\tgame_section_max_us\t\
                  main_object_us\tmain_object_n\tmain_object_max_us\tgame_object_us\t\
                  game_object_n\tgame_object_max_us\tmain_sleep_us\tmain_sleep_n\tgame_sleep_us\t\
-                 game_sleep_n\tsection_notifies\tsection_spurious\thost_hold_us"
+                 game_sleep_n\tsection_notifies\tsection_spurious\thost_hold_us\tmain_wakes\tgame_wakes"
             );
             Some(LockStats {
                 kernel: Default::default(),
@@ -219,6 +225,7 @@ fn lock_stats() -> Option<&'static LockStats> {
                 sleep: Default::default(),
                 notifies: AtomicU64::new(0),
                 spurious: AtomicU64::new(0),
+                wakes: Default::default(),
                 host_hold: WaitSum::default(),
                 host_since: Mutex::new(None),
                 out: Mutex::new(out),
@@ -246,9 +253,11 @@ impl LockStats {
         }
         let (hold, _, _) = self.host_hold.take();
         line.push_str(&format!(
-            "\t{}\t{}\t{hold}",
+            "\t{}\t{}\t{hold}\t{}\t{}",
             self.notifies.swap(0, Ordering::Relaxed),
-            self.spurious.swap(0, Ordering::Relaxed)
+            self.spurious.swap(0, Ordering::Relaxed),
+            self.wakes[0].swap(0, Ordering::Relaxed),
+            self.wakes[1].swap(0, Ordering::Relaxed)
         ));
         let mut out = guard(&self.out);
         let _ = writeln!(out, "{line}");
@@ -457,10 +466,11 @@ unsafe impl Send for SendEngine {}
 /// What the real threads of one run share.
 pub struct World {
     kernel: KernelLock,
+    /// Critical sections not 4-aligned (a fallback): their owners and holds. Aligned ones keep
+    /// theirs in their own guest words ([`section_words`]).
     sections: Mutex<AddrMap<u32, Section>>,
-    section_freed: Condvar,
-    /// Threads waiting for a critical section.
-    section_waiters: AtomicU32,
+    /// The threads parked waiting for a critical section, each with its section's address.
+    section_parkers: Mutex<Vec<std::sync::Arc<Waiter>>>,
     /// Interlocked operations on words that are not 4-aligned.
     unaligned: Mutex<()>,
     /// Game threads running game code ([`World::enter_guest`]).
@@ -483,6 +493,11 @@ pub struct World {
     /// each thread's flag by its index in the thread host's list ([`Ctx::suspend`]), set under
     /// the kernel lock ([`suspends_changed`]).
     suspend_flags: Mutex<Vec<(usize, std::sync::Arc<AtomicBool>)>>,
+    /// The threads blocked in a wait on kernel objects, each with its objects
+    /// ([`World::wait_for_objects`]): a change of an object wakes only its own waiters.
+    waiters: Mutex<Vec<std::sync::Arc<Waiter>>>,
+    /// How many times blocked threads woke from waits on objects (all threads, the whole run).
+    wakes: AtomicU64,
     /// Threads parked by a suspend now, and parks so far ([`park_if_suspended`]).
     parked: AtomicU32,
     parks: AtomicU32,
@@ -510,8 +525,7 @@ impl World {
         World {
             kernel: KernelLock::new(),
             sections: Mutex::new(AddrMap::default()),
-            section_freed: Condvar::new(),
-            section_waiters: AtomicU32::new(0),
+            section_parkers: Mutex::new(Vec::new()),
             unaligned: Mutex::new(()),
             running: AtomicUsize::new(0),
             stop: AtomicBool::new(false),
@@ -523,6 +537,8 @@ impl World {
             template: Mutex::new(None),
             stopped: Mutex::new(None),
             suspend_flags: Mutex::new(Vec::new()),
+            waiters: Mutex::new(Vec::new()),
+            wakes: AtomicU64::new(0),
             parked: AtomicU32::new(0),
             parks: AtomicU32::new(0),
             any_stop: AtomicBool::new(false),
@@ -637,6 +653,63 @@ impl World {
             // the game's code, even where a platform version stands in (the memory manager, the
             // C runtime's heap: on the heap's own lock).
             None => crate::mem::PLATFORM_AREA.contains(&addr),
+        }
+    }
+}
+
+/// A thread blocked in a wait on kernel objects ([`World::wait_for_objects`]).
+struct Waiter {
+    thread: std::thread::Thread,
+    handles: Vec<u32>,
+    /// One of its objects changed since it last looked (set under the kernel lock).
+    woken: AtomicBool,
+}
+
+impl World {
+    /// Held by this thread (the kernel lock): gives it back whole, parks until one of `me`'s
+    /// objects changes ([`object_signalled`]) or `timeout`, and takes it again. The thread is not
+    /// running game code meanwhile. A change made after the flag is cleared here unparks it (it
+    /// sets the flag under the lock, then unparks), so none is missed.
+    fn wait_for_objects(&self, me: &Waiter, timeout: Option<Duration>) {
+        me.woken.store(false, Ordering::SeqCst);
+        let held = self.kernel.release_all();
+        let was = self.leave_guest();
+        if !me.woken.load(Ordering::SeqCst) {
+            match timeout {
+                Some(t) => std::thread::park_timeout(t),
+                None => std::thread::park(),
+            }
+        }
+        if was {
+            self.enter_guest();
+        }
+        self.kernel.take_again(self, held);
+        self.wakes.fetch_add(1, Ordering::Relaxed);
+        if let Some(s) = lock_stats() {
+            s.wakes[role()].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Wakes every thread blocked in a wait (a game thread stopped: the main thread ends with it).
+    fn wake_all_waiters(&self) {
+        for o in guard(&self.waiters)
+            .iter()
+            .chain(guard(&self.section_parkers).iter())
+        {
+            o.woken.store(true, Ordering::SeqCst);
+            o.thread.unpark();
+        }
+    }
+}
+
+/// The object `handle` changed so that waiters on it may go on (under the kernel lock,
+/// `thread_host::signal_object`): wakes the threads waiting on it, and only them.
+pub(crate) fn object_signalled(e: &Engine, handle: u32) {
+    let Some(r) = &e.real else { return };
+    for o in guard(&r.world.waiters).iter() {
+        if o.handles.contains(&handle) {
+            o.woken.store(true, Ordering::SeqCst);
+            o.thread.unpark();
         }
     }
 }
@@ -954,13 +1027,15 @@ fn run_thread(engine: SendEngine, world: &'static World, i: usize, start: u32, p
         eprintln!("real threads: {line}");
         guard(&world.stopped).get_or_insert(line);
         world.any_stop.store(true, Ordering::SeqCst);
-        // Wake the main thread if it waits for a section this thread held.
-        let _sections = guard(&world.sections);
-        world.section_freed.notify_all();
+        // Wake the main thread if it waits for a section this thread held, or on an object.
+        world.wake_all_waiters();
     }
     let t = &mut e.kernel.threads.list[i];
     t.state = state;
+    let handle = t.handle;
     crate::thread_host::signal(&mut e);
+    // Its handle is signalled now: its waiters go on.
+    object_signalled(&e, handle);
     world.kernel.unlock();
 }
 
@@ -1287,51 +1362,89 @@ fn set_last_error(e: &mut Engine, code: u32) {
     ctx_mut(e).last_error = code;
 }
 
+/// The spin count a section uses at most before it parks ([`enter_critical_section`]).
+const SECTION_SPIN_MAX: u32 = 4000;
+
+/// A critical section's own words in its guest `RTL_CRITICAL_SECTION`, as Windows keeps them there:
+/// the owner (`OwningThread`, +0xc: a thread id, 0 when free) and the threads waiting for it
+/// (+4, where Windows keeps its `LockCount`), as atomics; the holds (`RecursionCount`, +8) and the
+/// spin count (`SpinCount`, +0x14) are plain words only the owner (or the initialiser) writes.
+/// `None` for a section not 4-aligned (the shared table then keeps it: [`World::sections`]).
+fn section_words(e: &Engine, a: u32) -> Option<(&AtomicU32, &AtomicU32)> {
+    Some((
+        e.mem.atomic_u32(a.wrapping_add(0xc))?,
+        e.mem.atomic_u32(a.wrapping_add(4))?,
+    ))
+}
+
+/// Tries to make `me` the owner of a free section: one compare-exchange on its owner word.
+fn take_section(owner: &AtomicU32, me: u32) -> bool {
+    owner.load(Ordering::Relaxed) == 0
+        && owner
+            .compare_exchange(0, me, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+}
+
 // Real threads: replaces KERNEL32.DLL EnterCriticalSection (import)
-/// Takes the section for the calling thread (again, counted, when it holds it), blocking while
-/// another holds it. The kernel lock, if this thread holds it, is given back meanwhile.
+/// Takes the section for the calling thread (again, counted, when it holds it), as Windows does:
+/// one compare-exchange on the section's own owner word when it is free (no shared lock), else
+/// its spin count of tries, then the thread parks until the owner's leave wakes it. The kernel
+/// lock, if this thread holds it, is given back while it waits.
 fn enter_critical_section(e: &mut Engine, section: Ptr) {
     let r = ctx(e);
     let (w, me) = (r.world, r.id);
     w.safe_point();
     park_here(e);
-    let mut table = guard(&w.sections);
-    let s = table.entry(section.addr()).or_default();
-    if s.owner == 0 || s.owner == me {
-        s.owner = me;
-        s.count += 1;
+    let a = section.addr();
+    let Some((owner, waiting)) = section_words(e, a) else {
+        return enter_section_in_table(e, section);
+    };
+    let count_at = a.wrapping_add(8);
+    if owner.load(Ordering::Relaxed) == me {
+        e.mem.set_u32(count_at, e.mem.u32(count_at).wrapping_add(1));
         return;
     }
-    let owner = s.owner;
-    drop(table);
+    if take_section(owner, me) {
+        e.mem.set_u32(count_at, 1);
+        return;
+    }
+    let spins = (e.mem.u32(a.wrapping_add(0x14)) & 0x00ff_ffff).min(SECTION_SPIN_MAX);
+    for _ in 0..spins {
+        std::hint::spin_loop();
+        if take_section(owner, me) {
+            e.mem.set_u32(count_at, 1);
+            return;
+        }
+    }
     note_state(e, || {
         format!(
-            "waiting for critical section {:08x} (held by thread {owner})",
-            section.addr()
+            "waiting for critical section {a:08x} (held by thread {})",
+            owner.load(Ordering::Relaxed)
         )
     });
     let held = w.kernel.release_all();
     let was = w.leave_guest();
-    let mut table = guard(&w.sections);
-    w.section_waiters.fetch_add(1, Ordering::SeqCst);
+    let started = lock_stats().map(|_| std::time::Instant::now());
+    // Counted, then listed, then the owner word tried: a leave that frees it after the count sees
+    // the count and wakes the listed (`leave_critical_section`), so no wake is missed.
+    waiting.fetch_add(1, Ordering::SeqCst);
+    let parker = std::sync::Arc::new(Waiter {
+        thread: std::thread::current(),
+        handles: vec![a],
+        woken: AtomicBool::new(false),
+    });
+    guard(&w.section_parkers).push(std::sync::Arc::clone(&parker));
     // The main thread ends the run when a game thread stopped (it may have stopped holding this
     // section, which then never comes free): the stop wakes the section's waiters.
     let mut stop = None;
-    let started = lock_stats().map(|_| std::time::Instant::now());
     let mut woken = false;
     loop {
-        let s = table.entry(section.addr()).or_default();
-        if s.owner == 0 {
-            if ctx(e).suspend.load(Ordering::Relaxed) {
-                // Suspended meanwhile: it parks without taking the section.
-                drop(table);
-                park_here(e);
-                table = guard(&w.sections);
-                continue;
-            }
-            let s = table.entry(section.addr()).or_default();
-            s.owner = me;
-            s.count = 1;
+        if ctx(e).suspend.load(Ordering::Relaxed) {
+            // Suspended meanwhile: it parks without taking the section.
+            park_here(e);
+        }
+        parker.woken.store(false, Ordering::SeqCst);
+        if take_section(owner, me) {
             break;
         }
         if woken {
@@ -1340,16 +1453,19 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
             }
         }
         woken = true;
-        if me == MAIN_THREAD_ID {
+        if me == MAIN_THREAD_ID && w.any_stop.load(Ordering::SeqCst) {
             stop = guard(&w.stopped).clone();
-            if stop.is_some() {
-                break;
-            }
+            break;
         }
-        table = wait(&w.section_freed, table);
+        if !parker.woken.load(Ordering::SeqCst) {
+            std::thread::park();
+        }
     }
-    w.section_waiters.fetch_sub(1, Ordering::SeqCst);
-    drop(table);
+    waiting.fetch_sub(1, Ordering::SeqCst);
+    guard(&w.section_parkers).retain(|o| !std::sync::Arc::ptr_eq(o, &parker));
+    if stop.is_none() {
+        e.mem.set_u32(count_at, 1);
+    }
     if let (Some(stats), Some(t)) = (lock_stats(), started) {
         stats.section[role()].add(t.elapsed());
     }
@@ -1364,21 +1480,30 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
 }
 
 // Real threads: replaces KERNEL32.DLL LeaveCriticalSection (import)
-/// Counts a hold down; at 0 the section is free and a waiter may take it.
+/// Counts a hold down (as on Windows and the stepped host, whoever calls it); at 0 the section is
+/// free, and the threads waiting for it wake (they try for it again).
 fn leave_critical_section(e: &mut Engine, section: Ptr) {
-    // As on Windows (and the stepped host): a leave counts the hold down whoever calls it.
     let w = ctx(e).world;
-    let mut table = guard(&w.sections);
-    if let Some(s) = table.get_mut(&section.addr()) {
-        if s.count > 0 {
-            s.count -= 1;
-            if s.count == 0 {
-                s.owner = 0;
-                if w.section_waiters.load(Ordering::SeqCst) > 0 {
-                    if let Some(stats) = lock_stats() {
-                        stats.notifies.fetch_add(1, Ordering::Relaxed);
-                    }
-                    w.section_freed.notify_all();
+    let a = section.addr();
+    let Some((owner, waiting)) = section_words(e, a) else {
+        return leave_section_in_table(e, section);
+    };
+    let count_at = a.wrapping_add(8);
+    let count = e.mem.u32(count_at);
+    if count == 0 {
+        return;
+    }
+    e.mem.set_u32(count_at, count - 1);
+    if count == 1 {
+        owner.store(0, Ordering::SeqCst);
+        if waiting.load(Ordering::SeqCst) > 0 {
+            if let Some(stats) = lock_stats() {
+                stats.notifies.fetch_add(1, Ordering::Relaxed);
+            }
+            for o in guard(&w.section_parkers).iter() {
+                if o.handles[0] == a {
+                    o.woken.store(true, Ordering::SeqCst);
+                    o.thread.unpark();
                 }
             }
         }
@@ -1387,6 +1512,85 @@ fn leave_critical_section(e: &mut Engine, section: Ptr) {
 
 // Real threads: replaces KERNEL32.DLL TryEnterCriticalSection (import)
 fn try_enter_critical_section(e: &mut Engine, section: Ptr) -> i32 {
+    let me = ctx(e).id;
+    let a = section.addr();
+    let Some((owner, _)) = section_words(e, a) else {
+        return try_enter_section_in_table(e, section);
+    };
+    let count_at = a.wrapping_add(8);
+    if owner.load(Ordering::Relaxed) == me {
+        e.mem.set_u32(count_at, e.mem.u32(count_at).wrapping_add(1));
+        return 1;
+    }
+    if take_section(owner, me) {
+        e.mem.set_u32(count_at, 1);
+        return 1;
+    }
+    0
+}
+
+/// A section's words made free with `spin` as its spin count (`InitializeCriticalSection*`,
+/// `DeleteCriticalSection`).
+fn section_reset(e: &mut Engine, section: Ptr, spin: u32) {
+    let a = section.addr();
+    match section_words(e, a) {
+        Some((owner, waiting)) => {
+            owner.store(0, Ordering::SeqCst);
+            waiting.store(0, Ordering::SeqCst);
+            e.mem.set_u32(a.wrapping_add(8), 0);
+            e.mem.set_u32(a.wrapping_add(0x14), spin);
+        }
+        None => {
+            guard(&ctx(e).world.sections).remove(&a);
+        }
+    }
+}
+
+// Real threads: replaces KERNEL32.DLL InitializeCriticalSection and DeleteCriticalSection (imports)
+fn critical_section_reset(e: &mut Engine, section: Ptr) {
+    section_reset(e, section, 0);
+}
+
+// Real threads: replaces KERNEL32.DLL InitializeCriticalSectionAndSpinCount (import)
+fn initialize_critical_section_and_spin_count(e: &mut Engine, section: Ptr, spin: u32) -> i32 {
+    section_reset(e, section, spin);
+    1
+}
+
+/// [`enter_critical_section`] for a section not 4-aligned: the shared table ([`World::sections`]),
+/// waiting by sleeping 0 ms (the exe's sections are aligned; this is a fallback).
+fn enter_section_in_table(e: &mut Engine, section: Ptr) {
+    let r = ctx(e);
+    let (w, me) = (r.world, r.id);
+    loop {
+        {
+            let mut table = guard(&w.sections);
+            let s = table.entry(section.addr()).or_default();
+            if s.owner == 0 || s.owner == me {
+                s.owner = me;
+                s.count += 1;
+                return;
+            }
+        }
+        real_sleep(w, 0);
+        main_stop_check(e);
+    }
+}
+
+fn leave_section_in_table(e: &mut Engine, section: Ptr) {
+    let w = ctx(e).world;
+    let mut table = guard(&w.sections);
+    if let Some(s) = table.get_mut(&section.addr()) {
+        if s.count > 0 {
+            s.count -= 1;
+            if s.count == 0 {
+                s.owner = 0;
+            }
+        }
+    }
+}
+
+fn try_enter_section_in_table(e: &mut Engine, section: Ptr) -> i32 {
     let r = ctx(e);
     let (w, me) = (r.world, r.id);
     let mut table = guard(&w.sections);
@@ -1398,17 +1602,6 @@ fn try_enter_critical_section(e: &mut Engine, section: Ptr) -> i32 {
     } else {
         0
     }
-}
-
-// Real threads: replaces KERNEL32.DLL InitializeCriticalSection and DeleteCriticalSection (imports)
-fn critical_section_reset(e: &mut Engine, section: Ptr) {
-    guard(&ctx(e).world.sections).remove(&section.addr());
-}
-
-// Real threads: replaces KERNEL32.DLL InitializeCriticalSectionAndSpinCount (import)
-fn initialize_critical_section_and_spin_count(e: &mut Engine, section: Ptr, _spin: u32) -> i32 {
-    critical_section_reset(e, section);
-    1
 }
 
 // Real threads: replaces KERNEL32.DLL Sleep (import)
@@ -1529,9 +1722,10 @@ fn real_sleep_here(w: &World, ms: u32) {
 pub struct Real;
 
 impl ThreadHost for Real {
-    /// Under the kernel lock (the wait imports hold it): until the objects are signalled, waiting
-    /// on the condition variable every change wakes; a timed wait ends at its deadline. On the
-    /// main thread a game thread's stop ends the wait (the run stops).
+    /// Under the kernel lock (the wait imports hold it): until the objects are signalled, the
+    /// thread parks, and only a change of one of its objects wakes it ([`World::wait_for_objects`],
+    /// [`object_signalled`]), as Windows wakes a thread blocked in `WaitForSingleObject`; a timed wait
+    /// ends at its deadline. On the main thread a game thread's stop ends the wait (the run stops).
     fn block(
         &self,
         e: &mut Engine,
@@ -1551,6 +1745,7 @@ impl ThreadHost for Real {
         };
         let mut waiting = false;
         let mut started = None;
+        let mut waiter: Option<std::sync::Arc<Waiter>> = None;
         let ready = loop {
             park_if_suspended(e);
             if ready(e) {
@@ -1585,8 +1780,20 @@ impl ThreadHost for Real {
                 }
             }
             let timeout = deadline.map(|d| Duration::from_micros(d - now));
-            w.kernel.wait_change(w, timeout);
+            let me = waiter.get_or_insert_with(|| {
+                let me = std::sync::Arc::new(Waiter {
+                    thread: std::thread::current(),
+                    handles: handles.to_vec(),
+                    woken: AtomicBool::new(false),
+                });
+                guard(&w.waiters).push(std::sync::Arc::clone(&me));
+                me
+            });
+            w.wait_for_objects(me, timeout);
         };
+        if let Some(me) = waiter {
+            guard(&w.waiters).retain(|o| !std::sync::Arc::ptr_eq(o, &me));
+        }
         if let (Some(stats), Some(t)) = (lock_stats(), started) {
             stats.object[role()].add(t.elapsed());
         }
@@ -1860,7 +2067,8 @@ mod tests {
 
     /// A game thread's start: `count` (word at +0) increments of the word at `param + 4` with
     /// `InterlockedIncrement` and `count` plain increments under the critical section at
-    /// `param + 8`, the word at `param + 0x40`; then it ends with the thread's id.
+    /// `param + 0x60` (its 24 bytes clear of the other words), the word at `param + 0x40`; then it
+    /// ends with the thread's id.
     fn worker(e: &mut Engine, a: &[u32]) -> Ret {
         let p = a[0];
         let n = e.mem.u32(p);
@@ -1870,11 +2078,11 @@ mod tests {
         let id = e.mem.u32(p + 0x1c);
         for _ in 0..n {
             e.call(inc, &args![p + 4]);
-            e.call(enter, &args![p + 8]);
+            e.call(enter, &args![p + 0x60]);
             let v = e.mem.u32(p + 0x40);
             std::hint::black_box(());
             e.mem.set_u32(p + 0x40, v + 1);
-            e.call(leave, &args![p + 8]);
+            e.call(leave, &args![p + 0x60]);
         }
         Ret {
             eax: e.call(id, &[]).eax,
@@ -2196,12 +2404,12 @@ mod tests {
     /// that section with the stop, instead of leaving it waiting for good.
     #[test]
     fn a_stop_holding_a_section_ends_mains_wait_for_it() {
-        /// Enters the section at +0, sets the word at +4, sleeps 30 ms, then calls an address
+        /// Enters the section at +0x40, sets the word at +4, sleeps 30 ms, then calls an address
         /// nothing is registered at (a stop).
         fn holder(e: &mut Engine, a: &[u32]) -> Ret {
             let p = a[0];
             let (enter, sleep) = (e.mem.u32(p + 8), e.mem.u32(p + 12));
-            e.call(enter, &args![p]);
+            e.call(enter, &args![p + 0x40]);
             e.mem.set_u32(p + 4, 1);
             e.call(sleep, &args![30u32]);
             e.call(0x0040_9990, &[]);
@@ -2210,7 +2418,7 @@ mod tests {
         let (mut e, slot) = engine_with_imports();
         start(&mut e).expect("real threads on");
         e.register(0x0040_9000, holder);
-        let p = e.mem.alloc(0x20);
+        let p = e.mem.alloc(0x80);
         e.mem.set_u32(p + 8, slot("EnterCriticalSection"));
         e.mem.set_u32(p + 12, slot("Sleep"));
         e.call(
@@ -2222,7 +2430,7 @@ mod tests {
         }
         let enter = slot("EnterCriticalSection");
         let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            e.call(enter, &args![p]);
+            e.call(enter, &args![p + 0x40]);
         }));
         let text = stop
             .err()
@@ -2303,6 +2511,65 @@ mod tests {
         );
         assert_eq!(e.call(alloc, &args![0u32]).eax, index);
         assert_eq!(e.call(get, &args![index]).eax, 0, "handed out again: 0");
+    }
+
+    /// A thread blocked on one event wakes when that event is set, not when others change (as
+    /// Windows wakes it; every change woke every waiter before, a storm of wakes and kernel lock
+    /// takes with the game's task threads, about 12 cores busy in Goodsprings).
+    #[test]
+    fn a_waiter_wakes_only_for_its_own_object() {
+        /// Waits on the event at +0, then stores 1 at +4.
+        fn waits(e: &mut Engine, a: &[u32]) -> Ret {
+            let p = a[0];
+            let wait = e.mem.u32(p + 8);
+            e.call(wait, &args![e.mem.u32(p), 0xffff_ffffu32]);
+            e.mem.set_u32(p + 4, 1);
+            Ret::default()
+        }
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        e.register(0x0040_c000, waits);
+        let create = slot("CreateEventA");
+        let (mine, other) = (
+            e.call(create, &args![0u32, 0u32, 0u32, 0u32]).eax,
+            e.call(create, &args![0u32, 0u32, 0u32, 0u32]).eax,
+        );
+        let p = e.mem.alloc(0x10);
+        e.mem.set_u32(p, mine);
+        e.mem.set_u32(p + 8, slot("WaitForSingleObject"));
+        let h = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0040_c000u32, p, 0u32, 0u32],
+            )
+            .eax;
+        let world = ctx(&e).world;
+        let since = std::time::Instant::now();
+        while guard(&world.waiters).is_empty() {
+            assert!(
+                since.elapsed() < Duration::from_secs(10),
+                "the thread never waited"
+            );
+            std::thread::yield_now();
+        }
+        let before = world.wakes.load(Ordering::SeqCst);
+        let (set, reset) = (slot("SetEvent"), slot("ResetEvent"));
+        for _ in 0..1000 {
+            e.call(set, &args![other]);
+            e.call(reset, &args![other]);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(e.mem.u32(p + 4), 0, "still waiting");
+        let woken = world.wakes.load(Ordering::SeqCst) - before;
+        assert!(woken <= 2, "woke {woken} times for another event's changes");
+        e.call(set, &args![mine]);
+        assert_eq!(
+            e.call(slot("WaitForSingleObject"), &args![h, 0xffff_ffffu32])
+                .eax,
+            0
+        );
+        assert_eq!(e.mem.u32(p + 4), 1);
     }
 
     /// A thread the game made before real threads started, not run yet, starts real with them.

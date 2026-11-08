@@ -170,7 +170,9 @@ impl Host {
                     eprintln!("NV_THREADS=real: {v} needs stepped threads (they run stepped)")
                 }
                 None => match engine::real_threads::start(&mut engine) {
-                    Ok(()) => eprintln!("threads: real (NV_THREADS=real)"),
+                    Ok(()) => {
+                        eprintln!("threads: real (NV_THREADS=stepped runs them one at a time)")
+                    }
                     Err(why) => eprintln!("{why}"),
                 },
             }

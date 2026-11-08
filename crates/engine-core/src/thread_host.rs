@@ -638,6 +638,28 @@ pub fn signal(e: &mut Engine) {
     }
 }
 
+/// The object `handle` became signalled (`SetEvent`, `ReleaseSemaphore`): as [`signal`]; with
+/// real threads only the threads waiting on that object wake, as Windows wakes them
+/// ([`crate::real_threads`]), not every waiting thread.
+pub fn signal_object(e: &mut Engine, handle: u32) {
+    if e.real.is_some() {
+        e.kernel.threads.signals = e.kernel.threads.signals.wrapping_add(1);
+        crate::real_threads::object_signalled(e, handle);
+    } else {
+        signal(e);
+    }
+}
+
+/// A waiter took an object (an auto-reset event, a semaphore's count, a mutex): as [`signal`] for the
+/// stepped host; with real threads nobody else can go on because of it, so nobody wakes.
+pub fn signal_taken(e: &mut Engine) {
+    if e.real.is_some() {
+        e.kernel.threads.signals = e.kernel.threads.signals.wrapping_add(1);
+    } else {
+        signal(e);
+    }
+}
+
 fn runnable(e: &mut Engine, i: usize, signalled: Signalled) -> bool {
     if let RunState::Sleeping { until } = e.kernel.threads.list[i].state {
         if e.kernel.threads.list[i].suspend_count != 0 {

@@ -1525,7 +1525,7 @@ fn take(e: &mut Engine, handle: u32) -> Option<bool> {
         None => return None,
     };
     if taken {
-        crate::thread_host::signal(e);
+        crate::thread_host::signal_taken(e);
     }
     Some(taken)
 }
@@ -1575,7 +1575,7 @@ fn set_event_state(e: &mut Engine, handle: u32, state: bool) -> i32 {
         Some(KernelObject::Event { signalled, .. }) => {
             *signalled = state;
             if state {
-                crate::thread_host::signal(e);
+                crate::thread_host::signal_object(e, handle);
             }
             1
         }
@@ -1637,7 +1637,7 @@ fn release_semaphore(e: &mut Engine, handle: u32, release: i32, previous: Ptr) -
         }
         _ => return 0,
     };
-    crate::thread_host::signal(e);
+    crate::thread_host::signal_object(e, handle);
     if !previous.is_null() {
         e.mem.set_i32(previous.addr(), old);
     }

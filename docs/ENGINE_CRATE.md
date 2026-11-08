@@ -82,10 +82,12 @@ each function belongs to.
   function table (copied from a template; later registrations reach every
   engine). The interlocked imports are real atomics (the exe has no inline
   `lock` instruction outside the C runtime's exception cache), critical
-  sections a real owner table, `Sleep` a real sleep, TLS and FLS values
-  per thread off the lock; waits block on a
-  condition variable under the re-entrant kernel lock every other platform
-  function runs under (Direct3D, sound, files, windows: the exe creates its
+  sections work on their own guest words as on Windows (one atomic operation
+  uncontended; a waiter spins the section's spin count, then parks), `Sleep`
+  a real sleep, TLS and FLS values per thread off the lock; a wait on events,
+  semaphores or threads parks the thread, and a change of an object wakes only
+  its own waiters; the wait checks run under the re-entrant kernel lock every
+  other platform function runs under (Direct3D, sound, files, windows: the exe creates its
   device `D3DCREATE_MULTITHREADED`). The host holds the kernel lock between
   frames. A thread-local storage index freed or handed out again reads 0 on
   every thread, as on Windows (the lock-free maps keep per-thread accessors
