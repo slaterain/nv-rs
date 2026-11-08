@@ -69,6 +69,10 @@ pub struct Real {
     forwarded: engine_core::AddrSet<u32>,
     /// Open locks of forwarded buffers: (offset, size, flags), innermost last.
     locks: engine_core::AddrMap<u32, Vec<(u32, u32, u32)>>,
+    /// With the render thread: the real queries as the backend carried them out
+    /// (`d3d9backend::QueryBoard`), and how many `D3DISSUE_END`s of each the game recorded.
+    query_board: Option<std::sync::Arc<super::d3d9backend::QueryBoard>>,
+    query_ends: engine_core::AddrMap<u32, u64>,
     /// The game's side's notes already printed.
     logged: HashSet<&'static str>,
     /// Tests: the real backend behind the stream, to look at ([`real_texture`]).
@@ -200,6 +204,7 @@ pub fn any_real_device(e: &Engine) -> bool {
 pub fn forget(e: &mut Engine, object: u32) {
     let r = real(e);
     r.locks.remove(&object);
+    r.query_ends.remove(&object);
     let device = match r.devices.iter().position(|(d, _)| *d == object) {
         Some(at) => {
             r.devices.remove(at);
@@ -751,9 +756,13 @@ pub fn direct3d_created(e: &mut Engine) {
     if !wanted() || real(e).stream.is_some() {
         return;
     }
-    let backend = Box::new(super::d3d9backend::RealBackend::new());
     let mut stream = if d3d9_stream::render_thread_wanted() {
         let settings = d3d9_stream::Settings::from_env();
+        let board = std::sync::Arc::new(super::d3d9backend::QueryBoard::default());
+        let backend = Box::new(super::d3d9backend::RealBackend::with_query_board(
+            std::sync::Arc::clone(&board),
+        ));
+        real(e).query_board = Some(board);
         eprintln!(
             "NV_D3D9=real: the render thread is on (NV_RENDER_THREAD=1; at most {} frame(s) in flight{})",
             settings.frames_in_flight,
@@ -761,7 +770,7 @@ pub fn direct3d_created(e: &mut Engine) {
         );
         Stream::threaded(backend, settings)
     } else {
-        Stream::direct(backend)
+        Stream::direct(Box::new(super::d3d9backend::RealBackend::new()))
     };
     if let Some(path) = std::env::var_os("NV_D3D9_RECORD") {
         let recording = std::fs::File::create(&path).and_then(|file| {
@@ -1807,19 +1816,69 @@ pub fn query_created(e: &mut Engine, this: u32, query: u32, kind: u32) {
     r.forwarded.insert(query);
 }
 
+/// `D3DISSUE_END`, `D3DGETDATA_FLUSH`, `S_FALSE`.
+const ISSUE_END: u32 = 1;
+const GETDATA_FLUSH: u32 = 1;
+const S_FALSE: u32 = 1;
+
 pub fn query_issue(e: &mut Engine, query: u32, flags: u32) {
+    if flags == ISSUE_END && is_forwarded(e, query) {
+        *real(e).query_ends.entry(query).or_default() += 1;
+    }
     record_on(e, query, Cmd::QueryIssue { query, flags });
 }
 
-/// `GetData` of the real query after the game's `END`: its answer and its 4-byte result, after
-/// every earlier command; `None` without a real query.
+/// `GetData` of the real query after the game's `END`: its answer and its 4-byte result; `None`
+/// without a real query.
+///
+/// Carried out at once, it is the real query's answer after every earlier call. With the render
+/// thread (an improvement, not the original's order), a call without `D3DGETDATA_FLUSH` does not
+/// wait for the render thread to catch up, as a GPU's queries are answered: once the render thread
+/// has issued the game's last `END`, the real query answers (`S_FALSE` while the GPU is not done);
+/// before that the answer is `S_FALSE`, which Direct3D gives whenever the result is not in yet,
+/// and the commands recorded so far are handed over so it comes. A call with
+/// `D3DGETDATA_FLUSH` (a caller that waits for the result) waits for the render thread, as before.
 pub fn query_get_data(e: &mut Engine, query: u32, flags: u32) -> Option<(u32, u32)> {
     if !is_forwarded(e, query) {
         return None;
     }
+    if flags & GETDATA_FLUSH == 0 {
+        if let Some(answer) = query_without_waiting(real(e), query, flags) {
+            return answer;
+        }
+    }
     match call(e, Cmd::QueryGetData { query, flags }) {
         Some(Reply::Query(answer)) => answer,
         _ => None,
+    }
+}
+
+/// [`query_get_data`] with the render thread, without waiting for it: `None` without the render
+/// thread (the call waits then).
+fn query_without_waiting(r: &mut Real, query: u32, flags: u32) -> Option<Option<(u32, u32)>> {
+    let board = r.query_board.as_ref()?;
+    let recorded = r.query_ends.get(&query).copied().unwrap_or(0);
+    let ready = match board.lock().get(&query) {
+        // Its creation failed on the real device: no real query, as before.
+        Some((None, _)) => return Some(None),
+        Some((Some(q), done)) if *done >= recorded => Some(q.0.clone()),
+        // Not made, or the game's last `END` not issued, on the real device yet.
+        _ => None,
+    };
+    match ready {
+        Some(q) => {
+            if let Some(s) = r.stream.as_mut() {
+                s.note("query results read at once");
+            }
+            Some(Some(super::d3d9backend::query_data(&q, flags)))
+        }
+        None => {
+            if let Some(s) = r.stream.as_mut() {
+                s.flush();
+                s.note("query results not in yet");
+            }
+            Some(Some((S_FALSE, 0)))
+        }
     }
 }
 
@@ -2777,8 +2836,15 @@ pub(crate) fn test_real_device_on(
 ) -> Option<IDirect3DDevice9> {
     let window = test_window()?;
     if real(e).stream.is_none() {
-        let backend =
-            std::sync::Arc::new(std::sync::Mutex::new(super::d3d9backend::RealBackend::new()));
+        // With the render thread, the queries' board too, as `direct3d_created` makes it.
+        let board = std::sync::Arc::new(super::d3d9backend::QueryBoard::default());
+        let made = if threaded {
+            real(e).query_board = Some(std::sync::Arc::clone(&board));
+            super::d3d9backend::RealBackend::with_query_board(board)
+        } else {
+            super::d3d9backend::RealBackend::new()
+        };
+        let backend = std::sync::Arc::new(std::sync::Mutex::new(made));
         let shared = Box::new(SharedBackend(std::sync::Arc::clone(&backend)));
         real(e).stream = Some(if threaded {
             Stream::threaded(shared, d3d9_stream::Settings::default())
@@ -2977,6 +3043,75 @@ mod tests {
         // The fake shifts around extended keys are dropped.
         assert_eq!(dik(key(0x2a, true)), None);
         assert_eq!(dik(key(0, false)), None);
+    }
+
+    /// With the render thread, a query read without `D3DGETDATA_FLUSH` before the real device has
+    /// the game's `END` answers `S_FALSE` (the result is not in) without waiting; one the real
+    /// device could not make answers as before (no real query); once the `END` is issued, the
+    /// real query answers.
+    #[test]
+    fn query_results_not_in_yet_answer_not_ready_without_waiting() {
+        let mut e = Engine::new();
+        let board = std::sync::Arc::new(super::super::d3d9backend::QueryBoard::default());
+        {
+            let r = real(&mut e);
+            r.stream = Some(Stream::direct(Box::new(
+                super::super::d3d9backend::RealBackend::new(),
+            )));
+            r.query_board = Some(std::sync::Arc::clone(&board));
+            r.forwarded.extend([0x10, 0x20]);
+        }
+        query_issue(&mut e, 0x10, 2);
+        query_issue(&mut e, 0x10, ISSUE_END);
+        assert_eq!(real(&mut e).query_ends.get(&0x10), Some(&1));
+        // Not made on the real device yet.
+        assert_eq!(query_get_data(&mut e, 0x10, 0), Some((S_FALSE, 0)));
+        // Its creation failed there.
+        board.lock().insert(0x20, (None, 0));
+        query_issue(&mut e, 0x20, ISSUE_END);
+        assert_eq!(query_get_data(&mut e, 0x20, 0), None);
+        // Not a forwarded query: none, as before.
+        assert_eq!(query_get_data(&mut e, 0x30, 0), None);
+        forget(&mut e, 0x10);
+        assert_eq!(real(&mut e).query_ends.get(&0x10), None);
+    }
+
+    /// The same on a real device with the render thread: the occlusion query's result comes
+    /// (`S_FALSE` until then, never a wait), and a reader with `D3DGETDATA_FLUSH` gets the real
+    /// answer after waiting. Skipped where Direct3D 9 has no device.
+    #[test]
+    fn a_real_query_answers_without_waiting_for_the_render_thread() {
+        let mut e = Engine::new();
+        let device = 0x1000;
+        if test_real_device_on(&mut e, device, 0x54, true).is_none() {
+            return;
+        }
+        let query = 0x2000;
+        query_created(&mut e, device, query, 9);
+        for _ in 0..3 {
+            query_issue(&mut e, query, 2);
+            query_issue(&mut e, query, ISSUE_END);
+            // At once: not in yet, or the real answer (nothing was drawn: no pixels passed).
+            let at_once = query_get_data(&mut e, query, 0);
+            assert!(
+                matches!(at_once, Some((S_FALSE, 0)) | Some((0, 0))),
+                "{at_once:?}"
+            );
+            // A reader that waits (D3DGETDATA_FLUSH, as the game's loops read): the real answer
+            // after every earlier command, until the GPU is done.
+            let mut answer = None;
+            for _ in 0..2000 {
+                answer = query_get_data(&mut e, query, GETDATA_FLUSH);
+                if answer != Some((S_FALSE, 0)) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert_eq!(answer, Some((0, 0)));
+            // Then the result reads at once.
+            assert_eq!(query_get_data(&mut e, query, 0), Some((0, 0)));
+        }
+        assert!(state!(e).graphics.real.logged_is_empty());
     }
 
     /// A level's rows read as if packed, from rows lying `pitch` apart.

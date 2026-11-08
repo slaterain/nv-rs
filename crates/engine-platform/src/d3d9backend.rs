@@ -45,6 +45,31 @@ pub struct SharedDevice(pub IDirect3DDevice9);
 // SAFETY: a `D3DCREATE_MULTITHREADED` device takes calls from any thread (d3d9.dll locks itself).
 unsafe impl Send for SharedDevice {}
 
+/// A real query the game's threads read directly ([`QueryBoard`]).
+pub struct SharedQuery(pub IDirect3DQuery9);
+
+// SAFETY: a query of a `D3DCREATE_MULTITHREADED` device takes calls from any thread.
+unsafe impl Send for SharedQuery {}
+
+/// With the render thread: the real queries, which the game's threads read without waiting for
+/// the render thread to catch up (`d3d9real::query_get_data`): by the modelled query, its real
+/// object (`None`: its creation failed) and how many of its `D3DISSUE_END`s the backend has
+/// carried out. A query the backend has not made yet is not in it.
+#[derive(Default)]
+pub struct QueryBoard(
+    pub(crate) std::sync::Mutex<engine_core::AddrMap<u32, (Option<SharedQuery>, u64)>>,
+);
+
+impl QueryBoard {
+    pub(crate) fn lock(
+        &self,
+    ) -> std::sync::MutexGuard<'_, engine_core::AddrMap<u32, (Option<SharedQuery>, u64)>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 /// The real side of the game's Direct3D 9 calls.
 #[derive(Default)]
 pub struct RealBackend {
@@ -66,6 +91,8 @@ pub struct RealBackend {
     kept: engine_core::AddrMap<u32, Vec<u8>>,
     /// The differences already printed: (call, model's answer, real answer).
     pub(crate) logged: HashSet<(&'static str, u32, u32)>,
+    /// With the render thread: the queries the game's threads read ([`QueryBoard`]).
+    board: Option<std::sync::Arc<QueryBoard>>,
 }
 
 // SAFETY: the real objects are free-threaded COM objects of a `D3DCREATE_MULTITHREADED` device;
@@ -161,6 +188,14 @@ impl RealBackend {
         RealBackend::default()
     }
 
+    /// A backend that keeps `board` up to date with its queries (for the render thread).
+    pub fn with_query_board(board: std::sync::Arc<QueryBoard>) -> RealBackend {
+        RealBackend {
+            board: Some(board),
+            ..RealBackend::default()
+        }
+    }
+
     /// Prints, once per kind, a call where the real runtime answers otherwise than the model.
     #[inline]
     fn answer(&mut self, call: &'static str, model: u32, real: u32) {
@@ -223,6 +258,9 @@ impl RealBackend {
         }
         self.dynamic.remove(&at);
         self.kept.remove(&at);
+        if let Some(board) = &self.board {
+            board.lock().remove(&at);
+        }
     }
 
     fn surface(&self, at: u32) -> Option<IDirect3DSurface9> {
@@ -488,20 +526,29 @@ impl RealBackend {
         let Some(Object::Query(q)) = self.objects.get(&query) else {
             return None;
         };
-        let mut value = 0u32;
-        // The raw slot: `S_FALSE` (not done yet) is a success code the wrapper would fold into Ok.
-        let hr = unsafe {
-            use windows::core::Interface;
-            (Interface::vtable(q).GetData)(
-                Interface::as_raw(q),
-                &mut value as *mut u32 as *mut core::ffi::c_void,
-                4,
-                flags,
-            )
-        };
-        Some((hr.0 as u32, value))
+        Some(query_data(q, flags))
     }
 }
+
+/// `GetData` of a real query into 4 bytes: the answer (`S_OK` 0, `S_FALSE` 1 while the GPU is not
+/// done, ...) and the result.
+pub(crate) fn query_data(q: &IDirect3DQuery9, flags: u32) -> (u32, u32) {
+    let mut value = 0u32;
+    // The raw slot: `S_FALSE` (not done yet) is a success code the wrapper would fold into Ok.
+    let hr = unsafe {
+        use windows::core::Interface;
+        (Interface::vtable(q).GetData)(
+            Interface::as_raw(q),
+            &mut value as *mut u32 as *mut core::ffi::c_void,
+            4,
+            flags,
+        )
+    };
+    (hr.0 as u32, value)
+}
+
+/// `D3DISSUE_END`.
+const ISSUE_END: u32 = 1;
 
 /// `Set*ShaderConstant*` of `kind` (0..2 vertex F, I, B; 3..5 pixel) with the `count` registers
 /// at `p` (4 words each, or one for booleans).
@@ -588,6 +635,13 @@ impl Backend for RealBackend {
                 if let Some(Object::Query(q)) = self.objects.get(&query) {
                     let r = unsafe { q.Issue(flags) };
                     self.answer("Query::Issue", 0, hr(r));
+                }
+                if flags == ISSUE_END {
+                    if let Some(board) = &self.board {
+                        if let Some((_, ends)) = board.lock().get_mut(&query) {
+                            *ends += 1;
+                        }
+                    }
                 }
             }
             _ => self.device_command(cmd),
@@ -1339,9 +1393,18 @@ impl RealBackend {
                 }
             }
             Cmd::CreateQuery { query, kind, .. } => {
-                match unsafe { d.CreateQuery(D3DQUERYTYPE(kind as i32)) } {
-                    Ok(q) => self.insert(query, Object::Query(q)),
-                    Err(err) => self.answer("CreateQuery", 0, err.code().0 as u32),
+                let made = match unsafe { d.CreateQuery(D3DQUERYTYPE(kind as i32)) } {
+                    Ok(q) => {
+                        self.insert(query, Object::Query(q.clone()));
+                        Some(SharedQuery(q))
+                    }
+                    Err(err) => {
+                        self.answer("CreateQuery", 0, err.code().0 as u32);
+                        None
+                    }
+                };
+                if let Some(board) = &self.board {
+                    board.lock().insert(query, (made, 0));
                 }
             }
             other => unreachable!("{} is not a device's command", other.name()),

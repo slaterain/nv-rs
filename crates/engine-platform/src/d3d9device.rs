@@ -5251,7 +5251,8 @@ pub(crate) mod tests {
 
     /// What reaches the real device is the game's calls as given, in the game's order, with
     /// the data behind their pointers as engine memory holds it; a call the model refuses does
-    /// not reach it. Pins the forwarding against a stand-in device (`d3d9real::stub`).
+    /// not reach it. Pins the forwarding against a stand-in device (`d3d9backend::stub`), carried
+    /// out directly or from the render thread.
     #[cfg(windows)]
     #[test]
     fn forwarded_calls_reach_the_real_device_as_given() {
@@ -5472,7 +5473,7 @@ pub(crate) mod tests {
     /// The cost of the platform's Direct3D 9 calls as the game makes them (through
     /// `Engine::vcall`), per call: the call machinery alone (the same calls to an object whose
     /// slots do nothing), the model alone, and the model forwarding to a stand-in real device
-    /// (`d3d9real::stub`); then the forwarded cost by group of calls. The scene has 2048
+    /// (`d3d9backend::stub`); then the forwarded cost by group of calls. The scene has 2048
     /// textures, 1024 vertex and index buffers, 64 shaders of each kind and 32 declarations.
     /// `cargo test --release -p engine-platform --lib cost_of_d3d9 -- --ignored --nocapture`.
     #[cfg(windows)]
