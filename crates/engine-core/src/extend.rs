@@ -600,8 +600,8 @@ pub(crate) enum ExtSlot {
 /// reference [`Engine::ext`] gives (which borrows the engine) is never live while another thread
 /// holds it. With stepped threads there is one engine and the lock is never contended.
 pub(crate) struct Shared {
-    /// The holder: its OS thread's token and its engine's id; `None` when free.
-    holder: std::sync::Mutex<Option<(u64, u64)>>,
+    /// The engine that holds it; `None` when free.
+    holder: std::sync::Mutex<Option<u64>>,
     freed: std::sync::Condvar,
     value: std::cell::UnsafeCell<Box<dyn std::any::Any + Send>>,
 }
@@ -633,11 +633,6 @@ thread_local! {
     /// The shared slots this OS thread holds, with the engine that took each.
     static HELD: std::cell::RefCell<Vec<(std::sync::Arc<Shared>, u64)>> =
         const { std::cell::RefCell::new(Vec::new()) };
-    /// This OS thread's token (never 0).
-    static THREAD: u64 = {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    };
 }
 
 /// Gives back every shared slot this OS thread holds: real threads call it where a thread stops
@@ -658,9 +653,11 @@ pub(crate) fn holds_shared() -> bool {
     HELD.with(|h| !h.borrow().is_empty())
 }
 
-/// Takes the shared slot `s` for this OS thread (engine `engine`), unless it holds it already;
-/// while another thread holds it, waits as a thread that runs no game code (a barrier does not
-/// wait for it).
+/// Takes the shared slot `s` for engine `engine`, unless that engine holds it already: the
+/// holder is an engine, not an OS thread, because stepped threads run one engine on several OS
+/// threads, one at a time (with real threads each engine is one OS thread). While another
+/// engine holds it, waits as a thread that runs no game code (a barrier does not wait for it).
+/// What this OS thread took is listed for [`release_held`].
 fn hold(s: &std::sync::Arc<Shared>, engine: u64, real: Option<&crate::real_threads::Ctx>) {
     let held = HELD.with(|h| {
         h.borrow()
@@ -673,8 +670,23 @@ fn hold(s: &std::sync::Arc<Shared>, engine: u64, real: Option<&crate::real_threa
         Some(_) => panic!("a shared extension slot used by two engines on one thread"),
         None => {}
     }
-    let me = THREAD.with(|t| *t);
-    let take = || {
+    {
+        let mut h = s
+            .holder
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *h == Some(engine) {
+            // This engine took it on another OS thread (stepped threads).
+            return;
+        }
+        if h.is_none() {
+            *h = Some(engine);
+            drop(h);
+            HELD.with(|l| l.borrow_mut().push((s.clone(), engine)));
+            return;
+        }
+    }
+    crate::real_threads::blocking(real, || {
         let mut h = s
             .holder
             .lock()
@@ -685,19 +697,9 @@ fn hold(s: &std::sync::Arc<Shared>, engine: u64, real: Option<&crate::real_threa
                 .wait(h)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
-        *h = Some((me, engine));
-    };
-    let free = s
-        .holder
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .is_none();
-    if free {
-        take();
-    } else {
-        crate::real_threads::blocking(real, take);
-    }
-    HELD.with(|h| h.borrow_mut().push((s.clone(), engine)));
+        *h = Some(engine);
+    });
+    HELD.with(|l| l.borrow_mut().push((s.clone(), engine)));
 }
 
 /// The id of a new engine's extension state (for [`Shared`]'s holder).
@@ -1108,6 +1110,26 @@ mod tests {
         .is_err());
         release_held();
         assert_eq!(e.ext::<Game>().0, 6);
+        release_held();
+    }
+
+    /// Stepped threads run one engine on several OS threads, one at a time: the engine that holds
+    /// the slot on one of them takes it on another at once (it never waits for itself).
+    #[test]
+    fn one_engine_on_several_os_threads_never_waits_for_itself() {
+        let s = std::sync::Arc::new(Shared::new(Box::new(0u32)));
+        hold(&s, 7, None);
+        let t = s.clone();
+        let other = std::thread::spawn(move || {
+            hold(&t, 7, None);
+            // SAFETY: engine 7 holds it; the main thread does not touch it meanwhile.
+            unsafe { *(*t.value.get()).downcast_mut::<u32>().unwrap() += 1 };
+        });
+        other.join().unwrap();
+        assert_eq!(
+            unsafe { *(*s.value.get()).downcast_ref::<u32>().unwrap() },
+            1
+        );
         release_held();
     }
 
