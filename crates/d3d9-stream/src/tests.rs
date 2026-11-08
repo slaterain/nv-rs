@@ -116,11 +116,14 @@ fn play(stream: &mut Stream, frames: u32) -> Vec<String> {
         let draws = 40 + rng.next() % 40;
         for _ in 0..draws {
             let constants: Vec<u32> = (0..4 * (1 + rng.next() % 8)).map(|_| rng.next()).collect();
+            let kind = (rng.next() % 6) as u8;
+            // Booleans are one word a register.
+            let per = if kind % 3 == 2 { 1 } else { 4 };
             stream.submit(Cmd::SetConstants {
                 device: 0x1000,
-                kind: (rng.next() % 6) as u8,
+                kind,
                 start: rng.next() % 200,
-                count: constants.len() as u32 / 4,
+                count: constants.len() as u32 / per,
                 data: Data::from_words(&constants),
             });
             stream.submit(Cmd::SetTexture {
@@ -435,8 +438,51 @@ fn dropping_the_stream_carries_out_what_was_recorded() {
     assert_eq!(lines.lock().unwrap().len(), 10_000);
 }
 
-/// One of every command, with payloads of different lengths.
-fn every_command<'a>(p: Data<'a>, q: Data<'a>) -> Vec<Cmd<Data<'a>>> {
+/// TEST DATA: payloads of the sizes the calls give them, filled with distinct words.
+struct Payloads {
+    present: [u32; 14],
+    handles: [u32; 3],
+    rect: [u32; 4],
+    other_rect: [u32; 4],
+    matrix: [u32; 16],
+    ramp: Vec<u8>,
+    registers: [u32; 12],
+    vertices: [u32; 9],
+    material: [u32; 17],
+    light: [u32; 26],
+    cube: [u32; 6],
+    tokens: [u32; 5],
+    elements: [u32; 4],
+    level: [u32; 2],
+}
+
+impl Payloads {
+    fn new() -> Payloads {
+        fn words<const N: usize>(from: u32) -> [u32; N] {
+            std::array::from_fn(|i| from.wrapping_add(i as u32).wrapping_mul(0x0101_0101))
+        }
+        Payloads {
+            present: words(1),
+            handles: words(20),
+            rect: words(30),
+            other_rect: words(40),
+            matrix: words(50),
+            ramp: (0..0x600u32).map(|i| (i * 3) as u8).collect(),
+            registers: words(70),
+            vertices: words(100),
+            material: words(110),
+            light: words(130),
+            cube: words(160),
+            tokens: words(170),
+            elements: words(180),
+            level: words(190),
+        }
+    }
+}
+
+/// One of every command, in the list's order; `big` the payload of the buffer's upload.
+fn every_command<'a>(p: &'a Payloads, big: Data<'a>) -> Vec<Cmd<Data<'a>>> {
+    let w = |words: &'a [u32]| Data::from_words(words);
     let d = 0x1000;
     vec![
         Cmd::CreateDevice {
@@ -444,20 +490,20 @@ fn every_command<'a>(p: Data<'a>, q: Data<'a>) -> Vec<Cmd<Data<'a>>> {
             focus: -2,
             window: 0x1234_5678_9abc,
             behavior: 0x54,
-            present: p,
-            back_buffers: q,
+            present: w(&p.present),
+            back_buffers: w(&p.handles),
             depth_stencil: 3,
         },
         Cmd::Reset {
             device: d,
             window: 9,
-            present: q,
-            back_buffers: p,
+            present: w(&p.present),
+            back_buffers: w(&p.handles[..1]),
             depth_stencil: 0,
         },
         Cmd::Present {
             device: d,
-            source: Some(p),
+            source: Some(w(&p.rect)),
             dest: None,
             window: 5,
             dirty: true,
@@ -475,7 +521,7 @@ fn every_command<'a>(p: Data<'a>, q: Data<'a>) -> Vec<Cmd<Data<'a>>> {
         Cmd::Clear {
             device: d,
             count: 1,
-            rects: Some(q),
+            rects: Some(w(&p.other_rect)),
             flags: 7,
             colour: 0xff00_00ff,
             z: 1f32.to_bits(),
@@ -498,7 +544,7 @@ fn every_command<'a>(p: Data<'a>, q: Data<'a>) -> Vec<Cmd<Data<'a>>> {
         Cmd::SetTransform {
             device: d,
             state: 256,
-            matrix: p,
+            matrix: w(&p.matrix),
         },
         Cmd::SetScissorRect {
             device: d,
@@ -513,7 +559,7 @@ fn every_command<'a>(p: Data<'a>, q: Data<'a>) -> Vec<Cmd<Data<'a>>> {
             device: d,
             swap_chain: 0,
             flags: 1,
-            ramp: q,
+            ramp: Data::Bytes(&p.ramp),
         },
         Cmd::SetRenderState {
             device: d,
@@ -552,10 +598,10 @@ fn every_command<'a>(p: Data<'a>, q: Data<'a>) -> Vec<Cmd<Data<'a>>> {
         },
         Cmd::SetConstants {
             device: d,
-            kind: 5,
+            kind: 3,
             start: 2,
             count: 3,
-            data: q,
+            data: w(&p.registers),
         },
         Cmd::SetStreamSource {
             device: d,
@@ -588,16 +634,16 @@ fn every_command<'a>(p: Data<'a>, q: Data<'a>) -> Vec<Cmd<Data<'a>>> {
             kind: 4,
             count: 1,
             stride: 12,
-            vertices: p,
+            vertices: w(&p.vertices),
         },
         Cmd::SetMaterial {
             device: d,
-            material: q,
+            material: w(&p.material),
         },
         Cmd::SetLight {
             device: d,
             index: 1,
-            light: p,
+            light: w(&p.light),
         },
         Cmd::LightEnable {
             device: d,
@@ -618,19 +664,19 @@ fn every_command<'a>(p: Data<'a>, q: Data<'a>) -> Vec<Cmd<Data<'a>>> {
             source: 1,
             source_rect: None,
             destination: 2,
-            destination_rect: Some(q),
+            destination_rect: Some(w(&p.rect)),
             filter: 2,
         },
         Cmd::ColorFill {
             device: d,
             surface: 1,
-            rect: Some(p),
+            rect: Some(w(&p.other_rect)),
             colour: 5,
         },
         Cmd::CreateTexture {
             device: d,
             texture: 0x4000,
-            levels: q,
+            levels: w(&p.handles),
             width: 256,
             height: 128,
             usage: 0,
@@ -640,7 +686,7 @@ fn every_command<'a>(p: Data<'a>, q: Data<'a>) -> Vec<Cmd<Data<'a>>> {
         Cmd::CreateCubeTexture {
             device: d,
             texture: 0x4500,
-            surfaces: p,
+            surfaces: w(&p.cube),
             edge: 64,
             usage: 1,
             format: 22,
@@ -678,12 +724,12 @@ fn every_command<'a>(p: Data<'a>, q: Data<'a>) -> Vec<Cmd<Data<'a>>> {
             device: d,
             shader: 0x4200,
             pixel: false,
-            tokens: p,
+            tokens: w(&p.tokens),
         },
         Cmd::CreateDeclaration {
             device: d,
             declaration: 0x4100,
-            elements: q,
+            elements: w(&p.elements),
         },
         Cmd::CreateQuery {
             device: d,
@@ -695,13 +741,13 @@ fn every_command<'a>(p: Data<'a>, q: Data<'a>) -> Vec<Cmd<Data<'a>>> {
             surface: 0x4600,
             row: 4,
             rows: 2,
-            data: p,
+            data: w(&p.level),
         },
         Cmd::UploadBuffer {
             buffer: 0x4300,
             offset: 8,
             flags: 0x1000,
-            data: q,
+            data: big,
         },
         Cmd::SetLod {
             texture: 0x4000,
@@ -730,11 +776,14 @@ fn every_command<'a>(p: Data<'a>, q: Data<'a>) -> Vec<Cmd<Data<'a>>> {
 }
 
 #[test]
-fn every_command_is_listed_once() {
-    let p: Vec<u32> = (0..16).collect();
-    let cmds = every_command(Data::from_words(&p), Data::Bytes(&[1, 2, 3]));
+fn every_command_is_listed_once_and_well_formed() {
+    let p = Payloads::new();
+    let cmds = every_command(&p, Data::Bytes(&[1, 2, 3]));
     let names: Vec<&str> = cmds.iter().map(|c| c.name()).collect();
     assert_eq!(names, NAMES);
+    for c in &cmds {
+        assert_eq!(c.check(), Ok(()), "{}", c.name());
+    }
     let sync: Vec<&str> = cmds
         .iter()
         .filter(|c| c.is_sync())
@@ -749,6 +798,43 @@ fn every_command_is_listed_once() {
             "QueryGetData"
         ]
     );
+}
+
+/// A payload of another size than its call gives it is refused: by the check, on submitting in a
+/// debug build, and on reading a file.
+#[test]
+fn a_payload_of_the_wrong_size_is_refused() {
+    let short = [0u32; 15];
+    let bad = Cmd::SetTransform {
+        device: 1,
+        state: 256,
+        matrix: Data::from_words(&short),
+    };
+    assert!(bad
+        .check()
+        .unwrap_err()
+        .contains("matrix is 60 bytes, not 64"));
+    let booleans = [1u32; 3];
+    let ok = Cmd::SetConstants {
+        device: 1,
+        kind: 2,
+        start: 0,
+        count: 3,
+        data: Data::from_words(&booleans),
+    };
+    assert_eq!(ok.check(), Ok(()));
+    let mut bytes = wire::header().to_vec();
+    wire::encode(&bad, &mut bytes);
+    assert!(matches!(
+        wire::commands(&bytes).unwrap().next(),
+        Some(Err(wire::WireError::Payload { .. }))
+    ));
+    if cfg!(debug_assertions) {
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Stream::direct(Box::new(Log::default())).submit(bad);
+        }));
+        assert!(refused.is_err());
+    }
 }
 
 /// A file being written that the test reads afterwards.
@@ -767,17 +853,17 @@ impl Write for File {
 
 #[test]
 fn every_command_reads_back_as_written_and_replays() {
-    let p: Vec<u32> = (0..16).map(|i| i * 0x0101_0101).collect();
+    let p = Payloads::new();
     let fill = |offset: u32, into: &mut [u8]| {
         for (i, b) in into.iter_mut().enumerate() {
             *b = (offset as usize + i) as u8;
         }
     };
-    let q = Data::Read {
+    let big = Data::Read {
         len: 70_000,
         read: &fill,
     };
-    let cmds = every_command(Data::from_words(&p), q);
+    let cmds = every_command(&p, big);
     let log = Log::default();
     let lines = log.lines();
     let mut stream = Stream::direct(Box::new(log));
@@ -818,7 +904,7 @@ fn a_damaged_file_is_refused() {
         wire::commands(b"not a stream").err(),
         Some(wire::WireError::NotAStream)
     );
-    let mut bytes = wire::MAGIC.to_vec();
+    let mut bytes = wire::header().to_vec();
     wire::encode(&Cmd::SetFvf { device: 1, fvf: 2 }, &mut bytes);
     let whole = bytes.clone();
     bytes.truncate(bytes.len() - 1);
@@ -829,12 +915,44 @@ fn a_damaged_file_is_refused() {
     ));
     assert!(cmds.next().is_none());
     let mut unknown = whole.clone();
-    unknown[wire::MAGIC.len() + 4] = 0xff;
+    unknown[16 + 4] = 0xff;
     assert!(matches!(
         wire::commands(&unknown).unwrap().next(),
         Some(Err(wire::WireError::UnknownCommand { tag: 0xff, .. }))
     ));
     assert_eq!(wire::commands(&whole).unwrap().count(), 1);
+    // Written with another command list: refused before any command is read.
+    let mut other = whole.clone();
+    other[8] ^= 1;
+    assert!(matches!(
+        wire::commands(&other).err(),
+        Some(wire::WireError::OtherList { .. })
+    ));
+}
+
+/// The list's hash covers each command's place and fields: two commands of the same layout
+/// (SetVertexDeclaration and SetFvf) swapped would give another hash.
+#[test]
+fn the_list_hash_covers_names_order_and_fields() {
+    let list = crate::cmd::LIST;
+    let a = list.find("SetVertexDeclaration").unwrap();
+    let b = list.find("SetFvf").unwrap();
+    assert!(a < b);
+    let mut swapped = list.to_string();
+    swapped.replace_range(b..b + "SetFvf".len(), "SetVertexDeclaration");
+    swapped.replace_range(a..a + "SetVertexDeclaration".len(), "SetFvf");
+    assert_ne!(
+        wire::hash(wire::HASH_START, swapped.as_bytes()),
+        wire::LIST_HASH
+    );
+    assert_eq!(
+        wire::hash(wire::HASH_START, list.as_bytes()),
+        wire::LIST_HASH
+    );
+    assert!(
+        list.contains("SetConstants") && list.contains("optional"),
+        "{list}"
+    );
 }
 
 #[test]
@@ -1024,4 +1142,58 @@ fn the_stream_and_its_replies_move_between_threads() {
     moves::<Stream>();
     moves::<Reply>();
     moves::<Tee>();
+}
+
+/// A backend that refuses every command and panics again when dropped.
+struct Bomb;
+
+impl Backend for Bomb {
+    fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+        panic!("the bomb refuses {}", cmd.name());
+    }
+}
+
+impl Drop for Bomb {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            panic!("the bomb goes off in its drop");
+        }
+    }
+}
+
+#[test]
+fn a_shadow_that_panics_in_its_drop_too_is_left_out() {
+    let primary = Log::default();
+    let lines = primary.lines();
+    let mut tee = Tee::new(Box::new(primary), Box::new(Bomb));
+    for fvf in 0..3 {
+        tee.execute(Cmd::SetFvf { device: 1, fvf });
+    }
+    assert!(!tee.shadow_running());
+    assert_eq!(lines.lock().unwrap().len(), 3);
+}
+
+/// A render thread stopped by its backend stops the recording side at its next command, not only
+/// at the next wait.
+#[test]
+fn the_next_command_after_a_backend_panic_stops() {
+    let log = Log {
+        refuse: Some("SetFvf"),
+        ..Log::default()
+    };
+    let mut stream = Stream::threaded(Box::new(log), Settings::default());
+    stream.submit(Cmd::SetFvf { device: 1, fvf: 2 });
+    stream.flush();
+    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for value in 0..10_000 {
+            stream.submit(Cmd::SetRenderState {
+                device: 1,
+                state: 7,
+                value,
+            });
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }));
+    let message = crate::runner::panic_message(&*stopped.expect_err("the recording side stops"));
+    assert!(message.contains("refuses SetFvf"), "{message}");
 }

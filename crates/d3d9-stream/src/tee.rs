@@ -40,7 +40,11 @@ impl Backend for Tee {
                     cmd.name(),
                     crate::runner::panic_message(&*panic)
                 );
-                self.shadow = None;
+                // Dropped inside a guard too: a shadow left broken may panic in its drop.
+                let failed = self.shadow.take();
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    drop(failed);
+                }));
             }
         }
         reply

@@ -2,40 +2,66 @@
 //! [`Backend`] (a run's first frames recorded on the real device, replayed into another backend in
 //! its tests), and the hashes of `NV_D3D9_STREAM_CHECK`.
 //!
-//! A file is [`MAGIC`], then one record per command: its length (a little-endian `u32`, the bytes
-//! after it), its number (the command's place in the list in `cmd.rs`) and its fields in order:
-//! `u32`, `i32` and `isize` (as `i64`) little-endian, `bool` and `u8` one byte, arrays element by
-//! element; a payload as its length (`u32`) and its bytes, an optional payload as one byte (0
-//! none, 1 some) and the payload. The numbers follow the list, so a file is read by the build that
-//! wrote it (the magic names the format's version, not the list's).
+//! A file is [`MAGIC`], the [`LIST_HASH`] of the command list it was written with (a little-endian
+//! `u64`), then one record per command: its length (a little-endian `u32`, the bytes after it),
+//! its number (the command's place in the list in `cmd.rs`) and its fields in order: `u32`, `i32`
+//! and `isize` (as `i64`) little-endian, `bool` and `u8` one byte, arrays element by element; a
+//! payload as its length (`u32`) and its bytes, an optional payload as one byte (0 none, 1 some)
+//! and the payload. The numbers and layouts follow the list, so a file written with another list
+//! (a command added, moved or changed) is refused, never read with other meanings. Each command
+//! read is checked ([`Cmd::check`]): its payloads have the sizes the call gives them.
 
-use crate::cmd::{Backend, Cmd, Data};
+use crate::cmd::{Backend, Cmd, Data, LIST};
 
 /// The first bytes of a file of commands.
 pub const MAGIC: &[u8; 8] = b"NVD3D9S1";
+
+/// The hash of the command list this build encodes with (its text: names, fields, kinds).
+pub const LIST_HASH: u64 = hash_const(LIST.as_bytes());
+
+/// [`hash`] at compile time.
+const fn hash_const(bytes: &[u8]) -> u64 {
+    let mut h = HASH_START;
+    let mut i = 0;
+    while i < bytes.len() {
+        h ^= bytes[i] as u64;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+        i += 1;
+    }
+    h
+}
 
 /// Why bytes could not be read as commands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireError {
     /// The bytes do not start with [`MAGIC`].
     NotAStream,
+    /// The file was written with another command list (its [`LIST_HASH`]).
+    OtherList { file: u64, this: u64 },
     /// The bytes end inside a record that starts at `at`.
     Truncated { at: usize },
     /// No command has this number.
     UnknownCommand { at: usize, tag: u8 },
     /// The record at `at` is not as long as it says.
     Length { at: usize },
+    /// The command at `at` carries a payload of another size than its call gives it.
+    Payload { at: usize, why: String },
 }
 
 impl std::fmt::Display for WireError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             WireError::NotAStream => write!(f, "not a Direct3D 9 command stream (no {MAGIC:?})"),
+            WireError::OtherList { file, this } => write!(
+                f,
+                "written with another command list ({file:016x}; this build's is {this:016x})"
+            ),
             WireError::Truncated { at } => write!(f, "the stream ends inside the record at {at}"),
             WireError::UnknownCommand { at, tag } => {
                 write!(f, "unknown command number {tag} at {at}")
             }
             WireError::Length { at } => write!(f, "the record at {at} has another length"),
+            WireError::Payload { at, why } => write!(f, "the record at {at}: {why}"),
         }
     }
 }
@@ -172,17 +198,29 @@ pub fn encode(cmd: &Cmd<Data<'_>>, out: &mut Vec<u8>) {
     out[at..at + 4].copy_from_slice(&len.to_le_bytes());
 }
 
-/// The commands of a file of commands (after [`MAGIC`]), in order; each borrows its payloads
-/// from `bytes`.
+/// A file's first bytes: [`MAGIC`] and this build's [`LIST_HASH`].
+pub fn header() -> [u8; 16] {
+    let mut h = [0; 16];
+    h[..8].copy_from_slice(MAGIC);
+    h[8..].copy_from_slice(&LIST_HASH.to_le_bytes());
+    h
+}
+
+/// The commands of a file of commands (after its [`header`]), in order; each borrows its payloads
+/// from `bytes`. A file written with another command list is refused.
 pub fn commands(bytes: &[u8]) -> Result<Commands<'_>, WireError> {
-    if bytes.len() < MAGIC.len() || &bytes[..MAGIC.len()] != MAGIC {
+    if bytes.len() < 16 || &bytes[..MAGIC.len()] != MAGIC {
         return Err(WireError::NotAStream);
     }
+    let file = u64::from_le_bytes(bytes[8..16].try_into().expect("8 bytes"));
+    if file != LIST_HASH {
+        return Err(WireError::OtherList {
+            file,
+            this: LIST_HASH,
+        });
+    }
     Ok(Commands {
-        r: Reader {
-            bytes,
-            at: MAGIC.len(),
-        },
+        r: Reader { bytes, at: 16 },
         failed: false,
     })
 }
@@ -214,6 +252,8 @@ impl<'a> Iterator for Commands<'a> {
             if self.r.at != end {
                 return Err(WireError::Length { at: start });
             }
+            cmd.check()
+                .map_err(|why| WireError::Payload { at: start, why })?;
             Ok(cmd)
         })();
         self.failed = item.is_err();

@@ -134,7 +134,7 @@ impl Stream {
     /// From now on every command is also written to `out` ([`crate::wire`]'s file: [`wire::MAGIC`]
     /// first). A write that fails is printed and ends the recording.
     pub fn record_to(&mut self, mut out: Box<dyn Write + Send>) -> std::io::Result<()> {
-        out.write_all(wire::MAGIC)?;
+        out.write_all(&wire::header())?;
         self.record = Some(Recording {
             out,
             buf: Vec::new(),
@@ -147,6 +147,10 @@ impl Stream {
     /// returns once no more than [`Settings::frames_in_flight`] presents are left to carry out;
     /// any other returns [`Reply::None`] at once.
     pub fn submit(&mut self, mut cmd: Cmd<Data<'_>>) -> Reply {
+        #[cfg(debug_assertions)]
+        if let Err(why) = cmd.check() {
+            panic!("a malformed command: {why}");
+        }
         if let Cmd::Present { frame, .. } = &mut cmd {
             self.presents = self.presents.wrapping_add(1);
             *frame = self.presents;
@@ -216,6 +220,9 @@ struct Threaded {
 
 /// What both sides share.
 struct Shared {
+    /// The render thread stopped (`Queue::dead` says why): read at every command, so the
+    /// recording side stops at its next call.
+    dead: std::sync::atomic::AtomicBool,
     queue: Mutex<Queue>,
     /// The render thread waits on it for chunks.
     work: Condvar,
@@ -254,6 +261,7 @@ fn lock(m: &Mutex<Queue>) -> MutexGuard<'_, Queue> {
 impl Threaded {
     fn start(backend: Box<dyn Backend>, settings: Settings) -> Threaded {
         let shared = Arc::new(Shared {
+            dead: std::sync::atomic::AtomicBool::new(false),
             queue: Mutex::new(Queue::default()),
             work: Condvar::new(),
             progress: Condvar::new(),
@@ -280,6 +288,9 @@ impl Threaded {
     }
 
     fn submit(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+        if self.shared.dead.load(std::sync::atomic::Ordering::Relaxed) {
+            stopped(&lock(&self.shared.queue));
+        }
         if self.settings.check {
             self.encoded.clear();
             wire::encode(&cmd, &mut self.encoded);
@@ -464,6 +475,9 @@ fn render(shared: &Shared, mut backend: Box<dyn Backend>, check: bool) {
             Err(panic) => {
                 q.dead = Some(panic_message(&*panic));
                 q.chunks.clear();
+                shared
+                    .dead
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 drop(q);
                 shared.progress.notify_all();
                 return;

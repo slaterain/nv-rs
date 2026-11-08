@@ -206,6 +206,10 @@ macro_rules! commands {
         #[cfg(test)]
         pub(crate) const NAMES: &[&str] = &[ $( stringify!($name) ),* ];
 
+        /// The command list as written (names, fields and their kinds, in order): what a
+        /// command's number and encoding mean.
+        pub(crate) const LIST: &str = stringify!($( $name { $( $field : $kind ),* } ),*);
+
         impl<P> Cmd<P> {
             /// The same command with each payload passed through `f`.
             pub fn map<Q>(self, mut f: impl FnMut(P) -> Q) -> Cmd<Q> {
@@ -417,6 +421,104 @@ commands! {
     /// (sync) `IDirect3DQuery9::GetData(flags)` after the game's `D3DISSUE_END`. Replies
     /// [`Reply::Query`].
     QueryGetData { query: Handle, flags: u32 },
+}
+
+impl Cmd<Data<'_>> {
+    /// Whether each payload has the size the call gives it (a structure's, `count` registers' or
+    /// rectangles', a level's rows, whole handles or elements): checked on every command read
+    /// from a file, and on every command submitted in a debug build.
+    pub fn check(&self) -> Result<(), String> {
+        let name = self.name();
+        let exact = |what: &str, d: &Data<'_>, want: u64| {
+            if u64::from(d.len()) == want {
+                Ok(())
+            } else {
+                Err(format!("{name}: {what} is {} bytes, not {want}", d.len()))
+            }
+        };
+        let whole = |what: &str, d: &Data<'_>, unit: u32| {
+            if d.len() % unit == 0 {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{name}: {what} is {} bytes, not a multiple of {unit}",
+                    d.len()
+                ))
+            }
+        };
+        let rect =
+            |what: &str, d: &Option<Data<'_>>| d.as_ref().map_or(Ok(()), |d| exact(what, d, 16));
+        match self {
+            Cmd::CreateDevice {
+                present,
+                back_buffers,
+                ..
+            }
+            | Cmd::Reset {
+                present,
+                back_buffers,
+                ..
+            } => {
+                exact("present", present, 56)?;
+                whole("back_buffers", back_buffers, 4)
+            }
+            Cmd::Present { source, dest, .. } => {
+                rect("source", source)?;
+                rect("dest", dest)
+            }
+            Cmd::Clear { count, rects, .. } => rects
+                .as_ref()
+                .map_or(Ok(()), |r| exact("rects", r, 16 * u64::from(*count))),
+            Cmd::SetTransform { matrix, .. } => exact("matrix", matrix, 64),
+            Cmd::SetGammaRamp { ramp, .. } => exact("ramp", ramp, 0x600),
+            Cmd::SetConstants {
+                kind, count, data, ..
+            } => {
+                if *kind > 5 {
+                    return Err(format!("{name}: kind {kind}"));
+                }
+                let per = if kind % 3 == 2 { 4 } else { 16 };
+                exact("data", data, per * u64::from(*count))
+            }
+            Cmd::DrawPrimitiveUp {
+                kind,
+                count,
+                stride,
+                vertices,
+                ..
+            } => {
+                let c = u64::from(*count);
+                let n = match kind {
+                    1 => c,
+                    2 => 2 * c,
+                    3 => c + 1,
+                    4 => 3 * c,
+                    5 | 6 => c + 2,
+                    _ => return Err(format!("{name}: primitive type {kind}")),
+                };
+                exact("vertices", vertices, n * u64::from(*stride))
+            }
+            Cmd::SetMaterial { material, .. } => exact("material", material, 68),
+            Cmd::SetLight { light, .. } => exact("light", light, 104),
+            Cmd::StretchRect {
+                source_rect,
+                destination_rect,
+                ..
+            } => {
+                rect("source_rect", source_rect)?;
+                rect("destination_rect", destination_rect)
+            }
+            Cmd::ColorFill { rect: r, .. } => rect("rect", r),
+            Cmd::CreateTexture { levels, .. } => whole("levels", levels, 4),
+            Cmd::CreateCubeTexture { surfaces, .. } => whole("surfaces", surfaces, 24),
+            Cmd::CreateShader { tokens, .. } => whole("tokens", tokens, 4),
+            Cmd::CreateDeclaration { elements, .. } => whole("elements", elements, 8),
+            Cmd::UploadSurface {
+                row, rows, data, ..
+            } => exact("data", data, u64::from(*row) * u64::from(*rows)),
+            _ => Ok(()),
+        }
+    }
 }
 
 impl<P> Cmd<P> {
