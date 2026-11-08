@@ -229,7 +229,8 @@ save) should get.
   that list (JIP LN NVSE maps them through the list it was saved with), so under another list
   they go, as with xNVSE.
 - **Script error loop guard** (the row above): the maintainer's decision, 2026-11-08 (review of
-  #329). One error reaches the handlers once; the console still shows every error.
+  #329). One error reaches the handlers once; the console still shows every error. Kept per game
+  thread: an error another thread raises meanwhile is its own and reaches the handlers.
 
 ## Credits
 
