@@ -177,6 +177,15 @@ impl Default for HashOrder {
 }
 
 impl HashOrder {
+    /// A map made with `count` buckets (a power of two: `AlignBucketCount` keeps 0x40 and 0x80).
+    pub fn with_buckets(count: u32) -> HashOrder {
+        HashOrder {
+            buckets: Vec::new(),
+            num_buckets: count,
+            entries: 0,
+        }
+    }
+
     /// `HashKey<UInt32>`.
     fn hash(key: u32) -> u32 {
         key.wrapping_mul(0xd) ^ (key >> 0xf)

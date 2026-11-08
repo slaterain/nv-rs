@@ -49,6 +49,7 @@ pub mod event_commands;
 pub mod events;
 pub mod expr;
 pub mod functions;
+pub mod invref;
 pub mod lambda;
 pub mod mt19937;
 pub mod names;
@@ -183,6 +184,9 @@ pub struct Nvse {
     pub saveload: saveload::State,
     /// The event manager (I-9).
     pub events: events::State,
+    /// The inventory references (I-12), and the stacks `GetFirstRefForItem` listed per script.
+    pub invrefs: invref::State,
+    pub inv_ref_arrays: commands::inventory_ref::State,
     /// The first frame recorded the main thread (`s_recordedMainThreadID`): xNVSE prints to the
     /// console from then on.
     pub main_thread_recorded: bool,
@@ -276,6 +280,8 @@ mod tests {
             0x0078_f8e5,
             0x0078_fe24,
             0x0079_0461,
+            0x007b_5cac,
+            0x007b_800e,
             0x0086_80a4,
             0x0086_fe75,
             0x0088_caeb,
