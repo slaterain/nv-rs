@@ -755,7 +755,7 @@ fn foreach_alt_execute(e: &mut Engine, w: &[u32]) -> Ret {
             source = 0;
         }
     }
-    if value_var.0 == 0 && key_var.is_none_or(|k| k.0 == 0) {
+    if value_var.0 == 0 && !key_var.is_some_and(|k| k.0 != 0) {
         source = 0;
     }
     expr::report(e, &ev);
