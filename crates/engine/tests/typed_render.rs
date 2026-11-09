@@ -100,9 +100,7 @@ fn obj(e: &mut Engine, size: u32, vt: u32) -> u32 {
 
 /// The world's objects.
 #[derive(Clone, Copy)]
-#[allow(dead_code)]
 struct W {
-    device: u32,
     renderer: u32,
     manager: u32,
     stand_in_manager: u32,
@@ -278,7 +276,6 @@ fn world(e: &mut Engine, real_shader: bool) -> W {
     set(e, holder, view);
     set(e, VIEW_HOLDER, holder);
     W {
-        device,
         renderer,
         manager,
         stand_in_manager,
