@@ -2494,17 +2494,24 @@ thread_local! {
 
 /// Runs `job` on `helpers` helper engines (numbers 1 to `helpers`, each on its own OS thread, made
 /// at the first call) and on `e` itself (number 0) at the same time, and returns when all are done.
-/// Each helper takes the caller's x87 control word and counts as running game code for the page
-/// barrier while it works. False (nothing run) without real threads, or when the pool was made
-/// with fewer helpers. A helper's panic is resumed here after every helper is done.
+/// Each helper takes the caller's x87 control word (and with real threads counts as running game
+/// code for the page barrier while it works). With stepped threads the memory becomes shared at the
+/// first call. False (nothing run) on a helper, with a memory diagnostic that keeps memory unshared,
+/// or when the pool was made with fewer helpers. A helper's panic is resumed here after every helper is done.
 pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
     if HELPER.with(Cell::get) {
         return false;
     }
-    let Some(world) = e.real.as_ref().map(|r| r.world) else {
-        return false;
-    };
-    let pool = *POOL.get_or_init(|| make_pool(world, helpers));
+    // With stepped threads the helpers run inside the caller's turn (it waits for them), so the run
+    // stays as deterministic as stepped threads are; their engines need the memory shared.
+    let world = e.real.as_ref().map(|r| r.world);
+    if world.is_none() && !e.mem.is_shared() {
+        if !e.mem.can_share() {
+            return false;
+        }
+        e.mem.start_sharing();
+    }
+    let pool = *POOL.get_or_init(|| make_pool(e, world, helpers));
     if pool.count < helpers || helpers == 0 {
         return false;
     }
@@ -2554,7 +2561,7 @@ pub fn helper_register(e: &mut Engine, addr: u32, f: AbiFn) -> bool {
 }
 
 /// The pool and its helpers' OS threads, each with an engine made on this thread.
-fn make_pool(world: &'static World, helpers: usize) -> &'static Pool {
+fn make_pool(e: &mut Engine, world: Option<&'static World>, helpers: usize) -> &'static Pool {
     let pool: &'static Pool = Box::leak(Box::new(Pool {
         count: helpers,
         state: Mutex::new(PoolState {
@@ -2569,7 +2576,16 @@ fn make_pool(world: &'static World, helpers: usize) -> &'static Pool {
     }));
     for number in 1..=helpers {
         let id = HELPER_ID_BASE + u32::try_from(number).unwrap_or(0);
-        let engine = SendEngine(Box::new(world.context(id, HELPER_INDEX_BASE + number)));
+        let mut helper = match world {
+            Some(world) => world.context(id, HELPER_INDEX_BASE + number),
+            None => e.helper_context(),
+        };
+        // Its TLS block and guest stack made here, in order, so the guest memory they take is the
+        // same in every run (made by the helpers themselves, the order would be a race).
+        let tls = helper.new_tls_block();
+        helper.swap_tls(tls);
+        helper.with_stack(4, |_, _| ());
+        let engine = SendEngine(Box::new(helper));
         std::thread::Builder::new()
             .name(format!("render helper {number}"))
             .stack_size(THREAD_STACK)
@@ -2580,11 +2596,14 @@ fn make_pool(world: &'static World, helpers: usize) -> &'static Pool {
 }
 
 /// A helper's body: waits for each job, runs it on its engine, counts itself done.
-fn run_helper(engine: SendEngine, world: &'static World, pool: &'static Pool, number: usize) {
+fn run_helper(
+    engine: SendEngine,
+    world: Option<&'static World>,
+    pool: &'static Pool,
+    number: usize,
+) {
     HELPER.with(|h| h.set(true));
     let mut e = engine.0;
-    let tls = e.new_tls_block();
-    e.swap_tls(tls);
     let mut seen = 0u64;
     loop {
         let (job, control_word) = {
@@ -2598,11 +2617,17 @@ fn run_helper(engine: SendEngine, world: &'static World, pool: &'static Pool, nu
                 None => continue,
             }
         };
-        sync_registered(&mut e);
+        if world.is_some() {
+            sync_registered(&mut e);
+        }
         crate::x87::set_control_word(control_word);
-        world.enter_guest();
+        if let Some(world) = world {
+            world.enter_guest();
+        }
         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&mut e, number)));
-        world.leave_guest();
+        if let Some(world) = world {
+            world.leave_guest();
+        }
         let mut s = guard(&pool.state);
         if let Err(payload) = out {
             s.panic.get_or_insert(payload);

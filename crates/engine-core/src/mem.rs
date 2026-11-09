@@ -1192,7 +1192,13 @@ impl Mem {
         }
     }
 
-    /// Real threads (`crate::real_threads`): this `Mem` becomes a view of itself, shared: its
+    /// Whether [`Mem::start_sharing`] may run now: not shared yet, no memory diagnostic on.
+    pub fn can_share(&self) -> bool {
+        self.shared.is_none() && self.watch.is_none() && self.touch.is_none() && self.race.is_none()
+    }
+
+    /// Real threads (`crate::real_threads`), or the render helpers with stepped threads: this `Mem`
+    /// becomes a view of itself, shared: its
     /// whole state moves to a `Mem` that lives for good, and this one keeps only the guest space's
     /// address. Guest loads and stores stay this one's own (the same instructions); the heap
     /// ([`Mem::alloc`], [`Mem::free`], the asked sizes) and the page table ([`Mem::map`],

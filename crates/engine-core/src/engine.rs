@@ -769,6 +769,16 @@ impl Engine {
     /// objects and the same device state; its own call cache, call stack, TLS block (none yet),
     /// guest stack and time slice (none). No diagnostic. `real` is the new thread's context.
     pub(crate) fn thread_context(&self, real: crate::real_threads::Ctx) -> Engine {
+        self.context_for(Some(Box::new(real)))
+    }
+
+    /// An engine for a render helper with stepped threads (`crate::real_threads::fork_join`): as
+    /// [`Engine::thread_context`] with no real-threads context. Its memory must be shared already.
+    pub(crate) fn helper_context(&self) -> Engine {
+        self.context_for(None)
+    }
+
+    fn context_for(&self, real: Option<Box<crate::real_threads::Ctx>>) -> Engine {
         let mut e = Engine {
             mem: self.mem.view(),
             funcs: self
@@ -805,7 +815,7 @@ impl Engine {
             guest_stacks: Vec::new(),
             typed: self.typed.for_thread(),
             extend: self.extend.for_thread(),
-            real: Some(Box::new(real)),
+            real,
         };
         e.sync_diag();
         e

@@ -71,12 +71,15 @@ pub(crate) enum Entry {
     Call { addr: u32, words: Vec<u32> },
 }
 
-/// 0: not read, 1: off, 2: on, 3: check.
+/// 0: not read, 1: off, 2: on, 3: check, 4: serial (the helpers made and given each split's process
+/// copy as when on, the walk serial on main: the off side of the stream gate).
 static MODE: AtomicU8 = AtomicU8::new(0);
 static HELPERS: AtomicUsize = AtomicUsize::new(3);
 static MIN_CHILDREN: AtomicU32 = AtomicU32::new(16);
 /// Differences the check mode has printed (it stops at 20), and splits it compared.
 static PRINTED: AtomicU32 = AtomicU32::new(0);
+/// Splits the helpers walked (printed at 1024, 2048, 4096, ...: the proof they ran).
+static WALKS: AtomicU32 = AtomicU32::new(0);
 static COMPARED: AtomicU32 = AtomicU32::new(0);
 
 /// The bytes of a fade node its `OnVisible` writes: `m_uFlags` (+0x30) and the fade fields
@@ -133,7 +136,9 @@ fn mode() -> u8 {
 fn read_switch() -> u8 {
     let value = std::env::var("NV_PAR_RENDER").unwrap_or_default();
     let parts = || value.split(',').map(str::trim);
-    let m = if parts().any(|p| p == "check") {
+    let m = if parts().any(|p| p == "serial") {
+        4
+    } else if parts().any(|p| p == "check") {
         3
     } else if parts().any(|p| p == "1" || p == "on") {
         2
@@ -270,11 +275,9 @@ fn plain_process(e: &Engine, process: u32) -> bool {
     frustum.is_null() || e.get(frustum, BSCompoundFrustum::iFreeOp) == 0
 }
 
-/// The main thread (the split runs only there).
+/// The main thread (the split runs only there), with real or stepped threads.
 fn on_main(e: &Engine) -> bool {
-    e.real
-        .as_ref()
-        .is_some_and(|r| r.id == engine_core::thread_host::MAIN_THREAD_ID)
+    engine_core::thread_host::on_main(e)
 }
 
 /// Walks `children` (a chunk) with `process` into a log (on a helper).
@@ -359,8 +362,17 @@ pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32)
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(log);
     };
+    if mode() == 4 {
+        // Serial: the helpers take their process copies as when on, and walk nothing; main walks.
+        on_helpers(e, helpers, &image, &|_: &mut Engine, _: usize, _: u32| {});
+        return false;
+    }
     if !on_helpers(e, helpers, &image, &walk) {
         return false;
+    }
+    let walks = WALKS.fetch_add(1, Relaxed) + 1;
+    if walks.is_power_of_two() && walks >= 1024 {
+        println!("NV_PAR_RENDER: {walks} splits walked on the helpers");
     }
     let logs: Vec<Vec<Entry>> = logs
         .into_iter()
