@@ -629,12 +629,13 @@ const TEST_VARIABLES: &[&str] = &[
     "NV_NVSE_EVENT_LOG",
 ];
 
-/// Whether a launcher started this run for play: `NV_SAVE_OUT` (Play.exe) or `NV_SETTINGS`
-/// (Play.exe, and the play folder's Play.cmd through apply-settings.sh) set. No scripted, gated
-/// or measured run sets either; only such a run reads `Fallout.ini`'s `[nv-rs ...]` keys, and
-/// then only when it is no test ([`TEST_VARIABLES`], a fix's own variable, a test's command line).
+/// Whether a launcher started this run for play: `NV_SETTINGS` set (Play.exe, and the play
+/// folder's Play.cmd through apply-settings.sh). No scripted, gated or measured run sets it
+/// (`NV_SAVE_OUT` is not a sign: scripts that make saves set it too). Only such a run reads
+/// `Fallout.ini`'s `[nv-rs ...]` keys, and then only when it is no test ([`TEST_VARIABLES`], a
+/// fix's own variable, a test's command line).
 pub fn is_play_run(env: impl Fn(&str) -> Option<String>) -> bool {
-    env("NV_SAVE_OUT").is_some() || env("NV_SETTINGS").is_some()
+    env("NV_SETTINGS").is_some()
 }
 
 /// The settings file's text: a UTF-8 byte order mark is dropped and UTF-16 (what PowerShell 5.1's
@@ -1142,7 +1143,7 @@ mod tests {
         [nv-rs Display]\nbBorderless=1\niFrameLimit=90\niMenuFrameLimit=60\n\
         [nv-rs Threads]\nbSteppedThreads=1\nbRenderThread=0\n";
 
-    /// A launcher's play run (its `NV_SAVE_OUT`) with these variables too.
+    /// A launcher's play run (its `NV_SETTINGS`) with these variables too.
     fn with_ini(
         settings: Option<&str>,
         ini: &str,
@@ -1150,15 +1151,16 @@ mod tests {
     ) -> Choice {
         let env = env_of(pairs);
         let play = move |name: &str| {
-            (name == "NV_SAVE_OUT")
+            (name == "NV_SETTINGS")
                 .then(|| "x".to_string())
                 .or(env(name))
         };
         Choice::from_texts(settings, Some(ini), play).unwrap()
     }
 
-    /// Only a launcher's play run reads the file: a run with only a run setting, a preset or the
-    /// renderer named, or one its command line marks as a test, never does.
+    /// Only a launcher's play run reads the file: a run with only a run setting, a preset, the
+    /// renderer or a save folder (a script making saves) named, or one its command line marks as
+    /// a test, never does.
     #[test]
     fn only_a_launchers_play_run_reads_fallout_ini() {
         let reads = |pairs: &'static [(&'static str, &'static str)], command_line_test: bool| {
@@ -1167,8 +1169,9 @@ mod tests {
                 .borderless
                 == Some(true)
         };
-        assert!(reads(&[("NV_SAVE_OUT", "x")], false));
+        assert!(!reads(&[("NV_SAVE_OUT", "x")], false));
         assert!(reads(&[("NV_SETTINGS", "x")], false));
+        assert!(reads(&[("NV_SETTINGS", "x"), ("NV_SAVE_OUT", "x")], false));
         assert!(reads(
             &[("NV_SETTINGS", "x"), ("NV_PRESET", "fixes")],
             false
@@ -1180,17 +1183,42 @@ mod tests {
         assert!(!reads(&[("NV_RENDER_THREAD", "1")], false));
         assert!(!reads(&[("NV_D3D9", "real"), ("NV_SOUND", "out")], false));
         // The viewer's --movement-missing and --movement-probe, even in a play run.
-        assert!(!reads(&[("NV_SAVE_OUT", "x")], true));
+        assert!(!reads(&[("NV_SETTINGS", "x")], true));
         let marked = Choice::build(
             None,
             Some(PLAYER_INI),
-            env_of(&[("NV_SAVE_OUT", "x")]),
+            env_of(&[("NV_SETTINGS", "x")]),
             true,
         )
         .unwrap();
         assert_eq!(marked, Choice::from_parts(None, no_env).unwrap());
-        assert!(is_play_run(env_of(&[("NV_SAVE_OUT", "")])));
+        assert!(is_play_run(env_of(&[("NV_SETTINGS", "")])));
+        assert!(!is_play_run(env_of(&[("NV_SAVE_OUT", "x")])));
         assert!(!is_play_run(env_of(&[("NV_D3D9", "real")])));
+    }
+
+    /// Play.exe passes Fallout.ini's player switches only when the game would read the file, so
+    /// its list of what makes a test must be the host's (scripts/launcher/src/settings.rs).
+    #[test]
+    fn the_launcher_knows_what_makes_a_test() {
+        let launcher = include_str!("../../../scripts/launcher/src/settings.rs");
+        let list = launcher
+            .split("pub const TEST_SWITCHES")
+            .nth(1)
+            .and_then(|rest| rest.split("];").next())
+            .expect("TEST_SWITCHES in the launcher's settings.rs");
+        let names: Vec<&str> = list
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .filter(|w| w.starts_with("NV_"))
+            .collect();
+        let mut host: Vec<&str> = TEST_VARIABLES.to_vec();
+        host.extend(FIXES.iter().map(|f| f.env));
+        host.sort_unstable();
+        let mut names = names;
+        names.sort_unstable();
+        assert_eq!(names, host);
     }
 
     /// Fallout.ini's keys over the built-in defaults; nothing in the file is the defaults.
@@ -1330,7 +1358,7 @@ mod tests {
         let mut bytes = vec![0xef, 0xbb, 0xbf];
         bytes.extend_from_slice(b"[nv-rs General]\r\nsPreset=vanilla\r\n");
         std::fs::write(&file, bytes).unwrap();
-        let play = env_of(&[("NV_SAVE_OUT", "x")]);
+        let play = env_of(&[("NV_SETTINGS", "x")]);
         let choice = Choice::from_files(None, Some(&file), &play).unwrap();
         assert_eq!(choice.preset, Preset::Vanilla);
         let missing = Choice::from_files(None, Some(&dir.join("missing.ini")), &play).unwrap();

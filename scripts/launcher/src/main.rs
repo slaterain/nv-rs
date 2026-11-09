@@ -1125,9 +1125,15 @@ fn play(
         command.env_remove("NV_BORDERLESS");
     }
     // The run's Fallout.ini wins over settings.ini (host `game_ini.rs`): each player switch its
-    // [nv-rs ...] sections set goes to the game with the file's value instead.
+    // [nv-rs ...] sections set goes to the game with the file's value instead. Not when a
+    // settings.ini line (or the launcher's own environment) makes the run a test, which never
+    // reads the file: then settings.ini's switches stand, as the game sees it.
     let fallout_ini = profile.documents.join("My Games\\FalloutNV\\Fallout.ini");
-    if let Ok(bytes) = std::fs::read(&fallout_ini) {
+    let test = settings::makes_a_test(
+        user_switches(&settings).into_iter().map(|(name, _)| name),
+        |name| std::env::var_os(name).is_some(),
+    );
+    if let Some(bytes) = (!test).then(|| std::fs::read(&fallout_ini).ok()).flatten() {
         let from_file = Settings::file_switches(&settings::decode(&bytes));
         for (name, value) in &from_file {
             match value {
