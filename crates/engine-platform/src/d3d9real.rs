@@ -3074,6 +3074,65 @@ pub(crate) fn real_texture(e: &mut Engine, texture: u32) -> Option<IDirect3DBase
 mod tests {
     use super::*;
 
+    /// With real threads, a kernel-locked function that reaches the device's state takes the device
+    /// lock first: `SetWindowPos` (an import, run under the kernel lock) moves the real window
+    /// through [`window_moved`] and [`real_window`], whose `device_ref!` checks the device lock
+    /// (debug builds). Outside any lock the check is live, and the lock is free again afterwards.
+    #[test]
+    fn a_kernel_locked_function_reaches_the_device_state_under_the_device_lock() {
+        let mut e = Engine::new();
+        let table = crate::imports();
+        e.mem.map(0x00fd_f000, 0x2000);
+        let imports: Vec<engine_core::exe::Import> = table
+            .iter()
+            .enumerate()
+            .map(|(i, (dll, name, _))| engine_core::exe::Import {
+                dll: dll.to_string(),
+                name: name.to_string(),
+                slot: 0x00fd_f000 + 4 * i as u32,
+            })
+            .collect();
+        e.register_imports(&imports);
+        let slot = |name: &str| {
+            imports
+                .iter()
+                .find(|i| i.name == name)
+                .unwrap_or_else(|| panic!("no import {name}"))
+                .slot
+        };
+        let window = 0x1234;
+        state!(e).windows.windows.insert(
+            window,
+            crate::window::Window {
+                class: 0,
+                title: Vec::new(),
+                style: 0,
+                ex_style: 0,
+                parent: 0,
+                rect: [0, 0, 640, 480],
+            },
+        );
+        engine_core::real_threads::start(&mut e).expect("real threads on");
+        if cfg!(debug_assertions) {
+            assert!(
+                !crate::device_held(&e),
+                "the main thread holds no lock here"
+            );
+        }
+        let moved = e.call(
+            slot("SetWindowPos"),
+            &crate::args![window, 0u32, 10i32, 20i32, 800i32, 600i32, 0u32],
+        );
+        assert_eq!(moved.eax, 1);
+        assert_eq!(state!(e).windows.windows[&window].rect, [10, 20, 810, 620]);
+        if cfg!(debug_assertions) {
+            assert!(!crate::device_held(&e), "the device lock is given back");
+        }
+        let held = engine_core::real_threads::device_guard(&e);
+        assert!(held.is_some() && crate::device_held(&e));
+        assert!(real_window(&e, window).is_none(), "NV_D3D9 is not set here");
+    }
+
     /// `NV_D3D9`'s words: the real `d3d9.dll`, wgpu, or both (the real one answering), any case
     /// and spaces; anything else is refused (nothing is drawn) rather than guessed.
     #[test]
