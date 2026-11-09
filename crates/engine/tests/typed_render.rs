@@ -562,7 +562,15 @@ fn geometry_pass() {
             Input::Of(&[0, 0x40]),
             Input::Of(TWO_WAYS),
         ])
-        .translation_calls_plainly(&[0x00e7_ea00, 0x00e7_e940, 0x00e7_df90])
+        .translation_calls_plainly(&[
+            0x00e7_ea00,
+            0x00e7_e940,
+            0x00e7_df90,
+            // The 4x4 inverse's translation reaches the matrix row and column helpers plainly.
+            0x0047_6930,
+            0x0047_6980,
+            0x0047_69c0,
+        ])
         .setup(|e, c| {
             let w = world(e, false);
             // The lighting property (its clamp mode typed) or one with stand-ins.
