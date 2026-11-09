@@ -926,8 +926,16 @@ pub fn direct3d_created(e: &mut Engine) {
         Stream::direct(backend_of(which, None, warm))
     };
     if let Some(path) = std::env::var_os("NV_D3D9_RECORD") {
+        // `NV_REPEATABLE`: the record leaves out what differs between two runs of the same
+        // exe (`Stream::record_repeatable`).
+        let repeatable = e.repeatable;
         let recording = std::fs::File::create(&path).and_then(|file| {
-            stream.record_to(Box::new(std::io::BufWriter::with_capacity(1 << 20, file)))
+            let out = Box::new(std::io::BufWriter::with_capacity(1 << 20, file));
+            if repeatable {
+                stream.record_repeatable(out)
+            } else {
+                stream.record_to(out)
+            }
         });
         match recording {
             Ok(()) => eprintln!(
@@ -941,6 +949,14 @@ pub fn direct3d_created(e: &mut Engine) {
         }
     }
     real(e).stream = Some(stream);
+}
+
+/// `NV_REPEATABLE`'s end: what `NV_D3D9_RECORD` holds is written out to its file now, so the
+/// process can end at once.
+pub fn finish_recording(e: &mut Engine) {
+    if let Some(s) = real(e).stream.as_mut() {
+        s.finish_recording();
+    }
 }
 
 /// The game's `D3DPRESENT_PARAMETERS` (0x38 bytes) as words.
@@ -2002,6 +2018,23 @@ pub fn query_issue(e: &mut Engine, query: u32, flags: u32) {
 pub fn query_get_data(e: &mut Engine, query: u32, flags: u32) -> Option<(u32, u32)> {
     if !is_forwarded(e, query) {
         return None;
+    }
+    // `NV_REPEATABLE`: the answer once the GPU has it, whenever the game asks, so the game takes
+    // the same path on every run (a sync command, after every command before it).
+    if e.repeatable {
+        loop {
+            match call(
+                e,
+                Cmd::QueryGetData {
+                    query,
+                    flags: flags | GETDATA_FLUSH,
+                },
+            ) {
+                Some(Reply::Query(Some((S_FALSE, _)))) => std::thread::yield_now(),
+                Some(Reply::Query(answer)) => return answer,
+                _ => return None,
+            }
+        }
     }
     if let Some(answer) = query_without_waiting(real(e), query, flags) {
         return answer;
