@@ -15,8 +15,8 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::{entry, Engine};
-use engine_typed::culling;
 use engine_typed::shader::{self, accumulator as acc, batch, state};
+use engine_typed::{crt, culling, pathing, render};
 
 /// The stand-in virtual functions, one per slot, and the table of what each answers.
 const VT_FN: u32 = 0x00ff_2000;
@@ -2644,6 +2644,105 @@ fn append_virtual_registers_through_the_typed_slot() {
         let process = e.mem.alloc(0xc8);
         set(e, process + 0xc4, w.acc);
         vec![process, w.geometry]
+    })
+    .run()
+    .assert_same();
+}
+
+/// Stand-ins for the untyped functions the render family's `GetRenderPasses` and geometry packing call,
+/// for the two tests below: each answers 0 and leaves a mark.
+fn render_stand_ins(e: &mut Engine) {
+    for addr in [
+        0x00ba_9660u32,
+        0x00bd_f650,
+        0x00ba_9740,
+        0x00bd_a060,
+        0x00ba_96d0,
+        0x00bd_e170,
+        0x00ba_9820,
+        0x00bd_f6c0,
+        0x00b7_0390,
+        0x00a5_9d30,
+        0x005b_f7b0,
+        0x004b_3ab0,
+        0x00e6_d760,
+        0x00e6_d780,
+        0x00e8_bf90,
+        0x00e8_ef10,
+        0x00e8_c1e0,
+        0x00e8_f200,
+        0x00e8_eee0,
+        0x0043_b300,
+        0x00a7_b850,
+        0x00a7_5f10,
+    ] {
+        e.register(addr, |e, a| {
+            let n = e.mem.u32(RETS + 0x700);
+            e.mem.set_u32(
+                RETS + 0x700,
+                n.wrapping_mul(31).wrapping_add(a.len() as u32),
+            );
+            ret(0)
+        });
+    }
+}
+
+/// `RegisterObject` with the property's slot 0xa0 holding the render family's `GetRenderPasses`
+/// (`00b67be0`): that call made direct (the plain world has a stand-in there).
+#[test]
+fn register_object_typed_render_passes() {
+    Diff::new(entry!(
+        0x00b6_3f10,
+        acc::register_object(Ptr<_>, Ptr<_>) -> bool
+    ))
+    .common()
+    .family(&render::RENDER)
+    .family(&pathing::PATHING)
+    .family(&crt::CRT)
+    .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(TWO_WAYS)])
+    .translation_calls_plainly(&[
+        0x00b9_9840,
+        0x00b9_9a50,
+        0x00b9_9770,
+        0x00b9_9a90,
+        0x00b9_9b00,
+        0x00b9_8e20,
+        0x00b6_6760,
+    ])
+    .float_sweep(0)
+    .setup(|e, c| {
+        let w = world(e);
+        render_stand_ins(e);
+        let vt = vtable(e, &[(0xa0, 0x00b6_7be0)]);
+        set(e, w.property, vt);
+        set(e, w.acc + 0x19c, c.word(0));
+        set(e, w.property + 0x20, c.word(1));
+        vec![w.acc, w.geometry]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `render_standard` with the shader's slot 0x6c holding the render family's `00e812f0`: the draw made
+/// direct (the plain world has a stand-in there).
+#[test]
+fn render_standard_typed_draw() {
+    Diff::new(entry!(
+        0x00b9_8e80,
+        batch::render_standard(Ptr<_>, u32, u32, u32)
+    ))
+    .common()
+    .family(&render::RENDER)
+    .inputs(&[Input::Of(&[0x10, 0x11]), Input::Of(BYTES)])
+    .float_sweep(0)
+    .setup(|e, c| {
+        let w = world(e);
+        render_stand_ins(e);
+        let vt = vtable(e, &[(0x6c, 0x00e8_12f0)]);
+        set(e, w.shader, vt);
+        let pass = w.passes[0];
+        e.mem.set_u16(pass + 4, c.word(0) as u16);
+        vec![pass, c.word(1), 0, 1]
     })
     .run()
     .assert_same();
