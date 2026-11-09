@@ -40,6 +40,9 @@ pub static FIXES: &[Fix] = &[
     crate::topic_index::FIX,
     KEEP_COSAVE_PLUGINS,
     SCRIPT_ERROR_GUARD,
+    SCRIPT_SIZE_CAPS,
+    SCRIPT_NULL_GUARD,
+    SCRIPT_CYCLE_GUARD,
 ];
 
 /// The built-in script extender's rows (docs/FIXES.md, "The script extender"): each sets a flag
@@ -69,6 +72,45 @@ fn install_script_error_guard(e: &mut Engine) {
     nvse::events::set_error_guard(e, true);
 }
 
+pub const SCRIPT_SIZE_CAPS: Fix = Fix {
+    name: "script array and string size caps",
+    env: "NV_NVSE_SIZE_CAPS",
+    addresses: &[],
+    summary:
+        "arrays the script commands make or grow stop at 8,388,608 elements; an empty text replaced a given number of times stops at 64 MiB",
+    install: install_script_size_caps,
+};
+
+fn install_script_size_caps(e: &mut Engine) {
+    nvse::commands::array::set_fix(e, nvse::commands::array::SIZE_CAPS, true);
+}
+
+pub const SCRIPT_NULL_GUARD: Fix = Fix {
+    name: "script missing array guard",
+    env: "NV_NVSE_NULL_GUARD",
+    addresses: &[],
+    summary:
+        "ar_Count and ar_GetNth on a missing array answer 0, and a format string's string outside the game's memory ends the text, instead of stopping the game",
+    install: install_script_null_guard,
+};
+
+fn install_script_null_guard(e: &mut Engine) {
+    nvse::commands::array::set_fix(e, nvse::commands::array::NULL_GUARD, true);
+}
+
+pub const SCRIPT_CYCLE_GUARD: Fix = Fix {
+    name: "script array cycle guard",
+    env: "NV_NVSE_CYCLE_GUARD",
+    addresses: &[],
+    summary:
+        "a deep copy, deep compare or dump of an array that holds itself ends where it meets itself again, instead of running out of stack",
+    install: install_script_cycle_guard,
+};
+
+fn install_script_cycle_guard(e: &mut Engine) {
+    nvse::commands::array::set_fix(e, nvse::commands::array::CYCLE_GUARD, true);
+}
+
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
 /// the extender's rows set flags `crates/nvse` reads.
 #[cfg(test)]
@@ -76,6 +118,9 @@ const NO_ADDRESS: &[&str] = &[
     crate::uncap::MENU_FIX.name,
     KEEP_COSAVE_PLUGINS.name,
     SCRIPT_ERROR_GUARD.name,
+    SCRIPT_SIZE_CAPS.name,
+    SCRIPT_NULL_GUARD.name,
+    SCRIPT_CYCLE_GUARD.name,
 ];
 
 /// Menus' frames a second at most when nothing says otherwise (the maintainer, 2026-11-07).

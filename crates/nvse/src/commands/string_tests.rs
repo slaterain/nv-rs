@@ -142,7 +142,7 @@ fn printf_formats_as_the_ucrt() {
         ("%08llX", &[f64::from_bits(255)], "000000FF"),
         ("%c%c", &[f64::from_bits(0x42_0000_0041)], "AB"),
         ("%s|%5.2s|", &[0.0], "(null)|   (n|"),
-        ("%%%n tail", &[], "%"),
+        ("%%%n tail", &[], ""),
         (
             "%.*f",
             &[f64::from_bits(2 | (0x4004_0000u64 << 32)), 0.0],
@@ -758,7 +758,7 @@ fn regexes_are_checked_as_msvc_parses_them() {
         (r"a}", 7),
         (r"(?:a)", 0),
         (r"(?=a)b", 0),
-        (r"(?<a)", 14),
+        (r"(?<a)", 11),
         (r"\d+", 0),
         (r"a{,2}", 8),
         (r"(a)\1", 0),
@@ -851,4 +851,98 @@ fn format_strings_match_the_real_game() {
     let big = ucrt_format(&e, b"%f", &1e300f64.to_le_bytes());
     assert!(big.starts_with(b"10000000000000000525047602552044202487044685811081591549158541"));
     assert!(big.ends_with(b"6865459400540160.000000"));
+}
+
+/// What the shipping xNVSE 6.4.9 DLL's `std::regex` answered for each pattern of
+/// `regex_cases.txt` (its fuzzed and hand-made mismatches with the 14.44 source, run natively).
+#[test]
+fn regexes_match_the_shipping_dll() {
+    let decode = |hex: &str| -> Vec<u8> {
+        (0..hex.len() / 2)
+            .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap())
+            .collect()
+    };
+    let mut checked = 0;
+    for line in include_str!("regex_cases.txt").lines() {
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+        let (hex, code) = line.split_once('|').unwrap();
+        let pattern = decode(hex);
+        let want: u8 = code.parse().unwrap();
+        let got = regex_check::check(c_str(&pattern)).map_or_else(|e| e.code(), |()| 0);
+        assert_eq!(got, want, "{:?}", String::from_utf8_lossy(&pattern));
+        checked += 1;
+    }
+    assert!(checked > 400);
+    // 1000 groups open at once, or 1000 capture groups in all, are too many.
+    let deep = |n: usize, open: &str| {
+        let mut p = open.repeat(n).into_bytes();
+        p.push(b'a');
+        p.extend(")".repeat(n).into_bytes());
+        regex_check::check(&p).map_or_else(|e| e.code(), |()| 0)
+    };
+    assert_eq!(deep(999, "(?:"), 0);
+    assert_eq!(deep(1000, "(?:"), 13);
+    assert_eq!(deep(1000, "("), 13);
+    assert_eq!(deep(5000, "(?="), 13);
+    assert_eq!(regex_check::check("(a)".repeat(999).as_bytes()), Ok(()));
+    assert_eq!(
+        regex_check::check("(a)".repeat(1000).as_bytes()).map_err(|e| e.code()),
+        Err(13)
+    );
+}
+
+/// The printf's limits: what `snprintf` keeps (0x3FFD bytes) bounds every width and precision,
+/// so none allocates more or panics; the UCRT's refusals give `""`, an unknown conversion its
+/// character, `%0Nc`/`%0Ns` zeros, `%lc` the byte.
+#[test]
+fn printf_keeps_to_the_buffer_and_the_ucrts_rules() {
+    let e = Engine::new();
+    let list = |vs: &[u64]| vs.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+    let one = list(&[1.0f64.to_bits()]);
+    for format in [
+        "%.100000f",
+        "%.70000e",
+        "%.99999g",
+        "%#.99999g",
+        "%.70000a",
+        "%2000000000d",
+        "%-2000000000d|",
+        "%.1000000d",
+        "%*d",
+        "%.*f",
+    ] {
+        let out = ucrt_format(&e, format.as_bytes(), &one);
+        assert!(out.len() <= BUDGET, "{format}: {}", out.len());
+    }
+    let big = ucrt_format(&e, b"%.100000f", &one);
+    assert!(big.starts_with(b"1.000") && big.len() == BUDGET);
+    let cases: &[(&str, u64, &str)] = &[
+        ("%1.0qd|%d", 0, "qd|0"),
+        ("%qf|", 0, "qf|"),
+        ("%Ld|%d", 0, ""),
+        ("%wd", 5, ""),
+        ("%n", 0, ""),
+        ("[%05c]", 0x41, "[0000A]"),
+        ("[%06s]", 0, "[(null)]"),
+        ("[%08s]", 0, "[00(null)]"),
+        ("[%lc]", 0xe9, "[\u{e9}]"),
+        ("[%lc]", 0x141, "[]"),
+        ("[%5Tc]", 0x41, "[    A]"),
+        ("%Lf", 0x3ff8_0000_0000_0000, "1.500000"),
+    ];
+    for &(format, arg, want) in cases {
+        let out = ucrt_format(&e, format.as_bytes(), &list(&[arg]));
+        let want: Vec<u8> = want.chars().map(|c| c as u32 as u8).collect();
+        assert_eq!(out, want, "{format}");
+    }
+    // A string outside the game's memory: the game stops (vanilla), or the text ends there.
+    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ucrt_format(&e, b"a%sb", &list(&[0x10]))
+    }));
+    assert!(stopped.is_err());
+    let mut guarded = Engine::new();
+    super::super::array::set_fix(&mut guarded, super::super::array::NULL_GUARD, true);
+    assert_eq!(ucrt_format(&guarded, b"a%sb", &list(&[0x10])), b"a");
 }

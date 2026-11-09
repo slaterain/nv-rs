@@ -420,14 +420,69 @@ fn copying_sorting_and_comparing() {
     assert_eq!(run(&mut e, 0x1675, &[arr(5), n1(-1.0)]), 0.0);
     let v = run(&mut e, 0x1675, &[arr(6), n1(0.0)]);
     assert_eq!(text_of(&e, v), "v");
+    // No array: xNVSE reads through the null pointer and the game stops (vanilla); the
+    // missing array guard row answers 0.
+    add_local(&mut e, 7, "stale", 999.0);
+    for (op, args) in [(0x1675, [n1(3.0), n1(0.0)]), (0x1672, [arr(7), n1(0.0)])] {
+        let mut vanilla = setup();
+        add_local(&mut vanilla, 7, "stale", 999.0);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run(&mut vanilla, op, &args);
+        }));
+        assert!(stopped.is_err(), "{op:#x} stops the game in vanilla");
+    }
+    set_fix(&mut e, NULL_GUARD, true);
     assert_eq!(run(&mut e, 0x1675, &[n1(3.0), n1(0.0)]), 0.0, "no array");
-    assert_eq!(run(&mut e, 0x1672, &[n1(3.0), n1(0.0)]), 0.0, "no array");
+    assert_eq!(run(&mut e, 0x1672, &[arr(7), n1(0.0)]), 0.0, "no array");
+    assert_eq!(
+        run(&mut e, 0x1672, &[n1(3.0), n1(0.0)]),
+        0.0,
+        "not an array"
+    );
 }
 
-/// The dump's lines, and `ar_DumpF` writing them with the C runtime's text-mode new lines.
+thread_local! {
+    /// The stand-in file system of `ar_DumpF`'s test: files by path, open handles (path, at end).
+    static FILES: std::cell::RefCell<std::collections::HashMap<Vec<u8>, Vec<u8>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    static HANDLES: std::cell::RefCell<std::collections::HashMap<u32, Vec<u8>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+fn create_file(e: &mut Engine, a: &[u32]) -> Ret {
+    let path = crate::table::guest_text(e, a[0]);
+    FILES.with(|f| {
+        let mut f = f.borrow_mut();
+        if a[4] == CREATE_ALWAYS || !f.contains_key(&path) {
+            f.insert(path.clone(), Vec::new());
+        }
+    });
+    let h = HANDLES.with(|h| {
+        let mut h = h.borrow_mut();
+        let id = 0x100 + h.len() as u32;
+        h.insert(id, path);
+        id
+    });
+    ret(h)
+}
+
+fn write_file(e: &mut Engine, a: &[u32]) -> Ret {
+    let path = HANDLES.with(|h| h.borrow()[&a[0]].clone());
+    let bytes = e.mem.bytes(a[1], a[2]);
+    FILES.with(|f| f.borrow_mut().get_mut(&path).unwrap().extend(bytes));
+    e.mem.set_u32(a[3], a[2]);
+    ret(1)
+}
+
+/// The dump's lines, and `ar_DumpF` writing them through the game's file calls (here a
+/// stand-in in memory) with the C runtime's text-mode new lines.
 #[test]
 fn dumps_list_every_element() {
     let mut e = setup();
+    e.register(CREATE_FILE_A, create_file);
+    e.register(WRITE_FILE, write_file);
+    e.register(SET_FILE_POINTER, |_, _| ret(0));
+    e.register(CLOSE_HANDLE, |_, _| ret(1));
     let id = make(
         &mut e,
         1,
@@ -458,17 +513,19 @@ fn dumps_list_every_element() {
             "[ y ] : [1.5, \"s\"]".to_string(),
         ]
     );
-    let dir = std::env::temp_dir().join(format!("nvse-dumpf-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("dump.txt");
-    let path = file.to_string_lossy().into_owned();
-    run(&mut e, 0x1625, &[arr(1), t1(&path), n1(0.0)]);
-    run(&mut e, 0x1625, &[arr(1), t1(&path)]);
-    let written = std::fs::read(&file).unwrap();
+    let path = r"..\dump.txt";
+    run(&mut e, 0x1625, &[arr(1), t1(path), n1(0.0)]);
+    run(&mut e, 0x1625, &[arr(1), t1(path)]);
+    let written = FILES.with(|f| f.borrow()[path.as_bytes()].clone());
     let one = format!("** Dumping Array #{id} **\r\nRefs: 1 Owner 05: \r\n[ 0.000000 ] : 1.500000\r\n[ 1.000000 ] : s\r\n");
     assert_eq!(String::from_utf8_lossy(&written), one.repeat(2));
-    std::fs::remove_file(&file).unwrap();
-    std::fs::remove_dir(&dir).unwrap();
+    run(&mut e, 0x1625, &[arr(1), t1(path), n1(0.0)]);
+    let written = FILES.with(|f| f.borrow()[path.as_bytes()].clone());
+    assert_eq!(
+        String::from_utf8_lossy(&written),
+        one,
+        "\"w+\" makes the file anew"
+    );
 }
 
 /// The function commands: no function script, no run (each answers 0).
@@ -485,4 +542,42 @@ fn function_commands_need_a_function() {
         values(&e, sorted).is_empty(),
         "no comparator: an empty array"
     );
+}
+
+/// The walk the function commands make sees the array as it is at each step: an element the
+/// function appends is walked, one it erases ahead is not.
+#[test]
+fn the_walk_follows_the_live_array() {
+    let mut e = setup();
+    let a = make(&mut e, 1, KEY_NUMBER, true, &nums(&[1.0, 2.0, 3.0]));
+    let mut seen = Vec::new();
+    walk(&mut e, a, |e, _, x| {
+        let Data::Number(n) = x.data else {
+            return false;
+        };
+        seen.push(n);
+        if n == 1.0 {
+            vars::erase_element(e, a, &Key::Number(1.0));
+            insert_at(e, a, 2, &Data::Number(9.0));
+        }
+        true
+    });
+    assert_eq!(seen, [1.0, 3.0, 9.0]);
+}
+
+/// An array that holds itself: with the cycle guard row the deep copy holds its own copy
+/// there, the deep compare counts the pair as equal and the dump writes `[...]` (vanilla walks
+/// on until the stack runs out, as xNVSE).
+#[test]
+fn the_cycle_guard_ends_self_holding_walks() {
+    let mut e = setup();
+    set_fix(&mut e, CYCLE_GUARD, true);
+    let a = make(&mut e, 1, KEY_NUMBER, true, &nums(&[1.0]));
+    vars::set_element(&mut e, a, &Key::Number(1.0), Value::Array(a));
+    let copy = run(&mut e, 0x1561, &[arr(1)]) as u32;
+    assert_ne!(copy, a);
+    assert_eq!(entries(&e, copy)[1].1.data, Data::Array(copy));
+    add_local(&mut e, 2, "c", f64::from(copy));
+    assert_eq!(run(&mut e, 0x162f, &[arr(1), arr(2)]), 1.0);
+    assert_eq!(array_repr(&mut e, a), b"[1, [...]]");
 }

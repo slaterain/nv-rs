@@ -5,13 +5,21 @@
 //!
 //! - **Elements:** an element is set as `ArrayElement::Set` does: a string copied, a form by id,
 //!   an array held by a reference from the holding array's owning mod.
-//! - **Iteration:** the commands that call a function on each element go over the elements the
-//!   array had when they started (xNVSE walks the live container; a function that changes it
-//!   there can leave the walk on freed memory).
-//! - **Sizes:** `ar_Range` with a step of 0 never ends in xNVSE, and a range, `ar_Init`,
-//!   `ar_Resize` or `ar_Generate` of millions of elements runs it out of memory; here an array
-//!   these make stops at [`MAX_MADE`] elements (the 64 MiB of numbers [`crate::expr`] allows a
-//!   string).
+//! - **Iteration:** the commands that call a function on each element walk the live array by
+//!   position, as xNVSE's iterator does, so elements the function adds or erases count as they
+//!   do there; the element is read afresh at each step (xNVSE's iterator can be left pointing at
+//!   freed memory when the function grows the array).
+//! - **Files:** `ar_DumpF` writes through the game's own `CreateFileA`, as every file the game
+//!   makes ([`crate::saveload`] does the same): the platform's file layer decides where it goes.
+//! - **The fixes preset** (docs/FIXES.md, "The script extender"; [`set_fix`]): vanilla is
+//!   xNVSE's, its crashes included, except an outright hang or an allocation without end, which
+//!   is capped in every preset: an `ar_Range` that never ends (a step of 0, or one that wraps
+//!   past the end) stops at [`MAX_MADE`] elements (about 335 MB), as does `ar_Cat` of an array
+//!   with itself. The rows: [`SIZE_CAPS`] caps every array these commands make or grow at
+//!   [`MAX_MADE`] elements (xNVSE runs out of memory); [`NULL_GUARD`] answers 0 where xNVSE reads
+//!   through a missing array (`ar_Count`, `ar_GetNth`) or a format string reads a string outside
+//!   the game's memory; [`CYCLE_GUARD`] ends the walk of an array that holds itself (a deep copy,
+//!   a deep compare, a dump), which overflows xNVSE's stack.
 //!
 //! Not here: lambdas' saved variables when an element takes or loses a lambda (as
 //! [`crate::vars`]).
@@ -26,9 +34,38 @@ use crate::vars::{self, Container, Data, Element, Key, Value, KEY_NUMBER, KEY_ST
 use crate::{handled, CommandArgs, Nvse};
 use engine_core::prelude::*;
 use std::cmp::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering as Atomic};
 
-/// The most elements a command here adds to an array it makes or grows.
+/// The most elements an array made or grown here gets when it is capped.
 pub const MAX_MADE: usize = 1 << 23;
+
+/// The fixes preset's rows for these commands, set by the host's rows before the first frame
+/// (`crates/host/src/fixes.rs`); never set (vanilla), they are off. Lock-free: every game thread
+/// reads them.
+#[derive(Default)]
+pub struct CommandFixes {
+    rows: [AtomicBool; 3],
+}
+
+/// `NV_NVSE_SIZE_CAPS`: arrays made or grown here stop at [`MAX_MADE`] elements, an empty text
+/// replaced a given number of times at 64 MiB.
+pub const SIZE_CAPS: usize = 0;
+/// `NV_NVSE_NULL_GUARD`: a missing array or a string outside the game's memory answers 0 or ends
+/// the text instead of stopping the game.
+pub const NULL_GUARD: usize = 1;
+/// `NV_NVSE_CYCLE_GUARD`: an array met again inside itself ends the walk.
+pub const CYCLE_GUARD: usize = 2;
+
+/// Turns one of the rows on or off (the host's fix rows; before the game's threads start).
+pub fn set_fix(e: &mut Engine, row: usize, on: bool) {
+    e.ext_free::<CommandFixes>().rows[row].store(on, Atomic::Relaxed);
+}
+
+/// Whether a row is on.
+pub fn fix_on(e: &Engine, row: usize) -> bool {
+    e.ext_get::<CommandFixes>()
+        .is_some_and(|f| f.rows[row].load(Atomic::Relaxed))
+}
 
 /// `s_arrayErrorCodeNum`, the bad numeric key.
 const ERROR_NUM: f64 = -99999.0;
@@ -246,6 +283,17 @@ fn entries(e: &Engine, id: u32) -> Vec<(Key, Element)> {
             .iter()
             .map(|(k, x)| (Key::Str(k.clone()), x.clone()))
             .collect(),
+    }
+}
+
+/// The key and element at position `i` of the array as it is now (`None` past its end, or when
+/// it is gone): the live walk of xNVSE's iterator.
+fn nth_entry(e: &Engine, id: u32, i: usize) -> Option<(Key, Element)> {
+    let a = vars::array(e, id)?;
+    match &a.elements {
+        Container::Array(v) => v.get(i).map(|x| (Key::Number(i as f64), x.clone())),
+        Container::NumMap(v) => v.get(i).map(|(k, x)| (Key::Number(*k), x.clone())),
+        Container::StrMap(v) => v.get(i).map(|(k, x)| (Key::Str(k.clone()), x.clone())),
     }
 }
 
@@ -470,12 +518,47 @@ fn data_equals(e: &mut Engine, a: &Data, b: &Data, deep: bool) -> bool {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ArrayVar.cpp: ArrayVar::CompareArrays.
 fn compare_arrays(e: &mut Engine, a: u32, b: u32, deep: bool) -> bool {
+    let guard = fix_on(e, CYCLE_GUARD);
+    compare_in(e, a, b, deep, guard.then(Vec::new).as_mut())
+}
+
+/// [`compare_arrays`], with the pairs being compared when the cycle guard is on: a pair met again
+/// inside itself counts as equal (without it the walk goes on until the stack runs out, as in
+/// xNVSE).
+fn compare_in(
+    e: &mut Engine,
+    a: u32,
+    b: u32,
+    deep: bool,
+    path: Option<&mut Vec<(u32, u32)>>,
+) -> bool {
     if size(e, a) != size(e, b) {
         return false;
     }
     if a == b {
         return true;
     }
+    match path {
+        Some(path) => {
+            if path.contains(&(a, b)) {
+                return true;
+            }
+            path.push((a, b));
+            let equal = compare_entries(e, a, b, deep, Some(&mut *path));
+            path.pop();
+            equal
+        }
+        None => compare_entries(e, a, b, deep, None),
+    }
+}
+
+fn compare_entries(
+    e: &mut Engine,
+    a: u32,
+    b: u32,
+    deep: bool,
+    mut path: Option<&mut Vec<(u32, u32)>>,
+) -> bool {
     let upper = vars::upper_table(e);
     for ((k1, x1), (k2, x2)) in entries(e, a).into_iter().zip(entries(e, b)) {
         let keys_equal = match (&k1, &k2) {
@@ -489,7 +572,7 @@ fn compare_arrays(e: &mut Engine, a: u32, b: u32, deep: bool) -> bool {
         if let (Data::Array(i1), Data::Array(i2), true) = (&x1.data, &x2.data, deep) {
             let (l, r) = (exists(e, *i1), exists(e, *i2));
             if l && r {
-                if !compare_arrays(e, *i1, *i2, true) {
+                if !compare_in(e, *i1, *i2, true, path.as_deref_mut()) {
                     return false;
                 }
             } else if l || r {
@@ -609,17 +692,43 @@ fn keys_of(e: &mut Engine, id: u32, modi: u8) -> u32 {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ArrayVar.cpp: ArrayVar::Copy.
 fn copy(e: &mut Engine, id: u32, modi: u8, deep: bool) -> u32 {
+    let guard = fix_on(e, CYCLE_GUARD);
+    copy_in(e, id, modi, deep, guard.then(Vec::new).as_mut())
+}
+
+/// [`copy`], with the arrays being copied and their copies when the cycle guard is on: an array
+/// met again inside itself is held as its copy (without it the copy goes on until the stack runs
+/// out, as in xNVSE).
+fn copy_in(
+    e: &mut Engine,
+    id: u32,
+    modi: u8,
+    deep: bool,
+    mut path: Option<&mut Vec<(u32, u32)>>,
+) -> u32 {
     let (kt, packed) = vars::array(e, id).map_or((KEY_NUMBER, true), |a| (a.key_type, a.packed));
     let out = create(e, kt, packed, modi);
+    if let Some(p) = path.as_deref_mut() {
+        p.push((id, out));
+    }
     for (k, x) in entries(e, id) {
         if let (Data::Array(inner), true) = (&x.data, deep) {
             if exists(e, *inner) {
-                let inner_copy = copy(e, *inner, modi, true);
+                let made = path
+                    .as_deref()
+                    .and_then(|p| p.iter().find(|(from, _)| from == inner).map(|&(_, to)| to));
+                let inner_copy = match made {
+                    Some(to) => to,
+                    None => copy_in(e, *inner, modi, true, path.as_deref_mut()),
+                };
                 vars::set_element(e, out, &k, Value::Array(inner_copy));
             }
         } else {
             set_data(e, out, &k, &x.data);
         }
+    }
+    if let Some(p) = path {
+        p.pop();
     }
     out
 }
@@ -755,7 +864,7 @@ fn fixed(e: &Engine, v: f64) -> Vec<u8> {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ArrayVar.cpp: ArrayElement::
 // GetStringRepresentation, ArrayVar::GetStringRepresentation.
-fn element_repr(e: &mut Engine, data: &Data) -> Vec<u8> {
+fn element_repr(e: &mut Engine, data: &Data, path: Option<&mut Vec<u32>>) -> Vec<u8> {
     match data {
         Data::Invalid => b"invalid".to_vec(),
         Data::Number(n) => expr::format_g(*n).into_bytes(),
@@ -775,7 +884,7 @@ fn element_repr(e: &mut Engine, data: &Data) -> Vec<u8> {
         }
         Data::Array(id) => {
             if exists(e, *id) {
-                array_repr(e, *id)
+                array_repr_in(e, *id, path)
             } else {
                 b"invalid array".to_vec()
             }
@@ -784,6 +893,20 @@ fn element_repr(e: &mut Engine, data: &Data) -> Vec<u8> {
 }
 
 fn array_repr(e: &mut Engine, id: u32) -> Vec<u8> {
+    let guard = fix_on(e, CYCLE_GUARD);
+    array_repr_in(e, id, guard.then(Vec::new).as_mut())
+}
+
+/// [`array_repr`], with the arrays being written when the cycle guard is on: an array met again
+/// inside itself is written `[...]` (without it the text goes on until the stack runs out, as in
+/// xNVSE).
+fn array_repr_in(e: &mut Engine, id: u32, mut path: Option<&mut Vec<u32>>) -> Vec<u8> {
+    if let Some(p) = path.as_deref_mut() {
+        if p.contains(&id) {
+            return b"[...]".to_vec();
+        }
+        p.push(id);
+    }
     let list = entries(e, id);
     let numbered = matches!(
         vars::array(e, id).map(|a| &a.elements),
@@ -804,12 +927,15 @@ fn array_repr(e: &mut Engine, id: u32) -> Vec<u8> {
             }
             Key::Number(_) => {}
         }
-        out.extend(element_repr(e, &x.data));
+        out.extend(element_repr(e, &x.data, path.as_deref_mut()));
         if i != n - 1 {
             out.extend_from_slice(b", ");
         }
     }
     out.push(b']');
+    if let Some(p) = path {
+        p.pop();
+    }
     out
 }
 
@@ -912,23 +1038,64 @@ fn ar_dump_id(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
-/// The host path of a path the game opens: as given when absolute, else under the folder the
-/// game started in (the C runtime's current directory).
-fn host_path(e: &Engine, path: &[u8]) -> std::path::PathBuf {
-    let text = String::from_utf8_lossy(path).into_owned();
-    let absolute = text.starts_with('\\') || text.starts_with('/') || text.get(1..2) == Some(":");
-    if absolute {
-        std::path::PathBuf::from(text)
-    } else {
-        let dir = String::from_utf8_lossy(&e.kernel.current_directory).into_owned();
-        std::path::Path::new(&dir).join(text)
+/// KERNEL32's import slots the game's own file code calls (`CreateFileA`, `SetFilePointer`,
+/// `WriteFile`, `CloseHandle`): what goes through them reaches only where the platform's file
+/// layer lets it.
+const CREATE_FILE_A: u32 = 0x00fd_f088;
+const SET_FILE_POINTER: u32 = 0x00fd_f240;
+const WRITE_FILE: u32 = 0x00fd_f0dc;
+const CLOSE_HANDLE: u32 = 0x00fd_f07c;
+const GENERIC_READ_WRITE: u32 = 0xc000_0000;
+const CREATE_ALWAYS: u32 = 2;
+const OPEN_ALWAYS: u32 = 4;
+const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
+const FILE_END: u32 = 2;
+const INVALID_HANDLE_VALUE: u32 = 0xffff_ffff;
+
+/// `fopen_s(path, "a+"/"w+")`, the text and `fclose`, through the game's file calls: `"w+"`
+/// makes the file anew, `"a+"` opens or makes it and writes at its end. False when it cannot be
+/// opened.
+fn write_text_file(e: &mut Engine, path: &[u8], append: bool, text: &[u8]) -> bool {
+    let disposition = if append { OPEN_ALWAYS } else { CREATE_ALWAYS };
+    let handle = crate::events::with_guest_text(e, path, |e, p| {
+        e.call(
+            CREATE_FILE_A,
+            &args![
+                p,
+                GENERIC_READ_WRITE,
+                0u32,
+                0u32,
+                disposition,
+                FILE_ATTRIBUTE_NORMAL,
+                0u32
+            ],
+        )
+        .u32()
+    });
+    if handle == INVALID_HANDLE_VALUE {
+        return false;
     }
+    if append {
+        e.call(SET_FILE_POINTER, &args![handle, 0u32, 0u32, FILE_END]);
+    }
+    e.with_stack(0x1004, |e, frame| {
+        let (buf, written) = (frame.addr(), frame.addr() + 0x1000);
+        for piece in text.chunks(0x1000) {
+            e.mem.write(buf, piece);
+            e.call(
+                WRITE_FILE,
+                &args![handle, buf, piece.len() as u32, written, 0u32],
+            );
+        }
+    });
+    e.call(CLOSE_HANDLE, &args![handle]);
+    true
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Array.cpp: Cmd_ar_DumpF_Execute,
 // ArrayVar.cpp: ArrayVar::DumpToFile.
-/// The dump's lines to a text file (`fopen_s` `"a+"` or `"w+"`: a new line is `\r\n`); a file
-/// that cannot be opened is passed over.
+/// The dump's lines to a text file (`fopen_s` `"a+"` or `"w+"`, text mode: a new line is
+/// `\r\n`), through the game's own file calls; a file that cannot be opened is passed over.
 fn ar_dump_f(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     with_eval(e, &a, |e, ev, toks| {
@@ -961,17 +1128,8 @@ fn ar_dump_f(e: &mut Engine, w: &[u32]) -> Ret {
             }
             text.extend_from_slice(b"\r\n");
         }
-        let target = host_path(e, &path);
-        let mut options = std::fs::OpenOptions::new();
-        if append {
-            options.append(true).create(true);
-        } else {
-            options.write(true).create(true).truncate(true);
-        }
-        if let Ok(mut f) = options.open(target) {
-            use std::io::Write;
-            let _ = f.write_all(&text);
-        }
+        let path = super::string::c_str(&path).to_vec();
+        write_text_file(e, &path, append, &text);
     });
     handled(true)
 }
@@ -1436,7 +1594,10 @@ fn set_size(e: &mut Engine, id: u32, new_size: u32, pad: &Data) -> bool {
     }
     let len = size(e, id) as u32;
     if len < new_size {
-        let grow = ((new_size - len) as usize).min(MAX_MADE.saturating_sub(len as usize));
+        let mut grow = (new_size - len) as usize;
+        if fix_on(e, SIZE_CAPS) {
+            grow = grow.min(MAX_MADE.saturating_sub(len as usize));
+        }
         for i in 0..grow {
             set_data(e, id, &Key::Number(f64::from(len) + i as f64), pad);
         }
@@ -1599,12 +1760,20 @@ fn ar_range(e: &mut Engine, w: &[u32]) -> Ret {
         } else {
             1
         };
+        // A step of 0, or one that wraps past the end, never ends in xNVSE: capped in every
+        // preset. Any other range is capped with the fixes preset's row only.
+        let mut endless = step == 0;
+        let caps = fix_on(e, SIZE_CAPS);
         let mut made = Vec::new();
-        while !((step > 0 && start > end) || (step < 0 && start < end)) && made.len() < MAX_MADE {
+        while !((step > 0 && start > end) || (step < 0 && start < end)) {
+            if (endless || caps) && made.len() >= MAX_MADE {
+                break;
+            }
             made.push(Element {
                 data: Data::Number(f64::from(start)),
                 owning_array: arr,
             });
+            endless |= start.checked_add(step).is_none();
             start = start.wrapping_add(step);
         }
         if let Some(Container::Array(v)) = arrays(e).get_mut(&arr).map(|a| &mut a.elements) {
@@ -1702,6 +1871,19 @@ fn basic_data(t: &Tok) -> Option<Data> {
     }
 }
 
+/// xNVSE's walk of an array (`ArrayIterator`, `++iter` until `End()`): position by position
+/// against its size as it is now, each element read afresh, so what the function adds or erases
+/// counts as it does there; `f` answers false to stop.
+fn walk(e: &mut Engine, arr: u32, mut f: impl FnMut(&mut Engine, Key, Element) -> bool) {
+    let mut i = 0;
+    while let Some((k, x)) = nth_entry(e, arr, i) {
+        if !f(e, k, x) {
+            return;
+        }
+        i += 1;
+    }
+}
+
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Array.cpp:
 // Cmd_ar_FindWhere_Execute.
 fn ar_find_where(e: &mut Engine, w: &[u32]) -> Ret {
@@ -1709,15 +1891,16 @@ fn ar_find_where(e: &mut Engine, w: &[u32]) -> Ret {
         let Some((arr, function)) = array_and_function(e, ev, toks) else {
             return;
         };
-        for (k, x) in entries(e, arr) {
+        walk(e, arr, |e, k, x| {
             let Some(t) = call_on(e, a, function, &k, &x) else {
-                continue;
+                return true;
             };
             if truth(&t) {
                 return_element(e, a, &x.data);
-                break;
+                return false;
             }
-        }
+            true
+        });
     })
 }
 
@@ -1731,9 +1914,9 @@ fn filter_or_map(e: &mut Engine, w: &[u32], map: bool) -> Ret {
         let (kt, packed) = (key_type(e, arr), is_packed(e, arr));
         let modi = script_mod(e, a.script);
         let out = create(e, kt, packed, modi);
-        for (k, x) in entries(e, arr) {
+        walk(e, arr, |e, k, x| {
             let Some(t) = call_on(e, a, function, &k, &x) else {
-                continue;
+                return true;
             };
             if map {
                 if let Some(d) = basic_data(&t) {
@@ -1742,7 +1925,8 @@ fn filter_or_map(e: &mut Engine, w: &[u32], map: bool) -> Ret {
             } else if truth(&t) {
                 set_data(e, out, &k, &x.data);
             }
-        }
+            true
+        });
         a.set_result(e, f64::from(out));
     })
 }
@@ -1761,9 +1945,10 @@ fn ar_for_each(e: &mut Engine, w: &[u32]) -> Ret {
         let Some((arr, function)) = array_and_function(e, ev, toks) else {
             return;
         };
-        for (k, x) in entries(e, arr) {
+        walk(e, arr, |e, k, x| {
             call_on(e, a, function, &k, &x);
-        }
+            true
+        });
         a.set_result(e, 1.0);
     })
 }
@@ -1775,25 +1960,32 @@ fn any_or_all(e: &mut Engine, w: &[u32], all: bool) -> Ret {
         let Some((arr, function)) = array_and_function(e, ev, toks) else {
             return;
         };
-        for (k, x) in entries(e, arr) {
+        let mut answer = all;
+        walk(e, arr, |e, k, x| {
             let t = call_on(e, a, function, &k, &x);
             match (t, all) {
-                (None, false) => continue,
-                (None, true) => return,
+                (None, false) => true,
+                (None, true) => {
+                    answer = false;
+                    false
+                }
                 (Some(t), false) => {
                     if truth_number(&t) {
-                        a.set_result(e, 1.0);
-                        return;
+                        answer = true;
+                        return false;
                     }
+                    true
                 }
                 (Some(t), true) => {
                     if !truth_number(&t) {
-                        return;
+                        answer = false;
+                        return false;
                     }
+                    true
                 }
             }
-        }
-        if all {
+        });
+        if answer {
             a.set_result(e, 1.0);
         }
     })
@@ -1817,14 +2009,14 @@ fn ar_count_where(e: &mut Engine, w: &[u32]) -> Ret {
         let modi = script_mod(e, a.script);
         create(e, kt, packed, modi);
         let mut count = 0.0;
-        for (k, x) in entries(e, arr) {
-            let Some(t) = call_on(e, a, function, &k, &x) else {
-                continue;
-            };
-            if truth(&t) {
-                count += 1.0;
+        walk(e, arr, |e, k, x| {
+            if let Some(t) = call_on(e, a, function, &k, &x) {
+                if truth(&t) {
+                    count += 1.0;
+                }
             }
-        }
+            true
+        });
         a.set_result(e, count);
     })
 }
@@ -1860,7 +2052,12 @@ fn ar_generate(e: &mut Engine, w: &[u32]) -> Ret {
             None => Some(create(e, KEY_NUMBER, true, modi)),
             Some(_) => None,
         };
-        for i in 0..count.min(MAX_MADE as u32) {
+        let limit = if fix_on(e, SIZE_CAPS) {
+            count.min(MAX_MADE as u32)
+        } else {
+            count
+        };
+        for i in 0..limit {
             let Some(value) = generated(e, a, value_fn) else {
                 continue;
             };
@@ -1924,7 +2121,12 @@ fn ar_init(e: &mut Engine, w: &[u32]) -> Ret {
         };
         let modi = script_mod(e, a.script);
         let out = create(e, KEY_NUMBER, true, modi);
-        for i in 0..count.min(MAX_MADE as u32) {
+        let limit = if fix_on(e, SIZE_CAPS) {
+            count.min(MAX_MADE as u32)
+        } else {
+            count
+        };
+        for i in 0..limit {
             insert_at(e, out, i, &d);
         }
         a.set_result(e, f64::from(out));
@@ -2037,8 +2239,16 @@ fn ar_exists(e: &mut Engine, w: &[u32]) -> Ret {
     })
 }
 
-// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Array.cpp: Cmd_ar_Count_Execute
-// (no array: xNVSE reads through a null pointer; here the count is 0).
+/// What xNVSE does with a missing array it goes on to use: it reads the null `ArrayVar`'s word at
+/// `offset` (an access violation: the game stops), which the port does too; under the fixes
+/// preset's row ([`NULL_GUARD`]) the command answers 0 instead.
+fn missing_array(e: &mut Engine, offset: u32) {
+    if !fix_on(e, NULL_GUARD) {
+        let _ = e.mem.u32(offset);
+    }
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Array.cpp: Cmd_ar_Count_Execute.
 fn ar_count(e: &mut Engine, w: &[u32]) -> Ret {
     run(e, w, |e, a, ev, toks| {
         let Some(toks) = toks.filter(|t| t.len() == 2) else {
@@ -2048,6 +2258,8 @@ fn ar_count(e: &mut Engine, w: &[u32]) -> Ret {
             return;
         }
         let Some(id) = array_arg(e, ev, &toks[0]) else {
+            // `arr->Begin()`: the container's type word.
+            missing_array(e, 0xc);
             return;
         };
         let value = as_elem(e, ev, &toks[1]).unwrap_or_default();
@@ -2061,14 +2273,15 @@ fn ar_count(e: &mut Engine, w: &[u32]) -> Ret {
     })
 }
 
-// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Array.cpp: Cmd_ar_GetNth_Execute
-// (no array: xNVSE reads through a null pointer; here the result stays 0).
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Array.cpp: Cmd_ar_GetNth_Execute.
 fn ar_get_nth(e: &mut Engine, w: &[u32]) -> Ret {
     run(e, w, |e, a, ev, toks| {
         let Some(toks) = toks.filter(|t| t.len() == 2) else {
             return;
         };
         let Some(id) = array_arg(e, ev, &toks[0]) else {
+            // `arr->Size()`: the container's item count.
+            missing_array(e, 4);
             return;
         };
         let idx = f64_to_i32(ev.get_number(e, &toks[1]));
@@ -2094,14 +2307,20 @@ fn ar_cat(e: &mut Engine, w: &[u32]) -> Ret {
         if kind != container_type(e, y) {
             return;
         }
-        for (k, el) in entries(e, y) {
+        // The live walk of the second array; an array added to itself grows under its own walk,
+        // which never ends in xNVSE: capped at [`MAX_MADE`] elements in every preset.
+        walk(e, y, |e, k, el| {
             if kind == Some(0) {
-                let at = size(e, x) as u32;
-                insert_at(e, x, at, &el.data);
+                let at = size(e, x);
+                if x == y && at >= MAX_MADE {
+                    return false;
+                }
+                insert_at(e, x, at as u32, &el.data);
             } else if !has_key(e, x, &k) || overwrite {
                 set_data(e, x, &k, &el.data);
             }
-        }
+            true
+        });
     })
 }
 

@@ -10,7 +10,12 @@
 //!   for xNVSE's per-thread function-result string.
 //! - **Format strings:** xNVSE's own specifiers (`%z`, `%n`, `%i`, `%c`, `%k`, `%v`, `%p`, `%q`,
 //!   `%r`, `%e`, `%a`, `%{ %}`, `%x`) are expanded first; the number specifiers left go to the
-//!   UCRT's `snprintf` with the 20 numbers as its argument list ([`ucrt_format`]).
+//!   UCRT's `snprintf` with the 20 numbers as its argument list ([`ucrt_format`]), whose output
+//!   is kept to what `snprintf`'s buffer holds (0x3FFD bytes).
+//! - **The fixes preset** (docs/FIXES.md, "The script extender"): `sv_Replace` of an empty text a
+//!   given number of times stops at 64 MiB with the size caps row (without a count it never ends
+//!   in xNVSE: capped in every preset); a `%s` outside the game's memory ends the text with the
+//!   missing array guard row ([`crate::commands::array`] keeps the rows).
 //! - **Bytes:** strings are bytes; case changes and case-blind compares go through the exe's own
 //!   `toupper`/`tolower`, as xNVSE calls them; the character classes are the C locale's.
 //!
@@ -19,9 +24,11 @@
 //! expression is not parsed again (`SetToStatement`'s `ReadExpression`, the script analyser of
 //! I-14): a compiled `set` line is taken as well formed.
 //!
-//! `ValidateRegex` checks a pattern as `std::regex`'s constructor does (MSVC's `_Parser` for the
-//! ECMAScript grammar, from the MSVC STL's `<regex>`, Apache-2.0 WITH LLVM-exception): only the
-//! parse, which decides every error the constructor raises ([`regex_check`]).
+//! `ValidateRegex` checks a pattern as `std::regex`'s constructor does in xNVSE 6.4.9 (MSVC
+//! 14.50's `_Parser` for the ECMAScript grammar, derived from the MSVC STL's `<regex>`,
+//! Copyright (c) Microsoft Corporation, Apache-2.0 WITH LLVM-exception, modified; licence in
+//! `crates/nvse/LICENSE-msvc-stl`): only the parse, which decides every error the constructor
+//! raises ([`regex_check`]).
 
 use super::{
     base_form, console_print, dynamic_cast, is_console_mode, rtti, try_get_refr_parent, Read,
@@ -848,7 +855,7 @@ fn literal_percents(text: &[u8]) -> Vec<u8> {
 }
 
 /// `StrCopy` of a C string: up to its first NUL.
-fn c_str(text: &[u8]) -> &[u8] {
+pub(crate) fn c_str(text: &[u8]) -> &[u8] {
     match text.iter().position(|&b| b == 0) {
         Some(n) => &text[..n],
         None => text,
@@ -1169,6 +1176,14 @@ fn format_string_args(e: &mut Engine, a: &CommandArgs, max_params: u32) -> Forma
 
 // ---- the UCRT's printf ----
 
+/// The most bytes `snprintf(buffer, kMaxMessageLength - 2, ...)` keeps (0x3FFD): what is made
+/// past it is cut, so no conversion here makes more, and none is made once it is reached.
+const BUDGET: usize = MAX_MESSAGE_LENGTH - 3;
+
+/// The digits after the point Rust formats a double with at most here: a double's exact
+/// decimal digits end well before (1074 after the point at most), so past them only zeros.
+const EXACT_DIGITS: usize = 1100;
+
 /// The `va_list`: the 20 doubles' bytes, read in order; past them zeros.
 struct VaList<'a> {
     bytes: &'a [u8],
@@ -1203,34 +1218,56 @@ struct Spec {
     precision: Option<usize>,
 }
 
+/// `count` bytes `b`, no more than the budget.
+fn fill(count: usize, b: u8) -> Vec<u8> {
+    vec![b; count.min(BUDGET)]
+}
+
 /// Pads `body` (after `prefix`, the sign and any `0x`) to the width: spaces before, zeros between
 /// the prefix and the body, or spaces after.
 fn pad(spec: &Spec, prefix: &[u8], body: &[u8], zeros_allowed: bool) -> Vec<u8> {
     let len = prefix.len() + body.len();
-    let fill = spec.width.saturating_sub(len);
-    let mut out = Vec::with_capacity(len + fill);
+    let gap = fill(
+        spec.width.saturating_sub(len),
+        if spec.zero && zeros_allowed && !spec.left {
+            b'0'
+        } else {
+            b' '
+        },
+    );
+    let mut out = Vec::with_capacity(len + gap.len());
     if spec.left {
         out.extend_from_slice(prefix);
         out.extend_from_slice(body);
-        out.resize(out.len() + fill, b' ');
+        out.extend(gap);
     } else if spec.zero && zeros_allowed {
         out.extend_from_slice(prefix);
-        out.resize(out.len() + fill, b'0');
+        out.extend(gap);
         out.extend_from_slice(body);
     } else {
-        out.resize(fill, b' ');
+        out.extend(gap);
         out.extend_from_slice(prefix);
         out.extend_from_slice(body);
     }
     out
 }
 
+/// `%f`'s digits of `v` (not negative, finite) with `precision` digits after the point.
+fn fixed_text(v: f64, precision: usize) -> Vec<u8> {
+    let p = precision.min(EXACT_DIGITS);
+    let mut s = format!("{v:.p$}").into_bytes();
+    s.extend(fill(precision - p, b'0'));
+    s
+}
+
 /// `%e`'s text of `v` (not negative, finite) with `precision` digits: `d.ddde+XX`.
 fn exp_text(v: f64, precision: usize, alt: bool, upper: bool) -> (Vec<u8>, i32) {
-    let s = format!("{v:.precision$e}");
+    let p = precision.min(EXACT_DIGITS);
+    let s = format!("{v:.p$e}");
     let (mant, exp) = s.split_once('e').unwrap_or((&s, "0"));
     let exp: i32 = exp.parse().unwrap_or(0);
     let mut out = mant.as_bytes().to_vec();
+    out.extend(fill(precision - p, b'0'));
     if alt && precision == 0 {
         out.push(b'.');
     }
@@ -1250,7 +1287,8 @@ fn hex_float_text(v: f64, precision: Option<usize>, upper: bool) -> Vec<u8> {
     } else {
         (1u64, raw_exp - 1023)
     };
-    let digits = precision.unwrap_or(13).min(13);
+    let wanted = precision.unwrap_or(13);
+    let digits = wanted.min(13);
     if digits < 13 {
         let drop = 4 * (13 - digits) as u32;
         let full = (lead << 52) | mant;
@@ -1266,23 +1304,19 @@ fn hex_float_text(v: f64, precision: Option<usize>, upper: bool) -> Vec<u8> {
     }
     let mut hex = format!("{mant:013x}");
     hex.truncate(digits);
-    let mut out = format!("0x{lead}");
-    if digits > 0 || precision.unwrap_or(13) > 0 {
-        out.push('.');
-        out.push_str(&hex);
-        for _ in 13..precision.unwrap_or(13) {
-            out.push('0');
-        }
+    let mut out = format!("0x{lead}").into_bytes();
+    if wanted > 0 {
+        out.push(b'.');
+        out.extend_from_slice(hex.as_bytes());
+        out.extend(fill(wanted - digits, b'0'));
     }
-    out.push_str(&format!(
-        "p{}{}",
-        if exp < 0 { '-' } else { '+' },
-        exp.unsigned_abs()
-    ));
+    out.extend_from_slice(
+        format!("p{}{}", if exp < 0 { '-' } else { '+' }, exp.unsigned_abs()).as_bytes(),
+    );
     if upper {
-        out = out.to_uppercase();
+        out.make_ascii_uppercase();
     }
-    out.into_bytes()
+    out
 }
 
 /// A floating-point conversion's text (without the sign) and whether it is a number (zeros may
@@ -1319,7 +1353,7 @@ fn float_body(v: f64, conv: u8, spec: &Spec) -> (Vec<u8>, bool) {
     let body = match conv {
         b'f' | b'F' => {
             let p = spec.precision.unwrap_or(6);
-            let mut s = format!("{a:.p$}").into_bytes();
+            let mut s = fixed_text(a, p);
             if spec.alt && p == 0 {
                 s.push(b'.');
             }
@@ -1335,11 +1369,11 @@ fn float_body(v: f64, conv: u8, spec: &Spec) -> (Vec<u8>, bool) {
             let x = if a == 0.0 {
                 0
             } else {
-                exp_text(a, p - 1, false, false).1
+                exp_text(a, (p - 1).min(EXACT_DIGITS), false, false).1
             };
             let mut s = if (x as i64) < p as i64 && x >= -4 {
                 let d = (p as i64 - 1 - x as i64) as usize;
-                let mut s = format!("{a:.d$}").into_bytes();
+                let mut s = fixed_text(a, d);
                 if spec.alt && d == 0 {
                     s.push(b'.');
                 }
@@ -1371,9 +1405,41 @@ fn float_body(v: f64, conv: u8, spec: &Spec) -> (Vec<u8>, bool) {
     (body, true)
 }
 
-/// The UCRT's `printf` core on `format` with `list` as its arguments. A conversion it refuses
-/// (`%n`, an unknown one) or a string pointer outside the game's memory would stop the game in
-/// xNVSE (the invalid-parameter handler or an access violation); here the text ends there.
+/// A string argument's text: the guest's `char` (or, `wide`, `wchar_t`) string at `ptr`, up to
+/// `max` characters; a wide character above 0xFF gives no byte (`wctomb` in the C locale). A
+/// pointer outside the game's memory stops xNVSE (an access violation): under the fixes
+/// preset's row ([`crate::commands::array::NULL_GUARD`]) the text ends there (`None`), off it
+/// is read, and the game stops as it does.
+fn guest_string(e: &Engine, ptr: u32, wide: bool, max: Option<usize>) -> Option<Vec<u8>> {
+    let guarded = super::array::fix_on(e, super::array::NULL_GUARD);
+    let step = if wide { 2 } else { 1 };
+    let mut text = Vec::new();
+    let mut p = ptr;
+    let mut count = 0usize;
+    while max.map_or(true, |n| count < n) && text.len() < BUDGET {
+        if guarded && !(e.mem.is_mapped(p) && e.mem.is_mapped(p + step - 1)) {
+            return None;
+        }
+        let c = if wide {
+            u32::from(e.mem.u16(p))
+        } else {
+            u32::from(e.mem.u8(p))
+        };
+        if c == 0 {
+            break;
+        }
+        if c < 0x100 {
+            text.push(c as u8);
+        }
+        count += 1;
+        p = p.wrapping_add(step);
+    }
+    Some(text)
+}
+
+/// The UCRT's `printf` core on `format` with `list` as its arguments, its output kept to the
+/// budget. A conversion the UCRT refuses (`%n`; an integer with the `L` or `w` length) makes
+/// the whole call fail (`""`); an unknown conversion character is written as it is.
 pub(crate) fn ucrt_format(e: &Engine, format: &[u8], list: &[u8]) -> Vec<u8> {
     let mut va = VaList { bytes: list, at: 0 };
     let mut out = Vec::new();
@@ -1382,7 +1448,9 @@ pub(crate) fn ucrt_format(e: &Engine, format: &[u8], list: &[u8]) -> Vec<u8> {
         let c = format[i];
         i += 1;
         if c != b'%' {
-            out.push(c);
+            if out.len() < BUDGET {
+                out.push(c);
+            }
             continue;
         }
         let mut spec = Spec::default();
@@ -1428,9 +1496,10 @@ pub(crate) fn ucrt_format(e: &Engine, format: &[u8], list: &[u8]) -> Vec<u8> {
                 spec.precision = Some(p);
             }
         }
-        // Length: 1 char, 2 short, 4 the default, 8 64-bit.
+        // Length: 1 char, 2 short, 4 the default, 8 64-bit; `l` (wide for a character or a
+        // string), `w` (wide), `L` (long double), `T` (the narrow `TCHAR`).
         let mut size = 4u8;
-        let mut wide = false;
+        let (mut long, mut wide_w, mut big_l) = (false, false, false);
         match format.get(i) {
             Some(b'h') => {
                 i += 1;
@@ -1442,21 +1511,25 @@ pub(crate) fn ucrt_format(e: &Engine, format: &[u8], list: &[u8]) -> Vec<u8> {
             }
             Some(b'l') => {
                 i += 1;
-                wide = true;
+                long = true;
                 if format.get(i) == Some(&b'l') {
                     i += 1;
                     size = 8;
-                    wide = false;
+                    long = false;
                 }
             }
             Some(b'j') => {
                 i += 1;
                 size = 8;
             }
-            Some(b'L' | b'z' | b't') => i += 1,
+            Some(b'L') => {
+                i += 1;
+                big_l = true;
+            }
+            Some(b'z' | b't' | b'T') => i += 1,
             Some(b'w') => {
                 i += 1;
-                wide = true;
+                wide_w = true;
             }
             Some(b'I') => {
                 i += 1;
@@ -1473,6 +1546,7 @@ pub(crate) fn ucrt_format(e: &Engine, format: &[u8], list: &[u8]) -> Vec<u8> {
             break;
         };
         i += 1;
+        let full = out.len() >= BUDGET;
         match conv {
             b'd' | b'i' | b'u' | b'o' | b'x' | b'X' => {
                 let raw = if size == 8 {
@@ -1480,6 +1554,12 @@ pub(crate) fn ucrt_format(e: &Engine, format: &[u8], list: &[u8]) -> Vec<u8> {
                 } else {
                     u64::from(va.u32())
                 };
+                if big_l || wide_w {
+                    return Vec::new();
+                }
+                if full {
+                    continue;
+                }
                 let signed = conv == b'd' || conv == b'i';
                 let (neg, mag) = if signed {
                     let v = match size {
@@ -1500,20 +1580,21 @@ pub(crate) fn ucrt_format(e: &Engine, format: &[u8], list: &[u8]) -> Vec<u8> {
                         },
                     )
                 };
-                let mut digits = match conv {
+                let text = match conv {
                     b'o' => format!("{mag:o}"),
                     b'x' => format!("{mag:x}"),
                     b'X' => format!("{mag:X}"),
                     _ => format!("{mag}"),
                 }
                 .into_bytes();
-                if let Some(p) = spec.precision {
-                    if p == 0 && mag == 0 {
-                        digits.clear();
+                let mut digits = Vec::new();
+                match spec.precision {
+                    Some(0) if mag == 0 => {}
+                    Some(p) => {
+                        digits = fill(p.saturating_sub(text.len()), b'0');
+                        digits.extend(text);
                     }
-                    while digits.len() < p {
-                        digits.insert(0, b'0');
-                    }
+                    None => digits = text,
                 }
                 let mut prefix = Vec::new();
                 if signed {
@@ -1537,16 +1618,24 @@ pub(crate) fn ucrt_format(e: &Engine, format: &[u8], list: &[u8]) -> Vec<u8> {
             }
             b'c' | b'C' => {
                 let v = va.u32();
-                let wide = wide || conv == b'C';
-                let ch = if wide && v & 0xffff >= 0x80 {
-                    b'?'
+                if full {
+                    continue;
+                }
+                if long || wide_w || conv == b'C' {
+                    // `wctomb` in the C locale: a byte up to 0xFF, nothing above.
+                    let w = v & 0xffff;
+                    if w < 0x100 {
+                        out.extend(pad(&spec, &[], &[w as u8], true));
+                    }
                 } else {
-                    v as u8
-                };
-                out.extend(pad(&spec, &[], &[ch], false));
+                    out.extend(pad(&spec, &[], &[v as u8], true));
+                }
             }
             b'e' | b'E' | b'f' | b'F' | b'g' | b'G' | b'a' | b'A' => {
                 let v = f64::from_bits(va.u64());
+                if full {
+                    continue;
+                }
                 let mut prefix = Vec::new();
                 if v.is_sign_negative() {
                     prefix.push(b'-');
@@ -1562,37 +1651,69 @@ pub(crate) fn ucrt_format(e: &Engine, format: &[u8], list: &[u8]) -> Vec<u8> {
                 }
                 out.extend(pad(&spec, &prefix, &body, number));
             }
-            b's' | b'S' | b'Z' => {
+            b's' | b'S' => {
                 let ptr = va.u32();
-                let wide = wide || conv == b'S' || conv == b'Z';
+                if full {
+                    continue;
+                }
+                let wide = long || wide_w || conv == b'S';
                 if ptr == 0 {
                     let t: &[u8] = b"(null)";
                     let t = &t[..spec.precision.unwrap_or(6).min(6)];
-                    out.extend(pad(&spec, &[], t, false));
-                } else if wide || !e.mem.is_mapped(ptr) {
-                    return out;
+                    out.extend(pad(&spec, &[], t, true));
                 } else {
-                    let mut text = Vec::new();
-                    let mut p = ptr;
-                    while spec.precision.map_or(true, |n| text.len() < n) && e.mem.is_mapped(p) {
-                        let b = e.mem.u8(p);
-                        if b == 0 {
-                            break;
-                        }
-                        text.push(b);
-                        p += 1;
+                    match guest_string(e, ptr, wide, spec.precision) {
+                        Some(text) => out.extend(pad(&spec, &[], &text, true)),
+                        None => break,
                     }
-                    out.extend(pad(&spec, &[], &text, false));
+                }
+            }
+            b'Z' => {
+                // An `ANSI_STRING`/`UNICODE_STRING`: its length (`u16`) and its buffer (`+4`).
+                let ptr = va.u32();
+                if full {
+                    continue;
+                }
+                let wide = long || wide_w;
+                let text = if ptr == 0 {
+                    Some(b"(null)".to_vec())
+                } else {
+                    let guarded = super::array::fix_on(e, super::array::NULL_GUARD);
+                    if guarded && !(e.mem.is_mapped(ptr) && e.mem.is_mapped(ptr + 7)) {
+                        None
+                    } else {
+                        let len = usize::from(e.mem.u16(ptr));
+                        let buffer = e.mem.u32(ptr + 4);
+                        let n = if wide { len / 2 } else { len };
+                        guest_string(e, buffer, wide, Some(n))
+                    }
+                };
+                match text {
+                    Some(text) => out.extend(pad(&spec, &[], &text, true)),
+                    None => break,
                 }
             }
             b'p' => {
                 let v = va.u32();
+                if full {
+                    continue;
+                }
                 out.extend(pad(&spec, &[], format!("{v:08X}").as_bytes(), false));
             }
-            b'%' => out.push(b'%'),
-            _ => return out,
+            b'n' => return Vec::new(),
+            b'%' => {
+                if !full {
+                    out.push(b'%');
+                }
+            }
+            other => {
+                if !full {
+                    out.push(other);
+                }
+            }
         }
     }
+    out.truncate(BUDGET);
     out
 }
 
@@ -1698,8 +1819,38 @@ fn sv_count_in(
     count
 }
 
-/// The longest string a replacement of an empty text makes here (xNVSE runs out of memory).
+/// The longest string a replacement of an empty text makes when it is capped: always for a
+/// replace-all (xNVSE never stops), with the fixes preset's row for a given count (xNVSE runs
+/// out of memory).
 const MAX_REPLACED: usize = 64 << 20;
+
+/// The exe's `tolower` of every byte (each passed as xNVSE's `char`, sign-extended).
+fn lower_table(e: &mut Engine) -> [u8; 256] {
+    let mut t = [0u8; 256];
+    for (b, slot) in t.iter_mut().enumerate() {
+        *slot = game_case(e, false, b as u8 as i8 as i32 as u32) as u8;
+    }
+    t
+}
+
+/// `std::search` with `ci_equal`: the first place at or after `from` where `needle` matches
+/// without case (both through the exe's `tolower`).
+fn find_ci(lower: &[u8; 256], hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    if from > hay.len() {
+        return None;
+    }
+    if needle.is_empty() {
+        return Some(from);
+    }
+    hay[from..]
+        .windows(needle.len())
+        .position(|w| {
+            w.iter()
+                .zip(needle)
+                .all(|(&a, &b)| lower[usize::from(a)] == lower[usize::from(b)])
+        })
+        .map(|i| i + from)
+}
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), StringVar.cpp: StringVar::Replace.
 #[allow(clippy::too_many_arguments)]
@@ -1723,23 +1874,15 @@ fn sv_replace_in(
         .saturating_add(num as usize)
         .min(data.len());
     let mut src: Vec<u8> = data.drain(start as usize..end).collect();
-    let lower_find = if case {
-        Vec::new()
-    } else {
-        change_case(e, find, false)
-    };
+    let lower = if case { [0u8; 256] } else { lower_table(e) };
+    let capped = how_many == u32::MAX || super::array::fix_on(e, super::array::SIZE_CAPS);
     let mut replaced = 0u32;
     let mut idx = 0usize;
     while replaced < how_many {
         let found = if case {
             find_bytes(&src, find, idx)
-        } else if idx > src.len() {
-            None
-        } else if find.is_empty() {
-            Some(idx)
         } else {
-            let lower = change_case(e, &src[idx..], false);
-            find_bytes(&lower, &lower_find, 0).map(|p| p + idx)
+            find_ci(&lower, &src, find, idx)
         };
         let Some(at) = found else {
             break;
@@ -1753,7 +1896,7 @@ fn sv_replace_in(
                 break;
             }
             let left = u64::from(how_many - replaced);
-            let room = if with.is_empty() {
+            let room = if with.is_empty() || !capped {
                 left
             } else {
                 left.min((MAX_REPLACED.saturating_sub(src.len()) / with.len()) as u64)
@@ -2963,12 +3106,20 @@ fn validate_regex(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
-/// The MSVC STL's `std::regex` parser for the ECMAScript grammar (`_Parser` in `<regex>`,
-/// 14.44: `_Compile`, `_Disjunction`, `_Alternative`, `_Quantifier`, `_Wrapped_disjunction`,
+/// The MSVC STL's `std::regex` parser for the ECMAScript grammar (`_Parser` in `<regex>`:
+/// `_Compile`, `_Disjunction`, `_Alternative`, `_Quantifier`, `_Wrapped_disjunction`,
 /// `_AtomEscape`, `_CharacterEscape`, `_IdentityEscape`, `_CharacterClassEscape`,
 /// `_CharacterClass`, `_ClassRanges`, `_ClassAtom`, `_ClassEscape2`, `_Do_ex_class`,
 /// `_Do_digits`, `_Trans`, `_Next`, `_Expect`), keeping only what decides an error: the NFA it
 /// builds raises none for a `char` pattern.
+///
+/// Derived from the Microsoft C++ Standard Library, `<regex>`:
+/// Copyright (c) Microsoft Corporation.
+/// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception (`crates/nvse/LICENSE-msvc-stl`).
+/// Modified: translated to Rust, reduced to the parse, and made to answer as MSVC 14.50 (the
+/// version compiled into xNVSE 6.4.9's `nvse_1_4.dll`) where the 14.44 source read here
+/// differs: the open-group limit, `(?` with another character, `\0` before a digit, `\b` in a
+/// class, the `[. .]`/`[= =]` names (each case measured on that DLL, `regex_cases.txt`).
 pub(crate) mod regex_check {
     /// `regex_constants::error_type` as xNVSE numbers it (`RegexError`), `Syntax` its
     /// `Unknown`.
@@ -3149,14 +3300,26 @@ pub(crate) mod regex_check {
                 self.next();
                 return Ok(Atom::Chr);
             }
+            // 14.50: `\b` in a class is the backspace.
+            if self.ch == i32::from(b'b') {
+                self.val = 8;
+                self.next();
+                return Ok(Atom::Chr);
+            }
             if self.class_escape() {
                 return Ok(Atom::Set);
             }
-            if self.decimal_digits(RegexError::Escape)? {
-                if self.val != 0 {
+            // 14.50: `\0` is the NUL character unless a digit follows it.
+            if self.ch == i32::from(b'0') {
+                self.next();
+                if value(self.ch, 10) != -1 {
                     return Err(RegexError::Escape);
                 }
+                self.val = 0;
                 return Ok(Atom::Chr);
+            }
+            if self.decimal_digits(RegexError::Escape)? {
+                return Err(RegexError::Escape);
             }
             Ok(if self.character_escape()? {
                 Atom::Chr
@@ -3175,8 +3338,7 @@ pub(crate) mod regex_check {
                 if self.is(b':') || self.is(b'=') || self.is(b'.') {
                     let end = self.mchar;
                     self.next();
-                    self.ex_class(end)?;
-                    return Ok(Atom::Set);
+                    return self.ex_class(end);
                 }
                 self.val = i32::from(b'[');
                 return Ok(Atom::Chr);
@@ -3189,7 +3351,9 @@ pub(crate) mod regex_check {
             Ok(Atom::Chr)
         }
 
-        fn ex_class(&mut self, end: i32) -> R {
+        /// A `[: :]` class (a set), a `[= =]` equivalence class (a set) or a `[. .]` collating
+        /// element (one character): in 14.50 the last two name exactly one character.
+        fn ex_class(&mut self, end: i32) -> R<Atom> {
             let error = if end == i32::from(b':') {
                 RegexError::Ctype
             } else if end == i32::from(b'=') || end == i32::from(b'.') {
@@ -3204,19 +3368,22 @@ pub(crate) mod regex_check {
             if self.mchar != end {
                 return Err(error);
             }
-            if end == i32::from(b':') {
+            let atom = if end == i32::from(b':') {
                 if !is_class_name(&self.pat[beg..self.pos]) {
                     return Err(RegexError::Ctype);
                 }
-            } else if beg == self.pos {
+                Atom::Set
+            } else if self.pos - beg != 1 {
                 return Err(RegexError::Collate);
-            } else if end == i32::from(b'.') && self.pos - beg != 1 {
-                // The STL xNVSE 6.4.9 was built with refuses a collating element of more than
-                // one character (measured, `[[.foo.]]`: error_collate); 14.44 takes it.
-                return Err(RegexError::Collate);
-            }
+            } else if end == i32::from(b'.') {
+                self.val = i32::from(self.pat[beg]);
+                Atom::Chr
+            } else {
+                Atom::Set
+            };
             self.next();
-            self.expect(b']', error)
+            self.expect(b']', error)?;
+            Ok(atom)
         }
 
         fn class_ranges(&mut self) -> R {
@@ -3252,19 +3419,27 @@ pub(crate) mod regex_check {
 
         fn wrapped_disjunction(&mut self) -> R<bool> {
             self.disj_count += 1;
-            if self.is(b'?') {
+            // 14.50: at most 999 groups open at once.
+            if self.disj_count >= 1000 {
+                return Err(RegexError::Stack);
+            }
+            // 14.50: `(?` followed by anything but `:`, `=` or `!` opens a capture group whose
+            // first character is the `?` (which then quantifies nothing).
+            let kind = if self.is(b'?') {
+                self.pat.get(self.pos + 1).copied()
+            } else {
+                None
+            };
+            if kind == Some(b':') {
                 self.next();
-                let kind = self.mchar;
                 self.next();
-                if kind == i32::from(b':') {
-                    self.disjunction()?;
-                } else if kind == i32::from(b'!') || kind == i32::from(b'=') {
-                    self.disjunction()?;
-                    self.disj_count -= 1;
-                    return Ok(false);
-                } else {
-                    return Err(RegexError::Syntax);
-                }
+                self.disjunction()?;
+            } else if kind == Some(b'!') || kind == Some(b'=') {
+                self.next();
+                self.next();
+                self.disjunction()?;
+                self.disj_count -= 1;
+                return Ok(false);
             } else {
                 self.grp_idx += 1;
                 if self.grp_idx >= 1000 {
@@ -3296,7 +3471,17 @@ pub(crate) mod regex_check {
                 return Err(RegexError::Escape);
             }
             match u8::try_from(self.ch).unwrap_or(0) {
-                b'f' | b'n' | b'r' | b't' | b'v' => self.next(),
+                c @ (b'f' | b'n' | b'r' | b't' | b'v') => {
+                    // `_Do_ffn`: the control character is the value.
+                    self.val = match c {
+                        b'f' => 0x0c,
+                        b'n' => 0x0a,
+                        b'r' => 0x0d,
+                        b't' => 0x09,
+                        _ => 0x0b,
+                    };
+                    self.next();
+                }
                 b'c' => {
                     self.next();
                     let alpha = u8::try_from(self.ch).is_ok_and(|c| c.is_ascii_alphabetic());
@@ -3323,9 +3508,17 @@ pub(crate) mod regex_check {
         }
 
         fn atom_escape(&mut self) -> R {
+            // 14.50: `\0` is the NUL character unless a digit follows it.
+            if self.ch == i32::from(b'0') {
+                self.next();
+                if value(self.ch, 10) != -1 {
+                    return Err(RegexError::Escape);
+                }
+                return Ok(());
+            }
             if self.decimal_digits(RegexError::Backref)? {
                 let v = self.val as usize;
-                if v != 0 && (self.grp_idx < v || self.finished.len() <= v || !self.finished[v]) {
+                if self.grp_idx < v || self.finished.len() <= v || !self.finished[v] {
                     return Err(RegexError::Backref);
                 }
             } else if self.character_escape()? {
