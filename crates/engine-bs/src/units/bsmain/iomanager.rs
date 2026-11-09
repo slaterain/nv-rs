@@ -98,15 +98,16 @@ pub fn fn_00c3dfa0_waking_early(e: &mut Engine, this: Ptr, priority: i32) {
 }
 
 /// The wait loop's sleep while the completed work is short of what is in flight (`+0x18`): 50 ms, or
-/// with `wake_early` until it is not, looked at after each 1 ms sleep, 50 ms at most by the clock (a
-/// 1 ms sleep takes longer, so the turns are counted by time, not by sleeps).
+/// with `wake_early` until it is not, looked at after each 1 ms sleep, for 50 ms at most by the clock
+/// (a 1 ms sleep takes longer, so a turn is bounded by time) and 50 looks at most (a clock that a
+/// sleep does not move, as in a test, still ends it).
 fn wait_for_completions(e: &mut Engine, this: Ptr, wake_early: bool) {
     if !wake_early {
         e.call(SLEEP, &args![50u32]);
         return;
     }
     let until = e.clock_now_us() + 50_000;
-    loop {
+    for _ in 0..50 {
         e.call(SLEEP, &args![1u32]);
         if count_queued(e, this) >= word(e, this, 0x18) || e.clock_now_us() >= until {
             break;
@@ -2395,7 +2396,8 @@ mod tests {
 
     /// The sleep while completions are short: 50 ms as the exe's; waking early, 1 ms looks until
     /// the completed count reaches the in-flight one (the third look here), or 50 ms have passed by the
-    /// clock (34 sleeps of 1.5 ms, about what a 1 ms sleep takes on Windows).
+    /// clock (34 sleeps of 1.5 ms, about what a 1 ms sleep takes on Windows), or 50 looks when the
+    /// sleep does not move the clock.
     #[test]
     fn the_completion_wait_ends_when_the_work_is_in() {
         let sleeps = |e: &Engine| -> Vec<u32> {
@@ -2407,10 +2409,12 @@ mod tests {
                 .map(|(_, args)| args[0])
                 .collect()
         };
-        for (wake_early, done_at, want) in [
-            (false, 3, vec![50]),
-            (true, 3, vec![1, 1, 1]),
-            (true, u32::MAX, vec![1; 34]),
+        for (wake_early, done_at, step, want) in [
+            (false, 3, 1_500, vec![50]),
+            (true, 3, 1_500, vec![1, 1, 1]),
+            (true, u32::MAX, 1_500, vec![1; 34]),
+            // A sleep that does not move the clock (stepped threads' virtual clock in a test).
+            (true, u32::MAX, 0, vec![1; 50]),
         ] {
             let mut e = Engine::new();
             let manager = block(&mut e, 0x84);
@@ -2424,8 +2428,8 @@ mod tests {
                 reads += 1;
                 u32::from(reads >= done_at).into_ret()
             });
-            e.register(SLEEP, |e, _| {
-                e.advance_clock_us(1_500);
+            e.register_double(SLEEP, move |e, _| {
+                e.advance_clock_us(step);
                 Ret::default()
             });
             e.call_log = Some(vec![]);

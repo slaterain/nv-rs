@@ -52,13 +52,14 @@ pub static FIXES: &[Fix] = &[
 
 /// The IO manager's wait for queued loads (`00c3dfa0`: main at a cell border, a load, a save) sleeps
 /// 50 ms a turn while the completed work is short of what is in flight; here the sleep ends as
-/// soon as it is not (looked at every millisecond), so the wait ends when the loads it waits for are
-/// done, not at the next 50 ms step. Vanilla keeps the 50 ms steps.
+/// soon as it is not (looked at after each 1 ms sleep; 50 ms by the clock or 50 looks at most), so
+/// the wait for queued loads ends when they are done, not at its next 50 ms step. Vanilla keeps the
+/// 50 ms steps.
 pub const IO_WAIT_ENDS_ON_COMPLETION: Fix = Fix {
     name: "IO wait ends on completion",
     env: "NV_IO_WAIT",
     addresses: &[0x00c3_dfa0],
-    summary: "the wait for queued loads (a cell border, a load) ends when they are done, not at its next 50 ms sleep's end",
+    summary: "the wait for queued loads (a cell border, a load, a save) ends when they are done, not at its next 50 ms step",
     install: install_io_wait,
 };
 
