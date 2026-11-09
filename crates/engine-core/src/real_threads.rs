@@ -3263,6 +3263,47 @@ mod tests {
         eprintln!("timed waits racing releases: {short} short waits timed out");
     }
 
+    /// A wait made while the kernel lock is held (inside a kernel-locked platform call, as a window
+    /// procedure the game runs from `DispatchMessageA`) gives the lock back while it waits: the
+    /// game thread that sets the event takes the kernel lock first (`CreateEventA`).
+    #[test]
+    fn a_wait_under_the_kernel_lock_gives_it_back() {
+        /// Makes an event (the kernel lock), then sets the event at +0 (`SetEvent` at +8,
+        /// `CreateEventA` at +4).
+        fn setter(e: &mut Engine, a: &[u32]) -> Ret {
+            let p = a[0];
+            let (event, create, set) = (e.mem.u32(p), e.mem.u32(p + 4), e.mem.u32(p + 8));
+            e.call(create, &args![0u32, 0u32, 0u32, 0u32]);
+            e.call(set, &args![event]);
+            Ret::default()
+        }
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        e.register(0x0040_f000, setter);
+        let event = e
+            .call(slot("CreateEventA"), &args![0u32, 0u32, 0u32, 0u32])
+            .eax;
+        let p = e.mem.alloc(0x10);
+        for (at, word) in [(0, event), (4, slot("CreateEventA")), (8, slot("SetEvent"))] {
+            e.mem.set_u32(p + at, word);
+        }
+        let world = ctx(&e).world;
+        world.kernel.lock(world);
+        e.call(
+            slot("CreateThread"),
+            &args![0u32, 0u32, 0x0040_f000u32, p, 0u32, 0u32],
+        );
+        let got = e
+            .call(
+                slot("WaitForSingleObject"),
+                &args![event, STRESS_TIMEOUT_MS],
+            )
+            .eax;
+        world.kernel.unlock();
+        assert_eq!(got, 0, "the wait held the kernel lock the setter needed");
+    }
+
     /// A tasklet pool as the exe's (`00b023f0`: workers waiting on one semaphore, a release of one
     /// unit a job): four game threads with long waits take 50,000 single releases the main thread
     /// makes without waiting. Every unit is taken once, none lost to a missed wake (a long wait

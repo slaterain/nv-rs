@@ -407,6 +407,10 @@ fn wait(e: &mut Engine, handles: &[u32], objects: &[Arc<Object>], all: bool, tim
         guard(&o.queue).push(Arc::clone(&me));
         o.waiting.fetch_add(1, Ordering::SeqCst);
     }
+    // A wait inside a kernel-locked platform call (a window procedure the game runs from
+    // `DispatchMessageA`, say) gives the kernel lock back while it waits, as the kernel lock's
+    // path does, and takes it again after.
+    let held = w.kernel.release_all();
     let was = w.leave_guest();
     let mut stop = None;
     let taken = loop {
@@ -485,6 +489,7 @@ fn wait(e: &mut Engine, handles: &[u32], objects: &[Arc<Object>], all: bool, tim
     if was {
         w.enter_guest();
     }
+    w.kernel.take_again(w, held);
     note_state(e, String::new);
     if let Some(why) = stop {
         panic!("{why}");
