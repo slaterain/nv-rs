@@ -4,6 +4,7 @@
 pub mod algohol;
 pub mod array;
 pub mod inventory;
+pub mod inventory_ref;
 pub mod math;
 pub mod scripting;
 pub mod string;
@@ -18,6 +19,7 @@ use engine_core::prelude::*;
 pub fn all() -> Vec<&'static Command> {
     inventory::COMMANDS
         .iter()
+        .chain(inventory_ref::COMMANDS)
         .chain(weapons::COMMANDS)
         .chain(math::COMMANDS)
         .chain(algohol::COMMANDS)

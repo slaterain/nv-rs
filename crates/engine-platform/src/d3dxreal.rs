@@ -1333,6 +1333,8 @@ mod tests {
         else {
             return;
         };
+        // The DLL's path (NV_TEXTURES=dll); the default, the translation, is d3dx.rs's test.
+        d3dx::set_texture_mode(&mut e, d3dx::TextureMode::Dll);
         // Bytes of one level with its rows packed, as the game reads them through a lock.
         let packed = |e: &Engine, s: &CachedSurface, pitch: u32, bits: u32| -> Vec<u8> {
             let block = super::super::d3d9device::format_blocks(s.format).map_or(1, |(b, _)| b);
@@ -1367,7 +1369,8 @@ mod tests {
             assert_eq!(hr, 0, "cube {cube}");
             let texture = e.mem.u32(out);
             // The real counterpart, as the layer's uploads left it.
-            let t = super::super::d3d9real::real_texture(&e, texture).expect("its real texture");
+            let t =
+                super::super::d3d9real::real_texture(&mut e, texture).expect("its real texture");
             let (levels, surfaces) = read_levels(&t, cube);
             assert_eq!(levels, want.levels, "cube {cube}: the real level count");
             for (i, (got, w)) in surfaces.iter().zip(&want.surfaces).enumerate() {

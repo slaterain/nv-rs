@@ -43,7 +43,7 @@ The game's code answers Windows' questions from tables measured on the machine
 | --- | --- | --- |
 | Display adapter, folders, metrics, time zones | `scripts/d3d9-capture`, then `scripts/nvapi-capture`, then the `CreateQuery` lines of `d3d9-capture device queries` | `NV_D3D9_ADAPTER`, default `%LOCALAPPDATA%\nv-rs\d3d9_adapter.tsv` |
 | DirectSound devices and mixing | `scripts/dsound-capture`, `scripts/dsmix-measure` | `NV_DSOUND_TABLE` |
-| D3DX texture loads | `scripts/d3dx-texture-capture` | `NV_D3DX_CACHE` |
+| D3DX texture loads (only with `NV_TEXTURES=dll`, or for files `crates/d3dx-tex` does not translate, where the DLL is missing) | `scripts/d3dx-texture-capture` | `NV_D3DX_CACHE` |
 
 The folders in the adapter table are the machine's own, so the game reads and writes its
 settings and saves where the original does (`Documents\My Games\FalloutNV`). For test runs,
@@ -58,6 +58,7 @@ point the table's folders at a scratch copy of Documents; never at a player's ow
 | `NV_D3D9_BACKGROUND=1` | The window opens without taking the focus (scripted runs) |
 | `NV_D3D9_TEXTURES=guest` or `check` | Texture pixels in the game's 32-bit memory as before ADR-0015's step 3 (`guest`, for comparisons), or kept outside it with checks printed (`check`); the default keeps them outside it, in the game's memory only while a level is locked |
 | `NV_D3D9_BUFFERS=guest` or `check` | Static vertex and index buffers in the game's 32-bit memory as before (`guest`, for comparisons), or kept outside it with checks printed (`check`); the default keeps them outside it, in the game's memory only while a buffer is locked (dynamic buffers stay in it) |
+| `NV_TEXTURES=dll` | The game's textures from the player's 64-bit `d3dx9_38.dll` (with `NV_D3D9=real`) or the texture cache, as before `crates/d3dx-tex`; the default makes them with `crates/d3dx-tex`, byte for byte the 32-bit DLL's at the calling game thread's x87 precision (what the original game gets), on any platform; files it does not translate, and a thread at 64-bit precision, still go to the DLL or the cache |
 | `NV_MOVE_KEYS`, `NV_MOVE_MOUSE` | Scripted keys and mouse by main's frame (`crates/host/src/player_move.rs`) |
 | `NV_MOVE_TRACE` | The last calls before a stop, to a file (slow) |
 | `NV_SAVE_OUT=DIR` | The saves the game writes, copied out to DIR, and the ones it deletes removed there (`crates/host/src/save_out.rs`) |
@@ -66,6 +67,9 @@ point the table's folders at a scratch copy of Documents; never at a player's ow
 | `NV_PRESET=fixes` or `vanilla` | What differs from the exe: the fixes set (the default) or the original's behaviour; comparisons and gates pin vanilla ([FIXES.md](FIXES.md)) |
 | `NV_FRAME_LIMIT=n` | Frames a second at most under the fixes preset (0: none) |
 | `NV_THREADS=real` or `stepped` | The game's threads side by side on their own cores (`real`, the default in play) or one at a time (`stepped`, the fallback, and the reference mode); a scripted or measured run without `NV_THREADS` runs them stepped whatever the default ([FIXES.md](FIXES.md)). Players set it with a `NV_THREADS=stepped` line in `settings.ini` (Settings.cmd's threads option) |
+| `NV_RENDER_THREAD=1` | The real Direct3D 9 calls on a render thread of their own: the game's threads record them and go on (`crates/d3d9-stream`, `crates/engine-platform/src/d3d9real.rs`); `Present` returns with at most `NV_RENDER_THREAD_FRAMES` (default 1) earlier frames still to draw. Off by default until measured |
+| `NV_RENDER_THREAD_STATS=1`, `NV_D3D9_STREAM_CHECK=1` | With the render thread: a line a second on its hand-overs and the game's waits; every command hashed as recorded and as carried out, the run stopped at a difference |
+| `NV_D3D9_RECORD=FILE` | Every Direct3D 9 command to FILE (`d3d9_stream::wire`), to replay into another backend |
 | `NV_UNCAP=0` or `1`, `NV_HF_LANDING=0` or `1` | One fix alone; with no `NV_PRESET` the rest of the run is vanilla |
 | `NV_FRAME_LOG=FILE` | One line per main frame (clock, step, player position), with no per-call cost | 
 

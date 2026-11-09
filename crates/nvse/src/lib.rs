@@ -33,12 +33,19 @@
 //!   events the game marks (`005ac750`, wrapped), the save, load and exit messages, and the
 //!   commands (`SetEventHandler`, `SetEventHandlerAlt`, `RemoveEventHandler`, `DispatchEvent`,
 //!   `DispatchEventAlt`, `GetCurrentEventName`, `GetEventHandlers`, the priority queries).
+//! - I-12 [`invref`], [`commands::inventory_ref`]: inventory references (a container's stacks
+//!   as temporary references, gone each frame and before a load, with their deferred equips and
+//!   removals), `ForEach` over a container, `GetSoldItemInvRef` and OnRepair's reference. Of
+//!   xNVSE's form extra data only OnCellRefsLoaded's mark is used so far (a set of cells,
+//!   [`call_sites`]); its script token cache comes with I-14, its plugin interface with native
+//!   plugins.
 //! - [`commands`]: the commands built so far, by xNVSE's `Commands_*.cpp` file.
 //!
 //! [`install`] runs once per engine, after the fix rows (`host::Host::start_with`); the engine
 //! crates' own tests never install it, so they run the exe as it is.
 
 pub mod args;
+pub mod call_sites;
 pub mod cnum;
 pub mod commands;
 pub mod context;
@@ -48,6 +55,7 @@ pub mod event_commands;
 pub mod events;
 pub mod expr;
 pub mod functions;
+pub mod invref;
 pub mod lambda;
 pub mod mt19937;
 pub mod names;
@@ -182,6 +190,9 @@ pub struct Nvse {
     pub saveload: saveload::State,
     /// The event manager (I-9).
     pub events: events::State,
+    /// The inventory references (I-12), and the stacks `GetFirstRefForItem` listed per script.
+    pub invrefs: invref::State,
+    pub inv_ref_arrays: commands::inventory_ref::State,
     /// The first frame recorded the main thread (`s_recordedMainThreadID`): xNVSE prints to the
     /// console from then on.
     pub main_thread_recorded: bool,
@@ -213,6 +224,7 @@ pub fn install(e: &mut Engine) {
     tick::install(e);
     saveload::install(e);
     events::install(e);
+    call_sites::install(e);
     e.ext::<Nvse>().installed = true;
     // The extender's state is the game's, not one engine's: real threads' engines share it
     // (engine-core's shared slot, one lock), so an event raised or a variable used on another
@@ -247,13 +259,40 @@ mod tests {
             0x005a_ccb0,
             0x0041_af70,
             0x005a_c750,
+            0x0045_12a0,
         ] {
             e.register(addr, base);
         }
         install(&mut e);
         assert!(e.unlisted_wraps().is_empty());
-        assert_eq!(e.wrapped().len(), 7);
+        assert_eq!(e.wrapped().len(), 8);
         for site in [
+            0x0048_3669,
+            0x004c_0032,
+            0x0052_9a37,
+            0x0052_9d37,
+            0x0054_9787,
+            0x0055_18a5,
+            0x0057_1090,
+            0x0057_10ac,
+            0x0057_318e,
+            0x0057_515a,
+            0x005c_453c,
+            0x005c_47b6,
+            0x0072_fe3e,
+            0x0072_ff20,
+            0x0076_717a,
+            0x0076_74b0,
+            0x0078_f8e5,
+            0x0078_fe24,
+            0x0079_0461,
+            0x007b_5cac,
+            0x007b_800e,
+            0x0086_80a4,
+            0x0086_fe75,
+            0x0088_caeb,
+            0x0088_cb97,
+            0x0088_cd11,
             0x005a_cb9d,
             0x005b_6ca6,
             0x005e_16c3,

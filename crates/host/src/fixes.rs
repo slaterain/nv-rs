@@ -40,6 +40,8 @@ pub static FIXES: &[Fix] = &[
     crate::topic_index::FIX,
     KEEP_COSAVE_PLUGINS,
     SCRIPT_ERROR_GUARD,
+    IMOD_EVENT_FORM_CHECK,
+    INVENTORY_REFERENCE_CHECKS,
     SCRIPT_SIZE_CAPS,
     SCRIPT_NULL_GUARD,
     SCRIPT_CYCLE_GUARD,
@@ -70,6 +72,32 @@ pub const SCRIPT_ERROR_GUARD: Fix = Fix {
 
 fn install_script_error_guard(e: &mut Engine) {
     nvse::events::set_error_guard(e, true);
+}
+
+pub const IMOD_EVENT_FORM_CHECK: Fix = Fix {
+    name: "image-space event form check",
+    env: "NV_NVSE_IMOD_CHECK",
+    addresses: &[],
+    summary:
+        "OnRemoveIMOD only for a modifier form's instance that ran out (not depth of field or blur)",
+    install: install_imod_event_form_check,
+};
+
+fn install_imod_event_form_check(e: &mut Engine) {
+    nvse::call_sites::set_imod_form_check(e, true);
+}
+
+pub const INVENTORY_REFERENCE_CHECKS: Fix = Fix {
+    name: "inventory reference checks",
+    env: "NV_NVSE_INVREF_CHECK",
+    addresses: &[],
+    summary: "a removed stack leaves the container's own entry before its data is freed; a sale \
+              ends with its event; a container entry without a form is passed over",
+    install: install_inventory_reference_checks,
+};
+
+fn install_inventory_reference_checks(e: &mut Engine) {
+    nvse::invref::set_checks(e, true);
 }
 
 pub const SCRIPT_SIZE_CAPS: Fix = Fix {
@@ -118,6 +146,8 @@ const NO_ADDRESS: &[&str] = &[
     crate::uncap::MENU_FIX.name,
     KEEP_COSAVE_PLUGINS.name,
     SCRIPT_ERROR_GUARD.name,
+    IMOD_EVENT_FORM_CHECK.name,
+    INVENTORY_REFERENCE_CHECKS.name,
     SCRIPT_SIZE_CAPS.name,
     SCRIPT_NULL_GUARD.name,
     SCRIPT_CYCLE_GUARD.name,
