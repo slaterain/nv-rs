@@ -31,6 +31,7 @@ pub mod bound;
 pub mod compound;
 pub mod layout;
 pub mod planes;
+mod probe;
 pub mod process;
 pub mod update;
 pub mod visible;

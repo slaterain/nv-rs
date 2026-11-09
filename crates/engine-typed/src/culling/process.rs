@@ -172,6 +172,7 @@ fn active_planes(e: &Engine, this: Ptr<BSCullingProcess>) -> u32 {
 /// as the compound frustum says (its active-plane state kept around the test); with no frustum in
 /// use any more and no plane active the object is visible too.
 pub fn bs_process(e: &mut Engine, this: Ptr<BSCullingProcess>, object: Ptr<NiAVObject>) {
+    let _walk = super::probe::on().then(|| super::probe::walk_begins(e, object.addr()));
     let mode = e.get(this, BSCullingProcess::kCullMode);
     if mode == MODE_NONE_VISIBLE || mode == MODE_ALL_VISIBLE {
         if e.get(this, BSCullingProcess::kCullMode) == MODE_ALL_VISIBLE {
@@ -221,6 +222,7 @@ pub fn bs_process(e: &mut Engine, this: Ptr<BSCullingProcess>, object: Ptr<NiAVO
 /// the debug print (empty here) gets the failure text and the geometry's name (the empty text for
 /// none).
 pub fn append_virtual(e: &mut Engine, this: Ptr<BSCullingProcess>, geometry: Ptr<NiGeometry>) {
+    let _register = super::probe::on().then(super::probe::register_begins);
     let mut registered = false;
     if e.get(this, BSCullingProcess::spAccumulator) != 0 {
         let accumulator = e.get(this, BSCullingProcess::spAccumulator);
