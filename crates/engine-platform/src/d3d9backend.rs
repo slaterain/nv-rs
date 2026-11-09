@@ -19,6 +19,7 @@ use super::d3d9real::{face_check, shot};
 use d3d9_stream::{Backend, Cmd, Data, Native, Reply, Rows};
 use std::collections::HashSet;
 use std::mem::ManuallyDrop;
+use windows::core::Interface;
 use windows::Win32::Foundation::{BOOL, HWND, RECT};
 use windows::Win32::Graphics::Direct3D9::*;
 
@@ -115,9 +116,8 @@ pub struct RealBackend {
 struct Warm {
     queue: std::collections::VecDeque<WarmShader>,
     bindings: Bindings,
-    /// The 1x1 target, a vertex declaration of one position, and a plain shader of each stage
-    /// for shader models 2 and 3 (to pair with the one being compiled), made at the first warm-up.
-    tools: Option<WarmTools>,
+    /// How long one warm-up may take ([`WARM_BUDGET`]; tests set it).
+    budget: std::time::Duration,
     /// Shaders drawn with, draws refused, time spent, presents that warmed.
     done: u32,
     failed: u32,
@@ -285,6 +285,8 @@ impl Bindings {
                 stride,
                 ..
             } => self.stream0 = (buffer, offset, stride),
+            // `DrawPrimitiveUP` leaves stream 0 unbound.
+            Cmd::DrawPrimitiveUp { .. } => self.stream0 = (0, 0, 0),
             // A new device's, and `Reset`'s: the state's defaults, the first back buffer and the
             // automatic depth surface bound.
             Cmd::CreateDevice {
@@ -417,7 +419,7 @@ impl RealBackend {
             Box::new(Warm {
                 queue: Default::default(),
                 bindings: Bindings::default(),
-                tools: None,
+                budget: WARM_BUDGET,
                 done: 0,
                 failed: 0,
                 spent: std::time::Duration::ZERO,
@@ -429,24 +431,20 @@ impl RealBackend {
 
     /// After a `Present`: draws with the queued shaders ([`Warm`]) for [`WARM_BUDGET`] at most,
     /// then sets the game's bindings again with its own commands.
+    /// Its objects (`warm_tools`: the 1x1 target is in the default pool, which `Reset` refuses
+    /// while any of it is alive) live for this call only.
     fn warm_some(&mut self, d: &IDirect3DDevice9, device: u32) {
         let start = std::time::Instant::now();
-        if self.warm.as_ref().is_some_and(|w| w.tools.is_none()) {
-            match warm_tools(d) {
-                Some(t) => self.warm.as_mut().expect("on").tools = Some(t),
-                None => {
-                    eprintln!("NV_D3D9=real: the shader warm-up could not make its target: off");
-                    self.warm = None;
-                    return;
-                }
-            }
-        }
         let Some(w) = self.warm.as_mut() else { return };
         // The game's target to bind again is known (it always is after `CreateDevice`).
         if w.bindings.targets[0] == 0 {
             return;
         }
-        let t = w.tools.as_ref().expect("made above");
+        let Some(t) = warm_tools(d) else {
+            eprintln!("NV_D3D9=real: the shader warm-up could not make its target: off");
+            self.warm = None;
+            return;
+        };
         let zeros = [0u32; 4];
         unsafe {
             // Not inside a scene of the game's (a Present inside one): nothing then.
@@ -484,7 +482,7 @@ impl RealBackend {
                 } else {
                     w.failed += 1;
                 }
-                if start.elapsed() >= WARM_BUDGET {
+                if start.elapsed() >= w.budget {
                     break;
                 }
             }
@@ -549,8 +547,24 @@ impl RealBackend {
                     w.spent.as_secs_f64() * 1000.0,
                     w.presents
                 );
-                w.tools = None;
             }
+        }
+        // Target 0 is the game's again, not the warm-up's (its command may have found no real
+        // surface): else the game would draw into the 1x1 target. Said loudly, and no more warm-up.
+        let target0 = unsafe { d.GetRenderTarget(0) }.ok();
+        if target0.as_ref().map(Interface::as_raw) == Some(t.target.as_raw()) {
+            eprintln!(
+                "NV_D3D9=real: the shader warm-up could not bind the game's target {:#x} again: the warm-up is off; set NV_SHADER_WARM=0 if frames look wrong",
+                b.targets[0]
+            );
+            // Its surface, or else the back buffer: never the warm-up's.
+            let rt = self
+                .surface(b.targets[0])
+                .or_else(|| unsafe { d.GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO) }.ok());
+            if let Some(rt) = rt {
+                let _ = unsafe { d.SetRenderTarget(0, &rt) };
+            }
+            self.warm = None;
         }
     }
 
@@ -934,6 +948,8 @@ fn forward_constants(
 impl Backend for RealBackend {
     fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
         if let (Some(w), Cmd::CreateDevice { .. }) = (self.warm.as_mut(), &cmd) {
+            // Shaders of an earlier device are not this one's to warm.
+            w.queue.clear();
             w.bindings.follow(&cmd);
         }
         match cmd {
@@ -1877,6 +1893,84 @@ mod tests {
     }
 
     const DEVICE: u32 = 0x1000;
+
+    /// The shader warm-up leaves nothing of its in the default pool between `Present`s: a `Reset`
+    /// (alt-tab, a new resolution, a lost device) while the warm-up is unfinished answers as it
+    /// does without the warm-up, and the game's target 0 is its back buffer again after each
+    /// warm-up. Skipped where there is no Direct3D 9 device.
+    #[test]
+    fn a_reset_during_an_unfinished_shader_warm_up_answers_as_without_it() {
+        let _turn = super::super::d3d9real::real_turn();
+        let (Some(with), Some(without)) = (reset_after_warm_up(true), reset_after_warm_up(false))
+        else {
+            return;
+        };
+        assert_eq!(with, without, "Reset refused with the warm-up only");
+    }
+
+    /// [`a_reset_during_an_unfinished_shader_warm_up_answers_as_without_it`]'s run: whether the
+    /// real device refused the `Reset`; `None` without a device.
+    fn reset_after_warm_up(warm: bool) -> Option<bool> {
+        super::super::d3d9real::assert_real_turn();
+        let window = super::super::d3d9real::test_window()?;
+        let present = super::super::d3d9real::test_present();
+        let back_buffer = 0x3000;
+        let mut b = RealBackend::new().with_warm(warm);
+        let made = b.execute(Cmd::CreateDevice {
+            device: DEVICE,
+            focus: window,
+            window,
+            behavior: 0x54,
+            present: Data::from_words(&present),
+            back_buffers: Data::from_words(&[back_buffer]),
+            depth_stencil: 0,
+        });
+        if !matches!(made, Reply::Device { created: true, .. }) {
+            return None;
+        }
+        // One shader a warm-up, so it is unfinished after the first `Present`.
+        if let Some(w) = b.warm.as_mut() {
+            w.budget = std::time::Duration::ZERO;
+        }
+        for (i, tokens) in [&PLAIN_PS2[..], &PLAIN_PS3, &PLAIN_PS2, &PLAIN_PS3]
+            .into_iter()
+            .enumerate()
+        {
+            b.execute(Cmd::CreateShader {
+                device: DEVICE,
+                shader: 0x4000 + 8 * i as u32,
+                pixel: true,
+                tokens: Data::from_words(tokens),
+            });
+        }
+        b.execute(Cmd::Present {
+            device: DEVICE,
+            source: None,
+            dest: None,
+            window: 0,
+            dirty: false,
+            model: 0,
+            frame: 1,
+        });
+        if let Some(w) = b.warm.as_ref() {
+            assert_eq!((w.done, w.failed), (1, 0), "one warmed, none refused");
+            assert_eq!(w.queue.len(), 3, "unfinished");
+        }
+        assert_eq!(b.warm.is_some(), warm);
+        let d = b.device(DEVICE).expect("the device");
+        let target0 = unsafe { d.GetRenderTarget(0) }.expect("a target");
+        let back = b.surface(back_buffer).expect("the back buffer");
+        assert_eq!(target0.as_raw(), back.as_raw(), "the game's target again");
+        drop((target0, back));
+        b.execute(Cmd::Reset {
+            device: DEVICE,
+            window: 0,
+            present: Data::from_words(&present),
+            back_buffers: Data::from_words(&[back_buffer]),
+            depth_stencil: 0,
+        });
+        Some(b.logged.iter().any(|(call, ..)| *call == "Reset"))
+    }
 
     /// p169's crash: on a pure device (the game's behaviour flags 0x54) the runtime keeps no
     /// reference of its own to a bound vertex buffer. The model lets go of a buffer when the
