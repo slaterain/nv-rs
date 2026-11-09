@@ -133,7 +133,7 @@ pub(crate) fn object_on_visible(e: &mut Engine, object: Ptr<NiAVObject>, process
         ),
         0x00a7_fd90 => {
             // A parallel walk logs it for main, which registers it in order (`par`).
-            if !super::par::defer(e, object.addr(), process) {
+            if !super::par::defer(e, object.addr(), process, 0x00a7_fd90) {
                 typed_call!(
                     FAMILY,
                     0x00a7_fd90,
@@ -146,9 +146,10 @@ pub(crate) fn object_on_visible(e: &mut Engine, object: Ptr<NiAVObject>, process
             0x00c4_6f60,
             super::visible::multibound_node_on_visible(e, object.cast(), Ptr::new(process))
         ),
-        _ => {
-            // Not audited for other cores: a parallel walk logs it for main (`par`).
-            if !super::par::defer(e, object.addr(), process) {
+        target => {
+            // Not audited for other cores: a parallel walk logs it for main (`par`), unless it is
+            // the fade node's.
+            if !super::par::defer(e, object.addr(), process, target) {
                 e.vcall(object.addr(), SLOT_ON_VISIBLE, &args![process]);
             }
         }

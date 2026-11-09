@@ -2454,6 +2454,9 @@ pub(crate) fn main_stopped(e: &Engine, why: &str) {
 
 /// The first id a helper answers `GetCurrentThreadId` with (game threads have small ids).
 const HELPER_ID_BASE: u32 = 0x0001_0000;
+/// The first thread index a helper takes: its guest stack's slot in its engine, past every game
+/// thread's (the thread list holds a few dozen), so `SuspendThread` of a game thread never finds it.
+const HELPER_INDEX_BASE: usize = 1000;
 
 /// A job for [`fork_join`]: called once on each helper with its engine and number (1 to n), and on
 /// the caller with number 0.
@@ -2539,6 +2542,17 @@ pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
     true
 }
 
+/// On a helper's own engine, inside a [`fork_join`] job: `f` at `addr` for this engine alone (the
+/// parallel render logs the accumulator calls a fade node makes, instead of running them, while a
+/// helper walks). False, and nothing changed, on any other thread.
+pub fn helper_register(e: &mut Engine, addr: u32, f: AbiFn) -> bool {
+    if !HELPER.with(Cell::get) {
+        return false;
+    }
+    e.register_here(addr, f);
+    true
+}
+
 /// The pool and its helpers' OS threads, each with an engine made on this thread.
 fn make_pool(world: &'static World, helpers: usize) -> &'static Pool {
     let pool: &'static Pool = Box::leak(Box::new(Pool {
@@ -2555,7 +2569,7 @@ fn make_pool(world: &'static World, helpers: usize) -> &'static Pool {
     }));
     for number in 1..=helpers {
         let id = HELPER_ID_BASE + u32::try_from(number).unwrap_or(0);
-        let engine = SendEngine(Box::new(world.context(id, usize::MAX)));
+        let engine = SendEngine(Box::new(world.context(id, HELPER_INDEX_BASE + number)));
         std::thread::Builder::new()
             .name(format!("render helper {number}"))
             .stack_size(THREAD_STACK)
