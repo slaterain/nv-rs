@@ -774,23 +774,36 @@ struct Waiter {
 }
 
 /// How long a blocked wait watches for its signal before the thread parks ([`watch_briefly`]):
-/// `NV_WAIT_SPIN_US` microseconds, 50 unless set (0: park at once). Waking a parked thread costs
-/// Windows tens of microseconds, and the game's hand-offs answer within that: its file reads
-/// go through one thread (OEI's IO thread, `00aa8430`), a request and a semaphore each way, about
-/// 12,000 of them in the Goodsprings load, where those wake-ups were most of the time
-/// (measure/stutter/REAL-THREADS.md). A thread waiting for longer pays this much CPU, once.
+/// `NV_WAIT_SPIN_US` microseconds; unset, 50 on a machine with more than 2 logical processors
+/// and 0 (park at once) on one with 2 or fewer, where a watching thread would hold up the one
+/// that is to signal it. Waking a parked thread costs Windows tens of microseconds, and the game's
+/// hand-offs answer within that: its file reads go through one thread (OEI's IO thread,
+/// `00aa8430`), a request and a semaphore each way, about 12,000 of them in the Goodsprings load,
+/// where those wake-ups were most of the time (measure/stutter/REAL-THREADS.md). A thread waiting
+/// for longer pays this much CPU, once, most of it yielding (see [`watch_briefly`]).
 fn wait_spin() -> Duration {
     static SPIN: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
     *SPIN.get_or_init(|| {
+        let default = if std::thread::available_parallelism().map_or(1, |n| n.get()) > 2 {
+            50
+        } else {
+            0
+        };
         let us = std::env::var("NV_WAIT_SPIN_US")
             .ok()
             .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(50);
+            .unwrap_or(default);
         Duration::from_micros(us)
     })
 }
 
-/// Watches `flag` for [`wait_spin`] (or `timeout`, if shorter): whether it was set meanwhile.
+/// How long [`watch_briefly`] spins before it yields its time slice between looks.
+const WATCH_SPIN_ONLY: Duration = Duration::from_micros(10);
+
+/// Watches `flag` for [`wait_spin`] (or `timeout`, if shorter): whether it was set meanwhile. The
+/// first [`WATCH_SPIN_ONLY`] it only spins; after that it yields between looks (`SwitchToThread`,
+/// which returns at once when no other thread is ready to run), so a thread that is to set the
+/// flag gets the processor when there is no other.
 fn watch_briefly(flag: &AtomicBool, timeout: Option<Duration>) -> bool {
     let limit = timeout.map_or(wait_spin(), |t| t.min(wait_spin()));
     if limit.is_zero() {
@@ -804,8 +817,12 @@ fn watch_briefly(flag: &AtomicBool, timeout: Option<Duration>) -> bool {
             }
             std::hint::spin_loop();
         }
-        if started.elapsed() >= limit {
+        let spent = started.elapsed();
+        if spent >= limit {
             return flag.load(Ordering::Acquire);
+        }
+        if spent >= WATCH_SPIN_ONLY {
+            std::thread::yield_now();
         }
     }
 }
@@ -821,9 +838,16 @@ impl World {
         me.woken.store(false, Ordering::SeqCst);
         let held = self.kernel.release_all();
         let was = self.leave_guest();
+        let watched = std::time::Instant::now();
         if !me.woken.load(Ordering::SeqCst) && !watch_briefly(&me.woken, timeout) {
             match timeout {
-                Some(t) => std::thread::park_timeout(t),
+                // What is left of the timeout after the watch.
+                Some(t) => {
+                    let left = t.saturating_sub(watched.elapsed());
+                    if !left.is_zero() {
+                        std::thread::park_timeout(left);
+                    }
+                }
                 None => std::thread::park(),
             }
         }

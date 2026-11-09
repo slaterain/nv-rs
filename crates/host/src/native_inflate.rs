@@ -28,13 +28,28 @@ const AVAIL_OUT: u32 = 0x10;
 const TOTAL_OUT: u32 = 0x14;
 const ADLER: u32 = 0x30;
 
-/// One stream's host decoder, with its buffers kept between calls.
+/// zlib-rs's message for a trailer whose checksum does not match the data (a data error like any
+/// other otherwise): the exe's zlib reads the checksum and ends the stream without comparing it.
+/// `a_wrong_checksum_still_ends_the_stream` fails if zlib-rs words it otherwise.
+const CHECKSUM_MISMATCH: &str = "incorrect data check";
+
+/// The most input or output one step of a call moves through the host's buffers: a call takes as
+/// many steps as zlib's one call goes on for (until the input runs out, the output is full, the
+/// stream ends or an error), so a call with a large `avail_in` or `avail_out` (a whole plugin
+/// record at once, as `DecompressCurrentForm` asks) neither allocates nor clears that much.
+const STEP: usize = 256 << 10;
+
+thread_local! {
+    /// This thread's step buffers (input, output), made once.
+    static STEP_BUFFERS: std::cell::RefCell<(Vec<u8>, Vec<u8>)> =
+        std::cell::RefCell::new((vec![0; STEP], vec![0; STEP]));
+}
+
+/// One stream's host decoder.
 struct Decoder {
     inflate: Inflate,
     /// The stream ended (a call answered 1): later calls answer 1 again, as zlib's done mode does.
     ended: bool,
-    input: Vec<u8>,
-    output: Vec<u8>,
 }
 
 impl Decoder {
@@ -43,8 +58,6 @@ impl Decoder {
         Box::new(Decoder {
             inflate: Inflate::new(true, 15),
             ended: false,
-            input: Vec::new(),
-            output: Vec::new(),
         })
     }
 }
@@ -52,7 +65,11 @@ impl Decoder {
 /// Decoders by (kernel table, stream).
 type Decoders = HashMap<(usize, u32), Box<Decoder>>;
 
-/// The run's decoders by (kernel table, stream): every thread's engine context of a run shares them.
+/// The run's decoders by (kernel table, stream): every thread's engine context of a run shares
+/// them. `inflateInit_` puts a new one in (a stream block at an address used before gets a new
+/// decoder, whatever the old one's state), `inflateEnd` takes it out; one whose stream the game
+/// frees without `inflateEnd` stays until its address is initialised again, as the exe's zlib
+/// keeps that stream's window.
 fn decoders() -> std::sync::MutexGuard<'static, Decoders> {
     static DECODERS: std::sync::OnceLock<Mutex<Decoders>> = std::sync::OnceLock::new();
     DECODERS
@@ -67,7 +84,10 @@ pub fn wanted() -> bool {
     std::env::var("NV_NATIVE_INFLATE").map_or(true, |v| v.trim() != "0")
 }
 
-/// Registers the three entry points over their translations.
+/// Registers the three entry points over their translations. The exe's other zlib entries
+/// (`inflateInit2_` `00b43e70`, `inflateReset` `00b43db0`, `inflateSetDictionary` `00b45e30`,
+/// `inflateSync` `00b45f50`, `inflateSyncPoint` `00b46170`, `inflateCopy` `00b461c0`) are called
+/// only from these zlib functions themselves or not at all (Ghidra, every reference).
 pub fn install(e: &mut Engine) {
     e.register(INFLATE_INIT, inflate_init_entry);
     e.register(INFLATE, inflate_entry);
@@ -75,9 +95,11 @@ pub fn install(e: &mut Engine) {
 }
 
 fn inflate_init_entry(e: &mut Engine, a: &[u32]) -> Ret {
+    let key = (e.kernel.id(), a[0]);
+    decoders().remove(&key);
     let ret = engine::units::unplaced::run_00b43db0::fn_00b43fe0(e, a[0], a[1], a[2]);
     if ret == 0 {
-        decoders().insert((e.kernel.id(), a[0]), Decoder::new());
+        decoders().insert(key, Decoder::new());
     }
     Ret {
         eax: ret as u32,
@@ -128,27 +150,41 @@ fn decode(e: &mut Engine, stream: u32, flush: i32, d: &mut Decoder) -> i32 {
     }
     let (next_in, avail_in) = (e.mem.u32(stream + NEXT_IN), e.mem.u32(stream + AVAIL_IN));
     let (next_out, avail_out) = (e.mem.u32(stream + NEXT_OUT), e.mem.u32(stream + AVAIL_OUT));
-    if d.input.len() < avail_in as usize {
-        d.input.resize(avail_in as usize, 0);
-    }
-    if d.output.len() < avail_out as usize {
-        d.output.resize(avail_out as usize, 0);
-    }
-    let input = &mut d.input[..avail_in as usize];
-    e.mem.read(next_in, input);
-    let flush = match flush {
-        4 => InflateFlush::Finish,
-        2 | 3 => InflateFlush::SyncFlush,
-        5 => InflateFlush::Block,
-        _ => InflateFlush::NoFlush,
+    // Inflate's output does not depend on the flush kind; `Z_BLOCK` (5) stops at a block's end.
+    let block = flush == 5;
+    let step_flush = if block {
+        InflateFlush::Block
+    } else {
+        InflateFlush::NoFlush
     };
-    let (in_before, out_before) = (d.inflate.total_in(), d.inflate.total_out());
-    let result = d
-        .inflate
-        .decompress(input, &mut d.output[..avail_out as usize], flush);
-    let read = (d.inflate.total_in() - in_before) as u32;
-    let written = (d.inflate.total_out() - out_before) as u32;
-    e.mem.write(next_out, &d.output[..written as usize]);
+    let (mut read, mut written) = (0u32, 0u32);
+    let result = STEP_BUFFERS.with(|buffers| {
+        let (input, output) = &mut *buffers.borrow_mut();
+        loop {
+            let n_in = ((avail_in - read) as usize).min(STEP);
+            let n_out = ((avail_out - written) as usize).min(STEP);
+            e.mem.read(next_in.wrapping_add(read), &mut input[..n_in]);
+            let (in_before, out_before) = (d.inflate.total_in(), d.inflate.total_out());
+            let step = d
+                .inflate
+                .decompress(&input[..n_in], &mut output[..n_out], step_flush);
+            let used = (d.inflate.total_in() - in_before) as u32;
+            let made = (d.inflate.total_out() - out_before) as u32;
+            e.mem
+                .write(next_out.wrapping_add(written), &output[..made as usize]);
+            read += used;
+            written += made;
+            match step {
+                Ok(Status::Ok | Status::BufError) => {
+                    let stuck = used == 0 && made == 0;
+                    if block || stuck || read == avail_in || written == avail_out {
+                        break Ok(Status::Ok);
+                    }
+                }
+                other => break other,
+            }
+        }
+    });
     e.mem.set_u32(stream + NEXT_IN, next_in.wrapping_add(read));
     e.mem.set_u32(stream + AVAIL_IN, avail_in - read);
     e.mem.set_u32(
@@ -164,16 +200,20 @@ fn decode(e: &mut Engine, stream: u32, flush: i32, d: &mut Decoder) -> i32 {
     );
     e.mem.set_u32(stream + ADLER, 0);
     match result {
-        Ok(Status::Ok) => 0,
-        Ok(Status::BufError) => -5,
+        // zlib's answer for a call that went on without ending: no progress, or `Z_FINISH` (4)
+        // that did not finish, is `Z_BUF_ERROR`.
+        Ok(Status::Ok | Status::BufError) => {
+            if (read == 0 && written == 0) || flush == 4 {
+                -5
+            } else {
+                0
+            }
+        }
         Ok(Status::StreamEnd) => {
             d.ended = true;
             1
         }
-        // The exe's zlib reads the trailer's checksum and ends without comparing it.
-        Err(InflateError::DataError)
-            if d.inflate.error_message() == Some("incorrect data check") =>
-        {
+        Err(InflateError::DataError) if d.inflate.error_message() == Some(CHECKSUM_MISMATCH) => {
             d.ended = true;
             1
         }
@@ -227,6 +267,62 @@ mod tests {
         assert_eq!(e.mem.u32(stream + AVAIL_IN), 0);
         assert_eq!(inflate(&mut e, stream, 2), 1);
         decoders().remove(&(e.kernel.id(), stream));
+    }
+
+    /// zlib-rs names a checksum that does not match with [`CHECKSUM_MISMATCH`], the message the
+    /// decoder's tolerance of it matches on.
+    #[test]
+    fn zlib_rs_names_a_checksum_mismatch_as_the_decoder_expects() {
+        let data: Vec<u8> = (0..5000u32).map(|i| (i % 13) as u8).collect();
+        let mut packed = zlib(&data);
+        let last = packed.len() - 1;
+        packed[last] ^= 0x55;
+        let mut z = Inflate::new(true, 15);
+        let mut out = vec![0u8; 8192];
+        assert_eq!(
+            z.decompress(&packed, &mut out, InflateFlush::Finish),
+            Err(InflateError::DataError)
+        );
+        assert_eq!(z.error_message(), Some(CHECKSUM_MISMATCH));
+    }
+
+    /// A stream larger than a step, all of it in one call with room for all of it (as
+    /// `DecompressCurrentForm` asks): it comes out whole in that call, which answers 1; with too
+    /// little room the call fills it and answers 0, and `Z_FINISH` (4) answers -5 then, as zlib.
+    #[test]
+    fn a_stream_larger_than_a_step_decodes_in_one_call() {
+        let mut e = Engine::new();
+        let data: Vec<u8> = (0..(3 * STEP as u32))
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8 & 0x3f)
+            .collect();
+        let packed = zlib(&data);
+        assert!(packed.len() > STEP);
+        let input = e.mem.alloc(packed.len() as u32);
+        e.mem.write(input, &packed);
+        let output = e.mem.alloc(data.len() as u32);
+        for (room, flush, answer) in [
+            (data.len() as u32, 0, 1),
+            (STEP as u32 + 7, 0, 0),
+            (STEP as u32 + 7, 4, -5),
+        ] {
+            let stream = stream_block(&mut e);
+            e.mem.set_u32(stream + NEXT_IN, input);
+            e.mem.set_u32(stream + AVAIL_IN, packed.len() as u32);
+            e.mem.set_u32(stream + NEXT_OUT, output);
+            e.mem.set_u32(stream + AVAIL_OUT, room);
+            assert_eq!(
+                inflate(&mut e, stream, flush),
+                answer,
+                "room {room}, flush {flush}"
+            );
+            assert_eq!(e.mem.u32(stream + AVAIL_OUT), 0, "room {room}: filled");
+            assert_eq!(
+                e.mem.bytes(output, room),
+                data[..room as usize],
+                "room {room}"
+            );
+            decoders().remove(&(e.kernel.id(), stream));
+        }
     }
 
     /// A zlib stream fed in 300-byte pieces into a 1000-byte output, as the archive's reads do:
@@ -289,10 +385,18 @@ mod tests {
     const TEST_ZALLOC: u32 = 0x7d01_0000;
     const TEST_ZFREE: u32 = 0x7d01_0010;
 
-    /// One compressed file through a fresh stream, fed as the archive feeds it (64 KB of input at
-    /// a time, 256 KB of output), by the host decoder or by the exe's zlib (the translation, which
-    /// this engine keeps registered): the bytes out and the last answer.
-    fn decode(e: &mut Engine, packed: &[u8], expected: u32, host: bool) -> (Vec<u8>, i32) {
+    /// One compressed item through a fresh stream, by the host decoder or by the exe's zlib (the
+    /// translation, which this engine keeps registered), fed as the archive feeds a file (64 KB of
+    /// input at a time, 256 KB of output, `Z_SYNC_FLUSH`) or, `whole`, as `DecompressCurrentForm`
+    /// feeds a record (all of it in one call with room for all of it, no flush): the bytes out and
+    /// the last answer.
+    fn decode(
+        e: &mut Engine,
+        packed: &[u8],
+        expected: u32,
+        host: bool,
+        whole: bool,
+    ) -> (Vec<u8>, i32) {
         const VERSION: u32 = 0x010a_4590; // "1.2.1", as `CompressedArchiveFile` passes it.
         const PIECE: u32 = 0x1_0000;
         const ROOM: u32 = 0x4_0000;
@@ -322,23 +426,28 @@ mod tests {
         assert_eq!(started, 0);
         let input = e.mem.alloc(packed.len().max(1) as u32);
         e.mem.write(input, packed);
-        let output = e.mem.alloc(ROOM);
+        let (piece_len, room, flush) = if whole {
+            (packed.len() as u32, expected.max(1), 0u32)
+        } else {
+            (PIECE, ROOM, 2)
+        };
+        let output = e.mem.alloc(room);
         let (mut out, mut fed) = (Vec::with_capacity(expected as usize), 0u32);
         let last = loop {
             if e.mem.u32(stream + AVAIL_IN) == 0 && fed < packed.len() as u32 {
-                let piece = PIECE.min(packed.len() as u32 - fed);
+                let piece = piece_len.min(packed.len() as u32 - fed);
                 e.mem.set_u32(stream + NEXT_IN, input + fed);
                 e.mem.set_u32(stream + AVAIL_IN, piece);
                 fed += piece;
             }
             e.mem.set_u32(stream + NEXT_OUT, output);
-            e.mem.set_u32(stream + AVAIL_OUT, ROOM);
+            e.mem.set_u32(stream + AVAIL_OUT, room);
             let answer = if host {
-                inflate(e, stream, 2)
+                inflate(e, stream, flush as i32)
             } else {
-                e.call(INFLATE, &[stream, 2]).eax as i32
+                e.call(INFLATE, &[stream, flush]).eax as i32
             };
-            let made = ROOM - e.mem.u32(stream + AVAIL_OUT);
+            let made = room - e.mem.u32(stream + AVAIL_OUT);
             out.extend(e.mem.bytes(output, made));
             // As the archive's reader stops: the stream's end, the whole file out, an error, or no input left
             // and no progress.
@@ -417,7 +526,7 @@ mod tests {
                 }
                 let expected = u32::from_le_bytes([stored[0], stored[1], stored[2], stored[3]]);
                 let packed = &stored[4..];
-                bytes += same(&mut e, packed, expected, &entry.path, &mut short);
+                bytes += same(&mut e, packed, expected, &entry.path, false, &mut short);
                 files += 1;
             }
         }
@@ -440,7 +549,7 @@ mod tests {
                     continue;
                 }
                 let name = format!("{} record {form:08x}", plugin.display());
-                record_bytes += same(&mut e, packed, expected, &name, &mut short);
+                record_bytes += same(&mut e, packed, expected, &name, true, &mut short);
                 records += 1;
             }
         }
@@ -465,10 +574,11 @@ mod tests {
         packed: &[u8],
         expected: u32,
         name: &str,
+        whole: bool,
         short: &mut Vec<String>,
     ) -> usize {
-        let (guest, guest_answer) = decode(e, packed, expected, false);
-        let (host, host_answer) = decode(e, packed, expected, true);
+        let (guest, guest_answer) = decode(e, packed, expected, false, whole);
+        let (host, host_answer) = decode(e, packed, expected, true, whole);
         assert_eq!(host.len(), guest.len(), "{name}: the lengths differ");
         assert!(host == guest, "{name}: the bytes differ");
         assert_eq!(host_answer, guest_answer, "{name}: the answers differ");
