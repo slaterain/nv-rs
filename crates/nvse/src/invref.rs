@@ -207,18 +207,45 @@ fn state(e: &mut Engine) -> &mut State {
 
 // ---- the game's lists ----
 
-/// The first data of each node of a `tList` (`ListNode<T>`: data, next), skipping empty ones.
-pub fn list_items(e: &Engine, list: u32) -> Vec<u32> {
+/// The most nodes a walk of one of the game's lists goes through. The game's container lists hold
+/// a few hundred; one that runs back into itself would keep xNVSE walking for ever, so past this
+/// the walk ends with the list guard row (`NV_NVSE_LIST_GUARD`) and stops the game without it.
+pub const MAX_LIST_NODES: usize = 1 << 20;
+
+/// The data of each node of a `tList` (`ListNode<T>`: data, next) in order: the non-empty ones, or
+/// (`until_empty`) those up to the first empty one, as `tList::GetNthItem` reads them; at most
+/// [`MAX_LIST_NODES`] nodes.
+fn walk_list(e: &Engine, list: u32, until_empty: bool) -> Vec<u32> {
     let mut out = Vec::new();
     let mut node = list;
+    let mut walked = 0usize;
     while node != 0 {
+        walked += 1;
+        if walked > MAX_LIST_NODES {
+            if crate::commands::array::fix_on(e, crate::commands::array::LIST_GUARD) {
+                break;
+            }
+            panic!("a game list of more than {MAX_LIST_NODES} nodes: it runs back into itself, and xNVSE would walk it for ever");
+        }
         let data = e.mem.u32(node);
         if data != 0 {
             out.push(data);
+        } else if until_empty {
+            break;
         }
         node = e.mem.u32(node + 4);
     }
     out
+}
+
+/// The first data of each node of a `tList` (`ListNode<T>`: data, next), skipping empty ones.
+pub fn list_items(e: &Engine, list: u32) -> Vec<u32> {
+    walk_list(e, list, false)
+}
+
+/// A `tList`'s data up to its first empty node (`GetNthItem` from 0 until it answers none).
+pub fn list_items_until_empty(e: &Engine, list: u32) -> Vec<u32> {
+    walk_list(e, list, true)
 }
 
 /// `BaseExtraList::HasType`.
@@ -788,6 +815,28 @@ const EXTRA_TYPE: u32 = 4;
 const EXTRA_ADD: u32 = 0x0040_ff60;
 const EXTRA_COPY: u32 = 0x0041_1ec0;
 const EXTRA_REMOVE_BY_TYPE: u32 = 0x0041_0140;
+
+/// `BaseExtraList::Remove(extra, free)` (`thiscall`).
+const EXTRA_REMOVE: u32 = 0x0041_0020;
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameExtraData.cpp: BSExtraData::Create.
+/// A new extra data block: zeroed, with its vtable and type.
+pub fn create_extra(e: &mut Engine, kind: u32, size: u32, vtable: u32) -> u32 {
+    let extra = heap_zeroed(e, size);
+    e.mem.set_u32(extra, vtable);
+    e.mem.set_u8(extra + EXTRA_TYPE, kind as u8);
+    extra
+}
+
+/// `BaseExtraList::Add`.
+pub fn extra_add(e: &mut Engine, list: u32, extra: u32) {
+    e.call(EXTRA_ADD, &args![list, extra]);
+}
+
+/// `BaseExtraList::Remove`.
+pub fn extra_remove(e: &mut Engine, list: u32, extra: u32, free: bool) {
+    e.call(EXTRA_REMOVE, &args![list, extra, u32::from(free)]);
+}
 
 /// A zeroed block of the form heap.
 fn heap_zeroed(e: &mut Engine, size: u32) -> u32 {
