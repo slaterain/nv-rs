@@ -107,7 +107,9 @@ impl Drop for Walk {
         let root = ROOT.with(Cell::get);
         let reg_ns = REG_NS.with(Cell::get);
         let registered = REG_COUNT.with(Cell::get);
-        let mut guard = TABLE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut guard = TABLE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let table = guard.get_or_insert_with(|| Table {
             since: Instant::now(),
             roots: HashMap::new(),
@@ -157,7 +159,7 @@ fn nanos(d: Duration) -> u64 {
 fn print_table(table: &Table) {
     let secs = table.since.elapsed().as_secs_f64();
     let mut rows: Vec<(u32, Root)> = table.roots.iter().map(|(k, v)| (*k, *v)).collect();
-    rows.sort_by(|a, b| b.1.walk_ns.cmp(&a.1.walk_ns));
+    rows.sort_by_key(|row| std::cmp::Reverse(row.1.walk_ns));
     let mut out = format!("NV_PAR_RENDER probe, {secs:.1} s:");
     for (root, r) in rows {
         let per = |ns: u64| ns as f64 / r.walks.max(1) as f64 / 1000.0;
