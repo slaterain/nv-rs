@@ -165,12 +165,14 @@ struct Spec {
 }
 
 /// A conversion's text: `lead` (a sign, a `0x`), then `body`, which holds a run of `zeros` zeros
-/// at `zeros_at` (a precision's zeros, too many to hold).
+/// at `zeros_at` (a precision's zeros, too many to hold), and then
+/// `past` more bytes that are counted but never kept (a string longer than the buffer).
 struct Field {
     lead: Vec<u8>,
     body: Vec<u8>,
     zeros_at: usize,
     zeros: u64,
+    past: u64,
 }
 
 impl Field {
@@ -180,11 +182,12 @@ impl Field {
             body,
             zeros_at: 0,
             zeros: 0,
+            past: 0,
         }
     }
 
     fn len(&self) -> u64 {
-        (self.lead.len() + self.body.len()) as u64 + self.zeros
+        (self.lead.len() + self.body.len()) as u64 + self.zeros + self.past
     }
 }
 
@@ -196,6 +199,8 @@ fn pad(out: &mut Out, spec: &Spec, field: &Field, zeros_allowed: bool) {
         out.bytes(&field.body[..field.zeros_at]);
         out.repeat(b'0', field.zeros);
         out.bytes(&field.body[field.zeros_at..]);
+        // Past the body's kept part the buffer is full: these are only counted.
+        out.count += field.past;
     };
     if spec.left {
         out.bytes(&field.lead);
@@ -412,15 +417,15 @@ fn run(e: &Engine, format: &[u8], va: &mut VaList, out: &mut Out) -> Result<(), 
                     let n = spec
                         .precision
                         .map_or(null.len(), |p| null.len().min(p as usize));
-                    Some(null[..n].to_vec())
+                    Some(Field::plain(null[..n].to_vec()))
                 } else {
-                    guest_string(e, ptr, is_wide(&spec, conv), spec.precision)
+                    guest_string(e, ptr, is_wide(&spec, conv), spec.precision, spec.width)
                 };
-                let Some(text) = text else {
+                let Some(field) = text else {
                     // Outside the game's memory under the missing array guard: the text ends.
                     return Ok(());
                 };
-                pad(out, &spec, &Field::plain(text), true);
+                pad(out, &spec, &field, true);
             }
             b'Z' => {
                 // An `ANSI_STRING` (or with `l`/`w` a `UNICODE_STRING`): its length in bytes
@@ -428,7 +433,7 @@ fn run(e: &Engine, format: &[u8], va: &mut VaList, out: &mut Out) -> Result<(), 
                 let ptr = va.u32();
                 let wide = matches!(spec.size, Size::Long | Size::Wide);
                 let text = if ptr == 0 {
-                    Some(b"(null)".to_vec())
+                    Some(Field::plain(b"(null)".to_vec()))
                 } else if fix_on(e, NULL_GUARD)
                     && !(e.mem.is_mapped(ptr) && e.mem.is_mapped(ptr.wrapping_add(7)))
                 {
@@ -437,12 +442,12 @@ fn run(e: &Engine, format: &[u8], va: &mut VaList, out: &mut Out) -> Result<(), 
                     let len = usize::from(e.mem.u16(ptr));
                     let buffer = e.mem.u32(ptr.wrapping_add(4));
                     let n = if wide { len / 2 } else { len };
-                    guest_string(e, buffer, wide, Some(n as u64))
+                    guest_string(e, buffer, wide, Some(n as u64), spec.width)
                 };
-                let Some(text) = text else {
+                let Some(field) = text else {
                     return Ok(());
                 };
-                pad(out, &spec, &Field::plain(text), true);
+                pad(out, &spec, &field, true);
             }
             b'p' => {
                 // Eight upper-case hex digits; the precision, `#`, `+` and space change nothing,
@@ -534,6 +539,7 @@ fn integer(e: &Engine, out: &mut Out, spec: &Spec, conv: u8, raw: u64) {
         body: digits,
         zeros_at: 0,
         zeros,
+        past: 0,
     };
     pad(out, spec, &field, spec.precision.is_none());
 }
@@ -622,6 +628,7 @@ fn float(e: &Engine, out: &mut Out, spec: &Spec, conv: u8, v: f64) {
         zeros_at: zeros_at.saturating_sub(sign_len).min(body.len()),
         body,
         zeros,
+        past: 0,
     };
     pad(out, spec, &field, number);
 }
@@ -724,18 +731,27 @@ fn hex(a: f64, precision: Option<u64>) -> (Vec<u8>, u64, i32) {
     (digits, wanted - u64::from(shown), x)
 }
 
-/// A string argument's text: the game's `char` (or, `wide`, `wchar_t`) string at `ptr`, up to
-/// `max` characters, of which the buffer keeps [`BUDGET`]; a wide character above 0xFF gives no
-/// byte (`wctomb` in the C locale). A pointer outside the game's memory stops xNVSE (an access
-/// violation): under the missing array guard row the text ends there (`None`), off it the read
-/// stops the game as it does.
-fn guest_string(e: &Engine, ptr: u32, wide: bool, max: Option<u64>) -> Option<Vec<u8>> {
+/// The most characters a string conversion reads past the buffer's size: enough to pad to any
+/// width up to it exactly. A longer string (only a huge width can tell) counts as this long.
+const READ_LIMIT: u64 = 1 << 24;
+
+/// A string argument as a field: the game's `char` (or, `wide`, `wchar_t`) string at `ptr`, up to
+/// `max` characters; a wide character above 0xFF gives no byte (`wctomb` in the C locale). The
+/// buffer keeps [`BUDGET`] bytes of it; the rest is only counted, and at most the width or the
+/// buffer's size, whichever is larger (up to [`READ_LIMIT`]), is read, so a long run of wide
+/// characters that give no byte cannot hold the game up. A pointer outside the game's memory
+/// stops xNVSE (an access violation): under the missing array guard row the text ends there
+/// (`None`), off it the read stops the game as it does.
+fn guest_string(e: &Engine, ptr: u32, wide: bool, max: Option<u64>, width: u64) -> Option<Field> {
     let guarded = fix_on(e, NULL_GUARD);
     let step = if wide { 2 } else { 1 };
+    let read = width
+        .clamp(BUDGET as u64, READ_LIMIT)
+        .min(max.unwrap_or(u64::MAX));
     let mut text = Vec::new();
+    let mut made = 0u64;
     let mut p = ptr;
-    let mut count = 0u64;
-    while max.map_or(true, |n| count < n) && text.len() < BUDGET {
+    for _ in 0..read {
         if guarded && !(e.mem.is_mapped(p) && e.mem.is_mapped(p.wrapping_add(step - 1))) {
             return None;
         }
@@ -748,12 +764,16 @@ fn guest_string(e: &Engine, ptr: u32, wide: bool, max: Option<u64>) -> Option<Ve
             break;
         }
         if c < 0x100 {
-            text.push(c as u8);
+            if text.len() < BUDGET {
+                text.push(c as u8);
+            }
+            made += 1;
         }
-        count += 1;
         p = p.wrapping_add(step);
     }
-    Some(text)
+    let mut field = Field::plain(text);
+    field.past = made - field.body.len() as u64;
+    Some(field)
 }
 
 #[cfg(test)]

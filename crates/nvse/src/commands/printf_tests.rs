@@ -219,6 +219,40 @@ fn printf_precisions_past_the_buffer() {
     assert!(full.len() == BUDGET && full.starts_with(b"1.000"));
 }
 
+/// A string conversion reads a bounded number of characters: a run of wide characters that give
+/// no byte, longer than the buffer and with no end in mapped memory, gives nothing and reads
+/// nothing past the buffer's size (read on, it would reach unmapped memory and stop the game).
+#[test]
+fn printf_wide_strings_read_a_bounded_run() {
+    const AT: u32 = 0x0300_0000;
+    let mut e = Engine::new();
+    e.map(AT, 0x10000);
+    // 32,768 characters of U+0141 fill the mapping, with no NUL after them.
+    let run: Vec<u8> = (0..0x8000).flat_map(|_| 0x0141u16.to_le_bytes()).collect();
+    e.mem.write(AT, &run);
+    assert_eq!(
+        ucrt_format(&e, b"[%S]|%d", &words(&[AT as u64 | 7 << 32])),
+        b"[]|7"
+    );
+}
+
+/// A width pads from a guest string's whole length, not from what the buffer keeps of it.
+#[test]
+fn printf_pads_a_long_string_from_its_length() {
+    const AT: u32 = 0x0300_0000;
+    let mut e = Engine::new();
+    e.map(AT, 0x10000);
+    e.mem.write(AT, &[b'a'; 17000]);
+    e.mem.set_u8(AT + 17000, 0);
+    let out = ucrt_format(&e, b"%20000s", &words(&[AT as u64]));
+    assert_eq!(out.len(), BUDGET);
+    assert!(out[..3000].iter().all(|&b| b == b' '));
+    assert!(out[3000..].iter().all(|&b| b == b'a'));
+    // Longer than a width: no padding at all.
+    let out = ucrt_format(&e, b"%-16999s|", &words(&[AT as u64]));
+    assert!(out.len() == BUDGET && out.iter().all(|&b| b == b'a'));
+}
+
 /// The real UCRT's text for each measured case of `printf_cases.txt` (format, arguments and text
 /// in hex, a case a line), with the fixes preset's rows on.
 #[test]
