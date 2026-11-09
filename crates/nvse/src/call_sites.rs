@@ -225,11 +225,9 @@ fn sell(e: &mut Engine, a: &[u32]) -> Option<u32> {
 // OnItemRepair_2.
 /// OnRepair: the repaired item as an inventory reference of the player (a stack of its own: the
 /// entry's item, count and first list), the repairer, and 0 for the player's own repair or 1
-/// for a vendor's.
+/// for a vendor's. As in xNVSE the reference is made on every repair, with a handler or not (it
+/// takes the next temporary form id); repairs are rare and on the main thread.
 fn repair(e: &mut Engine, entry: u32, repairer: u32, kind: u32) {
-    if !events::has_handlers_lock_free(e, id::ON_REPAIR) {
-        return;
-    }
     let player = e.global::<u32>(PLAYER);
     let item = e.mem.u32(entry + crate::invref::ENTRY_TYPE);
     let count = e.mem.u32(entry + crate::invref::ENTRY_COUNT_DELTA) as i32;

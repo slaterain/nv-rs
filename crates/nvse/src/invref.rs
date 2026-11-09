@@ -625,9 +625,16 @@ const EXTRA_REMOVE_ALL: u32 = 0x0040_fae0;
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameExtraData.cpp:
 // ExtraContainerChanges::Remove.
 /// For every entry of `item`: with `list`, that list taken out of its lists; without one, an
-/// entry with no lists taken out of the changes. (xNVSE answers false whatever it did.)
+/// entry with no lists taken out of the changes. (xNVSE answers false whatever it did.) Without
+/// changes, their data or an entry list xNVSE reads through a null pointer; here nothing is done.
 fn changes_remove(e: &mut Engine, changes: u32, item: u32, list: u32) {
+    if changes == 0 {
+        return;
+    }
     let data = e.mem.u32(changes + CHANGES_DATA);
+    if data == 0 || e.mem.u32(data) == 0 {
+        return;
+    }
     let objects = e.mem.u32(data);
     let mut i = 0;
     while i < list_count(e, objects) {
@@ -651,10 +658,11 @@ fn changes_remove(e: &mut Engine, changes: u32, item: u32, list: u32) {
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), InventoryReference.cpp: MoveToContainer.
-/// Moves the stack to `dest` when it is released (deferred).
+/// Moves the stack to `dest` when it is released (deferred). A `dest` without container changes
+/// gets empty ones first (xNVSE's `GetForRef`).
 pub fn move_to_container(e: &mut Engine, id: u32, dest: u32) -> bool {
-    let dest_changes = get_by_type(e, dest + REFR_EXTRA, EXTRA_CONTAINER_CHANGES);
-    if dest_changes == 0 || !validate(e, id) {
+    changes_for_ref(e, dest);
+    if !validate(e, id) {
         return false;
     }
     let Some(r) = state(e).refs.get(&id) else {
@@ -666,6 +674,154 @@ pub fn move_to_container(e: &mut Engine, id: u32, dest: u32) -> bool {
     }
     push_deferred(e, id, Action::Remove, data, dest);
     true
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), InventoryReference.cpp: CopyToContainer.
+/// Adds a copy of the stack (a new extra data list copied from the temporary reference's, not
+/// worn) to `dest`'s changes, at once. With `want_ref`, also an inventory reference for the copy
+/// (its temporary reference; xNVSE's `outInvRef`). False when `dest`'s changes have no data, as a
+/// `dest` that had none gets (the new list is then left unused, as in xNVSE).
+pub fn copy_to_container(e: &mut Engine, id: u32, dest: u32, want_ref: bool) -> (bool, u32) {
+    let changes = changes_for_ref(e, dest);
+    if !validate(e, id) {
+        return (false, 0);
+    }
+    let refr = state(e).refs.get(&id).map_or(0, |r| r.temp_ref);
+    if refr == 0 {
+        return (false, 0);
+    }
+    let list = e.call(FORM_HEAP_ALLOCATE, &args![EXTRA_LIST_SIZE]).u32();
+    e.mem.write(list, &[0u8; EXTRA_LIST_SIZE as usize]);
+    e.mem.set_u32(list, EXTRA_LIST_VTBL);
+    e.call(EXTRA_COPY, &args![list, refr + REFR_EXTRA]);
+    e.call(EXTRA_REMOVE_BY_TYPE, &args![list, EXTRA_WORN]);
+    let item = e.mem.u32(refr + REFR_BASE_FORM);
+    let (extend, entry) = changes_add(e, changes, item, list);
+    if extend == 0 {
+        return (false, 0);
+    }
+    let copy = if want_ref {
+        create(
+            e,
+            dest,
+            Data {
+                item,
+                entry,
+                xdata: list,
+            },
+            false,
+        )
+    } else {
+        0
+    };
+    (true, copy)
+}
+
+// ---- xNVSE's own container changes code (GameExtraData.cpp, GameTypes.h) ----
+
+/// `ExtraDataList` and `ExtraContainerChanges`: vtable and size (`s_ExtraDataListVtbl`,
+/// `s_ExtraContainerChangesVtbl` (xNVSE)); `BSExtraData::type` (`+4`).
+const EXTRA_LIST_VTBL: u32 = 0x0101_43e8;
+const EXTRA_LIST_SIZE: u32 = 0x20;
+const CHANGES_VTBL: u32 = 0x0101_5bb8;
+const CHANGES_SIZE: u32 = 0x10;
+const EXTRA_TYPE: u32 = 4;
+/// `BaseExtraList::Add(extra)`, `Copy(from)`, `RemoveByType(type)` (`thiscall`, the list).
+const EXTRA_ADD: u32 = 0x0040_ff60;
+const EXTRA_COPY: u32 = 0x0041_1ec0;
+const EXTRA_REMOVE_BY_TYPE: u32 = 0x0041_0140;
+
+/// A zeroed block of the form heap.
+fn heap_zeroed(e: &mut Engine, size: u32) -> u32 {
+    let block = e.call(FORM_HEAP_ALLOCATE, &args![size]).u32();
+    e.mem.write(block, &vec![0u8; size as usize]);
+    block
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameExtraData.cpp:
+// ExtraContainerChanges::GetForRef, ExtraContainerChanges::Create, BSExtraData::Create.
+/// A reference's container changes; when it has none, new ones with no data are added to its
+/// extra data list.
+pub fn changes_for_ref(e: &mut Engine, reference: u32) -> u32 {
+    let list = reference + REFR_EXTRA;
+    let found = get_by_type(e, list, EXTRA_CONTAINER_CHANGES);
+    if found != 0 {
+        return found;
+    }
+    let changes = heap_zeroed(e, CHANGES_SIZE);
+    e.mem.set_u32(changes, CHANGES_VTBL);
+    e.mem
+        .set_u8(changes + EXTRA_TYPE, EXTRA_CONTAINER_CHANGES as u8);
+    e.call(EXTRA_ADD, &args![list, changes]);
+    changes
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameTypes.h: tList::AddAt (at the end),
+// ListNode::Append.
+/// Puts `item` at the end of the `tList` at `list`: in the last node when it is empty, else in a
+/// new node after it.
+fn list_append(e: &mut Engine, list: u32, item: u32) {
+    if item == 0 {
+        return;
+    }
+    let mut node = list;
+    while e.mem.u32(node + 4) != 0 {
+        node = e.mem.u32(node + 4);
+    }
+    if e.mem.u32(node) == 0 {
+        e.mem.set_u32(node, item);
+        return;
+    }
+    let added = e.call(FORM_HEAP_ALLOCATE, &args![LIST_NODE_SIZE]).u32();
+    e.mem.set_u32(added, item);
+    e.mem.set_u32(added + 4, e.mem.u32(node + 4));
+    e.mem.set_u32(node + 4, added);
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameExtraData.cpp:
+// ExtraContainerChanges::Add, ExtraContainerChangesEntryDataListCreate, EntryData::Create,
+// EntryData::Add, ExtraContainerChangesExtendDataListCreate.
+/// Adds the extra data list `list` of `item` to the changes: the item's entry (a new one with a
+/// count of 0 at the end when there is none) gets the list at the end of its lists and its count
+/// raised by the list's count (1 without one). Answers the entry's lists and the entry; (0, 0)
+/// when the changes have no data. A new entry list starts with an empty entry, as xNVSE's
+/// default `ExtraContainerChangesEntryDataListCreate()` makes it.
+fn changes_add(e: &mut Engine, changes: u32, item: u32, list: u32) -> (u32, u32) {
+    let data = e.mem.u32(changes + CHANGES_DATA);
+    if data == 0 {
+        return (0, 0);
+    }
+    let mut entries = e.mem.u32(data);
+    if entries == 0 {
+        entries = heap_zeroed(e, LIST_NODE_SIZE);
+        let empty = heap_zeroed(e, ENTRY_SIZE);
+        list_append(e, entries, empty);
+        e.mem.set_u32(data, entries);
+    }
+    let mut entry = find_for_item(e, entries, item);
+    if entry == 0 {
+        entry = heap_zeroed(e, ENTRY_SIZE);
+        e.mem.set_u32(entry + ENTRY_TYPE, item);
+        list_append(e, entries, entry);
+    }
+    let mut extend = e.mem.u32(entry + ENTRY_EXTEND_DATA);
+    if extend != 0 {
+        list_append(e, extend, list);
+    } else {
+        extend = heap_zeroed(e, LIST_NODE_SIZE);
+        list_append(e, extend, list);
+        e.mem.set_u32(entry + ENTRY_EXTEND_DATA, extend);
+    }
+    let count = get_by_type(e, list, EXTRA_COUNT);
+    let added = if count != 0 {
+        i32::from(e.mem.u16(count + EXTRA_COUNT_VALUE) as i16)
+    } else {
+        1
+    };
+    let delta = e.mem.u32(entry + ENTRY_COUNT_DELTA) as i32;
+    e.mem
+        .set_u32(entry + ENTRY_COUNT_DELTA, delta.wrapping_add(added) as u32);
+    (extend, entry)
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), InventoryReference.cpp: SetEquipped.

@@ -1,7 +1,6 @@
 //! xNVSE's inventory reference commands (`Commands_InventoryRef.cpp` (xNVSE)), with ADR-0016's
 //! step I-12 (`crate::invref`): a container's stacks as temporary references, and the commands
-//! that act on one. Not here yet: `CopyIR` and `CopyIRAlt` (they add a stack to a container
-//! through xNVSE's own list code, with the inventory batch).
+//! that act on one.
 
 use crate::args::extract_args_ex;
 use crate::invref::{self, Data};
@@ -11,7 +10,8 @@ use crate::{handled, CommandArgs};
 use engine_core::prelude::*;
 use std::collections::HashMap;
 
-/// `kParams_OneOptionalContainerRef`, `kParams_OneObjectID` (xNVSE).
+/// `kParams_OneOptionalContainerRef`, `kParams_OneObjectID` (xNVSE). `kParams_OneContainerRef`
+/// (`CopyIR`, `CopyIRAlt`) is the same: its one parameter is optional too.
 const ONE_OPTIONAL_CONTAINER: &[Param] = &[Param {
     name: "containerRef",
     kind: 0x1a,
@@ -46,6 +46,28 @@ pub static COMMANDS: &[Command] = &[
         execute: remove_me_ir,
         eval: None,
         returns: Returns::Default,
+    },
+    Command {
+        opcode: 0x1500,
+        name: "CopyIR",
+        short: "",
+        help: "copies an inventory reference to the specified container. The calling object needn't be in a container and remains valid after the command is called. If the calling object is equipped, the copy will not be equipped.",
+        needs_ref: true,
+        params: ONE_OPTIONAL_CONTAINER,
+        execute: copy_ir,
+        eval: None,
+        returns: Returns::Default,
+    },
+    Command {
+        opcode: 0x1667,
+        name: "CopyIRAlt",
+        short: "",
+        help: "copies an inventory reference to the specified container. The calling object needn't be in a container and remains valid after the command is called. If the calling object is equipped, the copy will not be equipped.",
+        needs_ref: true,
+        params: ONE_OPTIONAL_CONTAINER,
+        execute: copy_ir_alt,
+        eval: None,
+        returns: Returns::Form,
     },
     Command {
         opcode: 0x1501,
@@ -143,6 +165,48 @@ fn remove_me_ir(e: &mut Engine, w: &[u32]) -> Ret {
                     invref::remove_from_container(e, id)
                 };
                 a.set_result(e, if done { 1.0 } else { 0.0 });
+            }
+        }
+    }
+    handled(true)
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_InventoryRef.cpp:
+// Cmd_CopyIR_Execute.
+fn copy_ir(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    a.set_result(e, 0.0);
+    if a.this_obj != 0 {
+        let id = e.mem.u32(a.this_obj + FORM_ID);
+        if invref::for_ref_id(e, id) {
+            if let Some(dest) = reference_arg(e, &a).filter(|&d| d != 0) {
+                let (done, _) = invref::copy_to_container(e, id, dest, false);
+                a.set_result(e, if done { 1.0 } else { 0.0 });
+            }
+        }
+    }
+    handled(true)
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_InventoryRef.cpp:
+// Cmd_CopyIRAlt_Execute.
+/// The copy's inventory reference. When the copy fails xNVSE reads an uninitialised pointer;
+/// here the result stays 0.
+fn copy_ir_alt(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    e.mem.set_u32(a.result, 0);
+    if a.this_obj != 0 {
+        let id = e.mem.u32(a.this_obj + FORM_ID);
+        if invref::for_ref_id(e, id) {
+            if let Some(dest) = reference_arg(e, &a).filter(|&d| d != 0) {
+                let (_, copy) = invref::copy_to_container(e, id, dest, true);
+                if copy != 0 {
+                    let copy_id = e.mem.u32(copy + FORM_ID);
+                    let refr = invref::get_ref(e, copy_id);
+                    if refr != 0 {
+                        a.set_form_result(e, e.mem.u32(refr + FORM_ID));
+                    }
+                }
             }
         }
     }

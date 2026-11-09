@@ -33,6 +33,12 @@
 //!   events the game marks (`005ac750`, wrapped), the save, load and exit messages, and the
 //!   commands (`SetEventHandler`, `SetEventHandlerAlt`, `RemoveEventHandler`, `DispatchEvent`,
 //!   `DispatchEventAlt`, `GetCurrentEventName`, `GetEventHandlers`, the priority queries).
+//! - I-12 [`invref`], [`commands::inventory_ref`]: inventory references (a container's stacks
+//!   as temporary references, gone each frame and before a load, with their deferred equips and
+//!   removals), `ForEach` over a container, `GetSoldItemInvRef` and OnRepair's reference. Of
+//!   xNVSE's form extra data only OnCellRefsLoaded's mark is used so far (a set of cells,
+//!   [`call_sites`]); its script token cache comes with I-14, its plugin interface with native
+//!   plugins.
 //! - [`commands`]: the commands built so far, by xNVSE's `Commands_*.cpp` file.
 //!
 //! [`install`] runs once per engine, after the fix rows (`host::Host::start_with`); the engine

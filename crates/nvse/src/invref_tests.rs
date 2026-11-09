@@ -293,3 +293,122 @@ fn the_sold_item_is_its_first_stack() {
     clear_sold(&mut e);
     assert_eq!(sold_item_ref(&mut e), 0);
 }
+
+/// `BaseExtraList::Add`: the extra data at the head of the list, marked present.
+fn extra_add(e: &mut Engine, a: &[u32]) -> Ret {
+    let kind = u32::from(e.mem.u8(a[1] + 4));
+    add_extra(e, a[0], a[1], kind);
+    eax(a[1])
+}
+
+/// `BaseExtraList::Copy`: the source's data words (the chain shared, enough here).
+fn extra_copy(e: &mut Engine, a: &[u32]) -> Ret {
+    let mut bytes = [0u8; 0x1c];
+    e.mem.read(a[1] + 4, &mut bytes);
+    e.mem.write(a[0] + 4, &bytes);
+    Ret::default()
+}
+
+fn extra_remove_by_type(_: &mut Engine, a: &[u32]) -> Ret {
+    log("remove type", a);
+    Ret::default()
+}
+
+/// A second container: a reference with container changes whose data has no entry list yet.
+const DEST: u32 = AREA + 0x5000;
+const DEST_CHANGES: u32 = AREA + 0x5100;
+const DEST_DATA: u32 = AREA + 0x5200;
+
+fn copy_engine() -> Engine {
+    let mut e = engine();
+    e.register(EXTRA_ADD, extra_add);
+    e.register(EXTRA_COPY, extra_copy);
+    e.register(EXTRA_REMOVE_BY_TYPE, extra_remove_by_type);
+    e.mem.set_u32(DEST, CONTAINER_VTABLE);
+    add_extra(
+        &mut e,
+        DEST + REFR_EXTRA,
+        DEST_CHANGES,
+        EXTRA_CONTAINER_CHANGES,
+    );
+    e.mem.set_u32(DEST_CHANGES + 0xc, DEST_DATA);
+    e
+}
+
+/// `CopyToContainer` into changes without an entry list: the new list starts with xNVSE's empty
+/// entry, then the item's entry (count 0 + 1) holding a new extra data list copied from the
+/// temporary reference's with the worn flag removed; the copy's own inventory reference
+/// (`CopyIRAlt`) stands for that list.
+#[test]
+fn a_copy_gets_a_new_list_in_a_new_entry() {
+    let mut e = copy_engine();
+    let refr = create_entry(&mut e, CONTAINER, ITEM_A, 1, X_B);
+    let id = id_of(&e, refr);
+    calls();
+    let (done, copy) = copy_to_container(&mut e, id, DEST, true);
+    assert!(done);
+    let entries = e.mem.u32(DEST_DATA);
+    let empty = e.mem.u32(entries);
+    assert_eq!(
+        (e.mem.u32(empty), e.mem.u32(empty + 4), e.mem.u32(empty + 8)),
+        (0, 0, 0),
+        "the empty first entry"
+    );
+    let node = e.mem.u32(entries + 4);
+    let entry = e.mem.u32(node);
+    assert_eq!(e.mem.u32(entry + ENTRY_TYPE), ITEM_A);
+    assert_eq!(e.mem.u32(entry + ENTRY_COUNT_DELTA), 1);
+    let list = e.mem.u32(e.mem.u32(entry + ENTRY_EXTEND_DATA));
+    assert_eq!(e.mem.u32(list), EXTRA_LIST_VTBL);
+    assert_eq!(e.mem.u32(list + 4), WORN_B, "the reference's data copied");
+    assert_eq!(calls(), [("remove type", vec![list, EXTRA_WORN])]);
+    let copy_id = id_of(&e, copy);
+    let r = get(&mut e, copy_id).unwrap();
+    assert_eq!(
+        (r.container, r.data.item, r.data.entry, r.data.xdata),
+        (DEST, ITEM_A, entry, list)
+    );
+    // Again: the same entry, the second list after the first, the count 2.
+    let (done, _) = copy_to_container(&mut e, id, DEST, false);
+    assert!(done);
+    assert_eq!(e.mem.u32(entry + ENTRY_COUNT_DELTA), 2);
+    let lists = list_items(&e, e.mem.u32(entry + ENTRY_EXTEND_DATA));
+    assert_eq!((lists.len(), lists[0]), (2, list));
+}
+
+/// Into the container's own entry of the item: the list goes after its lists, the count from
+/// -1 to 0 (the copied data has no count: 1).
+#[test]
+fn a_copy_joins_the_items_entry() {
+    let mut e = copy_engine();
+    let refr = create_entry(&mut e, CONTAINER, ITEM_A, 1, X_B);
+    let id = id_of(&e, refr);
+    let (done, copy) = copy_to_container(&mut e, id, CONTAINER, false);
+    assert!(done);
+    assert_eq!(copy, 0);
+    assert_eq!(e.mem.u32(ENTRY_A + ENTRY_COUNT_DELTA), 0);
+    let lists = list_items(&e, LISTS_A);
+    assert_eq!(lists.len(), 3);
+    assert_eq!(&lists[..2], [X_A, X_B]);
+}
+
+/// A destination without container changes gets new ones (no data) added to its list, as
+/// xNVSE's `GetForRef` does; the copy then fails. `MoveToContainer` adds them the same way and
+/// still defers the move.
+#[test]
+fn a_destination_without_changes_gets_empty_ones() {
+    let mut e = copy_engine();
+    let other = AREA + 0x6000;
+    e.mem.set_u32(other, CONTAINER_VTABLE);
+    let refr = create_entry(&mut e, CONTAINER, ITEM_A, 1, X_A);
+    let id = id_of(&e, refr);
+    assert_eq!(copy_to_container(&mut e, id, other, true), (false, 0));
+    let changes = e.mem.u32(other + REFR_EXTRA + 4);
+    assert_eq!(e.mem.u32(changes), CHANGES_VTBL);
+    assert_eq!(u32::from(e.mem.u8(changes + 4)), EXTRA_CONTAINER_CHANGES);
+    assert_eq!(e.mem.u32(changes + CHANGES_DATA), 0);
+    let third = AREA + 0x6100;
+    e.mem.set_u32(third, CONTAINER_VTABLE);
+    assert!(move_to_container(&mut e, id, third));
+    assert_ne!(e.mem.u32(third + REFR_EXTRA + 4), 0);
+}
