@@ -10,6 +10,8 @@
 //! write to the device goes through the same calls in the same order: the D3D9 stream is the
 //! translation's. Floats use the exact x87 helpers, the same under either control word.
 
+#![allow(clippy::cast_possible_truncation, clippy::too_many_arguments)]
+
 use super::{accumulator, constants, state, FAMILY};
 use engine_core::prelude::*;
 
@@ -492,15 +494,6 @@ fn fn_00b798c0(e: &mut Engine, _this: Ptr, object: Ptr) {
     }
 }
 
-/// The vertex shader of the current pass's +0x5c: its device (+0x20) gets `count` float
-/// constants from `register` at `data` (the device's vtable +0x178).
-fn set_vertex_constants(e: &mut Engine, register: u32, data: u32, count: u32) {
-    let pass = e.global::<u32>(CURRENT_PASS_0126F74C);
-    let shader = e.mem.u32(pass + 0x5c);
-    let device = e.mem.u32(shader + 0x20);
-    e.vcall(device, 0x178, &args![register, data, count]);
-}
-
 /// The eye position the shaders use (`011fa2a0`, three floats), the two vectors
 /// `SetupGeometryConstants_EyePos` writes (`011fd894`, `011fd8a4`), the point unitize
 /// `004a0c10` (unnamed, `thiscall` on the point) and the D3DX import thunk
@@ -727,190 +720,10 @@ fn shadow_light_shader_setup_geometry_constants_obj_to_cube(
     });
 }
 
-/// The scaled colour of a light as the shaders compute it, from the light object (its scale at
-/// +0xd0) and its data (the strength +0xc4, at most 1.0 without HDR, and the colour +0xd4 to
-/// +0xdc): (colour * strength) * scale for each channel, each x87 step and float store in the
-/// exe's order and operand order.
-fn light_colour(e: &Engine, light: u32, values: u32) -> [u32; 3] {
-    let strength_bits = copy_float(e, values + 0xc4);
-    let mut strength = x87_load32(strength_bits);
-    if e.global::<u8>(HDR_011F941E) == 0 && strength > e.global::<f64>(ONE_01012070) {
-        strength = x87_load32(1.0f32.to_bits());
-    }
-    let scale_bits = copy_float(e, light + 0xd0);
-    let red = e.mem.u32(values + 0xd4);
-    let green = e.mem.u32(values + 0xd8);
-    let blue = e.mem.u32(values + 0xdc);
-    let red_strength = x87_store32(x87_mul(x87_load32(red), strength));
-    let green_strength = x87_store32(x87_mul(x87_load32(green), strength));
-    let blue_strength = x87_store32(x87_mul(strength, x87_m32(blue)));
-    let scale = x87_load32(scale_bits);
-    [
-        x87_store32(x87_mul(x87_load32(red_strength), scale)),
-        x87_store32(x87_mul(scale, x87_m32(green_strength))),
-        x87_store32(x87_mul(scale, x87_m32(blue_strength))),
-    ]
-}
-
 /// The camera object (`011f91c8`; its position at +0x1e4) and the light vectors the light
 /// loops write and upload (`011fd9a8`, 0x10 bytes per light).
 const CAMERA_OBJECT_011F91C8: u32 = 0x011f_91c8;
 const LIGHT_VECTORS_011FD9A8: u32 = 0x011f_d9a8;
-
-/// One light of the light loops (`00b7c850`, `00b7cb00`): light `index` of the rendering pass
-/// (`011f91e0` +0xc) and its data (+0xf8). Its position (+0x8c) plus the camera object's
-/// (`011f91c8` +0x1e4), transformed by `matrix` (`D3DXVec3TransformCoord`), with its radius
-/// (+0xe0) over `scale` goes to `011fd9a8` row `index` and is uploaded as vertex constant 0x19 +
-/// index; row `index` of `011fa0c0` takes the scaled colour and `fourth`.
-fn light_row(e: &mut Engine, rendering: u32, index: u32, matrix: u32, scale: u32, fourth: u32) {
-    let lights = e.mem.u32(rendering + 0xc);
-    let light = e.mem.u32(lights.wrapping_add(index * 4));
-    let values = e.mem.u32(light + 0xf8);
-    let camera = e.global::<u32>(CAMERA_OBJECT_011F91C8);
-    e.with_stack(0x18, |e, frame| {
-        let frame = frame.addr();
-        let position = frame;
-        let transformed = frame + 0xc;
-        for axis in 0..3u32 {
-            let coordinate = x87_load32(e.mem.u32(values + 0x8c + 4 * axis));
-            let offset = x87_m32(e.mem.u32(camera + 0x1e4 + 4 * axis));
-            let value = x87_store32(x87_add(coordinate, offset));
-            e.mem.set_u32(position + 4 * axis, value);
-        }
-        e.call(VEC3_TRANSFORM_COORD, &args![transformed, position, matrix]);
-        let radius = x87_load32(e.mem.u32(values + 0xe0));
-        let range = x87_store32(x87_div(radius, x87_m32(scale)));
-        let row = LIGHT_VECTORS_011FD9A8 + index * 0x10;
-        for axis in 0..3u32 {
-            let value = copy_float(e, transformed + 4 * axis);
-            e.mem.set_u32(row + 4 * axis, value);
-        }
-        e.mem.set_u32(row + 0xc, x87_quiet_bits(range));
-        set_vertex_constants(e, index + 0x19, row, 1);
-    });
-    let colour = light_colour(e, light, values);
-    let row = ROWS_011FA0C0 + index * 0x10;
-    for (axis, value) in colour.iter().enumerate() {
-        e.mem.set_u32(row + 4 * axis as u32, x87_quiet_bits(*value));
-    }
-    e.mem.set_u32(row + 0xc, fourth);
-}
-
-/// `9.0` (`01050c98`), `99.0` (`010af450`) and `30.0` (`01018f5c`), the constants the light
-/// loops use.
-const NINE_01050C98: u32 = 0x0105_0c98;
-const NINETY_NINE_010AF450: u32 = 0x010a_f450;
-const THIRTY_01018F5C: u32 = 0x0101_8f5c;
-
-/// The light count byte of the rendering pass (+9) less one, as a float (`FILD`, `FSUB` 1.0).
-fn light_count_less_one(e: &Engine, rendering: u32) -> u32 {
-    let count = f64::from(e.mem.u8(rendering + 9));
-    x87_store32(x87_sub(count, e.global::<f64>(ONE_01012070)))
-}
-
-// Typed from 00b7c850
-/// Unnamed in the engine map (`shadowlightshader.cpp`), `stdcall` with two words: a matrix and a
-/// float (the radius divisor). Vertex constant 0x19 becomes (9, 9, 9, n - 1) with n the
-/// rendering pass's light count (+9); pixel entry 2's register count (+0x20) n - 1, and pixel
-/// entry 7's when enabled. Lights 1 to n - 1 then each get their row (`light_row`) with n - 1
-/// as the fourth colour word.
-fn fn_00b7c850(e: &mut Engine, matrix: u32, scale: u32) {
-    let rendering = e.global::<u32>(RENDERING_PASS_011F91E0);
-    let less_one = light_count_less_one(e, rendering);
-    e.with_stack(0x10, |e, constant| {
-        let constant = constant.addr();
-        let nine = copy_float(e, NINE_01050C98);
-        for index in 0..3u32 {
-            e.mem.set_u32(constant + 4 * index, nine);
-        }
-        e.mem.set_u32(constant + 0xc, x87_quiet_bits(less_one));
-        set_vertex_constants(e, 0x19, constant, 1);
-    });
-    let count = u32::from(e.mem.u8(rendering + 9)).wrapping_sub(1);
-    let entry = e.global::<u32>(PIXEL_ENTRIES_011FEC30 + 4 * 2);
-    e.mem.set_u32(entry + 0x20, count);
-    let entry = e.global::<u32>(PIXEL_ENTRIES_011FEC30 + 4 * 7);
-    if e.mem.u8(entry + 8) != 0 {
-        let count = u32::from(e.mem.u8(rendering + 9)).wrapping_sub(1);
-        e.mem.set_u32(entry + 0x20, count);
-    }
-    let less_one = light_count_less_one(e, rendering);
-    let fourth = x87_quiet_bits(less_one);
-    let mut index: u8 = 1;
-    if e.mem.u8(rendering + 9) > 1 {
-        loop {
-            light_row(e, rendering, u32::from(index), matrix, scale, fourth);
-            index = index.wrapping_add(1);
-            if index >= e.mem.u8(rendering + 9) {
-                break;
-            }
-        }
-    }
-}
-
-/// Row 2 of `011fa0c0` (`011fa0e0`), which the second light loop sets when there are only two
-/// lights (the loop then fills only row 1).
-const FAR_PLANE_011FA0E0: u32 = 0x011f_a0e0;
-
-// Typed from 00b7cb00
-/// Unnamed in the engine map (`shadowlightshader.cpp`), `stdcall` with three words: a matrix, a
-/// float (the radius divisor) and an object (a float at +0x38) or null. Vertex constant 0x19
-/// becomes (99, 99, 99, the float the rendering pass's first object's +0xa8 answers from its
-/// vtable +0x10c); pixel entry 2's register count max(2, n - 1) and pixel entry 7's n - 1 when
-/// enabled. Lights 1 to n - 1 each get their row (`light_row`): the first with n - 1 as the
-/// fourth colour word, the later ones with the object's float (30.0 without one). With exactly
-/// two lights row 2 (`011fa0e0`) becomes (0, 0, 0, that float).
-fn fn_00b7cb00(e: &mut Engine, matrix: u32, scale: u32, object: u32) {
-    let rendering = e.global::<u32>(RENDERING_PASS_011F91E0);
-    let holder = e.mem.u32(rendering);
-    let source = e.mem.u32(holder + 0xa8);
-    let value = e.vcall(source, 0x10c, &args![]).f64();
-    let value = x87_store32(value);
-    e.with_stack(0x10, |e, constant| {
-        let constant = constant.addr();
-        let ninety_nine = copy_float(e, NINETY_NINE_010AF450);
-        for index in 0..3u32 {
-            e.mem.set_u32(constant + 4 * index, ninety_nine);
-        }
-        e.mem.set_u32(constant + 0xc, x87_quiet_bits(value));
-        set_vertex_constants(e, 0x19, constant, 1);
-    });
-    let mut count = u32::from(e.mem.u8(rendering + 9)).wrapping_sub(1);
-    if (count as i32) < 2 {
-        count = 2;
-    }
-    let entry = e.global::<u32>(PIXEL_ENTRIES_011FEC30 + 4 * 2);
-    e.mem.set_u32(entry + 0x20, count);
-    let entry = e.global::<u32>(PIXEL_ENTRIES_011FEC30 + 4 * 7);
-    if e.mem.u8(entry + 8) != 0 {
-        let count = u32::from(e.mem.u8(rendering + 9)).wrapping_sub(1);
-        e.mem.set_u32(entry + 0x20, count);
-    }
-    let far = if object != 0 {
-        copy_float(e, object + 0x38)
-    } else {
-        copy_float(e, THIRTY_01018F5C)
-    };
-    let mut fourth = light_count_less_one(e, rendering);
-    let mut index: u8 = 1;
-    if e.mem.u8(rendering + 9) > 1 {
-        loop {
-            let word = x87_quiet_bits(fourth);
-            light_row(e, rendering, u32::from(index), matrix, scale, word);
-            fourth = x87_quiet_bits(far);
-            index = index.wrapping_add(1);
-            if index >= e.mem.u8(rendering + 9) {
-                break;
-            }
-        }
-    }
-    if e.mem.u8(rendering + 9) == 2 {
-        for offset in [0u32, 4, 8] {
-            e.set_global(FAR_PLANE_011FA0E0 + offset, 0u32);
-        }
-        e.set_global(FAR_PLANE_011FA0E0 + 0xc, x87_quiet_bits(far));
-    }
-}
 
 /// The D3DX import thunks the clip planes use (unnamed in the engine map; `stdcall`):
 /// `00ee6dce` (plane normalize: out, plane) and `00ee6dc8` (plane transform: out, plane,
