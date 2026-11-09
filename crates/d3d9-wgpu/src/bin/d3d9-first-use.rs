@@ -13,7 +13,9 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let path = args.next().expect("the recording");
     let shaders_dir = args.next().filter(|a| a != "-");
-    let from: u64 = args.next().map_or(0, |a| a.parse().expect("FROM: a present"));
+    let from: u64 = args
+        .next()
+        .map_or(0, |a| a.parse().expect("FROM: a present"));
     let mut names: HashMap<Vec<u8>, String> = HashMap::new();
     if let Some(dir) = shaders_dir {
         let mut files: Vec<_> = std::fs::read_dir(&dir)
