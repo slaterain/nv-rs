@@ -13,6 +13,7 @@ OUT="${1:-$ROOT/distribution/nv-rs-sections.ini}"
   echo "; nv-rs's own options. Only nv-rs reads these sections; the original game never asks for them."
   echo "; Lines starting with ; are notes. A key nv-rs does not know is passed over, as the game does."
   awk -F'\t' '
+    { sub(/\r$/, "") }
     /^#/ || NF == 0 { next }
     {
       if ($1 != section) {

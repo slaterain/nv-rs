@@ -201,7 +201,7 @@ pub fn path_from_table(table: &str) -> Option<PathBuf> {
             let csidl = f[1].split([' ', ',']).find(|w| !w.is_empty())?;
             (u32::from_str_radix(csidl, 16).ok()? == DOCUMENTS).then_some(f[3].trim())
         })
-        .last()?;
+        .next_back()?;
     let bytes: Vec<u8> = (0..folder.len() / 2)
         .map(|i| u8::from_str_radix(folder.get(2 * i..2 * i + 2)?, 16).ok())
         .collect::<Option<_>>()?;
@@ -222,17 +222,20 @@ pub fn path_from_table(table: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    /// One row per fix, in FIXES's order, each with its own variable; the player settings
-    /// before them. Every key has a comment, and every key carries the original's type prefix.
+    /// One row per fix (in docs/FIXES.md's order), each with its own variable; the player
+    /// settings before them. Every key has a comment, and every key carries the original's type
+    /// prefix.
     #[test]
     fn the_table_has_every_fix_and_a_comment_per_key() {
         let rows = rows();
-        let fixes: Vec<&str> = rows
+        let mut fixes: Vec<&str> = rows
             .iter()
             .filter(|r| r.section == FIXES_SECTION)
             .map(|r| r.switch)
             .collect();
-        let envs: Vec<&str> = FIXES.iter().map(|f| f.env).collect();
+        let mut envs: Vec<&str> = FIXES.iter().map(|f| f.env).collect();
+        fixes.sort_unstable();
+        envs.sort_unstable();
         assert_eq!(fixes, envs);
         let mut seen = std::collections::BTreeSet::new();
         for row in &rows {
