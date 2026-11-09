@@ -182,18 +182,14 @@ impl Real {
 }
 
 fn real(e: &mut Engine) -> &mut Real {
-    debug_assert!(
-        engine_core::real_threads::device_lock_held(e),
-        "the Direct3D 9 state reached without the device lock"
-    );
-    &mut state!(e).graphics.real
+    &mut device!(e).real
 }
 
 /// The real window of a modelled window handle, when it has one (under the device lock with real
 /// threads: the window functions make them, the device presents in them).
 pub fn real_window(e: &Engine, handle: u32) -> Option<isize> {
     let _device = engine_core::real_threads::device_guard(e);
-    state_ref!(e).graphics.real.windows.get(&handle).copied()
+    device_ref!(e).real.windows.get(&handle).copied()
 }
 
 /// Prints once a call the game's side could not forward (`NV_D3D9=real: ...`, as the backend
@@ -255,8 +251,7 @@ fn call(e: &mut Engine, cmd: Cmd<Data<'_>>) -> Option<Reply> {
 /// failed, or the backend has no such device.
 pub fn real_device(e: &Engine, this: u32) -> Option<IDirect3DDevice9> {
     let _device = engine_core::real_threads::device_guard(e);
-    state_ref!(e)
-        .graphics
+    device_ref!(e)
         .real
         .devices
         .iter()
@@ -268,8 +263,7 @@ pub fn real_device(e: &Engine, this: u32) -> Option<IDirect3DDevice9> {
 /// takes no device, the image info).
 pub fn any_real_device(e: &Engine) -> bool {
     let _device = engine_core::real_threads::device_guard(e);
-    state_ref!(e)
-        .graphics
+    device_ref!(e)
         .real
         .devices
         .iter()
@@ -299,7 +293,7 @@ pub fn forget(e: &mut Engine, object: u32) {
 
 /// Whether the modelled object's counterpart was asked of the backend.
 fn is_forwarded(e: &Engine, object: u32) -> bool {
-    state_ref!(e).graphics.real.forwarded.contains(&object)
+    device_ref!(e).real.forwarded.contains(&object)
 }
 
 // The window.
@@ -1416,7 +1410,7 @@ pub fn surface_created(
 /// Whether the modelled surface `surface` has a real counterpart (asked of the backend; one it
 /// could not make keeps its bytes there, so the level reads back what it was given either way).
 pub fn has_surface(e: &Engine, surface: u32) -> bool {
-    state_ref!(e).graphics.real.forwarded.contains(&surface)
+    device_ref!(e).real.forwarded.contains(&surface)
 }
 
 /// The modelled `surface` as the backend keeps it read into engine memory at `at` (`size`
@@ -1473,8 +1467,9 @@ pub fn surface_unlocked(
     if !has_surface(e, surface) {
         return false;
     }
+    let held = crate::device_held(e);
     let mem = &e.mem;
-    let r = &mut crate::state_mut(&mut e.kernel.platform).graphics.real;
+    let r = &mut crate::device_mut(&mut e.device, held).real;
     let Some(s) = r.stream.as_mut() else {
         return false;
     };
@@ -1542,8 +1537,9 @@ pub fn buffer_unlocked(e: &mut Engine, buffer: u32, bits: u32, length: u32, mode
     if model != 0 {
         return;
     }
+    let held = crate::device_held(e);
     let mem = &e.mem;
-    let r = &mut crate::state_mut(&mut e.kernel.platform).graphics.real;
+    let r = &mut crate::device_mut(&mut e.device, held).real;
     let Some((offset, size, flags)) = r.locks.get_mut(&buffer).and_then(|l| l.pop()) else {
         return;
     };
@@ -1653,8 +1649,9 @@ pub fn set_constants(
     if data == 0 {
         return;
     }
+    let held = crate::device_held(e);
     let mem = &e.mem;
-    let g = &mut crate::state_mut(&mut e.kernel.platform).graphics;
+    let g = crate::device_mut(&mut e.device, held);
     let Some(s) = stream_of(&mut g.real, this) else {
         return;
     };
@@ -1813,8 +1810,9 @@ pub fn draw_primitive_up(
     model: u32,
 ) {
     let _ = model;
+    let held = crate::device_held(e);
     let mem = &e.mem;
-    let r = &mut crate::state_mut(&mut e.kernel.platform).graphics.real;
+    let r = &mut crate::device_mut(&mut e.device, held).real;
     let Some(s) = stream_of(r, this) else { return };
     let read = |at: u32, into: &mut [u8]| mem.read(data + at, into);
     s.submit(Cmd::DrawPrimitiveUp {
@@ -3285,7 +3283,7 @@ mod tests {
             // Then the result reads at once.
             assert_eq!(query_get_data(&mut e, query, 0), Some((0, 0)));
         }
-        assert!(state!(e).graphics.real.logged_is_empty());
+        assert!(device!(e).real.logged_is_empty());
     }
 
     /// A level's rows read as if packed, from rows lying `pitch` apart.

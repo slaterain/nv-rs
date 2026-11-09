@@ -45,7 +45,9 @@
 //! ([`device_call`]); kernel-locked code that reaches the device's state takes it inside the
 //! kernel lock ([`device_guard`]). **Lock order: the kernel lock, then the device lock; never the
 //! kernel lock while the device lock is held.** Device functions touch no kernel object and no
-//! last-error code, so they never need the kernel lock.
+//! last-error code, so they never need the kernel lock; their state is the layer's device state,
+//! behind a pointer of its own (`Engine::device`, `units::platform::DeviceRef`), so they never
+//! make a reference to the kernel either.
 //!
 //! **The host (step 9).** [`start`] turns real threads on for an engine before the game's `main`
 //! runs; from then on `CreateThread` starts a real OS thread at once (or at `ResumeThread` to 0).
@@ -1053,9 +1055,10 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
     e.slice_left = 0;
     e.kernel.threads.wake_pending = false;
     e.kernel.threads.overrun = false;
-    // The kernel table, the memory and the world below live for good: game threads may still use
-    // them after the main engine is gone.
+    // The kernel table, the device state, the memory and the world below live for good: game
+    // threads may still use them after the main engine is gone.
     e.kernel.leak();
+    e.device.leak();
     e.mem.start_sharing();
     let world: &'static World = Box::leak(Box::new(World::new(e.kernel.import_names.clone())));
     let mut locked = AddrMap::default();
