@@ -90,6 +90,7 @@ pub mod units {
         engine_core::typed::provide(&crate::crt::CRT);
         engine_core::typed::provide(&crate::dispatch::DISPATCH);
         engine_core::typed::provide(&crate::render::RENDER);
+        crate::render::stream::note_head_check();
     }
 }
 

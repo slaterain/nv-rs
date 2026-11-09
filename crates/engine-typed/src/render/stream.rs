@@ -3,12 +3,24 @@
 //! batch renderer's draw (a shader's slot 0x6c) runs for each plain geometry.
 //!
 //! The translation of `00e812f0` also notes the geometry for the `NV_HEAD_CHECK` diagnostic (not exe
-//! behaviour); with this family on that diagnostic's notes are not taken (`NV_TYPED=render:off`).
+//! behaviour); with this family on that diagnostic's notes are not taken (`NV_TYPED=render:off`), and
+//! [`note_head_check`] says so once.
 
 use super::FAMILY;
 use crate::shader::state;
 use engine_core::ptr::Ptr;
 use engine_core::{args, typed_call, Engine};
+
+/// With `NV_HEAD_CHECK` set, one line saying this family's stream set-up takes none of that
+/// diagnostic's notes (the translation of `00e812f0` does): `NV_TYPED=render:off` for them.
+pub fn note_head_check() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    if std::env::var_os("NV_HEAD_CHECK").is_some() {
+        ONCE.call_once(|| {
+            println!("head check: the render family's stream set-up takes no notes; NV_TYPED=render:off for them");
+        });
+    }
+}
 
 /// `00e6d760` (`thiscall` on the renderer, a declaration word): the vertex declaration.
 const DECLARATION: u32 = 0x00e6_d760;

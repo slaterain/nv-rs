@@ -778,7 +778,9 @@ fn property_world(e: &mut Engine) -> (u32, u32, u32) {
 }
 
 /// `GetRenderPasses`: each special pass type and the main rebuild, with and without fades (the camera
-/// distance measured), a material, the shader level, the state matching the key, depth passes.
+/// distance measured), a material, the shader level, the state matching the key, depth passes; the
+/// special arrays as made, with their first pass's byte +9 set, or empty (their pass added); the bound
+/// centre and the shader's scale with low mantissa bits.
 #[test]
 fn render_passes() {
     Diff::new(entry!(
@@ -793,8 +795,10 @@ fn render_passes() {
         Input::Of(&[0, 1, 2]),
         Input::Of(TWO_WAYS),
         Input::Of(TWO_WAYS),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0x4120_0000, 0x4123_d70b, 0x3fb5_04f3]),
     ])
-    .max_cases(400)
+    .max_cases(600)
     // The point length's root: the translation of `004019b0` takes it plainly.
     .translation_calls_plainly(&[0x00b6_6760, 0x0040_19d0])
     .setup(|e, c| {
@@ -811,6 +815,29 @@ fn render_passes() {
         if c.word(5) != 0 {
             set(e, property + 0x38, (c.word(0) << 8) | 3);
         }
+        // The special arrays (depth map, constant alpha, silhouette): first pass's +9 set, or empty.
+        for at in [0x40, 0x44, 0x54] {
+            let array = e.mem.u32(property + at);
+            match c.word(6) {
+                1 => {
+                    let first = e.mem.u32(e.mem.u32(array + 4));
+                    e.mem.set_u8(first + 9, 1);
+                }
+                2 => set(e, array + 0x10, 0),
+                _ => {}
+            }
+        }
+        // The renderer's `+8` object's word `+0x1a0`, what a refreshed first pass gets.
+        let inner = e.mem.alloc(0x1a4);
+        set(e, inner + 0x1a0, 0x5151_0001);
+        let renderer = e.mem.alloc(0x10);
+        set(e, renderer + 8, inner);
+        set(e, 0x011f_4748, renderer);
+        // The bound centre's x and the shader's scale.
+        let bound = e.mem.u32(geometry + 0x20);
+        set(e, bound, c.word(7));
+        let shader = e.mem.u32(e.mem.u32(0x011f_95ec) + 8);
+        set(e, shader + 0x110, c.word(7));
         let count = e.mem.alloc(4);
         vec![
             property,
