@@ -279,6 +279,10 @@ save) should get.
   game (xNVSE 6.4.9 with JIP LN 57.30: `sv_Construct "refused [%Ld]" 5` ends it with
   0xC0000409, the next line never runs); the memory limit was measured in a 32-bit harness and
   moves a little from run to run.
+- **Input** (I-11): no row. xNVSE's DirectInput hook stops the game only on calls the game never
+  makes (a buffered read that peeks with records, a mouse read of another size, a record size other
+  than DirectInput 8's); every keyboard and mouse read the game makes goes through it as with
+  xNVSE, in both presets.
 
 ## Credits
 
