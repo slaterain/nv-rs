@@ -17,8 +17,10 @@ const RT_ICON: u16 = 3;
 const RT_GROUP_ICON: u16 = 14;
 const LANG_EN_US: u16 = 0x0409;
 
-/// One resource: the 32-byte header (numeric type and name), then the data padded to 4 bytes.
+/// One resource: the 32-byte header (numeric type and name), then the data padded to 4 bytes. The
+/// empty first entry has language 0, as resource compilers write it.
 fn entry(res: &mut Vec<u8>, kind: u16, name: u16, flags: u16, data: &[u8]) {
+    let language = if kind == 0 { 0 } else { LANG_EN_US };
     let size = u32::try_from(data.len()).expect("an icon image under 4 GB");
     res.extend_from_slice(&size.to_le_bytes());
     res.extend_from_slice(&32u32.to_le_bytes());
@@ -28,7 +30,7 @@ fn entry(res: &mut Vec<u8>, kind: u16, name: u16, flags: u16, data: &[u8]) {
     res.extend_from_slice(&name.to_le_bytes());
     res.extend_from_slice(&0u32.to_le_bytes()); // data version
     res.extend_from_slice(&flags.to_le_bytes());
-    res.extend_from_slice(&LANG_EN_US.to_le_bytes());
+    res.extend_from_slice(&language.to_le_bytes());
     res.extend_from_slice(&0u32.to_le_bytes()); // version
     res.extend_from_slice(&0u32.to_le_bytes()); // characteristics
     res.extend_from_slice(data);
@@ -64,12 +66,20 @@ fn main() {
     // The group: the .ico's directory with each image's file offset replaced by its resource id.
     let mut group = Vec::with_capacity(6 + 14 * count);
     group.extend_from_slice(&ico[0..6]);
+    assert!(
+        ico.len() >= 6 + 16 * count,
+        "nv-rs.ico's directory is cut short"
+    );
     for k in 0..count {
         let dir = 6 + 16 * k;
-        let size = u32_at(&ico, dir + 8) as usize;
-        let offset = u32_at(&ico, dir + 12) as usize;
+        let size = usize::try_from(u32_at(&ico, dir + 8)).expect("an image size");
+        let offset = usize::try_from(u32_at(&ico, dir + 12)).expect("an image offset");
+        let image = offset
+            .checked_add(size)
+            .and_then(|end| ico.get(offset..end))
+            .expect("nv-rs.ico: an image runs past the end of the file");
         let id = u16::try_from(k + 1).expect("fewer than 65535 images");
-        entry(&mut res, RT_ICON, id, 0x1010, &ico[offset..offset + size]);
+        entry(&mut res, RT_ICON, id, 0x1010, image);
         group.extend_from_slice(&ico[dir..dir + 12]);
         group.extend_from_slice(&id.to_le_bytes());
     }
