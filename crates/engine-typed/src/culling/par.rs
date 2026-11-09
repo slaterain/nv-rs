@@ -185,7 +185,9 @@ pub(crate) fn defer(e: &Engine, object: u32, process: u32, target: u32) -> bool 
                     saved.push(FadeState {
                         node: object,
                         flags: e.mem.u32(object.wrapping_add(FADE_FLAGS)),
-                        fields: e.mem.bytes(object.wrapping_add(FADE_FIELDS), FADE_FIELDS_SIZE),
+                        fields: e
+                            .mem
+                            .bytes(object.wrapping_add(FADE_FIELDS), FADE_FIELDS_SIZE),
                     });
                 }
             });
