@@ -343,6 +343,11 @@ impl Threaded {
     /// The chunk being recorded goes to the render thread (waking it if it sleeps); past the
     /// queue's limit, waits until the render thread has carried out half of it.
     fn hand_over(&mut self) {
+        // A stopped render thread stops the caller here even with nothing to hand over (a caller
+        // polling for a result the render thread will never give would spin otherwise).
+        if self.shared.dead.load(std::sync::atomic::Ordering::Relaxed) {
+            stopped(&lock(&self.shared.queue));
+        }
         if self.chunk.is_empty() {
             return;
         }

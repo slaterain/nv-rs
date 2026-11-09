@@ -51,19 +51,25 @@ pub struct SharedQuery(pub IDirect3DQuery9);
 // SAFETY: a query of a `D3DCREATE_MULTITHREADED` device takes calls from any thread.
 unsafe impl Send for SharedQuery {}
 
+/// One query on the [`QueryBoard`].
+pub struct BoardQuery {
+    /// Which of the queries made at this address it is: the backend's count of its `CreateQuery`s
+    /// there (a query destroyed and made again at the same address is another).
+    pub made: u64,
+    /// The real query; `None`: its creation failed.
+    pub query: Option<SharedQuery>,
+    /// The `D3DISSUE_END`s the backend has issued on it.
+    pub ends: u64,
+}
+
 /// With the render thread: the real queries, which the game's threads read without waiting for
-/// the render thread to catch up (`d3d9real::query_get_data`): by the modelled query, its real
-/// object (`None`: its creation failed) and how many of its `D3DISSUE_END`s the backend has
-/// carried out. A query the backend has not made yet is not in it.
+/// the render thread to catch up (`d3d9real::query_get_data`), by the modelled query. A query the
+/// backend has not made yet, or has destroyed, is not in it.
 #[derive(Default)]
-pub struct QueryBoard(
-    pub(crate) std::sync::Mutex<engine_core::AddrMap<u32, (Option<SharedQuery>, u64)>>,
-);
+pub struct QueryBoard(pub(crate) std::sync::Mutex<engine_core::AddrMap<u32, BoardQuery>>);
 
 impl QueryBoard {
-    pub(crate) fn lock(
-        &self,
-    ) -> std::sync::MutexGuard<'_, engine_core::AddrMap<u32, (Option<SharedQuery>, u64)>> {
+    pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, engine_core::AddrMap<u32, BoardQuery>> {
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -91,8 +97,10 @@ pub struct RealBackend {
     kept: engine_core::AddrMap<u32, Vec<u8>>,
     /// The differences already printed: (call, model's answer, real answer).
     pub(crate) logged: HashSet<(&'static str, u32, u32)>,
-    /// With the render thread: the queries the game's threads read ([`QueryBoard`]).
+    /// With the render thread: the queries the game's threads read ([`QueryBoard`]), and how
+    /// many queries it has made at each address.
     board: Option<std::sync::Arc<QueryBoard>>,
+    queries_made: engine_core::AddrMap<u32, u64>,
 }
 
 // SAFETY: the real objects are free-threaded COM objects of a `D3DCREATE_MULTITHREADED` device;
@@ -638,8 +646,8 @@ impl Backend for RealBackend {
                 }
                 if flags == ISSUE_END {
                     if let Some(board) = &self.board {
-                        if let Some((_, ends)) = board.lock().get_mut(&query) {
-                            *ends += 1;
+                        if let Some(q) = board.lock().get_mut(&query) {
+                            q.ends += 1;
                         }
                     }
                 }
@@ -1404,7 +1412,16 @@ impl RealBackend {
                     }
                 };
                 if let Some(board) = &self.board {
-                    board.lock().insert(query, (made, 0));
+                    let count = self.queries_made.entry(query).or_default();
+                    *count += 1;
+                    board.lock().insert(
+                        query,
+                        BoardQuery {
+                            made: *count,
+                            query: made,
+                            ends: 0,
+                        },
+                    );
                 }
             }
             other => unreachable!("{} is not a device's command", other.name()),

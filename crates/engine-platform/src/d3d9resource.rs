@@ -210,6 +210,10 @@ pub struct Resources {
 }
 
 fn resources(e: &mut Engine) -> &mut Resources {
+    debug_assert!(
+        engine_core::real_threads::device_lock_held(e),
+        "the Direct3D 9 state reached without the device lock"
+    );
     &mut state!(e).graphics.device_objects.resources
 }
 

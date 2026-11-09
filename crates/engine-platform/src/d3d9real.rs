@@ -73,6 +73,9 @@ pub struct Real {
     /// (`d3d9backend::QueryBoard`), and how many `D3DISSUE_END`s of each the game recorded.
     query_board: Option<std::sync::Arc<super::d3d9backend::QueryBoard>>,
     query_ends: engine_core::AddrMap<u32, u64>,
+    /// How many queries the game made at each address (the board's `made`: a query made again at
+    /// a destroyed one's address is not read as the old one).
+    queries_made: engine_core::AddrMap<u32, u64>,
     /// The game's side's notes already printed.
     logged: HashSet<&'static str>,
     /// Tests: the real backend behind the stream, to look at ([`real_texture`]).
@@ -108,6 +111,10 @@ impl Real {
 }
 
 fn real(e: &mut Engine) -> &mut Real {
+    debug_assert!(
+        engine_core::real_threads::device_lock_held(e),
+        "the Direct3D 9 state reached without the device lock"
+    );
     &mut state!(e).graphics.real
 }
 
@@ -756,7 +763,15 @@ pub fn direct3d_created(e: &mut Engine) {
     if !wanted() || real(e).stream.is_some() {
         return;
     }
-    let mut stream = if d3d9_stream::render_thread_wanted() {
+    // `NV_FACE_CHECK` (a diagnostic) follows calls in the game's order on its own thread: it keeps
+    // the calls on the game's threads, as diagnostics keep the threads stepped.
+    let refused = d3d9_stream::render_thread_wanted() && face_check::enabled();
+    if refused {
+        eprintln!(
+            "NV_D3D9=real: NV_RENDER_THREAD=1 is not taken with NV_FACE_CHECK: the calls stay on the game's threads"
+        );
+    }
+    let mut stream = if d3d9_stream::render_thread_wanted() && !refused {
         let settings = d3d9_stream::Settings::from_env();
         let board = std::sync::Arc::new(super::d3d9backend::QueryBoard::default());
         let backend = Box::new(super::d3d9backend::RealBackend::with_query_board(
@@ -825,14 +840,11 @@ pub fn device_created(
         eprintln!("NV_D3D9=real: CreateDevice: the game's window has no real window");
         return;
     };
-    // On the render thread the real device also takes the D3DX side channel's calls from the
-    // game's threads: it must lock itself (the game's flags have it: 0x54).
-    let threaded = real(e).stream.as_ref().is_some_and(Stream::is_threaded);
-    let behavior = if threaded {
-        behavior | MULTITHREADED
-    } else {
-        behavior
-    };
+    // The real device takes calls from more than one thread at once: the D3DX side channel's
+    // texture loading on the game's threads (thread 12) beside the device's own calls, under the
+    // device lock or on the render thread, not under one lock with them. It must lock itself: the
+    // game's own flags have that (0x54), and it is kept whatever flags a caller passes.
+    let behavior = behavior | MULTITHREADED;
     let reply = call(
         e,
         Cmd::CreateDevice {
@@ -1814,6 +1826,7 @@ pub fn query_created(e: &mut Engine, this: u32, query: u32, kind: u32) {
         kind,
     });
     r.forwarded.insert(query);
+    *r.queries_made.entry(query).or_default() += 1;
 }
 
 /// `D3DISSUE_END`, `D3DGETDATA_FLUSH`, `S_FALSE`.
@@ -1832,20 +1845,19 @@ pub fn query_issue(e: &mut Engine, query: u32, flags: u32) {
 /// without a real query.
 ///
 /// Carried out at once, it is the real query's answer after every earlier call. With the render
-/// thread (an improvement, not the original's order), a call without `D3DGETDATA_FLUSH` does not
-/// wait for the render thread to catch up, as a GPU's queries are answered: once the render thread
-/// has issued the game's last `END`, the real query answers (`S_FALSE` while the GPU is not done);
-/// before that the answer is `S_FALSE`, which Direct3D gives whenever the result is not in yet,
-/// and the commands recorded so far are handed over so it comes. A call with
-/// `D3DGETDATA_FLUSH` (a caller that waits for the result) waits for the render thread, as before.
+/// thread (an improvement, not the original's order) it does not wait for the render thread to
+/// catch up where it needs not: once the render thread has issued the game's last `END`, the real
+/// query answers at once, the same call with the same flags (`S_FALSE` while the GPU is not done).
+/// Before that, a call without `D3DGETDATA_FLUSH` answers `S_FALSE`, which Direct3D gives whenever
+/// the result is not in yet, and the commands recorded so far are handed over so it comes; a call
+/// with `D3DGETDATA_FLUSH` (the game's sun tests poll with it once a frame, its reference volumes
+/// in a loop until ready: `00b63540`, `00b63680`) waits for the render thread, as before.
 pub fn query_get_data(e: &mut Engine, query: u32, flags: u32) -> Option<(u32, u32)> {
     if !is_forwarded(e, query) {
         return None;
     }
-    if flags & GETDATA_FLUSH == 0 {
-        if let Some(answer) = query_without_waiting(real(e), query, flags) {
-            return answer;
-        }
+    if let Some(answer) = query_without_waiting(real(e), query, flags) {
+        return answer;
     }
     match call(e, Cmd::QueryGetData { query, flags }) {
         Some(Reply::Query(answer)) => answer,
@@ -1854,14 +1866,20 @@ pub fn query_get_data(e: &mut Engine, query: u32, flags: u32) -> Option<(u32, u3
 }
 
 /// [`query_get_data`] with the render thread, without waiting for it: `None` without the render
-/// thread (the call waits then).
+/// thread, or for a `D3DGETDATA_FLUSH` read whose `END` the real device has not issued yet (the
+/// call waits then).
 fn query_without_waiting(r: &mut Real, query: u32, flags: u32) -> Option<Option<(u32, u32)>> {
     let board = r.query_board.as_ref()?;
     let recorded = r.query_ends.get(&query).copied().unwrap_or(0);
+    let made = r.queries_made.get(&query).copied().unwrap_or(0);
     let ready = match board.lock().get(&query) {
-        // Its creation failed on the real device: no real query, as before.
-        Some((None, _)) => return Some(None),
-        Some((Some(q), done)) if *done >= recorded => Some(q.0.clone()),
+        // This query (not an earlier one at its address): its creation failed on the real
+        // device: no real query, as before; or its last `END` issued there.
+        Some(q) if q.made == made => match &q.query {
+            None => return Some(None),
+            Some(real) if q.ends >= recorded => Some(real.0.clone()),
+            Some(_) => None,
+        },
         // Not made, or the game's last `END` not issued, on the real device yet.
         _ => None,
     };
@@ -1872,6 +1890,7 @@ fn query_without_waiting(r: &mut Real, query: u32, flags: u32) -> Option<Option<
             }
             Some(Some(super::d3d9backend::query_data(&q, flags)))
         }
+        None if flags & GETDATA_FLUSH != 0 => None,
         None => {
             if let Some(s) = r.stream.as_mut() {
                 s.flush();
@@ -3066,10 +3085,26 @@ mod tests {
         assert_eq!(real(&mut e).query_ends.get(&0x10), Some(&1));
         // Not made on the real device yet.
         assert_eq!(query_get_data(&mut e, 0x10, 0), Some((S_FALSE, 0)));
+        // A reader that waits (D3DGETDATA_FLUSH) asks the backend after every earlier command
+        // instead: here it has no such query.
+        assert_eq!(query_get_data(&mut e, 0x10, GETDATA_FLUSH), None);
         // Its creation failed there.
-        board.lock().insert(0x20, (None, 0));
+        let failed = || super::super::d3d9backend::BoardQuery {
+            made: 1,
+            query: None,
+            ends: 0,
+        };
+        real(&mut e).queries_made.insert(0x20, 1);
+        board.lock().insert(0x20, failed());
         query_issue(&mut e, 0x20, ISSUE_END);
         assert_eq!(query_get_data(&mut e, 0x20, 0), None);
+        // Destroyed and made again at the same address before the backend got there: the board
+        // still holds the old one, which is not this one's answer.
+        forget(&mut e, 0x20);
+        real(&mut e).forwarded.insert(0x20);
+        real(&mut e).queries_made.insert(0x20, 2);
+        query_issue(&mut e, 0x20, ISSUE_END);
+        assert_eq!(query_get_data(&mut e, 0x20, 0), Some((S_FALSE, 0)));
         // Not a forwarded query: none, as before.
         assert_eq!(query_get_data(&mut e, 0x30, 0), None);
         forget(&mut e, 0x10);

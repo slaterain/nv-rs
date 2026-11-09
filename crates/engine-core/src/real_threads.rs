@@ -1140,8 +1140,10 @@ fn device_addr(addr: u32) -> bool {
 /// A platform function of the Direct3D 9 device or one of its objects: under the device lock,
 /// not the kernel lock. Their state (the device model and its forwarding, engine-platform's
 /// `Graphics`) is reached only under it: by these functions, and by the kernel-locked ones that
-/// reach it through [`device_guard`]. They touch no kernel object and no last-error code; a
-/// suspended thread parks at its next kernel-locked call.
+/// reach it through [`device_guard`]. They touch no kernel object and no last-error code. A
+/// suspended thread (`SuspendThread`, the game's task threads at quit) parks here before it takes
+/// the device lock, as it does at a kernel-locked call; not while it holds the device lock (a
+/// device function calling another), where parking would take the kernel lock inside it.
 fn device_call(e: &mut Engine, args: &[u32]) -> Ret {
     let addr = *e
         .call_stack
@@ -1152,8 +1154,11 @@ fn device_call(e: &mut Engine, args: &[u32]) -> Ret {
         .as_ref()
         .expect("a device platform call on a real thread's engine")
         .world;
+    if !world.device.held_here() {
+        park_here(e);
+    }
     world.device.lock(world);
-    let _held = DeviceGuard(world);
+    let _held = DeviceGuard(world, std::marker::PhantomData);
     if world.late_count.load(Ordering::Acquire) != e.real.as_ref().map_or(0, |r| r.late_seen) {
         sync_registered(e);
     }
@@ -1167,8 +1172,9 @@ fn device_call(e: &mut Engine, args: &[u32]) -> Ret {
     f(e, args)
 }
 
-/// A hold of the device lock, given back when dropped ([`device_guard`], [`device_call`]).
-pub struct DeviceGuard(&'static World);
+/// A hold of the device lock, given back when dropped ([`device_guard`], [`device_call`]); not
+/// `Send`: the lock is the taking thread's, and only it can give it back.
+pub struct DeviceGuard(&'static World, std::marker::PhantomData<*const ()>);
 
 impl Drop for DeviceGuard {
     fn drop(&mut self) {
@@ -1184,7 +1190,13 @@ impl Drop for DeviceGuard {
 pub fn device_guard(e: &Engine) -> Option<DeviceGuard> {
     let world = e.real.as_ref()?.world;
     world.device.lock(world);
-    Some(DeviceGuard(world))
+    Some(DeviceGuard(world, std::marker::PhantomData))
+}
+
+/// Whether this thread may reach the device's state: it holds the device lock, or there are no
+/// real threads (one game thread runs at a time). For debug assertions in the platform layer.
+pub fn device_lock_held(e: &Engine) -> bool {
+    e.real.as_ref().map_or(true, |r| r.world.device.held_here())
 }
 
 /// `f` registered at `addr` on `e`, as real threads keep it: behind the kernel lock when it is a

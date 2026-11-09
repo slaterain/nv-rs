@@ -1328,6 +1328,10 @@ pub fn create_device(
 }
 
 fn device(e: &mut Engine, this: Ptr) -> &mut Device {
+    debug_assert!(
+        engine_core::real_threads::device_lock_held(e),
+        "the Direct3D 9 state reached without the device lock"
+    );
     state!(e)
         .graphics
         .device_objects
