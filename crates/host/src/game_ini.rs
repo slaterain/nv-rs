@@ -10,9 +10,10 @@
 //! at, as in the original. A value we can't use falls back to the default and is named in one log
 //! line ([`Keys::bad`]); it never stops the start.
 //!
-//! Precedence, lowest to highest (`crate::fixes::Choice::from_texts`): the built-in default, the
-//! preset, these keys, then the `NV_*` environment variables. A scripted or measured run (the
-//! test rule of `crate::fixes`) never reads them.
+//! Precedence, lowest to highest (`crate::fixes::Choice::read`): the built-in default, the
+//! preset, these keys, then the `NV_*` environment variables. Only a launcher's play run that is
+//! no test reads them (`crate::fixes::is_play_run`); every scripted, gated or measured run never
+//! does.
 
 use crate::fixes::{Preset, FIXES};
 use std::path::{Path, PathBuf};
@@ -179,18 +180,44 @@ fn flag(raw: &str) -> Option<bool> {
 
 /// The run's `Fallout.ini`: `My Games\FalloutNV\Fallout.ini` in the Documents folder the run's
 /// adapter table gives the game (`crate::adapter_table_path`), where the game reads it.
+/// A folder whose bytes can't be read is named once in the log ([`path_from_table`]).
 pub fn path() -> Option<PathBuf> {
     let table = std::fs::read_to_string(crate::adapter_table_path()?).ok()?;
-    path_from_table(&table)
+    path_from_table(&table).unwrap_or_else(|why| {
+        eprintln!("{why}");
+        None
+    })
 }
 
 /// `CSIDL_PERSONAL` (5), the Documents folder, the game's `SHGetFolderPathA` asks for.
 const DOCUMENTS: u32 = 5;
 
 /// [`path`] from the adapter table's text: its last `SHGetFolderPathA` line for the Documents
-/// folder (`engine_platform::d3d9`'s reader keeps the last), the path read as the file layer
-/// reads the game's paths.
-pub fn path_from_table(table: &str) -> Option<PathBuf> {
+/// folder (`engine_platform::d3d9`'s reader keeps the last). The folder's bytes are read as the
+/// game's file layer turns its paths back to Windows, as UTF-8 (`engine_platform` files.rs; the
+/// launcher writes plain, 8.3 or UTF-8 names for that reason). Bytes that aren't UTF-8 are a
+/// folder the game can't open either: an error naming it, for the log.
+pub fn path_from_table(table: &str) -> Result<Option<PathBuf>, String> {
+    let Some(path) = documents_bytes(table) else {
+        return Ok(None);
+    };
+    let documents = String::from_utf8(path).map_err(|e| {
+        format!(
+            "Fallout.ini's nv-rs settings not read: the adapter table's Documents folder is not \
+             UTF-8 text, as the game's file layer reads its paths ({})",
+            String::from_utf8_lossy(e.as_bytes())
+        )
+    })?;
+    Ok(Some(
+        Path::new(&documents)
+            .join("My Games")
+            .join("FalloutNV")
+            .join("Fallout.ini"),
+    ))
+}
+
+/// The Documents folder's bytes from the adapter table, up to the first zero.
+fn documents_bytes(table: &str) -> Option<Vec<u8>> {
     let folder = table
         .lines()
         .filter_map(|line| {
@@ -206,16 +233,7 @@ pub fn path_from_table(table: &str) -> Option<PathBuf> {
         .map(|i| u8::from_str_radix(folder.get(2 * i..2 * i + 2)?, 16).ok())
         .collect::<Option<_>>()?;
     let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-    if end == 0 {
-        return None;
-    }
-    let documents = String::from_utf8_lossy(&bytes[..end]).into_owned();
-    Some(
-        Path::new(&documents)
-            .join("My Games")
-            .join("FalloutNV")
-            .join("Fallout.ini"),
-    )
+    (end != 0).then(|| bytes[..end].to_vec())
 }
 
 #[cfg(test)]
@@ -383,12 +401,21 @@ mod tests {
             hex(r"D:\Play\docs"),
         );
         assert_eq!(
-            path_from_table(&table).unwrap(),
+            path_from_table(&table).unwrap().unwrap(),
             Path::new(r"D:\Play\docs")
                 .join("My Games")
                 .join("FalloutNV")
                 .join("Fallout.ini")
         );
-        assert_eq!(path_from_table("GetACP\t\t4e4\t\n"), None);
+        assert_eq!(path_from_table("GetACP\t\t4e4\t\n"), Ok(None));
+        // A UTF-8 name (what the launcher writes) is read; a one-byte code page's isn't, and the
+        // miss is said rather than passed over.
+        let utf8 = format!("SHGetFolderPathA\t5 0\t0\t{}\n", hex("D:\\Play\\Jos\u{e9}"));
+        let path = path_from_table(&utf8).unwrap().unwrap();
+        assert!(path.starts_with("D:\\Play\\Jos\u{e9}"), "{path:?}");
+        // "D:\Play\Jos" and the one byte e9 a Western code page has for the accented e.
+        let ansi = "SHGetFolderPathA\t5 0\t0\t443a5c506c61795c4a6f73e9\n";
+        let why = path_from_table(ansi).unwrap_err();
+        assert!(why.contains("not read"), "{why}");
     }
 }

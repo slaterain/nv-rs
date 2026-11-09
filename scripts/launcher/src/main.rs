@@ -1124,6 +1124,25 @@ fn play(
     } else {
         command.env_remove("NV_BORDERLESS");
     }
+    // The run's Fallout.ini wins over settings.ini (host `game_ini.rs`): each player switch its
+    // [nv-rs ...] sections set goes to the game with the file's value instead.
+    let fallout_ini = profile.documents.join("My Games\\FalloutNV\\Fallout.ini");
+    if let Ok(bytes) = std::fs::read(&fallout_ini) {
+        let from_file = Settings::file_switches(&settings::decode(&bytes));
+        for (name, value) in &from_file {
+            match value {
+                Some(value) => command.env(name, value),
+                None => command.env_remove(name),
+            };
+        }
+        if !from_file.is_empty() {
+            let names: Vec<&str> = from_file.iter().map(|(name, _)| *name).collect();
+            package.log(&format!(
+                "Fallout.ini's nv-rs settings over settings.ini: {}",
+                names.join(", ")
+            ));
+        }
+    }
 
     package.log(&format!(
         "starting the game on {}; preset {}, frame limit {}, menu frame limit {}; log {}",

@@ -36,6 +36,34 @@ pub fn decode(bytes: &[u8]) -> String {
     }
 }
 
+/// The value of `key` in `section` of an INI text, found as the game finds it (host
+/// `game_ini::value`): names compared without case, spaces trimmed, one pair of quotes taken off,
+/// the first match wins; a `;` line never matches.
+pub fn ini_value<'a>(text: &'a str, section: &str, key: &str) -> Option<&'a str> {
+    let mut inside = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix('[') {
+            let name = rest.split(']').next().unwrap_or(rest);
+            inside = name.trim().eq_ignore_ascii_case(section);
+            continue;
+        }
+        let Some((name, value)) = line.split_once('=').filter(|_| inside) else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case(key) {
+            let value = value.trim();
+            return Some(
+                value
+                    .strip_prefix('"')
+                    .and_then(|v| v.strip_suffix('"'))
+                    .unwrap_or(value),
+            );
+        }
+    }
+    None
+}
+
 /// The file's settings.
 #[derive(Debug, Default, PartialEq)]
 pub struct Settings(pub BTreeMap<String, String>);
@@ -105,6 +133,50 @@ impl Settings {
             ("NV_FRAME_LIMIT", limit.to_string()),
             ("NV_MENU_FRAME_LIMIT", menu.to_string()),
         ])
+    }
+
+    /// The player switches the run's `Fallout.ini` sets in its `[nv-rs ...]` sections (host
+    /// `game_ini.rs`), which win over this file's: `Some(value)` to pass, `None` to leave the
+    /// variable out (the game's own default). A key that is missing, empty or not a value the
+    /// game takes leaves this file's switch as it is.
+    pub fn file_switches(fallout_ini: &str) -> Vec<(&'static str, Option<String>)> {
+        let get = |section: &str, key: &str| {
+            ini_value(fallout_ini, section, key).filter(|v| !v.is_empty())
+        };
+        let flag = |section: &str, key: &str| match get(section, key) {
+            Some("1") => Some(true),
+            Some("0") => Some(false),
+            _ => None,
+        };
+        let number = |key: &str| {
+            get("nv-rs Display", key).and_then(|v| v.parse::<u32>().ok().map(|n| n.to_string()))
+        };
+        let mut out = Vec::new();
+        match get("nv-rs General", "sPreset") {
+            Some(v) if v.eq_ignore_ascii_case("fixes") || v.eq_ignore_ascii_case("vanilla") => {
+                out.push(("NV_PRESET", Some(v.to_ascii_lowercase())));
+            }
+            _ => {}
+        }
+        if let Some(n) = number("iFrameLimit") {
+            out.push(("NV_FRAME_LIMIT", Some(n)));
+        }
+        if let Some(n) = number("iMenuFrameLimit") {
+            out.push(("NV_MENU_FRAME_LIMIT", Some(n)));
+        }
+        if let Some(on) = flag("nv-rs Display", "bBorderless") {
+            out.push(("NV_BORDERLESS", on.then(|| "1".to_string())));
+        }
+        if let Some(stepped) = flag("nv-rs Threads", "bSteppedThreads") {
+            out.push(("NV_THREADS", stepped.then(|| "stepped".to_string())));
+        }
+        if let Some(on) = flag("nv-rs Threads", "bRenderThread") {
+            out.push((
+                "NV_RENDER_THREAD",
+                Some(if on { "1" } else { "0" }.to_string()),
+            ));
+        }
+        out
     }
 
     /// The game's environment switches from the file (`NV_...=...`).
@@ -206,6 +278,45 @@ mod tests {
         s.iter()
             .map(|(a, b)| (a.to_string(), b.to_string()))
             .collect()
+    }
+
+    /// Fallout.ini's [nv-rs ...] keys become the switches that win over settings.ini's; a commented,
+    /// empty or unusable key leaves settings.ini's.
+    #[test]
+    fn fallout_inis_keys_win_over_settings_ini() {
+        let ini = "[General]\nsPreset=vanilla\n[nv-rs General]\nsPreset=Vanilla\n\
+                   [nv-rs Display]\nbBorderless=0\niFrameLimit=fast\n;iMenuFrameLimit=60\n\
+                   [nv-rs Threads]\nbSteppedThreads=1\nbRenderThread=0\n";
+        let some = |v: &str| Some(v.to_string());
+        assert_eq!(
+            Settings::file_switches(ini),
+            [
+                ("NV_PRESET", some("vanilla")),
+                ("NV_BORDERLESS", None),
+                ("NV_THREADS", some("stepped")),
+                ("NV_RENDER_THREAD", some("0")),
+            ]
+        );
+        let ini = "[nv-rs Display]\nbBorderless=1\niFrameLimit=90\niMenuFrameLimit=0\n\
+                   [nv-rs Threads]\nbSteppedThreads=0\n";
+        assert_eq!(
+            Settings::file_switches(ini),
+            [
+                ("NV_FRAME_LIMIT", some("90")),
+                ("NV_MENU_FRAME_LIMIT", some("0")),
+                ("NV_BORDERLESS", some("1")),
+                ("NV_THREADS", None),
+            ]
+        );
+        assert!(Settings::file_switches("[General]\nsLanguage=ENGLISH\n").is_empty());
+        assert_eq!(
+            ini_value(
+                " [ NV-RS display ]\n IFRAMELIMIT = \"5\" \n",
+                "nv-rs Display",
+                "iFrameLimit"
+            ),
+            Some("5")
+        );
     }
 
     #[test]

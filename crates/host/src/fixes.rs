@@ -308,13 +308,34 @@ impl Choice {
     /// `NV_MENU_FRAME_LIMIT=n`, `NV_THREADS`, `NV_RENDER_THREAD`, `NV_BORDERLESS` and each
     /// [`Fix::env`]. A settings file or variable it can't read stops the start with a message, so
     /// a misspelt pin never runs the wrong game; a `Fallout.ini` value it can't use leaves the
-    /// default and is named in one log line ([`Choice::ini_note`]).
+    /// default and is named in one log line ([`Choice::ini_note`]). Only a launcher's play run
+    /// reads `Fallout.ini` ([`is_play_run`]).
     pub fn read() -> Result<Choice, String> {
-        Choice::from_files(
+        Choice::read_with(false)
+    }
+
+    /// [`Choice::read`] for a run its command line marks as a test (`command_line_test`: the
+    /// viewer's `--movement-missing` and `--movement-probe`, which record or go on past
+    /// untranslated functions on the main thread's engine only) or not. A marked run never reads
+    /// `Fallout.ini`'s keys, and its threads run stepped unless `NV_THREADS` names them
+    /// ([`Choice::pin_test_threads`]).
+    pub fn read_with(command_line_test: bool) -> Result<Choice, String> {
+        let env = |name: &str| std::env::var(name).ok();
+        let game_ini = if command_line_test {
+            None
+        } else {
+            crate::game_ini::path()
+        };
+        let mut choice = Choice::load(
             settings_file().as_deref(),
-            crate::game_ini::path().as_deref(),
-            |name| std::env::var(name).ok(),
-        )
+            game_ini.as_deref(),
+            env,
+            command_line_test,
+        )?;
+        if command_line_test {
+            choice.pin_test_threads(env);
+        }
+        Ok(choice)
     }
 
     /// [`Choice::read`] on a given settings file (none: no file) and environment, with no
@@ -323,17 +344,27 @@ impl Choice {
         file: Option<&Path>,
         env: impl Fn(&str) -> Option<String>,
     ) -> Result<Choice, String> {
-        Choice::from_files(file, None, env)
+        Choice::load(file, None, env, false)
     }
 
     /// [`Choice::read`] on a given settings file, `Fallout.ini` (none: no file) and environment.
-    /// A settings file that exists and can't be read stops the start, since its `Preset=vanilla`
-    /// would be lost; an explicit `NV_PRESET` makes the file moot, so then it doesn't matter. A
-    /// `Fallout.ini` that can't be read is passed over, as the game passes over a missing key.
     pub fn from_files(
         file: Option<&Path>,
         game_ini: Option<&Path>,
         env: impl Fn(&str) -> Option<String>,
+    ) -> Result<Choice, String> {
+        Choice::load(file, game_ini, env, false)
+    }
+
+    /// The files' texts, then [`Choice::build`]. A settings file that exists and can't be read
+    /// stops the start, since its `Preset=vanilla` would be lost; an explicit `NV_PRESET` makes
+    /// the file moot, so then it doesn't matter. A `Fallout.ini` that can't be read is passed
+    /// over, as the game passes over a missing key.
+    fn load(
+        file: Option<&Path>,
+        game_ini: Option<&Path>,
+        env: impl Fn(&str) -> Option<String>,
+        command_line_test: bool,
     ) -> Result<Choice, String> {
         let ini = game_ini
             .and_then(|p| std::fs::read(p).ok())
@@ -351,7 +382,7 @@ impl Choice {
                 ))
             }
         };
-        Choice::from_texts(text.as_deref(), ini.as_deref(), env)
+        Choice::build(text.as_deref(), ini.as_deref(), env, command_line_test)
     }
 
     /// [`Choice::read`] on given settings text and environment, with no `Fallout.ini`.
@@ -359,17 +390,28 @@ impl Choice {
         settings: Option<&str>,
         env: impl Fn(&str) -> Option<String>,
     ) -> Result<Choice, String> {
-        Choice::from_texts(settings, None, env)
+        Choice::build(settings, None, env, false)
     }
 
-    /// [`Choice::read`] on given settings text, `Fallout.ini` text and environment. Lowest to
-    /// highest: the built-in default, the preset, `Fallout.ini`'s `[nv-rs ...]` keys, then the
-    /// environment. settings.ini, the fallback until it is migrated, sits under `Fallout.ini`: a
-    /// line of it that `Fallout.ini` or the environment overrides isn't even read.
+    /// [`Choice::read`] on given settings text, `Fallout.ini` text and environment.
     pub fn from_texts(
         settings: Option<&str>,
         game_ini: Option<&str>,
         env: impl Fn(&str) -> Option<String>,
+    ) -> Result<Choice, String> {
+        Choice::build(settings, game_ini, env, false)
+    }
+
+    /// The choice. Lowest to highest: the built-in default, the preset, `Fallout.ini`'s
+    /// `[nv-rs ...]` keys, then the environment. settings.ini, the fallback until it is migrated,
+    /// sits under `Fallout.ini`: a line of it that `Fallout.ini` or the environment overrides
+    /// isn't even read. `Fallout.ini` counts only in a launcher's play run ([`is_play_run`]) that
+    /// is no test, by its variables or by its command line (`command_line_test`).
+    fn build(
+        settings: Option<&str>,
+        game_ini: Option<&str>,
+        env: impl Fn(&str) -> Option<String>,
+        command_line_test: bool,
     ) -> Result<Choice, String> {
         let mut overrides = Vec::new();
         for fix in FIXES {
@@ -387,10 +429,13 @@ impl Choice {
         // unless its NV_THREADS names them, and without the render thread unless its
         // NV_RENDER_THREAD names it.
         let test = TEST_VARIABLES.iter().any(|name| env(name).is_some()) || !overrides.is_empty();
-        // A test never reads the player's `[nv-rs ...]` keys: pinned defaults and the environment
-        // only, so a player's file can never change a test's result (measure/ini/DESIGN.md).
+        // Only a launcher's play run reads the player's `[nv-rs ...]` keys: every scripted, gated
+        // or measured run has pinned defaults and the environment only, so a player's file can
+        // never change its result (measure/ini/DESIGN.md).
         let ini = match game_ini {
-            Some(text) if !test => crate::game_ini::Keys::read(text),
+            Some(text) if is_play_run(&env) && !test && !command_line_test => {
+                crate::game_ini::Keys::read(text)
+            }
             _ => crate::game_ini::Keys::default(),
         };
         let mut choice = Choice {
@@ -583,6 +628,14 @@ const TEST_VARIABLES: &[&str] = &[
     "NV_TOPIC_INDEX_CHECK",
     "NV_NVSE_EVENT_LOG",
 ];
+
+/// Whether a launcher started this run for play: `NV_SAVE_OUT` (Play.exe) or `NV_SETTINGS`
+/// (Play.exe, and the play folder's Play.cmd through apply-settings.sh) set. No scripted, gated
+/// or measured run sets either; only such a run reads `Fallout.ini`'s `[nv-rs ...]` keys, and
+/// then only when it is no test ([`TEST_VARIABLES`], a fix's own variable, a test's command line).
+pub fn is_play_run(env: impl Fn(&str) -> Option<String>) -> bool {
+    env("NV_SAVE_OUT").is_some() || env("NV_SETTINGS").is_some()
+}
 
 /// The settings file's text: a UTF-8 byte order mark is dropped and UTF-16 (what PowerShell 5.1's
 /// `>` writes) is decoded; anything else is read as UTF-8, bad bytes replaced.
@@ -1089,12 +1142,55 @@ mod tests {
         [nv-rs Display]\nbBorderless=1\niFrameLimit=90\niMenuFrameLimit=60\n\
         [nv-rs Threads]\nbSteppedThreads=1\nbRenderThread=0\n";
 
+    /// A launcher's play run (its `NV_SAVE_OUT`) with these variables too.
     fn with_ini(
         settings: Option<&str>,
         ini: &str,
         pairs: &'static [(&'static str, &'static str)],
     ) -> Choice {
-        Choice::from_texts(settings, Some(ini), env_of(pairs)).unwrap()
+        let env = env_of(pairs);
+        let play = move |name: &str| {
+            (name == "NV_SAVE_OUT")
+                .then(|| "x".to_string())
+                .or(env(name))
+        };
+        Choice::from_texts(settings, Some(ini), play).unwrap()
+    }
+
+    /// Only a launcher's play run reads the file: a run with only a run setting, a preset or the
+    /// renderer named, or one its command line marks as a test, never does.
+    #[test]
+    fn only_a_launchers_play_run_reads_fallout_ini() {
+        let reads = |pairs: &'static [(&'static str, &'static str)], command_line_test: bool| {
+            Choice::build(None, Some(PLAYER_INI), env_of(pairs), command_line_test)
+                .unwrap()
+                .borderless
+                == Some(true)
+        };
+        assert!(reads(&[("NV_SAVE_OUT", "x")], false));
+        assert!(reads(&[("NV_SETTINGS", "x")], false));
+        assert!(reads(
+            &[("NV_SETTINGS", "x"), ("NV_PRESET", "fixes")],
+            false
+        ));
+        assert!(!reads(&[], false));
+        assert!(!reads(&[("NV_PRESET", "fixes")], false));
+        assert!(!reads(&[("NV_FRAME_LIMIT", "60")], false));
+        assert!(!reads(&[("NV_THREADS", "real")], false));
+        assert!(!reads(&[("NV_RENDER_THREAD", "1")], false));
+        assert!(!reads(&[("NV_D3D9", "real"), ("NV_SOUND", "out")], false));
+        // The viewer's --movement-missing and --movement-probe, even in a play run.
+        assert!(!reads(&[("NV_SAVE_OUT", "x")], true));
+        let marked = Choice::build(
+            None,
+            Some(PLAYER_INI),
+            env_of(&[("NV_SAVE_OUT", "x")]),
+            true,
+        )
+        .unwrap();
+        assert_eq!(marked, Choice::from_parts(None, no_env).unwrap());
+        assert!(is_play_run(env_of(&[("NV_SAVE_OUT", "")])));
+        assert!(!is_play_run(env_of(&[("NV_D3D9", "real")])));
     }
 
     /// Fallout.ini's keys over the built-in defaults; nothing in the file is the defaults.
@@ -1234,12 +1330,13 @@ mod tests {
         let mut bytes = vec![0xef, 0xbb, 0xbf];
         bytes.extend_from_slice(b"[nv-rs General]\r\nsPreset=vanilla\r\n");
         std::fs::write(&file, bytes).unwrap();
-        let choice = Choice::from_files(None, Some(&file), no_env).unwrap();
+        let play = env_of(&[("NV_SAVE_OUT", "x")]);
+        let choice = Choice::from_files(None, Some(&file), &play).unwrap();
         assert_eq!(choice.preset, Preset::Vanilla);
-        let missing = Choice::from_files(None, Some(&dir.join("missing.ini")), no_env).unwrap();
+        let missing = Choice::from_files(None, Some(&dir.join("missing.ini")), &play).unwrap();
         assert_eq!(missing.preset, Preset::Fixes);
         // A folder where the file should be: it can't be read, and the start goes on.
-        let folder = Choice::from_files(None, Some(&dir), no_env).unwrap();
+        let folder = Choice::from_files(None, Some(&dir), &play).unwrap();
         assert_eq!(folder.preset, Preset::Fixes);
         std::fs::remove_dir_all(&dir).unwrap();
     }

@@ -84,8 +84,12 @@ and the host's tests check one against the other. The fix lines are written with
   already sets is not read.
 - A key nv-rs does not know is passed over, as the game passes over one it never asks for. A value it
   can't use leaves the default, and one line in the log names it; the game still starts.
-- A test or script run (a starred name, or a fix's own variable, set) never reads these sections, so a
-  player's file can't change a result.
+- Only a launcher's play run reads these sections: `NV_SAVE_OUT` or `NV_SETTINGS` set (Play.exe; the
+  play folder's Play.cmd), with no starred name, no fix's own variable and no test flag on the viewer's
+  command line. Every scripted, gated or measured run ignores them, so a player's file can't change a
+  result.
+- Play.exe passes the player options on as variables; for each one `Fallout.ini` sets, it passes the
+  file's value instead of `settings.ini`'s, so the file wins there too.
 
 ### 1. Player settings
 
