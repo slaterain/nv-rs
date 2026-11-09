@@ -573,6 +573,8 @@ impl Common for Diff {
     fn common(self) -> Diff {
         self.family(&shader::SHADER)
             .family(&leaf::LEAVES)
+            // The plain geometry pass (pass types 0xfc, 0xfd) is the render family's (its own test).
+            .goes_by_address(&[0x00b7_dde0])
             .max_calls(MAX_CALLS)
             .max_cases(160)
     }
