@@ -1839,15 +1839,23 @@ fn wait_for_multiple_objects(
     let finite = timeout != INFINITE;
     let deadline = finite.then(|| e.clock_now_us() + u64::from(timeout) * 1000);
     loop {
+        // With real threads, events and semaphores are taken off the kernel lock too
+        // (`real_threads::sync_object`): one seen free may be gone by the take, so a take's answer
+        // counts, and those of a wait for all go together or not at all.
         if all {
-            if list.iter().all(|&h| signalled(e, h)) {
+            if list.iter().all(|&h| signalled(e, h)) && crate::real_threads::take_all_sync(e, list)
+            {
                 for &h in list {
-                    take(e, h);
+                    if crate::real_threads::sync_object(e, h).is_none() {
+                        take(e, h);
+                    }
                 }
                 return WAIT_OBJECT_0;
             }
-        } else if let Some(i) = list.iter().position(|&h| signalled(e, h)) {
-            take(e, list[i]);
+        } else if let Some(i) = list
+            .iter()
+            .position(|&h| signalled(e, h) && take(e, h) == Some(true))
+        {
             return WAIT_OBJECT_0 + i as u32;
         }
         if crate::thread_host::host_for(e).block(e, list, all, deadline, signalled) {

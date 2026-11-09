@@ -84,7 +84,7 @@ use std::time::Duration;
 
 #[path = "real_sync.rs"]
 mod sync;
-pub(crate) use sync::{handle_closed, sync_object};
+pub(crate) use sync::{handle_closed, sync_object, take_all_sync};
 
 /// The kept pages over the limit that make the host hand them back at a frame's end (64 MB): a
 /// barrier is a few hundred microseconds, so not every frame.
@@ -788,6 +788,8 @@ struct Waiter {
     handles: Vec<u32>,
     /// One of its objects changed since it last looked (set under the kernel lock).
     woken: AtomicBool,
+    /// It waits for all of its objects at once (`WaitForMultipleObjects` with `bWaitAll`).
+    all: bool,
 }
 
 /// How long a blocked wait watches for its signal before the thread parks ([`watch_briefly`]):
@@ -855,14 +857,8 @@ impl World {
         me.woken.store(false, Ordering::SeqCst);
         let held = self.kernel.release_all();
         let was = self.leave_guest();
-        // An event or a semaphore set off the kernel lock ([`sync`]) after this thread looked, by a
-        // thread that found no waiter listed yet: looked at again here, after the flag is cleared.
-        let ready = me
-            .handles
-            .iter()
-            .any(|&h| self.sync_object(h).is_some_and(|o| o.available()));
         let watched = std::time::Instant::now();
-        if !ready && !me.woken.load(Ordering::SeqCst) && !watch_briefly(&me.woken, timeout) {
+        if !me.woken.load(Ordering::SeqCst) && !watch_briefly(&me.woken, timeout) {
             match timeout {
                 // What is left of the timeout after the watch.
                 Some(t) => {
@@ -1789,6 +1785,7 @@ fn enter_critical_section(e: &mut Engine, section: Ptr) {
         thread: std::thread::current(),
         handles: vec![a],
         woken: AtomicBool::new(false),
+        all: false,
     });
     guard(&w.section_parkers).push(std::sync::Arc::clone(&parker));
     // The main thread ends the run when a game thread stopped (it may have stopped holding this
@@ -2186,16 +2183,24 @@ impl ThreadHost for Real {
                 }
             }
             let timeout = deadline.map(|d| Duration::from_micros(d - now));
-            let me = waiter.get_or_insert_with(|| {
+            if waiter.is_none() {
                 let me = std::sync::Arc::new(Waiter {
                     thread: std::thread::current(),
                     handles: handles.to_vec(),
                     woken: AtomicBool::new(false),
+                    all,
                 });
                 guard(&w.waiters).push(std::sync::Arc::clone(&me));
                 w.waiters_n.fetch_add(1, Ordering::SeqCst);
-                me
-            });
+                waiter = Some(me);
+                // Listed, then looked at again: an event or a semaphore set off the kernel lock
+                // ([`sync`]) before the listing, by a thread that found no waiter listed, is seen
+                // here (the release changes the state, then looks at the count of listed waiters).
+                if ready(e) {
+                    break true;
+                }
+            }
+            let me = waiter.as_ref().expect("listed above");
             w.wait_for_objects(me, timeout);
         };
         if let Some(me) = waiter {
@@ -3261,6 +3266,198 @@ mod tests {
             "a unit left over"
         );
         eprintln!("timed waits racing releases: {short} short waits timed out");
+    }
+
+    /// Takes units of the semaphore at +0 with `WaitForSingleObject(.., 0)` (at +4) until the word
+    /// at +0xc is set, counting them at +8 (`InterlockedIncrement` at +0x10).
+    fn racing_taker(e: &mut Engine, a: &[u32]) -> Ret {
+        let p = a[0];
+        let (sem, wait, increment) = (e.mem.u32(p), e.mem.u32(p + 4), e.mem.u32(p + 0x10));
+        while e.mem.u32(p + 0xc) == 0 {
+            if e.call(wait, &args![sem, 0u32]).eax == 0 {
+                e.call(increment, &args![p + 8]);
+            }
+        }
+        Ret::default()
+    }
+
+    /// Waits on the event at +0 for good (a live thread's handle for the tests below).
+    fn waits_for_good(e: &mut Engine, a: &[u32]) -> Ret {
+        let p = a[0];
+        e.call(e.mem.u32(p + 4), &args![e.mem.u32(p), 0xffff_ffffu32]);
+        Ret::default()
+    }
+
+    /// A live game thread (waiting on a new event): its handle and the event that ends it.
+    fn live_thread(e: &mut Engine, slot: &impl Fn(&str) -> u32) -> (u32, u32) {
+        e.register(0x0041_1000, waits_for_good);
+        let end = e
+            .call(slot("CreateEventA"), &args![0u32, 0u32, 0u32, 0u32])
+            .eax;
+        let p = e.mem.alloc(8);
+        e.mem.set_u32(p, end);
+        e.mem.set_u32(p + 4, slot("WaitForSingleObject"));
+        let h = e
+            .call(
+                slot("CreateThread"),
+                &args![0u32, 0u32, 0x0041_1000u32, p, 0u32, 0u32],
+            )
+            .eax;
+        (h, end)
+    }
+
+    /// A wait for any of a semaphore and a live thread's handle (the kernel lock's path) against
+    /// threads taking the semaphore off the kernel lock: each unit is taken once, by one of them
+    /// (a wait that answered for a unit another thread took would count it twice).
+    #[test]
+    fn a_mixed_wait_for_any_takes_only_units_it_got() {
+        const UNITS: u32 = 20_000;
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        e.register(0x0041_0000, racing_taker);
+        let sem = e
+            .call(
+                slot("CreateSemaphoreA"),
+                &args![0u32, 0u32, 0x7fff_ffffu32, 0u32],
+            )
+            .eax;
+        let p = e.mem.alloc(0x14);
+        for (at, word) in [
+            (0, sem),
+            (4, slot("WaitForSingleObject")),
+            (0x10, slot("InterlockedIncrement")),
+        ] {
+            e.mem.set_u32(p + at, word);
+        }
+        let takers: Vec<u32> = (0..2)
+            .map(|_| {
+                e.call(
+                    slot("CreateThread"),
+                    &args![0u32, 0u32, 0x0041_0000u32, p, 0u32, 0u32],
+                )
+                .eax
+            })
+            .collect();
+        let (thread, end) = live_thread(&mut e, &slot);
+        let list = e.mem.alloc(8);
+        e.mem.set_u32(list, sem);
+        e.mem.set_u32(list + 4, thread);
+        let (release, multiple) = (slot("ReleaseSemaphore"), slot("WaitForMultipleObjects"));
+        let mut mine = 0;
+        for _ in 0..UNITS {
+            e.call(release, &args![sem, 1u32, 0u32]);
+            if e.call(multiple, &args![2u32, list, 0u32, 0u32]).eax == 0 {
+                mine += 1;
+            }
+        }
+        e.mem.set_u32(p + 0xc, 1);
+        let wait = slot("WaitForSingleObject");
+        for h in takers {
+            assert_eq!(e.call(wait, &args![h, STRESS_TIMEOUT_MS]).eax, 0);
+        }
+        let mut left = 0;
+        while e.call(wait, &args![sem, 0u32]).eax == 0 {
+            left += 1;
+        }
+        let theirs = shared_count(&e, p + 8);
+        assert_eq!(
+            mine + theirs + left,
+            UNITS,
+            "mine {mine}, theirs {theirs}, left {left}"
+        );
+        e.call(slot("SetEvent"), &args![end]);
+    }
+
+    /// A wait for all of a semaphore with a unit and a live thread's handle waits (parked) for
+    /// its timeout, taking nothing, rather than looking again and again.
+    #[test]
+    fn a_wait_for_all_with_one_object_free_does_not_spin() {
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        let sem = e
+            .call(slot("CreateSemaphoreA"), &args![0u32, 1u32, 1u32, 0u32])
+            .eax;
+        let (thread, end) = live_thread(&mut e, &slot);
+        let list = e.mem.alloc(8);
+        e.mem.set_u32(list, sem);
+        e.mem.set_u32(list + 4, thread);
+        let world = ctx(&e).world;
+        let before = world.wakes.load(Ordering::SeqCst);
+        let got = e
+            .call(
+                slot("WaitForMultipleObjects"),
+                &args![2u32, list, 1u32, 200u32],
+            )
+            .eax;
+        let passes = world.wakes.load(Ordering::SeqCst) - before;
+        assert_eq!(got, 0x102);
+        assert!(passes < 50, "{passes} passes in a 200 ms wait");
+        assert_eq!(
+            e.call(slot("WaitForSingleObject"), &args![sem, 0u32]).eax,
+            0,
+            "the unit was taken"
+        );
+        e.call(slot("SetEvent"), &args![end]);
+    }
+
+    /// Two game threads waiting for all of a set manual-reset event and a reset auto-reset one
+    /// do not wake each other while the second stays reset; each goes on when it is set.
+    #[test]
+    fn two_waits_for_all_do_not_wake_each_other() {
+        /// `WaitForMultipleObjects(2, +0, all, INFINITE)` (at +8), then stores 1 at +0xc.
+        fn waits_for_both(e: &mut Engine, a: &[u32]) -> Ret {
+            let p = a[0];
+            let multiple = e.mem.u32(p + 8);
+            e.call(multiple, &args![2u32, p, 1u32, STRESS_TIMEOUT_MS]);
+            e.mem.set_u32(p + 0xc, 1);
+            Ret::default()
+        }
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        ctx(&e).frame_begins(false);
+        e.register(0x0041_2000, waits_for_both);
+        let create = slot("CreateEventA");
+        let manual = e.call(create, &args![0u32, 1u32, 1u32, 0u32]).eax;
+        let auto = e.call(create, &args![0u32, 0u32, 0u32, 0u32]).eax;
+        let blocks: Vec<u32> = (0..2)
+            .map(|_| {
+                let p = e.mem.alloc(0x10);
+                e.mem.set_u32(p, manual);
+                e.mem.set_u32(p + 4, auto);
+                e.mem.set_u32(p + 8, slot("WaitForMultipleObjects"));
+                e.call(
+                    slot("CreateThread"),
+                    &args![0u32, 0u32, 0x0041_2000u32, p, 0u32, 0u32],
+                );
+                p
+            })
+            .collect();
+        let world = ctx(&e).world;
+        std::thread::sleep(Duration::from_millis(50));
+        let before = world.wakes.load(Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(100));
+        let passes = world.wakes.load(Ordering::SeqCst) - before;
+        assert!(passes < 20, "{passes} passes in 100 ms with nothing set");
+        let set = slot("SetEvent");
+        for _ in 0..2 {
+            e.call(set, &args![auto]);
+            let since = std::time::Instant::now();
+            while blocks.iter().filter(|&&p| e.mem.u32(p + 0xc) == 1).count() < 1 {
+                assert!(since.elapsed() < Duration::from_secs(10), "nobody went on");
+                std::thread::yield_now();
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let since = std::time::Instant::now();
+        while blocks.iter().any(|&p| e.mem.u32(p + 0xc) == 0) {
+            assert!(
+                since.elapsed() < Duration::from_secs(10),
+                "a waiter never went on"
+            );
+            std::thread::yield_now();
+        }
     }
 
     /// A wait made while the kernel lock is held (inside a kernel-locked platform call, as a window

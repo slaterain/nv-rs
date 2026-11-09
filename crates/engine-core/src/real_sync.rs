@@ -102,21 +102,28 @@ impl Object {
 
     /// Gives back what [`Object::try_take`] took (a wait for all that could not take every
     /// object), waking a waiter for it.
+    /// An auto-reset event is set again only if it is still reset (0 to 1, once); a semaphore's
+    /// count goes up by one but never past its maximum.
     fn give_back(&self) {
-        match self.kind {
-            Kind::Event { manual: true } => {}
-            Kind::Event { manual: false } => {
-                self.state.store(1, Ordering::SeqCst);
-                self.wake(1);
+        let back = match self.kind {
+            Kind::Event { manual: true } => false,
+            Kind::Event { manual: false } => self
+                .state
+                .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok(),
+            Kind::Semaphore { maximum } => {
+                update(&self.state, |c| (c < maximum).then(|| c + 1)).is_some()
             }
-            Kind::Semaphore { .. } => {
-                self.state.fetch_add(1, Ordering::SeqCst);
-                self.wake(1);
-            }
+        };
+        if back {
+            self.wake(1);
         }
     }
 
-    /// Wakes up to `n` of its queued threads, each the first not woken already.
+    /// Wakes up to `n` of its queued threads waiting for any of their objects, each the first not
+    /// woken already, and every one waiting for all of its objects (it takes this one only with the
+    /// others, so it may leave it to the rest: woken, it looks and goes on or waits again, and
+    /// passes nothing on).
     fn wake(&self, n: usize) {
         if n == 0 || self.waiting.load(Ordering::SeqCst) == 0 {
             return;
@@ -124,25 +131,14 @@ impl Object {
         let queue = guard(&self.queue);
         let mut left = n;
         for o in queue.iter() {
-            if left == 0 {
-                break;
-            }
-            if !o.woken.swap(true, Ordering::SeqCst) {
+            if o.all {
+                if !o.woken.swap(true, Ordering::SeqCst) {
+                    o.thread.unpark();
+                }
+            } else if left > 0 && !o.woken.swap(true, Ordering::SeqCst) {
                 o.thread.unpark();
                 left -= 1;
             }
-        }
-    }
-
-    /// Wakes one queued thread not woken already, other than `me`.
-    fn wake_other(&self, me: &Arc<Waiter>) {
-        let queue = guard(&self.queue);
-        if let Some(o) = queue
-            .iter()
-            .find(|o| !Arc::ptr_eq(o, me) && !o.woken.load(Ordering::SeqCst))
-        {
-            o.woken.store(true, Ordering::SeqCst);
-            o.thread.unpark();
         }
     }
 
@@ -402,6 +398,7 @@ fn wait(e: &mut Engine, handles: &[u32], objects: &[Arc<Object>], all: bool, tim
         thread: std::thread::current(),
         handles: handles.to_vec(),
         woken: AtomicBool::new(false),
+        all,
     });
     for o in objects {
         guard(&o.queue).push(Arc::clone(&me));
@@ -421,15 +418,6 @@ fn wait(e: &mut Engine, handles: &[u32], objects: &[Arc<Object>], all: bool, tim
         std::sync::atomic::fence(Ordering::SeqCst);
         if let Some(i) = take(objects, all) {
             break Some(i);
-        }
-        // A wait for all woken by one object that it cannot take with the others leaves that object
-        // to another waiter, which may go on with it.
-        if all {
-            for o in objects {
-                if o.available() {
-                    o.wake_other(&me);
-                }
-            }
         }
         if main && w.any_stop.load(Ordering::SeqCst) {
             stop = guard(&w.stopped).clone();
@@ -526,4 +514,34 @@ pub(super) fn adopt(world: &World, e: &Engine) {
 /// lock's path for them too, as before, for a comparison). Read at real threads' start.
 pub(super) fn wanted() -> bool {
     std::env::var("NV_REAL_SYNC").map_or(true, |v| v.trim() != "0")
+}
+
+/// For the kernel lock's path of a wait for all (`units/platform.rs`): takes every event and
+/// semaphore of this module among `handles` at once, or none (a thread off the kernel lock may
+/// have taken one since it was seen free). True when there is none of them.
+pub(crate) fn take_all_sync(e: &Engine, handles: &[u32]) -> bool {
+    let objects: Vec<Arc<Object>> = handles.iter().filter_map(|&h| sync_object(e, h)).collect();
+    objects.is_empty() || take(&objects, true).is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What a wait for all gives back goes back once and within bounds: a semaphore's count not
+    /// past its maximum (a release came in between), an auto-reset event set once.
+    #[test]
+    fn a_give_back_stays_within_bounds() {
+        let s = Object::new(Kind::Semaphore { maximum: 1 }, 1);
+        assert!(s.try_take());
+        s.state.store(1, Ordering::SeqCst);
+        s.give_back();
+        assert_eq!(s.state.load(Ordering::SeqCst), 1, "past the maximum");
+        let e = Object::new(Kind::Event { manual: false }, 1);
+        assert!(e.try_take());
+        e.give_back();
+        assert_eq!(e.state.load(Ordering::SeqCst), 1);
+        e.give_back();
+        assert_eq!(e.state.load(Ordering::SeqCst), 1);
+    }
 }
