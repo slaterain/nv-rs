@@ -1516,6 +1516,45 @@ mod tests {
     /// Readings closer together than a microsecond still add up to the real time that passed
     /// (each one used to drop its part of a microsecond, so back-to-back readings stopped the
     /// clock).
+    /// `NV_REPEATABLE`'s clock: the same readings on every run, whatever the host's speed: it
+    /// starts at the hour, each reading moves it 1 us, a frame end moves it on to 1/60 s past the
+    /// previous one (not past a frame that took longer), and a sleep jumps it.
+    #[test]
+    fn the_repeatable_clock_reads_the_same_on_every_run() {
+        let run = || {
+            let mut e = Engine::new();
+            e.start_repeatable_clock();
+            let mut seen = vec![e.clock_now_us(), e.clock_now_us()];
+            e.repeatable_frame_end();
+            seen.push(e.clock_now_us());
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            seen.push(e.clock_now_us());
+            e.advance_clock_us(20_000); // a frame longer than 1/60 s
+            e.repeatable_frame_end();
+            seen.push(e.clock_peek_us());
+            e.repeatable_frame_end();
+            seen.push(e.clock_peek_us());
+            e.wait_clock_until_us(e.clock_peek_us() + 5_000);
+            seen.push(e.clock_peek_us());
+            seen
+        };
+        let start = u64::from(REPEATABLE_START_MS) * 1000;
+        let a = run();
+        assert_eq!(a, run());
+        assert_eq!(
+            a,
+            [
+                start + 1,
+                start + 2,
+                start + REPEATABLE_FRAME_US + 1,
+                start + REPEATABLE_FRAME_US + 2,
+                start + REPEATABLE_FRAME_US + 20_002,
+                start + 2 * REPEATABLE_FRAME_US + 20_002,
+                start + 2 * REPEATABLE_FRAME_US + 25_002,
+            ]
+        );
+    }
+
     #[test]
     fn the_real_clock_keeps_up_with_back_to_back_readings() {
         use std::time::{Duration, Instant};

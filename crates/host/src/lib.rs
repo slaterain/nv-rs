@@ -281,9 +281,6 @@ impl Host {
     }
 }
 
-/// What `nv-viewer --check` reports for the installation whose `Data` folder is `data`, without
-/// starting anything: an error when its `FalloutNV.exe` is missing or is not 1.4.0.525
-/// ([`engine::exe::verify`]), else a line for each thing that decides how the run will go.
 /// `NV_REPEATABLE=FRAMES` (a test mode, never play; docs/PLAYTESTING.md): a run that two runs of
 /// the same exe with the same settings and scripted input repeat exactly, down to the bytes of
 /// `NV_D3D9_RECORD`, ending after FRAMES of main's frames ([`Host::repeatable_end`]). `None`
@@ -319,6 +316,9 @@ impl Host {
     }
 }
 
+/// What `nv-viewer --check` reports for the installation whose `Data` folder is `data`, without
+/// starting anything: an error when its `FalloutNV.exe` is missing or is not 1.4.0.525
+/// ([`engine::exe::verify`]), else a line for each thing that decides how the run will go.
 pub fn check_installation(data: &Path) -> Result<Vec<String>, String> {
     let exe = engine::exe::installed_exe(data);
     if !exe.is_file() {
