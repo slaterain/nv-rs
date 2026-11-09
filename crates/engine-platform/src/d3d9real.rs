@@ -117,6 +117,11 @@ pub fn wanted() -> bool {
     backends().is_some()
 }
 
+/// The backends' words for the layer's lines (`NV_D3D9=real: ...`, as in play).
+fn tag() -> &'static str {
+    backends().map_or("real", Backends::name)
+}
+
 /// The forwarding's side on the game's threads (`Graphics::real`): the real windows by modelled
 /// handle, the stream to the backend, and what was asked of it.
 #[derive(Default)]
@@ -310,7 +315,10 @@ extern "system" fn window_procedure(
     // Closing the game's window ends the run (the player's way out, also when the game has
     // stopped); the window itself is not destroyed first.
     if message == WM_CLOSE {
-        eprintln!("NV_D3D9=real: the game's window was closed: the run ends");
+        eprintln!(
+            "NV_D3D9={}: the game's window was closed: the run ends",
+            tag()
+        );
         std::process::exit(0);
     }
     match message {
@@ -744,7 +752,10 @@ pub fn window_created(
         match real_window(e, parent) {
             Some(p) => p,
             None => {
-                eprintln!("NV_D3D9=real: a child window of a window without a real one");
+                eprintln!(
+                    "NV_D3D9={}: a child window of a window without a real one",
+                    tag()
+                );
                 return;
             }
         }
@@ -767,12 +778,13 @@ pub fn window_created(
     match answer.recv().ok().filter(|&w| sent && w != 0) {
         Some(window) => {
             eprintln!(
-                "NV_D3D9=real: window {handle:#x} (style {style:#x}, parent {parent:#x}, {rect:?}) is real window {window:#x}"
+                "NV_D3D9={}: window {handle:#x} (style {style:#x}, parent {parent:#x}, {rect:?}) is real window {window:#x}",
+                tag()
             );
             let _device = engine_core::real_threads::device_guard(e);
             real(e).windows.insert(handle, window);
         }
-        None => eprintln!("NV_D3D9=real: the real window could not be made"),
+        None => eprintln!("NV_D3D9={}: the real window could not be made", tag()),
     }
 }
 
@@ -937,7 +949,10 @@ pub fn device_created(
         real_window(e, h)
     };
     let (Some(window), Some(focus)) = (map(e, words[7]), map(e, focus)) else {
-        eprintln!("NV_D3D9=real: CreateDevice: the game's window has no real window");
+        eprintln!(
+            "NV_D3D9={}: CreateDevice: the game's window has no real window",
+            tag()
+        );
         return;
     };
     // The real device takes calls from more than one thread at once: the D3DX side channel's
