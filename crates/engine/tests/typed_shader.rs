@@ -3098,140 +3098,147 @@ fn geometry_world(e: &mut Engine, c: &Case) -> Geo {
     }
 }
 
-/// A set-up's test: the function at its address with the words `args` makes of the world.
-fn geometry_test(f: (u32, AbiFn), plainly: &[u32], args: fn(&Geo) -> Vec<u32>) {
-    Diff::new(f)
-        .common()
-        .translation_calls_plainly(plainly)
-        .inputs(GEOMETRY_INPUTS)
-        .max_cases(400)
-        .float_sweep(FLOAT_SWEEP)
-        .setup(move |e, c| {
-            let g = geometry_world(e, c);
-            args(&g)
-        })
-        .run()
-        .assert_same();
+trait Geometry {
+    /// A set-up's test: [`GEOMETRY_INPUTS`] in [`geometry_world`], the words `args` makes of it.
+    fn geometry(self, plainly: &[u32], args: fn(&Geo) -> Vec<u32>) -> Diff;
+}
+
+impl Geometry for Diff {
+    fn geometry(self, plainly: &[u32], args: fn(&Geo) -> Vec<u32>) -> Diff {
+        self.common()
+            .translation_calls_plainly(plainly)
+            .inputs(GEOMETRY_INPUTS)
+            .max_cases(400)
+            .float_sweep(FLOAT_SWEEP)
+            .setup(move |e, c| {
+                let g = geometry_world(e, c);
+                args(&g)
+            })
+    }
 }
 
 /// `ShadowLightShader::SetupGeometryConstants` with the constant set-ups it calls; the pixel map's
 /// `SetShaderConstants` the real one or a stand-in.
 #[test]
 fn setup_geometry_constants() {
-    geometry_test(
-        entry!(
-            0x00b7_dab0,
-            geometry::setup_geometry_constants(Ptr<_>, Ptr<_>)
-        ),
-        &[0x00b7_c750],
-        |g| vec![g.shader, g.block],
-    );
+    Diff::new(entry!(
+        0x00b7_dab0,
+        geometry::setup_geometry_constants(Ptr<_>, Ptr<_>)
+    ))
+    .geometry(&[0x00b7_c750], |g| vec![g.shader, g.block])
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn vertex_entry_12() {
-    geometry_test(
-        entry!(0x00b7_9050, geometry::vertex_entry_12(Ptr<_>, u32)),
-        &[],
-        |g| vec![g.shader, g.skin],
-    );
+    Diff::new(entry!(0x00b7_9050, geometry::vertex_entry_12(Ptr<_>, u32)))
+        .geometry(&[], |g| vec![g.shader, g.skin])
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn vertex_entry_15() {
-    geometry_test(
-        entry!(0x00b7_90d0, geometry::vertex_entry_15(Ptr<_>, Ptr<_>)),
-        &[],
-        |g| vec![g.shader, g.property],
-    );
+    Diff::new(entry!(
+        0x00b7_90d0,
+        geometry::vertex_entry_15(Ptr<_>, Ptr<_>)
+    ))
+    .geometry(&[], |g| vec![g.shader, g.property])
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn vertex_entry_16() {
-    geometry_test(
-        entry!(0x00b7_9100, geometry::vertex_entry_16(Ptr<_>, u32)),
-        &[],
-        |g| vec![g.shader, 0],
-    );
+    Diff::new(entry!(0x00b7_9100, geometry::vertex_entry_16(Ptr<_>, u32)))
+        .geometry(&[], |g| vec![g.shader, 0])
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn vertex_entry_17() {
-    geometry_test(
-        entry!(0x00b7_9180, geometry::vertex_entry_17(Ptr<_>, Ptr<_>)),
-        &[],
-        |g| vec![g.shader, g.geometry],
-    );
+    Diff::new(entry!(
+        0x00b7_9180,
+        geometry::vertex_entry_17(Ptr<_>, Ptr<_>)
+    ))
+    .geometry(&[], |g| vec![g.shader, g.geometry])
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn vertex_entry_21() {
-    geometry_test(
-        entry!(
-            0x00b7_91f0,
-            geometry::vertex_entry_21(Ptr<_>, u32, Ptr<_>, Ptr<_>)
-        ),
-        &[],
-        |g| vec![g.shader, g.pass_type, g.property, g.geometry],
-    );
+    Diff::new(entry!(
+        0x00b7_91f0,
+        geometry::vertex_entry_21(Ptr<_>, u32, Ptr<_>, Ptr<_>)
+    ))
+    .geometry(&[], |g| vec![g.shader, g.pass_type, g.property, g.geometry])
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn pixel_entry_2() {
-    geometry_test(
-        entry!(0x00b7_9410, geometry::pixel_entry_2(Ptr<_>, u32, Ptr<_>)),
-        &[],
-        |g| vec![g.shader, g.pass_type, g.rendering],
-    );
+    Diff::new(entry!(
+        0x00b7_9410,
+        geometry::pixel_entry_2(Ptr<_>, u32, Ptr<_>)
+    ))
+    .geometry(&[], |g| vec![g.shader, g.pass_type, g.rendering])
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn toggles() {
-    geometry_test(
-        entry!(
-            0x00b7_95b0,
-            geometry::toggles(Ptr<_>, u32, u32, Ptr<_>, u32, u32, Ptr<_>)
-        ),
-        &[],
-        |g| {
-            vec![
-                g.shader,
-                g.pass_type,
-                g.geometry,
-                g.property,
-                g.fog,
-                g.rendering,
-                g.first_property,
-            ]
-        },
-    );
+    Diff::new(entry!(
+        0x00b7_95b0,
+        geometry::toggles(Ptr<_>, u32, u32, Ptr<_>, u32, u32, Ptr<_>)
+    ))
+    .geometry(&[], |g| {
+        vec![
+            g.shader,
+            g.pass_type,
+            g.geometry,
+            g.property,
+            g.fog,
+            g.rendering,
+            g.first_property,
+        ]
+    })
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn pixel_entry_16() {
-    geometry_test(
-        entry!(0x00b7_96f0, geometry::pixel_entry_16(Ptr<_>, Ptr<_>)),
-        &[],
-        |g| vec![g.shader, g.property],
-    );
+    Diff::new(entry!(
+        0x00b7_96f0,
+        geometry::pixel_entry_16(Ptr<_>, Ptr<_>)
+    ))
+    .geometry(&[], |g| vec![g.shader, g.property])
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn pixel_entry_19() {
-    geometry_test(
-        entry!(0x00b7_9730, geometry::pixel_entry_19()),
-        &[],
-        |_| vec![],
-    );
+    Diff::new(entry!(0x00b7_9730, geometry::pixel_entry_19()))
+        .geometry(&[], |_| vec![])
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn pixel_entry_20() {
-    geometry_test(
-        entry!(0x00b7_98c0, geometry::pixel_entry_20(Ptr<_>, Ptr<_>)),
-        &[],
-        |g| vec![g.shader, g.property],
-    );
+    Diff::new(entry!(
+        0x00b7_98c0,
+        geometry::pixel_entry_20(Ptr<_>, Ptr<_>)
+    ))
+    .geometry(&[], |g| vec![g.shader, g.property])
+    .run()
+    .assert_same();
 }
 
 /// A 4x4 matrix's words for the by-value set-ups: a scale and a translation.
@@ -3248,67 +3255,73 @@ fn matrix_words(g: &Geo) -> Vec<u32> {
 
 #[test]
 fn eye_pos() {
-    geometry_test((0x00b7_8ef0, geometry::eye_pos_words as AbiFn), &[], |g| {
-        let mut words = vec![g.pass_type, g.transform()];
-        words.extend(matrix_words(g));
-        words
-    });
+    Diff::new((0x00b7_8ef0, geometry::eye_pos_words as AbiFn))
+        .geometry(&[], |g| {
+            let mut words = vec![g.pass_type, g.transform()];
+            words.extend(matrix_words(g));
+            words
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn shadow_proj() {
-    geometry_test(
-        entry!(
-            0x00b7_b930,
-            geometry::shadow_proj(Ptr<_>, Ptr<_>, u32, Ptr<_>)
-        ),
-        &[],
-        |g| vec![g.shader, g.block, g.skin, g.transform()],
-    );
+    Diff::new(entry!(
+        0x00b7_b930,
+        geometry::shadow_proj(Ptr<_>, Ptr<_>, u32, Ptr<_>)
+    ))
+    .geometry(&[], |g| vec![g.shader, g.block, g.skin, g.transform()])
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn obj_to_cube() {
-    geometry_test(
-        entry!(
-            0x00b7_b730,
-            geometry::obj_to_cube(Ptr<_>, Ptr<_>, u32, u32, u32)
-        ),
-        &[],
-        |g| vec![g.shader, g.rendering, g.pass_type, g.skin, g.transform()],
-    );
+    Diff::new(entry!(
+        0x00b7_b730,
+        geometry::obj_to_cube(Ptr<_>, Ptr<_>, u32, u32, u32)
+    ))
+    .geometry(&[], |g| {
+        vec![g.shader, g.rendering, g.pass_type, g.skin, g.transform()]
+    })
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn simple_shadow_clip_planes() {
-    geometry_test(
-        entry!(
-            0x00b7_be00,
-            geometry::simple_shadow_clip_planes(Ptr<_>, u32)
-        ),
-        &[],
-        |g| vec![g.shader, g.pass_type],
-    );
+    Diff::new(entry!(
+        0x00b7_be00,
+        geometry::simple_shadow_clip_planes(Ptr<_>, u32)
+    ))
+    .geometry(&[], |g| vec![g.shader, g.pass_type])
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn lights() {
-    geometry_test((0x00b7_8a90, geometry::lights_words as AbiFn), &[], |g| {
-        let mut words = vec![g.property, g.rendering];
-        words.extend(matrix_words(g));
-        words.extend([g.transform(), g.pass_type, g.skin]);
-        words
-    });
+    Diff::new((0x00b7_8a90, geometry::lights_words as AbiFn))
+        .geometry(&[], |g| {
+            let mut words = vec![g.property, g.rendering];
+            words.extend(matrix_words(g));
+            words.extend([g.transform(), g.pass_type, g.skin]);
+            words
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
 fn ambient_emittance() {
-    geometry_test(
-        entry!(
-            0x00b7_ba70,
-            geometry::ambient_emittance(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, u32)
-        ),
-        &[],
-        |g| vec![g.shader, g.property, g.rendering, g.geometry, g.fog],
-    );
+    Diff::new(entry!(
+        0x00b7_ba70,
+        geometry::ambient_emittance(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, u32)
+    ))
+    .geometry(&[], |g| {
+        vec![g.shader, g.property, g.rendering, g.geometry, g.fog]
+    })
+    .run()
+    .assert_same();
 }

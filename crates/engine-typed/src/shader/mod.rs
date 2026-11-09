@@ -28,6 +28,8 @@ pub mod geometry;
 pub mod layout;
 pub mod state;
 
+use geometry::{eye_pos_words, lights_words};
+
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(17);
 
@@ -215,7 +217,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b7_96f0, geometry::pixel_entry_16(Ptr<_>, Ptr<_>)),
         entry!(0x00b7_9730, geometry::pixel_entry_19()),
         entry!(0x00b7_98c0, geometry::pixel_entry_20(Ptr<_>, Ptr<_>)),
-        (0x00b7_8ef0, geometry::eye_pos_words as AbiFn),
+        (0x00b7_8ef0, eye_pos_words as AbiFn),
         entry!(
             0x00b7_b930,
             geometry::shadow_proj(Ptr<_>, Ptr<_>, u32, Ptr<_>)
@@ -228,7 +230,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
             0x00b7_be00,
             geometry::simple_shadow_clip_planes(Ptr<_>, u32)
         ),
-        (0x00b7_8a90, geometry::lights_words as AbiFn),
+        (0x00b7_8a90, lights_words as AbiFn),
         entry!(
             0x00b7_ba70,
             geometry::ambient_emittance(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, u32)
