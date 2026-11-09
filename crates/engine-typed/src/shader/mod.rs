@@ -198,6 +198,41 @@ fn funcs() -> Vec<(u32, AbiFn)> {
             0x00b7_dab0,
             geometry::setup_geometry_constants(Ptr<_>, Ptr<_>)
         ),
+        // The constant set-ups SetupGeometryConstants calls (plain Rust calls there, as in the exe).
+        entry!(0x00b7_9050, geometry::vertex_entry_12(Ptr<_>, u32)),
+        entry!(0x00b7_90d0, geometry::vertex_entry_15(Ptr<_>, Ptr<_>)),
+        entry!(0x00b7_9100, geometry::vertex_entry_16(Ptr<_>, u32)),
+        entry!(0x00b7_9180, geometry::vertex_entry_17(Ptr<_>, Ptr<_>)),
+        entry!(
+            0x00b7_91f0,
+            geometry::vertex_entry_21(Ptr<_>, u32, Ptr<_>, Ptr<_>)
+        ),
+        entry!(0x00b7_9410, geometry::pixel_entry_2(Ptr<_>, u32, Ptr<_>)),
+        entry!(
+            0x00b7_95b0,
+            geometry::toggles(Ptr<_>, u32, u32, Ptr<_>, u32, u32, Ptr<_>)
+        ),
+        entry!(0x00b7_96f0, geometry::pixel_entry_16(Ptr<_>, Ptr<_>)),
+        entry!(0x00b7_9730, geometry::pixel_entry_19()),
+        entry!(0x00b7_98c0, geometry::pixel_entry_20(Ptr<_>, Ptr<_>)),
+        (0x00b7_8ef0, geometry::eye_pos_words as AbiFn),
+        entry!(
+            0x00b7_b930,
+            geometry::shadow_proj(Ptr<_>, Ptr<_>, u32, Ptr<_>)
+        ),
+        entry!(
+            0x00b7_b730,
+            geometry::obj_to_cube(Ptr<_>, Ptr<_>, u32, u32, u32)
+        ),
+        entry!(
+            0x00b7_be00,
+            geometry::simple_shadow_clip_planes(Ptr<_>, u32)
+        ),
+        (0x00b7_8a90, geometry::lights_words as AbiFn),
+        entry!(
+            0x00b7_ba70,
+            geometry::ambient_emittance(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, u32)
+        ),
         entry!(
             0x00c0_3230,
             accumulator::texture_by_index(Ptr<_>, u32) -> u32
