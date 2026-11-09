@@ -292,8 +292,15 @@ mod tests {
     #[test]
     fn a_stream_larger_than_a_step_decodes_in_one_call() {
         let mut e = Engine::new();
-        let data: Vec<u8> = (0..(3 * STEP as u32))
-            .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8 & 0x3f)
+        // Six random bits a byte (xorshift): it packs to about three quarters, more than a step.
+        let mut x = 0x2545_f491u32;
+        let data: Vec<u8> = (0..3 * STEP)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                (x >> 7) as u8 & 0x3f
+            })
             .collect();
         let packed = zlib(&data);
         assert!(packed.len() > STEP);
