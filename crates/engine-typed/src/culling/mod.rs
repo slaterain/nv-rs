@@ -30,6 +30,7 @@ use layout::{
 pub mod bound;
 pub mod compound;
 pub mod layout;
+mod par;
 pub mod planes;
 mod probe;
 pub mod process;

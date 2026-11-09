@@ -63,6 +63,11 @@ pub fn node_on_visible(e: &mut Engine, this: Ptr<NiNode>, process: Ptr<NiCulling
         return;
     }
     let count = u32::from(e.get(this, NiNode::m_usSize));
+    // `NV_PAR_RENDER`: the children on several cores, registered in order (`par`).
+    if super::par::wants_split(count) && super::par::split(e, this, process.addr(), count) {
+        return;
+    }
+    let _nest = super::par::nest();
     for index in 0..count {
         let child = child(e, this, index);
         if !child.is_null() {

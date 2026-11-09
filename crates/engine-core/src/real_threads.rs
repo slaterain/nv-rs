@@ -2445,6 +2445,161 @@ pub(crate) fn main_stopped(e: &Engine, why: &str) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Helpers: engines for fork-join work inside a game thread's call (the parallel render's culling
+// walk, `NV_PAR_RENDER`). Not game threads: no handle, not in the thread list, never seen by the
+// game; each is made like a game thread's engine (`World::context`: the shared memory view, its own
+// call cache, guest stack and TLS block) and runs only while the thread that forked waits for it.
+// ---------------------------------------------------------------------------------------------
+
+/// The first id a helper answers `GetCurrentThreadId` with (game threads have small ids).
+const HELPER_ID_BASE: u32 = 0x0001_0000;
+
+/// A job for [`fork_join`]: called once on each helper with its engine and number (1 to n), and on
+/// the caller with number 0.
+pub type HelperJob<'a> = &'a (dyn Fn(&mut Engine, usize) + Sync);
+
+/// What the helpers and the caller of [`fork_join`] share.
+struct Pool {
+    /// The helpers made so far.
+    count: usize,
+    state: Mutex<PoolState>,
+    /// A new job (the generation moved on).
+    start: Condvar,
+    /// The last helper of a job finished.
+    done: Condvar,
+}
+
+struct PoolState {
+    generation: u64,
+    /// The job, its lifetime erased: [`fork_join`] waits for every helper before it returns.
+    job: Option<HelperJob<'static>>,
+    /// The caller's x87 control word, which the helpers take for the job.
+    control_word: u16,
+    /// Helpers still running the job.
+    running: usize,
+    /// The first helper's panic in this job, resumed on the caller.
+    panic: Option<Box<dyn std::any::Any + Send>>,
+}
+
+static POOL: std::sync::OnceLock<&'static Pool> = std::sync::OnceLock::new();
+
+thread_local! {
+    /// This OS thread is a helper: it never forks itself.
+    static HELPER: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Runs `job` on `helpers` helper engines (numbers 1 to `helpers`, each on its own OS thread, made
+/// at the first call) and on `e` itself (number 0) at the same time, and returns when all are done.
+/// Each helper takes the caller's x87 control word and counts as running game code for the page
+/// barrier while it works. False (nothing run) without real threads, or when the pool was made
+/// with fewer helpers. A helper's panic is resumed here after every helper is done.
+pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
+    if HELPER.with(Cell::get) {
+        return false;
+    }
+    let Some(world) = e.real.as_ref().map(|r| r.world) else {
+        return false;
+    };
+    let pool = *POOL.get_or_init(|| make_pool(world, helpers));
+    if pool.count < helpers || helpers == 0 {
+        return false;
+    }
+    // SAFETY: the job's borrow is erased only until every helper has run it: this function does
+    // not return (or unwind) before `running` is back to 0, and the helpers drop their copy of the
+    // reference before they count themselves done.
+    let erased: HelperJob<'static> =
+        unsafe { std::mem::transmute::<HelperJob<'_>, HelperJob<'static>>(job) };
+    {
+        let mut s = guard(&pool.state);
+        s.job = Some(erased);
+        s.control_word = crate::x87::control_word();
+        s.running = helpers;
+        s.panic = None;
+        s.generation += 1;
+        pool.start.notify_all();
+    }
+    struct Join(&'static Pool);
+    impl Drop for Join {
+        fn drop(&mut self) {
+            let mut s = guard(&self.0.state);
+            while s.running != 0 {
+                s = wait(&self.0.done, s);
+            }
+            s.job = None;
+        }
+    }
+    let join = Join(pool);
+    job(e, 0);
+    drop(join);
+    let panic = guard(&pool.state).panic.take();
+    if let Some(payload) = panic {
+        std::panic::resume_unwind(payload);
+    }
+    true
+}
+
+/// The pool and its helpers' OS threads, each with an engine made on this thread.
+fn make_pool(world: &'static World, helpers: usize) -> &'static Pool {
+    let pool: &'static Pool = Box::leak(Box::new(Pool {
+        count: helpers,
+        state: Mutex::new(PoolState {
+            generation: 0,
+            job: None,
+            control_word: 0,
+            running: 0,
+            panic: None,
+        }),
+        start: Condvar::new(),
+        done: Condvar::new(),
+    }));
+    for number in 1..=helpers {
+        let id = HELPER_ID_BASE + u32::try_from(number).unwrap_or(0);
+        let engine = SendEngine(Box::new(world.context(id, usize::MAX)));
+        std::thread::Builder::new()
+            .name(format!("render helper {number}"))
+            .stack_size(THREAD_STACK)
+            .spawn(move || run_helper(engine, world, pool, number))
+            .expect("a render helper thread");
+    }
+    pool
+}
+
+/// A helper's body: waits for each job, runs it on its engine, counts itself done.
+fn run_helper(engine: SendEngine, world: &'static World, pool: &'static Pool, number: usize) {
+    HELPER.with(|h| h.set(true));
+    let mut e = engine.0;
+    let tls = e.new_tls_block();
+    e.swap_tls(tls);
+    let mut seen = 0u64;
+    loop {
+        let (job, control_word) = {
+            let mut s = guard(&pool.state);
+            while s.generation == seen {
+                s = wait(&pool.start, s);
+            }
+            seen = s.generation;
+            match s.job {
+                Some(job) => (job, s.control_word),
+                None => continue,
+            }
+        };
+        sync_registered(&mut e);
+        crate::x87::set_control_word(control_word);
+        world.enter_guest();
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&mut e, number)));
+        world.leave_guest();
+        let mut s = guard(&pool.state);
+        if let Err(payload) = out {
+            s.panic.get_or_insert(payload);
+        }
+        s.running -= 1;
+        if s.running == 0 {
+            pool.done.notify_all();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

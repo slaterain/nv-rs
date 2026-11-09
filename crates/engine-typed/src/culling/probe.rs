@@ -32,7 +32,8 @@ pub(crate) fn on() -> bool {
 
 #[cold]
 fn read_switch() -> bool {
-    let on = std::env::var("NV_PAR_RENDER").is_ok_and(|v| v.trim() == "time");
+    let on = std::env::var("NV_PAR_RENDER")
+        .is_ok_and(|v| v.split(',').any(|part| part.trim() == "time"));
     STATE.store(if on { 2 } else { 1 }, Relaxed);
     if on {
         println!(
@@ -71,11 +72,15 @@ struct Table {
 static TABLE: Mutex<Option<Table>> = Mutex::new(None);
 
 /// Held across a `Process` call while the probe is on.
-pub(crate) struct Walk(());
+pub(crate) struct Walk(bool);
 
 /// A `Process` call starts on `root` (the object handed to the process; its vtable files the walk
 /// when it is the outermost one).
 pub(crate) fn walk_begins(e: &engine_core::Engine, root: u32) -> Walk {
+    // A helper's chunk of a parallel walk is part of main's walk, timed there.
+    if super::par::collecting() {
+        return Walk(false);
+    }
     let open = OPEN.with(|o| {
         let n = o.get();
         o.set(n + 1);
@@ -87,11 +92,14 @@ pub(crate) fn walk_begins(e: &engine_core::Engine, root: u32) -> Walk {
         REG_COUNT.with(|r| r.set(0));
         START.with(|s| s.set(Some(Instant::now())));
     }
-    Walk(())
+    Walk(true)
 }
 
 impl Drop for Walk {
     fn drop(&mut self) {
+        if !self.0 {
+            return;
+        }
         let open = OPEN.with(|o| {
             let n = o.get().saturating_sub(1);
             o.set(n);
