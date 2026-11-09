@@ -1210,6 +1210,7 @@ constants!(set_pixel_constant_i, get_pixel_constant_i, 4);
 constants!(set_pixel_constant_b, get_pixel_constant_b, 5);
 
 /// Whether the device has a buffer of its own in `D3DPOOL_DEFAULT` alive (`Reset` refuses then).
+/// Under the device lock: its one caller is `d3d9device::default_pool_alive`, for `Reset`.
 pub(super) fn default_pool_alive(e: &Engine, device: u32) -> bool {
     device_ref!(e)
         .device_objects

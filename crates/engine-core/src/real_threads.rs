@@ -1293,8 +1293,9 @@ fn device_addr(addr: u32) -> bool {
 
 /// A platform function of the Direct3D 9 device or one of its objects: under the device lock,
 /// not the kernel lock. Their state (the device model and its forwarding, engine-platform's
-/// `Graphics`) is reached only under it: by these functions, and by the kernel-locked ones that
-/// reach it through [`device_guard`]. They touch no kernel object and no last-error code. A
+/// `d3d9::DeviceState` behind `Engine::device`, apart from the kernel) is reached only under it:
+/// by these functions, and by the kernel-locked ones that reach it through [`device_guard`]. They
+/// touch no kernel object and no last-error code, and never make a reference to the kernel. A
 /// suspended thread (`SuspendThread`, the game's task threads at quit) parks here before it takes
 /// the device lock, as it does at a kernel-locked call; not while it holds the device lock (a
 /// device function calling another), where parking would take the kernel lock inside it.

@@ -291,7 +291,8 @@ pub fn forget(e: &mut Engine, object: u32) {
     }
 }
 
-/// Whether the modelled object's counterpart was asked of the backend.
+/// Whether the modelled object's counterpart was asked of the backend. Under the device lock:
+/// its callers are the query's `Issue` and `GetData` and the texture's `SetLOD`, device functions.
 fn is_forwarded(e: &Engine, object: u32) -> bool {
     device_ref!(e).real.forwarded.contains(&object)
 }
@@ -1409,7 +1410,9 @@ pub fn surface_created(
 
 /// Whether the modelled surface `surface` has a real counterpart (asked of the backend; one it
 /// could not make keeps its bytes there, so the level reads back what it was given either way).
-pub fn has_surface(e: &Engine, surface: u32) -> bool {
+/// Under the device lock: its callers are device functions (texture creation, a level's lock and
+/// unlock, `GetRenderTargetData`; through [`read_surface`] and [`surface_unlocked`]).
+pub(crate) fn has_surface(e: &Engine, surface: u32) -> bool {
     device_ref!(e).real.forwarded.contains(&surface)
 }
 

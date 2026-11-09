@@ -2829,7 +2829,8 @@ fn get_render_target_data(e: &mut Engine, this: Ptr, source: u32, destination: u
 }
 
 /// Whether the device has a resource of its own in `D3DPOOL_DEFAULT` alive (a texture, a
-/// surface it did not make itself, a buffer).
+/// surface it did not make itself, a buffer). Under the device lock: its one caller is `Reset`,
+/// a device function.
 fn default_pool_alive(e: &Engine, device: u32) -> bool {
     let o = &device_ref!(e).device_objects;
     o.textures
@@ -3555,8 +3556,9 @@ pub(crate) fn written_after_unlock(e: &mut Engine, object: u32) -> bool {
         .contains(&object)
 }
 
-/// The present parameters a device took (for the viewer and tests).
-pub fn device_present_parameters(e: &Engine, device: u32) -> Option<Vec<u8>> {
+/// The present parameters a device took (tests, with no real threads: `device_ref!` checks).
+#[cfg(test)]
+pub(crate) fn device_present_parameters(e: &Engine, device: u32) -> Option<Vec<u8>> {
     device_ref!(e)
         .device_objects
         .devices

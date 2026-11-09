@@ -710,8 +710,8 @@ impl Engine {
     /// A new engine for a real thread (`crate::real_threads`), made from this one (the real
     /// threads' template): the same functions (plain ones; test doubles stay with their engine),
     /// typed families, clock and platform slots, a view of the same memory, the same kernel
-    /// objects and the same device state; its own call cache, call stack, TLS block (none yet), guest stack and time slice
-    /// (none). No diagnostic. `real` is the new thread's context.
+    /// objects and the same device state; its own call cache, call stack, TLS block (none yet),
+    /// guest stack and time slice (none). No diagnostic. `real` is the new thread's context.
     pub(crate) fn thread_context(&self, real: crate::real_threads::Ctx) -> Engine {
         let mut e = Engine {
             mem: self.mem.view(),

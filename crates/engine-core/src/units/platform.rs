@@ -1274,6 +1274,10 @@ impl DeviceRef {
     /// Another reference to this state, for a real thread's engine. Made only after
     /// [`DeviceRef::leak`], so it never outlives the state.
     pub(crate) fn alias(&self) -> DeviceRef {
+        debug_assert!(
+            !self.owned,
+            "the device state is aliased before it is leaked: the alias could outlive it"
+        );
         DeviceRef {
             state: self.state,
             owned: false,
