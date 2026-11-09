@@ -20,7 +20,7 @@ use engine_core::typed::diff::{Diff, Input};
 use engine_core::typed::leaf;
 use engine_core::{entry, Engine};
 use engine_typed::render::{self, pass, stage};
-use engine_typed::{dispatch, shader};
+use engine_typed::{culling, dispatch, pathing, shader};
 
 /// The stand-in virtual functions, one per slot, and the table of what each answers.
 const VT_FN: u32 = 0x00ff_2000;
@@ -307,6 +307,9 @@ impl Common for Diff {
             .family(&render::RENDER)
             .family(&leaf::LEAVES)
             .family(&dispatch::DISPATCH)
+            // What dispatch calls in turn (the 4x4 inverse's helpers are pathing's).
+            .family(&pathing::PATHING)
+            .family(&culling::CULLING)
             .max_calls(MAX_CALLS)
             .max_cases(200);
         if real_shader {
@@ -581,7 +584,11 @@ fn geometry_pass() {
             };
             set(e, RETS + 0xe0, 3);
             // Stage 1's texture: none, or the world's.
-            set(e, TEXTURE_ANSWER, if c.word(1) != 0 { w.texture } else { 0 });
+            set(
+                e,
+                TEXTURE_ANSWER,
+                if c.word(1) != 0 { w.texture } else { 0 },
+            );
             set(e, APPLY_STATES_ANSWER, c.word(2));
             let shader = e.mem.alloc(0x40);
             let pass = e.mem.alloc(0x10);
