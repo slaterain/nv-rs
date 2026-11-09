@@ -202,6 +202,12 @@ fn add_worn_item(e: &mut Engine, a: &[u32]) -> Option<u32> {
 /// OnSell: the entry's item (a base form) and the seller, when the seller is a reference; the
 /// entry and the seller are kept while the handlers run, for `GetSoldItemInvRef`. The count read
 /// goes on as the game's.
+///
+/// xNVSE lets them go after a handler runs (`PostDispatchCleanup`), so when none runs (every
+/// handler filtered out) they stay, and a later `GetSoldItemInvRef` outside the event reads the
+/// entry, which the sale may have freed. Vanilla does the same. The row
+/// `crate::invref::set_checks` lets them go when the event ends too. (A sale is made in the
+/// barter menu, on the main thread, where the handlers run at once.)
 fn sell(e: &mut Engine, a: &[u32]) -> Option<u32> {
     if !events::has_handlers_lock_free(e, id::ON_SELL) || events::in_use(e) & MASK_ON_SELL == 0 {
         return None;
@@ -217,6 +223,9 @@ fn sell(e: &mut Engine, a: &[u32]) -> Option<u32> {
             seller,
             Some(crate::invref::clear_sold),
         );
+        if crate::invref::checks(e) {
+            crate::invref::clear_sold(e);
+        }
     }
     None
 }

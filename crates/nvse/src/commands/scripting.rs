@@ -393,8 +393,12 @@ fn set_container_iterator(
 }
 
 /// Ends a loop: `ArrayIterLoop`'s destructor gives up the iterator variable's reference;
-/// `ContainerIterLoop`'s frees its stacks and releases its inventory reference.
-fn drop_loop(e: &mut Engine, info: &LoopInfo) {
+/// `ContainerIterLoop`'s releases its inventory reference and frees its stacks.
+///
+/// xNVSE frees the stacks first, and the release's deferred actions then read the count of the
+/// stack the reference stands for from its freed entry. Here the release comes first: the same
+/// actions with the same counts, read before the entry is freed.
+pub(crate) fn drop_loop(e: &mut Engine, info: &LoopInfo) {
     match info.kind {
         Loop::Container {
             invref,
@@ -402,10 +406,10 @@ fn drop_loop(e: &mut Engine, info: &LoopInfo) {
             ref elements,
             ..
         } => {
+            crate::invref::release(e, invref);
             for &entry in elements {
                 crate::invref::free_temp_entry(e, entry);
             }
-            crate::invref::release(e, invref);
             e.mem.set_f64(local + 8, 0.0);
         }
         Loop::Array {

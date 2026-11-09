@@ -96,6 +96,8 @@ pub struct State {
     order: HashOrder,
     sold: Option<(u32, u32)>,
     sold_ref: u32,
+    /// The fixes preset's row [`set_checks`].
+    checks: bool,
 }
 
 impl Default for State {
@@ -105,8 +107,29 @@ impl Default for State {
             order: HashOrder::with_buckets(0x80),
             sold: None,
             sold_ref: 0,
+            checks: false,
         }
     }
+}
+
+/// The fixes preset's row "Inventory reference checks" (docs/FIXES.md), where xNVSE frees, reads
+/// or keeps memory it should not: an unworn stack's removal ([`remove_from_container`]) takes the
+/// list out of the container's own entry before freeing it; a sale ends with its event
+/// (`crate::call_sites`); a base container entry without a form is passed over
+/// ([`inventory_items`]). Off (vanilla), each is xNVSE's.
+pub fn set_checks(e: &mut Engine, on: bool) {
+    state(e).checks = on;
+}
+
+/// Whether the row [`set_checks`] is on.
+pub fn checks(e: &mut Engine) -> bool {
+    state(e).checks
+}
+
+/// OnSell's entry and seller while they are kept (`GetSoldItemInvRef` reads them).
+#[cfg(test)]
+pub fn sale(e: &mut Engine) -> Option<(u32, u32)> {
+    state(e).sold
 }
 
 /// OnSell's entry and seller, kept while its handlers run.
@@ -344,6 +367,9 @@ pub fn create_entry(e: &mut Engine, container: u32, item: u32, count: i32, xdata
 /// base container's items first (leveled lists left out; a count with changes is the changes'
 /// when the entry came from a leveled list, else the sum), then items only in the changes, each
 /// with a count above 0. None without a container or changes.
+///
+/// A base container entry without a form: xNVSE reads its form type through the null pointer and
+/// the game stops, and so does vanilla here; the row [`set_checks`] passes over it.
 pub fn inventory_items(e: &mut Engine, reference: u32) -> Vec<(u32, i32, u32)> {
     let container = crate::commands::inventory_ref::container_of(e, reference);
     if container == 0 {
@@ -353,10 +379,14 @@ pub fn inventory_items(e: &mut Engine, reference: u32) -> Vec<(u32, i32, u32)> {
     if list == 0 {
         return Vec::new();
     }
+    let checks = state(e).checks;
     let mut order = HashOrder::with_buckets(0x40);
     let mut items: HashMap<u32, (i32, u32)> = HashMap::new();
     for fc in list_items(e, container + 4) {
         let item = e.mem.u32(fc + 4);
+        if item == 0 && checks {
+            continue;
+        }
         if e.mem.u8(item + 4) == FORM_TYPE_LEVELED_ITEM || items.contains_key(&item) {
             continue;
         }
@@ -434,16 +464,25 @@ pub fn validate(e: &mut Engine, id: u32) -> bool {
         return false;
     }
     let item = e.mem.u32(entry + ENTRY_TYPE);
+    entry_holding(e, list, item, xdata) != 0
+}
+
+/// The first entry of the entry list `list` for `item` whose lists hold `xdata`, or 0
+/// ([`validate`]'s walk).
+fn entry_holding(e: &Engine, list: u32, item: u32, xdata: u32) -> u32 {
+    if list == 0 {
+        return 0;
+    }
     for en in list_items(e, list) {
         if e.mem.u32(en + ENTRY_TYPE) != item {
             continue;
         }
         let extend = e.mem.u32(en + ENTRY_EXTEND_DATA);
         if extend != 0 && list_items(e, extend).contains(&xdata) {
-            return true;
+            return en;
         }
     }
-    false
+    0
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), InventoryReference.cpp: GetForRefID.
@@ -493,6 +532,14 @@ pub fn count(e: &mut Engine, id: u32) -> i32 {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), InventoryReference.cpp:
 // RemoveFromContainer.
 /// Takes the stack out of the container: a worn stack waits for the release (deferred).
+///
+/// An unworn stack with extra data (a weapon with its condition) leaves the reference's entry
+/// and its list is freed. xNVSE does that through the entry the reference holds, which for a
+/// reference with an entry of its own (`GetInvRefsForItem`, `ForEach`, OnSell, OnRepair) is that
+/// entry, not the container's: the container's entry keeps the freed list and its count, so the
+/// game later reads freed memory as the item's data. Vanilla does the same. The row
+/// [`set_checks`] takes the list out of the container's own entry too (its count with it) before
+/// freeing it, and frees nothing when no entry of the container holds it.
 pub fn remove_from_container(e: &mut Engine, id: u32) -> bool {
     if !validate(e, id) {
         return false;
@@ -511,7 +558,18 @@ pub fn remove_from_container(e: &mut Engine, id: u32) -> bool {
     if let Some(r) = state(e).refs.get_mut(&id) {
         r.removed = true;
     }
-    if data.xdata != 0 {
+    if data.xdata != 0 && state(e).checks {
+        let list = entry_list(e, container);
+        let own = entry_holding(e, list, data.item, data.xdata);
+        if own == 0 {
+            return false;
+        }
+        if own != data.entry {
+            // The reference's own entry: the list and its count leave it as in xNVSE, unfreed.
+            entry_remove(e, data.entry, data.xdata, false);
+        }
+        entry_remove(e, own, data.xdata, true)
+    } else if data.xdata != 0 {
         entry_remove(e, data.entry, data.xdata, true)
     } else {
         let changes = get_by_type(e, container + REFR_EXTRA, EXTRA_CONTAINER_CHANGES);
@@ -934,14 +992,16 @@ pub fn release(e: &mut Engine, id: u32) {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), InventoryReference.cpp:
 // ~InventoryReference.
+/// Out of the map's order first (xNVSE's clean-up takes the chain's head before destroying it),
+/// then the deferred actions, then the temporary reference and the entry of its own.
 fn destroy(e: &mut Engine, id: u32) {
+    state(e).order.remove(id);
     if state(e).refs.get(&id).is_some_and(|r| r.data.item != 0) {
         do_deferred_actions(e, id);
     }
     let Some(r) = state(e).refs.remove(&id) else {
         return;
     };
-    state(e).order.remove(id);
     if r.temp_ref != 0 {
         e.mem.set_u32(r.temp_ref + REFR_BASE_FORM, 0);
         e.mem.write(
@@ -955,12 +1015,29 @@ fn destroy(e: &mut Engine, id: u32) {
     }
 }
 
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), containers.h: UnorderedMap::Clear,
+// Bucket::Clear.
 /// `s_invRefMap.Clear()`: every inventory reference destroyed, in the map's order (the main loop
-/// each frame, and before a game is loaded).
+/// each frame, and before a game is loaded), until none is left.
+///
+/// A destroyed reference's deferred equip or removal raises the game's events, and their
+/// handlers can make new references (`ForEach` over a container, `GetInvRefsForItem`). xNVSE
+/// walks the buckets in order and takes each chain's head before destroying it, so one made in
+/// the bucket being cleared or a later one goes in the same walk; one made in an earlier bucket
+/// stays there with the map's count set to 0, out of reach of lookups, until a later clean-up
+/// with a new reference in the map. Here the walk starts again from the first bucket until the
+/// map is empty, so that one goes now.
 pub fn clear(e: &mut Engine) {
-    let ids = state(e).order.keys();
-    for id in ids {
-        destroy(e, id);
+    let mut from = 0;
+    loop {
+        match state(e).order.head_from(from) {
+            Some((bucket, id)) => {
+                from = bucket;
+                destroy(e, id);
+            }
+            None if from != 0 => from = 0,
+            None => break,
+        }
     }
     state(e).order.clear();
 }

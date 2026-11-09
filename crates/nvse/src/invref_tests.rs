@@ -392,6 +392,156 @@ fn a_copy_joins_the_items_entry() {
     assert_eq!(&lists[..2], [X_A, X_B]);
 }
 
+/// Where the stand-in `RemoveItem` below keeps the temporary references it made.
+const MADE: u32 = AREA + 0x6800;
+
+/// `RemoveItem`'s stand-in whose handlers make two inventory references: one with the first
+/// id again (a destroyed reference's id comes back: bucket 0, before the one being cleared)
+/// and one in a later bucket (`0xFF000802`: 26).
+fn remove_item_making_references(e: &mut Engine, a: &[u32]) -> Ret {
+    log("remove", a);
+    e.mem.set_u32(NEXT_ID, 0xff00_0800);
+    let early = create_entry(e, CONTAINER, ITEM_B, 2, 0);
+    e.mem.set_u32(NEXT_ID, 0xff00_0802);
+    let late = create_entry(e, CONTAINER, ITEM_B, 2, 0);
+    e.mem.set_u32(MADE, early);
+    e.mem.set_u32(MADE + 4, late);
+    Ret::default()
+}
+
+/// The review of #349: references made while the clean-up runs (a deferred removal's handlers
+/// using `GetInvRefsForItem` or `ForEach`) go with it. The map's walk (A in bucket 0, B in 13)
+/// destroys B, whose removal makes two; the one in a later bucket goes in the same walk, as in
+/// xNVSE, and the one in bucket 0, which xNVSE leaves behind, in a second walk.
+#[test]
+fn references_made_during_the_clean_up_go_with_it() {
+    let mut e = engine();
+    e.register(AREA + 0xf20, remove_item_making_references);
+    let ids = crate::commands::inventory_ref::stacks_for_item(&mut e, CONTAINER, ITEM_A);
+    let refs: Vec<u32> = ids
+        .iter()
+        .map(|&id| get(&mut e, id).unwrap().temp_ref)
+        .collect();
+    // B is worn: its removal waits for the clean-up.
+    assert!(remove_from_container(&mut e, ids[1]));
+    calls();
+    clear(&mut e);
+    assert!(!any(&mut e), "none left");
+    let (early, late) = (e.mem.u32(MADE), e.mem.u32(MADE + 4));
+    let destroyed: Vec<u32> = calls()
+        .into_iter()
+        .filter(|(n, _)| *n == "destroy")
+        .map(|(_, a)| a[0])
+        .collect();
+    assert_eq!(destroyed, [refs[0], refs[1], late, early]);
+}
+
+/// The review of #349: `RemoveMeIR` on an unworn stack with data of its own, through a reference
+/// with an entry of its own (`GetInvRefsForItem`'s). Both ways the list leaves the reference's
+/// entry (its count 1 - 1) and is freed once. Vanilla (xNVSE) leaves the container's entry
+/// holding the freed list with its count; the row takes it out of that entry too (the count
+/// -1 - 1). With the row, a list no entry of the container holds is not freed.
+#[test]
+fn an_unworn_stacks_removal_leaves_the_containers_entry() {
+    for checks in [false, true] {
+        let mut e = engine();
+        set_checks(&mut e, checks);
+        let ids = crate::commands::inventory_ref::stacks_for_item(&mut e, CONTAINER, ITEM_A);
+        let own = get(&mut e, ids[0]).unwrap().data.entry;
+        assert_ne!(own, ENTRY_A);
+        calls();
+        assert!(remove_from_container(&mut e, ids[0]));
+        assert!(list_items(&e, e.mem.u32(own)).is_empty(), "checks {checks}");
+        assert_eq!(e.mem.u32(own + ENTRY_COUNT_DELTA), 0);
+        let frees: Vec<_> = calls().into_iter().filter(|(_, a)| a[0] == X_A).collect();
+        assert_eq!(frees, [("free", vec![X_A, 1]), ("free", vec![X_A])]);
+        let (lists, count) = (
+            list_items(&e, LISTS_A),
+            e.mem.u32(ENTRY_A + ENTRY_COUNT_DELTA) as i32,
+        );
+        if checks {
+            assert_eq!((lists, count), (vec![X_B], -2));
+        } else {
+            assert_eq!((lists, count), (vec![X_A, X_B], -1), "the freed list kept");
+        }
+    }
+    // The row, with the list already gone from the container: nothing freed.
+    let mut e = engine();
+    set_checks(&mut e, true);
+    let ids = crate::commands::inventory_ref::stacks_for_item(&mut e, CONTAINER, ITEM_A);
+    e.mem.set_u32(LISTS_A, 0);
+    calls();
+    assert!(!remove_from_container(&mut e, ids[0]));
+    assert!(calls().is_empty());
+}
+
+/// The review of #349: a base container entry without a form. xNVSE reads its form type through
+/// the null pointer and the game stops; vanilla does too. The row passes over it.
+#[test]
+fn a_base_entry_without_a_form() {
+    for checks in [false, true] {
+        let mut e = engine();
+        set_checks(&mut e, checks);
+        // A second base entry after item A's: 2 of no form.
+        let (node, counted) = (AREA + 0x6900, AREA + 0x6910);
+        e.mem.set_u32(counted, 2);
+        e.mem.set_u32(node, counted);
+        e.mem.set_u32(BASE + 0x64 + 8, node);
+        let items = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            inventory_items(&mut e, CONTAINER)
+        }));
+        if checks {
+            assert_eq!(items.unwrap(), [(ITEM_B, 2, ENTRY_B), (ITEM_A, 2, ENTRY_A)]);
+        } else {
+            assert!(items.is_err(), "vanilla stops, as xNVSE");
+        }
+    }
+}
+
+/// The review of #349: a container loop that ends releases its inventory reference before it
+/// frees its stacks, so a deferred removal reads the stack's count (1) from an entry not yet
+/// freed (xNVSE frees first). The loop's variable is cleared.
+#[test]
+fn a_container_loop_releases_before_freeing_its_stacks() {
+    use crate::commands::scripting::{drop_loop, Loop, LoopInfo, SavedIp};
+    let mut e = engine();
+    let refr = create(&mut e, CONTAINER, Data::default(), false);
+    let id = id_of(&e, refr);
+    let stack = create_temp_entry(&mut e, ITEM_A, 1, X_B);
+    let data = Data {
+        item: ITEM_A,
+        entry: stack,
+        xdata: X_B,
+    };
+    set_data(&mut e, id, data);
+    // X_B is worn: the removal waits for the release.
+    assert!(remove_from_container(&mut e, id));
+    calls();
+    let local = AREA + 0x6a00;
+    e.mem.set_f64(local + 8, 1.0);
+    let info = LoopInfo {
+        kind: Loop::Container {
+            invref: id,
+            local,
+            elements: vec![stack],
+            index: 0,
+        },
+        saved: SavedIp::default(),
+        end_ip: 0,
+        depth: 0,
+    };
+    drop_loop(&mut e, &info);
+    let log = calls();
+    let removed = log.iter().position(|(n, _)| *n == "remove").unwrap();
+    let freed = log
+        .iter()
+        .position(|c| *c == ("free", vec![stack]))
+        .unwrap();
+    assert!(removed < freed, "{log:x?}");
+    assert_eq!(log[removed].1[3], 1, "the stack's count");
+    assert_eq!(e.mem.f64(local + 8), 0.0);
+}
+
 /// A destination without container changes gets new ones (no data) added to its list, as
 /// xNVSE's `GetForRef` does; the copy then fails. `MoveToContainer` adds them the same way and
 /// still defers the move.

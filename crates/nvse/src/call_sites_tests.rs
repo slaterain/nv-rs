@@ -221,6 +221,33 @@ fn a_sale_raises_on_sell_with_the_item_and_the_seller() {
     );
 }
 
+/// The review of #349: the sale is kept for `GetSoldItemInvRef` while OnSell's handlers run.
+/// When none runs (the one handler is for another seller), xNVSE (vanilla) keeps it after the
+/// event; the fixes preset's row lets it go when the event ends. A handler that runs lets it go
+/// both ways.
+#[test]
+fn a_sale_ends_with_its_event_under_the_row() {
+    for checks in [false, true] {
+        let mut e = sites();
+        scripts(&mut e, &[(1, 4), (2, 4)]);
+        crate::invref::set_checks(&mut e, checks);
+        let mut other_seller = Callback::new(FN_A);
+        other_seller.object = REF_2;
+        set_handler(&mut e, b"OnSell", other_seller, 1, None);
+        e.site(0x0072_ff20, &[ENTRY, REF_1]);
+        assert!(log().is_empty());
+        let kept = crate::invref::sale(&mut e);
+        if checks {
+            assert_eq!(kept, None);
+        } else {
+            assert_eq!(kept, Some((ENTRY, REF_1)), "kept after the event");
+        }
+        e.site(0x0072_ff20, &[ENTRY, REF_2]);
+        assert_eq!(log().len(), 1, "checks {checks}");
+        assert_eq!(crate::invref::sale(&mut e), None);
+    }
+}
+
 /// A dropped item: OnDrop with the reference made, OnDropItem with the item.
 #[test]
 fn a_drop_raises_on_drop_and_on_drop_item() {
