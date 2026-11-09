@@ -65,8 +65,10 @@ const INVALID: d3dx_tex::Error = d3dx_tex::Error::D3dx(d3dx_tex::D3DXERR_INVALID
 /// The precision the files go through here (the other tests use single precision).
 const PRECISION: d3dx_tex::Precision = d3dx_tex::Precision::Double;
 
+/// Sides whose sizes pass 32 bits, and a side of 0 (levels of no bytes): left to D3DX, whose own
+/// 32-bit arithmetic decides there, with the kind the caller logs once.
 #[test]
-fn huge_sides_are_refused() {
+fn huge_sides_are_left_to_d3dx() {
     let argb = (0x41, 0, 32, [0xff_0000, 0xff00, 0xff, 0xff00_0000]);
     let f128 = (4, 116, 0, [0; 4]);
     for (w, h, pf) in [
@@ -75,8 +77,18 @@ fn huge_sides_are_refused() {
         (u32::MAX, u32::MAX, f128),
     ] {
         let (info, made) = answers(header(w, h, 1, 0x1007, pf, 0), false);
-        assert_eq!(info, Err(INVALID), "{w:#x}x{h:#x}");
-        assert_eq!(made, Err(INVALID), "{w:#x}x{h:#x}");
+        for answer in [info.map(|_| ()), made.map(|_| ())] {
+            assert!(
+                matches!(
+                    answer,
+                    Err(d3dx_tex::Error::NotProvided(
+                        d3dx_tex::Untranslated::Header,
+                        _
+                    ))
+                ),
+                "{w:#x}x{h:#x}: {answer:?}"
+            );
+        }
     }
 }
 

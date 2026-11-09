@@ -344,7 +344,7 @@ fn compare(path: &str, data: &[u8], cache: &std::path::Path) -> (Outcome, Durati
                 )
             }
         }
-        Err(d3dx_tex::Error::NotProvided(why)) => {
+        Err(d3dx_tex::Error::NotProvided(_, why)) => {
             return (Outcome::Panic(format!("not provided: {why}")), took)
         }
         Ok(t) => t,

@@ -965,7 +965,9 @@ pub fn get_image_info_from_file_in_memory(e: &mut Engine, data: Ptr, size: u32, 
                 note_source(e, TextureSource::Translated);
                 return hr;
             }
-            Err(d3dx_tex::Error::NotProvided(why)) => note_not_translated(e, why),
+            Err(d3dx_tex::Error::NotProvided(kind, why)) => {
+                note_not_translated(e, NotTranslated::Crate(kind), &why)
+            }
         }
     }
     #[cfg(windows)]
@@ -1067,11 +1069,23 @@ fn note_source(e: &mut Engine, source: TextureSource) {
     }
 }
 
-/// Prints, once per kind, what the translation left to the DLL or the cache.
-fn note_not_translated(e: &mut Engine, why: String) {
-    if !state!(e).graphics.d3dx_not_translated.contains(&why) {
-        eprintln!("D3DX textures: {why} is not translated; the DLL or the cache answers");
-        state!(e).graphics.d3dx_not_translated.push(why);
+/// Why a texture call went to the DLL or the cache, by kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotTranslated {
+    /// What `d3dx_tex` leaves to D3DX.
+    Crate(d3dx_tex::Untranslated),
+    /// A calling thread at an x87 precision other than 24 or 53 bits.
+    Precision,
+}
+
+/// Prints once per kind (with the first case's details) what the translation left to the DLL or
+/// the cache.
+fn note_not_translated(e: &mut Engine, kind: NotTranslated, why: &str) {
+    if !state!(e).graphics.d3dx_not_translated.contains(&kind) {
+        eprintln!(
+            "D3DX textures: {why} is not translated; the DLL or the cache answers (once per kind)"
+        );
+        state!(e).graphics.d3dx_not_translated.push(kind);
     }
 }
 
@@ -1089,19 +1103,15 @@ fn calling_precision(e: &mut Engine) -> Option<d3dx_tex::Precision> {
     }
 }
 
-/// `d3dx_tex`'s answer for the create calls on the calling thread, as a texture cache entry with
-/// the bytes beside it.
+/// `d3dx_tex`'s answer for the create calls at the calling thread's `precision`, as a texture
+/// cache entry with the bytes beside it. Pure work on the file's bytes: it runs outside the kernel
+/// lock.
 fn translated_texture(
-    e: &mut Engine,
     bytes: &[u8],
     cube: bool,
+    precision: d3dx_tex::Precision,
 ) -> Result<(CachedTexture, Vec<Vec<u8>>), d3dx_tex::Error> {
     let caps = d3dx_tex::Caps::default();
-    let Some(precision) = calling_precision(e) else {
-        return Err(d3dx_tex::Error::NotProvided(
-            "a texture made at an x87 precision other than 24 or 53 bits".into(),
-        ));
-    };
     let t = if cube {
         d3dx_tex::create_cube_texture_from_file_in_memory(bytes, &caps, precision)
     } else {
@@ -1342,17 +1352,34 @@ fn create_from_file(
         "CreateTextureFromFileInMemory"
     };
     if texture_mode(e) == TextureMode::Translated {
-        match translated_texture(e, &bytes, cube) {
-            Ok((entry, levels)) => {
-                note_source(e, TextureSource::Translated);
-                let levels: Vec<&[u8]> = levels.iter().map(|l| &l[..]).collect();
-                return fill_texture(e, device, out, call, &entry, cube, &levels);
+        match calling_precision(e) {
+            None => note_not_translated(
+                e,
+                NotTranslated::Precision,
+                "a texture made at an x87 precision other than 24 or 53 bits",
+            ),
+            Some(precision) => {
+                // On the copy of the file, with the kernel lock given back meanwhile: a loading
+                // thread's encoding does not hold up other threads' platform calls. The device
+                // calls that fill the texture come after, under the kernel lock again.
+                let made = engine_core::real_threads::without_kernel_lock(e, || {
+                    translated_texture(&bytes, cube, precision)
+                });
+                match made {
+                    Ok((entry, levels)) => {
+                        note_source(e, TextureSource::Translated);
+                        let levels: Vec<&[u8]> = levels.iter().map(|l| &l[..]).collect();
+                        return fill_texture(e, device, out, call, &entry, cube, &levels);
+                    }
+                    Err(d3dx_tex::Error::D3dx(hr)) => {
+                        note_source(e, TextureSource::Translated);
+                        return hr;
+                    }
+                    Err(d3dx_tex::Error::NotProvided(kind, why)) => {
+                        note_not_translated(e, NotTranslated::Crate(kind), &why)
+                    }
+                }
             }
-            Err(d3dx_tex::Error::D3dx(hr)) => {
-                note_source(e, TextureSource::Translated);
-                return hr;
-            }
-            Err(d3dx_tex::Error::NotProvided(why)) => note_not_translated(e, why),
         }
     }
     let source = choose_source(e, Some(device.addr()));
@@ -2147,8 +2174,8 @@ mod tests {
     }
 
     /// The precision comes from the calling game thread's own control word: 24 bits at 0x007f
-    /// (the main thread after the device), 53 at 0x027f (a loading thread); at 64 bits the
-    /// translation steps aside for the DLL or the cache.
+    /// (the main thread after the device), 53 at 0x027f (a loading thread); none at 64 bits, where
+    /// the translation steps aside for the DLL or the cache.
     #[test]
     fn the_translation_takes_the_game_threads_precision() {
         let mut e = Engine::new();
@@ -2164,21 +2191,39 @@ mod tests {
         ] {
             engine_core::units::crt::set_x87_control_word(&mut e, cw);
             assert_eq!(calling_precision(&mut e), precision, "{cw:#x}");
-            let ours = translated_texture(&mut e, &file, false).map(|(_, levels)| levels);
-            match precision {
-                Some(p) => {
-                    let want = d3dx_tex::create_texture_from_file_in_memory(&file, &caps, p)
-                        .expect("a DXT1 file");
-                    let want: Vec<Vec<u8>> = want.surfaces.into_iter().map(|s| s.bytes).collect();
-                    assert_eq!(ours.expect("translated"), want, "{cw:#x}");
-                }
-                None => assert!(
-                    matches!(ours, Err(d3dx_tex::Error::NotProvided(_))),
-                    "{cw:#x}"
-                ),
+            if let Some(p) = precision {
+                let ours = translated_texture(&file, false, p).map(|(_, levels)| levels);
+                let want = d3dx_tex::create_texture_from_file_in_memory(&file, &caps, p)
+                    .expect("a DXT1 file");
+                let want: Vec<Vec<u8>> = want.surfaces.into_iter().map(|s| s.bytes).collect();
+                assert_eq!(ours.expect("translated"), want, "{cw:#x}");
             }
         }
         engine_core::units::crt::set_x87_control_word(&mut e, 0x027f);
+    }
+
+    /// What the translation leaves to the DLL or the cache is printed once per kind, not once per
+    /// file or message.
+    #[test]
+    fn what_is_not_translated_is_noted_once_per_kind() {
+        let mut e = Engine::new();
+        let format = NotTranslated::Crate(d3dx_tex::Untranslated::PixelFormat);
+        note_not_translated(&mut e, format, "DDS pixel format 0x32");
+        note_not_translated(&mut e, format, "DDS pixel format 0x33");
+        note_not_translated(
+            &mut e,
+            NotTranslated::Precision,
+            "a texture made at 64 bits",
+        );
+        note_not_translated(
+            &mut e,
+            NotTranslated::Precision,
+            "a texture made at 64 bits",
+        );
+        assert_eq!(
+            state!(e).graphics.d3dx_not_translated,
+            vec![format, NotTranslated::Precision]
+        );
     }
 
     /// The device and texture doubles: CreateTexture (of an 8x4 DXT1 texture of 4 levels)

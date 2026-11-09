@@ -96,7 +96,9 @@ fn synthetic(data: &str, precision: d3dx_tex::Precision) {
         };
         match made {
             Err(d3dx_tex::Error::D3dx(ours)) => assert_eq!(ours, hr, "{}", file.name),
-            Err(d3dx_tex::Error::NotProvided(why)) => panic!("{}: not provided: {why}", file.name),
+            Err(d3dx_tex::Error::NotProvided(_, why)) => {
+                panic!("{}: not provided: {why}", file.name)
+            }
             Ok(t) => {
                 assert_eq!(hr, 0, "{}", file.name);
                 assert_eq!(

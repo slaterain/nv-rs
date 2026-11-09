@@ -238,16 +238,27 @@ fn format_bits(format: u32) -> u32 {
     }
 }
 
-/// Reads `data` as D3DX's DDS loader does; `None` when the loader refuses it (D3DX then answers
-/// `D3DXERR_INVALIDDATA`, its other image readers refusing it too).
+/// Why [`parse`] does not read a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// D3DX's DDS loader refuses it (D3DX then answers `D3DXERR_INVALIDDATA`, its other image
+    /// readers refusing it too).
+    Invalid,
+    /// A header this crate will not follow, so D3DX should decide: a level of no bytes (a format
+    /// the table gives no size; D3DX would step through such levels without end), or a size past
+    /// 32 bits (where the 32-bit DLL's own arithmetic wraps).
+    Header(&'static str),
+}
+
+/// Reads `data` as D3DX's DDS loader does.
 ///
 /// Every size is checked, in 64 bits, against the data before anything is kept: a header can
-/// ask for no more than the file holds. A level of no bytes (a format this table gives no size)
-/// is refused. A mip count past the whole chain must still have its 1x1 levels in the data, as
-/// D3DX reads them; only the chain's levels are kept.
-pub fn parse(data: &[u8]) -> Option<Image> {
+/// ask for no more than the file holds. A mip count past the whole chain must still have its
+/// 1x1 levels in the data, as D3DX reads them; only the chain's levels are kept.
+pub fn parse(data: &[u8]) -> Result<Image, Refusal> {
+    use Refusal::Invalid;
     if data.len() < 4 || word(data, 0) != u32::from_le_bytes(*b"DDS ") || data.len() - 4 < 0x7c {
-        return None;
+        return Err(Invalid);
     }
     let width = word(data, 16);
     let height = word(data, 12);
@@ -261,7 +272,7 @@ pub fn parse(data: &[u8]) -> Option<Image> {
     let faces: u32 = match caps2 & 0xfc00 {
         0xfc00 => 6,
         0 => 1,
-        _ => return None,
+        _ => return Err(Invalid),
     };
     let mips = word(data, 28).max(1);
     let mut pf_flags = word(data, 80);
@@ -270,16 +281,19 @@ pub fn parse(data: &[u8]) -> Option<Image> {
     }
     let (pf_size, fourcc, bits) = (word(data, 76), word(data, 84), word(data, 88));
     let masks = [92, 96, 100, 104].map(|a| word(data, a));
-    let entry = PIXEL_FORMATS.iter().find(|e| {
-        !(pf_size != 0x20
-            || e.flags != pf_flags
-            || (pf_flags & 4 != 0 && fourcc != e.fourcc)
-            || (pf_flags & 0xc4462 != 0 && bits != e.bits)
-            || (pf_flags & 0xe4040 != 0 && masks[0] != e.masks[0])
-            || (pf_flags & 0xc4440 != 0 && masks[1] != e.masks[1])
-            || (pf_flags & 0xc4040 != 0 && masks[2] != e.masks[2])
-            || (pf_flags & 0x80003 != 0 && masks[3] != e.masks[3]))
-    })?;
+    let entry = PIXEL_FORMATS
+        .iter()
+        .find(|e| {
+            !(pf_size != 0x20
+                || e.flags != pf_flags
+                || (pf_flags & 4 != 0 && fourcc != e.fourcc)
+                || (pf_flags & 0xc4462 != 0 && bits != e.bits)
+                || (pf_flags & 0xe4040 != 0 && masks[0] != e.masks[0])
+                || (pf_flags & 0xc4440 != 0 && masks[1] != e.masks[1])
+                || (pf_flags & 0xc4040 != 0 && masks[2] != e.masks[2])
+                || (pf_flags & 0x80003 != 0 && masks[3] != e.masks[3]))
+        })
+        .ok_or(Invalid)?;
     let format = entry.format;
     let resource_type = if flags & 0x80_0000 != 0 {
         RTYPE_VOLUME
@@ -293,7 +307,7 @@ pub fn parse(data: &[u8]) -> Option<Image> {
     let mut left = (data.len() - 128) as u64;
     if format == format::P8 || format == format::A8P8 {
         if left < 0x400 {
-            return None;
+            return Err(Invalid);
         }
         at += 0x400;
         left -= 0x400;
@@ -306,23 +320,27 @@ pub fn parse(data: &[u8]) -> Option<Image> {
     for _ in 0..faces {
         let (mut w, mut h, mut d) = (width, height, depth);
         for l in 0..mips {
-            let (pitch, slice) = level_bytes(format, bits, w, h)?;
-            let size = slice.checked_mul(u64::from(d))?;
+            let size = level_bytes(format, bits, w, h)
+                .and_then(|(pitch, slice)| Some((pitch, slice, slice.checked_mul(u64::from(d))?)))
+                .filter(|&(_, _, size)| size <= u64::from(u32::MAX));
+            let Some((pitch, slice, size)) = size else {
+                return Err(Refusal::Header("a level size past 32 bits"));
+            };
             if size == 0 {
-                return None;
+                return Err(Refusal::Header("a level of no bytes"));
             }
             if l >= stored {
-                // The rest are all this 1x1 level.
-                let rest = size.checked_mul(u64::from(mips - l))?;
-                if left < rest {
-                    return None;
+                // The rest are all this 1x1 level (each one no bigger than 16 bytes).
+                if left < size.saturating_mul(u64::from(mips - l)) {
+                    return Err(Invalid);
                 }
+                let rest = size * u64::from(mips - l);
                 at += rest;
                 left -= rest;
                 break;
             }
             if left < size {
-                return None;
+                return Err(Invalid);
             }
             levels.push(Level {
                 width: w,
@@ -339,7 +357,7 @@ pub fn parse(data: &[u8]) -> Option<Image> {
             d = (d >> 1).max(1);
         }
     }
-    Some(Image {
+    Ok(Image {
         width,
         height,
         depth,
@@ -379,18 +397,40 @@ mod tests {
         let img = parse(&d).expect("8x8: 4 levels, then 2 more 1x1 ones");
         assert_eq!((img.mip_levels, img.stored, img.levels.len()), (6, 4, 4));
         d.pop();
-        assert!(parse(&d).is_none(), "one byte short of the last 1x1 level");
+        assert_eq!(
+            parse(&d).err(),
+            Some(Refusal::Invalid),
+            "one byte short of the last 1x1 level"
+        );
         let mut d = header(4, 4, u32::MAX, b"DXT1");
         d.extend([0u8; 64]);
-        assert!(parse(&d).is_none(), "4 billion levels are not in 64 bytes");
+        assert_eq!(
+            parse(&d).err(),
+            Some(Refusal::Invalid),
+            "4 billion levels are not in 64 bytes"
+        );
     }
 
-    /// Sizes past 32 bits do not wrap into small ones, and past 64 bits are no size.
+    /// Sizes past 32 bits (where the 32-bit DLL's arithmetic wraps) and levels of no bytes are
+    /// left to D3DX; sizes are counted in 64 bits and past them are no size.
     #[test]
-    fn huge_sizes_are_refused() {
+    fn huge_sizes_and_empty_levels_are_left_to_d3dx() {
         let mut d = header(u32::MAX, u32::MAX, 1, b"DXT5");
         d.extend([0u8; 256]);
-        assert!(parse(&d).is_none());
+        assert!(matches!(parse(&d), Err(Refusal::Header(_))));
+        // 2 GiB of DXT1 blocks is a size the DLL counts too (and not in the data); 8 GiB is not.
+        let mut d = header(0x1_0000, 0x1_0000, 1, b"DXT1");
+        d.extend([0u8; 256]);
+        assert_eq!(parse(&d).err(), Some(Refusal::Invalid));
+        let mut d = header(0x2_0000, 0x2_0000, 1, b"DXT1");
+        d.extend([0u8; 256]);
+        assert!(matches!(parse(&d), Err(Refusal::Header(_))));
+        let mut d = header(8, 0, 1, b"DXT1");
+        d.extend([0u8; 256]);
+        assert_eq!(
+            parse(&d).err(),
+            Some(Refusal::Header("a level of no bytes"))
+        );
         let wide = level_bytes(format::A8R8G8B8, 32, 65536, 65536);
         assert_eq!(wide, Some((1 << 18, 1 << 34)));
         assert_eq!(

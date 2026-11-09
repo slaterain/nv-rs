@@ -42,9 +42,25 @@ impl Default for Caps {
 pub enum Error {
     /// D3DX's own answer for this file (the game gets it).
     D3dx(u32),
-    /// Something D3DX does that this crate does not translate (yet); the caller decides (on
-    /// Windows the player's DLL can still answer).
-    NotProvided(String),
+    /// Something D3DX does that this crate does not translate (yet): its kind and the details;
+    /// the caller decides (on Windows the player's DLL can still answer).
+    NotProvided(Untranslated, String),
+}
+
+/// What D3DX does here that this crate leaves to it, by kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Untranslated {
+    /// An image file that is not DDS (BMP, TGA, PNG, JPG, ...).
+    ImageFile,
+    /// A volume texture.
+    Volume,
+    /// A DDS pixel format this crate does not read or make.
+    PixelFormat,
+    /// A top level D3DX resamples (its triangle filter).
+    Resampled,
+    /// A DDS header this crate will not follow: a level of no bytes, or a size past 32 bits,
+    /// where the 32-bit DLL's own arithmetic wraps.
+    Header,
 }
 
 /// `D3DXIMAGE_INFO`'s seven words.
@@ -104,10 +120,16 @@ fn read(data: &[u8]) -> Result<dds::Image, Error> {
             return Err(Error::D3dx(crate::D3DXERR_INVALIDDATA));
         }
         return Err(Error::NotProvided(
+            Untranslated::ImageFile,
             "an image file that is not DDS (BMP, TGA, PNG, JPG, ...)".into(),
         ));
     }
-    dds::parse(data).ok_or(Error::D3dx(crate::D3DXERR_INVALIDDATA))
+    dds::parse(data).map_err(|r| match r {
+        dds::Refusal::Invalid => Error::D3dx(crate::D3DXERR_INVALIDDATA),
+        dds::Refusal::Header(why) => {
+            Error::NotProvided(Untranslated::Header, format!("a DDS header with {why}"))
+        }
+    })
 }
 
 /// `D3DXGetImageInfoFromFileInMemory`.
@@ -173,7 +195,10 @@ fn create(data: &[u8], caps: &Caps, rtype: u32, precision: Precision) -> Result<
     }
     let img = read(data)?;
     if img.resource_type == dds::RTYPE_VOLUME {
-        return Err(Error::NotProvided("a volume DDS file".into()));
+        return Err(Error::NotProvided(
+            Untranslated::Volume,
+            "a volume DDS file".into(),
+        ));
     }
     // 0x61025e counts the image's faces only for a cube texture; one that is not a whole cube
     // is E_FAIL. A texture takes the first face of a cube file.
@@ -194,9 +219,10 @@ fn create(data: &[u8], caps: &Caps, rtype: u32, precision: Precision) -> Result<
         file_format
     };
     if !filter::supported(file_format) || !filter::supported(tex_format) {
-        return Err(Error::NotProvided(format!(
-            "DDS pixel format {file_format:#x}"
-        )));
+        return Err(Error::NotProvided(
+            Untranslated::PixelFormat,
+            format!("DDS pixel format {file_format:#x}"),
+        ));
     }
     // The size: D3DX_DEFAULT rounds the file's up to powers of two; then the requirements.
     let mut w = default_side(img.width);
@@ -218,10 +244,13 @@ fn create(data: &[u8], caps: &Caps, rtype: u32, precision: Precision) -> Result<
         h = h.saturating_add(3) & !3;
     }
     if (w, h) != (img.width, img.height) {
-        return Err(Error::NotProvided(format!(
-            "a {}x{} file in a {w}x{h} texture (D3DX resamples the top level with its triangle filter)",
-            img.width, img.height
-        )));
+        return Err(Error::NotProvided(
+            Untranslated::Resampled,
+            format!(
+                "a {}x{} file in a {w}x{h} texture (D3DX resamples the top level with its triangle filter)",
+                img.width, img.height
+            ),
+        ));
     }
     let levels = bit_count(w).max(bit_count(h));
     let mut surfaces = Vec::with_capacity((levels * faces) as usize);
