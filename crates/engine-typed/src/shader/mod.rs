@@ -4,7 +4,8 @@
 //! render passes with the thread's batch renderer by pass type ([`batch`]); the batch renderer then
 //! draws the groups type by type, beginning each shader pass and drawing each geometry, while the
 //! render state setters keep the device's states behind lock counters and a cache ([`state`]); the
-//! shaders' per-geometry set-ups (world matrix, light colour, blend states) are in [`accumulator`].
+//! shaders' per-geometry set-ups (world matrix, light colour, blend states) are in [`accumulator`], a
+//! constant map's upload of its entries for each draw in [`constants`].
 //!
 //! Stage 1: the objects stay in guest memory where the game made them and are read through their
 //! [`layout`]. Each function stays registered at its exe address; a call inside the family is a
@@ -22,6 +23,8 @@ use engine_core::{entry, AbiFn};
 
 pub mod accumulator;
 pub mod batch;
+pub mod constants;
+pub mod geometry;
 pub mod layout;
 pub mod state;
 
@@ -110,6 +113,23 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e8_6f40, state::array_set_at(Ptr<_>, u32, u32)),
         entry!(0x00e8_70c0, state::sort_entries_by_enabled(u32, Ptr<_>)),
         entry!(0x00e8_7200, state::sort_by_enabled(Ptr<_>)),
+        entry!(
+            0x00e8_26d0,
+            constants::set_shader_constants(
+                Ptr<_>,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+            ) -> bool
+        ),
         // The batch renderer.
         entry!(0x00b9_8ae0, batch::first_list(Ptr<_>, u32, u32) -> bool),
         entry!(0x00b9_9730, batch::pop_active(Ptr<_>)),
@@ -174,6 +194,10 @@ fn funcs() -> Vec<(u32, AbiFn)> {
             accumulator::set_world_view_constants(u32, u32, u32)
         ),
         entry!(0x00b7_c7b0, accumulator::set_light_direction(u32)),
+        entry!(
+            0x00b7_dab0,
+            geometry::setup_geometry_constants(Ptr<_>, Ptr<_>)
+        ),
         entry!(
             0x00c0_3230,
             accumulator::texture_by_index(Ptr<_>, u32) -> u32

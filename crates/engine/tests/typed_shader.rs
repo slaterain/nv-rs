@@ -15,7 +15,7 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::{entry, Engine};
-use engine_typed::shader::{self, accumulator as acc, batch, state};
+use engine_typed::shader::{self, accumulator as acc, batch, constants, geometry, state};
 use engine_typed::{crt, culling, pathing, render};
 
 /// The stand-in virtual functions, one per slot, and the table of what each answers.
@@ -2756,6 +2756,324 @@ fn render_standard_typed_draw() {
         let pass = w.passes[0];
         e.mem.set_u16(pass + 4, c.word(0) as u16);
         vec![pass, c.word(1), 0, 1]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A constant map's entries for `set_shader_constants`: `count` entries of 0x38 bytes, entry `i` of
+/// kind `kinds[(i + rotate) % 8]`, enabled unless `(i + pattern) % 4` is 0, without a register when
+/// `(i + pattern) % 3` is 0 and without a name for even `i`, of program type `(i + program) % 4`; with
+/// `hole` one element null. Answers the elements.
+fn constant_entries(e: &mut Engine, rotate: u32, pattern: u32, program: u32, hole: bool) -> u32 {
+    const KINDS: [u32; 8] = [1, 2, 3, 4, 5, 6, 7, 0];
+    const COUNT: u32 = 10;
+    let elements = e.mem.alloc(4 * COUNT);
+    for i in 0..COUNT {
+        let entry = e.mem.alloc(0x38);
+        e.mem.set_u8(entry + 8, u8::from((i + pattern) % 4 != 0));
+        let kind = KINDS[((i + rotate) % 8) as usize];
+        set(e, entry + 0x14, (kind << 28) | 0x0123_4560 | i);
+        set(e, entry + 0x18, (i + program) % 4);
+        let register = if (i + pattern) % 3 == 0 {
+            u32::MAX
+        } else {
+            4 * i
+        };
+        set(e, entry + 0x1c, register);
+        set(e, entry + 0x20, 1 + i % 3);
+        set(
+            e,
+            entry + 0x24,
+            if i % 2 == 0 { 0 } else { 0x0300_0800 + i },
+        );
+        set(e, entry + 0x30, 0x0300_0900 + 0x10 * i);
+        let at = if hole && i == 3 { 0 } else { entry };
+        set(e, elements + 4 * i, at);
+    }
+    elements
+}
+
+/// `NiD3DShaderConstantMap::SetShaderConstants`: every kind of entry in both arrays, enabled or not,
+/// with or without a register or a name, each program type, a null element, and the entries' set-ups
+/// and the device's uploads answering success, failure or (the device) a positive code.
+#[test]
+fn set_shader_constants() {
+    Diff::new(entry!(
+        0x00e8_26d0,
+        constants::set_shader_constants(
+            Ptr<_>,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+        ) -> bool
+    ))
+    .common()
+    .inputs(&[
+        Input::Of(&[0, 1, 3, 6]),
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(TWO_WAYS),
+        Input::Of(&[0, 1, 2, 3]),
+    ])
+    .setup(|e, c| {
+        stand_ins(e, false);
+        slots!(e; 0x90, 0x94, 0x98, 0x9c, 0x1b4);
+        for slot in [0x8c, 0x90, 0x94, 0x98, 0x9c, 0xa4] {
+            set(e, RETS + slot, c.word(2) & 1);
+        }
+        let device_answer = [0, 0x8000_0000, 5][c.word(2) as usize];
+        set(e, RETS + 0x178, device_answer);
+        set(e, RETS + 0x1b4, device_answer);
+        let vt = vtable(e, &[]);
+        let device = obj(e, 0x10, vt);
+        let map = obj(e, 0x44, vt);
+        let hole = c.word(3) != 0;
+        let entries = constant_entries(e, c.word(0), c.word(1), c.word(4), hole);
+        let defined = constant_entries(e, c.word(0) + 1, c.word(1) + 1, c.word(4) + 2, hole);
+        set(e, map + 0x10, entries);
+        e.mem.set_u16(map + 0x16, 10);
+        set(e, map + 0x20, defined);
+        e.mem.set_u16(map + 0x26, 10);
+        set(e, map + 0x38, device);
+        let mut words = vec![map];
+        words.extend((0..11).map(|i| 0x0700_0000 + 0x100 * i));
+        words
+    })
+    .run()
+    .assert_same();
+}
+
+/// A light for `setup_geometry_constants`: its scale (+0xd0), directional byte (+0xf4), a matrix at
+/// +0x10, the clip byte (+0x208) and its data (+0xf8: position +0x8c, strength +0xc4, colour +0xd4,
+/// radius +0xe0, direction +0xf0), the colour `colour`.
+fn geometry_light(e: &mut Engine, i: u32, colour: u32, directional: bool) -> u32 {
+    let light = e.mem.alloc(0x220);
+    let values = e.mem.alloc(0x100);
+    for k in 0..16u32 {
+        set(e, light + 0x10 + 4 * k, if k % 5 == 0 { ONE } else { 0 });
+    }
+    set(e, light + 0xd0, TWO);
+    e.mem.set_u8(light + 0xf4, u8::from(directional));
+    set(e, light + 0xf8, values);
+    e.mem.set_u8(light + 0x208, (i & 1) as u8);
+    for (k, w) in [ONE + i, TWO, HALF].iter().enumerate() {
+        set(e, values + 0x8c + 4 * k as u32, *w);
+        set(e, values + 0xf0 + 4 * k as u32, *w ^ 0x8000_0000);
+    }
+    set(e, values + 0xc4, if i == 1 { TWO } else { HALF });
+    set(e, values + 0xd4, colour);
+    set(e, values + 0xd8, HALF);
+    set(e, values + 0xdc, ONE);
+    set(e, values + 0xe0, 0x4248_0000);
+    light
+}
+
+/// The calls `setup_geometry_constants` reaches that stand in: the D3DX thunks and the model matrix
+/// write a mark of their words into their out word; the light, ambient and pass set-ups leave a mark
+/// of the call; the fog property and the first active light answer from the table.
+fn geometry_stand_ins(e: &mut Engine) {
+    for addr in [
+        0x00ee_6df8u32,
+        0x00ee_6de0,
+        0x00ee_6dd4,
+        0x00ee_6dda,
+        0x00ee_6dce,
+        0x00ee_6dc8,
+    ] {
+        e.register(addr, |e, a| {
+            let mark = a.iter().fold(0x3f00_0000u32, |m, w| m.rotate_left(5) ^ w) & 0x3fff_ffff;
+            e.mem.set_u32(a[0], mark);
+            ret(a[0])
+        });
+    }
+    // The model matrix (transform, skin, out).
+    e.register(0x00c4_c2d0, |e, a| {
+        for k in 0..16u32 {
+            let w = if k % 5 == 0 { ONE } else { a[0] & 0xffff };
+            e.mem.set_u32(a[2] + 4 * k, w);
+        }
+        ret(a[2])
+    });
+    for addr in [
+        0x00b7_0820u32,
+        0x00c0_3180,
+        0x00c0_3010,
+        0x00b7_ad00,
+        0x00b7_ce90,
+        0x00c0_2c30,
+    ] {
+        e.register(addr, |e, a| {
+            let n = e.mem.u32(RETS + 0x500);
+            e.mem.set_u32(
+                RETS + 0x500,
+                n.wrapping_mul(31).wrapping_add(a.len() as u32),
+            );
+            ret(0)
+        });
+    }
+    e.register(0x00b5_5520, |e, _| ret(e.mem.u32(RETS + 0x504)));
+    e.register(0x00b7_0590, |e, _| ret(e.mem.u32(RETS + 0x508)));
+    e.register(0x00b7_0600, |e, _| ret(e.mem.u32(RETS + 0x508)));
+    slots!(e; 0x154);
+}
+
+/// `ShadowLightShader::SetupGeometryConstants` with the constant set-ups it calls: pass types of each
+/// path (4, the full set-up, the eye and clip plane ranges, 0x250), 0 to 3 lights (directional or
+/// not), the property's flags, the vertex and pixel entries off, on or alternating, a plain or skinned
+/// geometry, and the HDR, shader mode, white ambient and alpha switches; the pixel map's
+/// `SetShaderConstants` the real one or a stand-in. Floats: a light's colour and the camera's position.
+#[test]
+fn setup_geometry_constants() {
+    Diff::new(entry!(
+        0x00b7_dab0,
+        geometry::setup_geometry_constants(Ptr<_>, Ptr<_>)
+    ))
+    .common()
+    .translation_calls_plainly(&[0x00b7_c750])
+    .inputs(&[
+        Input::Of(&[
+            0, 4, 6, 0x93, 0x1f6, 0x1f7, 0x231, 0x244, 0x248, 0x24b, 0x250,
+        ]),
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 0x40400, 0x24000, 0x20400]),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(TWO_WAYS),
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7]),
+        Input::F32,
+        Input::F32,
+    ])
+    .max_cases(400)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(|e, c| {
+        let w = world(e);
+        geometry_stand_ins(e);
+        e.map(0, 0x1000);
+        for (addr, len) in [
+            (0x0102_0000, 0x1000),
+            (0x0104_e000, 0x1000),
+            (0x0105_0000, 0x1000),
+            (0x010a_e000, 0x2000),
+        ] {
+            e.map(addr, len);
+        }
+        for (addr, value) in [
+            (0x0101_2070u32, 1.0f64),
+            (0x0101_2640, 3600.0),
+            (0x0104_eea0, std::f64::consts::TAU),
+            (0x0101_5a38, 15.0),
+            (0x0102_0998, 5.0),
+            (0x0101_e568, 255.0),
+            (0x0101_2054, -1.0),
+            (0x0101_6248, 0.5),
+        ] {
+            e.mem.set_u64(addr, value.to_bits());
+        }
+        set(e, 0x0105_0c98, 0x4110_0000);
+        set(e, 0x010a_f450, 0x42c6_0000);
+        let (pass_type, lights, flags, entries, skinned, misc) = (
+            c.word(0),
+            c.word(1),
+            c.word(2),
+            c.word(3),
+            c.word(4),
+            c.word(5),
+        );
+        set(e, 0x011f_91e4, pass_type);
+        // The vertex and pixel entries (22 each): off, on, or every other one.
+        let vt = vtable(e, &[]);
+        for table in [0x011f_ebd8u32, 0x011f_ec30] {
+            for i in 0..22u32 {
+                let entry = obj(e, 0x38, vt);
+                let on = match entries {
+                    0 => false,
+                    1 => true,
+                    _ => i % 2 == 0,
+                };
+                e.mem.set_u8(entry + 8, u8::from(on));
+                set(e, entry + 0x20, i);
+                set(e, table + 4 * i, entry);
+            }
+        }
+        // The lights, the rendering object and its geometry.
+        let array = e.mem.alloc(0x10);
+        for i in 0..3u32 {
+            let light = geometry_light(e, i, bits(c, 6), i == 1 || misc & 4 != 0);
+            set(e, array + 4 * i, light);
+        }
+        let geometry = if skinned != 0 { w.skinned } else { w.geometry };
+        let transform = [ONE, 0, 0, 0, ONE, 0, 0, 0, ONE, HALF, TWO, ONE, TWO];
+        for (i, word) in transform.iter().enumerate() {
+            set(e, geometry + 0x68 + 4 * i as u32, *word);
+        }
+        let rendering = e.mem.alloc(0x40);
+        set(e, rendering, geometry);
+        e.mem
+            .set_u16(rendering + 4, [0, 0xc5, 0x10, 0xd6][(misc & 3) as usize]);
+        e.mem.set_u8(rendering + 9, lights as u8);
+        e.mem.set_u8(rendering + 0xb, (misc & 3) as u8);
+        set(e, rendering + 0xc, array);
+        set(e, 0x011f_91e0, rendering);
+        // The camera object: a position, its light.
+        let camera = e.mem.alloc(0x200);
+        for k in 0..3u32 {
+            set(e, camera + 0x1e4 + 4 * k, bits(c, 7) ^ (k << 20));
+        }
+        let first = e.mem.u32(array);
+        set(e, camera + 0xe0, first);
+        set(e, 0x011f_91c8, camera);
+        // The fog property, the first active light, the switches.
+        let fog = e.mem.alloc(0x70);
+        set(e, fog + 0x2c, if misc & 1 != 0 { ONE } else { 0 });
+        set(e, fog + 0x30, if misc & 2 != 0 { 0x4500_0000 } else { 0 });
+        set(e, RETS + 0x504, fog);
+        set(e, RETS + 0x508, if misc & 2 != 0 { first } else { 0 });
+        set(e, RETS + 0xf4, misc & 1);
+        e.mem.set_u8(0x011f_941e, (misc & 1) as u8);
+        set(e, 0x011f_91b8, if misc & 2 != 0 { 0xf } else { 8 });
+        e.mem.set_u8(0x011f_91a7, ((misc >> 2) & 1) as u8);
+        // The property and the block.
+        set(e, w.property + 0x20, flags);
+        set(
+            e,
+            w.property + 0x24,
+            if misc & 1 != 0 { 0x28010 } else { 0x20 },
+        );
+        set(e, w.property + 0xe4, lights);
+        set(
+            e,
+            w.property + 0x1c,
+            if misc & 4 != 0 { u32::MAX } else { 1 },
+        );
+        let other = obj(e, 0x1c, vt);
+        e.mem.set_u8(other + 0x18, (misc & 1) as u8);
+        let block = e.mem.alloc(0xa0);
+        set(e, block, w.alpha);
+        set(e, block + 8, 0x0100 | misc);
+        set(e, block + 0xc, w.property);
+        set(e, block + 0x10, other);
+        set(e, block + 0x9c, w.alpha);
+        // The shader: its renderer, the object at +0x1c, the pixel map (the real SetShaderConstants on
+        // an empty map, or a stand-in) and the vertex map.
+        set(e, w.shader + 0x18, w.renderer);
+        let object = obj(e, 0x10, vt);
+        set(e, w.shader + 0x1c, object);
+        if misc & 4 != 0 {
+            let map_vt = vtable(e, &[(0x78, 0x00e8_26d0)]);
+            let map = obj(e, 0x44, map_vt);
+            set(e, w.shader + 0x30, map);
+        }
+        let current = e.mem.u32(0x0126_f74c);
+        set(e, current + 0x44, if misc & 1 != 0 { 0 } else { 0x4444 });
+        vec![w.shader, block]
     })
     .run()
     .assert_same();
