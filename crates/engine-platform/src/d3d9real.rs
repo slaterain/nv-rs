@@ -3065,7 +3065,10 @@ mod tests {
         assert_eq!(Backends::parse("real"), Ok(Some(Backends::Real)));
         assert_eq!(Backends::parse(" Real "), Ok(Some(Backends::Real)));
         assert_eq!(Backends::parse("wgpu"), Ok(Some(Backends::Wgpu)));
-        assert_eq!(Backends::parse("real, WGPU"), Ok(Some(Backends::RealAndWgpu)));
+        assert_eq!(
+            Backends::parse("real, WGPU"),
+            Ok(Some(Backends::RealAndWgpu))
+        );
         assert_eq!(Backends::parse(""), Ok(None));
         assert_eq!(Backends::parse(" , "), Ok(None));
         for wrong in ["wgpu,real", "real,real", "dx9", "1"] {
