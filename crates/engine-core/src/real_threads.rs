@@ -188,6 +188,9 @@ type SiteTable = std::collections::HashMap<(u8, u32, u32), (u64, u32)>;
 
 struct LockStats {
     kernel: [WaitSum; 2],
+    /// Waits for the device lock ([`World::device`]: the Direct3D 9 device's calls), apart from the
+    /// kernel lock's: main, others.
+    device: [WaitSum; 2],
     section: [WaitSum; 2],
     object: [WaitSum; 2],
     sleep: [WaitSum; 2],
@@ -234,10 +237,12 @@ fn lock_stats() -> Option<&'static LockStats> {
                  main_object_us\tmain_object_n\tmain_object_max_us\tgame_object_us\t\
                  game_object_n\tgame_object_max_us\tmain_sleep_us\tmain_sleep_n\tgame_sleep_us\t\
                  game_sleep_n\tsection_notifies\tsection_spurious\thost_hold_us\tmain_wakes\tgame_wakes\t\
-                 barrier_us"
+                 barrier_us\tmain_device_us\tmain_device_n\tmain_device_max_us\tgame_device_us\t\
+                 game_device_n\tgame_device_max_us"
             );
             Some(LockStats {
                 kernel: Default::default(),
+                device: Default::default(),
                 section: Default::default(),
                 object: Default::default(),
                 sleep: Default::default(),
@@ -303,6 +308,10 @@ impl LockStats {
             self.wakes[1].swap(0, Ordering::Relaxed)
         ));
         line.push_str(&format!("\t{}", self.barrier.take().0));
+        for s in &self.device {
+            let (us, n, max) = s.take();
+            line.push_str(&format!("\t{us}\t{n}\t{max}"));
+        }
         let sites = std::mem::take(&mut *guard(&self.sites));
         let main_ns: u64 = sites
             .iter()
@@ -362,11 +371,23 @@ struct KernelLock {
     m: Mutex<()>,
     free: Condvar,
     changed: Condvar,
+    /// The device lock ([`World::device`]): its waits count apart in [`LockStats`].
+    device: bool,
 }
 
 impl KernelLock {
     fn new() -> Self {
+        Self::made(false)
+    }
+
+    /// The device lock: as the kernel lock, its waits counted apart.
+    fn device() -> Self {
+        Self::made(true)
+    }
+
+    fn made(device: bool) -> Self {
         KernelLock {
+            device,
             owner: AtomicU64::new(0),
             depth: AtomicU32::new(0),
             waiters: AtomicU32::new(0),
@@ -411,7 +432,8 @@ impl KernelLock {
         let started = lock_stats().map(|_| std::time::Instant::now());
         self.acquire_here(me);
         if let (Some(s), Some(t)) = (lock_stats(), started) {
-            s.kernel[role()].add(t.elapsed());
+            let sums = if self.device { &s.device } else { &s.kernel };
+            sums[role()].add(t.elapsed());
         }
     }
 
@@ -601,7 +623,7 @@ impl World {
     fn new(import_names: AddrMap<u32, &'static str>) -> Self {
         World {
             kernel: KernelLock::new(),
-            device: KernelLock::new(),
+            device: KernelLock::device(),
             sections: Mutex::new(AddrMap::default()),
             section_parkers: Mutex::new(Vec::new()),
             unaligned: Mutex::new(()),
