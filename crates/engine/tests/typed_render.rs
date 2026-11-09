@@ -999,6 +999,9 @@ fn pack_geometry_buffer() {
         e.mem.set_u16(data + 0xe, c.word(3) as u16);
         e.mem.set_u16(data + 0xc, 0x1001);
         set(e, data + 0x24, 1);
+        // The base count and the strip count (a strip list's index count adds two a strip).
+        e.mem.set_u16(data + 0x40, 9);
+        e.mem.set_u16(data + 0x44, 3);
         // The data's kind: its RTTI chain (slot 8) holds the triangle list data, or the strip test.
         let rtti = e.mem.alloc(8);
         let next = if c.word(2) == 0 { 0x011f_4a88 } else { 0 };
