@@ -636,7 +636,8 @@ fn menu_key(e: &mut Engine, w: &[u32], down: bool, tap: bool) -> Ret {
     if let Some(key) = one_key(e, &a) {
         if key < 256 {
             let time = input::tick_count(e);
-            input::state(e).buffered_key(key, time, down, tap);
+            let caps = super::array::fix_on(e, super::array::SIZE_CAPS);
+            input::state(e).buffered_key(key, time, down, tap, caps);
         }
     }
     handled(true)

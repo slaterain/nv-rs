@@ -345,6 +345,21 @@ fn key_commands_set_the_hooks_states() {
     );
 }
 
+/// `MenuTapKey` with the size caps row on queues up to the cap: a tap at the last place keeps its
+/// press and drops its release.
+#[test]
+fn menu_keys_respect_the_size_caps_row() {
+    let mut e = setup();
+    crate::commands::array::set_fix(&mut e, crate::commands::array::SIZE_CAPS, true);
+    for _ in 0..input::MAX_QUEUED - 1 {
+        r(&mut e, MENU_HOLD_KEY, &[0x10]);
+    }
+    r(&mut e, MENU_TAP_KEY, &[0x1c]);
+    let s = input::state(&mut e);
+    assert_eq!(s.buffered.len(), input::MAX_QUEUED);
+    assert_eq!(s.buffered.back(), Some(&[0x1c, 0x80, 777, 0, u32::MAX]));
+}
+
 /// The readers over the hook's states: `IsKeyPressed` and `IsControlPressed` (also as
 /// conditions), the counts, the n-th key and button, the array of keys down.
 #[test]

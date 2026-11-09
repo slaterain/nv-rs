@@ -361,7 +361,7 @@ fn buffered_reads_append_the_queued_keys() {
     };
     e.mem.set_u32(EVENT_COUNT, 1);
     e.mem.write(EVENTS, &[0x1c, 0, 0, 0, 0x80, 0, 0, 0]);
-    keys(&mut e).buffered_key(0x30, 1234, true, true);
+    keys(&mut e).buffered_key(0x30, 1234, true, true, false);
     let (hr, n, record) = read_one(&mut e);
     assert_eq!((hr, n, record[0], record[1]), (DI_OK, 1, 0x1c, 0x80));
     assert_eq!(keys(&mut e).buffered.len(), 2, "a real event first");
@@ -372,7 +372,7 @@ fn buffered_reads_append_the_queued_keys() {
     let (hr, n, _) = read_one(&mut e);
     assert_eq!((hr, n), (DI_OK, 0), "the device's own call");
     // A peek counts without taking.
-    keys(&mut e).buffered_key(0x31, 5, true, true);
+    keys(&mut e).buffered_key(0x31, 5, true, true, false);
     e.mem.set_u32(COUNT, 5);
     e.vcall(keyboard, GET_DEVICE_DATA, &[0x14, 0, COUNT, DIGDD_PEEK]);
     assert_eq!(e.mem.u32(COUNT), 2);
@@ -393,7 +393,7 @@ fn buffered_reads_append_the_queued_keys() {
     assert_eq!(e.mem.u32(COUNT), 3);
     assert!(keys(&mut e).buffered.is_empty());
     // A peek with records stops (xNVSE's HALT).
-    keys(&mut e).buffered_key(0x31, 5, true, true);
+    keys(&mut e).buffered_key(0x31, 5, true, true, false);
     let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         e.mem.set_u32(COUNT, 5);
         e.vcall(
@@ -413,7 +413,7 @@ fn several_queued_records_overwrite_the_second_place() {
     let (mut e, di) = game();
     let keyboard = device(&mut e, di, GUID_KEYBOARD);
     for key in [0x10, 0x11, 0x12] {
-        keys(&mut e).buffered_key(key, 9, true, false);
+        keys(&mut e).buffered_key(key, 9, true, false, false);
     }
     e.mem.write(RECORDS, &[0xaa; 0x3c]);
     e.mem.set_u32(COUNT, 3);
@@ -449,4 +449,29 @@ fn process_follows_xnvses_order() {
     };
     assert!(k.process(false));
     assert!(!k.tap);
+}
+
+/// The queue of menu keys: with the size caps row a key past [`MAX_QUEUED`] is dropped (a tap's
+/// release with it); without the row the queue grows until the out-of-memory stop (here at a
+/// small bound in place of [`OUT_OF_MEMORY_QUEUED`]).
+#[test]
+fn the_key_queue_is_capped_or_stops_as_out_of_memory() {
+    let mut s = State::default();
+    for _ in 0..MAX_QUEUED - 1 {
+        s.buffered_key(0x10, 1, true, false, true);
+    }
+    s.buffered_key(0x1c, 2, true, true, true);
+    assert_eq!(s.buffered.len(), MAX_QUEUED);
+    assert_eq!(s.buffered.back(), Some(&[0x1c, 0x80, 2, 0, u32::MAX]));
+    s.buffered_key(0x1c, 3, true, false, true);
+    assert_eq!(s.buffered.len(), MAX_QUEUED, "dropped");
+    s.buffered_key(0x1c, 3, true, false, false);
+    assert_eq!(s.buffered.len(), MAX_QUEUED + 1, "no cap without the row");
+    let mut s = State::default();
+    s.queue([1, 0x80, 0, 0, 0], usize::MAX, 2);
+    s.queue([1, 0, 0, 0, 0], usize::MAX, 2);
+    let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        s.queue([2, 0x80, 0, 0, 0], usize::MAX, 2);
+    }));
+    assert!(stop.is_err());
 }

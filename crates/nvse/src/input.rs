@@ -144,6 +144,13 @@ impl KeyInfo {
     }
 }
 
+/// The most keys `MenuTapKey`, `MenuHoldKey` and `MenuReleaseKey` queue with the size caps row
+/// (`NV_NVSE_SIZE_CAPS`); the rest are dropped.
+pub const MAX_QUEUED: usize = 4096;
+/// The queued keys past which the game stops as out of memory without the row: xNVSE's queue (a
+/// `std::deque` of 20-byte records) holds about 1.3 GB by then, about what its 32-bit process has.
+pub const OUT_OF_MEMORY_QUEUED: usize = 1 << 26;
+
 /// A `DIDEVICEOBJECTDATA`: offset (the key), data (0x80 down), time stamp, sequence,
 /// application data.
 pub type ObjectData = [u32; 5];
@@ -245,15 +252,35 @@ impl State {
     // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_DirectInput8Create.cpp:
     // DIHookControl::BufferedKeyTap, BufferedKeyPress, BufferedKeyRelease.
     /// Queues `key` going down (`down`), up, or (`tap`) down then up, stamped `time` (one
-    /// stamp for both of a tap), sequence 0, application data -1.
-    pub fn buffered_key(&mut self, key: u32, time: u32, down: bool, tap: bool) {
+    /// stamp for both of a tap), sequence 0, application data -1. xNVSE's queue has no end, and
+    /// the game drains it only when it reads buffered keys: with the size caps row (`caps`) a key
+    /// past [`MAX_QUEUED`] is dropped; without it the game stops as out of memory past
+    /// [`OUT_OF_MEMORY_QUEUED`], about where xNVSE's 32-bit process would.
+    pub fn buffered_key(&mut self, key: u32, time: u32, down: bool, tap: bool, caps: bool) {
         let event = |data: u32| [key, data, time, 0, u32::MAX];
+        let cap = if caps { MAX_QUEUED } else { usize::MAX };
         if tap {
-            self.buffered.push_back(event(0x80));
-            self.buffered.push_back(event(0));
+            self.queue(event(0x80), cap, OUT_OF_MEMORY_QUEUED);
+            self.queue(event(0), cap, OUT_OF_MEMORY_QUEUED);
         } else {
-            self.buffered.push_back(event(if down { 0x80 } else { 0 }));
+            self.queue(
+                event(if down { 0x80 } else { 0 }),
+                cap,
+                OUT_OF_MEMORY_QUEUED,
+            );
         }
+    }
+
+    /// One key into the queue: dropped at `cap`, the out-of-memory stop at `out_of_memory_at`.
+    fn queue(&mut self, event: ObjectData, cap: usize, out_of_memory_at: usize) {
+        let len = self.buffered.len();
+        if len >= cap {
+            return;
+        }
+        if len >= out_of_memory_at {
+            crate::commands::array::out_of_memory("the queue of keys for the buffered reads");
+        }
+        self.buffered.push_back(event);
     }
 
     // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_DirectInput8Create.cpp:
