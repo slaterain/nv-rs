@@ -1569,6 +1569,10 @@ fn stop_blocked(what: String) -> ! {
 /// Whether an object would let a waiter go on now, without taking it: a
 /// signalled event, a semaphore with a count, an ended thread.
 pub fn signalled(e: &Engine, handle: u32) -> bool {
+    // Real threads keep events and semaphores off the kernel table (`real_threads::sync_object`).
+    if let Some(o) = crate::real_threads::sync_object(e, handle) {
+        return o.available();
+    }
     match e.kernel.objects.get(&handle) {
         Some(KernelObject::Event { signalled, .. }) => *signalled,
         Some(KernelObject::Semaphore { count, .. }) => *count > 0,
@@ -1586,6 +1590,13 @@ pub fn signalled(e: &Engine, handle: u32) -> bool {
 /// semaphore down; an ended thread stays signalled. `None` for a handle that
 /// is not open.
 fn take(e: &mut Engine, handle: u32) -> Option<bool> {
+    if let Some(o) = crate::real_threads::sync_object(e, handle) {
+        let taken = o.try_take();
+        if taken {
+            crate::thread_host::signal_taken(e);
+        }
+        return Some(taken);
+    }
     let me = crate::thread_host::current_id(e);
     let taken = match e.kernel.objects.get_mut(&handle) {
         Some(KernelObject::Event {
@@ -1857,6 +1868,7 @@ fn wait_for_multiple_objects(
 /// Closes a handle from this table; 0 for one that is not open. A file handle that wrote
 /// publishes the file's size and times to its directory entry ([`Layer::file_closed`]).
 pub fn close_handle(e: &mut Engine, handle: u32) -> i32 {
+    crate::real_threads::handle_closed(e, handle);
     match e.kernel.objects.remove(&handle) {
         Some(KernelObject::File(file)) => {
             if let Some(layer) = LAYER.get() {
