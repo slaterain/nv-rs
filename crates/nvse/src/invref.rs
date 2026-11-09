@@ -215,17 +215,26 @@ pub const MAX_LIST_NODES: usize = 1 << 20;
 /// The data of each node of a `tList` (`ListNode<T>`: data, next) in order: the non-empty ones, or
 /// (`until_empty`) those up to the first empty one, as `tList::GetNthItem` reads them; at most
 /// [`MAX_LIST_NODES`] nodes.
+/// One more node of a walk of a game list, counted in `walked`: true within [`MAX_LIST_NODES`]; past
+/// it the list guard row ends the walk (false), and without the row the game stops.
+pub fn list_step(e: &Engine, walked: &mut usize) -> bool {
+    *walked += 1;
+    if *walked <= MAX_LIST_NODES {
+        return true;
+    }
+    if crate::commands::array::fix_on(e, crate::commands::array::LIST_GUARD) {
+        return false;
+    }
+    panic!("a game list of more than {MAX_LIST_NODES} nodes: it runs back into itself, and xNVSE would walk it for ever");
+}
+
 fn walk_list(e: &Engine, list: u32, until_empty: bool) -> Vec<u32> {
     let mut out = Vec::new();
     let mut node = list;
     let mut walked = 0usize;
     while node != 0 {
-        walked += 1;
-        if walked > MAX_LIST_NODES {
-            if crate::commands::array::fix_on(e, crate::commands::array::LIST_GUARD) {
-                break;
-            }
-            panic!("a game list of more than {MAX_LIST_NODES} nodes: it runs back into itself, and xNVSE would walk it for ever");
+        if !list_step(e, &mut walked) {
+            break;
         }
         let data = e.mem.u32(node);
         if data != 0 {
@@ -623,7 +632,11 @@ fn list_remove_nth(e: &mut Engine, list: u32, index: i32) {
     }
     let mut node = list;
     let mut index = index;
+    let mut walked = 0usize;
     loop {
+        if !list_step(e, &mut walked) {
+            return;
+        }
         let next = e.mem.u32(node + 4);
         if next == 0 {
             break;
@@ -643,8 +656,11 @@ fn list_remove_nth(e: &mut Engine, list: u32, index: i32) {
 
 /// `tList::GetIndexOf`: the index of the node holding `item` (empty nodes counted), or -1.
 fn list_index_of(e: &Engine, list: u32, item: u32) -> i32 {
-    let (mut node, mut index) = (list, 0);
+    let (mut node, mut index, mut walked) = (list, 0, 0usize);
     while node != 0 {
+        if !list_step(e, &mut walked) {
+            return -1;
+        }
         let data = e.mem.u32(node);
         if data != 0 && data == item {
             return index;
@@ -660,8 +676,11 @@ fn list_count(e: &Engine, list: u32) -> u32 {
     if e.mem.u32(list) == 0 {
         return 0;
     }
-    let (mut node, mut count) = (e.mem.u32(list + 4), 1);
+    let (mut node, mut count, mut walked) = (e.mem.u32(list + 4), 1, 0usize);
     while node != 0 {
+        if !list_step(e, &mut walked) {
+            break;
+        }
         count += 1;
         node = e.mem.u32(node + 4);
     }
@@ -671,7 +690,11 @@ fn list_count(e: &Engine, list: u32) -> u32 {
 /// `tList::GetNthItem`: the item of node `n` (counting every node), or 0.
 fn list_nth(e: &Engine, list: u32, n: u32) -> u32 {
     let mut node = list;
+    let mut walked = 0usize;
     for _ in 0..n {
+        if !list_step(e, &mut walked) {
+            return 0;
+        }
         node = e.mem.u32(node + 4);
         if node == 0 {
             return 0;
@@ -872,7 +895,11 @@ fn list_append(e: &mut Engine, list: u32, item: u32) {
         return;
     }
     let mut node = list;
+    let mut walked = 0usize;
     while e.mem.u32(node + 4) != 0 {
+        if !list_step(e, &mut walked) {
+            return;
+        }
         node = e.mem.u32(node + 4);
     }
     if e.mem.u32(node) == 0 {

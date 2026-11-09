@@ -280,7 +280,7 @@ save) should get.
   game (xNVSE 6.4.9 with JIP LN 57.30: `sv_Construct "refused [%Ld]" 5` ends it with
   0xC0000409, the next line never runs); the memory limit was measured in a 32-bit harness and
   moves a little from run to run.
-- **Script inventory list guard** (the row above): from the review of #364, 2026-11-09. The game's
+- **Script inventory list guard** (the row above): from the review of #365, 2026-11-09. The game's
   own lists never run back into themselves; the bound only turns a hang into a stop, or with the row
   into the end of the walk.
 - **Input** (I-11): the queue of menu keys is the size caps row's (review of #362); otherwise no

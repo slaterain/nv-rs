@@ -6,7 +6,7 @@
 use super::{
     console_print, double_words, dynamic_cast, form_or_caller, is_console_mode, rtti, Read,
 };
-use crate::invref::{self, has_type, list_items};
+use crate::invref::{self, has_type};
 use crate::table::{Command, Param, Returns};
 use crate::{handled, CommandArgs, EvalArgs};
 use engine_core::prelude::*;
@@ -394,23 +394,44 @@ fn matches_slot(e: &mut Engine, item: u32, mask: u32) -> bool {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameExtraData.cpp:
 // ExtraContainerChanges::FindEquipped, GetMatchingEquipped.
 /// The first stack in the reference's container changes, in list order, whose item uses a slot
-/// of `mask` and one of whose extra data lists (up to the first empty node; both walks bounded, [`invref::MAX_LIST_NODES`]) is worn in either
-/// hand: the item and that list; `(0, 0)` for none.
+/// of `mask` and one of whose extra data lists (up to the first empty node) is worn in either
+/// hand: the item and that list; `(0, 0)` for none. Both walks share one bound
+/// ([`invref::MAX_LIST_NODES`]), so two lists that run back into themselves stay within it.
 fn find_equipped(e: &mut Engine, reference: u32, mask: u32) -> (u32, u32) {
     let list = invref::entry_list(e, reference);
     if list == 0 {
         return (0, 0);
     }
-    for entry in list_items(e, list) {
+    // One count over both walks, so that two lists that run back into themselves stay bounded.
+    let mut walked = 0usize;
+    let mut node = list;
+    while node != 0 {
+        if !invref::list_step(e, &mut walked) {
+            return (0, 0);
+        }
+        let entry = e.mem.u32(node);
+        node = e.mem.u32(node + 4);
+        if entry == 0 {
+            continue;
+        }
         let extend = e.mem.u32(entry + invref::ENTRY_EXTEND_DATA);
         let item = e.mem.u32(entry + invref::ENTRY_TYPE);
         if extend == 0 || !matches_slot(e, item, mask) {
             continue;
         }
-        for xdata in invref::list_items_until_empty(e, extend) {
+        let mut inner = extend;
+        while inner != 0 {
+            if !invref::list_step(e, &mut walked) {
+                return (0, 0);
+            }
+            let xdata = e.mem.u32(inner);
+            if xdata == 0 {
+                break;
+            }
             if has_type(e, xdata, invref::EXTRA_WORN) || has_type(e, xdata, EXTRA_WORN_LEFT) {
                 return (item, xdata);
             }
+            inner = e.mem.u32(inner + 4);
         }
     }
     (0, 0)
@@ -709,8 +730,9 @@ fn name_text(e: &Engine, full_name: u32) -> Option<Vec<u8>> {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Inventory.cpp:
 // Cmd_CompareNames_Execute, GameTypes.cpp: String::Compare.
-/// -1, 0 or 1 as the second form's name (else the caller's base form's) orders before, with or
-/// after the first's, compared without case (ASCII); -2 when the second has no text.
+/// -1, 0 or 1 as the base form's name (the second argument's, else the caller's base form's) orders
+/// before, with or after the first argument's, compared without case (ASCII); -2 when the base
+/// form's name has no text.
 fn compare_names(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     a.set_result(e, 0.0);
