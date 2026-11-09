@@ -428,7 +428,11 @@ The migration of [ADR-0012](adr/0012-modern-64-bit-engine.md) and
 [ADR-0014](adr/0014-typed-migration-in-two-stages.md) replaces a translation with typed, native
 Rust, a family of functions at a time. `engine_core::typed` is the seam it plugs into. The first
 family is `leaves` (`typed/leaf.rs`): the small functions the translations call most, on since its
-speed gate passed (G1, 2026-11-06: Goodsprings +7.1%, Doc's room +3.0%); `NV_TYPED=off` turns it off.
+speed gate passed (G1, 2026-11-06: Goodsprings +7.1%, Doc's room +3.0%). It is no longer the only one on: by default
+`leaves`, `topic_search`, `topic_order` and, since their speed gate (2026-11-08), `lockfree`, `culling`,
+`pathing`, `shader`, `crt` and `dispatch` are on (below); `NV_TYPED=off` turns every family off, and
+`<family>:off` one. A run compared call for call with the original's record (nv-trace's `NV_TRACE_OUT`,
+`NV_TRACE_LIST`) has every family off unless `NV_TYPED` says otherwise (`typed::switch_for`).
 The second is `topic_search` (`crates/engine-fallout-forms/src/topic_search.rs`, provided from that
 crate): the search for the topic that holds a topic info (`TESTopic::GetOwnerTopic`) and the functions
 its loops call. A plugin that replaces dialogue runs it once per replaced info over every topic's infos

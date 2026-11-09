@@ -123,18 +123,39 @@ mod tests {
         assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 5);
     }
 
-    /// With no switch, `Engine::new` registers each family and its calls between typed functions go
-    /// direct. A test process started with `NV_TYPED` set (the differential runs) is not the default.
+    /// With no switch, `Engine::new` registers every function of each family, and its calls between
+    /// typed functions go direct. Not the default, so not checked: a test process started with
+    /// `NV_TYPED` set (the differential runs) or as a run compared with the original's record
+    /// (`typed::COMPARED_RUN_VARIABLES`, every family off). A diagnostic the shell has on at start (a
+    /// profile, a block check, a census, the touch record) keeps every call by address: the functions
+    /// are registered, and only that is checked.
     #[test]
     fn engine_new_has_them_on_with_no_switch() {
-        if std::env::var_os("NV_TYPED").is_some() {
+        let set = |name: &str| std::env::var_os(name).is_some();
+        if set("NV_TYPED")
+            || engine_core::typed::COMPARED_RUN_VARIABLES
+                .iter()
+                .any(|n| set(n))
+        {
             return;
         }
+        let diagnosing = [
+            "NV_PROFILE",
+            "NV_BLOCK_CHECK",
+            "NV_CENSUS",
+            "NV_RACE_CENSUS",
+            "NV_TOUCH",
+        ]
+        .iter()
+        .any(|n| set(n));
         let e = engine_core::Engine::new();
         for f in families() {
-            let (addr, _) = (f.funcs)()[0];
-            assert!(e.is_registered(addr), "{} at {addr:08x}", f.name);
-            assert!(e.typed_direct(f.id, addr), "{} at {addr:08x}", f.name);
+            for (addr, _) in (f.funcs)() {
+                assert!(e.is_registered(addr), "{} at {addr:08x}", f.name);
+                if !diagnosing {
+                    assert!(e.typed_direct(f.id, addr), "{} at {addr:08x}", f.name);
+                }
+            }
         }
     }
 }
