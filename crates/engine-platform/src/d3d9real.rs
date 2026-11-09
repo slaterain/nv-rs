@@ -1996,6 +1996,8 @@ pub fn query_created(e: &mut Engine, this: u32, query: u32, kind: u32) {
 const ISSUE_END: u32 = 1;
 const GETDATA_FLUSH: u32 = 1;
 const S_FALSE: u32 = 1;
+/// How long `NV_REPEATABLE` waits for a GPU query's answer before it gives up (`query_get_data`).
+const REPEATABLE_QUERY_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub fn query_issue(e: &mut Engine, query: u32, flags: u32) {
     if flags == ISSUE_END && is_forwarded(e, query) {
@@ -2020,8 +2022,11 @@ pub fn query_get_data(e: &mut Engine, query: u32, flags: u32) -> Option<(u32, u3
         return None;
     }
     // `NV_REPEATABLE`: the answer once the GPU has it, whenever the game asks, so the game takes
-    // the same path on every run (a sync command, after every command before it).
+    // the same path on every run (a sync command, after every command before it). A query that
+    // never comes in (never issued, a hidden or lost device) gives up after
+    // [`REPEATABLE_QUERY_WAIT`] with the last answer and a line.
     if e.repeatable {
+        let started = std::time::Instant::now();
         loop {
             match call(
                 e,
@@ -2030,7 +2035,16 @@ pub fn query_get_data(e: &mut Engine, query: u32, flags: u32) -> Option<(u32, u3
                     flags: flags | GETDATA_FLUSH,
                 },
             ) {
-                Some(Reply::Query(Some((S_FALSE, _)))) => std::thread::yield_now(),
+                Some(Reply::Query(Some((S_FALSE, value)))) => {
+                    if started.elapsed() >= REPEATABLE_QUERY_WAIT {
+                        eprintln!(
+                            "NV_REPEATABLE: query {query:#x} not in after {REPEATABLE_QUERY_WAIT:?}: \
+                             answered not ready (this run may not repeat)"
+                        );
+                        return Some((S_FALSE, value));
+                    }
+                    std::thread::yield_now();
+                }
                 Some(Reply::Query(answer)) => return answer,
                 _ => return None,
             }

@@ -1513,9 +1513,6 @@ mod tests {
         );
     }
 
-    /// Readings closer together than a microsecond still add up to the real time that passed
-    /// (each one used to drop its part of a microsecond, so back-to-back readings stopped the
-    /// clock).
     /// `NV_REPEATABLE`'s clock: the same readings on every run, whatever the host's speed: it
     /// starts at the hour, each reading moves it 1 us, a frame end moves it on to 1/60 s past the
     /// previous one (not past a frame that took longer), and a sleep jumps it.
@@ -1555,6 +1552,9 @@ mod tests {
         );
     }
 
+    /// Readings closer together than a microsecond still add up to the real time that passed
+    /// (each one used to drop its part of a microsecond, so back-to-back readings stopped the
+    /// clock).
     #[test]
     fn the_real_clock_keeps_up_with_back_to_back_readings() {
         use std::time::{Duration, Instant};
