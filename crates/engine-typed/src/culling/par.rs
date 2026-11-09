@@ -53,7 +53,14 @@ const SLOT_PROCESS: u32 = 0x44;
 const SLOT_APPEND_VIRTUAL: u32 = 0x4c;
 /// The size of `BSCullingProcess`: the bytes a helper's copy takes.
 const PROCESS_SIZE: u32 = 0xc8;
-/// `BSFadeNode::OnVisible`, which runs on the helpers.
+/// `BSFadeNode::OnVisible`, which runs on the helpers. What it reads, from the exe: its own node's
+/// fields; globals (fading on, the frame time, the thresholds and multipliers); the camera through
+/// the process; the accumulator's class (`0043b300` is an `IsKindOf` walk of its RTTI); and the most
+/// alpha through the callback `0086a050`, the reference's actor alpha (an actor's virtual +0x420).
+/// What the replayed calls write: the batch renderer's grouping state (start and stop), the
+/// subtree's shader properties' fade alpha at +0x2c (`RecursiveSetPropertyFadeAlpha`, `00b6bb30`),
+/// and registration's lists and property flags. The two sets don't meet, so walking it before the
+/// replay reads what the serial walk reads.
 const FADE_NODE_ON_VISIBLE: u32 = 0x00b4_e490;
 /// The fade node's calls into the accumulator's side, logged on the helpers: start grouping alphas
 /// (`thiscall(accumulator, bound, 1)`), stop (`thiscall(accumulator)`), the fade alpha down a
@@ -215,8 +222,16 @@ pub(crate) fn defer(e: &Engine, object: u32, process: u32, target: u32) -> bool 
     })
 }
 
-/// A call the helper's engine logs instead of running (see [`install_logging`]).
-fn log_call(addr: u32, args: &[u32]) -> Ret {
+/// A call the helper's engine logs instead of running (see [`install_logging`]). Its words are
+/// replayed on main after the helper's walk, so none may point into the helper's own stack; in the
+/// exe they don't (the accumulator, the fade node, its world bound or the empty bound, a flag, an
+/// alpha's bits), and a word that does stops the run here rather than replay a dead local.
+fn log_call(e: &Engine, addr: u32, args: &[u32]) -> Ret {
+    if let Some((low, high)) = e.guest_stack_region() {
+        if let Some(word) = args.iter().find(|w| (low..high).contains(*w)) {
+            panic!("NV_PAR_RENDER: a logged call to {addr:08x} passes {word:08x}, in the helper's stack");
+        }
+    }
     LOG.with(|log| {
         if let Some(log) = log.borrow_mut().as_mut() {
             log.push(Entry::Call {
@@ -228,16 +243,16 @@ fn log_call(addr: u32, args: &[u32]) -> Ret {
     Ret::default()
 }
 
-fn log_start_grouping(_e: &mut Engine, args: &[u32]) -> Ret {
-    log_call(START_GROUPING_ALPHAS, args)
+fn log_start_grouping(e: &mut Engine, args: &[u32]) -> Ret {
+    log_call(e, START_GROUPING_ALPHAS, args)
 }
 
-fn log_stop_grouping(_e: &mut Engine, args: &[u32]) -> Ret {
-    log_call(STOP_GROUPING_ALPHAS, args)
+fn log_stop_grouping(e: &mut Engine, args: &[u32]) -> Ret {
+    log_call(e, STOP_GROUPING_ALPHAS, args)
 }
 
-fn log_fade_alpha(_e: &mut Engine, args: &[u32]) -> Ret {
-    log_call(SET_FADE_ALPHA, args)
+fn log_fade_alpha(e: &mut Engine, args: &[u32]) -> Ret {
+    log_call(e, SET_FADE_ALPHA, args)
 }
 
 /// The logging functions on a helper's own engine (each job: a function registered for every

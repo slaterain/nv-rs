@@ -1403,8 +1403,7 @@ impl Engine {
     }
 
     /// The running thread's stack for `with_stack` locals as (lowest address, end), once made.
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn guest_stack_region(&self) -> Option<(u32, u32)> {
+    pub fn guest_stack_region(&self) -> Option<(u32, u32)> {
         let (base, _) = self
             .guest_stacks
             .get(self.thread_index())

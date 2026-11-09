@@ -2499,7 +2499,7 @@ thread_local! {
 /// first call. False (nothing run) on a helper, with a memory diagnostic that keeps memory unshared,
 /// or when the pool was made with fewer helpers. A helper's panic is resumed here after every helper is done.
 pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
-    if HELPER.with(Cell::get) {
+    if helpers == 0 || HELPER.with(Cell::get) {
         return false;
     }
     // With stepped threads the helpers run inside the caller's turn (it waits for them), so the run
@@ -2512,7 +2512,7 @@ pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
         e.mem.start_sharing();
     }
     let pool = *POOL.get_or_init(|| make_pool(e, world, helpers));
-    if pool.count < helpers || helpers == 0 {
+    if pool.count < helpers {
         return false;
     }
     // SAFETY: the job's borrow is erased only until every helper has run it: this function does
@@ -2529,17 +2529,27 @@ pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
         s.generation += 1;
         pool.start.notify_all();
     }
-    struct Join(&'static Pool);
+    // While it waits the caller is not running game code: a barrier another thread asks for (it
+    // waits for every counted thread) must not wait for it while it waits for a helper that the
+    // barrier holds in `enter_guest` or at a safe point.
+    struct Join(&'static Pool, Option<&'static World>);
     impl Drop for Join {
         fn drop(&mut self) {
+            let counted = self.1.is_some_and(World::leave_guest);
             let mut s = guard(&self.0.state);
             while s.running != 0 {
                 s = wait(&self.0.done, s);
             }
             s.job = None;
+            drop(s);
+            if counted {
+                if let Some(world) = self.1 {
+                    world.enter_guest();
+                }
+            }
         }
     }
-    let join = Join(pool);
+    let join = Join(pool, world);
     job(e, 0);
     drop(join);
     let panic = guard(&pool.state).panic.take();
@@ -4073,5 +4083,55 @@ mod tests {
         e.mem.set_u32(p + 8, 1);
         let wait = slot("WaitForSingleObject");
         assert_eq!(e.call(wait, &args![h, 0xffff_ffffu32]).eax, 0);
+    }
+
+    /// The render helpers (`fork_join`, one pool per process, so one test makes it): each job runs
+    /// once on every helper and the caller; a helper's panic reaches the caller and the pool goes
+    /// on; no helpers is refused; and a barrier asked for from another thread while main forks over
+    /// and over never deadlocks (main is counted as running game code, as in a frame).
+    #[test]
+    fn fork_join_runs_helpers_and_survives_barriers() {
+        let (mut e, _slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        let world = ctx(&e).world;
+        world.enter_guest();
+        assert!(!fork_join(&mut e, 0, &|_: &mut Engine, _: usize| {}));
+        let ran = AtomicUsize::new(0);
+        assert!(fork_join(&mut e, 2, &|_: &mut Engine, _: usize| {
+            ran.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert_eq!(ran.load(Ordering::SeqCst), 3);
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            fork_join(&mut e, 2, &|_: &mut Engine, n: usize| {
+                assert!(n != 1, "helper 1 stops");
+            })
+        }));
+        assert!(caught.is_err(), "a helper's panic reaches the caller");
+        // 300 barriers a few hundred microseconds apart (the host asks for one between frames; back to
+        // back with no gap, a thread in `enter_guest` can be starved by the next one) while main forks.
+        let done = std::sync::Arc::new(AtomicBool::new(false));
+        let barriers = {
+            let done = std::sync::Arc::clone(&done);
+            std::thread::spawn(move || {
+                for _ in 0..300 {
+                    world.barrier(|| ());
+                    std::thread::sleep(Duration::from_micros(300));
+                }
+                done.store(true, Ordering::SeqCst);
+            })
+        };
+        let mut forks = 0u32;
+        while !done.load(Ordering::SeqCst) {
+            forks += 1;
+            let count = AtomicUsize::new(0);
+            assert!(fork_join(&mut e, 2, &|w: &mut Engine, _: usize| {
+                w.with_stack(16, |_, _| ());
+                count.fetch_add(1, Ordering::SeqCst);
+            }));
+            assert_eq!(count.load(Ordering::SeqCst), 3);
+        }
+        barriers.join().expect("the barrier thread");
+        assert!(forks > 0);
+        world.leave_guest();
     }
 }
