@@ -1255,19 +1255,11 @@ impl std::fmt::Debug for KernelRef {
 /// kernel-locked function). The device's functions then never make a reference to the kernel,
 /// which other threads change under the kernel lock at the same time ([`KernelRef`]). `None`
 /// without the layer.
+#[derive(Default)]
 pub struct DeviceRef {
     state: Option<std::ptr::NonNull<dyn std::any::Any>>,
     /// Whether this one owns the state (frees it when dropped).
     owned: bool,
-}
-
-impl Default for DeviceRef {
-    fn default() -> Self {
-        DeviceRef {
-            state: None,
-            owned: false,
-        }
-    }
 }
 
 impl DeviceRef {
