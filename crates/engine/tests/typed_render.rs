@@ -795,7 +795,8 @@ fn render_passes() {
         Input::Of(TWO_WAYS),
     ])
     .max_cases(400)
-    .translation_calls_plainly(&[0x00b6_6760])
+    // The point length's root: the translation of `004019b0` takes it plainly.
+    .translation_calls_plainly(&[0x00b6_6760, 0x0040_19d0])
     .setup(|e, c| {
         let (property, geometry, accumulator) = property_world(e);
         set(e, property + 0x20, c.word(2));

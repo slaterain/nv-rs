@@ -73,8 +73,9 @@ fn obj(e: &mut Engine, size: u32, vt: u32) -> u32 {
     o
 }
 
-/// The callees outside the family.
-fn stand_ins(e: &mut Engine) {
+/// The callees outside the family; the plain geometry pass (`00b7dde0`) too unless the test names the
+/// render family, which holds it.
+fn stand_ins(e: &mut Engine, render: bool) {
     e.map(RETS, 0x1000);
     slots!(e; 0x04, 0x08, 0x24, 0x30, 0x34, 0x64, 0x6c, 0x78, 0x7c, 0x80, 0x84, 0x88, 0x8c, 0xa0,
         0xa4, 0xa8, 0xac, 0xb0, 0xc0, 0xcc, 0xdc, 0xe0, 0xe4, 0xf0, 0xf4, 0xf8, 0xfc, 0x100, 0x104,
@@ -104,8 +105,10 @@ fn stand_ins(e: &mut Engine) {
     });
     // The shadow-pass test: odd types.
     e.register(0x00b6_30f0, |_, a| ret(a[0] & 1));
+    if !render {
+        e.register(0x00b7_dde0, |_, _| ret(0));
+    }
     for addr in [
-        0x00b7_dde0,
         0x00b7_ded0,
         0x00b7_dfe0,
         0x00b7_e150,
@@ -215,7 +218,12 @@ fn list_at(e: &mut Engine, at: u32, items: &[u32]) {
 }
 
 fn world(e: &mut Engine) -> W {
-    stand_ins(e);
+    world_with(e, false)
+}
+
+/// [`world`] for a test that names the render family: its geometry pass stays real.
+fn world_with(e: &mut Engine, render: bool) -> W {
+    stand_ins(e, render);
     let vt = vtable(e, &[]);
     let cache_vt = vtable(e, &[(0x68, 0x00e8_8780)]);
     let br_vt = vtable(e, &[(0x8c, 0x00b9_9c90)]);
@@ -2708,10 +2716,15 @@ fn register_object_typed_render_passes() {
         0x00b9_9b00,
         0x00b9_8e20,
         0x00b6_6760,
+        0x0040_19d0,
+        // The pass list's construction, as in `check_create_pass_array`.
+        0x00ba_94b0,
+        0x00ba_8b80,
+        0x00ba_8d30,
     ])
     .float_sweep(0)
     .setup(|e, c| {
-        let w = world(e);
+        let w = world_with(e, true);
         render_stand_ins(e);
         let vt = vtable(e, &[(0xa0, 0x00b6_7be0)]);
         set(e, w.property, vt);
@@ -2736,7 +2749,7 @@ fn render_standard_typed_draw() {
     .inputs(&[Input::Of(&[0x10, 0x11]), Input::Of(BYTES)])
     .float_sweep(0)
     .setup(|e, c| {
-        let w = world(e);
+        let w = world_with(e, true);
         render_stand_ins(e);
         let vt = vtable(e, &[(0x6c, 0x00e8_12f0)]);
         set(e, w.shader, vt);
