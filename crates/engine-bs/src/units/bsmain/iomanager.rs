@@ -98,15 +98,17 @@ pub fn fn_00c3dfa0_waking_early(e: &mut Engine, this: Ptr, priority: i32) {
 }
 
 /// The wait loop's sleep while the completed work is short of what is in flight (`+0x18`): 50 ms, or
-/// with `wake_early` until it is not, looked at every millisecond, 50 ms at most.
+/// with `wake_early` until it is not, looked at after each 1 ms sleep, 50 ms at most by the clock (a
+/// 1 ms sleep takes longer, so the turns are counted by time, not by sleeps).
 fn wait_for_completions(e: &mut Engine, this: Ptr, wake_early: bool) {
     if !wake_early {
         e.call(SLEEP, &args![50u32]);
         return;
     }
-    for _ in 0..50 {
+    let until = e.clock_now_us() + 50_000;
+    loop {
         e.call(SLEEP, &args![1u32]);
-        if count_queued(e, this) >= word(e, this, 0x18) {
+        if count_queued(e, this) >= word(e, this, 0x18) || e.clock_now_us() >= until {
             break;
         }
     }
@@ -2392,7 +2394,8 @@ mod tests {
     }
 
     /// The sleep while completions are short: 50 ms as the exe's; waking early, 1 ms looks until
-    /// the completed count reaches the in-flight one (the third look here), or 50 of them.
+    /// the completed count reaches the in-flight one (the third look here), or 50 ms have passed by the
+    /// clock (34 sleeps of 1.5 ms, about what a 1 ms sleep takes on Windows).
     #[test]
     fn the_completion_wait_ends_when_the_work_is_in() {
         let sleeps = |e: &Engine| -> Vec<u32> {
@@ -2407,7 +2410,7 @@ mod tests {
         for (wake_early, done_at, want) in [
             (false, 3, vec![50]),
             (true, 3, vec![1, 1, 1]),
-            (true, u32::MAX, vec![1; 50]),
+            (true, u32::MAX, vec![1; 34]),
         ] {
             let mut e = Engine::new();
             let manager = block(&mut e, 0x84);
@@ -2421,7 +2424,10 @@ mod tests {
                 reads += 1;
                 u32::from(reads >= done_at).into_ret()
             });
-            e.register(SLEEP, no_op);
+            e.register(SLEEP, |e, _| {
+                e.advance_clock_us(1_500);
+                Ret::default()
+            });
             e.call_log = Some(vec![]);
             wait_for_completions(&mut e, manager, wake_early);
             assert_eq!(sleeps(&e), want, "wake early {wake_early}");
