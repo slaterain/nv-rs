@@ -2906,7 +2906,6 @@ fn geometry_stand_ins(e: &mut Engine) {
     for addr in [
         0x00b7_0820u32,
         0x00c0_3180,
-        0x00c0_3010,
         0x00b7_ad00,
         0x00b7_ce90,
         0x00c0_2c30,

@@ -1098,7 +1098,15 @@ fn shadow_light_shader_setup_geometry_constants_ambient_emittance(
         } else {
             AMBIENT_00C03010
         };
-    e.call(helper, &args![word]);
+    if helper == AMBIENT_00C03010 {
+        typed_call!(
+            FAMILY,
+            0x00c0_3010,
+            accumulator::accumulate_light_color(e, Ptr::new(word))
+        );
+    } else {
+        e.call(helper, &args![word]);
+    }
     let kind = e.mem.u16(rendering + 4);
     if (0xc3..=0xd6).contains(&kind) {
         let count = x87_store32(f64::from(e.mem.u8(rendering + 9)));
