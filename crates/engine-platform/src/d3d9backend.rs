@@ -101,6 +101,213 @@ pub struct RealBackend {
     /// many queries it has made at each address.
     board: Option<std::sync::Arc<QueryBoard>>,
     queries_made: engine_core::AddrMap<u32, u64>,
+    /// The shader warm-up (the fixes preset's row, `RealBackend::with_warm`): `None` when off.
+    warm: Option<Box<Warm>>,
+}
+
+/// The shader warm-up (the fixes preset's "shaders compiled ahead of first use"): the driver
+/// compiles a Direct3D 9 shader when it is first drawn with, so a shader the game first draws
+/// with in play (a weapon's effects at the first shot: 7 shaders, a 25-45 ms frame) stalls that
+/// frame. Every shader the game makes (all 960 of its packages' at start-up) is queued here, and
+/// after each `Present` the queue is drawn with, one point into a 1x1 target of this layer's,
+/// for at most [`WARM_BUDGET`]; the game's bindings that draw changes are then set again with its
+/// own commands. Nothing the game draws into is touched: no target of its, no depth (none bound).
+struct Warm {
+    queue: std::collections::VecDeque<WarmShader>,
+    bindings: Bindings,
+    /// The 1x1 target, a vertex declaration of one position, and a plain shader of each stage
+    /// for shader models 2 and 3 (to pair with the one being compiled), made at the first warm-up.
+    tools: Option<WarmTools>,
+    /// Shaders drawn with, draws refused, time spent, presents that warmed.
+    done: u32,
+    failed: u32,
+    spent: std::time::Duration,
+    presents: u32,
+}
+
+enum WarmShader {
+    Vertex(IDirect3DVertexShader9, u8),
+    Pixel(IDirect3DPixelShader9, u8),
+}
+
+struct WarmTools {
+    target: IDirect3DSurface9,
+    declaration: IDirect3DVertexDeclaration9,
+    vs: [IDirect3DVertexShader9; 2],
+    ps: [IDirect3DPixelShader9; 2],
+}
+
+/// Render-thread time the warm-up takes after one `Present` at most (one shader's compile may go
+/// past it): the menus' and loading screens' frames leave the render thread idle far longer.
+const WARM_BUDGET: std::time::Duration = std::time::Duration::from_millis(3);
+
+/// The plain shaders (Direct3D 9 bytecode): a vertex shader that writes its position, and a
+/// pixel shader that writes black, for shader model 2 and 3 (models can't be mixed across 3).
+const PLAIN_VS2: [u32; 8] = [
+    0xfffe_0200,
+    0x0200_001f,
+    0x8000_0000,
+    0x900f_0000,
+    0x0200_0001,
+    0xc00f_0000,
+    0x90e4_0000,
+    0x0000_ffff,
+];
+const PLAIN_VS3: [u32; 11] = [
+    0xfffe_0300,
+    0x0200_001f,
+    0x8000_0000,
+    0x900f_0000,
+    0x0200_001f,
+    0x8000_0000,
+    0xe00f_0000,
+    0x0200_0001,
+    0xe00f_0000,
+    0x90e4_0000,
+    0x0000_ffff,
+];
+const PLAIN_PS2: [u32; 11] = [
+    0xffff_0200,
+    0x0500_0051,
+    0xa00f_0000,
+    0,
+    0,
+    0,
+    0,
+    0x0200_0001,
+    0x800f_0800,
+    0xa0e4_0000,
+    0x0000_ffff,
+];
+const PLAIN_PS3: [u32; 11] = [
+    0xffff_0300,
+    0x0500_0051,
+    0xa00f_0000,
+    0,
+    0,
+    0,
+    0,
+    0x0200_0001,
+    0x800f_0800,
+    0xa0e4_0000,
+    0x0000_ffff,
+];
+
+/// The warm-up's own objects on the game's device ([`WarmTools`]); `None` when one can't be made.
+fn warm_tools(d: &IDirect3DDevice9) -> Option<WarmTools> {
+    unsafe {
+        let mut target = None;
+        d.CreateRenderTarget(
+            1,
+            1,
+            D3DFMT_A8R8G8B8,
+            D3DMULTISAMPLE_NONE,
+            0,
+            BOOL(0),
+            &mut target,
+            std::ptr::null_mut(),
+        )
+        .ok()?;
+        let elements = [
+            D3DVERTEXELEMENT9 {
+                Stream: 0,
+                Offset: 0,
+                Type: D3DDECLTYPE_FLOAT4.0 as u8,
+                Method: D3DDECLMETHOD_DEFAULT.0 as u8,
+                Usage: D3DDECLUSAGE_POSITION.0 as u8,
+                UsageIndex: 0,
+            },
+            D3DVERTEXELEMENT9 {
+                Stream: 0xff,
+                Offset: 0,
+                Type: D3DDECLTYPE_UNUSED.0 as u8,
+                Method: 0,
+                Usage: 0,
+                UsageIndex: 0,
+            },
+        ];
+        Some(WarmTools {
+            target: target?,
+            declaration: d.CreateVertexDeclaration(elements.as_ptr()).ok()?,
+            vs: [
+                d.CreateVertexShader(PLAIN_VS2.as_ptr()).ok()?,
+                d.CreateVertexShader(PLAIN_VS3.as_ptr()).ok()?,
+            ],
+            ps: [
+                d.CreatePixelShader(PLAIN_PS2.as_ptr()).ok()?,
+                d.CreatePixelShader(PLAIN_PS3.as_ptr()).ok()?,
+            ],
+        })
+    }
+}
+
+/// The game's bindings a warm-up draw changes, as its commands last set them.
+#[derive(Clone, Copy, Default)]
+struct Bindings {
+    targets: [u32; 4],
+    depth: u32,
+    /// Since the last `SetRenderTarget(0, ..)` (which resets both).
+    viewport: Option<[u32; 6]>,
+    scissor: Option<[i32; 4]>,
+    vs: u32,
+    ps: u32,
+    /// The last of `SetVertexDeclaration` (false) and `SetFVF` (true), with its value.
+    layout: (bool, u32),
+    stream0: (u32, u32, u32),
+}
+
+impl Bindings {
+    fn follow(&mut self, cmd: &Cmd<Data<'_>>) {
+        match *cmd {
+            Cmd::SetRenderTarget { index, surface, .. } if index < 4 => {
+                self.targets[index as usize] = surface;
+                if index == 0 {
+                    self.viewport = None;
+                    self.scissor = None;
+                }
+            }
+            Cmd::SetDepthStencilSurface { surface, .. } => self.depth = surface,
+            Cmd::SetViewport { viewport, .. } => self.viewport = Some(viewport),
+            Cmd::SetScissorRect { rect, .. } => self.scissor = Some(rect),
+            Cmd::SetShader { pixel, shader, .. } => {
+                if pixel {
+                    self.ps = shader;
+                } else {
+                    self.vs = shader;
+                }
+            }
+            Cmd::SetVertexDeclaration { declaration, .. } => self.layout = (false, declaration),
+            Cmd::SetFvf { fvf, .. } => self.layout = (true, fvf),
+            Cmd::SetStreamSource {
+                stream: 0,
+                buffer,
+                offset,
+                stride,
+                ..
+            } => self.stream0 = (buffer, offset, stride),
+            // A new device's, and `Reset`'s: the state's defaults, the first back buffer and the
+            // automatic depth surface bound.
+            Cmd::CreateDevice {
+                ref back_buffers,
+                depth_stencil,
+                ..
+            }
+            | Cmd::Reset {
+                ref back_buffers,
+                depth_stencil,
+                ..
+            } => {
+                let mut targets = [0; 4];
+                targets[0] = back_buffers.to_words().first().copied().unwrap_or(0);
+                *self = Bindings {
+                    targets,
+                    depth: depth_stencil,
+                    ..Bindings::default()
+                };
+            }
+            _ => {}
+        }
+    }
 }
 
 // SAFETY: the real objects are free-threaded COM objects of a `D3DCREATE_MULTITHREADED` device;
@@ -201,6 +408,149 @@ impl RealBackend {
         RealBackend {
             board: Some(board),
             ..RealBackend::default()
+        }
+    }
+
+    /// This backend with the shader warm-up ([`Warm`]) on.
+    pub fn with_warm(mut self, on: bool) -> RealBackend {
+        self.warm = on.then(|| {
+            Box::new(Warm {
+                queue: Default::default(),
+                bindings: Bindings::default(),
+                tools: None,
+                done: 0,
+                failed: 0,
+                spent: std::time::Duration::ZERO,
+                presents: 0,
+            })
+        });
+        self
+    }
+
+    /// After a `Present`: draws with the queued shaders ([`Warm`]) for [`WARM_BUDGET`] at most,
+    /// then sets the game's bindings again with its own commands.
+    fn warm_some(&mut self, d: &IDirect3DDevice9, device: u32) {
+        let start = std::time::Instant::now();
+        if self.warm.as_ref().is_some_and(|w| w.tools.is_none()) {
+            match warm_tools(d) {
+                Some(t) => self.warm.as_mut().expect("on").tools = Some(t),
+                None => {
+                    eprintln!("NV_D3D9=real: the shader warm-up could not make its target: off");
+                    self.warm = None;
+                    return;
+                }
+            }
+        }
+        let Some(w) = self.warm.as_mut() else { return };
+        // The game's target to bind again is known (it always is after `CreateDevice`).
+        if w.bindings.targets[0] == 0 {
+            return;
+        }
+        let t = w.tools.as_ref().expect("made above");
+        let zeros = [0u32; 4];
+        unsafe {
+            // Not inside a scene of the game's (a Present inside one): nothing then.
+            if d.BeginScene().is_err() {
+                return;
+            }
+            let _ = d.SetRenderTarget(0, &t.target);
+            for i in 1..4 {
+                let _ = d.SetRenderTarget(i, None::<&IDirect3DSurface9>);
+            }
+            let _ = d.SetDepthStencilSurface(None::<&IDirect3DSurface9>);
+            let _ = d.SetVertexDeclaration(&t.declaration);
+            while let Some(s) = w.queue.pop_front() {
+                let model = |major: u8| usize::from(major >= 3);
+                let r = match &s {
+                    WarmShader::Vertex(vs, major) => {
+                        let _ = d.SetPixelShader(&t.ps[model(*major)]);
+                        d.SetVertexShader(vs)
+                    }
+                    WarmShader::Pixel(ps, major) => {
+                        let _ = d.SetVertexShader(&t.vs[model(*major)]);
+                        d.SetPixelShader(ps)
+                    }
+                }
+                .and_then(|()| {
+                    d.DrawPrimitiveUP(
+                        D3DPT_POINTLIST,
+                        1,
+                        zeros.as_ptr().cast(),
+                        std::mem::size_of_val(&zeros) as u32,
+                    )
+                });
+                if r.is_ok() {
+                    w.done += 1;
+                } else {
+                    w.failed += 1;
+                }
+                if start.elapsed() >= WARM_BUDGET {
+                    break;
+                }
+            }
+            let _ = d.EndScene();
+        }
+        w.presents += 1;
+        let finished = w.queue.is_empty();
+        let b = w.bindings;
+        // The game's bindings again, through its own commands (their real objects, the bindings
+        // without a counterpart): render targets (the first resets the viewport and scissor
+        // rectangle), depth, viewport, scissor rectangle, shaders, layout, stream 0 (which
+        // `DrawPrimitiveUP` unbinds).
+        for (index, &surface) in b.targets.iter().enumerate() {
+            // Unbound ones stay unbound (the first is the back buffer at the least).
+            if surface != 0 {
+                self.device_command(Cmd::SetRenderTarget {
+                    device,
+                    index: index as u32,
+                    surface,
+                });
+            }
+        }
+        self.device_command(Cmd::SetDepthStencilSurface {
+            device,
+            surface: b.depth,
+        });
+        if let Some(viewport) = b.viewport {
+            self.device_command(Cmd::SetViewport { device, viewport });
+        }
+        if let Some(rect) = b.scissor {
+            self.device_command(Cmd::SetScissorRect { device, rect });
+        }
+        for (pixel, shader) in [(false, b.vs), (true, b.ps)] {
+            self.device_command(Cmd::SetShader {
+                device,
+                pixel,
+                shader,
+            });
+        }
+        self.device_command(match b.layout {
+            (true, fvf) => Cmd::SetFvf { device, fvf },
+            (false, declaration) => Cmd::SetVertexDeclaration {
+                device,
+                declaration,
+            },
+        });
+        let (buffer, offset, stride) = b.stream0;
+        self.device_command(Cmd::SetStreamSource {
+            device,
+            stream: 0,
+            buffer,
+            offset,
+            stride,
+        });
+        if let Some(w) = self.warm.as_mut() {
+            w.spent += start.elapsed();
+            if finished {
+                eprintln!(
+                    "NV_D3D9=real: shader warm-up: {} shaders drawn with ahead of the game ({} refused) in {:.0} ms over {} presents",
+                    w.done,
+                    w.failed,
+                    w.spent.as_secs_f64() * 1000.0,
+                    w.presents
+                );
+                w.tools = None;
+            }
         }
     }
 
@@ -583,6 +933,9 @@ fn forward_constants(
 
 impl Backend for RealBackend {
     fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+        if let (Some(w), Cmd::CreateDevice { .. }) = (self.warm.as_mut(), &cmd) {
+            w.bindings.follow(&cmd);
+        }
         match cmd {
             Cmd::CreateDevice {
                 device,
@@ -705,6 +1058,9 @@ impl RealBackend {
             other => unreachable!("{} is not a device's command", other.name()),
         };
         let Some(d) = self.device(device) else { return };
+        if let Some(w) = self.warm.as_mut() {
+            w.bindings.follow(&cmd);
+        }
         let ok = 0;
         match cmd {
             Cmd::Reset {
@@ -755,6 +1111,9 @@ impl RealBackend {
                 // The frame is over: what the model let go of is bound nowhere on the real
                 // device now.
                 self.graveyard.clear();
+                if self.warm.as_ref().is_some_and(|w| !w.queue.is_empty()) {
+                    self.warm_some(&d, device);
+                }
             }
             Cmd::BeginScene { model, .. } => {
                 let r = unsafe { d.BeginScene() };
@@ -1385,6 +1744,15 @@ impl RealBackend {
                         }
                     }
                 };
+                if let Some(w) = self.warm.as_mut() {
+                    // The shader model's major version (the version token's second byte).
+                    let major = (tokens.first().copied().unwrap_or(0) >> 8) as u8;
+                    w.queue.push_back(match &object {
+                        Object::PixelShader(s) => WarmShader::Pixel(s.clone(), major),
+                        Object::VertexShader(s) => WarmShader::Vertex(s.clone(), major),
+                        _ => unreachable!("a shader"),
+                    });
+                }
                 self.insert(shader, object);
             }
             Cmd::CreateDeclaration {
