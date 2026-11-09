@@ -88,7 +88,31 @@ enum Obj {
     Buffer(Arc<Buf>, Vec<u8>),
     Shader(Arc<Shader>),
     Decl(Arc<Decl>),
-    Query,
+    Query(Query),
+}
+
+/// A query (`CreateQuery`): an event's answer comes from the model; an occlusion query counts
+/// the samples its draws pass ([`Device::query_issue`]).
+#[derive(Clone, Copy, Debug, Default)]
+struct Query {
+    /// `D3DQUERYTYPE`: 8 event, 9 occlusion.
+    kind: u32,
+    /// Its count's slot in the count buffer, from its last `D3DISSUE_BEGIN`.
+    slot: Option<u32>,
+    /// The batch that ended it (its count is in the GPU's hands once that batch is sent).
+    batch: u64,
+    /// The count, once read back.
+    result: Option<u32>,
+}
+
+/// The occlusion count's target of the open pass ([`wgsl::COUNT_TARGET`]): each sample a draw
+/// passes adds 1 there; summed into `slot` of the count buffer when the pass ends.
+struct CountSegment {
+    view: wgpu::TextureView,
+    samples: u32,
+    width: u32,
+    height: u32,
+    slot: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -130,6 +154,8 @@ struct State {
     psf: Box<[[u32; 4]; 256]>,
     psi: [[u32; 4]; 16],
     psb: [u32; 16],
+    /// The user clip planes (`SetClipPlane`), float bits.
+    clip: [[u32; 4]; wgsl::CLIP_PLANES],
     /// The uniform blocks need writing again.
     dirty: bool,
 }
@@ -139,6 +165,8 @@ struct State {
 struct Targets {
     colours: [Option<u64>; 4],
     depth: Option<u64>,
+    /// An occlusion query counts in this pass ([`CountSegment`]).
+    counting: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -154,6 +182,12 @@ struct PipeKey {
     states: [u32; 30],
     samples: u32,
     samplers: Vec<(u32, u8, bool)>,
+    /// NVIDIA's alpha to coverage in place of the alpha test ([`ATOC`]).
+    atoc: bool,
+    /// The pass has the occlusion count's target.
+    count: bool,
+    /// The user clip planes' code ([`Device::clip_link`]).
+    clip: wgsl::Clip,
 }
 
 /// The render states a pipeline is made from.
@@ -190,6 +224,22 @@ const PIPELINE_STATES: [usize; 30] = [
     rs::SLOPESCALEDEPTHBIAS,
 ];
 
+/// `D3DRS_ADAPTIVETESS_Y` set to `MAKEFOURCC('A','T','O','C')`: NVIDIA's Direct3D 9 driver's
+/// switch from the alpha test to alpha to coverage ("transparency multisampling"), in effect while
+/// the alpha test is on and the target is multisampled. The game's renderer sets it on this card
+/// (Doc's house: about 14,000 times in a minute, around its alpha-tested draws). What the driver
+/// does with it is NVIDIA's documented behaviour, which DXVK applies the same way: coverage from
+/// the pixel's alpha, the alpha test itself off.
+const ATOC: u32 = u32::from_le_bytes(*b"ATOC");
+/// `D3DRS_CLIPPING` and `D3DRS_ADAPTIVETESS_Y`.
+const RS_CLIPPING: usize = 136;
+const RS_ADAPTIVETESS_Y: usize = 181;
+/// The occlusion counts' slots: a ring (a query's count is read long before its slot comes round
+/// again).
+const COUNT_SLOTS: u32 = 4096;
+/// The occlusion count's target format: whole counts are exact up to 2048 a sample.
+const COUNT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
+
 /// The uniform block of one stage in the ring, rounded up to the offset alignment.
 const BLOCK: u64 = wgsl::REGS_SIZE.div_ceil(256) * 256;
 /// The ring of uniform blocks and `DrawPrimitiveUP` vertices sent with each batch.
@@ -223,10 +273,12 @@ pub struct Device {
     pipelines: HashMap<PipeKey, Option<wgpu::RenderPipeline>>,
     #[allow(clippy::type_complexity)]
     vs_modules: HashMap<
-        (u64, Vec<wgsl::Input>, Vec<wgsl::Semantic>, Vec<bool>),
+        (u64, Vec<wgsl::Input>, Vec<wgsl::Semantic>, Vec<bool>, wgsl::Clip),
         Option<wgpu::ShaderModule>,
     >,
-    ps_modules: HashMap<(u64, Vec<wgsl::Semantic>), Option<wgpu::ShaderModule>>,
+    #[allow(clippy::type_complexity)]
+    ps_modules:
+        HashMap<(u64, Vec<wgsl::Semantic>, bool, wgsl::Clip), Option<wgpu::ShaderModule>>,
     samplers: HashMap<SamplerKey, wgpu::Sampler>,
     groups: HashMap<Vec<(u32, u64, Option<SamplerKey>)>, wgpu::BindGroup>,
     blit: HashMap<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
@@ -245,6 +297,23 @@ pub struct Device {
     dummy: [wgpu::TextureView; 3],
     border: bool,
     float_filterable: bool,
+    /// Whether the adapter has clip distances for the user clip planes ([`Device::clip_link`]),
+    /// and where the pixel centres go ([`wgsl::Centre`]; `NV_WGPU_CENTRE=shader` for the
+    /// shader's move, to compare).
+    clip_distances: bool,
+    centre: wgsl::Centre,
+    /// The levels whose bytes the backend keeps (managed and system-memory pools: what
+    /// `ReadSurface` answers), by the texture or surface they belong to; and those bytes, as the
+    /// game last gave them (`UploadSurface`) or `GetRenderTargetData` wrote them.
+    keeps: HashMap<Handle, Vec<Handle>>,
+    kept: HashMap<Handle, Vec<u8>>,
+    /// The occlusion query counting now (its `D3DISSUE_BEGIN` until its `END`) and its slot.
+    counting: Option<(Handle, u32)>,
+    pass_count: Option<CountSegment>,
+    count_targets: HashMap<(u32, u32, u32), wgpu::TextureView>,
+    count_buffer: wgpu::Buffer,
+    next_count_slot: u32,
+    reduce: HashMap<bool, (wgpu::ComputePipeline, wgpu::BindGroupLayout)>,
     next_id: u64,
     presents: u64,
     shots: Option<Shots>,
@@ -297,6 +366,16 @@ impl PresentParameters {
 
 /// `D3DPRESENT_INTERVAL_IMMEDIATE`.
 const INTERVAL_IMMEDIATE: u32 = 0x8000_0000;
+/// `D3DPOOL_MANAGED`, `D3DPOOL_SYSTEMMEM`, `D3DPOOL_SCRATCH`.
+const POOL_MANAGED: u32 = 1;
+const POOL_SYSTEMMEM: u32 = 2;
+const POOL_SCRATCH: u32 = 3;
+/// `D3DQUERYTYPE_OCCLUSION`; `D3DISSUE_END`, `D3DISSUE_BEGIN`.
+const QUERY_OCCLUSION: u32 = 9;
+const ISSUE_END: u32 = 1;
+const ISSUE_BEGIN: u32 = 2;
+/// `S_FALSE`: a query's result is not in yet.
+const S_FALSE: u32 = 1;
 
 impl Device {
     /// The wgpu device for the game's (`CreateDevice`): on the game's real window `window` when
@@ -351,7 +430,8 @@ impl Device {
             | wgpu::Features::FLOAT32_FILTERABLE
             | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
             | wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER
-            | wgpu::Features::DEPTH32FLOAT_STENCIL8;
+            | wgpu::Features::DEPTH32FLOAT_STENCIL8
+            | wgpu::Features::CLIP_DISTANCES;
         let features = adapter.features() & wanted;
         let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("d3d9-wgpu"),
@@ -411,6 +491,14 @@ impl Device {
             mapped_at_creation: false,
         });
         let dummy = dummies(&device, &queue);
+        let count_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("occlusion counts"),
+            size: u64::from(COUNT_SLOTS) * 4,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let mut d = Device {
             device,
             queue,
@@ -440,6 +528,7 @@ impl Device {
                 psf: Box::new([[0; 4]; 256]),
                 psi: [[0; 4]; 16],
                 psb: [0; 16],
+                clip: [[0; 4]; wgsl::CLIP_PLANES],
                 dirty: true,
             },
             encoder: None,
@@ -466,6 +555,22 @@ impl Device {
             dummy,
             border: features.contains(wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER),
             float_filterable: features.contains(wgpu::Features::FLOAT32_FILTERABLE),
+            clip_distances: features.contains(wgpu::Features::CLIP_DISTANCES),
+            centre: if std::env::var("NV_WGPU_CENTRE")
+                .is_ok_and(|v| v.eq_ignore_ascii_case("shader"))
+            {
+                wgsl::Centre::Shader
+            } else {
+                wgsl::Centre::Viewport
+            },
+            keeps: HashMap::new(),
+            kept: HashMap::new(),
+            counting: None,
+            pass_count: None,
+            count_targets: HashMap::new(),
+            count_buffer,
+            next_count_slot: 0,
+            reduce: HashMap::new(),
             next_id: 1,
             presents: 0,
             shots: Shots::from_env(),
@@ -484,7 +589,9 @@ impl Device {
                 .or_else(|| caps.formats.iter().copied().find(|f| !f.is_srgb()))
                 .unwrap_or(caps.formats[0]);
             let config = wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                // Copies out too where the surface allows them: `NV_SHOT` reads the window's frame.
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | (caps.usages & wgpu::TextureUsages::COPY_SRC),
                 format,
                 width: pp.width.max(1),
                 height: pp.height.max(1),
@@ -527,6 +634,11 @@ impl Device {
     fn id(&mut self) -> u64 {
         self.next_id += 1;
         self.next_id
+    }
+
+    /// Prints once that a call the game made is not carried out.
+    pub(crate) fn not_provided(&mut self, what: &str) {
+        self.warn(what);
     }
 
     /// Prints a message once.
@@ -716,6 +828,19 @@ impl Device {
 
     // Resources.
 
+    /// Marks `levels` (of `owner`) as levels whose bytes the backend keeps when `pool` is the
+    /// managed or system-memory pool, which the game reads back through `ReadSurface`; kept even
+    /// when the backend's own texture could not be made.
+    fn keep_levels(&mut self, owner: Handle, levels: &[Handle], pool: u32) {
+        if pool != POOL_MANAGED && pool != POOL_SYSTEMMEM {
+            return;
+        }
+        for &h in levels {
+            self.kept.insert(h, Vec::new());
+        }
+        self.keeps.insert(owner, levels.to_vec());
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn create_texture(
         &mut self,
@@ -726,7 +851,9 @@ impl Device {
         usage: u32,
         format: u32,
         cube: bool,
+        pool: u32,
     ) {
+        self.keep_levels(texture, levels, pool);
         let count = if cube {
             levels.len() as u32 / 6
         } else {
@@ -783,6 +910,25 @@ impl Device {
         }
     }
 
+    /// `CreateOffscreenPlainSurface`: a surface of one level; a system-memory one keeps its
+    /// bytes here (`GetRenderTargetData`'s destination, read back by `ReadSurface`).
+    pub(crate) fn create_offscreen(
+        &mut self,
+        surface: Handle,
+        width: u32,
+        height: u32,
+        format: u32,
+        pool: u32,
+    ) {
+        let pool = if pool == POOL_SCRATCH {
+            POOL_SYSTEMMEM
+        } else {
+            pool
+        };
+        self.keep_levels(surface, &[surface], pool);
+        self.create_surface(surface, false, width, height, format, 0);
+    }
+
     pub(crate) fn create_buffer(&mut self, buffer: Handle, index: bool, length: u32, format: u32) {
         let size = u64::from(length.max(4).div_ceil(4) * 4);
         let wgpu_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -835,11 +981,26 @@ impl Device {
             .insert(declaration, Obj::Decl(Arc::new(Decl { elements, id })));
     }
 
-    pub(crate) fn create_query(&mut self, query: Handle) {
-        self.objects.insert(query, Obj::Query);
+    pub(crate) fn create_query(&mut self, query: Handle, kind: u32) {
+        self.objects.insert(
+            query,
+            Obj::Query(Query {
+                kind,
+                ..Query::default()
+            }),
+        );
     }
 
     pub(crate) fn destroy(&mut self, object: Handle) {
+        if let Some(levels) = self.keeps.remove(&object) {
+            for h in levels {
+                self.kept.remove(&h);
+            }
+        }
+        if self.counting.is_some_and(|(q, _)| q == object) {
+            self.end_pass();
+            self.counting = None;
+        }
         if let Some(Obj::Texture(_, surfaces)) = self.objects.remove(&object) {
             for s in surfaces {
                 self.objects.remove(&s);
@@ -866,6 +1027,10 @@ impl Device {
     }
 
     pub(crate) fn upload_surface(&mut self, surface: Handle, data: &[u8]) {
+        if let Some(bytes) = self.kept.get_mut(&surface) {
+            bytes.clear();
+            bytes.extend_from_slice(data);
+        }
         let Some(s) = self.surface_of(surface) else {
             return;
         };
@@ -972,6 +1137,17 @@ impl Device {
         } else {
             self.surface_of(surface)
         };
+        // The targets' sample count decides the alpha to coverage switch ([`ATOC`]).
+        self.st.dirty = true;
+    }
+
+    /// `SetClipPlane(index, plane)`: in clip space, as Direct3D 9 takes them with a vertex
+    /// shader ([`wgsl::Clip`]).
+    pub(crate) fn set_clip_plane(&mut self, index: u32, plane: [u32; 4]) {
+        if let Some(p) = self.st.clip.get_mut(index as usize) {
+            *p = plane;
+            self.st.dirty = true;
+        }
     }
 
     pub(crate) fn set_viewport(&mut self, v: [u32; 6]) {
@@ -995,12 +1171,16 @@ impl Device {
             *s = value;
         }
         match state as usize {
-            rs::ALPHATESTENABLE | rs::ALPHAREF | rs::ALPHAFUNC => self.st.dirty = true,
+            rs::ALPHATESTENABLE
+            | rs::ALPHAREF
+            | rs::ALPHAFUNC
+            | rs::CLIPPLANEENABLE
+            | RS_CLIPPING
+            | RS_ADAPTIVETESS_Y => self.st.dirty = true,
             rs::FOGENABLE if value != 0 => {
                 self.warn("D3DRS_FOGENABLE (fixed-function fog) is not provided")
             }
             rs::SRGBWRITEENABLE if value != 0 => self.warn("D3DRS_SRGBWRITEENABLE is not provided"),
-            rs::CLIPPLANEENABLE if value != 0 => self.warn("user clip planes are not provided yet"),
             rs::FILLMODE if value != 3 => {
                 self.warn("wireframe and point fill modes are not provided")
             }
@@ -1125,13 +1305,215 @@ impl Device {
     fn end_pass(&mut self) {
         self.pass = None;
         self.pass_targets = None;
+        if let Some(c) = self.pass_count.take() {
+            self.reduce_count(&c);
+        }
     }
 
     fn current_targets(&mut self) -> Targets {
         Targets {
             colours: std::array::from_fn(|i| self.st.rt[i].as_ref().map(|s| s.id)),
             depth: self.usable_depth().map(|s| s.id),
+            counting: self.counting.is_some(),
         }
+    }
+
+    /// The size and sample count of what the current targets draw into.
+    fn target_shape(&mut self) -> (u32, u32, u32) {
+        match self.st.rt.iter().flatten().next() {
+            Some(s) => (s.width, s.height, s.samples),
+            None => self
+                .usable_depth()
+                .map_or((1, 1, 1), |d| (d.width, d.height, d.samples)),
+        }
+    }
+
+    /// The clip code a draw takes on a target of `samples`: none without a plane on; the
+    /// hardware's clip distances where the adapter has them; else the pixel shader's discard,
+    /// per sample on a multisampled target, which is where the hardware cuts.
+    fn clip_link(&self, samples: u32) -> wgsl::Clip {
+        let on = self.st.rs[RS_CLIPPING] != 0
+            && self.st.rs[rs::CLIPPLANEENABLE] & ((1 << wgsl::CLIP_PLANES) - 1) != 0;
+        if !on {
+            wgsl::Clip::Off
+        } else if self.clip_distances {
+            wgsl::Clip::Distances
+        } else {
+            wgsl::Clip::Discard {
+                per_sample: samples > 1,
+            }
+        }
+    }
+
+    /// Whether NVIDIA's alpha to coverage stands in for the alpha test ([`ATOC`]).
+    fn atoc(&mut self) -> bool {
+        self.st.rs[RS_ADAPTIVETESS_Y] == ATOC
+            && self.st.rs[rs::ALPHATESTENABLE] != 0
+            && self.target_shape().2 > 1
+    }
+
+    /// The occlusion count's target of `(width, height, samples)`, made once.
+    fn count_target(&mut self, width: u32, height: u32, samples: u32) -> wgpu::TextureView {
+        if let Some(v) = self.count_targets.get(&(width, height, samples)) {
+            return v.clone();
+        }
+        let t = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("occlusion count"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: samples,
+            dimension: wgpu::TextureDimension::D2,
+            format: COUNT_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let v = t.create_view(&Default::default());
+        self.count_targets.insert((width, height, samples), v.clone());
+        v
+    }
+
+    /// Adds the samples a pass's count target holds into its query's slot (a compute pass after
+    /// the render pass, in the same encoder).
+    fn reduce_count(&mut self, c: &CountSegment) {
+        let multisampled = c.samples > 1;
+        if !self.reduce.contains_key(&multisampled) {
+            let texture = if multisampled {
+                "texture_multisampled_2d<f32>"
+            } else {
+                "texture_2d<f32>"
+            };
+            let source = format!(
+                "struct P {{ slot: u32, samples: u32, w: u32, h: u32 }}
+@group(0) @binding(0) var t: {texture};
+@group(0) @binding(1) var<storage, read_write> counts: array<atomic<u32>>;
+@group(0) @binding(2) var<uniform> p: P;
+var<workgroup> sum: atomic<u32>;
+@compute @workgroup_size(16, 16)
+fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_index) i: u32) {{
+    if (i == 0u) {{ atomicStore(&sum, 0u); }}
+    workgroupBarrier();
+    if (g.x < p.w && g.y < p.h) {{
+        var n = 0u;
+        for (var s = 0u; s < p.samples; s++) {{
+            n += u32(textureLoad(t, vec2<i32>(g.xy), {sample}).x + 0.5);
+        }}
+        if (n != 0u) {{ atomicAdd(&sum, n); }}
+    }}
+    workgroupBarrier();
+    if (i == 0u) {{
+        let total = atomicLoad(&sum);
+        if (total != 0u) {{ atomicAdd(&counts[p.slot], total); }}
+    }}
+}}
+",
+                sample = if multisampled { "i32(s)" } else { "0" },
+            );
+            let module = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("occlusion count"),
+                    source: wgpu::ShaderSource::Wgsl(source.into()),
+                });
+            let layout = self
+                .device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("occlusion count"),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                    ],
+                });
+            let pl = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: None,
+                    bind_group_layouts: &[Some(&layout)],
+                    immediate_size: 0,
+                });
+            let pipeline = self
+                .device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("occlusion count"),
+                    layout: Some(&pl),
+                    module: &module,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
+            self.reduce.insert(multisampled, (pipeline, layout));
+        }
+        let (pipeline, layout) = self.reduce[&multisampled].clone();
+        let words = [c.slot, c.samples, c.width, c.height];
+        let ub = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM,
+            mapped_at_creation: true,
+        });
+        if let Ok(mut mapped) = ub.slice(..).get_mapped_range_mut() {
+            let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+            mapped.copy_from_slice(&bytes);
+        }
+        ub.unmap();
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&c.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.count_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: ub.as_entire_binding(),
+                },
+            ],
+        });
+        let mut pass = self
+            .encoder()
+            .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("occlusion count"),
+                timestamp_writes: None,
+            });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &group, &[]);
+        pass.dispatch_workgroups(c.width.div_ceil(16), c.height.div_ceil(16), 1);
     }
 
     /// The depth surface when it can be used with the colour targets (wgpu wants one size).
@@ -1224,11 +1606,37 @@ impl Device {
                     })
             })
             .collect();
-        // As many attachments as the pipelines have targets: up to the last bound one.
-        let colours = &colours[..colours
-            .iter()
-            .rposition(|c| c.is_some())
-            .map_or(0, |i| i + 1)];
+        // As many attachments as the pipelines have targets: up to the last bound one, then the
+        // occlusion count's while a query counts.
+        let mut colours = colours;
+        colours.truncate(colours.iter().rposition(|c| c.is_some()).map_or(0, |i| i + 1));
+        let count = match self.counting {
+            Some((_, slot)) => {
+                let (width, height, samples) = self.target_shape();
+                let view = self.count_target(width, height, samples);
+                Some(CountSegment {
+                    view,
+                    samples,
+                    width,
+                    height,
+                    slot,
+                })
+            }
+            None => None,
+        };
+        if let Some(c) = &count {
+            colours.resize_with(wgsl::COUNT_TARGET as usize, || None);
+            colours.push(Some(wgpu::RenderPassColorAttachment {
+                view: &c.view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            }));
+        }
+        let colours = &colours[..];
         let depth = self.usable_depth();
         let depth_view = depth.as_ref().and_then(|s| s.view.clone());
         let depth_attachment = depth.as_ref().zip(depth_view.as_ref()).map(|(s, view)| {
@@ -1264,6 +1672,7 @@ impl Device {
             .forget_lifetime();
         self.pass = Some(pass);
         self.pass_targets = Some(targets);
+        self.pass_count = count;
         // The surfaces' textures are in use by this batch.
         for s in self.st.rt.iter().flatten() {
             if let Some(t) = &s.tex {
@@ -1357,16 +1766,13 @@ impl Device {
         });
         let depth_surface = self.usable_depth();
         let depth = depth_surface.as_ref().map(|d| d.format.wgpu);
-        let samples = self
-            .st
-            .rt
-            .iter()
-            .flatten()
-            .next()
-            .map(|s| s.samples)
-            .or(depth_surface.as_ref().map(|d| d.samples))
-            .unwrap_or(1);
-        let key = (colours, depth, (flags & 7) | (samples << 8));
+        let (tw, th, samples) = self.target_shape();
+        let count = self.counting.is_some();
+        let key = (
+            colours,
+            depth,
+            (flags & 7) | (samples << 8) | (u32::from(count) << 16),
+        );
         if !self.clears.contains_key(&key) {
             let n = colours
                 .iter()
@@ -1420,7 +1826,7 @@ impl Device {
                     bind_group_layouts: &[Some(&layout)],
                     immediate_size: 0,
                 });
-            let targets: Vec<Option<wgpu::ColorTargetState>> = colours[..n]
+            let mut targets: Vec<Option<wgpu::ColorTargetState>> = colours[..n]
                 .iter()
                 .map(|c| {
                     c.map(|(format, opaque)| wgpu::ColorTargetState {
@@ -1434,6 +1840,15 @@ impl Device {
                     })
                 })
                 .collect();
+            // A clear adds nothing to an occlusion count.
+            if count {
+                targets.resize(wgsl::COUNT_TARGET as usize, None);
+                targets.push(Some(wgpu::ColorTargetState {
+                    format: COUNT_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::empty(),
+                }));
+            }
             let stencil_face = wgpu::StencilFaceState {
                 compare: wgpu::CompareFunction::Always,
                 fail_op: wgpu::StencilOperation::Replace,
@@ -1511,6 +1926,9 @@ impl Device {
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &group, &[]);
         pass.set_stencil_reference(stencil);
+        // The whole target, depth range 0 to 1: the pass keeps the last draw's viewport, whose
+        // depth range would move the cleared depth and whose area may not cover the rectangles.
+        pass.set_viewport(0.0, 0.0, tw as f32, th as f32, 0.0, 1.0);
         for p in parts {
             if p[2] <= p[0] || p[3] <= p[1] || p[0] < 0 || p[1] < 0 {
                 continue;
@@ -1696,8 +2114,19 @@ impl Device {
         if self.ring.len() as u64 + 2 * BLOCK > RING {
             self.flush();
         }
+        let atoc = self.atoc();
         let mut ring = std::mem::take(&mut self.ring);
         let st = &self.st;
+        // The planes `D3DRS_CLIPPLANEENABLE` turns on (all off without `D3DRS_CLIPPING`); a plane
+        // that is off is zero, which keeps everything.
+        let mut clip = [[0u32; 4]; wgsl::CLIP_PLANES];
+        if st.rs[RS_CLIPPING] != 0 {
+            for (k, plane) in clip.iter_mut().enumerate() {
+                if st.rs[rs::CLIPPLANEENABLE] & (1 << k) != 0 {
+                    *plane = st.clip[k];
+                }
+            }
+        }
         // Each sampler's fill mode (its texture's format) and LOD bias.
         let per_sampler = |range: std::ops::Range<usize>| -> ([u32; 16], [f32; 16]) {
             let mut fix = [0u32; 16];
@@ -1710,7 +2139,8 @@ impl Device {
         };
         let v = st.viewport;
         let vs_sys = [1.0 / v.w.max(1) as f32, -1.0 / v.h.max(1) as f32, 0.0, 0.0];
-        let alpha_func = if st.rs[rs::ALPHATESTENABLE] != 0 {
+        // The alpha test, unless alpha to coverage stands in for it ([`ATOC`]).
+        let alpha_func = if st.rs[rs::ALPHATESTENABLE] != 0 && !atoc {
             st.rs[rs::ALPHAFUNC] as f32
         } else {
             8.0
@@ -1728,6 +2158,7 @@ impl Device {
             &st.vsb,
             vs_sys,
             per_sampler(16..20),
+            &clip,
         );
         let ps = write_block(
             &mut ring,
@@ -1736,6 +2167,7 @@ impl Device {
             &st.psb,
             ps_sys,
             per_sampler(0..16),
+            &[[0; 4]; wgsl::CLIP_PLANES],
         );
         self.ring = ring;
         self.blocks = (vs, ps);
@@ -1822,6 +2254,7 @@ impl Device {
         let samplers = self.sampler_bindings(&vs, &ps);
         let index32 = indexed && self.st.indices.as_ref().is_some_and(|b| b.index32);
         let depth = self.usable_depth();
+        let atoc = self.atoc();
         let key = PipeKey {
             vs: vs.id,
             ps: ps.id,
@@ -1846,6 +2279,13 @@ impl Device {
                 .or(depth.as_ref().map(|d| d.samples))
                 .unwrap_or(1),
             samplers: samplers.iter().map(|(k, _)| *k).collect(),
+            atoc,
+            count: self.counting.is_some(),
+            clip: wgsl::Clip::Off,
+        };
+        let key = PipeKey {
+            clip: self.clip_link(key.samples),
+            ..key
         };
         if !self.pipelines.contains_key(&key) {
             // Bounded: render states with continuous values (depth bias) could grow it without end.
@@ -2016,13 +2456,19 @@ impl Device {
                 t.batch.store(self.batch, Ordering::Relaxed);
             }
         }
+        // Direct3D 9's pixel centres: the viewport half a pixel right and down
+        // ([`wgsl::Centre::Viewport`]; wgpu takes a viewport past the target's edge).
+        let centre = match self.centre {
+            wgsl::Centre::Viewport => 0.5,
+            wgsl::Centre::Shader => 0.0,
+        };
         let pass = self.pass.as_mut().expect("a pass is open");
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &self.ring_group, &[vs_block, ps_block]);
         pass.set_bind_group(1, &group, &[]);
         pass.set_viewport(
-            vx as f32,
-            vy as f32,
+            vx as f32 + centre,
+            vy as f32 + centre,
             vw as f32,
             vh as f32,
             v.min_z.clamp(0.0, 1.0),
@@ -2067,22 +2513,29 @@ impl Device {
             inputs.to_vec(),
             varyings.to_vec(),
             ps.sig.centroid.clone(),
+            key.clip,
         );
         if !self.vs_modules.contains_key(&vkey) {
             let link = wgsl::Link {
                 inputs: inputs.to_vec(),
                 varyings: varyings.to_vec(),
                 centroid: ps.sig.centroid.clone(),
+                clip: key.clip,
+                centre: self.centre,
+                count: false,
             };
             let m = self.module(wgsl::convert(&vs.program, &link), "a vertex shader");
             self.vs_modules.insert(vkey.clone(), m);
         }
-        let pkey = (ps.id, varyings.to_vec());
+        let pkey = (ps.id, varyings.to_vec(), key.count, key.clip);
         if !self.ps_modules.contains_key(&pkey) {
             let link = wgsl::Link {
                 inputs: Vec::new(),
                 varyings: varyings.to_vec(),
                 centroid: ps.sig.centroid.clone(),
+                clip: key.clip,
+                centre: self.centre,
+                count: key.count,
             };
             let m = self.module(wgsl::convert(&ps.program, &link), "a pixel shader");
             self.ps_modules.insert(pkey.clone(), m);
@@ -2131,6 +2584,23 @@ impl Device {
         while targets.last().is_some_and(|t| t.is_none()) {
             targets.pop();
         }
+        // The occlusion count: one added for each sample the draw passes.
+        if key.count {
+            let add = wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            };
+            targets.resize(wgsl::COUNT_TARGET as usize, None);
+            targets.push(Some(wgpu::ColorTargetState {
+                format: COUNT_FORMAT,
+                blend: Some(wgpu::BlendState {
+                    color: add,
+                    alpha: add,
+                }),
+                write_mask: wgpu::ColorWrites::RED,
+            }));
+        }
         let strip = matches!(
             topology,
             wgpu::PrimitiveTopology::TriangleStrip | wgpu::PrimitiveTopology::LineStrip
@@ -2160,7 +2630,8 @@ impl Device {
             depth_stencil: key.depth.map(|f| state::depth_stencil(s, f)),
             multisample: wgpu::MultisampleState {
                 count: key.samples,
-                ..Default::default()
+                mask: !0,
+                alpha_to_coverage_enabled: key.atoc,
             },
             fragment: Some(wgpu::FragmentState {
                 module: &pm,
@@ -2540,6 +3011,254 @@ impl Device {
         }
     }
 
+    // Queries.
+
+    /// `Issue(flags)` of `query`. An occlusion query's `D3DISSUE_BEGIN` starts its count: the
+    /// open pass ends, and every pass until its `END` carries the count's target
+    /// ([`CountSegment`]), to which each draw adds one for each sample it passes (after the
+    /// depth and stencil tests, the alpha test and `texkill`: Direct3D 9's count); each pass's
+    /// samples are summed into the query's slot as it ends. An event query has nothing here.
+    pub(crate) fn query_issue(&mut self, query: Handle, flags: u32) {
+        let Some(Obj::Query(q)) = self.objects.get(&query) else {
+            return;
+        };
+        if q.kind != QUERY_OCCLUSION {
+            return;
+        }
+        if flags & ISSUE_BEGIN != 0 {
+            if self.counting.is_some_and(|(other, _)| other != query) {
+                self.warn("an occlusion query begun while another counts: the other stops there");
+            }
+            self.end_pass();
+            let slot = self.next_count_slot;
+            self.next_count_slot = (slot + 1) % COUNT_SLOTS;
+            let counts = self.count_buffer.clone();
+            self.encoder()
+                .clear_buffer(&counts, u64::from(slot) * 4, Some(4));
+            self.counting = Some((query, slot));
+            if let Some(Obj::Query(q)) = self.objects.get_mut(&query) {
+                q.slot = Some(slot);
+                q.result = None;
+            }
+        }
+        if flags & ISSUE_END != 0 {
+            if self.counting.is_some_and(|(q, _)| q == query) {
+                self.end_pass();
+                self.counting = None;
+            }
+            let batch = self.batch;
+            if let Some(Obj::Query(q)) = self.objects.get_mut(&query) {
+                q.batch = batch;
+                q.result = None;
+            }
+        }
+    }
+
+    /// `GetData` of an occlusion query after its `END`: `S_OK` and the samples its draws passed,
+    /// read back at once (the batch that counted is sent, and this waits for the GPU, as
+    /// `D3DGETDATA_FLUSH` would). `None` for an event query, whose answer is the model's.
+    pub(crate) fn query_get_data(&mut self, query: Handle) -> Option<(u32, u32)> {
+        let q = match self.objects.get(&query) {
+            Some(Obj::Query(q)) if q.kind == QUERY_OCCLUSION => *q,
+            _ => return None,
+        };
+        if let Some(n) = q.result {
+            return Some((0, n));
+        }
+        let Some(slot) = q.slot else {
+            // Ended without a begin: nothing was counted.
+            return Some((0, 0));
+        };
+        if self.counting.is_some_and(|(c, _)| c == query) {
+            // Still counting (asked before its END): not done, as Direct3D 9 answers.
+            return Some((S_FALSE, 0));
+        }
+        if q.batch == self.batch {
+            self.flush();
+        }
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("occlusion count read-back"),
+            size: 4,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut e = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        e.copy_buffer_to_buffer(&self.count_buffer, u64::from(slot) * 4, &staging, 0, 4u64);
+        self.queue.submit([e.finish()]);
+        staging.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        let n = match staging.slice(..).get_mapped_range() {
+            Ok(data) => u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
+            Err(e) => {
+                self.warn(format!("an occlusion count not read back: {e}"));
+                return Some((S_FALSE, 0));
+            }
+        };
+        staging.unmap();
+        if let Some(Obj::Query(q)) = self.objects.get_mut(&query) {
+            q.result = Some(n);
+        }
+        Some((0, n))
+    }
+
+    // Read-backs.
+
+    /// `ReadSurface`: the bytes of a managed or system-memory level as the backend keeps them
+    /// (`size` of them, rows packed); none for another level or another size.
+    pub(crate) fn read_surface(&self, surface: Handle, size: u32) -> Option<Vec<u8>> {
+        self.kept
+            .get(&surface)
+            .filter(|b| b.len() == size as usize)
+            .cloned()
+    }
+
+    /// The pixels of a level as wgpu holds them, rows packed (a multisampled surface resolved
+    /// first, as Direct3D 9 resolves for a read); none for block-compressed levels.
+    fn read_level(&mut self, s: &Arc<Surf>) -> Option<Vec<u8>> {
+        let tex = s.tex.clone()?;
+        self.end_pass();
+        if s.format.block || s.format.depth {
+            return None;
+        }
+        let bpp = s.format.wgpu.block_copy_size(None)?;
+        let (texture, level, layer) = if s.samples > 1 {
+            let scratch = self.new_texture(s.width, s.height, 1, s.format.d3d, false, true, 1)?;
+            let resolved = self.level_surface(&scratch, 0, 0);
+            let (from, to) = (s.view.clone()?, resolved.view.clone()?);
+            self.resolve(&from, &to);
+            (scratch.texture.clone(), 0, 0)
+        } else {
+            (tex.texture.clone(), s.level, s.layer)
+        };
+        let row = (s.width * bpp).div_ceil(256) * 256;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: u64::from(row * s.height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        self.encoder().copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: level,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: layer,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: Some(s.height),
+                },
+            },
+            wgpu::Extent3d {
+                width: s.width,
+                height: s.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.flush();
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        let mut out = Vec::with_capacity((s.width * bpp * s.height) as usize);
+        {
+            let data = buffer.slice(..).get_mapped_range().ok()?;
+            for y in 0..s.height {
+                out.extend_from_slice(
+                    &data[(y * row) as usize..(y * row + s.width * bpp) as usize],
+                );
+            }
+        }
+        buffer.unmap();
+        Some(out)
+    }
+
+    /// `GetRenderTargetData(source, destination)`: the render target's pixels into the
+    /// destination (a system-memory surface or level of the same size and format, as the model
+    /// checked): on the GPU, and as the level's kept bytes (`ReadSurface`); with `pitch` (not 0),
+    /// also its rows, `row` bytes each (the narrower of `pitch` and the level's row). `None` when
+    /// either surface has no counterpart or the format's bytes are not kept as Direct3D 9 lays
+    /// them out.
+    pub(crate) fn get_render_target_data(
+        &mut self,
+        source: Handle,
+        destination: Handle,
+        pitch: u32,
+    ) -> Option<d3d9_stream::Rows> {
+        let src = self.surface_of(source)?;
+        if src.format.upload != format::Upload::Copy {
+            self.warn(format!(
+                "GetRenderTargetData of format {:#x} is not provided",
+                src.format.d3d
+            ));
+            return None;
+        }
+        let bytes = self.read_level(&src)?;
+        if let Some(dst) = self.surface_of(destination) {
+            if let (Some(st), Some(dt)) = (&src.tex, &dst.tex) {
+                if src.samples == 1
+                    && dst.samples == 1
+                    && (src.width, src.height, src.format.wgpu)
+                        == (dst.width, dst.height, dst.format.wgpu)
+                {
+                    self.encoder().copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &st.texture,
+                            mip_level: src.level,
+                            origin: wgpu::Origin3d {
+                                x: 0,
+                                y: 0,
+                                z: src.layer,
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &dt.texture,
+                            mip_level: dst.level,
+                            origin: wgpu::Origin3d {
+                                x: 0,
+                                y: 0,
+                                z: dst.layer,
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d {
+                            width: src.width,
+                            height: src.height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    dt.batch.store(self.batch, Ordering::Relaxed);
+                }
+            }
+        }
+        let natural = (bytes.len() as u32) / src.height.max(1);
+        let rows = if pitch == 0 {
+            d3d9_stream::Rows {
+                row: 0,
+                bytes: Vec::new(),
+            }
+        } else {
+            let row = pitch.min(natural);
+            let mut out = Vec::with_capacity((row * src.height) as usize);
+            for r in bytes.chunks(natural.max(1) as usize) {
+                out.extend_from_slice(&r[..row as usize]);
+            }
+            d3d9_stream::Rows { row, bytes: out }
+        };
+        if let Some(k) = self.kept.get_mut(&destination) {
+            *k = bytes;
+        }
+        Some(rows)
+    }
+
     // Present.
 
     /// `Present` of the stream's `frame` (numbered as the forwarding layer's captures are).
@@ -2586,6 +3305,7 @@ impl Device {
             readback = Some((buffer, row, b.width, b.height, b.format));
         }
         let mut frame_texture = None;
+        let mut window_shot = None;
         if let (Some((surface, config)), Some(b)) = (&self.surface, &back) {
             // An outdated or lost surface (the window resized, the display changed) is configured
             // again and asked once more; a frame that cannot be had now (minimised, timed out) is
@@ -2609,19 +3329,48 @@ impl Device {
                 Some(t) => {
                     let view = t.texture.create_view(&Default::default());
                     let format = config.format;
-                    let (w, h) = (config.width as f32, config.height as f32);
+                    let (cw, ch) = (config.width, config.height);
+                    let copyable = config.usage.contains(wgpu::TextureUsages::COPY_SRC);
                     let sv = b.view.clone().expect("the back buffer's view");
                     let size = (b.width, b.height);
-                    frame_texture = Some(t);
                     self.blit_into(
                         &sv,
                         size,
                         [0.0, 0.0, size.0 as f32, size.1 as f32],
                         &view,
                         (format, false),
-                        [0.0, 0.0, w, h],
+                        [0.0, 0.0, cw as f32, ch as f32],
                         false,
                     );
+                    // With a capture, the frame the window gets too (`wgpu-window-N.bmp`): the
+                    // swapchain's own texture, read back before it is presented.
+                    if shot && copyable && format == wgpu::TextureFormat::Bgra8Unorm {
+                        let row = (cw * 4).div_ceil(256) * 256;
+                        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("window shot"),
+                            size: u64::from(row * ch),
+                            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                            mapped_at_creation: false,
+                        });
+                        self.encoder().copy_texture_to_buffer(
+                            t.texture.as_image_copy(),
+                            wgpu::TexelCopyBufferInfo {
+                                buffer: &buffer,
+                                layout: wgpu::TexelCopyBufferLayout {
+                                    offset: 0,
+                                    bytes_per_row: Some(row),
+                                    rows_per_image: Some(ch),
+                                },
+                            },
+                            wgpu::Extent3d {
+                                width: cw,
+                                height: ch,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                        window_shot = Some((buffer, row, cw, ch));
+                    }
+                    frame_texture = Some(t);
                 }
                 None => self.warn("a frame the window could not take (skipped)"),
             }
@@ -2629,6 +3378,24 @@ impl Device {
         self.flush();
         if let Some(t) = frame_texture {
             self.queue.present(t);
+        }
+        if let Some((buffer, row, width, height)) = window_shot {
+            buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+            let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+            if let Ok(data) = buffer.slice(..).get_mapped_range() {
+                for y in 0..height {
+                    let r = &data[(y * row) as usize..(y * row + width * 4) as usize];
+                    pixels.extend_from_slice(r);
+                }
+            }
+            buffer.unmap();
+            if let (Some(s), true) = (&self.shots, pixels.len() == (width * height * 4) as usize) {
+                let path = s.dir.join(format!("wgpu-window-{frame:06}.bmp"));
+                if let Err(e) = std::fs::write(&path, shot::bmp(width, height, &pixels)) {
+                    eprintln!("NV_SHOT wgpu: {} not written: {e}", path.display());
+                }
+            }
         }
         if let Some((buffer, row, width, height, format)) = readback {
             buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
@@ -2667,62 +3434,11 @@ impl Device {
         }
     }
 
-    /// The bytes of a back buffer or render target, read back (tests and `GetRenderTargetData`).
+    /// The pixels of a back buffer or render target as wgpu holds them, rows packed (tests).
     pub fn read_surface_pixels(&mut self, surface: Handle) -> Option<(u32, u32, Vec<u8>)> {
         let s = self.surface_of(surface)?;
-        let tex = s.tex.clone()?;
-        self.end_pass();
-        // The texture's own bytes per pixel (16-bit formats are widened; blocks are not read).
-        if s.format.block || s.samples > 1 {
-            return None;
-        }
-        let bpp = s.format.wgpu.block_copy_size(None)?;
-        let row = (s.width * bpp).div_ceil(256) * 256;
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: u64::from(row * s.height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        self.encoder().copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &tex.texture,
-                mip_level: s.level,
-                origin: wgpu::Origin3d {
-                    x: 0,
-                    y: 0,
-                    z: s.layer,
-                },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(row),
-                    rows_per_image: Some(s.height),
-                },
-            },
-            wgpu::Extent3d {
-                width: s.width,
-                height: s.height,
-                depth_or_array_layers: 1,
-            },
-        );
-        self.flush();
-        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-        let mut out = Vec::new();
-        {
-            let data = buffer.slice(..).get_mapped_range().ok()?;
-            for y in 0..s.height {
-                out.extend_from_slice(
-                    &data[(y * row) as usize..(y * row + s.width * bpp) as usize],
-                );
-            }
-        }
-        buffer.unmap();
-        Some((s.width, s.height, out))
+        let pixels = self.read_level(&s)?;
+        Some((s.width, s.height, pixels))
     }
 
     pub(crate) fn reset(&mut self, pp: &PresentParameters, back_buffers: &[Handle], depth: Handle) {
@@ -2751,7 +3467,9 @@ impl Device {
         *st.psf = [[0; 4]; 256];
         st.psi = [[0; 4]; 16];
         st.psb = [0; 16];
+        st.clip = [[0; 4]; wgsl::CLIP_PLANES];
         st.dirty = true;
+        self.counting = None;
         self.groups.clear();
         self.depth_parts.clear();
         for h in std::mem::take(&mut self.back_buffers) {
@@ -2774,6 +3492,7 @@ fn write_block(
     b: &[u32; 16],
     sys: [f32; 4],
     (fix, bias): ([u32; 16], [f32; 16]),
+    clip: &[[u32; 4]; wgsl::CLIP_PLANES],
 ) -> u32 {
     let at = ring.len();
     for w in f.iter().chain(i.iter()).flatten().chain(b.iter()) {
@@ -2788,6 +3507,9 @@ fn write_block(
     }
     for v in bias {
         ring.extend_from_slice(&v.to_le_bytes());
+    }
+    for w in clip.iter().flatten() {
+        ring.extend_from_slice(&w.to_le_bytes());
     }
     debug_assert_eq!((ring.len() - at) as u64, wgsl::REGS_SIZE);
     ring.resize(at + BLOCK as usize, 0);

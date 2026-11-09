@@ -671,6 +671,13 @@ pub fn check_package(package: &package::Package) -> Vec<(String, String)> {
                         .collect(),
                     Stage::Pixel => sig.inputs.iter().map(|(_, s)| *s).collect(),
                 },
+                // The clip code too: the hardware's distances in vertex shaders, the discard
+                // (per sample) in pixel shaders.
+                clip: match p.stage {
+                    Stage::Vertex => wgsl::Clip::Distances,
+                    Stage::Pixel => wgsl::Clip::Discard { per_sample: true },
+                },
+                ..wgsl::Link::default()
             };
             let source = wgsl::convert(&p, &link)?;
             validate(&source).map_err(Error::Unsupported)

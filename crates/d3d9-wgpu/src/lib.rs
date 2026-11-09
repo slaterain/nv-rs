@@ -208,6 +208,7 @@ impl Backend for WgpuBackend {
                 height,
                 usage,
                 format,
+                pool,
                 ..
             } => d.create_texture(
                 texture,
@@ -217,6 +218,7 @@ impl Backend for WgpuBackend {
                 usage,
                 format,
                 false,
+                pool,
             ),
             Cmd::CreateCubeTexture {
                 texture,
@@ -224,6 +226,7 @@ impl Backend for WgpuBackend {
                 edge,
                 usage,
                 format,
+                pool,
                 ..
             } => d.create_texture(
                 texture,
@@ -233,6 +236,7 @@ impl Backend for WgpuBackend {
                 usage,
                 format,
                 true,
+                pool,
             ),
             Cmd::CreateSurface {
                 surface,
@@ -248,8 +252,9 @@ impl Backend for WgpuBackend {
                 width,
                 height,
                 format,
+                pool,
                 ..
-            } => d.create_surface(surface, false, width, height, format, 0),
+            } => d.create_offscreen(surface, width, height, format, pool),
             Cmd::CreateBuffer {
                 buffer,
                 index,
@@ -263,7 +268,7 @@ impl Backend for WgpuBackend {
                 elements,
                 ..
             } => d.create_declaration(declaration, &elements.bytes()),
-            Cmd::CreateQuery { query, .. } => d.create_query(query),
+            Cmd::CreateQuery { query, kind, .. } => d.create_query(query, kind),
             Cmd::Destroy { object } => d.destroy(object),
             Cmd::UploadSurface { surface, data, .. } => d.upload_surface(surface, &data.bytes()),
             Cmd::UploadBuffer {
@@ -272,13 +277,23 @@ impl Backend for WgpuBackend {
                 data,
                 ..
             } => d.upload_buffer(buffer, offset, &data),
-            Cmd::ReadSurface { .. } => return Reply::Bytes(None),
-            Cmd::GetRenderTargetData { .. } => return Reply::Rows(None),
-            Cmd::QueryGetData { .. } => return Reply::Query(None),
+            Cmd::ReadSurface { surface, size } => {
+                return Reply::Bytes(d.read_surface(surface, size))
+            }
+            Cmd::GetRenderTargetData {
+                source,
+                destination,
+                pitch,
+                ..
+            } => return Reply::Rows(d.get_render_target_data(source, destination, pitch)),
+            Cmd::QueryGetData { query, .. } => return Reply::Query(d.query_get_data(query)),
+            Cmd::QueryIssue { query, flags } => d.query_issue(query, flags),
+            Cmd::SetClipPlane { index, plane, .. } => d.set_clip_plane(index, plane),
+            Cmd::ColorFill { .. } => d.not_provided("ColorFill is not provided (skipped)"),
             // Fixed-function state and the rest: the game's shaders do not read them; a draw
-            // without shaders is skipped and printed by the device.
+            // without shaders is skipped and printed by the device. (`SetGammaRamp` changes
+            // nothing in a window, which is how the game runs.)
             Cmd::SetTransform { .. }
-            | Cmd::SetClipPlane { .. }
             | Cmd::SetGammaRamp { .. }
             | Cmd::SetTextureStageState { .. }
             | Cmd::SetFvf { .. }
@@ -286,9 +301,7 @@ impl Backend for WgpuBackend {
             | Cmd::SetLight { .. }
             | Cmd::LightEnable { .. }
             | Cmd::SetSoftwareVertexProcessing { .. }
-            | Cmd::ColorFill { .. }
-            | Cmd::SetLod { .. }
-            | Cmd::QueryIssue { .. } => {}
+            | Cmd::SetLod { .. } => {}
         }
         Reply::None
     }
