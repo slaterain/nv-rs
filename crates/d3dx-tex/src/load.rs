@@ -58,9 +58,6 @@ pub enum Untranslated {
     PixelFormat,
     /// A top level D3DX resamples (its triangle filter).
     Resampled,
-    /// A DDS header this crate will not follow: a level of no bytes, or a size past 32 bits,
-    /// where the 32-bit DLL's own arithmetic wraps.
-    Header,
 }
 
 /// `D3DXIMAGE_INFO`'s seven words.
@@ -124,12 +121,7 @@ fn read(data: &[u8]) -> Result<dds::Image, Error> {
             "an image file that is not DDS (BMP, TGA, PNG, JPG, ...)".into(),
         ));
     }
-    dds::parse(data).map_err(|r| match r {
-        dds::Refusal::Invalid => Error::D3dx(crate::D3DXERR_INVALIDDATA),
-        dds::Refusal::Header(why) => {
-            Error::NotProvided(Untranslated::Header, format!("a DDS header with {why}"))
-        }
-    })
+    dds::parse(data).ok_or(Error::D3dx(crate::D3DXERR_INVALIDDATA))
 }
 
 /// `D3DXGetImageInfoFromFileInMemory`.
@@ -223,6 +215,17 @@ fn create(data: &[u8], caps: &Caps, rtype: u32, precision: Precision) -> Result<
             Untranslated::PixelFormat,
             format!("DDS pixel format {file_format:#x}"),
         ));
+    }
+    // A level whose size the loader's 32-bit arithmetic wrapped into one the file holds: the
+    // 32-bit DLL reads past the file and crashes (measured); refused as a file shorter than its
+    // levels instead.
+    if img.past_file {
+        return Err(Error::D3dx(crate::D3DXERR_INVALIDDATA));
+    }
+    // A side of 0 (levels of no bytes): the image info takes it, the create calls answer E_FAIL
+    // (measured, `data/headers_32bit.tsv`).
+    if img.width == 0 || img.height == 0 {
+        return Err(Error::D3dx(0x8000_4005));
     }
     // The size: D3DX_DEFAULT rounds the file's up to powers of two; then the requirements.
     let mut w = default_side(img.width);

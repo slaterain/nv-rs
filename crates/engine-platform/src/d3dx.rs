@@ -909,18 +909,22 @@ pub fn read_dds(data: &[u8]) -> Result<DdsImage, u32> {
         word(DDS_PF_BITS),
         masks,
     );
+    // Each level checked against the data as it is counted, in 64 bits with checked arithmetic:
+    // a header's sizes can neither wrap nor overflow into a small one.
     let mut levels = Vec::new();
-    let mut at = DDS_HEADER_SIZE;
+    let mut at = DDS_HEADER_SIZE as u64;
     for _face in 0..faces {
         for level in 0..mip_levels {
             let (w, h) = ((width >> level).max(1), (height >> level).max(1));
-            let size = (w.div_ceil(block) * h.div_ceil(block) * bytes) as usize;
-            levels.push((at, size));
-            at += size;
+            let end = u64::from(w.div_ceil(block))
+                .checked_mul(u64::from(h.div_ceil(block)))
+                .and_then(|n| n.checked_mul(u64::from(bytes)))
+                .and_then(|size| at.checked_add(size))
+                .filter(|&end| end <= data.len() as u64)
+                .ok_or(D3DXERR_INVALIDDATA)?;
+            levels.push((at as usize, (end - at) as usize));
+            at = end;
         }
-    }
-    if at > data.len() {
-        return Err(D3DXERR_INVALIDDATA);
     }
     Ok(DdsImage {
         width,
@@ -966,7 +970,10 @@ pub fn get_image_info_from_file_in_memory(e: &mut Engine, data: Ptr, size: u32, 
                 return hr;
             }
             Err(d3dx_tex::Error::NotProvided(kind, why)) => {
-                note_not_translated(e, NotTranslated::Crate(kind), &why)
+                note_not_translated(e, NotTranslated::Crate(kind), &why);
+                if let Some(hr) = unreadable_without_dll(e, None) {
+                    return hr;
+                }
             }
         }
     }
@@ -1083,7 +1090,7 @@ pub enum NotTranslated {
 fn note_not_translated(e: &mut Engine, kind: NotTranslated, why: &str) {
     if !state!(e).graphics.d3dx_not_translated.contains(&kind) {
         eprintln!(
-            "D3DX textures: {why} is not translated; the DLL or the cache answers (once per kind)"
+            "D3DX textures: {why} is not translated; the player's DLL answers, or without it D3DXERR_INVALIDDATA (once per kind)"
         );
         state!(e).graphics.d3dx_not_translated.push(kind);
     }
@@ -1154,6 +1161,13 @@ pub fn texture_source(real_device: bool, dll: bool) -> TextureSource {
 /// info, for which any of the game's devices with a real one behind it counts); each source
 /// printed the first time it is used.
 fn choose_source(e: &mut Engine, device: Option<u32>) -> TextureSource {
+    let source = source_for(e, device);
+    note_source(e, source);
+    source
+}
+
+/// [`choose_source`] without printing it.
+fn source_for(e: &mut Engine, device: Option<u32>) -> TextureSource {
     #[cfg(windows)]
     let real = match device {
         Some(d) => super::d3d9real::real_device(e, d).is_some(),
@@ -1168,9 +1182,14 @@ fn choose_source(e: &mut Engine, device: Option<u32>) -> TextureSource {
     let dll = real && super::d3dxreal::textures_available();
     #[cfg(not(windows))]
     let dll = false;
-    let source = texture_source(real, dll);
-    note_source(e, source);
-    source
+    texture_source(real, dll)
+}
+
+/// What the translation leaves over goes to the player's DLL; without one (no real device, not
+/// Windows) the answer is D3DX's for a file it cannot read, `D3DXERR_INVALIDDATA`, never the texture
+/// cache (it holds the game's own textures, all translated) and its stop.
+fn unreadable_without_dll(e: &mut Engine, device: Option<u32>) -> Option<u32> {
+    (source_for(e, device) != TextureSource::Dll).then_some(D3DXERR_INVALIDDATA)
 }
 
 /// Gives the layer the machine-local texture cache folder (`scripts/d3dx-texture-capture`).
@@ -1353,11 +1372,16 @@ fn create_from_file(
     };
     if texture_mode(e) == TextureMode::Translated {
         match calling_precision(e) {
-            None => note_not_translated(
-                e,
-                NotTranslated::Precision,
-                "a texture made at an x87 precision other than 24 or 53 bits",
-            ),
+            None => {
+                note_not_translated(
+                    e,
+                    NotTranslated::Precision,
+                    "a texture made at an x87 precision other than 24 or 53 bits",
+                );
+                if let Some(hr) = unreadable_without_dll(e, Some(device.addr())) {
+                    return hr;
+                }
+            }
             Some(precision) => {
                 // On the copy of the file, with the kernel lock given back meanwhile: a loading
                 // thread's encoding does not hold up other threads' platform calls. The device
@@ -1376,7 +1400,10 @@ fn create_from_file(
                         return hr;
                     }
                     Err(d3dx_tex::Error::NotProvided(kind, why)) => {
-                        note_not_translated(e, NotTranslated::Crate(kind), &why)
+                        note_not_translated(e, NotTranslated::Crate(kind), &why);
+                        if let Some(hr) = unreadable_without_dll(e, Some(device.addr())) {
+                            return hr;
+                        }
                     }
                 }
             }
@@ -1873,6 +1900,15 @@ mod tests {
         let mut broken = dxt1(8, 4, 1, 16);
         broken[0] = b'X';
         assert_eq!(read_dds(&broken), Err(D3DXERR_INVALIDDATA));
+        // Sizes far past the data, and past 32 bits, are refused without wrapping.
+        assert_eq!(
+            read_dds(&dxt1(0x8000_0000, 0x8000_0000, 1, 16)),
+            Err(D3DXERR_INVALIDDATA)
+        );
+        assert_eq!(
+            read_dds(&dxt1(0x2_0000, 0x2_0000, 1, 16)),
+            Err(D3DXERR_INVALIDDATA)
+        );
     }
 
     #[test]
@@ -2198,6 +2234,43 @@ mod tests {
                 let want: Vec<Vec<u8>> = want.surfaces.into_iter().map(|s| s.bytes).collect();
                 assert_eq!(ours.expect("translated"), want, "{cw:#x}");
             }
+        }
+        engine_core::units::crt::set_x87_control_word(&mut e, 0x027f);
+    }
+
+    /// Without the player's DLL (no real device here) what the translation leaves over answers
+    /// `D3DXERR_INVALIDDATA`, never the texture cache and its stop: a file that is not DDS, and a
+    /// thread at 64-bit precision.
+    #[test]
+    fn what_is_not_translated_is_unreadable_without_the_dll() {
+        let mut e = Engine::new();
+        let (device, _, _) = texture_doubles(&mut e);
+        let mut bmp = b"BM".to_vec();
+        bmp.extend([0u8; 62]);
+        let good = dxt1(8, 4, 4, 40);
+        for (file, cw) in [(bmp, 0x027f), (good, 0x037f)] {
+            engine_core::units::crt::set_x87_control_word(&mut e, cw);
+            let data = e.mem.alloc(file.len() as u32);
+            e.mem.write(data, &file);
+            let (info, out) = (e.mem.alloc(28), e.mem.alloc(4));
+            let size = file.len() as u32;
+            if cw == 0x027f {
+                let hr = get_image_info_from_file_in_memory(
+                    &mut e,
+                    Ptr::new(data),
+                    size,
+                    Ptr::new(info),
+                );
+                assert_eq!(hr, D3DXERR_INVALIDDATA, "image info, {cw:#x}");
+            }
+            let hr = create_texture_from_file_in_memory(
+                &mut e,
+                Ptr::new(device),
+                Ptr::new(data),
+                size,
+                Ptr::new(out),
+            );
+            assert_eq!(hr, D3DXERR_INVALIDDATA, "create, {cw:#x}");
         }
         engine_core::units::crt::set_x87_control_word(&mut e, 0x027f);
     }

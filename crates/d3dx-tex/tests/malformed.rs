@@ -65,10 +65,12 @@ const INVALID: d3dx_tex::Error = d3dx_tex::Error::D3dx(d3dx_tex::D3DXERR_INVALID
 /// The precision the files go through here (the other tests use single precision).
 const PRECISION: d3dx_tex::Precision = d3dx_tex::Precision::Double;
 
-/// Sides whose sizes pass 32 bits, and a side of 0 (levels of no bytes): left to D3DX, whose own
-/// 32-bit arithmetic decides there, with the kind the caller logs once.
+/// Sides whose sizes pass 32 bits, and a side of 0 (levels of no bytes): the image info is the
+/// header's, or a refusal when even the wrapped size is not in the file, and the create call answers a D3DX error (E_FAIL for the
+/// side of 0; a refusal where the DLL would read past the file); the exact answers are the DLL's
+/// in `tests/dll_answers.rs`.
 #[test]
-fn huge_sides_are_left_to_d3dx() {
+fn huge_sides_answer() {
     let argb = (0x41, 0, 32, [0xff_0000, 0xff00, 0xff, 0xff00_0000]);
     let f128 = (4, 116, 0, [0; 4]);
     for (w, h, pf) in [
@@ -77,18 +79,15 @@ fn huge_sides_are_left_to_d3dx() {
         (u32::MAX, u32::MAX, f128),
     ] {
         let (info, made) = answers(header(w, h, 1, 0x1007, pf, 0), false);
-        for answer in [info.map(|_| ()), made.map(|_| ())] {
-            assert!(
-                matches!(
-                    answer,
-                    Err(d3dx_tex::Error::NotProvided(
-                        d3dx_tex::Untranslated::Header,
-                        _
-                    ))
-                ),
-                "{w:#x}x{h:#x}: {answer:?}"
-            );
-        }
+        assert!(
+            matches!(info, Ok(i) if (i[0], i[1]) == (w, h))
+                || info == Err(d3dx_tex::Error::D3dx(d3dx_tex::D3DXERR_INVALIDDATA)),
+            "{w:#x}x{h:#x}: {info:?}"
+        );
+        assert!(
+            matches!(made, Err(d3dx_tex::Error::D3dx(0x8000_4005 | 0x8876_0b59))),
+            "{w:#x}x{h:#x}: {made:?}"
+        );
     }
 }
 
