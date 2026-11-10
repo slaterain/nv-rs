@@ -56,8 +56,9 @@
 //!   unmapped pages committed and hands them back only at the thread host's
 //!   barrier ([`Mem::hand_back_deferred`]).
 //! - The main thread's frees ([`Mem::free`], [`Mem::free_asked`]) past the
-//!   first 2,048 of a frame are done by the memory's free worker, a host thread, in their order, under the
-//!   same lock ([`Mem::defer_frees`]): a free's bookkeeping touches no guest
+//!   first 2,048 of a frame are done by the memory's free worker, a host
+//!   thread, in their order, under the same lock ([`Mem::defer_frees`]): a
+//!   free's bookkeeping touches no guest
 //!   page and maps or unmaps none, so the rule above is untouched, and an
 //!   allocation the heap cannot serve does the waiting frees first.
 //! - Guest values are plain host loads and stores through raw pointers, the
@@ -1430,10 +1431,10 @@ impl Mem {
         }
     }
 
-    /// Real threads: this view's frees (the main thread's) past the first [`INLINE_FREES`] of each frame
-    /// go to the memory's free worker from now on, a thread that does the heap's bookkeeping of each ([`Mem::free`], [`Mem::free_asked`])
-    /// in the order they were made, under the shared memory's lock as before. The view keeps
-    /// them in a batch and hands it on with its next change of the shared memory (any
+    /// Real threads: this view's frees (the main thread's) past the first [`INLINE_FREES`] of
+    /// each frame go to the memory's free worker from now on, a thread that does the heap's
+    /// bookkeeping of each ([`Mem::free`], [`Mem::free_asked`]) in the order they were made,
+    /// under the shared memory's lock as before. The view keeps them in a batch and hands it on with its next change of the shared memory (any
     /// allocation), when the batch is full, and at the end of each of main's frames
     /// ([`Mem::hand_on_frees`]); an allocation the heap cannot serve does the waiting frees first
     /// ([`Mem::alloc`]), so the heap reports itself full only as it did before. A free the worker
@@ -3930,9 +3931,9 @@ mod tests {
         assert!(panic_text(r).starts_with("heap exhausted"));
     }
 
-    /// The first frees of a frame ([`INLINE_FREES`], here 1) are done at once, as before deferred frees (a block
-    /// freed is the next one of its size handed out), the ones past them kept; the frame's end starts
-    /// the count again.
+    /// The first frees of a frame ([`INLINE_FREES`], here 1) are done at once, as before deferred
+    /// frees (a block freed is the next one of its size handed out), the ones past them kept; the
+    /// frame's end starts the count again.
     #[test]
     fn a_frames_first_frees_are_done_at_once_and_a_burst_past_them_kept() {
         let mut m = Mem::new();
