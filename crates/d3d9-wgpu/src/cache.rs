@@ -167,7 +167,8 @@ impl PipelineCacheFile {
     pub(crate) fn save_if_due(&mut self, presents: u64, now: bool) {
         if self.failed.load(std::sync::atomic::Ordering::Relaxed)
             || !self.dirty.get()
-            || (!now && presents.saturating_sub(self.saved_at) < SAVE_EVERY) {
+            || (!now && presents.saturating_sub(self.saved_at) < SAVE_EVERY)
+        {
             return;
         }
         self.dirty.set(false);

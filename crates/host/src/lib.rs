@@ -398,11 +398,13 @@ pub fn texture_cache_path() -> Option<PathBuf> {
 /// `%LOCALAPPDATA%\nv-rs\wgpu-cache`. Every other run without the variable (a test, a script, an
 /// agent's measurement) keeps nothing, so it never writes outside its own folders.
 pub fn wgpu_cache_path(play: bool) -> Option<PathBuf> {
-    std::env::var_os("NV_WGPU_CACHE").map(PathBuf::from).or_else(|| {
-        play.then(|| std::env::var_os("LOCALAPPDATA"))
-            .flatten()
-            .map(|d| PathBuf::from(d).join("nv-rs").join("wgpu-cache"))
-    })
+    std::env::var_os("NV_WGPU_CACHE")
+        .map(PathBuf::from)
+        .or_else(|| {
+            play.then(|| std::env::var_os("LOCALAPPDATA"))
+                .flatten()
+                .map(|d| PathBuf::from(d).join("nv-rs").join("wgpu-cache"))
+        })
 }
 
 /// Gives the Direct3D 9 layer the player's adapter table ([`adapter_table_path`]) before the

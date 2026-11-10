@@ -1031,6 +1031,7 @@ fn the_pipeline_cache_file_is_kept_and_a_bad_one_is_ignored() {
     let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("pipeline-cache-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
     let draw = |cache: Option<std::path::PathBuf>| -> Option<Vec<u8>> {
         let mut g = Gpu::with_cache(4, 1, cache)?;
         g.colour([1.0, 0.5, 0.25, 1.0]);
