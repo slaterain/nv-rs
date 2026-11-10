@@ -105,23 +105,39 @@ image! {
         0x024 ppSorted: u32,
         0x028 unknown_028: u32,
         0x02c uiSortedCurrent: u32,
-        0x030 unknown_030: [u8; 10],
+        0x030 unknown_030: u8,
+        /// The alpha distances take the bound's radius off its centre's distance while this is set.
+        0x031 ucSubtractRadius: u8,
+        0x032 unknown_032: [u8; 6],
+        /// The second half of the world draw copies the water reflection first while this is set.
+        0x038 ucCopyReflection: u8,
+        0x039 unknown_039: u8,
         0x03a bDoDepthPasses: u8,
         0x03b unknown_03b: [u8; 0x49],
         0x084 bAccumulate: u8,
         0x085 b1stPerson: u8,
         0x086 unknown_086: [u8; 0xde],
-        /// The register function answers at once for a shader of type 0xd while this is set.
+        /// The register function answers at once for a shader of type 0xd while this is set; the
+        /// world draw splits its first pass types at 0x237 with clip planes off for the rest, and it
+        /// (or +0x165) sends shadow pass types through the group-clearing draw.
         0x164 ucSkipType13: u8,
-        0x165 unknown_165: u8,
+        0x165 ucShadowGroups: u8,
         /// With this set, a pass whose bound radius is below the `int` at +0x168 is flagged.
         0x166 ucRadiusTest: u8,
-        0x167 unknown_167: u8,
+        /// Which alpha group the world draw's second half draws (the first half the other).
+        0x167 ucAlphaGroupLate: u8,
         0x168 iRadiusLimit: i32,
         0x16c bRenderDecals: u8,
         0x16d unknown_16d: [u8; 7],
         /// `pBatchRenderer` by thread, `uiBatchRendererCount` of them.
-        0x174 pBatchRenderer: [u32; 6],
+        0x174 pBatchRenderer: [u32; 2],
+        /// The pass type range draw's per-renderer state, arrays of `uiBatchRendererCount`:
+        /// `puicurrentPassA`, `picurrentBucketA` (words), `pbcurrentFirstPassA`, `pbcurrentActiveA`
+        /// (bytes) (Xbox PDB).
+        0x17c puicurrentPassA: u32,
+        0x180 picurrentBucketA: u32,
+        0x184 pbcurrentFirstPassA: u32,
+        0x188 pbcurrentActiveA: u32,
         0x18c uiBatchRendererCount: u32,
         0x190 unknown_190: [u32; 3],
         0x19c eRenderMode: u32,

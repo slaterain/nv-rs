@@ -1874,6 +1874,9 @@ const PASS_TREE_TAKE: u32 = 0x0066_b0d0;
 const DECAL_PASS: u32 = 0x00b6_4e30;
 const SET_ALPHA_BLEND_ENABLE: u32 = 0x00b9_7fa0;
 const SET_CLIP_PLANES: u32 = 0x00b9_8280;
+/// This file's register group draw `00b639e0`, which the two render mode 0 halves call by address
+/// (as the decal pass does, so a typed caller compares; the other callers here call it plainly).
+const ACCUMULATOR_RENDER_GROUP_00B639E0: u32 = 0x00b6_39e0;
 /// The word `00b65ae0` sets to 1 around group 0.
 const GROUP_ZERO_FLAG_011A9608: u32 = 0x011a_9608;
 
@@ -1911,7 +1914,7 @@ pub fn fn_00b65ae0(e: &mut Engine, accumulator: Ptr<BSShaderAccumulator>) {
         fn_00b65580(e, accumulator);
         return;
     }
-    fn_00b639e0(e, accumulator, 0xa, 0);
+    e.call(ACCUMULATOR_RENDER_GROUP_00B639E0, &[base, 0xa, 0]);
     if e.mem.u8(MAKE_PASS_TREE) != 0 && e.get(accumulator, BSShaderAccumulator::eRenderMode) != 7 {
         make_pass_tree(e, base);
     }
@@ -1925,7 +1928,7 @@ pub fn fn_00b65ae0(e: &mut Engine, accumulator: Ptr<BSShaderAccumulator>) {
     }
     let saved = e.mem.u32(GROUP_ZERO_FLAG_011A9608);
     e.mem.set_u32(GROUP_ZERO_FLAG_011A9608, 1);
-    fn_00b639e0(e, accumulator, 0, 0);
+    e.call(ACCUMULATOR_RENDER_GROUP_00B639E0, &[base, 0, 0]);
     e.mem.set_u32(GROUP_ZERO_FLAG_011A9608, saved);
     e.call(DECAL_PASS, &[base]);
     fn_00b63770(e, accumulator, 0x25c, 0x287, 0, -1);
@@ -1992,13 +1995,13 @@ pub fn fn_00b65c60(e: &mut Engine, accumulator: Ptr<BSShaderAccumulator>) {
         e.call(TEXTURE_MANAGER_RETURN_RENDERED, &[manager, copy]);
         e.mem.set_u32(REFLECTION_COPY, 0);
     }
-    fn_00b639e0(e, accumulator, 9, 1);
+    e.call(ACCUMULATOR_RENDER_GROUP_00B639E0, &[base, 9, 1]);
     let group = u32::from(e.mem.u8(base + 0x167) != 0);
     bs_shader_accumulator_render_alpha_geometry(e, accumulator, group);
     e.call(SET_ALPHA_BLEND_ENABLE, &[0, 0]);
     e.call(SET_ALPHA_BLEND_ENABLE, &[0, 0]);
     fn_00b63770(e, accumulator, 0x2cf, 0x2d7, 0, -1);
-    fn_00b639e0(e, accumulator, 1, 0);
+    e.call(ACCUMULATOR_RENDER_GROUP_00B639E0, &[base, 1, 0]);
 }
 
 // Translated from 00b65dc0 (decompiled, FalloutNV.exe 1.4.0.525)

@@ -496,6 +496,17 @@ through its vtable), and `NiTriStrips`' immediate draw the packed draw when the 
 do. Speed (2026-11-10, the crowded street view, main's default against it, BAAB): neutral, crowded 15.25 to
 15.27 ms a frame, the sky 6.54 to 6.46 ms, both inside the spread between two runs of the same exe. The time
 moved from the translations to the typed code; the Direct3D 9 stream is byte-identical with the families on or off.
+And `draw` (same crate, id 18): the main world draw's drivers, typed as the groundwork for running that draw on
+its own thread: the world pass's two halves and the secondary scenes' draw (water reflections, menus), the
+accumulator's render mode draw and finish, render mode 0's two halves, the pass type range draw that interleaves
+the batch renderers, the register group draw, the alpha sort, the alpha group draw with its distances and clears,
+a holder's draw and the shadow types' group-clearing draw; its tests are in `crates/engine/tests/typed_shader.rs`
+(the shader family's world). Everything the draw reads that the rest of the frame changes goes through
+`draw::packet`, and everything it writes that is its own through `draw::own`, one section per condition of the
+pipeline probe that lives there (the pass lists the next frame's registration fills again, blend, clip and depth
+state, the blocks it frees, the one reference count): a later step changes those two files to feed the draw from a
+copied packet. On since its gate (the recorded street run byte-identical with `NV_TYPED=draw:off`); not a speed
+change by itself.
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with
