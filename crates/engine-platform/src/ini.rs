@@ -229,6 +229,27 @@ mod tests {
         );
     }
 
+    /// A file that starts with a UTF-8 byte order mark, as Windows' `GetPrivateProfileStringA`
+    /// reads it (measured on scratch files, 2026-11-09, measure/ini/DESIGN.md): a heading glued
+    /// to the mark is no heading, so the keys under it are in no section and not found, and the
+    /// sections after it read as usual. Play.exe puts nv-rs's block at the end of such a file
+    /// (scripts/launcher `game_ini::with_sections`), where it changes none of the player's keys.
+    #[test]
+    fn a_heading_glued_to_a_byte_order_mark_is_no_heading() {
+        let marked = b"\xef\xbb\xbf[General]\r\nsA=1\r\nsB=two\r\n[Display]\r\nfB=2\r\n\
+                       \r\n[nv-rs General]\r\nsPreset=fixes\r\n";
+        assert_eq!(ini_value(marked, b"General", b"sA"), None);
+        assert_eq!(ini_value(marked, b"General", b"sB"), None);
+        assert_eq!(ini_value(marked, b"Display", b"fB").unwrap(), b"2");
+        assert_eq!(
+            ini_value(marked, b"nv-rs General", b"sPreset").unwrap(),
+            b"fixes"
+        );
+        // The mark alone on the first line: the next line is a heading.
+        let alone = b"\xef\xbb\xbf\r\n[General]\r\nsA=1\r\n";
+        assert_eq!(ini_value(alone, b"General", b"sA").unwrap(), b"1");
+    }
+
     /// Windows' `GetPrivateProfileIntA` answers, measured on the player's machine (2026-10-21).
     #[test]
     fn profile_ints_read_as_windows_does() {

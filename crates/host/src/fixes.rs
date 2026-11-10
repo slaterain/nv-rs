@@ -1196,27 +1196,27 @@ mod tests {
         assert!(!is_play_run(env_of(&[("NV_D3D9", "real")])));
     }
 
-    /// Play.exe passes Fallout.ini's player switches only when the game would read the file, so
-    /// its list of what makes a test must be the host's (scripts/launcher/src/settings.rs).
+    /// Play.exe takes the player options' variables out in play and passes the file's choices on
+    /// in a test (scripts/launcher/src/game_ini.rs `switches`). It takes the six names from this
+    /// crate's table itself; what makes a test it keeps as a list, which must be this one. (A
+    /// fix's own variable makes a test too: Play.exe reads those from the table.)
     #[test]
     fn the_launcher_knows_what_makes_a_test() {
-        let launcher = include_str!("../../../scripts/launcher/src/settings.rs");
+        let launcher = include_str!("../../../scripts/launcher/src/game_ini.rs");
         let list = launcher
             .split("pub const TEST_SWITCHES")
             .nth(1)
             .and_then(|rest| rest.split("];").next())
-            .expect("TEST_SWITCHES in the launcher's settings.rs");
-        let names: Vec<&str> = list
+            .expect("TEST_SWITCHES in the launcher's game_ini.rs");
+        let mut names: Vec<&str> = list
             .split('"')
             .skip(1)
             .step_by(2)
             .filter(|w| w.starts_with("NV_"))
             .collect();
         let mut host: Vec<&str> = TEST_VARIABLES.to_vec();
-        host.extend(FIXES.iter().map(|f| f.env));
-        host.sort_unstable();
-        let mut names = names;
         names.sort_unstable();
+        host.sort_unstable();
         assert_eq!(names, host);
     }
 

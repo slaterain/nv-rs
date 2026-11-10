@@ -58,3 +58,17 @@ jobs:
         run: |
           cargo test --locked --manifest-path scripts/ledger/Cargo.toml
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      # Play.exe is its own workspace too, so the workspace steps above never build it. Its tests
+      # run distribution/Settings.ps1 in Windows PowerShell on made-up files in scratch folders.
+      # It runs and reports even when an earlier step failed; its own tests end a PowerShell
+      # that hangs after 2 minutes, and the step as a whole has its limit.
+      - name: Test the launcher (Play.exe and Settings.cmd)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 20
+        run: |
+          cargo fmt --manifest-path scripts/launcher/Cargo.toml -- --check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test --locked --manifest-path scripts/launcher/Cargo.toml
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo clippy --locked --manifest-path scripts/launcher/Cargo.toml --all-targets -- -D warnings
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }

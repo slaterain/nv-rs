@@ -27,7 +27,9 @@ Windows language or Windows version change, nv-rs notices and reads them again.
   Play.exe               the game
   Play with mods.cmd     the game with the mods in the mods folder (see mods\READ ME.txt)
   Settings.cmd           window or borderless, resolution, anti-aliasing, game fixes, frame limit
-                         and more (next start)
+                         and more (next start). Close the game first: the game writes its own
+                         settings file again when you change an option in its menu, and that can
+                         undo a choice saved while it runs
   Import my saves.cmd    copies your saves from Documents\My Games\FalloutNV. Those stay as they are
 
 Use Exit Game in the game's menu to quit. Saves reach the disk within about 5 seconds of being made,
@@ -62,8 +64,10 @@ second (loading screens as fast as they can), and a dragged body is pulled as ha
 To play the original game's behaviour instead, open Settings.cmd and choose "Vanilla (the original
 game)" under Game fixes. Settings.cmd can also set a frame limit (60, 120, 144 and so on) or no limit,
 which is the default, and a frame limit in menus (120 unless you choose another, or none). The frame
-limits only work with the fixes on. Settings.cmd keeps them in userdata\settings.ini, as Preset=fixes
-or Preset=vanilla, FrameLimit=0 (no limit) or a number, and MenuFrameLimit=120, 0 or a number.
+limits only work with the fixes on. Settings.cmd keeps them in the game's own Fallout.ini, in
+userdata\game\Documents\My Games\FalloutNV (and the same under userdata\mods), in sections named
+[nv-rs ...] (usually at the top of the file): sPreset=fixes or vanilla, iFrameLimit=0 (no limit) or a number, iMenuFrameLimit=120,
+0 or a number. You can change them there too; a note above each line says what it does.
 
 
 Game threads
@@ -71,14 +75,14 @@ Game threads
 The game's threads (the main one, the AI, loading and sound) run side by side on your processor's
 cores, as in the original. If the game misbehaves in a way it didn't with the previous preview (it
 stops, hangs, or something acts oddly), open Settings.cmd, choose "One at a time (slower)" under Game
-threads, and please tell us. Settings.cmd keeps that choice in userdata\settings.ini as the line
-NV_THREADS=stepped; without the line the threads run side by side.
+threads, and please tell us. Settings.cmd keeps that choice in Fallout.ini as bSteppedThreads=1;
+with 0 the threads run side by side.
 
 The game's drawing is handed to a thread of its own (the original draws on its main thread), which
 makes busy places faster. If something looks wrong or the game stops in a way it didn't with the
 previous preview, open Settings.cmd, choose "Main thread (slower)" under Drawing thread, and please
-tell us. Settings.cmd keeps that choice in userdata\settings.ini as the line NV_RENDER_THREAD=0;
-without the line the drawing has its own thread.
+tell us. Settings.cmd keeps that choice in Fallout.ini as bRenderThread=0; with 1 the drawing has its
+own thread.
 
 
 What works

@@ -9,7 +9,7 @@ every comparison with the original, gate and recording runs on it (the maintaine
 | Where | What | Who |
 | --- | --- | --- |
 | The run's `Fallout.ini`, `[nv-rs General]`, `[nv-rs Display]`, `[nv-rs Threads]` and `[nv-rs Fixes]` | `sPreset=fixes` or `vanilla`; `bBorderless`, `iFrameLimit=n`, `iMenuFrameLimit=n`; `bSteppedThreads`, `bRenderThread`; a fix's own line (`bUncap=0` or `1`, ...: `distribution/nv-rs-sections.ini`), which turns that fix alone on or off without making the run a test; a commented line leaves it to the preset. Read only in a launcher's play run (`NV_SETTINGS` set) that is no test | The player |
-| `Settings.cmd`'s `settings.ini` | `Preset=fixes` (the default) or `Preset=vanilla`; `FrameLimit=n` (0: none); `MenuFrameLimit=n` (120 when missing or empty, 0: none of its own). Read under `Fallout.ini`, until it is moved over | The player |
+| `userdata\settings.ini` (older previews' Settings.cmd; today's only before Play.exe's first start) | `Preset=fixes` (the default) or `Preset=vanilla`; `FrameLimit=n` (0: none); `MenuFrameLimit=n` (120 when missing or empty, 0: none of its own). Play.exe moves it into both profiles' `Fallout.ini` at its next start and renames it `settings.ini.migrated`. While it is there Play.exe moves it in at every start, its lines winning over the files (PLAYTESTING.md, "The game's Fallout.ini"), and the game reads these three lines of it itself, each only when neither `Fallout.ini` nor a variable sets it | The player |
 | `NV_PRESET=fixes` or `vanilla`, `NV_FRAME_LIMIT=n`, `NV_MENU_FRAME_LIMIT=n` | Over the files | Tests, scripts |
 | `NV_UNCAP=0` or `1`, and each fix's own variable below | That fix alone; with no `NV_PRESET` the rest of the run is vanilla | Gates, tests |
 | A recording or scripted run: `NV_TRACE_LIST`, `NV_MOVE_KEYS`, `NV_MOVE_MOUSE`, `NV_SOUND_RECORD`, `NV_SHOT`, `NV_FRAME_LOG`, the probes and `*_CHECK` switches (the list is `TEST_VARIABLES` in `fixes.rs`), with no `NV_PRESET` | Vanilla; and, with no `NV_THREADS`, stepped threads whatever the play default is (`Choice::threads`); with no `NV_RENDER_THREAD`, no render thread (`Choice::render_thread`) | A script that was never told about the preset or the threads still measures the original, and doesn't change when a play default does. `NV_SAVE_OUT` (the preview launcher's) does not pin |
@@ -23,15 +23,15 @@ Anything that compares with the original says `NV_PRESET=vanilla`. Speed gates s
 NV_UNCAP=1` as before.
 
 The game's threads are not part of the preset. In play they run side by side on their own cores
-(`fixes::PLAY_THREADS`); the line `NV_THREADS=stepped` in `settings.ini` (Settings.cmd's "Game
-threads": "One at a time") runs them one at a time, the fallback. A test or scripted run without
+(`fixes::PLAY_THREADS`); `bSteppedThreads=1` in `Fallout.ini`'s `[nv-rs Threads]` (Settings.cmd's
+"Game threads": "One at a time") runs them one at a time, the fallback. A test or scripted run without
 `NV_THREADS` runs them stepped whatever play's default is (the table above).
 
 The render thread isn't part of the preset either: it changes where the real Direct3D 9 calls are
 made, not which calls or in what order. In play they are made on a render thread of their own
 (`fixes::PLAY_RENDER_THREAD`, since measure/render-thread: town +14%, the crowded main street +16%;
-#347); the line `NV_RENDER_THREAD=0` in `settings.ini` (Settings.cmd's "Drawing thread": "Main
-thread") makes them on the game's threads, as the original does, the fallback. A test or scripted
+#347); `bRenderThread=0` in `Fallout.ini`'s `[nv-rs Threads]` (Settings.cmd's "Drawing thread":
+"Main thread") makes them on the game's threads, as the original does, the fallback. A test or scripted
 run without `NV_RENDER_THREAD` makes them on the game's threads whatever play's default is.
 
 ## How a fix is built

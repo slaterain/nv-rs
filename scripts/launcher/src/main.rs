@@ -16,6 +16,7 @@
 #![windows_subsystem = "windows"]
 
 mod find;
+mod game_ini;
 mod mods;
 mod settings;
 mod tables;
@@ -154,6 +155,11 @@ impl Profile {
 
             documents,
         }
+    }
+
+    /// The profile's `Fallout.ini`, beside its `FalloutPrefs.ini`.
+    fn fallout_ini(&self) -> PathBuf {
+        self.prefs.with_file_name("Fallout.ini")
     }
 
     fn make(&self) -> std::io::Result<()> {
@@ -616,30 +622,111 @@ fn guest_bytes(path: &Path) -> Option<Vec<u8>> {
     Some(text.as_bytes().to_vec())
 }
 
-/// `FalloutPrefs.ini` in the profile: the player's own copied once, read only (the settings the
-/// game's launcher made); then the choices from Settings.cmd over it.
+/// A file's bytes as text, one character per byte, so writing it back with [`bytes_of`] gives
+/// every byte not changed back as it was.
+fn text_of(bytes: &[u8]) -> String {
+    bytes.iter().map(|&b| b as char).collect()
+}
+
+/// [`text_of`]'s text as the file's bytes again.
+fn bytes_of(text: &str) -> Vec<u8> {
+    text.chars().map(|c| c as u32 as u8).collect()
+}
+
+/// [`tables::write_whole`], keeping the file's read-only mark: the mark is lifted for the write
+/// and put back on the new file.
+// Windows only: `set_readonly(false)` clears the read-only attribute.
+#[allow(clippy::permissions_set_readonly_false)]
+fn write_keeping_mark(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let read_only = std::fs::metadata(path).is_ok_and(|m| m.permissions().readonly());
+    if read_only {
+        let mut permissions = std::fs::metadata(path)?.permissions();
+        permissions.set_readonly(false);
+        std::fs::set_permissions(path, permissions)?;
+    }
+    let written = tables::write_whole(path, bytes);
+    if read_only {
+        let mut permissions = std::fs::metadata(path)?.permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(path, permissions)?;
+    }
+    written
+}
+
+/// What a start did with one profile's `Fallout.ini` ([`prepare_profile`]).
+struct Prepared {
+    /// nv-rs's sections are in the file, and with them a `settings.ini` that is being moved in.
+    seeded: bool,
+}
+
+/// A profile's `Fallout.ini` and `FalloutPrefs.ini`: the player's own copied once, read only from
+/// `real` (their `My Games\FalloutNV`: the settings the game's launcher made). nv-rs's own sections
+/// go into `Fallout.ini` (`game_ini.rs`): the whole block once, and what a file with only some of
+/// them lacks. The player's choices go into them: `pending`, a `settings.ini` that is being moved
+/// into the files, whose lines win; with none, only Play.exe's own default for a key it added.
+///
+/// Two files get no sections and are said in the log: one with nothing to start from (a file
+/// holding only our block would stop the player's own from being copied at a later start), and a
+/// UTF-16 file, which is left as it is.
 ///
 /// On a PC where the game's own launcher has never run, this does what it leaves behind: `Fallout.ini`
 /// from the game's `Fallout_default.ini` and `FalloutPrefs.ini` from its High preset (`high.ini`), both
 /// only read from the game's folder. `sD3DDevice` always names this PC's card: the game hands over to
 /// its launcher when it doesn't (`004da570`), and here there is no launcher to hand over to.
-fn prepare_prefs(
+fn prepare_profile(
     package: &Package,
     profile: &Profile,
-    settings: &Settings,
+    real: Option<&Path>,
+    pending: Option<&Settings>,
     game_folder: &Path,
     device: Option<&str>,
-) -> std::io::Result<()> {
-    let real = real_documents().map(|d| d.join("My Games\\FalloutNV"));
-    let read_real = |name: &str| real.as_ref().and_then(|d| std::fs::read(d.join(name)).ok());
-    let ini = profile.prefs.with_file_name("Fallout.ini");
-    if !ini.is_file() {
-        let bytes = read_real("Fallout.ini")
-            .or_else(|| std::fs::read(game_folder.join("Fallout_default.ini")).ok());
-        if let Some(bytes) = bytes {
-            tables::write_whole(&ini, &bytes)?;
+) -> std::io::Result<Prepared> {
+    let read_real = |name: &str| real.and_then(|d| std::fs::read(d.join(name)).ok());
+    let ini = profile.fallout_ini();
+    let old = match std::fs::read(&ini) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e),
+    };
+    // An empty file is no file: the player's own or the game's defaults are copied, as at a
+    // first start.
+    let start = match &old {
+        Some(bytes) if !bytes.is_empty() => bytes.clone(),
+        _ => read_real("Fallout.ini")
+            .filter(|bytes| !bytes.is_empty())
+            .or_else(|| std::fs::read(game_folder.join("Fallout_default.ini")).ok())
+            .unwrap_or_default(),
+    };
+    let mut prepared = Prepared { seeded: false };
+    let mut text = text_of(&start);
+    if start.is_empty() {
+        package.log(&format!(
+            "no Fallout.ini to start from (none of the player's, no Fallout_default.ini in the game's folder): none made at {}",
+            ini.display()
+        ));
+    } else if let Some(seeded) = game_ini::with_sections(&text) {
+        text = game_ini::apply_choices(&seeded.text, pending, &seeded.added).0;
+        prepared = Prepared { seeded: true };
+        if seeded.fresh {
+            package.log(&format!("nv-rs's own sections added to {}", ini.display()));
+        } else if !seeded.added.is_empty() {
+            package.log(&format!(
+                "nv-rs's own sections completed in {}: {} added",
+                ini.display(),
+                seeded.added.join(", ")
+            ));
         }
+    } else {
+        package.log(&format!(
+            "{} is UTF-16 text: left as it is, without nv-rs's own sections",
+            ini.display()
+        ));
     }
+    let bytes = bytes_of(&text);
+    if !bytes.is_empty() && old.as_ref() != Some(&bytes) {
+        write_keeping_mark(&ini, &bytes)?;
+    }
+
     let mut first_time_size = None;
     if !profile.prefs.is_file() {
         if let Some(bytes) = read_real("FalloutPrefs.ini") {
@@ -653,7 +740,18 @@ fn prepare_prefs(
             package.log("no FalloutPrefs.ini to copy: starting from the game's High preset");
         }
     }
-    let mut lines = settings.prefs_lines();
+    let mut lines = pending.map(Settings::prefs_lines).unwrap_or_default();
+    // A borderless window is the game's windowed mode, at every start: by what the file says now,
+    // a settings.ini's choice already in it. A file without our sections can't say: then the
+    // choice passed to the game decides (`game_ini::switches`), settings.ini's or the default.
+    let borderless = if prepared.seeded {
+        settings::ini_value(&text, "nv-rs Display", "bBorderless") == Some("1")
+    } else {
+        pending.and_then(Settings::borderless).unwrap_or(true)
+    };
+    if borderless {
+        lines.push(("bFull Screen".into(), "0".into()));
+    }
     if let Some(device) = device {
         lines.push(("sD3DDevice".into(), format!("\"{device}\"")));
     }
@@ -664,15 +762,129 @@ fn prepare_prefs(
         }
     }
     if lines.is_empty() {
+        return Ok(prepared);
+    }
+    let old: Vec<u8> = std::fs::read(&profile.prefs).unwrap_or_default();
+    let new = settings::apply_to_prefs(&text_of(&old), &lines);
+    let bytes = bytes_of(&new);
+    if bytes != old {
+        write_keeping_mark(&profile.prefs, &bytes)?;
+    }
+    Ok(prepared)
+}
+
+/// The name a moved `settings.ini` gets: `settings.ini.migrated`, or with the first free number
+/// after it (`settings.ini.migrated.2`, ...) when an earlier one is there. An earlier one is
+/// never replaced.
+fn migrated_name(settings: &Path) -> PathBuf {
+    let mut base = settings.as_os_str().to_owned();
+    base.push(".migrated");
+    let mut name = PathBuf::from(&base);
+    let mut number = 1u32;
+    while name.symlink_metadata().is_ok() {
+        number += 1;
+        let mut numbered = base.clone();
+        numbered.push(format!(".{number}"));
+        name = PathBuf::from(numbered);
+    }
+    name
+}
+
+/// Both profiles' files made ready ([`prepare_profile`]), so Settings.cmd finds them to edit; a
+/// `settings.ini` goes into both and is renamed `settings.ini.migrated` ([`migrated_name`]).
+///
+/// While a `settings.ini` exists it is the settings for both tools: Settings.cmd reads and
+/// writes it, and its lines win here over what the files say. So when it can't be renamed, or a
+/// profile's file couldn't take our sections, it stays, the log says so, and the next start
+/// moves it in again: the same result every time.
+fn prepare_files(
+    package: &Package,
+    profiles: [&Profile; 2],
+    real: Option<&Path>,
+    game_folder: &Path,
+    device: Option<&str>,
+) -> Result<(), Stop> {
+    let pending = match std::fs::read(&package.settings) {
+        Ok(bytes) => Some(Settings::parse(&settings::decode(&bytes))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            return stop(
+                STOP_SETTINGS,
+                format!(
+                    "nv-rs can't read its settings ({e}). Close any program that has it open, or remove it, and start Play.exe again. The file is:\n{}",
+                    package.settings.display()
+                ),
+            )
+        }
+    };
+    if let Some(settings) = &pending {
+        settings.game_switches().map_err(|why| Stop {
+            code: STOP_SETTINGS,
+            message: format!(
+                "nv-rs's settings have a line it can't use: {why}.\n\nOpen Settings.cmd, choose again and click Save. The file is:\n{}",
+                package.settings.display()
+            ),
+        })?;
+    }
+    // settings.ini's lines that are not used any more: the same whatever file they go into.
+    let unused = pending
+        .as_ref()
+        .map(|s| game_ini::apply_choices("", Some(s), &[]).1)
+        .unwrap_or_default();
+    let mut all_seeded = true;
+    for profile in profiles {
+        let done = profile.make().and_then(|()| {
+            prepare_profile(
+                package,
+                profile,
+                real,
+                pending.as_ref(),
+                game_folder,
+                device,
+            )
+        });
+        match done {
+            Ok(prepared) => {
+                all_seeded &= prepared.seeded;
+            }
+            Err(e) => {
+                return stop(
+                    STOP_LOCATION,
+                    format!(
+                        "nv-rs could not write the game's settings ({e}):\n{}",
+                        profile.fallout_ini().display()
+                    ),
+                )
+            }
+        }
+    }
+    if pending.is_none() {
         return Ok(());
     }
-    // One character per byte, so the rest of the file comes back unchanged.
-    let old: Vec<u8> = std::fs::read(&profile.prefs).unwrap_or_default();
-    let text: String = old.iter().map(|&b| b as char).collect();
-    let new = settings::apply_to_prefs(&text, &lines);
-    let bytes: Vec<u8> = new.chars().map(|c| c as u32 as u8).collect();
-    if bytes != old {
-        tables::write_whole(&profile.prefs, &bytes)?;
+    if !unused.is_empty() {
+        package.log(&format!(
+            "settings.ini's lines not used any more (left in the file): {}",
+            unused.join(", ")
+        ));
+    }
+    if !all_seeded {
+        package.log(
+            "settings.ini stays where it is: a Fallout.ini could not take its choices (said above). Settings.cmd keeps reading and writing settings.ini, and Play.exe moves it in again at the next start",
+        );
+        return Ok(());
+    }
+    let moved = migrated_name(&package.settings);
+    let name = moved
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match std::fs::rename(&package.settings, &moved) {
+        Ok(()) => package.log(&format!(
+            "settings.ini's choices are now in the game's Fallout.ini and FalloutPrefs.ini; the old file is {name}"
+        )),
+        Err(e) => package.log(&format!(
+            "settings.ini's choices are in the game's Fallout.ini and FalloutPrefs.ini, but the file could not be renamed to {name} ({e}). It stays the settings while it is there: Settings.cmd keeps reading and writing it, and Play.exe moves it in again at every start, over what the game's files say. Close whatever has it open, or remove it"
+        )),
     }
     Ok(())
 }
@@ -1038,36 +1250,20 @@ fn play(
         message: format!("{}: {e}", profile.table.display()),
     })?;
 
-    let settings = Settings::parse(&settings::decode(
-        &std::fs::read(&package.settings).unwrap_or_default(),
-    ));
-    let game_switches = settings.game_switches().map_err(|why| Stop {
-        code: STOP_SETTINGS,
-        message: format!(
-            "nv-rs's settings have a line it can't use: {why}.\n\nOpen Settings.cmd, choose again and click Save. The file is:\n{}",
-            package.settings.display()
-        ),
-    })?;
-    if settings
-        .0
-        .keys()
-        .any(|k| k.eq_ignore_ascii_case("NV_FIXES"))
-    {
-        package.log("settings.ini's NV_FIXES line is not used: Preset= chooses the fixes");
-    }
-    for raw in ["NV_PRESET", "NV_FRAME_LIMIT", "NV_MENU_FRAME_LIMIT"] {
-        if settings.0.keys().any(|k| k.eq_ignore_ascii_case(raw)) {
-            package.log(&format!(
-                "settings.ini's {raw} line is not used: Preset=, FrameLimit= and MenuFrameLimit= choose them (Settings.cmd)"
-            ));
-        }
-    }
-    prepare_prefs(package, profile, &settings, &game.folder, device.as_deref()).map_err(|e| {
-        Stop {
-            code: STOP_LOCATION,
-            message: format!("{}: {e}", profile.prefs.display()),
-        }
-    })?;
+    // Both ways of playing get their files, so Settings.cmd can edit them; the profile not played
+    // takes the game's own folder's defaults (the mods install's are the same files).
+    let other = Profile::at(
+        &package.userdata,
+        if options.mods { "game" } else { "mods" },
+    );
+    let real = real_documents().map(|d| d.join("My Games\\FalloutNV"));
+    prepare_files(
+        package,
+        [profile, &other],
+        real.as_deref(),
+        &game.folder,
+        device.as_deref(),
+    )?;
 
     if options.check_only {
         let mut text = format!("Game: {}\n", game.folder.display());
@@ -1094,11 +1290,10 @@ fn play(
         code: STOP_LOCATION,
         message: format!("{}: {e}", log_path.display()),
     })?;
+    // The player's options are in the profile's Fallout.ini, which the game reads itself (host
+    // `game_ini.rs`): in play no variable is passed for them, so nothing here can beat the file
+    // (`pass_switches`, below).
     let mut command = Command::new(&package.game_exe);
-    // What settings.ini passes on first, so the launcher's own switches below win over it.
-    for (name, value) in user_switches(&settings) {
-        command.env(name, value);
-    }
     command
         .arg(&data_argument)
         .current_dir(&package.userdata)
@@ -1116,46 +1311,30 @@ fn play(
         .env("NV_REPORT_DIR", &package.reports)
         .env("NV_REPORT_LOG", &log_path)
         .env("NV_SETTINGS", &package.settings);
-    for (name, value) in &game_switches {
-        command.env(name, value);
-    }
-    if settings.borderless() {
-        command.env("NV_BORDERLESS", "1");
-    } else {
-        command.env_remove("NV_BORDERLESS");
-    }
-    // The run's Fallout.ini wins over settings.ini (host `game_ini.rs`): each player switch its
-    // [nv-rs ...] sections set goes to the game with the file's value instead. Not when a
-    // settings.ini line (or the launcher's own environment) makes the run a test, which never
-    // reads the file: then settings.ini's switches stand, as the game sees it.
-    let fallout_ini = profile.documents.join("My Games\\FalloutNV\\Fallout.ini");
-    let test = settings::makes_a_test(
-        user_switches(&settings).into_iter().map(|(name, _)| name),
-        |name| std::env::var_os(name).is_some(),
-    );
-    if let Some(bytes) = (!test).then(|| std::fs::read(&fallout_ini).ok()).flatten() {
-        let from_file = Settings::file_switches(&settings::decode(&bytes));
-        for (name, value) in &from_file {
-            match value {
-                Some(value) => command.env(name, value),
-                None => command.env_remove(name),
-            };
-        }
-        if !from_file.is_empty() {
-            let names: Vec<&str> = from_file.iter().map(|(name, _)| *name).collect();
-            package.log(&format!(
-                "Fallout.ini's nv-rs settings over settings.ini: {}",
-                names.join(", ")
-            ));
-        }
-    }
 
+    let fallout_ini = text_of(&std::fs::read(profile.fallout_ini()).unwrap_or_default());
+    // A settings.ini still there (its choices could not go into the files) is read the same way
+    // `prepare_files` read it, which already stopped the start for a line the game can't use.
+    let pending = std::fs::read(&package.settings)
+        .ok()
+        .map(|bytes| Settings::parse(&settings::decode(&bytes)));
+    let switches = game_ini::switches(&fallout_ini, pending.as_ref(), |name| {
+        std::env::var_os(name).is_some()
+    });
+    if let Some(line) = pass_switches(&mut command, &switches) {
+        package.log(&line);
+    }
+    let key = |section: &str, key: &str| {
+        settings::ini_value(&fallout_ini, section, key)
+            .unwrap_or("")
+            .to_string()
+    };
     package.log(&format!(
-        "starting the game on {}; preset {}, frame limit {}, menu frame limit {}; log {}",
+        "starting the game on {}; Fallout.ini: preset {}, frame limit {}, menu frame limit {}; log {}",
         data_argument.display(),
-        game_switches[0].1,
-        game_switches[1].1,
-        game_switches[2].1,
+        key("nv-rs General", "sPreset"),
+        key("nv-rs Display", "iFrameLimit"),
+        key("nv-rs Display", "iMenuFrameLimit"),
         log_path.display()
     ));
     let mut child = command.spawn().map_err(|e| Stop {
@@ -1201,41 +1380,48 @@ fn play(
     Ok(STOP_GAME_STOPPED)
 }
 
-/// The switches the launcher sets itself: a `NV_` line in settings.ini can't replace them (it
-/// could point the saves or settings anywhere). `NV_PRESET`, `NV_FRAME_LIMIT` and
-/// `NV_MENU_FRAME_LIMIT` come from the `Preset=`, `FrameLimit=` and `MenuFrameLimit=` lines
-/// Settings.cmd writes, so a second, raw line can't disagree with
-/// what Settings.cmd shows. `NV_FIXES` was never a switch of the game's (an early name for the
-/// preset, in a test): it is dropped, so a stale line can't look as if it did something.
-const OWN_SWITCHES: [&str; 15] = [
-    "NV_PRESET",
-    "NV_FRAME_LIMIT",
-    "NV_MENU_FRAME_LIMIT",
-    "NV_FIXES",
-    "NV_D3D9",
-    "NV_SOUND",
-    "NV_D3D9_ADAPTER",
-    "NV_DSOUND_TABLE",
-    "NV_D3DX_CACHE",
-    "NV_SAVE_OUT",
-    "NV_PREFS_OUT",
-    "NV_REPORT_DIR",
-    "NV_REPORT_LOG",
-    "NV_BORDERLESS",
-    "NV_SETTINGS",
-];
-
-/// settings.ini's `NV_` lines that go to the game: all but the launcher's own switches.
-fn user_switches(settings: &Settings) -> Vec<(&str, &str)> {
-    settings
-        .environment()
-        .into_iter()
-        .filter(|(name, _)| {
-            !OWN_SWITCHES
-                .iter()
-                .any(|own| own.eq_ignore_ascii_case(name))
-        })
-        .collect()
+/// The game's variables for the player's options on its command ([`game_ini::switches`]).
+///
+/// In play the six that would beat the profile's `Fallout.ini` are taken out, not even one left
+/// from Play.exe's own environment. When a variable set before the start makes the run a test,
+/// which never reads the file, nothing is taken out and the file's choices are passed on, so the
+/// run plays like the player's game; the line for the log says which variable did it, what was
+/// passed and what was kept. When the played profile's file has none of our sections, the
+/// player's choices (settings.ini's, else the play defaults) are passed in play too, and the
+/// line says so.
+fn pass_switches(command: &mut Command, switches: &game_ini::Switches) -> Option<String> {
+    for name in &switches.removed {
+        command.env_remove(name);
+    }
+    for (name, value) in &switches.passed {
+        command.env(name, value);
+    }
+    let passed: Vec<String> = switches
+        .passed
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect();
+    let list = |names: &[String]| {
+        if names.is_empty() {
+            "none".to_string()
+        } else {
+            names.join(", ")
+        }
+    };
+    let kept: Vec<String> = switches.kept.iter().map(|name| name.to_string()).collect();
+    let Some(test) = switches.test else {
+        return switches.no_sections.then(|| {
+            format!(
+                "the played profile's Fallout.ini has no nv-rs sections (said above), so the game can't read the player's settings there: passed as variables instead, from settings.ini where it has a line, else the defaults: {}",
+                list(&passed)
+            )
+        });
+    };
+    Some(format!(
+        "{test} was set before Play.exe started, which makes this run a test: the game does not read Fallout.ini's nv-rs settings in a test. Passed on from the file (from settings.ini when the file has no nv-rs sections), so the game plays as the player's does: {}. Set before the start and kept as they were: {}",
+        list(&passed),
+        list(&kept)
+    ))
 }
 
 /// What the sound table and the game's own check say about sound, once when the table is made.
@@ -1497,30 +1683,966 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn settings_ini_cannot_redirect_the_launchers_own_switches() {
-        let settings = Settings::parse(
-            "NV_SAVE_OUT=C:\\Elsewhere\nNV_PREFS_OUT=C:\\Elsewhere\\p.ini\nNV_SETTINGS=x\nNV_FIXES=vnv\nNV_BORDERLESS=0\nNV_SOMETHING_NEW=1\n",
-        );
-        assert_eq!(user_switches(&settings), [("NV_SOMETHING_NEW", "1")]);
+    /// A scratch package (`userdata`) and game folder with made-up INI text (not the game's own),
+    /// and the player's `My Games\FalloutNV` with `Fallout.ini` when `player` is given.
+    struct Files {
+        dir: PathBuf,
+        package: Package,
+        game: PathBuf,
+        real: PathBuf,
+    }
+
+    const DEFAULT_INI: &[u8] = b"[General]\r\nsTestName=Default\r\n\r\n[Display]\r\niPresentInterval=1\r\nfTest=1.0000\r\n";
+
+    impl Files {
+        fn new(name: &str, player: Option<&[u8]>) -> Files {
+            let dir = scratch(name);
+            let game = dir.join("game");
+            std::fs::create_dir_all(&game).unwrap();
+            std::fs::write(game.join("Fallout_default.ini"), DEFAULT_INI).unwrap();
+            std::fs::write(game.join("high.ini"), b"[Display]\r\niSize W=800\r\n").unwrap();
+            let real = dir.join("Documents\\My Games\\FalloutNV");
+            std::fs::create_dir_all(&real).unwrap();
+            if let Some(bytes) = player {
+                std::fs::write(real.join("Fallout.ini"), bytes).unwrap();
+            }
+            let package = Package::at(dir.join("nv-rs"));
+            Files {
+                package,
+                game,
+                real,
+                dir,
+            }
+        }
+
+        fn profiles(&self) -> [Profile; 2] {
+            ["game", "mods"].map(|name| Profile::at(&self.package.userdata, name))
+        }
+
+        fn start(&self) -> Result<(), Stop> {
+            let [game, mods] = self.profiles();
+            prepare_files(
+                &self.package,
+                [&game, &mods],
+                Some(&self.real),
+                &self.game,
+                Some("Test Card"),
+            )
+        }
+
+        fn ini(&self, profile: usize) -> Vec<u8> {
+            std::fs::read(self.profiles()[profile].fallout_ini()).unwrap()
+        }
+
+        fn prefs(&self, profile: usize) -> String {
+            text_of(&std::fs::read(&self.profiles()[profile].prefs).unwrap())
+        }
+
+        /// What the launcher logged so far (kept in memory: these tests never open the log).
+        fn log(&self) -> String {
+            self.package.held.borrow().join("\n")
+        }
+
+        /// The moved settings.ini files, by name.
+        fn migrated(&self) -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(&self.package.userdata)
+                .unwrap()
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.starts_with("settings.ini."))
+                .collect();
+            names.sort();
+            names
+        }
+    }
+
+    impl Drop for Files {
+        // Windows only: this clears the read-only attribute.
+        #[allow(clippy::permissions_set_readonly_false)]
+        fn drop(&mut self) {
+            for profile in self.profiles() {
+                for file in [profile.fallout_ini(), profile.prefs.clone()] {
+                    if let Ok(m) = std::fs::metadata(&file) {
+                        let mut p = m.permissions();
+                        p.set_readonly(false);
+                        let _ = std::fs::set_permissions(&file, p);
+                    }
+                }
+            }
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// The sections with Play.exe's defaults (borderless) in the line ends `eol`, then an empty line.
+    fn our_block(eol: &str) -> Vec<u8> {
+        let mut out = String::new();
+        for line in game_ini::SECTIONS.lines() {
+            out.push_str(if line == "bBorderless=0" {
+                "bBorderless=1"
+            } else {
+                line
+            });
+            out.push_str(eol);
+        }
+        out.push_str(eol);
+        out.into_bytes()
     }
 
     #[test]
-    fn the_preset_reaches_the_game_only_from_the_preset_line() {
-        // Raw NV_PRESET / NV_FRAME_LIMIT / NV_MENU_FRAME_LIMIT lines and a stale NV_FIXES don't go
-        // through; Preset=, FrameLimit= and MenuFrameLimit= do, as the game's switches.
-        let settings = Settings::parse(
-            "Preset=vanilla\nFrameLimit=90\nMenuFrameLimit=60\nNV_PRESET=fixes\nnv_frame_limit=30\nNV_MENU_FRAME_LIMIT=0\nNV_FIXES=vnv\n",
-        );
-        assert!(user_switches(&settings).is_empty());
+    fn a_new_players_file_from_fallout_default_ini_gets_the_sections_once() {
+        let files = Files::new("seed-default", None);
+        files.start().unwrap();
+        for profile in 0..2 {
+            let ini = files.ini(profile);
+            let mut want = our_block("\r\n");
+            want.extend_from_slice(DEFAULT_INI);
+            assert_eq!(
+                ini, want,
+                "the default file byte for byte under the sections"
+            );
+            let prefs = files.prefs(profile);
+            assert!(prefs.contains("bFull Screen=0") && prefs.contains("sD3DDevice=\"Test Card\""));
+        }
+        // A second start changes nothing.
+        let before = (files.ini(0), files.ini(1), files.prefs(0));
+        files.start().unwrap();
+        assert_eq!((files.ini(0), files.ini(1), files.prefs(0)), before);
+        assert!(!files.package.settings.exists());
+    }
+
+    #[test]
+    fn the_players_own_file_is_copied_once_with_the_sections_and_its_line_ends() {
+        // LF ends and bytes that are not UTF-8 come through as they were.
+        let player = b"[General]\nsTestName=Caf\xe9\n[Display]\nfTest=2.0000\n";
+        let files = Files::new("seed-player", Some(player));
+        files.start().unwrap();
+        let mut want = our_block("\n");
+        want.extend_from_slice(player);
+        assert_eq!(files.ini(0), want);
+        // The player's file changes later: the profile's copy is not made again.
+        std::fs::write(files.real.join("Fallout.ini"), b"[General]\r\nsOther=1\r\n").unwrap();
+        files.start().unwrap();
+        assert_eq!(files.ini(0), want);
         assert_eq!(
-            settings.game_switches().unwrap(),
+            std::fs::read(files.real.join("Fallout.ini")).unwrap(),
+            b"[General]\r\nsOther=1\r\n"
+        );
+    }
+
+    #[test]
+    fn a_file_that_has_the_sections_is_left_as_it_is() {
+        // The whole block, with the player's own values in it.
+        let mut player = text_of(&our_block("\r\n"))
+            .replace("sPreset=fixes", "sPreset=vanilla")
+            .replace("bBorderless=1", "bBorderless=0")
+            .into_bytes();
+        player.extend_from_slice(b"[General]\r\nx=1\r\n");
+        let files = Files::new("seed-has", Some(&player));
+        files.start().unwrap();
+        assert_eq!(files.ini(0), player);
+        assert!(!files.prefs(0).contains("bFull Screen"));
+        assert!(!files.log().contains("completed"));
+    }
+
+    /// A file with one section of ours made by hand (or left half made by an older tool): the
+    /// rest of the block is added, the borderless window as for a new file, and nothing that was
+    /// there changes. No state leaves a file half seeded.
+    #[test]
+    fn a_file_with_one_hand_made_section_gets_the_rest_of_the_block() {
+        let player = b"[General]\r\nsTestName=Hand\r\n\r\n[nv-rs Display]\r\niFrameLimit=60\r\n";
+        let files = Files::new("seed-hand", Some(player));
+        files.start().unwrap();
+        for profile in 0..2 {
+            let ini = text_of(&files.ini(profile));
+            assert!(ini.starts_with(&text_of(player)), "{ini}");
+            let get = |s: &str, k: &str| settings::ini_value(&ini, s, k).map(str::to_string);
+            assert_eq!(get("nv-rs Display", "iFrameLimit").as_deref(), Some("60"));
+            assert_eq!(get("nv-rs Display", "bBorderless").as_deref(), Some("1"));
+            assert_eq!(
+                get("nv-rs Display", "iMenuFrameLimit").as_deref(),
+                Some("120")
+            );
+            assert_eq!(get("nv-rs General", "sPreset").as_deref(), Some("fixes"));
+            assert_eq!(get("nv-rs Threads", "bRenderThread").as_deref(), Some("1"));
+            assert!(ini.contains("\r\n\r\n[nv-rs Fixes]\r\n; Each fix follows sPreset."));
+            assert!(ini.ends_with(";bNVSEListGuard=1\r\n"));
+            assert!(files.prefs(profile).contains("bFull Screen=0"));
+        }
+        assert!(files.log().contains("nv-rs's own sections completed in"));
+        // A second start changes nothing.
+        let before = (files.ini(0), files.ini(1), files.prefs(0));
+        files.start().unwrap();
+        assert_eq!((files.ini(0), files.ini(1), files.prefs(0)), before);
+    }
+
+    /// A profile from before the sections (the published preview's), and Settings.cmd opened
+    /// before Play.exe: it must not write a key into that Fallout.ini, which Play.exe would then
+    /// take for one that has the sections. It writes settings.ini, and Play.exe puts the whole
+    /// block and the choices into both profiles.
+    #[test]
+    fn settings_cmd_on_a_file_from_before_the_sections_leaves_it_to_play_exe() {
+        let files = Files::new("old-profile", None);
+        let [game, _] = files.profiles();
+        game.make().unwrap();
+        let old_ini = b"[General]\r\nsTestName=Old\r\n[Display]\r\niPresentInterval=1\r\n";
+        let old_prefs = "[Display]\r\niSize W=800\r\niSize H=600\r\n";
+        std::fs::write(game.fallout_ini(), old_ini).unwrap();
+        std::fs::write(&game.prefs, old_prefs).unwrap();
+        settings_window(&files, "FrameLimit=60");
+        assert_eq!(files.ini(0), old_ini);
+        assert_eq!(files.prefs(0), old_prefs);
+        let written = std::fs::read_to_string(&files.package.settings).unwrap();
+        assert!(
+            written.contains("\r\nFrameLimit=60\r\n") && written.contains("\r\nBorderless=1\r\n"),
+            "{written}"
+        );
+        files.start().unwrap();
+        for (profile, rest) in [&old_ini[..], DEFAULT_INI].into_iter().enumerate() {
+            let ini = text_of(&files.ini(profile));
+            assert!(ini.starts_with("; nv-rs's own options."), "{ini}");
+            assert!(
+                ini.ends_with(&text_of(rest)),
+                "the file's own part as it was"
+            );
+            let get = |s: &str, k: &str| settings::ini_value(&ini, s, k).map(str::to_string);
+            assert_eq!(get("nv-rs Display", "iFrameLimit").as_deref(), Some("60"));
+            assert_eq!(get("nv-rs Display", "bBorderless").as_deref(), Some("1"));
+            assert!(ini.contains("\r\n;bUncap=1\r\n"), "the fix lines too");
+            assert!(files.prefs(profile).contains("bFull Screen=0"));
+        }
+        assert!(!files.package.settings.exists());
+        // From here on Settings.cmd edits the files.
+        settings_window(&files, "FrameLimit=90");
+        assert!(!files.package.settings.exists());
+        for profile in 0..2 {
+            let ini = text_of(&files.ini(profile));
+            assert_eq!(
+                settings::ini_value(&ini, "nv-rs Display", "iFrameLimit"),
+                Some("90")
+            );
+        }
+    }
+
+    /// With no Fallout.ini of the player's and no Fallout_default.ini, no file is made: one that
+    /// held only our block would stop the player's own from being copied at a later start. A
+    /// settings.ini then stays until there is a file for its choices.
+    #[test]
+    fn with_nothing_to_start_from_no_fallout_ini_is_made() {
+        let files = Files::new("seed-nothing", None);
+        std::fs::remove_file(files.game.join("Fallout_default.ini")).unwrap();
+        std::fs::create_dir_all(&files.package.userdata).unwrap();
+        std::fs::write(&files.package.settings, "FrameLimit=60\r\n").unwrap();
+        files.start().unwrap();
+        let [game, mods] = files.profiles();
+        assert!(!game.fallout_ini().exists() && !mods.fallout_ini().exists());
+        assert!(game.prefs.is_file(), "the prefs are made as before");
+        assert!(files.package.settings.exists());
+        assert!(files.log().contains("no Fallout.ini to start from"));
+        assert!(files.log().contains("settings.ini stays where it is"));
+        // The player's file appears later (the game's own launcher ran): now it is copied, an
+        // empty file in the profile counting as none, and the settings go in.
+        let player = b"[General]\r\nsTestName=Later\r\n";
+        std::fs::write(files.real.join("Fallout.ini"), player).unwrap();
+        std::fs::write(game.fallout_ini(), b"").unwrap();
+        files.start().unwrap();
+        for profile in 0..2 {
+            let ini = text_of(&files.ini(profile));
+            assert!(ini.ends_with(&text_of(player)));
+            assert_eq!(
+                settings::ini_value(&ini, "nv-rs Display", "iFrameLimit"),
+                Some("60")
+            );
+        }
+        assert!(!files.package.settings.exists());
+    }
+
+    /// A file that starts with a UTF-8 byte order mark gets the block at its end, every byte of
+    /// the player's where it was (`game_ini::with_sections` says why).
+    #[test]
+    fn a_file_with_a_byte_order_mark_gets_the_sections_at_its_end() {
+        let mut player = vec![0xef, 0xbb, 0xbf];
+        player.extend_from_slice(b"[General]\r\nsTestName=Marked\r\n[Display]\r\nfTest=2.0000\r\n");
+        let files = Files::new("seed-marked", Some(&player));
+        files.start().unwrap();
+        let block = our_block("\r\n");
+        let mut want = player.clone();
+        want.extend_from_slice(b"\r\n");
+        want.extend_from_slice(&block[..block.len() - 2]);
+        assert_eq!(files.ini(0), want);
+        files.start().unwrap();
+        assert_eq!(files.ini(0), want, "a second start changes nothing");
+    }
+
+    /// A UTF-16 file is copied and left as it is, the log says so, and a settings.ini stays: its
+    /// choices have no file to go into.
+    #[test]
+    fn a_utf16_file_is_left_as_it_is() {
+        let mut player = vec![0xff, 0xfe];
+        player.extend(
+            "[General]\r\nsTestName=Wide\r\n"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes),
+        );
+        let files = Files::new("seed-utf16", Some(&player));
+        std::fs::create_dir_all(&files.package.userdata).unwrap();
+        std::fs::write(&files.package.settings, "FrameLimit=60\r\n").unwrap();
+        files.start().unwrap();
+        assert_eq!(files.ini(0), player);
+        assert_eq!(files.ini(1), player);
+        assert!(files.log().contains("is UTF-16 text: left as it is"));
+        assert!(files.package.settings.exists());
+        files.start().unwrap();
+        assert_eq!(files.ini(0), player);
+    }
+
+    #[test]
+    fn a_read_only_file_gets_the_sections_and_stays_read_only() {
+        let files = Files::new("seed-read-only", None);
+        let [game, _] = files.profiles();
+        game.make().unwrap();
+        std::fs::write(game.fallout_ini(), DEFAULT_INI).unwrap();
+        let mut p = std::fs::metadata(game.fallout_ini()).unwrap().permissions();
+        p.set_readonly(true);
+        std::fs::set_permissions(game.fallout_ini(), p).unwrap();
+        files.start().unwrap();
+        let mut want = our_block("\r\n");
+        want.extend_from_slice(DEFAULT_INI);
+        assert_eq!(files.ini(0), want);
+        assert!(std::fs::metadata(game.fallout_ini())
+            .unwrap()
+            .permissions()
+            .readonly());
+        assert!(!std::fs::metadata(game.prefs.clone())
+            .unwrap()
+            .permissions()
+            .readonly());
+    }
+
+    #[test]
+    fn settings_ini_moves_into_both_profiles_once() {
+        let files = Files::new("migrate", None);
+        std::fs::create_dir_all(&files.package.userdata).unwrap();
+        let old = "Borderless=0\r\nResolution=1920x1080\r\nAntiAliasing=4x\r\nVSync=Off\r\nPreset=vanilla\r\nFrameLimit=60\r\nMenuFrameLimit=0\r\nNV_THREADS=stepped\r\nNV_SOMETHING=1\r\n";
+        std::fs::write(&files.package.settings, old).unwrap();
+        files.start().unwrap();
+        let mut moved = files.package.settings.as_os_str().to_owned();
+        moved.push(".migrated");
+        assert!(!files.package.settings.exists());
+        assert_eq!(std::fs::read_to_string(&moved).unwrap(), old);
+        for profile in 0..2 {
+            let ini = text_of(&files.ini(profile));
+            let get = |s: &str, k: &str| settings::ini_value(&ini, s, k).map(str::to_string);
+            assert_eq!(get("nv-rs General", "sPreset").as_deref(), Some("vanilla"));
+            assert_eq!(get("nv-rs Display", "bBorderless").as_deref(), Some("0"));
+            assert_eq!(get("nv-rs Display", "iFrameLimit").as_deref(), Some("60"));
+            assert_eq!(
+                get("nv-rs Display", "iMenuFrameLimit").as_deref(),
+                Some("0")
+            );
+            assert_eq!(
+                get("nv-rs Threads", "bSteppedThreads").as_deref(),
+                Some("1")
+            );
+            assert_eq!(get("Display", "iPresentInterval").as_deref(), Some("0"));
+            assert!(ini.ends_with("[Display]\r\niPresentInterval=0\r\nfTest=1.0000\r\n"));
+            let prefs = files.prefs(profile);
+            assert!(prefs.contains("iSize W=1920") && prefs.contains("iMultiSample=4"));
+            assert!(!prefs.contains("iPresentInterval") && !prefs.contains("bFull Screen"));
+        }
+        // Next start: nothing moves again; a key the player edits in the file stays.
+        let [game, _] = files.profiles();
+        let edited = text_of(&files.ini(0)).replace("iFrameLimit=60", "iFrameLimit=144");
+        std::fs::write(game.fallout_ini(), bytes_of(&edited)).unwrap();
+        let before = files.prefs(0);
+        files.start().unwrap();
+        assert_eq!(text_of(&files.ini(0)), edited);
+        assert_eq!(files.prefs(0), before);
+    }
+
+    #[test]
+    fn a_settings_line_the_game_would_refuse_stops_before_anything_moves() {
+        let files = Files::new("migrate-bad", None);
+        std::fs::create_dir_all(&files.package.userdata).unwrap();
+        std::fs::write(&files.package.settings, "Preset=vanila\r\n").unwrap();
+        let why = files.start().unwrap_err();
+        assert_eq!(why.code, STOP_SETTINGS);
+        assert!(why.message.contains("Preset=vanila"));
+        assert!(files.package.settings.exists());
+        assert!(!files.profiles()[0].fallout_ini().exists());
+    }
+
+    /// A file of the player's with the sections (Play.exe made it ready) and a settings.ini put
+    /// back beside it: while settings.ini is there it is the settings, for Settings.cmd and for
+    /// Play.exe alike. Settings.cmd shows the files with settings.ini's lines over them and writes
+    /// settings.ini; Play.exe moves it in, its lines winning, a key no line names keeping the
+    /// file's value.
+    #[test]
+    fn settings_ini_beside_files_that_have_the_sections_wins_in_both_tools() {
+        let files = Files::new("both-present", None);
+        files.start().unwrap();
+        let [game, mods] = files.profiles();
+        for profile in [&game, &mods] {
+            let ini = text_of(&std::fs::read(profile.fallout_ini()).unwrap())
+                .replace("iMenuFrameLimit=120", "iMenuFrameLimit=45")
+                .replace("iFrameLimit=0", "iFrameLimit=30");
+            std::fs::write(profile.fallout_ini(), bytes_of(&ini)).unwrap();
+        }
+        std::fs::write(&files.package.settings, "FrameLimit=60\r\nBorderless=0\r\n").unwrap();
+        let before = (files.ini(0), files.ini(1));
+        // Settings.cmd, saving what it shows: settings.ini over the files, into settings.ini.
+        settings_window(&files, "");
+        assert_eq!(
+            (files.ini(0), files.ini(1)),
+            before,
+            "the files are not edited"
+        );
+        let written = std::fs::read_to_string(&files.package.settings).unwrap();
+        for line in [
+            "FrameLimit=60",
+            "Borderless=0",
+            "MenuFrameLimit=45",
+            "Preset=fixes",
+        ] {
+            assert!(
+                written.contains(&format!("\r\n{line}\r\n")),
+                "{line}: {written}"
+            );
+        }
+        files.start().unwrap();
+        for profile in 0..2 {
+            let ini = text_of(&files.ini(profile));
+            let get = |s: &str, k: &str| settings::ini_value(&ini, s, k).map(str::to_string);
+            assert_eq!(get("nv-rs Display", "iFrameLimit").as_deref(), Some("60"));
+            assert_eq!(get("nv-rs Display", "bBorderless").as_deref(), Some("0"));
+            assert_eq!(
+                get("nv-rs Display", "iMenuFrameLimit").as_deref(),
+                Some("45")
+            );
+        }
+        assert!(!files.package.settings.exists());
+        assert_eq!(files.migrated(), ["settings.ini.migrated"]);
+    }
+
+    /// A settings.ini that can't be renamed (another program holds it open): its choices go in,
+    /// the log says clearly that it stays, and it stays the settings: the next start moves it in
+    /// again, over a key edited in the file meanwhile, the same result every time.
+    #[test]
+    fn a_settings_ini_that_cannot_be_renamed_stays_the_settings() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let files = Files::new("rename-fails", None);
+        std::fs::create_dir_all(&files.package.userdata).unwrap();
+        std::fs::write(&files.package.settings, "FrameLimit=60\r\n").unwrap();
+        // Readable by others, not to be renamed or deleted while this is open.
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&files.package.settings)
+            .unwrap();
+        files.start().unwrap();
+        assert!(files.package.settings.exists());
+        assert!(files.migrated().is_empty());
+        assert!(
+            files
+                .log()
+                .contains("but the file could not be renamed to settings.ini.migrated"),
+            "{}",
+            files.log()
+        );
+        let frame_limit = |p: usize| {
+            settings::ini_value(&text_of(&files.ini(p)), "nv-rs Display", "iFrameLimit")
+                .map(str::to_string)
+        };
+        assert_eq!(frame_limit(0).as_deref(), Some("60"));
+        assert_eq!(frame_limit(1).as_deref(), Some("60"));
+        // Settings.cmd, meanwhile, writes settings.ini, not the files.
+        drop(held);
+        settings_window(&files, "MenuFrameLimit=90");
+        let written = std::fs::read_to_string(&files.package.settings).unwrap();
+        assert!(
+            written.contains("\r\nFrameLimit=60\r\n")
+                && written.contains("\r\nMenuFrameLimit=90\r\n")
+        );
+        let [game, _] = files.profiles();
+        let edited = text_of(&files.ini(0)).replace("iFrameLimit=60", "iFrameLimit=144");
+        std::fs::write(game.fallout_ini(), bytes_of(&edited)).unwrap();
+        files.start().unwrap();
+        assert_eq!(
+            frame_limit(0).as_deref(),
+            Some("60"),
+            "settings.ini still wins"
+        );
+        assert!(!files.package.settings.exists());
+        assert_eq!(files.migrated(), ["settings.ini.migrated"]);
+    }
+
+    /// A second settings.ini (restored from a backup, or an old userdata copied over) moves in
+    /// too, and the earlier moved file is kept as it was: the new one gets a number.
+    #[test]
+    fn a_second_migration_keeps_the_first_moved_file() {
+        let files = Files::new("migrate-twice", None);
+        std::fs::create_dir_all(&files.package.userdata).unwrap();
+        std::fs::write(&files.package.settings, "FrameLimit=60\r\n").unwrap();
+        files.start().unwrap();
+        std::fs::write(&files.package.settings, "FrameLimit=90\r\n").unwrap();
+        files.start().unwrap();
+        std::fs::write(&files.package.settings, "FrameLimit=120\r\n").unwrap();
+        files.start().unwrap();
+        assert_eq!(
+            files.migrated(),
             [
-                ("NV_PRESET", "vanilla".to_string()),
-                ("NV_FRAME_LIMIT", "90".to_string()),
-                ("NV_MENU_FRAME_LIMIT", "60".to_string())
+                "settings.ini.migrated",
+                "settings.ini.migrated.2",
+                "settings.ini.migrated.3"
             ]
         );
+        let read = |name: &str| std::fs::read_to_string(files.package.userdata.join(name)).unwrap();
+        assert_eq!(read("settings.ini.migrated"), "FrameLimit=60\r\n");
+        assert_eq!(read("settings.ini.migrated.2"), "FrameLimit=90\r\n");
+        let ini = text_of(&files.ini(1));
+        assert_eq!(
+            settings::ini_value(&ini, "nv-rs Display", "iFrameLimit"),
+            Some("120")
+        );
+        assert!(files
+            .log()
+            .contains("the old file is settings.ini.migrated.3"));
+    }
+
+    /// The variables on the game's own command (`pass_switches` on a `Command`, as `play` makes
+    /// it). In play the six are taken out and nothing else is said; with a test variable set
+    /// before Play.exe, the file's choices are set on the command, nothing is taken out, the one
+    /// set before is left to come through as it was, and the log line names all of it.
+    #[test]
+    fn the_games_command_gets_the_files_choices_only_in_a_test() {
+        let six = [
+            "NV_PRESET",
+            "NV_BORDERLESS",
+            "NV_FRAME_LIMIT",
+            "NV_MENU_FRAME_LIMIT",
+            "NV_THREADS",
+            "NV_RENDER_THREAD",
+        ];
+        let ini = text_of(&our_block("\r\n"))
+            .replace("sPreset=fixes", "sPreset=vanilla")
+            .replace("iFrameLimit=0", "iFrameLimit=90")
+            .replace(";bGrabPush=1", "bGrabPush=0");
+        let envs = |command: &Command| -> Vec<(String, Option<String>)> {
+            command
+                .get_envs()
+                .map(|(k, v)| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        v.map(|v| v.to_string_lossy().into_owned()),
+                    )
+                })
+                .collect()
+        };
+        let mut play = Command::new("game.exe");
+        play.env("NV_SETTINGS", "settings.ini");
+        let line = pass_switches(&mut play, &game_ini::switches(&ini, None, |_| false));
+        assert_eq!(line, None);
+        let mut want: Vec<(String, Option<String>)> =
+            six.iter().map(|name| (name.to_string(), None)).collect();
+        want.push(("NV_SETTINGS".into(), Some("settings.ini".into())));
+        want.sort();
+        let mut got = envs(&play);
+        got.sort();
+        assert_eq!(got, want);
+
+        let mut test = Command::new("game.exe");
+        let inherited = |name: &str| name == "NV_FRAME_LOG" || name == "NV_THREADS";
+        let line = pass_switches(&mut test, &game_ini::switches(&ini, None, inherited)).unwrap();
+        let mut got = envs(&test);
+        got.sort();
+        let mut want: Vec<(String, Option<String>)> = [
+            ("NV_PRESET", "vanilla"),
+            ("NV_BORDERLESS", "1"),
+            ("NV_FRAME_LIMIT", "90"),
+            ("NV_MENU_FRAME_LIMIT", "120"),
+            ("NV_RENDER_THREAD", "1"),
+            ("NV_GRAB_PUSH", "0"),
+        ]
+        .iter()
+        .map(|(n, v)| (n.to_string(), Some(v.to_string())))
+        .collect();
+        want.sort();
+        assert_eq!(
+            got, want,
+            "NV_THREADS is not on the command: it comes through as set"
+        );
+        assert!(
+            line.starts_with("NV_FRAME_LOG was set before Play.exe started"),
+            "{line}"
+        );
+        assert!(
+            line.contains("NV_PRESET=vanilla, NV_BORDERLESS=1, NV_FRAME_LIMIT=90"),
+            "{line}"
+        );
+        assert!(line.ends_with("kept as they were: NV_THREADS"), "{line}");
+    }
+
+    /// Settings.ps1 on a file it must change in place whatever its shape: LF line ends, a byte
+    /// that is not UTF-8, a key the player commented out and no `[Display]` section. Its lines are
+    /// the ones Play.exe's own `set_key` makes, in Settings.ps1's order; every other byte stays.
+    #[test]
+    fn settings_cmd_edits_any_shape_of_file_as_play_exe_would() {
+        let files = Files::new("settings-shapes", None);
+        files.start().unwrap();
+        let [game, mods] = files.profiles();
+        let ini = text_of(&our_block("\n")).replace("\niFrameLimit=0\n", "\n;iFrameLimit=0\n")
+            + "[General]\nsTestName=Caf\u{e9}\n";
+        for profile in [&game, &mods] {
+            std::fs::write(profile.fallout_ini(), bytes_of(&ini)).unwrap();
+        }
+        let prefs_before = (files.prefs(0), files.prefs(1));
+        settings_window(&files, "VSync=Off;FrameLimit=60;NV_RENDER_THREAD=0");
+        let mut want = ini.clone();
+        for (section, key, value) in [
+            ("Display", "iPresentInterval", "0"),
+            ("nv-rs Display", "iFrameLimit", "60"),
+            ("nv-rs Threads", "bRenderThread", "0"),
+        ] {
+            want = game_ini::set_key(&want, section, key, value);
+        }
+        assert!(want.ends_with("sTestName=Caf\u{e9}\n[Display]\niPresentInterval=0\n"));
+        assert!(!want.contains('\r'));
+        for profile in 0..2 {
+            assert_eq!(text_of(&files.ini(profile)), want);
+        }
+        assert_eq!((files.prefs(0), files.prefs(1)), prefs_before);
+    }
+
+    /// A save that fails at its last step leaves the file whole and as it was, leaves no `.part`
+    /// file behind and says so; saving again once it is free finishes the job. Here the game
+    /// profile's Fallout.ini is held open by another program that lets others read and write it
+    /// but not replace or delete it: an in-place write (the old way) would go through and could be
+    /// cut off half way, while the `.part` file is written in full and only its last step, taking
+    /// the file's place, fails.
+    #[test]
+    fn a_failed_save_leaves_the_file_whole_and_says_so() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let files = Files::new("settings-fails", None);
+        files.start().unwrap();
+        let [game, mods] = files.profiles();
+        let before = files.ini(0);
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1 | 2)
+            .open(game.fallout_ini())
+            .unwrap();
+        let (saved, errors) = run_settings(&files, "FrameLimit=60");
+        assert!(!saved, "the script ends with a failure");
+        assert!(errors.contains("The settings were not saved."), "{errors}");
+        // The path's own ASCII end: the scratch folder above it may have letters the error
+        // stream's code page shows otherwise.
+        assert!(
+            errors.contains("game\\Documents\\My Games\\FalloutNV\\Fallout.ini"),
+            "{errors}"
+        );
+        drop(held);
+        assert_eq!(files.ini(0), before, "the game profile's file as it was");
+        for profile in [&game, &mods] {
+            let mut part = profile.fallout_ini().into_os_string();
+            part.push(".part");
+            assert!(!Path::new(&part).exists(), "no .part left");
+        }
+        settings_window(&files, "FrameLimit=60");
+        for profile in 0..2 {
+            assert_eq!(
+                settings::ini_value(
+                    &text_of(&files.ini(profile)),
+                    "nv-rs Display",
+                    "iFrameLimit"
+                ),
+                Some("60")
+            );
+        }
+    }
+
+    /// The played profile's Fallout.ini can't take our sections (UTF-16 here; or there was
+    /// nothing to make it from): settings.ini stays, its unused lines are named, the game's own
+    /// full-screen mode is kept off by settings.ini's choice, and the game gets the player's
+    /// choices as variables, the defaults for what settings.ini doesn't say. Settings.cmd keeps
+    /// writing settings.ini for it.
+    #[test]
+    fn a_profile_without_the_sections_gets_the_choices_as_variables() {
+        let mut player = vec![0xff, 0xfe];
+        player.extend(
+            "[General]\r\nsTestName=Wide\r\n"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes),
+        );
+        let files = Files::new("unseeded-play", Some(&player));
+        std::fs::create_dir_all(&files.package.userdata).unwrap();
+        std::fs::write(
+            &files.package.settings,
+            "NV_THREADS=stepped\r\nFrameLimit=60\r\nNV_SOMETHING=1\r\n",
+        )
+        .unwrap();
+        files.start().unwrap();
+        assert_eq!(files.ini(0), player);
+        assert!(files.package.settings.exists());
+        assert!(
+            files.log().contains(
+                "settings.ini's lines not used any more (left in the file): NV_SOMETHING"
+            ),
+            "{}",
+            files.log()
+        );
+        assert!(
+            files.prefs(0).contains("bFull Screen=0"),
+            "no Borderless line: the default"
+        );
+        let pending = Settings::parse(&settings::decode(
+            &std::fs::read(&files.package.settings).unwrap(),
+        ));
+        let mut command = Command::new("game.exe");
+        let switches = game_ini::switches(&text_of(&files.ini(0)), Some(&pending), |_| false);
+        let line = pass_switches(&mut command, &switches).unwrap();
+        assert!(line.starts_with("the played profile's Fallout.ini has no nv-rs sections"));
+        let mut got: Vec<(String, Option<String>)> = command
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        got.sort();
+        let mut want: Vec<(String, Option<String>)> = [
+            ("NV_PRESET", "fixes"),
+            ("NV_BORDERLESS", "1"),
+            ("NV_FRAME_LIMIT", "60"),
+            ("NV_MENU_FRAME_LIMIT", "120"),
+            ("NV_THREADS", "stepped"),
+            ("NV_RENDER_THREAD", "1"),
+        ]
+        .iter()
+        .map(|(n, v)| (n.to_string(), Some(v.to_string())))
+        .collect();
+        want.sort();
+        assert_eq!(got, want);
+        // Settings.cmd: Window chosen goes into settings.ini, and the next start keeps the game's
+        // full-screen mode as the game's files say (no push).
+        settings_window(&files, "Borderless=0");
+        assert_eq!(files.ini(0), player);
+        let written = std::fs::read_to_string(&files.package.settings).unwrap();
+        assert!(
+            written.contains("\r\nBorderless=0\r\n") && written.contains("\r\nFrameLimit=60\r\n")
+        );
+        let [game, _] = files.profiles();
+        std::fs::remove_file(&game.prefs).unwrap();
+        files.start().unwrap();
+        assert!(!files.prefs(0).contains("bFull Screen"));
+    }
+
+    /// Settings.cmd edits the files in place only when every profile's Fallout.ini has our
+    /// sections: with the mods profile's file missing it writes settings.ini, and Play.exe puts
+    /// the choice into both profiles, not its defaults into one.
+    #[test]
+    fn settings_cmd_edits_the_files_only_when_every_profile_has_the_sections() {
+        let files = Files::new("one-profile", None);
+        files.start().unwrap();
+        let [_, mods] = files.profiles();
+        std::fs::remove_file(mods.fallout_ini()).unwrap();
+        let game_before = files.ini(0);
+        settings_window(&files, "FrameLimit=90");
+        assert_eq!(files.ini(0), game_before, "not edited in place");
+        assert!(std::fs::read_to_string(&files.package.settings)
+            .unwrap()
+            .contains("\r\nFrameLimit=90\r\n"));
+        files.start().unwrap();
+        for profile in 0..2 {
+            assert_eq!(
+                settings::ini_value(
+                    &text_of(&files.ini(profile)),
+                    "nv-rs Display",
+                    "iFrameLimit"
+                ),
+                Some("90")
+            );
+        }
+        assert!(!files.package.settings.exists());
+    }
+
+    /// A file Settings.cmd can't read stops it with the message, before it writes anything: it
+    /// must not take the file for one without the settings and save defaults over the player's
+    /// choices.
+    #[test]
+    fn a_file_settings_cmd_cannot_read_stops_it_before_anything_is_written() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let files = Files::new("settings-unreadable", None);
+        files.start().unwrap();
+        let [game, _] = files.profiles();
+        let before = (files.ini(0), files.ini(1), files.prefs(0), files.prefs(1));
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(game.fallout_ini())
+            .unwrap();
+        let (saved, errors) = run_settings(&files, "FrameLimit=60");
+        drop(held);
+        assert!(!saved);
+        assert!(errors.contains("The settings were not saved."), "{errors}");
+        assert!(!files.package.settings.exists(), "no settings.ini written");
+        assert_eq!(
+            (files.ini(0), files.ini(1), files.prefs(0), files.prefs(1)),
+            before
+        );
+    }
+
+    /// distribution/Settings.ps1 run in the scratch package with no window (`NV_RS_NO_WINDOWS`),
+    /// `choose` its choices (`NV_RS_SETTINGS_CHOOSE`): how it ended and what it wrote to its
+    /// error stream.
+    fn run_settings(files: &Files, choose: &str) -> (bool, String) {
+        let script = files.package.root.join("Settings.ps1");
+        std::fs::create_dir_all(&files.package.root).unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../distribution/Settings.ps1"),
+            &script,
+        )
+        .unwrap();
+        let mut command = Command::new("powershell");
+        command
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ])
+            .arg(&script)
+            .env("NV_RS_NO_WINDOWS", "1")
+            .env("NV_RS_SETTINGS_CHOOSE", choose);
+        // A PowerShell that hangs fails the test instead of holding it (and CI) for hours.
+        let out = match run_limited(&mut command, Duration::from_secs(120)) {
+            Limited::Done(out) => out,
+            Limited::TimedOut => panic!("Settings.ps1 did not end within 2 minutes"),
+            Limited::Failed(e) => panic!("Windows PowerShell could not start: {e}"),
+        };
+        let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        (out.status.success(), own_errors(&said))
+    }
+
+    /// What a PowerShell script itself wrote to the error stream. On a PC where Windows
+    /// PowerShell has not run before, PowerShell's own "Preparing modules for first use" progress
+    /// arrives there too, as a CLIXML document with no error record in it: that is not the
+    /// script's: that block is taken out and the rest kept. A block with an error record stays.
+    fn own_errors(said: &str) -> String {
+        let Some(rest) = said.strip_prefix("#< CLIXML") else {
+            return said.to_string();
+        };
+        let end = rest
+            .find("</Objs>")
+            .map_or(rest.len(), |at| at + "</Objs>".len());
+        if rest[..end].contains("S=\"Error\"") {
+            return said.to_string();
+        }
+        rest[end..].trim().to_string()
+    }
+
+    /// [`run_settings`], which must save without a word.
+    fn settings_window(files: &Files, choose: &str) {
+        let (saved, errors) = run_settings(files, choose);
+        assert!(saved && errors.is_empty(), "{errors}");
+    }
+
+    #[test]
+    fn powershells_own_progress_is_not_a_script_error() {
+        let progress = "#< CLIXML\r\n<Objs Version=\"1.1.0.1\" xmlns=\"http://schemas.microsoft.com/powershell/2004/04\"><Obj S=\"progress\" RefId=\"0\"><TN RefId=\"0\"><T>System.Management.Automation.PSCustomObject</T></TN><MS><I64 N=\"SourceId\">1</I64><PR N=\"Record\"><AV>Preparing modules for first use.</AV></PR></MS></Obj></Objs>";
+        assert_eq!(own_errors(progress), "");
+        let error = "#< CLIXML\r\n<Objs><S S=\"Error\">boom</S></Objs>";
+        assert_eq!(own_errors(error), error);
+        assert_eq!(
+            own_errors("The settings were not saved."),
+            "The settings were not saved."
+        );
+        assert_eq!(own_errors(""), "");
+        // The script's own words after the block are kept.
+        assert_eq!(
+            own_errors(&format!("{progress}\r\nThe settings were not saved.")),
+            "The settings were not saved."
+        );
+    }
+
+    #[test]
+    fn settings_cmd_before_the_first_start_writes_settings_ini_for_play_exe_to_move() {
+        let files = Files::new("settings-first", None);
+        settings_window(&files, "Preset=vanilla;FrameLimit=60;NV_RENDER_THREAD=0");
+        let written = std::fs::read_to_string(&files.package.settings).unwrap();
+        assert!(
+            written.contains("\r\nPreset=vanilla\r\n") && written.contains("\r\nFrameLimit=60\r\n")
+        );
+        files.start().unwrap();
+        let ini = text_of(&files.ini(1));
+        assert_eq!(
+            settings::ini_value(&ini, "nv-rs General", "sPreset"),
+            Some("vanilla")
+        );
+        assert_eq!(
+            settings::ini_value(&ini, "nv-rs Display", "iFrameLimit"),
+            Some("60")
+        );
+        assert_eq!(
+            settings::ini_value(&ini, "nv-rs Threads", "bRenderThread"),
+            Some("0")
+        );
+        assert!(!files.package.settings.exists());
+    }
+
+    #[test]
+    fn settings_cmd_changes_only_its_own_lines_in_both_profiles() {
+        let files = Files::new("settings-files", None);
+        files.start().unwrap();
+        let [game, mods] = files.profiles();
+        // Saving what it shows changes no byte.
+        let before: Vec<(Vec<u8>, String)> =
+            (0..2).map(|p| (files.ini(p), files.prefs(p))).collect();
+        settings_window(&files, "");
+        let after: Vec<(Vec<u8>, String)> =
+            (0..2).map(|p| (files.ini(p), files.prefs(p))).collect();
+        assert_eq!(after, before);
+        assert!(!files.package.settings.exists());
+        // A read-only mark stays.
+        let mut p = std::fs::metadata(mods.fallout_ini()).unwrap().permissions();
+        p.set_readonly(true);
+        std::fs::set_permissions(mods.fallout_ini(), p).unwrap();
+        settings_window(
+            &files,
+            "Borderless=0;Preset=vanilla;FrameLimit=144;VSync=Off;Resolution=1280x720;AntiAliasing=Off;NV_THREADS=stepped",
+        );
+        for (profile, (ini, prefs)) in before.iter().enumerate() {
+            // The same lines as Play.exe's own set_key makes, everything else as it was.
+            let mut want = text_of(ini);
+            for (section, key, value) in [
+                ("nv-rs Display", "bBorderless", "0"),
+                ("Display", "iPresentInterval", "0"),
+                ("nv-rs General", "sPreset", "vanilla"),
+                ("nv-rs Display", "iFrameLimit", "144"),
+                ("nv-rs Threads", "bSteppedThreads", "1"),
+            ] {
+                want = game_ini::set_key(&want, section, key, value);
+            }
+            assert_eq!(text_of(&files.ini(profile)), want);
+            let mut want = prefs.clone();
+            for (key, value) in [
+                ("iSize W", "1280"),
+                ("iSize H", "720"),
+                ("iMultiSample", "0"),
+            ] {
+                want = game_ini::set_key(&want, "Display", key, value);
+            }
+            assert_eq!(files.prefs(profile), want);
+        }
+        assert!(std::fs::metadata(mods.fallout_ini())
+            .unwrap()
+            .permissions()
+            .readonly());
+        assert!(!std::fs::metadata(game.fallout_ini())
+            .unwrap()
+            .permissions()
+            .readonly());
     }
 
     #[test]

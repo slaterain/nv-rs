@@ -58,9 +58,9 @@ needs, and the rest are for testers, scripts and the maintainers.
 
 The groups, by who uses them:
 
-1. **Player settings** (Settings.cmd, or a line in `userdata\settings.ini`).
+1. **Player settings** (Settings.cmd, or their keys in the game's `Fallout.ini`, below).
 2. **Game fixes** (one per row of [FIXES.md](FIXES.md); `Preset=` turns them all on or off, a row's own variable turns one alone, for gates and tests).
-3. **Set by Play.exe** (the launcher sets these; a `NV_` line in `settings.ini` cannot replace them).
+3. **Set by Play.exe** (the launcher sets these).
 4. **Tests and diagnostics** (profiling, tracing, recording, checks, measurements).
 5. **Obsolete candidates** (the feature is settled as the default and only the "off" side remains, which nothing uses; for the maintainer to approve, nothing removed yet).
 
@@ -81,16 +81,40 @@ and the host's tests check one against the other. The fix lines are written with
 
 - Lowest to highest: the built-in default, the preset, the `Fallout.ini` keys, then the `NV_...`
   variables (for tests and scripts).
-- `settings.ini` is still read, below `Fallout.ini`, until it is moved over: a line `Fallout.ini`
-  already sets is not read.
+- Play.exe puts the block into each profile's `Fallout.ini` (`userdata\game` and `userdata\mods`)
+  once, the rest of the file byte for byte as it was: at the top, or at the end of a file that
+  starts with a UTF-8 byte order mark (Windows does not read the heading glued to the mark, and
+  the player's keys must read as before). A file that has only some of the sections or keys gets
+  the rest. A UTF-16 file is left as it is (launcher.log says so).
+- While a `userdata\settings.ini` exists it is the settings, for Settings.cmd and Play.exe alike:
+  Settings.cmd shows the files with its lines over them and writes it; Play.exe moves it into both
+  profiles' files, its lines winning over what the files say, and renames it
+  `settings.ini.migrated` (`.migrated.2`, ... after an earlier one). When it can't be renamed, or a
+  profile's file can't take its choices, it stays and the next start does the same again.
+  Settings.cmd changes the files in place only when every profile's `Fallout.ini` has the sections
+  and no settings.ini exists; then it changes the lines of the options it shows in both, in place.
+- The game reads three lines of a `settings.ini` that is there (`Preset`, `FrameLimit`,
+  `MenuFrameLimit`), each only when neither `Fallout.ini` nor a variable sets it. When the played
+  profile's `Fallout.ini` has no sections (UTF-16, or nothing to make it from), Play.exe passes
+  the six options as variables instead, from settings.ini's lines, else the play defaults; the
+  fix lines and V-sync then do nothing until the file can take them.
 - A key nv-rs does not know is passed over, as the game passes over one it never asks for. A value it
   can't use leaves the default, and one line in the log names it; the game still starts.
 - Only a launcher's play run reads these sections: `NV_SETTINGS` set (Play.exe; the
   play folder's Play.cmd), with no starred name, no fix's own variable and no test flag on the viewer's
   command line. Every scripted, gated or measured run ignores them, so a player's file can't change a
   result.
-- Play.exe passes the player options on as variables; for each one `Fallout.ini` sets, it passes the
-  file's value instead of `settings.ini`'s, so the file wins there too (but not in a run a settings.ini line makes a test, which never reads the file).
+- Play.exe passes none of the player options' variables (not even one in its own environment), so
+  the file decides. settings.ini's other `NV_...` lines are not passed any more (launcher.log names
+  them once, when the file is moved in).
+- A tester passes a variable by setting it in the environment before starting Play.exe. When it
+  makes the run a test (a starred name or a fix's own variable), the game ignores the file, so
+  Play.exe passes the file's choices on as the six variables and the uncommented fix lines (the
+  play default where the file says nothing) and leaves any of them set beforehand as they were:
+  the run plays like the player's game, and launcher.log says which variable made it a test and
+  what was passed.
+- Close the game before changing settings: the game writes its whole `FalloutPrefs.ini` when an
+  option changes in its own menu, which can undo a choice Settings.cmd saved meanwhile.
 
 ### 1. Player settings
 
@@ -99,11 +123,11 @@ and the host's tests check one against the other. The fix lines are written with
 | `NV_PRESET=fixes` or `vanilla` (`sPreset`; `Preset=`) | What differs from the original program: the fixes set, or the original's behaviour exactly | `fixes` |
 | `NV_FRAME_LIMIT=n` (`iFrameLimit`; `FrameLimit=`) | Frames a second at most in play (0: none) | none under `fixes`; the original's own pacing under `vanilla` |
 | `NV_MENU_FRAME_LIMIT=n` (`iMenuFrameLimit`; `MenuFrameLimit=`) | Frames a second at most in menus (0: none) | 120 |
-| `NV_THREADS=stepped` (`bSteppedThreads=1`; a line in `settings.ini`; Settings.cmd's threads option) | The game's threads one at a time (the fallback, and the reference mode) instead of side by side on their own cores | side by side in play; a scripted or measured run is stepped whatever the default |
-| `NV_RENDER_THREAD=0` (`bRenderThread=0`; a line in `settings.ini`; Settings.cmd's drawing thread option) | The real Direct3D 9 calls on the game's own threads, as the original makes them, instead of a render thread of their own | render thread in play; a scripted or measured run draws on the game's threads |
+| `NV_THREADS=stepped` (`bSteppedThreads=1`; `NV_THREADS=`; Settings.cmd's threads option) | The game's threads one at a time (the fallback, and the reference mode) instead of side by side on their own cores | side by side in play; a scripted or measured run is stepped whatever the default |
+| `NV_RENDER_THREAD=0` (`bRenderThread=0`; `NV_RENDER_THREAD=`; Settings.cmd's drawing thread option) | The real Direct3D 9 calls on the game's own threads, as the original makes them, instead of a render thread of their own | render thread in play; a scripted or measured run draws on the game's threads |
 | `NV_BORDERLESS=1` (`bBorderless=1`; `Borderless=`) | The game's window without a frame, filling the screen | off |
 
-`Resolution=`, `AntiAliasing=`, `Anisotropy=` and `VSync=` are the other lines Settings.cmd writes; the launcher turns them into the game's own settings, not into switches.
+Settings.cmd's resolution, anti-aliasing, anisotropy and V-sync are the game's own keys, not switches: `iSize W`, `iSize H`, `iMultiSample` and `iMaxAnisotropy` in `FalloutPrefs.ini`, `iPresentInterval` in `Fallout.ini` (where the game reads it).
 
 ### 2. Game fixes (the 18 rows of FIXES.md)
 
@@ -147,7 +171,7 @@ Play.exe sets these for every run; set them by hand only to run `nv-viewer` with
 | `NV_PREFS_OUT=FILE` | The `FalloutPrefs.ini` the game writes, copied out to FILE | stays in memory |
 | `NV_REPORT_DIR=DIR`, `NV_REPORT_LOG=FILE` | F12 in the game's window makes `DIR\NNN\` with the frame, the end of FILE and a `note.txt` for the player (`crates/engine-platform/src/d3d9real.rs`) | no F12 report |
 | `NV_SETTINGS=FILE` | The settings file | `settings.ini` beside the program or in the folder above it |
-| `NV_RS_GAME`, `NV_RS_REAL_DOCUMENTS`, `NV_RS_SYSTEM_FOLDER`, `NV_RS_NO_STORES`, `NV_RS_NO_SHORT_PATHS`, `NV_RS_NO_WINDOWS` | The launcher's own test hooks: the game folder, where the player's Documents are read from, the system folder, no look in game stores, no short paths, no windows shown (`scripts/launcher`; `NV_RS_NO_WINDOWS` is also read in `host/save_out.rs`) | the player's own folders, windows shown |
+| `NV_RS_GAME`, `NV_RS_REAL_DOCUMENTS`, `NV_RS_SYSTEM_FOLDER`, `NV_RS_NO_STORES`, `NV_RS_NO_SHORT_PATHS`, `NV_RS_NO_WINDOWS`, `NV_RS_SETTINGS_CHOOSE` | The launcher's own test hooks: the game folder, where the player's Documents are read from, the system folder, no look in game stores, no short paths, no windows shown (`scripts/launcher`; `NV_RS_NO_WINDOWS` is also read in `host/save_out.rs`, and makes Settings.ps1 save without its window, with `NV_RS_SETTINGS_CHOOSE`'s `Name=Value;...` as the choices) | the player's own folders, windows shown |
 
 ### 4. Tests and diagnostics
 
@@ -223,7 +247,8 @@ GitHub Releases; the packages there from before 2026-11-03 are of the removed vi
   registry key, all read only, then a folder picker. `app\FalloutNV.exe --check` makes the same check
   of the game's program the game's start-up makes, so a refusal is said in a window before anything runs.
 - **The folders:** everything in `userdata\`: the game's Documents and AppData (one set per way of
-  playing, `game` and `mods`), the tables (`machine`), `logs`, `reports` and `settings.ini`. The table's
+  playing, `game` and `mods`), the tables (`machine`), `logs` and `reports`; an older preview's
+  `settings.ini` is moved into the two profiles' files once (`settings.ini.migrated`). The table's
   `SHGetFolderPathA` answers point at them. The game's own writes stay in memory as ever
   (`engine-platform` files.rs); only `NV_SAVE_OUT` and `NV_PREFS_OUT` reach the disk, inside `userdata`.
 - **The tables:** the adapter table is made again at every start (about 1.3 s here), so a new graphics
@@ -232,7 +257,7 @@ GitHub Releases; the packages there from before 2026-11-03 are of the removed vi
   default sound device changes. Without a sound device the table says so and the game goes on silent.
 - **The first settings:** the player's `Fallout.ini` and `FalloutPrefs.ini` copied once (read only); where
   the game's own launcher never ran, what it leaves behind: `Fallout_default.ini` and the `high.ini` preset,
-  from the game's folder. `sD3DDevice` is set to this PC's card at every start, because `main` asks for
+  from the game's folder; nv-rs's own sections in that `Fallout.ini`, once (above). `sD3DDevice` is set to this PC's card at every start, because `main` asks for
   `FalloutNVLauncher.exe` when it differs (`004da570`); `ShellExecuteA` answers for it that nothing started,
   but after that the game's start-up still stops, in the renderer (a run without `sD3DDevice`): the name must match.
 - **The name:** the program is simply named `FalloutNV.exe` in the package, in `app\`: no link is needed,
