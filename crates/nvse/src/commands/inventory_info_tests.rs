@@ -279,46 +279,74 @@ fn armor_health(e: &mut Engine) {
     e.register(FN_GET_HEALTH, |_, _| eax(100));
 }
 
+/// A stand-in of `TESObjectREFR::AddItem` that does what the game's does to the changes: the
+/// item's entry (the armor's, `NODES + 0x120`, made again when missing) gets the new list as its
+/// first stack and the count added.
+fn add_item_makes_the_entry(e: &mut Engine) {
+    e.register(FN_ADD_ITEM, |e, a| {
+        record(FN_ADD_ITEM, a);
+        let (form, list, count) = (a[1], a[2], a[3]);
+        let entry = NODES + 0x120;
+        let delta = if e.mem.u32(NODES + 0x10) == 0 {
+            0
+        } else {
+            e.mem.u32(entry + 4)
+        };
+        e.mem.set_u32(NODES + 0x10, entry);
+        e.mem.set_u32(entry + 8, form);
+        e.mem.set_u32(entry + 4, delta.wrapping_add(count));
+        tlist(e, NODES + 0x180, &[list]);
+        e.mem.set_u32(entry, NODES + 0x180);
+        Ret::default()
+    });
+}
+
 /// The same with the list guard row: the search goes on without xNVSE's null reads. The getters
 /// answer for the base container's armor (the armor's own base health, 100, read from the found
-/// form; no owner), each setter sets the armor's first stack as xNVSE would have, which with no
-/// stack is `AddItem` of one at the value (`AddItemHealthPercentOwner` takes it as a share of the
-/// base health, as xNVSE does), then marks the reference; `GetPaired` answers 0 (no armor is
-/// owned). The weapon, which has a stack, is not touched by any of it.
+/// form; no owner); `GetPaired` answers 0 (no armor is owned); the weapon, which has a stack, is
+/// not touched. Each setter goes xNVSE's way for an item not held: `AddItem` of one (marked as
+/// changed), then the first stack set, so the stack holds the value given (the base health for
+/// `SetTokenRef`, which gives none) and its owner, with a count change of 1.
 #[test]
 fn a_base_container_token_answers_with_the_list_guard() {
+    let setters: [(u32, Vec<Vec<u8>>, f64, u32); 3] = [
+        (0x1507, vec![r(1), z(50.0)], 50.0, 0),
+        (0x1509, vec![r(1), r(4)], 100.0, OWNER),
+        (0x150a, vec![r(1), z(30.0), r(4)], 30.0, OWNER),
+    ];
     for entry_missing in [false, true] {
-        let mut e = setup();
-        crate::commands::array::set_fix(&mut e, crate::commands::array::LIST_GUARD, true);
-        armor_health(&mut e);
-        if entry_missing {
-            e.mem.set_u32(NODES + 0x10, 0);
+        for (opcode, args, health, owner) in &setters {
+            let mut e = setup();
+            crate::commands::array::set_fix(&mut e, crate::commands::array::LIST_GUARD, true);
+            armor_health(&mut e);
+            add_item_makes_the_entry(&mut e);
+            if entry_missing {
+                e.mem.set_u32(NODES + 0x10, 0);
+            }
+            assert_eq!(run(&mut e, 0x1506, REF, &[r(1)]), 100.0);
+            assert_eq!(eval(&mut e, 0x1506, REF, ARMOR, 0), 100.0);
+            assert_eq!(run(&mut e, 0x1508, REF, &[r(1)]), 0.0);
+            assert_eq!(form_of(eval(&mut e, 0x1508, REF, ARMOR, 0)), 0);
+            assert_eq!(run(&mut e, 0x150b, REF, &[r(1), r(6)]), 0.0);
+            assert_eq!(eval(&mut e, 0x150b, REF, ARMOR, REF), 0.0);
+            run(&mut e, *opcode, REF, args);
+            let added = calls_to(FN_ADD_ITEM);
+            assert_eq!(added.len(), 1, "{opcode:#x}");
+            assert_eq!((added[0][1], added[0][3]), (ARMOR, 1));
+            assert_eq!(calls_to(FN_MARK).len(), 2, "added, then set");
+            let list = added[0][2];
+            assert_eq!(e.mem.f32(extra_of(&e, list, 0x25) + 0xc), *health as f32);
+            assert_eq!(run(&mut e, 0x1506, REF, &[r(1)]), *health, "{opcode:#x}");
+            let read_owner = form_of(run(&mut e, 0x1508, REF, &[r(1)]));
+            let want = if *owner == 0 { 0 } else { 0x0001_0005 };
+            assert_eq!(read_owner, want);
+            assert_eq!(e.mem.u32(NODES + 0x124), 1, "the count change");
+            assert_eq!(
+                run(&mut e, 0x1506, REF, &[r(2)]),
+                50.0,
+                "the weapon's stack"
+            );
         }
-        assert_eq!(run(&mut e, 0x1506, REF, &[r(1)]), 100.0);
-        assert_eq!(eval(&mut e, 0x1506, REF, ARMOR, 0), 100.0);
-        assert_eq!(run(&mut e, 0x1508, REF, &[r(1)]), 0.0);
-        assert_eq!(form_of(eval(&mut e, 0x1508, REF, ARMOR, 0)), 0);
-        run(&mut e, 0x1507, REF, &[r(1), z(0.4)]);
-        let added = calls_to(FN_ADD_ITEM);
-        assert_eq!(added.len(), 1);
-        assert_eq!((added[0][1], added[0][3]), (ARMOR, 1));
-        assert_eq!(e.mem.f32(extra_of(&e, added[0][2], 0x25) + 0xc), 40.0);
-        assert_eq!(calls_to(FN_MARK), vec![vec![REF, 0x0800_0000]]);
-        run(&mut e, 0x1509, REF, &[r(1), r(4)]);
-        let added = calls_to(FN_ADD_ITEM);
-        assert_eq!(added.len(), 1);
-        assert_eq!(e.mem.u32(extra_of(&e, added[0][2], 0x21) + 0xc), OWNER);
-        run(&mut e, 0x150a, REF, &[r(1), z(0.5), r(4)]);
-        assert_eq!(calls_to(FN_ADD_ITEM).len(), 1);
-        assert_eq!(calls_to(FN_MARK).len(), 2);
-        assert_eq!(e.mem.u32(NODES + 0x124), 1, "the armor's count delta");
-        assert_eq!(run(&mut e, 0x150b, REF, &[r(1), r(6)]), 0.0);
-        assert_eq!(eval(&mut e, 0x150b, REF, ARMOR, REF), 0.0);
-        assert_eq!(
-            run(&mut e, 0x1506, REF, &[r(2)]),
-            50.0,
-            "the weapon's stack"
-        );
     }
 }
 
@@ -382,9 +410,13 @@ fn get_paired_ends_where_the_index_stays() {
         let mut e = setup();
         crate::commands::array::set_fix(&mut e, crate::commands::array::LIST_GUARD, guard);
         tlist(&mut e, NODES + 0x40, &[XDATA[1], 0, XDATA[0]]);
+        SEARCHES.with(|s| s.set(0));
         let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run(&mut e, 0x150b, REF, &[r(2), r(6)])
         }));
+        // Stack 0 (no owner), then stack 1 (the empty node, the index left at 1): two questions,
+        // not a bound's worth.
+        assert_eq!(SEARCHES.with(|s| s.get()), 2);
         if guard {
             assert_eq!(answer.ok(), Some(0.0));
         } else {
@@ -393,9 +425,11 @@ fn get_paired_ends_where_the_index_stays() {
     }
 }
 
-/// Review of #384, point D: a base container entry without a form. xNVSE counts it, gives it as
-/// an item without a form, and its finders by id read through it (the game stops); with the
-/// inventory reference checks row it is passed over, as in `GetInventoryItems`.
+/// Review of #384, point D (and its second review, point 2): a base container entry without a
+/// form. xNVSE counts it and gives it as an item without a form (`GetNumItems` 3,
+/// `GetInventoryObject 1` none): the same in both presets. Its finders by id read through it
+/// (the game stops); with the inventory reference checks row they take it as another item, so
+/// `PickOneOf` finds the weapon in the changes.
 #[test]
 fn a_base_entry_without_a_form() {
     for checks in [false, true] {
@@ -403,18 +437,17 @@ fn a_base_entry_without_a_form() {
         invref::set_checks(&mut e, checks);
         e.mem.set_u32(NODES + 0x210 + 4, 0);
         tlist(&mut e, LIST_FORM + 0x18, &[WEAPON]);
+        assert_eq!(run(&mut e, 0x144e, REF, &[]), 3.0);
+        assert_eq!(run(&mut e, 0x144f, REF, &[n(1)]), 0.0);
+        assert_eq!(form_of(run(&mut e, 0x144f, REF, &[n(2)])), 0x0001_0002);
+        let pick = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run(&mut e, 0x159f, REF, &[r(5)])
+        }));
         if checks {
-            assert_eq!(run(&mut e, 0x144e, REF, &[]), 2.0);
-            assert_eq!(form_of(run(&mut e, 0x144f, REF, &[n(1)])), 0x0001_0002);
-            assert_eq!(form_of(run(&mut e, 0x159f, REF, &[r(5)])), 0x0001_0002);
+            assert_eq!(pick.ok().map(form_of), Some(0x0001_0002));
             assert_eq!(run(&mut e, 0x1506, REF, &[r(2)]), 50.0);
         } else {
-            assert_eq!(run(&mut e, 0x144e, REF, &[]), 3.0);
-            assert_eq!(run(&mut e, 0x144f, REF, &[n(1)]), 0.0);
-            let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                call(&mut e, 0x159f, REF, &[r(5)]);
-            }));
-            assert!(stop.is_err());
+            assert!(pick.is_err());
         }
     }
 }

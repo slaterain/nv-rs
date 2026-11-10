@@ -398,12 +398,6 @@ impl Info {
         }
         let mut num = e.mem.u32(fc) as i32;
         let form = e.mem.u32(fc + 4);
-        // A base container entry without a form: xNVSE counts it, and the finders read its id
-        // through the null form (the game stops). The inventory reference checks row
-        // (`NV_NVSE_INVREF_CHECK`) passes over it, as it does for `GetInventoryItems`.
-        if form == 0 && invref::checks(e) {
-            return false;
-        }
         if dynamic_cast(e, form, rtti::TES_FORM, rtti::TES_LEV_ITEM) != 0 {
             return false;
         }
@@ -486,7 +480,12 @@ fn find_ref_id(e: &mut Engine, info: &mut Info, list: u32, id: u32) -> Option<(u
     let mut cur = 0u32;
     let found = find_form_count(e, list, |e, fc| {
         if info.is_valid_form_count(e, fc) {
-            if e.mem.u32(e.mem.u32(fc + 4) + FORM_ID) == id {
+            // A base container entry without a form counts as an item, as in xNVSE; its id is
+            // read through the null form there (the game stops). The inventory reference checks
+            // row (`NV_NVSE_INVREF_CHECK`) takes it as another item instead.
+            let form = e.mem.u32(fc + 4);
+            let formless = form == 0 && invref::checks(e);
+            if !formless && e.mem.u32(form + FORM_ID) == id {
                 return true;
             }
             cur += 1;
@@ -557,6 +556,10 @@ struct Token {
     health: f32,
     owner: u32,
     rank: u32,
+    /// With the list guard row: found in the base container where xNVSE reads through a null
+    /// pointer, so no stack of it served the request (the setters then add it, as for an item
+    /// not held).
+    stackless: bool,
 }
 
 /// Where xNVSE's token search reads or writes through a null pointer, for an item of the reference's
@@ -570,6 +573,12 @@ fn null_read_in_the_token_search(e: &Engine, id: u32, what: &str) {
     if !super::array::fix_on(e, super::array::LIST_GUARD) {
         panic!("a token command on item {id:08X}, which is in its holder's base container: {what}, and the game stops");
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How often the token search ran (the tests count `GetPaired`'s questions).
+    static SEARCHES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), InventoryInfo.cpp:
@@ -588,6 +597,8 @@ fn item_with_health_and_owner(
     id: u32,
     mut index: Option<&mut i32>,
 ) -> Option<Token> {
+    #[cfg(test)]
+    SEARCHES.with(|s| s.set(s.get() + 1));
     if reference == 0 {
         return None;
     }
@@ -664,11 +675,14 @@ fn item_with_health_and_owner(
                 }
                 match index {
                     Some(i) => *i = i.wrapping_add(1),
-                    None => null_read_in_the_token_search(
-                        e,
-                        id,
-                        "xNVSE counts its place on through an index the command does not pass",
-                    ),
+                    None => {
+                        null_read_in_the_token_search(
+                            e,
+                            id,
+                            "xNVSE counts its place on through an index the command does not pass",
+                        );
+                        token.stackless = true;
+                    }
                 }
                 token.item = form;
                 return Some(token);
@@ -1097,7 +1111,9 @@ fn set_token_value_or_ref(e: &mut Engine, reference: u32, item: u32, value: f32,
         return;
     };
     let mut form = token.item;
-    if form == 0 {
+    // An item no stack served (with the list guard row, one only in the base container) goes the
+    // way of an item not held: added, then its first stack set.
+    if form == 0 || token.stackless {
         form = e.call(LOOKUP_FORM, &args![id]).u32();
         if form != 0 {
             if dynamic_cast(e, form, rtti::TES_FORM, rtti::TES_HEALTH_FORM) != 0 {
