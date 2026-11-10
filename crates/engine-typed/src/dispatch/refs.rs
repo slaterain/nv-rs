@@ -558,3 +558,53 @@ pub fn info_array_drop(e: &mut Engine, this: Ptr) -> Ptr {
 pub fn extra_kind(e: &mut Engine, this: Ptr) -> u8 {
     e.mem.u8(this.addr() + 4)
 }
+
+/// The bucket and compare functions of the game's maps keyed by a word (`NiTMapBase<UInt32, ..>`):
+/// the key modulo the bucket count at `+4` (`006c6a60`) and plain equality (`006b81d0`), what the
+/// maps of the save's references (vtables `010800a8` and `010800c8`) hold in slots 4 and 8.
+const WORD_MAP_HASH: u32 = 0x006c_6a60;
+const WORD_MAP_EQUAL: u32 = 0x006b_81d0;
+
+// Typed from 00853130
+/// A map's lookup (`thiscall(this, key, out)`, `NiTMapBase::GetAt`): the key's bucket from the map's
+/// hash (vtable `+4`), then the bucket's chain (the table at `+8`; a node is the next node, its key
+/// and its value), each node's key compared with the map's compare (vtable `+8`); the value of the
+/// first equal one stored through `out`, answering 1, else 0 with `out` untouched. The save's
+/// references map is one of these with 37 buckets: a quicksave in Goodsprings makes about 230,000
+/// lookups over about 2.8 million nodes, all on the main thread in the save's one frame, so the hash
+/// and the compare are called directly when the slots hold the word map's own (above) and by address
+/// otherwise; the chain is read after each compare, as in the exe.
+pub fn map_lookup(e: &mut Engine, this: Ptr, key: u32, out: Ptr<u32>) -> u8 {
+    let t = this.addr();
+    let hash = if crate::slot_target(e, t, 4) == WORD_MAP_HASH {
+        typed_call!(
+            pathing::FAMILY,
+            0x006c_6a60,
+            pathing::search::hash(e, this.cast(), key)
+        )
+    } else {
+        e.vcall(t, 4, &args![key]).u32()
+    };
+    let direct_equal = crate::slot_target(e, t, 8) == WORD_MAP_EQUAL;
+    let table = e.mem.u32(t.wrapping_add(8));
+    let mut node = e.mem.u32(table.wrapping_add(hash.wrapping_mul(4)));
+    while node != 0 {
+        let existing = e.mem.u32(node.wrapping_add(4));
+        let equal = if direct_equal {
+            typed_call!(
+                pathing::FAMILY,
+                0x006b_81d0,
+                pathing::search::keys_equal(e, this, key, existing)
+            )
+        } else {
+            e.vcall(t, 8, &args![key, existing]).u8()
+        };
+        if equal != 0 {
+            let value = e.mem.u32(node.wrapping_add(8));
+            e.mem.set_u32(out.addr(), value);
+            return 1;
+        }
+        node = e.mem.u32(node);
+    }
+    0
+}

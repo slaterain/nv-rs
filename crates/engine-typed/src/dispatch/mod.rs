@@ -12,7 +12,9 @@
 //!   updates, the collision object and its RTTI cast, a reference's 3D, the frustum test of a bound,
 //!   the geometry's immediate render;
 //! - [`refs`]: the counted references, the recursive spin lock, lists, arrays and the small getters
-//!   the AI, the inventory, the HUD's compass and the process levels call on every actor.
+//!   the AI, the inventory, the HUD's compass and the process levels call on every actor; and the
+//!   word map's lookup (`00853130`), which a quicksave makes about 230,000 times in its one frame
+//!   (2026-11-10: about 30 ms of the 120 ms save frame by address).
 //!
 //! Stage 1: the objects stay in guest memory where the game made them. Each function stays
 //! registered at its exe address; a call inside the family, or into another family, is a
@@ -158,5 +160,6 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0069_aee0, refs::order_array_new(Ptr) -> Ptr),
         entry!(0x0069_af10, refs::info_array_drop(Ptr) -> Ptr),
         entry!(0x004f_1540, refs::extra_kind(Ptr) -> u8),
+        entry!(0x0085_3130, refs::map_lookup(Ptr, u32, Ptr<u32>) -> u8),
     ]
 }

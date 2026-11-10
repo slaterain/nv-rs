@@ -1279,10 +1279,15 @@ impl PlayerMovement {
                 self.main_stage = Stage::Done(());
                 // The status line every 5 s of the run while main's frames go on (the viewer's own
                 // print stops when its walking stops).
-                if self
+                let status_line = self
                     .main_reported
-                    .map_or(true, |t| t.elapsed().as_secs() >= 5)
-                {
+                    .map_or(true, |t| t.elapsed().as_secs() >= 5);
+                // `NV_SAVE_OUT=DIR`, `NV_PREFS_OUT=FILE`: the saves and settings the game wrote,
+                // handed to the copy-out's thread at the end of the frame that wrote them
+                // ([`crate::save_out`]; one comparison while no file changed); copies that failed
+                // are made again at the status line.
+                crate::save_out::copy_saves(e, status_line);
+                if status_line {
                     self.main_reported = Some(std::time::Instant::now());
                     println!("{}", self.summary());
                     // `NV_MOVE_WATCH=addr,addr..`: the words at those exe addresses with it (a
@@ -1313,11 +1318,6 @@ impl PlayerMovement {
                         println!("threads: {}", engine::thread_host::describe(e));
                         let order = engine::thread_host::take_order(e);
                         println!("thread calls: {} order: {order}", e.kernel.threads.calls);
-                    }
-                    // `NV_SAVE_OUT=DIR` (a test aid): the saves the game wrote, copied out
-                    // ([`crate::save_out`]).
-                    for name in crate::save_out::copy_saves(e) {
-                        println!("NV_SAVE_OUT: copied {name}");
                     }
                 }
                 true
@@ -1351,14 +1351,15 @@ impl PlayerMovement {
                         format!("Game's main stopped in frame {frame}: {why}"),
                     ),
                 };
-                // `NV_SAVE_OUT` (a test aid): at a clean end the saves once more, so one written
-                // since the last status line is kept. Not at a stop: a save the stop cut short
-                // would be copied part-way and never completed. Before the line, which ends the
-                // log when the run ends here.
+                // `NV_SAVE_OUT`: at a clean end the saves once more, so one written in this last
+                // frame is kept, and the copy-out's thread finishes every copy (the process
+                // ends right after). At a stop only the copies already handed on are finished:
+                // a save the stop cut short would be copied part-way and never completed. Before
+                // the line, which ends the log when the run ends here.
                 if end.clean() {
-                    for name in crate::save_out::copy_saves(e) {
-                        println!("NV_SAVE_OUT: copied {name}");
-                    }
+                    crate::save_out::finish(e);
+                } else {
+                    crate::save_out::flush();
                 }
                 eprintln!("{line}");
                 self.main_stop = Some(line);

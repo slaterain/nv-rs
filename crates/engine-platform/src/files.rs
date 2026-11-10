@@ -63,6 +63,33 @@ pub struct Disk {
     /// The clock file times are stamped with when set (tests); otherwise the real clock
     /// ([`file_clock`]).
     pub clock: Option<u64>,
+    /// How many changes `files` and `deleted` have had in this run: a file's bytes written,
+    /// emptied, made, copied or renamed in, a file deleted or renamed away ([`Disk::changed`],
+    /// [`Disk::gone`]). The host's copy-out of saves (`NV_SAVE_OUT`) looks at it each frame, so
+    /// it has nothing to do while nothing changed.
+    pub changes: u64,
+    /// The value of [`Disk::changes`] at the last change of each file in `files`, by the same
+    /// keys: a file whose stamp is the same as at the last look has the same bytes.
+    pub stamps: BTreeMap<Vec<u8>, u64>,
+}
+
+impl Disk {
+    /// The file at key `k` changed (its bytes, or it was made or renamed in): a new stamp.
+    pub fn changed(&mut self, k: &[u8]) {
+        self.changes += 1;
+        match self.stamps.get_mut(k) {
+            Some(stamp) => *stamp = self.changes,
+            None => {
+                self.stamps.insert(k.to_vec(), self.changes);
+            }
+        }
+    }
+
+    /// The file at key `k` left `files` (deleted, or renamed away).
+    pub fn gone(&mut self, k: &[u8]) {
+        self.changes += 1;
+        self.stamps.remove(k);
+    }
 }
 
 /// A file's directory entry as `FindFirstFileA` describes it, for a file the game made or
@@ -392,6 +419,7 @@ pub fn delete_file_a(e: &mut Engine, name: Ptr) -> u32 {
             state!(e).disk.entries.remove(&k);
             state!(e).disk.player.remove(&k);
             state!(e).disk.deleted.insert(k.clone());
+            state!(e).disk.gone(&k);
             removed(e, &k, entry.as_ref());
             e.kernel.last_error = ERROR_SUCCESS;
             1
@@ -419,6 +447,7 @@ pub fn copy_file_a(e: &mut Engine, source: Ptr, target: Ptr, fail_if_exists: u32
     let k = key(&to);
     state!(e).disk.deleted.remove(&k);
     state!(e).disk.entries.remove(&k);
+    state!(e).disk.changed(&k);
     state!(e).disk.files.insert(k, data);
     e.kernel.last_error = ERROR_SUCCESS;
     1
@@ -479,6 +508,8 @@ pub fn move_file_a(e: &mut Engine, existing: Ptr, new: Ptr) -> u32 {
     state!(e).disk.entries.remove(&kf);
     state!(e).disk.player.remove(&kf);
     state!(e).disk.deleted.insert(kf.clone());
+    state!(e).disk.gone(&kf);
+    state!(e).disk.changed(&kt);
     removed(e, &kf, entry.as_ref());
     match entry {
         Some(entry) => {
@@ -1659,6 +1690,7 @@ fn adopt(e: &mut Engine, name: &[u8], k: &[u8], read: bool) {
         vec![]
     };
     state!(e).disk.files.insert(k.to_vec(), data);
+    state!(e).disk.changed(k);
     if let Some(entry) = entry {
         state!(e).disk.entries.insert(k.to_vec(), entry);
     }
@@ -1671,6 +1703,7 @@ fn adopt(e: &mut Engine, name: &[u8], k: &[u8], read: bool) {
 fn emptied(e: &mut Engine, k: &[u8]) {
     let now = file_clock(e);
     state!(e).disk.files.insert(k.to_vec(), vec![]);
+    state!(e).disk.changed(k);
     if let Some(entry) = state!(e).disk.entries.get_mut(k) {
         entry.size = 0;
         entry.accessed = now;
@@ -1691,6 +1724,7 @@ fn made(e: &mut Engine, name: &[u8], k: &[u8]) {
     };
     state!(e).disk.deleted.remove(k);
     state!(e).disk.files.insert(k.to_vec(), vec![]);
+    state!(e).disk.changed(k);
     let entry = Entry {
         name: last_part(name),
         short,
@@ -1808,15 +1842,18 @@ pub fn write_file(
             return 0;
         }
     };
-    let bytes = e.mem.bytes(buffer.addr(), count);
     let now = file_clock(e);
-    let data = state!(e).disk.files.entry(path).or_default();
+    let disk = &mut state!(e).disk;
+    disk.changed(&path);
+    let data = disk.files.entry(path).or_default();
     let start = position as usize;
-    let end = start + bytes.len();
+    let end = start + count as usize;
     if data.len() < end {
         data.resize(end, 0);
     }
-    data[start..end].copy_from_slice(&bytes);
+    // Straight from guest memory into the file's bytes (a save is about a hundred writes of 4 MB
+    // in all, in its one frame; through a copy of each write first it took about 2.5 ms).
+    e.mem.read(buffer.addr(), &mut data[start..end]);
     if let Some(file) = open_file(e, handle) {
         file.position = end as u64;
         // A write of no bytes changes no time a search shows (measured 2026-11-03: a file
@@ -2462,6 +2499,65 @@ mod tests {
         assert_eq!(e.kernel.last_error, ERROR_FILE_NOT_FOUND);
         assert_eq!(delete_file_a(&mut e, Ptr::new(dir)), 0);
         assert_eq!(e.kernel.last_error, ERROR_ACCESS_DENIED);
+    }
+
+    /// Every change to the run's files moves the change count and stamps the file
+    /// (`Disk::changes`, `Disk::stamps`, what the host's copy-out of saves looks at each frame);
+    /// reading changes nothing; a file renamed away or deleted has no stamp.
+    #[test]
+    fn every_change_to_the_runs_files_is_counted_and_stamped() {
+        let (mut e, name) = engine();
+        let path = |e: &mut Engine, p: &[u8]| {
+            let at = e.mem.alloc(0x40);
+            e.mem.set_cstr(at, p);
+            Ptr::new(at)
+        };
+        let dir = path(&mut e, br"Q:\nv-rs-stamp-dir");
+        create_directory_a(&mut e, dir, 0);
+        let changes = |e: &Engine| state_ref!(e).disk.changes;
+        let stamp = |e: &Engine, k: &[u8]| state_ref!(e).disk.stamps.get(k).copied();
+        let k = key(&full_path(&e, &e.mem.cstr(name)));
+        let before = changes(&e);
+        let h = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_WRITE | GENERIC_READ,
+            0,
+            0,
+            CREATE_NEW,
+            0,
+            0,
+        );
+        let made = changes(&e);
+        assert!(made > before, "made");
+        assert_eq!(stamp(&e, &k), Some(made));
+        let buffer = e.mem.alloc(4);
+        e.mem.write(buffer, b"ab");
+        write_file(&mut e, h, Ptr::new(buffer), 2, Ptr::new(0), 0);
+        let written = changes(&e);
+        assert!(written > made, "written");
+        assert_eq!(stamp(&e, &k), Some(written));
+        set_file_pointer(&mut e, h, 0, Ptr::new(0), 0);
+        read_file(&mut e, h, Ptr::new(buffer), 2, Ptr::new(0), 0);
+        assert_eq!(changes(&e), written, "a read changes nothing");
+        let copy = path(&mut e, br"Q:\nv-rs-stamp-dir\copy.txt");
+        copy_file_a(&mut e, Ptr::new(name), copy, 0);
+        let kc = key(br"q:\nv-rs-stamp-dir\copy.txt");
+        assert_eq!(stamp(&e, &kc), Some(changes(&e)), "copied in");
+        let moved = path(&mut e, br"Q:\nv-rs-stamp-dir\moved.txt");
+        move_file_a(&mut e, copy, moved);
+        let km = key(br"q:\nv-rs-stamp-dir\moved.txt");
+        assert_eq!(stamp(&e, &kc), None, "renamed away");
+        assert_eq!(stamp(&e, &km), Some(changes(&e)), "renamed in");
+        let at = changes(&e);
+        delete_file_a(&mut e, moved);
+        assert!(changes(&e) > at, "deleted");
+        assert_eq!(stamp(&e, &km), None);
+        assert_eq!(
+            state_ref!(e).disk.stamps.keys().collect::<Vec<_>>(),
+            state_ref!(e).disk.files.keys().collect::<Vec<_>>(),
+            "a stamp for every file of the run and none other"
+        );
     }
 
     #[test]

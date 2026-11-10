@@ -461,8 +461,10 @@ string routines; its tests are `crates/engine/tests/typed_crt.rs`.
 And `dispatch` (same crate, id 9): a speed batch picked by calls by address a frame in town, each function with the callers whose call sites
 make those calls, so they become Rust calls (the transforms' and matrices' arithmetic, the scene graph's
 controller and children walks and getters, counted references, the recursive spin lock, the AI's and the
-inventory's getters), stage 1 (its calls into `leaves`, `culling` and `pathing` go direct only when those
-are on); its tests are `crates/engine/tests/typed_dispatch.rs`. And `shader` (same crate, id 17): the shader
+inventory's getters; since 2026-11-10 also the word map's lookup `00853130`, which a quicksave makes about
+230,000 times in its frame through the save's 37-bucket references map), stage 1 (its calls into `leaves`,
+`culling` and `pathing` go direct only when those are on); its tests are
+`crates/engine/tests/typed_dispatch.rs`. And `shader` (same crate, id 17): the shader
 set-up and batch renderer (render state setters and caches, the batch renderer's lists and passes, the
 accumulator's registration and the shaders' per-geometry set-ups), stage 1; its tests are
 `crates/engine/tests/typed_shader.rs`. These six are on since their speed gate, taken together (2026-11-08,

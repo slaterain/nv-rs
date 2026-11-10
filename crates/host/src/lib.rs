@@ -316,6 +316,8 @@ impl Host {
         engine_platform::d3d9real::finish_recording(&mut self.engine);
         // The sound's recording too (`NV_SOUND_RECORD`): its WAV headers name every frame.
         engine_platform::dsound::finish_recording(&mut self.engine);
+        // The saves the run wrote, all on disk before the process ends (`NV_SAVE_OUT`).
+        save_out::finish(&self.engine);
         eprintln!("NV_REPEATABLE: {frames} main frames run; the run ends");
         true
     }
