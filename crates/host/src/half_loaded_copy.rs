@@ -94,6 +94,20 @@ pub fn in_transition<R>(e: &mut Engine, actor: u32, f: impl FnOnce(&mut Engine) 
     result
 }
 
+/// The first copies of the run are said in the log (a play report then shows the gap was met).
+fn note_copy(e: &Engine, old_process: u32) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SAID: AtomicU32 = AtomicU32::new(0);
+    if old_process == 0 || SAID.fetch_add(1, Ordering::Relaxed) >= 20 {
+        return;
+    }
+    let target = e.mem.u32(old_process.wrapping_add(0x40));
+    eprintln!(
+        "half-loaded actor's process copied to another level: its saved ids carried through \
+         (the target word {target:08x})"
+    );
+}
+
 /// Runs `f` as a transition's `Copy`.
 pub fn in_copy<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
     let saved = TRANSITION_OF_HALF_LOADED.with(Cell::get);
@@ -123,6 +137,9 @@ pub fn install(e: &mut Engine) {
     });
     e.register(PROCESS_COPY, |e, a| {
         let (this, other) = (a[0], a[1]);
+        if TRANSITION_OF_HALF_LOADED.with(Cell::get) {
+            note_copy(e, other);
+        }
         in_copy(e, |e| base_process_copy(e, Ptr::new(this), Ptr::new(other)));
         Ret::default()
     });
