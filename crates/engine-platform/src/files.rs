@@ -2643,7 +2643,16 @@ mod tests_player_files {
         let name = e.mem.alloc(0x200);
         e.mem.set_cstr(name, real.as_bytes());
         let open = |e: &mut Engine| {
-            create_file_a(e, Ptr::new(name), GENERIC_READ, 1, 0, OPEN_EXISTING, 0x80, 0)
+            create_file_a(
+                e,
+                Ptr::new(name),
+                GENERIC_READ,
+                1,
+                0,
+                OPEN_EXISTING,
+                0x80,
+                0,
+            )
         };
         let (a, b) = (open(&mut e), open(&mut e));
         assert!(open_file(&mut e, a).unwrap().kept.0.is_none());
@@ -2680,7 +2689,14 @@ mod tests_player_files {
         let back = (-10i32) as u32;
         set_file_pointer(&mut e, a, back, Ptr::new(0), 2);
         assert_eq!(
-            read_file(&mut e, a, Ptr::new(buffer), READ_SIZE_CHECK + 1, Ptr::new(count), 0),
+            read_file(
+                &mut e,
+                a,
+                Ptr::new(buffer),
+                READ_SIZE_CHECK + 1,
+                Ptr::new(count),
+                0
+            ),
             1
         );
         assert_eq!(e.mem.u32(count), 10);
