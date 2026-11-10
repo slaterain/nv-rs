@@ -841,6 +841,25 @@ mod tests {
         assert_eq!(apply_choices(empty, None).0, empty);
     }
 
+    /// Settings.ps1 shows a file whose `bBorderless` says nothing as the game's default: its one
+    /// literal for that (`Get-Setting 'Borderless' '1'`) must be the host table's default, so a
+    /// change of the table can't leave the window showing the other mode.
+    #[test]
+    fn settings_cmd_shows_the_tables_borderless_default() {
+        let script = include_str!("../../../distribution/Settings.ps1");
+        let shown: Vec<&str> = script
+            .split("Get-Setting 'Borderless' '")
+            .skip(1)
+            .map(|rest| rest.split('\'').next().unwrap_or(""))
+            .collect();
+        let table = rows().find(|row| row.1 == "bBorderless").unwrap().3;
+        assert_eq!(
+            shown,
+            [table],
+            "Settings.ps1's default for the display mode"
+        );
+    }
+
     /// The borderless window as the game decides it in a play run: the file's line, else the
     /// default, which is the host's table's and what the generated sections say.
     #[test]
