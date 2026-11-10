@@ -379,7 +379,7 @@ mod tests {
 
     struct World {
         e: Box<Engine>,
-        log: Log,
+        _log: Log,
         actor: u32,
         old: u32,
         target: u32,
@@ -393,6 +393,7 @@ mod tests {
     /// call answers 0. `fix` installs the row (else the move to high is the translation's).
     fn world(fix: bool, target_word: u32, package_words: [u32; 3]) -> World {
         let mut e = Box::new(Engine::new());
+        e.call_log = Some(Vec::new());
         let log: Log = Rc::default();
         let open = log.clone();
         e.on_open = Some(Rc::new(RefCell::new(
@@ -401,12 +402,33 @@ mod tests {
                 Some(Ret::default())
             },
         )));
+        // Every translated callee answers 0, as an untranslated one does, except the path's functions
+        // registered below (they replace these).
+        let mut translated = Vec::new();
+        engine::units::funcs(&mut translated);
+        // The one-word list and field readers the path walks with stay translated.
+        const KEPT: [u32; 6] = [
+            0x0082_56d0,
+            0x0068_15c0,
+            0x0072_6070,
+            0x0044_ddc0,
+            0x008d_6f30,
+            0x007a_f430,
+        ];
+        for (addr, function) in translated {
+            if KEPT.contains(&addr) {
+                e.register(addr, function);
+            } else {
+                e.register(addr, |_, _| Ret::default());
+            }
+        }
         e.map(0x0100_0000, 0x4_0000);
         e.map(0x011c_0000, 0x6_0000);
         // The save/load game, the save/load record, the player and the data handler: blank
         // objects (their flags read as clear).
         for global in [0x011d_df38u32, 0x011d_e45c, 0x011d_ea3c, 0x011c_3f2c] {
             let object = e.mem.alloc(0x1000);
+            e.mem.set_u32(object, ACTOR_VTABLE);
             e.mem.set_u32(global, object);
         }
         for vtable in [LOW_VTABLE, HIGH_VTABLE, ACTOR_VTABLE, TARGET_VTABLE] {
@@ -488,11 +510,14 @@ mod tests {
         e.register(TEST_IS_A_FOLLOWER, |_, _| 1u32.into_ret());
         e.register(TEST_RUNNING_PACKAGE, |_, a| (a[0] + 4).into_ret());
         let reserving = e.mem.alloc(0x20);
+        e.mem.set_u32(reserving, ACTOR_VTABLE);
         e.register_double(TEST_CURRENT_PACKAGE, move |_, _| reserving.into_ret());
         let target = e.mem.alloc(0x40);
         e.mem.set_u32(target, TARGET_VTABLE);
         e.mem.set_u32(target + 8, 0x10);
         e.mem.set_u32(TARGET_VTABLE + 0x1f4, TEST_LOCATION);
+        // The actor's position too (the move asks for it on the way).
+        e.mem.set_u32(ACTOR_VTABLE + 0x1f4, TEST_LOCATION);
         let location = e.mem.alloc(12);
         e.register_double(TEST_LOCATION, move |_, _| location.into_ret());
         e.register_double(LOOKUP_FORM_BY_ID, move |_, a| {
@@ -501,6 +526,14 @@ mod tests {
         let actor = e.mem.alloc(0x200);
         e.mem.set_u32(actor, ACTOR_VTABLE);
         e.mem.set_u32(actor + 8, LOADING_FLAG);
+        // Its base form, a blank object of the open vtable.
+        let form = e.mem.alloc(0x100);
+        e.mem.set_u32(form, ACTOR_VTABLE);
+        e.mem.set_u32(actor + 0x20, form);
+        // Its parent cell, a blank object (an interior: no worldspace).
+        let cell = e.mem.alloc(0x200);
+        e.mem.set_u32(cell, ACTOR_VTABLE);
+        e.mem.set_u32(actor + 0x40, cell);
         let old = e.mem.alloc(0x400);
         e.mem.set_u32(old, LOW_VTABLE);
         e.mem.set_u32(old + PROCESS_LEVEL, 3);
@@ -512,7 +545,7 @@ mod tests {
         e.mem.set_u32(actor + ACTOR_PROCESS, old);
         World {
             e,
-            log,
+            _log: log,
             actor,
             old,
             target,
@@ -525,12 +558,37 @@ mod tests {
             self.e.mem.u32(self.actor + ACTOR_PROCESS)
         }
         fn count(&self, addr: u32) -> usize {
-            self.log.borrow().iter().filter(|&&a| a == addr).count()
+            let log = self.e.call_log.as_ref().expect("the call log");
+            log.iter().filter(|c| c.0 == addr).count()
         }
         /// The move to high as the loading thread's `SetAnimation` makes it.
         fn move_to_high(&mut self) {
             let actor = self.actor;
-            self.e.call(MOVE_TO_HIGH, &args![actor]);
+            let e = &mut self.e;
+            if let Err(stop) =
+                catch_unwind(AssertUnwindSafe(|| e.call(MOVE_TO_HIGH, &args![actor])))
+            {
+                // Where it stopped, for a reader of a failing test.
+                let stack: Vec<String> = e.call_stack.iter().map(|a| format!("{a:08x}")).collect();
+                let last: Vec<String> = e
+                    .call_log
+                    .as_ref()
+                    .map(|log| {
+                        log.iter()
+                            .rev()
+                            .take(10)
+                            .map(|c| format!("{:08x}", c.0))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                eprintln!(
+                    "the move stopped in {}, after {}",
+                    stack.join(" < "),
+                    last.join(" < ")
+                );
+                e.call_stack.clear();
+                resume_unwind(stop);
+            }
         }
         /// The second pass on the actor: the gap closes, then the process's `InitLoadGame`.
         fn second_pass(&mut self) {
