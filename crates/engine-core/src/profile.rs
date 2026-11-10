@@ -3871,9 +3871,17 @@ mod tests {
             .to_string_lossy()
             .to_ascii_lowercase();
         assert_eq!(module, exe);
-        let (_, symbol) = sampler.name(readable_symbol as fn(&str) -> String as usize as u64 + 1);
-        // Named from the test program's PDB, found next to it.
-        assert!(symbol.ends_with("readable_symbol"), "{symbol}");
+        // Named from the test program's PDB, found next to it. The address is inside an
+        // assembly label of the native tests' fixtures, a global symbol in every build: a Rust
+        // function such as `readable_symbol` is one only when another code-generation unit uses
+        // it, so a build that merges units (CI's, without incremental builds or debug info) lists
+        // no name for it and the nearest public name before it answers instead.
+        extern "C" {
+            fn nv_profile_test_framed();
+        }
+        let framed = nv_profile_test_framed as unsafe extern "C" fn() as usize as u64;
+        let (_, symbol) = sampler.name(framed + 1);
+        assert_eq!(symbol, "nv_profile_test_framed");
         // The sampler never samples itself.
         assert_eq!(
             sampler.instruction_pointer(native::current_thread_id()),
