@@ -13,11 +13,22 @@
 //! up, and the splits refused (for the process, for a compound frustum in use, for want of
 //! helpers). Every five seconds the table so far is printed and cleared.
 //!
-//! Off (the default), each `Cull`, `Process` and `AppendVirtual` pays one relaxed load.
+//! Of a split it also counts what main's own walking took, how many helpers joined in and how
+//! long after the fork each took its first task.
+//!
+//! **The outline.** After each table, the next walk of the table's longest row is recorded object
+//! by object on main (every `OnVisible` but a geometry's, outside the split's tasks): its depth,
+//! vtable, `OnVisible`, children and time, inclusive, whether it split, and whether the replay ran
+//! it. The outline prints the objects that took 1% of the walk or more, and a sum of the nodes of
+//! `NV_PAR_RENDER_MIN` or more children by `OnVisible` and whether they split (what the split
+//! does not reach).
+//!
+//! Off (the default), each `Cull`, `Process`, `AppendVirtual` and `OnVisible` the typed process
+//! hands on pays one relaxed load.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU8, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering::Relaxed};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -67,6 +78,10 @@ struct Splits {
     fork_ns: u64,
     replay_ns: u64,
     busy_ns: u64,
+    main_ns: u64,
+    tasks: u64,
+    joined: u64,
+    wake_ns: u64,
     refused: [u64; 3],
 }
 
@@ -78,9 +93,50 @@ impl Splits {
         fork_ns: 0,
         replay_ns: 0,
         busy_ns: 0,
+        main_ns: 0,
+        tasks: 0,
+        joined: 0,
+        wake_ns: 0,
         refused: [0; 3],
     };
 }
+
+/// What one split took (`par::split`): its children, tasks and log entries; fork to join and the
+/// replay; the walkers' time walking added up, main's part of it; the helpers that joined in and
+/// the time from the fork to each one's first task, added up.
+pub(crate) struct SplitTimes {
+    pub children: usize,
+    pub tasks: usize,
+    pub entries: usize,
+    pub fork: Duration,
+    pub replay: Duration,
+    pub busy_ns: u64,
+    pub main_ns: u64,
+    pub joined: u64,
+    pub wake_ns: u64,
+}
+
+/// One object of an outline.
+#[derive(Clone, Copy)]
+struct Node {
+    depth: u32,
+    vtable: u32,
+    target: u32,
+    children: u32,
+    ns: u64,
+    split: bool,
+    replayed: bool,
+}
+
+/// The outline being recorded on this thread: the objects so far, the open ones (index, start).
+struct Outline {
+    nodes: Vec<Node>,
+    open: Vec<(usize, Instant)>,
+}
+
+/// An outline is wanted of the next walk with this key (set after each table).
+static OUTLINE_WANTED: AtomicBool = AtomicBool::new(false);
+static OUTLINE_KEY: Mutex<(u32, u32)> = Mutex::new((0, 0));
 
 thread_local! {
     /// The walks open on this thread, the outermost one's start and key (root vtable, process
@@ -93,6 +149,10 @@ thread_local! {
     static REG_OPEN: Cell<u32> = const { Cell::new(0) };
     /// The splits of the outermost walk so far.
     static SPLITS: Cell<Splits> = const { Cell::new(Splits::NONE) };
+    /// The outline of the outermost walk, when one is recorded.
+    static OUTLINE: RefCell<Option<Outline>> = const { RefCell::new(None) };
+    /// A split's replay runs on this thread.
+    static REPLAYING: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The walks of one root and process since the last table.
@@ -129,7 +189,22 @@ pub(crate) fn walk_begins(e: &engine_core::Engine, root: u32, process: u32) -> W
         n
     });
     if open == 0 {
-        KEY.with(|k| k.set((e.mem.u32(root), e.mem.u32(process))));
+        let key = (e.mem.u32(root), e.mem.u32(process));
+        KEY.with(|k| k.set(key));
+        if OUTLINE_WANTED.load(Relaxed)
+            && *OUTLINE_KEY
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                == key
+            && OUTLINE_WANTED.swap(false, Relaxed)
+        {
+            OUTLINE.with(|o| {
+                *o.borrow_mut() = Some(Outline {
+                    nodes: Vec::new(),
+                    open: Vec::new(),
+                })
+            });
+        }
         REG_NS.with(|r| r.set(0));
         REG_COUNT.with(|r| r.set(0));
         SPLITS.with(|s| s.set(Splits::NONE));
@@ -159,6 +234,9 @@ impl Drop for Walk {
         let reg_ns = REG_NS.with(Cell::get);
         let registered = REG_COUNT.with(Cell::get);
         let splits = SPLITS.with(Cell::get);
+        if let Some(outline) = OUTLINE.with(|o| o.borrow_mut().take()) {
+            print_outline(&outline.nodes, key, walk_ns);
+        }
         let mut guard = TABLE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -185,6 +263,10 @@ impl Drop for Walk {
         row.splits.fork_ns += splits.fork_ns;
         row.splits.replay_ns += splits.replay_ns;
         row.splits.busy_ns += splits.busy_ns;
+        row.splits.main_ns += splits.main_ns;
+        row.splits.tasks += splits.tasks;
+        row.splits.joined += splits.joined;
+        row.splits.wake_ns += splits.wake_ns;
         for (sum, n) in row.splits.refused.iter_mut().zip(splits.refused) {
             *sum += n;
         }
@@ -205,25 +287,144 @@ pub(crate) fn split_refused(why: Refused) {
     });
 }
 
-/// A split of the walk open on this thread was walked: its children and log entries, the time
-/// from fork to join, the replay's, and the walkers' time walking added up.
-pub(crate) fn split_walked(
-    children: usize,
-    entries: usize,
-    fork: Duration,
-    replay: Duration,
-    busy_ns: u64,
-) {
+/// A split of the walk open on this thread was walked ([`SplitTimes`]).
+pub(crate) fn split_walked(t: &SplitTimes) {
     SPLITS.with(|s| {
         let mut splits = s.get();
         splits.count += 1;
-        splits.children += children as u64;
-        splits.entries += entries as u64;
-        splits.fork_ns += nanos(fork);
-        splits.replay_ns += nanos(replay);
-        splits.busy_ns += busy_ns;
+        splits.children += t.children as u64;
+        splits.tasks += t.tasks as u64;
+        splits.entries += t.entries as u64;
+        splits.fork_ns += nanos(t.fork);
+        splits.replay_ns += nanos(t.replay);
+        splits.busy_ns += t.busy_ns;
+        splits.main_ns += t.main_ns;
+        splits.joined += t.joined;
+        splits.wake_ns += t.wake_ns;
         s.set(splits);
     });
+    // The outline's innermost open object is the node that split.
+    OUTLINE.with(|o| {
+        if let Some(o) = o.borrow_mut().as_mut() {
+            if let Some(&(at, _)) = o.open.last() {
+                o.nodes[at].split = true;
+            }
+        }
+    });
+}
+
+/// Held across an object's `OnVisible` while the probe is on (see [`object_begins`]).
+pub(crate) struct Object(bool);
+
+/// `object`'s `OnVisible` (`target`) starts on this thread: recorded when an outline is being
+/// recorded here and this thread does not walk a split's task.
+pub(crate) fn object_begins(e: &engine_core::Engine, object: u32, target: u32) -> Object {
+    if super::par::collecting() {
+        return Object(false);
+    }
+    OUTLINE.with(|o| {
+        let mut o = o.borrow_mut();
+        let Some(o) = o.as_mut() else {
+            return Object(false);
+        };
+        let children = u32::from(e.get(
+            engine_core::ptr::Ptr::<super::layout::NiNode>::new(object),
+            super::layout::NiNode::m_usSize,
+        ));
+        let at = o.nodes.len();
+        o.nodes.push(Node {
+            depth: u32::try_from(o.open.len()).unwrap_or(u32::MAX),
+            vtable: e.mem.u32(object),
+            target,
+            children,
+            ns: 0,
+            split: false,
+            replayed: REPLAYING.with(Cell::get),
+        });
+        o.open.push((at, Instant::now()));
+        Object(true)
+    })
+}
+
+impl Drop for Object {
+    fn drop(&mut self) {
+        if !self.0 {
+            return;
+        }
+        OUTLINE.with(|o| {
+            if let Some(o) = o.borrow_mut().as_mut() {
+                if let Some((at, start)) = o.open.pop() {
+                    o.nodes[at].ns = nanos(start.elapsed());
+                }
+            }
+        });
+    }
+}
+
+/// Held across a split's replay while the probe is on: what it runs is marked in an outline.
+pub(crate) struct Replay(bool);
+
+pub(crate) fn replay_begins() -> Replay {
+    Replay(REPLAYING.with(|r| r.replace(true)))
+}
+
+impl Drop for Replay {
+    fn drop(&mut self) {
+        REPLAYING.with(|r| r.set(self.0));
+    }
+}
+
+/// Prints an outline: the objects of 1% of the walk or more (at most 60), then the nodes of
+/// `NV_PAR_RENDER_MIN`+ children walked on main, by vtable and `OnVisible`, split or not.
+fn print_outline(nodes: &[Node], (root, process): (u32, u32), walk_ns: u64) {
+    let least = super::par::least_children();
+    let mut out = format!(
+        "NV_PAR_RENDER outline of a walk (root vtable {root:08x} process {process:08x}): {:.1} us, {} objects on main \
+         (geometries not counted); depth, vtable, OnVisible, children, us inclusive:",
+        walk_ns as f64 / 1000.0,
+        nodes.len()
+    );
+    let mut shown = 0;
+    for n in nodes {
+        if n.ns * 100 < walk_ns || shown == 60 {
+            continue;
+        }
+        shown += 1;
+        out.push_str(&format!(
+            "\n  {:indent$}{} {:08x} {:08x} {} {:.1}{}{}",
+            "",
+            n.depth,
+            n.vtable,
+            n.target,
+            n.children,
+            n.ns as f64 / 1000.0,
+            if n.split { " SPLIT" } else { "" },
+            if n.replayed { " (replay)" } else { "" },
+            indent = 2 * n.depth.min(12) as usize,
+        ));
+    }
+    // The big nodes by kind: (vtable, OnVisible, split) -> (count, children, ns).
+    let mut big: HashMap<(u32, u32, bool), (u64, u64, u64)> = HashMap::new();
+    for n in nodes.iter().filter(|n| n.children >= least && !n.replayed) {
+        let sum = big.entry((n.vtable, n.target, n.split)).or_default();
+        sum.0 += 1;
+        sum.1 += u64::from(n.children);
+        sum.2 += n.ns;
+    }
+    let mut big: Vec<_> = big.into_iter().collect();
+    big.sort_by_key(|(_, (_, _, ns))| std::cmp::Reverse(*ns));
+    out.push_str(&format!(
+        "\n  nodes of {least}+ children on main, by vtable and OnVisible:"
+    ));
+    for ((vtable, target, split), (count, children, ns)) in big {
+        out.push_str(&format!(
+            "\n    {vtable:08x} {target:08x} {}: {count} nodes, {:.0} children each, {:.1} us",
+            if split { "split" } else { "NOT split" },
+            children as f64 / count as f64,
+            ns as f64 / 1000.0
+        ));
+    }
+    println!("{out}");
 }
 
 /// Held across an `AppendVirtual` call while the probe is on.
@@ -289,7 +490,31 @@ fn print_table(table: &Table) {
                 a_walk(s.refused[1]),
                 a_walk(s.refused[2]),
             ));
+            out.push_str(&format!(
+                "\n      tasks {:.1} a split; main walked {:.1} us a walk of it; helpers that took a task {:.2} a split, \
+                 each its first {:.1} us after the split was made",
+                each(s.tasks),
+                per(s.main_ns),
+                each(s.joined),
+                s.wake_ns as f64 / s.joined.max(1) as f64 / 1000.0,
+            ));
         }
     }
+    // The next walk of the longest row gets an outline.
+    if let Some(((root, process), _)) = rows_longest(table) {
+        *OUTLINE_KEY
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = (root, process);
+        OUTLINE_WANTED.store(true, Relaxed);
+    }
     println!("{out}");
+}
+
+/// The table's row with the most walking time.
+fn rows_longest(table: &Table) -> Option<((u32, u32), Row)> {
+    table
+        .rows
+        .iter()
+        .max_by_key(|(_, r)| r.walk_ns)
+        .map(|(k, r)| (*k, *r))
 }

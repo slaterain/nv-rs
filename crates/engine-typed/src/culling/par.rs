@@ -126,9 +126,14 @@ struct Split {
     /// The check mode: each fade node's state before it runs is kept ([`FadeState`]).
     check: bool,
     saved: Mutex<Vec<FadeState>>,
-    /// The probe is on: the walkers' time walking is added up.
+    /// The probe is on: the walkers' time walking is added up (main's also on its own), and the
+    /// helpers that joined in with the time from the split's making to each one's first task.
     timed: bool,
+    born: Instant,
     busy_ns: AtomicU64,
+    main_ns: AtomicU64,
+    joined: AtomicU64,
+    wake_ns: AtomicU64,
 }
 
 impl Split {
@@ -139,7 +144,11 @@ impl Split {
             check,
             saved: Mutex::new(Vec::new()),
             timed,
+            born: Instant::now(),
             busy_ns: AtomicU64::new(0),
+            main_ns: AtomicU64::new(0),
+            joined: AtomicU64::new(0),
+            wake_ns: AtomicU64::new(0),
         })
     }
 
@@ -187,6 +196,7 @@ impl Split {
             }
         }
         let mut idle = 0u32;
+        let mut first = true;
         loop {
             let taken = {
                 let mut queue = self.queue();
@@ -215,6 +225,12 @@ impl Split {
                 continue;
             };
             idle = 0;
+            if first && self.timed && number != 0 {
+                self.joined.fetch_add(1, Relaxed);
+                self.wake_ns
+                    .fetch_add(super::probe::nanos(self.born.elapsed()), Relaxed);
+            }
+            first = false;
             let mut walking = Walking(self, false);
             if number == 0 {
                 MAIN_CHUNKS.fetch_add(1, Relaxed);
@@ -226,8 +242,11 @@ impl Split {
             let started = self.timed.then(Instant::now);
             let log = walk_chunk(w, &task.children, local);
             if let Some(started) = started {
-                self.busy_ns
-                    .fetch_add(super::probe::nanos(started.elapsed()), Relaxed);
+                let ns = super::probe::nanos(started.elapsed());
+                self.busy_ns.fetch_add(ns, Relaxed);
+                if number == 0 {
+                    self.main_ns.fetch_add(ns, Relaxed);
+                }
             }
             if self.check {
                 let mine = SAVED.with(|s| s.borrow_mut().take()).unwrap_or_default();
@@ -375,6 +394,11 @@ pub fn counts_for_tests() -> (u32, u32, u32, u32, u32) {
         MAIN_CHUNKS.load(Relaxed),
         BELOW.load(Relaxed),
     )
+}
+
+/// The least children a node must have to split (`NV_PAR_RENDER_MIN`).
+pub(crate) fn least_children() -> u32 {
+    MIN_CHILDREN.load(Relaxed)
 }
 
 /// Whether a node of `count` children may be split or, inside a task, made tasks of (the switch
@@ -674,6 +698,7 @@ pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32)
         println!("NV_PAR_RENDER: {walks} splits walked in tasks");
     }
     let mut logs = tasks.logs();
+    let task_count = logs.len();
     if check {
         // The fade nodes as they were before the first walk: the second steps them once again.
         let saved = std::mem::take(
@@ -699,15 +724,21 @@ pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32)
         logs = serial;
         top = logs.len();
     }
+    let replaying = timed.then(super::probe::replay_begins);
     let entries = replay_tasks(e, process, &logs, 0..top);
+    drop(replaying);
     if let (Some(forked), Some(joined)) = (forked, joined) {
-        super::probe::split_walked(
-            children.len(),
+        super::probe::split_walked(&super::probe::SplitTimes {
+            children: children.len(),
+            tasks: task_count,
             entries,
-            joined.duration_since(forked),
-            joined.elapsed(),
-            tasks.busy_ns.load(Relaxed),
-        );
+            fork: joined.duration_since(forked),
+            replay: joined.elapsed(),
+            busy_ns: tasks.busy_ns.load(Relaxed),
+            main_ns: tasks.main_ns.load(Relaxed),
+            joined: tasks.joined.load(Relaxed),
+            wake_ns: tasks.wake_ns.load(Relaxed),
+        });
     }
     true
 }

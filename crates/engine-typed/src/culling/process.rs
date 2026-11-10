@@ -125,7 +125,11 @@ fn on_visible(e: &mut Engine, this: Ptr<BSCullingProcess>, object: Ptr<NiAVObjec
 /// (`00c46f60`), else through the vtable.
 #[inline(always)]
 pub(crate) fn object_on_visible(e: &mut Engine, object: Ptr<NiAVObject>, process: u32) {
-    match crate::slot_target(e, object.addr(), SLOT_ON_VISIBLE) {
+    let target = crate::slot_target(e, object.addr(), SLOT_ON_VISIBLE);
+    // `NV_PAR_RENDER=time`: an outline records every object but a geometry.
+    let _outline = (super::probe::on() && target != 0x00a7_fd90)
+        .then(|| super::probe::object_begins(e, object.addr(), target));
+    match target {
         0x00a5_dbe0 => typed_call!(
             FAMILY,
             0x00a5_dbe0,
