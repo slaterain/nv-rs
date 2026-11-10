@@ -175,7 +175,10 @@ fn actor_of_form(e: &mut Engine, form: u32) -> u32 {
 pub(crate) fn tlist_items(e: &Engine, head: u32) -> Vec<u32> {
     let mut items = Vec::new();
     let mut node = head;
-    while !(node == 0 || (e.mem.u32(node) == 0 && e.mem.u32(node + 4) == 0)) {
+    let mut walked = 0;
+    while !(node == 0 || (e.mem.u32(node) == 0 && e.mem.u32(node + 4) == 0))
+        && crate::invref::list_step(e, &mut walked)
+    {
         let item = e.mem.u32(node);
         if item != 0 {
             items.push(item);
