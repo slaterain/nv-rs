@@ -15,8 +15,8 @@
 // also stops `u32 as u8` and `f64 as f32`: those go through a named helper with a local `allow`.
 #![deny(clippy::cast_possible_truncation)]
 
-pub mod crt;
 pub mod collision;
+pub mod crt;
 pub mod culling;
 pub mod dispatch;
 pub mod draw;

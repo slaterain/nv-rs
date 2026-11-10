@@ -7,8 +7,10 @@
 use super::FAMILY;
 use crate::{culling, dispatch};
 use engine_core::ptr::Ptr;
-use engine_core::x87::{x87_add, x87_div, x87_load32, x87_m32, x87_mul, x87_quiet_bits, x87_store32};
 use engine_core::x87::x87_sub;
+use engine_core::x87::{
+    x87_add, x87_div, x87_load32, x87_m32, x87_mul, x87_quiet_bits, x87_store32,
+};
 use engine_core::{args, typed_call, Engine};
 
 /// The Havok world of a body (`00c87a40`), the object test (`0047b470`) and the motion type test
@@ -212,7 +214,11 @@ fn spill(v: f64) -> f64 {
 
 /// The square root (`00ec6040`, the crt family's) of `x`.
 fn root(e: &mut Engine, x: f64) -> f64 {
-    typed_call!(crate::crt::FAMILY, 0x00ec_6040, crate::crt::math::ci_sqrt(e, x))
+    typed_call!(
+        crate::crt::FAMILY,
+        0x00ec_6040,
+        crate::crt::math::ci_sqrt(e, x)
+    )
 }
 
 // Typed from 00a6df40

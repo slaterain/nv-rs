@@ -323,28 +323,25 @@ fn collision_quaternion_from_rotation() {
 #[test]
 fn collision_linear_velocity() {
     // No controller, a controller without a proxy, a proxy.
-    Diff::new(entry!(
-        0x0056_0d80,
-        body::linear_velocity(Ptr<_>) -> Ptr<_>
-    ))
-    .common()
-    .inputs(&[Input::Of(&[0, 1, 2])])
-    .setup(|e, case| {
-        stand_ins(e, 0);
-        let r = block(e, 0x40, &[0; 16]);
-        if case.word(0) != 0 {
-            let proxy = if case.word(0) == 2 {
-                e.mem.alloc(0x200)
-            } else {
-                0
-            };
-            let controller = block(e, 0x10, &[0, 0, proxy]);
-            e.mem.set_u32(r + 8, controller);
-        }
-        vec![r]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x0056_0d80, body::linear_velocity(Ptr<_>) -> Ptr<_>))
+        .common()
+        .inputs(&[Input::Of(&[0, 1, 2])])
+        .setup(|e, case| {
+            stand_ins(e, 0);
+            let r = block(e, 0x40, &[0; 16]);
+            if case.word(0) != 0 {
+                let proxy = if case.word(0) == 2 {
+                    e.mem.alloc(0x200)
+                } else {
+                    0
+                };
+                let controller = block(e, 0x10, &[0, 0, proxy]);
+                e.mem.set_u32(r + 8, controller);
+            }
+            vec![r]
+        })
+        .run()
+        .assert_same();
 }
 
 #[test]
@@ -398,7 +395,11 @@ fn collision_ni_to_hk() {
             if case.word(0) == 2 {
                 // The body's position: the node's translation (near) or two away (far).
                 let n = e.mem.u32(c + 8);
-                let t = [e.mem.u32(n + 0x8c), e.mem.u32(n + 0x90), e.mem.u32(n + 0x94)];
+                let t = [
+                    e.mem.u32(n + 0x8c),
+                    e.mem.u32(n + 0x90),
+                    e.mem.u32(n + 0x94),
+                ];
                 let position = if case.word(5) != 0 {
                     [t[0], t[1], t[2], 0]
                 } else {
@@ -472,48 +473,46 @@ fn collision_update_world_data() {
     // The update state; the set byte; the Havok object: none, without or with the flag bit 6; the flags
     // byte (move, keyframed); the blend amount; the motion mode; a node or none; the slot +0xa4 the
     // typed hktoNiTransform or a stand-in.
-    Diff::new(entry!(
-        0x00c8_17d0,
-        blend::update_world_data(Ptr<_>, u32)
-    ))
-    .common()
-    .inputs(&inputs(&[
-        &[
-            Input::Of(&[0, 2, 3]),
-            Input::Flag,
-            Input::Of(&[0, 1, 2]),
-            Input::Of(&[0, 1, 0x40, 0x41]),
-            Input::Of(&[ONE, HALF]),
-            Input::Of(&[0, 1]),
-            Input::Flag,
-            Input::Flag,
-        ],
-        &P3,
-    ]))
-    .max_cases(256)
-    .setup(|e, case| {
-        stand_ins(e, case.word(0));
-        let c = object(e, 0x28);
-        if case.word(6) != 0 {
-            let n = node(e, case, 0, 8);
-            e.mem.set_u32(c + 8, n);
-        }
-        e.mem.set_u16(c + 0xc, case.word(3) as u16);
-        e.mem.set_u8(c + 0x14, case.word(1) as u8);
-        if case.word(2) != 0 {
-            // The Havok object (+0x10): its word +0x10 is what the flag test reads.
-            let h = havok_body(e, 1, 0, [ONE, TWO, HALF, 0]);
-            e.mem.set_u32(h + 0x10, if case.word(2) == 2 { 0x40 } else { 0 });
-            e.mem.set_u32(c + 0x10, h);
-        }
-        words(e, c + 0x18, &[case.word(4), 0, case.word(5)]);
-        if case.word(7) != 0 {
-            set_slot(e, c, 0xa4, BLEND_HK_TO_NI);
-        }
-        vec![c, 0x55]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x00c8_17d0, blend::update_world_data(Ptr<_>, u32)))
+        .common()
+        .inputs(&inputs(&[
+            &[
+                Input::Of(&[0, 2, 3]),
+                Input::Flag,
+                Input::Of(&[0, 1, 2]),
+                Input::Of(&[0, 1, 0x40, 0x41]),
+                Input::Of(&[ONE, HALF]),
+                Input::Of(&[0, 1]),
+                Input::Flag,
+                Input::Flag,
+            ],
+            &P3,
+        ]))
+        .max_cases(256)
+        .setup(|e, case| {
+            stand_ins(e, case.word(0));
+            let c = object(e, 0x28);
+            if case.word(6) != 0 {
+                let n = node(e, case, 0, 8);
+                e.mem.set_u32(c + 8, n);
+            }
+            e.mem.set_u16(c + 0xc, case.word(3) as u16);
+            e.mem.set_u8(c + 0x14, case.word(1) as u8);
+            if case.word(2) != 0 {
+                // The Havok object (+0x10): its word +0x10 is what the flag test reads.
+                let h = havok_body(e, 1, 0, [ONE, TWO, HALF, 0]);
+                e.mem
+                    .set_u32(h + 0x10, if case.word(2) == 2 { 0x40 } else { 0 });
+                e.mem.set_u32(c + 0x10, h);
+            }
+            words(e, c + 0x18, &[case.word(4), 0, case.word(5)]);
+            if case.word(7) != 0 {
+                set_slot(e, c, 0xa4, BLEND_HK_TO_NI);
+            }
+            vec![c, 0x55]
+        })
+        .run()
+        .assert_same();
 }
 
 /// The culling family's `NiAVObject::UpdateWorldData` with a collision object whose slot +0x90 holds
