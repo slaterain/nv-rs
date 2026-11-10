@@ -198,7 +198,11 @@ fn owners_and_ranks() {
     let rank = e.mem.u32(DOOR + 0x44 + 0x100 + 4 * 0x23);
     assert_eq!(e.mem.u32(rank), 0x0101_58cc);
     assert_eq!(run(&mut e, 0x14f9, DOOR, &[n(0)]), 0.0);
-    assert_eq!(e.mem.u32(DOOR + 0x44 + 0x100 + 4 * 0x23), rank, "0 adds nothing");
+    assert_eq!(
+        e.mem.u32(DOOR + 0x44 + 0x100 + 4 * 0x23),
+        rank,
+        "0 adds nothing"
+    );
 }
 
 /// The actor base flag halves (the argument, else the caller's base as an actor base) and the
