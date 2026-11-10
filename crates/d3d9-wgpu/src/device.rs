@@ -3247,7 +3247,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
         };
         let t = std::time::Instant::now();
-        self.make_modules(tasks, threads, &mut step);
+        self.make_modules(tasks, threads, false, &mut step);
         let modules_took = t.elapsed();
         let mut jobs = Vec::new();
         for (r, (vk, pk)) in ready.iter().zip(&keys) {
@@ -3356,11 +3356,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     }
 
     /// Makes the modules of `tasks` (each once, on `threads` worker threads; 1: here) and keeps
-    /// them; a module wgpu or the converter refuses is kept as none and said once.
+    /// them; a module wgpu or the converter refuses is kept as none and said once. `on_draw`: for
+    /// a draw's pipeline, counted in the pipeline report (modules made ahead have a line of their
+    /// own, [`Device::prepare_listed`]).
     fn make_modules(
         &mut self,
         mut tasks: Vec<ModuleTask>,
         threads: usize,
+        on_draw: bool,
         tick: &mut dyn FnMut(usize),
     ) {
         let mut seen = HashSet::new();
@@ -3380,7 +3383,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             tick,
         );
         for (t, (m, took)) in tasks.into_iter().zip(made) {
-            self.made.add_module(t.convert, took);
+            if on_draw {
+                self.made.add_module(t.convert, took);
+            }
             let what = match t.key {
                 ModKey::V(_) => "a vertex shader",
                 ModKey::P(_) => "a pixel shader",
@@ -3527,7 +3532,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.made_on_draws += 1;
         let started = std::time::Instant::now();
         let (vkey, pkey, tasks) = self.module_tasks(key, vs, ps, inputs, varyings);
-        self.make_modules(tasks, 1, &mut |_| {});
+        self.make_modules(tasks, 1, true, &mut |_| {});
         let job = self.pipeline_job(key, ps, &vkey, &pkey, attributes, topology, samplers)?;
         let t = std::time::Instant::now();
         let made = build_pipeline(
