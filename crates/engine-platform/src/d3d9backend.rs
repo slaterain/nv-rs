@@ -2167,10 +2167,25 @@ mod tests {
     /// PROBE: what the probe's own warm-up draws and under what.
     struct ProbeWarm {
         singles: bool,
-        pairs: Vec<(u32, u32)>,
+        pairs: Vec<ProbePair>,
         overrides: Vec<(u32, u32)>,
         target: (u32, u32),
         depth: u32,
+        /// `FS_LAYOUT=1`: a pair's draw with the declaration it is first drawn with.
+        layout: bool,
+        /// `FS_TEX=1`: with the textures bound at that draw (those made by then).
+        textures: bool,
+        /// `FS_STATES=1`: under every render state as set at that draw.
+        states: bool,
+    }
+
+    /// PROBE: a pair as the recording first draws with it.
+    struct ProbePair {
+        vs: u32,
+        ps: u32,
+        declaration: u32,
+        textures: Vec<(u32, u32)>,
+        render: Vec<(u32, u32)>,
     }
 
     /// PROBE: one point into a 1x1 target of the probe's with every shader in `shaders` (beside a
@@ -2181,6 +2196,7 @@ mod tests {
         device: u32,
         bind: &Bindings,
         render: &std::collections::HashMap<u32, u32>,
+        game_textures: &std::collections::HashMap<u32, u32>,
         shaders: &[(u32, u8)],
         p: &ProbeWarm,
     ) -> (u32, u32, std::time::Duration) {
@@ -2257,17 +2273,50 @@ mod tests {
                     }
                 }
             }
-            for &(vs, ps) in &p.pairs {
-                let r = match (b.objects.get(&vs), b.objects.get(&ps)) {
-                    (Some(Object::VertexShader(vs)), Some(Object::PixelShader(ps))) => d
-                        .SetVertexShader(vs)
-                        .and_then(|()| d.SetPixelShader(ps))
-                        .and_then(|()| draw()),
-                    _ => {
-                        failed += 1;
-                        continue;
-                    }
+            let big = [0u32; 64];
+            let mut touched_states: Vec<u32> = vec![];
+            let mut touched_samplers: Vec<u32> = vec![];
+            for pair in &p.pairs {
+                let (Some(Object::VertexShader(vs)), Some(Object::PixelShader(ps))) =
+                    (b.objects.get(&pair.vs), b.objects.get(&pair.ps))
+                else {
+                    failed += 1;
+                    continue;
                 };
+                if p.layout {
+                    match b.objects.get(&pair.declaration) {
+                        Some(Object::Declaration(decl)) => {
+                            let _ = d.SetVertexDeclaration(decl);
+                        }
+                        _ => {
+                            let _ = d.SetVertexDeclaration(&t.declaration);
+                        }
+                    }
+                }
+                if p.textures {
+                    for &(sampler, texture) in &pair.textures {
+                        let base: Option<IDirect3DBaseTexture9> = match b.objects.get(&texture) {
+                            Some(Object::Texture(x)) => x.cast().ok(),
+                            Some(Object::Cube(x)) => x.cast().ok(),
+                            _ => None,
+                        };
+                        let _ = d.SetTexture(sampler, base.as_ref());
+                        touched_samplers.push(sampler);
+                    }
+                }
+                if p.states {
+                    for &(state, value) in &pair.render {
+                        let _ = d.SetRenderState(D3DRENDERSTATETYPE(state as i32), value);
+                        touched_states.push(state);
+                    }
+                }
+                let r = d
+                    .SetVertexShader(vs)
+                    .and_then(|()| d.SetPixelShader(ps))
+                    .and_then(|()| {
+                        // Room for any of the game's layouts on stream 0 (one vertex).
+                        d.DrawPrimitiveUP(D3DPT_POINTLIST, 1, big.as_ptr().cast(), 128)
+                    });
                 if r.is_ok() {
                     done += 1;
                 } else {
@@ -2275,12 +2324,21 @@ mod tests {
                 }
             }
             let _ = d.EndScene();
-            for &(state, _) in &p.overrides {
+            touched_states.extend(p.overrides.iter().map(|&(s, _)| s));
+            for state in touched_states {
                 let value = render
                     .get(&state)
                     .copied()
                     .unwrap_or_else(|| probe_default(state));
                 let _ = d.SetRenderState(D3DRENDERSTATETYPE(state as i32), value);
+            }
+            for sampler in touched_samplers {
+                let texture = game_textures.get(&sampler).copied().unwrap_or(0);
+                b.device_command(Cmd::SetTexture {
+                    device,
+                    sampler,
+                    texture,
+                });
             }
         }
         b.rebind(device, bind);
@@ -2303,18 +2361,16 @@ mod tests {
         extern "system" {
             fn GetCurrentProcess() -> isize;
             fn GetCurrentThread() -> isize;
-            fn GetProcessTimes(h: isize, c: *mut u64, e: *mut u64, k: *mut u64, u: *mut u64)
-                -> i32;
-            fn GetThreadTimes(h: isize, c: *mut u64, e: *mut u64, k: *mut u64, u: *mut u64)
-                -> i32;
+            fn QueryProcessCycleTime(h: isize, cycles: *mut u64) -> i32;
+            fn QueryThreadCycleTime(h: isize, cycles: *mut u64) -> i32;
         }
-        // CPU time so far in 100 ns: (the whole process, this thread).
+        // CPU cycles so far (exact, unlike the 15.6 ms ticks of the times): (the whole process,
+        // this thread).
         let cpu = || unsafe {
-            let (mut c, mut e, mut k, mut u) = (0u64, 0u64, 0u64, 0u64);
-            GetProcessTimes(GetCurrentProcess(), &mut c, &mut e, &mut k, &mut u);
-            let process = k + u;
-            GetThreadTimes(GetCurrentThread(), &mut c, &mut e, &mut k, &mut u);
-            (process, k + u)
+            let (mut process, mut thread) = (0u64, 0u64);
+            QueryProcessCycleTime(GetCurrentProcess(), &mut process);
+            QueryThreadCycleTime(GetCurrentThread(), &mut thread);
+            (process, thread)
         };
         let Ok(path) = std::env::var("FS_REC") else {
             return;
@@ -2349,12 +2405,23 @@ mod tests {
             overrides: pairs_of("FS_RS"),
             target: pairs_of("FS_RT").first().copied().unwrap_or((21, 0)),
             depth: num("FS_DEPTH", 0),
+            layout: num("FS_LAYOUT", 0) != 0,
+            textures: num("FS_TEX", 0) != 0,
+            states: num("FS_STATES", 0) != 0,
         };
+        // `FS_ONLY=i,j,..`: only those of the pairs found (numbered from 0 in first-use order).
+        let only: Option<Vec<usize>> = std::env::var("FS_ONLY").ok().map(|v| {
+            v.split(',')
+                .map(|x| x.trim().parse().expect("a pair's number"))
+                .collect()
+        });
         let out_path = std::env::var("FS_OUT").expect("FS_OUT");
         let bytes = std::fs::read(&path).expect("the recording");
         // The pairs the recording draws with in the presents asked for, in first-use order.
         if let Some((first, last)) = pair_presents {
-            let (mut vs, mut ps, mut presents) = (0u32, 0u32, 0u32);
+            let (mut vs, mut ps, mut presents, mut decl) = (0u32, 0u32, 0u32, 0u32);
+            let mut tex: std::collections::BTreeMap<u32, u32> = Default::default();
+            let mut rs: std::collections::BTreeMap<u32, u32> = Default::default();
             for cmd in d3d9_stream::wire::commands(&bytes).expect("a stream") {
                 let Ok(cmd) = cmd else { break };
                 match cmd {
@@ -2365,15 +2432,30 @@ mod tests {
                             vs = shader;
                         }
                     }
+                    Cmd::SetVertexDeclaration { declaration, .. } => decl = declaration,
+                    Cmd::SetTexture {
+                        sampler, texture, ..
+                    } => {
+                        tex.insert(sampler, texture);
+                    }
+                    Cmd::SetRenderState { state, value, .. } => {
+                        rs.insert(state, value);
+                    }
                     Cmd::DrawPrimitive { .. }
                     | Cmd::DrawIndexedPrimitive { .. }
                     | Cmd::DrawPrimitiveUp { .. }
                         if presents >= first
                             && vs != 0
                             && ps != 0
-                            && !probe.pairs.contains(&(vs, ps)) =>
+                            && !probe.pairs.iter().any(|p| (p.vs, p.ps) == (vs, ps)) =>
                     {
-                        probe.pairs.push((vs, ps));
+                        probe.pairs.push(ProbePair {
+                            vs,
+                            ps,
+                            declaration: decl,
+                            textures: tex.iter().map(|(&s, &t)| (s, t)).collect(),
+                            render: rs.iter().map(|(&s, &v)| (s, v)).collect(),
+                        });
                     }
                     Cmd::Present { .. } => {
                         presents += 1;
@@ -2387,8 +2469,24 @@ mod tests {
         }
         let _turn = super::super::d3d9real::real_turn();
         let window = super::super::d3d9real::test_window().expect("a window");
+        if let Some(only) = &only {
+            let mut i = 0;
+            probe.pairs.retain(|_| {
+                i += 1;
+                only.contains(&(i - 1))
+            });
+        }
         let mut b = RealBackend::new().with_warm(warm);
         let mut out = std::io::BufWriter::new(std::fs::File::create(out_path).unwrap());
+        for (i, p) in probe.pairs.iter().enumerate() {
+            writeln!(
+                out,
+                "pair {i}: vs {:#x} ps {:#x} declaration {:#x} textures {:x?}",
+                p.vs, p.ps, p.declaration, p.textures
+            )
+            .unwrap();
+        }
+        let mut game_textures = std::collections::HashMap::new();
         let mut presents = 0u32;
         let mut frame_start = Instant::now();
         let mut cpu_start = cpu();
@@ -2462,6 +2560,11 @@ mod tests {
                 Cmd::SetRenderState { state, value, .. } => {
                     render.insert(*state, *value);
                 }
+                Cmd::SetTexture {
+                    sampler, texture, ..
+                } => {
+                    game_textures.insert(*sampler, *texture);
+                }
                 Cmd::CreateShader { shader, tokens, .. } => {
                     let major = (tokens.to_words().first().copied().unwrap_or(0) >> 8) as u8;
                     shaders.retain(|(s, _)| s != shader);
@@ -2496,7 +2599,15 @@ mod tests {
             if is_present {
                 if at != 0 && presents == at {
                     let (done, failed, took) =
-                        probe_warm(&mut b, the_device, &bind, &render, &shaders, &probe);
+                        probe_warm(
+                            &mut b,
+                            the_device,
+                            &bind,
+                            &render,
+                            &game_textures,
+                            &shaders,
+                            &probe,
+                        );
                     writeln!(
                         out,
                         "probe warm-up after present {presents}: {done} draws ({failed} refused) in {:.1} ms; singles {} pairs {} overrides {:?} target {:?} depth {}",
@@ -2519,7 +2630,8 @@ mod tests {
                     "present {presents}\t{:.3}\t{:.3}\t{:.3}\t{draws}\t{}",
                     wall.as_secs_f64() * 1000.0,
                     inside.as_secs_f64() * 1000.0,
-                    others as f64 / 10_000.0,
+                    // Million cycles (about 0.3 ms each at this PC's clock).
+                    others as f64 / 1_000_000.0,
                     slow.join(" | ")
                 )
                 .unwrap();

@@ -279,6 +279,15 @@ fn main() {
     let mut new_here = vec![0u32; kinds.len()];
     let mut totals = vec![0u64; kinds.len()];
     let mut lines: Vec<String> = Vec::new();
+    // `SHOW=P:D,D,..` in the environment: present P's draws D (numbered from 1 as printed) are
+    // printed in full whether or not anything in them is new (to name a replay's slow draws).
+    let show: Option<(u64, Vec<u64>)> = std::env::var("SHOW").ok().map(|v| {
+        let (p, d) = v.split_once(':').expect("SHOW=present:draw,..");
+        (
+            p.parse().expect("a present"),
+            d.split(',').map(|x| x.parse().expect("a draw")).collect(),
+        )
+    });
     for c in d3d9_stream::wire::commands(&bytes).expect("a stream") {
         // A recording cut by the run's end stops at its last whole command.
         let Ok(c) = c else { break };
@@ -511,14 +520,19 @@ fn main() {
                         }
                     }
                 }
-                if detail && !new.is_empty() {
+                let shown = show
+                    .as_ref()
+                    .is_some_and(|(p, d)| *p == presents && d.contains(&draw));
+                if (detail && !new.is_empty()) || shown {
                     let made = |h: u32| s.shaders.get(&h).map_or(0, |x| x.made_at);
                     let model = |h: u32| s.shaders.get(&h).map_or(0, |x| x.major);
                     lines.push(format!(
-                        "  draw {draw} new [{}]\n    vs {vs} (model {}, made at {}) ps {ps} (model {}, made at {})\n    layout {layout}\n    {}\n    {alpha} ref {}; {fog}; srgb write {}; clip {}; shade {}; points {}; colour write {}; blend {} {}/{}; z {} write {}; stencil {}\n    textures {textures}",
+                        "  draw {draw} new [{}]\n    vs {vs} {:#x} (model {}, made at {}) ps {ps} {:#x} (model {}, made at {})\n    layout {layout}\n    {}\n    {alpha} ref {}; {fog}; srgb write {}; clip {}; shade {}; points {}; colour write {}; blend {} {}/{}; z {} write {}; stencil {}\n    textures {textures}",
                         new.join(", "),
+                        s.vs,
                         model(s.vs),
                         made(s.vs),
+                        s.ps,
                         model(s.ps),
                         made(s.ps),
                         s.target_text(),
