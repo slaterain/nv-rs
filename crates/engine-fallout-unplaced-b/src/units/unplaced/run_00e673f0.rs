@@ -779,41 +779,53 @@ pub fn fn_00e68a80(
         if device == 0 {
             return false;
         }
-        let mut file = file.addr();
-        if file == 0 {
-            e.call(STRCPY_S, &args![path, 0x104u32, file_name]);
-            e.call(PATH_STANDARDIZE, &args![path]);
-            e.call(FILENAME_CONSTRUCTOR, &args![filename, path]);
-            // `NiFilename`'s extension, +0x103 into it.
-            let extension = filename + 0x103;
-            let mut known = false;
-            for name in [EXTENSION_BMP, EXTENSION_TGA, EXTENSION_DDS] {
-                if e.call(NI_STRICMP, &args![extension, name]).u32() == 0 {
-                    known = true;
-                    break;
+        // The fixes preset's row: the file already read on this thread before the renderer's
+        // lock ([`read_first`]), with these same calls; nothing kept, the exe's own read here.
+        let (mut buffer, size) = match read_first::take(file_name.addr(), file.addr()) {
+            Some(read_first::Read::Bytes { buffer, size }) => {
+                e.mem.set_u32(size_slot, size);
+                (buffer, size)
+            }
+            Some(_) => return false,
+            None => {
+                let mut file = file.addr();
+                if file == 0 {
+                    e.call(STRCPY_S, &args![path, 0x104u32, file_name]);
+                    e.call(PATH_STANDARDIZE, &args![path]);
+                    e.call(FILENAME_CONSTRUCTOR, &args![filename, path]);
+                    // `NiFilename`'s extension, +0x103 into it.
+                    let extension = filename + 0x103;
+                    let mut known = false;
+                    for name in [EXTENSION_BMP, EXTENSION_TGA, EXTENSION_DDS] {
+                        if e.call(NI_STRICMP, &args![extension, name]).u32() == 0 {
+                            known = true;
+                            break;
+                        }
+                    }
+                    if !known {
+                        return false;
+                    }
+                    file = e.call(FILE_GET_FILE, &args![path, 0u32, 0x8000u32]).u32();
+                    if file == 0 {
+                        return false;
+                    }
                 }
+                if !e.vcall(file, FILE_GOOD_SLOT, &args![]).bool() {
+                    e.vcall(file, FILE_DELETE_SLOT, &args![1u32]);
+                    return false;
+                }
+                let size = e.vcall(file, FILE_SIZE_SLOT, &args![]).u32();
+                e.mem.set_u32(size_slot, size);
+                if size == 0 {
+                    e.vcall(file, FILE_DELETE_SLOT, &args![1u32]);
+                    return false;
+                }
+                let buffer = e.call(ALLOCATE, &args![size]).u32();
+                e.call(FILE_READ, &args![file, buffer, size]);
+                e.vcall(file, FILE_DELETE_SLOT, &args![1u32]);
+                (buffer, size)
             }
-            if !known {
-                return false;
-            }
-            file = e.call(FILE_GET_FILE, &args![path, 0u32, 0x8000u32]).u32();
-            if file == 0 {
-                return false;
-            }
-        }
-        if !e.vcall(file, FILE_GOOD_SLOT, &args![]).bool() {
-            e.vcall(file, FILE_DELETE_SLOT, &args![1u32]);
-            return false;
-        }
-        let size = e.vcall(file, FILE_SIZE_SLOT, &args![]).u32();
-        e.mem.set_u32(size_slot, size);
-        if size == 0 {
-            e.vcall(file, FILE_DELETE_SLOT, &args![1u32]);
-            return false;
-        }
-        let mut buffer = e.call(ALLOCATE, &args![size]).u32();
-        e.call(FILE_READ, &args![file, buffer, size]);
-        e.vcall(file, FILE_DELETE_SLOT, &args![1u32]);
+        };
         let result = e
             .call(D3DX_GET_IMAGE_INFO, &args![buffer, size, info])
             .u32();
@@ -2238,6 +2250,169 @@ pub fn fn_00e689d0(e: &mut Engine, this: Ptr<NiDX9SourceTextureData>) {
     }
 }
 
+/// The fixes preset's "texture files read before the renderer's lock" row (`NV_TEXTURE_READ_FIRST`;
+/// docs/FIXES.md): the renderer's source-data lock (`m_kSourceDataCriticalSection`, the
+/// renderer's +0x180; `00e6dc40` takes it to make a texture's renderer data) was held while the
+/// loading thread read a texture file and inflated it from its archive (`fn_00e68a80`'s
+/// `NiFile::GetFile` and `00462d80`); main, binding a texture of its own, waited 6-13 ms on it
+/// at cell borders. With the row, [`read_first::fn_00e6dc40_reading_first`] reads the file on the calling
+/// thread first, with the same calls on the same file, and keeps the bytes here; under the lock
+/// [`fn_00e68a80`] takes them instead of reading. Everything else stays under the lock in the
+/// exe's order: the renderer data's allocation and construction, the image description, the
+/// Direct3D texture's creation and the texture taking its data.
+pub mod read_first {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// The renderer's source-data lock (`m_kSourceDataCriticalSection`, +0x180), the
+    /// `EnterCriticalSection` / `LeaveCriticalSection` import slots, and `00e68ef0` (the
+    /// renderer data maker `00e6dc40` calls by address).
+    const SOURCE_DATA_LOCK: u32 = 0x180;
+    const ENTER_CRITICAL_SECTION: u32 = 0x00fd_f05c;
+    const LEAVE_CRITICAL_SECTION: u32 = 0x00fd_f100;
+    const MAKE_DATA: u32 = 0x00e6_8ef0;
+
+    /// What reading the file gave, as [`fn_00e68a80`] would have met it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Read {
+        /// `NiFile::GetFile` answered no file.
+        NoFile,
+        /// The file was not good (it was deleted).
+        NotGood,
+        /// The file was empty (it was deleted).
+        Empty,
+        /// `size` bytes in `buffer` (`00aa1070`), the file deleted.
+        Bytes { buffer: u32, size: u32 },
+    }
+
+    /// A file read ahead for the texture whose platform file name is `name` (and, when it came
+    /// with one, its file object `file`).
+    #[derive(Debug, Clone, Copy)]
+    struct Ahead {
+        name: u32,
+        file: u32,
+        read: Read,
+    }
+
+    thread_local! {
+        static AHEAD: RefCell<Option<Ahead>> = const { RefCell::new(None) };
+    }
+
+    /// The read kept for (`name`, `file`) on this thread, taken.
+    pub fn take(name: u32, file: u32) -> Option<Read> {
+        AHEAD.with(|a| {
+            let mut a = a.borrow_mut();
+            match *a {
+                Some(ahead) if ahead.name == name && ahead.file == file => {
+                    *a = None;
+                    Some(ahead.read)
+                }
+                _ => None,
+            }
+        })
+    }
+
+    fn keep(ahead: Option<Ahead>) {
+        AHEAD.with(|a| *a.borrow_mut() = ahead);
+    }
+
+    /// Whether [`fn_00e68ef0`] on (`texture`, `renderer`) would reach [`fn_00e68a80`]'s file read,
+    /// with the same reads it makes before it: not a cube map, no persistent or pixel data,
+    /// loading straight to the renderer allowed and hinted, a renderer with a device. Read
+    /// without the lock: a texture another thread gives data meanwhile only wastes the read.
+    fn reaches_the_read(e: &mut Engine, texture: u32, renderer: u32) -> bool {
+        if texture == 0 || renderer == 0 {
+            return false;
+        }
+        let mut rtti = e.vcall(texture, GET_RTTI_SLOT, &args![]).u32();
+        while rtti != 0 {
+            if rtti == NI_SOURCE_CUBE_MAP_RTTI {
+                return false;
+            }
+            rtti = e.mem.u32(rtti + RTTI_BASE);
+        }
+        e.mem.u32(texture + SOURCE_PERSISTENT_DATA) == 0
+            && e.mem.u32(texture + SOURCE_PIXEL_DATA) == 0
+            && e.mem.u8(LOAD_DIRECT_TO_RENDERER) != 0
+            && e.mem.u8(texture + SOURCE_LOAD_DIRECT_HINT) != 0
+            && e.mem.u32(renderer + RENDERER_DEVICE) != 0
+    }
+
+    /// [`fn_00e68a80`]'s file part, as it makes it: with no file object, the name copied,
+    /// standardized and split, only `.bmp`, `.tga` and `.dds` opened (`None` otherwise: nothing
+    /// read, the exe's path runs as it is); then the good test, the size, the buffer, the read
+    /// and the file's deletion.
+    pub fn read_file(e: &mut Engine, name: u32, file: u32) -> Option<Read> {
+        let mut file = file;
+        if file == 0 {
+            let opened = e.with_stack(0x550, |e, frame| {
+                let frame = frame.addr();
+                let filename = frame + 0x44;
+                let path = frame + 0x448;
+                e.call(STRCPY_S, &args![path, 0x104u32, name]);
+                e.call(PATH_STANDARDIZE, &args![path]);
+                e.call(FILENAME_CONSTRUCTOR, &args![filename, path]);
+                let extension = filename + 0x103;
+                let known = [EXTENSION_BMP, EXTENSION_TGA, EXTENSION_DDS]
+                    .into_iter()
+                    .any(|ext| e.call(NI_STRICMP, &args![extension, ext]).u32() == 0);
+                if !known {
+                    return None;
+                }
+                Some(e.call(FILE_GET_FILE, &args![path, 0u32, 0x8000u32]).u32())
+            })?;
+            if opened == 0 {
+                return Some(Read::NoFile);
+            }
+            file = opened;
+        }
+        if !e.vcall(file, FILE_GOOD_SLOT, &args![]).bool() {
+            e.vcall(file, FILE_DELETE_SLOT, &args![1u32]);
+            return Some(Read::NotGood);
+        }
+        let size = e.vcall(file, FILE_SIZE_SLOT, &args![]).u32();
+        if size == 0 {
+            e.vcall(file, FILE_DELETE_SLOT, &args![1u32]);
+            return Some(Read::Empty);
+        }
+        let buffer = e.call(ALLOCATE, &args![size]).u32();
+        e.call(FILE_READ, &args![file, buffer, size]);
+        e.vcall(file, FILE_DELETE_SLOT, &args![1u32]);
+        Some(Read::Bytes { buffer, size })
+    }
+
+    /// `00e6dc40` with the row: the file read first ([`read_file`]) when the texture has no
+    /// renderer data yet and its making would read it, then the exe's body: under the lock at
+    /// +0x180, the renderer data made (`00e68ef0`) unless the texture has some. A read the making
+    /// did not take (another thread made the data meanwhile) has its buffer freed (`00aa10f0`).
+    pub fn fn_00e6dc40_reading_first(e: &mut Engine, this: Ptr, texture: Ptr) -> bool {
+        let renderer = this.addr();
+        let texture = texture.addr();
+        if e.mem.u32(texture.wrapping_add(TEXTURE_RENDERER_DATA)) == 0
+            && reaches_the_read(e, texture, renderer)
+        {
+            let name = e.mem.u32(texture + SOURCE_PLATFORM_FILENAME);
+            let file = e.mem.u32(texture + SOURCE_FILE);
+            keep(read_file(e, name, file).map(|read| Ahead { name, file, read }));
+        }
+        let lock = renderer.wrapping_add(SOURCE_DATA_LOCK);
+        e.call(ENTER_CRITICAL_SECTION, &args![lock]);
+        let mut data = e.mem.u32(texture.wrapping_add(TEXTURE_RENDERER_DATA));
+        if data == 0 {
+            data = e.call(MAKE_DATA, &args![texture, renderer]).u32();
+        }
+        e.call(LEAVE_CRITICAL_SECTION, &args![lock]);
+        if let Some(Ahead {
+            read: Read::Bytes { buffer, .. },
+            ..
+        }) = AHEAD.with(|a| a.borrow_mut().take())
+        {
+            e.call(FREE, &args![buffer]);
+        }
+        data != 0
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3225,6 +3400,136 @@ mod tests {
         );
         assert_eq!(e.mem.u8(object + 0x6c), 1);
         assert_eq!((e.mem.u32(object + 0xc), e.mem.u32(object + 0x10)), (4, 4));
+    }
+
+    const ENTER_SECTION: u32 = 0x00fd_f05c;
+    const LEAVE_SECTION: u32 = 0x00fd_f100;
+
+    /// A texture that loads straight to the renderer from its file object, with the renderer's
+    /// lock calls logged: (texture, renderer, file, the data object).
+    fn read_first_setup(e: &mut Engine) -> (u32, u32, u32, u32) {
+        let (texture, renderer, object) = create_setup(e, 0);
+        let (_, file, _) = load_setup(e, 0x40, D3DRTYPE_TEXTURE, 1);
+        e.mem.set_u32(renderer + RENDERER_DEVICE, 0xd3d);
+        e.mem.set_u8(LOAD_DIRECT_TO_RENDERER, 1);
+        e.mem.set_u8(texture + SOURCE_LOAD_DIRECT_HINT, 1);
+        e.mem.set_u32(texture + SOURCE_FILE, file);
+        // The data's virtual table (the exe's, at 010ed37c) sends the texture taking to a double.
+        e.map(SOURCE_TEXTURE_DATA_VTABLE, 0x100);
+        e.mem.set_u32(
+            SOURCE_TEXTURE_DATA_VTABLE + INIT_FROM_D3D_TEXTURE_SLOT,
+            INIT_FROM_D3D,
+        );
+        e.register(ENTER_SECTION, |_, _| Ret::default());
+        e.register(LEAVE_SECTION, |_, _| Ret::default());
+        (texture, renderer, file, object)
+    }
+
+    fn position(e: &Engine, callee: u32) -> usize {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .position(|(address, _)| *address == callee)
+            .unwrap_or_else(|| panic!("no call to {callee:08x}"))
+    }
+
+    /// The calls of a run without the lock's and the type test's (which the row makes once more
+    /// before the lock).
+    fn calls_but_the_lock(e: &Engine) -> Vec<(u32, Vec<u32>)> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, _)| ![ENTER_SECTION, LEAVE_SECTION, GET_RTTI].contains(address))
+            .cloned()
+            .collect()
+    }
+
+    /// The row (`NV_TEXTURE_READ_FIRST`): the file is read and deleted before the renderer's lock
+    /// is taken, and the making under the lock gets the same data, the same Direct3D texture and
+    /// the same calls in the same order as the exe's `00e6dc40` (vanilla), which reads inside it.
+    #[test]
+    fn reading_first_reads_before_the_lock_and_makes_the_same_data() {
+        let mut runs = Vec::new();
+        for row in [false, true] {
+            let mut e = Engine::new();
+            let (texture, renderer, file, object) = read_first_setup(&mut e);
+            e.call_log = Some(vec![]);
+            let made = if row {
+                read_first::fn_00e6dc40_reading_first(&mut e, Ptr::new(renderer), Ptr::new(texture))
+            } else {
+                engine_gamebryo::units::nixenonrenderer::nixenonrenderer::fn_00e6dc40(
+                    &mut e,
+                    Ptr::new(renderer),
+                    Ptr::new(texture),
+                )
+            };
+            assert!(made);
+            assert_eq!(e.mem.u32(texture + TEXTURE_RENDERER_DATA), object);
+            let (read, enter, leave) = (
+                position(&e, FILE_READ),
+                position(&e, ENTER_SECTION),
+                position(&e, LEAVE_SECTION),
+            );
+            let create = position(&e, D3DX_CREATE_TEXTURE);
+            assert!(enter < create && create < leave);
+            if row {
+                assert!(read < enter, "the row reads before the lock");
+                assert!(position(&e, FILE_DELETE) < enter);
+            } else {
+                assert!(enter < read && read < leave, "vanilla reads under the lock");
+            }
+            assert_eq!(calls_to(&e, ENTER_SECTION), vec![vec![renderer + 0x180]]);
+            assert_eq!(calls_to(&e, FILE_DELETE), vec![vec![file, 1]]);
+            assert_eq!(calls_to(&e, INIT_FROM_D3D), vec![vec![object, 0x7e70]]);
+            assert_eq!(calls_to(&e, FREE).len(), 1);
+            // Nothing is left kept for a later making.
+            assert_eq!(read_first::take(0, file), None);
+            runs.push(calls_but_the_lock(&e));
+        }
+        // The same calls with the same words, in the same order but for the file's part, which
+        // the row makes first (in its own order).
+        let file_part = [FILE_GOOD, FILE_SIZE, ALLOCATE, FILE_READ, FILE_DELETE];
+        let split = |run: &[(u32, Vec<u32>)], file: bool| -> Vec<(u32, Vec<u32>)> {
+            run.iter()
+                .filter(|(address, _)| file_part.contains(address) == file)
+                .cloned()
+                .collect()
+        };
+        assert_eq!(split(&runs[0], false), split(&runs[1], false));
+        assert_eq!(split(&runs[0], true), split(&runs[1], true));
+        assert_eq!(runs[0].len(), runs[1].len());
+    }
+
+    /// With the row, a texture another thread gave data while this one read (seen under the lock)
+    /// is not made again; the bytes read for it are freed, and a texture that does not load
+    /// straight to the renderer reads nothing before the lock.
+    #[test]
+    fn reading_first_frees_a_read_the_making_did_not_take() {
+        let mut e = Engine::new();
+        let (texture, renderer, file, _) = read_first_setup(&mut e);
+        e.register_double(ENTER_SECTION, move |e, _| {
+            e.mem.set_u32(texture + TEXTURE_RENDERER_DATA, 0x5ad0);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert!(read_first::fn_00e6dc40_reading_first(
+            &mut e,
+            Ptr::new(renderer),
+            Ptr::new(texture)
+        ));
+        let buffer = calls_to(&e, FILE_READ)[0][1];
+        assert_eq!(calls_to(&e, FREE), vec![vec![buffer]]);
+        assert!(calls_to(&e, D3DX_CREATE_TEXTURE).is_empty());
+        assert_eq!(read_first::take(0, file), None);
+        // Not hinted to load straight: nothing read first (the lock's double gives the texture
+        // data again, so the making, which would go to the image converter, does not run).
+        e.mem.set_u32(texture + TEXTURE_RENDERER_DATA, 0);
+        e.mem.set_u8(texture + SOURCE_LOAD_DIRECT_HINT, 0);
+        e.call_log = Some(vec![]);
+        read_first::fn_00e6dc40_reading_first(&mut e, Ptr::new(renderer), Ptr::new(texture));
+        assert!(calls_to(&e, FILE_READ).is_empty());
     }
 }
 

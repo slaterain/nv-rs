@@ -50,6 +50,7 @@ pub static FIXES: &[Fix] = &[
     IO_WAIT_ENDS_ON_COMPLETION,
     crate::half_loaded_move::FIX,
     crate::thread_races::FIX,
+    TEXTURE_READ_FIRST,
 ];
 
 /// The IO manager's wait for queued loads (`00c3dfa0`: main at a cell border, a load, a save) sleeps
@@ -68,6 +69,25 @@ pub const IO_WAIT_ENDS_ON_COMPLETION: Fix = Fix {
 fn install_io_wait(e: &mut Engine) {
     use engine::units::bsmain::iomanager::fn_00c3dfa0_waking_early;
     let (at, f) = engine::entry!(0x00c3_dfa0, fn_00c3dfa0_waking_early(Ptr, i32));
+    e.register(at, f);
+}
+
+/// The loading thread made a texture's renderer data (`00e6dc40`) under the renderer's source-data
+/// lock (+0x180) and read and inflated the texture's file inside it, so main, binding another
+/// texture, waited for that read (6-13 ms in border frames). With the row the file is read first,
+/// with the same calls, and only the making stays under the lock, in the same order
+/// (`engine::units::unplaced::run_00e673f0::read_first`). Vanilla reads it under the lock.
+pub const TEXTURE_READ_FIRST: Fix = Fix {
+    name: "texture files read before the renderer's lock",
+    env: "NV_TEXTURE_READ_FIRST",
+    addresses: &[0x00e6_dc40],
+    summary: "a texture file is read and unpacked before the renderer's lock is taken, so drawing does not wait for it",
+    install: install_texture_read_first,
+};
+
+fn install_texture_read_first(e: &mut Engine) {
+    use engine::units::unplaced::run_00e673f0::read_first::fn_00e6dc40_reading_first;
+    let (at, f) = engine::entry!(0x00e6_dc40, fn_00e6dc40_reading_first(Ptr, Ptr) -> bool);
     e.register(at, f);
 }
 
