@@ -18,8 +18,9 @@
 use crate::fixes::{Preset, FIXES};
 use std::path::{Path, PathBuf};
 
-/// The table of our keys: section, key, environment variable, the generated file's value, and
-/// the comment line above it (`scripts/game-ini-sections.sh` writes the file from it).
+/// The table of our keys: section, key, environment variable, the generated file's value (the
+/// built-in default of a play run), and the comment line above it
+/// (`scripts/game-ini-sections.sh` writes the file from it).
 pub const TABLE: &str = include_str!("../data/game_ini.tsv");
 
 /// The section of the fix rows: each key turns one row of `crate::fixes::FIXES` on or off.
@@ -282,12 +283,13 @@ mod tests {
         );
     }
 
-    /// The table's values are the built-in defaults, so the generated file changes nothing.
+    /// The table's values are the built-in defaults of a play run (the only run that reads the
+    /// file), so the generated file changes nothing.
     #[test]
     fn the_tables_values_are_the_built_in_defaults() {
         let keys = Keys::read(&generated());
         assert_eq!(keys.preset, Some(Preset::Fixes));
-        assert_eq!(keys.borderless, Some(false));
+        assert_eq!(keys.borderless, Some(crate::fixes::PLAY_BORDERLESS));
         assert_eq!(keys.frame_limit, Some(0));
         assert_eq!(
             keys.menu_frame_limit,

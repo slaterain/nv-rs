@@ -51,7 +51,12 @@ for you.
 
 The first start takes your settings from the game's own launcher if you have run it (it copies them,
 and your real ones stay as they are). If not, it starts on the game's High preset at your desktop's
-size, in a borderless window. Settings.cmd and the game's own menu change them.
+size. Settings.cmd and the game's own menu change them.
+
+Either way the game starts in a borderless window that fills the screen. For the game's own window
+instead, choose Window under Display mode in Settings.cmd. That is bBorderless=0 in Fallout.ini's
+[nv-rs Display] section (Bug fixes, below, says where the file is). With 1, or with no such line,
+the window is borderless.
 
 
 Bug fixes

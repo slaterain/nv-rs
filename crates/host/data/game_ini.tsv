@@ -1,10 +1,12 @@
 # nv-rs's own options in the run's Fallout.ini (crates/host/src/game_ini.rs; measure/ini/DESIGN.md).
 # One row per key: section, key, the environment variable that wins over it (tests and scripts
 # only), the value the generated file writes, and the one comment line written above the key.
+# That value is the built-in default of a play run (crates/host/src/fixes.rs; a test holds the
+# two together), and Play.exe and the generated file take it from here: they have none of their own.
 # scripts/game-ini-sections.sh writes distribution/nv-rs-sections.ini from this table; the
 # [nv-rs Fixes] rows are written commented out, so sPreset decides until a line is uncommented.
 nv-rs General	sPreset	NV_PRESET	fixes	fixes = nv-rs's fixes on (recommended); vanilla = exactly the original game's behaviour.
-nv-rs Display	bBorderless	NV_BORDERLESS	0	1 = the game's window has no frame and fills the screen; 0 = the window as the game makes it.
+nv-rs Display	bBorderless	NV_BORDERLESS	1	1 = the game's window has no frame and fills the screen (the default); 0 = the window as the game makes it.
 nv-rs Display	iFrameLimit	NV_FRAME_LIMIT	0	Most frames a second in play, with the fixes' uncapped frame rate; 0 = no limit.
 nv-rs Display	iMenuFrameLimit	NV_MENU_FRAME_LIMIT	120	Most frames a second in menus (main menu, Pip-Boy, dialogue, inventory, pause); 0 = no limit of their own.
 nv-rs Threads	bSteppedThreads	NV_THREADS	0	1 = the game's threads take turns, one at a time (the fallback); 0 = side by side on their own cores.

@@ -232,6 +232,8 @@ function New-Combo($items, $selected) {
     $c
 }
 
+# A file with no bBorderless line starts borderless, the game's default, so that is what is shown
+# (scripts/launcher's tests hold this to the game's table).
 $mode = New-Combo @('Borderless fullscreen', 'Window') $(if ((Get-Setting 'Borderless' '1') -eq '0') { 'Window' } else { 'Borderless fullscreen' })
 Add-Row 'Display mode' $mode
 $res = New-Combo $resolutions (Get-Setting 'Resolution' $own)

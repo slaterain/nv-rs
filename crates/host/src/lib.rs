@@ -170,8 +170,9 @@ impl Host {
         // without it); `NV_RENDER_THREAD=0` makes them on the game's threads.
         #[cfg(windows)]
         engine_platform::d3d9real::want_render_thread(&mut engine, choice.render_thread);
-        // The borderless window (`fixes::Choice::borderless`: `NV_BORDERLESS`, else Fallout.ini's
-        // `[nv-rs Display] bBorderless`); with neither, the window layer reads `NV_BORDERLESS`.
+        // The borderless window (`fixes::Choice::borderless`: `NV_BORDERLESS`; else, in a
+        // launcher's play run, Fallout.ini's `[nv-rs Display] bBorderless` or play's default, on).
+        // A test or script without the variable makes no choice: the window as the game makes it.
         #[cfg(windows)]
         if let Some(on) = choice.borderless {
             engine_platform::d3d9real::want_borderless(on);

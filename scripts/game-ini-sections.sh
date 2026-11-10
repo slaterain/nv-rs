@@ -1,9 +1,9 @@
 #!/bin/bash
 # game-ini-sections.sh [OUT]: writes nv-rs's four [nv-rs ...] sections of Fallout.ini, each key
 # with its one comment line above it, from crates/host/data/game_ini.tsv (default OUT:
-# distribution/nv-rs-sections.ini: the block a settings tool can put at the top of a Fallout.ini
-# that has none, and the one the docs name; distribution/Settings.cmd does not use it yet). The
-# [nv-rs Fixes] lines are written commented out, so sPreset
+# distribution/nv-rs-sections.ini: the block Play.exe puts at the top of a Fallout.ini that has
+# none, as it is, and the one the docs name). Its values are the table's, the built-in defaults of
+# a play run. The [nv-rs Fixes] lines are written commented out, so sPreset
 # decides until a player removes the ; in front of one. Keys the game never reads are not written.
 # crates/host's game_ini tests check the file against the table; run this after changing the table.
 set -e

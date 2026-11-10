@@ -663,7 +663,8 @@ struct Prepared {
 /// `real` (their `My Games\FalloutNV`: the settings the game's launcher made). nv-rs's own sections
 /// go into `Fallout.ini` (`game_ini.rs`): the whole block once, and what a file with only some of
 /// them lacks. The player's choices go into them: `pending`, a `settings.ini` that is being moved
-/// into the files, whose lines win; with none, only Play.exe's own default for a key it added.
+/// into the files, whose lines win. Play.exe has no values of its own: what nothing chose is the
+/// generated sections' value, the game's default (the borderless window among them).
 ///
 /// Two files get no sections and are said in the log: one with nothing to start from (a file
 /// holding only our block would stop the player's own from being copied at a later start), and a
@@ -705,7 +706,7 @@ fn prepare_profile(
             ini.display()
         ));
     } else if let Some(seeded) = game_ini::with_sections(&text) {
-        text = game_ini::apply_choices(&seeded.text, pending, &seeded.added).0;
+        text = game_ini::apply_choices(&seeded.text, pending).0;
         prepared = Prepared { seeded: true };
         if seeded.fresh {
             package.log(&format!("nv-rs's own sections added to {}", ini.display()));
@@ -741,13 +742,17 @@ fn prepare_profile(
         }
     }
     let mut lines = pending.map(Settings::prefs_lines).unwrap_or_default();
-    // A borderless window is the game's windowed mode, at every start: by what the file says now,
-    // a settings.ini's choice already in it. A file without our sections can't say: then the
-    // choice passed to the game decides (`game_ini::switches`), settings.ini's or the default.
+    // A borderless window is the game's windowed mode, at every start: by what the file says now
+    // (a settings.ini's choice already in it), read as the game reads it, and the game's default
+    // when it says nothing usable (`game_ini::borderless`), so Play.exe and the game agree. A
+    // file without our sections can't say: then the choice passed to the game decides
+    // (`game_ini::switches`), settings.ini's or the same default.
     let borderless = if prepared.seeded {
-        settings::ini_value(&text, "nv-rs Display", "bBorderless") == Some("1")
+        game_ini::borderless(&settings::decode(&bytes))
     } else {
-        pending.and_then(Settings::borderless).unwrap_or(true)
+        pending
+            .and_then(Settings::borderless)
+            .unwrap_or_else(|| game_ini::borderless(""))
     };
     if borderless {
         lines.push(("bFull Screen".into(), "0".into()));
@@ -829,7 +834,7 @@ fn prepare_files(
     // settings.ini's lines that are not used any more: the same whatever file they go into.
     let unused = pending
         .as_ref()
-        .map(|s| game_ini::apply_choices("", Some(s), &[]).1)
+        .map(|s| game_ini::apply_choices("", Some(s)).1)
         .unwrap_or_default();
     let mut all_seeded = true;
     for profile in profiles {
@@ -1773,15 +1778,12 @@ mod tests {
         }
     }
 
-    /// The sections with Play.exe's defaults (borderless) in the line ends `eol`, then an empty line.
+    /// The sections as generated (the game's defaults: Play.exe changes no value) in the line ends
+    /// `eol`, then an empty line.
     fn our_block(eol: &str) -> Vec<u8> {
         let mut out = String::new();
         for line in game_ini::SECTIONS.lines() {
-            out.push_str(if line == "bBorderless=0" {
-                "bBorderless=1"
-            } else {
-                line
-            });
+            out.push_str(line);
             out.push_str(eol);
         }
         out.push_str(eol);
@@ -1800,6 +1802,11 @@ mod tests {
                 ini, want,
                 "the default file byte for byte under the sections"
             );
+            // A new player starts borderless: the generated sections' own line, from the table.
+            assert_eq!(
+                settings::ini_value(&text_of(&ini), "nv-rs Display", "bBorderless"),
+                Some("1")
+            );
             let prefs = files.prefs(profile);
             assert!(prefs.contains("bFull Screen=0") && prefs.contains("sD3DDevice=\"Test Card\""));
         }
@@ -1808,6 +1815,44 @@ mod tests {
         files.start().unwrap();
         assert_eq!((files.ini(0), files.ini(1), files.prefs(0)), before);
         assert!(!files.package.settings.exists());
+    }
+
+    /// A `bBorderless` line that chooses nothing (empty, or a word the game can't use) is the
+    /// game's default, borderless, as the host reads it: Play.exe leaves the line as it is and
+    /// keeps the game's own full-screen mode off for it, as for 1; Settings.cmd shows it as
+    /// borderless, so saving that changes no byte, and choosing Window writes 0, which then stays
+    /// and gets no such push.
+    #[test]
+    fn a_borderless_line_that_says_nothing_takes_the_games_default() {
+        for (name, value) in [("empty", ""), ("word", "yes")] {
+            let ini = text_of(&our_block("\r\n"))
+                .replace("bBorderless=1", &format!("bBorderless={value}"))
+                + "[General]\r\nx=1\r\n";
+            assert!(ini.contains(&format!("\r\nbBorderless={value}\r\n")));
+            let files = Files::new(&format!("borderless-{name}"), Some(ini.as_bytes()));
+            files.start().unwrap();
+            for profile in 0..2 {
+                assert_eq!(text_of(&files.ini(profile)), ini);
+                assert!(files.prefs(profile).contains("bFull Screen=0"), "{name}");
+            }
+            settings_window(&files, "");
+            settings_window(&files, "Borderless=1");
+            assert_eq!(text_of(&files.ini(0)), ini, "{name}");
+            settings_window(&files, "Borderless=0");
+            let chosen = text_of(&files.ini(0));
+            assert_eq!(
+                chosen,
+                ini.replace(&format!("bBorderless={value}\r\n"), "bBorderless=0\r\n")
+            );
+            files.start().unwrap();
+            assert_eq!(text_of(&files.ini(0)), chosen);
+            assert_eq!(text_of(&files.ini(1)), chosen);
+        }
+        // A file with 0 gets no push: a fresh profile's prefs stay without the key.
+        let ini = text_of(&our_block("\r\n")).replace("bBorderless=1", "bBorderless=0");
+        let files = Files::new("borderless-off", Some(ini.as_bytes()));
+        files.start().unwrap();
+        assert!(!files.prefs(0).contains("bFull Screen"));
     }
 
     #[test]
