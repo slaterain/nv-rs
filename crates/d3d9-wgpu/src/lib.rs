@@ -67,10 +67,12 @@ fn cover_monitor(window: isize) {
             -> i32;
     }
     /// `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`, `MONITOR_DEFAULTTONEAREST`,
-    /// `SWP_NOZORDER | SWP_NOACTIVATE`.
+    /// `SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS`: the window belongs to another thread
+    /// (engine-platform's window thread, which only pumps messages, but the request is posted
+    /// rather than sent all the same, so this thread can never wait on it).
     const PER_MONITOR_V2: isize = -4;
     const NEAREST: u32 = 2;
-    const FLAGS: u32 = 0x4 | 0x10;
+    const FLAGS: u32 = 0x4 | 0x10 | 0x4000;
     // SAFETY: plain calls on a window the window thread owns; `info` is this frame's, its size set.
     unsafe {
         let before = SetThreadDpiAwarenessContext(PER_MONITOR_V2);
