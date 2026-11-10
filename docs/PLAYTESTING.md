@@ -98,6 +98,9 @@ and the host's tests check one against the other. The fix lines are written with
   profile's `Fallout.ini` has no sections (UTF-16, or nothing to make it from), Play.exe passes
   the six options as variables instead, from settings.ini's lines, else the play defaults; the
   fix lines and V-sync then do nothing until the file can take them.
+- A section of ours that appears twice counts only where it first appears, as Windows reads a
+  repeated section name: a key in the later one is not read (and Play.exe adds a missing key to
+  the first).
 - A key nv-rs does not know is passed over, as the game passes over one it never asks for. A value it
   can't use leaves the default, and one line in the log names it; the game still starts.
 - Only a launcher's play run reads these sections: `NV_SETTINGS` set (Play.exe; the
@@ -284,7 +287,10 @@ elsewhere only as far as Windows and drivers behave the same:
   are measuring tools: their results are built in, from this PC. They aren't re-run on a player's.
 - The C runtime's character table (`nls`, `ctype1_measured.tsv`), Windows' file-system answers in `files.rs`
   (tunnelling, 8.3 names, `FindFirstFile` order) and `GetPrivateProfile*` rules were measured here on
-  NTFS under an English Windows. Text conversion itself asks the real Windows.
+  NTFS under an English Windows (among them: in a file with a repeated section name only the first
+  section of it is read or written, case and the spaces in the brackets aside, so every reader of
+  the port and Play.exe's and Settings.cmd's writes follow that; `engine-platform` `ini.rs` tests).
+  Text conversion itself asks the real Windows.
 - `d3d9-capture` covers adapter 0, and only the display modes of that moment. nvapi answers come from
   the DLL, but only an NVIDIA driver has run them.
 - An AMD card: the game asks for the player's 32-bit `ATIMGPUD.dll` and, with Eyefinity on, ADL; this 64-bit

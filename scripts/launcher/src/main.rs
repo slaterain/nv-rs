@@ -2326,6 +2326,44 @@ mod tests {
         assert!(line.ends_with("kept as they were: NV_THREADS"), "{line}");
     }
 
+    /// Settings.ps1 on a file with a repeated `[Display]` section (a hand-edited file): it shows
+    /// and changes the first section's key only, as Windows reads and writes it, the same lines as
+    /// `set_key`; the later section stays byte for byte.
+    #[test]
+    fn settings_cmd_uses_the_first_section_of_a_repeated_name() {
+        let files = Files::new("settings-repeated", None);
+        files.start().unwrap();
+        let [game, mods] = files.profiles();
+        // The first [Display] has no iPresentInterval; a later [Display] says 0, which Windows
+        // never reads. So the game's V-sync is its default, and the window shows the game's
+        // setting: choosing Off writes the key into the first section, the later one untouched.
+        let ini = text_of(&files.ini(0)).replace("iPresentInterval=1\r\n", "")
+            + "\r\n[Display]\r\niPresentInterval=0\r\n";
+        assert_eq!(
+            settings::ini_value(&ini, "Display", "iPresentInterval"),
+            None
+        );
+        for profile in [&game, &mods] {
+            std::fs::write(profile.fallout_ini(), bytes_of(&ini)).unwrap();
+        }
+        settings_window(&files, "");
+        assert_eq!(
+            text_of(&files.ini(0)),
+            ini,
+            "nothing chosen, nothing written"
+        );
+        settings_window(&files, "VSync=Off");
+        let want = game_ini::set_key(&ini, "Display", "iPresentInterval", "0");
+        assert!(want.ends_with("\r\n[Display]\r\niPresentInterval=0\r\n"));
+        assert_eq!(
+            settings::ini_value(&want, "Display", "iPresentInterval"),
+            Some("0")
+        );
+        for profile in 0..2 {
+            assert_eq!(text_of(&files.ini(profile)), want);
+        }
+    }
+
     /// Settings.ps1 on a file it must change in place whatever its shape: LF line ends, a byte
     /// that is not UTF-8, a key the player commented out and no `[Display]` section. Its lines are
     /// the ones Play.exe's own `set_key` makes, in Settings.ps1's order; every other byte stays.

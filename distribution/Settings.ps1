@@ -43,7 +43,8 @@ function Get-IniValue($text, $section, $key) {
     $inside = $false
     foreach ($line in ($text -split "`n")) {
         $t = $line.Trim()
-        if ($t.StartsWith('[')) { $inside = ($t.Substring(1).Split(']')[0].Trim() -eq $section); continue }
+        # Only the first section of the name counts, as Windows reads a repeated one.
+        if ($t.StartsWith('[')) { if ($inside) { return $null }; $inside = ($t.Substring(1).Split(']')[0].Trim() -eq $section.Trim()); continue }
         $i = $t.IndexOf('=')
         if (-not $inside -or $i -lt 0) { continue }
         if ($t.Substring(0, $i).Trim() -eq $key) {
@@ -77,7 +78,9 @@ function Set-IniKey($text, $section, $key, $value) {
         $body = $line.TrimEnd([char[]]"`r`n")
         $t = $body.Trim()
         if ($t.StartsWith('[')) {
-            $inside = ($t.Substring(1).Split(']')[0].Trim() -eq $section)
+            # Only the first section of the name, as Windows writes a repeated one.
+            if ($inside) { break }
+            $inside = ($t.Substring(1).Split(']')[0].Trim() -eq $section.Trim())
             if ($inside -and $under -lt 0) { $under = $at }
             continue
         }

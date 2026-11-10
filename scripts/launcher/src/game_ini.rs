@@ -162,22 +162,31 @@ fn block_key(line: &str) -> Option<&str> {
 }
 
 /// Whether `text` has `key` in a section named `section`, set or commented out (`;key=`): names
-/// compared without case, every section of that name looked in, as the game finds a key.
+/// compared without case, only the first section of that name looked in, as the game (and
+/// Windows) finds a key: one in a later section of the name is not read, so it counts as missing
+/// and is added to the first.
 fn has_key(text: &str, section: &str, key: &str) -> bool {
     let mut inside = false;
-    text.lines().any(|line| {
+    for line in text.lines() {
         if let Some(name) = section_of(line) {
+            if inside {
+                return false;
+            }
             inside = name.eq_ignore_ascii_case(section);
-            return false;
+            continue;
         }
-        inside
+        let found = inside
             && line.split_once('=').is_some_and(|(name, _)| {
                 let name = name.trim();
                 name.strip_prefix(';')
                     .map_or(name, str::trim)
                     .eq_ignore_ascii_case(key)
-            })
-    })
+            });
+        if found {
+            return true;
+        }
+    }
+    false
 }
 
 /// A `Fallout.ini` with all of our sections and keys in it ([`with_sections`]).
@@ -338,7 +347,9 @@ fn complete(text: &str, eol: &str) -> (String, Vec<&'static str>) {
 /// `text` with `key=value` in `section`: the first such key's value replaced where it stands
 /// (names compared without case, as the game finds them); else a `;key=` line of that section
 /// turned into the key; else the line added under the section's first heading; else the section
-/// added at the end. Every other byte stays.
+/// added at the end. Every other byte stays. Only the first section of the name is looked in:
+/// Windows reads and writes that one alone (measured), so a key in a later section of the same
+/// name is left as it is and the key goes into the first.
 pub fn set_key(text: &str, section: &str, key: &str, value: &str) -> String {
     let mut inside = false;
     let mut under_heading = None;
@@ -349,7 +360,10 @@ pub fn set_key(text: &str, section: &str, key: &str, value: &str) -> String {
         at += line.len();
         let body = line.trim_end_matches(['\r', '\n']);
         if let Some(name) = section_of(body) {
-            inside = name.eq_ignore_ascii_case(section);
+            if inside {
+                break;
+            }
+            inside = name.eq_ignore_ascii_case(section.trim());
             if inside && under_heading.is_none() {
                 under_heading = Some(at);
             }
@@ -767,6 +781,55 @@ mod tests {
         assert_eq!(
             set_key("[General]\nx=1", "Display", "iPresentInterval", "1"),
             "[General]\nx=1\n[Display]\niPresentInterval=1\n"
+        );
+    }
+
+    /// A repeated section name: Windows reads and writes only the first section of it
+    /// (measure/ini/repeated-sections.md), so `set_key` changes or adds the key there and leaves a
+    /// later section of the name as it is, and the completion counts a key that only a later
+    /// section has as missing.
+    #[test]
+    fn only_the_first_section_of_a_name_is_written() {
+        let ini = "[A]\r\nx=1\r\n[B]\r\nz=3\r\n[a]\r\ny=2\r\nx=9\r\n";
+        assert_eq!(
+            set_key(ini, "A", "x", "5"),
+            "[A]\r\nx=5\r\n[B]\r\nz=3\r\n[a]\r\ny=2\r\nx=9\r\n"
+        );
+        assert_eq!(
+            set_key(ini, "A", "y", "7"),
+            "[A]\r\ny=7\r\nx=1\r\n[B]\r\nz=3\r\n[a]\r\ny=2\r\nx=9\r\n"
+        );
+        assert_eq!(
+            set_key(ini, "a", "n", "8"),
+            "[A]\r\nn=8\r\nx=1\r\n[B]\r\nz=3\r\n[a]\r\ny=2\r\nx=9\r\n"
+        );
+        // An empty first section takes the key; a later one's commented line is not turned on.
+        assert_eq!(
+            set_key("[A]\r\n[A]\r\n;x=1\r\n", "A", "x", "5"),
+            "[A]\r\nx=5\r\n[A]\r\n;x=1\r\n"
+        );
+        // Completion: our key only in a later section of the name is added to the first.
+        let block = ours("\r\n");
+        let line = block
+            .lines()
+            .find(|l| l.starts_with("bBorderless="))
+            .unwrap();
+        let text = format!("{}[nv-rs Display]\r\nbBorderless=7\r\n", block).replacen(
+            &format!("{line}\r\n"),
+            "",
+            1,
+        );
+        let first = text.find("[nv-rs Display]").unwrap();
+        assert!(!text[first..text.find("[nv-rs Threads]").unwrap()].contains("bBorderless="));
+        let seeded = with_sections(&text).unwrap();
+        assert_eq!(seeded.added, ["bBorderless"]);
+        assert!(seeded
+            .text
+            .ends_with("[nv-rs Display]\r\nbBorderless=7\r\n"));
+        assert_eq!(
+            ini_value(&seeded.text, "nv-rs Display", "bBorderless"),
+            ini_value(SECTIONS, "nv-rs Display", "bBorderless"),
+            "the first section's, the block's value: the later 7 is not read"
         );
     }
 

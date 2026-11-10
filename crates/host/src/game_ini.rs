@@ -59,16 +59,21 @@ pub fn rows() -> Vec<Row> {
 }
 
 /// The value of `key` in `section` of the INI `text`, as the game's `GetPrivateProfileStringA`
-/// finds it (`engine_platform::ini`'s reader): every section of that name is looked in, names
-/// compared without case, spaces around names and values trimmed, one pair of surrounding quotes
-/// taken off; the first match wins. A `;` line never matches.
+/// finds it (`engine_platform::ini`'s reader): only in the first section of that name (a later
+/// section of the same name is not read, as Windows measured: measure/ini/repeated-sections.md),
+/// names compared without case, spaces around names and values trimmed, one pair of surrounding
+/// quotes taken off; the first match wins. A `;` line never matches.
 pub fn value<'a>(text: &'a str, section: &str, key: &str) -> Option<&'a str> {
     let mut inside = false;
     for line in text.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix('[') {
+            // The first section of the name ends here: no later one is read.
+            if inside {
+                return None;
+            }
             let name = rest.split(']').next().unwrap_or(rest);
-            inside = name.trim().eq_ignore_ascii_case(section);
+            inside = name.trim().eq_ignore_ascii_case(section.trim());
             continue;
         }
         if !inside {
@@ -360,10 +365,31 @@ mod tests {
         let text = "[nv-rs Display]\n;iFrameLimit=30\n  IFRAMELIMIT = \"60\" \niFrameLimit=90\n\
                     [General]\niFrameLimit=10\n[ NV-RS display ]\nbBorderless=1\n";
         assert_eq!(value(text, "nv-rs Display", "iFrameLimit"), Some("60"));
-        assert_eq!(value(text, "nv-rs Display", "bBorderless"), Some("1"));
+        // Only the first section of a name counts (Windows, measured 2026-11-09): the key in the
+        // later `[ NV-RS display ]` is not read.
+        assert_eq!(value(text, "nv-rs Display", "bBorderless"), None);
         assert_eq!(value(text, "General", "iFrameLimit"), Some("10"));
         assert_eq!(value(text, "nv-rs Display", ";iFrameLimit"), Some("30"));
         assert_eq!(value(text, "nv-rs Threads", "iFrameLimit"), None);
+    }
+
+    /// Windows' answers on a file with a repeated section name (measure/ini/repeated-sections.md,
+    /// scratch files, 2026-11-09): the first section of the name only, case and the spaces in the
+    /// brackets aside; an empty first section hides a later one too.
+    #[test]
+    fn only_the_first_section_of_a_name_is_read() {
+        let text = "[A]\r\nx=1\r\n[B]\r\nz=3\r\n[a]\r\ny=2\r\nx=9\r\n[ A ]\r\nw=6\r\n";
+        assert_eq!(value(text, "A", "x"), Some("1"));
+        assert_eq!(value(text, "A", "y"), None);
+        assert_eq!(value(text, "A", "w"), None);
+        assert_eq!(value(text, "B", "z"), Some("3"));
+        assert_eq!(value(text, " A ", "x"), Some("1"));
+        let text = "[a]\r\nx=1\r\n[A]\r\ny=2\r\n[C]\r\nq=1\r\n[C]\r\nq=2\r\nr=3\r\n";
+        assert_eq!(value(text, "A", "x"), Some("1"));
+        assert_eq!(value(text, "A", "y"), None);
+        assert_eq!(value(text, "C", "q"), Some("1"));
+        assert_eq!(value(text, "C", "r"), None);
+        assert_eq!(value("[A]\r\n[A]\r\nx=1\r\n", "A", "x"), None);
     }
 
     /// Unknown keys, original keys and notes are passed over; a value we can't use leaves the
