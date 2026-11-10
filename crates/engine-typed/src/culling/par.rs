@@ -1,6 +1,8 @@
-//! `NV_PAR_RENDER=1`: the culling walk on several cores, registered in the original order (the
-//! parallel-render design, P1 to P5 of DESIGN.md in the measure folder parallel-render). Off by
-//! default; with real or stepped threads (the helpers are engines like a game thread's,
+//! `NV_PAR_RENDER`: the culling walk on several cores, registered in the original order (the
+//! parallel-render design, P1 to P5 of DESIGN.md in the measure folder parallel-render). On by
+//! default with real threads, with the helpers the cores allow (`default_helpers`; none below 4
+//! logical processors); `NV_PAR_RENDER=off` turns it off, `=1` turns it on with real or stepped
+//! threads alike (the helpers are engines like a game thread's,
 //! `engine_core::real_threads::fork_join_first`; with stepped threads they run only inside main's
 //! turn, while it is in the fork, so a repeatable run stays repeatable; they take no memory from
 //! the game's heap, so the run records the same bytes with the switch on as off). Only with the
@@ -59,7 +61,9 @@ use super::FAMILY;
 use engine_core::ptr::Ptr;
 use engine_core::{typed_call, AbiFn, Engine, Ret};
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{
+    AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering::Relaxed,
+};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
@@ -287,6 +291,9 @@ impl Split {
 /// 0: not read, 1: off, 2: on, 3: check, 4: serial (the helpers made and given each split's process
 /// copy as when on, the walk serial on main: the off side of the stream gate).
 static MODE: AtomicU8 = AtomicU8::new(0);
+/// On by default (the switch unset): the walk splits only with real threads (a repeatable run, a
+/// recorded run and the tests step their threads, and keep the serial walk).
+static AUTO: AtomicBool = AtomicBool::new(false);
 static HELPERS: AtomicUsize = AtomicUsize::new(3);
 static MIN_CHILDREN: AtomicU32 = AtomicU32::new(16);
 /// Differences the check mode has printed (it stops at 20), and splits it compared.
@@ -333,22 +340,35 @@ fn mode() -> u8 {
 fn read_switch() -> u8 {
     let value = std::env::var("NV_PAR_RENDER").unwrap_or_default();
     let parts = || value.split(',').map(str::trim);
-    let m = if parts().any(|p| p == "serial") {
+    let threads = std::env::var("NV_PAR_RENDER_THREADS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok());
+    let m = if parts().any(|p| p == "off" || p == "0") {
+        1
+    } else if parts().any(|p| p == "serial") {
         4
     } else if parts().any(|p| p == "check") {
         3
     } else if parts().any(|p| p == "1" || p == "on") {
         2
     } else {
-        1
+        // Unset (or only `time`): on by default with real threads, with the helpers the
+        // machine's cores allow (`default_helpers`); never with stepped threads (`split`).
+        let helpers = threads.unwrap_or_else(|| {
+            default_helpers(std::thread::available_parallelism().map_or(1, usize::from))
+        });
+        if helpers == 0 {
+            1
+        } else {
+            AUTO.store(true, Relaxed);
+            2
+        }
     };
     if m >= 2 {
-        if let Some(n) = std::env::var("NV_PAR_RENDER_THREADS")
-            .ok()
-            .and_then(|v| v.trim().parse::<usize>().ok())
-        {
-            HELPERS.store(n.clamp(1, 15), Relaxed);
-        }
+        let helpers = threads.unwrap_or_else(|| {
+            default_helpers(std::thread::available_parallelism().map_or(1, usize::from)).max(1)
+        });
+        HELPERS.store(helpers.clamp(1, 15), Relaxed);
         if let Some(n) = std::env::var("NV_PAR_RENDER_MIN")
             .ok()
             .and_then(|v| v.trim().parse::<u32>().ok())
@@ -356,14 +376,36 @@ fn read_switch() -> u8 {
             MIN_CHILDREN.store(n.max(2), Relaxed);
         }
         println!(
-            "NV_PAR_RENDER={}: culling walks split over {} helpers at nodes of {}+ children",
-            value.trim(),
+            "NV_PAR_RENDER={}: culling walks split over {} helpers at nodes of {}+ children{}",
+            if value.trim().is_empty() {
+                "(default)"
+            } else {
+                value.trim()
+            },
             HELPERS.load(Relaxed),
-            MIN_CHILDREN.load(Relaxed)
+            MIN_CHILDREN.load(Relaxed),
+            if AUTO.load(Relaxed) {
+                ", with real threads only"
+            } else {
+                ""
+            }
         );
     }
     MODE.store(m, Relaxed);
     m
+}
+
+/// The helpers the parallel walk gets by default on a machine of `logical` logical processors:
+/// three from 8 up, one from 4 to 7, none (the walk stays serial) below 4. Measured on the
+/// maintainer's PC, pinned to 8 logical processors, crowded street: three helpers -1.29 ms a
+/// frame (+9.3%), one helper -0.47 ms (+3.2%); pinned to 4: MEASURE4. The game keeps main, the
+/// render thread and its loaders busy, so a helper needs a processor of its own to pay.
+fn default_helpers(logical: usize) -> usize {
+    match logical {
+        0..=3 => 0,
+        4..=7 => 1,
+        _ => 3,
+    }
 }
 
 /// For the replay-order test (`crates/engine/tests/par_render.rs`): the switch's mode (`off`, `on`,
@@ -377,6 +419,7 @@ pub fn set_for_tests(mode: &str, helpers: usize, min_children: u32) {
         "serial" => 4,
         _ => 1,
     };
+    AUTO.store(false, Relaxed);
     HELPERS.store(helpers.clamp(1, 15), Relaxed);
     MIN_CHILDREN.store(min_children.max(2), Relaxed);
     MODE.store(m, Relaxed);
@@ -707,7 +750,7 @@ pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32)
     if collecting() {
         return split_below(e, node, process, count);
     }
-    if !on_main(e) {
+    if !on_main(e) || (AUTO.load(Relaxed) && e.real.is_none()) {
         return false;
     }
     if let Some(why) = not_plain(e, process) {
