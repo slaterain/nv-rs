@@ -204,14 +204,10 @@ mod tests {
 
     /// Runs `f` without and with the row: the original's stop message, and the row's result.
     fn both<T>(mut make: impl FnMut() -> Engine, f: impl Fn(&mut Engine) -> T) -> (String, T) {
+        // No call log: it sends typed calls by address, where this engine answers 0.
         let mut e = make();
-        e.call_log = Some(vec![]);
         let stop = match catch_unwind(AssertUnwindSafe(|| f(&mut e))) {
-            Ok(_) => {
-                let log = e.call_log.take().unwrap_or_default();
-                let tail: Vec<_> = log.iter().rev().take(12).collect();
-                panic!("the original went on at the fault; its last calls: {tail:x?}")
-            }
+            Ok(_) => panic!("the original went on at the fault"),
             Err(stop) => stop
                 .downcast_ref::<String>()
                 .cloned()
@@ -220,16 +216,13 @@ mod tests {
         };
         let mut e = make();
         install(&mut e);
-        e.call_log = Some(vec![]);
         let result = catch_unwind(AssertUnwindSafe(|| f(&mut e))).unwrap_or_else(|stop| {
-            let log = e.call_log.take().unwrap_or_default();
-            let tail: Vec<_> = log.iter().rev().take(12).collect();
             let text = stop
                 .downcast_ref::<String>()
                 .cloned()
                 .or_else(|| stop.downcast_ref::<&str>().map(|s| s.to_string()))
                 .unwrap_or_default();
-            panic!("the row stopped: {text}; its last calls: {tail:x?}")
+            panic!("the row stopped: {text}")
         });
         (stop, result)
     }
