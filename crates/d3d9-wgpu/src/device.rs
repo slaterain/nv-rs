@@ -3807,10 +3807,7 @@ fn write_block(
 /// 12 bits. `from` is -1 for reference 0 (every alpha is at or above it).
 fn alpha_bounds(aref: u32) -> (f32, f32) {
     let above = |r: u32| ((4096 * (2 * r + 1)) / 510) as f32;
-    (
-        above(aref),
-        if aref == 0 { -1.0 } else { above(aref - 1) },
-    )
+    (above(aref), if aref == 0 { -1.0 } else { above(aref - 1) })
 }
 
 /// Whether a multisampled surface of `format` is resolved gamma-corrected ([`GAMMA_RESOLVE`]):
@@ -4012,7 +4009,13 @@ mod tests {
     fn the_alpha_bounds_are_the_measured_ones() {
         // Reference: GREATER from x = 9, 25, 266, 2049, 2306 (measured, 255 * alpha - ref =
         // +0.56030, +0.55640, +0.56006, +0.56226, +0.56201).
-        for (r, from) in [(0, 9.0), (1, 25.0), (16, 266.0), (127, 2049.0), (143, 2306.0)] {
+        for (r, from) in [
+            (0, 9.0),
+            (1, 25.0),
+            (16, 266.0),
+            (127, 2049.0),
+            (143, 2306.0),
+        ] {
             assert_eq!(alpha_bounds(r).0 + 1.0, from, "reference {r}");
             assert_eq!(alpha_bounds(r + 1).1 + 1.0, from, "reference {}", r + 1);
         }
