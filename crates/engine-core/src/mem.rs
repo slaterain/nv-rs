@@ -55,8 +55,8 @@
 //!   be between its page test and its access), so the shared `Mem` keeps
 //!   unmapped pages committed and hands them back only at the thread host's
 //!   barrier ([`Mem::hand_back_deferred`]).
-//! - The main thread's frees ([`Mem::free`], [`Mem::free_asked`]) are done
-//!   by the memory's free worker, a host thread, in their order, under the
+//! - The main thread's frees ([`Mem::free`], [`Mem::free_asked`]) past the
+//!   first 2,048 of a frame are done by the memory's free worker, a host thread, in their order, under the
 //!   same lock ([`Mem::defer_frees`]): a free's bookkeeping touches no guest
 //!   page and maps or unmaps none, so the rule above is untouched, and an
 //!   allocation the heap cannot serve does the waiting frees first.
@@ -558,6 +558,11 @@ impl Shared {
     }
 }
 
+/// How many of each of main's frames' frees it still does itself ([`Mem::defer_frees`]): only a
+/// burst past them is deferred. An ordinary frame frees a few hundred blocks, and the heap hands a
+/// block just freed out again for the next object of its size, still in the cache; deferring every
+/// free lost that and cost about 4% in light views (sitting S1, 2026-11-10).
+const INLINE_FREES: u32 = 2048;
 /// The frees a view that defers them ([`Mem::defer_frees`]) keeps before handing them on.
 const FREE_BATCH: usize = 64;
 /// The most frees the free worker does in one hold of the shared memory's lock (about 10 us).
@@ -718,6 +723,10 @@ pub struct Mem {
     /// [`Mem::batch`] until its next change of the shared `Mem` (any allocation, a full batch, the
     /// frame's end).
     defer_frees: bool,
+    /// Of a view that defers its frees: how many of each frame's frees it still does itself
+    /// ([`INLINE_FREES`]), and how many it has done this frame.
+    inline_frees: u32,
+    frame_frees: u32,
     /// A view's frees not yet handed on: (block, whether its asked size goes too).
     batch: Vec<(u32, bool)>,
     /// On the shared `Mem`: frees handed on, in order, waiting for the free worker; and the stop
@@ -1234,6 +1243,8 @@ impl Mem {
             view_path: Vec::new(),
             view_thread: 0,
             defer_frees: false,
+            inline_frees: 0,
+            frame_frees: 0,
             batch: Vec::new(),
             deferred: std::collections::VecDeque::new(),
             deferred_fault: None,
@@ -1268,6 +1279,8 @@ impl Mem {
             view_path: Vec::new(),
             view_thread: 0,
             defer_frees: false,
+            inline_frees: 0,
+            frame_frees: 0,
             batch: Vec::new(),
             deferred: std::collections::VecDeque::new(),
             deferred_fault: None,
@@ -1417,8 +1430,8 @@ impl Mem {
         }
     }
 
-    /// Real threads: this view's frees (the main thread's) go to the memory's free worker from now
-    /// on, a thread that does the heap's bookkeeping of each ([`Mem::free`], [`Mem::free_asked`])
+    /// Real threads: this view's frees (the main thread's) past the first [`INLINE_FREES`] of each frame
+    /// go to the memory's free worker from now on, a thread that does the heap's bookkeeping of each ([`Mem::free`], [`Mem::free_asked`])
     /// in the order they were made, under the shared memory's lock as before. The view keeps
     /// them in a batch and hands it on with its next change of the shared memory (any
     /// allocation), when the batch is full, and at the end of each of main's frames
@@ -1437,11 +1450,12 @@ impl Mem {
     /// Nothing changes for the pages: the heap never hands pages back, and the worker touches no
     /// guest page (the block check, which would, keeps frees on their own thread).
     pub fn defer_frees(&mut self) {
-        self.defer_frees_with(true);
+        self.defer_frees_with(true, INLINE_FREES);
     }
 
-    /// [`Mem::defer_frees`], with the free worker started or not (the tests' frees that wait).
-    fn defer_frees_with(&mut self, worker: bool) {
+    /// [`Mem::defer_frees`], with the free worker started or not (the tests' frees that wait) and
+    /// `inline` frees a frame done as before.
+    fn defer_frees_with(&mut self, worker: bool, inline: u32) {
         let Some(s) = self.shared else {
             return;
         };
@@ -1449,6 +1463,7 @@ impl Mem {
             return;
         }
         self.defer_frees = true;
+        self.inline_frees = inline;
         if worker {
             std::thread::Builder::new()
                 .name("nv memory frees".into())
@@ -1460,6 +1475,7 @@ impl Mem {
     /// Main's frame ended: the frees this view still holds go to the free worker
     /// ([`Mem::defer_frees`]).
     pub fn hand_on_frees(&mut self) {
+        self.frame_frees = 0;
         if let (Some(s), false) = (self.shared, self.batch.is_empty()) {
             self.with_shared(s, |_| ());
         }
@@ -1496,12 +1512,18 @@ impl Mem {
     }
 
     /// Real threads, on a view that defers its frees: the free of `addr` (`asked`: its asked size
-    /// goes too) kept for the free worker ([`Mem::defer_frees`]).
-    fn defer_free(&mut self, s: Shared, addr: u32, asked: bool) {
+    /// goes too) kept for the free worker ([`Mem::defer_frees`]) when this frame's first
+    /// [`INLINE_FREES`] are done; whether it was kept (else the caller does it).
+    fn defer_free(&mut self, s: Shared, addr: u32, asked: bool) -> bool {
+        if self.frame_frees < self.inline_frees {
+            self.frame_frees += 1;
+            return false;
+        }
         self.batch.push((addr, asked));
         if self.batch.len() >= FREE_BATCH {
             self.with_shared(s, |_| ());
         }
+        true
     }
 
     /// On the shared `Mem`, under its lock: this view's batch of frees handed on, the worker woken
@@ -1575,10 +1597,7 @@ impl Mem {
     /// [`Mem::free`] of a block of [`Mem::alloc_asked`], forgetting its asked size.
     pub fn free_asked(&mut self, addr: u32) {
         if let Some(s) = self.shared {
-            if self.defer_frees {
-                if addr != 0 {
-                    self.defer_free(s, addr, true);
-                }
+            if self.defer_frees && addr != 0 && self.defer_free(s, addr, true) {
                 return;
             }
             return self.with_shared(s, |m| m.free_asked(addr));
@@ -2614,8 +2633,7 @@ impl Mem {
             return;
         }
         if let Some(s) = self.shared {
-            if self.defer_frees {
-                self.defer_free(s, addr, false);
+            if self.defer_frees && self.defer_free(s, addr, false) {
                 return;
             }
             return self.with_shared(s, |m| m.free(addr));
@@ -3901,7 +3919,7 @@ mod tests {
         let a = m.alloc(1 << 20);
         let _b = m.alloc(0x100);
         m.start_sharing();
-        m.defer_frees_with(false);
+        m.defer_frees_with(false, 0);
         m.free(a);
         assert_eq!(m.batch.len(), 1, "kept by the view");
         owner(&m, |o| o.fill_heap());
@@ -3912,6 +3930,31 @@ mod tests {
         assert!(panic_text(r).starts_with("heap exhausted"));
     }
 
+    /// The first frees of a frame ([`INLINE_FREES`], here 1) are done at once, as before deferred frees (a block
+    /// freed is the next one of its size handed out), the ones past them kept; the frame's end starts
+    /// the count again.
+    #[test]
+    fn a_frames_first_frees_are_done_at_once_and_a_burst_past_them_kept() {
+        let mut m = Mem::new();
+        m.start_sharing();
+        m.defer_frees_with(false, 1);
+        for _ in 0..2 {
+            let a = m.alloc(0x40);
+            m.free(a);
+            assert!(m.batch.is_empty(), "done at once");
+            assert_eq!(m.alloc(0x40), a, "and handed out again");
+            m.free(a);
+            assert_eq!(
+                m.batch,
+                vec![(a, false)],
+                "the second free of the frame is kept"
+            );
+            m.hand_on_frees();
+            assert!(m.batch.is_empty());
+            owner(&m, |o| o.apply_all_deferred());
+        }
+    }
+
     /// A bad free of the main thread's (a block that is not live), found by the free worker, is
     /// kept for the frame's end, once, with the free's own words; the frees after it go on.
     #[test]
@@ -3920,7 +3963,7 @@ mod tests {
         let a = m.alloc(0x40);
         let b = m.alloc(0x40);
         m.start_sharing();
-        m.defer_frees();
+        m.defer_frees_with(true, 0);
         m.free(a);
         m.free(a);
         m.free(b);
