@@ -252,14 +252,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00b7_c120, textures::stage_light_texture(u32)),
         entry!(0x00b7_c190, textures::stage_shared_texture(u32)),
-        entry!(
-            0x00b7_c290,
-            textures::stage_fourth_texture(u32, u32, u32)
-        ),
-        entry!(
-            0x00b7_c2c0,
-            textures::stage_fifth_texture(Ptr<_>, u32, u32)
-        ),
+        entry!(0x00b7_c290, textures::stage_fourth_texture(u32, u32, u32)),
+        entry!(0x00b7_c2c0, textures::stage_fifth_texture(Ptr<_>, u32, u32)),
         entry!(0x00b7_1b10, textures::stage_clamp(Ptr<_>, u32, u32)),
         entry!(0x00b7_0820, lighting::light_setup(u32, Ptr<_>, f32)),
         entry!(

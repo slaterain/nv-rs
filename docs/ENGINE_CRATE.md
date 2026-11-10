@@ -483,6 +483,15 @@ Since 2026-11-09 `shader` also holds a constant map's upload of its entries (`Se
 light shader's per-geometry constants (`SetupGeometryConstants`, about 600 calls a frame in the crowded street,
 with the sixteen constant set-ups it calls, each registered; plain Rust calls inside it, as in the exe), in
 `shader::constants` and `shader::geometry`, tested in the same file against one shared world.
+And it holds the shadow light shader's per-geometry textures (`shader::textures`: the set-up the batch renderer
+runs just before the constants, about 600 times a frame there, with the seven stage set-ups it calls, each
+registered) and the lighting shaders' per-light set-up (`shader::lighting`, about 600 a frame); `render` holds the
+renderer's packed-geometry draw (`render::draw`: the Direct3D draw calls, about 1,150 a frame, with its skinned
+test and the shader's "is a pass set" slot). The batch renderer now calls the per-geometry textures, constants
+and state restore directly when the shader's slots hold the shadow light shader's own (another shader's go
+through its vtable), and `NiTriStrips`' immediate draw the packed draw when the renderer's slot holds it. With
+`render` on, the `NV_HEAD_CHECK` notes from the packed draw need `NV_TYPED=render:off`, as the stream set-up's
+do. SPEED
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with

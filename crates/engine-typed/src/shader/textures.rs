@@ -337,11 +337,7 @@ pub fn setup_geometry_textures(e: &mut Engine, this: Ptr, block: Ptr) {
             }
             set_stage_texture(e, stage, texture);
             // By address in the translation too: `00b71b10` is another unit's.
-            typed_call!(
-                FAMILY,
-                0x00b7_1b10,
-                stage_clamp(e, this, stage, property)
-            );
+            typed_call!(FAMILY, 0x00b7_1b10, stage_clamp(e, this, stage, property));
         }
         2 => {
             stage_texture(e, p, 0, 0);

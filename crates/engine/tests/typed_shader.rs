@@ -3092,7 +3092,11 @@ fn geometry_light(e: &mut Engine, i: u32, s: &Shape) -> u32 {
     e.mem.set_u8(light + 0xf4, ((s.points >> i) & 1) as u8);
     e.mem
         .set_u8(light + 0xf5, u8::from(s.bits & LIGHT_AMBIENT != 0));
-    let data = if s.bits & NO_LIGHT_DATA != 0 { 0 } else { values };
+    let data = if s.bits & NO_LIGHT_DATA != 0 {
+        0
+    } else {
+        values
+    };
     set(e, light + 0xf8, data);
     let rendered = e.mem.alloc(0x40);
     set(e, rendered + 0x30, 0x7500 + i);
@@ -3553,7 +3557,11 @@ fn geometry_shape(e: &mut Engine, s: &Shape) -> Geo {
     set(
         e,
         single,
-        if s.textures & TEX_NO_FIRST != 0 { 0 } else { 0x7300 },
+        if s.textures & TEX_NO_FIRST != 0 {
+            0
+        } else {
+            0x7300
+        },
     );
     set(e, w.property + 0xb4, single);
     let shadow = if s.textures & TEX_NO_OBJECT != 0 {
@@ -3602,6 +3610,18 @@ fn geometry_shape(e: &mut Engine, s: &Shape) -> Geo {
     }
 }
 
+/// What the translations of the dispatch and pathing callees the set-ups now reach for real call
+/// plainly (a Rust call, not logged), as typed_dispatch.rs lists them: the model matrix's (`00c4c2d0`)
+/// matrix row, columns and entry helpers (`00476930`, `00476980`, `004769c0`) and the square roots
+/// (`004019d0`, `00408860`) under the unitize (`004a0c10`) the light set-up calls.
+const SET_UP_PLAIN: &[u32] = &[
+    0x0047_6930,
+    0x0047_6980,
+    0x0047_69c0,
+    0x0040_19d0,
+    0x0040_8860,
+];
+
 trait Geometry {
     /// The families a set-up's test names: the shader family and the leaves, and the dispatch, pathing
     /// and render families the set-ups call into (the model matrix and the point helpers, the
@@ -3629,6 +3649,7 @@ impl Geometry for Diff {
             .family(&dispatch::DISPATCH)
             .family(&pathing::PATHING)
             .family(&render::RENDER)
+            .translation_calls_plainly(SET_UP_PLAIN)
             .max_calls(MAX_CALLS)
             .max_cases(160)
     }
@@ -4230,10 +4251,10 @@ const EVERY_TYPE: [u32; 0x2f0] = {
 
 /// A type or two of each body of the texture set-up, then types outside its table.
 const BODY_TYPES: &[u32] = &[
-    0x2, 0x2eb, 0x4, 0x5, 0x59, 0x1f4, 0x64, 0x235, 0x66, 0x91, 0x68, 0x7c, 0x1e4, 0x93, 0x1f6, 0x95,
-    0x10b, 0x96, 0x97, 0x12b, 0xc4, 0x128, 0xd8, 0xfe, 0x14b, 0x14c, 0x155, 0x24b, 0x1f7, 0x1ff,
-    0x207, 0x20f, 0x217, 0x21f, 0x227, 0x22e, 0x230, 0x231, 0x233, 0x244, 0x247, 0x248, 0x24a, 0x2d6,
-    0x2d7, 0, 1, 3, 0x2ec, 0x22f, 0x234,
+    0x2, 0x2eb, 0x4, 0x5, 0x59, 0x1f4, 0x64, 0x235, 0x66, 0x91, 0x68, 0x7c, 0x1e4, 0x93, 0x1f6,
+    0x95, 0x10b, 0x96, 0x97, 0x12b, 0xc4, 0x128, 0xd8, 0xfe, 0x14b, 0x14c, 0x155, 0x24b, 0x1f7,
+    0x1ff, 0x207, 0x20f, 0x217, 0x21f, 0x227, 0x22e, 0x230, 0x231, 0x233, 0x244, 0x247, 0x248,
+    0x24a, 0x2d6, 0x2d7, 0, 1, 3, 0x2ec, 0x22f, 0x234,
 ];
 
 /// A shape for the texture tests: the rendering object's type and selector byte, the texture
@@ -4418,26 +4439,23 @@ fn stage_fifth_texture() {
 /// A stage and a property, either or both null.
 #[test]
 fn stage_clamp() {
-    Diff::new(entry!(
-        0x00b7_1b10,
-        textures::stage_clamp(Ptr<_>, u32, u32)
-    ))
-    .shaped(
-        &[
-            Input::Of(&[0, 1, 2, 3]),
-            Input::Of(&[0, TEX_REAL_SLOTS]),
-            Input::Of(&[0, 3, 7]),
-        ],
-        100,
-        |c| texture_shape(0, c.word(2), c.word(1), true),
-        |g, c| {
-            let stage = if c.word(0) & 1 != 0 { 0 } else { g.stage };
-            let property = if c.word(0) & 2 != 0 { 0 } else { g.property };
-            vec![g.shader, stage, property]
-        },
-    )
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x00b7_1b10, textures::stage_clamp(Ptr<_>, u32, u32)))
+        .shaped(
+            &[
+                Input::Of(&[0, 1, 2, 3]),
+                Input::Of(&[0, TEX_REAL_SLOTS]),
+                Input::Of(&[0, 3, 7]),
+            ],
+            100,
+            |c| texture_shape(0, c.word(2), c.word(1), true),
+            |g, c| {
+                let stage = if c.word(0) & 1 != 0 { 0 } else { g.stage };
+                let property = if c.word(0) & 2 != 0 { 0 } else { g.property };
+                vec![g.shader, stage, property]
+            },
+        )
+        .run()
+        .assert_same();
 }
 
 // The lighting shaders' per-light set-up.
@@ -4449,64 +4467,61 @@ fn stage_clamp() {
 /// with every special value, the colours swept.
 #[test]
 fn light_setup() {
-    Diff::new(entry!(
-        0x00b7_0820,
-        lighting::light_setup(u32, Ptr<_>, f32)
-    ))
-    .shaped(
-        &[
-            Input::Of(&[0, 1, 7, 8, 9]),
-            Input::Of(&[1, 0, 2, 3, 4]),
-            Input::Of(&[8, 12, 7, 13, 1, 0x8000_0008]),
-            Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
-            Input::Of(&[0x154, 0x177, 0x153, 0x178, 0]),
-            Input::F32,
-            Input::F32,
-            Input::F32,
-            Input::F32Swept(PLAIN_FLOATS[F_COLOUR]),
-            Input::F32Swept(PLAIN_FLOATS[F_POSITION]),
-            Input::F32Swept(PLAIN_FLOATS[F_ROWS]),
-            Input::F32Swept(PLAIN_FLOATS[F_PROPERTY]),
-            Input::F32Swept(PLAIN_FLOATS[F_RADIUS]),
-        ],
-        400,
-        |c| {
-            let mut s = Shape::plain();
-            // 0 no light, 1 directional, 2 point, 3 directional without data, 4 point without data.
-            let light = c.word(1);
-            s.points = u32::from(light == 2 || light == 4);
-            if light >= 3 {
-                s.bits |= NO_LIGHT_DATA;
-            }
-            s.register = c.word(2);
-            let switches = c.word(3);
-            s.hdr = switches & 1 != 0;
-            if switches & 2 != 0 {
-                s.bits |= SKIP_AMBIENT;
-            }
-            if switches & 4 != 0 {
-                s.bits |= NO_EXTRA_SCALE;
-            }
-            if switches & 8 != 0 {
-                s.bits |= LIGHT_AMBIENT;
-            }
-            s.pass_type = c.word(4);
-            s.floats[F_STRENGTH] = bits(c, 6);
-            s.floats[F_THRESHOLD] = bits(c, 7);
-            s.floats[F_COLOUR] = bits(c, 8);
-            s.floats[F_POSITION] = bits(c, 9);
-            s.floats[F_ROWS] = bits(c, 10);
-            s.floats[F_PROPERTY] = bits(c, 11);
-            s.floats[F_RADIUS] = bits(c, 12);
-            s
-        },
-        |g, c| {
-            let light = if c.word(1) == 0 { 0 } else { g.light };
-            vec![c.word(0), light, bits(c, 5)]
-        },
-    )
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x00b7_0820, lighting::light_setup(u32, Ptr<_>, f32)))
+        .shaped(
+            &[
+                Input::Of(&[0, 1, 7, 8, 9]),
+                Input::Of(&[1, 0, 2, 3, 4]),
+                Input::Of(&[8, 12, 7, 13, 1, 0x8000_0008]),
+                Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
+                Input::Of(&[0x154, 0x177, 0x153, 0x178, 0]),
+                Input::F32,
+                Input::F32,
+                Input::F32,
+                Input::F32Swept(PLAIN_FLOATS[F_COLOUR]),
+                Input::F32Swept(PLAIN_FLOATS[F_POSITION]),
+                Input::F32Swept(PLAIN_FLOATS[F_ROWS]),
+                Input::F32Swept(PLAIN_FLOATS[F_PROPERTY]),
+                Input::F32Swept(PLAIN_FLOATS[F_RADIUS]),
+            ],
+            400,
+            |c| {
+                let mut s = Shape::plain();
+                // 0 no light, 1 directional, 2 point, 3 directional without data, 4 point without data.
+                let light = c.word(1);
+                s.points = u32::from(light == 2 || light == 4);
+                if light >= 3 {
+                    s.bits |= NO_LIGHT_DATA;
+                }
+                s.register = c.word(2);
+                let switches = c.word(3);
+                s.hdr = switches & 1 != 0;
+                if switches & 2 != 0 {
+                    s.bits |= SKIP_AMBIENT;
+                }
+                if switches & 4 != 0 {
+                    s.bits |= NO_EXTRA_SCALE;
+                }
+                if switches & 8 != 0 {
+                    s.bits |= LIGHT_AMBIENT;
+                }
+                s.pass_type = c.word(4);
+                s.floats[F_STRENGTH] = bits(c, 6);
+                s.floats[F_THRESHOLD] = bits(c, 7);
+                s.floats[F_COLOUR] = bits(c, 8);
+                s.floats[F_POSITION] = bits(c, 9);
+                s.floats[F_ROWS] = bits(c, 10);
+                s.floats[F_PROPERTY] = bits(c, 11);
+                s.floats[F_RADIUS] = bits(c, 12);
+                s
+            },
+            |g, c| {
+                let light = if c.word(1) == 0 { 0 } else { g.light };
+                vec![c.word(0), light, bits(c, 5)]
+            },
+        )
+        .run()
+        .assert_same();
 }
 
 // The batch renderer with the shadow light shader's own slots.
