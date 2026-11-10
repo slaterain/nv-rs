@@ -301,7 +301,8 @@ pub fn repeatable_frames() -> Result<Option<u64>, String> {
 
 impl Host {
     /// `NV_REPEATABLE=FRAMES`: true once main's FRAMES frames have run; the Direct3D 9 record
-    /// (`NV_D3D9_RECORD`) is written out first, so the caller can end the process.
+    /// (`NV_D3D9_RECORD`) and the sound's (`NV_SOUND_RECORD`) are written out first, so the
+    /// caller can end the process.
     pub fn repeatable_end(&mut self) -> bool {
         static FRAMES: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
         let Some(frames) = *FRAMES.get_or_init(|| repeatable_frames().ok().flatten()) else {
@@ -313,6 +314,8 @@ impl Host {
         self.join();
         #[cfg(windows)]
         engine_platform::d3d9real::finish_recording(&mut self.engine);
+        // The sound's recording too (`NV_SOUND_RECORD`): its WAV headers name every frame.
+        engine_platform::dsound::finish_recording(&mut self.engine);
         eprintln!("NV_REPEATABLE: {frames} main frames run; the run ends");
         true
     }

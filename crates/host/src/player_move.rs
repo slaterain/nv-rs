@@ -1270,6 +1270,9 @@ impl PlayerMovement {
                 self.main_frames += 1;
                 // `NV_REPEATABLE`: the virtual clock moves on to the frame's end.
                 e.repeatable_frame_end();
+                // `NV_REPEATABLE` with `NV_SOUND=out`: the sound's virtual device takes the
+                // frame's frames.
+                engine_platform::dsound::repeatable_pull(e);
                 engine::thread_host::note_frame(e);
                 // `NV_CENSUS` (a diagnostic): the census files at the frames it lists.
                 engine::census::at_frame(e, self.main_frames);

@@ -864,6 +864,7 @@ fn get_duration(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
 fn get_current_position(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
     let at = graph_of(e, this);
     let p = position_now(e, at);
+    super::dsound::trace(e, || format!("music {at:08x} get_CurrentPosition: {p}"));
     e.mem.set_f64(out.addr(), p as f64 / 1e7);
     S_OK
 }
