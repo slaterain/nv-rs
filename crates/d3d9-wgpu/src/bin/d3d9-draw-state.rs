@@ -274,15 +274,28 @@ fn main() {
     let mut draw = 0u64;
     // The combinations drawn so far, by kind.
     let kinds = [
-        "vs", "ps", "pair", "vs+layout", "ps+alpha", "ps+fog", "ps+srgb", "ps+target",
-        "ps+textures", "vs+clip", "ps+shade", "ps+points", "ps+alpha+target", "pair+joint",
+        "vs",
+        "ps",
+        "pair",
+        "vs+layout",
+        "ps+alpha",
+        "ps+fog",
+        "ps+srgb",
+        "ps+target",
+        "ps+textures",
+        "vs+clip",
+        "ps+shade",
+        "ps+points",
+        "ps+alpha+target",
+        "pair+joint",
     ];
     let mut seen: Vec<HashSet<String>> = kinds.iter().map(|_| HashSet::new()).collect();
     let mut new_here = vec![0u32; kinds.len()];
     let mut totals = vec![0u64; kinds.len()];
     let mut lines: Vec<String> = Vec::new();
     #[allow(clippy::type_complexity)]
-    let mut target_kinds: HashMap<(u32, u32, usize, u32), (u64, u64, HashSet<u32>)> = HashMap::new();
+    let mut target_kinds: HashMap<(u32, u32, usize, u32), (u64, u64, HashSet<u32>)> =
+        HashMap::new();
     // `SHOW=P:D,D,..` in the environment: present P's draws D (numbered from 1 as printed) are
     // printed in full whether or not anything in them is new (to name a replay's slow draws).
     let show: Option<(u64, Vec<u64>)> = std::env::var("SHOW").ok().map(|v| {
@@ -511,11 +524,7 @@ fn main() {
                     s.render(FOG_TABLE_MODE),
                     s.render(FOG_VERTEX_MODE)
                 );
-                let target = format!(
-                    "{} ms{} x{targets}",
-                    format_name(rt.format),
-                    rt.multisample
-                );
+                let target = format!("{} ms{} x{targets}", format_name(rt.format), rt.multisample);
                 let textures = s.textures_text();
                 let layout = s.layout_text();
                 let keys = [

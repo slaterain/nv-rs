@@ -2196,13 +2196,15 @@ mod tests {
         assert_eq!((w.done, w.failed), (4, 0), "two shaders into two kinds");
         assert!(w.queue.is_empty());
         let d = b.device(DEVICE).expect("the device");
-        let raw = |at: u32| b.objects.get(&at).map(|o| match o {
-            Object::Surface(s) => s.as_raw(),
-            Object::VertexShader(s) => s.as_raw(),
-            Object::PixelShader(s) => s.as_raw(),
-            Object::Declaration(s) => s.as_raw(),
-            _ => std::ptr::null_mut(),
-        });
+        let raw = |at: u32| {
+            b.objects.get(&at).map(|o| match o {
+                Object::Surface(s) => s.as_raw(),
+                Object::VertexShader(s) => s.as_raw(),
+                Object::PixelShader(s) => s.as_raw(),
+                Object::Declaration(s) => s.as_raw(),
+                _ => std::ptr::null_mut(),
+            })
+        };
         unsafe {
             assert_eq!(d.GetRenderTarget(0).ok().map(|s| s.as_raw()), raw(scene));
             assert!(d.GetRenderTarget(1).is_err(), "target 1 unbound");
@@ -2464,358 +2466,62 @@ mod tests {
         ));
     }
 
-    /// PROBE (first-shot investigation, not for the repo): the D3D9 defaults of the render states
-    /// the probe's warm-up may override.
-    fn probe_default(state: u32) -> u32 {
-        match state {
-            // ZENABLE (with an automatic depth buffer), SHADEMODE gouraud, ALPHAFUNC always,
-            // FOGEND and FOGDENSITY 1.0, MULTISAMPLEANTIALIAS on, COLORWRITEENABLE all.
-            7 | 161 => 1,
-            9 => 2,
-            25 => 8,
-            37 | 38 => 0x3f80_0000,
-            168 => 0xf,
-            _ => 0,
-        }
-    }
-
-    /// PROBE: what the probe's own warm-up draws and under what.
-    struct ProbeWarm {
-        singles: bool,
-        pairs: Vec<ProbePair>,
-        overrides: Vec<(u32, u32)>,
-        target: (u32, u32),
-        depth: u32,
-        /// `FS_LAYOUT=1`: a pair's draw with the declaration it is first drawn with.
-        layout: bool,
-        /// `FS_TEX=1`: with the textures bound at that draw (those made by then).
-        textures: bool,
-        /// `FS_STATES=1`: under every render state as set at that draw.
-        states: bool,
-    }
-
-    /// PROBE: a pair as the recording first draws with it.
-    struct ProbePair {
-        vs: u32,
-        ps: u32,
-        declaration: u32,
-        textures: Vec<(u32, u32)>,
-        render: Vec<(u32, u32)>,
-    }
-
-    /// PROBE: one point into a 1x1 target of the probe's with every shader in `shaders` (beside a
-    /// plain partner) when `singles`, and with every pair in `pairs`, under the render states
-    /// `overrides`; then the game's states and bindings again. Answers draws done, refused, time.
-    fn probe_warm(
-        b: &mut RealBackend,
-        device: u32,
-        bind: &Bindings,
-        render: &std::collections::HashMap<u32, u32>,
-        game_textures: &std::collections::HashMap<u32, u32>,
-        shaders: &[(u32, u8)],
-        p: &ProbeWarm,
-    ) -> (u32, u32, std::time::Duration) {
-        let d = b.device(device).expect("the device");
-        let t = warm_tools(&d).expect("the warm-up's tools");
-        let start = std::time::Instant::now();
-        let (mut done, mut failed) = (0, 0);
-        let zeros = [0u32; 4];
-        unsafe {
-            let mut target = None;
-            d.CreateRenderTarget(
-                1,
-                1,
-                D3DFORMAT(p.target.0),
-                D3DMULTISAMPLE_TYPE(p.target.1 as i32),
-                0,
-                BOOL(0),
-                &mut target,
-                std::ptr::null_mut(),
-            )
-            .expect("the probe's target");
-            let target = target.expect("the probe's target");
-            let mut depth = None;
-            if p.depth != 0 {
-                d.CreateDepthStencilSurface(
-                    1,
-                    1,
-                    D3DFORMAT(p.depth),
-                    D3DMULTISAMPLE_TYPE(p.target.1 as i32),
-                    0,
-                    BOOL(0),
-                    &mut depth,
-                    std::ptr::null_mut(),
-                )
-                .expect("the probe's depth surface");
-            }
-            d.BeginScene().expect("a scene");
-            let _ = d.SetRenderTarget(0, &target);
-            for i in 1..4 {
-                let _ = d.SetRenderTarget(i, None::<&IDirect3DSurface9>);
-            }
-            let _ = d.SetDepthStencilSurface(depth.as_ref());
-            let _ = d.SetVertexDeclaration(&t.declaration);
-            for &(state, value) in &p.overrides {
-                let _ = d.SetRenderState(D3DRENDERSTATETYPE(state as i32), value);
-            }
-            let draw = || {
-                d.DrawPrimitiveUP(
-                    D3DPT_POINTLIST,
-                    1,
-                    zeros.as_ptr().cast(),
-                    std::mem::size_of_val(&zeros) as u32,
-                )
-            };
-            if p.singles {
-                for &(shader, major) in shaders {
-                    let model = usize::from(major >= 3);
-                    let r = match b.objects.get(&shader) {
-                        Some(Object::VertexShader(vs)) => {
-                            let _ = d.SetPixelShader(&t.ps[model]);
-                            d.SetVertexShader(vs)
-                        }
-                        Some(Object::PixelShader(ps)) => {
-                            let _ = d.SetVertexShader(&t.vs[model]);
-                            d.SetPixelShader(ps)
-                        }
-                        _ => continue,
-                    }
-                    .and_then(|()| draw());
-                    if r.is_ok() {
-                        done += 1;
-                    } else {
-                        failed += 1;
-                    }
-                }
-            }
-            let big = [0u32; 64];
-            let mut touched_states: Vec<u32> = vec![];
-            let mut touched_samplers: Vec<u32> = vec![];
-            for pair in &p.pairs {
-                let (Some(Object::VertexShader(vs)), Some(Object::PixelShader(ps))) =
-                    (b.objects.get(&pair.vs), b.objects.get(&pair.ps))
-                else {
-                    failed += 1;
-                    continue;
-                };
-                if p.layout {
-                    match b.objects.get(&pair.declaration) {
-                        Some(Object::Declaration(decl)) => {
-                            let _ = d.SetVertexDeclaration(decl);
-                        }
-                        _ => {
-                            let _ = d.SetVertexDeclaration(&t.declaration);
-                        }
-                    }
-                }
-                if p.textures {
-                    for &(sampler, texture) in &pair.textures {
-                        let base: Option<IDirect3DBaseTexture9> = match b.objects.get(&texture) {
-                            Some(Object::Texture(x)) => x.cast().ok(),
-                            Some(Object::Cube(x)) => x.cast().ok(),
-                            _ => None,
-                        };
-                        let _ = d.SetTexture(sampler, base.as_ref());
-                        touched_samplers.push(sampler);
-                    }
-                }
-                if p.states {
-                    for &(state, value) in &pair.render {
-                        let _ = d.SetRenderState(D3DRENDERSTATETYPE(state as i32), value);
-                        touched_states.push(state);
-                    }
-                }
-                let r = d
-                    .SetVertexShader(vs)
-                    .and_then(|()| d.SetPixelShader(ps))
-                    .and_then(|()| {
-                        // Room for any of the game's layouts on stream 0 (one vertex).
-                        d.DrawPrimitiveUP(D3DPT_POINTLIST, 1, big.as_ptr().cast(), 128)
-                    });
-                if r.is_ok() {
-                    done += 1;
-                } else {
-                    failed += 1;
-                }
-            }
-            let _ = d.EndScene();
-            touched_states.extend(p.overrides.iter().map(|&(s, _)| s));
-            for state in touched_states {
-                let value = render
-                    .get(&state)
-                    .copied()
-                    .unwrap_or_else(|| probe_default(state));
-                let _ = d.SetRenderState(D3DRENDERSTATETYPE(state as i32), value);
-            }
-            for sampler in touched_samplers {
-                let texture = game_textures.get(&sampler).copied().unwrap_or(0);
-                b.device_command(Cmd::SetTexture {
-                    device,
-                    sampler,
-                    texture,
-                });
-            }
-        }
-        b.rebind(device, bind);
-        (done, failed, start.elapsed())
-    }
-
-    /// PROBE (first-shot investigation, not for the repo): replays the recording `FS_REC` into a
-    /// real device and writes to `FS_OUT`, per present: wall ms, ms inside the backend, the CPU ms
-    /// of the process's other threads (the driver's compiler among them), draws, and from present
-    /// `FS_FROM` the commands that took 0.3 ms or more with the shaders bound. `FS_WARM=0`: without
-    /// the backend's warm-up. After present `FS_AT` the probe's own warm-up ([`probe_warm`]):
-    /// `FS_SINGLES=1` every shader, `FS_PAIRS=P1-P2` the pairs the recording draws with in those
-    /// presents, `FS_RS=state=value,..` render states for it, `FS_RT=format-multisample` and
-    /// `FS_DEPTH=format` its target.
+    /// A measurement, not a check (ignored): replays the Direct3D 9 recording `D3D9_REPLAY_REC`
+    /// (`NV_D3D9_RECORD`) into a real device and writes to `D3D9_REPLAY_OUT`, a line a present: wall
+    /// ms, ms inside the backend, the CPU cycles of the process's other threads in millions (the
+    /// graphics driver's own threads, where its shader compiler runs), draws, and from present
+    /// `D3D9_REPLAY_FROM` on the commands that took 0.3 ms or more with the shaders bound.
+    /// `D3D9_REPLAY_STOP`: the last present; `D3D9_REPLAY_WARM=0`: without the shader warm-up. It found
+    /// what the driver still compiled at the first shot (a pixel shader again for a multisampled
+    /// target, [`Warm`]) without running the game; run it as `FalloutNV.exe` (the driver applies
+    /// its profile by the exe's name): build43-scratch/measure/stutter/fs-probe.sh.
     #[test]
     #[ignore]
-    fn probe_replay() {
+    fn replay_timing() {
         use std::io::Write;
         use std::time::{Duration, Instant};
         extern "system" {
             fn GetCurrentProcess() -> isize;
-            fn GetCurrentThread() -> isize;
             fn QueryProcessCycleTime(h: isize, cycles: *mut u64) -> i32;
             fn QueryThreadCycleTime(h: isize, cycles: *mut u64) -> i32;
         }
-        // CPU cycles so far (exact, unlike the 15.6 ms ticks of the times): (the whole process,
-        // this thread).
+        // `GetCurrentThread`'s pseudo handle.
+        const THIS_THREAD: isize = -2;
+        // CPU cycles so far (exact, unlike the 15.6 ms steps of the thread times): (the whole
+        // process, this thread).
         let cpu = || unsafe {
             let (mut process, mut thread) = (0u64, 0u64);
             QueryProcessCycleTime(GetCurrentProcess(), &mut process);
-            QueryThreadCycleTime(GetCurrentThread(), &mut thread);
+            QueryThreadCycleTime(THIS_THREAD, &mut thread);
             (process, thread)
         };
-        let Ok(path) = std::env::var("FS_REC") else {
+        let Ok(path) = std::env::var("D3D9_REPLAY_REC") else {
             return;
         };
-        let word = |text: &str| -> u32 {
-            let text = text.trim();
-            match text.strip_prefix("0x") {
-                Some(hex) => u32::from_str_radix(hex, 16).expect("a hex number"),
-                None => text.parse().expect("a number"),
-            }
+        let num = |name: &str, default: u32| {
+            std::env::var(name).map_or(default, |v| v.trim().parse().expect("a number"))
         };
-        let num = |name: &str, default: u32| std::env::var(name).map_or(default, |v| word(&v));
-        // `a=b,c=d` or `a-b`: pairs of numbers.
-        let pairs_of = |name: &str| -> Vec<(u32, u32)> {
-            std::env::var(name).map_or(vec![], |v| {
-                v.split(',')
-                    .filter(|part| !part.trim().is_empty())
-                    .map(|part| {
-                        let (a, b) = part.split_once(['=', '-']).expect("a pair");
-                        (word(a), word(b))
-                    })
-                    .collect()
-            })
-        };
-        let (from, stop) = (num("FS_FROM", 0), num("FS_STOP", u32::MAX));
-        let (cmd_from, cmd_to) = (num("FS_CMD", u32::MAX), num("FS_CMD_TO", 0));
-        let warm = num("FS_WARM", 1) != 0;
-        let at = num("FS_AT", 0);
-        let pair_presents = pairs_of("FS_PAIRS").first().copied();
-        let mut probe = ProbeWarm {
-            singles: num("FS_SINGLES", 0) != 0,
-            pairs: vec![],
-            overrides: pairs_of("FS_RS"),
-            target: pairs_of("FS_RT").first().copied().unwrap_or((21, 0)),
-            depth: num("FS_DEPTH", 0),
-            layout: num("FS_LAYOUT", 0) != 0,
-            textures: num("FS_TEX", 0) != 0,
-            states: num("FS_STATES", 0) != 0,
-        };
-        // `FS_ONLY=i,j,..`: only those of the pairs found (numbered from 0 in first-use order).
-        let only: Option<Vec<usize>> = std::env::var("FS_ONLY").ok().map(|v| {
-            v.split(',')
-                .map(|x| x.trim().parse().expect("a pair's number"))
-                .collect()
-        });
-        let out_path = std::env::var("FS_OUT").expect("FS_OUT");
+        let (from, stop) = (
+            num("D3D9_REPLAY_FROM", 0),
+            num("D3D9_REPLAY_STOP", u32::MAX),
+        );
+        let warm = num("D3D9_REPLAY_WARM", 1) != 0;
+        let out_path = std::env::var("D3D9_REPLAY_OUT").expect("D3D9_REPLAY_OUT");
         let bytes = std::fs::read(&path).expect("the recording");
-        // The pairs the recording draws with in the presents asked for, in first-use order.
-        if let Some((first, last)) = pair_presents {
-            let (mut vs, mut ps, mut presents, mut decl) = (0u32, 0u32, 0u32, 0u32);
-            let mut tex: std::collections::BTreeMap<u32, u32> = Default::default();
-            let mut rs: std::collections::BTreeMap<u32, u32> = Default::default();
-            for cmd in d3d9_stream::wire::commands(&bytes).expect("a stream") {
-                let Ok(cmd) = cmd else { break };
-                match cmd {
-                    Cmd::SetShader { pixel, shader, .. } => {
-                        if pixel {
-                            ps = shader;
-                        } else {
-                            vs = shader;
-                        }
-                    }
-                    Cmd::SetVertexDeclaration { declaration, .. } => decl = declaration,
-                    Cmd::SetTexture {
-                        sampler, texture, ..
-                    } => {
-                        tex.insert(sampler, texture);
-                    }
-                    Cmd::SetRenderState { state, value, .. } => {
-                        rs.insert(state, value);
-                    }
-                    Cmd::DrawPrimitive { .. }
-                    | Cmd::DrawIndexedPrimitive { .. }
-                    | Cmd::DrawPrimitiveUp { .. }
-                        if presents >= first
-                            && vs != 0
-                            && ps != 0
-                            && !probe.pairs.iter().any(|p| (p.vs, p.ps) == (vs, ps)) =>
-                    {
-                        probe.pairs.push(ProbePair {
-                            vs,
-                            ps,
-                            declaration: decl,
-                            textures: tex.iter().map(|(&s, &t)| (s, t)).collect(),
-                            render: rs.iter().map(|(&s, &v)| (s, v)).collect(),
-                        });
-                    }
-                    Cmd::Present { .. } => {
-                        presents += 1;
-                        if presents > last {
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
         let _turn = super::super::d3d9real::real_turn();
         let window = super::super::d3d9real::test_window().expect("a window");
-        if let Some(only) = &only {
-            let mut i = 0;
-            probe.pairs.retain(|_| {
-                i += 1;
-                only.contains(&(i - 1))
-            });
-        }
         let mut b = RealBackend::new().with_warm(warm);
         let mut out = std::io::BufWriter::new(std::fs::File::create(out_path).unwrap());
-        for (i, p) in probe.pairs.iter().enumerate() {
-            writeln!(
-                out,
-                "pair {i}: vs {:#x} ps {:#x} declaration {:#x} textures {:x?}",
-                p.vs, p.ps, p.declaration, p.textures
-            )
-            .unwrap();
-        }
-        let mut game_textures = std::collections::HashMap::new();
-        let mut presents = 0u32;
+        let (mut presents, mut draws) = (0u32, 0u32);
         let mut frame_start = Instant::now();
         let mut cpu_start = cpu();
         let mut bind = Bindings::default();
-        let mut render = std::collections::HashMap::new();
-        let mut shaders: Vec<(u32, u8)> = vec![];
-        let mut the_device = 0u32;
         let mut slow: Vec<String> = vec![];
-        let mut draws = 0u32;
         let mut inside = Duration::ZERO;
         for cmd in d3d9_stream::wire::commands(&bytes).expect("a stream") {
             // A recording cut by the run's end stops at its last whole command.
             let Ok(cmd) = cmd else { break };
+            // The recording's windows are gone: this test's window instead.
             let cmd = match cmd {
                 Cmd::CreateDevice {
                     device,
@@ -2866,28 +2572,6 @@ mod tests {
                 other => other,
             };
             bind.follow(&cmd);
-            match &cmd {
-                Cmd::CreateDevice { device, .. } => {
-                    the_device = *device;
-                    render.clear();
-                    shaders.clear();
-                }
-                Cmd::Reset { .. } => render.clear(),
-                Cmd::SetRenderState { state, value, .. } => {
-                    render.insert(*state, *value);
-                }
-                Cmd::SetTexture {
-                    sampler, texture, ..
-                } => {
-                    game_textures.insert(*sampler, *texture);
-                }
-                Cmd::CreateShader { shader, tokens, .. } => {
-                    let major = (tokens.to_words().first().copied().unwrap_or(0) >> 8) as u8;
-                    shaders.retain(|(s, _)| s != shader);
-                    shaders.push((*shader, major));
-                }
-                _ => {}
-            }
             let name = cmd.name();
             let is_present = matches!(cmd, Cmd::Present { .. });
             let is_draw = matches!(
@@ -2896,57 +2580,22 @@ mod tests {
                     | Cmd::DrawIndexedPrimitive { .. }
                     | Cmd::DrawPrimitiveUp { .. }
             );
-            // From present `FS_CMD` to `FS_CMD_TO`: the other threads' cycles over each command
-            // too (slows those presents; for naming the command the driver's compiler follows).
-            let per_cmd = presents >= cmd_from && presents <= cmd_to;
-            let c0 = if per_cmd { cpu() } else { (0, 0) };
             let t = Instant::now();
             b.execute(cmd);
             let dt = t.elapsed();
             inside += dt;
-            let other = if per_cmd {
-                let c1 = cpu();
-                (c1.0 - c0.0).saturating_sub(c1.1 - c0.1)
-            } else {
-                0
-            };
             if is_draw {
                 draws += 1;
             }
-            if presents >= from && (dt >= Duration::from_micros(300) || other >= 1_000_000) {
+            if presents >= from && dt >= Duration::from_micros(300) {
                 slow.push(format!(
-                    "{name}#{draws}:{:.2}ms others {:.1}M vs={:#x} ps={:#x} layout={:?}",
+                    "{name}#{draws}:{:.2}ms vs={:#x} ps={:#x}",
                     dt.as_secs_f64() * 1000.0,
-                    other as f64 / 1e6,
                     bind.vs,
-                    bind.ps,
-                    bind.layout
+                    bind.ps
                 ));
             }
             if is_present {
-                if at != 0 && presents == at {
-                    let (done, failed, took) =
-                        probe_warm(
-                            &mut b,
-                            the_device,
-                            &bind,
-                            &render,
-                            &game_textures,
-                            &shaders,
-                            &probe,
-                        );
-                    writeln!(
-                        out,
-                        "probe warm-up after present {presents}: {done} draws ({failed} refused) in {:.1} ms; singles {} pairs {} overrides {:?} target {:?} depth {}",
-                        took.as_secs_f64() * 1000.0,
-                        probe.singles,
-                        probe.pairs.len(),
-                        probe.overrides,
-                        probe.target,
-                        probe.depth
-                    )
-                    .unwrap();
-                }
                 let wall = frame_start.elapsed();
                 frame_start = Instant::now();
                 let now = cpu();
@@ -2957,8 +2606,7 @@ mod tests {
                     "present {presents}\t{:.3}\t{:.3}\t{:.3}\t{draws}\t{}",
                     wall.as_secs_f64() * 1000.0,
                     inside.as_secs_f64() * 1000.0,
-                    // Million cycles (about 0.3 ms each at this PC's clock).
-                    others as f64 / 1_000_000.0,
+                    others as f64 / 1e6,
                     slow.join(" | ")
                 )
                 .unwrap();
