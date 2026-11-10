@@ -246,6 +246,8 @@ fn main() {
         .next()
         .map_or(u64::MAX, |a| a.parse().expect("TO: a present"));
     let detail = std::env::var_os("DETAIL").is_some();
+    // `MADE=1`: every surface and target texture made, with the present it was made at.
+    let made = std::env::var_os("MADE").is_some();
     let mut names: HashMap<Vec<u8>, String> = HashMap::new();
     if let Some(dir) = shaders_dir {
         let mut files: Vec<_> = std::fs::read_dir(&dir)
@@ -273,12 +275,14 @@ fn main() {
     // The combinations drawn so far, by kind.
     let kinds = [
         "vs", "ps", "pair", "vs+layout", "ps+alpha", "ps+fog", "ps+srgb", "ps+target",
-        "ps+textures", "vs+clip", "ps+shade", "ps+points",
+        "ps+textures", "vs+clip", "ps+shade", "ps+points", "ps+alpha+target", "pair+joint",
     ];
     let mut seen: Vec<HashSet<String>> = kinds.iter().map(|_| HashSet::new()).collect();
     let mut new_here = vec![0u32; kinds.len()];
     let mut totals = vec![0u64; kinds.len()];
     let mut lines: Vec<String> = Vec::new();
+    #[allow(clippy::type_complexity)]
+    let mut target_kinds: HashMap<(u32, u32, usize, u32), (u64, u64, HashSet<u32>)> = HashMap::new();
     // `SHOW=P:D,D,..` in the environment: present P's draws D (numbered from 1 as printed) are
     // printed in full whether or not anything in them is new (to name a replay's slow draws).
     let show: Option<(u64, Vec<u64>)> = std::env::var("SHOW").ok().map(|v| {
@@ -343,6 +347,12 @@ fn main() {
                 format,
                 ..
             } => {
+                if made && usage & 3 != 0 {
+                    println!(
+                        "made target texture {texture:#x} {} usage {usage:#x} {width}x{height} at present {presents}",
+                        format_name(format)
+                    );
+                }
                 s.textures.insert(
                     texture,
                     Texture {
@@ -399,6 +409,12 @@ fn main() {
                 multisample,
                 ..
             } => {
+                if made {
+                    println!(
+                        "made surface {surface:#x} {} ms{multisample} {width}x{height} at present {presents}",
+                        format_name(format)
+                    );
+                }
                 s.surfaces.insert(
                     surface,
                     Surface {
@@ -474,6 +490,12 @@ fn main() {
                 let (vs, ps) = (s.shader_name(s.vs), s.shader_name(s.ps));
                 let rt = s.surfaces.get(&s.targets[0]).copied().unwrap_or_default();
                 let targets = s.targets.iter().filter(|&&t| t != 0).count();
+                let depth = s.surfaces.get(&s.depth).map_or(0, |d| d.format);
+                let kind = target_kinds
+                    .entry((rt.format, rt.multisample, targets, depth))
+                    .or_insert((presents, 0, HashSet::new()));
+                kind.1 += 1;
+                kind.2.insert(s.ps);
                 let alpha = format!(
                     "test {} func {}",
                     s.render(ALPHA_TEST),
@@ -509,6 +531,12 @@ fn main() {
                     format!("{vs} | clip planes {}", s.render(CLIP_PLANES)),
                     format!("{ps} | shade {}", s.render(SHADE_MODE)),
                     format!("{ps} | point sprites {}", s.render(POINT_SPRITES)),
+                    format!("{ps} | {alpha} | {target}"),
+                    format!(
+                        "{vs} + {ps} | {layout} | {alpha} | {fog} | {target} | srgb write {} | colour write {} | {textures}",
+                        s.render(SRGB_WRITE),
+                        s.render(COLOUR_WRITE)
+                    ),
                 ];
                 let mut new = Vec::new();
                 for (i, key) in keys.iter().enumerate() {
@@ -570,6 +598,17 @@ fn main() {
             }
             _ => {}
         }
+    }
+    // The kinds of target drawn into: first present, draws, pixel shaders drawn with.
+    let mut kinds_drawn: Vec<_> = target_kinds.into_iter().collect();
+    kinds_drawn.sort_by_key(|(k, _)| *k);
+    for ((format, multisample, targets, depth), (first, draws, shaders)) in kinds_drawn {
+        println!(
+            "target {} ms{multisample} x{targets} depth {}: from present {first}, {draws} draws, {} pixel shaders",
+            format_name(format),
+            format_name(depth),
+            shaders.len()
+        );
     }
     let all: Vec<String> = kinds
         .iter()
