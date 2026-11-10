@@ -353,7 +353,16 @@ pub fn tri_strips_render_immediate(e: &mut Engine, this: Ptr, renderer: Ptr) {
     );
     let mode = e.mem.u32(renderer.addr().wrapping_add(RENDERER_MODE));
     if (mode == 1 || mode == 2) && e.mem.u8(renderer.addr().wrapping_add(RENDERER_IMMEDIATE)) == 1 {
-        e.vcall(renderer.addr(), DRAW_TRI_STRIPS, &args![this]);
+        // `NiDX9Renderer` holds `00e74840` there (the render family's `draw_packed`).
+        if crate::slot_target(e, renderer.addr(), DRAW_TRI_STRIPS) == 0x00e7_4840 {
+            typed_call!(
+                crate::render::FAMILY,
+                0x00e7_4840,
+                crate::render::draw::draw_packed(e, renderer, this)
+            );
+        } else {
+            e.vcall(renderer.addr(), DRAW_TRI_STRIPS, &args![this]);
+        }
     }
 }
 

@@ -483,6 +483,17 @@ Since 2026-11-09 `shader` also holds a constant map's upload of its entries (`Se
 light shader's per-geometry constants (`SetupGeometryConstants`, about 600 calls a frame in the crowded street,
 with the sixteen constant set-ups it calls, each registered; plain Rust calls inside it, as in the exe), in
 `shader::constants` and `shader::geometry`, tested in the same file against one shared world.
+And it holds the shadow light shader's per-geometry textures (`shader::textures`: the set-up the batch renderer
+runs just before the constants, about 600 times a frame there, with the seven stage set-ups it calls, each
+registered) and the lighting shaders' per-light set-up (`shader::lighting`, about 600 a frame); `render` holds the
+renderer's packed-geometry draw (`render::draw`: the Direct3D draw calls, about 1,150 a frame, with its skinned
+test and the shader's "is a pass set" slot). The batch renderer now calls the per-geometry textures, constants
+and state restore directly when the shader's slots hold the shadow light shader's own (another shader's go
+through its vtable), and `NiTriStrips`' immediate draw the packed draw when the renderer's slot holds it. With
+`render` on, the `NV_HEAD_CHECK` notes from the packed draw need `NV_TYPED=render:off`, as the stream set-up's
+do. Speed (2026-11-10, the crowded street view, main's default against it, BAAB): neutral, crowded 15.25 to
+15.27 ms a frame, the sky 6.54 to 6.46 ms, both inside the spread between two runs of the same exe. The time
+moved from the translations to the typed code; the Direct3D 9 stream is byte-identical with the families on or off.
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with
@@ -529,7 +540,13 @@ the differential test read.
   typed function that can return one writes `.allow_nan_payloads()` in its differential test, and
   stores nothing it needs quieted.
 - A plain Rust call of a registered function isn't allowed in typed code: it would skip the flag,
-  doubles and diagnostics. A helper nothing registers is ordinary code.
+  doubles and diagnostics. A helper nothing registers is ordinary code. One exception: a call inside
+  one source file (one unit) that the translation also makes as a plain Rust call, at an address not
+  in `data/overridable.tsv` (the shadow light shader's set-up calling its own constant and stage
+  set-ups, the packed draw calling its skinned test). It costs what the translation's call costs: a
+  test double or a fix registered at the callee's address is not reached from there, and the
+  profiler and nv-trace do not see the call, so the profile's figure for the outer function
+  includes the callee.
 
 **The direct flag** lives in the `Engine`, one bit per family, so each engine has its own:
 

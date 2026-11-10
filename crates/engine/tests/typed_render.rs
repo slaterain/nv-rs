@@ -19,7 +19,7 @@ use engine_core::prelude::*;
 use engine_core::typed::diff::{Diff, Input};
 use engine_core::typed::leaf;
 use engine_core::{entry, Engine};
-use engine_typed::render::{self, pass, passes, stage, stream};
+use engine_typed::render::{self, draw, pass, passes, stage, stream};
 use engine_typed::{crt, culling, dispatch, pathing, shader};
 
 /// The stand-in virtual functions, one per slot, and the table of what each answers.
@@ -1052,6 +1052,252 @@ fn pack_geometry_buffer() {
         let object = e.mem.alloc(0x20);
         set(e, object + 0x18, 0x99);
         vec![renderer, buffer, data, object, source, c.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+// The renderer's packed-geometry draw.
+
+/// The draw tests' switches: the geometry has a skin (its first partition has buffer data, so the
+/// renderer's test answers at once); the strips have a lengths array; the renderer data has an index
+/// buffer; the geometry has no bound; the data has no vertices; the renderer skips drawing; the first
+/// partition's strip word is set (strips, not a list); the shader's slot 0x90 is the real `00e80580`.
+const DRAW_SKIN: u32 = 1;
+const DRAW_LENGTHS: u32 = 2;
+const DRAW_INDEXED: u32 = 4;
+const DRAW_NO_BOUND: u32 = 8;
+const DRAW_NO_VERTICES: u32 = 0x10;
+const DRAW_SKIPPED: u32 = 0x20;
+const DRAW_PARTITION_STRIPS: u32 = 0x40;
+const DRAW_REAL_SLOT: u32 = 0x80;
+
+/// What the draw tests make.
+struct Drawn {
+    renderer: u32,
+    geometry: u32,
+    shader: u32,
+    partitions: u32,
+}
+
+/// Renderer data (or a partition's data): `strips` strips of the lengths 5, 6, 7.. (or a list of 9
+/// primitives without `lengths`), each field moved by `seed`.
+fn strip_data(e: &mut Engine, strips: u32, lengths: bool, indexed: bool, seed: u32) -> u32 {
+    let data = e.mem.alloc(0x50);
+    set(e, data + 0x18, 0x100 + seed);
+    set(e, data + 0x34, if indexed { 0x7e00_2000 } else { 0 });
+    set(e, data + 0x38, 0x30 + seed);
+    set(e, data + 0x3c, 4 + seed);
+    set(e, data + 0x40, 9 + seed);
+    set(e, data + 0x48, strips);
+    if lengths {
+        let array = e.mem.alloc(0x10);
+        for i in 0..8u32 {
+            e.mem.set_u16(array + 2 * i, (5 + i + seed) as u16);
+        }
+        set(e, data + 0x4c, array);
+    }
+    data
+}
+
+/// A renderer with its device, a geometry with its data, bound and shader, and for a skinned one a
+/// skin whose instance holds `partitions` of four partitions (0x2c bytes each: the vertex count at
+/// +0x1c, the strip word at +0x22 of the first, the buffer data at +0x28).
+fn drawn(e: &mut Engine, switches: u32, strips: u32, partitions: u32, radius: u32) -> Drawn {
+    stand_ins(e, false);
+    slots!(e; 0x144, 0x148, 0xd4, 0xbc);
+    e.map(0, 0x1000);
+    let vt = vtable(e, &[]);
+    let device = obj(e, 0x10, vt);
+    let renderer = obj(e, 0x900, vt);
+    set(e, renderer + 0x288, device);
+    e.mem
+        .set_u8(renderer + 0x6fc, u8::from(switches & DRAW_SKIPPED != 0));
+    let lengths = switches & DRAW_LENGTHS != 0;
+    let skinned = switches & DRAW_SKIN != 0;
+    let data = obj(e, 0x40, vt);
+    // The data's vertex count (its slot 0x90): the low word decides.
+    let vertices = if switches & DRAW_NO_VERTICES != 0 {
+        0x1_0000
+    } else {
+        0x1_0020
+    };
+    set(e, RETS + 0x90, vertices);
+    e.mem.set_u16(data + 0xe, 0xabcd);
+    // A skinned geometry's data has no renderer data of its own (the skinned test asks).
+    let render_data = strip_data(e, strips, lengths, switches & DRAW_INDEXED != 0, 0);
+    set(e, data + 0x34, if skinned { 0 } else { render_data });
+    let shader_vt = if switches & DRAW_REAL_SLOT != 0 {
+        vtable(e, &[(0x90, 0x00e8_0580)])
+    } else {
+        vt
+    };
+    let shader = obj(e, 0x40, shader_vt);
+    let geometry = obj(e, 0xc4, vt);
+    let bound = e.mem.alloc(0x10);
+    for (i, w) in [0x3f80_0000u32, 0x4000_0000, 0x4040_0000, radius]
+        .iter()
+        .enumerate()
+    {
+        set(e, bound + 4 * i as u32, *w);
+        set(e, 0x011f_4288 + 4 * i as u32, *w ^ 0x0010_0000);
+    }
+    let own_bound = switches & DRAW_NO_BOUND == 0;
+    set(e, geometry + 0x20, if own_bound { bound } else { 0 });
+    set(e, geometry + 0xb8, data);
+    set(e, geometry + 0xc0, shader);
+    let array = e.mem.alloc(0x2c * 4);
+    if skinned {
+        for p in 0..4u32 {
+            let at = array + 0x2c * p;
+            e.mem.set_u16(at + 0x1c, (0x40 + p) as u16);
+            let part = strip_data(e, strips + (p & 1), lengths, true, 1 + p);
+            set(e, at + 0x28, part);
+        }
+        e.mem.set_u16(
+            array + 0x22,
+            u16::from(switches & DRAW_PARTITION_STRIPS != 0),
+        );
+        let instance = e.mem.alloc(0x10);
+        set(e, instance + 8, partitions);
+        set(e, instance + 0xc, array);
+        let skin = e.mem.alloc(0x10);
+        set(e, skin + 0xc, instance);
+        set(e, geometry + 0xbc, skin);
+    }
+    Drawn {
+        renderer,
+        geometry,
+        shader,
+        partitions: array,
+    }
+}
+
+/// `draw_packed` (`00e74840`): skipped or without vertices; a plain geometry drawn indexed (strips with
+/// or without lengths) or not; a skinned one partition by partition; with or without a bound, whose
+/// radius takes every special float; the shader's slot 0x90 real or a stand-in.
+#[test]
+fn draw_packed() {
+    Diff::new(entry!(0x00e7_4840, draw::draw_packed(Ptr, Ptr)))
+        .common(false)
+        .inputs(&[
+            Input::Of(&[
+                0,
+                DRAW_INDEXED,
+                DRAW_INDEXED | DRAW_LENGTHS,
+                DRAW_SKIN,
+                DRAW_SKIN | DRAW_LENGTHS,
+                DRAW_SKIN | DRAW_LENGTHS | DRAW_PARTITION_STRIPS,
+                DRAW_INDEXED | DRAW_NO_BOUND | DRAW_REAL_SLOT,
+                DRAW_SKIN | DRAW_REAL_SLOT,
+                DRAW_INDEXED | DRAW_NO_VERTICES,
+                DRAW_INDEXED | DRAW_SKIPPED,
+            ]),
+            Input::Of(&[1, 0, 3]),
+            Input::Of(&[1, 0, 2, 4]),
+            Input::F32,
+        ])
+        .max_cases(360)
+        .setup(|e, c| {
+            let d = drawn(e, c.word(0), c.word(1), c.word(2), c.f32(3).to_bits());
+            vec![d.renderer, d.geometry]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `is_skinned` (`00e72c20`): the data with renderer data of its own; the skin chain broken at each
+/// link; the first partition with or without buffer data; the renderer's answer (bit 1); an object
+/// handed in or the geometry's shader, the renderer's word and byte that ask it, and its answers.
+#[test]
+fn is_skinned() {
+    Diff::new(entry!(0x00e7_2c20, draw::is_skinned(Ptr, Ptr, u32) -> bool))
+        .common(false)
+        .inputs(&[
+            Input::Of(&[0, 1, 2, 3, 4]),
+            Input::Of(&[0, 2, 3]),
+            Input::Of(&[0, 1, 2]),
+            Input::Of(&[0, 0xfffe_0000, 0xfffe_0001]),
+            Input::Of(&[0, 1, 0x100, 0x101]),
+            Input::Of(&[0, 1, 2, 3]),
+        ])
+        .max_cases(400)
+        .setup(|e, c| {
+            // 0 the data has renderer data, 1 no skin, 2 no instance, 3 the first partition has
+            // buffer data, 4 it has none.
+            let chain = c.word(0);
+            let d = drawn(e, DRAW_SKIN, 1, 2, 0x3f80_0000);
+            let data = e.mem.u32(d.geometry + 0xb8);
+            let skin = e.mem.u32(d.geometry + 0xbc);
+            match chain {
+                0 => set(e, data + 0x34, 1),
+                1 => set(e, d.geometry + 0xbc, 0),
+                2 => set(e, skin + 0xc, 0),
+                3 => {}
+                _ => set(e, d.partitions + 0x28, 0),
+            }
+            set(e, RETS + 0xa0, c.word(1));
+            // The object: none (the geometry's shader is asked), one, or neither.
+            let object = match c.word(2) {
+                0 => 0,
+                1 => {
+                    let vt = e.mem.u32(d.renderer);
+                    obj(e, 0x10, vt)
+                }
+                _ => {
+                    set(e, d.geometry + 0xc0, 0);
+                    0
+                }
+            };
+            set(e, d.renderer + 0x6f0, c.word(3));
+            set(e, RETS + 0xd4, c.word(4));
+            e.mem.set_u8(d.renderer + 0x5d5, (c.word(5) & 1) as u8);
+            // The object's slot 0xbc: nothing, or an object whose slot 0xa8 answers the case's bit.
+            let inner = if c.word(5) & 2 != 0 { d.shader } else { 0 };
+            set(e, RETS + 0xbc, inner);
+            set(e, RETS + 0xa8, c.word(4) >> 8);
+            vec![d.renderer, d.geometry, object]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pass_is_set() {
+    Diff::new(entry!(0x00e8_0580, draw::pass_is_set(u32) -> u32))
+        .common(false)
+        .inputs(&[Input::Word, Input::Word])
+        .setup(|e, c| {
+            stand_ins(e, false);
+            set(e, CURRENT_PASS, c.word(0));
+            vec![c.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `NiTriStrips::RenderImmediate` (the dispatch family's) with the renderer's slot 0x1b8 holding the
+/// typed draw (`00e74840`), as `NiDX9Renderer` has it: the draw made direct.
+#[test]
+fn tri_strips_draw_through_the_typed_slot() {
+    Diff::new(entry!(
+        0x00a7_1d70,
+        dispatch::scene::tri_strips_render_immediate(Ptr, Ptr)
+    ))
+    .common(false)
+    .inputs(&[
+        Input::Of(&[DRAW_INDEXED, DRAW_SKIN | DRAW_LENGTHS, 0]),
+        Input::Of(&[1, 2, 0]),
+        Input::Of(TWO_WAYS),
+    ])
+    .setup(|e, c| {
+        let d = drawn(e, c.word(0), 2, 2, 0x3f80_0000);
+        let vt = vtable(e, &[(0x1b8, 0x00e7_4840)]);
+        set(e, d.renderer, vt);
+        // The renderer's draw mode and immediate flag.
+        set(e, d.renderer + 0x200, c.word(1));
+        e.mem.set_u8(d.renderer + 0x208, c.word(2) as u8);
+        vec![d.geometry, d.renderer]
     })
     .run()
     .assert_same();

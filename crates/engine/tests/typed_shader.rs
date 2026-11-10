@@ -18,8 +18,10 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::{entry, Engine};
-use engine_typed::shader::{self, accumulator as acc, batch, constants, geometry, state};
-use engine_typed::{crt, culling, pathing, render};
+use engine_typed::shader::{
+    self, accumulator as acc, batch, constants, geometry, lighting, state, textures,
+};
+use engine_typed::{crt, culling, dispatch, pathing, render};
 
 /// The stand-in virtual functions, one per slot, and the table of what each answers.
 const VT_FN: u32 = 0x00ff_2000;
@@ -79,6 +81,12 @@ fn obj(e: &mut Engine, size: u32, vt: u32) -> u32 {
 /// The callees outside the family; the plain geometry pass (`00b7dde0`) too unless the test names the
 /// render family, which holds it.
 fn stand_ins(e: &mut Engine, render: bool) {
+    stand_ins_named(e, render, false);
+}
+
+/// [`stand_ins`] for a test that names the render family (`render`: the plain geometry pass and the
+/// renderer's skinned test are its own) or the dispatch family (`dispatch`: the node pool's lock is).
+fn stand_ins_named(e: &mut Engine, render: bool, dispatch: bool) {
     e.map(RETS, 0x1000);
     slots!(e; 0x04, 0x08, 0x24, 0x30, 0x34, 0x64, 0x6c, 0x78, 0x7c, 0x80, 0x84, 0x88, 0x8c, 0xa0,
         0xa4, 0xa8, 0xac, 0xb0, 0xc0, 0xcc, 0xdc, 0xe0, 0xe4, 0xf0, 0xf4, 0xf8, 0xfc, 0x100, 0x104,
@@ -100,12 +108,14 @@ fn stand_ins(e: &mut Engine, render: bool) {
     e.register(0x00aa_4060, |_, _| ret(0));
     e.register(0x00b6_4ec0, |_, _| ret(0));
     // The node pool's lock: taken once more.
-    e.register(0x0040_fbf0, |e, _| {
-        let n = e.mem.u32(0x011c_5f84);
-        e.mem.set_u32(0x011c_5f84, n + 1);
-        e.mem.set_u32(0x011c_5f80, 1);
-        ret(0)
-    });
+    if !dispatch {
+        e.register(0x0040_fbf0, |e, _| {
+            let n = e.mem.u32(0x011c_5f84);
+            e.mem.set_u32(0x011c_5f84, n + 1);
+            e.mem.set_u32(0x011c_5f80, 1);
+            ret(0)
+        });
+    }
     // The shadow-pass test: odd types.
     e.register(0x00b6_30f0, |_, a| ret(a[0] & 1));
     if !render {
@@ -128,9 +138,11 @@ fn stand_ins(e: &mut Engine, render: bool) {
         e.register(addr, |_, _| ret(0));
     }
     // The renderer's skinned test: the geometry has a skin.
-    e.register(0x00e7_2c20, |e, a| {
-        ret(u32::from(e.mem.u32(a[1] + 0xbc) != 0))
-    });
+    if !render {
+        e.register(0x00e7_2c20, |e, a| {
+            ret(u32::from(e.mem.u32(a[1] + 0xbc) != 0))
+        });
+    }
     e.register(0x00b5_5560, |e, _| ret(e.mem.u32(RETS + 0x1f0)));
     // The D3DX helpers: a mark into the out word.
     for addr in [0x00ee_6dfe, 0x00ee_6df2, 0x00ee_6dec] {
@@ -226,7 +238,12 @@ fn world(e: &mut Engine) -> W {
 
 /// [`world`] for a test that names the render family: its geometry pass stays real.
 fn world_with(e: &mut Engine, render: bool) -> W {
-    stand_ins(e, render);
+    world_named(e, render, false)
+}
+
+/// [`world`] for a test that names the render or the dispatch family ([`stand_ins_named`]).
+fn world_named(e: &mut Engine, render: bool, dispatch: bool) -> W {
+    stand_ins_named(e, render, dispatch);
     let vt = vtable(e, &[]);
     let cache_vt = vtable(e, &[(0x68, 0x00e8_8780)]);
     let br_vt = vtable(e, &[(0x8c, 0x00b9_9c90)]);
@@ -585,8 +602,9 @@ impl Common for Diff {
     fn common(self) -> Diff {
         self.family(&shader::SHADER)
             .family(&leaf::LEAVES)
-            // The plain geometry pass (pass types 0xfc, 0xfd) is the render family's (its own test).
-            .goes_by_address(&[0x00b7_dde0])
+            // The plain geometry pass (pass types 0xfc, 0xfd) and the renderer's skinned test are the
+            // render family's (their own tests).
+            .goes_by_address(&[0x00b7_dde0, 0x00e7_2c20])
             .max_calls(MAX_CALLS)
             .max_cases(160)
     }
@@ -2867,7 +2885,8 @@ fn near(seed: u32, k: u32) -> u32 {
 /// HDR scale; the renderer's matrices and the geometry's transform; a light's clip planes and matrix; a
 /// light's and the geometry's position; a light's radius and strength; the game time; the fade's start
 /// time and duration; the eye, the plane with its distances and vertex entry 16's four floats; the
-/// shader property's floats with the fade's pairs and the lone constants; the transform's scale.
+/// shader property's floats with the fade's pairs and the lone constants; the transform's scale; a
+/// light's strength; the brightness threshold of the light set-up.
 const F_COLOUR: usize = 0;
 const F_CAMERA: usize = 1;
 const F_ROWS: usize = 2;
@@ -2881,8 +2900,10 @@ const F_DURATION: usize = 9;
 const F_EYE: usize = 10;
 const F_PROPERTY: usize = 11;
 const F_SCALE: usize = 12;
-const SHAPE_FLOATS: usize = 13;
-/// Their plain values: 1, 1, 0.75, 0.5, 0.25, 3, 50, 1234.5, 1, 0.2, 1.5, 0.6, 2.
+const F_STRENGTH: usize = 13;
+const F_THRESHOLD: usize = 14;
+const SHAPE_FLOATS: usize = 15;
+/// Their plain values: 1, 1, 0.75, 0.5, 0.25, 3, 50, 1234.5, 1, 0.2, 1.5, 0.6, 2, 0.5, 0.
 const PLAIN_FLOATS: [u32; SHAPE_FLOATS] = [
     ONE,
     ONE,
@@ -2897,13 +2918,18 @@ const PLAIN_FLOATS: [u32; SHAPE_FLOATS] = [
     0x3fc0_0000,
     0x3f19_999a,
     TWO,
+    HALF,
+    0,
 ];
 
 /// A [`Shape`]'s switches: the geometry has no position (+0x20 null, so `011f4288` is used); the
 /// rendering object's byte +8 is set; both distances of pixel entry 19 are 0; the accumulator has no
 /// shadow maps (+0x194 clear); the first light's clip planes are already made (+0x208); the first
 /// light's byte +0xed is set; the rendering object has no light array (+0xc null); the set-ups that
-/// take the rendering object get a copy with the lights while `011f91e0`'s own has no light array.
+/// take the rendering object get a copy with the lights while `011f91e0`'s own has no light array; the
+/// lights have no data (+0xf8 null); the light set-up's bytes `011f91de` and `011f9427`; the lights'
+/// byte +0xf5; the lights' ambient colour (-1, 0, 0) at strength 1, whose luminance is exactly 0 under
+/// either control word.
 const NO_POSITION: u32 = 1;
 const RENDER_BYTE: u32 = 2;
 const ZERO_RANGE: u32 = 0x10;
@@ -2912,11 +2938,31 @@ const CLIP_CACHED: u32 = 0x100;
 const LIGHT_ED: u32 = 0x200;
 const NO_LIGHT_ARRAY: u32 = 0x400;
 const SPLIT_BLOCK: u32 = 0x800;
+const NO_LIGHT_DATA: u32 = 0x1000;
+const SKIP_AMBIENT: u32 = 0x2000;
+const NO_EXTRA_SCALE: u32 = 0x4000;
+const LIGHT_AMBIENT: u32 = 0x8000;
+const DARK_AMBIENT: u32 = 0x1_0000;
+
+/// The texture switches (a [`Shape`]'s `textures`): the property's first texture is null; it has no
+/// object at +0xdc, or one without a texture; its vtable +0xe0 is the real clamp mode (`00b671c0`), the
+/// shader's +0x108 the real stage binding (`00be2170`) and its +0x154 the real `UpdateTogglesConstant`
+/// (`00c02d90`), else stand-ins; the choice and filter bytes of the shared texture; the property's second
+/// array is empty.
+const TEX_NO_FIRST: u32 = 1;
+const TEX_NO_OBJECT: u32 = 2;
+const TEX_NO_OBJECT_TEXTURE: u32 = 4;
+const TEX_REAL_SLOTS: u32 = 8;
+const TEX_CHOICE: u32 = 0x10;
+const TEX_FILTER: u32 = 0x20;
+const TEX_NO_SECOND: u32 = 0x40;
 
 /// The lights the world makes (the set-ups stop at 10).
 const LIGHTS: u32 = 12;
-/// The stand-in of the shader property's vtable +0x110: the float at `RETS + 0x110`, in ST0.
+/// The stand-ins of the shader property's vtable +0x110 and +0x10c: the floats at `RETS + 0x110` and
+/// `RETS + 0x10c`, in ST0.
 const FLOAT_SLOT: u32 = 0x00ff_2900;
+const FLOAT_SLOT_10C: u32 = 0x00ff_2910;
 
 /// What the set-up tests' world is made of ([`geometry_shape`]).
 #[derive(Clone, Copy)]
@@ -2932,10 +2978,12 @@ struct Shape {
     null_light: u32,
     points: u32,
     active: u32,
-    /// The shader property's flags (+0x20, +0x24) and its integer at +0xe4.
+    /// The shader property's flags (+0x20, +0x24), its integer at +0xe4 and its word at +0x1c (a
+    /// register for the shadow projection, its type for the light set-up).
     flags: u32,
     flags_24: u32,
     steps: u32,
+    register: u32,
     /// The vertex and pixel entries: 0 off, 1 on, 2 every other one.
     entries: u32,
     skinned: bool,
@@ -2950,8 +2998,9 @@ struct Shape {
     /// The alpha property's flags (+0x18) and byte (+0x1a).
     alpha_flags: u16,
     alpha_byte: u8,
-    /// [`NO_POSITION`] and the other switches.
+    /// [`NO_POSITION`] and the other switches; [`TEX_NO_FIRST`] and the other texture switches.
     bits: u32,
+    textures: u32,
     floats: [u32; SHAPE_FLOATS],
 }
 
@@ -2969,6 +3018,7 @@ impl Shape {
             flags: 0,
             flags_24: 0x20,
             steps: 1,
+            register: 1,
             entries: 1,
             skinned: false,
             misc: 0,
@@ -2978,6 +3028,7 @@ impl Shape {
             alpha_flags: 0x032b,
             alpha_byte: 0x80,
             bits: 0,
+            textures: 0,
             floats: PLAIN_FLOATS,
         }
     }
@@ -3004,6 +3055,7 @@ impl Shape {
             flags: c.word(2),
             flags_24: if misc & 1 != 0 { 0x28010 } else { 0x20 },
             steps: c.word(1),
+            register: if misc & 4 != 0 { u32::MAX } else { 1 },
             entries: c.word(3),
             skinned: c.word(4) != 0,
             misc,
@@ -3013,14 +3065,21 @@ impl Shape {
             alpha_flags: [0x032b, 0x012b, 0x012a, 0x032a][((options >> 2) & 3) as usize],
             alpha_byte: [0x80, 0, 0xff][(misc % 3) as usize],
             bits: switches,
+            textures: if options & RENDER_BYTE != 0 {
+                TEX_REAL_SLOTS
+            } else {
+                0
+            },
             floats,
         }
     }
 }
 
-/// A light for the set-up tests: its matrix (+0x10), scale (+0xd0), the bytes at +0xed and +0xf4 (a
-/// point light), six clip planes (+0x144) and the made ones (+0x1a8) with their byte (+0x208), and its
-/// data (+0xf8: position +0x8c, strength +0xc4, colour +0xd4, radius +0xe0, direction +0xf0).
+/// A light for the set-up tests: its matrix (+0x10), scale (+0xd0) and fourth colour word (+0xd4), the
+/// bytes at +0xed, +0xf4 (a point light) and +0xf5, its shadow map (+0x10c, a rendered texture whose
+/// texture is at +0x30), six clip planes (+0x144) and the made ones (+0x1a8) with their byte (+0x208),
+/// and its data (+0xf8, or none: position +0x8c, strength +0xc4, ambient colour +0xc8, colour +0xd4,
+/// radius +0xe0, direction +0xf0).
 fn geometry_light(e: &mut Engine, i: u32, s: &Shape) -> u32 {
     let light = e.mem.alloc(0x220);
     let values = e.mem.alloc(0x100);
@@ -3029,10 +3088,21 @@ fn geometry_light(e: &mut Engine, i: u32, s: &Shape) -> u32 {
         set(e, light + 0x10 + 4 * k, word);
     }
     set(e, light + 0xd0, TWO);
+    set(e, light + 0xd4, near(s.floats[F_RADIUS], 0x20 + i));
     e.mem
         .set_u8(light + 0xed, u8::from(i == 0 && s.bits & LIGHT_ED != 0));
     e.mem.set_u8(light + 0xf4, ((s.points >> i) & 1) as u8);
-    set(e, light + 0xf8, values);
+    e.mem
+        .set_u8(light + 0xf5, u8::from(s.bits & LIGHT_AMBIENT != 0));
+    let data = if s.bits & NO_LIGHT_DATA != 0 {
+        0
+    } else {
+        values
+    };
+    set(e, light + 0xf8, data);
+    let rendered = e.mem.alloc(0x40);
+    set(e, rendered + 0x30, 0x7500 + i);
+    set(e, light + 0x10c, rendered);
     for k in 0..24u32 {
         set(
             e,
@@ -3060,9 +3130,20 @@ fn geometry_light(e: &mut Engine, i: u32, s: &Shape) -> u32 {
             values + 0xd4 + 4 * k,
             near(s.floats[F_COLOUR], 3 * i + k),
         );
+        set(
+            e,
+            values + 0xc8 + 4 * k,
+            near(s.floats[F_COLOUR], 0x40 + 3 * i + k),
+        );
     }
-    set(e, values + 0xc4, near(s.floats[F_RADIUS], 1 + i));
+    set(e, values + 0xc4, near(s.floats[F_STRENGTH], i));
     set(e, values + 0xe0, near(s.floats[F_RADIUS], 0x10 * i));
+    if s.bits & DARK_AMBIENT != 0 {
+        set(e, values + 0xc4, ONE);
+        set(e, values + 0xc8, 0xbf80_0000);
+        set(e, values + 0xcc, 0);
+        set(e, values + 0xd0, 0);
+    }
     light
 }
 
@@ -3076,9 +3157,10 @@ fn words_at(e: &Engine, at: u32, n: u32) -> Vec<u32> {
 /// both sides: a vector function (out, in, ..) writes its three floats rotated by one, a plane's
 /// normalize copies and its transform rotates the four, a matrix's transpose is the real one, its
 /// multiply (out, a, b) writes `a` with `b`'s low bytes mixed in and its inverse (out, determinant, in)
-/// writes the floats in reverse. The model matrix writes a mark of its words; the light, ambient and pass
-/// set-ups leave a mark of the call; the fog property and the first active light answer from the table,
-/// the shader property's vtable +0x110 a float, the CRT's `_errno` a word of the table.
+/// writes the floats in reverse. The ambient and pass set-ups leave a mark of the call; the fog property
+/// and the first active light answer from the table, the shader property's vtable +0x110 and +0x10c a
+/// float each, the CRT's `_errno` a word of the table. The model matrix (`00c4c2d0`) and the per-light
+/// set-up (`00b70820`) are the real ones: typed, in the dispatch and shader families.
 fn geometry_stand_ins(e: &mut Engine) {
     for addr in [0x00ee_6df8u32, 0x00ee_6df2, 0x00ee_6dec] {
         e.register(addr, |e, a| {
@@ -3126,21 +3208,7 @@ fn geometry_stand_ins(e: &mut Engine) {
         }
         ret(a[0])
     });
-    // The model matrix (transform, skin, out).
-    e.register(0x00c4_c2d0, |e, a| {
-        for k in 0..16u32 {
-            let w = if k % 5 == 0 { ONE } else { a[0] & 0xffff };
-            e.mem.set_u32(a[2] + 4 * k, w);
-        }
-        ret(a[2])
-    });
-    for addr in [
-        0x00b7_0820u32,
-        0x00c0_3180,
-        0x00b7_ad00,
-        0x00b7_ce90,
-        0x00c0_2c30,
-    ] {
+    for addr in [0x00c0_3180u32, 0x00b7_ad00, 0x00b7_ce90, 0x00c0_2c30] {
         e.register(addr, |e, a| {
             let n = e.mem.u32(RETS + 0x500);
             e.mem.set_u32(
@@ -3157,10 +3225,14 @@ fn geometry_stand_ins(e: &mut Engine) {
         st0: f64::from(f32::from_bits(e.mem.u32(RETS + 0x110))),
         ..Ret::default()
     });
+    e.register(FLOAT_SLOT_10C, |e, _| Ret {
+        st0: f64::from(f32::from_bits(e.mem.u32(RETS + 0x10c))),
+        ..Ret::default()
+    });
     // The CRT's `_errno` (`00ec85e3`): a length that overflows sets it in the square root's error
     // path, which otherwise reads the thread's data through imports. A word of the table instead.
     e.register(0x00ec_85e3, |_, _| ret(RETS + 0x600));
-    slots!(e; 0x154);
+    slots!(e; 0x154, 0x108);
 }
 
 /// The words and floats every set-up test varies: the pass type (one of each path: the full set-up,
@@ -3192,6 +3264,8 @@ const GEOMETRY_INPUTS: &[Input] = &[
     Input::F32Swept(PLAIN_FLOATS[F_EYE]),
     Input::F32Swept(PLAIN_FLOATS[F_PROPERTY]),
     Input::F32Swept(PLAIN_FLOATS[F_SCALE]),
+    Input::F32Swept(PLAIN_FLOATS[F_STRENGTH]),
+    Input::F32Swept(PLAIN_FLOATS[F_THRESHOLD]),
 ];
 
 /// What a set-up test passes its function.
@@ -3210,6 +3284,10 @@ struct Geo {
     fog: u32,
     /// A 4x4 matrix for the by-value set-ups.
     matrix: [u32; 16],
+    /// The first light (also when the rendering object's pointer to it is null) and the current
+    /// pass's stage 2.
+    light: u32,
+    stage: u32,
 }
 
 impl Geo {
@@ -3224,22 +3302,25 @@ fn geometry_world(e: &mut Engine, c: &Case) -> Geo {
     geometry_shape(e, &Shape::of(c))
 }
 
-/// The world of the set-up tests: [`world`] with everything the set-ups read made from `s`.
+/// The world of the set-up tests: [`world`] with everything the set-ups read made from `s`. The tests
+/// name the render and dispatch families ([`Geometry::set_ups`]), so their functions are the real ones.
 fn geometry_shape(e: &mut Engine, s: &Shape) -> Geo {
-    let w = world(e);
+    let w = world_named(e, true, true);
     geometry_stand_ins(e);
     e.map(0, 0x1000);
     for (addr, len) in [
         (0x0102_0000, 0x1000),
+        (0x0102_6000, 0x1000),
         (0x0104_e000, 0x1000),
         (0x0105_0000, 0x1000),
+        (0x0107_8000, 0x1000),
         (0x010a_e000, 0x2000),
     ] {
         e.map(addr, len);
     }
     let seed = |i: usize, k: u32| near(s.floats[i], k);
-    // The exe's constants: the doubles 1, 3600, 6.28318, 15, 5, 255 and the luminance weights
-    // (0.32, 0.31, 0.36 as floats), the floats -1 and 0.5.
+    // The exe's constants: the doubles 1, 3600, 6.28318, 15, 5, 255, the luminance weights (0.32, 0.31,
+    // 0.36 as floats), the light set-up's weights (0.34, 0.33) and offset (0.1), the floats -1 and 0.5.
     for (addr, value) in [
         (0x0101_2070u32, 1.0f64.to_bits()),
         (0x0101_2640, 3600.0f64.to_bits()),
@@ -3250,6 +3331,9 @@ fn geometry_shape(e: &mut Engine, s: &Shape) -> Geo {
         (0x010a_e8b0, 0x3fd4_7ae1_4000_0000),
         (0x010a_e8b8, 0x3fd3_d70a_4000_0000),
         (0x010a_e8c0, 0x3fd7_0a3d_8000_0000),
+        (0x0107_84d0, 0x3fd5_c28f_6000_0000),
+        (0x0102_6998, 0x3fd5_1eb8_6000_0000),
+        (0x0101_ffa0, 0x3fb9_9999_a000_0000),
     ] {
         e.mem.set_u64(addr, value);
     }
@@ -3364,6 +3448,13 @@ fn geometry_shape(e: &mut Engine, s: &Shape) -> Geo {
     e.mem.set_u8(0x011f_941e, u8::from(s.hdr));
     set(e, 0x011f_91b8, s.mode);
     e.mem.set_u8(0x011f_91a7, u8::from(s.white));
+    // The light set-up's bytes, brightness threshold and extra scale.
+    e.mem
+        .set_u8(0x011f_91de, u8::from(s.bits & SKIP_AMBIENT != 0));
+    e.mem
+        .set_u8(0x011f_9427, u8::from(s.bits & NO_EXTRA_SCALE != 0));
+    set(e, 0x011f_947c, s.floats[F_THRESHOLD]);
+    set(e, 0x011f_9190, seed(F_ROWS, 0x7e));
     // The eye, the plane and its distances, vertex entry 16's floats; the times and the fade.
     for k in 0..3u32 {
         set(e, 0x011f_a2a0 + 4 * k, seed(F_EYE, k));
@@ -3390,18 +3481,22 @@ fn geometry_shape(e: &mut Engine, s: &Shape) -> Geo {
     set(e, 0x010a_f2f0, seed(F_PROPERTY, 0x22));
     set(e, 0x0101_77e8, seed(F_PROPERTY, 0x23));
     set(e, 0x011f_a2d4, ONE);
-    // The shader property (its floats, its vtable +0x110 a float), the alpha property, the block.
-    let property_vt = vtable(e, &[(0x110, FLOAT_SLOT)]);
+    // The shader property (its floats, its vtable +0x110 and +0x10c a float each, +0xe0 the real clamp
+    // mode or a stand-in answering 5), the alpha property, the block.
+    let real_slots = s.textures & TEX_REAL_SLOTS != 0;
+    let mut slots = vec![(0x110u32, FLOAT_SLOT), (0x10c, FLOAT_SLOT_10C)];
+    if real_slots {
+        slots.push((0xe0, 0x00b6_71c0));
+    }
+    let property_vt = vtable(e, &slots);
     set(e, w.property, property_vt);
     set(e, RETS + 0x110, seed(F_PROPERTY, 0x20));
+    set(e, RETS + 0x10c, seed(F_PROPERTY, 0x28));
+    set(e, RETS + 0xe0, 5);
     set(e, w.property + 0x20, s.flags);
     set(e, w.property + 0x24, s.flags_24);
     set(e, w.property + 0xe4, s.steps);
-    set(
-        e,
-        w.property + 0x1c,
-        if s.misc & 4 != 0 { u32::MAX } else { 1 },
-    );
+    set(e, w.property + 0x1c, s.register);
     for (k, offset) in [
         0x28u32, 0x30, 0x6c, 0x80, 0x94, 0x98, 0x9c, 0xa0, 0xe0, 0xf0, 0xf4, 0xf8, 0xfc,
     ]
@@ -3430,8 +3525,82 @@ fn geometry_shape(e: &mut Engine, s: &Shape) -> Geo {
         let map = obj(e, 0x44, map_vt);
         set(e, w.shader + 0x30, map);
     }
+    if real_slots {
+        // The shadow light shader's own stage binding and `UpdateTogglesConstant`.
+        let shader_vt = vtable(e, &[(0x108, 0x00be_2170), (0x154, 0x00c0_2d90)]);
+        set(e, w.shader, shader_vt);
+    }
     let current = e.mem.u32(0x0126_f74c);
     set(e, current + 0x44, if s.misc & 1 != 0 { 0 } else { 0x4444 });
+    // The current pass's stages (each with a state cache of its own; none marked for binding), the
+    // property's texture arrays, its first texture and its object at +0xdc, its clamp mode, and the
+    // textures the texture set-up falls back to.
+    let stages = e.mem.alloc(0x40);
+    let mut stage_2 = 0;
+    for i in 0..16u32 {
+        let stage = e.mem.alloc(0x70);
+        let cache = e.mem.alloc(0xb8);
+        set(e, stage + 4, i);
+        set(e, stage + 0x10, cache);
+        set(e, stages + 4 * i, stage);
+        if i == 2 {
+            stage_2 = stage;
+        }
+    }
+    set(e, current + 0x18, 16);
+    set(e, current + 0x24, stages);
+    let (firsts, seconds) = (e.mem.alloc(0x20), e.mem.alloc(0x20));
+    for i in 0..8u32 {
+        set(e, firsts + 4 * i, 0x7100 + i);
+        let second = if s.textures & TEX_NO_SECOND != 0 {
+            0
+        } else {
+            0x7200 + i
+        };
+        set(e, seconds + 4 * i, second);
+    }
+    set(e, w.property + 0xac, firsts);
+    set(e, w.property + 0xb0, seconds);
+    let single = e.mem.alloc(8);
+    set(
+        e,
+        single,
+        if s.textures & TEX_NO_FIRST != 0 {
+            0
+        } else {
+            0x7300
+        },
+    );
+    set(e, w.property + 0xb4, single);
+    let shadow = if s.textures & TEX_NO_OBJECT != 0 {
+        0
+    } else {
+        let shadow = e.mem.alloc(0x70);
+        let texture = if s.textures & TEX_NO_OBJECT_TEXTURE != 0 {
+            0
+        } else {
+            0x7400
+        };
+        set(e, shadow + 0x6c, texture);
+        shadow
+    };
+    set(e, w.property + 0xdc, shadow);
+    set(e, w.property + 0xd8, u32::from(s.selector) % 8);
+    for (addr, word) in [
+        (0x011f_953cu32, 0x7601u32),
+        (0x011f_9540, 0x7602),
+        (0x011f_9428, 0x7603),
+        (0x011f_951c, 0x7604),
+        (0x011f_952c, 0x7605),
+        (0x011f_9514, 0x7606),
+        (0x011f_95d4, 0x7607),
+    ] {
+        set(e, addr, word);
+    }
+    e.mem
+        .set_u8(0x011a_d80c, u8::from(s.textures & TEX_CHOICE != 0));
+    e.mem
+        .set_u8(0x011f_9425, u8::from(s.textures & TEX_FILTER != 0));
     Geo {
         shader: w.shader,
         block,
@@ -3444,10 +3613,29 @@ fn geometry_shape(e: &mut Engine, s: &Shape) -> Geo {
         skin: e.mem.u32(geometry + 0xbc),
         fog: 0x0100 | s.misc,
         matrix: std::array::from_fn(|k| seed(F_MATRIX, 0x80 + k as u32)),
+        light: first,
+        stage: stage_2,
     }
 }
 
+/// What the translations of the dispatch and pathing callees the set-ups now reach for real call
+/// plainly (a Rust call, not logged), as typed_dispatch.rs lists them: the model matrix's (`00c4c2d0`)
+/// matrix row, columns and entry helpers (`00476930`, `00476980`, `004769c0`) and the square roots
+/// (`004019d0`, `00408860`) under the unitize (`004a0c10`) the light set-up calls.
+const SET_UP_PLAIN: &[u32] = &[
+    0x0047_6930,
+    0x0047_6980,
+    0x0047_69c0,
+    0x0040_19d0,
+    0x0040_8860,
+];
+
 trait Geometry {
+    /// The families a set-up's test names: the shader family and the leaves, and the dispatch, pathing
+    /// and render families the set-ups call into (the model matrix and the point helpers, the
+    /// accumulator, clamp mode and stage binding).
+    fn set_ups(self) -> Diff;
+
     /// A set-up's test: [`GEOMETRY_INPUTS`] in [`geometry_world`], the words `args` makes of it.
     fn geometry(self, plainly: &[u32], args: fn(&Geo) -> Vec<u32>) -> Diff;
 
@@ -3458,13 +3646,24 @@ trait Geometry {
         inputs: &[Input],
         cases: usize,
         shape: fn(&Case) -> Shape,
-        args: fn(&Geo) -> Vec<u32>,
+        args: fn(&Geo, &Case) -> Vec<u32>,
     ) -> Diff;
 }
 
 impl Geometry for Diff {
+    fn set_ups(self) -> Diff {
+        self.family(&shader::SHADER)
+            .family(&leaf::LEAVES)
+            .family(&dispatch::DISPATCH)
+            .family(&pathing::PATHING)
+            .family(&render::RENDER)
+            .translation_calls_plainly(SET_UP_PLAIN)
+            .max_calls(MAX_CALLS)
+            .max_cases(160)
+    }
+
     fn geometry(self, plainly: &[u32], args: fn(&Geo) -> Vec<u32>) -> Diff {
-        self.common()
+        self.set_ups()
             .translation_calls_plainly(plainly)
             .inputs(GEOMETRY_INPUTS)
             .max_cases(400)
@@ -3480,15 +3679,15 @@ impl Geometry for Diff {
         inputs: &[Input],
         cases: usize,
         shape: fn(&Case) -> Shape,
-        args: fn(&Geo) -> Vec<u32>,
+        args: fn(&Geo, &Case) -> Vec<u32>,
     ) -> Diff {
-        self.common()
+        self.set_ups()
             .inputs(inputs)
             .max_cases(cases)
             .float_sweep(FLOAT_SWEEP)
             .setup(move |e, c| {
                 let g = geometry_shape(e, &shape(c));
-                args(&g)
+                args(&g, c)
             })
     }
 }
@@ -3739,7 +3938,7 @@ fn vertex_entry_21_by_type() {
             s.floats[F_MATRIX] = bits(c, 6);
             s
         },
-        |g| vec![g.shader, g.pass_type, g.property, g.geometry],
+        |g, _| vec![g.shader, g.pass_type, g.property, g.geometry],
     )
     .run()
     .assert_same();
@@ -3769,7 +3968,7 @@ fn pixel_entry_2_by_type() {
             s.selector = c.word(2) as u8;
             s
         },
-        |g| vec![g.shader, g.pass_type, g.rendering],
+        |g, _| vec![g.shader, g.pass_type, g.rendering],
     )
     .run()
     .assert_same();
@@ -3819,7 +4018,7 @@ fn obj_to_cube_by_type() {
             s.floats[F_PLANES] = bits(c, 6);
             s
         },
-        |g| vec![g.shader, g.lit, g.pass_type, g.skin, g.transform()],
+        |g, _| vec![g.shader, g.lit, g.pass_type, g.skin, g.transform()],
     )
     .run()
     .assert_same();
@@ -3854,7 +4053,7 @@ fn simple_shadow_clip_planes_made_or_kept() {
             s.floats[F_PLANES] = bits(c, 4);
             s
         },
-        |g| vec![g.shader, g.pass_type],
+        |g, _| vec![g.shader, g.pass_type],
     )
     .run()
     .assert_same();
@@ -3906,7 +4105,7 @@ fn lights_by_count_and_mode() {
                 s.floats[F_PROPERTY] = bits(c, 11);
                 s
             },
-            |g| {
+            |g, _| {
                 let mut words = vec![g.property, g.rendering];
                 words.extend(matrix_words(g));
                 words.extend([g.transform(), g.pass_type, g.skin]);
@@ -3940,6 +4139,7 @@ fn ambient_emittance_luminance() {
             Input::F32Swept(PLAIN_FLOATS[F_POSITION]),
             Input::F32Swept(PLAIN_FLOATS[F_RADIUS]),
             Input::F32Swept(PLAIN_FLOATS[F_PROPERTY]),
+            Input::F32Swept(PLAIN_FLOATS[F_STRENGTH]),
         ],
         280,
         |c| {
@@ -3958,9 +4158,10 @@ fn ambient_emittance_luminance() {
             s.floats[F_POSITION] = bits(c, 8);
             s.floats[F_RADIUS] = bits(c, 9);
             s.floats[F_PROPERTY] = bits(c, 10);
+            s.floats[F_STRENGTH] = bits(c, 11);
             s
         },
-        |g| vec![g.shader, g.property, g.rendering, g.geometry, g.fog],
+        |g, _| vec![g.shader, g.property, g.rendering, g.geometry, g.fog],
     )
     .float_sweep(2 * FLOAT_SWEEP)
     .run()
@@ -4005,6 +4206,8 @@ fn setup_geometry_constants_other_types() {
             Input::F32Swept(PLAIN_FLOATS[F_EYE]),
             Input::F32Swept(PLAIN_FLOATS[F_PROPERTY]),
             Input::F32Swept(PLAIN_FLOATS[F_SCALE]),
+            Input::F32Swept(PLAIN_FLOATS[F_STRENGTH]),
+            Input::F32Swept(PLAIN_FLOATS[F_THRESHOLD]),
         ],
         240,
         |c| {
@@ -4034,9 +4237,409 @@ fn setup_geometry_constants_other_types() {
             }
             s
         },
-        |g| vec![g.shader, g.block],
+        |g, _| vec![g.shader, g.block],
     )
     .translation_calls_plainly(&[0x00b7_c750])
+    .run()
+    .assert_same();
+}
+
+// The shadow light shader's per-geometry textures.
+
+/// Every type the rendering object can have, and a few past the exe's table.
+const EVERY_TYPE: [u32; 0x2f0] = {
+    let mut types = [0u32; 0x2f0];
+    let mut i = 0;
+    while i < 0x2f0 {
+        types[i] = i as u32;
+        i += 1;
+    }
+    types
+};
+
+/// A type or two of each body of the texture set-up, then types outside its table.
+const BODY_TYPES: &[u32] = &[
+    0x2, 0x2eb, 0x4, 0x5, 0x59, 0x1f4, 0x64, 0x235, 0x66, 0x91, 0x68, 0x7c, 0x1e4, 0x93, 0x1f6,
+    0x95, 0x10b, 0x96, 0x97, 0x12b, 0xc4, 0x128, 0xd8, 0xfe, 0x14b, 0x14c, 0x155, 0x24b, 0x1f7,
+    0x1ff, 0x207, 0x20f, 0x217, 0x21f, 0x227, 0x22e, 0x230, 0x231, 0x233, 0x244, 0x247, 0x248,
+    0x24a, 0x2d6, 0x2d7, 0, 1, 3, 0x2ec, 0x22f, 0x234,
+];
+
+/// A shape for the texture tests: the rendering object's type and selector byte, the texture
+/// switches (bit 1 of them also makes the property's vtable +0xf4 answer a texture), and with `second`
+/// clear the property's bit that keeps its second array off the stages.
+fn texture_shape(kind: u32, selector: u32, switches: u32, second: bool) -> Shape {
+    let mut s = Shape::plain();
+    s.kind = kind as u16;
+    s.selector = selector as u8;
+    s.textures = switches;
+    s.misc = (switches >> 1) & 1;
+    if !second {
+        s.flags_24 |= 0x10_0000;
+    }
+    s
+}
+
+/// The texture set-up for every type there is, with the shadow light shader's own slots: each of the
+/// exe's 29 bodies and every type outside its table.
+#[test]
+fn setup_geometry_textures_every_type() {
+    Diff::new(entry!(
+        0x00b7_d200,
+        textures::setup_geometry_textures(Ptr<_>, Ptr<_>)
+    ))
+    .shaped(
+        &[Input::Of(&EVERY_TYPE)],
+        0x2f0,
+        |c| texture_shape(c.word(0), 1, TEX_REAL_SLOTS, true),
+        |g, _| vec![g.shader, g.block],
+    )
+    // No float arithmetic in the set-up or its stage set-ups (they move words): no float sweep and one
+    // control word, so a run ends inside the minute a mutant's run gets.
+    .float_sweep(0)
+    .control_words(&[0x027f])
+    .run()
+    .assert_same();
+}
+
+/// The texture set-up's bodies with everything they read varied: the selector byte, a null first
+/// texture, the object at +0xdc missing or without a texture, the second array kept off the stages or
+/// empty, the property's answers, the shared texture's choice and filter bytes, real or stand-in slots.
+#[test]
+fn setup_geometry_textures() {
+    Diff::new(entry!(
+        0x00b7_d200,
+        textures::setup_geometry_textures(Ptr<_>, Ptr<_>)
+    ))
+    .shaped(
+        &[
+            Input::Of(BODY_TYPES),
+            Input::Of(&[0, 1, 3]),
+            Input::Of(&[
+                0,
+                TEX_NO_FIRST,
+                TEX_NO_OBJECT,
+                TEX_NO_OBJECT_TEXTURE,
+                TEX_REAL_SLOTS,
+                TEX_CHOICE,
+                TEX_FILTER,
+                TEX_NO_SECOND,
+                TEX_REAL_SLOTS | TEX_NO_FIRST | TEX_FILTER,
+                TEX_REAL_SLOTS | TEX_CHOICE | TEX_NO_SECOND | TEX_NO_OBJECT,
+            ]),
+            Input::Of(TWO_WAYS),
+        ],
+        300,
+        |c| texture_shape(c.word(0), c.word(1), c.word(2), c.word(3) != 0),
+        |g, _| vec![g.shader, g.block],
+    )
+    .float_sweep(0)
+    .control_words(&[0x027f])
+    .run()
+    .assert_same();
+}
+
+/// The inputs of a stage set-up's test: the stage, the texture index or word, the texture switches.
+const STAGE_INPUTS: &[Input] = &[
+    Input::Of(&[0, 1, 6, 15]),
+    Input::Of(&[0, 1, 7]),
+    Input::Of(&[
+        0,
+        TEX_REAL_SLOTS,
+        TEX_NO_SECOND,
+        TEX_NO_OBJECT,
+        TEX_CHOICE,
+        TEX_FILTER,
+        TEX_CHOICE | TEX_FILTER | TEX_REAL_SLOTS,
+    ]),
+];
+
+fn stage_shape(c: &Case) -> Shape {
+    texture_shape(0, c.word(1), c.word(2), true)
+}
+
+#[test]
+fn stage_texture() {
+    Diff::new(entry!(
+        0x00b7_c0a0,
+        textures::stage_texture(Ptr<_>, u32, u32)
+    ))
+    .shaped(STAGE_INPUTS, 100, stage_shape, |g, c| {
+        vec![g.property, c.word(0), c.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// With a property (its second array's texture, or a default one by its flag) and without one.
+#[test]
+fn stage_second_texture() {
+    Diff::new(entry!(
+        0x00b7_c0e0,
+        textures::stage_second_texture(Ptr<_>, u32, u32)
+    ))
+    .shaped(
+        &[
+            Input::Of(&[0, 1, 6, 15]),
+            Input::Of(&[0, 1, 7]),
+            Input::Of(&[
+                0,
+                TEX_REAL_SLOTS,
+                TEX_NO_SECOND,
+                TEX_NO_SECOND | TEX_REAL_SLOTS,
+            ]),
+            Input::Of(&[0, 0x80]),
+            Input::Of(TWO_WAYS),
+        ],
+        200,
+        |c| {
+            let mut s = texture_shape(0, c.word(1), c.word(2), true);
+            s.flags = c.word(3);
+            s
+        },
+        |g, c| {
+            let property = if c.word(4) != 0 { 0 } else { g.property };
+            vec![property, c.word(0), c.word(1)]
+        },
+    )
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn stage_light_texture() {
+    Diff::new(entry!(0x00b7_c120, textures::stage_light_texture(u32)))
+        .shaped(STAGE_INPUTS, 100, stage_shape, |_, c| vec![c.word(0)])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn stage_shared_texture() {
+    Diff::new(entry!(0x00b7_c190, textures::stage_shared_texture(u32)))
+        .shaped(STAGE_INPUTS, 100, stage_shape, |_, c| vec![c.word(0)])
+        .run()
+        .assert_same();
+}
+
+/// The property's answer for kind 4 null (the default texture) or not.
+#[test]
+fn stage_fourth_texture() {
+    Diff::new(entry!(
+        0x00b7_c290,
+        textures::stage_fourth_texture(u32, u32, u32)
+    ))
+    .shaped(STAGE_INPUTS, 100, stage_shape, |g, c| {
+        vec![g.property, c.word(0), c.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The property's answer for kind 5 null (the fallback texture) or not.
+#[test]
+fn stage_fifth_texture() {
+    Diff::new(entry!(
+        0x00b7_c2c0,
+        textures::stage_fifth_texture(Ptr<_>, u32, u32)
+    ))
+    .shaped(STAGE_INPUTS, 100, stage_shape, |g, c| {
+        vec![g.property, c.word(0), c.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A stage and a property, either or both null.
+#[test]
+fn stage_clamp() {
+    Diff::new(entry!(0x00b7_1b10, textures::stage_clamp(Ptr<_>, u32, u32)))
+        .shaped(
+            &[
+                Input::Of(&[0, 1, 2, 3]),
+                Input::Of(&[0, TEX_REAL_SLOTS]),
+                Input::Of(&[0, 3, 7]),
+            ],
+            100,
+            |c| texture_shape(0, c.word(2), c.word(1), true),
+            |g, c| {
+                let stage = if c.word(0) & 1 != 0 { 0 } else { g.stage };
+                let property = if c.word(0) & 2 != 0 { 0 } else { g.property };
+                vec![g.shader, stage, property]
+            },
+        )
+        .run()
+        .assert_same();
+}
+
+// The lighting shaders' per-light set-up.
+
+/// `light_setup` (`00b70820`): an index below, at and past 8; no light, a directional one or a point
+/// light, with or without data; the shader property's type inside or beside 8 to 12 (its vtable +0x10c
+/// then scales); the HDR, skip-ambient and no-extra-scale bytes and the light's ambient byte; the pass
+/// type inside or beside 0x154 to 0x177; the scale, the strength and the brightness threshold as floats
+/// with every special value, the colours swept.
+#[test]
+fn light_setup() {
+    Diff::new(entry!(0x00b7_0820, lighting::light_setup(u32, Ptr<_>, f32)))
+        .shaped(
+            &[
+                Input::Of(&[0, 1, 7, 8, 9]),
+                Input::Of(&[1, 0, 2, 3, 4]),
+                Input::Of(&[8, 12, 7, 13, 1, 0x8000_0008]),
+                Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]),
+                Input::Of(&[0x154, 0x177, 0x153, 0x178, 0]),
+                Input::F32,
+                Input::F32,
+                Input::F32,
+                Input::F32Swept(PLAIN_FLOATS[F_COLOUR]),
+                Input::F32Swept(PLAIN_FLOATS[F_POSITION]),
+                Input::F32Swept(PLAIN_FLOATS[F_ROWS]),
+                Input::F32Swept(PLAIN_FLOATS[F_PROPERTY]),
+                Input::F32Swept(PLAIN_FLOATS[F_RADIUS]),
+            ],
+            160,
+            |c| {
+                let mut s = Shape::plain();
+                // 0 no light, 1 directional, 2 point, 3 directional without data, 4 point without data.
+                let light = c.word(1);
+                s.points = u32::from(light == 2 || light == 4);
+                if light >= 3 {
+                    s.bits |= NO_LIGHT_DATA;
+                }
+                s.register = c.word(2);
+                let switches = c.word(3);
+                s.hdr = switches & 1 != 0;
+                if switches & 2 != 0 {
+                    s.bits |= SKIP_AMBIENT;
+                }
+                if switches & 4 != 0 {
+                    s.bits |= NO_EXTRA_SCALE;
+                }
+                if switches & 8 != 0 {
+                    s.bits |= LIGHT_AMBIENT;
+                }
+                s.pass_type = c.word(4);
+                s.floats[F_STRENGTH] = bits(c, 6);
+                s.floats[F_THRESHOLD] = bits(c, 7);
+                s.floats[F_COLOUR] = bits(c, 8);
+                s.floats[F_POSITION] = bits(c, 9);
+                s.floats[F_ROWS] = bits(c, 10);
+                s.floats[F_PROPERTY] = bits(c, 11);
+                s.floats[F_RADIUS] = bits(c, 12);
+                s
+            },
+            |g, c| {
+                let light = if c.word(1) == 0 { 0 } else { g.light };
+                vec![c.word(0), light, bits(c, 5)]
+            },
+        )
+        .run()
+        .assert_same();
+}
+
+/// `light_setup`'s brightness step at a luminance of exactly 0 (the ambient colour (-1, 0, 0) at
+/// strength 1: -1 times 0.33, plus 0.33, is exactly 0 at any precision, the
+/// weight being a float held as a double): every component becomes the threshold. Floats the sweep
+/// alone almost never meets.
+#[test]
+fn light_setup_luminance_zero() {
+    Diff::new(entry!(0x00b7_0820, lighting::light_setup(u32, Ptr<_>, f32)))
+        .shaped(
+            &[
+                Input::Of(&[0, 5]),
+                Input::Of(&[1, 2]),
+                Input::Of(TWO_WAYS),
+                Input::Of(&[ONE, HALF, TWO, 0, 0xbf80_0000]),
+                Input::Of(&[ONE, HALF, TWO]),
+            ],
+            60,
+            |c| {
+                let mut s = Shape::plain();
+                s.points = u32::from(c.word(1) == 2);
+                s.bits |= DARK_AMBIENT;
+                s.register = 8;
+                s.hdr = c.word(2) != 0;
+                s.floats[F_THRESHOLD] = c.word(3);
+                s
+            },
+            |g, c| vec![c.word(0), g.light, c.word(4)],
+        )
+        .float_sweep(0)
+        .run()
+        .assert_same();
+}
+
+// The batch renderer with the shadow light shader's own slots.
+
+/// The pass for the batch renderer's typed-slot tests: the set-ups' world with the shader's slots 0x78,
+/// 0x7c and 0x8c holding the shadow light shader's texture set-up, constants and state restore, the
+/// rendering object a pass of the batch renderer's own (its geometry the world's, plain or skinned).
+fn typed_setups_pass(e: &mut Engine, c: &Case) -> u32 {
+    let mut s = texture_shape(c.word(0), 1, 0, true);
+    s.pass_type = c.word(0);
+    s.skinned = c.word(1) != 0;
+    s.lights = 2;
+    let g = geometry_shape(e, &s);
+    let vt = vtable(
+        e,
+        &[
+            (0x78, 0x00b7_d200),
+            (0x7c, 0x00b7_dab0),
+            (0x8c, 0x00b7_c320),
+        ],
+    );
+    set(e, g.shader, vt);
+    set(e, g.geometry + 0xc0, g.shader);
+    e.mem.set_u8(g.rendering + 6, 2);
+    e.mem.set_u8(g.rendering + 7, c.word(2) as u8);
+    g.rendering
+}
+
+/// `render_standard` with the shader's per-geometry slots holding the shadow light shader's typed
+/// set-ups (`00b7d200`, `00b7dab0`) and state restore (`00b7c320`): those calls made direct.
+#[test]
+fn render_standard_typed_setups() {
+    Diff::new(entry!(
+        0x00b9_8e80,
+        batch::render_standard(Ptr<_>, u32, u32, u32)
+    ))
+    .set_ups()
+    .inputs(&[
+        Input::Of(&[0x10, 0x11, 6, 0x231, 0x1f7, 0x250]),
+        Input::Of(&[0]),
+        Input::Of(TWO_WAYS),
+        Input::Of(BYTES),
+    ])
+    .translation_calls_plainly(&[0x00b7_c750])
+    .setup(|e, c| {
+        let pass = typed_setups_pass(e, c);
+        vec![pass, c.word(3), 1, 0]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `render_skinned` with the same slots: the first drawn partition's set-ups and the geometry end made
+/// direct.
+#[test]
+fn render_skinned_typed_setups() {
+    Diff::new(entry!(
+        0x00b9_9110,
+        batch::render_skinned(Ptr<_>, u32, u32, u32)
+    ))
+    .set_ups()
+    .inputs(&[
+        Input::Of(&[0x10, 0x11, 6, 0x231]),
+        Input::Of(&[1]),
+        Input::Of(TWO_WAYS),
+        Input::Of(BYTES),
+    ])
+    .translation_calls_plainly(&[0x00b7_c750])
+    .setup(|e, c| {
+        let pass = typed_setups_pass(e, c);
+        vec![pass, c.word(3), 1, 0]
+    })
     .run()
     .assert_same();
 }
