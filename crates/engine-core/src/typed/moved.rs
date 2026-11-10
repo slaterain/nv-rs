@@ -84,8 +84,7 @@ pub const fn poison(family: FamilyId, offset: u32) -> u32 {
 
 /// The family number and offset a poison word names; `None` for any other word.
 pub fn poison_parts(word: u32) -> Option<(u8, u8)> {
-    (word & 0xffff_0000 == POISON_BASE && word & 3 == 0)
-        .then(|| (byte(word >> 8), byte(word)))
+    (word & 0xffff_0000 == POISON_BASE && word & 3 == 0).then(|| (byte(word >> 8), byte(word)))
 }
 
 /// A word of the guest space as an index (widening: the guest space needs a 64-bit host).
@@ -303,9 +302,7 @@ impl Slab {
     /// Adds `v` (sequentially consistent, as the interlocked increment); answers the new value.
     #[inline]
     pub fn add(&self, a: u32, v: u32) -> u32 {
-        self.cell(a)
-            .fetch_add(v, Ordering::SeqCst)
-            .wrapping_add(v)
+        self.cell(a).fetch_add(v, Ordering::SeqCst).wrapping_add(v)
     }
 
     /// A byte, read from its word.
@@ -752,6 +749,53 @@ impl Store {
                     d.check_bool(family, a, done, seen, e.call_stack.last().copied());
                 }
                 done
+            }
+        }
+    }
+
+    /// An interlocked add of `v` to the word at `a`, answering the new value, as the game's
+    /// interlocked increment (`v` 1) and decrement (`v` -1 as a word) do. A guest word goes through
+    /// `by_address` (the family's call by address, as in stage 1); a moved word is a slab atomic; the
+    /// dual run does both and compares the results.
+    pub fn add(
+        self,
+        e: &mut Engine,
+        a: u32,
+        v: u32,
+        by_address: impl FnOnce(&mut Engine) -> u32,
+    ) -> u32 {
+        match self {
+            Store::Guest => by_address(e),
+            Store::Moved { moved, .. } => {
+                if is_handle(a) {
+                    moved.slab.add(a, v)
+                } else {
+                    by_address(e)
+                }
+            }
+            Store::Dual { moved, family } => {
+                let done = by_address(e);
+                if let Some(m) = moved.dual.mirror_of(a) {
+                    let seen = moved.slab.add(m, v);
+                    moved
+                        .dual
+                        .check(family, a, done, seen, e.call_stack.last().copied());
+                }
+                done
+            }
+        }
+    }
+
+    /// The dual run after a call by address that wrote `words` words of the family's own object at
+    /// `a` (one the family has not typed yet, whose result the mirror must take): the mirror takes
+    /// the guest words (translated). Nothing in the other forms, where such a call is done in place.
+    pub fn resync(self, e: &Engine, a: u32, words: u32) {
+        if let Store::Dual { moved, .. } = self {
+            for i in 0..words {
+                let at = a.wrapping_add(4 * i);
+                if let Some(m) = moved.dual.mirror_of(at) {
+                    moved.slab.store(m, moved.dual.translate(e.mem.u32(at)));
+                }
             }
         }
     }
@@ -1318,6 +1362,18 @@ mod tests {
         assert!(!is_handle(poison(TOY, 0)) && !is_stub(poison(TOY, 0)));
         assert!(is_handle(SLAB_RANGE.start) && !is_handle(SLAB_RANGE.end));
         assert!(is_stub(STUB_RANGE.start) && !is_stub(STUB_RANGE.end));
+    }
+
+    /// The status line's dual-run report names the family with its counts.
+    #[test]
+    fn the_dual_run_reports_its_counts() {
+        crate::typed::provide(&TOY_FAMILY);
+        let mut e = engine("toy:dual");
+        assert_eq!(run(&mut e).0, 15);
+        let line = crate::typed::dual_line(&e).expect("a dual run");
+        assert!(line.starts_with("Dual run: toy: "), "{line}");
+        assert!(line.ends_with(" compared, 0 differed."), "{line}");
+        assert_eq!(crate::typed::dual_line(&engine("toy:moved")), None);
     }
 
     #[test]

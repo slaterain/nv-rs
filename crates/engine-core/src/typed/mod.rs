@@ -429,8 +429,7 @@ impl Engine {
             Mode::Moved
         } else if self.typed.freed & bit != 0 {
             Mode::Freed
-        } else if self.typed.allowed & bit != 0 || self.typed.members.values().any(|&b| b == bit)
-        {
+        } else if self.typed.allowed & bit != 0 || self.typed.members.values().any(|&b| b == bit) {
             Mode::On
         } else {
             Mode::Off
@@ -534,6 +533,25 @@ pub fn apply(e: &mut Engine) {
         .iter()
         .any(|name| std::env::var_os(name).is_some());
     apply_families(e, &families, switch_for(switch_text(), compared));
+}
+
+/// The dual run's line for the status line and the run's end: for each family in its dual run on
+/// `e`, how many words it compared and how many differed (a gate passes with differences 0 and
+/// comparisons above 0). `None` when no family is in its dual run.
+pub fn dual_line(e: &Engine) -> Option<String> {
+    let moved = e.moved()?;
+    let provided = PROVIDED.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let parts: Vec<String> = FAMILIES
+        .iter()
+        .copied()
+        .chain(provided)
+        .filter(|f| e.typed_dual(f.id))
+        .map(|f| {
+            let (compared, differed) = moved.dual.counts(f.id);
+            format!("{}: {compared} compared, {differed} differed", f.name)
+        })
+        .collect();
+    (!parts.is_empty()).then(|| format!("Dual run: {}.", parts.join("; ")))
 }
 
 /// [`apply`] with the table and the switch given.

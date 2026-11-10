@@ -319,6 +319,9 @@ impl Host {
         engine_platform::dsound::finish_recording(&mut self.engine);
         // The saves the run wrote, all on disk before the process ends (`NV_SAVE_OUT`).
         save_out::finish(&self.engine);
+        if let Some(line) = engine::typed::dual_line(&self.engine) {
+            eprintln!("{line}");
+        }
         eprintln!("NV_REPEATABLE: {frames} main frames run; the run ends");
         true
     }

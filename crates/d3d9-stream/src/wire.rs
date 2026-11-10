@@ -391,8 +391,14 @@ pub fn compare_renamed(
     let (mut ea, mut eb) = (Vec::new(), Vec::new());
     let mut index = 0u64;
     loop {
-        let ra = a.next()?.map(|r| renamed(r, &mut na, &mut ea)).transpose()?;
-        let rb = b.next()?.map(|r| renamed(r, &mut nb, &mut eb)).transpose()?;
+        let ra = a
+            .next()?
+            .map(|r| renamed(r, &mut na, &mut ea))
+            .transpose()?;
+        let rb = b
+            .next()?
+            .map(|r| renamed(r, &mut nb, &mut eb))
+            .transpose()?;
         match (ra, rb) {
             (None, None) => return Ok((index, None)),
             (Some(_), Some(_)) if ea == eb => index += 1,

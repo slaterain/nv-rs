@@ -4405,8 +4405,14 @@ mod tests {
         assert_eq!(reserve(&mut e, 0xeff0_0000), 0);
         // The moved area below the heap (stage 2's slab handles and stubs).
         assert_eq!(reserve(&mut e, crate::typed::moved::MOVED_AREA.start), 0);
-        assert_eq!(reserve(&mut e, crate::typed::moved::STUB_RANGE.end - 0x1_0000), 0);
-        assert_eq!(reserve(&mut e, crate::typed::moved::MOVED_AREA.start - 0x1_0000), 0);
+        assert_eq!(
+            reserve(&mut e, crate::typed::moved::STUB_RANGE.end - 0x1_0000),
+            0
+        );
+        assert_eq!(
+            reserve(&mut e, crate::typed::moved::MOVED_AREA.start - 0x1_0000),
+            0
+        );
         // Above the heap: free.
         assert_eq!(reserve(&mut e, 0xf000_0000), 0xf000_0000);
         assert_eq!(reserve(&mut e, 0x0200_0000), 0x0200_0000);
