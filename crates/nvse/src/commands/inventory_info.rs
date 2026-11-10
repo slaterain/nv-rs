@@ -11,7 +11,6 @@ use crate::table::{guest_str, Command, Param, Returns};
 use crate::{handled, CommandArgs, EvalArgs, Nvse};
 use engine_core::prelude::*;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 const fn p(name: &'static str, kind: u32, optional: bool) -> Param {
     Param {
@@ -57,12 +56,9 @@ const ITEM_COUNT_HEALTH_OWNER_RANK: &[Param] = &[
     p("rank", INT, true),
 ];
 
-/// `TESForm::refID` (`+0xC`); `TESObjectREFR::baseForm` (`+0x20`), `extraDataList` (`+0x44`).
+/// `TESForm::refID` (`+0xC`); `TESObjectREFR::baseForm` (`+0x20`).
 const FORM_ID: u32 = 0xc;
 const REFR_BASE_FORM: u32 = 0x20;
-const REFR_EXTRA: u32 = invref::REFR_EXTRA;
-/// `ExtraContainerChanges::data` (`+0xC`), its `objList` (`+0`).
-const CHANGES_DATA: u32 = 0xc;
 /// `TESContainer::formCountList` (a `tList` at `+4`) of `FormCount`s: `count` (`+0`), `form`
 /// (`+4`).
 const CONTAINER_LIST: u32 = 4;
@@ -279,15 +275,12 @@ fn nth_item(e: &Engine, head: u32, n: i32) -> Option<u32> {
     nodes(e, head).map(|v| v.get(n as usize).copied().unwrap_or(0))
 }
 
-/// A reference's container changes entry list (`xChanges->data->objList`), 0 without container
-/// changes. Changes without data are read through, as xNVSE does (the game stops).
+/// A reference's container changes entry list, 0 without container changes or without their data
+/// (`ExtraContainerChanges::GetEntryDataList`, `data ? data->objList : NULL`, as every finder of
+/// `InventoryInfo.cpp` reads it). Changes without data are what xNVSE itself makes for a reference
+/// that had none (`GetForRef`, after `CopyIR` or `RemoveMeIR` into it: `invref::changes_for_ref`).
 fn changes_entries(e: &mut Engine, reference: u32) -> u32 {
-    let changes = get_by_type(e, reference + REFR_EXTRA, invref::EXTRA_CONTAINER_CHANGES);
-    if changes == 0 {
-        return 0;
-    }
-    let data = e.mem.u32(changes + CHANGES_DATA);
-    e.mem.u32(data)
+    invref::entry_list(e, reference)
 }
 
 /// The reference's base form's container (`DYNAMIC_CAST(baseForm, TESForm, TESContainer)`), 0.
@@ -328,15 +321,19 @@ fn full_name_text(e: &mut Engine, form: u32) -> u32 {
 /// otherwise and where xNVSE's exception handler would catch a bad read (here: a read outside
 /// mapped memory).
 fn object_class_name(e: &mut Engine, object: u32) -> u32 {
-    let read = |e: &Engine, at: u32| e.mem.is_mapped(at).then(|| e.mem.u32(at));
+    // Every byte of a read mapped; an address past the top of memory is a bad read too.
+    let mapped = |e: &Engine, at: u32, len: u32| {
+        (0..len).all(|i| at.checked_add(i).is_some_and(|a| e.mem.is_mapped(a)))
+    };
+    let read = |e: &Engine, at: u32| mapped(e, at, 4).then(|| e.mem.u32(at));
     let name = read(e, object)
-        .and_then(|vtbl| read(e, vtbl.wrapping_sub(4)))
-        .and_then(|locator| read(e, locator + 0xc))
-        .map(|kind| kind + 8);
+        .and_then(|vtbl| read(e, vtbl.checked_sub(4)?))
+        .and_then(|locator| read(e, locator.checked_add(0xc)?))
+        .and_then(|kind| kind.checked_add(8));
     if let Some(name) = name {
-        if e.mem.is_mapped(name) && e.mem.u8(name) == b'.' && e.mem.u8(name + 1) == b'?' {
+        if mapped(e, name, 2) && e.mem.u8(name) == b'.' && e.mem.u8(name + 1) == b'?' {
             for i in 0..100 {
-                if !e.mem.is_mapped(name + i) {
+                if !mapped(e, name, i + 1) {
                     break;
                 }
                 if e.mem.u8(name + i) == 0 {
@@ -401,6 +398,12 @@ impl Info {
         }
         let mut num = e.mem.u32(fc) as i32;
         let form = e.mem.u32(fc + 4);
+        // A base container entry without a form: xNVSE counts it, and the finders read its id
+        // through the null form (the game stops). The inventory reference checks row
+        // (`NV_NVSE_INVREF_CHECK`) passes over it, as it does for `GetInventoryItems`.
+        if form == 0 && invref::checks(e) {
+            return false;
+        }
         if dynamic_cast(e, form, rtti::TES_FORM, rtti::TES_LEV_ITEM) != 0 {
             return false;
         }
@@ -556,27 +559,17 @@ struct Token {
     rank: u32,
 }
 
-/// Whether the refusal below has been written to the log in this run.
-static STACK_NOT_THERE_NOTED: AtomicBool = AtomicBool::new(false);
-
-/// Where the token search reads a stack that is not there: an item of the reference's base
-/// container whose changes entry is missing, or one whose place is counted on through an index
-/// the command did not pass. xNVSE reads or writes through the null pointer and the game stops
-/// (measured: `player.GetTokenValue` of the Pip-Boy ends the real game with an access violation,
-/// run `inv6r1`). With the list guard row (`NV_NVSE_LIST_GUARD`) the search ends here and the
-/// command answers nothing, with one line on stderr the first time in a run; without the row
-/// the game stops, as xNVSE's does.
-fn stack_not_there(e: &Engine, reference: u32, id: u32, what: &str) -> Option<Token> {
+/// Where xNVSE's token search reads or writes through a null pointer, for an item of the reference's
+/// base container: its health through a changes entry that is missing, or its place counted on
+/// through an index the command did not pass (measured: `player.GetTokenValue` of the Pip-Boy ends
+/// the real game with an access violation, run `inv6r1`). With the list guard row
+/// (`NV_NVSE_LIST_GUARD`) the search goes on without that read (the health is then the found
+/// form's, the place is not counted on) and the command answers; without the row the game stops
+/// here, as xNVSE's does.
+fn null_read_in_the_token_search(e: &Engine, id: u32, what: &str) {
     if !super::array::fix_on(e, super::array::LIST_GUARD) {
-        panic!("a token command on item {id:08X}, which is in its holder's base container without a stack of its own: {what}, and the game stops");
+        panic!("a token command on item {id:08X}, which is in its holder's base container: {what}, and the game stops");
     }
-    if !STACK_NOT_THERE_NOTED.swap(true, Ordering::Relaxed) {
-        let holder = e.mem.u32(reference + FORM_ID);
-        eprintln!(
-            "script inventory list guard: a token command (GetTokenValue, GetTokenRef, SetTokenValue, SetTokenRef, SetTokenValueAndRef, GetPaired) was refused for item {id:08X} of {holder:08X}: it is in the base container without a stack of its own ({what}); the command answers nothing"
-        );
-    }
-    None
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), InventoryInfo.cpp:
@@ -584,11 +577,11 @@ fn stack_not_there(e: &Engine, reference: u32, id: u32, what: &str) -> Option<To
 /// The item with id `id` among the reference's changes and its stack at place `index` (from 0;
 /// counted on by one when the stack was read): the stack's `ExtraHealth`, else the item's base
 /// health, and its owner and rank (the rank only with an owner). Past the item's stacks, the base
-/// container is looked at, at the stacks left over; xNVSE reads that place's health through the
-/// changes entry, which is missing when the item is only in the base container, and counts the
-/// place on through `index`, which `GetTokenValue`, `GetTokenRef` and the setters do not pass:
-/// both stop the game in xNVSE, and here end the search with the list guard row
-/// ([`stack_not_there`]). `None` for no reference, no item or the list guard.
+/// container is looked at, at the stacks left over: its item's base health (read through the
+/// changes entry, as xNVSE does), the place counted on. Where xNVSE reads a missing entry or
+/// counts on through no index, the game stops without the list guard row; with it the health is
+/// the found item's and nothing is counted ([`null_read_in_the_token_search`]). `None` when the
+/// list guard row ended a walk.
 fn item_with_health_and_owner(
     e: &mut Engine,
     reference: u32,
@@ -633,7 +626,7 @@ fn item_with_health_and_owner(
                         }
                     }
                     if let Some(i) = index.as_deref_mut() {
-                        *i += 1;
+                        *i = i.wrapping_add(1);
                     }
                 }
                 token.item = entry_type(e, entry);
@@ -655,29 +648,27 @@ fn item_with_health_and_owner(
         if fc != 0 {
             let form = e.mem.u32(fc + 4);
             if form != 0 && e.mem.u32(form + FORM_ID) == id {
-                if entry == 0 {
-                    return stack_not_there(
+                let item = if entry != 0 {
+                    entry_type(e, entry)
+                } else {
+                    null_read_in_the_token_search(
                         e,
-                        reference,
                         id,
                         "xNVSE reads its health through a changes entry that is missing",
                     );
-                }
-                let item = entry_type(e, entry);
+                    form
+                };
                 let health = dynamic_cast(e, item, rtti::TES_FORM, rtti::TES_HEALTH_FORM);
                 if health != 0 {
                     token.health = e.mem.u32(health + HEALTH_FORM_HEALTH) as f32;
                 }
                 match index {
-                    Some(i) => *i += 1,
-                    None => {
-                        return stack_not_there(
-                            e,
-                            reference,
-                            id,
-                            "xNVSE counts its place on through an index the command does not pass",
-                        );
-                    }
+                    Some(i) => *i = i.wrapping_add(1),
+                    None => null_read_in_the_token_search(
+                        e,
+                        id,
+                        "xNVSE counts its place on through an index the command does not pass",
+                    ),
                 }
                 token.item = form;
                 return Some(token);
@@ -790,12 +781,8 @@ fn set_first_item(
             e, reference, id, count, health, owner, rank,
         ))
     };
-    let changes = get_by_type(e, reference + REFR_EXTRA, invref::EXTRA_CONTAINER_CHANGES);
-    if changes == 0 {
-        return add(e);
-    }
-    let data = e.mem.u32(changes + CHANGES_DATA);
-    let entries = e.mem.u32(data);
+    // No changes, changes without data (`GetEntryDataList` answers NULL) or no entry list: added.
+    let entries = changes_entries(e, reference);
     if entries == 0 {
         return add(e);
     }
@@ -1193,8 +1180,10 @@ fn set_token_value_and_ref(e: &mut Engine, w: &[u32]) -> Ret {
 // Cmd_GetPaired_Eval.
 /// 1 when one of the reference's stacks of the item is owned by the actor and one of the actor's
 /// is owned by the reference. Each search goes stack by stack until the owner matches or the item
-/// runs out; a search that would not end (a stack list with an empty node, which xNVSE reads again
-/// and again) is bounded as the list walks are.
+/// runs out. A search that finds an item without counting its index on (an empty node in the
+/// item's stack list) would ask for the same stack again for ever, as xNVSE does (the game
+/// hangs): with the list guard row (`NV_NVSE_LIST_GUARD`) it ends there as not paired; without it
+/// the game stops there instead.
 fn paired(e: &mut Engine, reference: u32, item: u32, actor: u32) -> bool {
     if item == 0 || actor == 0 {
         return false;
@@ -1202,13 +1191,16 @@ fn paired(e: &mut Engine, reference: u32, item: u32, actor: u32) -> bool {
     let id = e.mem.u32(item + FORM_ID);
     let owned_by = |e: &mut Engine, holder: u32, owner: u32| -> Option<bool> {
         let mut index = 0i32;
-        let mut walked = 0usize;
         loop {
+            let before = index;
             let token = item_with_health_and_owner(e, holder, id, Some(&mut index))?;
             if token.item == 0 || token.owner == owner {
                 return Some(token.owner == owner);
             }
-            if !invref::list_step(e, &mut walked) {
+            if index == before {
+                if !super::array::fix_on(e, super::array::LIST_GUARD) {
+                    panic!("GetPaired asks for stack {index} of item {id:08X} again and again: xNVSE would ask for ever");
+                }
                 return None;
             }
         }

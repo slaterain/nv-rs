@@ -272,26 +272,45 @@ fn a_base_container_token_stops_the_game() {
     assert!(armor_token_stops(true, 0x150b, &[r(1), r(6)]));
 }
 
-/// The same with the list guard row: the token commands answer nothing there and set nothing
-/// (nothing added, nothing marked, the count as it was); an item with a stack of its own still
-/// answers.
+/// The armor's health form answers `GetHealth` 100 (for `AddItem`'s `ExtraHealth`).
+fn armor_health(e: &mut Engine) {
+    e.mem.set_u32(ARMOR + 0x200, VTABLE + 0x400);
+    e.mem.set_u32(VTABLE + 0x400 + 0x10, FN_GET_HEALTH);
+    e.register(FN_GET_HEALTH, |_, _| eax(100));
+}
+
+/// The same with the list guard row: the search goes on without xNVSE's null reads. The getters
+/// answer for the base container's armor (the armor's own base health, 100, read from the found
+/// form; no owner), each setter sets the armor's first stack as xNVSE would have, which with no
+/// stack is `AddItem` of one at the value (`AddItemHealthPercentOwner` takes it as a share of the
+/// base health, as xNVSE does), then marks the reference; `GetPaired` answers 0 (no armor is
+/// owned). The weapon, which has a stack, is not touched by any of it.
 #[test]
-fn a_base_container_token_is_refused_with_the_list_guard() {
+fn a_base_container_token_answers_with_the_list_guard() {
     for entry_missing in [false, true] {
         let mut e = setup();
         crate::commands::array::set_fix(&mut e, crate::commands::array::LIST_GUARD, true);
+        armor_health(&mut e);
         if entry_missing {
             e.mem.set_u32(NODES + 0x10, 0);
         }
-        assert_eq!(run(&mut e, 0x1506, REF, &[r(1)]), 0.0);
-        assert_eq!(eval(&mut e, 0x1506, REF, ARMOR, 0), 0.0);
+        assert_eq!(run(&mut e, 0x1506, REF, &[r(1)]), 100.0);
+        assert_eq!(eval(&mut e, 0x1506, REF, ARMOR, 0), 100.0);
         assert_eq!(run(&mut e, 0x1508, REF, &[r(1)]), 0.0);
         assert_eq!(form_of(eval(&mut e, 0x1508, REF, ARMOR, 0)), 0);
-        run(&mut e, 0x1507, REF, &[r(1), z(40.0)]);
+        run(&mut e, 0x1507, REF, &[r(1), z(0.4)]);
+        let added = calls_to(FN_ADD_ITEM);
+        assert_eq!(added.len(), 1);
+        assert_eq!((added[0][1], added[0][3]), (ARMOR, 1));
+        assert_eq!(e.mem.f32(extra_of(&e, added[0][2], 0x25) + 0xc), 40.0);
+        assert_eq!(calls_to(FN_MARK), vec![vec![REF, 0x0800_0000]]);
         run(&mut e, 0x1509, REF, &[r(1), r(4)]);
-        run(&mut e, 0x150a, REF, &[r(1), z(40.0), r(4)]);
-        assert!(calls_to(FN_ADD_ITEM).is_empty(), "nothing added");
-        assert!(calls_to(FN_MARK).is_empty(), "nothing marked");
+        let added = calls_to(FN_ADD_ITEM);
+        assert_eq!(added.len(), 1);
+        assert_eq!(e.mem.u32(extra_of(&e, added[0][2], 0x21) + 0xc), OWNER);
+        run(&mut e, 0x150a, REF, &[r(1), z(0.5), r(4)]);
+        assert_eq!(calls_to(FN_ADD_ITEM).len(), 1);
+        assert_eq!(calls_to(FN_MARK).len(), 2);
         assert_eq!(e.mem.u32(NODES + 0x124), 1, "the armor's count delta");
         assert_eq!(run(&mut e, 0x150b, REF, &[r(1), r(6)]), 0.0);
         assert_eq!(eval(&mut e, 0x150b, REF, ARMOR, REF), 0.0);
@@ -301,6 +320,198 @@ fn a_base_container_token_is_refused_with_the_list_guard() {
             "the weapon's stack"
         );
     }
+}
+
+/// Review of #384, point A: container changes without data (what xNVSE itself makes after
+/// `CopyIR` or `RemoveMeIR` into a container that had none) are no changes to every finder, as
+/// `GetEntryDataList` gives them: the base container's items are counted and found, an item only
+/// the changes could hold is not there, and a setter adds it (twice: the set finds no entry
+/// either, as with no changes).
+#[test]
+fn changes_without_data_are_no_changes() {
+    let mut e = setup();
+    e.mem.set_u32(CHANGES + 0xc, 0);
+    e.mem.set_u32(WEAPON + 0x200, VTABLE + 0x400);
+    e.mem.set_u32(VTABLE + 0x400 + 0x10, FN_GET_HEALTH);
+    e.register(FN_GET_HEALTH, |_, _| eax(250));
+    assert_eq!(run(&mut e, 0x144e, REF, &[]), 2.0, "the armor and the ammo");
+    assert_eq!(eval(&mut e, 0x144e, REF, 0, 0), 2.0);
+    assert_eq!(form_of(run(&mut e, 0x144f, REF, &[n(1)])), 0x0001_0003);
+    tlist(&mut e, LIST_FORM + 0x18, &[AMMO, WEAPON]);
+    assert_eq!(form_of(run(&mut e, 0x159f, REF, &[r(5)])), 0x0001_0003);
+    assert_eq!(run(&mut e, 0x1506, REF, &[r(2)]), 0.0);
+    assert_eq!(run(&mut e, 0x1508, REF, &[r(2)]), 0.0);
+    assert_eq!(run(&mut e, 0x150b, REF, &[r(2), r(6)]), 0.0);
+    run(&mut e, 0x1507, REF, &[r(2), z(0.5)]);
+    let added = calls_to(FN_ADD_ITEM);
+    assert_eq!(added.len(), 2);
+    assert_eq!((added[0][1], added[0][3]), (WEAPON, 1));
+}
+
+/// Review of #384, point C: a changes entry list that runs back into itself stops the game
+/// without the list guard row, and with it ends the walk: the commands answer 0.
+#[test]
+fn a_cyclic_entry_list_stops_the_game_or_ends_the_walk() {
+    for guard in [false, true] {
+        let mut e = setup();
+        crate::commands::array::set_fix(&mut e, crate::commands::array::LIST_GUARD, guard);
+        e.mem.set_u32(NODES + 0x14, NODES);
+        let answers = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            [
+                run(&mut e, 0x144e, REF, &[]),
+                run(&mut e, 0x144f, REF, &[n(1)]),
+                run(&mut e, 0x1506, REF, &[r(2)]),
+                run(&mut e, 0x150b, REF, &[r(2), r(6)]),
+            ]
+        }));
+        if guard {
+            assert_eq!(answers.ok(), Some([0.0; 4]));
+        } else {
+            assert!(answers.is_err());
+        }
+    }
+}
+
+/// Review of #384, point C: `GetPaired` over a stack list with an empty node after the first (a
+/// stack without an owner, then the empty node) finds the item with its index not counted on,
+/// and xNVSE would ask for the same stack for ever (the game hangs). It ends at the first such
+/// answer: with the list guard row as not paired, without it the game stops there.
+#[test]
+fn get_paired_ends_where_the_index_stays() {
+    for guard in [false, true] {
+        let mut e = setup();
+        crate::commands::array::set_fix(&mut e, crate::commands::array::LIST_GUARD, guard);
+        tlist(&mut e, NODES + 0x40, &[XDATA[1], 0, XDATA[0]]);
+        let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run(&mut e, 0x150b, REF, &[r(2), r(6)])
+        }));
+        if guard {
+            assert_eq!(answer.ok(), Some(0.0));
+        } else {
+            assert!(answer.is_err());
+        }
+    }
+}
+
+/// Review of #384, point D: a base container entry without a form. xNVSE counts it, gives it as
+/// an item without a form, and its finders by id read through it (the game stops); with the
+/// inventory reference checks row it is passed over, as in `GetInventoryItems`.
+#[test]
+fn a_base_entry_without_a_form() {
+    for checks in [false, true] {
+        let mut e = setup();
+        invref::set_checks(&mut e, checks);
+        e.mem.set_u32(NODES + 0x210 + 4, 0);
+        tlist(&mut e, LIST_FORM + 0x18, &[WEAPON]);
+        if checks {
+            assert_eq!(run(&mut e, 0x144e, REF, &[]), 2.0);
+            assert_eq!(form_of(run(&mut e, 0x144f, REF, &[n(1)])), 0x0001_0002);
+            assert_eq!(form_of(run(&mut e, 0x159f, REF, &[r(5)])), 0x0001_0002);
+            assert_eq!(run(&mut e, 0x1506, REF, &[r(2)]), 50.0);
+        } else {
+            assert_eq!(run(&mut e, 0x144e, REF, &[]), 3.0);
+            assert_eq!(run(&mut e, 0x144f, REF, &[n(1)]), 0.0);
+            let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                call(&mut e, 0x159f, REF, &[r(5)]);
+            }));
+            assert!(stop.is_err());
+        }
+    }
+}
+
+/// `PickOneOf` of an empty list answers 0; of the armor, held in the base container and in the
+/// changes, the armor.
+#[test]
+fn pick_one_of_an_empty_list_and_an_item_held_twice() {
+    let mut e = setup();
+    assert_eq!(run(&mut e, 0x159f, REF, &[r(5)]), 0.0);
+    tlist(&mut e, LIST_FORM + 0x18, &[ARMOR]);
+    assert_eq!(form_of(run(&mut e, 0x159f, REF, &[r(5)])), 0x0001_0001);
+}
+
+/// The token getters and setters on what the review listed: a stack list whose head node is
+/// empty (`tList::Count` 0, so no stack is read and the weapon, not in the base container,
+/// answers 0); `GetTokenRef` on a stack without an owner (0); `SetTokenValue` at the
+/// holder's base form's health (the `ExtraHealth` removed, as xNVSE compares with the container's
+/// health) and at -1 (the health kept); `SetTokenRef` with a new owner (the rank removed);
+/// `SetTokenValueAndRef` on a stack with an `ExtraCount` (set to 1).
+#[test]
+fn token_edge_cases() {
+    let mut e = setup();
+    tlist(&mut e, NODES + 0x40, &[0, XDATA[0]]);
+    assert_eq!(run(&mut e, 0x1506, REF, &[r(2)]), 0.0);
+    tlist(&mut e, NODES + 0x40, &[XDATA[0]]);
+    let owner = XDATA[0] + 0x100 + 4 * 0x21;
+    e.mem.set_u32(owner, 0);
+    assert_eq!(run(&mut e, 0x1508, REF, &[r(2)]), 0.0);
+    e.mem.set_u32(owner, XDATA[0] + 0x390);
+    // The holder's base form has health 60: setting 60 removes the stack's ExtraHealth.
+    e.mem.set_u32(BASE + 0x7f0, (1 << 23) | 4);
+    e.mem.set_u32(BASE + 0x200 + 4, 60);
+    run(&mut e, 0x1507, REF, &[r(2), z(60.0)]);
+    assert_eq!(
+        calls_to(0x0041_0020),
+        vec![vec![XDATA[0], XDATA[0] + 0x380, 1]]
+    );
+    put_extra(&mut e, XDATA[0], 0x25, XDATA[0] + 0x380);
+    e.mem.set_f32(XDATA[0] + 0x38c, 50.0);
+    e.mem.set_u32(NODES + 0x114, 3);
+    run(&mut e, 0x1507, REF, &[r(2), z(-1.0)]);
+    assert_eq!(e.mem.f32(XDATA[0] + 0x38c), 50.0, "kept");
+    assert_eq!(e.mem.u32(NODES + 0x114), 1);
+    // A rank with the owner: a new owner drops it.
+    put_extra(&mut e, XDATA[0], 0x23, XDATA[0] + 0x3a0);
+    e.mem.set_u32(XDATA[0] + 0x3ac, 2);
+    run(&mut e, 0x1509, REF, &[r(2), r(1)]);
+    assert_eq!(e.mem.u32(XDATA[0] + 0x39c), ARMOR);
+    assert_eq!(
+        calls_to(0x0041_0020),
+        vec![vec![XDATA[0], XDATA[0] + 0x3a0, 1]]
+    );
+    // An ExtraCount of 5 on the stack becomes 1.
+    put_extra(&mut e, XDATA[0], 0x24, XDATA[0] + 0x3b0);
+    e.mem.set_u16(XDATA[0] + 0x3bc, 5);
+    run(&mut e, 0x150a, REF, &[r(2), z(10.0), r(4)]);
+    assert_eq!(e.mem.u16(XDATA[0] + 0x3bc), 1);
+    assert_eq!(e.mem.f32(XDATA[0] + 0x38c), 10.0);
+    assert_eq!(e.mem.u32(XDATA[0] + 0x39c), OWNER);
+}
+
+/// `AddItemOwnership` and `AddItemHealthPercentOwner` of a scripted item: the new list also gets
+/// an `ExtraScript` with the item's script and a new event list (`CreateEventList`); the count is
+/// the float truncated; a rank is added with `AddItemOwnership` too, and no health.
+#[test]
+fn a_scripted_item_is_added_with_its_script() {
+    const ITEM_SCRIPT: u32 = 0x0200_9800;
+    const EVENTS: u32 = 0x0200_9900;
+    let mut e = setup();
+    e.mem
+        .set_u32(WEAPON + 0x7f0, e.mem.u32(WEAPON + 0x7f0) | (1 << 25));
+    e.mem.set_u32(WEAPON + 0x5c0 + 4, ITEM_SCRIPT);
+    e.register(0x005a_bf60, |_, a| {
+        record(0x005a_bf60, a);
+        eax(EVENTS)
+    });
+    run(&mut e, 0x1504, REF, &[r(2), z(2.7), r(4), n(3)]);
+    let added = calls_to(FN_ADD_ITEM);
+    let (list, count) = (added[0][2], added[0][3]);
+    assert_eq!(count, 2, "2.7 truncated");
+    let script = extra_of(&e, list, 0x0d);
+    assert_eq!(e.mem.u32(script), 0x0101_5914);
+    assert_eq!(e.mem.u32(script + 0xc), ITEM_SCRIPT);
+    assert_eq!(e.mem.u32(script + 0x10), EVENTS);
+    assert_eq!(calls_to(0x005a_bf60), vec![vec![ITEM_SCRIPT]]);
+    assert_eq!(e.mem.u32(extra_of(&e, list, 0x21) + 0xc), OWNER);
+    assert_eq!(e.mem.u32(extra_of(&e, list, 0x23) + 0xc), 3);
+    assert_eq!(extra_of(&e, list, 0x25), 0, "no health");
+    e.mem.set_u32(WEAPON + 0x200, VTABLE + 0x400);
+    e.mem.set_u32(VTABLE + 0x400 + 0x10, FN_GET_HEALTH);
+    e.register(FN_GET_HEALTH, |_, _| eax(250));
+    run(&mut e, 0x1505, REF, &[r(2), z(1.0), z(1.0)]);
+    let list = calls_to(FN_ADD_ITEM)[0][2];
+    assert_ne!(list, 0, "a list for the script alone");
+    assert_eq!(e.mem.u32(extra_of(&e, list, 0x0d) + 0xc), ITEM_SCRIPT);
+    assert_eq!(extra_of(&e, list, 0x21), 0);
 }
 
 /// The token setters on the weapon's stack: a new health (the stack's `ExtraHealth` changed), a new
