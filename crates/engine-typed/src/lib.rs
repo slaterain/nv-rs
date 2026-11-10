@@ -22,6 +22,7 @@ pub mod draw;
 pub mod lockfree;
 pub mod pathing;
 pub mod render;
+pub mod scene;
 pub mod shader;
 
 /// The function a virtual call on `this` through vtable `slot` reaches: the word in that slot of
@@ -92,6 +93,7 @@ pub mod units {
         engine_core::typed::provide(&crate::dispatch::DISPATCH);
         engine_core::typed::provide(&crate::render::RENDER);
         engine_core::typed::provide(&crate::draw::DRAW);
+        engine_core::typed::provide(&crate::scene::SCENE);
         crate::render::stream::note_head_check();
     }
 }

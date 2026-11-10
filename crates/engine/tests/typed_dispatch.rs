@@ -368,6 +368,11 @@ const PLAIN: &[(u32, &[u32])] = &[
     (0x0043_b5b0, &[0x0043_b5d0]),
     (0x0043_b5f0, &[0x0043_b5d0]),
     (0x004e_ff50, &[0x004f_0000]),
+    // The scene family: what reaches the controllers or `NiNode`'s pass.
+    (0x00a5_9f90, &[0x004f_0000]),
+    (0x00b4_ded0, &[0x004f_0000]),
+    (0x00c1_ad90, &[0x004f_0000]),
+    (0x00a5_9c60, &[0x004f_0000]),
     (0x00a5_dd70, &[0x004f_0000]),
     (0x00a5_ded0, &[0x004f_0000]),
     (0x004b_5fc0, &[0x004b_5ff0, 0x004b_6100]),
@@ -392,6 +397,7 @@ impl Common for Diff {
         }
         callees.retain(|c| *c != function);
         self.family(&dispatch::DISPATCH)
+            .family(&engine_typed::scene::SCENE)
             .family(&pathing::PATHING)
             .family(&culling::CULLING)
             .family(&leaf::LEAVES)
@@ -2094,6 +2100,254 @@ fn map_lookup_other_slots() {
         let map = word_map(e, vt, 1, &keys);
         e.mem.set_u32(map + 0x40, case.word(1));
         vec![map, case.word(2), block(e, 4, &[0x1234_5678])]
+    })
+    .run()
+    .assert_same();
+}
+
+// ---- The scene family (engine_typed::scene) ----
+
+/// A geometry (0xc0 bytes) with flags, a world bound, a local transform from the case's floats at
+/// `f`, model data with a bound (+0xb8) and no skin.
+fn geometry(e: &mut Engine, case: &Case, flags: u32, f: usize) -> u32 {
+    let g = object(e, 0xc0);
+    e.mem.set_u32(g + 0x30, flags);
+    let bound = block(e, 0x10, &[ONE, TWO, HALF, THIRD]);
+    e.mem.set_u32(g + 0x20, bound);
+    let t = transform(e, case, f);
+    let local = e.mem.bytes(t, 0x34);
+    e.mem.write(g + 0x34, &local);
+    let model = block(e, 0x20, &[0, 0, 0, 0, HALF, ONE, TWO, bits(case, f + 2)]);
+    e.mem.set_u32(g + 0xb8, model);
+    g
+}
+
+/// Slot `slot` of `object`'s vtable set to `target`.
+fn set_slot(e: &mut Engine, object: u32, slot: u32, target: u32) {
+    let vt = e.mem.u32(object);
+    e.mem.set_u32(vt + slot, target);
+}
+
+/// The update data's flag words: controllers (+4), particles skipped (+5).
+const DATA_FLAGS: &[u32] = &[0, 1, 0x100, 0x101];
+
+#[test]
+fn scene_object_update_downward() {
+    // The object's flags, the data's, the world data and bound slots stand-ins or the typed ones.
+    Diff::new(entry!(
+        0x00a5_9f90,
+        engine_typed::scene::walk::object_update_downward(Ptr<_>, Ptr<_>, u32)
+    ))
+    .common(0x00a5_9f90)
+    .inputs(&inputs(&[
+        &[
+            Input::Of(NODE_FLAGS),
+            Input::Of(DATA_FLAGS),
+            Input::Of(&[0, 1, 2, 3]),
+        ],
+        &P3,
+    ]))
+    .max_cases(256)
+    .setup(|e, case| {
+        stand_ins(e);
+        let g = geometry(e, case, case.word(0), 3);
+        if case.word(2) & 1 != 0 {
+            set_slot(e, g, 0xb8, 0x00a6_8c60);
+        }
+        if case.word(2) & 2 != 0 {
+            set_slot(e, g, 0xbc, 0x00a8_0710);
+        }
+        vec![g, block(e, 8, &[ONE, case.word(1)]), 0x55]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn scene_fade_update_downward() {
+    Diff::new(entry!(
+        0x00b4_ded0,
+        engine_typed::scene::walk::fade_update_downward(Ptr<_>, u32, u32)
+    ))
+    .common(0x00b4_ded0)
+    .inputs(&inputs(&[&PASS, &[Input::Of(&[0, 1, 6])]]))
+    .setup(|e, case| {
+        stand_ins(e);
+        let n = node(e, case.word(0), case.word(1), case.word(2));
+        vec![n, data(e, case, 3), case.word(4)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn scene_particles_update_downward() {
+    Diff::new(entry!(
+        0x00c1_ad90,
+        engine_typed::scene::walk::particles_update_downward(Ptr<_>, Ptr<_>, u32)
+    ))
+    .common(0x00c1_ad90)
+    .inputs(&inputs(&[
+        &[Input::Of(NODE_FLAGS), Input::Of(DATA_FLAGS), Input::Flag],
+        &P3,
+    ]))
+    .max_cases(128)
+    .setup(|e, case| {
+        stand_ins(e);
+        let g = geometry(e, case, case.word(0), 3);
+        if case.word(2) != 0 {
+            set_slot(e, g, 0xbc, 0x00a8_0710);
+        }
+        vec![g, block(e, 8, &[ONE, case.word(1)]), 7]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The classes a downward pass reaches by slot +0xa4: a stand-in, `NiNode`'s, a plain object's, the
+/// fade node's, the particle system's.
+const DOWNWARD_SLOTS: &[u32] = &[0, 0x00a5_dd70, 0x00a5_9f90, 0x00b4_ded0, 0x00c1_ad90];
+
+#[test]
+fn scene_update() {
+    // The object's class (slot +0xa4), its flags, the data's flags, an object at +0x18 or none.
+    Diff::new(entry!(
+        0x00a5_9c60,
+        engine_typed::scene::walk::update(Ptr<_>, u32)
+    ))
+    .common(0x00a5_9c60)
+    .inputs(&[
+        Input::Of(DOWNWARD_SLOTS),
+        Input::Of(NODE_FLAGS),
+        Input::Of(DATA_FLAGS),
+        Input::Flag,
+    ])
+    .setup(|e, case| {
+        stand_ins(e);
+        let n = node(e, case.word(1), 3, ONE);
+        if case.word(0) != 0 {
+            set_slot(e, n, 0xa4, case.word(0));
+        }
+        if case.word(3) != 0 {
+            let after = object(e, 0x40);
+            e.mem.set_u32(n + 0x18, after);
+        }
+        vec![n, block(e, 8, &[ONE, case.word(2)])]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `NiNode`'s typed pass with children of every class the scene family takes (child `i` gets
+/// `DOWNWARD_SLOTS[(i + shift) % 5]`): each child's pass a Rust call when the family is on.
+#[test]
+fn update_downward_scene_children() {
+    Diff::new(entry!(
+        0x00a5_dd70,
+        scene::update_downward(Ptr<_>, u32, u32)
+    ))
+    .common(0x00a5_dd70)
+    .inputs(&inputs(&[
+        &PASS,
+        &[Input::Of(&[0, 1, 6]), Input::Of(&[0, 1, 2, 3, 4])],
+    ]))
+    .setup(|e, case| {
+        stand_ins(e);
+        let n = node(e, case.word(0), case.word(1), case.word(2));
+        let base = e.mem.u32(n + 0xa0);
+        for i in 0..case.word(1) {
+            let child = e.mem.u32(base + 4 * i);
+            let class = DOWNWARD_SLOTS[((i + case.word(5)) % 5) as usize];
+            if child != 0 && class != 0 {
+                set_slot(e, child, 0xa4, class);
+            }
+        }
+        vec![n, data(e, case, 3), case.word(4)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A skin instance with `bones` bones: the skin data (+8) with the root-to-skin transform (+0xc),
+/// the bone data (+0x40, each 0x4c bytes with its bound at +0x34) and the count (+0x44); the root
+/// parent (+0x10) and the bones (+0x14), objects with world transforms (scale at +0x98): bone 1's
+/// `scale`, bone 2's 1.0, the others 2.0.
+fn skin(e: &mut Engine, case: &Case, bones: u32, scale: u32, f: usize) -> u32 {
+    let data = e.mem.alloc(0x48);
+    let to_skin = transform(e, case, f + 1);
+    let to_skin = e.mem.bytes(to_skin, 0x34);
+    e.mem.write(data + 0xc, &to_skin);
+    let bone_data = e.mem.alloc(0x4c * bones);
+    for i in 0..bones {
+        let r = if i == 0 { bits(case, f + 2) } else { TWO };
+        words(e, bone_data + 0x4c * i + 0x34, &[HALF, ONE, MINUS_ONE, r]);
+    }
+    e.mem.set_u32(data + 0x40, bone_data);
+    e.mem.set_u32(data + 0x44, bones);
+    let with_world = |e: &mut Engine, scale: u32, at: usize| {
+        let o = object(e, 0xb0);
+        let t = transform(e, case, at);
+        let w = e.mem.bytes(t, 0x34);
+        e.mem.write(o + 0x68, &w);
+        e.mem.set_u32(o + 0x98, scale);
+        o
+    };
+    let root = with_world(e, TWO, f);
+    let list = e.mem.alloc(4 * bones);
+    for i in 0..bones {
+        let s = match i {
+            1 => scale,
+            2 => ONE,
+            _ => TWO,
+        };
+        let b = with_world(e, s, f + 1);
+        e.mem.set_u32(list + 4 * i, b);
+    }
+    block(e, 0x1c, &[0, 0, data, 0, root, list, 0])
+}
+
+#[test]
+fn scene_skin_bound() {
+    // The bones, bone 1's world scale (1.0 among the values), the transforms' floats.
+    Diff::new(entry!(
+        0x00a8_6530,
+        engine_typed::scene::skin::skin_bound(Ptr<_>, Ptr<_>)
+    ))
+    .common(0x00a8_6530)
+    .inputs(&inputs(&[
+        &[
+            Input::Of(&[1, 2, 3]),
+            Input::Of(&[ONE, TWO, HALF, 0x7fc0_0000, 0]),
+        ],
+        &P3,
+        &[Input::F32Swept(ONE)],
+    ]))
+    .max_cases(192)
+    .setup(|e, case| {
+        stand_ins(e);
+        let s = skin(e, case, case.word(0), case.word(1), 2);
+        let bound = block(e, 0x10, &[ONE, TWO, HALF, THIRD]);
+        vec![s, bound]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn scene_transform_inverse() {
+    Diff::new(entry!(
+        0x008b_42e0,
+        engine_typed::scene::skin::transform_inverse(Ptr<_>, Ptr<_>)
+    ))
+    .common(0x008b_42e0)
+    .inputs(&inputs(&[&P3, &[Input::F32Swept(TWO)]]))
+    .max_cases(128)
+    .setup(|e, case| {
+        stand_ins(e);
+        let t = transform(e, case, 0);
+        e.mem.set_u32(t + 0x28, bits(case, 2));
+        e.mem.set_u32(t + 0x2c, bits(case, 3));
+        vec![t, e.mem.alloc(0x34)]
     })
     .run()
     .assert_same();
