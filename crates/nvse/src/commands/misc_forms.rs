@@ -695,10 +695,11 @@ fn get_nth_animation(e: &mut Engine, w: &[u32]) -> Ret {
 
 /// The name argument of `AddAnimation` and `DelAnimation`, which xNVSE reads into a 256-byte
 /// buffer on its stack: the script's bytes with their terminator, then (for a `$` string
-/// variable) the variable's text with its own. With the script list and scan guard row
-/// (`NV_NVSE_LIST_GUARD`) the whole name is used. Without it the port stops the game at 256 bytes
-/// or more, which is a DEVIATION (the coordinator's decision, from the review of #415), one rule for
-/// both: `AddAnimation`'s answer there depends on the run and cannot be reproduced; `DelAnimation`'s
+/// variable) the variable's text with its own; the command holds it up to its first 0
+/// ([`super::arg_in_buffer`], the rule every such buffer shares). With the script list and scan
+/// guard row (`NV_NVSE_LIST_GUARD`) the whole name is used. Without it the port stops the game at
+/// 256 bytes or more, which is a DEVIATION (the coordinator's decision, from the review of #415),
+/// one rule for both: `AddAnimation`'s answer there depends on the run and cannot be reproduced; `DelAnimation`'s
 /// is fixed by the list and could be, but no script means to give such a name. `AddAnimation`
 /// (buffer at `ebp-0x104`,
 /// the form argument at `ebp-4` above it) does not stop at 256: it adds the name followed by
@@ -709,18 +710,7 @@ fn get_nth_animation(e: &mut Engine, w: &[u32]) -> Ret {
 /// then the node's index byte, so it can delete only the list's first name; its first fault comes
 /// at 265 bytes without a form argument and at 272 with one.
 fn animation_name(e: &Engine, read: &Read, command: &str) -> Vec<u8> {
-    let written = match read.args.first() {
-        Some(crate::args::Arg::Str { raw, text }) => raw.len().max(text.len()),
-        _ => 0,
-    };
-    if written >= NAME_BUFFER && !super::array::fix_on(e, super::array::LIST_GUARD) {
-        panic!(
-            "{command}: a name of {written} bytes runs past xNVSE's 256-byte buffer (where \
-             AddAnimation's answer depends on the run): the port stops here, one rule for both \
-             (NV_NVSE_LIST_GUARD reads it whole)"
-        );
-    }
-    read.text(0)
+    super::arg_in_buffer(e, read, 0, NAME_BUFFER, command)
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Misc.cpp: Cmd_AddAnimation_Execute.

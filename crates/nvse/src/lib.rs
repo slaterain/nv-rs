@@ -84,8 +84,11 @@ pub mod vtable {
 
 use engine_core::prelude::*;
 
-/// The xNVSE version nv-rs reproduces, 6.4.9 (ADR-0016, question 6): `NVSE_VERSION_INTEGER`,
-/// `_MINOR`, `_BETA` (`nvse_version.h:6-8` (xNVSE)).
+/// The xNVSE release the built-in matches, 6.4.9 (ADR-0016, question 6): `NVSE_VERSION_INTEGER`,
+/// `_MINOR`, `_BETA` (`nvse_version.h:6-8` (xNVSE)). The one place it is written: `GetNVSEVersion`,
+/// `GetNVSERevision` and `GetNVSEBeta` answer it ([`commands::extender`]) and the co-save header
+/// carries it ([`cosave::NVSE_VERSION`]); change it here when the built-in catches up with a newer
+/// release.
 pub const VERSION: (u32, u32, u32) = (6, 4, 9);
 
 /// The eight words a command handler gets (`COMMAND_ARGS` (xNVSE)): the exe's `EvaluateLine`
