@@ -231,7 +231,18 @@ impl PipelineCacheFile {
                 };
                 match crate::device::block_on(scope.pop()) {
                     None => (cache, format!("{} KB read", d.len() / 1024), hash(d)),
-                    Some(e) => (empty(), format!("{e}: ignored, a new one is started"), 0),
+                    Some(e) => {
+                        // wgpu's error and its causes on one line ("... made for a different
+                        // device").
+                        let why = std::iter::successors(Some(&e as &dyn std::error::Error), |e| {
+                            e.source()
+                        })
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                        .join(": ");
+                        let why = why.split_whitespace().collect::<Vec<_>>().join(" ");
+                        (empty(), format!("{why}: ignored, a new one is started"), 0)
+                    }
                 }
             }
             Err(why) if why.is_empty() => (empty(), "none yet, a new one is started".into(), 0),
