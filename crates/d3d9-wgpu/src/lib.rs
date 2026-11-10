@@ -15,6 +15,7 @@
 
 pub mod device;
 pub mod format;
+mod fxhash;
 pub mod shot;
 pub mod sm;
 pub mod state;
