@@ -14,7 +14,9 @@
 //!
 //! **Floats.** The pass runs on the main thread and, for the actors' animated scenes, on the AI
 //! threads, so the family's row is [`Threads::Both`] and its x87 code keeps the exact helpers
-//! ([`engine_core::x87`]), each load, operation and store the exe's, in its order.
+//! ([`engine_core::x87`]), each load, operation and store the exe's, in its order; the one exception
+//! is the transform inverse's reciprocal, one division in `f64` rounded once to a float, as its
+//! translation computes it.
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
