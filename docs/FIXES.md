@@ -301,8 +301,9 @@ too. None has been seen in a port run: the evidence is the exe and a test with r
   why that is safe, so that part is not built.
 - **Tested.** The real-thread test runs four OS threads side by side: 20,000 rounds of first calls
   into a one-bucket map (so every insert meets another) and 200,000 takes and releases each of the
-  face-gen lock. With the row no round loses a heap and the depth ends at 0. The original's numbers
-  from the same test are below. The debug-text functions are checked by their call order (the
+  face-gen lock. With the row no round loses a heap and the depth ends at 0. Without it, in one run
+  on this machine (2026-11-10), 221 of the 20,000 rounds lost a heap and the depth ended at 47,032
+  after 800,000 takes and releases. The debug-text functions are checked by their call order (the
   section's take first, its leave last).
 
 ### Dialogue topic index

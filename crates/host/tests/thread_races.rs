@@ -11,11 +11,15 @@
 //!   (`00652140`, `00652190`); the original counts down after the release with a plain read and
 //!   write, so counts are lost and the depth ends away from 0; with the row it ends at 0.
 //!
-//! One test: the helper pool is one per process, made from the first engine that forks. The
+//! One test: the helper pool is one per process, made from the first engine that forks, and the
+//! helpers take the function table then, so the original and the row are one registered switch at
+//! each address (the row's own `install` is checked in `host::thread_races`). The
 //! vanilla halves only report how often the race struck (a race need not strike in a given run);
 //! the row's halves must never fail.
 
 use engine::prelude::*;
+use engine::units::bscore::memorymanager::memory_manager_get_thread_scrap_heap;
+use engine::units::fallout_shared_facegen::bsfacegenmanager::{fn_00652140, fn_00652190};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering::SeqCst};
 
@@ -81,6 +85,9 @@ impl Barrier {
 }
 
 static BARRIER: Barrier = Barrier::new();
+
+/// The row is on (the registered switches run its functions).
+static ROW: AtomicBool = AtomicBool::new(false);
 
 fn stand_ins(e: &mut Engine) {
     e.register(GET_CURRENT_THREAD_ID, |_, _| ID.with(Cell::get).into_ret());
@@ -176,6 +183,31 @@ fn threads_meeting_lose_nothing_with_the_row() {
         return;
     }
     stand_ins(&mut e);
+    // The helpers take the function table when the pool is made (the first fork), so each address
+    // is registered once, before it, as a switch between the original and the row.
+    e.register(GET_THREAD_SCRAP_HEAP, |e, a| {
+        if ROW.load(SeqCst) {
+            host::thread_races::thread_scrap_heap(e, a[0]).into_ret()
+        } else {
+            memory_manager_get_thread_scrap_heap(e, Ptr::new(a[0])).into_ret()
+        }
+    });
+    e.register(FACE_GEN_ENTER, |e, _| {
+        if ROW.load(SeqCst) {
+            host::thread_races::face_gen_enter(e);
+        } else {
+            fn_00652140(e);
+        }
+        Ret::default()
+    });
+    e.register(FACE_GEN_LEAVE, |e, _| {
+        if ROW.load(SeqCst) {
+            host::thread_races::face_gen_leave(e);
+        } else {
+            fn_00652190(e);
+        }
+        Ret::default()
+    });
     // The face-gen mapping of the exe's data: tests run without the exe.
     e.mem.map(FACE_GEN_DEPTH & !0xfff, 0x1000);
 
@@ -192,7 +224,8 @@ fn threads_meeting_lose_nothing_with_the_row() {
         TURNS * PARTICIPANTS
     );
 
-    host::thread_races::install(&mut e);
+    // What `install` registers at these addresses (`thread_races::install`) from here on.
+    ROW.store(true, SeqCst);
     let counted = AtomicU32::new(0);
     let manager_b = manager(&mut e);
     assert_eq!(scrap_heap_rounds(&mut e, manager_b, ROUNDS), 0);
