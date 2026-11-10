@@ -37,11 +37,11 @@
 //! shape is one node's, so one task's).
 //!
 //! **The replay.** Main runs the tasks' logs in child order, a marked node's tasks at its mark: an
-//! `OnVisible` with the logged mode
-//! and active planes set on its own process (a geometry registers, a tree or particle system walks
-//! here on main) and put back after; a logged call with its words. So every registration,
-//! accumulator call and unaudited override runs on main, in the serial order, with the process
-//! state the serial walk had.
+//! `OnVisible` with the logged mode and active planes set on its own process and put back after
+//! (a geometry registers; a particle system or another unaudited object runs here on main; a
+//! tree is walked on its walker, `tree_on_walker`); a logged call with its words. So every
+//! registration, accumulator call and unaudited override runs on main, in the serial order, with
+//! the process state the serial walk had.
 //!
 //! **The check** (`NV_PAR_RENDER=check`): after the tasks, the fade nodes they ran get back the
 //! bytes their `OnVisible` writes (flags and fade fields, saved before each ran: a second walk would
@@ -489,6 +489,9 @@ pub(crate) fn tree_on_walker(e: &mut Engine, node: Ptr<NiNode>, process: u32) ->
 /// bound), and one that does stops the run here rather than replay a dead local. Only the first
 /// `pointers` words are pointers: the rest (a flag, an alpha's bits) are values, which may look
 /// like a stack address (1.0 is `3f800000`, inside the heap the stacks come from).
+/// On main (its own part of a split) the region is main's whole stack, the outer frames under
+/// the walk included; it cannot fire falsely there either, since none of the logged pointers is
+/// ever a stack local (the accumulator comes from the scene global, the bound is the node's).
 fn log_call(e: &Engine, addr: u32, args: &[u32], pointers: usize) -> Ret {
     if let Some((low, high)) = e.guest_stack_region() {
         let pointer_words = &args[..pointers.min(args.len())];

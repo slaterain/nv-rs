@@ -20,7 +20,7 @@
 //! object by object on main (every `OnVisible` but a geometry's, outside the split's tasks): each
 //! object's depth, vtable, `OnVisible`, children and time, inclusive, whether it split, and
 //! whether the replay ran it. The longest of the 30 is printed (a root may walk a big scene and
-//! small ones in a frame): the objects the objects that took 1% of the walk or more, and a sum of the nodes of
+//! small ones in a frame): the objects that took 1% of the walk or more, and a sum of the nodes of
 //! `NV_PAR_RENDER_MIN` or more children by `OnVisible` and whether they split (what the split
 //! does not reach).
 //!

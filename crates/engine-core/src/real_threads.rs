@@ -2641,6 +2641,9 @@ fn fork(e: &mut Engine, helpers: usize, job: HelperJob<'_>, every: bool) -> bool
     // The caller's own part. With stepped threads no time slice ends inside it: a switch there
     // would run another game thread beside the helpers, which otherwise run only while every game
     // thread stands still. (A wake asked for meanwhile sets the hook itself; it is then kept.)
+    // Such a wake (a platform signal during the caller's part, thread_host) would stretch the
+    // caller's slice and make two repeatable runs differ; the parallel walk's part makes no
+    // platform signal call today, so it cannot happen now: a job that signals must not run here.
     let hook = e.slice_hook.take();
     let own = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(e, 0)));
     if e.slice_hook.is_none() {
