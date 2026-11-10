@@ -19,6 +19,7 @@
 pub mod fixes;
 pub mod form_types;
 pub mod frame_log;
+pub mod full_screen;
 pub mod game_file;
 pub mod game_ini;
 pub mod half_loaded_move;
@@ -108,6 +109,9 @@ impl Host {
         if native_inflate::wanted() {
             native_inflate::install(&mut engine);
         }
+        // Full screen asked is drawn in the borderless window over the monitor, in every preset:
+        // nv-rs offers no exclusive full-screen device yet ([`full_screen`]).
+        full_screen::install(&mut engine);
         // xNVSE built in, in every preset (ADR-0016): after the rows, so its wraps wrap what is
         // registered. Vanilla content calls no extender opcode, and every change it makes to
         // vanilla commands is a row.
