@@ -336,6 +336,16 @@ fn perk_ranks() {
     console(&mut e);
     run(&mut e, 0x15c4, NPC_REF, &[r(1)]);
     assert_eq!(seen()[0].0, b"GetAltPerkRank: %.0f");
+    // Without a perk the DLL returns before its print (`10033A1D`): -1 and no line.
+    assert_eq!(eval(&mut e, 0x15c3, NPC_REF, NPC, 0), -1.0);
+    assert_eq!(eval(&mut e, 0x15c4, NPC_REF, 0, 0), -1.0);
+    assert!(seen().is_empty());
+    // Without an actor it prints the -1.
+    eval(&mut e, 0x15c3, 0, PERK_FORM, 0);
+    assert_eq!(
+        seen(),
+        [(b"GetPerkRank: %.0f".to_vec(), double_words(-1.0).to_vec())]
+    );
 }
 
 /// The list commands: each makes an array (empty when there is nothing to list), in list order,

@@ -141,7 +141,8 @@ const GET: u32 = 0x15e1;
 const CHECK: u32 = 0x15ff;
 
 /// The race's hairs (kind 0): add at the head, the end (the index answered is the old last's),
-/// in the middle; get, replace, check and delete by index; a form of another kind is refused
+/// past the end (refused; a real middle insert is in `a_middle_insert_and_deleting_the_only_node`);
+/// get, replace, check and delete by index; a form of another kind is refused
 /// (the result stays -1); an unknown kind makes the handler answer false.
 #[test]
 fn generic_lists_of_a_race() {
@@ -579,4 +580,85 @@ fn fire_challenge_calls_the_game() {
     );
     assert_eq!(run_expr(&mut e, 0x1678, &args[..5]), 0.0);
     assert!(seen().is_empty());
+}
+
+/// `FireChallenge` with a type outside 0 to 13 answers 0 here: the port runs the translated
+/// `005F5950` (`engine-fallout-forms`' `run_005f5630.rs`), which answers false for such a type
+/// and true otherwise; the stand-in answers as it does. xNVSE answers the game function's leftover
+/// stack cookie there, a number that changes from run to run (docs/FIXES.md, "The script
+/// extender"): a deviation, documented, not xNVSE's answer.
+#[test]
+fn fire_challenge_with_a_type_out_of_range_answers_0() {
+    let mut e = setup();
+    e.register(LOOKUP_FORM, |_, _| eax(DOOR));
+    e.register(INCREMENT_CHALLENGE, |_, a| {
+        eax(u32::from((0..14).contains(&(a[0] as i32))))
+    });
+    set_script_ref(&mut e, 1, DOOR);
+    let args = |kind: f64| {
+        [
+            num(kind),
+            num(1.0),
+            form_tok(1),
+            num(0.0),
+            num(0.0),
+            num(0.0),
+        ]
+    };
+    assert_eq!(run_expr(&mut e, 0x1678, &args(13.0)), 1.0);
+    assert_eq!(run_expr(&mut e, 0x1678, &args(14.0)), 0.0);
+    assert_eq!(run_expr(&mut e, 0x1678, &args(-1.0)), 0.0);
+}
+
+/// `GetDoorSound` on no form (a reference variable holding none): outside the console xNVSE's
+/// cast of nothing answers no door and it prints nothing, 0 in both presets; in the console it
+/// prints the missing form's id through nothing and the game stops, as the port does without the
+/// script reference checks row; with it nothing is printed and the answer is 0.
+#[test]
+fn door_sound_of_no_form() {
+    for checks in [false, true] {
+        let mut e = setup();
+        e.register(LOOKUP_FORM, |_, _| eax(0));
+        crate::invref::set_checks(&mut e, checks);
+        set_script_ref(&mut e, 3, 0);
+        assert_eq!(run_expr(&mut e, 0x1677, &[form_tok(3), num(0.0)]), 0.0);
+        console(&mut e);
+        let printed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_expr(&mut e, 0x1677, &[form_tok(3), num(0.0)])
+        }));
+        match printed {
+            Ok(v) => assert!(checks && v == 0.0 && seen().is_empty(), "{checks}"),
+            Err(_) => assert!(!checks),
+        }
+    }
+}
+
+/// A form put in the middle of a list (index 1 of three), and the only node of a list deleted
+/// (the head emptied, nothing freed).
+#[test]
+fn a_middle_insert_and_deleting_the_only_node() {
+    let mut e = setup();
+    for (i, f) in [RACE, HAIR_A, HAIR_B, EYES].into_iter().enumerate() {
+        set_script_ref(&mut e, i as u16 + 1, f);
+    }
+    let race = RACE + 0x8c;
+    run(&mut e, ADD, 0, &[n(0), r(1), r(2), n(-2)]);
+    assert_eq!(list_ids(&e, race), [0x13, 0x14, 0x13]);
+    assert_eq!(run(&mut e, ADD, 0, &[n(0), r(1), r(2), n(1)]), 1.0);
+    assert_eq!(
+        list_ids(&e, race),
+        [0x13, 0x13, 0x14, 0x13],
+        "A went in before B"
+    );
+    // The eyes: one form, then deleted.
+    run(&mut e, ADD, 0, &[n(1), r(1), r(4), n(0)]);
+    assert_eq!(list_ids(&e, RACE + 0xa8), [0x15]);
+    freed();
+    assert_eq!(
+        low(run(&mut e, DELETE, 0, &[n(1), r(1), n(0)])),
+        0x0001_0015
+    );
+    assert!(list_ids(&e, RACE + 0xa8).iter().all(|&f| f == 0));
+    assert_eq!(e.mem.u32(RACE + 0xa8), 0);
+    assert!(freed().is_empty(), "the head is no heap node");
 }

@@ -686,10 +686,17 @@ fn get_nth_animation(e: &mut Engine, w: &[u32]) -> Ret {
 
 /// The name argument of `AddAnimation` and `DelAnimation`, which xNVSE reads into a 256-byte
 /// buffer on its stack: the script's bytes with their terminator, then (for a `$` string
-/// variable) the variable's text with its own. A name of 256 bytes or more written there runs into
-/// the command's own variables above the buffer (the form it then uses), then the saved frame and
-/// the return address: what xNVSE does from there is not defined. With the script list and scan
-/// guard row (`NV_NVSE_LIST_GUARD`) the whole name is used; without it the port stops the game.
+/// variable) the variable's text with its own. With the script list and scan guard row
+/// (`NV_NVSE_LIST_GUARD`) the whole name is used. Without it the port stops the game at 256 bytes
+/// or more, which is a DEVIATION (the coordinator's decision, from the review of #415): what xNVSE
+/// does there depends on the run and cannot be reproduced. `AddAnimation` (buffer at `ebp-0x104`,
+/// the form argument at `ebp-4` above it) does not stop at 256: it adds the name followed by
+/// whatever bytes come after it in its frame (the form pointer's and the frame pointer's); its
+/// first real fault comes at 257 bytes without a form argument (the name's bytes become the form
+/// it calls through) and at 260 with one (the saved frame). `DelAnimation` (buffer at `ebp-0x110`,
+/// its node index at `ebp-0x10` above it) compares, from 256 to 264 bytes, the first 256 bytes and
+/// then the node's index byte, so it can delete only the list's first name; its first fault comes
+/// at 265 bytes without a form argument and at 272 with one.
 fn animation_name(e: &Engine, read: &Read, command: &str) -> Vec<u8> {
     let written = match read.args.first() {
         Some(crate::args::Arg::Str { raw, text }) => raw.len().max(text.len()),
@@ -697,8 +704,8 @@ fn animation_name(e: &Engine, read: &Read, command: &str) -> Vec<u8> {
     };
     if written >= NAME_BUFFER && !super::array::fix_on(e, super::array::LIST_GUARD) {
         panic!(
-            "{command}: a name of {written} bytes overflows xNVSE's 256-byte buffer and the game \
-             stops (NV_NVSE_LIST_GUARD reads it whole)"
+            "{command}: a name of {written} bytes runs past xNVSE's 256-byte buffer, where what \
+             xNVSE does depends on the run: the port stops here (NV_NVSE_LIST_GUARD reads it whole)"
         );
     }
     read.text(0)
