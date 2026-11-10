@@ -491,7 +491,9 @@ test and the shader's "is a pass set" slot). The batch renderer now calls the pe
 and state restore directly when the shader's slots hold the shadow light shader's own (another shader's go
 through its vtable), and `NiTriStrips`' immediate draw the packed draw when the renderer's slot holds it. With
 `render` on, the `NV_HEAD_CHECK` notes from the packed draw need `NV_TYPED=render:off`, as the stream set-up's
-do. SPEED
+do. Speed (2026-11-10, the crowded street view, main's default against it, BAAB): neutral, crowded 15.25 to
+15.27 ms a frame, the sky 6.54 to 6.46 ms, both inside the spread between two runs of the same exe. The time
+moved from the translations to the typed code; the Direct3D 9 stream is byte-identical with the families on or off.
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with
