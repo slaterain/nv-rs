@@ -10,6 +10,8 @@ pub mod inventory_info;
 pub mod inventory_items;
 pub mod inventory_ref;
 pub mod math;
+pub mod misc;
+pub mod misc_forms;
 pub mod misc_ref;
 pub mod misc_ref_cells;
 pub mod misc_ref_more;
@@ -36,6 +38,8 @@ pub fn all() -> Vec<&'static Command> {
         .chain(misc_ref_npc::COMMANDS)
         .chain(misc_ref_cells::COMMANDS)
         .chain(misc_ref_more::COMMANDS)
+        .chain(misc::COMMANDS)
+        .chain(misc_forms::COMMANDS)
         .chain(weapons::COMMANDS)
         .chain(math::COMMANDS)
         .chain(algohol::COMMANDS)
@@ -172,6 +176,13 @@ pub mod rtti {
     pub const TES_OBJECT_LIGH: u32 = 0x0118_3938;
     pub const BS_TEMP_EFFECT: u32 = 0x0119_c08c;
     pub const MAGIC_SHADER_HIT_EFFECT: u32 = 0x011a_12c4;
+    pub const BGS_PERK: u32 = 0x0118_61dc;
+    pub const TES_LEV_CREATURE: u32 = 0x0118_9c10;
+    pub const TES_LEV_CHARACTER: u32 = 0x0118_a280;
+    pub const TES_OBJECT_DOOR: u32 = 0x0118_6530;
+    pub const TES_PACKAGE: u32 = 0x0118_46a0;
+    pub const TES_CREATURE: u32 = 0x0118_3a00;
+    pub const BGS_HEAD_PART: u32 = 0x0118_63b8;
 }
 
 /// `DYNAMIC_CAST(obj, from, to)` (xNVSE): the exe's `__RTDynamicCast`; 0 for a null object or
@@ -293,6 +304,13 @@ pub(crate) mod test_support {
             rtti::TES_ACTOR_BASE_DATA => (1 << 33, 0x30),
             rtti::TES_OBJECT_LIGH => (1 << 34, 0),
             rtti::MAGIC_SHADER_HIT_EFFECT => (1 << 35, 0),
+            rtti::BGS_PERK => (1 << 36, 0),
+            rtti::TES_LEV_CREATURE => (1 << 37, 0),
+            rtti::TES_LEV_CHARACTER => (1 << 38, 0),
+            rtti::TES_OBJECT_DOOR => (1 << 39, 0),
+            rtti::TES_PACKAGE => (1 << 40, 0),
+            rtti::TES_CREATURE => (1 << 41, 0),
+            rtti::BGS_HEAD_PART => (1 << 42, 0),
             _ => (0, 0),
         }
     }
