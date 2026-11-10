@@ -408,13 +408,15 @@ impl Common for Diff {
             .family(&culling::CULLING)
             .family(&leaf::LEAVES)
             .goes_by_address(&[0x00ec_6040])
-            // What the translations of the dispatch family's matrix functions call plainly (its PLAIN list).
+            // What the translations of the dispatch family's matrix functions and of the controller walk
+            // call plainly (its PLAIN list).
             .translation_calls_plainly(&[
                 0x0040_19d0,
                 0x0040_8860,
                 0x0047_6930,
                 0x0047_6980,
                 0x0047_69c0,
+                0x004f_0000,
             ])
             .max_calls(MAX_CALLS)
             .float_sweep(FLOAT_SWEEP)
