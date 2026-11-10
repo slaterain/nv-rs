@@ -688,8 +688,10 @@ fn get_nth_animation(e: &mut Engine, w: &[u32]) -> Ret {
 /// buffer on its stack: the script's bytes with their terminator, then (for a `$` string
 /// variable) the variable's text with its own. With the script list and scan guard row
 /// (`NV_NVSE_LIST_GUARD`) the whole name is used. Without it the port stops the game at 256 bytes
-/// or more, which is a DEVIATION (the coordinator's decision, from the review of #415): what xNVSE
-/// does there depends on the run and cannot be reproduced. `AddAnimation` (buffer at `ebp-0x104`,
+/// or more, which is a DEVIATION (the coordinator's decision, from the review of #415), one rule for
+/// both: `AddAnimation`'s answer there depends on the run and cannot be reproduced; `DelAnimation`'s
+/// is fixed by the list and could be, but no script means to give such a name. `AddAnimation`
+/// (buffer at `ebp-0x104`,
 /// the form argument at `ebp-4` above it) does not stop at 256: it adds the name followed by
 /// whatever bytes come after it in its frame (the form pointer's and the frame pointer's); its
 /// first real fault comes at 257 bytes without a form argument (the name's bytes become the form
@@ -704,8 +706,9 @@ fn animation_name(e: &Engine, read: &Read, command: &str) -> Vec<u8> {
     };
     if written >= NAME_BUFFER && !super::array::fix_on(e, super::array::LIST_GUARD) {
         panic!(
-            "{command}: a name of {written} bytes runs past xNVSE's 256-byte buffer, where what \
-             xNVSE does depends on the run: the port stops here (NV_NVSE_LIST_GUARD reads it whole)"
+            "{command}: a name of {written} bytes runs past xNVSE's 256-byte buffer (where \
+             AddAnimation's answer depends on the run): the port stops here, one rule for both \
+             (NV_NVSE_LIST_GUARD reads it whole)"
         );
     }
     read.text(0)
