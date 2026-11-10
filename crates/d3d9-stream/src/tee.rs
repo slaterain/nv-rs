@@ -38,15 +38,20 @@ impl Tee {
     }
 
     fn compare(&mut self, cmd: &Cmd<Data<'_>>, primary: &Reply, shadow: &Reply) {
-        let (Cmd::QueryGetData { query, .. }, Reply::Query(Some((0, a))), Reply::Query(Some((0, b)))) =
-            (cmd, primary, shadow)
+        let (
+            Cmd::QueryGetData { query, .. },
+            Reply::Query(Some((0, a))),
+            Reply::Query(Some((0, b))),
+        ) = (cmd, primary, shadow)
         else {
             return;
         };
         if a == b {
             self.queries.0 += 1;
             if self.queries.0 <= 3 {
-                eprintln!("NV_D3D9 tee: query {query:#x}: the shadow's result is the primary's ({a})");
+                eprintln!(
+                    "NV_D3D9 tee: query {query:#x}: the shadow's result is the primary's ({a})"
+                );
             }
         } else {
             self.queries.1 += 1;
@@ -63,7 +68,8 @@ impl Backend for Tee {
     fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
         let reply = self.primary.execute(cmd);
         if let Some(shadow) = &mut self.shadow {
-            let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| shadow.execute(cmd)));
+            let ran =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| shadow.execute(cmd)));
             match ran {
                 Ok(theirs) => self.compare(&cmd, &reply, &theirs),
                 Err(panic) => {

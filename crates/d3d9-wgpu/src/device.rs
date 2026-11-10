@@ -273,12 +273,17 @@ pub struct Device {
     pipelines: HashMap<PipeKey, Option<wgpu::RenderPipeline>>,
     #[allow(clippy::type_complexity)]
     vs_modules: HashMap<
-        (u64, Vec<wgsl::Input>, Vec<wgsl::Semantic>, Vec<bool>, wgsl::Clip),
+        (
+            u64,
+            Vec<wgsl::Input>,
+            Vec<wgsl::Semantic>,
+            Vec<bool>,
+            wgsl::Clip,
+        ),
         Option<wgpu::ShaderModule>,
     >,
     #[allow(clippy::type_complexity)]
-    ps_modules:
-        HashMap<(u64, Vec<wgsl::Semantic>, bool, wgsl::Clip), Option<wgpu::ShaderModule>>,
+    ps_modules: HashMap<(u64, Vec<wgsl::Semantic>, bool, wgsl::Clip), Option<wgpu::ShaderModule>>,
     samplers: HashMap<SamplerKey, wgpu::Sampler>,
     groups: HashMap<Vec<(u32, u64, Option<SamplerKey>)>, wgpu::BindGroup>,
     blit: HashMap<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
@@ -1362,7 +1367,8 @@ impl Device {
             view_formats: &[],
         });
         let v = t.create_view(&Default::default());
-        self.count_targets.insert((width, height, samples), v.clone());
+        self.count_targets
+            .insert((width, height, samples), v.clone());
         v
     }
 
@@ -1599,7 +1605,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // As many attachments as the pipelines have targets: up to the last bound one, then the
         // occlusion count's while a query counts.
         let mut colours = colours;
-        colours.truncate(colours.iter().rposition(|c| c.is_some()).map_or(0, |i| i + 1));
+        colours.truncate(
+            colours
+                .iter()
+                .rposition(|c| c.is_some())
+                .map_or(0, |i| i + 1),
+        );
         let count = match self.counting {
             Some((_, slot)) => {
                 let (width, height, samples) = self.target_shape();

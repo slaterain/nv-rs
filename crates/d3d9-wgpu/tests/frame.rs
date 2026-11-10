@@ -191,9 +191,7 @@ impl Gpu {
     /// edge at clip x = -1 runs through the left column's centres and leaves its multisample
     /// samples left of the centre uncovered.
     fn cover(&mut self, z: f32) {
-        let tri = floats(&[
-            -3.0, -3.0, z, 1.0, -3.0, 9.0, z, 1.0, 9.0, -3.0, z, 1.0,
-        ]);
+        let tri = floats(&[-3.0, -3.0, z, 1.0, -3.0, 9.0, z, 1.0, 9.0, -3.0, z, 1.0]);
         let offset = 48 * (self.next % 64);
         self.next += 1;
         self.run(Cmd::UploadBuffer {
@@ -287,7 +285,11 @@ fn occlusion_queries_count_the_samples_their_draws_pass() {
         g.colour([1.0, 0.0, 0.0, 1.0]);
         g.clear(3, 0, 1.0);
         let all = 16 * samples;
-        assert_eq!(g.count(0x2000, |g| g.cover(0.25)), all, "{samples}: in front");
+        assert_eq!(
+            g.count(0x2000, |g| g.cover(0.25)),
+            all,
+            "{samples}: in front"
+        );
         assert_eq!(g.count(0x2010, |g| g.cover(0.75)), 0, "{samples}: behind");
         // Two draws in one query: each sample passes twice.
         let n = g.count(0x2020, |g| {
@@ -447,7 +449,10 @@ fn managed_levels_read_back_what_the_game_gave_them() {
         data: Data::Bytes(&top),
     });
     assert!(matches!(
-        g.run(Cmd::ReadSurface { surface: 0x4110, size: 16 }),
+        g.run(Cmd::ReadSurface {
+            surface: 0x4110,
+            size: 16
+        }),
         Reply::Bytes(Some(_))
     ));
     // Destroyed: gone.

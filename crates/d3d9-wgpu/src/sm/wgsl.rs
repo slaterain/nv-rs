@@ -1577,7 +1577,10 @@ mod tests {
                     clip == Clip::Distances,
                     "{v}"
                 );
-                assert_eq!(v.starts_with("enable clip_distances;"), clip == Clip::Distances);
+                assert_eq!(
+                    v.starts_with("enable clip_distances;"),
+                    clip == Clip::Distances
+                );
                 assert_eq!(v.contains("dp4(R.clip[5], opos)"), clip != Clip::Off, "{v}");
                 assert!(v.contains("out.position = opos;"), "{v}");
                 assert_eq!(v.contains("k0: vec4<f32>"), discard, "{v}");
