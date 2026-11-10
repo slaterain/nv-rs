@@ -21,6 +21,10 @@
 //! game makes its window. `Renderer::Init`'s entry does the same for a start that read no file
 //! (the default 1); the window is already made then, so the game runs in it as it is. The
 //! player's file keeps its line: the platform's `WritePrivateProfileStringA` writes nothing.
+//!
+//! Both addresses are reached only by address, so the entries registered here run: `ReadSetting`
+//! through the INI collections' vtables (no translation calls it by name), `Renderer::Init` from
+//! `0086d500` by `e.call`. They are rows of `crates/engine-core/data/overridable.tsv`.
 
 use engine::prelude::*;
 use engine::units::bsmain::xinisetting_xenon::ini_setting_collection_read_setting;

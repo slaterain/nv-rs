@@ -22,6 +22,7 @@
 004bf630	4	JIP
 004c6a10	0	fixes preset guard
 004ca200	1	JIP
+004da670	0	nv-rs full screen taken as the borderless window
 004eec60	1	kNVSE
 004f0380	1	kNVSE
 0050de20	0	JIP
@@ -156,6 +157,7 @@
 00be0fe0	0	ShaderLoader
 00be1750	0	ShaderLoader
 00c3dfa0	0	nv-rs IO wait ends on completion
+00c44280	0	nv-rs full screen taken as the borderless window
 00c65a80	1	nv-rs smooth physics drawing
 00c73170	1	nv-rs high-frame-rate landing
 00cad480	5	ITR
