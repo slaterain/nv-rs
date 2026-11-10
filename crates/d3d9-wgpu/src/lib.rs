@@ -48,53 +48,6 @@ impl WgpuBackend {
     }
 }
 
-/// Moves and sizes `window` over its monitor (in the monitor's real pixels).
-#[cfg(windows)]
-fn cover_monitor(window: isize) {
-    #[repr(C)]
-    struct MonitorInfo {
-        size: u32,
-        monitor: [i32; 4],
-        work: [i32; 4],
-        flags: u32,
-    }
-    #[link(name = "user32")]
-    extern "system" {
-        fn MonitorFromWindow(window: isize, flags: u32) -> isize;
-        fn GetMonitorInfoW(monitor: isize, info: *mut MonitorInfo) -> i32;
-        fn SetThreadDpiAwarenessContext(context: isize) -> isize;
-        fn SetWindowPos(window: isize, after: isize, x: i32, y: i32, w: i32, h: i32, f: u32)
-            -> i32;
-    }
-    /// `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`, `MONITOR_DEFAULTTONEAREST`,
-    /// `SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS`: the window belongs to another thread
-    /// (engine-platform's window thread, which only pumps messages, but the request is posted
-    /// rather than sent all the same, so this thread can never wait on it).
-    const PER_MONITOR_V2: isize = -4;
-    const NEAREST: u32 = 2;
-    const FLAGS: u32 = 0x4 | 0x10 | 0x4000;
-    // SAFETY: plain calls on a window the window thread owns; `info` is this frame's, its size set.
-    unsafe {
-        let before = SetThreadDpiAwarenessContext(PER_MONITOR_V2);
-        let mut info = MonitorInfo {
-            size: std::mem::size_of::<MonitorInfo>() as u32,
-            monitor: [0; 4],
-            work: [0; 4],
-            flags: 0,
-        };
-        if GetMonitorInfoW(MonitorFromWindow(window, NEAREST), &mut info) != 0 {
-            let [l, t, r, b] = info.monitor;
-            SetWindowPos(window, 0, l, t, r - l, b - t, FLAGS);
-        }
-        if before != 0 {
-            SetThreadDpiAwarenessContext(before);
-        }
-    }
-}
-
-#[cfg(not(windows))]
-fn cover_monitor(_window: isize) {}
-
 fn handles(d: &Data<'_>) -> Vec<Handle> {
     d.to_words().into_owned()
 }
@@ -122,16 +75,9 @@ impl Backend for WgpuBackend {
         } = &cmd
         {
             let pp = device::PresentParameters::from_words(&present.to_words());
-            let hwnd = if *window != 0 { *window } else { *focus };
-            // `Windowed` 0 (`bFull Screen=1`): wgpu has no exclusive mode switch, so the frame goes
-            // to the window made to cover its monitor instead, as a borderless window does.
-            if present.to_words().get(8) == Some(&0) && hwnd != 0 && self.output == Output::Window {
-                eprintln!("NV_D3D9 wgpu: full screen asked: drawn in a borderless window over the monitor (wgpu has no exclusive full screen)");
-                cover_monitor(hwnd);
-            }
             return match device::Device::new(
                 self.output,
-                hwnd,
+                if *window != 0 { *window } else { *focus },
                 &pp,
                 &handles(back_buffers),
                 *depth_stencil,
