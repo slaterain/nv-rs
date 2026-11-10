@@ -2256,8 +2256,10 @@ pub fn fn_00e689d0(e: &mut Engine, this: Ptr<NiDX9SourceTextureData>) {
 /// loading thread read a texture file and inflated it from its archive (`fn_00e68a80`'s
 /// `NiFile::GetFile` and `00462d80`); main, binding a texture of its own, waited 6-13 ms on it
 /// at cell borders. With the row, [`read_first::fn_00e6dc40_reading_first`] reads the file on the calling
-/// thread first, with the same calls on the same file, and keeps the bytes here; under the lock
-/// [`fn_00e68a80`] takes them instead of reading. Everything else stays under the lock in the
+/// thread first, with the same calls (the file opened by its name), and keeps the bytes here;
+/// under the lock [`fn_00e68a80`] takes them instead of reading. Only a texture without a file
+/// object of its own is read first: each making opens its own file then, while a texture's own
+/// file object stays the making's alone, under the lock, as in the exe. Everything else stays under the lock in the
 /// exe's order: the renderer data's allocation and construction, the image description, the
 /// Direct3D texture's creation and the texture taking its data.
 pub mod read_first {
@@ -2381,19 +2383,42 @@ pub mod read_first {
         Some(Read::Bytes { buffer, size })
     }
 
+    /// Clears this thread's kept read when the call that kept it ends, however it ends (a stop
+    /// unwinding through it included); its buffer is then left to the guest heap.
+    struct Kept;
+
+    impl Drop for Kept {
+        fn drop(&mut self) {
+            AHEAD.with(|a| *a.borrow_mut() = None);
+        }
+    }
+
     /// `00e6dc40` with the row: the file read first ([`read_file`]) when the texture has no
-    /// renderer data yet and its making would read it, then the exe's body: under the lock at
-    /// +0x180, the renderer data made (`00e68ef0`) unless the texture has some. A read the making
-    /// did not take (another thread made the data meanwhile) has its buffer freed (`00aa10f0`).
+    /// renderer data yet, its making would read it, the texture holds no file object of its own
+    /// (a file object stays the making's alone: under the lock, as in the exe) and this thread
+    /// keeps no read already (a making nested in another); then the exe's body: under the lock
+    /// at +0x180, the renderer data made (`00e68ef0`) unless the texture has some. A read the
+    /// making did not take (another thread made the data meanwhile, or the device or the hint
+    /// changed before the lock) has its buffer freed (`00aa10f0`); its file, opened by name for
+    /// this call alone, is already deleted.
     pub fn fn_00e6dc40_reading_first(e: &mut Engine, this: Ptr, texture: Ptr) -> bool {
         let renderer = this.addr();
         let texture = texture.addr();
+        let mut kept = None;
         if e.mem.u32(texture.wrapping_add(TEXTURE_RENDERER_DATA)) == 0
+            && e.mem.u32(texture.wrapping_add(SOURCE_FILE)) == 0
+            && AHEAD.with(|a| a.borrow().is_none())
             && reaches_the_read(e, texture, renderer)
         {
             let name = e.mem.u32(texture + SOURCE_PLATFORM_FILENAME);
-            let file = e.mem.u32(texture + SOURCE_FILE);
-            keep(read_file(e, name, file).map(|read| Ahead { name, file, read }));
+            if let Some(read) = read_file(e, name, 0) {
+                keep(Some(Ahead {
+                    name,
+                    file: 0,
+                    read,
+                }));
+                kept = Some(Kept);
+            }
         }
         let lock = renderer.wrapping_add(SOURCE_DATA_LOCK);
         e.call(ENTER_CRITICAL_SECTION, &args![lock]);
@@ -2402,13 +2427,16 @@ pub mod read_first {
             data = e.call(MAKE_DATA, &args![texture, renderer]).u32();
         }
         e.call(LEAVE_CRITICAL_SECTION, &args![lock]);
-        if let Some(Ahead {
-            read: Read::Bytes { buffer, .. },
-            ..
-        }) = AHEAD.with(|a| a.borrow_mut().take())
-        {
-            e.call(FREE, &args![buffer]);
+        if kept.is_some() {
+            if let Some(Ahead {
+                read: Read::Bytes { buffer, .. },
+                ..
+            }) = AHEAD.with(|a| a.borrow_mut().take())
+            {
+                e.call(FREE, &args![buffer]);
+            }
         }
+        drop(kept);
         data != 0
     }
 }
@@ -3404,16 +3432,24 @@ mod tests {
 
     const ENTER_SECTION: u32 = 0x00fd_f05c;
     const LEAVE_SECTION: u32 = 0x00fd_f100;
+    /// The texture's platform file name (a word the doubles never read).
+    const NAME: u32 = 0x4444;
 
-    /// A texture that loads straight to the renderer from its file object, with the renderer's
-    /// lock calls logged: (texture, renderer, file, the data object).
+    /// A texture that loads straight to the renderer by its file name (no file object of its
+    /// own: `NiFile::GetFile` opens one for each making), with the renderer's lock calls
+    /// logged: (texture, renderer, the file each making opens, the data object).
     fn read_first_setup(e: &mut Engine) -> (u32, u32, u32, u32) {
         let (texture, renderer, object) = create_setup(e, 0);
         let (_, file, _) = load_setup(e, 0x40, D3DRTYPE_TEXTURE, 1);
         e.mem.set_u32(renderer + RENDERER_DEVICE, 0xd3d);
         e.mem.set_u8(LOAD_DIRECT_TO_RENDERER, 1);
         e.mem.set_u8(texture + SOURCE_LOAD_DIRECT_HINT, 1);
-        e.mem.set_u32(texture + SOURCE_FILE, file);
+        e.mem.set_u32(texture + SOURCE_PLATFORM_FILENAME, NAME);
+        e.register(STRCPY_S, |_, _| Ret::default());
+        e.register(PATH_STANDARDIZE, |_, _| Ret::default());
+        e.register(FILENAME_CONSTRUCTOR, |_, _| Ret::default());
+        e.register(NI_STRICMP, |_, a| word(u32::from(a[1] != EXTENSION_DDS)));
+        e.register_double(FILE_GET_FILE, move |_, _| word(file));
         // The data's virtual table (the exe's, at 010ed37c) sends the texture taking to a double.
         e.map(SOURCE_TEXTURE_DATA_VTABLE, 0x100);
         e.mem.set_u32(
@@ -3434,21 +3470,51 @@ mod tests {
             .unwrap_or_else(|| panic!("no call to {callee:08x}"))
     }
 
-    /// The calls of a run without the lock's and the type test's (which the row makes once more
-    /// before the lock).
-    fn calls_but_the_lock(e: &Engine) -> Vec<(u32, Vec<u32>)> {
+    /// The file's part of a making: the name's split, the open, the good test, the size, the
+    /// buffer, the read and the deletion.
+    const FILE_PART: [u32; 10] = [
+        STRCPY_S,
+        PATH_STANDARDIZE,
+        FILENAME_CONSTRUCTOR,
+        NI_STRICMP,
+        FILE_GET_FILE,
+        FILE_GOOD,
+        FILE_SIZE,
+        ALLOCATE,
+        FILE_READ,
+        FILE_DELETE,
+    ];
+
+    /// The calls of a run but the lock's and the type test's (which the row makes once more
+    /// before the lock), the file's part or the rest.
+    fn split(e: &Engine, file: bool) -> Vec<(u32, Vec<u32>)> {
         e.call_log
             .as_ref()
             .unwrap()
             .iter()
             .filter(|(address, _)| ![ENTER_SECTION, LEAVE_SECTION, GET_RTTI].contains(address))
-            .cloned()
+            .filter(|(address, _)| FILE_PART.contains(address) == file)
+            .map(|(address, words)| {
+                // The name's split works on buffers in the caller's frame, which the row has in
+                // a frame of its own: those words compare as where the frame's buffers are not.
+                let words = match *address {
+                    STRCPY_S | FILE_GET_FILE => words[1..].to_vec(),
+                    PATH_STANDARDIZE | FILENAME_CONSTRUCTOR | NI_STRICMP => words
+                        [words.len() - 1..]
+                        .iter()
+                        .map(|w| if *address == NI_STRICMP { *w } else { 0 })
+                        .collect(),
+                    _ => words.clone(),
+                };
+                (*address, words)
+            })
             .collect()
     }
 
-    /// The row (`NV_TEXTURE_READ_FIRST`): the file is read and deleted before the renderer's lock
-    /// is taken, and the making under the lock gets the same data, the same Direct3D texture and
-    /// the same calls in the same order as the exe's `00e6dc40` (vanilla), which reads inside it.
+    /// The row (`NV_TEXTURE_READ_FIRST`): the file is opened, read and deleted before the
+    /// renderer's lock is taken and every other call of the making stays under the lock; the
+    /// making gets the same data, the same Direct3D texture and the same calls with the same
+    /// words as the exe's `00e6dc40` (vanilla), which reads inside the lock.
     #[test]
     fn reading_first_reads_before_the_lock_and_makes_the_same_data() {
         let mut runs = Vec::new();
@@ -3467,44 +3533,40 @@ mod tests {
             };
             assert!(made);
             assert_eq!(e.mem.u32(texture + TEXTURE_RENDERER_DATA), object);
-            let (read, enter, leave) = (
-                position(&e, FILE_READ),
-                position(&e, ENTER_SECTION),
-                position(&e, LEAVE_SECTION),
-            );
-            let create = position(&e, D3DX_CREATE_TEXTURE);
-            assert!(enter < create && create < leave);
-            if row {
-                assert!(read < enter, "the row reads before the lock");
-                assert!(position(&e, FILE_DELETE) < enter);
-            } else {
-                assert!(enter < read && read < leave, "vanilla reads under the lock");
-            }
+            let (enter, leave) = (position(&e, ENTER_SECTION), position(&e, LEAVE_SECTION));
             assert_eq!(calls_to(&e, ENTER_SECTION), vec![vec![renderer + 0x180]]);
+            let log = e.call_log.as_ref().unwrap();
+            for (i, (address, _)) in log.iter().enumerate() {
+                if [ENTER_SECTION, LEAVE_SECTION].contains(address) {
+                    continue;
+                }
+                if row && FILE_PART.contains(address) {
+                    assert!(
+                        i < enter,
+                        "the row's file part ({address:08x}) before the lock"
+                    );
+                } else if !(row && *address == GET_RTTI && i < enter) {
+                    // Everything else (but the row's own type test before the lock) under it.
+                    assert!(
+                        enter < i && i < leave,
+                        "{address:08x} at {i} outside the lock ({enter}..{leave})"
+                    );
+                }
+            }
+            assert_eq!(calls_to(&e, FILE_GET_FILE)[0][1..], [0, 0x8000]);
             assert_eq!(calls_to(&e, FILE_DELETE), vec![vec![file, 1]]);
             assert_eq!(calls_to(&e, INIT_FROM_D3D), vec![vec![object, 0x7e70]]);
             assert_eq!(calls_to(&e, FREE).len(), 1);
             // Nothing is left kept for a later making.
-            assert_eq!(read_first::take(0, file), None);
-            runs.push(calls_but_the_lock(&e));
+            assert_eq!(read_first::take(NAME, 0), None);
+            runs.push((split(&e, false), split(&e, true)));
         }
-        // The same calls with the same words, in the same order but for the file's part, which
-        // the row makes first (in its own order).
-        let file_part = [FILE_GOOD, FILE_SIZE, ALLOCATE, FILE_READ, FILE_DELETE];
-        let split = |run: &[(u32, Vec<u32>)], file: bool| -> Vec<(u32, Vec<u32>)> {
-            run.iter()
-                .filter(|(address, _)| file_part.contains(address) == file)
-                .cloned()
-                .collect()
-        };
-        assert_eq!(split(&runs[0], false), split(&runs[1], false));
-        assert_eq!(split(&runs[0], true), split(&runs[1], true));
-        assert_eq!(runs[0].len(), runs[1].len());
+        assert_eq!(runs[0], runs[1]);
     }
 
     /// With the row, a texture another thread gave data while this one read (seen under the lock)
-    /// is not made again; the bytes read for it are freed, and a texture that does not load
-    /// straight to the renderer reads nothing before the lock.
+    /// is not made again and the bytes read for it are freed; a texture holding its own file
+    /// object, and one that does not load straight to the renderer, read nothing first.
     #[test]
     fn reading_first_frees_a_read_the_making_did_not_take() {
         let mut e = Engine::new();
@@ -3521,15 +3583,61 @@ mod tests {
         ));
         let buffer = calls_to(&e, FILE_READ)[0][1];
         assert_eq!(calls_to(&e, FREE), vec![vec![buffer]]);
+        assert_eq!(calls_to(&e, FILE_DELETE), vec![vec![file, 1]]);
         assert!(calls_to(&e, D3DX_CREATE_TEXTURE).is_empty());
-        assert_eq!(read_first::take(0, file), None);
-        // Not hinted to load straight: nothing read first (the lock's double gives the texture
-        // data again, so the making, which would go to the image converter, does not run).
+        assert_eq!(read_first::take(NAME, 0), None);
+        // Its own file object: nothing read first (the lock's double gives the texture data
+        // again, so the making does not run).
         e.mem.set_u32(texture + TEXTURE_RENDERER_DATA, 0);
-        e.mem.set_u8(texture + SOURCE_LOAD_DIRECT_HINT, 0);
+        e.mem.set_u32(texture + SOURCE_FILE, file);
         e.call_log = Some(vec![]);
         read_first::fn_00e6dc40_reading_first(&mut e, Ptr::new(renderer), Ptr::new(texture));
         assert!(calls_to(&e, FILE_READ).is_empty());
+        assert!(calls_to(&e, FILE_DELETE).is_empty());
+        // Not hinted to load straight: nothing read first.
+        e.mem.set_u32(texture + TEXTURE_RENDERER_DATA, 0);
+        e.mem.set_u32(texture + SOURCE_FILE, 0);
+        e.mem.set_u8(texture + SOURCE_LOAD_DIRECT_HINT, 0);
+        e.call_log = Some(vec![]);
+        read_first::fn_00e6dc40_reading_first(&mut e, Ptr::new(renderer), Ptr::new(texture));
+        assert!(calls_to(&e, FILE_GET_FILE).is_empty());
+    }
+
+    /// With the row, a texture with its own file object is made as the exe makes it: its file
+    /// read and deleted under the lock.
+    #[test]
+    fn reading_first_leaves_a_texture_s_own_file_under_the_lock() {
+        let mut e = Engine::new();
+        let (texture, renderer, file, object) = read_first_setup(&mut e);
+        e.mem.set_u32(texture + SOURCE_FILE, file);
+        e.call_log = Some(vec![]);
+        assert!(read_first::fn_00e6dc40_reading_first(
+            &mut e,
+            Ptr::new(renderer),
+            Ptr::new(texture)
+        ));
+        assert_eq!(e.mem.u32(texture + TEXTURE_RENDERER_DATA), object);
+        let (enter, leave) = (position(&e, ENTER_SECTION), position(&e, LEAVE_SECTION));
+        let read = position(&e, FILE_READ);
+        assert!(enter < read && read < leave);
+        assert!(calls_to(&e, FILE_GET_FILE).is_empty());
+    }
+
+    /// A stop while the read is kept (here the making stops under the lock) leaves nothing kept
+    /// on the thread for a later making.
+    #[test]
+    fn reading_first_clears_its_read_when_the_making_stops() {
+        let mut e = Engine::new();
+        let (texture, renderer, _, _) = read_first_setup(&mut e);
+        // The data object's construction, under the lock before the making takes the read.
+        e.register_double(TEXTURE_DATA_CONSTRUCTOR, |_, _| {
+            panic!("a stop under the lock")
+        });
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            read_first::fn_00e6dc40_reading_first(&mut e, Ptr::new(renderer), Ptr::new(texture))
+        }));
+        assert!(stopped.is_err());
+        assert_eq!(read_first::take(NAME, 0), None);
     }
 }
 
