@@ -152,6 +152,22 @@ fn file_size(e: &Engine, k: &[u8]) -> u64 {
         .map_or(0, |m| m.len())
 }
 
+/// The size of the file `handle` has open at `k`, for the calls that answer one through a handle
+/// (`SetFilePointer` from the end, `GetFileSizeEx`): the run's copy; else the player's file, from
+/// the handle's kept host file once it has one ([`Kept`]: its sizes and its reads then describe
+/// the same file, also after another program replaced or deleted it on disk), by path before the
+/// handle's first read ([`file_size`]); 0 for neither.
+fn handle_size(e: &mut Engine, handle: u32, k: &[u8]) -> u64 {
+    let disk = &state_ref!(e).disk;
+    if disk.files.contains_key(k) || !disk.player.contains_key(k) {
+        return file_size(e, k);
+    }
+    let kept = open_file(e, handle)
+        .and_then(|file| file.kept.0.as_ref().map(|host| host.metadata()))
+        .map(|meta| meta.map_or(0, |m| m.len()));
+    kept.unwrap_or_else(|| file_size(e, k))
+}
+
 /// Up to `count` bytes of the file at `k` from `start` (fewer at the end, none past it): the
 /// run's copy, else the player's file opened for reading only (read from disk through `handle`'s
 /// kept host file, [`Kept`]).
@@ -183,10 +199,22 @@ fn read_range(e: &mut Engine, handle: u32, k: &[u8], start: u64, count: u32) -> 
 /// A read-only handle's host file for the player's file it reads ([`OpenFile::kept`]): opened at
 /// the handle's first `ReadFile` and kept until the handle is closed, as the handle Windows gives
 /// the game is one open file. Before (to 2026-11-09) every `ReadFile` opened the file by its path
-/// again, read and closed it: in the Goodsprings load (route2, 12,300 reads through OEI's file
-/// thread) the opens and closes were about 0.8 s of that thread's 2.8 s busy, and each fresh open
-/// read through the file cache cold (measure/stutter/REAL-THREADS.md, "Border loads"). The bytes
-/// read are the same: each read is at the handle's position, of the same count, in the same order.
+/// again, read and closed it. The Goodsprings load makes about 12,300 reads through OEI's file
+/// thread; with the file kept open that load fell from 2.2-2.4 s to about 1.5 s (A/B under one
+/// QUIET: measure/stutter/REAL-THREADS.md, "Border loads"). Its profiles show the opens and
+/// closes as a bucket of their own and the reads themselves far shorter once the file stays
+/// open, likely because each fresh open read through the file cache cold: an inference, the two
+/// profiles were taken under different load.
+///
+/// Each read is at the handle's position, of the same count, in the same order, so a file nobody
+/// changes reads byte for byte as before. A file another program replaces or deletes on disk
+/// while the handle is open goes on reading as the file the handle opened, its bytes and its
+/// size ([`handle_size`]), until the handle is closed; a handle opened after the change sees the
+/// new file. (Before, every read saw whatever the path named then: the new file's bytes at the
+/// old position, or a stop when it was gone. The original refuses such a change: its opens
+/// never share delete, `00afeac0` sharing read and the C runtime's `__tsopen_nolock` at most
+/// read and write. The host file here shares read, write and delete on purpose, so a mod manager
+/// can replace or remove a file while the game runs.)
 /// A cache, not part of the handle's state: two handles compare equal whatever they keep.
 #[derive(Debug, Clone, Default)]
 pub struct Kept(Option<std::sync::Arc<std::fs::File>>);
@@ -1725,7 +1753,7 @@ pub fn set_file_pointer(e: &mut Engine, handle: u32, low: u32, high: Ptr, method
     let base = match method {
         0 => 0i64,
         1 => position as i64,
-        2 => file_size(e, &path) as i64,
+        2 => handle_size(e, handle, &path) as i64,
         _ => {
             e.kernel.last_error = ERROR_INVALID_PARAMETER;
             return INVALID_SET_FILE_POINTER;
@@ -1918,7 +1946,7 @@ pub fn get_file_size_ex(e: &mut Engine, handle: u32, size: Ptr) -> u32 {
             return 0;
         }
     };
-    let bytes = file_size(e, &path);
+    let bytes = handle_size(e, handle, &path);
     e.mem.set_u32(size.addr(), bytes as u32);
     e.mem.set_u32(size.addr() + 4, (bytes >> 32) as u32);
     1
@@ -2635,85 +2663,6 @@ mod tests_player_files {
     }
 
     #[test]
-    fn a_read_only_handle_keeps_its_file_and_reads_the_same_bytes() {
-        let mut e = Engine::new();
-        let real = concat!(env!("CARGO_MANIFEST_DIR"), "/src/files.rs");
-        let bytes = std::fs::read(real).unwrap();
-        assert!(bytes.len() > 4096);
-        let name = e.mem.alloc(0x200);
-        e.mem.set_cstr(name, real.as_bytes());
-        let open = |e: &mut Engine| {
-            create_file_a(
-                e,
-                Ptr::new(name),
-                GENERIC_READ,
-                1,
-                0,
-                OPEN_EXISTING,
-                0x80,
-                0,
-            )
-        };
-        let (a, b) = (open(&mut e), open(&mut e));
-        assert!(open_file(&mut e, a).unwrap().kept.0.is_none());
-        let buffer = e.mem.alloc(bytes.len() as u32 + 0x10);
-        let count = e.mem.alloc(4);
-        // Handle a in reads of 1000 (the last one short), b at its own position in between.
-        let mut got = Vec::new();
-        loop {
-            assert_eq!(
-                read_file(&mut e, a, Ptr::new(buffer), 1000, Ptr::new(count), 0),
-                1
-            );
-            let n = e.mem.u32(count);
-            got.extend(e.mem.bytes(buffer, n));
-            if n < 1000 {
-                break;
-            }
-            assert_eq!(
-                read_file(&mut e, b, Ptr::new(buffer), 7, Ptr::new(count), 0),
-                1
-            );
-        }
-        assert_eq!(got, bytes);
-        assert!(open_file(&mut e, a).unwrap().kept.0.is_some());
-        let at = set_file_pointer(&mut e, b, 0, Ptr::new(0), 1) as usize;
-        assert_eq!(at, 7 * (bytes.len() / 1000));
-        assert_eq!(
-            read_file(&mut e, b, Ptr::new(buffer), 7, Ptr::new(count), 0),
-            1
-        );
-        assert_eq!(e.mem.bytes(buffer, 7), bytes[at..at + 7].to_vec());
-        // A count past the size check from 10 bytes before the end: the 10 bytes; past the end
-        // nothing, the position where it was put.
-        let back = (-10i32) as u32;
-        set_file_pointer(&mut e, a, back, Ptr::new(0), 2);
-        assert_eq!(
-            read_file(
-                &mut e,
-                a,
-                Ptr::new(buffer),
-                READ_SIZE_CHECK + 1,
-                Ptr::new(count),
-                0
-            ),
-            1
-        );
-        assert_eq!(e.mem.u32(count), 10);
-        assert_eq!(e.mem.bytes(buffer, 10), bytes[bytes.len() - 10..].to_vec());
-        set_file_pointer(&mut e, a, 5, Ptr::new(0), 2);
-        assert_eq!(
-            read_file(&mut e, a, Ptr::new(buffer), 3, Ptr::new(count), 0),
-            1
-        );
-        assert_eq!(e.mem.u32(count), 0);
-        assert_eq!(
-            set_file_pointer(&mut e, a, 0, Ptr::new(0), 1) as usize,
-            bytes.len() + 5
-        );
-    }
-
-    #[test]
     fn a_read_only_open_reads_the_players_file_in_place() {
         let mut e = Engine::new();
         let real = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
@@ -2805,6 +2754,229 @@ mod tests_player_files {
     }
 }
 
+/// A read-only handle's kept host file ([`Kept`]), on scratch files the tests make themselves.
+#[cfg(test)]
+mod tests_kept_files {
+    use super::tests_changed_directories::scratch;
+    use super::*;
+
+    /// `len` bytes that differ along the file and from one `seed` to another.
+    fn pattern(seed: u8, len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|i| (i as u8).wrapping_mul(31) ^ ((i >> 8) as u8).wrapping_add(seed))
+            .collect()
+    }
+
+    /// The scratch file `name` in `dir` with `bytes`; its full path.
+    fn file(dir: &str, name: &str, bytes: &[u8]) -> String {
+        let path = format!("{dir}\\{name}");
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn open(e: &mut Engine, path: &str, access: u32) -> u32 {
+        let name = e.mem.alloc(0x200);
+        e.mem.set_cstr(name, path.as_bytes());
+        create_file_a(e, Ptr::new(name), access, 1, 0, OPEN_EXISTING, 0x80, 0)
+    }
+
+    /// `ReadFile` of `count` bytes through `h`: what it read (the call itself succeeds).
+    fn read(e: &mut Engine, h: u32, count: u32) -> Vec<u8> {
+        let buffer = e.mem.alloc(count.min(0x1_0000) + 0x10);
+        let got = e.mem.alloc(4);
+        assert_eq!(
+            read_file(e, h, Ptr::new(buffer), count, Ptr::new(got), 0),
+            1
+        );
+        let n = e.mem.u32(got);
+        e.mem.bytes(buffer, n)
+    }
+
+    /// The file's size as `GetFileSizeEx` and as `SetFilePointer` from the end answer it through
+    /// `h` (the same number; the position is put back).
+    fn size(e: &mut Engine, h: u32) -> u64 {
+        let out = e.mem.alloc(8);
+        assert_eq!(get_file_size_ex(e, h, Ptr::new(out)), 1);
+        let by_call = u64::from(e.mem.u32(out)) | (u64::from(e.mem.u32(out + 4)) << 32);
+        let position = set_file_pointer(e, h, 0, Ptr::new(0), 1);
+        let from_end = set_file_pointer(e, h, 0, Ptr::new(0), 2);
+        assert_eq!(set_file_pointer(e, h, position, Ptr::new(0), 0), position);
+        assert_eq!(u64::from(from_end), by_call);
+        by_call
+    }
+
+    fn close(e: &mut Engine, h: u32) {
+        assert_eq!(super::super::close_handle(e, h), 1);
+    }
+
+    /// An open of `path` that shares nothing: it succeeds only while no handle at all has the
+    /// file open. Tried for up to 2 s, as a virus scanner may hold a new file for a moment.
+    #[cfg(windows)]
+    fn opens_alone(path: &str) -> bool {
+        use std::os::windows::fs::OpenOptionsExt;
+        (0..200).any(|_| {
+            let alone = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(path)
+                .is_ok();
+            if !alone {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            alone
+        })
+    }
+
+    /// Two handles on one file: each keeps a host file from its first read to its close and reads
+    /// at its own position, in the counts asked (short at the end, nothing past it).
+    #[test]
+    fn a_read_only_handle_keeps_its_file_and_reads_the_same_bytes() {
+        let dir = scratch("kept-reads", &[]);
+        let bytes = pattern(1, 10_437);
+        let path = file(&dir, "Archive.bsa", &bytes);
+        let mut e = Engine::new();
+        #[cfg(windows)]
+        assert!(opens_alone(&path));
+        let (a, b) = (
+            open(&mut e, &path, GENERIC_READ),
+            open(&mut e, &path, GENERIC_READ),
+        );
+        // No host file before the first read: the open itself holds nothing on disk.
+        assert!(open_file(&mut e, a).unwrap().kept.0.is_none());
+        #[cfg(windows)]
+        assert!(opens_alone(&path));
+        assert_eq!(size(&mut e, a), bytes.len() as u64);
+        // Handle a in reads of 1000 (the last one short), b at its own position in between.
+        let mut got = Vec::new();
+        loop {
+            let part = read(&mut e, a, 1000);
+            got.extend_from_slice(&part);
+            if part.len() < 1000 {
+                break;
+            }
+            assert_eq!(read(&mut e, b, 7).len(), 7);
+        }
+        assert_eq!(got, bytes);
+        assert!(open_file(&mut e, a).unwrap().kept.0.is_some());
+        let at = set_file_pointer(&mut e, b, 0, Ptr::new(0), 1) as usize;
+        assert_eq!(at, 7 * (bytes.len() / 1000));
+        assert_eq!(read(&mut e, b, 7), bytes[at..at + 7].to_vec());
+        // A count past the size check from 10 bytes before the end: the 10 bytes; past the end
+        // nothing, the position where it was put.
+        let back = (-10i32) as u32;
+        set_file_pointer(&mut e, a, back, Ptr::new(0), 2);
+        assert_eq!(
+            read(&mut e, a, READ_SIZE_CHECK + 1),
+            bytes[bytes.len() - 10..].to_vec()
+        );
+        set_file_pointer(&mut e, a, 5, Ptr::new(0), 2);
+        assert!(read(&mut e, a, 3).is_empty());
+        assert_eq!(
+            set_file_pointer(&mut e, a, 0, Ptr::new(0), 1) as usize,
+            bytes.len() + 5
+        );
+        // The host files are held while the handles are open and let go at `CloseHandle`: an
+        // open that shares nothing fails with a sharing violation until both are closed.
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            let alone = || {
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .share_mode(0)
+                    .open(&path)
+            };
+            assert_eq!(alone().unwrap_err().raw_os_error(), Some(32));
+            close(&mut e, a);
+            assert_eq!(alone().unwrap_err().raw_os_error(), Some(32));
+            close(&mut e, b);
+            assert!(opens_alone(&path), "CloseHandle lets the host file go");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A player's file changed while a read-only handle has it open. Another program (a mod
+    /// manager; the "Play with mods" folder is hard links) may replace or delete it on disk: both
+    /// succeed, the kept host file sharing read, write and delete, and the handle goes on reading
+    /// the file it opened, its bytes and its size, until it is closed, while a handle opened
+    /// afterwards sees the disk as it is. (Before the kept file every read opened the path again:
+    /// the new file's bytes at the old position, or a stop when the file was gone.) The game's
+    /// own `DeleteFileA` and its own write open act on the run's side, as before.
+    #[test]
+    fn a_file_changed_while_a_handle_has_it_open() {
+        let dir = scratch("kept-changed", &[]);
+        let (old, new) = (pattern(1, 6000), pattern(2, 3500));
+        let mut e = Engine::new();
+
+        // Replaced on disk: another file renamed over it.
+        let path = file(&dir, "Replaced.bsa", &old);
+        let incoming = file(&dir, "Incoming.bsa", &new);
+        let h = open(&mut e, &path, GENERIC_READ);
+        assert_eq!(read(&mut e, h, 100), old[..100].to_vec());
+        std::fs::rename(&incoming, &path).expect("a rename over a file the game has open");
+        assert_eq!(std::fs::read(&path).unwrap(), new);
+        assert_eq!(read(&mut e, h, 100), old[100..200].to_vec());
+        assert_eq!(size(&mut e, h), 6000);
+        set_file_pointer(&mut e, h, (-50i32) as u32, Ptr::new(0), 2);
+        assert_eq!(read(&mut e, h, 100), old[5950..].to_vec());
+        let after = open(&mut e, &path, GENERIC_READ);
+        assert_eq!(size(&mut e, after), 3500);
+        assert_eq!(read(&mut e, after, 100), new[..100].to_vec());
+        assert_eq!(size(&mut e, after), 3500);
+        assert_eq!(size(&mut e, h), 6000);
+        close(&mut e, h);
+        close(&mut e, after);
+
+        // Deleted on disk: the handle reads on; for a new open there is no such file.
+        let path = file(&dir, "Deleted.bsa", &old);
+        let h = open(&mut e, &path, GENERIC_READ);
+        assert_eq!(read(&mut e, h, 100), old[..100].to_vec());
+        std::fs::remove_file(&path).expect("deleting a file the game has open");
+        assert_eq!(read(&mut e, h, 100), old[100..200].to_vec());
+        assert_eq!(size(&mut e, h), 6000);
+        assert_eq!(open(&mut e, &path, GENERIC_READ), INVALID_HANDLE_VALUE);
+        assert_eq!(e.kernel.last_error, ERROR_FILE_NOT_FOUND);
+        assert_eq!(read(&mut e, h, 100), old[200..300].to_vec());
+        close(&mut e, h);
+
+        // The game's own DeleteFileA: gone for the game, so the handle reads nothing more and
+        // the size is 0; the player's file stays on disk.
+        let path = file(&dir, "GameDeleted.bsa", &old);
+        let h = open(&mut e, &path, GENERIC_READ);
+        assert_eq!(read(&mut e, h, 100), old[..100].to_vec());
+        let name = e.mem.alloc(0x200);
+        e.mem.set_cstr(name, path.as_bytes());
+        assert_eq!(delete_file_a(&mut e, Ptr::new(name)), 1);
+        assert!(read(&mut e, h, 100).is_empty());
+        assert_eq!(size(&mut e, h), 0);
+        assert_eq!(std::fs::read(&path).unwrap(), old);
+        close(&mut e, h);
+
+        // The game's own write open takes the file into the run: the earlier read handle then
+        // reads the run's copy (what the write handle wrote, and its size), not the disk.
+        let path = file(&dir, "Written.bsa", &old);
+        let r = open(&mut e, &path, GENERIC_READ);
+        assert_eq!(read(&mut e, r, 100), old[..100].to_vec());
+        let w = open(&mut e, &path, GENERIC_WRITE);
+        assert_ne!(w, INVALID_HANDLE_VALUE);
+        let words = e.mem.alloc(8);
+        e.mem.write(words, b"THE RUN!");
+        set_file_pointer(&mut e, w, 100, Ptr::new(0), 0);
+        assert_eq!(write_file(&mut e, w, Ptr::new(words), 8, Ptr::new(0), 0), 1);
+        set_file_pointer(&mut e, w, 0, Ptr::new(0), 2);
+        assert_eq!(write_file(&mut e, w, Ptr::new(words), 8, Ptr::new(0), 0), 1);
+        assert_eq!(
+            read(&mut e, r, 10),
+            [&b"THE RUN!"[..], &old[108..110]].concat()
+        );
+        assert_eq!(size(&mut e, r), 6008);
+        assert_eq!(std::fs::read(&path).unwrap(), old);
+        close(&mut e, r);
+        close(&mut e, w);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// Searches of a directory the game changed in this run list it as Windows would after the
 /// same calls (`build43-scratch/measure/findfile-changed/findfile-2026-11-03.txt`): the pause
 /// menu's `Saves\*.fos` after a save stopped the run before (`007cbaf0`).
@@ -2817,7 +2989,7 @@ mod tests_changed_directories {
 
     /// A scratch folder of the test's own (under the system's temporary folder) holding `files`
     /// (name, size), made one after the other.
-    fn scratch(test: &str, files: &[(&str, usize)]) -> String {
+    pub(super) fn scratch(test: &str, files: &[(&str, usize)]) -> String {
         let dir = std::env::temp_dir().join(format!("nv-rs-{test}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
