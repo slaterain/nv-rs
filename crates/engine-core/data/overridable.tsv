@@ -58,7 +58,11 @@
 00646260	0	JIP
 00646360	0	JIP
 00646d00	1	JIP
+00652140	0	nv-rs thread races
+00652160	0	nv-rs thread races
+00652190	0	nv-rs thread races
 0068f320	1	ITR
+0071d0a0	1	nv-rs thread races
 0077a480	0	JIP
 007838a0	1	nv-rs mod fit worn question
 0078ac60	2	JIP
@@ -99,6 +103,9 @@
 00a09410	3	ITR
 00a0a270	0	ITR
 00a0a300	0	ITR
+00a0df80	0	nv-rs thread races
+00a0e770	1	nv-rs thread races
+00a0f8b0	1	nv-rs thread races
 00a239e0	0	JIP
 00a2e1b0	0	kNVSE
 00a2e280	0	kNVSE
@@ -115,11 +122,12 @@
 00a41110	0	kNVSE
 00a5b460	0	JG
 00a5b690	0	JG,JIP
+00aa3a40	1	nv-rs thread races
 00aa3e40	0	HeapReplacer
 00aa4060	0	HeapReplacer
 00aa4150	0	HeapReplacer
 00aa4200	0	HeapReplacer
-00aa42e0	0	HeapReplacer
+00aa42e0	0	HeapReplacer,nv-rs thread races
 00aa44c0	2	HeapReplacer
 00aa4e40	1	nv-rs high-frame-rate slow motion
 00aa4ee0	1	nv-rs uncap

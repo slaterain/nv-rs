@@ -291,6 +291,11 @@ const FACE_GEN_LOCK_DEPTH: u32 = 0x011d_59dc;
 const LOCK_TAKE: u32 = 0x0045_38e0;
 const LOCK_TRY: u32 = 0x0044_b130;
 const LOCK_RELEASE: u32 = 0x0082_f1f0;
+/// `00652140` (take the face-gen lock, count the depth up) and `00652190` (release it, count
+/// down), called by address: the fixes preset's thread-race row registers over both
+/// (`crates/engine-core/data/overridable.tsv`).
+const FACE_GEN_SECTION_ENTER: u32 = 0x0065_2140;
+const FACE_GEN_SECTION_LEAVE: u32 = 0x0065_2190;
 /// `NiPointer<T>` helpers (`thiscall` on the pointer): the constructor from a raw pointer
 /// (`00633c90`, one word), the destructor (`0045cec0`), the dereference (`00559450`), the
 /// assignment from a raw pointer (`0066b0d0`, one word), the copy constructor (`00559a40`,
@@ -412,11 +417,11 @@ fn pointer_get(e: &mut Engine, slot: u32) -> u32 {
 /// (`00650ba0`).
 pub fn fn_0064ffd0(e: &mut Engine, this: Ptr, key: u32, model: u32) {
     let base = this.addr();
-    fn_00652140(e);
+    e.call(FACE_GEN_SECTION_ENTER, &args![]);
     with_pointer(e, |e, entry| {
         if model == 0 {
             e.call(MAP_REMOVE_AT, &args![base.wrapping_add(4), key]);
-            fn_00652190(e);
+            e.call(FACE_GEN_SECTION_LEAVE, &args![]);
             return;
         }
         let block = e.call(ALLOCATE, &args![0x10u32]).u32();
@@ -438,7 +443,7 @@ pub fn fn_0064ffd0(e: &mut Engine, this: Ptr, key: u32, model: u32) {
         fn_00658950(e, Ptr::new(base.wrapping_add(4)), key, copy);
         let held = pointer_get(e, entry);
         e.call(MODEL_MAP_TOUCH, &args![this, held]);
-        fn_00652190(e);
+        e.call(FACE_GEN_SECTION_LEAVE, &args![]);
     });
 }
 
@@ -489,7 +494,7 @@ pub fn fn_006501a0(e: &mut Engine, this: Ptr) {
 /// is set. Answers whether it was found.
 pub fn fn_00650200(e: &mut Engine, this: Ptr, key: u32, model: u32) -> bool {
     let base = this.addr();
-    fn_00652140(e);
+    e.call(FACE_GEN_SECTION_ENTER, &args![]);
     with_pointer(e, |e, entry| {
         let mut found = false;
         if e.call(MAP_LOOKUP, &args![base.wrapping_add(4), key, entry])
@@ -509,7 +514,7 @@ pub fn fn_00650200(e: &mut Engine, this: Ptr, key: u32, model: u32) -> bool {
             e.mem.set_u8(base.wrapping_add(0x20), 1);
             found = true;
         }
-        fn_00652190(e);
+        e.call(FACE_GEN_SECTION_LEAVE, &args![]);
         found
     })
 }
@@ -535,7 +540,7 @@ fn touch_named(
             return false;
         }
         let mut found = false;
-        fn_00652140(e);
+        e.call(FACE_GEN_SECTION_ENTER, &args![]);
         let name = e.call(first, &args![source]).u32();
         let mut hit = e
             .call(MAP_LOOKUP, &args![base.wrapping_add(4), name, entry])
@@ -558,7 +563,7 @@ fn touch_named(
             e.mem.set_u8(base.wrapping_add(0x20), 1);
             found = true;
         }
-        fn_00652190(e);
+        e.call(FACE_GEN_SECTION_LEAVE, &args![]);
         found
     })
 }
@@ -1255,7 +1260,7 @@ pub fn fn_00651e30(e: &mut Engine) {
 /// `0065c3a0`.
 pub fn fn_00651e70(e: &mut Engine, this: Ptr) {
     let base = this.addr();
-    fn_00652140(e);
+    e.call(FACE_GEN_SECTION_ENTER, &args![]);
     let first = e.call(0x004b_9ba0, &args![base.wrapping_add(4)]).u32();
     e.with_stack(8, |e, slots| {
         let position = slots.addr();
@@ -1278,7 +1283,7 @@ pub fn fn_00651e70(e: &mut Engine, this: Ptr) {
             });
         }
     });
-    fn_00652190(e);
+    e.call(FACE_GEN_SECTION_LEAVE, &args![]);
 }
 
 // Translated from 00651f40 (decompiled, FalloutNV.exe 1.4.0.525)

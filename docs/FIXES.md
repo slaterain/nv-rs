@@ -103,6 +103,7 @@ The game's own `iFPSClamp` ignores `FrameLimit`: a clamp is a fixed step with no
 | Script list and scan guard | none (a flag the extender reads) | `NV_NVSE_LIST_GUARD` | (Once "Script inventory list guard": the variable and the Fallout.ini key `bNVSEListGuard` keep that name.) Lists and walks that cannot end are ended. A game list the inventory commands walk (a container's stacks, a stack's extra data lists) that runs back into itself ends the walk after 1,048,576 nodes, and `GetPaired` ends where it would ask for the same stack again (a stack list with an empty node). A cell scan (`GetFirstRef`, `GetNextRef`, `GetNumRefs`, `GetRefs`, their `InCell` forms, `GetInGrid`, `GetInGridInCell`) whose depth takes the walk past the cell grid's 8-bit positions (the cell's x or y plus the depth above 127, as with `GetNumRefs 0 200`, or a depth of -2, taken as 254) ends when the walk is back where it started, every cell position it can reach visited once: `GetNumRefs` and `GetRefs` give the references of the cells passed; `GetFirstRef` and `GetNextRef` go on answering the same references round and round as xNVSE does, and only a call that goes the whole way round without finding one answers 0. xNVSE walks on for ever and the game hangs; off (vanilla), the port stops the game there instead. And two places where xNVSE itself stops the game no longer do: the extra data list `SetHotkeyItem` gives a stack that had none (stimpaks, for one) has the game's own vtable, so the game can free it when the stack is used up, dropped or the inventory torn down; the token commands (`GetTokenValue`, `GetTokenRef`, `SetTokenValue`, `SetTokenRef`, `SetTokenValueAndRef`, `GetPaired`) on an item that is in the reference's base container without a stack of its own (the player's Pip-Boy, for one) answer with that item's base health and no owner, and the setters add it and set its new stack to the value given, as they do for an item not held (except that `SetTokenRef`, which gives no value, keeps the item's base health, where xNVSE's not-held path would store 0). xNVSE's list has no vtable, and its token search reads the item's health through the missing changes entry or counts on through an index the command did not pass: the game crashes; off (vanilla), the port stops there too. Below |
 | IO wait ends on completion | `00c3dfa0` | `NV_IO_WAIT` | The IO manager's wait for queued loads (`00c3dfa0`; main at a cell border, a load, a save) sleeps 50 ms a turn while the completed work is short of what is in flight, then takes what came in. Here that sleep ends as soon as it is not (looked at after each 1 ms sleep; a turn still ends after 50 ms by the clock, or after 50 looks), so the wait for queued loads ends when they are done, not at its next 50 ms step: the same work in the same order. With stepped threads each 1 ms sleep is a switch point, where the IO thread runs. `IOManager::LoadQueuedPriority` (`00456520`) calls it by address now, so the row applies there too. |
 | Half-loaded actor's level change | `00881d30`, `00882b90`, `00883240`, `00883800`, `00932a00`, `00932b70` | `NV_HALF_LOADED_MOVE` | An actor moved to another AI level while its saved data loads (one loading thread between the two passes over a cell's saved changes, another setting its animation: running fast across cells) has its saved reference ids taken out for the move and put back where the original's copy puts them, for the second pass to resolve. The original follows the saved target id as an object (marks it, then calls through the word at the id as a vtable): its own crash. Below |
+| Thread races | `00aa42e0`, `00aa3a40`, `00a0e770`, `00a0df80`, `00a0f8b0`, `0071d0a0`, `00652140`, `00652160`, `00652190` | `NV_THREAD_RACES` | Three places where the original shares state between its threads without the lock it needs, which the port meets because it runs the game's threads side by side: a new thread's scrap heap (the first look-up on a thread inserts into an unlocked map, so two threads starting at once can lose one, and a block is later freed into the wrong heap), the debug texts and the console (printed from any thread while the main thread handles and times out the same queue), and the face-gen lock's count (counted down after the release with a plain read and write, so counts are lost and the model cache is never emptied, or emptied under another thread). From lStewieAl's Tweaks. Below |
 
 ### What high frame rates do to the original's code
 
@@ -261,6 +262,60 @@ then running across cells) stopped with `read of unmapped memory at 00154145 (in
 - **Not covered.** The id lists (`+0x6c`; middle-high `+0xc8`, the active effects, the queued items;
   high `+0x38c`, `+0x394`, the detection states) stay in place; the first pass still writing into the
   old process while the other thread replaces it is the original's own race.
+
+### Thread races
+
+Found by lStewieAl's Tweaks (`ThreadSafeThreadScrapHeap`, `ConsolePrintMultithreadingFix`,
+`patchFixFaceGenRaceDataRace`; none of the three depends on JIP LN or JohnnyGuitar), built here from
+the exe (`crates/host/src/thread_races.rs`). In the original these are races between the game's own
+threads on Windows; the port runs those threads side by side in play (`NV_THREADS`), so it has them
+too. None has been seen in a port run: the evidence is the exe and a test with real threads
+(`crates/host/tests/thread_races.rs`).
+
+- **A new thread's scrap heap.** `MemoryManager::GetThreadScrapHeap` (`00aa42e0`) looks the calling
+  thread's id up in a map of 37 buckets; on the first call of a thread it allocates a heap and inserts
+  it with `SetAt` (`00aa4860`): read the bucket's head, link the new node in front of it, write the head
+  back. No lock. Two threads inserting into one bucket at the same moment both read the old head, and
+  one node is lost: that thread's next call makes a second heap, so a block taken from the first heap
+  is freed into the second. In the port two ids share a bucket when they differ by a multiple of 37
+  (game threads are numbered from 1, render helpers from 65,537), so it is rare today; the original's
+  Windows ids collide more often. With the row each OS thread keeps the heap it found (for its run,
+  its game thread, and until the next install or the memory manager's teardown, `00aa3a40`). The
+  exe's own look-up and insert run under one lock, with the stepped host's time slice taken out
+  around them (as the render helpers' fork does for its caller), so no turn ends while the lock is
+  held. So the map is filled as in the original, and the teardown frees every heap. A heap looked up
+  while a teardown runs is not kept. Not fixed: the teardown's own walk of the map, racing another
+  thread's first call, is the original's race and stays.
+  After its first call a thread pays one thread-local read, where the original makes an import call
+  and a map look-up through three virtual calls.
+- **The debug texts and the console.** The debug texts' queue is handled and timed out on the main
+  thread (`DebugText::HandleQueuedPrints`, `00a0e770`; `00a0df80`), which take the critical section
+  at `011f33dc` only while the debug texts are shown; `DebugText::Print` (`00a0f8b0`) and the console
+  print (`0071d0a0`, which scripts and the script extender's commands print with) take none, from any
+  thread. With the row the four run whole inside that section (it is recursive: their own takes inside
+  stay). Two differences from the plugin: the console print is wrapped whole, its log-file write
+  included, where the plugin takes the section from the line break on; and the functions' own
+  takes, made only while the debug texts show, stay, where the plugin removes them.
+- **The face-gen lock's count.** `00652140` takes the face-gen lock and counts its depth (`011d59dc`)
+  up, `00652160` tries it and counts up when it got it, `00652190` releases it and only then counts
+  down, outside the lock. A release and a take on two threads at once lose a count. The memory-freeing
+  step (`00866a90`) empties the face-gen model cache only when the depth is exactly 1 after its own
+  take: a depth that drifted up keeps the cache full for good (the plugin's author links it to endless
+  loading on some saves), one that drifted down empties it while another thread uses it. With the row
+  the counts are locked increments and decrements at the same points. Tweaks also takes the lock out
+  of three of the model map's functions (`00650200`, `00650930`, `00650ba0`); the exe gives no reason
+  why that is safe, so that part is not built.
+- **Tested.** The real-thread tests (`crates/host/tests/thread_races*.rs`) run four OS threads side
+  by side (skipped below four cores): up to 20,000 rounds of first calls into a one-bucket map, so
+  every insert meets another, and 100,000 takes and releases each of the face-gen lock. One binary
+  installs the row before the first fork; the other runs the original. In 10 runs of each on this
+  machine (2026-11-10, commit b45bc457): with the row, 0 rounds lost a heap and the depth ended at 0
+  every time. Without it, 72 to 248 of the 20,000 rounds lost a heap, and the depth ended between
+  -3,161 and 4,513 after 400,000 takes and releases. A stepped-threads test (the reviewer's) ends a
+  time slice at the map look-up; it finishes, where the first version hung. Single-thread tests
+  install the row and drive all nine addresses: 200 engines in a row each find their own heap, a
+  heap looked up during the teardown is not kept, and the debug-text section is taken first and left
+  as often as taken.
 
 ### Dialogue topic index
 
