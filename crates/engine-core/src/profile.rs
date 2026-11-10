@@ -54,10 +54,13 @@
 //! functions by inclusive samples and the callers of the 15 busiest (from the walked stacks), and
 //! the top `NV_PROFILE_CALLS` (default 60) call targets with their calls a frame.
 //!
-//! `NV_PROFILE_UNDER=ADDR[,ADDR..]` (a measuring aid): every table counts only what runs inside the
-//! named exe functions (a sample whose shadow stack holds one; a call made while one runs), and
-//! each table is followed by the calls a frame of every caller-to-callee edge inside them. Unset,
-//! nothing changes.
+//! `NV_PROFILE_UNDER=ADDR[,ADDR..]` (a measuring aid): the function, native and call tables count
+//! only what runs inside the named exe functions (a sample whose shadow stack holds one; a call
+//! made while one runs; the sample total, phases, threads, sleeps and calls-a-frame header stay
+//! whole-run), and each table is followed by the calls a frame of every caller-to-callee edge
+//! inside them, the edge into a named function from its outer caller included. A named function
+//! deeper than [`MAX_DEPTH`] shadow slots has its calls counted but not its samples. The sampler
+//! says at its start what it counts under and what it ignored. Unset, nothing changes.
 //!
 //! Off (the default), each `Engine::call` pays one relaxed load of [`on`].
 
@@ -305,8 +308,8 @@ pub fn init_from_env() {
     });
 }
 
-/// `NV_PROFILE_UNDER=ADDR[,ADDR..]` (exe addresses in hex, with the profiler on): the tables count
-/// only what runs inside one of these functions (a sample whose shadow stack holds one, a call
+/// `NV_PROFILE_UNDER=ADDR[,ADDR..]` (exe addresses in hex, with the profiler on): the function,
+/// native and call tables count only what runs inside one of these functions (a sample whose shadow stack holds one, a call
 /// made while one is on it), and the calls are also counted by edge (the caller's exe address, the
 /// callee's) for [`edges`]. Read once by [`init_from_env`]; empty when unset.
 static UNDER: OnceLock<Vec<u32>> = OnceLock::new();
@@ -323,10 +326,46 @@ fn under_roots() -> &'static [u32] {
 
 /// `NV_PROFILE_UNDER`'s addresses: hex words separated by commas (`0x` allowed); others ignored.
 fn parse_under(value: &str) -> Vec<u32> {
-    value
-        .split(',')
-        .filter_map(|a| u32::from_str_radix(a.trim().trim_start_matches("0x"), 16).ok())
-        .collect()
+    parse_under_all(value).0
+}
+
+/// [`parse_under`] with the entries it could not read, as written.
+fn parse_under_all(value: &str) -> (Vec<u32>, Vec<String>) {
+    let mut roots = Vec::new();
+    let mut ignored = Vec::new();
+    for entry in value.split(',').map(str::trim).filter(|a| !a.is_empty()) {
+        let digits = entry
+            .strip_prefix("0x")
+            .or_else(|| entry.strip_prefix("0X"))
+            .unwrap_or(entry);
+        match u32::from_str_radix(digits, 16) {
+            Ok(a) => roots.push(a),
+            Err(_) => ignored.push(entry.to_string()),
+        }
+    }
+    (roots, ignored)
+}
+
+/// The line the sampler prints at its start when `NV_PROFILE_UNDER` is set (`None` unset).
+fn under_notice(value: Option<&str>) -> Option<String> {
+    let value = value?;
+    let (roots, ignored) = parse_under_all(value);
+    let ignored = if ignored.is_empty() {
+        String::new()
+    } else {
+        format!(" (ignored: {})", ignored.join(", "))
+    };
+    Some(if roots.is_empty() {
+        format!(
+            "NV_PROFILE_UNDER: no usable address in {value:?}{ignored}: counting EVERYTHING, as if unset"
+        )
+    } else {
+        let names: Vec<String> = roots.iter().map(|a| format!("{a:08x}")).collect();
+        format!(
+            "NV_PROFILE_UNDER: counting under {}{ignored}",
+            names.join(", ")
+        )
+    })
 }
 
 /// The [`UNDER_SLOT`] after a call to `addr` enters shadow stack slot `depth`: the outermost root
@@ -612,6 +651,9 @@ pub fn start() {
             period.as_secs_f64()
         );
         COUNT_TARGETS.store(calls_top > 0, Relaxed);
+        if let Some(notice) = under_notice(std::env::var("NV_PROFILE_UNDER").ok().as_deref()) {
+            println!("{notice}");
+        }
         let settings = Settings {
             period,
             top,
@@ -4501,16 +4543,37 @@ mod tests {
         }
     }
 
-    /// `NV_PROFILE_SECONDS` takes any number of seconds a `Duration` holds; anything else
-    /// (infinite, too big, not a number, not above 0, unset) gives the 10 s default instead of
-    /// stopping the frame that starts the sampler.
     #[test]
     fn under_reads_hex_addresses() {
         assert_eq!(parse_under(""), Vec::<u32>::new());
         assert_eq!(
-            parse_under("00b6ba20, 0x00b6b930,,nonsense"),
-            vec![0x00b6_ba20, 0x00b6_b930]
+            parse_under("00b6ba20, 0x00b6b930,,nonsense, 0X00b9a120"),
+            vec![0x00b6_ba20, 0x00b6_b930, 0x00b9_a120]
         );
+        assert_eq!(under_notice(None), None);
+        assert_eq!(
+            under_notice(Some("00b6ba20,0X00b6b930,nonsense")).as_deref(),
+            Some("NV_PROFILE_UNDER: counting under 00b6ba20, 00b6b930 (ignored: nonsense)")
+        );
+        // Nothing usable: said plainly, since everything is then counted.
+        let notice = under_notice(Some("nonsense")).unwrap();
+        assert!(notice.contains("no usable address"), "{notice}");
+        assert!(notice.contains("EVERYTHING"), "{notice}");
+    }
+
+    #[test]
+    fn push_and_pop_count_every_call_when_under_is_unset() {
+        // The switch unset (as in these tests): push counts each call by target whatever is on the
+        // shadow stack. A target only this test calls.
+        assert!(!UNDER_ON.load(Relaxed));
+        let target = 0x0f77_7770;
+        let counting = COUNT_TARGETS.swap(true, Relaxed);
+        for _ in 0..3 {
+            push(target);
+            pop();
+        }
+        COUNT_TARGETS.store(counting, Relaxed);
+        assert_eq!(target_counts().get(&target).copied(), Some(3));
     }
 
     #[test]
@@ -4562,6 +4625,9 @@ mod tests {
         assert!(all.contains(&((callee, caller), 1)));
     }
 
+    /// `NV_PROFILE_SECONDS` takes any number of seconds a `Duration` holds; anything else
+    /// (infinite, too big, not a number, not above 0, unset) gives the 10 s default instead of
+    /// stopping the frame that starts the sampler.
     #[test]
     fn the_table_period_takes_any_value() {
         assert_eq!(table_period(None), Duration::from_secs(10));
