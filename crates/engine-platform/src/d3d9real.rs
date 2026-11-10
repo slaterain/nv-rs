@@ -2009,14 +2009,22 @@ pub fn query_issue(e: &mut Engine, query: u32, flags: u32) {
 /// `GetData` of the real query after the game's `END`: its answer and its 4-byte result; `None`
 /// without a real query.
 ///
-/// Carried out at once, it is the real query's answer after every earlier call. With the render
-/// thread (an improvement, not the original's order) it does not wait for the render thread to
-/// catch up where it needs not: once the render thread has issued the game's last `END`, the real
-/// query answers at once, the same call with the same flags (`S_FALSE` while the GPU is not done).
-/// Before that, a call without `D3DGETDATA_FLUSH` answers `S_FALSE`, which Direct3D gives whenever
-/// the result is not in yet, and the commands recorded so far are handed over so it comes; a call
-/// with `D3DGETDATA_FLUSH` (the game's sun tests poll with it once a frame, its reference volumes
-/// in a loop until ready: `00b63540`, `00b63680`) waits for the render thread, as before.
+/// Without the render thread (scripted, gated and reference runs) it is carried out at once, on the
+/// calling thread: the real query's answer after every earlier call, as in the original. Under
+/// `NV_REPEATABLE` it waits for the GPU's answer (below), so a run repeats.
+///
+/// With the render thread it never waits for it, which is the real device's own rule (measured on
+/// this PC, measure/wgpu/DESIGN.md section 10: the first `GetData` after `END` answers `S_FALSE` with
+/// or without `D3DGETDATA_FLUSH`; without the flag it stays `S_FALSE`, 20,000 reads in a row; with
+/// it the answer comes 3-13 ms on). Once the render thread has issued the game's last `END`, the
+/// real query answers at once, the same call with the same flags (`S_FALSE` while the GPU is not
+/// done). Before that the answer is `S_FALSE`, and the commands recorded so far are handed to the
+/// render thread, so a game loop that polls always makes progress: with the flag the sun tests
+/// once a frame (`00b63540`), the reference volumes until ready (`00b63680`), the VATS and
+/// clean-up reads (`00800370`, `004a4340`, `008026b0`); without it the decals (`0068de30`). (The
+/// real device without the flag would hand nothing over; handing over is kept for those reads as
+/// before, so no loop can wait on a buffer nobody sends.) So with the render thread a result can
+/// come a frame later than without it; the game's code takes "not ready" at every one of these.
 pub fn query_get_data(e: &mut Engine, query: u32, flags: u32) -> Option<(u32, u32)> {
     if !is_forwarded(e, query) {
         return None;
@@ -2059,9 +2067,8 @@ pub fn query_get_data(e: &mut Engine, query: u32, flags: u32) -> Option<(u32, u3
     }
 }
 
-/// [`query_get_data`] with the render thread, without waiting for it: `None` without the render
-/// thread, or for a `D3DGETDATA_FLUSH` read whose `END` the real device has not issued yet (the
-/// call waits then).
+/// [`query_get_data`] with the render thread, never waiting for it: `None` without the render
+/// thread (the call is carried out at once then).
 fn query_without_waiting(r: &mut Real, query: u32, flags: u32) -> Option<Option<(u32, u32)>> {
     let board = r.query_board.as_ref()?;
     let recorded = r.query_ends.get(&query).copied().unwrap_or(0);
@@ -2084,7 +2091,6 @@ fn query_without_waiting(r: &mut Real, query: u32, flags: u32) -> Option<Option<
             }
             Some(Some(super::d3d9backend::query_data(&q, flags)))
         }
-        None if flags & GETDATA_FLUSH != 0 => None,
         None => {
             if let Some(s) = r.stream.as_mut() {
                 s.flush();
@@ -3409,9 +3415,11 @@ mod tests {
         assert_eq!(real(&mut e).query_ends.get(&0x10), Some(&1));
         // Not made on the real device yet.
         assert_eq!(query_get_data(&mut e, 0x10, 0), Some((S_FALSE, 0)));
-        // A reader that waits (D3DGETDATA_FLUSH) asks the backend after every earlier command
-        // instead: here it has no such query.
-        assert_eq!(query_get_data(&mut e, 0x10, GETDATA_FLUSH), None);
+        // A reader with D3DGETDATA_FLUSH does not wait either (the real device's rule): not in.
+        assert_eq!(
+            query_get_data(&mut e, 0x10, GETDATA_FLUSH),
+            Some((S_FALSE, 0))
+        );
         // Its creation failed there.
         let failed = || super::super::d3d9backend::BoardQuery {
             made: 1,
@@ -3436,8 +3444,8 @@ mod tests {
     }
 
     /// The same on a real device with the render thread: the occlusion query's result comes
-    /// (`S_FALSE` until then, never a wait), and a reader with `D3DGETDATA_FLUSH` gets the real
-    /// answer after waiting. Skipped where Direct3D 9 has no device.
+    /// (`S_FALSE` until then, never a wait), and a reader polling with `D3DGETDATA_FLUSH` gets the
+    /// real answer. Skipped where Direct3D 9 has no device.
     #[test]
     fn a_real_query_answers_without_waiting_for_the_render_thread() {
         let _turn = real_turn();
@@ -3457,8 +3465,8 @@ mod tests {
                 matches!(at_once, Some((S_FALSE, 0)) | Some((0, 0))),
                 "{at_once:?}"
             );
-            // A reader that waits (D3DGETDATA_FLUSH, as the game's loops read): the real answer
-            // after every earlier command, until the GPU is done.
+            // A reader polling with D3DGETDATA_FLUSH, as the game's loops read: the real answer
+            // once the render thread has issued the END and the GPU is done.
             let mut answer = None;
             for _ in 0..2000 {
                 answer = query_get_data(&mut e, query, GETDATA_FLUSH);
@@ -3471,6 +3479,50 @@ mod tests {
             // Then the result reads at once.
             assert_eq!(query_get_data(&mut e, query, 0), Some((0, 0)));
         }
+        assert!(device!(e).real.logged_is_empty());
+    }
+
+    /// A game loop of `D3DGETDATA_FLUSH` reads with the render thread held up (its backend locked
+    /// by the test, so it cannot carry out the `END`): every read answers at once, `S_FALSE`,
+    /// and hands the commands over; once the render thread goes on, the loop ends with the real
+    /// answer. Skipped where Direct3D 9 has no device.
+    #[test]
+    fn a_loop_of_flush_reads_ends_while_the_render_thread_is_slow() {
+        let _turn = real_turn();
+        let mut e = Engine::new();
+        let device = 0x1000;
+        if test_real_device_on(&mut e, device, 0x54, true).is_none() {
+            eprintln!("skipped: no Direct3D 9 device");
+            return;
+        }
+        let query = 0x2000;
+        query_created(&mut e, device, query, 9);
+        let backend = real(&mut e)
+            .test_backend
+            .clone()
+            .expect("the test's backend");
+        let held = backend.lock().unwrap_or_else(|p| p.into_inner());
+        query_issue(&mut e, query, 2);
+        query_issue(&mut e, query, ISSUE_END);
+        let started = std::time::Instant::now();
+        for _ in 0..200 {
+            assert_eq!(
+                query_get_data(&mut e, query, GETDATA_FLUSH),
+                Some((S_FALSE, 0))
+            );
+        }
+        // 200 reads while the render thread cannot move: none waited for it.
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        drop(held);
+        let mut answer = None;
+        for _ in 0..5000 {
+            answer = query_get_data(&mut e, query, GETDATA_FLUSH);
+            if answer != Some((S_FALSE, 0)) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(answer, Some((0, 0)));
         assert!(device!(e).real.logged_is_empty());
     }
 
