@@ -5389,7 +5389,16 @@ fn render_next_alpha() {
         Input::Of(&[0, 1, 2]),
         Input::Of(&[0, 1, 0x101]),
         // The limit: the exe's floats and 0.5 (a sorted group sits just inside it).
-        Input::Of(&[0, HALF, ONE, TWO, 0xbf80_0000, 0xff80_0000, 0x7fc0_0000, 0x3eaa_aaab]),
+        Input::Of(&[
+            0,
+            HALF,
+            ONE,
+            TWO,
+            0xbf80_0000,
+            0xff80_0000,
+            0x7fc0_0000,
+            0x3eaa_aaab,
+        ]),
         Input::F32Swept(HALF),
         Input::Of(&[0, 1, 2, 3]),
     ])
