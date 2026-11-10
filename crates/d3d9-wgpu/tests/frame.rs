@@ -48,16 +48,27 @@ fn floats(f: &[f32]) -> Vec<u8> {
     f.iter().flat_map(|f| f.to_le_bytes()).collect()
 }
 
+/// One GPU device at a time in this process: each test's device is made, used and dropped on
+/// its turn. Microsoft's software adapter (WARP, all GitHub's runners have) stops the process
+/// with an access violation inside `d3d10warp.dll` when devices of several test threads work at
+/// once (7 of 30 parallel runs here; 0 of 20 with one test thread, 0 of 20 for each test alone).
+/// The game makes one device, so only the tests need this.
+static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// A backend with a `size` by `size` A8R8G8B8 target (`samples` per pixel), a D24S8 depth
 /// surface of the same, a pass-through vertex shader (`mov oPos, v0`: positions in clip space)
 /// and a pixel shader writing `c0`.
 struct Gpu {
     b: WgpuBackend,
     next: u32,
+    /// Held until the device is gone (fields drop in order: the backend first).
+    _turn: std::sync::MutexGuard<'static, ()>,
 }
 
 impl Gpu {
     fn new(size: u32, samples: u32) -> Option<Gpu> {
+        // A failed test leaves the lock poisoned; the next one still takes its turn.
+        let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
         let mut b = WgpuBackend::new(Output::Offscreen);
         let present = words(&[size, size, A8R8G8B8, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0]);
         let back = words(&[BACK]);
@@ -74,7 +85,11 @@ impl Gpu {
             eprintln!("no GPU adapter: the frame tests are skipped");
             return None;
         }
-        let mut g = Gpu { b, next: 0 };
+        let mut g = Gpu {
+            b,
+            next: 0,
+            _turn: turn,
+        };
         for (surface, depth, format) in [(RT, false, A8R8G8B8), (DS, true, D24S8)] {
             g.run(Cmd::CreateSurface {
                 device: DEVICE,

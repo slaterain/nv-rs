@@ -2,8 +2,8 @@
 //! (bytecode, converter, constants, draw, read-back) and compared with the meaning the DirectX 9
 //! SDK's instruction reference gives it, Direct3D 9's `0 * anything = 0` included.
 //!
-//! The shaders are built here from tokens (no game file). A machine without a GPU adapter, and
-//! GitHub Actions, skip with a message: these need a GPU.
+//! The shaders are built here from tokens (no game file). A machine without a GPU adapter skips
+//! with a message; GitHub's runners have Microsoft's software adapter, on which these run.
 
 use d3d9_stream::{Backend, Cmd, Data};
 use d3d9_wgpu::{Output, WgpuBackend};
@@ -51,8 +51,15 @@ fn words(w: &[u32]) -> Vec<u8> {
     w.iter().flat_map(|w| w.to_le_bytes()).collect()
 }
 
+/// One GPU device at a time in this process, as in `frame.rs`: Microsoft's software adapter
+/// (WARP, on GitHub's runners) stops the process with an access violation inside
+/// `d3d10warp.dll` when devices of several test threads work at once.
+static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 struct Rig {
     b: WgpuBackend,
+    /// Held until the device is gone (fields drop in order: the backend first).
+    _turn: std::sync::MutexGuard<'static, ()>,
 }
 
 const DEVICE: u32 = 0x1000;
@@ -64,13 +71,8 @@ const VB: u32 = 0x1500;
 
 impl Rig {
     fn new() -> Option<Rig> {
-        // GitHub's hosted runners have no GPU (only a software adapter), and this test process
-        // stops there with an access violation (main's CI, 2026-11-09). Only GitHub Actions sets
-        // `GITHUB_ACTIONS` (a local `CI` must not hide these tests).
-        if std::env::var_os("GITHUB_ACTIONS").is_some() {
-            eprintln!("GitHub Actions: no GPU on the runner, the instruction tests are skipped");
-            return None;
-        }
+        // A failed test leaves the lock poisoned; the next one still takes its turn.
+        let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
         let mut b = WgpuBackend::new(Output::Offscreen);
         // D3DPRESENT_PARAMETERS: 1x1, A32B32G32R32F, one back buffer, no depth.
         let present = words(&[1, 1, 116, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0]);
@@ -88,7 +90,7 @@ impl Rig {
             eprintln!("no GPU adapter: the instruction tests are skipped");
             return None;
         }
-        let mut r = Rig { b };
+        let mut r = Rig { b, _turn: turn };
         let run = |r: &mut Rig, cmd| {
             r.b.execute(cmd);
         };
