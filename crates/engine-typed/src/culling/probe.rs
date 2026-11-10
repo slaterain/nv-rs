@@ -16,10 +16,11 @@
 //! Of a split it also counts what main's own walking took, how many helpers joined in and how
 //! long after the fork each took its first task.
 //!
-//! **The outline.** After each table, the next walk of the table's longest row is recorded object
-//! by object on main (every `OnVisible` but a geometry's, outside the split's tasks): its depth,
-//! vtable, `OnVisible`, children and time, inclusive, whether it split, and whether the replay ran
-//! it. The outline prints the objects that took 1% of the walk or more, and a sum of the nodes of
+//! **The outline.** After each table, the next 30 walks of the table's longest row are recorded
+//! object by object on main (every `OnVisible` but a geometry's, outside the split's tasks): each
+//! object's depth, vtable, `OnVisible`, children and time, inclusive, whether it split, and
+//! whether the replay ran it. The longest of the 30 is printed (a root may walk a big scene and
+//! small ones in a frame): the objects the objects that took 1% of the walk or more, and a sum of the nodes of
 //! `NV_PAR_RENDER_MIN` or more children by `OnVisible` and whether they split (what the split
 //! does not reach).
 //!
@@ -28,7 +29,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering::Relaxed};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -79,6 +80,7 @@ struct Splits {
     replay_ns: u64,
     busy_ns: u64,
     main_ns: u64,
+    early: u64,
     tasks: u64,
     joined: u64,
     wake_ns: u64,
@@ -94,6 +96,7 @@ impl Splits {
         replay_ns: 0,
         busy_ns: 0,
         main_ns: 0,
+        early: 0,
         tasks: 0,
         joined: 0,
         wake_ns: 0,
@@ -108,6 +111,8 @@ pub(crate) struct SplitTimes {
     pub children: usize,
     pub tasks: usize,
     pub entries: usize,
+    /// Of the entries, those main replayed inside the fork.
+    pub early: usize,
     pub fork: Duration,
     pub replay: Duration,
     pub busy_ns: u64,
@@ -134,8 +139,11 @@ struct Outline {
     open: Vec<(usize, Instant)>,
 }
 
-/// An outline is wanted of the next walk with this key (set after each table).
-static OUTLINE_WANTED: AtomicBool = AtomicBool::new(false);
+/// Walks still to record for an outline, of the key below (set after each table), and the
+/// longest recorded so far.
+const OUTLINE_WALKS: u32 = 30;
+static OUTLINE_WANTED: AtomicU32 = AtomicU32::new(0);
+static OUTLINE_BEST: Mutex<Option<(u64, Vec<Node>)>> = Mutex::new(None);
 static OUTLINE_KEY: Mutex<(u32, u32)> = Mutex::new((0, 0));
 
 thread_local! {
@@ -191,12 +199,12 @@ pub(crate) fn walk_begins(e: &engine_core::Engine, root: u32, process: u32) -> W
     if open == 0 {
         let key = (e.mem.u32(root), e.mem.u32(process));
         KEY.with(|k| k.set(key));
-        if OUTLINE_WANTED.load(Relaxed)
+        if OUTLINE_WANTED.load(Relaxed) != 0
             && *OUTLINE_KEY
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 == key
-            && OUTLINE_WANTED.swap(false, Relaxed)
+            && take_outline_walk()
         {
             OUTLINE.with(|o| {
                 *o.borrow_mut() = Some(Outline {
@@ -235,7 +243,17 @@ impl Drop for Walk {
         let registered = REG_COUNT.with(Cell::get);
         let splits = SPLITS.with(Cell::get);
         if let Some(outline) = OUTLINE.with(|o| o.borrow_mut().take()) {
-            print_outline(&outline.nodes, key, walk_ns);
+            let mut best = OUTLINE_BEST
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if best.as_ref().map_or(true, |(ns, _)| walk_ns > *ns) {
+                *best = Some((walk_ns, outline.nodes));
+            }
+            if OUTLINE_WANTED.load(Relaxed) == 0 {
+                if let Some((ns, nodes)) = best.take() {
+                    print_outline(&nodes, key, ns);
+                }
+            }
         }
         let mut guard = TABLE
             .lock()
@@ -264,6 +282,7 @@ impl Drop for Walk {
         row.splits.replay_ns += splits.replay_ns;
         row.splits.busy_ns += splits.busy_ns;
         row.splits.main_ns += splits.main_ns;
+        row.splits.early += splits.early;
         row.splits.tasks += splits.tasks;
         row.splits.joined += splits.joined;
         row.splits.wake_ns += splits.wake_ns;
@@ -299,6 +318,7 @@ pub(crate) fn split_walked(t: &SplitTimes) {
         splits.replay_ns += nanos(t.replay);
         splits.busy_ns += t.busy_ns;
         splits.main_ns += t.main_ns;
+        splits.early += t.early as u64;
         splits.joined += t.joined;
         splits.wake_ns += t.wake_ns;
         s.set(splits);
@@ -427,6 +447,18 @@ fn print_outline(nodes: &[Node], (root, process): (u32, u32), walk_ns: u64) {
     println!("{out}");
 }
 
+/// One walk fewer for the outline to record; false when none is left.
+fn take_outline_walk() -> bool {
+    let mut n = OUTLINE_WANTED.load(Relaxed);
+    while n != 0 {
+        match OUTLINE_WANTED.compare_exchange_weak(n, n - 1, Relaxed, Relaxed) {
+            Ok(_) => return true,
+            Err(now) => n = now,
+        }
+    }
+    false
+}
+
 /// Held across an `AppendVirtual` call while the probe is on.
 pub(crate) struct Register(Option<Instant>);
 
@@ -491,8 +523,9 @@ fn print_table(table: &Table) {
                 a_walk(s.refused[2]),
             ));
             out.push_str(&format!(
-                "\n      tasks {:.1} a split; main walked {:.1} us a walk of it; helpers that took a task {:.2} a split, \
+                "\n      entries replayed inside the fork {:.0} a split; tasks {:.1} a split; main walked {:.1} us a walk of it; helpers that took a task {:.2} a split, \
                  each its first {:.1} us after the split was made",
+                each(s.early),
                 each(s.tasks),
                 per(s.main_ns),
                 each(s.joined),
@@ -505,7 +538,7 @@ fn print_table(table: &Table) {
         *OUTLINE_KEY
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = (root, process);
-        OUTLINE_WANTED.store(true, Relaxed);
+        OUTLINE_WANTED.store(OUTLINE_WALKS, Relaxed);
     }
     println!("{out}");
 }
