@@ -227,6 +227,17 @@ pub const PLAY_THREADS: &str = "real";
 /// takes this: it runs without the render thread unless it names it.
 pub const PLAY_RENDER_THREAD: bool = true;
 
+/// Whether the game's window has no frame and fills the screen in play when neither
+/// `NV_BORDERLESS` nor `Fallout.ini`'s `bBorderless` says ([`Choice::borderless`]): on (the
+/// maintainer, 2026-11-09: borderless is the default everywhere). The one source of that default:
+/// `crates/host/data/game_ini.tsv`'s `bBorderless` row is held to it by a test
+/// (`game_ini`'s), the generated sections are written from the table, and Play.exe reads the
+/// table. Only a launcher's play run that is no test takes it ([`is_play_run`]): a scripted,
+/// gated or measured run keeps the window as the game makes it, so it never covers the screen
+/// of whoever works beside it and no recording or measurement changes when the play default
+/// does.
+pub const PLAY_BORDERLESS: bool = true;
+
 /// The player's one line: the fixes set, or the original's behaviour.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Preset {
@@ -278,8 +289,10 @@ pub struct Choice {
     pub render_thread: bool,
     /// Whether the game's window has no frame and fills the screen
     /// (`engine_platform::d3d9real::want_borderless`): `NV_BORDERLESS` when set (`1` on, else
-    /// off); else `Fallout.ini`'s `[nv-rs Display] bBorderless` (never for a test); `None` when
-    /// neither says, and the window is framed, as the game makes it.
+    /// off); else, in a launcher's play run that is no test ([`is_play_run`]), `Fallout.ini`'s
+    /// `[nv-rs Display] bBorderless`, and [`PLAY_BORDERLESS`] when the file doesn't say. `None`
+    /// in every other run without the variable (a test, a script, a start no launcher made): the
+    /// window is as the game makes it, whatever the play default is.
     pub borderless: Option<bool>,
     /// The one log line naming `Fallout.ini` values that could not be used
     /// ([`crate::game_ini::Keys::bad_line`]): the default stood for each.
@@ -432,10 +445,9 @@ impl Choice {
         // Only a launcher's play run reads the player's `[nv-rs ...]` keys: every scripted, gated
         // or measured run has pinned defaults and the environment only, so a player's file can
         // never change its result (measure/ini/DESIGN.md).
+        let play = is_play_run(&env) && !test && !command_line_test;
         let ini = match game_ini {
-            Some(text) if is_play_run(&env) && !test && !command_line_test => {
-                crate::game_ini::Keys::read(text)
-            }
+            Some(text) if play => crate::game_ini::Keys::read(text),
             _ => crate::game_ini::Keys::default(),
         };
         let mut choice = Choice {
@@ -445,7 +457,9 @@ impl Choice {
             overrides: Vec::new(),
             threads: PLAY_THREADS.to_string(),
             render_thread: PLAY_RENDER_THREAD,
-            borderless: ini.borderless,
+            // The same run takes play's borderless window, with or without a file; any other
+            // keeps the window it has (`None`), so a play default never reaches it.
+            borderless: ini.borderless.or(play.then_some(PLAY_BORDERLESS)),
             ini_note: ini.bad_line(),
         };
         for line in settings.unwrap_or("").lines() {
@@ -632,8 +646,9 @@ const TEST_VARIABLES: &[&str] = &[
 /// Whether a launcher started this run for play: `NV_SETTINGS` set (Play.exe, and the play
 /// folder's Play.cmd through apply-settings.sh). No scripted, gated or measured run sets it
 /// (`NV_SAVE_OUT` is not a sign: scripts that make saves set it too). Only such a run reads
-/// `Fallout.ini`'s `[nv-rs ...]` keys, and then only when it is no test ([`TEST_VARIABLES`], a
-/// fix's own variable, a test's command line).
+/// `Fallout.ini`'s `[nv-rs ...]` keys and takes play's borderless window ([`PLAY_BORDERLESS`]),
+/// and then only when it is no test ([`TEST_VARIABLES`], a fix's own variable, a test's command
+/// line).
 pub fn is_play_run(env: impl Fn(&str) -> Option<String>) -> bool {
     env("NV_SETTINGS").is_some()
 }
@@ -1231,9 +1246,16 @@ mod tests {
         assert_eq!(choice.threads, "stepped");
         assert!(!choice.render_thread);
         assert_eq!(choice.ini_note, None);
+        // No key of ours: the defaults, which for a play run include the borderless window.
         let plain = with_ini(None, "[General]\nbUseThreadedAI=1\n", &[]);
-        assert_eq!(plain, Choice::from_parts(None, no_env).unwrap());
-        assert_eq!(plain.borderless, None);
+        assert_eq!(plain.borderless, Some(PLAY_BORDERLESS));
+        assert_eq!(
+            Choice {
+                borderless: None,
+                ..plain
+            },
+            Choice::from_parts(None, no_env).unwrap()
+        );
         let real = with_ini(None, "[nv-rs Threads]\nbSteppedThreads=0\n", &[]);
         assert_eq!(real.threads, PLAY_THREADS);
     }
@@ -1275,6 +1297,111 @@ mod tests {
         assert_eq!(choice.borderless, Some(true));
         let choice = Choice::from_parts(None, env_of(&[("NV_BORDERLESS", "1")])).unwrap();
         assert_eq!(choice.borderless, Some(true));
+    }
+
+    /// Borderless is play's default (the maintainer, 2026-11-09): a launcher's play run with no
+    /// `bBorderless` line, or no file at all, is borderless, and a file that says 0 is not. A
+    /// scripted, gated or measured run keeps the window as the game makes it whatever the default
+    /// and the file say: one with a starred variable, a fix's own variable or a test's command
+    /// line, and any run no launcher started (no `NV_SETTINGS`). `NV_BORDERLESS` decides in
+    /// every one of them.
+    #[test]
+    fn borderless_is_plays_default_and_a_test_keeps_its_window() {
+        let launcher: &'static [(&str, &str)] = &[("NV_SETTINGS", "x")];
+        // In play: no file, a file without the key, the key commented out, empty or unusable.
+        let no_file = Choice::from_texts(None, None, env_of(launcher)).unwrap();
+        assert_eq!(no_file.borderless, Some(true));
+        for ini in [
+            "",
+            "[General]\nsLanguage=ENGLISH\n",
+            "[nv-rs Display]\niFrameLimit=60\n",
+            "[nv-rs Display]\n;bBorderless=0\n",
+            "[nv-rs Display]\nbBorderless=\n",
+            "[Display]\nbBorderless=0\n",
+        ] {
+            assert_eq!(with_ini(None, ini, &[]).borderless, Some(true), "{ini:?}");
+        }
+        let unusable = with_ini(None, "[nv-rs Display]\nbBorderless=yes\n", &[]);
+        assert_eq!(unusable.borderless, Some(true));
+        assert!(unusable.ini_note.unwrap().ends_with("bBorderless=yes"));
+        // The player's line decides.
+        let off = with_ini(None, "[nv-rs Display]\nbBorderless=0\n", &[]);
+        assert_eq!(off.borderless, Some(false));
+        let on = with_ini(None, "[nv-rs Display]\nbBorderless=1\n", &[]);
+        assert_eq!(on.borderless, Some(true));
+        // The launcher's own variables make no test.
+        let own = with_ini(
+            None,
+            "",
+            &[
+                ("NV_SAVE_OUT", "x"),
+                ("NV_D3D9", "real"),
+                ("NV_SOUND", "out"),
+            ],
+        );
+        assert_eq!(own.borderless, Some(true));
+
+        // No launcher started it: the window it has, whatever else it names and a file says.
+        let scripted: [&'static [(&str, &str)]; 5] = [
+            &[],
+            &[("NV_SAVE_OUT", "x")],
+            &[("NV_D3D9", "real"), ("NV_SOUND", "out")],
+            &[("NV_PRESET", "fixes"), ("NV_FRAME_LIMIT", "60")],
+            &[("NV_THREADS", "real"), ("NV_RENDER_THREAD", "1")],
+        ];
+        for pairs in scripted {
+            let choice = Choice::from_texts(None, Some(PLAYER_INI), env_of(pairs)).unwrap();
+            assert_eq!(choice.borderless, None, "{pairs:?}");
+            let choice = Choice::from_texts(None, None, env_of(pairs)).unwrap();
+            assert_eq!(choice.borderless, None, "{pairs:?}");
+        }
+        // A test, even when a launcher started it: each starred variable, a preset named or not.
+        for name in TEST_VARIABLES {
+            for pairs in [
+                vec![(*name, "x")],
+                vec![(*name, "x"), ("NV_PRESET", "fixes")],
+            ] {
+                let pairs: &'static [(&str, &str)] = Box::leak(pairs.into_boxed_slice());
+                assert_eq!(with_ini(None, "", pairs).borderless, None, "{name}");
+                assert_eq!(with_ini(None, PLAYER_INI, pairs).borderless, None, "{name}");
+                let alone = Choice::from_parts(None, env_of(pairs)).unwrap();
+                assert_eq!(alone.borderless, None, "{name}");
+            }
+        }
+        // A fix's own variable, and the viewer's test command line.
+        let one_fix = with_ini(None, PLAYER_INI, &[("NV_UNCAP", "1")]);
+        assert_eq!(one_fix.borderless, None);
+        let marked = Choice::build(None, None, env_of(launcher), true).unwrap();
+        assert_eq!(marked.borderless, None);
+        assert_eq!(Choice::vanilla().borderless, None);
+
+        // NV_BORDERLESS wins: over play's default, over the file, in a test and with no launcher.
+        let over_default = with_ini(None, "", &[("NV_BORDERLESS", "0")]);
+        assert_eq!(over_default.borderless, Some(false));
+        let over_file = with_ini(
+            None,
+            "[nv-rs Display]\nbBorderless=0\n",
+            &[("NV_BORDERLESS", "1")],
+        );
+        assert_eq!(over_file.borderless, Some(true));
+        let in_a_test: [(&'static [(&str, &str)], bool); 2] = [
+            (&[("NV_SHOT", "x"), ("NV_BORDERLESS", "1")], true),
+            (&[("NV_SHOT", "x"), ("NV_BORDERLESS", "0")], false),
+        ];
+        for (pairs, want) in in_a_test {
+            assert_eq!(with_ini(None, PLAYER_INI, pairs).borderless, Some(want));
+            let alone = Choice::from_parts(None, env_of(pairs)).unwrap();
+            assert_eq!(alone.borderless, Some(want));
+        }
+        let on = Choice::from_parts(None, env_of(&[("NV_BORDERLESS", "1")])).unwrap();
+        assert_eq!(on.borderless, Some(true));
+        let off = Choice::from_parts(None, env_of(&[("NV_BORDERLESS", "0")])).unwrap();
+        assert_eq!(off.borderless, Some(false));
+        // An empty variable says nothing: the run's own rule stands.
+        let empty = with_ini(None, "", &[("NV_BORDERLESS", "")]);
+        assert_eq!(empty.borderless, Some(true));
+        let empty = Choice::from_parts(None, env_of(&[("NV_BORDERLESS", " ")])).unwrap();
+        assert_eq!(empty.borderless, None);
     }
 
     /// A commented fix line leaves the preset deciding; an uncommented one overrides that fix

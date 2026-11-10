@@ -232,6 +232,10 @@ function New-Combo($items, $selected) {
     $c
 }
 
+# A file with no bBorderless line (or one that chooses nothing) starts as the game's default does,
+# borderless, so that is what is shown. This '1' is the host table's default for bBorderless
+# (crates/host/data/game_ini.tsv): scripts/launcher's test
+# settings_cmd_shows_the_tables_borderless_default compares the two.
 $mode = New-Combo @('Borderless fullscreen', 'Window') $(if ((Get-Setting 'Borderless' '1') -eq '0') { 'Window' } else { 'Borderless fullscreen' })
 Add-Row 'Display mode' $mode
 $res = New-Combo $resolutions (Get-Setting 'Resolution' $own)

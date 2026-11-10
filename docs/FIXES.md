@@ -12,7 +12,7 @@ every comparison with the original, gate and recording runs on it (the maintaine
 | `userdata\settings.ini` (older previews' Settings.cmd; today's only before Play.exe's first start) | `Preset=fixes` (the default) or `Preset=vanilla`; `FrameLimit=n` (0: none); `MenuFrameLimit=n` (120 when missing or empty, 0: none of its own). Play.exe moves it into both profiles' `Fallout.ini` at its next start and renames it `settings.ini.migrated`. While it is there Play.exe moves it in at every start, its lines winning over the files (PLAYTESTING.md, "The game's Fallout.ini"), and the game reads these three lines of it itself, each only when neither `Fallout.ini` nor a variable sets it | The player |
 | `NV_PRESET=fixes` or `vanilla`, `NV_FRAME_LIMIT=n`, `NV_MENU_FRAME_LIMIT=n` | Over the files | Tests, scripts |
 | `NV_UNCAP=0` or `1`, and each fix's own variable below | That fix alone; with no `NV_PRESET` the rest of the run is vanilla | Gates, tests |
-| A recording or scripted run: `NV_TRACE_LIST`, `NV_MOVE_KEYS`, `NV_MOVE_MOUSE`, `NV_SOUND_RECORD`, `NV_SHOT`, `NV_FRAME_LOG`, the probes and `*_CHECK` switches (the list is `TEST_VARIABLES` in `fixes.rs`), with no `NV_PRESET` | Vanilla; and, with no `NV_THREADS`, stepped threads whatever the play default is (`Choice::threads`); with no `NV_RENDER_THREAD`, no render thread (`Choice::render_thread`) | A script that was never told about the preset or the threads still measures the original, and doesn't change when a play default does. `NV_SAVE_OUT` (the preview launcher's) does not pin |
+| A recording or scripted run: `NV_TRACE_LIST`, `NV_MOVE_KEYS`, `NV_MOVE_MOUSE`, `NV_SOUND_RECORD`, `NV_SHOT`, `NV_FRAME_LOG`, the probes and `*_CHECK` switches (the list is `TEST_VARIABLES` in `fixes.rs`), with no `NV_PRESET` | Vanilla; and, with no `NV_THREADS`, stepped threads whatever the play default is (`Choice::threads`); with no `NV_RENDER_THREAD`, no render thread (`Choice::render_thread`); with no `NV_BORDERLESS`, the window as the game makes it (`Choice::borderless`) | A script that was never told about the preset or the threads still measures the original, and doesn't change when a play default does. `NV_SAVE_OUT` (the preview launcher's) does not pin |
 | `NV_SETTINGS=FILE` | The settings file, when it isn't `settings.ini` beside the program or in the folder above it | Launchers |
 
 It is read once at start-up and bound before the first frame (`fixes::install`): the log's `Preset ...`
@@ -33,6 +33,16 @@ made, not which calls or in what order. In play they are made on a render thread
 #347); `bRenderThread=0` in `Fallout.ini`'s `[nv-rs Threads]` (Settings.cmd's "Drawing thread":
 "Main thread") makes them on the game's threads, as the original does, the fallback. A test or scripted
 run without `NV_RENDER_THREAD` makes them on the game's threads whatever play's default is.
+
+The borderless window isn't part of the preset either. In a launcher's play run (`NV_SETTINGS` set
+and no test: the run that reads `Fallout.ini`'s sections) the game's window has no frame and fills
+the screen (`fixes::PLAY_BORDERLESS`; the maintainer, 2026-11-09); `bBorderless=0` in `Fallout.ini`
+(Settings.cmd's "Display mode": "Window") keeps the window as the game makes it. Every other run
+keeps that window too unless its `NV_BORDERLESS=1` says otherwise: a test, a scripted or measured
+run, and a start no launcher made. So a run in the background never covers the screen, and no
+recording or measurement changes with play's default. The default is the host's alone: its table
+`crates/host/data/game_ini.tsv` is held to `PLAY_BORDERLESS` by a test, and the generated sections
+and Play.exe take the value from the table.
 
 ## How a fix is built
 

@@ -125,7 +125,7 @@ and the host's tests check one against the other. The fix lines are written with
 | `NV_MENU_FRAME_LIMIT=n` (`iMenuFrameLimit`; `MenuFrameLimit=`) | Frames a second at most in menus (0: none) | 120 |
 | `NV_THREADS=stepped` (`bSteppedThreads=1`; `NV_THREADS=`; Settings.cmd's threads option) | The game's threads one at a time (the fallback, and the reference mode) instead of side by side on their own cores | side by side in play; a scripted or measured run is stepped whatever the default |
 | `NV_RENDER_THREAD=0` (`bRenderThread=0`; `NV_RENDER_THREAD=`; Settings.cmd's drawing thread option) | The real Direct3D 9 calls on the game's own threads, as the original makes them, instead of a render thread of their own | render thread in play; a scripted or measured run draws on the game's threads |
-| `NV_BORDERLESS=1` (`bBorderless=1`; `Borderless=`) | The game's window without a frame, filling the screen | off |
+| `NV_BORDERLESS=1` or `0` (`bBorderless`; `Borderless=`; Settings.cmd's display mode) | The game's window without a frame, filling the screen (`1`), or the window as the game makes it (`0`) | on in play (a launcher's run that is no test, the one that reads the sections above; a test started through Play.exe gets the file's choice passed on, as above); a scripted or measured run keeps a normal window |
 
 Settings.cmd's resolution, anti-aliasing, anisotropy and V-sync are the game's own keys, not switches: `iSize W`, `iSize H`, `iMultiSample` and `iMaxAnisotropy` in `FalloutPrefs.ini`, `iPresentInterval` in `Fallout.ini` (where the game reads it).
 

@@ -84,6 +84,18 @@ fn rows() -> impl Iterator<Item = (&'static str, &'static str, &'static str, &'s
         })
 }
 
+/// Whether the game starts in its borderless window with this `Fallout.ini`, as the host decides
+/// it in a play run (`fixes.rs`, `Choice::borderless`): `[nv-rs Display] bBorderless` 1 or 0,
+/// and for a missing, empty or unusable value the default. That default is the host's table's
+/// (`fixes::PLAY_BORDERLESS` is held to it): Play.exe has none of its own.
+pub fn borderless(fallout_ini: &str) -> bool {
+    match ini_value(fallout_ini, "nv-rs Display", "bBorderless") {
+        Some("1") => true,
+        Some("0") => false,
+        _ => rows().any(|(_, key, _, default)| key == "bBorderless" && default == "1"),
+    }
+}
+
 /// The section a line opens, if it is a `[...]` line.
 fn section_of(line: &str) -> Option<&str> {
     let rest = line.trim().strip_prefix('[')?;
@@ -383,17 +395,13 @@ pub fn set_key(text: &str, section: &str, key: &str, value: &str) -> String {
 /// names keeps the file's value. V-sync goes to `[Display] iPresentInterval`, where the original
 /// reads it.
 ///
-/// The borderless window is Play.exe's own default: with no `Borderless=` line, `bBorderless=1`
-/// goes into a key that was added just now (`added`) or that is empty, and nowhere else: a key
-/// the player commented out (`;bBorderless=...`) stays as it is.
+/// Play.exe has no values of its own: a key nothing chose keeps what the file says, the
+/// generated sections' value (the host table's default) for a key added just now. A key the
+/// player commented out (`;bBorderless=...`) stays as it is: they meant the default.
 ///
 /// Also the names of settings.ini's lines that are not used any more. `settings` must have
 /// passed [`Settings::game_switches`].
-pub fn apply_choices(
-    fallout_ini: &str,
-    settings: Option<&Settings>,
-    added: &[&str],
-) -> (String, Vec<String>) {
+pub fn apply_choices(fallout_ini: &str, settings: Option<&Settings>) -> (String, Vec<String>) {
     let none = Settings::default();
     let settings = settings.unwrap_or(&none);
     let line = |name: &str| {
@@ -441,15 +449,8 @@ pub fn apply_choices(
         if variable != "NV_BORDERLESS" && value.is_some() {
             used.push(variable);
         }
-        match value {
-            Some(value) => text = set_key(&text, section, key, &value),
-            // Not a `;bBorderless=` line: a player who commented the key out meant the default.
-            None if key == "bBorderless"
-                && (added.contains(&key) || ini_value(&text, section, key) == Some("")) =>
-            {
-                text = set_key(&text, section, key, "1");
-            }
-            None => {}
+        if let Some(value) = value {
+            text = set_key(&text, section, key, &value);
         }
     }
     match line("VSync") {
@@ -522,11 +523,11 @@ pub fn switches(
         return out;
     }
     // The choices as the file would hold them: the file's own, or settings.ini's moved into the
-    // block (its keys all just added, so Play.exe's own defaults go in too).
+    // block as generated (the host table's defaults for what it does not say).
     let moved;
     let fallout_ini = if no_sections {
         moved = with_sections("").map_or_else(String::new, |seeded| {
-            apply_choices(&seeded.text, settings, &seeded.added).0
+            apply_choices(&seeded.text, settings).0
         });
         moved.as_str()
     } else {
@@ -559,8 +560,7 @@ pub fn switches(
                     .unwrap_or(default)
                     .to_string(),
             ),
-            // Play.exe's own default: borderless.
-            "bBorderless" => Some(flag.unwrap_or("1").to_string()),
+            "bBorderless" => Some(flag.unwrap_or(default).to_string()),
             "bSteppedThreads" => Some(
                 if flag.unwrap_or(default) == "1" {
                     "stepped"
@@ -777,7 +777,7 @@ mod tests {
         let settings = Settings::parse(
             "Borderless=1\nPreset=vanilla\nFrameLimit=90\nMenuFrameLimit=\nVSync=Off\nNV_THREADS=stepped\nNV_RENDER_THREAD=0\nNV_UNCAP=0\nNV_TRACE_LIST=x\nNV_FIXES=vnv\nResolution=1920x1080\n",
         );
-        let (out, unused) = apply_choices(&fresh, Some(&settings), &seeded.added);
+        let (out, unused) = apply_choices(&fresh, Some(&settings));
         let get = |s: &str, k: &str| ini_value(&out, s, k);
         assert_eq!(get("nv-rs General", "sPreset"), Some("vanilla"));
         assert_eq!(get("nv-rs Display", "bBorderless"), Some("1"));
@@ -796,20 +796,26 @@ mod tests {
         // Only values changed: the same lines, the original part byte for byte.
         assert_eq!(out.lines().count(), fresh.lines().count());
         assert!(out.ends_with("[Display]\r\nfTestSize=1.5000\r\niPresentInterval=0\r\n"));
-        // No settings.ini: Play.exe's defaults, which differ from the sections' only in borderless.
-        let (out, unused) = apply_choices(&fresh, None, &seeded.added);
-        assert_ne!(out, fresh);
-        assert_eq!(out, fresh.replace("bBorderless=0", "bBorderless=1"));
+        // Nothing chosen: the sections as generated, the game's defaults (Play.exe has none of its
+        // own, the borderless window included); a settings.ini without a Borderless line the same
+        // for that key. Window chosen: the key says so.
+        let (out, unused) = apply_choices(&fresh, None);
+        assert_eq!(out, fresh);
         assert!(unused.is_empty());
+        assert_eq!(ini_value(&fresh, "nv-rs Display", "bBorderless"), Some("1"));
+        let (out, _) = apply_choices(&fresh, Some(&Settings::parse("FrameLimit=90\n")));
+        assert_eq!(out, fresh.replace("iFrameLimit=0", "iFrameLimit=90"));
+        let (out, _) = apply_choices(&fresh, Some(&Settings::parse("Borderless=0\n")));
+        assert_eq!(out, fresh.replace("bBorderless=1", "bBorderless=0"));
+        assert_ne!(out, fresh);
         // What Settings.cmd writes for the threads side by side and the drawing thread on.
         let side = Settings::parse("NV_THREADS=real\nNV_RENDER_THREAD=1\n");
         let stepped = "[nv-rs Threads]\r\nbSteppedThreads=1\r\nbRenderThread=0\r\n";
-        let (out, unused) = apply_choices(stepped, Some(&side), &[]);
+        let (out, unused) = apply_choices(stepped, Some(&side));
         assert!(out.starts_with("[nv-rs Threads]\r\nbSteppedThreads=0\r\nbRenderThread=1\r\n"));
         assert!(unused.is_empty());
         // Another word chooses nothing and is named.
-        let (out, unused) =
-            apply_choices(stepped, Some(&Settings::parse("NV_THREADS=slice\n")), &[]);
+        let (out, unused) = apply_choices(stepped, Some(&Settings::parse("NV_THREADS=slice\n")));
         assert!(out.starts_with(stepped));
         assert_eq!(unused, ["NV_THREADS"]);
     }
@@ -821,34 +827,69 @@ mod tests {
         let had = "[nv-rs General]\r\nsPreset=fixes\r\n[nv-rs Display]\r\nbBorderless=0\r\niFrameLimit=30\r\niMenuFrameLimit=45\r\n[nv-rs Threads]\r\nbSteppedThreads=1\r\n";
         let settings =
             Settings::parse("Borderless=1\nPreset=vanilla\nFrameLimit=90\nNV_RENDER_THREAD=0\n");
-        let (out, _) = apply_choices(had, Some(&settings), &[]);
+        let (out, _) = apply_choices(had, Some(&settings));
         assert_eq!(
             out,
             "[nv-rs General]\r\nsPreset=vanilla\r\n[nv-rs Display]\r\nbBorderless=1\r\niFrameLimit=90\r\niMenuFrameLimit=45\r\n[nv-rs Threads]\r\nbRenderThread=0\r\nbSteppedThreads=1\r\n"
         );
-        // No Borderless line: the player's 0 stays (Play.exe's default is only for a key it adds
-        // or an empty one); with no settings.ini at all nothing changes.
-        let (out, _) = apply_choices(had, Some(&Settings::parse("FrameLimit=90\n")), &[]);
+        // No Borderless line: the player's 0 stays; with no settings.ini at all nothing changes,
+        // an empty key included (the game reads it as its default).
+        let (out, _) = apply_choices(had, Some(&Settings::parse("FrameLimit=90\n")));
         assert_eq!(out, had.replace("iFrameLimit=30", "iFrameLimit=90"));
-        assert_eq!(apply_choices(had, None, &[]).0, had);
+        assert_eq!(apply_choices(had, None).0, had);
         let empty = "[nv-rs Display]\r\nbBorderless=\r\n";
+        assert_eq!(apply_choices(empty, None).0, empty);
+    }
+
+    /// Settings.ps1 shows a file whose `bBorderless` says nothing as the game's default: its one
+    /// literal for that (`Get-Setting 'Borderless' '1'`) must be the host table's default, so a
+    /// change of the table can't leave the window showing the other mode.
+    #[test]
+    fn settings_cmd_shows_the_tables_borderless_default() {
+        let script = include_str!("../../../distribution/Settings.ps1");
+        let shown: Vec<&str> = script
+            .split("Get-Setting 'Borderless' '")
+            .skip(1)
+            .map(|rest| rest.split('\'').next().unwrap_or(""))
+            .collect();
+        let table = rows().find(|row| row.1 == "bBorderless").unwrap().3;
         assert_eq!(
-            apply_choices(empty, None, &[]).0,
-            "[nv-rs Display]\r\nbBorderless=1\r\n"
+            shown,
+            [table],
+            "Settings.ps1's default for the display mode"
         );
-        let added = "[nv-rs Display]\r\nbBorderless=0\r\n";
-        assert_eq!(
-            apply_choices(added, None, &["bBorderless"]).0,
-            "[nv-rs Display]\r\nbBorderless=1\r\n"
+    }
+
+    /// The borderless window as the game decides it in a play run: the file's line, else the
+    /// default, which is the host's table's and what the generated sections say.
+    #[test]
+    fn borderless_is_the_files_line_or_the_tables_default() {
+        assert!(borderless("[nv-rs Display]\r\nbBorderless=1\r\n"));
+        assert!(!borderless("[nv-rs Display]\r\nbBorderless=0\r\n"));
+        assert!(!borderless("[ NV-RS display ]\n  bborderless = \"0\" \n"));
+        let default = rows().find(|row| row.1 == "bBorderless").unwrap().3 == "1";
+        for no_choice in [
+            "",
+            "[General]\r\nx=1\r\n",
+            "[nv-rs Display]\r\niFrameLimit=60\r\n",
+            "[nv-rs Display]\r\n;bBorderless=0\r\n",
+            "[nv-rs Display]\r\nbBorderless=\r\n",
+            "[nv-rs Display]\r\nbBorderless=yes\r\n",
+            "[Display]\r\nbBorderless=0\r\n",
+        ] {
+            assert_eq!(borderless(no_choice), default, "{no_choice:?}");
+        }
+        assert_eq!(borderless(SECTIONS), default, "the generated sections");
+        assert!(
+            default,
+            "borderless is the default (the maintainer, 2026-11-09)"
         );
         // A key the player commented out is theirs: left as it is, every byte.
         let off = "[nv-rs Display]\r\n;bBorderless=0\r\niFrameLimit=60\r\n";
-        assert_eq!(apply_choices(off, None, &[]).0, off);
+        assert_eq!(apply_choices(off, None).0, off);
         let seeded = with_sections(off).unwrap();
         assert!(!seeded.added.contains(&"bBorderless"));
-        assert!(apply_choices(&seeded.text, None, &seeded.added)
-            .0
-            .starts_with(off));
+        assert!(apply_choices(&seeded.text, None).0.starts_with(off));
     }
 
     /// The played profile's file has none of our sections (UTF-16, or none could be made): in
