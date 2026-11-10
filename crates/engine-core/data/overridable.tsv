@@ -167,6 +167,7 @@
 00d4cca0	0	ITR
 00d4cf10	0	ITR
 00d53a80	0	fixes preset guard
+00e6dc40	0	nv-rs texture files read before the renderer's lock
 00e90c70	0	fixes preset guard
 00ec89e9	0	ImprovedConsole
 00eccf5d	0	HeapReplacer
