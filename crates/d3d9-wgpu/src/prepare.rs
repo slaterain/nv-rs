@@ -185,6 +185,7 @@ impl List {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn text(&self) -> String {
         let mut s = String::new();
         for e in &self.entries {

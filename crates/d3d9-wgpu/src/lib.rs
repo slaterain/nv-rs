@@ -23,7 +23,12 @@ pub mod shot;
 pub mod sm;
 pub mod state;
 
-pub use cache::save_all_now as save_pipeline_caches;
+/// Writes every live wgpu device's pipeline cache and pipeline list now, when they changed: for
+/// the end of the run (the host's exit hooks; the process ends with `std::process::exit`).
+pub fn save_pipeline_caches() {
+    cache::save_all_now();
+    device::save_lists_now();
+}
 use d3d9_stream::{Backend, Cmd, Data, Handle, Reply};
 pub use device::{hardware_adapter, Output};
 

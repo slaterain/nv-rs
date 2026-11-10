@@ -277,12 +277,70 @@ struct Listed {
     list: prepare::List,
     /// Entry by entry: made, or tried and given up (its shaders collide, a format is unknown).
     done: Vec<bool>,
-    file: std::path::PathBuf,
-    /// Entries this run added that the file does not have yet.
+    /// The file and its lines, shared with the writer threads and the exit hooks.
+    shared: Arc<ListFile>,
+    /// Entries this run added that the file does not have yet, and the present of the last.
     dirty: bool,
+    added_at: u64,
     saved_at: u64,
+}
+
+/// The list's file: its lines as the device has them, written on a thread of its own or by the
+/// exit hooks ([`save_lists_now`]).
+struct ListFile {
+    file: std::path::PathBuf,
+    lines: std::sync::Mutex<Vec<String>>,
+    /// How many lines the file has (none written yet: the count read).
+    written: std::sync::atomic::AtomicUsize,
+    writing: std::sync::Mutex<()>,
     /// A write failed: none more this run (said once).
-    failed: Arc<std::sync::atomic::AtomicBool>,
+    failed: std::sync::atomic::AtomicBool,
+}
+
+impl ListFile {
+    fn save(&self) {
+        if self.failed.load(Ordering::Relaxed) {
+            return;
+        }
+        let _one = self.writing.lock().unwrap_or_else(|e| e.into_inner());
+        let text = {
+            let lines = self.lines.lock().unwrap_or_else(|e| e.into_inner());
+            if lines.len() == self.written.load(Ordering::Relaxed) {
+                return;
+            }
+            self.written.store(lines.len(), Ordering::Relaxed);
+            let mut t = String::new();
+            for l in lines.iter() {
+                t.push_str(l);
+                t.push('\n');
+            }
+            t
+        };
+        if let Err(e) = cache::write_replacing(&self.file, text.as_bytes()) {
+            self.failed.store(true, Ordering::Relaxed);
+            eprintln!(
+                "NV_D3D9 wgpu: pipeline list {}: not written: {e}: none written this run",
+                self.file.display()
+            );
+        }
+    }
+}
+
+/// The devices' list files, for [`save_lists_now`].
+static LISTS: std::sync::Mutex<Vec<std::sync::Weak<ListFile>>> = std::sync::Mutex::new(Vec::new());
+
+/// Writes every live device's pipeline list now, when it has new entries (the end of the run:
+/// the process ends with `std::process::exit`, so no device is dropped).
+pub fn save_lists_now() {
+    let all: Vec<Arc<ListFile>> = LISTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter_map(std::sync::Weak::upgrade)
+        .collect();
+    for l in all {
+        l.save();
+    }
 }
 
 /// The list shipped with the port (`data/pipelines.txt`: recorded on the maintainer's machine).
@@ -303,43 +361,61 @@ impl Listed {
             file.display(),
             s1 + s2
         );
+        let lines: Vec<String> = list.entries.iter().map(prepare::Entry::line).collect();
+        let shared = Arc::new(ListFile {
+            file,
+            // Written when this run adds a line (the file then holds the shipped ones too).
+            written: std::sync::atomic::AtomicUsize::new(lines.len()),
+            lines: std::sync::Mutex::new(lines),
+            writing: std::sync::Mutex::new(()),
+            failed: Default::default(),
+        });
+        let mut all = LISTS.lock().unwrap_or_else(|e| e.into_inner());
+        all.retain(|w| w.strong_count() > 0);
+        all.push(Arc::downgrade(&shared));
         Listed {
             done: vec![false; list.entries.len()],
             list,
-            file,
+            shared,
             dirty: false,
+            added_at: 0,
             saved_at: 0,
-            failed: Default::default(),
         }
     }
 
-    /// Writes the list when it has new entries and the last write is 600 presents old (or `now`),
-    /// on a thread of its own.
+    /// `e` listed (it was made on a draw at present `presents`), unless it is already.
+    fn add(&mut self, e: prepare::Entry, presents: u64) {
+        let line = e.line();
+        if self.list.add(e) {
+            self.done.push(true);
+            self.dirty = true;
+            self.added_at = presents;
+            self.shared
+                .lines
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(line);
+        }
+    }
+
+    /// Writes the list 300 presents after the last new entry (or every 3600 while they keep
+    /// coming; at once with `now`), on a thread of its own.
     fn save_if_due(&mut self, presents: u64, now: bool) {
-        if self.failed.load(Ordering::Relaxed)
-            || !self.dirty
-            || (!now && presents.saturating_sub(self.saved_at) < 600)
-        {
+        if !self.dirty {
+            return;
+        }
+        let quiet = presents.saturating_sub(self.added_at) >= 300;
+        let long = presents.saturating_sub(self.saved_at) >= 3600;
+        if !(now || quiet || long) {
             return;
         }
         self.dirty = false;
         self.saved_at = presents;
-        let text = self.list.text();
-        let file = self.file.clone();
-        let failed = self.failed.clone();
-        let write = move || {
-            if let Err(e) = cache::write_replacing(&file, text.as_bytes()) {
-                failed.store(true, Ordering::Relaxed);
-                eprintln!(
-                    "NV_D3D9 wgpu: pipeline list {}: not written: {e}",
-                    file.display()
-                );
-            }
-        };
+        let shared = self.shared.clone();
         if now {
-            write();
+            shared.save();
         } else {
-            std::thread::spawn(write);
+            std::thread::spawn(move || shared.save());
         }
     }
 }
@@ -2733,11 +2809,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                             count: key.count,
                             clip: clip_code(key.clip),
                         };
+                        let presents = self.presents;
                         if let Some(l) = &mut self.list {
-                            if l.list.add(entry) {
-                                l.done.push(true);
-                                l.dirty = true;
-                            }
+                            l.add(entry, presents);
                         }
                     }
                 }
@@ -3181,7 +3255,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
         }
         if let Some(c) = &self.pipeline_cache {
-            c.touched();
+            c.touched(self.presents);
         }
         let left = l.done.iter().filter(|d| !**d).count();
         eprintln!(
