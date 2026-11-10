@@ -52,6 +52,8 @@ pub mod own;
 pub mod packed;
 pub mod packet;
 pub mod packing;
+pub mod passes;
+pub mod setups;
 pub mod shapes;
 pub mod skin;
 
@@ -141,5 +143,23 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e8_bff0, packing::lock_vertices(Ptr<_>, u32, u32, u32, u32) -> u32),
         entry!(0x00e8_c0d0, packing::unlock_vertices(Ptr<_>, u32) -> bool),
         entry!(0x00e9_5550, packing::create_chip(Ptr<_>, u32, u32) -> u32),
+        // The pass begin and end (group B): the BSShader slots, the render state put back, the masked stages.
+        entry!(0x00be_0eb0, passes::set_pass_states(u32, u32)),
+        entry!(0x00be_0ee0, passes::restore_pass_states(u32, u32)),
+        entry!(0x00b9_8610, passes::restore_state(u32, u32)),
+        entry!(0x00be_20b0, passes::alpha_function_of(u32, u32)),
+        entry!(0x00be_20e0, passes::alpha_test_of(u32, u32, bool)),
+        entry!(0x00be_0e50, passes::end_states(u32, u32)),
+        entry!(0x00be_0e90, passes::end_states_restored()),
+        entry!(0x00be_21b0, passes::bind_masked_stages()),
+        entry!(0x00be_1f90, passes::begin_done(u32, u32)),
+        // The shadow light shader's pass set-ups (group B).
+        entry!(0x00b7_dd50, setups::begin_types_fc(Ptr<_>)),
+        entry!(0x00b7_deb0, setups::begin_types_ca(Ptr<_>)),
+        entry!(0x00b7_ded0, setups::setup_type_ca(Ptr<_>, Ptr<_>)),
+        entry!(0x00b7_dfe0, setups::setup_type_d1(Ptr<_>, Ptr<_>)),
+        entry!(0x00b7_e150, setups::setup_type_102(Ptr<_>, Ptr<_>)),
+        entry!(0x00b7_ac20, setups::tail_kinds_1_to_5(Ptr<_>, u32)),
+        entry!(0x00b7_b450, setups::setup_pass_constants(Ptr<_>, u32)),
     ]
 }
