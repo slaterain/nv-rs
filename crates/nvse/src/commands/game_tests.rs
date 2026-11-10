@@ -255,55 +255,79 @@ fn run_over(e: &mut Engine, opcode: u32, script: u32, args: &[Vec<u8>], start: f
     e.mem.u64(RESULT)
 }
 
-/// Every record as xNVSE's DLL has it: opcode, names, help text, parameters.
+/// Every record as xNVSE's DLL has it (`dllrec.pl` over `nvse_1_4.dll`): opcode, names, help
+/// text, parameters (name, type, optional), no calling reference needed, not condition-capable;
+/// and the return types `CommandTable.cpp` registers (`ADD_CMD_RET`): a form for
+/// `GetCrosshairRef`, `GetDebugSelection` and `BuildRef`, a number for the rest.
 #[test]
 fn the_records_match_the_dll() {
     let e = engine_with_table();
-    let want: [Record; 4] = [
-        (0x149a, "GetNumericGameSetting", "", &[("string", 0, false)]),
-        (
-            0x149b,
-            "SetNumericGameSetting",
-            "",
-            &[("string", 0, false), ("float", 2, false)],
-        ),
-        (0x14b1, "GetSourceModIndex", "", &[("form", 0x3d, true)]),
-        (
-            0x15e8,
-            "SetOutputLocalMapPicturesGrids",
-            "SetOLMPGrids",
-            &[("int", 1, false)],
-        ),
+    const S: (&str, u32, bool) = ("string", 0, false);
+    const F: (&str, u32, bool) = ("float", 2, false);
+    const I: (&str, u32, bool) = ("int", 1, false);
+    const FORM: (&str, u32, bool) = ("form", 0x3d, true);
+    let mut format = vec![("format string", 0, false)];
+    format.extend([("variable", 2, true); 20]);
+    let want: [(Record, Returns); 19] = [
+        ((0x149a, "GetNumericGameSetting", "", &[S]), Returns::Default),
+        ((0x149b, "SetNumericGameSetting", "", &[S, F]), Returns::Default),
+        ((0x149c, "GetNumericIniSetting", "", &[S]), Returns::Default),
+        ((0x149d, "SetNumericIniSetting", "", &[S, F]), Returns::Default),
+        ((0x14a7, "GetCrosshairRef", "", &[]), Returns::Form),
+        ((0x14a8, "GetGameRestarted", "", &[]), Returns::Default),
+        ((0x14ac, "GetGameLoaded", "", &[]), Returns::Default),
+        ((0x14ae, "IsModLoaded", "", &[S]), Returns::Default),
+        ((0x14af, "GetModIndex", "", &[S]), Returns::Default),
+        ((0x14b0, "GetNumLoadedMods", "", &[]), Returns::Default),
+        ((0x14b1, "GetSourceModIndex", "", &[FORM]), Returns::Default),
+        ((0x14b2, "GetDebugSelection", "", &[]), Returns::Form),
+        ((0x14d8, "GetLocalRefIndex", "", &[FORM]), Returns::Default),
+        ((0x14d9, "BuildRef", "", &[I, I]), Returns::Form),
+        ((0x14db, "MessageEx", "", &format), Returns::Default),
+        ((0x14dc, "MessageBoxEx", "", &format), Returns::Default),
+        ((0x15e6, "GetGridsToLoad", "", &[]), Returns::Default),
+        ((0x15e8, "SetOutputLocalMapPicturesGrids", "SetOLMPGrids", &[I]), Returns::Default),
+        ((0x15ef, "AddSpellNS", "", &[("spell", 7, false)]), Returns::Default),
     ];
-    for (opcode, name, short, params) in want {
+    let helps = [
+        "returns the value of a numeric game setting",
+        "sets a numeric game setting",
+        "returns the value of an ini setting",
+        "sets an ini setting",
+        "returns the reference under the crosshair",
+        "returns 1 when the game is restarted",
+        "returns 1 after a game is loaded",
+        "returns the whether the specified mod is loaded",
+        "returns the index of the specified mod",
+        "returns the number of loaded mods",
+        "returns the index of the mod associated with the form",
+        "returns the current selected object in the console",
+        "returns the index of the ref",
+        "builds a reference from a mod and ref index",
+        "prints a formatted message",
+        "displays a formatted message box",
+        "returns the effective value of the uGridsToLoad ini setting",
+        "sets the value with which to override uGridsToLoad when generating local maps with OLMPOR",
+        "identical to AddSpell but without the UI message",
+    ];
+    let text = |at: u32| crate::table::guest_text(&e, e.mem.u32(at));
+    for (((opcode, name, short, params), returns), help) in want.into_iter().zip(helps) {
         let record = crate::table::record_of(&e, opcode);
-        assert_eq!(
-            crate::table::guest_text(&e, e.mem.u32(record)),
-            name.as_bytes()
-        );
-        assert_eq!(
-            crate::table::guest_text(&e, e.mem.u32(record + 4)),
-            short.as_bytes()
-        );
-        assert_eq!(u32::from(e.mem.u16(record + 0x12)), params.len() as u32);
+        assert_eq!(text(record), name.as_bytes(), "{opcode:04x}");
+        assert_eq!(text(record + 4), short.as_bytes(), "{name}");
+        assert_eq!(text(record + 0xc), help.as_bytes(), "{name}");
+        assert_eq!(e.mem.u16(record + 0x10), 0, "{name}: no calling reference needed");
+        assert_eq!(u32::from(e.mem.u16(record + 0x12)), params.len() as u32, "{name}");
         let at = e.mem.u32(record + 0x14);
         for (i, &(pname, kind, optional)) in params.iter().enumerate() {
             let p = at + 12 * i as u32;
-            assert_eq!(crate::table::guest_text(&e, e.mem.u32(p)), pname.as_bytes());
-            assert_eq!(e.mem.u32(p + 4), kind);
-            assert_eq!(e.mem.u32(p + 8), u32::from(optional));
+            assert_eq!(text(p), pname.as_bytes(), "{name} {i}");
+            assert_eq!(e.mem.u32(p + 4), kind, "{name} {i}");
+            assert_eq!(e.mem.u32(p + 8), u32::from(optional), "{name} {i}");
         }
+        assert_eq!((e.mem.u32(record + 0x20), e.mem.u32(record + 0x24)), (0, 0), "{name}");
+        assert_eq!(crate::table::return_type(&e, opcode), returns, "{name}");
     }
-    let msg = crate::table::record_of(&e, 0x14db);
-    assert_eq!(
-        e.mem.u16(msg + 0x12),
-        21,
-        "the format string and twenty numbers"
-    );
-    assert_eq!(
-        crate::table::guest_text(&e, e.mem.u32(crate::table::record_of(&e, 0x15ef) + 0xc)),
-        b"identical to AddSpell but without the UI message"
-    );
 }
 
 /// A game setting's number by its type letter: a bool's and an integer's word signed, an

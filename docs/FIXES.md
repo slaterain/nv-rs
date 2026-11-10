@@ -369,6 +369,11 @@ save) should get.
   `AddSpellNS` silences the game's `QueueUIMessage` while AddSpell runs as xNVSE does (a `ret`
   written at its entry, here a wrap), and the silenced call answers 0, the function's own answer,
   where xNVSE's `ret` leaves the caller's register as it was; no translated caller reads it.
+  A format string of 16 KB or more (`MessageEx`, `sv_Construct` and every command taking one,
+  the text given or a `$` variable's): xNVSE copies it into its 16 KB buffers without a bound
+  (`s_tempStrArgBuffer`, then `ExtractFormattedString`'s `fmtBuffer` on its stack) and writes
+  past them; the port takes it whole, and cuts the formatted text at 16 KB less 3 bytes only
+  where the C runtime formats it (a format with specifiers).
 - **Co-save keeps other plugins** (the row above): the maintainer's decision, 2026-11-08. The
   sections are kept byte for byte from the co-save of the game loaded (none after a new game or a
   save without a co-save) and written after xNVSE's own section, with that co-save's file list:
