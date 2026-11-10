@@ -2575,6 +2575,11 @@ fn typed_cross_file_findings(
                 {
                     continue;
                 }
+                // The exception docs/ENGINE_CRATE.md ("Calls") names: a bare call of a function
+                // defined in this same file and registered elsewhere (its family's list) is a call
+                // inside one unit, which the translation makes plainly too (the shadow light shader's
+                // set-ups calling their constant and stage set-ups, the packed draw its skinned test).
+                // Doubles, fixes at that address, the profiler and nv-trace don't see it.
                 let registered_here = by_name[&call.called.name].iter().any(|r| r.rel == *rel);
                 if call.called.bare && !registered_here && defines_locally(code, &call.called.name)
                 {

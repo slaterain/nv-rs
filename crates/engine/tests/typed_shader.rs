@@ -2929,7 +2929,7 @@ const PLAIN_FLOATS: [u32; SHAPE_FLOATS] = [
 /// take the rendering object get a copy with the lights while `011f91e0`'s own has no light array; the
 /// lights have no data (+0xf8 null); the light set-up's bytes `011f91de` and `011f9427`; the lights'
 /// byte +0xf5; the lights' ambient colour (-1, 0, 0) at strength 1, whose luminance is exactly 0 under
-/// the default control word.
+/// either control word.
 const NO_POSITION: u32 = 1;
 const RENDER_BYTE: u32 = 2;
 const ZERO_RANGE: u32 = 0x10;
@@ -4539,8 +4539,9 @@ fn light_setup() {
 }
 
 /// `light_setup`'s brightness step at a luminance of exactly 0 (the ambient colour (-1, 0, 0) at
-/// strength 1: -1 times 0.33, plus 0.33, is 0 under the default control word, slightly below it under
-/// the Direct3D one): every component becomes the threshold. Floats the sweep alone almost never meets.
+/// strength 1: -1 times 0.33, plus 0.33, is exactly 0 at any precision, the
+/// weight being a float held as a double): every component becomes the threshold. Floats the sweep
+/// alone almost never meets.
 #[test]
 fn light_setup_luminance_zero() {
     Diff::new(entry!(0x00b7_0820, lighting::light_setup(u32, Ptr<_>, f32)))

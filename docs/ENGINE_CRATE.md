@@ -540,7 +540,13 @@ the differential test read.
   typed function that can return one writes `.allow_nan_payloads()` in its differential test, and
   stores nothing it needs quieted.
 - A plain Rust call of a registered function isn't allowed in typed code: it would skip the flag,
-  doubles and diagnostics. A helper nothing registers is ordinary code.
+  doubles and diagnostics. A helper nothing registers is ordinary code. One exception: a call inside
+  one source file (one unit) that the translation also makes as a plain Rust call, at an address not
+  in `data/overridable.tsv` (the shadow light shader's set-up calling its own constant and stage
+  set-ups, the packed draw calling its skinned test). It costs what the translation's call costs: a
+  test double or a fix registered at the callee's address is not reached from there, and the
+  profiler and nv-trace do not see the call, so the profile's figure for the outer function
+  includes the callee.
 
 **The direct flag** lives in the `Engine`, one bit per family, so each engine has its own:
 
