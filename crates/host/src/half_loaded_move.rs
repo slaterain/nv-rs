@@ -403,6 +403,12 @@ mod tests {
         )));
         e.map(0x0100_0000, 0x4_0000);
         e.map(0x011c_0000, 0x6_0000);
+        // The save/load game, the save/load record, the player and the data handler: blank
+        // objects (their flags read as clear).
+        for global in [0x011d_df38u32, 0x011d_e45c, 0x011d_ea3c, 0x011c_3f2c] {
+            let object = e.mem.alloc(0x1000);
+            e.mem.set_u32(global, object);
+        }
         for vtable in [LOW_VTABLE, HIGH_VTABLE, ACTOR_VTABLE, TARGET_VTABLE] {
             e.map(vtable, 0x1000);
             for slot in (0..0x1000).step_by(4) {
