@@ -246,7 +246,8 @@ const SET_STREAM_COUNT: u32 = 0x00e8_ef10;
 const SET_DECLARATION: u32 = 0x00e8_f040;
 const ROTATE_POINT: u32 = 0x004b_3ae0;
 const REPORT: u32 = 0x00a2_9680;
-/// `"NiDX9IndexBufferManager::PackBuffer> Failed to lock index buffer\n"` (`010eddd0`).
+/// The message the index buffer's failed lock prints (`010eddd0`, the index buffer manager's "Failed to
+/// lock index buffer").
 const LOCK_FAILED_MESSAGE: u32 = 0x010e_ddd0;
 /// Whether the device is Direct3D 9Ex (`0126f0d0`, a byte).
 const DIRECT3D_IS_EX: u32 = 0x0126_f0d0;
