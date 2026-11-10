@@ -328,6 +328,9 @@ pub struct Device {
     groups: HashMap<Vec<(u32, u64, Option<SamplerKey>)>, wgpu::BindGroup>,
     blit: HashMap<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
     blit_layout: Option<wgpu::BindGroupLayout>,
+    #[allow(clippy::type_complexity)]
+    gamma_resolves:
+        HashMap<(wgpu::TextureFormat, u32, bool), (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
     /// Depth stand-ins for targets smaller than the bound depth surface ([`Device::usable_depth`]).
     depth_parts: HashMap<(u64, u32, u32), Arc<Surf>>,
     #[allow(clippy::type_complexity)]
@@ -602,6 +605,7 @@ impl Device {
             groups: HashMap::new(),
             blit: HashMap::new(),
             blit_layout: None,
+            gamma_resolves: HashMap::new(),
             depth_parts: HashMap::new(),
             clears: HashMap::new(),
             dummy,
@@ -782,8 +786,11 @@ impl Device {
             sample_count: samples,
             dimension: wgpu::TextureDimension::D2,
             format: format.wgpu,
-            // A multisampled surface is only drawn into and resolved (`StretchRect`).
-            usage: if samples > 1 {
+            // A multisampled surface is only drawn into and resolved (`StretchRect`; an 8-bit
+            // colour one by a shader that reads its samples).
+            usage: if samples > 1 && gamma_resolved(format.wgpu) {
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+            } else if samples > 1 {
                 wgpu::TextureUsages::RENDER_ATTACHMENT
             } else {
                 Self::texture_usage(&format, target)
@@ -2252,12 +2259,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             (true, true) if (1..=4).contains(&st.rs[rs::ALPHAFUNC]) => 1.0,
             (true, true) => 8.0,
         };
-        let ps_sys = [
-            (st.rs[rs::ALPHAREF] & 0xFF) as f32 / 255.0,
-            alpha_func,
-            0.0,
-            0.0,
-        ];
+        let (above, from) = alpha_bounds(st.rs[rs::ALPHAREF] & 0xFF);
+        let ps_sys = [above, alpha_func, from, 0.0];
         let vs = write_block(
             &mut ring,
             &st.vsf,
@@ -3008,7 +3011,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 && (src.width, src.height) == (dst.width, dst.height)
                 && src.format.wgpu == dst.format.wgpu
             {
-                self.resolve(&sv, &dv);
+                self.resolve(&sv, &dv, &src);
                 for s in [&src, &dst] {
                     if let Some(t) = &s.tex {
                         t.batch.store(self.batch, Ordering::Relaxed);
@@ -3023,7 +3026,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             };
             let resolved = self.level_surface(&scratch, 0, 0);
             let rv = resolved.view.clone().expect("a view");
-            self.resolve(&sv, &rv);
+            self.resolve(&sv, &rv, &src);
             (rv, (src.width, src.height))
         } else {
             (sv, (src.width, src.height))
@@ -3045,10 +3048,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
     }
 
-    /// Resolves the multisampled `source` into `target` (same size and format): a render pass
-    /// that only loads the samples and resolves them at its end.
-    fn resolve(&mut self, source: &wgpu::TextureView, target: &wgpu::TextureView) {
+    /// Resolves the multisampled `source` (the view of `surface`) into `target` (same size and
+    /// format). An 8-bit colour surface is resolved as the reference machine's driver does,
+    /// gamma-corrected ([`GAMMA_RESOLVE`]); others by the hardware's average: a render pass that
+    /// only loads the samples and resolves them at its end.
+    fn resolve(&mut self, source: &wgpu::TextureView, target: &wgpu::TextureView, surface: &Surf) {
         self.end_pass();
+        if gamma_resolved(surface.format.wgpu) {
+            self.gamma_resolve(source, target, surface);
+            return;
+        }
         let encoder = self.encoder();
         let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("resolve"),
@@ -3066,6 +3075,103 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             occlusion_query_set: None,
             multiview_mask: None,
         });
+    }
+
+    /// [`Device::resolve`] of an 8-bit colour surface: each sample's colour taken out of the sRGB
+    /// curve, averaged, put back; alpha averaged as it is ([`GAMMA_RESOLVE`]).
+    fn gamma_resolve(&mut self, source: &wgpu::TextureView, target: &wgpu::TextureView, s: &Surf) {
+        let key = (s.format.wgpu, s.samples, s.format.opaque);
+        if !self.gamma_resolves.contains_key(&key) {
+            let layout = self
+                .device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("gamma resolve"),
+                    entries: &[wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: true,
+                        },
+                        count: None,
+                    }],
+                });
+            let module = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("gamma resolve"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        GAMMA_RESOLVE
+                            .replace("SAMPLES", &format!("{}u", s.samples))
+                            .into(),
+                    ),
+                });
+            let pl = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: None,
+                    bind_group_layouts: &[Some(&layout)],
+                    immediate_size: 0,
+                });
+            let p = self
+                .device
+                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("gamma resolve"),
+                    layout: Some(&pl),
+                    vertex: wgpu::VertexState {
+                        module: &module,
+                        entry_point: Some("vs"),
+                        compilation_options: Default::default(),
+                        buffers: &[],
+                    },
+                    primitive: wgpu::PrimitiveState::default(),
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &module,
+                        entry_point: Some("fs"),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: s.format.wgpu,
+                            blend: None,
+                            write_mask: state::write_mask(0xF, s.format.opaque),
+                        })],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                });
+            self.gamma_resolves.insert(key, (p, layout));
+        }
+        let (pipeline, layout) = self.gamma_resolves[&key].clone();
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(source),
+            }],
+        });
+        let encoder = self.encoder();
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("gamma resolve"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &group, &[]);
+        pass.draw(0..3, 0..1);
     }
 
     pub(crate) fn update_texture(&mut self, source: Handle, destination: Handle) {
@@ -3277,7 +3383,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             let scratch = self.new_texture(s.width, s.height, 1, s.format.d3d, false, true, 1)?;
             let resolved = self.level_surface(&scratch, 0, 0);
             let (from, to) = (s.view.clone()?, resolved.view.clone()?);
-            self.resolve(&from, &to);
+            self.resolve(&from, &to, s);
             (scratch.texture.clone(), 0, 0)
         } else {
             (tex.texture.clone(), s.level, s.layer)
@@ -3692,6 +3798,64 @@ fn write_block(
     at as u32
 }
 
+/// The alpha test's two bounds for the reference `aref` (0..=255), in steps of 1/4096: the
+/// pixel's alpha `a` taken as `x = floor(a * 4096)` is above the reference when `x > above`
+/// and at or above it when `x > from`. So the reference machine's alpha test answers (measured
+/// on the real Direct3D 9 here, DESIGN.md section 11: the exact alpha at which GREATER,
+/// GREATEREQUAL, LESS and LESSEQUAL change their answer, for every reference, 1,020 of 1,020):
+/// as if the alpha were rounded to 8 bits, with the halfway points `(aref + 0.5) / 255` cut to
+/// 12 bits. `from` is -1 for reference 0 (every alpha is at or above it).
+fn alpha_bounds(aref: u32) -> (f32, f32) {
+    let above = |r: u32| ((4096 * (2 * r + 1)) / 510) as f32;
+    (
+        above(aref),
+        if aref == 0 { -1.0 } else { above(aref - 1) },
+    )
+}
+
+/// Whether a multisampled surface of `format` is resolved gamma-corrected ([`GAMMA_RESOLVE`]):
+/// the 8-bit colour formats (`D3DFMT_A8R8G8B8` and `X8R8G8B8`, the race menu's head target).
+fn gamma_resolved(format: wgpu::TextureFormat) -> bool {
+    format == wgpu::TextureFormat::Bgra8Unorm
+}
+
+/// The multisample resolve of an 8-bit colour surface as the reference machine's driver does it
+/// (NVIDIA's "Antialiasing - Gamma correction", on by default; measured on the real Direct3D 9
+/// here, DESIGN.md section 11): each sample's red, green and blue taken out of the sRGB curve,
+/// averaged, put back on it; alpha averaged as it is. (One sample of four white on black: 137,
+/// where the plain average gives 64. Over 2,080 measured resolves at 4x and 8x this curve gives
+/// the driver's byte or one off in 238, at most 1.4 levels.) A16B16G16R16F targets the driver
+/// averages plainly (measured: identical to wgpu's hardware resolve). `SAMPLES` is replaced by
+/// the sample count.
+const GAMMA_RESOLVE: &str = "
+@group(0) @binding(0) var src: texture_multisampled_2d<f32>;
+
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    return vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0);
+}
+
+fn to_linear(c: vec3<f32>) -> vec3<f32> {
+    return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
+}
+
+fn to_srgb(l: vec3<f32>) -> vec3<f32> {
+    return select(1.055 * pow(l, vec3<f32>(1.0 / 2.4)) - 0.055, l * 12.92, l <= vec3<f32>(0.0031308));
+}
+
+@fragment fn fs(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
+    let xy = vec2<i32>(p.xy);
+    var rgb = vec3<f32>(0.0);
+    var a = 0.0;
+    for (var s = 0u; s < SAMPLES; s++) {
+        let c = textureLoad(src, xy, i32(s));
+        rgb += to_linear(saturate(c.rgb));
+        a += c.a;
+    }
+    return vec4<f32>(to_srgb(rgb / f32(SAMPLES)), a / f32(SAMPLES));
+}
+";
+
 /// The copy of one texture's rectangle into another's (`Present`, `StretchRect`).
 const BLIT: &str = "
 struct Rect { uv: vec4<f32> }
@@ -3840,5 +4004,20 @@ mod tests {
         // The occlusion count's 16-bit target lacks 8x: 4x, so counting still joins the pass.
         let count_4x = |f: F, c: u32| !(f == COUNT_FORMAT_16 && c > 4);
         assert_eq!(common_sample_count(F::Bgra8Unorm, 8, count_4x), 4);
+    }
+
+    /// The alpha test's bounds give the alphas at which the real Direct3D 9 here changes its
+    /// answers (`probe-1109/k-probe4.log`: the smallest alpha passing GREATER is (bound + 1) / 4096).
+    #[test]
+    fn the_alpha_bounds_are_the_measured_ones() {
+        // Reference: GREATER from x = 9, 25, 266, 2049, 2306 (measured, 255 * alpha - ref =
+        // +0.56030, +0.55640, +0.56006, +0.56226, +0.56201).
+        for (r, from) in [(0, 9.0), (1, 25.0), (16, 266.0), (127, 2049.0), (143, 2306.0)] {
+            assert_eq!(alpha_bounds(r).0 + 1.0, from, "reference {r}");
+            assert_eq!(alpha_bounds(r + 1).1 + 1.0, from, "reference {}", r + 1);
+        }
+        // 255: nothing is above it; 0: everything is at or above it.
+        assert!(alpha_bounds(255).0 >= 4096.0);
+        assert!(alpha_bounds(0).1 < 0.0);
     }
 }

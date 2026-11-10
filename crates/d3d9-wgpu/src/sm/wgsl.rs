@@ -743,10 +743,12 @@ impl Gen<'_> {
         }
         s.push_str("    body();\n");
         // The fixed-function alpha test (`D3DRS_ALPHATESTENABLE`), as the device sets it:
-        // sys[0].x the reference (0..1), sys[0].y the comparison (`D3DCMPFUNC`, 8 = always).
+        // sys[0].y the comparison (`D3DCMPFUNC`, 8 = always); the alpha in steps of 1/4096
+        // against sys[0].x (above the reference past it) and sys[0].z (at or above it past it),
+        // as the reference machine compares (the device's `alpha_bounds`).
         if self.sig.colours & 1 != 0 {
             s.push_str(
-                "    let a = saturate(oC0.w);\n    let f = u32(R.sys[0].y);\n    let aref = R.sys[0].x;\n    if (f != 8u) {\n        var ok = true;\n        switch f {\n            case 1u: { ok = false; }\n            case 2u: { ok = a < aref; }\n            case 3u: { ok = a == aref; }\n            case 4u: { ok = a <= aref; }\n            case 5u: { ok = a > aref; }\n            case 6u: { ok = a != aref; }\n            case 7u: { ok = a >= aref; }\n            default: { ok = true; }\n        }\n        if (!ok) { discard; }\n    }\n",
+                "    let x = floor(saturate(oC0.w) * 4096.0);\n    let f = u32(R.sys[0].y);\n    let gt = x > R.sys[0].x;\n    let ge = x > R.sys[0].z;\n    if (f != 8u) {\n        var ok = true;\n        switch f {\n            case 1u: { ok = false; }\n            case 2u: { ok = !ge; }\n            case 3u: { ok = ge && !gt; }\n            case 4u: { ok = !gt; }\n            case 5u: { ok = gt; }\n            case 6u: { ok = !(ge && !gt); }\n            case 7u: { ok = ge; }\n            default: { ok = true; }\n        }\n        if (!ok) { discard; }\n    }\n",
             );
         }
         s.push_str("    var out: Out;\n");
