@@ -588,8 +588,10 @@ const FREE_BATCH: usize = 64;
 /// longest the main thread can wait for the lock because of it.
 const FREE_CHUNK: usize = 16;
 /// The most frees that wait for the worker: past it the main thread does the oldest itself
-/// ([`Mem::take_batch`]). 4,096 blocks: at most a few MB the heap cannot hand out meanwhile.
-const FREE_QUEUE_MAX: usize = 4096;
+/// ([`Mem::take_batch`]). 32,768 blocks: the 22,000-free burst of the first frame back outside
+/// fits (with 4,096, main did most of it itself again: sitting S4, 2026-11-10), and the blocks the
+/// heap cannot hand out meanwhile are bounded by that count.
+const FREE_QUEUE_MAX: usize = 32_768;
 
 /// The memory's free worker ([`Mem::defer_frees`]): the frees handed on, in order, a few at a time
 /// under the shared memory's lock ([`Shared::when_frees_wait`]), parked on the lock or on the
