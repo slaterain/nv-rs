@@ -70,7 +70,6 @@ pub fn node_on_visible(e: &mut Engine, this: Ptr<NiNode>, process: Ptr<NiCulling
     if super::par::wants_split(count) && super::par::split(e, this, process.addr(), count) {
         return;
     }
-    let _nest = super::par::nest();
     for index in 0..count {
         let child = child(e, this, index);
         if !child.is_null() {

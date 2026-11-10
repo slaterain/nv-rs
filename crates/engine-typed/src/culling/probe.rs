@@ -10,8 +10,8 @@
 //! `AppendVirtual`, inclusive) and the geometries it registered. With the walk split over the
 //! helpers (`NV_PAR_RENDER=1,time`) it also counts the splits: the children and log entries of
 //! each, the time from fork to join, the replay's time, the time the walkers spent walking added
-//! up, and the splits refused (at a walk's root, for the process, for a compound frustum in use,
-//! for want of helpers). Every five seconds the table so far is printed and cleared.
+//! up, and the splits refused (for the process, for a compound frustum in use, for want of
+//! helpers). Every five seconds the table so far is printed and cleared.
 //!
 //! Off (the default), each `Cull`, `Process` and `AppendVirtual` pays one relaxed load.
 
@@ -50,14 +50,12 @@ fn read_switch() -> bool {
 /// Why a split was refused.
 #[derive(Clone, Copy)]
 pub(crate) enum Refused {
-    /// The node is a walk's root.
-    Root = 0,
     /// The process is not the Bethesda process with the typed `Process` and `AppendVirtual`.
-    Process = 1,
+    Process = 0,
     /// A compound frustum is in use.
-    Frustum = 2,
+    Frustum = 1,
     /// The helpers could not be had (a memory diagnostic keeps memory unshared).
-    Helpers = 3,
+    Helpers = 2,
 }
 
 /// What the splits of one walk add up to.
@@ -69,7 +67,7 @@ struct Splits {
     fork_ns: u64,
     replay_ns: u64,
     busy_ns: u64,
-    refused: [u64; 4],
+    refused: [u64; 3],
 }
 
 impl Splits {
@@ -80,7 +78,7 @@ impl Splits {
         fork_ns: 0,
         replay_ns: 0,
         busy_ns: 0,
-        refused: [0; 4],
+        refused: [0; 3],
     };
 }
 
@@ -279,7 +277,7 @@ fn print_table(table: &Table) {
             let a_walk = |n: u64| n as f64 / r.walks.max(1) as f64;
             out.push_str(&format!(
                 "\n    splits {:.2} a walk ({:.0} children, {:.0} entries each): fork to join {:.1} us a walk, \
-                 replay {:.1} us (its registration included), walkers busy {:.1} us; refused a walk: root {:.2}, \
+                 replay {:.1} us (its registration included), walkers busy {:.1} us; refused a walk: \
                  process {:.2}, compound frustum {:.2}, no helpers {:.2}",
                 a_walk(s.count),
                 each(s.children),
@@ -290,7 +288,6 @@ fn print_table(table: &Table) {
                 a_walk(s.refused[0]),
                 a_walk(s.refused[1]),
                 a_walk(s.refused[2]),
-                a_walk(s.refused[3]),
             ));
         }
     }

@@ -780,15 +780,22 @@ fn chunked_walks_replay_the_serial_order() {
     );
 
     // The first fork makes the pool with 4 helpers; later ones use 1 to 4 of them and main, so
-    // the big node's 40 children are cut into 20, 14, 10 or 8 chunks. Three nodes split at 16+
-    // children (the 40, the 20, and the 24 under the root's multi-bound node), one at 30+.
-    let main_chunks = culling::par_counts_for_tests().3;
+    // the big node's 40 children are cut into 20, 14, 10 or 8 tasks. Three nodes fork at 16+
+    // children (the 40, the 20, and the 24 under the root's multi-bound node), and the nodes of
+    // 18 inside the 40 become tasks of its fork; at 30+ only the 40 forks; at 2+ the root itself
+    // forks, and every node below it with two children or more becomes tasks of that one fork.
+    let (_, _, _, main_chunks, below) = culling::par_counts_for_tests();
     for (helpers, min_children) in [(4, 16), (3, 16), (2, 16), (1, 16), (3, 30), (2, 2)] {
-        let (walks, _, _, _) = culling::par_counts_for_tests();
+        let (walks, _, _, _, below_before) = culling::par_counts_for_tests();
         let started = std::time::Instant::now();
         let got = walk(&mut e, &t, "on", helpers, min_children);
-        let (walks_now, _, _, _) = culling::par_counts_for_tests();
-        let splits = if min_children <= 20 { 3 } else { 1 };
+        let (walks_now, _, _, _, below_now) = culling::par_counts_for_tests();
+        let splits = if min_children == 16 { 3 } else { 1 };
+        assert_eq!(
+            below_now > below_before,
+            min_children != 30,
+            "{helpers} helpers, nodes of {min_children}+: nodes inside tasks made tasks"
+        );
         assert_eq!(
             walks_now - walks,
             splits,
@@ -819,14 +826,16 @@ fn chunked_walks_replay_the_serial_order() {
         );
     }
 
-    // Main walked chunks itself (it starts on the first while the helpers wake).
+    // Main walked tasks itself (it starts on the first while the helpers wake), and nodes inside
+    // tasks made tasks of their children.
     assert!(
         culling::par_counts_for_tests().3 > main_chunks,
-        "main walked no chunk in any of the chunked walks"
+        "main walked no task in any of the chunked walks"
     );
+    assert!(culling::par_counts_for_tests().4 > below);
 
     // No split: a node must have this many children.
-    let (walks, _, _, _) = culling::par_counts_for_tests();
+    let (walks, _, _, _, _) = culling::par_counts_for_tests();
     assert_eq!(walk(&mut e, &t, "on", 3, 41), serial);
     assert_eq!(culling::par_counts_for_tests().0, walks);
 
@@ -836,9 +845,9 @@ fn chunked_walks_replay_the_serial_order() {
     assert_eq!(culling::par_counts_for_tests().0, walks);
 
     // The check mode: the chunked logs against one helper's walk of the same children.
-    let (_, compared, differed, _) = culling::par_counts_for_tests();
+    let (_, compared, differed, _, _) = culling::par_counts_for_tests();
     let got = walk(&mut e, &t, "check", 3, 16);
-    let (_, compared_now, differed_now, _) = culling::par_counts_for_tests();
+    let (_, compared_now, differed_now, _, _) = culling::par_counts_for_tests();
     assert_eq!(
         compared_now - compared,
         3,

@@ -7,15 +7,18 @@
 //! behaviour: what the game sees happens in the order one thread makes it.
 //!
 //! **The split.** On main, a node whose `OnVisible` walks at least `NV_PAR_RENDER_MIN` (default 16)
-//! children (not the walk's root), with a Bethesda culling process whose `Process` and
-//! `AppendVirtual` are the typed ones and no compound frustum in use, hands its children in
-//! contiguous chunks to the helpers (`NV_PAR_RENDER_THREADS`, default 3) and walks chunks itself.
-//! Each walker takes the next chunk not yet taken and walks it with its own copy of the process
-//! (its bytes on the walker's guest stack; at a child's `Cull` the process is in the state the
-//! node's loop gives every child, since each child's walk puts the planes and mode back). Nothing
-//! the log holds runs before every chunk is walked.
+//! children, with a Bethesda culling process whose `Process` and `AppendVirtual` are the typed ones
+//! and no compound frustum in use, makes tasks of its children (contiguous chunks) for the helpers
+//! (`NV_PAR_RENDER_THREADS`, default 3) and itself. Each walker takes the next task not yet taken
+//! and walks it with a copy of the process on its own guest stack (at a child's `Cull` the process
+//! is in the state the node's loop gives every child, since each child's walk puts the planes and
+//! mode back). A walker that meets another such node inside its task does not walk that node's
+//! children itself: it makes tasks of them too, with the process as its own copy is at that node,
+//! and goes on; whoever is free takes them. So one fork serves the whole subtree, and a subtree
+//! that holds most of the work (the cell the player stands in) is shared out as well. Nothing the
+//! logs hold runs before every task is walked.
 //!
-//! **The log.** While a walker (a helper, or main in its part) walks a chunk it collects:
+//! **The log.** While a walker (a helper, or main in its part) walks a task it collects:
 //! - an object whose `OnVisible` is a geometry's (it would register itself with the accumulator),
 //!   or a function not audited for other cores (every one but the typed `NiNode` and
 //!   `BSMultiBoundNode` walks and the fade node's), is not run but logged with the process's mode
@@ -25,23 +28,26 @@
 //!   subtree's properties) are logged with their words instead of run (the walker's engine has
 //!   logging functions at those addresses: a helper's for good,
 //!   `engine_core::real_threads::helper_register`; main's only during its part of a split,
-//!   `caller_swap`, with what they stood in for put back before the replay).
+//!   `caller_swap`, with what they stood in for put back before the replay);
+//! - a node below whose children became tasks leaves a mark in the log where their entries belong.
 //!
 //! Otherwise the walk writes only the process copy and the multi-bound shapes' kept verdicts (each
-//! shape is one node's, so one chunk's).
+//! shape is one node's, so one task's).
 //!
-//! **The replay.** Main runs the chunks' logs in child order: an `OnVisible` with the logged mode
+//! **The replay.** Main runs the tasks' logs in child order, a marked node's tasks at its mark: an
+//! `OnVisible` with the logged mode
 //! and active planes set on its own process (a geometry registers, a tree or particle system walks
 //! here on main) and put back after; a logged call with its words. So every registration,
 //! accumulator call and unaudited override runs on main, in the serial order, with the process
 //! state the serial walk had.
 //!
-//! **The check** (`NV_PAR_RENDER=check`): after the chunks, the fade nodes they ran get back the
+//! **The check** (`NV_PAR_RENDER=check`): after the tasks, the fade nodes they ran get back the
 //! bytes their `OnVisible` writes (flags and fade fields, saved before each ran: a second walk would
-//! step their fade again), then one helper walks all the children in order into a log of its own;
-//! the two are compared entry by entry, a difference is printed (the first 20), and the one-helper
-//! log is the one replayed. The flags word is put back whole: a change another game thread made to
-//! it within the split is lost (check mode only).
+//! step their fade again), then one walker walks all the children in order as one task, nodes
+//! below included, into a log of its own; the two are compared entry by entry (the tasks' logs
+//! laid out in order), a difference is printed (the first 20), and the one-task log is the one
+//! replayed. The flags word is put back whole: a change another game thread made to it within the
+//! split is lost (check mode only).
 
 use super::layout::{
     BSCompoundFrustum, BSCullingProcess, NiCullingProcess, NiFrustumPlanes, NiNode,
@@ -50,9 +56,9 @@ use super::probe::Refused;
 use super::FAMILY;
 use engine_core::ptr::Ptr;
 use engine_core::{typed_call, AbiFn, Engine, Ret};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering::Relaxed};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 /// The process's `Process` and `AppendVirtual` slots and the typed functions a split needs there.
@@ -76,13 +82,170 @@ const START_GROUPING_ALPHAS: u32 = 0x00b6_3500;
 const STOP_GROUPING_ALPHAS: u32 = 0x00b6_3090;
 const SET_FADE_ALPHA: u32 = 0x00b6_bb30;
 
-/// One logged step of a helper's walk.
+/// One logged step of a walker's walk.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum Entry {
     /// An object's `OnVisible`, with the process's mode and active planes when it was reached.
     Visible { object: u32, mode: u32, planes: u32 },
     /// A call by address with its words.
     Call { addr: u32, words: Vec<u32> },
+    /// A node below whose children were walked as tasks of their own: the logs of the split's
+    /// tasks `first..first + count` belong here, in that order.
+    Tasks { first: usize, count: usize },
+}
+
+/// Some of a node's children, to be walked with the process as it was at that node.
+struct Task {
+    children: Vec<u32>,
+    /// The process's bytes at the node ([`PROCESS_SIZE`]).
+    image: Arc<[u8]>,
+}
+
+/// The tasks of one split and their logs, by task number.
+#[derive(Default)]
+struct Queue {
+    /// Taken (`None`) when a walker takes the task.
+    tasks: Vec<Option<Task>>,
+    logs: Vec<Option<Vec<Entry>>>,
+    /// The next task to take.
+    next: usize,
+    /// Tasks being walked now (they may still add tasks).
+    walking: usize,
+    /// A walker stopped (a panic in a task): the others stop taking tasks.
+    stopped: bool,
+}
+
+/// What the walkers of one split share.
+struct Split {
+    queue: Mutex<Queue>,
+    /// Whether a node met inside a task makes tasks of its children (not in the check mode's
+    /// one-task walk).
+    nested: bool,
+    /// The check mode: each fade node's state before it runs is kept ([`FadeState`]).
+    check: bool,
+    saved: Mutex<Vec<FadeState>>,
+    /// The probe is on: the walkers' time walking is added up.
+    timed: bool,
+    busy_ns: AtomicU64,
+}
+
+impl Split {
+    fn new(nested: bool, check: bool, timed: bool) -> Arc<Split> {
+        Arc::new(Split {
+            queue: Mutex::new(Queue::default()),
+            nested,
+            check,
+            saved: Mutex::new(Vec::new()),
+            timed,
+            busy_ns: AtomicU64::new(0),
+        })
+    }
+
+    fn queue(&self) -> MutexGuard<'_, Queue> {
+        self.queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Adds `children` as tasks of at most `chunk` children each, to be walked with the process
+    /// bytes `image`; answers the first task's number and how many were added.
+    fn add(&self, children: &[u32], chunk: usize, image: &Arc<[u8]>) -> (usize, usize) {
+        let mut queue = self.queue();
+        let first = queue.tasks.len();
+        for part in children.chunks(chunk.max(1)) {
+            queue.tasks.push(Some(Task {
+                children: part.to_vec(),
+                image: Arc::clone(image),
+            }));
+            queue.logs.push(None);
+        }
+        (first, queue.tasks.len() - first)
+    }
+
+    /// A walker's loop: takes tasks and walks them with its process copy at `local` until none is
+    /// left and none is being walked (a task being walked may still add tasks).
+    fn work(self: &Arc<Split>, w: &mut Engine, number: usize, local: u32) {
+        struct Current;
+        impl Drop for Current {
+            fn drop(&mut self) {
+                SPLIT.with(|s| *s.borrow_mut() = None);
+            }
+        }
+        SPLIT.with(|s| *s.borrow_mut() = Some(Arc::clone(self)));
+        let _current = Current;
+        // Held while a task is walked: on a stop the task is given up and the others told.
+        struct Walking<'a>(&'a Split, bool);
+        impl Drop for Walking<'_> {
+            fn drop(&mut self) {
+                let mut queue = self.0.queue();
+                queue.walking -= 1;
+                if !self.1 {
+                    queue.stopped = true;
+                }
+            }
+        }
+        let mut idle = 0u32;
+        loop {
+            let taken = {
+                let mut queue = self.queue();
+                if queue.stopped {
+                    break;
+                }
+                let k = queue.next;
+                match queue.tasks.get_mut(k).and_then(Option::take) {
+                    Some(task) => {
+                        queue.next += 1;
+                        queue.walking += 1;
+                        Some((k, task))
+                    }
+                    None if queue.walking == 0 => break,
+                    None => None,
+                }
+            };
+            let Some((k, task)) = taken else {
+                // Tasks being walked may add tasks: look again shortly.
+                idle += 1;
+                if idle % 64 == 0 {
+                    std::thread::yield_now();
+                } else {
+                    std::hint::spin_loop();
+                }
+                continue;
+            };
+            idle = 0;
+            let mut walking = Walking(self, false);
+            if number == 0 {
+                MAIN_CHUNKS.fetch_add(1, Relaxed);
+            }
+            w.mem.write(local, &task.image);
+            if self.check {
+                SAVED.with(|s| *s.borrow_mut() = Some(Vec::new()));
+            }
+            let started = self.timed.then(Instant::now);
+            let log = walk_chunk(w, &task.children, local);
+            if let Some(started) = started {
+                self.busy_ns
+                    .fetch_add(super::probe::nanos(started.elapsed()), Relaxed);
+            }
+            if self.check {
+                let mine = SAVED.with(|s| s.borrow_mut().take()).unwrap_or_default();
+                self.saved
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .extend(mine);
+            }
+            self.queue().logs[k] = Some(log);
+            walking.1 = true;
+        }
+    }
+
+    /// The tasks' logs, by task number, once every walker is done.
+    fn logs(&self) -> Vec<Vec<Entry>> {
+        std::mem::take(&mut self.queue().logs)
+            .into_iter()
+            .map(Option::unwrap_or_default)
+            .collect()
+    }
 }
 
 /// 0: not read, 1: off, 2: on, 3: check, 4: serial (the helpers made and given each split's process
@@ -92,11 +255,13 @@ static HELPERS: AtomicUsize = AtomicUsize::new(3);
 static MIN_CHILDREN: AtomicU32 = AtomicU32::new(16);
 /// Differences the check mode has printed (it stops at 20), and splits it compared.
 static PRINTED: AtomicU32 = AtomicU32::new(0);
-/// Splits the helpers walked (printed at 1024, 2048, 4096, ...: the proof they ran).
+/// Splits walked in tasks (printed at 1024, 2048, 4096, ...: the proof they ran).
 static WALKS: AtomicU32 = AtomicU32::new(0);
 static COMPARED: AtomicU32 = AtomicU32::new(0);
-/// Chunks main walked itself.
+/// Tasks main walked itself.
 static MAIN_CHUNKS: AtomicU32 = AtomicU32::new(0);
+/// Nodes met inside a task whose children became tasks.
+static BELOW: AtomicU32 = AtomicU32::new(0);
 
 /// The bytes of a fade node its `OnVisible` writes: `m_uFlags` (+0x30) and the fade fields
 /// (+0xac to the end, 0xe4).
@@ -112,32 +277,12 @@ struct FadeState {
 }
 
 thread_local! {
-    /// While this thread walks a chunk: its log.
+    /// While this thread walks a task: its log.
     static LOG: RefCell<Option<Vec<Entry>>> = const { RefCell::new(None) };
-    /// The check mode's first walk on this helper: each fade node's state before it runs.
+    /// The check mode's first walk on this walker: each fade node's state before it runs.
     static SAVED: RefCell<Option<Vec<FadeState>>> = const { RefCell::new(None) };
-    /// The `NiNode` walks open on this thread (the root's is never split: its children are few and
-    /// uneven, the cells and the sky).
-    static NEST: Cell<u32> = const { Cell::new(0) };
-}
-
-/// Held while a node walks its children (switch on only).
-pub(crate) struct Nest;
-
-/// A node starts walking its children.
-#[inline(always)]
-pub(crate) fn nest() -> Option<Nest> {
-    if mode() < 2 {
-        return None;
-    }
-    NEST.with(|n| n.set(n.get() + 1));
-    Some(Nest)
-}
-
-impl Drop for Nest {
-    fn drop(&mut self) {
-        NEST.with(|n| n.set(n.get().saturating_sub(1)));
-    }
+    /// While this thread is a split's walker: the split, for the tasks a node below adds.
+    static SPLIT: RefCell<Option<Arc<Split>>> = const { RefCell::new(None) };
 }
 
 #[inline(always)]
@@ -201,19 +346,22 @@ pub fn set_for_tests(mode: &str, helpers: usize, min_children: u32) {
     MODE.store(m, Relaxed);
 }
 
-/// For the replay-order test: splits walked in chunks, splits the check mode compared, the
-/// comparisons that differed, and the chunks main walked itself, so far.
+/// For the replay-order test: splits walked in tasks, splits the check mode compared, the
+/// comparisons that differed, the tasks main walked itself, and the nodes inside tasks whose
+/// children became tasks, so far.
 #[doc(hidden)]
-pub fn counts_for_tests() -> (u32, u32, u32, u32) {
+pub fn counts_for_tests() -> (u32, u32, u32, u32, u32) {
     (
         WALKS.load(Relaxed),
         COMPARED.load(Relaxed),
         PRINTED.load(Relaxed),
         MAIN_CHUNKS.load(Relaxed),
+        BELOW.load(Relaxed),
     )
 }
 
-/// Whether a node of `count` children may be split (the switch is on and the node is big enough).
+/// Whether a node of `count` children may be split or, inside a task, made tasks of (the switch
+/// is on and the node is big enough).
 #[inline(always)]
 pub(crate) fn wants_split(count: u32) -> bool {
     count >= 2 && mode() >= 2 && count >= MIN_CHILDREN.load(Relaxed)
@@ -350,7 +498,7 @@ fn planes(process: u32) -> Ptr<NiFrustumPlanes> {
     Ptr::<NiCullingProcess>::new(process).at(NiCullingProcess::m_kPlanes)
 }
 
-/// Whether this thread walks a chunk now.
+/// Whether this thread walks a task now.
 pub(crate) fn collecting() -> bool {
     LOG.with(|log| log.borrow().is_some())
 }
@@ -388,7 +536,7 @@ fn on_main(e: &Engine) -> bool {
     engine_core::thread_host::on_main(e)
 }
 
-/// Walks `children` (a chunk) with `process` into a log (on a helper, or on main in its part).
+/// Walks `children` (a task) with `process` into a log (on a helper, or on main in its part).
 fn walk_chunk(e: &mut Engine, children: &[u32], process: u32) -> Vec<Entry> {
     LOG.with(|log| *log.borrow_mut() = Some(Vec::new()));
     struct Take;
@@ -412,24 +560,19 @@ fn walk_chunk(e: &mut Engine, children: &[u32], process: u32) -> Vec<Entry> {
     log
 }
 
-/// Runs `walk` on the helpers and on main (number 0), each with a copy of the process `image` on
-/// its own guest stack and the logging functions on its own engine. Main takes its copy in any
-/// case, and walks only with the logging functions there ([`with_logging_on_main`]).
-fn on_walkers(
-    e: &mut Engine,
-    helpers: usize,
-    image: &[u8],
-    walk: &(dyn Fn(&mut Engine, usize, u32) + Sync),
-) -> bool {
+/// Runs the split's walkers: the helpers and main (number 0), each with a process copy on its own
+/// guest stack and the logging functions on its own engine, until the split's tasks are all
+/// walked. Main takes its copy in any case, and walks only with the logging functions there
+/// ([`with_logging_on_main`]). False when the helpers could not be had.
+fn on_walkers(e: &mut Engine, helpers: usize, split: &Arc<Split>) -> bool {
     with_logging_on_main(e, |e, main_walks| {
         let job = |w: &mut Engine, number: usize| {
             if number != 0 {
                 install_logging(w);
             }
             w.with_stack(PROCESS_SIZE, |w, local| {
-                w.mem.write(local.addr(), image);
                 if number != 0 || main_walks {
-                    walk(w, number, local.addr());
+                    split.work(w, number, local.addr());
                 }
             });
         };
@@ -437,124 +580,151 @@ fn on_walkers(
     })
 }
 
+/// The children of `node` (its first `count` slots; 0: an empty slot).
+fn children_of(e: &Engine, node: Ptr<NiNode>, count: u32) -> Vec<u32> {
+    let base = e.get(node, NiNode::m_pBase);
+    (0..count)
+        .map(|index| e.mem.u32(base.index(index, 4).addr()))
+        .collect()
+}
+
+/// How many children a task of a node of `count` children gets: enough tasks that every walker
+/// has several to take, and no task smaller than `least`.
+fn task_size(count: usize, helpers: usize, least: usize) -> usize {
+    count.div_ceil((helpers + 1) * 4).max(least)
+}
+
+/// A node of `count` children met while this thread walks a task: its children become tasks of
+/// the split, walked with the process as this walker's copy is now, and the log gets the mark
+/// where their entries belong. False (the walker walks them itself) when the split takes no
+/// tasks from below, or the process is not one to copy.
+fn split_below(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32) -> bool {
+    let Some(split) = SPLIT.with(|s| s.borrow().clone()) else {
+        return false;
+    };
+    if !split.nested || not_plain(e, process).is_some() {
+        return false;
+    }
+    let children = children_of(e, node, count);
+    let image: Arc<[u8]> = e.mem.bytes(process, PROCESS_SIZE).into();
+    let chunk = task_size(children.len(), HELPERS.load(Relaxed), 8);
+    let (first, count) = split.add(&children, chunk, &image);
+    BELOW.fetch_add(1, Relaxed);
+    LOG.with(|log| {
+        if let Some(log) = log.borrow_mut().as_mut() {
+            log.push(Entry::Tasks { first, count });
+        }
+    });
+    true
+}
+
 /// Splits `node`'s `count` children over the helpers and main, then replays their logs. False
 /// (nothing done; the caller walks them as before) when a split isn't possible here.
 pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32) -> bool {
-    if collecting() || !on_main(e) {
-        return false;
+    if collecting() {
+        return split_below(e, node, process, count);
     }
-    if NEST.with(Cell::get) == 0 {
-        return refused(Refused::Root);
+    if !on_main(e) {
+        return false;
     }
     if let Some(why) = not_plain(e, process) {
         return refused(why);
     }
     let timed = super::probe::on();
-    let busy_ns = AtomicU64::new(0);
-    let base = e.get(node, NiNode::m_pBase);
-    let children: Vec<u32> = (0..count)
-        .map(|index| e.mem.u32(base.index(index, 4).addr()))
-        .collect();
+    let children = children_of(e, node, count);
     let helpers = HELPERS.load(Relaxed);
-    let chunk = children.len().div_ceil((helpers + 1) * 4).max(1);
-    let chunks: Vec<&[u32]> = children.chunks(chunk).collect();
-    let logs: Vec<Mutex<Option<Vec<Entry>>>> = chunks.iter().map(|_| Mutex::new(None)).collect();
-    let next = AtomicUsize::new(0);
-    let image = e.mem.bytes(process, PROCESS_SIZE);
+    let image: Arc<[u8]> = e.mem.bytes(process, PROCESS_SIZE).into();
     let check = mode() == 3;
-    let saved: Mutex<Vec<FadeState>> = Mutex::new(Vec::new());
-    let walk = |w: &mut Engine, number: usize, walk_process: u32| loop {
-        let k = next.fetch_add(1, Relaxed);
-        let Some(children) = chunks.get(k) else {
-            break;
-        };
-        if number == 0 {
-            MAIN_CHUNKS.fetch_add(1, Relaxed);
-        }
-        if check {
-            SAVED.with(|s| *s.borrow_mut() = Some(Vec::new()));
-        }
-        let started = timed.then(Instant::now);
-        let log = walk_chunk(w, children, walk_process);
-        if let Some(started) = started {
-            busy_ns.fetch_add(super::probe::nanos(started.elapsed()), Relaxed);
-        }
-        if check {
-            let mine = SAVED.with(|s| s.borrow_mut().take()).unwrap_or_default();
-            saved
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .extend(mine);
-        }
-        *logs[k]
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(log);
-    };
     if mode() == 4 {
-        // Serial: the helpers and main take their process copies as when on, and no one walks a
-        // chunk; main then walks the children as with the switch off.
-        on_walkers(e, helpers, &image, &|_: &mut Engine, _: usize, _: u32| {});
+        // Serial: the helpers and main take their process copies as when on, and there is no
+        // task; main then walks the children as with the switch off.
+        on_walkers(e, helpers, &Split::new(false, false, false));
         return false;
     }
+    let tasks = Split::new(true, check, timed);
+    let (_, mut top) = tasks.add(&children, task_size(children.len(), helpers, 1), &image);
     let forked = timed.then(Instant::now);
-    if !on_walkers(e, helpers, &image, &walk) {
+    if !on_walkers(e, helpers, &tasks) {
         return refused(Refused::Helpers);
     }
     let joined = timed.then(Instant::now);
     let walks = WALKS.fetch_add(1, Relaxed) + 1;
     if walks.is_power_of_two() && walks >= 1024 {
-        println!("NV_PAR_RENDER: {walks} splits walked in chunks");
+        println!("NV_PAR_RENDER: {walks} splits walked in tasks");
     }
-    let logs: Vec<Vec<Entry>> = logs
-        .into_iter()
-        .map(|l| {
-            l.into_inner()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .unwrap_or_default()
-        })
-        .collect();
-    let replayed = if check {
+    let mut logs = tasks.logs();
+    if check {
         // The fade nodes as they were before the first walk: the second steps them once again.
-        for state in saved
-            .into_inner()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-        {
+        let saved = std::mem::take(
+            &mut *tasks
+                .saved
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        for state in saved {
             e.mem
                 .set_u32(state.node.wrapping_add(FADE_FLAGS), state.flags);
             e.mem
                 .write(state.node.wrapping_add(FADE_FIELDS), &state.fields);
         }
-        let serial: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
-        let one = |w: &mut Engine, number: usize, walk_process: u32| {
-            if number == 1 {
-                let log = walk_chunk(w, &children, walk_process);
-                *serial
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = log;
-            }
-        };
-        on_walkers(e, helpers, &image, &one);
-        let serial = serial
-            .into_inner()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        compare(&logs, &serial);
-        vec![serial]
-    } else {
-        logs
-    };
-    for entry in replayed.iter().flatten() {
-        replay(e, process, entry);
+        // All the children as one task, the nodes below walked in it.
+        let one = Split::new(false, false, false);
+        one.add(&children, children.len(), &image);
+        on_walkers(e, helpers, &one);
+        let serial = one.logs();
+        let mut parallel = Vec::new();
+        flatten(&logs, 0..top, &mut parallel);
+        compare(&parallel, serial.first().map_or(&[][..], Vec::as_slice));
+        logs = serial;
+        top = logs.len();
     }
+    let entries = replay_tasks(e, process, &logs, 0..top);
     if let (Some(forked), Some(joined)) = (forked, joined) {
         super::probe::split_walked(
             children.len(),
-            replayed.iter().map(Vec::len).sum(),
+            entries,
             joined.duration_since(forked),
             joined.elapsed(),
-            busy_ns.load(Relaxed),
+            tasks.busy_ns.load(Relaxed),
         );
     }
     true
+}
+
+/// The entries of tasks `range` in order, a marked node's tasks at its mark.
+fn flatten<'a>(logs: &'a [Vec<Entry>], range: std::ops::Range<usize>, out: &mut Vec<&'a Entry>) {
+    for log in logs.get(range).unwrap_or_default() {
+        for entry in log {
+            match entry {
+                Entry::Tasks { first, count } => flatten(logs, *first..*first + *count, out),
+                entry => out.push(entry),
+            }
+        }
+    }
+}
+
+/// Replays tasks `range` in order, a marked node's tasks at its mark; how many entries it ran.
+fn replay_tasks(
+    e: &mut Engine,
+    process: u32,
+    logs: &[Vec<Entry>],
+    range: std::ops::Range<usize>,
+) -> usize {
+    let mut entries = 0;
+    for log in logs.get(range).unwrap_or_default() {
+        for entry in log {
+            match entry {
+                Entry::Tasks { first, count } => {
+                    entries += replay_tasks(e, process, logs, *first..*first + *count);
+                }
+                entry => {
+                    replay(e, process, entry);
+                    entries += 1;
+                }
+            }
+        }
+    }
+    entries
 }
 
 /// One entry run on main as the serial walk ran it.
@@ -581,11 +751,13 @@ fn replay(e: &mut Engine, process: u32, entry: &Entry) {
         Entry::Call { addr, words } => {
             e.call(*addr, words);
         }
+        // A mark is replayed by its tasks ([`replay_tasks`]).
+        Entry::Tasks { .. } => {}
     }
 }
 
-/// The check mode: the helpers' logs, in order, against one helper's walk of all the children.
-fn compare(logs: &[Vec<Entry>], serial: &[Entry]) {
+/// The check mode: the tasks' entries, in order, against one walker's walk of all the children.
+fn compare(parallel: &[&Entry], serial: &[Entry]) {
     let compared = COMPARED.fetch_add(1, Relaxed) + 1;
     if compared.is_power_of_two() && compared >= 1024 {
         println!(
@@ -593,7 +765,6 @@ fn compare(logs: &[Vec<Entry>], serial: &[Entry]) {
             PRINTED.load(Relaxed)
         );
     }
-    let parallel: Vec<&Entry> = logs.iter().flatten().collect();
     if parallel.len() == serial.len() && parallel.iter().zip(serial).all(|(a, b)| *a == b) {
         return;
     }
@@ -606,7 +777,7 @@ fn compare(logs: &[Vec<Entry>], serial: &[Entry]) {
         .position(|(a, b)| *a != b)
         .unwrap_or(parallel.len().min(serial.len()));
     println!(
-        "NV_PAR_RENDER=check: the logs differ at entry {at} of {} (parallel) and {} (one helper): {:?} against {:?}",
+        "NV_PAR_RENDER=check: the logs differ at entry {at} of {} (tasks) and {} (one task): {:?} against {:?}",
         parallel.len(),
         serial.len(),
         parallel.get(at),
