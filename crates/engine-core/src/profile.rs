@@ -2384,6 +2384,18 @@ mod native {
     type SymSetOptions = unsafe extern "system" fn(u32) -> u32;
     type SymFromAddr = unsafe extern "system" fn(Handle, u64, *mut u64, *mut u8) -> i32;
     type SymGetModuleInfo = unsafe extern "system" fn(Handle, u64, *mut u8) -> i32;
+    /// (process, file, image name, module name, base, size, data, flags) -> base or 0.
+    type SymLoadModuleEx = unsafe extern "system" fn(
+        Handle,
+        Handle,
+        *const u8,
+        *const u8,
+        u64,
+        u32,
+        *mut c_void,
+        u32,
+    ) -> u64;
+    type SymRefreshModuleList = unsafe extern "system" fn(Handle) -> i32;
 
     pub struct Sampler {
         threads: HashMap<u32, Handle>,
@@ -2842,8 +2854,36 @@ mod native {
                 }
                 let path = std::ffi::CString::new(path).unwrap_or_default();
                 let init: SymInitialize = std::mem::transmute(init);
-                if init(GetCurrentProcess(), path.as_ptr() as *const u8, 1) == 0 {
+                // Without invading the process: an invading initialize lists every loaded module
+                // at once, and a module another thread loads or frees meanwhile can fail it (a CI
+                // run of the tests answered no name at all, 2026-11-10). The modules are listed
+                // after, the program first, each on its own.
+                if init(GetCurrentProcess(), path.as_ptr() as *const u8, 0) == 0 {
                     return;
+                }
+                let load = GetProcAddress(dll, b"SymLoadModuleEx\0".as_ptr());
+                if !load.is_null() {
+                    let load: SymLoadModuleEx = std::mem::transmute(load);
+                    let mut name = [0u8; 520];
+                    let base = GetModuleHandleA(std::ptr::null());
+                    let n = GetModuleFileNameA(base, name.as_mut_ptr(), name.len() as u32);
+                    if n > 0 && (n as usize) < name.len() {
+                        load(
+                            GetCurrentProcess(),
+                            std::ptr::null_mut(),
+                            name.as_ptr(),
+                            std::ptr::null(),
+                            base as u64,
+                            0,
+                            std::ptr::null_mut(),
+                            0,
+                        );
+                    }
+                }
+                let refresh = GetProcAddress(dll, b"SymRefreshModuleList\0".as_ptr());
+                if !refresh.is_null() {
+                    let refresh: SymRefreshModuleList = std::mem::transmute(refresh);
+                    refresh(GetCurrentProcess());
                 }
                 self.sym_from_addr =
                     Some(std::mem::transmute::<*mut c_void, SymFromAddr>(from_addr));
@@ -4089,7 +4129,13 @@ mod tests {
         }
         let framed = nv_profile_test_framed as unsafe extern "C" fn() as usize as u64;
         let (_, symbol) = sampler.name(framed + 1);
-        assert_eq!(symbol, "nv_profile_test_framed");
+        // On a failure, what dbghelp loaded for the program says why (a CI run answered "?").
+        assert_eq!(
+            symbol,
+            "nv_profile_test_framed",
+            "symbols: {}",
+            sampler.symbol_source()
+        );
         // The sampler never samples itself.
         assert_eq!(
             sampler.instruction_pointer(native::current_thread_id()),
