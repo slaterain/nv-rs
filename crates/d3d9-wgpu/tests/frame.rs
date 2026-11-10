@@ -996,7 +996,19 @@ fn constant_changes_between_draws_in_one_pass_reach_the_shaders() {
     let px = g.pixels();
     let at = |x: usize, y: usize| px[y * 8 + x];
     assert_eq!(at(1, 1), [0, 0, 255, 255], "top left");
-    assert_eq!(at(6, 1), [0, 0, 255, 255], "top right: the vertex constant change");
-    assert_eq!(at(1, 6), [0, 0, 255, 255], "bottom left: c10 on the shader change");
-    assert_eq!(at(6, 6), [0, 255, 0, 255], "bottom right: the pixel constant change");
+    assert_eq!(
+        at(6, 1),
+        [0, 0, 255, 255],
+        "top right: the vertex constant change"
+    );
+    assert_eq!(
+        at(1, 6),
+        [0, 0, 255, 255],
+        "bottom left: c10 on the shader change"
+    );
+    assert_eq!(
+        at(6, 6),
+        [0, 255, 0, 255],
+        "bottom right: the pixel constant change"
+    );
 }
