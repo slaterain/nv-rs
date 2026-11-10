@@ -44,9 +44,31 @@ fn out_dir() -> Option<&'static Path> {
             );
             return None;
         }
+        for name in clean_parts(&dir) {
+            println!("NV_SAVE_OUT: removed {name}, a copy cut short by an earlier run's end");
+        }
         Some(dir)
     })
     .as_deref()
+}
+
+/// The copy-out's temporary files (`<save>.fos.part`, `<save>.nvse.part`) an earlier run left in
+/// `dir` when it was killed part-way through a copy, removed (the save itself, renamed only once
+/// complete, is untouched): their names.
+pub fn clean_parts(dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return vec![];
+    };
+    let mut removed = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let lower = name.to_ascii_lowercase();
+        let part = lower.ends_with(".fos.part") || lower.ends_with(".nvse.part");
+        if part && entry.path().is_file() && std::fs::remove_file(entry.path()).is_ok() {
+            removed.push(name);
+        }
+    }
+    removed
 }
 
 /// A warning the player can't miss: a line in the log, and on Windows a message box (from its own
@@ -369,37 +391,75 @@ enum Message {
 /// The keys whose copy failed on the copy-out's thread, for [`copy_saves`] to make again.
 static FAILED: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
 
+/// Does one job on the copy-out's thread or, when that is gone, on the caller's: its line
+/// printed, a failed write's key kept for the next look. A panic in it (the disk work, the
+/// printing) is caught, said, and counted as a failed write, so the thread goes on.
+fn do_job(job: &Job) {
+    let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(job)));
+    let failed = match done {
+        Ok(Ok(Some(line))) => {
+            println!("{line}");
+            false
+        }
+        Ok(Ok(None)) => false,
+        Ok(Err(line)) => {
+            println!("{line}");
+            true
+        }
+        Err(_) => {
+            println!("NV_SAVE_OUT: a copy stopped with a panic; it is made again at the next look");
+            true
+        }
+    };
+    if let (true, Job::Write { key, .. }) = (failed, job) {
+        FAILED
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(key.clone());
+    }
+}
+
 /// The copy-out's thread, started with the first job: it does the jobs in the order sent, so the
 /// disk work (writing a save of several megabytes, renaming it, removing one) never holds up a
-/// frame.
+/// frame. Its start registers [`flush`] with the platform layer, which runs it before it ends the
+/// process itself (the game's window closed: `engine_platform::on_exit`).
 fn writer() -> &'static std::sync::mpsc::Sender<Message> {
     static SENDER: OnceLock<std::sync::mpsc::Sender<Message>> = OnceLock::new();
     SENDER.get_or_init(|| {
         let (send, receive) = std::sync::mpsc::channel::<Message>();
-        std::thread::Builder::new()
+        let started = std::thread::Builder::new()
             .name("nv save out".into())
             .spawn(move || {
                 for message in receive {
                     match message {
-                        Message::Job(job) => match run(&job) {
-                            Ok(Some(line)) => println!("{line}"),
-                            Ok(None) => {}
-                            Err(line) => {
-                                println!("{line}");
-                                if let Job::Write { key, .. } = job {
-                                    FAILED.lock().unwrap_or_else(|p| p.into_inner()).push(key);
-                                }
-                            }
-                        },
+                        Message::Job(job) => do_job(&job),
                         Message::Flush(done) => {
                             let _ = done.send(());
                         }
                     }
                 }
-            })
-            .expect("the copy-out's thread");
+            });
+        if let Err(why) = started {
+            // No thread: the jobs are done on the caller's ([`hand`]), as the receiver is gone.
+            println!("NV_SAVE_OUT: the copy-out's thread could not start ({why})");
+        }
+        engine_platform::on_exit(flush);
         send
     })
+}
+
+/// Hands `job` to the copy-out's thread through `send`, or, when that thread is gone (it never
+/// started, or it ended), does it here, saying so once: no copy is dropped unsaid.
+fn hand(send: &std::sync::mpsc::Sender<Message>, job: Job) {
+    if let Err(std::sync::mpsc::SendError(Message::Job(job))) = send.send(Message::Job(job)) {
+        static SAID: std::sync::Once = std::sync::Once::new();
+        SAID.call_once(|| {
+            println!(
+                "NV_SAVE_OUT: the copy-out's thread is gone; saves are copied on the main thread from now on"
+            )
+        });
+        do_job(&job);
+    }
 }
 
 /// Whether the copy-out's thread was started (a job was sent).
@@ -428,7 +488,7 @@ pub fn copy_saves(e: &Engine, look_again: bool) {
     STARTED.store(true, std::sync::atomic::Ordering::SeqCst);
     let send = writer();
     for job in jobs {
-        let _ = send.send(Message::Job(job));
+        hand(send, job);
     }
 }
 
@@ -696,6 +756,74 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("a.fos")).unwrap(), big);
         assert!(!dir.join("b.fos").exists());
         assert!(!dir.join("a.fos.part").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// A save handed to the copy-out's thread just before the platform layer ends the process
+    /// (the game's window closed) is on disk once the exit hooks have run: the thread's start
+    /// registered the flush (`engine_platform::on_exit`).
+    #[test]
+    fn the_platforms_exit_hook_finishes_the_copies_handed_on() {
+        let dir = std::env::temp_dir().join(format!("nv-save-exit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let bytes = vec![5u8; 6 << 20];
+        let job = Job::Write {
+            key: b"exit.fos".to_vec(),
+            dir: Some(dir.clone()),
+            target: dir.join("exit.fos"),
+            temporary: dir.join("exit.fos.part"),
+            bytes: bytes.clone(),
+            copied: Some("exit.fos".into()),
+        };
+        STARTED.store(true, std::sync::atomic::Ordering::SeqCst);
+        hand(writer(), job);
+        engine_platform::run_exit_hooks();
+        assert_eq!(std::fs::read(dir.join("exit.fos")).unwrap(), bytes);
+        assert!(!dir.join("exit.fos.part").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With the copy-out's thread gone (its receiver dropped), a job is done on the caller's
+    /// thread at once: no copy is dropped.
+    #[test]
+    fn with_the_thread_gone_a_copy_is_made_on_the_callers_thread() {
+        let dir = std::env::temp_dir().join(format!("nv-save-gone-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (send, receive) = std::sync::mpsc::channel::<Message>();
+        drop(receive);
+        hand(
+            &send,
+            Job::Write {
+                key: b"gone.fos".to_vec(),
+                dir: Some(dir.clone()),
+                target: dir.join("gone.fos"),
+                temporary: dir.join("gone.fos.part"),
+                bytes: b"kept".to_vec(),
+                copied: Some("gone.fos".into()),
+            },
+        );
+        assert_eq!(std::fs::read(dir.join("gone.fos")).unwrap(), b"kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A copy an earlier run's kill cut short leaves `<save>.part`: removed at the next start,
+    /// the saves and other files left.
+    #[test]
+    fn copies_cut_short_by_an_earlier_kill_are_removed() {
+        let dir = std::env::temp_dir().join(format!("nv-save-part-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["a.fos", "a.fos.part", "b.NVSE.part", "notes.part", "c.fos"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let mut removed = clean_parts(&dir);
+        removed.sort();
+        assert_eq!(
+            removed,
+            vec!["a.fos.part".to_string(), "b.NVSE.part".to_string()]
+        );
+        for kept in ["a.fos", "notes.part", "c.fos"] {
+            assert!(dir.join(kept).exists(), "{kept}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

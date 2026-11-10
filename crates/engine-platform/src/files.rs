@@ -504,12 +504,12 @@ pub fn move_file_a(e: &mut Engine, existing: Ptr, new: Ptr) -> u32 {
     let data = read_whole(e, &from).expect("the source file's bytes");
     state!(e).disk.deleted.remove(&kt);
     state!(e).disk.files.insert(kt.clone(), data);
+    state!(e).disk.changed(&kt);
     state!(e).disk.files.remove(&kf);
     state!(e).disk.entries.remove(&kf);
     state!(e).disk.player.remove(&kf);
     state!(e).disk.deleted.insert(kf.clone());
     state!(e).disk.gone(&kf);
-    state!(e).disk.changed(&kt);
     removed(e, &kf, entry.as_ref());
     match entry {
         Some(entry) => {
@@ -2501,6 +2501,65 @@ mod tests {
         assert_eq!(e.kernel.last_error, ERROR_ACCESS_DENIED);
     }
 
+    /// Every change to the run's files in the platform's code stamps them (`Disk::changed`,
+    /// `Disk::gone`): the host's copy-out of saves looks only at the stamps, so a path that
+    /// changed a file without one would leave that save uncopied, silently. Each line outside the
+    /// tests that inserts into, removes from or writes through `disk.files` or `disk.deleted`
+    /// must have a `changed(` or `gone(` within five lines; and no other file of the crate
+    /// changes them outside its tests.
+    #[test]
+    fn every_path_that_changes_the_runs_files_stamps_them() {
+        let mutation = |line: &str| {
+            [".files.", ".deleted."].iter().any(|field| {
+                line.split(field).skip(1).any(|rest| {
+                    [
+                        "insert(", "remove(", "entry(", "get_mut(", "clear(", "retain(", "append(",
+                        "extend(",
+                    ]
+                    .iter()
+                    .any(|op| rest.starts_with(op))
+                })
+            })
+        };
+        let source = include_str!("files.rs");
+        let code: Vec<&str> = source
+            .lines()
+            .take_while(|l| !l.starts_with("#[cfg(test)]"))
+            .collect();
+        let mut unstamped = Vec::new();
+        for (i, line) in code.iter().enumerate() {
+            if line.trim_start().starts_with("//") || !mutation(line) {
+                continue;
+            }
+            let near = code[i.saturating_sub(5)..(i + 6).min(code.len())]
+                .iter()
+                .any(|l| l.contains("changed(") || l.contains("gone("));
+            if !near {
+                unstamped.push(format!("files.rs:{}: {}", i + 1, line.trim()));
+            }
+        }
+        assert!(
+            unstamped.is_empty(),
+            "changes without a stamp: {unstamped:#?}"
+        );
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if name == "files.rs" || !name.ends_with(".rs") || name.ends_with("_tests.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let code = text.split("#[cfg(test)]").next().unwrap_or("");
+            for line in code.lines() {
+                assert!(
+                    !(line.contains("disk") && mutation(line)),
+                    "{name} changes the run's files outside files.rs: {line}"
+                );
+            }
+        }
+    }
+
     /// Every change to the run's files moves the change count and stamps the file
     /// (`Disk::changes`, `Disk::stamps`, what the host's copy-out of saves looks at each frame);
     /// reading changes nothing; a file renamed away or deleted has no stamp.
@@ -2544,11 +2603,12 @@ mod tests {
         copy_file_a(&mut e, Ptr::new(name), copy, 0);
         let kc = key(br"q:\nv-rs-stamp-dir\copy.txt");
         assert_eq!(stamp(&e, &kc), Some(changes(&e)), "copied in");
+        let copied = changes(&e);
         let moved = path(&mut e, br"Q:\nv-rs-stamp-dir\moved.txt");
         move_file_a(&mut e, copy, moved);
         let km = key(br"q:\nv-rs-stamp-dir\moved.txt");
         assert_eq!(stamp(&e, &kc), None, "renamed away");
-        assert_eq!(stamp(&e, &km), Some(changes(&e)), "renamed in");
+        assert!(stamp(&e, &km).is_some_and(|s| s > copied), "renamed in");
         let at = changes(&e);
         delete_file_a(&mut e, moved);
         assert!(changes(&e) > at, "deleted");

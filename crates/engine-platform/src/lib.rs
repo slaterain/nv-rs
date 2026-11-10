@@ -132,6 +132,29 @@ pub struct State {
     pub process: process::Process,
 }
 
+/// What runs before the platform layer ends the process itself, which it does in one place: the
+/// game's window closed (its X button, Alt-F4: `d3d9real`'s window procedure, `WM_CLOSE`). The
+/// host registers the copy-out of saves' flush here (`host::save_out`), so a save handed to its
+/// thread just before is on disk when the process ends. Every other end of a run goes through
+/// the host's own end of main's frames, which flushes too.
+static EXIT_HOOKS: std::sync::Mutex<Vec<fn()>> = std::sync::Mutex::new(Vec::new());
+
+/// Registers `hook` to run before the platform layer ends the process ([`EXIT_HOOKS`]).
+pub fn on_exit(hook: fn()) {
+    EXIT_HOOKS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push(hook);
+}
+
+/// Runs the hooks [`on_exit`] registered, in order (the platform layer is ending the process).
+pub fn run_exit_hooks() {
+    let hooks = EXIT_HOOKS.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    for hook in hooks {
+        hook();
+    }
+}
+
 /// The [`State`] in an engine's `Kernel::platform`.
 #[inline]
 pub fn state(slot: &Option<Box<dyn std::any::Any>>) -> &State {
