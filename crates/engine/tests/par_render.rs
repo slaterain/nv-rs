@@ -20,16 +20,17 @@
 //! each chunked walk (several helper counts, so several chunkings, two split sizes, the check and
 //! serial modes) must record the same list, all of it on main.
 //!
-//! Out-of-order completion is forced: the most-alpha callback sleeps 100 ms on a helper for the
-//! fade node that is the big node's first child, so the helper walking the first chunk finishes
-//! after the others have walked the last one (a sequence number taken on the helpers shows it).
+//! Out-of-order completion is forced: while a walk is chunked the most-alpha callback sleeps 100 ms
+//! for the fade node that is the big node's first child, so whoever walks the first chunk (main
+//! walks chunks too) finishes after the others have walked the last one (a sequence number taken
+//! at both shows it).
 //!
 //! One test: the helper pool is one per process, made from the first engine that forks.
 
 use engine as _;
 use engine_core::prelude::*;
 use engine_typed::culling;
-use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::SeqCst};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -56,6 +57,12 @@ const NODE_ON_VISIBLE: u32 = 0x00a5_dbe0;
 const GEOMETRY_ON_VISIBLE: u32 = 0x00a7_fd90;
 const FADE_NODE_ON_VISIBLE: u32 = 0x00b4_e490;
 const MULTI_BOUND_NODE_ON_VISIBLE: u32 = 0x00c4_6f60;
+/// `BSTreeNode::OnVisible`, the tree manager's getter, the manager singleton and the trees
+/// setting's byte.
+const TREE_NODE_ON_VISIBLE: u32 = 0x0066_bf50;
+const TREE_MANAGER_GET: u32 = 0x0066_4840;
+const TREE_MANAGER: u32 = 0x011d_5c48;
+const TREES_SETTING: u32 = 0x011d_5cec;
 /// `NiAVObject::Cull`: the walk's entry.
 const CULL: u32 = 0x00a5_9e00;
 
@@ -152,13 +159,22 @@ static RECORD: Mutex<Vec<Rec>> = Mutex::new(Vec::new());
 static MAIN_PROCESS: AtomicU32 = AtomicU32::new(0);
 /// The fade nodes whose most alpha is 0.5 (they group their alphas); the rest answer 1.
 static GROUPING: Mutex<Vec<u32>> = Mutex::new(Vec::new());
-/// The first chunk's slow fade node and the last chunk's, and the sequence numbers taken on the
-/// helpers when the slow one's sleep ended and when the last one ran (`u32::MAX`: not on a helper).
+/// The first chunk's slow fade node and the last chunk's, and the sequence numbers taken in a
+/// chunked walk when the slow one's sleep ended and when the last one ran (`u32::MAX`: not in one).
+/// `CHUNKED`: the walk under way is chunked (the switch on, or its check mode).
+static CHUNKED: AtomicBool = AtomicBool::new(false);
 static SLOW: AtomicU32 = AtomicU32::new(0);
 static LAST: AtomicU32 = AtomicU32::new(0);
 static SEQUENCE: AtomicU32 = AtomicU32::new(0);
+/// The tree manager stand-in (`00664840`): its calls and the managers it made.
+static TREE_MANAGER_CALLS: AtomicU32 = AtomicU32::new(0);
+static TREE_MANAGER_MADE: AtomicU32 = AtomicU32::new(0);
+/// The fade nodes' and shapes' bytes after the last walk (`walk`).
+static STATE_AFTER: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
 static SLOW_DONE: AtomicU32 = AtomicU32::new(u32::MAX);
 static LAST_SEEN: AtomicU32 = AtomicU32::new(u32::MAX);
+/// In a chunked walk the most-alpha callback stops (panics) at this fade node (0: none).
+static STOP_AT: AtomicU32 = AtomicU32::new(0);
 
 fn on_helper() -> bool {
     std::thread::current()
@@ -237,6 +253,19 @@ fn stand_ins(e: &mut Engine) {
         ret(n)
     });
     e.register(GETPTD_NOEXIT, |_, _| ret(0));
+    // Trees (`BSTreeNode::OnVisible` asks `0054ee20`): the trees setting's byte and the tree
+    // manager singleton, made by `00664840(1)` when there is none (a stand-in here, counted).
+    e.map(0x011d_5000, 0x1000);
+    e.register(TREE_MANAGER_GET, |e, a| {
+        TREE_MANAGER_CALLS.fetch_add(1, SeqCst);
+        if e.mem.u32(TREE_MANAGER) == 0 && a[0] & 0xff != 0 {
+            let manager = e.mem.alloc(0x20);
+            e.mem.set_u8(manager + 0x18, 1);
+            e.mem.set_u32(TREE_MANAGER, manager);
+            TREE_MANAGER_MADE.fetch_add(1, SeqCst);
+        }
+        ret(e.mem.u32(TREE_MANAGER))
+    });
     e.map(0x011c_1000, 0x1000);
     e.map(0x0101_1000, 0x2000);
     e.mem.set_u64(0x0101_1588, 0.5f64.to_bits());
@@ -271,11 +300,15 @@ fn stand_ins(e: &mut Engine) {
     e.register(WITHIN_FRUSTUM_FN, |e, a| {
         ret(u32::from(e.mem.u8(a[0] + SHAPE_ANSWER)))
     });
-    // The most alpha: 0.5 for the grouping nodes, 1 for the others. On a helper the first chunk's
-    // fade node sleeps first, and both marked nodes take a sequence number.
+    // The most alpha: 0.5 for the grouping nodes, 1 for the others. In a chunked walk the first
+    // chunk's fade node sleeps first, and both marked nodes take a sequence number.
     e.register(MOST_ALPHA_FN, |_, a| {
         let node = a[0];
-        if on_helper() {
+        if CHUNKED.load(SeqCst) {
+            assert!(
+                node != STOP_AT.load(SeqCst),
+                "the test stops a walker at this fade node"
+            );
             if node == SLOW.load(SeqCst) {
                 std::thread::sleep(Duration::from_millis(100));
                 SLOW_DONE.store(SEQUENCE.fetch_add(1, SeqCst), SeqCst);
@@ -385,6 +418,7 @@ struct Kinds {
     multi_bound_vt: u32,
     shape_vt: u32,
     stand_in_vt: u32,
+    tree_vt: u32,
     data: u32,
 }
 
@@ -502,6 +536,7 @@ fn tree(e: &mut Engine) -> Tree {
         multi_bound_vt: vtable(e, &[(0xd4, MULTI_BOUND_NODE_ON_VISIBLE)]),
         shape_vt: vtable(e, &[(0x9c, WITHIN_FRUSTUM_FN)]),
         stand_in_vt,
+        tree_vt: vtable(e, &[(0xd4, TREE_NODE_ON_VISIBLE)]),
         data: e.mem.alloc(0x40),
     };
     for (i, w) in [ONE, TWO, MINUS_TEN, HALF].iter().enumerate() {
@@ -587,6 +622,15 @@ fn tree(e: &mut Engine) -> Tree {
             let bound = kinds.multi_bound(e, 0, false, &mut shapes);
             asked_outside = *shapes.last().unwrap();
             kinds.multi_bound_node(e, ALL_VISIBLE, bound, &kids)
+        } else if i == 19 {
+            // A tree: walked on a walker when trees are on and the manager is there; logged for
+            // main (which makes the manager) when it is not; nothing when trees are off.
+            let kids = [
+                kinds.geometry(e, 0),
+                kinds.unaudited(e, 1),
+                kinds.geometry(e, 3),
+            ];
+            kinds.node(e, 0xac, kinds.tree_vt, 12.0, &kids)
         } else if i == 0 || i == 39 {
             let kids = [
                 kinds.geometry(e, 0),
@@ -701,8 +745,10 @@ fn walk(e: &mut Engine, t: &Tree, mode: &str, helpers: usize, min_children: u32)
     SLOW_DONE.store(u32::MAX, SeqCst);
     LAST_SEEN.store(u32::MAX, SeqCst);
     culling::par_set_for_tests(mode, helpers, min_children);
+    CHUNKED.store(mode == "on" || mode == "check", SeqCst);
     let before = e.mem.bytes(t.process, 0xc8);
     e.call(CULL, &args![t.root, t.process]);
+    CHUNKED.store(false, SeqCst);
     assert_eq!(
         e.mem.bytes(t.process, 0xc8),
         before,
@@ -715,6 +761,11 @@ fn walk(e: &mut Engine, t: &Tree, mode: &str, helpers: usize, min_children: u32)
         OUTSIDE,
         "{mode}"
     );
+    *STATE_AFTER.lock().unwrap() = t
+        .reset
+        .iter()
+        .map(|(at, bytes)| e.mem.bytes(*at, bytes.len() as u32))
+        .collect();
     culling::par_set_for_tests("off", 1, 16);
     std::mem::take(&mut *RECORD.lock().unwrap())
 }
@@ -724,6 +775,9 @@ fn chunked_walks_replay_the_serial_order() {
     let mut e = Engine::new();
     let t = tree(&mut e);
     let serial = walk(&mut e, &t, "off", 1, 16);
+    // What the walk writes on the objects (the fade nodes' fields, the shapes' kept verdicts),
+    // compared after each walk below too.
+    let serial_state = STATE_AFTER.lock().unwrap().clone();
     let count = |tag: Tag| serial.iter().filter(|r| r.tag == tag).count();
     // The reference has every kind of entry the replay must order.
     assert!(count(Tag::Register) >= 40, "registrations: {serial:?}");
@@ -774,19 +828,27 @@ fn chunked_walks_replay_the_serial_order() {
         "a split ends on an entry in another mode than main's"
     );
 
-    // The first fork makes the pool with 4 helpers; later ones use 1 to 4 of them, so the big
-    // node's 40 children are cut into 4, 8, 10 or 14 chunks. Three nodes split at 16+ children (the
-    // 40, the 20, and the 24 under the root's multi-bound node), one at 30+.
+    // The first fork makes the pool with 4 helpers; later ones use 1 to 4 of them and main, so
+    // the big node's 40 children are cut into 20, 14, 10 or 8 tasks. Three nodes fork at 16+
+    // children (the 40, the 20, and the 24 under the root's multi-bound node), and the nodes of
+    // 18 inside the 40 become tasks of its fork; at 30+ only the 40 forks; at 2+ the root itself
+    // forks, and every node below it with two children or more becomes tasks of that one fork.
+    let (_, _, _, main_chunks, below) = culling::par_counts_for_tests();
     for (helpers, min_children) in [(4, 16), (3, 16), (2, 16), (1, 16), (3, 30), (2, 2)] {
-        let (walks, _, _) = culling::par_counts_for_tests();
+        let (walks, _, _, _, below_before) = culling::par_counts_for_tests();
         let started = std::time::Instant::now();
         let got = walk(&mut e, &t, "on", helpers, min_children);
-        let (walks_now, _, _) = culling::par_counts_for_tests();
-        let splits = if min_children <= 20 { 3 } else { 1 };
+        let (walks_now, _, _, _, below_now) = culling::par_counts_for_tests();
+        let splits = if min_children == 16 { 3 } else { 1 };
+        assert_eq!(
+            below_now > below_before,
+            min_children != 30,
+            "{helpers} helpers, nodes of {min_children}+: nodes inside tasks made tasks"
+        );
         assert_eq!(
             walks_now - walks,
             splits,
-            "{helpers} helpers, nodes of {min_children}+: splits walked on the helpers"
+            "{helpers} helpers, nodes of {min_children}+: splits walked in chunks"
         );
         assert!(
             got.iter().all(|r| r.main),
@@ -796,17 +858,20 @@ fn chunked_walks_replay_the_serial_order() {
             got, serial,
             "{helpers} helpers, nodes of {min_children}+: the replay is the serial walk"
         );
+        assert!(
+            *STATE_AFTER.lock().unwrap() == serial_state,
+            "{helpers} helpers, nodes of {min_children}+: the fade nodes and shapes end as in the serial walk"
+        );
         let (slow, last) = (SLOW_DONE.load(SeqCst), LAST_SEEN.load(SeqCst));
         assert!(
             slow != u32::MAX && last != u32::MAX,
-            "{helpers} helpers: both marked fade nodes ran on helpers"
+            "{helpers} helpers: both marked fade nodes ran in chunk walks"
         );
-        if helpers >= 2 {
-            assert!(
-                last < slow,
-                "{helpers} helpers: the last chunk was walked before the first one finished"
-            );
-        }
+        // Main walks chunks too, so even one helper makes two walkers.
+        assert!(
+            last < slow,
+            "{helpers} helpers: the last chunk was walked before the first one finished"
+        );
         eprintln!(
             "{helpers} helpers, nodes of {min_children}+: {} entries, same as serial, {:?}",
             got.len(),
@@ -814,8 +879,16 @@ fn chunked_walks_replay_the_serial_order() {
         );
     }
 
+    // Main walked tasks itself (it starts on the first while the helpers wake), and nodes inside
+    // tasks made tasks of their children.
+    assert!(
+        culling::par_counts_for_tests().3 > main_chunks,
+        "main walked no task in any of the chunked walks"
+    );
+    assert!(culling::par_counts_for_tests().4 > below);
+
     // No split: a node must have this many children.
-    let (walks, _, _) = culling::par_counts_for_tests();
+    let (walks, _, _, _, _) = culling::par_counts_for_tests();
     assert_eq!(walk(&mut e, &t, "on", 3, 41), serial);
     assert_eq!(culling::par_counts_for_tests().0, walks);
 
@@ -825,9 +898,9 @@ fn chunked_walks_replay_the_serial_order() {
     assert_eq!(culling::par_counts_for_tests().0, walks);
 
     // The check mode: the chunked logs against one helper's walk of the same children.
-    let (_, compared, differed) = culling::par_counts_for_tests();
+    let (_, compared, differed, _, _) = culling::par_counts_for_tests();
     let got = walk(&mut e, &t, "check", 3, 16);
-    let (_, compared_now, differed_now) = culling::par_counts_for_tests();
+    let (_, compared_now, differed_now, _, _) = culling::par_counts_for_tests();
     assert_eq!(
         compared_now - compared,
         3,
@@ -837,6 +910,67 @@ fn chunked_walks_replay_the_serial_order() {
     assert_eq!(differed_now, 0);
     assert_eq!(got, serial);
 
+    // A walker that stops inside a task: the stop reaches main, the other walkers stop taking
+    // tasks (nothing hangs), and the next walk is whole again. (The stopped walk leaves main's
+    // process mid-walk; the test puts its bytes back, as a run would end there.)
+    let process = e.mem.bytes(t.process, 0xc8);
+    let stack = e.guest_stack_mark();
+    STOP_AT.store(LAST.load(SeqCst), SeqCst);
+    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        walk(&mut e, &t, "on", 3, 16)
+    }));
+    STOP_AT.store(0, SeqCst);
+    CHUNKED.store(false, SeqCst);
+    assert!(stopped.is_err(), "a walker's stop reaches main");
+    e.guest_stack_restore(stack);
+    e.mem.write(t.process, &process);
+    assert_eq!(walk(&mut e, &t, "on", 3, 16), serial);
+
     // And the reference again: the tree reset makes it repeat.
     assert_eq!(walk(&mut e, &t, "off", 1, 16), serial);
+
+    // The tree. Above, trees were off (the setting's byte 0): nothing under it was walked, on
+    // main or a walker, and the manager was never asked for on a walker.
+    let tree_children = |records: &[Rec]| records.len() > serial.len();
+    // Trees on, the manager there: the serial walk asks for it on main; a chunked walk walks the
+    // tree on its walker, which reads the manager without asking (no call at all).
+    e.mem.set_u8(TREES_SETTING, 1);
+    let manager = e.mem.alloc(0x20);
+    e.mem.set_u8(manager + 0x18, 1);
+    e.mem.set_u32(TREE_MANAGER, manager);
+    let calls = TREE_MANAGER_CALLS.load(SeqCst);
+    let with_trees = walk(&mut e, &t, "off", 1, 16);
+    assert!(
+        tree_children(&with_trees),
+        "trees on: the tree's children are walked"
+    );
+    assert_eq!(TREE_MANAGER_CALLS.load(SeqCst), calls + 1);
+    let got = walk(&mut e, &t, "on", 3, 16);
+    assert_eq!(got, with_trees, "trees on: the tree walked on a walker");
+    assert!(got.iter().all(|r| r.main));
+    assert_eq!(
+        TREE_MANAGER_CALLS.load(SeqCst),
+        calls + 1,
+        "the walker read the manager without asking main's getter"
+    );
+    // Trees on, no manager yet: the walker logs the tree, main runs it and makes the manager,
+    // once; the walk is the serial one.
+    e.mem.set_u32(TREE_MANAGER, 0);
+    let (calls, made) = (
+        TREE_MANAGER_CALLS.load(SeqCst),
+        TREE_MANAGER_MADE.load(SeqCst),
+    );
+    let got = walk(&mut e, &t, "on", 3, 16);
+    assert_eq!(
+        got, with_trees,
+        "no manager: the tree logged and run on main"
+    );
+    assert!(got.iter().all(|r| r.main));
+    assert_eq!(TREE_MANAGER_CALLS.load(SeqCst), calls + 1);
+    assert_eq!(
+        TREE_MANAGER_MADE.load(SeqCst),
+        made + 1,
+        "the manager made once"
+    );
+    e.mem.set_u8(TREES_SETTING, 0);
 }

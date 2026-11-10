@@ -325,6 +325,12 @@ pub struct Engine {
     /// [`GUEST_STACK_SIZE`]: the region's lowest address and its size. A render helper's
     /// ([`Engine::place_thread_memory`]); `None` on every game thread's engine.
     placed_stack: Option<(u32, u32)>,
+    /// The game thread index whose stack for locals is the placed one (the first that took a
+    /// local on this engine): with stepped threads a helper's `thread_index` is the shared
+    /// kernel's current thread, so a local taken while another thread is current would build a
+    /// second stack on the same region. It cannot today (a helper runs only inside main's fork);
+    /// [`Engine::push_frame`] stops the run if it ever did.
+    placed_owner: Option<usize>,
     /// The typed migration's seam on this engine: which families are on and may go direct
     /// ([`crate::typed`]).
     pub(crate) typed: crate::typed::State,
@@ -471,6 +477,7 @@ impl Engine {
             stack_frames: Vec::new(),
             guest_stacks: Vec::new(),
             placed_stack: None,
+            placed_owner: None,
             typed: Default::default(),
             real: None,
             extend: Default::default(),
@@ -848,6 +855,7 @@ impl Engine {
             stack_frames: Vec::new(),
             guest_stacks: Vec::new(),
             placed_stack: None,
+            placed_owner: None,
             typed: self.typed.for_thread(),
             extend: self.extend.for_thread(),
             real,
@@ -1460,7 +1468,15 @@ impl Engine {
             Some(stack) => stack,
             None => {
                 let (base, size) = match self.placed_stack {
-                    Some(placed) => placed,
+                    Some(placed) => {
+                        assert!(
+                            self.placed_owner.map_or(true, |owner| owner == thread),
+                            "a render helper's stack for locals is game thread {:?}'s, not {thread}'s",
+                            self.placed_owner
+                        );
+                        self.placed_owner = Some(thread);
+                        placed
+                    }
                     None => (self.mem.alloc(GUEST_STACK_SIZE), GUEST_STACK_SIZE),
                 };
                 (base, base + size - STACK_TOP_RESERVE)

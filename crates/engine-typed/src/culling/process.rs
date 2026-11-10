@@ -125,7 +125,11 @@ fn on_visible(e: &mut Engine, this: Ptr<BSCullingProcess>, object: Ptr<NiAVObjec
 /// (`00c46f60`), else through the vtable.
 #[inline(always)]
 pub(crate) fn object_on_visible(e: &mut Engine, object: Ptr<NiAVObject>, process: u32) {
-    match crate::slot_target(e, object.addr(), SLOT_ON_VISIBLE) {
+    let target = crate::slot_target(e, object.addr(), SLOT_ON_VISIBLE);
+    // `NV_PAR_RENDER=time`: an outline records every object but a geometry.
+    let _outline = (super::probe::on() && target != 0x00a7_fd90)
+        .then(|| super::probe::object_begins(e, object.addr(), target));
+    match target {
         0x00a5_dbe0 => typed_call!(
             FAMILY,
             0x00a5_dbe0,
@@ -147,6 +151,12 @@ pub(crate) fn object_on_visible(e: &mut Engine, object: Ptr<NiAVObject>, process
             super::visible::multibound_node_on_visible(e, object.cast(), Ptr::new(process))
         ),
         target => {
+            // A tree met by a parallel walk's walker is walked there (`par::tree_on_walker`).
+            if target == super::par::TREE_NODE_ON_VISIBLE
+                && super::par::tree_on_walker(e, object.cast(), process)
+            {
+                return;
+            }
             // Not audited for other cores: a parallel walk logs it for main (`par`), unless it is
             // the fade node's.
             if !super::par::defer(e, object.addr(), process, target) {
@@ -181,7 +191,8 @@ fn active_planes(e: &Engine, this: Ptr<BSCullingProcess>) -> u32 {
 /// as the compound frustum says (its active-plane state kept around the test); with no frustum in
 /// use any more and no plane active the object is visible too.
 pub fn bs_process(e: &mut Engine, this: Ptr<BSCullingProcess>, object: Ptr<NiAVObject>) {
-    let _walk = super::probe::on().then(|| super::probe::walk_begins(e, object.addr()));
+    let _walk =
+        super::probe::on().then(|| super::probe::walk_begins(e, object.addr(), this.addr()));
     let mode = e.get(this, BSCullingProcess::kCullMode);
     if mode == MODE_NONE_VISIBLE || mode == MODE_ALL_VISIBLE {
         if e.get(this, BSCullingProcess::kCullMode) == MODE_ALL_VISIBLE {

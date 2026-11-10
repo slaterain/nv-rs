@@ -47,6 +47,9 @@ pub fn cull(e: &mut Engine, this: Ptr<NiAVObject>, process: Ptr<NiCullingProcess
                 super::process::bs_process(e, process.cast(), this)
             );
         } else {
+            // Another process class: its walk is timed too (`NV_PAR_RENDER=time`).
+            let _walk = super::probe::on()
+                .then(|| super::probe::walk_begins(e, this.addr(), process.addr()));
             e.vcall(process.addr(), SLOT_PROCESS, &args![this]);
         }
     }
@@ -67,7 +70,6 @@ pub fn node_on_visible(e: &mut Engine, this: Ptr<NiNode>, process: Ptr<NiCulling
     if super::par::wants_split(count) && super::par::split(e, this, process.addr(), count) {
         return;
     }
-    let _nest = super::par::nest();
     for index in 0..count {
         let child = child(e, this, index);
         if !child.is_null() {
