@@ -280,8 +280,12 @@ too. None has been seen in a port run: the evidence is the exe and a test with r
   is freed into the second. In the port two ids share a bucket when they differ by a multiple of 37
   (game threads are numbered from 1, render helpers from 65,537), so it is rare today; the original's
   Windows ids collide more often. With the row each OS thread keeps the heap it found (for its run,
-  its game thread and until the memory manager's teardown, `00aa3a40`), and the map's look-up and
-  insert run under one lock: the map is filled as in the original, and the teardown frees every heap.
+  its game thread, and until the next install or the memory manager's teardown, `00aa3a40`). The
+  exe's own look-up and insert run under one lock, with the stepped host's time slice taken out
+  around them (as the render helpers' fork does for its caller), so no turn ends while the lock is
+  held. So the map is filled as in the original, and the teardown frees every heap. A heap looked up
+  while a teardown runs is not kept. Not fixed: the teardown's own walk of the map, racing another
+  thread's first call, is the original's race and stays.
   After its first call a thread pays one thread-local read, where the original makes an import call
   and a map look-up through three virtual calls.
 - **The debug texts and the console.** The debug texts' queue is handled and timed out on the main
@@ -289,7 +293,9 @@ too. None has been seen in a port run: the evidence is the exe and a test with r
   at `011f33dc` only while the debug texts are shown; `DebugText::Print` (`00a0f8b0`) and the console
   print (`0071d0a0`, which scripts and the script extender's commands print with) take none, from any
   thread. With the row the four run whole inside that section (it is recursive: their own takes inside
-  stay).
+  stay). Two differences from the plugin: the console print is wrapped whole, its log-file write
+  included, where the plugin takes the section from the line break on; and the functions' own
+  takes, made only while the debug texts show, stay, where the plugin removes them.
 - **The face-gen lock's count.** `00652140` takes the face-gen lock and counts its depth (`011d59dc`)
   up, `00652160` tries it and counts up when it got it, `00652190` releases it and only then counts
   down, outside the lock. A release and a take on two threads at once lose a count. The memory-freeing
