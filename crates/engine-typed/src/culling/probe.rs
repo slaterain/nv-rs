@@ -80,7 +80,6 @@ struct Splits {
     replay_ns: u64,
     busy_ns: u64,
     main_ns: u64,
-    early: u64,
     tasks: u64,
     joined: u64,
     wake_ns: u64,
@@ -96,7 +95,6 @@ impl Splits {
         replay_ns: 0,
         busy_ns: 0,
         main_ns: 0,
-        early: 0,
         tasks: 0,
         joined: 0,
         wake_ns: 0,
@@ -111,8 +109,6 @@ pub(crate) struct SplitTimes {
     pub children: usize,
     pub tasks: usize,
     pub entries: usize,
-    /// Of the entries, those main replayed inside the fork.
-    pub early: usize,
     pub fork: Duration,
     pub replay: Duration,
     pub busy_ns: u64,
@@ -282,7 +278,6 @@ impl Drop for Walk {
         row.splits.replay_ns += splits.replay_ns;
         row.splits.busy_ns += splits.busy_ns;
         row.splits.main_ns += splits.main_ns;
-        row.splits.early += splits.early;
         row.splits.tasks += splits.tasks;
         row.splits.joined += splits.joined;
         row.splits.wake_ns += splits.wake_ns;
@@ -318,7 +313,6 @@ pub(crate) fn split_walked(t: &SplitTimes) {
         splits.replay_ns += nanos(t.replay);
         splits.busy_ns += t.busy_ns;
         splits.main_ns += t.main_ns;
-        splits.early += t.early as u64;
         splits.joined += t.joined;
         splits.wake_ns += t.wake_ns;
         s.set(splits);
@@ -444,6 +438,31 @@ fn print_outline(nodes: &[Node], (root, process): (u32, u32), walk_ns: u64) {
             ns as f64 / 1000.0
         ));
     }
+    // What the replays ran besides registrations (the unaudited `OnVisible`s), by kind: the
+    // outermost ones only (their own walks are inside their time).
+    let mut replayed: HashMap<(u32, u32), (u64, u64)> = HashMap::new();
+    let mut inside: Option<u32> = None;
+    for n in nodes {
+        if inside.is_some_and(|depth| n.depth > depth) {
+            continue;
+        }
+        inside = None;
+        if n.replayed {
+            let sum = replayed.entry((n.vtable, n.target)).or_default();
+            sum.0 += 1;
+            sum.1 += n.ns;
+            inside = Some(n.depth);
+        }
+    }
+    let mut replayed: Vec<_> = replayed.into_iter().collect();
+    replayed.sort_by_key(|(_, (_, ns))| std::cmp::Reverse(*ns));
+    out.push_str("\n  unaudited OnVisible run by the replays, by vtable and OnVisible:");
+    for ((vtable, target), (count, ns)) in replayed {
+        out.push_str(&format!(
+            "\n    {vtable:08x} {target:08x}: {count}, {:.1} us",
+            ns as f64 / 1000.0
+        ));
+    }
     println!("{out}");
 }
 
@@ -523,9 +542,8 @@ fn print_table(table: &Table) {
                 a_walk(s.refused[2]),
             ));
             out.push_str(&format!(
-                "\n      entries replayed inside the fork {:.0} a split; tasks {:.1} a split; main walked {:.1} us a walk of it; helpers that took a task {:.2} a split, \
+                "\n      tasks {:.1} a split; main walked {:.1} us a walk of it; helpers that took a task {:.2} a split, \
                  each its first {:.1} us after the split was made",
-                each(s.early),
                 each(s.tasks),
                 per(s.main_ns),
                 each(s.joined),
