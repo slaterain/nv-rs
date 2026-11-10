@@ -30,7 +30,7 @@ const FORM_ID: u32 = 0xc;
 const ACTOR_BASE_CONTAINER: u32 = 0x64;
 const CONT_CONTAINER: u32 = 0x30;
 const FORM_TYPE_CONT: u8 = 0x1b;
-const IS_ACTOR: u32 = 0x100;
+use crate::vtable::IS_ACTOR;
 /// `TESContainer::formCountList` (`+4`: a `tList<FormCount>`; `FormCount`: count (`+0`), form
 /// (`+4`)).
 const CONTAINER_LIST: u32 = 4;

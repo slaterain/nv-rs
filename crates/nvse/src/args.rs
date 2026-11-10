@@ -391,7 +391,10 @@ fn check_form(e: &mut Engine, kind: u32, form: u32) -> Option<u32> {
     use form_type::*;
     let t = type_of(e, form);
     let is = |x: u8| t == x;
-    let bound = |e: &mut Engine| e.vcall(form, 0xe8, &args![]).bool();
+    let bound = |e: &mut Engine| {
+        e.vcall(form, crate::vtable::IS_BOUND_OBJECT, &args![])
+            .bool()
+    };
     let ok = match kind {
         0x03 => is_inventory_type(t),
         0x04 => !(t < TES_OBJECT_REFR || (t > FLAME_PROJECTILE && t != CONTINUOUS_BEAM_PROJECTILE)),
@@ -797,6 +800,41 @@ mod tests {
 
     fn read(e: &mut Engine) -> Extracted {
         v_extract_args_ex(e, PARAMS, DATA, OFFSET, SCRIPT, LIST, false)
+    }
+
+    /// The parameter checks that ask `IsBoundObject` (kinds 0x15 and 0x35,
+    /// `kParamType_NonFormList`): the form's vtable answers at `+0xE8` (written as a number, not
+    /// through the constant), every other entry stops the test if it is called. A bound object
+    /// passes both (not a form list for 0x35); an unbound one passes neither.
+    #[test]
+    fn bound_object_checks_call_is_bound_object() {
+        const VT: u32 = 0x0200_7000;
+        const FN_TRUE: u32 = 0x0060_0000;
+        const FN_FALSE: u32 = 0x0060_0004;
+        const FN_STOP: u32 = 0x0060_0008;
+        let mut e = engine();
+        e.register(FN_TRUE, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register(FN_FALSE, |_, _| Ret::default());
+        e.register(FN_STOP, |_, _| {
+            panic!("a vtable entry other than IsBoundObject was called")
+        });
+        for slot in (0..0x200).step_by(4) {
+            e.mem.set_u32(VT + slot, FN_STOP);
+        }
+        e.mem.set_u32(VT + 0xe8, FN_TRUE);
+        e.mem.set_u32(FORM, VT);
+        e.mem.set_u8(FORM + 4, 0x28);
+        assert_eq!(check_form(&mut e, 0x15, FORM), Some(FORM));
+        assert_eq!(check_form(&mut e, 0x35, FORM), Some(FORM));
+        e.mem.set_u8(FORM + 4, 0x55);
+        assert_eq!(check_form(&mut e, 0x35, FORM), None, "a form list");
+        e.mem.set_u8(FORM + 4, 0x28);
+        e.mem.set_u32(VT + 0xe8, FN_FALSE);
+        assert_eq!(check_form(&mut e, 0x15, FORM), None);
+        assert_eq!(check_form(&mut e, 0x35, FORM), None);
     }
 
     /// Immediate numbers, a short, a byte and a string, each in its own width.

@@ -52,7 +52,7 @@ const LIST_NODE_SIZE: u32 = 8;
 const ACTOR_EQUIP_ITEM: u32 = 0x0088_c650;
 const ACTOR_UNEQUIP_ITEM: u32 = 0x0088_c790;
 const REFR_REMOVE_ITEM: u32 = 0x17c;
-const IS_ACTOR: u32 = 0x100;
+use crate::vtable::IS_ACTOR;
 const FORM_TYPE_AMMO: u8 = 0x29;
 
 /// `InventoryReference::Data`: the item, its changes entry and its extra data list.
