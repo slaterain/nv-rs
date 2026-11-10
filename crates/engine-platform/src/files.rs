@@ -153,28 +153,79 @@ fn file_size(e: &Engine, k: &[u8]) -> u64 {
 }
 
 /// Up to `count` bytes of the file at `k` from `start` (fewer at the end, none past it): the
-/// run's copy, else the player's file opened for reading only (read from disk).
-fn read_range(e: &Engine, k: &[u8], start: u64, count: u32) -> Vec<u8> {
+/// run's copy, else the player's file opened for reading only (read from disk through `handle`'s
+/// kept host file, [`Kept`]).
+fn read_range(e: &mut Engine, handle: u32, k: &[u8], start: u64, count: u32) -> Vec<u8> {
     if let Some(data) = state_ref!(e).disk.files.get(k) {
         let start = (start as usize).min(data.len());
         let end = start.saturating_add(count as usize).min(data.len());
         return data[start..end].to_vec();
     }
-    let Some(path) = state_ref!(e).disk.player.get(k) else {
+    let Some(path) = state_ref!(e).disk.player.get(k).cloned() else {
         return vec![];
     };
-    use std::io::{Read, Seek, SeekFrom};
-    let mut file = std::fs::File::open(path).unwrap_or_else(|err| {
-        panic!("ReadFile: the player's file {path:?} can no longer be read: {err}")
-    });
-    let size = file.metadata().map_or(0, |m| m.len());
-    let start = start.min(size);
-    let take = u64::from(count).min(size - start);
-    file.seek(SeekFrom::Start(start))
-        .unwrap_or_else(|err| panic!("ReadFile: seeking in {path:?}: {err}"));
+    let kept = open_file(e, handle).and_then(|file| file.kept.0.clone());
+    let file = match kept {
+        Some(file) => file,
+        None => {
+            let file = std::sync::Arc::new(std::fs::File::open(&path).unwrap_or_else(|err| {
+                panic!("ReadFile: the player's file {path:?} can no longer be read: {err}")
+            }));
+            if let Some(open) = open_file(e, handle) {
+                open.kept = Kept(Some(file.clone()));
+            }
+            file
+        }
+    };
+    read_at(&file, &path, start, count)
+}
+
+/// A read-only handle's host file for the player's file it reads ([`OpenFile::kept`]): opened at
+/// the handle's first `ReadFile` and kept until the handle is closed, as the handle Windows gives
+/// the game is one open file. Before (to 2026-11-09) every `ReadFile` opened the file by its path
+/// again, read and closed it: in the Goodsprings load (route2, 12,300 reads through OEI's file
+/// thread) the opens and closes were about 0.8 s of that thread's 2.8 s busy, and each fresh open
+/// read through the file cache cold (measure/stutter/REAL-THREADS.md, "Border loads"). The bytes
+/// read are the same: each read is at the handle's position, of the same count, in the same order.
+/// A cache, not part of the handle's state: two handles compare equal whatever they keep.
+#[derive(Debug, Clone, Default)]
+pub struct Kept(Option<std::sync::Arc<std::fs::File>>);
+
+impl PartialEq for Kept {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+impl Eq for Kept {}
+
+/// Reads above this many bytes are first cut to the file's size (from the open file), so a
+/// count far past the end does not make a buffer that large; smaller reads need no size.
+const READ_SIZE_CHECK: u32 = 1 << 20;
+
+/// Up to `count` bytes of the open player's file `file` (at `path`, for messages) from `start`:
+/// fewer at the end, none past it.
+fn read_at(file: &std::fs::File, path: &std::path::Path, start: u64, count: u32) -> Vec<u8> {
+    let mut take = u64::from(count);
+    if count > READ_SIZE_CHECK {
+        let size = file.metadata().map_or(0, |m| m.len());
+        take = take.min(size.saturating_sub(start));
+    }
     let mut out = vec![0u8; take as usize];
-    file.read_exact(&mut out)
-        .unwrap_or_else(|err| panic!("ReadFile: reading {path:?}: {err}"));
+    let mut got = 0usize;
+    while got < out.len() {
+        let at = start + got as u64;
+        #[cfg(windows)]
+        let read = std::os::windows::fs::FileExt::seek_read(file, &mut out[got..], at);
+        #[cfg(unix)]
+        let read = std::os::unix::fs::FileExt::read_at(file, &mut out[got..], at);
+        match read {
+            Ok(0) => break,
+            Ok(n) => got += n,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(err) => panic!("ReadFile: reading {path:?}: {err}"),
+        }
+    }
+    out.truncate(got);
     out
 }
 
@@ -456,6 +507,8 @@ pub struct OpenFile {
     /// The time of this handle's last `WriteFile` ([`file_clock`]), published to the file's
     /// [`Entry`] when the handle is closed ([`closed`]); `None` while it wrote nothing.
     pub wrote: Option<u64>,
+    /// The player's file this handle reads, once read ([`Kept`]).
+    pub kept: Kept,
 }
 
 fn key(path: &[u8]) -> Vec<u8> {
@@ -1491,6 +1544,7 @@ pub fn create_file_a(
                 read: access & GENERIC_READ != 0,
                 write: false,
                 wrote: None,
+                kept: Kept::default(),
             })));
         }
     }
@@ -1558,6 +1612,7 @@ pub fn create_file_a(
         read: access & GENERIC_READ != 0,
         write: access & GENERIC_WRITE != 0,
         wrote: None,
+        kept: Kept::default(),
     })))
 }
 
@@ -1666,11 +1721,11 @@ pub fn set_file_pointer(e: &mut Engine, handle: u32, low: u32, high: Ptr, method
     };
     let path = file.path.clone();
     let position = file.position;
-    let size = file_size(e, &path);
+    // The size only from the end: it is a look at the disk for a player's file.
     let base = match method {
         0 => 0i64,
         1 => position as i64,
-        2 => size as i64,
+        2 => file_size(e, &path) as i64,
         _ => {
             e.kernel.last_error = ERROR_INVALID_PARAMETER;
             return INVALID_SET_FILE_POINTER;
@@ -1781,7 +1836,7 @@ pub fn read_file(
             return 0;
         }
     };
-    let bytes = read_range(e, &path, position, count);
+    let bytes = read_range(e, handle, &path, position, count);
     e.mem.write(buffer.addr(), &bytes);
     let got = bytes.len() as u32;
     if let Some(file) = open_file(e, handle) {
@@ -2577,6 +2632,69 @@ mod tests_player_files {
         assert_eq!(compare_file_time(&mut e, Ptr::new(a), Ptr::new(b)), 1);
         assert_eq!(compare_file_time(&mut e, Ptr::new(b), Ptr::new(a)), -1);
         assert_eq!(compare_file_time(&mut e, Ptr::new(a), Ptr::new(a)), 0);
+    }
+
+    #[test]
+    fn a_read_only_handle_keeps_its_file_and_reads_the_same_bytes() {
+        let mut e = Engine::new();
+        let real = concat!(env!("CARGO_MANIFEST_DIR"), "/src/files.rs");
+        let bytes = std::fs::read(real).unwrap();
+        assert!(bytes.len() > 4096);
+        let name = e.mem.alloc(0x200);
+        e.mem.set_cstr(name, real.as_bytes());
+        let open = |e: &mut Engine| {
+            create_file_a(e, Ptr::new(name), GENERIC_READ, 1, 0, OPEN_EXISTING, 0x80, 0)
+        };
+        let (a, b) = (open(&mut e), open(&mut e));
+        assert!(open_file(&mut e, a).unwrap().kept.0.is_none());
+        let buffer = e.mem.alloc(bytes.len() as u32 + 0x10);
+        let count = e.mem.alloc(4);
+        // Handle a in reads of 1000 (the last one short), b at its own position in between.
+        let mut got = Vec::new();
+        loop {
+            assert_eq!(
+                read_file(&mut e, a, Ptr::new(buffer), 1000, Ptr::new(count), 0),
+                1
+            );
+            let n = e.mem.u32(count);
+            got.extend(e.mem.bytes(buffer, n));
+            if n < 1000 {
+                break;
+            }
+            assert_eq!(
+                read_file(&mut e, b, Ptr::new(buffer), 7, Ptr::new(count), 0),
+                1
+            );
+        }
+        assert_eq!(got, bytes);
+        assert!(open_file(&mut e, a).unwrap().kept.0.is_some());
+        let at = set_file_pointer(&mut e, b, 0, Ptr::new(0), 1) as usize;
+        assert_eq!(at, 7 * (bytes.len() / 1000));
+        assert_eq!(
+            read_file(&mut e, b, Ptr::new(buffer), 7, Ptr::new(count), 0),
+            1
+        );
+        assert_eq!(e.mem.bytes(buffer, 7), bytes[at..at + 7].to_vec());
+        // A count past the size check from 10 bytes before the end: the 10 bytes; past the end
+        // nothing, the position where it was put.
+        let back = (-10i32) as u32;
+        set_file_pointer(&mut e, a, back, Ptr::new(0), 2);
+        assert_eq!(
+            read_file(&mut e, a, Ptr::new(buffer), READ_SIZE_CHECK + 1, Ptr::new(count), 0),
+            1
+        );
+        assert_eq!(e.mem.u32(count), 10);
+        assert_eq!(e.mem.bytes(buffer, 10), bytes[bytes.len() - 10..].to_vec());
+        set_file_pointer(&mut e, a, 5, Ptr::new(0), 2);
+        assert_eq!(
+            read_file(&mut e, a, Ptr::new(buffer), 3, Ptr::new(count), 0),
+            1
+        );
+        assert_eq!(e.mem.u32(count), 0);
+        assert_eq!(
+            set_file_pointer(&mut e, a, 0, Ptr::new(0), 1) as usize,
+            bytes.len() + 5
+        );
     }
 
     #[test]
