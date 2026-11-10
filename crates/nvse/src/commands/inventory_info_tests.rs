@@ -237,15 +237,70 @@ fn token_values_and_owners() {
     assert_eq!(run(&mut e, 0x1506, REF, &[r(2)]), 250.0);
 }
 
-/// An item in the base container whose changes entry has no stacks: xNVSE counts the base
-/// container's stack on through the index `GetTokenValue` does not pass, and the game stops.
+/// Whether a token command stops the game for the armor, which is in the base container: with a
+/// changes entry that has no stacks, or (`entry_missing`) with none.
+fn armor_token_stops(entry_missing: bool, opcode: u32, args: &[Vec<u8>]) -> bool {
+    let mut e = setup();
+    if entry_missing {
+        e.mem.set_u32(NODES + 0x10, 0);
+    }
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        call(&mut e, opcode, REF, args);
+    }))
+    .is_err()
+}
+
+/// An item of the base container whose changes entry has no stacks, or is missing: xNVSE counts
+/// the base container's stack on through the index `GetTokenValue`, `GetTokenRef` and the setters
+/// do not pass, or reads the item's health through the missing entry, and the game stops (the
+/// real game: `player.GetTokenValue` of the Pip-Boy ends it with an access violation, run
+/// `inv6r1`). `GetPaired` passes its index, so only the missing entry stops it.
 #[test]
 fn a_base_container_token_stops_the_game() {
-    let mut e = setup();
-    let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        call(&mut e, 0x1506, REF, &[r(1)]);
-    }));
-    assert!(stop.is_err());
+    for entry_missing in [false, true] {
+        assert!(armor_token_stops(entry_missing, 0x1506, &[r(1)]));
+        assert!(armor_token_stops(entry_missing, 0x1508, &[r(1)]));
+        assert!(armor_token_stops(entry_missing, 0x1507, &[r(1), z(40.0)]));
+        assert!(armor_token_stops(entry_missing, 0x1509, &[r(1), r(4)]));
+        assert!(armor_token_stops(
+            entry_missing,
+            0x150a,
+            &[r(1), z(40.0), r(4)]
+        ));
+    }
+    assert!(!armor_token_stops(false, 0x150b, &[r(1), r(6)]));
+    assert!(armor_token_stops(true, 0x150b, &[r(1), r(6)]));
+}
+
+/// The same with the list guard row: the token commands answer nothing there and set nothing
+/// (nothing added, nothing marked, the count as it was); an item with a stack of its own still
+/// answers.
+#[test]
+fn a_base_container_token_is_refused_with_the_list_guard() {
+    for entry_missing in [false, true] {
+        let mut e = setup();
+        crate::commands::array::set_fix(&mut e, crate::commands::array::LIST_GUARD, true);
+        if entry_missing {
+            e.mem.set_u32(NODES + 0x10, 0);
+        }
+        assert_eq!(run(&mut e, 0x1506, REF, &[r(1)]), 0.0);
+        assert_eq!(eval(&mut e, 0x1506, REF, ARMOR, 0), 0.0);
+        assert_eq!(run(&mut e, 0x1508, REF, &[r(1)]), 0.0);
+        assert_eq!(form_of(eval(&mut e, 0x1508, REF, ARMOR, 0)), 0);
+        run(&mut e, 0x1507, REF, &[r(1), z(40.0)]);
+        run(&mut e, 0x1509, REF, &[r(1), r(4)]);
+        run(&mut e, 0x150a, REF, &[r(1), z(40.0), r(4)]);
+        assert!(calls_to(FN_ADD_ITEM).is_empty(), "nothing added");
+        assert!(calls_to(FN_MARK).is_empty(), "nothing marked");
+        assert_eq!(e.mem.u32(NODES + 0x124), 1, "the armor's count delta");
+        assert_eq!(run(&mut e, 0x150b, REF, &[r(1), r(6)]), 0.0);
+        assert_eq!(eval(&mut e, 0x150b, REF, ARMOR, REF), 0.0);
+        assert_eq!(
+            run(&mut e, 0x1506, REF, &[r(2)]),
+            50.0,
+            "the weapon's stack"
+        );
+    }
 }
 
 /// The token setters on the weapon's stack: a new health (the stack's `ExtraHealth` changed), a new
@@ -350,4 +405,86 @@ fn paired_owners_cross_reference() {
     e.mem.set_u32(XDATA[0] + 0x39c, OWNER);
     assert_eq!(eval(&mut e, 0x150b, REF, WEAPON, ACTOR), 0.0);
     assert_eq!(eval(&mut e, 0x150b, REF, 0, ACTOR), 0.0);
+}
+
+/// The real game's answers (xNVSE 6.4.9 with JIP LN 57.30, `real-tests/gr_s_tokens.txt` and
+/// `gr_t_pick.txt`, run `inv6r1`, after `nvsecos4` loads, on the player) on stand-ins laid out
+/// the same way.
+/// - The 9mm pistol (base health 150): its one stack reads 51; after the game's `AddItem` of
+///   another the first stack reads 149.85 and there are 2. `SetTokenValue 50` reads back 50 and
+///   leaves 1 (the count is set, not kept), 75 the same. `SetTokenRef` with the holder itself reads
+///   the holder back, keeps 75, and `GetPaired` with the holder answers 1.
+/// - `AddItemHealthPercentOwner` of 2 at 0.5 adds 2 (1 became 3) at health 75 with the owner;
+///   `AddItemOwnership` of 5 rounds adds 5 (20 became 25) with the owner and no health.
+/// - A Varmint Rifle (base health 120) added at 0.5: its stack reads 60, and no owner, the game
+///   having taken the holder's own ownership off. `SetTokenValueAndRef 30` with another actor reads
+///   30 and that actor; `GetPaired` with that actor, who holds none, answers 0.
+/// - `PickOneOf` over a list of one form the holder has answers that form.
+#[test]
+fn the_real_games_answers() {
+    let mut e = setup();
+    let delta = NODES + 0x114;
+    e.mem.set_u32(WEAPON + 0x200 + 4, 150);
+    e.mem.set_u32(WEAPON + 0x200, VTABLE + 0x400);
+    e.mem.set_u32(VTABLE + 0x400 + 0x10, FN_GET_HEALTH);
+    e.register(FN_GET_HEALTH, |_, _| eax(150));
+    e.mem.set_f32(XDATA[0] + 0x38c, 51.0);
+    e.mem.set_u32(XDATA[0] + 0x100 + 4 * 0x21, 0);
+    assert_eq!(run(&mut e, 0x1506, REF, &[r(2)]), 51.0);
+    // What the game's AddItem left: 2 of them, and a first stack that reads 149.85.
+    put_extra(&mut e, XDATA[1], 0x25, XDATA[1] + 0x380);
+    e.mem.set_f32(XDATA[1] + 0x38c, 149.85);
+    tlist(&mut e, NODES + 0x40, &[XDATA[1], XDATA[0]]);
+    e.mem.set_u32(delta, 2);
+    assert_eq!(run(&mut e, 0x1506, REF, &[r(2)]), f64::from(149.85f32));
+    assert_eq!(run(&mut e, 0x1508, REF, &[r(2)]), 0.0);
+    for value in [50.0, 75.0] {
+        run(&mut e, 0x1507, REF, &[r(2), z(value)]);
+        assert_eq!(run(&mut e, 0x1506, REF, &[r(2)]), value);
+        assert_eq!(e.mem.u32(delta), 1);
+    }
+    run(&mut e, 0x1509, REF, &[r(2), r(6)]);
+    assert_eq!(form_of(run(&mut e, 0x1508, REF, &[r(2)])), 0x0001_0010);
+    assert_eq!(run(&mut e, 0x1506, REF, &[r(2)]), 75.0);
+    assert_eq!(run(&mut e, 0x150b, REF, &[r(2), r(6)]), 1.0);
+    assert_eq!(e.mem.u32(delta), 1);
+    calls_to(FN_ADD_ITEM);
+    run(&mut e, 0x1505, REF, &[r(2), z(2.0), z(0.5), r(6)]);
+    let added = calls_to(FN_ADD_ITEM);
+    assert_eq!((added[0][1], added[0][3]), (WEAPON, 2));
+    assert_eq!(e.mem.f32(extra_of(&e, added[0][2], 0x25) + 0xc), 75.0);
+    assert_eq!(e.mem.u32(extra_of(&e, added[0][2], 0x21) + 0xc), REF);
+    run(&mut e, 0x1504, REF, &[r(3), z(5.0), r(6)]);
+    let added = calls_to(FN_ADD_ITEM);
+    assert_eq!((added[0][1], added[0][3]), (AMMO, 5));
+    assert_eq!(extra_of(&e, added[0][2], 0x25), 0);
+    assert_eq!(e.mem.u32(extra_of(&e, added[0][2], 0x21) + 0xc), REF);
+    // The rifle: the armor stands in, with a base health of 120.
+    e.mem.set_u32(ARMOR + 0x200 + 4, 120);
+    e.mem.set_u32(ARMOR + 0x200, VTABLE + 0x500);
+    e.mem.set_u32(VTABLE + 0x500 + 0x10, FN_GET_HEALTH + 4);
+    e.register(FN_GET_HEALTH + 4, |_, _| eax(120));
+    run(&mut e, 0x1505, REF, &[r(1), z(1.0), z(0.5), r(6)]);
+    let added = calls_to(FN_ADD_ITEM);
+    let list = added[0][2];
+    assert_eq!((added[0][1], added[0][3]), (ARMOR, 1));
+    assert_eq!(e.mem.f32(extra_of(&e, list, 0x25) + 0xc), 60.0);
+    // Its stack as the game left it: the health kept, the holder's own ownership taken off.
+    e.mem.set_u32(list + 0x100 + 4 * 0x21, 0);
+    tlist(&mut e, NODES + 0x60, &[list]);
+    e.mem.set_u32(NODES + 0x120, NODES + 0x60);
+    assert_eq!(run(&mut e, 0x1506, REF, &[r(1)]), 60.0);
+    assert_eq!(run(&mut e, 0x1508, REF, &[r(1)]), 0.0);
+    e.mem.set_u8(ACTOR + 4, 0x3b);
+    e.mem.set_u32(ACTOR + 0x7f0, 1 | (1 << 21));
+    e.mem.set_u32(ACTOR + 0xc, 0x0001_0020);
+    e.mem.set_u32(ACTOR + 0x20, BASE + 0x40);
+    set_script_ref(&mut e, 7, ACTOR);
+    run(&mut e, 0x150a, REF, &[r(1), z(30.0), r(7)]);
+    assert_eq!(run(&mut e, 0x1506, REF, &[r(1)]), 30.0);
+    assert_eq!(form_of(run(&mut e, 0x1508, REF, &[r(1)])), 0x0001_0020);
+    assert_eq!(run(&mut e, 0x150b, REF, &[r(1), r(7)]), 0.0);
+    assert_eq!(e.mem.u32(NODES + 0x124), 1);
+    tlist(&mut e, LIST_FORM + 0x18, &[WEAPON]);
+    assert_eq!(form_of(run(&mut e, 0x159f, REF, &[r(5)])), 0x0001_0002);
 }

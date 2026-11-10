@@ -11,6 +11,7 @@ use crate::table::{guest_str, Command, Param, Returns};
 use crate::{handled, CommandArgs, EvalArgs, Nvse};
 use engine_core::prelude::*;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const fn p(name: &'static str, kind: u32, optional: bool) -> Param {
     Param {
@@ -555,15 +556,39 @@ struct Token {
     rank: u32,
 }
 
+/// Whether the refusal below has been written to the log in this run.
+static STACK_NOT_THERE_NOTED: AtomicBool = AtomicBool::new(false);
+
+/// Where the token search reads a stack that is not there: an item of the reference's base
+/// container whose changes entry is missing, or one whose place is counted on through an index
+/// the command did not pass. xNVSE reads or writes through the null pointer and the game stops
+/// (measured: `player.GetTokenValue` of the Pip-Boy ends the real game with an access violation,
+/// run `inv6r1`). With the list guard row (`NV_NVSE_LIST_GUARD`) the search ends here and the
+/// command answers nothing, with one line on stderr the first time in a run; without the row
+/// the game stops, as xNVSE's does.
+fn stack_not_there(e: &Engine, reference: u32, id: u32, what: &str) -> Option<Token> {
+    if !super::array::fix_on(e, super::array::LIST_GUARD) {
+        panic!("a token command on item {id:08X}, which is in its holder's base container without a stack of its own: {what}, and the game stops");
+    }
+    if !STACK_NOT_THERE_NOTED.swap(true, Ordering::Relaxed) {
+        let holder = e.mem.u32(reference + FORM_ID);
+        eprintln!(
+            "script inventory list guard: a token command (GetTokenValue, GetTokenRef, SetTokenValue, SetTokenRef, SetTokenValueAndRef, GetPaired) was refused for item {id:08X} of {holder:08X}: it is in the base container without a stack of its own ({what}); the command answers nothing"
+        );
+    }
+    None
+}
+
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), InventoryInfo.cpp:
 // GetItemWithHealthAndOwnershipByRefID.
 /// The item with id `id` among the reference's changes and its stack at place `index` (from 0;
 /// counted on by one when the stack was read): the stack's `ExtraHealth`, else the item's base
 /// health, and its owner and rank (the rank only with an owner). Past the item's stacks, the base
 /// container is looked at, at the stacks left over; xNVSE reads that place's health through the
-/// changes entry, which is missing when the item is only in the base container (the game stops
-/// there, as in xNVSE), and counts the place on through `index`, which `GetTokenValue` and
-/// `GetTokenRef` do not pass (the same). `None` for no reference, no item or the list guard.
+/// changes entry, which is missing when the item is only in the base container, and counts the
+/// place on through `index`, which `GetTokenValue`, `GetTokenRef` and the setters do not pass:
+/// both stop the game in xNVSE, and here end the search with the list guard row
+/// ([`stack_not_there`]). `None` for no reference, no item or the list guard.
 fn item_with_health_and_owner(
     e: &mut Engine,
     reference: u32,
@@ -631,7 +656,12 @@ fn item_with_health_and_owner(
             let form = e.mem.u32(fc + 4);
             if form != 0 && e.mem.u32(form + FORM_ID) == id {
                 if entry == 0 {
-                    panic!("xNVSE reads the health of an item held only in the base container through its missing changes entry");
+                    return stack_not_there(
+                        e,
+                        reference,
+                        id,
+                        "xNVSE reads its health through a changes entry that is missing",
+                    );
                 }
                 let item = entry_type(e, entry);
                 let health = dynamic_cast(e, item, rtti::TES_FORM, rtti::TES_HEALTH_FORM);
@@ -641,7 +671,12 @@ fn item_with_health_and_owner(
                 match index {
                     Some(i) => *i += 1,
                     None => {
-                        panic!("xNVSE counts a base container stack on through a missing index")
+                        return stack_not_there(
+                            e,
+                            reference,
+                            id,
+                            "xNVSE counts its place on through an index the command does not pass",
+                        );
                     }
                 }
                 token.item = form;
