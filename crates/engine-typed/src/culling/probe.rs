@@ -444,6 +444,33 @@ fn print_outline(nodes: &[Node], (root, process): (u32, u32), walk_ns: u64) {
             ns as f64 / 1000.0
         ));
     }
+    // What the replays ran besides registrations (the unaudited `OnVisible`s), by kind: the
+    // outermost ones only (their own walks are inside their time).
+    let mut replayed: HashMap<(u32, u32), (u64, u64)> = HashMap::new();
+    let mut inside_until = 0u32;
+    let mut inside = false;
+    for n in nodes {
+        if inside && n.depth > inside_until {
+            continue;
+        }
+        inside = false;
+        if n.replayed {
+            let sum = replayed.entry((n.vtable, n.target)).or_default();
+            sum.0 += 1;
+            sum.1 += n.ns;
+            inside = true;
+            inside_until = n.depth;
+        }
+    }
+    let mut replayed: Vec<_> = replayed.into_iter().collect();
+    replayed.sort_by_key(|(_, (_, ns))| std::cmp::Reverse(*ns));
+    out.push_str("\n  unaudited OnVisible run by the replays, by vtable and OnVisible:");
+    for ((vtable, target), (count, ns)) in replayed {
+        out.push_str(&format!(
+            "\n    {vtable:08x} {target:08x}: {count}, {:.1} us",
+            ns as f64 / 1000.0
+        ));
+    }
     println!("{out}");
 }
 

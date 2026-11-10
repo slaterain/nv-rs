@@ -141,15 +141,19 @@ struct Split {
     replay: Mutex<Option<Replayer>>,
 }
 
-/// `OnVisible`'s vtable slot, and `NiGeometry::OnVisible` (what a geometry's slot holds).
+/// `OnVisible`'s vtable slot, and the `OnVisible`s main may replay inside the fork, beside the
+/// walkers: `NiGeometry::OnVisible` (a geometry registers) and `NiParticles::OnVisible`
+/// (`00a9b2a0`: it sorts its own particle data, at +0xb8, by the camera, when its property asks
+/// for it, then registers as a geometry; the walkers never read particle data).
 const SLOT_ON_VISIBLE: u32 = 0xd4;
-const GEOMETRY_ON_VISIBLE: u32 = 0x00a7_fd90;
+const IN_FORK: [u32; 2] = [0x00a7_fd90, 0x00a9_b2a0];
 
 /// Main's replay of a split's logs in the serial order: the top tasks in order, a marked node's
 /// tasks at its mark. Inside the fork (`Split::work`, main's part) it replays a task's log as
 /// soon as that log and every one before it in the order are in, and walks tasks while it
-/// waits; it stops at the first entry that is not a geometry's registration or a logged call (an
-/// unaudited `OnVisible`, which may run any game code: that waits for the join). After the join
+/// waits; it stops at the first entry that is not a geometry's or particle system's
+/// registration or a logged call (an unaudited `OnVisible`, which may run any game code: that
+/// waits for the join). After the join
 /// it replays the rest. So registration, the one part of a split that only main can do, runs
 /// while the walkers are still walking.
 ///
@@ -254,8 +258,7 @@ impl Replayer {
                 }
                 Entry::Visible { object, .. }
                     if in_fork
-                        && crate::slot_target(e, *object, SLOT_ON_VISIBLE)
-                            != GEOMETRY_ON_VISIBLE =>
+                        && !IN_FORK.contains(&crate::slot_target(e, *object, SLOT_ON_VISIBLE)) =>
                 {
                     return Progress::Halted;
                 }
