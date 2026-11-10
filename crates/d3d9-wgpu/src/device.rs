@@ -10,6 +10,7 @@
 use crate::cache;
 use crate::format::{self, d3dfmt, Format};
 use crate::fxhash::Map;
+use crate::loading;
 use crate::shot::{self, Shots};
 use crate::sm::{self, wgsl, Stage};
 use crate::state::{self, rs, SamplerKey};
@@ -409,6 +410,8 @@ pub struct Device {
     pipeline_cache: Option<cache::PipelineCacheFile>,
     /// When the last `Present` began ([`Made::longest_frame`]).
     last_present: Option<std::time::Instant>,
+    /// The screen of the backend's own long steps ([`Device::show_progress`]), made when first shown.
+    loading: Option<loading::Screen>,
     made: Made,
     #[allow(clippy::type_complexity)]
     vs_modules: Map<
@@ -711,6 +714,7 @@ impl Device {
             binds: PassBinds::default(),
             pipeline_cache,
             last_present: None,
+            loading: None,
             made: Made::default(),
             vs_modules: Map::default(),
             ps_modules: Map::default(),
@@ -3790,6 +3794,39 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     // Present.
 
     /// `Present` of the stream's `frame` (numbered as the forwarding layer's captures are).
+    /// Shows `p` in the game's window ([`loading`]): for a long step of the backend's own before
+    /// play, which calls it as it goes. Only a device on the game's window draws it; every call
+    /// also writes one log line with the same numbers (for a launcher). The game's own frames
+    /// are not touched: the next `Present` shows the game again.
+    pub fn show_progress(&mut self, p: &loading::Progress) {
+        eprintln!(
+            "NV_D3D9 wgpu: {}: {} ({:.0}%)",
+            p.title,
+            p.status,
+            p.done.clamp(0.0, 1.0) * 100.0
+        );
+        let Some((surface, config)) = &self.surface else {
+            return;
+        };
+        let frame = match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(t)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+            _ => return,
+        };
+        let view = frame.texture.create_view(&Default::default());
+        let screen = self
+            .loading
+            .get_or_insert_with(|| loading::Screen::new(&self.device, &self.queue, config.format));
+        screen.draw(
+            &self.device,
+            &self.queue,
+            &view,
+            (config.width, config.height),
+            p,
+        );
+        self.queue.present(frame);
+    }
+
     pub(crate) fn present(&mut self, frame: u32) {
         let now = std::time::Instant::now();
         if let Some(t) = self.last_present {
@@ -4000,6 +4037,64 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// None without a cache (no folder, or a backend without one). Tests.
     pub fn pipeline_cache_note(&self) -> Option<String> {
         self.pipeline_cache.as_ref().map(|c| c.note.clone())
+    }
+
+    /// The screen of [`Device::show_progress`] drawn into a `width` by `height` texture of its own,
+    /// its pixels B, G, R, A rows packed (tests: an offscreen device has no window to show it in).
+    pub fn progress_pixels(&mut self, width: u32, height: u32, p: &loading::Progress) -> Vec<u8> {
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("loading screen test"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&Default::default());
+        let mut screen = loading::Screen::new(&self.device, &self.queue, format);
+        screen.draw(&self.device, &self.queue, &view, (width, height), p);
+        let row = (width * 4).div_ceil(256) * 256;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: u64::from(row * height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            tex.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        let mut out = Vec::with_capacity((width * height * 4) as usize);
+        if let Ok(data) = buffer.slice(..).get_mapped_range() {
+            for y in 0..height {
+                out.extend_from_slice(&data[(y * row) as usize..(y * row + width * 4) as usize]);
+            }
+        }
+        buffer.unmap();
+        out
     }
 
     /// The pixels of a back buffer or render target as wgpu holds them, rows packed (tests).
