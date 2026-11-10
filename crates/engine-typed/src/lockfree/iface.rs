@@ -1067,3 +1067,206 @@ pub fn delete(e: &mut Engine, this: Ptr<MapInterface>, flags: u32) -> Ptr<MapInt
     }
     this
 }
+
+// Typed from 00906af0
+/// The lip task map's own copy of [`first_in_bucket`] (`thiscall(bucket, key out, value holder
+/// out)`, bool): the same body.
+pub fn first_in_bucket_copy(
+    e: &mut Engine,
+    this: Ptr<MapInterface>,
+    bucket: u32,
+    key_out: Ptr<u32>,
+    value_out: Ptr<Holder>,
+) -> bool {
+    first_node(e, this, bucket, key_out, |e, node| {
+        let value = HashListNode::value_holder(node);
+        typed_call!(FAMILY, 0x0092_c820, holder::assign(e, value_out, value));
+    })
+}
+
+// Typed from 00906c10
+/// The lip task map's own copy of [`next_in_bucket`] (`thiscall(bucket, key in and out, value
+/// holder out)`, bool): the same body.
+pub fn next_in_bucket_copy(
+    e: &mut Engine,
+    this: Ptr<MapInterface>,
+    bucket: u32,
+    key: Ptr<u32>,
+    value_out: Ptr<Holder>,
+) -> bool {
+    next_node(
+        e,
+        this,
+        key,
+        |e, wanted| typed_call!(FAMILY, 0x0052_9030, search(e, this, bucket, wanted)),
+        |e, node| {
+            let value = HashListNode::value_holder(node);
+            typed_call!(FAMILY, 0x0092_c820, holder::assign(e, value_out, value));
+        },
+        |e| {
+            e.call(HOLDER_SET, &args![value_out, 0u32]);
+        },
+    )
+}
+
+/// A counted pointer local made from a holder (`thiscall(local, holder)`), its release (`thiscall`),
+/// and whether it holds `object` (`thiscall(local, object)`).
+const POINTER_FROM_HOLDER: u32 = 0x0044_e370;
+const POINTER_RELEASE: u32 = 0x0044_cbf0;
+const POINTER_HOLDS: u32 = 0x004b_0460;
+
+// Typed from 00906820
+/// [`find_value`] for the lip task map, whose values are counted (`thiscall(bucket, wanted)`,
+/// bool: whether a live node holds the object the holder `wanted` holds): the walk of [`search`],
+/// each live node's value taken into a counted pointer local (`0044e370`) and compared with
+/// `wanted`'s (`004b0460`), the local released at each step and at the end (`0044cbf0`); unlinked
+/// nodes retired through `005292a0`.
+pub fn find_counted_value(
+    e: &mut Engine,
+    this: Ptr<MapInterface>,
+    bucket: u32,
+    wanted: Ptr<Holder>,
+) -> bool {
+    let map = e.get(this, MapInterface::map);
+    let buckets = e.get(map, LockFreeMap::pBuckets);
+    let head_link = LockFreeMap::bucket(buckets, bucket);
+    e.with_stack(4, |e, local| loop {
+        e.set(this, MapInterface::previous, head_link);
+        let link = e.get(this, MapInterface::previous);
+        let head = e.get(link, BucketHead::head);
+        e.set(this, MapInterface::current, head);
+        let current = e.get(this, MapInterface::current).node();
+        let slot = e.get(this, MapInterface::current_slot);
+        e.set(slot, NodeSlot::node, current);
+        let seen = e.get(this, MapInterface::current).node();
+        let link = e.get(this, MapInterface::previous);
+        if e.get(link, BucketHead::head).word() != seen.addr() {
+            continue;
+        }
+        if let Some(found) = walk_counted(e, this, local, wanted) {
+            return found;
+        }
+    })
+}
+
+/// The chain walk of [`find_counted_value`] from the bucket's head: `Some` with the answer, or
+/// `None` to start again from the head.
+#[inline(always)]
+fn walk_counted(
+    e: &mut Engine,
+    this: Ptr<MapInterface>,
+    local: Ptr,
+    wanted: Ptr<Holder>,
+) -> Option<bool> {
+    loop {
+        let node = e.get(this, MapInterface::current).node();
+        if node.is_null() {
+            return Some(false);
+        }
+        let next = e.get(node, HashListNode::next);
+        e.set(this, MapInterface::next, next);
+        let next = e.get(this, MapInterface::next).node();
+        let slot = e.get(this, MapInterface::next_slot);
+        e.set(slot, NodeSlot::node, next);
+        let next = e.get(this, MapInterface::next);
+        let node = e.get(this, MapInterface::current).node();
+        if next != e.get(node, HashListNode::next) {
+            return None;
+        }
+        let node = e.get(this, MapInterface::current).node();
+        e.call(
+            POINTER_FROM_HOLDER,
+            &args![local, HashListNode::value_holder(node)],
+        );
+        let seen = e.get(this, MapInterface::current).node();
+        let link = e.get(this, MapInterface::previous);
+        if e.get(link, BucketHead::head).word() != seen.addr() {
+            e.call(POINTER_RELEASE, &args![local]);
+            return None;
+        }
+        if !e.get(this, MapInterface::next).is_marked() {
+            if e.call(POINTER_HOLDS, &args![local, wanted]).bool() {
+                e.call(POINTER_RELEASE, &args![local]);
+                return Some(true);
+            }
+            let node = e.get(this, MapInterface::current).node();
+            e.set(this, MapInterface::previous, HashListNode::next_link(node));
+            let node = e.get(this, MapInterface::current).node();
+            let slot = e.get(this, MapInterface::previous_slot);
+            e.set(slot, NodeSlot::node, node);
+        } else {
+            let next = e.get(this, MapInterface::next).node();
+            let link = e.get(this, MapInterface::previous);
+            if !e.call(SWAP_LINK, &args![link, next, seen]).bool() {
+                e.call(POINTER_RELEASE, &args![local]);
+                return None;
+            }
+            let node = e.get(this, MapInterface::current).node();
+            typed_call!(FAMILY, 0x0052_92a0, retire(e, this, node));
+        }
+        step_to_next(e, this);
+        e.call(POINTER_RELEASE, &args![local]);
+    }
+}
+
+// Typed from 009066d0
+/// [`remove_value_in_bucket`] for the lip task map (`thiscall(bucket, wanted)`, bool): found by
+/// [`find_counted_value`], retired through `005292a0`.
+pub fn remove_counted_value_in_bucket(
+    e: &mut Engine,
+    this: Ptr<MapInterface>,
+    bucket: u32,
+    wanted: Ptr<Holder>,
+) -> bool {
+    let removed = loop {
+        if !typed_call!(
+            FAMILY,
+            0x0090_6820,
+            find_counted_value(e, this, bucket, wanted)
+        ) {
+            break false;
+        }
+        let next = e.get(this, MapInterface::next).node();
+        let marked = next.addr() | 1;
+        let current = e.get(this, MapInterface::current).node();
+        let link = HashListNode::next_link(current);
+        if !e.call(SWAP_LINK, &args![link, marked, next]).bool() {
+            continue;
+        }
+        let current = e.get(this, MapInterface::current).node();
+        let previous = e.get(this, MapInterface::previous);
+        if e.call(SWAP_LINK, &args![previous, next, current]).bool() {
+            let current = e.get(this, MapInterface::current).node();
+            typed_call!(FAMILY, 0x0052_92a0, retire(e, this, current));
+        } else {
+            let _: bool = typed_call!(
+                FAMILY,
+                0x0090_6820,
+                find_counted_value(e, this, bucket, wanted)
+            );
+        }
+        break true;
+    };
+    release_slots(e, this);
+    removed
+}
+
+// Typed from 0044f420
+/// [`flush`] for the maps of counted values: [`scan_deleted_releasing`] while the count is not
+/// zero.
+pub fn flush_counted(e: &mut Engine, this: Ptr<MapInterface>) {
+    while e.get(this, MapInterface::deleted_count) != 0 {
+        typed_call!(FAMILY, 0x0044_f070, scan_deleted_releasing(e, this));
+    }
+}
+
+// Typed from 005293c0
+/// [`delete`] for the maps of counted values (`thiscall(flags)`, answers `this`): [`flush_counted`],
+/// then the interface freed when bit 0 of `flags` is set.
+pub fn delete_counted(e: &mut Engine, this: Ptr<MapInterface>, flags: u32) -> Ptr<MapInterface> {
+    typed_call!(FAMILY, 0x0044_f420, flush_counted(e, this));
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}

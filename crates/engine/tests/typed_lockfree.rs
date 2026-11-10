@@ -263,6 +263,9 @@ impl Cases for Diff {
             .family(&leaf::LEAVES)
             .ignore_calls(INLINED)
             .max_calls(MAX_CALLS)
+            // The translations empty the map through functions that call the manager's and the
+            // interfaces' destructor bodies as plain Rust calls.
+            .translation_calls_plainly(&[0x0066_65c0, 0x0052_9300, 0x0052_9330, 0x0052_93c0])
             .inputs(&[Input::Flag])
             .setup(|e, case| {
                 let w = world(e, true);
@@ -863,6 +866,8 @@ fn clear() {
         .family(&leaf::LEAVES)
         .ignore_calls(INLINED)
         .max_calls(MAX_CALLS)
+        // The manager's deleting destructor's translation calls its body as a plain Rust call.
+        .translation_calls_plainly(&[0x0066_65c0])
         .inputs(&[Input::Flag, Input::Flag])
         .setup(|e, case| {
             let w = world(e, true);
@@ -1598,6 +1603,8 @@ fn waiting(e: &mut Engine, w: &World, three: bool) {
 #[test]
 fn interface_flush() {
     node_case(Diff::new(entry!(0x0044_f200, iface::flush(Ptr<_>))))
+        // Its translation calls the scan as a plain Rust call.
+        .translation_calls_plainly(&[0x0044_f220])
         .local_at(0x0040_4eb0, 0, 4)
         .local_at(0x0040_4ee0, 0, 4)
         .inputs(&[Input::Flag])
@@ -1616,6 +1623,7 @@ fn interface_delete() {
         0x0044_ed80,
         iface::delete(Ptr<_>, u32) -> Ptr
     )))
+    .translation_calls_plainly(&[0x0044_f220])
     .local_at(0x0040_4eb0, 0, 4)
     .local_at(0x0040_4ee0, 0, 4)
     .inputs(&[Input::Flag, Input::Of(&[0, 1, 3])])
@@ -1638,6 +1646,7 @@ fn manager_case(d: Diff) -> Diff {
 #[test]
 fn manager_destroy() {
     manager_case(Diff::new(entry!(0x0066_65c0, manager::destroy(Ptr<_>))))
+        .translation_calls_plainly(&[0x0044_f220])
         .inputs(&[Input::Flag, Input::Flag])
         .setup(|e, case| {
             let w = world(e, true);
@@ -1659,6 +1668,7 @@ fn manager_delete() {
         0x0066_6570,
         manager::delete(Ptr<_>, u32) -> Ptr
     )))
+    .translation_calls_plainly(&[0x0066_65c0, 0x0044_f220])
     .inputs(&[Input::Flag, Input::Of(&[0, 1])])
     .setup(|e, case| {
         let w = world(e, true);
@@ -1670,4 +1680,235 @@ fn manager_delete() {
     })
     .run()
     .assert_same();
+}
+
+#[test]
+fn first_in_bucket_copy() {
+    // As `first_in_bucket`: the lip task map's own copy of it.
+    Diff::new(entry!(
+        0x0090_6af0,
+        iface::first_in_bucket_copy(Ptr<_>, u32, Ptr<_>, Ptr<_>) -> bool
+    ))
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(&[0, 1, 2])])
+    .setup(|e, case| {
+        let w = world(e, true);
+        let key_out = e.mem.alloc(4);
+        let bucket = case.word(0);
+        let head = e.mem.u32(w.buckets + bucket * 4);
+        let held = match case.word(1) {
+            0 => 0,
+            1 if head != 0 => e.mem.u32(head + 4),
+            _ => w.spare,
+        };
+        let value_out = holder_of(e, held);
+        vec![w.face, bucket, key_out, value_out]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn next_in_bucket_copy() {
+    // As `next_in_bucket`: the lip task map's own copy of it.
+    Diff::new(entry!(
+        0x0090_6c10,
+        iface::next_in_bucket_copy(Ptr<_>, u32, Ptr<_>, Ptr<_>) -> bool
+    ))
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(KEYS), Input::Flag])
+    .setup(|e, case| {
+        let w = world(e, true);
+        let key = e.mem.alloc(4);
+        e.mem.set_u32(key, case.word(1));
+        let held = if case.word(2) != 0 { w.spare } else { 0 };
+        let value_out = holder_of(e, held);
+        vec![w.face, case.word(0), key, value_out]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A holder of the value of the bucket's nth node (marks cleared), of the spare object, or of none.
+fn wanted_holder(e: &mut Engine, w: &World, bucket: u32, nth: u32) -> u32 {
+    let mut n = e.mem.u32(w.buckets + bucket * 4) & !1;
+    for _ in 0..nth {
+        if n != 0 {
+            n = e.mem.u32(n + 8) & !1;
+        }
+    }
+    let wanted = match (n, nth) {
+        (0, 3) => 0,
+        (0, _) => w.spare,
+        (n, _) => e.mem.u32(n + 4),
+    };
+    holder_of(e, wanted)
+}
+
+/// The counted pointer local of the lip task map's finds: one local, whichever frame holds it.
+fn counted_local(d: Diff) -> Diff {
+    d.local_at(0x0044_e370, 0, 4)
+        .local_at(0x0044_cbf0, 0, 4)
+        .local_at(0x004b_0460, 0, 4)
+}
+
+#[test]
+fn find_counted_value() {
+    // Each bucket, against each of its nodes' objects, the spare one, and none; the waiting list
+    // well below or one short of a full batch.
+    counted_local(Diff::new(entry!(
+        0x0090_6820,
+        iface::find_counted_value(Ptr<_>, u32, Ptr<_>) -> bool
+    )))
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Flag,
+    ])
+    .setup(|e, case| {
+        let w = world(e, true);
+        if case.word(2) != 0 {
+            e.mem.set_u32(w.face + 0x20, 99);
+        }
+        let wanted = wanted_holder(e, &w, case.word(0), case.word(1));
+        vec![w.face, case.word(0), wanted]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn remove_counted_value_in_bucket() {
+    counted_local(Diff::new(entry!(
+        0x0090_66d0,
+        iface::remove_counted_value_in_bucket(Ptr<_>, u32, Ptr<_>) -> bool
+    )))
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Flag,
+    ])
+    .setup(|e, case| {
+        let w = world(e, true);
+        if case.word(2) != 0 {
+            e.mem.set_u32(w.face + 0x20, 99);
+        }
+        let wanted = wanted_holder(e, &w, case.word(0), case.word(1));
+        vec![w.face, case.word(0), wanted]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn interface_flush_counted() {
+    node_case(Diff::new(entry!(0x0044_f420, iface::flush_counted(Ptr<_>))))
+        .local_at(0x0040_4eb0, 0, 4)
+        .local_at(0x0040_4ee0, 0, 4)
+        .inputs(&[Input::Flag])
+        .setup(|e, case| {
+            let w = world(e, true);
+            waiting(e, &w, case.word(0) != 0);
+            vec![w.face]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn interface_delete_counted() {
+    node_case(Diff::new(entry!(
+        0x0052_93c0,
+        iface::delete_counted(Ptr<_>, u32) -> Ptr
+    )))
+    .local_at(0x0040_4eb0, 0, 4)
+    .local_at(0x0040_4ee0, 0, 4)
+    .inputs(&[Input::Flag, Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        let w = world(e, true);
+        waiting(e, &w, case.word(0) != 0);
+        vec![w.face, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn manager_destroy_counted() {
+    // Its translation calls the interface's deleting destructor as a plain Rust call.
+    manager_case(Diff::new(entry!(
+        0x0052_9330,
+        manager::destroy_counted(Ptr<_>)
+    )))
+    .translation_calls_plainly(&[0x0052_93c0])
+    .inputs(&[Input::Flag, Input::Flag])
+    .setup(|e, case| {
+        let w = world(e, true);
+        if case.word(0) != 0 {
+            let entries = e.mem.u32(w.manager + 8);
+            e.mem.set_u32(entries, 0x1234);
+            e.mem.set_u32(entries + 4, w.face);
+        }
+        waiting(e, &w, case.word(1) != 0);
+        vec![w.manager]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn manager_delete_counted() {
+    manager_case(Diff::new(entry!(
+        0x0052_9300,
+        manager::delete_counted(Ptr<_>, u32) -> Ptr
+    )))
+    .translation_calls_plainly(&[0x0052_9330, 0x0052_93c0])
+    .inputs(&[Input::Flag, Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        let w = world(e, true);
+        if case.word(0) != 0 {
+            let entries = e.mem.u32(w.manager + 8);
+            e.mem.set_u32(entries + 4, w.face);
+        }
+        vec![w.manager, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn clear_counted() {
+    // With an interface manager or none; keeping none or making a new one. Its translation calls
+    // the manager's deleting destructor as a plain Rust call (and that, its body and the
+    // interfaces' deleting destructor).
+    Diff::new(entry!(0x0052_8e40, map::clear_counted(Ptr<_>, u8)))
+        .family(&lockfree::LOCKFREE)
+        .family(&leaf::LEAVES)
+        .ignore_calls(INLINED)
+        .max_calls(MAX_CALLS)
+        .translation_calls_plainly(&[0x0052_9300, 0x0052_9330, 0x0052_93c0])
+        .inputs(&[Input::Flag, Input::Flag])
+        .setup(|e, case| {
+            let w = world(e, true);
+            if case.word(0) == 0 {
+                e.mem.set_u32(w.map + 0x14, 0);
+            }
+            vec![w.map, case.word(1)]
+        })
+        .run()
+        .assert_same();
 }

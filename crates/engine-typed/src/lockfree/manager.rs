@@ -154,3 +154,41 @@ pub fn delete(e: &mut Engine, this: Ptr<InterfaceManager>, flags: u32) -> Ptr<In
     }
     this
 }
+
+// Typed from 00529330
+/// [`destroy`] for the maps of counted values: each thread's interface deleted with `005293c0`
+/// (which drains with the releasing scan), the entries and the TLS slot freed.
+pub fn destroy_counted(e: &mut Engine, this: Ptr<InterfaceManager>) {
+    let mut i = 0u32;
+    while i < e.get(this, InterfaceManager::max_threads) {
+        let entries = e.get(this, InterfaceManager::entries);
+        let face = e.get(InterfaceManager::entry(entries, i), InterfaceEntry::interface);
+        if !face.is_null() {
+            let _: Ptr<MapInterface> = typed_call!(
+                FAMILY,
+                0x0052_93c0,
+                super::iface::delete_counted(e, face, 1)
+            );
+        }
+        i = i.wrapping_add(1);
+    }
+    let entries = e.get(this, InterfaceManager::entries);
+    e.call(OPERATOR_DELETE, &args![entries]);
+    let tls = e.get(this, InterfaceManager::tls_index);
+    e.call(TLS_FREE, &args![tls]);
+}
+
+// Typed from 00529300
+/// [`delete`] for the maps of counted values (`thiscall(flags)`, answers `this`):
+/// [`destroy_counted`], then the manager freed when bit 0 of `flags` is set.
+pub fn delete_counted(
+    e: &mut Engine,
+    this: Ptr<InterfaceManager>,
+    flags: u32,
+) -> Ptr<InterfaceManager> {
+    typed_call!(FAMILY, 0x0052_9330, destroy_counted(e, this));
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}

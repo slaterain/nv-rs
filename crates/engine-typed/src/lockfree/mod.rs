@@ -321,5 +321,35 @@ fn funcs() -> Vec<(u32, AbiFn)> {
             0x0066_6570,
             manager::delete(Ptr<InterfaceManager>, u32) -> Ptr
         ),
+        entry!(
+            0x0090_6af0,
+            iface::first_in_bucket_copy(Ptr<MapInterface>, u32, Ptr<u32>, Ptr<Holder>) -> bool
+        ),
+        entry!(
+            0x0090_6c10,
+            iface::next_in_bucket_copy(Ptr<MapInterface>, u32, Ptr<u32>, Ptr<Holder>) -> bool
+        ),
+        entry!(
+            0x0090_6820,
+            iface::find_counted_value(Ptr<MapInterface>, u32, Ptr<Holder>) -> bool
+        ),
+        entry!(
+            0x0090_66d0,
+            iface::remove_counted_value_in_bucket(Ptr<MapInterface>, u32, Ptr<Holder>) -> bool
+        ),
+        entry!(0x0044_f420, iface::flush_counted(Ptr<MapInterface>)),
+        entry!(
+            0x0052_93c0,
+            iface::delete_counted(Ptr<MapInterface>, u32) -> Ptr
+        ),
+        entry!(
+            0x0052_9330,
+            manager::destroy_counted(Ptr<InterfaceManager>)
+        ),
+        entry!(
+            0x0052_9300,
+            manager::delete_counted(Ptr<InterfaceManager>, u32) -> Ptr
+        ),
+        entry!(0x0052_8e40, map::clear_counted(Ptr<LockFreeMap>, u8)),
     ]
 }
