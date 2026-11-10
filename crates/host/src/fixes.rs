@@ -190,7 +190,7 @@ pub const SCRIPT_LIST_GUARD: Fix = Fix {
     env: "NV_NVSE_LIST_GUARD",
     addresses: &[],
     summary:
-        "an inventory list the script commands walk that runs back into itself, GetPaired asking for the same stack again, or a cell scan (GetFirstRef, GetNumRefs, GetRefs and the rest) whose depth takes it past the cell grid's 8-bit positions ends the walk; a name xNVSE copies into a 256-byte buffer (GetAgeClass's race name, AddAnimation's and DelAnimation's name) is read whole when it is longer; the list SetHotkeyItem gives a stack gets the game's vtable; the token commands (GetTokenValue, SetTokenValue and the rest) answer for an item only in the base container (the Pip-Boy, for one); none of these stops or hangs the game",
+        "an inventory list or a form list the script commands walk that runs back into itself, GetPaired asking for the same stack again, or a cell scan (GetFirstRef, GetNumRefs, GetRefs and the rest) whose depth takes it past the cell grid's 8-bit positions ends the walk; a name xNVSE copies into a 256-byte buffer (GetAgeClass's race name, AddAnimation's and DelAnimation's name) is read whole when it is longer; the list SetHotkeyItem gives a stack gets the game's vtable; the token commands (GetTokenValue, SetTokenValue and the rest) answer for an item only in the base container (the Pip-Boy, for one); none of these stops or hangs the game",
     install: install_script_list_guard,
 };
 

@@ -23,7 +23,7 @@ const LOOKUP_FORM: u32 = 0x0048_39c0;
 
 thread_local! {
     static SEEN: std::cell::RefCell<Vec<(Vec<u8>, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
-    static RUNS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    static RUNS: std::cell::RefCell<Vec<(u32, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 fn eax(v: u32) -> Ret {
@@ -380,7 +380,7 @@ fn a_function_on_each_form() {
     e.register(SCRIPT_EXECUTE, |e, a| {
         let local = crate::args::event_list_variable(e, a[2], 1);
         let v = e.mem.u32(local + 8);
-        RUNS.with(|r| r.borrow_mut().push(v));
+        RUNS.with(|r| r.borrow_mut().push((v, a[1])));
         eax(0)
     });
     e.register(CREATE_EVENT_LIST, |e, a| {
@@ -417,9 +417,11 @@ fn a_function_on_each_form() {
     e.mem.set_u32(NODES, 0);
     e.mem.set_u32(NODES + 4, NODES + 8);
     e.mem.set_u32(NODES + 8, B);
-    assert_eq!(run(&mut e, FOR_EACH, 0, &[r(1), r(8)]), 1.0);
+    assert_eq!(run(&mut e, FOR_EACH, REF, &[r(1), r(8)]), 1.0);
     let runs = RUNS.with(|r| r.borrow_mut().drain(..).collect::<Vec<_>>());
-    assert_eq!(runs.len(), 3, "{runs:x?}");
+    // Each call gets its node's form (the reference parameter holds its id; the empty node 0) and
+    // the calling reference.
+    assert_eq!(runs, [(0x0001_0011, REF), (0, REF), (0x0001_0012, REF)]);
     assert_eq!(run(&mut e, FOR_EACH, 0, &[r(1), r(2)]), 0.0, "no script");
     assert!(RUNS.with(|r| r.borrow().is_empty()));
 }
@@ -459,4 +461,86 @@ fn save_baked_counts() {
             double_words(2.0).to_vec()
         )
     );
+}
+
+/// `IsRefInList` through the permanent base form: a reference whose base form was made in game
+/// (file 0xFF) and is a placed water finds its water's index (`GetPermanentBaseForm`, inlined at
+/// `10031AA6`); and a reference without a base form given as the argument: xNVSE reads the
+/// missing form's id, the port stops without the script reference checks row and finds nothing
+/// with it.
+#[test]
+fn references_through_their_permanent_base_form() {
+    let mut e = setup();
+    e.mem.set_u32(REF_BASE + 0xc, 0xff00_0015);
+    set_classes(&mut e, REF_BASE, 1 << 28);
+    e.mem.set_u32(REF_BASE + 0x4c, C);
+    run(&mut e, ADD, 0, &[r(1), r(4)]);
+    assert_eq!(run(&mut e, IN_LIST, 0, &[r(1), r(5)]), 2.0, "the water: C");
+    assert_eq!(run(&mut e, IN_LIST, REF, &[r(1)]), 2.0);
+    for checks in [false, true] {
+        let mut e = setup();
+        crate::invref::set_checks(&mut e, checks);
+        e.mem.set_u32(REF + 0x20, 0);
+        let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run(&mut e, IN_LIST, 0, &[r(1), r(5)])
+        }));
+        match found {
+            Ok(v) => assert!(checks && v == -1.0, "{checks} {v}"),
+            Err(_) => assert!(!checks),
+        }
+    }
+}
+
+/// Removing by form lowers the count of added forms when the index was one of them; removing
+/// from an empty list finds nothing; clearing a list of its head alone frees nothing.
+#[test]
+fn removing_from_short_lists() {
+    thread_local! {
+        static FREED: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let mut e = setup();
+    e.mem.set_u32(LIST + 0x20, 2);
+    assert_eq!(run(&mut e, REMOVE, 0, &[r(1), r(3)]), 1.0);
+    assert_eq!(e.mem.u32(LIST + 0x20), 1, "index 1 was below 2");
+    assert_eq!(ids(&e, LIST), [0x11]);
+    e.register(0x0040_1030, |_, a| {
+        FREED.with(|f| f.borrow_mut().push(a[0]));
+        eax(0)
+    });
+    run(&mut e, CLEAR, 0, &[r(1)]);
+    assert!(ids(&e, LIST).is_empty());
+    assert!(FREED.with(|f| f.borrow().is_empty()), "the head is no heap node");
+    assert_eq!(run(&mut e, REMOVE_NTH, 0, &[r(1), n(0)]), 0.0);
+    assert_eq!(run(&mut e, REMOVE_NTH, 0, &[r(1), n(3)]), 0.0);
+    assert_eq!(run(&mut e, REMOVE, 0, &[r(1), r(2)]), -1.0);
+    assert_eq!(run(&mut e, COUNT, 0, &[r(1)]), 0.0);
+}
+
+/// A form list that runs back into itself (a node whose next is itself): xNVSE walks it for
+/// ever; with the script list and scan guard row the walk ends after 1,048,576 nodes
+/// (`invref::MAX_LIST_NODES`, the inventory walks' bound) with what it found; without it the port
+/// stops the game.
+#[test]
+fn a_list_that_runs_back_into_itself() {
+    for guard in [false, true] {
+        let mut e = setup();
+        super::super::array::set_fix(&mut e, super::super::array::LIST_GUARD, guard);
+        e.mem.set_u32(NODES + 4, NODES);
+        let counted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            (
+                run(&mut e, COUNT, 0, &[r(1)]),
+                run(&mut e, INDEX, 0, &[r(1), r(4)]),
+                run(&mut e, ADD, 0, &[r(1), r(4)]),
+            )
+        }));
+        match counted {
+            Ok((n, index, added)) => {
+                assert!(guard, "{n}");
+                assert_eq!(n, f64::from((1u32 << 20) + 1));
+                assert_eq!(index, -1.0, "not found within the bound");
+                assert_eq!(added, f64::from(1u32 << 20), "after the last node the walk reached");
+            }
+            Err(_) => assert!(!guard),
+        }
+    }
 }

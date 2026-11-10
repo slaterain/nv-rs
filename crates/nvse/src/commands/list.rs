@@ -148,7 +148,8 @@ fn added(e: &Engine, list: u32) -> u32 {
 fn index_of(e: &mut Engine, list: u32, form: u32) -> i32 {
     let mut node = forms(list);
     let mut idx: i32 = 0;
-    while node != 0 {
+    let mut walked = 0;
+    while node != 0 && crate::invref::list_step(e, &mut walked) {
         let item = e.mem.u32(node);
         if item != 0 {
             if super::misc_ref::passed_over(e, form) {
@@ -182,7 +183,7 @@ fn add_at_temp(e: &mut Engine, list: u32, form: u32, index: i32, dupes: bool) ->
     }
     let res = add_at(e, forms(list), form, at);
     if is_added(e, list, res) {
-        let n = added(e, list) + 1;
+        let n = added(e, list).wrapping_add(1);
         e.mem.set_u32(list + LIST_ADDED, n);
     }
     res
@@ -402,7 +403,8 @@ fn list_clear(e: &mut Engine, w: &[u32]) -> Ret {
     let mut node = e.mem.u32(head + 4);
     e.mem.set_u32(head, 0);
     e.mem.set_u32(head + 4, 0);
-    while node != 0 {
+    let mut walked = 0;
+    while node != 0 && crate::invref::list_step(e, &mut walked) {
         let next = e.mem.u32(node + 4);
         e.call(FORM_HEAP_FREE, &args![node]);
         node = next;
@@ -485,7 +487,10 @@ fn for_each_in_list(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     }
     let mut node = forms(list);
-    while !(node == 0 || (e.mem.u32(node) == 0 && e.mem.u32(node + 4) == 0)) {
+    let mut walked = 0;
+    while !(node == 0 || (e.mem.u32(node) == 0 && e.mem.u32(node + 4) == 0))
+        && crate::invref::list_step(e, &mut walked)
+    {
         let form = e.mem.u32(node);
         crate::functions::call(
             e,

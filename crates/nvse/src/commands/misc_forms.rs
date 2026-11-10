@@ -185,7 +185,8 @@ pub(super) fn nth_node(e: &Engine, head: u32, index: i32) -> u32 {
 /// `tList::GetLastNode`: the last node and its index.
 pub(super) fn last_node(e: &Engine, head: u32) -> (u32, i32) {
     let (mut node, mut index) = (head, 0);
-    while e.mem.u32(node + 4) != 0 {
+    let mut walked = 0;
+    while e.mem.u32(node + 4) != 0 && crate::invref::list_step(e, &mut walked) {
         node = e.mem.u32(node + 4);
         index += 1;
     }
@@ -277,7 +278,11 @@ pub(super) fn remove_nth(e: &mut Engine, head: u32, idx: i32) -> u32 {
         return removed;
     }
     let (mut node, mut idx) = (head, idx);
+    let mut walked = 0;
     while e.mem.u32(node + 4) != 0 {
+        if !crate::invref::list_step(e, &mut walked) {
+            return 0;
+        }
         idx -= 1;
         if idx == 0 {
             break;
@@ -313,7 +318,8 @@ pub(super) fn count(e: &Engine, head: u32) -> u32 {
         return 0;
     }
     let (mut node, mut n) = (head, 1);
-    while e.mem.u32(node + 4) != 0 {
+    let mut walked = 0;
+    while e.mem.u32(node + 4) != 0 && crate::invref::list_step(e, &mut walked) {
         node = e.mem.u32(node + 4);
         n += 1;
     }
@@ -573,7 +579,10 @@ fn get_default_forms(e: &mut Engine, w: &[u32]) -> Ret {
 fn tlist_nodes(e: &Engine, head: u32) -> Vec<u32> {
     let mut items = Vec::new();
     let mut node = head;
-    while !(node == 0 || (e.mem.u32(node) == 0 && e.mem.u32(node + 4) == 0)) {
+    let mut walked = 0;
+    while !(node == 0 || (e.mem.u32(node) == 0 && e.mem.u32(node + 4) == 0))
+        && crate::invref::list_step(e, &mut walked)
+    {
         items.push(e.mem.u32(node));
         node = e.mem.u32(node + 4);
     }
