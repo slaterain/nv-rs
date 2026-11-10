@@ -4,8 +4,10 @@
 //! render passes with the thread's batch renderer by pass type ([`batch`]); the batch renderer then
 //! draws the groups type by type, beginning each shader pass and drawing each geometry, while the
 //! render state setters keep the device's states behind lock counters and a cache ([`state`]); the
-//! shaders' per-geometry set-ups (world matrix, light colour, blend states) are in [`accumulator`], a
-//! constant map's upload of its entries for each draw in [`constants`].
+//! shaders' per-geometry set-ups (world matrix, light colour, blend states) are in [`accumulator`], the
+//! shadow light shader's per-geometry constants (`SetupGeometryConstants` and the sixteen constant
+//! set-ups it calls) in [`geometry`], a constant map's upload of its entries for each draw in
+//! [`constants`].
 //!
 //! Stage 1: the objects stay in guest memory where the game made them and are read through their
 //! [`layout`]. Each function stays registered at its exe address; a call inside the family is a
