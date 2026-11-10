@@ -186,10 +186,13 @@ impl Gpu {
         });
     }
 
-    /// A triangle covering the whole target at depth `z`, in its own part of the buffer.
+    /// A triangle covering the whole target at depth `z`, in its own part of the buffer. Its
+    /// edges lie outside the target: Direct3D 9's pixel centres are on whole coordinates, so an
+    /// edge at clip x = -1 runs through the left column's centres and leaves its multisample
+    /// samples left of the centre uncovered.
     fn cover(&mut self, z: f32) {
         let tri = floats(&[
-            -1.0, -1.0, z, 1.0, -1.0, 3.0, z, 1.0, 3.0, -1.0, z, 1.0,
+            -3.0, -3.0, z, 1.0, -3.0, 9.0, z, 1.0, 9.0, -3.0, z, 1.0,
         ]);
         let offset = 48 * (self.next % 64);
         self.next += 1;
@@ -252,7 +255,7 @@ fn user_clip_planes_cut_where_the_distance_is_negative() {
         plane,
     });
     // Off: everything drawn.
-    g.clear(1, 0, 1.0);
+    g.clear(3, 0, 1.0);
     g.cover(0.5);
     assert_eq!(g.reds(), vec![255; 16], "no plane on");
     // On (plane 2's bit).
@@ -286,16 +289,14 @@ fn occlusion_queries_count_the_samples_their_draws_pass() {
         let all = 16 * samples;
         assert_eq!(g.count(0x2000, |g| g.cover(0.25)), all, "{samples}: in front");
         assert_eq!(g.count(0x2010, |g| g.cover(0.75)), 0, "{samples}: behind");
-        // Two draws in one query: the left half of the viewport passes twice.
+        // Two draws in one query: each sample passes twice.
         let n = g.count(0x2020, |g| {
-            g.viewport(0, 0, 2, 4, 0.0, 1.0);
             g.state(ZENABLE, 0);
             g.cover(0.5);
             g.cover(0.5);
             g.state(ZENABLE, 1);
-            g.viewport(0, 0, 4, 4, 0.0, 1.0);
         });
-        assert_eq!(n, all, "{samples}: two draws on half");
+        assert_eq!(n, 2 * all, "{samples}: two draws");
         // Colour writes off still count; a later full clear does not.
         let n = g.count(0x2030, |g| {
             g.state(168, 0);
