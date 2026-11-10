@@ -148,7 +148,10 @@ pub fn requeue_cells_ahead(e: &mut Engine, entered: Ptr) {
                 if found {
                     let task = e.call(TASK_POINTER_GET, &args![item]).u32();
                     let data = e.mem.u32(task.wrapping_add(TASK_DATA));
-                    let place = (e.mem.u32(data) as i32, e.mem.u32(data.wrapping_add(4)) as i32);
+                    let place = (
+                        e.mem.u32(data) as i32,
+                        e.mem.u32(data.wrapping_add(4)) as i32,
+                    );
                     if Some(place) != own {
                         let wanted = cell_priority_at(e, place.0, place.1);
                         let current = u32::from(e.call(TASK_PRIORITY, &args![task]).u8());
@@ -212,6 +215,10 @@ mod tests {
     const TEST_REMOVE: u32 = 0x00d8_0014;
     const TEST_THREAD_OF: u32 = 0x00d8_0058;
     const SIGNAL_THREAD: u32 = 0x0044_2600;
+    /// The interlocked imports' slots: a test engine has no kernel bound to them.
+    const INTERLOCKED_COMPARE_EXCHANGE: u32 = 0x00fd_f1bc;
+    const INTERLOCKED_INCREMENT: u32 = 0x00fd_f1c0;
+    const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
     const MANAGER_COUNTS: u32 = 0x54;
     const MANAGER_TOTAL: u32 = 0x58;
     const MANAGER_MODE: u32 = 0x68;
@@ -242,7 +249,23 @@ mod tests {
         let mut e = Box::new(Engine::new());
         e.map(0x011c_0000, 0x6_0000);
         e.put_vtable(TASK_VTABLE, &TASK_SLOTS);
-        e.register(0x0040_1000, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(INTERLOCKED_INCREMENT, |e, a| {
+            let value = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], value);
+            value.into_ret()
+        });
+        e.register(INTERLOCKED_DECREMENT, |e, a| {
+            let value = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], value);
+            value.into_ret()
+        });
+        e.register(INTERLOCKED_COMPARE_EXCHANGE, |e, a| {
+            let old = e.mem.u32(a[0]);
+            if old == a[2] {
+                e.mem.set_u32(a[0], a[1]);
+            }
+            old.into_ret()
+        });
 
         let manager = e.mem.alloc(0x84);
         let mut slots = [0u32; 0x17];
@@ -263,12 +286,14 @@ mod tests {
         let inserted: Keys = Rc::default();
         let log = removed.clone();
         e.register_double(TEST_REMOVE, move |_, a| {
-            log.borrow_mut().push(u64::from(a[1]) | u64::from(a[2]) << 32);
+            log.borrow_mut()
+                .push(u64::from(a[1]) | u64::from(a[2]) << 32);
             1u32.into_ret()
         });
         let log = inserted.clone();
         e.register_double(TEST_INSERT, move |_, a| {
-            log.borrow_mut().push(u64::from(a[1]) | u64::from(a[2]) << 32);
+            log.borrow_mut()
+                .push(u64::from(a[1]) | u64::from(a[2]) << 32);
             1u32.into_ret()
         });
         e.register(TEST_THREAD_OF, |_, _| 0u32.into_ret());
