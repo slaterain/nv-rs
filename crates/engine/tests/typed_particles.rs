@@ -408,7 +408,14 @@ impl Common for Diff {
             .family(&culling::CULLING)
             .family(&leaf::LEAVES)
             .goes_by_address(&[0x00ec_6040])
-            .translation_calls_plainly(&[0x0040_19d0, 0x0040_8860])
+            // What the translations of the dispatch family's matrix functions call plainly (its PLAIN list).
+            .translation_calls_plainly(&[
+                0x0040_19d0,
+                0x0040_8860,
+                0x0047_6930,
+                0x0047_6980,
+                0x0047_69c0,
+            ])
             .max_calls(MAX_CALLS)
             .float_sweep(FLOAT_SWEEP)
     }
@@ -941,9 +948,12 @@ fn particles_controller_walk() {
         set_slot(e, s, 0xf0, UPDATE_SYSTEM);
         set_slot(e, s, 0xf4, DO_UPDATE_SYSTEM);
         let c = object(e, 0x34);
-        set_answer(e, c, bits(case, 2));
+        // The controller is in its own target's chain: its slot 8 answers a plain RTTI record.
+        let rtti = block(e, 8, &[0x0120_0000, 0]);
+        set_answer(e, c, rtti);
         e.mem.set_u16(c + 8, 0x08);
         e.mem.set_u32(c + 0x20, ONE);
+        e.mem.set_u32(c + 0x28, bits(case, 2));
         e.mem.set_u32(c + 0x2c, s);
         if case.word(0) != 0 {
             set_slot(e, c, 0x94, 0x00c2_71c0);
