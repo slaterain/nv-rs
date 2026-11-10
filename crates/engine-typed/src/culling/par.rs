@@ -9,20 +9,23 @@
 //! **The split.** On main, a node whose `OnVisible` walks at least `NV_PAR_RENDER_MIN` (default 16)
 //! children (not the walk's root), with a Bethesda culling process whose `Process` and
 //! `AppendVirtual` are the typed ones and no compound frustum in use, hands its children in
-//! contiguous chunks to the helpers (`NV_PAR_RENDER_THREADS`, default 3). Each walks its chunks with
-//! its own copy of the process (its bytes on the helper's guest stack; at a child's `Cull` the
-//! process is in the state the node's loop gives every child, since each child's walk puts the
-//! planes and mode back). Main waits: only it runs what the log holds.
+//! contiguous chunks to the helpers (`NV_PAR_RENDER_THREADS`, default 3) and walks chunks itself.
+//! Each walker takes the next chunk not yet taken and walks it with its own copy of the process
+//! (its bytes on the walker's guest stack; at a child's `Cull` the process is in the state the
+//! node's loop gives every child, since each child's walk puts the planes and mode back). Nothing
+//! the log holds runs before every chunk is walked.
 //!
-//! **The log.** While a helper walks a chunk it collects:
+//! **The log.** While a walker (a helper, or main in its part) walks a chunk it collects:
 //! - an object whose `OnVisible` is a geometry's (it would register itself with the accumulator),
 //!   or a function not audited for other cores (every one but the typed `NiNode` and
 //!   `BSMultiBoundNode` walks and the fade node's), is not run but logged with the process's mode
 //!   and active planes at that point;
-//! - the fade node's `OnVisible` runs on the helper: it writes its own fade state, and its three
+//! - the fade node's `OnVisible` runs on the walker: it writes its own fade state, and its three
 //!   calls into the accumulator's side (start and stop grouping alphas, the fade alpha down its
-//!   subtree's properties) are logged with their words instead of run (the helper's engine has
-//!   logging functions at those addresses, `engine_core::real_threads::helper_register`).
+//!   subtree's properties) are logged with their words instead of run (the walker's engine has
+//!   logging functions at those addresses: a helper's for good,
+//!   `engine_core::real_threads::helper_register`; main's only during its part of a split,
+//!   `caller_swap`, with what they stood in for put back before the replay).
 //!
 //! Otherwise the walk writes only the process copy and the multi-bound shapes' kept verdicts (each
 //! shape is one node's, so one chunk's).
@@ -46,7 +49,7 @@ use super::layout::{
 use super::probe::Refused;
 use super::FAMILY;
 use engine_core::ptr::Ptr;
-use engine_core::{typed_call, Engine, Ret};
+use engine_core::{typed_call, AbiFn, Engine, Ret};
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering::Relaxed};
 use std::sync::Mutex;
@@ -92,6 +95,8 @@ static PRINTED: AtomicU32 = AtomicU32::new(0);
 /// Splits the helpers walked (printed at 1024, 2048, 4096, ...: the proof they ran).
 static WALKS: AtomicU32 = AtomicU32::new(0);
 static COMPARED: AtomicU32 = AtomicU32::new(0);
+/// Chunks main walked itself.
+static MAIN_CHUNKS: AtomicU32 = AtomicU32::new(0);
 
 /// The bytes of a fade node its `OnVisible` writes: `m_uFlags` (+0x30) and the fade fields
 /// (+0xac to the end, 0xe4).
@@ -196,14 +201,15 @@ pub fn set_for_tests(mode: &str, helpers: usize, min_children: u32) {
     MODE.store(m, Relaxed);
 }
 
-/// For the replay-order test: splits walked on the helpers, splits the check mode compared, and
-/// the comparisons that differed, so far.
+/// For the replay-order test: splits walked in chunks, splits the check mode compared, the
+/// comparisons that differed, and the chunks main walked itself, so far.
 #[doc(hidden)]
-pub fn counts_for_tests() -> (u32, u32, u32) {
+pub fn counts_for_tests() -> (u32, u32, u32, u32) {
     (
         WALKS.load(Relaxed),
         COMPARED.load(Relaxed),
         PRINTED.load(Relaxed),
+        MAIN_CHUNKS.load(Relaxed),
     )
 }
 
@@ -292,13 +298,50 @@ fn log_fade_alpha(e: &mut Engine, args: &[u32]) -> Ret {
     log_call(e, SET_FADE_ALPHA, args, 1)
 }
 
+/// The functions that log the fade node's three accumulator-side calls, by the address each
+/// stands in for while a walker collects.
+const LOGGING: [(u32, AbiFn); 3] = [
+    (START_GROUPING_ALPHAS, log_start_grouping),
+    (STOP_GROUPING_ALPHAS, log_stop_grouping),
+    (SET_FADE_ALPHA, log_fade_alpha),
+];
+
 /// The logging functions on a helper's own engine (each job: a function registered for every
 /// engine since would otherwise replace them).
 fn install_logging(e: &mut Engine) {
-    use engine_core::real_threads::helper_register;
-    helper_register(e, START_GROUPING_ALPHAS, log_start_grouping);
-    helper_register(e, STOP_GROUPING_ALPHAS, log_stop_grouping);
-    helper_register(e, SET_FADE_ALPHA, log_fade_alpha);
+    for (addr, f) in LOGGING {
+        engine_core::real_threads::helper_register(e, addr, f);
+    }
+}
+
+/// Runs `fork` (a split's fork and join) with the logging functions on main's own engine, and
+/// puts back what they stood in for after it, also when it stops. `fork` is told whether they are
+/// there: they cannot go on main's engine when one of the three addresses has become a typed
+/// family's member (`engine_core::real_threads::caller_swap`); main then walks no chunk, and the
+/// helpers walk them all.
+fn with_logging_on_main<R>(e: &mut Engine, fork: impl FnOnce(&mut Engine, bool) -> R) -> R {
+    use engine_core::real_threads::caller_swap;
+    let mut put_back: Vec<(u32, AbiFn)> = Vec::with_capacity(LOGGING.len());
+    for (addr, f) in LOGGING {
+        match caller_swap(e, addr, f) {
+            Some(old) => put_back.push((addr, old)),
+            None => break,
+        }
+    }
+    let all = put_back.len() == LOGGING.len();
+    if !all {
+        for (addr, old) in put_back.drain(..) {
+            caller_swap(e, addr, old);
+        }
+    }
+    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fork(e, all)));
+    for (addr, old) in put_back {
+        caller_swap(e, addr, old);
+    }
+    match out {
+        Ok(out) => out,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 /// The process's frustum planes.
@@ -345,7 +388,7 @@ fn on_main(e: &Engine) -> bool {
     engine_core::thread_host::on_main(e)
 }
 
-/// Walks `children` (a chunk) with `process` into a log (on a helper).
+/// Walks `children` (a chunk) with `process` into a log (on a helper, or on main in its part).
 fn walk_chunk(e: &mut Engine, children: &[u32], process: u32) -> Vec<Entry> {
     LOG.with(|log| *log.borrow_mut() = Some(Vec::new()));
     struct Take;
@@ -369,28 +412,33 @@ fn walk_chunk(e: &mut Engine, children: &[u32], process: u32) -> Vec<Entry> {
     log
 }
 
-/// Runs `walk` on the helpers (not main) with a copy of the process `image` each.
-fn on_helpers(
+/// Runs `walk` on the helpers and on main (number 0), each with a copy of the process `image` on
+/// its own guest stack and the logging functions on its own engine. Main takes its copy in any
+/// case, and walks only with the logging functions there ([`with_logging_on_main`]).
+fn on_walkers(
     e: &mut Engine,
     helpers: usize,
     image: &[u8],
     walk: &(dyn Fn(&mut Engine, usize, u32) + Sync),
 ) -> bool {
-    let job = |w: &mut Engine, number: usize| {
-        if number == 0 {
-            return;
-        }
-        install_logging(w);
-        w.with_stack(PROCESS_SIZE, |w, local| {
-            w.mem.write(local.addr(), image);
-            walk(w, number, local.addr());
-        });
-    };
-    engine_core::real_threads::fork_join(e, helpers, &job)
+    with_logging_on_main(e, |e, main_walks| {
+        let job = |w: &mut Engine, number: usize| {
+            if number != 0 {
+                install_logging(w);
+            }
+            w.with_stack(PROCESS_SIZE, |w, local| {
+                w.mem.write(local.addr(), image);
+                if number != 0 || main_walks {
+                    walk(w, number, local.addr());
+                }
+            });
+        };
+        engine_core::real_threads::fork_join(e, helpers, &job)
+    })
 }
 
-/// Splits `node`'s `count` children over the helpers, then replays their logs. False (nothing
-/// done; the caller walks them as before) when a split isn't possible here.
+/// Splits `node`'s `count` children over the helpers and main, then replays their logs. False
+/// (nothing done; the caller walks them as before) when a split isn't possible here.
 pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32) -> bool {
     if collecting() || !on_main(e) {
         return false;
@@ -408,18 +456,21 @@ pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32)
         .map(|index| e.mem.u32(base.index(index, 4).addr()))
         .collect();
     let helpers = HELPERS.load(Relaxed);
-    let chunk = children.len().div_ceil(helpers * 4).max(1);
+    let chunk = children.len().div_ceil((helpers + 1) * 4).max(1);
     let chunks: Vec<&[u32]> = children.chunks(chunk).collect();
     let logs: Vec<Mutex<Option<Vec<Entry>>>> = chunks.iter().map(|_| Mutex::new(None)).collect();
     let next = AtomicUsize::new(0);
     let image = e.mem.bytes(process, PROCESS_SIZE);
     let check = mode() == 3;
     let saved: Mutex<Vec<FadeState>> = Mutex::new(Vec::new());
-    let walk = |w: &mut Engine, _number: usize, walk_process: u32| loop {
+    let walk = |w: &mut Engine, number: usize, walk_process: u32| loop {
         let k = next.fetch_add(1, Relaxed);
         let Some(children) = chunks.get(k) else {
             break;
         };
+        if number == 0 {
+            MAIN_CHUNKS.fetch_add(1, Relaxed);
+        }
         if check {
             SAVED.with(|s| *s.borrow_mut() = Some(Vec::new()));
         }
@@ -440,18 +491,19 @@ pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32)
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(log);
     };
     if mode() == 4 {
-        // Serial: the helpers take their process copies as when on, and walk nothing; main walks.
-        on_helpers(e, helpers, &image, &|_: &mut Engine, _: usize, _: u32| {});
+        // Serial: the helpers and main take their process copies as when on, and no one walks a
+        // chunk; main then walks the children as with the switch off.
+        on_walkers(e, helpers, &image, &|_: &mut Engine, _: usize, _: u32| {});
         return false;
     }
     let forked = timed.then(Instant::now);
-    if !on_helpers(e, helpers, &image, &walk) {
+    if !on_walkers(e, helpers, &image, &walk) {
         return refused(Refused::Helpers);
     }
     let joined = timed.then(Instant::now);
     let walks = WALKS.fetch_add(1, Relaxed) + 1;
     if walks.is_power_of_two() && walks >= 1024 {
-        println!("NV_PAR_RENDER: {walks} splits walked on the helpers");
+        println!("NV_PAR_RENDER: {walks} splits walked in chunks");
     }
     let logs: Vec<Vec<Entry>> = logs
         .into_iter()
@@ -481,7 +533,7 @@ pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32)
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = log;
             }
         };
-        on_helpers(e, helpers, &image, &one);
+        on_walkers(e, helpers, &image, &one);
         let serial = serial
             .into_inner()
             .unwrap_or_else(std::sync::PoisonError::into_inner);

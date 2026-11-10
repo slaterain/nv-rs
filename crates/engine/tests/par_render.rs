@@ -20,16 +20,17 @@
 //! each chunked walk (several helper counts, so several chunkings, two split sizes, the check and
 //! serial modes) must record the same list, all of it on main.
 //!
-//! Out-of-order completion is forced: the most-alpha callback sleeps 100 ms on a helper for the
-//! fade node that is the big node's first child, so the helper walking the first chunk finishes
-//! after the others have walked the last one (a sequence number taken on the helpers shows it).
+//! Out-of-order completion is forced: while a walk is chunked the most-alpha callback sleeps 100 ms
+//! for the fade node that is the big node's first child, so whoever walks the first chunk (main
+//! walks chunks too) finishes after the others have walked the last one (a sequence number taken
+//! at both shows it).
 //!
 //! One test: the helper pool is one per process, made from the first engine that forks.
 
 use engine as _;
 use engine_core::prelude::*;
 use engine_typed::culling;
-use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::SeqCst};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -152,8 +153,10 @@ static RECORD: Mutex<Vec<Rec>> = Mutex::new(Vec::new());
 static MAIN_PROCESS: AtomicU32 = AtomicU32::new(0);
 /// The fade nodes whose most alpha is 0.5 (they group their alphas); the rest answer 1.
 static GROUPING: Mutex<Vec<u32>> = Mutex::new(Vec::new());
-/// The first chunk's slow fade node and the last chunk's, and the sequence numbers taken on the
-/// helpers when the slow one's sleep ended and when the last one ran (`u32::MAX`: not on a helper).
+/// The first chunk's slow fade node and the last chunk's, and the sequence numbers taken in a
+/// chunked walk when the slow one's sleep ended and when the last one ran (`u32::MAX`: not in one).
+/// `CHUNKED`: the walk under way is chunked (the switch on, or its check mode).
+static CHUNKED: AtomicBool = AtomicBool::new(false);
 static SLOW: AtomicU32 = AtomicU32::new(0);
 static LAST: AtomicU32 = AtomicU32::new(0);
 static SEQUENCE: AtomicU32 = AtomicU32::new(0);
@@ -271,11 +274,11 @@ fn stand_ins(e: &mut Engine) {
     e.register(WITHIN_FRUSTUM_FN, |e, a| {
         ret(u32::from(e.mem.u8(a[0] + SHAPE_ANSWER)))
     });
-    // The most alpha: 0.5 for the grouping nodes, 1 for the others. On a helper the first chunk's
-    // fade node sleeps first, and both marked nodes take a sequence number.
+    // The most alpha: 0.5 for the grouping nodes, 1 for the others. In a chunked walk the first
+    // chunk's fade node sleeps first, and both marked nodes take a sequence number.
     e.register(MOST_ALPHA_FN, |_, a| {
         let node = a[0];
-        if on_helper() {
+        if CHUNKED.load(SeqCst) {
             if node == SLOW.load(SeqCst) {
                 std::thread::sleep(Duration::from_millis(100));
                 SLOW_DONE.store(SEQUENCE.fetch_add(1, SeqCst), SeqCst);
@@ -701,8 +704,10 @@ fn walk(e: &mut Engine, t: &Tree, mode: &str, helpers: usize, min_children: u32)
     SLOW_DONE.store(u32::MAX, SeqCst);
     LAST_SEEN.store(u32::MAX, SeqCst);
     culling::par_set_for_tests(mode, helpers, min_children);
+    CHUNKED.store(mode == "on" || mode == "check", SeqCst);
     let before = e.mem.bytes(t.process, 0xc8);
     e.call(CULL, &args![t.root, t.process]);
+    CHUNKED.store(false, SeqCst);
     assert_eq!(
         e.mem.bytes(t.process, 0xc8),
         before,
@@ -774,19 +779,20 @@ fn chunked_walks_replay_the_serial_order() {
         "a split ends on an entry in another mode than main's"
     );
 
-    // The first fork makes the pool with 4 helpers; later ones use 1 to 4 of them, so the big
-    // node's 40 children are cut into 4, 8, 10 or 14 chunks. Three nodes split at 16+ children (the
-    // 40, the 20, and the 24 under the root's multi-bound node), one at 30+.
+    // The first fork makes the pool with 4 helpers; later ones use 1 to 4 of them and main, so
+    // the big node's 40 children are cut into 20, 14, 10 or 8 chunks. Three nodes split at 16+
+    // children (the 40, the 20, and the 24 under the root's multi-bound node), one at 30+.
+    let main_chunks = culling::par_counts_for_tests().3;
     for (helpers, min_children) in [(4, 16), (3, 16), (2, 16), (1, 16), (3, 30), (2, 2)] {
-        let (walks, _, _) = culling::par_counts_for_tests();
+        let (walks, _, _, _) = culling::par_counts_for_tests();
         let started = std::time::Instant::now();
         let got = walk(&mut e, &t, "on", helpers, min_children);
-        let (walks_now, _, _) = culling::par_counts_for_tests();
+        let (walks_now, _, _, _) = culling::par_counts_for_tests();
         let splits = if min_children <= 20 { 3 } else { 1 };
         assert_eq!(
             walks_now - walks,
             splits,
-            "{helpers} helpers, nodes of {min_children}+: splits walked on the helpers"
+            "{helpers} helpers, nodes of {min_children}+: splits walked in chunks"
         );
         assert!(
             got.iter().all(|r| r.main),
@@ -799,14 +805,13 @@ fn chunked_walks_replay_the_serial_order() {
         let (slow, last) = (SLOW_DONE.load(SeqCst), LAST_SEEN.load(SeqCst));
         assert!(
             slow != u32::MAX && last != u32::MAX,
-            "{helpers} helpers: both marked fade nodes ran on helpers"
+            "{helpers} helpers: both marked fade nodes ran in chunk walks"
         );
-        if helpers >= 2 {
-            assert!(
-                last < slow,
-                "{helpers} helpers: the last chunk was walked before the first one finished"
-            );
-        }
+        // Main walks chunks too, so even one helper makes two walkers.
+        assert!(
+            last < slow,
+            "{helpers} helpers: the last chunk was walked before the first one finished"
+        );
         eprintln!(
             "{helpers} helpers, nodes of {min_children}+: {} entries, same as serial, {:?}",
             got.len(),
@@ -814,8 +819,14 @@ fn chunked_walks_replay_the_serial_order() {
         );
     }
 
+    // Main walked chunks itself (it starts on the first while the helpers wake).
+    assert!(
+        culling::par_counts_for_tests().3 > main_chunks,
+        "main walked no chunk in any of the chunked walks"
+    );
+
     // No split: a node must have this many children.
-    let (walks, _, _) = culling::par_counts_for_tests();
+    let (walks, _, _, _) = culling::par_counts_for_tests();
     assert_eq!(walk(&mut e, &t, "on", 3, 41), serial);
     assert_eq!(culling::par_counts_for_tests().0, walks);
 
@@ -825,9 +836,9 @@ fn chunked_walks_replay_the_serial_order() {
     assert_eq!(culling::par_counts_for_tests().0, walks);
 
     // The check mode: the chunked logs against one helper's walk of the same children.
-    let (_, compared, differed) = culling::par_counts_for_tests();
+    let (_, compared, differed, _) = culling::par_counts_for_tests();
     let got = walk(&mut e, &t, "check", 3, 16);
-    let (_, compared_now, differed_now) = culling::par_counts_for_tests();
+    let (_, compared_now, differed_now, _) = culling::par_counts_for_tests();
     assert_eq!(
         compared_now - compared,
         3,
