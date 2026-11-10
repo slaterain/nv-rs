@@ -44,6 +44,7 @@ use crate::fixes::Fix;
 use engine::prelude::*;
 use engine::units::fallout_ai::actor::{fn_00881d30, fn_00882b90, fn_00883240, fn_00883800};
 use engine::units::fallout_ai::mobileobject::{fn_00932b70, mobile_object_load_game_ov2};
+use engine::units::fallout_misc::bgssaveloadgame::fn_008492b0;
 use std::collections::HashMap;
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -53,6 +54,9 @@ pub const LEVEL_CHANGES: [u32; 4] = [0x0088_1d30, 0x0088_2b90, 0x0088_3240, 0x00
 /// `MobileObject::LoadGame` and `InitLoadGame` for a form buffer (Xbox PDB `_ov2`).
 pub const LOAD_GAME: u32 = 0x0093_2a00;
 pub const INIT_LOAD_GAME: u32 = 0x0093_2b70;
+/// `BGSSaveLoadGame`'s second pass over the loaded buffers (each form's `InitLoadGame`, then
+/// `FinishLoadGame`).
+pub const SECOND_PASS: u32 = 0x0084_92b0;
 
 /// The row in [`crate::fixes::FIXES`].
 pub const FIX: Fix = Fix {
@@ -65,6 +69,7 @@ pub const FIX: Fix = Fix {
         LEVEL_CHANGES[3],
         LOAD_GAME,
         INIT_LOAD_GAME,
+        SECOND_PASS,
     ],
     summary: "an actor moved to another AI level while its saved data loads keeps its saved references for the second pass instead of following them",
     install,
@@ -269,6 +274,10 @@ pub fn level_change<R>(e: &mut Engine, actor: u32, f: impl FnOnce(&mut Engine) -
             _ => None,
         }
     };
+    // The pass that was to close the gap ended during the move: it closes now.
+    if parked.is_some() && !openers().contains_key(&key) {
+        gaps().remove(&key);
+    }
     if let Some(parked) = parked {
         let now = e.mem.u32(actor.wrapping_add(ACTOR_PROCESS));
         unpark(e, &parked, now);
@@ -279,14 +288,81 @@ pub fn level_change<R>(e: &mut Engine, actor: u32, f: impl FnOnce(&mut Engine) -
     }
 }
 
+/// Who opened a gap: the thread (a tag of this module's) and how many second passes were running on
+/// it then. The second pass that closes it is the next one to end on that thread at that depth.
+type Opener = (u64, u32);
+
+fn openers() -> MutexGuard<'static, HashMap<Key, Opener>> {
+    static OPENERS: OnceLock<Mutex<HashMap<Key, Opener>>> = OnceLock::new();
+    OPENERS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+}
+
+thread_local! {
+    /// This thread's tag, and the second passes running on it (a pass can run another: its
+    /// `FinishLoadGame` and, for a whole save, the queued loads run inside it).
+    static THREAD_TAG: u64 = {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    };
+    static PASS_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+fn opener() -> Opener {
+    (THREAD_TAG.with(|t| *t), PASS_DEPTH.with(|d| d.get()))
+}
+
 /// The actor's `LoadGame` returned: its process holds saved ids until `InitLoadGame`.
 pub fn loaded(e: &Engine, actor: u32) {
-    gaps().insert((e.kernel.id(), actor), Gap::Open);
+    let key = (e.kernel.id(), actor);
+    gaps().insert(key, Gap::Open);
+    openers().insert(key, opener());
+}
+
+/// Runs a second pass (`008492b0`). When it ends, the gaps it was the one to close are closed
+/// whether or not it reached their actors: it passes over a buffer whose form is gone, and that
+/// actor's address may later be another actor's, which must not be taken for half-loaded. The
+/// gaps of an outer pass on the same thread, and of other threads, stay open.
+pub fn second_pass<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
+    let (tag, depth) = opener();
+    PASS_DEPTH.with(|d| d.set(depth + 1));
+    let result = catch_unwind(AssertUnwindSafe(|| f(e)));
+    PASS_DEPTH.with(|d| d.set(depth));
+    let run = e.kernel.id();
+    let stale: Vec<Key> = {
+        let mut openers = openers();
+        let keys: Vec<Key> = openers
+            .iter()
+            .filter(|(key, at)| key.0 == run && **at == (tag, depth))
+            .map(|(key, _)| *key)
+            .collect();
+        for key in &keys {
+            openers.remove(key);
+        }
+        keys
+    };
+    {
+        let mut gaps = gaps();
+        for key in &stale {
+            // A move under way puts its ids back itself and finds nothing to do after.
+            if matches!(gaps.get(key), Some(Gap::Open)) {
+                gaps.remove(key);
+            }
+        }
+    }
+    match result {
+        Ok(value) => value,
+        Err(stop) => resume_unwind(stop),
+    }
 }
 
 /// The actor's `InitLoadGame` begins: the gap closes; ids a running level change took out go back
 /// into the actor's process first, for this pass to resolve.
 pub fn initialising(e: &mut Engine, actor: u32) {
+    openers().remove(&(e.kernel.id(), actor));
     let gap = gaps().remove(&(e.kernel.id(), actor));
     if let Some(Gap::Moving(parked)) = gap {
         let process = e.mem.u32(actor.wrapping_add(ACTOR_PROCESS));
@@ -317,6 +393,10 @@ pub fn install(e: &mut Engine) {
     e.register(INIT_LOAD_GAME, |e, a| {
         initialising(e, a[0]);
         fn_00932b70(e, Ptr::new(a[0]), Ptr::new(a[1]));
+        Ret::default()
+    });
+    e.register(SECOND_PASS, |e, a| {
+        second_pass(e, |e| fn_008492b0(e, Ptr::new(a[0]), a[1] as u8 != 0));
         Ret::default()
     });
 }
@@ -590,7 +670,8 @@ mod tests {
                 resume_unwind(stop);
             }
         }
-        /// The second pass on the actor: the gap closes, then the process's `InitLoadGame`.
+        /// The second pass on the actor: the gap closes, then the low level's `InitLoadGame` on the
+        /// process (the game runs the high and middle-high steps around it: see the test below).
         fn second_pass(&mut self) {
             let actor = self.actor;
             initialising(&mut self.e, actor);
@@ -632,7 +713,10 @@ mod tests {
         assert_eq!(w.e.mem.u32(w.old + 0x40), 0);
         assert_eq!(w.e.mem.u32(new + 0x40), SAVED_ID);
         w.second_pass();
-        // Resolved, marked once, its marker reserved once.
+        // Resolved, marked once, its marker reserved once: in this world, whose second pass is the
+        // low level's step alone. The game's chain for a high process runs the high, then the
+        // middle-high, then the low step, and the middle-high one reserves the marker again (the
+        // same reservation: harmless), so "once" is this world's count, not the game's.
         assert_eq!(w.e.mem.u32(new + 0x40), w.target);
         assert_eq!(w.count(SET_TARGETED), 1);
         assert_eq!(w.e.mem.u32(w.target + 8), 0x10 | TARGETED);
@@ -739,6 +823,68 @@ mod tests {
         loaded(&w.e, actor);
         assert!(matches!(gaps().get(&key), Some(Gap::Open)));
         initialising(&mut w.e, actor);
+        assert!(!gaps().contains_key(&key));
+    }
+
+    #[test]
+    fn a_gap_the_second_pass_never_reaches_closes_when_the_pass_ends() {
+        let mut w = world(true, 0, [0, 0, 0]);
+        let (actor, old, target) = (w.actor, w.old, w.target);
+        let key = (w.e.kernel.id(), actor);
+        loaded(&w.e, actor);
+        // The pass passes over the actor's buffer (its form gone).
+        second_pass(&mut w.e, |_| {});
+        assert!(!gaps().contains_key(&key));
+        // The address is another actor's now, fully loaded, with a real target: nothing parked.
+        w.e.mem.set_u32(old + 0x40, target);
+        level_change(&mut w.e, actor, |e| {
+            assert_eq!(e.mem.u32(old + 0x40), target)
+        });
+        assert_eq!(w.e.mem.u32(old + 0x40), target);
+    }
+
+    #[test]
+    fn a_pass_inside_a_pass_closes_only_its_own_gaps() {
+        let mut w = world(true, 0, [0, 0, 0]);
+        let outer = w.actor;
+        let inner = w.e.mem.alloc(0x200);
+        let run = w.e.kernel.id();
+        loaded(&w.e, outer);
+        second_pass(&mut w.e, |e| {
+            loaded(e, inner);
+            second_pass(e, |_| {});
+            assert!(!gaps().contains_key(&(run, inner)));
+            // The outer pass has not reached its actor yet.
+            assert!(matches!(gaps().get(&(run, outer)), Some(Gap::Open)));
+        });
+        assert!(!gaps().contains_key(&(run, outer)));
+    }
+
+    #[test]
+    fn another_threads_gap_stays_open_when_this_threads_pass_ends() {
+        let mut w = world(true, 0, [0, 0, 0]);
+        let key = (w.e.kernel.id(), w.actor);
+        gaps().insert(key, Gap::Open);
+        openers().insert(key, (u64::MAX, 0));
+        second_pass(&mut w.e, |_| {});
+        assert!(matches!(gaps().get(&key), Some(Gap::Open)));
+        gaps().remove(&key);
+        openers().remove(&key);
+    }
+
+    #[test]
+    fn a_pass_ending_during_a_move_closes_the_gap_when_the_move_ends() {
+        let mut w = world(true, SAVED_ID, [0, 0, 0]);
+        let (actor, old) = (w.actor, w.old);
+        let key = (w.e.kernel.id(), actor);
+        loaded(&w.e, actor);
+        level_change(&mut w.e, actor, |e| {
+            // The pass that was to close the gap ends while the move runs: the move keeps it.
+            second_pass(e, |_| {});
+            assert!(matches!(gaps().get(&key), Some(Gap::Moving(_))));
+        });
+        // The move put the ids back, then the gap closed.
+        assert_eq!(w.e.mem.u32(old + 0x40), SAVED_ID);
         assert!(!gaps().contains_key(&key));
     }
 }
