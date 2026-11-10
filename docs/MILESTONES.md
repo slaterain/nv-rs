@@ -35,7 +35,9 @@ lockfree, culling, pathing, shader, crt and dispatch after their speed gate: Goo
 crowded street +10%; docs/ENGINE_CRATE.md, "Typed code"). A tenth, `render` (the render path's stage binding,
 texture lookup, geometry pass, render passes and stream set-up, with direct calls through vtable slots between
 typed functions), is on since 2026-11-09: the whole family on against main's default with it off, the crowded
-street +4.6% (t 10).
+street +4.6% (t 10). An eleventh, `draw` (the main world draw's drivers and its alpha pass, the first step
+towards drawing on a thread of its own), is on after its gate: the recorded street run byte-identical with it
+off; no speed claim of its own.
 
 An interim Windows preview (maintainer, 2026-11-06) can be built with `scripts/package-playtest.ps1`:
 a ZIP a player can run with no build, labelled a preview, wgpu remaining the big release. It has only
