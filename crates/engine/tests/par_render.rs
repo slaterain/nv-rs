@@ -93,8 +93,9 @@ const LAST_FADE: u32 = 0xb4;
 const CURRENT_FADE: u32 = 0xb8;
 const BOUND_RADIUS: u32 = 0xbc;
 const FRAME_COUNTER: u32 = 0xc8;
-/// `m_uFlags`' faded-in bit.
+/// `m_uFlags`' faded-in bit, and its always-visible bit (the process does no `DoCulling`).
 const FADED_IN: u32 = 0x4000;
+const ALWAYS_VISIBLE: u32 = 0x800;
 
 /// A multi-bound node's size, its multi-bound and its culling mode; a shape's size here, its kept
 /// verdict (0 none yet, 1 inside, 2 outside) and the stand-in's answer.
@@ -630,8 +631,20 @@ fn tree(e: &mut Engine) -> Tree {
         big.push(child);
     }
     let big = kinds.node(e, 0xac, kinds.node_vt, 15.0, &big);
+    // The node of 20 ends on an all-visible multi-bound node on one plane (its bound inside the
+    // other five), whose last entry registers: the split's last replayed entry is in mode 1 with one
+    // active plane. The node is always visible, so no `DoCulling` around it puts the planes back
+    // either: the root's geometry after it (`last`) and the multi-bound node after that see main's
+    // own mode and planes only if the replay put them back.
     let second: Vec<u32> = (0..20)
         .map(|k| match k % 4 {
+            _ if k == 19 => {
+                let kids = [kinds.unaudited(e, 1), kinds.geometry(e, 0)];
+                let n = kinds.multi_bound_node(e, ALL_VISIBLE, 0, &kids);
+                let on_one_plane = small_bound(e, 1);
+                e.mem.set_u32(n + 0x20, on_one_plane);
+                n
+            }
             0 | 2 => kinds.geometry(e, k),
             1 => kinds.unaudited(e, k),
             _ => {
@@ -641,6 +654,7 @@ fn tree(e: &mut Engine) -> Tree {
         })
         .collect();
     let second = kinds.node(e, 0xac, kinds.node_vt, 12.0, &second);
+    e.mem.set_u32(second + 0x30, ALWAYS_VISIBLE);
     let last = kinds.geometry(e, 0);
     // The root's own multi-bound child, in the ask-the-shapes mode: the node of 24 under it splits
     // on main while main's process is in that mode; in it all-visible nodes whose shapes are asked
@@ -732,8 +746,9 @@ fn chunked_walks_replay_the_serial_order() {
     planes.dedup();
     assert!(planes.len() >= 3, "planes seen: {planes:x?}");
     // So do the culling modes: the process's own (0) and each multi-bound node's (the replay must
-    // set each entry's, and put main's back). Each mode is seen by registrations and by unaudited
-    // objects alike.
+    // set each entry's, and put main's back: the node of 20's last entry is in mode 1, and what the
+    // root walks after it is in mode 0). Each mode is seen by registrations and by unaudited objects
+    // alike.
     for tag in [Tag::Register, Tag::Unaudited] {
         let mut modes: Vec<u32> = serial
             .iter()
@@ -748,6 +763,16 @@ fn chunked_walks_replay_the_serial_order() {
             "{tag:?}: modes seen"
         );
     }
+    // The node of 20's last registration (mode 1, one active plane) is followed by the root's
+    // geometry `last` (mode 0, main's own).
+    assert!(
+        serial.windows(2).any(|w| w[0].tag == Tag::Register
+            && w[1].tag == Tag::Register
+            && w[0].words[2] == ALL_VISIBLE
+            && w[0].words[3].count_ones() == 1
+            && w[1].words[2] == 0),
+        "a split ends on an entry in another mode than main's"
+    );
 
     // The first fork makes the pool with 4 helpers; later ones use 1 to 4 of them, so the big
     // node's 40 children are cut into 4, 8, 10 or 14 chunks. Three nodes split at 16+ children (the

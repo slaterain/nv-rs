@@ -321,6 +321,10 @@ pub struct Engine {
     /// list: the region's lowest address and the current top (frames go down from the region's
     /// end); made at the thread's first local ([`Engine::with_stack`]).
     guest_stacks: Vec<Option<(u32, u32)>>,
+    /// Where this engine's own thread has its stack for locals when that is not a heap block of
+    /// [`GUEST_STACK_SIZE`]: the region's lowest address and its size. A render helper's
+    /// ([`Engine::place_thread_memory`]); `None` on every game thread's engine.
+    placed_stack: Option<(u32, u32)>,
     /// The typed migration's seam on this engine: which families are on and may go direct
     /// ([`crate::typed`]).
     pub(crate) typed: crate::typed::State,
@@ -335,6 +339,8 @@ pub struct Engine {
 
 /// The bytes of each game thread's stack for `with_stack` locals.
 pub const GUEST_STACK_SIZE: u32 = 1 << 20;
+/// The bytes of a thread's TLS block ([`Engine::new_tls_block`]).
+pub const TLS_BLOCK_SIZE: u32 = 0x1000;
 /// The bytes kept free at the top of each game thread's stack, below its end: they stand for the
 /// frames the exe has above a thread's first translated local (its start routine's, the C
 /// runtime's), so a store past the outermost local stays on the stack instead of reaching the
@@ -464,6 +470,7 @@ impl Engine {
             call_trace: crate::call_trace::for_new_engine(),
             stack_frames: Vec::new(),
             guest_stacks: Vec::new(),
+            placed_stack: None,
             typed: Default::default(),
             real: None,
             extend: Default::default(),
@@ -541,12 +548,39 @@ impl Engine {
     /// A new TLS block: 0x1000 bytes, zeroed, then the exe's `.tls` template
     /// when it is mapped, as Windows makes one for each thread.
     pub fn new_tls_block(&mut self) -> u32 {
-        let block = self.mem.alloc(0x1000);
+        let block = self.mem.alloc(TLS_BLOCK_SIZE);
+        self.fill_tls_block(block);
+        block
+    }
+
+    /// The exe's `.tls` template, when it is mapped, into the zeroed TLS block at `block`.
+    fn fill_tls_block(&mut self, block: u32) {
         if self.mem.is_mapped(0x0127_2000) {
             let template = self.mem.bytes(0x0127_2000, 0x2c5);
             self.mem.write(block, &template);
         }
-        block
+    }
+
+    /// A render helper's engine (`crate::real_threads::fork_join`) takes its thread's memory at
+    /// `at`, outside the heap ([`crate::mem::HELPER_AREA`]): `size` bytes mapped there (zeroed),
+    /// the TLS block first ([`TLS_BLOCK_SIZE`] bytes, with the exe's template) and the stack for
+    /// `with_stack` locals in the rest. So making the helpers takes nothing from the game's heap,
+    /// and every block the game allocates lies where it would without them.
+    pub(crate) fn place_thread_memory(&mut self, at: u32, size: u32) {
+        assert!(
+            size > TLS_BLOCK_SIZE + STACK_TOP_RESERVE + 0x1000,
+            "a helper's memory of {size:#x} bytes holds no stack"
+        );
+        self.mem.map(at, size);
+        self.mem.zero(at, size);
+        self.fill_tls_block(at);
+        self.tls = at;
+        self.placed_stack = Some((at + TLS_BLOCK_SIZE, size - TLS_BLOCK_SIZE));
+    }
+
+    /// The bytes of this engine's own thread's stack for locals.
+    fn stack_size(&self) -> u32 {
+        self.placed_stack.map_or(GUEST_STACK_SIZE, |(_, size)| size)
     }
 
     /// The running thread's TLS block as it is (0 before first use), and
@@ -813,6 +847,7 @@ impl Engine {
             call_trace: None,
             stack_frames: Vec::new(),
             guest_stacks: Vec::new(),
+            placed_stack: None,
             typed: self.typed.for_thread(),
             extend: self.extend.for_thread(),
             real,
@@ -1374,7 +1409,9 @@ impl Engine {
     /// since the mark is empty again.
     pub fn guest_stack_restore(&mut self, (thread, top): (usize, Option<u32>)) {
         if let Some(Some(stack)) = self.guest_stacks.get_mut(thread) {
-            stack.1 = top.unwrap_or(stack.0 + GUEST_STACK_SIZE - STACK_TOP_RESERVE);
+            stack.1 = top.unwrap_or(
+                stack.0 + self.placed_stack.map_or(GUEST_STACK_SIZE, |p| p.1) - STACK_TOP_RESERVE,
+            );
         }
     }
 
@@ -1409,7 +1446,7 @@ impl Engine {
             .get(self.thread_index())
             .copied()
             .flatten()?;
-        Some((base, base + GUEST_STACK_SIZE))
+        Some((base, base + self.stack_size()))
     }
 
     /// Takes a local of `size` bytes (rounded up to 8, zeroed) from game thread `thread`'s stack,
@@ -1422,8 +1459,11 @@ impl Engine {
         let (base, top) = match self.guest_stacks[thread] {
             Some(stack) => stack,
             None => {
-                let base = self.mem.alloc(GUEST_STACK_SIZE);
-                (base, base + GUEST_STACK_SIZE - STACK_TOP_RESERVE)
+                let (base, size) = match self.placed_stack {
+                    Some(placed) => placed,
+                    None => (self.mem.alloc(GUEST_STACK_SIZE), GUEST_STACK_SIZE),
+                };
+                (base, base + size - STACK_TOP_RESERVE)
             }
         };
         // In 64 bits, so a size near 4 GB stops here before anything is written.
@@ -1431,7 +1471,8 @@ impl Engine {
         let need = bytes + u64::from(FRAME_GAP);
         assert!(
             u64::from(top - base) >= need,
-            "game thread {thread}: its stack for locals ({GUEST_STACK_SIZE:#x} bytes) is full"
+            "game thread {thread}: its stack for locals ({:#x} bytes) is full",
+            self.stack_size()
         );
         let block = top - need as u32;
         self.guest_stacks[thread] = Some((base, block));

@@ -2458,6 +2458,10 @@ const HELPER_ID_BASE: u32 = 0x0001_0000;
 /// thread's (the thread list holds a few dozen), so `SuspendThread` of a game thread never finds it.
 const HELPER_INDEX_BASE: usize = 1000;
 
+/// The most helpers a pool can have: the slots of [`crate::mem::HELPER_AREA`].
+pub const MOST_HELPERS: usize = ((crate::mem::HELPER_AREA.end - crate::mem::HELPER_AREA.start)
+    / crate::mem::HELPER_SLOT) as usize;
+
 /// A job for [`fork_join`]: called once on each helper with its engine and number (1 to n), and on
 /// the caller with number 0.
 pub type HelperJob<'a> = &'a (dyn Fn(&mut Engine, usize) + Sync);
@@ -2518,14 +2522,20 @@ thread_local! {
 /// Each helper takes the caller's x87 control word (and with real threads counts as running game
 /// code for the page barrier while it works). With stepped threads the memory becomes shared at the
 /// first call. False (nothing run) on a helper, with a memory diagnostic that keeps memory unshared,
-/// or when the pool was made with fewer helpers (a pool with more runs the job on its first
-/// `helpers`). A helper's panic is resumed here after every helper is done.
+/// for more than [`MOST_HELPERS`], or when the pool was made with fewer helpers (a pool with more
+/// runs the job on its first `helpers`). A helper's panic is resumed here after every helper is
+/// done.
+///
+/// The helpers take nothing from the game's heap: each has its TLS block and its stack for locals
+/// at a fixed place of its own ([`crate::mem::HELPER_AREA`]). So a run lays the game's memory out
+/// the same whether it forks or not, and when: every block the game allocates has the address it
+/// has without the helpers.
 ///
 /// One pool per process, for the run that first forks: a caller from another run (another
 /// engine's kernel, as a second test in the same binary would be) stops with a panic. One caller
 /// at a time: a call while another runs (from another thread, or from inside a job) stops too.
 pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
-    if helpers == 0 || HELPER.with(Cell::get) {
+    if helpers == 0 || helpers > MOST_HELPERS || HELPER.with(Cell::get) {
         return false;
     }
     let world = e.real.as_ref().map(|r| r.world);
@@ -2547,8 +2557,10 @@ pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
     }
     let pool = *POOL.get_or_init(|| make_pool(e, world, helpers));
     // And once more with the pool in hand: of two runs that both found no pool above, one made it
-    // and the other got it here; its helpers view the maker's memory, so the other stops too (its
-    // memory may be shared by now: stepped threads share it just above).
+    // and the other got it here; its helpers view the maker's memory, so the other stops too. By
+    // then, with stepped threads, the other has already been changed just above: its memory may be
+    // shared and its kernel and device state leaked (they live until the process ends). Only tests
+    // run two engines' runs in one process, so only a test can get here.
     pool.assert_same_run(e.kernel.id(), world_id);
     if pool.count < helpers {
         return false;
@@ -2647,11 +2659,13 @@ fn make_pool(e: &mut Engine, world: Option<&'static World>, helpers: usize) -> &
             Some(world) => world.context(id, HELPER_INDEX_BASE + number),
             None => e.helper_context(),
         };
-        // Its TLS block and guest stack made here, in order, so the guest memory they take is the
-        // same in every run (made by the helpers themselves, the order would be a race).
-        let tls = helper.new_tls_block();
-        helper.swap_tls(tls);
-        helper.with_stack(4, |_, _| ());
+        // Its TLS block and stack for locals at its own fixed place outside the heap, so the
+        // helpers take no heap block: the game's memory is laid out as in a run without them.
+        let slot = u32::try_from(number - 1).unwrap_or(u32::MAX);
+        helper.place_thread_memory(
+            crate::mem::HELPER_AREA.start + slot * crate::mem::HELPER_SLOT,
+            crate::mem::HELPER_SLOT,
+        );
         let engine = SendEngine(Box::new(helper));
         std::thread::Builder::new()
             .name(format!("render helper {number}"))
@@ -4158,11 +4172,35 @@ mod tests {
         let world = ctx(&e).world;
         world.enter_guest();
         assert!(!fork_join(&mut e, 0, &|_: &mut Engine, _: usize| {}));
+        // Making the helpers and forking takes nothing from the heap: what it can still hand out
+        // and the highest address it has reached stay as they were, and each helper's stack for
+        // locals and TLS block lie in the helpers' own area.
+        let heap = (e.mem.heap_available(), e.mem.heap_top());
         let ran = AtomicUsize::new(0);
-        assert!(fork_join(&mut e, 2, &|_: &mut Engine, _: usize| {
+        let outside = AtomicUsize::new(0);
+        assert!(fork_join(&mut e, 2, &|w: &mut Engine, n: usize| {
             ran.fetch_add(1, Ordering::SeqCst);
+            if n != 0 {
+                let local = w.with_stack(16, |_, local| local.addr());
+                let stack = w.guest_stack_region().expect("a helper's stack");
+                let area = crate::mem::HELPER_AREA;
+                let inside = area.contains(&w.tls())
+                    && area.contains(&stack.0)
+                    && stack.1 <= area.end
+                    && (stack.0..stack.1).contains(&local);
+                if !inside {
+                    outside.fetch_add(1, Ordering::SeqCst);
+                }
+            }
         }));
         assert_eq!(ran.load(Ordering::SeqCst), 3);
+        assert_eq!(outside.load(Ordering::SeqCst), 0);
+        assert_eq!((e.mem.heap_available(), e.mem.heap_top()), heap);
+        assert!(!fork_join(
+            &mut e,
+            MOST_HELPERS + 1,
+            &|_: &mut Engine, _: usize| {}
+        ));
         // A job for fewer helpers than the pool has runs on those alone (the other is not counted).
         let numbers = Mutex::new(Vec::new());
         assert!(fork_join(&mut e, 1, &|_: &mut Engine, n: usize| {

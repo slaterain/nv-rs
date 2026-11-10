@@ -101,8 +101,10 @@
 //! - [`HEAP_LOW_END`]`..`[`HEAP_HIGH_BASE`]: the platform layer's own addresses
 //!   ([`PLATFORM_AREA`]): the code addresses of its COM objects and procedures (DirectInput,
 //!   DirectSound, DirectShow, Direct3D 9, NVAPI, `GetProcAddress` answers, from 0x7E000000),
-//!   module handles (0x7E100000..0x7E130000), the Bink state page (0x7E140000, mapped) and the
-//!   D3DX handles (from 0x7E300000, never mapped); then the built-in script extenders' code
+//!   module handles (0x7E100000..0x7E130000), the Bink state page (0x7E140000, mapped), the
+//!   D3DX handles (from 0x7E300000, never mapped) and the render helpers' TLS blocks and stacks
+//!   ([`HELPER_AREA`], 0x7E400000..0x7E800000, mapped when the helpers are made); then the
+//!   built-in script extenders' code
 //!   addresses ([`EXTENDER_CODE`], 0x7E800000..0x7F000000) and the built-ins' static data
 //!   ([`BUILTIN_DATA`], 0x7F000000..0x80000000: command tables, their strings and parameter
 //!   lists; ADR-0016). The heap never comes here, and a
@@ -568,10 +570,22 @@ pub const EXTENDER_CODE: std::ops::Range<u32> = 0x7E80_0000..0x7F00_0000;
 /// The built-ins' static data inside [`PLATFORM_AREA`]: command tables, their strings and
 /// parameter lists, mapped by the extender that installs (ADR-0016).
 pub const BUILTIN_DATA: std::ops::Range<u32> = 0x7F00_0000..HEAP_HIGH_BASE;
+/// The render helpers' own memory inside [`PLATFORM_AREA`] (`crate::real_threads::fork_join`):
+/// each helper's TLS block and stack for locals, [`HELPER_SLOT`] bytes a helper, mapped when the
+/// helpers are made. Outside the heap, so making them takes no heap block and moves none: a run
+/// lays the game's memory out the same with the helpers as without. Above the D3DX handles (which
+/// count up from 0x7E300000 in steps of 4: a quarter of a million of them would reach it) and
+/// below [`EXTENDER_CODE`].
+pub const HELPER_AREA: std::ops::Range<u32> = 0x7E40_0000..0x7E80_0000;
+/// The bytes of [`HELPER_AREA`] one helper has: its TLS block, then its stack.
+pub const HELPER_SLOT: u32 = 0x4_0000;
 const _: () = assert!(
     PLATFORM_AREA.start < EXTENDER_CODE.start
         && EXTENDER_CODE.end == BUILTIN_DATA.start
         && BUILTIN_DATA.end == PLATFORM_AREA.end
+        && PLATFORM_AREA.start < HELPER_AREA.start
+        && HELPER_AREA.end <= EXTENDER_CODE.start
+        && (HELPER_AREA.end - HELPER_AREA.start) % HELPER_SLOT == 0
 );
 /// The most bytes one heap block can have: the larger of the heap's two ranges (a block never
 /// spans both).
