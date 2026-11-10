@@ -77,7 +77,8 @@ pub const BOOL_CONSTANTS: u32 = 16;
 /// block can stop after the float constants its shader reads ([`float_constants_read`]).
 pub const REGS_SIZE: u64 = REGS_C_OFFSET + 16 * 256;
 /// Where `c` starts in `Regs`.
-pub const REGS_C_OFFSET: u64 = 16 * 16 + 16 * 4 + 16 * 4 + 16 * 4 + 16 * 4 + 16 * CLIP_PLANES as u64;
+pub const REGS_C_OFFSET: u64 =
+    16 * 16 + 16 * 4 + 16 * 4 + 16 * 4 + 16 * 4 + 16 * CLIP_PLANES as u64;
 
 /// How many float constants (`c0` up) a shader can read from the device's registers, at least:
 /// one past the highest register a source names, plus 3 (a matrix instruction such as `m4x4`

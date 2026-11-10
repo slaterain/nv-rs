@@ -8,11 +8,11 @@
 //! state (pipelines, shader modules, samplers, bind groups) are where the speed work starts.
 
 use crate::format::{self, d3dfmt, Format};
+use crate::fxhash::Map;
 use crate::shot::{self, Shots};
 use crate::sm::{self, wgsl, Stage};
 use crate::state::{self, rs, SamplerKey};
 use d3d9_stream::{Handle, Rect};
-use crate::fxhash::Map;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -357,7 +357,10 @@ pub struct Device {
     /// The last draw's pipeline key and pipeline, its bind group's key and group, its vertex
     /// link; the vertex links by shader and declaration; what the open pass was given.
     #[allow(clippy::type_complexity)]
-    last_pipeline: Option<(PipeKey, Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout)>)>,
+    last_pipeline: Option<(
+        PipeKey,
+        Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
+    )>,
     last_group: (Vec<(u32, u64, Option<SamplerKey>)>, Option<wgpu::BindGroup>),
     last_link: Option<((u64, u64), Arc<VertexLink>)>,
     vertex_links: Map<(u64, u64), Arc<VertexLink>>,
