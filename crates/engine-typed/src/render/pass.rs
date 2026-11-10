@@ -47,7 +47,7 @@ fn pass_stage(e: &Engine, index: u32) -> u32 {
 
 /// The property's clamp mode (slot 0xe0): [`clamp_mode`] directly when the slot holds it.
 #[inline(always)]
-fn property_clamp_mode(e: &mut Engine, property: u32) -> u32 {
+pub(crate) fn property_clamp_mode(e: &mut Engine, property: u32) -> u32 {
     if crate::slot_target(e, property, SLOT_CLAMP_MODE) == CLAMP_MODE {
         typed_call!(FAMILY, 0x00b6_71c0, clamp_mode(e, property))
     } else {

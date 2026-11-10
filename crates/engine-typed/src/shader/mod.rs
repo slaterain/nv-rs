@@ -6,8 +6,8 @@
 //! render state setters keep the device's states behind lock counters and a cache ([`state`]); the
 //! shaders' per-geometry set-ups (world matrix, light colour, blend states) are in [`accumulator`], the
 //! shadow light shader's per-geometry constants (`SetupGeometryConstants` and the sixteen constant
-//! set-ups it calls) in [`geometry`], a constant map's upload of its entries for each draw in
-//! [`constants`].
+//! set-ups it calls) in [`geometry`], its per-geometry textures in [`textures`], the per-light set-up its
+//! light loop runs in [`lighting`], a constant map's upload of its entries for each draw in [`constants`].
 //!
 //! Stage 1: the objects stay in guest memory where the game made them and are read through their
 //! [`layout`]. Each function stays registered at its exe address; a call inside the family is a
@@ -28,7 +28,9 @@ pub mod batch;
 pub mod constants;
 pub mod geometry;
 pub mod layout;
+pub mod lighting;
 pub mod state;
+pub mod textures;
 
 use geometry::{eye_pos_words, lights_words};
 
@@ -237,6 +239,29 @@ fn funcs() -> Vec<(u32, AbiFn)> {
             0x00b7_ba70,
             geometry::ambient_emittance(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, u32)
         ),
+        // The shadow light shader's per-geometry textures and the stage set-ups it calls (plain Rust calls
+        // there, as in the exe), and the per-light set-up of the light loop.
+        entry!(
+            0x00b7_d200,
+            textures::setup_geometry_textures(Ptr<_>, Ptr<_>)
+        ),
+        entry!(0x00b7_c0a0, textures::stage_texture(Ptr<_>, u32, u32)),
+        entry!(
+            0x00b7_c0e0,
+            textures::stage_second_texture(Ptr<_>, u32, u32)
+        ),
+        entry!(0x00b7_c120, textures::stage_light_texture(u32)),
+        entry!(0x00b7_c190, textures::stage_shared_texture(u32)),
+        entry!(
+            0x00b7_c290,
+            textures::stage_fourth_texture(u32, u32, u32)
+        ),
+        entry!(
+            0x00b7_c2c0,
+            textures::stage_fifth_texture(Ptr<_>, u32, u32)
+        ),
+        entry!(0x00b7_1b10, textures::stage_clamp(Ptr<_>, u32, u32)),
+        entry!(0x00b7_0820, lighting::light_setup(u32, Ptr<_>, f32)),
         entry!(
             0x00c0_3230,
             accumulator::texture_by_index(Ptr<_>, u32) -> u32

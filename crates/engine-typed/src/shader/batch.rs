@@ -8,7 +8,7 @@ use super::layout::{
     NiSkinPartition, PassGroup, PassHolder, PassList, PassNode, RenderPass,
 };
 use super::state::{self, DEVICE_SET_SAMPLER_STATE};
-use super::{elem_addr, low8, FAMILY};
+use super::{accumulator, elem_addr, geometry, low8, textures, FAMILY};
 use crate::culling::layout::NiBound;
 use crate::culling::{fstp, m32};
 use engine_core::abi::OneWord;
@@ -63,7 +63,6 @@ const SETUP_TYPE_D1: u32 = 0x00b7_dfe0;
 const SETUP_TYPE_102: u32 = 0x00b7_e150;
 const BEGIN_TYPES_FC_102: u32 = 0x00b7_dd50;
 const BEGIN_TYPES_CA_D1: u32 = 0x00b7_deb0;
-const RENDERER_IS_SKINNED: u32 = 0x00e7_2c20;
 const HOLDER_DRAW: u32 = 0x00e6_d310;
 const TAIL_KINDS_1_TO_5: u32 = 0x00b7_ac20;
 const TAIL_KIND_11: u32 = 0x00bb_96d0;
@@ -442,10 +441,12 @@ pub fn render_pass(
     }
     let renderer = e.global::<u32>(state::RENDERER);
     let geometry = e.get(pass, RenderPass::pGeometry);
-    if e.call(RENDERER_IS_SKINNED, &args![renderer, geometry, 0u32])
-        .u8()
-        != 0
-    {
+    let skinned: bool = typed_call!(
+        crate::render::FAMILY,
+        0x00e7_2c20,
+        crate::render::draw::is_skinned(e, Ptr::new(renderer), Ptr::new(geometry.addr()), 0u32)
+    );
+    if skinned {
         typed_call!(
             FAMILY,
             0x00b9_9110,
@@ -565,8 +566,7 @@ pub fn render_standard(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second
             call_third(e);
         }
     } else {
-        e.vcall(shader, slot::GEOMETRY_A, &args![state]);
-        e.vcall(shader, slot::GEOMETRY_B, &args![state]);
+        shader_geometry_setups(e, shader, state);
         if e.get(pass, RenderPass::ucSortFlag) != 0 {
             if second && e.call(IS_SHADOW_PASS, &args![pass_type]).u8() == 0 {
                 e.vcall(shader, slot::SECOND, &args![state]);
@@ -588,7 +588,7 @@ pub fn render_standard(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second
     }
     shader_draw(e, shader, geometry, 0u32, buffer, state);
     e.vcall(geometry.addr(), slot::SET_HOLDER, &args![holder]);
-    e.vcall(shader, slot::GEOMETRY_DONE, &args![state]);
+    shader_geometry_done(e, shader, state);
 }
 
 // Typed from 00b99110
@@ -638,8 +638,7 @@ pub fn render_skinned(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second:
                 ],
             );
             if first_partition {
-                e.vcall(shader, slot::GEOMETRY_A, &args![state]);
-                e.vcall(shader, slot::GEOMETRY_B, &args![state]);
+                shader_geometry_setups(e, shader, state);
                 if e.get(pass, RenderPass::ucSortFlag) != 0
                     && e.call(IS_SHADOW_PASS, &args![pass_type]).u8() == 0
                 {
@@ -686,7 +685,7 @@ pub fn render_skinned(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second:
     let data = e.get(geometry, NiGeometry::m_spModelData);
     let bits = e.get(data, NiGeometryData::m_usDirtyFlags) & 0xf000;
     e.set(data, NiGeometryData::m_usDirtyFlags, bits);
-    e.vcall(shader, slot::GEOMETRY_DONE, &args![state]);
+    shader_geometry_done(e, shader, state);
 }
 
 // Typed from 00b99390
@@ -829,6 +828,46 @@ pub fn sort_alphas(e: &mut Engine, this: Ptr<BSBatchRenderer>, camera: u32, subt
         let holder = e.global::<u32>(elem_addr(this, BSBatchRenderer::pAlphaGroups, index, 4));
         let list = Ptr::<PassHolder>::new(holder).at(PassHolder::kList);
         typed_call!(FAMILY, 0x00b9_9630, sort_list(e, list, COMPARE_BY_DEPTH));
+    }
+}
+
+/// The shader's per-geometry textures and constants (slots 0x78 and 0x7c, `thiscall(shader, state)`):
+/// the shadow light shader's (`00b7d200`, `00b7dab0`) directly when the slots hold them, as its classes
+/// have; another shader's through the vtable. Each slot is read when its call is made.
+#[inline(always)]
+fn shader_geometry_setups(e: &mut Engine, shader: u32, state: u32) {
+    if crate::slot_target(e, shader, slot::GEOMETRY_A) == 0x00b7_d200 {
+        typed_call!(
+            FAMILY,
+            0x00b7_d200,
+            textures::setup_geometry_textures(e, Ptr::new(shader), Ptr::new(state))
+        );
+    } else {
+        e.vcall(shader, slot::GEOMETRY_A, &args![state]);
+    }
+    if crate::slot_target(e, shader, slot::GEOMETRY_B) == 0x00b7_dab0 {
+        typed_call!(
+            FAMILY,
+            0x00b7_dab0,
+            geometry::setup_geometry_constants(e, Ptr::new(shader), Ptr::new(state))
+        );
+    } else {
+        e.vcall(shader, slot::GEOMETRY_B, &args![state]);
+    }
+}
+
+/// The shader's geometry end (slot 0x8c, `thiscall(shader, state)`): the shadow light shader's
+/// (`00b7c320`) directly when the slot holds it; another shader's through the vtable.
+#[inline(always)]
+fn shader_geometry_done(e: &mut Engine, shader: u32, state: u32) {
+    if crate::slot_target(e, shader, slot::GEOMETRY_DONE) == 0x00b7_c320 {
+        typed_call!(
+            FAMILY,
+            0x00b7_c320,
+            accumulator::restore_states(e, shader, state)
+        );
+    } else {
+        e.vcall(shader, slot::GEOMETRY_DONE, &args![state]);
     }
 }
 

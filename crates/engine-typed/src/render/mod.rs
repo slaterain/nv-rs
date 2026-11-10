@@ -9,7 +9,8 @@
 //! - [`pass`]: the current pass's stage binding and the shadow light shader's plain geometry pass;
 //! - [`passes`]: the lighting property's render passes (`GetRenderPasses`) and the small getters it
 //!   calls;
-//! - [`stream`]: preparing a draw's shader and streams with the geometry packing it calls.
+//! - [`stream`]: preparing a draw's shader and streams with the geometry packing it calls;
+//! - [`draw`]: the renderer's packed-geometry draw (the Direct3D draw calls) with its skinned test.
 //!
 //! A call the exe makes through a vtable or a function pointer stays one, except where the typed
 //! caller finds the slot holding a typed function ([`crate::slot_target`]): then it is a
@@ -26,6 +27,7 @@ use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
+pub mod draw;
 pub mod layout;
 pub mod pass;
 pub mod passes;
@@ -72,5 +74,9 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         // The geometry packing and streams.
         entry!(0x00e8_12f0, stream::prepare_streams(Ptr, u32, u32, u32, u32) -> u32),
         entry!(0x00e7_1fe0, stream::pack_geometry_buffer(Ptr, u32, u32, u32, u32, u8) -> bool),
+        // The packed-geometry draw.
+        entry!(0x00e7_4840, draw::draw_packed(Ptr, Ptr)),
+        entry!(0x00e7_2c20, draw::is_skinned(Ptr, Ptr, u32) -> bool),
+        entry!(0x00e8_0580, draw::pass_is_set(u32) -> u32),
     ]
 }

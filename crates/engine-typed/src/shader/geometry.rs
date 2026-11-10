@@ -11,7 +11,7 @@
 //! write to the device goes through the same calls in the same order: the D3D9 stream is the
 //! translation's. Floats use the exact x87 helpers, the same under either control word.
 
-use super::{accumulator, constants, state, FAMILY};
+use super::{accumulator, constants, lighting, state, FAMILY};
 use engine_core::prelude::*;
 
 /// The rendering object and its pass type (`011f91e0`, `011f91e4`), the current pass (`0126f74c`) and
@@ -310,11 +310,13 @@ pub fn pixel_entry_2(e: &mut Engine, _this: Ptr, pass_type: u32, object: Ptr) {
 }
 
 /// `ShadowLightShader::UpdateTogglesConstantLand` (`00c02c30`, engine map; `thiscall`, four
-/// words), `BSShaderManager::GetFogProperty` (`00b55520`, `cdecl`, one word), the fog
+/// words), `UpdateTogglesConstant` as the shadow light shader's vtable +0x154 holds it (`00c02d90`,
+/// this family's `set_tint`), `BSShaderManager::GetFogProperty` (`00b55520`, `cdecl`, one word), the fog
 /// property index byte (`011f91c4`), the three floats `SetupGeometryConstants_Toggles` writes
 /// (`011fa2d4`, `011fa2d8`, `011fa2dc`), `1.0` and `255.0` (`double`, `01012070`, `0101e568`) and
 /// the float it uses for bit 0 (`010af2f0`).
 const UPDATE_TOGGLES_LAND: u32 = 0x00c0_2c30;
+const UPDATE_TOGGLES: u32 = 0x00c0_2d90;
 const GET_FOG_PROPERTY: u32 = 0x00b5_5520;
 const FOG_INDEX: u32 = 0x011f_91c4;
 const TOGGLE_FIRST: u32 = 0x011f_a2d4;
@@ -361,7 +363,15 @@ pub fn toggles(
         let index = u32::from(e.global::<u8>(FOG_INDEX));
         let fog_property = e.call(GET_FOG_PROPERTY, &args![index]).u32();
         let target = e.mem.u32(vtable + 0x154);
-        e.call(target, &args![base, geometry, fog_property, fog]);
+        if target == UPDATE_TOGGLES {
+            typed_call!(
+                FAMILY,
+                0x00c0_2d90,
+                accumulator::set_tint(e, base, Ptr::new(geometry), fog_property, fog)
+            );
+        } else {
+            e.call(target, &args![base, geometry, fog_property, fog]);
+        }
     }
     if object != 0 && e.mem.u8(object + 8) == 0 {
         e.set_global(TOGGLE_FIRST, 0u32);
@@ -583,9 +593,9 @@ pub fn eye_pos(e: &mut Engine, pass_type: u32, object: Ptr, matrix: [u32; 16]) {
     e.set_global(EYE_VECTOR + 0xc, value);
 }
 
-/// `BSShaderManager::GetAccumulator` (`00b4f5c0`, engine map; no arguments) and the matrix
-/// `SetupGeometryConstants_ShadowProj` writes (`011fd968`, 16 floats).
-const GET_ACCUMULATOR: u32 = 0x00b4_f5c0;
+/// The matrix `SetupGeometryConstants_ShadowProj` writes (`011fd968`, 16 floats).
+/// `BSShaderManager::GetAccumulator` (`00b4f5c0`, engine map; no arguments) is the render family's
+/// `shader_accumulator`.
 const SHADOW_PROJECTION: u32 = 0x011f_d968;
 
 // Typed from 00b7b930
@@ -605,7 +615,11 @@ pub fn shadow_proj(e: &mut Engine, _this: Ptr, block: Ptr, flag: u32, transform:
     if object == 0 || e.mem.u32(object + 0x1c) == 0xffff_ffff {
         return;
     }
-    let accumulator = e.call(GET_ACCUMULATOR, &args![]).u32();
+    let accumulator: u32 = typed_call!(
+        crate::render::FAMILY,
+        0x00b4_f5c0,
+        crate::render::passes::shader_accumulator(e)
+    );
     if e.mem.u32(accumulator + 0x194) == 0 {
         return;
     }
@@ -815,14 +829,13 @@ pub fn simple_shadow_clip_planes(e: &mut Engine, this: Ptr, pass_type: u32) {
 
 /// The shader mode the shaders switch on (`011f91b8`), the shader manager's object `00b4f5d0`
 /// answers (unnamed, no arguments; its colour at +0x154), the per-light set-up `00b70820`
-/// (unnamed, `cdecl`: index, light, a float), `BSShaderLightingProperty::GetFirstActiveLight`
+/// ([`lighting::light_setup`]; `cdecl`: index, light, a float), `BSShaderLightingProperty::GetFirstActiveLight`
 /// (`00b70590`, engine map; `thiscall`, one word), the light positions and directions the
 /// set-up leaves (`011fa170` and `011fa1f0`, 0x10 bytes per light), `0.5` (`01016248`), the
 /// HDR light scale (`011f9184`) and the colour rows `SetupGeometryConstants_Lights` writes
 /// (`011fa0d0`).
 const SHADER_MODE: u32 = 0x011f_91b8;
 const MANAGER_OBJECT: u32 = 0x00b4_f5d0;
-const LIGHT_SETUP: u32 = 0x00b7_0820;
 const GET_FIRST_ACTIVE_LIGHT: u32 = 0x00b7_0590;
 const LIGHT_POSITIONS: u32 = 0x011f_a170;
 const LIGHT_DIRECTIONS: u32 = 0x011f_a1f0;
@@ -920,7 +933,16 @@ pub fn lights(
                 let i = u32::from(index);
                 let lights = e.mem.u32(rendering + 0xc);
                 let light = e.mem.u32(lights.wrapping_add(i * 4));
-                e.call(LIGHT_SETUP, &args![i, light, x87_quiet_bits(light_float)]);
+                typed_call!(
+                    FAMILY,
+                    0x00b7_0820,
+                    lighting::light_setup(
+                        e,
+                        i,
+                        Ptr::new(light),
+                        f32::from_bits(x87_quiet_bits(light_float))
+                    )
+                );
                 let row = LIGHT_VECTORS + 0x10 * i;
                 let position = LIGHT_POSITIONS + 0x10 * i;
                 let direction = LIGHT_DIRECTIONS + 0x10 * i;
@@ -1226,11 +1248,9 @@ pub fn ambient_emittance(
     e.set_global(ROWS + 0xc, x87_store32(value));
 }
 
-/// The model-to-world helper `00c4c2d0` (unnamed, `cdecl`: transform, skin, matrix out) and the
-/// two pass set-ups `SetupGeometryConstants` runs for types 4 and 5 (`00b7ad00`) and 0x250 and
-/// 0x251 (`00b7ce90`) (unit `thiscall`: geometry, property, rendering
-/// object).
-const MODEL_MATRIX: u32 = 0x00c4_c2d0;
+/// The two pass set-ups `SetupGeometryConstants` runs for types 4 and 5 (`00b7ad00`) and 0x250 and
+/// 0x251 (`00b7ce90`) (`thiscall`: geometry, property, rendering object). The model-to-world helper
+/// `00c4c2d0` (`cdecl`: transform, skin, matrix out) is the dispatch family's `inverse_4x4`.
 const PASS_SETUP_SHADOW: u32 = 0x00b7_ad00;
 const PASS_SETUP_SPECIAL: u32 = 0x00b7_ce90;
 
@@ -1278,7 +1298,11 @@ pub fn setup_geometry_constants(e: &mut Engine, this: Ptr, block: Ptr) {
     let transform = geometry + 0x68;
     e.with_stack(0x40, |e, matrix| {
         let matrix_addr = matrix.addr();
-        e.call(MODEL_MATRIX, &args![transform, skin, matrix_addr]);
+        typed_call!(
+            crate::dispatch::FAMILY,
+            0x00c4_c2d0,
+            crate::dispatch::math::inverse_4x4(e, Ptr::new(transform), skin, Ptr::new(matrix_addr))
+        );
         if skin == 0 {
             typed_call!(
                 FAMILY,
