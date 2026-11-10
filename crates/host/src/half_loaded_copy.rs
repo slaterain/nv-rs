@@ -109,14 +109,18 @@ pub fn in_copy<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
 
 /// Registers the transitions, the copy and the three reference calls (every preset).
 pub fn install(e: &mut Engine) {
-    let transitions: [fn(&mut Engine, Ptr<_>) -> bool; 4] =
-        [fn_00881d30, fn_00882b90, fn_00883240, fn_00883800];
-    for (address, transition) in TRANSITIONS.into_iter().zip(transitions) {
-        e.register(address, move |e, a| {
-            let actor = a[0];
-            in_transition(e, actor, |e| transition(e, Ptr::new(actor))).into_ret()
-        });
-    }
+    e.register(TRANSITIONS[0], |e, a| {
+        in_transition(e, a[0], |e| fn_00881d30(e, Ptr::new(a[0]))).into_ret()
+    });
+    e.register(TRANSITIONS[1], |e, a| {
+        in_transition(e, a[0], |e| fn_00882b90(e, Ptr::new(a[0]))).into_ret()
+    });
+    e.register(TRANSITIONS[2], |e, a| {
+        in_transition(e, a[0], |e| fn_00883240(e, Ptr::new(a[0]))).into_ret()
+    });
+    e.register(TRANSITIONS[3], |e, a| {
+        in_transition(e, a[0], |e| fn_00883800(e, Ptr::new(a[0]))).into_ret()
+    });
     e.register(PROCESS_COPY, |e, a| {
         let (this, other) = (a[0], a[1]);
         in_copy(e, |e| base_process_copy(e, Ptr::new(this), Ptr::new(other)));
@@ -207,9 +211,10 @@ mod tests {
             middle_high_process_set_target(e, Ptr::new(a[0]), a[1]);
             Ret::default()
         });
-        let stubs = LOW_COPY_CALLS
-            .into_iter()
-            .chain([NO_TARGET, DATA_HANDLER_TEST, SAVE_LOAD_TEST]);
+        let stubs =
+            LOW_COPY_CALLS
+                .into_iter()
+                .chain([NO_TARGET, DATA_HANDLER_TEST, SAVE_LOAD_TEST]);
         for address in stubs {
             e.register(address, |_, _| Ret::default());
         }
@@ -223,9 +228,9 @@ mod tests {
         });
         e.register(RESERVES_TARGET, |_, _| 1u32.into_ret());
         let holder = e.mem.alloc(0x10);
-        e.register(RUNNING_PACKAGE, move |_, _| holder.into_ret());
+        e.register_double(RUNNING_PACKAGE, move |_, _| holder.into_ret());
         let package = if reserving { e.mem.alloc(0x10) } else { 0 };
-        e.register(CURRENT_PACKAGE, move |_, _| package.into_ret());
+        e.register_double(CURRENT_PACKAGE, move |_, _| package.into_ret());
         let actor = e.mem.alloc(0x200);
         if half_loaded {
             e.mem.set_u32(actor + FORM_FLAGS, SAVED_FIELDS_UNRESOLVED);
