@@ -2557,8 +2557,10 @@ pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
     }
     let pool = *POOL.get_or_init(|| make_pool(e, world, helpers));
     // And once more with the pool in hand: of two runs that both found no pool above, one made it
-    // and the other got it here; its helpers view the maker's memory, so the other stops too (its
-    // memory may be shared by now: stepped threads share it just above).
+    // and the other got it here; its helpers view the maker's memory, so the other stops too. By
+    // then, with stepped threads, the other has already been changed just above: its memory may be
+    // shared and its kernel and device state leaked (they live until the process ends). Only tests
+    // run two engines' runs in one process, so only a test can get here.
     pool.assert_same_run(e.kernel.id(), world_id);
     if pool.count < helpers {
         return false;
