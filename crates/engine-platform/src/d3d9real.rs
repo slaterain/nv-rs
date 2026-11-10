@@ -317,7 +317,9 @@ extern "system" fn window_procedure(
             "NV_D3D9={}: the game's window was closed: the run ends",
             tag()
         );
-        // What the host asked to finish first (the copy-out of saves, `crate::on_exit`).
+        // What the host asked to finish first (the copy-out of saves, `crate::on_exit`). The window
+        // runs on its own thread, so this covers only the jobs main has already handed on: a save
+        // written in the frame still running on main when the window closes can be lost.
         crate::run_exit_hooks();
         std::process::exit(0);
     }

@@ -28,6 +28,9 @@ const VT_FN: u32 = 0x00ff_2000;
 const RETS: u32 = 0x0300_0000;
 /// The stand-in of the pass map's hash (its vtable's slot 4).
 const MAP_HASH: u32 = 0x00ff_2800;
+/// The stand-in of the pass map's key compare (its vtable's slot 8), for the tests that name the
+/// dispatch family: the map's lookup (`00853130`) is then the real one and walks the map's chains.
+const MAP_EQUAL: u32 = 0x00ff_2804;
 const MAX_CALLS: usize = 5_000;
 const FLOAT_SWEEP: usize = 48;
 
@@ -91,11 +94,15 @@ fn stand_ins_named(e: &mut Engine, render: bool, dispatch: bool) {
     slots!(e; 0x04, 0x08, 0x24, 0x30, 0x34, 0x64, 0x6c, 0x78, 0x7c, 0x80, 0x84, 0x88, 0x8c, 0xa0,
         0xa4, 0xa8, 0xac, 0xb0, 0xc0, 0xcc, 0xdc, 0xe0, 0xe4, 0xf0, 0xf4, 0xf8, 0xfc, 0x100, 0x104,
         0x10c, 0x110, 0x114, 0x15c, 0x170, 0x178, 0x1ac);
-    // The pass map: `GetAt(map, key, out)` finds keys below 0x200, value `key & 3`.
-    e.register(0x0085_3130, |e, a| {
-        e.mem.set_u32(a[2], a[1] & 3);
-        ret(u32::from(a[1] < 0x200))
-    });
+    // The pass map: `GetAt(map, key, out)` finds keys below 0x200, value `key & 3`. The lookup is a
+    // member of the dispatch family, so a test that names it gets the real lookup over the world's
+    // map (its hash and compare stand-ins below) instead.
+    if !dispatch {
+        e.register(0x0085_3130, |e, a| {
+            e.mem.set_u32(a[2], a[1] & 3);
+            ret(u32::from(a[1] < 0x200))
+        });
+    }
     e.register(0x0084_4700, |e, a| {
         let n = e.mem.u32(a[0] + 0xc);
         e.mem.set_u32(a[0] + 0xc, n + 1);
@@ -166,6 +173,8 @@ fn stand_ins_named(e: &mut Engine, render: bool, dispatch: bool) {
         let size = e.mem.u32(a[0] + 4);
         ret(if size == 0 { 0 } else { a[1] % size })
     });
+    // Its key compare: equal keys.
+    e.register(MAP_EQUAL, |_, a| ret(u32::from(a[1] == a[2])));
     // The active list's pass-type comparison.
     e.register(0x00b9_88a0, |_, a| {
         ret((a[0].wrapping_sub(a[1]) as i32).signum() as u32)
@@ -376,7 +385,11 @@ fn world_named(e: &mut Engine, render: bool, dispatch: bool) -> W {
     let br = obj(e, 0x98, br_vt);
     let groups = e.mem.alloc(4 * 0x68);
     set(e, br + 8, groups);
-    let map_vt = vtable(e, &[(4, MAP_HASH)]);
+    let map_vt = if dispatch {
+        vtable(e, &[(4, MAP_HASH), (8, MAP_EQUAL)])
+    } else {
+        vtable(e, &[(4, MAP_HASH)])
+    };
     set(e, br + 0xc, map_vt);
     set(e, br + 0x10, 4);
     let buckets = e.mem.alloc(0x10);

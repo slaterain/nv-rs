@@ -2506,7 +2506,9 @@ mod tests {
     /// changed a file without one would leave that save uncopied, silently. Each line outside the
     /// tests that inserts into, removes from or writes through `disk.files` or `disk.deleted`
     /// must have a `changed(` or `gone(` within five lines; and no other file of the crate
-    /// changes them outside its tests.
+    /// changes them outside its tests. A tripwire, not a guard: a local alias of the map or a
+    /// `mem::take` of it defeats this scan. The real guard would be private fields changed only
+    /// through methods that stamp.
     #[test]
     fn every_path_that_changes_the_runs_files_stamps_them() {
         let mutation = |line: &str| {
