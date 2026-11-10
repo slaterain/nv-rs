@@ -11,14 +11,10 @@ use crate::shader::{self, batch};
 use engine_core::ptr::Ptr;
 use engine_core::{args, typed_call, Engine};
 
-/// The camera hand-over to the scene renderer (`004e9bb0`, `thiscall(renderer, camera)`).
-const SCENE_SET_CAMERA: u32 = 0x004e_9bb0;
 /// The render mode's preparation (`00b4f450`, `cdecl(mode)`).
 const RENDER_MODE_PREPARE: u32 = 0x00b4_f450;
 /// The render modes' draws (`011f9f40`, `cdecl(accumulator)`; entry 0 for a mode without one).
 const RENDER_MODE_DRAWS: u32 = 0x011f_9f40;
-/// The lighting shaders' fog-coloured ambient set-up (`00bbb840`, no words).
-const FOG_AMBIENT_SETUP: u32 = 0x00bb_b840;
 /// Whether a batch renderer's active list holds a pass type in a range (`00b98970`,
 /// `thiscall(renderer, low, high)`).
 const HAS_LISTED_PASS: u32 = 0x00b9_8970;
@@ -46,7 +42,7 @@ fn start(e: &mut Engine, camera: u32, acc: u32) -> bool {
     if scene == 0 || camera == 0 {
         return false;
     }
-    e.call(SCENE_SET_CAMERA, &args![scene, camera]);
+    typed_call!(FAMILY, 0x004e_9bb0, packet::hand_camera(e, scene, camera));
     packet::note_camera(e, camera);
     typed_call!(FAMILY, 0x00b5_4b10, hold_accumulator(e, acc));
     camera_into(e, acc, camera);
@@ -165,15 +161,26 @@ pub fn first_half(e: &mut Engine, acc: Ptr<BSShaderAccumulator>) {
     let saved = own::swap_group_zero_flag(e, 1);
     typed_call!(FAMILY, 0x00b6_39e0, draw_group(e, acc, 0u32, 0u32));
     own::swap_group_zero_flag(e, saved);
-    e.call(DECAL_PASS, &args![acc]);
+    typed_call!(FAMILY, 0x00b6_4e30, decal_pass(e, acc));
     typed_call!(FAMILY, 0x00b6_3770, draw_types(e, acc, 0x25cu32, 0x287u32, 0u32, -1i32));
     typed_call!(FAMILY, 0x00b6_3a50, sort_alphas(e, acc));
     let group = u32::from(!packet::late_alpha_group(e, acc));
     typed_call!(FAMILY, 0x00b6_50c0, alpha::draw_alpha_group(e, acc, group));
 }
 
-/// The decal pass (`00b64e30`, `thiscall(accumulator)`).
-const DECAL_PASS: u32 = 0x00b6_4e30;
+// Typed from 00b64e30
+/// The decal pass, `thiscall(accumulator)` (named `BSRenderState::SetRenderState` in the engine map,
+/// but an accumulator method): with decals on and a render mode other than 8, register groups 2 and 3
+/// (flag 1) drawn in the decal state ([`own::decal_state_on`], [`own::decal_state_off`]).
+pub fn decal_pass(e: &mut Engine, acc: Ptr<BSShaderAccumulator>) {
+    if !packet::render_decals(e, acc) || packet::render_mode(e, acc) == 8 {
+        return;
+    }
+    own::decal_state_on(e);
+    typed_call!(FAMILY, 0x00b6_39e0, draw_group(e, acc, 2u32, 1u32));
+    typed_call!(FAMILY, 0x00b6_39e0, draw_group(e, acc, 3u32, 1u32));
+    own::decal_state_off(e);
+}
 
 // Typed from 00b65c60
 /// Render mode 0's finish, `cdecl(accumulator)`: with +0x38 set and a pass of the types 0x288..0x2ce
@@ -190,7 +197,7 @@ pub fn second_half(e: &mut Engine, acc: Ptr<BSShaderAccumulator>) {
         }
         let camera = packet::camera(e, acc);
         let renderer = e.global::<u32>(packet::RENDERER);
-        e.call(SCENE_SET_CAMERA, &args![renderer, camera]);
+        typed_call!(FAMILY, 0x004e_9bb0, packet::hand_camera(e, renderer, camera));
     }
     typed_call!(FAMILY, 0x00b6_3770, draw_types(e, acc, 0x288u32, 0x289u32, 0u32, -1i32));
     typed_call!(FAMILY, 0x00b6_3770, draw_types(e, acc, 0x28au32, 0x2abu32, 0u32, -1i32));
@@ -239,7 +246,7 @@ pub fn draw_types(
 ) {
     type A = BSShaderAccumulator;
     if packet::fog_ambient(e) {
-        e.call(FOG_AMBIENT_SETUP, &[]);
+        typed_call!(FAMILY, 0x00bb_b840, own::fog_ambient(e));
     }
     let count = packet::renderer_count(e, acc);
     let n = (count as usize).min(MAX_RENDERERS);

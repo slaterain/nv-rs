@@ -76,5 +76,18 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b6_4f20, alpha::clear_alpha_group(Ptr<_>, u32)),
         entry!(0x00b9_a3c0, alpha::draw_and_clear_type(Ptr<_>, u32, u32, u32, u32) -> bool),
         entry!(0x00b9_a4d0, alpha::draw_holder(u32, u32)),
+        entry!(0x00b9_af60, alpha::render_next_alpha(Ptr<_>, u32, u32, u32, f32)),
+        // The decal pass and the fog-coloured ambient.
+        entry!(0x00b6_4e30, drivers::decal_pass(Ptr<_>)),
+        entry!(0x00bb_b840, own::fog_ambient()),
+        // The camera handed to the scene renderer, with the camera getters it reads (game-wide).
+        entry!(0x004e_9bb0, packet::hand_camera(u32, u32)),
+        entry!(0x004e_9c90, packet::pass_camera_data(u32, u32, u32, u32, u32, u32, u32)),
+        entry!(0x004a_0d10, packet::camera_frustum(u32) -> u32),
+        entry!(0x0045_bbe0, packet::camera_port(u32) -> u32),
+        entry!(0x0045_bb80, packet::world_translate(u32) -> u32),
+        entry!(0x0045_bba0, packet::rotation_column_0(u32, u32) -> u32),
+        entry!(0x004e_9c10, packet::rotation_column_1(u32, u32) -> u32),
+        entry!(0x004e_9c50, packet::rotation_column_2(u32, u32) -> u32),
     ]
 }

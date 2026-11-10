@@ -274,16 +274,17 @@ pub fn fn_00b64e30(e: &mut Engine, this: Ptr) {
     if e.mem.u8(DECAL_DEPTH_BIAS_ENABLED) == 0 {
         bias = x87_store32(0.0);
     }
-    bs_render_state_set_z_write_enable(e, 0, 1);
-    bs_render_state_set_depth_bias(e, f32::from_bits(bias), 1);
+    // By address, as `RenderNextAlpha` sets the same state, so the typed decal pass compares.
+    e.call(0x00b9_7e30, &args![0u32, 1u32]);
+    e.call(0x00b9_8320, &args![bias, 1u32]);
     e.call(ACCUMULATOR_RENDER_GROUP, &[base, 2, 1]);
     e.call(ACCUMULATOR_RENDER_GROUP, &[base, 3, 1]);
     let count = e.mem.u32(LOCK_COUNT_1).wrapping_sub(1);
     e.mem.set_u32(LOCK_COUNT_1, count);
-    bs_render_state_set_z_write_enable(e, 1, 0);
+    e.call(0x00b9_7e30, &args![1u32, 0u32]);
     let count = e.mem.u32(LOCK_COUNT_3).wrapping_sub(1);
     e.mem.set_u32(LOCK_COUNT_3, count);
-    bs_render_state_set_depth_bias(e, 0.0, 0);
+    e.call(0x00b9_8320, &args![0u32, 0u32]);
 }
 
 /// This unit's translated functions, by exe address.

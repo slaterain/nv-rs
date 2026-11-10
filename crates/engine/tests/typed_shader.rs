@@ -4662,7 +4662,7 @@ fn render_skinned_typed_setups() {
 // camera object), a second batch renderer, alpha holders and sorted alpha groups, and stand-ins for what
 // the draw calls outside the two families (the scene renderer's camera hand-over, the render mode
 // preparation and table, the fog ambient set-up, the clip planes, the render pass tree, the reflection
-// copy's renderer calls, the decal pass, a holder's own list draw, `RenderNextAlpha`, a sorted group's
+// copy's renderer calls, the decal pass, a holder's own list draw, a sorted group's
 // destructor and the list's `RemoveAll`).
 
 use engine_typed::draw::{self, alpha as dalpha, drivers, own, packet};
@@ -4670,16 +4670,14 @@ use engine_typed::draw::{self, alpha as dalpha, drivers, own, packet};
 /// Callees of the draw outside the families, stood in.
 fn draw_stand_ins(e: &mut Engine) {
     for addr in [
-        0x004e_9bb0u32,
-        0x00b4_f450,
-        0x00bb_b840,
+        0x00b4_f450u32,
         0x00b9_8280,
+        0x00b9_8320,
         0x0066_b0d0,
         0x00b6_b790,
         0x00b9_7550,
         0x00b6_b8d0,
         0x00b6_da10,
-        0x00b6_4e30,
         0x00b9_9990,
         0x00b9_a410,
     ] {
@@ -4687,6 +4685,14 @@ fn draw_stand_ins(e: &mut Engine) {
     }
     // A batch renderer's slot 0x90 (its pass types drawn).
     e.register(VT_FN + 0x90, slot_answer::<0x90>);
+    // The render object's camera data slot, and its check for the "SetCameraData" extra: present.
+    e.register(VT_FN + 0x18c, slot_answer::<0x18c>);
+    e.register(0x004a_0e10, |e, _| ret(e.mem.u32(RETS + 0x7f0)));
+    set(e, RETS + 0x7f0, 1);
+    // The fog-coloured ambient's targets and its enable object.
+    e.map(0x0120_0000, 0x2000);
+    let enable = e.mem.alloc(0x10);
+    set(e, 0x0120_10c4, enable);
     e.register(0x00b6_3420, |_, _| ret(0x0bad_7ee0));
     e.register(0x00b6_e110, |_, _| ret(0x00c0_c0a0));
     e.register(0x00b6_b260, |_, a| ret(a[0] ^ 0x5a5a));
@@ -4695,14 +4701,6 @@ fn draw_stand_ins(e: &mut Engine) {
         for k in 0..3 {
             e.mem.set_u32(a[0] + 4 * k, 0);
         }
-        ret(0)
-    });
-    // `RenderNextAlpha`: the renderer's alpha group drawn: its holder's count and its list's count
-    // cleared, so its next distance is -FLT_MAX.
-    e.register(0x00b9_af60, |e, a| {
-        let holder = e.mem.u32(a[0] + 0x70 + 4 * a[1]);
-        e.mem.set_u16(holder + 2, 0);
-        e.mem.set_u32(a[0] + 0x78 + 0xc * a[1] + 8, 0);
         ret(0)
     });
     // The render mode table: mode 3's own draw; mode 5's entry empty (entry 0 then runs).
@@ -4807,7 +4805,6 @@ const DRAW_PLAIN: &[u32] = &[
     0x00b9_9630,
     0x00b9_9bc0,
     0x00b6_3770,
-    0x00b6_39e0,
     0x00b6_3a50,
     0x00b6_5580,
     0x00b6_3120,
@@ -4815,6 +4812,9 @@ const DRAW_PLAIN: &[u32] = &[
     0x00b6_4f20,
     0x00b9_9a50,
     0x00b9_9990,
+    0x004e_9c50,
+    0x004e_9c10,
+    0x004e_9c90,
 ];
 
 trait DrawCommon {
@@ -5225,8 +5225,7 @@ fn draw_alpha_group() {
             set(e, d.w.acc + 0x18c, c.word(1));
             e.mem.set_u8(d.w.acc + 0x31, c.word(4) as u8);
             alpha_state(e, &d, c.word(0), c.word(2), c.word(3), bits(c, 5));
-            // The group word's upper bytes reach the radius word the exe pushes.
-            vec![d.w.acc, c.word(0) | 0x1200]
+            vec![d.w.acc, c.word(0)]
         })
         .run()
         .assert_same();
@@ -5340,4 +5339,193 @@ fn draw_holder() {
         })
         .run()
         .assert_same();
+}
+
+#[test]
+fn render_next_alpha() {
+    Diff::new(entry!(
+        0x00b9_af60,
+        dalpha::render_next_alpha(Ptr<_>, u32, u32, u32, f32)
+    ))
+    .draw_common()
+    .inputs(&[
+        Input::Of(TWO_WAYS),
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1, 0x101]),
+        Input::F32,
+        Input::F32Swept(HALF),
+        Input::Of(&[0, 1, 2, 3]),
+    ])
+    .max_cases(240)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(|e, c| {
+        let d = draw_world(e);
+        let group = c.word(0);
+        alpha_state(e, &d, group, c.word(1), c.word(2), bits(c, 5));
+        // The pass's property: none, plain, decal-biased, or of kind 0x15 in shader mode 9.
+        let pass = e.mem.u32(e.mem.u32(d.alpha_holders[0][group as usize] + 0x10) + 8);
+        let geometry = e.mem.u32(pass);
+        let property = e.mem.u32(geometry + 0xa8);
+        match c.word(6) {
+            0 => set(e, geometry + 0xa8, 0),
+            2 => set(e, property + 0x20, 0x0400_0000),
+            3 => {
+                set(e, 0x011f_91b8, 9);
+                set(e, property + 0x1c, 0x15);
+            }
+            _ => {}
+        }
+        // A sorted group that keeps its own passes, the other its renderer's.
+        let list = d.w.br + 0x78 + 0xc * group;
+        let head = e.mem.u32(list);
+        if head != 0 {
+            let g = e.mem.u32(head + 8);
+            e.mem.set_u8(g, 1);
+        }
+        vec![d.w.br, group, d.w.camera, c.word(3), bits(c, 4)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn decal_pass() {
+    Diff::new(entry!(0x00b6_4e30, own::decal_pass(Ptr<_>)))
+        .draw_common()
+        .inputs(&[
+            Input::Of(TWO_WAYS),
+            Input::Of(&[0, 8]),
+            Input::Of(TWO_WAYS),
+            Input::F32,
+        ])
+        .setup(|e, c| {
+            let d = draw_world(e);
+            e.mem.set_u8(d.w.acc + 0x16c, c.word(0) as u8);
+            set(e, d.w.acc + 0x19c, c.word(1));
+            e.mem.set_u8(0x011a_d80f, c.word(2) as u8);
+            set(e, 0x0120_0458, bits(c, 3));
+            vec![d.w.acc]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn fog_ambient() {
+    Diff::new(entry!(0x00bb_b840, own::fog_ambient()))
+        .draw_common()
+        .inputs(&[Input::Word])
+        .setup(|e, c| {
+            let _ = draw_world(e);
+            let enable = e.mem.alloc(0x10);
+            set(e, 0x0120_10c4, enable);
+            set(e, 0x011a_9bd0, c.word(0));
+            vec![]
+        })
+        .run()
+        .assert_same();
+}
+
+/// A camera whose world rotation and translate are swept floats.
+fn swept_camera(e: &mut Engine, c: &Case, first: usize) -> u32 {
+    let camera = e.mem.alloc(0x120);
+    for k in 0..12u32 {
+        let w = if k % 4 == 0 { bits(c, first) } else { bits(c, first + 1) ^ k };
+        set(e, camera + 0x68 + 4 * k, w);
+    }
+    camera
+}
+
+#[test]
+fn hand_camera() {
+    Diff::new(entry!(0x004e_9bb0, packet::hand_camera(u32, u32)))
+        .draw_common()
+        .inputs(&[Input::Of(TWO_WAYS), Input::F32Swept(ONE), Input::F32Swept(HALF)])
+        .float_sweep(16)
+        .setup(|e, c| {
+            let d = draw_world(e);
+            set(e, RETS + 0x7f0, c.word(0));
+            let camera = swept_camera(e, c, 1);
+            vec![d.w.renderer, camera]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn camera_getters() {
+    Diff::new(entry!(0x004a_0d10, packet::camera_frustum(u32) -> u32))
+        .draw_common()
+        .inputs(&[Input::Word])
+        .setup(|_, c| vec![c.word(0)])
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x0045_bbe0, packet::camera_port(u32) -> u32))
+        .draw_common()
+        .inputs(&[Input::Word])
+        .setup(|_, c| vec![c.word(0)])
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x0045_bb80, packet::world_translate(u32) -> u32))
+        .draw_common()
+        .inputs(&[Input::Word])
+        .setup(|_, c| vec![c.word(0)])
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn rotation_columns() {
+    Diff::new(entry!(0x0045_bba0, packet::rotation_column_0(u32, u32) -> u32))
+        .draw_common()
+        .inputs(&[Input::F32Swept(ONE), Input::F32Swept(HALF)])
+        .float_sweep(16)
+        .setup(|e, c| {
+            let camera = swept_camera(e, c, 0);
+            let out = e.mem.alloc(0xc);
+            vec![camera, out]
+        })
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x004e_9c10, packet::rotation_column_1(u32, u32) -> u32))
+        .draw_common()
+        .inputs(&[Input::F32Swept(ONE), Input::F32Swept(HALF)])
+        .float_sweep(16)
+        .setup(|e, c| {
+            let camera = swept_camera(e, c, 0);
+            let out = e.mem.alloc(0xc);
+            vec![camera, out]
+        })
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x004e_9c50, packet::rotation_column_2(u32, u32) -> u32))
+        .draw_common()
+        .inputs(&[Input::F32Swept(ONE), Input::F32Swept(HALF)])
+        .float_sweep(16)
+        .setup(|e, c| {
+            let camera = swept_camera(e, c, 0);
+            let out = e.mem.alloc(0xc);
+            vec![camera, out]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn pass_camera_data() {
+    Diff::new(entry!(
+        0x004e_9c90,
+        packet::pass_camera_data(u32, u32, u32, u32, u32, u32, u32)
+    ))
+    .draw_common()
+    .inputs(&[Input::Of(TWO_WAYS), Input::Word])
+    .setup(|e, c| {
+        let d = draw_world(e);
+        set(e, RETS + 0x7f0, c.word(0));
+        let w = c.word(1);
+        vec![d.w.renderer, w, w ^ 1, w ^ 2, w ^ 3, w ^ 4, w ^ 5]
+    })
+    .run()
+    .assert_same();
 }

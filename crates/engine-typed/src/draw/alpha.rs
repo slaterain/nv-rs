@@ -10,9 +10,6 @@ use engine_core::ptr::Ptr;
 use engine_core::x87::{x87_add, x87_load32, x87_m32, x87_mul, x87_quiet_bits, x87_store32, x87_sub};
 use engine_core::{args, typed_call, Engine};
 
-/// `BSBatchRenderer::RenderNextAlpha` (`00b9af60`, `thiscall(renderer, group, camera, subtract,
-/// limit)`), by address until it is typed.
-const RENDER_NEXT_ALPHA: u32 = 0x00b9_af60;
 /// `-FLT_MAX` as the float an empty group's distance is (`01015f5c`), and as the double the alpha
 /// draw's loop compares with (`010241b0`).
 const NO_DISTANCE: u32 = 0x0101_5f5c;
@@ -75,9 +72,10 @@ pub fn draw_alpha_group(e: &mut Engine, acc: Ptr<BSShaderAccumulator>, group: u3
         let flag = word(e, 0);
         let camera = packet::camera(e, acc);
         let renderer = packet::renderer(e, acc, which as u32);
-        e.call(
-            RENDER_NEXT_ALPHA,
-            &args![renderer, group, camera, flag, limit],
+        typed_call!(
+            FAMILY,
+            0x00b9_af60,
+            render_next_alpha(e, renderer, group, camera, flag, f32::from_bits(limit))
         );
         let flag = word(e, group & 0xffff_ff00);
         let camera = packet::camera(e, acc);
@@ -238,4 +236,200 @@ pub fn draw_holder(e: &mut Engine, holder: u32, flag: u32) {
         own::clear_active_list(e, renderer);
     }
     own::clear_holder_count(e, holder);
+}
+
+/// The double `RenderNextAlpha` takes off its limit (`01016978`, 0.001).
+const LIMIT_STEP: u32 = 0x0101_6978;
+/// `_isnan` (CRT, `cdecl(double)`).
+const ISNAN: u32 = 0x00ec_75b1;
+
+/// The distance of `pass` along `d` as `RenderNextAlpha` first takes it (the direction kept on the x87
+/// stack: each product the direction first, x then y, z last).
+#[inline(always)]
+fn next_alpha_first(e: &Engine, pass: u32, d: [f64; 3], subtract: bool) -> u32 {
+    let bound = packet::bound_of(e, e.global::<u32>(pass));
+    let p = |i: u32| x87_load32(e.global::<u32>(bound.wrapping_add(i * 4)));
+    let y = x87_mul(d[1], p(1));
+    let x = x87_mul(d[0], x87_m32(e.global::<u32>(bound)));
+    let dot = x87_add(x87_mul(d[2], p(2)), x87_add(y, x));
+    radius_off(e, bound, dot, subtract)
+}
+
+/// The same for the following passes (the direction read from its locals).
+#[inline(always)]
+fn next_alpha_next(e: &Engine, pass: u32, d: [u32; 3], subtract: bool) -> u32 {
+    let bound = packet::bound_of(e, e.global::<u32>(pass));
+    let p = |i: u32| x87_load32(e.global::<u32>(bound.wrapping_add(i * 4)));
+    let sum = x87_add(x87_mul(p(1), x87_m32(d[1])), x87_mul(p(0), x87_m32(d[0])));
+    let dot = x87_add(sum, x87_mul(p(2), x87_m32(d[2])));
+    radius_off(e, bound, dot, subtract)
+}
+
+/// A distance stored as a float, the radius taken off (and stored again) when `subtract`.
+#[inline(always)]
+fn radius_off(e: &Engine, bound: u32, dot: f64, subtract: bool) -> u32 {
+    if subtract {
+        let dot = x87_store32(dot);
+        x87_store32(x87_sub(
+            x87_load32(dot),
+            x87_m32(e.global::<u32>(bound.wrapping_add(0xc))),
+        ))
+    } else {
+        x87_store32(dot)
+    }
+}
+
+/// Whether `limit` is above `value` or either is NaN (the exe's `FCOMP` with `JP`/`JA` taken).
+#[inline(always)]
+fn beyond(limit: f64, value: f64) -> bool {
+    limit > value || limit.is_nan() || value.is_nan()
+}
+
+// Typed from 00b9af60
+/// `BSBatchRenderer::RenderNextAlpha` (Xbox PDB), `thiscall(renderer, group, camera, subtract,
+/// limit)`: draws, back to front, alpha group `group`'s passes (its holder's list) and its sorted
+/// groups (the group list) down to `limit` less 0.001 (the double at `01016978`). The current pass's
+/// distance is the camera direction dotted with its bound's centre (less the radius when `subtract`).
+/// While a sorted group is not nearer than the current pass (or there is no pass) and within the limit,
+/// it is drawn (its own passes through `00b99990` with 1 when it keeps them, else its batch renderer's
+/// slot 0x90 with 1, 0x2f1, 1), its renderer's active list cleared, the group destroyed and freed and
+/// its node given back to the pool. While the pass is within the limit it is drawn
+/// ([`draw_alpha_pass`]) and taken off the holder's list. The loop ends when neither is left within
+/// the limit, or the current distance is NaN (`_isnan`).
+pub fn render_next_alpha(
+    e: &mut Engine,
+    renderer: Ptr<BSBatchRenderer>,
+    group: u32,
+    camera: u32,
+    subtract: u32,
+    limit: f32,
+) {
+    let locals = packet::camera_direction_words(e, camera);
+    let d = locals.map(x87_load32);
+    let subtract = shader::low8(subtract) != 0;
+    let head = e.global::<u32>(packet::alpha_holder(e, renderer, group).wrapping_add(0x10));
+    let mut pass = if head != 0 {
+        e.global::<u32>(head.wrapping_add(8))
+    } else {
+        0
+    };
+    let mut current = x87_store32(0.0);
+    if pass != 0 {
+        current = next_alpha_first(e, pass, d, subtract);
+    }
+    let list = packet::alpha_list(renderer, group);
+    let first_sorted = |e: &Engine| {
+        if e.global::<u32>(list.wrapping_add(8)) != 0 {
+            e.global::<u32>(e.global::<u32>(list).wrapping_add(8))
+        } else {
+            0
+        }
+    };
+    let mut sorted = first_sorted(e);
+    let limit = x87_store32(x87_sub(
+        x87_load32(limit.to_bits()),
+        e.global::<f64>(LIMIT_STEP),
+    ));
+    let limit_value = x87_load32(limit);
+    loop {
+        // The sorted groups.
+        let mut pass_turn = false;
+        while sorted != 0 {
+            let distance = x87_load32(e.global::<u32>(sorted.wrapping_add(0x20)));
+            if !(x87_load32(current) < distance) && pass != 0 {
+                pass_turn = true;
+                break;
+            }
+            if beyond(limit_value, distance) {
+                break;
+            }
+            let own_renderer = packet::holder_renderer(e, sorted);
+            if packet::keeps_own(e, sorted) {
+                e.call(OWN_LIST_DRAW, &args![sorted.wrapping_add(0xc), 1u32]);
+            } else if own_renderer != 0 {
+                e.vcall(own_renderer, SLOT_DRAW_TYPES, &args![1u32, 0x2f1u32, 1u32]);
+            }
+            let own_renderer = packet::holder_renderer(e, sorted);
+            if own_renderer != 0 {
+                own::clear_active_list(e, own_renderer);
+            }
+            own::clear_holder_count(e, sorted);
+            own::free_alpha_group(e, sorted);
+            own::take_sorted_node(e, list);
+            sorted = first_sorted(e);
+        }
+        // The pass.
+        let mut check_pass = pass_turn || pass != 0;
+        if check_pass {
+            if !beyond(limit_value, x87_load32(current)) {
+                draw_alpha_pass(e, pass);
+                let holder = packet::alpha_holder(e, renderer, group);
+                own::take_first_pass(e, holder);
+                let holder = packet::alpha_holder(e, renderer, group);
+                let head = e.global::<u32>(holder.wrapping_add(0x10));
+                if head == 0 {
+                    pass = 0;
+                    check_pass = false;
+                } else {
+                    pass = e.global::<u32>(head.wrapping_add(8));
+                    if pass == 0 {
+                        check_pass = false;
+                    } else {
+                        current = next_alpha_next(e, pass, locals, subtract);
+                    }
+                }
+            }
+            if check_pass && limit_value <= x87_load32(current) {
+                if e.call(ISNAN, &args![x87_load32(current)]).u32() != 0 {
+                    return;
+                }
+                continue;
+            }
+        }
+        if sorted == 0 {
+            return;
+        }
+        let distance = x87_load32(e.global::<u32>(sorted.wrapping_add(0x20)));
+        if beyond(limit_value, distance) {
+            return;
+        }
+        if e.call(ISNAN, &args![x87_load32(current)]).u32() != 0 {
+            return;
+        }
+    }
+}
+
+/// The render mode word whose value 9 skips the property kinds 0x15 and 0x11 (`011f91b8`).
+const SHADER_MODE: u32 = 0x011f_91b8;
+
+/// One pass of [`render_next_alpha`]: skipped without a shader property, or in shader mode 9 with
+/// a property of kind 0x15 or 0x11; drawn (`RenderPassImmediately(pass, type, 1, 1, 1)`, the shader
+/// family's), with z-writes off and the decal depth bias around it when the property's flags have bit
+/// 26 or 27.
+fn draw_alpha_pass(e: &mut Engine, pass: u32) {
+    let geometry = e.global::<u32>(pass);
+    let property = e.global::<u32>(geometry.wrapping_add(0xa8));
+    if property == 0 {
+        return;
+    }
+    if e.global::<u32>(SHADER_MODE) == 9 {
+        let kind = e.global::<u32>(property.wrapping_add(0x1c));
+        if kind == 0x15 || kind == 0x11 {
+            return;
+        }
+    }
+    let flags = e.global::<u32>(property.wrapping_add(0x20));
+    let biased = flags & 0x0c00_0000 != 0;
+    if biased {
+        own::decal_state_on(e);
+    }
+    let pass_type = u32::from(e.global::<u16>(pass.wrapping_add(4)));
+    typed_call!(
+        shader::FAMILY,
+        0x00b9_94f0,
+        batch::render_pass(e, Ptr::new(pass), pass_type, 1u32, 1u32, 1u32)
+    );
+    if biased {
+        own::decal_state_off(e);
+    }
 }

@@ -8,6 +8,7 @@
 use crate::shader::layout::{BSBatchRenderer, PassGroup, PassHolder};
 use crate::shader::{self, batch, state};
 use engine_core::ptr::Ptr;
+use engine_core::x87::{x87_quiet_bits, x87_store32};
 use engine_core::{args, typed_call, Engine};
 
 // ---- Condition 1: the pass lists the next frame's registration fills again. ----
@@ -78,6 +79,58 @@ pub(crate) fn set_pass_range(e: &mut Engine, renderer: u32, low: u32, high: u32)
     e.set(renderer, BSBatchRenderer::uiLastPass, high);
 }
 
+/// Takes the first pass off a holder's list (+0xc: head +0x10, tail +0x14, spare chain +0x18, count
+/// +0x1c) into its spare chain, the holder's count (+2) down first, as `RenderNextAlpha` does after
+/// drawing it (condition 1).
+pub(crate) fn take_first_pass(e: &mut Engine, holder: u32) {
+    if e.global::<u32>(holder.wrapping_add(0x10)) == 0 {
+        return;
+    }
+    let count = e.global::<u16>(holder.wrapping_add(2)).wrapping_add(0xffff);
+    e.set_global(holder.wrapping_add(2), count);
+    let node = e.global::<u32>(holder.wrapping_add(0x10));
+    if node == 0 {
+        return;
+    }
+    if node == e.global::<u32>(holder.wrapping_add(0x14)) {
+        e.set_global(holder.wrapping_add(0x14), 0u32);
+    }
+    let mut next = 0;
+    if e.global::<u32>(node) != 0 {
+        next = e.global::<u32>(node);
+        e.set_global(next.wrapping_add(4), 0u32);
+    }
+    let spare = e.global::<u32>(holder.wrapping_add(0x18));
+    if spare != 0 {
+        let head = e.global::<u32>(holder.wrapping_add(0x10));
+        e.set_global(spare.wrapping_add(4), head);
+    }
+    let head = e.global::<u32>(holder.wrapping_add(0x10));
+    let spare = e.global::<u32>(holder.wrapping_add(0x18));
+    e.set_global(head, spare);
+    let head = e.global::<u32>(holder.wrapping_add(0x10));
+    let items = e.global::<u32>(holder.wrapping_add(0x1c)).wrapping_sub(1);
+    e.set_global(holder.wrapping_add(0x1c), items);
+    e.set_global(holder.wrapping_add(0x18), head);
+    e.set_global(holder.wrapping_add(0x10), next);
+}
+
+/// Takes the first node off an alpha group list (head, tail, count), gives it back to the node pool
+/// ([`give_node`]) and counts the list down (condition 1).
+pub(crate) fn take_sorted_node(e: &mut Engine, list: u32) {
+    let node = e.global::<u32>(list);
+    let next = e.global::<u32>(node);
+    e.set_global(list, next);
+    if next != 0 {
+        e.set_global(next.wrapping_add(4), 0u32);
+    } else {
+        e.set_global(list.wrapping_add(4), 0u32);
+    }
+    give_node(e, node);
+    let count = e.global::<u32>(list.wrapping_add(8)).wrapping_sub(1);
+    e.set_global(list.wrapping_add(8), count);
+}
+
 // ---- Condition 2: blend, clip and depth state the draw leaves behind. ----
 //
 // The render state cache and the shader-state globals are written by the draw and read by the next
@@ -120,6 +173,65 @@ pub(crate) fn swap_group_zero_flag(e: &mut Engine, value: u32) -> u32 {
     saved
 }
 
+/// The depth bias set-up (`00b98320`, `cdecl(bias, lock)`, by address), the decal depth bias
+/// (`01200458`) and whether it is used (`011ad80f`), and the two lock counters the decal state gives
+/// back by hand (`011ff9dc`, `011ff9e4`).
+const SET_DEPTH_BIAS: u32 = 0x00b9_8320;
+const DECAL_DEPTH_BIAS: u32 = 0x0120_0458;
+const DECAL_DEPTH_BIAS_ENABLED: u32 = 0x011a_d80f;
+const LOCK_COUNT_1: u32 = 0x011f_f9dc;
+const LOCK_COUNT_3: u32 = 0x011f_f9e4;
+
+/// The decal state on: z-writes off and the decal depth bias (0 when not used; the float goes through
+/// x87, so a signalling NaN is quieted), both locked (condition 2).
+pub(crate) fn decal_state_on(e: &mut Engine) {
+    let mut bias = x87_quiet_bits(e.global::<u32>(DECAL_DEPTH_BIAS));
+    if e.global::<u8>(DECAL_DEPTH_BIAS_ENABLED) == 0 {
+        bias = x87_store32(0.0);
+    }
+    typed_call!(
+        shader::FAMILY,
+        0x00b9_7e30,
+        state::set_z_write_enable(e, 0u8, 1u32)
+    );
+    e.call(SET_DEPTH_BIAS, &args![bias, 1u32]);
+}
+
+/// The decal state off: the first lock given back by hand, z-writes on, the third lock given back,
+/// no depth bias (condition 2).
+pub(crate) fn decal_state_off(e: &mut Engine) {
+    let count = e.global::<u32>(LOCK_COUNT_1).wrapping_sub(1);
+    e.set_global(LOCK_COUNT_1, count);
+    typed_call!(
+        shader::FAMILY,
+        0x00b9_7e30,
+        state::set_z_write_enable(e, 1u8, 0u32)
+    );
+    let count = e.global::<u32>(LOCK_COUNT_3).wrapping_sub(1);
+    e.set_global(LOCK_COUNT_3, count);
+    e.call(SET_DEPTH_BIAS, &args![x87_store32(0.0), 0u32]);
+}
+
+// Typed from 00bbb840
+/// The lighting shaders' fog-coloured ambient, no words: the fog colour (`011a9bd0`) into the ambient
+/// (`01201b30`), the ambient's enable flag (`012010c4`, +8) and the bytes `01200bf4` and `01200bf5` set
+/// (condition 2: shader-state globals).
+pub fn fog_ambient(e: &mut Engine) {
+    for index in 0..4u32 {
+        let word = e.global::<u32>(FOG_COLOUR.wrapping_add(4 * index));
+        e.set_global(AMBIENT.wrapping_add(4 * index), word);
+    }
+    let enable = e.global::<u32>(AMBIENT_ENABLE);
+    e.set_global(enable.wrapping_add(8), 1u8);
+    e.set_global(AMBIENT_SET, 1u8);
+    e.set_global(AMBIENT_FOG, 1u8);
+}
+const FOG_COLOUR: u32 = 0x011a_9bd0;
+const AMBIENT: u32 = 0x0120_1b30;
+const AMBIENT_ENABLE: u32 = 0x0120_10c4;
+const AMBIENT_SET: u32 = 0x0120_0bf4;
+const AMBIENT_FOG: u32 = 0x0120_0bf5;
+
 // ---- Condition 4: the blocks the draw frees. ----
 //
 // The draw frees the alpha groups it has drawn (each with its own pass lists) and gives list nodes
@@ -137,6 +249,15 @@ pub(crate) fn free_alpha_group(e: &mut Engine, group: u32) {
     e.call(GEOMETRY_GROUP_DESTRUCTOR, &args![group]);
     e.call(MEMORY_FREE, &args![MEMORY_MANAGER, group]);
 }
+
+/// A list node back to the global node pool: its item cleared, the pool's lock taken (`0040fbf0`)
+/// and given back once the node is on the free list (the shader family's `pool_give`) (condition 4).
+pub(crate) fn give_node(e: &mut Engine, node: u32) {
+    e.set_global(node.wrapping_add(8), 0u32);
+    e.call(LOCK_ENTER, &args![batch::POOL_LOCK, 0u32]);
+    batch::pool_give(e, node);
+}
+const LOCK_ENTER: u32 = 0x0040_fbf0;
 
 // ---- Condition 7: the one reference count. ----
 //

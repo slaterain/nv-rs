@@ -7,7 +7,8 @@ use crate::shader::elem_addr;
 use crate::shader::layout::{BSBatchRenderer, BSShaderAccumulator, PassHolder};
 use engine_core::ptr::Ptr;
 use engine_core::x87::{x87_load32, x87_quiet_bits};
-use engine_core::Engine;
+use engine_core::typed::leaf;
+use engine_core::{args, typed_call, Engine};
 
 /// The renderer as the scene holds it (`011f4748`): the draw starts only with one.
 pub(crate) const SCENE_RENDERER: u32 = 0x011f_4748;
@@ -85,6 +86,12 @@ pub(crate) fn shadow_groups(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
 #[inline(always)]
 pub(crate) fn late_alpha_group(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
     e.get(acc, BSShaderAccumulator::ucAlphaGroupLate) != 0
+}
+
+/// Whether decals are drawn (`bRenderDecals`).
+#[inline(always)]
+pub(crate) fn render_decals(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
+    e.get(acc, BSShaderAccumulator::bRenderDecals) != 0
 }
 
 /// The fog-coloured ambient flag of the lighting shaders (`011f94a6`).
@@ -182,4 +189,129 @@ pub fn set_camera(e: &mut Engine, this: Ptr<BSShaderAccumulator>, camera: u32) {
 /// `NiAccumulator::FinishAccumulating` (Xbox PDB), `thiscall(accumulator)`: the camera cleared.
 pub fn finish_accumulating(e: &mut Engine, this: Ptr<BSShaderAccumulator>) {
     e.set(this, BSShaderAccumulator::m_pkCamera, 0);
+}
+
+/// The camera direction's words as the exe keeps them in locals (each through `FLD`/`FSTP`, so quieted).
+#[inline(always)]
+pub(crate) fn camera_direction_words(e: &Engine, camera: u32) -> [u32; 3] {
+    [0x68u32, 0x74, 0x80].map(|offset| x87_quiet_bits(e.global::<u32>(camera.wrapping_add(offset))))
+}
+
+// ---- The camera handed to the scene renderer as the draw starts. ----
+
+/// `NiMatrix3::GetCol` (`00439f50`, `thiscall(matrix, column, out)`), by address.
+const MATRIX_COLUMN: u32 = 0x0043_9f50;
+/// The render object's check for a named extra (`004a0e10`, `thiscall(object, name, 1)`), the name
+/// "SetCameraData" (`010231b8`) and the render object's slot that takes the camera data (0x18c).
+const HAS_EXTRA: u32 = 0x004a_0e10;
+const SET_CAMERA_DATA_NAME: u32 = 0x0102_31b8;
+const SLOT_SET_CAMERA_DATA: u32 = 0x18c;
+
+/// Column `column` of the camera's world rotation (+0x68) into `out` through a local, as the exe's
+/// helpers do; answers `out`.
+#[inline(always)]
+fn rotation_column(e: &mut Engine, camera: u32, column: u32, out: u32) -> u32 {
+    e.with_stack(0x0c, |e, local| {
+        typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, local.addr()));
+        e.call(
+            MATRIX_COLUMN,
+            &args![camera.wrapping_add(0x68), column, local],
+        );
+        for word in 0..3u32 {
+            let value = e.global::<u32>(local.addr().wrapping_add(4 * word));
+            e.set_global(out.wrapping_add(4 * word), value);
+        }
+    });
+    out
+}
+
+// Typed from 004a0d10
+/// `thiscall(camera)`: the address of its view frustum (`m_kViewFrustum`, Xbox PDB, +0x100).
+pub fn camera_frustum(_e: &mut Engine, camera: u32) -> u32 {
+    camera.wrapping_add(0x100)
+}
+
+// Typed from 0045bbe0
+/// `thiscall(camera)`: the address of its port (+0xdc).
+pub fn camera_port(_e: &mut Engine, camera: u32) -> u32 {
+    camera.wrapping_add(0xdc)
+}
+
+// Typed from 0045bb80
+/// `thiscall(object)`: the address of its world translate (+0x8c).
+pub fn world_translate(_e: &mut Engine, object: u32) -> u32 {
+    object.wrapping_add(0x8c)
+}
+
+// Typed from 0045bba0
+/// `thiscall(object, out)`: column 0 of its world rotation into `out`; answers `out`.
+pub fn rotation_column_0(e: &mut Engine, object: u32, out: u32) -> u32 {
+    rotation_column(e, object, 0, out)
+}
+
+// Typed from 004e9c10
+/// `thiscall(object, out)`: column 1 of its world rotation into `out`; answers `out`.
+pub fn rotation_column_1(e: &mut Engine, object: u32, out: u32) -> u32 {
+    rotation_column(e, object, 1, out)
+}
+
+// Typed from 004e9c50
+/// `thiscall(object, out)`: column 2 of its world rotation into `out`; answers `out`.
+pub fn rotation_column_2(e: &mut Engine, object: u32, out: u32) -> u32 {
+    rotation_column(e, object, 2, out)
+}
+
+// Typed from 004e9bb0
+/// `thiscall(renderer, camera)`: the camera to the scene renderer: its frustum, its port, the three
+/// columns of its rotation (2, 1, 0, into a local) and its translate go to [`pass_camera_data`].
+pub fn hand_camera(e: &mut Engine, renderer: u32, camera: u32) {
+    e.with_stack(0x24, |e, columns| {
+        let columns = columns.addr();
+        let frustum = typed_call!(super::FAMILY, 0x004a_0d10, camera_frustum(e, camera));
+        let port = typed_call!(super::FAMILY, 0x0045_bbe0, camera_port(e, camera));
+        let two = typed_call!(super::FAMILY, 0x004e_9c50, rotation_column_2(e, camera, columns));
+        let one = typed_call!(
+            super::FAMILY,
+            0x004e_9c10,
+            rotation_column_1(e, camera, columns.wrapping_add(0xc))
+        );
+        let zero = typed_call!(
+            super::FAMILY,
+            0x0045_bba0,
+            rotation_column_0(e, camera, columns.wrapping_add(0x18))
+        );
+        let translate = typed_call!(super::FAMILY, 0x0045_bb80, world_translate(e, camera));
+        typed_call!(
+            super::FAMILY,
+            0x004e_9c90,
+            pass_camera_data(e, renderer, translate, zero, one, two, port, frustum)
+        );
+    });
+}
+
+// Typed from 004e9c90
+/// `thiscall(renderer, translate, column 0, column 1, column 2, port, frustum)`: when the render
+/// object has the "SetCameraData" extra, its slot 0x18c with the six words.
+#[allow(clippy::too_many_arguments)]
+pub fn pass_camera_data(
+    e: &mut Engine,
+    renderer: u32,
+    translate: u32,
+    zero: u32,
+    one: u32,
+    two: u32,
+    port: u32,
+    frustum: u32,
+) {
+    if !e
+        .call(HAS_EXTRA, &args![renderer, SET_CAMERA_DATA_NAME, 1u32])
+        .bool()
+    {
+        return;
+    }
+    e.vcall(
+        renderer,
+        SLOT_SET_CAMERA_DATA,
+        &args![translate, zero, one, two, port, frustum],
+    );
 }

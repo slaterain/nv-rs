@@ -2276,7 +2276,8 @@ pub fn bs_batch_renderer_render_next_alpha(
                 e.call(ACTIVE_LIST_CLEAR, &[renderer + 0x2c]);
             }
             e.mem.set_u16(alpha_group + 2, 0);
-            bs_batch_renderer_geometry_group_destructor(e, Ptr::new(alpha_group));
+            // By address, as `00b64f20` frees a drawn group, so a typed caller compares.
+            e.call(0x00b9_a410, &[alpha_group]);
             e.call(MEMORY_DEALLOCATE, &[MEMORY_MANAGER, alpha_group]);
             let node = e.mem.u32(list);
             let next = e.mem.u32(node);
