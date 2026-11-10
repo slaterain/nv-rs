@@ -132,6 +132,8 @@ and the host's tests check one against the other. The fix lines are written with
 
 Settings.cmd's resolution, anti-aliasing, anisotropy and V-sync are the game's own keys, not switches: `iSize W`, `iSize H`, `iMultiSample` and `iMaxAnisotropy` in `FalloutPrefs.ini`, `iPresentInterval` in `Fallout.ini` (where the game reads it).
 
+Exclusive full screen is not offered yet. The game's own `bFull Screen=1` (`FalloutPrefs.ini`) is taken as the borderless window over the monitor, on every backend and in both presets, and the log says so once (`crates/host/src/full_screen.rs`). Play.exe writes `bFull Screen=0` whenever the borderless window is on.
+
 ### 2. Game fixes (the 18 rows of FIXES.md)
 
 Each takes `1` (on) or `0` (off) whatever the preset says; with no `NV_PRESET` the rest of that run is vanilla.
