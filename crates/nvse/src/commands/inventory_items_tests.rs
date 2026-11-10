@@ -37,7 +37,11 @@ fn record(at: u32, a: &[u32]) {
 fn calls_to(at: u32) -> Vec<Vec<u32>> {
     CALLS.with(|c| {
         let mut c = c.borrow_mut();
-        let out = c.iter().filter(|(f, _)| *f == at).map(|(_, a)| a.clone()).collect();
+        let out = c
+            .iter()
+            .filter(|(f, _)| *f == at)
+            .map(|(_, a)| a.clone())
+            .collect();
         c.retain(|(f, _)| *f != at);
         out
     })
@@ -147,8 +151,7 @@ fn player_inventory(e: &mut Engine) -> (u32, u32, u32) {
     for (i, entry) in entries.into_iter().enumerate() {
         let node = NODES + 8 * i as u32;
         e.mem.set_u32(node, entry);
-        e.mem
-            .set_u32(node + 4, if i < 2 { node + 8 } else { 0 });
+        e.mem.set_u32(node + 4, if i < 2 { node + 8 } else { 0 });
     }
     let [weapon, armor, ammo] = entries;
     e.mem.set_u32(weapon, NODES + 0x40);
@@ -290,7 +293,9 @@ fn with_cloning(e: &mut Engine, script: u32, taken: &[u32]) {
         record(0x0046_03b0, a);
         eax(1)
     });
-    e.register(0x0048_39c0, |_, a| eax(u32::from(TAKEN.with(|t| t.borrow().contains(&a[0])))));
+    e.register(0x0048_39c0, |_, a| {
+        eax(u32::from(TAKEN.with(|t| t.borrow().contains(&a[0]))))
+    });
 }
 
 /// `TempCloneForm`: a form of the same type, copied, with the bounds of a bound object, added to
@@ -312,7 +317,10 @@ fn clones_and_cloned_forms() {
     assert_eq!(run(&mut e, 0x14de, 0, &[r(1)]), 0.0);
     set_script_ref(&mut e, 4, NEW);
     assert_eq!(run(&mut e, 0x14de, 0, &[r(4)]), 1.0, "file 0xFF");
-    assert_eq!(form_of(run(&mut e, 0x14dd, REF, &[r(1), n(1)])), 0x0100_0803);
+    assert_eq!(
+        form_of(run(&mut e, 0x14dd, REF, &[r(1), n(1)])),
+        0x0100_0803
+    );
     assert_eq!(calls_to(FN_SET_REF_ID), vec![vec![NEW, 0x0100_0803, 1]]);
     assert_eq!(run(&mut e, 0x14de, 0, &[r(4)]), 1.0, "inherited");
     // The next free id leaves the script's file: the clone keeps its own.

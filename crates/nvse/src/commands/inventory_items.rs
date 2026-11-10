@@ -326,8 +326,11 @@ fn get_player_current_ammo(e: &mut Engine, w: &[u32]) -> Ret {
 
 /// The equipped weapon (slot 5, `MatchBySlot(5)`) and its worn extra data list, or `None`.
 fn equipped_weapon(e: &mut Engine, reference: u32) -> Option<u32> {
-    let (item, xdata) =
-        super::inventory_forms::find_equipped(e, reference, super::inventory_forms::mask_for_slot(5));
+    let (item, xdata) = super::inventory_forms::find_equipped(
+        e,
+        reference,
+        super::inventory_forms::mask_for_slot(5),
+    );
     (item != 0 && xdata != 0).then_some(xdata)
 }
 
