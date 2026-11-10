@@ -172,6 +172,7 @@ Play.exe sets these for every run; set them by hand only to run `nv-viewer` with
 | `NV_D3D9_ADAPTER=FILE` | The display adapter table | `%LOCALAPPDATA%\nv-rs\d3d9_adapter.tsv` |
 | `NV_DSOUND_TABLE=FILE` | The DirectSound devices and mixing table | none: the run stops and says how to capture it |
 | `NV_D3DX_CACHE=DIR` | The D3DX texture cache (used only with `NV_TEXTURES=dll`, or for files `crates/d3dx-tex` does not translate) | `%LOCALAPPDATA%\nv-rs\d3dx-cache` |
+| `NV_WGPU_CACHE=DIR` | Where wgpu keeps the graphics driver's compiled pipelines between runs (Vulkan; wgpu keeps none for Direct3D 12): a start whose driver has nothing cached for the program makes them from this file instead of compiling them again. A missing, damaged or foreign file is ignored with one log line and made anew. Play.exe sets `userdata\machine\wgpu-cache`; `d3d9-replay` reads it too | nothing kept |
 | `NV_SAVE_OUT=DIR` | The saves the game writes, copied out to DIR at the end of the frame that wrote them (written by a thread of their own; a clean end waits for them), and the ones it deletes removed there (`crates/host/src/save_out.rs`) | saves stay in memory |
 | `NV_PREFS_OUT=FILE` | The `FalloutPrefs.ini` the game writes, copied out to FILE | stays in memory |
 | `NV_REPORT_DIR=DIR`, `NV_REPORT_LOG=FILE` | F12 in the game's window makes `DIR\NNN\` with the frame, the end of FILE and a `note.txt` for the player (`crates/engine-platform/src/d3d9real.rs`) | no F12 report |
@@ -200,7 +201,6 @@ None of these is for players.
 | `NV_TEXTURES=dll` | The game's textures from the player's 64-bit `d3dx9_38.dll` (with `NV_D3D9=real`) or the texture cache, as before `crates/d3dx-tex`; files `crates/d3dx-tex` does not translate, and a thread at 64-bit precision, go to the DLL in any case, and without one are refused as D3DX refuses a file it cannot read | `crates/d3dx-tex` makes them, byte for byte the 32-bit DLL's |
 | `NV_D3D9_PRESENT=immediate` | The real Direct3D 9 device and the wgpu backend present without waiting for the display, so a frame rate measures the work | the game's `iPresentInterval` |
 | `NV_WGPU_BACKEND=dx12`, `vulkan`, `gl` or `software`; `NV_WGPU_DEBUG` | wgpu backend: which graphics interface (`software`: the platform's software adapter, WARP on Windows, the one CI's runners have: for running the GPU tests there); wgpu's own debug checks | Direct3D 12 on Windows; off |
-| `NV_WGPU_CACHE=DIR` | Where wgpu keeps the graphics driver's compiled pipelines between runs, so a place seen before is not compiled again (Vulkan; Direct3D 12 has no such cache in wgpu). A missing, damaged or foreign file is ignored with one log line and rebuilt. Also read by `d3d9-replay` | `%LOCALAPPDATA%\nv-rs\wgpu-cache` in a launcher's play run; nothing kept in tests, scripts and other runs |
 | **Scripted input and movement runs** | | |
 | `NV_MOVE_KEYS`*, `NV_MOVE_MOUSE`* | Scripted keys and mouse by main's frame (`crates/host/src/player_move.rs`) | none |
 | `NV_MOVE_REAL_INPUT=1`* | Real input reaches the game even with a script set | off |
@@ -257,7 +257,8 @@ GitHub Releases; the packages there from before 2026-11-03 are of the removed vi
   playing, `game` and `mods`), the tables (`machine`), `logs` and `reports`; an older preview's
   `settings.ini` is moved into the two profiles' files once (`settings.ini.migrated`). The table's
   `SHGetFolderPathA` answers point at them. The game's own writes stay in memory as ever
-  (`engine-platform` files.rs); only `NV_SAVE_OUT` and `NV_PREFS_OUT` reach the disk, inside `userdata`.
+  (`engine-platform` files.rs); only `NV_SAVE_OUT`, `NV_PREFS_OUT` and (with `NV_D3D9=wgpu`)
+  `NV_WGPU_CACHE` reach the disk, inside `userdata`.
 - **The tables:** the adapter table is made again at every start (about 1.3 s here), so a new graphics
   card, driver, monitor, time zone or Windows language can't leave it stale. If its tools fail, the
   last good table is used. The sound table (about 19 s here) is made again when Windows' build or the

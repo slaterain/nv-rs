@@ -1,30 +1,46 @@
-//! The driver's compiled pipelines kept between runs, so a place seen before is not compiled
-//! again: wgpu's pipeline cache (Vulkan; other backends have none), read from a file of the
-//! port's own when the device is made and written back after new pipelines were made. The
-//! folder is the host's to choose (`host::wgpu_cache_path`); without one nothing is read or
-//! written.
+//! The driver's compiled pipelines kept between runs: wgpu's pipeline cache (Vulkan; wgpu has
+//! none for the other backends), read from a file of the port's own when the device is made and
+//! written back after a burst of new pipelines and at the end of the run. The folder is the
+//! host's to choose (`NV_WGPU_CACHE`, which the launcher points into its `userdata\machine`);
+//! without one nothing is read or written.
 //!
-//! The file is the cache's bytes in an envelope of ours: `NVWGPUPC`, a version, the length and
-//! a hash of the bytes. A missing, truncated, altered or foreign file is ignored with one log line
-//! and a new cache is started (wgpu then checks its own header: another wgpu version, adapter or
-//! driver starts empty too). It is written to a temporary name and renamed, so a run that ends
-//! while writing leaves the old file or the new one, never half of one.
+//! What it gains: a start whose graphics driver has nothing cached for this program (its own
+//! shader cache cleared or turned off, the exe moved or renamed, a driver with no cache of its
+//! own) makes its pipelines from this file instead of compiling them again: Doc's house on
+//! Vulkan about 5.8 s with nothing, 0.5 s with the file (#416's review). Where the driver's own
+//! cache already holds them it changes little.
+//!
+//! The file is the cache's bytes in an envelope of ours: `NVWGPUPC`, a version, the length and a
+//! fixed hash of the bytes ([`hash`], FNV-1a, not the map hasher, so the format never moves with
+//! it). A missing, oversized, truncated, altered or foreign file (another adapter, backend or
+//! driver: wgpu's own header says so) is one log line and a new, empty cache: never a failed
+//! start. It is written to a temporary name of its own and renamed, so a run that ends while
+//! writing leaves the old file or the new one, never half of one; a failed write removes its
+//! temporary.
 
-use crate::fxhash::FxHasher;
-use std::hash::Hasher;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 
 const MAGIC: &[u8; 8] = b"NVWGPUPC";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const HEADER: usize = 8 + 4 + 8 + 8;
-/// Presents between two saves at most (about ten seconds of play), so a burst of new pipelines
-/// is written once, after it.
-const SAVE_EVERY: u64 = 600;
+/// A file larger than this is not read (no driver's cache of one game comes near it).
+const MAX_FILE: u64 = 256 << 20;
+/// Presents after the last new pipeline before the cache is written: a burst of new pipelines
+/// (a new place) is written once, after it.
+const QUIET_PRESENTS: u64 = 300;
+/// And at least this often while pipelines keep coming.
+const SAVE_EVERY: u64 = 3600;
 
-fn hash(bytes: &[u8]) -> u64 {
-    let mut h = FxHasher::default();
-    h.write(bytes);
-    h.finish()
+/// The envelope's hash: 64-bit FNV-1a, fixed by its definition.
+pub(crate) fn hash(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
 }
 
 /// The cache's bytes in the file's envelope.
@@ -57,31 +73,107 @@ pub(crate) fn unwrap(file: &[u8]) -> Result<&[u8], &'static str> {
     Ok(data)
 }
 
-/// Writes `bytes` to `path` through a temporary file in the same folder, renamed over it.
+/// Writes `bytes` to `path` through a temporary file of this writer's own in the same folder
+/// (another instance of the game, or this one's other writer, never shares it), renamed over it;
+/// the temporary is removed when the write or the rename fails.
 pub(crate) fn write_replacing(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path)
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_extension(format!("{}-{n}.tmp", std::process::id()));
+    let r = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path));
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r
+}
+
+/// What writes the cache's file: shared by the device and the writer threads, and found by
+/// [`save_all_now`] at the end of the run.
+struct Saver {
+    cache: wgpu::PipelineCache,
+    path: PathBuf,
+    /// The hash of the bytes last written or read: the same bytes are not written again.
+    last: AtomicU64,
+    /// One write at a time.
+    writing: Mutex<()>,
+    /// A write failed (a read-only folder): no more writes this run, so it is said once.
+    failed: AtomicBool,
+}
+
+impl Saver {
+    /// Takes the cache's bytes and writes them when they changed (on the calling thread).
+    fn save(&self) {
+        if self.failed.load(Ordering::Relaxed) {
+            return;
+        }
+        let _one = self.writing.lock().unwrap_or_else(|e| e.into_inner());
+        let t = std::time::Instant::now();
+        let Some(data) = self.cache.get_data() else {
+            return;
+        };
+        let h = hash(&data);
+        if self.last.load(Ordering::Relaxed) == h {
+            return;
+        }
+        match write_replacing(&self.path, &wrap(&data)) {
+            Ok(()) => {
+                self.last.store(h, Ordering::Relaxed);
+                eprintln!(
+                    "NV_D3D9 wgpu: pipeline cache {}: {} KB written ({:.1} ms, off the render thread)",
+                    self.path.display(),
+                    data.len() / 1024,
+                    t.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+            Err(e) => {
+                self.failed.store(true, Ordering::Relaxed);
+                eprintln!(
+                    "NV_D3D9 wgpu: pipeline cache {}: not written: {e}: none written this run",
+                    self.path.display()
+                );
+            }
+        }
+    }
+}
+
+/// The devices' savers, for [`save_all_now`].
+static SAVERS: Mutex<Vec<Weak<Saver>>> = Mutex::new(Vec::new());
+
+/// Writes every live device's pipeline cache now, when it changed: for the end of the run (the
+/// game's process ends with `std::process::exit`, so the devices are not dropped; the host calls
+/// this from its exit hooks).
+pub fn save_all_now() {
+    let savers: Vec<Arc<Saver>> = SAVERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter_map(Weak::upgrade)
+        .collect();
+    for s in savers {
+        s.save();
+    }
 }
 
 /// The pipeline cache of the device and its file.
 pub(crate) struct PipelineCacheFile {
     pub(crate) cache: wgpu::PipelineCache,
-    path: PathBuf,
+    saver: Arc<Saver>,
+    /// What [`PipelineCacheFile::open`] made of the file (a log line's words; tests read it).
+    pub(crate) note: String,
     /// Pipelines were made since the last save.
     dirty: std::cell::Cell<bool>,
+    /// The present of the last new pipeline, and of the last save.
+    touched_at: std::cell::Cell<u64>,
     saved_at: u64,
-    /// A write failed (a read-only folder): no more writes this run, so it is said once.
-    failed: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl PipelineCacheFile {
     /// The cache for `device` (made with `Features::PIPELINE_CACHE`), filled from the file in
     /// `dir` for this adapter when there is a usable one. None where the backend has no
-    /// pipeline cache (wgpu names a file only for Vulkan).
+    /// pipeline cache (wgpu names a file only for Vulkan) or the folder cannot be made.
     pub(crate) fn open(
         device: &wgpu::Device,
         info: &wgpu::AdapterInfo,
@@ -102,103 +194,96 @@ impl PipelineCacheFile {
             return None;
         }
         let path = dir.join(format!("{name}.bin"));
-        let file = std::fs::read(&path);
+        let file = match std::fs::metadata(&path) {
+            Ok(m) if m.len() > MAX_FILE => Err(format!("{} MB, too large", m.len() >> 20)),
+            Ok(_) => std::fs::read(&path).map_err(|e| e.to_string()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(String::new()),
+            Err(e) => Err(e.to_string()),
+        };
         let data = match &file {
-            Ok(bytes) => match unwrap(bytes) {
-                Ok(d) => Some(d),
-                Err(why) => {
-                    eprintln!(
-                        "NV_D3D9 wgpu: pipeline cache {}: {why}: ignored, a new one is started",
-                        path.display()
-                    );
-                    None
-                }
-            },
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    eprintln!(
-                        "NV_D3D9 wgpu: pipeline cache {}: none yet, a new one is started",
-                        path.display()
-                    );
-                } else {
-                    eprintln!(
-                        "NV_D3D9 wgpu: pipeline cache {}: {e}: ignored, a new one is started",
-                        path.display()
-                    );
-                }
-                None
+            Ok(bytes) => unwrap(bytes).map_err(str::to_string),
+            Err(e) => Err(e.clone()),
+        };
+        let empty = || {
+            // SAFETY: no data: an empty cache.
+            unsafe {
+                device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
+                    label: Some("d3d9-wgpu pipelines"),
+                    data: None,
+                    fallback: true,
+                })
             }
         };
-        // SAFETY: the bytes are ones `PipelineCache::get_data` gave (the envelope's hash says
-        // they arrived as written); wgpu checks its own header and the driver its own, and with
-        // `fallback` a cache they refuse starts empty.
-        let cache = unsafe {
-            device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
-                label: Some("d3d9-wgpu pipelines"),
-                data,
-                fallback: true,
-            })
+        let (cache, note, read) = match data {
+            Ok(d) => {
+                // wgpu checks its own header (another adapter, backend or driver: refused) under
+                // an error scope, so a refusal is said here instead of ending the run; then an
+                // empty cache. SAFETY: the bytes are ones `PipelineCache::get_data` gave (the
+                // envelope's hash says they arrived as written); wgpu checks its header, the
+                // driver its own.
+                let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+                let cache = unsafe {
+                    device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
+                        label: Some("d3d9-wgpu pipelines"),
+                        data: Some(d),
+                        fallback: false,
+                    })
+                };
+                match crate::device::block_on(scope.pop()) {
+                    None => (cache, format!("{} KB read", d.len() / 1024), hash(d)),
+                    Some(e) => (empty(), format!("{e}: ignored, a new one is started"), 0),
+                }
+            }
+            Err(why) if why.is_empty() => (empty(), "none yet, a new one is started".into(), 0),
+            Err(why) => (empty(), format!("{why}: ignored, a new one is started"), 0),
         };
-        if let Some(d) = data {
-            eprintln!(
-                "NV_D3D9 wgpu: pipeline cache {}: {} KB read",
-                path.display(),
-                d.len() / 1024
-            );
-        }
+        eprintln!("NV_D3D9 wgpu: pipeline cache {}: {note}", path.display());
+        let saver = Arc::new(Saver {
+            cache: cache.clone(),
+            path,
+            last: AtomicU64::new(read),
+            writing: Mutex::new(()),
+            failed: AtomicBool::new(false),
+        });
+        let mut all = SAVERS.lock().unwrap_or_else(|e| e.into_inner());
+        all.retain(|w| w.strong_count() > 0);
+        all.push(Arc::downgrade(&saver));
         Some(PipelineCacheFile {
             cache,
-            path,
+            saver,
+            note,
             dirty: std::cell::Cell::new(false),
+            touched_at: std::cell::Cell::new(0),
             saved_at: 0,
-            failed: Default::default(),
         })
     }
 
-    /// A pipeline was made with the cache.
-    pub(crate) fn touched(&self) {
+    /// A pipeline was made with the cache at present `presents`.
+    pub(crate) fn touched(&self, presents: u64) {
         self.dirty.set(true);
+        self.touched_at.set(presents);
     }
 
-    /// At a `Present`: the cache written when pipelines were made since the last save and the
-    /// last save is [`SAVE_EVERY`] presents old (or `now` is forced). The bytes are taken here;
-    /// the file is written on a thread of its own, so the render thread does not wait for the
-    /// disk.
+    /// At a `Present`: the cache written [`QUIET_PRESENTS`] after the last new pipeline (or
+    /// [`SAVE_EVERY`] after the last save while they keep coming; at once with `now`). Both the
+    /// bytes and the file are taken and written on a thread of their own: the render thread only
+    /// starts it.
     pub(crate) fn save_if_due(&mut self, presents: u64, now: bool) {
-        if self.failed.load(std::sync::atomic::Ordering::Relaxed)
-            || !self.dirty.get()
-            || (!now && presents.saturating_sub(self.saved_at) < SAVE_EVERY)
-        {
+        if !self.dirty.get() {
+            return;
+        }
+        let quiet = presents.saturating_sub(self.touched_at.get()) >= QUIET_PRESENTS;
+        let long = presents.saturating_sub(self.saved_at) >= SAVE_EVERY;
+        if !(now || quiet || long) {
             return;
         }
         self.dirty.set(false);
         self.saved_at = presents;
-        let t = std::time::Instant::now();
-        let Some(data) = self.cache.get_data() else {
-            return;
-        };
-        let taken = t.elapsed();
-        let path = self.path.clone();
-        let failed = self.failed.clone();
-        let write = move || match write_replacing(&path, &wrap(&data)) {
-            Ok(()) => eprintln!(
-                "NV_D3D9 wgpu: pipeline cache {}: {} KB written (taken in {:.1} ms)",
-                path.display(),
-                data.len() / 1024,
-                taken.as_secs_f64() * 1000.0
-            ),
-            Err(e) => {
-                failed.store(true, std::sync::atomic::Ordering::Relaxed);
-                eprintln!(
-                    "NV_D3D9 wgpu: pipeline cache {}: not written: {e}: none written this run",
-                    path.display()
-                );
-            }
-        };
+        let saver = self.saver.clone();
         if now {
-            write();
+            saver.save();
         } else {
-            std::thread::spawn(write);
+            std::thread::spawn(move || saver.save());
         }
     }
 }
@@ -220,8 +305,16 @@ mod tests {
         assert!(unwrap(b"WGPUPLCH and the rest of something else").is_err());
         assert!(unwrap(&[]).is_err());
         let mut other = file.clone();
-        other[8] = 2;
+        other[8] = 1;
         assert!(unwrap(&other).is_err());
+    }
+
+    #[test]
+    fn the_envelope_hash_is_fnv_1a() {
+        // FNV-1a 64's published values: the file format does not move with the map hasher.
+        assert_eq!(hash(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(hash(b"a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(hash(b"foobar"), 0x8594_4171_f739_67e8);
     }
 
     #[test]
@@ -236,9 +329,23 @@ mod tests {
         write_replacing(&path, b"first").unwrap();
         write_replacing(&path, b"second").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"second");
-        assert!(!path.with_extension("tmp").exists());
-        // A "folder" that is a file: an error to log, not a panic.
+        // A "folder" that is a file: an error to log, not a panic; a target that is a folder:
+        // the rename fails, and no temporary is left either way.
         assert!(write_replacing(&path.join("c.bin"), b"x").is_err());
+        std::fs::create_dir_all(dir.join("d.bin")).unwrap();
+        assert!(write_replacing(&dir.join("d.bin"), b"x").is_err());
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        let mut left = left;
+        left.sort();
+        assert_eq!(
+            left,
+            vec!["c.bin".to_string(), "d.bin".to_string()],
+            "{left:?}"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

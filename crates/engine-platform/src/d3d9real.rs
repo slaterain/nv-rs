@@ -939,6 +939,9 @@ pub fn want_shader_warm(e: &mut Engine, on: bool) {
 /// `wgpu_cache_path`), set before the game starts. None until set: a test or tool keeps nothing.
 pub fn want_wgpu_cache(e: &mut Engine, dir: std::path::PathBuf) {
     real(e).wgpu_cache = Some(dir);
+    // The run ends with `std::process::exit` (the window closed, the game's quit): the backend's
+    // device is never dropped, so its last pipelines are written by the exit hooks.
+    crate::on_exit(d3d9_wgpu::save_pipeline_caches);
 }
 
 /// `Direct3DCreate9` made a modelled `IDirect3D9`: the stream to the backend `NV_D3D9` names

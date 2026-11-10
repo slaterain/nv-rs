@@ -21,6 +21,7 @@ pub mod shot;
 pub mod sm;
 pub mod state;
 
+pub use cache::save_all_now as save_pipeline_caches;
 use d3d9_stream::{Backend, Cmd, Data, Handle, Reply};
 pub use device::Output;
 

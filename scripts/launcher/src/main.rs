@@ -1311,6 +1311,8 @@ fn play(
         .env("NV_D3D9_ADAPTER", &profile.table)
         .env("NV_DSOUND_TABLE", &sound)
         .env("NV_D3DX_CACHE", package.machine.join("d3dx-cache"))
+        // wgpu's compiled pipelines (only used with NV_D3D9=wgpu), beside the other machine files.
+        .env("NV_WGPU_CACHE", package.machine.join("wgpu-cache"))
         .env("NV_SAVE_OUT", &profile.saves)
         .env("NV_PREFS_OUT", &profile.prefs)
         .env("NV_REPORT_DIR", &package.reports)
