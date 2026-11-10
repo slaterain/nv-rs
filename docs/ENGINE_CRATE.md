@@ -551,6 +551,17 @@ family's slot dispatch (`scene::walk::downward`), so the walk stays a Rust call 
 `NiGeometry::UpdateWorldBound` calls the skinned bound directly. Its tests are in `crates/engine/tests/typed_dispatch.rs`.
 On since its gate (2026-11-10: the differential tests with each planted mutant caught, and the recorded street run
 byte-identical with `NV_TYPED=scene:off` in the fixes and vanilla presets); not a speed change by itself.
+And `particles` (same crate, id 20), the update half's second group: a particle system's update, from its update
+controller (`NiPSysUpdateCtlr::Update`, which the typed controller walk calls directly when a controller's slot holds
+it) through `NiParticleSystem::UpdateSystem` and `Do_UpdateSystem` to the modifiers that move, age, turn, size, colour
+and bound the particles (bomb, position, age and death with the data's particle removal, rotation, grow and fade,
+bound update with its skip, Bethesda's simple colour), each called directly when the modifier's update slot holds it;
+another modifier (gravity, a mesh or strip one, a mod's) goes through its vtable as before. With it, `scene` holds the
+queued node updates main runs after the frame is shown (`00552570`: the scene graphs the AI threads changed, each
+queued node's geometries given their update, which reaches the scene family's update entry directly). Its tests are
+`crates/engine/tests/typed_particles.rs` and, for the queue, `typed_dispatch.rs`. On since its gate (the differential
+tests with each planted mutant caught, and the recorded street run byte-identical with
+`NV_TYPED=particles:off,scene:off` in the fixes and vanilla presets); not a speed change by itself.
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with

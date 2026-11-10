@@ -2358,3 +2358,186 @@ fn scene_transform_inverse() {
     .run()
     .assert_same();
 }
+
+// ---- The scene family: the queued node updates (engine_typed::scene::queue) ----
+
+/// The pending list (an item and the next node, inline) and its lock, the update time.
+const PENDING_LIST: u32 = 0x011c_a174;
+const PENDING_LOCK: u32 = 0x011c_a1a0;
+const UPDATE_TIME: u32 = 0x011c_3c08;
+/// A slot function answering `this`: an object's "as a node", "as a geometry" or "parent" for the
+/// classes that have one.
+const AS_SELF: u32 = 0x00ff_1f00;
+
+/// The queue's world: the list's `IsEmpty` and `RemoveHead` over the inline list, the smart pointer's
+/// copy, the reference of a node (the word at the node's +0x40), the cell's update for it.
+fn queue_world(e: &mut Engine) {
+    stand_ins(e);
+    e.map(0x011c_a000, 0x1000);
+    e.map(0x011c_3000, 0x1000);
+    e.mem.set_u32(UPDATE_TIME, HALF);
+    e.register(AS_SELF, |e, a| {
+        log(e, 0x1f00, a[0]);
+        ret(a[0])
+    });
+    e.register(0x004a_4460, |e, a| {
+        let empty = e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0;
+        ret(u32::from(empty))
+    });
+    e.register(0x004e_e8a0, |e, a| {
+        log(e, 0xe8a0, e.mem.u32(a[0]));
+        let next = e.mem.u32(a[0] + 4);
+        if next != 0 {
+            let (item, after) = (e.mem.u32(next), e.mem.u32(next + 4));
+            words(e, a[0], &[item, after]);
+        } else {
+            e.mem.set_u32(a[0], 0);
+        }
+        ret(0)
+    });
+    e.register(0x0055_9a40, |e, a| {
+        let held = e.mem.u32(a[1]);
+        e.mem.set_u32(a[0], held);
+        log(e, 0x9a40, held);
+        ret(a[0])
+    });
+    e.register(0x0056_f930, |e, a| {
+        log(e, 0xf930, a[0]);
+        ret(e.mem.u32(a[0] + 0x40))
+    });
+    e.register(0x0054_a070, |e, a| {
+        log(e, 0xa070, a[1]);
+        ret(0)
+    });
+}
+
+/// A queued object of `kind`: 0 a plain object, 1 a geometry (its "as a geometry" slot answers
+/// it), 2 a node (its "as a node" slot answers it) whose children are a geometry, a null slot and a
+/// plain object; with `parent` its parent slot answers it; its flags; with `reference` the reference
+/// its node finds (whose word +0x40 is a cell when `cell` is set).
+fn queued(e: &mut Engine, kind: u32, parent: bool, flags: u32, reference: bool, cell: bool) -> u32 {
+    let o = if kind == 2 {
+        let n = node(e, flags, 3, ONE);
+        let base = e.mem.u32(n + 0xa0);
+        let first = e.mem.u32(base);
+        set_slot(e, first, 0x30, AS_SELF);
+        set_slot(e, n, 0x0c, AS_SELF);
+        n
+    } else {
+        let o = object(e, 0xb0);
+        e.mem.set_u32(o + 0x30, flags);
+        if kind == 1 {
+            set_slot(e, o, 0x30, AS_SELF);
+        }
+        o
+    };
+    if parent {
+        set_slot(e, o, 0x10, AS_SELF);
+    }
+    e.mem.set_u32(o + 4, 1);
+    if reference {
+        let r = object(e, 0x80);
+        let c = if cell { object(e, 0x40) } else { 0 };
+        e.mem.set_u32(r + 0x40, c);
+        e.mem.set_u32(o + 0x40, r);
+    }
+    o
+}
+
+#[test]
+fn scene_run_queued() {
+    // The queued count; the first's kind; parents; the waiting flag; a reference; its cell.
+    Diff::new(entry!(
+        0x0055_2570,
+        engine_typed::scene::queue::run_queued()
+    ))
+    .common(0x0055_2570)
+    .inputs(&[
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1, 2]),
+        Input::Flag,
+        Input::Of(&[0, 0x0040_0000, 0x0040_0002]),
+        Input::Flag,
+        Input::Flag,
+    ])
+    .max_cases(192)
+    .setup(|e, case| {
+        queue_world(e);
+        let count = case.word(0);
+        let parent = case.word(2) != 0;
+        let (reference, cell) = (case.word(4) != 0, case.word(5) != 0);
+        let first = queued(e, case.word(1), parent, case.word(3), reference, cell);
+        let second = queued(e, 1, true, 0x0040_0000, true, true);
+        match count {
+            0 => words(e, PENDING_LIST, &[0, 0]),
+            1 => words(e, PENDING_LIST, &[first, 0]),
+            _ => {
+                let next = block(e, 8, &[second, 0]);
+                words(e, PENDING_LIST, &[first, next]);
+            }
+        }
+        words(e, PENDING_LOCK, &[0, 0]);
+        vec![]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn scene_update_geometries() {
+    // A null node, a plain object, a geometry, a node with children.
+    Diff::new(entry!(
+        0x0055_26f0,
+        engine_typed::scene::queue::update_geometries(Ptr<_>)
+    ))
+    .common(0x0055_26f0)
+    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(NODE_FLAGS)])
+    .setup(|e, case| {
+        queue_world(e);
+        let o = match case.word(0) {
+            0 => 0,
+            k => queued(e, k - 1, false, case.word(1), false, false),
+        };
+        vec![o]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn scene_waiting() {
+    Diff::new(entry!(
+        0x0055_26b0,
+        engine_typed::scene::queue::waiting(Ptr<_>) -> bool
+    ))
+    .common(0x0055_26b0)
+    .inputs(&[Input::Of(&[0, 0x0040_0000, 0x0080_0000, 0xffff_ffff])])
+    .setup(|e, case| {
+        let o = block(e, 0x40, &[0; 16]);
+        e.mem.set_u32(o + 0x30, case.word(0));
+        vec![o]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn scene_set_waiting() {
+    Diff::new(entry!(
+        0x0055_26d0,
+        engine_typed::scene::queue::set_waiting(Ptr<_>, bool)
+    ))
+    .common(0x0055_26d0)
+    .inputs(&[
+        Input::Of(&[0, 0x0040_0000, 0x0080_0001]),
+        Input::Of(&[0, 1, 0x100]),
+    ])
+    .setup(|e, case| {
+        stand_ins(e);
+        let o = object(e, 0x40);
+        e.mem.set_u32(o + 0x30, case.word(0));
+        vec![o, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
