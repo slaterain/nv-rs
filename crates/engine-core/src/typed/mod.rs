@@ -268,6 +268,12 @@ impl State {
         }
     }
 
+    /// Whether `addr` is a member of a family that may go direct on this engine: registering over
+    /// it would send the whole family by address ([`State::replaced`]).
+    pub(crate) fn is_member(&self, addr: u32) -> bool {
+        self.allowed != 0 && self.members.contains_key(&addr)
+    }
+
     /// Something was registered over `addr`. A member's family then goes by address for the rest
     /// of this engine's life, so what was registered is what runs.
     #[inline]

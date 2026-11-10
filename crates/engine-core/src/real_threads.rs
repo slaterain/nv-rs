@@ -2523,8 +2523,8 @@ thread_local! {
 /// code for the page barrier while it works). With stepped threads the memory becomes shared at the
 /// first call. False (nothing run) on a helper, with a memory diagnostic that keeps memory unshared,
 /// for more than [`MOST_HELPERS`], or when the pool was made with fewer helpers (a pool with more
-/// runs the job on its first `helpers`). A helper's panic is resumed here after every helper is
-/// done.
+/// runs the job on its first `helpers`). A helper's panic, or one in the caller's own part, is
+/// resumed here after every helper is done.
 ///
 /// The helpers take nothing from the game's heap: each has its TLS block and its stack for locals
 /// at a fixed place of its own ([`crate::mem::HELPER_AREA`]). So a run lays the game's memory out
@@ -2615,13 +2615,39 @@ pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
         }
     }
     let join = Join(pool, world);
-    job(e, 0);
+    // The caller's own part. With stepped threads no time slice ends inside it: a switch there
+    // would run another game thread beside the helpers, which otherwise run only while every game
+    // thread stands still. (A wake asked for meanwhile sets the hook itself; it is then kept.)
+    let hook = e.slice_hook.take();
+    let own = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(e, 0)));
+    if e.slice_hook.is_none() {
+        e.slice_hook = hook;
+    }
     drop(join);
+    if let Err(payload) = own {
+        std::panic::resume_unwind(payload);
+    }
     let panic = guard(&pool.state).panic.take();
     if let Some(payload) = panic {
         std::panic::resume_unwind(payload);
     }
     true
+}
+
+/// On a caller's own engine, around a [`fork_join`] in which it does a part of the work itself:
+/// puts `f` at `addr` on this engine alone and answers what was there, to be put back the same way
+/// after (the parallel render logs the accumulator calls a fade node makes while main walks its
+/// share, as [`helper_register`] does on a helper). `None`, and nothing changed: on a helper; when
+/// no plain function is registered there; or when `addr` is a typed family's member (a function
+/// registered over a member sends its whole family by address on this engine for good, which a
+/// helper's engine can bear and a game thread's cannot).
+pub fn caller_swap(e: &mut Engine, addr: u32, f: AbiFn) -> Option<AbiFn> {
+    if HELPER.with(Cell::get) || e.typed.is_member(addr) {
+        return None;
+    }
+    let old = e.registered_fn(addr)?;
+    e.register_here(addr, f);
+    Some(old)
 }
 
 /// On a helper's own engine, inside a [`fork_join`] job: `f` at `addr` for this engine alone (the
