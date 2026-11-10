@@ -509,7 +509,10 @@ fn removing_from_short_lists() {
     });
     run(&mut e, CLEAR, 0, &[r(1)]);
     assert!(ids(&e, LIST).is_empty());
-    assert!(FREED.with(|f| f.borrow().is_empty()), "the head is no heap node");
+    assert!(
+        FREED.with(|f| f.borrow().is_empty()),
+        "the head is no heap node"
+    );
     assert_eq!(run(&mut e, REMOVE_NTH, 0, &[r(1), n(0)]), 0.0);
     assert_eq!(run(&mut e, REMOVE_NTH, 0, &[r(1), n(3)]), 0.0);
     assert_eq!(run(&mut e, REMOVE, 0, &[r(1), r(2)]), -1.0);
@@ -538,7 +541,11 @@ fn a_list_that_runs_back_into_itself() {
                 assert!(guard, "{n}");
                 assert_eq!(n, f64::from((1u32 << 20) + 1));
                 assert_eq!(index, -1.0, "not found within the bound");
-                assert_eq!(added, f64::from(1u32 << 20), "after the last node the walk reached");
+                assert_eq!(
+                    added,
+                    f64::from(1u32 << 20),
+                    "after the last node the walk reached"
+                );
             }
             Err(_) => assert!(!guard),
         }
