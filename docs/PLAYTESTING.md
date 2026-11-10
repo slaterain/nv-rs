@@ -165,7 +165,7 @@ Play.exe sets these for every run; set them by hand only to run `nv-viewer` with
 
 | Variable | What it does | Default without Play.exe |
 | --- | --- | --- |
-| `NV_D3D9=real`, `wgpu` or `real,wgpu` | The game's own window, drawn by the real Direct3D 9 (`real`), by wgpu alone (`wgpu`, `crates/d3d9-wgpu`: for testing; checked from the main menu into Doc Mitchell's house, the race menu and the Pip-Boy with the game at 4x antialiasing; not yet outdoors, and the game at 8x antialiasing has not been run on wgpu), or by the real one with wgpu drawing every frame off screen beside it (`real,wgpu`, for comparison: with `NV_SHOT` both are captured, numbered alike, wgpu's as `wgpu-frame-*.bmp`) | nothing is shown |
+| `NV_D3D9=real`, `wgpu` or `real,wgpu` | The game's own window, drawn by the real Direct3D 9 (`real`), by wgpu alone (`wgpu`, `crates/d3d9-wgpu`: for testing; checked from the main menu into Doc Mitchell's house, the race menu, the Pip-Boy and out onto the Goodsprings street with the game at 4x antialiasing; the game at 8x antialiasing has not been run on wgpu), or by the real one with wgpu drawing every frame off screen beside it (`real,wgpu`, for comparison: with `NV_SHOT` both are captured, numbered alike, wgpu's as `wgpu-frame-*.bmp`) | nothing is shown |
 | `NV_SOUND=out` (or `device`) | The game's sound through DirectSound (`device` keeps the device's pace instead of the game's clock) | silent |
 | `NV_D3D9_ADAPTER=FILE` | The display adapter table | `%LOCALAPPDATA%\nv-rs\d3d9_adapter.tsv` |
 | `NV_DSOUND_TABLE=FILE` | The DirectSound devices and mixing table | none: the run stops and says how to capture it |
