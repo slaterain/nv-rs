@@ -1181,3 +1181,60 @@ fn the_loading_screen_shows_the_logo_the_text_and_the_bar() {
     #[cfg(not(windows))]
     let _ = other;
 }
+
+/// The pipelines a run made are listed in the cache folder; the next run makes them at the first
+/// `Present` after their shaders exist, so its draws make none (and draw the same pixels). A
+/// damaged list is skipped line by line, never a failed start.
+#[test]
+fn listed_pipelines_are_made_before_the_draws_that_need_them() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("pipeline-list-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let present = |g: &mut Gpu| {
+        g.run(Cmd::Present {
+            device: DEVICE,
+            source: None,
+            dest: None,
+            window: 0,
+            dirty: false,
+            model: 0,
+            frame: 1,
+        });
+    };
+    let run = |cache: &std::path::Path| -> Option<(Vec<u8>, u64)> {
+        let mut g = Gpu::with_cache(4, 1, Some(cache.to_path_buf()))?;
+        present(&mut g);
+        g.colour([1.0, 0.5, 0.25, 1.0]);
+        g.clear(1, 0, 1.0);
+        g.cover(0.5);
+        let reds = g.reds();
+        let made = g.b.device().expect("the device").pipelines_made_on_draws();
+        Some((reds, made))
+    };
+    let Some((first, made_first)) = run(&dir) else {
+        return;
+    };
+    assert!(
+        made_first >= 1,
+        "the first run makes its pipeline on the draw"
+    );
+    let list = std::fs::read_to_string(dir.join("pipelines.txt")).expect("the list written");
+    assert!(list.lines().count() >= 1, "{list}");
+    let (second, made_second) = run(&dir).unwrap();
+    assert_eq!(
+        second, first,
+        "the same pixels from the pipeline made ahead"
+    );
+    assert_eq!(made_second, 0, "no pipeline made on a draw: {list}");
+    // A damaged list: the readable lines are still made ahead.
+    std::fs::write(
+        dir.join("pipelines.txt"),
+        format!("junk\n{list}p1 broken\n"),
+    )
+    .unwrap();
+    let (third, made_third) = run(&dir).unwrap();
+    assert_eq!(third, first);
+    assert_eq!(made_third, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
