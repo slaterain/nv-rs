@@ -4,14 +4,18 @@
 //!
 //! A walk is an outermost `NiAVObject::Cull` or `BSCullingProcess::Process` on a thread (the
 //! scene's root handed to the process), with everything under it. Each walk is filed by its root's
-//! vtable and its process's (the main world's root is the shadow scene node; the water reflection,
-//! the shadow maps and first person have their own roots or the same one, and some walk with
-//! another process class), with its time, the time spent registering what it found (the typed
-//! `AppendVirtual`, inclusive) and the geometries it registered. With the walk split over the
-//! helpers (`NV_PAR_RENDER=1,time`) it also counts the splits: the children and log entries of
-//! each, the time from fork to join, the replay's time, the time the walkers spent walking added
-//! up, and the splits refused (for the process, for a compound frustum in use, for want of
-//! helpers). Every five seconds the table so far is printed and cleared.
+//! vtable, its process's and the process's `kCullMode` when it is the Bethesda process (`-` for
+//! another class). The main world walks the world's scene graph (vtable `01083b5c`, the shadow
+//! scene node below it) in the mode its process has. The water's world reflection (`004eaa00`)
+//! walks the same root through the reflected camera when reflections are high detail
+//! (`bForceHighDetailReflections`; else the sky's and the terrain's objects), with the process
+//! `MTRenderingSystem::AddAccumTask` makes, in mode 4; the shadow maps' and the menus' tasks make
+//! theirs in modes 0 and 1. Each row has its walks' time, the time spent registering what they
+//! found (the typed `AppendVirtual`, inclusive) and the geometries they registered. With the walk
+//! split over the helpers it also counts the splits: the children and log entries of each, the
+//! time from fork to join, the replay's time, the time the walkers spent walking added up, and
+//! the splits refused (for the process, for a compound frustum in use, for want of helpers).
+//! Every five seconds the table so far is printed and cleared.
 //!
 //! Of a split it also counts what main's own walking took, how many helpers joined in and how
 //! long after the fork each took its first task.
@@ -140,14 +144,19 @@ struct Outline {
 const OUTLINE_WALKS: u32 = 30;
 static OUTLINE_WANTED: AtomicU32 = AtomicU32::new(0);
 static OUTLINE_BEST: Mutex<Option<(u64, Vec<Node>)>> = Mutex::new(None);
-static OUTLINE_KEY: Mutex<(u32, u32)> = Mutex::new((0, 0));
+static OUTLINE_KEY: Mutex<Key> = Mutex::new((0, 0, 0));
+
+/// What files a walk: its root's vtable, its process's, and the process's `kCullMode`
+/// ([`NO_MODE`] for a process that is not the Bethesda one).
+type Key = (u32, u32, u32);
+const NO_MODE: u32 = u32::MAX;
 
 thread_local! {
-    /// The walks open on this thread, the outermost one's start and key (root vtable, process
-    /// vtable), and the registration time and count under it so far.
+    /// The walks open on this thread, the outermost one's start and [`Key`], and the
+    /// registration time and count under it so far.
     static OPEN: Cell<u32> = const { Cell::new(0) };
     static START: Cell<Option<Instant>> = const { Cell::new(None) };
-    static KEY: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
+    static KEY: Cell<Key> = const { Cell::new((0, 0, 0)) };
     static REG_NS: Cell<u64> = const { Cell::new(0) };
     static REG_COUNT: Cell<u64> = const { Cell::new(0) };
     static REG_OPEN: Cell<u32> = const { Cell::new(0) };
@@ -172,7 +181,7 @@ struct Row {
 
 struct Table {
     since: Instant,
-    rows: HashMap<(u32, u32), Row>,
+    rows: HashMap<Key, Row>,
 }
 
 static TABLE: Mutex<Option<Table>> = Mutex::new(None);
@@ -180,8 +189,8 @@ static TABLE: Mutex<Option<Table>> = Mutex::new(None);
 /// Held across a `Cull` or `Process` call while the probe is on.
 pub(crate) struct Walk(bool);
 
-/// A walk step starts on `root` with `process` (their vtables file the walk when it is the
-/// outermost one).
+/// A walk step starts on `root` with `process` (their vtables and the process's mode file the
+/// walk when it is the outermost one, [`Key`]).
 pub(crate) fn walk_begins(e: &engine_core::Engine, root: u32, process: u32) -> Walk {
     // A chunk of a parallel walk is part of main's walk, timed there.
     if super::par::collecting() {
@@ -193,7 +202,17 @@ pub(crate) fn walk_begins(e: &engine_core::Engine, root: u32, process: u32) -> W
         n
     });
     if open == 0 {
-        let key = (e.mem.u32(root), e.mem.u32(process));
+        // `BSCullingProcess::Process` (`00c4ee90`) in the process's slot 0x44: the Bethesda
+        // process, whose `kCullMode` is at +0x90.
+        let mode = if crate::slot_target(e, process, 0x44) == 0x00c4_ee90 {
+            e.get(
+                engine_core::ptr::Ptr::<super::layout::BSCullingProcess>::new(process),
+                super::layout::BSCullingProcess::kCullMode,
+            )
+        } else {
+            NO_MODE
+        };
+        let key = (e.mem.u32(root), e.mem.u32(process), mode);
         KEY.with(|k| k.set(key));
         if OUTLINE_WANTED.load(Relaxed) != 0
             && *OUTLINE_KEY
@@ -390,11 +409,12 @@ impl Drop for Replay {
 
 /// Prints an outline: the objects of 1% of the walk or more (at most 60), then the nodes of
 /// `NV_PAR_RENDER_MIN`+ children walked on main, by vtable and `OnVisible`, split or not.
-fn print_outline(nodes: &[Node], (root, process): (u32, u32), walk_ns: u64) {
+fn print_outline(nodes: &[Node], key: Key, walk_ns: u64) {
     let least = super::par::least_children();
     let mut out = format!(
-        "NV_PAR_RENDER outline of a walk (root vtable {root:08x} process {process:08x}): {:.1} us, {} objects on main \
+        "NV_PAR_RENDER outline of a walk ({}): {:.1} us, {} objects on main \
          (geometries not counted); depth, vtable, OnVisible, children, us inclusive:",
+        key_text(key),
         walk_ns as f64 / 1000.0,
         nodes.len()
     );
@@ -506,16 +526,26 @@ pub(crate) fn nanos(d: Duration) -> u64 {
     u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
 }
 
+/// A row's label: `root vtable R process P mode M` (`mode -` for another process class).
+fn key_text((root, process, mode): Key) -> String {
+    if mode == NO_MODE {
+        format!("root vtable {root:08x} process {process:08x} mode -")
+    } else {
+        format!("root vtable {root:08x} process {process:08x} mode {mode}")
+    }
+}
+
 fn print_table(table: &Table) {
     let secs = table.since.elapsed().as_secs_f64();
-    let mut rows: Vec<((u32, u32), Row)> = table.rows.iter().map(|(k, v)| (*k, *v)).collect();
+    let mut rows: Vec<(Key, Row)> = table.rows.iter().map(|(k, v)| (*k, *v)).collect();
     rows.sort_by_key(|row| std::cmp::Reverse(row.1.walk_ns));
     let mut out = format!("NV_PAR_RENDER probe, {secs:.1} s:");
-    for ((root, process), r) in rows {
+    for (key, r) in rows {
         let per = |ns: u64| ns as f64 / r.walks.max(1) as f64 / 1000.0;
         out.push_str(&format!(
-            "\n  root vtable {root:08x} process {process:08x}: {:.1} walks a second, a walk {:.1} us (without registration {:.1} us, \
+            "\n  {}: {:.1} walks a second, a walk {:.1} us (without registration {:.1} us, \
              registration {:.1} us for {:.0} geometries), longest {:.1} us",
+            key_text(key),
             r.walks as f64 / secs,
             per(r.walk_ns),
             per(r.walk_ns.saturating_sub(r.reg_ns)),
@@ -552,17 +582,17 @@ fn print_table(table: &Table) {
         }
     }
     // The next walk of the longest row gets an outline.
-    if let Some(((root, process), _)) = rows_longest(table) {
+    if let Some((key, _)) = rows_longest(table) {
         *OUTLINE_KEY
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = (root, process);
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = key;
         OUTLINE_WANTED.store(OUTLINE_WALKS, Relaxed);
     }
     println!("{out}");
 }
 
 /// The table's row with the most walking time.
-fn rows_longest(table: &Table) -> Option<((u32, u32), Row)> {
+fn rows_longest(table: &Table) -> Option<(Key, Row)> {
     table
         .rows
         .iter()
