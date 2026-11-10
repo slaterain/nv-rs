@@ -269,10 +269,19 @@ fn the_records_match_the_dll() {
     let mut format = vec![("format string", 0, false)];
     format.extend([("variable", 2, true); 20]);
     let want: [(Record, Returns); 19] = [
-        ((0x149a, "GetNumericGameSetting", "", &[S]), Returns::Default),
-        ((0x149b, "SetNumericGameSetting", "", &[S, F]), Returns::Default),
+        (
+            (0x149a, "GetNumericGameSetting", "", &[S]),
+            Returns::Default,
+        ),
+        (
+            (0x149b, "SetNumericGameSetting", "", &[S, F]),
+            Returns::Default,
+        ),
         ((0x149c, "GetNumericIniSetting", "", &[S]), Returns::Default),
-        ((0x149d, "SetNumericIniSetting", "", &[S, F]), Returns::Default),
+        (
+            (0x149d, "SetNumericIniSetting", "", &[S, F]),
+            Returns::Default,
+        ),
         ((0x14a7, "GetCrosshairRef", "", &[]), Returns::Form),
         ((0x14a8, "GetGameRestarted", "", &[]), Returns::Default),
         ((0x14ac, "GetGameLoaded", "", &[]), Returns::Default),
@@ -286,8 +295,19 @@ fn the_records_match_the_dll() {
         ((0x14db, "MessageEx", "", &format), Returns::Default),
         ((0x14dc, "MessageBoxEx", "", &format), Returns::Default),
         ((0x15e6, "GetGridsToLoad", "", &[]), Returns::Default),
-        ((0x15e8, "SetOutputLocalMapPicturesGrids", "SetOLMPGrids", &[I]), Returns::Default),
-        ((0x15ef, "AddSpellNS", "", &[("spell", 7, false)]), Returns::Default),
+        (
+            (
+                0x15e8,
+                "SetOutputLocalMapPicturesGrids",
+                "SetOLMPGrids",
+                &[I],
+            ),
+            Returns::Default,
+        ),
+        (
+            (0x15ef, "AddSpellNS", "", &[("spell", 7, false)]),
+            Returns::Default,
+        ),
     ];
     let helps = [
         "returns the value of a numeric game setting",
@@ -316,8 +336,16 @@ fn the_records_match_the_dll() {
         assert_eq!(text(record), name.as_bytes(), "{opcode:04x}");
         assert_eq!(text(record + 4), short.as_bytes(), "{name}");
         assert_eq!(text(record + 0xc), help.as_bytes(), "{name}");
-        assert_eq!(e.mem.u16(record + 0x10), 0, "{name}: no calling reference needed");
-        assert_eq!(u32::from(e.mem.u16(record + 0x12)), params.len() as u32, "{name}");
+        assert_eq!(
+            e.mem.u16(record + 0x10),
+            0,
+            "{name}: no calling reference needed"
+        );
+        assert_eq!(
+            u32::from(e.mem.u16(record + 0x12)),
+            params.len() as u32,
+            "{name}"
+        );
         let at = e.mem.u32(record + 0x14);
         for (i, &(pname, kind, optional)) in params.iter().enumerate() {
             let p = at + 12 * i as u32;
@@ -325,7 +353,11 @@ fn the_records_match_the_dll() {
             assert_eq!(e.mem.u32(p + 4), kind, "{name} {i}");
             assert_eq!(e.mem.u32(p + 8), u32::from(optional), "{name} {i}");
         }
-        assert_eq!((e.mem.u32(record + 0x20), e.mem.u32(record + 0x24)), (0, 0), "{name}");
+        assert_eq!(
+            (e.mem.u32(record + 0x20), e.mem.u32(record + 0x24)),
+            (0, 0),
+            "{name}"
+        );
         assert_eq!(crate::table::return_type(&e, opcode), returns, "{name}");
     }
 }
