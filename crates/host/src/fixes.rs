@@ -189,7 +189,7 @@ pub const SCRIPT_LIST_GUARD: Fix = Fix {
     env: "NV_NVSE_LIST_GUARD",
     addresses: &[],
     summary:
-        "an inventory list the script commands walk that runs back into itself, or a list or stack the extender itself leaves malformed or missing, no longer stops the game",
+        "an inventory list the script commands walk that runs back into itself, or GetPaired asking for the same stack again, ends the walk; the list SetHotkeyItem gives a stack gets the game's vtable; the token commands (GetTokenValue, SetTokenValue and the rest) answer for an item only in the base container (the Pip-Boy, for one); none of these stops the game",
     install: install_script_list_guard,
 };
 

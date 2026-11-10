@@ -72,9 +72,10 @@ pub mod vars;
 /// in Ghidra on the exe's vtables; every use goes through these, and the tests' stand-in vtables
 /// write the offsets as numbers, so a wrong slot here fails them).
 pub mod vtable {
-    /// `TESForm::IsActor` (the 65th entry): `Character`'s vtable `0108AA3C` answers 1 here
-    /// (`008D0360`), `TESObjectWEAP`'s `0102C51C` 0 (`0047C850`). The slot three entries on,
-    /// `+0x10C`, is the reference compare, which takes an argument.
+    /// `TESForm::IsActor` (the 65th entry): `Character`'s vtable `01086A6C` and
+    /// `PlayerCharacter`'s `0108AA3C` answer 1 here (`008D0360`), `TESObjectWEAP`'s `0102C51C` 0
+    /// (`0047C850`). The slot three entries on, `+0x10C`, is the reference compare, which takes
+    /// an argument.
     pub const IS_ACTOR: u32 = 0x100;
     /// `TESForm::IsBoundObject` (index 0x3A): `TESObjectWEAP`'s vtable answers 1 here
     /// (`008D0360`) and 0 at the next entry, `+0xEC`.

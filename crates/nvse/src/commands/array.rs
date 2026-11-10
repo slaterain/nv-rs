@@ -62,8 +62,10 @@ pub const NULL_GUARD: usize = 1;
 /// `NV_NVSE_CYCLE_GUARD`: an array met again inside itself ends the walk.
 pub const CYCLE_GUARD: usize = 2;
 /// `NV_NVSE_LIST_GUARD`: a game list walked by the inventory commands that runs back into itself ends
-/// the walk instead of stopping the game ([`crate::invref::MAX_LIST_NODES`]), and the extra data list
-/// `SetHotkeyItem` makes has the game's vtable (`inventory_items.rs`, `new_extra_list`).
+/// the walk instead of stopping the game ([`crate::invref::MAX_LIST_NODES`]) (`GetPaired` too, where it
+/// would ask for the same stack for ever), the extra data list `SetHotkeyItem` makes has the game's
+/// vtable (`inventory_items.rs`, `new_extra_list`), and the token commands search on without xNVSE's
+/// null reads (`inventory_info.rs`, `null_read_in_the_token_search`).
 pub const LIST_GUARD: usize = 3;
 
 /// Turns one of the rows on or off (the host's fix rows; before the game's threads start).
