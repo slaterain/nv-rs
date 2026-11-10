@@ -832,3 +832,77 @@ fn nvidia_alpha_to_coverage_stands_in_for_the_alpha_test_on_multisampled_targets
         assert_eq!(g.reds(), vec![0; 16], "{samples}: switch off");
     }
 }
+
+/// The alpha test compares as the reference machine's (measured on the real Direct3D 9 here,
+/// DESIGN.md section 11): as if the alpha were rounded to 8 bits, the halfway points cut to 12
+/// bits. With reference 0x80, GREATER passes from alpha 2065/4096 (128.56 of 255), not just above
+/// 128/255; GREATEREQUAL from 2049/4096 (127.56); EQUAL between them. Measured on the real one:
+/// GREATER, GREATEREQUAL, LESS and LESSEQUAL at one sample on an A8R8G8B8 target (one NVIDIA
+/// card). EQUAL (case 3 here) and NOTEQUAL are derived from the same bounds, not measured; other
+/// target formats get the same rule without a measurement there.
+#[test]
+fn the_alpha_test_compares_as_the_reference_machine() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    g.state(ZENABLE, 0);
+    g.state(ALPHATESTENABLE, 1);
+    g.state(ALPHAREF, 0x80);
+    let drawn = |g: &mut Gpu, func: u32, a: f32| {
+        g.state(ALPHAFUNC, func);
+        g.colour([1.0, 1.0, 1.0, a]);
+        g.clear(1, 0, 1.0);
+        g.cover(0.5);
+        g.reds()[5] == 255
+    };
+    let below = |x: f32| f32::from_bits((x / 4096.0).to_bits() - 1);
+    for (func, from, to) in [
+        (5, 2065.0, None),
+        (7, 2049.0, None),
+        (3, 2049.0, Some(2065.0)),
+    ] {
+        assert!(!drawn(&mut g, func, below(from)), "{func}: below {from}");
+        assert!(drawn(&mut g, func, from / 4096.0), "{func}: at {from}");
+        if let Some(to) = to {
+            assert!(drawn(&mut g, func, below(to)), "{func}: below {to}");
+            assert!(!drawn(&mut g, func, to / 4096.0), "{func}: at {to}");
+        }
+    }
+    // Above 128/255 by less than the halfway point: not GREATER (a float comparison would pass).
+    assert!(!drawn(&mut g, 5, 128.55 / 255.0));
+    assert!(drawn(&mut g, 3, 128.55 / 255.0));
+    // The ends: reference 0 is passed by every alpha at or above it, 255 by none above it.
+    g.state(ALPHAREF, 0);
+    assert!(drawn(&mut g, 7, 0.0));
+    assert!(!drawn(&mut g, 2, 0.0));
+    g.state(ALPHAREF, 0xFF);
+    assert!(!drawn(&mut g, 5, 1.0));
+    assert!(drawn(&mut g, 4, 1.0));
+}
+
+/// An 8-bit multisampled target resolves gamma-corrected, as the reference machine's driver does
+/// (NVIDIA's antialiasing gamma correction): a quad of the viewport's own edges covers one sample
+/// in four of the corner pixel and half of the first column's and row's, which the real Direct3D
+/// 9 here resolves to 137 and 188 (white on black; a plain average gives 64 and 127), at 4x and
+/// 8x.
+#[test]
+fn an_8_bit_target_resolves_gamma_corrected() {
+    for samples in [4u32, 8] {
+        let Some(mut g) = Gpu::new(8, samples) else {
+            return;
+        };
+        g.state(ZENABLE, 0);
+        g.colour([1.0, 1.0, 1.0, 1.0]);
+        g.clear(1, 0, 1.0);
+        g.quad(0.5);
+        let reds = g.reds();
+        for y in 0..8 {
+            for x in 0..8 {
+                let want = match (x, y) {
+                    (0, 0) => 137,
+                    (0, _) | (_, 0) => 188,
+                    _ => 255,
+                };
+                assert_eq!(reds[y * 8 + x], want, "{samples}x: ({x}, {y}) in {reds:?}");
+            }
+        }
+    }
+}
