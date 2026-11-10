@@ -3050,7 +3050,17 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             filterable: e.filterable,
             atoc: e.atoc,
             count: e.count,
-            clip: clip_of(e.clip),
+            // Planes on or off is the entry's; how they are cut is this adapter's (a list made on
+            // Direct3D 12 serves Vulkan too).
+            clip: if e.clip == 0 {
+                wgsl::Clip::Off
+            } else if self.clip_distances {
+                wgsl::Clip::Distances
+            } else {
+                wgsl::Clip::Discard {
+                    per_sample: e.samples > 1,
+                }
+            },
         };
         Some(Ready {
             key,
@@ -3111,8 +3121,25 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             keys.push((vk, pk));
         }
         let modules = tasks.len();
+        // The loading screen while it runs, when it is a long step (the start's; a few pipelines
+        // ready later, after a new sample count, are made without it).
+        let total = modules + ready.len();
+        let shown = total >= 32;
+        let surface = self.surface.take();
+        let mut screen = self.loading.take();
+        let (device, queue) = (self.device.clone(), self.queue.clone());
+        let mut step = |done: usize| {
+            if shown {
+                let p = loading::Progress {
+                    title: "Loading".into(),
+                    status: format!("Preparing shaders {} of {}", done.min(total), total),
+                    done: done as f32 / total.max(1) as f32,
+                };
+                show_on(&surface, &mut screen, &device, &queue, &p);
+            }
+        };
         let t = std::time::Instant::now();
-        self.make_modules(tasks, threads);
+        self.make_modules(tasks, threads, &mut step);
         let modules_took = t.elapsed();
         let mut jobs = Vec::new();
         for (r, (vk, pk)) in ready.iter().zip(&keys) {
@@ -3129,8 +3156,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
         }
         let cache = self.pipeline_cache.as_ref().map(|c| &c.cache);
-        let device = &self.device;
-        let built = on_workers(&jobs, threads, |(_, j)| build_pipeline(device, cache, j));
+        let built = on_workers(
+            &jobs,
+            threads,
+            |(_, j)| build_pipeline(&device, cache, j),
+            &mut |d| step(modules + d),
+        );
+        step(total);
+        drop(step);
+        self.surface = surface;
+        self.loading = screen;
         let mut refused = 0;
         let made = jobs.len();
         for ((key, j), b) in jobs.into_iter().zip(built) {
@@ -3214,18 +3249,28 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
 
     /// Makes the modules of `tasks` (each once, on `threads` worker threads; 1: here) and keeps
     /// them; a module wgpu or the converter refuses is kept as none and said once.
-    fn make_modules(&mut self, mut tasks: Vec<ModuleTask>, threads: usize) {
+    fn make_modules(
+        &mut self,
+        mut tasks: Vec<ModuleTask>,
+        threads: usize,
+        tick: &mut dyn FnMut(usize),
+    ) {
         let mut seen = HashSet::new();
         tasks.retain(|t| seen.insert(t.key.clone()));
         let device = self.device.clone();
-        let made = on_workers(&tasks, threads, |t| {
-            let start = std::time::Instant::now();
-            let m = match &t.source {
-                Ok(s) => create_module(&device, s.clone()),
-                Err(e) => Err(e.to_string()),
-            };
-            (m, start.elapsed())
-        });
+        let made = on_workers(
+            &tasks,
+            threads,
+            |t| {
+                let start = std::time::Instant::now();
+                let m = match &t.source {
+                    Ok(s) => create_module(&device, s.clone()),
+                    Err(e) => Err(e.to_string()),
+                };
+                (m, start.elapsed())
+            },
+            tick,
+        );
         for (t, (m, took)) in tasks.into_iter().zip(made) {
             self.made.add_module(t.convert, took);
             let what = match t.key {
@@ -3374,7 +3419,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.made_on_draws += 1;
         let started = std::time::Instant::now();
         let (vkey, pkey, tasks) = self.module_tasks(key, vs, ps, inputs, varyings);
-        self.make_modules(tasks, 1);
+        self.make_modules(tasks, 1, &mut |_| {});
         let job = self.pipeline_job(key, ps, &vkey, &pkey, attributes, topology, samplers)?;
         let t = std::time::Instant::now();
         let made = build_pipeline(
@@ -4182,40 +4227,21 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
 
     // Present.
 
-    /// `Present` of the stream's `frame` (numbered as the forwarding layer's captures are).
     /// Shows `p` in the game's window ([`loading`]): for a long step of the backend's own before
     /// play, which calls it as it goes. Only a device on the game's window draws it; every call
     /// also writes one log line with the same numbers (for a launcher). The game's own frames
     /// are not touched: the next `Present` shows the game again.
     pub fn show_progress(&mut self, p: &loading::Progress) {
-        eprintln!(
-            "NV_D3D9 wgpu: {}: {} ({:.0}%)",
-            p.title,
-            p.status,
-            p.done.clamp(0.0, 1.0) * 100.0
-        );
-        let Some((surface, config)) = &self.surface else {
-            return;
-        };
-        let frame = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
-            _ => return,
-        };
-        let view = frame.texture.create_view(&Default::default());
-        let screen = self
-            .loading
-            .get_or_insert_with(|| loading::Screen::new(&self.device, &self.queue, config.format));
-        screen.draw(
+        show_on(
+            &self.surface,
+            &mut self.loading,
             &self.device,
             &self.queue,
-            &view,
-            (config.width, config.height),
             p,
         );
-        self.queue.present(frame);
     }
 
+    /// `Present` of the stream's `frame` (numbered as the forwarding layer's captures are).
     pub(crate) fn present(&mut self, frame: u32) {
         let now = std::time::Instant::now();
         if let Some(t) = self.last_present {
@@ -4489,6 +4515,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         buffer.unmap();
         out
+    }
+
     /// How many pipelines were made on the draw that needed them, not ahead from the list (tests).
     pub fn pipelines_made_on_draws(&self) -> u64 {
         self.made_on_draws
@@ -4822,15 +4850,6 @@ fn clip_code(c: wgsl::Clip) -> u8 {
     }
 }
 
-fn clip_of(c: u8) -> wgsl::Clip {
-    match c {
-        1 => wgsl::Clip::Distances,
-        2 => wgsl::Clip::Discard { per_sample: false },
-        3 => wgsl::Clip::Discard { per_sample: true },
-        _ => wgsl::Clip::Off,
-    }
-}
-
 /// One module to make: its WGSL (or why there is none) and what converting it took.
 struct ModuleTask {
     key: ModKey,
@@ -4850,6 +4869,33 @@ struct PipelineJob {
     depth_stencil: Option<wgpu::DepthStencilState>,
     multisample: wgpu::MultisampleState,
     targets: Vec<Option<wgpu::ColorTargetState>>,
+}
+
+/// [`Device::show_progress`] on the device's parts (so it can run while other parts are lent out).
+fn show_on(
+    surface: &Option<(wgpu::Surface<'static>, wgpu::SurfaceConfiguration)>,
+    screen: &mut Option<loading::Screen>,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    p: &loading::Progress,
+) {
+    eprintln!(
+        "NV_D3D9 wgpu: {}: {} ({:.0}%)",
+        p.title,
+        p.status,
+        p.done.clamp(0.0, 1.0) * 100.0
+    );
+    let Some((surface, config)) = surface else {
+        return;
+    };
+    let frame = match surface.get_current_texture() {
+        wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+        _ => return,
+    };
+    let view = frame.texture.create_view(&Default::default());
+    let screen = screen.get_or_insert_with(|| loading::Screen::new(device, queue, config.format));
+    screen.draw(device, queue, &view, (config.width, config.height), p);
+    queue.present(frame);
 }
 
 /// Makes a module from WGSL: read and checked once, by wgpu (naga's reader and validator, with
@@ -4913,25 +4959,54 @@ fn build_pipeline(
 }
 
 /// `f` of each of `items`, on up to `threads` worker threads below normal priority (1: on this
-/// thread), the results in the items' order.
-fn on_workers<T: Sync, R: Send>(items: &[T], threads: usize, f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+/// thread), the results in the items' order. `tick` runs on this thread meanwhile, about ten
+/// times a second, with how many are done (the loading screen).
+fn on_workers<T: Sync, R: Send>(
+    items: &[T],
+    threads: usize,
+    f: impl Fn(&T) -> R + Sync,
+    tick: &mut dyn FnMut(usize),
+) -> Vec<R> {
     if threads <= 1 || items.len() <= 1 {
-        return items.iter().map(f).collect();
+        return items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                tick(i);
+                f(item)
+            })
+            .collect();
     }
     let next = std::sync::atomic::AtomicUsize::new(0);
+    let done = std::sync::atomic::AtomicUsize::new(0);
     let results: Vec<std::sync::Mutex<Option<R>>> =
         items.iter().map(|_| std::sync::Mutex::new(None)).collect();
     std::thread::scope(|s| {
+        let mut workers = Vec::new();
         for _ in 0..threads.min(items.len()) {
-            s.spawn(|| {
+            workers.push(s.spawn(|| {
                 lower_priority();
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(item) = items.get(i) else { break };
                     let r = f(item);
                     *results[i].lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+                    done.fetch_add(1, Ordering::Relaxed);
                 }
-            });
+            }));
+        }
+        // Until every worker is out (also one that panicked: the scope then passes it on).
+        let mut last: Option<std::time::Instant> = None;
+        loop {
+            let d = done.load(Ordering::Relaxed);
+            if d >= items.len() || workers.iter().all(|w| w.is_finished()) {
+                break;
+            }
+            if last.is_none_or(|t| t.elapsed().as_millis() >= 100) {
+                tick(d);
+                last = Some(std::time::Instant::now());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
     });
     results
