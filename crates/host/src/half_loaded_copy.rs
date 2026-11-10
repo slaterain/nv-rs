@@ -94,14 +94,24 @@ pub fn in_transition<R>(e: &mut Engine, actor: u32, f: impl FnOnce(&mut Engine) 
     result
 }
 
-/// The first copies of the run are said in the log (a play report then shows the gap was met).
+/// The first copies of the run are said in the log, and the first ones whose target is still a
+/// saved id (the case that stopped the port): a play report then shows the gap was met.
 fn note_copy(e: &Engine, old_process: u32) {
     use std::sync::atomic::{AtomicU32, Ordering};
     static SAID: AtomicU32 = AtomicU32::new(0);
-    if old_process == 0 || SAID.fetch_add(1, Ordering::Relaxed) >= 20 {
+    static SAID_WITH_TARGET: AtomicU32 = AtomicU32::new(0);
+    if old_process == 0 {
         return;
     }
     let target = e.mem.u32(old_process.wrapping_add(0x40));
+    let said = if target == 0 {
+        &SAID
+    } else {
+        &SAID_WITH_TARGET
+    };
+    if said.fetch_add(1, Ordering::Relaxed) >= 5 {
+        return;
+    }
     eprintln!(
         "half-loaded actor's process copied to another level: its saved ids carried through \
          (the target word {target:08x})"

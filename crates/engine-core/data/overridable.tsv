@@ -29,9 +29,9 @@
 00518f00	1	ITR
 00525a90	0	JIP
 00525b20	3	yUI
-00564db0	0	nv-rs half-loaded actor's process copy (every preset)
-00568150	1	nv-rs half-loaded actor's process copy (every preset)
-005682c0	1	nv-rs half-loaded actor's process copy (every preset)
+00564db0	1	nv-rs half-loaded actor's process copy (every preset)
+00568150	2	nv-rs half-loaded actor's process copy (every preset)
+005682c0	2	nv-rs half-loaded actor's process copy (every preset)
 005702e0	0	ITR
 0058e9d0	1	JIP
 00593870	2	script or frame function
@@ -74,15 +74,15 @@
 0086e650	0	script or frame function
 0086ff70	1	script or frame function
 008706b0	2	JIP, nv-rs smooth physics drawing
-00881d30	0	nv-rs half-loaded actor's process copy (every preset)
-00882b90	0	nv-rs half-loaded actor's process copy (every preset)
-00883240	0	nv-rs half-loaded actor's process copy (every preset)
-00883800	0	nv-rs half-loaded actor's process copy (every preset)
+00881d30	1	nv-rs half-loaded actor's process copy (every preset)
+00882b90	1	nv-rs half-loaded actor's process copy (every preset)
+00883240	1	nv-rs half-loaded actor's process copy (every preset)
+00883800	1	nv-rs half-loaded actor's process copy (every preset)
 008a06c0	0	ITR
 008a8dd0	2	JIP
 008b39f0	0	ITR
 008bca90	0	JIP
-008d0660	0	nv-rs half-loaded actor's process copy (every preset)
+008d0660	1	nv-rs half-loaded actor's process copy (every preset)
 008d4e80	0	ITR
 00903180	0	kNVSE
 0095f6c0	1	nv-rs dragged bodies by time
