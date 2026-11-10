@@ -27,7 +27,9 @@ Windows language or Windows version change, nv-rs notices and reads them again.
   Play.exe               the game
   Play with mods.cmd     the game with the mods in the mods folder (see mods\READ ME.txt)
   Settings.cmd           window or borderless, resolution, anti-aliasing, game fixes, frame limit
-                         and more (next start)
+                         and more (next start). Close the game first: the game writes its own
+                         settings file again when you change an option in its menu, and that can
+                         undo a choice saved while it runs
   Import my saves.cmd    copies your saves from Documents\My Games\FalloutNV. Those stay as they are
 
 Use Exit Game in the game's menu to quit. Saves reach the disk within about 5 seconds of being made,

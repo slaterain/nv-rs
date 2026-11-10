@@ -94,7 +94,16 @@ and the host's tests check one against the other. The fix lines are written with
   command line. Every scripted, gated or measured run ignores them, so a player's file can't change a
   result.
 - Play.exe passes none of the player options' variables (not even one in its own environment), so
-  the file decides.
+  the file decides. settings.ini's other `NV_...` lines are not passed any more (launcher.log names
+  them once, when the file is moved in).
+- A tester passes a variable by setting it in the environment before starting Play.exe. When it
+  makes the run a test (a starred name or a fix's own variable), the game ignores the file, so
+  Play.exe passes the file's choices on as the six variables and the uncommented fix lines (the
+  play default where the file says nothing) and leaves any of them set beforehand as they were:
+  the run plays like the player's game, and launcher.log says which variable made it a test and
+  what was passed.
+- Close the game before changing settings: the game writes its whole `FalloutPrefs.ini` when an
+  option changes in its own menu, which can undo a choice Settings.cmd saved meanwhile.
 
 ### 1. Player settings
 
@@ -103,8 +112,8 @@ and the host's tests check one against the other. The fix lines are written with
 | `NV_PRESET=fixes` or `vanilla` (`sPreset`; `Preset=`) | What differs from the original program: the fixes set, or the original's behaviour exactly | `fixes` |
 | `NV_FRAME_LIMIT=n` (`iFrameLimit`; `FrameLimit=`) | Frames a second at most in play (0: none) | none under `fixes`; the original's own pacing under `vanilla` |
 | `NV_MENU_FRAME_LIMIT=n` (`iMenuFrameLimit`; `MenuFrameLimit=`) | Frames a second at most in menus (0: none) | 120 |
-| `NV_THREADS=stepped` (`bSteppedThreads=1`; a line in `settings.ini`; Settings.cmd's threads option) | The game's threads one at a time (the fallback, and the reference mode) instead of side by side on their own cores | side by side in play; a scripted or measured run is stepped whatever the default |
-| `NV_RENDER_THREAD=0` (`bRenderThread=0`; a line in `settings.ini`; Settings.cmd's drawing thread option) | The real Direct3D 9 calls on the game's own threads, as the original makes them, instead of a render thread of their own | render thread in play; a scripted or measured run draws on the game's threads |
+| `NV_THREADS=stepped` (`bSteppedThreads=1`; `NV_THREADS=`; Settings.cmd's threads option) | The game's threads one at a time (the fallback, and the reference mode) instead of side by side on their own cores | side by side in play; a scripted or measured run is stepped whatever the default |
+| `NV_RENDER_THREAD=0` (`bRenderThread=0`; `NV_RENDER_THREAD=`; Settings.cmd's drawing thread option) | The real Direct3D 9 calls on the game's own threads, as the original makes them, instead of a render thread of their own | render thread in play; a scripted or measured run draws on the game's threads |
 | `NV_BORDERLESS=1` (`bBorderless=1`; `Borderless=`) | The game's window without a frame, filling the screen | off |
 
 Settings.cmd's resolution, anti-aliasing, anisotropy and V-sync are the game's own keys, not switches: `iSize W`, `iSize H`, `iMultiSample` and `iMaxAnisotropy` in `FalloutPrefs.ini`, `iPresentInterval` in `Fallout.ini` (where the game reads it).
@@ -227,7 +236,8 @@ GitHub Releases; the packages there from before 2026-11-03 are of the removed vi
   registry key, all read only, then a folder picker. `app\FalloutNV.exe --check` makes the same check
   of the game's program the game's start-up makes, so a refusal is said in a window before anything runs.
 - **The folders:** everything in `userdata\`: the game's Documents and AppData (one set per way of
-  playing, `game` and `mods`), the tables (`machine`), `logs`, `reports` and `settings.ini`. The table's
+  playing, `game` and `mods`), the tables (`machine`), `logs` and `reports`; an older preview's
+  `settings.ini` is moved into the two profiles' files once (`settings.ini.migrated`). The table's
   `SHGetFolderPathA` answers point at them. The game's own writes stay in memory as ever
   (`engine-platform` files.rs); only `NV_SAVE_OUT` and `NV_PREFS_OUT` reach the disk, inside `userdata`.
 - **The tables:** the adapter table is made again at every start (about 1.3 s here), so a new graphics

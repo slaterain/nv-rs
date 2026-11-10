@@ -1196,30 +1196,28 @@ mod tests {
         assert!(!is_play_run(env_of(&[("NV_D3D9", "real")])));
     }
 
-    /// Play.exe passes none of the variables that beat Fallout.ini's player keys, so the file
-    /// decides (scripts/launcher/src/main.rs `PLAYER_SWITCHES`): its list must be the table's.
+    /// Play.exe takes the player options' variables out in play and passes the file's choices on
+    /// in a test (scripts/launcher/src/game_ini.rs `switches`). It takes the six names from this
+    /// crate's table itself; what makes a test it keeps as a list, which must be this one. (A
+    /// fix's own variable makes a test too: Play.exe reads those from the table.)
     #[test]
-    fn the_launcher_passes_no_variable_over_the_players_keys() {
-        let launcher = include_str!("../../../scripts/launcher/src/main.rs");
+    fn the_launcher_knows_what_makes_a_test() {
+        let launcher = include_str!("../../../scripts/launcher/src/game_ini.rs");
         let list = launcher
-            .split("const PLAYER_SWITCHES")
+            .split("pub const TEST_SWITCHES")
             .nth(1)
             .and_then(|rest| rest.split("];").next())
-            .expect("PLAYER_SWITCHES in the launcher's main.rs");
+            .expect("TEST_SWITCHES in the launcher's game_ini.rs");
         let mut names: Vec<&str> = list
             .split('"')
             .skip(1)
             .step_by(2)
             .filter(|w| w.starts_with("NV_"))
             .collect();
-        let mut table: Vec<&str> = crate::game_ini::rows()
-            .into_iter()
-            .filter(|r| r.section != crate::game_ini::FIXES_SECTION)
-            .map(|r| r.switch)
-            .collect();
+        let mut host: Vec<&str> = TEST_VARIABLES.to_vec();
         names.sort_unstable();
-        table.sort_unstable();
-        assert_eq!(names, table);
+        host.sort_unstable();
+        assert_eq!(names, host);
     }
 
     /// Fallout.ini's keys over the built-in defaults; nothing in the file is the defaults.

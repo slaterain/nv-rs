@@ -89,9 +89,14 @@ impl Settings {
         self.0.get(name).map_or("", String::as_str)
     }
 
-    /// Borderless window: on unless the file says otherwise (the way the game has been played most).
-    pub fn borderless(&self) -> bool {
-        self.get("Borderless") != "0"
+    /// The `Borderless=` line's choice: `0` is the window as the game makes it, anything else the
+    /// borderless window. `None` with no line or an empty one: nothing was chosen here.
+    pub fn borderless(&self) -> Option<bool> {
+        match self.get_any_case("Borderless").map(str::trim) {
+            None | Some("") => None,
+            Some("0") => Some(false),
+            Some(_) => Some(true),
+        }
     }
 
     /// A setting by its name compared without case, as the game reads `Preset` and `FrameLimit`.
@@ -133,17 +138,16 @@ impl Settings {
         ])
     }
 
-    /// The `FalloutPrefs.ini` lines these settings set, by the game's own names; `desktop` is the
-    /// primary monitor's size, used when no resolution was chosen and the prefs have none.
+    /// The `FalloutPrefs.ini` lines these settings set, by the game's own names: resolution,
+    /// anti-aliasing and anisotropic filtering. The borderless window's `bFull Screen=0` is not
+    /// among them: Play.exe sets it at every start from what the profile's `Fallout.ini` says
+    /// once these settings are in it (`prepare_profile`), so the two can't disagree.
     pub fn prefs_lines(&self) -> Vec<(String, String)> {
         let mut set = Vec::new();
         let times = |v: &str| match v {
             "Off" => Some(0u32),
             v => v.strip_suffix('x').and_then(|n| n.parse().ok()),
         };
-        if self.borderless() {
-            set.push(("bFull Screen".into(), "0".into()));
-        }
         if let Some((w, h)) = self.get("Resolution").split_once('x') {
             if w.parse::<u32>().is_ok() && h.parse::<u32>().is_ok() {
                 set.push(("iSize W".into(), w.into()));
@@ -235,20 +239,24 @@ mod tests {
         let s = Settings::parse(
             "# a comment\nBorderless=1\nResolution=2560x1440\nAntiAliasing=8x\nAnisotropy=Off\nVSync=On\nSomethingNew=7\nNV_FIXES=vnv\n",
         );
-        assert!(s.borderless());
+        assert_eq!(s.borderless(), Some(true));
+        // The borderless window's bFull Screen=0 is not set from here: Play.exe sets it from the
+        // profile's Fallout.ini.
         assert_eq!(
             s.prefs_lines(),
             lines(&[
-                ("bFull Screen", "0"),
                 ("iSize W", "2560"),
                 ("iSize H", "1440"),
                 ("iMultiSample", "8"),
                 ("iMaxAnisotropy", "0"),
             ])
         );
-        assert!(Settings::parse("").borderless());
-        assert!(!Settings::parse("Borderless=0").borderless());
-        assert!(Settings::parse("Borderless=0\nResolution=Game launcher's")
+        // No Borderless line, or an empty one, chooses nothing.
+        assert_eq!(Settings::parse("").borderless(), None);
+        assert_eq!(Settings::parse("Borderless=\n").borderless(), None);
+        assert_eq!(Settings::parse("borderless = 0").borderless(), Some(false));
+        assert_eq!(Settings::parse("Borderless=yes").borderless(), Some(true));
+        assert!(Settings::parse("Borderless=1\nResolution=Game launcher's")
             .prefs_lines()
             .is_empty());
     }

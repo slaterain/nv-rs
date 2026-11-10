@@ -2,12 +2,20 @@
 # Documents): userdata\game and userdata\mods each have a Documents\My Games\FalloutNV with the game's
 # Fallout.ini, whose [nv-rs ...] sections hold nv-rs's options, and FalloutPrefs.ini. Save changes only
 # the lines of the options changed here, in both, in place: notes, order, other keys and a mod's lines
-# stay as they are. Before Play.exe's first start those files don't exist yet: then the choices go into
-# userdata\settings.ini, and Play.exe moves them into the files at its next start (and renames it
-# settings.ini.migrated).
+# stay as they are.
+#
+# The files are edited only once Play.exe has put nv-rs's sections into the game profile's Fallout.ini,
+# and only while there is no userdata\settings.ini. Otherwise the choices go into settings.ini: before
+# Play.exe's first start, for a Fallout.ini from before the sections (a key added here would leave it
+# half made), and while a settings.ini is there (it is the settings then, for Play.exe too). Play.exe
+# moves settings.ini into both profiles' files at its next start, its lines over what the files say,
+# and renames it settings.ini.migrated.
 #
 # Test hooks (scripts/launcher's tests): NV_RS_NO_WINDOWS=1 saves without showing the window, and
 # NV_RS_SETTINGS_CHOOSE="Name=Value;Name=Value" (settings.ini's names) are the choices made.
+
+# No progress records: with its output redirected, Windows PowerShell writes them to the error stream.
+$ProgressPreference = 'SilentlyContinue'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
@@ -16,7 +24,8 @@ $file = Join-Path $folder 'settings.ini'
 $games = @('game', 'mods') | ForEach-Object { Join-Path $folder "$_\Documents\My Games\FalloutNV" }
 # The files are read and written one character per byte, so every other byte stays as it was.
 $latin1 = [Text.Encoding]::GetEncoding(28591)
-$inFiles = (-not (Test-Path -LiteralPath $file)) -and (Test-Path -LiteralPath (Join-Path $games[0] 'Fallout.ini'))
+$noWindow = $env:NV_RS_NO_WINDOWS -eq '1'
+$failed = $false
 
 # The value of a key as the game finds it: names without case, spaces trimmed, one pair of quotes
 # taken off, the first match; a ; line never matches.
@@ -34,6 +43,17 @@ function Get-IniValue($text, $section, $key) {
         }
     }
     $null
+}
+
+# Whether a Fallout.ini's text has one of nv-rs's sections, as Play.exe looks for them
+# (scripts/launcher game_ini.rs has_sections).
+$ours = @('nv-rs General', 'nv-rs Display', 'nv-rs Threads', 'nv-rs Fixes')
+function Test-Sections($text) {
+    foreach ($line in ($text -split "`n")) {
+        $t = $line.Trim()
+        if ($t.StartsWith('[') -and $ours -contains $t.Substring(1).Split(']')[0].Trim()) { return $true }
+    }
+    $false
 }
 
 # The text with key=value in section, as Play.exe sets it (scripts/launcher game_ini.rs set_key): the
@@ -70,26 +90,67 @@ function Read-Ini($path) {
     if (Test-Path -LiteralPath $path) { $latin1.GetString([IO.File]::ReadAllBytes($path)) } else { '' }
 }
 
-# Writes the text back only when it changed, keeping a read-only mark.
-function Write-Ini($path, $old, $text) {
-    if ($text -ceq $old) { return }
-    $readOnly = (Test-Path -LiteralPath $path) -and (Get-Item -LiteralPath $path).IsReadOnly
-    if ($readOnly) { (Get-Item -LiteralPath $path).IsReadOnly = $false }
-    [IO.File]::WriteAllBytes($path, $latin1.GetBytes($text))
-    if ($readOnly) { (Get-Item -LiteralPath $path).IsReadOnly = $true }
+# A save that fails must be seen: Settings.cmd hides this script's own window.
+function Show-NotSaved($path, $why) {
+    $script:failed = $true
+    $text = "The settings were not saved.`n`n$why`n`nFile:`n$path`n`nClose the game and any program that has the file open, then open Settings again, choose and click Save."
+    if ($noWindow) { [Console]::Error.WriteLine($text) }
+    else { [void][System.Windows.Forms.MessageBox]::Show($text, 'nv-rs settings', 'OK', 'Error') }
+}
+
+# Puts each new text in place of its file ($writes: Path and Bytes). All of them are written whole
+# beside their files first (NAME.part); then each takes its file's place in one step. So a full
+# disk or a stop mid-write leaves every file whole: the old one or the new one, never a cut one. A
+# read-only mark is lifted for that step and put back. Says so when it fails.
+function Save-Files($writes) {
+    $now = ''
+    try {
+        foreach ($w in $writes) {
+            $now = $w.Path
+            [IO.File]::WriteAllBytes("$($w.Path).part", $w.Bytes)
+        }
+        foreach ($w in $writes) {
+            $now = $w.Path
+            if (-not (Test-Path -LiteralPath $w.Path)) {
+                [IO.File]::Move("$($w.Path).part", $w.Path)
+                continue
+            }
+            $readOnly = (Get-Item -LiteralPath $w.Path -Force -ErrorAction Stop).IsReadOnly
+            if ($readOnly) { (Get-Item -LiteralPath $w.Path -Force -ErrorAction Stop).IsReadOnly = $false }
+            try { [IO.File]::Replace("$($w.Path).part", $w.Path, [NullString]::Value) }
+            finally { if ($readOnly) { (Get-Item -LiteralPath $w.Path -Force -ErrorAction Stop).IsReadOnly = $true } }
+        }
+    } catch {
+        $e = $_.Exception
+        if ($e.InnerException) { $e = $e.InnerException }
+        Show-NotSaved $now $e.Message
+    } finally {
+        foreach ($w in $writes) {
+            $part = "$($w.Path).part"
+            if (Test-Path -LiteralPath $part) { Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue }
+        }
+    }
 }
 
 $own = "Game's setting"
-# Today's choices by settings.ini's names: from the files, or from settings.ini before the first start.
-$cur = @{}
-$kept = New-Object System.Collections.Generic.List[string]
 $known = @('Borderless', 'Resolution', 'AntiAliasing', 'Anisotropy', 'VSync', 'Preset', 'FrameLimit', 'MenuFrameLimit', 'NV_THREADS', 'NV_RENDER_THREAD')
 # Play.exe makes the game's NV_PRESET, NV_FRAME_LIMIT and NV_MENU_FRAME_LIMIT from Preset, FrameLimit and
 # MenuFrameLimit, and NV_FIXES was never one of the game's switches: such lines would only look as if
 # they did something.
 $dropped = @('NV_PRESET', 'NV_FRAME_LIMIT', 'NV_MENU_FRAME_LIMIT', 'NV_FIXES')
-if ($inFiles) {
-    $ini = Read-Ini (Join-Path $games[0] 'Fallout.ini')
+
+# Where the settings are. The game profile's Fallout.ini has nv-rs's sections ($seeded): Play.exe
+# made it ready. A settings.ini is there ($pending): it is the settings until Play.exe has moved it.
+$ini = Read-Ini (Join-Path $games[0] 'Fallout.ini')
+$seeded = Test-Sections $ini
+$pending = Test-Path -LiteralPath $file
+$inFiles = $seeded -and -not $pending
+
+# Today's choices by settings.ini's names: what the files say, then settings.ini's lines over them
+# while it is there, as Play.exe moves it in (a line wins; what no line names stays the files').
+$cur = @{}
+$kept = New-Object System.Collections.Generic.List[string]
+if ($seeded) {
     $prefs = Read-Ini (Join-Path $games[0] 'FalloutPrefs.ini')
     $times = { param($n) if ($n -eq '0') { 'Off' } elseif ($n -match '^\d+$') { "${n}x" } else { $own } }
     $cur['Borderless'] = Get-IniValue $ini 'nv-rs Display' 'bBorderless'
@@ -104,11 +165,18 @@ if ($inFiles) {
     $cur['NV_THREADS'] = if ((Get-IniValue $ini 'nv-rs Threads' 'bSteppedThreads') -eq '1') { 'stepped' } else { '' }
     $cur['NV_RENDER_THREAD'] = if ((Get-IniValue $ini 'nv-rs Threads' 'bRenderThread') -eq '0') { '0' } else { '' }
     foreach ($name in @($cur.Keys)) { if ($null -eq $cur[$name]) { $cur.Remove($name) } }
-} elseif (Test-Path -LiteralPath $file) {
+}
+if ($pending) {
     foreach ($line in [IO.File]::ReadAllLines($file)) {
         if ($line -match '^\s*([^=#;]+?)\s*=\s*(.*)$') {
-            $cur[$Matches[1]] = $Matches[2].Trim()
-            if ($known -notcontains $Matches[1] -and $dropped -notcontains $Matches[1]) { $kept.Add($line) }
+            $name = $Matches[1]; $value = $Matches[2].Trim()
+            if ($known -notcontains $name -and $dropped -notcontains $name) { $kept.Add($line) }
+            # As Play.exe reads them: an empty line chooses nothing, and the two thread lines only
+            # with the words it knows.
+            if ($value -eq '') { continue }
+            if ($name -eq 'NV_THREADS' -and @('stepped', 'real') -notcontains $value) { continue }
+            if ($name -eq 'NV_RENDER_THREAD' -and @('0', '1') -notcontains $value) { continue }
+            $cur[$name] = $value
         }
     }
 }
@@ -218,7 +286,6 @@ function Get-Choices {
 }
 $shown = Get-Choices
 
-$noWindow = $env:NV_RS_NO_WINDOWS -eq '1'
 if ($noWindow -or $form.ShowDialog() -eq 'OK') {
     $chosen = Get-Choices
     if ($noWindow -and $env:NV_RS_SETTINGS_CHOOSE) {
@@ -227,14 +294,19 @@ if ($noWindow -or $form.ShowDialog() -eq 'OK') {
             if ($chosen.Contains($name)) { $chosen[$name] = $value }
         }
     }
+    $writes = @()
     if ($inFiles) {
-        # Only what changed here: each option's own keys, in both ways of playing's files.
+        # Only what changed here: each option's own keys, in both ways of playing's files. The game
+        # profile's files go last: this window shows what they say, so after a save that failed part
+        # of the way it still shows what was not saved, and saving again finishes it.
         $sizes = { param($v) if ($v -eq 'Off') { '0' } else { $v.TrimEnd('x') } }
-        foreach ($dir in $games) {
+        foreach ($dir in @($games[1], $games[0])) {
             $iniPath = Join-Path $dir 'Fallout.ini'
             $prefsPath = Join-Path $dir 'FalloutPrefs.ini'
             if (-not (Test-Path -LiteralPath $iniPath)) { continue }
             $ini = Read-Ini $iniPath; $newIni = $ini
+            # A file without nv-rs's sections is Play.exe's to make ready at its next start.
+            if (-not (Test-Sections $ini)) { continue }
             $prefs = Read-Ini $prefsPath; $newPrefs = $prefs
             foreach ($name in $chosen.Keys) {
                 $v = $chosen[$name]
@@ -255,18 +327,26 @@ if ($noWindow -or $form.ShowDialog() -eq 'OK') {
                     'NV_RENDER_THREAD' { $newIni = Set-IniKey $newIni 'nv-rs Threads' 'bRenderThread' $(if ($v -eq '0') { '0' } else { '1' }) }
                 }
             }
-            Write-Ini $iniPath $ini $newIni
-            if (Test-Path -LiteralPath $prefsPath) { Write-Ini $prefsPath $prefs $newPrefs }
+            if ([string]::CompareOrdinal($newPrefs, $prefs) -ne 0 -and (Test-Path -LiteralPath $prefsPath)) {
+                $writes += @{ Path = $prefsPath; Bytes = $latin1.GetBytes($newPrefs) }
+            }
+            if ([string]::CompareOrdinal($newIni, $ini) -ne 0) {
+                $writes += @{ Path = $iniPath; Bytes = $latin1.GetBytes($newIni) }
+            }
         }
     } else {
+        # Every option has its line, so each choice shown here wins when Play.exe moves the file in.
         $lines = @('# nv-rs settings (written by Settings.cmd; Play.exe moves them into the game''s files)')
         foreach ($name in @('Borderless', 'Resolution', 'AntiAliasing', 'Anisotropy', 'VSync', 'Preset', 'FrameLimit', 'MenuFrameLimit')) {
             $lines += "$name=$($chosen[$name])"
         }
-        if ($chosen['NV_THREADS'] -eq 'stepped') { $lines += 'NV_THREADS=stepped' }
-        if ($chosen['NV_RENDER_THREAD'] -eq '0') { $lines += 'NV_RENDER_THREAD=0' }
+        $lines += "NV_THREADS=$(if ($chosen['NV_THREADS'] -eq 'stepped') { 'stepped' } else { 'real' })"
+        $lines += "NV_RENDER_THREAD=$(if ($chosen['NV_RENDER_THREAD'] -eq '0') { '0' } else { '1' })"
         $lines += $kept
-        [void][IO.Directory]::CreateDirectory($folder)
-        [IO.File]::WriteAllLines($file, [string[]]$lines, (New-Object System.Text.UTF8Encoding($false)))
+        try { [void][IO.Directory]::CreateDirectory($folder) } catch { Show-NotSaved $folder $_.Exception.Message }
+        $text = ($lines -join "`r`n") + "`r`n"
+        $writes += @{ Path = $file; Bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($text) }
     }
+    if ($writes.Count -gt 0 -and -not $failed) { Save-Files $writes }
 }
+if ($failed) { exit 1 }
