@@ -4130,6 +4130,29 @@ fn dummies(device: &wgpu::Device, queue: &wgpu::Queue) -> [wgpu::TextureView; 3]
     ]
 }
 
+/// A graphics card wgpu can draw with (not a software adapter) on the APIs `NV_WGPU_BACKEND` allows
+/// (all by default): its name and API, or none. `NV_WGPU_BACKEND=software` asks for the software
+/// adapter, so it answers that one.
+pub fn hardware_adapter() -> Option<String> {
+    let backends = match std::env::var("NV_WGPU_BACKEND").as_deref() {
+        Ok("dx12") => wgpu::Backends::DX12,
+        Ok("vulkan") => wgpu::Backends::VULKAN,
+        Ok("gl") => wgpu::Backends::GL,
+        Ok("metal") => wgpu::Backends::METAL,
+        Ok("software") => return Some("the software adapter (NV_WGPU_BACKEND=software)".into()),
+        _ => wgpu::Backends::PRIMARY,
+    };
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends,
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    block_on(instance.enumerate_adapters(backends))
+        .into_iter()
+        .map(|a| a.get_info())
+        .find(|i| i.device_type != wgpu::DeviceType::Cpu)
+        .map(|i| format!("{} ({:?})", i.name, i.backend))
+}
+
 /// The surface of a real window (Windows: an `HWND`).
 #[cfg(windows)]
 fn surface_for(instance: &wgpu::Instance, window: isize) -> Result<wgpu::Surface<'static>, String> {

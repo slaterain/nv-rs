@@ -21,7 +21,7 @@ pub mod sm;
 pub mod state;
 
 use d3d9_stream::{Backend, Cmd, Data, Handle, Reply};
-pub use device::Output;
+pub use device::{hardware_adapter, Output};
 
 /// The Direct3D 9 calls carried out on wgpu.
 pub struct WgpuBackend {

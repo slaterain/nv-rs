@@ -929,9 +929,20 @@ pub fn want_shader_warm(e: &mut Engine, on: bool) {
 /// (once), on the calling thread or on the render thread ([`want_render_thread`]), written to a
 /// file with `NV_D3D9_RECORD=FILE`.
 pub fn direct3d_created(e: &mut Engine) {
-    let Some(which) = backends() else { return };
+    let Some(mut which) = backends() else { return };
     if real(e).stream.is_some() {
         return;
+    }
+    // wgpu without a graphics card it can draw with (no Vulkan or Direct3D 12 driver, only the
+    // software adapter): the real Direct3D 9 instead, so the player still gets a picture.
+    if which == Backends::Wgpu {
+        match d3d9_wgpu::hardware_adapter() {
+            Some(adapter) => eprintln!("NV_D3D9=wgpu: drawing with {adapter}"),
+            None => {
+                eprintln!("NV_D3D9=wgpu: no graphics card wgpu can draw with (Vulkan or Direct3D 12): the real Direct3D 9 draws instead");
+                which = Backends::Real;
+            }
+        }
     }
     let name = which.name();
     let wanted_thread = real(e).render_thread;
