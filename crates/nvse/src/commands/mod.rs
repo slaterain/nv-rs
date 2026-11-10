@@ -3,12 +3,14 @@
 
 pub mod algohol;
 pub mod array;
+pub mod factions;
 pub mod input;
 pub mod inventory;
 pub mod inventory_forms;
 pub mod inventory_info;
 pub mod inventory_items;
 pub mod inventory_ref;
+pub mod list;
 pub mod math;
 pub mod misc;
 pub mod misc_forms;
@@ -17,6 +19,7 @@ pub mod misc_ref_cells;
 pub mod misc_ref_more;
 pub mod misc_ref_npc;
 pub mod printf;
+pub mod quest;
 pub mod scripting;
 pub mod string;
 pub mod weapons;
@@ -40,6 +43,9 @@ pub fn all() -> Vec<&'static Command> {
         .chain(misc_ref_more::COMMANDS)
         .chain(misc::COMMANDS)
         .chain(misc_forms::COMMANDS)
+        .chain(list::COMMANDS)
+        .chain(factions::COMMANDS)
+        .chain(quest::COMMANDS)
         .chain(weapons::COMMANDS)
         .chain(math::COMMANDS)
         .chain(algohol::COMMANDS)

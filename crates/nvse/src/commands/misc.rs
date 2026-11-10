@@ -599,7 +599,7 @@ fn actor_base_arg(e: &mut Engine, a: &CommandArgs) -> u32 {
 /// `ConvertNPC`, `ConvertActorBase`, `ConvertLevCreature`, `ConvertLevCharacter` (xNVSE): the form
 /// (else the calling reference's base form), a reference's base form for a reference, cast to
 /// `to`.
-fn convert(e: &mut Engine, this_obj: u32, form: u32, to: u32) -> u32 {
+pub(super) fn convert(e: &mut Engine, this_obj: u32, form: u32, to: u32) -> u32 {
     let mut form = form;
     if form == 0 && this_obj != 0 {
         form = base_form(e, this_obj);
