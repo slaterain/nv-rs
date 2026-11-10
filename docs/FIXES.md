@@ -102,6 +102,7 @@ The game's own `iFPSClamp` ignores `FrameLimit`: a clamp is a fixed step with no
 | Script array cycle guard | none (a flag the extender reads) | `NV_NVSE_CYCLE_GUARD` | A deep copy (`ar_DeepCopy`), a deep compare (`ar_DeepEquals`) or a dump (`ar_Dump`, `ar_DumpF`) of an array that holds itself, directly or through others, ends where it meets the array again: the copy holds its own copy there, the compare counts that pair as equal, the dump writes `[...]`. xNVSE walks on until the stack runs out and the game stops; off (vanilla), the port does the same. Below |
 | Script inventory list guard | none (a flag the extender reads) | `NV_NVSE_LIST_GUARD` | A game list the inventory commands walk (a container's stacks, a stack's extra data lists) that runs back into itself ends the walk after 1,048,576 nodes, and `GetPaired` ends where it would ask for the same stack again (a stack list with an empty node). xNVSE walks on for ever and the game hangs; off (vanilla), the port stops the game there instead. And two places where xNVSE itself stops the game no longer do: the extra data list `SetHotkeyItem` gives a stack that had none (stimpaks, for one) has the game's own vtable, so the game can free it when the stack is used up, dropped or the inventory torn down; the token commands (`GetTokenValue`, `GetTokenRef`, `SetTokenValue`, `SetTokenRef`, `SetTokenValueAndRef`, `GetPaired`) on an item that is in the reference's base container without a stack of its own (the player's Pip-Boy, for one) answer with that item's base health and no owner, and the setters add it and set its new stack to the value given, as they do for an item not held (except that `SetTokenRef`, which gives no value, keeps the item's base health, where xNVSE's not-held path would store 0). xNVSE's list has no vtable, and its token search reads the item's health through the missing changes entry or counts on through an index the command did not pass: the game crashes; off (vanilla), the port stops there too. Below |
 | IO wait ends on completion | `00c3dfa0` | `NV_IO_WAIT` | The IO manager's wait for queued loads (`00c3dfa0`; main at a cell border, a load, a save) sleeps 50 ms a turn while the completed work is short of what is in flight, then takes what came in. Here that sleep ends as soon as it is not (looked at after each 1 ms sleep; a turn still ends after 50 ms by the clock, or after 50 looks), so the wait for queued loads ends when they are done, not at its next 50 ms step: the same work in the same order. With stepped threads each 1 ms sleep is a switch point, where the IO thread runs. `IOManager::LoadQueuedPriority` (`00456520`) calls it by address now, so the row applies there too. |
+| Half-loaded actor's level change | `00881d30`, `00882b90`, `00883240`, `00883800`, `00932a00`, `00932b70` | `NV_HALF_LOADED_MOVE` | An actor moved to another AI level while its saved data loads (one loading thread between the two passes over a cell's saved changes, another setting its animation: running fast across cells) has its saved reference ids taken out for the move and put back where the original's copy puts them, for the second pass to resolve. The original follows the saved target id as an object (marks it, then calls through the word at the id as a vtable): its own crash. Below |
 
 ### What high frame rates do to the original's code
 
@@ -224,6 +225,42 @@ The fix runs the list's click as the original's, step for step, with the worn qu
 before the removal (`crates/host/src/mod_fit_worn.rs`). A mod is never worn, so the answer is the original's usual
 "no" and nothing more happens; no released memory is read. Tests: with the fix the click reads nothing released and
 rebuilds nothing; vanilla still asks after the removal and rebuilds on a "yes".
+
+### Half-loaded actor's level change
+
+The maintainer's play run of 2026-11-09 ("moving too fast": a console speed change, crouch and stand,
+then running across cells) stopped with `read of unmapped memory at 00154145 (in 00564db0 < 0091ea40 <
+00907510 < 008d0660 < 00881d30 < 00931920)` on a loading thread (measure/crash-1109).
+
+- **The gap.** When a cell loads with saved changes (`BGSSaveLoadGame::LoadCell`, `00849b10`, on a
+  loading thread), each changed actor gets two passes: its `LoadGame` (`00932a00`, the process's own
+  last) stores the references its AI process holds (the target `+0x40`, the furniture, its package's
+  target, ...) as saved form ids, and its `InitLoadGame` (`00932b70`) a moment later looks them up.
+  Between the two another loading thread can set the actor's animation (`00572e50`), which moves it to
+  the high process (`00881d30`). A recording of the original on the same route shows exactly that
+  interleaving for one actor (its target was empty that time).
+- **What the original does with a saved target.** The move copies the process (`00907510` gives the
+  target to `SetTarget`, which marks it targeted through the flags at `id + 8`), then
+  `HighProcess::SetLastSeenLocation` (`008f6ea0`) takes the word at the id as the target's vtable and
+  calls through it; for a follower the move also asks the target whether it is an actor the same way.
+  For an id such as `0x0015413d` that is a call through low memory: the original's own crash. The port
+  stops at the first read. Not reproduced in six fast runs of the port (the gap was met in every run,
+  never with a saved target); the evidence is the exe, the recording of the interleaving and the
+  engine-level test of the whole move.
+- **The row.** The gap is tracked as it is: from the return of the actor's `LoadGame` to the start of
+  its `InitLoadGame` (the form flag `0x200000` covers more: `LoadGame`'s own level change, `009319c0`,
+  runs before any id is written). A level change of an actor in the gap takes the saved ids out of its
+  process first (they read 0: the move runs as for an actor without a target, as in the recorded race),
+  then puts each back where the original's copy would have put it: into the new process when the level
+  copy carries that field (the target; the middle-high `+0x140`, `+0x158`, `+0x164`; a package's target
+  and, for a created package, its id with its "still an id" flag, which `ActorPackage::MoveTo` leaves
+  behind), nowhere when the copy drops it (as in the original), back into the same process when the move
+  keeps it. The second pass then resolves them as in a load without the move: the target marked and its
+  marker reserved once. If the second pass reaches the actor while the move runs, it puts the ids back
+  first. Vanilla keeps the original's path (the port stops where the original crashes).
+- **Not covered.** The id lists (`+0x6c`; middle-high `+0xc8`, the active effects, the queued items;
+  high `+0x38c`, `+0x394`, the detection states) stay in place; the first pass still writing into the
+  old process while the other thread replaces it is the original's own race.
 
 ### Dialogue topic index
 

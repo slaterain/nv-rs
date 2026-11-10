@@ -21,6 +21,7 @@ pub mod form_types;
 pub mod frame_log;
 pub mod game_file;
 pub mod game_ini;
+pub mod half_loaded_move;
 pub mod mod_fit_worn;
 pub mod native_inflate;
 pub mod phys_blend;

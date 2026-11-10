@@ -21,6 +21,7 @@ nv-rs Fixes	bModFitWorn	NV_MOD_WORN	1	Mod fit worn question: fitting a weapon mo
 nv-rs Fixes	bTopicIndex	NV_TOPIC_INDEX	1	Dialogue topic index: the topic that holds a dialogue line is looked up, not searched for (the same answers, faster loads with dialogue mods).
 nv-rs Fixes	bShaderWarm	NV_SHADER_WARM	1	Shaders compiled ahead of first use: the graphics driver compiles each of the game's shaders in the menus, not at its first use in play.
 nv-rs Fixes	bIOWait	NV_IO_WAIT	1	IO wait ends on completion: the wait for queued loads (a cell border, a load, a save) ends when they are done, not at its next 50 ms step.
+nv-rs Fixes	bHalfLoadedMove	NV_HALF_LOADED_MOVE	1	Half-loaded actor's level change: an actor moved to another AI level while its saved data loads (running fast across cells) no longer crashes the game.
 nv-rs Fixes	bCosaveKeep	NV_COSAVE_KEEP	1	Co-save keeps other plugins: a co-save's parts from plugins not built in (JIP LN NVSE's) are written back while the same files are loaded.
 nv-rs Fixes	bNVSEErrorGuard	NV_NVSE_ERROR_GUARD	1	Script error loop guard: an error inside a script's error handler is not sent to the handlers again.
 nv-rs Fixes	bNVSEImodCheck	NV_NVSE_IMOD_CHECK	1	Image-space event form check: OnRemoveIMOD only for an image-space modifier form's instance that ran out, not for depth of field or blur.
