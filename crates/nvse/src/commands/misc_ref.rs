@@ -398,6 +398,15 @@ fn form_id(e: &Engine, form: u32) -> u32 {
     e.mem.u32(form + FORM_ID)
 }
 
+/// Whether a reference's base form or parent cell that xNVSE reads through is missing and the
+/// inventory reference checks row (`NV_NVSE_INVREF_CHECK`) answers instead. A script reaches both
+/// with an inventory reference: its temporary reference is in no cell, and has no base form once
+/// released (after `RemoveMeIR`, or a loop's reference kept past its loop). xNVSE reads through
+/// the null pointer and the game stops; without the row the port stops there too.
+fn passed_over(e: &mut Engine, pointer: u32) -> bool {
+    pointer == 0 && invref::checks(e)
+}
+
 /// `GetFullName(TESForm *)` (xNVSE `GameForms.cpp`), a guest string for the console.
 fn full_name_text(e: &mut Engine, form: u32) -> u32 {
     let name = super::string::tes_full_name(e, form);
@@ -604,7 +613,7 @@ fn is_load_door(e: &mut Engine, w: &[u32]) -> Ret {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_MiscRef.cpp: GetTeleportInfo.
 /// Where a door teleports: x, y, z, or the z rotation in degrees (`float`s, the rotation times
 /// `kRadToDegree` in `float`); 0 for a reference that is not a door or has no teleport data. A
-/// reference without a base form is read through, as in xNVSE.
+/// reference without a base form is read through, as in xNVSE, unless [`passed_over`].
 fn teleport_info(e: &mut Engine, w: &[u32], which: u32) -> Ret {
     let a = CommandArgs::new(w);
     a.set_result(e, 0.0);
@@ -612,7 +621,7 @@ fn teleport_info(e: &mut Engine, w: &[u32], which: u32) -> Ret {
         return handled(true);
     }
     let base = e.mem.u32(a.this_obj + REFR_BASE_FORM);
-    if e.mem.u8(base + FORM_TYPE) != TYPE_DOOR {
+    if passed_over(e, base) || e.mem.u8(base + FORM_TYPE) != TYPE_DOOR {
         return handled(true);
     }
     let data = teleport_data(e, a.this_obj);
@@ -645,7 +654,8 @@ fn get_door_teleport_rot(e: &mut Engine, w: &[u32]) -> Ret {
 /// Links a door (not a random teleport marker) to a persistent reference: its `ExtraTeleport`
 /// (made when missing) gets the door and where to put the one who goes through: the coordinates
 /// given, else (all three left at 999) the linked reference's position, and the rotation given in
-/// degrees, else the linked reference's. 1 when set.
+/// degrees, else the linked reference's. 1 when set. A reference without a base form is read
+/// through, as in xNVSE, unless [`passed_over`].
 fn set_door_teleport(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     a.set_result(e, 0.0);
@@ -653,7 +663,7 @@ fn set_door_teleport(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     }
     let base = e.mem.u32(a.this_obj + REFR_BASE_FORM);
-    if e.mem.u8(base + FORM_TYPE) != TYPE_DOOR {
+    if passed_over(e, base) || e.mem.u8(base + FORM_TYPE) != TYPE_DOOR {
         return handled(true);
     }
     let list = a.this_obj + REFR_EXTRA;
@@ -804,9 +814,13 @@ fn rank_of(e: &mut Engine, list: u32) -> u32 {
 }
 
 /// The extra data list of the reference's parent cell; a reference without a cell is read
-/// through, as in xNVSE.
-fn parent_cell_list(e: &Engine, reference: u32) -> u32 {
-    e.mem.u32(reference + REFR_PARENT_CELL) + CELL_EXTRA
+/// through, as in xNVSE, unless [`passed_over`] (`None`: the command answers 0).
+fn parent_cell_list(e: &mut Engine, reference: u32) -> Option<u32> {
+    let cell = e.mem.u32(reference + REFR_PARENT_CELL);
+    if passed_over(e, cell) {
+        return None;
+    }
+    Some(cell.wrapping_add(CELL_EXTRA))
 }
 
 fn owner_result(e: &mut Engine, a: &CommandArgs, list: u32) {
@@ -834,8 +848,9 @@ fn get_parent_cell_owner(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     a.set_form_result(e, 0);
     if a.this_obj != 0 {
-        let list = parent_cell_list(e, a.this_obj);
-        owner_result(e, &a, list);
+        if let Some(list) = parent_cell_list(e, a.this_obj) {
+            owner_result(e, &a, list);
+        }
     }
     handled(true)
 }
@@ -858,9 +873,10 @@ fn get_parent_cell_owning_faction_required_rank(e: &mut Engine, w: &[u32]) -> Re
     let a = CommandArgs::new(w);
     a.set_result(e, 0.0);
     if a.this_obj != 0 {
-        let list = parent_cell_list(e, a.this_obj);
-        let rank = rank_of(e, list);
-        a.set_result(e, f64::from(rank));
+        if let Some(list) = parent_cell_list(e, a.this_obj) {
+            let rank = rank_of(e, list);
+            a.set_result(e, f64::from(rank));
+        }
     }
     handled(true)
 }

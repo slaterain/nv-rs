@@ -351,3 +351,44 @@ fn the_real_games_answers() {
     assert_eq!(run(&mut e, 0x14c8, DOOR, &[]), 0.0);
     assert_eq!(run(&mut e, 0x151b, DOOR, &[]), 0.0);
 }
+
+/// A reference in no cell and without a base form, as an inventory reference's temporary
+/// reference is once released. `GetParentCell` and `GetParentWorldspace` answer 0 (xNVSE looks);
+/// the door teleport commands and the parent cell's owner and rank read through the missing base
+/// form or cell, as xNVSE does, and stop the game; with the inventory reference checks row they
+/// answer 0 and set nothing.
+#[test]
+fn a_reference_without_a_base_form_or_a_cell() {
+    const TEMP: u32 = 0x0200_6000;
+    for checks in [false, true] {
+        let mut e = setup();
+        invref::set_checks(&mut e, checks);
+        e.mem.set_u8(TEMP + 4, 0x3a);
+        e.mem.set_u32(TEMP + 0x7f0, 1);
+        e.mem.set_u32(TEMP + 0xc, 0xff00_0800);
+        assert_eq!(run(&mut e, 0x146d, TEMP, &[]), 0.0);
+        assert_eq!(run(&mut e, 0x146e, TEMP, &[]), 0.0);
+        let opcodes: [(u32, &[Vec<u8>]); 5] = [
+            (0x15fa, &[]),
+            (0x15fd, &[]),
+            (0x15fe, &[r(2)]),
+            (0x14df, &[]),
+            (0x14e1, &[]),
+        ];
+        for (opcode, args) in opcodes {
+            let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run(&mut e, opcode, TEMP, args)
+            }));
+            if checks {
+                assert_eq!(answer.ok(), Some(0.0), "{opcode:#x}");
+            } else {
+                assert!(answer.is_err(), "{opcode:#x}");
+            }
+        }
+        assert_eq!(
+            e.mem.u32(TEMP + 0x44 + 0x100 + 4 * 0x2b),
+            0,
+            "no teleport made"
+        );
+    }
+}

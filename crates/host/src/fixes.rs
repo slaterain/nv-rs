@@ -137,7 +137,8 @@ pub const INVENTORY_REFERENCE_CHECKS: Fix = Fix {
     env: "NV_NVSE_INVREF_CHECK",
     addresses: &[],
     summary: "a removed stack leaves the container's own entry before its data is freed; a sale \
-              ends with its event; a container entry without a form is passed over",
+              ends with its event; a container entry without a form is passed over; a reference \
+              with no base form or cell answers 0",
     install: install_inventory_reference_checks,
 };
 
