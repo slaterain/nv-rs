@@ -11,6 +11,7 @@ pub mod inventory_items;
 pub mod inventory_ref;
 pub mod math;
 pub mod misc_ref;
+pub mod misc_ref_npc;
 pub mod printf;
 pub mod scripting;
 pub mod string;
@@ -30,6 +31,7 @@ pub fn all() -> Vec<&'static Command> {
         .chain(inventory_items::COMMANDS)
         .chain(inventory_info::COMMANDS)
         .chain(misc_ref::COMMANDS)
+        .chain(misc_ref_npc::COMMANDS)
         .chain(weapons::COMMANDS)
         .chain(math::COMMANDS)
         .chain(algohol::COMMANDS)
@@ -158,6 +160,9 @@ pub mod rtti {
     pub const TES_ACTOR_BASE: u32 = 0x0118_46e8;
     pub const TES_KEY: u32 = 0x0118_41b4;
     pub const BGS_PLACEABLE_WATER: u32 = 0x0118_9d70;
+    pub const TES_NPC: u32 = 0x0118_3a1c;
+    pub const TES_EYES: u32 = 0x0118_6388;
+    pub const TES_HAIR: u32 = 0x0118_63a0;
 }
 
 /// `DYNAMIC_CAST(obj, from, to)` (xNVSE): the exe's `__RTDynamicCast`; 0 for a null object or
@@ -283,6 +288,9 @@ pub(crate) mod test_support {
             rtti::TES_ACTOR_BASE => (1 << 26, 0),
             rtti::TES_KEY => (1 << 27, 0),
             rtti::BGS_PLACEABLE_WATER => (1 << 28, 0),
+            rtti::TES_NPC => (1 << 29, 0),
+            rtti::TES_EYES => (1 << 30, 0),
+            rtti::TES_HAIR => (1 << 31, 0),
             _ => (0, 0),
         }
     }
