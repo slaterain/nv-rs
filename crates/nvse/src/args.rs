@@ -224,6 +224,18 @@ pub fn f64_to_i32(v: f64) -> i32 {
     }
 }
 
+/// MSVC's `double` to `SInt64` helper (`__dtol3`, `100DE9A0` in the shipped DLL): truncation,
+/// and `0x8000000000000000` for NaN and out of range. The DLL also converts a `double` to a
+/// `UInt32` through it and keeps the low word (`Setting::Set`, `1007BF9C`), so -1.0 gives
+/// `0xFFFFFFFF` and 2^32 + 5 gives 5.
+pub fn dtol3(v: f64) -> i64 {
+    if v.is_nan() || v >= 9_223_372_036_854_775_808.0 || v < -9_223_372_036_854_775_808.0 {
+        i64::MIN
+    } else {
+        v as i64
+    }
+}
+
 /// `ScriptEventList::GetVariable` (xNVSE): the first local of the list with id `id`, or 0.
 /// The list (`+0xC`, `m_pLocalList`) is the game's singly linked list of `ScriptLocal`
 /// (`id +0`, `data +8`); empty nodes are passed over.

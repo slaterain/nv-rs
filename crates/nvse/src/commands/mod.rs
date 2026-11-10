@@ -4,6 +4,7 @@
 pub mod algohol;
 pub mod array;
 pub mod factions;
+pub mod game;
 pub mod input;
 pub mod inventory;
 pub mod inventory_forms;
@@ -46,6 +47,7 @@ pub fn all() -> Vec<&'static Command> {
         .chain(list::COMMANDS)
         .chain(factions::COMMANDS)
         .chain(quest::COMMANDS)
+        .chain(game::COMMANDS)
         .chain(weapons::COMMANDS)
         .chain(math::COMMANDS)
         .chain(algohol::COMMANDS)
@@ -104,6 +106,28 @@ impl Read {
             .map(<[u8]>::to_vec)
             .unwrap_or_default()
     }
+}
+
+/// String argument `i` as a command holds it when xNVSE's reader copies it into a `size`-byte
+/// buffer on the command's stack: its text up to the first 0. The reader writes the compiled
+/// string's bytes and a 0, then a `$` variable's whole text and its 0 (`v_ExtractArgsEx`), so an
+/// argument of `size` bytes or more runs past the buffer into the command's frame. With the list
+/// guard row (`NV_NVSE_LIST_GUARD`) the text is used whole; off (vanilla) the port stops the game
+/// there: one rule for every such buffer (the coordinator's, from the review of #415), since
+/// xNVSE's answer past the buffer depends on what its frame holds there, and no script means to
+/// give such a name.
+pub fn arg_in_buffer(e: &Engine, read: &Read, i: usize, size: usize, command: &str) -> Vec<u8> {
+    let written = match read.args.get(i) {
+        Some(Arg::Str { raw, text }) => raw.len().max(text.len()),
+        _ => 0,
+    };
+    if written >= size && !array::fix_on(e, array::LIST_GUARD) {
+        panic!(
+            "{command}: a text of {written} bytes runs past xNVSE's {size}-byte buffer into its \
+             frame: the port stops here (NV_NVSE_LIST_GUARD reads it whole)"
+        );
+    }
+    string::c_str(&read.text(i)).to_vec()
 }
 
 /// The form a base-form command works on: the given form's base form when it is a reference

@@ -646,3 +646,28 @@ fn every_save_writes_a_co_save() {
     assert_eq!(kinds, [*b"MODS", *b"ARVS", *b"ARVE", *b"STVS", *b"STVE"]);
     assert!(r.next_plugin().unwrap().is_none());
 }
+
+/// `GetGameLoaded`'s scripts forget the game at the load after the `.fos` (`DoLoadGameHook`, the
+/// seam at `0x00848C3C`) and at a new game (`NewGameHook`), so each answers 1 once more; the
+/// scripts `GetGameRestarted` told stay told.
+#[test]
+fn a_load_or_a_new_game_tells_the_scripts_again() {
+    let mut e = engine();
+    set_files(&mut e, &["FalloutNV.esm"]);
+    let told = |e: &mut Engine| {
+        let game = &mut e.ext::<Nvse>().game;
+        game.loaded_informed.insert(0x0500_0d00);
+        game.restarted_informed.insert(0x0500_0d00);
+    };
+    told(&mut e);
+    e.site(LOAD.addr(), &[NAME]);
+    assert!(e.ext::<Nvse>().game.loaded_informed.is_empty());
+    told(&mut e);
+    new_game(&mut e);
+    assert!(e.ext::<Nvse>().game.loaded_informed.is_empty());
+    assert!(e
+        .ext::<Nvse>()
+        .game
+        .restarted_informed
+        .contains(&0x0500_0d00));
+}

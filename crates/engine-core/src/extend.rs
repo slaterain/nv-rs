@@ -145,6 +145,13 @@ pub const WRAPS: &[Entry] = &[
         owners: NVSE,
         step: "I-3",
     },
+    // QueueUIMessage: returns at once while AddSpellNS runs AddSpell (xNVSE's ToggleUIMessages
+    // writes a `ret` at its entry), a command batch after I-4.
+    Entry {
+        addr: 0x0070_52f0,
+        owners: NVSE,
+        step: "I-4",
+    },
     // DINPUT8 DirectInput8Create, its import slot: the keyboard and mouse devices put behind
     // xNVSE's (`Hook_DirectInput8Create_Init` writes this slot).
     Entry {
