@@ -463,6 +463,9 @@ pub struct Device {
     count_buffer: wgpu::Buffer,
     next_count_slot: u32,
     reduce: Map<bool, (wgpu::ComputePipeline, wgpu::BindGroupLayout)>,
+    /// The copies of textures a draw samples while drawing into them, by the texture's id
+    /// ([`Device::copy_for_sampling`]).
+    target_copies: Map<u64, Arc<Tex>>,
     next_id: u64,
     presents: u64,
     shots: Option<Shots>,
@@ -738,6 +741,7 @@ impl Device {
             count_buffer,
             next_count_slot: 0,
             reduce: Map::default(),
+            target_copies: Map::default(),
             next_id: 1,
             presents: 0,
             shots: Shots::from_env(),
@@ -1178,7 +1182,8 @@ impl Device {
             self.end_pass();
             self.counting = None;
         }
-        if let Some(Obj::Texture(_, surfaces)) = self.objects.remove(&object) {
+        if let Some(Obj::Texture(t, surfaces)) = self.objects.remove(&object) {
+            self.target_copies.remove(&t.id);
             for s in surfaces {
                 self.objects.remove(&s);
             }
@@ -1494,6 +1499,65 @@ impl Device {
         if let Some(c) = self.pass_count.take() {
             self.reduce_count(&c);
         }
+    }
+
+    /// Whether a level or a face of `t` is one of the current colour targets.
+    fn is_colour_target(&self, t: &Tex) -> bool {
+        self.st
+            .rt
+            .iter()
+            .flatten()
+            .any(|s| s.tex.as_ref().is_some_and(|rt| rt.id == t.id))
+    }
+
+    /// A copy of `t` (every level and face) as it is now, for a draw that samples `t` while it
+    /// draws into it: the open pass ends, so the copy holds every draw before this one, and the
+    /// next pass loads the targets again. One scratch texture is kept for each such texture.
+    fn copy_for_sampling(&mut self, t: &Arc<Tex>) -> Option<Arc<Tex>> {
+        self.end_pass();
+        let copy = match self.target_copies.get(&t.id) {
+            Some(c) => c.clone(),
+            None => {
+                let c = self.new_texture(
+                    t.width,
+                    t.height,
+                    t.levels,
+                    t.format.d3d,
+                    t.cube,
+                    false,
+                    t.samples,
+                )?;
+                self.target_copies.insert(t.id, c.clone());
+                c
+            }
+        };
+        let layers = if t.cube { 6 } else { 1 };
+        for level in 0..t.levels {
+            let size = wgpu::Extent3d {
+                width: (t.width >> level).max(1),
+                height: (t.height >> level).max(1),
+                depth_or_array_layers: layers,
+            };
+            self.encoder().copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &t.texture,
+                    mip_level: level,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &copy.texture,
+                    mip_level: level,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                size,
+            );
+        }
+        for x in [t, &copy] {
+            x.batch.store(self.batch, Ordering::Relaxed);
+        }
+        Some(copy)
     }
 
     fn current_targets(&mut self) -> Targets {
@@ -2608,10 +2672,29 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.skipped += 1;
             return;
         };
+        // A texture the draw samples that is also one of its colour targets (a level or a face of
+        // it): Direct3D 9 draws so, and wgpu refuses such a pass and with it the whole submit. The
+        // game does it when the water displacement is set up near water: its texture-offset pass
+        // (ISWATERDISPLACEMENTTEXOFFSET) and then an image-space copy with an offset (ISCOPY) draw
+        // into the 512x512 displacement texture while sampling it, and that frame lost every draw
+        // (a repeatable run's recording, the route's run near x -49,100, y 10,400). The draw
+        // samples a copy of that texture instead, made just before it
+        // ([`Device::copy_for_sampling`]): what the target held before this draw.
+        let mut copies: [Option<Arc<Tex>>; 20] = Default::default();
+        for &(_, slot) in samplers {
+            if let Some(t) = self.st.textures[slot].clone() {
+                if self.is_colour_target(&t) {
+                    copies[slot] = self.copy_for_sampling(&t);
+                }
+            }
+        }
         // The textures and samplers: the last draw's bind group again, else the cache's.
         let mut group_key = [(0u32, 0u8, 0u64, None::<SamplerKey>); 20];
         for (g, &((binding, dim, filterable), slot)) in group_key.iter_mut().zip(samplers) {
-            let tex_id = self.st.textures[slot].as_ref().map_or(0, |t| t.id);
+            let tex_id = copies[slot]
+                .as_ref()
+                .or(self.st.textures[slot].as_ref())
+                .map_or(0, |t| t.id);
             let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
             *g = (binding, dim, tex_id, Some(sk));
         }
@@ -2626,7 +2709,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     let mut views = Vec::new();
                     let mut samps = Vec::new();
                     for &((binding, dim, filterable), slot) in samplers {
-                        let view = match &self.st.textures[slot] {
+                        let view = match copies[slot].as_ref().or(self.st.textures[slot].as_ref()) {
                             Some(t) if (dim == 1) == t.cube => t.view.clone(),
                             _ => self.dummy[dim as usize].clone(),
                         };
@@ -2761,7 +2844,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // The textures are this batch's from here (after any send above), so an upload into one
         // later in the batch sends the batch first.
         for &(_, slot) in samplers {
-            if let Some(t) = &self.st.textures[slot] {
+            for t in [&self.st.textures[slot], &copies[slot]]
+                .into_iter()
+                .flatten()
+            {
                 t.batch.store(self.batch, Ordering::Relaxed);
             }
         }
@@ -4037,6 +4123,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// None without a cache (no folder, or a backend without one). Tests.
     pub fn pipeline_cache_note(&self) -> Option<String> {
         self.pipeline_cache.as_ref().map(|c| c.note.clone())
+    }
+
+    /// The errors wgpu reported so far (a refused pass or submit among them; tests).
+    pub fn wgpu_errors(&self) -> u64 {
+        self.errors.load(Ordering::Relaxed)
     }
 
     /// The screen of [`Device::show_progress`] drawn into a `width` by `height` texture of its own,
