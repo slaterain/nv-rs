@@ -197,6 +197,8 @@ pub struct Nvse {
     /// The inventory references (I-12), and the stacks `GetFirstRefForItem` listed per script.
     pub invrefs: invref::State,
     pub inv_ref_arrays: commands::inventory_ref::State,
+    /// The forms `TempCloneForm` gave an id in its script's file (`IsClonedForm`).
+    pub inventory_items: commands::inventory_items::State,
     /// The DirectInput hook's keys and the input commands' controls (I-11).
     pub input: input::State,
     /// The first frame recorded the main thread (`s_recordedMainThreadID`): xNVSE prints to the

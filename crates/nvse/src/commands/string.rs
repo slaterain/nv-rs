@@ -117,7 +117,7 @@ const fn p(name: &'static str, kind: u32, optional: bool) -> Param {
 }
 
 /// `FORMAT_STRING_PARAMS` (the format string and 20 optional numbers) and what follows them.
-const fn fmt_params<const N: usize>(extra: &[Param]) -> [Param; N] {
+pub(crate) const fn fmt_params<const N: usize>(extra: &[Param]) -> [Param; N] {
     let mut out = [p("variable", FLOAT, true); N];
     out[0] = p("format string", STRING, false);
     let mut i = 0;
@@ -323,7 +323,7 @@ fn bs_string(e: &Engine, at: u32) -> Option<Vec<u8>> {
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameTypes.cpp: String::Set.
-fn bs_string_set(e: &mut Engine, at: u32, text: &[u8]) {
+pub(crate) fn bs_string_set(e: &mut Engine, at: u32, text: &[u8]) {
     let len = text.len() as u32;
     if len > u32::from(e.mem.u16(at + 6)) {
         let old = e.mem.u32(at);
@@ -1071,9 +1071,9 @@ fn formatted_string(e: &mut Engine, args: &mut FmtArgs, format: &[u8]) -> Option
 
 /// What `ExtractFormatStringArgs` gave: whether it succeeded, the formatted text (empty when the
 /// format failed) and the parameters after the format string that it read.
-struct Formatted {
-    ok: bool,
-    text: Vec<u8>,
+pub(crate) struct Formatted {
+    pub(crate) ok: bool,
+    pub(crate) text: Vec<u8>,
     args: Vec<Arg>,
 }
 
@@ -1084,7 +1084,7 @@ impl Formatted {
             .and_then(Arg::int)
             .map_or(default, |v| v as u32)
     }
-    fn form(&self, i: usize) -> u32 {
+    pub(crate) fn form(&self, i: usize) -> u32 {
         self.args.get(i).and_then(Arg::form).unwrap_or(0)
     }
 }
@@ -1092,7 +1092,7 @@ impl Formatted {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameAPI.cpp: ExtractFormatStringArgs
 // (format string first, `fmtStringPos` 0 for every caller) and the ScriptFormatStringArgs
 // constructor.
-fn format_string_args(e: &mut Engine, a: &CommandArgs, max_params: u32) -> Formatted {
+pub(crate) fn format_string_args(e: &mut Engine, a: &CommandArgs, max_params: u32) -> Formatted {
     let fail = Formatted {
         ok: false,
         text: Vec::new(),

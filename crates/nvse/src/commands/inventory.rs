@@ -1124,10 +1124,11 @@ fn list_contains(e: &Engine, list: u32, form: u32) -> bool {
     false
 }
 
-/// `TESForm::IsActor_Runtime` (vtable `+0x10C`), `Actor::baseProcess` (`+0x68`),
+/// `TESForm::IsActor_Runtime` (vtable `+0x100`, the 65th entry: `Character`'s vtable `0108AA3C` answers 1
+/// there; `+0x10C` is `TESForm::Compare`), `Actor::baseProcess` (`+0x68`),
 /// `BaseProcess::GetWeaponInfo` (`+0x148`) and `GetAmmoInfo` (`+0x14C`) (xNVSE `GameForms.h`,
 /// `GameProcess.h`); the weapon info's form at `+8`, the ammo info's ammo at `+8`.
-const IS_ACTOR: u32 = 0x10c;
+const IS_ACTOR: u32 = 0x100;
 const BASE_PROCESS: u32 = 0x68;
 const GET_WEAPON_INFO: u32 = 0x148;
 const GET_AMMO_INFO: u32 = 0x14c;

@@ -938,6 +938,15 @@ fn changes_add(e: &mut Engine, changes: u32, item: u32, list: u32) -> (u32, u32)
         e.mem.set_u32(entry + ENTRY_TYPE, item);
         list_append(e, entries, entry);
     }
+    (entry_add(e, entry, list), entry)
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameExtraData.cpp: EntryData::Add,
+// ExtraContainerChangesExtendDataListCreate.
+/// Adds the extra data list `list` to a changes entry: at the end of its lists (a new list of
+/// lists when it has none), its count raised by the list's count (1 without one). Answers the
+/// entry's lists.
+pub fn entry_add(e: &mut Engine, entry: u32, list: u32) -> u32 {
     let mut extend = e.mem.u32(entry + ENTRY_EXTEND_DATA);
     if extend != 0 {
         list_append(e, extend, list);
@@ -955,7 +964,7 @@ fn changes_add(e: &mut Engine, changes: u32, item: u32, list: u32) -> (u32, u32)
     let delta = e.mem.u32(entry + ENTRY_COUNT_DELTA) as i32;
     e.mem
         .set_u32(entry + ENTRY_COUNT_DELTA, delta.wrapping_add(added) as u32);
-    (extend, entry)
+    extend
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), InventoryReference.cpp: SetEquipped.

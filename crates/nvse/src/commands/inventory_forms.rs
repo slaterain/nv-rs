@@ -366,7 +366,7 @@ fn set_equipment_biped_mask(e: &mut Engine, w: &[u32]) -> Ret {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameForms.cpp:
 // TESBipedModelForm::MaskForSlot.
 /// The slot bit of slot `slot` (0-19), all bits for any other.
-fn mask_for_slot(slot: u32) -> u32 {
+pub(super) fn mask_for_slot(slot: u32) -> u32 {
     if slot < 20 {
         1 << slot
     } else {
@@ -397,7 +397,7 @@ fn matches_slot(e: &mut Engine, item: u32, mask: u32) -> bool {
 /// of `mask` and one of whose extra data lists (up to the first empty node) is worn in either
 /// hand: the item and that list; `(0, 0)` for none. Both walks share one bound
 /// ([`invref::MAX_LIST_NODES`]), so two lists that run back into themselves stay within it.
-fn find_equipped(e: &mut Engine, reference: u32, mask: u32) -> (u32, u32) {
+pub(super) fn find_equipped(e: &mut Engine, reference: u32, mask: u32) -> (u32, u32) {
     let list = invref::entry_list(e, reference);
     if list == 0 {
         return (0, 0);
