@@ -2019,12 +2019,20 @@ pub fn query_issue(e: &mut Engine, query: u32, flags: u32) {
 /// it the answer comes 3-13 ms on). Once the render thread has issued the game's last `END`, the
 /// real query answers at once, the same call with the same flags (`S_FALSE` while the GPU is not
 /// done). Before that the answer is `S_FALSE`, and the commands recorded so far are handed to the
-/// render thread, so a game loop that polls always makes progress: with the flag the sun tests
-/// once a frame (`00b63540`), the reference volumes until ready (`00b63680`), the VATS and
-/// clean-up reads (`00800370`, `004a4340`, `008026b0`); without it the decals (`0068de30`). (The
-/// real device without the flag would hand nothing over; handing over is kept for those reads as
-/// before, so no loop can wait on a buffer nobody sends.) So with the render thread a result can
-/// come a frame later than without it; the game's code takes "not ready" at every one of these.
+/// render thread, so a game loop that polls always makes progress. The game's reads (all through
+/// `00c4ee40` or `00c4edf0`): with the flag, the sun's tests once a frame (`00b63540`), VATS's two
+/// counts per target once a frame until both are in (`00800370`), the reference volumes
+/// (`00b63680`: it reads again while the answer is ready and leaves on the first "not ready",
+/// keeping its untouched local as the count; it was so before, and now leaves at once when the
+/// render thread has not sent the `END`, as at the real device's first answer; no loop spins on
+/// "not ready"), and four reads that discard the answer before the query is released
+/// (`004a4340`, `008026b0`, `00b631d0`, `00b63620`); without the flag, the decals (`0068de30`).
+/// (The real device without the flag would hand nothing over; handing over is kept for those
+/// reads as before, so no loop can wait on a buffer nobody sends.) So with the render thread a
+/// result can come a frame later than without it; the game's code takes "not ready" at each.
+///
+/// This holds for the real backend (its query board); the wgpu backend has no board yet, and its
+/// reads still go through the waiting call (measure/wgpu/MAIN-RENDERER.md, C5).
 pub fn query_get_data(e: &mut Engine, query: u32, flags: u32) -> Option<(u32, u32)> {
     if !is_forwarded(e, query) {
         return None;
@@ -3483,7 +3491,7 @@ mod tests {
     }
 
     /// A game loop of `D3DGETDATA_FLUSH` reads with the render thread held up (its backend locked
-    /// by the test, so it cannot carry out the `END`): every read answers at once, `S_FALSE`,
+    /// by a helper thread, so it cannot carry out the `END`): every read answers at once, `S_FALSE`,
     /// and hands the commands over; once the render thread goes on, the loop ends with the real
     /// answer. Skipped where Direct3D 9 has no device.
     #[test]
@@ -3501,19 +3509,35 @@ mod tests {
             .test_backend
             .clone()
             .expect("the test's backend");
-        let held = backend.lock().unwrap_or_else(|p| p.into_inner());
+        // A helper thread holds the backend and gives it back when told, or after 5 s: a read
+        // that waits for the render thread then fails the time check below instead of hanging.
+        let (holding, held) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let holder = {
+            let backend = std::sync::Arc::clone(&backend);
+            std::thread::spawn(move || {
+                let _held = backend.lock().unwrap_or_else(|p| p.into_inner());
+                let _ = holding.send(());
+                let _ = released.recv_timeout(std::time::Duration::from_secs(5));
+            })
+        };
+        held.recv().expect("the backend held");
         query_issue(&mut e, query, 2);
         query_issue(&mut e, query, ISSUE_END);
         let started = std::time::Instant::now();
+        let mut answers = Vec::new();
         for _ in 0..200 {
-            assert_eq!(
-                query_get_data(&mut e, query, GETDATA_FLUSH),
-                Some((S_FALSE, 0))
-            );
+            answers.push(query_get_data(&mut e, query, GETDATA_FLUSH));
         }
         // 200 reads while the render thread cannot move: none waited for it.
-        assert!(started.elapsed() < std::time::Duration::from_secs(1));
-        drop(held);
+        let took = started.elapsed();
+        let _ = release.send(());
+        holder.join().expect("the holder");
+        assert!(took < std::time::Duration::from_secs(1), "{took:?}");
+        assert!(
+            answers.iter().all(|a| *a == Some((S_FALSE, 0))),
+            "{answers:?}"
+        );
         let mut answer = None;
         for _ in 0..5000 {
             answer = query_get_data(&mut e, query, GETDATA_FLUSH);
