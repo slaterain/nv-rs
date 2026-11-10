@@ -7,6 +7,7 @@
 //! resource the frame's unsent commands still use send those commands first. The caches keyed by
 //! state (pipelines, shader modules, samplers, bind groups) are where the speed work starts.
 
+use crate::cache;
 use crate::format::{self, d3dfmt, Format};
 use crate::fxhash::Map;
 use crate::shot::{self, Shots};
@@ -232,6 +233,40 @@ struct VertexLink {
     attributes: [Vec<wgpu::VertexAttribute>; 8],
 }
 
+/// What making pipelines cost since the last report (printed with the present counters every
+/// 600 presents): a pipeline made on first use holds the draw, and so the frame, until it is done.
+#[derive(Default)]
+struct Made {
+    pipelines: u32,
+    modules: u32,
+    convert: std::time::Duration,
+    module: std::time::Duration,
+    pipeline: std::time::Duration,
+    longest: std::time::Duration,
+    /// The pipelines' whole times (their modules included), and how many took over 16 ms.
+    whole: std::time::Duration,
+    over_16ms: u32,
+    /// The longest time between two presents on the device's thread (the render thread).
+    longest_frame: std::time::Duration,
+}
+
+impl Made {
+    fn add_module(&mut self, convert: std::time::Duration, module: std::time::Duration) {
+        self.modules += 1;
+        self.convert += convert;
+        self.module += module;
+    }
+    fn add_pipeline(&mut self, pipeline: std::time::Duration, all: std::time::Duration) {
+        self.pipelines += 1;
+        self.pipeline += pipeline;
+        self.longest = self.longest.max(all);
+        self.whole += all;
+        if all.as_millis() > 16 {
+            self.over_16ms += 1;
+        }
+    }
+}
+
 /// What the open render pass was last given, so a draw sends only what changed.
 #[derive(Default)]
 struct PassBinds {
@@ -370,6 +405,11 @@ pub struct Device {
     last_link: Option<((u64, u64), Arc<VertexLink>)>,
     vertex_links: Map<(u64, u64), Arc<VertexLink>>,
     binds: PassBinds,
+    /// The driver's compiled pipelines kept between runs ([`cache`]), where the backend has them.
+    pipeline_cache: Option<cache::PipelineCacheFile>,
+    /// When the last `Present` began ([`Made::longest_frame`]).
+    last_present: Option<std::time::Instant>,
+    made: Made,
     #[allow(clippy::type_complexity)]
     vs_modules: Map<
         (
@@ -429,7 +469,7 @@ pub struct Device {
     pub(crate) skipped: u64,
 }
 
-fn block_on<F: std::future::Future>(f: F) -> F::Output {
+pub(crate) fn block_on<F: std::future::Future>(f: F) -> F::Output {
     // wgpu's native futures are ready when polled after the work they wait for (a `poll`).
     struct Noop;
     impl std::task::Wake for Noop {
@@ -494,6 +534,7 @@ impl Device {
         pp: &PresentParameters,
         back_buffers: &[Handle],
         depth: Handle,
+        cache_dir: Option<&std::path::Path>,
     ) -> Result<Device, String> {
         // `NV_WGPU_BACKEND` names one; by default Direct3D 12 on Windows (measured closest to the
         // real Direct3D 9 on the same driver: Doc's house differs in 0.3% of pixels against 6% on
@@ -545,7 +586,8 @@ impl Device {
             | wgpu::Features::DEPTH32FLOAT_STENCIL8
             | wgpu::Features::CLIP_DISTANCES
             | wgpu::Features::FLOAT32_BLENDABLE
-            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+            | wgpu::Features::PIPELINE_CACHE;
         let features = adapter.features() & wanted;
         let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("d3d9-wgpu"),
@@ -556,6 +598,9 @@ impl Device {
             trace: Default::default(),
         }))
         .map_err(|e| format!("request_device: {e}"))?;
+        // The driver's compiled pipelines from the last run, where the backend keeps them (Vulkan).
+        let pipeline_cache =
+            cache_dir.and_then(|d| cache::PipelineCacheFile::open(&device, &adapter.get_info(), d));
         let errors = Arc::new(AtomicU64::new(0));
         {
             let errors = errors.clone();
@@ -664,6 +709,9 @@ impl Device {
             last_link: None,
             vertex_links: Map::default(),
             binds: PassBinds::default(),
+            pipeline_cache,
+            last_present: None,
+            made: Made::default(),
             vs_modules: Map::default(),
             ps_modules: Map::default(),
             samplers: Map::default(),
@@ -2165,17 +2213,20 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 return None;
             }
         };
-        if let Err(e) = sm::validate(&source) {
+        // Read and checked once, by wgpu (naga's reader and validator, with the device's own
+        // capabilities): a shader it refuses is said here, as our own check used to say it.
+        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let module = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
+        if let Some(e) = block_on(scope.pop()) {
             self.warn(format!("{what}: the converted shader is not valid: {e}"));
             return None;
         }
-        Some(
-            self.device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: None,
-                    source: wgpu::ShaderSource::Wgsl(source.into()),
-                }),
-        )
+        Some(module)
     }
 
     fn sampler_layout(&mut self, key: &[(u32, u8, bool)]) -> wgpu::PipelineLayout {
@@ -2802,6 +2853,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         topology: wgpu::PrimitiveTopology,
         samplers: &[(u32, u8, bool)],
     ) -> Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout)> {
+        let started = std::time::Instant::now();
         let vkey = (
             vs.id,
             inputs.to_vec(),
@@ -2817,7 +2869,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 clip: key.clip,
                 count: false,
             };
-            let m = self.module(wgsl::convert(&vs.program, &link), "a vertex shader");
+            let t = std::time::Instant::now();
+            let source = wgsl::convert(&vs.program, &link);
+            let c = t.elapsed();
+            let m = self.module(source, "a vertex shader");
+            self.made.add_module(c, t.elapsed() - c);
             self.vs_modules.insert(vkey.clone(), m);
         }
         let pkey = (ps.id, varyings.to_vec(), key.count, key.clip);
@@ -2829,7 +2885,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 clip: key.clip,
                 count: key.count,
             };
-            let m = self.module(wgsl::convert(&ps.program, &link), "a pixel shader");
+            let t = std::time::Instant::now();
+            let source = wgsl::convert(&ps.program, &link);
+            let c = t.elapsed();
+            let m = self.module(source, "a pixel shader");
+            self.made.add_module(c, t.elapsed() - c);
             self.ps_modules.insert(pkey.clone(), m);
         }
         let vm = self.vs_modules[&vkey].clone()?;
@@ -2933,11 +2993,17 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 targets: &targets,
             }),
             multiview_mask: None,
-            cache: None,
+            cache: self.pipeline_cache.as_ref().map(|c| &c.cache),
         };
+        let t = std::time::Instant::now();
         let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        if let Some(c) = &self.pipeline_cache {
+            c.touched(self.presents);
+        }
         let pipeline = self.device.create_render_pipeline(&desc);
-        match block_on(scope.pop()) {
+        let popped = block_on(scope.pop());
+        self.made.add_pipeline(t.elapsed(), started.elapsed());
+        match popped {
             None => Some((pipeline, group_layout)),
             Some(e) => {
                 self.warn(format!("a pipeline wgpu refuses: {e}"));
@@ -3725,6 +3791,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
 
     /// `Present` of the stream's `frame` (numbered as the forwarding layer's captures are).
     pub(crate) fn present(&mut self, frame: u32) {
+        let now = std::time::Instant::now();
+        if let Some(t) = self.last_present {
+            self.made.longest_frame = self.made.longest_frame.max(now - t);
+        }
+        self.last_present = Some(now);
         self.end_pass();
         self.presents += 1;
         let frame = u64::from(frame);
@@ -3885,6 +3956,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 }
             }
         }
+        if let Some(c) = &mut self.pipeline_cache {
+            c.save_if_due(self.presents, false);
+        }
         if self.presents % 600 == 1 {
             // The bytes kept for read-backs (`ReadSurface`), printed for their memory cost.
             let kept: usize = self.kept.values().map(Vec::len).sum();
@@ -3897,7 +3971,35 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 kept as f64 / 1_048_576.0,
                 self.kept.values().filter(|k| !k.is_empty()).count()
             );
+            self.report_made();
         }
+    }
+
+    /// The pipeline report (with the present counters, and once more when the device goes): the
+    /// game's pipelines made on the draws that needed them since the last report (the backend's
+    /// own few for clears, copies and counts are not counted, nor kept in the pipeline cache), what
+    /// that took, and the longest time between two presents on this thread.
+    fn report_made(&mut self) {
+        let m = std::mem::take(&mut self.made);
+        let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+        eprintln!(
+            "NV_D3D9 wgpu: made since the last report: {} pipelines ({} shader modules) in {:.0} ms on the draws that needed them (of it converting {:.0}, modules {:.0}, pipelines {:.0}); the longest pipeline {:.0} ms, {} pipelines over 16 ms; the longest time between two presents here {:.0} ms",
+            m.pipelines,
+            m.modules,
+            ms(m.whole),
+            ms(m.convert),
+            ms(m.module),
+            ms(m.pipeline),
+            ms(m.longest),
+            m.over_16ms,
+            ms(m.longest_frame)
+        );
+    }
+
+    /// What the device made of its pipeline cache file ("N KB read", "none yet...", "...: ignored...");
+    /// None without a cache (no folder, or a backend without one). Tests.
+    pub fn pipeline_cache_note(&self) -> Option<String> {
+        self.pipeline_cache.as_ref().map(|c| c.note.clone())
     }
 
     /// The pixels of a back buffer or render target as wgpu holds them, rows packed (tests).
@@ -4188,6 +4290,16 @@ fn surface_for(
     _window: isize,
 ) -> Result<wgpu::Surface<'static>, String> {
     Err("windows of other platforms come with the window layer's port".into())
+}
+
+impl Drop for Device {
+    /// The pipeline cache written once more when pipelines were made since its last save.
+    fn drop(&mut self) {
+        self.report_made();
+        if let Some(c) = &mut self.pipeline_cache {
+            c.save_if_due(self.presents, true);
+        }
+    }
 }
 
 #[cfg(test)]

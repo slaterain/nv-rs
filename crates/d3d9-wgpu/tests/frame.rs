@@ -67,9 +67,17 @@ struct Gpu {
 
 impl Gpu {
     fn new(size: u32, samples: u32) -> Option<Gpu> {
+        Gpu::with_cache(size, samples, None)
+    }
+
+    /// As [`Gpu::new`], keeping the driver's pipelines in `cache` ([`WgpuBackend::with_cache_dir`]).
+    fn with_cache(size: u32, samples: u32, cache: Option<std::path::PathBuf>) -> Option<Gpu> {
         // A failed test leaves the lock poisoned; the next one still takes its turn.
         let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
         let mut b = WgpuBackend::new(Output::Offscreen);
+        if let Some(dir) = cache {
+            b = b.with_cache_dir(dir);
+        }
         let present = words(&[size, size, A8R8G8B8, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0]);
         let back = words(&[BACK]);
         b.execute(Cmd::CreateDevice {
@@ -1011,4 +1019,105 @@ fn constant_changes_between_draws_in_one_pass_reach_the_shaders() {
         [0, 255, 0, 255],
         "bottom right: the pixel constant change"
     );
+}
+
+/// The pipeline cache file's envelope, as `cache.rs` writes it (magic, version 2, length,
+/// FNV-1a 64 of the bytes): the test makes files of its own with it.
+fn envelope(data: &[u8]) -> Vec<u8> {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in data {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    let mut out = b"NVWGPUPC".to_vec();
+    out.extend_from_slice(&2u32.to_le_bytes());
+    out.extend_from_slice(&(data.len() as u64).to_le_bytes());
+    out.extend_from_slice(&h.to_le_bytes());
+    out.extend_from_slice(data);
+    out
+}
+
+/// The driver's pipelines kept between runs. Where the backend has a pipeline cache (Vulkan), a
+/// device that made a pipeline leaves the file behind and the next one reads it; a file whose
+/// bytes do not match their hash, a truncated one, and a FOREIGN one (a valid envelope around
+/// wgpu bytes made for another adapter) are each ignored with a new, empty cache, and the device
+/// draws the same pixels; a folder that is a file gives no cache and a working device. Without a
+/// pipeline cache (Direct3D 12, the software adapter) nothing is kept and the draws are the same.
+#[test]
+fn the_pipeline_cache_file_is_kept_and_a_bad_one_is_ignored() {
+    // A scratch folder in the build's own target folder.
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("pipeline-cache-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // The pixels and what the device made of its cache file.
+    let draw = |cache: Option<std::path::PathBuf>| -> Option<(Vec<u8>, Option<String>)> {
+        let mut g = Gpu::with_cache(4, 1, cache)?;
+        g.colour([1.0, 0.5, 0.25, 1.0]);
+        g.clear(1, 0, 1.0);
+        g.cover(0.5);
+        let note = g.b.device().expect("the device").pipeline_cache_note();
+        Some((g.reds(), note))
+    };
+    let Some((plain, none)) = draw(None) else {
+        return;
+    };
+    assert_eq!(none, None, "no folder, no cache");
+    let folder = dir.join("new");
+    let (first, note) = draw(Some(folder.clone())).unwrap();
+    assert_eq!(first, plain);
+    let Some(note) = note else {
+        // No pipeline cache on this backend: nothing kept, nothing to read back.
+        assert!(std::fs::read_dir(&folder).map_or(true, |d| d.count() == 0));
+        eprintln!("this backend keeps no pipeline cache");
+        return;
+    };
+    assert!(note.starts_with("none yet"), "{note}");
+    // The file is there after the device went, and is read back.
+    let files: Vec<_> = std::fs::read_dir(&folder)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "bin"))
+        .collect();
+    assert_eq!(files.len(), 1, "{files:?}");
+    let file = files[0].clone();
+    let good = std::fs::read(&file).unwrap();
+    let (pixels, note) = draw(Some(folder.clone())).unwrap();
+    assert_eq!(pixels, plain);
+    assert!(note.as_deref().unwrap().ends_with("KB read"), "{note:?}");
+    // Each bad file: ignored by name, a new cache, the same pixels.
+    let wgpu_bytes = &good[28..];
+    let mut altered = good.clone();
+    let n = altered.len();
+    altered[n / 2] ^= 0x55;
+    let truncated = good[..good.len() - 3].to_vec();
+    // wgpu's header: magic 8, version 4, ABI 4, backend 1, then the adapter key (15).
+    let mut foreign_bytes = wgpu_bytes.to_vec();
+    foreign_bytes[20] ^= 0x5A;
+    let foreign = envelope(&foreign_bytes);
+    let mut backend_bytes = wgpu_bytes.to_vec();
+    backend_bytes[16] ^= 0x03;
+    let other_backend = envelope(&backend_bytes);
+    for (bytes, why) in [
+        (altered, "do not match their hash"),
+        (truncated, "truncated"),
+        (foreign, "ignored"),
+        (other_backend, "ignored"),
+    ] {
+        std::fs::write(&file, &bytes).unwrap();
+        let (pixels, note) = draw(Some(folder.clone())).unwrap();
+        assert_eq!(pixels, plain, "{why}");
+        let note = note.unwrap();
+        assert!(
+            note.contains(why) && note.contains("ignored"),
+            "{why}: {note}"
+        );
+    }
+    // A "folder" that is a file: no cache, the device works.
+    std::fs::write(dir.join("a-file"), b"not a folder").unwrap();
+    let (pixels, note) = draw(Some(dir.join("a-file"))).unwrap();
+    assert_eq!(pixels, plain);
+    assert_eq!(note, None);
+    let _ = std::fs::remove_dir_all(&dir);
 }
