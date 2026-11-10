@@ -5,8 +5,9 @@
 //! the toggles, the clip planes and the smaller entries. Then the pixel and vertex constant maps upload
 //! their entries (`SetShaderConstants`, [`super::constants`], made direct when the map's slot holds it).
 //!
-//! Only `SetupGeometryConstants` is registered here: the set-ups it calls are plain Rust calls, as in
-//! the translation (which keeps them registered at their own addresses for other callers). Everything they
+//! `SetupGeometryConstants` and each of the sixteen set-ups it calls are registered at their own exe
+//! addresses (the family's list in `shader/mod.rs`), so another caller by address reaches the typed one.
+//! Inside `SetupGeometryConstants` they are plain Rust calls, as in the translation. Everything they
 //! write to the device goes through the same calls in the same order: the D3D9 stream is the
 //! translation's. Floats use the exact x87 helpers, the same under either control word.
 
@@ -19,13 +20,14 @@ const RENDERING_PASS: u32 = 0x011f_91e0;
 const RENDERING_PASS_TYPE: u32 = 0x011f_91e4;
 const CURRENT_PASS: u32 = 0x0126_f74c;
 const DEFAULT_POSITION: u32 = 0x011f_4288;
-/// The first word of the rendering pass's (`011f91e0`) +0xc.
+
 /// A loop's small index as a word.
 #[allow(clippy::cast_possible_truncation)]
 fn idx(i: usize) -> u32 {
     i as u32
 }
 
+/// The first word of the rendering pass's (`011f91e0`) +0xc: its first light.
 fn rendering_object(e: &Engine) -> u32 {
     let rendering = e.global::<u32>(RENDERING_PASS);
     let holder = e.mem.u32(rendering + 0xc);
