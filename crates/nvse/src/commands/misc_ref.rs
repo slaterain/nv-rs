@@ -407,7 +407,7 @@ fn form_id(e: &Engine, form: u32) -> u32 {
 /// `TESObjectREFR::AddLock` `005690A0`, and its loader never makes a teleport without data). xNVSE reads
 /// through the null pointer and the game stops; without the row the port stops there too. With it
 /// the command gives its "nothing" answer and writes nothing.
-fn passed_over(e: &mut Engine, pointer: u32) -> bool {
+pub(super) fn passed_over(e: &mut Engine, pointer: u32) -> bool {
     pointer == 0 && invref::checks(e)
 }
 
@@ -813,7 +813,7 @@ fn clear_open_key(e: &mut Engine, w: &[u32]) -> Ret {
 // ---- owners ----
 
 /// `GetOwner(BaseExtraList &)` (xNVSE): the list's `ExtraOwnership` owner, or 0.
-fn owner_of(e: &mut Engine, list: u32) -> u32 {
+pub(super) fn owner_of(e: &mut Engine, list: u32) -> u32 {
     let owner = get_by_type(e, list, EXTRA_OWNERSHIP);
     if owner == 0 {
         0
@@ -823,7 +823,7 @@ fn owner_of(e: &mut Engine, list: u32) -> u32 {
 }
 
 /// `GetOwningFactionRequiredRank(BaseExtraList &)` (xNVSE): the list's `ExtraRank`, or 0.
-fn rank_of(e: &mut Engine, list: u32) -> u32 {
+pub(super) fn rank_of(e: &mut Engine, list: u32) -> u32 {
     let rank = get_by_type(e, list, EXTRA_RANK);
     if rank == 0 {
         0

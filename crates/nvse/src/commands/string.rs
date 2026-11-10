@@ -560,6 +560,27 @@ fn ini_setting(e: &mut Engine, name: &[u8]) -> u32 {
     0
 }
 
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameSettings.cpp: GetNumericIniSetting,
+// Setting::Get(double &).
+/// An INI setting's number (a bool's or an integer's `data.i`, an unsigned's, a float's); `None`
+/// for an empty name, no such setting or one that holds no number.
+pub(crate) fn numeric_ini_setting(e: &mut Engine, name: &[u8]) -> Option<f64> {
+    if name.is_empty() {
+        return None;
+    }
+    let setting = ini_setting(e, name);
+    if setting == 0 {
+        return None;
+    }
+    let data = setting + 4;
+    match setting_type(e, setting) {
+        0 | 3 => Some(f64::from(e.mem.u32(data) as i32)),
+        4 => Some(f64::from(e.mem.u32(data))),
+        5 => Some(f64::from(e.mem.f32(data))),
+        _ => None,
+    }
+}
+
 /// `GetSeparatorChar`: `|`, or `@` for a console line of no mod.
 fn separator(e: &mut Engine, script: u32) -> u8 {
     if is_console_mode(e) && !(script != 0 && mod_index(e, script) != 0xff) {

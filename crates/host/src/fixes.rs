@@ -137,7 +137,7 @@ pub const INVENTORY_REFERENCE_CHECKS: Fix = Fix {
     name: "script reference checks",
     env: "NV_NVSE_INVREF_CHECK",
     addresses: &[],
-    summary: "a reference handed to a script with parts missing no longer stops the game: an inventory reference with no base form or cell, or a door whose teleport or lock data or linked door is missing, answers 0 in the door, key and cell owner commands (GetLinkedDoor, GetDoorTeleportX..Rot, SetDoorTeleport, SetOpenKey, GetParentCellOwner, GetParentCellOwningFactionRequiredRank); and the inventory references' own slips: a removed stack leaves the container's entry before its data is freed, a sale ends with its event, a container entry without a form is passed over",
+    summary: "a reference handed to a script with parts missing no longer stops the game: an inventory reference with no base form or cell, or a door whose teleport or lock data or linked door is missing, answers 0 in the door, key and cell owner commands (GetLinkedDoor, GetDoorTeleportX..Rot, SetDoorTeleport, SetOpenKey, GetParentCellOwner, GetParentCellOwningFactionRequiredRank); and the inventory references' own slips: a removed stack leaves the container's entry before its data is freed, a sale ends with its event, a container entry without a form is passed over; HasOwnership and IsOwned on a reference with no cell or base form answer 0, the cell scans pass over a reference with no base form, and GetNextRef on a scan that ended in the console or was never built answers as its first call did (the error, 0)",
     install: install_inventory_reference_checks,
 };
 
@@ -185,11 +185,11 @@ fn install_script_cycle_guard(e: &mut Engine) {
 }
 
 pub const SCRIPT_LIST_GUARD: Fix = Fix {
-    name: "script inventory list guard",
+    name: "script list and scan guard",
     env: "NV_NVSE_LIST_GUARD",
     addresses: &[],
     summary:
-        "an inventory list the script commands walk that runs back into itself, or GetPaired asking for the same stack again, ends the walk; the list SetHotkeyItem gives a stack gets the game's vtable; the token commands (GetTokenValue, SetTokenValue and the rest) answer for an item only in the base container (the Pip-Boy, for one); none of these stops the game",
+        "an inventory list the script commands walk that runs back into itself, GetPaired asking for the same stack again, or a cell scan (GetFirstRef, GetNumRefs, GetRefs and the rest) whose depth takes it past the cell grid's 8-bit positions ends the walk; the list SetHotkeyItem gives a stack gets the game's vtable; the token commands (GetTokenValue, SetTokenValue and the rest) answer for an item only in the base container (the Pip-Boy, for one); none of these stops or hangs the game",
     install: install_script_list_guard,
 };
 

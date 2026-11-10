@@ -895,7 +895,7 @@ pub fn changes_for_ref(e: &mut Engine, reference: u32) -> u32 {
 // ListNode::Append.
 /// Puts `item` at the end of the `tList` at `list`: in the last node when it is empty, else in a
 /// new node after it.
-fn list_append(e: &mut Engine, list: u32, item: u32) {
+pub(crate) fn list_append(e: &mut Engine, list: u32, item: u32) {
     if item == 0 {
         return;
     }

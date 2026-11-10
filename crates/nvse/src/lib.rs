@@ -213,6 +213,8 @@ pub struct Nvse {
     pub inv_ref_arrays: commands::inventory_ref::State,
     /// The forms `TempCloneForm` gave an id in its script's file (`IsClonedForm`).
     pub inventory_items: commands::inventory_items::State,
+    /// The cell scans `GetFirstRef` started, per script (`GetNextRef`).
+    pub cell_scans: commands::misc_ref_cells::State,
     /// The DirectInput hook's keys and the input commands' controls (I-11).
     pub input: input::State,
     /// The first frame recorded the main thread (`s_recordedMainThreadID`): xNVSE prints to the
