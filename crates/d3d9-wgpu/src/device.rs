@@ -2691,6 +2691,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         count: u32,
         up: Option<(&[u8], u32)>,
     ) {
+        // Listed pipelines whose shaders are now made, also when the game draws before its first
+        // `Present` (its first frame).
+        if self.listed_new {
+            self.prepare_listed();
+        }
         let (Some(vs), Some(ps)) = (self.st.vs.clone(), self.st.ps.clone()) else {
             self.warn("a draw without both shaders (fixed function is not provided): skipped");
             self.skipped += 1;
@@ -3194,7 +3199,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             tasks.extend(t);
             keys.push((vk, pk));
         }
-        let modules = tasks.len();
+        let modules = {
+            let mut seen = HashSet::new();
+            tasks.iter().filter(|t| seen.insert(t.key.clone())).count()
+        };
         // The loading screen while it runs, when it is a long step (the start's; a few pipelines
         // ready later, after a new sample count, are made without it).
         let total = modules + ready.len();
