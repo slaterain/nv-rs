@@ -423,6 +423,8 @@ const NODE_POOL_REFILL: u32 = 0x0043_a080;
 /// answers whether found) and `SetAt` (`00844700`; thiscall: key, value).
 const MAP_GET_AT: u32 = 0x0085_3130;
 const MAP_SET_AT: u32 = 0x0084_4700;
+/// This file's `00b9a090` (the next list made ready), which `00b9a120` and `00b9a3c0` end in.
+const NEXT_GROUP: u32 = 0x00b9_a090;
 /// `BSShaderAccumulator::IsShadowPass` (engine map; cdecl, one word).
 const IS_SHADOW_PASS: u32 = 0x00b6_30f0;
 /// The render-state setters of `bsrenderstate_xenon.cpp` and `run_00b97900`
@@ -1810,7 +1812,12 @@ pub fn fn_00b9a120(
     if stopped {
         return true;
     }
-    fn_00b9a090(e, this, pass_type, element, flag)
+    // By address, as the pass type range draw (`00b63770`) calls it, so a typed caller compares.
+    e.call(
+        NEXT_GROUP,
+        &args![this, pass_type, element, flag],
+    )
+    .bool()
 }
 
 // Translated from 00b9a410 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2640,7 +2647,12 @@ pub fn fn_00b9a3c0(
         Ptr::new(group.wrapping_mul(0x68).wrapping_add(groups)),
         0,
     );
-    fn_00b9a090(e, this, pass_type, element, flag)
+    // By address, as the pass type range draw (`00b63770`) calls it, so a typed caller compares.
+    e.call(
+        NEXT_GROUP,
+        &args![this, pass_type, element, flag],
+    )
+    .bool()
 }
 
 // Translated from 00b9a4d0 (decompiled, FalloutNV.exe 1.4.0.525)

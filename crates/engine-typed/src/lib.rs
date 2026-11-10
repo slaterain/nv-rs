@@ -18,6 +18,7 @@
 pub mod crt;
 pub mod culling;
 pub mod dispatch;
+pub mod draw;
 pub mod lockfree;
 pub mod pathing;
 pub mod render;
@@ -90,6 +91,7 @@ pub mod units {
         engine_core::typed::provide(&crate::crt::CRT);
         engine_core::typed::provide(&crate::dispatch::DISPATCH);
         engine_core::typed::provide(&crate::render::RENDER);
+        engine_core::typed::provide(&crate::draw::DRAW);
         crate::render::stream::note_head_check();
     }
 }
@@ -103,7 +105,7 @@ mod tests {
     use engine_core::typed::{parse_switch, Family, Mode};
 
     /// This crate's families, in the order `units::funcs` provides them.
-    fn families() -> [&'static Family; 7] {
+    fn families() -> [&'static Family; 8] {
         [
             &crate::lockfree::LOCKFREE,
             &crate::culling::CULLING,
@@ -112,6 +114,7 @@ mod tests {
             &crate::crt::CRT,
             &crate::dispatch::DISPATCH,
             &crate::render::RENDER,
+            &crate::draw::DRAW,
         ]
     }
 
@@ -128,7 +131,7 @@ mod tests {
             .collect();
         assert_eq!(
             past,
-            ["lockfree", "culling", "pathing", "shader", "crt", "dispatch", "render"]
+            ["lockfree", "culling", "pathing", "shader", "crt", "dispatch", "render", "draw"]
         );
         let defaults = parse_switch(None, &families).unwrap();
         for (f, m) in families.iter().zip(&defaults) {
@@ -138,7 +141,7 @@ mod tests {
         assert!(off.iter().all(|m| *m == Mode::Off));
         let one_off = parse_switch(Some("shader:off"), &families).unwrap();
         assert_eq!(one_off[3], Mode::Off);
-        assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 6);
+        assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 7);
     }
 
     /// With no switch, `Engine::new` registers every function of each family, and its calls between
