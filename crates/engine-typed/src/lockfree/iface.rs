@@ -11,7 +11,7 @@ use super::layout::{
     BucketHead, HashListNode, Holder, InterfaceManager, LockFreeMap, MapInterface, Marked, NodeSlot,
 };
 use super::{
-    holder, FAMILY, OPERATOR_DELETE, OPERATOR_NEW, SCOPE_BEGIN, SCOPE_CONTEXT, SCOPE_END,
+    holder, node, FAMILY, OPERATOR_DELETE, OPERATOR_NEW, SCOPE_BEGIN, SCOPE_CONTEXT, SCOPE_END,
     SCOPE_MODE, SOURCE_FILE,
 };
 use engine_core::ptr::{Field, Layout, Ptr};
@@ -730,11 +730,6 @@ const INSERT_LINE: u32 = 0x187;
 /// The map's virtual key for a new node (`thiscall(map, key)`), and its `IncrementCount` (Xbox PDB).
 const NODE_KEY_SLOT: u32 = 0x2c;
 const INCREMENT_COUNT_SLOT: u32 = 0x3c;
-/// The node constructors (`thiscall(node, key, value)`): with a counted value (`0044df40`) and with
-/// a plain word (`006ecbd0`); and the counted node's scalar deleting destructor (`0044ed50`).
-const NODE_CONSTRUCT_COUNTED: u32 = 0x0044_df40;
-const NODE_CONSTRUCT_PLAIN: u32 = 0x006e_cbd0;
-const NODE_DELETE_COUNTED: u32 = 0x0044_ed50;
 
 /// The two kinds of map the insertion serves: counted values, searched by [`search`], and plain
 /// words, searched by `006662a0`.
@@ -775,7 +770,8 @@ fn insert_node(
                 match values {
                     Values::Counted => {
                         if !node.is_null() {
-                            e.call(NODE_DELETE_COUNTED, &args![node, 1u32]);
+                            let _: Ptr<HashListNode> =
+                                typed_call!(FAMILY, 0x0044_ed50, node::delete(e, node, 1));
                         }
                     }
                     Values::Plain => {
@@ -808,11 +804,19 @@ fn insert_node(
                 if block != 0 {
                     let map = e.get(this, MapInterface::map);
                     let node_key = e.vcall(map.addr(), NODE_KEY_SLOT, &args![key]).u32();
-                    let construct = match values {
-                        Values::Counted => NODE_CONSTRUCT_COUNTED,
-                        Values::Plain => NODE_CONSTRUCT_PLAIN,
+                    let block = Ptr::new(block);
+                    node = match values {
+                        Values::Counted => typed_call!(
+                            FAMILY,
+                            0x0044_df40,
+                            node::construct(e, block, node_key, Ptr::new(value))
+                        ),
+                        Values::Plain => typed_call!(
+                            FAMILY,
+                            0x006e_cbd0,
+                            node::construct_word(e, block, node_key, Ptr::new(value))
+                        ),
                     };
-                    node = Ptr::new(e.call(construct, &args![block, node_key, value]).u32());
                 }
             }
             // Linked before the current node, then swapped into the link that pointed at it.
@@ -868,8 +872,6 @@ pub fn insert_word_in_bucket(
 const SCAN_LINE: u32 = 0x362;
 /// `memcpy` (`cdecl(to, from, bytes)`).
 const MEMCPY: u32 = 0x0040_1460;
-/// The map's deletion of a node (`thiscall(map, node)`).
-const DELETE_NODE: u32 = 0x0044_dde0;
 /// Referenced-node slots a thread.
 const SLOTS_PER_THREAD: u32 = 3;
 
@@ -881,23 +883,27 @@ const SLOTS_PER_THREAD: u32 = 3;
 /// cut loose and deleted (`0044dde0`). The copy is freed, and the new list and its count replace the
 /// old. The list links (`00726070`, `006ecd40`) are read and written in place.
 pub fn scan_deleted(e: &mut Engine, this: Ptr<MapInterface>) {
-    scan_deleted_with(e, this, DELETE_NODE);
+    scan_deleted_with(e, this, Delete::Plain);
 }
 
-/// The deletion of a node that first releases what it holds (`thiscall(map, node)`: the map's slot
-/// +0x28 on the node's first word, then the node deleted).
-const RELEASE_AND_DELETE_NODE: u32 = 0x0044_edd0;
+/// How a scan deletes a node: [`node::delete_plain`] (`0044dde0`), or [`node::delete_counted`]
+/// (`0044edd0`, which first releases what the node holds).
+#[derive(Clone, Copy)]
+enum Delete {
+    Plain,
+    Counted,
+}
 
 // Typed from 0044f070
 /// [`scan_deleted`]'s copy for maps whose nodes release what they hold: the same body, deleting
 /// with `0044edd0`.
 pub fn scan_deleted_releasing(e: &mut Engine, this: Ptr<MapInterface>) {
-    scan_deleted_with(e, this, RELEASE_AND_DELETE_NODE);
+    scan_deleted_with(e, this, Delete::Counted);
 }
 
-/// [`scan_deleted`]'s body, deleting a node with `delete`.
+/// [`scan_deleted`]'s body, deleting a node as `delete` says.
 #[inline(always)]
-fn scan_deleted_with(e: &mut Engine, this: Ptr<MapInterface>, delete: u32) {
+fn scan_deleted_with(e: &mut Engine, this: Ptr<MapInterface>, delete: Delete) {
     e.with_stack(4, |e, scope| {
         e.call(
             SCOPE_BEGIN,
@@ -936,7 +942,14 @@ fn scan_deleted_with(e: &mut Engine, this: Ptr<MapInterface>, delete: u32) {
             } else {
                 e.set(node, HashListNode::value, 0);
                 let map = e.get(this, MapInterface::map);
-                e.call(delete, &args![map, node]);
+                match delete {
+                    Delete::Plain => {
+                        typed_call!(FAMILY, 0x0044_dde0, node::delete_plain(e, map, node))
+                    }
+                    Delete::Counted => {
+                        typed_call!(FAMILY, 0x0044_edd0, node::delete_counted(e, map, node))
+                    }
+                }
             }
         }
         e.call(OPERATOR_DELETE, &args![copy]);
@@ -944,4 +957,113 @@ fn scan_deleted_with(e: &mut Engine, this: Ptr<MapInterface>, delete: u32) {
         e.set(this, MapInterface::deleted_count, kept_count);
         e.call(SCOPE_END, &args![scope]);
     });
+}
+
+/// The constructor of a marked pointer (cleared; `thiscall`).
+const MARKED_CONSTRUCT: u32 = 0x0044_dee0;
+
+// Typed from 0044d000
+/// An interface's constructor (`thiscall(map, next slot, current slot, previous slot)`, answers
+/// `this`): its current and next node cleared (`0044dee0` each), the map and its three node slots
+/// stored, and the link it came from, the waiting list and its count cleared.
+pub fn construct(
+    e: &mut Engine,
+    this: Ptr<MapInterface>,
+    map: Ptr<LockFreeMap>,
+    next_slot: Ptr<NodeSlot>,
+    current_slot: Ptr<NodeSlot>,
+    previous_slot: Ptr<NodeSlot>,
+) -> Ptr<MapInterface> {
+    e.call(MARKED_CONSTRUCT, &args![field_of(this, MapInterface::current)]);
+    e.call(MARKED_CONSTRUCT, &args![field_of(this, MapInterface::next)]);
+    e.set(this, MapInterface::map, map);
+    e.set(this, MapInterface::next_slot, next_slot);
+    e.set(this, MapInterface::current_slot, current_slot);
+    e.set(this, MapInterface::previous_slot, previous_slot);
+    e.set(this, MapInterface::previous, Ptr::NULL);
+    e.set(this, MapInterface::deleted, Ptr::NULL);
+    e.set(this, MapInterface::deleted_count, 0);
+    this
+}
+
+/// The address of field `f` of `p`.
+#[inline(always)]
+fn field_of<S, T>(p: Ptr<S>, f: Field<S, T>) -> u32 {
+    p.addr().wrapping_add(f.off)
+}
+
+/// The line `00906400` and `00665e30` name in their scope, and the header the tree map's copy
+/// names (the others name the thread-safe structures' header of [`super::queue`]).
+const ALLOCATE_LINE: u32 = 0x18e;
+const HEADER_FILE: u32 = 0x0101_71a0;
+const TREE_HEADER_FILE: u32 = 0x0106_649c;
+
+/// [`allocate`]'s body, the scope naming `header`.
+#[inline(always)]
+fn allocate_with(
+    e: &mut Engine,
+    this: Ptr<LockFreeMap>,
+    index: u32,
+    header: u32,
+) -> Ptr<MapInterface> {
+    e.with_stack(4, |e, scope| {
+        e.call(
+            SCOPE_BEGIN,
+            &args![scope, SCOPE_CONTEXT, SCOPE_MODE, header, ALLOCATE_LINE],
+        );
+        let block: Ptr<MapInterface> =
+            Ptr::new(e.call(OPERATOR_NEW, &args![MapInterface::SIZE]).u32());
+        let made = if block.is_null() {
+            Ptr::NULL
+        } else {
+            let slots = e
+                .get(this, LockFreeMap::pReferencedNodes)
+                .index(index.wrapping_mul(SLOTS_PER_THREAD), NodeSlot::SIZE);
+            let next = slots;
+            let current = slots.index(1, NodeSlot::SIZE);
+            let previous = slots.index(2, NodeSlot::SIZE);
+            typed_call!(
+                FAMILY,
+                0x0044_d000,
+                construct(e, block, this, next, current, previous)
+            )
+        };
+        e.call(SCOPE_END, &args![scope]);
+        made
+    })
+}
+
+// Typed from 00906400
+/// The maps' `AllocateInterface(index)` (their virtual slot +4), in a memory-context scope: a new
+/// interface (`operator new(0x24)`, `0044d000`) on this map and the three node slots of thread
+/// `index`; null when the allocation failed.
+pub fn allocate(e: &mut Engine, this: Ptr<LockFreeMap>, index: u32) -> Ptr<MapInterface> {
+    allocate_with(e, this, index, HEADER_FILE)
+}
+
+// Typed from 00665e30
+/// [`allocate`]'s copy the tree node map's vtable holds: the same body, its scope naming the
+/// header by another path.
+pub fn allocate_tree(e: &mut Engine, this: Ptr<LockFreeMap>, index: u32) -> Ptr<MapInterface> {
+    allocate_with(e, this, index, TREE_HEADER_FILE)
+}
+
+// Typed from 0044f200
+/// Frees what the interface still waits to free (`thiscall`): [`scan_deleted`] while its count is
+/// not zero.
+pub fn flush(e: &mut Engine, this: Ptr<MapInterface>) {
+    while e.get(this, MapInterface::deleted_count) != 0 {
+        typed_call!(FAMILY, 0x0044_f220, scan_deleted(e, this));
+    }
+}
+
+// Typed from 0044ed80
+/// An interface's deleting destructor (`thiscall(flags)`, answers `this`): [`flush`], then the
+/// interface freed when bit 0 of `flags` is set.
+pub fn delete(e: &mut Engine, this: Ptr<MapInterface>, flags: u32) -> Ptr<MapInterface> {
+    typed_call!(FAMILY, 0x0044_f200, flush(e, this));
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
 }

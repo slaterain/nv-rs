@@ -7,7 +7,7 @@ use super::layout::{
     MapInterface, MapLock, Marked, NodeSlot,
 };
 use super::{
-    field_ptr, iface, manager, FAMILY, OPERATOR_DELETE, OPERATOR_NEW, SCOPE_BEGIN, SCOPE_CONTEXT,
+    field_ptr, iface, manager, node, FAMILY, OPERATOR_DELETE, OPERATOR_NEW, SCOPE_BEGIN, SCOPE_CONTEXT,
     SCOPE_END, SCOPE_MODE, SOURCE_FILE,
 };
 use engine_core::ptr::{Field, Layout, Ptr};
@@ -250,10 +250,6 @@ pub fn find_word(e: &mut Engine, this: Ptr<LockFreeMap>, key: u32, value_out: Pt
 
 /// The line `0044c480` names in its scope.
 const CLEAR_LINE: u32 = 0x42c;
-/// The interface manager's scalar deleting destructor (`thiscall(manager, flags)`).
-const MANAGER_DELETE: u32 = 0x0066_6570;
-/// The map's deletion of a node (`thiscall(map, node)`).
-const DELETE_NODE: u32 = 0x0044_dde0;
 
 // Typed from 0044c480
 /// Empties the map (`thiscall(keep none)`), in a memory-context scope; a map with no interface
@@ -277,7 +273,8 @@ pub fn clear(e: &mut Engine, this: Ptr<LockFreeMap>, keep_none: u8) {
         let threads = e.get(manager, InterfaceManager::max_threads);
         let manager = e.get(this, LockFreeMap::pInterfaceManager);
         if !manager.is_null() {
-            e.call(MANAGER_DELETE, &args![manager, 1u32]);
+            let _: Ptr<InterfaceManager> =
+                typed_call!(FAMILY, 0x0066_6570, manager::delete(e, manager, 1));
         }
         e.set(this, LockFreeMap::pInterfaceManager, Ptr::NULL);
         e.set(this, LockFreeMap::iCount, 0);
@@ -293,7 +290,7 @@ pub fn clear(e: &mut Engine, this: Ptr<LockFreeMap>, keep_none: u8) {
                 let next = e.get(node, HashListNode::next).node();
                 e.set(node, HashListNode::next, Marked(0));
                 e.set(node, HashListNode::value, 0);
-                e.call(DELETE_NODE, &args![this, node]);
+                typed_call!(FAMILY, 0x0044_dde0, node::delete_plain(e, this, node));
                 node = next;
             }
             i = i.wrapping_add(1);

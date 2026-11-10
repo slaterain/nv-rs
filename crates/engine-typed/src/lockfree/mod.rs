@@ -19,7 +19,7 @@ use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 use layout::{
     HashListNode, Holder, InterfaceManager, LockFreeMap, LockFreeMapIterator, LockFreeQueue,
-    MapInterface,
+    MapInterface, NodeSlot,
 };
 
 pub mod holder;
@@ -27,6 +27,7 @@ pub mod iface;
 pub mod layout;
 pub mod manager;
 pub mod map;
+pub mod node;
 pub mod queue;
 
 /// The memory-context scope the family's allocating functions run in (`thiscall(scope, context,
@@ -279,6 +280,46 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x0044_d3f0,
             iface::remove_value_in_bucket(Ptr<MapInterface>, u32, Ptr<u32>) -> bool
+        ),
+        entry!(
+            0x0044_df40,
+            node::construct(Ptr<HashListNode>, u32, Ptr<Holder>) -> Ptr
+        ),
+        entry!(
+            0x006e_cbd0,
+            node::construct_word(Ptr<HashListNode>, u32, Ptr<u32>) -> Ptr
+        ),
+        entry!(0x0044_dd40, node::destroy(Ptr<HashListNode>)),
+        entry!(0x0044_ed50, node::delete(Ptr<HashListNode>, u32) -> Ptr),
+        entry!(
+            0x0044_dde0,
+            node::delete_plain(Ptr<LockFreeMap>, Ptr<HashListNode>)
+        ),
+        entry!(
+            0x0044_edd0,
+            node::delete_counted(Ptr<LockFreeMap>, Ptr<HashListNode>)
+        ),
+        entry!(
+            0x0044_d000,
+            iface::construct(
+                Ptr<MapInterface>,
+                Ptr<LockFreeMap>,
+                Ptr<NodeSlot>,
+                Ptr<NodeSlot>,
+                Ptr<NodeSlot>,
+            ) -> Ptr
+        ),
+        entry!(0x0090_6400, iface::allocate(Ptr<LockFreeMap>, u32) -> Ptr),
+        entry!(
+            0x0066_5e30,
+            iface::allocate_tree(Ptr<LockFreeMap>, u32) -> Ptr
+        ),
+        entry!(0x0044_f200, iface::flush(Ptr<MapInterface>)),
+        entry!(0x0044_ed80, iface::delete(Ptr<MapInterface>, u32) -> Ptr),
+        entry!(0x0066_65c0, manager::destroy(Ptr<InterfaceManager>)),
+        entry!(
+            0x0066_6570,
+            manager::delete(Ptr<InterfaceManager>, u32) -> Ptr
         ),
     ]
 }
