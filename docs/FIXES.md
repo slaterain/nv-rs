@@ -326,6 +326,29 @@ save) should get.
   that peeks with records, a mouse read of another size, a record size other than DirectInput 8's);
   every keyboard and mouse read the game makes goes through it as with xNVSE, in both presets.
 
+## Where every preset differs from the original
+
+Places where the original's own instructions do something the port cannot do, so both presets do
+the nearest thing that keeps the game's state the same. Not a row: there is nothing closer to the
+original for vanilla to do.
+
+- **A half-loaded actor's process copied to another level** (`crates/host/src/half_loaded_copy.rs`;
+  the maintainer's stop of 2026-11-09, "moving too fast", measure/crash-1109). When a cell loads with
+  saved changes, an actor's AI process first holds the references it had (its target, its furniture)
+  as saved form ids, and a second pass a moment later turns them into references; the form's flag
+  `0x200000` marks the gap, and the game's own process code already tests it. If the loading thread
+  moves that actor to another process level in the gap (its 3D finished, its animation set), the
+  copy into the new process marks the "target" targeted, and may reserve or free one of its markers,
+  through the saved id as if it were a pointer: the original reads and changes a bit at the id plus 8
+  (for `0x0015413d`, the address `0x00154145`), memory a 32-bit Windows process usually has there,
+  and carries on; the second pass then resolves the ids in the new process, and marks the real
+  target. The port has nothing at those addresses and stopped. In both presets, during that copy
+  only, the three calls that read through a saved id do nothing (the marker search answers "none",
+  as it does for a reference without a free marker); the ids are carried through untouched and the
+  second pass resolves them as in the original. A player sees no difference: the original's marks
+  went into unrelated memory. Vanilla cannot write the original's stray bit (the port has no memory
+  there to change), so it gets the same guard rather than a row.
+
 ## Credits
 
 Written with the fix plugins' knowledge, by their authors' permission (2026-11-03); no code is

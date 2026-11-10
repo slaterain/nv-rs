@@ -21,6 +21,7 @@ pub mod form_types;
 pub mod frame_log;
 pub mod game_file;
 pub mod game_ini;
+pub mod half_loaded_copy;
 pub mod mod_fit_worn;
 pub mod native_inflate;
 pub mod phys_blend;
@@ -106,6 +107,10 @@ impl Host {
         if native_inflate::wanted() {
             native_inflate::install(&mut engine);
         }
+        // A half-loaded actor's process copied to another level carries its saved reference ids through
+        // untouched, in every preset: the original reads and writes through them as references
+        // (memory the port does not have) on the way (`half_loaded_copy`, docs/FIXES.md).
+        half_loaded_copy::install(&mut engine);
         // xNVSE built in, in every preset (ADR-0016): after the rows, so its wraps wrap what is
         // registered. Vanilla content calls no extender opcode, and every change it makes to
         // vanilla commands is a row.
