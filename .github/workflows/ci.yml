@@ -6,7 +6,11 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # A pull request's newer push cancels its older run. On main every commit keeps its own run to
+  # the end (its group is the commit): merges there come closer together than the hour a run
+  # takes, and cancelling the run in progress left main without a finished run for hours, so a
+  # failing test went unseen (2026-11-09).
+  group: ci-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 jobs:
   check:
