@@ -272,6 +272,135 @@ pub fn replay(bytes: &[u8], backend: &mut dyn Backend) -> Result<u64, WireError>
     Ok(n)
 }
 
+/// Object handles renamed by order of first use (1, 2, ..; 0 stays 0), a destroyed object's name
+/// forgotten so an address used again is a new object: what two records are compared by when the
+/// game's heap differs between them (a typed family moved out of it, ADR-0014 stage 2) and every
+/// modelled object therefore lies at another address.
+#[derive(Default)]
+pub struct Names {
+    names: std::collections::HashMap<u32, u32>,
+    next: u32,
+}
+
+impl Names {
+    /// `h`'s name.
+    pub fn name(&mut self, h: u32) -> u32 {
+        if h == 0 {
+            return 0;
+        }
+        let next = &mut self.next;
+        *self.names.entry(h).or_insert_with(|| {
+            *next += 1;
+            *next
+        })
+    }
+
+    pub(crate) fn forget(&mut self, h: u32) {
+        self.names.remove(&h);
+    }
+
+    /// A payload of handles (whole words), each renamed.
+    pub(crate) fn put_handles(&mut self, d: &Data<'_>, out: &mut Vec<u8>) {
+        d.len().put(out);
+        for w in d.to_words().iter() {
+            self.name(*w).put(out);
+        }
+    }
+}
+
+/// The first command where two records differ ([`compare_renamed`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Difference {
+    /// The command's place (0 the first).
+    pub index: u64,
+    /// The two commands as they read, `None` past a file's end.
+    pub a: Option<String>,
+    pub b: Option<String>,
+}
+
+/// One record after another from a file of commands, its header checked first.
+struct Records<R> {
+    from: R,
+    record: Vec<u8>,
+}
+
+impl<R: std::io::Read> Records<R> {
+    fn new(mut from: R) -> Result<Self, String> {
+        let mut head = [0u8; 16];
+        from.read_exact(&mut head)
+            .map_err(|e| format!("no header: {e}"))?;
+        if &head[..MAGIC.len()] != MAGIC {
+            return Err(WireError::NotAStream.to_string());
+        }
+        let file = u64::from_le_bytes(head[8..].try_into().expect("8 bytes"));
+        if file != LIST_HASH {
+            return Err(WireError::OtherList {
+                file,
+                this: LIST_HASH,
+            }
+            .to_string());
+        }
+        Ok(Records {
+            from,
+            record: Vec::new(),
+        })
+    }
+
+    /// The next record's bytes (its command number first), `None` at the end of the file.
+    fn next(&mut self) -> Result<Option<&[u8]>, String> {
+        let mut len = [0u8; 4];
+        match self.from.read_exact(&mut len) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(e) => return Err(e.to_string()),
+        }
+        self.record.resize(u32::from_le_bytes(len) as usize, 0);
+        self.from
+            .read_exact(&mut self.record)
+            .map_err(|e| format!("a record cut short: {e}"))?;
+        Ok(Some(&self.record))
+    }
+}
+
+/// A record's command read back, with its encoding with handles renamed, and as it prints.
+fn renamed(record: &[u8], names: &mut Names, out: &mut Vec<u8>) -> Result<String, String> {
+    let mut r = Reader {
+        bytes: record,
+        at: 0,
+    };
+    let tag = u8::get(&mut r).map_err(|e| e.to_string())?;
+    let cmd = Cmd::get(tag, &mut r).map_err(|e| e.to_string())?;
+    if r.at != record.len() {
+        return Err(WireError::Length { at: 0 }.to_string());
+    }
+    out.clear();
+    cmd.put_renamed(out, names);
+    Ok(format!("{cmd:?}"))
+}
+
+/// Two files of commands (`NV_D3D9_RECORD`) compared command by command, each with its object
+/// handles renamed in its own order of first use ([`Names`]): the same calls, states, payloads and
+/// objects, with the objects at whatever addresses each run's heap gave them. Answers how many
+/// commands compared alike and the first difference, if any (a file ending first is one).
+pub fn compare_renamed(
+    a: impl std::io::Read,
+    b: impl std::io::Read,
+) -> Result<(u64, Option<Difference>), String> {
+    let (mut a, mut b) = (Records::new(a)?, Records::new(b)?);
+    let (mut na, mut nb) = (Names::default(), Names::default());
+    let (mut ea, mut eb) = (Vec::new(), Vec::new());
+    let mut index = 0u64;
+    loop {
+        let ra = a.next()?.map(|r| renamed(r, &mut na, &mut ea)).transpose()?;
+        let rb = b.next()?.map(|r| renamed(r, &mut nb, &mut eb)).transpose()?;
+        match (ra, rb) {
+            (None, None) => return Ok((index, None)),
+            (Some(_), Some(_)) if ea == eb => index += 1,
+            (a, b) => return Ok((index, Some(Difference { index, a, b }))),
+        }
+    }
+}
+
 /// The 64-bit FNV-1a hash of `bytes` continued from `hash` (start with [`HASH_START`]).
 pub(crate) fn hash(mut hash: u64, bytes: &[u8]) -> u64 {
     for &b in bytes {

@@ -41,6 +41,7 @@ use std::sync::{Mutex, OnceLock};
 #[cfg(any(test, feature = "test-support"))]
 pub mod diff;
 pub mod leaf;
+pub mod moved;
 
 /// A family's bit in the per-engine flag words. Every family has its own, for good: it is written
 /// in code at each [`typed_call!`](crate::typed_call) of the family.
@@ -57,6 +58,11 @@ impl FamilyId {
     #[inline(always)]
     pub(crate) const fn bit(self) -> u32 {
         1 << self.0
+    }
+
+    /// Its number (what the poison of its moved fields names, [`moved::poison`]).
+    pub const fn number(self) -> u8 {
+        self.0
     }
 }
 
@@ -161,8 +167,14 @@ pub enum Mode {
     /// The typed functions run.
     On,
     /// The typed functions run, and the family's own code keeps both forms live and compares them
-    /// ([`Engine::typed_dual`]).
+    /// ([`Engine::typed_dual`]): stage 2's dual run, the guest form the truth ([`moved`]).
     Dual,
+    /// Stage 2, K1: the family's objects in host memory ([`moved::Slab`]), its K1 stubs and every
+    /// guest allocation it made before still in the game's heap (poisoned), so the heap is as in
+    /// stage 1 ([`moved::Store::Moved`] with shadows).
+    Moved,
+    /// Stage 2, K2: as [`Mode::Moved`], the guest bytes freed (no shadow allocations).
+    Freed,
 }
 
 /// `NV_TYPED`'s answer for each of `families`. `None` or an empty text is the default: a family is
@@ -173,6 +185,9 @@ pub enum Mode {
 /// - `all`: back to the default;
 /// - `<family>`: that family on, past its gate or not (how a family is tried before its gate);
 /// - `<family>:dual`: on, with both forms live;
+/// - `<family>:moved`: on, its objects moved out of the game's heap, the heap kept as stage 1's
+///   (K1, [`Mode::Moved`]);
+/// - `<family>:freed`: on, moved, the guest bytes freed (K2, [`Mode::Freed`]);
 /// - `<family>:off`: that family off.
 ///
 /// An unknown family or mode is an error: a mistyped switch must not leave a comparison run on the
@@ -198,10 +213,13 @@ pub fn parse_switch(spec: Option<&str>, families: &[&Family]) -> Result<Vec<Mode
                 let (name, mode) = match item.split_once(':') {
                     None => (item, Mode::On),
                     Some((name, "dual")) => (name, Mode::Dual),
+                    Some((name, "moved")) => (name, Mode::Moved),
+                    Some((name, "freed")) => (name, Mode::Freed),
                     Some((name, "off")) => (name, Mode::Off),
                     Some((_, other)) => {
                         return Err(format!(
-                            "unknown mode `{other}` in `{item}` (dual or off, or none for on)"
+                            "unknown mode `{other}` in `{item}` (dual, moved, freed or off, or \
+                             none for on)"
                         ))
                     }
                 };
@@ -229,6 +247,12 @@ pub(crate) struct State {
     allowed: u32,
     /// The families the switch put on `dual`.
     dual: u32,
+    /// The families the switch put on `moved` (K1) and on `freed` (K2).
+    moved: u32,
+    freed: u32,
+    /// The moved families' slab, stubs and dual run ([`moved::Moved`]): made when any family is in
+    /// a stage-2 form, shared by every real thread's engine.
+    space: Option<&'static moved::Moved>,
     /// The addresses of the families that are on, with the family's bit.
     pub(crate) members: AddrMap<u32, u32>,
     /// The differential test's direct run: every `typed_call!` goes direct with the call log on,
@@ -263,6 +287,9 @@ impl State {
             direct: self.direct,
             allowed: self.allowed,
             dual: self.dual,
+            moved: self.moved,
+            freed: self.freed,
+            space: self.space,
             members: self.members.clone(),
             ..State::default()
         }
@@ -387,6 +414,66 @@ impl Engine {
         self.typed.dual & family.bit() != 0
     }
 
+    /// Whether any family runs its dual run: the game's threads then stay stepped, so each paired
+    /// access has no other thread between its two halves.
+    pub fn typed_any_dual(&self) -> bool {
+        self.typed.dual != 0
+    }
+
+    /// What the switch says about `family` on this engine.
+    pub fn typed_mode(&self, family: FamilyId) -> Mode {
+        let bit = family.bit();
+        if self.typed.dual & bit != 0 {
+            Mode::Dual
+        } else if self.typed.moved & bit != 0 {
+            Mode::Moved
+        } else if self.typed.freed & bit != 0 {
+            Mode::Freed
+        } else if self.typed.allowed & bit != 0 || self.typed.members.values().any(|&b| b == bit)
+        {
+            Mode::On
+        } else {
+            Mode::Off
+        }
+    }
+
+    /// The store `family`'s typed code makes its new objects in ([`moved::Store`]): the guest one
+    /// unless the family is in a stage-2 form.
+    #[inline]
+    pub fn typed_store(&self, family: FamilyId) -> moved::Store {
+        let bit = family.bit();
+        let Some(moved) = self.typed.space else {
+            return moved::Store::Guest;
+        };
+        if self.typed.dual & bit != 0 {
+            moved::Store::Dual { moved, family }
+        } else if (self.typed.moved | self.typed.freed) & bit != 0 {
+            moved::Store::Moved {
+                moved,
+                family,
+                shadows: self.typed.moved & bit != 0,
+            }
+        } else {
+            moved::Store::Guest
+        }
+    }
+
+    /// The moved families' slab, stubs and dual run, when any family is in a stage-2 form.
+    pub fn moved(&self) -> Option<&'static moved::Moved> {
+        self.typed.space
+    }
+
+    /// The switch's work with `spec` for `families`, on an engine none has been applied to yet: a
+    /// test that runs one engine in each form (`NV_TYPED` is read once per process).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn typed_apply_for_test(&mut self, families: &[&Family], spec: &str) {
+        assert!(
+            self.typed.members.is_empty(),
+            "the switch was applied to this engine already"
+        );
+        apply_families(self, families, Some(spec));
+    }
+
     /// Brings the direct flags up to the diagnostics: clear while any is on.
     pub(crate) fn typed_sync(&mut self) {
         if self.typed.forced {
@@ -453,7 +540,7 @@ pub fn apply(e: &mut Engine) {
 pub(crate) fn apply_families(e: &mut Engine, families: &[&Family], spec: Option<&str>) {
     check_table(families).unwrap_or_else(|why| panic!("{why}"));
     let modes = parse_switch(spec, families).unwrap_or_else(|why| panic!("NV_TYPED: {why}"));
-    let (mut allowed, mut dual) = (0, 0);
+    let (mut allowed, mut dual, mut moved, mut freed) = (0, 0, 0, 0);
     for (family, mode) in families.iter().zip(modes) {
         if mode == Mode::Off {
             continue;
@@ -470,12 +557,21 @@ pub(crate) fn apply_families(e: &mut Engine, families: &[&Family], spec: Option<
             e.register(addr, f);
         }
         allowed |= bit;
-        if mode == Mode::Dual {
-            dual |= bit;
+        match mode {
+            Mode::Dual => dual |= bit,
+            Mode::Moved => moved |= bit,
+            Mode::Freed => freed |= bit,
+            Mode::On | Mode::Off => {}
         }
     }
     e.typed.allowed = allowed;
     e.typed.dual = dual;
+    e.typed.moved = moved;
+    e.typed.freed = freed;
+    // The slab and the stubs, before any game thread starts (they are shared from then on).
+    if dual | moved | freed != 0 && e.typed.space.is_none() {
+        e.typed.space = Some(moved::Moved::leak());
+    }
     e.typed_sync();
 }
 
