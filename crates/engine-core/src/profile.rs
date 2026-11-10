@@ -54,6 +54,14 @@
 //! functions by inclusive samples and the callers of the 15 busiest (from the walked stacks), and
 //! the top `NV_PROFILE_CALLS` (default 60) call targets with their calls a frame.
 //!
+//! `NV_PROFILE_UNDER=ADDR[,ADDR..]` (a measuring aid): the function, native and call tables count
+//! only what runs inside the named exe functions (a sample whose shadow stack holds one; a call
+//! made while one runs; the sample total, phases, threads, sleeps and calls-a-frame header stay
+//! whole-run), and each table is followed by the calls a frame of every caller-to-callee edge
+//! inside them, the edge into a named function from its outer caller included. A named function
+//! deeper than [`MAX_DEPTH`] shadow slots has its calls counted but not its samples. The sampler
+//! says at its start what it counts under and what it ignored. Unset, nothing changes.
+//!
 //! Off (the default), each `Engine::call` pays one relaxed load of [`on`].
 
 use std::collections::HashMap;
@@ -296,17 +304,176 @@ pub fn init_from_env() {
         let wanted = std::env::var("NV_PROFILE").is_ok_and(|v| !v.is_empty() && v != "0");
         ON.store(wanted, Relaxed);
         COUNT_THREADS.store(wanted && thread_calls_file().is_some(), Relaxed);
+        UNDER_ON.store(wanted && !under_roots().is_empty(), Relaxed);
     });
+}
+
+/// `NV_PROFILE_UNDER=ADDR[,ADDR..]` (exe addresses in hex, with the profiler on): the function,
+/// native and call tables count only what runs inside one of these functions (a sample whose shadow stack holds one, a call
+/// made while one is on it), and the calls are also counted by edge (the caller's exe address, the
+/// callee's) for [`edges`]. Read once by [`init_from_env`]; empty when unset.
+static UNDER: OnceLock<Vec<u32>> = OnceLock::new();
+/// Whether [`UNDER`] names any function.
+static UNDER_ON: AtomicBool = AtomicBool::new(false);
+/// The shadow stack slot of the outermost function of [`UNDER`] now running, [`NOT_UNDER`] none.
+static UNDER_SLOT: AtomicU32 = AtomicU32::new(NOT_UNDER);
+/// [`UNDER_SLOT`] when no function of [`UNDER`] is running.
+const NOT_UNDER: u32 = u32::MAX;
+
+fn under_roots() -> &'static [u32] {
+    UNDER.get_or_init(|| parse_under(&std::env::var("NV_PROFILE_UNDER").unwrap_or_default()))
+}
+
+/// `NV_PROFILE_UNDER`'s addresses: hex words separated by commas (`0x` allowed); others ignored.
+fn parse_under(value: &str) -> Vec<u32> {
+    parse_under_all(value).0
+}
+
+/// [`parse_under`] with the entries it could not read, as written.
+fn parse_under_all(value: &str) -> (Vec<u32>, Vec<String>) {
+    let mut roots = Vec::new();
+    let mut ignored = Vec::new();
+    for entry in value.split(',').map(str::trim).filter(|a| !a.is_empty()) {
+        let digits = entry
+            .strip_prefix("0x")
+            .or_else(|| entry.strip_prefix("0X"))
+            .unwrap_or(entry);
+        match u32::from_str_radix(digits, 16) {
+            Ok(a) => roots.push(a),
+            Err(_) => ignored.push(entry.to_string()),
+        }
+    }
+    (roots, ignored)
+}
+
+/// The line the sampler prints at its start when `NV_PROFILE_UNDER` is set (`None` unset).
+fn under_notice(value: Option<&str>) -> Option<String> {
+    let value = value?;
+    let (roots, ignored) = parse_under_all(value);
+    let ignored = if ignored.is_empty() {
+        String::new()
+    } else {
+        format!(" (ignored: {})", ignored.join(", "))
+    };
+    Some(if roots.is_empty() {
+        format!(
+            "NV_PROFILE_UNDER: no usable address in {value:?}{ignored}: counting EVERYTHING, as if unset"
+        )
+    } else {
+        let names: Vec<String> = roots.iter().map(|a| format!("{a:08x}")).collect();
+        format!(
+            "NV_PROFILE_UNDER: counting under {}{ignored}",
+            names.join(", ")
+        )
+    })
+}
+
+/// The [`UNDER_SLOT`] after a call to `addr` enters shadow stack slot `depth`: the outermost root
+/// marks where the counted part starts; anything else leaves it as it was.
+fn under_enter(slot: u32, roots: &[u32], depth: u32, addr: u32) -> u32 {
+    if slot == NOT_UNDER && roots.contains(&addr) {
+        depth
+    } else {
+        slot
+    }
+}
+
+/// The [`UNDER_SLOT`] after a return leaves the shadow stack `depth` deep: it ends with its root.
+fn under_leave(slot: u32, depth: u32) -> u32 {
+    if slot != NOT_UNDER && depth <= slot {
+        NOT_UNDER
+    } else {
+        slot
+    }
+}
+
+/// The [`UNDER_SLOT`] of a whole shadow stack (a resync): its outermost root's slot.
+fn under_slot_of(stack: &[u32], roots: &[u32]) -> u32 {
+    stack
+        .iter()
+        .position(|a| roots.contains(a))
+        .map_or(NOT_UNDER, |i| i as u32)
+}
+
+/// Whether a sample with this shadow stack counts: always when no function is named.
+fn inside_of(stack: &[u32], roots: &[u32]) -> bool {
+    roots.is_empty() || stack.iter().any(|a| roots.contains(a))
+}
+
+/// How many slots the edge counts have (a power of two).
+const EDGE_SLOTS: usize = 1 << 16;
+#[allow(clippy::declare_interior_mutable_const)]
+const ZERO_EDGE: AtomicU64 = AtomicU64::new(0);
+/// The edge counts ([`UNDER`]): `caller << 32 | callee` in a slot (0 empty) and its calls.
+static EDGE_KEY: [AtomicU64; EDGE_SLOTS] = [ZERO_EDGE; EDGE_SLOTS];
+static EDGE_CALLS: [AtomicU64; EDGE_SLOTS] = [ZERO_EDGE; EDGE_SLOTS];
+
+fn count_edge(caller: u32, callee: u32) {
+    let key = (u64::from(caller) << 32) | u64::from(callee);
+    if key == 0 {
+        return;
+    }
+    let mut slot =
+        (key.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> (64 - EDGE_SLOTS.trailing_zeros())) as usize;
+    for _ in 0..TARGET_PROBES {
+        let held = EDGE_KEY[slot].load(Relaxed);
+        if held == key {
+            let n = &EDGE_CALLS[slot];
+            n.store(n.load(Relaxed).wrapping_add(1), Relaxed);
+            return;
+        }
+        if held == 0 {
+            EDGE_CALLS[slot].store(1, Relaxed);
+            EDGE_KEY[slot].store(key, Relaxed);
+            return;
+        }
+        slot = (slot + 1) & (EDGE_SLOTS - 1);
+    }
+}
+
+/// Every edge counted so far ([`UNDER`]): (caller, callee) and its calls.
+pub fn edges() -> Vec<((u32, u32), u64)> {
+    let mut v: Vec<_> = EDGE_KEY
+        .iter()
+        .zip(&EDGE_CALLS)
+        .filter_map(|(k, n)| {
+            let k = k.load(Relaxed);
+            (k != 0).then(|| (((k >> 32) as u32, k as u32), n.load(Relaxed)))
+        })
+        .collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    v
+}
+
+/// Whether a sample with this shadow stack counts ([`UNDER`]).
+fn inside(stack: &[u32]) -> bool {
+    !UNDER_ON.load(Relaxed) || inside_of(stack, under_roots())
 }
 
 /// A function entered through `Engine::call` (profiler on only).
 #[inline]
 pub fn push(addr: u32) {
     CALLS.store(CALLS.load(Relaxed).wrapping_add(1), Relaxed);
-    if COUNT_TARGETS.load(Relaxed) {
+    let d = DEPTH.load(Relaxed);
+    // `NV_PROFILE_UNDER` unset: every call is counted, as before it existed.
+    let counted = if UNDER_ON.load(Relaxed) {
+        let slot = under_enter(UNDER_SLOT.load(Relaxed), under_roots(), d, addr);
+        UNDER_SLOT.store(slot, Relaxed);
+        let under = slot != NOT_UNDER;
+        if under {
+            let caller = d
+                .checked_sub(1)
+                .and_then(|i| STACK.get(i as usize))
+                .map_or(0, |s| s.load(Relaxed));
+            count_edge(caller, addr);
+        }
+        under
+    } else {
+        true
+    };
+    if counted && COUNT_TARGETS.load(Relaxed) {
         count_target(addr);
     }
-    let d = DEPTH.load(Relaxed);
     if let Some(slot) = STACK.get(d as usize) {
         slot.store(addr, Relaxed);
     }
@@ -383,7 +550,11 @@ pub fn cache_miss() {
 #[inline]
 pub fn pop() {
     let d = DEPTH.load(Relaxed);
-    DEPTH.store(d.saturating_sub(1), Relaxed);
+    let new = d.saturating_sub(1);
+    DEPTH.store(new, Relaxed);
+    if UNDER_ON.load(Relaxed) {
+        UNDER_SLOT.store(under_leave(UNDER_SLOT.load(Relaxed), new), Relaxed);
+    }
 }
 
 /// The shadow stack becomes `stack` (the thread host swapped call stacks, or a stop unwound).
@@ -398,6 +569,9 @@ fn fill(stack: &[u32]) {
         slot.store(addr, Relaxed);
     }
     DEPTH.store(stack.len() as u32, Relaxed);
+    if UNDER_ON.load(Relaxed) {
+        UNDER_SLOT.store(under_slot_of(stack, under_roots()), Relaxed);
+    }
 }
 
 /// Sets the phase, returning the one before (profiler on only; `Viewer` otherwise).
@@ -477,6 +651,9 @@ pub fn start() {
             period.as_secs_f64()
         );
         COUNT_TARGETS.store(calls_top > 0, Relaxed);
+        if let Some(notice) = under_notice(std::env::var("NV_PROFILE_UNDER").ok().as_deref()) {
+            println!("{notice}");
+        }
         let settings = Settings {
             period,
             top,
@@ -591,6 +768,7 @@ fn sampler(settings: Settings) {
     let mut misses_at = CACHE_MISSES.load(Relaxed);
     let mut targets_at = target_counts();
     let mut uncounted_at = TARGET_UNCOUNTED.load(Relaxed);
+    let mut edges_at: HashMap<(u32, u32), u64> = HashMap::new();
     let mut stack = Vec::with_capacity(MAX_DEPTH);
     let mut seen: Vec<u32> = Vec::with_capacity(MAX_DEPTH);
     let mut sampler = native::Sampler::new();
@@ -613,7 +791,13 @@ fn sampler(settings: Settings) {
             Some(w) => Some(w.rip),
             None => sampler.instruction_pointer(os_thread),
         };
-        if let Some(w) = walk {
+        let game_thread = GAME_THREAD.load(Relaxed);
+        let depth = DEPTH.load(Relaxed) as usize;
+        stack.clear();
+        stack.extend(STACK.iter().take(depth).map(|s| s.load(Relaxed)));
+        // `NV_PROFILE_UNDER`: only samples inside the named functions fill the function tables.
+        let ins = inside(&stack);
+        if let Some(w) = walk.filter(|_| ins) {
             table.walks += 1;
             table.walk_frames += w.frames as u64;
             table.walk_ends[w.end as usize] += 1;
@@ -627,10 +811,7 @@ fn sampler(settings: Settings) {
                 None => {}
             }
         }
-        let game_thread = GAME_THREAD.load(Relaxed);
-        let depth = DEPTH.load(Relaxed) as usize;
-        stack.clear();
-        stack.extend(STACK.iter().take(depth).map(|s| s.load(Relaxed)));
+        let rip = rip.filter(|_| ins);
 
         table.samples += 1;
         table.phases[phase as usize] += 1;
@@ -666,7 +847,7 @@ fn sampler(settings: Settings) {
             }
             *table.sleeps.entry(chain).or_default() += 1;
         }
-        if phase == Phase::Game {
+        if phase == Phase::Game && ins {
             match stack.last() {
                 Some(&inner) => {
                     let kind = kind_of(inner).unwrap_or_else(|| "exe code".into());
@@ -715,6 +896,33 @@ fn sampler(settings: Settings) {
                 "== NV_PROFILE: the game's frames {frames_at} to {frames}, \
                  {per_frame} calls through Engine::call a frame ({misses} not in its cache)\n{text}"
             );
+            if UNDER_ON.load(Relaxed) {
+                // The edges' calls in this table's frames, a frame (caller, callee, calls).
+                let now: HashMap<(u32, u32), u64> = edges().into_iter().collect();
+                let mut rows: Vec<((u32, u32), u64)> = now
+                    .iter()
+                    .filter_map(|(&k, &n)| {
+                        let d = n.wrapping_sub(edges_at.get(&k).copied().unwrap_or(0));
+                        (d > 0).then_some((k, d))
+                    })
+                    .collect();
+                rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                let f = (frames - frames_at).max(1) as f64;
+                let mut text = format!(
+                    "NV_PROFILE_UNDER edges, the game's frames {frames_at} to {frames}: {} (calls a frame, caller, callee)\n",
+                    rows.len()
+                );
+                for ((caller, callee), d) in rows {
+                    use std::fmt::Write;
+                    let _ = writeln!(
+                        text,
+                        "  edge {:10.2} {caller:08x} {callee:08x}",
+                        d as f64 / f
+                    );
+                }
+                println!("{text}");
+                edges_at = now;
+            }
             if let (Some(file), true) = (thread_calls_file(), counting_threads()) {
                 if let Err(e) = std::fs::write(file, thread_calls_tsv()) {
                     println!("NV_PROFILE_THREAD_CALLS: {file}: {e}");
@@ -4333,6 +4541,88 @@ mod tests {
             waiting.join().unwrap();
             assert!(reached, "{last}");
         }
+    }
+
+    #[test]
+    fn under_reads_hex_addresses() {
+        assert_eq!(parse_under(""), Vec::<u32>::new());
+        assert_eq!(
+            parse_under("00b6ba20, 0x00b6b930,,nonsense, 0X00b9a120"),
+            vec![0x00b6_ba20, 0x00b6_b930, 0x00b9_a120]
+        );
+        assert_eq!(under_notice(None), None);
+        assert_eq!(
+            under_notice(Some("00b6ba20,0X00b6b930,nonsense")).as_deref(),
+            Some("NV_PROFILE_UNDER: counting under 00b6ba20, 00b6b930 (ignored: nonsense)")
+        );
+        // Nothing usable: said plainly, since everything is then counted.
+        let notice = under_notice(Some("nonsense")).unwrap();
+        assert!(notice.contains("no usable address"), "{notice}");
+        assert!(notice.contains("EVERYTHING"), "{notice}");
+    }
+
+    #[test]
+    fn push_and_pop_count_every_call_when_under_is_unset() {
+        // The switch unset (as in these tests): push counts each call by target whatever is on the
+        // shadow stack. A target only this test calls.
+        assert!(!UNDER_ON.load(Relaxed));
+        let target = 0x0f77_7770;
+        let counting = COUNT_TARGETS.swap(true, Relaxed);
+        for _ in 0..3 {
+            push(target);
+            pop();
+        }
+        COUNT_TARGETS.store(counting, Relaxed);
+        assert_eq!(target_counts().get(&target).copied(), Some(3));
+    }
+
+    #[test]
+    fn under_unset_counts_everything() {
+        // No function named: every sample counts, whatever its stack.
+        assert!(inside_of(&[], &[]));
+        assert!(inside_of(&[0x0086_e650, 0x0040_1000], &[]));
+        // With the profiler on but NV_PROFILE_UNDER unset (as in these tests), nothing is held back.
+        assert!(!UNDER_ON.load(Relaxed));
+        assert!(inside(&[0x0040_1000]));
+    }
+
+    #[test]
+    fn under_counts_from_the_outermost_root_until_it_returns() {
+        let roots = [0x00b6_ba20, 0x00b6_b930];
+        assert!(!inside_of(&[0x0086_e650, 0x0087_3200], &roots));
+        assert!(inside_of(&[0x0086_e650, 0x00b6_ba20, 0x00b9_94f0], &roots));
+        // A root entered at slot 3: calls inside it keep the slot, a nested root too.
+        let mut slot = under_enter(NOT_UNDER, &roots, 2, 0x0087_3200);
+        assert_eq!(slot, NOT_UNDER);
+        slot = under_enter(slot, &roots, 3, 0x00b6_ba20);
+        assert_eq!(slot, 3);
+        slot = under_enter(slot, &roots, 4, 0x00b9_94f0);
+        slot = under_enter(slot, &roots, 5, 0x00b6_b930);
+        assert_eq!(slot, 3);
+        // Returns: out of slot 5 and 4 it stays; the root's own return (depth back to 3) ends it.
+        slot = under_leave(slot, 5);
+        slot = under_leave(slot, 4);
+        assert_eq!(slot, 3);
+        assert_eq!(under_leave(slot, 3), NOT_UNDER);
+        assert_eq!(under_leave(NOT_UNDER, 0), NOT_UNDER);
+        // A resynced stack finds its outermost root.
+        assert_eq!(
+            under_slot_of(&[0x0086_e650, 0x00b6_b930, 0x00b6_ba20], &roots),
+            1
+        );
+        assert_eq!(under_slot_of(&[0x0086_e650], &roots), NOT_UNDER);
+    }
+
+    #[test]
+    fn edges_are_counted_by_caller_and_callee() {
+        let (caller, callee) = (0x0f12_3450, 0x0f12_3460);
+        for _ in 0..3 {
+            count_edge(caller, callee);
+        }
+        count_edge(callee, caller);
+        let all = edges();
+        assert!(all.contains(&((caller, callee), 3)));
+        assert!(all.contains(&((callee, caller), 1)));
     }
 
     /// `NV_PROFILE_SECONDS` takes any number of seconds a `Duration` holds; anything else

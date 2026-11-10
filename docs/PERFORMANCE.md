@@ -79,6 +79,15 @@ progress three (Main::OnIdle's, `HUDMainMenu::DoIdle`'s, `MessageMenu::DoIdle`'s
     numbers and private symbols; a build with `CARGO_PROFILE_PLAY_OPT_DEBUG=line-tables-only` has
     them, one with `debug = 0` public symbols only (a time inside a function without one counts
     under the nearest one before it).
+  - **Inside chosen functions.** `NV_PROFILE_UNDER=00b6ba20,00b6b930` (hex exe addresses): the function,
+    native and call tables count only samples whose shadow stack holds one of them and calls made
+    while one runs (the header's sample total, the phases, game-threads and sleep lines and the
+    calls-a-frame header stay whole-run), and each table is followed by the calls a frame of each
+    caller-to-callee edge inside them ("  edge CALLS CALLER CALLEE"). The edge into a named function
+    from its outer caller is counted too. A named function deeper than 256 shadow-stack slots has
+    its calls counted but not its samples. The sampler's first lines say which addresses it counts
+    under, which entries it ignored, and when none was usable (then everything is counted). Used on 2026-11-10 to measure the main world's draw (crowded street: 933 of the frame's
+    1,064 render passes; 203 translated functions still called inside it).
   - **The profiler's own cost.** With the profiler on, every call takes `Engine::call_full` (the
     shadow stack and the count), so `call_full`'s share of the native tables stands for the fast
     path a normal run inlines into its callers plus the profiler's per-call work, not for the
