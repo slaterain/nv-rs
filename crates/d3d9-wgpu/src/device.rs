@@ -5063,7 +5063,7 @@ fn on_workers<T: Sync, R: Send>(
             .iter()
             .enumerate()
             .map(|(i, item)| {
-                if last.is_none_or(|t| t.elapsed().as_millis() >= 250) {
+                if !matches!(last, Some(t) if t.elapsed().as_millis() < 250) {
                     tick(i);
                     last = Some(std::time::Instant::now());
                 }
@@ -5097,7 +5097,7 @@ fn on_workers<T: Sync, R: Send>(
                 break;
             }
             // Four times a second: each call presents (with the display's sync, a frame's wait).
-            if last.is_none_or(|t| t.elapsed().as_millis() >= 250) {
+            if !matches!(last, Some(t) if t.elapsed().as_millis() < 250) {
                 tick(d);
                 last = Some(std::time::Instant::now());
             }
