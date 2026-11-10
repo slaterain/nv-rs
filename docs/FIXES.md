@@ -305,12 +305,17 @@ too. None has been seen in a port run: the evidence is the exe and a test with r
   the counts are locked increments and decrements at the same points. Tweaks also takes the lock out
   of three of the model map's functions (`00650200`, `00650930`, `00650ba0`); the exe gives no reason
   why that is safe, so that part is not built.
-- **Tested.** The real-thread test runs four OS threads side by side: 20,000 rounds of first calls
-  into a one-bucket map (so every insert meets another) and 200,000 takes and releases each of the
-  face-gen lock. With the row no round loses a heap and the depth ends at 0. Without it, in one run
-  on this machine (2026-11-10), 221 of the 20,000 rounds lost a heap and the depth ended at 47,032
-  after 800,000 takes and releases. The debug-text functions are checked by their call order (the
-  section's take first, its leave last).
+- **Tested.** The real-thread tests (`crates/host/tests/thread_races*.rs`) run four OS threads side
+  by side (skipped below four cores): up to 20,000 rounds of first calls into a one-bucket map, so
+  every insert meets another, and 100,000 takes and releases each of the face-gen lock. One binary
+  installs the row before the first fork; the other runs the original. In 10 runs of each on this
+  machine (2026-11-10, commit b45bc457): with the row, 0 rounds lost a heap and the depth ended at 0
+  every time. Without it, 72 to 248 of the 20,000 rounds lost a heap, and the depth ended between
+  -3,161 and 4,513 after 400,000 takes and releases. A stepped-threads test (the reviewer's) ends a
+  time slice at the map look-up; it finishes, where the first version hung. Single-thread tests
+  install the row and drive all nine addresses: 200 engines in a row each find their own heap, a
+  heap looked up during the teardown is not kept, and the debug-text section is taken first and left
+  as often as taken.
 
 ### Dialogue topic index
 
