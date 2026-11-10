@@ -257,6 +257,28 @@ const COUNT_SLOTS: u32 = 4096;
 /// over one sample), where the adapter blends it; else 16-bit float, exact up to 2,048.
 const COUNT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 const COUNT_FORMAT_16: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
+/// The formats the game makes multisampled surfaces in (`d3d9-stats` of the recordings in Doc's
+/// house and the race menu): `D3DFMT_A8R8G8B8`, `D3DFMT_A16B16G16R16F` render targets and their
+/// `D3DFMT_D24S8` depth surfaces. One sample count serves them all ([`Device::sample_count`]).
+const MULTISAMPLED_FORMATS: [u32; 3] = [21, 113, 75];
+
+/// [`Device::sample_count`] with the adapter's answer `supported(format, count)`.
+fn common_sample_count(
+    format: wgpu::TextureFormat,
+    asked: u32,
+    supported: impl Fn(wgpu::TextureFormat, u32) -> bool,
+) -> u32 {
+    let family: Vec<wgpu::TextureFormat> = MULTISAMPLED_FORMATS
+        .iter()
+        .filter_map(|&d3d| format::format(d3d).map(|f| f.wgpu))
+        .chain([format, COUNT_FORMAT_16])
+        .collect();
+    [16u32, 8, 4, 2]
+        .into_iter()
+        .filter(|&c| c <= asked)
+        .find(|&c| family.iter().all(|&f| supported(f, c)))
+        .unwrap_or(1)
+}
 
 /// The uniform block of one stage in the ring, rounded up to the offset alignment.
 const BLOCK: u64 = wgsl::REGS_SIZE.div_ceil(256) * 256;
@@ -917,16 +939,12 @@ impl Device {
         multisample: u32,
     ) {
         // `D3DMULTISAMPLE_2_SAMPLES` and up are the sample counts; NONMASKABLE (1) has none here.
-        let mut samples = if multisample >= 2 { multisample } else { 1 };
-        if samples > 1 {
-            let supported =
-                format::format(format).is_some_and(|f| self.samples_supported(f.wgpu, samples));
-            if !supported {
-                self.warn(format!(
-                    "{samples}x multisampling of format {format:#x} is not supported here: one sample"
-                ));
-                samples = 1;
-            }
+        let asked = if multisample >= 2 { multisample } else { 1 };
+        let samples = format::format(format).map_or(1, |f| self.sample_count(f.wgpu, asked));
+        if samples != asked {
+            self.warn(format!(
+                "{asked}x multisampling is not supported here for every format the game draws multisampled: {samples}x"
+            ));
         }
         if let Some(s) = self.new_surface(width, height, format, depth, samples) {
             self.objects.insert(surface, Obj::Surface(s));
@@ -1403,7 +1421,19 @@ impl Device {
         features.flags.sample_count_supported(samples)
     }
 
-    /// The occlusion count's target format for `samples` ([`COUNT_FORMAT`]).
+    /// The sample count a surface of `format` asked with `asked` samples gets: the largest count
+    /// at or below it that `format` and every format of [`MULTISAMPLED_FORMATS`] support, and the
+    /// occlusion count's 16-bit target. A render target and its depth surface are made apart
+    /// with the same request, so both get the same count and draw together (a count for each
+    /// format alone left an 8x colour target with a 4x depth surface: every draw without depth);
+    /// and the occlusion count's target can always join their passes ([`Device::count_format`]).
+    fn sample_count(&self, format: wgpu::TextureFormat, asked: u32) -> u32 {
+        common_sample_count(format, asked, |f, c| self.samples_supported(f, c))
+    }
+
+    /// The occlusion count's target format for `samples` ([`COUNT_FORMAT`]): 32-bit where the
+    /// adapter blends it at that count, else 16-bit, which every multisampled surface's count
+    /// supports ([`Device::sample_count`] chose the count so).
     fn count_format(&self, samples: u32) -> wgpu::TextureFormat {
         if self
             .device
@@ -3783,4 +3813,32 @@ fn surface_for(
     _window: isize,
 ) -> Result<wgpu::Surface<'static>, String> {
     Err("windows of other platforms come with the window layer's port".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wgpu::TextureFormat as F;
+
+    /// A render target and its depth surface, asked for 8x apart, get the same count: the
+    /// largest that both (and the rest of the game's multisampled formats and the occlusion
+    /// count's target) support.
+    #[test]
+    fn a_target_and_its_depth_surface_get_one_sample_count() {
+        // Colour 8x, depth only up to 4x.
+        let depth_4x = |f: F, c: u32| !(f == F::Depth24PlusStencil8 && c > 4);
+        assert_eq!(common_sample_count(F::Bgra8Unorm, 8, depth_4x), 4);
+        assert_eq!(common_sample_count(F::Depth24PlusStencil8, 8, depth_4x), 4);
+        // The other way round: colour 4x, depth 8x.
+        let colour_4x = |f: F, c: u32| !(f == F::Bgra8Unorm && c > 4);
+        assert_eq!(common_sample_count(F::Bgra8Unorm, 8, colour_4x), 4);
+        assert_eq!(common_sample_count(F::Depth24PlusStencil8, 8, colour_4x), 4);
+        // Everything supported: as asked; nothing: one sample.
+        assert_eq!(common_sample_count(F::Bgra8Unorm, 8, |_, _| true), 8);
+        assert_eq!(common_sample_count(F::Bgra8Unorm, 2, |_, _| true), 2);
+        assert_eq!(common_sample_count(F::Bgra8Unorm, 8, |_, c| c == 1), 1);
+        // The occlusion count's 16-bit target lacks 8x: 4x, so counting still joins the pass.
+        let count_4x = |f: F, c: u32| !(f == COUNT_FORMAT_16 && c > 4);
+        assert_eq!(common_sample_count(F::Bgra8Unorm, 8, count_4x), 4);
+    }
 }
