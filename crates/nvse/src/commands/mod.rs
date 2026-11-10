@@ -11,6 +11,8 @@ pub mod inventory_items;
 pub mod inventory_ref;
 pub mod math;
 pub mod misc_ref;
+pub mod misc_ref_cells;
+pub mod misc_ref_more;
 pub mod misc_ref_npc;
 pub mod printf;
 pub mod scripting;
@@ -32,6 +34,8 @@ pub fn all() -> Vec<&'static Command> {
         .chain(inventory_info::COMMANDS)
         .chain(misc_ref::COMMANDS)
         .chain(misc_ref_npc::COMMANDS)
+        .chain(misc_ref_cells::COMMANDS)
+        .chain(misc_ref_more::COMMANDS)
         .chain(weapons::COMMANDS)
         .chain(math::COMMANDS)
         .chain(algohol::COMMANDS)
