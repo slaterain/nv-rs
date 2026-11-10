@@ -255,7 +255,6 @@ impl Common for Diff {
 /// and the camera vectors (+0x634, +0x640). `real` slots in its vtable.
 struct Renderer {
     renderer: u32,
-    device: u32,
     vertex_manager: u32,
 }
 
@@ -284,7 +283,6 @@ fn renderer_world(e: &mut Engine, real: &[(u32, u32)]) -> Renderer {
     set(e, 0x011f_9508, renderer);
     Renderer {
         renderer,
-        device,
         vertex_manager,
     }
 }
@@ -1187,6 +1185,9 @@ fn bone_matrices() {
         skin::bone_matrices(Ptr<_>, Ptr<_>, Ptr<_>, u8, u32, u8)
     ))
     .common()
+    // What the transform inverse's and product's translations call plainly (the dispatch family's tests list
+    // the same).
+    .translation_calls_plainly(&[0x0040_19d0, 0x0040_8860, 0x0047_6930, 0x0047_6980, 0x0047_69c0])
     .inputs(&[
         Input::Of(&[2, 0, 1]),
         Input::Of(&[0, 1]),
@@ -1227,6 +1228,7 @@ fn bone_setup() {
         skin::bone_setup(Ptr<_>, u32, u32, u32, u32, u32, u32, u32, u32) -> u32
     ))
     .common()
+    .translation_calls_plainly(&[0x0040_19d0, 0x0040_8860, 0x0047_6930, 0x0047_6980, 0x0047_69c0])
     .inputs(&[
         Input::Of(&[0, 1, 2]),
         Input::Of(TWO_WAYS),
@@ -1255,7 +1257,9 @@ fn bone_setup() {
         let constants = obj(e, 0x10, vt);
         set(e, pass + 0x5c, constants);
         set(e, 0x0126_f74c, pass);
-        let partition = if c.word(2) != 0 {
+        // No partition only for a shader without its own bones: with them the exe reads the null
+        // partition's count.
+        let partition = if c.word(2) != 0 || c.word(1) != 0 {
             let p = e.mem.alloc(0x30);
             e.mem.set_u16(p + 0x20, 3);
             set(e, p + 4, 0x0b0e_4444);
