@@ -69,7 +69,7 @@ shows what's left.
 | ✅ | **Windows preview** | [Released](https://github.com/slaterain/nv-rs/releases) |
 | 🔨 | **Native 64-bit code:** speed, no memory limit, every core in use | Started; the game's threads run on their own cores and signal each other without one shared lock, its drawing on a thread of its own, its compressed archives unpack in native code and are read without reopening them, and the first native families are on; finding what's on screen can be split over several cores as a test (off by default) |
 | 🔨 | **Built-in script extender:** xNVSE's and JIP LN's script commands, with nothing to install | Started: xNVSE's variables, loops, functions, events, co-save, inventory references, string and array commands, keyboard and mouse input and most of its inventory commands are in (370 of 654), format strings made exactly as the C runtime makes them; JIP LN's to come |
-| 🔨 | **Modern graphics (wgpu)** | Started: the game's own shaders and frames draw on wgpu beside Direct3D 9 for comparison (the main menu identical), and it can run the game on its own for testing; not yet for play |
+| 🔨 | **Modern graphics (wgpu)** | Started: the game's own shaders and frames draw on wgpu; on wgpu alone the game plays from the main menu into Doc Mitchell's house, and there, in the race menu and in the Pip-Boy its frames match Direct3D 9's to within 1% of pixels (the main menu identical; measured on one NVIDIA card, other vendors' not yet checked); not yet for play |
 | ⬜ | **More platforms, co-op, VR** | Planned; texture loading already needs no Windows DLL (D3DX's, translated byte for byte) |
 
 ✅ means working, not free of bugs. The details are in [docs/SYSTEMS.md](docs/SYSTEMS.md) and

@@ -25,6 +25,7 @@ fn default_link(p: &sm::Program) -> wgsl::Link {
                 .collect(),
             Stage::Pixel => sig.inputs.iter().map(|(_, s)| *s).collect(),
         },
+        ..wgsl::Link::default()
     }
 }
 
@@ -159,7 +160,8 @@ fn main() {
         println!("on {:?}", adapter.get_info());
         let (device, _queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: None,
-            required_features: adapter.features() & wgpu::Features::FLOAT32_FILTERABLE,
+            required_features: adapter.features()
+                & (wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::CLIP_DISTANCES),
             required_limits: adapter.limits(),
             memory_hints: Default::default(),
             experimental_features: Default::default(),

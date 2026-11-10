@@ -14,9 +14,15 @@
 //! - **Address registers**: `mova` rounds to nearest (halves up: `floor(x + 0.5)`); shader model 1's `mov a0.x` takes the floor.
 //!   A constant read outside the register file through an address register reads 0.
 //! - **Pixel centres**: Direct3D 9 puts them on whole coordinates, wgpu half a pixel further. Each
-//!   vertex shader moves its position by half a pixel right and down (`sys[0]`, set by the device
-//!   from the viewport), so every pixel samples where Direct3D 9 would; `vPos` is the pixel's
-//!   integer coordinate.
+//!   vertex shader moves its position half a pixel right and down (`R.sys[0].xy * w`, which the
+//!   device sets from the draw's viewport: `1 / width`, `-1 / height`), so every pixel samples
+//!   where Direct3D 9 would; `vPos` is the pixel's integer coordinate. The viewport itself stays
+//!   Direct3D 9's rectangle of whole pixels, so drawing is cut at its pixels' edges and every
+//!   sample of an edge pixel can be covered, as on Direct3D 9, on every adapter. (Moving the
+//!   viewport half a pixel instead is exact in the rasteriser but cuts through the first row and
+//!   column on an adapter that clips at the viewport's exact edge, as WARP does: DESIGN.md.)
+//! - **User clip planes** ([`Clip`]): each vertex shader also gives its distance to the six
+//!   planes the device sets in `R.clip`, from its own `oPos`.
 //!
 //! The minimum and maximum (`min`, `max`) are WGSL's, which the hardware computes the way it
 //! does for Direct3D 9 shaders; the SDK's pseudo-code (`src0 < src1 ? src0 : src1`) differs only
@@ -66,9 +72,10 @@ pub const INT_CONSTANTS: u32 = 16;
 pub const BOOL_CONSTANTS: u32 = 16;
 
 /// The uniform block both stages read (`Regs`), in bytes: `c`, `i`, `b` (16 words in 4
-/// vectors), `sys` (4 vectors of the device's values) and `fix` (each sampler's fill mode, 16
-/// words).
-pub const REGS_SIZE: u64 = 16 * 256 + 16 * 16 + 16 * 4 + 16 * 4 + 16 * 4 + 16 * 4;
+/// vectors), `sys` (4 vectors of the device's values), `fix` (each sampler's fill mode, 16
+/// words), `bias` (each sampler's LOD bias) and `clip` (the user clip planes, [`CLIP_PLANES`]).
+pub const REGS_SIZE: u64 =
+    16 * 256 + 16 * 16 + 16 * 4 + 16 * 4 + 16 * 4 + 16 * 4 + 16 * CLIP_PLANES as u64;
 
 /// The binding of sampler register `n`'s texture in group 1 (its sampler is the next one):
 /// pixel samplers from 0, vertex samplers from 32.
@@ -204,7 +211,41 @@ pub struct Link {
     /// Whether each varying (as `varyings`) is interpolated at the centroid: the pixel shader's
     /// `dcl_centroid`, which wgpu wants on both stages.
     pub centroid: Vec<bool>,
+    /// How the user clip planes cut (both stages of a pair take the same).
+    pub clip: Clip,
+    /// Pixel shaders: also write 1 to the occlusion count's target ([`COUNT_TARGET`]): every
+    /// sample that passes the depth and stencil tests (and is not discarded) adds one there.
+    pub count: bool,
 }
+
+/// How a converted pair applies Direct3D 9's user clip planes (`SetClipPlane`,
+/// `D3DRS_CLIPPLANEENABLE`), for draws with a plane on. With a vertex shader, a plane is in clip
+/// space: a point is kept where `dot(plane, oPos) >= 0`. The device puts the six planes in
+/// `R.clip` (zero for a plane that is off, which keeps everything); the distances are taken from
+/// the shader's own `oPos`, before any pixel-centre move. Both stages of a pair take the same.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Clip {
+    /// No plane on: no clip code.
+    #[default]
+    Off,
+    /// The hardware's clip distances (wgpu's `CLIP_DISTANCES`, which its Vulkan and Metal backends
+    /// have): the primitive is cut where a distance is negative, sample by sample, as Direct3D 9
+    /// drivers cut on this hardware.
+    Distances,
+    /// Without clip distances (wgpu's Direct3D 12 backend): the six distances go to the pixel
+    /// shader as two more varyings (after the linked ones), which discards where one is negative.
+    /// `per_sample` (multisampled targets): the distances are interpolated at each sample, so the
+    /// shader runs per sample and the discard cuts sample by sample as the hardware would (the
+    /// other varyings keep their own interpolation).
+    Discard { per_sample: bool },
+}
+
+/// The user clip planes Direct3D 9 gives (`D3DCAPS9.MaxUserClipPlanes` on the measured cards).
+pub const CLIP_PLANES: usize = 6;
+
+/// The colour target the occlusion count is written to ([`Link::count`]): after Direct3D 9's
+/// four.
+pub const COUNT_TARGET: u32 = 4;
 
 const COMPONENTS: [char; 4] = ['x', 'y', 'z', 'w'];
 
@@ -218,6 +259,7 @@ struct Regs {
     sys: array<vec4<f32>, 4>,
     fix: array<vec4<u32>, 4>,
     bias: array<vec4<f32>, 4>,
+    clip: array<vec4<f32>, 6>,
 }
 
 // Direct3D 9 multiplication: 0 times anything is 0.
@@ -415,6 +457,9 @@ impl Gen<'_> {
     }
 
     fn module(&mut self) -> Result<(), Error> {
+        if self.vertex() && self.link.clip == Clip::Distances {
+            self.out.push_str("enable clip_distances;\n");
+        }
         self.out.push_str(PRELUDE);
         let group0 = if self.vertex() { 0 } else { 1 };
         let _ = writeln!(
@@ -585,6 +630,7 @@ impl Gen<'_> {
             };
             let _ = writeln!(s, "    @location({l}){interp} l{l}: vec4<f32>,  // {v:?}");
         }
+        s.push_str(&self.clip_fields());
         s.push_str("}\n@vertex\nfn main(input: In) -> Out {\n");
         for l in &loads {
             s.push_str(l);
@@ -602,11 +648,28 @@ impl Gen<'_> {
             Some(r) => out_name(r),
             None => "o_pos".to_string(),
         };
+        let _ = writeln!(s, "    let opos = {pos};");
         // Half a pixel right and down: Direct3D 9's pixel centres (module documentation).
-        let _ = writeln!(
-            s,
-            "    out.position = {pos} + vec4<f32>(R.sys[0].xy * {pos}.w, 0.0, 0.0);"
-        );
+        s.push_str("    out.position = opos + vec4<f32>(R.sys[0].xy * opos.w, 0.0, 0.0);\n");
+        // The user clip planes' distances, from the shader's own position (with a plane on).
+        let d: Vec<String> = (0..CLIP_PLANES)
+            .map(|k| format!("dp4(R.clip[{k}], opos)"))
+            .collect();
+        match self.link.clip {
+            Clip::Off => {}
+            Clip::Distances => {
+                for (k, d) in d.iter().enumerate() {
+                    let _ = writeln!(s, "    out.clip[{k}] = {d};");
+                }
+            }
+            Clip::Discard { .. } => {
+                let _ = writeln!(
+                    s,
+                    "    out.k0 = vec4<f32>({}, {}, {}, {});\n    out.k1 = vec4<f32>({}, {}, 0.0, 0.0);",
+                    d[0], d[1], d[2], d[3], d[4], d[5]
+                );
+            }
+        }
         for (l, v) in self.link.varyings.iter().enumerate() {
             let written = self
                 .sig
@@ -642,6 +705,7 @@ impl Gen<'_> {
             };
             let _ = writeln!(s, "    @location({l}){interp} l{l}: vec4<f32>,  // {v:?}");
         }
+        s.push_str(&self.clip_fields());
         s.push_str("}\nstruct Out {\n");
         for k in 0..4 {
             if self.sig.colours & (1 << k) != 0 {
@@ -654,7 +718,15 @@ impl Gen<'_> {
         if self.sig.colours == 0 && !self.sig.depth {
             s.push_str("    @location(0) c0: vec4<f32>,\n");
         }
+        if self.link.count {
+            let _ = writeln!(s, "    @location({COUNT_TARGET}) n: vec4<f32>,");
+        }
         s.push_str("}\n@fragment\nfn main(input: In) -> Out {\n");
+        if matches!(self.link.clip, Clip::Discard { .. }) {
+            s.push_str(
+                "    if (any(input.k0 < vec4<f32>(0.0)) || any(input.k1 < vec4<f32>(0.0))) { discard; }\n",
+            );
+        }
         for (r, sem) in &self.sig.inputs {
             let l = self.link.varyings.iter().position(|v| v == sem);
             let value = match l {
@@ -686,8 +758,34 @@ impl Gen<'_> {
         if self.sig.depth {
             s.push_str("    out.depth = saturate(odepth.x);\n");
         }
+        if self.link.count {
+            s.push_str("    out.n = vec4<f32>(1.0);\n");
+        }
         s.push_str("    return out;\n}\n");
         self.out.push_str(&s);
+    }
+
+    /// The user clip distances' members of the vertex shader's output (and, with
+    /// [`Clip::Discard`], of the pixel shader's input: two varyings after the linked ones).
+    fn clip_fields(&self) -> String {
+        let l = self.link.varyings.len();
+        match self.link.clip {
+            Clip::Distances if self.vertex() => {
+                format!("    @builtin(clip_distances) clip: array<f32, {CLIP_PLANES}>,\n")
+            }
+            Clip::Distances | Clip::Off => String::new(),
+            Clip::Discard { per_sample } => {
+                let interp = if per_sample {
+                    " @interpolate(perspective, sample)"
+                } else {
+                    ""
+                };
+                format!(
+                    "    @location({l}){interp} k0: vec4<f32>,\n    @location({}){interp} k1: vec4<f32>,\n",
+                    l + 1
+                )
+            }
+        }
     }
 
     /// A source register's value as a vec4 expression, before swizzle and modifier.
@@ -1321,6 +1419,7 @@ mod tests {
                 index: 0,
             }],
             centroid: Vec::new(),
+            ..Link::default()
         };
         let source = convert(&p, &link).unwrap();
         validate(&source);
@@ -1439,7 +1538,79 @@ mod tests {
             s.contains("vec4<i32>(floor((v0).xxxx + vec4<f32>(0.5)))"),
             "{s}"
         );
-        assert!(s.contains("out.position = o0 + "), "{s}");
+        assert!(s.contains("let opos = o0;"), "{s}");
+        assert!(
+            s.contains("out.position = opos + vec4<f32>(R.sys[0].xy * opos.w, 0.0, 0.0);"),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn clip_planes_and_the_occlusion_count_convert_to_valid_wgsl() {
+        let vs = super::super::tests::small_vertex_shader();
+        let ps = [
+            0xFFFF_0200,
+            0x0200_001F,
+            0x8000_0000,
+            0xB00F_0000,
+            0x0200_0001,
+            0x800F_0800,
+            0xB0E4_0000,
+            super::super::END,
+        ];
+        let varyings = vec![Semantic {
+            usage: usage::TEXCOORD,
+            index: 0,
+        }];
+        let modes = [
+            Clip::Off,
+            Clip::Distances,
+            Clip::Discard { per_sample: false },
+            Clip::Discard { per_sample: true },
+        ];
+        for clip in modes {
+            let discard = matches!(clip, Clip::Discard { .. });
+            {
+                let link = Link {
+                    inputs: vec![Input::Float(4)],
+                    varyings: varyings.clone(),
+                    clip,
+                    ..Link::default()
+                };
+                let v = converts(&vs, &link);
+                assert_eq!(
+                    v.contains("@builtin(clip_distances) clip: array<f32, 6>"),
+                    clip == Clip::Distances,
+                    "{v}"
+                );
+                assert_eq!(
+                    v.starts_with("enable clip_distances;"),
+                    clip == Clip::Distances
+                );
+                assert_eq!(v.contains("dp4(R.clip[5], opos)"), clip != Clip::Off, "{v}");
+                assert!(
+                    v.contains("out.position = opos + vec4<f32>(R.sys[0].xy * opos.w, 0.0, 0.0);"),
+                    "{v}"
+                );
+                assert_eq!(v.contains("k0: vec4<f32>"), discard, "{v}");
+                assert_eq!(
+                    v.contains("@interpolate(perspective, sample) k0"),
+                    clip == Clip::Discard { per_sample: true }
+                );
+                let p = converts(
+                    &ps,
+                    &Link {
+                        varyings: varyings.clone(),
+                        clip,
+                        count: true,
+                        ..Link::default()
+                    },
+                );
+                assert_eq!(p.contains("any(input.k0 < "), discard, "{p}");
+                assert!(p.contains("@location(4) n: vec4<f32>"), "{p}");
+                assert!(p.contains("out.n = vec4<f32>(1.0);"), "{p}");
+            }
+        }
     }
 
     #[test]

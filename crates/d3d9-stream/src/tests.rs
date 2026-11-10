@@ -1019,6 +1019,24 @@ fn a_tee_feeds_both_and_the_primary_answers() {
 }
 
 #[test]
+fn a_tee_counts_the_query_results_both_give_alike_and_otherwise() {
+    let shadow = Log {
+        offset: 2,
+        ..Log::default()
+    };
+    let mut tee = Tee::new(Box::new(Log::default()), Box::new(shadow));
+    let get = Cmd::QueryGetData { query: 7, flags: 1 };
+    // Both answer 0 draws + offset: 0 and 2, different.
+    assert!(matches!(tee.execute(get), Reply::Query(Some((0, 0)))));
+    assert_eq!(tee.query_results(), (0, 1));
+    let alike = Log::default();
+    let mut tee = Tee::new(Box::new(Log::default()), Box::new(alike));
+    tee.execute(get);
+    tee.execute(Cmd::SetFvf { device: 1, fvf: 2 });
+    assert_eq!(tee.query_results(), (1, 0));
+}
+
+#[test]
 fn a_shadow_that_panics_is_left_out() {
     let shadow = Log {
         refuse: Some("SetFvf"),

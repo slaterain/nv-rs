@@ -165,7 +165,7 @@ Play.exe sets these for every run; set them by hand only to run `nv-viewer` with
 
 | Variable | What it does | Default without Play.exe |
 | --- | --- | --- |
-| `NV_D3D9=real`, `wgpu` or `real,wgpu` | The game's own window, drawn by the real Direct3D 9 (`real`), by wgpu alone (`wgpu`, `crates/d3d9-wgpu`: for testing, not yet complete), or by the real one with wgpu drawing every frame off screen beside it (`real,wgpu`, for comparison: with `NV_SHOT` both are captured, numbered alike, wgpu's as `wgpu-frame-*.bmp`) | nothing is shown |
+| `NV_D3D9=real`, `wgpu` or `real,wgpu` | The game's own window, drawn by the real Direct3D 9 (`real`), by wgpu alone (`wgpu`, `crates/d3d9-wgpu`: for testing; checked from the main menu into Doc Mitchell's house, the race menu and the Pip-Boy, not yet outdoors), or by the real one with wgpu drawing every frame off screen beside it (`real,wgpu`, for comparison: with `NV_SHOT` both are captured, numbered alike, wgpu's as `wgpu-frame-*.bmp`) | nothing is shown |
 | `NV_SOUND=out` (or `device`) | The game's sound through DirectSound (`device` keeps the device's pace instead of the game's clock) | silent |
 | `NV_D3D9_ADAPTER=FILE` | The display adapter table | `%LOCALAPPDATA%\nv-rs\d3d9_adapter.tsv` |
 | `NV_DSOUND_TABLE=FILE` | The DirectSound devices and mixing table | none: the run stops and says how to capture it |
@@ -197,7 +197,7 @@ None of these is for players.
 | `NV_WAKE_DELAY=n` | Stepped threads: calls after a signal before the threads it woke run | built-in |
 | `NV_TEXTURES=dll` | The game's textures from the player's 64-bit `d3dx9_38.dll` (with `NV_D3D9=real`) or the texture cache, as before `crates/d3dx-tex`; files `crates/d3dx-tex` does not translate, and a thread at 64-bit precision, go to the DLL in any case, and without one are refused as D3DX refuses a file it cannot read | `crates/d3dx-tex` makes them, byte for byte the 32-bit DLL's |
 | `NV_D3D9_PRESENT=immediate` | The real Direct3D 9 device and the wgpu backend present without waiting for the display, so a frame rate measures the work | the game's `iPresentInterval` |
-| `NV_WGPU_BACKEND=dx12`, `vulkan` or `gl`; `NV_WGPU_DEBUG` | wgpu backend: which graphics interface; wgpu's own debug checks | Direct3D 12 on Windows; off |
+| `NV_WGPU_BACKEND=dx12`, `vulkan`, `gl` or `software`; `NV_WGPU_DEBUG` | wgpu backend: which graphics interface (`software`: the platform's software adapter, WARP on Windows, the one CI's runners have: for running the GPU tests there); wgpu's own debug checks | Direct3D 12 on Windows; off |
 | **Scripted input and movement runs** | | |
 | `NV_MOVE_KEYS`*, `NV_MOVE_MOUSE`* | Scripted keys and mouse by main's frame (`crates/host/src/player_move.rs`) | none |
 | `NV_MOVE_REAL_INPUT=1`* | Real input reaches the game even with a script set | off |
@@ -208,7 +208,7 @@ None of these is for players.
 | `NV_MOVE_WATCH`* | The words at the listed addresses, printed with the status line | off |
 | `NV_MOVE_TSV`*, `NV_DATA`, `NV_CAPTURE`, `NV_FEET` | Inputs of the ignored live tests (`crates/host/tests`, `crates/engine/tests`) | none |
 | **Frames, sound and logs** | | |
-| `NV_SHOT=DIR[,every_ms]`*, `NV_SHOT_FRAMES=FROM-TO`, `NV_SHOT_LIST`, `NV_SHOT_WGPU=DIR` | Screenshots of the game's frames to DIR; only those presents; a list of presents; the wgpu backend's own folder | off |
+| `NV_SHOT=DIR[,every_ms]`*, `NV_SHOT_FRAMES=FROM-TO`, `NV_SHOT_LIST`, `NV_SHOT_WGPU=DIR` | Screenshots of the game's frames to DIR; only those presents; a list of presents; the wgpu backend's own folder (on wgpu alone in a window, the frame the window got is captured too, as `wgpu-window-*.bmp`) | off |
 | `NV_FRAME_LOG=FILE`* | One line per main frame (clock, step, player position), with no per-call cost | off |
 | `NV_LOCK_STATS=FILE`*, `NV_REAL_DUMP`* | Real threads: a line per main frame on the game clock and the waits; a dump of thread-local-storage misuse | off |
 | `NV_PHYS_BLEND_LOG=FILE`* | What the smooth physics drawing did each frame | off |
