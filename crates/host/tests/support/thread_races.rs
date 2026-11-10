@@ -151,7 +151,7 @@ fn nodes(e: &Engine, manager: u32) -> usize {
 
 /// Runs up to `rounds` scrap-heap rounds and `turns` face-gen takes per participant, within
 /// `limit` for the rounds. `row` installs the thread-race row first (before the first fork, so
-/// the helpers' function table has it). None when the machine has one core.
+/// the helpers' function table has it). None below four cores.
 pub fn run(row: bool, rounds: usize, turns: usize, limit: Duration) -> Option<Counts> {
     let helpers = helpers();
     if helpers == 0 {

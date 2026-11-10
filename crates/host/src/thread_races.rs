@@ -190,8 +190,9 @@ pub fn thread_scrap_heap(e: &mut Engine, manager: u32) -> u32 {
 /// Runs `f` (the map's look-up or insert) under [`MAP_LOCK`], with the engine's time-slice hook
 /// taken out meanwhile, as `real_threads::fork` does for the caller's part: under the stepped host
 /// no turn ends inside (the slice's end and its hard cap both come through that hook, and the map's
-/// functions reach no blocking call). A wake asked for meanwhile sets the hook itself; it is then
-/// kept.
+/// functions reach no blocking call). That rests on the node's allocation (`Allocate`, through the
+/// map's slot +0x14) not blocking: the platform heap's never does. A wake asked for meanwhile sets
+/// the hook itself; it is then kept.
 fn locked<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
     let hook = e.slice_hook.take();
     let guard = map_lock();
@@ -374,6 +375,7 @@ mod tests {
     /// (the translations alone) the print and the console print take no section at all.
     #[test]
     fn debug_text_functions_run_inside_the_section() {
+        let _serial = serial();
         for fix in [false, true] {
             let mut e = Engine::new();
             if fix {
