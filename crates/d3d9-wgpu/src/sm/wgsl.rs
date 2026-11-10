@@ -71,11 +71,33 @@ pub const FLOAT_CONSTANTS: u32 = 256;
 pub const INT_CONSTANTS: u32 = 16;
 pub const BOOL_CONSTANTS: u32 = 16;
 
-/// The uniform block both stages read (`Regs`), in bytes: `c`, `i`, `b` (16 words in 4
-/// vectors), `sys` (4 vectors of the device's values), `fix` (each sampler's fill mode, 16
-/// words), `bias` (each sampler's LOD bias) and `clip` (the user clip planes, [`CLIP_PLANES`]).
-pub const REGS_SIZE: u64 =
-    16 * 256 + 16 * 16 + 16 * 4 + 16 * 4 + 16 * 4 + 16 * 4 + 16 * CLIP_PLANES as u64;
+/// The uniform block both stages read (`Regs`), in bytes: `i`, `b` (16 words in 4 vectors),
+/// `sys` (4 vectors of the device's values), `fix` (each sampler's fill mode, 16 words), `bias`
+/// (each sampler's LOD bias), `clip` (the user clip planes, [`CLIP_PLANES`]) and last `c`, so a
+/// block can stop after the float constants its shader reads ([`float_constants_read`]).
+pub const REGS_SIZE: u64 = REGS_C_OFFSET + 16 * 256;
+/// Where `c` starts in `Regs`.
+pub const REGS_C_OFFSET: u64 = 16 * 16 + 16 * 4 + 16 * 4 + 16 * 4 + 16 * 4 + 16 * CLIP_PLANES as u64;
+
+/// How many float constants (`c0` up) a shader can read from the device's registers, at least:
+/// one past the highest register a source names, plus 3 (a matrix instruction such as `m4x4`
+/// reads the next three after the one it names); all 256 when any is read through an address
+/// register. Constants the shader defines (`def`) are read as well (harmless: the count only
+/// says what the device must provide).
+pub fn float_constants_read(p: &Program) -> u32 {
+    let mut n = 0;
+    for ins in &p.ins {
+        for s in &ins.src {
+            if s.reg.ty == reg::CONST {
+                if s.rel.is_some() {
+                    return FLOAT_CONSTANTS;
+                }
+                n = n.max(s.reg.n + 4);
+            }
+        }
+    }
+    n.min(FLOAT_CONSTANTS)
+}
 
 /// The binding of sampler register `n`'s texture in group 1 (its sampler is the next one):
 /// pixel samplers from 0, vertex samplers from 32.
@@ -253,13 +275,13 @@ const COMPONENTS: [char; 4] = ['x', 'y', 'z', 'w'];
 const PRELUDE: &str = "diagnostic(off, derivative_uniformity);
 
 struct Regs {
-    c: array<vec4<f32>, 256>,
     i: array<vec4<i32>, 16>,
     b: array<vec4<u32>, 4>,
     sys: array<vec4<f32>, 4>,
     fix: array<vec4<u32>, 4>,
     bias: array<vec4<f32>, 4>,
     clip: array<vec4<f32>, 6>,
+    c: array<vec4<f32>, 256>,
 }
 
 // Direct3D 9 multiplication: 0 times anything is 0.
@@ -1433,6 +1455,35 @@ mod tests {
         assert!(source.contains("out.l0 = o0;"), "{source}");
     }
 
+    /// The highest `R.c[n]` a converted shader reads, plus one.
+    fn constants_in(source: &str) -> u32 {
+        source
+            .match_indices("R.c[")
+            .filter_map(|(at, _)| {
+                let rest = &source[at + 4..];
+                rest[..rest.find(']')?].parse::<u32>().ok()
+            })
+            .map(|n| n + 1)
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn a_block_carries_every_constant_the_converted_shader_reads() {
+        // m4x4 oPos, v0, c0 reads c0 to c3 (the instruction names only c0).
+        let p = parse(&small_vertex_shader()).unwrap();
+        let link = Link {
+            inputs: vec![Input::Float(3)],
+            ..Link::default()
+        };
+        let source = convert(&p, &link).unwrap();
+        assert_eq!(constants_in(&source), 4, "{source}");
+        assert_eq!(float_constants_read(&p), 4);
+        assert_eq!(REGS_C_OFFSET % 16, 0);
+        assert_eq!(REGS_SIZE, 608 + 16 * 256);
+        assert!(PRELUDE.contains("clip: array<vec4<f32>, 6>,\n    c: array<vec4<f32>, 256>,\n}"));
+    }
+
     fn converts(tokens: &[u32], link: &Link) -> String {
         let p = parse(tokens).unwrap();
         let source = convert(&p, link).unwrap();
@@ -1536,6 +1587,8 @@ mod tests {
             "{s}"
         );
         assert!(s.contains("cr(i32(8) + a0.x)"), "{s}");
+        // Read through an address register: the block carries all 256.
+        assert_eq!(float_constants_read(&parse(&t).unwrap()), FLOAT_CONSTANTS);
         assert!(
             s.contains("vec4<i32>(floor((v0).xxxx + vec4<f32>(0.5)))"),
             "{s}"

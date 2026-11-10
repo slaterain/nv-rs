@@ -12,7 +12,8 @@ use crate::shot::{self, Shots};
 use crate::sm::{self, wgsl, Stage};
 use crate::state::{self, rs, SamplerKey};
 use d3d9_stream::{Handle, Rect};
-use std::collections::{HashMap, HashSet};
+use crate::fxhash::Map;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -65,6 +66,10 @@ pub(crate) struct Shader {
     program: sm::Program,
     sig: wgsl::Signature,
     id: u64,
+    /// The float constants its uniform block must carry ([`wgsl::float_constants_read`]).
+    fregs: u32,
+    /// Its inputs' varyings (a pixel shader's link to the vertex shader).
+    varyings: Vec<wgsl::Semantic>,
 }
 
 /// A `D3DVERTEXELEMENT9`.
@@ -166,8 +171,8 @@ struct State {
     psb: [u32; 16],
     /// The user clip planes (`SetClipPlane`), float bits.
     clip: [[u32; 4]; wgsl::CLIP_PLANES],
-    /// The uniform blocks need writing again.
-    dirty: bool,
+    /// The vertex and pixel stage's uniform blocks need writing again.
+    dirty: [bool; 2],
 }
 
 /// What a render pass draws into.
@@ -191,13 +196,49 @@ struct PipeKey {
     depth: Option<wgpu::TextureFormat>,
     states: [u32; 30],
     samples: u32,
-    samplers: Vec<(u32, u8, bool)>,
+    /// Whether each of the shaders' samplers ([`Device::sampler_bindings`], in order) filters:
+    /// with the two shaders, what the bind group's layout is made from.
+    filterable: u32,
     /// NVIDIA's alpha to coverage in place of the alpha test ([`ATOC`]).
     atoc: bool,
     /// The pass has the occlusion count's target.
     count: bool,
     /// The user clip planes' code ([`Device::clip_link`]).
     clip: wgsl::Clip,
+}
+
+/// The samplers a draw's two shaders use ([`Device::sampler_bindings`]): (binding, dimension,
+/// filterable) and the device's sampler slot; at most 16 pixel and 4 vertex samplers.
+#[derive(Clone, Copy, Default)]
+struct Bindings {
+    n: usize,
+    b: [((u32, u8, bool), usize); 20],
+}
+
+impl Bindings {
+    fn as_slice(&self) -> &[((u32, u8, bool), usize)] {
+        &self.b[..self.n]
+    }
+}
+
+/// A vertex shader's inputs read from a declaration ([`Device::vertex_link`]).
+struct VertexLink {
+    inputs: Vec<wgsl::Input>,
+    attributes: [Vec<wgpu::VertexAttribute>; 8],
+}
+
+/// What the open render pass was last given, so a draw sends only what changed.
+#[derive(Default)]
+struct PassBinds {
+    pipeline: Option<wgpu::RenderPipeline>,
+    blocks: Option<(u32, u32)>,
+    group: Option<wgpu::BindGroup>,
+    viewport: Option<[u32; 6]>,
+    scissor: Option<(u32, u32, u32, u32)>,
+    stencil: Option<u32>,
+    blend: Option<u32>,
+    streams: [Option<(wgpu::Buffer, u64)>; 8],
+    index: Option<(wgpu::Buffer, bool)>,
 }
 
 /// The render states a pipeline is made from.
@@ -293,7 +334,7 @@ pub struct Device {
     adapter_name: String,
     surface: Option<(wgpu::Surface<'static>, wgpu::SurfaceConfiguration)>,
     present_interval: u32,
-    objects: HashMap<Handle, Obj>,
+    objects: Map<Handle, Obj>,
     back_buffers: Vec<Handle>,
     auto_depth: Handle,
     st: State,
@@ -308,11 +349,21 @@ pub struct Device {
     up: Vec<u8>,
     up_buffer: wgpu::Buffer,
     blocks: (u32, u32),
+    /// The float constants each stage's last written block carries.
+    block_fregs: [u32; 2],
     #[allow(clippy::type_complexity)]
-    sampler_layouts: HashMap<Vec<(u32, u8, bool)>, (wgpu::BindGroupLayout, wgpu::PipelineLayout)>,
-    pipelines: HashMap<PipeKey, Option<wgpu::RenderPipeline>>,
+    sampler_layouts: Map<Vec<(u32, u8, bool)>, (wgpu::BindGroupLayout, wgpu::PipelineLayout)>,
+    pipelines: Map<PipeKey, Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout)>>,
+    /// The last draw's pipeline key and pipeline, its bind group's key and group, its vertex
+    /// link; the vertex links by shader and declaration; what the open pass was given.
     #[allow(clippy::type_complexity)]
-    vs_modules: HashMap<
+    last_pipeline: Option<(PipeKey, Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout)>)>,
+    last_group: (Vec<(u32, u64, Option<SamplerKey>)>, Option<wgpu::BindGroup>),
+    last_link: Option<((u64, u64), Arc<VertexLink>)>,
+    vertex_links: Map<(u64, u64), Arc<VertexLink>>,
+    binds: PassBinds,
+    #[allow(clippy::type_complexity)]
+    vs_modules: Map<
         (
             u64,
             Vec<wgsl::Input>,
@@ -323,18 +374,18 @@ pub struct Device {
         Option<wgpu::ShaderModule>,
     >,
     #[allow(clippy::type_complexity)]
-    ps_modules: HashMap<(u64, Vec<wgsl::Semantic>, bool, wgsl::Clip), Option<wgpu::ShaderModule>>,
-    samplers: HashMap<SamplerKey, wgpu::Sampler>,
-    groups: HashMap<Vec<(u32, u64, Option<SamplerKey>)>, wgpu::BindGroup>,
-    blit: HashMap<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
+    ps_modules: Map<(u64, Vec<wgsl::Semantic>, bool, wgsl::Clip), Option<wgpu::ShaderModule>>,
+    samplers: Map<SamplerKey, wgpu::Sampler>,
+    groups: Map<Vec<(u32, u64, Option<SamplerKey>)>, wgpu::BindGroup>,
+    blit: Map<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
     blit_layout: Option<wgpu::BindGroupLayout>,
     #[allow(clippy::type_complexity)]
     gamma_resolves:
-        HashMap<(wgpu::TextureFormat, u32, bool), (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
+        Map<(wgpu::TextureFormat, u32, bool), (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
     /// Depth stand-ins for targets smaller than the bound depth surface ([`Device::usable_depth`]).
-    depth_parts: HashMap<(u64, u32, u32), Arc<Surf>>,
+    depth_parts: Map<(u64, u32, u32), Arc<Surf>>,
     #[allow(clippy::type_complexity)]
-    clears: HashMap<
+    clears: Map<
         (
             [Option<(wgpu::TextureFormat, bool)>; 4],
             Option<wgpu::TextureFormat>,
@@ -352,15 +403,15 @@ pub struct Device {
     /// The levels whose bytes the backend keeps (managed and system-memory pools: what
     /// `ReadSurface` answers), by the texture or surface they belong to; and those bytes, as the
     /// game last gave them (`UploadSurface`) or `GetRenderTargetData` wrote them.
-    keeps: HashMap<Handle, Vec<Handle>>,
-    kept: HashMap<Handle, Vec<u8>>,
+    keeps: Map<Handle, Vec<Handle>>,
+    kept: Map<Handle, Vec<u8>>,
     /// The occlusion query counting now (its `D3DISSUE_BEGIN` until its `END`) and its slot.
     counting: Option<(Handle, u32)>,
     pass_count: Option<CountSegment>,
-    count_targets: HashMap<(u32, u32, u32), wgpu::TextureView>,
+    count_targets: Map<(u32, u32, u32), wgpu::TextureView>,
     count_buffer: wgpu::Buffer,
     next_count_slot: u32,
-    reduce: HashMap<bool, (wgpu::ComputePipeline, wgpu::BindGroupLayout)>,
+    reduce: Map<bool, (wgpu::ComputePipeline, wgpu::BindGroupLayout)>,
     next_id: u64,
     presents: u64,
     shots: Option<Shots>,
@@ -561,7 +612,7 @@ impl Device {
             adapter_name,
             surface: None,
             present_interval: pp.interval,
-            objects: HashMap::new(),
+            objects: Map::default(),
             back_buffers: Vec::new(),
             auto_depth: 0,
             st: State {
@@ -584,7 +635,7 @@ impl Device {
                 psi: [[0; 4]; 16],
                 psb: [0; 16],
                 clip: [[0; 4]; wgsl::CLIP_PLANES],
-                dirty: true,
+                dirty: [true; 2],
             },
             encoder: None,
             pass: None,
@@ -597,30 +648,36 @@ impl Device {
             up: Vec::new(),
             up_buffer,
             blocks: (0, 0),
-            sampler_layouts: HashMap::new(),
-            pipelines: HashMap::new(),
-            vs_modules: HashMap::new(),
-            ps_modules: HashMap::new(),
-            samplers: HashMap::new(),
-            groups: HashMap::new(),
-            blit: HashMap::new(),
+            block_fregs: [0; 2],
+            sampler_layouts: Map::default(),
+            pipelines: Map::default(),
+            last_pipeline: None,
+            last_group: (Vec::new(), None),
+            last_link: None,
+            vertex_links: Map::default(),
+            binds: PassBinds::default(),
+            vs_modules: Map::default(),
+            ps_modules: Map::default(),
+            samplers: Map::default(),
+            groups: Map::default(),
+            blit: Map::default(),
             blit_layout: None,
-            gamma_resolves: HashMap::new(),
-            depth_parts: HashMap::new(),
-            clears: HashMap::new(),
+            gamma_resolves: Map::default(),
+            depth_parts: Map::default(),
+            clears: Map::default(),
             dummy,
             border: features.contains(wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER),
             float_filterable: features.contains(wgpu::Features::FLOAT32_FILTERABLE),
             clip_distances: features.contains(wgpu::Features::CLIP_DISTANCES),
             block_centre: [0.0; 2],
-            keeps: HashMap::new(),
-            kept: HashMap::new(),
+            keeps: Map::default(),
+            kept: Map::default(),
             counting: None,
             pass_count: None,
-            count_targets: HashMap::new(),
+            count_targets: Map::default(),
             count_buffer,
             next_count_slot: 0,
-            reduce: HashMap::new(),
+            reduce: Map::default(),
             next_id: 1,
             presents: 0,
             shots: Shots::from_env(),
@@ -1005,8 +1062,18 @@ impl Device {
             Ok(program) => {
                 let sig = wgsl::signature(&program);
                 let id = self.id();
-                self.objects
-                    .insert(shader, Obj::Shader(Arc::new(Shader { program, sig, id })));
+                let fregs = wgsl::float_constants_read(&program);
+                let varyings = sig.inputs.iter().map(|(_, s)| *s).collect();
+                self.objects.insert(
+                    shader,
+                    Obj::Shader(Arc::new(Shader {
+                        program,
+                        sig,
+                        id,
+                        fregs,
+                        varyings,
+                    })),
+                );
             }
             Err(e) => self.warn(format!("a shader the converter cannot read: {e}")),
         }
@@ -1073,7 +1140,7 @@ impl Device {
             self.queue.submit([e.finish()]);
         }
         self.batch += 1;
-        self.st.dirty = true;
+        self.st.dirty = [true; 2];
     }
 
     pub(crate) fn upload_surface(&mut self, surface: Handle, data: &[u8]) {
@@ -1188,7 +1255,7 @@ impl Device {
         if let Some(slot) = self.st.rt.get_mut(index as usize) {
             *slot = s;
         }
-        self.st.dirty = true;
+        self.st.dirty = [true; 2];
     }
 
     pub(crate) fn set_depth_stencil(&mut self, surface: Handle) {
@@ -1198,7 +1265,7 @@ impl Device {
             self.surface_of(surface)
         };
         // The targets' sample count decides the alpha to coverage switch ([`ATOC`]).
-        self.st.dirty = true;
+        self.st.dirty = [true; 2];
     }
 
     /// `SetClipPlane(index, plane)`: in clip space, as Direct3D 9 takes them with a vertex
@@ -1206,7 +1273,7 @@ impl Device {
     pub(crate) fn set_clip_plane(&mut self, index: u32, plane: [u32; 4]) {
         if let Some(p) = self.st.clip.get_mut(index as usize) {
             *p = plane;
-            self.st.dirty = true;
+            self.st.dirty[0] = true;
         }
     }
 
@@ -1219,7 +1286,7 @@ impl Device {
             min_z: f32::from_bits(v[4]),
             max_z: f32::from_bits(v[5]),
         };
-        self.st.dirty = true;
+        self.st.dirty[0] = true;
     }
 
     pub(crate) fn set_scissor(&mut self, r: Rect) {
@@ -1231,12 +1298,11 @@ impl Device {
             *s = value;
         }
         match state as usize {
-            rs::ALPHATESTENABLE
-            | rs::ALPHAREF
-            | rs::ALPHAFUNC
-            | rs::CLIPPLANEENABLE
-            | RS_CLIPPING
-            | RS_ADAPTIVETESS_Y => self.st.dirty = true,
+            // The pixel block's alpha test and alpha to coverage; the vertex block's clip planes.
+            rs::ALPHATESTENABLE | rs::ALPHAREF | rs::ALPHAFUNC | RS_ADAPTIVETESS_Y => {
+                self.st.dirty[1] = true
+            }
+            rs::CLIPPLANEENABLE | RS_CLIPPING => self.st.dirty[0] = true,
             rs::FOGENABLE if value != 0 => {
                 self.warn("D3DRS_FOGENABLE (fixed-function fog) is not provided")
             }
@@ -1261,7 +1327,7 @@ impl Device {
             if let Some(s) = self.st.samplers[slot].get_mut(kind as usize) {
                 *s = value;
             }
-            self.st.dirty = true;
+            self.st.dirty[usize::from(slot < 16)] = true;
             if kind as usize == state::ss::SRGBTEXTURE && value != 0 {
                 self.warn("D3DSAMP_SRGBTEXTURE is not provided yet");
             }
@@ -1275,7 +1341,7 @@ impl Device {
             } else {
                 self.texture_of(texture)
             };
-            self.st.dirty = true;
+            self.st.dirty[usize::from(slot < 16)] = true;
         }
     }
 
@@ -1327,7 +1393,7 @@ impl Device {
                 }
             }
         }
-        st.dirty = true;
+        st.dirty[usize::from(kind >= 3)] = true;
     }
 
     pub(crate) fn set_stream(&mut self, stream: u32, buffer: Handle, offset: u32, stride: u32) {
@@ -1779,6 +1845,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             })
             .forget_lifetime();
         self.pass = Some(pass);
+        self.binds = PassBinds::default();
         self.pass_targets = Some(targets);
         self.pass_count = count;
         // The surfaces' textures are in use by this batch.
@@ -2030,6 +2097,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }],
         });
         self.begin_pass(None);
+        // The clear's own pipeline, group, viewport and scissor: the next draw sets its own.
+        self.binds = PassBinds::default();
         let pass = self.pass.as_mut().expect("a pass is open");
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &group, &[]);
@@ -2168,8 +2237,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
 
     /// The samplers both shaders use, as (binding, dimension, filterable) and the device sampler
     /// slot.
-    fn sampler_bindings(&self, vs: &Shader, ps: &Shader) -> Vec<((u32, u8, bool), usize)> {
-        let mut out = Vec::new();
+    fn sampler_bindings(&self, vs: &Shader, ps: &Shader) -> Bindings {
+        let mut out = Bindings::default();
         for (stage, shader) in [(Stage::Vertex, vs), (Stage::Pixel, ps)] {
             for &(n, dim) in &shader.sig.samplers {
                 let slot = match stage {
@@ -2185,10 +2254,64 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     wgsl::Dim::D3 => 2,
                 };
                 let filterable = self.filterable(self.st.textures[slot].as_ref());
-                out.push(((wgsl::texture_binding(stage, n), d, filterable), slot));
+                if out.n < out.b.len() {
+                    out.b[out.n] = ((wgsl::texture_binding(stage, n), d, filterable), slot);
+                    out.n += 1;
+                }
             }
         }
         out
+    }
+
+    /// The vertex inputs of `vs` read from `decl`'s elements: each shader input from the
+    /// declaration's element of its usage, the attributes by stream. Made once for each pair.
+    fn vertex_link(&mut self, vs: &Shader, decl: &Decl) -> Arc<VertexLink> {
+        let key = (vs.id, decl.id);
+        if let Some((k, l)) = &self.last_link {
+            if *k == key {
+                return l.clone();
+            }
+        }
+        let link = match self.vertex_links.get(&key) {
+            Some(l) => l.clone(),
+            None => {
+                let mut inputs = vec![wgsl::Input::Missing; 16];
+                let mut attributes: [Vec<wgpu::VertexAttribute>; 8] = Default::default();
+                for (r, sem) in &vs.sig.inputs {
+                    if r.n >= 16 {
+                        continue;
+                    }
+                    let Some(e) = decl
+                        .elements
+                        .iter()
+                        .find(|e| e.usage == sem.usage && e.index == sem.index)
+                    else {
+                        continue;
+                    };
+                    let Some((format, input)) = Self::input_of(e.ty) else {
+                        self.warn(format!("vertex element type {} is not provided", e.ty));
+                        continue;
+                    };
+                    if e.stream >= 8 {
+                        continue;
+                    }
+                    inputs[r.n as usize] = input;
+                    attributes[e.stream as usize].push(wgpu::VertexAttribute {
+                        format,
+                        offset: u64::from(e.offset),
+                        shader_location: r.n,
+                    });
+                }
+                if self.vertex_links.len() >= 8192 {
+                    self.vertex_links.clear();
+                }
+                let l = Arc::new(VertexLink { inputs, attributes });
+                self.vertex_links.insert(key, l.clone());
+                l
+            }
+        };
+        self.last_link = Some((key, link.clone()));
+        link
     }
 
     fn topology(kind: u32) -> Option<wgpu::PrimitiveTopology> {
@@ -2216,28 +2339,27 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     }
 
     /// The uniform blocks of the next draw; `centre`: the vertex shaders' half-pixel move in clip
-    /// space per unit of `w` (`1 / width`, `-1 / height` of the draw's viewport).
-    fn write_blocks(&mut self, centre: [f32; 2]) {
-        if !self.st.dirty && !self.ring.is_empty() && centre == self.block_centre {
-            return;
-        }
-        self.block_centre = centre;
+    /// space per unit of `w` (`1 / width`, `-1 / height` of the draw's viewport); `fregs`: the
+    /// float constants the vertex and pixel shader read ([`Shader::fregs`]). Each stage's block is
+    /// written again only when what it carries changed (or its shader reads constants beyond the
+    /// ones it carries), and carries only the constants up to the highest its shader reads: the
+    /// bytes a shader reads are the same as with whole blocks.
+    fn write_blocks(&mut self, centre: [f32; 2], fregs: [u32; 2]) {
         if self.ring.len() as u64 + 2 * BLOCK > RING {
             self.flush();
         }
-        let atoc = self.atoc();
+        let fresh = self.ring.is_empty();
+        let vs_due = fresh
+            || self.st.dirty[0]
+            || centre != self.block_centre
+            || fregs[0] > self.block_fregs[0];
+        let ps_due = fresh || self.st.dirty[1] || fregs[1] > self.block_fregs[1];
+        if !vs_due && !ps_due {
+            return;
+        }
+        let atoc = ps_due && self.atoc();
         let mut ring = std::mem::take(&mut self.ring);
         let st = &self.st;
-        // The planes `D3DRS_CLIPPLANEENABLE` turns on (all off without `D3DRS_CLIPPING`); a plane
-        // that is off is zero, which keeps everything.
-        let mut clip = [[0u32; 4]; wgsl::CLIP_PLANES];
-        if st.rs[RS_CLIPPING] != 0 {
-            for (k, plane) in clip.iter_mut().enumerate() {
-                if st.rs[rs::CLIPPLANEENABLE] & (1 << k) != 0 {
-                    *plane = st.clip[k];
-                }
-            }
-        }
         // Each sampler's fill mode (its texture's format) and LOD bias.
         let per_sampler = |range: std::ops::Range<usize>| -> ([u32; 16], [f32; 16]) {
             let mut fix = [0u32; 16];
@@ -2248,40 +2370,56 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
             (fix, bias)
         };
-        // The vertex stage's system values: the half-pixel move of Direct3D 9's pixel centres.
-        let vs_sys = [centre[0], centre[1], 0.0, 0.0];
-        // The alpha test, unless alpha to coverage stands in for it ([`ATOC`]: then the
-        // comparisons NEVER, LESS, EQUAL and LESSEQUAL draw nothing, the others pass everything
-        // and the coverage comes from the alpha alone).
-        let alpha_func = match (st.rs[rs::ALPHATESTENABLE] != 0, atoc) {
-            (false, _) => 8.0,
-            (true, false) => st.rs[rs::ALPHAFUNC] as f32,
-            (true, true) if (1..=4).contains(&st.rs[rs::ALPHAFUNC]) => 1.0,
-            (true, true) => 8.0,
-        };
-        let (above, from) = alpha_bounds(st.rs[rs::ALPHAREF] & 0xFF);
-        let ps_sys = [above, alpha_func, from, 0.0];
-        let vs = write_block(
-            &mut ring,
-            &st.vsf,
-            &st.vsi,
-            &st.vsb,
-            vs_sys,
-            per_sampler(16..20),
-            &clip,
-        );
-        let ps = write_block(
-            &mut ring,
-            &st.psf,
-            &st.psi,
-            &st.psb,
-            ps_sys,
-            per_sampler(0..16),
-            &[[0; 4]; wgsl::CLIP_PLANES],
-        );
+        if vs_due {
+            // The planes `D3DRS_CLIPPLANEENABLE` turns on (all off without `D3DRS_CLIPPING`); a
+            // plane that is off is zero, which keeps everything.
+            let mut clip = [[0u32; 4]; wgsl::CLIP_PLANES];
+            if st.rs[RS_CLIPPING] != 0 {
+                for (k, plane) in clip.iter_mut().enumerate() {
+                    if st.rs[rs::CLIPPLANEENABLE] & (1 << k) != 0 {
+                        *plane = st.clip[k];
+                    }
+                }
+            }
+            // The vertex stage's system values: the half-pixel move of Direct3D 9's pixel centres.
+            let vs_sys = [centre[0], centre[1], 0.0, 0.0];
+            self.blocks.0 = write_block(
+                &mut ring,
+                &st.vsf[..fregs[0] as usize],
+                &st.vsi,
+                &st.vsb,
+                vs_sys,
+                per_sampler(16..20),
+                &clip,
+            );
+            self.block_centre = centre;
+            self.block_fregs[0] = fregs[0];
+        }
+        if ps_due {
+            // The alpha test, unless alpha to coverage stands in for it ([`ATOC`]: then the
+            // comparisons NEVER, LESS, EQUAL and LESSEQUAL draw nothing, the others pass
+            // everything and the coverage comes from the alpha alone).
+            let alpha_func = match (st.rs[rs::ALPHATESTENABLE] != 0, atoc) {
+                (false, _) => 8.0,
+                (true, false) => st.rs[rs::ALPHAFUNC] as f32,
+                (true, true) if (1..=4).contains(&st.rs[rs::ALPHAFUNC]) => 1.0,
+                (true, true) => 8.0,
+            };
+            let (above, from) = alpha_bounds(st.rs[rs::ALPHAREF] & 0xFF);
+            let ps_sys = [above, alpha_func, from, 0.0];
+            self.blocks.1 = write_block(
+                &mut ring,
+                &st.psf[..fregs[1] as usize],
+                &st.psi,
+                &st.psb,
+                ps_sys,
+                per_sampler(0..16),
+                &[[0; 4]; wgsl::CLIP_PLANES],
+            );
+            self.block_fregs[1] = fregs[1];
+        }
         self.ring = ring;
-        self.blocks = (vs, ps);
-        self.st.dirty = false;
+        self.st.dirty = [false; 2];
     }
 
     fn sampler(&mut self, key: SamplerKey) -> wgpu::Sampler {
@@ -2322,34 +2460,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.skipped += 1;
             return;
         }
-        // The vertex inputs: each shader input from the declaration's element of its usage.
-        let mut inputs = vec![wgsl::Input::Missing; 16];
-        let mut attributes: [Vec<wgpu::VertexAttribute>; 8] = Default::default();
-        for (r, sem) in &vs.sig.inputs {
-            if r.n >= 16 {
-                continue;
-            }
-            let Some(e) = decl
-                .elements
-                .iter()
-                .find(|e| e.usage == sem.usage && e.index == sem.index)
-            else {
-                continue;
-            };
-            let Some((format, input)) = Self::input_of(e.ty) else {
-                self.warn(format!("vertex element type {} is not provided", e.ty));
-                continue;
-            };
-            if e.stream >= 8 {
-                continue;
-            }
-            inputs[r.n as usize] = input;
-            attributes[e.stream as usize].push(wgpu::VertexAttribute {
-                format,
-                offset: u64::from(e.offset),
-                shader_location: r.n,
-            });
-        }
+        // The vertex inputs: each shader input from the declaration's element of its usage
+        // (linked once for each vertex shader and declaration).
+        let link = self.vertex_link(&vs, &decl);
+        let attributes = &link.attributes;
         let mut strides = [0u32; 8];
         for (k, a) in attributes.iter().enumerate() {
             if !a.is_empty() {
@@ -2360,11 +2474,24 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 };
             }
         }
-        let varyings: Vec<wgsl::Semantic> = ps.sig.inputs.iter().map(|(_, s)| *s).collect();
         let samplers = self.sampler_bindings(&vs, &ps);
+        let samplers = samplers.as_slice();
+        let filterable = samplers
+            .iter()
+            .enumerate()
+            .fold(0u32, |m, (i, &((_, _, f), _))| m | (u32::from(f) << i));
         let index32 = indexed && self.st.indices.as_ref().is_some_and(|b| b.index32);
         let depth = self.usable_depth();
         let atoc = self.atoc();
+        let samples = self
+            .st
+            .rt
+            .iter()
+            .flatten()
+            .next()
+            .map(|s| s.samples)
+            .or(depth.as_ref().map(|d| d.samples))
+            .unwrap_or(1);
         let key = PipeKey {
             vs: vs.id,
             ps: ps.id,
@@ -2379,85 +2506,98 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }),
             depth: depth.as_ref().map(|d| d.format.wgpu),
             states: PIPELINE_STATES.map(|s| self.st.rs[s]),
-            samples: self
-                .st
-                .rt
-                .iter()
-                .flatten()
-                .next()
-                .map(|s| s.samples)
-                .or(depth.as_ref().map(|d| d.samples))
-                .unwrap_or(1),
-            samplers: samplers.iter().map(|(k, _)| *k).collect(),
+            samples,
+            filterable,
             atoc,
             count: self.counting.is_some(),
-            clip: wgsl::Clip::Off,
+            clip: self.clip_link(samples),
         };
-        let key = PipeKey {
-            clip: self.clip_link(key.samples),
-            ..key
-        };
-        if !self.pipelines.contains_key(&key) {
-            // Bounded: render states with continuous values (depth bias) could grow it without end.
-            if self.pipelines.len() >= 4096 {
-                self.pipelines.clear();
+        // The last draw's pipeline again (most draws), else the cache's, else a new one.
+        let made = match &self.last_pipeline {
+            Some((k, p)) if *k == key => p.clone(),
+            _ => {
+                if !self.pipelines.contains_key(&key) {
+                    // Bounded: render states with continuous values (depth bias) could grow it
+                    // without end.
+                    if self.pipelines.len() >= 4096 {
+                        self.pipelines.clear();
+                    }
+                    let sampler_keys: Vec<(u32, u8, bool)> =
+                        samplers.iter().map(|(k, _)| *k).collect();
+                    let pipeline = self.make_pipeline(
+                        &key,
+                        &vs,
+                        &ps,
+                        &link.inputs,
+                        &ps.varyings,
+                        attributes,
+                        topology,
+                        &sampler_keys,
+                    );
+                    self.pipelines.insert(key.clone(), pipeline);
+                }
+                let p = self.pipelines.get(&key).cloned().flatten();
+                self.last_pipeline = Some((key, p.clone()));
+                p
             }
-            let pipeline =
-                self.make_pipeline(&key, &vs, &ps, &inputs, &varyings, &attributes, topology);
-            self.pipelines.insert(key.clone(), pipeline);
-        }
-        let Some(pipeline) = self.pipelines.get(&key).cloned().flatten() else {
+        };
+        let Some((pipeline, group_layout)) = made else {
             self.skipped += 1;
             return;
         };
-        // The textures and samplers.
-        let mut group_key = Vec::with_capacity(samplers.len());
-        for &((binding, _, filterable), slot) in &samplers {
+        // The textures and samplers: the last draw's bind group again, else the cache's.
+        let mut group_key = [(0u32, 0u64, None::<SamplerKey>); 20];
+        for (g, &((binding, _, filterable), slot)) in group_key.iter_mut().zip(samplers) {
             let tex_id = self.st.textures[slot].as_ref().map_or(0, |t| t.id);
             let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
-            group_key.push((binding, tex_id, Some(sk)));
+            *g = (binding, tex_id, Some(sk));
         }
-        if !self.groups.contains_key(&group_key) {
-            if self.groups.len() > 8192 {
-                self.groups.clear();
+        let group_key = &group_key[..samplers.len()];
+        let group = match &self.last_group {
+            (k, Some(g)) if k.as_slice() == group_key => g.clone(),
+            _ => {
+                if !self.groups.contains_key(group_key) {
+                    if self.groups.len() > 8192 {
+                        self.groups.clear();
+                    }
+                    let mut views = Vec::new();
+                    let mut samps = Vec::new();
+                    for &((binding, dim, filterable), slot) in samplers {
+                        let view = match &self.st.textures[slot] {
+                            Some(t) if (dim == 1) == t.cube => t.view.clone(),
+                            _ => self.dummy[dim as usize].clone(),
+                        };
+                        let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
+                        views.push((binding, view));
+                        samps.push((binding + 1, self.sampler(sk)));
+                    }
+                    let mut entries = Vec::new();
+                    for (b, v) in &views {
+                        entries.push(wgpu::BindGroupEntry {
+                            binding: *b,
+                            resource: wgpu::BindingResource::TextureView(v),
+                        });
+                    }
+                    for (b, s) in &samps {
+                        entries.push(wgpu::BindGroupEntry {
+                            binding: *b,
+                            resource: wgpu::BindingResource::Sampler(s),
+                        });
+                    }
+                    let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: None,
+                        layout: &group_layout,
+                        entries: &entries,
+                    });
+                    self.groups.insert(group_key.to_vec(), group);
+                }
+                let group = self.groups[group_key].clone();
+                self.last_group.0.clear();
+                self.last_group.0.extend_from_slice(group_key);
+                self.last_group.1 = Some(group.clone());
+                group
             }
-            let (layout, _) = self
-                .sampler_layouts
-                .get(&key.samplers)
-                .expect("made with the pipeline");
-            let layout = layout.clone();
-            let mut views = Vec::new();
-            let mut samps = Vec::new();
-            for &((binding, dim, filterable), slot) in &samplers {
-                let view = match &self.st.textures[slot] {
-                    Some(t) if (dim == 1) == t.cube => t.view.clone(),
-                    _ => self.dummy[dim as usize].clone(),
-                };
-                let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
-                views.push((binding, view));
-                samps.push((binding + 1, self.sampler(sk)));
-            }
-            let mut entries = Vec::new();
-            for (b, v) in &views {
-                entries.push(wgpu::BindGroupEntry {
-                    binding: *b,
-                    resource: wgpu::BindingResource::TextureView(v),
-                });
-            }
-            for (b, s) in &samps {
-                entries.push(wgpu::BindGroupEntry {
-                    binding: *b,
-                    resource: wgpu::BindingResource::Sampler(s),
-                });
-            }
-            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &layout,
-                entries: &entries,
-            });
-            self.groups.insert(group_key.clone(), group);
-        }
-        let group = self.groups[&group_key].clone();
+        };
         // Vertices from DrawPrimitiveUP go into the batch's ring.
         let up_offset = if let Some((bytes, _)) = up {
             if self.up.len() + bytes.len() > UP_RING as usize {
@@ -2486,7 +2626,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let vh = v.h.min(th - vy).max(1);
         // Direct3D 9's pixel centres: each vertex shader moves its position half a pixel right
         // and down, by this viewport's size (the converter's module documentation).
-        self.write_blocks([1.0 / vw as f32, -1.0 / vh as f32]);
+        self.write_blocks([1.0 / vw as f32, -1.0 / vh as f32], [vs.fregs, ps.fregs]);
         self.begin_pass(None);
         let scissor = if self.st.rs[rs::SCISSORTESTENABLE] != 0 {
             let r = self.st.scissor;
@@ -2501,22 +2641,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         if scissor.2 == 0 || scissor.3 == 0 {
             return;
         }
-        let (vs_block, ps_block) = self.blocks;
+        let blocks = self.blocks;
         let stencil_ref = self.st.rs[rs::STENCILREF] & 0xFF;
         let bf = self.st.rs[rs::BLENDFACTOR];
-        let blend_constant = wgpu::Color {
-            r: f64::from((bf >> 16) & 0xFF) / 255.0,
-            g: f64::from((bf >> 8) & 0xFF) / 255.0,
-            b: f64::from(bf & 0xFF) / 255.0,
-            a: f64::from(bf >> 24) / 255.0,
-        };
-        let mut streams = Vec::new();
+        let mut streams: [Option<(wgpu::Buffer, u64)>; 8] = Default::default();
         for (k, a) in attributes.iter().enumerate() {
             if a.is_empty() {
                 continue;
             }
             if up.is_some() && k == 0 {
-                streams.push((k as u32, self.up_buffer.clone(), up_offset.unwrap_or(0)));
+                streams[k] = Some((self.up_buffer.clone(), up_offset.unwrap_or(0)));
                 continue;
             }
             match &self.st.streams[k].buffer {
@@ -2530,7 +2664,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         return;
                     }
                     b.batch.store(self.batch, Ordering::Relaxed);
-                    streams.push((k as u32, b.buffer.clone(), offset));
+                    streams[k] = Some((b.buffer.clone(), offset));
                 }
                 None => {
                     self.warn("a draw with a stream the declaration uses unbound: skipped");
@@ -2563,7 +2697,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         };
         // The textures are this batch's from here (after any send above), so an upload into one
         // later in the batch sends the batch first.
-        for &(_, slot) in &samplers {
+        for &(_, slot) in samplers {
             if let Some(t) = &self.st.textures[slot] {
                 t.batch.store(self.batch, Ordering::Relaxed);
             }
@@ -2573,34 +2707,72 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // are the vertex shaders' move, above: a viewport moved half a pixel would cut through
         // the edge pixels on an adapter that clips at the viewport's exact edge: WARP, the
         // software adapter, does, and lost 15 of the 64 samples of a 4 by 4 target at 4x).
-        let pass = self.pass.as_mut().expect("a pass is open");
-        pass.set_pipeline(&pipeline);
-        pass.set_bind_group(0, &self.ring_group, &[vs_block, ps_block]);
-        pass.set_bind_group(1, &group, &[]);
-        pass.set_viewport(
+        // Each of the pass's settings is sent only when it differs from what the pass has.
+        let viewport = [
             vx as f32,
             vy as f32,
             vw as f32,
             vh as f32,
             v.min_z.clamp(0.0, 1.0),
             v.max_z.clamp(0.0, 1.0),
-        );
-        pass.set_scissor_rect(scissor.0, scissor.1, scissor.2, scissor.3);
-        pass.set_stencil_reference(stencil_ref);
-        pass.set_blend_constant(blend_constant);
-        for (slot, buffer, offset) in &streams {
-            pass.set_vertex_buffer(*slot, buffer.slice(*offset..));
+        ]
+        .map(f32::to_bits);
+        let b = &mut self.binds;
+        let pass = self.pass.as_mut().expect("a pass is open");
+        if b.pipeline.as_ref() != Some(&pipeline) {
+            pass.set_pipeline(&pipeline);
+            b.pipeline = Some(pipeline);
+        }
+        if b.blocks != Some(blocks) {
+            pass.set_bind_group(0, &self.ring_group, &[blocks.0, blocks.1]);
+            b.blocks = Some(blocks);
+        }
+        if b.group.as_ref() != Some(&group) {
+            pass.set_bind_group(1, &group, &[]);
+            b.group = Some(group);
+        }
+        if b.viewport != Some(viewport) {
+            let f = viewport.map(f32::from_bits);
+            pass.set_viewport(f[0], f[1], f[2], f[3], f[4], f[5]);
+            b.viewport = Some(viewport);
+        }
+        if b.scissor != Some(scissor) {
+            pass.set_scissor_rect(scissor.0, scissor.1, scissor.2, scissor.3);
+            b.scissor = Some(scissor);
+        }
+        if b.stencil != Some(stencil_ref) {
+            pass.set_stencil_reference(stencil_ref);
+            b.stencil = Some(stencil_ref);
+        }
+        if b.blend != Some(bf) {
+            pass.set_blend_constant(wgpu::Color {
+                r: f64::from((bf >> 16) & 0xFF) / 255.0,
+                g: f64::from((bf >> 8) & 0xFF) / 255.0,
+                b: f64::from(bf & 0xFF) / 255.0,
+                a: f64::from(bf >> 24) / 255.0,
+            });
+            b.blend = Some(bf);
+        }
+        for (slot, s) in streams.into_iter().enumerate() {
+            if s.is_some() && b.streams[slot] != s {
+                let (buffer, offset) = s.as_ref().expect("checked");
+                pass.set_vertex_buffer(slot as u32, buffer.slice(*offset..));
+                b.streams[slot] = s;
+            }
         }
         match index {
-            Some((buffer, index32)) => {
-                pass.set_index_buffer(
-                    buffer.slice(..),
-                    if index32 {
-                        wgpu::IndexFormat::Uint32
-                    } else {
-                        wgpu::IndexFormat::Uint16
-                    },
-                );
+            Some(i) => {
+                if b.index.as_ref() != Some(&i) {
+                    pass.set_index_buffer(
+                        i.0.slice(..),
+                        if i.1 {
+                            wgpu::IndexFormat::Uint32
+                        } else {
+                            wgpu::IndexFormat::Uint16
+                        },
+                    );
+                    b.index = Some(i);
+                }
                 pass.draw_indexed(start..start + n, base_vertex, 0..1);
             }
             None => pass.draw(start..start + n, 0..1),
@@ -2618,7 +2790,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         varyings: &[wgsl::Semantic],
         attributes: &[Vec<wgpu::VertexAttribute>; 8],
         topology: wgpu::PrimitiveTopology,
-    ) -> Option<wgpu::RenderPipeline> {
+        samplers: &[(u32, u8, bool)],
+    ) -> Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout)> {
         let vkey = (
             vs.id,
             inputs.to_vec(),
@@ -2651,7 +2824,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         let vm = self.vs_modules[&vkey].clone()?;
         let pm = self.ps_modules[&pkey].clone()?;
-        let layout = self.sampler_layout(&key.samplers);
+        let layout = self.sampler_layout(samplers);
+        let group_layout = self.sampler_layouts[samplers].0.clone();
         // One layout per stream slot up to the last used (a slot's index is its stream's number).
         let last = attributes
             .iter()
@@ -2754,7 +2928,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let pipeline = self.device.create_render_pipeline(&desc);
         match block_on(scope.pop()) {
-            None => Some(pipeline),
+            None => Some((pipeline, group_layout)),
             Some(e) => {
                 self.warn(format!("a pipeline wgpu refuses: {e}"));
                 None
@@ -3750,7 +3924,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         st.psi = [[0; 4]; 16];
         st.psb = [0; 16];
         st.clip = [[0; 4]; wgsl::CLIP_PLANES];
-        st.dirty = true;
+        st.dirty = [true; 2];
         self.counting = None;
         self.groups.clear();
         self.depth_parts.clear();
@@ -3764,12 +3938,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     }
 }
 
-/// One stage's register block (`Regs` of the converted shaders) at the end of the ring: float,
-/// integer and boolean registers, the system values, each sampler's fill mode and LOD bias. Its
-/// offset.
+/// One stage's register block (`Regs` of the converted shaders) at the end of the ring: integer
+/// and boolean registers, the system values, each sampler's fill mode and LOD bias, the clip
+/// planes, then the float registers `f` (those the stage's shader reads: the rest of the block's
+/// range is never read). Its offset; the ring grows by the block rounded up to the offset
+/// alignment.
 fn write_block(
     ring: &mut Vec<u8>,
-    f: &[[u32; 4]; 256],
+    f: &[[u32; 4]],
     i: &[[u32; 4]; 16],
     b: &[u32; 16],
     sys: [f32; 4],
@@ -3777,24 +3953,25 @@ fn write_block(
     clip: &[[u32; 4]; wgsl::CLIP_PLANES],
 ) -> u32 {
     let at = ring.len();
-    for w in f.iter().chain(i.iter()).flatten().chain(b.iter()) {
-        ring.extend_from_slice(&w.to_le_bytes());
+    let len = wgsl::REGS_C_OFFSET as usize + 16 * f.len();
+    ring.resize(at + len.div_ceil(256) * 256, 0);
+    let words = i
+        .iter()
+        .flatten()
+        .copied()
+        .chain(b.iter().copied())
+        .chain(sys.iter().map(|v| v.to_bits()))
+        .chain([0u32; 12])
+        .chain(fix)
+        .chain(bias.iter().map(|v| v.to_bits()))
+        .chain(clip.iter().flatten().copied())
+        .chain(f.iter().flatten().copied());
+    let mut n = 0;
+    for (d, w) in ring[at..at + len].chunks_exact_mut(4).zip(words) {
+        d.copy_from_slice(&w.to_le_bytes());
+        n += 4;
     }
-    for v in sys {
-        ring.extend_from_slice(&v.to_le_bytes());
-    }
-    ring.extend_from_slice(&[0u8; 48]);
-    for w in fix {
-        ring.extend_from_slice(&w.to_le_bytes());
-    }
-    for v in bias {
-        ring.extend_from_slice(&v.to_le_bytes());
-    }
-    for w in clip.iter().flatten() {
-        ring.extend_from_slice(&w.to_le_bytes());
-    }
-    debug_assert_eq!((ring.len() - at) as u64, wgsl::REGS_SIZE);
-    ring.resize(at + BLOCK as usize, 0);
+    debug_assert_eq!(n, len);
     at as u32
 }
 
