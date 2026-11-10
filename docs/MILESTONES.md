@@ -38,6 +38,9 @@ typed functions), is on since 2026-11-09: the whole family on against main's def
 street +4.6% (t 10). An eleventh, `draw` (the main world draw's drivers and alpha pass, the geometry paths
 its draws reach and the shader passes' begin and end, the first step towards drawing on a thread of its own),
 is on after its gate: the recorded street run byte-identical with it off; no speed claim of its own.
+The update half (what main runs besides drawing) began on 2026-11-10 with `scene`: the scene graph's downward update pass across geometries, fade nodes and particle systems, and the skinned
+bound, on once proven identical (differential tests, the recorded run byte-identical with it off); not a speed
+change by itself.
 
 An interim Windows preview (maintainer, 2026-11-06) can be built with `scripts/package-playtest.ps1`:
 a ZIP a player can run with no build, labelled a preview, wgpu remaining the big release. It has only

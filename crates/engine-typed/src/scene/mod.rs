@@ -26,11 +26,13 @@ pub mod walk;
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(19);
 
-/// `NV_TYPED=scene`. Not past its gate yet: off unless `NV_TYPED` names it.
+/// `NV_TYPED=scene`. Proved by its differential tests (each planted mutant caught) and the
+/// byte-identical recorded street run in both presets (on against `NV_TYPED=scene:off`), so on
+/// unless `NV_TYPED` says otherwise.
 pub static SCENE: Family = Family {
     name: "scene",
     id: FAMILY,
-    past_gate: false,
+    past_gate: true,
     threads: Threads::Both,
     funcs,
 };
