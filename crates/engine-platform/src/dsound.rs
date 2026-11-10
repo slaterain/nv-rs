@@ -1062,6 +1062,14 @@ impl Record {
         }
     }
 
+    /// Every stream's header rewritten with the frames written so far.
+    fn finish(&mut self) {
+        let _ = self.game.header();
+        if let Some(w) = &mut self.own {
+            let _ = w.header();
+        }
+    }
+
     fn write(&mut self, which: Which, out: &[f32]) {
         match which {
             Which::Game => self.game.write(out),
@@ -1555,6 +1563,20 @@ pub fn tick(e: &mut Engine) {
         for p in [&mut game.pace, &mut own.pace].into_iter().flatten() {
             p.game_us = now;
             p.at = std::time::Instant::now();
+        }
+    }
+    // `NV_REPEATABLE`: the mix catches up to the clock before the call changes a voice, so a
+    // change is heard from when it was made (not from its frame's start) and a buffer refilled
+    // within a long frame is not heard with its new samples where the old ones played.
+    repeatable_pull(e);
+}
+
+/// `NV_REPEATABLE`'s end (the host's): the recording's WAV headers rewritten with every frame
+/// written, so a reader takes all of them.
+pub fn finish_recording(e: &mut Engine) {
+    if let Some(m) = &state!(e).sound.mix {
+        if let Some(r) = &mut m.voices.lock().expect("the voices").record {
+            r.finish();
         }
     }
 }
@@ -7045,6 +7067,7 @@ mod tests {
                 repeatable_pull(&mut e);
                 pulled.push(state!(e).sound.virtual_out.expect("the device").pulled);
             }
+            finish_recording(&mut e);
             state!(e).sound.mix = None;
             let bytes = std::fs::read(&path).expect("the recording");
             let _ = std::fs::remove_file(&path);
@@ -7057,6 +7080,8 @@ mod tests {
         assert_eq!(pulled, vec![1200, 1680, 1839]);
         // The WAV header and 1839 stereo float frames.
         assert_eq!(a.len(), 44 + 1839 * 8);
+        // The finished header names every frame written (its data size).
+        assert_eq!(u32::from_le_bytes([a[40], a[41], a[42], a[43]]), 1839 * 8);
         assert!(a[44..].iter().any(|&b| b != 0), "the stream was mixed");
         let (_, b) = run("b");
         assert_eq!(a, b);

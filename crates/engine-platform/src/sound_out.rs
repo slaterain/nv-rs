@@ -507,11 +507,25 @@ mod wasapi {
         slot::<Fn0>(d.client, 10 * w)(d.client);
         // Underruns: a wake that finds the device with nothing left to play, after the first
         // frames were given (the stream starts empty).
-        let (mut given, mut starved) = (false, 0u64);
+        let (mut given, mut starved, mut lost) = (false, 0u64, false);
         while !stop.load(Ordering::Relaxed) {
             WaitForSingleObject(d.event, 200);
             let mut padding = 0u32;
-            slot::<Fn1>(d.client, 6 * w)(d.client, &mut padding as *mut _ as usize);
+            let hr = slot::<Fn1>(d.client, 6 * w)(d.client, &mut padding as *mut _ as usize);
+            if hr != 0 {
+                // The device no longer answers (unplugged, disabled, or the default device
+                // changed: AUDCLNT_E_DEVICE_INVALIDATED): not an underrun. Named once; nothing
+                // is given to it while it does not answer (the stream is not opened again).
+                if !lost {
+                    lost = true;
+                    eprintln!(
+                        "sound: the sound device stopped answering (GetCurrentPadding {hr:#010x}: \
+                         unplugged, disabled or no longer the default?); this stream is not heard \
+                         while it does not answer"
+                    );
+                }
+                continue;
+            }
             if given && padding == 0 {
                 starved += 1;
                 if let Ok(mut s) = source.lock() {
