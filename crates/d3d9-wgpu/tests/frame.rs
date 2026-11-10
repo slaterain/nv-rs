@@ -233,9 +233,115 @@ impl Gpu {
         self.run(Cmd::QueryIssue { query, flags: 2 });
         draw(self);
         self.run(Cmd::QueryIssue { query, flags: 1 });
-        match self.run(Cmd::QueryGetData { query, flags: 1 }) {
-            Reply::Query(Some((0, n))) => n,
-            other => panic!("query {query:#x}: {other:?}"),
+        self.wait(query, 1)
+    }
+
+    /// `GetData(flags)` of `query` asked until it answers `S_OK` (as the game's loops ask), at
+    /// most 10 seconds; its count.
+    fn wait(&mut self, query: u32, flags: u32) -> u32 {
+        let start = std::time::Instant::now();
+        loop {
+            match self.run(Cmd::QueryGetData { query, flags }) {
+                Reply::Query(Some((0, n))) => return n,
+                Reply::Query(Some((1, _))) if start.elapsed().as_secs() < 10 => {}
+                other => panic!("query {query:#x}: {other:?} after {:?}", start.elapsed()),
+            }
+        }
+    }
+
+    /// A quad of exactly the viewport (clip -1 to 1) at depth `z`.
+    fn quad(&mut self, z: f32) {
+        let quad = floats(&[
+            -1.0, -1.0, z, 1.0, -1.0, 1.0, z, 1.0, 1.0, -1.0, z, 1.0, //
+            1.0, -1.0, z, 1.0, -1.0, 1.0, z, 1.0, 1.0, 1.0, z, 1.0,
+        ]);
+        let offset = 96 * (self.next % 32);
+        self.next += 1;
+        self.run(Cmd::UploadBuffer {
+            buffer: VB,
+            offset,
+            flags: 0,
+            data: Data::Bytes(&quad),
+        });
+        self.run(Cmd::SetStreamSource {
+            device: DEVICE,
+            stream: 0,
+            buffer: VB,
+            offset,
+            stride: 16,
+        });
+        self.run(Cmd::DrawPrimitive {
+            device: DEVICE,
+            kind: 4,
+            start: 0,
+            count: 2,
+        });
+    }
+}
+
+/// Direct3D 9's viewport is a rectangle of whole pixels and drawing is cut at its pixels' edges:
+/// geometry larger than the viewport covers every sample of its first and last rows and columns,
+/// so their resolved pixels are the interior's, on a full-target viewport and on one inside the
+/// target, at 1, 4 and 8 samples. (A viewport moved half a pixel for the pixel centres cut 15 of
+/// the 64 samples of a 4 by 4 target at 4x on WARP.) Where the geometry's edge is the viewport's
+/// own (a quad of clip -1 to 1), Direct3D 9's whole-number centres put the left and top edges
+/// through the first column's and row's centres and the right and bottom edges on the last
+/// ones' far sides: the last column and row are covered in full, the first column and row by
+/// their samples right of and below the centre only (measured so on the real Direct3D 9 here,
+/// DESIGN.md section 10).
+#[test]
+fn every_sample_of_the_viewports_edge_pixels_can_be_covered() {
+    const SIZE: usize = 8;
+    for samples in [1u32, 4, 8] {
+        let Some(mut g) = Gpu::new(SIZE as u32, samples) else {
+            return;
+        };
+        g.state(ZENABLE, 0);
+        g.colour([1.0, 1.0, 1.0, 1.0]);
+        for (x, y, w, h) in [(0, 0, SIZE, SIZE), (2, 1, 4, 5)] {
+            let inside = |px: usize, py: usize| px >= x && px < x + w && py >= y && py < y + h;
+            // Larger than the viewport: every pixel inside it in full, nothing outside.
+            g.viewport(0, 0, SIZE as u32, SIZE as u32, 0.0, 1.0);
+            g.clear(1, 0, 1.0);
+            g.viewport(x as u32, y as u32, w as u32, h as u32, 0.0, 1.0);
+            g.cover(0.5);
+            let reds = g.reds();
+            for py in 0..SIZE {
+                for px in 0..SIZE {
+                    let want = if inside(px, py) { 255 } else { 0 };
+                    assert_eq!(
+                        reds[py * SIZE + px],
+                        want,
+                        "{samples}x, viewport {:?}: pixel ({px}, {py}) in {reds:?}",
+                        (x, y, w, h)
+                    );
+                }
+            }
+            // The viewport's own edges.
+            g.viewport(0, 0, SIZE as u32, SIZE as u32, 0.0, 1.0);
+            g.clear(1, 0, 1.0);
+            g.viewport(x as u32, y as u32, w as u32, h as u32, 0.0, 1.0);
+            g.quad(0.5);
+            let reds = g.reds();
+            let at = |px: usize, py: usize| reds[py * SIZE + px];
+            for py in 0..SIZE {
+                for px in 0..SIZE {
+                    let r = at(px, py);
+                    let what = format!(
+                        "{samples}x, viewport {:?}: quad, pixel ({px}, {py}) in {reds:?}",
+                        (x, y, w, h)
+                    );
+                    if !inside(px, py) {
+                        assert_eq!(r, 0, "{what}");
+                    } else if samples == 1 || (px > x && py > y) {
+                        // One sample: the centre, on the left and top edges, is drawn (the
+                        // top-left rule).
+                        assert_eq!(r, 255, "{what}");
+                    } else {
+                        assert!(r > 0 && r < 255, "{what}: part of the samples");
+                    }
+                }
+            }
         }
     }
 }
@@ -271,11 +377,11 @@ fn user_clip_planes_cut_where_the_distance_is_negative() {
 
 #[test]
 fn occlusion_queries_count_the_samples_their_draws_pass() {
-    for samples in [1u32, 4] {
+    for samples in [1u32, 4, 8] {
         let Some(mut g) = Gpu::new(4, samples) else {
             return;
         };
-        for q in [0x2000, 0x2010, 0x2020, 0x2030] {
+        for q in [0x2000, 0x2010, 0x2020, 0x2030, 0x2040] {
             g.run(Cmd::CreateQuery {
                 device: DEVICE,
                 query: q,
@@ -307,6 +413,21 @@ fn occlusion_queries_count_the_samples_their_draws_pass() {
             g.clear(3, 0, 1.0);
         });
         assert_eq!(n, all, "{samples}: colour writes off");
+        // A quad of the viewport's own edges: Direct3D 9's whole-number pixel centres leave the
+        // samples left of the first column's centres and above the first row's out (the
+        // standard patterns put half of them on each side; 1 of 4 and 2 of 8 are both left and
+        // above). Measured so on the real Direct3D 9 here: 225 of 256 and 450 of 512 on an 8 by
+        // 8 target.
+        let lost = match samples {
+            1 => 0,
+            4 => 2 * 4 + 2 * 4 - 1,
+            _ => 4 * 4 + 4 * 4 - 2,
+        };
+        assert_eq!(
+            g.count(0x2040, |g| g.quad(0.25)),
+            all - lost,
+            "{samples}: the viewport's own edges"
+        );
         // Asked again: the same count.
         match g.run(Cmd::QueryGetData {
             query: 0x2000,
@@ -333,6 +454,66 @@ fn occlusion_queries_count_the_samples_their_draws_pass() {
             Reply::Query(None)
         ));
     }
+}
+
+/// `GetData` never waits: `S_FALSE` while the count is not there. Without `D3DGETDATA_FLUSH`
+/// nothing sends the batch that counted, so the answer stays `S_FALSE` (the real Direct3D 9 here
+/// answered so 20,000 times in a row); with the flag, or after a `Present` sent the batch, the
+/// asking ends with the count.
+#[test]
+fn occlusion_get_data_answers_not_ready_until_the_count_is_there() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    g.colour([1.0, 0.0, 0.0, 1.0]);
+    g.clear(3, 0, 1.0);
+    for q in [0x2000, 0x2010] {
+        g.run(Cmd::CreateQuery {
+            device: DEVICE,
+            query: q,
+            kind: 9,
+        });
+    }
+    let ask = |g: &mut Gpu, query: u32, flags: u32| match g.run(Cmd::QueryGetData { query, flags })
+    {
+        Reply::Query(Some(answer)) => answer,
+        other => panic!("{other:?}"),
+    };
+    // Asked before its END: not ready.
+    g.run(Cmd::QueryIssue {
+        query: 0x2000,
+        flags: 2,
+    });
+    g.cover(0.5);
+    assert_eq!(ask(&mut g, 0x2000, 1), (1, 0), "still counting");
+    g.run(Cmd::QueryIssue {
+        query: 0x2000,
+        flags: 1,
+    });
+    for _ in 0..1000 {
+        assert_eq!(ask(&mut g, 0x2000, 0), (1, 0), "not sent, not flushed");
+    }
+    assert_eq!(g.wait(0x2000, 1), 16, "flushed");
+    // A `Present` sends the batch: asked without the flag, the count comes.
+    g.clear(2, 0, 1.0);
+    g.run(Cmd::QueryIssue {
+        query: 0x2010,
+        flags: 2,
+    });
+    g.cover(0.5);
+    g.run(Cmd::QueryIssue {
+        query: 0x2010,
+        flags: 1,
+    });
+    assert_eq!(ask(&mut g, 0x2010, 0), (1, 0), "not sent yet");
+    g.run(Cmd::Present {
+        device: DEVICE,
+        source: None,
+        dest: None,
+        window: 0,
+        dirty: false,
+        model: 0,
+        frame: 1,
+    });
+    assert_eq!(g.wait(0x2010, 0), 16, "sent by the Present");
 }
 
 #[test]
@@ -392,6 +573,46 @@ fn get_render_target_data_and_read_surface_give_the_pixels_back() {
     ));
 }
 
+/// Direct3D 9 refuses `GetRenderTargetData` of a multisampled render target
+/// (`D3DERR_INVALIDCALL`, measured on the real one here): the destination keeps what it had.
+#[test]
+fn get_render_target_data_of_a_multisampled_target_leaves_the_destination() {
+    let Some(mut g) = Gpu::new(2, 4) else { return };
+    const SYS: u32 = 0x3000;
+    g.run(Cmd::CreateOffscreenSurface {
+        device: DEVICE,
+        surface: SYS,
+        width: 2,
+        height: 2,
+        format: A8R8G8B8,
+        pool: 2,
+    });
+    let before: Vec<u8> = (0..16).collect();
+    g.run(Cmd::UploadSurface {
+        surface: SYS,
+        row: 8,
+        rows: 2,
+        data: Data::Bytes(&before),
+    });
+    g.clear(1, 0x1122_3344, 1.0);
+    match g.run(Cmd::GetRenderTargetData {
+        device: DEVICE,
+        source: RT,
+        destination: SYS,
+        pitch: 8,
+    }) {
+        Reply::Rows(Some(r)) => assert_eq!(r.bytes, before, "the destination's own rows"),
+        other => panic!("{other:?}"),
+    }
+    match g.run(Cmd::ReadSurface {
+        surface: SYS,
+        size: 16,
+    }) {
+        Reply::Bytes(Some(b)) => assert_eq!(b, before),
+        other => panic!("{other:?}"),
+    }
+}
+
 #[test]
 fn managed_levels_read_back_what_the_game_gave_them() {
     let Some(mut g) = Gpu::new(2, 1) else { return };
@@ -421,6 +642,22 @@ fn managed_levels_read_back_what_the_game_gave_them() {
         size: 16,
     }) {
         Reply::Bytes(Some(b)) => assert_eq!(b, top),
+        other => panic!("{other:?}"),
+    }
+    // An upload shorter than the level changes only the bytes it carries.
+    g.run(Cmd::UploadSurface {
+        surface: LEVELS[0],
+        row: 8,
+        rows: 1,
+        data: Data::Bytes(&[0xAA; 8]),
+    });
+    let mut changed = top.clone();
+    changed[..8].copy_from_slice(&[0xAA; 8]);
+    match g.run(Cmd::ReadSurface {
+        surface: LEVELS[0],
+        size: 16,
+    }) {
+        Reply::Bytes(Some(b)) => assert_eq!(b, changed, "a short upload"),
         other => panic!("{other:?}"),
     }
     // A level never given its bytes: none.
@@ -497,31 +734,82 @@ const COLORWRITEENABLE: u32 = 168;
 #[test]
 fn nvidia_alpha_to_coverage_stands_in_for_the_alpha_test_on_multisampled_targets() {
     let atoc = u32::from_le_bytes(*b"ATOC");
-    for samples in [1u32, 4] {
+    for samples in [1u32, 4, 8] {
         let Some(mut g) = Gpu::new(4, samples) else {
             return;
         };
         g.state(ZENABLE, 0);
         g.state(ZWRITEENABLE, 0);
         g.state(ALPHATESTENABLE, 1);
-        g.state(ALPHAFUNC, 5); // GREATER
-        g.state(ALPHAREF, 0x80);
         g.state(ADAPTIVETESS_Y, atoc);
-        // Alpha 0.25: the alpha test (0.25 > 0.5) fails; coverage gives about a quarter.
-        g.colour([1.0, 1.0, 1.0, 0.25]);
-        g.clear(1, 0, 1.0);
-        g.cover(0.5);
-        let reds = g.reds();
+        g.run(Cmd::CreateQuery {
+            device: DEVICE,
+            query: 0x2000,
+            kind: 9,
+        });
+        // The samples the whole-target triangle (16 pixels) passes with alpha `a`, comparison `func`
+        // and reference `aref` (an occlusion count: exact, where a resolve rounds).
+        let covered = |g: &mut Gpu, a: f32, func: u32, aref: u32| {
+            g.state(ALPHAFUNC, func);
+            g.state(ALPHAREF, aref);
+            g.colour([1.0, 1.0, 1.0, a]);
+            g.clear(1, 0, 1.0);
+            g.count(0x2000, |g| g.cover(0.5))
+        };
         if samples == 1 {
-            assert_eq!(reds, vec![0; 16], "one sample: the alpha test");
+            // One sample: the alpha test, with its reference.
+            assert_eq!(covered(&mut g, 0.25, 5, 0x80), 0, "0.25 > 0.5");
+            assert_eq!(covered(&mut g, 0.75, 5, 0x80), 16, "0.75 > 0.5");
+            assert_eq!(covered(&mut g, 0.25, 2, 0x80), 16, "0.25 < 0.5");
         } else {
-            // The hardware's coverage pattern for an alpha is its own: some samples, not all.
-            let sum: u32 = reds.iter().map(|&r| u32::from(r)).sum();
+            // Multisampled (measured so on the real Direct3D 9 here, DESIGN.md section 10): the
+            // coverage comes from the alpha alone, the reference plays no part; GREATER,
+            // NOTEQUAL, GREATEREQUAL and ALWAYS cover so, NEVER, LESS, EQUAL and LESSEQUAL draw
+            // nothing. Which samples an alpha covers is the hardware's own (on the RTX 5070 Ti,
+            // in both: 1 of 4 from alpha 8/64, 2 from 24/64, 3 from 41/64, 4 from 57/64), so
+            // only its order and ends are checked here.
+            let mut last = 0;
+            for k in 0..=16 {
+                let a = k as f32 / 16.0;
+                let n = covered(&mut g, a, 8, 0x80);
+                assert!(
+                    n >= last && n <= 16 * samples,
+                    "{samples}x: alpha {a}: {n} after {last}"
+                );
+                last = n;
+                for func in [5, 6, 7] {
+                    for aref in [0, 0x80, 0xFF] {
+                        assert_eq!(
+                            covered(&mut g, a, func, aref),
+                            n,
+                            "{samples}x: alpha {a}, comparison {func}, reference {aref:#x}"
+                        );
+                    }
+                }
+                for func in 1..=4 {
+                    assert_eq!(
+                        covered(&mut g, a, func, 0x80),
+                        0,
+                        "{samples}x: comparison {func}"
+                    );
+                }
+                let ends = match k {
+                    0 => Some(0),
+                    16 => Some(16 * samples),
+                    _ => None,
+                };
+                if let Some(e) = ends {
+                    assert_eq!(n, e, "{samples}x: alpha {a}");
+                }
+            }
             assert!(
-                sum > 0 && sum < 16 * 255,
-                "four samples: partial coverage, {reds:?}"
+                covered(&mut g, 0.5, 8, 0x80) > 0 && covered(&mut g, 0.5, 8, 0x80) < 16 * samples,
+                "{samples}x: alpha 0.5 covers part of the samples"
             );
         }
+        g.state(ALPHAFUNC, 5);
+        g.state(ALPHAREF, 0x80);
+        g.colour([1.0, 1.0, 1.0, 0.25]);
         // The switch off: the alpha test again.
         g.state(ADAPTIVETESS_Y, 0);
         g.clear(1, 0, 1.0);

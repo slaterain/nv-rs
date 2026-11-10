@@ -286,7 +286,9 @@ impl Backend for WgpuBackend {
                 pitch,
                 ..
             } => return Reply::Rows(d.get_render_target_data(source, destination, pitch)),
-            Cmd::QueryGetData { query, .. } => return Reply::Query(d.query_get_data(query)),
+            Cmd::QueryGetData { query, flags } => {
+                return Reply::Query(d.query_get_data(query, flags))
+            }
             Cmd::QueryIssue { query, flags } => d.query_issue(query, flags),
             Cmd::SetClipPlane { index, plane, .. } => d.set_clip_plane(index, plane),
             Cmd::ColorFill { .. } => d.not_provided("ColorFill is not provided (skipped)"),

@@ -13,11 +13,14 @@
 //! - **Saturation** clamps to [0, 1] (`saturate`, NaN to 0 as the hardware does).
 //! - **Address registers**: `mova` rounds to nearest (halves up: `floor(x + 0.5)`); shader model 1's `mov a0.x` takes the floor.
 //!   A constant read outside the register file through an address register reads 0.
-//! - **Pixel centres**: Direct3D 9 puts them on whole coordinates, wgpu half a pixel further. The
-//!   device moves the viewport half a pixel right and down (as Direct3D 9 drivers do in the
-//!   viewport transform: exact, where moving each vertex shader's position rounds in clip space
-//!   and drew Doc's house 0.02% further from the real frames), so every pixel samples where
-//!   Direct3D 9 would; `vPos` is the pixel's integer coordinate.
+//! - **Pixel centres**: Direct3D 9 puts them on whole coordinates, wgpu half a pixel further. Each
+//!   vertex shader moves its position half a pixel right and down (`R.sys[0].xy * w`, which the
+//!   device sets from the draw's viewport: `1 / width`, `-1 / height`), so every pixel samples
+//!   where Direct3D 9 would; `vPos` is the pixel's integer coordinate. The viewport itself stays
+//!   Direct3D 9's rectangle of whole pixels, so drawing is cut at its pixels' edges and every
+//!   sample of an edge pixel can be covered, as on Direct3D 9, on every adapter. (Moving the
+//!   viewport half a pixel instead is exact in the rasteriser but cuts through the first row and
+//!   column on an adapter that clips at the viewport's exact edge, as WARP does: DESIGN.md.)
 //! - **User clip planes** ([`Clip`]): each vertex shader also gives its distance to the six
 //!   planes the device sets in `R.clip`, from its own `oPos`.
 //!
@@ -646,8 +649,8 @@ impl Gen<'_> {
             None => "o_pos".to_string(),
         };
         let _ = writeln!(s, "    let opos = {pos};");
-        // Direct3D 9's pixel centres are the viewport's (module documentation).
-        s.push_str("    out.position = opos;\n");
+        // Half a pixel right and down: Direct3D 9's pixel centres (module documentation).
+        s.push_str("    out.position = opos + vec4<f32>(R.sys[0].xy * opos.w, 0.0, 0.0);\n");
         // The user clip planes' distances, from the shader's own position (with a plane on).
         let d: Vec<String> = (0..CLIP_PLANES)
             .map(|k| format!("dp4(R.clip[{k}], opos)"))
@@ -1536,7 +1539,10 @@ mod tests {
             "{s}"
         );
         assert!(s.contains("let opos = o0;"), "{s}");
-        assert!(s.contains("out.position = opos;"), "{s}");
+        assert!(
+            s.contains("out.position = opos + vec4<f32>(R.sys[0].xy * opos.w, 0.0, 0.0);"),
+            "{s}"
+        );
     }
 
     #[test]
@@ -1582,7 +1588,10 @@ mod tests {
                     clip == Clip::Distances
                 );
                 assert_eq!(v.contains("dp4(R.clip[5], opos)"), clip != Clip::Off, "{v}");
-                assert!(v.contains("out.position = opos;"), "{v}");
+                assert!(
+                    v.contains("out.position = opos + vec4<f32>(R.sys[0].xy * opos.w, 0.0, 0.0);"),
+                    "{v}"
+                );
                 assert_eq!(v.contains("k0: vec4<f32>"), discard, "{v}");
                 assert_eq!(
                     v.contains("@interpolate(perspective, sample) k0"),
