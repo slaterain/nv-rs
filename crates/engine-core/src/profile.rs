@@ -54,6 +54,11 @@
 //! functions by inclusive samples and the callers of the 15 busiest (from the walked stacks), and
 //! the top `NV_PROFILE_CALLS` (default 60) call targets with their calls a frame.
 //!
+//! `NV_PROFILE_UNDER=ADDR[,ADDR..]` (a measuring aid): every table counts only what runs inside the
+//! named exe functions (a sample whose shadow stack holds one; a call made while one runs), and
+//! each table is followed by the calls a frame of every caller-to-callee edge inside them. Unset,
+//! nothing changes.
+//!
 //! Off (the default), each `Engine::call` pays one relaxed load of [`on`].
 
 use std::collections::HashMap;
@@ -307,17 +312,53 @@ pub fn init_from_env() {
 static UNDER: OnceLock<Vec<u32>> = OnceLock::new();
 /// Whether [`UNDER`] names any function.
 static UNDER_ON: AtomicBool = AtomicBool::new(false);
-/// The shadow stack slot of the outermost function of [`UNDER`] now running, `u32::MAX` none.
-static UNDER_SLOT: AtomicU32 = AtomicU32::new(u32::MAX);
+/// The shadow stack slot of the outermost function of [`UNDER`] now running, [`NOT_UNDER`] none.
+static UNDER_SLOT: AtomicU32 = AtomicU32::new(NOT_UNDER);
+/// [`UNDER_SLOT`] when no function of [`UNDER`] is running.
+const NOT_UNDER: u32 = u32::MAX;
 
 fn under_roots() -> &'static [u32] {
-    UNDER.get_or_init(|| {
-        std::env::var("NV_PROFILE_UNDER")
-            .unwrap_or_default()
-            .split(',')
-            .filter_map(|a| u32::from_str_radix(a.trim().trim_start_matches("0x"), 16).ok())
-            .collect()
-    })
+    UNDER.get_or_init(|| parse_under(&std::env::var("NV_PROFILE_UNDER").unwrap_or_default()))
+}
+
+/// `NV_PROFILE_UNDER`'s addresses: hex words separated by commas (`0x` allowed); others ignored.
+fn parse_under(value: &str) -> Vec<u32> {
+    value
+        .split(',')
+        .filter_map(|a| u32::from_str_radix(a.trim().trim_start_matches("0x"), 16).ok())
+        .collect()
+}
+
+/// The [`UNDER_SLOT`] after a call to `addr` enters shadow stack slot `depth`: the outermost root
+/// marks where the counted part starts; anything else leaves it as it was.
+fn under_enter(slot: u32, roots: &[u32], depth: u32, addr: u32) -> u32 {
+    if slot == NOT_UNDER && roots.contains(&addr) {
+        depth
+    } else {
+        slot
+    }
+}
+
+/// The [`UNDER_SLOT`] after a return leaves the shadow stack `depth` deep: it ends with its root.
+fn under_leave(slot: u32, depth: u32) -> u32 {
+    if slot != NOT_UNDER && depth <= slot {
+        NOT_UNDER
+    } else {
+        slot
+    }
+}
+
+/// The [`UNDER_SLOT`] of a whole shadow stack (a resync): its outermost root's slot.
+fn under_slot_of(stack: &[u32], roots: &[u32]) -> u32 {
+    stack
+        .iter()
+        .position(|a| roots.contains(a))
+        .map_or(NOT_UNDER, |i| i as u32)
+}
+
+/// Whether a sample with this shadow stack counts: always when no function is named.
+fn inside_of(stack: &[u32], roots: &[u32]) -> bool {
+    roots.is_empty() || stack.iter().any(|a| roots.contains(a))
 }
 
 /// How many slots the edge counts have (a power of two).
@@ -333,8 +374,8 @@ fn count_edge(caller: u32, callee: u32) {
     if key == 0 {
         return;
     }
-    let mut slot = (key.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> (64 - EDGE_SLOTS.trailing_zeros()))
-        as usize;
+    let mut slot =
+        (key.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> (64 - EDGE_SLOTS.trailing_zeros())) as usize;
     for _ in 0..TARGET_PROBES {
         let held = EDGE_KEY[slot].load(Relaxed);
         if held == key {
@@ -367,7 +408,7 @@ pub fn edges() -> Vec<((u32, u32), u64)> {
 
 /// Whether a sample with this shadow stack counts ([`UNDER`]).
 fn inside(stack: &[u32]) -> bool {
-    !UNDER_ON.load(Relaxed) || stack.iter().any(|a| under_roots().contains(a))
+    !UNDER_ON.load(Relaxed) || inside_of(stack, under_roots())
 }
 
 /// A function entered through `Engine::call` (profiler on only).
@@ -375,11 +416,11 @@ fn inside(stack: &[u32]) -> bool {
 pub fn push(addr: u32) {
     CALLS.store(CALLS.load(Relaxed).wrapping_add(1), Relaxed);
     let d = DEPTH.load(Relaxed);
+    // `NV_PROFILE_UNDER` unset: every call is counted, as before it existed.
     let counted = if UNDER_ON.load(Relaxed) {
-        if UNDER_SLOT.load(Relaxed) == u32::MAX && under_roots().contains(&addr) {
-            UNDER_SLOT.store(d, Relaxed);
-        }
-        let under = UNDER_SLOT.load(Relaxed) != u32::MAX;
+        let slot = under_enter(UNDER_SLOT.load(Relaxed), under_roots(), d, addr);
+        UNDER_SLOT.store(slot, Relaxed);
+        let under = slot != NOT_UNDER;
         if under {
             let caller = d
                 .checked_sub(1)
@@ -472,9 +513,8 @@ pub fn pop() {
     let d = DEPTH.load(Relaxed);
     let new = d.saturating_sub(1);
     DEPTH.store(new, Relaxed);
-    let slot = UNDER_SLOT.load(Relaxed);
-    if slot != u32::MAX && new <= slot {
-        UNDER_SLOT.store(u32::MAX, Relaxed);
+    if UNDER_ON.load(Relaxed) {
+        UNDER_SLOT.store(under_leave(UNDER_SLOT.load(Relaxed), new), Relaxed);
     }
 }
 
@@ -491,11 +531,7 @@ fn fill(stack: &[u32]) {
     }
     DEPTH.store(stack.len() as u32, Relaxed);
     if UNDER_ON.load(Relaxed) {
-        let slot = stack
-            .iter()
-            .position(|a| under_roots().contains(a))
-            .map_or(u32::MAX, |i| i as u32);
-        UNDER_SLOT.store(slot, Relaxed);
+        UNDER_SLOT.store(under_slot_of(stack, under_roots()), Relaxed);
     }
 }
 
@@ -836,7 +872,11 @@ fn sampler(settings: Settings) {
                 );
                 for ((caller, callee), d) in rows {
                     use std::fmt::Write;
-                    let _ = writeln!(text, "  edge {:10.2} {caller:08x} {callee:08x}", d as f64 / f);
+                    let _ = writeln!(
+                        text,
+                        "  edge {:10.2} {caller:08x} {callee:08x}",
+                        d as f64 / f
+                    );
                 }
                 println!("{text}");
                 edges_at = now;
@@ -4464,6 +4504,64 @@ mod tests {
     /// `NV_PROFILE_SECONDS` takes any number of seconds a `Duration` holds; anything else
     /// (infinite, too big, not a number, not above 0, unset) gives the 10 s default instead of
     /// stopping the frame that starts the sampler.
+    #[test]
+    fn under_reads_hex_addresses() {
+        assert_eq!(parse_under(""), Vec::<u32>::new());
+        assert_eq!(
+            parse_under("00b6ba20, 0x00b6b930,,nonsense"),
+            vec![0x00b6_ba20, 0x00b6_b930]
+        );
+    }
+
+    #[test]
+    fn under_unset_counts_everything() {
+        // No function named: every sample counts, whatever its stack.
+        assert!(inside_of(&[], &[]));
+        assert!(inside_of(&[0x0086_e650, 0x0040_1000], &[]));
+        // With the profiler on but NV_PROFILE_UNDER unset (as in these tests), nothing is held back.
+        assert!(!UNDER_ON.load(Relaxed));
+        assert!(inside(&[0x0040_1000]));
+    }
+
+    #[test]
+    fn under_counts_from_the_outermost_root_until_it_returns() {
+        let roots = [0x00b6_ba20, 0x00b6_b930];
+        assert!(!inside_of(&[0x0086_e650, 0x0087_3200], &roots));
+        assert!(inside_of(&[0x0086_e650, 0x00b6_ba20, 0x00b9_94f0], &roots));
+        // A root entered at slot 3: calls inside it keep the slot, a nested root too.
+        let mut slot = under_enter(NOT_UNDER, &roots, 2, 0x0087_3200);
+        assert_eq!(slot, NOT_UNDER);
+        slot = under_enter(slot, &roots, 3, 0x00b6_ba20);
+        assert_eq!(slot, 3);
+        slot = under_enter(slot, &roots, 4, 0x00b9_94f0);
+        slot = under_enter(slot, &roots, 5, 0x00b6_b930);
+        assert_eq!(slot, 3);
+        // Returns: out of slot 5 and 4 it stays; the root's own return (depth back to 3) ends it.
+        slot = under_leave(slot, 5);
+        slot = under_leave(slot, 4);
+        assert_eq!(slot, 3);
+        assert_eq!(under_leave(slot, 3), NOT_UNDER);
+        assert_eq!(under_leave(NOT_UNDER, 0), NOT_UNDER);
+        // A resynced stack finds its outermost root.
+        assert_eq!(
+            under_slot_of(&[0x0086_e650, 0x00b6_b930, 0x00b6_ba20], &roots),
+            1
+        );
+        assert_eq!(under_slot_of(&[0x0086_e650], &roots), NOT_UNDER);
+    }
+
+    #[test]
+    fn edges_are_counted_by_caller_and_callee() {
+        let (caller, callee) = (0x0f12_3450, 0x0f12_3460);
+        for _ in 0..3 {
+            count_edge(caller, callee);
+        }
+        count_edge(callee, caller);
+        let all = edges();
+        assert!(all.contains(&((caller, callee), 3)));
+        assert!(all.contains(&((callee, caller), 1)));
+    }
+
     #[test]
     fn the_table_period_takes_any_value() {
         assert_eq!(table_period(None), Duration::from_secs(10));
