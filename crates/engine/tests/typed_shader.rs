@@ -4678,7 +4678,6 @@ fn draw_stand_ins(e: &mut Engine) {
         0x00b9_7550,
         0x00b6_b8d0,
         0x00b6_da10,
-        0x00b9_9990,
         0x00b9_a410,
     ] {
         e.register(addr, |_, _| ret(0));
@@ -4762,7 +4761,31 @@ fn draw_world(e: &mut Engine) -> DrawW {
     }
     e.mem.set_u16(second + 0x2c, 0x11);
     set(e, second + 0x30, 0);
+    // Its own pass groups, filled as the first's (two renderers never share their lists).
+    let groups = e.mem.alloc(4 * 0x68);
+    set(e, second + 8, groups);
+    list_at(e, groups + 0x68, &[w.passes[0], w.passes[1]]);
+    list_at(e, groups + 0x68 + 2 * 0x14, &[w.passes[2]]);
+    set(e, groups + 0x68 + 0x64, 3);
+    list_at(e, groups, &[w.skin_pass]);
+    set(e, groups + 0x64, 1);
+    // -FLT_MAX as the float and the double the alpha draw compares with, and the 0.001 its next
+    // alphas take off their limit.
+    e.map(0x0102_4000, 0x1000);
+    e.mem.set_u64(0x0102_41b0, f64::from(-f32::MAX).to_bits());
+    set(e, 0x0101_5f5c, (-f32::MAX).to_bits());
+    e.mem.set_u64(0x0101_6978, 0.001f64.to_bits());
     set(e, w.acc + 0x178, second);
+    // Its own register group holders, whose renderer is itself.
+    for i in 0..13u32 {
+        let h = e.mem.alloc(0x20);
+        e.mem.set_u8(h, (i & 1) as u8);
+        e.mem.set_u16(h + 2, 2);
+        set(e, h + 4, 4);
+        set(e, h + 8, second);
+        list_at(e, h + 0xc, &[w.passes[(i % 4) as usize]]);
+        set(e, second + 0x3c + 4 * i, h);
+    }
     let mut alpha_holders = [[0u32; 2]; 2];
     for (r, br) in [w.br, second].into_iter().enumerate() {
         for g in 0..2u32 {
@@ -4818,14 +4841,16 @@ const DRAW_PLAIN: &[u32] = &[
 ];
 
 trait DrawCommon {
-    fn draw_common(self) -> Diff;
+    fn draw_common_at(self, entry: u32) -> Diff;
 }
 
 impl DrawCommon for Diff {
-    fn draw_common(self) -> Diff {
+    /// The draw family's settings for a test of `entry`: the plain calls but the entry itself.
+    fn draw_common_at(self, entry: u32) -> Diff {
+        let plain: Vec<u32> = DRAW_PLAIN.iter().copied().filter(|a| *a != entry).collect();
         self.common()
             .family(&draw::DRAW)
-            .translation_calls_plainly(DRAW_PLAIN)
+            .translation_calls_plainly(&plain)
             .float_sweep(0)
     }
 }
@@ -4867,7 +4892,7 @@ fn world_draw_first() {
         0x00b6_ba20,
         drivers::world_draw_first(u32, Ptr<_>, u32)
     ))
-    .draw_common()
+    .draw_common_at(0x00b6_ba20)
     .inputs(&[
         Input::Of(TWO_WAYS),
         Input::Of(TWO_WAYS),
@@ -4896,7 +4921,7 @@ fn world_draw_second() {
         0x00b6_b930,
         drivers::world_draw_second(u32, Ptr<_>, u32)
     ))
-    .draw_common()
+    .draw_common_at(0x00b6_b930)
     .inputs(&[Input::Of(TWO_WAYS)])
     .setup(|e, c| {
         let d = draw_world(e);
@@ -4911,7 +4936,7 @@ fn world_draw_second() {
 #[test]
 fn scene_draw() {
     Diff::new(entry!(0x00b6_c0d0, drivers::scene_draw(u32, Ptr<_>) -> u32))
-        .draw_common()
+        .draw_common_at(0x00b6_c0d0)
         .inputs(&[
             Input::Of(TWO_WAYS),
             Input::Of(TWO_WAYS),
@@ -4938,7 +4963,7 @@ fn scene_draw() {
 #[test]
 fn accumulator_draw() {
     Diff::new(entry!(0x00b6_6520, drivers::accumulator_draw(Ptr<_>)))
-        .draw_common()
+        .draw_common_at(0x00b6_6520)
         .inputs(&[Input::Of(&[0, 3, 5])])
         .setup(|e, c| {
             let d = draw_world(e);
@@ -4954,7 +4979,7 @@ fn accumulator_draw() {
 #[test]
 fn accumulator_finish() {
     Diff::new(entry!(0x00b6_6570, drivers::accumulator_finish(Ptr<_>)))
-        .draw_common()
+        .draw_common_at(0x00b6_6570)
         .inputs(&[Input::Of(&[0, 3]), Input::Of(TWO_WAYS)])
         .setup(|e, c| {
             let d = draw_world(e);
@@ -4969,7 +4994,7 @@ fn accumulator_finish() {
 #[test]
 fn set_camera_and_finish_accumulating() {
     Diff::new(entry!(0x00d4_7a40, packet::set_camera(Ptr<_>, u32)))
-        .draw_common()
+        .draw_common_at(0x00d4_7a40)
         .inputs(&[Input::Word])
         .setup(|e, c| {
             let d = draw_world(e);
@@ -4978,7 +5003,7 @@ fn set_camera_and_finish_accumulating() {
         .run()
         .assert_same();
     Diff::new(entry!(0x00aa_0fe0, packet::finish_accumulating(Ptr<_>)))
-        .draw_common()
+        .draw_common_at(0x00aa_0fe0)
         .inputs(&[Input::Of(TWO_WAYS)])
         .setup(|e, c| {
             let d = draw_world(e);
@@ -4992,7 +5017,7 @@ fn set_camera_and_finish_accumulating() {
 #[test]
 fn hold_accumulator() {
     Diff::new(entry!(0x00b5_4b10, own::hold_accumulator(u32)))
-        .draw_common()
+        .draw_common_at(0x00b5_4b10)
         .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(&[0, 1, 2])])
         .setup(|e, c| {
             let d = draw_world(e);
@@ -5035,7 +5060,7 @@ fn draw_types() {
         0x00b6_3770,
         drivers::draw_types(Ptr<_>, u32, u32, u32, i32)
     ))
-    .draw_common()
+    .draw_common_at(0x00b6_3770)
     .inputs(&[
         Input::Of(&[0, 1, 2]),
         Input::Of(&[u32::MAX, 0, 1, 3]),
@@ -5063,7 +5088,7 @@ fn draw_types() {
 #[test]
 fn draw_group() {
     Diff::new(entry!(0x00b6_39e0, drivers::draw_group(Ptr<_>, u32, u32)))
-        .draw_common()
+        .draw_common_at(0x00b6_39e0)
         .inputs(&[
             Input::Of(&[0, 1, 2, 9, 12]),
             Input::Of(&[0, 1]),
@@ -5085,7 +5110,7 @@ fn draw_group() {
 #[test]
 fn sort_alphas_of_renderers() {
     Diff::new(entry!(0x00b6_3a50, drivers::sort_alphas(Ptr<_>)))
-        .draw_common()
+        .draw_common_at(0x00b6_3a50)
         .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(BYTES)])
         .setup(|e, c| {
             let d = draw_world(e);
@@ -5103,7 +5128,7 @@ fn has_listed_pass() {
         0x00b6_3120,
         drivers::has_listed_pass(Ptr<_>, u32, u32) -> bool
     ))
-    .draw_common()
+    .draw_common_at(0x00b6_3120)
     .inputs(&[
         Input::Of(&[0, 1, 2]),
         Input::Of(&[0, 1, 2]),
@@ -5123,7 +5148,7 @@ fn has_listed_pass() {
 #[test]
 fn clear_active_lists() {
     Diff::new(entry!(0x00b6_5580, drivers::clear_active_lists(Ptr<_>)))
-        .draw_common()
+        .draw_common_at(0x00b6_5580)
         .inputs(&[Input::Of(&[0, 1, 2])])
         .setup(|e, c| {
             let d = draw_world(e);
@@ -5137,7 +5162,7 @@ fn clear_active_lists() {
 #[test]
 fn first_half() {
     Diff::new(entry!(0x00b6_5ae0, drivers::first_half(Ptr<_>)))
-        .draw_common()
+        .draw_common_at(0x00b6_5ae0)
         .inputs(&[
             Input::Of(&[0, 7, 8]),
             Input::Of(TWO_WAYS),
@@ -5169,7 +5194,7 @@ fn first_half() {
 #[test]
 fn second_half() {
     Diff::new(entry!(0x00b6_5c60, drivers::second_half(Ptr<_>)))
-        .draw_common()
+        .draw_common_at(0x00b6_5c60)
         .inputs(&[
             Input::Of(TWO_WAYS),
             Input::Of(&[0, 1, 2]),
@@ -5198,6 +5223,12 @@ fn alpha_state(e: &mut Engine, d: &DrawW, group: u32, counts: u32, listed: u32, 
     for (r, br) in d.renderers().into_iter().enumerate() {
         let holder = d.alpha_holders[r][group as usize];
         e.mem.set_u16(holder + 2, ((counts >> r) & 1) as u16);
+        if (counts >> r) & 1 == 0 {
+            // No passes: the list empty too, as the holder's count says.
+            set(e, holder + 0x10, 0);
+            set(e, holder + 0x14, 0);
+            set(e, holder + 0x1c, 0);
+        }
         let items: Vec<u32> = match (listed >> (2 * r)) & 3 {
             0 => vec![],
             1 => vec![sorted_group(e, br, distance)],
@@ -5214,21 +5245,22 @@ fn alpha_state(e: &mut Engine, d: &DrawW, group: u32, counts: u32, listed: u32, 
 #[test]
 fn draw_alpha_group() {
     Diff::new(entry!(0x00b6_50c0, dalpha::draw_alpha_group(Ptr<_>, u32)))
-        .draw_common()
+        .draw_common_at(0x00b6_50c0)
         .inputs(&[
             Input::Of(TWO_WAYS),
             Input::Of(&[1, 2]),
             Input::Of(&[0, 1, 2, 3]),
             Input::Of(&[0, 1, 6, 9]),
             Input::Of(BYTES),
-            Input::F32,
+            // No NaN: a sorted group at NaN is never within a limit, and the exe loops on it for ever.
+            Input::Of(&[ONE, HALF, TWO, 0xc2c8_0000, 0, 0x7f7f_ffff, 0xff80_0000]),
         ])
         .max_cases(160)
         .setup(|e, c| {
             let d = draw_world(e);
             set(e, d.w.acc + 0x18c, c.word(1));
             e.mem.set_u8(d.w.acc + 0x31, c.word(4) as u8);
-            alpha_state(e, &d, c.word(0), c.word(2), c.word(3), bits(c, 5));
+            alpha_state(e, &d, c.word(0), c.word(2), c.word(3), c.word(5));
             vec![d.w.acc, c.word(0)]
         })
         .run()
@@ -5241,7 +5273,7 @@ fn alpha_distance() {
         0x00b9_8c80,
         dalpha::alpha_distance(Ptr<_>, u32, u32, u32) -> f64
     ))
-    .draw_common()
+    .draw_common_at(0x00b9_8c80)
     .inputs(&[
         Input::Of(TWO_WAYS),
         Input::Of(TWO_WAYS),
@@ -5257,10 +5289,8 @@ fn alpha_distance() {
         let group = c.word(0);
         alpha_state(e, &d, group, c.word(1), c.word(2), bits(c, 4));
         // The first pass's bound and the camera direction from the swept floats.
-        let node = e.mem.u32(d.alpha_holders[0][group as usize] + 0x10);
-        let pass = e.mem.u32(node + 8);
-        let geometry = e.mem.u32(pass);
-        let bound = e.mem.u32(geometry + 0x20);
+        // (Every alpha pass of the world is of the one geometry.)
+        let bound = e.mem.u32(d.w.geometry + 0x20);
         set(e, bound, bits(c, 5));
         set(e, bound + 0xc, bits(c, 6));
         set(e, d.w.camera + 0x74, bits(c, 6));
@@ -5273,7 +5303,7 @@ fn alpha_distance() {
 #[test]
 fn clear_alpha_group() {
     Diff::new(entry!(0x00b6_4f20, dalpha::clear_alpha_group(Ptr<_>, u32)))
-        .draw_common()
+        .draw_common_at(0x00b6_4f20)
         .inputs(&[
             Input::Of(TWO_WAYS),
             Input::Of(&[0, 1, 2]),
@@ -5300,7 +5330,7 @@ fn draw_and_clear_type() {
         0x00b9_a3c0,
         dalpha::draw_and_clear_type(Ptr<_>, u32, u32, u32, u32) -> bool
     ))
-    .draw_common()
+    .draw_common_at(0x00b9_a3c0)
     .inputs(&[
         Input::Of(&[0, 0x10, 0x11, 0x13, 0x1c5]),
         Input::Of(&[0, 1, 2, 3, 4]),
@@ -5327,7 +5357,7 @@ fn draw_and_clear_type() {
 #[test]
 fn draw_holder() {
     Diff::new(entry!(0x00b9_a4d0, dalpha::draw_holder(u32, u32)))
-        .draw_common()
+        .draw_common_at(0x00b9_a4d0)
         .inputs(&[
             Input::Of(TWO_WAYS),
             Input::Of(TWO_WAYS),
@@ -5351,7 +5381,7 @@ fn render_next_alpha() {
         0x00b9_af60,
         dalpha::render_next_alpha(Ptr<_>, u32, u32, u32, f32)
     ))
-    .draw_common()
+    .draw_common_at(0x00b9_af60)
     .inputs(&[
         Input::Of(TWO_WAYS),
         Input::Of(&[0, 1]),
@@ -5368,10 +5398,8 @@ fn render_next_alpha() {
         let group = c.word(0);
         alpha_state(e, &d, group, c.word(1), c.word(2), bits(c, 5));
         // The pass's property: none, plain, decal-biased, or of kind 0x15 in shader mode 9.
-        let pass = e
-            .mem
-            .u32(e.mem.u32(d.alpha_holders[0][group as usize] + 0x10) + 8);
-        let geometry = e.mem.u32(pass);
+        // (Every alpha pass of the world is of the one geometry.)
+        let geometry = d.w.geometry;
         let property = e.mem.u32(geometry + 0xa8);
         match c.word(6) {
             0 => set(e, geometry + 0xa8, 0),
@@ -5398,7 +5426,7 @@ fn render_next_alpha() {
 #[test]
 fn decal_pass() {
     Diff::new(entry!(0x00b6_4e30, drivers::decal_pass(Ptr<_>)))
-        .draw_common()
+        .draw_common_at(0x00b6_4e30)
         .inputs(&[
             Input::Of(TWO_WAYS),
             Input::Of(&[0, 8]),
@@ -5420,7 +5448,7 @@ fn decal_pass() {
 #[test]
 fn fog_ambient() {
     Diff::new(entry!(0x00bb_b840, own::fog_ambient()))
-        .draw_common()
+        .draw_common_at(0x00bb_b840)
         .inputs(&[Input::Word])
         .setup(|e, c| {
             let _ = draw_world(e);
@@ -5450,7 +5478,7 @@ fn swept_camera(e: &mut Engine, c: &Case, first: usize) -> u32 {
 #[test]
 fn hand_camera() {
     Diff::new(entry!(0x004e_9bb0, packet::hand_camera(u32, u32)))
-        .draw_common()
+        .draw_common_at(0x004e_9bb0)
         .inputs(&[
             Input::Of(TWO_WAYS),
             Input::F32Swept(ONE),
@@ -5470,19 +5498,19 @@ fn hand_camera() {
 #[test]
 fn camera_getters() {
     Diff::new(entry!(0x004a_0d10, packet::camera_frustum(u32) -> u32))
-        .draw_common()
+        .draw_common_at(0x004a_0d10)
         .inputs(&[Input::Word])
         .setup(|_, c| vec![c.word(0)])
         .run()
         .assert_same();
     Diff::new(entry!(0x0045_bbe0, packet::camera_port(u32) -> u32))
-        .draw_common()
+        .draw_common_at(0x0045_bbe0)
         .inputs(&[Input::Word])
         .setup(|_, c| vec![c.word(0)])
         .run()
         .assert_same();
     Diff::new(entry!(0x0045_bb80, packet::world_translate(u32) -> u32))
-        .draw_common()
+        .draw_common_at(0x0045_bb80)
         .inputs(&[Input::Word])
         .setup(|_, c| vec![c.word(0)])
         .run()
@@ -5492,7 +5520,7 @@ fn camera_getters() {
 #[test]
 fn rotation_columns() {
     Diff::new(entry!(0x0045_bba0, packet::rotation_column_0(u32, u32) -> u32))
-        .draw_common()
+        .draw_common_at(0x0045_bba0)
         .inputs(&[Input::F32Swept(ONE), Input::F32Swept(HALF)])
         .float_sweep(16)
         .setup(|e, c| {
@@ -5503,7 +5531,7 @@ fn rotation_columns() {
         .run()
         .assert_same();
     Diff::new(entry!(0x004e_9c10, packet::rotation_column_1(u32, u32) -> u32))
-        .draw_common()
+        .draw_common_at(0x004e_9c10)
         .inputs(&[Input::F32Swept(ONE), Input::F32Swept(HALF)])
         .float_sweep(16)
         .setup(|e, c| {
@@ -5514,7 +5542,7 @@ fn rotation_columns() {
         .run()
         .assert_same();
     Diff::new(entry!(0x004e_9c50, packet::rotation_column_2(u32, u32) -> u32))
-        .draw_common()
+        .draw_common_at(0x004e_9c50)
         .inputs(&[Input::F32Swept(ONE), Input::F32Swept(HALF)])
         .float_sweep(16)
         .setup(|e, c| {
@@ -5532,7 +5560,7 @@ fn pass_camera_data() {
         0x004e_9c90,
         packet::pass_camera_data(u32, u32, u32, u32, u32, u32, u32)
     ))
-    .draw_common()
+    .draw_common_at(0x004e_9c90)
     .inputs(&[Input::Of(TWO_WAYS), Input::Word])
     .setup(|e, c| {
         let d = draw_world(e);
