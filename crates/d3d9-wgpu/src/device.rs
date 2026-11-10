@@ -221,8 +221,10 @@ impl Bindings {
     }
 }
 
-/// A bind group's key: each binding's number, texture and sampler.
-type GroupKey = Vec<(u32, u64, Option<SamplerKey>)>;
+/// A bind group's key: each binding's number, the dimension its shader declares (2D, cube, volume:
+/// the layout the group is made for, and the dummy a texture of the other kind is replaced by), its
+/// texture and its sampler.
+type GroupKey = Vec<(u32, u8, u64, Option<SamplerKey>)>;
 
 /// A vertex shader's inputs read from a declaration ([`Device::vertex_link`]).
 struct VertexLink {
@@ -2552,11 +2554,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             return;
         };
         // The textures and samplers: the last draw's bind group again, else the cache's.
-        let mut group_key = [(0u32, 0u64, None::<SamplerKey>); 20];
-        for (g, &((binding, _, filterable), slot)) in group_key.iter_mut().zip(samplers) {
+        let mut group_key = [(0u32, 0u8, 0u64, None::<SamplerKey>); 20];
+        for (g, &((binding, dim, filterable), slot)) in group_key.iter_mut().zip(samplers) {
             let tex_id = self.st.textures[slot].as_ref().map_or(0, |t| t.id);
             let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
-            *g = (binding, tex_id, Some(sk));
+            *g = (binding, dim, tex_id, Some(sk));
         }
         let group_key = &group_key[..samplers.len()];
         let group = match &self.last_group {
