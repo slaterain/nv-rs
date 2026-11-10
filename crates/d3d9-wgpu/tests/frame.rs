@@ -1121,3 +1121,32 @@ fn the_pipeline_cache_file_is_kept_and_a_bad_one_is_ignored() {
     assert_eq!(note, None);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The backend's own loading screen: black around, the logo and the text in the middle, the bar
+/// filled to the fraction done (its left end lit, its right end not, at a quarter done).
+#[test]
+fn the_loading_screen_shows_the_logo_the_text_and_the_bar() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    let p = d3d9_wgpu::loading::Progress {
+        title: "Loading".into(),
+        status: "Preparing shaders 212 of 1,480".into(),
+        done: 0.25,
+    };
+    let (w, h) = (640u32, 360u32);
+    let px = g.b.device().expect("the device").progress_pixels(w, h, &p);
+    assert_eq!(px.len(), (w * h * 4) as usize);
+    let at = |x: u32, y: u32| {
+        let i = ((y * w + x) * 4) as usize;
+        [px[i], px[i + 1], px[i + 2], px[i + 3]]
+    };
+    // The corners black.
+    for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+        assert_eq!(&at(x, y)[..3], &[0, 0, 0], "corner {x},{y}");
+    }
+    // Something lit in the middle third (the logo and the text).
+    let lit = (h / 3..2 * h / 3)
+        .flat_map(|y| (w / 3..2 * w / 3).map(move |x| (x, y)))
+        .filter(|&(x, y)| at(x, y)[..3].iter().any(|&c| c > 64))
+        .count();
+    assert!(lit > 500, "{lit} pixels lit in the middle");
+}
