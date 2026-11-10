@@ -906,3 +906,109 @@ fn an_8_bit_target_resolves_gamma_corrected() {
         }
     }
 }
+
+/// The register blocks are written only when what they carry changed, and only up to the
+/// highest constant the bound shaders read: within one pass, (1) a change of only a vertex
+/// constant moves the next draw; (2) a vertex shader reading a constant beyond the ones the last
+/// block carried (c10, set before any draw) gets it with no new constant call; (3) a change of
+/// only a pixel constant changes the next draw's colour.
+#[test]
+fn constant_changes_between_draws_in_one_pass_reach_the_shaders() {
+    let Some(mut g) = Gpu::new(8, 1) else { return };
+    const VS4: u32 = 0x1320;
+    const VS10: u32 = 0x1330;
+    // vs_2_0: dcl_position v0; add oPos, v0, cN.
+    for (shader, n) in [(VS4, 4u32), (VS10, 10)] {
+        let mut t = vec![0xFFFE_0200];
+        t.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+        t.extend(ins(2, &[0xC00F_0000, 0x90E4_0000, 0xA0E4_0000 | n]));
+        t.push(END);
+        let t = words(&t);
+        g.run(Cmd::CreateShader {
+            device: DEVICE,
+            shader,
+            pixel: false,
+            tokens: Data::Bytes(&t),
+        });
+    }
+    let vconst = |g: &mut Gpu, n: u32, v: [f32; 4]| {
+        let r = floats(&v);
+        g.run(Cmd::SetConstants {
+            device: DEVICE,
+            kind: 0,
+            start: n,
+            count: 1,
+            data: Data::Bytes(&r),
+        });
+    };
+    let shader = |g: &mut Gpu, s: u32| {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel: false,
+            shader: s,
+        })
+    };
+    // The top left quarter of the target (clip x -1 to 0, y 0 to 1).
+    let corner = |g: &mut Gpu| {
+        let q = floats(&[
+            -1.0, 0.0, 0.5, 1.0, -1.0, 1.0, 0.5, 1.0, 0.0, 0.0, 0.5, 1.0, //
+            0.0, 0.0, 0.5, 1.0, -1.0, 1.0, 0.5, 1.0, 0.0, 1.0, 0.5, 1.0,
+        ]);
+        let offset = 96 * (g.next % 32);
+        g.next += 1;
+        g.run(Cmd::UploadBuffer {
+            buffer: VB,
+            offset,
+            flags: 0,
+            data: Data::Bytes(&q),
+        });
+        g.run(Cmd::SetStreamSource {
+            device: DEVICE,
+            stream: 0,
+            buffer: VB,
+            offset,
+            stride: 16,
+        });
+        g.run(Cmd::DrawPrimitive {
+            device: DEVICE,
+            kind: 4,
+            start: 0,
+            count: 2,
+        });
+    };
+    g.state(ZENABLE, 0);
+    g.state(CULLMODE, 1);
+    vconst(&mut g, 10, [0.0, -1.0, 0.0, 0.0]);
+    vconst(&mut g, 4, [0.0, 0.0, 0.0, 0.0]);
+    shader(&mut g, VS4);
+    g.colour([1.0, 0.0, 0.0, 1.0]);
+    g.clear(1, 0, 1.0);
+    corner(&mut g); // top left, red
+    vconst(&mut g, 4, [1.0, 0.0, 0.0, 0.0]);
+    corner(&mut g); // top right, red: only c4 changed
+    shader(&mut g, VS10);
+    corner(&mut g); // bottom left, red: c10 was never sent with a draw
+    shader(&mut g, VS4);
+    vconst(&mut g, 4, [1.0, -1.0, 0.0, 0.0]);
+    corner(&mut g); // bottom right, red
+    g.colour([0.0, 1.0, 0.0, 1.0]);
+    corner(&mut g); // bottom right again, green: only the pixel shader's c0 changed
+    let px = g.pixels();
+    let at = |x: usize, y: usize| px[y * 8 + x];
+    assert_eq!(at(1, 1), [0, 0, 255, 255], "top left");
+    assert_eq!(
+        at(6, 1),
+        [0, 0, 255, 255],
+        "top right: the vertex constant change"
+    );
+    assert_eq!(
+        at(1, 6),
+        [0, 0, 255, 255],
+        "bottom left: c10 on the shader change"
+    );
+    assert_eq!(
+        at(6, 6),
+        [0, 255, 0, 255],
+        "bottom right: the pixel constant change"
+    );
+}

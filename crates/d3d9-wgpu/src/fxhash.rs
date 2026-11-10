@@ -59,7 +59,9 @@ impl Hasher for FxHasher {
     }
     #[inline]
     fn finish(&self) -> u64 {
-        self.hash
+        // The multiply leaves the low bits weakest, and the keys are often handles (guest addresses
+        // with zero low bits): rotated, the strong high bits pick the bucket (as rustc-hash does).
+        self.hash.rotate_left(26)
     }
 }
 
