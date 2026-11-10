@@ -165,7 +165,7 @@ fn form_id(e: &Engine, form: u32) -> u32 {
 // ---- the game's lists (`tList`, GameTypes.h (xNVSE)) ----
 
 /// `tList::GetNthNode`: the node at `index` from the head, 0 past the end or for a negative index.
-fn nth_node(e: &Engine, head: u32, index: i32) -> u32 {
+pub(super) fn nth_node(e: &Engine, head: u32, index: i32) -> u32 {
     if index < 0 {
         return 0;
     }
@@ -183,7 +183,7 @@ fn nth_node(e: &Engine, head: u32, index: i32) -> u32 {
 }
 
 /// `tList::GetLastNode`: the last node and its index.
-fn last_node(e: &Engine, head: u32) -> (u32, i32) {
+pub(super) fn last_node(e: &Engine, head: u32) -> (u32, i32) {
     let (mut node, mut index) = (head, 0);
     while e.mem.u32(node + 4) != 0 {
         node = e.mem.u32(node + 4);
@@ -210,7 +210,7 @@ fn insert(e: &mut Engine, node: u32, item: u32) {
 /// `item` put at `index` (0 the head, -2 the end, else before the node there); the index answered
 /// is the one given, or for the end the index of the node it went after (or into, when the list
 /// was empty); -1 for no item or no such node.
-fn add_at(e: &mut Engine, head: u32, item: u32, index: i32) -> i32 {
+pub(super) fn add_at(e: &mut Engine, head: u32, item: u32, index: i32) -> i32 {
     if item == 0 {
         return LIST_INVALID;
     }
@@ -242,7 +242,7 @@ fn add_at(e: &mut Engine, head: u32, item: u32, index: i32) -> i32 {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameTypes.h: tList::ReplaceNth.
 /// The item at `index` (-2 the last) replaced; the old item, 0 for none.
-fn replace_nth(e: &mut Engine, head: u32, index: i32, item: u32) -> u32 {
+pub(super) fn replace_nth(e: &mut Engine, head: u32, index: i32, item: u32) -> u32 {
     if item == 0 {
         return 0;
     }
@@ -263,7 +263,7 @@ fn replace_nth(e: &mut Engine, head: u32, index: i32, item: u32) -> u32 {
 // ListNode::RemoveMe, ListNode::RemoveNext.
 /// The item at `idx` taken out (any index of 0 or less the head: -2 too), its node freed; 0 past
 /// the end.
-fn remove_nth(e: &mut Engine, head: u32, idx: i32) -> u32 {
+pub(super) fn remove_nth(e: &mut Engine, head: u32, idx: i32) -> u32 {
     if idx <= 0 {
         let removed = e.mem.u32(head);
         let next = e.mem.u32(head + 4);
@@ -295,7 +295,7 @@ fn remove_nth(e: &mut Engine, head: u32, idx: i32) -> u32 {
 }
 
 /// `tList::GetNthItem`: the item at `index` (-2 the last), 0 for none.
-fn nth_item(e: &Engine, head: u32, index: i32) -> u32 {
+pub(super) fn nth_item(e: &Engine, head: u32, index: i32) -> u32 {
     if index == LIST_END {
         return e.mem.u32(last_node(e, head).0);
     }
@@ -308,7 +308,7 @@ fn nth_item(e: &Engine, head: u32, index: i32) -> u32 {
 }
 
 /// `tList::Count`: 0 for an empty head, else every node.
-fn count(e: &Engine, head: u32) -> u32 {
+pub(super) fn count(e: &Engine, head: u32) -> u32 {
     if e.mem.u32(head) == 0 {
         return 0;
     }

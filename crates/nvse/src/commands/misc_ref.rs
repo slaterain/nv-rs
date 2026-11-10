@@ -412,7 +412,7 @@ pub(super) fn passed_over(e: &mut Engine, pointer: u32) -> bool {
 }
 
 /// `GetFullName(TESForm *)` (xNVSE `GameForms.cpp`), a guest string for the console.
-fn full_name_text(e: &mut Engine, form: u32) -> u32 {
+pub(super) fn full_name_text(e: &mut Engine, form: u32) -> u32 {
     let name = super::string::tes_full_name(e, form);
     if name != 0 {
         let (data, len) = (e.mem.u32(name + 4), e.mem.u16(name + 8));
@@ -447,7 +447,7 @@ fn get_base_object(e: &mut Engine, w: &[u32]) -> Ret {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameObjects.cpp: GetPermanentBaseForm.
 /// A reference's base form; for one made in game (file 0xFF), a placed water's water or a
 /// leveled creature's real base form.
-fn permanent_base_form(e: &mut Engine, reference: u32) -> u32 {
+pub(super) fn permanent_base_form(e: &mut Engine, reference: u32) -> u32 {
     if reference == 0 {
         return 0;
     }
