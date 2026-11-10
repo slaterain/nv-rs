@@ -41,9 +41,7 @@
 //! and active planes set on its own process (a geometry registers, a tree or particle system walks
 //! here on main) and put back after; a logged call with its words. So every registration,
 //! accumulator call and unaudited override runs on main, in the serial order, with the process
-//! state the serial walk had. Main starts it inside the fork, as the logs come in, and walks tasks
-//! while the next log is not in; it goes on after the join from the first entry that may not run
-//! beside the walkers (an unaudited `OnVisible`), or wherever it got to ([`Replayer`]).
+//! state the serial walk had.
 //!
 //! **The check** (`NV_PAR_RENDER=check`): after the tasks, the fade nodes they ran get back the
 //! bytes their `OnVisible` writes (flags and fade fields, saved before each ran: a second walk would
@@ -136,153 +134,6 @@ struct Split {
     main_ns: AtomicU64,
     joined: AtomicU64,
     wake_ns: AtomicU64,
-    /// With the switch on: main's replay of the logs, which main runs inside the fork as the logs
-    /// come in ([`Replayer`]) and finishes after the join.
-    replay: Mutex<Option<Replayer>>,
-}
-
-/// `OnVisible`'s vtable slot, and `NiGeometry::OnVisible` (what a geometry's slot holds).
-const SLOT_ON_VISIBLE: u32 = 0xd4;
-const GEOMETRY_ON_VISIBLE: u32 = 0x00a7_fd90;
-
-/// Main's replay of a split's logs in the serial order: the top tasks in order, a marked node's
-/// tasks at its mark. Inside the fork (`Split::work`, main's part) it replays a task's log as
-/// soon as that log and every one before it in the order are in, and walks tasks while it
-/// waits; it stops at the first entry that is not a geometry's registration or a logged call (an
-/// unaudited `OnVisible`, which may run any game code: that waits for the join). After the join
-/// it replays the rest. So registration, the one part of a split that only main can do, runs
-/// while the walkers are still walking.
-///
-/// Why that is safe beside the walkers: a geometry's registration (`AppendVirtual`, the
-/// accumulator's `RegisterObject`, its property's render passes) writes the accumulator, its
-/// batch renderers, the geometry's property and the passes; the fade node's logged calls write
-/// the batch renderer's grouping state and the shader properties' fade alpha. The walkers read
-/// none of those: they read the objects' flags, bounds, children and multi-bound shapes, the
-/// fade nodes' own fields, the camera and the fade globals, and write only their process copies,
-/// the fade nodes they run and the shapes' kept verdicts, none of which a registration reads.
-struct Replayer {
-    /// Main's process: each entry runs with its logged mode and planes set on it.
-    process: u32,
-    /// The task ranges being replayed, innermost last.
-    frames: Vec<Frame>,
-    /// Entries replayed, and of them inside the fork.
-    entries: usize,
-    early: usize,
-    /// Inside the fork: the functions main's logging ones stand in for (a logged call runs with
-    /// its own put back for it); empty after the join.
-    originals: Vec<(u32, AbiFn)>,
-}
-
-/// Tasks `task..end` of a replay, at entry `pos` of task `task`'s log (taken from the queue).
-struct Frame {
-    log: Option<Vec<Entry>>,
-    task: usize,
-    end: usize,
-    pos: usize,
-}
-
-/// How far a replay got.
-#[derive(PartialEq, Eq, Debug)]
-enum Progress {
-    /// Every entry is replayed.
-    Done,
-    /// The next log in the order is not in yet.
-    Waiting,
-    /// Inside the fork: the next entry waits for the join.
-    Halted,
-}
-
-impl Replayer {
-    fn new(process: u32, top: usize) -> Replayer {
-        Replayer {
-            process,
-            frames: vec![Frame {
-                log: None,
-                task: 0,
-                end: top,
-                pos: 0,
-            }],
-            entries: 0,
-            early: 0,
-            originals: Vec::new(),
-        }
-    }
-
-    /// Replays as far as the logs in allow (`in_fork`: inside the fork, where it also stops at an
-    /// entry that must wait for the join; after it every log is in).
-    fn advance(&mut self, e: &mut Engine, split: &Split, in_fork: bool) -> Progress {
-        loop {
-            let Some(frame) = self.frames.last_mut() else {
-                return Progress::Done;
-            };
-            if frame.task >= frame.end {
-                self.frames.pop();
-                continue;
-            }
-            if frame.log.is_none() {
-                let taken = split
-                    .queue()
-                    .logs
-                    .get_mut(frame.task)
-                    .and_then(Option::take);
-                match taken {
-                    Some(log) => frame.log = Some(log),
-                    None if in_fork => return Progress::Waiting,
-                    // A task that left no log (a stop: the fork has resumed the panic by then).
-                    None => frame.log = Some(Vec::new()),
-                }
-            }
-            let at = self.frames.len() - 1;
-            let pos = self.frames[at].pos;
-            let Some(entry) = self.frames[at].log.as_ref().and_then(|log| log.get(pos)) else {
-                let frame = &mut self.frames[at];
-                frame.task += 1;
-                frame.pos = 0;
-                frame.log = None;
-                continue;
-            };
-            match entry {
-                Entry::Tasks { first, count } => {
-                    let (task, end) = (*first, *first + *count);
-                    self.frames[at].pos += 1;
-                    self.frames.push(Frame {
-                        log: None,
-                        task,
-                        end,
-                        pos: 0,
-                    });
-                }
-                Entry::Visible { object, .. }
-                    if in_fork
-                        && crate::slot_target(e, *object, SLOT_ON_VISIBLE)
-                            != GEOMETRY_ON_VISIBLE =>
-                {
-                    return Progress::Halted;
-                }
-                Entry::Call { addr, words } if in_fork => {
-                    // Main's engine has the logging function there now: the real one for this call.
-                    let real = self.originals.iter().find(|(a, _)| a == addr).map(|p| p.1);
-                    let logging =
-                        real.and_then(|f| engine_core::real_threads::caller_swap(e, *addr, f));
-                    e.call(*addr, words);
-                    if let Some(logging) = logging {
-                        engine_core::real_threads::caller_swap(e, *addr, logging);
-                    }
-                    self.frames[at].pos += 1;
-                    self.entries += 1;
-                    self.early += 1;
-                }
-                entry => {
-                    replay(e, self.process, entry);
-                    self.frames[at].pos += 1;
-                    self.entries += 1;
-                    if in_fork {
-                        self.early += 1;
-                    }
-                }
-            }
-        }
-    }
 }
 
 impl Split {
@@ -298,7 +149,6 @@ impl Split {
             main_ns: AtomicU64::new(0),
             joined: AtomicU64::new(0),
             wake_ns: AtomicU64::new(0),
-            replay: Mutex::new(None),
         })
     }
 
@@ -324,16 +174,8 @@ impl Split {
     }
 
     /// A walker's loop: takes tasks and walks them with its process copy at `local` until none is
-    /// left and none is being walked (a task being walked may still add tasks). With `early`
-    /// (main's part, the switch on) it also replays the logs as they come in ([`Replayer`]),
-    /// before each task it takes.
-    fn work(
-        self: &Arc<Split>,
-        w: &mut Engine,
-        number: usize,
-        local: u32,
-        mut early: Option<&mut Replayer>,
-    ) {
+    /// left and none is being walked (a task being walked may still add tasks).
+    fn work(self: &Arc<Split>, w: &mut Engine, number: usize, local: u32) {
         struct Current;
         impl Drop for Current {
             fn drop(&mut self) {
@@ -356,14 +198,6 @@ impl Split {
         let mut idle = 0u32;
         let mut first = true;
         loop {
-            if let Some(replayer) = early.as_deref_mut() {
-                match replayer.advance(w, self, true) {
-                    // Every log is replayed, so every task is walked.
-                    Progress::Done => break,
-                    Progress::Halted => early = None,
-                    Progress::Waiting => {}
-                }
-            }
             let taken = {
                 let mut queue = self.queue();
                 if queue.stopped {
@@ -706,14 +540,10 @@ fn install_logging(e: &mut Engine) {
 
 /// Runs `fork` (a split's fork and join) with the logging functions on main's own engine, and
 /// puts back what they stood in for after it, also when it stops. `fork` is told whether they are
-/// there (it gets what they stand in for; nothing when they are not): they cannot go on main's
-/// engine when one of the three addresses has become a typed family's member
-/// (`engine_core::real_threads::caller_swap`); main then walks no chunk, and the helpers walk them
-/// all.
-fn with_logging_on_main<R>(
-    e: &mut Engine,
-    fork: impl FnOnce(&mut Engine, &[(u32, AbiFn)]) -> R,
-) -> R {
+/// there: they cannot go on main's engine when one of the three addresses has become a typed
+/// family's member (`engine_core::real_threads::caller_swap`); main then walks no chunk, and the
+/// helpers walk them all.
+fn with_logging_on_main<R>(e: &mut Engine, fork: impl FnOnce(&mut Engine, bool) -> R) -> R {
     use engine_core::real_threads::caller_swap;
     let mut put_back: Vec<(u32, AbiFn)> = Vec::with_capacity(LOGGING.len());
     for (addr, f) in LOGGING {
@@ -722,12 +552,13 @@ fn with_logging_on_main<R>(
             None => break,
         }
     }
-    if put_back.len() != LOGGING.len() {
+    let all = put_back.len() == LOGGING.len();
+    if !all {
         for (addr, old) in put_back.drain(..) {
             caller_swap(e, addr, old);
         }
     }
-    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fork(e, &put_back)));
+    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fork(e, all)));
     for (addr, old) in put_back {
         caller_swap(e, addr, old);
     }
@@ -812,28 +643,14 @@ fn walk_chunk(e: &mut Engine, children: &[u32], process: u32) -> Vec<Entry> {
 /// that has not started when the tasks are all walked does not join in
 /// (`engine_core::real_threads::fork_join_first`). False when the helpers could not be had.
 fn on_walkers(e: &mut Engine, helpers: usize, split: &Arc<Split>) -> bool {
-    with_logging_on_main(e, |e, originals| {
-        let main_walks = !originals.is_empty();
+    with_logging_on_main(e, |e, main_walks| {
         let job = |w: &mut Engine, number: usize| {
             if number != 0 {
                 install_logging(w);
             }
             w.with_stack(PROCESS_SIZE, |w, local| {
-                if number != 0 {
-                    split.work(w, number, local.addr(), None);
-                } else if main_walks {
-                    // Main replays the logs as they come in when the split has a replayer.
-                    let mut replay = split
-                        .replay
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    if let Some(replayer) = replay.as_mut() {
-                        replayer.originals = originals.to_vec();
-                    }
-                    split.work(w, number, local.addr(), replay.as_mut());
-                    if let Some(replayer) = replay.as_mut() {
-                        replayer.originals.clear();
-                    }
+                if number != 0 || main_walks {
+                    split.work(w, number, local.addr());
                 } else {
                     split.wait();
                 }
@@ -906,13 +723,6 @@ pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32)
     }
     let tasks = Split::new(true, check, timed);
     let (_, mut top) = tasks.add(&children, task_size(children.len(), helpers, 1), &image);
-    if !check {
-        // Main replays inside the fork as the logs come in, and the rest after the join.
-        *tasks
-            .replay
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Replayer::new(process, top));
-    }
     let forked = timed.then(Instant::now);
     if !on_walkers(e, helpers, &tasks) {
         return refused(Refused::Helpers);
@@ -922,34 +732,8 @@ pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32)
     if walks.is_power_of_two() && walks >= 1024 {
         println!("NV_PAR_RENDER: {walks} splits walked in tasks");
     }
-    let task_count = tasks.queue().tasks.len();
-    let replayer = tasks
-        .replay
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .take();
-    if let Some(mut replayer) = replayer {
-        let replaying = timed.then(super::probe::replay_begins);
-        let done = replayer.advance(e, &tasks, false);
-        drop(replaying);
-        debug_assert_eq!(done, Progress::Done);
-        if let (Some(forked), Some(joined)) = (forked, joined) {
-            super::probe::split_walked(&super::probe::SplitTimes {
-                children: children.len(),
-                tasks: task_count,
-                entries: replayer.entries,
-                early: replayer.early,
-                fork: joined.duration_since(forked),
-                replay: joined.elapsed(),
-                busy_ns: tasks.busy_ns.load(Relaxed),
-                main_ns: tasks.main_ns.load(Relaxed),
-                joined: tasks.joined.load(Relaxed),
-                wake_ns: tasks.wake_ns.load(Relaxed),
-            });
-        }
-        return true;
-    }
     let mut logs = tasks.logs();
+    let task_count = logs.len();
     if check {
         // The fade nodes as they were before the first walk: the second steps them once again.
         let saved = std::mem::take(
@@ -983,7 +767,6 @@ pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32)
             children: children.len(),
             tasks: task_count,
             entries,
-            early: 0,
             fork: joined.duration_since(forked),
             replay: joined.elapsed(),
             busy_ns: tasks.busy_ns.load(Relaxed),
