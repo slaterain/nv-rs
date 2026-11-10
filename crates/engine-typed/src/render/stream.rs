@@ -24,8 +24,6 @@ pub fn note_head_check() {
 
 /// `00e6d760` (`thiscall` on the renderer, a declaration word): the vertex declaration.
 const DECLARATION: u32 = 0x00e6_d760;
-/// `00e6d780` (`thiscall` on the renderer, six words): the skinned packer.
-const PACK_SKINNED: u32 = 0x00e6_d780;
 /// The stream limit (`011bf558`).
 const STREAM_LIMIT: u32 = 0x011b_f558;
 /// The RTTI records the packer tells the data's kind by: the triangle list data (walked up the data's
@@ -33,9 +31,8 @@ const STREAM_LIMIT: u32 = 0x011b_f558;
 const TRI_LIST_DATA_RTTI: u32 = 0x011f_4a88;
 const STRIP_DATA_RTTI: u32 = 0x011f_4a70;
 const IS_KIND_OF: u32 = 0x0043_b300;
-/// `NiTriShapeData::GetTriList` (`00a7b850`) and `NiTriStripsData::GetStripLists` (`00a75f10`).
+/// `NiTriShapeData::GetTriList` (`00a7b850`).
 const GET_TRI_LIST: u32 = 0x00a7_b850;
-const GET_STRIP_LISTS: u32 = 0x00a7_5f10;
 /// `NiD3DHLSLVertexShader::GetEntryPoint` (`00e8bf90`, on the renderer's +0x8bc), the buffer data's
 /// stream count set (`00e8ef10`), `PackUntransformedVB` (`00e8c1e0`), the index buffer maker
 /// (`00e8f200`, on the renderer's +0x8c0) and `NiGeometryBufferData::RemoveIB` (`00e8eee0`).
@@ -49,6 +46,61 @@ const DIRECT3D_IS_EX: u32 = 0x0126_f0d0;
 /// The render state cache's `SetVertexDeclaration` (slot 0xac, `00e90fc0`).
 const SLOT_SET_DECLARATION: u32 = 0xac;
 const SET_DECLARATION: u32 = 0x00e9_0fc0;
+
+/// A shader declaration's build (its slot 0xb4): the draw family's `00e76a80` directly when the slot
+/// holds it, any other target through the vtable.
+#[inline(always)]
+fn declaration_built(e: &mut Engine, declaration: u32) -> u32 {
+    if crate::slot_target(e, declaration, 0xb4) == 0x00e7_6a80 {
+        typed_call!(
+            crate::draw::FAMILY,
+            0x00e7_6a80,
+            crate::draw::packing::build_declaration(e, Ptr::new(declaration))
+        )
+    } else {
+        e.vcall(declaration, 0xb4, &args![]).u32()
+    }
+}
+
+/// A source's pack of one stream (its slot 0xac, nine words): a shader declaration's (the draw family's
+/// `00e76770`) directly when the slot holds it, any other target through the vtable.
+#[inline(always)]
+fn stream_packed(
+    e: &mut Engine,
+    source: u32,
+    data: u32,
+    object: u32,
+    dirty: u32,
+    stream: u32,
+    index: u32,
+) -> u32 {
+    if crate::slot_target(e, source, 0xac) == 0x00e7_6770 {
+        typed_call!(
+            crate::draw::FAMILY,
+            0x00e7_6770,
+            crate::draw::packing::pack_stream(
+                e,
+                Ptr::new(source),
+                data,
+                object,
+                0u32,
+                dirty,
+                stream,
+                index,
+                0u32,
+                0u32,
+                0u32
+            )
+        )
+    } else {
+        e.vcall(
+            source,
+            0xac,
+            &args![data, object, 0u32, dirty, stream, index, 0u32, 0u32, 0u32],
+        )
+        .u32()
+    }
+}
 
 // Typed from 00e812f0
 /// `thiscall(shader, geometry, partition, buffer data, unused)`: with a geometry and no word at +0x38,
@@ -76,7 +128,7 @@ pub fn prepare_streams(
         let mut declaration = None;
         if data != 0 {
             let shader_declaration = e.mem.u32(data.wrapping_add(0x30));
-            if shader_declaration != 0 && e.vcall(shader_declaration, 0x8c, &args![]).bool() {
+            if shader_declaration != 0 && crate::draw::shapes::asks(e, shader_declaration, 0x8c) {
                 let word = e.mem.u32(shader_declaration.wrapping_add(0x2c));
                 let renderer = e.mem.u32(base.wrapping_add(0x18));
                 declaration = Some(e.call(DECLARATION, &args![renderer, word]).u32());
@@ -85,7 +137,7 @@ pub fn prepare_streams(
         if declaration.is_none() {
             let own = e.mem.u32(base.wrapping_add(0x28));
             if own != 0 {
-                declaration = Some(e.vcall(own, 0xb4, &args![]).u32());
+                declaration = Some(declaration_built(e, own));
             }
         }
         if let Some(declaration) = declaration {
@@ -104,9 +156,19 @@ pub fn prepare_streams(
         let own = e.mem.u32(base.wrapping_add(0x28));
         if partition != 0 {
             result = e.mem.u32(partition.wrapping_add(0x28));
-            e.call(
-                PACK_SKINNED,
-                &args![renderer, result, data, second, partition, own, 0u32],
+            let _: bool = typed_call!(
+                crate::draw::FAMILY,
+                0x00e6_d780,
+                crate::draw::packing::pack_skinned(
+                    e,
+                    Ptr::new(renderer),
+                    Ptr::new(result),
+                    Ptr::new(data),
+                    second,
+                    Ptr::new(partition),
+                    Ptr::new(own),
+                    0u8
+                )
             );
         } else {
             result = e.mem.u32(data.wrapping_add(0x34));
@@ -191,7 +253,7 @@ pub fn pack_geometry_buffer(
         stream_flags |= 0x20_0000;
     }
     e.mem.set_u32(b.wrapping_add(4), (low << 24) | stream_flags);
-    let vertices = u32::from(e.vcall(d, 0x90, &args![]).u16());
+    let vertices = u32::from(crate::draw::shapes::vertex_count(e, d));
     let second = u32::from(e.mem.u16(d.wrapping_add(8)));
     let mut triangles = 0u32;
     let mut base_count = 0u32;
@@ -199,7 +261,7 @@ pub fn pack_geometry_buffer(
     let mut list = 0u32;
     let mut lengths = 0u32;
     let mut strips = 0u32;
-    let mut rtti = e.vcall(d, 8, &args![]).u32();
+    let mut rtti = crate::draw::shapes::rtti_of(e, d);
     let mut tri_list = false;
     while rtti != 0 {
         if rtti == TRI_LIST_DATA_RTTI {
@@ -209,16 +271,20 @@ pub fn pack_geometry_buffer(
         rtti = e.mem.u32(rtti.wrapping_add(4));
     }
     if tri_list {
-        triangles = u32::from(e.vcall(d, 0xa8, &args![]).u16());
+        triangles = u32::from(crate::draw::shapes::triangle_count(e, d));
         base_count = u32::from(e.mem.u16(d.wrapping_add(0x40)));
         list = e.call(GET_TRI_LIST, &args![data]).u32();
         lengths = 0;
         strips = 1;
         index_count = base_count.wrapping_mul(3);
     } else if e.call(IS_KIND_OF, &args![STRIP_DATA_RTTI, data]).u8() != 0 {
-        triangles = u32::from(e.vcall(d, 0xa8, &args![]).u16());
+        triangles = u32::from(crate::draw::shapes::triangle_count(e, d));
         base_count = u32::from(e.mem.u16(d.wrapping_add(0x40)));
-        list = e.call(GET_STRIP_LISTS, &args![data]).u32();
+        list = typed_call!(
+            crate::draw::FAMILY,
+            0x00a7_5f10,
+            crate::draw::shapes::strip_lists(e, d)
+        );
         lengths = e.mem.u32(d.wrapping_add(0x48));
         strips = u32::from(e.mem.u16(d.wrapping_add(0x44)));
         index_count = base_count.wrapping_add(strips.wrapping_mul(2));
@@ -279,14 +345,8 @@ pub fn pack_geometry_buffer(
             } else {
                 0
             };
-            let done = source != 0
-                && e.vcall(
-                    source,
-                    0xac,
-                    &args![data, object, 0u32, dirty, stream, index, 0u32, 0u32, 0u32],
-                )
-                .u32()
-                    != 0;
+            let done =
+                source != 0 && stream_packed(e, source, data, object, dirty, stream, index) != 0;
             if !done {
                 if count != 1 {
                     return false;

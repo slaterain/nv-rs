@@ -308,6 +308,9 @@ impl Common for Diff {
             .family(&pathing::PATHING)
             .family(&culling::CULLING)
             .family(&crt::CRT)
+            // The draw family's skinned packer and strip lists, which the packing calls: stood in here, run
+            // in the draw family's tests below.
+            .goes_by_address(&[0x00e6_d780, 0x00a7_5f10])
             .max_calls(MAX_CALLS)
             .max_cases(200);
         if real_shader {
@@ -1301,4 +1304,32 @@ fn tri_strips_draw_through_the_typed_slot() {
     })
     .run()
     .assert_same();
+}
+
+/// `draw_packed` with the data's slot 0x90 holding the draw family's vertex count (`00a669e0`): the
+/// call made direct; with vertices and without.
+#[test]
+fn draw_packed_typed_vertex_count() {
+    Diff::new(entry!(0x00e7_4840, draw::draw_packed(Ptr, Ptr)))
+        .common(false)
+        .family(&engine_typed::draw::DRAW)
+        .inputs(&[
+            Input::Of(&[
+                DRAW_INDEXED,
+                DRAW_SKIN | DRAW_LENGTHS,
+                DRAW_INDEXED | DRAW_LENGTHS,
+            ]),
+            Input::Of(&[1, 2]),
+            Input::Of(&[0x20, 0]),
+        ])
+        .setup(|e, c| {
+            let d = drawn(e, c.word(0), c.word(1), 2, 0x3f80_0000);
+            let data = e.mem.u32(d.geometry + 0xb8);
+            let vt = vtable(e, &[(0x90, 0x00a6_69e0)]);
+            set(e, data, vt);
+            e.mem.set_u16(data + 8, c.word(2) as u16);
+            vec![d.renderer, d.geometry]
+        })
+        .run()
+        .assert_same();
 }
