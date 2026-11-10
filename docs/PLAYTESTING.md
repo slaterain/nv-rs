@@ -81,12 +81,23 @@ and the host's tests check one against the other. The fix lines are written with
 
 - Lowest to highest: the built-in default, the preset, the `Fallout.ini` keys, then the `NV_...`
   variables (for tests and scripts).
-- Play.exe puts the block at the top of each profile's `Fallout.ini` (`userdata\game` and
-  `userdata\mods`) once, the rest of the file byte for byte as it was, and moves an older
-  `userdata\settings.ini` into the files once (renamed `settings.ini.migrated`). Settings.cmd then
-  changes the lines of the options it shows in both profiles' files, in place.
-- `settings.ini` is still read by the game, below `Fallout.ini`, when it is there: a line
-  `Fallout.ini` already sets is not read.
+- Play.exe puts the block into each profile's `Fallout.ini` (`userdata\game` and `userdata\mods`)
+  once, the rest of the file byte for byte as it was: at the top, or at the end of a file that
+  starts with a UTF-8 byte order mark (Windows does not read the heading glued to the mark, and
+  the player's keys must read as before). A file that has only some of the sections or keys gets
+  the rest. A UTF-16 file is left as it is (launcher.log says so).
+- While a `userdata\settings.ini` exists it is the settings, for Settings.cmd and Play.exe alike:
+  Settings.cmd shows the files with its lines over them and writes it; Play.exe moves it into both
+  profiles' files, its lines winning over what the files say, and renames it
+  `settings.ini.migrated` (`.migrated.2`, ... after an earlier one). When it can't be renamed, or a
+  profile's file can't take its choices, it stays and the next start does the same again.
+  Settings.cmd changes the files in place only when every profile's `Fallout.ini` has the sections
+  and no settings.ini exists; then it changes the lines of the options it shows in both, in place.
+- The game reads three lines of a `settings.ini` that is there (`Preset`, `FrameLimit`,
+  `MenuFrameLimit`), each only when neither `Fallout.ini` nor a variable sets it. When the played
+  profile's `Fallout.ini` has no sections (UTF-16, or nothing to make it from), Play.exe passes
+  the six options as variables instead, from settings.ini's lines, else the play defaults; the
+  fix lines and V-sync then do nothing until the file can take them.
 - A key nv-rs does not know is passed over, as the game passes over one it never asks for. A value it
   can't use leaves the default, and one line in the log names it; the game still starts.
 - Only a launcher's play run reads these sections: `NV_SETTINGS` set (Play.exe; the
@@ -246,7 +257,7 @@ GitHub Releases; the packages there from before 2026-11-03 are of the removed vi
   default sound device changes. Without a sound device the table says so and the game goes on silent.
 - **The first settings:** the player's `Fallout.ini` and `FalloutPrefs.ini` copied once (read only); where
   the game's own launcher never ran, what it leaves behind: `Fallout_default.ini` and the `high.ini` preset,
-  from the game's folder; nv-rs's own sections at the top of that `Fallout.ini`, once. `sD3DDevice` is set to this PC's card at every start, because `main` asks for
+  from the game's folder; nv-rs's own sections in that `Fallout.ini`, once (above). `sD3DDevice` is set to this PC's card at every start, because `main` asks for
   `FalloutNVLauncher.exe` when it differs (`004da570`); `ShellExecuteA` answers for it that nothing started,
   but after that the game's start-up still stops, in the renderer (a run without `sD3DDevice`): the name must match.
 - **The name:** the program is simply named `FalloutNV.exe` in the package, in `app\`: no link is needed,

@@ -16,6 +16,16 @@
 
 # No progress records: with its output redirected, Windows PowerShell writes them to the error stream.
 $ProgressPreference = 'SilentlyContinue'
+# Any error stops the script, and nothing is written after it: a file it could not read would
+# otherwise look like one without the settings, and its defaults would be saved over the
+# player's choices. Settings.cmd hides this script's own window, so the error is shown here.
+$ErrorActionPreference = 'Stop'
+trap {
+    $text = "The settings were not saved.`n`n$($_.Exception.Message)`n`nClose the game and any program that has nv-rs's files open, then open Settings again, choose and click Save."
+    if ($env:NV_RS_NO_WINDOWS -eq '1') { [Console]::Error.WriteLine($text) }
+    else { try { [void][System.Windows.Forms.MessageBox]::Show($text, 'nv-rs settings', 'OK', 'Error') } catch { } }
+    exit 1
+}
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
@@ -139,10 +149,15 @@ $known = @('Borderless', 'Resolution', 'AntiAliasing', 'Anisotropy', 'VSync', 'P
 # they did something.
 $dropped = @('NV_PRESET', 'NV_FRAME_LIMIT', 'NV_MENU_FRAME_LIMIT', 'NV_FIXES')
 
-# Where the settings are. The game profile's Fallout.ini has nv-rs's sections ($seeded): Play.exe
-# made it ready. A settings.ini is there ($pending): it is the settings until Play.exe has moved it.
+# Where the settings are. Every profile's Fallout.ini has nv-rs's sections ($seeded): Play.exe
+# made them ready; one that lacks them would be left with Play.exe's defaults, not the choices
+# made here. A settings.ini is there ($pending): it is the settings until Play.exe has moved it.
 $ini = Read-Ini (Join-Path $games[0] 'Fallout.ini')
-$seeded = Test-Sections $ini
+$seeded = $true
+foreach ($dir in $games) {
+    $path = Join-Path $dir 'Fallout.ini'
+    if (-not (Test-Path -LiteralPath $path) -or -not (Test-Sections (Read-Ini $path))) { $seeded = $false }
+}
 $pending = Test-Path -LiteralPath $file
 $inFiles = $seeded -and -not $pending
 

@@ -384,7 +384,8 @@ pub fn set_key(text: &str, section: &str, key: &str, value: &str) -> String {
 /// reads it.
 ///
 /// The borderless window is Play.exe's own default: with no `Borderless=` line, `bBorderless=1`
-/// goes into a key that was added just now (`added`) or that is empty, and nowhere else.
+/// goes into a key that was added just now (`added`) or that is empty, and nowhere else: a key
+/// the player commented out (`;bBorderless=...`) stays as it is.
 ///
 /// Also the names of settings.ini's lines that are not used any more. `settings` must have
 /// passed [`Settings::game_switches`].
@@ -442,9 +443,9 @@ pub fn apply_choices(
         }
         match value {
             Some(value) => text = set_key(&text, section, key, &value),
+            // Not a `;bBorderless=` line: a player who commented the key out meant the default.
             None if key == "bBorderless"
-                && (added.contains(&key)
-                    || ini_value(&text, section, key).is_none_or(str::is_empty)) =>
+                && (added.contains(&key) || ini_value(&text, section, key) == Some("")) =>
             {
                 text = set_key(&text, section, key, "1");
             }
@@ -470,6 +471,9 @@ pub fn apply_choices(
 pub struct Switches {
     /// The variable set before Play.exe started that makes the game's run a test, if one does.
     pub test: Option<&'static str>,
+    /// The played profile's `Fallout.ini` has none of our sections (UTF-16, or there was nothing
+    /// to make it from), so the game can't read the player's options there: they are passed.
+    pub no_sections: bool,
     /// Taken out of the game's environment: in play the file decides, so nothing may beat it.
     pub removed: Vec<&'static str>,
     /// Passed on with the file's choices: a test never reads the file.
@@ -487,25 +491,53 @@ pub struct Switches {
 /// plays like the player's game, the file's choices are passed on then: its value for each of
 /// the six, or the value a play run has when the file does not say, and each fix line that is
 /// not commented out. A variable set before the start stays as it was set: nothing is taken out.
-pub fn switches(fallout_ini: &str, inherited: impl Fn(&str) -> bool) -> Switches {
+///
+/// When the played profile's file has none of our sections (Play.exe leaves a UTF-16 file
+/// alone, and makes none when there is nothing to make it from), the game can't find the
+/// player's options in it, and a `settings.ini` stays: the choices then come from `settings`
+/// (that file, when there is one) over the play defaults, as they would be in the file once
+/// moved in. In play the six are passed from there, each one set (over an inherited one too);
+/// the fix lines are not, since a fix's own variable would make the run a test.
+pub fn switches(
+    fallout_ini: &str,
+    settings: Option<&Settings>,
+    inherited: impl Fn(&str) -> bool,
+) -> Switches {
     let test = TEST_SWITCHES
         .iter()
         .copied()
         .chain(rows().filter(|r| r.0 == FIXES_SECTION).map(|r| r.2))
         .find(|name| inherited(name));
+    let no_sections = !has_sections(fallout_ini);
     let mut out = Switches {
         test,
+        no_sections,
         ..Switches::default()
     };
-    if test.is_none() {
+    if test.is_none() && !no_sections {
         out.removed = rows()
             .filter(|r| r.0 != FIXES_SECTION)
             .map(|r| r.2)
             .collect();
         return out;
     }
+    // The choices as the file would hold them: the file's own, or settings.ini's moved into the
+    // block (its keys all just added, so Play.exe's own defaults go in too).
+    let moved;
+    let fallout_ini = if no_sections {
+        moved = with_sections("").map_or_else(String::new, |seeded| {
+            apply_choices(&seeded.text, settings, &seeded.added).0
+        });
+        moved.as_str()
+    } else {
+        fallout_ini
+    };
+    let play = test.is_none();
     for (section, key, variable, default) in rows() {
-        if inherited(variable) {
+        if play && section == FIXES_SECTION {
+            continue;
+        }
+        if inherited(variable) && !play {
             if section != FIXES_SECTION {
                 out.kept.push(variable);
             }
@@ -809,6 +841,66 @@ mod tests {
             apply_choices(added, None, &["bBorderless"]).0,
             "[nv-rs Display]\r\nbBorderless=1\r\n"
         );
+        // A key the player commented out is theirs: left as it is, every byte.
+        let off = "[nv-rs Display]\r\n;bBorderless=0\r\niFrameLimit=60\r\n";
+        assert_eq!(apply_choices(off, None, &[]).0, off);
+        let seeded = with_sections(off).unwrap();
+        assert!(!seeded.added.contains(&"bBorderless"));
+        assert!(apply_choices(&seeded.text, None, &seeded.added)
+            .0
+            .starts_with(off));
+    }
+
+    /// The played profile's file has none of our sections (UTF-16, or none could be made): in
+    /// play the six are passed from settings.ini over the play defaults, each one set, no fix
+    /// line; in a test the same choices, what was set before kept.
+    #[test]
+    fn a_file_without_the_sections_gets_the_choices_as_variables() {
+        let pairs = |list: &[(&'static str, &str)]| -> Vec<(&'static str, String)> {
+            list.iter().map(|(n, v)| (*n, v.to_string())).collect()
+        };
+        let wide = "\u{ff}\u{fe}[\0G\0e\0n\0e\0r\0a\0l\0]\0";
+        let settings = Settings::parse(
+            "Borderless=0\nPreset=vanilla\nFrameLimit=60\nNV_THREADS=stepped\nNV_UNCAP=0\n",
+        );
+        for text in [wide, "", "[General]\r\nx=1\r\n"] {
+            let play = switches(text, Some(&settings), |name| name == "NV_PRESET");
+            assert!(play.no_sections && play.test.is_none());
+            assert!(play.removed.is_empty() && play.kept.is_empty());
+            assert_eq!(
+                play.passed,
+                pairs(&[
+                    ("NV_PRESET", "vanilla"),
+                    ("NV_BORDERLESS", "0"),
+                    ("NV_FRAME_LIMIT", "60"),
+                    ("NV_MENU_FRAME_LIMIT", "120"),
+                    ("NV_THREADS", "stepped"),
+                    ("NV_RENDER_THREAD", "1"),
+                ]),
+                "{text:?}"
+            );
+        }
+        // No settings.ini: the play defaults, borderless among them.
+        let plain = switches(wide, None, |_| false);
+        assert_eq!(
+            plain.passed,
+            pairs(&[
+                ("NV_PRESET", "fixes"),
+                ("NV_BORDERLESS", "1"),
+                ("NV_FRAME_LIMIT", "0"),
+                ("NV_MENU_FRAME_LIMIT", "120"),
+                ("NV_THREADS", "real"),
+                ("NV_RENDER_THREAD", "1"),
+            ])
+        );
+        // A test: settings.ini's fix line too, the inherited one kept.
+        let test = switches(wide, Some(&settings), |name| {
+            name == "NV_SHOT" || name == "NV_THREADS"
+        });
+        assert_eq!(test.test, Some("NV_SHOT"));
+        assert_eq!(test.kept, ["NV_THREADS"]);
+        assert!(test.passed.contains(&("NV_UNCAP", "0".to_string())));
+        assert!(!test.passed.iter().any(|(n, _)| *n == "NV_THREADS"));
     }
 
     /// In play Play.exe takes the six variables out; in a test, which never reads the file, it
@@ -831,7 +923,7 @@ mod tests {
             &["NV_SAVE_OUT", "NV_D3D9"],
         ];
         for set in sets {
-            let play = switches(ini, |name| set.contains(&name));
+            let play = switches(ini, None, |name| set.contains(&name));
             assert_eq!(
                 play,
                 Switches {
@@ -846,7 +938,7 @@ mod tests {
         let pairs = |list: &[(&'static str, &str)]| -> Vec<(&'static str, String)> {
             list.iter().map(|(n, v)| (*n, v.to_string())).collect()
         };
-        let test = switches(ini, |name| name == "NV_FRAME_LOG");
+        let test = switches(ini, None, |name| name == "NV_FRAME_LOG");
         assert_eq!(test.test, Some("NV_FRAME_LOG"));
         assert!(test.removed.is_empty() && test.kept.is_empty());
         assert_eq!(
@@ -862,7 +954,7 @@ mod tests {
             ])
         );
         // A file that says nothing: a play run's values, so the test plays like the player's game.
-        let plain = switches("[General]\nx=1\n", |name| name == "NV_SHOT");
+        let plain = switches("[General]\nx=1\n", None, |name| name == "NV_SHOT");
         assert_eq!(
             plain.passed,
             pairs(&[
@@ -877,7 +969,7 @@ mod tests {
         // A fix's own variable makes a test too; what was set before the start is kept, not
         // passed and not taken out.
         let set = ["NV_UNCAP", "NV_PRESET", "NV_THREADS", "NV_GRAB_PUSH"];
-        let pinned = switches(ini, |name| set.contains(&name));
+        let pinned = switches(ini, None, |name| set.contains(&name));
         assert_eq!(pinned.test, Some("NV_UNCAP"));
         assert_eq!(pinned.kept, ["NV_PRESET", "NV_THREADS"]);
         assert!(pinned.removed.is_empty());
@@ -896,7 +988,7 @@ mod tests {
             .copied()
             .chain(rows().filter(|r| r.0 == FIXES_SECTION).map(|r| r.2))
         {
-            assert_eq!(switches(ini, |n| n == name).test, Some(name));
+            assert_eq!(switches(ini, None, |n| n == name).test, Some(name));
         }
     }
 }
