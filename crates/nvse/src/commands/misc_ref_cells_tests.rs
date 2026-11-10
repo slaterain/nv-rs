@@ -401,14 +401,14 @@ fn a_walk_past_the_grid_ends_with_the_list_guard() {
         0x0003_0001
     );
     // Each GetNextRef walks only until it finds one: round the wrapped row again and again, as
-    // xNVSE answers, in both presets.
+    // xNVSE answers (these calls never reach the guard).
     for expected in [0x0003_0002, 0x0003_0001, 0x0003_0002, 0x0003_0001] {
         assert_eq!(id_of(run(&mut e, GET_NEXT_REF, 0, &[])), expected);
     }
     // Doors are on no cell of that row: one call goes round without a match, the hang, ended.
     assert_eq!(id_of(run(&mut e, GET_FIRST_REF, 0, &[n(28), n(10)])), 0);
     assert!(state(&mut e).scans.is_empty());
-    // A depth that ends (x 100, depth 10) is the same in both presets.
+    // A depth that ends (x 100, depth 10) never reaches the guard: walked as xNVSE walks it.
     let ends = cell(&mut e, 3, 100, 0, WORLD);
     let mut scan = Scan::new(&mut e, 10, 0, false, ends).unwrap();
     let mut found = Vec::new();
