@@ -233,6 +233,35 @@ struct VertexLink {
     attributes: [Vec<wgpu::VertexAttribute>; 8],
 }
 
+/// What making pipelines cost since the last report (printed with the present counters every
+/// 600 presents): a pipeline made on first use holds the draw, and so the frame, until it is done.
+#[derive(Default)]
+struct Made {
+    pipelines: u32,
+    modules: u32,
+    convert: std::time::Duration,
+    module: std::time::Duration,
+    pipeline: std::time::Duration,
+    longest: std::time::Duration,
+    over_16ms: u32,
+}
+
+impl Made {
+    fn add_module(&mut self, convert: std::time::Duration, module: std::time::Duration) {
+        self.modules += 1;
+        self.convert += convert;
+        self.module += module;
+    }
+    fn add_pipeline(&mut self, pipeline: std::time::Duration, all: std::time::Duration) {
+        self.pipelines += 1;
+        self.pipeline += pipeline;
+        self.longest = self.longest.max(all);
+        if all.as_millis() > 16 {
+            self.over_16ms += 1;
+        }
+    }
+}
+
 /// What the open render pass was last given, so a draw sends only what changed.
 #[derive(Default)]
 struct PassBinds {
@@ -373,6 +402,7 @@ pub struct Device {
     binds: PassBinds,
     /// The driver's compiled pipelines kept between runs ([`cache`]), where the backend has them.
     pipeline_cache: Option<cache::PipelineCacheFile>,
+    made: Made,
     #[allow(clippy::type_complexity)]
     vs_modules: Map<
         (
@@ -673,6 +703,7 @@ impl Device {
             vertex_links: Map::default(),
             binds: PassBinds::default(),
             pipeline_cache,
+            made: Made::default(),
             vs_modules: Map::default(),
             ps_modules: Map::default(),
             samplers: Map::default(),
@@ -2814,6 +2845,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         topology: wgpu::PrimitiveTopology,
         samplers: &[(u32, u8, bool)],
     ) -> Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout)> {
+        let started = std::time::Instant::now();
         let vkey = (
             vs.id,
             inputs.to_vec(),
@@ -2829,7 +2861,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 clip: key.clip,
                 count: false,
             };
-            let m = self.module(wgsl::convert(&vs.program, &link), "a vertex shader");
+            let t = std::time::Instant::now();
+            let source = wgsl::convert(&vs.program, &link);
+            let c = t.elapsed();
+            let m = self.module(source, "a vertex shader");
+            self.made.add_module(c, t.elapsed() - c);
             self.vs_modules.insert(vkey.clone(), m);
         }
         let pkey = (ps.id, varyings.to_vec(), key.count, key.clip);
@@ -2841,7 +2877,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 clip: key.clip,
                 count: key.count,
             };
-            let m = self.module(wgsl::convert(&ps.program, &link), "a pixel shader");
+            let t = std::time::Instant::now();
+            let source = wgsl::convert(&ps.program, &link);
+            let c = t.elapsed();
+            let m = self.module(source, "a pixel shader");
+            self.made.add_module(c, t.elapsed() - c);
             self.ps_modules.insert(pkey.clone(), m);
         }
         let vm = self.vs_modules[&vkey].clone()?;
@@ -2947,12 +2987,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             multiview_mask: None,
             cache: self.pipeline_cache.as_ref().map(|c| &c.cache),
         };
+        let t = std::time::Instant::now();
         let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         if let Some(c) = &self.pipeline_cache {
             c.touched();
         }
         let pipeline = self.device.create_render_pipeline(&desc);
-        match block_on(scope.pop()) {
+        let popped = block_on(scope.pop());
+        self.made.add_pipeline(t.elapsed(), started.elapsed());
+        match popped {
             None => Some((pipeline, group_layout)),
             Some(e) => {
                 self.warn(format!("a pipeline wgpu refuses: {e}"));
@@ -3915,6 +3958,21 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 kept as f64 / 1_048_576.0,
                 self.kept.values().filter(|k| !k.is_empty()).count()
             );
+            let m = std::mem::take(&mut self.made);
+            if m.pipelines + m.modules > 0 {
+                let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+                eprintln!(
+                    "NV_D3D9 wgpu: made since the last report: {} pipelines, {} shader modules in {:.0} ms (converting {:.0}, modules {:.0}, pipelines {:.0}); the longest {:.0} ms, {} over 16 ms",
+                    m.pipelines,
+                    m.modules,
+                    ms(m.convert + m.module + m.pipeline),
+                    ms(m.convert),
+                    ms(m.module),
+                    ms(m.pipeline),
+                    ms(m.longest),
+                    m.over_16ms
+                );
+            }
         }
     }
 
