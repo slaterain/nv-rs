@@ -1416,6 +1416,12 @@ pub fn start_output(e: &mut Engine) -> bool {
             mix.channels
         );
     }
+    if idle.is_some() {
+        eprintln!(
+            "sound: NV_REPEATABLE: no stream is opened on that device (nothing is heard); the \
+             frames are mixed on the virtual clock at each main frame's end"
+        );
+    }
     state!(e).sound.mix = Some(Mix {
         voices,
         rate,
