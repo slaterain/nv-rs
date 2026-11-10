@@ -877,11 +877,43 @@ fn backend_of(
     };
     match which {
         Backends::Real => real(),
-        Backends::Wgpu => Box::new(d3d9_wgpu::WgpuBackend::new(d3d9_wgpu::Output::Window)),
+        Backends::Wgpu => Box::new(WgpuWithReport {
+            wgpu: d3d9_wgpu::WgpuBackend::new(d3d9_wgpu::Output::Window),
+            back_buffer: 0,
+        }),
         Backends::RealAndWgpu => Box::new(d3d9_stream::Tee::new(
             real(),
             Box::new(d3d9_wgpu::WgpuBackend::new(d3d9_wgpu::Output::Offscreen)),
         )),
+    }
+}
+
+/// The wgpu backend on the game's window, with the F12 report (`shot::report_with`) at each
+/// `Present`, as the real backend makes it in its own: the back buffer read from wgpu before the
+/// frame is presented.
+struct WgpuWithReport {
+    wgpu: d3d9_wgpu::WgpuBackend,
+    /// The device's first back buffer (`CreateDevice`, `Reset`).
+    back_buffer: u32,
+}
+
+impl d3d9_stream::Backend for WgpuWithReport {
+    fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+        match &cmd {
+            Cmd::CreateDevice { back_buffers, .. } | Cmd::Reset { back_buffers, .. } => {
+                self.back_buffer = back_buffers.to_words().first().copied().unwrap_or(0);
+            }
+            Cmd::Present { .. } => {
+                let (wgpu, back) = (&mut self.wgpu, self.back_buffer);
+                shot::report_with(|| {
+                    wgpu.device()
+                        .and_then(|d| d.read_surface_pixels(back))
+                        .ok_or_else(|| "the back buffer could not be read from wgpu".to_string())
+                });
+            }
+            _ => {}
+        }
+        self.wgpu.execute(cmd)
     }
 }
 
@@ -2375,6 +2407,12 @@ pub(super) mod shot {
     /// end (`log.txt`, from the file `NV_REPORT_LOG` names) and a `note.txt` for the player's own
     /// words; a beep says it is done. The game's state and the model are not touched.
     pub(crate) fn report_at_present(d: &IDirect3DDevice9) {
+        report_with(|| capture(d));
+    }
+
+    /// [`report_at_present`] for any backend: `picture` gives the frame's pixels (rows top
+    /// first, B, G, R, X), called only when a report was asked for.
+    pub(crate) fn report_with(picture: impl FnOnce() -> Result<(u32, u32, Vec<u8>), String>) {
         if !REPORT_ASKED.swap(false, std::sync::atomic::Ordering::Relaxed) {
             return;
         }
@@ -2382,7 +2420,7 @@ pub(super) mod shot {
             eprintln!("F12: the report's folder could not be made");
             return;
         };
-        match capture(d) {
+        match picture() {
             Ok((width, height, pixels)) => {
                 let _ = std::fs::write(folder.join("picture.bmp"), bmp(width, height, &pixels));
             }
