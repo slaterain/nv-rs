@@ -170,7 +170,7 @@ None of these is for players.
 | `NV_WAKE_DELAY=n` | Stepped threads: calls after a signal before the threads it woke run | built-in |
 | `NV_TEXTURES=dll` | The game's textures from the player's 64-bit `d3dx9_38.dll` (with `NV_D3D9=real`) or the texture cache, as before `crates/d3dx-tex`; files `crates/d3dx-tex` does not translate, and a thread at 64-bit precision, go to the DLL in any case, and without one are refused as D3DX refuses a file it cannot read | `crates/d3dx-tex` makes them, byte for byte the 32-bit DLL's |
 | `NV_D3D9_PRESENT=immediate` | The real Direct3D 9 device and the wgpu backend present without waiting for the display, so a frame rate measures the work | the game's `iPresentInterval` |
-| `NV_WGPU_BACKEND=dx12`, `vulkan` or `gl`; `NV_WGPU_DEBUG` | wgpu backend: which graphics interface; wgpu's own debug checks | Direct3D 12 on Windows; off |
+| `NV_WGPU_BACKEND=dx12`, `vulkan`, `gl` or `software`; `NV_WGPU_DEBUG` | wgpu backend: which graphics interface (`software`: the platform's software adapter, WARP on Windows, the one CI's runners have: for running the GPU tests there); wgpu's own debug checks | Direct3D 12 on Windows; off |
 | **Scripted input and movement runs** | | |
 | `NV_MOVE_KEYS`*, `NV_MOVE_MOUSE`* | Scripted keys and mouse by main's frame (`crates/host/src/player_move.rs`) | none |
 | `NV_MOVE_REAL_INPUT=1`* | Real input reaches the game even with a script set | off |
