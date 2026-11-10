@@ -484,7 +484,7 @@ pub(crate) mod tests {
     }
 
     /// How many of xNVSE's 654 commands are in: the built ones, each at an opcode of its own (the
-    /// README's count and `docs/SYSTEMS.md` say this number: change them together), and the
+    /// README's count, in its system table, says this number: change them together), and the
     /// console commands xNVSE re-exports, which are copied records and not counted.
     #[test]
     fn the_count_of_built_commands() {

@@ -398,12 +398,15 @@ fn form_id(e: &Engine, form: u32) -> u32 {
     e.mem.u32(form + FORM_ID)
 }
 
-/// Whether a pointer xNVSE reads through is missing and the inventory reference checks row
-/// (`NV_NVSE_INVREF_CHECK`) answers instead: a reference's base form or parent cell (a script
-/// reaches both with an inventory reference: its temporary reference is in no cell, and has no
-/// base form once released, after `RemoveMeIR` or a loop's reference kept past its loop), or a
-/// door teleport's data or linked door (a mod's broken door data). xNVSE reads through the null
-/// pointer and the game stops; without the row the port stops there too.
+/// Whether a pointer xNVSE reads or writes through is missing and the script reference checks row
+/// (`NV_NVSE_INVREF_CHECK`, a reference handed to a script with parts missing) answers instead: a
+/// reference's base form or parent cell (a script reaches both with an inventory reference: its
+/// temporary reference is in no cell, and has no base form once released, after `RemoveMeIR` or a
+/// loop's reference kept past its loop), or a door's teleport data, linked door or lock data (a
+/// mod's broken door data; the game makes a lock without data only when an allocation fails, in
+/// `TESObjectREFR::AddLock` `005690A0`, and its loader never makes a teleport without data). xNVSE reads
+/// through the null pointer and the game stops; without the row the port stops there too. With it
+/// the command gives its "nothing" answer and writes nothing.
 fn passed_over(e: &mut Engine, pointer: u32) -> bool {
     pointer == 0 && invref::checks(e)
 }
@@ -705,6 +708,9 @@ fn set_door_teleport(e: &mut Engine, w: &[u32]) -> Ret {
         invref::extra_add(e, list, tele);
     }
     let data = e.mem.u32(tele + EXTRA_VALUE);
+    if passed_over(e, data) {
+        return handled(true);
+    }
     e.mem.set_u32(data, door);
     if x == 999.0 && y == 999.0 && z == 999.0 {
         x = e.mem.f32(door + REFR_POS);
@@ -776,6 +782,9 @@ fn set_open_key(e: &mut Engine, w: &[u32]) -> Ret {
     }
     if lock != 0 {
         let data = e.mem.u32(lock + EXTRA_VALUE);
+        if passed_over(e, data) {
+            return handled(true);
+        }
         e.mem.set_u32(data + LOCK_KEY, key);
         a.set_result(e, 1.0);
     }

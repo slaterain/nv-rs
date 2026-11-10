@@ -355,7 +355,7 @@ fn the_real_games_answers() {
 /// A reference in no cell and without a base form, as an inventory reference's temporary
 /// reference is once released. `GetParentCell` and `GetParentWorldspace` answer 0 (xNVSE looks);
 /// the door teleport commands and the parent cell's owner and rank read through the missing base
-/// form or cell, as xNVSE does, and stop the game; with the inventory reference checks row they
+/// form or cell, as xNVSE does, and stop the game; with the script reference checks row they
 /// answer 0 and set nothing.
 #[test]
 fn a_reference_without_a_base_form_or_a_cell() {
@@ -395,7 +395,7 @@ fn a_reference_without_a_base_form_or_a_cell() {
 
 /// A door whose `ExtraTeleport` has no data, or data without a linked door (a mod's broken door
 /// data; no command makes one): `GetLinkedDoor` reads through it as xNVSE does and the game stops;
-/// with the inventory reference checks row it answers 0. `GetTeleportCell` answers 0 in both
+/// with the script reference checks row it answers 0. `GetTeleportCell` answers 0 in both
 /// presets, as xNVSE looks.
 #[test]
 fn a_teleport_without_a_linked_door() {
@@ -414,6 +414,31 @@ fn a_teleport_without_a_linked_door() {
                 assert_eq!(answer.ok(), Some(0.0));
             } else {
                 assert!(answer.is_err());
+            }
+        }
+    }
+}
+
+/// A door whose teleport has no data, and one whose lock has no data (the game makes a lock
+/// without data only when an allocation fails; its loader makes no teleport without data):
+/// `SetDoorTeleport` and `SetOpenKey` write through them as xNVSE does and the game stops; with
+/// the script reference checks row they answer 0 and write nothing.
+#[test]
+fn a_teleport_or_lock_without_data_is_refused() {
+    for checks in [false, true] {
+        for (kind, opcode, arg) in [(0x2b, 0x15fe, r(2)), (0x2a, 0x1512, r(4))] {
+            let mut e = setup();
+            invref::set_checks(&mut e, checks);
+            put_extra(&mut e, DOOR + 0x44, kind, EXTRA);
+            e.mem.set_u32(EXTRA + 0xc, 0);
+            let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run(&mut e, opcode, DOOR, std::slice::from_ref(&arg))
+            }));
+            if checks {
+                assert_eq!(answer.ok(), Some(0.0), "{opcode:#x}");
+                assert_eq!(e.mem.u32(EXTRA + 0xc), 0, "nothing made");
+            } else {
+                assert!(answer.is_err(), "{opcode:#x}");
             }
         }
     }

@@ -112,14 +112,16 @@ impl Default for State {
     }
 }
 
-/// The fixes preset's row "Inventory reference checks" (docs/FIXES.md), where xNVSE frees, reads
-/// or keeps memory it should not: an unworn stack's removal ([`remove_from_container`]) takes the
-/// list out of the container's own entry before freeing it; a sale ends with its event
-/// (`crate::call_sites`); a base container entry without a form is passed over
-/// ([`inventory_items`]) or, in the lookups by id of `commands/inventory_info.rs`, taken as another
-/// item; a reference with no base form or no cell, or a door teleport with no linked door, answers
-/// 0 in the reference commands that read through them (`commands/misc_ref.rs`). Off (vanilla),
-/// each is xNVSE's.
+/// The fixes preset's row "Script reference checks" (docs/FIXES.md; once "Inventory reference
+/// checks", whose variable and Fallout.ini key it keeps): a reference handed to a script with parts
+/// missing, or xNVSE freeing or keeping memory it should not. An unworn stack's removal
+/// ([`remove_from_container`]) takes the list out of the container's own entry before freeing it;
+/// a sale ends with its event (`crate::call_sites`); a base container entry without a form is
+/// passed over ([`inventory_items`]) or, in the lookups by id of `commands/inventory_info.rs`,
+/// taken as another item; a reference with no base form or no cell, and a door whose teleport or
+/// lock has no data or whose teleport has no linked door, answer 0 or refuse in the reference
+/// commands that read or write through them (`commands/misc_ref.rs`). Off (vanilla), each is
+/// xNVSE's.
 pub fn set_checks(e: &mut Engine, on: bool) {
     state(e).checks = on;
 }

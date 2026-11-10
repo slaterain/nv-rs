@@ -428,7 +428,7 @@ fn get_paired_ends_where_the_index_stays() {
 /// Review of #384, point D (and its second review, point 2): a base container entry without a
 /// form. xNVSE counts it and gives it as an item without a form (`GetNumItems` 3,
 /// `GetInventoryObject 1` none): the same in both presets. Its finders by id read through it
-/// (the game stops); with the inventory reference checks row they take it as another item, so
+/// (the game stops); with the script reference checks row they take it as another item, so
 /// `PickOneOf` finds the weapon in the changes.
 #[test]
 fn a_base_entry_without_a_form() {
