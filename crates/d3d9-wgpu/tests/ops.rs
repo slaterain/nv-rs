@@ -664,3 +664,185 @@ fn a_texel_aligned_quad_copies_its_texture_exactly() {
     let (_, _, px) = b.device().unwrap().read_surface_pixels(RT2).unwrap();
     assert_eq!(px, texels);
 }
+
+/// A draw that samples the texture it draws into (its level 0 the render target), as the game's
+/// water displacement does (its texture-offset pass and a copy with an offset, both into the
+/// displacement texture): Direct3D 9 draws so, and wgpu refused such a pass and with it the whole
+/// submit, so that frame lost its draws. Each such draw reads the target as it was before that
+/// draw: the clear colour plus 0.25 after the first, plus 0.5 after the second, and no wgpu error.
+#[test]
+fn a_draw_that_samples_its_own_target_reads_it_as_it_was_before_the_draw() {
+    let Some(mut r) = Rig::new() else { return };
+    const VS2: u32 = 0x3100;
+    const PS2: u32 = 0x3104;
+    const DECL2: u32 = 0x3108;
+    const VB2: u32 = 0x310c;
+    const TEX: u32 = 0x3110;
+    const LEVEL: u32 = 0x3114;
+    // vs_2_0: dcl_position v0; dcl_texcoord v1; mov oPos, v0; mov oT0, v1.
+    let vs = words(&[
+        0xFFFE_0200,
+        0x0200_001F,
+        0x8000_0000,
+        0x900F_0000,
+        0x0200_001F,
+        0x8000_0005,
+        0x900F_0001,
+        0x0200_0001,
+        0xC00F_0000,
+        0x90E4_0000,
+        0x0200_0001,
+        0xE00F_0000,
+        0x90E4_0001,
+        END,
+    ]);
+    // ps_2_0: dcl t0.xy; dcl_2d s0; texld r0, t0, s0; add r0, r0, c0; mov oC0, r0.
+    let ps = words(&[
+        0xFFFF_0200,
+        0x0200_001F,
+        0x8000_0000,
+        0xB003_0000,
+        0x0200_001F,
+        0x9000_0000,
+        0xA00F_0800,
+        0x0300_0042,
+        0x800F_0000,
+        0xB0E4_0000,
+        0xA0E4_0800,
+        0x0300_0002,
+        0x800F_0000,
+        0x80E4_0000,
+        0xA0E4_0000,
+        0x0200_0001,
+        0x800F_0800,
+        0x80E4_0000,
+        END,
+    ]);
+    let decl = [
+        0u8, 0, 0, 0, 3, 0, 0, 0, // position, FLOAT4
+        0, 0, 16, 0, 1, 0, 5, 0, // texcoord0, FLOAT2
+        0xFF, 0, 0, 0, 17, 0, 0, 0,
+    ];
+    let quad: Vec<u8> = [
+        [-1.25f32, 1.25, 0.0, 1.0, 0.0, 0.0],
+        [0.75, 1.25, 0.0, 1.0, 1.0, 0.0],
+        [-1.25, -0.75, 0.0, 1.0, 0.0, 1.0],
+        [0.75, -0.75, 0.0, 1.0, 1.0, 1.0],
+    ]
+    .iter()
+    .flatten()
+    .flat_map(|f| f.to_le_bytes())
+    .collect();
+    let quarter: Vec<u8> = [0.25f32, 0.25, 0.25, 0.0]
+        .iter()
+        .flat_map(|f| f.to_le_bytes())
+        .collect();
+    let levels = words(&[LEVEL]);
+    let b = &mut r.b;
+    b.execute(Cmd::CreateShader {
+        device: DEVICE,
+        shader: VS2,
+        pixel: false,
+        tokens: Data::Bytes(&vs),
+    });
+    b.execute(Cmd::CreateShader {
+        device: DEVICE,
+        shader: PS2,
+        pixel: true,
+        tokens: Data::Bytes(&ps),
+    });
+    b.execute(Cmd::CreateDeclaration {
+        device: DEVICE,
+        declaration: DECL2,
+        elements: Data::Bytes(&decl),
+    });
+    b.execute(Cmd::CreateBuffer {
+        device: DEVICE,
+        buffer: VB2,
+        index: false,
+        length: 96,
+        usage: 0,
+        format: 0,
+        pool: 1,
+    });
+    b.execute(Cmd::UploadBuffer {
+        buffer: VB2,
+        offset: 0,
+        flags: 0,
+        data: Data::Bytes(&quad),
+    });
+    // D3DUSAGE_RENDERTARGET, D3DPOOL_DEFAULT.
+    b.execute(Cmd::CreateTexture {
+        device: DEVICE,
+        texture: TEX,
+        levels: Data::Bytes(&levels),
+        width: 4,
+        height: 4,
+        usage: 1,
+        format: 21,
+        pool: 0,
+    });
+    b.execute(Cmd::SetRenderTarget {
+        device: DEVICE,
+        index: 0,
+        surface: LEVEL,
+    });
+    b.execute(Cmd::Clear {
+        device: DEVICE,
+        count: 0,
+        rects: None,
+        flags: 1,
+        colour: 0xFF40_2010,
+        z: 0,
+        stencil: 0,
+        model: 0,
+    });
+    for (shader, pixel) in [(VS2, false), (PS2, true)] {
+        b.execute(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    b.execute(Cmd::SetVertexDeclaration {
+        device: DEVICE,
+        declaration: DECL2,
+    });
+    b.execute(Cmd::SetStreamSource {
+        device: DEVICE,
+        stream: 0,
+        buffer: VB2,
+        offset: 0,
+        stride: 24,
+    });
+    b.execute(Cmd::SetConstants {
+        device: DEVICE,
+        kind: 3,
+        start: 0,
+        count: 1,
+        data: Data::Bytes(&quarter),
+    });
+    b.execute(Cmd::SetTexture {
+        device: DEVICE,
+        sampler: 0,
+        texture: TEX,
+    });
+    let mut after = Vec::new();
+    for _ in 0..2 {
+        b.execute(Cmd::DrawPrimitive {
+            device: DEVICE,
+            kind: 5,
+            start: 0,
+            count: 2,
+        });
+        let (_, _, px) = b.device().unwrap().read_surface_pixels(LEVEL).unwrap();
+        after.push(px);
+    }
+    // B, G, R, A bytes: 0x10 + 63.75, 0x20 + 63.75, 0x40 + 63.75 (each rounded), alpha 1 + 0.
+    let first: Vec<u8> = [0x50u8, 0x60, 0x80, 0xFF].repeat(16);
+    let second: Vec<u8> = [0x90u8, 0xA0, 0xC0, 0xFF].repeat(16);
+    let close = |a: &[u8], b: &[u8]| a.iter().zip(b).all(|(x, y)| x.abs_diff(*y) <= 1);
+    assert!(close(&after[0], &first), "{:02x?}", &after[0][..4]);
+    assert!(close(&after[1], &second), "{:02x?}", &after[1][..4]);
+    assert_eq!(b.device().unwrap().wgpu_errors(), 0);
+}
