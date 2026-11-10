@@ -100,7 +100,11 @@ pub fn skin_bound(e: &mut Engine, this: Ptr, bound: Ptr) {
         typed_call!(
             FAMILY,
             0x008b_42e0,
-            transform_inverse(e, Ptr::new(root.wrapping_add(WORLD_TRANSFORM)), Ptr::new(inverse))
+            transform_inverse(
+                e,
+                Ptr::new(root.wrapping_add(WORLD_TRANSFORM)),
+                Ptr::new(inverse)
+            )
         );
         let data = e.mem.u32(base + SKIN_DATA);
         let result = typed_call!(
@@ -145,11 +149,7 @@ pub fn transform_inverse(e: &mut Engine, this: Ptr, out: Ptr) {
         let negated = typed_call!(
             pathing::FAMILY,
             0x004a_0bd0,
-            pathing::point::negated(
-                e,
-                Ptr::<NiPoint3>::new(this.addr() + 0x24),
-                Ptr::new(first)
-            )
+            pathing::point::negated(e, Ptr::<NiPoint3>::new(this.addr() + 0x24), Ptr::new(first))
         );
         let rotated = typed_call!(
             dispatch::FAMILY,

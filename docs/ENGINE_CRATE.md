@@ -544,6 +544,11 @@ rendered pass's byte +9, the state block's properties, the land table +0xc4) and
 constant setters' copy into an entry's own buffer). A later step changes those two files to feed the draw from a
 copied packet. On since its gate (the recorded street run
 byte-identical with `NV_TYPED=draw:off`); not a speed change by itself.
+And `scene` (same crate, id 19, off by default; `NV_TYPED=scene` turns it on): the downward update pass of the classes
+beside `NiNode` (a plain object such as a geometry, the fade node's slot, the particle system), the update's entry, the
+skinned geometry's bound and the transform inverse it needs; the typed `NiNode` pass sends each child to the scene
+family's slot dispatch (`scene::walk::downward`), so the walk stays a Rust call across those classes, and
+`NiGeometry::UpdateWorldBound` calls the skinned bound directly. Its tests are in `crates/engine/tests/typed_dispatch.rs`.
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with

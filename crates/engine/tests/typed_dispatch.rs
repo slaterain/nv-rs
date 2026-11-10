@@ -2325,6 +2325,12 @@ fn scene_skin_bound() {
     .max_cases(192)
     .setup(|e, case| {
         stand_ins(e);
+        // The merge's constants in the exe's data: 0.5 and 0.0 as doubles, the threshold 1e-6.
+        e.map(0x0101_1000, 0x2000);
+        e.mem.set_u64(0x0101_1588, 0.5f64.to_bits());
+        e.mem.set_u64(0x0101_2060, 0);
+        e.map(0x011a_b000, 0x1000);
+        e.mem.set_u32(0x011a_b3c0, 0x3586_37bd);
         let s = skin(e, case, case.word(0), case.word(1), 2);
         let bound = block(e, 0x10, &[ONE, TWO, HALF, THIRD]);
         vec![s, bound]
