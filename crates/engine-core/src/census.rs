@@ -183,18 +183,32 @@ pub fn heap_tsv(mem: &Mem, frame: u64) -> String {
 
 /// What the moved families keep outside the game's heap (the slab and the buffers of
 /// [`crate::typed::moved::Moved`]): one comment line a family and tag, after the heap's table, so the
-/// bytes a move took out of the heap show where they went.
+/// bytes a move took out of the heap show where they went. In K1 (`<family>:moved`) each slab block
+/// keeps a shadow of its size in the heap, still in the table above: the line says how many, and
+/// only the blocks without one left the heap.
 pub fn moved_tsv(moved: &crate::typed::moved::Moved) -> String {
     let mut out = String::new();
+    let shadowed = moved.slab.shadowed();
     for (kind, rows) in [
         ("slab", moved.slab.census()),
         ("buffers", moved.buffers.census()),
     ] {
         for (family, tag, blocks, bytes) in rows {
-            let _ = writeln!(
-                out,
-                "# moved out of the heap ({kind}): family {family} tag {tag}: {blocks} blocks, {bytes} bytes"
-            );
+            let shadows = shadowed
+                .iter()
+                .find(|&&(f, t, _)| kind == "slab" && (f, t) == (family, tag))
+                .map_or(0, |&(_, _, n)| n);
+            let _ = if shadows == 0 {
+                writeln!(
+                    out,
+                    "# moved out of the heap ({kind}): family {family} tag {tag}: {blocks} blocks, {bytes} bytes"
+                )
+            } else {
+                writeln!(
+                    out,
+                    "# moved ({kind}), K1 shadows still in the heap: family {family} tag {tag}: {blocks} blocks, {bytes} bytes, {shadows} of them shadowed"
+                )
+            };
         }
     }
     out

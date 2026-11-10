@@ -1389,8 +1389,9 @@ pub fn finish_main_frame(e: &mut Engine, main: &mut MainThread) -> MainTurn {
     } else {
         0
     };
+    let moved = e.moved();
     if let Some(r) = &e.real {
-        stopped = r.frame_ended(&mut e.mem, now);
+        stopped = r.frame_ended(&mut e.mem, moved, now);
         main.host_holds_kernel = true;
     } else if e.mem.is_shared() && e.mem.deferred_pages() >= crate::real_threads::HAND_BACK_AT {
         // Stepped threads with the render helpers (`real_threads::fork_join` shared the memory,
@@ -1398,6 +1399,13 @@ pub fn finish_main_frame(e: &mut Engine, main: &mut MainThread) -> MainTurn {
         // runs anywhere (the stepped threads run only with the engine, the helpers only inside a
         // fork, which main's frame has finished).
         e.mem.hand_back_deferred();
+    }
+    if e.real.is_none() {
+        // Stepped threads: no guest code runs anywhere now (as above), so the moved families'
+        // freed buffers go back to the host at once.
+        if let Some(m) = moved {
+            m.buffers.reclaim();
+        }
     }
     if let Some(r) = e.mem.race_census() {
         r.frame_ended();

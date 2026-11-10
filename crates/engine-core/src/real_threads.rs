@@ -1009,16 +1009,30 @@ impl Ctx {
 
     /// Main's frame ended (`thread_host::finish_main_frame`, on the host's thread): the host takes
     /// the kernel lock while it has the engine, and hands deferred pages back at a barrier when
-    /// enough wait. Answers a game thread's stop, if one stopped.
-    pub(crate) fn frame_ended(&self, mem: &mut crate::Mem, clock_us: u64) -> Option<String> {
+    /// enough wait, and the moved families' freed buffers with them
+    /// ([`crate::typed::moved::Buffers::reclaim`]: no thread may be inside a buffer access). Answers
+    /// a game thread's stop, if one stopped.
+    pub(crate) fn frame_ended(
+        &self,
+        mem: &mut crate::Mem,
+        moved: Option<&'static crate::typed::moved::Moved>,
+        clock_us: u64,
+    ) -> Option<String> {
         let w = self.world;
         w.kernel.lock(w);
         if let Some(s) = lock_stats() {
             s.frame_ended(clock_us);
         }
-        if mem.deferred_pages() >= HAND_BACK_AT {
+        let buffers =
+            moved.filter(|m| m.buffers.retired_bytes() >= crate::typed::moved::RECLAIM_AT);
+        if mem.deferred_pages() >= HAND_BACK_AT || buffers.is_some() {
             let started = lock_stats().map(|_| std::time::Instant::now());
-            w.barrier(|| mem.hand_back_deferred());
+            w.barrier(|| {
+                mem.hand_back_deferred();
+                if let Some(m) = buffers {
+                    m.buffers.reclaim();
+                }
+            });
             if let (Some(s), Some(t)) = (lock_stats(), started) {
                 s.barrier.add(t.elapsed());
             }
@@ -1163,7 +1177,7 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
 }
 
 /// The diagnostic that keeps real threads off (R6), if one is on.
-fn diagnostic_on(e: &Engine) -> Option<&'static str> {
+pub(crate) fn diagnostic_on(e: &Engine) -> Option<&'static str> {
     if crate::profile::on() {
         return Some("the profile (NV_PROFILE)");
     }
@@ -2554,6 +2568,12 @@ pub fn fork_join_first(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bo
 /// [`fork_join`] (`every`: each helper runs the job) or [`fork_join_first`].
 fn fork(e: &mut Engine, helpers: usize, job: HelperJob<'_>, every: bool) -> bool {
     if helpers == 0 || helpers > MOST_HELPERS || HELPER.with(Cell::get) {
+        return false;
+    }
+    // A typed family's dual run changes a guest word and then its mirror, one access at a time
+    // (`typed::moved::Store::Dual`): the helpers would run game code beside it, so the caller does
+    // the work alone.
+    if e.typed_any_dual() {
         return false;
     }
     let world = e.real.as_ref().map(|r| r.world);

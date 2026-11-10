@@ -106,6 +106,10 @@ pub struct Family {
     pub past_gate: bool,
     /// The threads it runs on ([`Threads`]).
     pub threads: Threads,
+    /// Its code reads and writes its own objects through the stage-2 store ([`moved::Store`]), so
+    /// the switch's `dual`, `moved` and `freed` forms mean something for it; for any other family
+    /// they are refused ([`parse_switch`]).
+    pub stage2: bool,
     /// The typed functions by exe address, in the form of a unit's `funcs()`.
     pub funcs: fn() -> Vec<(u32, AbiFn)>,
 }
@@ -230,6 +234,12 @@ pub fn parse_switch(spec: Option<&str>, families: &[&Family]) -> Result<Vec<Mode
                         known.join(", ")
                     ));
                 };
+                if matches!(mode, Mode::Dual | Mode::Moved | Mode::Freed) && !families[k].stage2 {
+                    return Err(format!(
+                        "`{item}`: family `{name}` has no stage-2 form yet (its code does not go \
+                         through the store), so it would run as stage 1"
+                    ));
+                }
                 modes[k] = mode;
             }
         }
@@ -676,6 +686,7 @@ mod tests {
         id: FAMILY,
         past_gate: false,
         threads: Threads::Both,
+        stage2: true,
         funcs,
     };
     static PAST_GATE: Family = Family {
@@ -683,6 +694,7 @@ mod tests {
         id: FamilyId::new(4),
         past_gate: true,
         threads: Threads::Both,
+        stage2: false,
         funcs: || vec![],
     };
 
@@ -1028,6 +1040,12 @@ mod tests {
         assert_eq!(parse(Some("off")), Ok(vec![Off, Off]));
         assert_eq!(parse(Some("stand_in")), Ok(vec![On, On]));
         assert_eq!(parse(Some("stand_in:dual")), Ok(vec![Dual, On]));
+        assert_eq!(parse(Some("stand_in:freed")), Ok(vec![Freed, On]));
+        // A stage-2 form only for a family whose code goes through the store.
+        for spec in ["past_gate:dual", "past_gate:moved", "past_gate:freed"] {
+            let why = parse(Some(spec)).unwrap_err();
+            assert!(why.contains("no stage-2 form"), "{why}");
+        }
         assert_eq!(parse(Some("past_gate:off")), Ok(vec![Off, Off]));
         assert_eq!(parse(Some("off, stand_in")), Ok(vec![On, Off]));
         assert_eq!(parse(Some("stand_in,off")), Ok(vec![Off, Off]));
@@ -1120,6 +1138,7 @@ mod tests {
             id: FAMILY,
             past_gate: false,
             threads: Threads::Both,
+            stage2: false,
             funcs: || vec![],
         };
         static SAME_NAME: Family = Family {
@@ -1127,6 +1146,7 @@ mod tests {
             id: FamilyId::new(9),
             past_gate: false,
             threads: Threads::Both,
+            stage2: false,
             funcs: || vec![],
         };
         assert!(check_table(&[&STAND_IN, &PAST_GATE]).is_ok());
@@ -1182,6 +1202,7 @@ mod tests {
             id: FamilyId::new(5),
             past_gate: true,
             threads: Threads::Both,
+            stage2: false,
             funcs,
         };
         let mut e = engine(plain());
@@ -1201,6 +1222,7 @@ mod tests {
             id: FamilyId::new(30),
             past_gate: false,
             threads: Threads::Both,
+            stage2: false,
             funcs: || vec![],
         };
         provide(&ABOVE);
@@ -1223,6 +1245,7 @@ mod tests {
             id: FamilyId::new(29),
             past_gate: false,
             threads: Threads::Both,
+            stage2: false,
             funcs: || vec![],
         };
         static SECOND: Family = Family {
@@ -1230,6 +1253,7 @@ mod tests {
             id: FamilyId::new(29),
             past_gate: false,
             threads: Threads::Both,
+            stage2: false,
             funcs: || vec![],
         };
         provide(&FIRST);
@@ -1320,6 +1344,7 @@ mod tests {
             id: FamilyId::new(6),
             past_gate: false,
             threads: Threads::Both,
+            stage2: false,
             funcs: || vec![crate::entry!(0x00ff_0000, typed_leaf(u32) -> u32)],
         };
         provide(&CHILD);
