@@ -172,6 +172,10 @@ impl Host {
         // without it); `NV_RENDER_THREAD=0` makes them on the game's threads.
         #[cfg(windows)]
         engine_platform::d3d9real::want_render_thread(&mut engine, choice.render_thread);
+        #[cfg(windows)]
+        if let Some(dir) = wgpu_cache_path(fixes::is_play_run(|k| std::env::var(k).ok())) {
+            engine_platform::d3d9real::want_wgpu_cache(&mut engine, dir);
+        }
         // The borderless window (`fixes::Choice::borderless`: `NV_BORDERLESS`; else, in a
         // launcher's play run, Fallout.ini's `[nv-rs Display] bBorderless` or play's default, on).
         // A test or script without the variable makes no choice: the window as the game makes it.
@@ -387,6 +391,18 @@ pub fn texture_cache_path() -> Option<PathBuf> {
             std::env::var_os("LOCALAPPDATA")
                 .map(|d| PathBuf::from(d).join("nv-rs").join("d3dx-cache"))
         })
+}
+
+/// Where the wgpu backend keeps the driver's compiled pipelines between runs (`d3d9-wgpu`'s
+/// `cache.rs`): `NV_WGPU_CACHE`, else in a launcher's play run (`fixes::is_play_run`)
+/// `%LOCALAPPDATA%\nv-rs\wgpu-cache`. Every other run without the variable (a test, a script, an
+/// agent's measurement) keeps nothing, so it never writes outside its own folders.
+pub fn wgpu_cache_path(play: bool) -> Option<PathBuf> {
+    std::env::var_os("NV_WGPU_CACHE").map(PathBuf::from).or_else(|| {
+        play.then(|| std::env::var_os("LOCALAPPDATA"))
+            .flatten()
+            .map(|d| PathBuf::from(d).join("nv-rs").join("wgpu-cache"))
+    })
 }
 
 /// Gives the Direct3D 9 layer the player's adapter table ([`adapter_table_path`]) before the

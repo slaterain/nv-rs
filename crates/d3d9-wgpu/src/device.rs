@@ -7,6 +7,7 @@
 //! resource the frame's unsent commands still use send those commands first. The caches keyed by
 //! state (pipelines, shader modules, samplers, bind groups) are where the speed work starts.
 
+use crate::cache;
 use crate::format::{self, d3dfmt, Format};
 use crate::fxhash::Map;
 use crate::shot::{self, Shots};
@@ -370,6 +371,8 @@ pub struct Device {
     last_link: Option<((u64, u64), Arc<VertexLink>)>,
     vertex_links: Map<(u64, u64), Arc<VertexLink>>,
     binds: PassBinds,
+    /// The driver's compiled pipelines kept between runs ([`cache`]), where the backend has them.
+    pipeline_cache: Option<cache::PipelineCacheFile>,
     #[allow(clippy::type_complexity)]
     vs_modules: Map<
         (
@@ -494,6 +497,7 @@ impl Device {
         pp: &PresentParameters,
         back_buffers: &[Handle],
         depth: Handle,
+        cache_dir: Option<&std::path::Path>,
     ) -> Result<Device, String> {
         // `NV_WGPU_BACKEND` names one; by default Direct3D 12 on Windows (measured closest to the
         // real Direct3D 9 on the same driver: Doc's house differs in 0.3% of pixels against 6% on
@@ -545,7 +549,8 @@ impl Device {
             | wgpu::Features::DEPTH32FLOAT_STENCIL8
             | wgpu::Features::CLIP_DISTANCES
             | wgpu::Features::FLOAT32_BLENDABLE
-            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+            | wgpu::Features::PIPELINE_CACHE;
         let features = adapter.features() & wanted;
         let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("d3d9-wgpu"),
@@ -556,6 +561,9 @@ impl Device {
             trace: Default::default(),
         }))
         .map_err(|e| format!("request_device: {e}"))?;
+        // The driver's compiled pipelines from the last run, where the backend keeps them (Vulkan).
+        let pipeline_cache =
+            cache_dir.and_then(|d| cache::PipelineCacheFile::open(&device, &adapter.get_info(), d));
         let errors = Arc::new(AtomicU64::new(0));
         {
             let errors = errors.clone();
@@ -664,6 +672,7 @@ impl Device {
             last_link: None,
             vertex_links: Map::default(),
             binds: PassBinds::default(),
+            pipeline_cache,
             vs_modules: Map::default(),
             ps_modules: Map::default(),
             samplers: Map::default(),
@@ -2165,17 +2174,20 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 return None;
             }
         };
-        if let Err(e) = sm::validate(&source) {
+        // Read and checked once, by wgpu (naga's reader and validator, with the device's own
+        // capabilities): a shader it refuses is said here, as our own check used to say it.
+        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let module = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
+        if let Some(e) = block_on(scope.pop()) {
             self.warn(format!("{what}: the converted shader is not valid: {e}"));
             return None;
         }
-        Some(
-            self.device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: None,
-                    source: wgpu::ShaderSource::Wgsl(source.into()),
-                }),
-        )
+        Some(module)
     }
 
     fn sampler_layout(&mut self, key: &[(u32, u8, bool)]) -> wgpu::PipelineLayout {
@@ -2933,9 +2945,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 targets: &targets,
             }),
             multiview_mask: None,
-            cache: None,
+            cache: self.pipeline_cache.as_ref().map(|c| &c.cache),
         };
         let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        if let Some(c) = &self.pipeline_cache {
+            c.touched();
+        }
         let pipeline = self.device.create_render_pipeline(&desc);
         match block_on(scope.pop()) {
             None => Some((pipeline, group_layout)),
@@ -3885,6 +3900,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 }
             }
         }
+        if let Some(c) = &mut self.pipeline_cache {
+            c.save_if_due(self.presents, false);
+        }
         if self.presents % 600 == 1 {
             // The bytes kept for read-backs (`ReadSurface`), printed for their memory cost.
             let kept: usize = self.kept.values().map(Vec::len).sum();
@@ -4165,6 +4183,15 @@ fn surface_for(
     _window: isize,
 ) -> Result<wgpu::Surface<'static>, String> {
     Err("windows of other platforms come with the window layer's port".into())
+}
+
+impl Drop for Device {
+    /// The pipeline cache written once more when pipelines were made since its last save.
+    fn drop(&mut self) {
+        if let Some(c) = &mut self.pipeline_cache {
+            c.save_if_due(self.presents, true);
+        }
+    }
 }
 
 #[cfg(test)]

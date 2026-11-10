@@ -67,9 +67,17 @@ struct Gpu {
 
 impl Gpu {
     fn new(size: u32, samples: u32) -> Option<Gpu> {
+        Gpu::with_cache(size, samples, None)
+    }
+
+    /// As [`Gpu::new`], keeping the driver's pipelines in `cache` ([`WgpuBackend::with_cache_dir`]).
+    fn with_cache(size: u32, samples: u32, cache: Option<std::path::PathBuf>) -> Option<Gpu> {
         // A failed test leaves the lock poisoned; the next one still takes its turn.
         let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
         let mut b = WgpuBackend::new(Output::Offscreen);
+        if let Some(dir) = cache {
+            b = b.with_cache_dir(dir);
+        }
         let present = words(&[size, size, A8R8G8B8, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0]);
         let back = words(&[BACK]);
         b.execute(Cmd::CreateDevice {
@@ -1011,4 +1019,59 @@ fn constant_changes_between_draws_in_one_pass_reach_the_shaders() {
         [0, 255, 0, 255],
         "bottom right: the pixel constant change"
     );
+}
+
+/// The driver's pipelines kept between runs: where the backend has a pipeline cache (Vulkan), a
+/// device that made a pipeline leaves the cache file behind when it is dropped; a damaged file, a
+/// folder that cannot be made, and a folder that does not exist yet each give a working device
+/// that draws the same pixels (the cache only skips the driver's compile, never changes it).
+#[test]
+fn the_pipeline_cache_file_is_kept_and_a_bad_one_is_ignored() {
+    // A scratch folder in the build's own target folder.
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("pipeline-cache-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let draw = |cache: Option<std::path::PathBuf>| -> Option<Vec<u8>> {
+        let mut g = Gpu::with_cache(4, 1, cache)?;
+        g.colour([1.0, 0.5, 0.25, 1.0]);
+        g.clear(1, 0, 1.0);
+        g.cover(0.5);
+        Some(g.reds())
+    };
+    let Some(plain) = draw(None) else { return };
+    // A folder that does not exist yet: made; the file written when the device goes.
+    assert_eq!(draw(Some(dir.join("new"))), Some(plain.clone()));
+    let files: Vec<_> = std::fs::read_dir(dir.join("new"))
+        .map(|d| d.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    let vulkan = files.iter().any(|f| {
+        f.file_name()
+            .is_some_and(|n| n.to_string_lossy().contains("vulkan"))
+    });
+    for f in &files {
+        assert!(std::fs::metadata(f).unwrap().len() > 28, "{}", f.display());
+    }
+    // Read back (a warm start), then damaged: the same pixels both times.
+    assert_eq!(draw(Some(dir.join("new"))), Some(plain.clone()));
+    for f in &files {
+        let mut bytes = std::fs::read(f).unwrap();
+        let n = bytes.len();
+        bytes[n / 2] ^= 0x55;
+        bytes.truncate(n - 3);
+        std::fs::write(f, bytes).unwrap();
+    }
+    assert_eq!(draw(Some(dir.join("new"))), Some(plain.clone()));
+    // A "folder" that is a file: no cache, the device works.
+    std::fs::write(dir.join("a-file"), b"not a folder").unwrap();
+    assert_eq!(draw(Some(dir.join("a-file"))), Some(plain.clone()));
+    eprintln!(
+        "pipeline cache files: {} ({})",
+        files.len(),
+        if vulkan {
+            "Vulkan"
+        } else {
+            "this backend keeps none"
+        }
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

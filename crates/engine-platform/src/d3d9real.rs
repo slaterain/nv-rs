@@ -152,6 +152,8 @@ pub struct Real {
     /// Whether the real backend compiles the game's shaders ahead of their first draw
     /// ([`want_shader_warm`]).
     shader_warm: bool,
+    /// Where wgpu keeps the driver's compiled pipelines between runs ([`want_wgpu_cache`]).
+    wgpu_cache: Option<std::path::PathBuf>,
     /// Tests: the real backend behind the stream, to look at ([`real_texture`]).
     #[cfg(test)]
     test_backend: Option<std::sync::Arc<std::sync::Mutex<super::d3d9backend::RealBackend>>>,
@@ -865,7 +867,15 @@ fn backend_of(
     which: Backends,
     board: Option<std::sync::Arc<super::d3d9backend::QueryBoard>>,
     warm: bool,
+    wgpu_cache: Option<std::path::PathBuf>,
 ) -> Box<dyn d3d9_stream::Backend> {
+    let wgpu = |output| {
+        let b = d3d9_wgpu::WgpuBackend::new(output);
+        match wgpu_cache.clone() {
+            Some(dir) => b.with_cache_dir(dir),
+            None => b,
+        }
+    };
     let real = || -> Box<dyn d3d9_stream::Backend> {
         Box::new(
             match board.clone() {
@@ -878,12 +888,12 @@ fn backend_of(
     match which {
         Backends::Real => real(),
         Backends::Wgpu => Box::new(WgpuWithReport {
-            wgpu: d3d9_wgpu::WgpuBackend::new(d3d9_wgpu::Output::Window),
+            wgpu: wgpu(d3d9_wgpu::Output::Window),
             back_buffer: 0,
         }),
         Backends::RealAndWgpu => Box::new(d3d9_stream::Tee::new(
             real(),
-            Box::new(d3d9_wgpu::WgpuBackend::new(d3d9_wgpu::Output::Offscreen)),
+            Box::new(wgpu(d3d9_wgpu::Output::Offscreen)),
         )),
     }
 }
@@ -925,6 +935,12 @@ pub fn want_shader_warm(e: &mut Engine, on: bool) {
     real(e).shader_warm = on;
 }
 
+/// Where the wgpu backend keeps the driver's compiled pipelines between runs (the host's
+/// `wgpu_cache_path`), set before the game starts. None until set: a test or tool keeps nothing.
+pub fn want_wgpu_cache(e: &mut Engine, dir: std::path::PathBuf) {
+    real(e).wgpu_cache = Some(dir);
+}
+
 /// `Direct3DCreate9` made a modelled `IDirect3D9`: the stream to the backend `NV_D3D9` names
 /// (once), on the calling thread or on the render thread ([`want_render_thread`]), written to a
 /// file with `NV_D3D9_RECORD=FILE`.
@@ -936,6 +952,7 @@ pub fn direct3d_created(e: &mut Engine) {
     let name = which.name();
     let wanted_thread = real(e).render_thread;
     let warm = real(e).shader_warm;
+    let wgpu_cache = real(e).wgpu_cache.clone();
     // `NV_FACE_CHECK` (a diagnostic) follows calls in the game's order on its own thread: it keeps
     // the calls on the game's threads, as diagnostics keep the threads stepped.
     let refused = wanted_thread && face_check::enabled();
@@ -957,9 +974,9 @@ pub fn direct3d_created(e: &mut Engine) {
             settings.frames_in_flight,
             if settings.check { ", the stream checked" } else { "" }
         );
-        Stream::threaded(backend_of(which, board, warm), settings)
+        Stream::threaded(backend_of(which, board, warm, wgpu_cache), settings)
     } else {
-        Stream::direct(backend_of(which, None, warm))
+        Stream::direct(backend_of(which, None, warm, wgpu_cache))
     };
     if let Some(path) = std::env::var_os("NV_D3D9_RECORD") {
         // `NV_REPEATABLE`: the record leaves out what differs between two runs of the same

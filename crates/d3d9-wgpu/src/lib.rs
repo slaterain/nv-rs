@@ -13,6 +13,7 @@
 //! - `device`: resources, passes, pipelines, draws and `Present`.
 //! - `shot`: `NV_SHOT` captures numbered like the forwarding layer's.
 
+mod cache;
 pub mod device;
 pub mod format;
 mod fxhash;
@@ -29,6 +30,8 @@ pub struct WgpuBackend {
     device: Option<device::Device>,
     /// The handle of the game's device (one is made).
     game_device: Handle,
+    /// Where the driver's compiled pipelines are kept between runs ([`WgpuBackend::with_cache_dir`]).
+    cache_dir: Option<std::path::PathBuf>,
 }
 
 impl WgpuBackend {
@@ -39,7 +42,16 @@ impl WgpuBackend {
             output,
             device: None,
             game_device: 0,
+            cache_dir: None,
         }
+    }
+
+    /// Keeps the driver's compiled pipelines in `dir` between runs, where the backend has a
+    /// pipeline cache (Vulkan): read when the device is made, written after new pipelines
+    /// (`cache.rs`). The host chooses the folder; without one nothing is read or written.
+    pub fn with_cache_dir(mut self, dir: std::path::PathBuf) -> Self {
+        self.cache_dir = Some(dir);
+        self
     }
 
     /// The wgpu device, once the game made its own.
@@ -81,6 +93,7 @@ impl Backend for WgpuBackend {
                 &pp,
                 &handles(back_buffers),
                 *depth_stencil,
+                self.cache_dir.as_deref(),
             ) {
                 Ok(d) => {
                     self.device = Some(d);
