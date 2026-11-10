@@ -2928,7 +2928,8 @@ const PLAIN_FLOATS: [u32; SHAPE_FLOATS] = [
 /// light's byte +0xed is set; the rendering object has no light array (+0xc null); the set-ups that
 /// take the rendering object get a copy with the lights while `011f91e0`'s own has no light array; the
 /// lights have no data (+0xf8 null); the light set-up's bytes `011f91de` and `011f9427`; the lights'
-/// byte +0xf5.
+/// byte +0xf5; the lights' ambient colour (-1, 0, 0) at strength 1, whose luminance is exactly 0 under
+/// the default control word.
 const NO_POSITION: u32 = 1;
 const RENDER_BYTE: u32 = 2;
 const ZERO_RANGE: u32 = 0x10;
@@ -2941,6 +2942,7 @@ const NO_LIGHT_DATA: u32 = 0x1000;
 const SKIP_AMBIENT: u32 = 0x2000;
 const NO_EXTRA_SCALE: u32 = 0x4000;
 const LIGHT_AMBIENT: u32 = 0x8000;
+const DARK_AMBIENT: u32 = 0x1_0000;
 
 /// The texture switches (a [`Shape`]'s `textures`): the property's first texture is null; it has no
 /// object at +0xdc, or one without a texture; its vtable +0xe0 is the real clamp mode (`00b671c0`), the
@@ -3136,6 +3138,12 @@ fn geometry_light(e: &mut Engine, i: u32, s: &Shape) -> u32 {
     }
     set(e, values + 0xc4, near(s.floats[F_STRENGTH], i));
     set(e, values + 0xe0, near(s.floats[F_RADIUS], 0x10 * i));
+    if s.bits & DARK_AMBIENT != 0 {
+        set(e, values + 0xc4, ONE);
+        set(e, values + 0xc8, 0xbf80_0000);
+        set(e, values + 0xcc, 0);
+        set(e, values + 0xd0, 0);
+    }
     light
 }
 
@@ -4526,6 +4534,37 @@ fn light_setup() {
                 vec![c.word(0), light, bits(c, 5)]
             },
         )
+        .run()
+        .assert_same();
+}
+
+/// `light_setup`'s brightness step at a luminance of exactly 0 (the ambient colour (-1, 0, 0) at
+/// strength 1: -1 times 0.33, plus 0.33, is 0 under the default control word, slightly below it under
+/// the Direct3D one): every component becomes the threshold. Floats the sweep alone almost never meets.
+#[test]
+fn light_setup_luminance_zero() {
+    Diff::new(entry!(0x00b7_0820, lighting::light_setup(u32, Ptr<_>, f32)))
+        .shaped(
+            &[
+                Input::Of(&[0, 5]),
+                Input::Of(&[1, 2]),
+                Input::Of(TWO_WAYS),
+                Input::Of(&[ONE, HALF, TWO, 0, 0xbf80_0000]),
+                Input::Of(&[ONE, HALF, TWO]),
+            ],
+            60,
+            |c| {
+                let mut s = Shape::plain();
+                s.points = u32::from(c.word(1) == 2);
+                s.bits |= DARK_AMBIENT;
+                s.register = 8;
+                s.hdr = c.word(2) != 0;
+                s.floats[F_THRESHOLD] = c.word(3);
+                s
+            },
+            |g, c| vec![c.word(0), g.light, c.word(4)],
+        )
+        .float_sweep(0)
         .run()
         .assert_same();
 }
