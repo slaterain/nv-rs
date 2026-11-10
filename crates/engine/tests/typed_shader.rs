@@ -3691,6 +3691,8 @@ impl Geometry for Diff {
             .family(&pathing::PATHING)
             .family(&render::RENDER)
             .translation_calls_plainly(SET_UP_PLAIN)
+            // The draw family's partition draw, skinned packer and strip lists, as in `common`.
+            .goes_by_address(&[0x00e6_d310, 0x00e6_d780, 0x00a7_5f10])
             .max_calls(MAX_CALLS)
             .max_cases(160)
     }
