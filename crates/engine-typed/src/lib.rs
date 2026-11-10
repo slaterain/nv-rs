@@ -136,14 +136,7 @@ mod tests {
         assert_eq!(
             past,
             [
-                "lockfree",
-                "culling",
-                "pathing",
-                "shader",
-                "crt",
-                "dispatch",
-                "render",
-                "draw",
+                "lockfree", "culling", "pathing", "shader", "crt", "dispatch", "render", "draw",
                 "scene"
             ]
         );
