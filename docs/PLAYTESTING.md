@@ -32,7 +32,8 @@ yet, a fault, a call the platform layer does not provide), with status 3 and a l
 5 s. `--movement-missing FILE` writes the untranslated functions reached, the stops and the
 skipped static initializers; `--movement-probe` runs past untranslated functions to list more.
 The removed viewer's arguments (a place name, `--walk`, `--physics`, `--wait`, `--background`,
-`--new-game`, `--official`) are accepted and ignored.
+`--new-game`, `--official`) are accepted after the Data folder and ignored (`viewer/src/main.rs`
+names them in one line); the first argument that does not start with `-` is the Data folder.
 
 ## The machine's tables
 
@@ -167,7 +168,7 @@ None of these is for players.
 | `NV_SLICE=n` | Stepped threads: calls between turns (0: only at waits and sleeps) | 200000 |
 | `NV_WAKE_DELAY=n` | Stepped threads: calls after a signal before the threads it woke run | built-in |
 | `NV_TEXTURES=dll` | The game's textures from the player's 64-bit `d3dx9_38.dll` (with `NV_D3D9=real`) or the texture cache, as before `crates/d3dx-tex`; files `crates/d3dx-tex` does not translate, and a thread at 64-bit precision, go to the DLL in any case, and without one are refused as D3DX refuses a file it cannot read | `crates/d3dx-tex` makes them, byte for byte the 32-bit DLL's |
-| `NV_D3D9_PRESENT=immediate` | wgpu backend: present without waiting for the display | waits |
+| `NV_D3D9_PRESENT=immediate` | The real Direct3D 9 device and the wgpu backend present without waiting for the display, so a frame rate measures the work | the game's `iPresentInterval` |
 | `NV_WGPU_BACKEND=dx12`, `vulkan` or `gl`; `NV_WGPU_DEBUG` | wgpu backend: which graphics interface; wgpu's own debug checks | Direct3D 12 on Windows; off |
 | **Scripted input and movement runs** | | |
 | `NV_MOVE_KEYS`*, `NV_MOVE_MOUSE`* | Scripted keys and mouse by main's frame (`crates/host/src/player_move.rs`) | none |

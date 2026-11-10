@@ -14,7 +14,11 @@ medians of alternating runs (old, new, old, new) and show the direction
 and rough size of each change; re-measure on a quiet machine before
 quoting them as frame rates.
 
-## How to measure
+## How the removed viewer was measured
+
+Its arguments below (`--fps`, a place name, `--at`, `--key-at`, `--screenshot`...) and
+`scripts/acceptance.ps1` went with it; the measurements under them were taken that way. The game's
+own frame rate is measured as the next section says.
 
 - Frame rate: the viewer's `--fps` prints frames per second, the mean
   frame time and the longest frame of each 2 s window. Skip the first two
@@ -81,8 +85,6 @@ progress three (Main::OnIdle's, `HUDMainMenu::DoIdle`'s, `MessageMenu::DoIdle`'s
     normal run's dispatch cost. Off, each call pays one relaxed load.
 - `NV_D3D9_PRESENT=immediate`: the real device presents without waiting for the display, to
   measure the work (the INI's `iPresentInterval=1` holds a 60 Hz panel to 60).
-- `NV_GAME_FRAME_SYNC=1`: the game's frame runs inside the viewer's `Update` again instead of
-  beside the rest of the viewer's frame (to compare).
 
 ### The fixes preset (not 1:1)
 
