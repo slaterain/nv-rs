@@ -76,9 +76,25 @@ impl Backend for WgpuBackend {
         } = &cmd
         {
             let pp = device::PresentParameters::from_words(&present.to_words());
+            let mut hwnd = if *window != 0 { *window } else { *focus };
+            // TEMPORARY experiment switch (DXGI's direct path), removed before any PR: the surface on
+            // the top-level window instead of the game's child window.
+            #[cfg(windows)]
+            if std::env::var_os("NV_WGPU_TMP_TOPLEVEL").is_some() && hwnd != 0 {
+                #[link(name = "user32")]
+                extern "system" {
+                    fn GetAncestor(window: isize, flags: u32) -> isize;
+                }
+                // SAFETY: a window handle the window thread owns; GA_ROOT (2).
+                let root = unsafe { GetAncestor(hwnd, 2) };
+                eprintln!("NV_D3D9 wgpu TMP: surface on the top-level window {root:#x} (device window {hwnd:#x})");
+                if root != 0 {
+                    hwnd = root;
+                }
+            }
             return match device::Device::new(
                 self.output,
-                if *window != 0 { *window } else { *focus },
+                hwnd,
                 &pp,
                 &handles(back_buffers),
                 *depth_stencil,
