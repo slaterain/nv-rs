@@ -581,18 +581,18 @@ fn free_worker(s: Shared) {
         let mut held = lock(s.lock);
         // SAFETY: as in `Shared::with`: the lock is held, and the leaked `Mem` lives for good.
         let mut m = unsafe { &mut *s.mem.as_ptr() };
-        while m.deferred.is_empty() {
-            m.freer_idle = true;
+        while m.frees_queued() == 0 {
+            m.frees_mut().idle = true;
             held = s.freed.wait(held).unwrap_or_else(PoisonError::into_inner);
             // SAFETY: as above, the lock held again.
             m = unsafe { &mut *s.mem.as_ptr() };
         }
-        m.freer_idle = false;
+        m.frees_mut().idle = false;
         for _ in 0..FREE_CHUNK {
             if s.main_wants.load(Ordering::Acquire) {
                 break;
             }
-            let Some((addr, asked)) = m.deferred.pop_front() else {
+            let Some((addr, asked)) = m.frees_mut().deferred.pop_front() else {
                 break;
             };
             m.apply_deferred_free(addr, asked);
@@ -720,22 +720,26 @@ pub struct Mem {
     view_frame: (u32, u32),
     view_path: Vec<u32>,
     view_thread: u32,
-    /// Real threads, on a view: its frees are handed to the free worker ([`Mem::defer_frees`]), in
-    /// [`Mem::batch`] until its next change of the shared `Mem` (any allocation, a full batch, the
-    /// frame's end).
-    defer_frees: bool,
-    /// Of a view that defers its frees: how many of each frame's frees it still does itself
-    /// ([`INLINE_FREES`]), and how many it has done this frame.
-    inline_frees: u32,
-    frame_frees: u32,
-    /// A view's frees not yet handed on: (block, whether its asked size goes too).
+    /// Real threads: the main thread's deferred frees ([`Mem::defer_frees`], [`Frees`]), on its
+    /// view and on the shared `Mem`; `None` everywhere else. Boxed, so `Mem` grows by one pointer.
+    frees: Option<Box<Frees>>,
+}
+
+/// Real threads: the main thread's deferred frees ([`Mem::defer_frees`]). On the main thread's
+/// view: how many of each frame's frees it still does itself ([`INLINE_FREES`]), how many it has
+/// done this frame, and the frees not yet handed on, (block, whether its asked size goes too),
+/// until its next change of the shared `Mem` (any allocation, a full batch, the frame's end). On
+/// the shared `Mem`: the frees handed on, in order, waiting for the free worker; the stop of a
+/// free the worker found bad (a block that is not live), for the frame's end; whether the worker
+/// waits for frees.
+#[derive(Default)]
+struct Frees {
+    inline: u32,
+    frame: u32,
     batch: Vec<(u32, bool)>,
-    /// On the shared `Mem`: frees handed on, in order, waiting for the free worker; and the stop
-    /// of a free the worker found bad (a block that is not live), for the frame's end to report.
     deferred: std::collections::VecDeque<(u32, bool)>,
-    deferred_fault: Option<String>,
-    /// On the shared `Mem`: the free worker is waiting for frees.
-    freer_idle: bool,
+    fault: Option<String>,
+    idle: bool,
 }
 
 /// A live heap block as the heap census sees it ([`Mem::for_each_census_block`]).
@@ -1243,13 +1247,7 @@ impl Mem {
             view_frame: (0, 0),
             view_path: Vec::new(),
             view_thread: 0,
-            defer_frees: false,
-            inline_frees: 0,
-            frame_frees: 0,
-            batch: Vec::new(),
-            deferred: std::collections::VecDeque::new(),
-            deferred_fault: None,
-            freer_idle: false,
+            frees: None,
         }
     }
 
@@ -1279,13 +1277,7 @@ impl Mem {
             view_frame: (0, 0),
             view_path: Vec::new(),
             view_thread: 0,
-            defer_frees: false,
-            inline_frees: 0,
-            frame_frees: 0,
-            batch: Vec::new(),
-            deferred: std::collections::VecDeque::new(),
-            deferred_fault: None,
-            freer_idle: false,
+            frees: None,
         }
     }
 
@@ -1345,7 +1337,7 @@ impl Mem {
     /// this view's running function, the allocator's path it was given and its thread, so a block
     /// allocated or freed in `f` is named with them.
     fn with_shared<R>(&mut self, s: Shared, f: impl FnOnce(&mut Mem) -> R) -> R {
-        if self.defer_frees {
+        if let Some(frees) = self.frees.as_deref_mut() {
             // The main thread: the free worker steps aside while it takes and holds the lock, and
             // its batch of frees goes on with this change ([`Mem::defer_frees`]).
             use std::sync::atomic::{AtomicBool, Ordering};
@@ -1358,7 +1350,7 @@ impl Mem {
             }
             s.main_wants.store(true, Ordering::Release);
             let _wants = Wants(s.main_wants);
-            let batch = &mut self.batch;
+            let batch = &mut frees.batch;
             return s.with(|m| {
                 m.take_batch(s, batch);
                 f(m)
@@ -1460,11 +1452,16 @@ impl Mem {
         let Some(s) = self.shared else {
             return;
         };
-        if self.view_check || self.defer_frees {
+        if self.view_check || self.frees.is_some() {
             return;
         }
-        self.defer_frees = true;
-        self.inline_frees = inline;
+        self.frees = Some(Box::new(Frees {
+            inline,
+            ..Frees::default()
+        }));
+        s.with(|m| {
+            m.frees_mut();
+        });
         if worker {
             std::thread::Builder::new()
                 .name("nv memory frees".into())
@@ -1476,8 +1473,11 @@ impl Mem {
     /// Main's frame ended: the frees this view still holds go to the free worker
     /// ([`Mem::defer_frees`]).
     pub fn hand_on_frees(&mut self) {
-        self.frame_frees = 0;
-        if let (Some(s), false) = (self.shared, self.batch.is_empty()) {
+        let Some(frees) = self.frees.as_deref_mut() else {
+            return;
+        };
+        frees.frame = 0;
+        if let (Some(s), false) = (self.shared, frees.batch.is_empty()) {
             self.with_shared(s, |_| ());
         }
     }
@@ -1504,27 +1504,50 @@ impl Mem {
     /// How many of the frees handed to the free worker wait for it (the tests' look).
     #[cfg(test)]
     pub(crate) fn frees_waiting(&self) -> usize {
-        self.shared.map_or(0, |s| s.with(|m| m.deferred.len()))
+        self.shared.map_or(0, |s| s.with(|m| m.frees_queued()))
     }
 
     /// A free the free worker found bad ([`Mem::defer_frees`]): the stop it makes, once.
     pub fn take_deferred_fault(&mut self) -> Option<String> {
-        self.shared?.with(|m| m.deferred_fault.take())
+        self.shared?.with(|m| m.frees.as_deref_mut()?.fault.take())
     }
 
     /// Real threads, on a view that defers its frees: the free of `addr` (`asked`: its asked size
     /// goes too) kept for the free worker ([`Mem::defer_frees`]) when this frame's first
-    /// [`INLINE_FREES`] are done; whether it was kept (else the caller does it).
+    /// [`INLINE_FREES`] are done; whether it was kept (else the caller does it, as without
+    /// deferred frees).
+    #[inline]
     fn defer_free(&mut self, s: Shared, addr: u32, asked: bool) -> bool {
-        if self.frame_frees < self.inline_frees {
-            self.frame_frees += 1;
+        let Some(frees) = self.frees.as_deref_mut() else {
+            return false;
+        };
+        if frees.frame < frees.inline {
+            frees.frame += 1;
             return false;
         }
-        self.batch.push((addr, asked));
-        if self.batch.len() >= FREE_BATCH {
+        self.keep_free(s, addr, asked);
+        true
+    }
+
+    /// [`Mem::defer_free`] past the frame's first frees: into the batch, handed on when full.
+    #[cold]
+    #[inline(never)]
+    fn keep_free(&mut self, s: Shared, addr: u32, asked: bool) {
+        let frees = self.frees.as_deref_mut().expect("deferred frees");
+        frees.batch.push((addr, asked));
+        if frees.batch.len() >= FREE_BATCH {
             self.with_shared(s, |_| ());
         }
-        true
+    }
+
+    /// On the shared `Mem`: its [`Frees`], made with the first view that defers.
+    fn frees_mut(&mut self) -> &mut Frees {
+        self.frees.get_or_insert_with(Box::default)
+    }
+
+    /// On the shared `Mem`: how many frees wait for the free worker.
+    fn frees_queued(&self) -> usize {
+        self.frees.as_ref().map_or(0, |f| f.deferred.len())
     }
 
     /// On the shared `Mem`, under its lock: this view's batch of frees handed on, the worker woken
@@ -1533,9 +1556,10 @@ impl Mem {
         if batch.is_empty() {
             return;
         }
-        self.deferred.extend(batch.drain(..));
-        if self.freer_idle {
-            self.freer_idle = false;
+        let frees = self.frees_mut();
+        frees.deferred.extend(batch.drain(..));
+        if frees.idle {
+            frees.idle = false;
             s.freed.notify_one();
         }
     }
@@ -1556,7 +1580,7 @@ impl Mem {
                 .cloned()
                 .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
                 .unwrap_or_default();
-            self.deferred_fault.get_or_insert(format!(
+            self.frees_mut().fault.get_or_insert(format!(
                 "{why} (a free of the main thread's, done by the memory's free worker)"
             ));
         }
@@ -1565,8 +1589,12 @@ impl Mem {
     /// On the shared `Mem`: every free waiting for the worker done now (an allocation the heap
     /// could not serve without them); whether there were any.
     fn apply_all_deferred(&mut self) -> bool {
-        let any = !self.deferred.is_empty();
-        while let Some((addr, asked)) = self.deferred.pop_front() {
+        let Some(frees) = self.frees.as_deref_mut() else {
+            return false;
+        };
+        let waiting = std::mem::take(&mut frees.deferred);
+        let any = !waiting.is_empty();
+        for (addr, asked) in waiting {
             self.apply_deferred_free(addr, asked);
         }
         any
@@ -1598,7 +1626,7 @@ impl Mem {
     /// [`Mem::free`] of a block of [`Mem::alloc_asked`], forgetting its asked size.
     pub fn free_asked(&mut self, addr: u32) {
         if let Some(s) = self.shared {
-            if self.defer_frees && addr != 0 && self.defer_free(s, addr, true) {
+            if addr != 0 && self.defer_free(s, addr, true) {
                 return;
             }
             return self.with_shared(s, |m| m.free_asked(addr));
@@ -2634,7 +2662,7 @@ impl Mem {
             return;
         }
         if let Some(s) = self.shared {
-            if self.defer_frees && self.defer_free(s, addr, false) {
+            if self.defer_free(s, addr, false) {
                 return;
             }
             return self.with_shared(s, |m| m.free(addr));
@@ -3854,7 +3882,7 @@ mod tests {
     /// Waits (at most 10 s) until the free worker has done every free handed to it.
     fn worker_done(view: &Mem) {
         let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !owner(view, |m| m.deferred.is_empty()) {
+        while owner(view, |m| m.frees_queued()) > 0 {
             assert!(
                 std::time::Instant::now() < until,
                 "the free worker never caught up"
@@ -3897,7 +3925,7 @@ mod tests {
         m.free(0);
         m.free_asked(0);
         m.hand_on_frees();
-        assert!(m.batch.is_empty());
+        assert!(m.frees.as_ref().unwrap().batch.is_empty());
         worker_done(&m);
         owner(&m, |o| {
             assert_eq!(o.live.len(), 1, "only the block made before is live");
@@ -3922,10 +3950,10 @@ mod tests {
         m.start_sharing();
         m.defer_frees_with(false, 0);
         m.free(a);
-        assert_eq!(m.batch.len(), 1, "kept by the view");
+        assert_eq!(m.frees.as_ref().unwrap().batch.len(), 1, "kept by the view");
         owner(&m, |o| o.fill_heap());
         assert_eq!(m.alloc(1 << 20), a, "served by the free that waited");
-        assert!(owner(&m, |o| o.deferred.is_empty()));
+        assert_eq!(owner(&m, |o| o.frees_queued()), 0);
         // With nothing waiting, a full heap stops as before.
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.alloc(2 << 20)));
         assert!(panic_text(r).starts_with("heap exhausted"));
@@ -3942,16 +3970,16 @@ mod tests {
         for _ in 0..2 {
             let a = m.alloc(0x40);
             m.free(a);
-            assert!(m.batch.is_empty(), "done at once");
+            assert!(m.frees.as_ref().unwrap().batch.is_empty(), "done at once");
             assert_eq!(m.alloc(0x40), a, "and handed out again");
             m.free(a);
             assert_eq!(
-                m.batch,
+                m.frees.as_ref().unwrap().batch,
                 vec![(a, false)],
                 "the second free of the frame is kept"
             );
             m.hand_on_frees();
-            assert!(m.batch.is_empty());
+            assert!(m.frees.as_ref().unwrap().batch.is_empty());
             owner(&m, |o| o.apply_all_deferred());
         }
     }
