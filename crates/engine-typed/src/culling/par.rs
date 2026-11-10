@@ -1,6 +1,6 @@
 //! `NV_PAR_RENDER`: the culling walk on several cores, registered in the original order (the
 //! parallel-render design, P1 to P5 of DESIGN.md in the measure folder parallel-render). On by
-//! default with real threads, with the helpers the cores allow (`default_helpers`; none below 4
+//! default with real threads, with the helpers the cores allow (`default_helpers`; none below 8
 //! logical processors); `NV_PAR_RENDER=off` turns it off, `=1` turns it on with real or stepped
 //! threads alike (the helpers are engines like a game thread's,
 //! `engine_core::real_threads::fork_join_first`; with stepped threads they run only inside main's
@@ -396,15 +396,16 @@ fn read_switch() -> u8 {
 }
 
 /// The helpers the parallel walk gets by default on a machine of `logical` logical processors:
-/// three from 8 up, one from 4 to 7, none (the walk stays serial) below 4. Measured on the
-/// maintainer's PC, pinned to 8 logical processors, crowded street: three helpers -1.29 ms a
-/// frame (+9.3%), one helper -0.47 ms (+3.2%); pinned to 4: MEASURE4. The game keeps main, the
-/// render thread and its loaders busy, so a helper needs a processor of its own to pay.
+/// three from 8 up, none (the walk stays serial) below 8. Measured on the maintainer's PC (12
+/// cores, 24 logical processors), the crowded street: pinned to 8 logical processors, three
+/// helpers -1.29 ms a frame (+9.3%) and one -0.47 ms (+3.2%); pinned to 4, one helper +0.16 ms
+/// (-1.0%), and +0.33 ms (-4.2%) in the view of the sky. The game keeps main, the render thread,
+/// its AI threads and loaders busy, so a helper needs a processor of its own to pay.
 fn default_helpers(logical: usize) -> usize {
-    match logical {
-        0..=3 => 0,
-        4..=7 => 1,
-        _ => 3,
+    if logical >= 8 {
+        3
+    } else {
+        0
     }
 }
 
@@ -967,4 +968,17 @@ mod tests {
     }
 
     const ONE_BITS: u32 = 0x3f80_0000;
+
+    /// By default three helpers from 8 logical processors up, none below (one helper did not
+    /// pay on 4).
+    #[test]
+    fn default_helpers_need_eight_logical_processors() {
+        for (logical, helpers) in [(1, 0), (4, 0), (7, 0), (8, 3), (24, 3)] {
+            assert_eq!(
+                default_helpers(logical),
+                helpers,
+                "{logical} logical processors"
+            );
+        }
+    }
 }
