@@ -2494,6 +2494,18 @@ struct PoolState {
     panic: Option<Box<dyn std::any::Any + Send>>,
 }
 
+impl Pool {
+    /// Stops a caller from another run than the pool's (`kernel`: its kernel's id; `world`: its
+    /// real threads' world, none with stepped threads).
+    fn assert_same_run(&self, kernel: usize, world: Option<usize>) {
+        assert!(
+            self.kernel == kernel && self.world == world,
+            "fork_join: the helper pool belongs to another run (its helpers' engines are views of \
+             that run's memory and kernel); one run per process may fork"
+        );
+    }
+}
+
 static POOL: std::sync::OnceLock<&'static Pool> = std::sync::OnceLock::new();
 
 thread_local! {
@@ -2518,12 +2530,9 @@ pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
     }
     let world = e.real.as_ref().map(|r| r.world);
     let world_id = world.map(|w| w as *const World as usize);
+    // Before anything changes: a caller from another run stops with its memory still its own.
     if let Some(pool) = POOL.get() {
-        assert!(
-            pool.kernel == e.kernel.id() && pool.world == world_id,
-            "fork_join: the helper pool belongs to another run (its helpers' engines are views of \
-             that run's memory and kernel); one run per process may fork"
-        );
+        pool.assert_same_run(e.kernel.id(), world_id);
     }
     // With stepped threads the helpers run inside the caller's turn (it waits for them), so the run
     // stays as deterministic as stepped threads are. Their engines alias the kernel and the device
@@ -2537,6 +2546,10 @@ pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
         e.mem.start_sharing();
     }
     let pool = *POOL.get_or_init(|| make_pool(e, world, helpers));
+    // And once more with the pool in hand: of two runs that both found no pool above, one made it
+    // and the other got it here; its helpers view the maker's memory, so the other stops too (its
+    // memory may be shared by now: stepped threads share it just above).
+    pool.assert_same_run(e.kernel.id(), world_id);
     if pool.count < helpers {
         return false;
     }
@@ -4177,6 +4190,19 @@ mod tests {
         }));
         assert!(foreign.is_err(), "another run's fork stops");
         assert!(!other.mem.is_shared(), "and changes nothing first");
+        // The same check runs again once the pool is in hand (two runs that both found no pool:
+        // the one that didn't make it stops there). It takes this run and refuses any other.
+        let pool = *POOL.get().expect("the pool");
+        pool.assert_same_run(e.kernel.id(), Some(world as *const World as usize));
+        for (kernel, world_id) in [
+            (other.kernel.id(), Some(world as *const World as usize)),
+            (e.kernel.id(), None),
+        ] {
+            let late = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                pool.assert_same_run(kernel, world_id);
+            }));
+            assert!(late.is_err(), "another kernel or world is another run");
+        }
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             fork_join(&mut e, 2, &|_: &mut Engine, n: usize| {
                 assert!(n != 1, "helper 1 stops");

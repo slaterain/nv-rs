@@ -7,7 +7,11 @@
 //! `|x|, |y|, |z| <= 10`), a root with a node of 40 children and a node of 20, under them geometries
 //! (inside, outside and on the planes), empty slots, plain nodes, objects whose `OnVisible` is not
 //! audited for other cores (a stand-in that records), and fade nodes running the translated
-//! `BSFadeNode::OnVisible` (some step their fade in, some group their alphas with the accumulator).
+//! `BSFadeNode::OnVisible` (some step their fade in, some group their alphas with the accumulator),
+//! and multi-bound nodes (the typed `BSMultiBoundNode::OnVisible`) whose culling mode differs from
+//! the process's: all visible (1), planes only (3) and ask the shapes (4), nested in each other, with
+//! shapes whose verdict is kept, asked for or outside; one of them is the root's child, so a node
+//! under it splits while main's process is in that node's mode.
 //!
 //! What is recorded, on the host, with the thread it ran on: the accumulator's `RegisterObject`
 //! (with the main process's mode and active planes at that moment), the unaudited `OnVisible`
@@ -33,6 +37,8 @@ use std::time::Duration;
 const VT_FN: u32 = 0x00ff_2000;
 /// The most-alpha callback the fade nodes call (`pMaxAlphaAccessFunc`).
 const MOST_ALPHA_FN: u32 = 0x00ff_3000;
+/// A multi-bound shape's `WithinFrustum` stand-in (slot 0x9c): the answer is the shape's byte +0x24.
+const WITHIN_FRUSTUM_FN: u32 = 0x00ff_3004;
 
 const POOL_ALLOCATE: u32 = 0x00aa_3e40;
 const SCRAP_HEAP: u32 = 0x00aa_42e0;
@@ -49,6 +55,7 @@ const APPEND_VIRTUAL: u32 = 0x00c4_f1d0;
 const NODE_ON_VISIBLE: u32 = 0x00a5_dbe0;
 const GEOMETRY_ON_VISIBLE: u32 = 0x00a7_fd90;
 const FADE_NODE_ON_VISIBLE: u32 = 0x00b4_e490;
+const MULTI_BOUND_NODE_ON_VISIBLE: u32 = 0x00c4_6f60;
 /// `NiAVObject::Cull`: the walk's entry.
 const CULL: u32 = 0x00a5_9e00;
 
@@ -88,6 +95,21 @@ const BOUND_RADIUS: u32 = 0xbc;
 const FRAME_COUNTER: u32 = 0xc8;
 /// `m_uFlags`' faded-in bit.
 const FADED_IN: u32 = 0x4000;
+
+/// A multi-bound node's size, its multi-bound and its culling mode; a shape's size here, its kept
+/// verdict (0 none yet, 1 inside, 2 outside) and the stand-in's answer.
+const MULTI_BOUND_NODE_SIZE: u32 = 0xb4;
+const MULTI_BOUND: u32 = 0xac;
+const CULLING_MODE: u32 = 0xb0;
+const SHAPE_SIZE: u32 = 0x28;
+const SHAPE_VERDICT: u32 = 0x8;
+const SHAPE_ANSWER: u32 = 0x24;
+const INSIDE: u32 = 1;
+const OUTSIDE: u32 = 2;
+/// The process's culling modes the multi-bound nodes set.
+const ALL_VISIBLE: u32 = 1;
+const PLANES_ONLY: u32 = 3;
+const ASK_SHAPES: u32 = 4;
 
 const ONE: u32 = 0x3f80_0000;
 const TWO: u32 = 0x4000_0000;
@@ -245,6 +267,9 @@ fn stand_ins(e: &mut Engine) {
         ret(0)
     });
     e.register(ACCUMULATOR_CHECK, |_, _| ret(1));
+    e.register(WITHIN_FRUSTUM_FN, |e, a| {
+        ret(u32::from(e.mem.u8(a[0] + SHAPE_ANSWER)))
+    });
     // The most alpha: 0.5 for the grouping nodes, 1 for the others. On a helper the first chunk's
     // fade node sleeps first, and both marked nodes take a sequence number.
     e.register(MOST_ALPHA_FN, |_, a| {
@@ -356,6 +381,8 @@ struct Kinds {
     node_vt: u32,
     geometry_vt: u32,
     fade_vt: u32,
+    multi_bound_vt: u32,
+    shape_vt: u32,
     stand_in_vt: u32,
     data: u32,
 }
@@ -410,13 +437,58 @@ impl Kinds {
         fades.push(n);
         n
     }
+
+    /// A multi-bound with a shape whose kept verdict is `verdict` and whose `WithinFrustum`
+    /// answers `answer`.
+    fn multi_bound(
+        &self,
+        e: &mut Engine,
+        verdict: u32,
+        answer: bool,
+        shapes: &mut Vec<u32>,
+    ) -> u32 {
+        let shape = e.mem.alloc(SHAPE_SIZE);
+        e.mem.set_u32(shape, self.shape_vt);
+        e.mem.set_u32(shape + 4, 1);
+        e.mem.set_u32(shape + SHAPE_VERDICT, verdict);
+        e.mem.set_u32(shape + SHAPE_ANSWER, u32::from(answer));
+        shapes.push(shape);
+        let multi_bound = e.mem.alloc(0x10);
+        e.mem.set_u32(multi_bound + 4, 1);
+        e.mem.set_u32(multi_bound + 0xc, shape);
+        multi_bound
+    }
+
+    /// A multi-bound node that culls its children in `mode`, with `multi_bound` (0: none).
+    fn multi_bound_node(
+        &self,
+        e: &mut Engine,
+        mode: u32,
+        multi_bound: u32,
+        children: &[u32],
+    ) -> u32 {
+        let n = self.node(
+            e,
+            MULTI_BOUND_NODE_SIZE,
+            self.multi_bound_vt,
+            12.0,
+            children,
+        );
+        e.mem.set_u32(n + MULTI_BOUND, multi_bound);
+        e.mem.set_u32(n + CULLING_MODE, mode);
+        n
+    }
 }
 
 struct Tree {
     root: u32,
     process: u32,
-    /// Every fade node and its bytes as built (put back before each walk: a walk steps fades).
-    fades: Vec<(u32, Vec<u8>)>,
+    /// Every fade node and multi-bound shape with its bytes as built (put back before each walk: a
+    /// walk steps fades and keeps shapes' verdicts).
+    reset: Vec<(u32, Vec<u8>)>,
+    /// The shapes with no verdict at first that a walk asks once: one answers inside, one outside.
+    asked_inside: u32,
+    asked_outside: u32,
 }
 
 fn tree(e: &mut Engine) -> Tree {
@@ -426,6 +498,8 @@ fn tree(e: &mut Engine) -> Tree {
         node_vt: vtable(e, &[(0xd4, NODE_ON_VISIBLE)]),
         geometry_vt: vtable(e, &[(0xd4, GEOMETRY_ON_VISIBLE)]),
         fade_vt: vtable(e, &[(0xd4, FADE_NODE_ON_VISIBLE)]),
+        multi_bound_vt: vtable(e, &[(0xd4, MULTI_BOUND_NODE_ON_VISIBLE)]),
+        shape_vt: vtable(e, &[(0x9c, WITHIN_FRUSTUM_FN)]),
         stand_in_vt,
         data: e.mem.alloc(0x40),
     };
@@ -467,9 +541,52 @@ fn tree(e: &mut Engine) -> Tree {
     MAIN_PROCESS.store(process, SeqCst);
 
     let mut fades = Vec::new();
+    let mut shapes = Vec::new();
+    let (mut asked_inside, mut asked_outside) = (0, 0);
     let mut big = Vec::new();
     for i in 0..40usize {
-        let child = if i == 0 || i == 39 {
+        let child = if i == 12 {
+            // All visible, its shape's verdict kept from before (inside; asked, it would say
+            // outside): the outside geometry registers; a fade node; and a planes-only node in it.
+            let inner = [
+                kinds.geometry(e, 1),
+                kinds.geometry(e, 5),
+                kinds.unaudited(e, 3),
+            ];
+            let inner = kinds.multi_bound_node(e, PLANES_ONLY, 0, &inner);
+            let faded = [kinds.geometry(e, 1), kinds.unaudited(e, 2)];
+            let kids = [
+                kinds.geometry(e, 5),
+                kinds.unaudited(e, 5),
+                kinds.fade(e, true, &faded, &mut fades),
+                inner,
+                kinds.geometry(e, 0),
+            ];
+            let bound = kinds.multi_bound(e, INSIDE, false, &mut shapes);
+            kinds.multi_bound_node(e, ALL_VISIBLE, bound, &kids)
+        } else if i == 26 {
+            // Planes only, its shape asked (inside, kept): an all-visible node in it changes
+            // nothing (planes only stays), so its outside geometry is culled.
+            let inner = [kinds.geometry(e, 5), kinds.unaudited(e, 1)];
+            let inner = kinds.multi_bound_node(e, ALL_VISIBLE, 0, &inner);
+            let faded = [kinds.geometry(e, 3)];
+            let kids = [
+                kinds.geometry(e, 2),
+                kinds.unaudited(e, 4),
+                kinds.geometry(e, 5),
+                inner,
+                kinds.fade(e, false, &faded, &mut fades),
+            ];
+            let bound = kinds.multi_bound(e, 0, true, &mut shapes);
+            asked_inside = *shapes.last().unwrap();
+            kinds.multi_bound_node(e, PLANES_ONLY, bound, &kids)
+        } else if i == 33 {
+            // Its shape asked: outside (kept), so nothing under it is reached.
+            let kids = [kinds.geometry(e, 0), kinds.unaudited(e, 0)];
+            let bound = kinds.multi_bound(e, 0, false, &mut shapes);
+            asked_outside = *shapes.last().unwrap();
+            kinds.multi_bound_node(e, ALL_VISIBLE, bound, &kids)
+        } else if i == 0 || i == 39 {
             let kids = [
                 kinds.geometry(e, 0),
                 kinds.unaudited(e, 1),
@@ -525,22 +642,46 @@ fn tree(e: &mut Engine) -> Tree {
         .collect();
     let second = kinds.node(e, 0xac, kinds.node_vt, 12.0, &second);
     let last = kinds.geometry(e, 0);
-    let root = kinds.node(e, 0xac, kinds.node_vt, 20.0, &[big, second, last]);
-    let fades = fades
+    // The root's own multi-bound child, in the ask-the-shapes mode: the node of 24 under it splits
+    // on main while main's process is in that mode; in it all-visible nodes whose shapes are asked
+    // at every walk (inside for some, outside for others).
+    let third: Vec<u32> = (0..24)
+        .map(|k| match k % 6 {
+            0 | 2 => kinds.geometry(e, k),
+            1 => kinds.unaudited(e, k),
+            3 => {
+                let kids = [kinds.geometry(e, 5), kinds.unaudited(e, 5)];
+                let bound = kinds.multi_bound(e, 0, k % 12 == 3, &mut shapes);
+                kinds.multi_bound_node(e, ALL_VISIBLE, bound, &kids)
+            }
+            4 => {
+                let kids = [kinds.geometry(e, k), kinds.unaudited(e, k + 1)];
+                kinds.fade(e, k % 12 == 4, &kids, &mut fades)
+            }
+            _ => 0,
+        })
+        .collect();
+    let third = kinds.node(e, 0xac, kinds.node_vt, 12.0, &third);
+    let asking = kinds.multi_bound_node(e, ASK_SHAPES, 0, &[third]);
+    let root = kinds.node(e, 0xac, kinds.node_vt, 20.0, &[big, second, last, asking]);
+    let mut reset: Vec<(u32, Vec<u8>)> = fades
         .into_iter()
         .map(|f| (f, e.mem.bytes(f, FADE_NODE_SIZE)))
         .collect();
+    reset.extend(shapes.into_iter().map(|s| (s, e.mem.bytes(s, SHAPE_SIZE))));
     Tree {
         root,
         process,
-        fades,
+        reset,
+        asked_inside,
+        asked_outside,
     }
 }
 
 /// One walk of the tree with the switch as given: what it recorded.
 fn walk(e: &mut Engine, t: &Tree, mode: &str, helpers: usize, min_children: u32) -> Vec<Rec> {
-    for (node, bytes) in &t.fades {
-        e.mem.write(*node, bytes);
+    for (at, bytes) in &t.reset {
+        e.mem.write(*at, bytes);
     }
     RECORD.lock().unwrap().clear();
     SLOW_DONE.store(u32::MAX, SeqCst);
@@ -552,6 +693,13 @@ fn walk(e: &mut Engine, t: &Tree, mode: &str, helpers: usize, min_children: u32)
         e.mem.bytes(t.process, 0xc8),
         before,
         "{mode}: the walk leaves the process as it found it"
+    );
+    // A shape asked once keeps its answer, wherever the walk asked it.
+    assert_eq!(e.mem.u32(t.asked_inside + SHAPE_VERDICT), INSIDE, "{mode}");
+    assert_eq!(
+        e.mem.u32(t.asked_outside + SHAPE_VERDICT),
+        OUTSIDE,
+        "{mode}"
     );
     culling::par_set_for_tests("off", 1, 16);
     std::mem::take(&mut *RECORD.lock().unwrap())
@@ -583,15 +731,33 @@ fn chunked_walks_replay_the_serial_order() {
     planes.sort_unstable();
     planes.dedup();
     assert!(planes.len() >= 3, "planes seen: {planes:x?}");
+    // So do the culling modes: the process's own (0) and each multi-bound node's (the replay must
+    // set each entry's, and put main's back). Each mode is seen by registrations and by unaudited
+    // objects alike.
+    for tag in [Tag::Register, Tag::Unaudited] {
+        let mut modes: Vec<u32> = serial
+            .iter()
+            .filter(|r| r.tag == tag)
+            .map(|r| r.words[2])
+            .collect();
+        modes.sort_unstable();
+        modes.dedup();
+        assert_eq!(
+            modes,
+            vec![0, ALL_VISIBLE, PLANES_ONLY, ASK_SHAPES],
+            "{tag:?}: modes seen"
+        );
+    }
 
     // The first fork makes the pool with 4 helpers; later ones use 1 to 4 of them, so the big
-    // node's 40 children are cut into 4, 8, 10 or 14 chunks.
+    // node's 40 children are cut into 4, 8, 10 or 14 chunks. Three nodes split at 16+ children (the
+    // 40, the 20, and the 24 under the root's multi-bound node), one at 30+.
     for (helpers, min_children) in [(4, 16), (3, 16), (2, 16), (1, 16), (3, 30), (2, 2)] {
         let (walks, _, _) = culling::par_counts_for_tests();
         let started = std::time::Instant::now();
         let got = walk(&mut e, &t, "on", helpers, min_children);
         let (walks_now, _, _) = culling::par_counts_for_tests();
-        let splits = if min_children <= 20 { 2 } else { 1 };
+        let splits = if min_children <= 20 { 3 } else { 1 };
         assert_eq!(
             walks_now - walks,
             splits,
@@ -639,8 +805,8 @@ fn chunked_walks_replay_the_serial_order() {
     let (_, compared_now, differed_now) = culling::par_counts_for_tests();
     assert_eq!(
         compared_now - compared,
-        2,
-        "the check mode compared both splits"
+        3,
+        "the check mode compared every split"
     );
     assert_eq!(differed_now, differed, "the check mode found no difference");
     assert_eq!(differed_now, 0);
