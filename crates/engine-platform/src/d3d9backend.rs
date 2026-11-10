@@ -2144,6 +2144,166 @@ mod tests {
             Reply::Bytes(None)
         ));
     }
+
+    /// PROBE (first-shot investigation, not for the repo): replays the recording `FS_REC` into a
+    /// real device and writes to `FS_OUT`, per present: wall ms, ms inside the backend, the CPU ms
+    /// of the process's other threads (the driver's compiler among them), draws, and from present
+    /// `FS_FROM` the commands that took 0.3 ms or more with the shaders bound.
+    #[test]
+    #[ignore]
+    fn probe_replay() {
+        use std::io::Write;
+        use std::time::{Duration, Instant};
+        extern "system" {
+            fn GetCurrentProcess() -> isize;
+            fn GetCurrentThread() -> isize;
+            fn GetProcessTimes(h: isize, c: *mut u64, e: *mut u64, k: *mut u64, u: *mut u64)
+                -> i32;
+            fn GetThreadTimes(h: isize, c: *mut u64, e: *mut u64, k: *mut u64, u: *mut u64)
+                -> i32;
+        }
+        // CPU time so far in 100 ns: (the whole process, this thread).
+        let cpu = || unsafe {
+            let (mut c, mut e, mut k, mut u) = (0u64, 0u64, 0u64, 0u64);
+            GetProcessTimes(GetCurrentProcess(), &mut c, &mut e, &mut k, &mut u);
+            let process = k + u;
+            GetThreadTimes(GetCurrentThread(), &mut c, &mut e, &mut k, &mut u);
+            (process, k + u)
+        };
+        let Ok(path) = std::env::var("FS_REC") else {
+            return;
+        };
+        let num = |name: &str, default: u32| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(default)
+        };
+        let (from, stop) = (num("FS_FROM", 0), num("FS_STOP", u32::MAX));
+        let warm = num("FS_WARM", 1) != 0;
+        let out_path = std::env::var("FS_OUT").expect("FS_OUT");
+        let _turn = super::super::d3d9real::real_turn();
+        let window = super::super::d3d9real::test_window().expect("a window");
+        let bytes = std::fs::read(&path).expect("the recording");
+        let mut b = RealBackend::new().with_warm(warm);
+        let mut out = std::io::BufWriter::new(std::fs::File::create(out_path).unwrap());
+        let mut presents = 0u32;
+        let mut frame_start = Instant::now();
+        let mut cpu_start = cpu();
+        let (mut vs, mut ps, mut decl) = (0u32, 0u32, 0u32);
+        let mut slow: Vec<String> = vec![];
+        let mut draws = 0u32;
+        let mut inside = Duration::ZERO;
+        for cmd in d3d9_stream::wire::commands(&bytes).expect("a stream") {
+            // A recording cut by the run's end stops at its last whole command.
+            let Ok(cmd) = cmd else { break };
+            let cmd = match cmd {
+                Cmd::CreateDevice {
+                    device,
+                    behavior,
+                    present,
+                    back_buffers,
+                    depth_stencil,
+                    ..
+                } => Cmd::CreateDevice {
+                    device,
+                    focus: window,
+                    window,
+                    behavior,
+                    present,
+                    back_buffers,
+                    depth_stencil,
+                },
+                Cmd::Reset {
+                    device,
+                    present,
+                    back_buffers,
+                    depth_stencil,
+                    ..
+                } => Cmd::Reset {
+                    device,
+                    window,
+                    present,
+                    back_buffers,
+                    depth_stencil,
+                },
+                Cmd::Present {
+                    device,
+                    source,
+                    dest,
+                    dirty,
+                    model,
+                    frame,
+                    ..
+                } => Cmd::Present {
+                    device,
+                    source,
+                    dest,
+                    window: 0,
+                    dirty,
+                    model,
+                    frame,
+                },
+                other => other,
+            };
+            match cmd {
+                Cmd::SetShader { pixel, shader, .. } => {
+                    if pixel {
+                        ps = shader;
+                    } else {
+                        vs = shader;
+                    }
+                }
+                Cmd::SetVertexDeclaration { declaration, .. } => decl = declaration,
+                _ => {}
+            }
+            let name = cmd.name();
+            let is_present = matches!(cmd, Cmd::Present { .. });
+            let is_draw = matches!(
+                cmd,
+                Cmd::DrawPrimitive { .. }
+                    | Cmd::DrawIndexedPrimitive { .. }
+                    | Cmd::DrawPrimitiveUp { .. }
+            );
+            let t = Instant::now();
+            b.execute(cmd);
+            let dt = t.elapsed();
+            inside += dt;
+            if is_draw {
+                draws += 1;
+            }
+            if presents >= from && dt >= Duration::from_micros(300) {
+                slow.push(format!(
+                    "{name}#{draws}:{:.2}ms vs={vs:#x} ps={ps:#x} decl={decl:#x}",
+                    dt.as_secs_f64() * 1000.0
+                ));
+            }
+            if is_present {
+                let wall = frame_start.elapsed();
+                frame_start = Instant::now();
+                let now = cpu();
+                let others = (now.0 - cpu_start.0).saturating_sub(now.1 - cpu_start.1);
+                cpu_start = now;
+                writeln!(
+                    out,
+                    "present {presents}\t{:.3}\t{:.3}\t{:.3}\t{draws}\t{}",
+                    wall.as_secs_f64() * 1000.0,
+                    inside.as_secs_f64() * 1000.0,
+                    others as f64 / 10_000.0,
+                    slow.join(" | ")
+                )
+                .unwrap();
+                presents += 1;
+                draws = 0;
+                slow.clear();
+                inside = Duration::ZERO;
+                if presents > stop {
+                    break;
+                }
+            }
+        }
+        out.flush().unwrap();
+    }
 }
 
 /// Test only: a stand-in for the real device and its objects (COM objects of this module whose
