@@ -373,6 +373,29 @@ mod tests {
         assert_eq!(value(text, "nv-rs Threads", "iFrameLimit"), None);
     }
 
+    /// Three more of Windows' answers (measure/ini/repeated-sections.md, scratch files): a key
+    /// repeated in one section gives its first line; a heading is the text up to its first `]`
+    /// (text after it or no `]` changes nothing; `[A]x=9` is a heading); a key before any heading
+    /// is in no section, and `[]` is a section named "".
+    #[test]
+    fn repeated_keys_headings_and_keys_before_any_section_read_as_windows_does() {
+        assert_eq!(value("[A]\r\nx=1\r\nx=2\r\n", "A", "x"), Some("1"));
+        assert_eq!(value("[A]\r\nX=1\r\n x =2\r\n", "A", "x"), Some("1"));
+        for text in [
+            "[A] trailing\r\nx=1\r\n",
+            "[A]; note\r\nx=1\r\n",
+            "[A]]\r\nx=1\r\n",
+            "[A\r\nx=1\r\n",
+            "[A]x=9\r\nx=1\r\n",
+        ] {
+            assert_eq!(value(text, "A", "x"), Some("1"), "{text:?}");
+        }
+        assert_eq!(value("[A]]\r\nx=1\r\n", "A]", "x"), None);
+        assert_eq!(value("x=1\r\n[A]\r\ny=2\r\n", "", "x"), None);
+        assert_eq!(value("x=1\r\n[A]\r\ny=2\r\n", "A", "x"), None);
+        assert_eq!(value("x=1\r\n[]\r\nz=3\r\n", "", "z"), Some("3"));
+    }
+
     /// Windows' answers on a file with a repeated section name (measure/ini/repeated-sections.md,
     /// scratch files, 2026-11-09): the first section of the name only, case and the spaces in the
     /// brackets aside; an empty first section hides a later one too.

@@ -169,54 +169,16 @@ impl Settings {
     }
 }
 
-/// `prefs` (a `FalloutPrefs.ini`) with these lines set: each replaced where its name stands, and
-/// those it doesn't have added to `[Display]` (the section made when missing). Line ends stay.
+/// `prefs` (a `FalloutPrefs.ini`) with these lines set in its `[Display]` section, where the game
+/// reads them, one at a time by [`crate::game_ini::set_key`]: the same rule as every other writer
+/// of Play.exe and Settings.cmd, and as Windows' own (measured, measure/ini/repeated-sections.md):
+/// only the first `[Display]` of the file, names compared without case, so a later `[Display]`
+/// the game never reads is left as it is. A missing key goes under the first `[Display]`; a
+/// missing section is added at the end. Every other byte stays, line ends included.
 pub fn apply_to_prefs(prefs: &str, lines: &[(String, String)]) -> String {
-    let mut missing: Vec<&(String, String)> = lines.iter().collect();
-    let mut out = String::with_capacity(prefs.len() + 64);
-    for line in prefs.split_inclusive('\n') {
-        let body = line.trim_end_matches(['\r', '\n']);
-        let end = &line[body.len()..];
-        let set = body
-            .split_once('=')
-            .and_then(|(name, _)| lines.iter().find(|(n, _)| n == name));
-        match set {
-            Some((name, value)) => {
-                out.push_str(name);
-                out.push('=');
-                out.push_str(value);
-                out.push_str(end);
-                missing.retain(|(n, _)| n != name);
-            }
-            None => out.push_str(line),
-        }
-    }
-    if missing.is_empty() {
-        return out;
-    }
-    let mut added = String::new();
-    for (name, value) in &missing {
-        added.push_str(name);
-        added.push('=');
-        added.push_str(value);
-        added.push_str("\r\n");
-    }
-    if let Some(at) = out.find("[Display]") {
-        let after = out[at..].find('\n').map_or(out.len(), |n| at + n + 1);
-        if after == out.len() && !out.ends_with('\n') {
-            out.push_str("\r\n");
-            out.push_str(&added);
-        } else {
-            out.insert_str(after, &added);
-        }
-    } else {
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push_str("\r\n");
-        }
-        out.push_str("[Display]\r\n");
-        out.push_str(&added);
-    }
-    out
+    lines.iter().fold(prefs.to_string(), |text, (name, value)| {
+        crate::game_ini::set_key(&text, "Display", name, value)
+    })
 }
 
 #[cfg(test)]
@@ -245,6 +207,33 @@ mod tests {
         assert_eq!(ini_value(ini, " A ", "x"), Some("1"));
         assert_eq!(ini_value("[A]\r\n[A]\r\nx=1\r\n", "A", "x"), None);
         assert_eq!(ini_value("[A]\r\nx=\r\n[A]\r\nx=1\r\n", "A", "x"), Some(""));
+    }
+
+    /// Three more of Windows' answers (measure/ini/repeated-sections.md, scratch files): a key
+    /// repeated in one section gives its first line, whatever the case and spaces; a heading is
+    /// the text up to its first `]` (text after it, or no `]` at all, changes nothing, and
+    /// `[A]x=9` is a heading, not a key); a key before any heading is in no section, and `[]` is a
+    /// section named "".
+    #[test]
+    fn repeated_keys_headings_and_keys_before_any_section_read_as_windows_does() {
+        assert_eq!(ini_value("[A]\r\nx=1\r\nx=2\r\n", "A", "x"), Some("1"));
+        assert_eq!(ini_value("[A]\r\nx=1\r\n X =2\r\n", "A", "x"), Some("1"));
+        assert_eq!(ini_value("[A]\r\nX=1\r\nx=2\r\n", "A", "x"), Some("1"));
+        for text in [
+            "[A] trailing\r\nx=1\r\n",
+            "[A]; note\r\nx=1\r\n",
+            "[A]]\r\nx=1\r\n",
+            "[A\r\nx=1\r\n",
+            "[A]x=9\r\nx=1\r\n",
+            " [A] \r\nx=1\r\n",
+        ] {
+            assert_eq!(ini_value(text, "A", "x"), Some("1"), "{text:?}");
+        }
+        assert_eq!(ini_value("[A]]\r\nx=1\r\n", "A]", "x"), None);
+        assert_eq!(ini_value("x=1\r\n[A]\r\ny=2\r\n", "", "x"), None);
+        assert_eq!(ini_value("x=1\r\n[A]\r\ny=2\r\n", "A", "x"), None);
+        assert_eq!(ini_value("x=1\r\n[]\r\nz=3\r\n", "", "z"), Some("3"));
+        assert_eq!(ini_value("x=1\r\n[]\r\nz=3\r\n", "", "x"), None);
     }
 
     #[test]
@@ -377,8 +366,43 @@ mod tests {
         );
         let out = apply_to_prefs("", &lines(&[("iSize H", "600")]));
         assert_eq!(out, "[Display]\r\niSize H=600\r\n");
+        // A missing section in the file's own line ends.
         let out = apply_to_prefs("[Audio]\nfVolume=1", &lines(&[("iSize H", "600")]));
-        assert_eq!(out, "[Audio]\nfVolume=1\r\n[Display]\r\niSize H=600\r\n");
+        assert_eq!(out, "[Audio]\nfVolume=1\n[Display]\niSize H=600\n");
+    }
+
+    /// A FalloutPrefs.ini with a repeated `[Display]`: the game reads only the first (Windows,
+    /// measured), so Play.exe's resolution, anti-aliasing, `bFull Screen` and `sD3DDevice` go
+    /// there, and the later section, which the game never reads, stays byte for byte. A key of
+    /// another section with the same name is not touched; names match without case.
+    #[test]
+    fn prefs_lines_go_into_the_first_display_section() {
+        let prefs = "[Display]\r\nisize w=800\r\n[Audio]\r\niSize W=5\r\n[Display]\r\niSize W=640\r\niMultiSample=8\r\nbFull Screen=1\r\n";
+        let out = apply_to_prefs(
+            prefs,
+            &lines(&[
+                ("iSize W", "1920"),
+                ("iMultiSample", "4"),
+                ("bFull Screen", "0"),
+                ("sD3DDevice", "\"Test Card\""),
+            ]),
+        );
+        let later = "[Display]\r\niSize W=640\r\niMultiSample=8\r\nbFull Screen=1\r\n";
+        assert!(
+            out.ends_with(&format!("[Audio]\r\niSize W=5\r\n{later}")),
+            "{out}"
+        );
+        let first = &out[..out.find("[Audio]").unwrap()];
+        assert!(first.starts_with("[Display]\r\n") && first.contains("isize w=1920\r\n"));
+        for line in [
+            "iMultiSample=4\r\n",
+            "bFull Screen=0\r\n",
+            "sD3DDevice=\"Test Card\"\r\n",
+        ] {
+            assert!(first.contains(line), "{line} in {first}");
+        }
+        assert_eq!(ini_value(&out, "Display", "iMultiSample"), Some("4"));
+        assert_eq!(ini_value(&out, "Display", "bFull Screen"), Some("0"));
     }
 
     #[test]

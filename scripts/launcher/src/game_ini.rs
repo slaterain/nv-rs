@@ -784,6 +784,33 @@ mod tests {
         );
     }
 
+    /// Windows' writes measured for three more shapes (measure/ini/repeated-sections.md): a key
+    /// repeated in one section has its first line changed, the spaces around its name kept; a
+    /// heading with text after its `]` is that section; a key before any heading belongs to no
+    /// section and stays as it is, and the key goes into the section asked for, made at the end
+    /// when missing (`[]` for the section named "").
+    #[test]
+    fn repeated_keys_headings_and_keys_before_any_section_are_written_as_windows_does() {
+        assert_eq!(
+            set_key("[A]\r\n X =1\r\nx=2\r\n", "A", "x", "5"),
+            "[A]\r\n X =5\r\nx=2\r\n"
+        );
+        assert_eq!(
+            set_key("[A] trailing\r\nx=1\r\n", "A", "x", "5"),
+            "[A] trailing\r\nx=5\r\n"
+        );
+        let added = set_key("[A] trailing\r\nx=1\r\n", "A", "n", "8");
+        assert!(added.starts_with("[A] trailing\r\n") && added.contains("\r\nn=8\r\n"));
+        assert_eq!(
+            set_key("x=1\r\n[A]\r\ny=2\r\n", "A", "x", "5"),
+            "x=1\r\n[A]\r\nx=5\r\ny=2\r\n"
+        );
+        assert_eq!(
+            set_key("x=1\r\n[A]\r\ny=2\r\n", "", "x", "5"),
+            "x=1\r\n[A]\r\ny=2\r\n[]\r\nx=5\r\n"
+        );
+    }
+
     /// A repeated section name: Windows reads and writes only the first section of it
     /// (measure/ini/repeated-sections.md), so `set_key` changes or adds the key there and leaves a
     /// later section of the name as it is, and the completion counts a key that only a later
