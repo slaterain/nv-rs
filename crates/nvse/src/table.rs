@@ -483,6 +483,20 @@ pub(crate) mod tests {
         assert_eq!(record_of(&e, 0x1400), t.record(0x1400));
     }
 
+    /// How many of xNVSE's 654 commands are in: the built ones, each at an opcode of its own (the
+    /// README's count and `docs/SYSTEMS.md` say this number: change them together), and the
+    /// console commands xNVSE re-exports, which are copied records and not counted.
+    #[test]
+    fn the_count_of_built_commands() {
+        let built = crate::commands::all();
+        let mut opcodes: Vec<u32> = built.iter().map(|c| c.opcode).collect();
+        opcodes.sort_unstable();
+        opcodes.dedup();
+        assert_eq!(opcodes.len(), built.len(), "two commands at one opcode");
+        let console = NAMES.iter().filter(|(n, _)| n.starts_with("con_")).count();
+        assert_eq!((built.len(), console), (410, 20));
+    }
+
     /// Every xNVSE opcode has its names; a console re-export copies the console record with the
     /// script opcode, the `con_` name and no short name.
     #[test]
