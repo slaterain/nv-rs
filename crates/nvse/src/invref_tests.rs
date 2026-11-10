@@ -123,7 +123,7 @@ fn engine() -> Engine {
     e.register(AREA + 0xf20, remove_item);
     e.register(EXTRA_REMOVE_ALL, free);
     e.mem.set_u32(REF_VTABLE + FORM_DESTROY, AREA + 0xf00);
-    e.mem.set_u32(CONTAINER_VTABLE + IS_ACTOR, AREA + 0xf10);
+    e.mem.set_u32(CONTAINER_VTABLE + 0x100, AREA + 0xf10);
     e.mem
         .set_u32(CONTAINER_VTABLE + REFR_REMOVE_ITEM, AREA + 0xf20);
     for (item, id) in [(ITEM_A, 0x0001_0a00u32), (ITEM_B, 0x0001_0b00)] {

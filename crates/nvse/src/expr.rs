@@ -2110,7 +2110,7 @@ fn convert_form(e: &mut Engine, kind: u32, form: u32) -> Option<u32> {
                 return None;
             }
             // `TESObjectREFR::GetContainer`: an actor's base, or a container base.
-            let is_actor = e.vcall(refr, 0x10c, &args![]).bool();
+            let is_actor = e.vcall(refr, crate::vtable::IS_ACTOR, &args![]).bool();
             let base = e.mem.u32(refr + 0x20);
             (is_actor || (base != 0 && e.mem.u8(base + 4) == 0x1b)).then_some(refr)
         }
@@ -2124,7 +2124,10 @@ fn convert_form(e: &mut Engine, kind: u32, form: u32) -> Option<u32> {
             .call(IS_INVENTORY_OBJECT_TYPE, &args![u32::from(t)])
             .bool()
             || t == 0x55),
-        0x35 => ok(e.vcall(form, 0xec, &args![]).bool() && t != 0x55),
+        0x35 => ok(e
+            .vcall(form, crate::vtable::IS_BOUND_OBJECT, &args![])
+            .bool()
+            && t != 0x55),
         _ => {
             let want: u8 = match kind {
                 0x0c => 0x0d,
@@ -2249,6 +2252,54 @@ mod tests {
 #[cfg(test)]
 mod review_tests {
     use super::*;
+
+    /// Review of #380, point 2: an expression's Container argument asks `IsActor` (`+0x100`) and
+    /// a NonFormList argument `IsBoundObject` (`+0xE8`). The stand-in vtable answers at those two
+    /// offsets, written as numbers; every other entry (the reference compare at `+0x10C`, which
+    /// takes an argument, and `+0xEC`) stops the test if it is called. A reference that is not an
+    /// actor passes as a Container only when its base is a container (0x1B); an actor always.
+    #[test]
+    fn container_and_non_form_list_arguments_ask_the_right_slots() {
+        const REFR: u32 = 0x0200_1000;
+        const BASE: u32 = 0x0200_2000;
+        const VT: u32 = 0x0200_3000;
+        const FN_TRUE: u32 = 0x0060_0000;
+        const FN_FALSE: u32 = 0x0060_0004;
+        const FN_STOP: u32 = 0x0060_0008;
+        let mut e = crate::commands::test_support::engine();
+        e.register(FN_TRUE, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register(FN_FALSE, |_, _| Ret::default());
+        e.register(FN_STOP, |_, _| {
+            panic!("a vtable entry the check does not ask was called")
+        });
+        for slot in (0..0x200).step_by(4) {
+            e.mem.set_u32(VT + slot, FN_STOP);
+        }
+        e.mem.set_u32(VT + 0x100, FN_FALSE);
+        e.mem.set_u32(VT + 0xe8, FN_TRUE);
+        e.mem.set_u32(REFR, VT);
+        e.mem.set_u8(REFR + 4, 0x3a);
+        e.mem.set_u32(REFR + 0x7f0, 1);
+        e.mem.set_u32(REFR + 0x20, BASE);
+        e.mem.set_u8(BASE + 4, 0x1b);
+        assert_eq!(convert_form(&mut e, 0x1a, REFR), Some(REFR), "a container");
+        e.mem.set_u8(BASE + 4, 0x15);
+        assert_eq!(convert_form(&mut e, 0x1a, REFR), None, "a static");
+        e.mem.set_u32(VT + 0x100, FN_TRUE);
+        assert_eq!(convert_form(&mut e, 0x1a, REFR), Some(REFR), "an actor");
+        // NonFormList: a bound object that is not a form list.
+        e.mem.set_u32(BASE, VT);
+        e.mem.set_u8(BASE + 4, 0x28);
+        assert_eq!(convert_form(&mut e, 0x35, BASE), Some(BASE));
+        e.mem.set_u8(BASE + 4, 0x55);
+        assert_eq!(convert_form(&mut e, 0x35, BASE), None, "a form list");
+        e.mem.set_u8(BASE + 4, 0x28);
+        e.mem.set_u32(VT + 0xe8, FN_FALSE);
+        assert_eq!(convert_form(&mut e, 0x35, BASE), None, "not bound");
+    }
 
     /// Review item 8: shifts as `_allshl`/`_allshr` give them: the count's low byte, 64 and up
     /// 0 (left) or the sign (right), negative counts the same way.

@@ -1124,10 +1124,10 @@ fn list_contains(e: &Engine, list: u32, form: u32) -> bool {
     false
 }
 
-/// `TESForm::IsActor_Runtime` (vtable `+0x10C`), `Actor::baseProcess` (`+0x68`),
-/// `BaseProcess::GetWeaponInfo` (`+0x148`) and `GetAmmoInfo` (`+0x14C`) (xNVSE `GameForms.h`,
-/// `GameProcess.h`); the weapon info's form at `+8`, the ammo info's ammo at `+8`.
-const IS_ACTOR: u32 = 0x10c;
+use crate::vtable::IS_ACTOR;
+/// `Actor::baseProcess` (`+0x68`), `BaseProcess::GetWeaponInfo` (`+0x148`) and `GetAmmoInfo`
+/// (`+0x14C`) (xNVSE `GameForms.h`, `GameProcess.h`); the weapon info's form at `+8`, the ammo
+/// info's ammo at `+8`. `IsActor_Runtime` is [`crate::vtable::IS_ACTOR`].
 const BASE_PROCESS: u32 = 0x68;
 const GET_WEAPON_INFO: u32 = 0x148;
 const GET_AMMO_INFO: u32 = 0x14c;
@@ -1448,7 +1448,7 @@ mod armor_ammo_tests {
             e.mem.set_u32(a[0] + 8, flags);
             Ret::default()
         });
-        e.mem.set_u32(VTABLE + IS_ACTOR, FN_TRUE);
+        e.mem.set_u32(VTABLE + 0x100, FN_TRUE);
         e.mem.set_u32(VTABLE + GET_AMMO_INFO, FN_INFO);
         e.mem.set_u32(VTABLE + GET_WEAPON_INFO, FN_INFO);
         e.mem.set_u32(VTABLE + IS_QUEST_ITEM, FN_IS_QUEST);
@@ -1538,5 +1538,34 @@ mod armor_ammo_tests {
         // The equipped weapon is the weapon info block's form.
         e.mem.set_u32(INFO + 8, WEAPON);
         assert_eq!(eval(&mut e, 0x1658, ACTOR, AMMO, 0), 1.0);
+    }
+
+    /// Review of #380, point 2 (a live bug on main before it): `HasAmmoEquipped` and
+    /// `IsEquippedAmmoInList` ask `IsActor` at `+0x100`. A reference that is not an actor has a
+    /// vtable answering 0 there and stopping the test at every other entry (the reference compare
+    /// at `+0x10C` among them): both answer 0, as a condition and as a command. The actor still
+    /// answers 1 with its compare entry stopping the test too.
+    #[test]
+    fn a_non_actor_is_asked_is_actor_and_answers_0() {
+        const NON_ACTOR_VT: u32 = 0x0200_e000;
+        const FN_FALSE: u32 = 0x0060_0010;
+        const FN_STOP: u32 = 0x0060_0014;
+        let mut e = setup();
+        e.register(FN_FALSE, |_, _| Ret::default());
+        e.register(FN_STOP, |_, _| {
+            panic!("a vtable entry other than IsActor was called")
+        });
+        for slot in (0..0x200).step_by(4) {
+            e.mem.set_u32(NON_ACTOR_VT + slot, FN_STOP);
+        }
+        e.mem.set_u32(NON_ACTOR_VT + 0x100, FN_FALSE);
+        e.mem.set_u32(VTABLE + 0x10c, FN_STOP);
+        e.mem.set_u32(ARMOR, NON_ACTOR_VT);
+        assert_eq!(eval(&mut e, 0x1657, ARMOR, AMMO, 0), 0.0);
+        assert_eq!(eval(&mut e, 0x1659, ARMOR, LIST, 0), 0.0);
+        assert_eq!(call(&mut e, 0x1657, ARMOR, &[r(2)]).1, 0.0);
+        assert_eq!(call(&mut e, 0x1659, ARMOR, &[r(3)]).1, 0.0);
+        assert_eq!(eval(&mut e, 0x1657, ACTOR, AMMO, 0), 1.0);
+        assert_eq!(call(&mut e, 0x1657, ACTOR, &[r(2)]).1, 1.0);
     }
 }

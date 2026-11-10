@@ -6,6 +6,7 @@ pub mod array;
 pub mod input;
 pub mod inventory;
 pub mod inventory_forms;
+pub mod inventory_items;
 pub mod inventory_ref;
 pub mod math;
 pub mod printf;
@@ -24,6 +25,7 @@ pub fn all() -> Vec<&'static Command> {
         .iter()
         .chain(inventory_ref::COMMANDS)
         .chain(inventory_forms::COMMANDS)
+        .chain(inventory_items::COMMANDS)
         .chain(weapons::COMMANDS)
         .chain(math::COMMANDS)
         .chain(algohol::COMMANDS)
@@ -144,6 +146,8 @@ pub mod rtti {
     pub const TES_RACE: u32 = 0x0118_6370;
     pub const BGS_DESTRUCTIBLE_OBJECT_FORM: u32 = 0x0118_32ac;
     pub const TES_FULL_NAME: u32 = 0x0118_3158;
+    pub const TES_BOUND_OBJECT: u32 = 0x0118_3108;
+    pub const ACTOR: u32 = 0x0118_46d4;
 }
 
 /// `DYNAMIC_CAST(obj, from, to)` (xNVSE): the exe's `__RTDynamicCast`; 0 for a null object or
@@ -261,6 +265,8 @@ pub(crate) mod test_support {
             rtti::TES_RACE => (1 << 18, 0),
             rtti::BGS_DESTRUCTIBLE_OBJECT_FORM => (1 << 19, 0x7e0),
             rtti::TES_FULL_NAME => (1 << 20, 0x7d0),
+            rtti::ACTOR => (1 << 21, 0),
+            rtti::TES_BOUND_OBJECT => (1 << 22, 0),
             _ => (0, 0),
         }
     }
