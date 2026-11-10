@@ -2326,6 +2326,62 @@ mod tests {
         assert!(line.ends_with("kept as they were: NV_THREADS"), "{line}");
     }
 
+    /// Settings.ps1 on the three shapes measured last (measure/ini/repeated-sections.md): a key
+    /// before any heading (in no section: not read, not written), a heading with text after its
+    /// `]` (still `[Display]`) and a key twice in that section (the first line is the one read
+    /// and written). It shows what Windows reads and writes as `set_key` does; FalloutPrefs.ini's
+    /// resolution goes into its first `[Display]` the same way, from Play.exe and Settings.cmd.
+    #[test]
+    fn settings_cmd_reads_and_writes_as_windows_on_odd_lines() {
+        let files = Files::new("settings-odd", None);
+        files.start().unwrap();
+        let [game, mods] = files.profiles();
+        let ini = format!(
+            "iPresentInterval=0\r\n{}",
+            text_of(&files.ini(0)).replace(
+                "[Display]\r\niPresentInterval=1\r\n",
+                "[Display] ; tweaks\r\niPresentInterval=1\r\nipresentinterval=0\r\n"
+            )
+        );
+        assert!(ini.contains("[Display] ; tweaks\r\n"));
+        assert_eq!(
+            settings::ini_value(&ini, "Display", "iPresentInterval"),
+            Some("1")
+        );
+        let prefs = "[Display]\r\niSize W=800\r\n[Display]\r\niSize W=640\r\niSize H=480\r\n";
+        for profile in [&game, &mods] {
+            std::fs::write(profile.fallout_ini(), bytes_of(&ini)).unwrap();
+            std::fs::write(&profile.prefs, prefs).unwrap();
+        }
+        // The window shows V-sync On (the first line): choosing On writes nothing.
+        settings_window(&files, "VSync=On");
+        assert_eq!(text_of(&files.ini(0)), ini);
+        settings_window(&files, "VSync=Off;Resolution=1920x1080");
+        let want = game_ini::set_key(&ini, "Display", "iPresentInterval", "0");
+        assert!(want.starts_with("iPresentInterval=0\r\n"));
+        assert!(want.contains("[Display] ; tweaks\r\niPresentInterval=0\r\nipresentinterval=0\r\n"));
+        let mut want_prefs = prefs.to_string();
+        for (key, value) in [("iSize W", "1920"), ("iSize H", "1080")] {
+            want_prefs = game_ini::set_key(&want_prefs, "Display", key, value);
+        }
+        assert!(want_prefs.ends_with("[Display]\r\niSize W=640\r\niSize H=480\r\n"));
+        for profile in 0..2 {
+            assert_eq!(text_of(&files.ini(profile)), want);
+            assert_eq!(files.prefs(profile), want_prefs);
+        }
+        // Play.exe's own writer gives the same FalloutPrefs.ini lines.
+        assert_eq!(
+            settings::apply_to_prefs(
+                prefs,
+                &[
+                    ("iSize W".to_string(), "1920".to_string()),
+                    ("iSize H".to_string(), "1080".to_string())
+                ]
+            ),
+            want_prefs
+        );
+    }
+
     /// Settings.ps1 on a file with a repeated `[Display]` section (a hand-edited file): it shows
     /// and changes the first section's key only, as Windows reads and writes it, the same lines as
     /// `set_key`; the later section stays byte for byte.

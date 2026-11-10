@@ -286,6 +286,39 @@ mod tests {
         );
     }
 
+    /// Three more of Windows' `GetPrivateProfileStringA` answers, measured on scratch files on
+    /// the player's machine (2026-11-10): a key repeated in one section gives its first line,
+    /// whatever its case and spaces; a heading is the text up to its first `]` (text after it, or
+    /// no `]` at all, changes nothing, and `[A]x=9` is a heading, not a key); a key before any
+    /// heading is in no section, not even the one named "", which `[]` opens.
+    #[test]
+    fn repeated_keys_headings_and_keys_before_any_section_read_as_windows_does() {
+        assert_eq!(
+            ini_value(b"[A]\r\nx=1\r\nx=2\r\n", b"A", b"x").unwrap(),
+            b"1"
+        );
+        assert_eq!(
+            ini_value(b"[A]\r\nX=1\r\n x =2\r\n", b"A", b"x").unwrap(),
+            b"1"
+        );
+        let headings: [&[u8]; 6] = [
+            b"[A] trailing\r\nx=1\r\n",
+            b"[A]; note\r\nx=1\r\n",
+            b"[A]]\r\nx=1\r\n",
+            b"[A\r\nx=1\r\n",
+            b"[A]x=9\r\nx=1\r\n",
+            b" [A] \r\nx=1\r\n",
+        ];
+        for text in headings {
+            assert_eq!(ini_value(text, b"A", b"x").unwrap(), b"1");
+        }
+        assert_eq!(ini_value(b"[A]]\r\nx=1\r\n", b"A]", b"x"), None);
+        assert_eq!(ini_value(b"x=1\r\n[A]\r\ny=2\r\n", b"", b"x"), None);
+        assert_eq!(ini_value(b"x=1\r\n[A]\r\ny=2\r\n", b"A", b"x"), None);
+        assert_eq!(ini_value(b"x=1\r\n[]\r\nz=3\r\n", b"", b"z").unwrap(), b"3");
+        assert_eq!(ini_value(b"x=1\r\n[]\r\nz=3\r\n", b"", b"x"), None);
+    }
+
     /// Windows' `GetPrivateProfileIntA` answers, measured on the player's machine (2026-10-21).
     #[test]
     fn profile_ints_read_as_windows_does() {
