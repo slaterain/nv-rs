@@ -36,15 +36,20 @@ pub fn decode(bytes: &[u8]) -> String {
 }
 
 /// The value of `key` in `section` of an INI text, found as the game finds it (host
-/// `game_ini::value`): names compared without case, spaces trimmed, one pair of quotes taken off,
-/// the first match wins; a `;` line never matches.
+/// `game_ini::value`): only in the first section of that name (Windows reads no later one,
+/// measured), names compared without case, spaces trimmed, one pair of quotes taken off, the
+/// first match wins; a `;` line never matches.
 pub fn ini_value<'a>(text: &'a str, section: &str, key: &str) -> Option<&'a str> {
     let mut inside = false;
     for line in text.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix('[') {
+            // The first section of the name ends here.
+            if inside {
+                return None;
+            }
             let name = rest.split(']').next().unwrap_or(rest);
-            inside = name.trim().eq_ignore_ascii_case(section);
+            inside = name.trim().eq_ignore_ascii_case(section.trim());
             continue;
         }
         let Some((name, value)) = line.split_once('=').filter(|_| inside) else {
@@ -231,6 +236,15 @@ mod tests {
         assert_eq!(ini_value(ini, "nv-rs Display", "iFrameLimit"), Some("5"));
         assert_eq!(ini_value(ini, "Other", "iFrameLimit"), Some("7"));
         assert_eq!(ini_value(ini, "nv-rs Display", "bBorderless"), None);
+        // A repeated section name: only the first section counts, as Windows reads it
+        // (measure/ini/repeated-sections.md); an empty first one hides the later one too.
+        let ini = "[A]\r\nx=1\r\n[B]\r\nz=3\r\n[a]\r\ny=2\r\nx=9\r\n[ A ]\r\nw=6\r\n";
+        assert_eq!(ini_value(ini, "A", "x"), Some("1"));
+        assert_eq!(ini_value(ini, "A", "y"), None);
+        assert_eq!(ini_value(ini, "A", "w"), None);
+        assert_eq!(ini_value(ini, " A ", "x"), Some("1"));
+        assert_eq!(ini_value("[A]\r\n[A]\r\nx=1\r\n", "A", "x"), None);
+        assert_eq!(ini_value("[A]\r\nx=\r\n[A]\r\nx=1\r\n", "A", "x"), Some(""));
     }
 
     #[test]
