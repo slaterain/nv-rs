@@ -85,10 +85,12 @@ fn install_keep_cosave_plugins(e: &mut Engine) {
 }
 
 /// The driver compiles a Direct3D 9 shader at its first draw: the first shot's frame took 25-46 ms
-/// (7 shaders the game made at start-up, first drawn with at the shot). With the row the real
-/// backend draws once with each shader the game makes, into a 1x1 target of its own, a few
-/// milliseconds after each `Present` (`engine_platform::d3d9backend`): the compiles happen in the
-/// menus and loading screens instead. No exe address; nothing the game draws changes.
+/// (7 shaders the game made at start-up, first drawn with at the shot), and the NVIDIA driver
+/// compiles a pixel shader again for a multisampled target. With the row the real backend draws
+/// once with each shader the game makes into a 1x1 target of its own, and once more into a 1x1
+/// target of each multisample type the game's render targets use (the scene's 8x, the 4x of its
+/// 1024x1024 targets), a few milliseconds after each `Present` (`engine_platform::d3d9backend`):
+/// the compiles happen in the menus instead. No exe address; nothing the game draws changes.
 pub const SHADER_WARM: Fix = Fix {
     name: "shaders compiled ahead of first use",
     env: "NV_SHADER_WARM",

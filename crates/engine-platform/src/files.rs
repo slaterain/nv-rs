@@ -208,9 +208,10 @@ fn read_range(e: &mut Engine, handle: u32, k: &[u8], start: u64, count: u32) -> 
 ///
 /// Each read is at the handle's position, of the same count, in the same order, so a file nobody
 /// changes reads byte for byte as before. A file another program replaces or deletes on disk
-/// while the handle is open goes on reading as the file the handle opened, its bytes and its
-/// size ([`handle_size`]), until the handle is closed; a handle opened after the change sees the
-/// new file. (Before, every read saw whatever the path named then: the new file's bytes at the
+/// while the handle is open goes on reading, once it has read, as the file the handle opened,
+/// its bytes and its size ([`handle_size`]), until the handle is closed (the host file is opened
+/// at the first read: until then the handle still follows the path); a handle opened after the
+/// change sees the new file. (Before, every read saw whatever the path named then: the new file's bytes at the
 /// old position, or a stop when it was gone. The original refuses such a change: its opens
 /// never share delete, `00afeac0` sharing read and the C runtime's `__tsopen_nolock` at most
 /// read and write. The host file here shares read, write and delete on purpose, so a mod manager

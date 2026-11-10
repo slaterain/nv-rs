@@ -113,8 +113,23 @@ pub struct RealBackend {
 /// after each `Present` the queue is drawn with, one point into a 1x1 target of this layer's,
 /// for at most [`WARM_BUDGET`]; the game's bindings that draw changes are then set again with its
 /// own commands. Nothing the game draws into is touched: no target of its, no depth (none bound).
+///
+/// The NVIDIA driver compiles a pixel shader again for a multisampled target: a shader drawn
+/// with into the plain 1x1 target was compiled again at its first draw into the game's 8x
+/// multisampled scene target (the first shot). In a replay of the shooting route, drawing each
+/// shader also into a multisampled 1x1 target alone removed that compile; adding the real vertex
+/// layout, textures and render states on top changed nothing (measurements:
+/// build43-scratch/measure/stutter/REAL-THREADS.md, "The first shot: what the driver compiles").
+/// So every multisample type of a render target the game makes is a kind of target here too
+/// ([`Warm::kinds`]), and every shader is drawn with once into each kind.
 struct Warm {
-    queue: std::collections::VecDeque<WarmShader>,
+    queue: std::collections::VecDeque<WarmDraw>,
+    /// Every shader made on this device, to draw with again into a kind of target made later.
+    shaders: Vec<WarmShader>,
+    /// The kinds of 1x1 target drawn into: the plain one ([`PLAIN_KIND`]) first, then each
+    /// multisample type (with its quality) of a render target the game has made, in the format of
+    /// the first such target.
+    kinds: Vec<WarmKind>,
     bindings: Bindings,
     /// How long one warm-up may take ([`WARM_BUDGET`]; tests set it).
     budget: std::time::Duration,
@@ -125,9 +140,97 @@ struct Warm {
     presents: u32,
 }
 
-enum WarmShader {
-    Vertex(IDirect3DVertexShader9, u8),
-    Pixel(IDirect3DPixelShader9, u8),
+/// A shader the game made: its address (the backend's object; one the game has destroyed since is
+/// skipped), whether it is a pixel shader, and its shader model's major version.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WarmShader {
+    shader: u32,
+    pixel: bool,
+    major: u8,
+}
+
+/// One warm-up draw: a shader, into a kind of target (an index into [`Warm::kinds`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WarmDraw {
+    shader: WarmShader,
+    kind: usize,
+}
+
+/// A kind of 1x1 target: `D3DFORMAT`, `D3DMULTISAMPLE_TYPE`, multisample quality.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WarmKind {
+    format: u32,
+    multisample: u32,
+    quality: u32,
+}
+
+/// The plain kind: `D3DFMT_A8R8G8B8`, no multisampling.
+const PLAIN_KIND: WarmKind = WarmKind {
+    format: 21,
+    multisample: 0,
+    quality: 0,
+};
+
+impl Warm {
+    fn new(budget: std::time::Duration) -> Warm {
+        Warm {
+            queue: Default::default(),
+            shaders: vec![],
+            kinds: vec![PLAIN_KIND],
+            bindings: Bindings::default(),
+            budget,
+            done: 0,
+            failed: 0,
+            spent: std::time::Duration::ZERO,
+            presents: 0,
+        }
+    }
+
+    /// A new device: nothing of an earlier one's is warmed.
+    fn device_made(&mut self) {
+        self.queue.clear();
+        self.shaders.clear();
+        self.kinds.truncate(1);
+    }
+
+    /// The game made a shader: queued for every kind of target.
+    fn shader_made(&mut self, shader: WarmShader) {
+        self.shaders.push(shader);
+        for kind in 0..self.kinds.len() {
+            self.queue.push_back(WarmDraw { shader, kind });
+        }
+    }
+
+    /// `CreateDevice` or `Reset` with the game's `D3DPRESENT_PARAMETERS` (the 32-bit layout's
+    /// words): its back buffers are render targets too.
+    fn back_buffer_made(&mut self, present: &[u32]) {
+        let w = |i: usize| present.get(i).copied().unwrap_or(0);
+        // `D3DFMT_UNKNOWN` (windowed: the desktop's format) as `D3DFMT_X8R8G8B8`.
+        let format = if w(2) == 0 { 22 } else { w(2) };
+        self.target_made(format, w(4), w(5));
+    }
+
+    /// The game made a render target (not a depth surface): a multisample type (and quality) not
+    /// seen before is a new kind, and every shader made so far is queued for it.
+    fn target_made(&mut self, format: u32, multisample: u32, quality: u32) {
+        if multisample == 0
+            || self
+                .kinds
+                .iter()
+                .any(|k| (k.multisample, k.quality) == (multisample, quality))
+        {
+            return;
+        }
+        let kind = self.kinds.len();
+        self.kinds.push(WarmKind {
+            format,
+            multisample,
+            quality,
+        });
+        for &shader in &self.shaders {
+            self.queue.push_back(WarmDraw { shader, kind });
+        }
+    }
 }
 
 struct WarmTools {
@@ -415,86 +518,15 @@ impl RealBackend {
 
     /// This backend with the shader warm-up ([`Warm`]) on.
     pub fn with_warm(mut self, on: bool) -> RealBackend {
-        self.warm = on.then(|| {
-            Box::new(Warm {
-                queue: Default::default(),
-                bindings: Bindings::default(),
-                budget: WARM_BUDGET,
-                done: 0,
-                failed: 0,
-                spent: std::time::Duration::ZERO,
-                presents: 0,
-            })
-        });
+        self.warm = on.then(|| Box::new(Warm::new(WARM_BUDGET)));
         self
     }
 
-    /// After a `Present`: draws with the queued shaders ([`Warm`]) for [`WARM_BUDGET`] at most,
-    /// then sets the game's bindings again with its own commands.
-    /// Its objects (`warm_tools`: the 1x1 target is in the default pool, which `Reset` refuses
-    /// while any of it is alive) live for this call only.
-    fn warm_some(&mut self, d: &IDirect3DDevice9, device: u32) {
-        let start = std::time::Instant::now();
-        let Some(w) = self.warm.as_mut() else { return };
-        // The game's target to bind again is known (it always is after `CreateDevice`).
-        if w.bindings.targets[0] == 0 {
-            return;
-        }
-        let Some(t) = warm_tools(d) else {
-            eprintln!("NV_D3D9=real: the shader warm-up could not make its target: off");
-            self.warm = None;
-            return;
-        };
-        let zeros = [0u32; 4];
-        unsafe {
-            // Not inside a scene of the game's (a Present inside one): nothing then.
-            if d.BeginScene().is_err() {
-                return;
-            }
-            let _ = d.SetRenderTarget(0, &t.target);
-            for i in 1..4 {
-                let _ = d.SetRenderTarget(i, None::<&IDirect3DSurface9>);
-            }
-            let _ = d.SetDepthStencilSurface(None::<&IDirect3DSurface9>);
-            let _ = d.SetVertexDeclaration(&t.declaration);
-            while let Some(s) = w.queue.pop_front() {
-                let model = |major: u8| usize::from(major >= 3);
-                let r = match &s {
-                    WarmShader::Vertex(vs, major) => {
-                        let _ = d.SetPixelShader(&t.ps[model(*major)]);
-                        d.SetVertexShader(vs)
-                    }
-                    WarmShader::Pixel(ps, major) => {
-                        let _ = d.SetVertexShader(&t.vs[model(*major)]);
-                        d.SetPixelShader(ps)
-                    }
-                }
-                .and_then(|()| {
-                    d.DrawPrimitiveUP(
-                        D3DPT_POINTLIST,
-                        1,
-                        zeros.as_ptr().cast(),
-                        std::mem::size_of_val(&zeros) as u32,
-                    )
-                });
-                if r.is_ok() {
-                    w.done += 1;
-                } else {
-                    w.failed += 1;
-                }
-                if start.elapsed() >= w.budget {
-                    break;
-                }
-            }
-            let _ = d.EndScene();
-        }
-        w.presents += 1;
-        let finished = w.queue.is_empty();
-        let b = w.bindings;
-        // The game's bindings again, through its own commands (their real objects, the bindings
-        // without a counterpart): render targets (the first resets the viewport and scissor
-        // rectangle), depth, viewport, scissor rectangle, shaders, layout, stream 0 (which
-        // `DrawPrimitiveUP` unbinds).
+    /// The game's bindings `b` set again after a warm-up's draws, through its own commands (their
+    /// real objects, the bindings without a counterpart): render targets (the first resets the
+    /// viewport and scissor rectangle), depth, viewport, scissor rectangle, shaders, layout,
+    /// stream 0 (which `DrawPrimitiveUP` unbinds).
+    fn rebind(&mut self, device: u32, b: &Bindings) {
         for (index, &surface) in b.targets.iter().enumerate() {
             // Unbound ones stay unbound (the first is the back buffer at the least).
             if surface != 0 {
@@ -537,6 +569,114 @@ impl RealBackend {
             offset,
             stride,
         });
+    }
+
+    /// After a `Present`: draws with the queued shaders ([`Warm`]) for [`WARM_BUDGET`] at most,
+    /// then sets the game's bindings again with its own commands.
+    /// Its objects (`warm_tools`: the 1x1 target is in the default pool, which `Reset` refuses
+    /// while any of it is alive) live for this call only.
+    fn warm_some(&mut self, d: &IDirect3DDevice9, device: u32) {
+        let start = std::time::Instant::now();
+        let Some(w) = self.warm.as_mut() else { return };
+        // The game's target to bind again is known (it always is after `CreateDevice`).
+        if w.bindings.targets[0] == 0 {
+            return;
+        }
+        let Some(t) = warm_tools(d) else {
+            eprintln!("NV_D3D9=real: the shader warm-up could not make its target: off");
+            self.warm = None;
+            return;
+        };
+        let zeros = [0u32; 4];
+        // This call's 1x1 targets by kind (the plain one is the tools'), made when first needed;
+        // `None` inside: that kind's target could not be made.
+        let mut targets: Vec<Option<Option<IDirect3DSurface9>>> = vec![None; w.kinds.len()];
+        targets[0] = Some(Some(t.target.clone()));
+        let objects = &self.objects;
+        unsafe {
+            // Not inside a scene of the game's (a Present inside one): nothing then.
+            if d.BeginScene().is_err() {
+                return;
+            }
+            for i in 1..4 {
+                let _ = d.SetRenderTarget(i, None::<&IDirect3DSurface9>);
+            }
+            let _ = d.SetDepthStencilSurface(None::<&IDirect3DSurface9>);
+            let _ = d.SetVertexDeclaration(&t.declaration);
+            let mut bound_kind = None;
+            while let Some(s) = w.queue.pop_front() {
+                if bound_kind != Some(s.kind) {
+                    let target = targets[s.kind].get_or_insert_with(|| {
+                        let k = w.kinds[s.kind];
+                        let mut target = None;
+                        d.CreateRenderTarget(
+                            1,
+                            1,
+                            D3DFORMAT(k.format),
+                            D3DMULTISAMPLE_TYPE(k.multisample as i32),
+                            k.quality,
+                            BOOL(0),
+                            &mut target,
+                            std::ptr::null_mut(),
+                        )
+                        .ok()
+                        .and(target)
+                    });
+                    let Some(surface) = target else {
+                        w.failed += 1;
+                        continue;
+                    };
+                    if d.SetRenderTarget(0, &*surface).is_err() {
+                        // Not bound (the previous binding stays, maybe the game's own target
+                        // 0): this kind's draws are refused, never drawn into another target.
+                        *target = None;
+                        w.failed += 1;
+                        continue;
+                    }
+                    bound_kind = Some(s.kind);
+                }
+                let model = usize::from(s.shader.major >= 3);
+                let r = match objects.get(&s.shader.shader) {
+                    Some(Object::VertexShader(vs)) if !s.shader.pixel => {
+                        let _ = d.SetPixelShader(&t.ps[model]);
+                        d.SetVertexShader(vs)
+                    }
+                    Some(Object::PixelShader(ps)) if s.shader.pixel => {
+                        let _ = d.SetVertexShader(&t.vs[model]);
+                        d.SetPixelShader(ps)
+                    }
+                    // Destroyed by the game since (or its address reused for something else).
+                    _ => continue,
+                }
+                .and_then(|()| {
+                    d.DrawPrimitiveUP(
+                        D3DPT_POINTLIST,
+                        1,
+                        zeros.as_ptr().cast(),
+                        std::mem::size_of_val(&zeros) as u32,
+                    )
+                });
+                if r.is_ok() {
+                    w.done += 1;
+                } else {
+                    w.failed += 1;
+                }
+                if start.elapsed() >= w.budget {
+                    break;
+                }
+            }
+            let _ = d.EndScene();
+        }
+        let ours: Vec<*mut std::ffi::c_void> = targets
+            .iter()
+            .flatten()
+            .flatten()
+            .map(Interface::as_raw)
+            .collect();
+        w.presents += 1;
+        let finished = w.queue.is_empty();
+        let b = w.bindings;
+        self.rebind(device, &b);
         if let Some(w) = self.warm.as_mut() {
             w.spent += start.elapsed();
             if finished {
@@ -552,7 +692,10 @@ impl RealBackend {
         // Target 0 is the game's again, not the warm-up's (its command may have found no real
         // surface): else the game would draw into the 1x1 target. Said loudly, and no more warm-up.
         let target0 = unsafe { d.GetRenderTarget(0) }.ok();
-        if target0.as_ref().map(Interface::as_raw) == Some(t.target.as_raw()) {
+        if target0
+            .as_ref()
+            .is_some_and(|t0| ours.contains(&t0.as_raw()))
+        {
             eprintln!(
                 "NV_D3D9=real: the shader warm-up could not bind the game's target {:#x} again: the warm-up is off; set NV_SHADER_WARM=0 if frames look wrong",
                 b.targets[0]
@@ -947,9 +1090,10 @@ fn forward_constants(
 
 impl Backend for RealBackend {
     fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
-        if let (Some(w), Cmd::CreateDevice { .. }) = (self.warm.as_mut(), &cmd) {
+        if let (Some(w), Cmd::CreateDevice { present, .. }) = (self.warm.as_mut(), &cmd) {
             // Shaders of an earlier device are not this one's to warm.
-            w.queue.clear();
+            w.device_made();
+            w.back_buffer_made(&present.to_words());
             w.bindings.follow(&cmd);
         }
         match cmd {
@@ -1086,7 +1230,11 @@ impl RealBackend {
                 depth_stencil,
                 ..
             } => {
-                let mut pp = present_parameters(&present.to_words(), window);
+                let words = present.to_words();
+                if let Some(w) = self.warm.as_mut() {
+                    w.back_buffer_made(&words);
+                }
+                let mut pp = present_parameters(&words, window);
                 let r = unsafe { d.Reset(&mut pp) };
                 self.answer("Reset", ok, hr(r));
                 self.implicit_surfaces(&d, &back_buffers.to_words(), depth_stencil);
@@ -1660,7 +1808,12 @@ impl RealBackend {
                     }
                 };
                 match out.filter(|_| r.is_ok()) {
-                    Some(s) => self.insert(surface, Object::Surface(s)),
+                    Some(s) => {
+                        if let (false, Some(w)) = (depth, self.warm.as_mut()) {
+                            w.target_made(format.0, multisample.0 as u32, quality);
+                        }
+                        self.insert(surface, Object::Surface(s))
+                    }
                     None => self.answer("CreateRenderTarget/DepthStencilSurface", 0, hr(r)),
                 }
             }
@@ -1761,12 +1914,11 @@ impl RealBackend {
                     }
                 };
                 if let Some(w) = self.warm.as_mut() {
-                    // The shader model's major version (the version token's second byte).
-                    let major = (tokens.first().copied().unwrap_or(0) >> 8) as u8;
-                    w.queue.push_back(match &object {
-                        Object::PixelShader(s) => WarmShader::Pixel(s.clone(), major),
-                        Object::VertexShader(s) => WarmShader::Vertex(s.clone(), major),
-                        _ => unreachable!("a shader"),
+                    w.shader_made(WarmShader {
+                        shader,
+                        pixel,
+                        // The shader model's major version (the version token's second byte).
+                        major: (tokens.first().copied().unwrap_or(0) >> 8) as u8,
                     });
                 }
                 self.insert(shader, object);
@@ -1894,27 +2046,212 @@ mod tests {
 
     const DEVICE: u32 = 0x1000;
 
+    /// The warm-up's queue: each shader once into each kind of target, a multisampled render
+    /// target (or back buffer) a new kind once per multisample type and quality, with every
+    /// shader made so far queued for it; depth-less plain targets and repeats add nothing; a new
+    /// device starts again.
+    #[test]
+    fn every_shader_is_queued_once_for_each_multisample_type_the_game_makes() {
+        let mut w = Warm::new(WARM_BUDGET);
+        let s = |shader: u32, pixel: bool| WarmShader {
+            shader,
+            pixel,
+            major: 2,
+        };
+        let draw = |shader: WarmShader, kind: usize| WarmDraw { shader, kind };
+        w.shader_made(s(0x10, false));
+        w.shader_made(s(0x20, true));
+        // A plain target, then the game's 8x scene target (A16B16G16R16F), its repeat at a
+        // `Reset`, and 8x with another format: one new kind.
+        w.target_made(113, 0, 0);
+        w.target_made(113, 8, 0);
+        w.target_made(113, 8, 0);
+        w.target_made(21, 8, 0);
+        w.shader_made(s(0x30, true));
+        // A back buffer with 4x, its format unknown (windowed).
+        w.back_buffer_made(&[1920, 1080, 0, 1, 4, 0, 1, 0, 1, 1, 75, 0, 0, 1]);
+        assert_eq!(
+            w.kinds,
+            [
+                PLAIN_KIND,
+                WarmKind {
+                    format: 113,
+                    multisample: 8,
+                    quality: 0
+                },
+                WarmKind {
+                    format: 22,
+                    multisample: 4,
+                    quality: 0
+                }
+            ]
+        );
+        let queued: Vec<WarmDraw> = w.queue.iter().copied().collect();
+        assert_eq!(
+            queued,
+            [
+                draw(s(0x10, false), 0),
+                draw(s(0x20, true), 0),
+                draw(s(0x10, false), 1),
+                draw(s(0x20, true), 1),
+                draw(s(0x30, true), 0),
+                draw(s(0x30, true), 1),
+                draw(s(0x10, false), 2),
+                draw(s(0x20, true), 2),
+                draw(s(0x30, true), 2),
+            ]
+        );
+        w.device_made();
+        assert!(w.queue.is_empty() && w.shaders.is_empty());
+        assert_eq!(w.kinds, [PLAIN_KIND]);
+    }
+
+    /// With a multisampled render target of the game's, the warm-up draws each shader into the
+    /// plain 1x1 target and into a multisampled one, and leaves the game's bindings as the game
+    /// set them: target 0, depth, both shaders, the declaration. Skipped where there is no
+    /// Direct3D 9 device or it can't make a 2x multisampled target.
+    #[test]
+    fn the_multisampled_warm_up_leaves_the_games_bindings_as_they_were() {
+        let _turn = super::super::d3d9real::real_turn();
+        let Some(window) = super::super::d3d9real::test_window() else {
+            return;
+        };
+        let present = super::super::d3d9real::test_present();
+        let (back_buffer, scene, vs, ps, decl) = (0x3000, 0x3100, 0x4000, 0x4008, 0x5000);
+        let mut b = RealBackend::new().with_warm(true);
+        let made = b.execute(Cmd::CreateDevice {
+            device: DEVICE,
+            focus: window,
+            window,
+            behavior: 0x54,
+            present: Data::from_words(&present),
+            back_buffers: Data::from_words(&[back_buffer]),
+            depth_stencil: 0,
+        });
+        if !matches!(made, Reply::Device { created: true, .. }) {
+            return;
+        }
+        // The game's scene target: A8R8G8B8, 2x multisampled, 64x64.
+        b.execute(Cmd::CreateSurface {
+            device: DEVICE,
+            surface: scene,
+            depth: false,
+            width: 64,
+            height: 64,
+            format: 21,
+            multisample: 2,
+            quality: 0,
+            flag: 0,
+        });
+        if b.surface(scene).is_none() {
+            return;
+        }
+        // All of it at the first `Present` (a debug build's first draws can pass 3 ms).
+        if let Some(w) = b.warm.as_mut() {
+            w.budget = std::time::Duration::from_secs(10);
+        }
+        for (shader, pixel, tokens) in [(vs, false, &PLAIN_VS2[..]), (ps, true, &PLAIN_PS2[..])] {
+            b.execute(Cmd::CreateShader {
+                device: DEVICE,
+                shader,
+                pixel,
+                tokens: Data::from_words(tokens),
+            });
+        }
+        // A position (FLOAT3) and the end.
+        let elements: [u32; 4] = [0, 0x0000_0002, 0x00ff, 0x0000_0011];
+        b.execute(Cmd::CreateDeclaration {
+            device: DEVICE,
+            declaration: decl,
+            elements: Data::from_words(&elements),
+        });
+        for cmd in [
+            Cmd::SetRenderTarget {
+                device: DEVICE,
+                index: 0,
+                surface: scene,
+            },
+            Cmd::SetShader {
+                device: DEVICE,
+                pixel: false,
+                shader: vs,
+            },
+            Cmd::SetShader {
+                device: DEVICE,
+                pixel: true,
+                shader: ps,
+            },
+            Cmd::SetVertexDeclaration {
+                device: DEVICE,
+                declaration: decl,
+            },
+            Cmd::Present {
+                device: DEVICE,
+                source: None,
+                dest: None,
+                window: 0,
+                dirty: false,
+                model: 0,
+                frame: 1,
+            },
+        ] {
+            b.execute(cmd);
+        }
+        let w = b.warm.as_ref().expect("the warm-up still on");
+        assert_eq!(w.kinds.len(), 2, "the plain kind and 2x");
+        assert_eq!((w.done, w.failed), (4, 0), "two shaders into two kinds");
+        assert!(w.queue.is_empty());
+        let d = b.device(DEVICE).expect("the device");
+        let raw = |at: u32| {
+            b.objects.get(&at).map(|o| match o {
+                Object::Surface(s) => s.as_raw(),
+                Object::VertexShader(s) => s.as_raw(),
+                Object::PixelShader(s) => s.as_raw(),
+                Object::Declaration(s) => s.as_raw(),
+                _ => std::ptr::null_mut(),
+            })
+        };
+        unsafe {
+            assert_eq!(d.GetRenderTarget(0).ok().map(|s| s.as_raw()), raw(scene));
+            assert!(d.GetRenderTarget(1).is_err(), "target 1 unbound");
+            assert!(d.GetDepthStencilSurface().is_err(), "no depth bound");
+            assert_eq!(d.GetVertexShader().ok().map(|s| s.as_raw()), raw(vs));
+            assert_eq!(d.GetPixelShader().ok().map(|s| s.as_raw()), raw(ps));
+            assert_eq!(d.GetVertexDeclaration().ok().map(|s| s.as_raw()), raw(decl));
+        }
+    }
+
     /// The shader warm-up leaves nothing of its in the default pool between `Present`s: a `Reset`
     /// (alt-tab, a new resolution, a lost device) while the warm-up is unfinished answers as it
     /// does without the warm-up, and the game's target 0 is its back buffer again after each
-    /// warm-up. Skipped where there is no Direct3D 9 device.
+    /// warm-up; also after a warm-up into a multisampled 1x1 target of its own (made for a
+    /// multisampled target of the game's, which the game destroys before its `Reset`). Skipped
+    /// where there is no Direct3D 9 device (CI) or it can't make a 2x multisampled target.
     #[test]
     fn a_reset_during_an_unfinished_shader_warm_up_answers_as_without_it() {
         let _turn = super::super::d3d9real::real_turn();
-        let (Some(with), Some(without)) = (reset_after_warm_up(true), reset_after_warm_up(false))
-        else {
-            return;
-        };
-        assert_eq!(with, without, "Reset refused with the warm-up only");
+        for multisampled in [false, true] {
+            let (Some(with), Some(without)) = (
+                reset_after_warm_up(true, multisampled),
+                reset_after_warm_up(false, multisampled),
+            ) else {
+                return;
+            };
+            assert_eq!(
+                with, without,
+                "Reset refused with the warm-up only (multisampled {multisampled})"
+            );
+        }
     }
 
     /// [`a_reset_during_an_unfinished_shader_warm_up_answers_as_without_it`]'s run: whether the
-    /// real device refused the `Reset`; `None` without a device.
-    fn reset_after_warm_up(warm: bool) -> Option<bool> {
+    /// real device refused the `Reset`; `None` without a device (or, `multisampled`, without a
+    /// 2x multisampled target).
+    fn reset_after_warm_up(warm: bool, multisampled: bool) -> Option<bool> {
         super::super::d3d9real::assert_real_turn();
         let window = super::super::d3d9real::test_window()?;
         let present = super::super::d3d9real::test_present();
-        let back_buffer = 0x3000;
+        let (back_buffer, scene) = (0x3000, 0x3100);
         let mut b = RealBackend::new().with_warm(warm);
         let made = b.execute(Cmd::CreateDevice {
             device: DEVICE,
@@ -1928,9 +2265,24 @@ mod tests {
         if !matches!(made, Reply::Device { created: true, .. }) {
             return None;
         }
-        // One shader a warm-up, so it is unfinished after the first `Present`.
+        // One shader a warm-up, so it is unfinished after each `Present`.
         if let Some(w) = b.warm.as_mut() {
             w.budget = std::time::Duration::ZERO;
+        }
+        if multisampled {
+            // The game's 2x multisampled target, 64x64 A8R8G8B8: a second kind of the warm-up's.
+            b.execute(Cmd::CreateSurface {
+                device: DEVICE,
+                surface: scene,
+                depth: false,
+                width: 64,
+                height: 64,
+                format: 21,
+                multisample: 2,
+                quality: 0,
+                flag: 0,
+            });
+            b.surface(scene)?;
         }
         for (i, tokens) in [&PLAIN_PS2[..], &PLAIN_PS3, &PLAIN_PS2, &PLAIN_PS3]
             .into_iter()
@@ -1943,18 +2295,29 @@ mod tests {
                 tokens: Data::from_words(tokens),
             });
         }
-        b.execute(Cmd::Present {
+        let present_cmd = |frame| Cmd::Present {
             device: DEVICE,
             source: None,
             dest: None,
             window: 0,
             dirty: false,
             model: 0,
-            frame: 1,
-        });
+            frame,
+        };
+        b.execute(present_cmd(1));
+        if multisampled {
+            // The queue: the first shader plain, the first multisampled, the second plain, ...:
+            // the second `Present` draws into a multisampled 1x1 target of the warm-up's. Then
+            // the game lets go of its own multisampled target (released at the next `Present`).
+            b.execute(present_cmd(2));
+            b.execute(Cmd::Destroy { object: scene });
+            b.execute(present_cmd(3));
+        }
         if let Some(w) = b.warm.as_ref() {
-            assert_eq!((w.done, w.failed), (1, 0), "one warmed, none refused");
-            assert_eq!(w.queue.len(), 3, "unfinished");
+            let (done, left) = if multisampled { (3, 5) } else { (1, 3) };
+            assert_eq!((w.done, w.failed), (done, 0), "warmed, none refused");
+            assert_eq!(w.queue.len(), left, "unfinished");
+            assert_eq!(w.kinds.len(), if multisampled { 2 } else { 1 });
         }
         assert_eq!(b.warm.is_some(), warm);
         let d = b.device(DEVICE).expect("the device");
@@ -2143,6 +2506,162 @@ mod tests {
             }),
             Reply::Bytes(None)
         ));
+    }
+
+    /// A measurement, not a check (ignored): replays the Direct3D 9 recording `D3D9_REPLAY_REC`
+    /// (`NV_D3D9_RECORD`) into a real device and writes to `D3D9_REPLAY_OUT`, a line a present: wall
+    /// ms, ms inside the backend, the CPU cycles of the process's other threads in millions (the
+    /// graphics driver's own threads, where its shader compiler runs), draws, and from present
+    /// `D3D9_REPLAY_FROM` on the commands that took 0.3 ms or more with the shaders bound.
+    /// `D3D9_REPLAY_STOP`: the last present; `D3D9_REPLAY_WARM=0`: without the shader warm-up. It found
+    /// what the driver still compiled at the first shot (a pixel shader again for a multisampled
+    /// target, [`Warm`]) without running the game; run it as `FalloutNV.exe` (the driver applies
+    /// its profile by the exe's name): build43-scratch/measure/stutter/fs-probe.sh.
+    #[test]
+    #[ignore]
+    fn replay_timing() {
+        use std::io::Write;
+        use std::time::{Duration, Instant};
+        extern "system" {
+            fn GetCurrentProcess() -> isize;
+            fn QueryProcessCycleTime(h: isize, cycles: *mut u64) -> i32;
+            fn QueryThreadCycleTime(h: isize, cycles: *mut u64) -> i32;
+        }
+        // `GetCurrentThread`'s pseudo handle.
+        const THIS_THREAD: isize = -2;
+        // CPU cycles so far (exact, unlike the 15.6 ms steps of the thread times): (the whole
+        // process, this thread).
+        let cpu = || unsafe {
+            let (mut process, mut thread) = (0u64, 0u64);
+            QueryProcessCycleTime(GetCurrentProcess(), &mut process);
+            QueryThreadCycleTime(THIS_THREAD, &mut thread);
+            (process, thread)
+        };
+        let Ok(path) = std::env::var("D3D9_REPLAY_REC") else {
+            return;
+        };
+        let num = |name: &str, default: u32| {
+            std::env::var(name).map_or(default, |v| v.trim().parse().expect("a number"))
+        };
+        let (from, stop) = (
+            num("D3D9_REPLAY_FROM", 0),
+            num("D3D9_REPLAY_STOP", u32::MAX),
+        );
+        let warm = num("D3D9_REPLAY_WARM", 1) != 0;
+        let out_path = std::env::var("D3D9_REPLAY_OUT").expect("D3D9_REPLAY_OUT");
+        let bytes = std::fs::read(&path).expect("the recording");
+        let _turn = super::super::d3d9real::real_turn();
+        let window = super::super::d3d9real::test_window().expect("a window");
+        let mut b = RealBackend::new().with_warm(warm);
+        let mut out = std::io::BufWriter::new(std::fs::File::create(out_path).unwrap());
+        let (mut presents, mut draws) = (0u32, 0u32);
+        let mut frame_start = Instant::now();
+        let mut cpu_start = cpu();
+        let mut bind = Bindings::default();
+        let mut slow: Vec<String> = vec![];
+        let mut inside = Duration::ZERO;
+        for cmd in d3d9_stream::wire::commands(&bytes).expect("a stream") {
+            // A recording cut by the run's end stops at its last whole command.
+            let Ok(cmd) = cmd else { break };
+            // The recording's windows are gone: this test's window instead.
+            let cmd = match cmd {
+                Cmd::CreateDevice {
+                    device,
+                    behavior,
+                    present,
+                    back_buffers,
+                    depth_stencil,
+                    ..
+                } => Cmd::CreateDevice {
+                    device,
+                    focus: window,
+                    window,
+                    behavior,
+                    present,
+                    back_buffers,
+                    depth_stencil,
+                },
+                Cmd::Reset {
+                    device,
+                    present,
+                    back_buffers,
+                    depth_stencil,
+                    ..
+                } => Cmd::Reset {
+                    device,
+                    window,
+                    present,
+                    back_buffers,
+                    depth_stencil,
+                },
+                Cmd::Present {
+                    device,
+                    source,
+                    dest,
+                    dirty,
+                    model,
+                    frame,
+                    ..
+                } => Cmd::Present {
+                    device,
+                    source,
+                    dest,
+                    window: 0,
+                    dirty,
+                    model,
+                    frame,
+                },
+                other => other,
+            };
+            bind.follow(&cmd);
+            let name = cmd.name();
+            let is_present = matches!(cmd, Cmd::Present { .. });
+            let is_draw = matches!(
+                cmd,
+                Cmd::DrawPrimitive { .. }
+                    | Cmd::DrawIndexedPrimitive { .. }
+                    | Cmd::DrawPrimitiveUp { .. }
+            );
+            let t = Instant::now();
+            b.execute(cmd);
+            let dt = t.elapsed();
+            inside += dt;
+            if is_draw {
+                draws += 1;
+            }
+            if presents >= from && dt >= Duration::from_micros(300) {
+                slow.push(format!(
+                    "{name}#{draws}:{:.2}ms vs={:#x} ps={:#x}",
+                    dt.as_secs_f64() * 1000.0,
+                    bind.vs,
+                    bind.ps
+                ));
+            }
+            if is_present {
+                let wall = frame_start.elapsed();
+                frame_start = Instant::now();
+                let now = cpu();
+                let others = (now.0 - cpu_start.0).saturating_sub(now.1 - cpu_start.1);
+                cpu_start = now;
+                writeln!(
+                    out,
+                    "present {presents}\t{:.3}\t{:.3}\t{:.3}\t{draws}\t{}",
+                    wall.as_secs_f64() * 1000.0,
+                    inside.as_secs_f64() * 1000.0,
+                    others as f64 / 1e6,
+                    slow.join(" | ")
+                )
+                .unwrap();
+                presents += 1;
+                draws = 0;
+                slow.clear();
+                inside = Duration::ZERO;
+                if presents > stop {
+                    break;
+                }
+            }
+        }
+        out.flush().unwrap();
     }
 }
 
