@@ -2,17 +2,21 @@
 //! family's objects moved out of the game's heap into host memory, with the parts every family uses.
 //!
 //! - **The moved area** ([`MOVED_AREA`], `0x10000000..0x20000000`, below the heap: ordinary play never
-//!   used it, and `VirtualAlloc` at a chosen address is refused there). Its lower half
-//!   ([`SLAB_RANGE`]) names the objects in the [`Slab`]: a moved object's handle is an address there,
-//!   and the guest page table never maps one, so an untyped read or write of a moved object stops the
-//!   run naming the address. Its upper half ([`STUB_RANGE`]) holds 16-byte stubs ([`Stubs`]) for
-//!   objects untyped code still reaches through their vtable. Below 0x80000000, so neither ever has
-//!   its top bit set.
-//! - **The slab**: host memory outside the guest space, addressed by those handles, every word an
-//!   atomic (loads acquire, stores release, compare-and-swap sequentially consistent: what real
-//!   threads need where the game uses interlocked operations, from the first step). A moved object
-//!   keeps its PC layout, and its pointers to other moved objects are handles, so a pointer into an
-//!   object (a link field, an array's element) works unchanged.
+//!   used it, and `VirtualAlloc` at a chosen address is refused there), in three parts, none of them
+//!   ever mapped as the game's memory but the stubs: [`SLAB_RANGE`] names the bytes of the [`Slab`]
+//!   (a moved object's handle is an address there, so an untyped read or write of a moved object
+//!   stops the run naming the address), [`TOKEN_RANGE`] the starts of the [`Buffers`], and
+//!   [`STUB_RANGE`] holds 16-byte stubs ([`Stubs`]) for objects untyped code still reaches through
+//!   their vtable. Below 0x80000000, so none ever has its top bit set.
+//! - **Two shapes of host memory.** The **slab**: small objects that keep their PC layout and point
+//!   into each other (a link field, an element of a little array), every word an atomic (loads
+//!   acquire, stores release, compare-and-swap sequentially consistent: what real threads need where
+//!   the game uses interlocked operations, from the first step); its handles cover its bytes, so it
+//!   is for families whose bytes are few. The **buffers**: big arrays (vertex arrays, keys) behind
+//!   start-only tokens, 16 bytes of the 32-bit space each whatever their size, so no 32-bit pointer
+//!   into one exists and typed code indexes the host bytes; plain bytes copied plainly, ordered by
+//!   the game's own hand-off between threads as guest memory's plain accesses are (`mem.rs`,
+//!   "Threads").
 //! - **K1 stubs** ([`K1`]): the object's original guest block stays, holding what untyped code still
 //!   reads; a spare word holds the handle of its moved record, and the moved fields hold
 //!   [`poison`]: a word in the last 64 KB of the space (never mapped) naming the family and the
@@ -49,18 +53,27 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 /// The moved area: below the heap ([`crate::mem::HEAP_BASE`]) and above everything the image and
 /// the tests use; `VirtualAlloc` at a chosen address fails inside it.
 pub const MOVED_AREA: Range<u32> = 0x1000_0000..0x2000_0000;
-/// The slab's handles ([`Slab`]): never mapped as guest memory.
-pub const SLAB_RANGE: Range<u32> = 0x1000_0000..0x1800_0000;
-/// The 16-byte stubs ([`Stubs`]): mapped page by page as stubs are handed out.
+/// The slab's handles ([`Slab`]), 64 MB: never mapped as guest memory.
+pub const SLAB_RANGE: Range<u32> = 0x1000_0000..0x1400_0000;
+/// The buffers' start-only tokens ([`Buffers`]), 4 M of them: never mapped as guest memory.
+pub const TOKEN_RANGE: Range<u32> = 0x1400_0000..0x1800_0000;
+/// The 16-byte stubs ([`Stubs`]), 8 M of them: mapped page by page as stubs are handed out.
 pub const STUB_RANGE: Range<u32> = 0x1800_0000..0x2000_0000;
-/// A stub's bytes.
+/// A stub's bytes, and the step between two tokens.
 pub const STUB_BYTES: u32 = 16;
 const _: () = assert!(
     MOVED_AREA.start == SLAB_RANGE.start
-        && SLAB_RANGE.end == STUB_RANGE.start
+        && SLAB_RANGE.end == TOKEN_RANGE.start
+        && TOKEN_RANGE.end == STUB_RANGE.start
         && STUB_RANGE.end == MOVED_AREA.end
         && MOVED_AREA.end <= crate::mem::HEAP_BASE
 );
+
+/// Whether `a` is a buffer's token.
+#[inline(always)]
+pub fn is_token(a: u32) -> bool {
+    a.wrapping_sub(TOKEN_RANGE.start) < TOKEN_RANGE.end - TOKEN_RANGE.start
+}
 
 /// Whether `a` is a slab handle (or a place inside a moved object).
 #[inline(always)]
@@ -486,6 +499,194 @@ impl Stubs {
     }
 }
 
+/// Tokens a chunk of the buffers' table holds.
+const TOKEN_CHUNK: usize = 1 << 14;
+
+/// One buffer's place in the table: its bytes (null: no buffer), their count, and its family and
+/// tag for the census.
+#[derive(Default)]
+struct BufferEntry {
+    bytes: AtomicPtr<u8>,
+    len: AtomicU32,
+    owner: AtomicU32,
+}
+
+#[derive(Default)]
+struct TokenAlloc {
+    top: u32,
+    free: Vec<u32>,
+    /// Live buffers and bytes by (family, tag).
+    census: BTreeMap<(u8, u16), (u64, u64)>,
+}
+
+/// Big arrays moved out of the game's heap ([module documentation](self)): a buffer of host bytes
+/// behind a start-only token in [`TOKEN_RANGE`]. A typed function reads and writes it by token and
+/// offset ([`Buffers::read`], [`Buffers::write`]); no 32-bit address of a place inside it exists.
+pub struct Buffers {
+    table: Chunks<BufferEntry>,
+    alloc: Mutex<TokenAlloc>,
+}
+
+impl Default for Buffers {
+    fn default() -> Self {
+        Buffers::new()
+    }
+}
+
+impl Buffers {
+    pub fn new() -> Self {
+        let tokens = index((TOKEN_RANGE.end - TOKEN_RANGE.start) / STUB_BYTES);
+        Buffers {
+            table: Chunks::new(tokens, TOKEN_CHUNK),
+            alloc: Mutex::new(TokenAlloc {
+                top: TOKEN_RANGE.start,
+                ..TokenAlloc::default()
+            }),
+        }
+    }
+
+    fn slot(token: u32) -> usize {
+        index((token - TOKEN_RANGE.start) / STUB_BYTES)
+    }
+
+    /// The table entry of the live buffer `token`; stops naming the token when it is none.
+    fn entry(&self, token: u32) -> (&BufferEntry, *mut u8, u32) {
+        let found = (is_token(token) && token % STUB_BYTES == 0)
+            .then(|| self.table.get(Self::slot(token)))
+            .flatten();
+        if let Some(entry) = found {
+            let bytes = entry.bytes.load(Ordering::Acquire);
+            if !bytes.is_null() {
+                return (entry, bytes, entry.len.load(Ordering::Acquire));
+            }
+        }
+        panic!("moved array: {token:08x} is no live buffer's token");
+    }
+
+    /// A new buffer of `len` bytes, all zero, for `family` (tagged `tag`); `None` when the tokens
+    /// run out.
+    pub fn alloc(&self, len: u32, family: FamilyId, tag: u16) -> Option<u32> {
+        let token = {
+            let mut a = lock(&self.alloc);
+            let token = match a.free.pop() {
+                Some(t) => t,
+                None => {
+                    let t = a.top;
+                    if t >= TOKEN_RANGE.end {
+                        return None;
+                    }
+                    let i = Self::slot(t);
+                    self.table.make(i..i + 1);
+                    a.top = t + STUB_BYTES;
+                    t
+                }
+            };
+            let row = a.census.entry((family.number(), tag)).or_default();
+            row.0 += 1;
+            row.1 += u64::from(len);
+            token
+        };
+        let bytes: Box<[u8]> = vec![0u8; index(len)].into_boxed_slice();
+        let entry = self.table.get(Self::slot(token)).expect("made");
+        entry.len.store(len, Ordering::Release);
+        entry.owner.store(
+            u32::from(family.number()) << 16 | u32::from(tag),
+            Ordering::Release,
+        );
+        entry
+            .bytes
+            .store(Box::into_raw(bytes).cast::<u8>(), Ordering::Release);
+        Some(token)
+    }
+
+    /// Frees buffer `token` (its bytes handed back to the host); answers its length.
+    pub fn free(&self, token: u32) -> u32 {
+        let (entry, bytes, len) = self.entry(token);
+        entry.bytes.store(std::ptr::null_mut(), Ordering::Release);
+        let owner = entry.owner.load(Ordering::Acquire);
+        // SAFETY: made by `alloc` from a boxed slice of `len` bytes, and taken out of the table just
+        // now, so no later `read` or `write` reaches it (one racing with the free is the game's own
+        // use after free, as with a guest block).
+        drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(bytes, index(len))) });
+        let mut a = lock(&self.alloc);
+        let key = (
+            byte(owner >> 16),
+            u16::try_from(owner & 0xffff).expect("a tag"),
+        );
+        if let Some(row) = a.census.get_mut(&key) {
+            row.0 -= 1;
+            row.1 -= u64::from(len);
+        }
+        a.free.push(token);
+        len
+    }
+
+    /// The length of buffer `token`, `None` when it is no live buffer.
+    pub fn len(&self, token: u32) -> Option<u32> {
+        if !is_token(token) || token % STUB_BYTES != 0 {
+            return None;
+        }
+        let entry = self.table.get(Self::slot(token))?;
+        (!entry.bytes.load(Ordering::Acquire).is_null()).then(|| entry.len.load(Ordering::Acquire))
+    }
+
+    /// Copies `into.len()` bytes of buffer `token` from `offset`; stops past its end.
+    pub fn read(&self, token: u32, offset: u32, into: &mut [u8]) {
+        let (_, bytes, len) = self.entry(token);
+        let end = u64::from(offset) + into.len() as u64;
+        assert!(
+            end <= u64::from(len),
+            "moved array {token:08x}: bytes {offset}..{end} of {len}"
+        );
+        // SAFETY: inside the live buffer (checked above); plain bytes, ordered by the game's own
+        // synchronisation as guest memory's plain accesses are.
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.add(index(offset)), into.as_mut_ptr(), into.len())
+        }
+    }
+
+    /// Copies `from` into buffer `token` at `offset`; stops past its end.
+    pub fn write(&self, token: u32, offset: u32, from: &[u8]) {
+        let (_, bytes, len) = self.entry(token);
+        let end = u64::from(offset) + from.len() as u64;
+        assert!(
+            end <= u64::from(len),
+            "moved array {token:08x}: bytes {offset}..{end} of {len}"
+        );
+        // SAFETY: as in `read`.
+        unsafe {
+            std::ptr::copy_nonoverlapping(from.as_ptr(), bytes.add(index(offset)), from.len())
+        }
+    }
+
+    /// The live buffers and their bytes by family number and tag, for the heap census.
+    pub fn census(&self) -> Vec<(u8, u16, u64, u64)> {
+        lock(&self.alloc)
+            .census
+            .iter()
+            .filter(|(_, n)| n.0 != 0)
+            .map(|(&(f, t), &(n, b))| (f, t, n, b))
+            .collect()
+    }
+}
+
+impl Drop for Buffers {
+    fn drop(&mut self) {
+        for i in 0..index((TOKEN_RANGE.end - TOKEN_RANGE.start) / STUB_BYTES) {
+            let Some(entry) = self.table.get(i) else {
+                continue;
+            };
+            let bytes = entry.bytes.load(Ordering::Acquire);
+            if !bytes.is_null() {
+                let len = index(entry.len.load(Ordering::Acquire));
+                // SAFETY: a live buffer `alloc` made from a boxed slice of `len` bytes; nothing uses
+                // it after the drop.
+                drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(bytes, len)) });
+            }
+        }
+    }
+}
+
 /// The first differences the dual run prints (the rest are counted).
 pub const DUAL_PRINT: u32 = 20;
 /// Families' numbers are below 32 ([`FamilyId::new`]).
@@ -591,6 +792,7 @@ impl Dual {
 #[derive(Default)]
 pub struct Moved {
     pub slab: Slab,
+    pub buffers: Buffers,
     pub stubs: Stubs,
     pub dual: Dual,
 }
@@ -1281,6 +1483,35 @@ mod tests {
         assert_eq!(e.mem.u32(stub), poison(TOY, 0));
         // The next one takes the freed place.
         assert_eq!(moved.stubs.alloc(&mut e.mem, TOY, VTABLE, h), Some(stub));
+    }
+
+    /// A buffer takes one token, 16 bytes of the 32-bit space, whatever its size; its bytes start
+    /// zero, are read and written by offset, and are gone with it; a token freed is handed out
+    /// again; reads past the end and of a freed token stop.
+    #[test]
+    fn a_buffer_takes_one_token_whatever_its_size() {
+        let buffers = Buffers::new();
+        let big = buffers.alloc(40 << 20, TOY, 5).expect("a token");
+        let small = buffers.alloc(12, TOY, 5).expect("a token");
+        assert_eq!(big, TOKEN_RANGE.start);
+        assert_eq!(small, big + STUB_BYTES);
+        assert!(is_token(big) && !is_handle(big) && !is_stub(big));
+        assert_eq!(buffers.len(big), Some(40 << 20));
+        let mut got = [0xffu8; 8];
+        buffers.read(big, (40 << 20) - 8, &mut got);
+        assert_eq!(got, [0; 8]);
+        buffers.write(small, 4, &[1, 2, 3, 4, 5, 6, 7, 8]);
+        let mut got = [0u8; 12];
+        buffers.read(small, 0, &mut got);
+        assert_eq!(got, [0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(buffers.census(), [(27, 5, 2, (40 << 20) + 12)]);
+        assert!(std::panic::catch_unwind(|| buffers.read(small, 8, &mut [0; 8])).is_err());
+        assert_eq!(buffers.free(big), 40 << 20);
+        assert_eq!(buffers.len(big), None);
+        assert!(std::panic::catch_unwind(|| buffers.read(big, 0, &mut [0; 1])).is_err());
+        assert_eq!(buffers.census(), [(27, 5, 1, 12)]);
+        assert_eq!(buffers.alloc(4, TOY, 6), Some(big));
+        assert_eq!(buffers.len(small + 4), None);
     }
 
     #[test]

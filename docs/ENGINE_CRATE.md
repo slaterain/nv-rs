@@ -779,16 +779,24 @@ the steps: the touch census, the creation sites, K1 stubs and the dual run, the 
 uses is `engine_core::typed::moved`, tested with a made-up family, so a family reuses it unchanged:
 
 - **The moved area**, `0x10000000..0x20000000`, below the heap (`mem.rs` has the layout): ordinary play never
-  used it, and `VirtualAlloc` at a chosen address fails there. Below 0x80000000, so no handle or stub ever has
-  its top bit set. Its lower half names objects in the **slab**: host memory outside the guest space, every word
-  an atomic (loads acquire, stores release, compare-and-swap sequentially consistent: what real threads need
-  where the game uses interlocked operations, from the first step), blocks in 16-byte steps, counted by family
-  and tag. A moved object's handle is an address in that half, which the guest page table never maps, so an
-  untyped read or write of a moved object stops the run naming the address. A moved object keeps its PC
-  layout (the offsets are the contract: built-in commands, the dual run), and its pointers to other moved
-  objects are handles, so a pointer into an object works unchanged. The upper half holds 16-byte **stubs** for
-  moved objects untyped code still calls through their vtable: the vtable, then poison, on a mapped page; a
-  table in host memory gives each stub's slab handle.
+  used it, and `VirtualAlloc` at a chosen address fails there. Below 0x80000000, so no handle, token or stub ever
+  has its top bit set. Two shapes of host memory, outside the guest space, behind it:
+  - the **slab** (`0x10000000..0x14000000`): small objects that keep their PC layout (the offsets are the
+    contract: built-in commands, the dual run) and point into each other. Every word an atomic (loads
+    acquire, stores release, compare-and-swap sequentially consistent: what real threads need where the game
+    uses interlocked operations, from the first step); blocks in 16-byte steps, counted by family and tag. A
+    moved object's handle is an address there, which the guest page table never maps, so an untyped read or
+    write of one stops the run naming the address, and a pointer into an object (a link, an element) is a
+    handle too. Its handles cover its bytes, so it is for families whose bytes are few (the lock-free maps);
+  - the **buffers** (`0x14000000..0x18000000`): big arrays behind
+    start-only tokens, 16 bytes of the space each whatever their size (4 M of them), so no 32-bit address
+    inside one exists: typed code reads and writes it by token and offset. Plain bytes copied plainly,
+    ordered by the game's own hand-off between threads, as guest memory's plain accesses are; for arrays
+    written once and read many times (vertex arrays, keys).
+
+  The upper half, `0x18000000..0x20000000`, holds 16-byte **stubs** for moved objects untyped code still
+  calls through their vtable: the vtable, then poison, on a mapped page; a table in host memory gives each
+  stub's handle.
 - **K1 stubs** (`moved::K1`): the object's original guest block stays, with every field untyped code reads; a
   spare word holds the handle of its moved record (its layout, in the slab, never a guest allocation) and the
   moved fields hold **poison**, a word in the last 64 KB of the space (never mapped) naming the family and the
