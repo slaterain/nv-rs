@@ -297,11 +297,8 @@ pub struct Device {
     dummy: [wgpu::TextureView; 3],
     border: bool,
     float_filterable: bool,
-    /// Whether the adapter has clip distances for the user clip planes ([`Device::clip_link`]),
-    /// and where the pixel centres go ([`wgsl::Centre`]; `NV_WGPU_CENTRE=shader` for the
-    /// shader's move, to compare).
+    /// Whether the adapter has clip distances for the user clip planes ([`Device::clip_link`]).
     clip_distances: bool,
-    centre: wgsl::Centre,
     /// The levels whose bytes the backend keeps (managed and system-memory pools: what
     /// `ReadSurface` answers), by the texture or surface they belong to; and those bytes, as the
     /// game last gave them (`UploadSurface`) or `GetRenderTargetData` wrote them.
@@ -556,13 +553,6 @@ impl Device {
             border: features.contains(wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER),
             float_filterable: features.contains(wgpu::Features::FLOAT32_FILTERABLE),
             clip_distances: features.contains(wgpu::Features::CLIP_DISTANCES),
-            centre: if std::env::var("NV_WGPU_CENTRE")
-                .is_ok_and(|v| v.eq_ignore_ascii_case("shader"))
-            {
-                wgsl::Centre::Shader
-            } else {
-                wgsl::Centre::Viewport
-            },
             keeps: HashMap::new(),
             kept: HashMap::new(),
             counting: None,
@@ -2137,8 +2127,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
             (fix, bias)
         };
-        let v = st.viewport;
-        let vs_sys = [1.0 / v.w.max(1) as f32, -1.0 / v.h.max(1) as f32, 0.0, 0.0];
+        // The vertex stage has no system values (the pixel centres are the viewport's).
+        let vs_sys = [0.0; 4];
         // The alpha test, unless alpha to coverage stands in for it ([`ATOC`]).
         let alpha_func = if st.rs[rs::ALPHATESTENABLE] != 0 && !atoc {
             st.rs[rs::ALPHAFUNC] as f32
@@ -2456,12 +2446,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 t.batch.store(self.batch, Ordering::Relaxed);
             }
         }
-        // Direct3D 9's pixel centres: the viewport half a pixel right and down
-        // ([`wgsl::Centre::Viewport`]; wgpu takes a viewport past the target's edge).
-        let centre = match self.centre {
-            wgsl::Centre::Viewport => 0.5,
-            wgsl::Centre::Shader => 0.0,
-        };
+        // Direct3D 9's pixel centres: the viewport half a pixel right and down (the converter's
+        // module documentation; wgpu takes a viewport past the target's edge).
+        let centre = 0.5;
         let pass = self.pass.as_mut().expect("a pass is open");
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &self.ring_group, &[vs_block, ps_block]);
@@ -2521,7 +2508,6 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 varyings: varyings.to_vec(),
                 centroid: ps.sig.centroid.clone(),
                 clip: key.clip,
-                centre: self.centre,
                 count: false,
             };
             let m = self.module(wgsl::convert(&vs.program, &link), "a vertex shader");
@@ -2534,7 +2520,6 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 varyings: varyings.to_vec(),
                 centroid: ps.sig.centroid.clone(),
                 clip: key.clip,
-                centre: self.centre,
                 count: key.count,
             };
             let m = self.module(wgsl::convert(&ps.program, &link), "a pixel shader");

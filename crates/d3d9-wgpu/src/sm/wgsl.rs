@@ -14,10 +14,10 @@
 //! - **Address registers**: `mova` rounds to nearest (halves up: `floor(x + 0.5)`); shader model 1's `mov a0.x` takes the floor.
 //!   A constant read outside the register file through an address register reads 0.
 //! - **Pixel centres**: Direct3D 9 puts them on whole coordinates, wgpu half a pixel further. The
-//!   device moves the viewport half a pixel right and down ([`Centre::Viewport`], as Direct3D 9
-//!   drivers do in the viewport transform), or each vertex shader moves its position
-//!   ([`Centre::Shader`], `sys[0]`), so every pixel samples where Direct3D 9 would; `vPos` is the
-//!   pixel's integer coordinate.
+//!   device moves the viewport half a pixel right and down (as Direct3D 9 drivers do in the
+//!   viewport transform: exact, where moving each vertex shader's position rounds in clip space
+//!   and drew Doc's house 0.02% further from the real frames), so every pixel samples where
+//!   Direct3D 9 would; `vPos` is the pixel's integer coordinate.
 //! - **User clip planes** ([`Clip`]): each vertex shader also gives its distance to the six
 //!   planes the device sets in `R.clip`, from its own `oPos`.
 //!
@@ -210,8 +210,6 @@ pub struct Link {
     pub centroid: Vec<bool>,
     /// How the user clip planes cut (both stages of a pair take the same).
     pub clip: Clip,
-    /// Where Direct3D 9's pixel centres are put (vertex shaders).
-    pub centre: Centre,
     /// Pixel shaders: also write 1 to the occlusion count's target ([`COUNT_TARGET`]): every
     /// sample that passes the depth and stencil tests (and is not discarded) adds one there.
     pub count: bool,
@@ -237,18 +235,6 @@ pub enum Clip {
     /// shader runs per sample and the discard cuts sample by sample as the hardware would (the
     /// other varyings keep their own interpolation).
     Discard { per_sample: bool },
-}
-
-/// Where Direct3D 9's pixel centres are put (module documentation, "Pixel centres").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum Centre {
-    /// The device moves the viewport half a pixel right and down, as the Direct3D 9 driver does
-    /// in the viewport transform: positions are unchanged, the move exact.
-    #[default]
-    Viewport,
-    /// Each vertex shader moves its position by half a pixel (`R.sys[0].xy * w`, set by the
-    /// device from the viewport): the move rounds in clip space.
-    Shader,
 }
 
 /// The user clip planes Direct3D 9 gives (`D3DCAPS9.MaxUserClipPlanes` on the measured cards).
@@ -660,13 +646,8 @@ impl Gen<'_> {
             None => "o_pos".to_string(),
         };
         let _ = writeln!(s, "    let opos = {pos};");
-        match self.link.centre {
-            // Half a pixel right and down: Direct3D 9's pixel centres (module documentation).
-            Centre::Shader => s.push_str(
-                "    out.position = opos + vec4<f32>(R.sys[0].xy * opos.w, 0.0, 0.0);\n",
-            ),
-            Centre::Viewport => s.push_str("    out.position = opos;\n"),
-        }
+        // Direct3D 9's pixel centres are the viewport's (module documentation).
+        s.push_str("    out.position = opos;\n");
         // The user clip planes' distances, from the shader's own position (with a plane on).
         let d: Vec<String> = (0..CLIP_PLANES)
             .map(|k| format!("dp4(R.clip[{k}], opos)"))
@@ -1583,12 +1564,11 @@ mod tests {
         ];
         for clip in modes {
             let discard = matches!(clip, Clip::Discard { .. });
-            for centre in [Centre::Viewport, Centre::Shader] {
+            {
                 let link = Link {
                     inputs: vec![Input::Float(4)],
                     varyings: varyings.clone(),
                     clip,
-                    centre,
                     ..Link::default()
                 };
                 let v = converts(&vs, &link);
@@ -1599,7 +1579,7 @@ mod tests {
                 );
                 assert_eq!(v.starts_with("enable clip_distances;"), clip == Clip::Distances);
                 assert_eq!(v.contains("dp4(R.clip[5], opos)"), clip != Clip::Off, "{v}");
-                assert_eq!(v.contains("R.sys[0].xy * opos.w"), centre == Centre::Shader);
+                assert!(v.contains("out.position = opos;"), "{v}");
                 assert_eq!(v.contains("k0: vec4<f32>"), discard, "{v}");
                 assert_eq!(
                     v.contains("@interpolate(perspective, sample) k0"),
