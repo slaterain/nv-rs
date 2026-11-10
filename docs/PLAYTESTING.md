@@ -153,7 +153,7 @@ Each also has a `[nv-rs Fixes]` key in `Fallout.ini` (`bUncap` ... `bNVSEListGua
 | `NV_COSAVE_KEEP` | Co-save keeps other plugins | `host/fixes.rs` (flag read by `nvse`) |
 | `NV_NVSE_ERROR_GUARD` | Script error loop guard | `host/fixes.rs` |
 | `NV_NVSE_IMOD_CHECK` | Image-space event form check | `host/fixes.rs` |
-| `NV_NVSE_INVREF_CHECK` | Inventory reference checks | `host/fixes.rs` |
+| `NV_NVSE_INVREF_CHECK` | Script reference checks | `host/fixes.rs` |
 | `NV_NVSE_SIZE_CAPS` | Script array and string size caps | `host/fixes.rs` |
 | `NV_NVSE_NULL_GUARD` | Script missing array guard | `host/fixes.rs` |
 | `NV_NVSE_CYCLE_GUARD` | Script array cycle guard | `host/fixes.rs` |

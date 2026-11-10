@@ -133,11 +133,10 @@ fn install_imod_event_form_check(e: &mut Engine) {
 }
 
 pub const INVENTORY_REFERENCE_CHECKS: Fix = Fix {
-    name: "inventory reference checks",
+    name: "script reference checks",
     env: "NV_NVSE_INVREF_CHECK",
     addresses: &[],
-    summary: "a removed stack leaves the container's own entry before its data is freed; a sale \
-              ends with its event; a container entry without a form is passed over",
+    summary: "a reference handed to a script with parts missing no longer stops the game: an inventory reference with no base form or cell, or a door whose teleport or lock data or linked door is missing, answers 0 in the door, key and cell owner commands (GetLinkedDoor, GetDoorTeleportX..Rot, SetDoorTeleport, SetOpenKey, GetParentCellOwner, GetParentCellOwningFactionRequiredRank); and the inventory references' own slips: a removed stack leaves the container's entry before its data is freed, a sale ends with its event, a container entry without a form is passed over",
     install: install_inventory_reference_checks,
 };
 

@@ -481,7 +481,7 @@ fn find_ref_id(e: &mut Engine, info: &mut Info, list: u32, id: u32) -> Option<(u
     let found = find_form_count(e, list, |e, fc| {
         if info.is_valid_form_count(e, fc) {
             // A base container entry without a form counts as an item, as in xNVSE; its id is
-            // read through the null form there (the game stops). The inventory reference checks
+            // read through the null form there (the game stops). The script reference checks
             // row (`NV_NVSE_INVREF_CHECK`) takes it as another item instead.
             let form = e.mem.u32(fc + 4);
             let formless = form == 0 && invref::checks(e);
