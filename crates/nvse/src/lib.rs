@@ -215,6 +215,9 @@ pub struct Nvse {
     pub inventory_items: commands::inventory_items::State,
     /// The cell scans `GetFirstRef` started, per script (`GetNextRef`).
     pub cell_scans: commands::misc_ref_cells::State,
+    /// What `Commands_Game.cpp`'s commands keep: the scripts told of a loaded or restarted game,
+    /// the local map grids' override.
+    pub game: commands::game::State,
     /// The DirectInput hook's keys and the input commands' controls (I-11).
     pub input: input::State,
     /// The first frame recorded the main thread (`s_recordedMainThreadID`): xNVSE prints to the
@@ -250,6 +253,7 @@ pub fn install(e: &mut Engine) {
     saveload::install(e);
     events::install(e);
     call_sites::install(e);
+    commands::game::install(e);
     e.ext::<Nvse>().installed = true;
     // The extender's state is the game's, not one engine's: real threads' engines share it
     // (engine-core's shared slot, one lock), so an event raised or a variable used on another
@@ -285,13 +289,14 @@ mod tests {
             0x0041_af70,
             0x005a_c750,
             0x0045_12a0,
+            0x0070_52f0,
             0x00fd_f02c,
         ] {
             e.register(addr, base);
         }
         install(&mut e);
         assert!(e.unlisted_wraps().is_empty());
-        assert_eq!(e.wrapped().len(), 9);
+        assert_eq!(e.wrapped().len(), 10);
         for site in [
             0x0048_3669,
             0x004c_0032,

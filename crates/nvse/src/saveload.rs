@@ -279,7 +279,7 @@ fn loaded_mods(e: &Engine) -> Vec<Vec<u8>> {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameData.cpp: DataHandler::GetModIndex.
 /// The position of the file called `name` (without case) in the list of files, `0xFF` when it
 /// is not there.
-fn mod_index(e: &mut Engine, name: &[u8]) -> u8 {
+pub(crate) fn mod_index(e: &mut Engine, name: &[u8]) -> u8 {
     let handler = e.mem.u32(DATA_HANDLER);
     if handler == 0 {
         return 0xff;
@@ -861,9 +861,10 @@ fn handle_new_game(e: &mut Engine) {
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_SaveLoad.cpp: NewGameHook.
-/// A new game: the delayed calls dropped, the handlers that go on a load, then
-/// `HandleNewGame`.
+/// A new game: the scripts told of a loaded game forget it (`GetGameLoaded`), the delayed calls
+/// dropped, the handlers that go on a load, then `HandleNewGame`.
 pub fn new_game(e: &mut Engine) {
+    crate::commands::game::game_loaded(e);
     tick::clear_delayed_calls(e);
     events::clear_flush_on_load(e);
     handle_new_game(e);
@@ -934,7 +935,10 @@ fn pre_load_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     None
 }
 
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_SaveLoad.cpp: DoLoadGameHook.
+/// The scripts told of a loaded game forget it (`GetGameLoaded`), then `HandleLoadGame`.
 fn load_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    crate::commands::game::game_loaded(e);
     load(e, a[0]);
     None
 }

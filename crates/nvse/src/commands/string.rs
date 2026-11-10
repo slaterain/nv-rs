@@ -62,9 +62,9 @@ const GET_ACTOR_VALUE_NAME: u32 = 0x0066_eac0;
 /// `NiTMapBase::Lookup` (thiscall: the map, the key, the output).
 const NI_TMAP_LOOKUP: u32 = 0x0085_3130;
 /// `g_GameSettingCollection`, `g_IniSettingCollection`, `g_IniPrefCollection`.
-const GAME_SETTINGS: u32 = 0x011c_8048;
-const INI_SETTINGS: u32 = 0x011f_96a0;
-const INI_PREFS: u32 = 0x011f_35a0;
+pub(crate) const GAME_SETTINGS: u32 = 0x011c_8048;
+pub(crate) const INI_SETTINGS: u32 = 0x011f_96a0;
+pub(crate) const INI_PREFS: u32 = 0x011f_35a0;
 /// `g_keyNames`, `g_mouseButtonNames`: `ControlName *` arrays (the name at `+4`).
 const KEY_NAMES: u32 = 0x011d_52f0;
 const MOUSE_BUTTON_NAMES: u32 = 0x011d_5240;
@@ -468,7 +468,7 @@ fn nth_rank_name(e: &Engine, faction: u32, which: u32, female: bool) -> Option<V
 // ---- settings (`GameSettings.cpp` (xNVSE)) ----
 
 /// `Setting::GetType`: by the name's first letter; 6 is a string.
-fn setting_type(e: &Engine, setting: u32) -> u32 {
+pub(crate) fn setting_type(e: &Engine, setting: u32) -> u32 {
     let name = e.mem.u32(setting + 8);
     if name == 0 {
         return 9;
@@ -514,7 +514,7 @@ fn setting_set_str(e: &mut Engine, setting: u32, text: &[u8]) -> bool {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameSettings.cpp:
 // GameSettingCollection::GetGameSetting.
-fn game_setting(e: &mut Engine, name: &[u8]) -> u32 {
+pub(crate) fn game_setting(e: &mut Engine, name: &[u8]) -> u32 {
     let collection = e.mem.u32(GAME_SETTINGS);
     if collection == 0 {
         return 0;
@@ -538,7 +538,7 @@ fn game_setting(e: &mut Engine, name: &[u8]) -> u32 {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameSettings.cpp: GetIniSetting.
 /// The preferences' settings first, then the INI's (each list at `+0x10C`), by name without
 /// case.
-fn ini_setting(e: &mut Engine, name: &[u8]) -> u32 {
+pub(crate) fn ini_setting(e: &mut Engine, name: &[u8]) -> u32 {
     let upper = vars::upper_table(e);
     for collection in [INI_PREFS, INI_SETTINGS] {
         let coll = e.mem.u32(collection);
@@ -560,10 +560,9 @@ fn ini_setting(e: &mut Engine, name: &[u8]) -> u32 {
     0
 }
 
-// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameSettings.cpp: GetNumericIniSetting,
-// Setting::Get(double &).
-/// An INI setting's number (a bool's or an integer's `data.i`, an unsigned's, a float's); `None`
-/// for an empty name, no such setting or one that holds no number.
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameSettings.cpp: GetNumericIniSetting.
+/// An INI setting's number ([`setting_number`]); `None` for an empty name, no such setting or one
+/// that holds no number.
 pub(crate) fn numeric_ini_setting(e: &mut Engine, name: &[u8]) -> Option<f64> {
     if name.is_empty() {
         return None;
@@ -572,6 +571,13 @@ pub(crate) fn numeric_ini_setting(e: &mut Engine, name: &[u8]) -> Option<f64> {
     if setting == 0 {
         return None;
     }
+    setting_number(e, setting)
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameSettings.cpp: Setting::Get(double &).
+/// A setting's number: a bool's or an integer's `data.i` signed, an unsigned's, a float's
+/// (`1007BED0`); `None` for the other types.
+pub(crate) fn setting_number(e: &Engine, setting: u32) -> Option<f64> {
     let data = setting + 4;
     match setting_type(e, setting) {
         0 | 3 => Some(f64::from(e.mem.u32(data) as i32)),
@@ -582,7 +588,7 @@ pub(crate) fn numeric_ini_setting(e: &mut Engine, name: &[u8]) -> Option<f64> {
 }
 
 /// `GetSeparatorChar`: `|`, or `@` for a console line of no mod.
-fn separator(e: &mut Engine, script: u32) -> u8 {
+pub(crate) fn separator(e: &mut Engine, script: u32) -> u8 {
     if is_console_mode(e) && !(script != 0 && mod_index(e, script) != 0xff) {
         b'@'
     } else {
