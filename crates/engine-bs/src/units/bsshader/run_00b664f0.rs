@@ -45,7 +45,7 @@ pub fn fn_00b664f0(e: &mut Engine, this: Ptr, flags: u8) -> Ptr {
 }
 
 // Translated from 00b66520 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Slot +0xA4 of `BSShaderAccumulator`'s vtable (`010adff8`; unnamed in the
+/// Slot +0xA8 of `BSShaderAccumulator`'s vtable (`010adff8`; unnamed in the
 /// engine map): passes the render mode (+0x19C) to `00b4f450`, then reads
 /// it again: mode 0 runs `00b65ae0(this)`; any other mode runs the entry of
 /// the table at `011f9f40` for it, or the table's entry 0 when that entry
@@ -71,7 +71,7 @@ pub fn fn_00b66520(e: &mut Engine, this: Ptr) {
 }
 
 // Translated from 00b66570 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Slot +0xA8 of `BSShaderAccumulator`'s vtable (`010adff8`; unnamed in the
+/// Slot +0xAC of `BSShaderAccumulator`'s vtable (`010adff8`; unnamed in the
 /// engine map): in render mode 0 (+0x19C) runs `00b65c60(this)`; then
 /// clears word +0x0C of the object `011f4748` points to and jumps to
 /// `NiAccumulator::FinishAccumulating` (`00aa0fe0`).

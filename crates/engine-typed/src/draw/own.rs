@@ -5,7 +5,7 @@
 //! count it takes (condition 7). Nothing outside this file touches what a section names. Each accessor
 //! does what the exe does there, in its order: nothing is copied, deferred or moved yet.
 
-use crate::shader::layout::{BSBatchRenderer, PassGroup, PassHolder};
+use crate::shader::layout::{BSBatchRenderer, BSShaderAccumulator, PassGroup, PassHolder};
 use crate::shader::{self, batch, state};
 use engine_core::ptr::Ptr;
 use engine_core::x87::{x87_quiet_bits, x87_store32};
@@ -77,6 +77,67 @@ pub(crate) fn set_pass_range(e: &mut Engine, renderer: u32, low: u32, high: u32)
     let renderer = Ptr::<BSBatchRenderer>::new(renderer);
     e.set(renderer, BSBatchRenderer::uiFirstPass, low);
     e.set(renderer, BSBatchRenderer::uiLastPass, high);
+}
+
+/// The pass type range draw's cursors, the accumulator's arrays by renderer (+0x17c pass types, +0x180
+/// buckets, +0x184 first-pass bytes, +0x188 active bytes) (condition 1: the draw's cursor into the
+/// lists): the address of renderer `index`'s entry, each array read afresh as the exe reads it.
+#[inline(always)]
+pub(crate) fn cursor_pass_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
+    e.get(acc, BSShaderAccumulator::puicurrentPassA)
+        .wrapping_add(index.wrapping_mul(4))
+}
+#[inline(always)]
+pub(crate) fn cursor_bucket_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
+    e.get(acc, BSShaderAccumulator::picurrentBucketA)
+        .wrapping_add(index.wrapping_mul(4))
+}
+#[inline(always)]
+pub(crate) fn cursor_first_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
+    e.get(acc, BSShaderAccumulator::pbcurrentFirstPassA)
+        .wrapping_add(index)
+}
+#[inline(always)]
+fn cursor_active_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
+    e.get(acc, BSShaderAccumulator::pbcurrentActiveA)
+        .wrapping_add(index)
+}
+
+/// Renderer `index`'s cursor: its pass type, its bucket, its first-pass byte, its active byte.
+#[inline(always)]
+pub(crate) fn cursor_pass(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
+    e.global::<u32>(cursor_pass_at(e, acc, index))
+}
+#[inline(always)]
+pub(crate) fn cursor_bucket(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> i32 {
+    e.global::<i32>(cursor_bucket_at(e, acc, index))
+}
+#[inline(always)]
+pub(crate) fn cursor_first(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> bool {
+    e.global::<u8>(cursor_first_at(e, acc, index)) != 0
+}
+#[inline(always)]
+pub(crate) fn cursor_active(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> bool {
+    e.global::<u8>(cursor_active_at(e, acc, index)) != 0
+}
+
+/// Renderer `index`'s cursor pass type cleared before its first list is made ready (condition 1).
+#[inline(always)]
+pub(crate) fn clear_cursor_pass(e: &mut Engine, acc: Ptr<BSShaderAccumulator>, index: u32) {
+    let at = cursor_pass_at(e, acc, index);
+    e.set_global(at, 0u32);
+}
+
+/// Renderer `index`'s active byte (condition 1).
+#[inline(always)]
+pub(crate) fn set_cursor_active(
+    e: &mut Engine,
+    acc: Ptr<BSShaderAccumulator>,
+    index: u32,
+    active: bool,
+) {
+    let at = cursor_active_at(e, acc, index);
+    e.set_global(at, u8::from(active));
 }
 
 /// Takes the first pass off a holder's list (+0xc: head +0x10, tail +0x14, spare chain +0x18, count

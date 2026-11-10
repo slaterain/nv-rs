@@ -12,9 +12,11 @@
 //! - [`packet`] and [`own`]: the accessors. Everything the draw reads that the rest of the frame
 //!   changes goes through [`packet`]; everything it writes that is its own through [`own`], one section
 //!   for each of the pipeline probe's conditions that live here (1: the pass lists the next frame's
-//!   registration fills again; 2: blend, clip and depth state; 4: the blocks it frees; 7: the one
-//!   reference count). A later step can feed the draw from a copied packet and give a drawing thread
-//!   its own state by changing those two files; nothing here copies, defers or moves anything yet.
+//!   registration fills again, with the range draw's cursors; 2: blend, clip and depth state; 4: the
+//!   blocks it frees; 7: the one reference count). Not routed yet: the exe's constant data the alpha
+//!   pass compares with (-FLT_MAX, 0.001). A later step can feed the draw from a copied packet and give
+//!   a drawing thread its own state by changing those two files; nothing here copies, defers or moves
+//!   anything yet.
 //!
 //! The drawing itself (the batch renderer's lists, passes and state setters) is the shader family's,
 //! reached by `typed_call!`s that go direct while both families are on.

@@ -13,8 +13,6 @@ use engine_core::{args, typed_call, Engine};
 
 /// The render mode's preparation (`00b4f450`, `cdecl(mode)`).
 const RENDER_MODE_PREPARE: u32 = 0x00b4_f450;
-/// The render modes' draws (`011f9f40`, `cdecl(accumulator)`; entry 0 for a mode without one).
-const RENDER_MODE_DRAWS: u32 = 0x011f_9f40;
 /// Whether a batch renderer's active list holds a pass type in a range (`00b98970`,
 /// `thiscall(renderer, low, high)`).
 const HAS_LISTED_PASS: u32 = 0x00b9_8970;
@@ -38,7 +36,7 @@ fn camera_into(e: &mut Engine, acc: u32, camera: u32) {
 /// False (nothing done) without a scene renderer or a camera.
 #[inline(always)]
 fn start(e: &mut Engine, camera: u32, acc: u32) -> bool {
-    let scene = e.global::<u32>(packet::SCENE_RENDERER);
+    let scene = packet::scene_renderer(e);
     if scene == 0 || camera == 0 {
         return false;
     }
@@ -104,9 +102,9 @@ pub fn accumulator_draw(e: &mut Engine, acc: Ptr<BSShaderAccumulator>) {
         typed_call!(FAMILY, 0x00b6_5ae0, first_half(e, acc));
         return;
     }
-    let mut function = e.global::<u32>(RENDER_MODE_DRAWS.wrapping_add(mode.wrapping_mul(4)));
+    let mut function = packet::render_mode_draw(e, mode);
     if function == 0 {
-        function = e.global::<u32>(RENDER_MODE_DRAWS);
+        function = packet::render_mode_draw(e, 0);
     }
     e.call(function, &args![acc]);
 }
@@ -155,7 +153,7 @@ pub fn first_half(e: &mut Engine, acc: Ptr<BSShaderAccumulator>) {
         return;
     }
     typed_call!(FAMILY, 0x00b6_39e0, draw_group(e, acc, 0xau32, 0u32));
-    if e.global::<u8>(packet::MAKE_PASS_TREE) != 0 && packet::render_mode(e, acc) != 7 {
+    if packet::pass_tree_asked(e) && packet::render_mode(e, acc) != 7 {
         own::make_pass_tree(e, acc.addr());
     }
     if packet::split_clip(e, acc) {
@@ -220,11 +218,11 @@ pub fn second_half(e: &mut Engine, acc: Ptr<BSShaderAccumulator>) {
             has_listed_pass(e, acc, 0x288u32, 0x2ceu32)
         )
     {
-        if e.global::<u32>(packet::REFLECTION_SOURCE) != 0 {
+        if packet::reflection_source(e) != 0 {
             own::copy_reflection(e);
         }
         let camera = packet::camera(e, acc);
-        let renderer = e.global::<u32>(packet::RENDERER);
+        let renderer = packet::renderer_singleton(e);
         typed_call!(
             FAMILY,
             0x004e_9bb0,
@@ -270,8 +268,8 @@ fn is_shadow_pass(pass_type: u32) -> bool {
         || pass_type.wrapping_sub(0x284) <= 3
 }
 
-/// The most batch renderers the accumulator holds (its array at +0x174 and the arrays after it).
-const MAX_RENDERERS: u32 = 6;
+/// The most batch renderers the accumulator holds (its array at +0x174, two words, as the exe has it).
+const MAX_RENDERERS: u32 = 2;
 
 // Typed from 00b63770
 /// `thiscall(accumulator, low, high, second, group)`: draws the pass types `low..=high` of the batch
@@ -282,8 +280,8 @@ const MAX_RENDERERS: u32 = 6;
 /// (`00b9a3c0`), any other through `00b9a120` with `second`. Then the register groups are emptied and
 /// the pass ends. With the fog-coloured ambient flag set, the ambient is set up first.
 ///
-/// The exe keeps the renderers (and the groups after them) in a four-word stack array, so a count
-/// above two writes the renderers over the groups; this keeps them in one array the same way.
+/// The exe keeps the renderers and the groups after them in a four-word stack array: two renderers,
+/// the most the accumulator holds; this keeps them in one array the same way.
 pub fn draw_types(
     e: &mut Engine,
     acc: Ptr<BSShaderAccumulator>,
@@ -292,7 +290,6 @@ pub fn draw_types(
     second: u32,
     group: i32,
 ) {
-    type A = BSShaderAccumulator;
     if packet::fog_ambient(e) {
         typed_call!(FAMILY, 0x00bb_b840, own::fog_ambient(e));
     }
@@ -315,20 +312,16 @@ pub fn draw_types(
             local[i as usize] = packet::renderer(e, acc, i).addr();
         }
     }
-    let passes = |e: &Engine| e.get(acc, A::puicurrentPassA);
-    let buckets = |e: &Engine| e.get(acc, A::picurrentBucketA);
-    let firsts = |e: &Engine| e.get(acc, A::pbcurrentFirstPassA);
-    let actives = |e: &Engine| e.get(acc, A::pbcurrentActiveA);
     if count != 0 {
         let mut i = 0u32;
         loop {
             let renderer = local[(i as usize).min(MAX_RENDERERS as usize + 1)];
-            e.set_global(passes(e).wrapping_add(i * 4), 0u32);
+            own::clear_cursor_pass(e, acc, i);
             if renderer != 0 {
                 own::set_pass_range(e, renderer, low, high);
-                let pass = passes(e).wrapping_add(i * 4);
-                let bucket = buckets(e).wrapping_add(i * 4);
-                let first = firsts(e).wrapping_add(i);
+                let pass = own::cursor_pass_at(e, acc, i);
+                let bucket = own::cursor_bucket_at(e, acc, i);
+                let first = own::cursor_first_at(e, acc, i);
                 let active = typed_call!(
                     shader::FAMILY,
                     0x00b9_a090,
@@ -340,9 +333,9 @@ pub fn draw_types(
                         first
                     )
                 );
-                e.set_global(actives(e).wrapping_add(i), u8::from(active));
+                own::set_cursor_active(e, acc, i, active);
             } else {
-                e.set_global(actives(e).wrapping_add(i), 0u8);
+                own::set_cursor_active(e, acc, i, false);
             }
             i += 1;
             if i >= packet::renderer_count(e, acc) {
@@ -351,24 +344,23 @@ pub fn draw_types(
         }
     }
     loop {
-        let mut any = e.global::<u8>(actives(e)) != 0;
+        let mut any = own::cursor_active(e, acc, 0);
         let mut best = 0u32;
         let mut index = 1u32;
         while index < packet::renderer_count(e, acc) {
-            let active = e.global::<u8>(actives(e).wrapping_add(index)) != 0;
+            let active = own::cursor_active(e, acc, index);
             let better = if !any && active {
                 any = true;
                 true
             } else if active {
-                let pass_of = |e: &Engine, k: u32| e.global::<u32>(passes(e).wrapping_add(k * 4));
-                let bucket_of =
-                    |e: &Engine, k: u32| e.global::<i32>(buckets(e).wrapping_add(k * 4));
+                let pass_of = |e: &Engine, k: u32| own::cursor_pass(e, acc, k);
+                let bucket_of = |e: &Engine, k: u32| own::cursor_bucket(e, acc, k);
                 let (p, q) = (pass_of(e, index), pass_of(e, best));
                 p < q
                     || (p == q
                         && (bucket_of(e, index) < bucket_of(e, best)
                             || (bucket_of(e, index) == bucket_of(e, best)
-                                && e.global::<u8>(firsts(e).wrapping_add(index)) != 0)))
+                                && own::cursor_first(e, acc, index))))
             } else {
                 false
             };
@@ -380,12 +372,12 @@ pub fn draw_types(
         if !any {
             break;
         }
-        let pass = passes(e).wrapping_add(best * 4);
-        let pass_type = e.global::<u32>(pass);
+        let pass = own::cursor_pass_at(e, acc, best);
+        let pass_type = own::cursor_pass(e, acc, best);
         let renderer =
             Ptr::<BSBatchRenderer>::new(local[(best as usize).min(MAX_RENDERERS as usize + 1)]);
-        let bucket = buckets(e).wrapping_add(best * 4);
-        let first = firsts(e).wrapping_add(best);
+        let bucket = own::cursor_bucket_at(e, acc, best);
+        let first = own::cursor_first_at(e, acc, best);
         let active = if is_shadow_pass(pass_type) && packet::shadow_groups(e, acc) {
             typed_call!(
                 FAMILY,
@@ -399,7 +391,7 @@ pub fn draw_types(
                 batch::render_group(e, renderer, pass, bucket, first, second)
             )
         };
-        e.set_global(actives(e).wrapping_add(best), u8::from(active));
+        own::set_cursor_active(e, acc, best, active);
     }
     let mut i = 0u32;
     while i < packet::renderer_count(e, acc) {

@@ -430,7 +430,8 @@ Rust, a family of functions at a time. `engine_core::typed` is the seam it plugs
 family is `leaves` (`typed/leaf.rs`): the small functions the translations call most, on since its
 speed gate passed (G1, 2026-11-06: Goodsprings +7.1%, Doc's room +3.0%). It is no longer the only one on: by default
 `leaves`, `topic_search`, `topic_order` and, since their speed gate (2026-11-08), `lockfree`, `culling`,
-`pathing`, `shader`, `crt` and `dispatch` are on (below); `NV_TYPED=off` turns every family off, and
+`pathing`, `shader`, `crt` and `dispatch` are on, and since their gates `render` (2026-11-09) and `draw`
+(2026-11-10) (below); `NV_TYPED=off` turns every family off, and
 `<family>:off` one. A run compared call for call with the original's record (nv-trace's `NV_TRACE_OUT`,
 `NV_TRACE_LIST`) has every family off unless `NV_TYPED` says otherwise (`typed::switch_for`).
 The second is `topic_search` (`crates/engine-fallout-forms/src/topic_search.rs`, provided from that
@@ -496,17 +497,24 @@ through its vtable), and `NiTriStrips`' immediate draw the packed draw when the 
 do. Speed (2026-11-10, the crowded street view, main's default against it, BAAB): neutral, crowded 15.25 to
 15.27 ms a frame, the sky 6.54 to 6.46 ms, both inside the spread between two runs of the same exe. The time
 moved from the translations to the typed code; the Direct3D 9 stream is byte-identical with the families on or off.
-And `draw` (same crate, id 18): the main world draw's drivers, typed as the groundwork for running that draw on
-its own thread: the world pass's two halves and the secondary scenes' draw (water reflections, menus), the
-accumulator's render mode draw and finish, render mode 0's two halves, the pass type range draw that interleaves
-the batch renderers, the register group draw, the alpha sort, the alpha group draw with its distances and clears,
-a holder's draw and the shadow types' group-clearing draw; its tests are in `crates/engine/tests/typed_shader.rs`
-(the shader family's world). Everything the draw reads that the rest of the frame changes goes through
-`draw::packet`, and everything it writes that is its own through `draw::own`, one section per condition of the
-pipeline probe that lives there (the pass lists the next frame's registration fills again, blend, clip and depth
-state, the blocks it frees, the one reference count): a later step changes those two files to feed the draw from a
-copied packet. On since its gate (the recorded street run byte-identical with `NV_TYPED=draw:off`); not a speed
-change by itself.
+And `draw` (same crate, id 18): the main world draw, typed as the groundwork for running that draw on its own
+thread. Its drivers: the world pass's two halves and the secondary scenes' draw (`00b6c0d0`: water reflections,
+menus), the accumulator's render mode draw and finish, its camera in and out (`00d47a40`, `00aa0fe0`), the held
+accumulator (`00b54b10`), render mode 0's two halves, the pass type range draw that interleaves the batch
+renderers, the register group draw, the alpha sort, the decal pass, the fog-coloured ambient (`00bbb840`), the
+alpha group draw with its distances and clears, `RenderNextAlpha`, a holder's draw, the shadow types'
+group-clearing draw, and the camera handed to the scene renderer (`004e9bb0`, `004e9c90`) with the camera getters
+it reads (`004a0d10`, `0045bbe0`, `0045bb80`, `0045bba0`, `004e9c10`, `004e9c50`). Members used outside the world
+draw too, so that `draw:off` gives those callers the translations again: the camera hand-over and getters
+(`004e9bb0`, `004e9c90`, `004e9c10`, `004e9c50`; the other four game-wide), the accumulator's camera in and out
+(`00d47a40`, `00aa0fe0`), the fog ambient (`00bbb840`), the held accumulator (`00b54b10`) and the secondary scenes'
+draw (`00b6c0d0`). Its tests are in `crates/engine/tests/typed_shader.rs` (the shader family's world). What the
+draw reads that the rest of the frame changes goes through `draw::packet`, and what it writes that is its own
+through `draw::own`, one section per condition of the pipeline probe that lives there (the pass lists the next
+frame's registration fills again with the range draw's cursors, blend, clip and depth state, the blocks it frees,
+the one reference count); not routed yet: the exe's constant data the alpha pass compares with (-FLT_MAX, 0.001).
+A later step changes those two files to feed the draw from a copied packet. On since its gate (the recorded street
+run byte-identical with `NV_TYPED=draw:off`); not a speed change by itself.
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with

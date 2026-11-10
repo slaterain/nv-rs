@@ -102,11 +102,11 @@ pub fn draw_alpha_group(e: &mut Engine, acc: Ptr<BSShaderAccumulator>, group: u3
 /// then x, then z.
 #[inline(always)]
 fn centre_distance(e: &Engine, bound: u32, d: [f64; 3], x_by_load: bool) -> f64 {
-    let p = |i: u32| x87_load32(e.global::<u32>(bound.wrapping_add(i * 4)));
+    let p = |i: u32| x87_load32(packet::bound_word(e, bound, i));
     let x = if x_by_load {
         x87_mul(p(0), d[0])
     } else {
-        x87_mul(d[0], x87_m32(e.global::<u32>(bound)))
+        x87_mul(d[0], x87_m32(packet::bound_word(e, bound, 0)))
     };
     let sum = x87_add(x87_mul(p(1), d[1]), x);
     x87_add(sum, x87_mul(p(2), d[2]))
@@ -117,7 +117,7 @@ fn centre_distance(e: &Engine, bound: u32, d: [f64; 3], x_by_load: bool) -> f64 
 fn stored_distance(e: &Engine, bound: u32, d: [f64; 3], subtract: bool) -> u32 {
     let dot = x87_store32(centre_distance(e, bound, d, true));
     if subtract {
-        let radius = x87_m32(e.global::<u32>(bound.wrapping_add(0xc)));
+        let radius = x87_m32(packet::bound_word(e, bound, 3));
         x87_store32(x87_sub(x87_load32(dot), radius))
     } else {
         dot
@@ -142,12 +142,9 @@ pub fn alpha_distance(
     let holder = packet::alpha_holder(e, renderer, group);
     let count = packet::holder_count(e, holder);
     let list = packet::alpha_list(renderer, group);
-    let listed = e.global::<u32>(list.wrapping_add(8));
-    let first_group_distance = |e: &Engine| {
-        let head = e.global::<u32>(list);
-        let item = e.global::<u32>(head.wrapping_add(8));
-        e.global::<u32>(item.wrapping_add(0x20))
-    };
+    let listed = packet::sorted_count(e, list);
+    let first_group_distance =
+        |e: &Engine| packet::sorted_distance(e, packet::first_sorted_group(e, list));
     if count == 0 {
         if listed == 0 {
             return x87_load32(e.global::<u32>(NO_DISTANCE));
@@ -155,9 +152,8 @@ pub fn alpha_distance(
         return x87_load32(first_group_distance(e));
     }
     let first_bound = |e: &Engine| {
-        let node = e.global::<u32>(holder.wrapping_add(0x10));
-        let pass = e.global::<u32>(node.wrapping_add(8));
-        packet::bound_of(e, e.global::<u32>(pass))
+        let pass = packet::node_pass(e, packet::holder_head(e, holder));
+        packet::bound_of(e, packet::pass_geometry(e, pass))
     };
     if listed == 0 {
         let bound = first_bound(e);
@@ -179,10 +175,10 @@ pub fn alpha_distance(
 pub fn clear_alpha_group(e: &mut Engine, renderer: Ptr<BSBatchRenderer>, group: u32) {
     let holder = packet::alpha_holder(e, renderer, group);
     own::reset_holder(e, holder);
-    let mut node = e.global::<u32>(packet::alpha_list(renderer, group));
+    let mut node = packet::list_head(e, packet::alpha_list(renderer, group));
     while node != 0 {
-        let item = e.global::<u32>(node.wrapping_add(8));
-        node = e.global::<u32>(node);
+        let item = packet::node_pass(e, node);
+        node = packet::node_next(e, node);
         if item != 0 {
             own::free_alpha_group(e, item);
         }
@@ -250,10 +246,10 @@ const ISNAN: u32 = 0x00ec_75b1;
 /// stack: each product the direction first, x then y, z last).
 #[inline(always)]
 fn next_alpha_first(e: &Engine, pass: u32, d: [f64; 3], subtract: bool) -> u32 {
-    let bound = packet::bound_of(e, e.global::<u32>(pass));
-    let p = |i: u32| x87_load32(e.global::<u32>(bound.wrapping_add(i * 4)));
+    let bound = packet::bound_of(e, packet::pass_geometry(e, pass));
+    let p = |i: u32| x87_load32(packet::bound_word(e, bound, i));
     let y = x87_mul(d[1], p(1));
-    let x = x87_mul(d[0], x87_m32(e.global::<u32>(bound)));
+    let x = x87_mul(d[0], x87_m32(packet::bound_word(e, bound, 0)));
     let dot = x87_add(x87_mul(d[2], p(2)), x87_add(y, x));
     radius_off(e, bound, dot, subtract)
 }
@@ -261,8 +257,8 @@ fn next_alpha_first(e: &Engine, pass: u32, d: [f64; 3], subtract: bool) -> u32 {
 /// The same for the following passes (the direction read from its locals).
 #[inline(always)]
 fn next_alpha_next(e: &Engine, pass: u32, d: [u32; 3], subtract: bool) -> u32 {
-    let bound = packet::bound_of(e, e.global::<u32>(pass));
-    let p = |i: u32| x87_load32(e.global::<u32>(bound.wrapping_add(i * 4)));
+    let bound = packet::bound_of(e, packet::pass_geometry(e, pass));
+    let p = |i: u32| x87_load32(packet::bound_word(e, bound, i));
     let sum = x87_add(x87_mul(p(1), x87_m32(d[1])), x87_mul(p(0), x87_m32(d[0])));
     let dot = x87_add(sum, x87_mul(p(2), x87_m32(d[2])));
     radius_off(e, bound, dot, subtract)
@@ -275,7 +271,7 @@ fn radius_off(e: &Engine, bound: u32, dot: f64, subtract: bool) -> u32 {
         let dot = x87_store32(dot);
         x87_store32(x87_sub(
             x87_load32(dot),
-            x87_m32(e.global::<u32>(bound.wrapping_add(0xc))),
+            x87_m32(packet::bound_word(e, bound, 3)),
         ))
     } else {
         x87_store32(dot)
@@ -311,9 +307,9 @@ pub fn render_next_alpha(
     let locals = packet::camera_direction_words(e, camera);
     let d = locals.map(x87_load32);
     let subtract = shader::low8(subtract) != 0;
-    let head = e.global::<u32>(packet::alpha_holder(e, renderer, group).wrapping_add(0x10));
+    let head = packet::holder_head(e, packet::alpha_holder(e, renderer, group));
     let mut pass = if head != 0 {
-        e.global::<u32>(head.wrapping_add(8))
+        packet::node_pass(e, head)
     } else {
         0
     };
@@ -323,8 +319,8 @@ pub fn render_next_alpha(
     }
     let list = packet::alpha_list(renderer, group);
     let first_sorted = |e: &Engine| {
-        if e.global::<u32>(list.wrapping_add(8)) != 0 {
-            e.global::<u32>(e.global::<u32>(list).wrapping_add(8))
+        if packet::sorted_count(e, list) != 0 {
+            packet::first_sorted_group(e, list)
         } else {
             0
         }
@@ -339,7 +335,7 @@ pub fn render_next_alpha(
         // The sorted groups.
         let mut pass_turn = false;
         while sorted != 0 {
-            let distance = x87_load32(e.global::<u32>(sorted.wrapping_add(0x20)));
+            let distance = x87_load32(packet::sorted_distance(e, sorted));
             if !(x87_load32(current) < distance) && pass != 0 {
                 pass_turn = true;
                 break;
@@ -370,12 +366,12 @@ pub fn render_next_alpha(
                 let holder = packet::alpha_holder(e, renderer, group);
                 own::take_first_pass(e, holder);
                 let holder = packet::alpha_holder(e, renderer, group);
-                let head = e.global::<u32>(holder.wrapping_add(0x10));
+                let head = packet::holder_head(e, holder);
                 if head == 0 {
                     pass = 0;
                     check_pass = false;
                 } else {
-                    pass = e.global::<u32>(head.wrapping_add(8));
+                    pass = packet::node_pass(e, head);
                     if pass == 0 {
                         check_pass = false;
                     } else {
@@ -393,7 +389,7 @@ pub fn render_next_alpha(
         if sorted == 0 {
             return;
         }
-        let distance = x87_load32(e.global::<u32>(sorted.wrapping_add(0x20)));
+        let distance = x87_load32(packet::sorted_distance(e, sorted));
         if beyond(limit_value, distance) {
             return;
         }
@@ -403,31 +399,28 @@ pub fn render_next_alpha(
     }
 }
 
-/// The render mode word whose value 9 skips the property kinds 0x15 and 0x11 (`011f91b8`).
-const SHADER_MODE: u32 = 0x011f_91b8;
-
 /// One pass of [`render_next_alpha`]: skipped without a shader property, or in shader mode 9 with
 /// a property of kind 0x15 or 0x11; drawn (`RenderPassImmediately(pass, type, 1, 1, 1)`, the shader
 /// family's), with z-writes off and the decal depth bias around it when the property's flags have bit
 /// 26 or 27.
 fn draw_alpha_pass(e: &mut Engine, pass: u32) {
-    let geometry = e.global::<u32>(pass);
-    let property = e.global::<u32>(geometry.wrapping_add(0xa8));
+    let geometry = packet::pass_geometry(e, pass);
+    let property = packet::shader_property(e, geometry);
     if property == 0 {
         return;
     }
-    if e.global::<u32>(SHADER_MODE) == 9 {
-        let kind = e.global::<u32>(property.wrapping_add(0x1c));
+    if packet::shader_mode(e) == 9 {
+        let kind = packet::property_kind(e, property);
         if kind == 0x15 || kind == 0x11 {
             return;
         }
     }
-    let flags = e.global::<u32>(property.wrapping_add(0x20));
+    let flags = packet::property_flags(e, property);
     let biased = flags & 0x0c00_0000 != 0;
     if biased {
         own::decal_state_on(e);
     }
-    let pass_type = u32::from(e.global::<u16>(pass.wrapping_add(4)));
+    let pass_type = packet::pass_type(e, pass);
     typed_call!(
         shader::FAMILY,
         0x00b9_94f0,

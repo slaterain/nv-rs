@@ -5253,7 +5253,8 @@ fn draw_alpha_group() {
             Input::Of(&[0, 1, 2, 3]),
             Input::Of(&[0, 1, 6, 9]),
             Input::Of(BYTES),
-            // No NaN: a sorted group at NaN is never within a limit, and the exe loops on it for ever.
+            // No NaN with two renderers: a sorted group at NaN is never within a limit, and with two the
+            // exe loops on it for ever (PC builds one: `draw_alpha_group_nan` has NaN with one).
             Input::Of(&[ONE, HALF, TWO, 0xc2c8_0000, 0, 0x7f7f_ffff, 0xff80_0000]),
         ])
         .max_cases(160)
@@ -5262,6 +5263,31 @@ fn draw_alpha_group() {
             set(e, d.w.acc + 0x18c, c.word(1));
             e.mem.set_u8(d.w.acc + 0x31, c.word(4) as u8);
             alpha_state(e, &d, c.word(0), c.word(2), c.word(3), c.word(5));
+            vec![d.w.acc, c.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `draw_alpha_group` with one batch renderer, as PC builds the accumulator, and a sorted group at a NaN
+/// distance (quiet, the x87 default, signalling): the alpha loop ends there; the group is not drawn,
+/// then freed.
+#[test]
+fn draw_alpha_group_nan() {
+    Diff::new(entry!(0x00b6_50c0, dalpha::draw_alpha_group(Ptr<_>, u32)))
+        .draw_common_at(0x00b6_50c0)
+        .inputs(&[
+            Input::Of(TWO_WAYS),
+            Input::Of(&[0, 1]),
+            Input::Of(&[1, 2]),
+            Input::Of(BYTES),
+            Input::Of(&[0x7fc0_0000, 0xffc0_0000, 0x7f80_0001]),
+        ])
+        .setup(|e, c| {
+            let d = draw_world(e);
+            set(e, d.w.acc + 0x18c, 1);
+            e.mem.set_u8(d.w.acc + 0x31, c.word(3) as u8);
+            alpha_state(e, &d, c.word(0), c.word(1), c.word(2), c.word(4));
             vec![d.w.acc, c.word(0)]
         })
         .run()
@@ -5401,6 +5427,8 @@ fn render_next_alpha() {
         ]),
         Input::F32Swept(HALF),
         Input::Of(&[0, 1, 2, 3]),
+        // The first sorted group: keeps its own passes, or has no renderer (+8 = 0).
+        Input::Of(TWO_WAYS),
     ])
     .max_cases(240)
     .float_sweep(FLOAT_SWEEP)
@@ -5421,12 +5449,17 @@ fn render_next_alpha() {
             }
             _ => {}
         }
-        // A sorted group that keeps its own passes, the other its renderer's.
+        // A sorted group that keeps its own passes, the other its renderer's; or the first with no
+        // renderer at all.
         let list = d.w.br + 0x78 + 0xc * group;
         let head = e.mem.u32(list);
         if head != 0 {
             let g = e.mem.u32(head + 8);
-            e.mem.set_u8(g, 1);
+            if c.word(7) != 0 {
+                set(e, g + 8, 0);
+            } else {
+                e.mem.set_u8(g, 1);
+            }
         }
         vec![d.w.br, group, d.w.camera, c.word(3), c.word(4)]
     })

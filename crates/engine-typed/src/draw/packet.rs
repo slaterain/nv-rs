@@ -23,6 +23,19 @@ pub(crate) const MAKE_PASS_TREE: u32 = 0x011f_9fc1;
 /// The water reflection's source target (`011f9438`).
 pub(crate) const REFLECTION_SOURCE: u32 = 0x011f_9438;
 
+/// The renderer as the scene holds it (`011f4748`).
+#[inline(always)]
+pub(crate) fn scene_renderer(e: &Engine) -> u32 {
+    e.global::<u32>(SCENE_RENDERER)
+}
+
+/// The render modes' draws (`011f9f40`, `cdecl(accumulator)`): mode `mode`'s entry.
+const RENDER_MODE_DRAWS: u32 = 0x011f_9f40;
+#[inline(always)]
+pub(crate) fn render_mode_draw(e: &Engine, mode: u32) -> u32 {
+    e.global::<u32>(RENDER_MODE_DRAWS.wrapping_add(mode.wrapping_mul(4)))
+}
+
 /// The accumulator's camera (`m_pkCamera`, +8): nothing is drawn without one.
 #[inline(always)]
 pub(crate) fn camera(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> u32 {
@@ -127,6 +140,102 @@ pub(crate) fn alpha_list(renderer: Ptr<BSBatchRenderer>, group: u32) -> u32 {
         .wrapping_add(0x78)
 }
 
+/// How many sorted groups an alpha group list holds (its +8).
+#[inline(always)]
+pub(crate) fn sorted_count(e: &Engine, list: u32) -> u32 {
+    e.global::<u32>(list.wrapping_add(8))
+}
+
+/// The first sorted group of an alpha group list (its head's item).
+#[inline(always)]
+pub(crate) fn first_sorted_group(e: &Engine, list: u32) -> u32 {
+    let head = e.global::<u32>(list);
+    e.global::<u32>(head.wrapping_add(8))
+}
+
+/// A sorted group's distance (+0x20), as its word.
+#[inline(always)]
+pub(crate) fn sorted_distance(e: &Engine, sorted: u32) -> u32 {
+    e.global::<u32>(sorted.wrapping_add(0x20))
+}
+
+/// A holder's first list node (+0x10), 0 for an empty list.
+#[inline(always)]
+pub(crate) fn holder_head(e: &Engine, holder: u32) -> u32 {
+    e.global::<u32>(holder.wrapping_add(0x10))
+}
+
+/// A list's first node (its +0).
+#[inline(always)]
+pub(crate) fn list_head(e: &Engine, list: u32) -> u32 {
+    e.global::<u32>(list)
+}
+
+/// A list node's next node (its +0).
+#[inline(always)]
+pub(crate) fn node_next(e: &Engine, node: u32) -> u32 {
+    e.global::<u32>(node)
+}
+
+/// A list node's pass (+8).
+#[inline(always)]
+pub(crate) fn node_pass(e: &Engine, node: u32) -> u32 {
+    e.global::<u32>(node.wrapping_add(8))
+}
+
+/// A pass's geometry (+0).
+#[inline(always)]
+pub(crate) fn pass_geometry(e: &Engine, pass: u32) -> u32 {
+    e.global::<u32>(pass)
+}
+
+/// A pass's type (16 bits at +4).
+#[inline(always)]
+pub(crate) fn pass_type(e: &Engine, pass: u32) -> u32 {
+    u32::from(e.global::<u16>(pass.wrapping_add(4)))
+}
+
+/// A geometry's shader property (+0xa8).
+#[inline(always)]
+pub(crate) fn shader_property(e: &Engine, geometry: u32) -> u32 {
+    e.global::<u32>(geometry.wrapping_add(0xa8))
+}
+
+/// A shader property's kind (+0x1c) and its flags (+0x20).
+#[inline(always)]
+pub(crate) fn property_kind(e: &Engine, property: u32) -> u32 {
+    e.global::<u32>(property.wrapping_add(0x1c))
+}
+#[inline(always)]
+pub(crate) fn property_flags(e: &Engine, property: u32) -> u32 {
+    e.global::<u32>(property.wrapping_add(0x20))
+}
+
+/// The shader mode word (`011f91b8`; 9 skips two property kinds in the alpha pass).
+const SHADER_MODE: u32 = 0x011f_91b8;
+#[inline(always)]
+pub(crate) fn shader_mode(e: &Engine) -> u32 {
+    e.global::<u32>(SHADER_MODE)
+}
+
+/// Whether the render pass tree is asked for (`011f9fc1`).
+#[inline(always)]
+pub(crate) fn pass_tree_asked(e: &Engine) -> bool {
+    e.global::<u8>(MAKE_PASS_TREE) != 0
+}
+
+/// The water reflection's source target (`011f9438`), 0 for none.
+#[inline(always)]
+pub(crate) fn reflection_source(e: &Engine) -> u32 {
+    e.global::<u32>(REFLECTION_SOURCE)
+}
+
+/// The renderer singleton (`011f9508`).
+#[inline(always)]
+pub(crate) fn renderer_singleton(e: &Engine) -> u32 {
+    e.global::<u32>(RENDERER)
+}
+
 /// Whether a holder keeps its passes in its own list (bit 0 of its flags).
 #[inline(always)]
 pub(crate) fn keeps_own(e: &Engine, holder: u32) -> bool {
@@ -155,6 +264,12 @@ pub(crate) fn bound_of(e: &Engine, geometry: u32) -> u32 {
     } else {
         bound
     }
+}
+
+/// Word `index` of a bound (the centre's x, y, z, then the radius).
+#[inline(always)]
+pub(crate) fn bound_word(e: &Engine, bound: u32, index: u32) -> u32 {
+    e.global::<u32>(bound.wrapping_add(index.wrapping_mul(4)))
 }
 
 /// The camera's view direction (+0x68, +0x74, +0x80), each through an `FLD` and `FSTP` into a
