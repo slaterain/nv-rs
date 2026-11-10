@@ -116,12 +116,12 @@ pub struct RealBackend {
 ///
 /// The NVIDIA driver compiles a pixel shader again for a multisampled target: a shader drawn
 /// with into the plain 1x1 target was compiled again at its first draw into the game's 8x
-/// multisampled scene target (the first shot: two frames of 25-30 ms in a replay of the shooting
-/// route, against 10-14 when each shader was also drawn with into a 1x1 multisampled target; the
-/// format, the depth surface, the partner shader, the vertex layout, the textures and the render
-/// states made no difference: build43-scratch/measure/stutter/REAL-THREADS.md, "The first shot:
-/// what the driver compiles"). So every multisample type of a render target the game makes is a
-/// kind of target here too ([`Warm::kinds`]), and every shader is drawn with once into each kind.
+/// multisampled scene target (the first shot). In a replay of the shooting route, drawing each
+/// shader also into a multisampled 1x1 target alone removed that compile; adding the real vertex
+/// layout, textures and render states on top changed nothing (measurements:
+/// build43-scratch/measure/stutter/REAL-THREADS.md, "The first shot: what the driver compiles").
+/// So every multisample type of a render target the game makes is a kind of target here too
+/// ([`Warm::kinds`]), and every shader is drawn with once into each kind.
 struct Warm {
     queue: std::collections::VecDeque<WarmDraw>,
     /// Every shader made on this device, to draw with again into a kind of target made later.
@@ -622,11 +622,17 @@ impl RealBackend {
                         .ok()
                         .and(target)
                     });
-                    let Some(target) = target else {
+                    let Some(surface) = target else {
                         w.failed += 1;
                         continue;
                     };
-                    let _ = d.SetRenderTarget(0, &*target);
+                    if d.SetRenderTarget(0, &*surface).is_err() {
+                        // Not bound (the previous binding stays, maybe the game's own target
+                        // 0): this kind's draws are refused, never drawn into another target.
+                        *target = None;
+                        w.failed += 1;
+                        continue;
+                    }
                     bound_kind = Some(s.kind);
                 }
                 let model = usize::from(s.shader.major >= 3);
@@ -2218,24 +2224,34 @@ mod tests {
     /// The shader warm-up leaves nothing of its in the default pool between `Present`s: a `Reset`
     /// (alt-tab, a new resolution, a lost device) while the warm-up is unfinished answers as it
     /// does without the warm-up, and the game's target 0 is its back buffer again after each
-    /// warm-up. Skipped where there is no Direct3D 9 device.
+    /// warm-up; also after a warm-up into a multisampled 1x1 target of its own (made for a
+    /// multisampled target of the game's, which the game destroys before its `Reset`). Skipped
+    /// where there is no Direct3D 9 device (CI) or it can't make a 2x multisampled target.
     #[test]
     fn a_reset_during_an_unfinished_shader_warm_up_answers_as_without_it() {
         let _turn = super::super::d3d9real::real_turn();
-        let (Some(with), Some(without)) = (reset_after_warm_up(true), reset_after_warm_up(false))
-        else {
-            return;
-        };
-        assert_eq!(with, without, "Reset refused with the warm-up only");
+        for multisampled in [false, true] {
+            let (Some(with), Some(without)) = (
+                reset_after_warm_up(true, multisampled),
+                reset_after_warm_up(false, multisampled),
+            ) else {
+                return;
+            };
+            assert_eq!(
+                with, without,
+                "Reset refused with the warm-up only (multisampled {multisampled})"
+            );
+        }
     }
 
     /// [`a_reset_during_an_unfinished_shader_warm_up_answers_as_without_it`]'s run: whether the
-    /// real device refused the `Reset`; `None` without a device.
-    fn reset_after_warm_up(warm: bool) -> Option<bool> {
+    /// real device refused the `Reset`; `None` without a device (or, `multisampled`, without a
+    /// 2x multisampled target).
+    fn reset_after_warm_up(warm: bool, multisampled: bool) -> Option<bool> {
         super::super::d3d9real::assert_real_turn();
         let window = super::super::d3d9real::test_window()?;
         let present = super::super::d3d9real::test_present();
-        let back_buffer = 0x3000;
+        let (back_buffer, scene) = (0x3000, 0x3100);
         let mut b = RealBackend::new().with_warm(warm);
         let made = b.execute(Cmd::CreateDevice {
             device: DEVICE,
@@ -2249,9 +2265,24 @@ mod tests {
         if !matches!(made, Reply::Device { created: true, .. }) {
             return None;
         }
-        // One shader a warm-up, so it is unfinished after the first `Present`.
+        // One shader a warm-up, so it is unfinished after each `Present`.
         if let Some(w) = b.warm.as_mut() {
             w.budget = std::time::Duration::ZERO;
+        }
+        if multisampled {
+            // The game's 2x multisampled target, 64x64 A8R8G8B8: a second kind of the warm-up's.
+            b.execute(Cmd::CreateSurface {
+                device: DEVICE,
+                surface: scene,
+                depth: false,
+                width: 64,
+                height: 64,
+                format: 21,
+                multisample: 2,
+                quality: 0,
+                flag: 0,
+            });
+            b.surface(scene)?;
         }
         for (i, tokens) in [&PLAIN_PS2[..], &PLAIN_PS3, &PLAIN_PS2, &PLAIN_PS3]
             .into_iter()
@@ -2264,18 +2295,29 @@ mod tests {
                 tokens: Data::from_words(tokens),
             });
         }
-        b.execute(Cmd::Present {
+        let present_cmd = |frame| Cmd::Present {
             device: DEVICE,
             source: None,
             dest: None,
             window: 0,
             dirty: false,
             model: 0,
-            frame: 1,
-        });
+            frame,
+        };
+        b.execute(present_cmd(1));
+        if multisampled {
+            // The queue: the first shader plain, the first multisampled, the second plain, ...:
+            // the second `Present` draws into a multisampled 1x1 target of the warm-up's. Then
+            // the game lets go of its own multisampled target (released at the next `Present`).
+            b.execute(present_cmd(2));
+            b.execute(Cmd::Destroy { object: scene });
+            b.execute(present_cmd(3));
+        }
         if let Some(w) = b.warm.as_ref() {
-            assert_eq!((w.done, w.failed), (1, 0), "one warmed, none refused");
-            assert_eq!(w.queue.len(), 3, "unfinished");
+            let (done, left) = if multisampled { (3, 5) } else { (1, 3) };
+            assert_eq!((w.done, w.failed), (done, 0), "warmed, none refused");
+            assert_eq!(w.queue.len(), left, "unfinished");
+            assert_eq!(w.kinds.len(), if multisampled { 2 } else { 1 });
         }
         assert_eq!(b.warm.is_some(), warm);
         let d = b.device(DEVICE).expect("the device");
