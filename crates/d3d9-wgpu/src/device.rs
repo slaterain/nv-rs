@@ -275,8 +275,9 @@ impl Made {
 /// The list of pipelines to make before play and what of it is done ([`prepare`]).
 struct Listed {
     list: prepare::List,
-    /// Entry by entry: made, or tried and given up (its shaders collide, a format is unknown).
-    done: Vec<bool>,
+    /// Entry by entry, the sample counts (as bits, as [`Device::sample_mask`]) it was made at or
+    /// tried and given up at (its shaders collide, a format is unknown); none yet: 0.
+    done: Vec<u32>,
     /// The file and its lines, shared with the writer threads and the exit hooks.
     shared: Arc<ListFile>,
     /// Entries this run added that the file does not have yet, and the present of the last.
@@ -376,7 +377,7 @@ impl Listed {
         all.retain(|w| w.strong_count() > 0);
         all.push(Arc::downgrade(&shared));
         Listed {
-            done: vec![false; list.entries.len()],
+            done: vec![0; list.entries.len()],
             list,
             shared,
             dirty: false,
@@ -388,8 +389,9 @@ impl Listed {
     /// `e` listed (it was made on a draw at present `presents`), unless it is already.
     fn add(&mut self, e: prepare::Entry, presents: u64) {
         let line = e.line();
+        let samples = 1u32 << e.samples.min(31);
         if self.list.add(e) {
-            self.done.push(true);
+            self.done.push(samples);
             if !self.dirty {
                 self.first_added_at = presents;
             }
@@ -3156,10 +3158,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     }
 
     /// Makes, before the game goes on, every listed pipeline whose two shaders the game has made
-    /// and whose sample count one of its surfaces has ([`prepare`]): the modules first, then the
-    /// pipelines, each on the worker threads. At a `Present`, after a new shader or sample
-    /// count; the game waits for it (its next frame comes after), so no listed pipeline is ever
-    /// made during play.
+    /// ([`prepare`]), at the sample counts its surfaces have: a single-sampled entry when it is
+    /// listed so, a multisampled one at each multisample count the surfaces have (a list
+    /// recorded at 4x serves a player at 8x: the same draws on that player's targets), where
+    /// its formats take that count. The modules first, then the pipelines, each on the worker
+    /// threads. At a `Present`, after a new shader or sample count; the game waits for it (its
+    /// next frame comes after), so no listed pipeline is ever made during play.
     fn prepare_listed(&mut self) {
         if !self.listed_new {
             return;
@@ -3170,23 +3174,41 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         };
         let started = std::time::Instant::now();
         let mut ready = Vec::new();
+        let mut ahead = HashSet::new();
         for i in 0..l.list.entries.len() {
-            if l.done[i] {
-                continue;
-            }
             let e = &l.list.entries[i];
-            if self.sample_mask & (1u32 << e.samples.min(31)) == 0 {
+            let want = if e.samples > 1 {
+                self.sample_mask & !0b11
+            } else {
+                self.sample_mask & (1u32 << e.samples.min(31))
+            };
+            let todo = want & !l.done[i];
+            if todo == 0 {
                 continue;
             }
             let (Some(vs), Some(ps)) = (self.shader_by_hash(e.vs), self.shader_by_hash(e.ps))
             else {
                 continue;
             };
-            l.done[i] = true;
+            l.done[i] |= todo;
             let e = e.clone();
-            if let Some(r) = self.key_of_entry(&e, vs, ps) {
-                if !self.pipelines.contains_key(&r.key) {
-                    ready.push(r);
+            for samples in (1..32u32).filter(|n| todo & (1 << n) != 0) {
+                let formats_take_it = samples == e.samples
+                    || e.colours.iter().flatten().chain(&e.depth).all(|&d| {
+                        format::format(d).is_some_and(|f| self.samples_supported(f.wgpu, samples))
+                    });
+                if !formats_take_it {
+                    continue;
+                }
+                let e = prepare::Entry {
+                    samples,
+                    ..e.clone()
+                };
+                if let Some(r) = self.key_of_entry(&e, vs.clone(), ps.clone()) {
+                    // Two entries can name one pipeline (one recorded at 4x and one at 8x).
+                    if !self.pipelines.contains_key(&r.key) && ahead.insert(r.key.clone()) {
+                        ready.push(r);
+                    }
                 }
             }
         }
@@ -3269,7 +3291,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         if let Some(c) = &self.pipeline_cache {
             c.touched(self.presents);
         }
-        let left = l.done.iter().filter(|d| !**d).count();
+        let left = l.done.iter().filter(|&&d| d == 0).count();
         eprintln!(
             "NV_D3D9 wgpu: made ahead: {made} pipelines and {modules} shader modules in {:.0} ms (modules {:.0} ms) on {threads} threads, {refused} refused; {left} listed not yet possible (present {})",
             started.elapsed().as_secs_f64() * 1000.0,
@@ -4974,9 +4996,24 @@ fn show_on(
     let Some((surface, config)) = surface else {
         return;
     };
-    let frame = match surface.get_current_texture() {
-        wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
-        _ => return,
+    // As a `Present` does: an outdated or lost surface (the window resized or the display
+    // changed during the step) is configured again and asked once more; a frame that cannot be
+    // had now (minimised, timed out) is not drawn.
+    let mut acquired = None;
+    for _ in 0..2 {
+        match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(t)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => acquired = Some(t),
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                surface.configure(device, config);
+                continue;
+            }
+            _ => {}
+        }
+        break;
+    }
+    let Some(frame) = acquired else {
+        return;
     };
     let view = frame.texture.create_view(&Default::default());
     // Made again if the window's format changed since (its pipeline is made for one).

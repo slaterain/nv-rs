@@ -1241,3 +1241,43 @@ fn listed_pipelines_are_made_before_the_draws_that_need_them() {
     assert_eq!(made_third, 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A multisampled entry is made ahead at the run's own multisample count, whatever count it was
+/// recorded at (the shipped list is recorded at one antialiasing setting): the list a 4x run
+/// wrote leaves an 8x run no pipeline to make on its draws, and the same pixels as an 8x run
+/// without a list.
+#[test]
+fn a_list_recorded_at_4x_serves_a_run_at_8x() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("pipeline-list-8x-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let run = |samples: u32, cache: Option<&std::path::Path>| -> Option<(Vec<u8>, u64)> {
+        let mut g = Gpu::with_cache(4, samples, cache.map(std::path::Path::to_path_buf))?;
+        g.run(Cmd::Present {
+            device: DEVICE,
+            source: None,
+            dest: None,
+            window: 0,
+            dirty: false,
+            model: 0,
+            frame: 1,
+        });
+        g.colour([1.0, 0.5, 0.25, 1.0]);
+        g.clear(1, 0, 1.0);
+        g.cover(0.5);
+        let reds = g.reds();
+        let made = g.b.device().expect("the device").pipelines_made_on_draws();
+        Some((reds, made))
+    };
+    let Some((_, made_4x)) = run(4, Some(&dir)) else {
+        return;
+    };
+    assert!(made_4x >= 1, "the 4x run makes its pipeline on the draw");
+    let list = std::fs::read_to_string(dir.join("pipelines.txt")).expect("the list written");
+    let (plain, _) = run(8, None).unwrap();
+    let (listed, made_8x) = run(8, Some(&dir)).unwrap();
+    assert_eq!(made_8x, 0, "the 8x run makes no pipeline on a draw: {list}");
+    assert_eq!(listed, plain, "the same pixels as an 8x run without a list");
+    let _ = std::fs::remove_dir_all(&dir);
+}

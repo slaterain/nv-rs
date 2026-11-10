@@ -3,7 +3,10 @@
 //! port and grown by each run on the player's machine. At start-up the backend makes every listed
 //! pipeline whose two shaders the game has created, on worker threads, before the game goes on;
 //! what is not on the list (a mod's new shader, a state nobody recorded) is made on first use, as
-//! before, and added to the local list for the next start.
+//! before, and added to the local list for the next start. A multisampled entry is made at each
+//! multisample count the run's surfaces have, whatever count it was recorded at, so a list
+//! recorded at 4x serves a player at 2x or 8x (the same draws on that player's targets); a
+//! single-sampled entry only at one sample.
 //!
 //! The list only predicts what to make: the pipelines themselves are kept and found under the
 //! backend's exact key of the live state, so an entry that matches nothing, or two shaders whose
