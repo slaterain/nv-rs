@@ -1068,7 +1068,10 @@ fn the_pipeline_cache_file_is_kept_and_a_bad_one_is_ignored() {
     assert_eq!(first, plain);
     let Some(note) = note else {
         // No pipeline cache on this backend: nothing kept, nothing to read back.
-        assert!(std::fs::read_dir(&folder).map_or(true, |d| d.count() == 0));
+        // (The pipeline list, `pipelines.txt`, is kept on every backend.)
+        assert!(std::fs::read_dir(&folder).map_or(true, |d| d
+            .flatten()
+            .all(|e| e.path().extension() != Some(std::ffi::OsStr::new("bin")))));
         eprintln!("this backend keeps no pipeline cache");
         return;
     };
