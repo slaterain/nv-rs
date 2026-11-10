@@ -861,6 +861,16 @@ pub struct Sound {
     /// than 1/500 of a rate, [`set_frequency`], [`refresh_voice`]): it steps the cursors
     /// ([`Steps`]) and converts the voices (`Voices::apl`).
     apl: bool,
+    /// `NV_REPEATABLE`: the output's device is the virtual clock's ([`repeatable_pull`]).
+    virtual_out: Option<VirtualOut>,
+}
+
+/// `NV_REPEATABLE`'s device ([`repeatable_pull`]): the clock when the output started, and the
+/// frames each stream has been asked for since.
+#[derive(Debug, Clone, Copy)]
+struct VirtualOut {
+    start_us: u64,
+    pulled: u64,
 }
 
 /// The output thread and the voices it plays (the buffers' engine addresses, newest `Play`
@@ -937,6 +947,8 @@ pub struct Record {
     path: std::path::PathBuf,
     game: Wav,
     own: Option<Wav>,
+    /// `NV_REPEATABLE`: the log's real-time column is written as 0, so two runs' logs compare.
+    repeatable: bool,
 }
 
 /// One stream's WAV file, whose sizes are written again every second, so a run that is killed
@@ -1030,6 +1042,7 @@ impl Record {
             path: path.to_path_buf(),
             game: Wav::create(path, rate, game)?,
             own,
+            repeatable: false,
         })
     }
 
@@ -1064,7 +1077,11 @@ impl Record {
     /// device's stream recorded so far, and `what`.
     fn note(&mut self, what: &str) {
         use std::io::Write;
-        let ms = self.started.elapsed().as_millis();
+        let ms = if self.repeatable {
+            0
+        } else {
+            self.started.elapsed().as_millis()
+        };
         let _ = writeln!(self.log, "{ms}\t{}\t{what}", self.game.frames);
     }
 }
@@ -1235,6 +1252,21 @@ impl super::sound_out::Source for Stream {
             v.render_stream(self.which, rate, channels, out);
         }
     }
+
+    /// Named on stderr (the first ten, then every hundredth) and in the recording's log.
+    fn starved(&mut self, count: u64) {
+        if count <= 10 || count % 100 == 0 {
+            eprintln!(
+                "sound: the device ran out of sound to play ({count} so far on the {:?} stream)",
+                self.which
+            );
+        }
+        if let Ok(mut v) = self.voices.lock() {
+            if let Some(r) = &mut v.record {
+                r.note(&format!("device: underrun {count} ({:?} stream)", self.which));
+            }
+        }
+    }
 }
 
 /// Has the output started ([`start_output`]) when the game makes its DirectSound device
@@ -1261,7 +1293,7 @@ pub fn start_output(e: &mut Engine) -> bool {
     // The first converter's tables, read now rather than on the output thread.
     let _ = super::resampler::tables();
     // The endpoint's mix format (`super::sound_out::device_mix`): its rate and layout.
-    let Some((_, mix)) = super::sound_out::device_mix() else {
+    let Some((mix_rate, mix)) = super::sound_out::device_mix() else {
         eprintln!("sound: no output device; the game's sound is not heard");
         return false;
     };
@@ -1289,7 +1321,9 @@ pub fn start_output(e: &mut Engine) -> bool {
         split,
         ..Voices::default()
     }));
-    let output = match open_stream(&voices, Which::Game, &mut device) {
+    // `NV_REPEATABLE`: a device of the virtual clock's, at the endpoint's rate ([`repeatable_pull`]).
+    let idle = e.repeatable.then_some(mix_rate);
+    let output = match open_stream(&voices, Which::Game, &mut device, idle) {
         Ok(o) => o,
         Err(Refused::Format(why)) => {
             eprintln!("sound: {why}; the game's sound is not heard");
@@ -1305,7 +1339,7 @@ pub fn start_output(e: &mut Engine) -> bool {
     let mut own_device = DeviceLayout::new(mix);
     own_device.made(Layout::STEREO, false);
     let own_output = if split {
-        match open_stream(&voices, Which::Own, &mut own_device) {
+        match open_stream(&voices, Which::Own, &mut own_device, idle) {
             Ok(o) => Some(o),
             Err(_) => {
                 eprintln!("sound: no stream for the movies' and the music's sound; not heard");
@@ -1342,11 +1376,20 @@ pub fn start_output(e: &mut Engine) -> bool {
     }
     if let Some(path) = state!(e).sound.record.clone() {
         match Record::create(&path, rate, game, split.then_some(own)) {
-            Ok(r) => voices.lock().expect("the voices").record = Some(r),
+            Ok(mut r) => {
+                r.repeatable = idle.is_some();
+                voices.lock().expect("the voices").record = Some(r);
+            }
             Err(err) => eprintln!("sound: cannot record to {}: {err}", path.display()),
         }
     }
-    if !state!(e).sound.device_paced {
+    if idle.is_some() {
+        // The virtual device asks for the frames the clock has passed: no pace to keep.
+        state!(e).sound.virtual_out = Some(VirtualOut {
+            start_us: e.clock_peek_us(),
+            pulled: 0,
+        });
+    } else if !state!(e).sound.device_paced {
         let now = e.clock_now_us();
         let mut v = voices.lock().expect("the voices");
         v.game.pace = Some(Pace::new(now));
@@ -1387,7 +1430,13 @@ fn open_stream(
     voices: &Arc<Mutex<Voices>>,
     which: Which,
     device: &mut DeviceLayout,
+    idle: Option<u32>,
 ) -> Result<super::sound_out::Output, super::sound_out::Refused> {
+    // `NV_REPEATABLE`'s device takes the layout asked for, as this machine's endpoint does
+    // (measured as `FalloutNV.exe`: the two-channel stream on the eight-channel endpoint).
+    if let Some(rate) = idle {
+        return Ok(super::sound_out::Output::idle(rate, device.current()));
+    }
     let source: Arc<Mutex<dyn super::sound_out::Source>> = Arc::new(Mutex::new(Stream {
         voices: voices.clone(),
         which,
@@ -1497,6 +1546,63 @@ pub fn tick(e: &mut Engine) {
         for p in [&mut game.pace, &mut own.pace].into_iter().flatten() {
             p.game_us = now;
             p.at = std::time::Instant::now();
+        }
+    }
+}
+
+/// `NV_REPEATABLE` (a test mode): the output's device is the virtual clock's. The host calls this
+/// at the end of each of main's frames; every stream is asked for the frames the clock has passed
+/// since the output started, in pieces of at most a 10 ms period, through the same
+/// `Source::render` the device's thread calls ([`super::sound_out`]). So two runs of an exe with
+/// the same inputs give the same `NV_SOUND_RECORD` files, and nothing is heard.
+pub fn repeatable_pull(e: &mut Engine) {
+    let Some(v) = state_ref!(e).sound.virtual_out else {
+        return;
+    };
+    let now = e.clock_peek_us();
+    let Some(m) = &state_ref!(e).sound.mix else {
+        return;
+    };
+    let rate = m.rate;
+    let target =
+        (u128::from(now.saturating_sub(v.start_us)) * u128::from(rate) / 1_000_000) as u64;
+    let mut streams = Vec::new();
+    if let Some(o) = &m.output {
+        streams.push((Which::Game, o.layout.channels));
+    }
+    if let Some(o) = &m._own_output {
+        streams.push((Which::Own, o.layout.channels));
+    }
+    let period = u64::from(rate / 100).max(1);
+    let mut pulled = v.pulled;
+    let mut out = Vec::new();
+    while pulled < target {
+        let n = (target - pulled).min(period) as usize;
+        for &(which, channels) in &streams {
+            out.clear();
+            out.resize(n * usize::from(channels), 0f32);
+            let mut s = Stream {
+                voices: m.voices.clone(),
+                which,
+            };
+            super::sound_out::Source::render(&mut s, rate, channels, &mut out);
+        }
+        pulled += n as u64;
+    }
+    state!(e).sound.virtual_out = Some(VirtualOut { pulled, ..v });
+}
+
+/// `NV_REPEATABLE` with `NV_SOUND_RECORD`: an answer the game was given (a cursor, a status, the
+/// music's position) in the recording's log, with the clock as it reads (not moved), so two
+/// runs' answers compare call by call.
+pub(crate) fn trace(e: &mut Engine, what: impl FnOnce() -> String) {
+    if state_ref!(e).sound.virtual_out.is_none() {
+        return;
+    }
+    let us = e.clock_peek_us();
+    if let Some(m) = &state!(e).sound.mix {
+        if let Some(r) = &mut m.voices.lock().expect("the voices").record {
+            r.note(&format!("game {us}us\t{}", what()));
         }
     }
 }
@@ -2182,8 +2288,12 @@ fn relayout(e: &mut Engine, now: Layout) {
         ),
     );
     refresh_3d(e);
+    let idle = state_ref!(e).sound.virtual_out.is_some();
     if had {
         reopen(e, now, |want| {
+            if idle {
+                return Ok(super::sound_out::Output::idle(rate, want.unwrap_or(now)));
+            }
             let source: Arc<Mutex<dyn super::sound_out::Source>> = Arc::new(Mutex::new(Stream {
                 voices: voices.clone(),
                 which: Which::Game,
@@ -3020,6 +3130,7 @@ fn cursors_at(e: &mut Engine, this: Ptr, now: u64) -> (u32, u32) {
 fn get_current_position(e: &mut Engine, this: Ptr, play: Ptr, write: Ptr) -> u32 {
     let _ = secondary(e, this, "GetCurrentPosition");
     let (p, w) = cursors(e, this);
+    trace(e, || format!("GetCurrentPosition {:08x}: {p:#x} {w:#x}", this.addr()));
     if !play.is_null() {
         e.mem.set_u32(play.addr(), p);
     }
@@ -3040,6 +3151,7 @@ fn get_status(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
         }
         _ => 0,
     };
+    trace(e, || format!("GetStatus {:08x}: {status:#x}", this.addr()));
     e.mem.set_u32(out.addr(), status);
     DS_OK
 }

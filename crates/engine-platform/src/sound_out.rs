@@ -22,6 +22,11 @@ use std::sync::{Arc, Mutex};
 pub trait Source: Send {
     /// Fills `out` (interleaved, `channels` per frame) with the next frames.
     fn render(&mut self, rate: u32, channels: u16, out: &mut [f32]);
+    /// The device had played everything it was given when the thread woke (an underrun: what
+    /// it plays next comes late): the `count`th of this stream.
+    fn starved(&mut self, count: u64) {
+        let _ = count;
+    }
 }
 
 /// A running output: the thread and its stop flag.
@@ -44,9 +49,10 @@ pub enum Refused {
     Layout,
 }
 
-#[cfg(test)]
 impl Output {
-    /// A stream that plays nothing (no thread), as an endpoint opened it: the tests'.
+    /// A stream with no device and no thread, as an endpoint opened it: the tests', and
+    /// `NV_REPEATABLE`'s, whose frames are asked for on the virtual clock
+    /// (`super::dsound::repeatable_pull`).
     pub fn idle(rate: u32, layout: Layout) -> Output {
         Output {
             stop: Arc::new(AtomicBool::new(false)),
@@ -499,10 +505,19 @@ mod wasapi {
         let channels = d.layout.channels;
         let mut scratch = vec![0f32; d.frames as usize * usize::from(channels)];
         slot::<Fn0>(d.client, 10 * w)(d.client);
+        // Underruns: a wake that finds the device with nothing left to play, after the first
+        // frames were given (the stream starts empty).
+        let (mut given, mut starved) = (false, 0u64);
         while !stop.load(Ordering::Relaxed) {
             WaitForSingleObject(d.event, 200);
             let mut padding = 0u32;
             slot::<Fn1>(d.client, 6 * w)(d.client, &mut padding as *mut _ as usize);
+            if given && padding == 0 {
+                starved += 1;
+                if let Ok(mut s) = source.lock() {
+                    s.starved(starved);
+                }
+            }
             let free = d.frames.saturating_sub(padding) as usize;
             if free == 0 {
                 continue;
@@ -519,6 +534,7 @@ mod wasapi {
             }
             std::ptr::copy_nonoverlapping(out.as_ptr(), data, n);
             slot::<Fn2>(d.render, 4 * w)(d.render, free, 0);
+            given = true;
         }
         slot::<Fn0>(d.client, 11 * w)(d.client);
         slot::<Fn0>(d.render, 2 * w)(d.render);
