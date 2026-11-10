@@ -187,7 +187,7 @@ pub const SCRIPT_LIST_GUARD: Fix = Fix {
     env: "NV_NVSE_LIST_GUARD",
     addresses: &[],
     summary:
-        "a container list that runs back into itself ends the walk of the inventory commands instead of stopping the game",
+        "an inventory list the script commands walk that runs back into itself, or a list or stack the extender itself leaves malformed or missing, no longer stops the game",
     install: install_script_list_guard,
 };
 

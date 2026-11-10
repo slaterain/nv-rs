@@ -66,9 +66,12 @@ const EXTRA_WEAPON_MOD_FLAGS_VTBL: u32 = 0x0101_59a4;
 const CHANGES_DATA: u32 = 0xc;
 /// `BaseExtraList::RemoveByType` (`thiscall`).
 const EXTRA_REMOVE_BY_TYPE: u32 = 0x0041_0140;
-/// `FormHeap_Allocate`; `ExtraDataList`'s size.
+/// `FormHeap_Allocate`; `ExtraDataList`'s size and vtable (`010143E8`: its RTTI locator `01102DA4`
+/// names `.?AVExtraDataList@@`; its one entry, `00410380`, is the deleting destructor the game
+/// frees a stack's lists through).
 const FORM_HEAP_ALLOCATE: u32 = 0x0040_1000;
 const EXTRA_LIST_SIZE: u32 = 0x20;
+const EXTRA_LIST_VTBL: u32 = 0x0101_43e8;
 /// `Actor::EquipItem` and `Actor::UnequipItem` (`thiscall`, six words after the actor).
 const ACTOR_EQUIP_ITEM: u32 = 0x0088_c650;
 const ACTOR_UNEQUIP_ITEM: u32 = 0x0088_c790;
@@ -823,10 +826,18 @@ fn get_hotkey_item(e: &mut Engine, w: &[u32]) -> Ret {
 }
 
 /// `new ExtraDataList()` in xNVSE: a value-initialised list (all zero, no vtable), from the form
-/// heap here (xNVSE's comes from its own heap).
+/// heap here (xNVSE's comes from its own heap). The game frees a stack's lists through their
+/// vtable (`ItemChange::DeleteAllExtra` `004BC780`, when the stack is used up or dropped, or the
+/// inventory is torn down), so xNVSE's list crashes the game then (measured: hotkey 8 on the
+/// player's stimpaks, then all of them removed, ends the real game with an access violation, run
+/// `hk1`). With the list guard row (`NV_NVSE_LIST_GUARD`) the list gets the game's own vtable
+/// and is freed as any other; without it, it is xNVSE's.
 fn new_extra_list(e: &mut Engine) -> u32 {
     let list = e.call(FORM_HEAP_ALLOCATE, &args![EXTRA_LIST_SIZE]).u32();
     e.mem.write(list, &[0u8; EXTRA_LIST_SIZE as usize]);
+    if super::array::fix_on(e, super::array::LIST_GUARD) {
+        e.mem.set_u32(list, EXTRA_LIST_VTBL);
+    }
     list
 }
 
@@ -836,7 +847,7 @@ fn new_extra_list(e: &mut Engine) -> u32 {
 /// to the item: taken off the first other stack holding it, then the item's first stack with a
 /// hotkey has it changed, else its first extra data list gets a new `ExtraHotkey`. A stack without
 /// extra data lists gets a new list through `EntryData::Add`, which counts it as one more item, as
-/// in xNVSE.
+/// in xNVSE (measured, run `inv4c`); the list is [`new_extra_list`]'s.
 fn set_hotkey_item(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     a.set_result(e, 0.0);
@@ -844,7 +855,7 @@ fn set_hotkey_item(e: &mut Engine, w: &[u32]) -> Ret {
     if !read.ok {
         return handled(true);
     }
-    let index = read.int(0, 0) as i32 - 1;
+    let index = (read.int(0, 0) as i32).wrapping_sub(1);
     let item = read.form(1);
     if index >= 8 {
         return handled(true);
@@ -916,7 +927,7 @@ fn clear_hotkey(e: &mut Engine, w: &[u32]) -> Ret {
     if !read.ok {
         return handled(true);
     }
-    let index = read.int(0, 0) as i32 - 1;
+    let index = (read.int(0, 0) as i32).wrapping_sub(1);
     if index >= 8 {
         return handled(true);
     }

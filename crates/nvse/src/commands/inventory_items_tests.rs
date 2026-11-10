@@ -497,3 +497,205 @@ fn the_real_games_answers() {
     assert_eq!(e.mem.u32(ammo + 4), 2);
     assert_eq!(form_of(run(&mut e, 0x144d, 0, &[n(7)])), 0x0001_0003);
 }
+
+/// Review of #380, point 3: `SetHotkeyItem` on a stack without extra data lists (the armor here,
+/// the stimpaks in the real game) gives it a new list. The game later frees a stack's lists
+/// through their vtable's first entry (`ItemChange::DeleteAllExtra`; called here as the game
+/// calls it). Without the list guard row the list is xNVSE's, with no vtable, and that call stops
+/// the game (measured: the real game ends with an access violation, run `hk1`); with the row it
+/// has the game's `ExtraDataList` vtable `010143E8` and is freed through it. Both modes count one
+/// more item, as xNVSE does.
+#[test]
+fn a_new_hotkey_list_has_the_games_vtable_with_the_list_guard() {
+    const FN_DELETE: u32 = 0x0060_0140;
+    for guard in [false, true] {
+        let mut e = setup();
+        crate::commands::array::set_fix(&mut e, crate::commands::array::LIST_GUARD, guard);
+        e.map(0x0101_4000, 0x1000);
+        e.mem.set_u32(0x0101_43e8, FN_DELETE);
+        e.register(FN_DELETE, |_, a| {
+            record(FN_DELETE, a);
+            Ret::default()
+        });
+        let (_, armor, _) = player_inventory(&mut e);
+        run(&mut e, 0x15bb, 0, &[n(8), r(1)]);
+        let list = e.mem.u32(e.mem.u32(armor));
+        assert_eq!(hotkey_of(&e, list), Some(7));
+        assert_eq!(e.mem.u32(armor + 4), 2);
+        let freed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.vcall(list, 0, &[1]);
+        }));
+        if guard {
+            assert_eq!(e.mem.u32(list), 0x0101_43e8);
+            assert!(freed.is_ok());
+            assert_eq!(calls_to(FN_DELETE), vec![vec![list, 1]]);
+        } else {
+            assert_eq!(e.mem.u32(list), 0, "xNVSE's list has no vtable");
+            assert!(freed.is_err(), "the game stops on freeing it");
+        }
+    }
+}
+
+/// The player's ammo info's count is a `UInt32`: above 2^31 it reads as itself, and a negative
+/// `SetPlayerCurrentAmmoRounds` stores its bits. An ammo info without ammo is read through, as
+/// xNVSE does (the game stops).
+#[test]
+fn ammo_rounds_are_unsigned_and_ammo_is_read_through() {
+    let mut e = setup();
+    with_ammo_info(&mut e);
+    e.mem.set_u32(AMMO_INFO + 4, 0x8000_0005);
+    assert_eq!(run(&mut e, 0x14c5, 0, &[]), 2_147_483_653.0);
+    run(&mut e, 0x14c6, 0, &[n(-5)]);
+    assert_eq!(e.mem.u32(AMMO_INFO + 4), 0xffff_fffb);
+    assert_eq!(run(&mut e, 0x14c5, 0, &[]), 4_294_967_291.0);
+    e.mem.set_u32(AMMO_INFO + 8, 0);
+    let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        call(&mut e, 0x14c7, 0, &[]);
+    }));
+    assert!(stop.is_err());
+}
+
+/// Mod flags without an equipped weapon (the weapon's worn list taken off), and on a reference
+/// that is no actor (no changes): 0, and setting them changes nothing.
+#[test]
+fn mod_flags_without_a_weapon() {
+    let mut e = setup();
+    player_inventory(&mut e);
+    take_extra(&mut e, XDATA[1], 0x16);
+    assert_eq!(run(&mut e, 0x14f2, PLAYER_REF, &[]), 0.0);
+    run(&mut e, 0x14f3, PLAYER_REF, &[n(5)]);
+    for list in XDATA {
+        assert_eq!(e.mem.u32(list + 0x100 + 4 * 0x8d), 0);
+    }
+    assert_eq!(run(&mut e, 0x14f2, REF, &[]), 0.0);
+    run(&mut e, 0x14f3, REF, &[n(5)]);
+    assert_eq!(eval(&mut e, 0x14f2, REF, 0, 0), 0.0);
+}
+
+/// `SetName` on a form without a name part leaves it untouched. On a cell the cell's own name
+/// (`TESObjectCELL`'s full name at `+0x18`) is set, or, when the cell has none, its worldspace's
+/// (`+0xC0`, whose name is at `+0x18` too), as `TESFullName` lookup gives them. `SetNameEx` whose
+/// format fails (a `%g` without its number) sets nothing.
+#[test]
+fn names_on_forms_without_a_name_and_on_cells() {
+    const CELL: u32 = 0x0200_a000;
+    const WORLD: u32 = 0x0200_a400;
+    let text_at = |e: &Engine, s: u32| {
+        let data = e.mem.u32(s + 4);
+        String::from_utf8_lossy(&e.mem.bytes(data, u32::from(e.mem.u16(s + 8)))).into_owned()
+    };
+    let mut e = setup();
+    run(&mut e, 0x144c, 0, &[s("No name"), r(3)]);
+    assert_eq!(e.mem.u32(AMMO + 0x7d4), 0, "untouched");
+    e.mem.set_u8(CELL + 4, 0x39);
+    e.mem.set_u32(CELL + 0xc0, WORLD);
+    set_script_ref(&mut e, 4, CELL);
+    run(&mut e, 0x144c, 0, &[s("Wasteland"), r(4)]);
+    assert_eq!(
+        text_at(&e, WORLD + 0x18),
+        "Wasteland",
+        "the cell had no name"
+    );
+    run(&mut e, 0x144c, 0, &[s("Primm"), r(4)]);
+    assert_eq!(text_at(&e, WORLD + 0x18), "Primm");
+    e.mem.set_u32(CELL + 0xc0, 0);
+    run(&mut e, 0x144c, 0, &[s("Goodsprings"), r(4)]);
+    assert_eq!(text_at(&e, CELL + 0x18), "Goodsprings");
+    named(&mut e, WEAPON, "9mm Pistol");
+    run(&mut e, 0x14da, 0, &[s("%g mines")]);
+    assert_eq!(name_of(&e, WEAPON), "9mm Pistol");
+}
+
+/// `TempCloneForm` when the game makes no form: 0, and nothing is copied, renumbered or added.
+#[test]
+fn no_clone_when_the_game_makes_no_form() {
+    let mut e = setup();
+    with_cloning(&mut e, 0x0100_0800, &[]);
+    e.register(0x0046_5110, |_, _| eax(0));
+    assert_eq!(run(&mut e, 0x14dd, 0, &[r(1), n(1)]), 0.0);
+    assert!(calls_to(FN_COPY_FROM).is_empty());
+    assert!(calls_to(0x0046_03b0).is_empty());
+    assert!(calls_to(FN_SET_REF_ID).is_empty());
+}
+
+/// `EquipItem2` equips one weapon up to type 9 and the whole stack from type 10 (thrown).
+#[test]
+fn equip_item2_weapon_type_9_and_10() {
+    let mut e = setup();
+    player_inventory(&mut e);
+    e.mem.set_u8(WEAPON + 0xf4, 9);
+    run(&mut e, 0x15b6, PLAYER_REF, &[r(2)]);
+    e.mem.set_u8(WEAPON + 0xf4, 10);
+    run(&mut e, 0x15b6, PLAYER_REF, &[r(2)]);
+    let counts: Vec<u32> = calls_to(0x0088_c650).iter().map(|c| c[2]).collect();
+    assert_eq!(counts, [1, 2]);
+}
+
+/// `EquipMe` and `UnequipMe` on an inventory reference (its containing object no actor): the
+/// stack is equipped (its unworn list) or unequipped (its worn list) only when the reference is
+/// released, on its container, which answers `IsActor` (`+0x100`).
+#[test]
+fn equip_me_and_unequip_me_on_an_inventory_reference() {
+    const FN_YES: u32 = 0x0060_0150;
+    let mut e = setup();
+    let (weapon, _, _) = player_inventory(&mut e);
+    e.register(0x0055_a2f0, |e, a| {
+        let id = e.mem.u32(HEAP + 4).max(0xff00_0800);
+        e.mem.set_u32(HEAP + 4, id + 1);
+        e.mem.set_u32(a[0] + 0xc, id);
+        eax(a[0])
+    });
+    e.register(FN_YES, |_, _| eax(1));
+    e.mem.set_u32(PLAYER_REF, VTABLE);
+    e.mem.set_u32(VTABLE + 0x100, FN_YES);
+    for (xdata, opcode) in [(XDATA[0], 0x15b7), (XDATA[1], 0x15b8)] {
+        let data = invref::Data {
+            item: WEAPON,
+            entry: weapon,
+            xdata,
+        };
+        let refr = invref::create(&mut e, PLAYER_REF, data, false);
+        let id = e.mem.u32(refr + 0xc);
+        call_in(&mut e, opcode, refr, 0);
+        assert!(calls_to(0x0088_c650).is_empty());
+        assert!(calls_to(0x0088_c790).is_empty());
+        invref::release(&mut e, id);
+        let (equip, unequip) = (calls_to(0x0088_c650), calls_to(0x0088_c790));
+        if opcode == 0x15b7 {
+            assert_eq!(equip, vec![vec![PLAYER_REF, WEAPON, 1, XDATA[0], 1, 0, 1]]);
+            assert!(unequip.is_empty());
+        } else {
+            assert!(equip.is_empty());
+            assert_eq!(
+                unequip,
+                vec![vec![PLAYER_REF, WEAPON, 1, XDATA[1], 0, 0, 0]]
+            );
+        }
+    }
+}
+
+/// `GetHotkeyItem` passes over an empty node in the middle of a stack's lists; `SetHotkeyItem` on
+/// a stack whose list of lists has only an empty head puts the new list there (no item added);
+/// `ClearHotkey 0` looks for -1 and leaves a stored 255.
+#[test]
+fn hotkeys_with_empty_nodes_and_hotkey_0() {
+    const HOTKEY: u32 = 0x0200_9f00;
+    let mut e = setup();
+    let (_, armor, _) = player_inventory(&mut e);
+    e.mem.set_u8(HOTKEY + 4, 0x4a);
+    e.mem.set_u8(HOTKEY + 0xc, 3);
+    put_extra(&mut e, XDATA[1], 0x4a, HOTKEY);
+    e.mem.set_u32(NODES + 0x40, 0);
+    assert_eq!(form_of(run(&mut e, 0x144d, 0, &[n(4)])), 0x0001_0002);
+    e.mem.set_u32(NODES + 0x40, XDATA[0]);
+    e.mem.set_u32(armor, NODES + 0x80);
+    run(&mut e, 0x15bb, 0, &[n(5), r(1)]);
+    let list = e.mem.u32(NODES + 0x80);
+    assert_ne!(list, 0, "the new list in the head");
+    assert_eq!(hotkey_of(&e, list), Some(4));
+    assert_eq!(e.mem.u32(armor + 4), 1);
+    run(&mut e, 0x15bb, 0, &[n(0), r(3)]);
+    assert_eq!(hotkey_of(&e, XDATA[2]), Some(255));
+    run(&mut e, 0x15bc, 0, &[n(0)]);
+    assert_eq!(hotkey_of(&e, XDATA[2]), Some(255));
+}
