@@ -5234,7 +5234,8 @@ fn alpha_state(e: &mut Engine, d: &DrawW, group: u32, counts: u32, listed: u32, 
             1 => vec![sorted_group(e, br, distance)],
             _ => {
                 let far = sorted_group(e, br, distance);
-                let near = sorted_group(e, br, HALF);
+                // Just inside a limit of 0.5 by less than the 0.001 RenderNextAlpha takes off.
+                let near = sorted_group(e, br, 0x3eff_be77);
                 vec![far, near]
             }
         };
@@ -5387,7 +5388,8 @@ fn render_next_alpha() {
         Input::Of(&[0, 1]),
         Input::Of(&[0, 1, 2]),
         Input::Of(&[0, 1, 0x101]),
-        Input::F32,
+        // The limit: the exe's floats and 0.5 (a sorted group sits just inside it).
+        Input::Of(&[0, HALF, ONE, TWO, 0xbf80_0000, 0xff80_0000, 0x7fc0_0000, 0x3eaa_aaab]),
         Input::F32Swept(HALF),
         Input::Of(&[0, 1, 2, 3]),
     ])
@@ -5417,7 +5419,7 @@ fn render_next_alpha() {
             let g = e.mem.u32(head + 8);
             e.mem.set_u8(g, 1);
         }
-        vec![d.w.br, group, d.w.camera, c.word(3), bits(c, 4)]
+        vec![d.w.br, group, d.w.camera, c.word(3), c.word(4)]
     })
     .run()
     .assert_same();
