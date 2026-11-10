@@ -6,6 +6,7 @@
 # missed), nv-rs's own fixes preset (crates/host/src/fixes.rs), and the four fixes-preset guards the audit left.
 00418b10	0	JIP
 0041af70	0	YUP,xNVSE
+00446b50	1	nv-rs cell entry waits for its own cell
 004512a0	0	xNVSE
 00455490	0	script or frame function
 0045dfe0	1	nv-rs dialogue topic index

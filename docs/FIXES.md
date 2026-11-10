@@ -105,6 +105,7 @@ The game's own `iFPSClamp` ignores `FrameLimit`: a clamp is a fixed step with no
 | Half-loaded actor's level change | `00881d30`, `00882b90`, `00883240`, `00883800`, `00932a00`, `00932b70` | `NV_HALF_LOADED_MOVE` | An actor moved to another AI level while its saved data loads (one loading thread between the two passes over a cell's saved changes, another setting its animation: running fast across cells) has its saved reference ids taken out for the move and put back where the original's copy puts them, for the second pass to resolve. The original follows the saved target id as an object (marks it, then calls through the word at the id as a vtable): its own crash. Below |
 | Thread races | `00aa42e0`, `00aa3a40`, `00a0e770`, `00a0df80`, `00a0f8b0`, `0071d0a0`, `00652140`, `00652160`, `00652190` | `NV_THREAD_RACES` | Three places where the original shares state between its threads without the lock it needs, which the port meets because it runs the game's threads side by side: a new thread's scrap heap (the first look-up on a thread inserts into an unlocked map, so two threads starting at once can lose one, and a block is later freed into the wrong heap), the debug texts and the console (printed from any thread while the main thread handles and times out the same queue), and the face-gen lock's count (counted down after the release with a plain read and write, so counts are lost and the model cache is never emptied, or emptied under another thread). From lStewieAl's Tweaks. Below |
 | Texture files read before the renderer's lock | `00e6dc40` | `NV_TEXTURE_READ_FIRST` | The loading thread makes a texture's renderer data (`00e6dc40`) under the renderer's source-data lock (`m_kSourceDataCriticalSection`, the renderer's +0x180), and the making reads the texture's file and unpacks it from its archive inside that lock (`00e68a80`: `NiFile::GetFile`, `00462d80`), so main, which takes the same lock to bind or make another texture's data, waited for the read: 6-13 ms in 5-6 frames of each run across cell borders (measure/smooth-200/BORDERS.md). Here the file is read first, on the same thread with the same calls, when the texture is loaded by its file name (the common case: each making opens its own file; a texture holding a file object of its own is made as before, its file read under the lock), and only the rest stays under the lock in the exe's order: the renderer data's allocation and construction, the image description, the Direct3D texture's creation, the texture taking its data. The lock guards the textures' renderer data (+0x24) and the renderer's texture state; the read touches only the file and a buffer of its own. A texture another thread gives data meanwhile frees the buffer read for nothing (its file, opened for this making alone, is already deleted). The same textures with the same bytes, made and handed to the renderer in the same order; what differs with the row on is the guest heap's order of allocation (the file's buffer is taken before the renderer data's object), so heap addresses differ, not what is drawn. |
+| Cell entry waits for its own cell | `00446b50` | `NV_CELL_ENTRY_WAIT` | Crossing into a new outdoor cell, the game waits for the loads the new cell needs at once. The original waits for more: at the same crossing it queues the row of cells three cells ahead as a pre-load, at the same top priority, and the wait takes them too, one cell after another on the one loading thread: a pause of 45 ms for 1.5 ms of the entered cell's own loads, about 150 ms with YUP. With the row the cells ahead that are still queued get the priority their references get (1 or 3, `TES::GetCellPriority`'s rule) before the wait, through the IO manager's own requeue, and load right after it, in the background. A cell load already running, and one for the entered cell itself, are waited for as before. Below |
 
 ### What high frame rates do to the original's code
 
@@ -317,6 +318,48 @@ too. None has been seen in a port run: the evidence is the exe and a test with r
   install the row and drive all nine addresses: 200 engines in a row each find their own heap, a
   heap looked up during the teardown is not kept, and the debug-text section is taken first and left
   as often as taken.
+
+### Cell entry waits for its own cell
+
+Crossing a cell border outdoors took one frame of 45 ms where the others take 12, and about 150 ms with
+YUP and SR556 loaded: the largest regular pause in play. Measured with a log of the wait and of the
+loading thread's tasks (measure/smooth-200/BORDERS.md, runs fd-dg1 and fd-dg2, 2026-11-10).
+
+- **The wait.** When the player's cell changes and the new cell still has references queued for
+  loading (`00447950`), `PlayerCharacter::Update` (`0094391c`..`00943964`) gives every queued
+  reference its priority again (`00446b50`: 0 for the entered cell's 3D-critical ones, else
+  `TES::GetCellPriority`, 1 near and 3 far) and waits in the IO manager until the priority-0 work is
+  loaded and post-processed (`00c3dfa0`).
+- **The cells ahead.** At the same crossing `TES::UpdateCurrentGridCell` queues the row of cells
+  three cells ahead of the cell just left (`004528ba`, `00452920`, `0045294a`): a pre-load into the
+  cell buffer, so that the grid's next shift finds them loaded. The exterior cell loader makes each
+  of these tasks at priority 0 (`00527c00`), and the walk above knows only the model loader's
+  references. So the wait takes the row too. The one loading thread runs its cells one after
+  another (5.5 to 7.5 ms each in the base game, 14 to 25 ms with YUP, which has no cell offset
+  table), and in the priority-0 order the entered cell's own loads come after them: in the
+  measured crossing 29 small file loads, 1.5 ms in all.
+- **Nothing needs the row there.** The entered cell is loaded and in the grid already. The cells
+  ahead are outside the grid until it shifts, half a cell further on; at the shift the game cancels
+  the cell loads still queued (`005281f0`) and loads what is missing itself. And when the entered
+  cell has no queued references there is no wait at all, so the code after the wait never had a
+  promise about them.
+- **The row.** Registered over the walk (`crates/host/src/cell_entry_wait.rs`). After the
+  translation's walk, at a cell entry, it walks the exterior cell loader's tasks (`011c9618`, as
+  `00528110` walks them) and requeues each whose priority differs from its cell's, through the
+  task's own requeue (`00440660`, `IOManager::RequeueTask`), as the walk does for references. A
+  queued cell task has no cell object yet (the task makes or finds it when it runs), so the
+  priority is `TES::GetCellPriority`'s arithmetic on the task's coordinates, 1 or 3 (a test holds
+  the two together over the grid); the function's cache of the last cell asked is left alone. A
+  task at the entered cell's own coordinates stays at 0. The requeue refuses a running or finished
+  task (`00c3e690`), so a cell load already running when the player crosses is waited for, one at
+  most. The walk's other caller (`0094cfd6`) passes no cell and waits for nothing: there the cell
+  tasks stay as they are.
+- **What stays the original's.** The wait itself: it post-processes whatever has finished, of any
+  priority, and sleeps a turn while fewer tasks have finished than are in flight (50 ms in the
+  original; the IO wait row ends a turn as soon as that is no longer so). The row's cells load at
+  the priority of their own references, so each cell's task is still post-processed before its
+  references' tasks, and the loads, their results and what is in the cell buffer afterwards are
+  the same; the order of loading differs.
 
 ### Dialogue topic index
 
