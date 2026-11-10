@@ -104,6 +104,9 @@ pub struct RealBackend {
     queries_made: engine_core::AddrMap<u32, u64>,
     /// The shader warm-up (the fixes preset's row, `RealBackend::with_warm`): `None` when off.
     warm: Option<Box<Warm>>,
+    /// `NV_RENDER_THREAD_STATS` only (a diagnostic): an event query issued after each `Present`,
+    /// oldest first, until the GPU has finished that frame (`d3d9_stream::latency`).
+    frames_out: std::collections::VecDeque<IDirect3DQuery9>,
 }
 
 /// The shader warm-up (the fixes preset's "shaders compiled ahead of first use"): the driver
@@ -1172,6 +1175,29 @@ impl Backend for RealBackend {
 }
 
 impl RealBackend {
+    /// `NV_RENDER_THREAD_STATS` only, after a `Present`: the frames whose GPU work is not done yet
+    /// (an event query after each `Present`, read without flushing), then one more query for this
+    /// frame.
+    fn count_frames_out(&mut self, d: &IDirect3DDevice9) {
+        /// `D3DQUERYTYPE_EVENT`.
+        const EVENT: i32 = 8;
+        while let Some(q) = self.frames_out.front() {
+            if query_data(q, 0).0 == 0 {
+                self.frames_out.pop_front();
+            } else {
+                break;
+            }
+        }
+        d3d9_stream::latency::gpu_frames(self.frames_out.len() as u64);
+        if self.frames_out.len() < 16 {
+            if let Ok(q) = unsafe { d.CreateQuery(D3DQUERYTYPE(EVENT)) } {
+                if unsafe { q.Issue(ISSUE_END) }.is_ok() {
+                    self.frames_out.push_back(q);
+                }
+            }
+        }
+    }
+
     /// A command of a device (the device's methods): nothing without its real device.
     fn device_command(&mut self, cmd: Cmd<Data<'_>>) {
         let device = match cmd {
@@ -1235,6 +1261,7 @@ impl RealBackend {
                     w.back_buffer_made(&words);
                 }
                 let mut pp = present_parameters(&words, window);
+                self.frames_out.clear();
                 let r = unsafe { d.Reset(&mut pp) };
                 self.answer("Reset", ok, hr(r));
                 self.implicit_surfaces(&d, &back_buffers.to_words(), depth_stencil);
@@ -1263,6 +1290,8 @@ impl RealBackend {
                 // Diagnostic only (`NV_REPORT_DIR`, not exe behaviour): the player pressed F12.
                 shot::report_at_present(&d);
                 let (source, dest) = (rect(&source), rect(&dest));
+                let timed = d3d9_stream::latency::carried_out(frame).is_some();
+                let started = std::time::Instant::now();
                 let r = unsafe {
                     d.Present(
                         rect_ptr(&source),
@@ -1271,6 +1300,10 @@ impl RealBackend {
                         std::ptr::null(),
                     )
                 };
+                if timed {
+                    d3d9_stream::latency::blocked(started.elapsed());
+                    self.count_frames_out(&d);
+                }
                 self.answer("Present", model, hr(r));
                 // The frame is over: what the model let go of is bound nowhere on the real
                 // device now.

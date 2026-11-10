@@ -367,9 +367,17 @@ impl SamplerKey {
                 wgpu::FilterMode::Nearest
             }
         };
-        let anisotropic =
-            self.filterable && (self.min == 3 || self.mag == 3) && self.anisotropy > 1;
-        let mip = if anisotropic || (self.mip >= 2 && self.filterable) {
+        // TEMPORARY experiment switches (Vulkan's picture difference), removed before any PR.
+        let tmp_noaniso = std::env::var_os("NV_WGPU_TMP_NOANISO").is_some();
+        let tmp_mippoint = std::env::var_os("NV_WGPU_TMP_MIPPOINT").is_some();
+        let anisotropic = !tmp_noaniso
+            && !tmp_mippoint
+            && self.filterable
+            && (self.min == 3 || self.mag == 3)
+            && self.anisotropy > 1;
+        let mip = if tmp_mippoint {
+            wgpu::MipmapFilterMode::Nearest
+        } else if anisotropic || (self.mip >= 2 && self.filterable) {
             wgpu::MipmapFilterMode::Linear
         } else {
             wgpu::MipmapFilterMode::Nearest

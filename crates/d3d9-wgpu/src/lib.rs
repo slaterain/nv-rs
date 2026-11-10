@@ -19,6 +19,7 @@ mod fxhash;
 pub mod shot;
 pub mod sm;
 pub mod state;
+mod timing;
 
 use d3d9_stream::{Backend, Cmd, Data, Handle, Reply};
 pub use device::Output;

@@ -174,6 +174,7 @@ impl Stream {
         if let Cmd::Present { frame, .. } = &mut cmd {
             self.presents = self.presents.wrapping_add(1);
             *frame = self.presents;
+            crate::latency::submitted(self.presents);
         }
         if let Some(r) = &mut self.record {
             r.buf.clear();
@@ -693,13 +694,14 @@ impl Stats {
         eprintln!(
             "NV_RENDER_THREAD: {:.1} frames/s; a frame: {:.0} commands in {:.1} chunks, render \
              thread busy {:.3} ms; the recording thread waited a frame: at Present {}, on a full \
-             queue {}, for replies: {replies}{events}",
+             queue {}, for replies: {replies}{events}{}",
             frames / elapsed.as_secs_f64(),
             self.commands as f64 / frames,
             self.chunks as f64 / frames,
             (busy - self.busy_before).as_secs_f64() * 1e3 / frames,
             self.present.per_frame(frames),
             self.full.per_frame(frames),
+            crate::latency::take_line(),
         );
         *self = Stats {
             on: true,

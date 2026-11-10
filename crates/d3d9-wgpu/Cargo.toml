@@ -18,3 +18,8 @@ wgpu = { version = "=30.0.1", default-features = false, features = ["std", "park
 # Note: gpu-allocator's `windows` dependency (">=0.53, <=0.62") is locked to 0.62.2, wgpu-hal's;
 # the resolver would otherwise pick the workspace's 0.58 and wgpu-hal would not build.
 raw-window-handle = "=0.6.2"
+
+# `NV_RENDER_THREAD_STATS`'s present timings (timing.rs): DXGI's frame statistics of wgpu's own
+# Direct3D 12 swap chain, so the version wgpu-hal uses.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "=0.62.2", features = ["Win32_Graphics_Dxgi", "Win32_System_Performance"] }

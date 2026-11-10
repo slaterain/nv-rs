@@ -427,6 +427,8 @@ pub struct Device {
     errors: Arc<AtomicU64>,
     pub(crate) draws: u64,
     pub(crate) skipped: u64,
+    /// `NV_RENDER_THREAD_STATS`: the window's presents timed (`timing`).
+    timing: crate::timing::Timing,
 }
 
 fn block_on<F: std::future::Future>(f: F) -> F::Output {
@@ -693,6 +695,7 @@ impl Device {
             errors,
             draws: 0,
             skipped: 0,
+            timing: Default::default(),
         };
         if let Some(surface) = surface {
             let caps = surface.get_capabilities(&adapter);
@@ -717,7 +720,11 @@ impl Device {
                 height: pp.height.max(1),
                 present_mode: d.present_mode(&caps),
                 color_space: wgpu::SurfaceColorSpace::Auto,
-                desired_maximum_frame_latency: 2,
+                // TEMPORARY measurement switch (removed before the PR).
+                desired_maximum_frame_latency: std::env::var("NV_WGPU_TMP_LATENCY")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(2),
                 alpha_mode: caps.alpha_modes[0],
                 view_formats: vec![],
             };
@@ -746,6 +753,9 @@ impl Device {
             wgpu::PresentMode::Immediate
         } else if immediate {
             wgpu::PresentMode::AutoNoVsync
+        } else if std::env::var_os("NV_WGPU_TMP_MAILBOX").is_some() {
+            // TEMPORARY measurement switch (removed before the PR).
+            wgpu::PresentMode::Mailbox
         } else {
             wgpu::PresentMode::Fifo
         }
@@ -1481,7 +1491,9 @@ impl Device {
 
     /// Whether NVIDIA's alpha to coverage stands in for the alpha test ([`ATOC`]).
     fn atoc(&mut self) -> bool {
-        self.st.rs[RS_ADAPTIVETESS_Y] == ATOC
+        // TEMPORARY experiment switch (Vulkan's picture difference), removed before any PR.
+        std::env::var_os("NV_WGPU_TMP_NOATOC").is_none()
+            && self.st.rs[RS_ADAPTIVETESS_Y] == ATOC
             && self.st.rs[rs::ALPHATESTENABLE] != 0
             && self.target_shape().2 > 1
     }
@@ -3725,6 +3737,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
 
     /// `Present` of the stream's `frame` (numbered as the forwarding layer's captures are).
     pub(crate) fn present(&mut self, frame: u32) {
+        let timed = self.surface.is_some() && self.timing.start(frame);
         self.end_pass();
         self.presents += 1;
         let frame = u64::from(frame);
@@ -3773,6 +3786,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             // again and asked once more; a frame that cannot be had now (minimised, timed out) is
             // skipped, as Direct3D 9's Present then shows nothing.
             let mut acquired = None;
+            let waited = std::time::Instant::now();
             for _ in 0..2 {
                 match surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(t) => acquired = Some(t),
@@ -3786,6 +3800,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     _ => {}
                 }
                 break;
+            }
+            if timed {
+                self.timing.add_blocked(waited.elapsed());
             }
             match acquired {
                 Some(t) => {
@@ -3838,8 +3855,18 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
         }
         self.flush();
+        if timed {
+            self.timing.submitted(&self.queue);
+        }
         if let Some(t) = frame_texture {
+            let call = std::time::Instant::now();
             self.queue.present(t);
+            if timed {
+                self.timing.add_blocked(call.elapsed());
+            }
+        }
+        if let (true, Some((surface, _))) = (timed, &self.surface) {
+            self.timing.presented(surface);
         }
         if let Some((buffer, row, width, height)) = window_shot {
             buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});

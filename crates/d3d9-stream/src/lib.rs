@@ -27,6 +27,7 @@
 
 mod chunk;
 mod cmd;
+pub mod latency;
 mod runner;
 mod tee;
 pub mod wire;
