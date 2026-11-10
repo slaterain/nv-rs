@@ -2490,7 +2490,8 @@ struct PoolState {
     job: Option<HelperJob<'static>>,
     /// The caller's x87 control word, which the helpers take for the job.
     control_word: u16,
-    /// Helpers still running the job.
+    /// Helpers that have still to take the job (each takes it once), and helpers running it.
+    to_take: usize,
     running: usize,
     /// The helpers this job runs on (numbers 1 to it); the pool's others skip it.
     helpers: usize,
@@ -2535,6 +2536,20 @@ thread_local! {
 /// engine's kernel, as a second test in the same binary would be) stops with a panic. One caller
 /// at a time: a call while another runs (from another thread, or from inside a job) stops too.
 pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
+    fork(e, helpers, job, true)
+}
+
+/// As [`fork_join`], for a job that is shared work every one of them takes pieces of until none
+/// is left (the caller's own part returns when the work is done): a helper that has not started
+/// the job when the caller's part ends does not run it, so the caller never waits for a helper
+/// that is still waking; it waits only for those that are in the job. The job may thus run on
+/// fewer than `helpers` helpers, or on none.
+pub fn fork_join_first(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
+    fork(e, helpers, job, false)
+}
+
+/// [`fork_join`] (`every`: each helper runs the job) or [`fork_join_first`].
+fn fork(e: &mut Engine, helpers: usize, job: HelperJob<'_>, every: bool) -> bool {
     if helpers == 0 || helpers > MOST_HELPERS || HELPER.with(Cell::get) {
         return false;
     }
@@ -2578,17 +2593,20 @@ pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
         }
     }
     let _busy = Busy(pool);
-    // SAFETY: the job's borrow is erased only until every helper has run it: this function does
-    // not return (or unwind) before `running` is back to 0 (`Join` waits for it when dropped), and
-    // a helper does not use its copy of the reference after it counts itself done; no other call
-    // replaces the job meanwhile (`busy`).
+    // SAFETY: the job's borrow is erased only while a helper may run it: a helper takes the
+    // reference under the state lock and is counted in `running` from then until it is done, and
+    // this function does not return (or unwind) before no helper may take it any more (`to_take`
+    // 0, or the job withdrawn under the lock) and `running` is back to 0 (`Join` waits for both
+    // when dropped); a helper does not use its copy of the reference after it counts itself done;
+    // no other call replaces the job meanwhile (`busy`).
     let erased: HelperJob<'static> =
         unsafe { std::mem::transmute::<HelperJob<'_>, HelperJob<'static>>(job) };
     {
         let mut s = guard(&pool.state);
         s.job = Some(erased);
         s.control_word = crate::x87::control_word();
-        s.running = helpers;
+        s.to_take = helpers;
+        s.running = 0;
         s.helpers = helpers;
         s.panic = None;
         s.generation += 1;
@@ -2597,12 +2615,17 @@ pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
     // While it waits the caller is not running game code: a barrier another thread asks for (it
     // waits for every counted thread) must not wait for it while it waits for a helper that the
     // barrier holds in `enter_guest` or at a safe point.
-    struct Join(&'static Pool, Option<&'static World>);
+    struct Join(&'static Pool, Option<&'static World>, bool);
     impl Drop for Join {
         fn drop(&mut self) {
             let counted = self.1.is_some_and(World::leave_guest);
             let mut s = guard(&self.0.state);
-            while s.running != 0 {
+            if !self.2 {
+                // The work is done: a helper that has not taken the job yet finds none.
+                s.job = None;
+                s.to_take = 0;
+            }
+            while s.running != 0 || s.to_take != 0 {
                 s = wait(&self.0.done, s);
             }
             s.job = None;
@@ -2614,7 +2637,7 @@ pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
             }
         }
     }
-    let join = Join(pool, world);
+    let join = Join(pool, world, every);
     // The caller's own part. With stepped threads no time slice ends inside it: a switch there
     // would run another game thread beside the helpers, which otherwise run only while every game
     // thread stands still. (A wake asked for meanwhile sets the hook itself; it is then kept.)
@@ -2669,6 +2692,7 @@ fn make_pool(e: &mut Engine, world: Option<&'static World>, helpers: usize) -> &
             generation: 0,
             job: None,
             control_word: 0,
+            to_take: 0,
             running: 0,
             helpers: 0,
             panic: None,
@@ -2719,13 +2743,19 @@ fn run_helper(
                 s = wait(&pool.start, s);
             }
             seen = s.generation;
-            // A job for fewer helpers than the pool has: not this one's (it isn't counted in
-            // `running`, and the caller may return before it would finish).
+            // A job for fewer helpers than the pool has: not this one's (it isn't counted, and
+            // the caller may return before it would finish).
             if number > s.helpers {
                 continue;
             }
             match s.job {
-                Some(job) => (job, s.control_word),
+                // Taken under the lock: from here the caller waits for this helper.
+                Some(job) => {
+                    s.to_take -= 1;
+                    s.running += 1;
+                    (job, s.control_word)
+                }
+                // No job any more (the caller's part of a `fork_join_first` ended first).
                 None => continue,
             }
         };
@@ -2745,7 +2775,7 @@ fn run_helper(
             s.panic.get_or_insert(payload);
         }
         s.running -= 1;
-        if s.running == 0 {
+        if s.running == 0 && s.to_take == 0 {
             pool.done.notify_all();
         }
     }
@@ -4236,6 +4266,42 @@ mod tests {
         numbers.sort_unstable();
         assert_eq!(numbers, vec![0, 1]);
         assert!(!fork_join(&mut e, 3, &|_: &mut Engine, _: usize| {}));
+        // `fork_join_first`: the caller does not wait for a helper that has not started, and no
+        // helper is in the job once it returns (the job borrows the caller's locals). With the
+        // caller's part waiting for a helper, that helper is waited for.
+        let inside = AtomicUsize::new(0);
+        for _ in 0..2000 {
+            let runs = AtomicUsize::new(0);
+            assert!(fork_join_first(&mut e, 2, &|_: &mut Engine, _: usize| {
+                inside.fetch_add(1, Ordering::SeqCst);
+                runs.fetch_add(1, Ordering::SeqCst);
+                inside.fetch_sub(1, Ordering::SeqCst);
+            }));
+            assert_eq!(
+                inside.load(Ordering::SeqCst),
+                0,
+                "a helper is still in the job"
+            );
+            let runs = runs.load(Ordering::SeqCst);
+            assert!((1..=3).contains(&runs), "the job ran {runs} times");
+        }
+        let helped = AtomicBool::new(false);
+        assert!(fork_join_first(&mut e, 2, &|_: &mut Engine, n: usize| {
+            if n == 0 {
+                while !helped.load(Ordering::SeqCst) {
+                    std::thread::yield_now();
+                }
+            } else {
+                helped.store(true, Ordering::SeqCst);
+            }
+        }));
+        assert!(helped.load(Ordering::SeqCst));
+        // And the pool takes whole jobs again after jobs that were withdrawn.
+        let ran = AtomicUsize::new(0);
+        assert!(fork_join(&mut e, 2, &|_: &mut Engine, _: usize| {
+            ran.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert_eq!(ran.load(Ordering::SeqCst), 3);
         // A second call while one runs stops (here from inside the caller's own part of the job),
         // and the pool goes on after.
         let nested = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

@@ -1,10 +1,12 @@
 //! `NV_PAR_RENDER=1`: the culling walk on several cores, registered in the original order (the
 //! parallel-render design, P1 to P5 of DESIGN.md in the measure folder parallel-render). Off by
 //! default; with real or stepped threads (the helpers are engines like a game thread's,
-//! `engine_core::real_threads::fork_join`; with stepped threads they run only while main waits,
-//! so a repeatable run stays repeatable). Only with the typed culling family on (the split is in
-//! its `NiNode::OnVisible`; with `NV_TYPED=off` nothing splits). A host change, not exe
-//! behaviour: what the game sees happens in the order one thread makes it.
+//! `engine_core::real_threads::fork_join_first`; with stepped threads they run only inside main's
+//! turn, while it is in the fork, so a repeatable run stays repeatable; they take no memory from
+//! the game's heap, so the run records the same bytes with the switch on as off). Only with the
+//! typed culling family on (the split is in its `NiNode::OnVisible`; with `NV_TYPED=off` nothing
+//! splits). A host change, not exe behaviour: what the game sees happens in the order one thread
+//! makes it.
 //!
 //! **The split.** On main, a node whose `OnVisible` walks at least `NV_PAR_RENDER_MIN` (default 16)
 //! children, with a Bethesda culling process whose `Process` and `AppendVirtual` are the typed ones
@@ -236,6 +238,21 @@ impl Split {
             }
             self.queue().logs[k] = Some(log);
             walking.1 = true;
+        }
+    }
+
+    /// Main's part of the fork when it walks no task itself: waits until every task is walked
+    /// (or a walker stopped). `fork_join_first` takes the end of the caller's part for the end of
+    /// the work.
+    fn wait(&self) {
+        loop {
+            {
+                let queue = self.queue();
+                if queue.stopped || (queue.next >= queue.tasks.len() && queue.walking == 0) {
+                    return;
+                }
+            }
+            std::thread::yield_now();
         }
     }
 
@@ -563,7 +580,9 @@ fn walk_chunk(e: &mut Engine, children: &[u32], process: u32) -> Vec<Entry> {
 /// Runs the split's walkers: the helpers and main (number 0), each with a process copy on its own
 /// guest stack and the logging functions on its own engine, until the split's tasks are all
 /// walked. Main takes its copy in any case, and walks only with the logging functions there
-/// ([`with_logging_on_main`]). False when the helpers could not be had.
+/// ([`with_logging_on_main`]); without them it waits for the helpers to walk every task. A helper
+/// that has not started when the tasks are all walked does not join in
+/// (`engine_core::real_threads::fork_join_first`). False when the helpers could not be had.
 fn on_walkers(e: &mut Engine, helpers: usize, split: &Arc<Split>) -> bool {
     with_logging_on_main(e, |e, main_walks| {
         let job = |w: &mut Engine, number: usize| {
@@ -573,10 +592,12 @@ fn on_walkers(e: &mut Engine, helpers: usize, split: &Arc<Split>) -> bool {
             w.with_stack(PROCESS_SIZE, |w, local| {
                 if number != 0 || main_walks {
                     split.work(w, number, local.addr());
+                } else {
+                    split.wait();
                 }
             });
         };
-        engine_core::real_threads::fork_join(e, helpers, &job)
+        engine_core::real_threads::fork_join_first(e, helpers, &job)
     })
 }
 

@@ -162,6 +162,8 @@ static LAST: AtomicU32 = AtomicU32::new(0);
 static SEQUENCE: AtomicU32 = AtomicU32::new(0);
 static SLOW_DONE: AtomicU32 = AtomicU32::new(u32::MAX);
 static LAST_SEEN: AtomicU32 = AtomicU32::new(u32::MAX);
+/// In a chunked walk the most-alpha callback stops (panics) at this fade node (0: none).
+static STOP_AT: AtomicU32 = AtomicU32::new(0);
 
 fn on_helper() -> bool {
     std::thread::current()
@@ -279,6 +281,10 @@ fn stand_ins(e: &mut Engine) {
     e.register(MOST_ALPHA_FN, |_, a| {
         let node = a[0];
         if CHUNKED.load(SeqCst) {
+            assert!(
+                node != STOP_AT.load(SeqCst),
+                "the test stops a walker at this fade node"
+            );
             if node == SLOW.load(SeqCst) {
                 std::thread::sleep(Duration::from_millis(100));
                 SLOW_DONE.store(SEQUENCE.fetch_add(1, SeqCst), SeqCst);
@@ -856,6 +862,22 @@ fn chunked_walks_replay_the_serial_order() {
     assert_eq!(differed_now, differed, "the check mode found no difference");
     assert_eq!(differed_now, 0);
     assert_eq!(got, serial);
+
+    // A walker that stops inside a task: the stop reaches main, the other walkers stop taking
+    // tasks (nothing hangs), and the next walk is whole again. (The stopped walk leaves main's
+    // process mid-walk; the test puts its bytes back, as a run would end there.)
+    let process = e.mem.bytes(t.process, 0xc8);
+    let stack = e.guest_stack_mark();
+    STOP_AT.store(LAST.load(SeqCst), SeqCst);
+    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        walk(&mut e, &t, "on", 3, 16)
+    }));
+    STOP_AT.store(0, SeqCst);
+    CHUNKED.store(false, SeqCst);
+    assert!(stopped.is_err(), "a walker's stop reaches main");
+    e.guest_stack_restore(stack);
+    e.mem.write(t.process, &process);
+    assert_eq!(walk(&mut e, &t, "on", 3, 16), serial);
 
     // And the reference again: the tree reset makes it repeat.
     assert_eq!(walk(&mut e, &t, "off", 1, 16), serial);
