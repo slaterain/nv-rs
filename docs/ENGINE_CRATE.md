@@ -430,10 +430,10 @@ Rust, a family of functions at a time. `engine_core::typed` is the seam it plugs
 family is `leaves` (`typed/leaf.rs`): the small functions the translations call most, on since its
 speed gate passed (G1, 2026-11-06: Goodsprings +7.1%, Doc's room +3.0%). It is no longer the only one on: by default
 `leaves`, `topic_search`, `topic_order` and, since their speed gate (2026-11-08), `lockfree`, `culling`,
-`pathing`, `shader`, `crt` and `dispatch` are on, and since their gates `render` (2026-11-09), `draw`, `scene` and
-`particles` (2026-11-10) (below); `NV_TYPED=off` turns every family off, and `<family>:off` one. A run compared
-call for call with the original's record (nv-trace's `NV_TRACE_OUT`, `NV_TRACE_LIST`) has every family off unless
-`NV_TYPED` says otherwise (`typed::switch_for`).
+`pathing`, `shader`, `crt` and `dispatch` are on, and since their gates `render` (2026-11-09), `draw`, `scene`,
+`particles` and `collision` (2026-11-10) (below); `NV_TYPED=off` turns every family off, and `<family>:off` one. A
+run compared call for call with the original's record (nv-trace's `NV_TRACE_OUT`, `NV_TRACE_LIST`) has every family
+off unless `NV_TYPED` says otherwise (`typed::switch_for`).
 The second is `topic_search` (`crates/engine-fallout-forms/src/topic_search.rs`, provided from that
 crate): the search for the topic that holds a topic info (`TESTopic::GetOwnerTopic`) and the functions
 its loops call. A plugin that replaces dialogue runs it once per replaced info over every topic's infos
@@ -562,6 +562,17 @@ queued node's geometries given their update, which reaches the scene family's up
 `crates/engine/tests/typed_particles.rs` and, for the queue, `typed_dispatch.rs`. On since its gate (the differential
 tests with each planted mutant caught, and the recorded street run byte-identical with
 `NV_TYPED=particles:off,scene:off` in the fixes and vanilla presets); not a speed change by itself.
+And `collision` (same crate, id 21), the update half's third group: the Havok collision objects' part of the scene
+graph's world-data update. `NiAVObject::UpdateWorldData` (culling family) calls a blend collision object's update
+directly when the object's slot holds it; the blend collision object (`bhkBlendCollisionObject::UpdateWorldData` and
+`hktoNiTransform`, the actors' ragdoll bones) moves its node to its Havok body or the body to the node, blending the
+two lane by lane as the exe's SSE does; a collision object moves its body to its node (`bhkCollisionObject::
+NitohkTransform`) with the quaternion of the node's rotation (`NiQuaternion::FromRotation`) and the body's linear
+velocity it reads. `bhkCollisionObject::hktoNiTransform` stays by address (the fixes preset's smooth physics drawing
+replaces it), as do the Havok calls (motion type, hard keyframe, the velocities' set-up). Its tests are
+`crates/engine/tests/typed_collision.rs`. On since its gate (the differential tests with each planted mutant caught,
+and the recorded street run byte-identical with `NV_TYPED=collision:off` in the fixes and vanilla presets); not a speed
+change by itself.
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with
