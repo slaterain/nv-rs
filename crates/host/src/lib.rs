@@ -393,6 +393,13 @@ pub fn texture_cache_path() -> Option<PathBuf> {
         })
 }
 
+/// Runs what the platform layer runs before it ends the process itself (`engine_platform::on_exit`:
+/// the copy-out of saves, wgpu's pipeline cache and list), for a host that ends it another way
+/// (the viewer at the end of main's frames, the game's own Quit).
+pub fn run_exit_hooks() {
+    engine_platform::run_exit_hooks();
+}
+
 /// Where the wgpu backend keeps the driver's compiled pipelines between runs (`d3d9-wgpu`'s
 /// `cache.rs`): `NV_WGPU_CACHE`, which the launcher sets to its `userdata\machine\wgpu-cache`
 /// beside the other machine files. Without it nothing is kept: no default in the player's

@@ -282,7 +282,8 @@ struct Listed {
     /// Entries this run added that the file does not have yet, and the present of the last.
     dirty: bool,
     added_at: u64,
-    saved_at: u64,
+    /// The present of the first entry the file does not have yet.
+    first_added_at: u64,
 }
 
 /// The list's file: its lines as the device has them, written on a thread of its own or by the
@@ -348,6 +349,7 @@ const SHIPPED_LIST: &str = include_str!("../data/pipelines.txt");
 
 impl Listed {
     fn load(dir: &std::path::Path) -> Listed {
+        cache::remove_stale_temporaries(dir);
         let file = dir.join("pipelines.txt");
         let mut list = prepare::List::default();
         let (shipped, s1) = list.merge(SHIPPED_LIST);
@@ -379,7 +381,7 @@ impl Listed {
             shared,
             dirty: false,
             added_at: 0,
-            saved_at: 0,
+            first_added_at: 0,
         }
     }
 
@@ -388,6 +390,9 @@ impl Listed {
         let line = e.line();
         if self.list.add(e) {
             self.done.push(true);
+            if !self.dirty {
+                self.first_added_at = presents;
+            }
             self.dirty = true;
             self.added_at = presents;
             self.shared
@@ -405,12 +410,11 @@ impl Listed {
             return;
         }
         let quiet = presents.saturating_sub(self.added_at) >= 300;
-        let long = presents.saturating_sub(self.saved_at) >= 3600;
+        let long = presents.saturating_sub(self.first_added_at) >= 3600;
         if !(now || quiet || long) {
             return;
         }
         self.dirty = false;
-        self.saved_at = presents;
         let shared = self.shared.clone();
         if now {
             shared.save();
@@ -4975,6 +4979,10 @@ fn show_on(
         _ => return,
     };
     let view = frame.texture.create_view(&Default::default());
+    // Made again if the window's format changed since (its pipeline is made for one).
+    if screen.as_ref().is_some_and(|s| s.format != config.format) {
+        *screen = None;
+    }
     let screen = screen.get_or_insert_with(|| loading::Screen::new(device, queue, config.format));
     screen.draw(device, queue, &view, (config.width, config.height), p);
     queue.present(frame);
@@ -5041,7 +5049,7 @@ fn build_pipeline(
 }
 
 /// `f` of each of `items`, on up to `threads` worker threads below normal priority (1: on this
-/// thread), the results in the items' order. `tick` runs on this thread meanwhile, about ten
+/// thread), the results in the items' order. `tick` runs on this thread meanwhile, about four
 /// times a second, with how many are done (the loading screen).
 fn on_workers<T: Sync, R: Send>(
     items: &[T],
@@ -5050,11 +5058,15 @@ fn on_workers<T: Sync, R: Send>(
     tick: &mut dyn FnMut(usize),
 ) -> Vec<R> {
     if threads <= 1 || items.len() <= 1 {
+        let mut last: Option<std::time::Instant> = None;
         return items
             .iter()
             .enumerate()
             .map(|(i, item)| {
-                tick(i);
+                if last.is_none_or(|t| t.elapsed().as_millis() >= 250) {
+                    tick(i);
+                    last = Some(std::time::Instant::now());
+                }
                 f(item)
             })
             .collect();
@@ -5084,7 +5096,8 @@ fn on_workers<T: Sync, R: Send>(
             if d >= items.len() || workers.iter().all(|w| w.is_finished()) {
                 break;
             }
-            if last.is_none_or(|t| t.elapsed().as_millis() >= 100) {
+            // Four times a second: each call presents (with the display's sync, a frame's wait).
+            if last.is_none_or(|t| t.elapsed().as_millis() >= 250) {
                 tick(d);
                 last = Some(std::time::Instant::now());
             }

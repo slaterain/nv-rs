@@ -202,6 +202,8 @@ struct V { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32> }
 /// The drawing of the screen on one device and window format.
 pub(crate) struct Screen {
     pipeline: wgpu::RenderPipeline,
+    /// The window format the pipeline is made for.
+    pub(crate) format: wgpu::TextureFormat,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     logo: Option<(u32, u32, wgpu::TextureView)>,
@@ -323,6 +325,7 @@ impl Screen {
         let white = texture(device, queue, (1, 1, &[255, 255, 255, 255]));
         Screen {
             pipeline,
+            format,
             layout,
             sampler,
             logo,
