@@ -1263,7 +1263,10 @@ impl super::sound_out::Source for Stream {
         }
         if let Ok(mut v) = self.voices.lock() {
             if let Some(r) = &mut v.record {
-                r.note(&format!("device: underrun {count} ({:?} stream)", self.which));
+                r.note(&format!(
+                    "device: underrun {count} ({:?} stream)",
+                    self.which
+                ));
             }
         }
     }
@@ -1564,8 +1567,7 @@ pub fn repeatable_pull(e: &mut Engine) {
         return;
     };
     let rate = m.rate;
-    let target =
-        (u128::from(now.saturating_sub(v.start_us)) * u128::from(rate) / 1_000_000) as u64;
+    let target = (u128::from(now.saturating_sub(v.start_us)) * u128::from(rate) / 1_000_000) as u64;
     let mut streams = Vec::new();
     if let Some(o) = &m.output {
         streams.push((Which::Game, o.layout.channels));
@@ -3130,7 +3132,9 @@ fn cursors_at(e: &mut Engine, this: Ptr, now: u64) -> (u32, u32) {
 fn get_current_position(e: &mut Engine, this: Ptr, play: Ptr, write: Ptr) -> u32 {
     let _ = secondary(e, this, "GetCurrentPosition");
     let (p, w) = cursors(e, this);
-    trace(e, || format!("GetCurrentPosition {:08x}: {p:#x} {w:#x}", this.addr()));
+    trace(e, || {
+        format!("GetCurrentPosition {:08x}: {p:#x} {w:#x}", this.addr())
+    });
     if !play.is_null() {
         e.mem.set_u32(play.addr(), p);
     }
@@ -6999,5 +7003,56 @@ mod tests {
             failed.len()
         );
         assert!(failed.is_empty(), "{} captures differ", failed.len());
+    }
+
+    /// `NV_REPEATABLE`'s device: each pull takes the frames the virtual clock has passed since
+    /// the output started (in pieces of at most a period), and two runs of the same calls record
+    /// the same bytes.
+    #[test]
+    fn the_repeatable_device_takes_the_frames_the_clock_passed() {
+        let run = |name: &str| {
+            let mut e = engine();
+            e.start_repeatable_clock();
+            hear_by_hand(&mut e, 48000);
+            let path = std::env::temp_dir().join(format!(
+                "nv-rs-repeatable-sound-{}-{name}.wav",
+                std::process::id()
+            ));
+            let mut r = Record::create(&path, 48000, Layout::STEREO, None).expect("a recording");
+            r.repeatable = true;
+            {
+                let m = state!(e).sound.mix.as_mut().expect("the output");
+                m.output = Some(super::super::sound_out::Output::idle(48000, Layout::STEREO));
+                m.voices.lock().unwrap().record = Some(r);
+            }
+            state!(e).sound.virtual_out = Some(VirtualOut {
+                start_us: e.clock_peek_us(),
+                pulled: 0,
+            });
+            let pcm: Vec<u8> = (0..4410i16)
+                .flat_map(|i| (i.wrapping_mul(7)).to_le_bytes())
+                .collect();
+            play_stream(&mut e, 0x9000, pcm, 1, 16, 48000);
+            let mut pulled = Vec::new();
+            for step_us in [25_000u64, 10_000, 3_333] {
+                e.advance_clock_us(step_us);
+                repeatable_pull(&mut e);
+                pulled.push(state!(e).sound.virtual_out.expect("the device").pulled);
+            }
+            state!(e).sound.mix = None;
+            let bytes = std::fs::read(&path).expect("the recording");
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(path.with_extension("log"));
+            (pulled, bytes)
+        };
+        let (pulled, a) = run("a");
+        // 25 ms, 35 ms and 38.333 ms of 48 kHz (whole frames: the clock moved a microsecond at
+        // each reading in between, none here).
+        assert_eq!(pulled, vec![1200, 1680, 1839]);
+        // The WAV header and 1839 stereo float frames.
+        assert_eq!(a.len(), 44 + 1839 * 8);
+        assert!(a[44..].iter().any(|&b| b != 0), "the stream was mixed");
+        let (_, b) = run("b");
+        assert_eq!(a, b);
     }
 }
