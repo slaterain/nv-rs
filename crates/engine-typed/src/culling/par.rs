@@ -1,8 +1,10 @@
 //! `NV_PAR_RENDER=1`: the culling walk on several cores, registered in the original order (the
 //! parallel-render design, P1 to P5 of DESIGN.md in the measure folder parallel-render). Off by
-//! default; with real threads only (the helpers are engines like a game thread's,
-//! `engine_core::real_threads::fork_join`). A host change, not exe behaviour: what the game sees
-//! happens in the order one thread makes it.
+//! default; with real or stepped threads (the helpers are engines like a game thread's,
+//! `engine_core::real_threads::fork_join`; with stepped threads they run only while main waits,
+//! so a repeatable run stays repeatable). Only with the typed culling family on (the split is in
+//! its `NiNode::OnVisible`; with `NV_TYPED=off` nothing splits). A host change, not exe
+//! behaviour: what the game sees happens in the order one thread makes it.
 //!
 //! **The split.** On main, a node whose `OnVisible` walks at least `NV_PAR_RENDER_MIN` (default 16)
 //! children (not the walk's root), with a Bethesda culling process whose `Process` and
@@ -176,6 +178,33 @@ fn read_switch() -> u8 {
     m
 }
 
+/// For the replay-order test (`crates/engine/tests/par_render.rs`): the switch's mode (`off`, `on`,
+/// `check`, `serial`), helpers and least children set as `NV_PAR_RENDER`, `NV_PAR_RENDER_THREADS`
+/// and `NV_PAR_RENDER_MIN` would (the environment is then not read).
+#[doc(hidden)]
+pub fn set_for_tests(mode: &str, helpers: usize, min_children: u32) {
+    let m = match mode {
+        "on" => 2,
+        "check" => 3,
+        "serial" => 4,
+        _ => 1,
+    };
+    HELPERS.store(helpers.clamp(1, 15), Relaxed);
+    MIN_CHILDREN.store(min_children.max(2), Relaxed);
+    MODE.store(m, Relaxed);
+}
+
+/// For the replay-order test: splits walked on the helpers, splits the check mode compared, and
+/// the comparisons that differed, so far.
+#[doc(hidden)]
+pub fn counts_for_tests() -> (u32, u32, u32) {
+    (
+        WALKS.load(Relaxed),
+        COMPARED.load(Relaxed),
+        PRINTED.load(Relaxed),
+    )
+}
+
 /// Whether a node of `count` children may be split (the switch is on and the node is big enough).
 #[inline(always)]
 pub(crate) fn wants_split(count: u32) -> bool {
@@ -223,12 +252,15 @@ pub(crate) fn defer(e: &Engine, object: u32, process: u32, target: u32) -> bool 
 }
 
 /// A call the helper's engine logs instead of running (see [`install_logging`]). Its words are
-/// replayed on main after the helper's walk, so none may point into the helper's own stack; in the
-/// exe they don't (the accumulator, the fade node, its world bound or the empty bound, a flag, an
-/// alpha's bits), and a word that does stops the run here rather than replay a dead local.
-fn log_call(e: &Engine, addr: u32, args: &[u32]) -> Ret {
+/// replayed on main after the helper's walk, so no pointer among them may point into the helper's
+/// own stack; in the exe none does (the accumulator, the fade node, its world bound or the empty
+/// bound), and one that does stops the run here rather than replay a dead local. Only the first
+/// `pointers` words are pointers: the rest (a flag, an alpha's bits) are values, which may look
+/// like a stack address (1.0 is `3f800000`, inside the heap the stacks come from).
+fn log_call(e: &Engine, addr: u32, args: &[u32], pointers: usize) -> Ret {
     if let Some((low, high)) = e.guest_stack_region() {
-        if let Some(word) = args.iter().find(|w| (low..high).contains(*w)) {
+        let pointer_words = &args[..pointers.min(args.len())];
+        if let Some(word) = pointer_words.iter().find(|w| (low..high).contains(*w)) {
             panic!("NV_PAR_RENDER: a logged call to {addr:08x} passes {word:08x}, in the helper's stack");
         }
     }
@@ -243,16 +275,19 @@ fn log_call(e: &Engine, addr: u32, args: &[u32]) -> Ret {
     Ret::default()
 }
 
+/// `(accumulator, bound, flag)`: two pointers.
 fn log_start_grouping(e: &mut Engine, args: &[u32]) -> Ret {
-    log_call(e, START_GROUPING_ALPHAS, args)
+    log_call(e, START_GROUPING_ALPHAS, args, 2)
 }
 
+/// `(accumulator)`.
 fn log_stop_grouping(e: &mut Engine, args: &[u32]) -> Ret {
-    log_call(e, STOP_GROUPING_ALPHAS, args)
+    log_call(e, STOP_GROUPING_ALPHAS, args, 1)
 }
 
+/// `(node, alpha)`: the alpha is a float's bits, not a pointer.
 fn log_fade_alpha(e: &mut Engine, args: &[u32]) -> Ret {
-    log_call(e, SET_FADE_ALPHA, args)
+    log_call(e, SET_FADE_ALPHA, args, 1)
 }
 
 /// The logging functions on a helper's own engine (each job: a function registered for every
@@ -487,4 +522,55 @@ fn compare(logs: &[Vec<Entry>], serial: &[Entry]) {
         parallel.get(at),
         serial.get(at)
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A logged call's pointers may not lie in the helper's stack; its values (an alpha's bits)
+    /// may, whatever they look like.
+    #[test]
+    fn logged_calls_check_only_their_pointers() {
+        let mut e = Engine::new();
+        e.with_stack(4, |_, _| ());
+        let (low, high) = e.guest_stack_region().expect("a guest stack");
+        let inside = low + (high - low) / 2;
+        let node = 0x0123_4560;
+        LOG.with(|log| *log.borrow_mut() = Some(Vec::new()));
+        log_fade_alpha(&mut e, &[node, inside]);
+        log_start_grouping(&mut e, &[0x0200_0000, 0x0200_0100, inside]);
+        let logged = LOG.with(|log| log.borrow_mut().take()).unwrap_or_default();
+        assert_eq!(
+            logged,
+            vec![
+                Entry::Call {
+                    addr: SET_FADE_ALPHA,
+                    words: vec![node, inside],
+                },
+                Entry::Call {
+                    addr: START_GROUPING_ALPHAS,
+                    words: vec![0x0200_0000, 0x0200_0100, inside],
+                },
+            ]
+        );
+        for (f, args) in [
+            (
+                log_fade_alpha as fn(&mut Engine, &[u32]) -> Ret,
+                vec![inside, ONE_BITS],
+            ),
+            (log_start_grouping, vec![0x0200_0000, inside, 1]),
+            (log_stop_grouping, vec![inside]),
+        ] {
+            let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                f(&mut e, &args);
+            }));
+            assert!(
+                stopped.is_err(),
+                "a pointer into the stack stops: {args:x?}"
+            );
+        }
+    }
+
+    const ONE_BITS: u32 = 0x3f80_0000;
 }

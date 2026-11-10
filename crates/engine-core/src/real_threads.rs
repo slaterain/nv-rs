@@ -88,7 +88,7 @@ pub(crate) use sync::{handle_closed, sync_object, take_all_sync};
 
 /// The kept pages over the limit that make the host hand them back at a frame's end (64 MB): a
 /// barrier is a few hundred microseconds, so not every frame.
-const HAND_BACK_AT: usize = 16384;
+pub(crate) const HAND_BACK_AT: usize = 16384;
 
 /// The synchronisation imports real threads replace with their own ([`sync_import`]).
 const SYNC_IMPORTS: [&str; 17] = [
@@ -2471,6 +2471,13 @@ struct Pool {
     start: Condvar,
     /// The last helper of a job finished.
     done: Condvar,
+    /// The run the pool was made in: its kernel ([`crate::units::platform::KernelRef::id`]) and
+    /// its real threads' world (none with stepped threads). The helpers' engines are views of that
+    /// run's memory and aliases of its kernel and device state, so no other run may fork on them.
+    kernel: usize,
+    world: Option<usize>,
+    /// A [`fork_join`] is running: a second caller at the same time would overwrite the job.
+    busy: std::sync::atomic::AtomicBool,
 }
 
 struct PoolState {
@@ -2481,6 +2488,8 @@ struct PoolState {
     control_word: u16,
     /// Helpers still running the job.
     running: usize,
+    /// The helpers this job runs on (numbers 1 to it); the pool's others skip it.
+    helpers: usize,
     /// The first helper's panic in this job, resumed on the caller.
     panic: Option<Box<dyn std::any::Any + Send>>,
 }
@@ -2497,27 +2506,57 @@ thread_local! {
 /// Each helper takes the caller's x87 control word (and with real threads counts as running game
 /// code for the page barrier while it works). With stepped threads the memory becomes shared at the
 /// first call. False (nothing run) on a helper, with a memory diagnostic that keeps memory unshared,
-/// or when the pool was made with fewer helpers. A helper's panic is resumed here after every helper is done.
+/// or when the pool was made with fewer helpers (a pool with more runs the job on its first
+/// `helpers`). A helper's panic is resumed here after every helper is done.
+///
+/// One pool per process, for the run that first forks: a caller from another run (another
+/// engine's kernel, as a second test in the same binary would be) stops with a panic. One caller
+/// at a time: a call while another runs (from another thread, or from inside a job) stops too.
 pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
     if helpers == 0 || HELPER.with(Cell::get) {
         return false;
     }
-    // With stepped threads the helpers run inside the caller's turn (it waits for them), so the run
-    // stays as deterministic as stepped threads are; their engines need the memory shared.
     let world = e.real.as_ref().map(|r| r.world);
+    let world_id = world.map(|w| w as *const World as usize);
+    if let Some(pool) = POOL.get() {
+        assert!(
+            pool.kernel == e.kernel.id() && pool.world == world_id,
+            "fork_join: the helper pool belongs to another run (its helpers' engines are views of \
+             that run's memory and kernel); one run per process may fork"
+        );
+    }
+    // With stepped threads the helpers run inside the caller's turn (it waits for them), so the run
+    // stays as deterministic as stepped threads are. Their engines alias the kernel and the device
+    // state and view the memory, so those live for good from here, as `start` makes them.
     if world.is_none() && !e.mem.is_shared() {
         if !e.mem.can_share() {
             return false;
         }
+        e.kernel.leak();
+        e.device.leak();
         e.mem.start_sharing();
     }
     let pool = *POOL.get_or_init(|| make_pool(e, world, helpers));
     if pool.count < helpers {
         return false;
     }
+    assert!(
+        pool.busy
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok(),
+        "fork_join: called while another fork_join runs (one caller at a time)"
+    );
+    struct Busy(&'static Pool);
+    impl Drop for Busy {
+        fn drop(&mut self) {
+            self.0.busy.store(false, Ordering::SeqCst);
+        }
+    }
+    let _busy = Busy(pool);
     // SAFETY: the job's borrow is erased only until every helper has run it: this function does
-    // not return (or unwind) before `running` is back to 0, and the helpers drop their copy of the
-    // reference before they count themselves done.
+    // not return (or unwind) before `running` is back to 0 (`Join` waits for it when dropped), and
+    // a helper does not use its copy of the reference after it counts itself done; no other call
+    // replaces the job meanwhile (`busy`).
     let erased: HelperJob<'static> =
         unsafe { std::mem::transmute::<HelperJob<'_>, HelperJob<'static>>(job) };
     {
@@ -2525,6 +2564,7 @@ pub fn fork_join(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bool {
         s.job = Some(erased);
         s.control_word = crate::x87::control_word();
         s.running = helpers;
+        s.helpers = helpers;
         s.panic = None;
         s.generation += 1;
         pool.start.notify_all();
@@ -2579,10 +2619,14 @@ fn make_pool(e: &mut Engine, world: Option<&'static World>, helpers: usize) -> &
             job: None,
             control_word: 0,
             running: 0,
+            helpers: 0,
             panic: None,
         }),
         start: Condvar::new(),
         done: Condvar::new(),
+        kernel: e.kernel.id(),
+        world: world.map(|w| w as *const World as usize),
+        busy: std::sync::atomic::AtomicBool::new(false),
     }));
     for number in 1..=helpers {
         let id = HELPER_ID_BASE + u32::try_from(number).unwrap_or(0);
@@ -2622,6 +2666,11 @@ fn run_helper(
                 s = wait(&pool.start, s);
             }
             seen = s.generation;
+            // A job for fewer helpers than the pool has: not this one's (it isn't counted in
+            // `running`, and the caller may return before it would finish).
+            if number > s.helpers {
+                continue;
+            }
             match s.job {
                 Some(job) => (job, s.control_word),
                 None => continue,
@@ -4101,6 +4150,33 @@ mod tests {
             ran.fetch_add(1, Ordering::SeqCst);
         }));
         assert_eq!(ran.load(Ordering::SeqCst), 3);
+        // A job for fewer helpers than the pool has runs on those alone (the other is not counted).
+        let numbers = Mutex::new(Vec::new());
+        assert!(fork_join(&mut e, 1, &|_: &mut Engine, n: usize| {
+            numbers.lock().unwrap().push(n);
+        }));
+        let mut numbers = numbers.into_inner().unwrap();
+        numbers.sort_unstable();
+        assert_eq!(numbers, vec![0, 1]);
+        assert!(!fork_join(&mut e, 3, &|_: &mut Engine, _: usize| {}));
+        // A second call while one runs stops (here from inside the caller's own part of the job),
+        // and the pool goes on after.
+        let nested = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            fork_join(&mut e, 2, &|w: &mut Engine, n: usize| {
+                if n == 0 {
+                    fork_join(w, 1, &|_: &mut Engine, _: usize| {});
+                }
+            })
+        }));
+        assert!(nested.is_err(), "a call inside a running fork_join stops");
+        assert!(fork_join(&mut e, 2, &|_: &mut Engine, _: usize| {}));
+        // Another run's engine may not use the pool: its helpers view this run's memory.
+        let (mut other, _) = engine_with_imports();
+        let foreign = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            fork_join(&mut other, 1, &|_: &mut Engine, _: usize| {})
+        }));
+        assert!(foreign.is_err(), "another run's fork stops");
+        assert!(!other.mem.is_shared(), "and changes nothing first");
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             fork_join(&mut e, 2, &|_: &mut Engine, n: usize| {
                 assert!(n != 1, "helper 1 stops");

@@ -31,6 +31,8 @@ pub mod bound;
 pub mod compound;
 pub mod layout;
 mod par;
+#[doc(hidden)]
+pub use par::{counts_for_tests as par_counts_for_tests, set_for_tests as par_set_for_tests};
 pub mod planes;
 mod probe;
 pub mod process;

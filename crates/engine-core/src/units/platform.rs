@@ -1191,7 +1191,8 @@ impl KernelRef {
         }
     }
 
-    /// Real threads (`crate::real_threads::start`): the kernel lives for good, as the shared
+    /// Real threads (`crate::real_threads::start`), or the render helpers' first fork with stepped
+    /// threads (`crate::real_threads::fork_join`): the kernel lives for good, as the shared
     /// memory and the threads' world do, since game threads may still use it after the main
     /// engine is gone.
     pub(crate) fn leak(&mut self) {
@@ -1278,7 +1279,8 @@ impl DeviceRef {
         }
     }
 
-    /// Real threads (`crate::real_threads::start`): the state lives for good, as the kernel does.
+    /// Real threads (`crate::real_threads::start`), or the render helpers' first fork with stepped
+    /// threads (`crate::real_threads::fork_join`): the state lives for good, as the kernel does.
     pub(crate) fn leak(&mut self) {
         self.owned = false;
     }
