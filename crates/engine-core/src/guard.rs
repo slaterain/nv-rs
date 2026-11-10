@@ -40,7 +40,10 @@ pub fn install(e: &mut Engine, sites: &'static [u32], guard: Guard) {
             }
         }
     }
-    assert!(entry.is_none(), "more than {ROWS} rows installed guard sites");
+    assert!(
+        entry.is_none(),
+        "more than {ROWS} rows installed guard sites"
+    );
 }
 
 /// What [`guard_site!`] runs: false when no row answers at `at` (the original's path).
@@ -78,7 +81,9 @@ mod tests {
         assert!(!crate::guard_site!(&mut e, 0x0040_0010, 0u32));
         install(&mut e, &[0x0040_0020], |_, _, _| true);
         assert!(!crate::guard_site!(&mut e, 0x0040_0010, 0u32));
-        install(&mut e, &[0x0040_0010], |_, at, w| at == 0x0040_0010 && w[0] == 7);
+        install(&mut e, &[0x0040_0010], |_, at, w| {
+            at == 0x0040_0010 && w[0] == 7
+        });
         assert!(crate::guard_site!(&mut e, 0x0040_0010, 7u32));
         assert!(!crate::guard_site!(&mut e, 0x0040_0010, 8u32));
         assert!(crate::guard_site!(&mut e, 0x0040_0020));

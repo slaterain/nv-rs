@@ -3876,7 +3876,13 @@ pub fn fn_00a34f20(
         // Guard site 00a34fcb (`CALL 00e7ec00`, `AddUnique` on the owner's active set, ECX the
         // owner at +0x40 plus 0x44): a sequence with no owner adds itself to the set at 0x44.
         // Crash guards: with no owner the add is skipped (the state and times are still set).
-        if old_state == 0 && !guard_site!(e, 0x00a3_4fcb, e.get(this, NiControllerSequence::m_pkOwner).addr()) {
+        if old_state == 0
+            && !guard_site!(
+                e,
+                0x00a3_4fcb,
+                e.get(this, NiControllerSequence::m_pkOwner).addr()
+            )
+        {
             add_to_active_set(e, this);
         }
         e.mem.set_u32(base + 0x4c, negative_max);
@@ -3886,7 +3892,13 @@ pub fn fn_00a34f20(
         let old_state = e.get(this, NiControllerSequence::m_eState);
         e.set(this, NiControllerSequence::m_eState, 1);
         // Guard site 00a35003: the same `AddUnique` on the branch without an ease-in.
-        if old_state == 0 && !guard_site!(e, 0x00a3_5003, e.get(this, NiControllerSequence::m_pkOwner).addr()) {
+        if old_state == 0
+            && !guard_site!(
+                e,
+                0x00a3_5003,
+                e.get(this, NiControllerSequence::m_pkOwner).addr()
+            )
+        {
             add_to_active_set(e, this);
         }
         e.mem.set_u32(base + 0x4c, 0);

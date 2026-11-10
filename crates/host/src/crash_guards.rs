@@ -79,7 +79,10 @@ mod tests {
             .map(|l| {
                 let cols: Vec<&str> = l.trim_end_matches('\r').split('\t').collect();
                 assert_eq!(cols.len(), 4, "{l}");
-                (u32::from_str_radix(cols[0], 16).unwrap(), cols[2].to_string())
+                (
+                    u32::from_str_radix(cols[0], 16).unwrap(),
+                    cols[2].to_string(),
+                )
             })
             .collect()
     }
@@ -114,12 +117,17 @@ mod tests {
                 let address = part
                     .split(',')
                     .nth(1)
-                    .unwrap_or_else(|| panic!("{}: a guard site without its address", path.display()))
+                    .unwrap_or_else(|| {
+                        panic!("{}: a guard site without its address", path.display())
+                    })
                     .trim()
                     .trim_start_matches("0x")
                     .replace('_', "");
                 found.push(u32::from_str_radix(&address, 16).unwrap_or_else(|_| {
-                    panic!("{}: a guard site's address is not a literal", path.display())
+                    panic!(
+                        "{}: a guard site's address is not a literal",
+                        path.display()
+                    )
                 }));
             }
         }
@@ -135,7 +143,11 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted, addresses, "the table is sorted, one row a site");
-        assert_eq!(sites_in_code(), addresses, "the translations' sites are the table's");
+        assert_eq!(
+            sites_in_code(),
+            addresses,
+            "the translations' sites are the table's"
+        );
         let ours: Vec<u32> = table
             .iter()
             .filter(|(_, row)| row == "crash guards")
@@ -206,7 +218,8 @@ mod tests {
 
     fn stops_at_null(stop: &str) {
         assert!(
-            stop.contains("read of unmapped memory at 0000") || stop.contains("write of unmapped memory at 0000"),
+            stop.contains("read of unmapped memory at 0000")
+                || stop.contains("write of unmapped memory at 0000"),
             "the original stops reading through null: {stop}"
         );
     }
@@ -258,7 +271,10 @@ mod tests {
                 let mut next = 0;
                 let taken_from = object(e, &mut next, 0x100, &[(0x100, 0)]);
                 let player = e.global::<u32>(0x011d_ea3c);
-                e.call(0x008b_fa40, &args![player, taken_from, 0x1234u32, 1u32, 0u32, 0u32]);
+                e.call(
+                    0x008b_fa40,
+                    &args![player, taken_from, 0x1234u32, 1u32, 0u32, 0u32],
+                );
             },
         );
         stops_at_null(&stop);
