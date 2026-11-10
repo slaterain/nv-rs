@@ -23,9 +23,13 @@ const ANY_FORM: u32 = 0x3d;
 /// `kParams_OneEyes_OneOptionalMask` and `kParams_OneHair_OneOptionalMask` (xNVSE).
 const BODY_DATA: &[Param] = &[p("body data", ANY_FORM, false), p("base NPC", NPC, true)];
 const ONE_NPC: &[Param] = &[p("NPC", NPC, true)];
-const FLOAT_NPC: &[Param] = &[p("value", FLOAT, false), p("base NPC", NPC, true)];
-const INT_NPC: &[Param] = &[p("value", INT, false), p("base NPC", NPC, true)];
-const FORM_MASK: &[Param] = &[p("form", ANY_FORM, false), p("mask", INT, true)];
+const SET_HAIR_LENGTH: &[Param] = &[p("hair length", FLOAT, false), p("base NPC", NPC, true)];
+const SET_HAIR_COLOR: &[Param] = &[p("hair color", INT, false), p("base NPC", NPC, true)];
+const GET_HAIR_COLOR: &[Param] = &[p("hair color code", INT, false), p("base NPC", NPC, true)];
+/// `SetNPCHeight` takes these too, as xNVSE registers it.
+const SET_NPC_WEIGHT: &[Param] = &[p("weight", FLOAT, false), p("base NPC", NPC, true)];
+const EYES_MASK: &[Param] = &[p("eyes", ANY_FORM, false), p("mask", INT, true)];
+const HAIR_MASK: &[Param] = &[p("hair", ANY_FORM, false), p("mask", INT, true)];
 
 /// `TESForm::refID`; `TESObjectREFR::baseForm`.
 const FORM_ID: u32 = 0xc;
@@ -109,7 +113,7 @@ pub static COMMANDS: &[Command] = &[
         0x1526,
         "SetHairLength",
         "set an NPCs hair length",
-        FLOAT_NPC,
+        SET_HAIR_LENGTH,
         set_hair_length,
         Returns::Default,
     ),
@@ -117,7 +121,7 @@ pub static COMMANDS: &[Command] = &[
         0x1527,
         "GetHairColor",
         "get an NPCs hair color (code: 1=R, 2=G, 3=B)",
-        INT_NPC,
+        GET_HAIR_COLOR,
         get_hair_color,
         Returns::Default,
     ),
@@ -125,7 +129,7 @@ pub static COMMANDS: &[Command] = &[
         0x1528,
         "SetHairColor",
         "set an NPCs hair color (RGB bytes)",
-        INT_NPC,
+        SET_HAIR_COLOR,
         set_hair_color,
         Returns::Default,
     ),
@@ -141,7 +145,7 @@ pub static COMMANDS: &[Command] = &[
         0x152a,
         "SetNPCWeight",
         "set an NPCs weight",
-        FLOAT_NPC,
+        SET_NPC_WEIGHT,
         set_npc_weight,
         Returns::Default,
     ),
@@ -157,7 +161,7 @@ pub static COMMANDS: &[Command] = &[
         0x152c,
         "SetNPCHeight",
         "set an NPCs height",
-        FLOAT_NPC,
+        SET_NPC_WEIGHT,
         set_npc_height,
         Returns::Default,
     ),
@@ -165,7 +169,7 @@ pub static COMMANDS: &[Command] = &[
         0x1600,
         "GetEyesFlags",
         "get the flags of eyes",
-        FORM_MASK,
+        EYES_MASK,
         get_eyes_flags,
         Returns::Default,
     ),
@@ -173,7 +177,7 @@ pub static COMMANDS: &[Command] = &[
         0x1601,
         "SetEyesFlags",
         "set the flags of eyes",
-        FORM_MASK,
+        EYES_MASK,
         set_eyes_flags,
         Returns::Default,
     ),
@@ -181,7 +185,7 @@ pub static COMMANDS: &[Command] = &[
         0x1602,
         "GetHairFlags",
         "get the flags of an hair",
-        FORM_MASK,
+        HAIR_MASK,
         get_hair_flags,
         Returns::Default,
     ),
@@ -189,7 +193,7 @@ pub static COMMANDS: &[Command] = &[
         0x1603,
         "SetHairFlags",
         "set the flags of an hair",
-        FORM_MASK,
+        HAIR_MASK,
         set_hair_flags,
         Returns::Default,
     ),

@@ -149,3 +149,23 @@ fn the_real_games_answers_for_the_setters() {
     assert_eq!(run(&mut e, 0x1526, DOC, &[z(0.5)]), 0.0);
     assert_eq!(e.mem.f32(EYES + 0x1bc), 0.0);
 }
+
+/// The parameter names are xNVSE's (`Commands_MiscRef.h`): the script compiler's messages and
+/// plugins reading the command table see them. `SetNPCHeight` takes `SetNPCWeight`'s list, as
+/// xNVSE registers it.
+#[test]
+fn parameter_names_are_xnvses() {
+    let names = |opcode: u32| -> Vec<&str> {
+        let command = COMMANDS.iter().find(|c| c.opcode == opcode).unwrap();
+        command.params.iter().map(|p| p.name).collect()
+    };
+    assert_eq!(names(0x1521), ["body data", "base NPC"]);
+    assert_eq!(names(0x1522), ["NPC"]);
+    assert_eq!(names(0x1526), ["hair length", "base NPC"]);
+    assert_eq!(names(0x1527), ["hair color code", "base NPC"]);
+    assert_eq!(names(0x1528), ["hair color", "base NPC"]);
+    assert_eq!(names(0x152a), ["weight", "base NPC"]);
+    assert_eq!(names(0x152c), ["weight", "base NPC"]);
+    assert_eq!(names(0x1600), ["eyes", "mask"]);
+    assert_eq!(names(0x1603), ["hair", "mask"]);
+}
