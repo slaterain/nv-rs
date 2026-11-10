@@ -233,16 +233,17 @@ pub fn find(e: &mut Engine, this: Ptr<LockFreeMap>, key: u32, value_out: Ptr<Hol
     found
 }
 
-/// The interface's lookup for maps of plain values (`thiscall(key, value out)`, the found byte).
-const FIND_WORD: u32 = 0x006e_c830;
-
 // Typed from 00449530
 /// [`find`]'s copy, the virtual lookup of the maps of plain values (their slot +8): the same body,
 /// the interface finding the key with `006ec830`.
 pub fn find_word(e: &mut Engine, this: Ptr<LockFreeMap>, key: u32, value_out: Ptr<u32>) -> u8 {
     e.call(LOCK_ENTER, &args![lock(this), 0u32]);
     let face = interface(e, this);
-    let found = e.call(FIND_WORD, &args![face, key, value_out]).u8();
+    let found: u8 = typed_call!(
+        FAMILY,
+        0x006e_c830,
+        iface::lookup_word(e, face, key, value_out)
+    );
     e.call(LOCK_LEAVE, &args![lock(this)]);
     found
 }

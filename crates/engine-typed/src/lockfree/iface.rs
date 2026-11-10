@@ -163,13 +163,13 @@ pub fn search_string_map(e: &mut Engine, this: Ptr<MapInterface>, bucket: u32, k
     search_with::<RETIRE_OTHER>(e, this, bucket, key)
 }
 
-/// Retires `node` with `RETIRE`: [`retire`] (typed) or a copy's own, by address.
+/// Retires `node` with `RETIRE`: [`retire`] or [`retire_other`].
 #[inline(always)]
 fn retire_by<const RETIRE: u32>(e: &mut Engine, this: Ptr<MapInterface>, node: Ptr<HashListNode>) {
     if RETIRE == 0x0052_92a0 {
         typed_call!(FAMILY, 0x0052_92a0, retire(e, this, node));
     } else {
-        e.call(RETIRE, &args![this, node]);
+        typed_call!(FAMILY, 0x0066_6510, retire_other(e, this, node));
     }
 }
 
@@ -519,15 +519,13 @@ pub fn find_value(e: &mut Engine, this: Ptr<MapInterface>, bucket: u32, value: P
                     continue 'start;
                 }
                 let node = e.get(this, MapInterface::current).node();
-                e.call(RETIRE_OTHER, &args![this, node]);
+                typed_call!(FAMILY, 0x0066_6510, retire_other(e, this, node));
             }
             step_to_next(e, this);
         }
     }
 }
 
-/// The interface's find of a key in a bucket (`thiscall(bucket, key, value holder out)`, bool).
-const FIND_IN_BUCKET: u32 = 0x0044_d510;
 /// The interface's insertion into a bucket (`thiscall(bucket, key, value, replace)`, bool).
 const INSERT_IN_BUCKET: u32 = 0x0044_d070;
 
@@ -537,8 +535,180 @@ const INSERT_IN_BUCKET: u32 = 0x0044_d070;
 pub fn find(e: &mut Engine, this: Ptr<MapInterface>, key: u32, value_out: Ptr<Holder>) -> u8 {
     let map = e.get(this, MapInterface::map);
     let bucket = e.vcall(map.addr(), BUCKET_OF_SLOT, &args![key]).u32();
-    e.call(FIND_IN_BUCKET, &args![this, bucket, key, value_out])
-        .u8()
+    typed_call!(
+        FAMILY,
+        0x0044_d510,
+        find_in_bucket(e, this, bucket, key, value_out)
+    )
+}
+
+/// The low byte of a word: the `AL` the exe tests.
+#[allow(clippy::cast_possible_truncation)]
+#[inline(always)]
+fn low_byte(w: u32) -> u8 {
+    w as u8
+}
+
+// Typed from 0044d510
+/// The find of `key` in bucket `bucket` for a map of counted values (`thiscall(bucket, key, value
+/// holder out)`, the found byte): the search (`00529030`); found, the current node's value is
+/// assigned to `value_out` (`0092c820`), and when the node was marked deleted meanwhile the answer
+/// is 0 after all (`0044df20` on the current node, as `0044df00` gives it). The slots are cleared
+/// at the end. The empty function between the assignment and the test (`0040fbe0`) is left out.
+pub fn find_in_bucket(
+    e: &mut Engine,
+    this: Ptr<MapInterface>,
+    bucket: u32,
+    key: u32,
+    value_out: Ptr<Holder>,
+) -> u8 {
+    let mut found = low_byte(typed_call!(
+        FAMILY,
+        0x0052_9030,
+        search(e, this, bucket, key)
+    ));
+    if found != 0 {
+        let current = e.get(this, MapInterface::current).node();
+        let value = HashListNode::value_holder(current);
+        typed_call!(FAMILY, 0x0092_c820, holder::assign(e, value_out, value));
+        let current = e.get(this, MapInterface::current).node();
+        if e.get(current, HashListNode::next).is_marked() {
+            found = 0;
+        }
+    }
+    release_slots(e, this);
+    found
+}
+
+// Typed from 006ec9b0
+/// [`find_in_bucket`] for a map of plain words, searched by `006662a0`: the current node's value
+/// word goes to `*value_out`.
+pub fn find_word_in_bucket(
+    e: &mut Engine,
+    this: Ptr<MapInterface>,
+    bucket: u32,
+    key: u32,
+    value_out: Ptr<u32>,
+) -> u8 {
+    let mut found = low_byte(typed_call!(
+        FAMILY,
+        0x0066_62a0,
+        search_string_map(e, this, bucket, key)
+    ));
+    if found != 0 {
+        let current = e.get(this, MapInterface::current).node();
+        let value = e.get(current, HashListNode::value);
+        e.set(value_out, KEY_WORD, value);
+        let current = e.get(this, MapInterface::current).node();
+        if e.get(current, HashListNode::next).is_marked() {
+            found = 0;
+        }
+    }
+    release_slots(e, this);
+    found
+}
+
+// Typed from 006ec830
+/// Looks `key` up in a map of plain words (`thiscall(key, value out)`, the found byte): its bucket
+/// from the map's slot +0x24, then `006ec9b0`.
+pub fn lookup_word(e: &mut Engine, this: Ptr<MapInterface>, key: u32, value_out: Ptr<u32>) -> u8 {
+    let map = e.get(this, MapInterface::map);
+    let bucket = e.vcall(map.addr(), BUCKET_OF_SLOT, &args![key]).u32();
+    typed_call!(
+        FAMILY,
+        0x006e_c9b0,
+        find_word_in_bucket(e, this, bucket, key, value_out)
+    )
+}
+
+// Typed from 0044a130
+/// Inserts `key` with the word at `value` into a map of plain words (`thiscall(key, value,
+/// replace)`, the `AL` of `0044d240`): its bucket from the map's slot +0x24, then `0044d240`.
+pub fn insert_word(
+    e: &mut Engine,
+    this: Ptr<MapInterface>,
+    key: u32,
+    value: Ptr<u32>,
+    replace: u8,
+) -> u8 {
+    let map = e.get(this, MapInterface::map);
+    let bucket = e.vcall(map.addr(), BUCKET_OF_SLOT, &args![key]).u32();
+    let inserted: bool = typed_call!(
+        FAMILY,
+        0x0044_d240,
+        insert_word_in_bucket(e, this, bucket, key, value, replace)
+    );
+    u8::from(inserted)
+}
+
+// Typed from 00665f20
+/// Removes `key` from a string map (`thiscall(key)`, bool): its bucket from the map's slot +0x24,
+/// then `00666080`.
+pub fn remove_string_map(e: &mut Engine, this: Ptr<MapInterface>, key: u32) -> bool {
+    let map = e.get(this, MapInterface::map);
+    let bucket = e.vcall(map.addr(), BUCKET_OF_SLOT, &args![key]).u32();
+    typed_call!(
+        FAMILY,
+        0x0066_6080,
+        remove_from_bucket_string_map(e, this, bucket, key)
+    )
+}
+
+// Typed from 00666510
+/// [`retire`] for the maps of plain words (`thiscall(node)`): the node's value word cleared (no
+/// holder to release), the node put first on the waiting list through that word (as `006ecd40`
+/// links it) and counted; at the map's `iDeleteBatchSize` (as `0044edb0` reads it) the waiting
+/// nodes are scanned (`0044f220`).
+pub fn retire_other(e: &mut Engine, this: Ptr<MapInterface>, node: Ptr<HashListNode>) {
+    e.set(node, HashListNode::value, 0);
+    let waiting = e.get(this, MapInterface::deleted);
+    e.set(node, HashListNode::value, waiting.addr());
+    e.set(this, MapInterface::deleted, node);
+    let count = e.get(this, MapInterface::deleted_count).wrapping_add(1);
+    e.set(this, MapInterface::deleted_count, count);
+    let map = e.get(this, MapInterface::map);
+    let batch = e.get(map, LockFreeMap::iDeleteBatchSize);
+    if e.get(this, MapInterface::deleted_count) == batch {
+        typed_call!(FAMILY, 0x0044_f220, scan_deleted(e, this));
+    }
+}
+
+// Typed from 0044d3f0
+/// Removes the node whose value word is `*value` from bucket `bucket` (`thiscall(bucket, value)`,
+/// bool): finds it (`0044e820`); not there answers false. Otherwise marks it deleted (a
+/// compare-and-swap of its own link to the same pointer with the mark set; a failed swap finds
+/// again), then unlinks it (a compare-and-swap of the link it came from to the next node): done,
+/// the node is retired (`00666510`); lost to another thread, a find unlinks it. Unlike
+/// [`remove_from_bucket`] the map's count is left alone. The slots are cleared at the end.
+pub fn remove_value_in_bucket(
+    e: &mut Engine,
+    this: Ptr<MapInterface>,
+    bucket: u32,
+    value: Ptr<u32>,
+) -> bool {
+    let removed = loop {
+        if !typed_call!(FAMILY, 0x0044_e820, find_value(e, this, bucket, value)) {
+            break false;
+        }
+        let next = e.get(this, MapInterface::next).node();
+        let marked = next.addr() | 1;
+        let current = e.get(this, MapInterface::current).node();
+        let link = HashListNode::next_link(current);
+        if !e.call(SWAP_LINK, &args![link, marked, next]).bool() {
+            continue;
+        }
+        let current = e.get(this, MapInterface::current).node();
+        let previous = e.get(this, MapInterface::previous);
+        if e.call(SWAP_LINK, &args![previous, next, current]).bool() {
+            let current = e.get(this, MapInterface::current).node();
+            typed_call!(FAMILY, 0x0066_6510, retire_other(e, this, current));
+        } else {
+            let _: bool = typed_call!(FAMILY, 0x0044_e820, find_value(e, this, bucket, value));
+        }
+        break true;
+    };
+    release_slots(e, this);
+    removed
 }
 
 // Typed from 0044c000

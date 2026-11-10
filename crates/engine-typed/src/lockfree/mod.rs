@@ -251,5 +251,34 @@ fn funcs() -> Vec<(u32, AbiFn)> {
             0x006c_73b0,
             manager::construct(Ptr<InterfaceManager>, u32) -> Ptr
         ),
+        // Stage-1 additions for stage 2 (the untyped readers and writers of the maps' body).
+        entry!(
+            0x0044_d510,
+            iface::find_in_bucket(Ptr<MapInterface>, u32, u32, Ptr<Holder>) -> u8
+        ),
+        entry!(
+            0x006e_c9b0,
+            iface::find_word_in_bucket(Ptr<MapInterface>, u32, u32, Ptr<u32>) -> u8
+        ),
+        entry!(
+            0x006e_c830,
+            iface::lookup_word(Ptr<MapInterface>, u32, Ptr<u32>) -> u8
+        ),
+        entry!(
+            0x0044_a130,
+            iface::insert_word(Ptr<MapInterface>, u32, Ptr<u32>, u8) -> u8
+        ),
+        entry!(
+            0x0066_5f20,
+            iface::remove_string_map(Ptr<MapInterface>, u32) -> bool
+        ),
+        entry!(
+            0x0066_6510,
+            iface::retire_other(Ptr<MapInterface>, Ptr<HashListNode>)
+        ),
+        entry!(
+            0x0044_d3f0,
+            iface::remove_value_in_bucket(Ptr<MapInterface>, u32, Ptr<u32>) -> bool
+        ),
     ]
 }
