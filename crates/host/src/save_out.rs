@@ -605,7 +605,7 @@ mod tests {
         let first = jobs(&e, &mut watch, Some(&dir), None);
         put(&mut e, &key, b"second");
         let second = jobs(&e, &mut watch, Some(&dir), None);
-        let bytes = |jobs: &[Job]| match &jobs[..] {
+        let bytes = |jobs: &[Job]| match jobs {
             [Job::Write { bytes, .. }] => bytes.clone(),
             other => panic!("{other:?}"),
         };
