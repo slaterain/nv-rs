@@ -207,3 +207,14 @@ impl InterfaceManager {
         entries.index(i, 8)
     }
 }
+
+impl engine_core::typed::moved::Word for Marked {
+    #[inline(always)]
+    fn from_word(w: u32) -> Self {
+        Marked(w)
+    }
+    #[inline(always)]
+    fn to_word(self) -> u32 {
+        self.0
+    }
+}

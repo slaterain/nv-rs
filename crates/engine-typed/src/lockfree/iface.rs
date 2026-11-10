@@ -10,12 +10,15 @@
 use super::layout::{
     BucketHead, HashListNode, Holder, InterfaceManager, LockFreeMap, MapInterface, Marked, NodeSlot,
 };
-use super::{
-    holder, node, FAMILY, OPERATOR_DELETE, OPERATOR_NEW, SCOPE_BEGIN, SCOPE_CONTEXT, SCOPE_END,
-    SCOPE_MODE, SOURCE_FILE,
+use super::store::{
+    alloc, clear_word, free, holder_set, map_get, map_store, pointer_from_holder, store, store_for,
+    swap_link, tag,
 };
+use super::{holder, node, FAMILY, SCOPE_BEGIN, SCOPE_CONTEXT, SCOPE_END, SCOPE_MODE, SOURCE_FILE};
 use engine_core::ptr::{Field, Layout, Ptr};
+use engine_core::typed::moved::Store;
 use engine_core::{args, typed_call, Engine};
+use std::sync::atomic::{fence, Ordering};
 
 /// The map's virtual key copy: `thiscall(map, key, out)`, the key into `*out`.
 const COPY_KEY_SLOT: u32 = 0x30;
@@ -23,12 +26,28 @@ const COPY_KEY_SLOT: u32 = 0x30;
 /// What `00529000` does: the interface's three node slots cleared, in order.
 #[inline(always)]
 pub(crate) fn release_slots(e: &mut Engine, this: Ptr<MapInterface>) {
-    let slot = e.get(this, MapInterface::next_slot);
-    e.set(slot, NodeSlot::node, Ptr::NULL);
-    let slot = e.get(this, MapInterface::current_slot);
-    e.set(slot, NodeSlot::node, Ptr::NULL);
-    let slot = e.get(this, MapInterface::previous_slot);
-    e.set(slot, NodeSlot::node, Ptr::NULL);
+    let s = store(e);
+    let slot = s.get(e, this, MapInterface::next_slot);
+    s.set(e, slot, NodeSlot::node, Ptr::NULL);
+    let slot = s.get(e, this, MapInterface::current_slot);
+    s.set(e, slot, NodeSlot::node, Ptr::NULL);
+    let slot = s.get(e, this, MapInterface::previous_slot);
+    s.set(e, slot, NodeSlot::node, Ptr::NULL);
+}
+
+/// Publishes `node` in a referenced-node slot (the store a deleting thread's scan must see before
+/// the check that follows it reads the link again): a store-load order where the slot is moved, a
+/// plain store in the guest, as the exe's.
+#[inline(always)]
+fn publish(e: &Engine, s: Store, slot: Ptr<NodeSlot>, node: Ptr<HashListNode>) {
+    s.store_seq(e, field_of(slot, NodeSlot::node), node.addr());
+}
+
+/// The link at `link` read again after a [`publish`], to check the node published is still the one
+/// it names.
+#[inline(always)]
+fn recheck(e: &Engine, s: Store, link: Ptr<BucketHead>) -> Marked {
+    Marked(s.load_seq(e, field_of(link, BucketHead::head)))
 }
 
 // Typed from 0044e550
@@ -61,8 +80,9 @@ pub fn first_word_in_bucket(
     key_out: Ptr<u32>,
     value_out: Ptr<u32>,
 ) -> bool {
+    let s = store(e);
     first_node(e, this, bucket, key_out, |e, node| {
-        let value = e.get(node, HashListNode::value);
+        let value = s.get(e, node, HashListNode::value);
         e.set(value_out, KEY_WORD, value);
     })
 }
@@ -77,41 +97,43 @@ fn first_node(
     key_out: Ptr<u32>,
     take: impl Fn(&mut Engine, Ptr<HashListNode>),
 ) -> bool {
+    let s = store(e);
     let found;
     loop {
         // A stable head: the one published is the one still there.
         loop {
-            let map = e.get(this, MapInterface::map);
-            let buckets = e.get(map, LockFreeMap::pBuckets);
-            e.set(
+            let map = s.get(e, this, MapInterface::map);
+            let buckets = map_get(e, s, map, LockFreeMap::pBuckets);
+            s.set(
+                e,
                 this,
                 MapInterface::previous,
                 LockFreeMap::bucket(buckets, bucket),
             );
-            let link = e.get(this, MapInterface::previous);
-            let head = e.get(link, BucketHead::head);
-            e.set(this, MapInterface::current, head);
-            let current = e.get(this, MapInterface::current).node();
-            let slot = e.get(this, MapInterface::current_slot);
-            e.set(slot, NodeSlot::node, current);
-            let seen = e.get(this, MapInterface::current).node();
-            let link = e.get(this, MapInterface::previous);
-            if e.get(link, BucketHead::head).word() == seen.addr() {
+            let link = s.get(e, this, MapInterface::previous);
+            let head = s.get(e, link, BucketHead::head);
+            s.set(e, this, MapInterface::current, head);
+            let current = s.get(e, this, MapInterface::current).node();
+            let slot = s.get(e, this, MapInterface::current_slot);
+            publish(e, s, slot, current);
+            let seen = s.get(e, this, MapInterface::current).node();
+            let link = s.get(e, this, MapInterface::previous);
+            if recheck(e, s, link).word() == seen.addr() {
                 break;
             }
         }
-        let node = e.get(this, MapInterface::current).node();
+        let node = s.get(e, this, MapInterface::current).node();
         if node.is_null() {
             found = false;
             break;
         }
-        let key = e.get(node, HashListNode::key);
-        let map = e.get(this, MapInterface::map);
+        let key = s.get(e, node, HashListNode::key);
+        let map = s.get(e, this, MapInterface::map);
         e.vcall(map.addr(), COPY_KEY_SLOT, &args![key, key_out]);
-        let node = e.get(this, MapInterface::current).node();
+        let node = s.get(e, this, MapInterface::current).node();
         take(e, node);
-        let node = e.get(this, MapInterface::current).node();
-        if !e.get(node, HashListNode::next).is_marked() {
+        let node = s.get(e, this, MapInterface::current).node();
+        if !s.get(e, node, HashListNode::next).is_marked() {
             found = true;
             break;
         }
@@ -120,27 +142,22 @@ fn first_node(
     found
 }
 
-/// The compare-and-swap of a link (`cdecl(link, new, expected)`, bool: whether the link held
-/// `expected` and now holds `new`).
-const SWAP_LINK: u32 = 0x0044_91c0;
 /// The map's virtual key compares: `+0x34` whether a node's key is not below the key looked for,
 /// `+0x38` whether they are equal (`thiscall(map, node key, key)`).
 const KEY_NOT_BELOW_SLOT: u32 = 0x34;
 const KEY_EQUAL_SLOT: u32 = 0x38;
-/// A holder set from a plain object pointer (`NiPointer<T>::operator=(T*)`, Xbox PDB name of the
-/// template; `thiscall(holder, object)`).
-const HOLDER_SET: u32 = 0x006f_74f0;
 /// A key word where the caller keeps it.
 const KEY_WORD: Field<u32, u32> = Field::new(0);
 
 /// Makes the next node the current one, published in the current-node slot (`0052925a`).
 #[inline(always)]
 fn step_to_next(e: &mut Engine, this: Ptr<MapInterface>) {
-    let next = e.get(this, MapInterface::next);
-    e.set(this, MapInterface::current, next);
-    let next = e.get(this, MapInterface::next).node();
-    let slot = e.get(this, MapInterface::current_slot);
-    e.set(slot, NodeSlot::node, next);
+    let s = store(e);
+    let next = s.get(e, this, MapInterface::next);
+    s.set(e, this, MapInterface::current, next);
+    let next = s.get(e, this, MapInterface::next).node();
+    let slot = s.get(e, this, MapInterface::current_slot);
+    publish(e, s, slot, next);
 }
 
 // Typed from 00529030
@@ -181,65 +198,71 @@ fn search_with<const RETIRE: u32>(
     bucket: u32,
     key: u32,
 ) -> u32 {
-    let map = e.get(this, MapInterface::map);
-    let buckets = e.get(map, LockFreeMap::pBuckets);
+    let s = store(e);
+    let map = s.get(e, this, MapInterface::map);
+    let buckets = map_get(e, s, map, LockFreeMap::pBuckets);
     let head_link = LockFreeMap::bucket(buckets, bucket);
     'start: loop {
-        e.set(this, MapInterface::previous, head_link);
-        let link = e.get(this, MapInterface::previous);
-        let head = e.get(link, BucketHead::head);
-        e.set(this, MapInterface::current, head);
-        let current = e.get(this, MapInterface::current).node();
-        let slot = e.get(this, MapInterface::current_slot);
-        e.set(slot, NodeSlot::node, current);
-        let seen = e.get(this, MapInterface::current).node();
-        let link = e.get(this, MapInterface::previous);
-        if e.get(link, BucketHead::head).word() != seen.addr() {
+        s.set(e, this, MapInterface::previous, head_link);
+        let link = s.get(e, this, MapInterface::previous);
+        let head = s.get(e, link, BucketHead::head);
+        s.set(e, this, MapInterface::current, head);
+        let current = s.get(e, this, MapInterface::current).node();
+        let slot = s.get(e, this, MapInterface::current_slot);
+        publish(e, s, slot, current);
+        let seen = s.get(e, this, MapInterface::current).node();
+        let link = s.get(e, this, MapInterface::previous);
+        if recheck(e, s, link).word() != seen.addr() {
             continue 'start;
         }
         loop {
-            let node = e.get(this, MapInterface::current).node();
+            let node = s.get(e, this, MapInterface::current).node();
             if node.is_null() {
                 return 0;
             }
-            let next = e.get(node, HashListNode::next);
-            e.set(this, MapInterface::next, next);
-            let next = e.get(this, MapInterface::next).node();
-            let slot = e.get(this, MapInterface::next_slot);
-            e.set(slot, NodeSlot::node, next);
-            let next = e.get(this, MapInterface::next);
-            let node = e.get(this, MapInterface::current).node();
-            if next != e.get(node, HashListNode::next) {
+            let next = s.get(e, node, HashListNode::next);
+            s.set(e, this, MapInterface::next, next);
+            let next = s.get(e, this, MapInterface::next).node();
+            let slot = s.get(e, this, MapInterface::next_slot);
+            publish(e, s, slot, next);
+            let next = s.get(e, this, MapInterface::next);
+            let node = s.get(e, this, MapInterface::current).node();
+            if next != recheck(e, s, HashListNode::next_link(node)) {
                 continue 'start;
             }
-            let node_key = e.get(node, HashListNode::key);
-            let seen = e.get(this, MapInterface::current).node();
-            let link = e.get(this, MapInterface::previous);
-            if e.get(link, BucketHead::head).word() != seen.addr() {
+            let node_key = s.get(e, node, HashListNode::key);
+            let seen = s.get(e, this, MapInterface::current).node();
+            let link = s.get(e, this, MapInterface::previous);
+            if recheck(e, s, link).word() != seen.addr() {
                 continue 'start;
             }
-            if !e.get(this, MapInterface::next).is_marked() {
-                let map = e.get(this, MapInterface::map);
+            if !s.get(e, this, MapInterface::next).is_marked() {
+                let map = s.get(e, this, MapInterface::map);
                 if e.vcall(map.addr(), KEY_NOT_BELOW_SLOT, &args![node_key, key])
                     .bool()
                 {
-                    let map = e.get(this, MapInterface::map);
+                    let map = s.get(e, this, MapInterface::map);
                     return e
                         .vcall(map.addr(), KEY_EQUAL_SLOT, &args![node_key, key])
                         .u32();
                 }
-                let node = e.get(this, MapInterface::current).node();
-                e.set(this, MapInterface::previous, HashListNode::next_link(node));
-                let node = e.get(this, MapInterface::current).node();
-                let slot = e.get(this, MapInterface::previous_slot);
-                e.set(slot, NodeSlot::node, node);
+                let node = s.get(e, this, MapInterface::current).node();
+                s.set(
+                    e,
+                    this,
+                    MapInterface::previous,
+                    HashListNode::next_link(node),
+                );
+                let node = s.get(e, this, MapInterface::current).node();
+                let slot = s.get(e, this, MapInterface::previous_slot);
+                publish(e, s, slot, node);
             } else {
-                let next = e.get(this, MapInterface::next).node();
-                let link = e.get(this, MapInterface::previous);
-                if !e.call(SWAP_LINK, &args![link, next, seen]).bool() {
+                let next = s.get(e, this, MapInterface::next).node();
+                let link = s.get(e, this, MapInterface::previous);
+                if !swap_link(e, s, link.addr(), next.addr(), seen.addr()) {
                     continue 'start;
                 }
-                let node = e.get(this, MapInterface::current).node();
+                let node = s.get(e, this, MapInterface::current).node();
                 retire_by::<RETIRE>(e, this, node);
             }
             step_to_next(e, this);
@@ -253,15 +276,16 @@ fn search_with<const RETIRE: u32>(
 /// `006ecd40` links it), and counted; when the count reaches the map's `iDeleteBatchSize` (as
 /// `0044edb0` reads it), the waiting nodes are scanned (`0044f070`).
 pub fn retire(e: &mut Engine, this: Ptr<MapInterface>, node: Ptr<HashListNode>) {
-    e.call(HOLDER_SET, &args![HashListNode::value_holder(node), 0u32]);
-    let waiting = e.get(this, MapInterface::deleted);
-    e.set(node, HashListNode::value, waiting.addr());
-    e.set(this, MapInterface::deleted, node);
-    let count = e.get(this, MapInterface::deleted_count).wrapping_add(1);
-    e.set(this, MapInterface::deleted_count, count);
-    let map = e.get(this, MapInterface::map);
-    let batch = e.get(map, LockFreeMap::iDeleteBatchSize);
-    if e.get(this, MapInterface::deleted_count) == batch {
+    let s = store(e);
+    holder_set(e, s, HashListNode::value_holder(node).addr(), 0);
+    let waiting = s.get(e, this, MapInterface::deleted);
+    s.set(e, node, HashListNode::value, waiting.addr());
+    s.set(e, this, MapInterface::deleted, node);
+    let count = s.get(e, this, MapInterface::deleted_count).wrapping_add(1);
+    s.set(e, this, MapInterface::deleted_count, count);
+    let map = s.get(e, this, MapInterface::map);
+    let batch = map_get(e, s, map, LockFreeMap::iDeleteBatchSize);
+    if s.get(e, this, MapInterface::deleted_count) == batch {
         typed_call!(FAMILY, 0x0044_f070, scan_deleted_releasing(e, this));
     }
 }
@@ -280,6 +304,7 @@ pub fn next_in_bucket(
     key: Ptr<u32>,
     value_out: Ptr<Holder>,
 ) -> bool {
+    let s = store(e);
     next_node(
         e,
         this,
@@ -290,7 +315,7 @@ pub fn next_in_bucket(
             typed_call!(FAMILY, 0x0092_c820, holder::assign(e, value_out, value));
         },
         |e| {
-            e.call(HOLDER_SET, &args![value_out, 0u32]);
+            holder_set(e, s, value_out.addr(), 0);
         },
     )
 }
@@ -305,6 +330,7 @@ pub fn next_word_in_bucket(
     key: Ptr<u32>,
     value_out: Ptr<u32>,
 ) -> bool {
+    let s = store(e);
     next_node(
         e,
         this,
@@ -317,7 +343,7 @@ pub fn next_word_in_bucket(
             )
         },
         |e, node| {
-            let value = e.get(node, HashListNode::value);
+            let value = s.get(e, node, HashListNode::value);
             e.set(value_out, KEY_WORD, value);
         },
         |e| e.set(value_out, KEY_WORD, 0),
@@ -335,6 +361,7 @@ fn next_node(
     take: impl Fn(&mut Engine, Ptr<HashListNode>),
     let_go: impl Fn(&mut Engine),
 ) -> bool {
+    let s = store(e);
     let found = loop {
         let wanted = e.get(key, KEY_WORD);
         let hit = search(e, wanted);
@@ -344,20 +371,20 @@ fn next_node(
         } else {
             MapInterface::current
         };
-        let node = e.get(this, place).node();
+        let node = s.get(e, this, place).node();
         if node.is_null() {
             break false;
         }
-        if e.get(node, HashListNode::next).is_marked() {
+        if s.get(e, node, HashListNode::next).is_marked() {
             continue;
         }
-        let node_key = e.get(node, HashListNode::key);
-        let map = e.get(this, MapInterface::map);
+        let node_key = s.get(e, node, HashListNode::key);
+        let map = s.get(e, this, MapInterface::map);
         e.vcall(map.addr(), COPY_KEY_SLOT, &args![node_key, key]);
-        let node = e.get(this, place).node();
+        let node = s.get(e, this, place).node();
         take(e, node);
-        let node = e.get(this, place).node();
-        if !e.get(node, HashListNode::next).is_marked() {
+        let node = s.get(e, this, place).node();
+        if !s.get(e, node, HashListNode::next).is_marked() {
             break true;
         }
         let_go(e);
@@ -417,27 +444,28 @@ fn remove_from_bucket_with<const RETIRE: u32>(
     bucket: u32,
     key: u32,
 ) -> bool {
+    let s = store(e);
     let removed = loop {
         let hit: u32 = search_by::<RETIRE>(e, this, bucket, key);
         if hit & 0xff == 0 {
             break false;
         }
-        let next = e.get(this, MapInterface::next).node();
+        let next = s.get(e, this, MapInterface::next).node();
         let marked = next.addr() | 1;
-        let current = e.get(this, MapInterface::current).node();
+        let current = s.get(e, this, MapInterface::current).node();
         let link = HashListNode::next_link(current);
-        if !e.call(SWAP_LINK, &args![link, marked, next]).bool() {
+        if !swap_link(e, s, link.addr(), marked, next.addr()) {
             continue;
         }
-        let current = e.get(this, MapInterface::current).node();
-        let previous = e.get(this, MapInterface::previous);
-        if e.call(SWAP_LINK, &args![previous, next, current]).bool() {
-            let current = e.get(this, MapInterface::current).node();
+        let current = s.get(e, this, MapInterface::current).node();
+        let previous = s.get(e, this, MapInterface::previous);
+        if swap_link(e, s, previous.addr(), next.addr(), current.addr()) {
+            let current = s.get(e, this, MapInterface::current).node();
             retire_by::<RETIRE>(e, this, current);
         } else {
             let _: u32 = search_by::<RETIRE>(e, this, bucket, key);
         }
-        let map = e.get(this, MapInterface::map);
+        let map = s.get(e, this, MapInterface::map);
         e.vcall(map.addr(), DECREMENT_COUNT_SLOT, &[]);
         break true;
     };
@@ -448,7 +476,8 @@ fn remove_from_bucket_with<const RETIRE: u32>(
 // Typed from 00528bb0
 /// Removes `key` (`thiscall(key)`, bool): its bucket from the map's slot +0x24, then `00528ce0`.
 pub fn remove(e: &mut Engine, this: Ptr<MapInterface>, key: u32) -> bool {
-    let map = e.get(this, MapInterface::map);
+    let s = store(e);
+    let map = s.get(e, this, MapInterface::map);
     let bucket = e.vcall(map.addr(), BUCKET_OF_SLOT, &args![key]).u32();
     typed_call!(
         FAMILY,
@@ -466,59 +495,65 @@ const RETIRE_OTHER: u32 = 0x0066_6510;
 /// value)`, bool): the walk of [`search`], with the value compared instead of the key (no virtual
 /// call), unlinked nodes retired through `00666510`.
 pub fn find_value(e: &mut Engine, this: Ptr<MapInterface>, bucket: u32, value: Ptr<u32>) -> bool {
-    let map = e.get(this, MapInterface::map);
-    let buckets = e.get(map, LockFreeMap::pBuckets);
+    let s = store(e);
+    let map = s.get(e, this, MapInterface::map);
+    let buckets = map_get(e, s, map, LockFreeMap::pBuckets);
     let head_link = LockFreeMap::bucket(buckets, bucket);
     'start: loop {
-        e.set(this, MapInterface::previous, head_link);
-        let link = e.get(this, MapInterface::previous);
-        let head = e.get(link, BucketHead::head);
-        e.set(this, MapInterface::current, head);
-        let current = e.get(this, MapInterface::current).node();
-        let slot = e.get(this, MapInterface::current_slot);
-        e.set(slot, NodeSlot::node, current);
-        let seen = e.get(this, MapInterface::current).node();
-        let link = e.get(this, MapInterface::previous);
-        if e.get(link, BucketHead::head).word() != seen.addr() {
+        s.set(e, this, MapInterface::previous, head_link);
+        let link = s.get(e, this, MapInterface::previous);
+        let head = s.get(e, link, BucketHead::head);
+        s.set(e, this, MapInterface::current, head);
+        let current = s.get(e, this, MapInterface::current).node();
+        let slot = s.get(e, this, MapInterface::current_slot);
+        publish(e, s, slot, current);
+        let seen = s.get(e, this, MapInterface::current).node();
+        let link = s.get(e, this, MapInterface::previous);
+        if recheck(e, s, link).word() != seen.addr() {
             continue 'start;
         }
         loop {
-            let node = e.get(this, MapInterface::current).node();
+            let node = s.get(e, this, MapInterface::current).node();
             if node.is_null() {
                 return false;
             }
-            let next = e.get(node, HashListNode::next);
-            e.set(this, MapInterface::next, next);
-            let next = e.get(this, MapInterface::next).node();
-            let slot = e.get(this, MapInterface::next_slot);
-            e.set(slot, NodeSlot::node, next);
-            let next = e.get(this, MapInterface::next);
-            let node = e.get(this, MapInterface::current).node();
-            if next != e.get(node, HashListNode::next) {
+            let next = s.get(e, node, HashListNode::next);
+            s.set(e, this, MapInterface::next, next);
+            let next = s.get(e, this, MapInterface::next).node();
+            let slot = s.get(e, this, MapInterface::next_slot);
+            publish(e, s, slot, next);
+            let next = s.get(e, this, MapInterface::next);
+            let node = s.get(e, this, MapInterface::current).node();
+            if next != recheck(e, s, HashListNode::next_link(node)) {
                 continue 'start;
             }
-            let node_value = e.get(node, HashListNode::value);
-            let seen = e.get(this, MapInterface::current).node();
-            let link = e.get(this, MapInterface::previous);
-            if e.get(link, BucketHead::head).word() != seen.addr() {
+            let node_value = s.get(e, node, HashListNode::value);
+            let seen = s.get(e, this, MapInterface::current).node();
+            let link = s.get(e, this, MapInterface::previous);
+            if recheck(e, s, link).word() != seen.addr() {
                 continue 'start;
             }
-            if !e.get(this, MapInterface::next).is_marked() {
+            if !s.get(e, this, MapInterface::next).is_marked() {
                 if node_value == e.get(value, KEY_WORD) {
                     return true;
                 }
-                let node = e.get(this, MapInterface::current).node();
-                e.set(this, MapInterface::previous, HashListNode::next_link(node));
-                let node = e.get(this, MapInterface::current).node();
-                let slot = e.get(this, MapInterface::previous_slot);
-                e.set(slot, NodeSlot::node, node);
+                let node = s.get(e, this, MapInterface::current).node();
+                s.set(
+                    e,
+                    this,
+                    MapInterface::previous,
+                    HashListNode::next_link(node),
+                );
+                let node = s.get(e, this, MapInterface::current).node();
+                let slot = s.get(e, this, MapInterface::previous_slot);
+                publish(e, s, slot, node);
             } else {
-                let next = e.get(this, MapInterface::next).node();
-                let link = e.get(this, MapInterface::previous);
-                if !e.call(SWAP_LINK, &args![link, next, seen]).bool() {
+                let next = s.get(e, this, MapInterface::next).node();
+                let link = s.get(e, this, MapInterface::previous);
+                if !swap_link(e, s, link.addr(), next.addr(), seen.addr()) {
                     continue 'start;
                 }
-                let node = e.get(this, MapInterface::current).node();
+                let node = s.get(e, this, MapInterface::current).node();
                 typed_call!(FAMILY, 0x0066_6510, retire_other(e, this, node));
             }
             step_to_next(e, this);
@@ -533,7 +568,8 @@ const INSERT_IN_BUCKET: u32 = 0x0044_d070;
 /// Looks `key` up (`thiscall(key, value holder out)`, the `AL` of `0044d510`): its bucket from the
 /// map's slot +0x24, then `0044d510` with the bucket, the key and the holder.
 pub fn find(e: &mut Engine, this: Ptr<MapInterface>, key: u32, value_out: Ptr<Holder>) -> u8 {
-    let map = e.get(this, MapInterface::map);
+    let s = store(e);
+    let map = s.get(e, this, MapInterface::map);
     let bucket = e.vcall(map.addr(), BUCKET_OF_SLOT, &args![key]).u32();
     typed_call!(
         FAMILY,
@@ -562,17 +598,18 @@ pub fn find_in_bucket(
     key: u32,
     value_out: Ptr<Holder>,
 ) -> u8 {
+    let s = store(e);
     let mut found = low_byte(typed_call!(
         FAMILY,
         0x0052_9030,
         search(e, this, bucket, key)
     ));
     if found != 0 {
-        let current = e.get(this, MapInterface::current).node();
+        let current = s.get(e, this, MapInterface::current).node();
         let value = HashListNode::value_holder(current);
         typed_call!(FAMILY, 0x0092_c820, holder::assign(e, value_out, value));
-        let current = e.get(this, MapInterface::current).node();
-        if e.get(current, HashListNode::next).is_marked() {
+        let current = s.get(e, this, MapInterface::current).node();
+        if s.get(e, current, HashListNode::next).is_marked() {
             found = 0;
         }
     }
@@ -590,17 +627,18 @@ pub fn find_word_in_bucket(
     key: u32,
     value_out: Ptr<u32>,
 ) -> u8 {
+    let s = store(e);
     let mut found = low_byte(typed_call!(
         FAMILY,
         0x0066_62a0,
         search_string_map(e, this, bucket, key)
     ));
     if found != 0 {
-        let current = e.get(this, MapInterface::current).node();
-        let value = e.get(current, HashListNode::value);
+        let current = s.get(e, this, MapInterface::current).node();
+        let value = s.get(e, current, HashListNode::value);
         e.set(value_out, KEY_WORD, value);
-        let current = e.get(this, MapInterface::current).node();
-        if e.get(current, HashListNode::next).is_marked() {
+        let current = s.get(e, this, MapInterface::current).node();
+        if s.get(e, current, HashListNode::next).is_marked() {
             found = 0;
         }
     }
@@ -612,7 +650,8 @@ pub fn find_word_in_bucket(
 /// Looks `key` up in a map of plain words (`thiscall(key, value out)`, the found byte): its bucket
 /// from the map's slot +0x24, then `006ec9b0`.
 pub fn lookup_word(e: &mut Engine, this: Ptr<MapInterface>, key: u32, value_out: Ptr<u32>) -> u8 {
-    let map = e.get(this, MapInterface::map);
+    let s = store(e);
+    let map = s.get(e, this, MapInterface::map);
     let bucket = e.vcall(map.addr(), BUCKET_OF_SLOT, &args![key]).u32();
     typed_call!(
         FAMILY,
@@ -631,7 +670,8 @@ pub fn insert_word(
     value: Ptr<u32>,
     replace: u8,
 ) -> u8 {
-    let map = e.get(this, MapInterface::map);
+    let s = store(e);
+    let map = s.get(e, this, MapInterface::map);
     let bucket = e.vcall(map.addr(), BUCKET_OF_SLOT, &args![key]).u32();
     let inserted: bool = typed_call!(
         FAMILY,
@@ -645,7 +685,8 @@ pub fn insert_word(
 /// Removes `key` from a string map (`thiscall(key)`, bool): its bucket from the map's slot +0x24,
 /// then `00666080`.
 pub fn remove_string_map(e: &mut Engine, this: Ptr<MapInterface>, key: u32) -> bool {
-    let map = e.get(this, MapInterface::map);
+    let s = store(e);
+    let map = s.get(e, this, MapInterface::map);
     let bucket = e.vcall(map.addr(), BUCKET_OF_SLOT, &args![key]).u32();
     typed_call!(
         FAMILY,
@@ -660,15 +701,16 @@ pub fn remove_string_map(e: &mut Engine, this: Ptr<MapInterface>, key: u32) -> b
 /// links it) and counted; at the map's `iDeleteBatchSize` (as `0044edb0` reads it) the waiting
 /// nodes are scanned (`0044f220`).
 pub fn retire_other(e: &mut Engine, this: Ptr<MapInterface>, node: Ptr<HashListNode>) {
-    e.set(node, HashListNode::value, 0);
-    let waiting = e.get(this, MapInterface::deleted);
-    e.set(node, HashListNode::value, waiting.addr());
-    e.set(this, MapInterface::deleted, node);
-    let count = e.get(this, MapInterface::deleted_count).wrapping_add(1);
-    e.set(this, MapInterface::deleted_count, count);
-    let map = e.get(this, MapInterface::map);
-    let batch = e.get(map, LockFreeMap::iDeleteBatchSize);
-    if e.get(this, MapInterface::deleted_count) == batch {
+    let s = store(e);
+    s.set(e, node, HashListNode::value, 0);
+    let waiting = s.get(e, this, MapInterface::deleted);
+    s.set(e, node, HashListNode::value, waiting.addr());
+    s.set(e, this, MapInterface::deleted, node);
+    let count = s.get(e, this, MapInterface::deleted_count).wrapping_add(1);
+    s.set(e, this, MapInterface::deleted_count, count);
+    let map = s.get(e, this, MapInterface::map);
+    let batch = map_get(e, s, map, LockFreeMap::iDeleteBatchSize);
+    if s.get(e, this, MapInterface::deleted_count) == batch {
         typed_call!(FAMILY, 0x0044_f220, scan_deleted(e, this));
     }
 }
@@ -686,21 +728,22 @@ pub fn remove_value_in_bucket(
     bucket: u32,
     value: Ptr<u32>,
 ) -> bool {
+    let s = store(e);
     let removed = loop {
         if !typed_call!(FAMILY, 0x0044_e820, find_value(e, this, bucket, value)) {
             break false;
         }
-        let next = e.get(this, MapInterface::next).node();
+        let next = s.get(e, this, MapInterface::next).node();
         let marked = next.addr() | 1;
-        let current = e.get(this, MapInterface::current).node();
+        let current = s.get(e, this, MapInterface::current).node();
         let link = HashListNode::next_link(current);
-        if !e.call(SWAP_LINK, &args![link, marked, next]).bool() {
+        if !swap_link(e, s, link.addr(), marked, next.addr()) {
             continue;
         }
-        let current = e.get(this, MapInterface::current).node();
-        let previous = e.get(this, MapInterface::previous);
-        if e.call(SWAP_LINK, &args![previous, next, current]).bool() {
-            let current = e.get(this, MapInterface::current).node();
+        let current = s.get(e, this, MapInterface::current).node();
+        let previous = s.get(e, this, MapInterface::previous);
+        if swap_link(e, s, previous.addr(), next.addr(), current.addr()) {
+            let current = s.get(e, this, MapInterface::current).node();
             typed_call!(FAMILY, 0x0066_6510, retire_other(e, this, current));
         } else {
             let _: bool = typed_call!(FAMILY, 0x0044_e820, find_value(e, this, bucket, value));
@@ -716,7 +759,8 @@ pub fn remove_value_in_bucket(
 /// its bucket from the map's slot +0x24, then `0044d070` with the bucket, the key, the value and the
 /// flag byte.
 pub fn insert(e: &mut Engine, this: Ptr<MapInterface>, key: u32, value: u32, replace: u8) -> u32 {
-    let map = e.get(this, MapInterface::map);
+    let s = store(e);
+    let map = s.get(e, this, MapInterface::map);
     let bucket = e.vcall(map.addr(), BUCKET_OF_SLOT, &args![key]).u32();
     e.call(
         INSERT_IN_BUCKET,
@@ -751,6 +795,7 @@ fn insert_node(
     replace: u8,
     values: Values,
 ) -> bool {
+    let s = store(e);
     e.with_stack(4, |e, scope| {
         e.call(
             SCOPE_BEGIN,
@@ -775,11 +820,11 @@ fn insert_node(
                         }
                     }
                     Values::Plain => {
-                        e.call(OPERATOR_DELETE, &args![node]);
+                        free(e, s, node.addr());
                     }
                 }
                 if replace != 0 {
-                    let current = e.get(this, MapInterface::current).node();
+                    let current = s.get(e, this, MapInterface::current).node();
                     match values {
                         Values::Counted => {
                             let held = HashListNode::value_holder(current);
@@ -791,7 +836,7 @@ fn insert_node(
                         }
                         Values::Plain => {
                             let word = e.get(Ptr::<u32>::new(value), KEY_WORD);
-                            e.set(current, HashListNode::value, word);
+                            s.set(e, current, HashListNode::value, word);
                         }
                     }
                 } else {
@@ -800,9 +845,10 @@ fn insert_node(
                 break;
             }
             if node.is_null() {
-                let block = e.call(OPERATOR_NEW, &args![HashListNode::SIZE]).u32();
+                let into = store_for(e, this.addr());
+                let block = alloc(e, into, HashListNode::SIZE, tag::NODE);
                 if block != 0 {
-                    let map = e.get(this, MapInterface::map);
+                    let map = s.get(e, this, MapInterface::map);
                     let node_key = e.vcall(map.addr(), NODE_KEY_SLOT, &args![key]).u32();
                     let block = Ptr::new(block);
                     node = match values {
@@ -820,11 +866,11 @@ fn insert_node(
                 }
             }
             // Linked before the current node, then swapped into the link that pointed at it.
-            let current = e.get(this, MapInterface::current).node();
-            e.set(node, HashListNode::next, Marked(current.addr()));
-            let previous = e.get(this, MapInterface::previous);
-            if e.call(SWAP_LINK, &args![previous, node, current]).bool() {
-                let map = e.get(this, MapInterface::map);
+            let current = s.get(e, this, MapInterface::current).node();
+            s.set(e, node, HashListNode::next, Marked(current.addr()));
+            let previous = s.get(e, this, MapInterface::previous);
+            if swap_link(e, s, previous.addr(), node.addr(), current.addr()) {
+                let map = s.get(e, this, MapInterface::map);
                 e.vcall(map.addr(), INCREMENT_COUNT_SLOT, &[]);
                 break;
             }
@@ -904,44 +950,50 @@ pub fn scan_deleted_releasing(e: &mut Engine, this: Ptr<MapInterface>) {
 /// [`scan_deleted`]'s body, deleting a node as `delete` says.
 #[inline(always)]
 fn scan_deleted_with(e: &mut Engine, this: Ptr<MapInterface>, delete: Delete) {
+    let s = store(e);
     e.with_stack(4, |e, scope| {
         e.call(
             SCOPE_BEGIN,
             &args![scope, SCOPE_CONTEXT, SCOPE_MODE, SOURCE_FILE, SCAN_LINE],
         );
-        let map = e.get(this, MapInterface::map);
-        let manager = e.get(map, LockFreeMap::pInterfaceManager);
-        let threads = e.get(manager, InterfaceManager::max_threads);
+        let map = s.get(e, this, MapInterface::map);
+        let manager = map_get(e, s, map, LockFreeMap::pInterfaceManager);
+        let threads = s.get(e, manager, InterfaceManager::max_threads);
         let slots = threads.wrapping_mul(SLOTS_PER_THREAD);
-        let copy: Ptr<NodeSlot> = Ptr::new(
-            e.call(OPERATOR_NEW, &args![slots.saturating_mul(NodeSlot::SIZE)])
-                .u32(),
-        );
-        let map = e.get(this, MapInterface::map);
-        let referenced = e.get(map, LockFreeMap::pReferencedNodes);
-        e.call(MEMCPY, &args![copy, referenced, slots << 2]);
+        let into = store_for(e, this.addr());
+        let bytes = slots.saturating_mul(NodeSlot::SIZE);
+        let copy: Ptr<NodeSlot> = Ptr::new(alloc(e, into, bytes, tag::SCAN_COPY));
+        let map = s.get(e, this, MapInterface::map);
+        let referenced = map_get(e, s, map, LockFreeMap::pReferencedNodes);
+        if let Store::Moved { .. } = s {
+            // The other half of the hazard order: the slots read after this thread's unlinks.
+            fence(Ordering::SeqCst);
+        }
+        s.copy(e, copy.addr(), referenced.addr(), slots, |e| {
+            e.call(MEMCPY, &args![copy, referenced, slots << 2]);
+        });
         let mut kept: Ptr<HashListNode> = Ptr::NULL;
         let mut kept_count = 0u32;
-        while !e.get(this, MapInterface::deleted).is_null() {
-            let node = e.get(this, MapInterface::deleted);
-            let next = Ptr::new(e.get(node, HashListNode::value));
-            e.set(this, MapInterface::deleted, next);
+        while !s.get(e, this, MapInterface::deleted).is_null() {
+            let node = s.get(e, this, MapInterface::deleted);
+            let next = Ptr::new(s.get(e, node, HashListNode::value));
+            s.set(e, this, MapInterface::deleted, next);
             let mut named = false;
             let mut i = 0u32;
             while i < slots {
-                if node == e.get(copy.index(i, NodeSlot::SIZE), NodeSlot::node) {
+                if node == s.get(e, copy.index(i, NodeSlot::SIZE), NodeSlot::node) {
                     named = true;
                     break;
                 }
                 i += 1;
             }
             if named {
-                e.set(node, HashListNode::value, kept.addr());
+                s.set(e, node, HashListNode::value, kept.addr());
                 kept = node;
                 kept_count = kept_count.wrapping_add(1);
             } else {
-                e.set(node, HashListNode::value, 0);
-                let map = e.get(this, MapInterface::map);
+                s.set(e, node, HashListNode::value, 0);
+                let map = s.get(e, this, MapInterface::map);
                 match delete {
                     Delete::Plain => {
                         typed_call!(FAMILY, 0x0044_dde0, node::delete_plain(e, map, node))
@@ -952,9 +1004,9 @@ fn scan_deleted_with(e: &mut Engine, this: Ptr<MapInterface>, delete: Delete) {
                 }
             }
         }
-        e.call(OPERATOR_DELETE, &args![copy]);
-        e.set(this, MapInterface::deleted, kept);
-        e.set(this, MapInterface::deleted_count, kept_count);
+        free(e, s, copy.addr());
+        s.set(e, this, MapInterface::deleted, kept);
+        s.set(e, this, MapInterface::deleted_count, kept_count);
         e.call(SCOPE_END, &args![scope]);
     });
 }
@@ -974,18 +1026,18 @@ pub fn construct(
     current_slot: Ptr<NodeSlot>,
     previous_slot: Ptr<NodeSlot>,
 ) -> Ptr<MapInterface> {
-    e.call(
-        MARKED_CONSTRUCT,
-        &args![field_of(this, MapInterface::current)],
-    );
-    e.call(MARKED_CONSTRUCT, &args![field_of(this, MapInterface::next)]);
-    e.set(this, MapInterface::map, map);
-    e.set(this, MapInterface::next_slot, next_slot);
-    e.set(this, MapInterface::current_slot, current_slot);
-    e.set(this, MapInterface::previous_slot, previous_slot);
-    e.set(this, MapInterface::previous, Ptr::NULL);
-    e.set(this, MapInterface::deleted, Ptr::NULL);
-    e.set(this, MapInterface::deleted_count, 0);
+    let s = store(e);
+    let at = field_of(this, MapInterface::current);
+    clear_word(e, s, MARKED_CONSTRUCT, at, &args![at]);
+    let at = field_of(this, MapInterface::next);
+    clear_word(e, s, MARKED_CONSTRUCT, at, &args![at]);
+    s.set(e, this, MapInterface::map, map);
+    s.set(e, this, MapInterface::next_slot, next_slot);
+    s.set(e, this, MapInterface::current_slot, current_slot);
+    s.set(e, this, MapInterface::previous_slot, previous_slot);
+    s.set(e, this, MapInterface::previous, Ptr::NULL);
+    s.set(e, this, MapInterface::deleted, Ptr::NULL);
+    s.set(e, this, MapInterface::deleted_count, 0);
     this
 }
 
@@ -1009,18 +1061,18 @@ fn allocate_with(
     index: u32,
     header: u32,
 ) -> Ptr<MapInterface> {
+    let s = store(e);
     e.with_stack(4, |e, scope| {
         e.call(
             SCOPE_BEGIN,
             &args![scope, SCOPE_CONTEXT, SCOPE_MODE, header, ALLOCATE_LINE],
         );
-        let block: Ptr<MapInterface> =
-            Ptr::new(e.call(OPERATOR_NEW, &args![MapInterface::SIZE]).u32());
+        let into = map_store(e, this.addr());
+        let block: Ptr<MapInterface> = Ptr::new(alloc(e, into, MapInterface::SIZE, tag::INTERFACE));
         let made = if block.is_null() {
             Ptr::NULL
         } else {
-            let slots = e
-                .get(this, LockFreeMap::pReferencedNodes)
+            let slots = map_get(e, s, this, LockFreeMap::pReferencedNodes)
                 .index(index.wrapping_mul(SLOTS_PER_THREAD), NodeSlot::SIZE);
             let next = slots;
             let current = slots.index(1, NodeSlot::SIZE);
@@ -1055,7 +1107,8 @@ pub fn allocate_tree(e: &mut Engine, this: Ptr<LockFreeMap>, index: u32) -> Ptr<
 /// Frees what the interface still waits to free (`thiscall`): [`scan_deleted`] while its count is
 /// not zero.
 pub fn flush(e: &mut Engine, this: Ptr<MapInterface>) {
-    while e.get(this, MapInterface::deleted_count) != 0 {
+    let s = store(e);
+    while s.get(e, this, MapInterface::deleted_count) != 0 {
         typed_call!(FAMILY, 0x0044_f220, scan_deleted(e, this));
     }
 }
@@ -1064,9 +1117,10 @@ pub fn flush(e: &mut Engine, this: Ptr<MapInterface>) {
 /// An interface's deleting destructor (`thiscall(flags)`, answers `this`): [`flush`], then the
 /// interface freed when bit 0 of `flags` is set.
 pub fn delete(e: &mut Engine, this: Ptr<MapInterface>, flags: u32) -> Ptr<MapInterface> {
+    let s = store(e);
     typed_call!(FAMILY, 0x0044_f200, flush(e, this));
     if flags & 1 != 0 {
-        e.call(OPERATOR_DELETE, &args![this]);
+        free(e, s, this.addr());
     }
     this
 }
@@ -1097,6 +1151,7 @@ pub fn next_in_bucket_copy(
     key: Ptr<u32>,
     value_out: Ptr<Holder>,
 ) -> bool {
+    let s = store(e);
     next_node(
         e,
         this,
@@ -1107,14 +1162,13 @@ pub fn next_in_bucket_copy(
             typed_call!(FAMILY, 0x0092_c820, holder::assign(e, value_out, value));
         },
         |e| {
-            e.call(HOLDER_SET, &args![value_out, 0u32]);
+            holder_set(e, s, value_out.addr(), 0);
         },
     )
 }
 
-/// A counted pointer local made from a holder (`thiscall(local, holder)`), its release (`thiscall`),
-/// and whether it holds `object` (`thiscall(local, object)`).
-const POINTER_FROM_HOLDER: u32 = 0x0044_e370;
+/// A counted pointer local's release (`thiscall`), and whether it holds `object` (`thiscall(local,
+/// object)`).
 const POINTER_RELEASE: u32 = 0x0044_cbf0;
 const POINTER_HOLDS: u32 = 0x004b_0460;
 
@@ -1130,20 +1184,21 @@ pub fn find_counted_value(
     bucket: u32,
     wanted: Ptr<Holder>,
 ) -> bool {
-    let map = e.get(this, MapInterface::map);
-    let buckets = e.get(map, LockFreeMap::pBuckets);
+    let s = store(e);
+    let map = s.get(e, this, MapInterface::map);
+    let buckets = map_get(e, s, map, LockFreeMap::pBuckets);
     let head_link = LockFreeMap::bucket(buckets, bucket);
     e.with_stack(4, |e, local| loop {
-        e.set(this, MapInterface::previous, head_link);
-        let link = e.get(this, MapInterface::previous);
-        let head = e.get(link, BucketHead::head);
-        e.set(this, MapInterface::current, head);
-        let current = e.get(this, MapInterface::current).node();
-        let slot = e.get(this, MapInterface::current_slot);
-        e.set(slot, NodeSlot::node, current);
-        let seen = e.get(this, MapInterface::current).node();
-        let link = e.get(this, MapInterface::previous);
-        if e.get(link, BucketHead::head).word() != seen.addr() {
+        s.set(e, this, MapInterface::previous, head_link);
+        let link = s.get(e, this, MapInterface::previous);
+        let head = s.get(e, link, BucketHead::head);
+        s.set(e, this, MapInterface::current, head);
+        let current = s.get(e, this, MapInterface::current).node();
+        let slot = s.get(e, this, MapInterface::current_slot);
+        publish(e, s, slot, current);
+        let seen = s.get(e, this, MapInterface::current).node();
+        let link = s.get(e, this, MapInterface::previous);
+        if recheck(e, s, link).word() != seen.addr() {
             continue;
         }
         if let Some(found) = walk_counted(e, this, local, wanted) {
@@ -1161,50 +1216,54 @@ fn walk_counted(
     local: Ptr,
     wanted: Ptr<Holder>,
 ) -> Option<bool> {
+    let s = store(e);
     loop {
-        let node = e.get(this, MapInterface::current).node();
+        let node = s.get(e, this, MapInterface::current).node();
         if node.is_null() {
             return Some(false);
         }
-        let next = e.get(node, HashListNode::next);
-        e.set(this, MapInterface::next, next);
-        let next = e.get(this, MapInterface::next).node();
-        let slot = e.get(this, MapInterface::next_slot);
-        e.set(slot, NodeSlot::node, next);
-        let next = e.get(this, MapInterface::next);
-        let node = e.get(this, MapInterface::current).node();
-        if next != e.get(node, HashListNode::next) {
+        let next = s.get(e, node, HashListNode::next);
+        s.set(e, this, MapInterface::next, next);
+        let next = s.get(e, this, MapInterface::next).node();
+        let slot = s.get(e, this, MapInterface::next_slot);
+        publish(e, s, slot, next);
+        let next = s.get(e, this, MapInterface::next);
+        let node = s.get(e, this, MapInterface::current).node();
+        if next != recheck(e, s, HashListNode::next_link(node)) {
             return None;
         }
-        let node = e.get(this, MapInterface::current).node();
-        e.call(
-            POINTER_FROM_HOLDER,
-            &args![local, HashListNode::value_holder(node)],
-        );
-        let seen = e.get(this, MapInterface::current).node();
-        let link = e.get(this, MapInterface::previous);
-        if e.get(link, BucketHead::head).word() != seen.addr() {
+        let node = s.get(e, this, MapInterface::current).node();
+        let held = HashListNode::value_holder(node).addr();
+        pointer_from_holder(e, s, local.addr(), held);
+        let seen = s.get(e, this, MapInterface::current).node();
+        let link = s.get(e, this, MapInterface::previous);
+        if recheck(e, s, link).word() != seen.addr() {
             e.call(POINTER_RELEASE, &args![local]);
             return None;
         }
-        if !e.get(this, MapInterface::next).is_marked() {
+        if !s.get(e, this, MapInterface::next).is_marked() {
             if e.call(POINTER_HOLDS, &args![local, wanted]).bool() {
                 e.call(POINTER_RELEASE, &args![local]);
                 return Some(true);
             }
-            let node = e.get(this, MapInterface::current).node();
-            e.set(this, MapInterface::previous, HashListNode::next_link(node));
-            let node = e.get(this, MapInterface::current).node();
-            let slot = e.get(this, MapInterface::previous_slot);
-            e.set(slot, NodeSlot::node, node);
+            let node = s.get(e, this, MapInterface::current).node();
+            s.set(
+                e,
+                this,
+                MapInterface::previous,
+                HashListNode::next_link(node),
+            );
+            let node = s.get(e, this, MapInterface::current).node();
+            let slot = s.get(e, this, MapInterface::previous_slot);
+            publish(e, s, slot, node);
         } else {
-            let next = e.get(this, MapInterface::next).node();
-            let link = e.get(this, MapInterface::previous);
-            if !e.call(SWAP_LINK, &args![link, next, seen]).bool() {
+            let next = s.get(e, this, MapInterface::next).node();
+            let link = s.get(e, this, MapInterface::previous);
+            if !swap_link(e, s, link.addr(), next.addr(), seen.addr()) {
                 e.call(POINTER_RELEASE, &args![local]);
                 return None;
             }
-            let node = e.get(this, MapInterface::current).node();
+            let node = s.get(e, this, MapInterface::current).node();
             typed_call!(FAMILY, 0x0052_92a0, retire(e, this, node));
         }
         step_to_next(e, this);
@@ -1221,6 +1280,7 @@ pub fn remove_counted_value_in_bucket(
     bucket: u32,
     wanted: Ptr<Holder>,
 ) -> bool {
+    let s = store(e);
     let removed = loop {
         if !typed_call!(
             FAMILY,
@@ -1229,17 +1289,17 @@ pub fn remove_counted_value_in_bucket(
         ) {
             break false;
         }
-        let next = e.get(this, MapInterface::next).node();
+        let next = s.get(e, this, MapInterface::next).node();
         let marked = next.addr() | 1;
-        let current = e.get(this, MapInterface::current).node();
+        let current = s.get(e, this, MapInterface::current).node();
         let link = HashListNode::next_link(current);
-        if !e.call(SWAP_LINK, &args![link, marked, next]).bool() {
+        if !swap_link(e, s, link.addr(), marked, next.addr()) {
             continue;
         }
-        let current = e.get(this, MapInterface::current).node();
-        let previous = e.get(this, MapInterface::previous);
-        if e.call(SWAP_LINK, &args![previous, next, current]).bool() {
-            let current = e.get(this, MapInterface::current).node();
+        let current = s.get(e, this, MapInterface::current).node();
+        let previous = s.get(e, this, MapInterface::previous);
+        if swap_link(e, s, previous.addr(), next.addr(), current.addr()) {
+            let current = s.get(e, this, MapInterface::current).node();
             typed_call!(FAMILY, 0x0052_92a0, retire(e, this, current));
         } else {
             let _: bool = typed_call!(
@@ -1258,7 +1318,8 @@ pub fn remove_counted_value_in_bucket(
 /// [`flush`] for the maps of counted values: [`scan_deleted_releasing`] while the count is not
 /// zero.
 pub fn flush_counted(e: &mut Engine, this: Ptr<MapInterface>) {
-    while e.get(this, MapInterface::deleted_count) != 0 {
+    let s = store(e);
+    while s.get(e, this, MapInterface::deleted_count) != 0 {
         typed_call!(FAMILY, 0x0044_f070, scan_deleted_releasing(e, this));
     }
 }
@@ -1267,9 +1328,10 @@ pub fn flush_counted(e: &mut Engine, this: Ptr<MapInterface>) {
 /// [`delete`] for the maps of counted values (`thiscall(flags)`, answers `this`): [`flush_counted`],
 /// then the interface freed when bit 0 of `flags` is set.
 pub fn delete_counted(e: &mut Engine, this: Ptr<MapInterface>, flags: u32) -> Ptr<MapInterface> {
+    let s = store(e);
     typed_call!(FAMILY, 0x0044_f420, flush_counted(e, this));
     if flags & 1 != 0 {
-        e.call(OPERATOR_DELETE, &args![this]);
+        free(e, s, this.addr());
     }
     this
 }

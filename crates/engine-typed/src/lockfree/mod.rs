@@ -29,6 +29,7 @@ pub mod manager;
 pub mod map;
 pub mod node;
 pub mod queue;
+pub(crate) mod store;
 
 /// The memory-context scope the family's allocating functions run in (`thiscall(scope, context,
 /// mode, source file, line)` .. `thiscall(scope)`), a 4-byte local: the context for the allocations,
@@ -41,6 +42,8 @@ pub(crate) const SOURCE_FILE: u32 = 0x0101_73f8;
 /// `operator new` and `operator delete` (`cdecl`).
 pub(crate) const OPERATOR_NEW: u32 = 0x0040_1000;
 pub(crate) const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// The vector constructor iterator (`stdcall(block, element size, count, constructor)`).
+pub(crate) const VECTOR_CONSTRUCT: u32 = 0x0040_1050;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(1);

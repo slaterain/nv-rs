@@ -17,14 +17,16 @@ const INTERLOCKED_INCREMENT: u32 = 0x0040_b460;
 /// The other holder is read again after the release, which may free what it points into. Answers
 /// `this`.
 pub fn assign(e: &mut Engine, this: Ptr<Holder>, other: Ptr<Holder>) -> Ptr<Holder> {
-    if e.get(this, Holder::object) != e.get(other, Holder::object) {
-        let held = e.get(this, Holder::object);
+    // Either holder may be a node's (the family's own, moved in stage 2) or a caller's.
+    let s = super::store::store(e);
+    if s.get(e, this, Holder::object) != s.get(e, other, Holder::object) {
+        let held = s.get(e, this, Holder::object);
         if !held.is_null() {
             e.call(RELEASE, &args![held]);
         }
-        let taken = e.get(other, Holder::object);
-        e.set(this, Holder::object, taken);
-        let held = e.get(this, Holder::object);
+        let taken = s.get(e, other, Holder::object);
+        s.set(e, this, Holder::object, taken);
+        let held = s.get(e, this, Holder::object);
         if !held.is_null() {
             e.call(
                 INTERLOCKED_INCREMENT,
