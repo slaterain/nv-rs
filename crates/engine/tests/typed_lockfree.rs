@@ -11,7 +11,7 @@
 use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Diff, Input};
-use engine_typed::lockfree::{self, holder, iface, manager, map, queue};
+use engine_typed::lockfree::{self, holder, iface, manager, map, node, queue};
 
 /// Where the test's map functions are registered: past `.text`, one per vtable slot.
 const VT_FN: u32 = 0x00ff_1000;
@@ -1392,6 +1392,281 @@ fn remove_value_in_bucket() {
         let value = e.mem.alloc(4);
         e.mem.set_u32(value, wanted);
         vec![w.face, case.word(0), value]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A block of `size` bytes filled with a pattern, as an allocation hands out stale bytes.
+fn stale_block(e: &mut Engine, size: u32) -> u32 {
+    let b = e.mem.alloc(size);
+    for off in (0..size).step_by(4) {
+        e.mem.set_u32(b + off, 0x5a5a_0000 | off);
+    }
+    b
+}
+
+#[test]
+fn node_construct() {
+    // A counted value or none.
+    Diff::new(entry!(
+        0x0044_df40,
+        node::construct(Ptr<_>, u32, Ptr<_>) -> Ptr
+    ))
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .inputs(&[Input::Flag])
+    .setup(|e, case| {
+        let w = world(e, true);
+        let block = stale_block(e, 0xc);
+        let value = if case.word(0) != 0 { w.spare } else { 0 };
+        let holder = holder_of(e, value);
+        vec![block, 9, holder]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn node_construct_word() {
+    Diff::new(entry!(
+        0x006e_cbd0,
+        node::construct_word(Ptr<_>, u32, Ptr<_>) -> Ptr
+    ))
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .inputs(&[Input::Of(&[0, 0x1234_5678])])
+    .setup(|e, case| {
+        let _ = world(e, true);
+        let block = stale_block(e, 0xc);
+        let word = e.mem.alloc(4);
+        e.mem.set_u32(word, case.word(0));
+        vec![block, 9, word]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A node holding a counted value (its count 3 or 1, so the release frees it or not), or none.
+fn node_case(d: Diff) -> Diff {
+    d.family(&lockfree::LOCKFREE)
+        .family(&leaf::LEAVES)
+        .ignore_calls(INLINED)
+        .max_calls(MAX_CALLS)
+}
+
+#[test]
+fn node_destroy() {
+    node_case(Diff::new(entry!(0x0044_dd40, node::destroy(Ptr<_>))))
+        .inputs(&[Input::Of(&[0, 1, 3])])
+        .setup(|e, case| {
+            let _ = world(e, true);
+            let n = node(e, 4, 0);
+            match case.word(0) {
+                0 => e.mem.set_u32(n + 4, 0),
+                count => {
+                    let value = e.mem.u32(n + 4);
+                    e.mem.set_u32(value + 8, count);
+                }
+            }
+            vec![n]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn node_delete() {
+    node_case(Diff::new(entry!(
+        0x0044_ed50,
+        node::delete(Ptr<_>, u32) -> Ptr
+    )))
+    .inputs(&[Input::Of(&[0, 1, 3])])
+    .setup(|e, case| {
+        let _ = world(e, true);
+        let n = node(e, 4, 0);
+        vec![n, case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn node_delete_plain() {
+    node_case(Diff::new(entry!(
+        0x0044_dde0,
+        node::delete_plain(Ptr<_>, Ptr<_>)
+    )))
+    .inputs(&[Input::Of(&[4, 9])])
+    .setup(|e, case| {
+        let w = world(e, true);
+        let n = node(e, case.word(0), 0);
+        vec![w.map, n]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn node_delete_counted() {
+    node_case(Diff::new(entry!(
+        0x0044_edd0,
+        node::delete_counted(Ptr<_>, Ptr<_>)
+    )))
+    .inputs(&[Input::Of(&[1, 3])])
+    .setup(|e, case| {
+        let w = world(e, true);
+        let n = node(e, 4, 0);
+        let value = e.mem.u32(n + 4);
+        e.mem.set_u32(value + 8, case.word(0));
+        vec![w.map, n]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn interface_construct() {
+    node_case(Diff::new(entry!(
+        0x0044_d000,
+        iface::construct(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr
+    )))
+    .inputs(&[Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        let w = world(e, true);
+        let block = stale_block(e, 0x24);
+        let slots = w.refs + 12 * case.word(0);
+        vec![block, w.map, slots, slots + 4, slots + 8]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn allocate_interface() {
+    // Thread 0 or 1's slots.
+    node_case(Diff::new(entry!(
+        0x0090_6400,
+        iface::allocate(Ptr<_>, u32) -> Ptr
+    )))
+    .local_at(0x0040_4eb0, 0, 4)
+    .local_at(0x0040_4ee0, 0, 4)
+    .inputs(&[Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        let w = world(e, true);
+        vec![w.map, case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn allocate_interface_tree() {
+    node_case(Diff::new(entry!(
+        0x0066_5e30,
+        iface::allocate_tree(Ptr<_>, u32) -> Ptr
+    )))
+    .local_at(0x0040_4eb0, 0, 4)
+    .local_at(0x0040_4ee0, 0, 4)
+    .inputs(&[Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        let w = world(e, true);
+        vec![w.map, case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The interface with a waiting list of three nodes, none of them named by a node slot, or none.
+fn waiting(e: &mut Engine, w: &World, three: bool) {
+    if three {
+        let third = node(e, 40, 0);
+        let second = node(e, 41, 0);
+        let first = node(e, 42, 0);
+        e.mem.set_u32(first + 4, second);
+        e.mem.set_u32(second + 4, third);
+        e.mem.set_u32(third + 4, 0);
+        e.mem.set_u32(w.face + 0x1c, first);
+        e.mem.set_u32(w.face + 0x20, 3);
+    }
+}
+
+#[test]
+fn interface_flush() {
+    node_case(Diff::new(entry!(0x0044_f200, iface::flush(Ptr<_>))))
+        .local_at(0x0040_4eb0, 0, 4)
+        .local_at(0x0040_4ee0, 0, 4)
+        .inputs(&[Input::Flag])
+        .setup(|e, case| {
+            let w = world(e, true);
+            waiting(e, &w, case.word(0) != 0);
+            vec![w.face]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn interface_delete() {
+    node_case(Diff::new(entry!(
+        0x0044_ed80,
+        iface::delete(Ptr<_>, u32) -> Ptr
+    )))
+    .local_at(0x0040_4eb0, 0, 4)
+    .local_at(0x0040_4ee0, 0, 4)
+    .inputs(&[Input::Flag, Input::Of(&[0, 1, 3])])
+    .setup(|e, case| {
+        let w = world(e, true);
+        waiting(e, &w, case.word(0) != 0);
+        vec![w.face, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The manager with thread 0's interface in its entry (with a waiting list, or none), or no entry.
+fn manager_case(d: Diff) -> Diff {
+    node_case(d)
+        .local_at(0x0040_4eb0, 0, 4)
+        .local_at(0x0040_4ee0, 0, 4)
+}
+
+#[test]
+fn manager_destroy() {
+    manager_case(Diff::new(entry!(0x0066_65c0, manager::destroy(Ptr<_>))))
+        .inputs(&[Input::Flag, Input::Flag])
+        .setup(|e, case| {
+            let w = world(e, true);
+            if case.word(0) != 0 {
+                let entries = e.mem.u32(w.manager + 8);
+                e.mem.set_u32(entries, 0x1234);
+                e.mem.set_u32(entries + 4, w.face);
+            }
+            waiting(e, &w, case.word(1) != 0);
+            vec![w.manager]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn manager_delete() {
+    manager_case(Diff::new(entry!(
+        0x0066_6570,
+        manager::delete(Ptr<_>, u32) -> Ptr
+    )))
+    .inputs(&[Input::Flag, Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        let w = world(e, true);
+        if case.word(0) != 0 {
+            let entries = e.mem.u32(w.manager + 8);
+            e.mem.set_u32(entries + 4, w.face);
+        }
+        vec![w.manager, case.word(1)]
     })
     .run()
     .assert_same();
