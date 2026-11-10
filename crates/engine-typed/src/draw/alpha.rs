@@ -7,7 +7,9 @@ use super::{own, packet, FAMILY};
 use crate::shader::layout::{BSBatchRenderer, BSShaderAccumulator, PassGroup};
 use crate::shader::{self, batch};
 use engine_core::ptr::Ptr;
-use engine_core::x87::{x87_add, x87_load32, x87_m32, x87_mul, x87_quiet_bits, x87_store32, x87_sub};
+use engine_core::x87::{
+    x87_add, x87_load32, x87_m32, x87_mul, x87_quiet_bits, x87_store32, x87_sub,
+};
 use engine_core::{args, typed_call, Engine};
 
 /// `-FLT_MAX` as the float an empty group's distance is (`01015f5c`), and as the double the alpha
@@ -34,6 +36,7 @@ const MAP_GET_AT: u32 = 0x0085_3130;
 /// The radius byte goes out as a word whose upper bytes are a stack slot's: an uninitialised local
 /// for the first distance (0 here, as the translation) and the `group` argument's for the others, as
 /// the exe pushes them.
+#[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN-aware as the exe: not above, including unordered.
 pub fn draw_alpha_group(e: &mut Engine, acc: Ptr<BSShaderAccumulator>, group: u32) {
     own::end_pass(e);
     let word = |e: &Engine, upper: u32| upper | u32::from(packet::subtract_radius(e, acc));
@@ -71,7 +74,7 @@ pub fn draw_alpha_group(e: &mut Engine, acc: Ptr<BSShaderAccumulator>, group: u3
         let limit = x87_quiet_bits(distances[1 - which]);
         let flag = word(e, 0);
         let camera = packet::camera(e, acc);
-        let renderer = packet::renderer(e, acc, which as u32);
+        let renderer = packet::renderer(e, acc, u32::from(which == 1));
         typed_call!(
             FAMILY,
             0x00b9_af60,
@@ -79,7 +82,7 @@ pub fn draw_alpha_group(e: &mut Engine, acc: Ptr<BSShaderAccumulator>, group: u3
         );
         let flag = word(e, group & 0xffff_ff00);
         let camera = packet::camera(e, acc);
-        let renderer = packet::renderer(e, acc, which as u32);
+        let renderer = packet::renderer(e, acc, u32::from(which == 1));
         distances[which] = x87_store32(typed_call!(
             FAMILY,
             0x00b9_8c80,
@@ -296,6 +299,7 @@ fn beyond(limit: f64, value: f64) -> bool {
 /// its node given back to the pool. While the pass is within the limit it is drawn
 /// ([`draw_alpha_pass`]) and taken off the holder's list. The loop ends when neither is left within
 /// the limit, or the current distance is NaN (`_isnan`).
+#[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN-aware as the exe: not nearer, including unordered.
 pub fn render_next_alpha(
     e: &mut Engine,
     renderer: Ptr<BSBatchRenderer>,

@@ -161,7 +161,10 @@ pub(crate) fn end_pass(e: &mut Engine) {
 /// The clip planes on (`1`) or off (`0`) (condition 2).
 #[inline(always)]
 pub(crate) fn clip_planes(e: &mut Engine, on: u32) {
-    e.call(SET_CLIP_PLANES, &args![on, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32]);
+    e.call(
+        SET_CLIP_PLANES,
+        &args![on, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+    );
 }
 
 /// The word at `011a9608` set to `value`, answering what it held (condition 2: a shader-state
@@ -322,9 +325,7 @@ const SET_RENDER_TARGET: u32 = 0x00b6_b8d0;
 /// the request cleared.
 #[inline(always)]
 pub(crate) fn make_pass_tree(e: &mut Engine, accumulator: u32) {
-    let tree = e
-        .call(CREATE_RENDER_PASS_TREE, &args![accumulator])
-        .u32();
+    let tree = e.call(CREATE_RENDER_PASS_TREE, &args![accumulator]).u32();
     e.call(PASS_TREE_ASSIGN, &args![PASS_TREE_OWNER, tree]);
     e.set_global(super::packet::MAKE_PASS_TREE, 0u8);
 }
@@ -339,7 +340,10 @@ pub(crate) fn copy_reflection(e: &mut Engine) {
         let manager = e.global::<u32>(TEXTURE_MANAGER);
         let renderer = e.global::<u32>(super::packet::RENDERER);
         copy = e
-            .call(TEXTURE_BORROW, &args![manager, renderer, 5u32, 0u32, 0u32, 0u32])
+            .call(
+                TEXTURE_BORROW,
+                &args![manager, renderer, 5u32, 0u32, 0u32, 0u32],
+            )
             .u32();
         e.set_global(REFLECTION_COPY, copy);
     }

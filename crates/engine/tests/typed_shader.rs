@@ -4835,7 +4835,11 @@ fn acc_slots(e: &mut Engine, acc: u32, real: bool) {
     let vt = if real {
         vtable(
             e,
-            &[(0x8c, 0x00d4_7a40), (0xa8, 0x00b6_6520), (0xac, 0x00b6_6570)],
+            &[
+                (0x8c, 0x00d4_7a40),
+                (0xa8, 0x00b6_6520),
+                (0xac, 0x00b6_6570),
+            ],
         )
     } else {
         vtable(e, &[])
@@ -5364,7 +5368,9 @@ fn render_next_alpha() {
         let group = c.word(0);
         alpha_state(e, &d, group, c.word(1), c.word(2), bits(c, 5));
         // The pass's property: none, plain, decal-biased, or of kind 0x15 in shader mode 9.
-        let pass = e.mem.u32(e.mem.u32(d.alpha_holders[0][group as usize] + 0x10) + 8);
+        let pass = e
+            .mem
+            .u32(e.mem.u32(d.alpha_holders[0][group as usize] + 0x10) + 8);
         let geometry = e.mem.u32(pass);
         let property = e.mem.u32(geometry + 0xa8);
         match c.word(6) {
@@ -5391,7 +5397,7 @@ fn render_next_alpha() {
 
 #[test]
 fn decal_pass() {
-    Diff::new(entry!(0x00b6_4e30, own::decal_pass(Ptr<_>)))
+    Diff::new(entry!(0x00b6_4e30, drivers::decal_pass(Ptr<_>)))
         .draw_common()
         .inputs(&[
             Input::Of(TWO_WAYS),
@@ -5431,7 +5437,11 @@ fn fog_ambient() {
 fn swept_camera(e: &mut Engine, c: &Case, first: usize) -> u32 {
     let camera = e.mem.alloc(0x120);
     for k in 0..12u32 {
-        let w = if k % 4 == 0 { bits(c, first) } else { bits(c, first + 1) ^ k };
+        let w = if k % 4 == 0 {
+            bits(c, first)
+        } else {
+            bits(c, first + 1) ^ k
+        };
         set(e, camera + 0x68 + 4 * k, w);
     }
     camera
@@ -5441,7 +5451,11 @@ fn swept_camera(e: &mut Engine, c: &Case, first: usize) -> u32 {
 fn hand_camera() {
     Diff::new(entry!(0x004e_9bb0, packet::hand_camera(u32, u32)))
         .draw_common()
-        .inputs(&[Input::Of(TWO_WAYS), Input::F32Swept(ONE), Input::F32Swept(HALF)])
+        .inputs(&[
+            Input::Of(TWO_WAYS),
+            Input::F32Swept(ONE),
+            Input::F32Swept(HALF),
+        ])
         .float_sweep(16)
         .setup(|e, c| {
             let d = draw_world(e);

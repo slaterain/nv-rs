@@ -1813,11 +1813,8 @@ pub fn fn_00b9a120(
         return true;
     }
     // By address, as the pass type range draw (`00b63770`) calls it, so a typed caller compares.
-    e.call(
-        NEXT_GROUP,
-        &args![this, pass_type, element, flag],
-    )
-    .bool()
+    e.call(NEXT_GROUP, &args![this, pass_type, element, flag])
+        .bool()
 }
 
 // Translated from 00b9a410 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2649,11 +2646,8 @@ pub fn fn_00b9a3c0(
         0,
     );
     // By address, as the pass type range draw (`00b63770`) calls it, so a typed caller compares.
-    e.call(
-        NEXT_GROUP,
-        &args![this, pass_type, element, flag],
-    )
-    .bool()
+    e.call(NEXT_GROUP, &args![this, pass_type, element, flag])
+        .bool()
 }
 
 // Translated from 00b9a4d0 (decompiled, FalloutNV.exe 1.4.0.525)

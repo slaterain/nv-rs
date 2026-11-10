@@ -6,8 +6,8 @@
 use crate::shader::elem_addr;
 use crate::shader::layout::{BSBatchRenderer, BSShaderAccumulator, PassHolder};
 use engine_core::ptr::Ptr;
-use engine_core::x87::{x87_load32, x87_quiet_bits};
 use engine_core::typed::leaf;
+use engine_core::x87::{x87_load32, x87_quiet_bits};
 use engine_core::{args, typed_call, Engine};
 
 /// The renderer as the scene holds it (`011f4748`): the draw starts only with one.
@@ -109,7 +109,12 @@ pub(crate) fn group_holder(e: &Engine, renderer: Ptr<BSBatchRenderer>, group: u3
 /// The alpha holder of alpha group `group` (+0x70 array), as a word.
 #[inline(always)]
 pub(crate) fn alpha_holder(e: &Engine, renderer: Ptr<BSBatchRenderer>, group: u32) -> u32 {
-    e.global::<u32>(renderer.addr().wrapping_add(group.wrapping_mul(4)).wrapping_add(0x70))
+    e.global::<u32>(
+        renderer
+            .addr()
+            .wrapping_add(group.wrapping_mul(4))
+            .wrapping_add(0x70),
+    )
 }
 
 /// The address of alpha group `group`'s list of sorted groups (+0x78, an `NiTPointerList` of
@@ -158,7 +163,6 @@ pub(crate) fn bound_of(e: &Engine, geometry: u32) -> u32 {
 pub(crate) fn camera_direction(e: &Engine, camera: u32) -> [f64; 3] {
     [0x68u32, 0x74, 0x80]
         .map(|offset| x87_load32(x87_quiet_bits(e.global::<u32>(camera.wrapping_add(offset)))))
-}
 }
 
 // ---- The packet's own inputs, written as the draw starts and ends. ----
@@ -269,7 +273,11 @@ pub fn hand_camera(e: &mut Engine, renderer: u32, camera: u32) {
         let columns = columns.addr();
         let frustum = typed_call!(super::FAMILY, 0x004a_0d10, camera_frustum(e, camera));
         let port = typed_call!(super::FAMILY, 0x0045_bbe0, camera_port(e, camera));
-        let two = typed_call!(super::FAMILY, 0x004e_9c50, rotation_column_2(e, camera, columns));
+        let two = typed_call!(
+            super::FAMILY,
+            0x004e_9c50,
+            rotation_column_2(e, camera, columns)
+        );
         let one = typed_call!(
             super::FAMILY,
             0x004e_9c10,
