@@ -296,17 +296,104 @@ pub fn init_from_env() {
         let wanted = std::env::var("NV_PROFILE").is_ok_and(|v| !v.is_empty() && v != "0");
         ON.store(wanted, Relaxed);
         COUNT_THREADS.store(wanted && thread_calls_file().is_some(), Relaxed);
+        UNDER_ON.store(wanted && !under_roots().is_empty(), Relaxed);
     });
+}
+
+/// `NV_PROFILE_UNDER=ADDR[,ADDR..]` (exe addresses in hex, with the profiler on): the tables count
+/// only what runs inside one of these functions (a sample whose shadow stack holds one, a call
+/// made while one is on it), and the calls are also counted by edge (the caller's exe address, the
+/// callee's) for [`edges`]. Read once by [`init_from_env`]; empty when unset.
+static UNDER: OnceLock<Vec<u32>> = OnceLock::new();
+/// Whether [`UNDER`] names any function.
+static UNDER_ON: AtomicBool = AtomicBool::new(false);
+/// The shadow stack slot of the outermost function of [`UNDER`] now running, `u32::MAX` none.
+static UNDER_SLOT: AtomicU32 = AtomicU32::new(u32::MAX);
+
+fn under_roots() -> &'static [u32] {
+    UNDER.get_or_init(|| {
+        std::env::var("NV_PROFILE_UNDER")
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|a| u32::from_str_radix(a.trim().trim_start_matches("0x"), 16).ok())
+            .collect()
+    })
+}
+
+/// How many slots the edge counts have (a power of two).
+const EDGE_SLOTS: usize = 1 << 16;
+#[allow(clippy::declare_interior_mutable_const)]
+const ZERO_EDGE: AtomicU64 = AtomicU64::new(0);
+/// The edge counts ([`UNDER`]): `caller << 32 | callee` in a slot (0 empty) and its calls.
+static EDGE_KEY: [AtomicU64; EDGE_SLOTS] = [ZERO_EDGE; EDGE_SLOTS];
+static EDGE_CALLS: [AtomicU64; EDGE_SLOTS] = [ZERO_EDGE; EDGE_SLOTS];
+
+fn count_edge(caller: u32, callee: u32) {
+    let key = (u64::from(caller) << 32) | u64::from(callee);
+    if key == 0 {
+        return;
+    }
+    let mut slot = (key.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> (64 - EDGE_SLOTS.trailing_zeros()))
+        as usize;
+    for _ in 0..TARGET_PROBES {
+        let held = EDGE_KEY[slot].load(Relaxed);
+        if held == key {
+            let n = &EDGE_CALLS[slot];
+            n.store(n.load(Relaxed).wrapping_add(1), Relaxed);
+            return;
+        }
+        if held == 0 {
+            EDGE_CALLS[slot].store(1, Relaxed);
+            EDGE_KEY[slot].store(key, Relaxed);
+            return;
+        }
+        slot = (slot + 1) & (EDGE_SLOTS - 1);
+    }
+}
+
+/// Every edge counted so far ([`UNDER`]): (caller, callee) and its calls.
+pub fn edges() -> Vec<((u32, u32), u64)> {
+    let mut v: Vec<_> = EDGE_KEY
+        .iter()
+        .zip(&EDGE_CALLS)
+        .filter_map(|(k, n)| {
+            let k = k.load(Relaxed);
+            (k != 0).then(|| (((k >> 32) as u32, k as u32), n.load(Relaxed)))
+        })
+        .collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    v
+}
+
+/// Whether a sample with this shadow stack counts ([`UNDER`]).
+fn inside(stack: &[u32]) -> bool {
+    !UNDER_ON.load(Relaxed) || stack.iter().any(|a| under_roots().contains(a))
 }
 
 /// A function entered through `Engine::call` (profiler on only).
 #[inline]
 pub fn push(addr: u32) {
     CALLS.store(CALLS.load(Relaxed).wrapping_add(1), Relaxed);
-    if COUNT_TARGETS.load(Relaxed) {
+    let d = DEPTH.load(Relaxed);
+    let counted = if UNDER_ON.load(Relaxed) {
+        if UNDER_SLOT.load(Relaxed) == u32::MAX && under_roots().contains(&addr) {
+            UNDER_SLOT.store(d, Relaxed);
+        }
+        let under = UNDER_SLOT.load(Relaxed) != u32::MAX;
+        if under {
+            let caller = d
+                .checked_sub(1)
+                .and_then(|i| STACK.get(i as usize))
+                .map_or(0, |s| s.load(Relaxed));
+            count_edge(caller, addr);
+        }
+        under
+    } else {
+        true
+    };
+    if counted && COUNT_TARGETS.load(Relaxed) {
         count_target(addr);
     }
-    let d = DEPTH.load(Relaxed);
     if let Some(slot) = STACK.get(d as usize) {
         slot.store(addr, Relaxed);
     }
@@ -383,7 +470,12 @@ pub fn cache_miss() {
 #[inline]
 pub fn pop() {
     let d = DEPTH.load(Relaxed);
-    DEPTH.store(d.saturating_sub(1), Relaxed);
+    let new = d.saturating_sub(1);
+    DEPTH.store(new, Relaxed);
+    let slot = UNDER_SLOT.load(Relaxed);
+    if slot != u32::MAX && new <= slot {
+        UNDER_SLOT.store(u32::MAX, Relaxed);
+    }
 }
 
 /// The shadow stack becomes `stack` (the thread host swapped call stacks, or a stop unwound).
@@ -398,6 +490,13 @@ fn fill(stack: &[u32]) {
         slot.store(addr, Relaxed);
     }
     DEPTH.store(stack.len() as u32, Relaxed);
+    if UNDER_ON.load(Relaxed) {
+        let slot = stack
+            .iter()
+            .position(|a| under_roots().contains(a))
+            .map_or(u32::MAX, |i| i as u32);
+        UNDER_SLOT.store(slot, Relaxed);
+    }
 }
 
 /// Sets the phase, returning the one before (profiler on only; `Viewer` otherwise).
@@ -591,6 +690,7 @@ fn sampler(settings: Settings) {
     let mut misses_at = CACHE_MISSES.load(Relaxed);
     let mut targets_at = target_counts();
     let mut uncounted_at = TARGET_UNCOUNTED.load(Relaxed);
+    let mut edges_at: HashMap<(u32, u32), u64> = HashMap::new();
     let mut stack = Vec::with_capacity(MAX_DEPTH);
     let mut seen: Vec<u32> = Vec::with_capacity(MAX_DEPTH);
     let mut sampler = native::Sampler::new();
@@ -613,7 +713,13 @@ fn sampler(settings: Settings) {
             Some(w) => Some(w.rip),
             None => sampler.instruction_pointer(os_thread),
         };
-        if let Some(w) = walk {
+        let game_thread = GAME_THREAD.load(Relaxed);
+        let depth = DEPTH.load(Relaxed) as usize;
+        stack.clear();
+        stack.extend(STACK.iter().take(depth).map(|s| s.load(Relaxed)));
+        // `NV_PROFILE_UNDER`: only samples inside the named functions fill the function tables.
+        let ins = inside(&stack);
+        if let Some(w) = walk.filter(|_| ins) {
             table.walks += 1;
             table.walk_frames += w.frames as u64;
             table.walk_ends[w.end as usize] += 1;
@@ -627,10 +733,7 @@ fn sampler(settings: Settings) {
                 None => {}
             }
         }
-        let game_thread = GAME_THREAD.load(Relaxed);
-        let depth = DEPTH.load(Relaxed) as usize;
-        stack.clear();
-        stack.extend(STACK.iter().take(depth).map(|s| s.load(Relaxed)));
+        let rip = rip.filter(|_| ins);
 
         table.samples += 1;
         table.phases[phase as usize] += 1;
@@ -666,7 +769,7 @@ fn sampler(settings: Settings) {
             }
             *table.sleeps.entry(chain).or_default() += 1;
         }
-        if phase == Phase::Game {
+        if phase == Phase::Game && ins {
             match stack.last() {
                 Some(&inner) => {
                     let kind = kind_of(inner).unwrap_or_else(|| "exe code".into());
@@ -715,6 +818,29 @@ fn sampler(settings: Settings) {
                 "== NV_PROFILE: the game's frames {frames_at} to {frames}, \
                  {per_frame} calls through Engine::call a frame ({misses} not in its cache)\n{text}"
             );
+            if UNDER_ON.load(Relaxed) {
+                // The edges' calls in this table's frames, a frame (caller, callee, calls).
+                let now: HashMap<(u32, u32), u64> = edges().into_iter().collect();
+                let mut rows: Vec<((u32, u32), u64)> = now
+                    .iter()
+                    .filter_map(|(&k, &n)| {
+                        let d = n.wrapping_sub(edges_at.get(&k).copied().unwrap_or(0));
+                        (d > 0).then_some((k, d))
+                    })
+                    .collect();
+                rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                let f = (frames - frames_at).max(1) as f64;
+                let mut text = format!(
+                    "NV_PROFILE_UNDER edges, the game's frames {frames_at} to {frames}: {} (calls a frame, caller, callee)\n",
+                    rows.len()
+                );
+                for ((caller, callee), d) in rows {
+                    use std::fmt::Write;
+                    let _ = writeln!(text, "  edge {:10.2} {caller:08x} {callee:08x}", d as f64 / f);
+                }
+                println!("{text}");
+                edges_at = now;
+            }
             if let (Some(file), true) = (thread_calls_file(), counting_threads()) {
                 if let Err(e) = std::fs::write(file, thread_calls_tsv()) {
                     println!("NV_PROFILE_THREAD_CALLS: {file}: {e}");
