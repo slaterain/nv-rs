@@ -70,7 +70,7 @@ pub const FIX: Fix = Fix {
     install,
 };
 
-/// `Actor`'s process (`pCurrentProcess`, the word `00881d30` reads as `param_1[0x1a]`) and the
+/// `Actor`'s process (`pCurrentProcess`, the word at +0x68 `00881d30` reads) and the
 /// process's level word (`0045cd60`: 0 high, 1 middle-high, 2 middle-low, 3 low).
 const ACTOR_PROCESS: u32 = 0x68;
 const PROCESS_LEVEL: u32 = 0x28;
