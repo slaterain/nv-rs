@@ -49,6 +49,7 @@ pub static FIXES: &[Fix] = &[
     SHADER_WARM,
     IO_WAIT_ENDS_ON_COMPLETION,
     crate::half_loaded_move::FIX,
+    crate::thread_races::FIX,
 ];
 
 /// The IO manager's wait for queued loads (`00c3dfa0`: main at a cell border, a load, a save) sleeps

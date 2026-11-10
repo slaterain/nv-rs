@@ -27,6 +27,7 @@ pub mod native_inflate;
 pub mod phys_blend;
 pub mod player_move;
 pub mod save_out;
+pub mod thread_races;
 pub mod topic_index;
 pub mod uncap;
 

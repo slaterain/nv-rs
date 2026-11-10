@@ -139,6 +139,8 @@ const CRITICAL_SECTION: u32 = 0x011f_33dc;
 const ENTER_CRITICAL_SECTION: u32 = 0x00fd_f05c;
 const LEAVE_CRITICAL_SECTION: u32 = 0x00fd_f100;
 const INTERLOCKED_DECREMENT: u32 = 0x00fd_f1c4;
+/// `DebugText::Print` (`00a0f8b0`), called by address.
+const PRINT: u32 = 0x00a0_f8b0;
 
 /// `MemoryManager::Allocate` / `Deallocate` (Xbox PDB) on `MEMORY_MANAGER`.
 const ALLOCATE: u32 = 0x00aa_3e40;
@@ -873,19 +875,14 @@ fn print_formatted(
 ) -> u32 {
     let buffer = e.mem.alloc(200);
     e.call(VSNPRINTF, &args![buffer, 200u32, format, list]);
-    let never = e.global(MINUS_ONE);
-    let result = debug_text_print(
-        e,
-        this,
-        buffer,
-        x,
-        y,
-        justify,
-        -1,
-        never,
-        0,
-        Ptr::new(color),
-    );
+    let never: f32 = e.global(MINUS_ONE);
+    // By address: the fixes preset's thread-race row registers over `DebugText::Print`.
+    let result = e
+        .call(
+            PRINT,
+            &args![this, buffer, x, y, justify, -1i32, never, 0i32, color],
+        )
+        .u32();
     e.mem.free(buffer);
     result
 }

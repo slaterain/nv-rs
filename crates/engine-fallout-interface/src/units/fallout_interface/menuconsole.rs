@@ -22,6 +22,9 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// The console print (`0071d0a0`), called by address: the fixes preset's thread-race row
+/// registers over it.
+const CONSOLE_PRINT: u32 = 0x0071_d0a0;
 /// Allocator (`operator new` replacement): returns a block of the given size.
 const ALLOCATE: u32 = 0x0040_1000;
 /// `BSStringT` constructor (empty string) / destructor.
@@ -260,7 +263,7 @@ pub fn menu_console_print_line(
         for (i, word) in arguments.iter().enumerate() {
             e.mem.set_u32(list + 4 * i as u32, *word);
         }
-        fn_0071d0a0(e, this, format, list);
+        e.call(CONSOLE_PRINT, &args![this, format, list]);
         e.mem.free(list);
         e.call(STRING_DESTRUCT, &args![scratch]);
     });
@@ -1525,9 +1528,15 @@ fn idle_set_trait(e: &mut Engine, this: Ptr<MenuConsole>, ebp: u32) {
         e.call(0x00a0_12d0, &args![tile, trait_id, number, 1u32]);
     } else if tile != 0 {
         // The original passes the address of the name as the `va_list`.
-        fn_0071d0a0(e, this, UNKNOWN_TRAIT_FORMAT, trait_name);
+        e.call(
+            CONSOLE_PRINT,
+            &args![this, UNKNOWN_TRAIT_FORMAT, trait_name],
+        );
     } else {
-        fn_0071d0a0(e, this, TILE_NOT_FOUND_FORMAT, tile_name);
+        e.call(
+            CONSOLE_PRINT,
+            &args![this, TILE_NOT_FOUND_FORMAT, tile_name],
+        );
     }
 }
 
