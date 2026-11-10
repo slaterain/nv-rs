@@ -24,7 +24,7 @@ nv-rs Fixes	bIOWait	NV_IO_WAIT	1	IO wait ends on completion: the wait for queued
 nv-rs Fixes	bCosaveKeep	NV_COSAVE_KEEP	1	Co-save keeps other plugins: a co-save's parts from plugins not built in (JIP LN NVSE's) are written back while the same files are loaded.
 nv-rs Fixes	bNVSEErrorGuard	NV_NVSE_ERROR_GUARD	1	Script error loop guard: an error inside a script's error handler is not sent to the handlers again.
 nv-rs Fixes	bNVSEImodCheck	NV_NVSE_IMOD_CHECK	1	Image-space event form check: OnRemoveIMOD only for an image-space modifier form's instance that ran out, not for depth of field or blur.
-nv-rs Fixes	bNVSEInvRefCheck	NV_NVSE_INVREF_CHECK	1	Inventory reference checks: a removed stack leaves the container before its data is freed; a sale ends with its event; an entry without a form is passed over; a reference with no base form or cell answers 0.
+nv-rs Fixes	bNVSEInvRefCheck	NV_NVSE_INVREF_CHECK	1	Inventory reference checks: a removed stack leaves the container before its data is freed; a sale ends with its event; an entry without a form is passed over; a reference with no base form or cell, or a door teleport with no linked door, answers 0.
 nv-rs Fixes	bNVSESizeCaps	NV_NVSE_SIZE_CAPS	1	Script array and string size caps: arrays stop at 8,388,608 elements and repeated empty text at 64 MiB; a bad format string no longer ends the game.
 nv-rs Fixes	bNVSENullGuard	NV_NVSE_NULL_GUARD	1	Script missing array guard: ar_Count and ar_GetNth on a missing array answer 0, and a bad text in a format string ends the text, instead of stopping the game.
 nv-rs Fixes	bNVSECycleGuard	NV_NVSE_CYCLE_GUARD	1	Script array cycle guard: copying, comparing or dumping an array that holds itself stops where it meets itself, instead of running out of stack.

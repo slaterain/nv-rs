@@ -138,7 +138,7 @@ pub const INVENTORY_REFERENCE_CHECKS: Fix = Fix {
     addresses: &[],
     summary: "a removed stack leaves the container's own entry before its data is freed; a sale \
               ends with its event; a container entry without a form is passed over; a reference \
-              with no base form or cell answers 0",
+              with no base form or cell, or a door teleport with no linked door, answers 0",
     install: install_inventory_reference_checks,
 };
 

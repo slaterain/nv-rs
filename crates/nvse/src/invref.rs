@@ -116,9 +116,10 @@ impl Default for State {
 /// or keeps memory it should not: an unworn stack's removal ([`remove_from_container`]) takes the
 /// list out of the container's own entry before freeing it; a sale ends with its event
 /// (`crate::call_sites`); a base container entry without a form is passed over
-/// ([`inventory_items`], and `commands/inventory_info.rs`); a reference with no base form or no
-/// cell answers 0 in the reference commands that read through them (`commands/misc_ref.rs`). Off
-/// (vanilla), each is xNVSE's.
+/// ([`inventory_items`]) or, in the lookups by id of `commands/inventory_info.rs`, taken as another
+/// item; a reference with no base form or no cell, or a door teleport with no linked door, answers
+/// 0 in the reference commands that read through them (`commands/misc_ref.rs`). Off (vanilla),
+/// each is xNVSE's.
 pub fn set_checks(e: &mut Engine, on: bool) {
     state(e).checks = on;
 }

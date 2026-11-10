@@ -398,11 +398,12 @@ fn form_id(e: &Engine, form: u32) -> u32 {
     e.mem.u32(form + FORM_ID)
 }
 
-/// Whether a reference's base form or parent cell that xNVSE reads through is missing and the
-/// inventory reference checks row (`NV_NVSE_INVREF_CHECK`) answers instead. A script reaches both
-/// with an inventory reference: its temporary reference is in no cell, and has no base form once
-/// released (after `RemoveMeIR`, or a loop's reference kept past its loop). xNVSE reads through
-/// the null pointer and the game stops; without the row the port stops there too.
+/// Whether a pointer xNVSE reads through is missing and the inventory reference checks row
+/// (`NV_NVSE_INVREF_CHECK`) answers instead: a reference's base form or parent cell (a script
+/// reaches both with an inventory reference: its temporary reference is in no cell, and has no
+/// base form once released, after `RemoveMeIR` or a loop's reference kept past its loop), or a
+/// door teleport's data or linked door (a mod's broken door data). xNVSE reads through the null
+/// pointer and the game stops; without the row the port stops there too.
 fn passed_over(e: &mut Engine, pointer: u32) -> bool {
     pointer == 0 && invref::checks(e)
 }
@@ -554,7 +555,9 @@ fn teleport_data(e: &mut Engine, reference: u32) -> u32 {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_MiscRef.cpp:
 // Cmd_GetLinkedDoor_Execute.
-/// The linked door's id; an `ExtraTeleport` without data or door is read through, as in xNVSE.
+/// The linked door's id. An `ExtraTeleport` without data or without a linked door (no command
+/// makes one, but a mod's broken door data can) is read through, as in xNVSE, unless
+/// [`passed_over`]: then 0.
 fn get_linked_door(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     a.set_form_result(e, 0);
@@ -563,7 +566,14 @@ fn get_linked_door(e: &mut Engine, w: &[u32]) -> Ret {
     }
     let tele = get_by_type(e, a.this_obj + REFR_EXTRA, EXTRA_TELEPORT);
     if tele != 0 {
-        let door = e.mem.u32(e.mem.u32(tele + EXTRA_VALUE));
+        let data = e.mem.u32(tele + EXTRA_VALUE);
+        if passed_over(e, data) {
+            return handled(true);
+        }
+        let door = e.mem.u32(data);
+        if passed_over(e, door) {
+            return handled(true);
+        }
         let id = form_id(e, door);
         a.set_form_result(e, id);
     }
