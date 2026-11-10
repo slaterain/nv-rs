@@ -461,3 +461,39 @@ fn a_cyclic_entry_list_stops_the_game_or_ends_the_walk() {
     run(&mut e, 0x15bb, 0, &[n(8), r(3)]);
     run(&mut e, 0x15bc, 0, &[n(8)]);
 }
+
+/// The real game's answers (xNVSE 6.4.9, `real-tests/gr_q_inv4.txt`, run `inv4c`, after `nvsecos4`
+/// loads) on stand-ins laid out the same way: 2 rounds of the player's ammo, 5 after
+/// `SetPlayerCurrentAmmoRounds 5`; the weapon's mod flags 0, 3 after setting 3, still 3 after
+/// setting 9, 0 after setting 0; 8 stimpaks (a stack without extra data lists) become 9 when
+/// `SetHotkeyItem 8` gives them hotkey 8, `GetHotkeyItem 8` answers the stimpak, `ClearHotkey 8`
+/// leaves none and the count at 9; a stack that has a list (the Leather Armor, 2) keeps its count.
+#[test]
+fn the_real_games_answers() {
+    let mut e = setup();
+    with_ammo_info(&mut e);
+    e.mem.set_u32(AMMO_INFO + 4, 2);
+    let (_, armor, ammo) = player_inventory(&mut e);
+    assert_eq!(run(&mut e, 0x14c5, 0, &[]), 2.0);
+    run(&mut e, 0x14c6, 0, &[n(5)]);
+    assert_eq!(run(&mut e, 0x14c5, 0, &[]), 5.0);
+    let mut flags = Vec::new();
+    for set in [None, Some(3), Some(9), Some(0)] {
+        if let Some(v) = set {
+            run(&mut e, 0x14f3, PLAYER_REF, &[n(v)]);
+        }
+        flags.push(run(&mut e, 0x14f2, PLAYER_REF, &[]));
+    }
+    assert_eq!(flags, [0.0, 3.0, 3.0, 0.0]);
+    e.mem.set_u32(armor + 4, 8);
+    run(&mut e, 0x15bb, 0, &[n(8), r(1)]);
+    assert_eq!(e.mem.u32(armor + 4), 9);
+    assert_eq!(form_of(run(&mut e, 0x144d, 0, &[n(8)])), 0x0001_0001);
+    run(&mut e, 0x15bc, 0, &[n(8)]);
+    assert_eq!(run(&mut e, 0x144d, 0, &[n(8)]), 0.0);
+    assert_eq!(e.mem.u32(armor + 4), 9);
+    e.mem.set_u32(ammo + 4, 2);
+    run(&mut e, 0x15bb, 0, &[n(7), r(3)]);
+    assert_eq!(e.mem.u32(ammo + 4), 2);
+    assert_eq!(form_of(run(&mut e, 0x144d, 0, &[n(7)])), 0x0001_0003);
+}
