@@ -5037,12 +5037,12 @@ fn hold_accumulator() {
 }
 
 /// The active list of each renderer from the case: as made, or with a shadow pass type (0x1c5) or a
-/// type of the second half (0x290) in front.
+/// type of the second half (0x291, one the "has a pass of these types" check lists) in front.
 fn active_lists(e: &mut Engine, d: &DrawW, which: u32) {
     if which == 0 {
         return;
     }
-    let kind = if which == 1 { 0x1c5u16 } else { 0x290 };
+    let kind = if which == 1 { 0x1c5u16 } else { 0x291 };
     for br in d.renderers() {
         let next = e.mem.alloc(8);
         let old = e.mem.u16(br + 0x2c);
