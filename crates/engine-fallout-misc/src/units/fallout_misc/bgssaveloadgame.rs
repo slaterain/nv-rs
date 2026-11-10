@@ -1576,7 +1576,8 @@ fn load_game_body(
     let trailer_offset = e.get(header, SaveBodyHeader::iTrailerOffset);
     e.call(FILE_SEEK_CURRENT, &args![file, trailer_offset]);
     fn_00848d10(e);
-    fn_008492b0(e, this, true);
+    // By address: the half-loaded actor row (crates/host) wraps the second pass.
+    e.call(0x0084_92b0, &args![this, 1u32]);
     fn_00848d30(e);
     let second_block = e.get(header, SaveBodyHeader::iSecondBlockSize);
     e.call(LOAD_GLOBAL_BLOCK, &args![file, second_block]);
