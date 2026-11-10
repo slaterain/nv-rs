@@ -868,7 +868,10 @@ fn get_parent_cell_owning_faction_required_rank(e: &mut Engine, w: &[u32]) -> Re
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_MiscRef.cpp:
 // Cmd_SetOwningFactionRequiredRank_Execute, SetOwningFactionRequiredRank.
 /// A new `ExtraRank` of the rank added to the reference (another one than any it has, as xNVSE
-/// adds without looking); 0 adds nothing. The rank is the result.
+/// adds without looking); 0 adds nothing. The rank is the result. The game's list puts an
+/// `ExtraRank` at its end (`BaseExtraList::AddExtra`, `0040ff60`, puts only five types in front),
+/// so a reference that already has one goes on answering the first: in the real game a rank of 2,
+/// then one of 3, reads back 2 (run `inv6r1`).
 fn set_owning_faction_required_rank(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     a.set_result(e, 0.0);

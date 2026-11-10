@@ -42,9 +42,15 @@ fn setup() -> Engine {
         eax(at)
     });
     e.register(0x0040_1030, |_, _| Ret::default());
+    // `BaseExtraList::AddExtra` (`0040ff60`) puts five types in front (0x0C, 0x0D, 0x0E, 0x15, 0x2B)
+    // and every other at the end of the list, where `GetExtraData` finds an earlier one of the type
+    // first: here the first one added keeps the type's place.
     e.register(0x0040_ff60, |e, a| {
         let kind = u32::from(e.mem.u8(a[1] + 4));
-        put_extra(e, a[0], kind, a[1]);
+        let front = matches!(kind, 0x0c | 0x0d | 0x0e | 0x15 | 0x2b);
+        if front || e.mem.u32(a[0] + 0x100 + 4 * kind) == 0 {
+            put_extra(e, a[0], kind, a[1]);
+        }
         Ret::default()
     });
     e.register(0x0041_0020, |e, a| {
@@ -227,4 +233,121 @@ fn flag_words() {
     assert_eq!(e.mem.u32(OTHER + 8), 0x21);
     run(&mut e, 0x15f3, 0, &[n(0x0304), r(2)]);
     assert_eq!(e.mem.u32(OTHER + 8), 0x0304_0021);
+}
+
+fn f4(v: f64) -> String {
+    format!("{v:.4}")
+}
+
+/// The real game's answers (xNVSE 6.4.9 with JIP LN 57.30, `real-tests/gr_r_miscref.txt`,
+/// `gr_r2_doors.txt` and `gr_r3_keys.txt`, run `inv6r1`, after `nvsecos4` loads in Doc Mitchell's
+/// house) on stand-ins laid out the same way.
+/// - The player: a base form and permanent base form (00000007), persistent, in a cell of no
+///   worldspace, no owner or cell owner, ranks 0, form flags 1032 and 4, actor base flags 0 and 0.
+/// - The 9mm pistol's form flags: low 9; 4096 after `SetFlagsLow 4096`; high 2 after
+///   `SetFlagsHigh 2` with the form; low 9 when put back.
+/// - Doc Mitchell: actor base flags 0 and 0, then 4660 and 22136 (set by the reference and by the
+///   base form). `SetFlagsHigh 2` on the reference leaves the reference's own high half at 0 and
+///   makes the base form's 2 (it was 4).
+/// - The house's load door: a load door, persistent, linked to a door whose cell is not loaded
+///   (no teleport cell), at (-73162.9297, 1312.4348, 8686.4268) turned 72.8114 degrees.
+///   `SetDoorTeleport` with 1 2 3 90 answers 1 and reads back 1 and 90.0000; without a place it
+///   reads back the linked door's own (x -73349.5234, 163.3844 degrees).
+/// - Ranks on it: 0; `SetOwningFactionRequiredRank 2` answers 2 and reads 2; a second one of 3
+///   still reads 2 (the game's list keeps the first of a type in front); 0 answers 0 and adds none.
+/// - The other door: no key; `SetOpenKey` answers 1 and the key reads back; `ClearOpenKey` answers
+///   1 and none reads back; once more 0.
+#[test]
+fn the_real_games_answers() {
+    let mut e = setup();
+    // The player.
+    e.mem.set_u32(OTHER + 8, 0x0004_0408);
+    e.mem.set_u32(OTHER + 0x40, CELL);
+    e.mem.set_u32(CELL + 0xc0, 0);
+    e.mem.set_u32(NPC + 0x34, 0);
+    assert_eq!(form_of(run(&mut e, 0x1403, OTHER, &[])), 0x0001_0013);
+    assert_eq!(form_of(run(&mut e, 0x1510, OTHER, &[])), 0x0001_0013);
+    assert_eq!(run(&mut e, 0x146c, OTHER, &[]), 1.0);
+    assert_eq!(form_of(run(&mut e, 0x146d, OTHER, &[])), 0x0001_0015);
+    assert_eq!(run(&mut e, 0x146e, OTHER, &[]), 0.0);
+    for opcode in [0x14d7, 0x14df, 0x14e0, 0x14e1] {
+        assert_eq!(run(&mut e, opcode, OTHER, &[]), 0.0, "{opcode:04x}");
+    }
+    assert_eq!(run(&mut e, 0x15f0, OTHER, &[]), 1032.0);
+    assert_eq!(run(&mut e, 0x15f2, OTHER, &[]), 4.0);
+    assert_eq!(run(&mut e, 0x14ec, OTHER, &[]), 0.0);
+    assert_eq!(run(&mut e, 0x14ee, OTHER, &[]), 0.0);
+    // The pistol's form: the key stands in.
+    e.mem.set_u32(KEY + 8, 9);
+    assert_eq!(run(&mut e, 0x15f0, 0, &[r(4)]), 9.0);
+    run(&mut e, 0x15f1, 0, &[n(4096), r(4)]);
+    assert_eq!(run(&mut e, 0x15f0, 0, &[r(4)]), 4096.0);
+    run(&mut e, 0x15f3, 0, &[n(2), r(4)]);
+    assert_eq!(run(&mut e, 0x15f2, 0, &[r(4)]), 2.0);
+    run(&mut e, 0x15f1, 0, &[n(9), r(4)]);
+    run(&mut e, 0x15f3, 0, &[n(0), r(4)]);
+    assert_eq!(run(&mut e, 0x15f0, 0, &[r(4)]), 9.0);
+    // Doc Mitchell: a reference whose own flags' high half is 0, its base form's 4.
+    e.mem.set_u32(OTHER + 8, 0x400);
+    e.mem.set_u32(NPC + 8, 0x0004_0000);
+    assert_eq!(run(&mut e, 0x14ec, OTHER, &[]), 0.0);
+    assert_eq!(run(&mut e, 0x14ee, 0, &[r(3)]), 0.0);
+    run(&mut e, 0x14ed, OTHER, &[n(4660)]);
+    run(&mut e, 0x14ef, 0, &[n(22136), r(3)]);
+    assert_eq!(run(&mut e, 0x14ec, 0, &[r(3)]), 4660.0);
+    assert_eq!(run(&mut e, 0x14ee, OTHER, &[]), 22136.0);
+    assert_eq!(run(&mut e, 0x15f2, OTHER, &[]), 0.0);
+    assert_eq!(run(&mut e, 0x15f2, 0, &[r(3)]), 4.0);
+    run(&mut e, 0x15f3, OTHER, &[n(2)]);
+    assert_eq!(run(&mut e, 0x15f2, OTHER, &[]), 0.0);
+    assert_eq!(run(&mut e, 0x15f2, 0, &[r(3)]), 2.0);
+    run(&mut e, 0x15f3, 0, &[n(4), r(3)]);
+    assert_eq!(run(&mut e, 0x15f2, 0, &[r(3)]), 4.0);
+    // The load door, linked to a door whose cell is not loaded.
+    e.mem.set_u32(OTHER + 0x40, 0);
+    e.mem.set_f32(OTHER + 0x30, -73_349.52);
+    e.mem.set_f32(OTHER + 0x2c, 163.3844 / 57.295_78);
+    let (tele, data) = (EXTRA + 0x100, EXTRA + 0x140);
+    put_extra(&mut e, DOOR + 0x44, 0x2b, tele);
+    e.mem.set_u32(tele + 0xc, data);
+    e.mem.set_u32(data, OTHER);
+    for (i, v) in [-73_162.93_f32, 1312.4348, 8_686.427]
+        .into_iter()
+        .enumerate()
+    {
+        e.mem.set_f32(data + 4 + 4 * i as u32, v);
+    }
+    e.mem.set_f32(data + 0x18, 72.8114 / 57.295_78);
+    assert_eq!(run(&mut e, 0x15f9, DOOR, &[]), 1.0);
+    assert_eq!(run(&mut e, 0x146c, DOOR, &[]), 1.0);
+    assert_eq!(form_of(run(&mut e, 0x1470, DOOR, &[])), 0x0001_0012);
+    assert_eq!(run(&mut e, 0x146f, DOOR, &[]), 0.0);
+    let place = |e: &mut Engine| {
+        [0x15fa, 0x15fb, 0x15fc, 0x15fd].map(|opcode| f4(run(e, opcode, DOOR, &[])))
+    };
+    let first = ["-73162.9297", "1312.4348", "8686.4268", "72.8114"];
+    assert_eq!(place(&mut e), first);
+    let set = [r(2), z(1.0), z(2.0), z(3.0), z(90.0)];
+    assert_eq!(run(&mut e, 0x15fe, DOOR, &set), 1.0);
+    assert_eq!(place(&mut e), ["1.0000", "2.0000", "3.0000", "90.0000"]);
+    assert_eq!(run(&mut e, 0x15fe, DOOR, &[r(2)]), 1.0);
+    let bare = place(&mut e);
+    assert_eq!(
+        (bare[0].as_str(), bare[3].as_str()),
+        ("-73349.5234", "163.3844")
+    );
+    // Ranks: a second ExtraRank goes behind the first.
+    let mut ranks = vec![run(&mut e, 0x14e0, DOOR, &[])];
+    for rank in [2, 3, 0] {
+        ranks.push(run(&mut e, 0x14f9, DOOR, &[n(rank)]));
+        ranks.push(run(&mut e, 0x14e0, DOOR, &[]));
+    }
+    assert_eq!(ranks, [0.0, 2.0, 2.0, 3.0, 2.0, 0.0, 2.0]);
+    // Keys.
+    assert_eq!(run(&mut e, 0x14c8, DOOR, &[]), 0.0);
+    assert_eq!(run(&mut e, 0x1512, DOOR, &[r(4)]), 1.0);
+    assert_eq!(form_of(run(&mut e, 0x14c8, DOOR, &[])), 0x0001_0014);
+    assert_eq!(run(&mut e, 0x151b, DOOR, &[]), 1.0);
+    assert_eq!(run(&mut e, 0x14c8, DOOR, &[]), 0.0);
+    assert_eq!(run(&mut e, 0x151b, DOOR, &[]), 0.0);
 }
