@@ -836,7 +836,10 @@ fn nvidia_alpha_to_coverage_stands_in_for_the_alpha_test_on_multisampled_targets
 /// The alpha test compares as the reference machine's (measured on the real Direct3D 9 here,
 /// DESIGN.md section 11): as if the alpha were rounded to 8 bits, the halfway points cut to 12
 /// bits. With reference 0x80, GREATER passes from alpha 2065/4096 (128.56 of 255), not just above
-/// 128/255; GREATEREQUAL from 2049/4096 (127.56); EQUAL between them.
+/// 128/255; GREATEREQUAL from 2049/4096 (127.56); EQUAL between them. Measured on the real one:
+/// GREATER, GREATEREQUAL, LESS and LESSEQUAL at one sample on an A8R8G8B8 target (one NVIDIA
+/// card). EQUAL (case 3 here) and NOTEQUAL are derived from the same bounds, not measured; other
+/// target formats get the same rule without a measurement there.
 #[test]
 fn the_alpha_test_compares_as_the_reference_machine() {
     let Some(mut g) = Gpu::new(4, 1) else { return };

@@ -3804,7 +3804,11 @@ fn write_block(
 /// on the real Direct3D 9 here, DESIGN.md section 11: the exact alpha at which GREATER,
 /// GREATEREQUAL, LESS and LESSEQUAL change their answer, for every reference, 1,020 of 1,020):
 /// as if the alpha were rounded to 8 bits, with the halfway points `(aref + 0.5) / 255` cut to
-/// 12 bits. `from` is -1 for reference 0 (every alpha is at or above it).
+/// 12 bits. `from` is -1 for reference 0 (every alpha is at or above it). What was measured:
+/// GREATER, GREATEREQUAL, LESS and LESSEQUAL, at one sample, on an A8R8G8B8 target, on one
+/// NVIDIA card. Not measured: EQUAL and NOTEQUAL (derived here from the same two bounds), and
+/// every other target format (the same rule is applied there without a measurement). The game
+/// uses only GREATER and ALWAYS in all three recordings.
 fn alpha_bounds(aref: u32) -> (f32, f32) {
     let above = |r: u32| ((4096 * (2 * r + 1)) / 510) as f32;
     (above(aref), if aref == 0 { -1.0 } else { above(aref - 1) })
