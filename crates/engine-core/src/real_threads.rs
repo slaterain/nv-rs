@@ -1009,7 +1009,8 @@ impl Ctx {
 
     /// Main's frame ended (`thread_host::finish_main_frame`, on the host's thread): the host takes
     /// the kernel lock while it has the engine, and hands deferred pages back at a barrier when
-    /// enough wait. Answers a game thread's stop, if one stopped.
+    /// enough wait. Main's frees still in its batch go to the free worker (`Mem::defer_frees`), and a
+    /// bad one the worker found is a stop. Answers a game thread's stop, if one stopped.
     pub(crate) fn frame_ended(&self, mem: &mut crate::Mem, clock_us: u64) -> Option<String> {
         let w = self.world;
         w.kernel.lock(w);
@@ -1022,6 +1023,12 @@ impl Ctx {
             if let (Some(s), Some(t)) = (lock_stats(), started) {
                 s.barrier.add(t.elapsed());
             }
+        }
+        // The frees main still holds go to the free worker; a bad one it found ends the run as a
+        // game thread's stop does (`Mem::defer_frees`).
+        mem.hand_on_frees();
+        if let Some(fault) = mem.take_deferred_fault() {
+            guard(&w.stopped).get_or_insert(fault);
         }
         guard(&w.stopped).clone()
     }
@@ -1086,6 +1093,8 @@ pub fn start(e: &mut Engine) -> Result<(), String> {
     e.kernel.leak();
     e.device.leak();
     e.mem.start_sharing();
+    // The main thread's frees go to the memory's free worker (`Mem::defer_frees`).
+    e.mem.defer_frees();
     let world: &'static World = Box::leak(Box::new(World::new(e.kernel.import_names.clone())));
     // The events and semaphores made before (the C runtime's start-up, static initializers): kept
     // off the kernel lock from here as the ones made after ([`sync`]).
@@ -4159,6 +4168,83 @@ mod tests {
         e.mem.set_u32(p + 8, 1);
         let wait = slot("WaitForSingleObject");
         assert_eq!(e.call(wait, &args![h, 0xffff_ffffu32]).eax, 0);
+    }
+
+    /// Deferred frees under load (`Mem::defer_frees`, a stress test bounded by its counts and the
+    /// 10 s wait for the free worker): the main thread allocates and frees 40,000 blocks in bursts,
+    /// handing its frees on at each "frame's end", while three game threads allocate and free
+    /// 20,000 each beside it and a barrier hands kept pages back between bursts. In the end none of
+    /// main's blocks is live, the heap is consistent, and no free was bad.
+    #[test]
+    fn deferred_frees_hold_up_beside_threads_allocating() {
+        fn churn(e: &mut Engine, a: &[u32]) -> Ret {
+            let n = e.mem.u32(a[0]);
+            let mut held = Vec::new();
+            for i in 0..n {
+                held.push(e.mem.alloc(16 + (i % 61) * 8));
+                if held.len() > 50 {
+                    let b = held.swap_remove((i as usize * 7) % held.len());
+                    e.mem.free(b);
+                }
+            }
+            for b in held {
+                e.mem.free(b);
+            }
+            Ret::default()
+        }
+        let (mut e, slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        e.register(0x0040_4000, churn);
+        let p = e.mem.alloc(0x10);
+        e.mem.set_u32(p, 20_000);
+        let handles = e.mem.alloc(12);
+        for k in 0..3 {
+            let h = e
+                .call(
+                    slot("CreateThread"),
+                    &args![0u32, 0u32, 0x0040_4000u32, p, 0u32, 0u32],
+                )
+                .eax;
+            assert_ne!(h, 0);
+            e.mem.set_u32(handles + 4 * k, h);
+        }
+        let world = ctx(&e).world;
+        let mut freed = Vec::new();
+        for burst in 0..20u32 {
+            let blocks: Vec<u32> = (0..2000u32)
+                .map(|i| {
+                    if i % 2 == 0 {
+                        e.mem.alloc_asked(8 + ((i + burst) % 200) * 16)
+                    } else {
+                        e.mem.alloc(8 + ((i * 3 + burst) % 200) * 16)
+                    }
+                })
+                .collect();
+            for (i, &b) in blocks.iter().enumerate() {
+                if i % 2 == 0 {
+                    e.mem.free_asked(b);
+                } else {
+                    e.mem.free(b);
+                }
+            }
+            freed.extend(blocks.iter().step_by(97));
+            // The frame's end: frees handed on, a barrier with every game thread stopped.
+            e.mem.hand_on_frees();
+            world.barrier(|| e.mem.hand_back_deferred());
+        }
+        let wait = slot("WaitForMultipleObjects");
+        assert_eq!(
+            e.call(wait, &args![3u32, handles, 1u32, 0xffff_ffffu32])
+                .eax,
+            0,
+            "every thread ended"
+        );
+        e.mem.hand_on_frees();
+        assert!(
+            e.mem.settled_live(&freed).iter().all(|live| !live),
+            "every block main freed was freed"
+        );
+        assert_eq!(e.mem.take_deferred_fault(), None);
     }
 
     /// The render helpers (`fork_join`, one pool per process, so one test makes it): each job runs
