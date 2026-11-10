@@ -151,6 +151,12 @@ pub(crate) fn object_on_visible(e: &mut Engine, object: Ptr<NiAVObject>, process
             super::visible::multibound_node_on_visible(e, object.cast(), Ptr::new(process))
         ),
         target => {
+            // A tree met by a parallel walk's walker is walked there (`par::tree_on_walker`).
+            if target == super::par::TREE_NODE_ON_VISIBLE
+                && super::par::tree_on_walker(e, object.cast(), process)
+            {
+                return;
+            }
             // Not audited for other cores: a parallel walk logs it for main (`par`), unless it is
             // the fade node's.
             if !super::par::defer(e, object.addr(), process, target) {

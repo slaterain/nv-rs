@@ -617,6 +617,41 @@ pub(crate) fn defer(e: &Engine, object: u32, process: u32, target: u32) -> bool 
     })
 }
 
+/// `BSTreeNode::OnVisible` (`0066bf50`): `NiNode::OnVisible` when trees are on (`0054ee20`).
+pub(crate) const TREE_NODE_ON_VISIBLE: u32 = 0x0066_bf50;
+/// What `0054ee20` reads: the trees setting's byte (`0051d740`: the byte at +4 of the setting at
+/// `011d5ce8`, through `00408d60`) and the tree manager singleton (`00664840(1)`, the global at
+/// `011d5c48`), whose byte at +0x18 must be set too.
+const TREES_SETTING_BYTE: u32 = 0x011d_5cec;
+const TREE_MANAGER: u32 = 0x011d_5c48;
+const TREE_MANAGER_ON: u32 = 0x18;
+
+/// While this thread walks a task: a tree's `OnVisible` (`TREE_NODE_ON_VISIBLE`) run here, as the
+/// exe runs it, instead of logged for main: when trees are on, the node's own `OnVisible` (so its
+/// children are walked by this walker and its geometries logged). What `0054ee20` reads are two
+/// bytes and a global, which nothing writes during a walk; only when the setting is on and the
+/// manager does not exist yet (`00664840(1)` would make it, under a lock) is the tree logged for
+/// main as before (false).
+pub(crate) fn tree_on_walker(e: &mut Engine, node: Ptr<NiNode>, process: u32) -> bool {
+    if mode() < 2 || !collecting() {
+        return false;
+    }
+    if e.mem.u8(TREES_SETTING_BYTE) != 0 {
+        let manager = e.mem.u32(TREE_MANAGER);
+        if manager == 0 {
+            return false;
+        }
+        if e.mem.u8(manager.wrapping_add(TREE_MANAGER_ON)) != 0 {
+            typed_call!(
+                FAMILY,
+                0x00a5_dbe0,
+                super::visible::node_on_visible(e, node, Ptr::new(process))
+            );
+        }
+    }
+    true
+}
+
 /// A call the helper's engine logs instead of running (see [`install_logging`]). Its words are
 /// replayed on main after the helper's walk, so no pointer among them may point into the helper's
 /// own stack; in the exe none does (the accumulator, the fade node, its world bound or the empty
