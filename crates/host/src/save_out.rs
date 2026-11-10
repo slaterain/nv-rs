@@ -9,14 +9,22 @@
 //! `.nvse` (the script extender's co-saves) are copied,
 //! each under its own name (as its directory entry has it). A file is written to a temporary
 //! name first and then renamed, so a reader never sees half of it. A copy is made again whenever
-//! the game's bytes change. A save still being written may be copied part-way; it is copied
-//! again, complete, at the next check.
+//! the game's bytes change.
+//!
+//! Main looks at the end of each of its frames, which costs one comparison while no file changed
+//! (the platform's change count, `Disk::changes`); a save is written within one frame, so the
+//! copy is of the whole file. Main only copies the changed file's bytes (a few megabytes, well
+//! under a millisecond); the disk work (writing, renaming, removing) is done on the copy-out's own
+//! thread, in order, and a clean end of the run (the game's own exit, `NV_REPEATABLE`'s end)
+//! waits for it ([`finish`]), so a save made just before the game closes is kept. Until
+//! 2026-11-10 main did it all itself at the 5 s status line: hashing every save written in the run
+//! each time, and writing a new one and renaming it inside a frame.
 //!
 //! `DIR` must be a scratch folder or the package's own. One inside the player's Documents,
 //! OneDrive's Documents or AppData is refused, and nothing is written.
 
 use engine::Engine;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -36,9 +44,31 @@ fn out_dir() -> Option<&'static Path> {
             );
             return None;
         }
+        for name in clean_parts(&dir) {
+            println!("NV_SAVE_OUT: removed {name}, a copy cut short by an earlier run's end");
+        }
         Some(dir)
     })
     .as_deref()
+}
+
+/// The copy-out's temporary files (`<save>.fos.part`, `<save>.nvse.part`) an earlier run left in
+/// `dir` when it was killed part-way through a copy, removed (the save itself, renamed only once
+/// complete, is untouched): their names.
+pub fn clean_parts(dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return vec![];
+    };
+    let mut removed = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let lower = name.to_ascii_lowercase();
+        let part = lower.ends_with(".fos.part") || lower.ends_with(".nvse.part");
+        if part && entry.path().is_file() && std::fs::remove_file(entry.path()).is_ok() {
+            removed.push(name);
+        }
+    }
+    removed
 }
 
 /// A warning the player can't miss: a line in the log, and on Windows a message box (from its own
@@ -172,133 +202,311 @@ pub fn refused(dir: &Path, profile: Option<&Path>, known: &[PathBuf]) -> Option<
     None
 }
 
+/// `NV_PREFS_OUT`'s file, or `None` when it is unset or refused (refused once, with a line).
+fn prefs_file() -> Option<&'static Path> {
+    static FILE: OnceLock<Option<PathBuf>> = OnceLock::new();
+    FILE.get_or_init(|| {
+        let file = PathBuf::from(std::env::var_os("NV_PREFS_OUT")?);
+        let profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
+        if let Some(why) = refused(&file, profile.as_deref(), &known_folders()) {
+            warn_visibly(
+                &format!(
+                    "NV_PREFS_OUT={}: refused ({why}); settings are not copied.",
+                    file.display()
+                ),
+                "Your changed game settings are NOT being kept: they will be lost when the game closes. The settings file the game was given is in a folder it must not write to. Start the game through Play.exe, and report this if you did.",
+            );
+            return None;
+        }
+        Some(file)
+    })
+    .as_deref()
+}
+
 /// A save or its script extender co-save (`.fos`, `.nvse`, ADR-0016 §10).
 fn is_save(key: &[u8]) -> bool {
     key.ends_with(b".fos") || key.ends_with(b".nvse")
 }
 
-/// Copies the run's `.fos` files into `NV_SAVE_OUT` where they are new or changed since the last
-/// call; the names copied, for the log.
-pub fn copy_saves(e: &Engine) -> Vec<String> {
-    copy_prefs(e);
-    let Some(dir) = out_dir() else {
+/// The game's `FalloutPrefs.ini` (what `NV_PREFS_OUT` copies).
+fn is_prefs(key: &[u8]) -> bool {
+    key.ends_with(b"\\falloutprefs.ini")
+}
+
+/// One piece of the copy-out's disk work, made on main from the run's files ([`jobs`]) and done
+/// on the copy-out's own thread ([`run`]), in the order made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Job {
+    /// `bytes` into `target`: written to `temporary` first and then renamed, so a reader never
+    /// sees half of it; `dir` made first when given. `key` is the file's key in the run's files;
+    /// `copied` the name the log line gives (none for the settings file).
+    Write {
+        key: Vec<u8>,
+        dir: Option<PathBuf>,
+        target: PathBuf,
+        temporary: PathBuf,
+        bytes: Vec<u8>,
+        copied: Option<String>,
+    },
+    /// `target` removed when it is a file (a save the game deleted); `name` for the log line.
+    Remove { target: PathBuf, name: String },
+}
+
+/// What the copy-out has handed on so far ([`jobs`]): the run's change count at the last look,
+/// the change stamp of each file's bytes handed on, and the deleted saves whose removal was
+/// handed on.
+#[derive(Debug, Default)]
+pub struct Watch {
+    seen: Option<u64>,
+    done: HashMap<Vec<u8>, u64>,
+    removed: HashSet<Vec<u8>>,
+}
+
+impl Watch {
+    /// A copy that failed is made again at the next look ([`copy_saves`] with `look_again`).
+    pub fn failed(&mut self, key: &[u8]) {
+        self.done.remove(key);
+        self.seen = None;
+    }
+}
+
+/// The jobs for what changed in the run's files since the last look: each save (into `dir`) and
+/// the settings file (into `prefs`) whose bytes changed, and each save the game deleted that is
+/// not there again (removed from `dir`). Nothing when no file changed since the last look, which
+/// is one comparison (`Disk::changes`): this runs on main every frame. The bytes are copied here
+/// (the game may write the file again); the disk work is the jobs'.
+pub fn jobs(e: &Engine, watch: &mut Watch, dir: Option<&Path>, prefs: Option<&Path>) -> Vec<Job> {
+    let disk = &engine_platform::state(&e.kernel.platform).disk;
+    if watch.seen == Some(disk.changes) {
         return vec![];
-    };
-    static DONE: Mutex<Option<HashMap<Vec<u8>, u64>>> = Mutex::new(None);
-    let mut done = DONE.lock().unwrap_or_else(|p| p.into_inner());
-    let mut names = copy_changed(e, dir, done.get_or_insert_with(HashMap::new));
-    names.extend(remove_deleted(e, dir));
-    names
-}
-
-/// `NV_PREFS_OUT`'s file gets the game's `FalloutPrefs.ini` when its bytes change.
-fn copy_prefs(e: &Engine) {
-    static FILE: OnceLock<Option<PathBuf>> = OnceLock::new();
-    let Some(file) = FILE
-        .get_or_init(|| {
-            let file = PathBuf::from(std::env::var_os("NV_PREFS_OUT")?);
-            let profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
-            if let Some(why) = refused(&file, profile.as_deref(), &known_folders()) {
-                warn_visibly(
-                    &format!(
-                        "NV_PREFS_OUT={}: refused ({why}); settings are not copied.",
-                        file.display()
-                    ),
-                    "Your changed game settings are NOT being kept: they will be lost when the game closes. The settings file the game was given is in a folder it must not write to. Start the game through Play.exe, and report this if you did.",
-                );
-                return None;
+    }
+    watch.seen = Some(disk.changes);
+    let mut jobs = Vec::new();
+    // The first settings file, as the copy-out always took it.
+    let prefs_key = prefs.and_then(|_| disk.files.keys().find(|key| is_prefs(key)));
+    for (key, &stamp) in &disk.stamps {
+        let save = dir.is_some() && is_save(key);
+        if !save && prefs_key != Some(key) {
+            continue;
+        }
+        if watch.done.get(key) == Some(&stamp) {
+            continue;
+        }
+        let Some(bytes) = disk.files.get(key) else {
+            continue;
+        };
+        watch.done.insert(key.clone(), stamp);
+        watch.removed.remove(key);
+        let job = match (save, dir, prefs) {
+            (true, Some(dir), _) => {
+                let name = key.rsplit(|&b| b == b'\\').next().unwrap_or(key);
+                let name = String::from_utf8_lossy(name).into_owned();
+                let name = disk
+                    .entries
+                    .get(key)
+                    .map_or(name, |entry| entry.name.clone());
+                Job::Write {
+                    key: key.clone(),
+                    dir: Some(dir.to_path_buf()),
+                    target: dir.join(&name),
+                    temporary: dir.join(format!("{name}.part")),
+                    bytes: bytes.clone(),
+                    copied: Some(name),
+                }
             }
-            Some(file)
-        })
-        .as_deref()
-    else {
-        return;
-    };
-    static DONE: Mutex<Option<u64>> = Mutex::new(None);
-    let mut done = DONE.lock().unwrap_or_else(|p| p.into_inner());
-    prefs_changed(e, file, &mut done);
-}
-
-/// [`copy_prefs`] into `file`, with `done` the fingerprint of the bytes copied last.
-pub fn prefs_changed(e: &Engine, file: &Path, done: &mut Option<u64>) {
-    use std::hash::{Hash, Hasher};
-    let disk = &engine_platform::state(&e.kernel.platform).disk;
-    let Some(data) = disk
-        .files
-        .iter()
-        .find(|(key, _)| key.ends_with(b"\\falloutprefs.ini"))
-        .map(|(_, data)| data)
-    else {
-        return;
-    };
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    data.hash(&mut h);
-    let print = h.finish();
-    if *done == Some(print) {
-        return;
+            (_, _, Some(file)) => Job::Write {
+                key: key.clone(),
+                dir: None,
+                target: file.to_path_buf(),
+                temporary: file.with_extension("ini.part"),
+                bytes: bytes.clone(),
+                copied: None,
+            },
+            _ => continue,
+        };
+        jobs.push(job);
     }
-    let temporary = file.with_extension("ini.part");
-    let written = std::fs::write(&temporary, data).and_then(|()| std::fs::rename(&temporary, file));
-    match written {
-        Ok(()) => *done = Some(print),
-        Err(err) => println!("NV_PREFS_OUT: {} not copied: {err}", file.display()),
-    }
-}
-
-/// The saves the game deleted in this run go from `dir` too, where a file of that name is there
-/// and the game has not made it again. The names, for the log.
-pub fn remove_deleted(e: &Engine, dir: &Path) -> Vec<String> {
-    let disk = &engine_platform::state(&e.kernel.platform).disk;
-    let mut removed = Vec::new();
-    for key in &disk.deleted {
-        if !is_save(key) || disk.files.contains_key(key) {
-            continue;
-        }
-        let name = key.rsplit(|&b| b == b'\\').next().unwrap_or(key);
-        let name = String::from_utf8_lossy(name).into_owned();
-        let target = dir.join(&name);
-        if target.is_file() && std::fs::remove_file(&target).is_ok() {
-            removed.push(format!("{name} (deleted)"));
-        }
-    }
-    removed
-}
-
-/// [`copy_saves`] into `dir`, with `done` the fingerprints of the bytes copied so far by key.
-pub fn copy_changed(e: &Engine, dir: &Path, done: &mut HashMap<Vec<u8>, u64>) -> Vec<String> {
-    use std::hash::{Hash, Hasher};
-    let mut copied = Vec::new();
-    let disk = &engine_platform::state(&e.kernel.platform).disk;
-    for (key, data) in &disk.files {
-        if !is_save(key) {
-            continue;
-        }
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        data.hash(&mut h);
-        let print = h.finish();
-        if done.get(key) == Some(&print) {
-            continue;
-        }
-        let name = key.rsplit(|&b| b == b'\\').next().unwrap_or(key);
-        let name = String::from_utf8_lossy(name).into_owned();
-        let name = disk
-            .entries
-            .get(key)
-            .map_or(name, |entry| entry.name.clone());
-        let target = dir.join(&name);
-        let temporary = dir.join(format!("{name}.part"));
-        let written = std::fs::create_dir_all(dir)
-            .and_then(|()| std::fs::write(&temporary, data))
-            .and_then(|()| std::fs::rename(&temporary, &target));
-        match written {
-            Ok(()) => {
-                done.insert(key.clone(), print);
-                copied.push(name);
+    if let Some(dir) = dir {
+        for key in &disk.deleted {
+            if !is_save(key) || disk.files.contains_key(key) || watch.removed.contains(key) {
+                continue;
             }
-            Err(err) => println!("NV_SAVE_OUT: {} not copied: {err}", target.display()),
+            watch.removed.insert(key.clone());
+            watch.done.remove(key);
+            let name = key.rsplit(|&b| b == b'\\').next().unwrap_or(key);
+            let name = String::from_utf8_lossy(name).into_owned();
+            jobs.push(Job::Remove {
+                target: dir.join(&name),
+                name,
+            });
         }
     }
-    copied
+    jobs
+}
+
+/// Does `job`'s disk work: the log line when there is one (`Ok`), or the line saying why a
+/// write failed (`Err`).
+pub fn run(job: &Job) -> Result<Option<String>, String> {
+    match job {
+        Job::Write {
+            dir,
+            target,
+            temporary,
+            bytes,
+            copied,
+            ..
+        } => {
+            let written = dir
+                .as_deref()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(temporary, bytes))
+                .and_then(|()| std::fs::rename(temporary, target));
+            match (written, copied) {
+                (Ok(()), Some(name)) => Ok(Some(format!("NV_SAVE_OUT: copied {name}"))),
+                (Ok(()), None) => Ok(None),
+                (Err(err), Some(_)) => Err(format!(
+                    "NV_SAVE_OUT: {} not copied: {err}",
+                    target.display()
+                )),
+                (Err(err), None) => Err(format!(
+                    "NV_PREFS_OUT: {} not copied: {err}",
+                    target.display()
+                )),
+            }
+        }
+        Job::Remove { target, name } => {
+            let removed = target.is_file() && std::fs::remove_file(target).is_ok();
+            Ok(removed.then(|| format!("NV_SAVE_OUT: copied {name} (deleted)")))
+        }
+    }
+}
+
+/// A message to the copy-out's thread.
+enum Message {
+    Job(Job),
+    /// Answers once every job sent before it is done.
+    Flush(std::sync::mpsc::SyncSender<()>),
+}
+
+/// The keys whose copy failed on the copy-out's thread, for [`copy_saves`] to make again.
+static FAILED: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+
+/// Does one job on the copy-out's thread or, when that is gone, on the caller's: its line
+/// printed, a failed write's key kept for the next look. A panic in it (the disk work, the
+/// printing) is caught, said, and counted as a failed write, so the thread goes on.
+fn do_job(job: &Job) {
+    let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(job)));
+    let failed = match done {
+        Ok(Ok(Some(line))) => {
+            println!("{line}");
+            false
+        }
+        Ok(Ok(None)) => false,
+        Ok(Err(line)) => {
+            println!("{line}");
+            true
+        }
+        Err(_) => {
+            println!("NV_SAVE_OUT: a copy stopped with a panic; it is made again at the next look");
+            true
+        }
+    };
+    if let (true, Job::Write { key, .. }) = (failed, job) {
+        FAILED
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(key.clone());
+    }
+}
+
+/// The copy-out's thread, started with the first job: it does the jobs in the order sent, so the
+/// disk work (writing a save of several megabytes, renaming it, removing one) never holds up a
+/// frame. Its start registers [`flush`] with the platform layer, which runs it before it ends the
+/// process itself (the game's window closed: `engine_platform::on_exit`).
+fn writer() -> &'static std::sync::mpsc::Sender<Message> {
+    static SENDER: OnceLock<std::sync::mpsc::Sender<Message>> = OnceLock::new();
+    SENDER.get_or_init(|| {
+        let (send, receive) = std::sync::mpsc::channel::<Message>();
+        let started = std::thread::Builder::new()
+            .name("nv save out".into())
+            .spawn(move || {
+                for message in receive {
+                    match message {
+                        Message::Job(job) => do_job(&job),
+                        Message::Flush(done) => {
+                            let _ = done.send(());
+                        }
+                    }
+                }
+            });
+        if let Err(why) = started {
+            // No thread: the jobs are done on the caller's ([`hand`]), as the receiver is gone.
+            println!("NV_SAVE_OUT: the copy-out's thread could not start ({why})");
+        }
+        engine_platform::on_exit(flush);
+        send
+    })
+}
+
+/// Hands `job` to the copy-out's thread through `send`, or, when that thread is gone (it never
+/// started, or it ended), does it here, saying so once: no copy is dropped unsaid.
+fn hand(send: &std::sync::mpsc::Sender<Message>, job: Job) {
+    if let Err(std::sync::mpsc::SendError(Message::Job(job))) = send.send(Message::Job(job)) {
+        static SAID: std::sync::Once = std::sync::Once::new();
+        SAID.call_once(|| {
+            println!(
+                "NV_SAVE_OUT: the copy-out's thread is gone; saves are copied on the main thread from now on"
+            )
+        });
+        do_job(&job);
+    }
+}
+
+/// Whether the copy-out's thread was started (a job was sent).
+static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `NV_SAVE_OUT` and `NV_PREFS_OUT`, each main frame: what changed in the run's files since the
+/// last call handed to the copy-out's thread ([`jobs`]); nothing at all while no file changed.
+/// `look_again` (the 5 s status line): copies that failed are made again.
+pub fn copy_saves(e: &Engine, look_again: bool) {
+    let (dir, prefs) = (out_dir(), prefs_file());
+    if dir.is_none() && prefs.is_none() {
+        return;
+    }
+    static WATCH: Mutex<Option<Watch>> = Mutex::new(None);
+    let mut watch = WATCH.lock().unwrap_or_else(|p| p.into_inner());
+    let watch = watch.get_or_insert_with(Watch::default);
+    if look_again {
+        for key in std::mem::take(&mut *FAILED.lock().unwrap_or_else(|p| p.into_inner())) {
+            watch.failed(&key);
+        }
+    }
+    let jobs = jobs(e, watch, dir, prefs);
+    if jobs.is_empty() {
+        return;
+    }
+    STARTED.store(true, std::sync::atomic::Ordering::SeqCst);
+    let send = writer();
+    for job in jobs {
+        hand(send, job);
+    }
+}
+
+/// Waits until every job handed to the copy-out's thread is done (the run is ending).
+pub fn flush() {
+    if !STARTED.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let (done, wait) = std::sync::mpsc::sync_channel(1);
+    if writer().send(Message::Flush(done)).is_ok() {
+        let _ = wait.recv();
+    }
+}
+
+/// The run ends cleanly: what changed since the last frame handed on, and all of it written.
+pub fn finish(e: &Engine) {
+    copy_saves(e, true);
+    flush();
 }
 
 #[cfg(test)]
@@ -374,6 +582,27 @@ mod tests {
         }
     }
 
+    /// The jobs of one look, done at once (as the copy-out's thread does them, in order): the log
+    /// lines.
+    fn look(
+        e: &Engine,
+        watch: &mut Watch,
+        dir: Option<&Path>,
+        prefs: Option<&Path>,
+    ) -> Vec<String> {
+        jobs(e, watch, dir, prefs)
+            .iter()
+            .filter_map(|job| run(job).unwrap())
+            .collect()
+    }
+
+    /// `key` with `bytes` among the run's files, stamped as a write of the game's stamps it.
+    fn put(e: &mut Engine, key: &[u8], bytes: &[u8]) {
+        let disk = &mut engine_platform::state_mut(&mut e.kernel.platform).disk;
+        disk.files.insert(key.to_vec(), bytes.to_vec());
+        disk.changed(key);
+    }
+
     #[test]
     fn new_and_changed_saves_are_copied_once_each() {
         let dir = std::env::temp_dir().join(format!("nv-save-out-{}", std::process::id()));
@@ -381,18 +610,12 @@ mod tests {
         let mut e = Engine::new();
         let saves = br"c:\scratch\my games\falloutnv\saves\";
         let key = |name: &str| [saves.as_slice(), name.as_bytes()].concat();
-        engine_platform::state_mut(&mut e.kernel.platform)
-            .disk
-            .files
-            .insert(key("quicksave.fos"), b"FO3SAVEGAME one".to_vec());
-        engine_platform::state_mut(&mut e.kernel.platform)
-            .disk
-            .files
-            .insert(key("falloutprefs.ini"), b"x".to_vec());
-        let mut done = HashMap::new();
+        put(&mut e, &key("quicksave.fos"), b"FO3SAVEGAME one");
+        put(&mut e, &key("falloutprefs.ini"), b"x");
+        let mut watch = Watch::default();
         assert_eq!(
-            copy_changed(&e, &dir, &mut done),
-            vec!["quicksave.fos".to_string()]
+            look(&e, &mut watch, Some(&dir), None),
+            vec!["NV_SAVE_OUT: copied quicksave.fos".to_string()]
         );
         assert_eq!(
             std::fs::read(dir.join("quicksave.fos")).unwrap(),
@@ -400,60 +623,207 @@ mod tests {
         );
         assert!(!dir.join("falloutprefs.ini").exists());
         assert!(!dir.join("quicksave.fos.part").exists());
-        assert!(copy_changed(&e, &dir, &mut done).is_empty());
-        engine_platform::state_mut(&mut e.kernel.platform)
-            .disk
-            .files
-            .insert(key("quicksave.fos"), b"FO3SAVEGAME two".to_vec());
+        assert!(look(&e, &mut watch, Some(&dir), None).is_empty());
+        put(&mut e, &key("quicksave.fos"), b"FO3SAVEGAME two");
         assert_eq!(
-            copy_changed(&e, &dir, &mut done),
-            vec!["quicksave.fos".to_string()]
+            look(&e, &mut watch, Some(&dir), None),
+            vec!["NV_SAVE_OUT: copied quicksave.fos".to_string()]
         );
         assert_eq!(
             std::fs::read(dir.join("quicksave.fos")).unwrap(),
             b"FO3SAVEGAME two"
         );
         // The script extender's co-save goes with it (ADR-0016 §10).
-        engine_platform::state_mut(&mut e.kernel.platform)
-            .disk
-            .files
-            .insert(key("quicksave.nvse"), b"NVSE".to_vec());
+        put(&mut e, &key("quicksave.nvse"), b"NVSE");
         assert_eq!(
-            copy_changed(&e, &dir, &mut done),
-            vec!["quicksave.nvse".to_string()]
+            look(&e, &mut watch, Some(&dir), None),
+            vec!["NV_SAVE_OUT: copied quicksave.nvse".to_string()]
         );
         assert_eq!(std::fs::read(dir.join("quicksave.nvse")).unwrap(), b"NVSE");
+        // A change to a file that is not a save hands on nothing.
+        put(&mut e, &key("note.txt"), b"x");
+        assert!(look(&e, &mut watch, Some(&dir), None).is_empty());
+        // A failed copy is made again once said so.
+        watch.failed(&key("quicksave.fos"));
+        assert_eq!(
+            look(&e, &mut watch, Some(&dir), None),
+            vec!["NV_SAVE_OUT: copied quicksave.fos".to_string()]
+        );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The bytes a job carries are the run's bytes when the look was made: the game writing the
+    /// file again before the copy-out's thread gets to it changes neither the copy nor the next
+    /// look's job, which carries the new bytes.
+    #[test]
+    fn a_job_keeps_the_bytes_of_its_look() {
+        let mut e = Engine::new();
+        let key = br"c:\scratch\saves\quicksave.fos".to_vec();
+        put(&mut e, &key, b"first");
+        let dir = PathBuf::from(r"c:\nowhere");
+        let mut watch = Watch::default();
+        let first = jobs(&e, &mut watch, Some(&dir), None);
+        put(&mut e, &key, b"second");
+        let second = jobs(&e, &mut watch, Some(&dir), None);
+        let bytes = |jobs: &[Job]| match jobs {
+            [Job::Write { bytes, .. }] => bytes.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(bytes(&first), b"first");
+        assert_eq!(bytes(&second), b"second");
     }
 
     #[test]
     fn a_save_the_game_deleted_goes_and_its_settings_are_copied() {
         let dir = std::env::temp_dir().join(format!("nv-save-del-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        for name in ["old.fos", "made again.fos", "kept.fos"] {
-            std::fs::write(dir.join(name), b"x").unwrap();
-        }
         let mut e = Engine::new();
         let saves = br"c:\scratch\my games\falloutnv\";
         let key = |name: &str| [saves.as_slice(), name.as_bytes()].concat();
-        let disk = &mut engine_platform::state_mut(&mut e.kernel.platform).disk;
-        disk.deleted.insert(key(r"saves\old.fos"));
-        disk.deleted.insert(key(r"saves\made again.fos"));
-        disk.files.insert(key(r"saves\made again.fos"), vec![1]);
-        disk.deleted.insert(key(r"saves\note.txt"));
-        disk.files.insert(key("falloutprefs.ini"), b"one".to_vec());
-        assert_eq!(remove_deleted(&e, &dir), vec!["old.fos (deleted)"]);
-        assert!(!dir.join("old.fos").exists());
-        assert!(dir.join("made again.fos").exists());
-        assert!(dir.join("kept.fos").exists());
+        {
+            let disk = &mut engine_platform::state_mut(&mut e.kernel.platform).disk;
+            for name in [r"saves\old.fos", r"saves\made again.fos", r"saves\note.txt"] {
+                disk.deleted.insert(key(name));
+                disk.gone(&key(name));
+            }
+        }
+        put(&mut e, &key(r"saves\made again.fos"), &[1]);
+        put(&mut e, &key("falloutprefs.ini"), b"one");
+        let saves_dir = dir.join("saves");
+        std::fs::create_dir_all(&saves_dir).unwrap();
+        for name in ["old.fos", "made again.fos", "kept.fos"] {
+            std::fs::write(saves_dir.join(name), b"x").unwrap();
+        }
         let prefs = dir.join("FalloutPrefs.ini");
-        let mut done = None;
-        prefs_changed(&e, &prefs, &mut done);
+        let mut watch = Watch::default();
+        let mut lines = look(&e, &mut watch, Some(&saves_dir), Some(&prefs));
+        lines.sort();
+        assert_eq!(
+            lines,
+            vec![
+                "NV_SAVE_OUT: copied made again.fos".to_string(),
+                "NV_SAVE_OUT: copied old.fos (deleted)".to_string()
+            ]
+        );
+        assert!(!saves_dir.join("old.fos").exists());
+        assert_eq!(
+            std::fs::read(saves_dir.join("made again.fos")).unwrap(),
+            [1]
+        );
+        assert!(saves_dir.join("kept.fos").exists());
         assert_eq!(std::fs::read(&prefs).unwrap(), b"one");
         std::fs::remove_file(&prefs).unwrap();
-        prefs_changed(&e, &prefs, &mut done);
+        // The same bytes are not copied again, and a removal is made once.
+        std::fs::write(saves_dir.join("old.fos"), b"x").unwrap();
+        put(&mut e, &key(r"saves\note.txt"), b"y");
+        assert!(look(&e, &mut watch, Some(&saves_dir), Some(&prefs)).is_empty());
         assert!(!prefs.exists(), "the same bytes are not copied again");
+        assert!(saves_dir.join("old.fos").exists(), "removed once only");
+        // Settings alone, without a save folder.
+        put(&mut e, &key("falloutprefs.ini"), b"two");
+        assert!(look(&e, &mut watch, None, Some(&prefs)).is_empty());
+        assert_eq!(std::fs::read(&prefs).unwrap(), b"two");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The thread: jobs sent are done by the time [`flush`] answers, in the order sent (a save
+    /// written and then removed is gone). What a run that ends right after a save relies on.
+    #[test]
+    fn a_flush_waits_for_every_job_sent() {
+        let dir = std::env::temp_dir().join(format!("nv-save-flush-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let big = vec![7u8; 8 << 20];
+        let write = |name: &str, bytes: Vec<u8>| Job::Write {
+            key: name.as_bytes().to_vec(),
+            dir: Some(dir.clone()),
+            target: dir.join(name),
+            temporary: dir.join(format!("{name}.part")),
+            bytes,
+            copied: Some(name.to_string()),
+        };
+        STARTED.store(true, std::sync::atomic::Ordering::SeqCst);
+        for job in [
+            write("a.fos", big.clone()),
+            write("b.fos", b"b".to_vec()),
+            Job::Remove {
+                target: dir.join("b.fos"),
+                name: "b.fos".into(),
+            },
+        ] {
+            writer().send(Message::Job(job)).unwrap();
+        }
+        flush();
+        assert_eq!(std::fs::read(dir.join("a.fos")).unwrap(), big);
+        assert!(!dir.join("b.fos").exists());
+        assert!(!dir.join("a.fos.part").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// A save handed to the copy-out's thread just before the platform layer ends the process
+    /// (the game's window closed) is on disk once the exit hooks have run: the thread's start
+    /// registered the flush (`engine_platform::on_exit`).
+    #[test]
+    fn the_platforms_exit_hook_finishes_the_copies_handed_on() {
+        let dir = std::env::temp_dir().join(format!("nv-save-exit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let bytes = vec![5u8; 6 << 20];
+        let job = Job::Write {
+            key: b"exit.fos".to_vec(),
+            dir: Some(dir.clone()),
+            target: dir.join("exit.fos"),
+            temporary: dir.join("exit.fos.part"),
+            bytes: bytes.clone(),
+            copied: Some("exit.fos".into()),
+        };
+        STARTED.store(true, std::sync::atomic::Ordering::SeqCst);
+        hand(writer(), job);
+        engine_platform::run_exit_hooks();
+        assert_eq!(std::fs::read(dir.join("exit.fos")).unwrap(), bytes);
+        assert!(!dir.join("exit.fos.part").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With the copy-out's thread gone (its receiver dropped), a job is done on the caller's
+    /// thread at once: no copy is dropped.
+    #[test]
+    fn with_the_thread_gone_a_copy_is_made_on_the_callers_thread() {
+        let dir = std::env::temp_dir().join(format!("nv-save-gone-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (send, receive) = std::sync::mpsc::channel::<Message>();
+        drop(receive);
+        hand(
+            &send,
+            Job::Write {
+                key: b"gone.fos".to_vec(),
+                dir: Some(dir.clone()),
+                target: dir.join("gone.fos"),
+                temporary: dir.join("gone.fos.part"),
+                bytes: b"kept".to_vec(),
+                copied: Some("gone.fos".into()),
+            },
+        );
+        assert_eq!(std::fs::read(dir.join("gone.fos")).unwrap(), b"kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A copy an earlier run's kill cut short leaves `<save>.part`: removed at the next start,
+    /// the saves and other files left.
+    #[test]
+    fn copies_cut_short_by_an_earlier_kill_are_removed() {
+        let dir = std::env::temp_dir().join(format!("nv-save-part-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["a.fos", "a.fos.part", "b.NVSE.part", "notes.part", "c.fos"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let mut removed = clean_parts(&dir);
+        removed.sort();
+        assert_eq!(
+            removed,
+            vec!["a.fos.part".to_string(), "b.NVSE.part".to_string()]
+        );
+        for kept in ["a.fos", "notes.part", "c.fos"] {
+            assert!(dir.join(kept).exists(), "{kept}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

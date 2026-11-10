@@ -2028,3 +2028,73 @@ fn lock_sleeps_a_millisecond_after_ten_thousand_tries() {
     assert_eq!(run(false), expected, "translation");
     assert_eq!(run(true), expected, "typed");
 }
+
+// ---- The word map's lookup (the save's references map) ----
+
+/// A word map (`NiTMapBase<UInt32, ..>`, 0x10 bytes and a word at +0x40 for the stand-ins' compare)
+/// with vtable `vt`, `buckets` buckets and a node (next, key, value) for each of `keys` put at the
+/// head of its key's bucket chain, as the map's insert does; the value of a key is key ^ 0x5a5a.
+fn word_map(e: &mut Engine, vt: u32, buckets: u32, keys: &[u32]) -> u32 {
+    let map = e.mem.alloc(0x44);
+    let table = e.mem.alloc(4 * buckets.max(1));
+    words(e, map, &[vt, buckets, table, keys.len() as u32]);
+    for &k in keys {
+        let at = table + 4 * (k % buckets.max(1));
+        let head = e.mem.u32(at);
+        let node = block(e, 0xc, &[head, k, k ^ 0x5a5a]);
+        e.mem.set_u32(at, node);
+    }
+    map
+}
+
+const MAP_KEYS: &[u32] = &[0, 1, 5, 36, 37, 38, 74, 111, 0xffff_ffff];
+
+/// The save's references map: slots 4 and 8 hold the word map's hash and compare (`006c6a60`,
+/// `006b81d0`), both called directly; found or not, at the head, inside or at the end of a chain,
+/// one bucket or 37.
+#[test]
+fn map_lookup_word_map() {
+    Diff::new(entry!(
+        0x0085_3130,
+        refs::map_lookup(Ptr<_>, u32, Ptr<u32>) -> u8
+    ))
+    .common(0x0085_3130)
+    .inputs(&[
+        Input::Of(&[1, 5, 37]),
+        Input::Of(&[0, 1, 37, 74, 111, 2, 0xffff_ffff]),
+        Input::Of(&[0, 4, 9]),
+    ])
+    .setup(|e, case| {
+        stand_ins(e);
+        let vt = vtable(e);
+        e.mem.set_u32(vt + 4, 0x006c_6a60);
+        e.mem.set_u32(vt + 8, 0x006b_81d0);
+        let n = case.word(2) as usize;
+        let map = word_map(e, vt, case.word(0), &MAP_KEYS[..n]);
+        vec![map, case.word(1), block(e, 4, &[0x1234_5678])]
+    })
+    .run()
+    .assert_same();
+}
+
+/// Any other map: the hash and the compare by address through the vtable (the stand-ins answer
+/// bucket 0, and "equal" by the map's word at +0x40), in the exe's order.
+#[test]
+fn map_lookup_other_slots() {
+    Diff::new(entry!(
+        0x0085_3130,
+        refs::map_lookup(Ptr<_>, u32, Ptr<u32>) -> u8
+    ))
+    .common(0x0085_3130)
+    .inputs(&[Input::Of(&[0, 1, 3]), Input::Flag, Input::Word])
+    .setup(|e, case| {
+        stand_ins(e);
+        let vt = vtable(e);
+        let keys: Vec<u32> = (0..case.word(0)).map(|i| 7 * i).collect();
+        let map = word_map(e, vt, 1, &keys);
+        e.mem.set_u32(map + 0x40, case.word(1));
+        vec![map, case.word(2), block(e, 4, &[0x1234_5678])]
+    })
+    .run()
+    .assert_same();
+}

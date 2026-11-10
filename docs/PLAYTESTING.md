@@ -171,7 +171,7 @@ Play.exe sets these for every run; set them by hand only to run `nv-viewer` with
 | `NV_D3D9_ADAPTER=FILE` | The display adapter table | `%LOCALAPPDATA%\nv-rs\d3d9_adapter.tsv` |
 | `NV_DSOUND_TABLE=FILE` | The DirectSound devices and mixing table | none: the run stops and says how to capture it |
 | `NV_D3DX_CACHE=DIR` | The D3DX texture cache (used only with `NV_TEXTURES=dll`, or for files `crates/d3dx-tex` does not translate) | `%LOCALAPPDATA%\nv-rs\d3dx-cache` |
-| `NV_SAVE_OUT=DIR` | The saves the game writes, copied out to DIR, and the ones it deletes removed there (`crates/host/src/save_out.rs`) | saves stay in memory |
+| `NV_SAVE_OUT=DIR` | The saves the game writes, copied out to DIR at the end of the frame that wrote them (written by a thread of their own; a clean end waits for them), and the ones it deletes removed there (`crates/host/src/save_out.rs`) | saves stay in memory |
 | `NV_PREFS_OUT=FILE` | The `FalloutPrefs.ini` the game writes, copied out to FILE | stays in memory |
 | `NV_REPORT_DIR=DIR`, `NV_REPORT_LOG=FILE` | F12 in the game's window makes `DIR\NNN\` with the frame, the end of FILE and a `note.txt` for the player (`crates/engine-platform/src/d3d9real.rs`) | no F12 report |
 | `NV_SETTINGS=FILE` | The settings file | `settings.ini` beside the program or in the folder above it |
