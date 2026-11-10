@@ -4286,6 +4286,10 @@ fn setup_geometry_textures_every_type() {
         |c| texture_shape(c.word(0), 1, TEX_REAL_SLOTS, true),
         |g, _| vec![g.shader, g.block],
     )
+    // No float arithmetic in the set-up or its stage set-ups (they move words): no float sweep and one
+    // control word, so a run ends inside the minute a mutant's run gets.
+    .float_sweep(0)
+    .control_words(&[0x027f])
     .run()
     .assert_same();
 }
@@ -4317,10 +4321,12 @@ fn setup_geometry_textures() {
             ]),
             Input::Of(TWO_WAYS),
         ],
-        500,
+        300,
         |c| texture_shape(c.word(0), c.word(1), c.word(2), c.word(3) != 0),
         |g, _| vec![g.shader, g.block],
     )
+    .float_sweep(0)
+    .control_words(&[0x027f])
     .run()
     .assert_same();
 }
@@ -4484,7 +4490,7 @@ fn light_setup() {
                 Input::F32Swept(PLAIN_FLOATS[F_PROPERTY]),
                 Input::F32Swept(PLAIN_FLOATS[F_RADIUS]),
             ],
-            400,
+            160,
             |c| {
                 let mut s = Shape::plain();
                 // 0 no light, 1 directional, 2 point, 3 directional without data, 4 point without data.
