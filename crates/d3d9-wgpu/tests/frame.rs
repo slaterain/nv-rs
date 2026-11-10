@@ -1122,31 +1122,62 @@ fn the_pipeline_cache_file_is_kept_and_a_bad_one_is_ignored() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The backend's own loading screen: black around, the logo and the text in the middle, the bar
-/// filled to the fraction done (its left end lit, its right end not, at a quarter done).
+/// The backend's own loading screen: black at the corners and the logo lit in the middle; the
+/// bar filled to the fraction done (a quarter against three quarters: some row has the fill's
+/// colour at three quarters where it has the empty bar's grey at a quarter); and (on Windows,
+/// where GDI draws the text) another status line changes pixels. A window narrower than the bar
+/// still draws.
 #[test]
 fn the_loading_screen_shows_the_logo_the_text_and_the_bar() {
     let Some(mut g) = Gpu::new(4, 1) else { return };
-    let p = d3d9_wgpu::loading::Progress {
+    let p = |status: &str, done: f32| d3d9_wgpu::loading::Progress {
         title: "Loading".into(),
-        status: "Preparing shaders 212 of 1,480".into(),
-        done: 0.25,
+        status: status.into(),
+        done,
     };
     let (w, h) = (640u32, 360u32);
-    let px = g.b.device().expect("the device").progress_pixels(w, h, &p);
-    assert_eq!(px.len(), (w * h * 4) as usize);
-    let at = |x: u32, y: u32| {
+    let d = g.b.device().expect("the device");
+    let quarter = d.progress_pixels(w, h, &p("Preparing shaders 212 of 1480", 0.25));
+    let most = d.progress_pixels(w, h, &p("Preparing shaders 212 of 1480", 0.75));
+    let other = d.progress_pixels(w, h, &p("Preparing shaders 1111 of 1480", 0.25));
+    // Narrower than the bar (64 pixels at least) and the logo: no underflow, a picture.
+    let narrow = d.progress_pixels(40, 30, &p("x", 0.5));
+    assert_eq!(narrow.len(), 40 * 30 * 4);
+    assert_eq!(quarter.len(), (w * h * 4) as usize);
+    let at = |px: &[u8], x: u32, y: u32| {
         let i = ((y * w + x) * 4) as usize;
-        [px[i], px[i + 1], px[i + 2], px[i + 3]]
+        [px[i], px[i + 1], px[i + 2]]
     };
-    // The corners black.
     for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
-        assert_eq!(&at(x, y)[..3], &[0, 0, 0], "corner {x},{y}");
+        assert_eq!(at(&quarter, x, y), [0, 0, 0], "corner {x},{y}");
     }
-    // Something lit in the middle third (the logo and the text).
-    let lit = (h / 3..2 * h / 3)
+    let lit = (h / 4..h / 2)
         .flat_map(|y| (w / 3..2 * w / 3).map(move |x| (x, y)))
-        .filter(|&(x, y)| at(x, y)[..3].iter().any(|&c| c > 64))
+        .filter(|&(x, y)| at(&quarter, x, y).iter().any(|&c| c > 64))
         .count();
-    assert!(lit > 500, "{lit} pixels lit in the middle");
+    assert!(lit > 500, "{lit} pixels of the logo lit");
+    // The bar: from x = w/3, w/3 wide; at x = w/3 + w/6 (half of it) the fill (B G R about 89, 191,
+    // 230) at three quarters, the empty bar's grey (about 64) at a quarter, in the same row.
+    let x = w / 3 + w / 6;
+    let fill = |c: [u8; 3]| c[2] > 180 && c[1] > 140 && c[0] < 140;
+    let grey = |c: [u8; 3]| c.iter().all(|&v| (40..=90).contains(&v));
+    let row = (0..h).find(|&y| fill(at(&most, x, y)) && grey(at(&quarter, x, y)));
+    assert!(
+        row.is_some(),
+        "no row with the bar filled at 3/4 and empty at 1/4"
+    );
+    #[cfg(windows)]
+    {
+        let changed = quarter
+            .chunks_exact(4)
+            .zip(other.chunks_exact(4))
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(
+            changed > 20,
+            "{changed} pixels changed with the status line"
+        );
+    }
+    #[cfg(not(windows))]
+    let _ = other;
 }

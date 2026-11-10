@@ -392,7 +392,7 @@ impl Screen {
             quads.push((
                 v.clone(),
                 [
-                    ((width - w.min(width)) / 2) as f32,
+                    (width.saturating_sub(w) / 2) as f32,
                     y as f32,
                     w as f32,
                     h as f32,
@@ -406,7 +406,7 @@ impl Screen {
             quads.push((
                 v,
                 [
-                    ((width - w.min(width)) / 2) as f32,
+                    (width.saturating_sub(w) / 2) as f32,
                     y as f32,
                     w as f32,
                     h as f32,
@@ -415,7 +415,7 @@ impl Screen {
             ));
             y += h + gap;
         }
-        let x = ((width - bar_w) / 2) as f32;
+        let x = (width.saturating_sub(bar_w) / 2) as f32;
         quads.push((
             self.white.clone(),
             [x, y as f32, bar_w as f32, bar_h as f32],
