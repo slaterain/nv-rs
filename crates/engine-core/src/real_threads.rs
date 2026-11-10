@@ -1028,6 +1028,8 @@ impl Ctx {
         // game thread's stop does (`Mem::defer_frees`).
         mem.hand_on_frees();
         if let Some(fault) = mem.take_deferred_fault() {
+            // Said at once too: a stop recorded first would hide it.
+            eprintln!("{fault}");
             guard(&w.stopped).get_or_insert(fault);
         }
         guard(&w.stopped).clone()
@@ -4170,8 +4172,8 @@ mod tests {
         assert_eq!(e.call(wait, &args![h, 0xffff_ffffu32]).eax, 0);
     }
 
-    /// Deferred frees under load (`Mem::defer_frees`, a stress test bounded by its counts and the
-    /// 10 s wait for the free worker): the main thread allocates and frees 60,000 blocks in bursts of
+    /// Deferred frees under load (`Mem::defer_frees`, a stress test bounded by its counts, a 30 s wait
+    /// for the game threads and a 10 s wait for the free worker): the main thread allocates and frees 60,000 blocks in bursts of
     /// 6,000 (past the 2,048 a frame it frees itself), handing its frees on at each "frame's end", while three game threads allocate and free
     /// 20,000 each beside it and a barrier hands kept pages back between bursts. In the end none of
     /// main's blocks is live, the heap is consistent, and no free was bad.
@@ -4234,8 +4236,7 @@ mod tests {
         }
         let wait = slot("WaitForMultipleObjects");
         assert_eq!(
-            e.call(wait, &args![3u32, handles, 1u32, 0xffff_ffffu32])
-                .eax,
+            e.call(wait, &args![3u32, handles, 1u32, 30_000u32]).eax,
             0,
             "every thread ended"
         );

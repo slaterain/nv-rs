@@ -541,13 +541,11 @@ struct Shared {
     lock: &'static Mutex<()>,
     /// Wakes the free worker ([`Mem::defer_frees`]) when frees wait for it.
     freed: &'static std::sync::Condvar,
-    /// The main thread is taking the lock, or holds it: the free worker steps aside
-    /// ([`Mem::defer_frees`]).
-    main_wants: &'static std::sync::atomic::AtomicBool,
 }
 
-// SAFETY: the shared `Mem` is reached only through `Shared::with`, under its lock, so the views on
-// several threads never change it at once; it is never freed (leaked).
+// SAFETY: the shared `Mem` is reached only through `Shared::with` and `Shared::when_frees_wait`
+// (the free worker), each under its lock, so the views on several threads and the worker never
+// change it at once; it is never freed (leaked).
 unsafe impl Send for Shared {}
 
 impl Shared {
@@ -556,6 +554,26 @@ impl Shared {
         let _held = lock(self.lock);
         // SAFETY: see `Shared`: the lock is held, and the leaked `Mem` lives for good.
         f(unsafe { &mut *self.mem.as_ptr() })
+    }
+
+    /// The free worker's turn ([`free_worker`]): under the lock, waits (the lock given up meanwhile)
+    /// until frees are handed on, then `f` on the shared `Mem`.
+    fn when_frees_wait(self, f: impl FnOnce(&mut Mem)) {
+        let mut held = lock(self.lock);
+        loop {
+            // SAFETY: see `Shared`: the lock is held, and the leaked `Mem` lives for good.
+            let m = unsafe { &mut *self.mem.as_ptr() };
+            if m.frees_queued() > 0 {
+                m.frees_mut().idle = false;
+                f(m);
+                return;
+            }
+            m.frees_mut().idle = true;
+            held = self
+                .freed
+                .wait(held)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
     }
 }
 
@@ -566,38 +584,26 @@ impl Shared {
 const INLINE_FREES: u32 = 2048;
 /// The frees a view that defers them ([`Mem::defer_frees`]) keeps before handing them on.
 const FREE_BATCH: usize = 64;
-/// The most frees the free worker does in one hold of the shared memory's lock (about 10 us).
-const FREE_CHUNK: usize = 32;
+/// The most frees the free worker does in one hold of the shared memory's lock (a few us): the
+/// longest the main thread can wait for the lock because of it.
+const FREE_CHUNK: usize = 16;
+/// The most frees that wait for the worker: past it the main thread does the oldest itself
+/// ([`Mem::take_batch`]). 4,096 blocks: at most a few MB the heap cannot hand out meanwhile.
+const FREE_QUEUE_MAX: usize = 4096;
 
 /// The memory's free worker ([`Mem::defer_frees`]): the frees handed on, in order, a few at a time
-/// under the shared memory's lock, and never while the main thread waits for that lock (it says
-/// so before it takes it, [`Shared::main_wants`]), so main never waits for more than one free.
+/// under the shared memory's lock ([`Shared::when_frees_wait`]), parked on the lock or on the
+/// wake-up like any thread, never spinning.
 fn free_worker(s: Shared) {
-    use std::sync::atomic::Ordering;
     loop {
-        while s.main_wants.load(Ordering::Acquire) {
-            std::hint::spin_loop();
-        }
-        let mut held = lock(s.lock);
-        // SAFETY: as in `Shared::with`: the lock is held, and the leaked `Mem` lives for good.
-        let mut m = unsafe { &mut *s.mem.as_ptr() };
-        while m.frees_queued() == 0 {
-            m.frees_mut().idle = true;
-            held = s.freed.wait(held).unwrap_or_else(PoisonError::into_inner);
-            // SAFETY: as above, the lock held again.
-            m = unsafe { &mut *s.mem.as_ptr() };
-        }
-        m.frees_mut().idle = false;
-        for _ in 0..FREE_CHUNK {
-            if s.main_wants.load(Ordering::Acquire) {
-                break;
+        s.when_frees_wait(|m| {
+            for _ in 0..FREE_CHUNK {
+                let Some((addr, asked, frame)) = m.frees_mut().deferred.pop_front() else {
+                    break;
+                };
+                m.apply_deferred_free(addr, asked, frame);
             }
-            let Some((addr, asked)) = m.frees_mut().deferred.pop_front() else {
-                break;
-            };
-            m.apply_deferred_free(addr, asked);
-        }
-        drop(held);
+        });
     }
 }
 
@@ -736,8 +742,9 @@ pub struct Mem {
 struct Frees {
     inline: u32,
     frame: u32,
-    batch: Vec<(u32, bool)>,
-    deferred: std::collections::VecDeque<(u32, bool)>,
+    frames: u32,
+    batch: Vec<(u32, bool, u32)>,
+    deferred: std::collections::VecDeque<(u32, bool, u32)>,
     fault: Option<String>,
     idle: bool,
 }
@@ -1306,7 +1313,6 @@ impl Mem {
             mem: std::ptr::NonNull::dangling(),
             lock: Box::leak(Box::new(Mutex::new(()))),
             freed: Box::leak(Box::new(std::sync::Condvar::new())),
-            main_wants: Box::leak(Box::new(std::sync::atomic::AtomicBool::new(false))),
         };
         let mut view = Mem::view_at(self.space.base, shared);
         view.view_check = checked;
@@ -1338,18 +1344,7 @@ impl Mem {
     /// allocated or freed in `f` is named with them.
     fn with_shared<R>(&mut self, s: Shared, f: impl FnOnce(&mut Mem) -> R) -> R {
         if let Some(frees) = self.frees.as_deref_mut() {
-            // The main thread: the free worker steps aside while it takes and holds the lock, and
-            // its batch of frees goes on with this change ([`Mem::defer_frees`]).
-            use std::sync::atomic::{AtomicBool, Ordering};
-            /// Clears the flag however the change ends (a heap that is full stops with a panic).
-            struct Wants(&'static AtomicBool);
-            impl Drop for Wants {
-                fn drop(&mut self) {
-                    self.0.store(false, Ordering::Release);
-                }
-            }
-            s.main_wants.store(true, Ordering::Release);
-            let _wants = Wants(s.main_wants);
+            // The main thread: its batch of frees goes on with this change ([`Mem::defer_frees`]).
             let batch = &mut frees.batch;
             return s.with(|m| {
                 m.take_batch(s, batch);
@@ -1442,6 +1437,14 @@ impl Mem {
     /// into guest memory), and where the next allocation goes was never the exe's (`mem/heap.rs`).
     /// Nothing changes for the pages: the heap never hands pages back, and the worker touches no
     /// guest page (the block check, which would, keeps frees on their own thread).
+    ///
+    /// Limits: a waiting free's block is not available to allocations until the worker (or, past
+    /// [`FREE_QUEUE_MAX`] waiting, the main thread) has done it; an allocation the heap cannot serve
+    /// does every free waiting in the queue first, but up to [`FREE_BATCH`] - 1 frees still in main's
+    /// own batch reach the queue only with main's next memory operation or the frame's end, so up to
+    /// 63 blocks may be unavailable to another thread's allocation until then. A bad free is
+    /// reported with the main frame that made it, not its caller; the block check
+    /// (`NV_BLOCK_CHECK`) keeps frees on their own thread and names it.
     pub fn defer_frees(&mut self) {
         self.defer_frees_with(true, INLINE_FREES);
     }
@@ -1477,6 +1480,7 @@ impl Mem {
             return;
         };
         frees.frame = 0;
+        frees.frames = frees.frames.wrapping_add(1);
         if let (Some(s), false) = (self.shared, frees.batch.is_empty()) {
             self.with_shared(s, |_| ());
         }
@@ -1534,7 +1538,8 @@ impl Mem {
     #[inline(never)]
     fn keep_free(&mut self, s: Shared, addr: u32, asked: bool) {
         let frees = self.frees.as_deref_mut().expect("deferred frees");
-        frees.batch.push((addr, asked));
+        let frame = frees.frames;
+        frees.batch.push((addr, asked, frame));
         if frees.batch.len() >= FREE_BATCH {
             self.with_shared(s, |_| ());
         }
@@ -1551,22 +1556,34 @@ impl Mem {
     }
 
     /// On the shared `Mem`, under its lock: this view's batch of frees handed on, the worker woken
-    /// when it waits ([`Mem::defer_frees`]).
-    fn take_batch(&mut self, s: Shared, batch: &mut Vec<(u32, bool)>) {
+    /// when it waits ([`Mem::defer_frees`]). Past [`FREE_QUEUE_MAX`] waiting (the worker behind,
+    /// as in a long frame that frees and allocates throughout), the caller does the oldest of them
+    /// itself, so the queue never holds more and the blocks in it are not lost to the heap for
+    /// long; below it this costs one comparison.
+    fn take_batch(&mut self, s: Shared, batch: &mut Vec<(u32, bool, u32)>) {
         if batch.is_empty() {
             return;
         }
         let frees = self.frees_mut();
         frees.deferred.extend(batch.drain(..));
+        let over = frees.deferred.len().saturating_sub(FREE_QUEUE_MAX);
         if frees.idle {
             frees.idle = false;
             s.freed.notify_one();
         }
+        for _ in 0..over {
+            let Some((addr, asked, frame)) = self.frees_mut().deferred.pop_front() else {
+                break;
+            };
+            self.apply_deferred_free(addr, asked, frame);
+        }
     }
 
     /// On the shared `Mem`: one free the worker does ([`Mem::defer_frees`]); a bad one (the free's
-    /// own stop) kept for the frame's end.
-    fn apply_deferred_free(&mut self, addr: u32, asked: bool) {
+    /// own stop) kept, with the main frame that made it, for the frame's end. Its caller is not
+    /// known here (`Mem` sees no call stack): the block check (`NV_BLOCK_CHECK`), which names
+    /// the function that freed each block, keeps frees on their own thread.
+    fn apply_deferred_free(&mut self, addr: u32, asked: bool, frame: u32) {
         let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if asked {
                 self.free_asked(addr);
@@ -1581,9 +1598,22 @@ impl Mem {
                 .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
                 .unwrap_or_default();
             self.frees_mut().fault.get_or_insert(format!(
-                "{why} (a free of the main thread's, done by the memory's free worker)"
+                "{why} (a free the main thread made in its frame {frame} counting from the start \
+                 of real threads, done later by the memory's free worker; NV_BLOCK_CHECK=1 keeps \
+                 frees on their own thread and names the function that made them)"
             ));
         }
+    }
+
+    /// The run ends: this view's batch and every free still waiting done now, and the stop of a
+    /// bad one, if any (a clean end reports it too, [`Mem::defer_frees`]).
+    pub fn settle_frees(&mut self) -> Option<String> {
+        let s = self.shared?;
+        self.frees.as_ref()?;
+        self.with_shared(s, |m| {
+            m.apply_all_deferred();
+            m.frees.as_deref_mut()?.fault.take()
+        })
     }
 
     /// On the shared `Mem`: every free waiting for the worker done now (an allocation the heap
@@ -1594,8 +1624,8 @@ impl Mem {
         };
         let waiting = std::mem::take(&mut frees.deferred);
         let any = !waiting.is_empty();
-        for (addr, asked) in waiting {
-            self.apply_deferred_free(addr, asked);
+        for (addr, asked, frame) in waiting {
+            self.apply_deferred_free(addr, asked, frame);
         }
         any
     }
@@ -3967,7 +3997,7 @@ mod tests {
         let mut m = Mem::new();
         m.start_sharing();
         m.defer_frees_with(false, 1);
-        for _ in 0..2 {
+        for round in 0..2 {
             let a = m.alloc(0x40);
             m.free(a);
             assert!(m.frees.as_ref().unwrap().batch.is_empty(), "done at once");
@@ -3975,13 +4005,64 @@ mod tests {
             m.free(a);
             assert_eq!(
                 m.frees.as_ref().unwrap().batch,
-                vec![(a, false)],
+                vec![(a, false, round)],
                 "the second free of the frame is kept"
             );
             m.hand_on_frees();
             assert!(m.frees.as_ref().unwrap().batch.is_empty());
             owner(&m, |o| o.apply_all_deferred());
         }
+    }
+
+    /// The queue is bounded: with no worker running (the worst case: a worker that never gets the
+    /// lock), a long burst of frees with allocations between them keeps at most
+    /// [`FREE_QUEUE_MAX`] waiting, the main thread doing the oldest itself, and the heap grows no
+    /// more than that many blocks past the same run without deferred frees.
+    #[test]
+    fn a_long_burst_with_allocations_throughout_stays_within_the_queues_bound() {
+        let run = |defer: bool| {
+            let mut m = Mem::new();
+            m.start_sharing();
+            if defer {
+                m.defer_frees_with(false, 0);
+            }
+            let mut most = 0;
+            let mut last = m.alloc(0x200);
+            for _ in 0..40_000 {
+                let next = m.alloc(0x200);
+                m.free(last);
+                last = next;
+                most = most.max(owner(&m, |o| o.frees_queued()));
+            }
+            (most, owner(&m, |o| o.heap.top()))
+        };
+        let (most, top) = run(true);
+        let (_, top_without) = run(false);
+        assert!(most <= FREE_QUEUE_MAX, "{most} waited");
+        let block = heap::class_bytes(heap::pool_size(0x200));
+        let bound = (FREE_QUEUE_MAX + FREE_BATCH) as u32 * block;
+        assert!(
+            top.saturating_sub(top_without) <= bound,
+            "the heap grew {:#x} past the run without deferred frees",
+            top.saturating_sub(top_without)
+        );
+    }
+
+    /// A bad free still waiting when the run ends cleanly is reported then
+    /// ([`Mem::settle_frees`]), with the main frame that made it.
+    #[test]
+    fn a_bad_free_waiting_at_a_clean_end_is_reported() {
+        let mut m = Mem::new();
+        let a = m.alloc(0x40);
+        m.start_sharing();
+        m.defer_frees_with(false, 0);
+        m.hand_on_frees();
+        m.free(a);
+        m.free(a);
+        let fault = m.settle_frees().expect("the bad free");
+        assert!(fault.contains("which is not a live heap block"), "{fault}");
+        assert!(fault.contains("in its frame 1 "), "{fault}");
+        assert_eq!(m.settle_frees(), None);
     }
 
     /// A bad free of the main thread's (a block that is not live), found by the free worker, is

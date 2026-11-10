@@ -180,6 +180,12 @@ Play.exe sets these for every run; set them by hand only to run `nv-viewer` with
 
 None of these is for players.
 
+A use-after-free or double-free investigation should rule out deferred frees first: with real threads, the
+main thread's frees past the first 2,048 of a frame are done later by a free worker thread
+(`engine-core` `Mem::defer_frees`), and a bad one is reported at a frame's end with the frame that made it, not its
+caller. `NV_BLOCK_CHECK` turns deferral off (frees stay on their own thread) and names the function that freed each
+block.
+
 | Variable | What it does | Default |
 | --- | --- | --- |
 | **Running and pacing** | | |

@@ -1348,6 +1348,11 @@ impl PlayerMovement {
                         format!("Game's main stopped in frame {frame}: {why}"),
                     ),
                 };
+                // Real threads: the main thread's frees still waiting for the memory's free worker done,
+                // and a bad one among them said (`Mem::defer_frees`): a clean end reports it too.
+                if let Some(fault) = e.mem.settle_frees() {
+                    eprintln!("{fault}");
+                }
                 // `NV_SAVE_OUT` (a test aid): at a clean end the saves once more, so one written
                 // since the last status line is kept. Not at a stop: a save the stop cut short
                 // would be copied part-way and never completed. Before the line, which ends the
