@@ -772,6 +772,8 @@ fn map_find_word() {
         map::find_word(Ptr<_>, u32, Ptr<_>) -> u8
     ))
     .map_find_case()
+    // The translation of the interface's lookup (`006ec830`) calls the bucket find plainly.
+    .translation_calls_plainly(&[0x006e_c9b0])
     .run()
     .assert_same();
 }
@@ -1276,6 +1278,8 @@ fn lookup_word() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
+    // Its translation calls the bucket find as a plain Rust call.
+    .translation_calls_plainly(&[0x006e_c9b0])
     .inputs(&[Input::Of(KEYS)])
     .setup(|e, case| {
         let w = world(e, true);
@@ -1797,6 +1801,8 @@ fn remove_counted_value_in_bucket() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
+    // Its translation calls the find as a plain Rust call.
+    .translation_calls_plainly(&[0x0090_6820])
     .inputs(&[
         Input::Of(&[0, 1, 2, 3]),
         Input::Of(&[0, 1, 2, 3]),
