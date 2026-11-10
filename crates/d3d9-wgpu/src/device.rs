@@ -221,6 +221,9 @@ impl Bindings {
     }
 }
 
+/// A bind group's key: each binding's number, texture and sampler.
+type GroupKey = Vec<(u32, u64, Option<SamplerKey>)>;
+
 /// A vertex shader's inputs read from a declaration ([`Device::vertex_link`]).
 struct VertexLink {
     inputs: Vec<wgsl::Input>,
@@ -361,7 +364,7 @@ pub struct Device {
         PipeKey,
         Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
     )>,
-    last_group: (Vec<(u32, u64, Option<SamplerKey>)>, Option<wgpu::BindGroup>),
+    last_group: (GroupKey, Option<wgpu::BindGroup>),
     last_link: Option<((u64, u64), Arc<VertexLink>)>,
     vertex_links: Map<(u64, u64), Arc<VertexLink>>,
     binds: PassBinds,
@@ -379,7 +382,7 @@ pub struct Device {
     #[allow(clippy::type_complexity)]
     ps_modules: Map<(u64, Vec<wgsl::Semantic>, bool, wgsl::Clip), Option<wgpu::ShaderModule>>,
     samplers: Map<SamplerKey, wgpu::Sampler>,
-    groups: Map<Vec<(u32, u64, Option<SamplerKey>)>, wgpu::BindGroup>,
+    groups: Map<GroupKey, wgpu::BindGroup>,
     blit: Map<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
     blit_layout: Option<wgpu::BindGroupLayout>,
     #[allow(clippy::type_complexity)]
@@ -2757,11 +2760,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             b.blend = Some(bf);
         }
         for (slot, s) in streams.into_iter().enumerate() {
-            if s.is_some() && b.streams[slot] != s {
-                let (buffer, offset) = s.as_ref().expect("checked");
-                pass.set_vertex_buffer(slot as u32, buffer.slice(*offset..));
-                b.streams[slot] = s;
+            if s.is_none() || b.streams[slot] == s {
+                continue;
             }
+            if let Some((buffer, offset)) = &s {
+                pass.set_vertex_buffer(slot as u32, buffer.slice(*offset..));
+            }
+            b.streams[slot] = s;
         }
         match index {
             Some(i) => {
