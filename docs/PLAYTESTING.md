@@ -152,6 +152,7 @@ Each also has a `[nv-rs Fixes]` key in `Fallout.ini` (`bUncap` ... `bNVSEListGua
 | `NV_IO_WAIT` | IO wait ends on completion | `host/fixes.rs` |
 | `NV_HALF_LOADED_MOVE` | Half-loaded actor's level change | `host/half_loaded_move.rs` |
 | `NV_THREAD_RACES` | Thread races | `host/thread_races.rs` |
+| `NV_CRASH_GUARDS` | Crash guards | `host/crash_guards.rs` (the sites: `engine-core/data/guard_sites.tsv`) |
 | `NV_COSAVE_KEEP` | Co-save keeps other plugins | `host/fixes.rs` (flag read by `nvse`) |
 | `NV_NVSE_ERROR_GUARD` | Script error loop guard | `host/fixes.rs` |
 | `NV_NVSE_IMOD_CHECK` | Image-space event form check | `host/fixes.rs` |

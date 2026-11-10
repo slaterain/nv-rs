@@ -745,6 +745,19 @@ marker elsewhere, in the engine crates, `crates/host` and `viewer`. The rules re
   directly. The translations' direct calls to them (138 today, six of them the fixes preset chaining to the translation) are frozen by count: a new one fails,
   and a removed one asks for the number to be lowered. Moving them to calls by address would change the
   calls the game makes, so it is left for each family's own step.
+- **Guard sites: translations are edited only by guard sites.** A fixes row that needs a check in
+  the middle of a translated function (a community fix's patch at one instruction of a function too large
+  to override whole) puts ONE marked line at that instruction: `guard_site!(e, <the instruction's
+  address>, words...)` (`crates/engine-core/src/guard.rs`), so a search finds every site. The words are
+  values the translation holds there. The site's comment names the instruction, the registers in scope
+  and the path the row takes (a skip, a substituted value, an early end), from the exe around it. Off
+  (vanilla) the site reads the engine's extension table, finds no guard and falls through: no call is
+  dispatched (the trace and recording gates see nothing), no memory is written, and the calls and their
+  order are the translation's. On, the row's guard (in the host's fixes module) answers whether the
+  fault is there. `crates/engine-core/data/guard_sites.tsv` has a row a site: the address, the function,
+  the row and what it does. A test (`crates/host/src/crash_guards.rs`) holds the table to the sites in the
+  engine crates and to the row's list, both ways. A site costs one table lookup when it is passed, so none
+  goes inside a loop that runs more than a few hundred times a frame without that count stated.
 - **What stays review-only,** because this reads text: a call through a function pointer or a `let` of
   the function; a call a macro builds; a devirtualised or copied body; a bare name a local of the same
   name hides; a re-export under another module's name; whether a `Diff::new` really covers the function's

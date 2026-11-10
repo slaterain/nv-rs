@@ -916,7 +916,15 @@ pub fn actor_steal_alarm(
     if stolen_from_actor != 0 && e.vcall(stolen_from_actor, 0x218, &args![]).bool() {
         witness = stolen_from_actor;
     } else {
-        let owner_type = e.call(FORM_TYPE, &args![owner]).u32();
+        // Guard site 008bfbc1 (`CALL 00401170`, the form's type, ECX the owner at EBP-0x20):
+        // an item with no owner and no actor taken from reads the type through null. Crash
+        // guards: a null owner goes to 008bfbfb, the branch for an owner that is no NPC, which
+        // tests for null itself.
+        let owner_type = if guard_site!(e, 0x008b_fbc1, owner) {
+            0
+        } else {
+            e.call(FORM_TYPE, &args![owner]).u32()
+        };
         if owner_type == 8 {
             if !e.call(BASE_FORM_FLAG_BIT_1, &args![owner]).bool() {
                 karma_penalty = true;

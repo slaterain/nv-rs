@@ -647,7 +647,11 @@ pub fn credits_menu_close(e: &mut Engine) {
     {
         let saves = e.global::<u32>(SAVE_LOAD_MANAGER);
         let name = first_word(e, saves.wrapping_add(0x30));
-        if e.call(TEXT_LENGTH, &args![name]).u32() != 0 {
+        // Guard site 0075f78e (`PUSH EAX` before `CALL 0044a670`, the length; EAX the player
+        // name's text, the string at +0x30 of the save-load manager `011de134`): with no save
+        // loaded the text is null and the length reads through it. Crash guards: a null text
+        // goes to 0075f8a1 (the flag cleared, the menu closed), as an empty name does.
+        if !guard_site!(e, 0x0075_f78e, name) && e.call(TEXT_LENGTH, &args![name]).u32() != 0 {
             let saves = e.global::<u32>(SAVE_LOAD_MANAGER);
             e.call(SAVES_REFRESH, &args![saves]);
             if e.global::<u32>(SAVE_LOAD_MANAGER) != 0 {

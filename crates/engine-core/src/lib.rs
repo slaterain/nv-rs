@@ -67,6 +67,7 @@ pub mod census;
 pub mod cxx_exception;
 mod engine;
 pub mod exe;
+pub mod guard;
 pub mod extend;
 pub mod mem;
 pub mod profile;
@@ -105,5 +106,5 @@ pub mod prelude {
         x87_fyl2xp1, X87Ext, X87_STATUS_C2,
     };
     pub use crate::Engine;
-    pub use crate::{args, entry, layout, typed_call};
+    pub use crate::{args, entry, guard_site, layout, typed_call};
 }

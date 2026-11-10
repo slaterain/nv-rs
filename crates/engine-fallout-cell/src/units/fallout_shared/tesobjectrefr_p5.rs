@@ -2519,6 +2519,13 @@ pub fn fn_0057ab70(e: &mut Engine) {
         if reference == 0 || value == 0 {
             continue;
         }
+        // Guard site 0057aba4 (the reference's test after `CALL 006b7f20`; the reference at
+        // EBP-8, its parent cell at +0x40): a reference in the map that has left its cell is
+        // looked up in a null cell. Crash guards: a reference with no parent cell is passed
+        // over, as a null reference is.
+        if guard_site!(e, 0x0057_aba4, e.mem.u32(reference + 0x40)) {
+            continue;
+        }
         let same_cell = model_of(e, reference) != 0 && {
             let cell = parent_cell_of(e, reference);
             let from_cell = e.call(0x0054_97a0, &args![cell]).u32();

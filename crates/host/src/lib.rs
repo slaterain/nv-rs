@@ -16,6 +16,7 @@
 //! thread). What it is connected to: docs/ENGINE_CRATE.md
 //! ("In the running game").
 
+pub mod crash_guards;
 pub mod fixes;
 pub mod form_types;
 pub mod frame_log;

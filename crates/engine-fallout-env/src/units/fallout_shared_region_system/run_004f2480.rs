@@ -144,6 +144,12 @@ pub fn fn_004f2640(e: &mut Engine, form: u32) -> bool {
             // `00547110` (RET 4).
             let location = e.call(GET_WORLD_LOCATION, &args![player, location]).u32();
             let cell = e.call(LOCATION_CELL, &args![location]).u32();
+            // Guard site 004f269f (`CALL 00547110`, the cell's region list, ECX the player's
+            // cell from `00527900`): with the player in no cell the list is asked of null.
+            // Crash guards: no cell has no regions (004f26b8: the list 0).
+            if guard_site!(e, 0x004f_269f, cell) {
+                return 0;
+            }
             e.call(CELL_REGION_LIST, &args![cell, 1u32]).u32()
         });
         node = if regions == 0 {

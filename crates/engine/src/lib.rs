@@ -61,7 +61,7 @@
 pub mod units;
 
 pub use engine_core::{
-    abi, census, cxx_exception, exe, mem, prelude, ptr, real_threads, sse, static_exit,
+    abi, census, cxx_exception, exe, guard, mem, prelude, ptr, real_threads, sse, static_exit,
     static_init, thread_host, types, x87,
 };
 pub use engine_core::{args, entry, layout};

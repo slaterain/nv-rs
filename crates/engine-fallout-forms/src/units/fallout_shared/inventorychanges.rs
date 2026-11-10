@@ -1403,6 +1403,19 @@ pub fn item_change_get_item_value(e: &mut Engine, this: Ptr<ItemChange>) -> f32 
             for bit in [1u32, 2, 4] {
                 if slots & bit != 0 {
                     let mod_object = fn_004bd570(e, Ptr::new(weapon), bit);
+                    // Guard sites 004bd48d, 004bd4b5, 004bd4dd (`ADD EAX,0x7c` after
+                    // `CALL 004bd570` for mod slot 1, 2 and 4; EAX the weapon's mod in that
+                    // slot): a stack whose mod flags name a slot the weapon form no longer
+                    // has a mod in reads that mod's value through null. Crash guards: a missing
+                    // mod adds no value (Tweaks: EAX 0 added at 004bd497).
+                    let missing = match bit {
+                        1 => guard_site!(e, 0x004b_d48d, mod_object),
+                        2 => guard_site!(e, 0x004b_d4b5, mod_object),
+                        _ => guard_site!(e, 0x004b_d4dd, mod_object),
+                    };
+                    if missing {
+                        continue;
+                    }
                     // TESObjectIMOD value word.
                     let word = typed_call!(
                         leaf::FAMILY,

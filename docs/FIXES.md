@@ -48,7 +48,13 @@ and Play.exe take the value from the table.
 
 - An override keyed by exe address, a plain function registered over the translation when it is on.
   Off, nothing is registered, so the translation runs as it is and no call tests a flag.
-- Translations are never edited for a fix.
+- Translations are never edited for a fix, except by guard sites: a fault in the middle of a function
+  too large to override whole (a community fix's patch at one instruction) gets one marked line in the
+  translation at that instruction, `guard_site!(e, <address>, words...)` (`crates/engine-core/src/guard.rs`;
+  docs/ENGINE_CRATE.md, "Guard sites"), listed in `crates/engine-core/data/guard_sites.tsv`. Off, the site
+  finds no guard in the engine's extension table and falls through: no call, no write, nothing a
+  recording sees. On, the row's guard answers whether the fault is there, and the site takes the path the
+  site's comment gives from the exe.
 - Its addresses are in `crates/engine-core/data/overridable.tsv`, so typed code keeps calling them by
   address (`docs/ENGINE_CRATE.md`, "Typed code"; a test checks).
 - Tests in both modes: the translation's behaviour stays what its own tests say; the fix's tests
@@ -104,6 +110,7 @@ The game's own `iFPSClamp` ignores `FrameLimit`: a clamp is a fixed step with no
 | IO wait ends on completion | `00c3dfa0` | `NV_IO_WAIT` | The IO manager's wait for queued loads (`00c3dfa0`; main at a cell border, a load, a save) sleeps 50 ms a turn while the completed work is short of what is in flight, then takes what came in. Here that sleep ends as soon as it is not (looked at after each 1 ms sleep; a turn still ends after 50 ms by the clock, or after 50 looks), so the wait for queued loads ends when they are done, not at its next 50 ms step: the same work in the same order. With stepped threads each 1 ms sleep is a switch point, where the IO thread runs. `IOManager::LoadQueuedPriority` (`00456520`) calls it by address now, so the row applies there too. |
 | Half-loaded actor's level change | `00881d30`, `00882b90`, `00883240`, `00883800`, `00932a00`, `00932b70` | `NV_HALF_LOADED_MOVE` | An actor moved to another AI level while its saved data loads (one loading thread between the two passes over a cell's saved changes, another setting its animation: running fast across cells) has its saved reference ids taken out for the move and put back where the original's copy puts them, for the second pass to resolve. The original follows the saved target id as an object (marks it, then calls through the word at the id as a vtable): its own crash. Below |
 | Thread races | `00aa42e0`, `00aa3a40`, `00a0e770`, `00a0df80`, `00a0f8b0`, `0071d0a0`, `00652140`, `00652160`, `00652190` | `NV_THREAD_RACES` | Three places where the original shares state between its threads without the lock it needs, which the port meets because it runs the game's threads side by side: a new thread's scrap heap (the first look-up on a thread inserts into an unlocked map, so two threads starting at once can lose one, and a block is later freed into the wrong heap), the debug texts and the console (printed from any thread while the main thread handles and times out the same queue), and the face-gen lock's count (counted down after the release with a plain read and write, so counts are lost and the model cache is never emptied, or emptied under another thread). From lStewieAl's Tweaks. Below |
+| Crash guards | guard sites (`crates/engine-core/data/guard_sites.tsv`) | `NV_CRASH_GUARDS` | Where the original reads through a missing object and the game crashes, the game goes on as for an empty one: the credits rolled with no save loaded, a theft from a container with no owner, a weapon whose mod was removed from its form, a throwing weapon taken as the ammunition for the damage shown, a limb cut off by an explosion from a body part with no limb node, an animation sequence with no owner, a face-gen model with a tri file and no geometry, a reference that left its cell in the multibound list, the player in no cell for the region check. From lStewieAl's Tweaks. Below |
 
 ### What high frame rates do to the original's code
 
@@ -316,6 +323,34 @@ too. None has been seen in a port run: the evidence is the exe and a test with r
   install the row and drive all nine addresses: 200 engines in a row each find their own heap, a
   heap looked up during the teardown is not kept, and the debug-text section is taken first and left
   as often as taken.
+
+### Crash guards
+
+Found by lStewieAl's Tweaks, each built from the exe at the instruction the plugin patches, as a guard
+site in the translation (`crates/host/src/crash_guards.rs`; the sites: `crates/engine-core/data/guard_sites.tsv`).
+With the row on, the guard does what the plugin's patch does there and nothing more. Off (vanilla), the
+port stops where the original crashes, at the read through the missing object. None of these depends on
+JIP LN or JohnnyGuitar. None has been met in a port run. The evidence for each is the exe and a test
+that drives the real translation to the instruction with the faulting input: the original stops at a
+read through null, and the row goes on with the result given.
+
+**Missing data.**
+
+| Where (site) | Trigger | With the row |
+| --- | --- | --- |
+| Credits menu close (`0075f78e`) | The credits rolled from the main menu with no save loaded: the player name's text is null and its length is read through it | Taken as an empty name: the flag cleared, the menu closed |
+| Steal alarm (`008bfbc1`) | Something taken from a container that has no owner and is not an actor: the owner's form type is read through null | The branch for an owner that is no NPC, which tests for null itself: no witness, no karma change |
+| An inventory entry's value (`004bd48d`, `004bd4b5`, `004bd4dd`) | A weapon whose mod flags name a slot whose mod was removed from the weapon form (a mod's edit): the mod's value is read through null | The missing mod adds no value |
+| Weapon damage shown (`0064529d`) | A throwing weapon equipped as the "ammo": its form is read as ammunition, a word of the weapon as the effect list | A form that is not ammunition has no effect list |
+| Explosion dismemberment (`009b9387`) | A body part whose node has no limb of that name: the limb's world scale is asked of null, the test for it comes after | The cut ends as for a missing limb (the exe's own branch), without the call |
+| Animation sequence start (`00a34fcb`, `00a35003`) | A controller sequence with no owner (its owner word at +0x40 null): it adds itself to the active set at the null owner + 0x44 | Not added to a set; its state and times are set as usual |
+| Face-gen mesh load (`0065a125`) | A face-gen model with a tri file and no model geometry: the geometry's vertex count is asked of null | 0 vertices, so the tri file does not match and is not used |
+| Multibound references (`0057aba4`) | A reference in the list that has left its cell: it is looked up in a null cell | Passed over, as a null reference is |
+| Region check (`004f269f`) | The player in no cell (`004f2640`, whether a form is in the player's regions): the cell's region list is asked of null | No regions |
+
+**Freed memory.** Not yet built (next batches).
+
+**Broken mod data.** Not yet built (next batches).
 
 ### Dialogue topic index
 

@@ -580,7 +580,15 @@ fn load_tri(e: &mut Engine, this: Ptr<BSFaceGenModel>, path: u32, kind: i32) {
     let matches = read && {
         let data = mesh(e);
         let geometry = pointer_get(e, data + 0x10);
-        let vertices = e.call(GEOMETRY_VERTEX_COUNT, &args![geometry]).u16() as u32;
+        // Guard site 0065a125 (`ADD ECX,0x10` then `CALL 00559450` and `CALL 00456650`, the
+        // vertex count, ECX the mesh data from EBP-0xc0 + 8): mesh data without geometry asks
+        // null for its vertex count. Crash guards: a null geometry counts 0 vertices (Tweaks:
+        // EAX 0 at 0065a134), so the tri file does not match.
+        let vertices = if guard_site!(e, 0x0065_a125, geometry) {
+            0
+        } else {
+            e.call(GEOMETRY_VERTEX_COUNT, &args![geometry]).u16() as u32
+        };
         vertices == fff_tri_file_data_s_num_model_vtx(e, Ptr::new(tri))
     };
     e.call(TRI_STREAM_DESTRUCT, &args![stream]);

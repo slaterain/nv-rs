@@ -1,0 +1,16 @@
+# Guard sites (docs/ENGINE_CRATE.md, "Guard sites"; crates/engine-core/src/guard.rs): the exe instructions where a
+# translation has a `guard_site!`, one row each. Columns: the instruction's address, the function it is in, the
+# fixes preset's row that answers there, and what the row does there. A test (crates/host/src/crash_guards.rs)
+# holds the table to the translations' sites and to the row's guard, both ways.
+004bd48d	004bd400	crash guards	an inventory entry's value: a weapon's missing mod in slot 1 adds no value
+004bd4b5	004bd400	crash guards	an inventory entry's value: a weapon's missing mod in slot 2 adds no value
+004bd4dd	004bd400	crash guards	an inventory entry's value: a weapon's missing mod in slot 4 adds no value
+004f269f	004f2640	crash guards	region check: with the player in no cell, no regions
+0057aba4	0057ab70	crash guards	multibound references: a reference with no parent cell is passed over
+0064529d	006450f0	crash guards	weapon damage for display: an "ammo" that is not ammo (a throwing weapon) has no effect list
+0065a125	00659ce0	crash guards	a face-gen model's mesh load: mesh data with no geometry has 0 vertices
+0075f78e	0075f750	crash guards	CreditsMenu::Close: with no save loaded, a null player name is an empty one
+008bfbc1	008bfa40	crash guards	the steal alarm: a null owner takes the not-an-NPC branch
+009b9387	009b90b0	crash guards	explosion dismemberment: a hit part with no limb node ends the cut without asking its scale
+00a34fcb	00a34f20	crash guards	NiControllerSequence::Activate (with an ease-in): a sequence with no owner is not added to its active set
+00a35003	00a34f20	crash guards	NiControllerSequence::Activate (no ease-in): a sequence with no owner is not added to its active set

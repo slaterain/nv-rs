@@ -912,6 +912,14 @@ fn fn_009b90b0_cut(e: &mut Engine, this: Ptr, in_vats: bool) -> CutEnd {
         if name_constructed {
             e.call(FIXED_STRING_DESTRUCT, &args![at(0x50)]);
         }
+        // Guard site 009b9387 (`CALL 008d01e0`, the node's world scale, ECX the limb at
+        // EBP-0x60): a hit part whose node has no limb of that name asks the scale of null, and
+        // the exe tests the limb only after. Crash guards: a null limb goes to that test's
+        // branch (009b9395) without the call.
+        if guard_site!(e, 0x009b_9387, limb) {
+            e.mem.set_u8(p + 0x90, 0);
+            return CutEnd::Done;
+        }
         let scale = x87_store32(e.call(NODE_SCALE, &args![limb]).f64());
         if limb == 0 {
             e.mem.set_u8(p + 0x90, 0);

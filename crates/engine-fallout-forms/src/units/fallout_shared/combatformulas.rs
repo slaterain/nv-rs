@@ -1088,7 +1088,14 @@ pub fn combat_formulas_calc_weapon_damage_for_display(
     }
     if !ammo_form.is_null() && !weapon.is_null() && ammo_form != weapon {
         // The exe tests `ammo_form` once more before this call; it is non-null here.
-        let effect = e.call(FUNCTION_00923000, &args![ammo_form]).u32();
+        // Guard site 0064529d (`CALL 00923000`, the ammo's effect list at +0xd4, ECX the ammo
+        // at EBP-4): a throwing weapon equipped as the ammo answers a word of the weapon as the
+        // list. Crash guards: a form that is not ammo (type 0x29) has no list (0).
+        let effect = if guard_site!(e, 0x0064_529d, ammo_form.addr()) {
+            0
+        } else {
+            e.call(FUNCTION_00923000, &args![ammo_form]).u32()
+        };
         result = e
             .call(
                 APPLY_PERK_ENTRY_FLOAT,
