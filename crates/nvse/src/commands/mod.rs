@@ -3,6 +3,7 @@
 
 pub mod algohol;
 pub mod array;
+pub mod extender;
 pub mod factions;
 pub mod game;
 pub mod input;
@@ -32,8 +33,9 @@ use engine_core::prelude::*;
 
 /// Every built command, for [`crate::table::install`].
 pub fn all() -> Vec<&'static Command> {
-    inventory::COMMANDS
+    extender::COMMANDS
         .iter()
+        .chain(inventory::COMMANDS)
         .chain(inventory_ref::COMMANDS)
         .chain(inventory_forms::COMMANDS)
         .chain(inventory_items::COMMANDS)

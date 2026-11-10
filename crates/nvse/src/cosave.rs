@@ -21,8 +21,9 @@
 pub const SIGNATURE: u32 = u32::from_le_bytes(*b"NVSE");
 /// `Header::kVersion`.
 pub const FORMAT_VERSION: u32 = 1;
-/// `NVSE_VERSION_INTEGER`, `NVSE_VERSION_INTEGER_MINOR`.
-pub const NVSE_VERSION: (u16, u16) = (6, 4);
+/// `NVSE_VERSION_INTEGER`, `NVSE_VERSION_INTEGER_MINOR`: the release the built-in matches
+/// ([`crate::VERSION`]).
+pub const NVSE_VERSION: (u16, u16) = (crate::VERSION.0 as u16, crate::VERSION.1 as u16);
 /// `RUNTIME_VERSION` for 1.4.0.525 (`MAKE_NEW_VEGAS_VERSION(4, 0, 525)`).
 pub const RUNTIME_VERSION: u32 = 0x0400_20d0;
 /// `kNvseOpcodeBase`: xNVSE's own plugin header.
