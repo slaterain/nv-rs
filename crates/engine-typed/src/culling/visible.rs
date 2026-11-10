@@ -47,6 +47,9 @@ pub fn cull(e: &mut Engine, this: Ptr<NiAVObject>, process: Ptr<NiCullingProcess
                 super::process::bs_process(e, process.cast(), this)
             );
         } else {
+            // Another process class: its walk is timed too (`NV_PAR_RENDER=time`).
+            let _walk = super::probe::on()
+                .then(|| super::probe::walk_begins(e, this.addr(), process.addr()));
             e.vcall(process.addr(), SLOT_PROCESS, &args![this]);
         }
     }

@@ -43,12 +43,14 @@
 use super::layout::{
     BSCompoundFrustum, BSCullingProcess, NiCullingProcess, NiFrustumPlanes, NiNode,
 };
+use super::probe::Refused;
 use super::FAMILY;
 use engine_core::ptr::Ptr;
 use engine_core::{typed_call, Engine, Ret};
 use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering::Relaxed};
 use std::sync::Mutex;
+use std::time::Instant;
 
 /// The process's `Process` and `AppendVirtual` slots and the typed functions a split needs there.
 const SLOT_PROCESS: u32 = 0x44;
@@ -310,19 +312,32 @@ pub(crate) fn collecting() -> bool {
     LOG.with(|log| log.borrow().is_some())
 }
 
-/// Whether `process` is one a split can copy: the typed `Process` and `AppendVirtual`, no compound
-/// frustum in use.
-fn plain_process(e: &Engine, process: u32) -> bool {
+/// Why `process` is not one a split can copy (none: it is): it needs the typed `Process` and
+/// `AppendVirtual`, and no compound frustum in use.
+fn not_plain(e: &Engine, process: u32) -> Option<Refused> {
     if crate::slot_target(e, process, SLOT_PROCESS) != 0x00c4_ee90
         || crate::slot_target(e, process, SLOT_APPEND_VIRTUAL) != 0x00c4_f1d0
     {
-        return false;
+        return Some(Refused::Process);
     }
     let frustum = e.get(
         Ptr::<BSCullingProcess>::new(process),
         BSCullingProcess::pCompoundFrustum,
     );
-    frustum.is_null() || e.get(frustum, BSCompoundFrustum::iFreeOp) == 0
+    if frustum.is_null() || e.get(frustum, BSCompoundFrustum::iFreeOp) == 0 {
+        None
+    } else {
+        Some(Refused::Frustum)
+    }
+}
+
+/// A split refused for `why`: counted by the probe when it is on. Answers false.
+#[cold]
+fn refused(why: Refused) -> bool {
+    if super::probe::on() {
+        super::probe::split_refused(why);
+    }
+    false
 }
 
 /// The main thread (the split runs only there), with real or stepped threads.
@@ -377,9 +392,17 @@ fn on_helpers(
 /// Splits `node`'s `count` children over the helpers, then replays their logs. False (nothing
 /// done; the caller walks them as before) when a split isn't possible here.
 pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32) -> bool {
-    if NEST.with(Cell::get) == 0 || collecting() || !on_main(e) || !plain_process(e, process) {
+    if collecting() || !on_main(e) {
         return false;
     }
+    if NEST.with(Cell::get) == 0 {
+        return refused(Refused::Root);
+    }
+    if let Some(why) = not_plain(e, process) {
+        return refused(why);
+    }
+    let timed = super::probe::on();
+    let busy_ns = AtomicU64::new(0);
     let base = e.get(node, NiNode::m_pBase);
     let children: Vec<u32> = (0..count)
         .map(|index| e.mem.u32(base.index(index, 4).addr()))
@@ -400,7 +423,11 @@ pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32)
         if check {
             SAVED.with(|s| *s.borrow_mut() = Some(Vec::new()));
         }
+        let started = timed.then(Instant::now);
         let log = walk_chunk(w, children, walk_process);
+        if let Some(started) = started {
+            busy_ns.fetch_add(super::probe::nanos(started.elapsed()), Relaxed);
+        }
         if check {
             let mine = SAVED.with(|s| s.borrow_mut().take()).unwrap_or_default();
             saved
@@ -417,9 +444,11 @@ pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32)
         on_helpers(e, helpers, &image, &|_: &mut Engine, _: usize, _: u32| {});
         return false;
     }
+    let forked = timed.then(Instant::now);
     if !on_helpers(e, helpers, &image, &walk) {
-        return false;
+        return refused(Refused::Helpers);
     }
+    let joined = timed.then(Instant::now);
     let walks = WALKS.fetch_add(1, Relaxed) + 1;
     if walks.is_power_of_two() && walks >= 1024 {
         println!("NV_PAR_RENDER: {walks} splits walked on the helpers");
@@ -463,6 +492,15 @@ pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32)
     };
     for entry in replayed.iter().flatten() {
         replay(e, process, entry);
+    }
+    if let (Some(forked), Some(joined)) = (forked, joined) {
+        super::probe::split_walked(
+            children.len(),
+            replayed.iter().map(Vec::len).sum(),
+            joined.duration_since(forked),
+            joined.elapsed(),
+            busy_ns.load(Relaxed),
+        );
     }
     true
 }

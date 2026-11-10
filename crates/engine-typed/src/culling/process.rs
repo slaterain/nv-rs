@@ -181,7 +181,8 @@ fn active_planes(e: &Engine, this: Ptr<BSCullingProcess>) -> u32 {
 /// as the compound frustum says (its active-plane state kept around the test); with no frustum in
 /// use any more and no plane active the object is visible too.
 pub fn bs_process(e: &mut Engine, this: Ptr<BSCullingProcess>, object: Ptr<NiAVObject>) {
-    let _walk = super::probe::on().then(|| super::probe::walk_begins(e, object.addr()));
+    let _walk =
+        super::probe::on().then(|| super::probe::walk_begins(e, object.addr(), this.addr()));
     let mode = e.get(this, BSCullingProcess::kCullMode);
     if mode == MODE_NONE_VISIBLE || mode == MODE_ALL_VISIBLE {
         if e.get(this, BSCullingProcess::kCullMode) == MODE_ALL_VISIBLE {
