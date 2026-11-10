@@ -7,7 +7,9 @@
 //! `nvse_1_4.dll`, its command records found by their names; the addresses below are the DLL's):
 //! the casts, the offsets and the order of the reads are the DLL's.
 
-use super::{console_print, double_words, dynamic_cast, is_console_mode, rtti, try_get_refr_parent, Read};
+use super::{
+    console_print, double_words, dynamic_cast, is_console_mode, rtti, try_get_refr_parent, Read,
+};
 use crate::table::{Command, Param, Returns};
 use crate::vars::{self, Key, Value};
 use crate::{handled, CommandArgs, EvalArgs};
@@ -201,7 +203,10 @@ fn fill(e: &mut Engine, array: u32, values: Vec<Value>) {
 }
 
 fn form_values(e: &Engine, forms: Vec<u32>) -> Vec<Value> {
-    forms.into_iter().map(|f| Value::Form(form_id(e, f))).collect()
+    forms
+        .into_iter()
+        .map(|f| Value::Form(form_id(e, f)))
+        .collect()
 }
 
 /// A `String`'s text at `at` (`String::CStr`: "" without a text pointer or with a length of 0,
@@ -239,7 +244,11 @@ fn age_class(e: &mut Engine, this_obj: u32, arg1: u32) -> f64 {
     } else {
         0
     };
-    let race = if npc != 0 { e.mem.u32(npc + NPC_RACE) } else { 0 };
+    let race = if npc != 0 {
+        e.mem.u32(npc + NPC_RACE)
+    } else {
+        0
+    };
     if race == 0 {
         return -1.0;
     }
@@ -324,7 +333,11 @@ fn base_data_of(e: &mut Engine, actor: u32) -> u32 {
 fn get_respawn_eval(e: &mut Engine, w: &[u32]) -> Ret {
     let a = EvalArgs::new(w);
     set(e, a.result, 0.0);
-    let mut actor = if a.arg1 != 0 { actor_of_form(e, a.arg1) } else { 0 };
+    let mut actor = if a.arg1 != 0 {
+        actor_of_form(e, a.arg1)
+    } else {
+        0
+    };
     if actor == 0 && a.this_obj != 0 {
         actor = actor_of_ref(e, a.this_obj);
     }
@@ -363,7 +376,11 @@ fn set_respawn(e: &mut Engine, w: &[u32]) -> Ret {
     let data = base_data_of(e, actor);
     if data != 0 {
         let flags = e.mem.u32(data + BASE_DATA_FLAGS);
-        let flags = if flag { flags | RESPAWN } else { flags & !RESPAWN };
+        let flags = if flag {
+            flags | RESPAWN
+        } else {
+            flags & !RESPAWN
+        };
         e.mem.set_u32(data + BASE_DATA_FLAGS, flags);
     }
     handled(true)
@@ -419,7 +436,11 @@ fn set_permanent(e: &mut Engine, w: &[u32]) -> Ret {
     }
     if obj != 0 {
         let flags = e.mem.u32(obj + FORM_FLAGS);
-        let flags = if flag { flags | QUEST_ITEM } else { flags & !QUEST_ITEM };
+        let flags = if flag {
+            flags | QUEST_ITEM
+        } else {
+            flags & !QUEST_ITEM
+        };
         e.mem.set_u32(obj + FORM_FLAGS, flags);
         e.vcall(obj, MARK_AS_MODIFIED, &args![MODIFIED_FLAGS]);
     }
@@ -510,7 +531,11 @@ fn perk_rank(e: &mut Engine, w: &[u32], alt: bool) -> Ret {
     if perk == 0 {
         return handled(true);
     }
-    let mut actor = if a.arg2 != 0 { actor_of_form(e, a.arg2) } else { 0 };
+    let mut actor = if a.arg2 != 0 {
+        actor_of_form(e, a.arg2)
+    } else {
+        0
+    };
     if actor == 0 && a.this_obj != 0 {
         actor = actor_of_ref(e, a.this_obj);
     }
@@ -702,7 +727,11 @@ fn active_factions(e: &mut Engine, w: &[u32], ranks: bool) -> Ret {
         return handled(true);
     }
     let changes = crate::invref::get_by_type(e, actor + REFR_EXTRA, EXTRA_FACTION_CHANGES);
-    let entry = if changes != 0 { e.mem.u32(changes + 0xc) } else { 0 };
+    let entry = if changes != 0 {
+        e.mem.u32(changes + 0xc)
+    } else {
+        0
+    };
     let changed = factions(e, entry);
     let mut values = Vec::new();
     for f in factions(e, base + ACTOR_BASE_FACTIONS) {

@@ -17,7 +17,6 @@ const DOOR: u32 = 0x0200_2400;
 const SOUND: u32 = 0x0200_2800;
 const MANAGER: u32 = 0x0200_3000;
 const NODES: u32 = 0x0200_4000;
-const TEXT: u32 = 0x0200_5000;
 const VTBL: u32 = 0x0200_6000;
 const TARGETS: u32 = 0x0200_7000;
 const HEAP: u32 = 0x0200_8000;
@@ -50,7 +49,9 @@ fn setup() -> Engine {
     let mut e = engine_with_table();
     e.map(0x011c_3000, 0x1000);
     e.map(0x011c_a000, 0x1000);
-    e.register(0x00ec_a7f4, |_, a| eax(u32::from((a[0] as u8).to_ascii_uppercase())));
+    e.register(0x00ec_a7f4, |_, a| {
+        eax(u32::from((a[0] as u8).to_ascii_uppercase()))
+    });
     e.register(0x0071_b160, |_, _| eax(CONSOLE));
     e.register(0x0071_d0a0, |e, a| {
         let t = crate::table::guest_text(e, a[1]);
@@ -97,9 +98,7 @@ fn setup() -> Engine {
     e.set_global::<u32>(DEFAULT_OBJECTS, MANAGER);
     e.mem.set_u32(SCRIPT + 0xc, 0x0500_0d00);
     // References answer `GetIsReference` (+0xF0) with 1, `+0xF4` stops.
-    for form in [NPC_REF] {
-        e.mem.set_u32(form, VTBL);
-    }
+    e.mem.set_u32(NPC_REF, VTBL);
     e.mem.set_u32(VTBL + 0xf0, 0x0300_9000);
     e.register(0x0300_9000, |_, _| eax(1));
     e.mem.set_u32(VTBL + 0xf4, 0x0300_9100);
@@ -147,40 +146,89 @@ const CHECK: u32 = 0x15ff;
 #[test]
 fn generic_lists_of_a_race() {
     let mut e = setup();
-    for (i, f) in [RACE, HAIR_A, HAIR_B, EYES, NPC, FORM_LIST].into_iter().enumerate() {
+    for (i, f) in [RACE, HAIR_A, HAIR_B, EYES, NPC, FORM_LIST]
+        .into_iter()
+        .enumerate()
+    {
         set_script_ref(&mut e, i as u16 + 1, f);
     }
     let race = RACE + 0x8c;
     assert_eq!(list_ids(&e, race), [0x13, 0x14]);
-    assert_eq!(run(&mut e, ADD, 0, &[n(0), r(1), r(3), n(-2)]), 1.0, "the old last index");
+    assert_eq!(
+        run(&mut e, ADD, 0, &[n(0), r(1), r(3), n(-2)]),
+        1.0,
+        "the old last index"
+    );
     assert_eq!(list_ids(&e, race), [0x13, 0x14, 0x14]);
     assert_eq!(run(&mut e, ADD, 0, &[n(0), r(1), r(2), n(0)]), 0.0);
     assert_eq!(list_ids(&e, race), [0x13, 0x13, 0x14, 0x14]);
-    assert_eq!(run(&mut e, ADD, 0, &[n(0), r(1), r(3), n(9)]), -1.0, "no such node");
-    assert_eq!(run(&mut e, ADD, 0, &[n(0), r(1), r(4), n(0)]), -1.0, "eyes are no hair");
+    assert_eq!(
+        run(&mut e, ADD, 0, &[n(0), r(1), r(3), n(9)]),
+        -1.0,
+        "no such node"
+    );
+    assert_eq!(
+        run(&mut e, ADD, 0, &[n(0), r(1), r(4), n(0)]),
+        -1.0,
+        "eyes are no hair"
+    );
     assert_eq!(list_ids(&e, race), [0x13, 0x13, 0x14, 0x14]);
     assert_eq!(low(run(&mut e, GET, 0, &[n(0), r(1), n(2)])), 0x0001_0014);
-    assert_eq!(low(run(&mut e, GET, 0, &[n(0), r(1), n(-2)])), 0x0001_0014, "-2 is the last");
+    assert_eq!(
+        low(run(&mut e, GET, 0, &[n(0), r(1), n(-2)])),
+        0x0001_0014,
+        "-2 is the last"
+    );
     let v = run(&mut e, GET, 0, &[n(0), r(1), n(9)]);
     assert_eq!(v, -1.0);
     // A form answered goes into the low word over -1's bits.
     let v = run(&mut e, REPLACE, 0, &[n(0), r(1), r(3), n(0)]);
-    assert_eq!(v.to_bits(), (-1.0f64).to_bits() & !0xffff_ffff | 0x0001_0013);
+    assert_eq!(
+        v.to_bits(),
+        (-1.0f64).to_bits() & !0xffff_ffff | 0x0001_0013
+    );
     assert_eq!(list_ids(&e, race), [0x14, 0x13, 0x14, 0x14]);
     assert_eq!(run(&mut e, CHECK, 0, &[n(0), r(1), r(2)]), 1.0);
-    assert_eq!(run(&mut e, CHECK, 0, &[n(0), r(1), r(4)]), -1.0, "eyes: no list");
+    assert_eq!(
+        run(&mut e, CHECK, 0, &[n(0), r(1), r(4)]),
+        -1.0,
+        "eyes: no list"
+    );
     freed();
-    assert_eq!(low(run(&mut e, DELETE, 0, &[n(0), r(1), n(1)])), 0x0001_0013);
+    assert_eq!(
+        low(run(&mut e, DELETE, 0, &[n(0), r(1), n(1)])),
+        0x0001_0013
+    );
     assert_eq!(list_ids(&e, race), [0x14, 0x14, 0x14]);
     assert_eq!(freed().len(), 1);
-    assert_eq!(run(&mut e, CHECK, 0, &[n(0), r(1), r(2)]), -2.0, "not found");
-    assert_eq!(low(run(&mut e, DELETE, 0, &[n(0), r(1), n(-2)])), 0x0001_0014, "-2: the head");
-    assert_eq!(run(&mut e, DELETE, 0, &[n(0), r(1), n(5)]), -1.0, "past the end");
+    assert_eq!(
+        run(&mut e, CHECK, 0, &[n(0), r(1), r(2)]),
+        -2.0,
+        "not found"
+    );
+    assert_eq!(
+        low(run(&mut e, DELETE, 0, &[n(0), r(1), n(-2)])),
+        0x0001_0014,
+        "-2: the head"
+    );
+    assert_eq!(
+        run(&mut e, DELETE, 0, &[n(0), r(1), n(5)]),
+        -1.0,
+        "past the end"
+    );
     // Kinds 2, 3, 4, 8, 9, 11, 12 and above 13 are no list: false.
     for which in [2, 3, 4, 8, 9, 11, 12, 14] {
-        assert_eq!(call(&mut e, GET, 0, &[n(which), r(1), n(0)]).0, 0, "{which}");
+        assert_eq!(
+            call(&mut e, GET, 0, &[n(which), r(1), n(0)]).0,
+            0,
+            "{which}"
+        );
     }
-    assert_eq!(call(&mut e, GET, 0, &[s("x"), r(1), n(0)]).0, 0, "a failed read");
+    assert_eq!(
+        call(&mut e, GET, 0, &[s("x"), r(1), n(0)]).0,
+        0,
+        "a failed read"
+    );
     // Eyes (kind 1): an empty list takes the first at its head.
     assert_eq!(run(&mut e, ADD, 0, &[n(1), r(1), r(4), n(0)]), 0.0);
     assert_eq!(list_ids(&e, RACE + 0xa8), [0x15]);
@@ -188,8 +236,17 @@ fn generic_lists_of_a_race() {
     run(&mut e, ADD, 0, &[n(1), r(1), r(4), n(-2)]);
     run(&mut e, CHECK, 0, &[n(1), r(1), r(4)]);
     let lines = seen();
-    assert_eq!(lines[0], (b"GenericAddForm: Which: %d, Index: %d".to_vec(), vec![1, 0]));
-    assert_eq!(lines[1], (b"GenericCheckForm: Which: %d, Returned: %d.".to_vec(), vec![1, 0]));
+    assert_eq!(
+        lines[0],
+        (b"GenericAddForm: Which: %d, Index: %d".to_vec(), vec![1, 0])
+    );
+    assert_eq!(
+        lines[1],
+        (
+            b"GenericCheckForm: Which: %d, Returned: %d.".to_vec(),
+            vec![1, 0]
+        )
+    );
     // The other lines, each with the form's id in hex.
     run(&mut e, GET, 0, &[n(1), r(1), n(0)]);
     run(&mut e, REPLACE, 0, &[n(1), r(1), r(4), n(0)]);
@@ -270,7 +327,11 @@ fn default_objects() {
     assert_eq!(run(&mut e, 0x15e4, 0, &[n(33), r(1)]), 0.0);
     assert_eq!(e.mem.u32(MANAGER + 0x18 + 4 * 33), SOUND);
     run(&mut e, 0x15e4, 0, &[n(34), r(1)]);
-    assert_eq!(e.mem.u32(MANAGER + 0x18 + 4 * 34), 0, "past the end: nothing");
+    assert_eq!(
+        e.mem.u32(MANAGER + 0x18 + 4 * 34),
+        0,
+        "past the end: nothing"
+    );
     let array = run(&mut e, 0x15e5, 0, &[]) as u32;
     assert_eq!(vars::array(&e, array).unwrap().len(), 34);
     let at = |e: &mut Engine, i: f64| vars::get_element(e, array, &Key::Number(i)).unwrap().data;
@@ -298,20 +359,33 @@ fn quest_objective_teleport_links() {
     e.mem.set_u32(links + 0x20, RACE);
     let array = run(&mut e, 0x1609, 0, &[]) as u32;
     let subs: Vec<u32> = (0..3)
-        .map(|i| match vars::get_element(&mut e, array, &Key::Number(f64::from(i))).unwrap().data {
-            vars::Data::Array(a) => a,
-            other => panic!("{other:?}"),
+        .map(|i| {
+            match vars::get_element(&mut e, array, &Key::Number(f64::from(i)))
+                .unwrap()
+                .data
+            {
+                vars::Data::Array(a) => a,
+                other => panic!("{other:?}"),
+            }
         })
         .collect();
     let forms = |e: &mut Engine, a: u32| -> Vec<vars::Data> {
         let len = vars::array(e, a).unwrap().len();
         (0..len)
-            .map(|i| vars::get_element(e, a, &Key::Number(i as f64)).unwrap().data)
+            .map(|i| {
+                vars::get_element(e, a, &Key::Number(i as f64))
+                    .unwrap()
+                    .data
+            })
             .collect()
     };
     assert_eq!(
         forms(&mut e, subs[0]),
-        [vars::Data::Form(0x0001_0017), vars::Data::Form(0x0001_0012), vars::Data::Form(0x0001_0018)]
+        [
+            vars::Data::Form(0x0001_0017),
+            vars::Data::Form(0x0001_0012),
+            vars::Data::Form(0x0001_0018)
+        ]
     );
     assert!(forms(&mut e, subs[1]).is_empty(), "an empty node");
     assert!(forms(&mut e, subs[2]).is_empty(), "a target without data");
@@ -343,13 +417,21 @@ fn special_idles() {
     let name = run(&mut e, 0x1618, NPC_REF, &[n(5)]);
     assert_eq!(vars::string(&e, name as u32).unwrap(), b"");
     let name = run(&mut e, 0x1618, NPC_REF, &[s("x")]);
-    assert_eq!(vars::string(&e, name as u32).unwrap(), b"", "a failed read: \"\"");
+    assert_eq!(
+        vars::string(&e, name as u32).unwrap(),
+        b"",
+        "a failed read: \"\""
+    );
     freed();
     let idle1 = tlist_nodes(&e, names)[0];
     run(&mut e, 0x161a, NPC_REF, &[s("IDLE1")]);
     assert_eq!(texts(&e), ["Idle2"]);
     let gone = freed();
-    assert_eq!((gone.len(), gone[1]), (2, idle1), "the next node, then the name");
+    assert_eq!(
+        (gone.len(), gone[1]),
+        (2, idle1),
+        "the next node, then the name"
+    );
     run(&mut e, 0x1619, NPC_REF, &[s("Idle4")]);
     run(&mut e, 0x161b, NPC_REF, &[]);
     assert!(texts(&e).is_empty());
@@ -395,7 +477,11 @@ fn a_long_idle_name() {
     assert_eq!(vars::string(&e, name as u32).unwrap().len(), 256);
     run(&mut e, 0x161a, NPC_REF, &[s(&long)]);
     let name = run(&mut e, 0x1618, NPC_REF, &[n(1)]);
-    assert_eq!(vars::string(&e, name as u32).unwrap(), b"", "the 256-byte one deleted");
+    assert_eq!(
+        vars::string(&e, name as u32).unwrap(),
+        b"",
+        "the 256-byte one deleted"
+    );
 }
 
 /// Runs an expression command with these expressions as its arguments.
@@ -444,11 +530,17 @@ fn door_sounds() {
     e.mem.set_u32(DOOR + 0x78, SOUND);
     set_script_ref(&mut e, 1, DOOR);
     set_script_ref(&mut e, 2, RACE);
-    assert_eq!(low(run_expr(&mut e, 0x1677, &[form_tok(1), num(0.0)])), 0x0001_0018);
+    assert_eq!(
+        low(run_expr(&mut e, 0x1677, &[form_tok(1), num(0.0)])),
+        0x0001_0018
+    );
     console(&mut e);
     assert_eq!(run_expr(&mut e, 0x1677, &[form_tok(2), num(0.0)]), 0.0);
     let lines = seen();
-    assert_eq!((lines[0].0.as_slice(), lines[0].1[0]), (&b"Form %X is not a TESObjectDOOR"[..], 0x0001_0012));
+    assert_eq!(
+        (lines[0].0.as_slice(), lines[0].1[0]),
+        (&b"Form %X is not a TESObjectDOOR"[..], 0x0001_0012)
+    );
     let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run_expr(&mut e, 0x1677, &[form_tok(1), num(1.0)])
     }));
@@ -472,9 +564,19 @@ fn fire_challenge_calls_the_game() {
         eax(0x8000_0001)
     });
     set_script_ref(&mut e, 1, DOOR);
-    let args = [num(3.9), num(-2.5), form_tok(1), num(1.0), num(2.0), num(7.0)];
+    let args = [
+        num(3.9),
+        num(-2.5),
+        form_tok(1),
+        num(1.0),
+        num(2.0),
+        num(7.0),
+    ];
     assert_eq!(run_expr(&mut e, 0x1678, &args), 2_147_483_649.0);
-    assert_eq!(seen(), [(Vec::new(), vec![3, (-2i32) as u32, 0, DOOR, 1, 2, 7])]);
+    assert_eq!(
+        seen(),
+        [(Vec::new(), vec![3, (-2i32) as u32, 0, DOOR, 1, 2, 7])]
+    );
     assert_eq!(run_expr(&mut e, 0x1678, &args[..5]), 0.0);
     assert!(seen().is_empty());
 }

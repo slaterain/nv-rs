@@ -56,7 +56,8 @@ fn string(e: &mut Engine, string: u32, at: u32, t: &str) {
 fn node(e: &mut Engine, i: u32, item: u32, next: u32) -> u32 {
     let at = NODES + 8 * i;
     e.mem.set_u32(at, item);
-    e.mem.set_u32(at + 4, if next == 0 { 0 } else { NODES + 8 * next });
+    e.mem
+        .set_u32(at + 4, if next == 0 { 0 } else { NODES + 8 * next });
     at
 }
 
@@ -65,7 +66,9 @@ fn node(e: &mut Engine, i: u32, item: u32, next: u32) -> u32 {
 fn setup() -> Engine {
     let mut e = engine_with_table();
     e.map(0x011c_3000, 0x1000);
-    e.register(0x00ec_a7f4, |_, a| eax(u32::from((a[0] as u8).to_ascii_uppercase())));
+    e.register(0x00ec_a7f4, |_, a| {
+        eax(u32::from((a[0] as u8).to_ascii_uppercase()))
+    });
     e.register(0x0071_b160, |_, _| eax(CONSOLE));
     e.register(0x0071_d0a0, |e, a| {
         let t = crate::table::guest_text(e, a[1]);
@@ -164,7 +167,10 @@ fn age_classes() {
     assert_eq!(run(&mut e, 0x14fe, NPC_REF, &[]), -1.0, "no race");
     console(&mut e);
     run(&mut e, 0x14fe, NPC_REF, &[]);
-    assert_eq!(seen(), [(b"GetAgeClass: %.0f".to_vec(), double_words(-1.0).to_vec())]);
+    assert_eq!(
+        seen(),
+        [(b"GetAgeClass: %.0f".to_vec(), double_words(-1.0).to_vec())]
+    );
 }
 
 /// Each byte goes to the game's `toupper` sign-extended (`movsx` at `10033123`), the terminator
@@ -242,13 +248,21 @@ fn respawn_and_permanent_flags() {
     run(&mut e, 0x150f, ITEM, &[n(1)]);
     assert_eq!(e.mem.u32(ITEM + 8), 0x400);
     assert_eq!(seen(), [(Vec::new(), vec![ITEM, 1])]);
-    assert_eq!(run(&mut e, 0x150e, ITEM, &[]), 0.0, "the base form's flag is read");
+    assert_eq!(
+        run(&mut e, 0x150e, ITEM, &[]),
+        0.0,
+        "the base form's flag is read"
+    );
     e.mem.set_u32(ITEM_BASE + 8, 0x400);
     assert_eq!(run(&mut e, 0x150e, ITEM, &[]), 1.0);
     assert_eq!(eval(&mut e, 0x150e, 0, ITEM, 0), 1.0);
     run(&mut e, 0x150f, ITEM, &[n(0)]);
     assert_eq!(e.mem.u32(ITEM + 8), 0);
-    assert_eq!(run(&mut e, 0x150f, ITEM, &[s("x")]), 0.0, "a failed read sets nothing");
+    assert_eq!(
+        run(&mut e, 0x150f, ITEM, &[s("x")]),
+        0.0,
+        "a failed read sets nothing"
+    );
     assert!(seen().len() == 1);
 }
 
@@ -258,14 +272,30 @@ fn respawn_and_permanent_flags() {
 #[test]
 fn race_and_class() {
     let mut e = setup();
-    assert_eq!(run(&mut e, 0x159c, NPC_REF, &[]).to_bits() as u32, 0x0001_0012);
-    assert_eq!(run(&mut e, 0x161c, NPC_REF, &[]).to_bits() as u32, 0x0001_0013);
+    assert_eq!(
+        run(&mut e, 0x159c, NPC_REF, &[]).to_bits() as u32,
+        0x0001_0012
+    );
+    assert_eq!(
+        run(&mut e, 0x161c, NPC_REF, &[]).to_bits() as u32,
+        0x0001_0013
+    );
     set_script_ref(&mut e, 1, NPC);
     set_script_ref(&mut e, 2, NPC_REF);
     set_script_ref(&mut e, 3, ITEM);
-    assert_eq!(run(&mut e, 0x159c, 0, &[r(1)]).to_bits() as u32, 0x0001_0012);
-    assert_eq!(run(&mut e, 0x159c, 0, &[r(2)]).to_bits() as u32, 0x0001_0012);
-    assert_eq!(run(&mut e, 0x159c, NPC_REF, &[r(3)]), 0.0, "the argument wins");
+    assert_eq!(
+        run(&mut e, 0x159c, 0, &[r(1)]).to_bits() as u32,
+        0x0001_0012
+    );
+    assert_eq!(
+        run(&mut e, 0x159c, 0, &[r(2)]).to_bits() as u32,
+        0x0001_0012
+    );
+    assert_eq!(
+        run(&mut e, 0x159c, NPC_REF, &[r(3)]),
+        0.0,
+        "the argument wins"
+    );
     let name = run(&mut e, 0x159d, NPC_REF, &[]);
     assert_eq!(vars::string(&e, name as u32).unwrap(), b"Hispanic Old");
     let name = run(&mut e, 0x161d, NPC_REF, &[]);
@@ -296,7 +326,11 @@ fn perk_ranks() {
     assert_eq!(run(&mut e, 0x15c3, NPC_REF, &[r(1)]), 2.0);
     assert_eq!(run(&mut e, 0x15c4, 0, &[r(1), r(2)]), 255.0);
     assert_eq!(eval(&mut e, 0x15c3, 0, PERK_FORM, NPC_REF), 2.0);
-    assert_eq!(eval(&mut e, 0x15c3, NPC_REF, NPC, 0), -1.0, "an NPC base is no perk");
+    assert_eq!(
+        eval(&mut e, 0x15c3, NPC_REF, NPC, 0),
+        -1.0,
+        "an NPC base is no perk"
+    );
     assert_eq!(eval(&mut e, 0x15c3, 0, PERK_FORM, 0), -1.0);
     assert_eq!(run(&mut e, 0x15c3, 0, &[r(1)]), -1.0);
     console(&mut e);
@@ -321,7 +355,10 @@ fn lists_to_arrays() {
     let a = run(&mut e, 0x15ce, 0, &[r(1)]);
     assert!(ids(&mut e, a).is_empty());
     let a = run(&mut e, 0x15cd, 0, &[r(2)]);
-    assert!(ids(&mut e, a).is_empty(), "no argument read: an empty array");
+    assert!(
+        ids(&mut e, a).is_empty(),
+        "no argument read: an empty array"
+    );
     // The actor base's factions and ranks (255 stays 255).
     let (fa, fb) = (NODES + 0x200, NODES + 0x210);
     e.mem.set_u32(fa, FACTION_A);
@@ -353,7 +390,11 @@ fn lists_to_arrays() {
     e.mem.set_u32(cb, FACTION_A);
     e.mem.set_u8(cb + 4, 7);
     let a = run(&mut e, 0x15d5, NPC_REF, &[]);
-    assert_eq!(ids(&mut e, a), ["255", "7"], "the base's B, then the change of A");
+    assert_eq!(
+        ids(&mut e, a),
+        ["255", "7"],
+        "the base's B, then the change of A"
+    );
     let a = run(&mut e, 0x15d4, ITEM, &[]);
     assert!(ids(&mut e, a).is_empty(), "no actor");
     // The faction's rank names.
@@ -369,13 +410,25 @@ fn lists_to_arrays() {
     e.mem.set_u32(FACTION_A + 0x40, next);
     set_script_ref(&mut e, 3, FACTION_A);
     let a = run(&mut e, 0x15d6, 0, &[r(3)]);
-    assert_eq!(ids(&mut e, a), ["Recruit", "Sergeant", ""], "a length of 0: \"\"");
+    assert_eq!(
+        ids(&mut e, a),
+        ["Recruit", "Sergeant", ""],
+        "a length of 0: \"\""
+    );
     let a = run(&mut e, 0x15d7, 0, &[r(3)]);
     assert_eq!(ids(&mut e, a), ["", "Sergeant Ma'am", ""]);
     let a = run(&mut e, 0x15d6, 0, &[r(1)]);
-    assert!(ids(&mut e, a).is_empty(), "a race is no faction: the read fails");
+    assert!(
+        ids(&mut e, a).is_empty(),
+        "a race is no faction: the read fails"
+    );
     // Spells, leveled spells, packages, head parts.
-    for (at, op) in [(0x80, 0x15cf), (0x88, 0x15d0), (0xa8, 0x15d1), (0x1dc, 0x15d8)] {
+    for (at, op) in [
+        (0x80, 0x15cf),
+        (0x88, 0x15d0),
+        (0xa8, 0x15d1),
+        (0x1dc, 0x15d8),
+    ] {
         e.mem.set_u32(NPC + at, CLASS);
         let a = run(&mut e, op, NPC_REF, &[]);
         assert_eq!(ids(&mut e, a), ["00010013"], "{op:x}");
@@ -393,7 +446,20 @@ fn lists_to_arrays() {
     let a = run(&mut e, 0x15d9, 0, &[r(4)]);
     assert_eq!(ids(&mut e, a), ["00010011", "00010013"]);
     let a = run(&mut e, 0x15da, 0, &[r(4)]);
-    assert!(ids(&mut e, a).is_empty(), "a leveled creature is no leveled character");
+    assert!(
+        ids(&mut e, a).is_empty(),
+        "a leveled creature is no leveled character"
+    );
+    set_classes(&mut e, LEVELED, 1 << 38);
+    let a = run(&mut e, 0x15da, 0, &[r(4)]);
+    assert_eq!(
+        ids(&mut e, a),
+        ["00010011", "00010013"],
+        "as a leveled character"
+    );
+    let a = run(&mut e, 0x15d9, 0, &[r(4)]);
+    assert!(ids(&mut e, a).is_empty(), "and no leveled creature");
+    set_classes(&mut e, LEVELED, 1 << 37);
     e.mem.set_u32(LIST + 0x18, ITEM_BASE);
     set_script_ref(&mut e, 5, LIST);
     let a = run(&mut e, 0x15db, 0, &[r(5)]);

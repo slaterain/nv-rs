@@ -375,12 +375,26 @@ fn generic(e: &mut Engine, w: &[u32], action: Action) -> Ret {
     let (holder, of_kind, at) = match which {
         0 | 1 => {
             let race = dynamic_cast(e, owner, rtti::TES_FORM, rtti::TES_RACE);
-            let kind = cast_form(e, if which == 0 { rtti::TES_HAIR } else { rtti::TES_EYES });
+            let kind = cast_form(
+                e,
+                if which == 0 {
+                    rtti::TES_HAIR
+                } else {
+                    rtti::TES_EYES
+                },
+            );
             (race, kind, if which == 0 { RACE_HAIRS } else { RACE_EYES })
         }
         5..=7 => {
             let base = convert(e, a.this_obj, owner, rtti::TES_ACTOR_BASE);
-            let kind = cast_form(e, if which == 5 { rtti::TES_PACKAGE } else { rtti::SPELL_ITEM });
+            let kind = cast_form(
+                e,
+                if which == 5 {
+                    rtti::TES_PACKAGE
+                } else {
+                    rtti::SPELL_ITEM
+                },
+            );
             let at = match which {
                 5 => ACTOR_BASE_PACKAGES,
                 6 => ACTOR_BASE_SPELLS,
@@ -410,7 +424,11 @@ fn generic(e: &mut Engine, w: &[u32], action: Action) -> Ret {
                 a.set_result(e, f64::from(index as u32));
             }
             if console {
-                console_print(e, "GenericAddForm: Which: %d, Index: %d", &[which, index as u32]);
+                console_print(
+                    e,
+                    "GenericAddForm: Which: %d, Index: %d",
+                    &[which, index as u32],
+                );
             }
         }
         Action::ChgAt => {
@@ -419,7 +437,11 @@ fn generic(e: &mut Engine, w: &[u32], action: Action) -> Ret {
                 let id = form_id(e, old);
                 a.set_form_result(e, id);
                 if console {
-                    console_print(e, "GenericChangeForm: Which: %d, Replaced: %08X.", &[which, id]);
+                    console_print(
+                        e,
+                        "GenericChangeForm: Which: %d, Replaced: %08X.",
+                        &[which, id],
+                    );
                 }
             }
         }
@@ -429,7 +451,11 @@ fn generic(e: &mut Engine, w: &[u32], action: Action) -> Ret {
                 let id = form_id(e, old);
                 a.set_form_result(e, id);
                 if console {
-                    console_print(e, "GenericDeleteForm: Which: %d, Deleted: %08X.", &[which, id]);
+                    console_print(
+                        e,
+                        "GenericDeleteForm: Which: %d, Deleted: %08X.",
+                        &[which, id],
+                    );
                 }
             }
         }
@@ -439,7 +465,11 @@ fn generic(e: &mut Engine, w: &[u32], action: Action) -> Ret {
                 let id = form_id(e, found);
                 a.set_form_result(e, id);
                 if console {
-                    console_print(e, "GenericGetForm: Which: %d, Returned: %08X.", &[which, id]);
+                    console_print(
+                        e,
+                        "GenericGetForm: Which: %d, Returned: %08X.",
+                        &[which, id],
+                    );
                 }
             }
         }
@@ -793,7 +823,13 @@ fn get_door_sound(e: &mut Engine, w: &[u32]) -> Ret {
             }
             return;
         }
-        let sound = e.mem.u32(door + if mode == 0 { DOOR_OPEN_SOUND } else { DOOR_CLOSE_SOUND });
+        let sound = e.mem.u32(
+            door + if mode == 0 {
+                DOOR_OPEN_SOUND
+            } else {
+                DOOR_CLOSE_SOUND
+            },
+        );
         if super::misc_ref::passed_over(e, sound) {
             return;
         }
@@ -818,13 +854,17 @@ fn fire_challenge(e: &mut Engine, w: &[u32]) -> Ret {
         let Some(toks) = toks.filter(|t| t.len() == 6) else {
             return;
         };
-        let int = |e: &mut Engine, i: usize| crate::args::f64_to_i32(ev.get_number(e, &toks[i])) as u32;
+        let int =
+            |e: &mut Engine, i: usize| crate::args::f64_to_i32(ev.get_number(e, &toks[i])) as u32;
         let kind = int(e, 0);
         let count = int(e, 1);
         let weapon = ev.get_form(e, &toks[2]);
         let (v1, v2, v3) = (int(e, 3), int(e, 4), int(e, 5));
         let r = e
-            .call(INCREMENT_CHALLENGE, &args![kind, count, 0u32, weapon, v1, v2, v3])
+            .call(
+                INCREMENT_CHALLENGE,
+                &args![kind, count, 0u32, weapon, v1, v2, v3],
+            )
             .u32();
         a.set_result(e, f64::from(r));
     });
