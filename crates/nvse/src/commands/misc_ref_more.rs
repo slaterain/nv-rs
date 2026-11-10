@@ -83,7 +83,7 @@ const HIT_SHADER: u32 = 0x30;
 /// `010334B4` holds `00401290` there, answering 1; `+0x130`, the editor id's getter, answers a
 /// fixed empty text).
 const SET_EDITOR_ID: u32 = 0x134;
-/// `TESObjectREFR::IsCharacter` (index 0x86, `+0x218`: `Character`'s vtable `0108AA3C` holds
+/// `TESObjectREFR::IsCharacter` (index 0x86, `+0x218`: `PlayerCharacter`'s vtable `0108AA3C` holds
 /// `008D0360`, answering 1) and `GetValidBip01Names` (index 0x7A, `+0x1E8`: `00950A90`).
 const IS_CHARACTER: u32 = 0x218;
 const VALID_BIP01_NAMES: u32 = 0x1e8;
@@ -252,8 +252,8 @@ fn set(e: &mut Engine, result: u32, v: f64) {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameExtraData.cpp: GetExtraFactionRank;
 // GameForms.cpp: TESActorBaseData::GetFactionRank; Commands_MiscRef.cpp: GetFactionRank.
-/// The rank of a reference in a faction: its own `ExtraFactionChanges` entry for it, else its base
-/// form's (as `TESActorBaseData`) faction list; -1 for neither.
+/// The rank of a reference in a faction: its own `ExtraFactionChanges` entry for it when that is
+/// not -1, else its base form's (as `TESActorBaseData`) faction list; -1 for neither.
 fn faction_rank(e: &mut Engine, refr: u32, faction: u32) -> i8 {
     if refr == 0 || faction == 0 {
         return -1;
@@ -264,7 +264,13 @@ fn faction_rank(e: &mut Engine, refr: u32, faction: u32) -> i8 {
         while node != 0 {
             let data = e.mem.u32(node);
             if data != 0 && e.mem.u32(data) == faction {
-                return e.mem.u8(data + 4) as i8;
+                let rank = e.mem.u8(data + 4) as i8;
+                // -1 (a faction left with `RemoveFromFaction`) is "not found": the base form's
+                // list is read (`GetFactionRank`, `Commands_MiscRef.cpp`).
+                if rank != -1 {
+                    return rank;
+                }
+                break;
             }
             node = e.mem.u32(node + 4);
         }
@@ -655,7 +661,9 @@ fn distance(e: &mut Engine, a: u32, b: u32) -> f32 {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_MiscRef.cpp:
 // Cmd_GetHeadingAngleX_Execute.
 /// The up/down angle in degrees from the calling reference's x rotation to the target, in
-/// `float`s as xNVSE computes it (`asin` of the height difference over the distance).
+/// `float`s as the shipped DLL computes it (`1003A0A1`): the height difference over the distance
+/// in `float`, its `asin` in `double` rounded to `float`, the rotation taken off and the degrees
+/// made in `float`.
 fn get_heading_angle_x(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     a.set_result(e, 0.0);
@@ -667,7 +675,8 @@ fn get_heading_angle_x(e: &mut Engine, w: &[u32]) -> Ret {
     let opposite = e.mem.f32(a.this_obj + REFR_POS + 8) - e.mem.f32(target + REFR_POS + 8);
     let hypotenuse = distance(e, a.this_obj, target);
     let fraction = opposite / hypotenuse;
-    let v = (fraction.asin() - e.mem.f32(a.this_obj + REFR_ROT_X)) * FLT_180_D_PI;
+    let v =
+        ((f64::from(fraction).asin() as f32) - e.mem.f32(a.this_obj + REFR_ROT_X)) * FLT_180_D_PI;
     a.set_result(e, f64::from(v));
     handled(true)
 }

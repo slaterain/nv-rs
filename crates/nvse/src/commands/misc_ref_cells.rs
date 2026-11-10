@@ -270,6 +270,15 @@ struct Scan {
     include_taken: bool,
     /// Where the walk started: a walk that comes back there can never end (the list guard).
     start: (i8, i8),
+    /// Stepped (`GetFirstRef`, `GetNextRef`): each call walks only until it finds a reference, so
+    /// coming back to the start is a hang only when one call has gone the whole way round from
+    /// where it began without finding one ([`Scan::begin_call`]). An area walk (`GetNumRefs`,
+    /// `GetRefs`) goes round in one call: back at the start it can never end.
+    stepped: bool,
+    /// A stepped call has passed its starting position once.
+    lapped: bool,
+    /// The list guard ended the walk (no cell is current: the scan answers 0).
+    guard_ended: bool,
 }
 
 /// The cell's coordinates (`cellData`'s two words); a cell without that data is read through, as
@@ -327,6 +336,9 @@ impl Scan {
             depth,
             include_taken,
             start: (0, 0),
+            stepped: false,
+            lapped: false,
+            guard_ended: false,
         };
         if world != 0 && depth != 0 {
             s.cur_x = (x as u8).wrapping_sub(depth) as i8;
@@ -374,7 +386,12 @@ impl Scan {
                 self.cur_x = self.cur_x.wrapping_add(1);
                 key(old_x + 1, i32::from(self.cur_y))
             };
-            if (self.cur_x, self.cur_y) == self.start {
+            if (self.cur_x, self.cur_y) == self.start && self.stepped && !self.lapped {
+                // A stepped call back where it began: its own cell is searched again from the
+                // top (xNVSE answers the same references again, round and round); a second time
+                // round with nothing found is the hang.
+                self.lapped = true;
+            } else if (self.cur_x, self.cur_y) == self.start {
                 if !super::array::fix_on(e, super::array::LIST_GUARD) {
                     panic!(
                         "a cell scan whose depth takes it past the cell grid's 8-bit positions never \
@@ -382,6 +399,7 @@ impl Scan {
                     );
                 }
                 self.cur_cell = 0;
+                self.guard_ended = true;
                 return false;
             }
             self.cur_cell = lookup(e, self.world, at);
@@ -389,6 +407,13 @@ impl Scan {
                 return true;
             }
         }
+    }
+
+    /// A stepped call begins here: the loop check counts from this position.
+    fn begin_call(&mut self) {
+        self.stepped = true;
+        self.lapped = false;
+        self.start = (self.cur_x, self.cur_y);
     }
 
     /// `CellScanInfo::FirstCell`.
@@ -428,12 +453,16 @@ fn distance_3d(e: &Engine, a: u32, b: u32) -> f32 {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameObjects.cpp:
 // TESObjectREFR::GetHeadingAngle.
-/// The angle in degrees from `from`'s heading to `to`, from -180 to 180.
+/// The angle in degrees from `from`'s heading to `to`, from -180 to 180, as the shipped DLL makes it
+/// (inlined in the distance and angle filter at `10036B2C`): the `float` differences widened to
+/// `double` for the C runtime's `atan2`, its answer rounded to `float`, the rotation taken off in
+/// `float`, then widened and multiplied by `57.29577951308232` in `double`.
 pub(crate) fn heading_angle(e: &Engine, from: u32, to: u32) -> f64 {
     let dx = e.mem.f32(to + REFR_POS) - e.mem.f32(from + REFR_POS);
     let dy = e.mem.f32(to + REFR_POS + 4) - e.mem.f32(from + REFR_POS + 4);
     let rot = e.mem.f32(from + REFR_ROT_Z);
-    let mut result = (f64::from(dx).atan2(f64::from(dy)) - f64::from(rot)) * 57.295_779_513_082_32;
+    let angle = f64::from(dx).atan2(f64::from(dy)) as f32 - rot;
+    let mut result = f64::from(angle) * 57.295_779_513_082_32;
     if result < -180.0 {
         result += 360.0;
     } else if result > 180.0 {
@@ -659,6 +688,7 @@ fn cell_scan(e: &mut Engine, script: u32, start: Option<(u32, u32, u32, bool, u3
         };
         let mut s = Scan::new(e, depth as u8, form_type as u8, include_taken, cell);
         if let Some(s) = s.as_mut() {
+            s.begin_call();
             s.first_cell(e);
         }
         state(e).scans.insert(key, s);
@@ -669,7 +699,10 @@ fn cell_scan(e: &mut Engine, script: u32, start: Option<(u32, u32, u32, bool, u3
     } else {
         let s = state(e).scans[&key];
         match s {
-            Some(s) if s.cur_cell != 0 => (s, 0),
+            Some(mut s) if s.cur_cell != 0 => {
+                s.begin_call();
+                (s, 0)
+            }
             _ => {
                 if !invref::checks(e) {
                     panic!(
@@ -684,8 +717,9 @@ fn cell_scan(e: &mut Engine, script: u32, start: Option<(u32, u32, u32, bool, u3
     };
     let found = loop {
         if s.cur_cell == 0 {
-            // A walk that found no cell at all: xNVSE reads the missing cell's list.
-            if !invref::checks(e) {
+            // A walk that found no cell at all: xNVSE reads the missing cell's list. A walk the
+            // list guard ended answers 0 (the row's own end, not that read).
+            if !s.guard_ended && !invref::checks(e) {
                 panic!(
                     "a cell scan found no cell, and xNVSE reads through the missing cell: the game \
                      stops (NV_NVSE_INVREF_CHECK ends the scan)"

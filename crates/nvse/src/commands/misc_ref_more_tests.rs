@@ -202,8 +202,13 @@ fn faction_ownership_and_ranks() {
     assert_eq!(
         eval(&mut e, HAS_OWNERSHIP, NPC_REF, ITEM, 0),
         0.0,
-        "255 is -1"
+        "255 is -1: not found, so the base's rank 1 is read"
     );
+    // After RemoveFromFaction (the change -1) the base's rank meets the requirement.
+    e.mem.set_u8(entry + 4, 2);
+    assert_eq!(eval(&mut e, HAS_OWNERSHIP, NPC_REF, ITEM, 0), 1.0);
+    assert_eq!(eval(&mut e, IS_OWNED, ITEM, NPC_REF, 0), 1.0);
+    e.mem.set_u8(entry + 4, 1);
     own(&mut e, ITEM + 0x44, FACTION, Some(0x1ff), EXTRA);
     assert_eq!(
         eval(&mut e, HAS_OWNERSHIP, NPC_REF, ITEM, 0),
@@ -474,28 +479,40 @@ fn new_form_lists() {
     assert_eq!(seen()[0].0, b"");
 }
 
-/// The up/down angle: asin of the height difference over the distance, less the x rotation, in
-/// degrees, all in `float`s; the distance is the largest float for references in different cells
-/// of no common worldspace. Pinned against the real game's numbers (run `inv6r1`): the player
-/// (z 7360.774902) to a door (z 7358) 1123.048218 away answered -0.530697 (exactly
-/// -583506984960 / 2^40, a `float`); the player's x rotation was not printed, so the one that
-/// gives that answer is used.
+/// The up/down angle: asin of the height difference over the distance (its asin in `double`, rounded),
+/// less the x rotation, in degrees in `float`s; the distance is the largest float for references in
+/// different cells of no common worldspace. The real game's numbers (run `inv6r1`): the player (z
+/// 7360.774902, x rotation 0.672267 degrees from `GetAngle x`) to a door (z 7358) 1123.048218 away
+/// answered -0.530697 (a `float`: -583506984960 / 2^40). The inputs are known to the printed six
+/// places only, so the answer is pinned as printed (six places, two floats from the real bits) and the
+/// arithmetic exactly.
 #[test]
 fn heading_angle_x() {
     let mut e = setup();
     let (me, door) = (NPC_REF, ITEM);
     e.mem.set_f32(me + 0x38, 7360.775);
     e.mem.set_f32(door + 0x38, 7358.0);
-    e.mem.set_f32(door + 0x30, 1_123.048_2);
-    let rot = 0.002_470_8_f32 + 0.530_697 / 57.295_78;
+    let dz = 7360.775f64 - 7358.0;
+    e.mem.set_f32(
+        door + 0x30,
+        (1_123.048_218f64.powi(2) - dz * dz).sqrt() as f32,
+    );
+    let rot = (0.672_267f64 / 57.295_779_513_082_32) as f32;
     e.mem.set_f32(me + 0x24, rot);
     set_script_ref(&mut e, 1, door);
     let v = run(&mut e, GET_HEADING_ANGLE_X, me, &[r(1)]);
     assert_eq!(v, f64::from(v as f32), "a float");
-    assert!((v - scaled(-583_506_984_960.0)).abs() < 2e-5, "{v}");
+    assert_eq!(format!("{v:.6}"), "-0.530697");
+    // Two floats from the real bits: the x rotation was printed in degrees to six places, which
+    // leaves it known to about 9e-9 radians, up to 8 floats of the answer.
+    assert!(
+        (v - scaled(-583_506_984_960.0)).abs() <= 2.0 * 6.0e-8,
+        "{v}"
+    );
     let opposite = 7360.775f32 - 7358.0;
     let hypotenuse = point_distance(&e, me + 0x30, door + 0x30);
-    assert_eq!(v as f32, ((opposite / hypotenuse).asin() - rot) * 57.295_78);
+    let asin = f64::from(opposite / hypotenuse).asin() as f32;
+    assert_eq!(v as f32, (asin - rot) * 57.295_78);
     // Different cells of no worldspace: the largest float, so about the x rotation alone.
     let other_cell = CELL + 0x200;
     e.mem.set_u32(door + 0x40, other_cell);
@@ -547,4 +564,17 @@ fn evaluate_inventory_calls_the_game() {
     run(&mut e, EVALUATE_INVENTORY, 0, &[]);
     assert!(seen().is_empty());
     let _ = e.ext::<Nvse>();
+}
+
+/// An asker without a base form, with an owner to compare: xNVSE reads its id through nothing and
+/// the game stops; without the script reference checks row the port stops too.
+#[test]
+fn an_asker_without_a_base_form_stops_without_the_reference_checks() {
+    let mut e = setup();
+    own(&mut e, ITEM + 0x44, NPC, None, EXTRA);
+    e.mem.set_u32(NPC_REF + 0x20, 0);
+    let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        eval(&mut e, HAS_OWNERSHIP, NPC_REF, ITEM, 0)
+    }));
+    assert!(stop.is_err());
 }

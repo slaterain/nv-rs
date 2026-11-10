@@ -400,8 +400,14 @@ fn a_walk_past_the_grid_ends_with_the_list_guard() {
         id_of(run(&mut e, GET_FIRST_REF, 0, &[n(0), n(10)])),
         0x0003_0001
     );
-    assert_eq!(id_of(run(&mut e, GET_NEXT_REF, 0, &[])), 0x0003_0002);
-    assert_eq!(id_of(run(&mut e, GET_NEXT_REF, 0, &[])), 0);
+    // Each GetNextRef walks only until it finds one: round the wrapped row again and again, as
+    // xNVSE answers, in both presets.
+    for expected in [0x0003_0002, 0x0003_0001, 0x0003_0002, 0x0003_0001] {
+        assert_eq!(id_of(run(&mut e, GET_NEXT_REF, 0, &[])), expected);
+    }
+    // Doors are on no cell of that row: one call goes round without a match, the hang, ended.
+    assert_eq!(id_of(run(&mut e, GET_FIRST_REF, 0, &[n(28), n(10)])), 0);
+    assert!(state(&mut e).scans.is_empty());
     // A depth that ends (x 100, depth 10) is the same in both presets.
     let ends = cell(&mut e, 3, 100, 0, WORLD);
     let mut scan = Scan::new(&mut e, 10, 0, false, ends).unwrap();
@@ -467,7 +473,11 @@ fn distance_angle_and_base_form_filters() {
         run(&mut e, GET_NUM_REFS, 0, &[n(0), n(0), n(0), z(1.0)]),
         4.0
     );
-    assert!((heading_angle(&e, me, REFS + 0x200) - 90.0).abs() < 1e-9);
+    assert_eq!(
+        heading_angle(&e, me, REFS + 0x200),
+        f64::from(std::f64::consts::FRAC_PI_2 as f32) * 57.295_779_513_082_32,
+        "the atan2 rounded to a float first"
+    );
     e.mem.set_f32(me + REFR_ROT_Z, 3.0);
     let a = heading_angle(&e, me, REFS + 0x200);
     assert!((-180.0..=180.0).contains(&a));
@@ -584,4 +594,64 @@ fn a_reference_without_a_base_form() {
     reference(&mut e, 1, misc, room, [0.0; 3]);
     assert_eq!(run(&mut e, GET_NUM_REFS, 0, &[n(31)]), 1.0);
     assert_eq!(run(&mut e, GET_NUM_REFS, 0, &[n(200)]), 0.0);
+}
+
+/// An exterior scan whose walk finds no cell of its area in the map (the centre itself not there):
+/// xNVSE reads the missing cell's list and the game stops; with the reference checks row the scan
+/// answers 0 and is dropped.
+#[test]
+fn a_walk_that_finds_no_cell() {
+    for checks in [false, true] {
+        let mut e = setup();
+        invref::set_checks(&mut e, checks);
+        let centre = cell(&mut e, 0, 5, 5, 0);
+        e.mem.set_u32(centre + CELL_WORLD, WORLD);
+        e.mem.set_u32(PC + REFR_PARENT_CELL, centre);
+        let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run(&mut e, GET_FIRST_REF, 0, &[n(0), n(1)])
+        }));
+        if checks {
+            assert_eq!(first.unwrap(), 0.0);
+            assert!(state(&mut e).scans.is_empty());
+            assert_eq!(run(&mut e, GET_NUM_REFS, 0, &[n(0), n(1)]), 0.0);
+        } else {
+            assert!(first.is_err());
+        }
+    }
+}
+
+/// The stepped scan's hang without the list guard: GetFirstRef for a type no cell of the wrapped
+/// row holds goes round and round in one call (read from the DLL's walk; the hang was not run).
+#[test]
+#[should_panic(expected = "never ends")]
+fn a_stepped_walk_past_the_grid_without_a_match_stops_without_the_list_guard() {
+    let mut e = setup();
+    let centre = cell(&mut e, 0, 120, 0, WORLD);
+    let first_row = cell(&mut e, 1, 125, -10, WORLD);
+    e.mem.set_u32(PC + REFR_PARENT_CELL, centre);
+    let misc = base(&mut e, 0, 0x1f, None);
+    reference(&mut e, 0, misc, first_row, [0.0; 3]);
+    assert_eq!(
+        id_of(run(&mut e, GET_FIRST_REF, 0, &[n(31), n(10)])),
+        0x0003_0000
+    );
+    assert_eq!(
+        id_of(run(&mut e, GET_NEXT_REF, 0, &[])),
+        0x0003_0000,
+        "round again"
+    );
+    run(&mut e, GET_FIRST_REF, 0, &[n(28), n(10)]);
+}
+
+/// With the list guard alone (no reference checks), a walk past the grid that finds no cell at all
+/// answers 0 instead of stopping.
+#[test]
+fn a_guard_ended_walk_without_cells_answers_with_the_list_guard_alone() {
+    let mut e = setup();
+    super::super::array::set_fix(&mut e, super::super::array::LIST_GUARD, true);
+    let centre = cell(&mut e, 0, 120, 0, 0);
+    e.mem.set_u32(centre + CELL_WORLD, WORLD);
+    e.mem.set_u32(PC + REFR_PARENT_CELL, centre);
+    assert_eq!(run(&mut e, GET_FIRST_REF, 0, &[n(0), n(10)]), 0.0);
+    assert_eq!(run(&mut e, GET_NUM_REFS, 0, &[n(0), n(10)]), 0.0);
 }
