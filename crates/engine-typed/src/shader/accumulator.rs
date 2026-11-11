@@ -623,10 +623,6 @@ pub fn set_world_transform(
 /// (`SetVertexShaderConstantF`) takes constants; its stages are at +0x24.
 const CURRENT_PASS: u32 = 0x0126_f74c;
 const DEVICE_SET_VERTEX_CONSTANTS: u32 = 0x178;
-/// `D3DXMatrixMultiplyTranspose`, `D3DXVec3TransformNormal`, `D3DXVec3Normalize`.
-const MATRIX_MULTIPLY_TRANSPOSE: u32 = 0x00ee_6dfe;
-const VEC3_TRANSFORM_NORMAL: u32 = 0x00ee_6df2;
-const VEC3_NORMALIZE: u32 = 0x00ee_6dec;
 /// `-1.0` (`double`, `0101a6b0`).
 const MINUS_ONE: u32 = 0x0101_a6b0;
 
@@ -655,13 +651,11 @@ pub fn set_world_view_constants(e: &mut Engine, this: u32, _unused: u32, transfo
     );
     let renderer = e.global::<u32>(this.wrapping_add(0x18));
     e.with_stack(0x40, |e, matrix| {
-        e.call(
-            MATRIX_MULTIPLY_TRANSPOSE,
-            &args![
-                matrix,
-                renderer.wrapping_add(NiDX9Renderer::m_kWorld.off),
-                renderer.wrapping_add(NiDX9Renderer::m_kView.off)
-            ],
+        crate::draw::thunks::call_matrix_multiply_transpose(
+            e,
+            matrix,
+            renderer.wrapping_add(NiDX9Renderer::m_kWorld.off),
+            renderer.wrapping_add(NiDX9Renderer::m_kView.off),
         );
         set_vertex_constants(e, 0, matrix.addr(), 4);
     });
@@ -696,11 +690,8 @@ pub fn set_light_direction(e: &mut Engine, matrix: u32) {
         e.set_global(frame + 8, x);
         e.set_global(frame + 0xc, x87_quiet_bits(y));
         e.set_global(frame + 0x10, x87_quiet_bits(z));
-        e.call(
-            VEC3_TRANSFORM_NORMAL,
-            &args![frame + 0x14, frame + 8, matrix],
-        );
-        e.call(VEC3_NORMALIZE, &args![frame + 8, frame + 0x14]);
+        crate::draw::thunks::call_vec3_transform_normal(e, frame + 0x14, frame + 8, matrix);
+        crate::draw::thunks::call_vec3_normalize(e, frame + 8, frame + 0x14);
         set_vertex_constants(e, 0x19, frame + 0x14, 1);
     });
 }

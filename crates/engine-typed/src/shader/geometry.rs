@@ -34,13 +34,11 @@ fn rendering_object(e: &Engine) -> u32 {
     e.mem.u32(holder)
 }
 
-/// The renderer (`011f4748`), the HDR switch (`011f941e`), the colour row the lights scale (`011fa0d0`), and
-/// the D3DX import thunks `D3DXVec3TransformNormal` (`00ee6df2`) and `D3DXVec3Normalize` (`00ee6dec`).
+/// The renderer (`011f4748`), the HDR switch (`011f941e`) and the colour row the lights scale (`011fa0d0`);
+/// the D3DX import thunks these set-ups call are the draw family's (`crate::draw::thunks`).
 const RENDERER: u32 = 0x011f_4748;
 const HDR: u32 = 0x011f_941e;
 const COLOUR: u32 = 0x011f_a0d0;
-const VEC3_TRANSFORM_NORMAL: u32 = 0x00ee_6df2;
-const VEC3_NORMALIZE: u32 = 0x00ee_6dec;
 
 /// The shader's vertex and pixel constant-map entry pointers (`ShadowLightShader::
 /// pVertexConstantMapEntry` / `pPixelConstantMapEntry` (Xbox PDB), 22 words each from
@@ -513,13 +511,11 @@ pub fn pixel_entry_20(e: &mut Engine, _this: Ptr, object: Ptr) {
 
 /// The eye position the shaders use (`011fa2a0`, three floats), the two vectors
 /// `SetupGeometryConstants_EyePos` writes (`011fd894`, `011fd8a4`), the point unitize
-/// `004a0c10` (unnamed, `thiscall` on the point) and the D3DX import thunk
-/// `D3DXVec3TransformCoord` (`00ee6df8`, `stdcall`).
+/// `004a0c10` (unnamed, `thiscall` on the point).
 const EYE: u32 = 0x011f_a2a0;
 const EYE_VECTOR: u32 = 0x011f_d894;
 const EYE_DIRECTION: u32 = 0x011f_d8a4;
 const POINT_UNITIZE: u32 = 0x004a_0c10;
-const VEC3_TRANSFORM_COORD: u32 = 0x00ee_6df8;
 
 // Typed from 00b78ef0
 /// `eye_pos` as the exe calls it (`stdcall`, eighteen words: the pass type, the object, the matrix).
@@ -585,7 +581,7 @@ pub fn eye_pos(e: &mut Engine, pass_type: u32, object: Ptr, matrix: [u32; 16]) {
             let value = copy_float(e, EYE + 4 * index);
             e.mem.set_u32(vector + 4 * index, value);
         }
-        e.call(VEC3_TRANSFORM_COORD, &args![transformed, vector, by_value]);
+        crate::draw::thunks::call_vec3_transform_coord(e, transformed, vector, by_value);
         for index in 0..3u32 {
             let value = copy_float(e, transformed + 4 * index);
             e.set_global(EYE_VECTOR + 4 * index, value);
@@ -648,14 +644,9 @@ pub fn shadow_proj(e: &mut Engine, _this: Ptr, block: Ptr, flag: u32, transform:
     }
 }
 
-/// `NiD3DUtility::GetD3DFromNi` (`00b799a0`, engine map; `cdecl`: matrix, transform), the D3DX
-/// import thunks `D3DXMatrixMultiply` (`00ee6de0`), `D3DXMatrixTranspose` (`00ee6dd4`) and
-/// `D3DXMatrixInverse` (`00ee6dda`) (engine map names; `stdcall`), and the matrix
+/// `NiD3DUtility::GetD3DFromNi` (`00b799a0`, engine map; `cdecl`: matrix, transform) and the matrix
 /// `SetupGeometryConstants_ObjToCube` writes (`011fecc8`).
 const GET_D3D_FROM_NI: u32 = 0x00b7_99a0;
-const MATRIX_MULTIPLY: u32 = 0x00ee_6de0;
-const MATRIX_TRANSPOSE: u32 = 0x00ee_6dd4;
-const MATRIX_INVERSE: u32 = 0x00ee_6dda;
 const OBJECT_TO_CUBE: u32 = 0x011f_ecc8;
 
 // Typed from 00b7b730
@@ -702,7 +693,7 @@ pub fn obj_to_cube(
             let renderer = e.mem.u32(this.addr() + 0x18);
             let bytes = e.mem.bytes(renderer + 0x940, 0x40);
             e.mem.write(product, &bytes);
-            e.call(MATRIX_TRANSPOSE, &args![OBJECT_TO_CUBE, product]);
+            crate::draw::thunks::call_matrix_transpose(e, OBJECT_TO_CUBE, product);
             return;
         }
         let rendering = e.global::<u32>(RENDERING_PASS);
@@ -726,10 +717,10 @@ pub fn obj_to_cube(
         }
         let lights = e.mem.u32(rendering + 0xc);
         let light = e.mem.u32(lights);
-        e.call(MATRIX_MULTIPLY, &args![product, first, light + 0x10]);
+        crate::draw::thunks::call_matrix_multiply(e, product, first, light + 0x10);
         let bytes = e.mem.bytes(product, 0x40);
         e.mem.write(second, &bytes);
-        e.call(MATRIX_TRANSPOSE, &args![second, second]);
+        crate::draw::thunks::call_matrix_transpose(e, second, second);
         e.call(MEMCPY, &args![OBJECT_TO_CUBE, second, 0x40u32]);
     });
 }
@@ -738,13 +729,6 @@ pub fn obj_to_cube(
 /// loops write and upload (`011fd9a8`, 0x10 bytes per light).
 const CAMERA_OBJECT: u32 = 0x011f_91c8;
 const LIGHT_VECTORS: u32 = 0x011f_d9a8;
-
-/// The D3DX import thunks the clip planes use (unnamed in the engine map; `stdcall`):
-/// `00ee6dce` (plane normalize: out, plane) and `00ee6dc8` (plane transform: out, plane,
-/// matrix), as the decompiler names their imports `D3DXPlaneNormalize` and
-/// `D3DXPlaneTransform`.
-const PLANE_NORMALIZE: u32 = 0x00ee_6dce;
-const PLANE_TRANSFORM: u32 = 0x00ee_6dc8;
 
 /// The six clip planes at `planes` set on the device (renderer `011f4748` +0x288, read for each;
 /// its vtable +0xdc with the index and the plane).
@@ -804,9 +788,9 @@ pub fn simple_shadow_clip_planes(e: &mut Engine, this: Ptr, pass_type: u32) {
         e.mem.set_u32(view + 0x38, x87_store32(-x87_load32(third)));
         let bytes = e.mem.bytes(renderer + 0x9c0, 0x40);
         e.mem.write(moved, &bytes);
-        e.call(MATRIX_MULTIPLY, &args![product, view, moved]);
-        e.call(MATRIX_INVERSE, &args![inverse, 0u32, product]);
-        e.call(MATRIX_TRANSPOSE, &args![product, inverse]);
+        crate::draw::thunks::call_matrix_multiply(e, product, view, moved);
+        crate::draw::thunks::call_matrix_inverse(e, inverse, 0u32, product);
+        crate::draw::thunks::call_matrix_transpose(e, product, inverse);
         for index in 0..6u32 {
             let source = light + 0x144 + 0x10 * index;
             for word in 0..3u32 {
@@ -815,9 +799,9 @@ pub fn simple_shadow_clip_planes(e: &mut Engine, this: Ptr, pass_type: u32) {
             }
             let distance = x87_store32(-x87_load32(e.mem.u32(source + 0xc)));
             e.mem.set_u32(plane + 0xc, distance);
-            e.call(PLANE_NORMALIZE, &args![plane, plane]);
+            crate::draw::thunks::call_plane_normalize(e, plane, plane);
             let out = frame + 0x170;
-            e.call(PLANE_TRANSFORM, &args![out, plane, product]);
+            crate::draw::thunks::call_plane_transform(e, out, plane, product);
             for word in 0..4u32 {
                 let value = copy_float(e, out + 4 * word);
                 e.mem.set_u32(planes + 0x10 * index + 4 * word, value);
@@ -968,7 +952,7 @@ pub fn lights(
                             let value = x87_add(offset, x87_m32(e.mem.u32(vector + 4 * word)));
                             e.mem.set_u32(vector + 4 * word, x87_store32(value));
                         }
-                        e.call(VEC3_TRANSFORM_COORD, &args![out, vector, by_value]);
+                        crate::draw::thunks::call_vec3_transform_coord(e, out, vector, by_value);
                         let mut fourth = copy_float(e, direction);
                         if flag == 0 {
                             let scale_object = scale_object.addr();
@@ -999,8 +983,8 @@ pub fn lights(
                             let value = x87_load32(e.mem.u32(direction + 4 * word));
                             e.mem.set_u32(vector + 4 * word, x87_store32(-value));
                         }
-                        e.call(VEC3_TRANSFORM_NORMAL, &args![out, vector, by_value]);
-                        e.call(VEC3_NORMALIZE, &args![vector, out]);
+                        crate::draw::thunks::call_vec3_transform_normal(e, out, vector, by_value);
+                        crate::draw::thunks::call_vec3_normalize(e, vector, out);
                         for word in 0..3u32 {
                             let value = copy_float(e, vector + 4 * word);
                             e.mem.set_u32(row + 4 * word, value);

@@ -589,7 +589,8 @@ pub(crate) fn bone_node(e: &Engine, list: u32, bone: u32) -> u32 {
     e.global::<u32>(list.wrapping_add(bone.wrapping_mul(4)))
 }
 
-/// A bone node's world scale (+0x98), as its word.
+/// An object's world scale (`NiAVObject` +0x98), as its word: a bone node's in the bone fill, the rendered
+/// geometry's in the pass set-ups.
 #[inline(always)]
 pub(crate) fn bone_scale(e: &Engine, node: u32) -> u32 {
     e.global::<u32>(node.wrapping_add(0x98))
@@ -668,4 +669,68 @@ const SHADOW_SCENE_NODES: u32 = 0x011f_91c8;
 pub(crate) fn scene_fog_property(e: &Engine, index: u32) -> u32 {
     let node = e.global::<u32>(SHADOW_SCENE_NODES.wrapping_add(index.wrapping_mul(4)));
     e.global::<u32>(node.wrapping_add(0x134))
+}
+
+/// A geometry's property state block's property `index` (a word each: 0 the alpha property, 3 the shader
+/// property, 4 the second property the cull mode reads).
+#[inline(always)]
+pub(crate) fn state_property(e: &Engine, block: u32, index: u32) -> u32 {
+    e.global::<u32>(block.wrapping_add(index.wrapping_mul(4)))
+}
+
+/// An `NiProperty`'s 16-bit flags (+0x18).
+#[inline(always)]
+pub(crate) fn ni_property_flags(e: &Engine, property: u32) -> u16 {
+    e.global::<u16>(property.wrapping_add(0x18))
+}
+
+/// An alpha property's reference (+0x1a).
+#[inline(always)]
+pub(crate) fn alpha_reference(e: &Engine, property: u32) -> u8 {
+    e.global::<u8>(property.wrapping_add(0x1a))
+}
+
+/// The pass being rendered's byte +9.
+#[inline(always)]
+pub(crate) fn rendering_pass_byte9(e: &Engine, pass: u32) -> u8 {
+    e.global::<u8>(pass.wrapping_add(9))
+}
+
+/// The fog property index byte (`011f91c4`), the scene node whose fog property the passes use.
+const FOG_INDEX: u32 = 0x011f_91c4;
+
+#[inline(always)]
+pub(crate) fn fog_index(e: &Engine) -> u8 {
+    e.global::<u8>(FOG_INDEX)
+}
+
+/// A fog property's word at `offset` (+0x20, +0x24, +0x28 its colour, +0x2c the near distance, +0x30
+/// the far one, +0x60 its power).
+#[inline(always)]
+pub(crate) fn fog_field(e: &Engine, fog: u32, offset: u32) -> u32 {
+    e.global::<u32>(fog.wrapping_add(offset))
+}
+
+/// The fog colour (`011a9bd0`, four floats): word `index`.
+const FOG_COLOUR: u32 = 0x011a_9bd0;
+
+#[inline(always)]
+pub(crate) fn fog_colour_word(e: &Engine, index: u32) -> u32 {
+    e.global::<u32>(FOG_COLOUR.wrapping_add(index.wrapping_mul(4)))
+}
+
+/// A shader property's table of land bytes (+0xc4), which the land toggles index.
+#[inline(always)]
+pub(crate) fn land_table(e: &Engine, property: u32) -> u32 {
+    e.mem.u32(property.wrapping_add(0xc4))
+}
+
+/// A lighting property's second flags word (+0x24) and its distance from the camera (+0x34).
+#[inline(always)]
+pub(crate) fn property_flags_24(e: &Engine, property: u32) -> u32 {
+    e.mem.u32(property.wrapping_add(0x24))
+}
+#[inline(always)]
+pub(crate) fn property_distance(e: &Engine, property: u32) -> u32 {
+    e.mem.u32(property.wrapping_add(0x34))
 }

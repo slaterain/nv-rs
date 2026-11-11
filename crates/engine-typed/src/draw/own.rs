@@ -731,3 +731,32 @@ pub(crate) fn set_counted(e: &mut Engine, slot: u32, object: u32) {
 pub(crate) fn copy_counted(e: &mut Engine, slot: u32, source: u32) {
     e.call(COPY_COUNTED, &args![slot, source]);
 }
+
+/// A pass stage's texture (+8) as the draw left it, read back.
+#[inline(always)]
+pub(crate) fn stage_texture(e: &Engine, stage: u32) -> u32 {
+    e.global::<u32>(stage.wrapping_add(8))
+}
+
+/// Whether a constant entry is switched on (its byte +8), read back.
+#[inline(always)]
+pub(crate) fn entry_is_enabled(e: &Engine, entry: u32) -> bool {
+    e.global::<u8>(entry.wrapping_add(8)) != 0
+}
+
+/// The shader's counted constant map at `offset` (+0x30 pixel, +0x34 vertex), read back.
+#[inline(always)]
+pub(crate) fn constant_map(e: &Engine, shader: u32, offset: u32) -> u32 {
+    e.global::<u32>(shader.wrapping_add(offset))
+}
+
+/// `size` bytes of constants from `from` copied into an entry's own buffer at `to` (`_memcpy`, the CRT
+/// family's) (condition 2).
+#[inline(always)]
+pub(crate) fn copy_constants(e: &mut Engine, to: u32, from: u32, size: u32) {
+    let _: u32 = typed_call!(
+        crate::crt::FAMILY,
+        0x00ec_44d0,
+        crate::crt::mem::memcpy(e, to, from, size)
+    );
+}

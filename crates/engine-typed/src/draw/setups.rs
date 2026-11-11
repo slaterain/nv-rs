@@ -24,14 +24,13 @@ const ORIGIN_POINT: u32 = 0x011f_a2a0;
 const ONE_DOUBLE: u32 = 0x0101_2070;
 /// The shader's own set-ups these call by address: `00b7c3a0`, `00b7c510`, `00b7c580`, `00b7c600`
 /// (`thiscall(shader)`), `00b7c850` (`stdcall(matrix, scale)`), `00b7cb00` (`stdcall(matrix, scale,
-/// word)`), and `D3DXVec3TransformCoord` (`00ee6df8`, `stdcall(out, point, matrix)`).
+/// word)`); `D3DXVec3TransformCoord` (`00ee6df8`) and `D3DXMatrixTranspose` (`00ee6dd4`) are [`super::thunks`].
 const FOG_CONSTANTS: u32 = 0x00b7_c3a0;
 const SETUP_C510: u32 = 0x00b7_c510;
 const SETUP_C580: u32 = 0x00b7_c580;
 const SETUP_C600: u32 = 0x00b7_c600;
 const SCALED_LIGHT: u32 = 0x00b7_c850;
 const SCALED_LIGHT_WORD: u32 = 0x00b7_cb00;
-const TRANSFORM_COORD: u32 = 0x00ee_6df8;
 
 /// An array index as a word (0..4 here).
 #[inline(always)]
@@ -109,7 +108,7 @@ fn view_matrix(e: &mut Engine, shader: u32, out: u32) -> u32 {
 /// The shader's object at +0x30 gets the pass's word +0x44 through its slot 0x78 with six zeros, the
 /// locals `big` (0x34 bytes) and `small` (0x10), 0 and 1: only with both.
 fn upload_last(e: &mut Engine, shader: u32, big: u32, small: u32) {
-    let object = e.global::<u32>(shader.wrapping_add(0x30));
+    let object = own::constant_map(e, shader, 0x30);
     if object == 0 {
         return;
     }
@@ -170,7 +169,7 @@ pub fn begin_types_ca(e: &mut Engine, this: Ptr) {
 /// (`00b7c850`, the geometry's world scale +0x98) and the last upload (big +0x50, small +0).
 pub fn setup_type_ca(e: &mut Engine, this: Ptr, state: Ptr) {
     let shader = this.addr();
-    let property = e.global::<u32>(state.addr().wrapping_add(0xc));
+    let property = packet::state_property(e, state.addr(), 3);
     property_stages(e, property);
     bind_stage(e, 0);
     bind_stage(e, 1);
@@ -178,7 +177,7 @@ pub fn setup_type_ca(e: &mut Engine, this: Ptr, state: Ptr) {
         let frame = frame.addr();
         let local = frame + 0x10;
         let object = view_matrix(e, shader, local);
-        let scale = x87_quiet_bits(e.global::<u32>(object.wrapping_add(0x98)));
+        let scale = x87_quiet_bits(packet::bone_scale(e, object));
         e.call(SCALED_LIGHT, &args![local, scale]);
         upload_last(e, shader, frame + 0x50, frame);
     });
@@ -191,7 +190,7 @@ pub fn setup_type_ca(e: &mut Engine, this: Ptr, state: Ptr) {
 /// the vertex constant 0x10; the last upload (big +0x54, small +4).
 pub fn setup_type_d1(e: &mut Engine, this: Ptr, state: Ptr) {
     let shader = this.addr();
-    let property = e.global::<u32>(state.addr().wrapping_add(0xc));
+    let property = packet::state_property(e, state.addr(), 3);
     property_stages(e, property);
     bind_stage(e, 0);
     bind_stage(e, 1);
@@ -200,15 +199,15 @@ pub fn setup_type_d1(e: &mut Engine, this: Ptr, state: Ptr) {
         let local = frame + 0x14;
         let holder = packet::rendering_pass(e);
         let object = view_matrix(e, shader, local);
-        let scale = x87_quiet_bits(e.global::<u32>(object.wrapping_add(0x98)));
-        let word = e.global::<u32>(state.addr().wrapping_add(8));
+        let scale = x87_quiet_bits(packet::bone_scale(e, object));
+        let word = packet::state_property(e, state.addr(), 2);
         e.call(SCALED_LIGHT_WORD, &args![local, scale, word]);
-        let byte = e.global::<u8>(holder.wrapping_add(9));
+        let byte = packet::rendering_pass_byte9(e, holder);
         let one: f64 = e.global(ONE_DOUBLE);
         let w = x87_store32(x87_sub(f64::from(byte), one));
         e.set_global(frame, w);
         let vector = frame + 4;
-        e.call(TRANSFORM_COORD, &args![vector, ORIGIN_POINT, local]);
+        crate::draw::thunks::call_vec3_transform_coord(e, vector, ORIGIN_POINT, local);
         let w = x87_quiet_bits(e.global::<u32>(frame));
         e.set_global(frame + 0x10, w);
         light_constant(e, vector);
@@ -223,7 +222,7 @@ pub fn setup_type_d1(e: &mut Engine, this: Ptr, state: Ptr) {
 /// fourth float of the transformed point, the vertex constant 0x10.
 pub fn setup_type_102(e: &mut Engine, this: Ptr, state: Ptr) {
     let shader = this.addr();
-    let property = e.global::<u32>(state.addr().wrapping_add(0xc));
+    let property = packet::state_property(e, state.addr(), 3);
     property_stages(e, property);
     let stage3 = pass_stage(e, 3);
     let value = if e.vcall(property, 0xf4, &args![3u32, 0u32]).u32() != 0 {
@@ -245,8 +244,8 @@ pub fn setup_type_102(e: &mut Engine, this: Ptr, state: Ptr) {
             accumulator::set_light_direction(e, local)
         );
         // The float is kept in the dead argument slot over the call.
-        let w = x87_quiet_bits(e.global::<u32>(object.wrapping_add(0x98)));
-        e.call(TRANSFORM_COORD, &args![frame, ORIGIN_POINT, local]);
+        let w = x87_quiet_bits(packet::bone_scale(e, object));
+        crate::draw::thunks::call_vec3_transform_coord(e, frame, ORIGIN_POINT, local);
         e.set_global(frame + 0xc, w);
         light_constant(e, frame);
     });
@@ -266,13 +265,13 @@ fn apply_mask(e: &mut Engine, mask: u32, from: u32, to: u32) {
     let mut at = from + 4;
     while at < to {
         let first = e.global::<u32>(at - 4);
-        if first != 0 && e.global::<u8>(first.wrapping_add(8)) != 0 {
+        if first != 0 && own::entry_is_enabled(e, first) {
             let on = e.global::<u32>(mask) & bit.rotate_left(1) == 0;
             own::set_entry_enabled(e, first, on);
         }
         let second = e.global::<u32>(at);
         bit = bit.rotate_left(1);
-        if second != 0 && e.global::<u8>(second.wrapping_add(8)) != 0 {
+        if second != 0 && own::entry_is_enabled(e, second) {
             let on = e.global::<u32>(mask) & bit.rotate_left(1) == 0;
             own::set_entry_enabled(e, second, on);
         }
@@ -289,13 +288,13 @@ pub fn tail_kinds_1_to_5(e: &mut Engine, this: Ptr, pass: u32) {
     let first = MASKS_FIRST.wrapping_add(pass.wrapping_mul(4));
     if e.global::<u32>(first) != 0 {
         apply_mask(e, first, FIRST_LIST.0, FIRST_LIST.1);
-        let map = e.global::<u32>(this.addr().wrapping_add(0x34));
+        let map = own::constant_map(e, this.addr(), 0x34);
         e.vcall(map, 0x24, &args![]);
     }
     let second = MASKS_SECOND.wrapping_add(pass.wrapping_mul(4));
     if e.global::<u32>(second) != 0 {
         apply_mask(e, second, SECOND_LIST.0, SECOND_LIST.1);
-        let map = e.global::<u32>(this.addr().wrapping_add(0x30));
+        let map = own::constant_map(e, this.addr(), 0x30);
         e.vcall(map, 0x24, &args![]);
     }
 }
@@ -306,15 +305,11 @@ const VERTEX_ENTRIES: u32 = 0x011f_ebd8;
 const PIXEL_ENTRIES: u32 = 0x011f_ec30;
 const VERTEX_FLAGS: u32 = 0x011f_cc80;
 const PIXEL_FLAGS: u32 = 0x011f_c0a0;
-/// The fog constants (`011fa280`), the far distance with no fog distances (`010ad6e0`), the fog colour
-/// (`011a9bd0`) and its three copies (`011fd9b8`), the fog index byte (`011f91c4`) and the matrix
-/// transpose (`00ee6dd4`).
+/// The fog constants (`011fa280`), the far distance with no fog distances (`010ad6e0`) and the fog
+/// colour's three copies (`011fd9b8`); the fog colour and the fog index byte come through [`packet`].
 const FOG: u32 = 0x011f_a280;
 const FAR_DISTANCE: u32 = 0x010a_d6e0;
-const FOG_COLOUR: u32 = 0x011a_9bd0;
 const FOG_COLOURS: u32 = 0x011f_d9b8;
-const FOG_INDEX: u32 = 0x011f_91c4;
-const MATRIX_TRANSPOSE: u32 = 0x00ee_6dd4;
 
 /// The 22 entries at `entries` enabled by the pass type's word of `flags` (entry k by bit k + 1, the
 /// word read for each).
@@ -335,21 +330,21 @@ fn enable_entries(e: &mut Engine, entries: u32, flags: u32, pass_type: u32) {
 #[inline(always)]
 fn entry_enabled(e: &Engine, slot: u32) -> bool {
     let entry = e.global::<u32>(slot);
-    e.global::<u8>(entry.wrapping_add(8)) != 0
+    own::entry_is_enabled(e, entry)
 }
 
 /// The fog constants (`011fa280`): with a fog property, (500000.0, 0, 0, 0) and the fog colour when its
 /// far (+0x30) and near (+0x2c) distances are both 0, else (far, far - near, its +0x60, 0) and its
 /// colour (+0x20, +0x24, +0x28, 0). Each float copied through x87 (a signalling NaN quieted).
 fn fog_constants(e: &mut Engine) {
-    let index = u32::from(e.global::<u8>(FOG_INDEX));
+    let index = u32::from(packet::fog_index(e));
     let fog: u32 = typed_call!(FAMILY, 0x00b5_5520, passes::fog_property(e, index));
     if fog == 0 {
         return;
     }
-    let near = x87_quiet_bits(e.global::<u32>(fog.wrapping_add(0x2c)));
-    let far = x87_quiet_bits(e.global::<u32>(fog.wrapping_add(0x30)));
-    let power = x87_quiet_bits(e.global::<u32>(fog.wrapping_add(0x60)));
+    let near = x87_quiet_bits(packet::fog_field(e, fog, 0x2c));
+    let far = x87_quiet_bits(packet::fog_field(e, fog, 0x30));
+    let power = x87_quiet_bits(packet::fog_field(e, fog, 0x60));
     let far_value = x87_load32(far);
     let near_value = x87_load32(near);
     if far_value == 0.0 && near_value == 0.0 {
@@ -358,16 +353,16 @@ fn fog_constants(e: &mut Engine) {
         for offset in [4u32, 8, 0xc] {
             own::set_constant_word(e, FOG + offset, 0u32);
         }
-        let colour: [u32; 4] = std::array::from_fn(|i| e.global::<u32>(FOG_COLOUR + 4 * idx(i)));
+        let colour: [u32; 4] = std::array::from_fn(|i| packet::fog_colour_word(e, idx(i)));
         own::set_constant_word(e, FOG + 0x10, colour[0]);
         own::set_constant_word(e, FOG + 0x1c, colour[3]);
         own::set_constant_word(e, FOG + 0x18, colour[2]);
         own::set_constant_word(e, FOG + 0x14, colour[1]);
     } else {
-        let red = e.global::<u32>(fog.wrapping_add(0x20));
-        let green = e.global::<u32>(fog.wrapping_add(0x24));
+        let red = packet::fog_field(e, fog, 0x20);
+        let green = packet::fog_field(e, fog, 0x24);
         let span = x87_store32(x87_sub(far_value, near_value));
-        let blue = e.global::<u32>(fog.wrapping_add(0x28));
+        let blue = packet::fog_field(e, fog, 0x28);
         own::set_constant_word(e, FOG, far);
         own::set_constant_word(e, FOG + 4, span);
         own::set_constant_word(e, FOG + 8, x87_quiet_bits(power));
@@ -393,27 +388,24 @@ pub fn setup_pass_constants(e: &mut Engine, this: Ptr, pass_type: u32) {
     let base = this.addr();
     enable_entries(e, VERTEX_ENTRIES, VERTEX_FLAGS, pass_type);
     enable_entries(e, PIXEL_ENTRIES, PIXEL_FLAGS, pass_type);
-    let vertex_map = e.global::<u32>(base.wrapping_add(0x34));
+    let vertex_map = own::constant_map(e, base, 0x34);
     e.vcall(vertex_map, 0x24, &args![]);
-    let pixel_map = e.global::<u32>(base.wrapping_add(0x30));
+    let pixel_map = own::constant_map(e, base, 0x30);
     e.vcall(pixel_map, 0x24, &args![]);
     if entry_enabled(e, VERTEX_ENTRIES + 4 * 8) {
         fog_constants(e);
     }
     let geometry = packet::rendering_geometry(e);
-    if e.global::<u32>(geometry.wrapping_add(0xbc)) != 0 {
+    if packet::skin_instance(e, geometry) != 0 {
         let renderer = e.global::<u32>(base.wrapping_add(0x18));
         e.with_stack(0x40, |e, matrix| {
-            e.call(
-                MATRIX_TRANSPOSE,
-                &args![matrix, renderer.wrapping_add(0xa00)],
-            );
+            crate::draw::thunks::call_matrix_transpose(e, matrix, renderer.wrapping_add(0xa00));
             let device = packet::pass_device(e);
             own::device_vertex_constants(e, device, 1, matrix.addr(), 4);
         });
     }
     if entry_enabled(e, VERTEX_ENTRIES + 4 * 8) {
-        let colour: [u32; 4] = std::array::from_fn(|i| e.global::<u32>(FOG_COLOUR + 4 * idx(i)));
+        let colour: [u32; 4] = std::array::from_fn(|i| packet::fog_colour_word(e, idx(i)));
         for copy in 0..3u32 {
             for (index, word) in (0u32..).zip(colour) {
                 own::set_constant_word(e, FOG_COLOURS + 0x10 * copy + 4 * index, word);
@@ -520,10 +512,9 @@ pub fn select_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
     }
 }
 
-/// The land toggles (`011fa2d0`, four floats), the defaults' second word (`011a9bd4`) and the
-/// property's count slot (0xec, 16 bits).
+/// The land toggles (`011fa2d0`, four floats) and the property's count slot (0xec, 16 bits); the
+/// defaults' second word is the fog colour's green (`011a9bd4`, through [`packet`]).
 const LAND_TOGGLES: u32 = 0x011f_a2d0;
-const TOGGLE_DEFAULT: u32 = 0x011a_9bd4;
 const PROPERTY_COUNT: u32 = 0xec;
 
 // Typed from 00c02c30
@@ -543,9 +534,9 @@ pub fn land_toggles(
     let second = if flag != 0 {
         x87_store32(1.0)
     } else {
-        e.global::<u32>(TOGGLE_DEFAULT)
+        packet::fog_colour_word(e, 1)
     };
-    let table = e.mem.u32(property.wrapping_add(0xc4));
+    let table = packet::land_table(e, property);
     let byte = e.mem.u8(table.wrapping_add(index));
     let third = x87_store32(f64::from(byte));
     let count = e.vcall(property, PROPERTY_COUNT, &args![]).u16();
@@ -594,12 +585,12 @@ fn fade_between(distance: u32, near: u32, far: u32) -> f32 {
 pub fn property_fade(e: &mut Engine, this: Ptr) -> f32 {
     let base = this.addr();
     let far = e.global::<u32>(FADE_FAR);
-    let enabled = e.mem.u32(base.wrapping_add(0x20)) & 1 != 0
-        && e.mem.u32(base.wrapping_add(0x24)) & 0x0080_0000 == 0
+    let enabled = packet::property_flags(e, base) & 1 != 0
+        && packet::property_flags_24(e, base) & 0x0080_0000 == 0
         && 0.0 < f32::from_bits(far);
     if !enabled {
         return 1.0;
     }
     let near = e.global::<u32>(FADE_NEAR);
-    fade_between(e.mem.u32(base.wrapping_add(0x34)), near, far)
+    fade_between(packet::property_distance(e, base), near, far)
 }

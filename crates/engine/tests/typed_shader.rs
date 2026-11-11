@@ -168,8 +168,8 @@ fn stand_ins_all(e: &mut Engine, render: bool, dispatch: bool, draw: bool) {
         });
     }
     e.register(0x00b5_5560, |e, _| ret(e.mem.u32(RETS + 0x1f0)));
-    // The D3DX helpers: a mark into the out word.
-    for addr in [0x00ee_6dfe, 0x00ee_6df2, 0x00ee_6dec] {
+    // The D3DX imports (behind the thunks, which are the draw family's): a mark into the out word.
+    for addr in [0x00fd_f410, 0x00fd_f420, 0x00fd_f41c] {
         e.register(addr, |e, a| {
             e.mem.set_u32(a[0], 0x3f80_0001);
             ret(a[0])
@@ -664,6 +664,16 @@ impl Common for Diff {
                 0x00b5_5520,
                 // The render family's stage bind, which the pass set-ups call.
                 0x00e7_eb00,
+                // The draw family's D3DX thunks, which the set-ups call.
+                0x00ee_6dfe,
+                0x00ee_6dec,
+                0x00ee_6df2,
+                0x00ee_6df8,
+                0x00ee_6dd4,
+                0x00ee_6dda,
+                0x00ee_6de0,
+                0x00ee_6dce,
+                0x00ee_6dc8,
             ])
             .max_calls(MAX_CALLS)
             .max_cases(160)
@@ -3211,7 +3221,8 @@ fn words_at(e: &Engine, at: u32, n: u32) -> Vec<u32> {
     (0..n).map(|k| e.mem.u32(at + 4 * k)).collect()
 }
 
-/// The calls the set-ups reach that stand in. The D3DX thunks move whole floats, so what a set-up
+/// The calls the set-ups reach that stand in. The D3DX imports (the slots the thunks jump through: the
+/// thunks are the draw family's, the same on both sides) move whole floats, so what a set-up
 /// computes from their results is arithmetic on real numbers and every word they write is the same on
 /// both sides: a vector function (out, in, ..) writes its three floats rotated by one, a plane's
 /// normalize copies and its transform rotates the four, a matrix's transpose is the real one, its
@@ -3221,7 +3232,7 @@ fn words_at(e: &Engine, at: u32, n: u32) -> Vec<u32> {
 /// float each, the CRT's `_errno` a word of the table. The model matrix (`00c4c2d0`) and the per-light
 /// set-up (`00b70820`) are the real ones: typed, in the dispatch and shader families.
 fn geometry_stand_ins(e: &mut Engine) {
-    for addr in [0x00ee_6df8u32, 0x00ee_6df2, 0x00ee_6dec] {
+    for addr in [0x00fd_f414u32, 0x00fd_f420, 0x00fd_f41c] {
         e.register(addr, |e, a| {
             let v = words_at(e, a[1], 3);
             for k in 0..3u32 {
@@ -3230,21 +3241,21 @@ fn geometry_stand_ins(e: &mut Engine) {
             ret(a[0])
         });
     }
-    e.register(0x00ee_6dce, |e, a| {
+    e.register(0x00fd_f430, |e, a| {
         let v = words_at(e, a[1], 4);
         for k in 0..4u32 {
             e.mem.set_u32(a[0] + 4 * k, v[k as usize]);
         }
         ret(a[0])
     });
-    e.register(0x00ee_6dc8, |e, a| {
+    e.register(0x00fd_f418, |e, a| {
         let v = words_at(e, a[1], 4);
         for k in 0..4u32 {
             e.mem.set_u32(a[0] + 4 * k, v[((k + 1) % 4) as usize]);
         }
         ret(a[0])
     });
-    e.register(0x00ee_6dd4, |e, a| {
+    e.register(0x00fd_f42c, |e, a| {
         let m = words_at(e, a[1], 16);
         for k in 0..16u32 {
             e.mem
@@ -3252,7 +3263,7 @@ fn geometry_stand_ins(e: &mut Engine) {
         }
         ret(a[0])
     });
-    e.register(0x00ee_6de0, |e, a| {
+    e.register(0x00fd_f424, |e, a| {
         let (m, n) = (words_at(e, a[1], 16), words_at(e, a[2], 16));
         for k in 0..16u32 {
             let word = m[k as usize] ^ (n[((5 * k + 3) % 16) as usize] & 0xff);
@@ -3260,7 +3271,7 @@ fn geometry_stand_ins(e: &mut Engine) {
         }
         ret(a[0])
     });
-    e.register(0x00ee_6dda, |e, a| {
+    e.register(0x00fd_f428, |e, a| {
         let m = words_at(e, a[2], 16);
         for k in 0..16u32 {
             e.mem.set_u32(a[0] + 4 * k, m[(15 - k) as usize]);
@@ -3717,14 +3728,23 @@ impl Geometry for Diff {
             .family(&pathing::PATHING)
             .family(&render::RENDER)
             .translation_calls_plainly(SET_UP_PLAIN)
-            // The draw family's partition draw, skinned packer and strip lists, land toggles and fog
-            // property, as in `common`.
+            // The draw family's partition draw, skinned packer and strip lists, land toggles, fog
+            // property and D3DX thunks, as in `common`.
             .goes_by_address(&[
                 0x00e6_d310,
                 0x00e6_d780,
                 0x00a7_5f10,
                 0x00c0_2c30,
                 0x00b5_5520,
+                0x00ee_6dfe,
+                0x00ee_6dec,
+                0x00ee_6df2,
+                0x00ee_6df8,
+                0x00ee_6dd4,
+                0x00ee_6dda,
+                0x00ee_6de0,
+                0x00ee_6dce,
+                0x00ee_6dc8,
             ])
             .max_calls(MAX_CALLS)
             .max_cases(160)
@@ -5899,8 +5919,8 @@ fn restore_state() {
         .pass_common()
         .inputs(&[
             Input::Of(&[
-                7, 0xe, 0xf, 0x13, 0x14, 0x17, 0x18, 0x19, 0x1b, 0x34, 0x36, 0x39, 0x3b, 0x98,
-                0xa8, 0xbe, 0xc3, 0x16, 0x1a, 0x89,
+                7, 0xe, 0xf, 0x13, 0x14, 0x17, 0x18, 0x19, 0x1b, 0x34, 0x35, 0x36, 0x37, 0x38,
+                0x39, 0x3a, 0x3b, 0x98, 0xa8, 0xbe, 0xc3, 0x16, 0x1a, 0x89, 0, 6, 0xc4, 0xff,
             ]),
             Input::Of(&[0, 1, 0x3f80_0000]),
             Input::Of(TWO_WAYS),
@@ -6124,7 +6144,8 @@ fn fog_property() {
         .assert_same();
 }
 
-/// The shader's own set-ups and the D3DX helpers the pass set-ups call by address, stood in.
+/// The shader's own set-ups the pass set-ups call by address and the D3DX imports behind the thunks they
+/// call (`D3DXVec3TransformCoord`, `D3DXMatrixTranspose`), stood in.
 const SETUP_CALLEES: &[u32] = &[
     0x00b7_c3a0,
     0x00b7_c510,
@@ -6132,8 +6153,8 @@ const SETUP_CALLEES: &[u32] = &[
     0x00b7_c600,
     0x00b7_c850,
     0x00b7_cb00,
-    0x00ee_6df8,
-    0x00ee_6dd4,
+    0x00fd_f414,
+    0x00fd_f42c,
 ];
 
 /// A geometry's state block whose shader property (+0xc) is the world's, with a texture word at its
@@ -6302,11 +6323,11 @@ fn setup_pass_constants() {
     .inputs(&[
         Input::Of(&[0x10, 0x250, 0x251, 0x2f0]),
         Input::Of(&[0, 0x0000_0200, 0xffff_ffff]),
-        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1, 2, 3]),
         Input::Of(TWO_WAYS),
         Input::F32,
     ])
-    .max_cases(200)
+    .max_cases(260)
     .setup(|e, c| {
         let p = pass_world(e, &[], 0, 0);
         for addr in SETUP_CALLEES {
@@ -6331,6 +6352,10 @@ fn setup_pass_constants() {
                 set(e, fog + 0x2c, bits(c, 4));
                 set(e, fog + 0x30, TWO);
                 set(e, fog + 0x60, 0x3f40_0000);
+            }
+            // A near distance with no far one.
+            if c.word(2) == 3 {
+                set(e, fog + 0x2c, ONE);
             }
             set(e, node + 0x134, fog);
         }
@@ -6361,8 +6386,8 @@ static EVERY_PASS_TYPE: [u32; 0x2f0] = {
 fn select_pass() {
     Diff::new(entry!(0x00b7_af80, setups::select_pass(Ptr<_>, u32)))
         .pass_common()
-        .inputs(&[Input::Of(&EVERY_PASS_TYPE), Input::Of(&[0, 1, 2])])
-        .max_cases(0x2f0 * 3)
+        .inputs(&[Input::Of(&EVERY_PASS_TYPE), Input::Of(&[0, 1, 2, 3, 4])])
+        .max_cases(0x2f0 * 5)
         .setup(|e, c| {
             // The plain world: the pass choice reads only the shader and the pass table.
             let w = world_all(e, false, false, false);
@@ -6371,21 +6396,27 @@ fn select_pass() {
             let pass_type = c.word(0);
             set(e, 0x011f_dff8 + 4 * pass_type, 0x0a55_0000 + pass_type);
             // The sources +0x6c to +0x88; with way 1 the held pointers are the sources already, with
-            // ways 0 and 2 others whose counts are 1 (let go: deleted) and 2.
+            // ways 0 and 2 others whose counts are 1 (let go: deleted) and 2, with way 3 none held, with
+            // way 4 the inline sources (+0x70, +0x7c, +0x80) null.
             for k in 0..8u32 {
                 let o = obj(e, 0x10, vt);
                 set(e, o + 4, 2 + k);
                 set(e, shader + 0x6c + 4 * k, o);
             }
             for (at, from) in [(0x28u32, 0x70u32), (0x30, 0x7c), (0x34, 0x80)] {
-                let held = if c.word(1) == 1 {
-                    e.mem.u32(shader + from)
-                } else {
-                    let o = obj(e, 0x10, vt);
-                    set(e, o + 4, 1 + c.word(1) / 2);
-                    o
+                let held = match c.word(1) {
+                    1 => e.mem.u32(shader + from),
+                    3 => 0,
+                    _ => {
+                        let o = obj(e, 0x10, vt);
+                        set(e, o + 4, 1 + (c.word(1) % 4) / 2);
+                        o
+                    }
                 };
                 set(e, shader + at, held);
+                if c.word(1) == 4 {
+                    set(e, shader + from, 0);
+                }
             }
             vec![shader, pass_type]
         })
@@ -6451,8 +6482,9 @@ fn property_fade() {
 }
 
 /// A vertex shader with a renderer whose device is the world's, and a constant map entry of kind
-/// `kind` (the table's index), with its own buffer or not, `count` registers.
-fn constant_entry(e: &mut Engine, kind: u32, own_buffer: bool, count: u32) -> (u32, u32) {
+/// `kind` (the table's index), with its own buffer (`own` 1), without (0) or flagged as having one with
+/// none (2), `count` registers.
+fn constant_entry(e: &mut Engine, kind: u32, own: u32, count: u32) -> (u32, u32) {
     let p = pass_world(e, &[], 0, 0);
     e.register(VT_FN + 0x180, slot_answer::<0x180>);
     e.register(VT_FN + 0x188, slot_answer::<0x188>);
@@ -6465,13 +6497,13 @@ fn constant_entry(e: &mut Engine, kind: u32, own_buffer: bool, count: u32) -> (u
         set(e, 0x011f_5fc4 + 4 * k as u32, *value);
     }
     let entry = e.mem.alloc(0x40);
-    let top = if own_buffer { 0x2000_0000 } else { 0x1000_0000 };
+    let top = if own != 0 { 0x2000_0000 } else { 0x1000_0000 };
     set(e, entry + 0x14, top | kind);
     set(e, entry + 0x1c, 7);
     set(e, entry + 0x20, count);
     set(e, entry + 0x28, 0x20);
     let buffer = e.mem.alloc(0x100);
-    set(e, entry + 0x30, buffer);
+    set(e, entry + 0x30, if own == 2 { 0 } else { buffer });
     for k in 0..0x40u32 {
         set(e, buffer + 4 * k, 0xb0f0_0000 + k);
     }
@@ -6493,13 +6525,13 @@ fn set_vertex_constant() {
     .goes_by_address(&[0x00ec_44d0])
     .inputs(&[
         Input::Of(&[0, 1, 2, 3, 4]),
-        Input::Of(TWO_WAYS),
+        Input::Of(&[0, 1, 2]),
         Input::Of(&[0, 3]),
         Input::Of(TWO_WAYS),
         Input::Of(&[0, 2]),
     ])
     .setup(|e, c| {
-        let (shader, entry) = constant_entry(e, c.word(0), c.word(1) != 0, c.word(2));
+        let (shader, entry) = constant_entry(e, c.word(0), c.word(1), c.word(2));
         let data = if c.word(3) != 0 {
             let d = e.mem.alloc(0x40);
             set(e, d, 0xda7a_0000);
@@ -6525,12 +6557,12 @@ fn set_vertex_constant_array() {
     .goes_by_address(&[0x00ec_44d0])
     .inputs(&[
         Input::Of(&[0, 2, 3, 4]),
-        Input::Of(TWO_WAYS),
+        Input::Of(&[0, 1, 2]),
         Input::Of(&[0, 1, 3]),
         Input::Of(&[1, 4]),
     ])
     .setup(|e, c| {
-        let (shader, entry) = constant_entry(e, c.word(0), c.word(1) != 0, 0);
+        let (shader, entry) = constant_entry(e, c.word(0), c.word(1), 0);
         let data = e.mem.alloc(0x400);
         for k in 0..0x100u32 {
             set(e, data + 4 * k, 0xda7a_0000 + k);
@@ -6617,7 +6649,7 @@ fn begin_pass_typed_slots() {
     Diff::new(entry!(0x00b9_9390, batch::begin_pass(u32, u32)))
         .pass_common()
         .inputs(&[
-            Input::Of(&[0x10, 0xca, 0xfc, 0x102, 0x250]),
+            Input::Of(&[0x10, 0xca, 0xd1, 0xfc, 0xfd, 0x102, 0x250]),
             Input::Of(&[0, 1, 2]),
             Input::Of(TWO_WAYS),
         ])

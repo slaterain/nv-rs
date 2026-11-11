@@ -7,7 +7,7 @@
 //! The render states go through the shader family's setters and caches (condition 2 of the pipeline
 //! probe: the render-state cache the next draw on main reads).
 
-use super::{packet, FAMILY};
+use super::{own, packet, FAMILY};
 use crate::shader::{self, state};
 use engine_core::ptr::Ptr;
 use engine_core::{args, typed_call, Engine};
@@ -95,9 +95,9 @@ pub fn restore_state(e: &mut Engine, state: u32, value: u32) {
 /// the alpha property (the block's first word) gives its function (bits 10 to 12 of +0x18) and
 /// reference (+0x1a), unlocked.
 pub fn alpha_function_of(e: &mut Engine, _this: u32, block: u32) {
-    let property = e.global::<u32>(block);
-    let flags = u32::from(e.global::<u16>(property.wrapping_add(0x18)));
-    let reference = u32::from(e.global::<u8>(property.wrapping_add(0x1a)));
+    let property = packet::state_property(e, block, 0);
+    let flags = u32::from(packet::ni_property_flags(e, property));
+    let reference = u32::from(packet::alpha_reference(e, property));
     typed_call!(
         shader::FAMILY,
         0x00b9_7f20,
@@ -119,8 +119,8 @@ pub fn alpha_test_of(e: &mut Engine, _this: u32, block: u32, flag: bool) {
     let mut both = false;
     let pass_type = packet::rendering_pass_type(e);
     if block != 0 {
-        let second = e.global::<u32>(block.wrapping_add(0x10));
-        if second != 0 && e.global::<u16>(second.wrapping_add(0x18)) & 0xc00 == 0xc00 {
+        let second = packet::state_property(e, block, 4);
+        if second != 0 && packet::ni_property_flags(e, second) & 0xc00 == 0xc00 {
             both = true;
         }
     }
@@ -129,9 +129,9 @@ pub fn alpha_test_of(e: &mut Engine, _this: u32, block: u32, flag: bool) {
     }
     let mut low = 0u32;
     if flag && block != 0 {
-        let first = e.global::<u32>(block);
+        let first = packet::state_property(e, block, 0);
         if first != 0 {
-            low = u32::from(e.global::<u16>(first.wrapping_add(0x18)) >> 9) & 1;
+            low = u32::from(packet::ni_property_flags(e, first) >> 9) & 1;
         }
     }
     typed_call!(
@@ -210,7 +210,7 @@ pub fn bind_masked_stages(e: &mut Engine) {
             if stage == 0 {
                 return;
             }
-            if e.global::<u32>(stage.wrapping_add(8)) != 0 {
+            if own::stage_texture(e, stage) != 0 {
                 let _: bool = typed_call!(
                     crate::render::FAMILY,
                     0x00e7_eb00,

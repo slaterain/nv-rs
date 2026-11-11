@@ -526,8 +526,14 @@ to 5 tail and land toggles, a lighting property's fade (`00b66b80`) and the vert
 (`00e89ba0`, `00e89c70`). Used outside the world draw too (`draw:off` gives those callers the translations again):
 `GetFogProperty` (`00b55520`), the lighting fade (`00b66b80`, in the lighting properties' vtables), the constant
 setters (every shader's constant maps), `00b98610`, the `BSShader` slots every `BSShader` class shares, and
-`00be21b0` (slot 0x10c of many shaders' vtables). The tests: groups A's and B's in
-`crates/engine/tests/typed_shader.rs` (the shader family's world), group D's in `crates/engine/tests/typed_draw.rs`.
+`00be21b0` (slot 0x10c of many shaders' vtables). Group E, the D3DX import thunks the typed families call
+(`D3DXMatrixMultiplyTranspose` `00ee6dfe`, `Vec3Normalize` `00ee6dec`, `Vec3TransformNormal` `00ee6df2`,
+`Vec3TransformCoord` `00ee6df8`, `MatrixTranspose` `00ee6dd4`, `MatrixInverse` `00ee6dda`, `MatrixMultiply`
+`00ee6de0`, `PlaneNormalize` `00ee6dce`, `PlaneTransform` `00ee6dc8`): each calls its import slot, which the
+platform layer answers (part crates do not depend on `engine-platform`, so the typed callers save the thunk's call,
+not the import's); every caller in the exe reaches them, so `draw:off` gives all of them the translations again.
+The tests: groups A's and B's in `crates/engine/tests/typed_shader.rs` (the shader family's world), groups D's and
+E's in `crates/engine/tests/typed_draw.rs`.
 The accessors: what the drivers and the alpha pass read that the rest of the frame changes goes through
 `draw::packet`, and what they write that is their own through `draw::own`, one section per condition of the
 pipeline probe that lives there (the pass lists the next frame's registration fills again with the range draw's
@@ -535,15 +541,14 @@ cursors, blend, clip and depth state and the device's transform, streams and ind
 geometry drawn, the blocks the draw frees and allocates, the reference counts). Not routed yet: the packing's own
 objects (the buffer data's streams and chips, the shader declaration, the dynamic geometry group, the vertex
 manager's staging block), which `draw::packing` and `draw::packed` read and write in place; the exe's constant
-data (the -FLT_MAX and 0.001 the alpha pass compares with, the colour scale, the bone scale bounds); and in group B,
-its own writes read back in place (the stage textures, the constant entries' enabled bytes, the counted constant
-maps +0x30/+0x34), reads that bypass accessors `draw::packet` has (a geometry's skin +0xbc and world scale +0x98,
-the state block's +0xc, a property's flags +0x20), frame-changing reads neither routed nor in an accessor (the fog
-property and its index, the fog colour `011a9bd0` with `011a9bd4`, a lighting property's camera distance +0x34, the
-rendered pass's byte +9, the state block's properties, the land table +0xc4) and one write past `draw::own` (the
-constant setters' copy into an entry's own buffer). A later step changes those two files to feed the draw from a
-copied packet. On since its gate (the recorded street run
-byte-identical with `NV_TYPED=draw:off`); not a speed change by itself.
+data (the -FLT_MAX and 0.001 the alpha pass compares with, the colour scale, the bone scale bounds, the far distance
+with no fog distances, the 1.0 at `01012070`); and what group B reads that is filled at load (the shader package's
+tables, the passes' contents, the shaders' own fields, the shader property's texture source and land table bytes,
+the constant map entries' fields and the pass type tables, the default stage texture `011f951c`, the fade distances
+`011f9454`/`011f9458`, the element bits `011ae640`, the constant kinds `011f5fc4`, the vertex shader's renderer's
+device word +0x10f8); group B's other reads and writes, its own writes read back included, go through the two
+accessor files. A later step changes those two files to feed the draw from a copied packet. On since its gate
+(the recorded street run byte-identical with `NV_TYPED=draw:off`); not a speed change by itself.
 And `scene` (same crate, id 19), the first group of the frame's update half: the downward update pass of the classes
 beside `NiNode` (a plain object such as a geometry, the fade node's slot, the particle system), the update's entry, the
 skinned geometry's bound and the transform inverse it needs; the typed `NiNode` pass sends each child to the scene

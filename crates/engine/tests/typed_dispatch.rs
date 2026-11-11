@@ -189,7 +189,7 @@ fn stand_ins(e: &mut Engine) {
         ret_f(f64::from(f32::from_bits(e.mem.u32(a[0] + 0x154))))
     });
     e.register(0x0045_8b20, |_, _| ret(0x011f_426c));
-    e.register(0x00ee_6dda, |e, a| {
+    e.register(0x00fd_f428, |e, a| {
         log(e, 0x6dda, e.mem.u32(a[2] + 0x30));
         ret(a[0])
     });
@@ -402,6 +402,8 @@ impl Common for Diff {
             .family(&culling::CULLING)
             .family(&leaf::LEAVES)
             .translation_calls_plainly(&callees)
+            // The draw family's `D3DXMatrixInverse` thunk, which the 4x4 inverse calls.
+            .goes_by_address(&[0x00ee_6dda])
             .max_calls(MAX_CALLS)
             .float_sweep(FLOAT_SWEEP)
     }
