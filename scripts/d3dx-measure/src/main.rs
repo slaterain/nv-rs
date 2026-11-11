@@ -10,7 +10,9 @@
 //! `-- serve [thread]` answers `scripts/d3dx-texture-capture` (`texture::serve`).
 //! `-- blocks` serves `scripts/d3dx-tex-verify`: the DLL's internal DXT block encoders, the one
 //! use of anything but its entry points (`blocks.rs`); `-- control-word` prints the x87 control
-//! word before and after the HAL device `serve` makes.
+//! word before and after the HAL device `serve` makes; `-- formats` prints what that device takes
+//! (`CheckDeviceFormat`) and the format D3DX's requirements calls pick, for every format of
+//! D3DX's format table.
 //! `-- thread-texture` makes one generated DXT5 texture on the device's thread and on new threads
 //! (as they start, at 0x27f, at 0x7f) and prints each thread's control word and the levels' hash.
 //!
@@ -211,6 +213,14 @@ fn main() {
             let module = LoadLibraryA(b"d3dx9_38.dll\0".as_ptr());
             assert!(!module.is_null(), "d3dx9_38.dll did not load");
             blocks::serve(module);
+        }
+        return;
+    }
+    if what == "formats" {
+        unsafe {
+            let module = LoadLibraryA(b"d3dx9_38.dll\0".as_ptr());
+            assert!(!module.is_null(), "d3dx9_38.dll did not load");
+            texture::formats(module);
         }
         return;
     }

@@ -539,6 +539,9 @@ fn time_both(
 /// back), one line each: name, call, answer, levels, faces, then per surface `format,width,height,
 /// fnv1a64 of the bytes`. `crates/d3dx-tex/data/synthetic_32bit.tsv` is this output;
 /// `synthetic_32bit_double.tsv` with `--double` (the DLL on a thread at 53 bits).
+/// `--capture-formats <out.tsv> --serve <d3dx-measure.exe>`: the same for
+/// `d3dx_tex::synthetic::formats` (the formats translated for mods' textures):
+/// `crates/d3dx-tex/data/formats_32bit.tsv`, `formats_32bit_double.tsv` with `--double`.
 /// `--capture-headers <out.tsv> --serve <d3dx-measure.exe>`: `d3dx_tex::synthetic::header_files`
 /// (headers that push D3DX's DDS loader's sizes) through the 32-bit DLL's image info and create
 /// calls, each file in a process of its own, so a crash ends only its own answer. One line each:
@@ -611,8 +614,13 @@ fn capture_headers(out: &std::path::Path, serve: &str) {
     std::fs::write(out, text).unwrap();
 }
 
-fn capture_synthetic(out: &std::path::Path, serve: &str) {
+fn capture_synthetic(out: &std::path::Path, serve: &str, set: &str) {
     use std::io::Read;
+    let files = match set {
+        "files" => d3dx_tex::synthetic::files(),
+        "formats" => d3dx_tex::synthetic::formats(),
+        other => panic!("no synthetic set {other}"),
+    };
     let mut child = std::process::Command::new(serve)
         .arg("serve")
         .args(DOUBLE.load(Ordering::Relaxed).then_some("thread"))
@@ -620,8 +628,8 @@ fn capture_synthetic(out: &std::path::Path, serve: &str) {
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("d3dx-measure serve");
-    let mut text = format!("# d3dx_tex::synthetic::files() through the 32-bit d3dx9_38.dll (d3dx-measure serve, x87 control word {:#x}): name, call, answer, levels, faces, then per surface format,width,height,fnv1a64\n", control_word());
-    for f in d3dx_tex::synthetic::files() {
+    let mut text = format!("# d3dx_tex::synthetic::{set}() through the 32-bit d3dx9_38.dll (d3dx-measure serve, x87 control word {:#x}): name, call, answer, levels, faces, then per surface format,width,height,fnv1a64\n", control_word());
+    for f in files {
         let stdin = child.stdin.as_mut().unwrap();
         stdin
             .write_all(&(if f.cube { 2u32 } else { 1 }).to_le_bytes())
@@ -1089,7 +1097,7 @@ fn main() {
     let mut oracle_exe: Option<String> = None;
     let mut fuzz_n: Option<usize> = None;
     let mut time_mode = false;
-    let mut capture_synth: Option<PathBuf> = None;
+    let mut capture_synth: Option<(PathBuf, &str)> = None;
     let mut capture_hdr: Option<PathBuf> = None;
     let mut capture_blk: Option<PathBuf> = None;
     let mut serve_exe: Option<String> = None;
@@ -1103,7 +1111,11 @@ fn main() {
             }
             "--time" => time_mode = true,
             "--capture-synthetic" => {
-                capture_synth = Some(PathBuf::from(&args[i + 1]));
+                capture_synth = Some((PathBuf::from(&args[i + 1]), "files"));
+                i += 1;
+            }
+            "--capture-formats" => {
+                capture_synth = Some((PathBuf::from(&args[i + 1]), "formats"));
                 i += 1;
             }
             "--capture-blocks" => {
@@ -1151,6 +1163,22 @@ fn main() {
         }
         i += 1;
     }
+    // The captures of synthetic files need neither the game's files nor a texture cache.
+    if let Some(out) = capture_hdr {
+        capture_headers(
+            &out,
+            serve_exe.as_deref().expect("--serve <d3dx-measure.exe>"),
+        );
+        return;
+    }
+    if let Some((out, set)) = capture_synth {
+        capture_synthetic(
+            &out,
+            serve_exe.as_deref().expect("--serve <d3dx-measure.exe>"),
+            set,
+        );
+        return;
+    }
     // The textures the capture took, by archive path (index.tsv: key, archive, path, ...).
     let index = std::fs::read_to_string(cache.join("index.tsv")).expect("the cache's index.tsv");
     let wanted: std::collections::HashSet<(String, String)> = index
@@ -1173,20 +1201,6 @@ fn main() {
     archives.sort();
     if time_mode {
         time_both(&archives, &wanted, &only);
-        return;
-    }
-    if let Some(out) = capture_hdr {
-        capture_headers(
-            &out,
-            serve_exe.as_deref().expect("--serve <d3dx-measure.exe>"),
-        );
-        return;
-    }
-    if let Some(out) = capture_synth {
-        capture_synthetic(
-            &out,
-            serve_exe.as_deref().expect("--serve <d3dx-measure.exe>"),
-        );
         return;
     }
     if let Some(out) = capture_blk {

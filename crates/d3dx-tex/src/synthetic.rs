@@ -5,7 +5,7 @@
 //! under a block re-encoded with dither), with one level (the chain made by the box filter),
 //! non-square sizes, transparent DXT1 pixels, A8R8G8B8 and A4R4G4B4 chains (integer and float box
 //! paths), R8G8B8 converted to X8R8G8B8 with ordered dither, a DXT1 cube map, and files D3DX
-//! refuses.
+//! refuses. [`formats`] adds the formats translated for mods' textures, in answers of their own.
 
 /// A file: its name, whether it goes to the cube call, and its bytes.
 pub struct File {
@@ -182,6 +182,69 @@ pub fn files() -> Vec<File> {
         true,
         dxt(&mut rng, b"DXT1", 16, 16, 5),
     );
+    v
+}
+
+/// A cube map of an uncompressed format: six faces of `plain` pictures, `s` a side, `mips`
+/// levels each.
+fn plain_cube(rng: &mut Rng, pf: (u32, u32, u32, [u32; 4]), s: u32, mips: u32) -> Vec<u8> {
+    let mut d = header(s, s, mips, pf, 0xfe00);
+    for _ in 0..6 {
+        d.extend_from_slice(&plain(rng, pf, s, s, mips)[128..]);
+    }
+    d
+}
+
+/// Files of the formats translated for mods' textures (2026-11-11), through the DLL once like
+/// [`files`] (`d3dx-tex-verify --capture-formats`, `data/formats_32bit.tsv` and
+/// `formats_32bit_double.tsv`). For each 16-bit format: the whole chain stored (copied as it
+/// is), one level (the box filter's integer path), levels 4 and 2 high (down to levels one pixel
+/// high: the box filter's path through the working colour, the codec's decoder and encoder without
+/// dither), some levels stored, and a cube map. X4R4G4B4's levels are read into X1R5G5B5 (the
+/// format D3DX picks on the reference device) with the ordered dither. The pixels are noise over
+/// gradients, so the X bits are set in some.
+pub fn formats() -> Vec<File> {
+    let mut rng = Rng(0x5eed_d3d8_16b1_2026);
+    let mut v = Vec::new();
+    let mut add = |name: String, cube: bool, data: Vec<u8>| v.push(File { name, cube, data });
+    let sixteen = [
+        ("r5g6b5", (0x40, 0, 16, [0xf800, 0x7e0, 0x1f, 0])),
+        ("x1r5g5b5", (0x40, 0, 16, [0x7c00, 0x3e0, 0x1f, 0])),
+        ("a1r5g5b5", (0x41, 0, 16, [0x7c00, 0x3e0, 0x1f, 0x8000])),
+        ("x4r4g4b4", (0x40, 0, 16, [0xf00, 0xf0, 0xf, 0])),
+    ];
+    for (name, pf) in sixteen {
+        add(
+            format!("{name}-16-full"),
+            false,
+            plain(&mut rng, pf, 16, 16, 5),
+        );
+        add(
+            format!("{name}-32-one"),
+            false,
+            plain(&mut rng, pf, 32, 32, 1),
+        );
+        add(
+            format!("{name}-64x4-one"),
+            false,
+            plain(&mut rng, pf, 64, 4, 1),
+        );
+        add(
+            format!("{name}-256x2-one"),
+            false,
+            plain(&mut rng, pf, 256, 2, 1),
+        );
+        add(
+            format!("{name}-8x32-three"),
+            false,
+            plain(&mut rng, pf, 8, 32, 3),
+        );
+        add(
+            format!("{name}-cube-8-one"),
+            true,
+            plain_cube(&mut rng, pf, 8, 1),
+        );
+    }
     v
 }
 
