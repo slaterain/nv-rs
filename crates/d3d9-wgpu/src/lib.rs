@@ -11,6 +11,7 @@
 //! - `format`: `D3DFORMAT` to wgpu formats.
 //! - `state`: render and sampler states to wgpu states.
 //! - `device`: resources, passes, pipelines, draws and `Present`.
+//! - `window`: the game's window: the swap chain at the window's size, minimised, sized or lost.
 //! - `shot`: `NV_SHOT` captures numbered like the forwarding layer's.
 
 mod answers;
@@ -23,6 +24,7 @@ mod prepare;
 pub mod shot;
 pub mod sm;
 pub mod state;
+mod window;
 
 /// Writes every live wgpu device's pipeline cache and pipeline list now, when they changed: for
 /// the end of the run (the host's exit hooks; the process ends with `std::process::exit`).

@@ -598,8 +598,8 @@ pub struct Device {
     pub(crate) queue: wgpu::Queue,
     adapter: wgpu::Adapter,
     adapter_name: String,
-    surface: Option<(wgpu::Surface<'static>, wgpu::SurfaceConfiguration)>,
-    present_interval: u32,
+    /// The game's window and its swap chain ([`crate::window::Window`]), with [`Output::Window`].
+    surface: Option<crate::window::Window>,
     objects: Map<Handle, Obj>,
     back_buffers: Vec<Handle>,
     auto_depth: Handle,
@@ -775,8 +775,6 @@ impl PresentParameters {
     }
 }
 
-/// `D3DPRESENT_INTERVAL_IMMEDIATE`.
-const INTERVAL_IMMEDIATE: u32 = 0x8000_0000;
 /// `D3DPOOL_MANAGED`, `D3DPOOL_SYSTEMMEM`, `D3DPOOL_SCRATCH`.
 const POOL_MANAGED: u32 = 1;
 const POOL_SYSTEMMEM: u32 = 2;
@@ -839,12 +837,12 @@ impl Device {
             // later API has a card, or is asked for: with none, the last API's (WARP, Direct3D
             // 12's, on Windows, as CI's runners had before Vulkan came first).
             let cpu = adapter.get_info().device_type == wgpu::DeviceType::Cpu;
-            found = Some((surface, adapter));
+            found = Some((instance, surface, adapter));
             if !cpu || software {
                 break;
             }
         }
-        let (surface, adapter) = found.ok_or("no wgpu adapter")?;
+        let (instance, surface, adapter) = found.ok_or("no wgpu adapter")?;
         let wanted = wgpu::Features::TEXTURE_COMPRESSION_BC
             | wgpu::Features::FLOAT32_FILTERABLE
             | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
@@ -938,7 +936,6 @@ impl Device {
             adapter: adapter.clone(),
             adapter_name,
             surface: None,
-            present_interval: pp.interval,
             objects: Map::default(),
             back_buffers: Vec::new(),
             auto_depth: 0,
@@ -1039,60 +1036,33 @@ impl Device {
             awaiting: Vec::new(),
         };
         if let Some(surface) = surface {
-            let caps = surface.get_capabilities(&adapter);
-            let format = caps
-                .formats
-                .iter()
-                .copied()
-                .find(|f| *f == wgpu::TextureFormat::Bgra8Unorm)
-                .or_else(|| caps.formats.iter().copied().find(|f| !f.is_srgb()))
-                .unwrap_or(caps.formats[0]);
-            // Copies out too, with `NV_SHOT` only and where the surface allows them: the shots
-            // read the window's frame.
-            let copies = if d.shots.is_some() {
-                caps.usages & wgpu::TextureUsages::COPY_SRC
-            } else {
-                wgpu::TextureUsages::empty()
-            };
-            let config = wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | copies,
-                format,
-                width: pp.width.max(1),
-                height: pp.height.max(1),
-                present_mode: d.present_mode(&caps),
-                color_space: wgpu::SurfaceColorSpace::Auto,
-                desired_maximum_frame_latency: 2,
-                alpha_mode: caps.alpha_modes[0],
-                view_formats: vec![],
-            };
-            surface.configure(&d.device, &config);
-            d.surface = Some((surface, config));
+            // The swap chain at the window's size ([`crate::window`]); with `NV_SHOT` its frames
+            // can be copied out too (`wgpu-window-N.bmp`).
+            d.surface = Some(crate::window::Window::new(
+                window,
+                instance,
+                adapter.clone(),
+                surface,
+                &d.device,
+                (pp.width, pp.height),
+                pp.interval,
+                d.shots.is_some(),
+            ));
         }
         d.make_back_buffers(pp, back_buffers, depth);
+        let shown = match (&d.surface, output) {
+            (Some(w), _) => format!(
+                "on the game's window: {}x{}, {:?}",
+                w.config.width, w.config.height, w.config.present_mode
+            ),
+            (None, Output::Window) => "with no window".to_string(),
+            (None, Output::Offscreen) => "offscreen".to_string(),
+        };
         eprintln!(
-            "NV_D3D9 wgpu: the game's device on {} ({}x{}, format {}, {})",
-            d.adapter_name,
-            pp.width,
-            pp.height,
-            pp.format,
-            match output {
-                Output::Window => "on the game's window",
-                Output::Offscreen => "offscreen",
-            }
+            "NV_D3D9 wgpu: the game's device on {} ({}x{}, format {}, {shown})",
+            d.adapter_name, pp.width, pp.height, pp.format,
         );
         Ok(d)
-    }
-
-    fn present_mode(&self, caps: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
-        let immediate = self.present_interval == INTERVAL_IMMEDIATE
-            || std::env::var("NV_D3D9_PRESENT").is_ok_and(|v| v.eq_ignore_ascii_case("immediate"));
-        if immediate && caps.present_modes.contains(&wgpu::PresentMode::Immediate) {
-            wgpu::PresentMode::Immediate
-        } else if immediate {
-            wgpu::PresentMode::AutoNoVsync
-        } else {
-            wgpu::PresentMode::Fifo
-        }
     }
 
     fn id(&mut self) -> u64 {
@@ -3628,7 +3598,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // ready later, after a new sample count, are made without it).
         let total = modules + ready.len();
         let shown = total >= 32;
-        let surface = self.surface.take();
+        let mut surface = self.surface.take();
         let mut screen = self.loading.take();
         let (device, queue) = (self.device.clone(), self.queue.clone());
         let mut step = |done: usize| {
@@ -3638,7 +3608,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     status: format!("Preparing shaders {} of {}", done.min(total), total),
                     done: done as f32 / total.max(1) as f32,
                 };
-                show_on(&surface, &mut screen, &device, &queue, &p);
+                show_on(&mut surface, &mut screen, &device, &queue, &p);
             }
         };
         let t = std::time::Instant::now();
@@ -4815,7 +4785,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// are not touched: the next `Present` shows the game again.
     pub fn show_progress(&mut self, p: &loading::Progress) {
         show_on(
-            &self.surface,
+            &mut self.surface,
             &mut self.loading,
             &self.device,
             &self.queue,
@@ -4875,74 +4845,62 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         let mut frame_texture = None;
         let mut window_shot = None;
-        if let (Some((surface, config)), Some(b)) = (&self.surface, &back) {
-            // An outdated or lost surface (the window resized, the display changed) is configured
-            // again and asked once more; a frame that cannot be had now (minimised, timed out) is
-            // skipped, as Direct3D 9's Present then shows nothing.
-            let mut acquired = None;
-            for _ in 0..2 {
-                match surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(t) => acquired = Some(t),
-                    wgpu::CurrentSurfaceTexture::Suboptimal(t) => {
-                        acquired = Some(t);
-                    }
-                    wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                        surface.configure(&self.device, config);
-                        continue;
-                    }
-                    _ => {}
-                }
-                break;
+        // The window's frame at its size now ([`crate::window`]); none while it is minimised,
+        // gives none in time or is lost (the frame is skipped, as Direct3D 9's Present then shows
+        // nothing, and the game goes on).
+        let taken = match (&mut self.surface, &back) {
+            // The swap chain as the frame was taken (configured again at the window's size first).
+            (Some(w), Some(_)) => w.frame(&self.device).map(|t| {
+                let c = &w.config;
+                (t, (c.format, c.width, c.height, c.usage))
+            }),
+            _ => None,
+        };
+        if let (Some((t, (format, cw, ch, usage))), Some(b)) = (taken, &back) {
+            let view = t.texture.create_view(&Default::default());
+            let copyable = usage.contains(wgpu::TextureUsages::COPY_SRC);
+            let sv = b.view.clone().expect("the back buffer's view");
+            let size = (b.width, b.height);
+            // Over the whole client area, as Direct3D 9's windowed Present without
+            // rectangles: a copy at the same size, filtered when the window's differs.
+            self.blit_into(
+                &sv,
+                size,
+                [0.0, 0.0, size.0 as f32, size.1 as f32],
+                &view,
+                (format, false),
+                [0.0, 0.0, cw as f32, ch as f32],
+                size != (cw, ch),
+            );
+            // With a capture, the frame the window gets too (`wgpu-window-N.bmp`): the
+            // swapchain's own texture, read back before it is presented.
+            if shot && copyable && format == wgpu::TextureFormat::Bgra8Unorm {
+                let row = (cw * 4).div_ceil(256) * 256;
+                let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("window shot"),
+                    size: u64::from(row * ch),
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
+                self.encoder().copy_texture_to_buffer(
+                    t.texture.as_image_copy(),
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(row),
+                            rows_per_image: Some(ch),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: cw,
+                        height: ch,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                window_shot = Some((buffer, row, cw, ch));
             }
-            match acquired {
-                Some(t) => {
-                    let view = t.texture.create_view(&Default::default());
-                    let format = config.format;
-                    let (cw, ch) = (config.width, config.height);
-                    let copyable = config.usage.contains(wgpu::TextureUsages::COPY_SRC);
-                    let sv = b.view.clone().expect("the back buffer's view");
-                    let size = (b.width, b.height);
-                    self.blit_into(
-                        &sv,
-                        size,
-                        [0.0, 0.0, size.0 as f32, size.1 as f32],
-                        &view,
-                        (format, false),
-                        [0.0, 0.0, cw as f32, ch as f32],
-                        false,
-                    );
-                    // With a capture, the frame the window gets too (`wgpu-window-N.bmp`): the
-                    // swapchain's own texture, read back before it is presented.
-                    if shot && copyable && format == wgpu::TextureFormat::Bgra8Unorm {
-                        let row = (cw * 4).div_ceil(256) * 256;
-                        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                            label: Some("window shot"),
-                            size: u64::from(row * ch),
-                            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                            mapped_at_creation: false,
-                        });
-                        self.encoder().copy_texture_to_buffer(
-                            t.texture.as_image_copy(),
-                            wgpu::TexelCopyBufferInfo {
-                                buffer: &buffer,
-                                layout: wgpu::TexelCopyBufferLayout {
-                                    offset: 0,
-                                    bytes_per_row: Some(row),
-                                    rows_per_image: Some(ch),
-                                },
-                            },
-                            wgpu::Extent3d {
-                                width: cw,
-                                height: ch,
-                                depth_or_array_layers: 1,
-                            },
-                        );
-                        window_shot = Some((buffer, row, cw, ch));
-                    }
-                    frame_texture = Some(t);
-                }
-                None => self.warn("a frame the window could not take (skipped)"),
-            }
+            frame_texture = Some(t);
         }
         self.flush();
         if let Some(t) = frame_texture {
@@ -5129,10 +5087,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
 
     pub(crate) fn reset(&mut self, pp: &PresentParameters, back_buffers: &[Handle], depth: Handle) {
         self.flush();
-        if let Some((surface, config)) = &mut self.surface {
-            config.width = pp.width.max(1);
-            config.height = pp.height.max(1);
-            surface.configure(&self.device, config);
+        // The swap chain stays the window's size; configured again before the next frame, in the
+        // new present interval's mode.
+        if let Some(w) = &mut self.surface {
+            w.reset(pp.interval);
         }
         // Reset returns the device to its defaults: every state, binding and register; the caches
         // that hold old resources go.
@@ -5411,7 +5369,10 @@ pub fn hardware_adapter() -> Option<String> {
 
 /// The surface of a real window (Windows: an `HWND`).
 #[cfg(windows)]
-fn surface_for(instance: &wgpu::Instance, window: isize) -> Result<wgpu::Surface<'static>, String> {
+pub(crate) fn surface_for(
+    instance: &wgpu::Instance,
+    window: isize,
+) -> Result<wgpu::Surface<'static>, String> {
     use raw_window_handle::{
         RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle,
     };
@@ -5439,7 +5400,7 @@ extern "system" {
 }
 
 #[cfg(not(windows))]
-fn surface_for(
+pub(crate) fn surface_for(
     _instance: &wgpu::Instance,
     _window: isize,
 ) -> Result<wgpu::Surface<'static>, String> {
@@ -5507,7 +5468,7 @@ struct PipelineJob {
 
 /// [`Device::show_progress`] on the device's parts (so it can run while other parts are lent out).
 fn show_on(
-    surface: &Option<(wgpu::Surface<'static>, wgpu::SurfaceConfiguration)>,
+    surface: &mut Option<crate::window::Window>,
     screen: &mut Option<loading::Screen>,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -5519,28 +5480,15 @@ fn show_on(
         p.status,
         p.done.clamp(0.0, 1.0) * 100.0
     );
-    let Some((surface, config)) = surface else {
+    let Some(window) = surface else {
         return;
     };
-    // As a `Present` does: an outdated or lost surface (the window resized or the display
-    // changed during the step) is configured again and asked once more; a frame that cannot be
-    // had now (minimised, timed out) is not drawn.
-    let mut acquired = None;
-    for _ in 0..2 {
-        match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => acquired = Some(t),
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                surface.configure(device, config);
-                continue;
-            }
-            _ => {}
-        }
-        break;
-    }
-    let Some(frame) = acquired else {
+    // As a `Present` does ([`crate::window`]): the window's frame at its size now, none while it
+    // is minimised, gives none in time or is lost (not drawn then).
+    let Some(frame) = window.frame(device) else {
         return;
     };
+    let config = &window.config;
     let view = frame.texture.create_view(&Default::default());
     // Made again if the window's format changed since (its pipeline is made for one).
     if screen.as_ref().is_some_and(|s| s.format != config.format) {
