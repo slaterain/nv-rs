@@ -25,8 +25,6 @@ const POOL_ALLOCATE: u32 = 0x00aa_3e40;
 /// `operator new` (`cdecl(size)`) and the bound block's set-up (`thiscall(block, 0x100, 0)`).
 const OPERATOR_NEW: u32 = 0x0040_1000;
 const BOUND_BLOCK_SETUP: u32 = 0x0054_6890;
-/// The skin instance's bound update (`thiscall(skin, bound)`).
-const SKIN_BOUND: u32 = 0x00a8_6530;
 /// Whether the world bound changed since the copy (`thiscall(bound, old copy)`, a bool).
 const BOUND_CHANGED: u32 = 0x00a9_2660;
 
@@ -253,7 +251,12 @@ pub fn geometry_update_world_bound(e: &mut Engine, this: Ptr<NiGeometry>) {
         let skin = e.get(this, NiGeometry::m_spSkinInstance);
         if skin != 0 {
             let bound = e.get(object, NiAVObject::m_kWorldBound);
-            e.call(SKIN_BOUND, &args![skin, bound]);
+            // The skin instance's bound (`00a86530`, the scene family).
+            typed_call!(
+                crate::scene::FAMILY,
+                0x00a8_6530,
+                crate::scene::skin::skin_bound(e, Ptr::new(skin), bound.cast())
+            );
             let bound = e.get(object, NiAVObject::m_kWorldBound);
             typed_call!(FAMILY, 0x00a7_fea0, bound_transform(e, bound, world));
         } else {

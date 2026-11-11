@@ -267,16 +267,10 @@ pub fn update_downward(e: &mut Engine, this: Ptr<NiNode>, data: u32, update_flag
     let update_flags = update_flags | (flags(e, t) & 1);
     let count = children_size(e, t);
     update_children(e, t, count, true, &mut |e, child| {
-        // A child node's `UpdateDownwardPass` (`00a5dd70`, this function) directly.
-        if crate::slot_target(e, child, 0xa4) == 0x00a5_dd70 {
-            typed_call!(
-                FAMILY,
-                0x00a5_dd70,
-                update_downward(e, Ptr::new(child), data, update_flags)
-            );
-        } else {
-            e.vcall(child, 0xa4, &args![data, update_flags]);
-        }
+        // A child's `UpdateDownwardPass` (vtable +0xa4): this function for a child node, the scene
+        // family's for a plain object, a fade node or a particle system, directly
+        // (`crate::scene::walk::downward`); any other class through its vtable.
+        crate::scene::walk::downward(e, child, data, update_flags);
     });
 }
 
