@@ -469,8 +469,10 @@ inventory's getters; since 2026-11-10 also the word map's lookup `00853130`, whi
 `culling` and `pathing` go direct only when those are on); its tests are
 `crates/engine/tests/typed_dispatch.rs`. And `shader` (same crate, id 17): the shader
 set-up and batch renderer (render state setters and caches, the batch renderer's lists and passes, the
-accumulator's registration and the shaders' per-geometry set-ups), stage 1; its tests are
-`crates/engine/tests/typed_shader.rs`. These six are on since their speed gate, taken together (2026-11-08,
+accumulator's registration and the shaders' per-geometry set-ups), stage 1, its float maths native since
+2026-11-11 by where each function runs (what the main thread alone runs in plain `f32`; the world transform
+and the range, which another game thread also runs, in `f64` rounded at the stores; no x87 helper left); its
+tests are `crates/engine/tests/typed_shader.rs`. These six are on since their speed gate, taken together (2026-11-08,
 real threads, fixes preset, the same exe with `NV_TYPED` unset and with the six on, BAAB): Goodsprings 55.0 to
 60.1 fps (+9.3%), the crowded street at 2560x1440 8x AA 52.3 to 57.7 fps (+10.3%), the sky above it 117 to
 134 fps (+14%). Each alone had been within the noise (shader +0.2%, dispatch +1.5%): they call each other, and a
@@ -769,7 +771,11 @@ build, the two builds alternating, 8 runs each):
   recording shows it matters. The family's `threads` row (`Threads::Main`, `Other`, `Both`) says
   which applies, and the differential test runs that row's control words: plain `f32` differs under
   the other threads' word, and `f64` rounded at the store under the main thread's. A family with no
-  such claim stays `Both`.
+  such claim stays `Both`. Inside a `Both` family, a function the thread census shows on the main
+  thread only may take plain `f32` too (the shader family's set-ups), its test then on the main
+  thread's word. The helpers are `engine_typed::native`: `wide` and `narrow`, and `mul_d`, `div_d`,
+  `add_d` and `sub_d` for a step with a `double` operand (an exe constant, a callee's ST0), done in
+  `f64` and rounded to a float once, as the x87 rounds the exact result once.
 - Float to integer goes through `x87::fistp_chop` and its family, never `as`, which saturates where
   the exe gets the integer indefinite. A typed folder's root denies clippy's
   `cast_possible_truncation`, which knows types. It also stops `u32 as u8` and `f64 as f32`: where

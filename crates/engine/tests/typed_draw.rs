@@ -15,7 +15,7 @@
 use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input, F32_VALUES};
-use engine_core::typed::leaf;
+use engine_core::typed::{leaf, MAIN_THREAD, OTHER_THREADS};
 use engine_core::{entry, Engine};
 use engine_typed::draw::{self, packed, packing, shapes, skin, thunks};
 use engine_typed::draw_f;
@@ -1299,9 +1299,52 @@ fn bone_world(
     (r.renderer, skin, world)
 }
 
-/// `bone_matrices` (`00e6fe30`): already filled for this entry point and register count, or filled
-/// for 3 or 4 registers, either layout, with the world or without; the buffer made anew or kept; no,
-/// one or two bones; the scales over the special floats.
+/// `bone_matrices`' inputs: already filled for this entry point and register count, or filled for 3 or
+/// 4 registers, either layout, with the world or without; the buffer made anew or kept; no, one or two
+/// bones; the scales over the special floats.
+const BONE_MATRICES_INPUTS: &[Input] = &[
+    Input::Of(&[2, 0, 1]),
+    Input::Of(&[0, 1]),
+    Input::Of(&[3, 4]),
+    Input::Of(&[0, 1]),
+    Input::Of(&[0, 1]),
+    Input::Of(&[0x400, 0]),
+    Input::F32,
+    Input::Of(TWO_WAYS),
+];
+
+/// `bone_matrices`' words for a case of [`BONE_MATRICES_INPUTS`].
+fn bone_matrices_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let registers = c.word(2);
+    // The register count the skin holds: the one asked for, or another (so a filled skin is filled
+    // again).
+    let stored = registers ^ (c.word(7) * 7);
+    let (renderer, skin, world) = bone_world(
+        e,
+        c.word(0),
+        c.word(1),
+        stored,
+        c.word(5),
+        c.f32(6).to_bits(),
+    );
+    vec![renderer, skin, world, c.word(3), registers, c.word(4)]
+}
+
+/// What the transform inverse's and product's translations call plainly (the dispatch family's tests
+/// list the same).
+const BONE_PLAIN: &[u32] = &[
+    0x0040_19d0,
+    0x0040_8860,
+    0x0047_6930,
+    0x0047_6980,
+    0x0047_69c0,
+];
+
+/// `bone_matrices` (`00e6fe30`), [`BONE_MATRICES_INPUTS`]. The four-register layout's matrix is the
+/// shader family's `make_matrix`, whose maths is native `f64` (it also runs on another game thread):
+/// under the other threads' word bit for bit; under the main thread's within one ulp, where a scaled
+/// entry falls below the float's normal range (a denormal scale) and the exe rounds it to 24 bits
+/// before its store rounds it again.
 #[test]
 fn bone_matrices() {
     Diff::new(entry!(
@@ -1309,42 +1352,26 @@ fn bone_matrices() {
         skin::bone_matrices(Ptr<_>, Ptr<_>, Ptr<_>, u8, u32, u8)
     ))
     .common()
-    // What the transform inverse's and product's translations call plainly (the dispatch family's tests list
-    // the same).
-    .translation_calls_plainly(&[
-        0x0040_19d0,
-        0x0040_8860,
-        0x0047_6930,
-        0x0047_6980,
-        0x0047_69c0,
-    ])
-    .inputs(&[
-        Input::Of(&[2, 0, 1]),
-        Input::Of(&[0, 1]),
-        Input::Of(&[3, 4]),
-        Input::Of(&[0, 1]),
-        Input::Of(&[0, 1]),
-        Input::Of(&[0x400, 0]),
-        Input::F32,
-        Input::Of(TWO_WAYS),
-    ])
+    .control_words(&[OTHER_THREADS])
+    .translation_calls_plainly(BONE_PLAIN)
+    .inputs(BONE_MATRICES_INPUTS)
     .max_cases(400)
     .float_sweep(32)
-    .setup(|e, c| {
-        let registers = c.word(2);
-        // The register count the skin holds: the one asked for, or another (so a filled skin is filled
-        // again).
-        let stored = registers ^ (c.word(7) * 7);
-        let (renderer, skin, world) = bone_world(
-            e,
-            c.word(0),
-            c.word(1),
-            stored,
-            c.word(5),
-            c.f32(6).to_bits(),
-        );
-        vec![renderer, skin, world, c.word(3), registers, c.word(4)]
-    })
+    .setup(bone_matrices_words)
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x00e6_fe30,
+        skin::bone_matrices(Ptr<_>, Ptr<_>, Ptr<_>, u8, u32, u8)
+    ))
+    .common()
+    .control_words(&[MAIN_THREAD])
+    .float_ulps(1)
+    .translation_calls_plainly(BONE_PLAIN)
+    .inputs(BONE_MATRICES_INPUTS)
+    .max_cases(400)
+    .float_sweep(32)
+    .setup(bone_matrices_words)
     .run()
     .assert_same();
 }
