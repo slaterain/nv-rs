@@ -365,6 +365,49 @@ fn collision_linear_velocity_of() {
     .assert_same();
 }
 
+/// The world of one `NitohkTransform` case, from `w` = [the parts (0: neither, 1: a node, 2: a node
+/// and a body), the body's motion type (5: no Havok object), the Havok world set, the object's flags
+/// word, the node's flags, the body near, the velocities (bit 0: the linear one within the epsilon,
+/// bit 1: the angular one), the tests that answer true (1: the object's, 2: the motion type's)], the
+/// node's floats from the case's float `f`.
+fn ni_to_hk_world(e: &mut Engine, case: &Case, w: [u32; 8], f: usize) -> Vec<u32> {
+    let [parts, motion, world, object_flags, node_flags, near, velocities, tests] = w;
+    stand_ins(e, 0);
+    set_logged_answer(e, 0x01, world);
+    set_logged_answer(e, 0x02, u32::from(tests == 1));
+    set_logged_answer(e, 0x03, u32::from(tests == 2));
+    let c = block(e, 0x14, &[0; 5]);
+    e.mem.set_u16(c + 0xc, object_flags as u16);
+    if parts >= 1 {
+        let n = node(e, case, node_flags, f);
+        e.mem.set_u32(c + 8, n);
+    }
+    if parts == 2 {
+        // The body's position is compared with the node's translation (2, -1, 0.5) in Havok's units
+        // (a seventh of it): the origin is within 1.0 of that (near), (1, 2, 3) is not (far).
+        let position = if near != 0 {
+            [0, 0, 0, 0]
+        } else {
+            [ONE, TWO, 0x4040_0000, 0]
+        };
+        let b = havok_body(e, motion, 0, position);
+        // The linear (+0xf0) and angular (+0x1c0) velocities: zero (within the epsilon) or (1, 0, 0).
+        let h = e.mem.u32(b + 8);
+        if h != 0 {
+            for (bit, at) in [(1, 0xf0), (2, 0x1c0)] {
+                let v = if velocities & bit != 0 {
+                    [0, 0, 0, 0]
+                } else {
+                    [ONE, 0, 0, 0]
+                };
+                words(e, h + at, &v);
+            }
+        }
+        e.mem.set_u32(c + 0x10, b);
+    }
+    vec![c]
+}
+
 #[test]
 fn collision_ni_to_hk() {
     // A node or none; a body or none; its motion type (5: none); the Havok world set; the object's
@@ -380,51 +423,35 @@ fn collision_ni_to_hk() {
                 Input::Of(&[0, 0x40]),
                 Input::Of(&[0, 0x8, 0x0040_0000]),
                 Input::Flag,
-                Input::Flag,
+                Input::Of(&[0, 1, 2, 3]),
                 Input::Of(&[0, 1, 2]),
             ],
             &P3,
         ]))
         .max_cases(256)
         .setup(|e, case| {
-            stand_ins(e, 0);
-            set_logged_answer(e, 0x01, case.word(2));
-            set_logged_answer(e, 0x02, u32::from(case.word(7) == 1));
-            set_logged_answer(e, 0x03, u32::from(case.word(7) == 2));
-            let c = block(e, 0x14, &[0; 5]);
-            e.mem.set_u16(c + 0xc, case.word(3) as u16);
-            if case.word(0) >= 1 {
-                let n = node(e, case, case.word(4), 8);
-                e.mem.set_u32(c + 8, n);
-            }
-            if case.word(0) == 2 {
-                // The body's position: the node's translation (near) or two away (far).
-                let n = e.mem.u32(c + 8);
-                let t = [
-                    e.mem.u32(n + 0x8c),
-                    e.mem.u32(n + 0x90),
-                    e.mem.u32(n + 0x94),
-                ];
-                let position = if case.word(5) != 0 {
-                    [t[0], t[1], t[2], 0]
-                } else {
-                    [ONE, TWO, 0x4040_0000, 0]
-                };
-                let b = havok_body(e, case.word(1), 0, position);
-                // The velocities: within the epsilon or not.
-                let v = if case.word(6) != 0 {
-                    [0, 0, 0, 0]
-                } else {
-                    [ONE, 0, 0, 0]
-                };
-                let h = e.mem.u32(b + 8);
-                if h != 0 {
-                    words(e, h + 0xf0, &v);
-                    words(e, h + 0x1c0, &v);
-                }
-                e.mem.set_u32(c + 0x10, b);
-            }
-            vec![c]
+            let w = core::array::from_fn(|i| case.word(i));
+            ni_to_hk_world(e, case, w, 8)
+        })
+        .run()
+        .assert_same();
+    // The path a body with a Havok object, no move bit and no node flags takes: near or far, each
+    // pair of velocities, each test; floats.
+    Diff::new(entry!(0x00c6_5b00, body::ni_to_hk(Ptr<_>)))
+        .common()
+        .inputs(&inputs(&[
+            &[
+                Input::Flag,
+                Input::Flag,
+                Input::Of(&[0, 1, 2, 3]),
+                Input::Of(&[0, 1, 2]),
+            ],
+            &P3,
+        ]))
+        .max_cases(256)
+        .setup(|e, case| {
+            let w = [2, 1, case.word(0), 0, 0, case.word(1), case.word(2), case.word(3)];
+            ni_to_hk_world(e, case, w, 4)
         })
         .run()
         .assert_same();
