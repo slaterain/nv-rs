@@ -2400,8 +2400,9 @@ mod native {
     /// dbghelp is single-threaded: Microsoft's documentation says every DbgHelp function is, and
     /// that calls from several threads at once must be synchronised. The game has one sampler
     /// thread, but the tests run several samplers at once: 8 threads each naming one address got
-    /// 2 to 9 of 320 names wrong (empty, "?", or the first bytes of the name zeroed; 2026-11-11).
-    /// Every dbghelp call holds this lock (process-wide, as dbghelp's state is).
+    /// up to 140 of 320 names wrong (empty, "?", or the first bytes of the name zeroed), and 2 of
+    /// 10 such runs ended in heap corruption (0xC0000374; 2026-11-11). Every dbghelp call holds
+    /// this lock (process-wide, as dbghelp's state is).
     static DBGHELP: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn dbghelp() -> std::sync::MutexGuard<'static, ()> {
@@ -3611,10 +3612,10 @@ mod native {
         /// 95,000 walks (the `bnd jmp` alone, 10 times in 30,163 walks); here a watchdog resumes
         /// the thread after two seconds without a walk coming back, and the test fails.
         /// Samplers on several threads at once name one address alike every time: dbghelp is
-        /// single-threaded, and its calls hold the dbghelp lock ([`DBGHELP`]). Without it, 8
-        /// threads got 2 to 9 of 320 names wrong (empty, "?", or the name's first bytes zeroed;
-        /// 2026-11-11), the way `a_busy_thread_is_sampled_in_this_program` can fail while other
-        /// tests sample.
+        /// single-threaded, and its calls hold the dbghelp lock ([`DBGHELP`]). Without it this
+        /// failed 10 runs of 10: 6 to 140 of the 320 names wrong (empty, "?", or the name's first
+        /// bytes zeroed) or the process ended in heap corruption (2026-11-11), the way
+        /// `a_busy_thread_is_sampled_in_this_program` can fail while other tests sample.
         #[test]
         fn samplers_on_several_threads_name_an_address_alike() {
             extern "C" {
@@ -3627,7 +3628,9 @@ mod native {
                     s.spawn(|| {
                         let mut sampler = Sampler::new();
                         for _ in 0..40 {
-                            // Looked up afresh each time (not from the sampler's own names).
+                            // Each round as a new sampler's first lookup: dbghelp set up again
+                            // (the setup's calls raced most), then the name looked up afresh.
+                            sampler.sym_tried = false;
                             sampler.names.clear();
                             let (_, symbol) = sampler.name(framed + 1);
                             if symbol != "nv_profile_test_framed" {
