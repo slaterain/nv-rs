@@ -1594,10 +1594,14 @@ impl Device {
             // runs, as the register ring is), so the draws before read the old bytes and the draws
             // after the new, and the batch is not sent for it (it was: five times a frame in the
             // crowded street, each a submit and a new encoder).
+            // The pass ends first (a copy cannot be recorded inside one), then the bytes are staged.
+            self.end_pass();
+            let Some(Obj::Buffer(_, shadow)) = self.objects.get(&buffer) else {
+                return;
+            };
             let at = self.stage.len() as u64;
             self.stage.extend_from_slice(&shadow[start..end]);
             let stage = self.stage_buffer.clone();
-            self.end_pass();
             self.encoder().copy_buffer_to_buffer(
                 &stage,
                 at,

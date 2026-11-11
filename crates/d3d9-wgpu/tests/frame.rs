@@ -1281,3 +1281,131 @@ fn a_list_recorded_at_4x_serves_a_run_at_8x() {
     assert_eq!(listed, plain, "the same pixels as an 8x run without a list");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Two triangles (a triangle list) covering clip x from `x0` to `x1` and every row, at depth 0.5.
+fn rect(x0: f32, x1: f32) -> Vec<f32> {
+    let (y0, y1) = (-3.0, 3.0);
+    vec![
+        x0, y0, 0.5, 1.0, x0, y1, 0.5, 1.0, x1, y0, 0.5, 1.0, //
+        x1, y0, 0.5, 1.0, x0, y1, 0.5, 1.0, x1, y1, 0.5, 1.0,
+    ]
+}
+
+/// On a 4 by 4 target: the left two columns red, the right two green, nothing else.
+fn left_red_right_green(g: &mut Gpu, what: &str) {
+    let px = g.pixels();
+    for (i, p) in px.iter().enumerate() {
+        let want = if i % 4 < 2 {
+            [0, 0, 255, 255]
+        } else {
+            [0, 255, 0, 255]
+        };
+        assert_eq!(*p, want, "{what}: pixel {i} of {px:?}");
+    }
+}
+
+/// Uploads into a buffer the open batch already draws from, with no Present or read-back between
+/// them: each draw reads the bytes uploaded before it, not those uploaded after it, and an upload
+/// after the last draw changes nothing drawn. The vertices: the left half uploaded at offset 0
+/// and drawn red, the right half uploaded at the same offset and drawn green, then the whole
+/// target uploaded there with no draw. The indices: the same with an index buffer rewritten
+/// between two `DrawIndexedPrimitive`s over one vertex buffer that holds all three rectangles.
+/// Copies that landed before every draw would make the target all green; copies dropped would
+/// leave the right half black.
+#[test]
+fn each_draw_reads_the_upload_before_it_in_one_batch() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    // Clip x of the pixel centres (Direct3D 9's whole coordinates): -1, -0.5, 0, 0.5; the
+    // halves meet at -0.25, between the second and third column.
+    let (left, right, whole) = (rect(-3.0, -0.25), rect(-0.25, 3.0), rect(-3.0, 3.0));
+    const VB2: u32 = 0x1600;
+    const VB3: u32 = 0x1610;
+    const IB: u32 = 0x1620;
+    for (buffer, index, length, format) in [
+        (VB2, false, 96, 0),
+        (VB3, false, 288, 0),
+        (IB, true, 12, 101),
+    ] {
+        g.run(Cmd::CreateBuffer {
+            device: DEVICE,
+            buffer,
+            index,
+            length,
+            usage: 0,
+            format,
+            pool: 1,
+        });
+    }
+    let upload = |g: &mut Gpu, buffer: u32, data: &[u8]| {
+        g.run(Cmd::UploadBuffer {
+            buffer,
+            offset: 0,
+            flags: 0,
+            data: Data::Bytes(data),
+        });
+    };
+    // Vertices.
+    g.clear(3, 0, 1.0);
+    g.run(Cmd::SetStreamSource {
+        device: DEVICE,
+        stream: 0,
+        buffer: VB2,
+        offset: 0,
+        stride: 16,
+    });
+    g.colour([1.0, 0.0, 0.0, 1.0]);
+    upload(&mut g, VB2, &floats(&left));
+    g.run(Cmd::DrawPrimitive {
+        device: DEVICE,
+        kind: 4,
+        start: 0,
+        count: 2,
+    });
+    g.colour([0.0, 1.0, 0.0, 1.0]);
+    upload(&mut g, VB2, &floats(&right));
+    g.run(Cmd::DrawPrimitive {
+        device: DEVICE,
+        kind: 4,
+        start: 0,
+        count: 2,
+    });
+    upload(&mut g, VB2, &floats(&whole));
+    left_red_right_green(&mut g, "vertices");
+    // Indices: one vertex buffer with the three rectangles (vertices 0-5, 6-11, 12-17).
+    let all: Vec<f32> = [left, right, whole].concat();
+    upload(&mut g, VB3, &floats(&all));
+    g.clear(3, 0, 1.0);
+    g.run(Cmd::SetStreamSource {
+        device: DEVICE,
+        stream: 0,
+        buffer: VB3,
+        offset: 0,
+        stride: 16,
+    });
+    g.run(Cmd::SetIndices {
+        device: DEVICE,
+        buffer: IB,
+    });
+    let indices =
+        |first: u16| -> Vec<u8> { (first..first + 6).flat_map(u16::to_le_bytes).collect() };
+    let draw = |g: &mut Gpu| {
+        g.run(Cmd::DrawIndexedPrimitive {
+            device: DEVICE,
+            kind: 4,
+            base_vertex: 0,
+            min_index: 0,
+            vertices: 18,
+            start_index: 0,
+            count: 2,
+        });
+    };
+    g.colour([1.0, 0.0, 0.0, 1.0]);
+    upload(&mut g, IB, &indices(0));
+    draw(&mut g);
+    g.colour([0.0, 1.0, 0.0, 1.0]);
+    upload(&mut g, IB, &indices(6));
+    draw(&mut g);
+    upload(&mut g, IB, &indices(12));
+    left_red_right_green(&mut g, "indices");
+    assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+}
