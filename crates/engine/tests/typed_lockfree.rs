@@ -2383,7 +2383,10 @@ mod forms {
             let form = queue_node_life(spec);
             assert_eq!(form.answers, stage1.answers, "{spec}");
             assert_eq!(form.references, stage1.references, "{spec}");
-            assert_eq!(form.heap, stage1.heap, "{spec}: a guest block in every form");
+            assert_eq!(
+                form.heap, stage1.heap,
+                "{spec}: a guest block in every form"
+            );
         }
     }
 
