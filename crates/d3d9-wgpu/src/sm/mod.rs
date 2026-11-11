@@ -664,6 +664,8 @@ pub fn check_package(package: &package::Package) -> Vec<(String, String)> {
                     .collect(),
                 Stage::Pixel => sig.inputs.iter().map(|(_, s)| *s).collect(),
             };
+            // As the device links them: at fixed locations where every varying has one.
+            let fixed = varyings.iter().all(|s| wgsl::fixed_slot(*s).is_some());
             let link = wgsl::Link {
                 inputs: vec![wgsl::Input::Float(4); 16],
                 // As the device links them: each at the centroid.
@@ -675,6 +677,7 @@ pub fn check_package(package: &package::Package) -> Vec<(String, String)> {
                     Stage::Vertex => wgsl::Clip::Distances,
                     Stage::Pixel => wgsl::Clip::Discard { per_sample: true },
                 },
+                fixed,
                 ..wgsl::Link::default()
             };
             let source = wgsl::convert(&p, &link)?;

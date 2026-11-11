@@ -369,6 +369,133 @@ fn every_sample_of_the_viewports_edge_pixels_can_be_covered() {
     }
 }
 
+/// Fixed varying locations: one vertex shader writing TEXCOORD0 (red) and TEXCOORD1 (green)
+/// serves a pixel shader reading TEXCOORD0 and one reading TEXCOORD1 with one module, each pair
+/// drawing its own colour; a pixel shader reading TEXCOORD2, which the vertex shader does not
+/// write, reads 0 from a vertex module of its own pair. Before, each pixel shader took a vertex
+/// module of its own.
+#[test]
+fn a_vertex_shader_has_one_module_for_the_pixel_shaders_reading_what_it_writes() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    // vs_2_0: dcl_position v0; mov oPos, v0; mov oT0, c1; mov oT1, c2.
+    let mut vs = vec![0xFFFE_0200];
+    vs.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    vs.extend(ins(1, &[0xC00F_0000, 0x90E4_0000]));
+    vs.extend(ins(1, &[0xE00F_0000, 0xA0E4_0001]));
+    vs.extend(ins(1, &[0xE00F_0001, 0xA0E4_0002]));
+    vs.push(END);
+    let t = words(&vs);
+    g.run(Cmd::CreateShader {
+        device: DEVICE,
+        shader: VS + 1,
+        pixel: false,
+        tokens: Data::Bytes(&t),
+    });
+    g.run(Cmd::SetShader {
+        device: DEVICE,
+        pixel: false,
+        shader: VS + 1,
+    });
+    let regs = floats(&[1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
+    g.run(Cmd::SetConstants {
+        device: DEVICE,
+        kind: 0,
+        start: 1,
+        count: 2,
+        data: Data::Bytes(&regs),
+    });
+    // ps_2_0: dcl tN; mov oC0, tN; for N = 0, 1, 2.
+    for (n, want) in [
+        (0u32, [0, 0, 255, 255]),
+        (1, [0, 255, 0, 255]),
+        (2, [0, 0, 0, 0]),
+    ] {
+        let mut ps = vec![0xFFFF_0200];
+        ps.extend(ins(31, &[0x8000_0000, 0xB00F_0000 | n]));
+        ps.extend(ins(1, &[0x800F_0800, 0xB0E4_0000 | n]));
+        ps.push(END);
+        let t = words(&ps);
+        g.run(Cmd::CreateShader {
+            device: DEVICE,
+            shader: PS + 1 + n,
+            pixel: true,
+            tokens: Data::Bytes(&t),
+        });
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel: true,
+            shader: PS + 1 + n,
+        });
+        g.clear(3, 0x8080_8080, 1.0);
+        g.cover(0.5);
+        assert_eq!(g.pixels(), vec![want; 16], "reading TEXCOORD{n}");
+    }
+    let d = g.b.device().expect("the device");
+    assert_eq!(
+        d.module_counts(),
+        (2, 3),
+        "one vertex module for TEXCOORD0 and 1, one more for TEXCOORD2"
+    );
+}
+
+/// A pixel shader reading a varying without a fixed location (NORMAL0, which no package's
+/// shader passes, but a mod's might) keeps the pair's own locations: a vs_3_0 writing TEXCOORD0
+/// and NORMAL0 and a ps_3_0 drawing the NORMAL0 it reads, green; each stage gets a module (none
+/// refused) and the draw is not skipped.
+#[test]
+fn a_varying_without_a_fixed_location_keeps_the_pairs_own_link() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    // vs_3_0: dcl_position v0; dcl_position o0; dcl_normal o1; dcl_texcoord0 o2;
+    // mov o0, v0; mov o1, c1; mov o2, c2.
+    let mut vs = vec![0xFFFE_0300];
+    vs.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    vs.extend(ins(31, &[0x8000_0000, 0xE00F_0000]));
+    vs.extend(ins(31, &[0x8000_0003, 0xE00F_0001]));
+    vs.extend(ins(31, &[0x8000_0005, 0xE00F_0002]));
+    vs.extend(ins(1, &[0xE00F_0000, 0x90E4_0000]));
+    vs.extend(ins(1, &[0xE00F_0001, 0xA0E4_0001]));
+    vs.extend(ins(1, &[0xE00F_0002, 0xA0E4_0002]));
+    vs.push(END);
+    // ps_3_0: dcl_normal v1; mov oC0, v1.
+    let mut ps = vec![0xFFFF_0300];
+    ps.extend(ins(31, &[0x8000_0003, 0x900F_0001]));
+    ps.extend(ins(1, &[0x800F_0800, 0x90E4_0001]));
+    ps.push(END);
+    for (shader, pixel, tokens) in [(VS + 3, false, vs), (PS + 7, true, ps)] {
+        let t = words(&tokens);
+        g.run(Cmd::CreateShader {
+            device: DEVICE,
+            shader,
+            pixel,
+            tokens: Data::Bytes(&t),
+        });
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    // NORMAL0 green, TEXCOORD0 red.
+    let regs = floats(&[0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0]);
+    g.run(Cmd::SetConstants {
+        device: DEVICE,
+        kind: 0,
+        start: 1,
+        count: 2,
+        data: Data::Bytes(&regs),
+    });
+    g.clear(3, 0, 1.0);
+    g.cover(0.5);
+    assert_eq!(g.pixels(), vec![[0, 255, 0, 255]; 16], "NORMAL0 drawn");
+    let d = g.b.device().expect("the device");
+    assert_eq!(
+        d.module_counts(),
+        (1, 1),
+        "a module for each stage, none refused"
+    );
+    assert_eq!(d.wgpu_errors(), 0);
+}
+
 #[test]
 fn user_clip_planes_cut_where_the_distance_is_negative() {
     let Some(mut g) = Gpu::new(4, 1) else { return };

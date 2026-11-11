@@ -2,12 +2,18 @@
 //! (`sdp-convert <Data/Shaders folder> [package] [shader name to print | --gpu]`): with naga's
 //! validator, and with `--gpu` also by making a render pipeline of each on this machine's GPU
 //! (wgpu, `NV_WGPU_BACKEND`), which runs the backend's own compiler (SPIR-V for Vulkan, HLSL and
-//! DXC/FXC for Direct3D 12). Reads the player's own files; prints only names, counts and errors
-//! (and, when asked, one shader's listing and WGSL).
+//! DXC/FXC for Direct3D 12). Each shader is linked as the device links it: its varyings at their
+//! fixed locations where every one has one, with the clip distances where the adapter has them;
+//! where it has not, once without a plane and once with the discard per sample. Reads the
+//! player's own files; prints only names, counts and errors (and, when asked, one shader's
+//! listing and WGSL).
 
 use d3d9_wgpu::sm::{self, package::Package, wgsl, Stage};
 
-fn default_link(p: &sm::Program) -> wgsl::Link {
+/// The link the device gives a draw of `p` cut as `clip`: each vertex input four floats, the
+/// varyings the shader itself has, each at the centroid and at its fixed location where every
+/// one has one ([`wgsl::fixed_slot`]).
+fn default_link(p: &sm::Program, clip: wgsl::Clip) -> wgsl::Link {
     let sig = wgsl::signature(p);
     let varyings: Vec<_> = match p.stage {
         Stage::Vertex => sig
@@ -18,11 +24,14 @@ fn default_link(p: &sm::Program) -> wgsl::Link {
             .collect(),
         Stage::Pixel => sig.inputs.iter().map(|(_, s)| *s).collect(),
     };
+    let fixed = varyings.iter().all(|s| wgsl::fixed_slot(*s).is_some());
     wgsl::Link {
         inputs: vec![wgsl::Input::Float(4); 16],
         // As the device links them: each at the centroid.
         centroid: wgsl::centroid_everywhere(varyings.len()),
         varyings,
+        clip,
+        fixed,
         ..wgsl::Link::default()
     }
 }
@@ -43,10 +52,14 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
     }
 }
 
-/// A render pipeline of the converted shader with a stand-in for the other stage; the error, if
-/// wgpu or the backend's compiler refuses it.
-fn on_gpu(device: &wgpu::Device, p: &sm::Program, source: &str) -> Option<String> {
-    let link = default_link(p);
+/// A render pipeline of the shader converted as `link` with a stand-in for the other stage,
+/// linked the same way; the error, if wgpu or the backend's compiler refuses it.
+fn on_gpu(
+    device: &wgpu::Device,
+    p: &sm::Program,
+    link: &wgsl::Link,
+    source: &str,
+) -> Option<String> {
     let sig = wgsl::signature(p);
     let partner = match p.stage {
         Stage::Vertex => {
@@ -54,13 +67,34 @@ fn on_gpu(device: &wgpu::Device, p: &sm::Program, source: &str) -> Option<String
         }
         Stage::Pixel => {
             let mut s = String::from("struct O {\n    @builtin(position) p: vec4<f32>,\n");
-            for l in 0..link.varyings.len() {
+            for (l, v) in link.varyings.iter().enumerate() {
                 let interp = if link.centroid.get(l).copied().unwrap_or(false) {
                     " @interpolate(perspective, centroid)"
                 } else {
                     ""
                 };
-                s.push_str(&format!("    @location({l}){interp} l{l}: vec4<f32>,\n"));
+                let at = match wgsl::fixed_slot(*v) {
+                    Some(slot) if link.fixed => slot,
+                    _ => l as u32,
+                };
+                s.push_str(&format!("    @location({at}){interp} l{l}: vec4<f32>,\n"));
+            }
+            // The discard's two clip varyings, where the pixel shader reads them.
+            if let wgsl::Clip::Discard { per_sample } = link.clip {
+                let (k0, k1) = if link.fixed {
+                    (wgsl::CLIP_SLOTS[0], wgsl::CLIP_SLOTS[1])
+                } else {
+                    let n = link.varyings.len() as u32;
+                    (n, n + 1)
+                };
+                let interp = if per_sample {
+                    " @interpolate(perspective, sample)"
+                } else {
+                    ""
+                };
+                s.push_str(&format!(
+                    "    @location({k0}){interp} k0: vec4<f32>,\n    @location({k1}){interp} k1: vec4<f32>,\n"
+                ));
             }
             s.push_str("}\n@vertex fn main() -> O { var o: O; return o; }\n");
             s
@@ -185,7 +219,7 @@ fn main() {
             let s = package.get(name).expect("the shader");
             let p = sm::parse(&sm::tokens(&s.bytecode).unwrap()).unwrap();
             println!("{}", sm::disasm::listing(&p));
-            match wgsl::convert(&p, &default_link(&p)) {
+            match wgsl::convert(&p, &default_link(&p, wgsl::Clip::Off)) {
                 Ok(w) => println!("{w}"),
                 Err(e) => println!("error: {e}"),
             }
@@ -204,26 +238,36 @@ fn main() {
             );
         }
         if let Some(device) = &device {
-            let mut refused = 0;
-            for s in &package.shaders {
-                let Ok(p) = sm::tokens(&s.bytecode).and_then(|t| sm::parse(&t)) else {
-                    continue;
-                };
-                let Ok(source) = wgsl::convert(&p, &default_link(&p)) else {
-                    continue;
-                };
-                if let Some(e) = on_gpu(device, &p, &source) {
-                    refused += 1;
-                    if refused <= 10 {
-                        println!(
-                            "  {}: {}",
-                            s.name,
-                            e.lines().take(8).collect::<Vec<_>>().join(" | ")
-                        );
+            // As the device cuts a draw: the clip distances where the adapter has them; else
+            // no plane, and a plane with the discard per sample.
+            let clips = if device.features().contains(wgpu::Features::CLIP_DISTANCES) {
+                vec![wgsl::Clip::Distances]
+            } else {
+                vec![wgsl::Clip::Off, wgsl::Clip::Discard { per_sample: true }]
+            };
+            for clip in clips {
+                let mut refused = 0;
+                for s in &package.shaders {
+                    let Ok(p) = sm::tokens(&s.bytecode).and_then(|t| sm::parse(&t)) else {
+                        continue;
+                    };
+                    let link = default_link(&p, clip);
+                    let Ok(source) = wgsl::convert(&p, &link) else {
+                        continue;
+                    };
+                    if let Some(e) = on_gpu(device, &p, &link, &source) {
+                        refused += 1;
+                        if refused <= 10 {
+                            println!(
+                                "  {}: {}",
+                                s.name,
+                                e.lines().take(8).collect::<Vec<_>>().join(" | ")
+                            );
+                        }
                     }
                 }
+                println!("{file}\t{refused} refused by the GPU's compiler ({clip:?})");
             }
-            println!("{file}\t{refused} refused by the GPU's compiler");
         }
     }
 }

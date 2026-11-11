@@ -74,6 +74,10 @@ pub(crate) struct Shader {
     fregs: u32,
     /// Its inputs' varyings (a pixel shader's link to the vertex shader).
     varyings: Vec<wgsl::Semantic>,
+    /// A pixel shader whose varyings all have a fixed location ([`wgsl::fixed_slot`]): its
+    /// module serves every vertex shader ([`Device::module_tasks`]). Every pixel shader of the
+    /// game's packages.
+    fixed: bool,
     /// Its bytecode and the bytecode's hash, the same in every run ([`prepare::bytecode_hash`]).
     tokens: Vec<u32>,
     stable: u64,
@@ -687,8 +691,7 @@ pub struct Device {
     listed_new: bool,
     made: Made,
     vs_modules: Map<VKey, Option<wgpu::ShaderModule>>,
-    #[allow(clippy::type_complexity)]
-    ps_modules: Map<(u64, Vec<wgsl::Semantic>, bool, wgsl::Clip), Option<wgpu::ShaderModule>>,
+    ps_modules: Map<PKey, Option<wgpu::ShaderModule>>,
     samplers: Map<SamplerKey, wgpu::Sampler>,
     groups: Map<GroupKey, wgpu::BindGroup>,
     blit: Map<(wgpu::TextureFormat, bool), wgpu::RenderPipeline>,
@@ -1467,13 +1470,15 @@ impl Device {
                 let sig = wgsl::signature(&program);
                 let id = self.id();
                 let fregs = wgsl::float_constants_read(&program);
-                let varyings = sig.inputs.iter().map(|(_, s)| *s).collect();
+                let varyings: Vec<wgsl::Semantic> = sig.inputs.iter().map(|(_, s)| *s).collect();
+                let fixed = varyings.iter().all(|s| wgsl::fixed_slot(*s).is_some());
                 let s = Arc::new(Shader {
                     program,
                     sig,
                     id,
                     fregs,
                     varyings,
+                    fixed,
                     tokens: tokens.to_vec(),
                     stable,
                 });
@@ -3190,7 +3195,6 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         &vs,
                         &ps,
                         &link.inputs,
-                        &ps.varyings,
                         attributes,
                         topology,
                         &sampler_keys,
@@ -3651,8 +3655,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let mut tasks = Vec::new();
         let mut keys = Vec::new();
         for r in &ready {
-            let (vk, pk, t) =
-                self.module_tasks(&r.key, &r.vs, &r.ps, &r.link.inputs, &r.ps.varyings);
+            let (vk, pk, t) = self.module_tasks(&r.key, &r.vs, &r.ps, &r.link.inputs);
             tasks.extend(t);
             keys.push((vk, pk));
         }
@@ -3744,28 +3747,38 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
 
     /// The cache keys of the two modules a pipeline of `key` takes, and the work to make each
     /// one not made yet (its WGSL converted here, the module made by [`Device::make_modules`]).
+    /// With fixed varying locations (a pixel shader whose varyings all have one,
+    /// [`wgsl::fixed_slot`]), the pixel module is the shader's own whatever its partner, and the
+    /// vertex module the shader's own for every pixel shader that reads only what it writes
+    /// ([`pair_varyings`]); else both are made for the pair, as the pixel shader's varyings.
     fn module_tasks(
         &self,
         key: &PipeKey,
         vs: &Shader,
         ps: &Shader,
         inputs: &[wgsl::Input],
-        varyings: &[wgsl::Semantic],
     ) -> (VKey, PKey, Vec<ModuleTask>) {
-        // Every varying at the centroid, whatever the pixel shader declares: no varying is
-        // extrapolated outside a thin triangle on a multisampled target (the white orbs; the
-        // converter's module documentation).
-        let centroid = wgsl::centroid_everywhere(varyings.len());
-        let vkey = (vs.id, inputs.to_vec(), varyings.to_vec(), key.clip);
-        let pkey = (ps.id, varyings.to_vec(), key.count, key.clip);
+        let fixed = ps.fixed;
+        let ps_varyings = ps.varyings.clone();
+        let vs_varyings = if fixed {
+            pair_varyings(vs, ps)
+        } else {
+            ps_varyings.clone()
+        };
+        let vkey = (vs.id, inputs.to_vec(), vs_varyings.clone(), key.clip, fixed);
+        let pkey = (ps.id, ps_varyings.clone(), key.count, key.clip, fixed);
         let mut tasks = Vec::new();
         if !self.vs_modules.contains_key(&vkey) {
+            // Every varying at the centroid, whatever the pixel shader declares: no varying is
+            // extrapolated outside a thin triangle on a multisampled target (the white orbs; the
+            // converter's module documentation).
             let link = wgsl::Link {
                 inputs: inputs.to_vec(),
-                varyings: varyings.to_vec(),
-                centroid: centroid.clone(),
+                centroid: wgsl::centroid_everywhere(vs_varyings.len()),
+                varyings: vs_varyings,
                 clip: key.clip,
                 count: false,
+                fixed,
             };
             let t = std::time::Instant::now();
             let source = wgsl::convert(&vs.program, &link);
@@ -3778,10 +3791,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         if !self.ps_modules.contains_key(&pkey) {
             let link = wgsl::Link {
                 inputs: Vec::new(),
-                varyings: varyings.to_vec(),
-                centroid,
+                centroid: wgsl::centroid_everywhere(ps_varyings.len()),
+                varyings: ps_varyings,
                 clip: key.clip,
                 count: key.count,
+                fixed,
             };
             let t = std::time::Instant::now();
             let source = wgsl::convert(&ps.program, &link);
@@ -3963,14 +3977,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         vs: &Shader,
         ps: &Shader,
         inputs: &[wgsl::Input],
-        varyings: &[wgsl::Semantic],
         attributes: &[Vec<wgpu::VertexAttribute>; 8],
         topology: wgpu::PrimitiveTopology,
         samplers: &[(u32, u8, bool)],
     ) -> Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout)> {
         self.made_on_draws += 1;
         let started = std::time::Instant::now();
-        let (vkey, pkey, tasks) = self.module_tasks(key, vs, ps, inputs, varyings);
+        let (vkey, pkey, tasks) = self.module_tasks(key, vs, ps, inputs);
         self.make_modules(tasks, 1, true, &mut |_| {});
         let job = self.pipeline_job(key, ps, &vkey, &pkey, attributes, topology, samplers)?;
         let t = std::time::Instant::now();
@@ -5292,6 +5305,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.made_on_draws
     }
 
+    /// How many vertex and pixel shader modules the device has made, not counting any wgpu or
+    /// the converter refused (tests).
+    pub fn module_counts(&self) -> (usize, usize) {
+        let made = |m: &Option<wgpu::ShaderModule>| m.is_some();
+        (
+            self.vs_modules.values().filter(|m| made(m)).count(),
+            self.ps_modules.values().filter(|m| made(m)).count(),
+        )
+    }
+
     /// The pixels of a back buffer or render target as wgpu holds them, rows packed (tests).
     pub fn read_surface_pixels(&mut self, surface: Handle) -> Option<(u32, u32, Vec<u8>)> {
         let s = self.surface_of(surface)?;
@@ -5743,11 +5766,35 @@ pub(crate) fn surface_for(
     Err("windows of other platforms come with the window layer's port".into())
 }
 
-/// A vertex module's cache key: the shader, the inputs its declaration gives, the varyings of the
-/// pixel shader it feeds (each at the centroid), the clip code.
-type VKey = (u64, Vec<wgsl::Input>, Vec<wgsl::Semantic>, wgsl::Clip);
-/// A pixel module's cache key: the shader, its varyings, the occlusion count, the clip code.
-type PKey = (u64, Vec<wgsl::Semantic>, bool, wgsl::Clip);
+/// A vertex module's cache key: the shader, the inputs its declaration gives, the varyings it
+/// writes (each at the centroid; [`Device::module_tasks`]), the clip code, whether at fixed
+/// locations.
+type VKey = (u64, Vec<wgsl::Input>, Vec<wgsl::Semantic>, wgsl::Clip, bool);
+/// A pixel module's cache key: the shader, its varyings, the occlusion count, the clip code,
+/// whether at fixed locations.
+type PKey = (u64, Vec<wgsl::Semantic>, bool, wgsl::Clip, bool);
+
+/// The varyings a vertex shader writes for a pixel shader with fixed varying locations
+/// ([`Shader::fixed`]), in location order: every one it writes that has a fixed location (the
+/// same for every pixel shader that reads only those), and any the pixel shader reads that it
+/// does not write, as 0 (the pair's own module then).
+fn pair_varyings(vs: &Shader, ps: &Shader) -> Vec<wgsl::Semantic> {
+    let mut v: Vec<wgsl::Semantic> = vs
+        .sig
+        .outputs
+        .iter()
+        .map(|(_, s)| *s)
+        .filter(|s| wgsl::fixed_slot(*s).is_some())
+        .collect();
+    for s in &ps.varyings {
+        if !v.contains(s) {
+            v.push(*s);
+        }
+    }
+    v.sort_by_key(|s| wgsl::fixed_slot(*s));
+    v.dedup();
+    v
+}
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum ModKey {
