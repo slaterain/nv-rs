@@ -579,7 +579,13 @@ fn float3_and_float1_elements_are_filled_as_direct3d_9_expands_them() {
         "FLOAT1 read as (0.4, 0, 0, 1)"
     );
     let d = g.b.device().expect("the device");
-    assert_eq!(d.module_counts().0, 1, "one vertex module for all three");
+    // With the harness's vertex shader's module, made ahead as this one's.
+    d.wait_for_modules();
+    assert_eq!(
+        d.module_counts().0,
+        1 + 1,
+        "one vertex module for all three"
+    );
 }
 
 /// A `D3DCOLOR` element reaches the shader with its bytes in Direct3D 9's order (memory B, G, R,
@@ -685,9 +691,11 @@ fn declarations_of_other_kinds_or_a_missing_element_get_their_own_modules() {
     draw_with(&mut g, DECL + 15, &[(0, 3, 0, 0)], &bare, 16);
     assert_eq!(g.pixels(), vec![[0, 0, 0, 255]; 16], "TEXCOORD0 missing");
     let d = g.b.device().expect("the device");
+    // With the harness's vertex shader's module; the float one was made ahead.
+    d.wait_for_modules();
     assert_eq!(
         d.module_counts().0,
-        3,
+        1 + 3,
         "a vertex module for float, for signed and for the missing input"
     );
 }
@@ -853,9 +861,12 @@ fn a_vertex_shader_has_one_module_for_the_pixel_shaders_reading_what_it_writes()
         assert_eq!(g.pixels(), vec![want; 16], "reading TEXCOORD{n}");
     }
     let d = g.b.device().expect("the device");
+    // With the modules the harness's own two shaders got when they were made (each shader's
+    // modules are made ahead: [`a_shaders_modules_are_made_when_the_game_creates_it`]).
+    d.wait_for_modules();
     assert_eq!(
         d.module_counts(),
-        (2, 3),
+        (1 + 2, 1 + 3),
         "one vertex module for TEXCOORD0 and 1, one more for TEXCOORD2"
     );
 }
@@ -910,10 +921,13 @@ fn a_varying_without_a_fixed_location_keeps_the_pairs_own_link() {
     g.cover(0.5);
     assert_eq!(g.pixels(), vec![[0, 255, 0, 255]; 16], "NORMAL0 drawn");
     let d = g.b.device().expect("the device");
+    // With the modules made ahead: the harness's two shaders', and this vertex shader's own
+    // (TEXCOORD0 at its fixed location; the pixel shader reading NORMAL0 has none).
+    d.wait_for_modules();
     assert_eq!(
         d.module_counts(),
-        (1, 1),
-        "a module for each stage, none refused"
+        (1 + 1 + 1, 1 + 1),
+        "a module for each stage of the pair, none refused"
     );
     assert_eq!(d.wgpu_errors(), 0);
 }
@@ -1198,6 +1212,94 @@ fn the_list_names_each_plane_state_a_pipeline_drew_with() {
     assert_eq!(made, want, "{adapter}: pipelines made on the draw");
     let _ = std::fs::remove_dir_all(&none_dir);
     let _ = std::fs::remove_dir_all(&both_dir);
+}
+
+/// Each shader's modules are made on the module threads when the game creates it: once they
+/// are, the first draw of the pair converts and makes no module (its pipeline only), and draws
+/// as before.
+#[test]
+fn a_shaders_modules_are_made_when_the_game_creates_it() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    let d = g.b.device().expect("the device");
+    d.wait_for_modules();
+    assert_eq!(
+        d.module_counts(),
+        (1, 1),
+        "the harness's two shaders' modules"
+    );
+    assert_eq!(d.modules_made_here(), 0);
+    g.colour([1.0, 0.5, 0.25, 1.0]);
+    g.clear(3, 0, 1.0);
+    g.cover(0.5);
+    assert_eq!(g.reds(), vec![255; 16]);
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.modules_made_here(), 0, "no module made on the draw");
+    assert_eq!(d.module_counts(), (1, 1));
+    assert_eq!(d.pipelines_made_on_draws(), 1);
+}
+
+/// A shader model 1 or 2 vertex shader always writes its two colours, as Direct3D 9's values
+/// where it does not (COLOR0 white, COLOR1 (0, 0, 0, 1)), so its own module, made when the game
+/// creates it, serves a pixel shader that reads a colour it does not write: the draws make no
+/// module and draw those values.
+#[test]
+fn a_shader_model_1_or_2_vertex_shaders_own_module_serves_its_colours_readers() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    // vs_1_1: dcl_position v0; mov oPos, v0 (shader model 1 tokens carry no length).
+    let vs1 = vec![
+        0xFFFE_0101,
+        0x0000_001F,
+        0x8000_0000,
+        0x900F_0000,
+        0x0000_0001,
+        0xC00F_0000,
+        0x90E4_0000,
+        END,
+    ];
+    // ps_2_0: dcl vN; mov oC0, vN (COLOR0, COLOR1).
+    let ps = |n: u32| {
+        let mut p = vec![0xFFFF_0200];
+        p.extend(ins(31, &[0x8000_0000, 0x900F_0000 | n]));
+        p.extend(ins(1, &[0x800F_0800, 0x90E4_0000 | n]));
+        p.push(END);
+        p
+    };
+    for (shader, pixel, tokens) in [
+        (VS + 9, false, vs1),
+        (PS + 17, true, ps(0)),
+        (PS + 18, true, ps(1)),
+    ] {
+        let t = words(&tokens);
+        g.run(Cmd::CreateShader {
+            device: DEVICE,
+            shader,
+            pixel,
+            tokens: Data::Bytes(&t),
+        });
+    }
+    g.b.device().expect("the device").wait_for_modules();
+    // The harness's vs_2_0 (its position only) and this vs_1_1, each with both pixel shaders.
+    for vs in [VS, VS + 9] {
+        for (ps, want) in [(PS + 17, [255, 255, 255, 255]), (PS + 18, [0, 0, 0, 255])] {
+            for (pixel, shader) in [(false, vs), (true, ps)] {
+                g.run(Cmd::SetShader {
+                    device: DEVICE,
+                    pixel,
+                    shader,
+                });
+            }
+            g.clear(3, 0x8080_8080, 1.0);
+            g.cover(0.5);
+            assert_eq!(g.pixels(), vec![want; 16], "{vs:#x} with {ps:#x}");
+        }
+    }
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.modules_made_here(), 0, "every module made ahead");
+    assert_eq!(
+        d.module_counts(),
+        (2, 1 + 2),
+        "a vertex module for each vertex shader, its own"
+    );
 }
 
 #[test]

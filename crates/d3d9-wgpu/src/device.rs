@@ -762,6 +762,15 @@ pub struct Device {
     /// Entries the draws offered the pipeline list: each pipeline once for each plane state it
     /// was drawn with this run.
     list_offers: u64,
+    /// Shader modules made on the device's thread for a draw or a listed pipeline (not ahead on
+    /// the module threads; tests).
+    modules_here: u64,
+    /// The module threads: each shader's modules made when the game creates it
+    /// ([`Device::queue_modules`]); started with the first.
+    modules_ahead: Option<crate::ahead::Queue<ModKey, ModuleMade>>,
+    /// The modules the module threads made since their queue last ran empty, and their time
+    /// (said in one line when it does: [`Device::collect_modules`]).
+    ahead_burst: (u32, std::time::Duration),
     /// Where the occlusion counts are posted for the game's threads ([`QueryAnswers`]), and the
     /// `END`s (query, number) whose counts are awaited.
     pub(crate) answers: Option<Arc<QueryAnswers>>,
@@ -1062,6 +1071,9 @@ impl Device {
             binds: PassBinds::default(),
             made_on_draws: 0,
             list_offers: 0,
+            modules_here: 0,
+            modules_ahead: None,
+            ahead_burst: (0, std::time::Duration::ZERO),
             pipeline_cache,
             last_present: None,
             loading: None,
@@ -1501,8 +1513,9 @@ impl Device {
                     .entry(stable)
                     .or_default()
                     .push(s.clone());
-                self.objects.insert(shader, Obj::Shader(s));
+                self.objects.insert(shader, Obj::Shader(s.clone()));
                 self.listed_new = true;
+                self.queue_modules(&s);
             }
             Err(e) => self.warn(format!("a shader the converter cannot read: {e}")),
         }
@@ -3754,6 +3767,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             return;
         }
         let threads = worker_threads();
+        // The modules the module threads are making (the game's shaders, created just before):
+        // all of them first, on those threads, so none is taken back to be made here alone.
+        self.wait_for_modules();
         let mut tasks = Vec::new();
         let mut keys = Vec::new();
         for r in &ready {
@@ -3850,6 +3866,158 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.list = Some(l);
     }
 
+    /// Queues the modules a draw of shader `s` will most likely take, for the module threads to
+    /// make before any draw needs them (FAST-LINK step 1A; the game creates its shaders before
+    /// its first frame): a pixel shader's own module where its varyings have fixed locations,
+    /// and a vertex shader's for float inputs and every pixel shader that reads only what it
+    /// writes; each with the clip code the adapter gives a draw without planes, no occlusion
+    /// count. Any other variant is made when a draw first needs it.
+    fn queue_modules(&mut self, s: &Arc<Shader>) {
+        let clip = if self.clip_distances {
+            wgsl::Clip::Distances
+        } else {
+            wgsl::Clip::Off
+        };
+        let (key, link) = match s.program.stage {
+            Stage::Pixel => {
+                if !s.fixed {
+                    return;
+                }
+                let link = wgsl::Link {
+                    inputs: Vec::new(),
+                    centroid: wgsl::centroid_everywhere(s.varyings.len()),
+                    varyings: s.varyings.clone(),
+                    clip,
+                    count: false,
+                    fixed: true,
+                };
+                let key = ModKey::P((s.id, s.varyings.clone(), false, clip, true));
+                (key, link)
+            }
+            Stage::Vertex => {
+                let mut inputs = vec![wgsl::Input::Missing; 16];
+                for (r, _) in &s.sig.inputs {
+                    if let Some(i) = inputs.get_mut(r.n as usize) {
+                        *i = wgsl::Input::Float(4);
+                    }
+                }
+                let varyings = own_varyings(s);
+                let link = wgsl::Link {
+                    inputs: inputs.clone(),
+                    centroid: wgsl::centroid_everywhere(varyings.len()),
+                    varyings: varyings.clone(),
+                    clip,
+                    count: false,
+                    fixed: true,
+                };
+                (ModKey::V((s.id, inputs, varyings, clip, true)), link)
+            }
+        };
+        let made = match &key {
+            ModKey::V(k) => self.vs_modules.contains_key(k),
+            ModKey::P(k) => self.ps_modules.contains_key(k),
+        };
+        if made {
+            return;
+        }
+        let device = self.device.clone();
+        let q = self
+            .modules_ahead
+            .get_or_insert_with(|| crate::ahead::Queue::new(worker_threads(), "nv-wgpu-modules"));
+        q.push(key, module_job(device, s.clone(), link));
+    }
+
+    /// The modules the module threads have made so far, kept ([`Device::queue_modules`]).
+    fn collect_modules(&mut self) {
+        let Some(q) = &mut self.modules_ahead else {
+            return;
+        };
+        let done = q.finished();
+        let empty = q.pending() == 0;
+        for (k, m) in done {
+            self.ahead_burst.0 += 1;
+            self.ahead_burst.1 += m.convert + m.made;
+            self.keep_module(k, m.module);
+        }
+        // One line for each burst (the game's shaders at its start; a mod's later).
+        if empty && self.ahead_burst.0 > 0 {
+            let (n, t) = std::mem::take(&mut self.ahead_burst);
+            eprintln!(
+                "NV_D3D9 wgpu: {n} shader modules made ahead on the module threads ({:.0} ms of their time; present {})",
+                t.as_secs_f64() * 1000.0,
+                self.presents
+            );
+        }
+    }
+
+    /// The module of `k` when the module threads have it: taken back and made here if no thread
+    /// has started it, else waited for (that one alone), then kept.
+    fn settle_module(&mut self, k: &ModKey) {
+        let Some(q) = &mut self.modules_ahead else {
+            return;
+        };
+        if !q.has(k) {
+            return;
+        }
+        match q.take(k) {
+            crate::ahead::Taken::Job(job) => {
+                let m = job();
+                self.modules_here += 1;
+                self.made.add_module(m.convert, m.made);
+                self.keep_module(k.clone(), m.module);
+            }
+            crate::ahead::Taken::Done(m) => {
+                self.ahead_burst.0 += 1;
+                self.ahead_burst.1 += m.convert + m.made;
+                self.keep_module(k.clone(), m.module);
+            }
+            // Its job panicked on a thread: made the usual way.
+            crate::ahead::Taken::None => {}
+        }
+    }
+
+    /// Keeps a module made (none: refused, said once).
+    fn keep_module(&mut self, k: ModKey, m: Result<wgpu::ShaderModule, String>) {
+        let what = match k {
+            ModKey::V(_) => "a vertex shader",
+            ModKey::P(_) => "a pixel shader",
+        };
+        let m = match m {
+            Ok(m) => Some(m),
+            Err(e) => {
+                self.warn(format!("{what}: the converted shader is not valid: {e}"));
+                None
+            }
+        };
+        match k {
+            ModKey::V(k) => {
+                self.vs_modules.insert(k, m);
+            }
+            ModKey::P(k) => {
+                self.ps_modules.insert(k, m);
+            }
+        }
+    }
+
+    /// Waits until the module threads have made every module queued, and keeps them (the
+    /// start's listed pipelines, [`Device::prepare_listed`]; tests).
+    pub fn wait_for_modules(&mut self) {
+        if let Some(q) = &mut self.modules_ahead {
+            let pending = q.wait_all();
+            for (k, m) in pending {
+                self.ahead_burst.0 += 1;
+                self.ahead_burst.1 += m.convert + m.made;
+                self.keep_module(k, m.module);
+            }
+        }
+    }
+
+    /// Shader modules made on the device's thread (for a draw or a listed pipeline) rather than
+    /// ahead on the module threads (tests).
+    pub fn modules_made_here(&self) -> u64 {
+        self.modules_here
+    }
+
     /// The cache keys of the two modules a pipeline of `key` takes, and the work to make each
     /// one not made yet (its WGSL converted here, the module made by [`Device::make_modules`]).
     /// With fixed varying locations (a pixel shader whose varyings all have one,
@@ -3857,7 +4025,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// vertex module the shader's own for every pixel shader that reads only what it writes
     /// ([`pair_varyings`]); else both are made for the pair, as the pixel shader's varyings.
     fn module_tasks(
-        &self,
+        &mut self,
         key: &PipeKey,
         vs: &Shader,
         ps: &Shader,
@@ -3872,6 +4040,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         };
         let vkey = (vs.id, inputs.to_vec(), vs_varyings.clone(), key.clip, fixed);
         let pkey = (ps.id, ps_varyings.clone(), key.count, key.clip, fixed);
+        // Made ahead, or being made, on the module threads ([`Device::queue_modules`]).
+        self.collect_modules();
+        self.settle_module(&ModKey::V(vkey.clone()));
+        self.settle_module(&ModKey::P(pkey.clone()));
         let mut tasks = Vec::new();
         if !self.vs_modules.contains_key(&vkey) {
             // Every varying at the centroid, whatever the pixel shader declares: no varying is
@@ -3926,6 +4098,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     ) {
         let mut seen = HashSet::new();
         tasks.retain(|t| seen.insert(t.key.clone()));
+        self.modules_here += tasks.len() as u64;
         let device = self.device.clone();
         let made = on_workers(
             &tasks,
@@ -5071,6 +5244,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.end_pass();
         self.presents += 1;
         self.made.end_present(self.presents);
+        self.collect_modules();
         // The start is over once the game has shown a picture (the GPU's gate already stopped
         // the screen), or at the backstop.
         if let Some(why) = self
@@ -5916,6 +6090,23 @@ type PKey = (u64, Vec<wgsl::Semantic>, bool, wgsl::Clip, bool);
 /// does not write, written with the real Direct3D 9's value for it ([`wgsl::unwritten`]; the pair's
 /// own module then).
 fn pair_varyings(vs: &Shader, ps: &Shader) -> Vec<wgsl::Semantic> {
+    let mut v = own_varyings(vs);
+    for s in &ps.varyings {
+        if !v.contains(s) {
+            v.push(*s);
+        }
+    }
+    v.sort_by_key(|s| wgsl::fixed_slot(*s));
+    v.dedup();
+    v
+}
+
+/// The varyings a vertex shader writes that have a fixed location, in location order: its
+/// varyings for every pixel shader that reads only what it writes ([`pair_varyings`]). One of
+/// shader model 1 or 2 always writes COLOR0 and COLOR1, as Direct3D 9's value where it does not
+/// ([`wgsl::unwritten`]): its two colours are there whatever it writes, so a pixel shader that
+/// reads a colour it does not write takes its own module, not one for the pair.
+fn own_varyings(vs: &Shader) -> Vec<wgsl::Semantic> {
     let mut v: Vec<wgsl::Semantic> = vs
         .sig
         .outputs
@@ -5923,10 +6114,11 @@ fn pair_varyings(vs: &Shader, ps: &Shader) -> Vec<wgsl::Semantic> {
         .map(|(_, s)| *s)
         .filter(|s| wgsl::fixed_slot(*s).is_some())
         .collect();
-    for s in &ps.varyings {
-        if !v.contains(s) {
-            v.push(*s);
-        }
+    if vs.program.major < 3 {
+        v.extend((0..2).map(|index| wgsl::Semantic {
+            usage: sm::usage::COLOR,
+            index,
+        }));
     }
     v.sort_by_key(|s| wgsl::fixed_slot(*s));
     v.dedup();
@@ -5960,6 +6152,37 @@ fn clip_code(c: wgsl::Clip, on: bool) -> u8 {
         wgsl::Clip::Discard { per_sample: false } => 2,
         wgsl::Clip::Discard { per_sample: true } => 3,
     }
+}
+
+/// A module made on a module thread ([`Device::queue_modules`]): the module or why there is
+/// none, and what converting and making it took.
+struct ModuleMade {
+    module: Result<wgpu::ShaderModule, String>,
+    convert: std::time::Duration,
+    made: std::time::Duration,
+}
+
+/// The job of making `program`'s module linked as `link`, on a module thread.
+fn module_job(
+    device: wgpu::Device,
+    shader: Arc<Shader>,
+    link: wgsl::Link,
+) -> crate::ahead::Job<ModuleMade> {
+    Box::new(move || {
+        let t = std::time::Instant::now();
+        let source = wgsl::convert(&shader.program, &link);
+        let convert = t.elapsed();
+        let t = std::time::Instant::now();
+        let module = match source {
+            Ok(s) => create_module(&device, s),
+            Err(e) => Err(e.to_string()),
+        };
+        ModuleMade {
+            module,
+            convert,
+            made: t.elapsed(),
+        }
+    })
 }
 
 /// One module to make: its WGSL (or why there is none) and what converting it took.
@@ -6392,7 +6615,7 @@ fn on_workers<T: Sync, R: Send>(
         let mut workers = Vec::new();
         for _ in 0..threads.min(items.len()) {
             workers.push(s.spawn(|| {
-                lower_priority();
+                crate::ahead::lower_priority();
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(item) = items.get(i) else { break };
@@ -6425,25 +6648,6 @@ fn on_workers<T: Sync, R: Send>(
                 .expect("every item done")
         })
         .collect()
-}
-
-/// The worker threads making pipelines ahead run below normal priority, so the game's own
-/// threads and the menus keep theirs.
-fn lower_priority() {
-    #[cfg(windows)]
-    {
-        #[link(name = "kernel32")]
-        extern "system" {
-            fn GetCurrentThread() -> isize;
-            fn SetThreadPriority(thread: isize, priority: i32) -> i32;
-        }
-        /// `THREAD_PRIORITY_BELOW_NORMAL`.
-        const BELOW_NORMAL: i32 = -1;
-        // SAFETY: the current thread's pseudo handle and a documented priority value.
-        unsafe {
-            SetThreadPriority(GetCurrentThread(), BELOW_NORMAL);
-        }
-    }
 }
 
 /// How many worker threads make pipelines ahead: fewer than the machine's cores (two left for

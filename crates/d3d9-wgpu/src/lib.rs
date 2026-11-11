@@ -14,6 +14,7 @@
 //! - `window`: the game's window: the swap chain at the window's size, minimised, sized or lost.
 //! - `shot`: `NV_SHOT` captures numbered like the forwarding layer's.
 
+mod ahead;
 mod answers;
 mod cache;
 pub mod device;
