@@ -369,6 +369,75 @@ fn every_sample_of_the_viewports_edge_pixels_can_be_covered() {
     }
 }
 
+/// Fixed varying locations: one vertex shader writing TEXCOORD0 (red) and TEXCOORD1 (green)
+/// serves a pixel shader reading TEXCOORD0 and one reading TEXCOORD1 with one module, each pair
+/// drawing its own colour; a pixel shader reading TEXCOORD2, which the vertex shader does not
+/// write, reads 0 from a vertex module of its own pair. Before, each pixel shader took a vertex
+/// module of its own.
+#[test]
+fn a_vertex_shader_has_one_module_for_the_pixel_shaders_reading_what_it_writes() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    // vs_2_0: dcl_position v0; mov oPos, v0; mov oT0, c1; mov oT1, c2.
+    let mut vs = vec![0xFFFE_0200];
+    vs.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    vs.extend(ins(1, &[0xC00F_0000, 0x90E4_0000]));
+    vs.extend(ins(1, &[0xE00F_0000, 0xA0E4_0001]));
+    vs.extend(ins(1, &[0xE00F_0001, 0xA0E4_0002]));
+    vs.push(END);
+    let t = words(&vs);
+    g.run(Cmd::CreateShader {
+        device: DEVICE,
+        shader: VS + 1,
+        pixel: false,
+        tokens: Data::Bytes(&t),
+    });
+    g.run(Cmd::SetShader {
+        device: DEVICE,
+        pixel: false,
+        shader: VS + 1,
+    });
+    let regs = floats(&[1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
+    g.run(Cmd::SetConstants {
+        device: DEVICE,
+        kind: 0,
+        start: 1,
+        count: 2,
+        data: Data::Bytes(&regs),
+    });
+    // ps_2_0: dcl tN; mov oC0, tN; for N = 0, 1, 2.
+    for (n, want) in [
+        (0u32, [0, 0, 255, 255]),
+        (1, [0, 255, 0, 255]),
+        (2, [0, 0, 0, 0]),
+    ] {
+        let mut ps = vec![0xFFFF_0200];
+        ps.extend(ins(31, &[0x8000_0000, 0xB00F_0000 | n]));
+        ps.extend(ins(1, &[0x800F_0800, 0xB0E4_0000 | n]));
+        ps.push(END);
+        let t = words(&ps);
+        g.run(Cmd::CreateShader {
+            device: DEVICE,
+            shader: PS + 1 + n,
+            pixel: true,
+            tokens: Data::Bytes(&t),
+        });
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel: true,
+            shader: PS + 1 + n,
+        });
+        g.clear(3, 0x8080_8080, 1.0);
+        g.cover(0.5);
+        assert_eq!(g.pixels(), vec![want; 16], "reading TEXCOORD{n}");
+    }
+    let d = g.b.device().expect("the device");
+    assert_eq!(
+        d.module_counts(),
+        (2, 3),
+        "one vertex module for TEXCOORD0 and 1, one more for TEXCOORD2"
+    );
+}
+
 #[test]
 fn user_clip_planes_cut_where_the_distance_is_negative() {
     let Some(mut g) = Gpu::new(4, 1) else { return };

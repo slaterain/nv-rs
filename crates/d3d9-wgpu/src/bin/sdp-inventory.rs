@@ -2,7 +2,7 @@
 //! use, with their counts (`sdp-inventory <Data/Shaders folder> [package number]`). Reads the
 //! player's own files; prints only names and counts.
 
-use d3d9_wgpu::sm::{self, opcode_name, package::Package};
+use d3d9_wgpu::sm::{self, opcode_name, package::Package, wgsl};
 use std::collections::BTreeMap;
 
 fn main() {
@@ -41,6 +41,29 @@ fn main() {
                 }
             };
             *profiles.entry(p.profile()).or_default() += 1;
+            // The varyings: what a vertex shader writes (its position aside), what a pixel
+            // shader reads, as (usage, index), and how many a shader has.
+            let sig = wgsl::signature(&p);
+            let (stage, varyings): (&str, Vec<wgsl::Semantic>) = match p.stage {
+                sm::Stage::Vertex => (
+                    "vs",
+                    sig.outputs
+                        .iter()
+                        .map(|(_, s)| *s)
+                        .filter(|s| !(s.usage == sm::usage::POSITION && s.index == 0))
+                        .collect(),
+                ),
+                sm::Stage::Pixel => ("ps", sig.inputs.iter().map(|(_, s)| *s).collect()),
+            };
+            for s in &varyings {
+                *ops.entry(format!(
+                    "{stage}:(varying usage {} index {})",
+                    s.usage, s.index
+                ))
+                .or_default() += 1;
+            }
+            *ops.entry(format!("{stage}:(varyings {})", varyings.len()))
+                .or_default() += 1;
             for ins in &p.ins {
                 let mut name = opcode_name(ins.op).unwrap_or("?").to_string();
                 if ins.op == sm::op::TEX {
