@@ -2435,13 +2435,23 @@ fn make_matrix() {
     .assert_same();
 }
 
-/// `set_world_transform`'s words: rotation entries 0, 4 and 8 and the scale from the case (as they came,
-/// or folded by `fold`), and the renderer's directions' second components.
+/// `set_world_transform`'s words: every rotation entry and the scale from the case (as they came, or
+/// folded by `fold`), and the renderer's directions' second components (the world's first and third
+/// are 1, 2 and 1/3, -1): all eighteen products of the model directions' sums nonzero. Entries 0, 4
+/// and 8 are the case's floats 0, 3 and 4; the others its floats 5, 6 and 7, each used twice with its
+/// low mantissa bits changed (entries 1 and 5 from float 5, 2 and 6 from 6, 3 and 7 from 7).
 fn world_transform_words(e: &mut Engine, c: &Case, fold: fn(u32) -> u32) -> Vec<u32> {
     let w = world(e);
     set(e, w.transform, fold(bits(c, 0)));
     set(e, w.transform + 0x10, fold(bits(c, 3)));
     set(e, w.transform + 0x20, fold(bits(c, 4)));
+    for (entry, input) in [(1u32, 5), (2, 6), (3, 7), (5, 5), (6, 6), (7, 7)] {
+        set(
+            e,
+            w.transform + 4 * entry,
+            fold(bits(c, input) ^ (entry << 3)),
+        );
+    }
     set(e, w.transform + 0x30, fold(bits(c, 1)));
     set(e, w.renderer + 0x638, fold(bits(c, 3)));
     set(e, w.renderer + 0x644, fold(bits(c, 4)));
@@ -2463,13 +2473,14 @@ fn unit(bits: u32) -> u32 {
 }
 
 /// The world transform runs on the main thread and another game thread: `f64` sums rounded at the
-/// stores. Under the other threads' word bit for bit (NaN payloads aside), every input. Under the main
-/// thread's the exe rounds each of the three products and two sums of a direction to 24 bits where the
-/// native sums round once at the store: floats within 3 ulps, or else within 2^-14 in value. The two
-/// part by at most 11 * 2^-24 of the largest product (the exe's five roundings and the native one),
-/// which is many ulps of a result where the sums cancel to near zero; with the rotation, the scale and
-/// the directions as play has them ([`unit`]: below 4, so every product is below 2^6) it is below
-/// 2^-14.
+/// stores. Every rotation entry comes from the case, so each of the six sums has its three products
+/// nonzero ([`world_transform_words`]). Under the other threads' word bit for bit (NaN payloads
+/// aside), every input. Under the main thread's the exe rounds each of the three products and two
+/// sums of a direction to 24 bits where the native sums round once at the store: floats within 3
+/// ulps, or else within 2^-14 in value. The two part by at most 11 * 2^-24 of the largest product (the
+/// exe's five roundings and the native one), which is many ulps of a result where the sums cancel to
+/// near zero; with the rotation, the scale and the directions as play has them ([`unit`]: below 4, so
+/// every product is below 2^6) it is below 2^-14.
 #[test]
 fn world_transform() {
     Diff::new(entry!(
@@ -2484,6 +2495,9 @@ fn world_transform() {
         Input::Of(BYTES),
         Input::F32Swept(HALF),
         Input::F32Swept(ONE),
+        Input::F32Swept(0x3eaa_aaab),
+        Input::F32Swept(0xbf00_0000),
+        Input::F32Swept(0x3e80_0000),
     ])
     .translation_calls_plainly(&[])
     .float_sweep(FLOAT_SWEEP)
@@ -2503,6 +2517,9 @@ fn world_transform() {
         Input::Of(BYTES),
         Input::F32Swept(HALF),
         Input::F32Swept(ONE),
+        Input::F32Swept(0x3eaa_aaab),
+        Input::F32Swept(0xbf00_0000),
+        Input::F32Swept(0x3e80_0000),
     ])
     .translation_calls_plainly(&[])
     .float_sweep(FLOAT_SWEEP)
@@ -2791,6 +2808,60 @@ fn compare_by_depth_stores_before_the_radius() {
                 set(e, bound, ONE);
                 set(e, bound + 4, y);
                 set(e, bound + 0xc, ONE);
+                let geometry = e.mem.alloc(0xc4);
+                set(e, geometry + 0x20, bound);
+                let pass = e.mem.alloc(8);
+                set(e, pass, geometry);
+                *item = e.mem.alloc(4);
+                set(e, *item, pass);
+            }
+            if c.word(0) != 0 {
+                items.swap(0, 1);
+            }
+            vec![items[0], items[1]]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The alpha sort's depth as the main thread sums it (the native maths is plain `f32` there):
+/// `(x dx + y dy) + z dz`, each sum rounded to 24 bits before the next. With the camera along
+/// (1, 1, 1), a bound at (1, y, z) of radius 1 against one on the x axis at the exe's depth of it,
+/// radius 1 too. With y = z = 2^-24 each sum is a tie that goes to the even 1.0: depth 1.0, where
+/// `x + (y + z)` or the sum rounded once gives 1 + 2^-23. With y = 2^-24 and z = 3 * 2^-25 the first
+/// sum goes to 1.0 and the second to 1 + 2^-23, where `(x + z) + y` gives 1 + 2^-22 (its second sum a
+/// tie to even). The two compare equal in both orders, with the radius taken off and not; each other
+/// order, and the sum rounded once, fails in one of the two. On the main thread's word only, where
+/// the code runs.
+#[test]
+fn compare_by_depth_at_24_bits_rounds_each_sum() {
+    Diff::new(entry!(0x00b9_8b20, batch::compare_by_depth(u32, u32) -> i32))
+        .common()
+        .control_words(&[MAIN_THREAD])
+        .inputs(&[
+            Input::Of(TWO_WAYS),
+            Input::Of(TWO_WAYS),
+            Input::Of(TWO_WAYS),
+        ])
+        .setup(|e, c| {
+            let w = world(e);
+            set(e, w.camera + 0x68, ONE);
+            set(e, w.camera + 0x74, ONE);
+            set(e, w.camera + 0x80, ONE);
+            e.mem.set_u8(0x011f_fe35, c.word(1) as u8);
+            set(e, 0x011f_fe38, w.camera);
+            // 2^-24; 3 * 2^-25; and the exe's depth of (1, y, z): 1.0, or 1 + 2^-23.
+            let (z, depth) = if c.word(2) == 0 {
+                (0x3380_0000, ONE)
+            } else {
+                (0x33c0_0000, ONE + 1)
+            };
+            let mut items = [0u32; 2];
+            for (item, centre) in items.iter_mut().zip([[ONE, 0x3380_0000, z], [depth, 0, 0]]) {
+                let bound = e.mem.alloc(0x10);
+                for (i, v) in (0u32..).zip(centre.iter().chain(&[ONE])) {
+                    set(e, bound + 4 * i, *v);
+                }
                 let geometry = e.mem.alloc(0xc4);
                 set(e, geometry + 0x20, bound);
                 let pass = e.mem.alloc(8);
