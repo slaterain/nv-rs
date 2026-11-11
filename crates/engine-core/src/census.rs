@@ -413,7 +413,7 @@ mod tests {
             name: "VirtualAlloc".into(),
         };
         assert_eq!(e.register_imports(&[import]), 1);
-        // One in the gap below the heap (`NV_RESERVE_GAP=on`), one a heap block (the gap off).
+        // One in the gap below the heap (the default), one a heap block (`NV_RESERVE_GAP=off`).
         let mut lines = String::new();
         for (gap, by) in [
             (ReserveGap::On, "placed in the gap below the heap"),

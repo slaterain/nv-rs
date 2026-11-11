@@ -1389,8 +1389,8 @@ fn page_up(v: u64) -> u64 {
 /// of the heap's address space on the route, in the gap they take none. A reservation keeps the range
 /// it was given for its life (commits and decommits happen in place), as on Windows, which placed
 /// them wherever it chose: no guest code can depend on where. When the gap has no room (about 29
-/// such buffers at once) a reservation is a heap block, as before. Off by default (`NV_RESERVE_GAP=on`
-/// turns it on: [`ReserveGap`]).
+/// such buffers at once) a reservation is a heap block, as before. On by default (`NV_RESERVE_GAP=off`
+/// turns it off: [`ReserveGap`]).
 pub const RESERVE_GAP: std::ops::Range<u32> = 0x0141_0000..0x1000_0000;
 const _: () = assert!(
     RESERVE_GAP.start >= IMAGE_END
@@ -1401,10 +1401,9 @@ const _: () = assert!(
 /// Where address-0 reservations go (`NV_RESERVE_GAP`, read once; a test sets the kernel's own).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReserveGap {
-    /// Every one is a heap block, as before (the default until the gap's in-game evidence is in:
-    /// the rule for changes merged off).
+    /// `NV_RESERVE_GAP=off`: every one is a heap block, as before the gap.
     Off,
-    /// `NV_RESERVE_GAP=on`: in [`RESERVE_GAP`] first, a heap block when it has no room.
+    /// The default: in [`RESERVE_GAP`] first, a heap block when it has no room.
     On,
     /// `NV_RESERVE_GAP=held`, for the gate only: placed as `On`, but each still takes, and keeps
     /// unused, the heap block it would take `Off`, so every other heap block lies where it lies
@@ -1424,12 +1423,12 @@ pub fn reserve_gap_setting() -> ReserveGap {
     *FROM_ENV.get_or_init(reserve_gap_from_env)
 }
 
-/// `NV_RESERVE_GAP` (`on`, `held`; anything else is off), said once when not off.
+/// `NV_RESERVE_GAP` (`off`, `held`; anything else is on), said once when not on.
 fn reserve_gap_from_env() -> ReserveGap {
     match std::env::var("NV_RESERVE_GAP").as_deref().map(str::trim) {
-        Ok("on") => {
-            println!("NV_RESERVE_GAP=on: address-0 reservations go in the gap below the heap");
-            ReserveGap::On
+        Ok("off") => {
+            println!("NV_RESERVE_GAP=off: address-0 reservations are heap blocks");
+            ReserveGap::Off
         }
         Ok("held") => {
             println!(
@@ -1439,7 +1438,7 @@ fn reserve_gap_from_env() -> ReserveGap {
             );
             ReserveGap::Held
         }
-        _ => ReserveGap::Off,
+        _ => ReserveGap::On,
     }
 }
 
@@ -1604,7 +1603,7 @@ fn set_committed(
 /// `VirtualAlloc(address, size, type, protect)` with the types the game
 /// passes (`ScrapHeapManager`, `MemoryPool`, the CRT small-block heap):
 /// `MEM_RESERVE` at address 0 takes a 64 KiB-aligned range in the gap
-/// below the heap first with `NV_RESERVE_GAP=on` ([`RESERVE_GAP`]), else
+/// below the heap first ([`RESERVE_GAP`]; not with `NV_RESERVE_GAP=off`), else
 /// from the [`crate::Mem`] heap (as [`memory_manager_allocate`] does); at a chosen
 /// address it succeeds only where nothing is (not the image, the moved
 /// families' area 0x10000000..0x20000000 (`typed::moved::MOVED_AREA`), the
