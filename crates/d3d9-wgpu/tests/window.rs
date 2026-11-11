@@ -446,8 +446,12 @@ fn a_device_that_cannot_show_frames_is_not_made_and_the_next_api_is_tried() {
         assert!(b.device().is_none());
     }
     // Refused on Vulkan only: Direct3D 12, where the run tries it after Vulkan. Without a Vulkan
-    // card (CI's runners, or NV_WGPU_BACKEND naming another API) Vulkan is never tried: said so.
-    if d3d9_wgpu::hardware_adapter().is_some_and(|n| n.ends_with("(Vulkan)")) {
+    // card (CI's runners), or with NV_WGPU_BACKEND naming one API, Vulkan then Direct3D 12 is
+    // never tried: said so.
+    let card = d3d9_wgpu::hardware_adapter();
+    if std::env::var_os("NV_WGPU_BACKEND").is_none()
+        && card.as_deref().is_some_and(|n| n.ends_with("(Vulkan)"))
+    {
         fail(wgpu::Backends::VULKAN, false, false);
         let (reply, mut b) = create(hwnd);
         fail(wgpu::Backends::empty(), false, false);
@@ -460,12 +464,18 @@ fn a_device_that_cannot_show_frames_is_not_made_and_the_next_api_is_tried() {
     } else {
         eprintln!("no Vulkan card: the Vulkan-then-Direct3D 12 part is skipped");
     }
-    // As usual on the same window afterwards: the window's size, the colour over all of it.
-    let (reply, b) = create(hwnd);
+    // As usual on the same window afterwards, on the run's first API (a failed attempt that
+    // kept the window would push it onto the next): the window's size, the colour over all of it.
+    let (reply, mut b) = create(hwnd);
     assert!(
         matches!(reply, Reply::Device { created: true, .. }),
         "{reply:?}"
     );
+    let api = |n: &str| n.rsplit_once(" (").map(|(_, a)| a.to_string());
+    let name = b.device().expect("the device").adapter_name().to_string();
+    if let Some(card) = &card {
+        assert_eq!(api(&name), api(card), "{name} against {card}");
+    }
     let dir = shots_dir();
     let _ = std::fs::remove_dir_all(dir);
     std::fs::create_dir_all(dir).expect("the captures' folder");
