@@ -997,6 +997,125 @@ fn an_8_bit_target_resolves_gamma_corrected() {
     }
 }
 
+/// A thin ("sliver") triangle on a multisampled target is shaded at a place inside itself: its
+/// varyings are never extrapolated to a pixel centre it does not cover (the white dots and orbs in
+/// Doc's house, measure/render-aa/orbs2/verdict). A pixel shader without `_centroid` reads a
+/// texture coordinate that falls from 0.3 on the slivers' left edges to 0 on their right; each
+/// sliver (0.09 of a pixel wide) covers the right-hand sample of 4 in every pixel of its column,
+/// not the centre. Shaded inside a sliver, a pixel's sample is at most 0.3 (resolved with three
+/// black samples: at most 41 of 255); at the centre the coordinate would be 1.3 or more, which
+/// the target keeps as 1.0 (resolved: 137).
+#[test]
+fn a_sliver_triangle_is_shaded_inside_itself_on_a_multisampled_target() {
+    let Some(mut g) = Gpu::new(16, 4) else { return };
+    const VS2: u32 = 0x1301;
+    const PS2: u32 = 0x1311;
+    const DECL2: u32 = 0x1401;
+    const VB2: u32 = 0x1501;
+    // vs_2_0: dcl_position v0; dcl_texcoord v1; mov oPos, v0; mov oT0, v1.
+    let mut vs = vec![0xFFFE_0200];
+    vs.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    vs.extend(ins(31, &[0x8000_0005, 0x900F_0001]));
+    vs.extend(ins(1, &[0xC00F_0000, 0x90E4_0000]));
+    vs.extend(ins(1, &[0xE00F_0000, 0x90E4_0001]));
+    vs.push(END);
+    // ps_2_0: dcl t0 (not _centroid); mov oC0, t0.
+    let mut ps = vec![0xFFFF_0200];
+    ps.extend(ins(31, &[0x8000_0000, 0xB00F_0000]));
+    ps.extend(ins(1, &[0x800F_0800, 0xB0E4_0000]));
+    ps.push(END);
+    for (shader, pixel, tokens) in [(VS2, false, vs), (PS2, true, ps)] {
+        let t = words(&tokens);
+        g.run(Cmd::CreateShader {
+            device: DEVICE,
+            shader,
+            pixel,
+            tokens: Data::Bytes(&t),
+        });
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    // FLOAT4 position, FLOAT4 texture coordinate 0, D3DDECL_END.
+    let decl = [
+        0u8, 0, 0, 0, 3, 0, 0, 0, 0, 0, 16, 0, 3, 0, 5, 0, 0xFF, 0, 0, 0, 17, 0, 0, 0,
+    ];
+    g.run(Cmd::CreateDeclaration {
+        device: DEVICE,
+        declaration: DECL2,
+        elements: Data::Bytes(&decl),
+    });
+    g.run(Cmd::SetVertexDeclaration {
+        device: DEVICE,
+        declaration: DECL2,
+    });
+    // One sliver a column: from 0.30 to 0.36 of a pixel right of its centre (Direct3D 9's
+    // centres are on whole coordinates), 0.09 wide, over the whole height; the right-hand
+    // sample of the standard 4x pattern is 0.375 right of the centre.
+    let (size, high) = (16.0f32, 0.3f32);
+    let mut v = Vec::new();
+    for c in 0..16 {
+        let left = c as f32 + 0.30 + 0.01 * (c % 7) as f32;
+        let x = |s: f32| s / size * 2.0 - 1.0;
+        let (l, r) = (x(left), x(left + 0.09));
+        let at = |px: f32, py: f32, t: f32| [px, py, 0.5, 1.0, t, t, t, 1.0];
+        for p in [
+            at(l, -1.0, high),
+            at(l, 1.0, high),
+            at(r, -1.0, 0.0),
+            at(r, -1.0, 0.0),
+            at(l, 1.0, high),
+            at(r, 1.0, 0.0),
+        ] {
+            v.extend_from_slice(&p);
+        }
+    }
+    let data = floats(&v);
+    g.run(Cmd::CreateBuffer {
+        device: DEVICE,
+        buffer: VB2,
+        index: false,
+        length: data.len() as u32,
+        usage: 0,
+        format: 0,
+        pool: 1,
+    });
+    g.run(Cmd::UploadBuffer {
+        buffer: VB2,
+        offset: 0,
+        flags: 0,
+        data: Data::Bytes(&data),
+    });
+    g.run(Cmd::SetStreamSource {
+        device: DEVICE,
+        stream: 0,
+        buffer: VB2,
+        offset: 0,
+        stride: 32,
+    });
+    g.state(ZENABLE, 0);
+    g.clear(1, 0, 1.0);
+    g.run(Cmd::DrawPrimitive {
+        device: DEVICE,
+        kind: 4,
+        start: 0,
+        count: 32,
+    });
+    let reds = g.reds();
+    let lit = reds.iter().filter(|&&r| r > 0).count();
+    let brightest = reds.iter().copied().max().unwrap_or(0);
+    assert!(
+        lit >= 128,
+        "the slivers cover a sample in most pixels: {reds:?}"
+    );
+    assert!(
+        brightest <= 48,
+        "shaded inside the slivers (at most 41), not at the centres (137): {reds:?}"
+    );
+}
+
 /// The register blocks are written only when what they carry changed, and only up to the
 /// highest constant the bound shaders read: within one pass, (1) a change of only a vertex
 /// constant moves the next draw; (2) a vertex shader reading a constant beyond the ones the last

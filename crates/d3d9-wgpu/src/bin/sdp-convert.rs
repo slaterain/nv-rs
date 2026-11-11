@@ -9,22 +9,20 @@ use d3d9_wgpu::sm::{self, package::Package, wgsl, Stage};
 
 fn default_link(p: &sm::Program) -> wgsl::Link {
     let sig = wgsl::signature(p);
+    let varyings: Vec<_> = match p.stage {
+        Stage::Vertex => sig
+            .outputs
+            .iter()
+            .map(|(_, s)| *s)
+            .filter(|s| !(s.usage == 0 && s.index == 0))
+            .collect(),
+        Stage::Pixel => sig.inputs.iter().map(|(_, s)| *s).collect(),
+    };
     wgsl::Link {
         inputs: vec![wgsl::Input::Float(4); 16],
-        centroid: if p.stage == Stage::Pixel {
-            sig.centroid.clone()
-        } else {
-            Vec::new()
-        },
-        varyings: match p.stage {
-            Stage::Vertex => sig
-                .outputs
-                .iter()
-                .map(|(_, s)| *s)
-                .filter(|s| !(s.usage == 0 && s.index == 0))
-                .collect(),
-            Stage::Pixel => sig.inputs.iter().map(|(_, s)| *s).collect(),
-        },
+        // As the device links them: each at the centroid.
+        centroid: wgsl::centroid_everywhere(varyings.len()),
+        varyings,
         ..wgsl::Link::default()
     }
 }
