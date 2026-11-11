@@ -2134,7 +2134,7 @@ const S_FALSE: u32 = 1;
 const REPEATABLE_QUERY_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub fn query_issue(e: &mut Engine, query: u32, flags: u32) {
-    if flags == ISSUE_END && is_forwarded(e, query) {
+    if flags & ISSUE_END != 0 && is_forwarded(e, query) {
         *real(e).query_ends.entry(query).or_default() += 1;
     }
     record_on(e, query, Cmd::QueryIssue { query, flags });
@@ -2201,9 +2201,10 @@ pub fn query_get_data(e: &mut Engine, query: u32, flags: u32) -> Option<(u32, u3
 /// the GPU has it, `d3d9_wgpu::QueryAnswers`), else `S_FALSE`, as Direct3D 9 answers until the
 /// GPU is done, with the commands recorded so far handed over so the count comes. With or without
 /// `D3DGETDATA_FLUSH`: the render thread sends the batch holding an awaited `END` and polls for
-/// its count whenever it has nothing else to do, so a reader that polls in a loop (the reference
-/// volumes, `00b63680`) gets its count without anything else asked. An event query's answer is
-/// the model's (`None` inside).
+/// its count whenever it has nothing else to do, so the count comes with nothing else asked (the
+/// exe's readers ask once a frame and take "not yet" as "ask again later"; none waits in a loop:
+/// the reference volumes' loop, `00b63680`, repeats only while answers are ready, and its one
+/// caller does not ask it to wait). An event query's answer is the model's (`None` inside).
 fn wgpu_answer(r: &mut Real, query: u32) -> Option<Option<(u32, u32)>> {
     let answers = r.wgpu_answers.as_ref()?;
     let recorded = r.query_ends.get(&query).copied().unwrap_or(0);
