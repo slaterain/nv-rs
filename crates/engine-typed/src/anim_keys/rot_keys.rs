@@ -1,13 +1,12 @@
 //! The rotation keys (the Xbox PDB's `NiRotKey` source unit, and the unit at `00a289b0`):
-//! `NiRotKey::GenInterp` with the key search the `GenInterp` functions share, and the preparation
-//! of a rotation key array.
+//! `NiRotKey::GenInterp` with the key search the `GenInterp` functions share (native maths: the
+//! times as `f64` locals, the ratio rounded where the exe stores it), and the preparation of a
+//! rotation key array (the exact x87 helpers).
 
 use super::quaternion;
-use super::{Keys, NiQuaternion, FAMILY};
+use super::{narrow, Keys, NiQuaternion, FAMILY};
 use engine_core::ptr::Ptr;
-use engine_core::x87::{
-    x87_add, x87_div, x87_load32, x87_m32, x87_mul, x87_quiet_bits, x87_store32, x87_sub,
-};
+use engine_core::x87::{x87_add, x87_load32, x87_m32, x87_mul, x87_store32};
 use engine_core::{args, typed_call, Engine};
 
 /// The rotation keys' interpolation functions, one word per key type (`011f3cc0`; each `cdecl`, (ratio
@@ -90,11 +89,11 @@ fn search(e: &Engine, time: f64, keys: Keys, count: u32, last_index: u32) -> Sea
 }
 
 /// The ratio `(time - previous) / (next - previous)` the interpolation function is given, as the
-/// float stored for it.
+/// float stored for it (native: `f64` locals, rounded once at the store).
 fn ratio(time: f64, search: &Search) -> u32 {
-    let elapsed = x87_sub(time, search.previous_time);
-    let span = x87_sub(search.next_time, search.previous_time);
-    x87_quiet_bits(x87_store32(x87_div(elapsed, span)))
+    let elapsed = time - search.previous_time;
+    let span = search.next_time - search.previous_time;
+    narrow(elapsed / span).to_bits()
 }
 
 /// Copies the four words at `from` to `result`.
@@ -126,7 +125,7 @@ pub fn gen_interp(
     last_index: Ptr,
     key_size: u8,
 ) -> Ptr<NiQuaternion> {
-    let time_value = x87_load32(time.to_bits());
+    let time_value = f64::from(time);
     let keys = Keys::new(keys.addr(), u32::from(key_size));
     let function = |e: &Engine| {
         e.mem
@@ -135,7 +134,7 @@ pub fn gen_interp(
     let lowest = count == 1 || time_value == e.global::<f64>(LOWEST_TIME);
     if key_type == WHOLE_ARRAY_TYPE {
         let function = function(e);
-        let time_bits = x87_store32(time_value);
+        let time_bits = time.to_bits();
         e.with_stack(16, |e, rotation| {
             e.call(function, &args![time_bits, keys.at(0), 0u32, rotation]);
             copy_quaternion(e, result, rotation.addr());

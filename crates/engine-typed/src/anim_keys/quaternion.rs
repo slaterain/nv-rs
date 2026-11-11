@@ -1,13 +1,12 @@
 //! `NiQuaternion`'s functions the rotation keys reach (the Xbox PDB's `NiQuaternion` source unit,
-//! and the unit at `00a6db50`): x87 code on four floats, each `FADD`, `FSUB` and `FMUL` through the
-//! `x87_*` helpers in the exe's operand order (destination first); `FLD dword` is `x87_load32`, a
-//! `float` memory operand `x87_m32`, `FSTP dword` `x87_store32`.
+//! and the unit at `00a6db50`). The constructor and the negation move floats as the exe's
+//! `FLD`/`FSTP` pairs do (`x87_load32`, `x87_store32`); `Slerp` and its parameter correction are
+//! native maths (the family's float rule: `f64` locals, each operation in the exe's order, rounded
+//! where the exe stores a float).
 
-use super::{NiQuaternion, FAMILY};
+use super::{narrow, rounded, wide, NiQuaternion, FAMILY};
 use engine_core::ptr::{Field, Ptr};
-use engine_core::x87::{
-    x87_add, x87_load32, x87_m32, x87_mul, x87_quiet_bits, x87_store32, x87_sub,
-};
+use engine_core::x87::{x87_load32, x87_quiet_bits, x87_store32};
 use engine_core::{args, typed_call, Engine};
 
 /// `NiQuaternion::FastNormalize` (Xbox PDB), `00a4ff00` (`thiscall`): stays by address.
@@ -27,11 +26,6 @@ const COMPONENTS: [Field<NiQuaternion, u32>; 4] = [
     NiQuaternion::m_fY,
     NiQuaternion::m_fZ,
 ];
-
-/// `FSTP dword tmp; FLD dword tmp`: the value rounded to a float and loaded back.
-fn spill(v: f64) -> f64 {
-    x87_load32(x87_store32(v))
-}
 
 // Typed from 00a6db50
 /// The constructor from four floats (`thiscall`, no Xbox PDB name; the rotation keys' constructor
@@ -70,28 +64,25 @@ pub fn negate(
 // Typed from 00a6dc30
 /// The parameter correction `Slerp` makes (`cdecl`, no Xbox PDB name): with `f = 1 - cos * 0.8228`
 /// and `g = f * f * 0.5855` (each rounded to a float), answers `t * (g + (1 + g * t * (2t - 3)))`
-/// rounded to a float, in `ST0`. The exe keeps `f`, `f * f`, `g` and the result in its own `cos`
-/// argument's slot (`[esp+8]`, stored and loaded back as floats); this keeps them in locals, as the
-/// translation does, and leaves the argument words as they came (`cdecl`: the caller drops them).
+/// rounded to a float, in `ST0`. Native: the exe's operations in its order on `f64` locals, rounded
+/// at its three stores and at the end. The exe keeps `f`, `f * f`, `g` and the result in its own
+/// `cos` argument's slot (`[esp+8]`, stored and loaded back as floats); this keeps them in locals,
+/// as the translation does, and leaves the argument words as they came (`cdecl`: the caller drops
+/// them).
 pub fn counter_warp(e: &mut Engine, t: f32, cos: f32) -> f64 {
-    let scaled = x87_mul(x87_load32(cos.to_bits()), e.global::<f64>(COSINE_FACTOR));
-    let f = spill(x87_sub(1.0, scaled));
-    let f2 = spill(x87_mul(f, f));
-    let g = spill(x87_mul(f2, e.global::<f64>(SQUARE_FACTOR)));
-    let t = x87_load32(t.to_bits());
-    let gt = x87_mul(g, t);
-    let twice = x87_add(t, t);
-    let a = x87_mul(gt, x87_sub(twice, e.global::<f64>(THREE)));
-    let one_plus = x87_add(1.0, a);
-    let sum = x87_add(g, one_plus);
-    spill(x87_mul(t, sum))
+    let f = rounded(1.0 - f64::from(cos) * e.global::<f64>(COSINE_FACTOR));
+    let g = rounded(rounded(f * f) * e.global::<f64>(SQUARE_FACTOR));
+    let t = f64::from(t);
+    let a = g * t * (t + t - e.global::<f64>(THREE));
+    rounded(t * (g + (1.0 + a)))
 }
 
 // Typed from 00a6e330
-/// `NiQuaternion::Slerp` (Xbox PDB, `thiscall` on the result): with `cos = p . q`, the parameter is
-/// corrected by [`counter_warp`] (`t <= 0.5`: on `t`; otherwise, a NaN `t` included, `1 - warp(1 -
-/// t)`), each component becomes `p + k (q - p)`, and the result is normalized (`FastNormalize`, by
-/// address).
+/// `NiQuaternion::Slerp` (Xbox PDB, `thiscall` on the result): with `cos = p . q` (summed `W`, `X`,
+/// `Y`, `Z`, rounded to a float), the parameter is corrected by [`counter_warp`] (`t <= 0.5`: on `t`;
+/// otherwise, a NaN `t` included, `1 - warp(1 - t)`, `1 - t` rounded to a float), rounded to a
+/// float `k`; each component becomes `p + k (q - p)`, read and stored one after the other, and the
+/// result is normalized (`FastNormalize`, by address). Native maths on `f64` locals.
 pub fn slerp(
     e: &mut Engine,
     this: Ptr<NiQuaternion>,
@@ -99,33 +90,21 @@ pub fn slerp(
     p: Ptr<NiQuaternion>,
     q: Ptr<NiQuaternion>,
 ) {
-    let products =
-        COMPONENTS.map(|field| x87_mul(x87_load32(e.get(p, field)), x87_m32(e.get(q, field))));
-    let [d0, d1, d2, d3] = products;
-    let dot = x87_store32(x87_add(x87_add(x87_add(d0, d1), d2), d3));
-    let half = x87_load32(e.global::<u32>(HALF_FLOAT));
-    let tv = x87_load32(t.to_bits());
-    let cos = f32::from_bits(x87_quiet_bits(dot));
+    let [w, x, y, z] = COMPONENTS.map(|field| wide(e.get(p, field)) * wide(e.get(q, field)));
+    let cos = narrow(((w + x) + y) + z);
+    let half = wide(e.global::<u32>(HALF_FLOAT));
     // FCOM; TEST AH,0x41; JP: below or equal corrects `t`; above or unordered the mirrored parameter.
-    let corrected = if tv <= half {
-        let t = f32::from_bits(x87_store32(tv));
+    let corrected = if f64::from(t) <= half {
         typed_call!(FAMILY, 0x00a6_dc30, counter_warp(e, t, cos))
     } else {
-        let mirrored = f32::from_bits(x87_store32(spill(x87_sub(1.0, tv))));
-        let warped = typed_call!(FAMILY, 0x00a6_dc30, counter_warp(e, mirrored, cos));
-        x87_sub(1.0, warped)
+        let mirrored = narrow(1.0 - f64::from(t));
+        1.0 - typed_call!(FAMILY, 0x00a6_dc30, counter_warp(e, mirrored, cos))
     };
-    let k = spill(corrected);
-    for (i, field) in COMPONENTS.into_iter().enumerate() {
-        let from = spill(x87_load32(e.get(p, field)));
-        let d = x87_sub(x87_load32(e.get(q, field)), from);
-        // The exe's operand orders: `p + d k` for W, `d k + p` for X and Y, `k d + p` for Z.
-        let r = match i {
-            0 => x87_add(from, x87_mul(d, k)),
-            3 => x87_add(x87_mul(k, d), from),
-            _ => x87_add(x87_mul(d, k), from),
-        };
-        e.set(this, field, x87_store32(r));
+    let k = rounded(corrected);
+    for field in COMPONENTS {
+        let from = wide(e.get(p, field));
+        let d = wide(e.get(q, field)) - from;
+        e.set(this, field, narrow(from + d * k).to_bits());
     }
     e.call(FAST_NORMALIZE, &args![this]);
 }
