@@ -2,6 +2,10 @@
 //! decided and enabled beside the published ones, with one call from each place in `adapter.rs`
 //! that handles those.
 
+// Our code in a vendored crate: no CI step lints it (`vendor/` is out of the workspace), and as a
+// path dependency its warnings are not capped, so a warning here fails every build.
+#![deny(warnings)]
+
 use core::ffi::CStr;
 
 use ash::{ext, khr, vk};

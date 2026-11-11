@@ -52,6 +52,10 @@
 //! its independent-sets variant ([`super::PipelineLayout::raw_for`]): layouts with and without the
 //! flag are not compatible, and compute pipelines cannot use the flag.
 
+// Our code in a vendored crate: no CI step lints it (`vendor/` is out of the workspace), and as a
+// path dependency its warnings are not capped, so a warning here fails every build.
+#![deny(warnings)]
+
 use alloc::{boxed::Box, ffi::CString, string::String, sync::Arc, sync::Weak, vec::Vec};
 use core::{
     fmt::{self, Write as _},
@@ -504,15 +508,19 @@ impl Cache {
         let n = |c: &AtomicU64| c.load(Ordering::Relaxed);
         let names = ["vertex input", "vertex shader", "pixel shader", "output"];
         let mut libraries = String::new();
-        for i in 0..4 {
+        for (((name, count), total), longest) in names
+            .iter()
+            .zip(&s.libraries)
+            .zip(&s.library_ns)
+            .zip(&s.library_max_ns)
+        {
             let _ = write!(
                 libraries,
-                "{}{} {} ({:.1} ms, longest {:.2})",
-                if i == 0 { "" } else { ", " },
-                n(&s.libraries[i]),
-                names[i],
-                ms(&s.library_ns[i]),
-                ms(&s.library_max_ns[i]),
+                "{}{} {name} ({:.1} ms, longest {:.2})",
+                if libraries.is_empty() { "" } else { ", " },
+                n(count),
+                ms(total),
+                ms(longest),
             );
         }
         format!(
