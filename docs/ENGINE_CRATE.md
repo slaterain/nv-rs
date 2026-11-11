@@ -625,7 +625,10 @@ weights' normalisation, an interpolator's own `Update` (the key lookups), the qu
 transform's getters and the bone's setters. The translations keep their plain calls of the family's small functions;
 only the bip node's walk calls `UpdateAllButTarget` by address (in every build, so kNVSE's hook runs from there too). Its tests are `crates/engine/tests/typed_animation.rs`. Merged off
 (AGENT-RULES.md, "Typed code merges OFF first"): `NV_TYPED=animation` turns it on until a batch gate runs the
-recorded street run with it on against off; x87 code with the exact helpers, as the other update-half families.
+recorded street run with it on against off. Its float maths is native (ADR-0014) at the running thread's precision: plain `f32` on
+main, `f64` locals rounded at each float store on the AI threads (one rule for both rounded main's sums twice, by more
+than an ulp near zero), not the exact x87 helpers; its tests compare floats within an ulp
+(`Diff::float_ulps(1)`).
 And `draw_f` (same crate, id 25), group F of the world draw's worklist: the small helpers the typed families called
 by address most. The float maximum (`00404010`) and minimum (`0040ebd0`); the class test with its null check
 (`0043b300`, which calls the dispatch family's `NiObject::IsKindOf`); the list node pool's allocation (`0043a010`:

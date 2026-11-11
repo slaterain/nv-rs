@@ -5,7 +5,6 @@
 
 use super::FAMILY;
 use engine_core::ptr::Ptr;
-use engine_core::x87::{x87_load32, x87_quiet_bits, x87_store32};
 use engine_core::{args, typed_call, Engine};
 
 /// The fields.
@@ -37,7 +36,7 @@ const SLOT_TRANSFORM_UPDATE: u32 = 0x8c;
 /// address), with none nothing (false); the last time becomes `time`. Answers what the store or
 /// blend answered.
 pub fn update_transform(e: &mut Engine, this: Ptr, time: f32, object: Ptr, transform: Ptr) -> bool {
-    let time_bits = x87_quiet_bits(time.to_bits());
+    let time_bits = time.to_bits();
     let count = e.mem.u8(this.addr().wrapping_add(INTERP_COUNT));
     let answer = if count == 1 {
         typed_call!(
@@ -60,7 +59,7 @@ pub fn update_transform(e: &mut Engine, this: Ptr, time: f32, object: Ptr, trans
 
 /// The invalid marker in a transform's translation, rotation (its float at +0x10) and scale.
 fn invalidate(e: &mut Engine, transform: u32) {
-    let invalid = x87_quiet_bits(e.mem.u32(INVALID_TRANSFORM_PART));
+    let invalid = e.mem.u32(INVALID_TRANSFORM_PART);
     e.mem.set_u32(transform, invalid);
     e.mem.set_u32(transform.wrapping_add(0x10), invalid);
     e.mem.set_u32(transform.wrapping_add(SCALE), invalid);
@@ -81,10 +80,9 @@ pub fn store_single_value(
 ) -> bool {
     let mut time_bits = time.to_bits();
     if e.mem.u8(this.addr().wrapping_add(FLAGS)) & 1 != 0 {
-        time_bits = x87_quiet_bits(e.mem.u32(this.addr().wrapping_add(SINGLE_TIME)));
+        time_bits = e.mem.u32(this.addr().wrapping_add(SINGLE_TIME));
     }
-    let time_value = x87_load32(time_bits);
-    if x87_load32(e.mem.u32(INVALID_FLOAT)) == time_value {
+    if f32::from_bits(e.mem.u32(INVALID_FLOAT)) == f32::from_bits(time_bits) {
         invalidate(e, transform.addr());
         return false;
     }
@@ -93,7 +91,7 @@ pub fn store_single_value(
         .vcall(
             single,
             SLOT_TRANSFORM_UPDATE,
-            &args![x87_store32(time_value), object, transform],
+            &args![time_bits, object, transform],
         )
         .u8()
         != 0;
@@ -103,7 +101,7 @@ pub fn store_single_value(
     }
     let lowest = f64::from_bits(e.global::<u64>(LOWEST));
     let rotation = transform.addr().wrapping_add(ROTATE);
-    if x87_load32(e.mem.u32(rotation.wrapping_add(4))) != lowest {
+    if f64::from(f32::from_bits(e.mem.u32(rotation.wrapping_add(4)))) != lowest {
         e.with_stack(16, |e, copy| {
             for word in 0..4u32 {
                 let value = e.mem.u32(rotation.wrapping_add(4 * word));

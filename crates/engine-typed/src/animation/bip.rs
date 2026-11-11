@@ -5,9 +5,6 @@ use super::FAMILY;
 use crate::{dispatch, pathing};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
-use engine_core::x87::{
-    x87_add, x87_load32, x87_m32, x87_mul, x87_quiet_bits, x87_store32, x87_sub,
-};
 use engine_core::{args, typed_call, Engine};
 
 /// The `NiRTTI` records of `NiMultiTargetTransformController` (`011f36bc`) and
@@ -52,7 +49,7 @@ const MATRIX_SET_COLUMN: u32 = 0x004b_4660;
 /// controller updates its bones (`004f0380`, with `time` and 0); a tread transform
 /// controller gets `Update` (slot +0x94) with update data for `time`.
 pub fn update_all_but_bip(e: &mut Engine, this: Ptr, time: f32) {
-    let time_bits = x87_quiet_bits(time.to_bits());
+    let time_bits = time.to_bits();
     let mut controller = typed_call!(
         dispatch::FAMILY,
         0x0043_b230,
@@ -112,7 +109,7 @@ fn update_target(
     }
     if typed_call!(FAMILY, 0x004f_0320, scale_valid(e, transform)) {
         let scale = e.call(SCALE_OF, &args![transform]).f64();
-        e.call(SET_SCALE, &args![target, x87_store32(scale)]);
+        e.call(SET_SCALE, &args![target, to_float(scale).to_bits()]);
     }
     true
 }
@@ -129,7 +126,7 @@ pub fn update_all_but_target(e: &mut Engine, this: Ptr, time: f32, inverse: u8) 
     {
         return;
     }
-    let time_bits = x87_quiet_bits(time.to_bits());
+    let time_bits = time.to_bits();
     e.with_stack(0x20, |e, transform| {
         e.call(TRANSFORM_CONSTRUCTOR, &args![transform]);
         let last = i32::from(e.mem.u16(this.addr().wrapping_add(TARGET_COUNT))) - 1;
@@ -178,6 +175,18 @@ pub fn flags_share(e: &mut Engine, this: Ptr, mask: u32) -> u32 {
     u32::from(flags & low_16(mask) != 0)
 }
 
+/// Whether the running game thread computes at a float's precision (its x87 control word's precision
+/// bits 00: main, once Direct3D set them), where plain `f32` maths rounds each step as the exe's code does.
+fn float_precision() -> bool {
+    engine_core::x87::control_word() & 0x0300 == 0
+}
+
+/// A float store of an `f64` local (ADR-0014's float rule): rounded to the nearest float.
+#[allow(clippy::cast_possible_truncation)]
+fn to_float(value: f64) -> f32 {
+    value as f32
+}
+
 /// The low 16 bits of a word, as the exe's 16-bit `TEST` takes them.
 #[allow(clippy::cast_possible_truncation)]
 fn low_16(word: u32) -> u16 {
@@ -203,16 +212,14 @@ pub fn rotation_valid(e: &mut Engine, this: Ptr) -> bool {
         0x006b_9130,
         pathing::search::second_float(e, this.byte_add(0xc).cast())
     );
-    let invalid = -x87_load32(e.mem.u32(LARGEST));
-    invalid != value
+    value != -f64::from(f32::from_bits(e.mem.u32(LARGEST)))
 }
 
 // Typed from 004f0320
 /// `thiscall(transform)`: the scale's test: whether the float at +0x1c is not `-FLT_MAX` (a NaN
 /// counts as not equal).
 pub fn scale_valid(e: &mut Engine, this: Ptr) -> bool {
-    let invalid = -x87_load32(e.mem.u32(LARGEST));
-    x87_load32(e.mem.u32(this.addr().wrapping_add(0x1c))) != invalid
+    f32::from_bits(e.mem.u32(this.addr().wrapping_add(0x1c))) != -f32::from_bits(e.mem.u32(LARGEST))
 }
 
 // Typed from 004f0160
@@ -232,27 +239,47 @@ pub fn set_rotation(e: &mut Engine, this: Ptr, quaternion: Ptr) {
 /// products `wx = x2 w` .. `zz = z2 z` (each rounded to a float, as the exe stores them), column 0
 /// is `(1 - (yy + zz), xy + wz, xz - wy)`, column 1 `(xy - wz, 1 - (xx + zz), yz + wx)`, column 2
 /// `(xz + wy, yz - wx, 1 - (xx + yy))`, each column's third value computed first.
+///
+/// Native float maths (ADR-0014's float rule), at the running thread's precision, since the animation
+/// runs on main and the AI threads: on main (24 bits, once Direct3D set it) plain `f32` maths rounds
+/// each step as the exe's x87 code does; on the AI threads (53 bits) `f64` locals rounded at each float
+/// store do. A product of two floats is exact in an `f64`, so it rounds once either way. (One rule for
+/// both, `f64` locals everywhere, rounds the sums of main twice: in `1 - (a + b)` near zero that came
+/// to more than an ulp of the result.)
 pub fn to_rotation(e: &mut Engine, this: Ptr, matrix: Ptr) {
     let q = this.addr();
     let two = f64::from_bits(e.global::<u64>(TWO));
-    let load = |e: &Engine, at: u32| x87_load32(e.mem.u32(at));
-    let operand = |e: &Engine, at: u32| x87_m32(e.mem.u32(at));
-    let double = |e: &Engine, at: u32| x87_store32(x87_mul(load(e, at), two));
-    let (x2, y2, z2) = (double(e, q + 4), double(e, q + 8), double(e, q + 0xc));
-    let product =
-        |e: &Engine, factor: u32, at: u32| x87_store32(x87_mul(x87_load32(factor), operand(e, at)));
-    let wx = product(e, x2, q);
-    let wy = product(e, y2, q);
-    let wz = product(e, z2, q);
-    let xx = product(e, x2, q + 4);
-    let xy = product(e, y2, q + 4);
-    let xz = product(e, z2, q + 4);
-    let yy = product(e, y2, q + 8);
-    let yz = product(e, z2, q + 8);
-    let zz = product(e, z2, q + 0xc);
-    let sub = |a: u32, b: u32| x87_store32(x87_sub(x87_load32(a), x87_m32(b)));
-    let add = |a: u32, b: u32| x87_store32(x87_add(x87_load32(a), x87_m32(b)));
-    let one_minus = |a: u32, b: u32| x87_store32(x87_sub(1.0, x87_add(x87_load32(a), x87_m32(b))));
+    let load = |e: &Engine, at: u32| f32::from_bits(e.mem.u32(at));
+    let (w, x, y, z) = (load(e, q), load(e, q + 4), load(e, q + 8), load(e, q + 0xc));
+    let double = |v: f32| to_float(f64::from(v) * two);
+    let (x2, y2, z2) = (double(x), double(y), double(z));
+    let product = |a: f32, b: f32| to_float(f64::from(a) * f64::from(b));
+    let (wx, wy, wz) = (product(x2, w), product(y2, w), product(z2, w));
+    let (xx, xy, xz) = (product(x2, x), product(y2, x), product(z2, x));
+    let (yy, yz, zz) = (product(y2, y), product(z2, y), product(z2, z));
+    let single = float_precision();
+    let wide = f64::from;
+    let sub = |a: f32, b: f32| {
+        if single {
+            a - b
+        } else {
+            to_float(wide(a) - wide(b))
+        }
+    };
+    let add = |a: f32, b: f32| {
+        if single {
+            a + b
+        } else {
+            to_float(wide(a) + wide(b))
+        }
+    };
+    let one_minus = |a: f32, b: f32| {
+        if single {
+            1.0 - (a + b)
+        } else {
+            to_float(1.0 - (wide(a) + wide(b)))
+        }
+    };
     let columns = [
         [one_minus(yy, zz), add(xy, wz), sub(xz, wy)],
         [sub(xy, wz), one_minus(xx, zz), add(yz, wx)],
@@ -261,13 +288,7 @@ pub fn to_rotation(e: &mut Engine, this: Ptr, matrix: Ptr) {
     for (column, [c0, c1, c2]) in (0u32..).zip(columns) {
         e.call(
             MATRIX_SET_COLUMN,
-            &args![
-                matrix,
-                column,
-                x87_quiet_bits(c0),
-                x87_quiet_bits(c1),
-                x87_quiet_bits(c2)
-            ],
+            &args![matrix, column, c0.to_bits(), c1.to_bits(), c2.to_bits()],
         );
     }
 }
