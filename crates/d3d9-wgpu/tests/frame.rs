@@ -1516,3 +1516,58 @@ fn a_handle_made_again_while_bound_is_looked_up_again() {
     left_red_right_green(&mut g, "made again");
     assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
 }
+
+/// With the answers board (the render thread's way to the game's threads), the backend posts each
+/// occlusion count once the GPU has it, through its idle work alone: the same count a reader that
+/// waits gets, for the game's last `END` of the query only; an event query gets none.
+#[test]
+fn occlusion_counts_are_posted_for_reading_without_waiting() {
+    let Some(mut g) = Gpu::new(4, 4) else { return };
+    let answers = std::sync::Arc::new(d3d9_wgpu::QueryAnswers::default());
+    g.b.answer_to(std::sync::Arc::clone(&answers));
+    g.colour([1.0, 0.0, 0.0, 1.0]);
+    g.clear(3, 0, 1.0);
+    for (q, kind) in [(0x2000, 9), (0x2010, 8)] {
+        g.run(Cmd::CreateQuery {
+            device: DEVICE,
+            query: q,
+            kind,
+        });
+    }
+    let posted = |g: &mut Gpu, ends: u64| {
+        let start = std::time::Instant::now();
+        loop {
+            let more = g.b.idle();
+            let a = answers.get(0x2000).expect("made");
+            if let (true, Some(n)) = (a.ends == ends, a.count) {
+                return n;
+            }
+            assert!(more, "nothing awaited, nothing posted: {a:?}");
+            assert!(start.elapsed().as_secs() < 10, "not posted: {a:?}");
+            std::thread::sleep(d3d9_stream::IDLE_POLL);
+        }
+    };
+    // The whole 4 by 4 target in front of the cleared depth: 16 pixels, 4 samples each.
+    g.run(Cmd::QueryIssue {
+        query: 0x2000,
+        flags: 2,
+    });
+    g.cover(0.5);
+    g.run(Cmd::QueryIssue {
+        query: 0x2000,
+        flags: 1,
+    });
+    assert_eq!(posted(&mut g, 1), 64);
+    assert!(!g.b.idle(), "nothing awaited once posted");
+    // A second END: its own count; the reader that waits agrees.
+    g.clear(2, 0, 1.0);
+    let waited = g.count(0x2000, |g| g.cover(0.25));
+    assert_eq!(posted(&mut g, 2), waited);
+    // An event query is the model's: no answer posted for it.
+    g.run(Cmd::QueryIssue {
+        query: 0x2010,
+        flags: 1,
+    });
+    let event = answers.get(0x2010).expect("made");
+    assert!(!event.occlusion && event.count.is_none(), "{event:?}");
+}

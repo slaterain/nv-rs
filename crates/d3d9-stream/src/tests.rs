@@ -1415,3 +1415,59 @@ fn records_compare_with_handles_renamed() {
     assert!(wire::compare_renamed(&ra[..], &rb[..rb.len() - 10]).is_err());
     assert!(wire::compare_renamed(&b"not a stream at all"[..], &ra[..]).is_err());
 }
+
+/// TEST DATA: a backend with idle work for its first `turns` idle calls, counting them.
+struct Idler {
+    turns: u64,
+    calls: Arc<AtomicU64>,
+}
+
+impl Backend for Idler {
+    fn execute(&mut self, _cmd: Cmd<Data<'_>>) -> Reply {
+        Reply::None
+    }
+
+    fn idle(&mut self) -> bool {
+        let n = self.calls.fetch_add(1, Ordering::Relaxed) + 1;
+        n < self.turns
+    }
+}
+
+/// The render thread gives a backend's idle work a turn whenever nothing is queued, again after
+/// [`IDLE_POLL`] while it says it has more, and then sleeps until the next command.
+#[test]
+fn the_render_thread_gives_idle_work_turns_until_it_is_done() {
+    let calls = Arc::new(AtomicU64::new(0));
+    let mut s = Stream::threaded(
+        Box::new(Idler {
+            turns: 5,
+            calls: Arc::clone(&calls),
+        }),
+        Settings::default(),
+    );
+    s.submit(Cmd::SetFvf { device: 1, fvf: 0 });
+    s.finish();
+    // Five turns at least come by themselves, a millisecond or so apart (the first when the
+    // render thread starts with nothing queued), then no more while nothing comes.
+    let settled = || {
+        let start = std::time::Instant::now();
+        let mut last = calls.load(Ordering::Relaxed);
+        loop {
+            std::thread::sleep(IDLE_POLL * 20);
+            let now = calls.load(Ordering::Relaxed);
+            if now == last && now >= 5 {
+                return now;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "idle turns never settle"
+            );
+            last = now;
+        }
+    };
+    let before = settled();
+    // The next command, and the queue empty again: one more turn, and no more.
+    s.submit(Cmd::SetFvf { device: 1, fvf: 1 });
+    s.finish();
+    assert_eq!(settled(), before + 1);
+}

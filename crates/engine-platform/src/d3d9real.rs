@@ -147,6 +147,9 @@ pub struct Real {
     /// How many queries the game made at each address (the board's `made`: a query made again at
     /// a destroyed one's address is not read as the old one).
     queries_made: engine_core::AddrMap<u32, u64>,
+    /// With the render thread on wgpu: the occlusion counts the backend posts
+    /// (`d3d9_wgpu::QueryAnswers`), read without waiting for the render thread.
+    wgpu_answers: Option<std::sync::Arc<d3d9_wgpu::QueryAnswers>>,
     /// The game's side's notes already printed.
     logged: HashSet<&'static str>,
     /// Whether the stream gets a render thread ([`want_render_thread`]).
@@ -914,6 +917,7 @@ pub fn want_render_thread(e: &mut Engine, on: bool) {
 fn backend_of(
     which: Backends,
     board: Option<std::sync::Arc<super::d3d9backend::QueryBoard>>,
+    answers: Option<std::sync::Arc<d3d9_wgpu::QueryAnswers>>,
     warm: bool,
     wgpu_cache: Option<std::path::PathBuf>,
 ) -> Box<dyn d3d9_stream::Backend> {
@@ -936,7 +940,10 @@ fn backend_of(
     match which {
         Backends::Real => real(),
         Backends::Wgpu => Box::new(WgpuWithReport {
-            wgpu: wgpu(d3d9_wgpu::Output::Window),
+            wgpu: match answers {
+                Some(a) => wgpu(d3d9_wgpu::Output::Window).with_answers(a),
+                None => wgpu(d3d9_wgpu::Output::Window),
+            },
             back_buffer: 0,
         }),
         Backends::RealAndWgpu => Box::new(d3d9_stream::Tee::new(
@@ -972,6 +979,10 @@ impl d3d9_stream::Backend for WgpuWithReport {
             _ => {}
         }
         self.wgpu.execute(cmd)
+    }
+
+    fn idle(&mut self) -> bool {
+        self.wgpu.idle()
     }
 }
 
@@ -1032,14 +1043,21 @@ pub fn direct3d_created(e: &mut Engine) {
             .real()
             .then(|| std::sync::Arc::new(super::d3d9backend::QueryBoard::default()));
         real(e).query_board = board.clone();
+        // wgpu alone on the window: its occlusion counts, posted by the render thread.
+        let answers = matches!(which, Backends::Wgpu)
+            .then(|| std::sync::Arc::new(d3d9_wgpu::QueryAnswers::default()));
+        real(e).wgpu_answers = answers.clone();
         eprintln!(
             "NV_D3D9={name}: the render thread is on (NV_RENDER_THREAD=0 turns it off; at most {} frame(s) in flight{})",
             settings.frames_in_flight,
             if settings.check { ", the stream checked" } else { "" }
         );
-        Stream::threaded(backend_of(which, board, warm, wgpu_cache), settings)
+        Stream::threaded(
+            backend_of(which, board, answers, warm, wgpu_cache),
+            settings,
+        )
     } else {
-        Stream::direct(backend_of(which, None, warm, wgpu_cache))
+        Stream::direct(backend_of(which, None, None, warm, wgpu_cache))
     };
     if let Some(path) = std::env::var_os("NV_D3D9_RECORD") {
         // `NV_REPEATABLE`: the record leaves out what differs between two runs of the same
@@ -2116,7 +2134,7 @@ const S_FALSE: u32 = 1;
 const REPEATABLE_QUERY_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub fn query_issue(e: &mut Engine, query: u32, flags: u32) {
-    if flags == ISSUE_END && is_forwarded(e, query) {
+    if flags & ISSUE_END != 0 && is_forwarded(e, query) {
         *real(e).query_ends.entry(query).or_default() += 1;
     }
     record_on(e, query, Cmd::QueryIssue { query, flags });
@@ -2166,12 +2184,50 @@ pub fn query_get_data(e: &mut Engine, query: u32, flags: u32) -> Option<(u32, u3
             }
         }
     }
+    if let Some(answer) = wgpu_answer(real(e), query) {
+        return answer;
+    }
     if let Some(answer) = query_without_waiting(real(e), query, flags) {
         return answer;
     }
     match call(e, Cmd::QueryGetData { query, flags }) {
         Some(Reply::Query(answer)) => answer,
         _ => None,
+    }
+}
+
+/// [`query_get_data`] with the render thread on wgpu, never waiting for it (`None` without them):
+/// the count the render thread posted for the game's last `END` of this query (it posts each once
+/// the GPU has it, `d3d9_wgpu::QueryAnswers`), else `S_FALSE`, as Direct3D 9 answers until the
+/// GPU is done, with the commands recorded so far handed over so the count comes. With or without
+/// `D3DGETDATA_FLUSH`: the render thread sends the batch holding an awaited `END` and polls for
+/// its count whenever it has nothing else to do, so the count comes with nothing else asked (the
+/// exe's readers ask once a frame and take "not yet" as "ask again later"; none waits in a loop:
+/// the reference volumes' loop, `00b63680`, repeats only while answers are ready, and its one
+/// caller does not ask it to wait). An event query's answer is the model's (`None` inside).
+fn wgpu_answer(r: &mut Real, query: u32) -> Option<Option<(u32, u32)>> {
+    let answers = r.wgpu_answers.as_ref()?;
+    let recorded = r.query_ends.get(&query).copied().unwrap_or(0);
+    let made = r.queries_made.get(&query).copied().unwrap_or(0);
+    let answer = answers.get(query);
+    if answer.is_some_and(|a| a.made == made && !a.occlusion) {
+        return Some(None);
+    }
+    match answer {
+        Some(a) if a.made == made && a.ends == recorded && a.count.is_some() => {
+            if let Some(s) = r.stream.as_mut() {
+                s.note("query results read at once");
+            }
+            Some(a.count.map(|n| (0, n)))
+        }
+        // Not in yet, or the game's last `END` (or the query) not carried out yet.
+        _ => {
+            if let Some(s) = r.stream.as_mut() {
+                s.flush();
+                s.note("query results not in yet");
+            }
+            Some(Some((S_FALSE, 0)))
+        }
     }
 }
 
@@ -3658,6 +3714,55 @@ mod tests {
         assert_eq!(query_get_data(&mut e, 0x30, 0), None);
         forget(&mut e, 0x10);
         assert_eq!(real(&mut e).query_ends.get(&0x10), None);
+    }
+
+    /// With the render thread on wgpu a query read never waits, with or without
+    /// `D3DGETDATA_FLUSH`: "not in yet" until the backend posted the count of the game's last
+    /// `END`, then that count; a later `END` waits for its own; an event query's answer is the
+    /// model's; a query made again at the same address is not read as the old one.
+    #[test]
+    fn wgpu_query_counts_are_read_without_waiting() {
+        let mut e = Engine::new();
+        let answers = std::sync::Arc::new(d3d9_wgpu::QueryAnswers::default());
+        {
+            let r = real(&mut e);
+            r.stream = Some(Stream::direct(Box::new(
+                super::super::d3d9backend::RealBackend::new(),
+            )));
+            r.wgpu_answers = Some(std::sync::Arc::clone(&answers));
+            r.forwarded.extend([0x10, 0x20]);
+            r.queries_made.insert(0x10, 1);
+            r.queries_made.insert(0x20, 1);
+        }
+        answers.made(0x10, true);
+        answers.made(0x20, false);
+        query_issue(&mut e, 0x10, 2);
+        query_issue(&mut e, 0x10, ISSUE_END);
+        // The backend has not carried the END out yet.
+        assert_eq!(
+            query_get_data(&mut e, 0x10, GETDATA_FLUSH),
+            Some((S_FALSE, 0))
+        );
+        let first = answers.ended(0x10);
+        assert_eq!(query_get_data(&mut e, 0x10, 0), Some((S_FALSE, 0)));
+        answers.post(0x10, first, 77);
+        assert_eq!(query_get_data(&mut e, 0x10, GETDATA_FLUSH), Some((0, 77)));
+        assert_eq!(query_get_data(&mut e, 0x10, 0), Some((0, 77)));
+        // A second END: its own count, not the first's.
+        query_issue(&mut e, 0x10, ISSUE_END);
+        assert_eq!(query_get_data(&mut e, 0x10, 0), Some((S_FALSE, 0)));
+        let second = answers.ended(0x10);
+        answers.post(0x10, second, 5);
+        assert_eq!(query_get_data(&mut e, 0x10, 0), Some((0, 5)));
+        // An event query: the model answers.
+        query_issue(&mut e, 0x20, ISSUE_END);
+        assert_eq!(query_get_data(&mut e, 0x20, 0), None);
+        // Destroyed and made again at the same address before the backend got there.
+        forget(&mut e, 0x10);
+        real(&mut e).forwarded.insert(0x10);
+        real(&mut e).queries_made.insert(0x10, 2);
+        query_issue(&mut e, 0x10, ISSUE_END);
+        assert_eq!(query_get_data(&mut e, 0x10, 0), Some((S_FALSE, 0)));
     }
 
     /// The same on a real device with the render thread: the occlusion query's result comes

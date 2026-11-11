@@ -7,6 +7,7 @@
 //! resource the frame's unsent commands still use send those commands first. The caches keyed by
 //! state (pipelines, shader modules, samplers, bind groups) are where the speed work starts.
 
+use crate::answers::QueryAnswers;
 use crate::cache;
 use crate::format::{self, d3dfmt, Format};
 use crate::fxhash::Map;
@@ -718,6 +719,10 @@ pub struct Device {
     pub(crate) skipped: u64,
     /// Pipelines made on the draw that needed them (not ahead from the list).
     made_on_draws: u64,
+    /// Where the occlusion counts are posted for the game's threads ([`QueryAnswers`]), and the
+    /// `END`s (query, number) whose counts are awaited.
+    pub(crate) answers: Option<Arc<QueryAnswers>>,
+    awaiting: Vec<(Handle, u64)>,
 }
 
 pub(crate) fn block_on<F: std::future::Future>(f: F) -> F::Output {
@@ -1016,6 +1021,8 @@ impl Device {
             errors,
             draws: 0,
             skipped: 0,
+            answers: None,
+            awaiting: Vec::new(),
         };
         if let Some(surface) = surface {
             let caps = surface.get_capabilities(&adapter);
@@ -1481,6 +1488,9 @@ impl Device {
                 ..Query::default()
             }),
         );
+        if let Some(a) = &self.answers {
+            a.made(query, kind == QUERY_OCCLUSION);
+        }
     }
 
     pub(crate) fn destroy(&mut self, object: Handle) {
@@ -4366,7 +4376,48 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 q.result = None;
                 q.read = None;
             }
+            // Its count is posted for the game's threads once the GPU has it
+            // ([`Device::post_answers`]).
+            if let Some(a) = &self.answers {
+                let ends = a.ended(query);
+                self.awaiting.push((query, ends));
+            }
         }
+    }
+
+    /// The occlusion counts the game's threads wait for ([`QueryAnswers`]): each awaited `END`'s
+    /// count read as `GetData` with `D3DGETDATA_FLUSH` reads it (its batch sent if it is not yet),
+    /// never waiting for the GPU, and posted once it is in. Whether any is still awaited.
+    fn post_answers(&mut self) -> bool {
+        if self.answers.is_none() || self.awaiting.is_empty() {
+            return false;
+        }
+        let mut awaiting = std::mem::take(&mut self.awaiting);
+        awaiting.retain(|&(query, ends)| {
+            let Some(a) = self.answers.clone() else {
+                return false;
+            };
+            // A later `END` of the same query supersedes this one.
+            if !a.awaits(query, ends) {
+                return false;
+            }
+            match self.query_get_data(query, GETDATA_FLUSH) {
+                Some((S_FALSE, _)) => true,
+                Some((_, count)) => {
+                    a.post(query, ends, count);
+                    false
+                }
+                None => false,
+            }
+        });
+        self.awaiting.extend(awaiting);
+        !self.awaiting.is_empty()
+    }
+
+    /// The render thread has nothing queued ([`d3d9_stream::Backend::idle`]): the awaited counts
+    /// polled and posted. Whether any is still awaited.
+    pub(crate) fn idle(&mut self) -> bool {
+        self.post_answers()
     }
 
     /// `GetData(flags)` of an occlusion query after its `END`, as Direct3D 9 answers it: `S_FALSE`
@@ -4823,6 +4874,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 }
             }
         }
+        // The counts the GPU has now posted for the game's threads.
+        self.post_answers();
         if let Some(c) = &mut self.pipeline_cache {
             c.save_if_due(self.presents, false);
         }

@@ -345,6 +345,10 @@ struct Queue {
 /// Emptied chunks kept for reuse.
 const FREE_CHUNKS: usize = 4;
 
+/// How long the render thread sleeps between turns of a backend's idle work while it has more
+/// ([`Backend::idle`]): a GPU answer is seen this soon after it comes in.
+pub const IDLE_POLL: Duration = Duration::from_millis(1);
+
 fn lock(m: &Mutex<Queue>) -> MutexGuard<'_, Queue> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -529,8 +533,38 @@ fn render(shared: &Shared, mut backend: Box<dyn Backend>, check: bool) {
                 if q.closing {
                     return;
                 }
+                // Nothing queued: the backend's idle work (outside the lock), then a sleep until
+                // the next chunk, or a short one while the backend has more of it.
+                drop(q);
+                let idle =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.idle()));
+                q = lock(&shared.queue);
+                let more = match idle {
+                    Ok(again) => again,
+                    Err(panic) => {
+                        q.dead = Some(panic_message(&*panic));
+                        q.chunks.clear();
+                        shared
+                            .dead
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                        drop(q);
+                        shared.progress.notify_all();
+                        return;
+                    }
+                };
+                if !q.chunks.is_empty() || q.closing {
+                    continue;
+                }
                 q.renderer_sleeps = true;
-                q = shared.work.wait(q).unwrap_or_else(PoisonError::into_inner);
+                q = if more {
+                    shared
+                        .work
+                        .wait_timeout(q, IDLE_POLL)
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .0
+                } else {
+                    shared.work.wait(q).unwrap_or_else(PoisonError::into_inner)
+                };
                 q.renderer_sleeps = false;
             }
         };
