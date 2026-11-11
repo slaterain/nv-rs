@@ -79,6 +79,7 @@ fn write_all(e: &Engine, at: &CensusAt, frame: u64) -> std::io::Result<()> {
     if let Some(moved) = e.moved() {
         heap.push_str(&moved_tsv(moved));
     }
+    heap.push_str(&reservations_tsv(&e.mem, &e.kernel.regions));
     std::fs::write(at.folder.join(format!("heap-{frame}.tsv")), heap)?;
     if e.mem.touch_on() {
         std::fs::write(
@@ -178,6 +179,67 @@ pub fn heap_tsv(mem: &Mem, frame: u64) -> String {
             r.function, r.caller, r.vtable, r.class, r.blocks, r.bytes, r.held
         );
     }
+    out
+}
+
+/// The `VirtualAlloc` reservations (`units::platform`'s regions), after the heap's table: one
+/// comment line each with its bytes reserved and committed and, for one the system placed (address
+/// 0, a heap block of its whole size and 64 KiB more), the function that made the block and its
+/// caller, as the table above names them; then the totals. Such a block counts whole in the table,
+/// committed or not: these lines tell the address space reserved from the bytes in use.
+pub fn reservations_tsv(
+    mem: &Mem,
+    regions: &std::collections::BTreeMap<u32, crate::units::platform::Region>,
+) -> String {
+    let blocks: std::collections::HashSet<u32> = regions.values().map(|r| r.block()).collect();
+    let mut owners: HashMap<u32, (u32, u32)> = HashMap::new();
+    mem.for_each_census_block(
+        |CensusBlock {
+             addr,
+             running,
+             path,
+             ..
+         }| {
+            if blocks.contains(&addr) {
+                let owner = if path.is_empty() {
+                    (running, 0)
+                } else {
+                    let f = allocating_function(path);
+                    let at = path.iter().position(|&p| p == f).unwrap_or(0);
+                    (f, path.get(at + 1).copied().unwrap_or(0))
+                };
+                owners.insert(addr, owner);
+            }
+        },
+    );
+    let mut out = String::new();
+    let (mut reserved, mut committed, mut from_heap) = (0u64, 0u64, 0usize);
+    for (base, r) in regions {
+        reserved += u64::from(r.size());
+        committed += u64::from(r.committed_bytes());
+        let by = if r.block() == 0 {
+            "at an address the caller chose".to_string()
+        } else {
+            from_heap += 1;
+            let (function, caller) = owners.get(&r.block()).copied().unwrap_or((0, 0));
+            format!(
+                "heap block {:08x} made by {function:08x} from {caller:08x}",
+                r.block()
+            )
+        };
+        let _ = writeln!(
+            out,
+            "# reservation {base:08x}: {} bytes reserved, {} committed; {by}",
+            r.size(),
+            r.committed_bytes()
+        );
+    }
+    let _ = writeln!(
+        out,
+        "# reservations: {} ({from_heap} of them from the heap), {reserved} bytes reserved, \
+         {committed} committed",
+        regions.len()
+    );
     out
 }
 
@@ -316,6 +378,34 @@ mod tests {
         mem.set_u32(col, 0);
         mem.set_u32(col + 12, td);
         mem.set_cstr(td + 8, name.as_bytes());
+    }
+
+    #[test]
+    fn reservations_tell_reserved_from_committed() {
+        // VirtualAlloc by its import slot: an 8 MiB reservation the system places, 64 KiB of it
+        // committed, as a scrap heap starts.
+        const VIRTUAL_ALLOC: u32 = 0x00fd_f114;
+        let mut e = Engine::new();
+        let base = e.call(VIRTUAL_ALLOC, &[0, 8 << 20, 0x2000, 4]).u32();
+        assert_ne!(base, 0);
+        assert_eq!(
+            e.call(VIRTUAL_ALLOC, &[base, 0x1_0000, 0x1000, 4]).u32(),
+            base
+        );
+        let lines = reservations_tsv(&e.mem, &e.kernel.regions);
+        assert!(
+            lines.contains(&format!(
+                "# reservation {base:08x}: 8388608 bytes reserved, 65536 committed; heap block"
+            )),
+            "{lines}"
+        );
+        assert!(
+            lines.ends_with(
+                "# reservations: 1 (1 of them from the heap), 8388608 bytes reserved, 65536 \
+                 committed\n"
+            ),
+            "{lines}"
+        );
     }
 
     #[test]

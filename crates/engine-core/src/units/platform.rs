@@ -1117,6 +1117,24 @@ pub struct Region {
     committed: Vec<bool>,
 }
 
+impl Region {
+    /// Its bytes reserved.
+    pub fn size(&self) -> u32 {
+        self.size
+    }
+
+    /// The heap block behind it (0: at an address the caller chose).
+    pub fn block(&self) -> u32 {
+        self.block
+    }
+
+    /// Its bytes committed now.
+    pub fn committed_bytes(&self) -> u32 {
+        let pages = self.committed.iter().filter(|&&c| c).count();
+        u32::try_from(pages).map_or(u32::MAX, |p| p.saturating_mul(PAGE_BYTES))
+    }
+}
+
 /// The handle table and the `VirtualAlloc` reservations (`Engine::kernel`).
 #[derive(Debug, Default)]
 pub struct Kernel {
