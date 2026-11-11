@@ -114,8 +114,7 @@ impl Features {
 /// pass objects on a Vulkan 1.3 device (and so no libraries); `NV_WGPU_LIBRARIES`: render pipelines made
 /// whole.
 fn switched_off(name: &str) -> bool {
-    std::env::var(name)
-        .is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "off" | "0"))
+    std::env::var(name).is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "off" | "0"))
 }
 
 /// What our additions use on a device: a field of the backend's private capabilities.

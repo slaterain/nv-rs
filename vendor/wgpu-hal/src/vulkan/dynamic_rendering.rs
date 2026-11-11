@@ -30,10 +30,6 @@
 // path dependency its warnings are not capped, so a warning here fails every build.
 #![deny(warnings)]
 
-// Our code in a vendored crate: no CI step lints it (`vendor/` is out of the workspace), and as a
-// path dependency its warnings are not capped, so a warning here fails every build.
-#![deny(warnings)]
-
 use arrayvec::ArrayVec;
 use ash::vk;
 use core::num::NonZeroU32;
