@@ -1175,7 +1175,12 @@ fn bone_world(
     );
     set(e, skin + 0x20, registers);
     set(e, skin + 0x24, capacity);
-    let buffer = e.mem.alloc(capacity.max(0x40) + 0x100);
+    let size = capacity.max(0x40) + 0x100;
+    let buffer = e.mem.alloc(size);
+    // Words left from an earlier fill, so a word this fill does not write shows.
+    for i in 0..size / 4 {
+        set(e, buffer + 4 * i, 0x5ca1_ab1e ^ i);
+    }
     set(e, skin + 0x28, buffer);
     let world = e.mem.alloc(0x34);
     transform_at(e, world, 2.0, TWO);
