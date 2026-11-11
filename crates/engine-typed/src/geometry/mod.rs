@@ -47,6 +47,12 @@ pub(crate) fn low_half(word: u32) -> u16 {
     word as u16
 }
 
+/// A 32-bit integer's bits as a word (a `FISTP` result the code shifts and ors as a word).
+#[inline(always)]
+pub(crate) fn word_of(value: i32) -> u32 {
+    value as u32
+}
+
 /// The low byte of a word (a byte the exe stores from a register).
 #[allow(clippy::cast_possible_truncation)]
 #[inline(always)]

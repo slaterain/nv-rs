@@ -17,7 +17,7 @@ use super::layout::{
     DeclarationEntry, GeometryBufferData, GeometryData, PackerEntry, ShaderDeclaration,
     SkinPartition, StreamEntry, VBChip, VertexBufferManager,
 };
-use super::{low_byte, low_half, FAMILY};
+use super::{low_byte, low_half, word_of, FAMILY};
 use engine_core::ptr::Ptr;
 use engine_core::x87::{fistp, fistp_chop, x87_load32, x87_store32};
 use engine_core::{args, typed_call, Engine};
@@ -237,7 +237,7 @@ const CHANNEL_SCALE: u32 = 0x0101_e568;
 /// precision round twice, and `FISTP` makes 0 of any value there.
 fn channel(bits: u32, scale: f64) -> u32 {
     let stored = x87_store32(x87_load32(bits) * scale);
-    fistp(x87_load32(stored)) as u32
+    word_of(fistp(x87_load32(stored)))
 }
 
 /// Four channels packed as the exe packs them (`SHL 8` and `OR` of whole words, so a negative
@@ -265,7 +265,7 @@ pub fn colour(e: &mut Engine, entry: u32) -> u32 {
         // `FLD dword` of the white channel and four `FST`/`FSTP` into the channel locals, each vertex
         // storing their four `FISTP`s: the same word for every vertex.
         let stored = x87_store32(x87_load32(e.global::<u32>(WHITE_CHANNEL)));
-        let white = fistp(x87_load32(stored)) as u32;
+        let white = word_of(fistp(x87_load32(stored)));
         let packed = pack_channels(white, white, white, white);
         let mut vertex = 0u16;
         loop {
@@ -360,7 +360,7 @@ pub fn floats_to_bytes(e: &mut Engine, entry: Ptr) -> u32 {
     pack_elements(e, entry, |e, from, to| {
         for k in 0..u32::from(n) {
             let value = fistp_chop(x87_load32(e.mem.u32(from.wrapping_add(4 * k))));
-            e.mem.set_u8(to.wrapping_add(k), low_byte(value as u32));
+            e.mem.set_u8(to.wrapping_add(k), low_byte(word_of(value)));
         }
         if n < 4 {
             let rest = 4 - u32::from(n);
