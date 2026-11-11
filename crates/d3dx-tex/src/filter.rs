@@ -337,7 +337,7 @@ pub(crate) fn box_next<P: Fpu>(src: &Level) -> Level {
         pixel::decode_row(f, &src.bytes[r0 * srow..(r0 + 1) * srow], w, &mut c0);
         pixel::decode_row(f, &src.bytes[r1 * srow..(r1 + 1) * srow], w, &mut c1);
         box_row(&c0, &c1, w, &mut out);
-        pixel::encode_row(
+        pixel::encode_row::<P>(
             f,
             &out,
             y as u32,
@@ -422,7 +422,7 @@ pub(crate) fn load_same_size<P: Fpu>(
             decode_rows(y0, step, &mut c);
             for y in y0..(y0 + step).min(h) {
                 let colors = &c[(y - y0) * w..(y - y0 + 1) * w];
-                pixel::encode_row(
+                pixel::encode_row::<P>(
                     dst_format,
                     colors,
                     y as u32,

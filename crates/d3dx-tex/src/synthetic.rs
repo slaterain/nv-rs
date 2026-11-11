@@ -197,73 +197,84 @@ fn plain_cube(rng: &mut Rng, pf: (u32, u32, u32, [u32; 4]), s: u32, mips: u32) -
 
 /// Files of the formats translated for mods' textures (2026-11-11), through the DLL once like
 /// [`files`] (`d3dx-tex-verify --capture-formats`, `data/formats_32bit.tsv` and
-/// `formats_32bit_double.tsv`). For each 16-bit format: the whole chain stored (copied as it
-/// is), one level (the box filter's integer path), levels 4 and 2 high (down to levels one pixel
-/// high: the box filter's path through the working colour, the codec's decoder and encoder without
-/// dither), some levels stored, and a cube map; then files of edge values ([`edges16`]).
-/// X4R4G4B4's levels are read into X1R5G5B5 (the format D3DX picks on the reference device) with
-/// the ordered dither. The pixels are noise over gradients, so the X bits are set in some.
+/// `formats_32bit_double.tsv`). For each format: the whole chain stored (copied as it is), one
+/// level (the box filter's integer path where the format has one), levels 4 and 2 high (down to
+/// levels one pixel high: the box filter's path through the working colour, the codec's decoder
+/// and encoder without dither), some levels stored, and a cube map; then files of edge values
+/// ([`edges`]). The 16-bit formats first, then the luminance and alpha ones. X4R4G4B4 and A4L4
+/// are read into X1R5G5B5 and A4R4G4B4 (the formats D3DX picks on the reference device) with the
+/// ordered dither. The pixels are noise over gradients, so the X bits are set in some.
 pub fn formats() -> Vec<File> {
     let mut rng = Rng(0x5eed_d3d8_16b1_2026);
     let mut v = Vec::new();
-    let mut add = |name: String, cube: bool, data: Vec<u8>| v.push(File { name, cube, data });
     let sixteen = [
         ("r5g6b5", (0x40, 0, 16, [0xf800, 0x7e0, 0x1f, 0])),
         ("x1r5g5b5", (0x40, 0, 16, [0x7c00, 0x3e0, 0x1f, 0])),
         ("a1r5g5b5", (0x41, 0, 16, [0x7c00, 0x3e0, 0x1f, 0x8000])),
         ("x4r4g4b4", (0x40, 0, 16, [0xf00, 0xf0, 0xf, 0])),
     ];
-    for (name, pf) in sixteen {
-        add(
-            format!("{name}-16-full"),
-            false,
-            plain(&mut rng, pf, 16, 16, 5),
-        );
-        add(
-            format!("{name}-32-one"),
-            false,
-            plain(&mut rng, pf, 32, 32, 1),
-        );
-        add(
-            format!("{name}-64x4-one"),
-            false,
-            plain(&mut rng, pf, 64, 4, 1),
-        );
+    let luminance = [
+        ("l8", (0x2_0000, 0, 8, [0xff, 0, 0, 0])),
+        ("a8l8", (0x2_0001, 0, 16, [0xff, 0, 0, 0xff00])),
+        ("a8", (0x2, 0, 8, [0, 0, 0, 0xff])),
+        ("a4l4", (0x2_0001, 0, 8, [0xf, 0, 0, 0xf0])),
+        ("l16", (0x2_0000, 0, 16, [0xffff, 0, 0, 0])),
+    ];
+    // In this order, so each file's bytes stay those its answer was captured for.
+    format_group(&mut rng, &mut v, &sixteen, false);
+    format_group(&mut rng, &mut v, &sixteen, true);
+    format_group(&mut rng, &mut v, &luminance, false);
+    format_group(&mut rng, &mut v, &luminance, true);
+    v
+}
+
+/// The files of [`formats`] for a group of formats: the plain ones, or (`edge`) the edge-value
+/// ones in levels one pixel high or wide that the file stores, and in a square one.
+fn format_group(
+    rng: &mut Rng,
+    v: &mut Vec<File>,
+    group: &[(&str, (u32, u32, u32, [u32; 4]))],
+    edge: bool,
+) {
+    let mut add = |name: String, cube: bool, data: Vec<u8>| v.push(File { name, cube, data });
+    for &(name, pf) in group {
+        if edge {
+            add(
+                format!("{name}-64x1-edges-one"),
+                false,
+                edges(rng, pf, 64, 1, 1),
+            );
+            add(
+                format!("{name}-1x32-edges-one"),
+                false,
+                edges(rng, pf, 1, 32, 1),
+            );
+            add(
+                format!("{name}-16-edges-one"),
+                false,
+                edges(rng, pf, 16, 16, 1),
+            );
+            continue;
+        }
+        add(format!("{name}-16-full"), false, plain(rng, pf, 16, 16, 5));
+        add(format!("{name}-32-one"), false, plain(rng, pf, 32, 32, 1));
+        add(format!("{name}-64x4-one"), false, plain(rng, pf, 64, 4, 1));
         add(
             format!("{name}-256x2-one"),
             false,
-            plain(&mut rng, pf, 256, 2, 1),
+            plain(rng, pf, 256, 2, 1),
         );
         add(
             format!("{name}-8x32-three"),
             false,
-            plain(&mut rng, pf, 8, 32, 3),
+            plain(rng, pf, 8, 32, 3),
         );
         add(
             format!("{name}-cube-8-one"),
             true,
-            plain_cube(&mut rng, pf, 8, 1),
+            plain_cube(rng, pf, 8, 1),
         );
     }
-    // Edge values in levels one pixel high or wide that the file stores, and in a square one.
-    for (name, pf) in sixteen {
-        add(
-            format!("{name}-64x1-edges-one"),
-            false,
-            edges16(&mut rng, pf, 64, 1, 1),
-        );
-        add(
-            format!("{name}-1x32-edges-one"),
-            false,
-            edges16(&mut rng, pf, 1, 32, 1),
-        );
-        add(
-            format!("{name}-16-edges-one"),
-            false,
-            edges16(&mut rng, pf, 16, 16, 1),
-        );
-    }
-    v
 }
 
 /// Edge values of the 16-bit formats: every bit, none, the top bit (an X bit) alone and with the
@@ -273,26 +284,32 @@ const EDGES16: [u16; 14] = [
     0x0001, 0x8001,
 ];
 
-/// A 16-bit file of [`EDGES16`] and some noise, one value per 2x2 cell (a box of a cell averages it
-/// unchanged): levels one pixel high or wide reach the box filter's path through the working
-/// colour with their X bits set and their fields at the ends.
-fn edges16(rng: &mut Rng, pf: (u32, u32, u32, [u32; 4]), w: u32, h: u32, mips: u32) -> Vec<u8> {
+/// Edge values of the 8-bit formats: every bit, none, the top bit alone and with the rest, a
+/// nibble full alone, and others near the ends.
+const EDGES8: [u8; 10] = [0xff, 0x00, 0x80, 0x7f, 0xf0, 0x0f, 0x01, 0xfe, 0x81, 0x7e];
+
+/// A file of edge values ([`EDGES16`], [`EDGES8`] by the format's bit count) and some noise, one
+/// value per 2x2 cell (a box of a cell averages it unchanged): levels one pixel high or wide
+/// reach the box filter's path through the working colour with their X bits set and their fields
+/// at the ends.
+fn edges(rng: &mut Rng, pf: (u32, u32, u32, [u32; 4]), w: u32, h: u32, mips: u32) -> Vec<u8> {
+    let wide = pf.2 == 16;
     let mut d = header(w, h, mips, pf, 0);
     for l in 0..mips {
         let (lw, lh) = ((w >> l).max(1), (h >> l).max(1));
         let cw = lw.div_ceil(2);
         let cells: Vec<u16> = (0..cw * lh.div_ceil(2))
-            .map(|i| {
-                if i % 4 == 3 {
-                    rng.next() as u16
-                } else {
-                    EDGES16[i as usize % EDGES16.len()]
-                }
+            .map(|i| match (i % 4 == 3, wide) {
+                (true, true) => rng.next() as u16,
+                (true, false) => u16::from(rng.next() as u8),
+                (false, true) => EDGES16[i as usize % EDGES16.len()],
+                (false, false) => u16::from(EDGES8[i as usize % EDGES8.len()]),
             })
             .collect();
         for y in 0..lh {
             for x in 0..lw {
-                d.extend_from_slice(&cells[((y / 2) * cw + x / 2) as usize].to_le_bytes());
+                let c = cells[((y / 2) * cw + x / 2) as usize].to_le_bytes();
+                d.extend_from_slice(if wide { &c } else { &c[..1] });
             }
         }
     }
