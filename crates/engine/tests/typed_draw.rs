@@ -1187,7 +1187,13 @@ fn bone_matrices() {
     .common()
     // What the transform inverse's and product's translations call plainly (the dispatch family's tests list
     // the same).
-    .translation_calls_plainly(&[0x0040_19d0, 0x0040_8860, 0x0047_6930, 0x0047_6980, 0x0047_69c0])
+    .translation_calls_plainly(&[
+        0x0040_19d0,
+        0x0040_8860,
+        0x0047_6930,
+        0x0047_6980,
+        0x0047_69c0,
+    ])
     .inputs(&[
         Input::Of(&[2, 0, 1]),
         Input::Of(&[0, 1]),
@@ -1228,7 +1234,13 @@ fn bone_setup() {
         skin::bone_setup(Ptr<_>, u32, u32, u32, u32, u32, u32, u32, u32) -> u32
     ))
     .common()
-    .translation_calls_plainly(&[0x0040_19d0, 0x0040_8860, 0x0047_6930, 0x0047_6980, 0x0047_69c0])
+    .translation_calls_plainly(&[
+        0x0040_19d0,
+        0x0040_8860,
+        0x0047_6930,
+        0x0047_6980,
+        0x0047_69c0,
+    ])
     .inputs(&[
         Input::Of(&[0, 1, 2]),
         Input::Of(TWO_WAYS),
