@@ -7,11 +7,10 @@ use super::layout::{
     BSCompoundFrustum, BSCullingProcess, BSMultiBoundAABB, NiAVObject, NiBound, NiCullingProcess,
     NiFrustum, NiFrustumPlanes, NiGeometry, NiPlane, NiPoint3, NiTransform,
 };
-use super::{bound, fld, fld_local, fstp, m32, radius_not_zero, FAMILY};
+use super::{bound, radius_not_zero, FAMILY};
 use crate::dispatch;
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
-use engine_core::x87::{x87_add, x87_mul, x87_sub};
 use engine_core::{args, typed_call, Engine};
 
 /// `NiAVObject::OnVisible` (Xbox PDB), virtual slot 0xd4: `thiscall(object, process)`.
@@ -370,7 +369,8 @@ pub fn bs_process_scene(
 /// bound against all six planes: the dot product of normal and centre (`(ny*cy + nx*cx) + cz*nz`,
 /// stored), minus the constant (stored); behind a plane when that is at most minus the radius
 /// (ordered). Behind any plane: culled (`0x100000` set), else cleared. The flags word is read once,
-/// after the mark, and written back whole.
+/// after the mark, and written back whole. Only the main thread runs it (the thread census), so its
+/// maths is plain `f32`: the exe's 24-bit products and sums.
 pub fn fade_culler_process(e: &mut Engine, this: Ptr<NiCullingProcess>, reference: u32) {
     let node = Ptr::<NiAVObject>::new(e.vcall(reference, SLOT_FADE_NODE, &[]).u32());
     if node.is_null() {
@@ -385,17 +385,13 @@ pub fn fade_culler_process(e: &mut Engine, this: Ptr<NiCullingProcess>, referenc
         let world = world_bound(e, node);
         let center = world.at(NiBound::m_kCenter);
         let normal = plane(planes, index).at(NiPlane::m_kNormal);
-        let y = x87_mul(fld(e, normal, NiPoint3::y), m32(e, center, NiPoint3::y));
-        let x = x87_mul(fld(e, normal, NiPoint3::x), m32(e, center, NiPoint3::x));
-        let z = x87_mul(fld(e, center, NiPoint3::z), m32(e, normal, NiPoint3::z));
-        let dot = fstp(x87_add(x87_add(y, x), z));
-        let distance = fstp(x87_sub(
-            fld_local(dot),
-            m32(e, plane(planes, index), NiPlane::m_fConstant),
-        ));
+        let y = e.get(normal, NiPoint3::y) * e.get(center, NiPoint3::y);
+        let x = e.get(normal, NiPoint3::x) * e.get(center, NiPoint3::x);
+        let z = e.get(center, NiPoint3::z) * e.get(normal, NiPoint3::z);
+        let dot = (y + x) + z;
+        let distance = dot - e.get(plane(planes, index), NiPlane::m_fConstant);
         // FLD distance; FLD radius; FCHS; FCOMPP; TEST AH,1; JZ: -radius not below the distance.
-        let below = -fld(e, world, NiBound::m_fRadius);
-        if below >= fld_local(distance) {
+        if -e.get(world, NiBound::m_fRadius) >= distance {
             break;
         }
         index += 1;
@@ -420,7 +416,7 @@ pub fn within_frustum(
 ) -> bool {
     let zero: f64 = e.global(ZERO_DOUBLE);
     let half_extents = this.at(BSMultiBoundAABB::HalfExtents);
-    let flat = fld(e, half_extents, NiPoint3::z) == zero;
+    let flat = f64::from(e.get(half_extents, NiPoint3::z)) == zero;
     // Eight points of 12 bytes, a local `00c39270` writes.
     e.with_stack(96, |e, corners| {
         typed_call!(

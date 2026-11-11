@@ -3,7 +3,7 @@
 
 use super::layout::{BSCompoundFrustum, FunctionOp, NiAVObject, NiBound, NiFrustumPlanes};
 use super::layout::{NiFrustum, NiPoint3, NiTransform};
-use super::{copy_float, fld, fld_local, fstp, FAMILY, NULL_BOUND};
+use super::{copy_float, FAMILY, NULL_BOUND};
 use engine_core::ptr::Ptr;
 use engine_core::{args, typed_call, Engine};
 
@@ -111,7 +111,7 @@ pub fn process(e: &mut Engine, this: Ptr<BSCompoundFrustum>, object: Ptr<NiAVObj
     if bound.is_null() {
         return false;
     }
-    let radius = fld_local(fstp(fld(e, bound, NiBound::m_fRadius)));
+    let radius = f64::from(e.get(bound, NiBound::m_fRadius));
     // TEST AH,0x44; JNP: an ordered equal is no bound.
     if radius == e.global::<f64>(ZERO_DOUBLE) {
         return false;
