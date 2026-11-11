@@ -2,6 +2,10 @@
 //! lists, the groups are drawn in the order of the active pass type list, and each pass is drawn by
 //! beginning the shader's pass when the type or shader changes, then the geometry (plain or skinned,
 //! partition by partition). The alpha lists are sorted back to front by the camera's direction.
+//!
+//! **Floats.** The alpha sort's comparison ([`compare_by_depth`]) runs on the main thread only (the
+//! thread census), so its depths are plain `f32` in the exe's order ([`crate::native`]): the exe's own
+//! rounding at the main thread's 24-bit precision. The other float reads here are comparisons.
 
 use super::layout::{
     ActivePass, BSBatchRenderer, NiGeometry, NiGeometryData, NiProperty, NiSkinInstance,
@@ -10,11 +14,9 @@ use super::layout::{
 use super::state::{self, DEVICE_SET_SAMPLER_STATE};
 use super::{accumulator, elem_addr, geometry, low8, textures, FAMILY};
 use crate::culling::layout::NiBound;
-use crate::culling::{fstp, m32};
 use engine_core::abi::OneWord;
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
-use engine_core::x87::{x87_add, x87_load32, x87_m32, x87_mul, x87_sub};
 use engine_core::{args, typed_call, Engine};
 
 /// A list word through the drawing thread's view (`draw::detach`, step 1): guest memory while it is closed.
@@ -875,11 +877,12 @@ pub fn end_pass(e: &mut Engine) {
     e.set_global(CURRENT_SHADER, 0u32);
 }
 
-/// The distance of a pass's world bound along the camera's direction (as the exe sums it: y, x, z),
-/// stored to a float; minus the bound's radius (stored again) when asked. `second` is the order of
-/// the comparison's second operand, whose last product takes its z as a memory operand.
+/// The distance of a pass's world bound along the camera's direction (as the exe sums it: x and y,
+/// then z), stored to a float; minus the bound's radius (stored again) when asked. The exe orders the
+/// operands of the second item's products the other way round, which changes nothing but the x87's
+/// choice of NaN.
 #[inline(always)]
-fn depth(e: &Engine, item: u32, d: [f64; 3], subtract: bool, second: bool) -> f32 {
+fn depth(e: &Engine, item: u32, d: [f32; 3], subtract: bool) -> f32 {
     let pass = Ptr::<RenderPass>::new(e.global::<u32>(item));
     let geometry = e.get(pass, RenderPass::pGeometry);
     let mut bound = Ptr::<NiBound>::new(e.get(geometry, NiGeometry::m_kWorldBound));
@@ -887,33 +890,15 @@ fn depth(e: &Engine, item: u32, d: [f64; 3], subtract: bool, second: bool) -> f3
         bound = Ptr::new(NULL_BOUND);
     }
     let centre = bound.addr();
-    let x = e.global::<u32>(centre);
-    let y = e.global::<u32>(centre.wrapping_add(4));
-    let z = e.global::<u32>(centre.wrapping_add(8));
-    let sum = if second {
-        let q1 = x87_mul(d[1], x87_load32(y));
-        let q0 = x87_mul(d[0], x87_load32(x));
-        let s = x87_add(q0, q1);
-        x87_add(s, x87_mul(d[2], x87_m32(z)))
-    } else {
-        let p1 = x87_mul(x87_load32(y), d[1]);
-        let p0 = x87_mul(x87_load32(x), d[0]);
-        let s = x87_add(p0, p1);
-        x87_add(x87_mul(x87_load32(z), d[2]), s)
-    };
-    let stored = fstp(sum);
+    let x = e.global::<f32>(centre);
+    let y = e.global::<f32>(centre.wrapping_add(4));
+    let z = e.global::<f32>(centre.wrapping_add(8));
+    let sum = (x * d[0] + y * d[1]) + z * d[2];
     if subtract {
-        let radius = e.get(bound, NiBound::m_fRadius).to_bits();
-        let value = x87_sub(fld_bits(stored), x87_m32(radius));
-        fstp(value)
+        sum - e.get(bound, NiBound::m_fRadius)
     } else {
-        stored
+        sum
     }
-}
-
-#[inline(always)]
-fn fld_bits(value: f32) -> f64 {
-    x87_load32(value.to_bits())
 }
 
 // Typed from 00b98b20
@@ -923,10 +908,10 @@ fn fld_bits(value: f32) -> f64 {
 pub fn compare_by_depth(e: &mut Engine, first: u32, second: u32) -> i32 {
     let subtract = e.global::<u8>(SORT_SUBTRACT_RADIUS) != 0;
     let camera = e.global::<u32>(SORT_CAMERA);
-    let direction = |off: u32| x87_load32(e.global::<u32>(camera.wrapping_add(off)));
+    let direction = |off: u32| e.global::<f32>(camera.wrapping_add(off));
     let d = [direction(0x68), direction(0x74), direction(0x80)];
-    let a = fld_bits(depth(e, first, d, subtract, false));
-    let b = fld_bits(depth(e, second, d, subtract, true));
+    let a = depth(e, first, d, subtract);
+    let b = depth(e, second, d, subtract);
     if b == a {
         0
     } else if b > a {
@@ -1572,8 +1557,7 @@ pub fn add_to_group(
     {
         use super::layout::BSShaderProperty as P;
         alpha = true;
-        let blocked =
-            1.0 > m32(e, properties, P::fAlpha) || 1.0 > m32(e, properties, P::fFadeAlpha);
+        let blocked = 1.0 > e.get(properties, P::fAlpha) || 1.0 > e.get(properties, P::fFadeAlpha);
         if blocked && e.get(alpha_property, NiProperty::m_usFlags) & 1 == 0 && pass_type != 2 {
             alpha = false;
         }

@@ -14,10 +14,16 @@
 //! `typed_call!`, and a function pointer that names one of them (the register function, the alpha
 //! sort's comparison) is called directly when it does.
 //!
-//! **Floats.** The per-thread census (`t3/threads.tsv`) has this layer on the main thread, a few of
-//! its functions also on another game thread (about 1 call in 2,000 for the stage caches and the
-//! transform). So the family is [`Threads::Both`] and keeps the culling family's exact x87 helpers:
-//! every load, operation and store is the exe's, in its order, under either control word.
+//! **Floats** (ADR-0014's float rule, [`crate::native`]). The per-thread census (`t3/threads.tsv`) has
+//! this layer on the main thread, a few of its functions also on another game thread (about 1 call in
+//! 2,000 for the stage caches and the transform). So the family is [`Threads::Both`], and each
+//! function's maths follows where it runs, in the exe's order: the world matrix
+//! ([`accumulator::make_matrix`], [`accumulator::set_world_transform`]) and the range
+//! ([`state::set_range`]) in `f64` rounded where the exe stores a float, the exe's own arithmetic at
+//! the other thread's 53-bit precision; what only the main thread runs (the constant set-ups in
+//! [`geometry`] and [`lighting`], the alpha sort's [`batch::compare_by_depth`], the light direction,
+//! colour and alpha in [`accumulator`]) in plain `f32`, the exe's own rounding at the main thread's
+//! 24-bit precision. No x87 helper is left in the family.
 
 use engine_core::ptr::{Field, Ptr};
 use engine_core::typed::{Family, FamilyId, Threads};

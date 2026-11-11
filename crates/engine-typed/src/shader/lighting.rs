@@ -3,9 +3,11 @@
 //! crowded street. It leaves the light's colour, its position or direction and its kind in the shaders'
 //! scratch rows and, for a light that is not a point light, the ambient colour.
 //!
-//! Every x87 load, operation and store is the exe's, in its order (the exact helpers, the same under
-//! either control word).
+//! **Floats.** Only the main thread runs it (the thread census), so its maths is plain `f32`, each
+//! operation the exe's in its order ([`crate::native`]): the exe's own rounding at the main thread's
+//! 24-bit precision. A float the exe copies through the x87 stack is copied as it is.
 
+use crate::native::{add_d, mul_d, narrow};
 use engine_core::prelude::*;
 
 /// The zero colour (4 words, `011a9bd0`).
@@ -39,8 +41,9 @@ const LAST_LIGHT_FLAG: u32 = 0x011f_91a6;
 /// The neutral colour a point light gets below full `scale` (3 words, `011f4998`).
 const DIMMED_COLOUR: u32 = 0x011f_4998;
 
-fn float_word(e: &Engine, address: u32) -> f64 {
-    x87_load32(e.mem.u32(address))
+#[inline(always)]
+fn float_word(e: &Engine, address: u32) -> f32 {
+    e.mem.f32(address)
 }
 
 /// The rendering geometry's shader property (`[[011f91e0]] + 0xa8`) when its word at +0x1c is 8 to 12
@@ -62,40 +65,38 @@ fn shader_object(e: &Engine) -> u32 {
 /// The brightness step: with the threshold above zero (else `None`), the luminance `red * w2 + green *
 /// w1 + blue + w2` (stored as a float) at or below zero makes all three the threshold; otherwise each
 /// component plus the offset is scaled by threshold / luminance (1.0 when the luminance is above the
-/// threshold), in the exe's x87 operand order.
+/// threshold), each step in the exe's order.
 #[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN-aware as the exe: not above, including unordered.
-fn brighten(e: &Engine, colour: [f64; 3], threshold: f64) -> Option<[u32; 3]> {
+fn brighten(e: &Engine, colour: [f32; 3], threshold: f32) -> Option<[f32; 3]> {
     if !(threshold > 0.0) {
         return None;
     }
     let [x, y, z] = colour;
-    let green = x87_mul(x87_load64(e.global::<u64>(GREEN_WEIGHT)), y);
-    let red_weight = x87_load64(e.global::<u64>(RED_WEIGHT));
-    let red = x87_mul(x, red_weight);
-    let sum = x87_add(x87_add(red, green), z);
-    let luminance = x87_load32(x87_store32(x87_add(red_weight, sum)));
+    let green = mul_d(y, e.global::<f64>(GREEN_WEIGHT));
+    let red_weight = e.global::<f64>(RED_WEIGHT);
+    let red = mul_d(x, red_weight);
+    let sum = (red + green) + z;
+    let luminance = add_d(sum, red_weight);
     if luminance <= 0.0 {
-        let t = x87_store32(threshold);
-        return Some([t, t, t]);
+        return Some([threshold; 3]);
     }
     let ratio = if luminance > threshold {
         1.0
     } else {
-        x87_div(threshold, luminance)
+        threshold / luminance
     };
-    let ratio = x87_load32(x87_store32(ratio));
-    let offset = x87_load64(e.global::<u64>(BRIGHTNESS_OFFSET));
-    let red = x87_store32(x87_mul(x87_add(x, offset), ratio));
-    let green = x87_store32(x87_mul(x87_add(y, offset), ratio));
-    let blue = x87_store32(x87_mul(ratio, x87_add(offset, z)));
+    let offset = e.global::<f64>(BRIGHTNESS_OFFSET);
+    let red = add_d(x, offset) * ratio;
+    let green = add_d(y, offset) * ratio;
+    let blue = ratio * add_d(z, offset);
     Some([red, green, blue])
 }
 
-/// The light's strength (the float at +0xc4 of its data, through the FPU), made 1.0 when above 1.0
-/// unless the HDR switch is set.
-fn capped_strength(e: &Engine, data: u32) -> f64 {
-    let strength = x87_load32(e.mem.u32(data.wrapping_add(0xc4)));
-    if e.global::<u8>(HDR) == 0 && strength > e.global::<f64>(ONE) {
+/// The light's strength (the float at +0xc4 of its data), made 1.0 when above 1.0 unless the HDR
+/// switch is set.
+fn capped_strength(e: &Engine, data: u32) -> f32 {
+    let strength = float_word(e, data.wrapping_add(0xc4));
+    if e.global::<u8>(HDR) == 0 && f64::from(strength) > e.global::<f64>(ONE) {
         1.0
     } else {
         strength
@@ -142,12 +143,10 @@ pub fn light_setup(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
     let data = e.mem.u32(light.wrapping_add(0xf8));
     let is_point = e.mem.u8(light.wrapping_add(0xf4));
     let object = shader_object(e);
-    let scale_value = x87_load32(scale.to_bits());
     if is_point != 0 {
         if data != 0 {
-            let position: [u32; 3] = std::array::from_fn(|i| {
-                x87_quiet_bits(e.mem.u32(data.wrapping_add(0x8c + 4 * idx(i))))
-            });
+            let position: [u32; 3] =
+                std::array::from_fn(|i| e.mem.u32(data.wrapping_add(0x8c + 4 * idx(i))));
             typed_call!(
                 leaf::FAMILY,
                 0x004e_20c0,
@@ -174,18 +173,13 @@ pub fn light_setup(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
                     0x004a_0c10,
                     crate::dispatch::math::normalize(e, Ptr::new(point))
                 );
-                [
-                    x87_quiet_bits(e.mem.u32(point)),
-                    x87_quiet_bits(e.mem.u32(point + 4)),
-                    x87_quiet_bits(e.mem.u32(point + 8)),
-                ]
+                [e.mem.u32(point), e.mem.u32(point + 4), e.mem.u32(point + 8)]
             });
             let w = if object != 0 {
-                e.vcall(object, 0x10c, &args![]).f64()
+                narrow(e.vcall(object, 0x10c, &args![]).f64())
             } else {
                 1.0
             };
-            let w = x87_store32(w);
             typed_call!(
                 leaf::FAMILY,
                 0x004e_20c0,
@@ -194,89 +188,74 @@ pub fn light_setup(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
         }
         let skipped = e.global::<u8>(SKIP_AMBIENT) != 0 && ambient_allowed == 0;
         if !skipped {
-            let mut strength = x87_quiet_bits(e.mem.u32(data.wrapping_add(0xc4)));
+            let mut strength = float_word(e, data.wrapping_add(0xc4));
             if e.global::<u8>(HDR) == 0 {
                 // The smaller of 1 and the strength (`0040ebd0`, `cdecl(a, b)`, answering in ST0).
-                let smaller = typed_call!(
+                strength = typed_call!(
                     crate::draw_f::FAMILY,
                     0x0040_ebd0,
-                    crate::draw_f::helpers::float_min(e, 1.0, f32::from_bits(strength))
+                    crate::draw_f::helpers::float_min(e, 1.0, strength)
                 );
-                strength = x87_store32(f64::from(smaller));
             }
-            let strength = x87_load32(strength);
-            let base: [f64; 3] =
+            let base: [f32; 3] =
                 std::array::from_fn(|i| float_word(e, data.wrapping_add(0xc8 + 4 * idx(i))));
             let mut colour = [
-                x87_store32(x87_mul(base[0], strength)),
-                x87_store32(x87_mul(base[1], strength)),
-                x87_store32(x87_mul(
-                    strength,
-                    x87_m32(e.mem.u32(data.wrapping_add(0xd0))),
-                )),
+                base[0] * strength,
+                base[1] * strength,
+                strength * float_word(e, data.wrapping_add(0xd0)),
             ];
-            let threshold = x87_load32(x87_quiet_bits(e.global::<u32>(THRESHOLD)));
-            let loaded = colour.map(x87_load32);
-            if let Some(bright) = brighten(e, loaded, threshold) {
+            let threshold = e.global::<f32>(THRESHOLD);
+            if let Some(bright) = brighten(e, colour, threshold) {
                 colour = bright;
             }
             for (i, component) in colour.iter().enumerate() {
-                let scaled = x87_store32(x87_mul(x87_load32(*component), scale_value));
-                e.set_global(AMBIENT_COLOUR + 4 * idx(i), x87_quiet_bits(scaled));
+                e.set_global(AMBIENT_COLOUR + 4 * idx(i), *component * scale);
             }
             e.set_global(AMBIENT_COLOUR + 0xc, 1.0f32.to_bits());
         }
     }
     let strength = capped_strength(e, data);
-    let weight = x87_quiet_bits(e.mem.u32(light.wrapping_add(0xd0)));
-    let base: [f64; 3] =
+    let weight = float_word(e, light.wrapping_add(0xd0));
+    let base: [f32; 3] =
         std::array::from_fn(|i| float_word(e, data.wrapping_add(0xd4 + 4 * idx(i))));
     let colour = [
-        x87_store32(x87_mul(base[0], strength)),
-        x87_store32(x87_mul(base[1], strength)),
-        x87_store32(x87_mul(
-            strength,
-            x87_m32(e.mem.u32(data.wrapping_add(0xdc))),
-        )),
+        base[0] * strength,
+        base[1] * strength,
+        strength * float_word(e, data.wrapping_add(0xdc)),
     ];
-    let scaled = colour.map(|component| x87_store32(x87_mul(x87_load32(component), scale_value)));
-    let weight = x87_load32(weight);
+    let scaled = colour.map(|component| component * scale);
     e.with_stack(0xc, |e, point| {
         let point = point.addr();
-        let products = [
-            x87_store32(x87_mul(x87_load32(scaled[0]), weight)),
-            x87_store32(x87_mul(weight, x87_m32(scaled[1]))),
-            x87_store32(x87_mul(weight, x87_m32(scaled[2]))),
-        ];
+        let products = [scaled[0] * weight, weight * scaled[1], weight * scaled[2]];
         for (i, value) in products.iter().enumerate() {
-            e.mem.set_u32(point + 4 * idx(i), *value);
+            e.mem.set_f32(point + 4 * idx(i), *value);
         }
         if is_point != 0 {
-            if scale_value < 1.0 {
+            if scale < 1.0 {
                 for i in 0..3u32 {
                     let value = e.global::<u32>(DIMMED_COLOUR + 4 * i);
                     e.mem.set_u32(point + 4 * i, value);
                 }
             }
         } else if e.global::<u8>(HDR) != 0 && e.global::<u8>(NO_EXTRA_SCALE) == 0 {
-            let extra = x87_quiet_bits(e.global::<u32>(EXTRA_SCALE));
+            let extra = e.global::<u32>(EXTRA_SCALE);
             scale_point(e, point, extra);
         }
         let pass = e.global::<u16>(PASS_TYPE).wrapping_sub(0x154);
-        let alpha = x87_quiet_bits(e.mem.u32(light.wrapping_add(0xd4)));
+        let alpha = e.mem.u32(light.wrapping_add(0xd4));
         if pass <= 0x23 && object != 0 {
-            let factor = x87_store32(e.vcall(object, 0x10c, &args![]).f64());
-            scale_point(e, point, factor);
+            let factor = narrow(e.vcall(object, 0x10c, &args![]).f64());
+            scale_point(e, point, factor.to_bits());
         }
         for i in 0..3u32 {
-            let value = x87_quiet_bits(e.mem.u32(point + 4 * i));
+            let value = e.mem.u32(point + 4 * i);
             e.set_global(row + 4 * i, value);
         }
         e.set_global(row + 0xc, alpha);
     });
     if is_point != 0 {
         let direction = LIGHT_DIRECTIONS.wrapping_add(index << 4);
-        let first = x87_quiet_bits(e.mem.u32(data.wrapping_add(0xe0)));
+        let first = e.mem.u32(data.wrapping_add(0xe0));
         // The exe also reads +0xe4 and +0xe8 and overwrites them with 0.0.
         let _ = (
             e.mem.u32(data.wrapping_add(0xe4)),

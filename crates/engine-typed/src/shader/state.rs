@@ -12,10 +12,9 @@ use super::layout::{
     StageStateCache,
 };
 use super::{elem_addr, low8, FAMILY};
-use crate::culling::fstp;
+use crate::native::narrow;
 use engine_core::ptr::{Field, Ptr};
 use engine_core::typed::leaf;
-use engine_core::x87::{x87_load32, x87_sub};
 use engine_core::{args, typed_call, Engine};
 
 /// The renderer (`011f9508`) whose state cache (+0x8b8) the setters use.
@@ -514,9 +513,9 @@ pub fn set_declaration(e: &mut Engine, this: Ptr<NiDX9RenderState>, declaration:
 /// bounds (both ordered) and neither force byte is set; on otherwise. Comparisons are exact under any
 /// control word.
 pub fn set_alpha_test_of(e: &mut Engine, this: Ptr<NiDX9RenderState>, object: u32) {
-    let alpha = x87_load32(e.global::<u32>(object.wrapping_add(0x30)));
-    let low = f64::from_bits(e.global::<u64>(ALPHA_LOW));
-    let high = x87_load32(e.global::<u32>(ALPHA_HIGH));
+    let alpha = f64::from(e.global::<f32>(object.wrapping_add(0x30)));
+    let low = e.global::<f64>(ALPHA_LOW);
+    let high = f64::from(e.global::<f32>(ALPHA_HIGH));
     let off = alpha >= low
         && high >= alpha
         && e.get(this, NiDX9RenderState::ucForceAlphaTestB) == 0
@@ -525,17 +524,13 @@ pub fn set_alpha_test_of(e: &mut Engine, this: Ptr<NiDX9RenderState>, object: u3
 }
 
 // Typed from 00e88730
-/// `thiscall(cache, first, second)`: both floats stored (`FST`, quieted), and second minus first.
+/// `thiscall(cache, first, second)`: both floats stored, and second minus first (`f64`, rounded where
+/// the exe stores it: this also runs on another game thread).
 pub fn set_range(e: &mut Engine, this: Ptr<NiDX9RenderState>, first: f32, second: f32) {
-    let first = x87_load32(first.to_bits());
-    e.set(this, NiDX9RenderState::fRangeFirst, fstp(first));
-    let second = x87_load32(second.to_bits());
-    e.set(this, NiDX9RenderState::fRangeSecond, fstp(second));
-    e.set(
-        this,
-        NiDX9RenderState::fRangeDifference,
-        fstp(x87_sub(second, first)),
-    );
+    e.set(this, NiDX9RenderState::fRangeFirst, first);
+    e.set(this, NiDX9RenderState::fRangeSecond, second);
+    let difference = narrow(f64::from(second) - f64::from(first));
+    e.set(this, NiDX9RenderState::fRangeDifference, difference);
 }
 
 // Typed from 00e88750
