@@ -18,7 +18,7 @@ use crate::sm::{self, wgsl, Stage};
 use crate::state::{self, rs, SamplerKey};
 use d3d9_stream::{Handle, Rect};
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Where the device's frames go.
@@ -780,7 +780,9 @@ const GETDATA_FLUSH: u32 = 1;
 
 impl Device {
     /// The wgpu device for the game's (`CreateDevice`): on the game's real window `window` when
-    /// `output` is [`Output::Window`].
+    /// `output` is [`Output::Window`], with the window's swap chain configured. Why none, when no
+    /// graphics API has a device that can show the game in the window (the platform then draws
+    /// with Direct3D 9).
     pub(crate) fn new(
         output: Output,
         window: isize,
@@ -790,10 +792,14 @@ impl Device {
         cache_dir: Option<&std::path::Path>,
     ) -> Result<Device, String> {
         // The graphics APIs in [`apis`]'s order: Vulkan, then Direct3D 12 for a card without a
-        // Vulkan driver; `NV_WGPU_BACKEND` names one.
+        // Vulkan driver, or whose Vulkan device or swap chain fails; `NV_WGPU_BACKEND` names one.
         let asked = std::env::var("NV_WGPU_BACKEND").ok();
         let (tries, software) = apis(asked.as_deref());
-        let mut found = None;
+        let shots = Shots::from_env();
+        let copies = shots.is_some();
+        let mut opened = None;
+        let mut software_one = None;
+        let mut failed = Vec::new();
         for backends in tries {
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends,
@@ -823,35 +829,58 @@ impl Device {
             })) else {
                 continue;
             };
-            // A graphics card ends the search. A software adapter (a CPU one) stands only until a
-            // later API has a card, or is asked for: with none, the last API's (WARP, Direct3D
-            // 12's, on Windows, as CI's runners had before Vulkan came first).
+            // A graphics card's device and swap chain end the search; when either fails, the next
+            // API is tried. A software adapter (a CPU one) stands only until a later API has a
+            // card, or is asked for: with none, the last API's (WARP, Direct3D 12's, on Windows,
+            // as CI's runners had before Vulkan came first).
             let cpu = adapter.get_info().device_type == wgpu::DeviceType::Cpu;
-            found = Some((instance, surface, adapter));
-            if !cpu || software {
-                break;
+            if cpu && !software {
+                software_one = Some((backends, instance, surface, adapter));
+                continue;
+            }
+            match open(instance, surface, adapter, window, pp, copies) {
+                Ok(o) => {
+                    opened = Some(o);
+                    break;
+                }
+                Err(e) => {
+                    eprintln!("NV_D3D9 wgpu: {backends:?}: {e}");
+                    failed.push(format!("{backends:?}"));
+                }
             }
         }
-        let (instance, surface, adapter) = found.ok_or("no wgpu adapter")?;
-        let wanted = wgpu::Features::TEXTURE_COMPRESSION_BC
-            | wgpu::Features::FLOAT32_FILTERABLE
-            | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
-            | wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER
-            | wgpu::Features::DEPTH32FLOAT_STENCIL8
-            | wgpu::Features::CLIP_DISTANCES
-            | wgpu::Features::FLOAT32_BLENDABLE
-            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
-            | wgpu::Features::PIPELINE_CACHE;
-        let features = adapter.features() & wanted;
-        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("d3d9-wgpu"),
-            required_features: features,
-            required_limits: adapter.limits(),
-            memory_hints: wgpu::MemoryHints::Performance,
-            experimental_features: Default::default(),
-            trace: Default::default(),
-        }))
-        .map_err(|e| format!("request_device: {e}"))?;
+        // A software adapter only on a machine without a graphics card: after a card's device
+        // failed, the platform's Direct3D 9 draws on that card (not the CPU at a few frames a
+        // second, which the hardware check of #422 keeps players from).
+        if opened.is_none() && failed.is_empty() {
+            if let Some((backends, instance, surface, adapter)) = software_one {
+                match open(instance, surface, adapter, window, pp, copies) {
+                    Ok(o) => opened = Some(o),
+                    Err(e) => {
+                        eprintln!("NV_D3D9 wgpu: {backends:?}: {e}");
+                        failed.push(format!("{backends:?}"));
+                    }
+                }
+            }
+        }
+        // None: the platform draws with Direct3D 9 (`engine-platform`'s `d3d9real`).
+        let Some(Opened {
+            adapter,
+            device,
+            queue,
+            features,
+            window: shown_in,
+        }) = opened
+        else {
+            return Err(if failed.is_empty() {
+                "no wgpu adapter".into()
+            } else {
+                format!(
+                    "no device on {} could show the game (why above)",
+                    failed.join(", ")
+                )
+            });
+        };
         // The driver's compiled pipelines from the last run, where the backend keeps them (Vulkan).
         let pipeline_cache =
             cache_dir.and_then(|d| cache::PipelineCacheFile::open(&device, &adapter.get_info(), d));
@@ -1017,7 +1046,7 @@ impl Device {
             destroyed: HashSet::new(),
             next_id: 1,
             presents: 0,
-            shots: Shots::from_env(),
+            shots,
             warned: HashSet::new(),
             errors,
             draws: 0,
@@ -1025,20 +1054,11 @@ impl Device {
             answers: None,
             awaiting: Vec::new(),
         };
-        if let Some(surface) = surface {
-            // The swap chain at the window's size ([`crate::window`]); with `NV_SHOT` its frames
-            // can be copied out too (`wgpu-window-N.bmp`).
-            d.surface = Some(crate::window::Window::new(
-                window,
-                instance,
-                adapter.clone(),
-                surface,
-                &d.device,
-                (pp.width, pp.height),
-                pp.interval,
-                d.shots.is_some(),
-            ));
-        }
+        d.surface = shown_in;
+        assert!(
+            FAIL_FOR_TESTS.load(Ordering::Relaxed) & PANIC_FOR_TESTS == 0,
+            "a device made to panic (tests)"
+        );
         d.make_back_buffers(pp, back_buffers, depth);
         let shown = match (&d.surface, output) {
             (Some(w), _) => format!(
@@ -4999,6 +5019,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.errors.load(Ordering::Relaxed)
     }
 
+    /// The adapter and its graphics API, as the log names them ("NVIDIA ... (Vulkan)"; tests).
+    pub fn adapter_name(&self) -> &str {
+        &self.adapter_name
+    }
+
     /// Loses the device, as a driver reset (TDR) or a removed graphics card does: from now on
     /// nothing reaches the GPU and nothing is read back from it (tests).
     pub fn lose(&self) {
@@ -5313,6 +5338,113 @@ fn dummies(device: &wgpu::Device, queue: &wgpu::Queue) -> [wgpu::TextureView; 3]
             wgpu::TextureViewDimension::D3,
         ),
     ]
+}
+
+/// Tests only ([`fail_devices_for_tests`]): the graphics APIs whose swap chains are refused, as
+/// `wgpu::Backends` bits; [`LOST_FOR_TESTS`] for a device lost before its swap chain is made;
+/// [`PANIC_FOR_TESTS`] for a panic once a device and its swap chain are made.
+static FAIL_FOR_TESTS: AtomicU32 = AtomicU32::new(0);
+const PANIC_FOR_TESTS: u32 = 1 << 31;
+const LOST_FOR_TESTS: u32 = 1 << 30;
+
+/// Tests only: from now on the swap chains of devices made on the `refused` graphics APIs are
+/// asked in a format no window offers (wgpu refuses each); with `lost` every device is destroyed
+/// before its swap chain is made (as a driver that loses it there); with `panic` making a device
+/// panics once it and its swap chain are made. `(wgpu::Backends::empty(), false, false)` makes
+/// them as before.
+#[doc(hidden)]
+pub fn fail_devices_for_tests(refused: wgpu::Backends, lost: bool, panic: bool) {
+    let bits = refused.bits() & !(PANIC_FOR_TESTS | LOST_FOR_TESTS);
+    FAIL_FOR_TESTS.store(
+        bits | if lost { LOST_FOR_TESTS } else { 0 } | if panic { PANIC_FOR_TESTS } else { 0 },
+        Ordering::Relaxed,
+    );
+}
+
+/// Whether the tests asked for the swap chains of devices on `backend` to be refused.
+pub(crate) fn refused_for_tests(backend: wgpu::Backend) -> bool {
+    let bits = FAIL_FOR_TESTS.load(Ordering::Relaxed) & !(PANIC_FOR_TESTS | LOST_FOR_TESTS);
+    wgpu::Backends::from_bits_truncate(bits).contains(wgpu::Backends::from(backend))
+}
+
+/// What [`open`] made on one graphics API's adapter.
+struct Opened {
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    features: wgpu::Features,
+    /// The game's window and its swap chain ([`crate::window`]); none offscreen.
+    window: Option<crate::window::Window>,
+}
+
+/// The device on `adapter` with the features the backend uses where it has them, and on
+/// `surface` (the game's window `window`) its swap chain at the window's size, configured
+/// ([`crate::window::Window::new`]; with `copies`, its frames can be copied out:
+/// `wgpu-window-N.bmp`); why not, when wgpu refused the device or the swap chain twice, or lost
+/// the device while the swap chain was made.
+fn open(
+    instance: wgpu::Instance,
+    surface: Option<wgpu::Surface<'static>>,
+    adapter: wgpu::Adapter,
+    window: isize,
+    pp: &PresentParameters,
+    copies: bool,
+) -> Result<Opened, String> {
+    let wanted = wgpu::Features::TEXTURE_COMPRESSION_BC
+        | wgpu::Features::FLOAT32_FILTERABLE
+        | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+        | wgpu::Features::ADDRESS_MODE_CLAMP_TO_BORDER
+        | wgpu::Features::DEPTH32FLOAT_STENCIL8
+        | wgpu::Features::CLIP_DISTANCES
+        | wgpu::Features::FLOAT32_BLENDABLE
+        | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+        | wgpu::Features::PIPELINE_CACHE;
+    let features = adapter.features() & wanted;
+    let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("d3d9-wgpu"),
+        required_features: features,
+        required_limits: adapter.limits(),
+        memory_hints: wgpu::MemoryHints::Performance,
+        experimental_features: Default::default(),
+        trace: Default::default(),
+    }))
+    .map_err(|e| format!("request_device: {e}"))?;
+    // A driver can refuse the swap chain in a way wgpu takes for a lost device (Vulkan: out of
+    // memory, a lost device or a code wgpu does not know): wgpu gives that to no error scope, so
+    // the window's configuration reads as taken. The device's lost callback says it (wgpu calls
+    // it inside that configuration, or at the poll below for an earlier loss).
+    let lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let lost = lost.clone();
+        device.set_device_lost_callback(move |_, _| lost.store(true, Ordering::Release));
+    }
+    if FAIL_FOR_TESTS.load(Ordering::Relaxed) & LOST_FOR_TESTS != 0 {
+        device.destroy();
+    }
+    let window = match surface {
+        Some(surface) => Some(crate::window::Window::new(
+            window,
+            instance,
+            adapter.clone(),
+            surface,
+            &device,
+            (pp.width, pp.height),
+            pp.interval,
+            copies,
+        )?),
+        None => None,
+    };
+    let _ = device.poll(wgpu::PollType::Poll);
+    if lost.load(Ordering::Acquire) {
+        return Err("the device was lost while the window's swap chain was made".into());
+    }
+    Ok(Opened {
+        adapter,
+        device,
+        queue,
+        features,
+        window,
+    })
 }
 
 /// The graphics APIs the device is made on, in the order tried, and whether the software adapter

@@ -118,14 +118,20 @@ impl Backend for WgpuBackend {
         } = &cmd
         {
             let pp = device::PresentParameters::from_words(&present.to_words());
-            return match device::Device::new(
-                self.output,
-                if *window != 0 { *window } else { *focus },
-                &pp,
-                &handles(back_buffers),
-                *depth_stencil,
-                self.cache_dir.as_deref(),
-            ) {
+            // A panic while the device is made (in wgpu or a driver's answer it did not expect)
+            // answers as a refused device does: the platform then draws with Direct3D 9.
+            let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                device::Device::new(
+                    self.output,
+                    if *window != 0 { *window } else { *focus },
+                    &pp,
+                    &handles(back_buffers),
+                    *depth_stencil,
+                    self.cache_dir.as_deref(),
+                )
+            }))
+            .unwrap_or_else(|_| Err("making the device panicked".into()));
+            return match made {
                 Ok(mut d) => {
                     d.answers = self.answers.clone();
                     self.device = Some(d);

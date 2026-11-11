@@ -11,7 +11,7 @@
 
 #![cfg(windows)]
 
-use d3d9_stream::{Backend, Cmd, Data};
+use d3d9_stream::{Backend, Cmd, Data, Reply};
 use d3d9_wgpu::{Output, WgpuBackend};
 use std::path::{Path, PathBuf};
 
@@ -394,4 +394,169 @@ fn a_refused_configuration_never_has_a_frame_asked_of_it() {
             "taken again, frames again ({new_surface})"
         );
     }
+}
+
+/// `CreateDevice` on a fresh hidden window with a 32x24 back buffer: the reply, and the backend.
+fn create(window: isize) -> (Reply, WgpuBackend) {
+    let mut b = WgpuBackend::new(Output::Window);
+    let present = words(&[32, 24, A8R8G8B8, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0]);
+    let reply = b.execute(Cmd::CreateDevice {
+        device: DEVICE,
+        focus: window,
+        window,
+        behavior: 0x54,
+        present: Data::Bytes(&present),
+        back_buffers: Data::Bytes(&words(&[BACK])),
+        depth_stencil: 0,
+    });
+    (reply, b)
+}
+
+/// A device that cannot show the game in its window is not made, and a graphics API whose device
+/// or swap chain fails gives way to the next. With the swap chain refused twice on every API (a
+/// format no window offers), with every device lost before its swap chain is made (as a driver
+/// that refuses the swap chain with out of memory does: wgpu takes that for a lost device), and
+/// with a panic once the device and its swap chain are made, `CreateDevice` answers not created
+/// (the platform then draws with Direct3D 9) and the window is left free: a device made on it
+/// afterwards shows frames in it. Refused on Vulkan alone (on a machine with a Vulkan card), the
+/// device is made on Direct3D 12.
+#[test]
+fn a_device_that_cannot_show_frames_is_not_made_and_the_next_api_is_tried() {
+    // A machine with an adapter only (a device made as usual first).
+    drop(match Rig::new((40, 30), (40, 30)) {
+        Some(g) => g,
+        None => return,
+    });
+    let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let hwnd = hidden_window(48, 36);
+    assert_ne!(hwnd, 0, "the test window");
+    let fail = d3d9_wgpu::device::fail_devices_for_tests;
+    for (refused, lost, panic) in [
+        (wgpu::Backends::all(), false, false),
+        (wgpu::Backends::empty(), true, false),
+        (wgpu::Backends::empty(), false, true),
+    ] {
+        fail(refused, lost, panic);
+        let (reply, mut b) = create(hwnd);
+        fail(wgpu::Backends::empty(), false, false);
+        assert!(
+            matches!(reply, Reply::Device { created: false, .. }),
+            "refused {refused:?}, lost {lost}, panic {panic}: {reply:?}"
+        );
+        assert!(b.device().is_none());
+    }
+    // Refused on Vulkan only: Direct3D 12, where the run tries it after Vulkan. Without a Vulkan
+    // card (CI's runners, or NV_WGPU_BACKEND naming another API) Vulkan is never tried: said so.
+    if d3d9_wgpu::hardware_adapter().is_some_and(|n| n.ends_with("(Vulkan)")) {
+        fail(wgpu::Backends::VULKAN, false, false);
+        let (reply, mut b) = create(hwnd);
+        fail(wgpu::Backends::empty(), false, false);
+        assert!(
+            matches!(reply, Reply::Device { created: true, .. }),
+            "{reply:?}"
+        );
+        let name = b.device().expect("the device").adapter_name().to_string();
+        assert!(name.ends_with("(Dx12)"), "{name}");
+    } else {
+        eprintln!("no Vulkan card: the Vulkan-then-Direct3D 12 part is skipped");
+    }
+    // As usual on the same window afterwards: the window's size, the colour over all of it.
+    let (reply, b) = create(hwnd);
+    assert!(
+        matches!(reply, Reply::Device { created: true, .. }),
+        "{reply:?}"
+    );
+    let dir = shots_dir();
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir).expect("the captures' folder");
+    let mut g = Rig {
+        b,
+        hwnd,
+        dir,
+        _turn: turn,
+    };
+    g.show(1, 0xFF60_7080);
+    assert_eq!(
+        g.window_frame(1),
+        Some((48, 36, vec![bgra(0xFF60_7080)])),
+        "a device on the window the failed ones were made on"
+    );
+}
+
+/// A window with no area when the device is made (sized to nothing) still gets the device: its
+/// swap chain is made at its first frame with an area, and frames are shown at that size.
+#[test]
+fn a_window_without_an_area_at_create_device_still_gets_the_device() {
+    // A machine with an adapter only (a device made as usual first).
+    drop(match Rig::new((40, 30), (40, 30)) {
+        Some(g) => g,
+        None => return,
+    });
+    let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = shots_dir();
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir).expect("the captures' folder");
+    let hwnd = hidden_window(0, 0);
+    assert_ne!(hwnd, 0, "the test window");
+    assert_eq!(state(hwnd), (false, (0, 0)), "the test window has no area");
+    let (reply, b) = create(hwnd);
+    assert!(
+        matches!(reply, Reply::Device { created: true, .. }),
+        "no area: {reply:?}"
+    );
+    let mut g = Rig {
+        b,
+        hwnd,
+        dir,
+        _turn: turn,
+    };
+    g.show(1, 0xFF11_2233);
+    assert_eq!(g.window_frame(1), None, "no area, no frame");
+    g.size(50, 20);
+    g.show(2, 0xFF44_5566);
+    assert_eq!(
+        g.window_frame(2),
+        Some((50, 20, vec![bgra(0xFF44_5566)])),
+        "sized, the swap chain is made and the frames come"
+    );
+}
+
+/// A window minimised when the device is made still gets the device (its swap chain is made at
+/// its first frame with an area): never Direct3D 9 for a player who minimises the game while it
+/// starts. Minimised, the game's frames go on unshown.
+#[test]
+fn a_window_minimised_at_create_device_still_gets_the_device() {
+    // A machine with an adapter only (a device made as usual first).
+    drop(match Rig::new((40, 30), (40, 30)) {
+        Some(g) => g,
+        None => return,
+    });
+    let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = shots_dir();
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir).expect("the captures' folder");
+    // Minimised: the style bit IsIconic reads, set by hand (the window stays hidden).
+    let hwnd = hidden_window(48, 36);
+    assert_ne!(hwnd, 0, "the test window");
+    // SAFETY: the test's own window.
+    unsafe {
+        let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+        SetWindowLongW(hwnd, GWL_STYLE, (style | WS_MINIMIZE) as i32);
+    }
+    assert!(state(hwnd).0, "the test window reads as minimised");
+    let (reply, b) = create(hwnd);
+    assert!(
+        matches!(reply, Reply::Device { created: true, .. }),
+        "minimised: {reply:?}"
+    );
+    let mut g = Rig {
+        b,
+        hwnd,
+        dir,
+        _turn: turn,
+    };
+    g.show(1, 0xFF77_8899);
+    assert_eq!(g.window_frame(1), None, "minimised, no frame");
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0, "wgpu reported no error");
 }
