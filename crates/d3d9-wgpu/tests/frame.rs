@@ -369,6 +369,49 @@ fn every_sample_of_the_viewports_edge_pixels_can_be_covered() {
     }
 }
 
+/// A vertex shader has one module for every declaration of the same kinds: its position from a
+/// FLOAT2 element (filled to (x, y, 0, 1), Direct3D 9's own expansion: the triangle at depth 0)
+/// and from the FLOAT4 element (at depth 0.5) draw alike from one module, in two pipelines.
+#[test]
+fn a_vertex_shader_has_one_module_for_float_inputs_of_any_size() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    g.colour([1.0, 0.0, 0.0, 1.0]);
+    // Behind the triangle at 0.5 and in front of the one at 0 (`LESSEQUAL` passes both
+    // against 1.0; a depth of 0.25 then shows which reached the target).
+    for (declaration, ty, z_drawn) in [(DECL, 3u8, 0.5f32), (DECL + 1, 1, 0.0)] {
+        if declaration != DECL {
+            // POSITION as FLOAT2 in stream 0, then D3DDECL_END.
+            let decl = [0u8, 0, 0, 0, ty, 0, 0, 0, 0xFF, 0, 0, 0, 17, 0, 0, 0];
+            g.run(Cmd::CreateDeclaration {
+                device: DEVICE,
+                declaration,
+                elements: Data::Bytes(&decl),
+            });
+        }
+        g.run(Cmd::SetVertexDeclaration {
+            device: DEVICE,
+            declaration,
+        });
+        // A first pass at depth 0.25: the triangle drawn after it covers it only where it is
+        // nearer (`LESSEQUAL`).
+        g.clear(3, 0, 0.25);
+        g.cover(0.5);
+        let want = if z_drawn <= 0.25 { 255 } else { 0 };
+        assert_eq!(g.reds(), vec![want; 16], "drawn at depth {z_drawn}");
+    }
+    let d = g.b.device().expect("the device");
+    assert_eq!(
+        d.module_counts().0,
+        1,
+        "one vertex module for FLOAT4 and FLOAT2"
+    );
+    assert_eq!(
+        d.pipelines_made_on_draws(),
+        2,
+        "a pipeline for each vertex format"
+    );
+}
+
 /// Fixed varying locations: one vertex shader writing TEXCOORD0 (red) and TEXCOORD1 (green)
 /// serves a pixel shader reading TEXCOORD0 and one reading TEXCOORD1 with one module, each pair
 /// drawing its own colour; a pixel shader reading TEXCOORD2, which the vertex shader does not

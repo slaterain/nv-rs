@@ -67,11 +67,13 @@ pub struct Semantic {
 pub enum Input {
     /// Not in the declaration: the shader reads (0, 0, 0, 1) (a guess, DESIGN.md).
     Missing,
-    /// `n` floats (float, normalized and half types).
+    /// `n` floats (float, normalized and half types). The device always gives 4: the hardware
+    /// fills a format with fewer components as Direct3D 9 expands it ((x, y, 0, 1) for two), so
+    /// one module serves every declaration of the same kinds.
     Float(u8),
     /// Four unsigned bytes (`UBYTE4`).
     Uint4,
-    /// `n` signed shorts (`SHORT2`, `SHORT4`).
+    /// `n` signed shorts (`SHORT2`, `SHORT4`); the device always gives 4, as for floats.
     Sint(u8),
 }
 
