@@ -112,7 +112,11 @@ fn proxy(data: &str, precision: d3dx_tex::Precision) {
                             })
                             .collect();
                         assert_eq!(ours.join(";"), f[7], "{at}");
-                        textures.insert((f[1].to_string(), file.name.clone(), t.surfaces[0].format));
+                        textures.insert((
+                            f[1].to_string(),
+                            file.name.clone(),
+                            t.surfaces[0].format,
+                        ));
                         made += 1;
                     }
                 }
