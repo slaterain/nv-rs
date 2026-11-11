@@ -512,8 +512,12 @@ secondary scenes' draw (`00b6c0d0`). Group D, the geometry paths the batch rende
 immediate draws (the triangle shape, the segmented shape with its segment merge, the particles), the renderer's
 shape, skin partition and points draws with the particles' quad builders and vertex declarations, the skinned
 shader classes' bone set-up and the renderer's bone-matrix fill, a skin partition's buffer pack, a shader
-declaration's stream pack and build, the chips and the vertex lock, and the geometry data getters; the lock,
-unlock and chip functions and the folded "false" (`0047c850`) are game-wide too. The tests: group A's in
+declaration's stream pack and build, the chips and the vertex lock, and the geometry data getters. Used outside
+the world draw too (`draw:off` gives those callers the translations again): the geometry data getters, which sit in
+the data classes' vtables (the vertex count `00a669e0` in seven, the strip lists `00a75f10` in 24) and are asked by
+whoever holds a data object, the strip lists getter also called directly from nine places (among them the
+tangent-space creation, `PackGeometryBuffer`, `PrecacheGeometry`, the cached geometry and `ClipMesh`); the lock,
+unlock and chip functions; and the folded "false" (`0047c850`). The tests: group A's in
 `crates/engine/tests/typed_shader.rs` (the shader family's world), group D's in `crates/engine/tests/typed_draw.rs`.
 The accessors: what the drivers and the alpha pass read that the rest of the frame changes goes through
 `draw::packet`, and what they write that is their own through `draw::own`, one section per condition of the
