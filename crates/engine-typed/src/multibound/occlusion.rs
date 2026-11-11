@@ -56,14 +56,12 @@ pub fn add_object(
         typed_call!(
             culling::FAMILY,
             0x00c3_87f0,
-            culling::process::within_frustum(
-                e,
-                shape.cast(),
-                Ptr::<NiFrustumPlanes>::new(planes)
-            )
+            culling::process::within_frustum(e, shape.cast(), Ptr::<NiFrustumPlanes>::new(planes))
         )
     } else {
-        e.vcall(shape.addr(), SLOT_WITHIN_FRUSTUM, &args![planes]).u8() != 0
+        e.vcall(shape.addr(), SLOT_WITHIN_FRUSTUM, &args![planes])
+            .u8()
+            != 0
     };
     let shape = shape_of(e, node);
     e.set(

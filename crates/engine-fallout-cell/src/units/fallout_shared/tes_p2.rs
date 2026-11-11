@@ -2778,7 +2778,9 @@ fn scene_update_held_object(e: &mut Engine, camera: u32, scene: u32, process: Pt
         // `FLD [frustum + 0x10]; FSTP [ESP]`: the near distance pushed through the x87 stack.
         let near = x87_quiet_bits(e.mem.u32(frustum + 0x10));
         let column = e.call(CAMERA_COLUMN_0, &args![camera, column_point]).u32();
-        let scaled = e.call(POINT_TIMES, &args![column, scaled_point, near]).u32();
+        let scaled = e
+            .call(POINT_TIMES, &args![column, scaled_point, near])
+            .u32();
         let location = e.call(CAMERA_POSITION, &args![camera]).u32();
         e.call(POINT_ADD, &args![location, point, scaled]);
         let mut flag = 1u32;

@@ -98,7 +98,11 @@ fn first_scene(e: &mut Engine) -> u32 {
 
 /// The portal graph of `scene` (`00454b30`).
 fn graph_of(e: &mut Engine, scene: u32) -> u32 {
-    typed_call!(FAMILY, 0x0045_4b30, getters::portal_graph(e, Ptr::new(scene)))
+    typed_call!(
+        FAMILY,
+        0x0045_4b30,
+        getters::portal_graph(e, Ptr::new(scene))
+    )
 }
 
 /// The node's child count (`0043b480`), read again before every step.
@@ -180,7 +184,11 @@ fn water_system(e: &mut Engine, this: Ptr<TES>) -> u32 {
 /// The water system's list of water groups (its address, `005a8080`).
 fn water_groups(e: &mut Engine, this: Ptr<TES>) -> u32 {
     let system = water_system(e, this);
-    typed_call!(FAMILY, 0x005a_8080, getters::address_3c(e, Ptr::new(system)))
+    typed_call!(
+        FAMILY,
+        0x005a_8080,
+        getters::address_3c(e, Ptr::new(system))
+    )
 }
 
 /// The position after `position` in `list` (`007b52d0`).
@@ -243,7 +251,11 @@ fn visit_water(e: &mut Engine, this: Ptr<TES>, visit: &mut dyn FnMut(&mut Engine
         position = next;
     }
     let system = water_system(e, this);
-    let lod = typed_call!(FAMILY, 0x0067_33e0, getters::word_at_48(e, Ptr::new(system)));
+    let lod = typed_call!(
+        FAMILY,
+        0x0067_33e0,
+        getters::word_at_48(e, Ptr::new(system))
+    );
     if lod != 0 {
         visit_water_group(e, lod, visit);
     }
@@ -251,7 +263,11 @@ fn visit_water(e: &mut Engine, this: Ptr<TES>, visit: &mut dyn FnMut(&mut Engine
 
 /// The children of the scene node's child 6 (`0045bc00`, as a node through its slot +0xc).
 fn visit_scene_child_6(e: &mut Engine, scene: u32, visit: &mut dyn FnMut(&mut Engine, u32)) {
-    let child = typed_call!(FAMILY, 0x0045_bc00, getters::node_child(e, Ptr::new(scene), 6));
+    let child = typed_call!(
+        FAMILY,
+        0x0045_bc00,
+        getters::node_child(e, Ptr::new(scene), 6)
+    );
     let node = if child != 0 {
         e.vcall(child, SLOT_AS_NODE, &[]).u32()
     } else {
@@ -282,7 +298,11 @@ pub fn add(e: &mut Engine, this: Ptr<TES>, camera: u32) {
         let position = process.wrapping_add(PROCESS_SIZE);
         e.call(PROCESS_CONSTRUCT, &args![process, 0u32]);
         e.call(PROCESS_SET_CAMERA, &args![process, camera]);
-        let frustum = typed_call!(draw::FAMILY, 0x0045_bbe0, draw::packet::camera_port(e, camera));
+        let frustum = typed_call!(
+            draw::FAMILY,
+            0x0045_bbe0,
+            draw::packet::camera_port(e, camera)
+        );
         typed_call!(
             culling::FAMILY,
             0x00a6_94a0,
@@ -370,7 +390,11 @@ fn offer_held_object(e: &mut Engine, camera: u32, scene: u32, process: Ptr) {
         let column_point = held.wrapping_add(4);
         let scaled_point = held.wrapping_add(16);
         let point = held.wrapping_add(28);
-        let frustum = typed_call!(draw::FAMILY, 0x0045_bbe0, draw::packet::camera_port(e, camera));
+        let frustum = typed_call!(
+            draw::FAMILY,
+            0x0045_bbe0,
+            draw::packet::camera_port(e, camera)
+        );
         // `FLD [frustum + 0x10]; FSTP [ESP]`: the near distance pushed through the x87 stack.
         let near = x87_quiet_bits(e.mem.u32(frustum.wrapping_add(0x10)));
         let column = typed_call!(
@@ -454,7 +478,11 @@ fn offer(e: &mut Engine, scene: u32, process: Ptr, object: u32, flag: u32) {
 /// The reset of one object: its multibound's shape (`006629f0`, `0043b230`) back to "not tested"
 /// (`00528820`).
 fn reset(e: &mut Engine, object: u32) {
-    let bound = typed_call!(FAMILY, 0x0066_29f0, getters::multibound_of(e, Ptr::new(object)));
+    let bound = typed_call!(
+        FAMILY,
+        0x0066_29f0,
+        getters::multibound_of(e, Ptr::new(object))
+    );
     let shape = typed_call!(
         dispatch::FAMILY,
         0x0043_b230,

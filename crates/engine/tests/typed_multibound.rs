@@ -252,7 +252,11 @@ fn water_group(e: &mut Engine, count: u32, k: u32) -> u32 {
     let g = block(e, 0xb0, &[]);
     let entries: Vec<u32> = (0..count)
         .map(|i| {
-            let rtti = if (i + k) % 2 == 0 { WATER_ENTRY_RTTI } else { 0x0120_2000 };
+            let rtti = if (i + k) % 2 == 0 {
+                WATER_ENTRY_RTTI
+            } else {
+                0x0120_2000
+            };
             let first = multibound_node(e, rtti, 2, 0, (i + k) % 2);
             let holder = node(e, &[first], 0);
             let entry = object(e, 0x24, holder);
@@ -393,7 +397,11 @@ impl Common for Diff {
 fn pass_world(e: &mut Engine, w: [u32; 9]) -> (u32, u32) {
     let [place, side, with_7, k, x, child_6, water, graph, held] = w;
     stand_ins(e);
-    let interior = if place == 0 { cell(e, 3, with_7 != 0, k) } else { 0 };
+    let interior = if place == 0 {
+        cell(e, 3, with_7 != 0, k)
+    } else {
+        0
+    };
     let world = if place == 1 { block(e, 0x40, &[]) } else { 0 };
     set_logged_answer(e, 0x07, if place == 1 { 0x4321 } else { 0 });
     let system = water_system(e, water, k);
@@ -505,7 +513,11 @@ fn multibound_add_object() {
         // The process: its planes (a plane through the origin facing x, and its opposite) and active
         // mask, the mode word after it.
         let p = block(e, 0xa0, &[]);
-        words(e, p + 0x2c, &[ONE, 0, 0, MINUS_ONE, MINUS_ONE, 0, 0, MINUS_ONE]);
+        words(
+            e,
+            p + 0x2c,
+            &[ONE, 0, 0, MINUS_ONE, MINUS_ONE, 0, 0, MINUS_ONE],
+        );
         e.mem.set_u32(p + 0x2c + 0x60, case.word(4));
         e.mem.set_u32(p + 0x90, case.word(0));
         vec![s, n, ONE, TWO, HALF, p]
@@ -650,41 +662,54 @@ fn multibound_getters() {
         .run()
         .assert_same();
     // A list position or none; the list is not read.
-    Diff::new(entry!(0x007b_52d0, getters::next_position(Ptr<_>, Ptr<_>) -> u32))
-        .common()
-        .inputs(&[Input::Flag])
-        .setup(|e, case| {
-            stand_ins(e);
-            let header = list(e, &[0x10, 0x20]);
-            let position = if case.word(0) == 0 { 0 } else { e.mem.u32(header) };
-            vec![0, position]
-        })
-        .run()
-        .assert_same();
-    Diff::new(entry!(0x0063_17a0, getters::item_address(Ptr<_>, Ptr<_>) -> u32))
-        .common()
-        .inputs(&[Input::Of(&[0, 0x1000, 0xffff_fffc])])
-        .setup(|e, case| {
-            stand_ins(e);
-            vec![0, case.word(0)]
-        })
-        .run()
-        .assert_same();
+    Diff::new(entry!(
+        0x007b_52d0,
+        getters::next_position(Ptr<_>, Ptr<_>) -> u32
+    ))
+    .common()
+    .inputs(&[Input::Flag])
+    .setup(|e, case| {
+        stand_ins(e);
+        let header = list(e, &[0x10, 0x20]);
+        let position = if case.word(0) == 0 {
+            0
+        } else {
+            e.mem.u32(header)
+        };
+        vec![0, position]
+    })
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x0063_17a0,
+        getters::item_address(Ptr<_>, Ptr<_>) -> u32
+    ))
+    .common()
+    .inputs(&[Input::Of(&[0, 0x1000, 0xffff_fffc])])
+    .setup(|e, case| {
+        stand_ins(e);
+        vec![0, case.word(0)]
+    })
+    .run()
+    .assert_same();
     // An object or none; its `NiRTTI` the one asked for or another.
-    Diff::new(entry!(0x0045_bad0, getters::is_exactly(u32, Ptr<_>) -> bool))
-        .common()
-        .inputs(&[Input::Flag, Input::Flag])
-        .setup(|e, case| {
-            stand_ins(e);
-            let o = if case.word(0) == 0 {
-                0
-            } else {
-                object(e, 0x10, WATER_ENTRY_RTTI + case.word(1))
-            };
-            vec![WATER_ENTRY_RTTI, o]
-        })
-        .run()
-        .assert_same();
+    Diff::new(entry!(
+        0x0045_bad0,
+        getters::is_exactly(u32, Ptr<_>) -> bool
+    ))
+    .common()
+    .inputs(&[Input::Flag, Input::Flag])
+    .setup(|e, case| {
+        stand_ins(e);
+        let o = if case.word(0) == 0 {
+            0
+        } else {
+            object(e, 0x10, WATER_ENTRY_RTTI + case.word(1))
+        };
+        vec![WATER_ENTRY_RTTI, o]
+    })
+    .run()
+    .assert_same();
     Diff::new(entry!(0x0045_baf0, getters::rtti_is(Ptr<_>, u32) -> bool))
         .common()
         .inputs(&[Input::Flag])
