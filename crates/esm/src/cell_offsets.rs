@@ -571,11 +571,15 @@ impl Group {
         let mut candidates = BTreeSet::new();
         for node in &self.nodes[world.node + 1..] {
             match node {
-                Node::Record { tag, cell, .. } if *tag == CELL => {
-                    if let Some(position) = cell {
-                        candidates.insert(*position);
-                    }
+                Node::Record {
+                    tag,
+                    cell: Some(position),
+                    ..
+                } if *tag == CELL => {
+                    candidates.insert(*position);
                 }
+                // A persistent cell: never found, and it does not end the walk.
+                Node::Record { tag, .. } if *tag == CELL => {}
                 Node::Record {
                     tag, flags, depth, ..
                 } if *depth == level && *tag != TLOD && flags & IGNORED == 0 => break,
@@ -818,7 +822,7 @@ mod tests {
             &[group(
                 block(0, 0),
                 4,
-                &[group(sub_block(0, 0), 5, &[ignored.clone()])],
+                &[group(sub_block(0, 0), 5, std::slice::from_ref(&ignored))],
             )],
         );
         let bytes = plugin(&[world(0x50), inside]);
@@ -849,7 +853,7 @@ mod tests {
     #[test]
     fn a_cell_without_a_grid_position_is_at_the_origin() {
         let bare = record(b"CELL", 0, 0x10, &sub(b"EDID", b"c\0"));
-        let bytes = plugin(&[world(0x50), group(0x50, 1, &[bare.clone()])]);
+        let bytes = plugin(&[world(0x50), group(0x50, 1, std::slice::from_ref(&bare))]);
         let w = &offsets(&bytes, false)[0];
         assert_eq!(
             w.built.as_ref().unwrap()[slot(0, 0)],
@@ -931,7 +935,7 @@ mod tests {
             &[group(
                 block(1, 0),
                 4,
-                &[group(sub_block(1, 0), 5, &[compressed.clone()])],
+                &[group(sub_block(1, 0), 5, std::slice::from_ref(&compressed))],
             )],
         );
         let bytes = plugin(&[world(0x50), content]);
@@ -988,7 +992,7 @@ mod tests {
                 world(0x50),
                 first_children.clone(),
                 second(flags),
-                children(0x51, &[far.clone()]),
+                children(0x51, std::slice::from_ref(&far)),
             ]);
             let worlds = offsets(&bytes, false);
             assert_eq!(worlds[1].built, Err(Decline::NotAsked));
