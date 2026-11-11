@@ -1588,7 +1588,8 @@ fn build_declaration() {
 
 /// `pack_stream` (`00e76770`): a partition or the data's count (none: the chip answered), the slot 0xb0
 /// answering set or not, the renderer's byte +0x5d4, a locked address or the chip kept, remade or
-/// failing, the derived vectors kept for the data's own pack or packed, the flags, the unlock's answer.
+/// failing, the derived vectors kept for the data's own pack or packed, the flags, the unlock's answer,
+/// the stream (stream 1's usages 13, 14, 1, 0; stream 0's 0, 3, 4, 7).
 #[test]
 fn pack_stream() {
     Diff::new(entry!(
@@ -1604,8 +1605,9 @@ fn pack_stream() {
         Input::Of(&[0, 0x07, 0x0f, 0xfff]),
         Input::Of(TWO_WAYS),
         Input::Of(&[0, 1]),
+        Input::Of(&[1, 0]),
     ])
-    .max_cases(400)
+    .max_cases(600)
     .setup(|e, c| {
         let declaration = declaration_world(e, 2, 4, &[0, 3, 4, 7, 13, 14, 1], 0, 0, 0);
         set(e, RETS + 0x708, c.word(1) * 0x0bd0_0002);
@@ -1670,7 +1672,7 @@ fn pack_stream() {
             partition,
             c.word(4),
             chip_word,
-            1,
+            c.word(7),
             locked_word,
             0x88,
             0x99,
