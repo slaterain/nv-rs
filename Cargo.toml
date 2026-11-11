@@ -1,11 +1,19 @@
 [workspace]
 resolver = "2"
 members = ["viewer", "crates/engine", "crates/engine-core", "crates/nvse", "crates/engine-platform", "crates/engine-typed", "crates/engine-gamebryo", "crates/engine-bs", "crates/engine-havok", "crates/engine-speedtree", "crates/engine-fallout-facegen", "crates/engine-fallout-script", "crates/engine-fallout-pathfinding", "crates/engine-fallout-env", "crates/engine-fallout-cell", "crates/engine-fallout-forms", "crates/engine-fallout-magic", "crates/engine-fallout-interface", "crates/engine-fallout-ai", "crates/engine-fallout-unplaced-a", "crates/engine-fallout-unplaced-b", "crates/engine-fallout-misc", "crates/frame-model", "crates/d3d9-stream", "crates/d3d9-wgpu", "crates/d3dx-tex", "crates/host", "crates/play-patch", "crates/esm", "crates/bsa", "crates/fos", "crates/mp3", "crates/vorbis", "crates/bink", "crates/nvinspect"]
+# Vendored third-party crates (vendor/README.md): dependencies, not members, so the workspace's
+# fmt, clippy and tests leave their code as published.
+exclude = ["vendor"]
 
 [workspace.package]
 edition = "2021"
 license = "GPL-3.0-or-later"
 rust-version = "1.75"
+
+# wgpu-hal 30.0.1 with the changes vendor/README.md lists: wgpu and wgpu-core stay the published
+# 30.0.1 and use it in place of the crates.io copy.
+[patch.crates-io]
+wgpu-hal = { path = "vendor/wgpu-hal" }
 
 # The play-build loop's nv-viewer (`cargo build --profile play`, exe in target/play/): the engine
 # crates and host at opt-level 1 (their time is almost all code generation: engine-fallout (one crate then) 370
@@ -93,6 +101,14 @@ opt-level = 1
 [profile.play.package.play-patch]
 opt-level = 1
 
+# The vendored wgpu-hal (vendor/README.md) is a path dependency, which cargo would build like our own
+# crates here (incremental, 256 code-generation units) where it built the crates.io copy as a
+# dependency (16 units, not incremental): kept as before, as the renderer's hal is hot code.
+# CARGO_INCREMENTAL, where a build script sets it, still decides `incremental`.
+[profile.play.package.wgpu-hal]
+codegen-units = 16
+incremental = false
+
 # Long play-build runs (a full data load): `--profile play-fast`, exe in target/play-fast/; the
 # engine crates and host at opt-level 3. Quick stop-fix loops stay on `--profile play`.
 [profile.play-fast]
@@ -166,6 +182,11 @@ opt-level = 3
 
 [profile.play-fast.package.host]
 opt-level = 3
+
+# As in `play` (above).
+[profile.play-fast.package.wgpu-hal]
+codegen-units = 16
+incremental = false
 
 # A fully optimised play build (`--profile play-opt`, exe in target/play-opt/; 2026-10-28): every
 # crate at opt-level 3 as in release, without the play profiles' incremental builds (their 256
