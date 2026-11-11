@@ -15,15 +15,27 @@
 //!   [`skin`] (the skinned shader classes' bone set-up and the renderer's bone matrices) and [`packing`]
 //!   (a skin partition's buffer, a shader declaration's stream pack and build, chips, the vertex lock);
 //!   [`layout`] has the classes they read;
+//! - the pass begin and end the batch renderer's draws reach through a shader's vtable (group B):
+//!   [`passes`] (`BSShader`'s slots: the pass's render states set and put back, the alpha function and
+//!   test of a geometry, the end's states, the begin's end; the render state put back by state, the
+//!   masked stages, the fog property), [`setups`] (the shadow light shader's: the pass choice, the type
+//!   groups' begins and per-geometry set-ups, the tail of the pass kinds 1 to 5, the pass constants, the
+//!   land toggles, the lighting property's fade) and [`constants`] (the vertex shader's constant
+//!   setters);
 //! - [`packet`] and [`own`]: the accessors. Everything the draw reads that the rest of the frame
 //!   changes goes through [`packet`]; everything it writes that is its own through [`own`], one section
 //!   for each of the pipeline probe's conditions that live here (1: the pass lists the next frame's
 //!   registration fills again; 2: blend, clip and depth state and the device's transform, streams and
-//!   indices; 3: the changed flags and buffers of the geometry it packs and draws; 4: the blocks it
-//!   frees; 5: the blocks it allocates; 7: the reference counts). Not routed yet: the packing's own
-//!   objects (the buffer data's streams and chips, the shader declaration, the dynamic geometry group,
-//!   the vertex manager's staging block), which [`packing`] and [`packed`] read and write in place,
-//!   and the exe's constant data (the -FLT_MAX and 0.001 the alpha pass compares with, the colour
+//!   indices, and the shader state a pass begin leaves (the current pass, its stage textures, the
+//!   constant switches, the fog and toggle constants, the device's vertex shader constants); 3: the
+//!   changed flags and buffers of the geometry it packs and draws; 4: the blocks it frees; 5: the blocks
+//!   it allocates; 7: the reference counts, with the shader's counted pointers the pass choice sets).
+//!   Not routed yet: the packing's own objects (the buffer data's streams and chips, the shader
+//!   declaration, the dynamic geometry group, the vertex manager's staging block), which [`packing`]
+//!   and [`packed`] read and write in place; the shader package's tables, the passes' contents (stages,
+//!   state lists, masks, programs), the shaders' and lighting properties' own fields and the constant
+//!   map entries, filled at load and read in place by [`passes`], [`setups`] and [`constants`]; and the
+//!   exe's constant data (the -FLT_MAX and 0.001 the alpha pass compares with, the colour
 //!   scale, the bone scale bounds). A later step can feed the draw from a copied packet and give a
 //!   drawing thread its own state by changing those two files; nothing here copies, defers or moves
 //!   anything yet.

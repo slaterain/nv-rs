@@ -309,15 +309,12 @@ pub fn pixel_entry_2(e: &mut Engine, _this: Ptr, pass_type: u32, object: Ptr) {
     }
 }
 
-/// `ShadowLightShader::UpdateTogglesConstantLand` (`00c02c30`, engine map; `thiscall`, four
-/// words), `UpdateTogglesConstant` as the shadow light shader's vtable +0x154 holds it (`00c02d90`,
-/// this family's `set_tint`), `BSShaderManager::GetFogProperty` (`00b55520`, `cdecl`, one word), the fog
-/// property index byte (`011f91c4`), the three floats `SetupGeometryConstants_Toggles` writes
-/// (`011fa2d4`, `011fa2d8`, `011fa2dc`), `1.0` and `255.0` (`double`, `01012070`, `0101e568`) and
-/// the float it uses for bit 0 (`010af2f0`).
-const UPDATE_TOGGLES_LAND: u32 = 0x00c0_2c30;
+/// `UpdateTogglesConstant` as the shadow light shader's vtable +0x154 holds it (`00c02d90`, this
+/// family's `set_tint`), the fog property index byte (`011f91c4`), the three floats
+/// `SetupGeometryConstants_Toggles` writes (`011fa2d4`, `011fa2d8`, `011fa2dc`), `1.0` and `255.0`
+/// (`double`, `01012070`, `0101e568`) and the float it uses for bit 0 (`010af2f0`). The land toggles
+/// (`00c02c30`) and the fog property (`00b55520`) are the draw family's.
 const UPDATE_TOGGLES: u32 = 0x00c0_2d90;
-const GET_FOG_PROPERTY: u32 = 0x00b5_5520;
 const FOG_INDEX: u32 = 0x011f_91c4;
 const TOGGLE_FIRST: u32 = 0x011f_a2d4;
 const TOGGLE_SECOND: u32 = 0x011f_a2d8;
@@ -354,14 +351,19 @@ pub fn toggles(
     let base = this.addr();
     let property = property.addr();
     if pass_type.wrapping_sub(0x1f7) <= 0x37 {
-        e.call(
-            UPDATE_TOGGLES_LAND,
-            &args![base, geometry, 0u32, property, 0u32],
+        typed_call!(
+            crate::draw::FAMILY,
+            0x00c0_2c30,
+            crate::draw::setups::land_toggles(e, Ptr::new(base), geometry, 0u32, property, 0u32)
         );
     } else {
         let vtable = e.mem.u32(base);
         let index = u32::from(e.global::<u8>(FOG_INDEX));
-        let fog_property = e.call(GET_FOG_PROPERTY, &args![index]).u32();
+        let fog_property: u32 = typed_call!(
+            crate::draw::FAMILY,
+            0x00b5_5520,
+            crate::draw::passes::fog_property(e, index)
+        );
         let target = e.mem.u32(vtable + 0x154);
         if target == UPDATE_TOGGLES {
             typed_call!(

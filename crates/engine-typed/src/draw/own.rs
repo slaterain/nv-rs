@@ -679,8 +679,21 @@ pub(crate) fn device_vertex_constants_of(
 
 /// `count` float vertex shader constant registers from `register` on (`data`) on `device` (condition 2).
 #[inline(always)]
-pub(crate) fn device_vertex_constants(e: &mut Engine, device: u32, register: u32, data: u32, count: u32) {
-    device_vertex_constants_of(e, device, DEVICE_SET_VERTEX_CONSTANTS, register, data, count);
+pub(crate) fn device_vertex_constants(
+    e: &mut Engine,
+    device: u32,
+    register: u32,
+    data: u32,
+    count: u32,
+) {
+    device_vertex_constants_of(
+        e,
+        device,
+        DEVICE_SET_VERTEX_CONSTANTS,
+        register,
+        data,
+        count,
+    );
 }
 
 /// The counted pointer at `slot` set to the word at `source`, the exe's own code (condition 7):

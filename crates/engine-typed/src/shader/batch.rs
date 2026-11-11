@@ -44,8 +44,9 @@ pub(crate) const SKIN_RTTI: u32 = 0x011f_49d8;
 
 /// Callees by address: the map's `GetAt` (`thiscall(map, key, out)`) and `SetAt`, the node pool's
 /// allocation (`thiscall(list + 0x10)`), the active list's clear, the memory manager and `operator
-/// new`, the batch renderer's constructor, the shadow-pass test, the shaders' own pass set-ups, the
-/// renderer's skinned test, the geometry holder's draw, the shaders' pass tails, the node pool lock.
+/// new`, the batch renderer's constructor, the shadow-pass test, the shadow light shader's per-geometry
+/// set-ups (the draw family's, compared by address), the renderer's skinned test, the geometry holder's
+/// draw, a shader's pass tail of kind 0x11, the node pool lock.
 const MAP_GET_AT: u32 = 0x0085_3130;
 const MAP_SET_AT: u32 = 0x0084_4700;
 const LIST_NODE_ALLOCATE: u32 = 0x0043_a010;
@@ -61,9 +62,6 @@ const SETUP_TYPES_FC_FD: u32 = 0x00b7_dde0;
 const SETUP_TYPE_CA: u32 = 0x00b7_ded0;
 const SETUP_TYPE_D1: u32 = 0x00b7_dfe0;
 const SETUP_TYPE_102: u32 = 0x00b7_e150;
-const BEGIN_TYPES_FC_102: u32 = 0x00b7_dd50;
-const BEGIN_TYPES_CA_D1: u32 = 0x00b7_deb0;
-const TAIL_KINDS_1_TO_5: u32 = 0x00b7_ac20;
 const TAIL_KIND_11: u32 = 0x00bb_96d0;
 const LOCK_ENTER: u32 = 0x0040_fbf0;
 /// The global node pool: its lock (owner `011c5f80`, count `011c5f84`) and free list (`011c5f58`).
@@ -75,13 +73,15 @@ const PASS_TYPE_COMPARE: u32 = 0x00b9_88a0;
 /// The alpha sort's comparison (this file's [`compare_by_depth`]).
 const COMPARE_BY_DEPTH: u32 = 0x00b9_8b20;
 
-/// The shader slots the drawing calls: begin a pass (0xf0, 0xfc, 0xf8, 0x100, 0xf4), end it (0x104,
-/// 0x114), per geometry (0x78, 0x7c, 0x80, 0x84, 0x88, 0x6c, 0x8c, 0x110, 0x64).
+/// The shader slots the drawing calls: begin a pass (0xf0 the pass choice, 0xfc its constants, 0xf8
+/// the pair textures, 0x100 its render states, 0xf4 the begin's end), end it (0x104 the render states
+/// put back, 0x114 the end's states put back), per geometry (0x78, 0x7c, 0x80 blending, 0x84 the alpha
+/// function, 0x88 the alpha test, 0x6c, 0x8c, 0x110 the end's states, 0x64).
 mod slot {
     pub const BEGIN: u32 = 0xf0;
-    pub const BEGIN_STATES: u32 = 0xfc;
-    pub const BEGIN_CONSTANTS: u32 = 0xf8;
-    pub const BEGIN_TEXTURES: u32 = 0x100;
+    pub const BEGIN_CONSTANTS: u32 = 0xfc;
+    pub const BEGIN_TEXTURES: u32 = 0xf8;
+    pub const BEGIN_STATES: u32 = 0x100;
     pub const BEGIN_DONE: u32 = 0xf4;
     pub const END: u32 = 0x104;
     pub const END_RESTORE: u32 = 0x114;
@@ -476,7 +476,11 @@ pub fn render_pass(
             #[allow(clippy::cast_possible_wrap)]
             let kind = e.global::<u32>(shader.wrapping_add(0x68)) as i32;
             if (1..=5).contains(&kind) {
-                e.call(TAIL_KINDS_1_TO_5, &args![shader, pass_type]);
+                typed_call!(
+                    crate::draw::FAMILY,
+                    0x00b7_ac20,
+                    crate::draw::setups::tail_kinds_1_to_5(e, Ptr::new(shader), pass_type)
+                );
             } else if kind == 0x11 {
                 e.call(TAIL_KIND_11, &args![shader, pass_type]);
             }
@@ -534,15 +538,15 @@ pub fn render_standard(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second
     let call_third = |e: &mut Engine| {
         if third {
             let flag = u32::from(e.get(pass, RenderPass::ucSortFlag));
-            e.vcall(shader, slot::THIRD, &args![state, flag]);
+            shader_alpha_test(e, shader, state, flag);
         }
     };
     let first_then_second = |e: &mut Engine| {
         if first {
-            e.vcall(shader, slot::FIRST, &args![state]);
+            shader_alpha_function(e, shader, state);
         }
         if second {
-            e.vcall(shader, slot::SECOND, &args![state]);
+            shader_blend(e, shader, state);
         }
     };
     let own = match pass_type {
@@ -559,8 +563,24 @@ pub fn render_standard(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second
                 0x00b7_dde0,
                 crate::render::pass::geometry_pass(e, Ptr::new(shader), Ptr::new(state))
             );
+        } else if setup == SETUP_TYPE_CA {
+            typed_call!(
+                crate::draw::FAMILY,
+                0x00b7_ded0,
+                crate::draw::setups::setup_type_ca(e, Ptr::new(shader), Ptr::new(state))
+            );
+        } else if setup == SETUP_TYPE_D1 {
+            typed_call!(
+                crate::draw::FAMILY,
+                0x00b7_dfe0,
+                crate::draw::setups::setup_type_d1(e, Ptr::new(shader), Ptr::new(state))
+            );
         } else {
-            e.call(setup, &args![shader, state]);
+            typed_call!(
+                crate::draw::FAMILY,
+                0x00b7_e150,
+                crate::draw::setups::setup_type_102(e, Ptr::new(shader), Ptr::new(state))
+            );
         }
         first_then_second(e);
         if then_third {
@@ -570,19 +590,19 @@ pub fn render_standard(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second
         shader_geometry_setups(e, shader, state);
         if e.get(pass, RenderPass::ucSortFlag) != 0 {
             if second && e.call(IS_SHADOW_PASS, &args![pass_type]).u8() == 0 {
-                e.vcall(shader, slot::SECOND, &args![state]);
+                shader_blend(e, shader, state);
             }
             if first
                 && !(4..=5).contains(&pass_type)
                 && !(0xe..=0xf).contains(&pass_type)
                 && pass_type != 0x23a
             {
-                e.vcall(shader, slot::FIRST, &args![state]);
+                shader_alpha_function(e, shader, state);
             }
         } else if e.global::<u8>(RESTORE_OWED) != 0
             && e.call(IS_SHADOW_PASS, &args![pass_type]).u8() == 0
         {
-            e.vcall(shader, slot::RESTORE, &args![state]);
+            shader_restore(e, shader, state);
             e.set_global(RESTORE_OWED, 0u8);
         }
         call_third(e);
@@ -644,18 +664,18 @@ pub fn render_skinned(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second:
                     && e.call(IS_SHADOW_PASS, &args![pass_type]).u8() == 0
                 {
                     if second {
-                        e.vcall(shader, slot::SECOND, &args![state]);
+                        shader_blend(e, shader, state);
                     }
                     if first && !(4..=5).contains(&pass_type) && !(0xe..=0xf).contains(&pass_type) {
-                        e.vcall(shader, slot::FIRST, &args![state]);
+                        shader_alpha_function(e, shader, state);
                     }
                 } else if e.global::<u8>(RESTORE_OWED) != 0 {
-                    e.vcall(shader, slot::RESTORE, &args![state]);
+                    shader_restore(e, shader, state);
                     e.set_global(RESTORE_OWED, 0u8);
                 }
                 if third {
                     let flag = u32::from(e.get(pass, RenderPass::ucSortFlag));
-                    e.vcall(shader, slot::THIRD, &args![state, flag]);
+                    shader_alpha_test(e, shader, state, flag);
                 }
                 first_partition = false;
             }
@@ -697,28 +717,80 @@ pub fn render_skinned(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second:
 pub fn begin_pass(e: &mut Engine, pass_type: u32, shader: u32) {
     typed_call!(FAMILY, 0x00b9_88e0, end_pass(e));
     e.set_global(PASS_MARKER, 0xffffu16);
-    e.vcall(shader, slot::BEGIN, &args![pass_type]);
+    if crate::slot_target(e, shader, slot::BEGIN) == 0x00b7_af80 {
+        typed_call!(
+            crate::draw::FAMILY,
+            0x00b7_af80,
+            crate::draw::setups::select_pass(e, Ptr::new(shader), pass_type)
+        );
+    } else {
+        e.vcall(shader, slot::BEGIN, &args![pass_type]);
+    }
     for i in 0..16 {
         e.set_global(STAGE_TEXTURES + i * 4, 0u32);
     }
     match pass_type {
         0xca | 0xd1 => {
-            e.call(BEGIN_TYPES_CA_D1, &args![shader]);
+            typed_call!(
+                crate::draw::FAMILY,
+                0x00b7_deb0,
+                crate::draw::setups::begin_types_ca(e, Ptr::new(shader))
+            );
         }
         0xfc | 0xfd => {
-            e.call(BEGIN_TYPES_FC_102, &args![shader]);
+            typed_call!(
+                crate::draw::FAMILY,
+                0x00b7_dd50,
+                crate::draw::setups::begin_types_fc(e, Ptr::new(shader))
+            );
             typed_call!(FAMILY, 0x00b9_7de0, state::set_z_enable(e, 1u8, 0u32));
         }
         0x102 => {
-            e.call(BEGIN_TYPES_FC_102, &args![shader]);
+            typed_call!(
+                crate::draw::FAMILY,
+                0x00b7_dd50,
+                crate::draw::setups::begin_types_fc(e, Ptr::new(shader))
+            );
         }
         _ => {
-            e.vcall(shader, slot::BEGIN_STATES, &args![pass_type]);
-            e.vcall(shader, slot::BEGIN_CONSTANTS, &args![pass_type]);
-            e.vcall(shader, slot::BEGIN_TEXTURES, &args![pass_type]);
+            if crate::slot_target(e, shader, slot::BEGIN_CONSTANTS) == 0x00b7_b450 {
+                typed_call!(
+                    crate::draw::FAMILY,
+                    0x00b7_b450,
+                    crate::draw::setups::setup_pass_constants(e, Ptr::new(shader), pass_type)
+                );
+            } else {
+                e.vcall(shader, slot::BEGIN_CONSTANTS, &args![pass_type]);
+            }
+            if crate::slot_target(e, shader, slot::BEGIN_TEXTURES) == 0x00b7_cfb0 {
+                typed_call!(
+                    FAMILY,
+                    0x00b7_cfb0,
+                    accumulator::set_pair_textures(e, shader, pass_type)
+                );
+            } else {
+                e.vcall(shader, slot::BEGIN_TEXTURES, &args![pass_type]);
+            }
+            if crate::slot_target(e, shader, slot::BEGIN_STATES) == 0x00be_0eb0 {
+                typed_call!(
+                    crate::draw::FAMILY,
+                    0x00be_0eb0,
+                    crate::draw::passes::set_pass_states(e, shader, pass_type)
+                );
+            } else {
+                e.vcall(shader, slot::BEGIN_STATES, &args![pass_type]);
+            }
         }
     }
-    e.vcall(shader, slot::BEGIN_DONE, &args![pass_type]);
+    if crate::slot_target(e, shader, slot::BEGIN_DONE) == 0x00be_1f90 {
+        typed_call!(
+            crate::draw::FAMILY,
+            0x00be_1f90,
+            crate::draw::passes::begin_done(e, shader, pass_type)
+        );
+    } else {
+        e.vcall(shader, slot::BEGIN_DONE, &args![pass_type]);
+    }
     e.set_global(CURRENT_PASS_TYPE, pass_type);
     e.set_global(CURRENT_SHADER, shader);
     e.set_global(RESTORE_OWED, 1u8);
@@ -733,10 +805,26 @@ pub fn end_pass(e: &mut Engine) {
     let shader = e.global::<u32>(CURRENT_SHADER);
     if shader != 0 {
         let pass_type = e.global::<u32>(CURRENT_PASS_TYPE);
-        e.vcall(shader, slot::END, &args![pass_type]);
+        if crate::slot_target(e, shader, slot::END) == 0x00be_0ee0 {
+            typed_call!(
+                crate::draw::FAMILY,
+                0x00be_0ee0,
+                crate::draw::passes::restore_pass_states(e, shader, pass_type)
+            );
+        } else {
+            e.vcall(shader, slot::END, &args![pass_type]);
+        }
         if e.global::<u8>(RESTORE_OWED) == 0 {
             let shader = e.global::<u32>(CURRENT_SHADER);
-            e.vcall(shader, slot::END_RESTORE, &[]);
+            if crate::slot_target(e, shader, slot::END_RESTORE) == 0x00be_0e90 {
+                typed_call!(
+                    crate::draw::FAMILY,
+                    0x00be_0e90,
+                    crate::draw::passes::end_states_restored(e)
+                );
+            } else {
+                e.vcall(shader, slot::END_RESTORE, &[]);
+            }
         }
         let sampler = match e.global::<u32>(CURRENT_PASS_TYPE) {
             0xfe | 0x10b => Some(7u32),
@@ -869,6 +957,67 @@ fn shader_geometry_done(e: &mut Engine, shader: u32, state: u32) {
         );
     } else {
         e.vcall(shader, slot::GEOMETRY_DONE, &args![state]);
+    }
+}
+
+/// The shader's blending of the geometry (slot 0x80, `thiscall(shader, state)`): `00be1ff0` (this
+/// family's) directly when the slot holds it, as the shadow light shader's classes have; another target
+/// through the vtable.
+#[inline(always)]
+fn shader_blend(e: &mut Engine, shader: u32, state: u32) {
+    if crate::slot_target(e, shader, slot::SECOND) == 0x00be_1ff0 {
+        typed_call!(
+            FAMILY,
+            0x00be_1ff0,
+            accumulator::set_blend_of(e, shader, state)
+        );
+    } else {
+        e.vcall(shader, slot::SECOND, &args![state]);
+    }
+}
+
+/// The shader's alpha function of the geometry (slot 0x84, `thiscall(shader, state)`): `00be20b0` (the
+/// draw family's) directly when the slot holds it; another target through the vtable.
+#[inline(always)]
+fn shader_alpha_function(e: &mut Engine, shader: u32, state: u32) {
+    if crate::slot_target(e, shader, slot::FIRST) == 0x00be_20b0 {
+        typed_call!(
+            crate::draw::FAMILY,
+            0x00be_20b0,
+            crate::draw::passes::alpha_function_of(e, shader, state)
+        );
+    } else {
+        e.vcall(shader, slot::FIRST, &args![state]);
+    }
+}
+
+/// The shader's alpha test and cull mode of the geometry (slot 0x88, `thiscall(shader, state, flag)`):
+/// `00be20e0` (the draw family's) directly when the slot holds it; another target through the vtable.
+#[inline(always)]
+fn shader_alpha_test(e: &mut Engine, shader: u32, state: u32, flag: u32) {
+    if crate::slot_target(e, shader, slot::THIRD) == 0x00be_20e0 {
+        typed_call!(
+            crate::draw::FAMILY,
+            0x00be_20e0,
+            crate::draw::passes::alpha_test_of(e, shader, state, low8(flag) != 0)
+        );
+    } else {
+        e.vcall(shader, slot::THIRD, &args![state, flag]);
+    }
+}
+
+/// The shader's per-geometry restore (slot 0x110, `thiscall(shader, state)`): `00be0e50` (the draw
+/// family's) directly when the slot holds it; another target through the vtable.
+#[inline(always)]
+fn shader_restore(e: &mut Engine, shader: u32, state: u32) {
+    if crate::slot_target(e, shader, slot::RESTORE) == 0x00be_0e50 {
+        typed_call!(
+            crate::draw::FAMILY,
+            0x00be_0e50,
+            crate::draw::passes::end_states(e, shader, state)
+        );
+    } else {
+        e.vcall(shader, slot::RESTORE, &args![state]);
     }
 }
 

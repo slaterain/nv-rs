@@ -125,7 +125,14 @@ pub fn set_constant_array(
             copy_into_buffer(e, entry, offset, source);
         } else {
             let device = device(e, this.addr());
-            own::device_vertex_constants_of(e, device, SET_CONSTANTS_F, register, source, registers);
+            own::device_vertex_constants_of(
+                e,
+                device,
+                SET_CONSTANTS_F,
+                register,
+                source,
+                registers,
+            );
         }
         offset = offset.wrapping_add(stride);
         i += 1;
