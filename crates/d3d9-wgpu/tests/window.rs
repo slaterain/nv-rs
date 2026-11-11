@@ -573,11 +573,12 @@ fn a_window_minimised_at_create_device_still_gets_the_device() {
 
 /// The backend's loading screen as the window shows it, from its captures (`wgpu-loading-N.bmp`
 /// for the screen's own frames, `wgpu-window-N.bmp` for the game's presents), at the window's
-/// size and not black (the logo, the text and the bar over black):
-/// - from the device's creation ("Starting");
+/// size and not black (the logo and the text over black):
+/// - from the device's creation ("Starting the game", no bar: its length is not known);
 /// - over the game's frames until its first picture (a frame with at least 1% of its pixels above
-///   24 of 255): over a black frame and over a dark one (16 of 255) alike; never over a picture,
-///   and not again after one (a black frame then stays black);
+///   24 of 255): the same over a black frame as over a dark one (16 of 255), with no bar also
+///   after a long step of the backend's own showed one; never over a picture, and not again
+///   after one (a black frame then stays black);
 /// - for a long step of the backend's own (`show_progress`), its bar at the share done, again
 ///   after the window was sized anew; the game's next `Present` shows the game.
 #[test]
@@ -585,24 +586,52 @@ fn the_loading_screen_is_shown_until_the_games_first_picture_and_is_not_black() 
     let Some(mut g) = Rig::new((320, 240), (32, 24)) else {
         return;
     };
-    // Lit: any channel over 24 (the logo, the text, the bar); the bar's colour where it is
-    // done (0.9, 0.75, 0.35), B, G, R.
+    // Lit: any channel over 24 (the logo, the text, the bar).
     let lit = |px: &[u8]| {
         px.chunks_exact(4)
             .filter(|p| p[0] > 24 || p[1] > 24 || p[2] > 24)
             .count() as u32
     };
-    let bar =
+    // The bar: its colour where it is done (0.9, 0.75, 0.35; B, G, R), and its track (0.25 grey),
+    // a row of at least 48 such pixels (the bar is at least 64 wide).
+    let gold =
         |p: &[u8]| p[0].abs_diff(89) <= 2 && p[1].abs_diff(191) <= 2 && p[2].abs_diff(230) <= 2;
+    let bar_shown = |px: &[u8], w: u32| {
+        px.chunks_exact(4).any(gold)
+            || px.chunks_exact(w as usize * 4).any(|row| {
+                row.chunks_exact(4)
+                    .filter(|p| p[..3].iter().all(|c| c.abs_diff(64) <= 1))
+                    .count()
+                    >= 48
+            })
+    };
     let (w, h, px) = g
         .capture("wgpu-loading", 1)
         .expect("the screen from the device's creation");
     assert_eq!((w, h), (320, 240), "the window's size");
     assert!(lit(&px) > w * h / 50, "not black: {} lit", lit(&px));
-    // The game's frames before its first picture show the screen (black, then dark: as the
-    // game's legal screen fades in); its first picture is the game's own, and a black frame
-    // after it is black.
-    for (frame, colour, what) in [(1, 0xFF00_0000u32, "black"), (2, 0xFF10_1010, "dark")] {
+    assert!(!bar_shown(&px, w), "no bar at the start");
+    let progress = |done: f32| d3d9_wgpu::loading::Progress {
+        title: "Loading".into(),
+        status: "Preparing shaders 1 of 2".into(),
+        done: Some(done),
+    };
+    // The game's frames before its first picture show the screen in their place: black, then
+    // (after a long step of the backend's own showed its full bar) black again, then dark (as
+    // the game's legal screen fading in from almost black): the same screen each time, no bar.
+    let mut shown = Vec::new();
+    for (frame, colour, what) in [
+        (1, 0xFF00_0000u32, "black"),
+        (2, 0xFF00_0000, "black after a full bar"),
+        (3, 0xFF10_1010, "dark"),
+    ] {
+        if frame == 2 {
+            g.b.device()
+                .expect("the device")
+                .show_progress(&progress(1.0));
+            let (_, _, px) = g.capture("wgpu-loading", 2).expect("the long step's frame");
+            assert!(bar_shown(&px, 320), "the long step's bar");
+        }
         g.show(frame, colour);
         let (w, h, px) = g.capture("wgpu-window", frame).expect("the window's frame");
         assert_eq!((w, h), (320, 240));
@@ -611,26 +640,27 @@ fn the_loading_screen_is_shown_until_the_games_first_picture_and_is_not_black() 
             "the screen over a {what} frame: {} lit",
             lit(&px)
         );
+        assert!(!bar_shown(&px, w), "no bar over a {what} frame");
+        shown.push(px);
     }
-    g.show(3, 0xFF20_4060);
+    assert!(
+        shown[0] == shown[1] && shown[1] == shown[2],
+        "the screen stands in for the whole frame, black or dark"
+    );
+    g.show(4, 0xFF20_4060);
     assert_eq!(
-        g.window_frame(3),
+        g.window_frame(4),
         Some((320, 240, vec![bgra(0xFF20_4060)])),
         "the game's first picture: the game's own"
     );
-    g.show(4, 0xFF00_0000);
+    g.show(5, 0xFF00_0000);
     assert_eq!(
-        g.window_frame(4),
+        g.window_frame(5),
         Some((320, 240, vec![bgra(0xFF00_0000)])),
         "black after the first picture: black"
     );
-    let progress = |done: f32| d3d9_wgpu::loading::Progress {
-        title: "Loading".into(),
-        status: "Preparing shaders 1 of 2".into(),
-        done,
-    };
-    for (n, (w, h), done) in [(2u32, (320u32, 240u32), 0.5f32), (3, (640, 360), 1.0)] {
-        if n == 3 {
+    for (n, (w, h), done) in [(3u32, (320u32, 240u32), 0.5f32), (4, (640, 360), 1.0)] {
+        if n == 4 {
             g.size(w as i32, h as i32);
         }
         g.b.device()
@@ -646,17 +676,76 @@ fn the_loading_screen_is_shown_until_the_games_first_picture_and_is_not_black() 
             lit(&px),
             w * h
         );
-        let done_px = px.chunks_exact(4).filter(|p| bar(p)).count();
+        let done_px = px.chunks_exact(4).filter(|p| gold(p)).count();
         let want = ((w / 3).max(64) as f32 * done) as usize;
         assert!(
             done_px >= want.saturating_sub(2) * (h / 200).max(3) as usize,
             "frame {n}: the bar done {done} ({done_px} pixels)"
         );
     }
-    g.show(5, 0xFF20_4060);
+    g.show(6, 0xFF20_4060);
     assert_eq!(
-        g.window_frame(5),
+        g.window_frame(6),
         Some((640, 360, vec![bgra(0xFF20_4060)])),
         "the game's frame after the loading screen"
+    );
+}
+
+/// B, G, R of every pixel of a capture (its fourth byte is the window's own alpha).
+fn rgb(px: &[u8]) -> Vec<[u8; 3]> {
+    px.chunks_exact(4).map(|c| [c[0], c[1], c[2]]).collect()
+}
+
+/// The start's rule, on a 32x24 back buffer in a window of its size (768 pixels: 1% is 7.68).
+/// Seven lit pixels on black, in two frames running, are no picture either time (each frame is
+/// counted from zero): the screen stands in for both. Eight are a picture: the game's own frame,
+/// and within two presents the start is over (its passes stop). A whole frame at 30 of 255 is a
+/// picture (lit is above 24).
+#[test]
+fn the_start_ends_at_one_percent_of_the_pixels_lit_and_its_passes_stop() {
+    let Some(mut g) = Rig::new((32, 24), (32, 24)) else {
+        return;
+    };
+    let lit_pixels = |g: &mut Rig, n: i32, frame: u32| {
+        g.clear(None, 0xFF00_0000);
+        g.clear(Some([0, 0, n, 1]), 0xFFFF_FFFF);
+        g.present(frame);
+    };
+    let pair = |g: &Rig, frame: u32| {
+        let game = g
+            .capture("wgpu-frame", frame)
+            .expect("the back buffer's capture");
+        let shown = g.capture("wgpu-window", frame).expect("the window's frame");
+        (rgb(&game.2), rgb(&shown.2))
+    };
+    for frame in [1, 2] {
+        lit_pixels(&mut g, 7, frame);
+        let (game, shown) = pair(&g, frame);
+        assert_ne!(shown, game, "frame {frame}: 7 lit pixels are no picture");
+        assert!(g.b.device().expect("the device").starting());
+    }
+    lit_pixels(&mut g, 8, 3);
+    let (game, shown) = pair(&g, 3);
+    assert_eq!(
+        shown, game,
+        "8 lit pixels are a picture: the game's own frame"
+    );
+    g.show(4, 0xFF00_0000);
+    g.show(5, 0xFF00_0000);
+    let d = g.b.device().expect("the device");
+    assert!(
+        !d.starting(),
+        "the start is over within two presents of the picture"
+    );
+    assert_eq!(d.wgpu_errors(), 0, "wgpu reported no error");
+    drop(g);
+    let Some(mut g) = Rig::new((32, 24), (32, 24)) else {
+        return;
+    };
+    g.show(1, 0xFF1E_1E1E);
+    assert_eq!(
+        g.window_frame(1),
+        Some((32, 24, vec![bgra(0xFF1E_1E1E)])),
+        "a whole frame at 30 of 255 is a picture"
     );
 }

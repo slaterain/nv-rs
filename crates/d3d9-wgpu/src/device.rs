@@ -1078,14 +1078,10 @@ impl Device {
             return Err("the device was lost while it was made".into());
         }
         // The loading screen from the start (the maintainer's rule for the port's waits: the
-        // logo, "Loading" and the step), until the game's first frame that draws anything.
+        // logo, "Loading" and the step), until the game's first picture ([`Start`]).
         if d.surface.is_some() {
             d.start = Some(Start::new(&d.device));
-            d.show_progress(&loading::Progress {
-                title: "Loading".into(),
-                status: "Starting".into(),
-                done: 0.0,
-            });
+            d.show_progress(&Start::progress());
         }
         let shown = match (&d.surface, output) {
             (Some(w), _) => format!(
@@ -3644,7 +3640,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 let p = loading::Progress {
                     title: "Loading".into(),
                     status: format!("Preparing shaders {} of {}", done.min(total), total),
-                    done: done as f32 / total.max(1) as f32,
+                    done: Some(done as f32 / total.max(1) as f32),
                 };
                 show_on(
                     &mut surface,
@@ -4872,11 +4868,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             Some(s) if s.format == format => s,
             _ => loading::Screen::new(&device, &queue, format),
         };
-        let p = loading::Progress {
-            title: "Loading".into(),
-            status: "Starting".into(),
-            done: 0.0,
-        };
+        let p = Start::progress();
         let encoder = self.encoder();
         screen.draw(
             &device,
@@ -4926,9 +4918,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.prepare_listed();
         self.end_pass();
         self.presents += 1;
-        // The game has shown a picture: the start is over (the GPU's gate already stopped the
-        // screen).
-        if self.start.as_mut().is_some_and(|s| s.drawn(&self.device)) {
+        // The start is over once the game has shown a picture (the GPU's gate already stopped
+        // the screen), or at the backstop.
+        if let Some(why) = self
+            .start
+            .as_mut()
+            .and_then(|s| s.over(&self.device, self.presents))
+        {
+            eprintln!("NV_D3D9 wgpu: the start's loading screen ended: {why}");
             self.start = None;
         }
         let frame = u64::from(frame);
@@ -4999,7 +4996,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             );
             // The start: the loading screen over the frame while the game has drawn nothing.
             if self.start.is_some() {
-                self.start_over(&sv, size, &view, (format, cw, ch));
+                // The count runs over the back buffer's own texture.
+                let tex = b.tex.as_ref().map(|t| &t.texture);
+                let full = tex.map_or(size, |t| (t.width(), t.height()));
+                self.start_over(&sv, full, &view, (format, cw, ch));
             }
             // With a capture, the frame the window gets too (`wgpu-window-N.bmp`): the
             // swapchain's own texture, read back before it is presented.
@@ -5032,8 +5032,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             frame_texture = Some(t);
         }
         self.flush();
+        let presents = self.presents;
         if let Some(s) = &mut self.start {
-            s.read_after_submit();
+            s.read_after_submit(presents);
         }
         if let Some(t) = frame_texture {
             self.queue.present(t);
@@ -5138,6 +5139,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// None without a cache (no folder, or a backend without one). Tests.
     pub fn pipeline_cache_note(&self) -> Option<String> {
         self.pipeline_cache.as_ref().map(|c| c.note.clone())
+    }
+
+    /// Whether the start's loading screen still stands in for the game's frames ([`Start`]; tests).
+    pub fn starting(&self) -> bool {
+        self.start.is_some()
     }
 
     /// The errors wgpu reported so far (a refused pass or submit among them; tests).
@@ -5750,7 +5756,11 @@ struct PipelineJob {
 /// picture (on the GPU); the screen is drawn over the frame only while the gate is shut, its quads
 /// taken off the target in the vertex shader once it is open. The gate stays open, so a black
 /// frame after the first picture stays black. The CPU reads it a frame or so later
-/// ([`Start::drawn`]) and ends the start.
+/// ([`Start::over`]) and ends the start, logging the present of the first picture. A backstop
+/// ends it all the same [`BACKSTOP_PRESENTS`] presents or [`BACKSTOP`] after the game's first
+/// present (the game's own start needs about 8 presents), so that a first picture under the
+/// rule (a mod's dark menu; a window minimised through the first pictures) never keeps
+/// "Loading" over a playable game.
 struct Start {
     count: wgpu::ComputePipeline,
     decide: wgpu::ComputePipeline,
@@ -5759,9 +5769,21 @@ struct Start {
     lit: wgpu::Buffer,
     /// The copy of `lit` recorded with this frame, mapped once the frame is sent.
     unsent: Option<wgpu::Buffer>,
-    /// Copies being mapped, each with whether its map is done.
-    reading: Vec<(wgpu::Buffer, Arc<std::sync::atomic::AtomicBool>)>,
+    /// Copies being mapped: each with its present and its map's state ([`MAP_PENDING`],
+    /// [`MAP_DONE`], [`MAP_FAILED`]).
+    reading: Vec<(wgpu::Buffer, u64, Arc<std::sync::atomic::AtomicU8>)>,
+    /// When the game's first present came, and which it was.
+    first: Option<(std::time::Instant, u64)>,
 }
+
+/// The start ends without a picture this many presents after the game's first ([`Start`]).
+const BACKSTOP_PRESENTS: u64 = 600;
+/// ... or this long after it.
+const BACKSTOP: std::time::Duration = std::time::Duration::from_secs(10);
+/// A read-back's map: not answered yet, done, or failed (a lost device): then dropped unread.
+const MAP_PENDING: u8 = 0;
+const MAP_DONE: u8 = 1;
+const MAP_FAILED: u8 = 2;
 
 /// A frame's lit pixels (a channel above 24 of 255: plainly not black on a screen) counted into
 /// `gate[1]` (per 16x16 block, then all), then the gate (`gate[0]`) opened when they are at least
@@ -5790,7 +5812,8 @@ fn count(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation
 @compute @workgroup_size(1)
 fn decide() {
     let size = textureDimensions(frame);
-    if (atomicLoad(&gate[1]) * 100u >= size.x * size.y) {
+    // 1% of the pixels, rounded up (no product that can overflow).
+    if (atomicLoad(&gate[1]) >= (size.x * size.y + 99u) / 100u) {
         atomicMax(&gate[0], 1u);
     }
 }
@@ -5859,41 +5882,73 @@ impl Start {
             lit,
             unsent: None,
             reading: Vec::new(),
+            first: None,
         }
     }
 
-    /// The copy recorded with the frame just sent, mapped.
-    fn read_after_submit(&mut self) {
+    /// What the screen says through the start: no bar (its length is not known).
+    fn progress() -> loading::Progress {
+        loading::Progress {
+            title: "Loading".into(),
+            status: "Starting the game".into(),
+            done: None,
+        }
+    }
+
+    /// The copy recorded with present `present`, just sent, mapped.
+    fn read_after_submit(&mut self, present: u64) {
         if let Some(copy) = self.unsent.take() {
-            let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let flag = done.clone();
+            let state = Arc::new(std::sync::atomic::AtomicU8::new(MAP_PENDING));
+            let answered = state.clone();
             copy.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-                if r.is_ok() {
-                    flag.store(true, Ordering::Release);
-                }
+                let s = if r.is_ok() { MAP_DONE } else { MAP_FAILED };
+                answered.store(s, Ordering::Release);
             });
-            self.reading.push((copy, done));
+            self.reading.push((copy, present, state));
         }
     }
 
-    /// Whether a copy mapped so far says the game has shown a picture (polls `device` without
-    /// waiting).
-    fn drawn(&mut self, device: &wgpu::Device) -> bool {
+    /// At present `present` (counted before it is made): why the start is over, if it is (the
+    /// game's first picture, or the backstop); polls `device` without waiting.
+    fn over(&mut self, device: &wgpu::Device, present: u64) -> Option<String> {
+        if let Some(at) = self.drawn(device) {
+            return Some(format!("the game's first picture at present {at}"));
+        }
+        let (since, first) = *self
+            .first
+            .get_or_insert((std::time::Instant::now(), present));
+        let shown = present.saturating_sub(first);
+        (shown >= BACKSTOP_PRESENTS || since.elapsed() >= BACKSTOP).then(|| {
+            format!(
+                "no picture in {shown} presents and {:.1} s after the game's first: the backstop",
+                since.elapsed().as_secs_f64()
+            )
+        })
+    }
+
+    /// The first present whose copy, mapped so far, says the game has shown a picture (polls
+    /// `device` without waiting). A copy whose map failed is dropped unread.
+    fn drawn(&mut self, device: &wgpu::Device) -> Option<u64> {
         if self.reading.is_empty() {
-            return false;
+            return None;
         }
         let _ = device.poll(wgpu::PollType::Poll);
-        let mut drawn = false;
-        self.reading.retain(|(copy, done)| {
-            if !done.load(Ordering::Acquire) {
-                return true;
-            }
-            if let Ok(data) = copy.slice(..).get_mapped_range() {
-                drawn |= data.iter().any(|&b| b != 0);
-            }
-            copy.unmap();
-            false
-        });
+        let mut drawn: Option<u64> = None;
+        self.reading.retain(
+            |(copy, present, state)| match state.load(Ordering::Acquire) {
+                MAP_PENDING => true,
+                MAP_DONE => {
+                    if let Ok(data) = copy.slice(..).get_mapped_range() {
+                        if data.iter().any(|&b| b != 0) {
+                            drawn = Some(drawn.map_or(*present, |d| d.min(*present)));
+                        }
+                    }
+                    copy.unmap();
+                    false
+                }
+                _ => false,
+            },
+        );
         drawn
     }
 }
@@ -5909,12 +5964,15 @@ fn show_on(
     shots: Option<&mut Shots>,
     p: &loading::Progress,
 ) {
-    eprintln!(
-        "NV_D3D9 wgpu: {}: {} ({:.0}%)",
-        p.title,
-        p.status,
-        p.done.clamp(0.0, 1.0) * 100.0
-    );
+    match p.done {
+        Some(done) => eprintln!(
+            "NV_D3D9 wgpu: {}: {} ({:.0}%)",
+            p.title,
+            p.status,
+            done.clamp(0.0, 1.0) * 100.0
+        ),
+        None => eprintln!("NV_D3D9 wgpu: {}: {}", p.title, p.status),
+    }
     let Some(window) = surface else {
         return;
     };

@@ -1337,7 +1337,7 @@ fn the_loading_screen_shows_the_logo_the_text_and_the_bar() {
     let p = |status: &str, done: f32| d3d9_wgpu::loading::Progress {
         title: "Loading".into(),
         status: status.into(),
-        done,
+        done: Some(done),
     };
     let (w, h) = (640u32, 360u32);
     let d = g.b.device().expect("the device");

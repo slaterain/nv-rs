@@ -17,8 +17,9 @@ pub struct Progress {
     pub title: String,
     /// The step and its count ("Preparing shaders 212 of 1,480").
     pub status: String,
-    /// How much is done, 0 to 1.
-    pub done: f32,
+    /// How much is done, 0 to 1; none for a step of no known length (the game's start), which
+    /// shows no bar.
+    pub done: Option<f32>,
 }
 
 /// The 128 by 128 logo from the icon: rows top first, B, G, R, A bytes.
@@ -217,8 +218,9 @@ pub(crate) struct Screen {
     white: wgpu::TextureView,
     /// The last text drawn and its texture, by line.
     text: Vec<(String, u32, (u32, u32, wgpu::TextureView))>,
-    /// A gate that is always open (zero): the screen drawn on its own, over black.
-    open: wgpu::Buffer,
+    /// A gate that never stops the screen (zero: the game has shown no picture): the screen
+    /// drawn on its own, over black.
+    ungated: wgpu::Buffer,
 }
 
 fn texture(
@@ -343,7 +345,7 @@ impl Screen {
         let logo = logo().map(|(w, h, px)| (w, h, texture(device, queue, (w, h, &px))));
         let white = texture(device, queue, (1, 1, &[255, 255, 255, 255]));
         // wgpu gives a new buffer zeros.
-        let open = device.create_buffer(&wgpu::BufferDescriptor {
+        let ungated = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("loading screen gate"),
             size: 4,
             usage: wgpu::BufferUsages::STORAGE,
@@ -357,7 +359,7 @@ impl Screen {
             logo,
             white,
             text: Vec::new(),
-            open,
+            ungated,
         }
     }
 
@@ -407,8 +409,17 @@ impl Screen {
         let status_px = (height / 40).max(10);
         let title = self.line(device, queue, 0, &p.title, title_px);
         let status = self.line(device, queue, 1, &p.status, status_px);
-        // Quads in pixels (x, y, w, h), laid out top to bottom, centred.
+        // Quads in pixels (x, y, w, h), laid out top to bottom, centred. Over a game frame, black
+        // over all of it first: the screen stands in for the whole frame (one that is no
+        // picture yet can be the game's own picture fading in from almost black).
         let mut quads: Vec<(wgpu::TextureView, [f32; 4], [f32; 4])> = Vec::new();
+        if over.is_some() {
+            quads.push((
+                self.white.clone(),
+                [0.0, 0.0, width as f32, height as f32],
+                [0.0, 0.0, 0.0, 1.0],
+            ));
+        }
         let logo_h = self.logo.as_ref().map_or(0, |(_, h, _)| h * scale);
         let bar_w = (width / 3).max(64);
         let bar_h = (height / 200).max(3);
@@ -418,8 +429,7 @@ impl Screen {
             + title.as_ref().map_or(0, |t| t.1)
             + gap
             + status.as_ref().map_or(0, |t| t.1)
-            + gap
-            + bar_h;
+            + if p.done.is_some() { gap + bar_h } else { 0 };
         let mut y = height.saturating_sub(total) / 2;
         let white = [1.0, 1.0, 1.0, 1.0];
         if let Some((w, h, v)) = &self.logo {
@@ -450,22 +460,24 @@ impl Screen {
             ));
             y += h + gap;
         }
-        let x = (width.saturating_sub(bar_w) / 2) as f32;
-        quads.push((
-            self.white.clone(),
-            [x, y as f32, bar_w as f32, bar_h as f32],
-            [0.25, 0.25, 0.25, 1.0],
-        ));
-        quads.push((
-            self.white.clone(),
-            [
-                x,
-                y as f32,
-                bar_w as f32 * p.done.clamp(0.0, 1.0),
-                bar_h as f32,
-            ],
-            [0.9, 0.75, 0.35, 1.0],
-        ));
+        if let Some(done) = p.done {
+            let x = (width.saturating_sub(bar_w) / 2) as f32;
+            quads.push((
+                self.white.clone(),
+                [x, y as f32, bar_w as f32, bar_h as f32],
+                [0.25, 0.25, 0.25, 1.0],
+            ));
+            quads.push((
+                self.white.clone(),
+                [
+                    x,
+                    y as f32,
+                    bar_w as f32 * done.clamp(0.0, 1.0),
+                    bar_h as f32,
+                ],
+                [0.9, 0.75, 0.35, 1.0],
+            ));
+        }
         let mut groups = Vec::new();
         for (view, [x, y, w, h], colour) in &quads {
             // Pixels to clip space, rounded to whole pixels.
@@ -505,7 +517,7 @@ impl Screen {
                     },
                     wgpu::BindGroupEntry {
                         binding: 3,
-                        resource: over.unwrap_or(&self.open).as_entire_binding(),
+                        resource: over.unwrap_or(&self.ungated).as_entire_binding(),
                     },
                 ],
             }));
