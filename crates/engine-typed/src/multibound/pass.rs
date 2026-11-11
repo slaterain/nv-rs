@@ -66,7 +66,8 @@ const NI_POINTER_COPY: u32 = 0x0055_9a40;
 const ADD_CANDIDATE: u32 = 0x00b5_f170;
 /// A tracked item's word +0x40 cleared (`0045c4a0`), its target's cell (`0045c4c0`); a queued object's
 /// state (`0045c570`), its object at +0xcc (`0045c4e0`), its two item lists (`006ab360`, `00514f30`);
-/// the object behind a cell (`004f9bf0`) and its release (`00c47980`, `thiscall(object, 0)`).
+/// the object behind a cell (`004f9bf0`), a compound frustum whose camera is then cleared
+/// (`BSCompoundFrustum::SetCamera`, `00c47980`, the culling family's, with no camera).
 const ITEM_CLEAR: u32 = 0x0045_c4a0;
 const ITEM_TARGET_CELL: u32 = 0x0045_c4c0;
 const OBJECT_SET_STATE: u32 = 0x0045_c570;
@@ -74,7 +75,6 @@ const OBJECT_SET_CC: u32 = 0x0045_c4e0;
 const OBJECT_ITEMS_A: u32 = 0x006a_b360;
 const OBJECT_ITEMS_B: u32 = 0x0051_4f30;
 const CELL_OBJECT: u32 = 0x004f_9bf0;
-const OBJECT_RELEASE: u32 = 0x00c4_7980;
 
 /// The stored pointer of the `NiPointer` cell at `cell` (`00559450`).
 fn pointer_at(e: &mut Engine, cell: u32) -> u32 {
@@ -565,7 +565,7 @@ fn release_tracked(e: &mut Engine, with_queue: bool) {
 /// One queued object of [`release_tracked`], held by the `NiPointer` cell `held`: its world bound
 /// (slot +0xbc), its state 3 (`0045c570`), its object at +0xcc cleared (`0045c4e0(0)`); each item of
 /// its first list gets its word +0x40 cleared and, when the object behind its target's cell is not
-/// null, that object released; each item of its second list gets its word +0x40 cleared.
+/// null, that object's compound frustum without a camera; each item of its second list gets its word +0x40 cleared.
 fn release_queued(e: &mut Engine, held: u32) {
     let object = pointer_at(e, held);
     e.vcall(object, SLOT_UPDATE_WORLD_BOUND, &[]);
@@ -589,7 +589,11 @@ fn release_queued(e: &mut Engine, held: u32) {
                 if e.call(CELL_OBJECT, &args![cell]).u32() != 0 {
                     let cell = e.call(ITEM_TARGET_CELL, &args![item]).u32();
                     let target = e.call(CELL_OBJECT, &args![cell]).u32();
-                    e.call(OBJECT_RELEASE, &args![target, 0u32]);
+                    typed_call!(
+                        culling::FAMILY,
+                        0x00c4_7980,
+                        culling::compound::set_camera(e, Ptr::new(target), 0)
+                    );
                 }
             }
         }

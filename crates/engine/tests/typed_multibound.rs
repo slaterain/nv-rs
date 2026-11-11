@@ -149,7 +149,6 @@ fn stand_ins(e: &mut Engine) {
     e.register(0x006a_b360, logged::<0x15>);
     e.register(0x0051_4f30, logged::<0x16>);
     e.register(0x004f_9bf0, logged::<0x17>);
-    e.register(0x00c4_7980, logged::<0x18>);
     for s in (0..VT_SLOTS).step_by(4) {
         e.register(VT_FN + s, any_slot);
     }
