@@ -160,3 +160,55 @@ image! {
         0x80 kLock: [u32; 6],
     }
 }
+
+image! {
+    /// `NiBound` (Xbox PDB): the centre and the radius.
+    pub struct Bound / BoundImage: 0x10 {
+        /// `m_kCenter` (Xbox PDB).
+        0x00 m_kCenter: [u32; 3],
+        /// `m_fRadius` (Xbox PDB).
+        0x0c m_fRadius: u32,
+    }
+
+    /// `NiGeomMorpherController` (Xbox PDB), 0x44 bytes, as far as read.
+    pub struct MorpherController / MorpherControllerImage: 0x44 {
+        0x00 vtable: u32,
+        0x04 unknown_04: u32,
+        /// `NiTimeController`'s flags (bit 5: a forced update).
+        0x08 m_uFlags: u8,
+        0x09 unknown_09: [u8; 31],
+        /// The last scaled time.
+        0x28 m_fScaledTime: u32,
+        /// `m_pkTarget` (Xbox PDB): the geometry.
+        0x2c m_pkTarget: u32,
+        0x30 unknown_30: u32,
+        /// `m_uFlags` (Xbox PDB, the morpher's own 16 bits).
+        0x34 m_uMorpherFlags: u16,
+        0x36 padding_36: u16,
+        /// `m_spMorphData` (Xbox PDB).
+        0x38 m_spMorphData: u32,
+        /// `m_pkInterpItems` (Xbox PDB): 8 bytes an item, the interpolator then the weight.
+        0x3c m_pkInterpItems: u32,
+        /// `m_bNeedPreDisplay`, `m_bIgnoreBaseTarget`, `m_bAlwaysUpdate`, `m_bBoundCalculated` (Xbox
+        /// PDB).
+        0x40 m_bNeedPreDisplay: u8,
+        0x41 m_bIgnoreBaseTarget: u8,
+        0x42 m_bAlwaysUpdate: u8,
+        0x43 m_bBoundCalculated: u8,
+    }
+
+    /// `NiMorphData` (Xbox PDB), as far as read.
+    pub struct MorphData / MorphDataImage: 0x18 {
+        0x00 vtable: u32,
+        0x04 m_uiRefCount: u32,
+        /// `m_uiNumTargets` (Xbox PDB).
+        0x08 m_uiNumTargets: u32,
+        /// `m_uiNumVertsPerTarget` (Xbox PDB).
+        0x0c m_uiNumVertsPerTarget: u32,
+        /// `m_aMorphTargets` (Xbox PDB): 16 bytes a target, its vertices first.
+        0x10 m_aMorphTargets: u32,
+        /// `m_bRelativeTargets` (Xbox PDB).
+        0x14 m_bRelativeTargets: u8,
+        0x15 padding_15: [u8; 3],
+    }
+}

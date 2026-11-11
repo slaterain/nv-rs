@@ -9,6 +9,10 @@
 //!   about 52 million reads on the census route): the element pack that picks an array for each entry
 //!   of a shader declaration's stream (the draw family's per-stream pack calls it), the converters that
 //!   can receive one, the texture set getter, and the fixed-function packer with its strided copy.
+//! - [`bound`]: the bound of a run of points, which the setters below compute over the positions;
+//! - [`data`]: the geometry data's setters of a set of arrays (`Replace` gives up the old ones: the
+//!   renderer's release of the arrays a static mesh does not keep after packing goes through it);
+//! - [`morph`]: the geometry morpher, which blends its targets into the position array each update.
 //!
 //! Stage 1: the arrays and the objects stay in guest memory where the game made them and are read
 //! through their [`layout`]. Each function stays registered at its exe address; a call the exe makes
@@ -24,7 +28,10 @@ use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
+pub mod bound;
+pub mod data;
 pub mod layout;
+pub mod morph;
 pub mod pack;
 
 /// This family's bit: what each `typed_call!` of it names.
@@ -78,5 +85,16 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         // The fixed-function packer and its strided copy.
         entry!(0x00e8_c1e0, pack::pack_untransformed(Ptr, Ptr, u32, u32, u32, u32) -> u32),
         entry!(0x00e8_c090, pack::copy_strided(Ptr, u32, u32, u32, u32, u32)),
+        // The bound of a run of points.
+        entry!(0x00a7_ee30, bound::compute_from_data(Ptr, i32, Ptr)),
+        // The geometry data's setters of a set of arrays.
+        entry!(0x00a6_70c0, data::replace(Ptr, u32, u32, u32, u32, u32, u32, u32)),
+        entry!(0x00a6_6b30, data::set_data(Ptr, u32, Ptr, Ptr, Ptr, Ptr, u32, u32)),
+        entry!(0x00a6_6bb0, data::replace_data(Ptr, u32, u32, u32, u32, u32, u32, u32)),
+        // The geometry morpher.
+        entry!(0x00a7_ec90, morph::add_scaled_points(Ptr, f32, Ptr, u32)),
+        entry!(0x00a3_aa10, morph::gen_morph_interp(Ptr, u32)),
+        entry!(0x00a3_b010, morph::vertex_data(Ptr) -> u32),
+        entry!(0x00a3_b080, morph::update(Ptr, Ptr)),
     ]
 }

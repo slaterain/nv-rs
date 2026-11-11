@@ -605,7 +605,10 @@ with the binormals and tangents after them, colours, texture coordinates), typed
 arrays outside the 32-bit space (about 23 to 40 MB of the guest heap on the census route, and what mesh mods grow).
 Its first batch is the renderer's packing of the arrays into a vertex buffer: the element pack that picks an array
 for a declaration entry (the draw family's stream pack calls it), the six converters that can receive one, the
-texture set getter and the fixed-function packer with its strided copy; its tests are
+texture set getter and the fixed-function packer with its strided copy. The second: the bound of a run of points
+(`NiBound::ComputeFromData`), the geometry data's setters of a set of arrays (`Replace`, which the renderer's
+release of the arrays a static mesh does not keep goes through, `SetData`, `ReplaceData`) and the geometry morpher
+(`Update`, `GenMorphInterp`, `GetVertexData` and the weighted add of a target). Its tests are
 `crates/engine/tests/typed_geometry.rs`. Off until its gate (`NV_TYPED=geometry` turns it on).
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
