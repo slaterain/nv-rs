@@ -4849,14 +4849,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // gives none in time or is lost (the frame is skipped, as Direct3D 9's Present then shows
         // nothing, and the game goes on).
         let taken = match (&mut self.surface, &back) {
-            // The swap chain as the frame was taken (configured again at the window's size first).
-            (Some(w), Some(_)) => w.frame(&self.device).map(|t| {
-                let c = &w.config;
-                (t, (c.format, c.width, c.height, c.usage))
-            }),
+            (Some(w), Some(_)) => w.frame(&self.device).map(|t| (t, w.config.usage)),
             _ => None,
         };
-        if let (Some((t, (format, cw, ch, usage))), Some(b)) = (taken, &back) {
+        if let (Some((t, usage)), Some(b)) = (taken, &back) {
+            // The frame's own size and format, as the swap chain gave it.
+            let (format, cw, ch) = (t.texture.format(), t.texture.width(), t.texture.height());
             let view = t.texture.create_view(&Default::default());
             let copyable = usage.contains(wgpu::TextureUsages::COPY_SRC);
             let sv = b.view.clone().expect("the back buffer's view");
@@ -4964,14 +4962,18 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             // The bytes kept for read-backs (`ReadSurface`), printed for their memory cost.
             let kept: usize = self.kept.values().map(Vec::len).sum();
             eprintln!(
-                "NV_D3D9 wgpu: present {frame}: {} draws, {} skipped, {} pipelines, {} bind groups, {} wgpu errors, {:.1} MB kept for read-backs ({} levels)",
+                "NV_D3D9 wgpu: present {frame}: {} draws, {} skipped, {} pipelines, {} bind groups, {} wgpu errors, {:.1} MB kept for read-backs ({} levels){}",
                 self.draws,
                 self.skipped,
                 self.pipelines.len(),
                 self.groups.len(),
                 self.errors.load(Ordering::Relaxed),
                 kept as f64 / 1_048_576.0,
-                self.kept.values().filter(|k| !k.is_empty()).count()
+                self.kept.values().filter(|k| !k.is_empty()).count(),
+                self.surface.as_ref().map_or(String::new(), |w| format!(
+                    ", the window's swap chain configured {} times ({} refused)",
+                    w.configures, w.refused
+                ))
             );
             self.report_made();
         }
@@ -5013,6 +5015,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// nothing reaches the GPU and nothing is read back from it (tests).
     pub fn lose(&self) {
         self.device.destroy();
+    }
+
+    /// The window's swap chain asked in `format` from the next frame on, on a surface made anew
+    /// and never configured with `new_surface` (as after a lost one); a format the surface does not
+    /// offer is refused by wgpu, as a configuration a driver refuses (tests).
+    pub fn reconfigure_window_for_tests(&mut self, format: wgpu::TextureFormat, new_surface: bool) {
+        if let Some(w) = &mut self.surface {
+            w.retarget_for_tests(format, new_surface);
+        }
     }
 
     /// The screen of [`Device::show_progress`] drawn into a `width` by `height` texture of its own,

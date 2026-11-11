@@ -52,6 +52,47 @@ pub(crate) fn present_mode(interval: u32, caps: &wgpu::SurfaceCapabilities) -> w
     }
 }
 
+/// The rest after a window gave no frame: none is asked for until it ends ([`RETRY_AFTER`] the
+/// first time, twice as long each time in a row, up to [`RETRY_MOST`]; short again once a frame
+/// is shown). The clock is the caller's, so tests drive it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Backoff {
+    next: Duration,
+    until: Option<Instant>,
+}
+
+impl Backoff {
+    pub(crate) fn new() -> Backoff {
+        Backoff {
+            next: RETRY_AFTER,
+            until: None,
+        }
+    }
+
+    /// Whether no frame is asked for at `now`.
+    pub(crate) fn resting(&mut self, now: Instant) -> bool {
+        match self.until {
+            Some(until) if now < until => true,
+            _ => {
+                self.until = None;
+                false
+            }
+        }
+    }
+
+    /// No frame could be had at `now`: a rest, twice as long as the last one in a row.
+    pub(crate) fn failed(&mut self, now: Instant) {
+        self.until = Some(now + self.next);
+        self.next = (self.next * 2).min(RETRY_MOST);
+    }
+
+    /// A frame was shown: the next rest is short again.
+    pub(crate) fn shown(&mut self) {
+        self.next = RETRY_AFTER;
+        self.until = None;
+    }
+}
+
 /// The game's window and its swap chain.
 pub(crate) struct Window {
     /// The window (an `HWND`).
@@ -61,16 +102,29 @@ pub(crate) struct Window {
     adapter: wgpu::Adapter,
     surface: wgpu::Surface<'static>,
     pub(crate) config: wgpu::SurfaceConfiguration,
-    /// The swap chain is configured again before the next frame (a frame came back suboptimal,
-    /// or the device's `Reset`).
+    /// The game's present interval and whether frames are copied out (`NV_SHOT`): what the
+    /// configuration is chosen from again for a new surface or a `Reset`.
+    interval: u32,
+    copies: bool,
+    /// Whether wgpu took the surface's last configuration. A frame is asked only of a surface
+    /// that holds one: wgpu gives a surface its error handler only when a configuration succeeds,
+    /// and asks of one without it stop the process.
+    configured: bool,
+    /// The swap chain is configured again before the next frame (a `Reset`, a configuration wgpu
+    /// refused, a first suboptimal frame at this size).
     stale: bool,
-    /// No frame is asked for before this (a window that gave none: [`RETRY_AFTER`]), and how long
-    /// the next rest is.
-    rest_until: Option<Instant>,
-    rest: Duration,
-    /// Frames asked for, and those not shown since the last one shown.
+    /// The swap chain size a suboptimal frame was answered at (configured again once): a driver
+    /// that keeps answering suboptimal must not have the swap chain made again, and the GPU waited
+    /// for, on every frame.
+    suboptimal_at: Option<(u32, u32)>,
+    rest: Backoff,
+    /// Frames asked for; those not shown since the last one shown, and why the last was not.
     asked: u64,
     skipped: u64,
+    last_why: Option<NoFrame>,
+    /// Configurations made, and those wgpu refused (the device's line every 600 presents).
+    pub(crate) configures: u64,
+    pub(crate) refused: u64,
 }
 
 /// Why no frame was shown ([`Window::frame`]).
@@ -78,10 +132,12 @@ pub(crate) struct Window {
 pub(crate) enum NoFrame {
     Minimised,
     NoArea,
+    Resting,
     TimedOut,
     Occluded,
     Outdated,
     Lost,
+    NotConfigured,
     Refused,
 }
 
@@ -90,10 +146,12 @@ impl NoFrame {
         match self {
             NoFrame::Minimised => "the window is minimised",
             NoFrame::NoArea => "the window has no area to show a frame in",
+            NoFrame::Resting => "the window is left alone a while after it gave none",
             NoFrame::TimedOut => "the window gave no frame in time",
             NoFrame::Occluded => "the window is hidden from view",
-            NoFrame::Outdated => "the window's swap chain could not be made for its size",
+            NoFrame::Outdated => "the window's swap chain stays out of date at its size",
             NoFrame::Lost => "the window's surface is lost and could not be made again",
+            NoFrame::NotConfigured => "wgpu refused the swap chain's configuration",
             NoFrame::Refused => "wgpu refused the frame",
         }
     }
@@ -104,7 +162,8 @@ impl Window {
     /// window's size, or at `fallback` (the back buffer's) when the window has none to read, in
     /// the present mode for the game's present `interval`; with `copies`, its frames can be copied
     /// out (`NV_SHOT`'s captures of the window's frame). The calling thread, the one that shows
-    /// the frames, takes the window's DPI awareness.
+    /// the frames, takes the window's DPI awareness. A configuration wgpu refuses leaves the
+    /// window without frames until one is taken (tried again after each rest).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         hwnd: isize,
@@ -117,53 +176,110 @@ impl Window {
         copies: bool,
     ) -> Window {
         take_dpi_awareness(hwnd);
-        let caps = surface.get_capabilities(&adapter);
-        let format = caps
+        let (width, height) = client_size(hwnd)
+            .filter(|&(w, h)| w > 0 && h > 0)
+            .unwrap_or(fallback);
+        let mut w = Window {
+            hwnd,
+            instance,
+            adapter,
+            surface,
+            config: wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                width: width.max(1),
+                height: height.max(1),
+                present_mode: wgpu::PresentMode::Fifo,
+                color_space: wgpu::SurfaceColorSpace::Auto,
+                desired_maximum_frame_latency: 2,
+                alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                view_formats: vec![],
+            },
+            interval,
+            copies,
+            configured: false,
+            stale: true,
+            suboptimal_at: None,
+            rest: Backoff::new(),
+            asked: 0,
+            skipped: 0,
+            last_why: None,
+            configures: 0,
+            refused: 0,
+        };
+        if w.choose() {
+            w.configure(device);
+        }
+        w
+    }
+
+    /// The configuration's format, present mode, alpha and usage chosen from what the surface
+    /// offers now (a new surface's may differ from the lost one's); false when it offers no format.
+    fn choose(&mut self) -> bool {
+        let caps = self.surface.get_capabilities(&self.adapter);
+        let Some(&first) = caps.formats.first() else {
+            return false;
+        };
+        let c = &mut self.config;
+        c.format = caps
             .formats
             .iter()
             .copied()
             .find(|f| *f == wgpu::TextureFormat::Bgra8Unorm)
             .or_else(|| caps.formats.iter().copied().find(|f| !f.is_srgb()))
-            .unwrap_or(caps.formats[0]);
-        let copies = if copies {
-            caps.usages & wgpu::TextureUsages::COPY_SRC
-        } else {
-            wgpu::TextureUsages::empty()
-        };
-        let (width, height) = client_size(hwnd)
-            .filter(|&(w, h)| w > 0 && h > 0)
-            .unwrap_or(fallback);
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | copies,
-            format,
-            width: width.max(1),
-            height: height.max(1),
-            present_mode: present_mode(interval, &caps),
-            color_space: wgpu::SurfaceColorSpace::Auto,
-            desired_maximum_frame_latency: 2,
-            alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
-        };
-        surface.configure(device, &config);
-        Window {
-            hwnd,
-            instance,
-            adapter,
-            surface,
-            config,
-            stale: false,
-            rest_until: None,
-            rest: RETRY_AFTER,
-            asked: 0,
-            skipped: 0,
+            .unwrap_or(first);
+        c.present_mode = present_mode(self.interval, &caps);
+        c.alpha_mode = caps
+            .alpha_modes
+            .first()
+            .copied()
+            .unwrap_or(wgpu::CompositeAlphaMode::Auto);
+        c.usage = wgpu::TextureUsages::RENDER_ATTACHMENT
+            | if self.copies {
+                caps.usages & wgpu::TextureUsages::COPY_SRC
+            } else {
+                wgpu::TextureUsages::empty()
+            };
+        true
+    }
+
+    /// The swap chain configured with [`Window::config`], wgpu's errors caught here (not passed to
+    /// the device's handler): whether wgpu took it. Refused, it is stale (configured again before
+    /// the next frame) and no frame is asked of the surface until a configuration is taken.
+    fn configure(&mut self, device: &wgpu::Device) -> bool {
+        let scopes = [
+            wgpu::ErrorFilter::Internal,
+            wgpu::ErrorFilter::OutOfMemory,
+            wgpu::ErrorFilter::Validation,
+        ]
+        .map(|filter| device.push_error_scope(filter));
+        self.surface.configure(device, &self.config);
+        let mut refused = None;
+        for scope in scopes.into_iter().rev() {
+            if let Some(e) = crate::device::block_on(scope.pop()) {
+                refused.get_or_insert(e);
+            }
         }
+        self.configures += 1;
+        self.configured = refused.is_none();
+        self.stale = !self.configured;
+        if let Some(e) = refused {
+            self.refused += 1;
+            if self.refused == 1 {
+                eprintln!(
+                    "NV_D3D9 wgpu: the window's swap chain ({}x{}, {:?}) was refused: {e} (tried again after a rest)",
+                    self.config.width, self.config.height, self.config.present_mode
+                );
+            }
+        }
+        self.configured
     }
 
     /// The device's `Reset` with the game's present `interval`: the swap chain is configured again
     /// before the next frame, at the window's size, in that interval's present mode.
     pub(crate) fn reset(&mut self, interval: u32) {
-        let caps = self.surface.get_capabilities(&self.adapter);
-        self.config.present_mode = present_mode(interval, &caps);
+        self.interval = interval;
+        self.choose();
         self.stale = true;
     }
 
@@ -173,11 +289,12 @@ impl Window {
         self.asked += 1;
         match self.take(device) {
             Ok(t) => {
-                self.rest = RETRY_AFTER;
+                self.rest.shown();
                 if self.skipped > 0 {
                     eprintln!(
-                        "NV_D3D9 wgpu: frames shown again in the window ({} not shown)",
-                        self.skipped
+                        "NV_D3D9 wgpu: frames shown again in the window ({} not shown; the last because {})",
+                        self.skipped,
+                        self.last_why.map_or("", NoFrame::says)
                     );
                     self.skipped = 0;
                 }
@@ -192,99 +309,109 @@ impl Window {
                     );
                 }
                 self.skipped += 1;
+                self.last_why = Some(why);
                 None
             }
         }
     }
 
     fn take(&mut self, device: &wgpu::Device) -> Result<wgpu::SurfaceTexture, NoFrame> {
-        if let Some(until) = self.rest_until {
-            if Instant::now() < until {
-                return Err(NoFrame::TimedOut);
-            }
-            self.rest_until = None;
+        if self.rest.resting(Instant::now()) {
+            return Err(NoFrame::Resting);
         }
         if minimised(self.hwnd) {
             return Err(NoFrame::Minimised);
         }
-        if !self.fit(device, false) {
-            return Err(NoFrame::NoArea);
+        match self.fit(device, false) {
+            Ok(()) => {}
+            // No area is the window's state, as minimised is: asked again at the next frame.
+            Err(NoFrame::NoArea) => return Err(NoFrame::NoArea),
+            Err(why) => return Err(self.rested(why)),
         }
         // An outdated swap chain is made again at the window's size and asked once more; a lost
         // surface is made anew on the same window.
         for _ in 0..2 {
-            let rest = match self.surface.get_current_texture() {
+            let why = match self.surface.get_current_texture() {
                 wgpu::CurrentSurfaceTexture::Success(t) => return Ok(t),
                 wgpu::CurrentSurfaceTexture::Suboptimal(t) => {
-                    self.stale = true;
+                    let size = (self.config.width, self.config.height);
+                    if self.suboptimal_at != Some(size) {
+                        self.suboptimal_at = Some(size);
+                        self.stale = true;
+                    }
                     return Ok(t);
                 }
-                wgpu::CurrentSurfaceTexture::Outdated => {
-                    if self.fit(device, true) {
-                        continue;
-                    }
-                    return Err(NoFrame::NoArea);
-                }
-                wgpu::CurrentSurfaceTexture::Lost => {
-                    if self.make_again(device) {
-                        continue;
-                    }
-                    NoFrame::Lost
-                }
+                wgpu::CurrentSurfaceTexture::Outdated => match self.fit(device, true) {
+                    Ok(()) => continue,
+                    Err(why) => why,
+                },
+                wgpu::CurrentSurfaceTexture::Lost => match self.make_again(device) {
+                    Ok(()) => continue,
+                    Err(why) => why,
+                },
                 wgpu::CurrentSurfaceTexture::Timeout => NoFrame::TimedOut,
                 wgpu::CurrentSurfaceTexture::Occluded => NoFrame::Occluded,
-                wgpu::CurrentSurfaceTexture::Validation => return Err(NoFrame::Refused),
+                wgpu::CurrentSurfaceTexture::Validation => NoFrame::Refused,
             };
-            return Err(self.rest_for(rest));
+            return Err(self.rested(why));
         }
         // Out of date twice in a row: made again at the window's size, still out of date.
-        Err(self.rest_for(NoFrame::Outdated))
+        Err(self.rested(NoFrame::Outdated))
     }
 
-    /// `why` no frame was had, after which none is asked for a while ([`RETRY_AFTER`], twice as
-    /// long each time in a row up to [`RETRY_MOST`]).
-    fn rest_for(&mut self, why: NoFrame) -> NoFrame {
-        self.rest_until = Some(Instant::now() + self.rest);
-        self.rest = (self.rest * 2).min(RETRY_MOST);
+    /// `why` no frame was had: none is asked for a while ([`Backoff`]).
+    fn rested(&mut self, why: NoFrame) -> NoFrame {
+        self.rest.failed(Instant::now());
         why
     }
 
-    /// The swap chain at the window's size now: configured again when the size changed, when
-    /// stale, or with `always`; false when the window has no area to show a frame in.
-    fn fit(&mut self, device: &wgpu::Device, always: bool) -> bool {
+    /// The swap chain at the window's size now, configured again when the size changed, when it
+    /// is stale (or wgpu refused the last configuration), or with `always`; why not when the
+    /// window has no area (nothing configured) or wgpu refused the configuration.
+    fn fit(&mut self, device: &wgpu::Device, always: bool) -> Result<(), NoFrame> {
         let (width, height) =
             client_size(self.hwnd).unwrap_or((self.config.width, self.config.height));
         if width == 0 || height == 0 {
-            return false;
+            return Err(NoFrame::NoArea);
         }
-        if always || self.stale || (width, height) != (self.config.width, self.config.height) {
+        let resized = (width, height) != (self.config.width, self.config.height);
+        if always || resized || self.stale || !self.configured {
             self.config.width = width;
             self.config.height = height;
-            self.surface.configure(device, &self.config);
-            self.stale = false;
+            if !self.configure(device) {
+                return Err(NoFrame::NotConfigured);
+            }
         }
-        true
+        Ok(())
     }
 
-    /// A new surface on the same window, configured as the lost one was (its format chosen again
-    /// where the new one lacks it); false when it could not be made.
-    fn make_again(&mut self, device: &wgpu::Device) -> bool {
+    /// [`crate::device::Device::reconfigure_window_for_tests`]: `format` asked from the next frame
+    /// on, on a new surface never configured with `new_surface`.
+    pub(crate) fn retarget_for_tests(&mut self, format: wgpu::TextureFormat, new_surface: bool) {
+        if new_surface {
+            if let Ok(surface) = crate::device::surface_for(&self.instance, self.hwnd) {
+                self.surface = surface;
+                self.configured = false;
+            }
+        }
+        self.config.format = format;
+        self.stale = true;
+    }
+
+    /// A new surface on the same window, its configuration chosen again from what it offers, and
+    /// configured at the window's size; why not when it could not be made or configured (the
+    /// window then rests).
+    fn make_again(&mut self, device: &wgpu::Device) -> Result<(), NoFrame> {
         let Ok(surface) = crate::device::surface_for(&self.instance, self.hwnd) else {
-            return false;
+            return Err(NoFrame::Lost);
         };
-        let caps = surface.get_capabilities(&self.adapter);
-        if caps.formats.is_empty() {
-            return false;
-        }
-        if !caps.formats.contains(&self.config.format) {
-            self.config.format = caps
-                .formats
-                .iter()
-                .copied()
-                .find(|f| !f.is_srgb())
-                .unwrap_or(caps.formats[0]);
-        }
         self.surface = surface;
+        self.configured = false;
+        self.stale = true;
+        self.suboptimal_at = None;
+        if !self.choose() {
+            return Err(NoFrame::Lost);
+        }
         eprintln!("NV_D3D9 wgpu: the window's surface was lost: made again");
         self.fit(device, true)
     }
@@ -385,5 +512,30 @@ mod tests {
             present_mode(INTERVAL_IMMEDIATE, &fifo),
             wgpu::PresentMode::AutoNoVsync
         );
+    }
+
+    /// A window that gives no frame rests: 100 ms, then twice as long each time in a row, up to
+    /// 2 s; nothing is asked during a rest; a frame shown makes the next rest short again.
+    #[test]
+    fn a_window_that_gives_no_frame_rests_longer_each_time() {
+        let ms = Duration::from_millis;
+        let t0 = Instant::now();
+        let mut b = Backoff::new();
+        assert!(!b.resting(t0));
+        b.failed(t0);
+        assert!(b.resting(t0 + ms(99)));
+        assert!(!b.resting(t0 + ms(100)));
+        let mut at = t0 + ms(100);
+        for rest in [200, 400, 800, 1600, 2000, 2000] {
+            b.failed(at);
+            assert!(b.resting(at + ms(rest - 1)), "{rest}");
+            assert!(!b.resting(at + ms(rest)), "{rest}");
+            at += ms(rest);
+        }
+        b.shown();
+        assert!(!b.resting(at));
+        b.failed(at);
+        assert!(b.resting(at + ms(99)));
+        assert!(!b.resting(at + ms(100)), "short again after a frame");
     }
 }
