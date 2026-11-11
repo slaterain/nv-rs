@@ -2112,21 +2112,28 @@ impl Device {
         }
     }
 
-    /// The clip code a draw takes on a target of `samples`: none without a plane on; the
-    /// hardware's clip distances where the adapter has them; else the pixel shader's discard,
-    /// per sample on a multisampled target, which is where the hardware cuts.
+    /// The clip code a draw takes on a target of `samples`: the hardware's clip distances where
+    /// the adapter has them, planes on or off (a plane that is off is zero and cuts nothing), so
+    /// a shader's modules and pipelines do not depend on the planes; else none without a plane
+    /// on, and the pixel shader's discard with one, per sample on a multisampled target, which
+    /// is where the hardware cuts.
     fn clip_link(&self, samples: u32) -> wgsl::Clip {
-        let on = self.st.rs[RS_CLIPPING] != 0
-            && self.st.rs[rs::CLIPPLANEENABLE] & ((1 << wgsl::CLIP_PLANES) - 1) != 0;
-        if !on {
+        if self.clip_distances {
+            return wgsl::Clip::Distances;
+        }
+        if !self.planes_on() {
             wgsl::Clip::Off
-        } else if self.clip_distances {
-            wgsl::Clip::Distances
         } else {
             wgsl::Clip::Discard {
                 per_sample: samples > 1,
             }
         }
+    }
+
+    /// Whether a user clip plane is on (`D3DRS_CLIPPING` and a bit of `D3DRS_CLIPPLANEENABLE`).
+    fn planes_on(&self) -> bool {
+        self.st.rs[RS_CLIPPING] != 0
+            && self.st.rs[rs::CLIPPLANEENABLE] & ((1 << wgsl::CLIP_PLANES) - 1) != 0
     }
 
     /// Whether NVIDIA's alpha to coverage stands in for the alpha test ([`ATOC`]).
@@ -3211,7 +3218,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                             filterable,
                             atoc,
                             count: key.count,
-                            clip: clip_code(key.clip),
+                            clip: clip_code(key.clip, self.planes_on()),
                         };
                         let presents = self.presents;
                         if let Some(l) = &mut self.list {
@@ -3558,12 +3565,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             filterable: e.filterable,
             atoc: e.atoc,
             count: e.count,
-            // Planes on or off is the entry's; how they are cut is this adapter's (a list made on
-            // Direct3D 12 serves Vulkan too).
-            clip: if e.clip == 0 {
-                wgsl::Clip::Off
-            } else if self.clip_distances {
+            // How the planes are cut is this adapter's ([`Device::clip_link`]: with clip distances
+            // every draw takes them, planes on or off); without them, planes on or off is the
+            // entry's (a list made on one API serves the other).
+            clip: if self.clip_distances {
                 wgsl::Clip::Distances
+            } else if e.clip == 0 {
+                wgsl::Clip::Off
             } else {
                 wgsl::Clip::Discard {
                     per_sample: e.samples > 1,
@@ -5192,6 +5200,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         &self.adapter_name
     }
 
+    /// Whether the adapter has the hardware's clip distances, which every draw then takes
+    /// ([`Device::clip_link`]; tests).
+    pub fn has_clip_distances(&self) -> bool {
+        self.clip_distances
+    }
+
     /// Loses the device, as a driver reset (TDR) or a removed graphics card does: from now on
     /// nothing reaches the GPU and nothing is read back from it (tests).
     pub fn lose(&self) {
@@ -5751,9 +5765,12 @@ struct Ready {
     samplers: Vec<(u32, u8, bool)>,
 }
 
-/// The clip code as the list writes it ([`prepare::Entry::clip`]).
-fn clip_code(c: wgsl::Clip) -> u8 {
+/// The clip code as the list writes it ([`prepare::Entry::clip`]) for a draw cut as `c`, with a
+/// plane on or not (`on`): 0 for none on, also with the clip distances every draw takes where
+/// the adapter has them, so a list written there predicts right on an adapter without them.
+fn clip_code(c: wgsl::Clip, on: bool) -> u8 {
     match c {
+        _ if !on => 0,
         wgsl::Clip::Off => 0,
         wgsl::Clip::Distances => 1,
         wgsl::Clip::Discard { per_sample: false } => 2,
@@ -6363,6 +6380,19 @@ impl Drop for Device {
 mod tests {
     use super::*;
     use wgpu::TextureFormat as F;
+
+    /// The list records whether a plane was on, not only how the adapter cut: the clip
+    /// distances every draw takes where the adapter has them write 0 with no plane on, so a list
+    /// written there predicts the right pipelines on an adapter without them (Direct3D 12).
+    #[test]
+    fn the_list_records_a_plane_on_whatever_cuts_it() {
+        use wgsl::Clip;
+        assert_eq!(clip_code(Clip::Distances, false), 0);
+        assert_eq!(clip_code(Clip::Distances, true), 1);
+        assert_eq!(clip_code(Clip::Off, false), 0);
+        assert_eq!(clip_code(Clip::Discard { per_sample: false }, true), 2);
+        assert_eq!(clip_code(Clip::Discard { per_sample: true }, true), 3);
+    }
 
     /// The first-use gate's counts: the pipeline work a present held (pipelines made on its draws,
     /// with their modules, and listed ones made ahead), the most in one present and where, the

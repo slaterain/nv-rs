@@ -21,6 +21,9 @@
 //!   sample of an edge pixel can be covered, as on Direct3D 9, on every adapter. (Moving the
 //!   viewport half a pixel instead is exact in the rasteriser but cuts through the first row and
 //!   column on an adapter that clips at the viewport's exact edge, as WARP does: DESIGN.md.)
+//! - **Invariant position**: every vertex shader's position is `@invariant`, so two draws whose
+//!   shaders compute it the same way get the same bits, and a second pass over the same geometry
+//!   with an equal depth test meets the first (DXVK's `d3d9.invariantPosition`, on by default).
 //! - **User clip planes** ([`Clip`]): each vertex shader also gives its distance to the six
 //!   planes the device sets in `R.clip`, from its own `oPos`.
 //! - **Interpolation at the centroid** ([`Link::centroid`]): the device asks it of every varying,
@@ -258,10 +261,11 @@ pub fn centroid_everywhere(varyings: usize) -> Vec<bool> {
 }
 
 /// How a converted pair applies Direct3D 9's user clip planes (`SetClipPlane`,
-/// `D3DRS_CLIPPLANEENABLE`), for draws with a plane on. With a vertex shader, a plane is in clip
-/// space: a point is kept where `dot(plane, oPos) >= 0`. The device puts the six planes in
-/// `R.clip` (zero for a plane that is off, which keeps everything); the distances are taken from
-/// the shader's own `oPos`, before any pixel-centre move. Both stages of a pair take the same.
+/// `D3DRS_CLIPPLANEENABLE`). With a vertex shader, a plane is in clip space: a point is kept
+/// where `dot(plane, oPos) >= 0`. The device puts the six planes in `R.clip` (zero for a plane
+/// that is off, whose distance is then exactly 0, which keeps everything); the distances are
+/// taken from the shader's own `oPos`, before any pixel-centre move. Both stages of a pair take
+/// the same.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Clip {
     /// No plane on: no clip code.
@@ -269,7 +273,9 @@ pub enum Clip {
     Off,
     /// The hardware's clip distances (wgpu's `CLIP_DISTANCES`, which its Vulkan and Metal backends
     /// have): the primitive is cut where a distance is negative, sample by sample, as Direct3D 9
-    /// drivers cut on this hardware.
+    /// drivers cut on this hardware. The device links every pair so where the adapter has them,
+    /// planes on or off (an off plane is zero: distance 0, nothing cut), so its modules and
+    /// pipelines do not depend on the planes.
     Distances,
     /// Without clip distances (wgpu's Direct3D 12 backend): the six distances go to the pixel
     /// shader as two more varyings (after the linked ones), which discards where one is negative.
@@ -660,7 +666,8 @@ impl Gen<'_> {
             s.push_str(f);
             s.push('\n');
         }
-        s.push_str("}\nstruct Out {\n    @builtin(position) position: vec4<f32>,\n");
+        // The position is invariant (module documentation).
+        s.push_str("}\nstruct Out {\n    @builtin(position) @invariant position: vec4<f32>,\n");
         for (l, v) in self.link.varyings.iter().enumerate() {
             let interp = if self.link.centroid.get(l).copied().unwrap_or(false) {
                 " @interpolate(perspective, centroid)"
@@ -690,9 +697,13 @@ impl Gen<'_> {
         let _ = writeln!(s, "    let opos = {pos};");
         // Half a pixel right and down: Direct3D 9's pixel centres (module documentation).
         s.push_str("    out.position = opos + vec4<f32>(R.sys[0].xy * opos.w, 0.0, 0.0);\n");
-        // The user clip planes' distances, from the shader's own position (with a plane on).
+        // The user clip planes' distances, from the shader's own position. A plane that is off
+        // is zero and gives exactly 0, which keeps everything (also a position with an infinite
+        // or NaN component, whose product with 0 would be NaN).
         let d: Vec<String> = (0..CLIP_PLANES)
-            .map(|k| format!("dp4(R.clip[{k}], opos)"))
+            .map(|k| {
+                format!("select(dp4(R.clip[{k}], opos), 0.0, all(R.clip[{k}] == vec4<f32>(0.0)))")
+            })
             .collect();
         match self.link.clip {
             Clip::Off => {}
@@ -1659,10 +1670,21 @@ mod tests {
                     v.starts_with("enable clip_distances;"),
                     clip == Clip::Distances
                 );
-                assert_eq!(v.contains("dp4(R.clip[5], opos)"), clip != Clip::Off, "{v}");
+                // A plane that is off (zero) gives exactly 0, whatever the position.
+                assert_eq!(
+                    v.contains(
+                        "select(dp4(R.clip[5], opos), 0.0, all(R.clip[5] == vec4<f32>(0.0)))"
+                    ),
+                    clip != Clip::Off,
+                    "{v}"
+                );
                 assert!(
                     v.contains("out.position = opos + vec4<f32>(R.sys[0].xy * opos.w, 0.0, 0.0);"),
                     "{v}"
+                );
+                assert!(
+                    v.contains("@builtin(position) @invariant position: vec4<f32>"),
+                    "the position is invariant: {v}"
                 );
                 assert_eq!(v.contains("k0: vec4<f32>"), discard, "{v}");
                 assert_eq!(
