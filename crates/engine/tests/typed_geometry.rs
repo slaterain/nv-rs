@@ -1,5 +1,8 @@
 //! The differential tests of the geometry family (`engine_typed::geometry`) against the translations:
-//! the renderer's packing of a geometry's arrays (`pack`).
+//! the renderer's packing of a geometry's arrays (`pack`), the bound, the data's setters and the morpher
+//! (`bound`, `data`, `morph`), where the arrays begin and end (`lifecycle`), the tangent space (`tangent`)
+//! and the pick of a geometry's triangles (`pick`). Each batch's stand-ins are described where its tests
+//! begin; the first batch's here.
 //!
 //! What stands in: the declaration's, the geometry data's and the vertex buffer's virtual functions
 //! (test functions past `.text` answering a word per slot from a table; the ones that fill words they
@@ -1757,6 +1760,386 @@ fn release_normals() {
                 set(e, data + 0x24, 0);
             }
             vec![data]
+        })
+        .run()
+        .assert_same();
+}
+
+// Batch 3: the tangent space.
+
+use engine_typed::geometry::tangent;
+
+/// `00b54b60`'s world: a geometry (slot 0x1c its triangle shape from the table, slot 0x20 whether it
+/// is strips) with a name or none, its data of six vertices (slot 0xac the triangle indices from a
+/// list holding a repeated vertex), a strip list, the tangent space extra data or none, and the
+/// callees that stand in: the name compare, the new object and its constructor, the fixed strings, the
+/// extra data's lookup and removal, the formatter. `c`'s words: the extra data, the shape, strips,
+/// normals, the triangle count, the name, the case's float and where it goes.
+fn tangent_world(e: &mut Engine, c: &Case) -> u32 {
+    lifecycle_globals(e);
+    e.map(0x0109_b000, 0x1000);
+    set(e, 0x0109_b220, 0x0abc_0000);
+    let vt = vtable(e);
+    slots!(e; 0x00, 0x1c, 0x20);
+    for addr in [0x00ec_7ec0u32, 0x00a5_be90, 0x0040_6d00, 0x00fd_f1c4] {
+        e.register(addr, |e, a| {
+            let mut fold = e.mem.u32(MARK + 0x1c);
+            for w in a {
+                fold = fold.rotate_left(13) ^ w;
+            }
+            set(e, MARK + 0x1c, fold);
+            ret(0)
+        });
+    }
+    e.register(0x00aa_13e0, |e, a| ret(e.mem.alloc(a[0].max(4))));
+    e.register(0x00b6_6810, |e, a| {
+        let vt = e.mem.u32(RETS + 0x800 + 0x20);
+        set(e, a[0], vt);
+        ret(a[0])
+    });
+    e.register(0x00a5_b690, |e, _| {
+        let s = e.mem.alloc(0x20);
+        ret(s + 8)
+    });
+    e.register(0x00a5_bdd0, |e, _| ret(e.mem.u32(RETS + 0x5bd)));
+    e.register(0x00a7_5f10, |e, _| ret(e.mem.u32(RETS + 0x5f1)));
+    // The data's triangle query (slot 0xac): (triangle, &i0, &i1, &i2) from a list of six triangles,
+    // the third with a repeated vertex.
+    e.register(VT_FN + 0xac, |e, a| {
+        const TRIANGLES: [[u32; 3]; 6] = [
+            [0, 1, 2],
+            [2, 1, 3],
+            [3, 3, 4],
+            [4, 5, 0],
+            [5, 1, 4],
+            [1, 0, 5],
+        ];
+        let t = TRIANGLES[(a[1] % 6) as usize];
+        for k in 0..3 {
+            e.mem.set_u16(a[2 + k], t[k] as u16);
+        }
+        ret(0)
+    });
+    set(e, RETS + 0x820, vt);
+    let data = geometry_data(e, vt, 0x0001);
+    // The case's float at one of the positions' or texture coordinates' words.
+    let at = c.word(7);
+    let (positions, coordinates) = (e.mem.u32(data + 0x20), e.mem.u32(data + 0x2c));
+    if at < 18 {
+        set(e, positions + 4 * at, c.f32(6).to_bits());
+    } else if at < 30 {
+        set(e, coordinates + 4 * (at - 18), c.f32(6).to_bits());
+    }
+    if c.word(3) == 0 {
+        set(e, data + 0x24, 0);
+    }
+    e.mem.set_u16(data + 0x40, c.word(4) as u16);
+    let strip = e.mem.alloc(0x20);
+    for (k, v) in [0u16, 1, 2, 3, 4, 5, 0, 2, 4].iter().enumerate() {
+        e.mem.set_u16(strip + 2 * k as u32, *v);
+    }
+    set(e, RETS + 0x5f1, strip);
+    let geometry = obj(e, 0xc0, vt);
+    let name = if c.word(5) != 0 {
+        let n = e.mem.alloc(8);
+        e.mem.write(n, b"STBBrock");
+        n
+    } else {
+        0
+    };
+    set(e, geometry + 8, name);
+    set(e, geometry + 0xb8, data);
+    set(e, RETS + 0x1c, if c.word(1) != 0 { geometry } else { 0 });
+    set(e, RETS + 0x20, c.word(2));
+    let existing = if c.word(0) != 0 {
+        let x = e.mem.alloc(0x10);
+        let halves = points(e, 12, u32::MAX, 0.0);
+        set(e, x + 0xc, halves);
+        x
+    } else {
+        0
+    };
+    set(e, RETS + 0x5bd, existing);
+    geometry
+}
+
+/// `00b54b60`: with the extra data or without; a shape or none; strips or a list; normals or none;
+/// no triangles, two, six; a name or none; the case's float at a position or texture coordinate (or
+/// nowhere), every float the harness has and a sweep.
+#[test]
+fn create_tangent_space() {
+    Diff::new(entry!(0x00b5_4b60, tangent::create_tangent_space(u32) -> u32))
+        .family(&geometry::GEOMETRY)
+        .max_calls(MAX_CALLS)
+        .inputs(&[
+            Input::Of(&[0, 1]),
+            Input::Of(&[1, 0]),
+            Input::Flag,
+            Input::Of(&[1, 0]),
+            Input::Of(&[0, 2, 6]),
+            Input::Flag,
+            Input::F32,
+            Input::Of(&[0, 5, 19, 26, 99]),
+        ])
+        .max_cases(600)
+        .float_sweep(48)
+        .setup(|e, c| {
+            let geometry = tangent_world(e, c);
+            vec![geometry]
+        })
+        .run()
+        .assert_same();
+}
+
+// Batch 3: the pick of a geometry's triangles.
+
+use engine_typed::geometry::pick;
+
+/// What the pick tests make: the ray, the pick, the geometry.
+struct Picked {
+    origin: u32,
+    direction: u32,
+    pick: u32,
+    geometry: u32,
+}
+
+/// `c`'s words for [`pick_world`]: the class (0 general, 1 single strip, 2 strips of two, 3 shape),
+/// the intersect type (0 the centre, 1 or 2 the triangles), a skin, the coordinate type, the ray-test
+/// answers (a bit a triangle), the returns (bits: 1 texture, 2 normal, 4 smooth normal, 8 colour),
+/// the locks (bits: 1 vertices through the additional data, 2 textures, 4 normals, 8 colours), the
+/// arrays the data keeps (bits: 1 positions, 2 normals, 4 colours, 8 texture coordinates), stop at
+/// the first hit, the case's float and where it goes.
+fn pick_world(e: &mut Engine, c: &Case) -> Picked {
+    lifecycle_globals(e);
+    e.map(0x011a_9000, 0x1000);
+    e.map(0x0126_f000, 0x1000);
+    let vt = vtable(e);
+    slots!(e; 0x08, 0x8c);
+    // The stand-ins: the ray-triangle test answers from the table's bits and writes its point,
+    // distance and weights; the data's locks fill their blocks from the table; the strip and triangle
+    // lists come from the table; the class test answers from the table; the record's set marks.
+    e.register(0x00ea_db90, |e, a| {
+        let k = e.mem.u32(RETS + 0x900);
+        set(e, RETS + 0x900, k + 1);
+        let hit = (e.mem.u32(RETS + 0x904) >> (k % 8)) & 1;
+        if hit != 0 {
+            let value = e.mem.u32(RETS + 0x908);
+            for (slot, bits) in [
+                (a[6], 0x3f80_0000u32),
+                (a[6] + 4, value),
+                (a[6] + 8, 0x4000_0000),
+                (a[7], 0x4120_0000),
+                (a[8], 0x3e80_0000),
+                (a[9], 0x3e00_0000),
+            ] {
+                set(e, slot, bits);
+            }
+        }
+        ret(hit)
+    });
+    // The locks: the vertices' (data, block), the texture coordinates' (data, 0, block), the
+    // normals' and the colours' (data, block) fill the block from the table.
+    fn fill_lock(e: &mut Engine, block: u32, at: u32) -> Ret {
+        set(e, block, e.mem.u32(RETS + at));
+        set(e, block + 4, e.mem.u32(RETS + at + 4));
+        ret(0)
+    }
+    e.register(0x00a6_7410, |e, a| fill_lock(e, a[1], 0x910));
+    e.register(0x00a6_7720, |e, a| fill_lock(e, a[2], 0x920));
+    e.register(0x00a6_75b0, |e, a| fill_lock(e, a[1], 0x930));
+    e.register(0x00a6_7660, |e, a| fill_lock(e, a[1], 0x940));
+    e.register(0x00a6_7360, |e, _| ret(e.mem.u32(RETS + 0x950)));
+    e.register(0x00a6_73d0, |e, a| {
+        set(e, MARK + 0x20, e.mem.u32(MARK + 0x20) ^ a[0]);
+        ret(0)
+    });
+    e.register(0x00a7_5f10, |e, _| ret(e.mem.u32(RETS + 0x954)));
+    e.register(0x00a7_b850, |e, _| ret(e.mem.u32(RETS + 0x958)));
+    e.register(0x0043_b300, |e, _| ret(e.mem.u32(RETS + 0x95c)));
+    e.register(0x00e9_8aa0, |e, a| {
+        set(e, a[0] + 0x40, a[1]);
+        ret(0)
+    });
+    e.register(0x0053_4780, |e, a| {
+        for w in 0..4 {
+            set(e, a[2] + 4 * w, (0.25f32 * (a[1] + w) as f32).to_bits());
+        }
+        ret(0)
+    });
+    e.register(VT_FN + 0xac, |e, a| {
+        const TRIANGLES: [[u16; 3]; 4] = [[0, 1, 2], [2, 1, 3], [3, 4, 5], [5, 4, 0]];
+        let t = TRIANGLES[(a[1] % 4) as usize];
+        for k in 0..3 {
+            e.mem.set_u16(a[2 + k], t[k]);
+        }
+        ret(0)
+    });
+    let class = c.word(0);
+    // The data, its arrays as kept, its additional data for the vertex lock.
+    let keeps = c.word(7);
+    let data = geometry_data(e, vt, 0x0001);
+    for (bit, field) in [(1u32, 0x20u32), (2, 0x24), (4, 0x28), (8, 0x2c)] {
+        if keeps & bit == 0 {
+            set(e, data + field, 0);
+        }
+    }
+    let positions = e.mem.u32(data + 0x20);
+    let at = c.word(10);
+    if positions != 0 && at < 18 {
+        set(e, positions + 4 * at, c.f32(9).to_bits());
+    }
+    let locks = c.word(6);
+    let additional = obj(e, 0x10, vt);
+    set(e, data + 0x30, additional);
+    set(e, RETS + 0x8c, locks & 1);
+    set(e, RETS + 0x950, locks & 1);
+    let locked_positions = points(e, 6, u32::MAX, 0.0);
+    set(e, RETS + 0x910, locked_positions);
+    set(e, RETS + 0x914, 12);
+    for (bit, at, stride) in [(2u32, 0x920u32, 8u32), (4, 0x930, 12), (8, 0x940, 16)] {
+        if locks & bit != 0 {
+            let block = points(e, 8, u32::MAX, 0.0);
+            set(e, RETS + at, block);
+            set(e, RETS + at + 4, stride);
+        }
+    }
+    e.mem.set_u16(data + 0x44, if class == 2 { 2 } else { 1 });
+    let strip = e.mem.alloc(0x20);
+    for (k, v) in [0u16, 1, 2, 2, 3, 4, 5, 0].iter().enumerate() {
+        e.mem.set_u16(strip + 2 * k as u32, *v);
+    }
+    set(e, RETS + 0x954, strip);
+    let list = e.mem.alloc(0x20);
+    for (k, v) in [0u16, 1, 2, 3, 4, 5, 2, 4, 0].iter().enumerate() {
+        e.mem.set_u16(list + 2 * k as u32, *v);
+    }
+    set(e, RETS + 0x958, list);
+    set(e, RETS + 0x95c, u32::from(class == 3));
+    set(e, RETS + 0xa8, 3);
+    // The class chain: the strips' record for classes 1 and 2, else a record with no parent.
+    let record = if class == 1 || class == 2 {
+        0x011f_4a20
+    } else {
+        let r = e.mem.alloc(8);
+        set(e, r + 4, 0);
+        r
+    };
+    set(e, RETS + 0x08, record);
+    // The geometry: its bound centre words, rotation, translation and scale, data and skin.
+    let geometry = obj(e, 0xc0, vt);
+    let centre = points(e, 2, u32::MAX, 0.0);
+    set(e, geometry + 0x20, centre);
+    let rotation = [
+        1.0f32, 0.0, 0.0, 0.0, 0.8, -0.6, 0.0, 0.6, 0.8, 5.0, -3.0, 2.0, 1.5,
+    ];
+    for (k, v) in rotation.iter().enumerate() {
+        set(e, geometry + 0x68 + 4 * k as u32, v.to_bits());
+    }
+    set(e, geometry + 0xb8, data);
+    set(e, geometry + 0xbc, c.word(2));
+    // The pick: types, the returns, the results' pool with eight records ready.
+    let p = e.mem.alloc(0x40);
+    set(e, p, 1);
+    set(e, p + 4, c.word(8));
+    set(e, p + 8, c.word(1));
+    set(e, p + 0xc, c.word(3));
+    e.mem.set_u8(p + 0x10, 1);
+    let returns = c.word(5);
+    for (k, bit) in [1u32, 2, 4, 8].iter().enumerate() {
+        e.mem
+            .set_u8(p + 0x30 + k as u32, u8::from(returns & bit != 0));
+    }
+    let records = e.mem.alloc(0x20);
+    for k in 0..8 {
+        let r = e.mem.alloc(0x44);
+        set(e, records + 4 * k, r);
+    }
+    set(e, p + 0x18 + 4, records);
+    e.mem.set_u16(p + 0x18 + 8, 8);
+    e.mem.set_u16(p + 0x18 + 0xa, 8);
+    set(e, RETS + 0x904, c.word(4));
+    set(e, RETS + 0x908, c.f32(9).to_bits());
+    let origin = points(e, 1, u32::MAX, 0.0);
+    let direction = e.mem.alloc(0xc);
+    for (k, v) in [0.0f32, 0.6, 0.8].iter().enumerate() {
+        set(e, direction + 4 * k as u32, v.to_bits());
+    }
+    Picked {
+        origin,
+        direction,
+        pick: p,
+        geometry,
+    }
+}
+
+const PICK_INPUTS: &[Input] = &[
+    Input::Of(&[0, 1, 2, 3]),
+    Input::Of(&[1, 0, 2]),
+    Input::Of(&[0, 1]),
+    Input::Of(&[0, 1]),
+    Input::Of(&[0x5, 0, 0xff, 0x2]),
+    Input::Of(&[0xf, 0, 0xb, 0x3, 0x8]),
+    Input::Of(&[0, 0xf, 0x1, 0x6]),
+    Input::Of(&[0xf, 0, 0x1, 0xe, 0x9]),
+    Input::Of(&[0, 1]),
+    Input::F32,
+    Input::Of(&[0, 4, 13, 99]),
+];
+
+/// `00e9b4f0`: each class (the general triangles, a single strip and two strips, a shape), the
+/// centre for intersect type 0 or a skin, each coordinate type, ray tests hitting some, none or all,
+/// each return, each lock, the arrays kept or not, stopping at the first hit or not, the case's float
+/// in a position. The translation calls the strips' and the shape's picks and the record adder
+/// plainly.
+#[test]
+fn pick_geometry() {
+    Diff::new(entry!(
+        0x00e9_b4f0,
+        pick::pick_geometry(Ptr, Ptr, Ptr, Ptr) -> bool
+    ))
+    .family(&geometry::GEOMETRY)
+    .translation_calls_plainly(&[0x00e9_93d0, 0x00e9_a280, 0x00e9_9330])
+    .max_calls(MAX_CALLS)
+    .inputs(PICK_INPUTS)
+    .max_cases(800)
+    .float_sweep(32)
+    .setup(|e, c| {
+        let w = pick_world(e, c);
+        vec![w.origin, w.direction, w.pick, w.geometry]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `00e993d0`, called directly: the strips' pick over the same inputs.
+#[test]
+fn pick_strips() {
+    Diff::new(entry!(0x00e9_93d0, pick::pick_strips(Ptr, Ptr, Ptr, Ptr) -> bool))
+        .family(&geometry::GEOMETRY)
+        .translation_calls_plainly(&[0x00e9_9330])
+        .max_calls(MAX_CALLS)
+        .inputs(PICK_INPUTS)
+        .max_cases(500)
+        .setup(|e, c| {
+            let w = pick_world(e, c);
+            vec![w.origin, w.direction, w.pick, w.geometry]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `00e9a280`, called directly: the shape's pick over the same inputs.
+#[test]
+fn pick_shape() {
+    Diff::new(entry!(0x00e9_a280, pick::pick_shape(Ptr, Ptr, Ptr, Ptr) -> bool))
+        .family(&geometry::GEOMETRY)
+        .translation_calls_plainly(&[0x00e9_9330])
+        .max_calls(MAX_CALLS)
+        .inputs(PICK_INPUTS)
+        .max_cases(500)
+        .setup(|e, c| {
+            let w = pick_world(e, c);
+            vec![w.origin, w.direction, w.pick, w.geometry]
         })
         .run()
         .assert_same();

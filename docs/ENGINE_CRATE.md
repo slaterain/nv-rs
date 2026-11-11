@@ -608,8 +608,11 @@ for a declaration entry (the draw family's stream pack calls it), the six conver
 texture set getter and the fixed-function packer with its strided copy. The second: the bound of a run of points
 (`NiBound::ComputeFromData`), the geometry data's setters of a set of arrays (`Replace`, which the renderer's
 release of the arrays a static mesh does not keep goes through, `SetData`, `ReplaceData`) and the geometry morpher
-(`Update`, `GenMorphInterp`, `GetVertexData` and the weighted add of a target). Its tests are
-`crates/engine/tests/typed_geometry.rs`. Off until its gate (`NV_TYPED=geometry` turns it on).
+(`Update`, `GenMorphInterp`, `GetVertexData` and the weighted add of a target). The third: where the arrays begin
+and end (the load from a stream, which FaceGen's deep copies of a head go through, the save with its texture
+coordinates' write, the destructor body, the normals' own allocation, method setter and release), the tangent space a
+lit geometry gets at load (`BSShaderManager::CreateTangentSpaceSimple`) and the pick of a geometry's triangles (the
+general pick and the two it hands strips and shapes). Its tests are `crates/engine/tests/typed_geometry.rs`. Off until its gate (`NV_TYPED=geometry` turns it on).
 And `animation` (same crate, id 24), the update half's fifth group: a skeleton's bones moved from their animation
 each frame. `BSBipNode::UpdateAllButBip` walks a bip node's controllers; a multi-target transform controller
 (`BSTransCon::UpdateAllButTarget`) updates each bone it drives from its interpolator's transform
