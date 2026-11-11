@@ -56,6 +56,14 @@ pub fn world_draw_first(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulato
     if !start(e, camera, acc.addr()) {
         return;
     }
+    if super::detach::switch_on() {
+        // The drawing thread's step 1: the lists the draw walks leave guest memory for the draw's view.
+        let mut words = Vec::new();
+        for i in 0..packet::renderer_count(e, acc) {
+            super::detach::list_words(e, packet::renderer(e, acc, i).addr(), &mut words);
+        }
+        super::detach::open(e, &words);
+    }
     e.vcall(acc.addr(), SLOT_DRAW, &args![camera, acc, third]);
 }
 
@@ -65,6 +73,8 @@ pub fn world_draw_first(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulato
 /// kept a call through the slot for them.
 pub fn world_draw_second(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>, third: u32) {
     e.vcall(acc.addr(), SLOT_FINISH, &args![camera, acc, third]);
+    // Step 1 of the drawing thread: the view's words back to guest memory as the draw ends.
+    super::detach::close(e);
 }
 
 // Typed from 00b6c0d0
@@ -106,7 +116,7 @@ pub fn accumulator_draw(e: &mut Engine, acc: Ptr<BSShaderAccumulator>) {
     if function == 0 {
         function = packet::render_mode_draw(e, 0);
     }
-    e.call(function, &args![acc]);
+    super::detach::suspended(e, |e| e.call(function, &args![acc]));
 }
 
 // Typed from 00b66570
@@ -455,7 +465,14 @@ pub fn has_listed_pass(e: &mut Engine, acc: Ptr<BSShaderAccumulator>, low: u32, 
     let mut i = 0u32;
     while i < packet::renderer_count(e, acc) && !found {
         let renderer = packet::renderer(e, acc, i);
-        found = e.call(HAS_LISTED_PASS, &args![renderer, low, high]).u8() != 0;
+        let words = |e: &Engine| {
+            let mut words = Vec::new();
+            super::detach::candidates(e, renderer.addr(), &mut words);
+            words
+        };
+        found = super::detach::suspended_for(e, words, |e| {
+            e.call(HAS_LISTED_PASS, &args![renderer, low, high]).u8()
+        }) != 0;
         i += 1;
     }
     found

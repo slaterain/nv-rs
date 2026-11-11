@@ -45,7 +45,9 @@
 //!   compares with, the colour scale, the bone scale bounds, the far distance with no fog distances, the
 //!   1.0 at `01012070`).
 //!   A later step can feed the draw from a copied packet and give a drawing thread its own state by
-//!   changing those two files; nothing here copies, defers or moves anything yet.
+//!   changing those two files. Step 1 of that ([`detach`], `NV_DRAW_DETACH=1`, a check that is slower and
+//!   not for play) takes the pass lists' words out of guest memory while the world draw runs; nothing else
+//!   is copied, deferred or moved yet.
 //!
 //! The drawing itself (the batch renderer's lists, passes and state setters) is the shader family's,
 //! reached by `typed_call!`s that go direct while both families are on.
@@ -67,6 +69,7 @@ use engine_core::{entry, AbiFn};
 
 pub mod alpha;
 pub mod constants;
+pub mod detach;
 pub mod drivers;
 pub mod layout;
 pub mod own;
