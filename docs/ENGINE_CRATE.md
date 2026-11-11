@@ -825,12 +825,32 @@ uses is `engine_core::typed::moved`, tested with a made-up family, so a family r
   the slab: every access is made on both and compared (a word inside a mirrored block compares as the same
   place in its mirror, so pointer fields need no types), the first 20 differences are printed with the place
   and the function running, and the status line counts comparisons and differences (`Dual run: ..`). A dual run
-  keeps the game's threads stepped, so each paired access has no other thread between its halves.
-- The heap census (`NV_CENSUS`) ends with what the slab holds, by family and tag.
+  keeps the game's threads stepped and the render helpers from forking, so each paired access has no other
+  thread between its halves; for the same reason a store method's call by address in the dual run must never
+  reach a wait.
+- **Checks along the way.** K1's destructor half checks the poison (an untyped writer of a moved field stops the
+  run, naming the field and what it wrote) and clears the spare word (a second destruction frees nothing); the
+  moved store stops when typed code reads its own family's poison as a value (a moved field read without
+  `K1::place`). Fault messages name the stage-2 range an access hit (a slab handle, a buffer token, a stub page,
+  the poison area, a freed moved object). No reservation reaches into the last 64 KB (the poison's target), and
+  slab and token pages are never mapped.
+- **Reuse: a quarantine, not the exe's order.** The guest heap reproduces the exe's pools for the objects that
+  stay, so a use after free in game code reads what the exe would have read. A moved family's blocks are not in
+  those pools, so a freed slab block waits, oldest first, until 4 MB of later frees have joined it, every word
+  the freed-block check's word (above the heap, never mapped): a stale handle reads freed words and a pointer
+  taken from them stops at once. Freed stubs and buffer tokens wait for 65,536 later ones. A family whose game
+  code reads its objects after freeing them is not moved until that read is typed or fixed.
+- **Buffers under real threads.** A free swaps the bytes out of the table (of two frees at once one wins and the
+  other stops) and keeps them until no thread can be inside an access: the thread host's barrier at a frame's
+  end (once 64 MB wait) with real threads, every frame's end with stepped ones (`Buffers::reclaim`).
+- The heap census (`NV_CENSUS`) ends with what the slab holds, by family and tag, saying how many of a K1
+  family's blocks keep a shadow in the heap.
 
 A family decides which of its objects move, which fields stay in a K1 stub and which word is spare, which
 allocations are its own, and which of its calls by address act on its own objects. Typed code reached by address
-tests a handle's range (`moved::is_handle`), so code shared with objects that stay needs no second path.
+tests a handle's range (`moved::is_handle`), so code shared with objects that stay needs no second path. Its
+`Family` says `stage2: true` once its code goes through the store; until then the switch refuses
+`<family>:dual`, `:moved` and `:freed` (they would run stage 1 without saying so).
 
 ## Checking against the real exe
 
