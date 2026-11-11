@@ -155,6 +155,7 @@ fn stand_ins(e: &mut Engine, state: u32) {
         0x010e_c000,
         0x011a_9000,
         0x011a_f000,
+        0x011c_5000,
         0x011f_4000,
         0x0126_7000,
     ] {
@@ -172,6 +173,8 @@ fn stand_ins(e: &mut Engine, state: u32) {
     e.mem.set_u32(0x011a_fe64, TWO);
     words(e, 0x011f_426c, &[0, 0, 0]);
     e.mem.set_u32(0x0126_7e6c, HALF);
+    // The Havok scale the position conversion multiplies by.
+    e.mem.set_u32(0x011c_582c, 0x3e12_4925);
     words(e, ZERO_VECTOR, &[0, 0, 0, 0]);
     words(e, LOCK, &[0, 0]);
     let tls = e.tls();
@@ -268,7 +271,9 @@ impl Common for Diff {
             .family(&culling::CULLING)
             .family(&leaf::LEAVES)
             .goes_by_address(&[0x00ec_6040])
-            .translation_calls_plainly(&[0x0040_19d0, 0x0040_8860])
+            // What the dispatch family's translations call plainly (its PLAIN list): the Havok position's
+            // helper and the body vector's part.
+            .translation_calls_plainly(&[0x0040_19d0, 0x0040_8860, 0x004a_3e90, 0x0056_0e50])
             .max_calls(MAX_CALLS)
             .float_sweep(FLOAT_SWEEP)
     }
@@ -445,6 +450,15 @@ fn collision_hk_to_ni() {
             &P3,
         ]))
         .max_cases(256)
+        // Blend mode 0 reads the Havok object's position through its vtable: without one both sides stop there
+        // (the game never has a part-keyframed object without one).
+        .expect_stops(|case| {
+            let (amount, second, flag, state) =
+                (case.word(0), case.word(1), case.word(2), case.word(3));
+            let mode_0 = (amount == 0 && state != 1 && second != 0 && flag == 0)
+                || (amount == HALF && state != 2);
+            case.word(5) == 0 && mode_0
+        })
         .setup(|e, case| {
             stand_ins(e, case.word(3));
             let c = object(e, 0x28);
