@@ -198,10 +198,16 @@ pub(crate) fn holder_set(e: &mut Engine, s: Store, holder: u32, object: u32) {
             }
         }
     } else {
-        s.whole(e, |e| {
-            e.call(HOLDER_SET, &args![holder, object]);
-            s.resync(e, holder, 1);
-        });
+        // Not inside `Store::whole`: every caller sets null, and with null `006f74f0`'s store of 0
+        // is its last step, so the resync cannot be separated from it by another thread's access;
+        // but the release before it can run the held object's deleting destructor (game code that
+        // may reach a contended wait), which must not run with the time-slice hook taken out.
+        debug_assert!(
+            object == 0 || !matches!(s, Store::Dual { .. }),
+            "the dual run's holder set is only ever given null"
+        );
+        e.call(HOLDER_SET, &args![holder, object]);
+        s.resync(e, holder, 1);
     }
 }
 

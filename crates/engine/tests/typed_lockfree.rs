@@ -2491,13 +2491,18 @@ mod forms {
         r.end()
     }
 
-    fn every_form(life: fn(&str) -> Life) {
+    /// `life` in every form against stage 1, which answers more than `floor` times.
+    fn every_form(life: fn(&str) -> Life, floor: usize) {
         let stage1 = life("lockfree");
         assert!(
             !stage1.heap.is_empty(),
             "stage 1 allocates in the guest heap"
         );
-        assert!(stage1.answers.len() > 20);
+        assert!(
+            stage1.answers.len() > floor,
+            "{} answers",
+            stage1.answers.len()
+        );
         for spec in ["lockfree:dual", "lockfree:moved", "lockfree:freed"] {
             let form = life(spec);
             assert_eq!(form.answers, stage1.answers, "{spec}: the answers");
@@ -2527,21 +2532,21 @@ mod forms {
 
     #[test]
     fn a_map_of_counted_values_lives_alike_in_every_form() {
-        every_form(counted_life);
+        every_form(counted_life, 40);
     }
 
     #[test]
     fn a_map_of_plain_words_lives_alike_in_every_form() {
-        every_form(words_life);
+        every_form(words_life, 40);
     }
 
     #[test]
     fn the_lip_task_map_lives_alike_in_every_form() {
-        every_form(lip_life);
+        every_form(lip_life, 20);
     }
 
     #[test]
     fn the_tree_node_map_lives_alike_in_every_form() {
-        every_form(tree_life);
+        every_form(tree_life, 20);
     }
 }

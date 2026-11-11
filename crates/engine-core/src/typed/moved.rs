@@ -2395,6 +2395,14 @@ mod tests {
         assert_eq!(slab.try_load(SLAB_RANGE.end - 4), None);
         assert_eq!(slab.try_load(record + 1), None);
         assert_eq!(slab.try_load(record), Some(toy));
+        // A word of a chunk made but of no block yet answers 0; a freed block's, its freed word.
+        assert_eq!(slab.try_load(record + 0x1000), Some(0));
+        let freed = slab.alloc(16, TOY, NODE_TAG, 0).expect("room");
+        slab.free(freed);
+        assert_eq!(
+            slab.try_load(freed + 4),
+            Some(crate::mem::freed_word(freed))
+        );
     }
 
     /// `Store::whole` runs a call and its resync in one turn in the dual run, and leaves the turn
