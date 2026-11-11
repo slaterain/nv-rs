@@ -17,6 +17,36 @@ use engine_core::typed::leaf;
 use engine_core::x87::{x87_add, x87_load32, x87_m32, x87_mul, x87_sub};
 use engine_core::{args, typed_call, Engine};
 
+/// A list word through the drawing thread's view (`draw::detach`, step 1): guest memory while it is closed.
+#[inline(always)]
+fn vget<S>(e: &Engine, p: Ptr<S>, f: engine_core::ptr::Field<S, u32>) -> u32 {
+    crate::draw::detach::word(e, p.addr().wrapping_add(f.off))
+}
+
+/// Writes a list word through the view ([`vget`]).
+#[inline(always)]
+fn vset<S>(e: &mut Engine, p: Ptr<S>, f: engine_core::ptr::Field<S, u32>, v: u32) {
+    crate::draw::detach::set_word(e, p.addr().wrapping_add(f.off), v);
+}
+
+/// A 16-bit list field through the view ([`vget`]).
+#[inline(always)]
+fn vget16<S>(e: &Engine, p: Ptr<S>, f: engine_core::ptr::Field<S, u16>) -> u16 {
+    crate::draw::detach::half(e, p.addr().wrapping_add(f.off))
+}
+
+/// Writes a 16-bit list field through the view ([`vget`]).
+#[inline(always)]
+fn vset16<S>(e: &mut Engine, p: Ptr<S>, f: engine_core::ptr::Field<S, u16>, v: u16) {
+    crate::draw::detach::set_half(e, p.addr().wrapping_add(f.off), v);
+}
+
+/// An 8-bit list field through the view ([`vget`]).
+#[inline(always)]
+fn vget8<S>(e: &Engine, p: Ptr<S>, f: engine_core::ptr::Field<S, u8>) -> u8 {
+    crate::draw::detach::byte(e, p.addr().wrapping_add(f.off))
+}
+
 /// The pass and type being drawn (`011f91e0`, `011f91e4`).
 pub(crate) const RENDERING_PASS: u32 = 0x011f_91e0;
 pub(crate) const RENDERING_PASS_TYPE: u32 = 0x011f_91e4;
@@ -137,7 +167,7 @@ pub fn first_list(e: &mut Engine, this: Ptr<BSBatchRenderer>, group: u32, out: u
             .wrapping_mul(0x68)
             .wrapping_add(index * 0x14)
             .wrapping_add(groups);
-        if e.global::<u32>(list.wrapping_add(4)) != 0 {
+        if crate::draw::detach::word(e, list.wrapping_add(4)) != 0 {
             e.set_global(out, index);
             return true;
         }
@@ -149,16 +179,16 @@ pub fn first_list(e: &mut Engine, this: Ptr<BSBatchRenderer>, group: u32, out: u
 /// `thiscall(active list)`: drops the head entry: the second entry's type and link move into the head
 /// (or the head's type clears when there is none) and the second is freed.
 pub fn pop_active(e: &mut Engine, this: Ptr<ActivePass>) {
-    let second = Ptr::<ActivePass>::new(e.get(this, ActivePass::pNext));
+    let second = Ptr::<ActivePass>::new(vget(e, this, ActivePass::pNext));
     if second.is_null() {
-        e.set(this, ActivePass::usItem, 0);
+        vset16(e, this, ActivePass::usItem, 0);
         return;
     }
-    let next = e.get(second, ActivePass::pNext);
-    e.set(this, ActivePass::pNext, next);
-    let item = e.get(second, ActivePass::usItem);
-    e.set(this, ActivePass::usItem, item);
-    e.set(second, ActivePass::pNext, 0);
+    let next = vget(e, second, ActivePass::pNext);
+    vset(e, this, ActivePass::pNext, next);
+    let item = vget16(e, second, ActivePass::usItem);
+    vset16(e, this, ActivePass::usItem, item);
+    vset(e, second, ActivePass::pNext, 0);
     e.call(ACTIVE_LIST_CLEAR, &args![second]);
     e.call(MEMORY_FREE, &args![MEMORY_MANAGER, second]);
 }
@@ -170,17 +200,17 @@ pub fn pop_active(e: &mut Engine, this: Ptr<ActivePass>) {
 pub fn next_active(e: &mut Engine, this: Ptr<BSBatchRenderer>, pass_type: u32, out: u32) -> bool {
     let head = this.at(BSBatchRenderer::kActivePassIndexList);
     let mut node = head;
-    if e.get(node, ActivePass::pNext) == 0 && e.get(node, ActivePass::usItem) == 0 {
+    if vget(e, node, ActivePass::pNext) == 0 && vget16(e, node, ActivePass::usItem) == 0 {
         return false;
     }
-    let mut value = u32::from(e.get(node, ActivePass::usItem));
+    let mut value = u32::from(vget16(e, node, ActivePass::usItem));
     e.set_global(pass_type, value);
     while value < e.get(this, BSBatchRenderer::uiFirstPass) {
-        node = Ptr::new(e.get(node, ActivePass::pNext));
+        node = Ptr::new(vget(e, node, ActivePass::pNext));
         if node.is_null() {
             return false;
         }
-        value = u32::from(e.get(node, ActivePass::usItem));
+        value = u32::from(vget16(e, node, ActivePass::usItem));
         e.set_global(pass_type, value);
     }
     if value > e.get(this, BSBatchRenderer::uiLastPass) {
@@ -227,7 +257,7 @@ pub fn next_group(
         let index = e.global::<u32>(element);
         let group = e.global::<u32>(slot.addr());
         let list = group_list(e, this, group, index);
-        let node = Ptr::<PassNode>::new(e.get(list, PassList::pHead));
+        let node = Ptr::<PassNode>::new(vget(e, list, PassList::pHead));
         let first = Ptr::<RenderPass>::new(e.get(node, PassNode::pItem));
         let byte = e.get(first, RenderPass::ucSortFlag);
         e.set_global(flag, byte);
@@ -252,7 +282,7 @@ pub fn render_group(
     let value = map_get(e, this, e.global::<u32>(pass_type));
     let index = e.global::<u32>(element);
     let list = group_list(e, this, value, index);
-    let head = Ptr::<PassNode>::new(e.get(list, PassList::pHead));
+    let head = Ptr::<PassNode>::new(vget(e, list, PassList::pHead));
     let first = Ptr::<RenderPass>::new(e.get(head, PassNode::pItem));
     let first_flag = e.get(first, RenderPass::ucSortFlag);
     let mut blend = 0u8;
@@ -304,7 +334,7 @@ pub fn render_group(
     let mut stopped = false;
     let list = group_list(e, this, value, e.global::<u32>(element));
     let mut pass = Ptr::<RenderPass>::new(e.get(
-        Ptr::<PassNode>::new(e.get(list, PassList::pHead)),
+        Ptr::<PassNode>::new(vget(e, list, PassList::pHead)),
         PassNode::pItem,
     ));
     if !pass.is_null() {
@@ -326,10 +356,10 @@ pub fn render_group(
                 .get(this, BSBatchRenderer::pRenderPassA)
                 .wrapping_add(group());
             let list = Ptr::<PassList>::new(group_at.wrapping_add(index.wrapping_mul(0x14)));
-            let node = Ptr::<PassNode>::new(e.get(list, PassList::pHead));
+            let node = Ptr::<PassNode>::new(vget(e, list, PassList::pHead));
             if !node.is_null() {
-                if node.addr() == e.get(list, PassList::pTail) {
-                    e.set(list, PassList::pTail, 0);
+                if node.addr() == vget(e, list, PassList::pTail) {
+                    vset(e, list, PassList::pTail, 0);
                 }
                 let mut next = 0;
                 if e.get(node, PassNode::pNext) != 0 {
@@ -338,23 +368,23 @@ pub fn render_group(
                 }
                 let spare = e.get(list, PassList::pSpare);
                 if spare != 0 {
-                    let head = e.get(list, PassList::pHead);
+                    let head = vget(e, list, PassList::pHead);
                     e.set(Ptr::<PassNode>::new(spare), PassNode::pPrev, head);
                 }
-                let head = Ptr::<PassNode>::new(e.get(list, PassList::pHead));
+                let head = Ptr::<PassNode>::new(vget(e, list, PassList::pHead));
                 let spare = e.get(list, PassList::pSpare);
                 e.set(head, PassNode::pNext, spare);
-                let head = e.get(list, PassList::pHead);
+                let head = vget(e, list, PassList::pHead);
                 e.set(list, PassList::pSpare, head);
-                let count = e.get(list, PassList::uiCount).wrapping_sub(1);
-                e.set(list, PassList::uiCount, count);
-                e.set(list, PassList::pHead, next);
+                let count = vget(e, list, PassList::uiCount).wrapping_sub(1);
+                vset(e, list, PassList::uiCount, count);
+                vset(e, list, PassList::pHead, next);
             }
             let group_ptr = Ptr::<PassGroup>::new(group_at);
-            let total = e.get(group_ptr, PassGroup::uiCount).wrapping_sub(1);
-            e.set(group_ptr, PassGroup::uiCount, total);
+            let total = vget(e, group_ptr, PassGroup::uiCount).wrapping_sub(1);
+            vset(e, group_ptr, PassGroup::uiCount, total);
             let list = group_list(e, this, value, e.global::<u32>(element));
-            let head = Ptr::<PassNode>::new(e.get(list, PassList::pHead));
+            let head = Ptr::<PassNode>::new(vget(e, list, PassList::pHead));
             if head.is_null() {
                 break;
             }
@@ -1151,14 +1181,14 @@ fn compare_items(e: &mut Engine, compare: u32, p: u32, q: u32) -> i32 {
 /// comparison above 0 for the second run going first; the spare chain is released first.
 pub fn sort_list(e: &mut Engine, this: Ptr<PassList>, compare: u32) {
     typed_call!(FAMILY, 0x00b6_3e90, release_spare(e, this));
-    if e.get(this, PassList::pHead) == 0 {
+    if vget(e, this, PassList::pHead) == 0 {
         return;
     }
     let mut run = 1u32;
     let mut tail;
     loop {
-        let mut p = e.get(this, PassList::pHead);
-        e.set(this, PassList::pHead, 0);
+        let mut p = vget(e, this, PassList::pHead);
+        vset(e, this, PassList::pHead, 0);
         tail = 0u32;
         let mut merges = 0u32;
         while p != 0 {
@@ -1206,7 +1236,7 @@ pub fn sort_list(e: &mut Engine, this: Ptr<PassList>, compare: u32) {
                 if tail != 0 {
                     e.set_global(tail, next);
                 } else {
-                    e.set(this, PassList::pHead, next);
+                    vset(e, this, PassList::pHead, next);
                 }
                 e.set_global(next.wrapping_add(4), tail);
                 tail = next;
@@ -1219,7 +1249,7 @@ pub fn sort_list(e: &mut Engine, this: Ptr<PassList>, compare: u32) {
             break;
         }
     }
-    e.set(this, PassList::pTail, tail);
+    vset(e, this, PassList::pTail, tail);
 }
 
 /// A node for `list`: the spare chain's first, or a new one from the pool allocator.
@@ -1249,18 +1279,18 @@ pub fn list_append(e: &mut Engine, this: Ptr<PassList>, item: u32) {
     let value = e.global::<u32>(item);
     e.set(node, PassNode::pItem, value);
     e.set(node, PassNode::pNext, 0);
-    let tail = e.get(this, PassList::pTail);
+    let tail = vget(e, this, PassList::pTail);
     e.set(node, PassNode::pPrev, tail);
-    let tail = e.get(this, PassList::pTail);
-    let count = e.get(this, PassList::uiCount).wrapping_add(1);
+    let tail = vget(e, this, PassList::pTail);
+    let count = vget(e, this, PassList::uiCount).wrapping_add(1);
     if tail != 0 {
         e.set(Ptr::<PassNode>::new(tail), PassNode::pNext, node.addr());
-        e.set(this, PassList::uiCount, count);
+        vset(e, this, PassList::uiCount, count);
     } else {
-        e.set(this, PassList::uiCount, count);
-        e.set(this, PassList::pHead, node.addr());
+        vset(e, this, PassList::uiCount, count);
+        vset(e, this, PassList::pHead, node.addr());
     }
-    e.set(this, PassList::pTail, node.addr());
+    vset(e, this, PassList::pTail, node.addr());
 }
 
 // Typed from 00b99890
@@ -1269,19 +1299,19 @@ pub fn list_prepend(e: &mut Engine, this: Ptr<PassList>, item: u32) {
     let node = take_node(e, this);
     let value = e.global::<u32>(item);
     e.set(node, PassNode::pItem, value);
-    let head = e.get(this, PassList::pHead);
+    let head = vget(e, this, PassList::pHead);
     e.set(node, PassNode::pNext, head);
     e.set(node, PassNode::pPrev, 0);
-    let head = e.get(this, PassList::pHead);
-    let count = e.get(this, PassList::uiCount).wrapping_add(1);
+    let head = vget(e, this, PassList::pHead);
+    let count = vget(e, this, PassList::uiCount).wrapping_add(1);
     if head != 0 {
         e.set(Ptr::<PassNode>::new(head), PassNode::pPrev, node.addr());
-        e.set(this, PassList::uiCount, count);
+        vset(e, this, PassList::uiCount, count);
     } else {
-        e.set(this, PassList::uiCount, count);
-        e.set(this, PassList::pTail, node.addr());
+        vset(e, this, PassList::uiCount, count);
+        vset(e, this, PassList::pTail, node.addr());
     }
-    e.set(this, PassList::pHead, node.addr());
+    vset(e, this, PassList::pHead, node.addr());
 }
 
 // Typed from 00b9abc0
@@ -1289,7 +1319,7 @@ pub fn list_prepend(e: &mut Engine, this: Ptr<PassList>, item: u32) {
 /// another hands it to its batch renderer's `AddPass` (made with the holder's size on first use). The
 /// holder's count goes up either way.
 pub fn add_pass(e: &mut Engine, this: Ptr<PassHolder>, pass: Ptr<RenderPass>, prepend: u32) {
-    if e.get(this, PassHolder::ucFlags) & 1 != 0 {
+    if vget8(e, this, PassHolder::ucFlags) & 1 != 0 {
         e.with_stack(4, |e, slot| {
             e.set_global(slot.addr(), pass.addr());
             let list = this.at(PassHolder::kList);
@@ -1315,8 +1345,8 @@ pub fn add_pass(e: &mut Engine, this: Ptr<PassHolder>, pass: Ptr<RenderPass>, pr
         let renderer = e.get(this, PassHolder::pRenderer);
         e.vcall(renderer.addr(), slot::ADD_PASS, &args![pass, pass_type]);
     }
-    let count = e.get(this, PassHolder::usCount).wrapping_add(1);
-    e.set(this, PassHolder::usCount, count);
+    let count = vget16(e, this, PassHolder::usCount).wrapping_add(1);
+    vset16(e, this, PassHolder::usCount, count);
 }
 
 // Typed from 00b9b3b0
@@ -1368,11 +1398,11 @@ pub fn register_alpha(
 #[inline(always)]
 fn reset_list(e: &mut Engine, list: Ptr<PassList>) {
     typed_call!(FAMILY, 0x00b6_3e90, release_spare(e, list));
-    let head = e.get(list, PassList::pHead);
+    let head = vget(e, list, PassList::pHead);
     e.set(list, PassList::pSpare, head);
-    e.set(list, PassList::pHead, 0);
-    e.set(list, PassList::pTail, 0);
-    e.set(list, PassList::uiCount, 0);
+    vset(e, list, PassList::pHead, 0);
+    vset(e, list, PassList::pTail, 0);
+    vset(e, list, PassList::uiCount, 0);
 }
 
 // Typed from 00b9a490
@@ -1383,7 +1413,7 @@ pub fn clear_holder(e: &mut Engine, this: Ptr<PassHolder>) {
     if !renderer.is_null() {
         typed_call!(FAMILY, 0x00b9_9bc0, clear_renderer(e, renderer, 0u32));
     }
-    e.set(this, PassHolder::usCount, 0);
+    vset16(e, this, PassHolder::usCount, 0);
 }
 
 /// The first item of the map's buckets from `start` on.
@@ -1402,11 +1432,11 @@ fn map_item_from(e: &Engine, this: Ptr<BSBatchRenderer>, start: u32) -> u32 {
 pub fn clear_group(e: &mut Engine, this: Ptr<PassGroup>, _unused: u32) {
     for index in 0..5u32 {
         let list = Ptr::<PassList>::new(this.addr().wrapping_add(index * 0x14));
-        if e.get(list, PassList::uiCount) != 0 {
+        if vget(e, list, PassList::uiCount) != 0 {
             reset_list(e, list);
         }
     }
-    e.set(this, PassGroup::uiCount, 0);
+    vset(e, this, PassGroup::uiCount, 0);
 }
 
 // Typed from 00b99bc0
@@ -1442,15 +1472,16 @@ pub fn clear_renderer(e: &mut Engine, this: Ptr<BSBatchRenderer>, _unused: u32) 
         let group = Ptr::<PassGroup>::new(group.wrapping_mul(0x68).wrapping_add(groups));
         for index in 0..5u32 {
             let list = Ptr::<PassList>::new(group.addr() + index * 0x14);
-            if e.get(list, PassList::uiCount) != 0 {
+            if vget(e, list, PassList::uiCount) != 0 {
                 reset_list(e, list);
             }
         }
-        e.set(group, PassGroup::uiCount, 0);
+        vset(e, group, PassGroup::uiCount, 0);
         item = next;
     }
     let active = this.at(BSBatchRenderer::kActivePassIndexList);
-    e.call(ACTIVE_LIST_CLEAR, &args![active]);
+    let words = [active.addr(), active.addr().wrapping_add(4)];
+    crate::draw::detach::suspended_for(e, &words, |e| e.call(ACTIVE_LIST_CLEAR, &args![active]));
 }
 
 // Typed from 00b63e90
@@ -1471,7 +1502,7 @@ pub fn release_spare(e: &mut Engine, this: Ptr<PassList>) -> u32 {
         }
         pool_unlock(e);
     }
-    let tail = e.get(this, PassList::pTail);
+    let tail = vget(e, this, PassList::pTail);
     e.set(this, PassList::pSpare, 0);
     if tail != 0 {
         e.set_global(tail, 0u32);
@@ -1580,7 +1611,7 @@ pub fn add_to_group(
         index
     };
     let group = group_at(e, this, index);
-    if e.get(group, PassGroup::uiCount) == 0 {
+    if vget(e, group, PassGroup::uiCount) == 0 {
         let active = this.at(BSBatchRenderer::kActivePassIndexList);
         typed_call!(
             FAMILY,
@@ -1615,15 +1646,15 @@ pub fn insert_active(e: &mut Engine, this: Ptr<ActivePass>, item: u32, compare: 
     let mut node = this.addr();
     while node != 0 {
         let entry = Ptr::<ActivePass>::new(node);
-        let current = e.get(entry, ActivePass::usItem);
+        let current = vget16(e, entry, ActivePass::usItem);
         if current == 0 {
-            e.set(entry, ActivePass::usItem, low16(value));
+            vset16(e, entry, ActivePass::usItem, low16(value));
             break;
         }
         if e.call(compare, &args![item, u32::from(current)]).i32() > 0 {
-            if e.get(entry, ActivePass::pNext) == 0 {
+            if vget(e, entry, ActivePass::pNext) == 0 {
                 let added = new_entry(e, value);
-                e.set(entry, ActivePass::pNext, added);
+                vset(e, entry, ActivePass::pNext, added);
                 break;
             }
         } else {
@@ -1637,20 +1668,20 @@ pub fn insert_active(e: &mut Engine, this: Ptr<ActivePass>, item: u32, compare: 
                 let before = Ptr::<ActivePass>::new(previous);
                 if added != 0 {
                     let added = Ptr::<ActivePass>::new(added);
-                    e.set(added, ActivePass::usItem, low16(value));
-                    e.set(added, ActivePass::pNext, 0);
-                    e.set(before, ActivePass::pNext, added.addr());
-                    e.set(added, ActivePass::pNext, node);
+                    vset16(e, added, ActivePass::usItem, low16(value));
+                    vset(e, added, ActivePass::pNext, 0);
+                    vset(e, before, ActivePass::pNext, added.addr());
+                    vset(e, added, ActivePass::pNext, node);
                 } else {
                     // The exe links through the null block: `[0 + 4]` takes the node.
-                    e.set(before, ActivePass::pNext, 0);
+                    vset(e, before, ActivePass::pNext, 0);
                     e.set_global(4u32, node);
                 }
             }
             break;
         }
         previous = node;
-        node = e.get(entry, ActivePass::pNext);
+        node = vget(e, entry, ActivePass::pNext);
     }
 }
 
@@ -1660,8 +1691,8 @@ fn new_entry(e: &mut Engine, value: u32) -> u32 {
     let added = e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, 8u32]).u32();
     if added != 0 {
         let entry = Ptr::<ActivePass>::new(added);
-        e.set(entry, ActivePass::usItem, low16(value));
-        e.set(entry, ActivePass::pNext, 0);
+        vset16(e, entry, ActivePass::usItem, low16(value));
+        vset(e, entry, ActivePass::pNext, 0);
     }
     added
 }
@@ -1678,16 +1709,16 @@ pub fn group_prepend(e: &mut Engine, this: Ptr<PassGroup>, list: u32, pass: Ptr<
     let list = Ptr::<PassList>::new(this.addr().wrapping_add(list.wrapping_mul(0x14)));
     let node = take_node(e, list);
     e.set(node, PassNode::pItem, pass.addr());
-    let head = e.get(list, PassList::pHead);
+    let head = vget(e, list, PassList::pHead);
     e.set(node, PassNode::pNext, head);
     e.set(node, PassNode::pPrev, 0);
-    let head = e.get(list, PassList::pHead);
+    let head = vget(e, list, PassList::pHead);
     if head != 0 {
         e.set(Ptr::<PassNode>::new(head), PassNode::pPrev, node.addr());
     } else {
-        e.set(list, PassList::pTail, node.addr());
+        vset(e, list, PassList::pTail, node.addr());
     }
-    e.set(list, PassList::pHead, node.addr());
+    vset(e, list, PassList::pHead, node.addr());
     count_up(e, this, list);
 }
 
@@ -1698,22 +1729,22 @@ pub fn group_append(e: &mut Engine, this: Ptr<PassGroup>, list: u32, pass: Ptr<R
     let node = take_node(e, list);
     e.set(node, PassNode::pItem, pass.addr());
     e.set(node, PassNode::pNext, 0);
-    let tail = e.get(list, PassList::pTail);
+    let tail = vget(e, list, PassList::pTail);
     e.set(node, PassNode::pPrev, tail);
-    let tail = e.get(list, PassList::pTail);
+    let tail = vget(e, list, PassList::pTail);
     if tail != 0 {
         e.set(Ptr::<PassNode>::new(tail), PassNode::pNext, node.addr());
     } else {
-        e.set(list, PassList::pHead, node.addr());
+        vset(e, list, PassList::pHead, node.addr());
     }
-    e.set(list, PassList::pTail, node.addr());
+    vset(e, list, PassList::pTail, node.addr());
     count_up(e, this, list);
 }
 
 #[inline(always)]
 fn count_up(e: &mut Engine, group: Ptr<PassGroup>, list: Ptr<PassList>) {
-    let count = e.get(list, PassList::uiCount).wrapping_add(1);
-    e.set(list, PassList::uiCount, count);
-    let total = e.get(group, PassGroup::uiCount).wrapping_add(1);
-    e.set(group, PassGroup::uiCount, total);
+    let count = vget(e, list, PassList::uiCount).wrapping_add(1);
+    vset(e, list, PassList::uiCount, count);
+    let total = vget(e, group, PassGroup::uiCount).wrapping_add(1);
+    vset(e, group, PassGroup::uiCount, total);
 }

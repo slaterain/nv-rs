@@ -67,6 +67,7 @@ use engine_core::{entry, AbiFn};
 
 pub mod alpha;
 pub mod constants;
+pub mod detach;
 pub mod drivers;
 pub mod layout;
 pub mod own;
