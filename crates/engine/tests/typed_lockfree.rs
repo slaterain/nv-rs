@@ -244,6 +244,52 @@ fn holder_of(e: &mut Engine, object: u32) -> u32 {
     h
 }
 
+/// The world's key compare (slot +0x38), except that a node found equal is marked deleted at once,
+/// as another thread's remove right after the search found it would: a find then takes the value
+/// and answers 0.
+fn mark_on_equal(e: &mut Engine) {
+    e.register(VT_FN + 0x38, |e, a| {
+        let equal = a[1] == a[2];
+        if equal {
+            let buckets = e.mem.u32(a[0] + 0xc);
+            let count = e.mem.u32(a[0] + 8).max(1);
+            let mut n = e.mem.u32(buckets + (a[2] % count) * 4) & !1;
+            while n != 0 {
+                let next = e.mem.u32(n + 8);
+                if e.mem.u32(n) == a[2] {
+                    e.mem.set_u32(n + 8, next | 1);
+                    break;
+                }
+                n = next & !1;
+            }
+        }
+        ret(u32::from(equal))
+    });
+}
+
+/// Where [`fail_cas`] keeps which compare-and-swap fails and how many it has seen.
+const FAIL_AT: u32 = WORLD + 8;
+
+/// The interlocked compare-exchange as Windows answers it on one thread, except that call number
+/// `nth` (0: none) fails, as when another thread changed the word first: the word is left and the
+/// answer is not what the caller expected.
+fn fail_cas(e: &mut Engine, nth: u32) {
+    e.mem.set_u32(FAIL_AT, nth);
+    e.mem.set_u32(FAIL_AT + 4, 0);
+    e.register(COMPARE_EXCHANGE, |e, a| {
+        let seen = e.mem.u32(FAIL_AT + 4) + 1;
+        e.mem.set_u32(FAIL_AT + 4, seen);
+        let old = e.mem.u32(a[0]);
+        if seen == e.mem.u32(FAIL_AT) {
+            return ret(a[2].wrapping_add(4));
+        }
+        if old == a[2] {
+            e.mem.set_u32(a[0], a[1]);
+        }
+        ret(old)
+    });
+}
+
 /// The comparisons of the functions with copies at other addresses, shared by the original and its
 /// copies.
 trait Cases {
@@ -1236,9 +1282,17 @@ fn find_in_bucket() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
-    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(KEYS), Input::Flag])
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(KEYS),
+        Input::Flag,
+        Input::Flag,
+    ])
     .setup(|e, case| {
         let w = world(e, true);
+        if case.word(3) != 0 {
+            mark_on_equal(e);
+        }
         let held = if case.word(2) != 0 { w.spare } else { 0 };
         let value_out = holder_of(e, held);
         vec![w.face, case.word(0), case.word(1), value_out]
@@ -1381,9 +1435,11 @@ fn remove_value_in_bucket() {
         Input::Of(&[0, 1, 2, 3]),
         Input::Of(&[0, 1, 2, 3]),
         Input::Flag,
+        Input::Of(&[0, 1, 2]),
     ])
     .setup(|e, case| {
         let w = world(e, true);
+        fail_cas(e, case.word(3));
         if case.word(2) != 0 {
             e.mem.set_u32(w.face + 0x20, 99);
         }
@@ -1497,7 +1553,7 @@ fn node_destroy() {
     // A node holding a counted value (its count 3 or 1, so the release frees it or not), or none.
     Diff::new(entry!(0x0044_dd40, node::destroy(Ptr<_>)))
         .node_case()
-        .inputs(&[Input::Of(&[0, 1, 3])])
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
         .setup(|e, case| {
             let _ = world(e, true);
             let n = node(e, 4, 0);
@@ -1518,7 +1574,7 @@ fn node_destroy() {
 fn node_delete() {
     Diff::new(entry!(0x0044_ed50, node::delete(Ptr<_>, u32) -> Ptr))
         .node_case()
-        .inputs(&[Input::Of(&[0, 1, 3])])
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
         .setup(|e, case| {
             let _ = world(e, true);
             let n = node(e, 4, 0);
@@ -1583,9 +1639,13 @@ fn allocate_interface() {
         .node_case()
         .local_at(0x0040_4eb0, 0, 4)
         .local_at(0x0040_4ee0, 0, 4)
-        .inputs(&[Input::Of(&[0, 1])])
+        .inputs(&[Input::Of(&[0, 1]), Input::Flag])
         .setup(|e, case| {
             let w = world(e, true);
+            if case.word(1) != 0 {
+                // `operator new` fails.
+                e.register(0x0040_1000, |_, _| ret(0));
+            }
             vec![w.map, case.word(0)]
         })
         .run()
@@ -1601,9 +1661,13 @@ fn allocate_interface_tree() {
     .node_case()
     .local_at(0x0040_4eb0, 0, 4)
     .local_at(0x0040_4ee0, 0, 4)
-    .inputs(&[Input::Of(&[0, 1])])
+    .inputs(&[Input::Of(&[0, 1]), Input::Flag])
     .setup(|e, case| {
         let w = world(e, true);
+        if case.word(1) != 0 {
+            // `operator new` fails.
+            e.register(0x0040_1000, |_, _| ret(0));
+        }
         vec![w.map, case.word(0)]
     })
     .run()
@@ -1649,7 +1713,7 @@ fn interface_delete() {
         .translation_calls_plainly(&[0x0044_f220])
         .local_at(0x0040_4eb0, 0, 4)
         .local_at(0x0040_4ee0, 0, 4)
-        .inputs(&[Input::Flag, Input::Of(&[0, 1, 3])])
+        .inputs(&[Input::Flag, Input::Of(&[0, 1, 2, 3])])
         .setup(|e, case| {
             let w = world(e, true);
             waiting(e, &w, case.word(0) != 0);
@@ -1686,7 +1750,7 @@ fn manager_delete() {
     Diff::new(entry!(0x0066_6570, manager::delete(Ptr<_>, u32) -> Ptr))
         .manager_case()
         .translation_calls_plainly(&[0x0066_65c0, 0x0044_f220])
-        .inputs(&[Input::Flag, Input::Of(&[0, 1])])
+        .inputs(&[Input::Flag, Input::Of(&[0, 1, 2, 3])])
         .setup(|e, case| {
             let w = world(e, true);
             if case.word(0) != 0 {
@@ -1739,9 +1803,17 @@ fn next_in_bucket_copy() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
-    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(KEYS), Input::Flag])
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(KEYS),
+        Input::Flag,
+        Input::Flag,
+    ])
     .setup(|e, case| {
         let w = world(e, true);
+        if case.word(3) != 0 {
+            mark_on_equal(e);
+        }
         let key = e.mem.alloc(4);
         e.mem.set_u32(key, case.word(1));
         let held = if case.word(2) != 0 { w.spare } else { 0 };
@@ -1785,9 +1857,11 @@ fn find_counted_value() {
         Input::Of(&[0, 1, 2, 3]),
         Input::Of(&[0, 1, 2, 3]),
         Input::Flag,
+        Input::Of(&[0, 1, 2]),
     ])
     .setup(|e, case| {
         let w = world(e, true);
+        fail_cas(e, case.word(3));
         if case.word(2) != 0 {
             e.mem.set_u32(w.face + 0x20, 99);
         }
@@ -1815,9 +1889,11 @@ fn remove_counted_value_in_bucket() {
         Input::Of(&[0, 1, 2, 3]),
         Input::Of(&[0, 1, 2, 3]),
         Input::Flag,
+        Input::Of(&[0, 1, 2]),
     ])
     .setup(|e, case| {
         let w = world(e, true);
+        fail_cas(e, case.word(3));
         if case.word(2) != 0 {
             e.mem.set_u32(w.face + 0x20, 99);
         }
@@ -1853,7 +1929,7 @@ fn interface_delete_counted() {
     .node_case()
     .local_at(0x0040_4eb0, 0, 4)
     .local_at(0x0040_4ee0, 0, 4)
-    .inputs(&[Input::Flag, Input::Of(&[0, 1])])
+    .inputs(&[Input::Flag, Input::Of(&[0, 1, 2, 3])])
     .setup(|e, case| {
         let w = world(e, true);
         waiting(e, &w, case.word(0) != 0);
@@ -1892,7 +1968,7 @@ fn manager_delete_counted() {
     ))
     .manager_case()
     .translation_calls_plainly(&[0x0052_9330, 0x0052_93c0])
-    .inputs(&[Input::Flag, Input::Of(&[0, 1])])
+    .inputs(&[Input::Flag, Input::Of(&[0, 1, 2, 3])])
     .setup(|e, case| {
         let w = world(e, true);
         if case.word(0) != 0 {
@@ -2283,6 +2359,32 @@ mod forms {
         r.call(0x0044_c3f0, &[map]);
         r.note(map);
         r.end()
+    }
+
+    /// A queue's node (the queues stay in the game's memory) deleted through the family's counted
+    /// node's deleting destructor (`0044ed50`), as the queue's scan `0044eed0` and its clear
+    /// `0044e170` do: the same in every form, its holder released and its block freed by address.
+    fn queue_node_life(spec: &str) -> Life {
+        let mut r = Run::new(spec);
+        let node = r.call(NEW, &[8]);
+        let object = r.objects[0];
+        r.e.mem.set_u32(node, 0);
+        r.e.mem.set_u32(node + 4, object);
+        let kept = r.call(0x0044_ed50, &[node, 1]);
+        r.answers.push(u32::from(kept == node));
+        r.end()
+    }
+
+    #[test]
+    fn a_queue_node_is_deleted_alike_in_every_form() {
+        let stage1 = queue_node_life("lockfree");
+        assert_eq!(stage1.heap.len(), 2, "the node made and freed by address");
+        for spec in ["lockfree:dual", "lockfree:moved", "lockfree:freed"] {
+            let form = queue_node_life(spec);
+            assert_eq!(form.answers, stage1.answers, "{spec}");
+            assert_eq!(form.references, stage1.references, "{spec}");
+            assert_eq!(form.heap, stage1.heap, "{spec}: a guest block in every form");
+        }
     }
 
     fn every_form(life: fn(&str) -> Life) {

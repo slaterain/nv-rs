@@ -14,7 +14,10 @@ use super::store::{
     alloc, clear_word, free, holder_set, map_get, map_store, pointer_from_holder, store, store_for,
     swap_link, tag,
 };
-use super::{holder, node, FAMILY, SCOPE_BEGIN, SCOPE_CONTEXT, SCOPE_END, SCOPE_MODE, SOURCE_FILE};
+use super::{
+    field_ptr, holder, node, FAMILY, SCOPE_BEGIN, SCOPE_CONTEXT, SCOPE_END, SCOPE_MODE, SOURCE_FILE,
+};
+use crate::crt::low_byte;
 use engine_core::ptr::{Field, Layout, Ptr};
 use engine_core::typed::moved::Store;
 use engine_core::{args, typed_call, Engine};
@@ -40,14 +43,14 @@ pub(crate) fn release_slots(e: &mut Engine, this: Ptr<MapInterface>) {
 /// plain store in the guest, as the exe's.
 #[inline(always)]
 fn publish(e: &Engine, s: Store, slot: Ptr<NodeSlot>, node: Ptr<HashListNode>) {
-    s.store_seq(e, field_of(slot, NodeSlot::node), node.addr());
+    s.store_seq(e, field_ptr(slot, NodeSlot::node).addr(), node.addr());
 }
 
 /// The link at `link` read again after a [`publish`], to check the node published is still the one
 /// it names.
 #[inline(always)]
 fn recheck(e: &Engine, s: Store, link: Ptr<BucketHead>) -> Marked {
-    Marked(s.load_seq(e, field_of(link, BucketHead::head)))
+    Marked(s.load_seq(e, field_ptr(link, BucketHead::head).addr()))
 }
 
 // Typed from 0044e550
@@ -578,13 +581,6 @@ pub fn find(e: &mut Engine, this: Ptr<MapInterface>, key: u32, value_out: Ptr<Ho
     )
 }
 
-/// The low byte of a word: the `AL` the exe tests.
-#[allow(clippy::cast_possible_truncation)]
-#[inline(always)]
-fn low_byte(w: u32) -> u8 {
-    w as u8
-}
-
 // Typed from 0044d510
 /// The find of `key` in bucket `bucket` for a map of counted values (`thiscall(bucket, key, value
 /// holder out)`, the found byte): the search (`00529030`); found, the current node's value is
@@ -1027,9 +1023,9 @@ pub fn construct(
     previous_slot: Ptr<NodeSlot>,
 ) -> Ptr<MapInterface> {
     let s = store(e);
-    let at = field_of(this, MapInterface::current);
+    let at = field_ptr(this, MapInterface::current).addr();
     clear_word(e, s, MARKED_CONSTRUCT, at, &args![at]);
-    let at = field_of(this, MapInterface::next);
+    let at = field_ptr(this, MapInterface::next).addr();
     clear_word(e, s, MARKED_CONSTRUCT, at, &args![at]);
     s.set(e, this, MapInterface::map, map);
     s.set(e, this, MapInterface::next_slot, next_slot);
@@ -1039,12 +1035,6 @@ pub fn construct(
     s.set(e, this, MapInterface::deleted, Ptr::NULL);
     s.set(e, this, MapInterface::deleted_count, 0);
     this
-}
-
-/// The address of field `f` of `p`.
-#[inline(always)]
-fn field_of<S, T>(p: Ptr<S>, f: Field<S, T>) -> u32 {
-    p.addr().wrapping_add(f.off)
 }
 
 /// The line `00906400` and `00665e30` name in their scope, and the header the tree map's copy
