@@ -810,18 +810,10 @@ const FREED_WORDS: u32 = HEAP_END;
 /// What a fault at the unmapped address `a` is, when it is one of stage 2's
 /// (`typed::moved`): a slab handle or a buffer token (a moved object or array reached by untyped
 /// code), a stub page never handed out, the poison area (a moved field followed as a pointer), or
-/// a pointer read from a freed slab block; or a page of the gap below the heap, where address-0
-/// reservations go with `NV_RESERVE_GAP` on (a scrap heap read past what it committed). Empty for
-/// any other address.
+/// a pointer read from a freed slab block. Empty for any other address.
 #[cold]
 fn moved_note(a: u32) -> String {
     use crate::typed::moved;
-    use crate::units::platform::{reserve_gap_setting, ReserveGap, RESERVE_GAP};
-    if RESERVE_GAP.contains(&a) && reserve_gap_setting() != ReserveGap::Off {
-        return " (the gap below the heap: with NV_RESERVE_GAP on or held, a page of a reservation \
-                not committed, such as a scrap heap's past its committed end)"
-            .into();
-    }
     if moved::is_handle(a) {
         return " (stage 2's slab range: if a family is moved, a moved object reached by untyped \
                 code)"

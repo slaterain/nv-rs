@@ -1417,8 +1417,8 @@ fn reserve_gap(kernel: &Kernel) -> ReserveGap {
     kernel.reserve_gap.unwrap_or_else(reserve_gap_setting)
 }
 
-/// `NV_RESERVE_GAP` as this process has it, read once (a fault's note asks it too).
-pub fn reserve_gap_setting() -> ReserveGap {
+/// `NV_RESERVE_GAP` as this process has it, read once.
+fn reserve_gap_setting() -> ReserveGap {
     static FROM_ENV: std::sync::OnceLock<ReserveGap> = std::sync::OnceLock::new();
     *FROM_ENV.get_or_init(reserve_gap_from_env)
 }
