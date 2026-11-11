@@ -4824,9 +4824,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     // Present.
 
     /// The game's start ([`Start`]) in the window's frame `view` (`frame`: its format and size), after
-    /// the game's back buffer `back` (`size`) was copied into it: the back buffer's brightest
-    /// channel into the start's gate, then the loading screen over the frame unless the gate says
-    /// the game has drawn anything (all on the GPU: no frame waits).
+    /// the game's back buffer `back` (`size`) was copied into it: the back buffer's lit pixels
+    /// counted into the start's gate, then the loading screen over the frame unless the gate says
+    /// the game has shown a picture (all on the GPU: no frame waits).
     fn start_over(
         &mut self,
         back: &wgpu::TextureView,
@@ -4854,14 +4854,18 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         });
         let (device, queue) = (self.device.clone(), self.queue.clone());
         let encoder = self.encoder();
+        // This frame's count from zero; the gate itself (word 0) is kept.
+        encoder.clear_buffer(&start.lit, 4, Some(4));
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("start"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&start.brightest);
             pass.set_bind_group(0, &group, &[]);
+            pass.set_pipeline(&start.count);
             pass.dispatch_workgroups(size.0.div_ceil(16), size.1.div_ceil(16), 1);
+            pass.set_pipeline(&start.decide);
+            pass.dispatch_workgroups(1, 1, 1);
         }
         // Made again if the window's format changed since (its pipeline is made for one).
         let mut screen = match self.loading.take() {
@@ -4922,7 +4926,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.prepare_listed();
         self.end_pass();
         self.presents += 1;
-        // The game has drawn: the start is over (the GPU's gate has already stopped the screen).
+        // The game has shown a picture: the start is over (the GPU's gate already stopped the
+        // screen).
         if self.start.as_mut().is_some_and(|s| s.drawn(&self.device)) {
             self.start = None;
         }
@@ -5736,17 +5741,21 @@ struct PipelineJob {
 }
 
 /// The game's start on a device in the game's window: from the device's creation until the game's
-/// first frame that draws anything, the window shows the loading screen ([`loading`]) instead of
-/// the game's black frames. The game's frames are never held back: each is copied into the
-/// window's frame as always, a compute pass then keeps the brightest channel of its frames so far
-/// in `lit` (on the GPU), and the screen is drawn over the frame only while that is zero (the
-/// frame is all black), its quads taken off the target in the vertex shader once it is not. The
-/// CPU reads `lit` a frame or so later ([`Start::drawn`]) and ends the start.
+/// first picture, the window shows the loading screen ([`loading`]) instead of the game's black
+/// frames. A picture: a frame with at least 1% of its pixels lit (a channel above 24 of 255,
+/// [`PICTURE`]). The game's own start is about 5 s of frames that are none: black, then its legal
+/// screen fading in from almost black (its first frames have no pixel above 24; the logo stays
+/// over them). The game's frames are never held back: each is copied into the window's frame as
+/// always; two compute passes then count its lit pixels and open the gate once a frame is a
+/// picture (on the GPU); the screen is drawn over the frame only while the gate is shut, its quads
+/// taken off the target in the vertex shader once it is open. The gate stays open, so a black
+/// frame after the first picture stays black. The CPU reads it a frame or so later
+/// ([`Start::drawn`]) and ends the start.
 struct Start {
-    brightest: wgpu::ComputePipeline,
+    count: wgpu::ComputePipeline,
+    decide: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
-    /// The brightest channel (0 to 255) of every frame since the device was made; zero: the game
-    /// has drawn nothing yet.
+    /// Two words: the gate (non-zero once a frame was a picture) and this frame's lit pixels.
     lit: wgpu::Buffer,
     /// The copy of `lit` recorded with this frame, mapped once the frame is sent.
     unsent: Option<wgpu::Buffer>,
@@ -5754,27 +5763,35 @@ struct Start {
     reading: Vec<(wgpu::Buffer, Arc<std::sync::atomic::AtomicBool>)>,
 }
 
-/// The brightest channel of a frame, kept in `lit` (most of every 16x16 block, then of all).
-const BRIGHTEST: &str = "
+/// A frame's lit pixels (a channel above 24 of 255: plainly not black on a screen) counted into
+/// `gate[1]` (per 16x16 block, then all), then the gate (`gate[0]`) opened when they are at least
+/// 1% of the frame: a picture.
+const PICTURE: &str = "
 @group(0) @binding(0) var frame: texture_2d<f32>;
-@group(0) @binding(1) var<storage, read_write> lit: atomic<u32>;
-var<workgroup> most: atomic<u32>;
+@group(0) @binding(1) var<storage, read_write> gate: array<atomic<u32>, 2>;
+var<workgroup> here: atomic<u32>;
 @compute @workgroup_size(16, 16)
-fn main(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_index) i: u32) {
+fn count(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_index) i: u32) {
     let size = textureDimensions(frame);
     if (id.x < size.x && id.y < size.y) {
         let c = textureLoad(frame, vec2<i32>(id.xy), 0);
-        let v = u32(round(saturate(max(c.r, max(c.g, c.b))) * 255.0));
-        if (v != 0u) {
-            atomicMax(&most, v);
+        if (max(c.r, max(c.g, c.b)) * 255.0 > 24.5) {
+            atomicAdd(&here, 1u);
         }
     }
     workgroupBarrier();
     if (i == 0u) {
-        let m = atomicLoad(&most);
-        if (m != 0u) {
-            atomicMax(&lit, m);
+        let n = atomicLoad(&here);
+        if (n != 0u) {
+            atomicAdd(&gate[1], n);
         }
+    }
+}
+@compute @workgroup_size(1)
+fn decide() {
+    let size = textureDimensions(frame);
+    if (atomicLoad(&gate[1]) * 100u >= size.x * size.y) {
+        atomicMax(&gate[0], 1u);
     }
 }
 ";
@@ -5783,7 +5800,7 @@ impl Start {
     fn new(device: &wgpu::Device) -> Start {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("start"),
-            source: wgpu::ShaderSource::Wgsl(BRIGHTEST.into()),
+            source: wgpu::ShaderSource::Wgsl(PICTURE.into()),
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("start"),
@@ -5804,7 +5821,7 @@ impl Start {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
-                        min_binding_size: std::num::NonZeroU64::new(4),
+                        min_binding_size: std::num::NonZeroU64::new(8),
                     },
                     count: None,
                 },
@@ -5815,23 +5832,29 @@ impl Start {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let brightest = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("start"),
-            layout: Some(&pl),
-            module: &module,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        // wgpu gives a new buffer zeros: nothing drawn yet.
+        let pipeline = |entry: &str| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("start"),
+                layout: Some(&pl),
+                module: &module,
+                entry_point: Some(entry),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        };
+        let (count, decide) = (pipeline("count"), pipeline("decide"));
+        // wgpu gives a new buffer zeros: no picture yet.
         let lit = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("start gate"),
-            size: 4,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            size: 8,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         Start {
-            brightest,
+            count,
+            decide,
             layout,
             lit,
             unsent: None,
@@ -5853,7 +5876,8 @@ impl Start {
         }
     }
 
-    /// Whether a copy mapped so far says the game has drawn (polls `device` without waiting).
+    /// Whether a copy mapped so far says the game has shown a picture (polls `device` without
+    /// waiting).
     fn drawn(&mut self, device: &wgpu::Device) -> bool {
         if self.reading.is_empty() {
             return false;

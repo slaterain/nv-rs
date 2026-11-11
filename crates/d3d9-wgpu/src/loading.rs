@@ -1,5 +1,5 @@
 //! The screen the backend shows while it does a long step of its own before play (the first
-//! start's pipelines, [`crate::prepare`]), and over the game's start until the game draws anything
+//! start's pipelines, [`crate::prepare`]), and over the game's start until its first picture
 //! ([`crate::device::Device`]'s start): the nv-rs logo, the word "Loading" and one line that names
 //! the step and its progress, centred on black, scaled to the window. Whoever does the long step
 //! gives it a [`Progress`]; the same numbers go to the log, for a launcher to read.
@@ -193,8 +193,8 @@ struct V { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32> }
     let c = vec2<f32>(f32(i & 1u), f32((i >> 1u) & 1u));
     var v: V;
     v.p = vec4<f32>(q.rect.xy + c * q.rect.zw, 0.0, 1.0);
-    // Over a game frame: nothing once the game has drawn anything (gate[0], the brightest
-    // channel of its frames so far), every quad then outside the target.
+    // Over a game frame: nothing once the game has shown a picture (gate[0] open), every quad
+    // then outside the target.
     if (gate[0] != 0u) {
         v.p = vec4<f32>(2.0, 2.0, 0.0, 1.0);
     }
@@ -387,8 +387,8 @@ impl Screen {
     }
 
     /// Draws `p` over all of `target` (`width` by `height` pixels) into `encoder`: cleared to black;
-    /// or with `over` (a gate: the game's brightest channel so far), over the game's frame already
-    /// there, and only while the gate is zero (the game has drawn nothing: its frame is black).
+    /// or with `over` (a gate: non-zero once the game has shown a picture), over the game's frame
+    /// already there, and only while the gate is shut.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw(
         &mut self,

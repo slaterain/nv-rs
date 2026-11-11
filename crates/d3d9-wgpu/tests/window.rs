@@ -575,12 +575,13 @@ fn a_window_minimised_at_create_device_still_gets_the_device() {
 /// for the screen's own frames, `wgpu-window-N.bmp` for the game's presents), at the window's
 /// size and not black (the logo, the text and the bar over black):
 /// - from the device's creation ("Starting");
-/// - over the game's frames while the game has drawn nothing (all black), never over a frame
-///   that draws anything, and not again after one (a black frame then stays black);
+/// - over the game's frames until its first picture (a frame with at least 1% of its pixels above
+///   24 of 255): over a black frame and over a dark one (16 of 255) alike; never over a picture,
+///   and not again after one (a black frame then stays black);
 /// - for a long step of the backend's own (`show_progress`), its bar at the share done, again
 ///   after the window was sized anew; the game's next `Present` shows the game.
 #[test]
-fn the_loading_screen_is_shown_until_the_game_draws_and_is_not_black() {
+fn the_loading_screen_is_shown_until_the_games_first_picture_and_is_not_black() {
     let Some(mut g) = Rig::new((320, 240), (32, 24)) else {
         return;
     };
@@ -598,27 +599,30 @@ fn the_loading_screen_is_shown_until_the_game_draws_and_is_not_black() {
         .expect("the screen from the device's creation");
     assert_eq!((w, h), (320, 240), "the window's size");
     assert!(lit(&px) > w * h / 50, "not black: {} lit", lit(&px));
-    // The game's black frames show the screen; the first frame that draws anything is the
-    // game's own, and a black frame after it is black.
-    g.show(1, 0xFF00_0000);
-    let (w, h, px) = g.capture("wgpu-window", 1).expect("the window's frame 1");
-    assert_eq!((w, h), (320, 240));
-    assert!(
-        lit(&px) > w * h / 50,
-        "the screen over a black frame: {} lit",
-        lit(&px)
-    );
-    g.show(2, 0xFF20_4060);
-    assert_eq!(
-        g.window_frame(2),
-        Some((320, 240, vec![bgra(0xFF20_4060)])),
-        "the game's first frame that draws: the game's own"
-    );
-    g.show(3, 0xFF00_0000);
+    // The game's frames before its first picture show the screen (black, then dark: as the
+    // game's legal screen fades in); its first picture is the game's own, and a black frame
+    // after it is black.
+    for (frame, colour, what) in [(1, 0xFF00_0000u32, "black"), (2, 0xFF10_1010, "dark")] {
+        g.show(frame, colour);
+        let (w, h, px) = g.capture("wgpu-window", frame).expect("the window's frame");
+        assert_eq!((w, h), (320, 240));
+        assert!(
+            lit(&px) > w * h / 50,
+            "the screen over a {what} frame: {} lit",
+            lit(&px)
+        );
+    }
+    g.show(3, 0xFF20_4060);
     assert_eq!(
         g.window_frame(3),
+        Some((320, 240, vec![bgra(0xFF20_4060)])),
+        "the game's first picture: the game's own"
+    );
+    g.show(4, 0xFF00_0000);
+    assert_eq!(
+        g.window_frame(4),
         Some((320, 240, vec![bgra(0xFF00_0000)])),
-        "black after the game has drawn: black"
+        "black after the first picture: black"
     );
     let progress = |done: f32| d3d9_wgpu::loading::Progress {
         title: "Loading".into(),
@@ -649,9 +653,9 @@ fn the_loading_screen_is_shown_until_the_game_draws_and_is_not_black() {
             "frame {n}: the bar done {done} ({done_px} pixels)"
         );
     }
-    g.show(4, 0xFF20_4060);
+    g.show(5, 0xFF20_4060);
     assert_eq!(
-        g.window_frame(4),
+        g.window_frame(5),
         Some((640, 360, vec![bgra(0xFF20_4060)])),
         "the game's frame after the loading screen"
     );
