@@ -179,8 +179,8 @@ pub fn update_system(e: &mut Engine, this: Ptr<NiParticleSystem>, time: f32) {
 /// true is kept as the last such one; otherwise an active one (+0x14) runs its `Update` with the time
 /// and the data ([`modifiers::update`]); the kept one runs after the walk the same way when active.
 /// `MarkAsChanged(7)` on the data; the last time becomes the time; when the radius word was 0 and no
-/// longer is, the first of the system and its parents (+0x18) whose slot +0x10 answers nonzero gets
-/// the flag `0x400000`.
+/// longer is, the first of the system's parents (its +0x18, then each parent's +0x18) whose slot +0x10
+/// answers nonzero gets the flag `0x400000`; the walk starts at the parent, not at the system.
 pub fn do_update_system(e: &mut Engine, this: Ptr<NiParticleSystem>, time: f32) {
     let time_bits = x87_quiet_bits(time.to_bits());
     let data = e.mem.u32(this.addr().wrapping_add(MODEL_DATA));

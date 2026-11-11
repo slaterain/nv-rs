@@ -2492,6 +2492,28 @@ const OBJECT_SECOND_LINK: u32 = 0x0043_b230;
 /// Call made on the node the two links reach, to take the object out of the
 /// scene.
 const NODE_REMOVE: u32 = 0x0052_8820;
+/// The camera's port (`0045bbe0`, its +0xdc), world position (`0045bb80`, its +0x8c) and rotation's
+/// first column (`0045bba0`, `thiscall(camera, out)`); a point times a float (`0045bb20`,
+/// `thiscall(point, out, scale)`); a node's child array entry (`0045bc00`, `thiscall(node, index)`).
+/// The scene walks call these by address, as the typed passes do.
+const CAMERA_PORT: u32 = 0x0045_bbe0;
+const CAMERA_POSITION: u32 = 0x0045_bb80;
+const CAMERA_COLUMN_0: u32 = 0x0045_bba0;
+const POINT_TIMES: u32 = 0x0045_bb20;
+const NODE_CHILD: u32 = 0x0045_bc00;
+/// `0045bad0` (`cdecl(rtti, object)`) and the slot 8 test it makes (`0045baf0`, `thiscall(object,
+/// rtti)`).
+const IS_EXACTLY: u32 = 0x0045_bad0;
+const RTTI_IS: u32 = 0x0045_baf0;
+/// The portal graph's list +0x30 emptied (`0045bc60`) and its `NiPointer` +0x2c set (`0045bc40`).
+const GRAPH_CLEAR_LIST: u32 = 0x0045_bc60;
+const GRAPH_SET_HELD: u32 = 0x0045_bc40;
+/// A tracked item's word +0x40 cleared (`0045c4a0`) and its target's cell (`0045c4c0`); a queued
+/// object's state set (`0045c570`) and its object at +0xcc replaced (`0045c4e0`).
+const ITEM_CLEAR: u32 = 0x0045_c4a0;
+const ITEM_TARGET_CELL: u32 = 0x0045_c4c0;
+const OBJECT_SET_STATE: u32 = 0x0045_c570;
+const OBJECT_SET_CC: u32 = 0x0045_c4e0;
 /// `ecx` = a state object: its list of tracked objects.
 const SCENE_STATE_LIST: u32 = 0x0041_3f40;
 /// `ecx` = a state object: its queue of objects.
@@ -2566,7 +2588,7 @@ fn visit_water_entries(e: &mut Engine, holder: u32, visit: &mut dyn FnMut(&mut E
             typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, entry));
             let objects = e.vcall(entry, 0x1d0, &[]).u32();
             let first = e.call(NODE_CHILD_AT, &args![objects, 0u32]).u32();
-            if fn_0045bad0(e, WATER_ENTRY_RTTI, Ptr::new(first)) {
+            if e.call(IS_EXACTLY, &args![WATER_ENTRY_RTTI, first]).u8() != 0 {
                 let object = e.call(NODE_CHILD_AT, &args![objects, 0u32]).u32();
                 visit(e, object);
             }
@@ -2626,8 +2648,11 @@ fn grid_cell_at(e: &mut Engine, this: Ptr<TES>, x: u32, y: u32) -> u32 {
 // Translated from 0045b070 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Adds the objects of the loaded world to the first shadow scene node
 /// (`fn_00450b80(0)`), for the camera `camera`. With a culling process on
-/// the stack (set to the camera and its frustum, `fn_0045bbe0`) and the
-/// camera position (`fn_0045bb80`, three words), `00b5bbe0` is called for: the
+/// the stack (set to the camera and its frustum, `0045bbe0`) and the camera
+/// position (`0045bb80`, three words kept right after the process, as in the
+/// exe's frame: `00b5bbe0` reads the process's word +0x90 as its mode, which is
+/// the position's x; an earlier version kept them in Rust locals, so that word
+/// was whatever the stack held there), `00b5bbe0` is called for: the
 /// interior cell's list 7 entries whose slot `0x104` returns 0; or, outdoors,
 /// the terrain manager is told of the camera and every loaded grid cell's
 /// lists 7 and 2 are added; then the children of the scene node's child 6
@@ -2641,20 +2666,27 @@ fn grid_cell_at(e: &mut Engine, this: Ptr<TES>, x: u32, y: u32) -> u32 {
 /// check, and a local the code initialises and never reads.
 pub fn fn_0045b070(e: &mut Engine, this: Ptr<TES>, camera: u32) {
     e.call(SCENE_WALK_MARKER_CALL, &args![SCENE_WALK_MARKER]);
-    e.with_stack(CULLING_PROCESS_SIZE, |e, process| {
+    // The process and right after it the camera position's three words, as in the exe's frame (EBP-0xb4
+    // and EBP-0x24): `00b5bbe0` reads the process's word +0x90 as its mode, here the position's x.
+    e.with_stack(CULLING_PROCESS_SIZE + 12, |e, process| {
         e.call(CULLING_PROCESS_CONSTRUCT, &args![process, 0u32]);
         e.call(CULLING_PROCESS_SET_CAMERA, &args![process, camera]);
-        let frustum = fn_0045bbe0(e, Ptr::new(camera));
+        let frustum = e.call(CAMERA_PORT, &args![camera]).u32();
         e.call(CULLING_PROCESS_SET_FRUSTUM, &args![process, frustum]);
-        let location = fn_0045bb80(e, Ptr::new(camera)).addr();
-        let position = [
-            e.mem.u32(location),
-            e.mem.u32(location + 4),
-            e.mem.u32(location + 8),
-        ];
+        let location = e.call(CAMERA_POSITION, &args![camera]).u32();
+        let position = process.addr() + CULLING_PROCESS_SIZE;
+        for word in 0..3 {
+            let value = e.mem.u32(location + 4 * word);
+            e.mem.set_u32(position + 4 * word, value);
+        }
         let scene = e.call(SHADOW_SCENE_NODE_GETTER, &args![0u32]).u32();
         let mut add = |e: &mut Engine, object: u32| {
-            scene_add_object(e, scene, object, position, process);
+            let words = [
+                e.mem.u32(position),
+                e.mem.u32(position + 4),
+                e.mem.u32(position + 8),
+            ];
+            scene_add_object(e, scene, object, words, process);
         };
         let interior = e.get(this, TES::pInteriorCell).addr();
         if interior != 0 {
@@ -2698,7 +2730,7 @@ pub fn fn_0045b070(e: &mut Engine, this: Ptr<TES>, camera: u32) {
                 x += 1;
             }
         }
-        let child = fn_0045bc00(e, Ptr::new(scene), 6);
+        let child = e.call(NODE_CHILD, &args![scene, 6u32]).u32();
         let children = if child != 0 {
             e.vcall(child, 0xc, &[]).u32()
         } else {
@@ -2731,7 +2763,7 @@ pub fn fn_0045b070(e: &mut Engine, this: Ptr<TES>, camera: u32) {
 fn scene_update_held_object(e: &mut Engine, camera: u32, scene: u32, process: Ptr) {
     let node = e.call(SHADOW_SCENE_NODE_GETTER, &args![0u32]).u32();
     let state = e.call(SCENE_NODE_STATE, &args![node]).u32();
-    fn_0045bc60(e, Ptr::new(state));
+    e.call(GRAPH_CLEAR_LIST, &args![state]);
     let node = e.call(SHADOW_SCENE_NODE_GETTER, &args![0u32]).u32();
     let state = e.call(SCENE_NODE_STATE, &args![node]).u32();
     let held_object = e.call(SCENE_STATE_HELD, &args![state]).u32();
@@ -2742,11 +2774,14 @@ fn scene_update_held_object(e: &mut Engine, camera: u32, scene: u32, process: Pt
         let column_point = held + 4;
         let scaled_point = held + 16;
         let point = held + 28;
-        let frustum = fn_0045bbe0(e, Ptr::new(camera));
-        let near = e.mem.f32(frustum.addr() + 0x10);
-        let column = fn_0045bba0(e, Ptr::new(camera), Ptr::new(column_point));
-        let scaled = fn_0045bb20(e, column, Ptr::new(scaled_point), near);
-        let location = fn_0045bb80(e, Ptr::new(camera));
+        let frustum = e.call(CAMERA_PORT, &args![camera]).u32();
+        // `FLD [frustum + 0x10]; FSTP [ESP]`: the near distance pushed through the x87 stack.
+        let near = x87_quiet_bits(e.mem.u32(frustum + 0x10));
+        let column = e.call(CAMERA_COLUMN_0, &args![camera, column_point]).u32();
+        let scaled = e
+            .call(POINT_TIMES, &args![column, scaled_point, near])
+            .u32();
+        let location = e.call(CAMERA_POSITION, &args![camera]).u32();
         e.call(POINT_ADD, &args![location, point, scaled]);
         let mut flag = 1u32;
         if pointer_at(e, held) != 0 {
@@ -2784,7 +2819,7 @@ fn scene_update_held_object(e: &mut Engine, camera: u32, scene: u32, process: Pt
         }
         let value = pointer_at(e, held);
         let state = e.call(SCENE_NODE_STATE, &args![scene]).u32();
-        fn_0045bc40(e, Ptr::new(state), value);
+        e.call(GRAPH_SET_HELD, &args![state, value]);
         e.call(NI_POINTER_DTOR, &args![held]);
     });
 }
@@ -2808,7 +2843,7 @@ pub fn fn_0045bad0(e: &mut Engine, rtti: u32, object: Ptr) -> bool {
     if object.is_null() {
         return false;
     }
-    fn_0045baf0(e, object, rtti)
+    e.call(RTTI_IS, &args![object, rtti]).u8() != 0
 }
 
 // Translated from 0045baf0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2977,7 +3012,7 @@ pub fn fn_0045bc80(e: &mut Engine, this: Ptr<TES>, with_lists: u8, with_queue: u
         }
     }
     let node = e.call(SHADOW_SCENE_NODE_GETTER, &args![0u32]).u32();
-    let child = fn_0045bc00(e, Ptr::new(node), 6);
+    let child = e.call(NODE_CHILD, &args![node, 6u32]).u32();
     let children = if child != 0 {
         e.vcall(child, 0xc, &[]).u32()
     } else {
@@ -3013,7 +3048,7 @@ fn scene_release_tracked(e: &mut Engine, with_queue: bool) {
             let item_address = e.call(LIST_ITERATE, &args![list, position]).u32();
             let item = e.mem.u32(item_address);
             if item != 0 {
-                fn_0045c4a0(e, Ptr::new(item));
+                e.call(ITEM_CLEAR, &args![item]);
             }
         }
     });
@@ -3045,9 +3080,9 @@ fn scene_release_queued(e: &mut Engine, held: u32) {
     let object = pointer_at(e, held);
     e.vcall(object, 0xbc, &[]);
     let object = pointer_at(e, held);
-    fn_0045c570(e, Ptr::new(object), 3);
+    e.call(OBJECT_SET_STATE, &args![object, 3u32]);
     let object = pointer_at(e, held);
-    fn_0045c4e0(e, Ptr::new(object), 0);
+    e.call(OBJECT_SET_CC, &args![object, 0u32]);
     let object = pointer_at(e, held);
     let list = e.call(OBJECT_ITEMS_A, &args![object]).u32();
     e.with_stack(4, |e, position| {
@@ -3059,10 +3094,10 @@ fn scene_release_queued(e: &mut Engine, held: u32) {
             let item_address = e.call(LIST_ITERATE, &args![list, position]).u32();
             let item = e.mem.u32(item_address);
             if item != 0 {
-                fn_0045c4a0(e, Ptr::new(item));
-                let target_cell = fn_0045c4c0(e, Ptr::new(item));
+                e.call(ITEM_CLEAR, &args![item]);
+                let target_cell = e.call(ITEM_TARGET_CELL, &args![item]).u32();
                 if e.call(ITEM_GET_TARGET_OBJECT, &args![target_cell]).u32() != 0 {
-                    let target_cell = fn_0045c4c0(e, Ptr::new(item));
+                    let target_cell = e.call(ITEM_TARGET_CELL, &args![item]).u32();
                     let target = e.call(ITEM_GET_TARGET_OBJECT, &args![target_cell]).u32();
                     e.call(OBJECT_RELEASE, &args![target, 0u32]);
                 }
@@ -3080,7 +3115,7 @@ fn scene_release_queued(e: &mut Engine, held: u32) {
             let item_address = e.call(LIST_ITERATE, &args![list, position]).u32();
             let item = e.mem.u32(item_address);
             if item != 0 {
-                fn_0045c4a0(e, Ptr::new(item));
+                e.call(ITEM_CLEAR, &args![item]);
             }
         }
     });

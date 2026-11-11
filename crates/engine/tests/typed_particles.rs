@@ -576,6 +576,39 @@ fn particles_grow_fade() {
     })
     .run()
     .assert_same();
+    // Generation 2 (particle 2's) matching, and the zero-time guards: particle 2's age is -1 and its
+    // life span -2, so a zero grow time is above its age and a zero fade time above its remaining life,
+    // and only the guards keep the factors from dividing by zero.
+    Diff::new(entry!(
+        0x00c2_a390,
+        modifiers::grow_fade(Ptr<_>, f32, Ptr<_>)
+    ))
+    .common()
+    .inputs(&inputs(&[
+        &[
+            Input::Of(&[2, 7]),
+            Input::Of(&[2, 7]),
+            Input::Of(&[0, ONE]),
+            Input::Of(&[0, ONE]),
+        ],
+        &P3,
+    ]))
+    .max_cases(256)
+    .setup(|e, case| {
+        stand_ins(e);
+        let d = particle_data(e, case, 3, 3, 4);
+        let info = e.mem.u32(d + 0x70) + 2 * 0x1c;
+        e.mem.set_u32(info + 0x0c, MINUS_ONE);
+        e.mem.set_u32(info + 0x10, 0xc000_0000);
+        let s = particle_system(e, case, d, &[], 4);
+        let m = modifier(e, 0x2c, s);
+        words(e, m + 0x18, &[case.word(2), case.word(0), case.word(3)]);
+        e.mem.set_u32(m + 0x24, case.word(1));
+        e.mem.set_u32(m + 0x28, bits(case, 4));
+        vec![m, ONE, d]
+    })
+    .run()
+    .assert_same();
 }
 
 #[test]
@@ -622,6 +655,46 @@ fn particles_bound_update() {
         }
         e.mem.set_u32(m + 0x1c, bounds);
         vec![m, bits(case, 4), d]
+    })
+    .run()
+    .assert_same();
+    // The merge's zero-radius skip: 100 or more particles make the step's limit 3 or more, so with a
+    // skip of 3 or 4 the bounds after the first merge, bound 2's radius zero (left out unless the
+    // update count is 2 and has just written it).
+    Diff::new(entry!(
+        0x00c2_df20,
+        modifiers::bound_update(Ptr<_>, f32, Ptr<_>)
+    ))
+    .common()
+    .inputs(&inputs(&[
+        &[
+            Input::Of(&[100, 150, 200]),
+            Input::Of(&[3, 4]),
+            Input::Of(&[0, 1, 2]),
+        ],
+        &P3,
+    ]))
+    .max_cases(128)
+    .setup(|e, case| {
+        stand_ins(e);
+        let count = case.word(0);
+        let d = particle_data(e, case, count, count, 3);
+        let chain = block(e, 8, &[0x0120_2558, 0]);
+        set_answer(e, d, chain);
+        let s = particle_system(e, case, d, &[], 3);
+        let m = modifier(e, 0x20, s);
+        e.mem.set_u16(m + 0x18, case.word(1) as u16);
+        e.mem.set_u16(m + 0x1a, case.word(2) as u16);
+        let bounds = e.mem.alloc(0x10 * 4);
+        for i in 0..4 {
+            words(
+                e,
+                bounds + 0x10 * i,
+                &[ONE, TWO, HALF, [ONE, TWO, 0, HALF][i as usize]],
+            );
+        }
+        e.mem.set_u32(m + 0x1c, bounds);
+        vec![m, bits(case, 3), d]
     })
     .run()
     .assert_same();
@@ -741,6 +814,45 @@ fn particles_bomb() {
                 ],
             );
             vec![m, bits(case, 4), d]
+        })
+        .run()
+        .assert_same();
+    // Without a bomb object (the bomb at the zero point (0.5, 0, 2)) and the axis (0, 0, 1), particle 0
+    // placed where the floats rarely put it: at the bomb (zero distance, and for symmetry 1 a zero
+    // length off the axis), on the axis one away (symmetry 1's zero length at a nonzero distance), or
+    // with its last update equal to the time (skipped); each decay and symmetry type; the time 10.
+    Diff::new(entry!(0x00c2_e670, modifiers::bomb(Ptr<_>, f32, Ptr<_>)))
+        .common()
+        .inputs(&inputs(&[
+            &[
+                Input::Of(&[1, 3]),
+                Input::Of(&[0, 1, 2]),
+                Input::Of(&[0, 1, 2, 3]),
+                Input::Of(&[0, 1, 2]),
+            ],
+            &P3,
+        ]))
+        .max_cases(256)
+        .setup(|e, case| {
+            stand_ins(e);
+            let d = particle_data(e, case, case.word(0), 3, 4);
+            let s = particle_system(e, case, d, &[], 4);
+            let m = modifier(e, 0x38, s);
+            words(
+                e,
+                m + 0x1c,
+                &[0, 0, ONE, TEN, TWO, case.word(1), case.word(2)],
+            );
+            let vertex = e.mem.u32(d + 0x20);
+            let info = e.mem.u32(d + 0x70);
+            match case.word(3) {
+                0 => words(e, vertex, &[HALF, 0, TWO]),
+                1 => words(e, vertex, &[HALF, 0, 0x4040_0000]),
+                _ => {}
+            }
+            let last = if case.word(3) == 2 { TEN } else { 0 };
+            e.mem.set_u32(info + 0x14, last);
+            vec![m, TEN, d]
         })
         .run()
         .assert_same();

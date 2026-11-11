@@ -431,9 +431,9 @@ family is `leaves` (`typed/leaf.rs`): the small functions the translations call 
 speed gate passed (G1, 2026-11-06: Goodsprings +7.1%, Doc's room +3.0%). It is no longer the only one on: by default
 `leaves`, `topic_search`, `topic_order` and, since their speed gate (2026-11-08), `lockfree`, `culling`,
 `pathing`, `shader`, `crt` and `dispatch` are on, and since their gates `render` (2026-11-09), `draw`, `scene`,
-`particles` and `collision` (2026-11-10) (below); `NV_TYPED=off` turns every family off, and `<family>:off` one. A
-run compared call for call with the original's record (nv-trace's `NV_TRACE_OUT`, `NV_TRACE_LIST`) has every family
-off unless `NV_TYPED` says otherwise (`typed::switch_for`).
+`particles`, `collision` and `multibound` (2026-11-10) (below); `NV_TYPED=off` turns every family off, and
+`<family>:off` one. A run compared call for call with the original's record (nv-trace's `NV_TRACE_OUT`,
+`NV_TRACE_LIST`) has every family off unless `NV_TYPED` says otherwise (`typed::switch_for`).
 The second is `topic_search` (`crates/engine-fallout-forms/src/topic_search.rs`, provided from that
 crate): the search for the topic that holds a topic info (`TESTopic::GetOwnerTopic`) and the functions
 its loops call. A plugin that replaces dialogue runs it once per replaced info over every topic's infos
@@ -573,6 +573,28 @@ replaces it), as do the Havok calls (motion type, hard keyframe, the velocities'
 `crates/engine/tests/typed_collision.rs`. On since its gate (the differential tests with each planted mutant caught,
 and the recorded street run byte-identical with `NV_TYPED=collision:off` in the fixes and vanilla presets); not a speed
 change by itself.
+The three update-half families (`scene`, `particles`, `collision`) keep the exact x87 helpers instead of the float
+rule's `f64` locals rounded at each `float` store (ADR-0014, below): they run on the main thread at 24-bit precision,
+where an `f64` local rounded only at the store can differ in the last bit from the exe, which rounds at every step, and
+byte identity with the translations needs each step rounded as the exe rounds it. The recording the rule asks for is
+each family's gate: the recorded street run, byte-identical with `NV_TYPED=scene:off`, `particles:off,scene:off` and
+`collision:off` in the fixes and vanilla presets.
+And `multibound` (same crate, id 22), the update half's fourth group: the two passes main runs over the loaded world
+once a frame that keep the multibound culling current. The reset pass (`0045bc80`) takes every object's multibound
+shape back to "not tested"; the visibility pass (`0045b070`) tests each again from the camera through the shadow
+scene node's test of one multibound node (`00b5bbe0`): the shape against the culling process's frustum
+(`BSMultiBoundAABB::WithinFrustum`, the culling family's, called directly when the shape's slot holds it), then
+against the portal graph's active occluders. The objects: an interior cell's multibound nodes, or each loaded grid
+cell's multibound nodes and land; the shadow scene node's child 6's children; the water objects. The small getters
+they call for each object, cell and water entry are typed with them (some shared by identical code with other
+classes, so every caller reaches the typed one). By address: the culling process's set-up, the terrain manager's
+calls, `VisibleAgainstActiveOccluders`, the scene node's candidate and the portal graph's held, queued and tracked
+objects' calls. Typing it found a translation bug: the exe keeps the camera position's three words right after its
+0x90-byte culling process, and the object test reads the process's word +0x90 as its mode, which is the position's
+x; the translation kept them in Rust locals, so it read whatever the stack held there. Fixed in both. Its tests are
+`crates/engine/tests/typed_multibound.rs`. On since its gate (the differential tests with each planted mutant caught,
+and the recorded street run byte-identical with `NV_TYPED=multibound:off` in the fixes and vanilla presets);
+integers only, not a speed change by itself.
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with
