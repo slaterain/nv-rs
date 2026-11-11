@@ -772,10 +772,27 @@ fn times() {
     .assert_same();
 }
 
-/// `normalize`'s words: a point of the case's floats.
+/// `normalize`'s words: a point of the case's floats, by the case's word 3 as it came, or scaled by
+/// 2^-14 (the ordinary cases' (x, 1, -1) then has a length below the minimum, 0.001, which zeroes it)
+/// or by 2^-9 (just above it).
 fn normalize_words(e: &mut Engine, case: &Case) -> Vec<u32> {
     stand_ins(e);
-    vec![point(e, case, 0)]
+    let p = point(e, case, 0);
+    let scale = match case.word(3) {
+        1 => 2f32.powi(-14),
+        2 => 2f32.powi(-9),
+        _ => return vec![p],
+    };
+    for i in 0..3 {
+        let v = f32::from_bits(e.mem.u32(p + 4 * i)) * scale;
+        e.mem.set_u32(p + 4 * i, v.to_bits());
+    }
+    vec![p]
+}
+
+/// `normalize`'s inputs: three floats and the scale of [`normalize_words`].
+fn normalize_inputs() -> Vec<Input> {
+    inputs(&[&P3, &[Input::Of(&[0, 1, 2])]])
 }
 
 #[test]
@@ -784,7 +801,7 @@ fn normalize() {
     Diff::new(entry!(0x004a_0c10, math::normalize(Ptr<_>)))
         .common(0x004a_0c10)
         .other_threads()
-        .inputs(&P3)
+        .inputs(&normalize_inputs())
         .setup(normalize_words)
         .run()
         .assert_same();
@@ -793,7 +810,7 @@ fn normalize() {
     Diff::new(entry!(0x004a_0c10, math::normalize(Ptr<_>)))
         .common(0x004a_0c10)
         .main_thread(0)
-        .inputs(&P3)
+        .inputs(&normalize_inputs())
         .setup(|e, case| normalize_words(e, &folded(case, play)))
         .run()
         .assert_same();
@@ -2186,7 +2203,9 @@ fn extra_kind() {
 // rounds to 24 bits (ties to even) before the next, under 53-bit to 53 bits, and `FSTP` to a float.
 // The typed versions are native maths (`f64` locals rounded where the exe stores a float): they give
 // the 53-bit results under both control words, one ulp from the exe's on the main thread here, where
-// the float rule accepts it (ADR-0014).
+// the float rule accepts it (ADR-0014). The engine has the translations only
+// ([`Engine::new_untyped_for_test`]): with the family on, as it is by default, a call by address would
+// reach the typed version.
 
 /// 2^-24 as a float.
 const TWO_POW_M24: u32 = 0x3380_0000;
@@ -2205,7 +2224,7 @@ const TIE_SUM: [(u16, u32); 2] = [(0x007f, ONE), (0x027f, ONE + 1)];
 
 #[test]
 fn multiply_at_24_bits_rounds_each_sum() {
-    let mut e = Engine::new();
+    let mut e = Engine::new_untyped_for_test();
     stand_ins(&mut e);
     let a = block(
         &mut e,
@@ -2231,7 +2250,7 @@ fn multiply_at_24_bits_rounds_each_sum() {
 
 #[test]
 fn rotate_at_24_bits_rounds_each_sum() {
-    let mut e = Engine::new();
+    let mut e = Engine::new_untyped_for_test();
     stand_ins(&mut e);
     let m = block(
         &mut e,
@@ -2261,7 +2280,7 @@ fn rotate_at_24_bits_rounds_each_sum() {
 /// the even 1.0. The typed version's `f64` product rounds as the 53-bit one: 1.0 under both words.
 #[test]
 fn location_on_reference_at_24_bits_rounds_the_rise_once() {
-    let mut e = Engine::new();
+    let mut e = Engine::new_untyped_for_test();
     stand_ins(&mut e);
     e.register(0x0057_b0a0, |_, _| ret_f(1000.0));
     e.register(0x0088_53a0, |_, _| {
@@ -2645,6 +2664,8 @@ fn scene_skin_bound() {
         engine_typed::scene::skin::skin_bound(Ptr<_>, Ptr<_>)
     ))
     .common(0x00a8_6530)
+    // The transform product copies the scale as it is (a signalling NaN radius's scale keeps its payload).
+    .allow_nan_payloads()
     .inputs(&inputs(&[
         &[
             Input::Of(&[0, 1, 2, 3]),

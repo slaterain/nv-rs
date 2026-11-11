@@ -1272,7 +1272,8 @@ fn frustum_planes_set() {
 }
 
 /// `within_frustum` with the dispatch family on: its call of the box's corners (`00c39270`) is a Rust
-/// call on the direct run.
+/// call on the direct run. The box's corners copy the half extents as they are (native maths: a
+/// signalling NaN keeps its payload).
 #[test]
 fn within_frustum_with_dispatch() {
     Diff::new(entry!(
@@ -1280,6 +1281,7 @@ fn within_frustum_with_dispatch() {
         process::within_frustum(Ptr<_>, Ptr<_>) -> bool
     ))
     .with_dispatch()
+    .allow_nan_payloads()
     .inputs(&[Input::F32, Input::F32, Input::Of(&[0x3f, 0x2, 0])])
     .max_cases(192)
     .setup(|e, case| {
@@ -1293,11 +1295,17 @@ fn within_frustum_with_dispatch() {
 }
 
 /// `update_world_transform` with the dispatch family on: its call of the transform product
-/// (`0062c250`) is a Rust call on the direct run.
+/// (`0062c250`) is a Rust call on the direct run. Under the other threads' control word only: the
+/// product is native maths, whose sums of products round once where the exe's 24-bit code rounds each
+/// step, so on the main thread's word it parts from the exe in the last bits (the dispatch family's own
+/// tests compare it there, within their tolerance); `update_world_transform` runs this function on both
+/// words with the product by address.
 #[test]
 fn update_world_transform_with_dispatch() {
     Diff::new(entry!(0x00a6_8bf0, update::update_world_transform(Ptr<_>)))
         .with_dispatch()
+        .control_words(&[0x027f])
+        .allow_nan_payloads()
         .inputs(&[Input::Flag, Input::Of(&[0, 0x200]), Input::F32])
         .setup(|e, case| {
             let s = scene(e);
