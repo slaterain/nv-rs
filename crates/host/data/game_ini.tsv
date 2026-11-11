@@ -26,6 +26,7 @@ nv-rs Fixes	bHalfLoadedMove	NV_HALF_LOADED_MOVE	1	Half-loaded actor's level chan
 nv-rs Fixes	bThreadRaces	NV_THREAD_RACES	1	Thread races: a new thread's scrap heap, the debug texts and console prints, and the face-gen lock's count are safe when the game's threads meet.
 nv-rs Fixes	bTextureReadFirst	NV_TEXTURE_READ_FIRST	1	Texture files read before the renderer's lock: a texture file is read and unpacked before the renderer's lock is taken, so drawing does not wait for it.
 nv-rs Fixes	bCellEntryWait	NV_CELL_ENTRY_WAIT	1	Cell entry waits for its own cell: crossing into a new outdoor cell no longer pauses for the row of cells loaded ahead; they load in the background, after what the cell entered needs.
+nv-rs Fixes	bCellOffsets	NV_CELL_OFFSETS	1	Cell offsets for every plugin: a cell of a plugin, or of a master without its cell offsets (YUP, TTW), is found by a table built from the plugin at load instead of a search of the file each time a cell loads (the same cells, sooner).
 nv-rs Fixes	bCosaveKeep	NV_COSAVE_KEEP	1	Co-save keeps other plugins: a co-save's parts from plugins not built in (JIP LN NVSE's) are written back while the same files are loaded.
 nv-rs Fixes	bNVSEErrorGuard	NV_NVSE_ERROR_GUARD	1	Script error loop guard: an error inside a script's error handler is not sent to the handlers again.
 nv-rs Fixes	bNVSEImodCheck	NV_NVSE_IMOD_CHECK	1	Image-space event form check: OnRemoveIMOD only for an image-space modifier form's instance that ran out, not for depth of field or blur.

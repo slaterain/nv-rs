@@ -25,6 +25,7 @@
 mod cursor;
 pub mod error;
 pub mod inflate;
+pub mod cell_offsets;
 pub mod load_order;
 pub mod plugin;
 pub mod record;

@@ -32,6 +32,8 @@
 00525a90	0	JIP
 00525b20	3	yUI
 005702e0	0	ITR
+00583560	1	nv-rs cell offsets for every plugin
+005854f0	1	nv-rs cell offsets for every plugin
 0058e9d0	1	JIP
 00593870	2	script or frame function
 00595560	2	JIP
