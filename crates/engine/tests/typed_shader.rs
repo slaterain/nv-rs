@@ -6687,7 +6687,8 @@ fn render_standard_typed_pass_slots() {
 }
 
 /// The toggles set-up reaching the land toggles (types 0x1f7 to 0x22e) and the fog property: both
-/// calls direct.
+/// calls direct. The shader property a land one (bit 0x4000 of its +0x20) or not: only a land one keeps
+/// the land toggles' fourth float (the toggles' third overwrites it otherwise).
 #[test]
 fn toggles_typed_land_and_fog() {
     Diff::new(entry!(
@@ -6695,10 +6696,14 @@ fn toggles_typed_land_and_fog() {
         geometry::toggles(Ptr<_>, u32, u32, Ptr<_>, u32, u32, Ptr<_>)
     ))
     .pass_common()
-    .inputs(&[Input::Of(&[0x10, 0x1f7, 0x22e])])
+    .inputs(&[Input::Of(&[0x10, 0x1f7, 0x22e]), Input::Of(TWO_WAYS)])
     .setup(|e, c| {
         let p = pass_world(e, &[], 0, 0);
         entries(e);
+        if c.word(1) != 0 {
+            let flags = e.mem.u32(p.d.w.property + 0x20);
+            set(e, p.d.w.property + 0x20, flags | 0x4000);
+        }
         // Pixel entry 4 on.
         let entry = e.mem.u32(0x011f_ec30 + 4 * 4);
         e.mem.set_u8(entry + 8, 1);
