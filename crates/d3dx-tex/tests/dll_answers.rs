@@ -67,6 +67,7 @@ fn synthetic_textures_are_the_32_bit_dlls() {
     synthetic(
         include_str!("../data/synthetic_32bit.tsv"),
         d3dx_tex::Precision::Single,
+        d3dx_tex::synthetic::files(),
     );
 }
 
@@ -77,12 +78,35 @@ fn synthetic_textures_are_the_32_bit_dlls_at_double_precision() {
     synthetic(
         include_str!("../data/synthetic_32bit_double.tsv"),
         d3dx_tex::Precision::Double,
+        d3dx_tex::synthetic::files(),
     );
 }
 
-fn synthetic(data: &str, precision: d3dx_tex::Precision) {
+/// `data/formats_32bit.tsv`: the formats translated for mods' textures
+/// (`d3dx_tex::synthetic::formats`) through the DLL on a real device: the texture format it picks,
+/// the levels it copies, the ones its box filter makes (integer and working-colour paths), cube
+/// maps.
+#[test]
+fn mod_formats_are_the_32_bit_dlls() {
+    synthetic(
+        include_str!("../data/formats_32bit.tsv"),
+        d3dx_tex::Precision::Single,
+        d3dx_tex::synthetic::formats(),
+    );
+}
+
+/// `data/formats_32bit_double.tsv`: the same at 53-bit precision, on a new thread.
+#[test]
+fn mod_formats_are_the_32_bit_dlls_at_double_precision() {
+    synthetic(
+        include_str!("../data/formats_32bit_double.tsv"),
+        d3dx_tex::Precision::Double,
+        d3dx_tex::synthetic::formats(),
+    );
+}
+
+fn synthetic(data: &str, precision: d3dx_tex::Precision, files: Vec<d3dx_tex::synthetic::File>) {
     let caps = d3dx_tex::Caps::default();
-    let files = d3dx_tex::synthetic::files();
     let lines: Vec<&str> = data.lines().filter(|l| !l.starts_with('#')).collect();
     assert_eq!(lines.len(), files.len());
     for (file, line) in files.iter().zip(lines) {
@@ -130,7 +154,8 @@ fn synthetic(data: &str, precision: d3dx_tex::Precision) {
 /// the resource type, DDS.
 #[test]
 fn image_info_follows_the_header() {
-    for file in d3dx_tex::synthetic::files() {
+    let files = d3dx_tex::synthetic::files();
+    for file in files.into_iter().chain(d3dx_tex::synthetic::formats()) {
         match d3dx_tex::get_image_info_from_file_in_memory(&file.data) {
             Ok(info) => {
                 let w = |at: usize| u32::from_le_bytes(file.data[at..at + 4].try_into().unwrap());

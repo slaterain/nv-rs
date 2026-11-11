@@ -5,10 +5,11 @@
 //! `D3DX_FILTER_TRIANGLE | D3DX_FILTER_DITHER`, mip filter `D3DX_FILTER_BOX`, no colour key.
 //!
 //! The texture's size and format go through `D3DXCheckTextureRequirements` (0x60d6b8): DXT
-//! sizes round up to whole blocks, a cube is square, the device's limits ([`Caps`]). Each level
-//! the file has is loaded into the texture's level (`D3DXLoadSurfaceFromMemory`,
-//! [`filter::load_same_size`]); the rest of the chain comes from `D3DXFilterTexture` with the
-//! box filter, each level from the one before ([`filter::box_next`]).
+//! sizes round up to whole blocks, a cube is square, the device's limits and the formats it takes
+//! ([`Caps`]; the format D3DX picks: [`crate::device`]). Each level the file has is loaded into
+//! the texture's level (`D3DXLoadSurfaceFromMemory`, [`filter::load_same_size`]); the rest of the
+//! chain comes from `D3DXFilterTexture` with the box filter, each level from the one before
+//! ([`filter::box_next`]).
 
 use crate::dds::{self, RTYPE_CUBE, RTYPE_TEXTURE};
 use crate::filter::{self, Level};
@@ -24,18 +25,100 @@ pub struct Caps {
     pub max_height: u32,
     /// `D3DPTEXTURECAPS_POW2`: texture sides must be powers of two (D3DX rounds them up).
     pub pow2: bool,
+    /// The formats the device takes for a texture and for a cube texture: of D3DX's format table,
+    /// those `IDirect3D9::CheckDeviceFormat` answers yes for (usage 0, on the display mode's
+    /// format), as D3DX asks (0x60d069).
+    pub texture_formats: Vec<u32>,
+    pub cube_formats: Vec<u32>,
 }
 
 impl Default for Caps {
-    /// The Direct3D 9 GPUs the game runs on today: 16384 texels a side, any size.
+    /// The Direct3D 9 GPUs the game runs on today: 16384 texels a side, any size; the formats the
+    /// reference machine's device takes ([`REFERENCE_TEXTURE_FORMATS`]).
     fn default() -> Self {
         Caps {
             max_width: 16384,
             max_height: 16384,
             pow2: false,
+            texture_formats: REFERENCE_TEXTURE_FORMATS.to_vec(),
+            cube_formats: REFERENCE_CUBE_FORMATS.to_vec(),
         }
     }
 }
+
+/// The formats of D3DX's table the reference machine's Direct3D 9 device takes for a texture
+/// (an NVIDIA RTX 5070 Ti, measured 2026-11-11 with `d3dx-measure formats`:
+/// `data/device_formats_32bit.tsv`). Not taken, among others: R8G8B8, X4R4G4B4, A8B8G8R8,
+/// X8B8G8R8, R3G3B2, A8R3G3B2, A4L4, the palette and YUV formats; D3DX then picks the nearest
+/// ([`crate::device`]).
+pub const REFERENCE_TEXTURE_FORMATS: &[u32] = &[
+    format::A8R8G8B8,
+    format::X8R8G8B8,
+    format::R5G6B5,
+    format::X1R5G5B5,
+    format::A1R5G5B5,
+    format::A4R4G4B4,
+    format::A8,
+    format::A2B10G10R10,
+    format::G16R16,
+    format::A2R10G10B10,
+    format::A16B16G16R16,
+    format::L8,
+    format::A8L8,
+    format::L16,
+    format::V8U8,
+    format::X8L8V8U8,
+    format::Q8W8V8U8,
+    format::V16U16,
+    format::DXT1,
+    format::DXT2,
+    format::DXT3,
+    format::DXT4,
+    format::DXT5,
+    // D32F_LOCKABLE, D24S8, D16, D24X8.
+    82,
+    75,
+    80,
+    77,
+    format::R16F,
+    format::G16R16F,
+    format::A16B16G16R16F,
+    format::R32F,
+    format::G32R32F,
+    format::A32B32G32R32F,
+];
+
+/// The same for a cube texture: [`REFERENCE_TEXTURE_FORMATS`] without V8U8, X8L8V8U8 and the depth
+/// formats.
+pub const REFERENCE_CUBE_FORMATS: &[u32] = &[
+    format::A8R8G8B8,
+    format::X8R8G8B8,
+    format::R5G6B5,
+    format::X1R5G5B5,
+    format::A1R5G5B5,
+    format::A4R4G4B4,
+    format::A8,
+    format::A2B10G10R10,
+    format::G16R16,
+    format::A2R10G10B10,
+    format::A16B16G16R16,
+    format::L8,
+    format::A8L8,
+    format::L16,
+    format::Q8W8V8U8,
+    format::V16U16,
+    format::DXT1,
+    format::DXT2,
+    format::DXT3,
+    format::DXT4,
+    format::DXT5,
+    format::R16F,
+    format::G16R16F,
+    format::A16B16G16R16F,
+    format::R32F,
+    format::G32R32F,
+    format::A32B32G32R32F,
+];
 
 /// Why a texture could not be made.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,18 +285,32 @@ fn create(data: &[u8], caps: &Caps, rtype: u32, precision: Precision) -> Result<
     } else {
         1
     };
-    // The format: R8G8B8 becomes X8R8G8B8 outside D3DPOOL_SCRATCH; then the device's check
-    // (0x60d069), which keeps every format this crate makes.
+    // The format (0x61025e): R8G8B8 becomes X8R8G8B8 outside D3DPOOL_SCRATCH; then the one the
+    // device takes (0x60d069), the file's or the nearest.
     let file_format = img.format;
-    let tex_format = if file_format == format::R8G8B8 {
+    let not_provided = |why: String| Err(Error::NotProvided(Untranslated::PixelFormat, why));
+    if !filter::reads(file_format) {
+        return not_provided(format!("DDS pixel format {file_format:#x}"));
+    }
+    let wanted = if file_format == format::R8G8B8 {
         format::X8R8G8B8
     } else {
         file_format
     };
-    if !filter::supported(file_format) || !filter::supported(tex_format) {
-        return Err(Error::NotProvided(
-            Untranslated::PixelFormat,
-            format!("DDS pixel format {file_format:#x}"),
+    let takes = if rtype == RTYPE_CUBE {
+        &caps.cube_formats
+    } else {
+        &caps.texture_formats
+    };
+    let tex_format = crate::device::choose(wanted, |f| takes.contains(&f));
+    if tex_format == 0 {
+        return Err(Error::D3dx(crate::D3DERR_NOTAVAILABLE));
+    }
+    // A texture format this crate does not make (D3DX's pick on a device that takes other formats
+    // than the reference one): left to the caller.
+    if !filter::makes(tex_format) {
+        return not_provided(format!(
+            "texture format {tex_format:#x} (D3DX's pick for DDS pixel format {file_format:#x})"
         ));
     }
     // A level whose size the loader's 32-bit arithmetic wrapped into one the file holds: the

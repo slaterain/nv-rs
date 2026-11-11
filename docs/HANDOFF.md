@@ -7,6 +7,13 @@ machinery runs.
 
 ## Resume here
 
+### Claude, 2026-11-11 (mods' textures on Vulkan, part 1: crates/d3dx-tex)
+
+- **Why:** on Vulkan there is no Direct3D 9 device, so a texture d3dx-tex does not translate fails (`D3DXERR_INVALIDDATA`, a missing texture) where Direct3D 9 still had the player's DLL. The maintainer's mods folder (YUP, SR556: 1,265 textures) needs none of the rest: all already translated. BC5/ATI2 normal maps are refused by the 32-bit DLL itself (its DDS table has no ATI2 row), so they never loaded in the original either.
+- **Translated:** the 16-bit DDS formats R5G6B5, X1R5G5B5, A1R5G5B5 and X4R4G4B4 (codecs, the box filter's integer paths), and the texture format D3DX picks from what the device takes (0x60d069 over its format table 0x406b10). The device's answers are `Caps`' format lists, by default the reference machine's GPU (`d3dx-measure formats`: it does not take X4R4G4B4, A8B8G8R8, X8B8G8R8, A4L4, R3G3B2 among others; D3DX makes X4R4G4B4 files X1R5G5B5 with its dither).
+- **Checked:** 36 synthetic files at both precisions against the 32-bit DLL (`d3dx-tex-verify --capture-formats`, `data/formats_32bit*.tsv`), D3DX's picks for all 57 formats of its table as textures and cubes (`data/device_formats_32bit.tsv`), 21 planted mutants caught.
+- **Next, most likely first:** luminance and alpha (L8, A8L8, A8, A4L4, L16; their encoders compute luminance at the thread's precision), the other 32/64-bit and float formats, palettes, non-power-of-two resampling (the triangle filter), non-DDS images, volume textures. For d3d9-wgpu: A2R10G10B10, X8L8V8U8 and V16U16 are formats the reference device takes that it lacks; they matter once those are translated.
+
 ### Claude, 2026-11-08 (render thread, NV_D3D9 backends, the device state apart from the kernel)
 
 - **The call stream** (`crates/d3d9-stream`, #339): every Direct3D 9 call the platform model forwards is a command (`Cmd`) for a `Backend`, carried out on the calling thread or on a render thread of its own (`Stream::threaded`, at most one frame in flight). `NV_D3D9_RECORD` writes it to a file, `wire::replay` plays it into any backend, `NV_D3D9_STREAM_CHECK` hashes it on both sides. Design and measurements: `build43-scratch/measure/render-thread/DESIGN.md`.

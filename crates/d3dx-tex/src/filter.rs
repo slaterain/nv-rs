@@ -21,9 +21,19 @@ pub struct Level {
     pub bytes: Vec<u8>,
 }
 
-/// Whether this crate reads and writes `f`.
-pub(crate) fn supported(f: u32) -> bool {
-    format::is_dxt(f) && f != format::DXT2 && f != format::DXT4 || pixel::supported(f)
+/// Whether this crate reads files of `f`.
+pub fn reads(f: u32) -> bool {
+    dxt_translated(f) || pixel::decodes(f)
+}
+
+/// Whether this crate makes textures of `f`.
+pub fn makes(f: u32) -> bool {
+    dxt_translated(f) || pixel::encodes(f)
+}
+
+/// DXT1, DXT3 and DXT5 (not the premultiplied DXT2 and DXT4).
+fn dxt_translated(f: u32) -> bool {
+    format::is_dxt(f) && f != format::DXT2 && f != format::DXT4
 }
 
 /// The bytes of one block of the DXT format `f`.
