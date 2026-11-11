@@ -5882,6 +5882,8 @@ fn pass_world(e: &mut Engine, states: &[(u32, u32)], mask: u8, pass_type: u32) -
     let rendering = e.mem.u32(0x011f_91e0);
     set(e, rendering, geometry);
     set(e, 0x011f_91e4, pass_type);
+    // The shader's renderer (+0x18), which its world-view constants go through.
+    set(e, w.shader + 0x18, w.renderer);
     PassW { d, pass }
 }
 
@@ -5920,33 +5922,37 @@ fn restore_state() {
         .assert_same();
 }
 
-/// The pass's render states set (slot 0x100) and put back (slot 0x104): no states, one, several.
-#[test]
-fn set_and_restore_pass_states() {
-    for (_addr, typed) in [
-        (
-            0x00be_0eb0u32,
-            entry!(0x00be_0eb0, passes::set_pass_states(u32, u32)),
-        ),
-        (
-            0x00be_0ee0,
-            entry!(0x00be_0ee0, passes::restore_pass_states(u32, u32)),
-        ),
-    ] {
-        Diff::new(typed)
-            .pass_common()
-            .inputs(&[Input::Of(&[0, 1, 5]), Input::Of(&[0, 1, 2])])
-            .setup(|e, c| {
-                let states = &PASS_STATES[..c.word(0) as usize];
-                let p = pass_world(e, states, 0, 0);
-                for k in 0..8u32 {
-                    e.mem.set_u8(p.d.w.cache + 0x920 + k, (c.word(1) & 1) as u8);
-                }
-                vec![p.d.w.shader, c.word(1)]
-            })
-            .run()
-            .assert_same();
+/// The pass's render states set (slot 0x100) or put back (slot 0x104): no states, one, several; the
+/// cache's locks clear or set.
+const PASS_STATES_INPUTS: &[Input] = &[Input::Of(&[0, 1, 5]), Input::Of(&[0, 1, 2])];
+
+fn pass_states_setup(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let states = &PASS_STATES[..c.word(0) as usize];
+    let p = pass_world(e, states, 0, 0);
+    for k in 0..8u32 {
+        e.mem.set_u8(p.d.w.cache + 0x920 + k, (c.word(1) & 1) as u8);
     }
+    vec![p.d.w.shader, c.word(1)]
+}
+
+#[test]
+fn set_pass_states() {
+    Diff::new(entry!(0x00be_0eb0, passes::set_pass_states(u32, u32)))
+        .pass_common()
+        .inputs(PASS_STATES_INPUTS)
+        .setup(pass_states_setup)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn restore_pass_states() {
+    Diff::new(entry!(0x00be_0ee0, passes::restore_pass_states(u32, u32)))
+        .pass_common()
+        .inputs(PASS_STATES_INPUTS)
+        .setup(pass_states_setup)
+        .run()
+        .assert_same();
 }
 
 /// The alpha function (slot 0x84) and the alpha test with the cull mode (slot 0x88) of a geometry's
@@ -6145,85 +6151,100 @@ fn setup_state(e: &mut Engine, p: &PassW, fourth: u32) -> u32 {
     state
 }
 
-/// The begins of the type groups 0xfc to 0x102 and 0xca to 0xd1: the shader's object +0x30 and the
-/// pass's object +0x44 there or not.
-#[test]
-fn begin_types() {
-    for (_addr, typed) in [
-        (
-            0x00b7_dd50u32,
-            entry!(0x00b7_dd50, setups::begin_types_fc(Ptr<_>)),
-        ),
-        (
-            0x00b7_deb0,
-            entry!(0x00b7_deb0, setups::begin_types_ca(Ptr<_>)),
-        ),
-    ] {
-        Diff::new(typed)
-            .pass_common()
-            .goes_by_address(&[0x00e7_eb00])
-            .inputs(&[Input::Of(TWO_WAYS), Input::Of(TWO_WAYS)])
-            .setup(|e, c| {
-                let p = pass_world(e, &[], 0, 0);
-                setup_state(e, &p, 0);
-                let vt = vtable(e, &[]);
-                for at in [0x011f_ebf0u32, 0x011f_ec38] {
-                    let switch = obj(e, 0x24, vt);
-                    set(e, at, switch);
-                }
-                if c.word(0) == 0 {
-                    set(e, p.d.w.shader + 0x30, 0);
-                }
-                if c.word(1) == 0 {
-                    set(e, p.pass + 0x44, 0);
-                }
-                vec![p.d.w.shader]
-            })
-            .run()
-            .assert_same();
+/// A begin of a type group (0xfc to 0x102, or 0xca to 0xd1): the shader's object +0x30 and the pass's
+/// object +0x44 there or not.
+fn begin_types_setup(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let p = pass_world(e, &[], 0, 0);
+    setup_state(e, &p, 0);
+    let vt = vtable(e, &[]);
+    for at in [0x011f_ebf0u32, 0x011f_ec38] {
+        let switch = obj(e, 0x24, vt);
+        set(e, at, switch);
     }
+    if c.word(0) == 0 {
+        set(e, p.d.w.shader + 0x30, 0);
+    }
+    if c.word(1) == 0 {
+        set(e, p.pass + 0x44, 0);
+    }
+    vec![p.d.w.shader]
 }
 
-/// The per-geometry set-ups of the types 0xca, 0xd1 and 0x102: stage 3's texture answered or not, the
-/// rendered pass's byte +9, the rendered geometry's scale over the special floats.
 #[test]
-fn setup_types() {
-    for (_addr, typed) in [
-        (
-            0x00b7_ded0u32,
-            entry!(0x00b7_ded0, setups::setup_type_ca(Ptr<_>, Ptr<_>)),
-        ),
-        (
-            0x00b7_dfe0,
-            entry!(0x00b7_dfe0, setups::setup_type_d1(Ptr<_>, Ptr<_>)),
-        ),
-        (
-            0x00b7_e150,
-            entry!(0x00b7_e150, setups::setup_type_102(Ptr<_>, Ptr<_>)),
-        ),
-    ] {
-        Diff::new(typed)
-            .pass_common()
-            .goes_by_address(&[0x00e7_eb00, 0x00c4_c2d0])
-            .inputs(&[
-                Input::Of(&[0, 0x7e00_00f4]),
-                Input::Of(&[0, 1, 0xff]),
-                Input::F32,
-            ])
-            .max_cases(160)
-            .setup(|e, c| {
-                let p = pass_world(e, &[], 0, 0);
-                let state = setup_state(e, &p, c.word(0));
-                let rendering = e.mem.u32(0x011f_91e0);
-                e.mem.set_u8(rendering + 9, c.word(1) as u8);
-                let geometry = e.mem.u32(rendering);
-                set(e, geometry + 0x98, bits(c, 2));
-                set(e, 0x011f_951c, 0x7e00_951c);
-                vec![p.d.w.shader, state]
-            })
-            .run()
-            .assert_same();
-    }
+fn begin_types_fc() {
+    Diff::new(entry!(0x00b7_dd50, setups::begin_types_fc(Ptr<_>)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .inputs(&[Input::Of(TWO_WAYS), Input::Of(TWO_WAYS)])
+        .setup(begin_types_setup)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn begin_types_ca() {
+    Diff::new(entry!(0x00b7_deb0, setups::begin_types_ca(Ptr<_>)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .inputs(&[Input::Of(TWO_WAYS), Input::Of(TWO_WAYS)])
+        .setup(begin_types_setup)
+        .run()
+        .assert_same();
+}
+
+/// A per-geometry set-up of the types 0xca, 0xd1 or 0x102: stage 3's texture answered or not, the
+/// rendered pass's byte +9, the rendered geometry's scale over the special floats.
+const SETUP_TYPE_INPUTS: &[Input] = &[
+    Input::Of(&[0, 0x7e00_00f4]),
+    Input::Of(&[0, 1, 0xff]),
+    Input::F32,
+];
+
+fn setup_type_setup(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let p = pass_world(e, &[], 0, 0);
+    let state = setup_state(e, &p, c.word(0));
+    let rendering = e.mem.u32(0x011f_91e0);
+    e.mem.set_u8(rendering + 9, c.word(1) as u8);
+    let geometry = e.mem.u32(rendering);
+    set(e, geometry + 0x98, bits(c, 2));
+    set(e, 0x011f_951c, 0x7e00_951c);
+    vec![p.d.w.shader, state]
+}
+
+#[test]
+fn setup_type_ca() {
+    Diff::new(entry!(0x00b7_ded0, setups::setup_type_ca(Ptr<_>, Ptr<_>)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00, 0x00c4_c2d0])
+        .inputs(SETUP_TYPE_INPUTS)
+        .max_cases(160)
+        .setup(setup_type_setup)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn setup_type_d1() {
+    Diff::new(entry!(0x00b7_dfe0, setups::setup_type_d1(Ptr<_>, Ptr<_>)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00, 0x00c4_c2d0])
+        .inputs(SETUP_TYPE_INPUTS)
+        .max_cases(160)
+        .setup(setup_type_setup)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn setup_type_102() {
+    Diff::new(entry!(0x00b7_e150, setups::setup_type_102(Ptr<_>, Ptr<_>)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00, 0x00c4_c2d0])
+        .inputs(SETUP_TYPE_INPUTS)
+        .max_cases(160)
+        .setup(setup_type_setup)
+        .run()
+        .assert_same();
 }
 
 /// The vertex (`011febd8`) and pixel (`011fec30`) constant entries, 22 each: every third missing (but
