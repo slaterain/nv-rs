@@ -1,7 +1,7 @@
-//! `NiQuaternion`'s functions the rotation keys reach (`niquaternion.cpp`, and the unit at `00a6db50`):
-//! x87 code on four floats, each `FADD`, `FSUB` and `FMUL` through the `x87_*` helpers in the exe's
-//! operand order (destination first); `FLD dword` is `x87_load32`, a `float` memory operand `x87_m32`,
-//! `FSTP dword` `x87_store32`.
+//! `NiQuaternion`'s functions the rotation keys reach (the Xbox PDB's `NiQuaternion` source unit,
+//! and the unit at `00a6db50`): x87 code on four floats, each `FADD`, `FSUB` and `FMUL` through the
+//! `x87_*` helpers in the exe's operand order (destination first); `FLD dword` is `x87_load32`, a
+//! `float` memory operand `x87_m32`, `FSTP dword` `x87_store32`.
 
 use super::{NiQuaternion, FAMILY};
 use engine_core::ptr::{Field, Ptr};

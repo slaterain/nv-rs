@@ -1,5 +1,6 @@
-//! The rotation keys (`nirotkey.cpp`, and the unit at `00a289b0`): `NiRotKey::GenInterp` with the key
-//! search the `GenInterp` functions share, and the preparation of a rotation key array.
+//! The rotation keys (the Xbox PDB's `NiRotKey` source unit, and the unit at `00a289b0`):
+//! `NiRotKey::GenInterp` with the key search the `GenInterp` functions share, and the preparation
+//! of a rotation key array.
 
 use super::quaternion;
 use super::{Keys, NiQuaternion, FAMILY};
