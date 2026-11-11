@@ -10,7 +10,7 @@ use super::getters;
 use super::occlusion;
 use super::FAMILY;
 use super::{GridCellArray, TES};
-use crate::{dispatch, draw, pathing};
+use crate::{culling, dispatch, draw, pathing};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::x87::x87_quiet_bits;
@@ -23,11 +23,11 @@ const WALK_MARKER: u32 = 0x011c_3c0f;
 /// process's word +0x90 that the object test reads as its mode is the position's x.
 const PROCESS_SIZE: u32 = 0x90;
 const FRAME_SIZE: u32 = PROCESS_SIZE + 12;
-/// The culling process's constructor (`thiscall(process, 0)`), camera and frustum set-up, destructor,
-/// and the address of its planes (`005d8a70`; a word pushed before it stays as the next call's last).
+/// The culling process's constructor (`thiscall(process, 0)`), camera set-up and destructor (its
+/// frustum set-up is the culling family's), and the address of its planes (`005d8a70`; a word pushed
+/// before it stays as the next call's last).
 const PROCESS_CONSTRUCT: u32 = 0x00a6_9400;
 const PROCESS_SET_CAMERA: u32 = 0x0041_fd00;
-const PROCESS_SET_FRUSTUM: u32 = 0x00a6_94a0;
 const PROCESS_DESTRUCT: u32 = 0x00a6_93e0;
 const PROCESS_PLANES: u32 = 0x005d_8a70;
 /// `uGridsToLoad`, the loaded grid's side.
@@ -283,7 +283,11 @@ pub fn add(e: &mut Engine, this: Ptr<TES>, camera: u32) {
         e.call(PROCESS_CONSTRUCT, &args![process, 0u32]);
         e.call(PROCESS_SET_CAMERA, &args![process, camera]);
         let frustum = typed_call!(draw::FAMILY, 0x0045_bbe0, draw::packet::camera_port(e, camera));
-        e.call(PROCESS_SET_FRUSTUM, &args![process, frustum]);
+        typed_call!(
+            culling::FAMILY,
+            0x00a6_94a0,
+            culling::process::set_frustum(e, Ptr::new(process), Ptr::new(frustum))
+        );
         let location = typed_call!(
             draw::FAMILY,
             0x0045_bb80,

@@ -122,7 +122,6 @@ fn stand_ins(e: &mut Engine) {
     }
     e.register(0x00a6_9400, logged::<0x01>);
     e.register(0x0041_fd00, logged::<0x02>);
-    e.register(0x00a6_94a0, logged::<0x03>);
     e.register(0x00a6_93e0, logged::<0x04>);
     e.register(0x005d_8a70, |e, a| {
         log(e, 0x05, a[0]);
