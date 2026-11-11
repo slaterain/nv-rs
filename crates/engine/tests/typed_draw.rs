@@ -1712,7 +1712,8 @@ fn build_declaration() {
 /// answering set or not, the renderer's byte +0x5d4, a locked address or the chip kept, remade or
 /// failing, the derived vectors kept for the data's own pack or packed, the flags, the unlock's answer,
 /// the stream (stream 1's usages 13, 14, 1, 0, 16; stream 0's 0, 3, 4, 7, 15: above 14 packed always), the
-/// vertex lock answering null (the buffer's Lock failing).
+/// vertex lock answering null (the buffer's Lock failing). The element pack (`00e7a200`) is the geometry family's,
+/// off here: its `typed_call!` goes by address, and `typed_geometry.rs` runs the typed one.
 #[test]
 fn pack_stream() {
     Diff::new(entry!(
@@ -1720,6 +1721,7 @@ fn pack_stream() {
         packing::pack_stream(Ptr<_>, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32
     ))
     .common()
+    .goes_by_address(&[0x00e7_a200])
     .inputs(&[
         Input::Of(&[0, 1, 2]),
         Input::Of(&[1, 0]),

@@ -1416,6 +1416,13 @@ const SINK: u32 = 0x0310_0000;
 /// save make that stand in, each leaving its mark.
 fn lifecycle_globals(e: &mut Engine) {
     bound_globals(e);
+    // The point length's square root (`004579e0`: a float in, its root in ST0), which the vector normalize
+    // (`004a0c10`) reaches; the C runtime's own would reach the open `GetLastError` import for a negative
+    // or NaN square.
+    e.register(0x0045_79e0, |_, a| Ret {
+        st0: f64::from(f32::from_bits(a[0]).sqrt()),
+        ..Ret::default()
+    });
     e.map(SINK, 0x10000);
     set(e, SINK, SINK + 0x10);
     e.register(0x00aa_3e40, |e, a| {
@@ -1909,6 +1916,7 @@ fn create_tangent_space() {
 
 // Batch 3: the pick of a geometry's triangles.
 
+use engine_core::typed::leaf;
 use engine_typed::geometry::pick;
 
 /// What the pick tests make: the ray, the pick, the geometry.
@@ -2106,7 +2114,8 @@ const PICK_INPUTS: &[Input] = &[
 /// centre for intersect type 0 or a skin, each coordinate type, ray tests hitting some, none or all,
 /// each return, each lock, the arrays kept or not, stopping at the first hit or not, the case's float
 /// in a position. The translation calls the strips' and the shape's picks and the record adder
-/// plainly.
+/// plainly. The leaves family is named too: the point helpers the picks call make points through
+/// its typed constructor (`00416870`).
 #[test]
 fn pick_geometry() {
     Diff::new(entry!(
@@ -2114,6 +2123,7 @@ fn pick_geometry() {
         pick::pick_geometry(Ptr, Ptr, Ptr, Ptr) -> bool
     ))
     .family(&geometry::GEOMETRY)
+    .family(&leaf::LEAVES)
     .translation_calls_plainly(&[0x00e9_93d0, 0x00e9_a280, 0x00e9_9330])
     .max_calls(MAX_CALLS)
     .inputs(PICK_INPUTS)
@@ -2132,6 +2142,7 @@ fn pick_geometry() {
 fn pick_strips() {
     Diff::new(entry!(0x00e9_93d0, pick::pick_strips(Ptr, Ptr, Ptr, Ptr) -> bool))
         .family(&geometry::GEOMETRY)
+        .family(&leaf::LEAVES)
         .translation_calls_plainly(&[0x00e9_9330])
         .max_calls(MAX_CALLS)
         .inputs(PICK_INPUTS)
@@ -2149,6 +2160,7 @@ fn pick_strips() {
 fn pick_shape() {
     Diff::new(entry!(0x00e9_a280, pick::pick_shape(Ptr, Ptr, Ptr, Ptr) -> bool))
         .family(&geometry::GEOMETRY)
+        .family(&leaf::LEAVES)
         .translation_calls_plainly(&[0x00e9_9330])
         .max_calls(MAX_CALLS)
         .inputs(PICK_INPUTS)
