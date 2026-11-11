@@ -203,9 +203,28 @@ impl Host {
         // makes its DirectSound device on; `NV_SOUND_RECORD=FILE.wav` also records what goes
         // to the device, with a log of what started when (`FILE.log`). Off by default.
         // `NV_SOUND=device` keeps the device's pace instead of the game's clock.
-        if let Ok(mode @ ("out" | "device")) = std::env::var("NV_SOUND").as_deref() {
-            let record = std::env::var_os("NV_SOUND_RECORD").map(std::path::PathBuf::from);
-            engine_platform::dsound::want_output(&mut engine, record, mode == "device");
+        // A window that is never shown (`NV_D3D9_HIDDEN=1`) is always a test run's: its sound
+        // never reaches the speakers ([`sound_choice`]).
+        let record = std::env::var_os("NV_SOUND_RECORD").map(std::path::PathBuf::from);
+        match sound_choice(
+            std::env::var("NV_SOUND").ok().as_deref(),
+            record.is_some(),
+            std::env::var("NV_D3D9_HIDDEN").ok().as_deref() == Some("1"),
+        ) {
+            SoundChoice::None => {}
+            SoundChoice::Off => eprintln!("sound off: the window is hidden"),
+            SoundChoice::Out {
+                device_paced,
+                muted,
+            } => {
+                if muted {
+                    eprintln!(
+                        "sound off: the window is hidden (NV_SOUND_RECORD records the mix; the speakers get silence)"
+                    );
+                    engine_platform::sound_out::mute_device();
+                }
+                engine_platform::dsound::want_output(&mut engine, record, device_paced);
+            }
         }
         let mut movement = player_move::PlayerMovement::default();
         // Diagnostics: with `NV_MOVE_PROBE` set, start-up's `__mtinit` and `NiInit` are probe
@@ -610,8 +629,55 @@ pub fn start_allocator(e: &mut Engine) {
     e.call(0x00aa_58d0, &[]);
 }
 
+/// What a run's sound does ([`sound_choice`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SoundChoice {
+    /// No output asked for (`NV_SOUND` unset or another value): silent.
+    None,
+    /// Output asked for under a hidden window, nothing recorded: silent, said once.
+    Off,
+    /// Output: on the device's own pace or the game's clock; muted, the device is fed silence
+    /// (a hidden window's recording).
+    Out { device_paced: bool, muted: bool },
+}
+
+/// The sound of a run with `NV_SOUND` = `sound`, `record` (`NV_SOUND_RECORD` set) and `hidden`
+/// (`NV_D3D9_HIDDEN=1`): `out` or `device` is output, but never on the speakers under a hidden
+/// window, which is always a test's (the maintainer heard a hidden test's menu music, 2026-11-11):
+/// there it is off, or with a recording muted (the mix still made and written to the file).
+fn sound_choice(sound: Option<&str>, record: bool, hidden: bool) -> SoundChoice {
+    let device_paced = match sound {
+        Some("out") => false,
+        Some("device") => true,
+        _ => return SoundChoice::None,
+    };
+    if hidden && !record {
+        return SoundChoice::Off;
+    }
+    SoundChoice::Out {
+        device_paced,
+        muted: hidden,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_hidden_window_never_plays_on_the_speakers() {
+        use super::{sound_choice, SoundChoice};
+        let out = |device_paced, muted| SoundChoice::Out {
+            device_paced,
+            muted,
+        };
+        assert_eq!(sound_choice(None, false, false), SoundChoice::None);
+        assert_eq!(sound_choice(Some("other"), true, true), SoundChoice::None);
+        assert_eq!(sound_choice(Some("out"), false, false), out(false, false));
+        assert_eq!(sound_choice(Some("device"), true, false), out(true, false));
+        assert_eq!(sound_choice(Some("out"), false, true), SoundChoice::Off);
+        assert_eq!(sound_choice(Some("device"), false, true), SoundChoice::Off);
+        assert_eq!(sound_choice(Some("out"), true, true), out(false, true));
+    }
+
     use super::*;
 
     /// `NiInit` runs when translated, through the miss recorder: a stop is

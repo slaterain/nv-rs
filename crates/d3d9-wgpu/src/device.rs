@@ -4969,6 +4969,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         let mut frame_texture = None;
         let mut window_shot = None;
+        // In the window's DPI awareness from the frame's size to its present ([`crate::window`]).
+        let _dpi = self.surface.as_ref().map(crate::window::Window::dpi_scope);
         // The window's frame at its size now ([`crate::window`]); none while it is minimised,
         // gives none in time or is lost (the frame is skipped, as Direct3D 9's Present then shows
         // nothing, and the game goes on).
@@ -5977,7 +5979,9 @@ fn show_on(
         return;
     };
     // As a `Present` does ([`crate::window`]): the window's frame at its size now, none while it
-    // is minimised, gives none in time or is lost (not drawn then).
+    // is minimised, gives none in time or is lost (not drawn then), in the window's DPI awareness
+    // to its present.
+    let _dpi = window.dpi_scope();
     let Some(frame) = window.frame(device) else {
         return;
     };

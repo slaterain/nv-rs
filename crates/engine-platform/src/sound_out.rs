@@ -136,6 +136,15 @@ pub fn not_provided(l: Layout) -> String {
     )
 }
 
+/// Whether the device is fed silence instead of the mix ([`mute_device`]).
+static MUTED: AtomicBool = AtomicBool::new(false);
+
+/// From now on the device is fed silence while the mix is still made (and recorded, with
+/// `NV_SOUND_RECORD`): a test run whose window is never shown never plays on the speakers.
+pub fn mute_device() {
+    MUTED.store(true, Ordering::Relaxed);
+}
+
 /// Starts playing `source` on the default output device, in its mix format as it is (`want`
 /// `None`, or the mix format's own layout) or in the layout `want` at the mix rate, 32-bit float
 /// (when the endpoint takes it).
@@ -546,7 +555,11 @@ mod wasapi {
             if let Ok(mut s) = source.lock() {
                 s.render(d.rate, channels, out);
             }
-            std::ptr::copy_nonoverlapping(out.as_ptr(), data, n);
+            if MUTED.load(Ordering::Relaxed) {
+                std::ptr::write_bytes(data, 0, n);
+            } else {
+                std::ptr::copy_nonoverlapping(out.as_ptr(), data, n);
+            }
             slot::<Fn2>(d.render, 4 * w)(d.render, free, 0);
             given = true;
         }

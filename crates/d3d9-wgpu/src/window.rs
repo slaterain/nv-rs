@@ -18,10 +18,13 @@
 //! size; a lost surface (the display or its driver gone) is made anew on the same window. Each
 //! stretch of frames not shown is one log line when it starts and one when frames come again.
 //!
-//! The thread that shows the frames takes the window's DPI awareness: the borderless window is
-//! per-monitor aware (`engine-platform`'s window thread) and the game's threads are not, and a
-//! thread that is not reads a scaled size (2048x1152 for a 2560x1440 window at 125% scaling),
-//! the graphics driver's reads for the swap chain on that thread included.
+//! The thread that shows a frame is in the window's DPI awareness while it does ([`DpiScope`]):
+//! the borderless window is per-monitor aware (`engine-platform`'s window thread) and the game's
+//! threads are not, and a thread that is not reads a scaled size (2048x1152 for a 2560x1440 window
+//! at 125% scaling), the graphics driver's reads for the swap chain on that thread included. The
+//! thread is in it from the frame's size to its present and back in its own after: the render
+//! thread, or with it off (`NV_RENDER_THREAD=0`) the game's thread that presents, whose own
+//! awareness the game's other calls keep.
 
 use std::time::{Duration, Instant};
 
@@ -93,6 +96,18 @@ impl Backoff {
     }
 }
 
+/// How many times the game's window was activated, its display changed or the machine woke
+/// ([`window_changed`]): a window resting after it gave no frame is asked at once after one.
+static CHANGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The game's window was activated (Alt+Tab back, a click, the screen unlocked), its display
+/// changed, or the machine woke from sleep (the window layer calls it from its window
+/// procedure): a window resting after it gave no frame is asked for one at once, not at the end
+/// of its rest (up to [`RETRY_MOST`] away, and then wgpu's wait for a frame).
+pub fn window_changed() {
+    CHANGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// The game's window and its swap chain.
 pub(crate) struct Window {
     /// The window (an `HWND`).
@@ -118,6 +133,13 @@ pub(crate) struct Window {
     /// for, on every frame.
     suboptimal_at: Option<(u32, u32)>,
     rest: Backoff,
+    /// The [`CHANGED`] count last seen.
+    seen_changes: u64,
+    /// While frames are not shown, the time between them is at least `refresh` (the display's
+    /// refresh interval) and `paced` the last one: a minimised window does not run the game as
+    /// fast as the machine can, for nothing on screen.
+    refresh: Duration,
+    paced: Option<Instant>,
     /// Frames asked for; those not shown since the last one shown, and why the last was not.
     asked: u64,
     skipped: u64,
@@ -179,7 +201,7 @@ impl Window {
         interval: u32,
         copies: bool,
     ) -> Result<Window, String> {
-        take_dpi_awareness(hwnd);
+        let _dpi = DpiScope::of(hwnd);
         let area = client_size(hwnd).filter(|&(w, h)| w > 0 && h > 0);
         let (width, height) = area.unwrap_or(fallback);
         let mut w = Window {
@@ -204,6 +226,9 @@ impl Window {
             stale: true,
             suboptimal_at: None,
             rest: Backoff::new(),
+            seen_changes: CHANGED.load(std::sync::atomic::Ordering::Relaxed),
+            refresh: refresh_interval(),
+            paced: None,
             asked: 0,
             skipped: 0,
             last_why: None,
@@ -305,6 +330,12 @@ impl Window {
         self.stale = true;
     }
 
+    /// The calling thread in the window's DPI awareness until the scope is dropped: held from
+    /// before [`Window::frame`] to after the frame's present.
+    pub(crate) fn dpi_scope(&self) -> DpiScope {
+        DpiScope::of(self.hwnd)
+    }
+
     /// The window's next frame, at its size now; `None` when it gives none now (the start and the
     /// end of a stretch of frames not shown are each one log line).
     pub(crate) fn frame(&mut self, device: &wgpu::Device) -> Option<wgpu::SurfaceTexture> {
@@ -312,6 +343,7 @@ impl Window {
         match self.take(device) {
             Ok(t) => {
                 self.rest.shown();
+                self.paced = None;
                 if self.skipped > 0 {
                     eprintln!(
                         "NV_D3D9 wgpu: frames shown again in the window ({} not shown; the last because {})",
@@ -332,12 +364,32 @@ impl Window {
                 }
                 self.skipped += 1;
                 self.last_why = Some(why);
+                self.pace();
                 None
             }
         }
     }
 
+    /// A frame not shown: the game is held until a display refresh has passed since the last one,
+    /// as a shown frame waits for the display.
+    fn pace(&mut self) {
+        let now = Instant::now();
+        if let Some(last) = self.paced {
+            let since = now.saturating_duration_since(last);
+            if since < self.refresh {
+                std::thread::sleep(self.refresh - since);
+            }
+        }
+        self.paced = Some(Instant::now());
+    }
+
     fn take(&mut self, device: &wgpu::Device) -> Result<wgpu::SurfaceTexture, NoFrame> {
+        // Activated, the display changed or the machine woke: asked at once, rest or not.
+        let changes = CHANGED.load(std::sync::atomic::Ordering::Relaxed);
+        if changes != self.seen_changes {
+            self.seen_changes = changes;
+            self.rest.shown();
+        }
         if self.rest.resting(Instant::now()) {
             return Err(NoFrame::Resting);
         }
@@ -466,6 +518,28 @@ pub(crate) fn client_size(_hwnd: isize) -> Option<(u32, u32)> {
     None
 }
 
+/// The primary display's refresh interval (the borderless window covers it), 60 a second where
+/// the display does not say.
+#[cfg(windows)]
+fn refresh_interval() -> Duration {
+    // A DEVMODEW (220 bytes) as 16-bit words: dmSize at byte 68, dmDisplayFrequency at 184.
+    let mut mode = [0u16; 110];
+    mode[34] = 220;
+    // SAFETY: `mode` is a DEVMODEW-sized buffer with its dmSize set, as the call requires.
+    let read =
+        unsafe { EnumDisplaySettingsW(std::ptr::null(), ENUM_CURRENT_SETTINGS, mode.as_mut_ptr()) }
+            != 0;
+    let hz = u32::from(mode[92]) | u32::from(mode[93]) << 16;
+    // 0 and 1 mean the display's default rate, which it does not name.
+    let hz = if read && hz > 1 { hz } else { 60 };
+    Duration::from_secs_f64(1.0 / f64::from(hz))
+}
+
+#[cfg(not(windows))]
+fn refresh_interval() -> Duration {
+    Duration::from_secs_f64(1.0 / 60.0)
+}
+
 /// Whether the window, or the top-level window it is in, is minimised.
 #[cfg(windows)]
 fn minimised(hwnd: isize) -> bool {
@@ -481,24 +555,55 @@ fn minimised(_hwnd: isize) -> bool {
     false
 }
 
-/// The calling thread takes `hwnd`'s DPI awareness.
+/// The calling thread in a window's DPI awareness until this is dropped, then back in its own
+/// (nothing done when it already is in it).
+pub(crate) struct DpiScope {
+    /// The thread's own awareness to go back to; 0: nothing was changed.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    before: isize,
+}
+
+impl DpiScope {
+    /// The calling thread in `hwnd`'s DPI awareness.
+    #[cfg(windows)]
+    pub(crate) fn of(hwnd: isize) -> DpiScope {
+        // SAFETY: the calling thread's own setting, from a window handle's.
+        unsafe {
+            let window = GetWindowDpiAwarenessContext(hwnd);
+            if window == 0
+                || AreDpiAwarenessContextsEqual(window, GetThreadDpiAwarenessContext()) != 0
+            {
+                return DpiScope { before: 0 };
+            }
+            DpiScope {
+                before: SetThreadDpiAwarenessContext(window),
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub(crate) fn of(_hwnd: isize) -> DpiScope {
+        DpiScope { before: 0 }
+    }
+}
+
 #[cfg(windows)]
-fn take_dpi_awareness(hwnd: isize) {
-    // SAFETY: the calling thread's own setting, from a window handle's.
-    unsafe {
-        let context = GetWindowDpiAwarenessContext(hwnd);
-        if context != 0 {
-            SetThreadDpiAwarenessContext(context);
+impl Drop for DpiScope {
+    fn drop(&mut self) {
+        if self.before != 0 {
+            // SAFETY: the calling thread's own setting, put back.
+            unsafe {
+                SetThreadDpiAwarenessContext(self.before);
+            }
         }
     }
 }
 
-#[cfg(not(windows))]
-fn take_dpi_awareness(_hwnd: isize) {}
-
-/// `GA_ROOT`.
+/// `GA_ROOT`, `ENUM_CURRENT_SETTINGS`.
 #[cfg(windows)]
 const GA_ROOT: u32 = 2;
+#[cfg(windows)]
+const ENUM_CURRENT_SETTINGS: u32 = 0xFFFF_FFFF;
 
 #[cfg(windows)]
 #[link(name = "user32")]
@@ -507,7 +612,10 @@ extern "system" {
     fn GetAncestor(hwnd: isize, flags: u32) -> isize;
     fn IsIconic(hwnd: isize) -> i32;
     fn GetWindowDpiAwarenessContext(hwnd: isize) -> isize;
+    fn GetThreadDpiAwarenessContext() -> isize;
     fn SetThreadDpiAwarenessContext(context: isize) -> isize;
+    fn AreDpiAwarenessContextsEqual(a: isize, b: isize) -> i32;
+    fn EnumDisplaySettingsW(device: *const u16, mode: u32, devmode: *mut u16) -> i32;
 }
 
 #[cfg(test)]

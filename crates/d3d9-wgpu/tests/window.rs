@@ -68,11 +68,13 @@ fn state(hwnd: isize) -> (bool, (i32, i32)) {
 /// The captures' folder, `NV_SHOT` for this process (set once, before any device reads it), every
 /// present the tests make captured (`NV_SHOT_LIST`, 1 to 100), however soon after the last it
 /// comes: by `NV_SHOT`'s interval alone (1 ms at least) a present within 1 ms of the one before
-/// was not (CI's run of #461: the frame after the one with no area).
+/// was not (CI's run of #461: the frame after the one with no area). In cargo's folder for tests'
+/// own files (under the target folder; one folder, emptied by each test), not the user's
+/// temporary folder, where every run of these tests had left one behind.
 fn shots_dir() -> &'static Path {
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
-        let dir = std::env::temp_dir().join(format!("nv-rs-wgpu-window-{}", std::process::id()));
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("wgpu-window-captures");
         std::env::set_var("NV_SHOT", format!("{},1", dir.display()));
         let every: Vec<String> = (1..=100).map(|n: u32| n.to_string()).collect();
         std::env::set_var("NV_SHOT_LIST", every.join(","));
@@ -299,6 +301,17 @@ fn the_swap_chain_follows_the_window_and_a_minimised_window_takes_no_frame() {
     assert!(state(g.hwnd).0, "the test window reads as minimised");
     g.show(6, 0xFF11_2233);
     assert_eq!(g.window_frame(6), None, "a minimised window takes no frame");
+    // Frames not shown are paced to the display's refresh (no faster than 240 a second on any
+    // display): the game does not run as fast as the machine can for nothing on screen.
+    let start = std::time::Instant::now();
+    for frame in 7..12 {
+        g.show(frame, 0xFF11_2233);
+    }
+    assert!(
+        start.elapsed() >= std::time::Duration::from_secs_f64(4.0 / 240.0),
+        "five frames not shown in {:?}",
+        start.elapsed()
+    );
     let d = g.b.device().expect("the device");
     assert_eq!(d.wgpu_errors(), 0, "wgpu reported no error");
 }
@@ -366,7 +379,8 @@ fn the_same_size_copies_exactly_and_a_stretch_blends_only_at_the_seam() {
 /// A configuration wgpu refuses (a format the surface does not offer), also on a surface made
 /// anew and never configured (as after a lost one): no frame is asked of it (wgpu gives such a
 /// surface no error handler, and asking it stops the process), the game's `Present` goes on, and
-/// once a configuration is taken again (after the rest) the frames come back.
+/// nothing is asked during the rest that follows; the window activated (`window_changed`: also a
+/// display change or a wake from sleep), it is asked at once and the frames come back.
 #[test]
 fn a_refused_configuration_never_has_a_frame_asked_of_it() {
     let Some(mut g) = Rig::new((40, 30), (40, 30)) else {
@@ -374,7 +388,7 @@ fn a_refused_configuration_never_has_a_frame_asked_of_it() {
     };
     g.show(1, 0xFF30_3030);
     assert!(g.window_frame(1).is_some());
-    for (frame, new_surface) in [(2, false), (4, true)] {
+    for (frame, new_surface) in [(2, false), (5, true)] {
         let d = g.b.device().expect("the device");
         d.reconfigure_window_for_tests(wgpu::TextureFormat::R8Unorm, new_surface);
         g.show(frame, 0xFF40_4040);
@@ -385,11 +399,14 @@ fn a_refused_configuration_never_has_a_frame_asked_of_it() {
         );
         let d = g.b.device().expect("the device");
         d.reconfigure_window_for_tests(wgpu::TextureFormat::Bgra8Unorm, false);
-        // The rest after the refusal (100 ms the first time, 200 the second), then a frame.
-        std::thread::sleep(std::time::Duration::from_millis(250));
-        g.show(frame + 1, 0xFF50_5050);
+        // Still resting after the refusal: no frame is asked.
+        g.show(frame + 1, 0xFF60_6060);
+        assert_eq!(g.window_frame(frame + 1), None, "resting ({new_surface})");
+        // The window activated (or its display changed, or the machine woke): asked at once.
+        d3d9_wgpu::window_changed();
+        g.show(frame + 2, 0xFF50_5050);
         assert_eq!(
-            g.window_frame(frame + 1),
+            g.window_frame(frame + 2),
             Some((40, 30, vec![bgra(0xFF50_5050)])),
             "taken again, frames again ({new_surface})"
         );
