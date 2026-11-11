@@ -570,3 +570,56 @@ fn a_window_minimised_at_create_device_still_gets_the_device() {
     let d = g.b.device().expect("the device");
     assert_eq!(d.wgpu_errors(), 0, "wgpu reported no error");
 }
+
+/// The backend's loading screen (`show_progress`: the first start's "Preparing shaders") as the
+/// window shows it, from its captures (`wgpu-loading-N.bmp`): at the window's size, not black
+/// (the logo, the text and the bar over black), the bar at its share done; and so again after
+/// the window was sized anew (the swap chain follows the window).
+#[test]
+fn the_loading_screen_is_shown_in_the_window_not_black() {
+    let Some(mut g) = Rig::new((320, 240), (32, 24)) else {
+        return;
+    };
+    let progress = |done: f32| d3d9_wgpu::loading::Progress {
+        title: "Loading".into(),
+        status: "Preparing shaders 1 of 2".into(),
+        done,
+    };
+    // The bar's colour where it is done (0.9, 0.75, 0.35), B, G, R.
+    let bar =
+        |p: &[u8]| p[0].abs_diff(89) <= 2 && p[1].abs_diff(191) <= 2 && p[2].abs_diff(230) <= 2;
+    for (n, (w, h), done) in [(1u32, (320u32, 240u32), 0.5f32), (2, (640, 360), 1.0)] {
+        if n == 2 {
+            g.size(w as i32, h as i32);
+        }
+        g.b.device()
+            .expect("the device")
+            .show_progress(&progress(done));
+        let (cw, ch, px) = g
+            .capture("wgpu-loading", n)
+            .expect("the loading screen's frame");
+        assert_eq!((cw, ch), (w, h), "frame {n}: the window's size");
+        let lit = px
+            .chunks_exact(4)
+            .filter(|p| p[0] > 24 || p[1] > 24 || p[2] > 24)
+            .count();
+        assert!(
+            lit as u32 > w * h / 50,
+            "frame {n}: not black ({lit} of {} pixels lit)",
+            w * h
+        );
+        let done_px = px.chunks_exact(4).filter(|p| bar(p)).count();
+        let want = ((w / 3).max(64) as f32 * done) as usize;
+        assert!(
+            done_px >= want.saturating_sub(2) * (h / 200).max(3) as usize,
+            "frame {n}: the bar done {done} ({done_px} pixels)"
+        );
+    }
+    // The game's next Present shows the game again.
+    g.show(1, 0xFF20_4060);
+    assert_eq!(
+        g.window_frame(1),
+        Some((640, 360, vec![bgra(0xFF20_4060)])),
+        "the game's frame after the loading screen"
+    );
+}

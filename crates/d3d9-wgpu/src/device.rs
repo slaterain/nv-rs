@@ -3624,6 +3624,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let mut surface = self.surface.take();
         let mut screen = self.loading.take();
         let (device, queue) = (self.device.clone(), self.queue.clone());
+        let shots = self.shots.as_ref().map(|s| s.dir.clone());
         let mut step = |done: usize| {
             if shown {
                 let p = loading::Progress {
@@ -3631,7 +3632,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     status: format!("Preparing shaders {} of {}", done.min(total), total),
                     done: done as f32 / total.max(1) as f32,
                 };
-                show_on(&mut surface, &mut screen, &device, &queue, &p);
+                show_on(
+                    &mut surface,
+                    &mut screen,
+                    &device,
+                    &queue,
+                    shots.as_deref(),
+                    &p,
+                );
             }
         };
         let t = std::time::Instant::now();
@@ -4810,6 +4818,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             &mut self.loading,
             &self.device,
             &self.queue,
+            self.shots.as_ref().map(|s| s.dir.as_path()),
             p,
         );
     }
@@ -5619,12 +5628,15 @@ struct PipelineJob {
     targets: Vec<Option<wgpu::ColorTargetState>>,
 }
 
-/// [`Device::show_progress`] on the device's parts (so it can run while other parts are lent out).
+/// [`Device::show_progress`] on the device's parts (so it can run while other parts are lent out);
+/// with `shots` (`NV_SHOT`'s folder) each frame it shows is also captured there
+/// (`wgpu-loading-N.bmp`, N counting the screen's frames from 1).
 fn show_on(
     surface: &mut Option<crate::window::Window>,
     screen: &mut Option<loading::Screen>,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    shots: Option<&std::path::Path>,
     p: &loading::Progress,
 ) {
     eprintln!(
@@ -5649,7 +5661,65 @@ fn show_on(
     }
     let screen = screen.get_or_insert_with(|| loading::Screen::new(device, queue, config.format));
     screen.draw(device, queue, &view, (config.width, config.height), p);
+    if let Some(dir) = shots {
+        if config.usage.contains(wgpu::TextureUsages::COPY_SRC)
+            && config.format == wgpu::TextureFormat::Bgra8Unorm
+        {
+            let path = dir.join(format!("wgpu-loading-{:06}.bmp", screen.shown));
+            capture(device, queue, &frame.texture, &path);
+        }
+    }
     queue.present(frame);
+}
+
+/// `texture` (B8G8R8A8, a window's frame before it is presented) read back and written to `path`
+/// as an `NV_SHOT` capture.
+fn capture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    path: &std::path::Path,
+) {
+    let (width, height) = (texture.width(), texture.height());
+    let row = (width * 4).div_ceil(256) * 256;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("loading screen shot"),
+        size: u64::from(row * height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit([encoder.finish()]);
+    buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    if let Ok(data) = buffer.slice(..).get_mapped_range() {
+        for y in 0..height {
+            pixels.extend_from_slice(&data[(y * row) as usize..(y * row + width * 4) as usize]);
+        }
+    }
+    buffer.unmap();
+    if pixels.len() == (width * height * 4) as usize {
+        if let Err(e) = std::fs::write(path, shot::bmp(width, height, &pixels)) {
+            eprintln!("NV_SHOT wgpu: {} not written: {e}", path.display());
+        }
+    }
 }
 
 /// Makes a module from WGSL: read and checked once, by wgpu (naga's reader and validator, with

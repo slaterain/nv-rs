@@ -210,6 +210,8 @@ pub(crate) struct Screen {
     white: wgpu::TextureView,
     /// The last text drawn and its texture, by line.
     text: Vec<(String, u32, (u32, u32, wgpu::TextureView))>,
+    /// The frames drawn so far.
+    pub(crate) shown: u64,
 }
 
 fn texture(
@@ -331,6 +333,7 @@ impl Screen {
             logo,
             white,
             text: Vec::new(),
+            shown: 0,
         }
     }
 
@@ -368,6 +371,7 @@ impl Screen {
         (width, height): (u32, u32),
         p: &Progress,
     ) {
+        self.shown += 1;
         let (fw, fh) = (width.max(1) as f32, height.max(1) as f32);
         // The logo at the largest whole multiple of its size that fits a third of the height.
         let scale = ((height / 3) / 128).max(1);
