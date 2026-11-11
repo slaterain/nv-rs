@@ -634,6 +634,88 @@ fn get_render_target_data_of_a_multisampled_target_leaves_the_destination() {
         Reply::Bytes(Some(b)) => assert_eq!(b, before),
         other => panic!("{other:?}"),
     }
+    // A destination never written holds zeros, and is read back as such: an answer, so the
+    // model goes on (it stops the run on none).
+    const FRESH: u32 = 0x3010;
+    g.run(Cmd::CreateOffscreenSurface {
+        device: DEVICE,
+        surface: FRESH,
+        width: 2,
+        height: 2,
+        format: A8R8G8B8,
+        pool: 2,
+    });
+    match g.run(Cmd::GetRenderTargetData {
+        device: DEVICE,
+        source: RT,
+        destination: FRESH,
+        pitch: 8,
+    }) {
+        Reply::Rows(Some(r)) => assert_eq!((r.row, r.bytes), (8, vec![0; 16])),
+        other => panic!("{other:?}"),
+    }
+    match g.run(Cmd::ReadSurface {
+        surface: FRESH,
+        size: 16,
+    }) {
+        Reply::Bytes(Some(b)) => assert_eq!(b, vec![0; 16]),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A lost device (a driver reset, the graphics card gone) reads nothing back: `GetRenderTargetData`
+/// still answers, with what the destination holds (as the real Direct3D 9 backend reads its
+/// destination after a failed copy), so a save's thumbnail made then does not stop the game
+/// (the model stops the run on no answer). Drawing and presenting go on without a stop too.
+#[test]
+fn a_read_back_after_the_device_is_lost_answers_what_the_destination_holds() {
+    let Some(mut g) = Gpu::new(2, 1) else { return };
+    const SYS: u32 = 0x3000;
+    g.run(Cmd::CreateOffscreenSurface {
+        device: DEVICE,
+        surface: SYS,
+        width: 2,
+        height: 2,
+        format: A8R8G8B8,
+        pool: 2,
+    });
+    let before: Vec<u8> = (0..16).collect();
+    g.run(Cmd::UploadSurface {
+        surface: SYS,
+        row: 8,
+        rows: 2,
+        data: Data::Bytes(&before),
+    });
+    g.clear(1, 0x1122_3344, 1.0);
+    g.b.device().expect("the device").lose();
+    g.clear(1, 0x5566_7788, 1.0);
+    g.colour([1.0, 0.0, 0.0, 1.0]);
+    g.cover(0.5);
+    g.run(Cmd::Present {
+        device: DEVICE,
+        source: None,
+        dest: None,
+        window: 0,
+        dirty: false,
+        model: 0,
+        frame: 1,
+    });
+    match g.run(Cmd::GetRenderTargetData {
+        device: DEVICE,
+        source: RT,
+        destination: SYS,
+        pitch: 8,
+    }) {
+        Reply::Rows(Some(r)) => assert_eq!((r.row, r.bytes.clone()), (8, before.clone())),
+        other => panic!("{other:?}"),
+    }
+    match g.run(Cmd::ReadSurface {
+        surface: SYS,
+        size: 16,
+    }) {
+        Reply::Bytes(Some(b)) => assert_eq!(b, before),
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]
