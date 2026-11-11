@@ -91,8 +91,8 @@
 //!   addresses (`.rdata` 0x00FDF000, `.data` 0x01183000, ...), mapped from the player's
 //!   installed FalloutNV.exe by [`crate::exe`] or set up by a test;
 //! - `0x01409000..0x10000000`: `VirtualAlloc` reservations: those the system places (address
-//!   0: the scrap heaps' 8 MiB buffers) first fit from 0x01410000 (`units/platform.rs`,
-//!   `RESERVE_GAP`; a heap block when it is full), and those at an address the caller chooses
+//!   0: the scrap heaps' 8 MiB buffers) with `NV_RESERVE_GAP=on` first fit from 0x01410000
+//!   (`units/platform.rs`, `RESERVE_GAP`; a heap block when it is full, or when off), and those at an address the caller chooses
 //!   (the game's `MemoryPool`s would search 16 MB boundaries here, but the port's memory
 //!   manager does not make them). Nothing else of the port is placed here (the census counts
 //!   any page mapped outside a reservation);

@@ -1386,7 +1386,8 @@ fn page_up(v: u64) -> u64 {
 /// of the heap's address space on the route, in the gap they take none. A reservation keeps the range
 /// it was given for its life (commits and decommits happen in place), as on Windows, which placed
 /// them wherever it chose: no guest code can depend on where. When the gap has no room (about 29
-/// such buffers at once) a reservation is a heap block, as before.
+/// such buffers at once) a reservation is a heap block, as before. Off by default (`NV_RESERVE_GAP=on`
+/// turns it on: [`reserve_gap_on`]).
 pub const RESERVE_GAP: std::ops::Range<u32> = 0x0141_0000..0x1000_0000;
 const _: () = assert!(
     RESERVE_GAP.start >= IMAGE_END
@@ -1394,17 +1395,18 @@ const _: () = assert!(
         && RESERVE_GAP.end == crate::typed::moved::MOVED_AREA.start
 );
 
-/// Whether address-0 reservations go in [`RESERVE_GAP`] first: on unless `NV_RESERVE_GAP=off`
-/// (heap blocks, as before: for a comparison run), read once; a test sets the kernel's own flag.
+/// Whether address-0 reservations go in [`RESERVE_GAP`] first: only with `NV_RESERVE_GAP=on`
+/// (off by default until its in-game evidence is in: the rule for changes merged off), read once;
+/// a test sets the kernel's own flag. Off, every one is a heap block, as before.
 fn reserve_gap_on(kernel: &Kernel) -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     kernel.reserve_gap.unwrap_or_else(|| {
         *ON.get_or_init(|| {
-            let off = std::env::var("NV_RESERVE_GAP").is_ok_and(|v| v.trim() == "off");
-            if off {
-                println!("NV_RESERVE_GAP=off: address-0 reservations are heap blocks");
+            let on = std::env::var("NV_RESERVE_GAP").is_ok_and(|v| v.trim() == "on");
+            if on {
+                println!("NV_RESERVE_GAP=on: address-0 reservations go in the gap below the heap");
             }
-            !off
+            on
         })
     })
 }
@@ -1561,8 +1563,8 @@ fn set_committed(
 /// `VirtualAlloc(address, size, type, protect)` with the types the game
 /// passes (`ScrapHeapManager`, `MemoryPool`, the CRT small-block heap):
 /// `MEM_RESERVE` at address 0 takes a 64 KiB-aligned range in the gap
-/// below the heap first ([`RESERVE_GAP`]), else from the [`crate::Mem`]
-/// heap (as [`memory_manager_allocate`] does); at a chosen
+/// below the heap first with `NV_RESERVE_GAP=on` ([`RESERVE_GAP`]), else
+/// from the [`crate::Mem`] heap (as [`memory_manager_allocate`] does); at a chosen
 /// address it succeeds only where nothing is (not the image, the moved
 /// families' area 0x10000000..0x20000000 (`typed::moved::MOVED_AREA`), the
 /// heap's ranges and the platform's addresses between them,
