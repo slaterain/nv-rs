@@ -813,9 +813,13 @@ impl Device {
             let surface = match output {
                 Output::Window if window != 0 => match surface_for(&instance, window) {
                     Ok(s) => Some(s),
-                    // The window on this API failed: the next API is tried.
+                    // The window on this API failed: the next API is tried. A card on this API
+                    // that cannot take the window counts as failed (no software adapter then).
                     Err(e) => {
                         eprintln!("NV_D3D9 wgpu: {backends:?}: {e}");
+                        if has_card(&instance, backends) {
+                            failed.push(format!("{backends:?}"));
+                        }
                         continue;
                     }
                 },
@@ -827,6 +831,10 @@ impl Device {
                 compatible_surface: surface.as_ref(),
                 apply_limit_buckets: false,
             })) else {
+                if surface.is_some() && has_card(&instance, backends) {
+                    eprintln!("NV_D3D9 wgpu: {backends:?}: no adapter can show the game's window");
+                    failed.push(format!("{backends:?}"));
+                }
                 continue;
             };
             // A graphics card's device and swap chain end the search; when either fails, the next
@@ -870,6 +878,7 @@ impl Device {
             queue,
             features,
             window: shown_in,
+            lost,
         }) = opened
         else {
             return Err(if failed.is_empty() {
@@ -1060,6 +1069,10 @@ impl Device {
             "a device made to panic (tests)"
         );
         d.make_back_buffers(pp, back_buffers, depth);
+        // Lost while the rest was made: refused as well (the platform's Direct3D 9 draws).
+        if lost.load(Ordering::Acquire) {
+            return Err("the device was lost while it was made".into());
+        }
         let shown = match (&d.surface, output) {
             (Some(w), _) => format!(
                 "on the game's window: {}x{}, {:?}",
@@ -5375,6 +5388,8 @@ struct Opened {
     features: wgpu::Features,
     /// The game's window and its swap chain ([`crate::window`]); none offscreen.
     window: Option<crate::window::Window>,
+    /// Set by the device's lost callback: checked again once the whole device is made.
+    lost: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// The device on `adapter` with the features the backend uses where it has them, and on
@@ -5434,7 +5449,12 @@ fn open(
         )?),
         None => None,
     };
-    let _ = device.poll(wgpu::PollType::Poll);
+    // Lost inside the configuration (the callback has run): refused without a poll, which on a
+    // truly lost Vulkan device reads a fence that fails, and wgpu then panics. Otherwise a poll
+    // for an earlier loss.
+    if !lost.load(Ordering::Acquire) {
+        let _ = device.poll(wgpu::PollType::Poll);
+    }
     if lost.load(Ordering::Acquire) {
         return Err("the device was lost while the window's swap chain was made".into());
     }
@@ -5444,6 +5464,7 @@ fn open(
         queue,
         features,
         window,
+        lost,
     })
 }
 
@@ -5496,6 +5517,13 @@ pub fn hardware_adapter() -> Option<String> {
             .find(|i| i.device_type != wgpu::DeviceType::Cpu)
             .map(|i| format!("{} ({:?})", i.name, i.backend))
     })
+}
+
+/// Whether `instance` has a graphics card (not a software adapter) on `backends`.
+fn has_card(instance: &wgpu::Instance, backends: wgpu::Backends) -> bool {
+    block_on(instance.enumerate_adapters(backends))
+        .iter()
+        .any(|a| a.get_info().device_type != wgpu::DeviceType::Cpu)
 }
 
 /// The surface of a real window (Windows: an `HWND`).
