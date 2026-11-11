@@ -386,6 +386,12 @@ mod tests {
         // committed, as a scrap heap starts.
         const VIRTUAL_ALLOC: u32 = 0x00fd_f114;
         let mut e = Engine::new();
+        let import = crate::exe::Import {
+            slot: VIRTUAL_ALLOC,
+            dll: "KERNEL32.dll".into(),
+            name: "VirtualAlloc".into(),
+        };
+        assert_eq!(e.register_imports(&[import]), 1);
         let base = e.call(VIRTUAL_ALLOC, &[0, 8 << 20, 0x2000, 4]).u32();
         assert_ne!(base, 0);
         assert_eq!(
