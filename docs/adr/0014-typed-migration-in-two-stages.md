@@ -65,7 +65,13 @@ These are open for the maintainer, and nothing in this record settles them:
 - whether rewriting call sites to typed leaf functions by script counts as the "generated direct
   calls" ADR-0012 skips;
 - how the extender notes' rule that guest memory is the only copy of game state changes once a
-  family has moved.
+  family has moved. Proposed with the lock-free maps' stage-2 form, the first that can move real data
+  (opt-in, `lockfree:moved` or `:freed`), for the maintainer to decide: a moved family keeps its classes' PC
+  layouts as the contract, but its moved fields live outside guest memory; a built-in command reaches such
+  an object only through what stays callable by address (its virtual methods, the family's typed functions
+  at their exe addresses), never by reading or writing the moved fields (it would read poison, or an
+  unmapped handle, and stop naming the family and the field). The objects' guest addresses (K1 stubs) and
+  vtables stay where the game made them. Until a family moves by default, nothing changes for extenders.
 
 ## Consequences
 

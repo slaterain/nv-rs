@@ -856,6 +856,14 @@ tests a handle's range (`moved::is_handle`), so code shared with objects that st
 `Family` says `stage2: true` once its code goes through the store; until then the switch refuses
 `<family>:dual`, `:moved` and `:freed` (they would run stage 1 without saying so).
 
+The first family with a stage-2 form is the lock-free maps (`engine-typed`'s `lockfree/store.rs`): their body
+(buckets, node slots, interface managers and their entries, interfaces, nodes, the scans' copies) is the
+family's own and moves whole; the map object stays a K1 stub (made by untyped code, often inside other
+objects), its record holding the node slots (+4), the buckets (+0xc), the delete batch size (+0x10) and the
+interface manager (+0x14), its spare word +0x1c; the vtable, the bucket count, the count and the lock stay
+for the untyped wrappers. The queues share the interface manager's functions and keep theirs in the game's
+memory: an object is made in the store of its root, so a queue's manager stays guest.
+
 ## Checking against the real exe
 
 Pure functions can be compared with the real CPU through `nv-call`

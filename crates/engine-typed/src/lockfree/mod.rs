@@ -51,13 +51,14 @@ pub const FAMILY: FamilyId = FamilyId::new(1);
 /// `NV_TYPED=lockfree`. Past its speed gate (2026-11-08, together with the other five families of this crate: real
 /// threads, the fixes preset, the same exe off and on, BAAB): Goodsprings 55.0 to 60.1 fps (+9.3%), the crowded
 /// street at 2560x1440 8x AA 52.3 to 57.7 fps (+10.3%), the sky above it 117 to 134 fps (+14%). On unless
-/// `NV_TYPED` says otherwise (`NV_TYPED=off` or `lockfree:off`).
+/// `NV_TYPED` says otherwise (`NV_TYPED=off` or `lockfree:off`). Stage 2 (the pilot, `store.rs`): `lockfree:dual` mirrors
+/// the maps' body in the slab and compares every access; `lockfree:moved` (K1) and `lockfree:freed` (K2) move it there.
 pub static LOCKFREE: Family = Family {
     name: "lockfree",
     id: FAMILY,
     past_gate: true,
     threads: Threads::Both,
-    stage2: false,
+    stage2: true,
     funcs,
 };
 
