@@ -792,21 +792,10 @@ impl Device {
         depth: Handle,
         cache_dir: Option<&std::path::Path>,
     ) -> Result<Device, String> {
-        // `NV_WGPU_BACKEND` names one; by default Direct3D 12 on Windows (measured closest to the
-        // real Direct3D 9 on the same driver: Doc's house differs in 0.3% of pixels against 6% on
-        // Vulkan, DESIGN.md), then whatever the platform has.
-        // `software`: the platform's software adapter (WARP on Windows, the one CI's runners
-        // have), for checking that the backend does not depend on one card's leniency.
-        let backend = std::env::var("NV_WGPU_BACKEND");
-        let software = backend.as_deref() == Ok("software");
-        let tries: Vec<wgpu::Backends> = match backend.as_deref() {
-            Ok("dx12") => vec![wgpu::Backends::DX12],
-            Ok("vulkan") => vec![wgpu::Backends::VULKAN],
-            Ok("gl") => vec![wgpu::Backends::GL],
-            Ok("metal") => vec![wgpu::Backends::METAL],
-            _ if cfg!(windows) => vec![wgpu::Backends::DX12, wgpu::Backends::PRIMARY],
-            _ => vec![wgpu::Backends::PRIMARY],
-        };
+        // The graphics APIs in [`apis`]'s order: Vulkan, then Direct3D 12 for a card without a
+        // Vulkan driver; `NV_WGPU_BACKEND` names one.
+        let asked = std::env::var("NV_WGPU_BACKEND").ok();
+        let (tries, software) = apis(asked.as_deref());
         let mut found = None;
         for backends in tries {
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -819,18 +808,30 @@ impl Device {
                 ..wgpu::InstanceDescriptor::new_without_display_handle()
             });
             let surface = match output {
-                Output::Window if window != 0 => Some(surface_for(&instance, window)?),
+                Output::Window if window != 0 => match surface_for(&instance, window) {
+                    Ok(s) => Some(s),
+                    // The window on this API failed: the next API is tried.
+                    Err(e) => {
+                        eprintln!("NV_D3D9 wgpu: {backends:?}: {e}");
+                        continue;
+                    }
+                },
                 _ => None,
             };
-            let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            let Ok(adapter) = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: software,
                 compatible_surface: surface.as_ref(),
                 apply_limit_buckets: false,
-            }))
-            .ok();
-            if let Some(adapter) = adapter {
-                found = Some((surface, adapter));
+            })) else {
+                continue;
+            };
+            // A graphics card ends the search. A software adapter (a CPU one) stands only until a
+            // later API has a card, or is asked for: with none, the last API's (WARP, Direct3D
+            // 12's, on Windows, as CI's runners had before Vulkan came first).
+            let cpu = adapter.get_info().device_type == wgpu::DeviceType::Cpu;
+            found = Some((surface, adapter));
+            if !cpu || software {
                 break;
             }
         }
@@ -4601,36 +4602,36 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         pitch: u32,
     ) -> Option<d3d9_stream::Rows> {
         let src = self.surface_of(source)?;
-        if src.samples > 1 {
+        let read = if src.samples > 1 {
             // Direct3D 9 refuses a multisampled source (D3DERR_INVALIDCALL, as documented and
-            // measured on the real one here): nothing is copied, the destination keeps what it
-            // had, which its rows then give, as the real backend reads them.
+            // measured on the real one here): nothing is copied.
             self.warn(
                 "GetRenderTargetData of a multisampled render target: refused, as Direct3D 9 does",
             );
-            let natural = src.width * src.format.wgpu.block_copy_size(None).unwrap_or(4);
-            let kept = self
-                .kept
-                .get(&destination)
-                .filter(|k| k.len() as u32 == natural * src.height)?;
-            let row = if pitch == 0 { 0 } else { pitch.min(natural) };
-            let bytes = if row == 0 {
-                Vec::new()
-            } else {
-                kept.chunks(natural as usize)
-                    .flat_map(|r| r[..row as usize].to_vec())
-                    .collect()
-            };
-            return Some(d3d9_stream::Rows { row, bytes });
-        }
-        if src.format.upload != format::Upload::Copy {
+            None
+        } else if src.format.upload != format::Upload::Copy {
             self.warn(format!(
-                "GetRenderTargetData of format {:#x} is not provided",
+                "GetRenderTargetData of format {:#x} is not provided: the destination keeps what it had",
                 src.format.d3d
             ));
-            return None;
-        }
-        let bytes = self.read_level(&src)?;
+            None
+        } else {
+            let read = self.read_level(&src);
+            if read.is_none() {
+                // The read-back failed: the device is lost (a driver reset) or the format is not
+                // read back.
+                self.warn(
+                    "GetRenderTargetData: the render target could not be read back (a lost device?): the destination keeps what it had",
+                );
+            }
+            read
+        };
+        let Some(bytes) = read else {
+            // Nothing copied: the destination keeps what it had, which its rows then give, as the
+            // real backend reads them back after a refused or failed copy. So the caller goes on
+            // (a save's thumbnail after a driver reset: the model would stop the run on no answer).
+            return Some(self.rows_kept(destination, &src, pitch));
+        };
         if let Some(dst) = self.surface_of(destination) {
             if let (Some(st), Some(dt)) = (&src.tex, &dst.tex) {
                 if src.samples == 1
@@ -4687,6 +4688,39 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             *k = bytes;
         }
         Some(rows)
+    }
+
+    /// The rows of `destination` (a system-memory level of `source`'s size and format, as the
+    /// model checked) as it holds them, when nothing was copied into it: its kept bytes, made
+    /// zeros of the level's size if it holds none yet (never written, or by a GPU that is lost),
+    /// so the game's lock of it reads them back as the real backend's does; `pitch` as in
+    /// [`Device::get_render_target_data`].
+    fn rows_kept(&mut self, destination: Handle, source: &Surf, pitch: u32) -> d3d9_stream::Rows {
+        let (natural, height) = format::level_layout(&source.format, source.width, source.height);
+        let size = (natural * height) as usize;
+        let mut zeros = Vec::new();
+        let kept = match self.kept.get_mut(&destination) {
+            Some(k) => {
+                if k.len() != size {
+                    k.clear();
+                    k.resize(size, 0);
+                }
+                k
+            }
+            None => {
+                zeros.resize(size, 0);
+                &mut zeros
+            }
+        };
+        let row = if pitch == 0 { 0 } else { pitch.min(natural) };
+        let bytes = if row == 0 {
+            Vec::new()
+        } else {
+            kept.chunks(natural.max(1) as usize)
+                .flat_map(|r| r[..row as usize].iter().copied())
+                .collect()
+        };
+        d3d9_stream::Rows { row, bytes }
     }
 
     // Present.
@@ -4928,6 +4962,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// The errors wgpu reported so far (a refused pass or submit among them; tests).
     pub fn wgpu_errors(&self) -> u64 {
         self.errors.load(Ordering::Relaxed)
+    }
+
+    /// Loses the device, as a driver reset (TDR) or a removed graphics card does: from now on
+    /// nothing reaches the GPU and nothing is read back from it (tests).
+    pub fn lose(&self) {
+        self.device.destroy();
     }
 
     /// The screen of [`Device::show_progress`] drawn into a `width` by `height` texture of its own,
@@ -5231,27 +5271,55 @@ fn dummies(device: &wgpu::Device, queue: &wgpu::Queue) -> [wgpu::TextureView; 3]
     ]
 }
 
-/// A graphics card wgpu can draw with (not a software adapter) on the APIs `NV_WGPU_BACKEND` allows
-/// (all by default): its name and API, or none. `NV_WGPU_BACKEND=software` asks for the software
+/// The graphics APIs the device is made on, in the order tried, and whether the software adapter
+/// is asked for, by `NV_WGPU_BACKEND`'s value (`None` unset; case and spaces aside):
+/// - unset: Vulkan, then Direct3D 12 for a card without a Vulkan driver (Windows; elsewhere the
+///   platform's own). Vulkan is the renderer (the maintainer, 2026-11-11: "we are trying to focus
+///   solely on wgpu and vulkan, as those brings the most improvements and compatability"). Its
+///   pictures differ from the real Direct3D 9's in faint texture filtering far off (NVIDIA filters
+///   anisotropically otherwise on Vulkan than on its Direct3D: town1, 10-26% of pixels by a mean
+///   of 0.2-0.8 levels against 0.3-0.6% on Direct3D 12; accepted by the lead, 2026-11-10).
+/// - `vulkan`, `dx12`, `gl`, `metal`: that one alone.
+/// - `software`: the platform's software adapter (WARP on Windows, the one CI's runners have),
+///   for checking that the backend does not depend on one card's leniency.
+pub(crate) fn apis(asked: Option<&str>) -> (Vec<wgpu::Backends>, bool) {
+    let asked = asked.map(|v| v.trim().to_ascii_lowercase());
+    let one = match asked.as_deref() {
+        Some("vulkan") => Some(wgpu::Backends::VULKAN),
+        Some("dx12") => Some(wgpu::Backends::DX12),
+        Some("gl") => Some(wgpu::Backends::GL),
+        Some("metal") => Some(wgpu::Backends::METAL),
+        _ => None,
+    };
+    let software = asked.as_deref() == Some("software");
+    let tries = match one {
+        Some(b) => vec![b],
+        None if software && cfg!(windows) => vec![wgpu::Backends::DX12, wgpu::Backends::PRIMARY],
+        None if cfg!(windows) => vec![wgpu::Backends::VULKAN, wgpu::Backends::DX12],
+        None => vec![wgpu::Backends::PRIMARY],
+    };
+    (tries, software)
+}
+
+/// A graphics card wgpu can draw with (not a software adapter) on the APIs `NV_WGPU_BACKEND` allows,
+/// in [`apis`]' order: its name and API, or none. `NV_WGPU_BACKEND=software` asks for the software
 /// adapter, so it answers that one.
 pub fn hardware_adapter() -> Option<String> {
-    let backends = match std::env::var("NV_WGPU_BACKEND").as_deref() {
-        Ok("dx12") => wgpu::Backends::DX12,
-        Ok("vulkan") => wgpu::Backends::VULKAN,
-        Ok("gl") => wgpu::Backends::GL,
-        Ok("metal") => wgpu::Backends::METAL,
-        Ok("software") => return Some("the software adapter (NV_WGPU_BACKEND=software)".into()),
-        _ => wgpu::Backends::PRIMARY,
-    };
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends,
-        ..wgpu::InstanceDescriptor::new_without_display_handle()
-    });
-    block_on(instance.enumerate_adapters(backends))
-        .into_iter()
-        .map(|a| a.get_info())
-        .find(|i| i.device_type != wgpu::DeviceType::Cpu)
-        .map(|i| format!("{} ({:?})", i.name, i.backend))
+    let (tries, software) = apis(std::env::var("NV_WGPU_BACKEND").ok().as_deref());
+    if software {
+        return Some("the software adapter (NV_WGPU_BACKEND=software)".into());
+    }
+    tries.into_iter().find_map(|backends| {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        block_on(instance.enumerate_adapters(backends))
+            .into_iter()
+            .map(|a| a.get_info())
+            .find(|i| i.device_type != wgpu::DeviceType::Cpu)
+            .map(|i| format!("{} ({:?})", i.name, i.backend))
+    })
 }
 
 /// The surface of a real window (Windows: an `HWND`).
@@ -5609,5 +5677,23 @@ mod tests {
         // 255: nothing is above it; 0: everything is at or above it.
         assert!(alpha_bounds(255).0 >= 4096.0);
         assert!(alpha_bounds(0).1 < 0.0);
+    }
+
+    /// Vulkan first, Direct3D 12 for a card without a Vulkan driver; a named API alone; the
+    /// software adapter on Direct3D 12 (WARP, CI's) as before.
+    #[test]
+    fn vulkan_is_tried_first_and_a_named_api_alone() {
+        use wgpu::Backends as B;
+        if cfg!(windows) {
+            assert_eq!(apis(None), (vec![B::VULKAN, B::DX12], false));
+            assert_eq!(apis(Some("")), (vec![B::VULKAN, B::DX12], false));
+            assert_eq!(apis(Some("bogus")), (vec![B::VULKAN, B::DX12], false));
+            assert_eq!(apis(Some("software")), (vec![B::DX12, B::PRIMARY], true));
+        }
+        assert_eq!(apis(Some("vulkan")), (vec![B::VULKAN], false));
+        assert_eq!(apis(Some(" Vulkan ")), (vec![B::VULKAN], false));
+        assert_eq!(apis(Some("dx12")), (vec![B::DX12], false));
+        assert_eq!(apis(Some("gl")), (vec![B::GL], false));
+        assert_eq!(apis(Some("metal")), (vec![B::METAL], false));
     }
 }
