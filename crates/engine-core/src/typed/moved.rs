@@ -299,6 +299,16 @@ impl Slab {
         self.cell(a).load(Ordering::Acquire)
     }
 
+    /// The word at `a` if it is a word of a chunk made (acquire); `None` for any other address, where
+    /// [`Slab::load`] stops the run.
+    pub fn try_load(&self, a: u32) -> Option<u32> {
+        if a % 4 != 0 || !is_handle(a) {
+            return None;
+        }
+        let cell = self.words.get(index((a - SLAB_RANGE.start) / 4))?;
+        Some(cell.load(Ordering::Acquire))
+    }
+
     /// Stores a word (release).
     #[inline]
     pub fn store(&self, a: u32, v: u32) {
@@ -1254,6 +1264,17 @@ impl Store {
         }
     }
 
+    /// A call by address that writes the family's own words and what follows it to keep the mirror
+    /// (`f`: the call, then [`Store::resync`]), as one access: in the dual run inside one turn of the
+    /// stepped host (`one_turn`), so no other thread's access comes between the guest effect and the
+    /// mirror's; in the other forms as it is (stage 1's turns end where they always did).
+    pub fn whole<R>(self, e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
+        match self {
+            Store::Dual { .. } => one_turn(e, f),
+            _ => f(e),
+        }
+    }
+
     /// The dual run after a call by address that wrote `words` words of the family's own object at
     /// `a` (one the family has not typed yet, whose result the mirror must take): the mirror takes
     /// the guest words (translated). Nothing in the other forms, where such a call is done in place.
@@ -1388,11 +1409,19 @@ pub struct K1 {
 }
 
 impl K1 {
-    /// The moved record of the stub at `obj`, if it has one.
+    /// The moved record of the stub at `obj`, if it has one: the spare word holds a handle whose
+    /// record names `obj` at its +0 (which no K1 moves: an object's +0 is its vtable). A word that
+    /// only looks like a handle (an object of the class made by code that never attaches it, as
+    /// IOManager's own task map, whose constructor is inlined) is no record, and reading it never
+    /// stops the run.
     #[inline]
     pub fn record(&self, e: &Engine, obj: u32) -> Option<u32> {
         let h = e.mem.u32(obj.wrapping_add(self.spare));
-        is_handle(h).then_some(h)
+        if !is_handle(h) {
+            return None;
+        }
+        let moved = e.moved()?;
+        (moved.slab.try_load(h) == Some(obj)).then_some(h)
     }
 
     /// Gives the object at `obj` its record (tagged `tag`), first thing in its constructor. The
@@ -1409,6 +1438,11 @@ impl K1 {
             .slab
             .alloc(self.size, family, tag, 0)
             .expect("the slab range is full");
+        assert!(
+            !self.moved.contains(&0),
+            "a K1 stub's +0 (its vtable) never moves: the record's +0 names the object"
+        );
+        moved.slab.store(record, obj);
         for &off in self.moved {
             let at = obj.wrapping_add(off);
             if let Store::Dual { .. } = s {
@@ -2336,6 +2370,54 @@ mod tests {
         let add =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.add(&mut e, at, 1, |_| 0)));
         assert!(add.is_err(), "add on the poison");
+    }
+
+    /// K1's record is the one whose +0 names the object: a handle-shaped spare word of an object
+    /// never attached is no record, and looking never stops the run.
+    #[test]
+    fn a_word_that_only_looks_like_a_handle_is_no_record() {
+        let mut e = engine("toy:moved");
+        let toy = toy_new(&mut e);
+        let record = STUB.record(&e, toy).expect("attached");
+        // An object of the class made by code that never attaches it, whose spare word happens to
+        // hold another object's record, a handle of no block, or a misaligned one.
+        let stray = e.call(NEW, &[TOY_SIZE]).u32();
+        for word in [record, SLAB_RANGE.start + 0x0200_0000, record + 2] {
+            e.mem.set_u32(stray + STUB.spare, word);
+            assert_eq!(STUB.record(&e, stray), None, "{word:08x}");
+            assert_eq!(
+                STUB.place(&e, store_of(&e, stray), stray, HEAD),
+                stray + HEAD
+            );
+        }
+        assert_eq!(STUB.record(&e, toy), Some(record));
+        let slab = &e.moved().expect("made").slab;
+        assert_eq!(slab.try_load(SLAB_RANGE.end - 4), None);
+        assert_eq!(slab.try_load(record + 1), None);
+        assert_eq!(slab.try_load(record), Some(toy));
+        // A word of a chunk made but of no block yet answers 0; a freed block's, its freed word.
+        assert_eq!(slab.try_load(record + 0x1000), Some(0));
+        let freed = slab.alloc(16, TOY, NODE_TAG, 0).expect("room");
+        slab.free(freed);
+        assert_eq!(
+            slab.try_load(freed + 4),
+            Some(crate::mem::freed_word(freed))
+        );
+    }
+
+    /// `Store::whole` runs a call and its resync in one turn in the dual run, and leaves the turn
+    /// alone in the other forms.
+    #[test]
+    fn whole_holds_the_turn_in_the_dual_run_only() {
+        fn hook(_: &mut Engine, _: u32) {}
+        for (mode, held) in [("toy:dual", true), ("toy:moved", false), ("toy", false)] {
+            let mut e = engine(mode);
+            let s = e.typed_store(TOY);
+            e.slice_hook = Some(hook);
+            let out = s.whole(&mut e, |e| e.slice_hook.is_none());
+            assert_eq!(out, held, "{mode}");
+            assert!(e.slice_hook.is_some(), "{mode}: the hook back");
+        }
     }
 
     /// The dual store runs an access's two halves in one turn: the time-slice hook is out while the
