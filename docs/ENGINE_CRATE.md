@@ -519,7 +519,9 @@ is a comma-separated list, read left to right:
 | `off` | Every family off: the game runs the translations |
 | `all` | Back to the default |
 | `<family>` | That family on, past its gate or not |
-| `<family>:dual` | On, with both forms live, for families that keep them (`Engine::typed_dual`) |
+| `<family>:dual` | On, with both forms live, for families that keep them (`Engine::typed_dual`): stage 2's dual run, below |
+| `<family>:moved` | On, its objects moved out of the game's heap, the heap kept as stage 1 leaves it (K1, below) |
+| `<family>:freed` | On, moved, the guest bytes freed (K2, below) |
 | `<family>:off` | That family off |
 
 Anything else stops the start with a message. A family is a row in `typed::FAMILIES`; a family in a
@@ -780,6 +782,55 @@ move out of guest memory needs, and what precision a typed function's floats tak
 on (checking at frees, reporting without stopping) when `NV_BLOCK_CHECK` didn't; that also makes every
 `with_stack` local a heap block, so a tagged stack object's tag ends with its frame. The block check now
 keeps the running function's caller too (the touch census names both).
+
+### Moved families (stage 2)
+
+Stage 2 moves a typed family's objects out of the game's heap ([ADR-0014](adr/0014-typed-migration-in-two-stages.md);
+the steps: the touch census, the creation sites, K1 stubs and the dual run, the save check, K2). What every family
+uses is `engine_core::typed::moved`, tested with a made-up family, so a family reuses it unchanged:
+
+- **The moved area**, `0x10000000..0x20000000`, below the heap (`mem.rs` has the layout): ordinary play never
+  used it, and `VirtualAlloc` at a chosen address fails there. Below 0x80000000, so no handle, token or stub ever
+  has its top bit set. Two shapes of host memory, outside the guest space, behind it:
+  - the **slab** (`0x10000000..0x14000000`): small objects that keep their PC layout (the offsets are the
+    contract: built-in commands, the dual run) and point into each other. Every word an atomic (loads
+    acquire, stores release, compare-and-swap sequentially consistent: what real threads need where the game
+    uses interlocked operations, from the first step); blocks in 16-byte steps, counted by family and tag. A
+    moved object's handle is an address there, which the guest page table never maps, so an untyped read or
+    write of one stops the run naming the address, and a pointer into an object (a link, an element) is a
+    handle too. Its handles cover its bytes, so it is for families whose bytes are few (the lock-free maps);
+  - the **buffers** (`0x14000000..0x18000000`): big arrays behind
+    start-only tokens, 16 bytes of the space each whatever their size (4 M of them), so no 32-bit address
+    inside one exists: typed code reads and writes it by token and offset. Plain bytes copied plainly,
+    ordered by the game's own hand-off between threads, as guest memory's plain accesses are; for arrays
+    written once and read many times (vertex arrays, keys).
+
+  The upper half, `0x18000000..0x20000000`, holds 16-byte **stubs** for moved objects untyped code still
+  calls through their vtable: the vtable, then poison, on a mapped page; a table in host memory gives each
+  stub's handle.
+- **K1 stubs** (`moved::K1`): the object's original guest block stays, with every field untyped code reads; a
+  spare word holds the handle of its moved record (its layout, in the slab, never a guest allocation) and the
+  moved fields hold **poison**, a word in the last 64 KB of the space (never mapped) naming the family and the
+  field: a missed reader that follows it stops there, one that counts with it gets about four billion, and a
+  missed writer shows when the poison is checked.
+- **The store** (`moved::Store`): one code path for every form. The family's typed code reads and writes its
+  own objects, allocates and frees them and makes the calls by address that act on them (a compare-and-swap,
+  a copy) through the store of each operation's root. `Guest` is stage 1. `Moved` puts new objects in the slab;
+  with shadows (K1, `NV_TYPED=<family>:moved`) every guest allocation the family made before is still made, of
+  the same size in the same order, poisoned and freed with its object, so the game's heap and every guest
+  address after it (the Direct3D model's objects, which the recorded stream names by address) stay as they
+  were, and two repeatable runs compare with `cmp`; without (K2, `<family>:freed`) the guest bytes are freed,
+  and the recorded streams compare with handles renamed (`d3d9-stream`'s `wire::compare_renamed`; the
+  `record_compare` example). `Dual` (`<family>:dual`) keeps the guest objects the truth and mirrors each one in
+  the slab: every access is made on both and compared (a word inside a mirrored block compares as the same
+  place in its mirror, so pointer fields need no types), the first 20 differences are printed with the place
+  and the function running, and the status line counts comparisons and differences (`Dual run: ..`). A dual run
+  keeps the game's threads stepped, so each paired access has no other thread between its halves.
+- The heap census (`NV_CENSUS`) ends with what the slab holds, by family and tag.
+
+A family decides which of its objects move, which fields stay in a K1 stub and which word is spare, which
+allocations are its own, and which of its calls by address act on its own objects. Typed code reached by address
+tests a handle's range (`moved::is_handle`), so code shared with objects that stay needs no second path.
 
 ## Checking against the real exe
 

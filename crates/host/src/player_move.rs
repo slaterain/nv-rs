@@ -1290,6 +1290,11 @@ impl PlayerMovement {
                 if status_line {
                     self.main_reported = Some(std::time::Instant::now());
                     println!("{}", self.summary());
+                    // A typed family's dual run (`NV_TYPED=<family>:dual`): words compared and
+                    // differences so far.
+                    if let Some(line) = engine::typed::dual_line(e) {
+                        println!("{line}");
+                    }
                     // `NV_MOVE_WATCH=addr,addr..`: the words at those exe addresses with it (a
                     // diagnostic of the game's state: which menus exist, flags).
                     if let Ok(list) = std::env::var("NV_MOVE_WATCH") {

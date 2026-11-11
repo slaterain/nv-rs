@@ -75,7 +75,10 @@ pub fn at_frame(e: &mut Engine, frame: u64) {
 
 fn write_all(e: &Engine, at: &CensusAt, frame: u64) -> std::io::Result<()> {
     std::fs::create_dir_all(&at.folder)?;
-    let heap = heap_tsv(&e.mem, frame);
+    let mut heap = heap_tsv(&e.mem, frame);
+    if let Some(moved) = e.moved() {
+        heap.push_str(&moved_tsv(moved));
+    }
     std::fs::write(at.folder.join(format!("heap-{frame}.tsv")), heap)?;
     if e.mem.touch_on() {
         std::fs::write(
@@ -174,6 +177,25 @@ pub fn heap_tsv(mem: &Mem, frame: u64) -> String {
             "{:08x}\t{:08x}\t{:08x}\t{}\t{}\t{}\t{}",
             r.function, r.caller, r.vtable, r.class, r.blocks, r.bytes, r.held
         );
+    }
+    out
+}
+
+/// What the moved families keep outside the game's heap (the slab and the buffers of
+/// [`crate::typed::moved::Moved`]): one comment line a family and tag, after the heap's table, so the
+/// bytes a move took out of the heap show where they went.
+pub fn moved_tsv(moved: &crate::typed::moved::Moved) -> String {
+    let mut out = String::new();
+    for (kind, rows) in [
+        ("slab", moved.slab.census()),
+        ("buffers", moved.buffers.census()),
+    ] {
+        for (family, tag, blocks, bytes) in rows {
+            let _ = writeln!(
+                out,
+                "# moved out of the heap ({kind}): family {family} tag {tag}: {blocks} blocks, {bytes} bytes"
+            );
+        }
     }
     out
 }

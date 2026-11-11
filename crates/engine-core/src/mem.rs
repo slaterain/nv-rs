@@ -90,9 +90,14 @@
 //! - `0x00400000..0x01409000`: the executable's image; its data sections at their own
 //!   addresses (`.rdata` 0x00FDF000, `.data` 0x01183000, ...), mapped from the player's
 //!   installed FalloutNV.exe by [`crate::exe`] or set up by a test;
-//! - `0x01409000..`[`HEAP_BASE`]: free for `VirtualAlloc` reservations at an address the
+//! - `0x01409000..0x10000000`: free for `VirtualAlloc` reservations at an address the
 //!   caller chooses (`units/platform.rs`; the game's `MemoryPool`s would search 16 MB
 //!   boundaries here, but the port's memory manager does not make them);
+//! - `0x10000000..`[`HEAP_BASE`]: the moved area of the typed migration's stage 2
+//!   ([`crate::typed::moved`]): the slab's handles (`0x10000000..0x14000000`) and the buffers'
+//!   start-only tokens (`0x14000000..0x18000000`), never mapped (a moved object's bytes are host
+//!   memory outside this space), and 16-byte stubs (`0x18000000..0x20000000`, mapped as they are
+//!   handed out). `VirtualAlloc` at a chosen address fails here;
 //! - [`HEAP_BASE`]`..`[`HEAP_LOW_END`]: the heap's lower range, handed out by [`Mem::alloc`]
 //!   (the translation of the game's allocator is `platform`, see `units/platform.rs`; its free
 //!   space and the choice of where a block goes are in `mem/heap.rs`). Every heap block, every

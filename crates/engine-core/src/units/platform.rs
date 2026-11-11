@@ -1369,9 +1369,11 @@ fn reserve(e: &mut Engine, address: u32, size: u32) -> Option<u32> {
         let base = address & !(ALLOCATION_GRANULARITY - 1);
         let end = page_up(address as u64 + size as u64);
         let overlaps = |lo: u32, hi: u32| (base as u64) < hi as u64 && end > lo as u64;
+        let moved = crate::typed::moved::MOVED_AREA;
         if base < ALLOCATION_GRANULARITY
             || end > 1 << 32
             || overlaps(crate::exe::IMAGE_BASE, IMAGE_END)
+            || overlaps(moved.start, moved.end)
             || overlaps(crate::mem::HEAP_BASE, crate::mem::HEAP_END)
             || e.kernel.overlaps_region(base as u64, end)
             || (base as u64..end)
@@ -4401,6 +4403,16 @@ mod tests {
         assert_eq!(reserve(&mut e, crate::mem::BUILTIN_DATA.start), 0);
         assert_eq!(reserve(&mut e, 0x8000_0000), 0);
         assert_eq!(reserve(&mut e, 0xeff0_0000), 0);
+        // The moved area below the heap (stage 2's slab handles and stubs).
+        assert_eq!(reserve(&mut e, crate::typed::moved::MOVED_AREA.start), 0);
+        assert_eq!(
+            reserve(&mut e, crate::typed::moved::STUB_RANGE.end - 0x1_0000),
+            0
+        );
+        assert_eq!(
+            reserve(&mut e, crate::typed::moved::MOVED_AREA.start - 0x1_0000),
+            0
+        );
         // Above the heap: free.
         assert_eq!(reserve(&mut e, 0xf000_0000), 0xf000_0000);
         assert_eq!(reserve(&mut e, 0x0200_0000), 0x0200_0000);

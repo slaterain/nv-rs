@@ -1193,6 +1193,9 @@ fn diagnostic_on(e: &Engine) -> Option<&'static str> {
     if crate::queue_check::enabled() {
         return Some("the queue check (NV_QUEUE_CHECK)");
     }
+    if e.typed_any_dual() {
+        return Some("a typed family's dual run (NV_TYPED=<family>:dual)");
+    }
     None
 }
 

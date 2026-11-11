@@ -1281,3 +1281,137 @@ fn a_flush_after_the_render_thread_stopped_stops_too() {
     let message = crate::runner::panic_message(&*stopped.expect_err("the flush stops"));
     assert!(message.contains("refuses SetFvf"), "{message}");
 }
+
+/// A file of `cmds`, as `NV_D3D9_RECORD` writes one.
+fn file_of(cmds: &[Cmd<Data<'_>>]) -> Vec<u8> {
+    let mut bytes = wire::header().to_vec();
+    for c in cmds {
+        wire::encode(c, &mut bytes);
+    }
+    bytes
+}
+
+/// The objects of [`drawing`]: the device, a texture, its two levels, a buffer, the buffer bound
+/// after the first one's `Destroy`, the level made the render target, and the texture bound.
+#[derive(Clone, Copy)]
+struct Objects {
+    device: u32,
+    texture: u32,
+    levels: [u32; 2],
+    buffer: u32,
+    again: u32,
+    target: u32,
+    bound: u32,
+}
+
+/// A small drawing over `o`'s objects, its draw `count` primitives.
+fn drawing(o: &Objects, count: u32) -> Vec<u8> {
+    let device = o.device;
+    file_of(&[
+        Cmd::CreateTexture {
+            device,
+            texture: o.texture,
+            levels: Data::from_words(&o.levels),
+            width: 4,
+            height: 4,
+            usage: 0,
+            format: 21,
+            pool: 1,
+        },
+        Cmd::SetRenderTarget {
+            device,
+            index: 0,
+            surface: o.target,
+        },
+        Cmd::SetTexture {
+            device,
+            sampler: 0,
+            texture: o.bound,
+        },
+        Cmd::SetStreamSource {
+            device,
+            stream: 0,
+            buffer: o.buffer,
+            offset: 0,
+            stride: 32,
+        },
+        Cmd::DrawPrimitive {
+            device,
+            kind: 4,
+            start: 0,
+            count,
+        },
+        Cmd::Destroy { object: o.buffer },
+        Cmd::SetStreamSource {
+            device,
+            stream: 0,
+            buffer: o.again,
+            offset: 0,
+            stride: 32,
+        },
+        Cmd::Present {
+            device,
+            source: None,
+            dest: None,
+            window: 0,
+            dirty: false,
+            model: 0,
+            frame: 1,
+        },
+    ])
+}
+
+/// Two records of the same drawing with every object at other addresses (a game heap laid out
+/// otherwise, ADR-0014 stage 2) compare alike once handles are renamed by first use, the handles in
+/// a texture's levels too, and an address used again after its object's `Destroy` is a new object.
+/// A real difference (another draw, another level as the render target, the buffer bound where the
+/// texture was) is found at its command, and so is a file that ends first.
+#[test]
+fn records_compare_with_handles_renamed() {
+    let a = Objects {
+        device: 0x2000_0010,
+        texture: 0x2000_0020,
+        levels: [0x2000_0100, 0x2000_0108],
+        buffer: 0x2000_0030,
+        // The freed buffer's address handed out again to the next one.
+        again: 0x2000_0030,
+        target: 0x2000_0108,
+        bound: 0x2000_0020,
+    };
+    let b = Objects {
+        device: 0x2400_0010,
+        texture: 0x2400_0040,
+        levels: [0x2400_0300, 0x2400_0310],
+        buffer: 0x2400_0050,
+        again: 0x2400_0060,
+        target: 0x2400_0310,
+        bound: 0x2400_0040,
+    };
+    let (ra, rb) = (drawing(&a, 2), drawing(&b, 2));
+    assert_ne!(ra, rb, "the addresses differ");
+    assert_eq!(wire::compare_renamed(&ra[..], &rb[..]), Ok((8, None)));
+    // Another draw.
+    let (alike, diff) = wire::compare_renamed(&ra[..], &drawing(&b, 3)[..]).unwrap();
+    let diff = diff.expect("a difference");
+    assert_eq!((alike, diff.index), (4, 4));
+    assert!(diff.a.expect("a's").contains("count: 2"));
+    // The other level as the render target: the levels' handles are renamed with the texture.
+    let other_level = Objects {
+        target: 0x2400_0300,
+        ..b
+    };
+    let found = wire::compare_renamed(&ra[..], &drawing(&other_level, 2)[..]).unwrap();
+    assert_eq!(found.0, 1);
+    // The buffer bound where the texture was.
+    let swapped = Objects {
+        bound: 0x2400_0050,
+        ..b
+    };
+    let found = wire::compare_renamed(&ra[..], &drawing(&swapped, 2)[..]).unwrap();
+    assert_eq!(found.0, 2);
+    // A file that ends first, one cut inside a record, and one that is no stream.
+    let (alike, diff) = wire::compare_renamed(&ra[..], &file_of(&[])[..]).unwrap();
+    assert_eq!((alike, diff.map(|d| (d.index, d.b))), (0, Some((0, None))));
+    assert!(wire::compare_renamed(&ra[..], &rb[..rb.len() - 10]).is_err());
+    assert!(wire::compare_renamed(&b"not a stream at all"[..], &ra[..]).is_err());
+}
