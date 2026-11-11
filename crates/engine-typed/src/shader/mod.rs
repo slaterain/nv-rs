@@ -14,10 +14,19 @@
 //! `typed_call!`, and a function pointer that names one of them (the register function, the alpha
 //! sort's comparison) is called directly when it does.
 //!
-//! **Floats.** The per-thread census (`t3/threads.tsv`) has this layer on the main thread, a few of
-//! its functions also on another game thread (about 1 call in 2,000 for the stage caches and the
-//! transform). So the family is [`Threads::Both`] and keeps the culling family's exact x87 helpers:
-//! every load, operation and store is the exe's, in its order, under either control word.
+//! **Floats** (ADR-0014's float rule). The per-thread census (`t3/threads.tsv`) has this layer on the
+//! main thread, a few of its functions also on another game thread (about 1 call in 2,000 for the stage
+//! caches and the transform). So the family is [`Threads::Both`], and each function's maths follows
+//! where it runs, in the exe's order: the world matrix ([`accumulator::make_matrix`],
+//! [`accumulator::set_world_transform`]) and the range ([`state::set_range`]) in `f64` locals rounded
+//! where the exe stores a float ([`crate::anim_keys::wide`], [`crate::anim_keys::narrow`]), the exe's
+//! own arithmetic at the other thread's 53-bit precision; what only the main thread runs (the constant
+//! set-ups in [`geometry`] and [`lighting`], the alpha sort's [`batch::compare_by_depth`], the light
+//! direction, colour and alpha in [`accumulator`]) in plain `f32`, the exe's own rounding at the main
+//! thread's 24-bit precision while the values stay inside the float range (the x87 keeps a wider
+//! exponent), with a step that has a `double` operand done by [`mul_d`] and its kin. No x87 helper is
+//! left in the family; a float the exe copies through the x87 stack is copied as it is (a signalling
+//! NaN keeps its payload).
 
 use engine_core::ptr::{Field, Ptr};
 use engine_core::typed::{Family, FamilyId, Threads};
@@ -63,6 +72,35 @@ pub(crate) fn elem_addr<S, A>(p: Ptr<S>, f: Field<S, A>, i: u32, stride: u32) ->
 #[allow(clippy::cast_possible_truncation)]
 pub(crate) fn low8(word: u32) -> u8 {
     word as u8
+}
+
+// A step of main-thread code with a `double` operand (an exe constant, or a value a callee leaves in
+// ST0): done in `f64` and rounded to a float once. The x87 rounds the exact result once at 24-bit
+// precision; the `f64` rounds it to 53 bits first, which changes the float only where that lands
+// exactly halfway between two floats.
+
+/// `a * b` for a float and a `double` (`FMUL qword`, or ST0 times a float), rounded to a float once.
+#[inline(always)]
+pub(crate) fn mul_d(a: f32, b: f64) -> f32 {
+    crate::anim_keys::narrow(f64::from(a) * b)
+}
+
+/// `a / b` for a float and a `double` (`FDIV qword`), rounded to a float once.
+#[inline(always)]
+pub(crate) fn div_d(a: f32, b: f64) -> f32 {
+    crate::anim_keys::narrow(f64::from(a) / b)
+}
+
+/// `a + b` for a float and a `double` (`FADD qword`), rounded to a float once.
+#[inline(always)]
+pub(crate) fn add_d(a: f32, b: f64) -> f32 {
+    crate::anim_keys::narrow(f64::from(a) + b)
+}
+
+/// `a - b` for a float and a `double` (`FSUB qword`), rounded to a float once.
+#[inline(always)]
+pub(crate) fn sub_d(a: f32, b: f64) -> f32 {
+    crate::anim_keys::narrow(f64::from(a) - b)
 }
 
 /// The family's functions, by exe address.
@@ -272,4 +310,30 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b7_cfb0, accumulator::set_pair_textures(u32, u32)),
         entry!(0x00b7_c320, accumulator::restore_states(u32, u32)),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The double-operand steps round once from the exact result where the `f64` holds it, to
+    /// nearest, ties to even.
+    #[test]
+    fn double_steps_round_once() {
+        assert_eq!(mul_d(3.0, 0.5), 1.5);
+        assert_eq!(mul_d(1.0, 1.0 + 2f64.powi(-24)), 1.0);
+        assert_eq!(mul_d(1.0, 1.0 + 3.0 * 2f64.powi(-24)), 1.0 + 2f32.powi(-22));
+        // 3 (1 + 2^-24 + 2^-50) is 0.75 ulp above 3: one rounding gives 3 + 2^-22. Rounding the double
+        // to a float first (1 + 2^-23) would give 3 + 1.5 ulp, then 3 + 2^-21.
+        assert_eq!(
+            mul_d(3.0, 1.0 + 2f64.powi(-24) + 2f64.powi(-50)),
+            3.0 + 2f32.powi(-22)
+        );
+        assert_eq!(div_d(1.0, 3.0), 1.0 / 3.0);
+        assert_eq!(div_d(3.0, 2.0), 1.5);
+        assert_eq!(add_d(1.0, 0.5), 1.5);
+        assert_eq!(add_d(1.0, 2f64.powi(-30)), 1.0);
+        assert_eq!(sub_d(1.0, 0.25), 0.75);
+        assert_eq!(sub_d(1.0, 2f64.powi(-30)), 1.0);
+    }
 }

@@ -2,20 +2,24 @@
 //! passes with the thread's batch renderer, drawing the sorted geometry, and the per-geometry constant
 //! set-ups the shaders call while drawing (the world matrix, the light colour, the fog colour, the
 //! pass textures, the alpha and blend states).
+//!
+//! **Floats** (the family's float rule: [`super`]). The world matrix ([`make_matrix`],
+//! [`set_world_transform`]) is also made on another game thread (the thread census), so its maths is
+//! `f64` rounded where the exe stores a float: the exe's own at that thread's 53-bit precision. The
+//! light direction, the light colour, the tint and the alpha run on the main thread only: plain `f32`,
+//! the exe's own rounding at its 24-bit precision.
 
 use super::batch::{self, pool_give, POOL_LOCK, RENDERING_PASS, RENDERING_PASS_TYPE, SKIN_RTTI};
 use super::layout::{
     BSBatchRenderer, BSShaderAccumulator, BSShaderProperty, NiDX9Renderer, NiGeometry, NiProperty,
     NiSkinInstance, RenderPass, ShaderLight, ShadowSceneNode,
 };
+use super::mul_d;
 use super::state;
 use super::{elem_addr, low8, FAMILY};
+use crate::anim_keys::{narrow, wide};
 use crate::culling::layout::{NiMatrix3, NiPoint3, NiTransform};
-use crate::culling::{fld, fstp, m32};
 use engine_core::ptr::Ptr;
-use engine_core::x87::{
-    x87_add, x87_load32, x87_load64, x87_m32, x87_mul, x87_quiet_bits, x87_store32, x87_sub,
-};
 use engine_core::{args, typed_call, Engine};
 
 /// The thread block's word with the thread's index (`+0x2bc`).
@@ -275,7 +279,7 @@ fn register_by_kind(
                     bound = NULL_BOUND;
                 }
                 // `FILD` of the limit against the bound's word +8 as a float: above and ordered.
-                let value = x87_load32(e.global::<u32>(bound.wrapping_add(8)));
+                let value = f64::from(e.global::<f32>(bound.wrapping_add(8)));
                 let limit = f64::from(e.get(accumulator, A::iRadiusLimit));
                 if limit > value {
                     flag = 1;
@@ -469,8 +473,8 @@ pub fn set_blend_of(e: &mut Engine, _this: u32, block: u32) {
         object = Ptr::new(0);
     }
     let blends = !alpha.is_null() && e.get(alpha, NiProperty::m_usFlags) & 1 != 0;
-    let opaque = !(1.0 > m32(e, object, BSShaderProperty::fAlpha))
-        && !(1.0 > m32(e, object, BSShaderProperty::fFadeAlpha))
+    let opaque = !(1.0 > e.get(object, BSShaderProperty::fAlpha))
+        && !(1.0 > e.get(object, BSShaderProperty::fFadeAlpha))
         && !blends;
     if opaque {
         typed_call!(
@@ -503,7 +507,8 @@ const ORIGIN: u32 = 0x011f_474c;
 
 // Typed from 00b71a40
 /// `cdecl(out, rotation, point, scale)`: a Direct3D matrix (row vectors) from a rotation scaled, the
-/// point less the world origin as the translation, 0 0 0 1 as the last column.
+/// point less the world origin as the translation, 0 0 0 1 as the last column. `f64` maths, each
+/// product and difference rounded where the exe stores it.
 pub fn make_matrix(
     e: &mut Engine,
     out: u32,
@@ -511,37 +516,22 @@ pub fn make_matrix(
     point: Ptr<NiPoint3>,
     scale: f32,
 ) {
-    let scale = x87_load32(scale.to_bits());
-    let r = |e: &Engine, i: u32| {
-        x87_load32(e.global::<u32>(elem_addr(rotation, NiMatrix3::m_pEntry, i, 4)))
-    };
+    let scale = f64::from(scale);
+    let r =
+        |e: &Engine, i: u32| wide(e.global::<u32>(elem_addr(rotation, NiMatrix3::m_pEntry, i, 4)));
     let put = |e: &mut Engine, i: u32, value: f32| e.set_global(out.wrapping_add(i * 4), value);
     // Columns of the rotation become rows: out[0..3] = r0 r3 r6, out[4..7] = r1 r4 r7, out[8..11] =
-    // r2 r5 r8, each times the scale; the first and last products with the scale as the source.
-    let v = fstp(x87_mul(r(e, 0), scale));
-    put(e, 0, v);
-    let v = fstp(x87_mul(r(e, 3), scale));
-    put(e, 1, v);
-    let v = fstp(x87_mul(r(e, 6), scale));
-    put(e, 2, v);
-    put(e, 3, 0.0);
-    let v = fstp(x87_mul(r(e, 1), scale));
-    put(e, 4, v);
-    let v = fstp(x87_mul(r(e, 4), scale));
-    put(e, 5, v);
-    let v = fstp(x87_mul(r(e, 7), scale));
-    put(e, 6, v);
-    put(e, 7, 0.0);
-    let v = fstp(x87_mul(r(e, 2), scale));
-    put(e, 8, v);
-    let v = fstp(x87_mul(r(e, 5), scale));
-    put(e, 9, v);
-    let v = fstp(x87_mul(scale, r(e, 8)));
-    put(e, 10, v);
-    put(e, 11, 0.0);
+    // r2 r5 r8, each times the scale.
+    for (row, first) in (0u32..).zip([0u32, 1, 2]) {
+        for column in 0..3u32 {
+            let v = narrow(r(e, first + 3 * column) * scale);
+            put(e, 4 * row + column, v);
+        }
+        put(e, 4 * row + 3, 0.0);
+    }
     for (i, field) in (0u32..).zip([NiPoint3::x, NiPoint3::y, NiPoint3::z]) {
-        let origin = x87_m32(e.global::<u32>(ORIGIN.wrapping_add(4 * i)));
-        let v = fstp(x87_sub(fld(e, point, field), origin));
+        let origin = wide(e.global::<u32>(ORIGIN.wrapping_add(4 * i)));
+        let v = narrow(f64::from(e.get(point, field)) - origin);
         put(e, 12 + i, v);
     }
     put(e, 15, 1.0);
@@ -556,7 +546,8 @@ const SLOT_STATE_TRANSFORM: u32 = 0x30;
 // Typed from 00e6fbb0
 /// `thiscall(renderer, transform, set world)`: the world matrix from the transform ([`make_matrix`]),
 /// sent to the device when asked; the render state is told of the transform; the rotation scaled turns
-/// the renderer's two directions into model space (+0x64c and +0x658), each sum in the exe's order.
+/// the renderer's two directions into model space (+0x64c and +0x658), each sum in the exe's order
+/// (`f64` maths, rounded where the exe stores a float).
 pub fn set_world_transform(
     e: &mut Engine,
     this: Ptr<NiDX9Renderer>,
@@ -566,13 +557,13 @@ pub fn set_world_transform(
     type R = NiDX9Renderer;
     let t = transform.addr();
     let world = this.addr().wrapping_add(R::m_kWorld.off);
-    let scale = x87_quiet_bits(e.get(transform, NiTransform::m_fScale).to_bits());
+    let scale = e.get(transform, NiTransform::m_fScale);
     let rotation = transform.at(NiTransform::m_Rotate);
     let point = transform.at(NiTransform::m_Translate);
     typed_call!(
         FAMILY,
         0x00b7_1a40,
-        make_matrix(e, world, rotation, point, f32::from_bits(scale))
+        make_matrix(e, world, rotation, point, scale)
     );
     if set_world != 0 {
         let device = e.get(this, R::m_pkD3DDevice9);
@@ -585,37 +576,26 @@ pub fn set_world_transform(
     } else {
         e.vcall(state.addr(), SLOT_STATE_TRANSFORM, &args![t]);
     }
-    let s = x87_load32(x87_quiet_bits(
-        e.get(transform, NiTransform::m_fScale).to_bits(),
-    ));
-    let entry = |e: &Engine, i: u32| x87_load32(e.global::<u32>(t.wrapping_add(i * 4)));
-    let mut a = [0u32; 9];
-    for (i, word) in (0u32..).zip(a.iter_mut().take(8)) {
-        *word = x87_store32(x87_mul(entry(e, i), s));
+    let s = f64::from(e.get(transform, NiTransform::m_fScale));
+    let entry = |e: &Engine, i: u32| wide(e.global::<u32>(t.wrapping_add(i * 4)));
+    // The rotation scaled, each entry stored as a float.
+    let mut a = [0f64; 9];
+    for (i, value) in (0u32..).zip(a.iter_mut()) {
+        *value = f64::from(narrow(entry(e, i) * s));
     }
-    a[8] = x87_store32(x87_mul(s, x87_m32(e.global::<u32>(t.wrapping_add(0x20)))));
-    let ld = |i: usize| x87_load32(a[i]);
-    let m = |i: usize| x87_m32(a[i]);
-    let v = |e: &Engine, i: u32| x87_load32(e.global::<u32>(elem_addr(this, R::kDirectionA, i, 4)));
-    let w = |e: &Engine, i: u32| x87_load32(e.global::<u32>(elem_addr(this, R::kDirectionB, i, 4)));
-    let wm = |e: &Engine, i: u32| x87_m32(e.global::<u32>(elem_addr(this, R::kDirectionB, i, 4)));
-    let sum = x87_add(x87_mul(v(e, 1), ld(3)), x87_mul(v(e, 0), ld(0)));
-    let out0 = x87_store32(x87_add(x87_mul(v(e, 2), ld(6)), sum));
-    let sum = x87_add(x87_mul(v(e, 1), ld(4)), x87_mul(v(e, 0), ld(1)));
-    let out1 = x87_store32(x87_add(sum, x87_mul(v(e, 2), m(7))));
-    let sum = x87_add(x87_mul(v(e, 0), m(2)), x87_mul(v(e, 1), m(5)));
-    let out2 = x87_store32(x87_add(sum, x87_mul(v(e, 2), m(8))));
-    for (i, word) in (0u32..).zip([out0, out1, out2]) {
-        e.set_global(elem_addr(this, R::kModelDirectionA, i, 4), word);
+    let v = |e: &Engine, i: u32| wide(e.global::<u32>(elem_addr(this, R::kDirectionA, i, 4)));
+    let w = |e: &Engine, i: u32| wide(e.global::<u32>(elem_addr(this, R::kDirectionB, i, 4)));
+    let out0 = narrow(v(e, 2) * a[6] + (v(e, 1) * a[3] + v(e, 0) * a[0]));
+    let out1 = narrow((v(e, 1) * a[4] + v(e, 0) * a[1]) + v(e, 2) * a[7]);
+    let out2 = narrow((v(e, 0) * a[2] + v(e, 1) * a[5]) + v(e, 2) * a[8]);
+    for (i, value) in (0u32..).zip([out0, out1, out2]) {
+        e.set_global(elem_addr(this, R::kModelDirectionA, i, 4), value);
     }
-    let sum = x87_add(x87_mul(ld(0), w(e, 0)), x87_mul(ld(3), w(e, 1)));
-    let out3 = x87_store32(x87_add(x87_mul(ld(6), w(e, 2)), sum));
-    let sum = x87_add(x87_mul(ld(1), w(e, 0)), x87_mul(ld(4), wm(e, 1)));
-    let out4 = x87_store32(x87_add(sum, x87_mul(w(e, 2), m(7))));
-    let sum = x87_add(x87_mul(w(e, 0), m(2)), x87_mul(w(e, 1), m(5)));
-    let out5 = x87_store32(x87_add(sum, x87_mul(w(e, 2), m(8))));
-    for (i, word) in (0u32..).zip([out3, out4, out5]) {
-        e.set_global(elem_addr(this, R::kModelDirectionB, i, 4), word);
+    let out3 = narrow(a[6] * w(e, 2) + (a[0] * w(e, 0) + a[3] * w(e, 1)));
+    let out4 = narrow((a[1] * w(e, 0) + a[4] * w(e, 1)) + w(e, 2) * a[7]);
+    let out5 = narrow((w(e, 0) * a[2] + w(e, 1) * a[5]) + w(e, 2) * a[8]);
+    for (i, value) in (0u32..).zip([out3, out4, out5]) {
+        e.set_global(elem_addr(this, R::kModelDirectionB, i, 4), value);
     }
 }
 
@@ -670,26 +650,17 @@ pub fn set_light_direction(e: &mut Engine, matrix: u32) {
     let holder = e.global::<u32>(rendering.wrapping_add(0xc));
     let object = e.global::<u32>(holder);
     let vector = e.global::<u32>(object.wrapping_add(0xf8));
-    let minus_one = x87_load64(e.global::<u64>(MINUS_ONE));
-    let y = x87_store32(x87_mul(
-        x87_load32(e.global::<u32>(vector.wrapping_add(0xf4))),
-        minus_one,
-    ));
-    let z = x87_store32(x87_mul(
-        x87_load32(e.global::<u32>(vector.wrapping_add(0xf8))),
-        minus_one,
-    ));
-    let x = x87_store32(x87_mul(
-        minus_one,
-        x87_m32(e.global::<u32>(vector.wrapping_add(0xf0))),
-    ));
+    let minus_one = e.global::<f64>(MINUS_ONE);
+    let y = mul_d(e.global::<f32>(vector.wrapping_add(0xf4)), minus_one);
+    let z = mul_d(e.global::<f32>(vector.wrapping_add(0xf8)), minus_one);
+    let x = mul_d(e.global::<f32>(vector.wrapping_add(0xf0)), minus_one);
     e.with_stack(0x24, |e, frame| {
         let frame = frame.addr();
         e.set_global(frame, y);
         e.set_global(frame + 4, z);
         e.set_global(frame + 8, x);
-        e.set_global(frame + 0xc, x87_quiet_bits(y));
-        e.set_global(frame + 0x10, x87_quiet_bits(z));
+        e.set_global(frame + 0xc, y);
+        e.set_global(frame + 0x10, z);
         crate::draw::thunks::call_vec3_transform_normal(e, frame + 0x14, frame + 8, matrix);
         crate::draw::thunks::call_vec3_normalize(e, frame + 8, frame + 0x14);
         set_vertex_constants(e, 0x19, frame + 0x14, 1);
@@ -732,9 +703,9 @@ pub fn accumulate_light_color(e: &mut Engine, light: Ptr<ShaderLight>) {
     if color == 0 {
         color = light.addr().wrapping_add(ShaderLight::kColor.off);
     }
-    let channel = |e: &Engine, i: u32| x87_load32(e.global::<u32>(color.wrapping_add(4 * i)));
+    let channel = |e: &Engine, i: u32| e.global::<f32>(color.wrapping_add(4 * i));
     let (red, green, blue) = (channel(e, 0), channel(e, 1), channel(e, 2));
-    let neutral = |e: &Engine, i: u32| x87_load32(e.global::<u32>(NEUTRAL + 4 * i));
+    let neutral = |e: &Engine, i: u32| e.global::<f32>(NEUTRAL + 4 * i);
     if neutral(e, 0) == red && neutral(e, 1) == green && neutral(e, 2) == blue {
         return;
     }
@@ -743,35 +714,25 @@ pub fn accumulate_light_color(e: &mut Engine, light: Ptr<ShaderLight>) {
         let manager = e.global::<u32>(IMAGE_SPACE_MANAGER);
         let effect = e.global::<u32>(e.global::<u32>(manager.wrapping_add(8)).wrapping_add(4));
         let data = e.global::<u32>(effect.wrapping_add(0x6c));
-        Some(x87_mul(
-            x87_load32(e.global::<u32>(data.wrapping_add(0xc))),
-            m32(e, light, ShaderLight::fFade),
-        ))
-    } else if 1.0 > m32(e, light, ShaderLight::fFade) {
-        Some(fld(e, light, ShaderLight::fFade))
+        Some(e.global::<f32>(data.wrapping_add(0xc)) * e.get(light, ShaderLight::fFade))
+    } else if 1.0 > e.get(light, ShaderLight::fFade) {
+        Some(e.get(light, ShaderLight::fFade))
     } else {
         None
     };
     let (red, green, blue) = match scale {
-        Some(scale) => {
-            let scale = x87_load32(x87_store32(scale));
-            let red = x87_store32(x87_mul(red, scale));
-            let green = x87_store32(x87_mul(green, scale));
-            let blue = x87_store32(x87_mul(blue, scale));
-            (x87_load32(red), x87_load32(green), x87_load32(blue))
-        }
+        Some(scale) => (red * scale, green * scale, blue * scale),
         None => (red, green, blue),
     };
     let alpha = e.global::<u32>(AMBIENT + 0xc);
-    let mut sums = [0u32; 3];
+    let mut sums = [0f32; 3];
     for ((i, value), sum) in (0u32..).zip([red, green, blue]).zip(sums.iter_mut()) {
-        let ambient = e.global::<u32>(AMBIENT + 4 * i);
-        *sum = x87_store32(x87_add(value, x87_m32(ambient)));
+        *sum = value + e.global::<f32>(AMBIENT + 4 * i);
     }
     if !hdr {
         for sum in &mut sums {
-            if !(1.0 > x87_m32(*sum)) {
-                *sum = 0x3f80_0000;
+            if !(1.0 > *sum) {
+                *sum = 1.0;
             }
         }
     }
@@ -807,7 +768,6 @@ pub fn set_tint(e: &mut Engine, _this: u32, owner: Ptr<NiGeometry>, green: u32, 
     } else {
         e.global::<u32>(DEFAULT_BLUE)
     };
-    let blue = x87_quiet_bits(blue);
     e.set_global(COLOR + 4, green);
     e.set_global(COLOR, red);
     e.set_global(COLOR + 8, blue);
@@ -840,16 +800,15 @@ pub fn check_create_pass_array(e: &mut Engine, this: Ptr<BSShaderProperty>, size
 }
 
 // Typed from 00ba8ab0
-/// `BSShaderProperty::SetAlpha` (engine map), `thiscall(property, alpha)`: the alpha (quieted by the
-/// load); crossing 1.0 either way (both ordered) clears `iLastRenderPassState`.
+/// `BSShaderProperty::SetAlpha` (engine map), `thiscall(property, alpha)`: the alpha; crossing 1.0
+/// either way (both ordered) clears `iLastRenderPassState`.
 pub fn set_alpha(e: &mut Engine, this: Ptr<BSShaderProperty>, alpha: f32) {
-    let old = m32(e, this, BSShaderProperty::fAlpha);
-    let new = x87_load32(alpha.to_bits());
-    let crosses = (old >= 1.0 && new < 1.0) || (old < 1.0 && new >= 1.0);
+    let old = e.get(this, BSShaderProperty::fAlpha);
+    let crosses = (old >= 1.0 && alpha < 1.0) || (old < 1.0 && alpha >= 1.0);
     if crosses {
         e.set(this, BSShaderProperty::iLastRenderPassState, 0);
     }
-    e.set(this, BSShaderProperty::fAlpha, fstp(new));
+    e.set(this, BSShaderProperty::fAlpha, alpha);
 }
 
 // Typed from 00b5ac20
