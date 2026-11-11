@@ -17,7 +17,7 @@ use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::leaf;
 use engine_core::{entry, Engine};
-use engine_typed::draw::{self, packed, packing, shapes, skin};
+use engine_typed::draw::{self, packed, packing, shapes, skin, thunks};
 use engine_typed::render::{self, stream};
 use engine_typed::{crt, culling, dispatch, pathing, shader};
 
@@ -1958,6 +1958,178 @@ fn prepare_streams_typed_slots() {
         e.mem.set_u16(data + 0xe, 0x4000);
         vec![shader, geometry, partition, buffer, 0]
     })
+    .run()
+    .assert_same();
+}
+
+// ---- The D3DX import thunks (group E). ----
+
+/// The import slots the thunks jump through (`D3DXMatrixMultiplyTranspose`, `D3DXVec3Normalize`,
+/// `D3DXVec3TransformNormal`, `D3DXVec3TransformCoord`, `D3DXMatrixTranspose`, `D3DXMatrixInverse`,
+/// `D3DXMatrixMultiply`, `D3DXPlaneNormalize`, `D3DXPlaneTransform`), stood in: each marks the call and
+/// answers a word made from its first.
+const D3DX_IMPORTS: &[u32] = &[
+    0x00fd_f410,
+    0x00fd_f41c,
+    0x00fd_f420,
+    0x00fd_f414,
+    0x00fd_f42c,
+    0x00fd_f428,
+    0x00fd_f424,
+    0x00fd_f430,
+    0x00fd_f418,
+];
+
+fn thunk_world(e: &mut Engine, c: &Case, words: usize) -> Vec<u32> {
+    stand_ins(e);
+    for slot in D3DX_IMPORTS {
+        e.register(*slot, |e, a| {
+            mark(e, a);
+            ret(a[0] ^ 0x5a5a_0000)
+        });
+    }
+    (0..words).map(|i| c.word(i)).collect()
+}
+
+const THUNK_WORDS: &[u32] = &[0, 0x0bad_0010, 0xffff_fff0];
+
+#[test]
+fn matrix_multiply_transpose_thunk() {
+    Diff::new(entry!(
+        0x00ee_6dfe,
+        thunks::matrix_multiply_transpose(Ptr<()>, Ptr<()>, Ptr<()>) -> Ptr<()>
+    ))
+    .common()
+    .inputs(&[
+        Input::Of(THUNK_WORDS),
+        Input::Of(THUNK_WORDS),
+        Input::Of(THUNK_WORDS),
+    ])
+    .setup(|e, c| thunk_world(e, c, 3))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn vec3_normalize_thunk() {
+    Diff::new(entry!(
+        0x00ee_6dec,
+        thunks::vec3_normalize(Ptr<()>, Ptr<()>) -> Ptr<()>
+    ))
+    .common()
+    .inputs(&[Input::Of(THUNK_WORDS), Input::Of(THUNK_WORDS)])
+    .setup(|e, c| thunk_world(e, c, 2))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn vec3_transform_normal_thunk() {
+    Diff::new(entry!(
+        0x00ee_6df2,
+        thunks::vec3_transform_normal(Ptr<()>, Ptr<()>, Ptr<()>) -> Ptr<()>
+    ))
+    .common()
+    .inputs(&[
+        Input::Of(THUNK_WORDS),
+        Input::Of(THUNK_WORDS),
+        Input::Of(THUNK_WORDS),
+    ])
+    .setup(|e, c| thunk_world(e, c, 3))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn vec3_transform_coord_thunk() {
+    Diff::new(entry!(
+        0x00ee_6df8,
+        thunks::vec3_transform_coord(Ptr<()>, Ptr<()>, Ptr<()>) -> Ptr<()>
+    ))
+    .common()
+    .inputs(&[
+        Input::Of(THUNK_WORDS),
+        Input::Of(THUNK_WORDS),
+        Input::Of(THUNK_WORDS),
+    ])
+    .setup(|e, c| thunk_world(e, c, 3))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn matrix_transpose_thunk() {
+    Diff::new(entry!(
+        0x00ee_6dd4,
+        thunks::matrix_transpose(Ptr<()>, Ptr<()>) -> Ptr<()>
+    ))
+    .common()
+    .inputs(&[Input::Of(THUNK_WORDS), Input::Of(THUNK_WORDS)])
+    .setup(|e, c| thunk_world(e, c, 2))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn matrix_inverse_thunk() {
+    Diff::new(entry!(
+        0x00ee_6dda,
+        thunks::matrix_inverse(Ptr<()>, u32, Ptr<()>) -> Ptr<()>
+    ))
+    .common()
+    .inputs(&[
+        Input::Of(THUNK_WORDS),
+        Input::Of(THUNK_WORDS),
+        Input::Of(THUNK_WORDS),
+    ])
+    .setup(|e, c| thunk_world(e, c, 3))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn matrix_multiply_thunk() {
+    Diff::new(entry!(
+        0x00ee_6de0,
+        thunks::matrix_multiply(Ptr<()>, Ptr<()>, Ptr<()>) -> Ptr<()>
+    ))
+    .common()
+    .inputs(&[
+        Input::Of(THUNK_WORDS),
+        Input::Of(THUNK_WORDS),
+        Input::Of(THUNK_WORDS),
+    ])
+    .setup(|e, c| thunk_world(e, c, 3))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn plane_normalize_thunk() {
+    Diff::new(entry!(
+        0x00ee_6dce,
+        thunks::plane_normalize(Ptr<()>, Ptr<()>) -> Ptr<()>
+    ))
+    .common()
+    .inputs(&[Input::Of(THUNK_WORDS), Input::Of(THUNK_WORDS)])
+    .setup(|e, c| thunk_world(e, c, 2))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn plane_transform_thunk() {
+    Diff::new(entry!(
+        0x00ee_6dc8,
+        thunks::plane_transform(Ptr<()>, Ptr<()>, Ptr<()>) -> Ptr<()>
+    ))
+    .common()
+    .inputs(&[
+        Input::Of(THUNK_WORDS),
+        Input::Of(THUNK_WORDS),
+        Input::Of(THUNK_WORDS),
+    ])
+    .setup(|e, c| thunk_world(e, c, 3))
     .run()
     .assert_same();
 }

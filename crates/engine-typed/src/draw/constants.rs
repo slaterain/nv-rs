@@ -5,7 +5,7 @@
 
 use super::own;
 use engine_core::ptr::Ptr;
-use engine_core::{typed_call, Engine};
+use engine_core::Engine;
 
 /// The constant kinds (`011f5fc4`, a word for each low byte of an entry's flags).
 const CONSTANT_KINDS: u32 = 0x011f_5fc4;
@@ -45,16 +45,12 @@ fn has_buffer(e: &Engine, entry: u32) -> bool {
         && e.mem.u32(entry.wrapping_add(ENTRY_DATA)) != 0
 }
 
-/// `size` bytes from `source` into the entry's buffer at `offset` (`_memcpy`, the CRT family's).
+/// `size` bytes from `source` into the entry's buffer at `offset` (through [`own`]).
 #[inline(always)]
 fn copy_into_buffer(e: &mut Engine, entry: u32, offset: u32, source: u32) {
     let buffer = e.mem.u32(entry.wrapping_add(ENTRY_DATA));
     let size = e.mem.u32(entry.wrapping_add(ENTRY_SIZE));
-    let _: u32 = typed_call!(
-        crate::crt::FAMILY,
-        0x00ec_44d0,
-        crate::crt::mem::memcpy(e, offset.wrapping_add(buffer), source, size)
-    );
+    own::copy_constants(e, offset.wrapping_add(buffer), source, size);
 }
 
 // Typed from 00e89ba0

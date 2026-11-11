@@ -22,6 +22,8 @@
 //!   groups' begins and per-geometry set-ups, the tail of the pass kinds 1 to 5, the pass constants, the
 //!   land toggles, the lighting property's fade) and [`constants`] (the vertex shader's constant
 //!   setters);
+//! - the D3DX import thunks the typed families call (group E): [`thunks`] (each calls its import slot,
+//!   which the platform layer answers; the typed callers reach them directly);
 //! - [`packet`] and [`own`]: the accessors. Everything the draw reads that the rest of the frame
 //!   changes goes through [`packet`]; everything it writes that is its own through [`own`], one section
 //!   for each of the pipeline probe's conditions that live here (1: the pass lists the next frame's
@@ -33,19 +35,17 @@
 //!   Not routed yet: the packing's own objects (the buffer data's streams and chips, the shader
 //!   declaration, the dynamic geometry group, the vertex manager's staging block), which [`packing`]
 //!   and [`packed`] read and write in place; the shader package's tables, the passes' contents (stages,
-//!   state lists, masks, programs), the shaders' and lighting properties' own fields and the constant
-//!   map entries, filled at load and read in place by [`passes`], [`setups`] and [`constants`]; in
-//!   group B also its own writes read back in place (the stage textures in [`passes::bind_masked_stages`],
-//!   the constant entries' enabled bytes in [`setups`], the counted constant maps +0x30/+0x34), reads
-//!   that bypass accessors [`packet`] has (a geometry's skin +0xbc and world scale +0x98, the state
-//!   block's +0xc, a property's flags +0x20), frame-changing reads neither routed nor in an accessor
-//!   (the fog property and its index, the fog colour `011a9bd0` with `011a9bd4`, a lighting property's
-//!   camera distance +0x34, the rendered pass's byte +9, the state block's properties, the land table
-//!   +0xc4) and one write past [`own`] (the constant setters' copy into an entry's own buffer); and the
-//!   exe's constant data (the -FLT_MAX and 0.001 the alpha pass compares with, the colour
-//!   scale, the bone scale bounds). A later step can feed the draw from a copied packet and give a
-//!   drawing thread its own state by changing those two files; nothing here copies, defers or moves
-//!   anything yet.
+//!   state lists, masks, programs), the shaders' own fields (their renderer, the counted pointers'
+//!   sources), the shader property's texture source +0xac and land table bytes, the constant map entries'
+//!   fields and the pass type tables, the default stage texture `011f951c`, the fade distances
+//!   `011f9454`/`011f9458`, the element bits `011ae640`, the constant kinds `011f5fc4` and the vertex shader's
+//!   renderer's device word (+0x10f8), all filled at load and read in place by [`passes`], [`setups`] and
+//!   [`constants`] (group B's other reads and writes, its own writes read back included, go through
+//!   [`packet`] and [`own`]); and the exe's constant data (the -FLT_MAX and 0.001 the alpha pass
+//!   compares with, the colour scale, the bone scale bounds, the far distance with no fog distances, the
+//!   1.0 at `01012070`).
+//!   A later step can feed the draw from a copied packet and give a drawing thread its own state by
+//!   changing those two files; nothing here copies, defers or moves anything yet.
 //!
 //! The drawing itself (the batch renderer's lists, passes and state setters) is the shader family's,
 //! reached by `typed_call!`s that go direct while both families are on.
@@ -57,9 +57,9 @@
 //!
 //! **Threads and floats.** The drivers and the alpha pass run on the main thread only by the census
 //! (`t3/threads.tsv`); the geometry paths' packing, shape draw and getters also on two other game
-//! threads (about one call in 300 to one in 3,000), and six of the pass begin and end's functions also on
-//! game thread 12. The family keeps the shader family's exact x87 helpers (the alpha distances, the
-//! particles' quads, the bone matrices): [`Threads::Both`].
+//! threads (about one call in 300 to one in 3,000), and six of the pass begin and end's functions and the
+//! D3DX thunks `00ee6de0` and `00ee6dfe` also on game thread 12. The family keeps the shader family's
+//! exact x87 helpers (the alpha distances, the particles' quads, the bone matrices): [`Threads::Both`].
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
@@ -77,6 +77,7 @@ pub mod passes;
 pub mod setups;
 pub mod shapes;
 pub mod skin;
+pub mod thunks;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(18);
@@ -189,5 +190,15 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         // The vertex shader's constant setters (group B).
         entry!(0x00e8_9ba0, constants::set_constant(Ptr<_>, Ptr<_>, u32, u32) -> bool),
         entry!(0x00e8_9c70, constants::set_constant_array(Ptr<_>, Ptr<_>, u32, u32, u32, u32) -> bool),
+        // The D3DX import thunks (group E).
+        entry!(0x00ee_6dfe, thunks::matrix_multiply_transpose(Ptr<()>, Ptr<()>, Ptr<()>) -> Ptr<()>),
+        entry!(0x00ee_6dec, thunks::vec3_normalize(Ptr<()>, Ptr<()>) -> Ptr<()>),
+        entry!(0x00ee_6df2, thunks::vec3_transform_normal(Ptr<()>, Ptr<()>, Ptr<()>) -> Ptr<()>),
+        entry!(0x00ee_6df8, thunks::vec3_transform_coord(Ptr<()>, Ptr<()>, Ptr<()>) -> Ptr<()>),
+        entry!(0x00ee_6dd4, thunks::matrix_transpose(Ptr<()>, Ptr<()>) -> Ptr<()>),
+        entry!(0x00ee_6dda, thunks::matrix_inverse(Ptr<()>, u32, Ptr<()>) -> Ptr<()>),
+        entry!(0x00ee_6de0, thunks::matrix_multiply(Ptr<()>, Ptr<()>, Ptr<()>) -> Ptr<()>),
+        entry!(0x00ee_6dce, thunks::plane_normalize(Ptr<()>, Ptr<()>) -> Ptr<()>),
+        entry!(0x00ee_6dc8, thunks::plane_transform(Ptr<()>, Ptr<()>, Ptr<()>) -> Ptr<()>),
     ]
 }

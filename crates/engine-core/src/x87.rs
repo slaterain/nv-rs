@@ -868,8 +868,11 @@ pub fn x87_fcos(x: X87Ext) -> X87Ext {
 /// and ST0 the cosine, stored in that order: the cosine first). An operand out of range (finite,
 /// |x| >= 2^63) pushes nothing: ST0 keeps the operand, so the cosine's store takes the operand and
 /// the sine's, popping a register there is not, the real indefinite (a masked stack underflow). That
-/// is what the exe's code stores where nothing else is on the FPU stack (the particles' quads), and
-/// what this answers: `(real indefinite, x)`.
+/// is what the exe's code stores where nothing else is on the FPU stack, and what this answers: `(real
+/// indefinite, x)`. Every exe site the port reaches it from has nothing else there (checked in the
+/// disassembly: the particles' quads `00e69ea0` and `00e6ab40`, the rotation matrix `00a59660` three times,
+/// `00a485e0`, `004169a0`, `00c58d30`); a site with a live register below would store that register
+/// instead.
 #[inline]
 pub fn x87_fsincos(x: X87Ext) -> (X87Ext, X87Ext) {
     imp::fsincos(x)

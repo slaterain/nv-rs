@@ -309,8 +309,20 @@ impl Common for Diff {
             .family(&culling::CULLING)
             .family(&crt::CRT)
             // The draw family's skinned packer and strip lists, which the packing calls: stood in here, run
-            // in the draw family's tests below.
-            .goes_by_address(&[0x00e6_d780, 0x00a7_5f10])
+            // in the draw family's tests below; its D3DX thunks, which the shader and dispatch families call.
+            .goes_by_address(&[
+                0x00e6_d780,
+                0x00a7_5f10,
+                0x00ee_6dfe,
+                0x00ee_6dec,
+                0x00ee_6df2,
+                0x00ee_6df8,
+                0x00ee_6dd4,
+                0x00ee_6dda,
+                0x00ee_6de0,
+                0x00ee_6dce,
+                0x00ee_6dc8,
+            ])
             .max_calls(MAX_CALLS)
             .max_cases(200);
         if real_shader {

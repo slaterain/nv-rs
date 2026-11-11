@@ -14,8 +14,6 @@ use engine_core::{args, typed_call, Engine};
 
 /// `NiMatrix3::NiMatrix3` (`006815c0`), which returns `this` and does nothing else.
 const MATRIX_NEW: u32 = 0x0068_15c0;
-/// `D3DXMatrixInverse` (`00ee6dda`).
-const D3DX_MATRIX_INVERSE: u32 = 0x00ee_6dda;
 /// The translation the fixed 4x4 inverse uses (`011f474c`).
 const FIXED_TRANSLATION: u32 = 0x011f_474c;
 /// The unit axes the box's half extents scale (`011a946c`, `011a9478`, `011a9484`).
@@ -414,7 +412,7 @@ pub fn inverse_4x4(e: &mut Engine, transform: Ptr<NiTransform>, fixed: u32, out:
             let value = x87_quiet_bits(e.mem.u32(FIXED_TRANSLATION + 4 * k));
             e.mem.set_u32(matrix + 0x30 + 4 * k, value);
         }
-        e.call(D3DX_MATRIX_INVERSE, &args![out, 0u32, matrix]);
+        crate::draw::thunks::call_matrix_inverse(e, out, 0u32, matrix);
     });
 }
 
