@@ -523,8 +523,6 @@ impl Drop for Threaded {
 fn render(shared: &Shared, mut backend: Box<dyn Backend>, check: bool) {
     let mut hash = wire::HASH_START;
     let mut encoded = Vec::new();
-    // Whether the backend's idle work wants another turn ([`Backend::idle`]).
-    let mut more = false;
     loop {
         let mut chunk = {
             let mut q = lock(&shared.queue);
@@ -541,8 +539,8 @@ fn render(shared: &Shared, mut backend: Box<dyn Backend>, check: bool) {
                 let idle =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.idle()));
                 q = lock(&shared.queue);
-                match idle {
-                    Ok(again) => more = again,
+                let more = match idle {
+                    Ok(again) => again,
                     Err(panic) => {
                         q.dead = Some(panic_message(&*panic));
                         q.chunks.clear();
@@ -553,7 +551,7 @@ fn render(shared: &Shared, mut backend: Box<dyn Backend>, check: bool) {
                         shared.progress.notify_all();
                         return;
                     }
-                }
+                };
                 if !q.chunks.is_empty() || q.closing {
                     continue;
                 }
