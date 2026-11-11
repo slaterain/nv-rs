@@ -739,3 +739,496 @@ fn pack_untransformed() {
     .run()
     .assert_same();
 }
+
+// Batch 2: the bound, the geometry data's setters, the morpher.
+
+use engine_typed::geometry::{bound, data, morph};
+
+/// The bound's, the setters' and the morpher's constants: the empty bound's centre (`011f426c`), the
+/// double 0.5 (`01011588`), the weight thresholds (`01017d00`, `0104ffb8`), the forced update's time
+/// (`01096324`), the update task switch (`011f3725`) and owner (`011f5b04`); the square root
+/// (`00ec6040`) stands in with the root of its argument.
+const ZERO_POINT: u32 = 0x011f_426c;
+const HALF: u32 = 0x0101_1588;
+const WEIGHT_ABOVE: u32 = 0x0101_7d00;
+const WEIGHT_BELOW: u32 = 0x0104_ffb8;
+const FORCED_UPDATE_TIME: u32 = 0x0109_6324;
+const UPDATE_TASKS_ENABLED: u32 = 0x011f_3725;
+const UPDATE_TASK_OWNER: u32 = 0x011f_5b04;
+
+fn bound_globals(e: &mut Engine) {
+    globals(e);
+    for page in [
+        0x0104_f000u32,
+        0x0109_6000,
+        0x011f_3000,
+        0x011f_4000,
+        0x011f_5000,
+    ] {
+        e.map(page, 0x1000);
+    }
+    for (k, value) in [1.5f32, -2.0, 0.25].iter().enumerate() {
+        set(e, ZERO_POINT + 4 * k as u32, value.to_bits());
+    }
+    e.mem.set_u64(HALF, 0.5f64.to_bits());
+    set(e, WEIGHT_ABOVE, 0.001f32.to_bits());
+    set(e, WEIGHT_BELOW, (-0.001f32).to_bits());
+    set(e, FORCED_UPDATE_TIME, 3.25f32.to_bits());
+    e.register(0x00ec_6040, |_, a| {
+        let x = f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32));
+        Ret {
+            st0: x.sqrt(),
+            ..Ret::default()
+        }
+    });
+}
+
+/// `count` points of floats from [`FLOATS`] spread out, the case's float at coordinate `at` (when
+/// there is one).
+fn points(e: &mut Engine, count: u32, at: u32, value: f32) -> u32 {
+    let words = 3 * count.max(1);
+    let p = e.mem.alloc(4 * words + 4);
+    for w in 0..words {
+        let spread = FLOATS[(w as usize) % FLOATS.len()] * (w as f32 - 7.0);
+        set(e, p + 4 * w, spread.to_bits());
+    }
+    if at < words {
+        set(e, p + 4 * at, value.to_bits());
+    }
+    p
+}
+
+/// `00a7ee30`: no points (zero and a negative count), one, a few, the unrolled four and more; the
+/// case's float at a coordinate of the first point or a later one, or none.
+#[test]
+fn compute_from_data() {
+    Diff::new(entry!(0x00a7_ee30, bound::compute_from_data(Ptr, i32, Ptr)))
+        .family(&geometry::GEOMETRY)
+        .inputs(&[
+            Input::Of(&[0xffff_ffff, 0, 1, 3, 4, 5, 9]),
+            Input::Of(&[0, 2, 4, 13, 26, 0x100]),
+            Input::F32,
+        ])
+        .max_cases(512)
+        .float_sweep(64)
+        .setup(|e, c| {
+            bound_globals(e);
+            let count = c.word(0);
+            let n = if (count as i32) > 0 { count } else { 1 };
+            let p = points(e, n, c.word(1), c.f32(2));
+            let bound = e.mem.alloc(0x10);
+            vec![bound, count, p]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `00a7ec90`: none, the unrolled groups and their tail; the scale and a planted float in the source
+/// or the destination, every float the harness has and a sweep.
+#[test]
+fn add_scaled_points() {
+    Diff::new(entry!(
+        0x00a7_ec90,
+        morph::add_scaled_points(Ptr, f32, Ptr, u32)
+    ))
+    .family(&geometry::GEOMETRY)
+    .inputs(&[
+        Input::Of(&[0, 1, 3, 4, 5, 8, 9]),
+        Input::F32,
+        Input::Of(&[0, 4, 13, 0x100, 0x104, 0x11a]),
+        Input::F32,
+    ])
+    .max_cases(512)
+    .float_sweep(64)
+    .setup(|e, c| {
+        globals(e);
+        let count = c.word(0);
+        let at = c.word(2);
+        let source = points(e, count, if at < 0x100 { at } else { u32::MAX }, c.f32(3));
+        let dest = points(
+            e,
+            count,
+            if at >= 0x100 { at - 0x100 } else { u32::MAX },
+            c.f32(3),
+        );
+        vec![dest, c.f32(1).to_bits(), source, count]
+    })
+    .run()
+    .assert_same();
+}
+
+/// What the morpher's world is made with.
+struct MorphCase {
+    targets: u32,
+    relative: bool,
+    ignore_base: bool,
+    items: bool,
+    answer: u32,
+    weight: f32,
+    real_slot: bool,
+    target_check: u32,
+    missing_interpolator: bool,
+}
+
+/// The morpher's world: a controller (slot 0xc4 answers the item's interpolator from the table, 0xe8
+/// the real `GetVertexData` or a stand-in answering an array) on a target geometry (slot 0x18 from
+/// the table) whose data has six vertices, morph data of `targets` targets, relative or not, the items
+/// with their weights or none, interpolators whose slot 0x9c writes `weight` and answers `answer`.
+fn morph_world(e: &mut Engine, m: &MorphCase) -> u32 {
+    bound_globals(e);
+    let vt = vtable(e);
+    slots!(e; 0x18, 0xe8, 0x94);
+    e.register(VT_FN + 0xc4, |e, a| ret(e.mem.u32(RETS + 0x700 + 4 * a[1])));
+    e.register(VT_FN + 0x9c, |e, a| {
+        set(e, a[3], e.mem.u32(RETS + 0x9c0));
+        ret(e.mem.u32(RETS + 0x9c))
+    });
+    let controller_vt = e.mem.alloc(0x200);
+    for slot in (0..0x200).step_by(4) {
+        let real = slot == 0xe8 && m.real_slot;
+        set(
+            e,
+            controller_vt + slot,
+            if real { 0x00a3_b010 } else { VT_FN + slot },
+        );
+    }
+    let data = geometry_data(e, vt, 1);
+    set(e, data + 0x30, 0);
+    let target = obj(e, 0xc0, vt);
+    set(e, target + 0xb8, data);
+    let controller = obj(e, 0x44, controller_vt);
+    set(e, controller + 0x2c, target);
+    set(e, controller + 0x28, 2.5f32.to_bits());
+    e.mem.set_u8(controller + 0x41, u8::from(m.ignore_base));
+    let count = m.targets;
+    let morph = e.mem.alloc(0x18);
+    set(e, morph + 8, count);
+    set(e, morph + 0xc, 6);
+    e.mem.set_u8(morph + 0x14, u8::from(m.relative));
+    let targets = e.mem.alloc(0x10 * count.max(1));
+    for i in 0..count {
+        let vertices = points(e, 6, u32::MAX, 0.0);
+        set(e, targets + 0x10 * i, vertices);
+    }
+    set(e, morph + 0x10, targets);
+    set(e, controller + 0x38, morph);
+    if m.items {
+        let items = e.mem.alloc(8 * count.max(1));
+        for i in 0..count {
+            let weight = [0.5f32, 0.0005, -0.75][i as usize % 3];
+            set(e, items + 8 * i + 4, weight.to_bits());
+        }
+        set(e, controller + 0x3c, items);
+    }
+    for i in 0..count {
+        let interpolator = if i == 1 && m.missing_interpolator {
+            0
+        } else {
+            obj(e, 0x10, vt)
+        };
+        set(e, RETS + 0x700 + 4 * i, interpolator);
+    }
+    set(e, RETS + 0x9c, m.answer);
+    set(e, RETS + 0x9c0, m.weight.to_bits());
+    set(e, RETS + 0x18, m.target_check);
+    let other = points(e, 6, u32::MAX, 0.0);
+    set(e, RETS + 0xe8, other);
+    controller
+}
+
+/// `00a3aa10`: no targets, one or three; relative data or not; the base ignored or not; items or
+/// none; the interpolators answering or not with every float the harness has; the slot 0xe8 real or a
+/// stand-in; the target check either way; an item without an interpolator.
+#[test]
+fn gen_morph_interp() {
+    Diff::new(entry!(0x00a3_aa10, morph::gen_morph_interp(Ptr, u32)))
+        .family(&geometry::GEOMETRY)
+        .max_calls(MAX_CALLS)
+        .inputs(&[
+            Input::Of(&[0, 1, 3]),
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[1, 0]),
+            Input::Of(&[1, 0]),
+            Input::F32,
+            Input::Flag,
+            Input::Flag,
+            Input::Flag,
+        ])
+        .max_cases(600)
+        .setup(|e, c| {
+            let m = MorphCase {
+                targets: c.word(0),
+                relative: c.word(1) != 0,
+                ignore_base: c.word(2) != 0,
+                items: c.word(3) != 0,
+                answer: c.word(4),
+                weight: c.f32(5),
+                real_slot: c.word(6) != 0,
+                target_check: c.word(7),
+                missing_interpolator: c.word(8) != 0,
+            };
+            let controller = morph_world(e, &m);
+            vec![controller, 0x7777]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `00a3b010`: with and without a target, the data with positions or none (then a new array from the
+/// memory manager, a stand-in making a block), the data flags kept.
+#[test]
+fn vertex_data() {
+    Diff::new(entry!(0x00a3_b010, morph::vertex_data(Ptr) -> u32))
+        .family(&geometry::GEOMETRY)
+        .inputs(&[
+            Input::Of(&[1, 0]),
+            Input::Of(&[1, 0]),
+            Input::Of(&[0, 1, 0xf001, 0xfffe]),
+        ])
+        .setup(|e, c| {
+            bound_globals(e);
+            e.register(0x00aa_3e40, |e, a| ret(e.mem.alloc(a[1].max(4))));
+            let vt = vtable(e);
+            let data = geometry_data(e, vt, c.word(2));
+            if c.word(1) == 0 {
+                set(e, data + 0x20, 0);
+            }
+            let target = if c.word(0) != 0 {
+                let t = obj(e, 0xc0, vt);
+                set(e, t + 0xb8, data);
+                t
+            } else {
+                0
+            };
+            let controller = obj(e, 0x44, vt);
+            set(e, controller + 0x2c, target);
+            vec![controller]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `00a3b080`: morph data or none; the update data's byte +5; a forced update; `DontDoUpdate`'s
+/// answer; always updating; a target or none; the update tasks off, refused, for a shared data word,
+/// made or not, queued or run at once. The translation calls `GenMorphInterp` plainly.
+#[test]
+fn update() {
+    Diff::new(entry!(0x00a3_b080, morph::update(Ptr, Ptr)))
+        .family(&geometry::GEOMETRY)
+        .translation_calls_plainly(&[0x00a3_aa10])
+        .max_calls(MAX_CALLS)
+        .inputs(&[
+            Input::Of(&[1, 0]),
+            Input::Flag,
+            Input::Flag,
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[1, 0]),
+            Input::Flag,
+            Input::Flag,
+            Input::Of(&[1, 2]),
+            Input::Flag,
+            Input::Flag,
+        ])
+        .max_cases(500)
+        .setup(|e, c| {
+            // Two targets, items, the interpolators answering 0.5.
+            let m = MorphCase {
+                targets: 2,
+                relative: false,
+                ignore_base: false,
+                items: true,
+                answer: 1,
+                weight: 0.5,
+                real_slot: true,
+                target_check: 1,
+                missing_interpolator: false,
+            };
+            let controller = morph_world(e, &m);
+            let target = e.mem.u32(controller + 0x2c);
+            let data = e.mem.u32(target + 0xb8);
+            set(e, data + 4, c.word(8));
+            if c.word(0) == 0 {
+                set(e, controller + 0x38, 0);
+            }
+            if c.word(5) == 0 {
+                set(e, controller + 0x2c, 0);
+            }
+            e.mem.set_u8(controller + 8, (c.word(2) as u8) << 5 | 0x11);
+            e.mem.set_u8(controller + 0x42, c.word(4) as u8);
+            let update = e.mem.alloc(8);
+            set(e, update, 7.5f32.to_bits());
+            e.mem.set_u8(update + 5, c.word(1) as u8);
+            e.register(0x00a3_6250, |e, _| ret(e.mem.u32(RETS + 0x250)));
+            set(e, RETS + 0x250, c.word(3));
+            e.mem.set_u8(UPDATE_TASKS_ENABLED, c.word(6) as u8);
+            e.register(0x0071_4a00, |e, _| ret(e.mem.u32(RETS + 0x4a0)));
+            set(e, RETS + 0x4a0, c.word(7));
+            let vt = e.mem.u32(target);
+            let task = if c.word(9) != 0 { obj(e, 0x20, vt) } else { 0 };
+            e.register(0x00a5_6f90, |e, _| ret(e.mem.u32(RETS + 0x6f0)));
+            set(e, RETS + 0x6f0, task);
+            e.register(0x00a5_6c60, |e, a| {
+                set(
+                    e,
+                    MARK + 0x10,
+                    a[0] ^ a[1].rotate_left(8) ^ a[2].rotate_left(16),
+                );
+                ret(0)
+            });
+            e.register(0x00a3_a730, |e, _| ret(e.mem.u32(RETS + 0x730)));
+            set(e, RETS + 0x730, c.word(10));
+            set(e, UPDATE_TASK_OWNER, 0x5150);
+            vec![controller, update]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The setters' world: a geometry data (slot 0x80 the group from the table, slot 0x90 the active
+/// count) with its arrays, a group with a count; the memory manager's free, the group's destructor
+/// and the sized delete stand in, each leaving its mark.
+fn setter_world(e: &mut Engine, group: bool, group_count: u32, active: u32) -> u32 {
+    bound_globals(e);
+    slots!(e; 0x80);
+    for addr in [0x00aa_4060u32, 0x00a8_a670, 0x00aa_1460] {
+        e.register(addr, |e, a| {
+            let mut fold = e.mem.u32(MARK + 0x14);
+            for w in a {
+                fold = fold.rotate_left(9) ^ w;
+            }
+            set(e, MARK + 0x14, fold);
+            ret(0)
+        });
+    }
+    let vt = vtable(e);
+    let data = geometry_data(e, vt, 0x0f0f);
+    let g = e.mem.alloc(0x10);
+    set(e, g + 0xc, group_count);
+    set(e, RETS + 0x80, if group { g } else { 0 });
+    set(e, RETS + 0x90, active);
+    data
+}
+
+/// New arrays for the setters: each of the four is the data's own when its bit in `changed` is clear,
+/// else a new block; the positions null when `no_positions`.
+fn new_arrays(e: &mut Engine, data: u32, changed: u32, no_positions: bool) -> [u32; 4] {
+    let mut arrays = [0u32; 4];
+    for (k, at) in [0x20u32, 0x24, 0x28, 0x2c].iter().enumerate() {
+        arrays[k] = if changed & (1 << k) != 0 {
+            points(e, 6, u32::MAX, 0.0)
+        } else {
+            e.mem.u32(data + at)
+        };
+    }
+    if no_positions {
+        arrays[0] = 0;
+    }
+    arrays
+}
+
+/// `00a670c0`: with a group (its count reaching zero or not) or without; none, one or every array
+/// changed; the new positions null; the active count zero or six; the texture set count and flags; the
+/// count's high half.
+#[test]
+fn replace() {
+    Diff::new(entry!(
+        0x00a6_70c0,
+        data::replace(Ptr, u32, u32, u32, u32, u32, u32, u32)
+    ))
+    .family(&geometry::GEOMETRY)
+    .inputs(&[
+        Input::Flag,
+        Input::Of(&[1, 3]),
+        Input::Of(&[0, 1, 2, 4, 8, 0xf]),
+        Input::Flag,
+        Input::Of(&[0, 6]),
+        Input::Of(&[0, 1, 3]),
+        Input::Of(&[0, 0xf000, 0x1_0001]),
+        Input::Of(&[6, 0x1_0006]),
+    ])
+    .max_cases(600)
+    .setup(|e, c| {
+        let data = setter_world(e, c.word(0) != 0, c.word(1), c.word(4));
+        let a = new_arrays(e, data, c.word(2), c.word(3) != 0);
+        vec![
+            data,
+            c.word(7),
+            a[0],
+            a[1],
+            a[2],
+            a[3],
+            c.word(5),
+            c.word(6),
+        ]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `00a66b30`: the active count zero or six, the positions null or not, the texture set count, the
+/// flags word and the count's high half.
+#[test]
+fn set_data() {
+    Diff::new(entry!(
+        0x00a6_6b30,
+        data::set_data(Ptr, u32, Ptr, Ptr, Ptr, Ptr, u32, u32)
+    ))
+    .family(&geometry::GEOMETRY)
+    .inputs(&[
+        Input::Of(&[0, 6]),
+        Input::Flag,
+        Input::Of(&[0, 1, 3]),
+        Input::Of(&[0, 0xf000, 0x1_0001]),
+        Input::Of(&[6, 0x1_0006]),
+    ])
+    .setup(|e, c| {
+        let data = setter_world(e, false, 1, c.word(0));
+        let a = new_arrays(e, data, 0xf, c.word(1) != 0);
+        vec![
+            data,
+            c.word(4),
+            a[0],
+            a[1],
+            a[2],
+            a[3],
+            c.word(2),
+            c.word(3),
+        ]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `00a66bb0`: the arrays, the texture set count, the flags and the count's high half.
+#[test]
+fn replace_data() {
+    Diff::new(entry!(
+        0x00a6_6bb0,
+        data::replace_data(Ptr, u32, u32, u32, u32, u32, u32, u32)
+    ))
+    .family(&geometry::GEOMETRY)
+    .inputs(&[
+        Input::Of(&[0, 1, 3]),
+        Input::Of(&[0, 0xf000, 0x1_0001]),
+        Input::Of(&[6, 0x1_0006]),
+        Input::Of(&[0, 0xf]),
+    ])
+    .setup(|e, c| {
+        let data = setter_world(e, false, 1, 6);
+        let a = new_arrays(e, data, c.word(3), false);
+        vec![
+            data,
+            c.word(2),
+            a[0],
+            a[1],
+            a[2],
+            a[3],
+            c.word(0),
+            c.word(1),
+        ]
+    })
+    .run()
+    .assert_same();
+}
