@@ -46,6 +46,7 @@ use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
 pub mod alpha;
+pub mod constants;
 pub mod drivers;
 pub mod layout;
 pub mod own;
@@ -153,6 +154,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00be_0e90, passes::end_states_restored()),
         entry!(0x00be_21b0, passes::bind_masked_stages()),
         entry!(0x00be_1f90, passes::begin_done(u32, u32)),
+        entry!(0x00b5_5520, passes::fog_property(u32) -> u32),
         // The shadow light shader's pass set-ups (group B).
         entry!(0x00b7_dd50, setups::begin_types_fc(Ptr<_>)),
         entry!(0x00b7_deb0, setups::begin_types_ca(Ptr<_>)),
@@ -161,5 +163,11 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b7_e150, setups::setup_type_102(Ptr<_>, Ptr<_>)),
         entry!(0x00b7_ac20, setups::tail_kinds_1_to_5(Ptr<_>, u32)),
         entry!(0x00b7_b450, setups::setup_pass_constants(Ptr<_>, u32)),
+        entry!(0x00b7_af80, setups::select_pass(Ptr<_>, u32)),
+        entry!(0x00c0_2c30, setups::land_toggles(Ptr<_>, u32, u32, u32, u32)),
+        entry!(0x00b6_6b80, setups::property_fade(Ptr<_>) -> f32),
+        // The vertex shader's constant setters (group B).
+        entry!(0x00e8_9ba0, constants::set_constant(Ptr<_>, Ptr<_>, u32, u32) -> bool),
+        entry!(0x00e8_9c70, constants::set_constant_array(Ptr<_>, Ptr<_>, u32, u32, u32, u32) -> bool),
     ]
 }

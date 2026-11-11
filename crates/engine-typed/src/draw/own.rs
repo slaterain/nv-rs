@@ -616,3 +616,105 @@ pub(crate) fn allocate_block(e: &mut Engine, size: u32) -> u32 {
 pub(crate) fn free_block(e: &mut Engine, block: u32) {
     e.call(MEMORY_FREE, &args![MEMORY_MANAGER, block]);
 }
+
+// ---- The pass begin and end (group B): the shader state a pass leaves behind. ----
+//
+// Condition 2: what the pass begin sets that the next draw on main reads: the current shader pass
+// (`0126f74c`), the textures its stages take, the constant entries switched on for the pass type, the
+// fog and toggle constants, the device's vertex shader constants. Condition 7: the shader's counted
+// pointers the pass begin sets (its +0x28 and the two constant maps, +0x30 and +0x34).
+
+/// `IDirect3DDevice9::SetVertexShaderConstantF` (slot 94).
+const DEVICE_SET_VERTEX_CONSTANTS: u32 = 0x178;
+/// `00a5f860` (a counted pointer set to an object, `thiscall(slot, object)`) and `00c663d0` (a counted
+/// pointer set from another, `thiscall(slot, source)`), by address.
+const SET_COUNTED: u32 = 0x00a5_f860;
+const COPY_COUNTED: u32 = 0x00c6_63d0;
+
+/// The current shader pass set (condition 2).
+#[inline(always)]
+pub(crate) fn set_current_pass(e: &mut Engine, pass: u32) {
+    e.set_global(super::packet::CURRENT_PASS, pass);
+}
+
+/// A pass stage's texture (+8) set (condition 2).
+#[inline(always)]
+pub(crate) fn set_stage_texture(e: &mut Engine, stage: u32, texture: u32) {
+    e.set_global(stage.wrapping_add(8), texture);
+}
+
+/// A constant switch object's word +0x20 set (condition 2).
+#[inline(always)]
+pub(crate) fn set_switch_word(e: &mut Engine, switch: u32, value: u32) {
+    e.set_global(switch.wrapping_add(0x20), value);
+}
+
+/// A constant entry switched on or off (its byte +8) for the pass (condition 2).
+#[inline(always)]
+pub(crate) fn set_entry_enabled(e: &mut Engine, entry: u32, on: bool) {
+    e.set_global(entry.wrapping_add(8), u8::from(on));
+}
+
+/// A word of the shader constants the pass begin fills (the fog constants `011fa280`, their colour's
+/// copies `011fd9b8`, the land toggles `011fa2d0`) (condition 2).
+#[inline(always)]
+pub(crate) fn set_constant_word(e: &mut Engine, at: u32, word: u32) {
+    e.set_global(at, word);
+}
+
+/// `count` vertex shader constant registers from `register` on (`data`) on `device`, of the kind the
+/// device's slot `slot` sets (floats 0x178, integers 0x180, booleans 0x188) (condition 2). Answers the
+/// device's result.
+#[inline(always)]
+pub(crate) fn device_vertex_constants_of(
+    e: &mut Engine,
+    device: u32,
+    slot: u32,
+    register: u32,
+    data: u32,
+    count: u32,
+) -> u32 {
+    e.vcall(device, slot, &args![register, data, count]).u32()
+}
+
+/// `count` float vertex shader constant registers from `register` on (`data`) on `device` (condition 2).
+#[inline(always)]
+pub(crate) fn device_vertex_constants(e: &mut Engine, device: u32, register: u32, data: u32, count: u32) {
+    device_vertex_constants_of(e, device, DEVICE_SET_VERTEX_CONSTANTS, register, data, count);
+}
+
+/// The counted pointer at `slot` set to the word at `source`, the exe's own code (condition 7):
+/// nothing when they are equal; else the old object's count goes down (deleted at 0, its slot 4), the
+/// new one is stored (read again from `source` when `reread`) and, when not null, counted.
+pub(crate) fn assign_counted(e: &mut Engine, slot: u32, source: u32, reread: bool) {
+    let old = e.global::<u32>(slot);
+    let new = e.global::<u32>(source);
+    if old == new {
+        return;
+    }
+    if old != 0 {
+        let left = e
+            .call(INTERLOCKED_DECREMENT, &args![old.wrapping_add(4)])
+            .u32();
+        if left == 0 {
+            e.vcall(old, SLOT_DELETE, &[]);
+        }
+    }
+    let new = if reread { e.global::<u32>(source) } else { new };
+    e.set_global(slot, new);
+    if new != 0 {
+        e.call(INTERLOCKED_INCREMENT, &args![new.wrapping_add(4)]);
+    }
+}
+
+/// The counted pointer at `slot` set to `object` through `00a5f860` (condition 7).
+#[inline(always)]
+pub(crate) fn set_counted(e: &mut Engine, slot: u32, object: u32) {
+    e.call(SET_COUNTED, &args![slot, object]);
+}
+
+/// The counted pointer at `slot` set from the one at `source` through `00c663d0` (condition 7).
+#[inline(always)]
+pub(crate) fn copy_counted(e: &mut Engine, slot: u32, source: u32) {
+    e.call(COPY_COUNTED, &args![slot, source]);
+}

@@ -7,21 +7,15 @@
 //! The render states go through the shader family's setters and caches (condition 2 of the pipeline
 //! probe: the render-state cache the next draw on main reads).
 
-use super::FAMILY;
+use super::{packet, FAMILY};
 use crate::shader::{self, state};
 use engine_core::ptr::Ptr;
 use engine_core::{args, typed_call, Engine};
 
-/// The current shader pass (`0126f74c`), the pass type being rendered (`011f91e4`), the renderer
-/// (`011f9508`).
-const CURRENT_PASS: u32 = 0x0126_f74c;
-const RENDERING_PASS_TYPE: u32 = 0x011f_91e4;
-const RENDERER: u32 = 0x011f_9508;
-
 /// The first node of the current pass's render state list (+0x30, its +0x10).
 #[inline(always)]
 fn pass_states(e: &Engine) -> u32 {
-    let pass = e.global::<u32>(CURRENT_PASS);
+    let pass = packet::current_pass(e);
     let states = e.global::<u32>(pass.wrapping_add(0x30));
     e.global::<u32>(states.wrapping_add(0x10))
 }
@@ -78,13 +72,9 @@ pub fn restore_state(e: &mut Engine, state: u32, value: u32) {
         0xbe => 0x00b9_85f0,
         0xc3 => 0x0071_4bf0,
         _ => {
-            let renderer = e.global::<u32>(RENDERER);
-            let cache = e.global::<u32>(renderer.wrapping_add(0x8b8));
-            let stored = e.global::<u32>(
-                cache
-                    .wrapping_add(state.wrapping_mul(8))
-                    .wrapping_add(0x124),
-            );
+            let renderer = packet::renderer_singleton(e);
+            let cache = packet::render_state_cache(e, renderer);
+            let stored = packet::stored_render_state(e, cache, state);
             if crate::slot_target(e, cache, 0x68) == 0x00e8_8780 {
                 typed_call!(
                     shader::FAMILY,
@@ -127,7 +117,7 @@ const SET_ALPHA_TEST_ENABLE: u32 = 0x00b9_7ed0;
 /// upper bytes are the block address's.
 pub fn alpha_test_of(e: &mut Engine, _this: u32, block: u32, flag: bool) {
     let mut both = false;
-    let pass_type = e.global::<u32>(RENDERING_PASS_TYPE);
+    let pass_type = packet::rendering_pass_type(e);
     if block != 0 {
         let second = e.global::<u32>(block.wrapping_add(0x10));
         if second != 0 && e.global::<u16>(second.wrapping_add(0x18)) & 0xc00 == 0xc00 {
@@ -159,7 +149,7 @@ pub fn alpha_test_of(e: &mut Engine, _this: u32, block: u32, flag: bool) {
 /// The pass end's states (a shader's slot 0x110), `thiscall(shader, unread word)`: unless the pass type
 /// being rendered is 0x252 to 0x256, alpha blending on, z-writes off and the z function 2, unlocked.
 pub fn end_states(e: &mut Engine, _this: u32, _unused: u32) {
-    let pass_type = e.global::<u32>(RENDERING_PASS_TYPE);
+    let pass_type = packet::rendering_pass_type(e);
     if (0x252..=0x256).contains(&pass_type) {
         return;
     }
@@ -209,7 +199,7 @@ const ELEMENT_BITS: u32 = 0x011a_e640;
 /// word in `011ae640` shares a bit with the mask, up to the first null one, is bound (the render
 /// family's `00e7eb00`, not forced) when it has a texture (+8). The count (+0x18) is read once.
 pub fn bind_masked_stages(e: &mut Engine) {
-    let pass = e.global::<u32>(CURRENT_PASS);
+    let pass = packet::current_pass(e);
     let count = e.global::<u32>(pass.wrapping_add(0x18));
     let mask = sign_extend_byte(e.global::<u8>(pass.wrapping_add(0x4c)));
     let mut index = 0u32;
@@ -270,15 +260,15 @@ fn shader_set(e: &mut Engine, target: u32, object: u32, value: u32) {
 /// target slot is read before the call that feeds it, as in the exe; the getters take no word, so the
 /// pushed 0 stays as the target's last word.
 pub fn begin_done(e: &mut Engine, _this: u32, _unused: u32) {
-    let pass = e.global::<u32>(CURRENT_PASS);
+    let pass = packet::current_pass(e);
     let object = e.call(PASS_TARGET, &args![pass]).u32();
-    let pass = e.global::<u32>(CURRENT_PASS);
+    let pass = packet::current_pass(e);
     let source = e.global::<u32>(pass.wrapping_add(0x5c));
     let vtable = e.global::<u32>(object);
     let value = e.vcall(source, 0x84, &args![]).u32();
     let target = e.global::<u32>(vtable.wrapping_add(0x8c));
     shader_set(e, target, object, value);
-    let pass = e.global::<u32>(CURRENT_PASS);
+    let pass = packet::current_pass(e);
     let source = e.global::<u32>(pass.wrapping_add(0x44));
     if source != 0 {
         let vtable = e.global::<u32>(object);
@@ -286,4 +276,11 @@ pub fn begin_done(e: &mut Engine, _this: u32, _unused: u32) {
         let target = e.global::<u32>(vtable.wrapping_add(0x7c));
         shader_set(e, target, object, value);
     }
+}
+
+// Typed from 00b55520
+/// `BSShaderManager::GetFogProperty` (engine map), `cdecl(index)`: the fog property of shadow scene
+/// node `index`.
+pub fn fog_property(e: &mut Engine, index: u32) -> u32 {
+    packet::scene_fog_property(e, index)
 }
