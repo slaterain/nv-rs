@@ -168,17 +168,64 @@ struct State {
     decl: Option<Arc<Decl>>,
     streams: [Stream; 16],
     indices: Option<Arc<Buf>>,
-    /// Shader constants as the model holds them: per stage float (4 words), int (4), bool (1).
-    vsf: Box<[[u32; 4]; 256]>,
+    /// Shader constants as the model holds them: per stage float (256 registers of 4 words, as
+    /// the register block carries them: little-endian bytes), int (4 words), bool (1).
+    vsf: Box<[u8; 4096]>,
     vsi: [[u32; 4]; 16],
     vsb: [u32; 16],
-    psf: Box<[[u32; 4]; 256]>,
+    psf: Box<[u8; 4096]>,
     psi: [[u32; 4]; 16],
     psb: [u32; 16],
     /// The user clip planes (`SetClipPlane`), float bits.
     clip: [[u32; 4]; wgsl::CLIP_PLANES],
     /// The vertex and pixel stage's uniform blocks need writing again.
     dirty: [bool; 2],
+    /// ... and their headers, everything but the float constants, need making again
+    /// ([`Device::write_blocks`]): set with `dirty` by every change but a float constant's.
+    header_dirty: [bool; 2],
+    /// The handles the bindings were last set from ([`Bound`]).
+    bound: Bound,
+}
+
+/// A handle no binding holds: the object at a handle may have changed since it was bound
+/// ([`Bound::forget`]).
+const UNKNOWN: Handle = Handle::MAX;
+
+/// The handles `SetTexture`, `SetStreamSource` (with its offset and stride) and `SetIndices` last
+/// bound, so binding the same again changes nothing and looks nothing up (the game binds many again
+/// each draw). 0 is no object.
+#[derive(Clone, Default)]
+struct Bound {
+    textures: [Handle; 20],
+    streams: [(Handle, u32, u32); 16],
+    indices: Handle,
+}
+
+impl Bound {
+    /// The object at `h` is gone or new: a binding of `h` looks it up again.
+    fn forget(&mut self, h: Handle) {
+        for t in &mut self.textures {
+            if *t == h {
+                *t = UNKNOWN;
+            }
+        }
+        for s in &mut self.streams {
+            if s.0 == h {
+                s.0 = UNKNOWN;
+            }
+        }
+        if self.indices == h {
+            self.indices = UNKNOWN;
+        }
+    }
+}
+
+impl State {
+    /// Something a stage's block header carries changed (`stage` 0 vertex, 1 pixel).
+    fn touch(&mut self, stage: usize) {
+        self.dirty[stage] = true;
+        self.header_dirty[stage] = true;
+    }
 }
 
 /// What a render pass draws into.
@@ -530,6 +577,9 @@ const BLOCK: u64 = wgsl::REGS_SIZE.div_ceil(256) * 256;
 /// The ring of uniform blocks and `DrawPrimitiveUP` vertices sent with each batch.
 const RING: u64 = 32 << 20;
 const UP_RING: u64 = 8 << 20;
+/// The upload stage: buffer uploads into buffers the open batch draws from, copied in among the
+/// batch's commands ([`Device::upload_buffer`]).
+const STAGE: u64 = 8 << 20;
 
 pub struct Device {
     pub(crate) device: wgpu::Device,
@@ -552,6 +602,8 @@ pub struct Device {
     uniform_layout: wgpu::BindGroupLayout,
     up: Vec<u8>,
     up_buffer: wgpu::Buffer,
+    stage: Vec<u8>,
+    stage_buffer: wgpu::Buffer,
     blocks: (u32, u32),
     /// The float constants each stage's last written block carries.
     block_fregs: [u32; 2],
@@ -626,6 +678,11 @@ pub struct Device {
     clip_distances: bool,
     /// The pixel-centre move the last written vertex block carries ([`Device::write_blocks`]).
     block_centre: [f32; 2],
+    /// Each stage's block header as last made, and the pixel-centre move and alpha to coverage
+    /// switch they were made with ([`Device::write_blocks`]).
+    headers: [[u8; HEADER]; 2],
+    header_centre: [f32; 2],
+    header_atoc: bool,
     /// The levels whose bytes the backend keeps (managed and system-memory pools: what
     /// `ReadSurface` answers), by the texture or surface they belong to; and those bytes, as the
     /// game last gave them (`UploadSurface`) or `GetRenderTargetData` wrote them.
@@ -828,6 +885,12 @@ impl Device {
                 }),
             }),
         });
+        let stage_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("upload stage"),
+            size: STAGE,
+            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let up_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("DrawPrimitiveUP vertices"),
             size: UP_RING,
@@ -866,14 +929,16 @@ impl Device {
                 decl: None,
                 streams: Default::default(),
                 indices: None,
-                vsf: Box::new([[0; 4]; 256]),
+                vsf: Box::new([0; 4096]),
                 vsi: [[0; 4]; 16],
                 vsb: [0; 16],
-                psf: Box::new([[0; 4]; 256]),
+                psf: Box::new([0; 4096]),
                 psi: [[0; 4]; 16],
                 psb: [0; 16],
                 clip: [[0; 4]; wgsl::CLIP_PLANES],
                 dirty: [true; 2],
+                header_dirty: [true; 2],
+                bound: Bound::default(),
             },
             encoder: None,
             pass: None,
@@ -885,6 +950,8 @@ impl Device {
             uniform_layout,
             up: Vec::new(),
             up_buffer,
+            stage: Vec::new(),
+            stage_buffer,
             blocks: (0, 0),
             block_fregs: [0; 2],
             sampler_layouts: Map::default(),
@@ -919,6 +986,9 @@ impl Device {
             float_filterable: features.contains(wgpu::Features::FLOAT32_FILTERABLE),
             clip_distances: features.contains(wgpu::Features::CLIP_DISTANCES),
             block_centre: [0.0; 2],
+            headers: [[0; HEADER]; 2],
+            header_centre: [0.0; 2],
+            header_atoc: false,
             keeps: Map::default(),
             kept: Map::default(),
             counting: None,
@@ -1225,6 +1295,7 @@ impl Device {
         pool: u32,
     ) {
         self.keep_levels(texture, levels, pool);
+        self.st.bound.forget(texture);
         let count = if cube {
             levels.len() as u32 / 6
         } else {
@@ -1293,6 +1364,7 @@ impl Device {
     }
 
     pub(crate) fn create_buffer(&mut self, buffer: Handle, index: bool, length: u32, format: u32) {
+        self.st.bound.forget(buffer);
         let size = u64::from(length.max(4).div_ceil(4) * 4);
         let wgpu_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -1399,6 +1471,7 @@ impl Device {
     }
 
     pub(crate) fn destroy(&mut self, object: Handle) {
+        self.st.bound.forget(object);
         if let Some(levels) = self.keeps.remove(&object) {
             for h in levels {
                 self.kept.remove(&h);
@@ -1426,6 +1499,10 @@ impl Device {
         if !self.up.is_empty() {
             self.queue.write_buffer(&self.up_buffer, 0, &self.up);
             self.up.clear();
+        }
+        if !self.stage.is_empty() {
+            self.queue.write_buffer(&self.stage_buffer, 0, &self.stage);
+            self.stage.clear();
         }
         if let Some(e) = self.encoder.take() {
             self.queue.submit([e.finish()]);
@@ -1509,13 +1586,39 @@ impl Device {
         }
         data.copy_to(0, &mut shadow[offset as usize..offset as usize + len]);
         let start = (offset as usize) & !3;
-        let end = (offset as usize + len).div_ceil(4) * 4;
-        let end = end.min(shadow.len());
-        let bytes = shadow[start..end].to_vec();
-        if b.batch.load(Ordering::Relaxed) == self.batch {
+        let end = ((offset as usize + len).div_ceil(4) * 4).min(shadow.len());
+        let in_batch = b.batch.load(Ordering::Relaxed) == self.batch;
+        if in_batch && self.stage.len() + (end - start) <= STAGE as usize {
+            // The open batch draws from this buffer already: the new bytes go in between, as a
+            // copy among the batch's commands from its upload stage (written before the batch
+            // runs, as the register ring is), so the draws before read the old bytes and the draws
+            // after the new, and the batch is not sent for it (it was: five times a frame in the
+            // crowded street, each a submit and a new encoder).
+            // The pass ends first (a copy cannot be recorded inside one), then the bytes are staged.
+            self.end_pass();
+            let Some(Obj::Buffer(_, shadow)) = self.objects.get(&buffer) else {
+                return;
+            };
+            let at = self.stage.len() as u64;
+            self.stage.extend_from_slice(&shadow[start..end]);
+            let stage = self.stage_buffer.clone();
+            self.encoder().copy_buffer_to_buffer(
+                &stage,
+                at,
+                &b.buffer,
+                start as u64,
+                (end - start) as u64,
+            );
+            return;
+        }
+        if in_batch {
             self.flush();
         }
-        self.queue.write_buffer(&b.buffer, start as u64, &bytes);
+        // Not drawn from by the open batch: written before the batch's commands run.
+        if let Some(Obj::Buffer(_, shadow)) = self.objects.get(&buffer) {
+            self.queue
+                .write_buffer(&b.buffer, start as u64, &shadow[start..end]);
+        }
     }
 
     // State.
@@ -1546,7 +1649,8 @@ impl Device {
         if let Some(slot) = self.st.rt.get_mut(index as usize) {
             *slot = s;
         }
-        self.st.dirty = [true; 2];
+        self.st.touch(0);
+        self.st.touch(1);
     }
 
     pub(crate) fn set_depth_stencil(&mut self, surface: Handle) {
@@ -1556,7 +1660,8 @@ impl Device {
             self.surface_of(surface)
         };
         // The targets' sample count decides the alpha to coverage switch ([`ATOC`]).
-        self.st.dirty = [true; 2];
+        self.st.touch(0);
+        self.st.touch(1);
     }
 
     /// `SetClipPlane(index, plane)`: in clip space, as Direct3D 9 takes them with a vertex
@@ -1564,7 +1669,7 @@ impl Device {
     pub(crate) fn set_clip_plane(&mut self, index: u32, plane: [u32; 4]) {
         if let Some(p) = self.st.clip.get_mut(index as usize) {
             *p = plane;
-            self.st.dirty[0] = true;
+            self.st.touch(0);
         }
     }
 
@@ -1577,7 +1682,7 @@ impl Device {
             min_z: f32::from_bits(v[4]),
             max_z: f32::from_bits(v[5]),
         };
-        self.st.dirty[0] = true;
+        self.st.touch(0);
     }
 
     pub(crate) fn set_scissor(&mut self, r: Rect) {
@@ -1585,15 +1690,20 @@ impl Device {
     }
 
     pub(crate) fn set_render_state(&mut self, state: u32, value: u32) {
-        if let Some(s) = self.st.rs.get_mut(state as usize) {
-            *s = value;
+        // A state set to the value it has changes nothing (the game sets many again each draw).
+        let Some(s) = self.st.rs.get_mut(state as usize) else {
+            return;
+        };
+        if *s == value {
+            return;
         }
+        *s = value;
         match state as usize {
             // The pixel block's alpha test and alpha to coverage; the vertex block's clip planes.
             rs::ALPHATESTENABLE | rs::ALPHAREF | rs::ALPHAFUNC | RS_ADAPTIVETESS_Y => {
-                self.st.dirty[1] = true
+                self.st.touch(1)
             }
-            rs::CLIPPLANEENABLE | RS_CLIPPING => self.st.dirty[0] = true,
+            rs::CLIPPLANEENABLE | RS_CLIPPING => self.st.touch(0),
             rs::FOGENABLE if value != 0 => {
                 self.warn("D3DRS_FOGENABLE (fixed-function fog) is not provided")
             }
@@ -1615,10 +1725,18 @@ impl Device {
 
     pub(crate) fn set_sampler_state(&mut self, sampler: u32, kind: u32, value: u32) {
         if let Some(slot) = Self::sampler_slot(sampler) {
-            if let Some(s) = self.st.samplers[slot].get_mut(kind as usize) {
-                *s = value;
+            let Some(s) = self.st.samplers[slot].get_mut(kind as usize) else {
+                return;
+            };
+            if *s == value {
+                return;
             }
-            self.st.dirty[usize::from(slot < 16)] = true;
+            *s = value;
+            // Of the sampler states only the LOD bias is in the stage's block; the rest go into
+            // the draw's sampler, made from them at the draw.
+            if kind as usize == state::ss::MIPMAPLODBIAS {
+                self.st.touch(usize::from(slot < 16));
+            }
             if kind as usize == state::ss::SRGBTEXTURE && value != 0 {
                 self.warn("D3DSAMP_SRGBTEXTURE is not provided yet");
             }
@@ -1627,12 +1745,23 @@ impl Device {
 
     pub(crate) fn set_texture(&mut self, sampler: u32, texture: Handle) {
         if let Some(slot) = Self::sampler_slot(sampler) {
-            self.st.textures[slot] = if texture == 0 {
+            // The texture bound there already (the game binds many again each draw): nothing
+            // to look up ([`State::bound`]).
+            if self.st.bound.textures[slot] == texture {
+                return;
+            }
+            let t = if texture == 0 {
                 None
             } else {
                 self.texture_of(texture)
             };
-            self.st.dirty[usize::from(slot < 16)] = true;
+            // The stage's block carries each sampler's fill mode (its texture's format).
+            let fix = |t: &Option<Arc<Tex>>| t.as_ref().map_or(0, |t| t.format.fix);
+            if fix(&t) != fix(&self.st.textures[slot]) {
+                self.st.touch(usize::from(slot < 16));
+            }
+            self.st.textures[slot] = t;
+            self.st.bound.textures[slot] = texture;
         }
     }
 
@@ -1655,18 +1784,32 @@ impl Device {
         };
     }
 
-    pub(crate) fn set_constants(&mut self, kind: u8, start: u32, count: u32, words: &[u32]) {
+    /// `Set*ShaderConstant*` (`kind`: vertex float, int, bool, then the same for the pixel stage)
+    /// of `count` registers from `start`, from the command's bytes. Float registers are copied
+    /// as bytes (a draw's block carries them so); registers past the file's end are not kept.
+    pub(crate) fn set_constants(
+        &mut self,
+        kind: u8,
+        start: u32,
+        count: u32,
+        data: &d3d9_stream::Data<'_>,
+    ) {
         let st = &mut self.st;
         let s = start as usize;
-        match kind {
-            0 | 3 => {
-                let regs = if kind == 0 { &mut st.vsf } else { &mut st.psf };
-                for (k, r) in words.chunks_exact(4).take(count as usize).enumerate() {
-                    if let Some(slot) = regs.get_mut(s + k) {
-                        slot.copy_from_slice(r);
-                    }
-                }
+        let stage = usize::from(kind >= 3);
+        if kind == 0 || kind == 3 {
+            let regs = if kind == 0 { &mut st.vsf } else { &mut st.psf };
+            let n = (count as usize)
+                .min(data.len() as usize / 16)
+                .min(256usize.saturating_sub(s));
+            if n > 0 {
+                data.copy_to(0, &mut regs[16 * s..16 * (s + n)]);
             }
+            st.dirty[stage] = true;
+            return;
+        }
+        let words = data.to_words();
+        match kind {
             1 | 4 => {
                 let regs = if kind == 1 { &mut st.vsi } else { &mut st.psi };
                 for (k, r) in words.chunks_exact(4).take(count as usize).enumerate() {
@@ -1684,10 +1827,17 @@ impl Device {
                 }
             }
         }
-        st.dirty[usize::from(kind >= 3)] = true;
+        st.touch(stage);
     }
 
     pub(crate) fn set_stream(&mut self, stream: u32, buffer: Handle, offset: u32, stride: u32) {
+        let Some(&(h, o, s)) = self.st.bound.streams.get(stream as usize) else {
+            return;
+        };
+        if (h, o, s) == (buffer, offset, stride) {
+            return;
+        }
+        self.st.bound.streams[stream as usize] = (buffer, offset, stride);
         let b = if buffer == 0 {
             None
         } else {
@@ -1703,6 +1853,10 @@ impl Device {
     }
 
     pub(crate) fn set_indices(&mut self, buffer: Handle) {
+        if self.st.bound.indices == buffer {
+            return;
+        }
+        self.st.bound.indices = buffer;
         self.st.indices = if buffer == 0 {
             None
         } else {
@@ -2683,7 +2837,6 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             return;
         }
         let atoc = ps_due && self.atoc();
-        let mut ring = std::mem::take(&mut self.ring);
         let st = &self.st;
         // Each sampler's fill mode (its texture's format) and LOD bias.
         let per_sampler = |range: std::ops::Range<usize>| -> ([u32; 16], [f32; 16]) {
@@ -2695,55 +2848,72 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
             (fix, bias)
         };
+        // A stage's header (everything before its float constants) is made again only when
+        // something it carries changed ([`State::header_dirty`]); the float constants, which
+        // most draws change, are copied as they are held.
         if vs_due {
-            // The planes `D3DRS_CLIPPLANEENABLE` turns on (all off without `D3DRS_CLIPPING`); a
-            // plane that is off is zero, which keeps everything.
-            let mut clip = [[0u32; 4]; wgsl::CLIP_PLANES];
-            if st.rs[RS_CLIPPING] != 0 {
-                for (k, plane) in clip.iter_mut().enumerate() {
-                    if st.rs[rs::CLIPPLANEENABLE] & (1 << k) != 0 {
-                        *plane = st.clip[k];
+            if st.header_dirty[0] || centre != self.header_centre {
+                // The planes `D3DRS_CLIPPLANEENABLE` turns on (all off without `D3DRS_CLIPPING`);
+                // a plane that is off is zero, which keeps everything.
+                let mut clip = [[0u32; 4]; wgsl::CLIP_PLANES];
+                if st.rs[RS_CLIPPING] != 0 {
+                    for (k, plane) in clip.iter_mut().enumerate() {
+                        if st.rs[rs::CLIPPLANEENABLE] & (1 << k) != 0 {
+                            *plane = st.clip[k];
+                        }
                     }
                 }
+                // The vertex stage's system values: the half-pixel move of Direct3D 9's pixel
+                // centres.
+                let vs_sys = [centre[0], centre[1], 0.0, 0.0];
+                self.headers[0] =
+                    block_header(&st.vsi, &st.vsb, vs_sys, per_sampler(16..20), &clip);
+                self.header_centre = centre;
             }
-            // The vertex stage's system values: the half-pixel move of Direct3D 9's pixel centres.
-            let vs_sys = [centre[0], centre[1], 0.0, 0.0];
             self.blocks.0 = write_block(
-                &mut ring,
-                &st.vsf[..fregs[0] as usize],
-                &st.vsi,
-                &st.vsb,
-                vs_sys,
-                per_sampler(16..20),
-                &clip,
+                &mut self.ring,
+                &self.headers[0],
+                &self.st.vsf[..16 * fregs[0] as usize],
             );
             self.block_centre = centre;
             self.block_fregs[0] = fregs[0];
         }
+        let st = &self.st;
         if ps_due {
-            // The alpha test, unless alpha to coverage stands in for it ([`ATOC`]: then the
-            // comparisons NEVER, LESS, EQUAL and LESSEQUAL draw nothing, the others pass
-            // everything and the coverage comes from the alpha alone).
-            let alpha_func = match (st.rs[rs::ALPHATESTENABLE] != 0, atoc) {
-                (false, _) => 8.0,
-                (true, false) => st.rs[rs::ALPHAFUNC] as f32,
-                (true, true) if (1..=4).contains(&st.rs[rs::ALPHAFUNC]) => 1.0,
-                (true, true) => 8.0,
-            };
-            let (above, from) = alpha_bounds(st.rs[rs::ALPHAREF] & 0xFF);
-            let ps_sys = [above, alpha_func, from, 0.0];
+            if st.header_dirty[1] || atoc != self.header_atoc {
+                // The alpha test, unless alpha to coverage stands in for it ([`ATOC`]: then the
+                // comparisons NEVER, LESS, EQUAL and LESSEQUAL draw nothing, the others pass
+                // everything and the coverage comes from the alpha alone).
+                let alpha_func = match (st.rs[rs::ALPHATESTENABLE] != 0, atoc) {
+                    (false, _) => 8.0,
+                    (true, false) => st.rs[rs::ALPHAFUNC] as f32,
+                    (true, true) if (1..=4).contains(&st.rs[rs::ALPHAFUNC]) => 1.0,
+                    (true, true) => 8.0,
+                };
+                let (above, from) = alpha_bounds(st.rs[rs::ALPHAREF] & 0xFF);
+                let ps_sys = [above, alpha_func, from, 0.0];
+                self.headers[1] = block_header(
+                    &st.psi,
+                    &st.psb,
+                    ps_sys,
+                    per_sampler(0..16),
+                    &[[0; 4]; wgsl::CLIP_PLANES],
+                );
+                self.header_atoc = atoc;
+            }
             self.blocks.1 = write_block(
-                &mut ring,
-                &st.psf[..fregs[1] as usize],
-                &st.psi,
-                &st.psb,
-                ps_sys,
-                per_sampler(0..16),
-                &[[0; 4]; wgsl::CLIP_PLANES],
+                &mut self.ring,
+                &self.headers[1],
+                &self.st.psf[..16 * fregs[1] as usize],
             );
             self.block_fregs[1] = fregs[1];
         }
-        self.ring = ring;
+        if vs_due {
+            self.st.header_dirty[0] = false;
+        }
+        if ps_due {
+            self.st.header_dirty[1] = false;
+        }
         self.st.dirty = [false; 2];
     }
 
@@ -4758,14 +4928,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         st.decl = None;
         st.streams = Default::default();
         st.indices = None;
-        *st.vsf = [[0; 4]; 256];
+        *st.vsf = [0; 4096];
         st.vsi = [[0; 4]; 16];
         st.vsb = [0; 16];
-        *st.psf = [[0; 4]; 256];
+        *st.psf = [0; 4096];
         st.psi = [[0; 4]; 16];
         st.psb = [0; 16];
         st.clip = [[0; 4]; wgsl::CLIP_PLANES];
         st.dirty = [true; 2];
+        st.header_dirty = [true; 2];
+        st.bound = Bound::default();
         self.counting = None;
         self.groups.clear();
         self.depth_parts.clear();
@@ -4779,23 +4951,18 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     }
 }
 
-/// One stage's register block (`Regs` of the converted shaders) at the end of the ring: integer
-/// and boolean registers, the system values, each sampler's fill mode and LOD bias, the clip
-/// planes, then the float registers `f` (those the stage's shader reads: the rest of the block's
-/// range is never read). Its offset; the ring grows by the block rounded up to the offset
-/// alignment.
-fn write_block(
-    ring: &mut Vec<u8>,
-    f: &[[u32; 4]],
+/// The bytes of a register block before its float constants (`Regs` up to `c`).
+const HEADER: usize = wgsl::REGS_C_OFFSET as usize;
+
+/// One stage's block header (`Regs` of the converted shaders up to `c`): the integer and boolean
+/// registers, the system values, each sampler's fill mode and LOD bias, the clip planes.
+fn block_header(
     i: &[[u32; 4]; 16],
     b: &[u32; 16],
     sys: [f32; 4],
     (fix, bias): ([u32; 16], [f32; 16]),
     clip: &[[u32; 4]; wgsl::CLIP_PLANES],
-) -> u32 {
-    let at = ring.len();
-    let len = wgsl::REGS_C_OFFSET as usize + 16 * f.len();
-    ring.resize(at + len.div_ceil(256) * 256, 0);
+) -> [u8; HEADER] {
     let words = i
         .iter()
         .flatten()
@@ -4805,14 +4972,25 @@ fn write_block(
         .chain([0u32; 12])
         .chain(fix)
         .chain(bias.iter().map(|v| v.to_bits()))
-        .chain(clip.iter().flatten().copied())
-        .chain(f.iter().flatten().copied());
+        .chain(clip.iter().flatten().copied());
+    let mut out = [0u8; HEADER];
     let mut n = 0;
-    for (d, w) in ring[at..at + len].chunks_exact_mut(4).zip(words) {
+    for (d, w) in out.chunks_exact_mut(4).zip(words) {
         d.copy_from_slice(&w.to_le_bytes());
         n += 4;
     }
-    debug_assert_eq!(n, len);
+    debug_assert_eq!(n, HEADER);
+    out
+}
+
+/// One stage's register block at the end of the ring: its header ([`block_header`]), then the
+/// float registers' bytes `f` (those the stage's shader reads: the rest of the block's range is
+/// never read). Its offset; the ring grows by the block rounded up to the offset alignment.
+fn write_block(ring: &mut Vec<u8>, header: &[u8; HEADER], f: &[u8]) -> u32 {
+    let at = ring.len();
+    ring.extend_from_slice(header);
+    ring.extend_from_slice(f);
+    ring.resize(at + (HEADER + f.len()).div_ceil(256) * 256, 0);
     at as u32
 }
 

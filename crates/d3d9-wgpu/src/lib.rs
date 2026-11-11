@@ -175,7 +175,7 @@ impl Backend for WgpuBackend {
                 count,
                 data,
                 ..
-            } => d.set_constants(kind, start, count, &data.to_words()),
+            } => d.set_constants(kind, start, count, &data),
             Cmd::SetStreamSource {
                 stream,
                 buffer,
