@@ -15,6 +15,7 @@
 // also stops `u32 as u8` and `f64 as f32`: those go through a named helper with a local `allow`.
 #![deny(clippy::cast_possible_truncation)]
 
+pub mod anim_keys;
 pub mod animation;
 pub mod collision;
 pub mod crt;
@@ -106,6 +107,7 @@ pub mod units {
         engine_core::typed::provide(&crate::geometry::GEOMETRY);
         engine_core::typed::provide(&crate::animation::ANIMATION);
         engine_core::typed::provide(&crate::draw_f::DRAW_F);
+        engine_core::typed::provide(&crate::anim_keys::ANIM_KEYS);
         crate::render::stream::note_head_check();
     }
 }
@@ -119,7 +121,7 @@ mod tests {
     use engine_core::typed::{parse_switch, Family, Mode};
 
     /// This crate's families, in the order `units::funcs` provides them.
-    fn families() -> [&'static Family; 15] {
+    fn families() -> [&'static Family; 16] {
         [
             &crate::lockfree::LOCKFREE,
             &crate::culling::CULLING,
@@ -136,13 +138,14 @@ mod tests {
             &crate::geometry::GEOMETRY,
             &crate::animation::ANIMATION,
             &crate::draw_f::DRAW_F,
+            &crate::anim_keys::ANIM_KEYS,
         ]
     }
 
     /// Which of this crate's families are past their gate, and so on with no switch: all but the geometry,
-    /// animation and draw_f families (on only when `NV_TYPED` names them until their gates), the first six
-    /// since their speed gate together (2026-11-08), render since its own (2026-11-09), draw, scene,
-    /// particles, collision and multibound since their recorded-run gates (2026-11-10);
+    /// animation, draw_f and anim_keys families (on only when `NV_TYPED` names them until their gates),
+    /// the first six since their speed gate together (2026-11-08), render since its own (2026-11-09),
+    /// draw, scene, particles, collision and multibound since their recorded-run gates (2026-11-10);
     /// `NV_TYPED=off` or `<family>:off` turns one off.
     #[test]
     fn families_past_their_gate_are_on_by_default() {
