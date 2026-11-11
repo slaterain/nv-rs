@@ -183,6 +183,41 @@ struct State {
     /// ... and their headers, everything but the float constants, need making again
     /// ([`Device::write_blocks`]): set with `dirty` by every change but a float constant's.
     header_dirty: [bool; 2],
+    /// The handles the bindings were last set from ([`Bound`]).
+    bound: Bound,
+}
+
+/// A handle no binding holds: the object at a handle may have changed since it was bound
+/// ([`Bound::forget`]).
+const UNKNOWN: Handle = Handle::MAX;
+
+/// The handles `SetTexture`, `SetStreamSource` (with its offset and stride) and `SetIndices` last
+/// bound, so binding the same again changes nothing and looks nothing up (the game binds many again
+/// each draw). 0 is no object.
+#[derive(Clone, Default)]
+struct Bound {
+    textures: [Handle; 20],
+    streams: [(Handle, u32, u32); 16],
+    indices: Handle,
+}
+
+impl Bound {
+    /// The object at `h` is gone or new: a binding of `h` looks it up again.
+    fn forget(&mut self, h: Handle) {
+        for t in &mut self.textures {
+            if *t == h {
+                *t = UNKNOWN;
+            }
+        }
+        for s in &mut self.streams {
+            if s.0 == h {
+                s.0 = UNKNOWN;
+            }
+        }
+        if self.indices == h {
+            self.indices = UNKNOWN;
+        }
+    }
 }
 
 impl State {
@@ -542,6 +577,9 @@ const BLOCK: u64 = wgsl::REGS_SIZE.div_ceil(256) * 256;
 /// The ring of uniform blocks and `DrawPrimitiveUP` vertices sent with each batch.
 const RING: u64 = 32 << 20;
 const UP_RING: u64 = 8 << 20;
+/// The upload stage: buffer uploads into buffers the open batch draws from, copied in among the
+/// batch's commands ([`Device::upload_buffer`]).
+const STAGE: u64 = 8 << 20;
 
 pub struct Device {
     pub(crate) device: wgpu::Device,
@@ -564,6 +602,8 @@ pub struct Device {
     uniform_layout: wgpu::BindGroupLayout,
     up: Vec<u8>,
     up_buffer: wgpu::Buffer,
+    stage: Vec<u8>,
+    stage_buffer: wgpu::Buffer,
     blocks: (u32, u32),
     /// The float constants each stage's last written block carries.
     block_fregs: [u32; 2],
@@ -845,6 +885,12 @@ impl Device {
                 }),
             }),
         });
+        let stage_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("upload stage"),
+            size: STAGE,
+            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let up_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("DrawPrimitiveUP vertices"),
             size: UP_RING,
@@ -892,6 +938,7 @@ impl Device {
                 clip: [[0; 4]; wgsl::CLIP_PLANES],
                 dirty: [true; 2],
                 header_dirty: [true; 2],
+                bound: Bound::default(),
             },
             encoder: None,
             pass: None,
@@ -903,6 +950,8 @@ impl Device {
             uniform_layout,
             up: Vec::new(),
             up_buffer,
+            stage: Vec::new(),
+            stage_buffer,
             blocks: (0, 0),
             block_fregs: [0; 2],
             sampler_layouts: Map::default(),
@@ -1246,6 +1295,7 @@ impl Device {
         pool: u32,
     ) {
         self.keep_levels(texture, levels, pool);
+        self.st.bound.forget(texture);
         let count = if cube {
             levels.len() as u32 / 6
         } else {
@@ -1314,6 +1364,7 @@ impl Device {
     }
 
     pub(crate) fn create_buffer(&mut self, buffer: Handle, index: bool, length: u32, format: u32) {
+        self.st.bound.forget(buffer);
         let size = u64::from(length.max(4).div_ceil(4) * 4);
         let wgpu_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -1420,6 +1471,7 @@ impl Device {
     }
 
     pub(crate) fn destroy(&mut self, object: Handle) {
+        self.st.bound.forget(object);
         if let Some(levels) = self.keeps.remove(&object) {
             for h in levels {
                 self.kept.remove(&h);
@@ -1447,6 +1499,10 @@ impl Device {
         if !self.up.is_empty() {
             self.queue.write_buffer(&self.up_buffer, 0, &self.up);
             self.up.clear();
+        }
+        if !self.stage.is_empty() {
+            self.queue.write_buffer(&self.stage_buffer, 0, &self.stage);
+            self.stage.clear();
         }
         if let Some(e) = self.encoder.take() {
             self.queue.submit([e.finish()]);
@@ -1530,13 +1586,35 @@ impl Device {
         }
         data.copy_to(0, &mut shadow[offset as usize..offset as usize + len]);
         let start = (offset as usize) & !3;
-        let end = (offset as usize + len).div_ceil(4) * 4;
-        let end = end.min(shadow.len());
-        let bytes = shadow[start..end].to_vec();
-        if b.batch.load(Ordering::Relaxed) == self.batch {
+        let end = ((offset as usize + len).div_ceil(4) * 4).min(shadow.len());
+        let in_batch = b.batch.load(Ordering::Relaxed) == self.batch;
+        if in_batch && self.stage.len() + (end - start) <= STAGE as usize {
+            // The open batch draws from this buffer already: the new bytes go in between, as a
+            // copy among the batch's commands from its upload stage (written before the batch
+            // runs, as the register ring is), so the draws before read the old bytes and the draws
+            // after the new, and the batch is not sent for it (it was: five times a frame in the
+            // crowded street, each a submit and a new encoder).
+            let at = self.stage.len() as u64;
+            self.stage.extend_from_slice(&shadow[start..end]);
+            let stage = self.stage_buffer.clone();
+            self.end_pass();
+            self.encoder().copy_buffer_to_buffer(
+                &stage,
+                at,
+                &b.buffer,
+                start as u64,
+                (end - start) as u64,
+            );
+            return;
+        }
+        if in_batch {
             self.flush();
         }
-        self.queue.write_buffer(&b.buffer, start as u64, &bytes);
+        // Not drawn from by the open batch: written before the batch's commands run.
+        if let Some(Obj::Buffer(_, shadow)) = self.objects.get(&buffer) {
+            self.queue
+                .write_buffer(&b.buffer, start as u64, &shadow[start..end]);
+        }
     }
 
     // State.
@@ -1608,9 +1686,14 @@ impl Device {
     }
 
     pub(crate) fn set_render_state(&mut self, state: u32, value: u32) {
-        if let Some(s) = self.st.rs.get_mut(state as usize) {
-            *s = value;
+        // A state set to the value it has changes nothing (the game sets many again each draw).
+        let Some(s) = self.st.rs.get_mut(state as usize) else {
+            return;
+        };
+        if *s == value {
+            return;
         }
+        *s = value;
         match state as usize {
             // The pixel block's alpha test and alpha to coverage; the vertex block's clip planes.
             rs::ALPHATESTENABLE | rs::ALPHAREF | rs::ALPHAFUNC | RS_ADAPTIVETESS_Y => {
@@ -1638,10 +1721,18 @@ impl Device {
 
     pub(crate) fn set_sampler_state(&mut self, sampler: u32, kind: u32, value: u32) {
         if let Some(slot) = Self::sampler_slot(sampler) {
-            if let Some(s) = self.st.samplers[slot].get_mut(kind as usize) {
-                *s = value;
+            let Some(s) = self.st.samplers[slot].get_mut(kind as usize) else {
+                return;
+            };
+            if *s == value {
+                return;
             }
-            self.st.touch(usize::from(slot < 16));
+            *s = value;
+            // Of the sampler states only the LOD bias is in the stage's block; the rest go into
+            // the draw's sampler, made from them at the draw.
+            if kind as usize == state::ss::MIPMAPLODBIAS {
+                self.st.touch(usize::from(slot < 16));
+            }
             if kind as usize == state::ss::SRGBTEXTURE && value != 0 {
                 self.warn("D3DSAMP_SRGBTEXTURE is not provided yet");
             }
@@ -1650,12 +1741,23 @@ impl Device {
 
     pub(crate) fn set_texture(&mut self, sampler: u32, texture: Handle) {
         if let Some(slot) = Self::sampler_slot(sampler) {
-            self.st.textures[slot] = if texture == 0 {
+            // The texture bound there already (the game binds many again each draw): nothing
+            // to look up ([`State::bound`]).
+            if self.st.bound.textures[slot] == texture {
+                return;
+            }
+            let t = if texture == 0 {
                 None
             } else {
                 self.texture_of(texture)
             };
-            self.st.touch(usize::from(slot < 16));
+            // The stage's block carries each sampler's fill mode (its texture's format).
+            let fix = |t: &Option<Arc<Tex>>| t.as_ref().map_or(0, |t| t.format.fix);
+            if fix(&t) != fix(&self.st.textures[slot]) {
+                self.st.touch(usize::from(slot < 16));
+            }
+            self.st.textures[slot] = t;
+            self.st.bound.textures[slot] = texture;
         }
     }
 
@@ -1725,6 +1827,13 @@ impl Device {
     }
 
     pub(crate) fn set_stream(&mut self, stream: u32, buffer: Handle, offset: u32, stride: u32) {
+        let Some(&(h, o, s)) = self.st.bound.streams.get(stream as usize) else {
+            return;
+        };
+        if (h, o, s) == (buffer, offset, stride) {
+            return;
+        }
+        self.st.bound.streams[stream as usize] = (buffer, offset, stride);
         let b = if buffer == 0 {
             None
         } else {
@@ -1740,6 +1849,10 @@ impl Device {
     }
 
     pub(crate) fn set_indices(&mut self, buffer: Handle) {
+        if self.st.bound.indices == buffer {
+            return;
+        }
+        self.st.bound.indices = buffer;
         self.st.indices = if buffer == 0 {
             None
         } else {
@@ -4820,6 +4933,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         st.clip = [[0; 4]; wgsl::CLIP_PLANES];
         st.dirty = [true; 2];
         st.header_dirty = [true; 2];
+        st.bound = Bound::default();
         self.counting = None;
         self.groups.clear();
         self.depth_parts.clear();
