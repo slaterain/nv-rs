@@ -878,6 +878,9 @@ struct MorphCase {
     real_slot: bool,
     target_check: u32,
     missing_interpolator: bool,
+    /// 0: the weights as below; 1 or 2: every item's weight and the interpolators' written weight exactly
+    /// 0.001 or -0.001 (the thresholds, where `>=` and `<=` decide).
+    boundary: u32,
 }
 
 /// The morpher's world: a controller (slot 0xc4 answers the item's interpolator from the table, 0xe8
@@ -925,7 +928,11 @@ fn morph_world(e: &mut Engine, m: &MorphCase) -> u32 {
     if m.items {
         let items = e.mem.alloc(8 * count.max(1));
         for i in 0..count {
-            let weight = [0.5f32, 0.0005, -0.75][i as usize % 3];
+            let weight = match m.boundary {
+                1 => 0.001f32,
+                2 => -0.001,
+                _ => [0.5f32, 0.0005, -0.75][i as usize % 3],
+            };
             set(e, items + 8 * i + 4, weight.to_bits());
         }
         set(e, controller + 0x3c, items);
@@ -939,7 +946,12 @@ fn morph_world(e: &mut Engine, m: &MorphCase) -> u32 {
         set(e, RETS + 0x700 + 4 * i, interpolator);
     }
     set(e, RETS + 0x9c, m.answer);
-    set(e, RETS + 0x9c0, m.weight.to_bits());
+    let written = match m.boundary {
+        1 => 0.001f32,
+        2 => -0.001,
+        _ => m.weight,
+    };
+    set(e, RETS + 0x9c0, written.to_bits());
     set(e, RETS + 0x18, m.target_check);
     let other = points(e, 6, u32::MAX, 0.0);
     set(e, RETS + 0xe8, other);
@@ -948,7 +960,8 @@ fn morph_world(e: &mut Engine, m: &MorphCase) -> u32 {
 
 /// `00a3aa10`: no targets, one or three; relative data or not; the base ignored or not; items or
 /// none; the interpolators answering or not with every float the harness has; the slot 0xe8 real or a
-/// stand-in; the target check either way; an item without an interpolator.
+/// stand-in; the target check either way; an item without an interpolator; the weights at exactly the
+/// thresholds 0.001 and -0.001.
 #[test]
 fn gen_morph_interp() {
     Diff::new(entry!(0x00a3_aa10, morph::gen_morph_interp(Ptr, u32)))
@@ -964,6 +977,7 @@ fn gen_morph_interp() {
             Input::Flag,
             Input::Flag,
             Input::Flag,
+            Input::Of(&[0, 1, 2]),
         ])
         .max_cases(600)
         .setup(|e, c| {
@@ -977,6 +991,7 @@ fn gen_morph_interp() {
                 real_slot: c.word(6) != 0,
                 target_check: c.word(7),
                 missing_interpolator: c.word(8) != 0,
+                boundary: c.word(9),
             };
             let controller = morph_world(e, &m);
             vec![controller, 0x7777]
@@ -1054,6 +1069,7 @@ fn update() {
                 real_slot: true,
                 target_check: 1,
                 missing_interpolator: false,
+                boundary: 0,
             };
             let controller = morph_world(e, &m);
             let target = e.mem.u32(controller + 0x2c);
