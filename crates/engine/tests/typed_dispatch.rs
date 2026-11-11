@@ -12,7 +12,8 @@
 
 use engine as _;
 use engine_core::prelude::*;
-use engine_core::typed::diff::{Case, Diff, Input};
+use engine_core::typed::diff::{Case, Diff, Input, Value};
+use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
 use engine_typed::dispatch::{self, math, refs, scene};
 use engine_typed::{culling, pathing};
 
@@ -409,94 +410,257 @@ impl Common for Diff {
     }
 }
 
+// ---- Native float maths ----
+//
+// The family's maths is native (ADR-0014's float rule; `engine_typed::dispatch`, "Floats"): `f64`
+// locals rounded where the exe stores a float, and a single operation on two floats in plain `f32`,
+// which rounds to the same float. Under the other threads' control word (53-bit precision) that is the
+// exe's arithmetic bit for bit, so those comparisons take every input. Under the main thread's (24-bit
+// precision, with the x87's wider exponent) the exe rounds every operation to 24 bits: a single
+// operation gives the float `f32` gives while the result is a normal float, and a sum of products (the
+// matrix and vector products) can differ in its last bits, by more ulps where it cancels to near zero.
+// Where a function's result differs there, its main-thread comparison takes the floats play has
+// ([`play`], [`unit`]) and says its tolerance; with `--nocapture` it prints what it let through. A
+// function that gives the exe's floats under both words for every input is compared under both.
+
+/// `bits` with its magnitude folded into the binades `low` to `low + span` (sign and mantissa kept);
+/// zeros and infinities as they come; a NaN the quiet NaN 0x7fc00000.
+fn fold(bits: u32, low: u32, span: u32) -> u32 {
+    let exponent = (bits >> 23) & 0xff;
+    if exponent == 0xff && bits & 0x007f_ffff != 0 {
+        return 0x7fc0_0000;
+    }
+    if exponent == 0xff || bits & 0x7fff_ffff == 0 || (low..low + span).contains(&exponent) {
+        return bits;
+    }
+    (bits & 0x807f_ffff) | ((low + exponent % span) << 23)
+}
+
+/// A float as play has it: its magnitude in 2^-12 to 2^12, so that no product of two leaves the
+/// float's normal range (where the x87 keeps a wider exponent); a NaN the quiet NaN (play has no
+/// signalling NaNs or payloads: the exe quiets a signalling NaN it copies through the x87 stack, native
+/// code copies it as it is).
+fn play(bits: u32) -> u32 {
+    fold(bits, 115, 24)
+}
+
+/// A float as a rotation's entry, a scale or a short vector's component has it in play: its
+/// magnitude in 2^-4 to 4 (otherwise as [`play`]).
+fn unit(bits: u32) -> u32 {
+    fold(bits, 123, 6)
+}
+
+/// The case with its floats folded by `f`, its words as they came.
+fn folded(case: &Case, f: fn(u32) -> u32) -> Case {
+    Case(
+        case.0
+            .iter()
+            .map(|v| match *v {
+                Value::F32(b) => Value::F32(f(b)),
+                other => other,
+            })
+            .collect(),
+    )
+}
+
+/// How the native maths is compared with its translation.
+trait Native {
+    /// Under the other threads' control word: bit for bit, NaN payloads aside (x87 and SSE pick a
+    /// result NaN's payload differently, and the exe quiets a signalling NaN it copies).
+    fn other_threads(self) -> Diff;
+    /// Under the main thread's: floats within `ulps`, or bit for bit (NaN payloads aside) with 0.
+    fn main_thread(self, ulps: u32) -> Diff;
+}
+
+impl Native for Diff {
+    fn other_threads(self) -> Diff {
+        self.control_words(&[OTHER_THREADS]).allow_nan_payloads()
+    }
+
+    fn main_thread(self, ulps: u32) -> Diff {
+        let d = self.control_words(&[MAIN_THREAD]);
+        if ulps == 0 {
+            d.allow_nan_payloads()
+        } else {
+            d.float_ulps(ulps)
+        }
+    }
+}
+
 // ---- The arithmetic ----
+
+/// `compose`'s words: two transforms of the case's floats, the first's translation x and the
+/// second's y the case's too.
+fn compose_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    stand_ins(e);
+    let a = transform(e, case, 0);
+    let b = transform(e, case, 3);
+    e.mem.set_u32(a + 0x24, bits(case, 2));
+    e.mem.set_u32(b + 0x28, bits(case, 5));
+    vec![a, e.mem.alloc(0x34), b]
+}
 
 #[test]
 fn compose() {
+    // Under the other threads' control word bit for bit, every input.
     Diff::new(entry!(
         0x0062_c250,
         math::compose(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
     ))
     .common(0x0062_c250)
+    .other_threads()
     .inputs(&inputs(&[&P3, &P3]))
     .max_cases(128)
-    .setup(|e, case| {
-        stand_ins(e);
-        let a = transform(e, case, 0);
-        let b = transform(e, case, 3);
-        e.mem.set_u32(a + 0x24, bits(case, 2));
-        e.mem.set_u32(b + 0x28, bits(case, 5));
-        vec![a, e.mem.alloc(0x34), b]
-    })
+    .setup(compose_words)
     .run()
     .assert_same();
+    // Under the main thread's, the case's floats in 2^-4 to 4 ([`unit`]): the rotation's entries and
+    // the rotated translation are sums of three products, which the exe rounds at each step, at most
+    // 4 * 2^-24 of the products' sizes (below 48 here) from the native sum; the translation scales
+    // that by up to 4. Within 4 ulps, or 2^-13 in value.
+    let report = Diff::new(entry!(
+        0x0062_c250,
+        math::compose(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
+    ))
+    .common(0x0062_c250)
+    .main_thread(4)
+    .float_abs(2f32.powi(-13))
+    .inputs(&inputs(&[&P3, &P3]))
+    .max_cases(128)
+    .setup(|e, case| compose_words(e, &folded(case, unit)))
+    .run();
+    println!("compose on the main thread: {report}");
+    report.assert_same();
+}
+
+/// `invert_non_uniform`'s words: a transform of the case's floats, its translation y the case's too.
+fn invert_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    stand_ins(e);
+    let t = transform(e, case, 0);
+    e.mem.set_u32(t + 0x28, bits(case, 2));
+    vec![t, e.mem.alloc(0x34)]
 }
 
 #[test]
 fn invert_non_uniform() {
+    // Under the other threads' control word bit for bit, every input.
     Diff::new(entry!(
         0x004b_4880,
         math::invert_non_uniform(Ptr<_>, Ptr<_>)
     ))
     .common(0x004b_4880)
+    .other_threads()
     .inputs(&P3)
-    .setup(|e, case| {
-        stand_ins(e);
-        let t = transform(e, case, 0);
-        e.mem.set_u32(t + 0x28, bits(case, 2));
-        vec![t, e.mem.alloc(0x34)]
-    })
+    .setup(invert_words)
     .run()
     .assert_same();
+    // Under the main thread's, in 2^-4 to 4 ([`unit`]): the translation is the rotated vector (sums
+    // of three products, as in `rotate`) times the inverse scale, up to 16. Within 4 ulps, or 2^-12 in
+    // value.
+    let report = Diff::new(entry!(
+        0x004b_4880,
+        math::invert_non_uniform(Ptr<_>, Ptr<_>)
+    ))
+    .common(0x004b_4880)
+    .main_thread(4)
+    .float_abs(2f32.powi(-12))
+    .inputs(&P3)
+    .setup(|e, case| invert_words(e, &folded(case, unit)))
+    .run();
+    println!("invert_non_uniform on the main thread: {report}");
+    report.assert_same();
+}
+
+/// `rotate`'s words: a matrix and a vector of the case's floats.
+fn rotate_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    stand_ins(e);
+    let m = transform(e, case, 0);
+    e.mem.set_u32(m + 0x14, bits(case, 2));
+    vec![m, e.mem.alloc(0xc), point(e, case, 3)]
 }
 
 #[test]
 fn rotate() {
+    // Under the other threads' control word bit for bit, every input.
     Diff::new(entry!(
         0x004b_4500,
         math::rotate(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
     ))
     .common(0x004b_4500)
+    .other_threads()
     .inputs(&inputs(&[&P3, &P3]))
     .max_cases(128)
-    .setup(|e, case| {
-        stand_ins(e);
-        let m = transform(e, case, 0);
-        e.mem.set_u32(m + 0x14, bits(case, 2));
-        vec![m, e.mem.alloc(0xc), point(e, case, 3)]
-    })
+    .setup(rotate_words)
     .run()
     .assert_same();
+    // Under the main thread's, in 2^-4 to 4 ([`unit`]): each component a sum of three products the
+    // exe rounds at each step, at most 4 * 2^-24 of the products' sizes (below 48) from the native
+    // sum. Within 4 ulps, or 2^-16 in value.
+    let report = Diff::new(entry!(
+        0x004b_4500,
+        math::rotate(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
+    ))
+    .common(0x004b_4500)
+    .main_thread(4)
+    .float_abs(2f32.powi(-16))
+    .inputs(&inputs(&[&P3, &P3]))
+    .max_cases(128)
+    .setup(|e, case| rotate_words(e, &folded(case, unit)))
+    .run();
+    println!("rotate on the main thread: {report}");
+    report.assert_same();
+}
+
+/// `multiply`'s words: two matrices of the case's floats.
+fn multiply_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    stand_ins(e);
+    let a = transform(e, case, 0);
+    let b = transform(e, case, 3);
+    e.mem.set_u32(a + 0x20, bits(case, 2));
+    e.mem.set_u32(b + 0x10, bits(case, 5));
+    vec![a, e.mem.alloc(0x24), b]
 }
 
 #[test]
 fn multiply() {
+    // Under the other threads' control word bit for bit, every input.
     Diff::new(entry!(
         0x0043_f8d0,
         math::multiply(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
     ))
     .common(0x0043_f8d0)
+    .other_threads()
     .inputs(&inputs(&[&P3, &P3]))
     .max_cases(128)
-    .setup(|e, case| {
-        stand_ins(e);
-        let a = transform(e, case, 0);
-        let b = transform(e, case, 3);
-        e.mem.set_u32(a + 0x20, bits(case, 2));
-        e.mem.set_u32(b + 0x10, bits(case, 5));
-        vec![a, e.mem.alloc(0x24), b]
-    })
+    .setup(multiply_words)
     .run()
     .assert_same();
+    // Under the main thread's, in 2^-4 to 4 ([`unit`]): each entry as `rotate`'s components. Within 4
+    // ulps, or 2^-16 in value.
+    let report = Diff::new(entry!(
+        0x0043_f8d0,
+        math::multiply(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
+    ))
+    .common(0x0043_f8d0)
+    .main_thread(4)
+    .float_abs(2f32.powi(-16))
+    .inputs(&inputs(&[&P3, &P3]))
+    .max_cases(128)
+    .setup(|e, case| multiply_words(e, &folded(case, unit)))
+    .run();
+    println!("multiply on the main thread: {report}");
+    report.assert_same();
 }
 
 #[test]
 fn transpose() {
+    // Copies only: bit for bit under both control words, NaN payloads aside.
     Diff::new(entry!(
         0x0047_68c0,
         math::transpose(Ptr<_>, Ptr<_>) -> Ptr<_>
     ))
     .common(0x0047_68c0)
+    .allow_nan_payloads()
     .inputs(&P3)
     .setup(|e, case| {
         stand_ins(e);
@@ -512,6 +676,7 @@ fn transpose() {
 fn row() {
     Diff::new(entry!(0x0047_6930, math::row(Ptr<_>, u32, Ptr<_>)))
         .common(0x0047_6930)
+        .allow_nan_payloads()
         .inputs(&inputs(&[&P3, &[Input::Of(&[0, 1, 2])]]))
         .setup(|e, case| {
             stand_ins(e);
@@ -530,6 +695,7 @@ fn set_columns() {
         math::set_columns(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
     ))
     .common(0x0047_6980)
+    .allow_nan_payloads()
     .inputs(&P3)
     .setup(|e, case| {
         stand_ins(e);
@@ -545,6 +711,7 @@ fn set_columns() {
 fn set_column() {
     Diff::new(entry!(0x0047_69c0, math::set_column(Ptr<_>, u32, Ptr<_>)))
         .common(0x0047_69c0)
+        .allow_nan_payloads()
         .inputs(&inputs(&[&P3, &[Input::Of(&[0, 1, 2])]]))
         .setup(|e, case| {
             stand_ins(e);
@@ -568,41 +735,77 @@ fn transform_new() {
         .assert_same();
 }
 
+/// `times`' words: a point and a scale of the case's floats.
+fn times_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    stand_ins(e);
+    let p = point(e, case, 0);
+    vec![p, e.mem.alloc(0xc), bits(case, 3)]
+}
+
 #[test]
 fn times() {
+    // Under the other threads' control word bit for bit, every input.
     Diff::new(entry!(
         0x0045_bb20,
         math::times(Ptr<_>, Ptr<_>, f32) -> Ptr<_>
     ))
     .common(0x0045_bb20)
+    .other_threads()
     .inputs(&inputs(&[&P3, &[Input::F32]]))
     .max_cases(128)
-    .setup(|e, case| {
-        stand_ins(e);
-        let p = point(e, case, 0);
-        vec![p, e.mem.alloc(0xc), bits(case, 3)]
-    })
+    .setup(times_words)
+    .run()
+    .assert_same();
+    // Under the main thread's, as play has the floats ([`play`]): each product of two floats rounds as
+    // the exe's while it is a normal float (below that the exe rounds to 24 bits first, then to the
+    // float). Bit for bit.
+    Diff::new(entry!(
+        0x0045_bb20,
+        math::times(Ptr<_>, Ptr<_>, f32) -> Ptr<_>
+    ))
+    .common(0x0045_bb20)
+    .main_thread(0)
+    .inputs(&inputs(&[&P3, &[Input::F32]]))
+    .max_cases(128)
+    .setup(|e, case| times_words(e, &folded(case, play)))
     .run()
     .assert_same();
 }
 
+/// `normalize`'s words: a point of the case's floats.
+fn normalize_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    stand_ins(e);
+    vec![point(e, case, 0)]
+}
+
 #[test]
 fn normalize() {
+    // Under the other threads' control word bit for bit, every input.
     Diff::new(entry!(0x004a_0c10, math::normalize(Ptr<_>)))
         .common(0x004a_0c10)
+        .other_threads()
         .inputs(&P3)
-        .setup(|e, case| {
-            stand_ins(e);
-            vec![point(e, case, 0)]
-        })
+        .setup(normalize_words)
+        .run()
+        .assert_same();
+    // Under the main thread's, as play has the floats ([`play`]): the inverse length and each
+    // product round as the exe's (normal floats). Bit for bit.
+    Diff::new(entry!(0x004a_0c10, math::normalize(Ptr<_>)))
+        .common(0x004a_0c10)
+        .main_thread(0)
+        .inputs(&P3)
+        .setup(|e, case| normalize_words(e, &folded(case, play)))
         .run()
         .assert_same();
 }
 
 #[test]
 fn box_corners() {
+    // The half extents times the unit axes (exact) and the corners' sums (the pathing family's):
+    // bit for bit under both control words, NaN payloads aside.
     Diff::new(entry!(0x00c3_9270, math::box_corners(Ptr<_>, Ptr<_>)))
         .common(0x00c3_9270)
+        .allow_nan_payloads()
         .inputs(&inputs(&[&P3, &P3]))
         .max_cases(128)
         .setup(|e, case| {
@@ -616,48 +819,97 @@ fn box_corners() {
         .assert_same();
 }
 
+/// `inverse_4x4`'s words: a transform of the case's floats, its translation z the case's too, and
+/// whether the inverse is the fixed one.
+fn inverse_4x4_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    stand_ins(e);
+    let t = transform(e, case, 0);
+    e.mem.set_u32(t + 0x2c, bits(case, 2));
+    vec![t, case.word(3), e.mem.alloc(0x40)]
+}
+
 #[test]
 fn inverse_4x4() {
+    // Under the other threads' control word bit for bit, every input.
     Diff::new(entry!(0x00c4_c2d0, math::inverse_4x4(Ptr<_>, u32, Ptr<_>)))
         .common(0x00c4_c2d0)
+        .other_threads()
         .inputs(&inputs(&[&P3, &[Input::Of(&[0, 1])]]))
-        .setup(|e, case| {
-            stand_ins(e);
-            let t = transform(e, case, 0);
-            e.mem.set_u32(t + 0x2c, bits(case, 2));
-            vec![t, case.word(3), e.mem.alloc(0x40)]
-        })
+        .setup(inverse_4x4_words)
         .run()
         .assert_same();
+    // Under the main thread's, in 2^-4 to 4 ([`unit`]): the inverse's translation as
+    // `invert_non_uniform`'s; each rotation entry times the inverse scale rounds as the exe's. Within
+    // 4 ulps, or 2^-12 in value.
+    let report = Diff::new(entry!(0x00c4_c2d0, math::inverse_4x4(Ptr<_>, u32, Ptr<_>)))
+        .common(0x00c4_c2d0)
+        .main_thread(4)
+        .float_abs(2f32.powi(-12))
+        .inputs(&inputs(&[&P3, &[Input::Of(&[0, 1])]]))
+        .setup(|e, case| inverse_4x4_words(e, &folded(case, unit)))
+        .run();
+    println!("inverse_4x4 on the main thread: {report}");
+    report.assert_same();
+}
+
+/// `havok_vector`'s words: a point of the case's floats.
+fn havok_vector_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    stand_ins(e);
+    let p = point(e, case, 0);
+    vec![e.mem.alloc(0x10), p]
 }
 
 #[test]
 fn havok_vector() {
+    // Under the other threads' control word bit for bit, every input.
     Diff::new(entry!(
         0x004a_3e00,
         math::havok_vector(Ptr<_>, Ptr<_>) -> Ptr<_>
     ))
     .common(0x004a_3e00)
+    .other_threads()
     .inputs(&P3)
-    .setup(|e, case| {
-        stand_ins(e);
-        let p = point(e, case, 0);
-        vec![e.mem.alloc(0x10), p]
-    })
+    .setup(havok_vector_words)
+    .run()
+    .assert_same();
+    // Under the main thread's, as play has the floats ([`play`]): each product rounds as the exe's.
+    // Bit for bit.
+    Diff::new(entry!(
+        0x004a_3e00,
+        math::havok_vector(Ptr<_>, Ptr<_>) -> Ptr<_>
+    ))
+    .common(0x004a_3e00)
+    .main_thread(0)
+    .inputs(&P3)
+    .setup(|e, case| havok_vector_words(e, &folded(case, play)))
     .run()
     .assert_same();
 }
 
+/// `havok_scale`'s words: the scale (at `011c582c`) and the value, the case's floats.
+fn havok_scale_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    stand_ins(e);
+    e.mem.set_u32(0x011c_582c, bits(case, 1));
+    vec![bits(case, 0)]
+}
+
 #[test]
 fn havok_scale() {
+    // Under the other threads' control word bit for bit, every input.
     Diff::new(entry!(0x004a_3e90, math::havok_scale(f32) -> f32))
         .common(0x004a_3e90)
+        .other_threads()
         .inputs(&[Input::F32, Input::F32Swept(0x3e12_4925)])
-        .setup(|e, case| {
-            stand_ins(e);
-            e.mem.set_u32(0x011c_582c, bits(case, 1));
-            vec![bits(case, 0)]
-        })
+        .setup(havok_scale_words)
+        .run()
+        .assert_same();
+    // Under the main thread's, as play has the floats ([`play`]): the product rounds as the exe's.
+    // Bit for bit.
+    Diff::new(entry!(0x004a_3e90, math::havok_scale(f32) -> f32))
+        .common(0x004a_3e90)
+        .main_thread(0)
+        .inputs(&[Input::F32, Input::F32Swept(0x3e12_4925)])
+        .setup(|e, case| havok_scale_words(e, &folded(case, play)))
         .run()
         .assert_same();
 }
@@ -691,6 +943,7 @@ fn point2_new() {
         math::point2_new(Ptr<_>, f32, f32) -> Ptr<_>
     ))
     .common(0x0045_2dc0)
+    .allow_nan_payloads()
     .inputs(&[Input::F32, Input::F32])
     .setup(|e, case| vec![e.mem.alloc(8), bits(case, 0), bits(case, 1)])
     .run()
@@ -699,11 +952,14 @@ fn point2_new() {
 
 #[test]
 fn points_close() {
+    // A difference of two floats rounds as the exe's under both control words (one that falls below
+    // the normal range is exact): bit for bit under both, NaN payloads aside.
     Diff::new(entry!(
         0x0049_e2f0,
         math::points_close(Ptr<_>, Ptr<_>, f32) -> bool
     ))
     .common(0x0049_e2f0)
+    .allow_nan_payloads()
     .inputs(&inputs(&[&P3, &[Input::F32, Input::F32Swept(HALF)]]))
     .max_cases(128)
     .setup(|e, case| {
@@ -718,8 +974,10 @@ fn points_close() {
 
 #[test]
 fn floats_close() {
+    // As `points_close`: bit for bit under both control words, NaN payloads aside.
     Diff::new(entry!(0x0049_e390, math::floats_close(f32, f32, f32) -> bool))
         .common(0x0049_e390)
+        .allow_nan_payloads()
         .inputs(&[Input::F32, Input::F32Swept(ONE), Input::F32])
         .max_cases(128)
         .setup(|e, case| {
@@ -1675,21 +1933,42 @@ const ACTOR: [Input; 7] = [
     Input::Of(&[0, 3, 4, 0xffff_ffff]),
 ];
 
+/// `location_on_reference`'s words: an actor of the case's floats.
+fn location_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    stand_ins(e);
+    vec![actor(e, case)]
+}
+
 #[test]
 fn location_on_reference() {
+    // Under the other threads' control word bit for bit, every input.
     Diff::new(entry!(
         0x008a_e4c0,
         refs::location_on_reference(Ptr<_>) -> u32
     ))
     .common(0x008a_e4c0)
+    .other_threads()
     .inputs(&ACTOR)
     .max_cases(128)
-    .setup(|e, case| {
-        stand_ins(e);
-        vec![actor(e, case)]
-    })
+    .setup(location_words)
     .run()
     .assert_same();
+    // Under the main thread's, as play has the floats ([`play`]): the ceiling and the rise are a
+    // `double` step rounded to a float, which native code rounds twice (to 53 bits, then to 24) where
+    // the exe rounds once: one ulp where the first rounding lands exactly halfway; the raised height
+    // is the exe's from those. Within 1 ulp.
+    let report = Diff::new(entry!(
+        0x008a_e4c0,
+        refs::location_on_reference(Ptr<_>) -> u32
+    ))
+    .common(0x008a_e4c0)
+    .main_thread(1)
+    .inputs(&ACTOR)
+    .max_cases(128)
+    .setup(|e, case| location_words(e, &folded(case, play)))
+    .run();
+    println!("location_on_reference on the main thread: {report}");
+    report.assert_same();
 }
 
 #[test]
@@ -1750,6 +2029,7 @@ fn compute_last_time_processed() {
         refs::compute_last_time_processed(Ptr<_>)
     ))
     .common(0x0090_7650)
+    .allow_nan_payloads()
     .inputs(&[Input::F32, Input::Of(&[0x7f, 0x80, 0xff, 1])])
     .setup(|e, case| {
         stand_ins(e);
@@ -1765,6 +2045,7 @@ fn compute_last_time_processed() {
 fn set_hour() {
     Diff::new(entry!(0x0069_3d50, refs::set_hour(Ptr<_>, f32)))
         .common(0x0069_3d50)
+        .allow_nan_payloads()
         .inputs(&[Input::F32])
         .setup(|e, case| vec![e.mem.alloc(0x28), bits(case, 0)])
         .run()
@@ -1903,6 +2184,9 @@ fn extra_kind() {
 // both share would pass them. These check the three sums the batch's translation fixes are about
 // against values worked out by hand from the x87's rules: under 24-bit precision each `FADD` and `FMUL`
 // rounds to 24 bits (ties to even) before the next, under 53-bit to 53 bits, and `FSTP` to a float.
+// The typed versions are native maths (`f64` locals rounded where the exe stores a float): they give
+// the 53-bit results under both control words, one ulp from the exe's on the main thread here, where
+// the float rule accepts it (ADR-0014).
 
 /// 2^-24 as a float.
 const TWO_POW_M24: u32 = 0x3380_0000;
@@ -1941,7 +2225,7 @@ fn multiply_at_24_bits_rounds_each_sum() {
             math::multiply(e, Ptr::new(a), Ptr::new(out), Ptr::new(b));
             e.mem.u32(out)
         });
-        assert_eq!(got, expected, "typed, control word {word:04x}");
+        assert_eq!(got, ONE + 1, "typed, control word {word:04x}");
     }
 }
 
@@ -1967,14 +2251,14 @@ fn rotate_at_24_bits_rounds_each_sum() {
             math::rotate(e, Ptr::new(m), Ptr::new(out), Ptr::new(v));
             e.mem.u32(out)
         });
-        assert_eq!(got, expected, "typed, control word {word:04x}");
+        assert_eq!(got, ONE + 1, "typed, control word {word:04x}");
     }
 }
 
 /// An actor's height `h = k * 2^-52` with `k = (2^54 + 2^30 + 1) / 3`, so `0.75 * h` is exactly
 /// `1 + 2^-24 + 2^-54`. Under 24 bits `FMUL` rounds that up (above the tie) to 1 + 2^-23; under
 /// 53 bits it rounds to 1 + 2^-24 (a quarter of a unit is dropped) and `FSTP` then breaks the tie to
-/// the even 1.0.
+/// the even 1.0. The typed version's `f64` product rounds as the 53-bit one: 1.0 under both words.
 #[test]
 fn location_on_reference_at_24_bits_rounds_the_rise_once() {
     let mut e = Engine::new();
@@ -1999,7 +2283,7 @@ fn location_on_reference_at_24_bits_rounds_the_rise_once() {
             let slot = refs::location_on_reference(e, Ptr::new(actor));
             e.mem.u32(slot + 8)
         });
-        assert_eq!(got, expected, "typed, control word {word:04x}");
+        assert_eq!(got, ONE, "typed, control word {word:04x}");
     }
 }
 

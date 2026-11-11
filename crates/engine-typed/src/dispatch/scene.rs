@@ -7,7 +7,6 @@ use crate::culling::layout::{NiAVObject, NiBound, NiNode, NiPlane};
 use crate::culling::{self, NULL_BOUND};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
-use engine_core::x87::{x87_m32, x87_quiet_bits, x87_store32};
 use engine_core::{args, typed_call, Engine};
 
 /// `BSSimpleList::GetNext` of a list position (`0057cbe0`).
@@ -151,10 +150,10 @@ fn child_at(e: &Engine, node: u32, index: u32) -> u32 {
     e.mem.u32(base.wrapping_add(index.wrapping_mul(4)))
 }
 
-/// A bound's radius not 0.0 (`FCOMP` against it as a memory operand: NaN is not 0.0).
+/// A bound's radius not 0.0 (a NaN is not; -0.0 is 0.0).
 #[inline(always)]
 fn radius_not_zero(e: &Engine, bound: u32) -> bool {
-    x87_m32(e.mem.u32(bound + 0xc)) != 0.0
+    f32::from_bits(e.mem.u32(bound + 0xc)) != 0.0
 }
 
 /// A node whose bound is merged from its children's: flag 0x80000 without 0x2000.
@@ -163,8 +162,8 @@ fn merges_bounds(flags: u32) -> bool {
     (flags >> 0xd) & 1 == 0 && (flags >> 0x13) & 1 != 0
 }
 
-/// The node's world bound becomes `source`'s (or the null bound's): centre and radius, the radius
-/// through the x87 stack, in the exe's order of stores.
+/// The node's world bound becomes `source`'s (or the null bound's): centre and radius, in the exe's
+/// order of stores.
 fn copy_bound(e: &mut Engine, node: u32, source: u32) {
     let source = if source != 0 {
         source
@@ -172,7 +171,7 @@ fn copy_bound(e: &mut Engine, node: u32, source: u32) {
         NULL_BOUND.addr()
     };
     let x = e.mem.u32(source);
-    let radius = x87_quiet_bits(e.mem.u32(source + 0xc));
+    let radius = e.mem.u32(source + 0xc);
     let target = e.mem.u32(node + 0x20);
     e.mem.set_u32(target, x);
     let y = e.mem.u32(source + 4);
@@ -198,7 +197,7 @@ fn update_children(
         if (flags_now >> 0xd) & 1 == 0 {
             let bound = e.mem.u32(node + 0x20);
             if fresh && bound != 0 {
-                e.mem.set_u32(bound + 0xc, x87_store32(0.0));
+                e.mem.set_f32(bound + 0xc, 0.0);
             }
             if count == 0 {
                 return;
