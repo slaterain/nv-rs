@@ -478,14 +478,21 @@ fn partition(e: &mut Engine, bones: u32, palette: bool) -> u32 {
 }
 
 /// The additional data's lookup `00a72720`: answers from the table whether it found the stream, and
-/// fills the source (the data's colours), the format (from the table), the element size and stride.
+/// fills the source (the data's colours, or null when the table says so), the format (from the table),
+/// the element size and stride.
 fn additional_lookup(e: &mut Engine) {
     e.register(0x00a7_2720, |e, a| {
         let found = e.mem.u32(RETS + 0x720);
         if found != 0 {
             let data = e.mem.u32(a[5]);
             let colours = e.mem.u32(data + 0x28);
-            set(e, a[2], colours);
+            // Found with a null source when the table says so.
+            let source = if e.mem.u32(RETS + 0x728) != 0 {
+                0
+            } else {
+                colours
+            };
+            set(e, a[2], source);
             set(e, a[3], e.mem.u32(RETS + 0x724));
             set(e, a[6], 0xc);
             set(e, a[7], 0x10);
@@ -1275,6 +1282,95 @@ fn add_scaled_points_nans() {
         let source = fill(e, c.word(2));
         let dest = fill(e, c.word(3));
         vec![dest, c.word(1), source, count]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `00e7a200`'s binormals and tangents (usages 13 and 14): normals present or none, the data flags
+/// without the method bits, with one and with all, the float types that copy them as they are and wider.
+#[test]
+fn pack_entry_derived() {
+    Diff::new(entry!(
+        0x00e7_a200,
+        pack::pack_entry(Ptr, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32
+    ))
+    .family(&geometry::GEOMETRY)
+    .max_calls(MAX_CALLS)
+    .inputs(&[
+        Input::Of(&[13, 14]),
+        Input::Flag,
+        Input::Of(&[0, 0x1000, 0xf000]),
+        Input::Of(&[2, 3]),
+    ])
+    .setup(|e, c| {
+        globals(e);
+        converter_tables(e);
+        additional_lookup(e);
+        let vt = vtable(e);
+        let data = geometry_data(e, vt, c.word(2));
+        if c.word(1) == 0 {
+            set(e, data + 0x24, 0);
+        }
+        let declaration = e.mem.alloc(0x1c);
+        set(e, declaration + 8, c.word(0));
+        set(e, declaration + 0xc, c.word(3));
+        let destination = e.mem.alloc(0x200);
+        for b in 0..0x200 {
+            e.mem.set_u8(destination + b, 0xcd);
+        }
+        let this = e.mem.alloc(0x10);
+        vec![this, 6, data, 0, 0, declaration, 0x20, destination, 0, 0]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `00e7a200`'s additional data streams: not found, found as a float format, found as a format of the
+/// stand-in converter, and found with a null source; the float types and the colour type.
+#[test]
+fn pack_entry_additional() {
+    Diff::new(entry!(
+        0x00e7_a200,
+        pack::pack_entry(Ptr, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32
+    ))
+    .family(&geometry::GEOMETRY)
+    .max_calls(MAX_CALLS)
+    .inputs(&[
+        Input::Of(&[0x8000_0002, 0x8000_0000]),
+        Input::Of(&[0, 3, 0x19, 0x103]),
+        Input::Of(&[2, 3, 4]),
+    ])
+    .setup(|e, c| {
+        globals(e);
+        converter_tables(e);
+        additional_lookup(e);
+        let vt = vtable(e);
+        let data = geometry_data(e, vt, 1);
+        let mode = c.word(1);
+        set(e, RETS + 0x720, u32::from(mode != 0));
+        set(e, RETS + 0x724, mode & 0xff);
+        set(e, RETS + 0x728, u32::from(mode > 0xff));
+        let declaration = e.mem.alloc(0x1c);
+        set(e, declaration + 8, c.word(0));
+        set(e, declaration + 0xc, c.word(2));
+        let destination = e.mem.alloc(0x200);
+        for b in 0..0x200 {
+            e.mem.set_u8(destination + b, 0xcd);
+        }
+        let this = e.mem.alloc(0x10);
+        vec![
+            this,
+            3,
+            data,
+            0,
+            0,
+            declaration,
+            0x20,
+            destination,
+            0x55,
+            0x66,
+        ]
     })
     .run()
     .assert_same();

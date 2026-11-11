@@ -231,6 +231,24 @@ pub fn copy_wider(e: &mut Engine, entry: u32) -> u32 {
 const WHITE_CHANNEL: u32 = 0x0102_3cd8;
 const CHANNEL_SCALE: u32 = 0x0101_e568;
 
+/// The channel scale as the exe holds it, checked (in builds with debug assertions) to have at most 29
+/// significant bits: [`channel`]'s product of a float (24 bits) and it is then exact in an `f64`.
+fn channel_scale(e: &Engine) -> f64 {
+    let scale = f64::from_bits(e.mem.u64(CHANNEL_SCALE));
+    debug_assert!(
+        !scale.is_finite() || scale == 0.0 || significant_bits(scale) <= 29,
+        "the colour scale at 0101e568 ({scale}) has more than 29 significant bits"
+    );
+    scale
+}
+
+/// The significant bits of a finite, nonzero double: its mantissa with the leading one, less the
+/// trailing zeros.
+fn significant_bits(value: f64) -> u32 {
+    let mantissa = (value.to_bits() & ((1u64 << 52) - 1)) | (1u64 << 52);
+    53 - mantissa.trailing_zeros()
+}
+
 /// One colour channel: `FLD dword` of the float, `FMUL qword` by the scale, `FSTP dword` and
 /// `FLD dword`, then `FISTP` (to nearest). The exe's scale is 255.0, eight significant bits: the
 /// product of a float and it is exact in an `f64`, so rounding that once to a float gives what `FMUL`
@@ -281,7 +299,7 @@ pub fn colour(e: &mut Engine, entry: u32) -> u32 {
         }
     }
     let opaque = low_half(e.get(entry, PackerEntry::uiFormat)) == 3;
-    let scale = f64::from_bits(e.mem.u64(CHANNEL_SCALE));
+    let scale = channel_scale(e);
     let mut vertex = 0u16;
     while vertex < vertex_count(e, entry) {
         let element = if index != 0 {
@@ -839,7 +857,7 @@ pub fn pack_untransformed(
             }
         }
         if colours != 0 && parts & 4 != 0 {
-            let scale = f64::from_bits(e.mem.u64(CHANNEL_SCALE));
+            let scale = channel_scale(e);
             let mut to = e.mem.u32(colour_at).wrapping_add(out);
             let mut from = colours;
             for _ in 0..count {
