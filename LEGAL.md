@@ -113,6 +113,10 @@ terms, whose notice must be kept:
 - `vendor/wgpu-hal` is wgpu-hal 30.0.1 (gfx-rs developers, MIT or Apache-2.0), kept in the
   repository with the changes [vendor/README.md](vendor/README.md) lists. Its licence files
   are beside it, and each changed file says so in its first line.
+- `vendor/wgpu-hal/src/vulkan/pipeline_library.rs` is translated into Rust from DXVK v3.1.1
+  (Philip Rebohle, Joshua Ashton, Robin Kertels, Jeffrey Ellison; zlib/libpng licence) and
+  altered to make wgpu-hal's pipelines; DXVK's copyright and licence notice is at the top of
+  the file, and the file says it is an altered version.
 
 ## Requests from rights holders
 

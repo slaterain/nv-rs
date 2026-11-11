@@ -1,4 +1,4 @@
-// Changed for nv-rs: dynamic rendering on Vulkan 1.3 devices (dynamic_rendering.rs, extras.rs); vendor/README.md.
+// Changed for nv-rs: dynamic rendering and pipeline libraries on Vulkan 1.3 devices (dynamic_rendering.rs, pipeline_library.rs, extras.rs); vendor/README.md.
 /*!
 # Vulkan API internals.
 
@@ -34,6 +34,7 @@ mod drm;
 mod dynamic_rendering;
 mod extras;
 mod instance;
+mod pipeline_library;
 mod sampler;
 mod semaphore_list;
 mod swapchain;
@@ -537,6 +538,9 @@ struct DeviceShared {
 
     empty_descriptor_set_layout: vk::DescriptorSetLayout,
 
+    /// nv-rs: pipeline libraries and the pipelines linked from them (`pipeline_library.rs`).
+    pipeline_libraries: pipeline_library::Cache,
+
     // The `drop_guard` field must be the last field of this struct so it is dropped last.
     // Do not add new fields after it.
     drop_guard: Option<crate::DropGuard>,
@@ -544,6 +548,8 @@ struct DeviceShared {
 
 impl Drop for DeviceShared {
     fn drop(&mut self) {
+        // nv-rs: the libraries go before the device does.
+        self.pipeline_libraries.clear();
         for &raw in self.render_passes.lock().values() {
             unsafe { self.raw.destroy_render_pass(raw, None) };
         }
@@ -918,6 +924,8 @@ impl crate::DynBindGroupLayout for BindGroupLayout {}
 pub struct PipelineLayout {
     raw: vk::PipelineLayout,
     binding_map: naga::back::spv::BindingMap,
+    /// nv-rs: the parts render pipelines linked from libraries use (`pipeline_library.rs`).
+    libraries: Option<pipeline_library::LayoutParts>,
 }
 
 impl crate::DynPipelineLayout for PipelineLayout {}
@@ -1092,6 +1100,9 @@ pub struct CommandEncoder {
     counters: Arc<wgt::HalCounters>,
 
     current_pipeline_is_multiview: bool,
+
+    /// nv-rs: the dynamic states this command buffer has (`pipeline_library.rs`); `None`: unknown.
+    dynamic_state: Option<pipeline_library::DynamicState>,
 }
 
 impl Drop for CommandEncoder {
@@ -1164,6 +1175,11 @@ impl crate::DynShaderModule for ShaderModule {}
 pub struct RenderPipeline {
     raw: vk::Pipeline,
     is_multiview: bool,
+    /// nv-rs: the states a linked pipeline leaves dynamic (`pipeline_library.rs`).
+    dynamic: Option<pipeline_library::DynamicState>,
+    /// nv-rs: the linked pipeline `raw` is, shared with the pipelines that differ only in
+    /// dynamic state and destroyed with the last of them.
+    linked: Option<Arc<pipeline_library::Linked>>,
 }
 
 impl crate::DynRenderPipeline for RenderPipeline {}

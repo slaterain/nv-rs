@@ -1,6 +1,6 @@
 THIRD-PARTY NOTICES — nv-rs Windows build (nv-viewer)
 
-This file indexes the license texts of the 118 external packages in the repository's root Cargo.lock, which nv-viewer is built from (the build-time macro crates and every platform variant of windows-targets included). Package names, versions and license expressions come from each package's Cargo.toml in the local Cargo registry; the files were copied from that exact version there. A package that ships no license file gets the standard text of its license expression (MIT with its authors as the copyright line), marked in its entry. It ends with the notice of source code the translation followed that is not a package.
+This file indexes the license texts of the 118 external packages in the repository's root Cargo.lock, which nv-viewer is built from (the build-time macro crates and every platform variant of windows-targets included). Package names, versions and license expressions come from each package's Cargo.toml in the local Cargo registry; the files were copied from that exact version there. A package that ships no license file gets the standard text of its license expression (MIT with its authors as the copyright line), marked in its entry. It ends with the notices of source code the translation followed that is not a package.
 
 Files are bundled under licenses/<package>-<version>/ in release ZIPs (distribution/licenses/ in the source tree). No crate source or game assets are included.
 
@@ -873,3 +873,34 @@ Microsoft C++ Standard Library, <regex> (Microsoft)
     Copyright (c) Microsoft Corporation.
     SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
     Modified: translated to Rust, reduced to the parse, made to answer as MSVC 14.50.
+
+DXVK v3.1.1 (Philip Rebohle and contributors)
+  License: zlib/libpng
+  Repository: https://github.com/doitsujin/dxvk
+  Used for: vendor/wgpu-hal (src/vulkan/pipeline_library.rs), how the Vulkan backend makes render pipelines: from pipeline libraries linked without link-time optimisation, with dynamic state. Translated into Rust from src/dxvk/dxvk_graphics.cpp, src/dxvk/dxvk_shader.cpp and src/dxvk/dxvk_context.cpp, and altered to make wgpu-hal's pipelines.
+  Notice:
+                      Copyright (c) 2017 Philip Rebohle
+                      Copyright (c) 2019 Joshua Ashton
+                      Copyright (c) 2019 Robin Kertels
+                      Copyright (c) 2023 Jeffrey Ellison
+
+                              zlib/libpng license
+
+    This software is provided 'as-is', without any express or implied
+    warranty. In no event will the authors be held liable for any damages
+    arising from the use of this software.
+
+    Permission is granted to anyone to use this software for any purpose,
+    including commercial applications, and to alter it and redistribute it
+    freely, subject to the following restrictions:
+
+    – The origin of this software must not be misrepresented; you must not
+      claim that you wrote the original software. If you use this software
+      in a product, an acknowledgment in the product documentation would be
+      appreciated but is not required.
+
+    – Altered source versions must be plainly marked as such, and must not
+      be misrepresented as being the original software.
+
+    – This notice may not be removed or altered from any source distribution.
+  Modified: translated to Rust and altered (see Used for).
