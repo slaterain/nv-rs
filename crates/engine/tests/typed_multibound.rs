@@ -115,11 +115,31 @@ fn list_iterate(e: &mut Engine, a: &[u32]) -> Ret {
 /// The exe's data and the stand-ins.
 fn stand_ins(e: &mut Engine) {
     e.map(LOG, 0x4000);
-    // The pages of the marker, the grid setting, the scene node table, the zero word and the double 0.0
-    // the frustum test compares with (01012060).
-    for page in [0x0101_2000, 0x011c_3000, 0x011c_6000, 0x011f_9000, 0x0120_2000] {
+    // The pages of the double 0.0 the frustum test compares with (01012060), the box corners' constants
+    // (011a9470: 0, 0, 0, 1.0, as in the exe), the marker, the grid setting, the scene node table and
+    // the zero word.
+    for page in [
+        0x0101_2000,
+        0x011a_9000,
+        0x011c_3000,
+        0x011c_6000,
+        0x011f_9000,
+        0x0120_2000,
+    ] {
         e.map(page, 0x1000);
     }
+    words(e, 0x011a_9470, &[0, 0, 0, ONE]);
+    // The reference counts' interlocked imports.
+    e.register(0x00fd_f1c0, |e, a| {
+        let n = e.mem.u32(a[0]).wrapping_add(1);
+        e.mem.set_u32(a[0], n);
+        ret(n)
+    });
+    e.register(0x00fd_f1c4, |e, a| {
+        let n = e.mem.u32(a[0]).wrapping_sub(1);
+        e.mem.set_u32(a[0], n);
+        ret(n)
+    });
     e.register(0x00a6_9400, logged::<0x01>);
     e.register(0x0041_fd00, logged::<0x02>);
     e.register(0x00a6_93e0, logged::<0x04>);
