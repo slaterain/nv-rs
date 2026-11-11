@@ -11,7 +11,7 @@ const TERRAIN_MANAGER_006FCEF0: u32 = 0x006f_cef0;
 /// `006f92a0` (`thiscall`, `RET 4`; in `bgsdistanttreeblock.cpp`).
 const TREE_BLOCK_006F92A0: u32 = 0x006f_92a0;
 /// `00a69400` (`thiscall`, `RET 4`; in `nicullingprocess.cpp`): constructs the 0x90-byte
-/// local; `00a693e0` (`thiscall`) destroys it.
+/// culling process at the start of the 0x94-byte local; `00a693e0` (`thiscall`) destroys it.
 const CULLING_CONSTRUCT_00A69400: u32 = 0x00a6_9400;
 const CULLING_DESTROY_00A693E0: u32 = 0x00a6_93e0;
 /// `0041fd00` (`thiscall`, `RET 4`): the setter the engine map names
@@ -52,13 +52,19 @@ pub fn fn_006fd010(e: &mut Engine, this: Ptr, object: Ptr) {
 }
 
 // Translated from 006fd080 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed (`thiscall`, `RET 4`, one word). Constructs a 0x90-byte local on the stack
-/// (`00a69400` with 0), gives it the argument (`0041fd00`) and `0045bbe0` of the argument
+/// Unnamed (`thiscall`, `RET 4`, one word). Constructs a 0x90-byte culling process in a local on
+/// the stack (`00a69400` with 0), gives it the argument (`0041fd00`) and `0045bbe0` of the argument
 /// (`00a694a0`); when the word at `this + 4` is non-zero, `006fa6d0(argument, &local)` and
 /// `006f5840()` run. The local is destroyed (`00a693e0`) at the end.
+///
+/// The frame: the local at EBP-0x9c, its 0x90 bytes reaching EBP-0xc, the frame's
+/// exception-record link (the previous FS:[0], a stack address). `00b5bbe0`, which `006fa6d0`
+/// hands the local to, reads the word after it as its mode (1 and 3 test nothing): in the exe
+/// that address, never 1 or 3. Here the local takes 0x94 bytes and that word is zero, which
+/// tests as the address does (with 0x90 it was whatever the stack held past the local).
 // Translation incomplete: 006fd080 - the C++ exception frame (FS:[0] chain, unwind state 0 for the local) is not translated.
 pub fn fn_006fd080(e: &mut Engine, this: Ptr, argument: u32) {
-    e.with_stack(0x90, |e, local| {
+    e.with_stack(0x94, |e, local| {
         e.call(CULLING_CONSTRUCT_00A69400, &args![local, 0u32]);
         e.call(SETTER_0041FD00, &args![local, argument]);
         let value = e.call(TES_0045BBE0, &args![argument]).u32();
@@ -248,6 +254,42 @@ mod tests {
         assert!(calls_to(&e, BLOCKS_006FA6D0).is_empty());
         assert!(calls_to(&e, BLOCKS_006F5840).is_empty());
         assert_eq!(calls_to(&e, CULLING_DESTROY_00A693E0).len(), 1);
+    }
+
+    /// The word after the culling process, which `00b5bbe0` reads as its mode, is part of the local
+    /// and zero: in the exe it is the frame's exception-record link, a stack address, never 1 or 3.
+    /// A 3 left on the stack where a 0x90-byte local would have ended (mode 3: no test) stays out.
+    #[test]
+    fn fn_006fd080_hands_on_a_process_whose_mode_word_is_zero() {
+        let mut e = Engine::new();
+        for callee in [
+            CULLING_CONSTRUCT_00A69400,
+            CULLING_DESTROY_00A693E0,
+            SETTER_0041FD00,
+            CULLING_00A694A0,
+            BLOCKS_006F5840,
+        ] {
+            e.register(callee, |_, _| Ret::default());
+        }
+        e.register(TES_0045BBE0, |_, _| 0x66u32.into_ret());
+        // The stand-in for 006fa6d0 keeps the process's word +0x90 where the test reads it.
+        const SEEN: u32 = 0x0300_0000;
+        e.map(SEEN, 0x1000);
+        e.mem.set_u32(SEEN, 0xdead);
+        e.register(BLOCKS_006FA6D0, |e, a| {
+            let word = e.mem.u32(a[1] + 0x90);
+            e.mem.set_u32(SEEN, word);
+            Ret::default()
+        });
+        let short = e.next_stack_local(0x90);
+        e.mem.set_u32(short + 0x90, 3);
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x006f_d080, &args![this, 0x1234u32]);
+        assert_eq!(calls_to(&e, BLOCKS_006FA6D0).len(), 1);
+        assert_eq!(e.mem.u32(SEEN), 0);
+        assert_eq!(e.mem.u32(short + 0x90), 3);
     }
 
     #[test]

@@ -53,6 +53,9 @@ const SET_SCALE: u32 = 0x0044_0490;
 /// The controller's own test `004f05a0` (`thiscall`, a byte) and the
 /// rotation's +4 float `006b9130` (`thiscall`, in ST0).
 const CONTROLLER_ACTIVE: u32 = 0x004f_05a0;
+/// `BSTransCon::UpdateAllButTarget` (`004f0380`), which the bip node's walk calls by address: kNVSE
+/// hooks it (`overridable.tsv`).
+const UPDATE_ALL_BUT_TARGET: u32 = 0x004f_0380;
 const ROTATION_SECOND: u32 = 0x006b_9130;
 /// The multi-target controller's targets: the count (+0x3C, 16-bit), the
 /// target array (+0x38) and the interpolators (+0x34, 0x30 bytes each).
@@ -298,12 +301,8 @@ pub fn bs_bip_node_update_all_but_bip(e: &mut Engine, this: Ptr, time: f32) {
     let mut controller = e.call(FIRST_CONTROLLER, &args![this]).u32();
     while controller != 0 {
         if e.vcall(controller, 8, &args![]).u32() == MULTI_TARGET_TRANSFORM_RTTI {
-            bs_trans_con_update_all_but_target(
-                e,
-                Ptr::new(controller),
-                f32::from_bits(time_bits),
-                0,
-            );
+            // By address: kNVSE hooks it (overridable.tsv), and its hook runs from here too.
+            e.call(UPDATE_ALL_BUT_TARGET, &args![controller, time_bits, 0u32]);
         } else if e.vcall(controller, 8, &args![]).u32() == TREAD_TRANSFORM_RTTI {
             e.with_stack(0xc, |e, data| {
                 e.call(UPDATE_DATA_CONSTRUCTOR, &args![data, time_bits, 0u32, 0u32]);

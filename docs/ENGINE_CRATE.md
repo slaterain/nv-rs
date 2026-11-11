@@ -610,6 +610,18 @@ texture set getter and the fixed-function packer with its strided copy. The seco
 release of the arrays a static mesh does not keep goes through, `SetData`, `ReplaceData`) and the geometry morpher
 (`Update`, `GenMorphInterp`, `GetVertexData` and the weighted add of a target). Its tests are
 `crates/engine/tests/typed_geometry.rs`. Off until its gate (`NV_TYPED=geometry` turns it on).
+And `animation` (same crate, id 24), the update half's fifth group: a skeleton's bones moved from their animation
+each frame. `BSBipNode::UpdateAllButBip` walks a bip node's controllers; a multi-target transform controller
+(`BSTransCon::UpdateAllButTarget`) updates each bone it drives from its interpolator's transform
+(`NiBlendTransformInterpolator::Update` with its single-value store), and the transform's translation, rotation (from
+its quaternion, `NiQuaternion::ToRotation`) and scale go into the bone; with the small tests and setters they make.
+`UpdateAllButTarget` and the blend interpolator's `Update` are typed but reached by address only: kNVSE hooks both
+(`overridable.tsv`), so a built-in may replace them. By address as well: the blend of several interpolators and the
+weights' normalisation, an interpolator's own `Update` (the key lookups), the quaternion's normalisation, the
+transform's getters and the bone's setters. The translations keep their plain calls of the family's small functions;
+only the bip node's walk calls `UpdateAllButTarget` by address (in every build, so kNVSE's hook runs from there too). Its tests are `crates/engine/tests/typed_animation.rs`. Merged off
+(AGENT-RULES.md, "Typed code merges OFF first"): `NV_TYPED=animation` turns it on until a batch gate runs the
+recorded street run with it on against off; x87 code with the exact helpers, as the other update-half families.
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with
