@@ -1083,6 +1083,9 @@ pub enum NotTranslated {
     Crate(d3dx_tex::Untranslated),
     /// A calling thread at an x87 precision other than 24 or 53 bits.
     Precision,
+    /// A texture the translation made that the device refuses to create (a format its adapter
+    /// table does not take after all).
+    Refused,
 }
 
 /// Prints once per kind (with the first case's details) what the translation left to the DLL or
@@ -1474,8 +1477,7 @@ fn create_from_file(
                                     "a texture of format {:#x} the device refuses ({hr:#x})",
                                     entry.surfaces[0].format
                                 );
-                                let kind = d3dx_tex::Untranslated::PixelFormat;
-                                note_not_translated(e, NotTranslated::Crate(kind), &why);
+                                note_not_translated(e, NotTranslated::Refused, &why);
                                 if let Some(hr) = unreadable_without_dll(e, Some(device.addr())) {
                                     return hr;
                                 }
@@ -2527,6 +2529,11 @@ mod tests {
             Ptr::new(out),
         );
         assert_eq!(hr, D3DXERR_INVALIDDATA);
+        // Noted under a kind of its own, so an earlier pixel-format note does not hide it.
+        assert_eq!(
+            state!(e).graphics.d3dx_not_translated,
+            vec![NotTranslated::Refused]
+        );
         engine_core::units::crt::set_x87_control_word(&mut e, 0x027f);
     }
 }

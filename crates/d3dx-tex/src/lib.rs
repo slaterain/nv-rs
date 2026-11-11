@@ -25,11 +25,16 @@
 //! blocks at both precisions (`data/`).
 //!
 //! Mods' textures (2026-11-11): the 16-bit formats R5G6B5, X1R5G5B5, A1R5G5B5 and X4R4G4B4, and
-//! the luminance and alpha formats L8, A8L8, A8, A4L4 and L16 too (the reference device takes
-//! neither X4R4G4B4 nor A4L4: D3DX reads them into X1R5G5B5 and A4R4G4B4 with its dither), with
-//! the format D3DX picks from what the device takes ([`Caps`]), checked against the DLL's answers
-//! on synthetic files at both precisions (`data/formats_32bit*.tsv`) and against its picks for
-//! every format of its table (`data/device_formats_32bit.tsv`).
+//! the luminance and alpha formats L8, A8L8, A8, A4L4 and L16 too, with the format D3DX picks from
+//! what the device takes ([`Caps`]: the caller's device's answers; in the game the player's
+//! adapter table's, asked as the layer's `CreateTexture` asks; by default the reference GPU's).
+//! The reference GPU takes neither X4R4G4B4 nor A4L4, so there D3DX reads them into X1R5G5B5 and
+//! A4R4G4B4 with its dither; on a card that takes them, both keep them. A picked format this crate
+//! does not make is [`Error::NotProvided`]; a texture the device refuses after all, the caller
+//! leaves to the DLL (`engine_platform::d3dx`). Checked against the DLL on synthetic files at both
+//! precisions (`data/formats_32bit*.tsv`), against its picks for every format of its table on the
+//! reference GPU (`data/device_formats_32bit.tsv`), and on proxy devices that take other formats
+//! (`data/proxy_32bit*.tsv`, `d3dx-measure serve proxy`: its picks and the textures it makes).
 //!
 //! What D3DX also does and this crate does not (yet) is [`Error::NotProvided`]: image files
 //! other than DDS, volume textures, DDS pixel formats other than DXT1/3/5, A8R8G8B8, X8R8G8B8,

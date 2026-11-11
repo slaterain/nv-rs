@@ -128,12 +128,15 @@ fn proxy(data: &str, precision: d3dx_tex::Precision) {
     assert_eq!(picks, 6 * 57 * 2);
     assert!(made > 3 * left, "{made} made, {left} left to the caller");
     // What only these devices reach: on the 16-bit one, A8R8G8B8 made A1R5G5B5 and X8R8G8B8 made
-    // R5G6B5 (the dithered encoders); on the one taking everything, X4R4G4B4 kept.
+    // R5G6B5 (the dithered encoders), L8 made R5G6B5; on the one taking everything, X4R4G4B4 and
+    // A4L4 kept.
     for (device, file, format) in [
         ("0", "a8r8g8b8-32-one", 25),
         ("0", "x8r8g8b8-32x8-one", 23),
         ("1", "x4r4g4b4-32-one", 30),
         ("1", "x4r4g4b4-64x1-edges-one", 30),
+        ("1", "a4l4-32-one", 52),
+        ("0", "l8-32-one", 23),
     ] {
         let key = (device.to_string(), file.to_string(), format);
         assert!(textures.contains(&key), "{key:?} not made");
