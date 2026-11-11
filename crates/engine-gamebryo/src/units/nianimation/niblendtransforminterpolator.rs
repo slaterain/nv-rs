@@ -50,6 +50,10 @@ const QUATERNION_NORMALIZE: u32 = 0x00a3_8560;
 const CRT_SQRT: u32 = 0x00ec_6040;
 /// `NiBlendInterpolator::ComputeNormalizedWeights` (`00a37260`).
 const COMPUTE_NORMALIZED_WEIGHTS: u32 = 0x00a3_7260;
+/// This unit's `StoreSingleValue` (`00a40b30`) and `BlendValues` (`00a40c10`), which `Update` calls by
+/// address.
+const STORE_SINGLE_VALUE: u32 = 0x00a4_0b30;
+const BLEND_VALUES: u32 = 0x00a4_0c10;
 /// The transform `Update` of an interpolator (vtable +0x8C, `(time,
 /// object, NiQuatTransform*)`, answers whether it gave a value).
 const UPDATE_TRANSFORM_SLOT: u32 = 0x8c;
@@ -361,23 +365,17 @@ pub fn ni_blend_transform_interpolator_update(
 ) -> bool {
     let time_bits = x87_quiet_bits(time.to_bits());
     let count = e.mem.u8(this.addr() + INTERP_COUNT);
+    // The store and the blend by address, as the animation family's typed version reaches them.
     let answer = if count == 1 {
-        ni_blend_transform_interpolator_store_single_value(
-            e,
-            this,
-            f32::from_bits(time_bits),
-            object,
-            transform,
+        e.call(
+            STORE_SINGLE_VALUE,
+            &args![this, time_bits, object, transform],
         )
+        .bool()
     } else if count > 0 {
         e.call(COMPUTE_NORMALIZED_WEIGHTS, &args![this]);
-        ni_blend_transform_interpolator_blend_values(
-            e,
-            this,
-            f32::from_bits(time_bits),
-            object,
-            transform,
-        )
+        e.call(BLEND_VALUES, &args![this, time_bits, object, transform])
+            .bool()
     } else {
         false
     };
