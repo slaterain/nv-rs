@@ -12,22 +12,34 @@
 //! attachment in one layout from start to end (initial, subpass and final layouts are equal), so
 //! they make no layout transitions and have no implicit external dependencies: the barriers
 //! wgpu-core records between passes are all the synchronisation, in both paths. Load and store
-//! operations, clear values, multisample resolves (averaged: wgpu resolves only formats whose
-//! render pass resolve averages) and the view mask are carried over one for one.
+//! operations, clear values, multisample resolves and the view mask are carried over one for one;
+//! a resolve averages the samples, or takes sample zero for an integer format (the only mode
+//! dynamic rendering allows for one).
+//!
+//! It mirrors the published render pass path, which a newer wgpu-hal may change: `command.rs`'s
+//! `begin_render_pass` and `end_render_pass`, and `device.rs`'s `make_render_pass` (each
+//! attachment's load and store operations and layouts). Both paths call the same helpers for what
+//! they share (`color_attachment_view`, `pass_prologue`, and per attachment `make_attachment_key`
+//! and `conv::map_attachment_ops`); when re-vendoring, diff those three published functions
+//! against the new version and carry any change here (`vendor/README.md`).
 //!
 //! Used on Vulkan 1.3 devices with the `dynamicRendering` feature (every 1.3 device has it,
-//! [`super::extras`]); older devices keep render passes.
+//! [`super::extras`]); older devices keep render passes, as does `NV_WGPU_DYNAMIC_RENDERING=off`.
+
+// Our code in a vendored crate: no CI step lints it (`vendor/` is out of the workspace), and as a
+// path dependency its warnings are not capped, so a warning here fails every build.
+#![deny(warnings)]
 
 use arrayvec::ArrayVec;
 use ash::vk;
 use core::num::NonZeroU32;
 
 use super::conv;
-use crate::CommandEncoder as _;
 
 impl super::CommandEncoder {
     /// [`crate::CommandEncoder::begin_render_pass`] without render pass objects: the same pass,
-    /// begun from its attachments, with the same debug marker, timestamps, viewport and scissor.
+    /// begun from its attachments, with the same debug marker, timestamps, viewport and scissor
+    /// (the published path's own helpers).
     pub(super) unsafe fn begin_rendering(
         &mut self,
         desc: &crate::RenderPassDescriptor<super::QuerySet, super::TextureView>,
@@ -42,35 +54,34 @@ impl super::CommandEncoder {
                 colors.push(vk::RenderingAttachmentInfo::default());
                 continue;
             };
-            let view = if cat.target.view.dimension == wgt::TextureViewDimension::D3 {
-                let key = super::TempTextureViewKey {
-                    texture: cat.target.view.raw_texture,
-                    texture_identity: cat.target.view.texture_identity,
-                    format: cat.target.view.raw_format,
-                    mip_level: cat.target.view.base_mip_level,
-                    depth_slice: cat.depth_slice.unwrap(),
-                };
-                self.make_temp_texture_view(key)?.raw
-            } else {
-                cat.target.view.raw
-            };
-            let (load_op, store_op) = conv::map_attachment_ops(cat.ops);
+            let view = self.color_attachment_view(cat)?.raw;
+            // The layout and operations the render pass path keys its attachment with.
+            let key = cat.target.make_attachment_key(cat.ops);
+            let (load_op, store_op) = conv::map_attachment_ops(key.ops);
             let mut info = vk::RenderingAttachmentInfo::default()
                 .image_view(view)
-                .image_layout(conv::derive_image_layout(
-                    cat.target.usage,
-                    cat.target.view.format,
-                ))
+                .image_layout(key.layout)
                 .load_op(load_op)
                 .store_op(store_op)
                 .clear_value(vk::ClearValue {
                     color: unsafe { cat.make_vk_clear_color() },
                 });
             if let Some(ref at) = cat.resolve_target {
+                let resolve = at.make_attachment_key(
+                    crate::AttachmentOps::LOAD_CLEAR | crate::AttachmentOps::STORE,
+                );
+                let integer = matches!(
+                    cat.target.view.format.sample_type(None, None),
+                    Some(wgt::TextureSampleType::Sint | wgt::TextureSampleType::Uint)
+                );
                 info = info
-                    .resolve_mode(vk::ResolveModeFlags::AVERAGE)
+                    .resolve_mode(if integer {
+                        vk::ResolveModeFlags::SAMPLE_ZERO
+                    } else {
+                        vk::ResolveModeFlags::AVERAGE
+                    })
                     .resolve_image_view(at.view.raw)
-                    .resolve_image_layout(conv::derive_image_layout(at.usage, at.view.format));
+                    .resolve_image_layout(resolve.layout);
             }
             colors.push(info);
         }
@@ -81,9 +92,10 @@ impl super::CommandEncoder {
         let mut stencil = None;
         if let Some(ref ds) = desc.depth_stencil_attachment {
             let format = ds.target.view.format;
+            let key = ds.target.make_attachment_key(ds.depth_ops);
             let base = vk::RenderingAttachmentInfo::default()
                 .image_view(ds.target.view.raw)
-                .image_layout(conv::derive_image_layout(ds.target.usage, format))
+                .image_layout(key.layout)
                 .clear_value(vk::ClearValue {
                     depth_stencil: vk::ClearDepthStencilValue {
                         depth: ds.clear_value.0,
@@ -91,7 +103,7 @@ impl super::CommandEncoder {
                     },
                 });
             if format.has_depth_aspect() {
-                let (load_op, store_op) = conv::map_attachment_ops(ds.depth_ops);
+                let (load_op, store_op) = conv::map_attachment_ops(key.ops);
                 depth = Some(base.load_op(load_op).store_op(store_op));
             }
             if format.has_stencil_aspect() {
@@ -107,14 +119,6 @@ impl super::CommandEncoder {
                 height: desc.extent.height,
             },
         };
-        let vk_viewports = [vk::Viewport {
-            x: 0.0,
-            y: desc.extent.height as f32,
-            width: desc.extent.width as f32,
-            height: -(desc.extent.height as f32),
-            min_depth: 0.0,
-            max_depth: 1.0,
-        }];
         let mut vk_info = vk::RenderingInfo::default()
             .render_area(render_area)
             .layer_count(desc.extent.depth_or_array_layers)
@@ -127,32 +131,8 @@ impl super::CommandEncoder {
             vk_info = vk_info.stencil_attachment(stencil);
         }
 
-        if let Some(label) = desc.label {
-            unsafe { self.begin_debug_marker(label) };
-            self.rpass_debug_marker_active = true;
-        }
-
-        // Start timestamp if any (before all other commands but after debug marker)
-        if let Some(timestamp_writes) = desc.timestamp_writes.as_ref() {
-            if let Some(index) = timestamp_writes.beginning_of_pass_write_index {
-                unsafe {
-                    self.write_timestamp(timestamp_writes.query_set, index);
-                }
-            }
-            self.end_of_pass_timer_query = timestamp_writes
-                .end_of_pass_write_index
-                .map(|index| (timestamp_writes.query_set.raw, index));
-        }
-
-        unsafe {
-            self.device
-                .raw
-                .cmd_set_viewport(self.active, 0, &vk_viewports);
-            self.device
-                .raw
-                .cmd_set_scissor(self.active, 0, &[render_area]);
-            self.device.raw.cmd_begin_rendering(self.active, &vk_info);
-        };
+        unsafe { self.pass_prologue(desc, render_area) };
+        unsafe { self.device.raw.cmd_begin_rendering(self.active, &vk_info) };
 
         self.bind_point = vk::PipelineBindPoint::GRAPHICS;
 

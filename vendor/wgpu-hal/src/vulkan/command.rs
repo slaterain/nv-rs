@@ -80,7 +80,75 @@ impl super::CommandEncoder {
         })
     }
 
-    pub(super) fn make_temp_texture_view(
+    // nv-rs: the parts of `begin_render_pass` that dynamic_rendering.rs's `begin_rendering` uses
+    // too, moved here unchanged so that both ways of beginning a pass share them.
+
+    /// The view a colour attachment is rendered through: a 3D texture's slice as a temporary 2D
+    /// view, otherwise the attachment's view.
+    pub(super) fn color_attachment_view(
+        &mut self,
+        cat: &crate::ColorAttachment<'_, super::TextureView>,
+    ) -> Result<super::IdentifiedTextureView, crate::DeviceError> {
+        Ok(
+            if cat.target.view.dimension == wgt::TextureViewDimension::D3 {
+                let key = super::TempTextureViewKey {
+                    texture: cat.target.view.raw_texture,
+                    texture_identity: cat.target.view.texture_identity,
+                    format: cat.target.view.raw_format,
+                    mip_level: cat.target.view.base_mip_level,
+                    depth_slice: cat.depth_slice.unwrap(),
+                };
+                self.make_temp_texture_view(key)?
+            } else {
+                cat.target.view.identified_raw_view()
+            },
+        )
+    }
+
+    /// What a render pass records before it begins: its debug marker, its first timestamp, and
+    /// the viewport and scissor of its whole area.
+    pub(super) unsafe fn pass_prologue(
+        &mut self,
+        desc: &crate::RenderPassDescriptor<super::QuerySet, super::TextureView>,
+        render_area: vk::Rect2D,
+    ) {
+        let vk_viewports = [vk::Viewport {
+            x: 0.0,
+            y: desc.extent.height as f32,
+            width: desc.extent.width as f32,
+            height: -(desc.extent.height as f32),
+            min_depth: 0.0,
+            max_depth: 1.0,
+        }];
+
+        if let Some(label) = desc.label {
+            unsafe { crate::CommandEncoder::begin_debug_marker(self, label) };
+            self.rpass_debug_marker_active = true;
+        }
+
+        // Start timestamp if any (before all other commands but after debug marker)
+        if let Some(timestamp_writes) = desc.timestamp_writes.as_ref() {
+            if let Some(index) = timestamp_writes.beginning_of_pass_write_index {
+                unsafe {
+                    crate::CommandEncoder::write_timestamp(self, timestamp_writes.query_set, index);
+                }
+            }
+            self.end_of_pass_timer_query = timestamp_writes
+                .end_of_pass_write_index
+                .map(|index| (timestamp_writes.query_set.raw, index));
+        }
+
+        unsafe {
+            self.device
+                .raw
+                .cmd_set_viewport(self.active, 0, &vk_viewports);
+            self.device
+                .raw
+                .cmd_set_scissor(self.active, 0, &[render_area]);
+        }
+    }
+
+    fn make_temp_texture_view(
         &mut self,
         key: super::TempTextureViewKey,
     ) -> Result<super::IdentifiedTextureView, crate::DeviceError> {
@@ -805,18 +873,8 @@ impl crate::CommandEncoder for super::CommandEncoder {
 
         for cat in desc.color_attachments {
             if let Some(cat) = cat.as_ref() {
-                let color_view = if cat.target.view.dimension == wgt::TextureViewDimension::D3 {
-                    let key = super::TempTextureViewKey {
-                        texture: cat.target.view.raw_texture,
-                        texture_identity: cat.target.view.texture_identity,
-                        format: cat.target.view.raw_format,
-                        mip_level: cat.target.view.base_mip_level,
-                        depth_slice: cat.depth_slice.unwrap(),
-                    };
-                    self.make_temp_texture_view(key)?
-                } else {
-                    cat.target.view.identified_raw_view()
-                };
+                // nv-rs: moved into a helper both ways of beginning a pass call.
+                let color_view = self.color_attachment_view(cat)?;
 
                 vk_clear_values.push(vk::ClearValue {
                     color: unsafe { cat.make_vk_clear_color() },
@@ -861,15 +919,6 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 height: desc.extent.height,
             },
         };
-        let vk_viewports = [vk::Viewport {
-            x: 0.0,
-            y: desc.extent.height as f32,
-            width: desc.extent.width as f32,
-            height: -(desc.extent.height as f32),
-            min_depth: 0.0,
-            max_depth: 1.0,
-        }];
-
         let raw_pass = self.device.make_render_pass(rp_key).unwrap();
         fb_key.raw_pass = raw_pass;
         let raw_framebuffer = self.make_framebuffer(fb_key).unwrap();
@@ -880,30 +929,10 @@ impl crate::CommandEncoder for super::CommandEncoder {
             .clear_values(&vk_clear_values)
             .framebuffer(raw_framebuffer);
 
-        if let Some(label) = desc.label {
-            unsafe { self.begin_debug_marker(label) };
-            self.rpass_debug_marker_active = true;
-        }
-
-        // Start timestamp if any (before all other commands but after debug marker)
-        if let Some(timestamp_writes) = desc.timestamp_writes.as_ref() {
-            if let Some(index) = timestamp_writes.beginning_of_pass_write_index {
-                unsafe {
-                    self.write_timestamp(timestamp_writes.query_set, index);
-                }
-            }
-            self.end_of_pass_timer_query = timestamp_writes
-                .end_of_pass_write_index
-                .map(|index| (timestamp_writes.query_set.raw, index));
-        }
+        // nv-rs: moved into a helper both ways of beginning a pass call.
+        unsafe { self.pass_prologue(desc, render_area) };
 
         unsafe {
-            self.device
-                .raw
-                .cmd_set_viewport(self.active, 0, &vk_viewports);
-            self.device
-                .raw
-                .cmd_set_scissor(self.active, 0, &[render_area]);
             self.device.raw.cmd_begin_render_pass(
                 self.active,
                 &vk_info,

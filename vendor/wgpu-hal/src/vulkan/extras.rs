@@ -2,6 +2,10 @@
 //! decided and enabled beside the published ones, with one call from each place in `adapter.rs`
 //! that handles those.
 
+// Our code in a vendored crate: no CI step lints it (`vendor/` is out of the workspace), and as a
+// path dependency its warnings are not capped, so a warning here fails every build.
+#![deny(warnings)]
+
 use ash::vk;
 
 /// Features of a physical device, as queried for it ([`Features::query`]) or as enabled on a
@@ -34,7 +38,8 @@ impl Features {
         Caps {
             dynamic_rendering: self
                 .dynamic_rendering
-                .is_some_and(|f| f.dynamic_rendering == vk::TRUE),
+                .is_some_and(|f| f.dynamic_rendering == vk::TRUE)
+                && !switched_off("NV_WGPU_DYNAMIC_RENDERING"),
         }
     }
 
@@ -57,6 +62,13 @@ impl Features {
         }
         info
     }
+}
+
+/// A switch set to `off` (or `0`): the published path where ours would run (`NV_WGPU_DYNAMIC_RENDERING`:
+/// render pass objects on a Vulkan 1.3 device). For checks of that path, which devices without
+/// Vulkan 1.3 take, or a way round a driver's bug.
+fn switched_off(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "off" | "0"))
 }
 
 /// What our additions use on a device: a field of the backend's private capabilities.
