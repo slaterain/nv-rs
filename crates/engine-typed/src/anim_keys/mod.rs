@@ -22,14 +22,19 @@
 //! raw key addresses to the interpolation functions it calls by address.
 //!
 //! Stage 1: the keys stay in guest memory where the game made them. **Floats.** These run wherever
-//! animations are loaded and updated, not only on the main thread: [`Threads::Both`], and the x87
-//! code keeps the exact helpers ([`engine_core::x87`]): each load, operation and store the exe's, in
-//! its order, as the translations have them. Float fields are declared as their bits.
+//! animations are loaded and updated, not only on the main thread: [`Threads::Both`]. What runs for
+//! every animated bone every frame (`Slerp`, its parameter correction, and the key search and ratio
+//! of `GenInterp`) is native maths by ADR-0014's float rule for such code: `f64` locals, each
+//! operation in the exe's order, rounded to a float where the exe stores one ([`wide`], [`narrow`],
+//! [`rounded`]). On the game's other threads (53-bit x87 precision) that is the exe's arithmetic
+//! exactly, NaN payloads aside; on the main thread (24-bit precision) the exe rounds every operation
+//! to 24 bits, and the results may differ in their last bits. The rest (the constructor, the
+//! negation, the preparation's dot products and clamps, which run when keys are loaded) keeps the
+//! exact helpers ([`engine_core::x87`]). Float fields are declared as their bits.
 
 use crate::image;
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
-use engine_core::x87::x87_load32;
 use engine_core::{entry, AbiFn, Engine};
 
 pub mod quaternion;
@@ -86,10 +91,30 @@ impl Keys {
         e.mem.u32(self.at(k).wrapping_add(offset))
     }
 
-    /// Key `k`'s time as `FLD dword` loads it.
+    /// Key `k`'s time, widened to a native `f64` local.
     pub fn time(self, e: &Engine, k: u32) -> f64 {
-        x87_load32(self.word(e, k, 0))
+        wide(self.word(e, k, 0))
     }
+}
+
+/// A `float` word as native code holds it: an `f64` local (ADR-0014's float rule for code that runs
+/// on any thread). Every float is exact in an `f64`.
+#[inline(always)]
+pub fn wide(bits: u32) -> f64 {
+    f64::from(f32::from_bits(bits))
+}
+
+/// An `f64` local rounded to the `float` that a store of it makes.
+#[inline(always)]
+#[allow(clippy::cast_possible_truncation)]
+pub fn narrow(value: f64) -> f32 {
+    value as f32
+}
+
+/// An `f64` local rounded as a store to a `float` and a load back round it.
+#[inline(always)]
+pub fn rounded(value: f64) -> f64 {
+    f64::from(narrow(value))
 }
 
 /// The family's functions, by exe address.
