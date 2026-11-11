@@ -571,7 +571,7 @@ fn animation_blend_update() {
     // the transform.
     Diff::new(entry!(
         0x00a4_1110,
-        blend::update(Ptr<_>, f32, Ptr<_>, Ptr<_>) -> bool
+        blend::update_transform(Ptr<_>, f32, Ptr<_>, Ptr<_>) -> bool
     ))
     .common()
     .inputs(&inputs(&[

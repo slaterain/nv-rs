@@ -57,7 +57,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004f_0320, bip::scale_valid(Ptr) -> bool),
         entry!(0x004f_0160, bip::set_rotation(Ptr, Ptr)),
         entry!(0x004f_0180, bip::to_rotation(Ptr, Ptr)),
-        entry!(0x00a4_1110, blend::update(Ptr, f32, Ptr, Ptr) -> bool),
+        entry!(0x00a4_1110, blend::update_transform(Ptr, f32, Ptr, Ptr) -> bool),
         entry!(0x00a4_0b30, blend::store_single_value(Ptr, f32, Ptr, Ptr) -> bool),
     ]
 }

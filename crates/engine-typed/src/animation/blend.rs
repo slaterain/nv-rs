@@ -36,7 +36,7 @@ const SLOT_TRANSFORM_UPDATE: u32 = 0x8c;
 /// interpolator [`store_single_value`], with more `ComputeNormalizedWeights` then `BlendValues` (by
 /// address), with none nothing (false); the last time becomes `time`. Answers what the store or
 /// blend answered.
-pub fn update(e: &mut Engine, this: Ptr, time: f32, object: Ptr, transform: Ptr) -> bool {
+pub fn update_transform(e: &mut Engine, this: Ptr, time: f32, object: Ptr, transform: Ptr) -> bool {
     let time_bits = x87_quiet_bits(time.to_bits());
     let count = e.mem.u8(this.addr().wrapping_add(INTERP_COUNT));
     let answer = if count == 1 {

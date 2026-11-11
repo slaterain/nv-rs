@@ -346,7 +346,7 @@ fn update_target(
         e.call(SET_TRANSLATE, &args![target, translate]);
     }
     if e.call(ROTATION_VALID, &args![transform]).bool() {
-        let rotate = e.call(ROTATE_OF, &args![transform]).ptr();
+        let rotate = e.call(ROTATE_OF, &args![transform]).u32();
         e.call(SET_ROTATION, &args![target, rotate]);
     }
     if e.call(SCALE_VALID, &args![transform]).bool() {
