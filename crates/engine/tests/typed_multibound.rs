@@ -290,8 +290,8 @@ fn water_system(e: &mut Engine, kind: u32, k: u32) -> u32 {
 }
 
 /// The first shadow scene node (in the table): its child 6 as a node of `count` objects (none for 9),
-/// its portal graph (none for 0) with an occluder list of an active plane, an inactive one and a null
-/// entry.
+/// its portal graph (none for 0) with an occluder list of an active plane, an inactive one, a null
+/// entry and another active plane.
 fn scene(e: &mut Engine, count: u32, graph: u32, k: u32) -> u32 {
     let s = object(e, 0x1e4, 0);
     let child = if count == 9 {
@@ -306,10 +306,13 @@ fn scene(e: &mut Engine, count: u32, graph: u32, k: u32) -> u32 {
     e.mem.set_u16(s + 0xa6, 8);
     if graph != 0 {
         let g = block(e, 0x78, &[]);
+        // Two active planes, so a test that answers 0 at the first ends the walk before the second.
         let active = block(e, 0x44, &[]);
         e.mem.set_u32(active + 0x40, 1);
+        let second = block(e, 0x44, &[]);
+        e.mem.set_u32(second + 0x40, 1);
         let inactive = block(e, 0x44, &[]);
-        let header = list(e, &[inactive, 0, active]);
+        let header = list(e, &[active, inactive, 0, second]);
         let first = e.mem.u32(header);
         e.mem.set_u32(g + 8, first);
         e.mem.set_u32(s + 0x1e0, g);
