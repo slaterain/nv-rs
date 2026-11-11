@@ -1983,7 +1983,7 @@ mod forms {
 
     /// An engine with the family on as `spec` says and the stand-ins registered.
     fn engine(spec: &str) -> Engine {
-        let mut e = Engine::new_untyped();
+        let mut e = Engine::new_untyped_for_test();
         e.typed_apply_for_test(&[&lockfree::LOCKFREE, &leaf::LEAVES], spec);
         e.map(WORLD, 0x1000);
         e.map(VTABLE_PAGE, 0x1000);
@@ -2296,9 +2296,17 @@ mod forms {
             assert_eq!(form.answers, stage1.answers, "{spec}: the answers");
             assert_eq!(form.references, stage1.references, "{spec}: the references");
             assert!(form.poison_held, "{spec}: the poison held");
-            assert_eq!(form.slab_after, [], "{spec}: nothing left in the slab");
+            assert!(
+                form.slab_after.is_empty(),
+                "{spec}: left in the slab: {:?}",
+                form.slab_after
+            );
             if spec == "lockfree:freed" {
-                assert_eq!(form.heap, [], "K2 makes no guest block");
+                assert!(
+                    form.heap.is_empty(),
+                    "K2 makes no guest block: {:?}",
+                    form.heap
+                );
             } else {
                 assert_eq!(form.heap, stage1.heap, "{spec}: the guest heap of stage 1");
             }
