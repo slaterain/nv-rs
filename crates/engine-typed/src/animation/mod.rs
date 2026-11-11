@@ -20,8 +20,10 @@
 //! Stage 1: the objects stay in guest memory; each function stays registered at its exe address.
 //! **Off by default** (`NV_TYPED=animation` turns it on) until a batch gate (AGENT-RULES.md, "Typed
 //! code merges OFF first"). **Floats.** The actors' animation runs on the AI threads as well as main,
-//! so the row is [`Threads::Both`] and the x87 code keeps the exact helpers ([`engine_core::x87`]),
-//! each load, operation and store the exe's, in its order, as the translations have them.
+//! so the row is [`Threads::Both`] and the float maths is native by ADR-0014's rule for such code: `f64`
+//! locals rounded at each of the exe's float stores, compares and copies plain (no x87 helper; the NaN
+//! quieting an x87 load does is gone, which only a signalling NaN's payload could show). Its tests
+//! compare floats within an ulp (`Diff::float_ulps`).
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};

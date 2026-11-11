@@ -393,7 +393,8 @@ fn transform_with(e: &mut Engine, case: &Case, at: u32) -> u32 {
 }
 
 /// What every test adds to its comparison: the families, the plain callees (all but the function
-/// under test), the call budget, the float sweep.
+/// under test), floats within an ulp (the native float maths, ADR-0014), the call budget, the float
+/// sweep.
 trait Common {
     fn common(self, function: u32) -> Diff;
 }
@@ -406,6 +407,7 @@ impl Common for Diff {
             .family(&pathing::PATHING)
             .family(&leaf::LEAVES)
             .translation_calls_plainly(&plain)
+            .float_ulps(1)
             .max_calls(MAX_CALLS)
             .float_sweep(FLOAT_SWEEP)
     }
