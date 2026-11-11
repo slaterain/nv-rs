@@ -645,6 +645,9 @@ pub struct Device {
     last_present: Option<std::time::Instant>,
     /// The screen of the backend's own long steps ([`Device::show_progress`]), made when first shown.
     loading: Option<loading::Screen>,
+    /// The game's start ([`Start`]): until the game draws anything, its black frames show the
+    /// loading screen. None offscreen and once the game has drawn.
+    start: Option<Start>,
     /// The shaders by bytecode hash; the hashes two bytecodes share; the declarations by their
     /// elements ([`Device::create_shader`], [`Device::decl_of`]).
     shader_bytecode: Map<u64, Vec<Arc<Shader>>>,
@@ -1019,6 +1022,7 @@ impl Device {
             pipeline_cache,
             last_present: None,
             loading: None,
+            start: None,
             shader_bytecode: Map::default(),
             collided: HashSet::new(),
             decls_by_elements: Map::default(),
@@ -1072,6 +1076,12 @@ impl Device {
         // Lost while the rest was made: refused as well (the platform's Direct3D 9 draws).
         if lost.load(Ordering::Acquire) {
             return Err("the device was lost while it was made".into());
+        }
+        // The loading screen from the start (the maintainer's rule for the port's waits: the
+        // logo, "Loading" and the step), until the game's first picture ([`Start`]).
+        if d.surface.is_some() {
+            d.start = Some(Start::new(&d.device));
+            d.show_progress(&Start::progress());
         }
         let shown = match (&d.surface, output) {
             (Some(w), _) => format!(
@@ -3624,14 +3634,22 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let mut surface = self.surface.take();
         let mut screen = self.loading.take();
         let (device, queue) = (self.device.clone(), self.queue.clone());
+        let mut shots = self.shots.take();
         let mut step = |done: usize| {
             if shown {
                 let p = loading::Progress {
                     title: "Loading".into(),
                     status: format!("Preparing shaders {} of {}", done.min(total), total),
-                    done: done as f32 / total.max(1) as f32,
+                    done: Some(done as f32 / total.max(1) as f32),
                 };
-                show_on(&mut surface, &mut screen, &device, &queue, &p);
+                show_on(
+                    &mut surface,
+                    &mut screen,
+                    &device,
+                    &queue,
+                    shots.as_mut(),
+                    &p,
+                );
             }
         };
         let t = std::time::Instant::now();
@@ -3662,6 +3680,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         drop(step);
         self.surface = surface;
         self.loading = screen;
+        self.shots = shots;
         let mut refused = 0;
         let made = jobs.len();
         for ((key, j), b) in jobs.into_iter().zip(built) {
@@ -4800,6 +4819,79 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
 
     // Present.
 
+    /// The game's start ([`Start`]) in the window's frame `view` (`frame`: its format and size), after
+    /// the game's back buffer `back` (`size`) was copied into it: the back buffer's lit pixels
+    /// counted into the start's gate, then the loading screen over the frame unless the gate says
+    /// the game has shown a picture (all on the GPU: no frame waits).
+    fn start_over(
+        &mut self,
+        back: &wgpu::TextureView,
+        size: (u32, u32),
+        view: &wgpu::TextureView,
+        (format, width, height): (wgpu::TextureFormat, u32, u32),
+    ) {
+        let Some(mut start) = self.start.take() else {
+            return;
+        };
+        self.end_pass();
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("start"),
+            layout: &start.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(back),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: start.lit.as_entire_binding(),
+                },
+            ],
+        });
+        let (device, queue) = (self.device.clone(), self.queue.clone());
+        let encoder = self.encoder();
+        // This frame's count from zero; the gate itself (word 0) is kept.
+        encoder.clear_buffer(&start.lit, 4, Some(4));
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("start"),
+                timestamp_writes: None,
+            });
+            pass.set_bind_group(0, &group, &[]);
+            pass.set_pipeline(&start.count);
+            pass.dispatch_workgroups(size.0.div_ceil(16), size.1.div_ceil(16), 1);
+            pass.set_pipeline(&start.decide);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        // Made again if the window's format changed since (its pipeline is made for one).
+        let mut screen = match self.loading.take() {
+            Some(s) if s.format == format => s,
+            _ => loading::Screen::new(&device, &queue, format),
+        };
+        let p = Start::progress();
+        let encoder = self.encoder();
+        screen.draw(
+            &device,
+            &queue,
+            encoder,
+            view,
+            (width, height),
+            &p,
+            Some(&start.lit),
+        );
+        // What the gate says, for the CPU (read after the frame is sent: [`Start::drawn`]).
+        let copy = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("start gate read"),
+            size: 4,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_buffer_to_buffer(&start.lit, 0, &copy, 0, 4);
+        start.unsent = Some(copy);
+        self.loading = Some(screen);
+        self.start = Some(start);
+    }
+
     /// Shows `p` in the game's window ([`loading`]): for a long step of the backend's own before
     /// play, which calls it as it goes. Only a device on the game's window draws it; every call
     /// also writes one log line with the same numbers (for a launcher). The game's own frames
@@ -4810,6 +4902,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             &mut self.loading,
             &self.device,
             &self.queue,
+            self.shots.as_mut(),
             p,
         );
     }
@@ -4825,6 +4918,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.prepare_listed();
         self.end_pass();
         self.presents += 1;
+        // The start is over once the game has shown a picture (the GPU's gate already stopped
+        // the screen), or at the backstop.
+        if let Some(why) = self
+            .start
+            .as_mut()
+            .and_then(|s| s.over(&self.device, self.presents))
+        {
+            eprintln!("NV_D3D9 wgpu: the start's loading screen ended: {why}");
+            self.start = None;
+        }
         let frame = u64::from(frame);
         let back = self.back_buffers.first().and_then(|&h| self.surface_of(h));
         let shot = match (&mut self.shots, &back) {
@@ -4891,6 +4994,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 [0.0, 0.0, cw as f32, ch as f32],
                 size != (cw, ch),
             );
+            // The start: the loading screen over the frame while the game has drawn nothing.
+            if self.start.is_some() {
+                // The count runs over the back buffer's own texture.
+                let tex = b.tex.as_ref().map(|t| &t.texture);
+                let full = tex.map_or(size, |t| (t.width(), t.height()));
+                self.start_over(&sv, full, &view, (format, cw, ch));
+            }
             // With a capture, the frame the window gets too (`wgpu-window-N.bmp`): the
             // swapchain's own texture, read back before it is presented.
             if shot && copyable && format == wgpu::TextureFormat::Bgra8Unorm {
@@ -4922,6 +5032,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             frame_texture = Some(t);
         }
         self.flush();
+        let presents = self.presents;
+        if let Some(s) = &mut self.start {
+            s.read_after_submit(presents);
+        }
         if let Some(t) = frame_texture {
             self.queue.present(t);
         }
@@ -5027,6 +5141,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.pipeline_cache.as_ref().map(|c| c.note.clone())
     }
 
+    /// Whether the start's loading screen still stands in for the game's frames ([`Start`]; tests).
+    pub fn starting(&self) -> bool {
+        self.start.is_some()
+    }
+
     /// The errors wgpu reported so far (a refused pass or submit among them; tests).
     pub fn wgpu_errors(&self) -> u64 {
         self.errors.load(Ordering::Relaxed)
@@ -5072,7 +5191,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         });
         let view = tex.create_view(&Default::default());
         let mut screen = loading::Screen::new(&self.device, &self.queue, format);
-        screen.draw(&self.device, &self.queue, &view, (width, height), p);
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        screen.draw(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            &view,
+            (width, height),
+            p,
+            None,
+        );
         let row = (width * 4).div_ceil(256) * 256;
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -5080,7 +5208,6 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        let mut encoder = self.device.create_command_encoder(&Default::default());
         encoder.copy_texture_to_buffer(
             tex.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
@@ -5619,20 +5746,233 @@ struct PipelineJob {
     targets: Vec<Option<wgpu::ColorTargetState>>,
 }
 
-/// [`Device::show_progress`] on the device's parts (so it can run while other parts are lent out).
+/// The game's start on a device in the game's window: from the device's creation until the game's
+/// first picture, the window shows the loading screen ([`loading`]) instead of the game's black
+/// frames. A picture: a frame with at least 1% of its pixels lit (a channel above 24 of 255,
+/// [`PICTURE`]). The game's own start is about 5 s of frames that are none: black, then its legal
+/// screen fading in from almost black (its first frames have no pixel above 24; the logo stays
+/// over them). The game's frames are never held back: each is copied into the window's frame as
+/// always; two compute passes then count its lit pixels and open the gate once a frame is a
+/// picture (on the GPU); the screen is drawn over the frame only while the gate is shut, its quads
+/// taken off the target in the vertex shader once it is open. The gate stays open, so a black
+/// frame after the first picture stays black. The CPU reads it a frame or so later
+/// ([`Start::over`]) and ends the start, logging the present of the first picture. A backstop
+/// ends it all the same [`BACKSTOP_PRESENTS`] presents or [`BACKSTOP`] after the game's first
+/// present (the game's own start needs about 8 presents), so that a first picture under the
+/// rule (a mod's dark menu; a window minimised through the first pictures) never keeps
+/// "Loading" over a playable game.
+struct Start {
+    count: wgpu::ComputePipeline,
+    decide: wgpu::ComputePipeline,
+    layout: wgpu::BindGroupLayout,
+    /// Two words: the gate (non-zero once a frame was a picture) and this frame's lit pixels.
+    lit: wgpu::Buffer,
+    /// The copy of `lit` recorded with this frame, mapped once the frame is sent.
+    unsent: Option<wgpu::Buffer>,
+    /// Copies being mapped: each with its present and its map's state ([`MAP_PENDING`],
+    /// [`MAP_DONE`], [`MAP_FAILED`]).
+    reading: Vec<(wgpu::Buffer, u64, Arc<std::sync::atomic::AtomicU8>)>,
+    /// When the game's first present came, and which it was.
+    first: Option<(std::time::Instant, u64)>,
+}
+
+/// The start ends without a picture this many presents after the game's first ([`Start`]).
+const BACKSTOP_PRESENTS: u64 = 600;
+/// ... or this long after it.
+const BACKSTOP: std::time::Duration = std::time::Duration::from_secs(10);
+/// A read-back's map: not answered yet, done, or failed (a lost device): then dropped unread.
+const MAP_PENDING: u8 = 0;
+const MAP_DONE: u8 = 1;
+const MAP_FAILED: u8 = 2;
+
+/// A frame's lit pixels (a channel above 24 of 255: plainly not black on a screen) counted into
+/// `gate[1]` (per 16x16 block, then all), then the gate (`gate[0]`) opened when they are at least
+/// 1% of the frame: a picture.
+const PICTURE: &str = "
+@group(0) @binding(0) var frame: texture_2d<f32>;
+@group(0) @binding(1) var<storage, read_write> gate: array<atomic<u32>, 2>;
+var<workgroup> here: atomic<u32>;
+@compute @workgroup_size(16, 16)
+fn count(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_index) i: u32) {
+    let size = textureDimensions(frame);
+    if (id.x < size.x && id.y < size.y) {
+        let c = textureLoad(frame, vec2<i32>(id.xy), 0);
+        if (max(c.r, max(c.g, c.b)) * 255.0 > 24.5) {
+            atomicAdd(&here, 1u);
+        }
+    }
+    workgroupBarrier();
+    if (i == 0u) {
+        let n = atomicLoad(&here);
+        if (n != 0u) {
+            atomicAdd(&gate[1], n);
+        }
+    }
+}
+@compute @workgroup_size(1)
+fn decide() {
+    let size = textureDimensions(frame);
+    // 1% of the pixels, rounded up (no product that can overflow).
+    if (atomicLoad(&gate[1]) >= (size.x * size.y + 99u) / 100u) {
+        atomicMax(&gate[0], 1u);
+    }
+}
+";
+
+impl Start {
+    fn new(device: &wgpu::Device) -> Start {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("start"),
+            source: wgpu::ShaderSource::Wgsl(PICTURE.into()),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("start"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: std::num::NonZeroU64::new(8),
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("start"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = |entry: &str| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("start"),
+                layout: Some(&pl),
+                module: &module,
+                entry_point: Some(entry),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        };
+        let (count, decide) = (pipeline("count"), pipeline("decide"));
+        // wgpu gives a new buffer zeros: no picture yet.
+        let lit = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("start gate"),
+            size: 8,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Start {
+            count,
+            decide,
+            layout,
+            lit,
+            unsent: None,
+            reading: Vec::new(),
+            first: None,
+        }
+    }
+
+    /// What the screen says through the start: no bar (its length is not known).
+    fn progress() -> loading::Progress {
+        loading::Progress {
+            title: "Loading".into(),
+            status: "Starting the game".into(),
+            done: None,
+        }
+    }
+
+    /// The copy recorded with present `present`, just sent, mapped.
+    fn read_after_submit(&mut self, present: u64) {
+        if let Some(copy) = self.unsent.take() {
+            let state = Arc::new(std::sync::atomic::AtomicU8::new(MAP_PENDING));
+            let answered = state.clone();
+            copy.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                let s = if r.is_ok() { MAP_DONE } else { MAP_FAILED };
+                answered.store(s, Ordering::Release);
+            });
+            self.reading.push((copy, present, state));
+        }
+    }
+
+    /// At present `present` (counted before it is made): why the start is over, if it is (the
+    /// game's first picture, or the backstop); polls `device` without waiting.
+    fn over(&mut self, device: &wgpu::Device, present: u64) -> Option<String> {
+        if let Some(at) = self.drawn(device) {
+            return Some(format!("the game's first picture at present {at}"));
+        }
+        let (since, first) = *self
+            .first
+            .get_or_insert((std::time::Instant::now(), present));
+        let shown = present.saturating_sub(first);
+        (shown >= BACKSTOP_PRESENTS || since.elapsed() >= BACKSTOP).then(|| {
+            format!(
+                "no picture in {shown} presents and {:.1} s after the game's first: the backstop",
+                since.elapsed().as_secs_f64()
+            )
+        })
+    }
+
+    /// The first present whose copy, mapped so far, says the game has shown a picture (polls
+    /// `device` without waiting). A copy whose map failed is dropped unread.
+    fn drawn(&mut self, device: &wgpu::Device) -> Option<u64> {
+        if self.reading.is_empty() {
+            return None;
+        }
+        let _ = device.poll(wgpu::PollType::Poll);
+        let mut drawn: Option<u64> = None;
+        self.reading.retain(
+            |(copy, present, state)| match state.load(Ordering::Acquire) {
+                MAP_PENDING => true,
+                MAP_DONE => {
+                    if let Ok(data) = copy.slice(..).get_mapped_range() {
+                        if data.iter().any(|&b| b != 0) {
+                            drawn = Some(drawn.map_or(*present, |d| d.min(*present)));
+                        }
+                    }
+                    copy.unmap();
+                    false
+                }
+                _ => false,
+            },
+        );
+        drawn
+    }
+}
+
+/// [`Device::show_progress`] on the device's parts (so it can run while other parts are lent out);
+/// with `shots` (`NV_SHOT`) each frame it shows is also captured in their folder
+/// (`wgpu-loading-N.bmp`, N counting these frames from 1).
 fn show_on(
     surface: &mut Option<crate::window::Window>,
     screen: &mut Option<loading::Screen>,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    shots: Option<&mut Shots>,
     p: &loading::Progress,
 ) {
-    eprintln!(
-        "NV_D3D9 wgpu: {}: {} ({:.0}%)",
-        p.title,
-        p.status,
-        p.done.clamp(0.0, 1.0) * 100.0
-    );
+    match p.done {
+        Some(done) => eprintln!(
+            "NV_D3D9 wgpu: {}: {} ({:.0}%)",
+            p.title,
+            p.status,
+            done.clamp(0.0, 1.0) * 100.0
+        ),
+        None => eprintln!("NV_D3D9 wgpu: {}: {}", p.title, p.status),
+    }
     let Some(window) = surface else {
         return;
     };
@@ -5648,8 +5988,77 @@ fn show_on(
         *screen = None;
     }
     let screen = screen.get_or_insert_with(|| loading::Screen::new(device, queue, config.format));
-    screen.draw(device, queue, &view, (config.width, config.height), p);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    screen.draw(
+        device,
+        queue,
+        &mut encoder,
+        &view,
+        (config.width, config.height),
+        p,
+        None,
+    );
+    queue.submit([encoder.finish()]);
+    if let Some(s) = shots {
+        if config.usage.contains(wgpu::TextureUsages::COPY_SRC)
+            && config.format == wgpu::TextureFormat::Bgra8Unorm
+        {
+            s.loading += 1;
+            let path = s.dir.join(format!("wgpu-loading-{:06}.bmp", s.loading));
+            capture(device, queue, &frame.texture, &path);
+        }
+    }
     queue.present(frame);
+}
+
+/// `texture` (B8G8R8A8, a window's frame before it is presented) read back and written to `path`
+/// as an `NV_SHOT` capture.
+fn capture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    path: &std::path::Path,
+) {
+    let (width, height) = (texture.width(), texture.height());
+    let row = (width * 4).div_ceil(256) * 256;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("loading screen shot"),
+        size: u64::from(row * height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit([encoder.finish()]);
+    buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    if let Ok(data) = buffer.slice(..).get_mapped_range() {
+        for y in 0..height {
+            pixels.extend_from_slice(&data[(y * row) as usize..(y * row + width * 4) as usize]);
+        }
+    }
+    buffer.unmap();
+    if pixels.len() == (width * height * 4) as usize {
+        if let Err(e) = std::fs::write(path, shot::bmp(width, height, &pixels)) {
+            eprintln!("NV_SHOT wgpu: {} not written: {e}", path.display());
+        }
+    }
 }
 
 /// Makes a module from WGSL: read and checked once, by wgpu (naga's reader and validator, with

@@ -1,7 +1,8 @@
 //! The screen the backend shows while it does a long step of its own before play (the first
-//! start's pipelines, [`crate::prepare`]): the nv-rs logo, the word "Loading" and one line that
-//! names the step and its progress, centred on black, scaled to the window. Whoever does the long
-//! step gives it a [`Progress`]; the same numbers go to the log, for a launcher to read.
+//! start's pipelines, [`crate::prepare`]), and over the game's start until its first picture
+//! ([`crate::device::Device`]'s start): the nv-rs logo, the word "Loading" and one line that names
+//! the step and its progress, centred on black, scaled to the window. Whoever does the long step
+//! gives it a [`Progress`]; the same numbers go to the log, for a launcher to read.
 //!
 //! The logo is the 128 by 128 image in the port's icon (`viewer/nv-rs.ico`: an uncompressed
 //! 32-bit picture, so no image decoder is needed), drawn at a whole multiple of its size (no
@@ -16,8 +17,9 @@ pub struct Progress {
     pub title: String,
     /// The step and its count ("Preparing shaders 212 of 1,480").
     pub status: String,
-    /// How much is done, 0 to 1.
-    pub done: f32,
+    /// How much is done, 0 to 1; none for a step of no known length (the game's start), which
+    /// shows no bar.
+    pub done: Option<f32>,
 }
 
 /// The 128 by 128 logo from the icon: rows top first, B, G, R, A bytes.
@@ -186,11 +188,17 @@ struct Q { rect: vec4<f32>, colour: vec4<f32> }
 @group(0) @binding(0) var t: texture_2d<f32>;
 @group(0) @binding(1) var s: sampler;
 @group(0) @binding(2) var<uniform> q: Q;
+@group(0) @binding(3) var<storage, read> gate: array<u32>;
 struct V { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32> }
 @vertex fn vs(@builtin(vertex_index) i: u32) -> V {
     let c = vec2<f32>(f32(i & 1u), f32((i >> 1u) & 1u));
     var v: V;
     v.p = vec4<f32>(q.rect.xy + c * q.rect.zw, 0.0, 1.0);
+    // Over a game frame: nothing once the game has shown a picture (gate[0] open), every quad
+    // then outside the target.
+    if (gate[0] != 0u) {
+        v.p = vec4<f32>(2.0, 2.0, 0.0, 1.0);
+    }
     v.uv = vec2<f32>(c.x, 1.0 - c.y);
     return v;
 }
@@ -210,6 +218,9 @@ pub(crate) struct Screen {
     white: wgpu::TextureView,
     /// The last text drawn and its texture, by line.
     text: Vec<(String, u32, (u32, u32, wgpu::TextureView))>,
+    /// A gate that never stops the screen (zero: the game has shown no picture): the screen
+    /// drawn on its own, over black.
+    ungated: wgpu::Buffer,
 }
 
 fn texture(
@@ -284,6 +295,16 @@ impl Screen {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: std::num::NonZeroU64::new(4),
+                    },
+                    count: None,
+                },
             ],
         });
         let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -323,6 +344,13 @@ impl Screen {
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
         let logo = logo().map(|(w, h, px)| (w, h, texture(device, queue, (w, h, &px))));
         let white = texture(device, queue, (1, 1, &[255, 255, 255, 255]));
+        // wgpu gives a new buffer zeros.
+        let ungated = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("loading screen gate"),
+            size: 4,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
         Screen {
             pipeline,
             format,
@@ -331,6 +359,7 @@ impl Screen {
             logo,
             white,
             text: Vec::new(),
+            ungated,
         }
     }
 
@@ -359,14 +388,19 @@ impl Screen {
         Some(v)
     }
 
-    /// Draws `p` over all of `target` (`width` by `height` pixels), cleared to black.
+    /// Draws `p` over all of `target` (`width` by `height` pixels) into `encoder`: cleared to black;
+    /// or with `over` (a gate: non-zero once the game has shown a picture), over the game's frame
+    /// already there, and only while the gate is shut.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         (width, height): (u32, u32),
         p: &Progress,
+        over: Option<&wgpu::Buffer>,
     ) {
         let (fw, fh) = (width.max(1) as f32, height.max(1) as f32);
         // The logo at the largest whole multiple of its size that fits a third of the height.
@@ -375,8 +409,17 @@ impl Screen {
         let status_px = (height / 40).max(10);
         let title = self.line(device, queue, 0, &p.title, title_px);
         let status = self.line(device, queue, 1, &p.status, status_px);
-        // Quads in pixels (x, y, w, h), laid out top to bottom, centred.
+        // Quads in pixels (x, y, w, h), laid out top to bottom, centred. Over a game frame, black
+        // over all of it first: the screen stands in for the whole frame (one that is no
+        // picture yet can be the game's own picture fading in from almost black).
         let mut quads: Vec<(wgpu::TextureView, [f32; 4], [f32; 4])> = Vec::new();
+        if over.is_some() {
+            quads.push((
+                self.white.clone(),
+                [0.0, 0.0, width as f32, height as f32],
+                [0.0, 0.0, 0.0, 1.0],
+            ));
+        }
         let logo_h = self.logo.as_ref().map_or(0, |(_, h, _)| h * scale);
         let bar_w = (width / 3).max(64);
         let bar_h = (height / 200).max(3);
@@ -386,8 +429,7 @@ impl Screen {
             + title.as_ref().map_or(0, |t| t.1)
             + gap
             + status.as_ref().map_or(0, |t| t.1)
-            + gap
-            + bar_h;
+            + if p.done.is_some() { gap + bar_h } else { 0 };
         let mut y = height.saturating_sub(total) / 2;
         let white = [1.0, 1.0, 1.0, 1.0];
         if let Some((w, h, v)) = &self.logo {
@@ -418,22 +460,24 @@ impl Screen {
             ));
             y += h + gap;
         }
-        let x = (width.saturating_sub(bar_w) / 2) as f32;
-        quads.push((
-            self.white.clone(),
-            [x, y as f32, bar_w as f32, bar_h as f32],
-            [0.25, 0.25, 0.25, 1.0],
-        ));
-        quads.push((
-            self.white.clone(),
-            [
-                x,
-                y as f32,
-                bar_w as f32 * p.done.clamp(0.0, 1.0),
-                bar_h as f32,
-            ],
-            [0.9, 0.75, 0.35, 1.0],
-        ));
+        if let Some(done) = p.done {
+            let x = (width.saturating_sub(bar_w) / 2) as f32;
+            quads.push((
+                self.white.clone(),
+                [x, y as f32, bar_w as f32, bar_h as f32],
+                [0.25, 0.25, 0.25, 1.0],
+            ));
+            quads.push((
+                self.white.clone(),
+                [
+                    x,
+                    y as f32,
+                    bar_w as f32 * done.clamp(0.0, 1.0),
+                    bar_h as f32,
+                ],
+                [0.9, 0.75, 0.35, 1.0],
+            ));
+        }
         let mut groups = Vec::new();
         for (view, [x, y, w, h], colour) in &quads {
             // Pixels to clip space, rounded to whole pixels.
@@ -471,10 +515,13 @@ impl Screen {
                         binding: 2,
                         resource: ub.as_entire_binding(),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: over.unwrap_or(&self.ungated).as_entire_binding(),
+                    },
                 ],
             }));
         }
-        let mut encoder = device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("loading screen"),
@@ -483,7 +530,11 @@ impl Screen {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        load: if over.is_some() {
+                            wgpu::LoadOp::Load
+                        } else {
+                            wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                        },
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -498,7 +549,6 @@ impl Screen {
                 pass.draw(0..4, 0..1);
             }
         }
-        queue.submit([encoder.finish()]);
     }
 }
 

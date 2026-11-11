@@ -13,6 +13,8 @@ pub struct Shots {
     pub frames: Option<(u64, u64)>,
     /// `NV_SHOT_LIST=N,N,..`: exactly these presents (to match another run's captures).
     pub list: Option<Vec<u64>>,
+    /// The loading screen's frames captured so far (`wgpu-loading-N.bmp`, N from 1).
+    pub loading: u64,
     last: Option<Instant>,
 }
 
@@ -78,6 +80,7 @@ pub fn parse(value: &str) -> Option<Shots> {
         every: Duration::from_millis(every.max(1)),
         frames: None,
         list: None,
+        loading: 0,
         last: None,
     })
 }
