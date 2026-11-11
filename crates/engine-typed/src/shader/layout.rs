@@ -366,11 +366,16 @@ image! {
         0x40 fFade: f32,
     }
 
-    /// `ShadowSceneNode` (Xbox PDB), as far as read: its light list.
-    pub struct ShadowSceneNode / ShadowSceneNodeImage: 0xc0 {
+    /// `ShadowSceneNode` (Xbox PDB), as far as read: its light list and its portal graph.
+    pub struct ShadowSceneNode / ShadowSceneNodeImage: 0x1e4 {
         0x00 unknown_00: [u32; 45],
         0xb4 kLights_head: u32,
         0xb8 kLights_tail: u32,
         0xbc kLights_count: u32,
+        /// `lShadowLightList` (Xbox PDB) to `bVisibleUnboundSpace`: not read here.
+        0xc0 unknown_c0: [u32; 72],
+        /// `pBSPortalGraph` (Xbox PDB): the occluders, portals and rooms, with the held and queued
+        /// objects.
+        0x1e0 pBSPortalGraph: u32,
     }
 }
