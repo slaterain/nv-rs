@@ -383,6 +383,13 @@ impl Engine {
         engine
     }
 
+    /// [`Engine::new`] with only the translations, for a test outside the core that applies the switch
+    /// itself ([`Engine::typed_apply_for_test`]): a family in each of its forms.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_untyped_for_test() -> Self {
+        Self::new_untyped()
+    }
+
     /// [`Engine::new`] with only the translations: the differential test's two engines
     /// ([`crate::typed`]), whatever the switch says.
     pub(crate) fn new_untyped() -> Self {

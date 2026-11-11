@@ -1,11 +1,11 @@
 //! The per-thread interfaces of a map (`ThreadSpecificInterfaceManager<..>`, Xbox PDB): each game
 //! thread that touches a map gets its own `LockFreeMapInterface`, found again through a TLS slot.
+//! The queues use the same manager functions with managers of their own, which stay in the game's
+//! memory; a map's manager is the family's own, in the store ([`super::store`]).
 
 use super::layout::{InterfaceEntry, InterfaceManager, LockFreeMap, MapInterface};
-use super::{
-    field_ptr, FAMILY, OPERATOR_DELETE, OPERATOR_NEW, SCOPE_BEGIN, SCOPE_CONTEXT, SCOPE_END,
-    SCOPE_MODE, SOURCE_FILE,
-};
+use super::store::{alloc, construct_array, free, store, store_for, tag};
+use super::{field_ptr, FAMILY, SCOPE_BEGIN, SCOPE_CONTEXT, SCOPE_END, SCOPE_MODE, SOURCE_FILE};
 use engine_core::ptr::{Layout, Ptr};
 use engine_core::{args, typed_call, Engine};
 
@@ -27,7 +27,8 @@ pub fn interface_for_thread(
     this: Ptr<InterfaceManager>,
     map: Ptr<LockFreeMap>,
 ) -> Ptr<MapInterface> {
-    let index = e.get(this, InterfaceManager::tls_index);
+    let s = store(e);
+    let index = s.get(e, this, InterfaceManager::tls_index);
     let found: Ptr<MapInterface> = Ptr::new(e.call(TLS_GET_VALUE, &args![index]).u32());
     if !found.is_null() {
         return found;
@@ -45,33 +46,34 @@ pub fn make_interface(
     this: Ptr<InterfaceManager>,
     map: Ptr<LockFreeMap>,
 ) -> Ptr<MapInterface> {
+    let s = store(e);
     let mut made: Ptr<MapInterface> = Ptr::NULL;
-    let count = e
-        .call(
-            INTERLOCKED_INCREMENT,
-            &args![field_ptr(this, InterfaceManager::handed_out)],
-        )
-        .u32();
+    let handed_out = field_ptr(this, InterfaceManager::handed_out).addr();
+    let count = s.add(e, handed_out, 1, |e| {
+        e.call(INTERLOCKED_INCREMENT, &args![handed_out]).u32()
+    });
     let index = count.wrapping_sub(1);
-    if index < e.get(this, InterfaceManager::max_threads) {
+    if index < s.get(e, this, InterfaceManager::max_threads) {
         made = Ptr::new(
             e.vcall(map.addr(), ALLOCATE_INTERFACE_SLOT, &args![index])
                 .u32(),
         );
-        let entries = e.get(this, InterfaceManager::entries);
-        e.set(
+        let entries = s.get(e, this, InterfaceManager::entries);
+        s.set(
+            e,
             InterfaceManager::entry(entries, index),
             InterfaceEntry::interface,
             made,
         );
         let thread = e.call(CURRENT_THREAD_ID, &[]).u32();
-        let entries = e.get(this, InterfaceManager::entries);
-        e.set(
+        let entries = s.get(e, this, InterfaceManager::entries);
+        s.set(
+            e,
             InterfaceManager::entry(entries, index),
             InterfaceEntry::thread_id,
             thread,
         );
-        let tls = e.get(this, InterfaceManager::tls_index);
+        let tls = s.get(e, this, InterfaceManager::tls_index);
         e.call(TLS_SET_VALUE, &args![tls, made]);
     }
     made
@@ -79,9 +81,7 @@ pub fn make_interface(
 
 /// The line `006c73b0` names in its scope.
 const MANAGER_LINE: u32 = 0x14;
-/// The vector constructor iterator (`stdcall(block, element size, count, constructor)`), and the
-/// constructor of an entry (both words cleared; `thiscall`).
-const VECTOR_CONSTRUCT: u32 = 0x0040_1050;
+/// The constructor of an entry (both words cleared; `thiscall`).
 const ENTRY_CONSTRUCT: u32 = 0x0096_a2d0;
 /// `TlsAlloc`'s wrapper (no arguments).
 const TLS_ALLOC: u32 = 0x0044_e330;
@@ -90,31 +90,37 @@ const TLS_ALLOC: u32 = 0x0044_e330;
 /// The interface manager's constructor (`thiscall(max threads)`, answers `this`), in a
 /// memory-context scope: none handed out yet, room for `max_threads` entries (`operator new` of
 /// eight bytes each, all ones when that overflows; the entries cleared by the vector constructor
-/// iterator, or null when the allocation failed), and a TLS slot of its own (`TlsAlloc`).
+/// iterator, or null when the allocation failed), and a TLS slot of its own (`TlsAlloc`). The
+/// queues' managers are made here too, in the game's memory.
 pub fn construct(
     e: &mut Engine,
     this: Ptr<InterfaceManager>,
     max_threads: u32,
 ) -> Ptr<InterfaceManager> {
+    let s = store_for(e, this.addr());
     e.with_stack(4, |e, scope| {
         e.call(
             SCOPE_BEGIN,
             &args![scope, SCOPE_CONTEXT, SCOPE_MODE, SOURCE_FILE, MANAGER_LINE],
         );
-        e.set(this, InterfaceManager::handed_out, 0);
-        e.set(this, InterfaceManager::max_threads, max_threads);
-        let count = e.get(this, InterfaceManager::max_threads);
+        s.set(e, this, InterfaceManager::handed_out, 0);
+        s.set(e, this, InterfaceManager::max_threads, max_threads);
+        let count = s.get(e, this, InterfaceManager::max_threads);
         let bytes = count.saturating_mul(InterfaceEntry::SIZE);
-        let block: Ptr<InterfaceEntry> = Ptr::new(e.call(OPERATOR_NEW, &args![bytes]).u32());
+        let block: Ptr<InterfaceEntry> = Ptr::new(alloc(e, s, bytes, tag::ENTRIES));
         if !block.is_null() {
-            e.call(
-                VECTOR_CONSTRUCT,
-                &args![block, InterfaceEntry::SIZE, count, ENTRY_CONSTRUCT],
+            construct_array(
+                e,
+                s,
+                block.addr(),
+                InterfaceEntry::SIZE,
+                count,
+                ENTRY_CONSTRUCT,
             );
         }
-        e.set(this, InterfaceManager::entries, block);
+        s.set(e, this, InterfaceManager::entries, block);
         let tls = e.call(TLS_ALLOC, &[]).u32();
-        e.set(this, InterfaceManager::tls_index, tls);
+        s.set(e, this, InterfaceManager::tls_index, tls);
         e.call(SCOPE_END, &args![scope]);
     });
     this
@@ -128,10 +134,12 @@ const TLS_FREE: u32 = 0x0044_e360;
 /// (`0044ed80`), the entries freed, and its TLS slot freed (`0044e360`). The thread count is read
 /// afresh at each step, as `00559450` reads it.
 pub fn destroy(e: &mut Engine, this: Ptr<InterfaceManager>) {
+    let s = store(e);
     let mut i = 0u32;
-    while i < e.get(this, InterfaceManager::max_threads) {
-        let entries = e.get(this, InterfaceManager::entries);
-        let face = e.get(
+    while i < s.get(e, this, InterfaceManager::max_threads) {
+        let entries = s.get(e, this, InterfaceManager::entries);
+        let face = s.get(
+            e,
             InterfaceManager::entry(entries, i),
             InterfaceEntry::interface,
         );
@@ -141,9 +149,9 @@ pub fn destroy(e: &mut Engine, this: Ptr<InterfaceManager>) {
         }
         i = i.wrapping_add(1);
     }
-    let entries = e.get(this, InterfaceManager::entries);
-    e.call(OPERATOR_DELETE, &args![entries]);
-    let tls = e.get(this, InterfaceManager::tls_index);
+    let entries = s.get(e, this, InterfaceManager::entries);
+    free(e, s, entries.addr());
+    let tls = s.get(e, this, InterfaceManager::tls_index);
     e.call(TLS_FREE, &args![tls]);
 }
 
@@ -153,7 +161,8 @@ pub fn destroy(e: &mut Engine, this: Ptr<InterfaceManager>) {
 pub fn delete(e: &mut Engine, this: Ptr<InterfaceManager>, flags: u32) -> Ptr<InterfaceManager> {
     typed_call!(FAMILY, 0x0066_65c0, destroy(e, this));
     if flags & 1 != 0 {
-        e.call(OPERATOR_DELETE, &args![this]);
+        let s = store(e);
+        free(e, s, this.addr());
     }
     this
 }
@@ -162,10 +171,12 @@ pub fn delete(e: &mut Engine, this: Ptr<InterfaceManager>, flags: u32) -> Ptr<In
 /// [`destroy`] for the maps of counted values: each thread's interface deleted with `005293c0`
 /// (which drains with the releasing scan), the entries and the TLS slot freed.
 pub fn destroy_counted(e: &mut Engine, this: Ptr<InterfaceManager>) {
+    let s = store(e);
     let mut i = 0u32;
-    while i < e.get(this, InterfaceManager::max_threads) {
-        let entries = e.get(this, InterfaceManager::entries);
-        let face = e.get(
+    while i < s.get(e, this, InterfaceManager::max_threads) {
+        let entries = s.get(e, this, InterfaceManager::entries);
+        let face = s.get(
+            e,
             InterfaceManager::entry(entries, i),
             InterfaceEntry::interface,
         );
@@ -178,9 +189,9 @@ pub fn destroy_counted(e: &mut Engine, this: Ptr<InterfaceManager>) {
         }
         i = i.wrapping_add(1);
     }
-    let entries = e.get(this, InterfaceManager::entries);
-    e.call(OPERATOR_DELETE, &args![entries]);
-    let tls = e.get(this, InterfaceManager::tls_index);
+    let entries = s.get(e, this, InterfaceManager::entries);
+    free(e, s, entries.addr());
+    let tls = s.get(e, this, InterfaceManager::tls_index);
     e.call(TLS_FREE, &args![tls]);
 }
 
@@ -194,7 +205,8 @@ pub fn delete_counted(
 ) -> Ptr<InterfaceManager> {
     typed_call!(FAMILY, 0x0052_9330, destroy_counted(e, this));
     if flags & 1 != 0 {
-        e.call(OPERATOR_DELETE, &args![this]);
+        let s = store(e);
+        free(e, s, this.addr());
     }
     this
 }

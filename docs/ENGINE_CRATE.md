@@ -843,9 +843,10 @@ uses is `engine_core::typed::moved`, tested with a made-up family, so a family r
   the slab: every access is made on both and compared (a word inside a mirrored block compares as the same
   place in its mirror, so pointer fields need no types), the first 20 differences are printed with the place
   and the function running, and the status line counts comparisons and differences (`Dual run: ..`). A dual run
-  keeps the game's threads stepped and the render helpers from forking, so each paired access has no other
-  thread between its halves; for the same reason a store method's call by address in the dual run must never
-  reach a wait.
+  keeps the game's threads stepped and the render helpers from forking, and runs both halves of each access
+  (the guest effect, often a call by address, and the mirror's) in one turn of the stepped host, its
+  time-slice hook taken out meanwhile: no other thread's access comes between them. (The call must still
+  reach no wait.)
 - **Checks along the way.** K1's destructor half checks the poison (an untyped writer of a moved field stops the
   run, naming the field and what it wrote) and clears the spare word (a second destruction frees nothing); the
   moved store stops when typed code reads its own family's poison as a value (a moved field read without
@@ -856,11 +857,14 @@ uses is `engine_core::typed::moved`, tested with a made-up family, so a family r
   stay, so a use after free in game code reads what the exe would have read. A moved family's blocks are not in
   those pools, so a freed slab block waits, oldest first, until 4 MB of later frees have joined it, every word
   the freed-block check's word (above the heap, never mapped): a stale handle reads freed words and a pointer
-  taken from them stops at once. Freed stubs and buffer tokens wait for 65,536 later ones. A family whose game
+  taken from them stops at once, and a stale store into one stops the run when the block leaves the
+  quarantine. Freed stubs and buffer tokens wait for 65,536 later ones. A family whose game
   code reads its objects after freeing them is not moved until that read is typed or fixed.
 - **Buffers under real threads.** A free swaps the bytes out of the table (of two frees at once one wins and the
   other stops) and keeps them until no thread can be inside an access: the thread host's barrier at a frame's
-  end (once 64 MB wait) with real threads, every frame's end with stepped ones (`Buffers::reclaim`).
+  end (once 64 MB wait) with real threads, every frame's end with stepped ones (`Buffers::reclaim`). So only
+  the threads the barrier counts (the game threads and the render helpers) may read or write a buffer; a host
+  thread outside it (the Direct3D 9 stream's render thread, the sound mixer, the save copy-out) never may.
 - The heap census (`NV_CENSUS`) ends with what the slab holds, by family and tag, saying how many of a K1
   family's blocks keep a shadow in the heap.
 
@@ -869,6 +873,14 @@ allocations are its own, and which of its calls by address act on its own object
 tests a handle's range (`moved::is_handle`), so code shared with objects that stay needs no second path. Its
 `Family` says `stage2: true` once its code goes through the store; until then the switch refuses
 `<family>:dual`, `:moved` and `:freed` (they would run stage 1 without saying so).
+
+The first family with a stage-2 form is the lock-free maps (`engine-typed`'s `lockfree/store.rs`): their body
+(buckets, node slots, interface managers and their entries, interfaces, nodes, the scans' copies) is the
+family's own and moves whole; the map object stays a K1 stub (made by untyped code, often inside other
+objects), its record holding the node slots (+4), the buckets (+0xc), the delete batch size (+0x10) and the
+interface manager (+0x14), its spare word +0x1c; the vtable, the bucket count, the count and the lock stay
+for the untyped wrappers. The queues share the interface manager's functions and keep theirs in the game's
+memory: an object is made in the store of its root, so a queue's manager stays guest.
 
 ## Checking against the real exe
 

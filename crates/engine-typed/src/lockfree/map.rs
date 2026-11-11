@@ -6,9 +6,12 @@ use super::layout::{
     BucketHead, HashListNode, Holder, InterfaceManager, LockFreeMap, LockFreeMapIterator,
     MapInterface, MapLock, Marked, NodeSlot,
 };
+use super::store::{
+    alloc, construct_array, free, holder_set, map_get, map_set, map_store, store, tag, MAP_STUB,
+};
 use super::{
-    field_ptr, iface, manager, node, FAMILY, OPERATOR_DELETE, OPERATOR_NEW, SCOPE_BEGIN,
-    SCOPE_CONTEXT, SCOPE_END, SCOPE_MODE, SOURCE_FILE,
+    field_ptr, iface, manager, node, FAMILY, SCOPE_BEGIN, SCOPE_CONTEXT, SCOPE_END, SCOPE_MODE,
+    SOURCE_FILE,
 };
 use engine_core::ptr::{Field, Layout, Ptr};
 use engine_core::{args, typed_call, Engine};
@@ -32,7 +35,8 @@ fn lock(this: Ptr<LockFreeMap>) -> Ptr<MapLock> {
 /// The current thread's interface to the map (`thiscall`): `0044d5c0` on its interface manager. A
 /// one-line helper, typed so the walks reach the interface manager by a Rust call.
 pub fn interface_of(e: &mut Engine, this: Ptr<LockFreeMap>) -> Ptr<MapInterface> {
-    let manager = e.get(this, LockFreeMap::pInterfaceManager);
+    let s = store(e);
+    let manager = map_get(e, s, this, LockFreeMap::pInterfaceManager);
     typed_call!(
         FAMILY,
         0x0044_d5c0,
@@ -188,6 +192,7 @@ fn walk(
     first: impl Fn(&mut Engine, Ptr<MapInterface>, u32, Ptr<u32>) -> bool,
     next: impl Fn(&mut Engine, Ptr<MapInterface>, u32, Ptr<u32>) -> bool,
 ) -> bool {
+    let s = store(e);
     let mut found = false;
     if e.get(it, LockFreeMapIterator::cFlags) & AT_END == 0 {
         loop {
@@ -207,7 +212,7 @@ fn walk(
             }
             let bucket = e.get(it, LockFreeMapIterator::iBucket).wrapping_add(1);
             e.set(it, LockFreeMapIterator::iBucket, bucket);
-            let buckets = e.get(this, LockFreeMap::iNumBuckets);
+            let buckets = map_get(e, s, this, LockFreeMap::iNumBuckets);
             if e.get(it, LockFreeMapIterator::iBucket) >= buckets {
                 set_flag(e, it, AT_END, true);
                 break;
@@ -261,51 +266,58 @@ const CLEAR_LINE: u32 = 0x42c;
 /// old one's place (`006c73b0`). The marked-pointer reads and clears (`0044dec0`, `006665a0`) are
 /// done in place.
 pub fn clear(e: &mut Engine, this: Ptr<LockFreeMap>, keep_none: u8) {
+    let s = store(e);
     e.with_stack(4, |e, scope| {
         e.call(
             SCOPE_BEGIN,
             &args![scope, SCOPE_CONTEXT, SCOPE_MODE, SOURCE_FILE, CLEAR_LINE],
         );
-        if e.get(this, LockFreeMap::pInterfaceManager).is_null() {
+        if map_get(e, s, this, LockFreeMap::pInterfaceManager).is_null() {
             e.call(SCOPE_END, &args![scope]);
             return;
         }
         e.call(LOCK_ENTER, &args![lock(this), 0u32]);
-        let manager = e.get(this, LockFreeMap::pInterfaceManager);
-        let threads = e.get(manager, InterfaceManager::max_threads);
-        let manager = e.get(this, LockFreeMap::pInterfaceManager);
+        let manager = map_get(e, s, this, LockFreeMap::pInterfaceManager);
+        let threads = s.get(e, manager, InterfaceManager::max_threads);
+        let manager = map_get(e, s, this, LockFreeMap::pInterfaceManager);
         if !manager.is_null() {
             let _: Ptr<InterfaceManager> =
                 typed_call!(FAMILY, 0x0066_6570, manager::delete(e, manager, 1));
         }
-        e.set(this, LockFreeMap::pInterfaceManager, Ptr::NULL);
-        e.set(this, LockFreeMap::iCount, 0);
+        map_set(e, s, this, LockFreeMap::pInterfaceManager, Ptr::NULL);
+        map_set(e, s, this, LockFreeMap::iCount, 0);
         let mut i = 0u32;
-        while i < e.get(this, LockFreeMap::iNumBuckets) {
-            let buckets = e.get(this, LockFreeMap::pBuckets);
-            let mut node = e
-                .get(LockFreeMap::bucket(buckets, i), BucketHead::head)
+        while i < map_get(e, s, this, LockFreeMap::iNumBuckets) {
+            let buckets = map_get(e, s, this, LockFreeMap::pBuckets);
+            let mut node = s
+                .get(e, LockFreeMap::bucket(buckets, i), BucketHead::head)
                 .node();
-            let buckets = e.get(this, LockFreeMap::pBuckets);
-            e.set(LockFreeMap::bucket(buckets, i), BucketHead::head, Marked(0));
+            let buckets = map_get(e, s, this, LockFreeMap::pBuckets);
+            s.set(
+                e,
+                LockFreeMap::bucket(buckets, i),
+                BucketHead::head,
+                Marked(0),
+            );
             while !node.is_null() {
-                let next = e.get(node, HashListNode::next).node();
-                e.set(node, HashListNode::next, Marked(0));
-                e.set(node, HashListNode::value, 0);
+                let next = s.get(e, node, HashListNode::next).node();
+                s.set(e, node, HashListNode::next, Marked(0));
+                s.set(e, node, HashListNode::value, 0);
                 typed_call!(FAMILY, 0x0044_dde0, node::delete_plain(e, this, node));
                 node = next;
             }
             i = i.wrapping_add(1);
         }
         if keep_none == 0 {
+            let into = map_store(e, this.addr());
             let block: Ptr<InterfaceManager> =
-                Ptr::new(e.call(OPERATOR_NEW, &args![InterfaceManager::SIZE]).u32());
+                Ptr::new(alloc(e, into, InterfaceManager::SIZE, tag::MANAGER));
             let made = if block.is_null() {
                 Ptr::NULL
             } else {
                 typed_call!(FAMILY, 0x006c_73b0, manager::construct(e, block, threads))
             };
-            e.set(this, LockFreeMap::pInterfaceManager, made);
+            map_set(e, s, this, LockFreeMap::pInterfaceManager, made);
         }
         e.call(LOCK_LEAVE, &args![lock(this)]);
         e.call(SCOPE_END, &args![scope]);
@@ -314,9 +326,7 @@ pub fn clear(e: &mut Engine, this: Ptr<LockFreeMap>, keep_none: u8) {
 
 /// The line the map constructors name in their scope.
 const CONSTRUCT_LINE: u32 = 0x390;
-/// The vector constructor iterator (`stdcall(block, element size, count, constructor)`), and the
-/// constructor of a bucket head (cleared; `thiscall`).
-const VECTOR_CONSTRUCT: u32 = 0x0040_1050;
+/// The constructor of a bucket head (cleared; `thiscall`).
 const BUCKET_CONSTRUCT: u32 = 0x0044_dee0;
 /// Referenced-node slots a thread.
 const SLOTS_PER_THREAD: u32 = 3;
@@ -325,7 +335,9 @@ const QUEUED_REFERENCE_MAP_VTABLE: u32 = 0x0101_747c;
 
 /// The body every map constructor of this shape shares, each with its own vtable: what the
 /// interfaced base's constructor (`0044d7f0`) writes at +0 is overwritten at once, and the lock is
-/// cleared in place as `0096a2d0` clears it.
+/// cleared in place as `0096a2d0` clears it. In a stage-2 form the map's record is attached first
+/// (its K1 stub, [`MAP_STUB`]), so every moved field written after it is the record's, and the
+/// body is made in the family's store.
 #[inline(always)]
 fn construct_map(
     e: &mut Engine,
@@ -335,7 +347,9 @@ fn construct_map(
     buckets: u32,
     batch: u32,
 ) -> Ptr<LockFreeMap> {
-    e.set(this, LockFreeMap::vtable, vtable);
+    let s = store(e);
+    MAP_STUB.attach(e, s, this.addr(), tag::RECORD);
+    map_set(e, s, this, LockFreeMap::vtable, vtable);
     let lock = lock(this);
     e.set(lock, MapLock::owner, 0);
     e.set(lock, MapLock::count, 0);
@@ -350,30 +364,30 @@ fn construct_map(
                 CONSTRUCT_LINE
             ],
         );
-        e.set(this, LockFreeMap::iCount, 0);
-        e.set(this, LockFreeMap::iNumBuckets, buckets);
-        let count = e.get(this, LockFreeMap::iNumBuckets);
-        let block: Ptr<BucketHead> = Ptr::new(
-            e.call(OPERATOR_NEW, &args![count.saturating_mul(BucketHead::SIZE)])
-                .u32(),
-        );
+        map_set(e, s, this, LockFreeMap::iCount, 0);
+        map_set(e, s, this, LockFreeMap::iNumBuckets, buckets);
+        let count = map_get(e, s, this, LockFreeMap::iNumBuckets);
+        let bytes = count.saturating_mul(BucketHead::SIZE);
+        let block: Ptr<BucketHead> = Ptr::new(alloc(e, s, bytes, tag::BUCKETS));
         if !block.is_null() {
-            e.call(
-                VECTOR_CONSTRUCT,
-                &args![block, BucketHead::SIZE, count, BUCKET_CONSTRUCT],
+            construct_array(
+                e,
+                s,
+                block.addr(),
+                BucketHead::SIZE,
+                count,
+                BUCKET_CONSTRUCT,
             );
         }
-        e.set(this, LockFreeMap::pBuckets, block);
+        map_set(e, s, this, LockFreeMap::pBuckets, block);
         // The slot count wraps; only the byte count saturates.
         let slots = max_threads.wrapping_mul(SLOTS_PER_THREAD);
-        let referenced: Ptr<NodeSlot> = Ptr::new(
-            e.call(OPERATOR_NEW, &args![slots.saturating_mul(NodeSlot::SIZE)])
-                .u32(),
-        );
-        e.set(this, LockFreeMap::pReferencedNodes, referenced);
-        e.set(this, LockFreeMap::iDeleteBatchSize, batch);
+        let bytes = slots.saturating_mul(NodeSlot::SIZE);
+        let referenced: Ptr<NodeSlot> = Ptr::new(alloc(e, s, bytes, tag::SLOTS));
+        map_set(e, s, this, LockFreeMap::pReferencedNodes, referenced);
+        map_set(e, s, this, LockFreeMap::iDeleteBatchSize, batch);
         let block: Ptr<InterfaceManager> =
-            Ptr::new(e.call(OPERATOR_NEW, &args![InterfaceManager::SIZE]).u32());
+            Ptr::new(alloc(e, s, InterfaceManager::SIZE, tag::MANAGER));
         let made = if block.is_null() {
             Ptr::NULL
         } else {
@@ -383,7 +397,7 @@ fn construct_map(
                 manager::construct(e, block, max_threads)
             )
         };
-        e.set(this, LockFreeMap::pInterfaceManager, made);
+        map_set(e, s, this, LockFreeMap::pInterfaceManager, made);
         e.call(SCOPE_END, &args![scope]);
     });
     this
@@ -573,20 +587,22 @@ pub fn destroy(e: &mut Engine, this: Ptr<LockFreeMap>) {
 
 /// [`destroy`]'s body, which every map destructor shares with its own vtable; `CLEAR` empties the
 /// map: `0044c480` ([`clear`]) for maps of plain values, `00528e40` ([`clear_counted`]) for maps
-/// of counted values.
+/// of counted values. In a stage-2 form the map's record goes last ([`MAP_STUB`]).
 #[inline(always)]
 fn destroy_map<const CLEAR: u32>(e: &mut Engine, this: Ptr<LockFreeMap>, vtable: u32) {
-    e.set(this, LockFreeMap::vtable, vtable);
+    let s = store(e);
+    map_set(e, s, this, LockFreeMap::vtable, vtable);
     if CLEAR == 0x0044_c480 {
         typed_call!(FAMILY, 0x0044_c480, clear(e, this, 1));
     } else {
         typed_call!(FAMILY, 0x0052_8e40, clear_counted(e, this, 1));
     }
-    let buckets = e.get(this, LockFreeMap::pBuckets);
-    e.call(OPERATOR_DELETE, &args![buckets]);
-    let referenced = e.get(this, LockFreeMap::pReferencedNodes);
-    e.call(OPERATOR_DELETE, &args![referenced]);
-    e.set(this, LockFreeMap::vtable, INTERFACED_BASE_VTABLE);
+    let buckets = map_get(e, s, this, LockFreeMap::pBuckets);
+    free(e, s, buckets.addr());
+    let referenced = map_get(e, s, this, LockFreeMap::pReferencedNodes);
+    free(e, s, referenced.addr());
+    map_set(e, s, this, LockFreeMap::vtable, INTERFACED_BASE_VTABLE);
+    MAP_STUB.detach(e, s, this.addr());
 }
 
 // The other map types' destructors: the same body (the exe's code differs only in the vtable and,
@@ -669,59 +685,63 @@ pub fn destroy_lip_task_map(e: &mut Engine, this: Ptr<LockFreeMap>) {
     destroy_map::<0x0052_8e40>(e, this, 0x0108_864c);
 }
 
-/// `NiPointer<T>::operator=` from an object (`thiscall(holder, object)`; one body for every `T`).
-const HOLDER_SET: u32 = 0x006f_74f0;
-
 // Typed from 00528e40
 /// [`clear`] for the maps of counted values: the same steps, the interface manager deleted with
 /// `00529300`, each node's value released (`006f74f0` with null) and the node deleted with
 /// `0044edd0` (which first hands its key to the map's slot +0x28).
 pub fn clear_counted(e: &mut Engine, this: Ptr<LockFreeMap>, keep_none: u8) {
+    let s = store(e);
     e.with_stack(4, |e, scope| {
         e.call(
             SCOPE_BEGIN,
             &args![scope, SCOPE_CONTEXT, SCOPE_MODE, SOURCE_FILE, CLEAR_LINE],
         );
-        if e.get(this, LockFreeMap::pInterfaceManager).is_null() {
+        if map_get(e, s, this, LockFreeMap::pInterfaceManager).is_null() {
             e.call(SCOPE_END, &args![scope]);
             return;
         }
         e.call(LOCK_ENTER, &args![lock(this), 0u32]);
-        let manager = e.get(this, LockFreeMap::pInterfaceManager);
-        let threads = e.get(manager, InterfaceManager::max_threads);
-        let manager = e.get(this, LockFreeMap::pInterfaceManager);
+        let manager = map_get(e, s, this, LockFreeMap::pInterfaceManager);
+        let threads = s.get(e, manager, InterfaceManager::max_threads);
+        let manager = map_get(e, s, this, LockFreeMap::pInterfaceManager);
         if !manager.is_null() {
             let _: Ptr<InterfaceManager> =
                 typed_call!(FAMILY, 0x0052_9300, manager::delete_counted(e, manager, 1));
         }
-        e.set(this, LockFreeMap::pInterfaceManager, Ptr::NULL);
-        e.set(this, LockFreeMap::iCount, 0);
+        map_set(e, s, this, LockFreeMap::pInterfaceManager, Ptr::NULL);
+        map_set(e, s, this, LockFreeMap::iCount, 0);
         let mut i = 0u32;
-        while i < e.get(this, LockFreeMap::iNumBuckets) {
-            let buckets = e.get(this, LockFreeMap::pBuckets);
-            let mut node = e
-                .get(LockFreeMap::bucket(buckets, i), BucketHead::head)
+        while i < map_get(e, s, this, LockFreeMap::iNumBuckets) {
+            let buckets = map_get(e, s, this, LockFreeMap::pBuckets);
+            let mut node = s
+                .get(e, LockFreeMap::bucket(buckets, i), BucketHead::head)
                 .node();
-            let buckets = e.get(this, LockFreeMap::pBuckets);
-            e.set(LockFreeMap::bucket(buckets, i), BucketHead::head, Marked(0));
+            let buckets = map_get(e, s, this, LockFreeMap::pBuckets);
+            s.set(
+                e,
+                LockFreeMap::bucket(buckets, i),
+                BucketHead::head,
+                Marked(0),
+            );
             while !node.is_null() {
-                let next = e.get(node, HashListNode::next).node();
-                e.set(node, HashListNode::next, Marked(0));
-                e.call(HOLDER_SET, &args![HashListNode::value_holder(node), 0u32]);
+                let next = s.get(e, node, HashListNode::next).node();
+                s.set(e, node, HashListNode::next, Marked(0));
+                holder_set(e, s, HashListNode::value_holder(node).addr(), 0);
                 typed_call!(FAMILY, 0x0044_edd0, node::delete_counted(e, this, node));
                 node = next;
             }
             i = i.wrapping_add(1);
         }
         if keep_none == 0 {
+            let into = map_store(e, this.addr());
             let block: Ptr<InterfaceManager> =
-                Ptr::new(e.call(OPERATOR_NEW, &args![InterfaceManager::SIZE]).u32());
+                Ptr::new(alloc(e, into, InterfaceManager::SIZE, tag::MANAGER));
             let made = if block.is_null() {
                 Ptr::NULL
             } else {
                 typed_call!(FAMILY, 0x006c_73b0, manager::construct(e, block, threads))
             };
-            e.set(this, LockFreeMap::pInterfaceManager, made);
+            map_set(e, s, this, LockFreeMap::pInterfaceManager, made);
         }
         e.call(LOCK_LEAVE, &args![lock(this)]);
         e.call(SCOPE_END, &args![scope]);

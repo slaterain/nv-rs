@@ -29,6 +29,7 @@ pub mod manager;
 pub mod map;
 pub mod node;
 pub mod queue;
+pub(crate) mod store;
 
 /// The memory-context scope the family's allocating functions run in (`thiscall(scope, context,
 /// mode, source file, line)` .. `thiscall(scope)`), a 4-byte local: the context for the allocations,
@@ -41,6 +42,8 @@ pub(crate) const SOURCE_FILE: u32 = 0x0101_73f8;
 /// `operator new` and `operator delete` (`cdecl`).
 pub(crate) const OPERATOR_NEW: u32 = 0x0040_1000;
 pub(crate) const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// The vector constructor iterator (`stdcall(block, element size, count, constructor)`).
+pub(crate) const VECTOR_CONSTRUCT: u32 = 0x0040_1050;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(1);
@@ -48,13 +51,14 @@ pub const FAMILY: FamilyId = FamilyId::new(1);
 /// `NV_TYPED=lockfree`. Past its speed gate (2026-11-08, together with the other five families of this crate: real
 /// threads, the fixes preset, the same exe off and on, BAAB): Goodsprings 55.0 to 60.1 fps (+9.3%), the crowded
 /// street at 2560x1440 8x AA 52.3 to 57.7 fps (+10.3%), the sky above it 117 to 134 fps (+14%). On unless
-/// `NV_TYPED` says otherwise (`NV_TYPED=off` or `lockfree:off`).
+/// `NV_TYPED` says otherwise (`NV_TYPED=off` or `lockfree:off`). Stage 2 (the pilot, `store.rs`): `lockfree:dual` mirrors
+/// the maps' body in the slab and compares every access; `lockfree:moved` (K1) and `lockfree:freed` (K2) move it there.
 pub static LOCKFREE: Family = Family {
     name: "lockfree",
     id: FAMILY,
     past_gate: true,
     threads: Threads::Both,
-    stage2: false,
+    stage2: true,
     funcs,
 };
 

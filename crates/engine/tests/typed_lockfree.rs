@@ -244,6 +244,52 @@ fn holder_of(e: &mut Engine, object: u32) -> u32 {
     h
 }
 
+/// The world's key compare (slot +0x38), except that a node found equal is marked deleted at once,
+/// as another thread's remove right after the search found it would: a find then takes the value
+/// and answers 0.
+fn mark_on_equal(e: &mut Engine) {
+    e.register(VT_FN + 0x38, |e, a| {
+        let equal = a[1] == a[2];
+        if equal {
+            let buckets = e.mem.u32(a[0] + 0xc);
+            let count = e.mem.u32(a[0] + 8).max(1);
+            let mut n = e.mem.u32(buckets + (a[2] % count) * 4) & !1;
+            while n != 0 {
+                let next = e.mem.u32(n + 8);
+                if e.mem.u32(n) == a[2] {
+                    e.mem.set_u32(n + 8, next | 1);
+                    break;
+                }
+                n = next & !1;
+            }
+        }
+        ret(u32::from(equal))
+    });
+}
+
+/// Where [`fail_cas`] keeps which compare-and-swap fails and how many it has seen.
+const FAIL_AT: u32 = WORLD + 8;
+
+/// The interlocked compare-exchange as Windows answers it on one thread, except that call number
+/// `nth` (0: none) fails, as when another thread changed the word first: the word is left and the
+/// answer is not what the caller expected.
+fn fail_cas(e: &mut Engine, nth: u32) {
+    e.mem.set_u32(FAIL_AT, nth);
+    e.mem.set_u32(FAIL_AT + 4, 0);
+    e.register(COMPARE_EXCHANGE, |e, a| {
+        let seen = e.mem.u32(FAIL_AT + 4) + 1;
+        e.mem.set_u32(FAIL_AT + 4, seen);
+        let old = e.mem.u32(a[0]);
+        if seen == e.mem.u32(FAIL_AT) {
+            return ret(a[2].wrapping_add(4));
+        }
+        if old == a[2] {
+            e.mem.set_u32(a[0], a[1]);
+        }
+        ret(old)
+    });
+}
+
 /// The comparisons of the functions with copies at other addresses, shared by the original and its
 /// copies.
 trait Cases {
@@ -1236,9 +1282,17 @@ fn find_in_bucket() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
-    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(KEYS), Input::Flag])
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(KEYS),
+        Input::Flag,
+        Input::Flag,
+    ])
     .setup(|e, case| {
         let w = world(e, true);
+        if case.word(3) != 0 {
+            mark_on_equal(e);
+        }
         let held = if case.word(2) != 0 { w.spare } else { 0 };
         let value_out = holder_of(e, held);
         vec![w.face, case.word(0), case.word(1), value_out]
@@ -1381,9 +1435,11 @@ fn remove_value_in_bucket() {
         Input::Of(&[0, 1, 2, 3]),
         Input::Of(&[0, 1, 2, 3]),
         Input::Flag,
+        Input::Of(&[0, 1, 2]),
     ])
     .setup(|e, case| {
         let w = world(e, true);
+        fail_cas(e, case.word(3));
         if case.word(2) != 0 {
             e.mem.set_u32(w.face + 0x20, 99);
         }
@@ -1497,7 +1553,7 @@ fn node_destroy() {
     // A node holding a counted value (its count 3 or 1, so the release frees it or not), or none.
     Diff::new(entry!(0x0044_dd40, node::destroy(Ptr<_>)))
         .node_case()
-        .inputs(&[Input::Of(&[0, 1, 3])])
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
         .setup(|e, case| {
             let _ = world(e, true);
             let n = node(e, 4, 0);
@@ -1518,7 +1574,7 @@ fn node_destroy() {
 fn node_delete() {
     Diff::new(entry!(0x0044_ed50, node::delete(Ptr<_>, u32) -> Ptr))
         .node_case()
-        .inputs(&[Input::Of(&[0, 1, 3])])
+        .inputs(&[Input::Of(&[0, 1, 2, 3])])
         .setup(|e, case| {
             let _ = world(e, true);
             let n = node(e, 4, 0);
@@ -1583,9 +1639,13 @@ fn allocate_interface() {
         .node_case()
         .local_at(0x0040_4eb0, 0, 4)
         .local_at(0x0040_4ee0, 0, 4)
-        .inputs(&[Input::Of(&[0, 1])])
+        .inputs(&[Input::Of(&[0, 1]), Input::Flag])
         .setup(|e, case| {
             let w = world(e, true);
+            if case.word(1) != 0 {
+                // `operator new` fails.
+                e.register(0x0040_1000, |_, _| ret(0));
+            }
             vec![w.map, case.word(0)]
         })
         .run()
@@ -1601,9 +1661,13 @@ fn allocate_interface_tree() {
     .node_case()
     .local_at(0x0040_4eb0, 0, 4)
     .local_at(0x0040_4ee0, 0, 4)
-    .inputs(&[Input::Of(&[0, 1])])
+    .inputs(&[Input::Of(&[0, 1]), Input::Flag])
     .setup(|e, case| {
         let w = world(e, true);
+        if case.word(1) != 0 {
+            // `operator new` fails.
+            e.register(0x0040_1000, |_, _| ret(0));
+        }
         vec![w.map, case.word(0)]
     })
     .run()
@@ -1649,7 +1713,7 @@ fn interface_delete() {
         .translation_calls_plainly(&[0x0044_f220])
         .local_at(0x0040_4eb0, 0, 4)
         .local_at(0x0040_4ee0, 0, 4)
-        .inputs(&[Input::Flag, Input::Of(&[0, 1, 3])])
+        .inputs(&[Input::Flag, Input::Of(&[0, 1, 2, 3])])
         .setup(|e, case| {
             let w = world(e, true);
             waiting(e, &w, case.word(0) != 0);
@@ -1686,7 +1750,7 @@ fn manager_delete() {
     Diff::new(entry!(0x0066_6570, manager::delete(Ptr<_>, u32) -> Ptr))
         .manager_case()
         .translation_calls_plainly(&[0x0066_65c0, 0x0044_f220])
-        .inputs(&[Input::Flag, Input::Of(&[0, 1])])
+        .inputs(&[Input::Flag, Input::Of(&[0, 1, 2, 3])])
         .setup(|e, case| {
             let w = world(e, true);
             if case.word(0) != 0 {
@@ -1739,9 +1803,17 @@ fn next_in_bucket_copy() {
     .family(&leaf::LEAVES)
     .ignore_calls(INLINED)
     .max_calls(MAX_CALLS)
-    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(KEYS), Input::Flag])
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(KEYS),
+        Input::Flag,
+        Input::Flag,
+    ])
     .setup(|e, case| {
         let w = world(e, true);
+        if case.word(3) != 0 {
+            mark_on_equal(e);
+        }
         let key = e.mem.alloc(4);
         e.mem.set_u32(key, case.word(1));
         let held = if case.word(2) != 0 { w.spare } else { 0 };
@@ -1785,9 +1857,11 @@ fn find_counted_value() {
         Input::Of(&[0, 1, 2, 3]),
         Input::Of(&[0, 1, 2, 3]),
         Input::Flag,
+        Input::Of(&[0, 1, 2]),
     ])
     .setup(|e, case| {
         let w = world(e, true);
+        fail_cas(e, case.word(3));
         if case.word(2) != 0 {
             e.mem.set_u32(w.face + 0x20, 99);
         }
@@ -1815,9 +1889,11 @@ fn remove_counted_value_in_bucket() {
         Input::Of(&[0, 1, 2, 3]),
         Input::Of(&[0, 1, 2, 3]),
         Input::Flag,
+        Input::Of(&[0, 1, 2]),
     ])
     .setup(|e, case| {
         let w = world(e, true);
+        fail_cas(e, case.word(3));
         if case.word(2) != 0 {
             e.mem.set_u32(w.face + 0x20, 99);
         }
@@ -1853,7 +1929,7 @@ fn interface_delete_counted() {
     .node_case()
     .local_at(0x0040_4eb0, 0, 4)
     .local_at(0x0040_4ee0, 0, 4)
-    .inputs(&[Input::Flag, Input::Of(&[0, 1])])
+    .inputs(&[Input::Flag, Input::Of(&[0, 1, 2, 3])])
     .setup(|e, case| {
         let w = world(e, true);
         waiting(e, &w, case.word(0) != 0);
@@ -1892,7 +1968,7 @@ fn manager_delete_counted() {
     ))
     .manager_case()
     .translation_calls_plainly(&[0x0052_9330, 0x0052_93c0])
-    .inputs(&[Input::Flag, Input::Of(&[0, 1])])
+    .inputs(&[Input::Flag, Input::Of(&[0, 1, 2, 3])])
     .setup(|e, case| {
         let w = world(e, true);
         if case.word(0) != 0 {
@@ -1926,4 +2002,435 @@ fn clear_counted() {
         })
         .run()
         .assert_same();
+}
+
+mod forms {
+    //! Stage 2 (the K1 pilot): one map's life run through the switch in every form of the family.
+    //!
+    //! A map's life (made, filled, looked up, removed from, emptied by a taking iteration and a
+    //! clear, filled again, destroyed), for a map of counted values and one of plain words, run the
+    //! same in stage 1, the dual run, K1 (`lockfree:moved`, shadows) and K2 (`lockfree:freed`): the
+    //! answers and the objects' reference counts are the same in each; the dual run compares and
+    //! finds no difference; K1 makes the guest heap's allocations stage 1 makes (same sizes, same
+    //! order, same addresses) and K2 none; the moved forms keep poison in the map's moved fields
+    //! while it lives; nothing of the family is left in the slab after.
+    //!
+    //! What stands in here, as for the differential tests above: the map's virtual functions (the
+    //! page of the exe's data holding the vtables the constructors and destructors write is mapped
+    //! and filled with the test's functions), the TLS slot, the map's lock, the allocator (which
+    //! logs each block) and the interlocked imports. `AllocateInterface` is the family's own
+    //! (`00906400`), as the game's maps have it, so the interfaces are made in the store.
+    use super::*;
+    use engine_core::typed::moved::poison;
+
+    /// The exe's data page with the vtables used here: the queued-reference map's (counted values,
+    /// `0101747c`) and the KF model map's (plain words, `0101760c`). The interfaced base's
+    /// (`01017458`, which the destructors write last, and through which nothing calls) lies on the
+    /// same page, its slots overlapping the first one's: it is only mapped.
+    const VTABLE_PAGE: u32 = 0x0101_7000;
+    const VTABLES: [u32; 2] = [0x0101_747c, 0x0101_760c];
+    /// The test's `AllocateInterface` (vtable slot +4): the family's `00906400`.
+    const VT_ALLOCATE: u32 = 0x00ff_2000;
+    /// The allocator's log: a count, then (1: new or 2: delete, size, address) for each call.
+    const LOG: u32 = 0x0310_0000;
+    const LOG_BYTES: u32 = 0x1_0000;
+    const NEW: u32 = 0x0040_1000;
+    const DELETE: u32 = 0x0040_1030;
+    /// The map's moved fields (`LockFreeMap`'s K1 stub).
+    const MOVED_FIELDS: [u32; 4] = [4, 0xc, 0x10, 0x14];
+
+    fn log(e: &mut Engine, kind: u32, size: u32, at: u32) {
+        let n = e.mem.u32(LOG);
+        let entry = LOG + 4 + n * 12;
+        assert!(entry + 12 <= LOG + LOG_BYTES, "the allocator's log is full");
+        e.mem.set_u32(entry, kind);
+        e.mem.set_u32(entry + 4, size);
+        e.mem.set_u32(entry + 8, at);
+        e.mem.set_u32(LOG, n + 1);
+    }
+
+    fn logged(e: &Engine) -> Vec<[u32; 3]> {
+        (0..e.mem.u32(LOG))
+            .map(|i| {
+                let entry = LOG + 4 + i * 12;
+                [entry, entry + 4, entry + 8].map(|a| e.mem.u32(a))
+            })
+            .collect()
+    }
+
+    /// An engine with the family on as `spec` says and the stand-ins registered.
+    fn engine(spec: &str) -> Engine {
+        let mut e = Engine::new_untyped_for_test();
+        e.typed_apply_for_test(&[&lockfree::LOCKFREE, &leaf::LEAVES], spec);
+        e.map(WORLD, 0x1000);
+        e.map(VTABLE_PAGE, 0x1000);
+        e.map(LOG, LOG_BYTES);
+        for vt in VTABLES {
+            for slot in (0..0x48).step_by(4) {
+                e.mem.set_u32(vt + slot, VT_FN + slot);
+            }
+            e.mem.set_u32(vt + 4, VT_ALLOCATE);
+        }
+        e.register(VT_ALLOCATE, |e, a| {
+            ret(e.call(0x0090_6400, &[a[0], a[1]]).u32())
+        });
+        e.register(VT_FN + 0x24, |e, a| {
+            let buckets = e.mem.u32(a[0] + 8);
+            ret(a[1] % buckets.max(1))
+        });
+        e.register(VT_FN + 0x2c, |_, a| ret(a[1]));
+        e.register(VT_FN + 0x30, |e, a| {
+            e.mem.set_u32(a[2], a[1]);
+            ret(0)
+        });
+        e.register(VT_FN + 0x34, |_, a| ret(u32::from(a[1] >= a[2])));
+        e.register(VT_FN + 0x38, |_, a| ret(u32::from(a[1] == a[2])));
+        e.register(VT_FN + 0x3c, |e, a| {
+            let n = e.mem.u32(a[0] + 0x18);
+            e.mem.set_u32(a[0] + 0x18, n.wrapping_add(1));
+            ret(0)
+        });
+        e.register(VT_FN + 0x40, |e, a| {
+            let n = e.mem.u32(a[0] + 0x18);
+            e.mem.set_u32(a[0] + 0x18, n.wrapping_sub(1));
+            ret(0)
+        });
+        e.register(VT_FN + 0x80, |_, a| ret(a[0]));
+        e.register(VT_FN + 0x28, |_, _| ret(0));
+        e.register(COMPARE_EXCHANGE, |e, a| {
+            let old = e.mem.u32(a[0]);
+            if old == a[2] {
+                e.mem.set_u32(a[0], a[1]);
+            }
+            ret(old)
+        });
+        e.register(INCREMENT, |e, a| {
+            let n = e.mem.u32(a[0]).wrapping_add(1);
+            e.mem.set_u32(a[0], n);
+            ret(n)
+        });
+        e.register(DECREMENT, |e, a| {
+            let n = e.mem.u32(a[0]).wrapping_sub(1);
+            e.mem.set_u32(a[0], n);
+            ret(n)
+        });
+        e.register(TLS_ALLOC, |_, _| ret(7));
+        // A freed index takes its values with it: the next manager's slot starts empty.
+        e.register(TLS_FREE, |e, _| {
+            e.mem.set_u32(W_TLS, 0);
+            ret(1)
+        });
+        e.register(CURRENT_THREAD_ID, |_, _| ret(0x1234));
+        e.register(LOCK_ENTER, |_, _| ret(0));
+        e.register(LOCK_LEAVE, |_, _| ret(0));
+        e.register(TLS_GET_VALUE, |e, _| ret(e.mem.u32(W_TLS)));
+        e.register(TLS_SET_VALUE, |e, a| {
+            e.mem.set_u32(W_TLS, a[1]);
+            ret(1)
+        });
+        e.register(NEW, |e, a| {
+            let p = e.mem.alloc(a[0].max(1));
+            log(e, 1, a[0], p);
+            ret(p)
+        });
+        e.register(DELETE, |e, a| {
+            if a[0] != 0 {
+                log(e, 2, 0, a[0]);
+                e.mem.free(a[0]);
+            }
+            ret(0)
+        });
+        e
+    }
+
+    /// What one life answers and leaves.
+    struct Life {
+        answers: Vec<u32>,
+        references: Vec<u32>,
+        heap: Vec<[u32; 3]>,
+        /// Whether the moved fields held the poison at each look (moved forms; always in the others).
+        poison_held: bool,
+        dual: Option<(u64, u64)>,
+        slab_after: Vec<(u8, u16, u64, u64)>,
+    }
+
+    /// The family's map, its moved fields at each look, and the rest of a life's bookkeeping.
+    struct Run {
+        e: Engine,
+        map: u32,
+        moved_form: bool,
+        poison_held: bool,
+        objects: Vec<u32>,
+        answers: Vec<u32>,
+    }
+
+    impl Run {
+        fn new(spec: &str) -> Run {
+            let mut e = engine(spec);
+            let objects = (0..8).map(|_| ref_object(&mut e, 1)).collect();
+            let map = e.mem.alloc(0x40);
+            Run {
+                e,
+                map,
+                moved_form: spec.ends_with(":moved") || spec.ends_with(":freed"),
+                poison_held: true,
+                objects,
+                answers: Vec::new(),
+            }
+        }
+
+        fn look(&mut self) {
+            if self.moved_form {
+                let map = self.map;
+                let e = &self.e;
+                self.poison_held &= MOVED_FIELDS
+                    .iter()
+                    .all(|&off| e.mem.u32(map + off) == poison(lockfree::FAMILY, off));
+            }
+        }
+
+        fn call(&mut self, addr: u32, args: &[u32]) -> u32 {
+            self.e.call(addr, args).u32()
+        }
+
+        /// Calls `addr` and notes the low byte it answers (a bool or a found byte).
+        fn ask(&mut self, addr: u32, args: &[u32]) {
+            let v = self.call(addr, args) & 0xff;
+            self.answers.push(v);
+        }
+
+        /// Notes the word at `a`.
+        fn note(&mut self, a: u32) {
+            let v = self.e.mem.u32(a);
+            self.answers.push(v);
+        }
+
+        /// Notes which object the holder `h` holds.
+        fn note_held(&mut self, h: u32) {
+            let v = self.held(h);
+            self.answers.push(v);
+        }
+
+        /// The index of the object `holder` holds (8 for none).
+        fn held(&self, holder: u32) -> u32 {
+            let object = self.e.mem.u32(holder);
+            self.objects
+                .iter()
+                .position(|&o| o == object)
+                .map_or(8, |i| u32::try_from(i).expect("few"))
+        }
+
+        fn holder(&mut self, object: Option<usize>) -> u32 {
+            let o = object.map_or(0, |i| self.objects[i]);
+            holder_of(&mut self.e, o)
+        }
+
+        fn iterator(&mut self) -> u32 {
+            let it = self.e.mem.alloc(0x10);
+            for off in [0, 4, 8] {
+                self.e.mem.set_u32(it + off, 0);
+            }
+            self.e.mem.set_u8(it + 0xc, 0);
+            it
+        }
+
+        fn end(self) -> Life {
+            let moved = self.e.moved();
+            let references = self
+                .objects
+                .iter()
+                .map(|&o| self.e.mem.u32(o + 8))
+                .collect();
+            let heap = logged(&self.e);
+            Life {
+                answers: self.answers,
+                references,
+                heap,
+                poison_held: self.poison_held,
+                dual: moved.map(|m| m.dual.counts(lockfree::FAMILY)),
+                slab_after: moved.map_or(Vec::new(), |m| m.slab.census()),
+            }
+        }
+    }
+
+    /// The queued-reference map's life (counted values): `0044b750` .. `0044d8f0`.
+    fn counted_life(spec: &str) -> Life {
+        let mut r = Run::new(spec);
+        let map = r.map;
+        let made = r.call(0x0044_b750, &[map, 2, 4, 3]);
+        r.answers.push(u32::from(made == map));
+        r.look();
+        let face = r.call(0x0044_9f80, &[map]);
+        for (i, key) in [1u32, 2, 3, 5, 6, 9].into_iter().enumerate() {
+            let h = r.holder(Some(i));
+            r.ask(0x0044_c000, &[face, key, h, 0]);
+        }
+        // A key already there: replaced, and not.
+        let h = r.holder(Some(6));
+        r.ask(0x0044_c000, &[face, 3, h, 1]);
+        r.ask(0x0044_c000, &[face, 5, h, 0]);
+        for key in [1, 2, 3, 4, 5, 6, 9, 10] {
+            let out = r.holder(None);
+            r.ask(0x0044_bd60, &[map, key, out]);
+            r.note_held(out);
+        }
+        r.ask(0x0052_8bb0, &[face, 2]);
+        r.ask(0x0052_8bb0, &[face, 4]);
+        r.note(map + 0x18);
+        r.look();
+        // A taking iteration over what is left.
+        let it = r.iterator();
+        for _ in 0..16 {
+            let key_out = r.e.mem.alloc(4);
+            let value_out = r.holder(None);
+            let took = r.call(0x0044_b8d0, &[map, it, key_out, value_out, 1]) & 0xff;
+            let key = r.e.mem.u32(key_out);
+            let held = r.held(value_out);
+            r.answers.extend([took, key, held]);
+            if r.e.mem.u8(it + 0xc) & 2 != 0 {
+                break;
+            }
+        }
+        r.note(map + 0x18);
+        // Two more, a clear that makes a new interface manager, one more after it.
+        for (i, key) in [12u32, 13].into_iter().enumerate() {
+            let h = r.holder(Some(i));
+            r.ask(0x0044_c000, &[face, key, h, 0]);
+        }
+        r.call(0x0052_8e40, &[map, 0]);
+        r.look();
+        let face = r.call(0x0044_9f80, &[map]);
+        let h = r.holder(Some(7));
+        r.ask(0x0044_c000, &[face, 11, h, 0]);
+        let out = r.holder(None);
+        r.ask(0x0044_bd60, &[map, 11, out]);
+        r.note_held(out);
+        r.ask(0x0044_bd60, &[map, 12, out]);
+        r.look();
+        r.call(0x0044_d8f0, &[map]);
+        r.note(map);
+        r.end()
+    }
+
+    /// The KF model map's life (plain words): `0044c270` .. `0044c3f0`.
+    fn words_life(spec: &str) -> Life {
+        let mut r = Run::new(spec);
+        let map = r.map;
+        let made = r.call(0x0044_c270, &[map, 2, 4, 3]);
+        r.answers.push(u32::from(made == map));
+        r.look();
+        let face = r.call(0x0044_9f80, &[map]);
+        let word = r.e.mem.alloc(4);
+        for key in [1u32, 2, 3, 5, 6, 9] {
+            r.e.mem.set_u32(word, 0x100 + key);
+            r.ask(0x0044_a130, &[face, key, word, 0]);
+        }
+        r.e.mem.set_u32(word, 0x333);
+        r.ask(0x0044_a130, &[face, 3, word, 1]);
+        r.ask(0x0044_a130, &[face, 5, word, 0]);
+        let out = r.e.mem.alloc(4);
+        for key in [1, 2, 3, 4, 5, 6, 9, 10] {
+            r.e.mem.set_u32(out, 0x5a5a_5a5a);
+            r.ask(0x0044_9530, &[map, key, out]);
+            r.note(out);
+        }
+        r.ask(0x0066_5f20, &[face, 2]);
+        r.ask(0x0066_5f20, &[face, 4]);
+        r.look();
+        let it = r.iterator();
+        for _ in 0..16 {
+            let key_out = r.e.mem.alloc(4);
+            let value_out = r.e.mem.alloc(4);
+            let took = r.call(0x0044_c640, &[map, it, key_out, value_out, 1]) & 0xff;
+            let (key, value) = (r.e.mem.u32(key_out), r.e.mem.u32(value_out));
+            r.answers.extend([took, key, value]);
+            if r.e.mem.u8(it + 0xc) & 2 != 0 {
+                break;
+            }
+        }
+        r.call(0x0044_c480, &[map, 0]);
+        r.look();
+        let face = r.call(0x0044_9f80, &[map]);
+        r.e.mem.set_u32(word, 0x111);
+        r.ask(0x0044_a130, &[face, 11, word, 0]);
+        r.ask(0x0044_9530, &[map, 11, out]);
+        r.note(out);
+        r.look();
+        r.call(0x0044_c3f0, &[map]);
+        r.note(map);
+        r.end()
+    }
+
+    /// A queue's node (the queues stay in the game's memory) deleted through the family's counted
+    /// node's deleting destructor (`0044ed50`), as the queue's scan `0044eed0` and its clear
+    /// `0044e170` do: the same in every form, its holder released and its block freed by address.
+    fn queue_node_life(spec: &str) -> Life {
+        let mut r = Run::new(spec);
+        let node = r.call(NEW, &[8]);
+        let object = r.objects[0];
+        r.e.mem.set_u32(node, 0);
+        r.e.mem.set_u32(node + 4, object);
+        let kept = r.call(0x0044_ed50, &[node, 1]);
+        r.answers.push(u32::from(kept == node));
+        r.end()
+    }
+
+    #[test]
+    fn a_queue_node_is_deleted_alike_in_every_form() {
+        let stage1 = queue_node_life("lockfree");
+        assert_eq!(stage1.heap.len(), 2, "the node made and freed by address");
+        for spec in ["lockfree:dual", "lockfree:moved", "lockfree:freed"] {
+            let form = queue_node_life(spec);
+            assert_eq!(form.answers, stage1.answers, "{spec}");
+            assert_eq!(form.references, stage1.references, "{spec}");
+            assert_eq!(
+                form.heap, stage1.heap,
+                "{spec}: a guest block in every form"
+            );
+        }
+    }
+
+    fn every_form(life: fn(&str) -> Life) {
+        let stage1 = life("lockfree");
+        assert!(
+            !stage1.heap.is_empty(),
+            "stage 1 allocates in the guest heap"
+        );
+        assert!(stage1.answers.len() > 40);
+        for spec in ["lockfree:dual", "lockfree:moved", "lockfree:freed"] {
+            let form = life(spec);
+            assert_eq!(form.answers, stage1.answers, "{spec}: the answers");
+            assert_eq!(form.references, stage1.references, "{spec}: the references");
+            assert!(form.poison_held, "{spec}: the poison held");
+            assert!(
+                form.slab_after.is_empty(),
+                "{spec}: left in the slab: {:?}",
+                form.slab_after
+            );
+            if spec == "lockfree:freed" {
+                assert!(
+                    form.heap.is_empty(),
+                    "K2 makes no guest block: {:?}",
+                    form.heap
+                );
+            } else {
+                assert_eq!(form.heap, stage1.heap, "{spec}: the guest heap of stage 1");
+            }
+            if spec == "lockfree:dual" {
+                let (compared, differed) = form.dual.expect("a dual run");
+                assert!(compared > 100, "{spec}: {compared} compared");
+                assert_eq!(differed, 0, "{spec}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_map_of_counted_values_lives_alike_in_every_form() {
+        every_form(counted_life);
+    }
+
+    #[test]
+    fn a_map_of_plain_words_lives_alike_in_every_form() {
+        every_form(words_life);
+    }
 }
