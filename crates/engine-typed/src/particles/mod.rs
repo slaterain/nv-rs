@@ -15,10 +15,11 @@
 //! at its exe address; a call the exe makes through a vtable slot is a `typed_call!` when the slot holds
 //! the typed function ([`crate::slot_target`]), and goes through the vtable otherwise.
 //!
-//! **Floats.** The systems update on the main thread and, for the actors' scene graphs with one
-//! thread, on the AI threads, so the row is [`Threads::Both`] and the x87 code keeps the exact helpers
-//! ([`engine_core::x87`]): each load, operation and store the exe's, in its order, as the translations
-//! have them. Float fields are declared as their bits, as the code moves them.
+//! **Floats.** The systems update inside the scene graph's downward pass, so they run wherever the
+//! scene family's pass runs (the main thread, and the AI threads for the actors' animated scenes): the
+//! row is [`Threads::Both`], and the x87 code keeps the exact helpers ([`engine_core::x87`]): each
+//! load, operation and store the exe's, in its order, as the translations have them. Float fields are
+//! declared as their bits, as the code moves them.
 
 use crate::culling::layout::{
     NiBound, NiBoundImage, NiGeometry, NiGeometryImage, NiPoint3, NiPoint3Image,
@@ -35,8 +36,8 @@ pub mod system;
 pub const FAMILY: FamilyId = FamilyId::new(20);
 
 /// `NV_TYPED=particles`. Proved by its differential tests (each planted mutant caught) and the
-/// byte-identical recorded street run in both presets (on against `NV_TYPED=particles:off`), so on
-/// unless `NV_TYPED` says otherwise.
+/// byte-identical recorded street run in both presets (on against `NV_TYPED=particles:off,scene:off`,
+/// the queued node updates being the scene family's), so on unless `NV_TYPED` says otherwise.
 pub static PARTICLES: Family = Family {
     name: "particles",
     id: FAMILY,

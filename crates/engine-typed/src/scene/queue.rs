@@ -140,6 +140,8 @@ pub fn update_geometries(e: &mut Engine, node: Ptr) {
     } else {
         let geometry = e.vcall(node.addr(), SLOT_AS_GEOMETRY, &[]).u32();
         if geometry != 0 {
+            // The exe pushes the time with `FLD; FSTP`, which would quiet a signalling NaN; the frame time
+            // never is one, so its bits go as read (as the translation passes them).
             let time = e.global::<f32>(UPDATE_TIME);
             e.with_stack(UPDATE_DATA_SIZE, |e, data| {
                 e.call(UPDATE_DATA_CONSTRUCT, &args![data, time, 1u32, 0u32]);

@@ -543,8 +543,9 @@ pub fn ni_particle_system_process_clone(e: &mut Engine, this: Ptr<NiParticleSyst
 /// slot +0x8c runs with the time and the data. The last kept one, if any, then runs slot
 /// +0x8c the same way when its byte +0x14 is set (only when the list is not empty).
 /// `NiGeometryData::MarkAsChanged(7)` (`00a67090`) on the data; `m_fLastTime` becomes the
-/// time. When the data's word +0x1c was 0 and no longer is, the first of the system and its
-/// parents (+0x18) whose slot +0x10 answers nonzero gets flag 0x400000 (+0x30).
+/// time. When the data's word +0x1c was 0 and no longer is, the first of the system's parents
+/// (its +0x18, then each parent's +0x18; the system itself is not tested) whose slot +0x10 answers
+/// nonzero gets flag 0x400000 (+0x30).
 pub fn ni_particle_system_do_update_system(e: &mut Engine, this: Ptr<NiParticleSystem>, time: f32) {
     let time_bits = x87_quiet_bits(time.to_bits());
     let data = e.get(this, NiParticleSystem::m_spModelData);

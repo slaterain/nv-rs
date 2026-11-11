@@ -16,10 +16,10 @@
 //! preset's smooth physics drawing, overridable.tsv), the Havok calls (motion type, hard keyframe,
 //! velocities' set-up, the blend's quaternion and transform helpers), the Havok world.
 //!
-//! Stage 1: the objects stay in guest memory. **Floats.** These run wherever the scene graph's update
-//! runs (main, and with one thread the AI threads): [`Threads::Both`]. The x87 parts keep the exact
-//! helpers; the SSE parts (Havok's vectors) compute in `f32` lane by lane in the exe's operand order
-//! ([`engine_core::sse`]).
+//! Stage 1: the objects stay in guest memory. **Floats.** These run inside the scene graph's update, so
+//! wherever the scene family's pass runs (the main thread, and the AI threads for the actors' animated
+//! scenes): [`Threads::Both`]. The x87 parts keep the exact helpers; the SSE parts (Havok's vectors)
+//! compute in `f32` lane by lane in the exe's operand order ([`engine_core::sse`]).
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};

@@ -573,6 +573,12 @@ replaces it), as do the Havok calls (motion type, hard keyframe, the velocities'
 `crates/engine/tests/typed_collision.rs`. On since its gate (the differential tests with each planted mutant caught,
 and the recorded street run byte-identical with `NV_TYPED=collision:off` in the fixes and vanilla presets); not a speed
 change by itself.
+The three update-half families (`scene`, `particles`, `collision`) keep the exact x87 helpers instead of the float
+rule's `f64` locals rounded at each `float` store (ADR-0014, below): they run on the main thread at 24-bit precision,
+where an `f64` local rounded only at the store can differ in the last bit from the exe, which rounds at every step, and
+byte identity with the translations needs each step rounded as the exe rounds it. The recording the rule asks for is
+each family's gate: the recorded street run, byte-identical with `NV_TYPED=scene:off`, `particles:off,scene:off` and
+`collision:off` in the fixes and vanilla presets.
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with

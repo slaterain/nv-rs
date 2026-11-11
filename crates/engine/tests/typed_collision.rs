@@ -26,6 +26,7 @@ const TWO: u32 = 0x4000_0000;
 const HALF: u32 = 0x3f00_0000;
 const MINUS_ONE: u32 = 0xbf80_0000;
 const THIRD: u32 = 0x3eaa_aaab;
+const NAN: u32 = 0x7fc0_0000;
 
 /// The real functions a test can put in a slot.
 const BLEND_HK_TO_NI: u32 = 0x00c8_1e30;
@@ -281,26 +282,31 @@ impl Common for Diff {
 
 #[test]
 fn collision_quaternion_from_rotation() {
-    // The diagonal: positive trace, each element the largest, NaN; the rest from the case.
+    // The diagonal: positive trace, each element the largest, NaN, two elements tied for the largest (a
+    // 180-degree turn about (1, 1, 0) has the diagonal (0, 0, -1)), where the exe's strict "below"
+    // picks the index; the rest from the case.
     Diff::new(entry!(
         0x00a6_df40,
         body::quaternion_from_rotation(Ptr<_>, Ptr<_>)
     ))
     .common()
     .inputs(&inputs(&[
-        &[Input::Of(&[0, 1, 2, 3, 4])],
+        &[Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7])],
         &P3,
         &[Input::F32Swept(HALF), Input::F32Swept(THIRD)],
     ]))
-    .max_cases(192)
+    .max_cases(256)
     .setup(|e, case| {
         stand_ins(e, 0);
-        let diagonals: [[u32; 3]; 5] = [
+        let diagonals: [[u32; 3]; 8] = [
             [ONE, ONE, ONE],
             [TWO, MINUS_ONE, MINUS_ONE],
             [MINUS_ONE, TWO, MINUS_ONE],
             [MINUS_ONE, MINUS_ONE, TWO],
-            [0x7fc0_0000, ONE, MINUS_ONE],
+            [NAN, ONE, MINUS_ONE],
+            [0, 0, MINUS_ONE],
+            [MINUS_ONE, 0, 0],
+            [0, MINUS_ONE, 0],
         ];
         let d = diagonals[case.word(0) as usize];
         let m = block(
@@ -421,7 +427,7 @@ fn collision_ni_to_hk() {
                 Input::Of(&[1, 5]),
                 Input::Flag,
                 Input::Of(&[0, 0x40]),
-                Input::Of(&[0, 0x8, 0x0040_0000]),
+                Input::Of(&[0, 0x8, 0x10, 0x0040_0000, 0x0800_0000]),
                 Input::Flag,
                 Input::Of(&[0, 1, 2, 3]),
                 Input::Of(&[0, 1, 2]),
@@ -468,14 +474,14 @@ fn collision_ni_to_hk() {
 
 #[test]
 fn collision_hk_to_ni() {
-    // The blend amount (0, 1, a half); the second amount zero or not; the position flag; the update
+    // The blend amount (0, 1, a half, NaN); the second amount zero or not; the position flag; the update
     // state; the motion mode it last set (the target's, 4, another); a Havok object or none; an owner
     // (whose word +0x18 is 0 or not) or none; floats.
     Diff::new(entry!(0x00c8_1e30, blend::hk_to_ni(Ptr<_>)))
         .common()
         .inputs(&inputs(&[
             &[
-                Input::Of(&[0, ONE, HALF]),
+                Input::Of(&[0, ONE, HALF, NAN]),
                 Input::Of(&[0, HALF]),
                 Input::Flag,
                 Input::Of(&[0, 1, 2]),
@@ -492,7 +498,7 @@ fn collision_hk_to_ni() {
             let (amount, second, flag, state) =
                 (case.word(0), case.word(1), case.word(2), case.word(3));
             let mode_0 = (amount == 0 && state != 1 && second != 0 && flag == 0)
-                || (amount == HALF && state != 2);
+                || ((amount == HALF || amount == NAN) && state != 2);
             case.word(5) == 0 && mode_0
         })
         .setup(|e, case| {
@@ -531,7 +537,7 @@ fn collision_update_world_data() {
                 Input::Flag,
                 Input::Of(&[0, 1, 2]),
                 Input::Of(&[0, 1, 0x40, 0x41]),
-                Input::Of(&[ONE, HALF]),
+                Input::Of(&[ONE, HALF, NAN]),
                 Input::Of(&[0, 1]),
                 Input::Flag,
                 Input::Flag,
