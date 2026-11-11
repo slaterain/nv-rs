@@ -1571,3 +1571,40 @@ fn occlusion_counts_are_posted_for_reading_without_waiting() {
     let event = answers.get(0x2010).expect("made");
     assert!(!event.occlusion && event.count.is_none(), "{event:?}");
 }
+
+/// One pass of far more draws than an encoder takes before it goes to a finishing thread
+/// (`SPLIT_DRAWS`, 256), each covering the target: every draw counted exactly once across the
+/// encoders (an occlusion count spanning all of them), and the last draw's colour on top (their
+/// order kept), with each draw's vertices uploaded into the same buffer as the batch goes on.
+#[test]
+fn draws_split_across_finished_encoders_keep_their_order_and_count() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    g.run(Cmd::CreateQuery {
+        device: DEVICE,
+        query: 0x2000,
+        kind: 9,
+    });
+    g.state(ZFUNC, 8);
+    g.clear(3, 0, 1.0);
+    let n = 600u32;
+    let colour = |i: u32| {
+        [
+            (i % 7) as f32 / 6.0,
+            (i % 5) as f32 / 4.0,
+            (i % 3) as f32 / 2.0,
+            1.0,
+        ]
+    };
+    let count = g.count(0x2000, |g| {
+        for i in 0..n {
+            g.colour(colour(i));
+            g.cover(0.5);
+        }
+    });
+    assert_eq!(count, n * 16, "every draw counted once");
+    let last = colour(n - 1).map(|c| (c * 255.0).round() as u8);
+    for p in g.pixels() {
+        assert_eq!(p, [last[2], last[1], last[0], 255], "the last draw on top");
+    }
+    assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+}
