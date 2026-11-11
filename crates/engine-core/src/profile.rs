@@ -2397,6 +2397,19 @@ mod native {
     ) -> u64;
     type SymRefreshModuleList = unsafe extern "system" fn(Handle) -> i32;
 
+    /// dbghelp is single-threaded: Microsoft's documentation says every DbgHelp function is, and
+    /// that calls from several threads at once must be synchronised. The game has one sampler
+    /// thread, but the tests run several samplers at once: 8 threads each naming one address got
+    /// 2 to 9 of 320 names wrong (empty, "?", or the first bytes of the name zeroed; 2026-11-11).
+    /// Every dbghelp call holds this lock (process-wide, as dbghelp's state is).
+    static DBGHELP: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn dbghelp() -> std::sync::MutexGuard<'static, ()> {
+        DBGHELP
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub struct Sampler {
         threads: HashMap<u32, Handle>,
         timer: Handle,
@@ -2816,8 +2829,9 @@ mod native {
                 return;
             }
             self.sym_tried = true;
+            let _dbghelp = dbghelp();
             // SAFETY: dbghelp.dll is a system DLL; the procedures are looked up by name and
-            // called with their documented signatures. Only this thread uses dbghelp.
+            // called with their documented signatures, under the dbghelp lock ([`DBGHELP`]).
             unsafe {
                 let dll = LoadLibraryA(b"dbghelp.dll\0".as_ptr());
                 if dll.is_null() {
@@ -2908,10 +2922,15 @@ mod native {
             // LineNumbers at 1652, GlobalSymbols at 1656.
             let mut buf = vec![0u64; 1680 / 8];
             let bytes = buf.as_mut_ptr() as *mut u8;
-            // SAFETY: `buf` is 8-aligned and 1680 bytes, its size in its first word.
+            // SAFETY: `buf` is 8-aligned and 1680 bytes, its size in its first word; called under
+            // the dbghelp lock ([`DBGHELP`]).
             unsafe {
                 *(bytes as *mut u32) = 1680;
-                if info(GetCurrentProcess(), base, bytes) == 0 {
+                let found = {
+                    let _dbghelp = dbghelp();
+                    info(GetCurrentProcess(), base, bytes)
+                };
+                if found == 0 {
                     return "no symbols for the program".into();
                 }
                 let all = std::slice::from_raw_parts(bytes, 1680);
@@ -2974,11 +2993,16 @@ mod native {
                 let mut buf = vec![0u64; (88 + 1024) / 8 + 1];
                 let bytes = buf.as_mut_ptr() as *mut u8;
                 let mut displacement = 0u64;
-                // SAFETY: `buf` is 8-aligned and holds the structure plus 1024 name bytes.
+                // SAFETY: `buf` is 8-aligned and holds the structure plus 1024 name bytes; called
+                // under the dbghelp lock ([`DBGHELP`]).
                 unsafe {
                     *(bytes as *mut u32) = 88;
                     *(bytes.add(80) as *mut u32) = 1024;
-                    if from_addr(GetCurrentProcess(), addr, &mut displacement, bytes) != 0 {
+                    let found = {
+                        let _dbghelp = dbghelp();
+                        from_addr(GetCurrentProcess(), addr, &mut displacement, bytes)
+                    };
+                    if found != 0 {
                         let len = (*(bytes.add(76) as *const u32)).min(1024) as usize;
                         let name = std::slice::from_raw_parts(bytes.add(84), len);
                         symbol = super::readable_symbol(&String::from_utf8_lossy(name));
@@ -3586,6 +3610,42 @@ mod native {
         /// back. Through `RtlVirtualUnwind`, a probe of the same loop got stuck within 9,000 to
         /// 95,000 walks (the `bnd jmp` alone, 10 times in 30,163 walks); here a watchdog resumes
         /// the thread after two seconds without a walk coming back, and the test fails.
+        /// Samplers on several threads at once name one address alike every time: dbghelp is
+        /// single-threaded, and its calls hold the dbghelp lock ([`DBGHELP`]). Without it, 8
+        /// threads got 2 to 9 of 320 names wrong (empty, "?", or the name's first bytes zeroed;
+        /// 2026-11-11), the way `a_busy_thread_is_sampled_in_this_program` can fail while other
+        /// tests sample.
+        #[test]
+        fn samplers_on_several_threads_name_an_address_alike() {
+            extern "C" {
+                fn nv_profile_test_framed();
+            }
+            let framed = nv_profile_test_framed as unsafe extern "C" fn() as usize as u64;
+            let wrong = std::sync::Mutex::new(Vec::new());
+            std::thread::scope(|s| {
+                for _ in 0..8 {
+                    s.spawn(|| {
+                        let mut sampler = Sampler::new();
+                        for _ in 0..40 {
+                            // Looked up afresh each time (not from the sampler's own names).
+                            sampler.names.clear();
+                            let (_, symbol) = sampler.name(framed + 1);
+                            if symbol != "nv_profile_test_framed" {
+                                wrong.lock().unwrap().push(symbol);
+                            }
+                        }
+                    });
+                }
+            });
+            let wrong = wrong.into_inner().unwrap();
+            assert!(
+                wrong.is_empty(),
+                "{} of 320 names wrong, the first: {:?}",
+                wrong.len(),
+                &wrong[..wrong.len().min(5)]
+            );
+        }
+
         #[test]
         fn a_walk_at_a_tail_call_never_waits_on_the_loader() {
             use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
