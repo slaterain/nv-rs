@@ -5808,8 +5808,9 @@ fn pass_world(e: &mut Engine, states: &[(u32, u32)], mask: u8, pass_type: u32) -
         e.register(*addr, marked);
     }
     let vt = vtable(e, &[]);
-    let old = e.mem.u32(0x0126_f74c);
-    let holder = e.mem.u32(old + 0x5c);
+    // The constants holder: it answers through its slots 0x84 and 0x7c; the device at +0x20.
+    let holder = obj(e, 0x24, vt);
+    set(e, holder + 0x20, w.device);
     let pass = e.mem.alloc(0x60);
     set(e, pass + 0x5c, holder);
     let list = e.mem.alloc(0x20);
@@ -6196,13 +6197,17 @@ fn setup_types() {
     }
 }
 
-/// The vertex (`011febd8`) and pixel (`011fec30`) constant entries, 22 each: every third missing, the
-/// others on or off.
+/// The vertex (`011febd8`) and pixel (`011fec30`) constant entries, 22 each: every third missing (but
+/// entry 8, which the pass constants read), the others on or off.
 fn entries(e: &mut Engine) {
     let vt = vtable(e, &[]);
     for list in [0x011f_ebd8u32, 0x011f_ec30] {
         for k in 0..22u32 {
-            let entry = if k % 3 == 2 { 0 } else { obj(e, 0x24, vt) };
+            let entry = if k % 3 == 2 && k != 8 {
+                0
+            } else {
+                obj(e, 0x24, vt)
+            };
             if entry != 0 {
                 e.mem.set_u8(entry + 8, (k % 2) as u8);
             }
@@ -6307,8 +6312,9 @@ fn select_pass() {
         .inputs(&[Input::Of(&EVERY_PASS_TYPE), Input::Of(&[0, 1, 2])])
         .max_cases(0x2f0 * 3)
         .setup(|e, c| {
-            let p = pass_world(e, &[], 0, 0);
-            let shader = p.d.w.shader;
+            // The plain world: the pass choice reads only the shader and the pass table.
+            let w = world_all(e, false, false, false);
+            let shader = w.shader;
             let vt = vtable(e, &[]);
             let pass_type = c.word(0);
             set(e, 0x011f_dff8 + 4 * pass_type, 0x0a55_0000 + pass_type);
@@ -6350,6 +6356,8 @@ fn land_toggles() {
     ])
     .setup(|e, c| {
         let p = pass_world(e, &[], 0, 0);
+        e.register(VT_FN + 0xec, slot_answer::<0xec>);
+        e.mem.set_u64(0x0101_2070, 1.0f64.to_bits());
         let vt = vtable(e, &[]);
         let geometry = obj(e, 0xc8, vt);
         let table = e.mem.alloc(4);
@@ -6395,6 +6403,8 @@ fn property_fade() {
 /// `kind` (the table's index), with its own buffer or not, `count` registers.
 fn constant_entry(e: &mut Engine, kind: u32, own_buffer: bool, count: u32) -> (u32, u32) {
     let p = pass_world(e, &[], 0, 0);
+    e.register(VT_FN + 0x180, slot_answer::<0x180>);
+    e.register(VT_FN + 0x188, slot_answer::<0x188>);
     let vt = vtable(e, &[]);
     let renderer = e.mem.alloc(0x1100);
     set(e, renderer + 0x10f8, p.d.w.device);
