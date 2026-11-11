@@ -287,6 +287,18 @@ pub fn fixed_slot(s: Semantic) -> Option<u32> {
 /// The locations of the two clip varyings of [`Clip::Discard`] with [`Link::fixed`].
 pub const CLIP_SLOTS: [u32; 2] = [10, 11];
 
+/// What a pixel shader reads from a varying its vertex shader (of shader model `vs_major`) does
+/// not write, as the real Direct3D 9 gives it: COLOR0 white; COLOR1 (0, 0, 0, 1) after a shader
+/// model 1 or 2 vertex shader and 0 after vs_3_0; anything else 0. Measured on NVIDIA's driver
+/// (engine-platform's `what_an_unwritten_varying_reads_on_the_real_direct3d_9`), and DXVK's values.
+pub fn unwritten(v: Semantic, vs_major: u8) -> &'static str {
+    match (v.usage, v.index) {
+        (usage::COLOR, 0) => "vec4<f32>(1.0)",
+        (usage::COLOR, 1) if vs_major < 3 => "vec4<f32>(0.0, 0.0, 0.0, 1.0)",
+        _ => "vec4<f32>(0.0)",
+    }
+}
+
 /// How a converted pair applies Direct3D 9's user clip planes (`SetClipPlane`,
 /// `D3DRS_CLIPPLANEENABLE`). With a vertex shader, a plane is in clip space: a point is kept
 /// where `dot(plane, oPos) >= 0`. The device puts the six planes in `R.clip` (zero for a plane
@@ -769,7 +781,7 @@ impl Gen<'_> {
                     format!("saturate({})", out_name(r))
                 }
                 Some(r) => out_name(r),
-                None => "vec4<f32>(0.0)".into(),
+                None => unwritten(*v, self.p.major).into(),
             };
             let _ = writeln!(s, "    out.l{l} = {value};");
         }
@@ -1785,7 +1797,7 @@ mod tests {
     }
 
     /// With fixed locations, each varying sits at its own location on both stages (a vertex
-    /// shader writes 0 for one it does not write), the discard's clip varyings at theirs; a
+    /// shader writes the unwritten value for one it does not write), the discard's clip varyings at theirs; a
     /// varying without one is refused.
     #[test]
     fn a_fixed_link_puts_each_varying_at_its_own_location() {
@@ -1827,7 +1839,8 @@ mod tests {
             v.contains("@location(9) @interpolate(perspective, centroid) l1: vec4<f32>"),
             "{v}"
         );
-        assert!(v.contains("out.l1 = vec4<f32>(0.0);"), "{v}");
+        // COLOR1 after vs_2_0: what the real Direct3D 9 gives ([`unwritten`]).
+        assert!(v.contains("out.l1 = vec4<f32>(0.0, 0.0, 0.0, 1.0);"), "{v}");
         assert!(v.contains("@location(10) k0: vec4<f32>"), "{v}");
         assert!(v.contains("@location(11) k1: vec4<f32>"), "{v}");
         let p = converts(&ps, &link(vec![t0]));
@@ -1851,6 +1864,27 @@ mod tests {
             index: 0,
         };
         assert!(convert(&parse(&vs).unwrap(), &link(vec![normal])).is_err());
+    }
+
+    /// A varying the vertex shader does not write reads as on the real Direct3D 9: COLOR0 white,
+    /// COLOR1 (0, 0, 0, 1) after shader model 1 or 2 and 0 after vs_3_0, anything else 0.
+    #[test]
+    fn an_unwritten_varying_has_direct3d_9s_value() {
+        let s = |usage, index| Semantic { usage, index };
+        assert_eq!(unwritten(s(usage::COLOR, 0), 2), "vec4<f32>(1.0)");
+        assert_eq!(unwritten(s(usage::COLOR, 0), 3), "vec4<f32>(1.0)");
+        assert_eq!(
+            unwritten(s(usage::COLOR, 1), 1),
+            "vec4<f32>(0.0, 0.0, 0.0, 1.0)"
+        );
+        assert_eq!(
+            unwritten(s(usage::COLOR, 1), 2),
+            "vec4<f32>(0.0, 0.0, 0.0, 1.0)"
+        );
+        assert_eq!(unwritten(s(usage::COLOR, 1), 3), "vec4<f32>(0.0)");
+        assert_eq!(unwritten(s(usage::COLOR, 2), 2), "vec4<f32>(0.0)");
+        assert_eq!(unwritten(s(usage::TEXCOORD, 0), 2), "vec4<f32>(0.0)");
+        assert_eq!(unwritten(s(usage::FOG, 0), 1), "vec4<f32>(0.0)");
     }
 
     /// The device's link puts every varying at the centroid on both stages (the pixel shader

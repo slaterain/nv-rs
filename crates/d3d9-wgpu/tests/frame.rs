@@ -496,6 +496,74 @@ fn a_varying_without_a_fixed_location_keeps_the_pairs_own_link() {
     assert_eq!(d.wgpu_errors(), 0);
 }
 
+/// A varying the vertex shader does not write reads as on the real Direct3D 9 (measured on
+/// NVIDIA's driver, engine-platform's `what_an_unwritten_varying_reads_on_the_real_direct3d_9`):
+/// COLOR0 white after vs_2_0 and vs_3_0; COLOR1 (0, 0, 0, 1) after vs_2_0, 0 after vs_3_0;
+/// TEXCOORD0 0 after either.
+#[test]
+fn an_unwritten_varying_reads_as_on_the_real_direct3d_9() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    // vs_3_0: dcl_position v0; dcl_position o0; mov o0, v0 (the harness's VS is the vs_2_0 one).
+    let mut vs3 = vec![0xFFFE_0300];
+    vs3.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    vs3.extend(ins(31, &[0x8000_0000, 0xE00F_0000]));
+    vs3.extend(ins(1, &[0xE00F_0000, 0x90E4_0000]));
+    vs3.push(END);
+    let t = words(&vs3);
+    g.run(Cmd::CreateShader {
+        device: DEVICE,
+        shader: VS + 4,
+        pixel: false,
+        tokens: Data::Bytes(&t),
+    });
+    // ps_2_0: dcl REG; mov oC0, REG. ps_3_0: dcl_USAGE vN; mov oC0, vN.
+    let ps2 = |dcl: u32, src: u32| {
+        let mut p = vec![0xFFFF_0200];
+        p.extend(ins(31, &[0x8000_0000, dcl]));
+        p.extend(ins(1, &[0x800F_0800, src]));
+        p.push(END);
+        p
+    };
+    let ps3 = |usage: u32, n: u32| {
+        let mut p = vec![0xFFFF_0300];
+        p.extend(ins(31, &[usage, 0x900F_0000 | n]));
+        p.extend(ins(1, &[0x800F_0800, 0x90E4_0000 | n]));
+        p.push(END);
+        p
+    };
+    let white = [255, 255, 255, 255];
+    let black = [0, 0, 0, 255];
+    let zero = [0, 0, 0, 0];
+    let cases = [
+        ("vs_2_0 COLOR0", VS, ps2(0x900F_0000, 0x90E4_0000), white),
+        ("vs_2_0 COLOR1", VS, ps2(0x900F_0001, 0x90E4_0001), black),
+        ("vs_2_0 TEXCOORD0", VS, ps2(0xB00F_0000, 0xB0E4_0000), zero),
+        ("vs_3_0 COLOR0", VS + 4, ps3(0x8000_000A, 0), white),
+        ("vs_3_0 COLOR1", VS + 4, ps3(0x8001_000A, 1), zero),
+        ("vs_3_0 TEXCOORD0", VS + 4, ps3(0x8000_0005, 2), zero),
+    ];
+    for (k, (name, vs, ps, want)) in cases.into_iter().enumerate() {
+        let t = words(&ps);
+        let shader = PS + 8 + k as u32;
+        g.run(Cmd::CreateShader {
+            device: DEVICE,
+            shader,
+            pixel: true,
+            tokens: Data::Bytes(&t),
+        });
+        for (pixel, shader) in [(false, vs), (true, shader)] {
+            g.run(Cmd::SetShader {
+                device: DEVICE,
+                pixel,
+                shader,
+            });
+        }
+        g.clear(3, 0x8080_8080, 1.0);
+        g.cover(0.5);
+        assert_eq!(g.pixels(), vec![want; 16], "{name}");
+    }
+}
+
 #[test]
 fn user_clip_planes_cut_where_the_distance_is_negative() {
     let Some(mut g) = Gpu::new(4, 1) else { return };
