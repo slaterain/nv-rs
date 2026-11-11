@@ -178,6 +178,8 @@ fn anim_keys_slerp() {
         quaternion::slerp(Ptr<_>, f32, Ptr<_>, Ptr<_>)
     ))
     .common()
+    // The translation calls the parameter correction as a plain Rust call.
+    .translation_calls_plainly(&[0x00a6_dc30])
     .inputs(&inputs(&[&[Input::F32, Input::Of(&[0, 1, 2])], &FLOATS8]))
     .setup(|e, case| {
         constants(e);
