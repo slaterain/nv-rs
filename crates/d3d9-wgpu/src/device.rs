@@ -605,6 +605,12 @@ pub struct Device {
     auto_depth: Handle,
     st: State,
     encoder: Option<wgpu::CommandEncoder>,
+    /// The batch's earlier encoders, in order: finished on the finishing threads (or here), their
+    /// command buffers sent with the batch before the open encoder's ([`Device::send_encoder`]).
+    finishing: Vec<Finishing>,
+    finisher: Option<Finisher>,
+    /// Draws recorded into the open encoder.
+    encoder_draws: u32,
     pass: Option<wgpu::RenderPass<'static>>,
     pass_targets: Option<Targets>,
     batch: u64,
@@ -958,6 +964,9 @@ impl Device {
                 bound: Bound::default(),
             },
             encoder: None,
+            finishing: Vec::new(),
+            finisher: Finisher::for_this_machine(),
+            encoder_draws: 0,
             pass: None,
             pass_targets: None,
             batch: 1,
@@ -1528,9 +1537,27 @@ impl Device {
             self.queue.write_buffer(&self.stage_buffer, 0, &self.stage);
             self.stage.clear();
         }
+        // The batch's encoders in order: the earlier ones as their finishing threads finish them,
+        // the open one finished here.
+        let mut buffers: Vec<wgpu::CommandBuffer> = self
+            .finishing
+            .drain(..)
+            .map(|f| match f {
+                Finishing::Ready(b) => b,
+                Finishing::Pending(r) => match r.recv() {
+                    Ok(Ok(b)) => b,
+                    Ok(Err(why)) => panic!("a finishing thread could not finish an encoder: {why}"),
+                    Err(_) => panic!("a finishing thread stopped before it finished an encoder"),
+                },
+            })
+            .collect();
         if let Some(e) = self.encoder.take() {
-            self.queue.submit([e.finish()]);
+            buffers.push(e.finish());
         }
+        if !buffers.is_empty() {
+            self.queue.submit(buffers);
+        }
+        self.encoder_draws = 0;
         self.batch += 1;
         self.st.dirty = [true; 2];
     }
@@ -1921,6 +1948,19 @@ impl Device {
             self.device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None })
         })
+    }
+
+    /// The open encoder (its pass ended) to a finishing thread, its command buffer sent with the
+    /// batch after the encoders before it ([`Device::flush`]).
+    fn send_encoder(&mut self) {
+        self.end_pass();
+        if let Some(e) = self.encoder.take() {
+            self.finishing.push(match &self.finisher {
+                Some(f) => f.send(e),
+                None => Finishing::Ready(e.finish()),
+            });
+        }
+        self.encoder_draws = 0;
     }
 
     fn end_pass(&mut self) {
@@ -3381,6 +3421,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             None => pass.draw(start..start + n, 0..1),
         }
         self.draws += 1;
+        // Every [`SPLIT_DRAWS`] draws the open encoder goes to a finishing thread: wgpu does its
+        // checking and the driver's recording when an encoder is finished, and those of different
+        // encoders run side by side. The next draw opens a new pass (it loads what this one
+        // stored) in a new encoder.
+        self.encoder_draws += 1;
+        if self.encoder_draws >= SPLIT_DRAWS && self.finisher.is_some() {
+            self.send_encoder();
+        }
     }
 
     /// The one shader with bytecode hash `hash`, unless two bytecodes share it.
@@ -5616,6 +5664,99 @@ fn worker_threads() -> usize {
         .map_or(1, |n| n.get())
         .saturating_sub(2)
         .clamp(1, 16)
+}
+
+/// Draws an encoder takes before it goes to a finishing thread ([`Device::send_encoder`]).
+const SPLIT_DRAWS: u32 = 256;
+
+/// An earlier encoder of the batch: finished, or on its way from a finishing thread.
+enum Finishing {
+    Ready(wgpu::CommandBuffer),
+    Pending(std::sync::mpsc::Receiver<Result<wgpu::CommandBuffer, String>>),
+}
+
+/// A job for a finishing thread: the encoder, and where its command buffer goes.
+type FinishJob = (
+    wgpu::CommandEncoder,
+    std::sync::mpsc::SyncSender<Result<wgpu::CommandBuffer, String>>,
+);
+
+/// The threads that finish the render thread's encoders ([`Device::send_encoder`]). wgpu records a
+/// pass as a list of commands and does all of its checking, resource tracking and the driver's
+/// recording when the encoder is finished (most of what wgpu and the driver cost a crowded frame,
+/// measure/wgpu/CROWD.md); finishing takes the device's resource lock only for reading, so
+/// encoders are finished side by side while the render thread goes on.
+struct Finisher {
+    jobs: Option<std::sync::mpsc::Sender<FinishJob>>,
+    threads: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl Finisher {
+    /// Two threads where the machine has six or more logical processors, one with four or five,
+    /// none below (the encoders are then finished at the submit, as before).
+    fn for_this_machine() -> Option<Finisher> {
+        let n = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let threads = match n {
+            6.. => 2,
+            4..=5 => 1,
+            _ => 0,
+        };
+        (threads > 0).then(|| Finisher::new(threads))
+    }
+
+    fn new(threads: usize) -> Finisher {
+        let (jobs, queue) = std::sync::mpsc::channel::<FinishJob>();
+        let queue = Arc::new(std::sync::Mutex::new(queue));
+        let threads = (0..threads)
+            .map(|k| {
+                let queue = Arc::clone(&queue);
+                std::thread::Builder::new()
+                    .name(format!("nv-wgpu-finish {k}"))
+                    .spawn(move || loop {
+                        let job = queue.lock().unwrap_or_else(|e| e.into_inner()).recv();
+                        let Ok((encoder, back)) = job else { break };
+                        // The render thread waits for it at the submit (a panic's message too, so
+                        // it can say why); gone (the device dropped), the buffer is dropped too.
+                        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            encoder.finish()
+                        }))
+                        .map_err(|p| {
+                            p.downcast_ref::<&str>()
+                                .map(|s| s.to_string())
+                                .or_else(|| p.downcast_ref::<String>().cloned())
+                                .unwrap_or_else(|| "a panic without a message".to_string())
+                        });
+                        let _ = back.send(done);
+                    })
+                    .expect("a finishing thread starts")
+            })
+            .collect();
+        Finisher {
+            jobs: Some(jobs),
+            threads,
+        }
+    }
+
+    fn send(&self, encoder: wgpu::CommandEncoder) -> Finishing {
+        let (back, buffer) = std::sync::mpsc::sync_channel(1);
+        match self.jobs.as_ref().map(|j| j.send((encoder, back))) {
+            Some(Ok(())) => Finishing::Pending(buffer),
+            // The threads are gone: finished here.
+            Some(Err(std::sync::mpsc::SendError((encoder, _)))) => {
+                Finishing::Ready(encoder.finish())
+            }
+            None => unreachable!("the jobs' sender lives until the finisher is dropped"),
+        }
+    }
+}
+
+impl Drop for Finisher {
+    fn drop(&mut self) {
+        self.jobs = None;
+        for t in self.threads.drain(..) {
+            let _ = t.join();
+        }
+    }
 }
 
 impl Drop for Device {
