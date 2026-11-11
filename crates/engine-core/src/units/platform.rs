@@ -1115,6 +1115,8 @@ pub struct Region {
     size: u32,
     block: u32,
     committed: Vec<bool>,
+    /// Placed by the system in [`RESERVE_GAP`] (address 0, not a heap block).
+    in_gap: bool,
 }
 
 impl Region {
@@ -1123,9 +1125,14 @@ impl Region {
         self.size
     }
 
-    /// The heap block behind it (0: at an address the caller chose).
+    /// The heap block behind it (0: in [`RESERVE_GAP`], or at an address the caller chose).
     pub fn block(&self) -> u32 {
         self.block
+    }
+
+    /// Whether the system placed it in [`RESERVE_GAP`].
+    pub fn in_gap(&self) -> bool {
+        self.in_gap
     }
 
     /// Its bytes committed now.
@@ -1145,6 +1152,9 @@ pub struct Kernel {
     /// The reservations by base address (public for the scrap heap's tests in
     /// `engine-bs`).
     pub regions: std::collections::BTreeMap<u32, Region>,
+    /// Whether an address-0 reservation goes in [`RESERVE_GAP`] first (`None`: as
+    /// `NV_RESERVE_GAP` says, read once; tests set it).
+    pub reserve_gap: Option<bool>,
     /// The in-memory files behind `BSFile`s ([`open_memory_file`]), by the
     /// `BSFile`'s address.
     files: std::collections::BTreeMap<u32, MemoryFile>,
@@ -1369,9 +1379,78 @@ fn page_up(v: u64) -> u64 {
     v.div_ceil(PAGE_BYTES as u64) * PAGE_BYTES as u64
 }
 
-/// Reserves `size` bytes at `address` (0: anywhere). Returns the base.
+/// Where a reservation the caller leaves to the system (address 0) goes first: the gap the image
+/// leaves below the moved area (`mem.rs`'s layout), which ordinary play never otherwise uses. The
+/// game's address-0 reservations are the scrap heaps' 8 MiB buffers (`00aa5ec0`), of which about 99%
+/// is never committed (the census's `# reservation` lines, 11-10): as heap blocks they took 128-144 MB
+/// of the heap's address space on the route, in the gap they take none. A reservation keeps the range
+/// it was given for its life (commits and decommits happen in place), as on Windows, which placed
+/// them wherever it chose: no guest code can depend on where. When the gap has no room (about 29
+/// such buffers at once) a reservation is a heap block, as before.
+pub const RESERVE_GAP: std::ops::Range<u32> = 0x0141_0000..0x1000_0000;
+const _: () = assert!(
+    RESERVE_GAP.start >= IMAGE_END
+        && RESERVE_GAP.start % ALLOCATION_GRANULARITY == 0
+        && RESERVE_GAP.end == crate::typed::moved::MOVED_AREA.start
+);
+
+/// Whether address-0 reservations go in [`RESERVE_GAP`] first: on unless `NV_RESERVE_GAP=off`
+/// (heap blocks, as before: for a comparison run), read once; a test sets the kernel's own flag.
+fn reserve_gap_on(kernel: &Kernel) -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    kernel.reserve_gap.unwrap_or_else(|| {
+        *ON.get_or_init(|| {
+            let off = std::env::var("NV_RESERVE_GAP").is_ok_and(|v| v.trim() == "off");
+            if off {
+                println!("NV_RESERVE_GAP=off: address-0 reservations are heap blocks");
+            }
+            !off
+        })
+    })
+}
+
+/// The lowest 64 KiB-aligned base in [`RESERVE_GAP`] where `len` bytes overlap no reservation and
+/// no mapped page, if any.
+fn gap_fit(e: &Engine, len: u64) -> Option<u32> {
+    let step = u64::from(ALLOCATION_GRANULARITY);
+    let up = |v: u64| v.div_ceil(step) * step;
+    let mut base = u64::from(RESERVE_GAP.start);
+    while base + len <= u64::from(RESERVE_GAP.end) {
+        let end = base + len;
+        let blocking = e.kernel.regions.iter().find(|(&b, r)| {
+            let (lo, hi) = (u64::from(b), u64::from(b) + u64::from(r.size));
+            lo < end && base < hi
+        });
+        if let Some((&b, r)) = blocking {
+            base = up(u64::from(b) + u64::from(r.size));
+            continue;
+        }
+        let mapped = (base..end)
+            .step_by(PAGE_BYTES as usize)
+            .filter(|&p| e.mem.is_mapped(p as u32))
+            .last();
+        if let Some(p) = mapped {
+            base = up(p + u64::from(PAGE_BYTES));
+            continue;
+        }
+        return u32::try_from(base).ok();
+    }
+    None
+}
+
+/// Reserves `size` bytes at `address` (0: anywhere: first in [`RESERVE_GAP`], else a heap block).
+/// Returns the base.
 fn reserve(e: &mut Engine, address: u32, size: u32) -> Option<u32> {
-    let (base, len, block) = if address == 0 {
+    let mut in_gap = false;
+    let gap = if address == 0 && size > 0 && reserve_gap_on(&e.kernel) {
+        gap_fit(e, page_up(size as u64))
+    } else {
+        None
+    };
+    let (base, len, block) = if let Some(base) = gap {
+        in_gap = true;
+        (base, page_up(size as u64) as u32, 0)
+    } else if address == 0 {
         // From the Mem heap, aligned within an oversized block.
         let len = page_up(size as u64);
         // A block lies in one of the heap's two ranges, so no reservation is bigger than the
@@ -1413,6 +1492,7 @@ fn reserve(e: &mut Engine, address: u32, size: u32) -> Option<u32> {
             size: len,
             block,
             committed: vec![false; (len / PAGE_BYTES) as usize],
+            in_gap,
         },
     );
     Some(base)
@@ -1480,8 +1560,9 @@ fn set_committed(
 // Platform: replaces KERNEL32.DLL VirtualAlloc (import)
 /// `VirtualAlloc(address, size, type, protect)` with the types the game
 /// passes (`ScrapHeapManager`, `MemoryPool`, the CRT small-block heap):
-/// `MEM_RESERVE` at address 0 takes a 64 KiB-aligned range from the
-/// [`crate::Mem`] heap (as [`memory_manager_allocate`] does); at a chosen
+/// `MEM_RESERVE` at address 0 takes a 64 KiB-aligned range in the gap
+/// below the heap first ([`RESERVE_GAP`]), else from the [`crate::Mem`]
+/// heap (as [`memory_manager_allocate`] does); at a chosen
 /// address it succeeds only where nothing is (not the image, the moved
 /// families' area 0x10000000..0x20000000 (`typed::moved::MOVED_AREA`), the
 /// heap's ranges and the platform's addresses between them,
@@ -4247,6 +4328,112 @@ mod tests {
         assert_eq!(call(&mut e, VIRTUAL_FREE, &[AT, 0, MEM_DECOMMIT]), 1);
         assert!(!(0..0x100u32).any(|i| e.mem.is_mapped(AT + i * 0x1000)));
         assert_eq!(call(&mut e, VIRTUAL_FREE, &[AT, 0, MEM_RELEASE]), 1);
+    }
+
+    /// The scrap heaps' contract (`00aa5ec0`, `ExpandBuffer`): an address-0 reservation of 8 MiB
+    /// lies in the gap below the heap, 64 KiB aligned, short of the moved area, takes no heap
+    /// block, keeps its range while pages are committed after one another and decommitted, and once
+    /// released leaves its range for the next.
+    #[test]
+    fn an_address_zero_reservation_lies_in_the_gap_and_keeps_its_range() {
+        let mut e = kernel_engine();
+        e.kernel.reserve_gap = Some(true);
+        let top = e.mem.heap_top();
+        let base = call(
+            &mut e,
+            VIRTUAL_ALLOC,
+            &[0, 0x80_0000, MEM_RESERVE, PAGE_READWRITE],
+        );
+        assert!(RESERVE_GAP.contains(&base), "{base:08x}");
+        assert_eq!(base % ALLOCATION_GRANULARITY, 0);
+        assert!(base + 0x80_0000 <= crate::typed::moved::MOVED_AREA.start);
+        assert_eq!(e.mem.heap_top(), top, "no heap block");
+        assert!(!e.mem.is_mapped(base));
+        for (at, len) in [(base, 0x1_0000), (base + 0x1_0000, 0x1_0000)] {
+            assert_eq!(
+                call(
+                    &mut e,
+                    VIRTUAL_ALLOC,
+                    &[at, len, MEM_COMMIT, PAGE_READWRITE]
+                ),
+                at
+            );
+            e.mem.set_u32(at + len - 4, 7);
+        }
+        assert!(!e.mem.is_mapped(base + 0x2_0000));
+        assert_eq!(e.mem.u32(base + 0xfffc), 7);
+        assert_eq!(
+            call(
+                &mut e,
+                VIRTUAL_FREE,
+                &[base + 0x1_0000, 0x1_0000, MEM_DECOMMIT]
+            ),
+            1
+        );
+        assert!(!e.mem.is_mapped(base + 0x1_0000) && e.mem.is_mapped(base));
+        assert_eq!(call(&mut e, VIRTUAL_FREE, &[base, 0, MEM_RELEASE]), 1);
+        assert!(!e.mem.is_mapped(base) && e.kernel.regions.is_empty());
+        let again = call(
+            &mut e,
+            VIRTUAL_ALLOC,
+            &[0, 0x80_0000, MEM_RESERVE, PAGE_READWRITE],
+        );
+        assert_eq!(again, base, "first fit");
+    }
+
+    /// The gap passes over a reservation and a mapped page in its way; when it has no room left a
+    /// reservation is a heap block, as before; with the gap off every one is.
+    #[test]
+    fn the_gap_fills_first_fit_then_heap_blocks_take_over() {
+        let mut e = kernel_engine();
+        e.kernel.reserve_gap = Some(true);
+        // A chosen-address reservation at the gap's start and a page mapped after it.
+        let chosen = RESERVE_GAP.start;
+        let at = call(
+            &mut e,
+            VIRTUAL_ALLOC,
+            &[chosen, 0x1_0000, MEM_RESERVE, PAGE_READWRITE],
+        );
+        assert_eq!(at, chosen);
+        e.mem.map(chosen + 0x2_0000, 0x1000);
+        let first = call(
+            &mut e,
+            VIRTUAL_ALLOC,
+            &[0, 0x80_0000, MEM_RESERVE, PAGE_READWRITE],
+        );
+        assert_eq!(
+            first,
+            chosen + 0x3_0000,
+            "past the reservation and the page"
+        );
+        let mut bases = vec![first];
+        loop {
+            let b = call(
+                &mut e,
+                VIRTUAL_ALLOC,
+                &[0, 0x80_0000, MEM_RESERVE, PAGE_READWRITE],
+            );
+            assert_ne!(b, 0);
+            if !RESERVE_GAP.contains(&b) {
+                assert!(b >= crate::mem::HEAP_BASE, "a heap block: {b:08x}");
+                assert!(!e.kernel.regions[&b].in_gap());
+                break;
+            }
+            assert!(b + 0x80_0000 <= RESERVE_GAP.end);
+            bases.push(b);
+        }
+        assert_eq!(
+            bases.len(),
+            29,
+            "the gap's room past the reservation and the page"
+        );
+        e.kernel.reserve_gap = Some(false);
+        let b = call(
+            &mut e,
+            VIRTUAL_ALLOC,
+            &[0, 0x1_0000, MEM_RESERVE, PAGE_READWRITE],
+        );
+        assert!(b >= crate::mem::HEAP_BASE, "{b:08x}");
     }
 
     /// A reservation that ends where user space ends (0xFFFF0000: the last 64 KB stay unmapped,

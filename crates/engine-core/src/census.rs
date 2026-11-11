@@ -213,11 +213,14 @@ pub fn reservations_tsv(
         },
     );
     let mut out = String::new();
-    let (mut reserved, mut committed, mut from_heap) = (0u64, 0u64, 0usize);
+    let (mut reserved, mut committed, mut from_heap, mut in_gap) = (0u64, 0u64, 0usize, 0usize);
     for (base, r) in regions {
         reserved += u64::from(r.size());
         committed += u64::from(r.committed_bytes());
-        let by = if r.block() == 0 {
+        let by = if r.in_gap() {
+            in_gap += 1;
+            "placed in the gap below the heap".to_string()
+        } else if r.block() == 0 {
             "at an address the caller chose".to_string()
         } else {
             from_heap += 1;
@@ -236,9 +239,26 @@ pub fn reservations_tsv(
     }
     let _ = writeln!(
         out,
-        "# reservations: {} ({from_heap} of them from the heap), {reserved} bytes reserved, \
-         {committed} committed",
+        "# reservations: {} ({from_heap} of them from the heap, {in_gap} in the gap below it), \
+         {reserved} bytes reserved, {committed} committed",
         regions.len()
+    );
+    // Nothing else of the port belongs in the gap: a page mapped there outside every reservation
+    // is counted (0 wanted).
+    let gap = crate::units::platform::RESERVE_GAP;
+    let stray = (gap.start..gap.end)
+        .step_by(0x1000)
+        .filter(|&p| mem.is_mapped(p))
+        .filter(|&p| {
+            regions.range(..=p).next_back().map_or(true, |(&b, r)| {
+                u64::from(p) >= u64::from(b) + u64::from(r.size())
+            })
+        })
+        .count();
+    let _ = writeln!(
+        out,
+        "# the gap below the heap ({:08x}..{:08x}): {stray} pages mapped outside a reservation",
+        gap.start, gap.end
     );
     out
 }
@@ -392,24 +412,27 @@ mod tests {
             name: "VirtualAlloc".into(),
         };
         assert_eq!(e.register_imports(&[import]), 1);
-        let base = e.call(VIRTUAL_ALLOC, &[0, 8 << 20, 0x2000, 4]).u32();
-        assert_ne!(base, 0);
-        assert_eq!(
-            e.call(VIRTUAL_ALLOC, &[base, 0x1_0000, 0x1000, 4]).u32(),
-            base
-        );
-        let lines = reservations_tsv(&e.mem, &e.kernel.regions);
+        // One in the gap below the heap (the default), one a heap block (as with the gap off).
+        let mut lines = String::new();
+        for (gap, by) in [
+            (true, "placed in the gap below the heap"),
+            (false, "heap block"),
+        ] {
+            e.kernel.reserve_gap = Some(gap);
+            let base = e.call(VIRTUAL_ALLOC, &[0, 8 << 20, 0x2000, 4]).u32();
+            assert_ne!(base, 0);
+            let committed = e.call(VIRTUAL_ALLOC, &[base, 0x1_0000, 0x1000, 4]).u32();
+            assert_eq!(committed, base);
+            lines = reservations_tsv(&e.mem, &e.kernel.regions);
+            let line =
+                format!("# reservation {base:08x}: 8388608 bytes reserved, 65536 committed; {by}");
+            assert!(lines.contains(&line), "{lines}");
+        }
+        let totals = "# reservations: 2 (1 of them from the heap, 1 in the gap below it), \
+                      16777216 bytes reserved, 131072 committed\n";
+        assert!(lines.contains(totals), "{lines}");
         assert!(
-            lines.contains(&format!(
-                "# reservation {base:08x}: 8388608 bytes reserved, 65536 committed; heap block"
-            )),
-            "{lines}"
-        );
-        assert!(
-            lines.ends_with(
-                "# reservations: 1 (1 of them from the heap), 8388608 bytes reserved, 65536 \
-                 committed\n"
-            ),
+            lines.ends_with(": 0 pages mapped outside a reservation\n"),
             "{lines}"
         );
     }
