@@ -3,7 +3,9 @@
 //! cover itself, so that the walk stays native across a geometry, a fade node and a particle system,
 //! and the skinned geometry's bound with the transform inverse it needs. The pass runs once a frame
 //! over every attached scene (about 1,700 objects a frame in the crowded Goodsprings street: 1,267
-//! nodes and 402 geometries, by the profile of 2026-11-10).
+//! nodes and 402 geometries, by the profile of 2026-11-10). With more than one thread the actors'
+//! scene graphs reach it from the queued node updates ([`queue`]), which main runs after the frame
+//! is shown.
 //!
 //! Stage 1: the objects stay in guest memory where the game made them. Each function stays
 //! registered at its exe address, so the vtables reach the typed version unchanged; a call into a
@@ -12,7 +14,9 @@
 //!
 //! **Floats.** The pass runs on the main thread and, for the actors' animated scenes, on the AI
 //! threads, so the family's row is [`Threads::Both`] and its x87 code keeps the exact helpers
-//! ([`engine_core::x87`]), each load, operation and store the exe's, in its order.
+//! ([`engine_core::x87`]), each load, operation and store the exe's, in its order; the one exception
+//! is the transform inverse's reciprocal, one division in `f64` rounded once to a float, as its
+//! translation computes it.
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
@@ -20,6 +24,7 @@ use engine_core::{entry, AbiFn};
 
 use crate::culling::layout::{NiAVObject, NiNode};
 
+pub mod queue;
 pub mod skin;
 pub mod walk;
 
@@ -48,5 +53,10 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a5_9c60, walk::update(Ptr, u32)),
         entry!(0x00a8_6530, skin::skin_bound(Ptr, Ptr)),
         entry!(0x008b_42e0, skin::transform_inverse(Ptr, Ptr)),
+        // The queued node updates main runs after the frame is shown.
+        entry!(0x0055_2570, queue::run_queued()),
+        entry!(0x0055_26b0, queue::waiting(Ptr) -> bool),
+        entry!(0x0055_26d0, queue::set_waiting(Ptr, bool)),
+        entry!(0x0055_26f0, queue::update_geometries(Ptr)),
     ]
 }

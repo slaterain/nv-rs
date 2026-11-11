@@ -64,7 +64,8 @@ pub fn next_controller(e: &mut Engine, this: Ptr) -> u32 {
 // Typed from 004eff50
 /// `NiAVObject::UpdateObjectControllers` (`thiscall(this, data, properties)`): with `properties` set
 /// and flag 0x40000 (`004f0000`), `Update` (vtable +0x90) of each property in the property list
-/// (`+0x24`) that has controllers; then `Update` (vtable +0x94) of each of the object's controllers.
+/// (`+0x24`) that has controllers; then `Update` (vtable +0x94) of each of the object's controllers,
+/// the particles family's for a particle system's update controller.
 pub fn update_object_controllers(e: &mut Engine, this: Ptr<NiAVObject>, data: Ptr, properties: u8) {
     if properties != 0 && typed_call!(FAMILY, 0x004f_0000, has_property_controllers(e, this)) {
         let list = this.addr().wrapping_add(0x24);
@@ -85,7 +86,17 @@ pub fn update_object_controllers(e: &mut Engine, this: Ptr<NiAVObject>, data: Pt
     }
     let mut controller = typed_call!(FAMILY, 0x0043_b230, first_controller(e, this)).addr();
     while controller != 0 {
-        e.vcall(controller, 0x94, &args![data]);
+        // A particle system's update controller (`00c271c0`, the particles family) directly; any other
+        // controller's `Update` through its vtable.
+        if crate::slot_target(e, controller, 0x94) == 0x00c2_71c0 {
+            typed_call!(
+                crate::particles::FAMILY,
+                0x00c2_71c0,
+                crate::particles::system::update_ctlr(e, Ptr::new(controller), data)
+            );
+        } else {
+            e.vcall(controller, 0x94, &args![data]);
+        }
         controller = typed_call!(
             FAMILY,
             0x004a_8a90,

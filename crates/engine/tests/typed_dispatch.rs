@@ -2208,6 +2208,28 @@ fn scene_particles_update_downward() {
 /// fade node's, the particle system's.
 const DOWNWARD_SLOTS: &[u32] = &[0, 0x00a5_dd70, 0x00a5_9f90, 0x00b4_ded0, 0x00c1_ad90];
 
+/// A downward pass stand-in (registered at [`CHANGES_AFTER`]) that gives the object a new object at
+/// +0x18 while it runs: the update's entry reads +0x18 after the pass.
+const CHANGES_AFTER: u32 = 0x00ff_1e00;
+
+fn changes_after(e: &mut Engine, a: &[u32]) -> Ret {
+    log(e, 0x1e00, a[0]);
+    let after = object(e, 0x40);
+    e.mem.set_u32(a[0] + 0x18, after);
+    ret(0)
+}
+
+/// The classes the update's entry meets by slot +0xa4: those of [`DOWNWARD_SLOTS`] and the stand-in
+/// that changes +0x18.
+const UPDATE_SLOTS: &[u32] = &[
+    0,
+    0x00a5_dd70,
+    0x00a5_9f90,
+    0x00b4_ded0,
+    0x00c1_ad90,
+    CHANGES_AFTER,
+];
+
 #[test]
 fn scene_update() {
     // The object's class (slot +0xa4), its flags, the data's flags, an object at +0x18 or none.
@@ -2217,13 +2239,14 @@ fn scene_update() {
     ))
     .common(0x00a5_9c60)
     .inputs(&[
-        Input::Of(DOWNWARD_SLOTS),
+        Input::Of(UPDATE_SLOTS),
         Input::Of(NODE_FLAGS),
         Input::Of(DATA_FLAGS),
         Input::Flag,
     ])
     .setup(|e, case| {
         stand_ins(e);
+        e.register(CHANGES_AFTER, changes_after);
         let n = node(e, case.word(1), 3, ONE);
         if case.word(0) != 0 {
             set_slot(e, n, 0xa4, case.word(0));
@@ -2268,18 +2291,25 @@ fn update_downward_scene_children() {
     .assert_same();
 }
 
-/// A skin instance with `bones` bones: the skin data (+8) with the root-to-skin transform (+0xc),
-/// the bone data (+0x40, each 0x4c bytes with its bound at +0x34) and the count (+0x44); the root
-/// parent (+0x10) and the bones (+0x14), objects with world transforms (scale at +0x98): bone 1's
-/// `scale`, bone 2's 1.0, the others 2.0.
-fn skin(e: &mut Engine, case: &Case, bones: u32, scale: u32, f: usize) -> u32 {
+/// A skin instance with `bones` bones (at least one in the list, which the bound always reads): the
+/// skin data (+8) with the root-to-skin transform (+0xc, the case's floats at `f`: scale, first
+/// entry), the bone data (+0x40, each 0x4c bytes with its bound at +0x34: bone 0's radius the case's
+/// float at `f + 2`, bone 1's `radius1`, the others 2.0) and the count (+0x44); the root parent
+/// (+0x10) and the bones (+0x14), objects with world transforms (scale at +0x98): bone 1's `scale`,
+/// bone 2's 1.0, the others 2.0.
+fn skin(e: &mut Engine, case: &Case, bones: u32, scale: u32, radius1: u32, f: usize) -> u32 {
+    let n = bones.max(1);
     let data = e.mem.alloc(0x48);
-    let to_skin = transform(e, case, f + 1);
+    let to_skin = transform(e, case, f);
     let to_skin = e.mem.bytes(to_skin, 0x34);
     e.mem.write(data + 0xc, &to_skin);
-    let bone_data = e.mem.alloc(0x4c * bones);
-    for i in 0..bones {
-        let r = if i == 0 { bits(case, f + 2) } else { TWO };
+    let bone_data = e.mem.alloc(0x4c * n);
+    for i in 0..n {
+        let r = match i {
+            0 => bits(case, f + 2),
+            1 => radius1,
+            _ => TWO,
+        };
         words(e, bone_data + 0x4c * i + 0x34, &[HALF, ONE, MINUS_ONE, r]);
     }
     e.mem.set_u32(data + 0x40, bone_data);
@@ -2292,23 +2322,38 @@ fn skin(e: &mut Engine, case: &Case, bones: u32, scale: u32, f: usize) -> u32 {
         e.mem.set_u32(o + 0x98, scale);
         o
     };
-    let root = with_world(e, TWO, f);
-    let list = e.mem.alloc(4 * bones);
-    for i in 0..bones {
+    let root = with_world(e, TWO, f + 1);
+    let list = e.mem.alloc(4 * n);
+    for i in 0..n {
         let s = match i {
             1 => scale,
             2 => ONE,
             _ => TWO,
         };
-        let b = with_world(e, s, f + 1);
+        let b = with_world(e, s, f);
         e.mem.set_u32(list + 4 * i, b);
     }
     block(e, 0x1c, &[0, 0, data, 0, root, list, 0])
 }
 
+/// The merge's constants in the exe's data: 0.5 and 0.0 as doubles, the threshold 1e-6.
+fn merge_constants(e: &mut Engine) {
+    e.map(0x0101_1000, 0x2000);
+    e.mem.set_u64(0x0101_1588, 0.5f64.to_bits());
+    e.mem.set_u64(0x0101_2060, 0);
+    e.map(0x011a_b000, 0x1000);
+    e.mem.set_u32(0x011a_b3c0, 0x3586_37bd);
+}
+
+/// The bone-1 radii the skin tests try: an ordinary one, a quiet and a signalling NaN (the fast path
+/// copies the radius through the x87).
+const RADII: &[u32] = &[TWO, 0x7fc0_0000, 0x7f80_0001];
+
 #[test]
 fn scene_skin_bound() {
-    // The bones, bone 1's world scale (1.0 among the values), the transforms' floats.
+    // The bones (0: only the first bone's bound); bone 1's world scale (1.0 among the values takes
+    // the fast path); bone 1's radius; the root-to-skin scale, the transforms' first entries and bone
+    // 0's radius.
     Diff::new(entry!(
         0x00a8_6530,
         engine_typed::scene::skin::skin_bound(Ptr<_>, Ptr<_>)
@@ -2316,24 +2361,51 @@ fn scene_skin_bound() {
     .common(0x00a8_6530)
     .inputs(&inputs(&[
         &[
-            Input::Of(&[1, 2, 3]),
+            Input::Of(&[0, 1, 2, 3]),
             Input::Of(&[ONE, TWO, HALF, 0x7fc0_0000, 0]),
+            Input::Of(RADII),
         ],
         &P3,
-        &[Input::F32Swept(ONE)],
     ]))
-    .max_cases(192)
+    .max_cases(256)
     .setup(|e, case| {
         stand_ins(e);
-        // The merge's constants in the exe's data: 0.5 and 0.0 as doubles, the threshold 1e-6.
-        e.map(0x0101_1000, 0x2000);
-        e.mem.set_u64(0x0101_1588, 0.5f64.to_bits());
-        e.mem.set_u64(0x0101_2060, 0);
-        e.map(0x011a_b000, 0x1000);
-        e.mem.set_u32(0x011a_b3c0, 0x3586_37bd);
-        let s = skin(e, case, case.word(0), case.word(1), 2);
+        merge_constants(e);
+        let s = skin(e, case, case.word(0), case.word(1), case.word(2), 3);
         let bound = block(e, 0x10, &[ONE, TWO, HALF, THIRD]);
         vec![s, bound]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The culling family's `NiGeometry::UpdateWorldBound` of a skinned geometry: with the scene family
+/// on, its call of the skin instance's bound is a Rust call.
+#[test]
+fn scene_skin_bound_from_culling() {
+    // The bones; bone 1's world scale; the geometry's flags (bit 19 forces the update; without it
+    // the old radius decides); the case's floats.
+    Diff::new(entry!(
+        0x00a8_0710,
+        culling::update::geometry_update_world_bound(Ptr<_>)
+    ))
+    .common(0x00a8_0710)
+    .inputs(&inputs(&[
+        &[
+            Input::Of(&[1, 2, 3]),
+            Input::Of(&[ONE, TWO]),
+            Input::Of(&[0, 0x0008_0000, 0x0048_0000]),
+        ],
+        &P3,
+    ]))
+    .max_cases(96)
+    .setup(|e, case| {
+        stand_ins(e);
+        merge_constants(e);
+        let g = geometry(e, case, case.word(2), 3);
+        let s = skin(e, case, case.word(0), case.word(1), TWO, 3);
+        e.mem.set_u32(g + 0xbc, s);
+        vec![g]
     })
     .run()
     .assert_same();
@@ -2354,6 +2426,189 @@ fn scene_transform_inverse() {
         e.mem.set_u32(t + 0x28, bits(case, 2));
         e.mem.set_u32(t + 0x2c, bits(case, 3));
         vec![t, e.mem.alloc(0x34)]
+    })
+    .run()
+    .assert_same();
+}
+
+// ---- The scene family: the queued node updates (engine_typed::scene::queue) ----
+
+/// The pending list (an item and the next node, inline) and its lock, the update time.
+const PENDING_LIST: u32 = 0x011c_a174;
+const PENDING_LOCK: u32 = 0x011c_a1a0;
+const UPDATE_TIME: u32 = 0x011c_3c08;
+/// A slot function answering `this`: an object's "as a node", "as a geometry" or "parent" for the
+/// classes that have one.
+const AS_SELF: u32 = 0x00ff_1f00;
+
+/// The queue's world: the list's `IsEmpty` and `RemoveHead` over the inline list, the smart pointer's
+/// copy, the reference of a node (the word at the node's +0x40), the cell's update for it.
+fn queue_world(e: &mut Engine) {
+    stand_ins(e);
+    e.map(0x011c_a000, 0x1000);
+    e.map(0x011c_3000, 0x1000);
+    e.mem.set_u32(UPDATE_TIME, HALF);
+    e.register(AS_SELF, |e, a| {
+        log(e, 0x1f00, a[0]);
+        ret(a[0])
+    });
+    e.register(0x004a_4460, |e, a| {
+        let empty = e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0;
+        ret(u32::from(empty))
+    });
+    e.register(0x004e_e8a0, |e, a| {
+        log(e, 0xe8a0, e.mem.u32(a[0]));
+        let next = e.mem.u32(a[0] + 4);
+        if next != 0 {
+            let (item, after) = (e.mem.u32(next), e.mem.u32(next + 4));
+            words(e, a[0], &[item, after]);
+        } else {
+            e.mem.set_u32(a[0], 0);
+        }
+        ret(0)
+    });
+    e.register(0x0055_9a40, |e, a| {
+        let held = e.mem.u32(a[1]);
+        e.mem.set_u32(a[0], held);
+        log(e, 0x9a40, held);
+        ret(a[0])
+    });
+    e.register(0x0056_f930, |e, a| {
+        log(e, 0xf930, a[0]);
+        ret(e.mem.u32(a[0] + 0x40))
+    });
+    e.register(0x0054_a070, |e, a| {
+        log(e, 0xa070, a[1]);
+        ret(0)
+    });
+}
+
+/// A queued object of `kind`: 0 a plain object, 1 a geometry (its "as a geometry" slot answers
+/// it), 2 a node (its "as a node" slot answers it) whose children are a geometry, a null slot and a
+/// plain object; with `parent` its parent slot answers it; its flags; with `reference` the reference
+/// its node finds (whose word +0x40 is a cell when `cell` is set).
+fn queued(e: &mut Engine, kind: u32, parent: bool, flags: u32, reference: bool, cell: bool) -> u32 {
+    let o = if kind == 2 {
+        let n = node(e, flags, 3, ONE);
+        let base = e.mem.u32(n + 0xa0);
+        let first = e.mem.u32(base);
+        set_slot(e, first, 0x30, AS_SELF);
+        set_slot(e, n, 0x0c, AS_SELF);
+        n
+    } else {
+        let o = object(e, 0xb0);
+        e.mem.set_u32(o + 0x30, flags);
+        if kind == 1 {
+            set_slot(e, o, 0x30, AS_SELF);
+        }
+        o
+    };
+    if parent {
+        set_slot(e, o, 0x10, AS_SELF);
+    }
+    e.mem.set_u32(o + 4, 1);
+    if reference {
+        let r = object(e, 0x80);
+        let c = if cell { object(e, 0x40) } else { 0 };
+        e.mem.set_u32(r + 0x40, c);
+        e.mem.set_u32(o + 0x40, r);
+    }
+    o
+}
+
+#[test]
+fn scene_run_queued() {
+    // The queued count; the first's kind; parents; the waiting flag; a reference; its cell.
+    Diff::new(entry!(
+        0x0055_2570,
+        engine_typed::scene::queue::run_queued()
+    ))
+    .common(0x0055_2570)
+    .inputs(&[
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1, 2]),
+        Input::Flag,
+        Input::Of(&[0, 0x0040_0000, 0x0040_0002]),
+        Input::Flag,
+        Input::Flag,
+    ])
+    .max_cases(192)
+    .setup(|e, case| {
+        queue_world(e);
+        let count = case.word(0);
+        let parent = case.word(2) != 0;
+        let (reference, cell) = (case.word(4) != 0, case.word(5) != 0);
+        let first = queued(e, case.word(1), parent, case.word(3), reference, cell);
+        let second = queued(e, 1, true, 0x0040_0000, true, true);
+        match count {
+            0 => words(e, PENDING_LIST, &[0, 0]),
+            1 => words(e, PENDING_LIST, &[first, 0]),
+            _ => {
+                let next = block(e, 8, &[second, 0]);
+                words(e, PENDING_LIST, &[first, next]);
+            }
+        }
+        words(e, PENDING_LOCK, &[0, 0]);
+        vec![]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn scene_update_geometries() {
+    // A null node, a plain object, a geometry, a node with children.
+    Diff::new(entry!(
+        0x0055_26f0,
+        engine_typed::scene::queue::update_geometries(Ptr<_>)
+    ))
+    .common(0x0055_26f0)
+    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(NODE_FLAGS)])
+    .setup(|e, case| {
+        queue_world(e);
+        let o = match case.word(0) {
+            0 => 0,
+            k => queued(e, k - 1, false, case.word(1), false, false),
+        };
+        vec![o]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn scene_waiting() {
+    Diff::new(entry!(
+        0x0055_26b0,
+        engine_typed::scene::queue::waiting(Ptr<_>) -> bool
+    ))
+    .common(0x0055_26b0)
+    .inputs(&[Input::Of(&[0, 0x0040_0000, 0x0080_0000, 0xffff_ffff])])
+    .setup(|e, case| {
+        let o = block(e, 0x40, &[0; 16]);
+        e.mem.set_u32(o + 0x30, case.word(0));
+        vec![o]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn scene_set_waiting() {
+    Diff::new(entry!(
+        0x0055_26d0,
+        engine_typed::scene::queue::set_waiting(Ptr<_>, bool)
+    ))
+    .common(0x0055_26d0)
+    .inputs(&[
+        Input::Of(&[0, 0x0040_0000, 0x0080_0001]),
+        Input::Of(&[0, 1, 0x100]),
+    ])
+    .setup(|e, case| {
+        stand_ins(e);
+        let o = object(e, 0x40);
+        e.mem.set_u32(o + 0x30, case.word(0));
+        vec![o, case.word(1)]
     })
     .run()
     .assert_same();

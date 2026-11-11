@@ -41,6 +41,8 @@ is on after its gate: the recorded street run byte-identical with it off; no spe
 The update half (what main runs besides drawing) began on 2026-11-10 with `scene`: the scene graph's
 downward update pass across geometries, fade nodes and particle systems, and the skinned bound, on once proven
 identical (differential tests, the recorded run byte-identical with it off); not a speed change by itself.
+Then `particles` (the particle systems' update and their modifiers) with the queued node updates main runs after the
+frame is shown, proven the same way.
 
 An interim Windows preview (maintainer, 2026-11-06) can be built with `scripts/package-playtest.ps1`:
 a ZIP a player can run with no build, labelled a preview, wgpu remaining the big release. It has only
