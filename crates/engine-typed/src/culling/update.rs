@@ -72,11 +72,20 @@ pub fn update_world_transform(e: &mut Engine, this: Ptr<NiAVObject>) {
 
 // Typed from 00a68c60
 /// `NiAVObject::UpdateWorldData` (Xbox PDB, `thiscall(object, word)`): an object with a collision
-/// object hands the word to it (slot 0x90); the others update their world transform.
+/// object hands the word to it (slot 0x90: a blend collision object's, `00c817d0`, directly); the
+/// others update their world transform.
 pub fn update_world_data(e: &mut Engine, this: Ptr<NiAVObject>, word: u32) {
     let collision = e.get(this, NiAVObject::m_spCollisionObject);
     if collision != 0 {
-        e.vcall(collision, SLOT_COLLISION_UPDATE, &args![word]);
+        if crate::slot_target(e, collision, SLOT_COLLISION_UPDATE) == 0x00c8_17d0 {
+            typed_call!(
+                crate::collision::FAMILY,
+                0x00c8_17d0,
+                crate::collision::blend::update_world_data(e, Ptr::new(collision), word)
+            );
+        } else {
+            e.vcall(collision, SLOT_COLLISION_UPDATE, &args![word]);
+        }
         return;
     }
     typed_call!(FAMILY, 0x00a6_8bf0, update_world_transform(e, this));
