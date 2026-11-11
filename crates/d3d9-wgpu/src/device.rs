@@ -5295,6 +5295,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             m.work_over_20ms,
             m.over_1ms
         );
+        // The Vulkan backend's pipeline libraries (vendor/wgpu-hal, pipeline_library.rs), where it
+        // links pipelines from them: what was made since the device was, and what linking cost.
+        // SAFETY: the hal device is only read (its counters), on the device's own thread.
+        if let Some(line) = unsafe { self.device.as_hal::<wgpu::hal::api::Vulkan>() }
+            .and_then(|hal| hal.pipeline_library_report())
+        {
+            eprintln!("NV_D3D9 wgpu: {line}");
+        }
     }
 
     /// What the device made of its pipeline cache file ("N KB read", "none yet...", "...: ignored...");
