@@ -1947,10 +1947,11 @@ mod forms {
     use engine_core::typed::moved::poison;
 
     /// The exe's data page with the vtables used here: the queued-reference map's (counted values,
-    /// `0101747c`), the KF model map's (plain words, `0101760c`) and the interfaced base's
-    /// (`01017458`), which the destructors write last.
+    /// `0101747c`) and the KF model map's (plain words, `0101760c`). The interfaced base's
+    /// (`01017458`, which the destructors write last, and through which nothing calls) lies on the
+    /// same page, its slots overlapping the first one's: it is only mapped.
     const VTABLE_PAGE: u32 = 0x0101_7000;
-    const VTABLES: [u32; 3] = [0x0101_747c, 0x0101_760c, 0x0101_7458];
+    const VTABLES: [u32; 2] = [0x0101_747c, 0x0101_760c];
     /// The test's `AllocateInterface` (vtable slot +4): the family's `00906400`.
     const VT_ALLOCATE: u32 = 0x00ff_2000;
     /// The allocator's log: a count, then (1: new or 2: delete, size, address) for each call.
