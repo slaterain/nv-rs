@@ -5305,9 +5305,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.made_on_draws
     }
 
-    /// How many vertex and pixel shader modules the device has made (tests).
+    /// How many vertex and pixel shader modules the device has made, not counting any wgpu or
+    /// the converter refused (tests).
     pub fn module_counts(&self) -> (usize, usize) {
-        (self.vs_modules.len(), self.ps_modules.len())
+        let made = |m: &Option<wgpu::ShaderModule>| m.is_some();
+        (
+            self.vs_modules.values().filter(|m| made(m)).count(),
+            self.ps_modules.values().filter(|m| made(m)).count(),
+        )
     }
 
     /// The pixels of a back buffer or render target as wgpu holds them, rows packed (tests).
