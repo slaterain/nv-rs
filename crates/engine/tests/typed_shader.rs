@@ -90,6 +90,12 @@ fn stand_ins(e: &mut Engine, render: bool) {
 /// [`stand_ins`] for a test that names the render family (`render`: the plain geometry pass and the
 /// renderer's skinned test are its own) or the dispatch family (`dispatch`: the node pool's lock is).
 fn stand_ins_named(e: &mut Engine, render: bool, dispatch: bool) {
+    stand_ins_all(e, render, dispatch, true);
+}
+
+/// [`stand_ins_named`], with the renderer's partition draw (`00e6d310`) stood in or not: a test that names the
+/// draw family, which holds it, has the real one ([`draw_world`]).
+fn stand_ins_all(e: &mut Engine, render: bool, dispatch: bool, partition_draw: bool) {
     e.map(RETS, 0x1000);
     slots!(e; 0x04, 0x08, 0x24, 0x30, 0x34, 0x64, 0x6c, 0x78, 0x7c, 0x80, 0x84, 0x88, 0x8c, 0xa0,
         0xa4, 0xa8, 0xac, 0xb0, 0xc0, 0xcc, 0xdc, 0xe0, 0xe4, 0xf0, 0xf4, 0xf8, 0xfc, 0x100, 0x104,
@@ -134,7 +140,6 @@ fn stand_ins_named(e: &mut Engine, render: bool, dispatch: bool) {
         0x00b7_e150,
         0x00b7_dd50,
         0x00b7_deb0,
-        0x00e6_d310,
         0x00b7_ac20,
         0x00bb_96d0,
         0x00b7_a870,
@@ -143,6 +148,9 @@ fn stand_ins_named(e: &mut Engine, render: bool, dispatch: bool) {
         0x00ec_658f,
     ] {
         e.register(addr, |_, _| ret(0));
+    }
+    if partition_draw {
+        e.register(0x00e6_d310, |_, _| ret(0));
     }
     // The renderer's skinned test: the geometry has a skin.
     if !render {
@@ -252,7 +260,12 @@ fn world_with(e: &mut Engine, render: bool) -> W {
 
 /// [`world`] for a test that names the render or the dispatch family ([`stand_ins_named`]).
 fn world_named(e: &mut Engine, render: bool, dispatch: bool) -> W {
-    stand_ins_named(e, render, dispatch);
+    world_all(e, render, dispatch, true)
+}
+
+/// [`world_named`] with the partition draw stood in or not ([`stand_ins_all`]).
+fn world_all(e: &mut Engine, render: bool, dispatch: bool, partition_draw: bool) -> W {
+    stand_ins_all(e, render, dispatch, partition_draw);
     let vt = vtable(e, &[]);
     let cache_vt = vtable(e, &[(0x68, 0x00e8_8780)]);
     let br_vt = vtable(e, &[(0x8c, 0x00b9_9c90)]);
@@ -617,7 +630,15 @@ impl Common for Diff {
             .family(&leaf::LEAVES)
             // The plain geometry pass (pass types 0xfc, 0xfd) and the renderer's skinned test are the
             // render family's (their own tests).
-            .goes_by_address(&[0x00b7_dde0, 0x00e7_2c20])
+            // The draw family's partition draw, skinned packer and strip lists, which the batch renderer's
+            // skinned draw and the render family's packing call, are stood in here and run in its tests.
+            .goes_by_address(&[
+                0x00b7_dde0,
+                0x00e7_2c20,
+                0x00e6_d310,
+                0x00e6_d780,
+                0x00a7_5f10,
+            ])
             .max_calls(MAX_CALLS)
             .max_cases(160)
     }
@@ -3670,6 +3691,8 @@ impl Geometry for Diff {
             .family(&pathing::PATHING)
             .family(&render::RENDER)
             .translation_calls_plainly(SET_UP_PLAIN)
+            // The draw family's partition draw, skinned packer and strip lists, as in `common`.
+            .goes_by_address(&[0x00e6_d310, 0x00e6_d780, 0x00a7_5f10])
             .max_calls(MAX_CALLS)
             .max_cases(160)
     }
@@ -4746,7 +4769,10 @@ fn pointer_list(e: &mut Engine, at: u32, items: &[u32]) {
 }
 
 fn draw_world(e: &mut Engine) -> DrawW {
-    let w = world(e);
+    // The renderer's partition draw is the draw family's: the real one runs (a drawn buffer of 1 reads
+    // no strips from the zero page).
+    let w = world_all(e, false, false, false);
+    e.map(0, 0x1000);
     draw_stand_ins(e);
     for off in [0x17c, 0x180, 0x184, 0x188] {
         let a = e.mem.alloc(0x20);
@@ -5253,7 +5279,8 @@ fn draw_alpha_group() {
             Input::Of(&[0, 1, 2, 3]),
             Input::Of(&[0, 1, 6, 9]),
             Input::Of(BYTES),
-            // No NaN: a sorted group at NaN is never within a limit, and the exe loops on it for ever.
+            // No NaN with two renderers: a sorted group at NaN is never within a limit, and with two the
+            // exe loops on it for ever (PC builds one: `draw_alpha_group_nan` has NaN with one).
             Input::Of(&[ONE, HALF, TWO, 0xc2c8_0000, 0, 0x7f7f_ffff, 0xff80_0000]),
         ])
         .max_cases(160)
@@ -5262,6 +5289,31 @@ fn draw_alpha_group() {
             set(e, d.w.acc + 0x18c, c.word(1));
             e.mem.set_u8(d.w.acc + 0x31, c.word(4) as u8);
             alpha_state(e, &d, c.word(0), c.word(2), c.word(3), c.word(5));
+            vec![d.w.acc, c.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `draw_alpha_group` with one batch renderer, as PC builds the accumulator, and a sorted group at a NaN
+/// distance (quiet, the x87 default, signalling): the alpha loop ends there; the group is not drawn,
+/// then freed.
+#[test]
+fn draw_alpha_group_nan() {
+    Diff::new(entry!(0x00b6_50c0, dalpha::draw_alpha_group(Ptr<_>, u32)))
+        .draw_common_at(0x00b6_50c0)
+        .inputs(&[
+            Input::Of(TWO_WAYS),
+            Input::Of(&[0, 1]),
+            Input::Of(&[1, 2]),
+            Input::Of(BYTES),
+            Input::Of(&[0x7fc0_0000, 0xffc0_0000, 0x7f80_0001]),
+        ])
+        .setup(|e, c| {
+            let d = draw_world(e);
+            set(e, d.w.acc + 0x18c, 1);
+            e.mem.set_u8(d.w.acc + 0x31, c.word(3) as u8);
+            alpha_state(e, &d, c.word(0), c.word(1), c.word(2), c.word(4));
             vec![d.w.acc, c.word(0)]
         })
         .run()
@@ -5401,6 +5453,8 @@ fn render_next_alpha() {
         ]),
         Input::F32Swept(HALF),
         Input::Of(&[0, 1, 2, 3]),
+        // The first sorted group: keeps its own passes, or has no renderer (+8 = 0).
+        Input::Of(TWO_WAYS),
     ])
     .max_cases(240)
     .float_sweep(FLOAT_SWEEP)
@@ -5421,12 +5475,17 @@ fn render_next_alpha() {
             }
             _ => {}
         }
-        // A sorted group that keeps its own passes, the other its renderer's.
+        // A sorted group that keeps its own passes, the other its renderer's; or the first with no
+        // renderer at all.
         let list = d.w.br + 0x78 + 0xc * group;
         let head = e.mem.u32(list);
         if head != 0 {
             let g = e.mem.u32(head + 8);
-            e.mem.set_u8(g, 1);
+            if c.word(7) != 0 {
+                set(e, g + 8, 0);
+            } else {
+                e.mem.set_u8(g, 1);
+            }
         }
         vec![d.w.br, group, d.w.camera, c.word(3), c.word(4)]
     })
@@ -5578,6 +5637,81 @@ fn pass_camera_data() {
         set(e, RETS + 0x7f0, c.word(0));
         let w = c.word(1);
         vec![d.w.renderer, w, w ^ 1, w ^ 2, w ^ 3, w ^ 4, w ^ 5]
+    })
+    .run()
+    .assert_same();
+}
+
+// ---- The batch renderer's direct calls into the draw family's geometry paths (group D). ----
+
+/// `render_standard` with the geometry's slot 0xe0 (its immediate draw with the renderer) holding the
+/// triangle shape's (`00a74600`), the segmented shape's (`00a87130`), the particles' (`00a9b1f0`) typed
+/// draw or the triangle strips' (`00a71d70`, the dispatch family's): the call made direct; the renderer
+/// is not drawing immediately, so each answers after `NiGeometry::RenderImmediate`.
+#[test]
+fn render_standard_typed_immediate() {
+    Diff::new(entry!(
+        0x00b9_8e80,
+        batch::render_standard(Ptr<_>, u32, u32, u32)
+    ))
+    .draw_common_at(0x00b9_8e80)
+    .goes_by_address(&[0x00a8_0610, 0x00a7_1d70])
+    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(TWO_WAYS)])
+    .setup(|e, c| {
+        let d = draw_world(e);
+        let w = d.w;
+        let target = [0x00a7_4600, 0x00a8_7130, 0x00a9_b1f0, 0x00a7_1d70][c.word(0) as usize];
+        // A geometry of the segmented shape's size, the world's own fields copied, its segments
+        // unchanged.
+        let vt = vtable(e, &[(0xe0, target)]);
+        let geometry = obj(e, 0xd0, vt);
+        for off in (4..0xc4).step_by(4) {
+            let word = e.mem.u32(w.geometry + off);
+            set(e, geometry + off, word);
+        }
+        // Two changed segments, so the segmented shape's merge shows.
+        let segments = e.mem.alloc(0x28);
+        set(e, segments + 4, 3);
+        e.mem.set_u8(segments + 8, 1);
+        set(e, segments + 0x18, 2);
+        e.mem.set_u8(segments + 0x1c, 1);
+        set(e, geometry + 0xc4, segments);
+        set(e, geometry + 0xc8, 2);
+        e.mem.set_u8(geometry + 0xcc, 1);
+        let pass = w.passes[0];
+        set(e, pass, geometry);
+        vec![pass, c.word(1), 1, 0]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `render_skinned` with the shader's slot 0x64 holding the skinned shader classes' bone set-up
+/// (`00b7a2c0`), which finds nothing to upload for the shader (no switch, +0x34 not its own bones):
+/// the call made direct for each drawn partition.
+#[test]
+fn render_skinned_typed_bone_setup() {
+    Diff::new(entry!(
+        0x00b9_9110,
+        batch::render_skinned(Ptr<_>, u32, u32, u32)
+    ))
+    .draw_common_at(0x00b9_9110)
+    .inputs(&[Input::Of(TWO_WAYS), Input::Of(TWO_WAYS)])
+    .setup(|e, c| {
+        let d = draw_world(e);
+        let w = d.w;
+        let skinned = e.mem.u32(w.skin_pass);
+        let vt = vtable(e, &[(0x64, 0x00b7_a2c0)]);
+        let shader = obj(e, 0x90, vt);
+        for off in (4..0x80).step_by(4) {
+            let word = e.mem.u32(w.shader + off);
+            set(e, shader + off, word);
+        }
+        set(e, shader + 0x34, 0x0b0e_0034);
+        set(e, shader + 0x80, 0x0b0e_0080);
+        set(e, 0x011f_ec00, 0);
+        set(e, skinned + 0xc0, shader);
+        vec![w.skin_pass, c.word(0), c.word(1), 0]
     })
     .run()
     .assert_same();

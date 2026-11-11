@@ -63,7 +63,6 @@ const SETUP_TYPE_D1: u32 = 0x00b7_dfe0;
 const SETUP_TYPE_102: u32 = 0x00b7_e150;
 const BEGIN_TYPES_FC_102: u32 = 0x00b7_dd50;
 const BEGIN_TYPES_CA_D1: u32 = 0x00b7_deb0;
-const HOLDER_DRAW: u32 = 0x00e6_d310;
 const TAIL_KINDS_1_TO_5: u32 = 0x00b7_ac20;
 const TAIL_KIND_11: u32 = 0x00bb_96d0;
 const LOCK_ENTER: u32 = 0x0040_fbf0;
@@ -95,11 +94,12 @@ mod slot {
     pub const GEOMETRY_DONE: u32 = 0x8c;
     pub const RESTORE: u32 = 0x110;
     pub const PARTITION: u32 = 0x64;
-    /// The geometry's own: render (0xdc), draws itself (0x30, 0x34), set the holder (0xe0).
+    /// The geometry's own: render (0xdc), draws itself (0x30, 0x34), its immediate draw with the
+    /// renderer (0xe0, `OnlyRenderImmediate`).
     pub const OWN_RENDER: u32 = 0xdc;
     pub const OWN_A: u32 = 0x30;
     pub const OWN_B: u32 = 0x34;
-    pub const SET_HOLDER: u32 = 0xe0;
+    pub const RENDER_IMMEDIATE: u32 = 0xe0;
     /// A batch renderer's `AddPass` ([`super::add_to_group`]) and a map's hash.
     pub const ADD_PASS: u32 = 0x8c;
     pub const MAP_HASH: u32 = 4;
@@ -517,8 +517,9 @@ fn add_to_geometry_group(
 /// `cdecl(pass, first, second, third)`: draws a plain geometry: into the geometry group, then the
 /// shader's per-geometry set-up (four types have their own set-up functions; the others the slots
 /// 0x78 and 0x7c, the first and second slots unless the pass is a shadow pass, and the owed restore),
-/// the draw (slot 0x6c), the holder to the geometry, and the shader's geometry end (slot 0x8c). The
-/// flags are the low bytes of their words.
+/// the draw (slot 0x6c), the geometry's immediate draw with the renderer (slot 0xe0, the draw
+/// family's or the dispatch family's directly when the slot holds theirs), and the shader's geometry
+/// end (slot 0x8c). The flags are the low bytes of their words.
 pub fn render_standard(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second: u32, third: u32) {
     let (first, second, third) = (low8(first) != 0, low8(second) != 0, low8(third) != 0);
     let pass_type = u32::from(e.get(pass, RenderPass::usPassEnum));
@@ -587,7 +588,7 @@ pub fn render_standard(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second
         call_third(e);
     }
     shader_draw(e, shader, geometry, 0u32, buffer, state);
-    e.vcall(geometry.addr(), slot::SET_HOLDER, &args![holder]);
+    render_immediate(e, geometry.addr(), holder);
     shader_geometry_done(e, shader, state);
 }
 
@@ -595,9 +596,9 @@ pub fn render_standard(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second
 /// `cdecl(pass, first, second, third)`: draws a skinned geometry partition by partition (only the
 /// partitions a dismember skin marks drawn): each starts with the shader's partition set-up (slot 0x64,
 /// with the world bound), the first one also with the per-geometry set-up; each is drawn (slot 0x6c)
-/// and handed to the holder (`00e6d310`), and a run of drawn partitions that don't start a run is
-/// drawn with it. A draw that answers 0 inside a run ends the whole call. The model data's dirty flags
-/// clear after, and the shader's geometry end runs.
+/// and handed to the renderer's partition draw (`00e6d310`, the draw family's), and a run of drawn
+/// partitions that don't start a run is drawn with it. A draw that answers 0 inside a run ends the
+/// whole call. The model data's dirty flags clear after, and the shader's geometry end runs.
 pub fn render_skinned(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second: u32, third: u32) {
     let (first, second, third) = (low8(first) != 0, low8(second) != 0, low8(third) != 0);
     let pass_type = u32::from(e.get(pass, RenderPass::usPassEnum));
@@ -623,18 +624,18 @@ pub fn render_skinned(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second:
             let mut partition = partitions.wrapping_add(index.wrapping_mul(0x2c));
             let word = e.global::<u32>(partition.wrapping_add(0x28));
             let bound = typed_call!(leaf::FAMILY, 0x0043_d450, leaf::world_bound(e, geometry));
-            e.vcall(
+            partition_setup(
+                e,
                 shader,
-                slot::PARTITION,
-                &args![
-                    geometry,
-                    skin,
+                [
+                    geometry.addr(),
+                    skin.addr(),
                     partition,
                     word,
                     state,
-                    0u32,
+                    0,
                     geometry.addr().wrapping_add(NiGeometry::m_kWorld.off),
-                    bound
+                    bound,
                 ],
             );
             if first_partition {
@@ -659,7 +660,7 @@ pub fn render_skinned(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second:
                 first_partition = false;
             }
             let drawn = shader_draw(e, shader, geometry, partition, word, state);
-            e.call(HOLDER_DRAW, &args![holder, drawn, partition, data]);
+            partition_drawn(e, holder, drawn, partition, data.addr());
             if flags != 0 {
                 let mut next = index + 1;
                 while next < count {
@@ -675,7 +676,7 @@ pub fn render_skinned(e: &mut Engine, pass: Ptr<RenderPass>, first: u32, second:
                         if drawn == 0 {
                             return;
                         }
-                        e.call(HOLDER_DRAW, &args![holder, drawn, partition, data]);
+                        partition_drawn(e, holder, drawn, partition, data.addr());
                     }
                 }
             }
@@ -898,6 +899,81 @@ fn shader_draw(
     } else {
         e.vcall(shader, slot::DRAW, &args![g, p, b, s]).u32()
     }
+}
+
+/// The geometry's immediate draw with the renderer (slot 0xe0, `OnlyRenderImmediate`): the triangle
+/// shape's, the segmented shape's and the particles' (the draw family's) and the triangle strips' (the
+/// dispatch family's) directly when the slot holds them; another class's through the vtable.
+#[inline(always)]
+fn render_immediate(e: &mut Engine, geometry: u32, renderer: u32) {
+    match crate::slot_target(e, geometry, slot::RENDER_IMMEDIATE) {
+        0x00a7_4600 => typed_call!(
+            crate::draw::FAMILY,
+            0x00a7_4600,
+            crate::draw::shapes::tri_shape_render_immediate(
+                e,
+                Ptr::new(geometry),
+                Ptr::new(renderer)
+            )
+        ),
+        0x00a8_7130 => typed_call!(
+            crate::draw::FAMILY,
+            0x00a8_7130,
+            crate::draw::shapes::segmented_render_immediate(
+                e,
+                Ptr::new(geometry),
+                Ptr::new(renderer)
+            )
+        ),
+        0x00a9_b1f0 => typed_call!(
+            crate::draw::FAMILY,
+            0x00a9_b1f0,
+            crate::draw::shapes::particles_render_immediate(
+                e,
+                Ptr::new(geometry),
+                Ptr::new(renderer)
+            )
+        ),
+        0x00a7_1d70 => typed_call!(
+            crate::dispatch::FAMILY,
+            0x00a7_1d70,
+            crate::dispatch::scene::tri_strips_render_immediate(
+                e,
+                Ptr::new(geometry),
+                Ptr::new(renderer)
+            )
+        ),
+        _ => {
+            e.vcall(geometry, slot::RENDER_IMMEDIATE, &args![renderer]);
+        }
+    }
+}
+
+/// The shader's partition set-up (slot 0x64, eight words): the skinned shader classes' bone set-up
+/// (`00b7a2c0`, the draw family's) directly when the slot holds it; another shader's through the vtable.
+#[inline(always)]
+fn partition_setup(e: &mut Engine, shader: u32, words: [u32; 8]) {
+    if crate::slot_target(e, shader, slot::PARTITION) == 0x00b7_a2c0 {
+        let [a, b, c, d, f, g, h, i] = words;
+        let _: u32 = typed_call!(
+            crate::draw::FAMILY,
+            0x00b7_a2c0,
+            crate::draw::skin::bone_setup(e, Ptr::new(shader), a, b, c, d, f, g, h, i)
+        );
+    } else {
+        e.vcall(shader, slot::PARTITION, &words);
+    }
+}
+
+/// A drawn partition to the renderer's partition draw (`00e6d310`, the draw family's, `thiscall(renderer,
+/// the drawn buffer data, the partition, the data)`).
+#[inline(always)]
+fn partition_drawn(e: &mut Engine, renderer: u32, drawn: u32, partition: u32, data: u32) {
+    typed_call!(
+        crate::draw::FAMILY,
+        0x00e6_d310,
+        crate::draw::packed::draw_partition(e, Ptr::new(renderer), drawn, partition, data)
+    );
 }
 
 /// A geometry's word-answering slot with no arguments (0x30, 0x34): the leaf `00acbb70` (0) that

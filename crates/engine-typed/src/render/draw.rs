@@ -114,7 +114,7 @@ pub fn draw_packed(e: &mut Engine, this: Ptr, geometry: Ptr) {
         return;
     }
     let data = e.mem.u32(g.wrapping_add(0xb8));
-    if e.vcall(data, 0x90, &args![]).u16() == 0 {
+    if crate::draw::shapes::vertex_count(e, data) == 0 {
         return;
     }
     let skin = e.mem.u32(g.wrapping_add(0xbc));

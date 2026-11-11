@@ -23,6 +23,19 @@ pub(crate) const MAKE_PASS_TREE: u32 = 0x011f_9fc1;
 /// The water reflection's source target (`011f9438`).
 pub(crate) const REFLECTION_SOURCE: u32 = 0x011f_9438;
 
+/// The renderer as the scene holds it (`011f4748`).
+#[inline(always)]
+pub(crate) fn scene_renderer(e: &Engine) -> u32 {
+    e.global::<u32>(SCENE_RENDERER)
+}
+
+/// The render modes' draws (`011f9f40`, `cdecl(accumulator)`): mode `mode`'s entry.
+const RENDER_MODE_DRAWS: u32 = 0x011f_9f40;
+#[inline(always)]
+pub(crate) fn render_mode_draw(e: &Engine, mode: u32) -> u32 {
+    e.global::<u32>(RENDER_MODE_DRAWS.wrapping_add(mode.wrapping_mul(4)))
+}
+
 /// The accumulator's camera (`m_pkCamera`, +8): nothing is drawn without one.
 #[inline(always)]
 pub(crate) fn camera(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> u32 {
@@ -127,6 +140,102 @@ pub(crate) fn alpha_list(renderer: Ptr<BSBatchRenderer>, group: u32) -> u32 {
         .wrapping_add(0x78)
 }
 
+/// How many sorted groups an alpha group list holds (its +8).
+#[inline(always)]
+pub(crate) fn sorted_count(e: &Engine, list: u32) -> u32 {
+    e.global::<u32>(list.wrapping_add(8))
+}
+
+/// The first sorted group of an alpha group list (its head's item).
+#[inline(always)]
+pub(crate) fn first_sorted_group(e: &Engine, list: u32) -> u32 {
+    let head = e.global::<u32>(list);
+    e.global::<u32>(head.wrapping_add(8))
+}
+
+/// A sorted group's distance (+0x20), as its word.
+#[inline(always)]
+pub(crate) fn sorted_distance(e: &Engine, sorted: u32) -> u32 {
+    e.global::<u32>(sorted.wrapping_add(0x20))
+}
+
+/// A holder's first list node (+0x10), 0 for an empty list.
+#[inline(always)]
+pub(crate) fn holder_head(e: &Engine, holder: u32) -> u32 {
+    e.global::<u32>(holder.wrapping_add(0x10))
+}
+
+/// A list's first node (its +0).
+#[inline(always)]
+pub(crate) fn list_head(e: &Engine, list: u32) -> u32 {
+    e.global::<u32>(list)
+}
+
+/// A list node's next node (its +0).
+#[inline(always)]
+pub(crate) fn node_next(e: &Engine, node: u32) -> u32 {
+    e.global::<u32>(node)
+}
+
+/// A list node's pass (+8).
+#[inline(always)]
+pub(crate) fn node_pass(e: &Engine, node: u32) -> u32 {
+    e.global::<u32>(node.wrapping_add(8))
+}
+
+/// A pass's geometry (+0).
+#[inline(always)]
+pub(crate) fn pass_geometry(e: &Engine, pass: u32) -> u32 {
+    e.global::<u32>(pass)
+}
+
+/// A pass's type (16 bits at +4).
+#[inline(always)]
+pub(crate) fn pass_type(e: &Engine, pass: u32) -> u32 {
+    u32::from(e.global::<u16>(pass.wrapping_add(4)))
+}
+
+/// A geometry's shader property (+0xa8).
+#[inline(always)]
+pub(crate) fn shader_property(e: &Engine, geometry: u32) -> u32 {
+    e.global::<u32>(geometry.wrapping_add(0xa8))
+}
+
+/// A shader property's kind (+0x1c) and its flags (+0x20).
+#[inline(always)]
+pub(crate) fn property_kind(e: &Engine, property: u32) -> u32 {
+    e.global::<u32>(property.wrapping_add(0x1c))
+}
+#[inline(always)]
+pub(crate) fn property_flags(e: &Engine, property: u32) -> u32 {
+    e.global::<u32>(property.wrapping_add(0x20))
+}
+
+/// The shader mode word (`011f91b8`; 9 skips two property kinds in the alpha pass).
+const SHADER_MODE: u32 = 0x011f_91b8;
+#[inline(always)]
+pub(crate) fn shader_mode(e: &Engine) -> u32 {
+    e.global::<u32>(SHADER_MODE)
+}
+
+/// Whether the render pass tree is asked for (`011f9fc1`).
+#[inline(always)]
+pub(crate) fn pass_tree_asked(e: &Engine) -> bool {
+    e.global::<u8>(MAKE_PASS_TREE) != 0
+}
+
+/// The water reflection's source target (`011f9438`), 0 for none.
+#[inline(always)]
+pub(crate) fn reflection_source(e: &Engine) -> u32 {
+    e.global::<u32>(REFLECTION_SOURCE)
+}
+
+/// The renderer singleton (`011f9508`).
+#[inline(always)]
+pub(crate) fn renderer_singleton(e: &Engine) -> u32 {
+    e.global::<u32>(RENDERER)
+}
+
 /// Whether a holder keeps its passes in its own list (bit 0 of its flags).
 #[inline(always)]
 pub(crate) fn keeps_own(e: &Engine, holder: u32) -> bool {
@@ -155,6 +264,12 @@ pub(crate) fn bound_of(e: &Engine, geometry: u32) -> u32 {
     } else {
         bound
     }
+}
+
+/// Word `index` of a bound (the centre's x, y, z, then the radius).
+#[inline(always)]
+pub(crate) fn bound_word(e: &Engine, bound: u32, index: u32) -> u32 {
+    e.global::<u32>(bound.wrapping_add(index.wrapping_mul(4)))
 }
 
 /// The camera's view direction (+0x68, +0x74, +0x80), each through an `FLD` and `FSTP` into a
@@ -322,4 +437,160 @@ pub fn pass_camera_data(
         SLOT_SET_CAMERA_DATA,
         &args![translate, zero, one, two, port, frustum],
     );
+}
+
+// ---- The geometry paths' reads: the renderer, the drawn geometry and its data. ----
+
+/// The renderer's draw mode (+0x200): 1 and 2 draw immediately.
+#[inline(always)]
+pub(crate) fn renderer_draw_mode(e: &Engine, renderer: u32) -> u32 {
+    e.global::<u32>(renderer.wrapping_add(0x200))
+}
+
+/// The renderer's immediate byte (+0x208).
+#[inline(always)]
+pub(crate) fn renderer_immediate(e: &Engine, renderer: u32) -> u8 {
+    e.global::<u8>(renderer.wrapping_add(0x208))
+}
+
+/// Whether the renderer skips drawing (its byte +0x6fc).
+#[inline(always)]
+pub(crate) fn renderer_skips(e: &Engine, renderer: u32) -> bool {
+    e.global::<u8>(renderer.wrapping_add(0x6fc)) != 0
+}
+
+/// The renderer's Direct3D device (+0x288), read at each use as the exe reads it.
+#[inline(always)]
+pub(crate) fn renderer_device(e: &Engine, renderer: u32) -> u32 {
+    e.global::<u32>(renderer.wrapping_add(0x288))
+}
+
+/// The renderer's current property state (+0xc), which `NiGeometry::RenderImmediate` points at the
+/// drawn geometry's.
+#[inline(always)]
+pub(crate) fn current_property_state(e: &Engine, renderer: u32) -> u32 {
+    e.global::<u32>(renderer.wrapping_add(0xc))
+}
+
+/// A geometry's model data (+0xb8).
+#[inline(always)]
+pub(crate) fn model_data(e: &Engine, geometry: u32) -> u32 {
+    e.global::<u32>(geometry.wrapping_add(0xb8))
+}
+
+/// A geometry's skin instance (+0xbc).
+#[inline(always)]
+pub(crate) fn skin_instance(e: &Engine, geometry: u32) -> u32 {
+    e.global::<u32>(geometry.wrapping_add(0xbc))
+}
+
+/// A geometry's world transform (`m_kWorld`, +0x68, 13 words) copied word by word to `to`.
+#[inline(always)]
+pub(crate) fn copy_world_transform(e: &mut Engine, geometry: u32, to: u32) {
+    for i in 0..13u32 {
+        let word = e.global::<u32>(geometry.wrapping_add(0x68 + 4 * i));
+        e.set_global(to.wrapping_add(4 * i), word);
+    }
+}
+
+/// A geometry's world bound (+0x20), or the empty bound, as [`bound_of`].
+#[inline(always)]
+pub(crate) fn bound_or_empty(e: &Engine, geometry: u32) -> u32 {
+    bound_of(e, geometry)
+}
+
+/// A data's vertex count (`m_usVertices`, +8).
+#[inline(always)]
+pub(crate) fn data_vertices(e: &Engine, data: u32) -> u16 {
+    e.global::<u16>(data.wrapping_add(8))
+}
+
+/// A particle data's active count (+0x50).
+#[inline(always)]
+pub(crate) fn active_particles(e: &Engine, data: u32) -> u16 {
+    e.global::<u16>(data.wrapping_add(0x50))
+}
+
+/// A triangle data's triangle count (`m_usTriangles`, +0x40).
+#[inline(always)]
+pub(crate) fn data_triangles(e: &Engine, data: u32) -> u16 {
+    e.global::<u16>(data.wrapping_add(0x40))
+}
+
+/// A dynamic strip data's active triangle count (+0x52).
+#[inline(always)]
+pub(crate) fn active_triangles(e: &Engine, data: u32) -> u16 {
+    e.global::<u16>(data.wrapping_add(0x52))
+}
+
+/// A strip data's index array (`m_pusStripLists`, +0x4c).
+#[inline(always)]
+pub(crate) fn strip_lists_of(e: &Engine, data: u32) -> u32 {
+    e.global::<u32>(data.wrapping_add(0x4c))
+}
+
+/// A particle data's index array (+0x44), 0 for the plain run of points.
+#[inline(always)]
+pub(crate) fn point_indices(e: &Engine, data: u32) -> u32 {
+    e.global::<u32>(data.wrapping_add(0x44))
+}
+
+/// The arrays the particles' quads are built from, as the points draw takes them.
+pub(crate) struct ParticleArrays {
+    /// The positions (`NiPoint3`, +0x20).
+    pub positions: u32,
+    /// The colours (`NiColorA`, +0x28), or 0.
+    pub colors: u32,
+    /// The sizes (+0x4c) and their scales (+0x54).
+    pub sizes: u32,
+    pub scales: u32,
+    /// The rotation angles (+0x5c), or 0.
+    pub angles: u32,
+    /// The extra bytes (+0x64), or 0.
+    pub bytes: u32,
+}
+
+/// A particle data's arrays ([`ParticleArrays`]).
+#[inline(always)]
+pub(crate) fn particle_arrays(e: &Engine, data: u32) -> ParticleArrays {
+    let word = |offset: u32| e.global::<u32>(data.wrapping_add(offset));
+    ParticleArrays {
+        sizes: word(0x4c),
+        colors: word(0x28),
+        scales: word(0x54),
+        angles: word(0x5c),
+        positions: word(0x20),
+        bytes: word(0x64),
+    }
+}
+
+/// Whether a draw object (the segmented shape) takes its model data whole, as one record (its byte
+/// +0xcd).
+#[inline(always)]
+pub(crate) fn draws_whole(e: &Engine, draw: u32) -> bool {
+    e.global::<u8>(draw.wrapping_add(0xcd)) != 0
+}
+
+/// A skin instance's root (+0x10), whose world transform (+0x68) the bones are measured from.
+#[inline(always)]
+pub(crate) fn skin_root(e: &Engine, skin: u32) -> u32 {
+    e.global::<u32>(skin.wrapping_add(0x10))
+}
+
+/// A skin instance's bone list (+0x14).
+#[inline(always)]
+pub(crate) fn skin_bones(e: &Engine, skin: u32) -> u32 {
+    e.global::<u32>(skin.wrapping_add(0x14))
+}
+
+/// Bone `bone` of a bone list: its node, whose world transform (+0x68) the animation wrote.
+#[inline(always)]
+pub(crate) fn bone_node(e: &Engine, list: u32, bone: u32) -> u32 {
+    e.global::<u32>(list.wrapping_add(bone.wrapping_mul(4)))
+}
+
+/// A bone node's world scale (+0x98), as its word.
+#[inline(always)]
+pub(crate) fn bone_scale(e: &Engine, node: u32) -> u32 {
+    e.global::<u32>(node.wrapping_add(0x98))
 }

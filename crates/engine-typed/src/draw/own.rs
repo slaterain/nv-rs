@@ -5,7 +5,7 @@
 //! count it takes (condition 7). Nothing outside this file touches what a section names. Each accessor
 //! does what the exe does there, in its order: nothing is copied, deferred or moved yet.
 
-use crate::shader::layout::{BSBatchRenderer, PassGroup, PassHolder};
+use crate::shader::layout::{BSBatchRenderer, BSShaderAccumulator, PassGroup, PassHolder};
 use crate::shader::{self, batch, state};
 use engine_core::ptr::Ptr;
 use engine_core::x87::{x87_quiet_bits, x87_store32};
@@ -77,6 +77,67 @@ pub(crate) fn set_pass_range(e: &mut Engine, renderer: u32, low: u32, high: u32)
     let renderer = Ptr::<BSBatchRenderer>::new(renderer);
     e.set(renderer, BSBatchRenderer::uiFirstPass, low);
     e.set(renderer, BSBatchRenderer::uiLastPass, high);
+}
+
+/// The pass type range draw's cursors, the accumulator's arrays by renderer (+0x17c pass types, +0x180
+/// buckets, +0x184 first-pass bytes, +0x188 active bytes) (condition 1: the draw's cursor into the
+/// lists): the address of renderer `index`'s entry, each array read afresh as the exe reads it.
+#[inline(always)]
+pub(crate) fn cursor_pass_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
+    e.get(acc, BSShaderAccumulator::puicurrentPassA)
+        .wrapping_add(index.wrapping_mul(4))
+}
+#[inline(always)]
+pub(crate) fn cursor_bucket_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
+    e.get(acc, BSShaderAccumulator::picurrentBucketA)
+        .wrapping_add(index.wrapping_mul(4))
+}
+#[inline(always)]
+pub(crate) fn cursor_first_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
+    e.get(acc, BSShaderAccumulator::pbcurrentFirstPassA)
+        .wrapping_add(index)
+}
+#[inline(always)]
+fn cursor_active_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
+    e.get(acc, BSShaderAccumulator::pbcurrentActiveA)
+        .wrapping_add(index)
+}
+
+/// Renderer `index`'s cursor: its pass type, its bucket, its first-pass byte, its active byte.
+#[inline(always)]
+pub(crate) fn cursor_pass(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
+    e.global::<u32>(cursor_pass_at(e, acc, index))
+}
+#[inline(always)]
+pub(crate) fn cursor_bucket(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> i32 {
+    e.global::<i32>(cursor_bucket_at(e, acc, index))
+}
+#[inline(always)]
+pub(crate) fn cursor_first(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> bool {
+    e.global::<u8>(cursor_first_at(e, acc, index)) != 0
+}
+#[inline(always)]
+pub(crate) fn cursor_active(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> bool {
+    e.global::<u8>(cursor_active_at(e, acc, index)) != 0
+}
+
+/// Renderer `index`'s cursor pass type cleared before its first list is made ready (condition 1).
+#[inline(always)]
+pub(crate) fn clear_cursor_pass(e: &mut Engine, acc: Ptr<BSShaderAccumulator>, index: u32) {
+    let at = cursor_pass_at(e, acc, index);
+    e.set_global(at, 0u32);
+}
+
+/// Renderer `index`'s active byte (condition 1).
+#[inline(always)]
+pub(crate) fn set_cursor_active(
+    e: &mut Engine,
+    acc: Ptr<BSShaderAccumulator>,
+    index: u32,
+    active: bool,
+) {
+    let at = cursor_active_at(e, acc, index);
+    e.set_global(at, u8::from(active));
 }
 
 /// Takes the first pass off a holder's list (+0xc: head +0x10, tail +0x14, spare chain +0x18, count
@@ -366,4 +427,192 @@ pub(crate) fn return_reflection(e: &mut Engine) {
     let manager = e.global::<u32>(TEXTURE_MANAGER);
     e.call(TEXTURE_RETURN, &args![manager, copy]);
     e.set_global(REFLECTION_COPY, 0u32);
+}
+
+// ---- The geometry paths (group D): what the drawn geometry's draw and packing write. ----
+//
+// Condition 3: the changed flags of the data the draw packed or drew (`NiGeometryData` +0xe) are read
+// by the next frame's other draws and set by the update; the draw settles them. With them go the
+// counts and buffers the draws write into the data's buffer data. Condition 2: the device's world
+// transform, streams and indices, and the renderer's copies of the drawn bound and camera vectors,
+// which the next draw on main reads. Condition 5: the blocks the drawing allocates (the vertex lock's
+// staging block, a skin's bone-matrix buffer, a declaration's element array). The vertex lock's
+// critical section (held from the lock to the unlock) and the reference counts given back (a
+// declaration or an index buffer released) are here too.
+
+/// `IDirect3DDevice9::SetTransform` (slot 44), `SetStreamSource` (slot 100) and `SetIndices` (slot
+/// 104); `D3DTS_WORLD`.
+const DEVICE_SET_TRANSFORM: u32 = 0xb0;
+const DEVICE_SET_STREAM_SOURCE: u32 = 0x190;
+const DEVICE_SET_INDICES: u32 = 0x1a0;
+const TRANSFORM_WORLD: u32 = 0x100;
+/// `IUnknown::Release` (slot 2).
+const SLOT_RELEASE: u32 = 8;
+/// The staging block's allocate (`00aa1070`, `cdecl(size)`) and free (`00aa10f0`, `cdecl(block)`), the
+/// aligned allocate (`00aa10b0`, `cdecl(size, alignment)`) and free (`00aa1110`, `cdecl(block)`), the
+/// memory manager's allocate (`00aa3e40`, `thiscall(manager, size)`).
+const ALLOCATE: u32 = 0x00aa_1070;
+const FREE: u32 = 0x00aa_10f0;
+const ALLOCATE_ALIGNED: u32 = 0x00aa_10b0;
+const FREE_ALIGNED: u32 = 0x00aa_1110;
+const MEMORY_ALLOCATE: u32 = 0x00aa_3e40;
+/// `EnterCriticalSection` and `LeaveCriticalSection` (the imports' slots).
+const ENTER_CRITICAL_SECTION: u32 = 0x00fd_f05c;
+const LEAVE_CRITICAL_SECTION: u32 = 0x00fd_f100;
+/// The vertex manager's critical section (+0x80), staging block (+0x40) and its capacity (+0x44).
+const STAGING_SECTION: u32 = 0x80;
+const STAGING_BLOCK: u32 = 0x40;
+const STAGING_CAPACITY: u32 = 0x44;
+
+/// The data's changed flags (+0xe) keep only their top four bits once it is drawn (condition 3).
+#[inline(always)]
+pub(crate) fn settle_changed_flags(e: &mut Engine, data: u32) {
+    let flags = e.global::<u16>(data.wrapping_add(0xe));
+    e.set_global(data.wrapping_add(0xe), flags & 0xf000);
+}
+
+/// The points draw's counts in the buffer data: four vertices (+0x18, +0x1c) and two triangles (+0x40,
+/// +0x44) a point of the active and the whole count, no strips (+0x50, +0x4c), one primitive group
+/// (+0x48) (condition 3).
+#[inline(always)]
+pub(crate) fn points_buffer_counts(
+    e: &mut Engine,
+    buffer: u32,
+    vertices: u32,
+    all: u32,
+    count: u32,
+) {
+    e.set_global(buffer.wrapping_add(0x18), vertices);
+    e.set_global(buffer.wrapping_add(0x1c), all.wrapping_mul(4));
+    e.set_global(buffer.wrapping_add(0x40), count.wrapping_mul(2));
+    e.set_global(buffer.wrapping_add(0x44), all.wrapping_mul(2));
+    e.set_global(buffer.wrapping_add(0x50), 0u32);
+    e.set_global(buffer.wrapping_add(0x4c), 0u32);
+    e.set_global(buffer.wrapping_add(0x48), 1u32);
+}
+
+/// A new index buffer for the points kept in the buffer data (+0x34), with its index count (+0x2c)
+/// and size (+0x30) (condition 3).
+#[inline(always)]
+pub(crate) fn points_index_buffer(
+    e: &mut Engine,
+    buffer: u32,
+    index_buffer: u32,
+    count: u32,
+    size: u32,
+) {
+    e.set_global(buffer.wrapping_add(0x34), index_buffer);
+    e.set_global(buffer.wrapping_add(0x2c), count);
+    e.set_global(buffer.wrapping_add(0x30), size);
+}
+
+/// A remade chip into the data's chip array (+0x28) when the stream is within its count (+0x20)
+/// (condition 3).
+#[inline(always)]
+pub(crate) fn store_chip(e: &mut Engine, data: u32, stream: u32, chip: u32) {
+    if stream < e.global::<u32>(data.wrapping_add(0x20)) {
+        let chips = e.global::<u32>(data.wrapping_add(0x28));
+        e.set_global(chips.wrapping_add(stream.wrapping_mul(4)), chip);
+    }
+}
+
+/// The drawn bound's copy in the renderer (centre +0x664, radius +0x670) (condition 2).
+#[inline(always)]
+pub(crate) fn drawn_bound(e: &mut Engine, renderer: u32, centre: [u32; 3], radius: u32) {
+    for (i, word) in (0u32..).zip(centre) {
+        e.set_global(renderer.wrapping_add(0x664 + 4 * i), word);
+    }
+    e.set_global(renderer.wrapping_add(0x670), radius);
+}
+
+/// A camera vector in model space (three words from `from`) into the renderer at `to` (condition 2).
+#[inline(always)]
+pub(crate) fn camera_vector(e: &mut Engine, renderer: u32, to: u32, from: u32) {
+    for i in 0..3u32 {
+        let word = e.global::<u32>(from.wrapping_add(4 * i));
+        e.set_global(renderer.wrapping_add(to).wrapping_add(4 * i), word);
+    }
+}
+
+/// The device's world transform (`SetTransform(D3DTS_WORLD, world)`) (condition 2).
+#[inline(always)]
+pub(crate) fn device_world_transform(e: &mut Engine, renderer: u32, world: u32) {
+    let device = super::packet::renderer_device(e, renderer);
+    e.vcall(device, DEVICE_SET_TRANSFORM, &args![TRANSFORM_WORLD, world]);
+}
+
+/// Stream 0 of the device (`SetStreamSource(0, buffer, 0, stride)`) (condition 2).
+#[inline(always)]
+pub(crate) fn device_stream(e: &mut Engine, renderer: u32, buffer: u32, stride: u32) {
+    let device = super::packet::renderer_device(e, renderer);
+    e.vcall(
+        device,
+        DEVICE_SET_STREAM_SOURCE,
+        &args![0u32, buffer, 0u32, stride],
+    );
+}
+
+/// The device's indices (`SetIndices`) (condition 2).
+#[inline(always)]
+pub(crate) fn device_indices(e: &mut Engine, renderer: u32, indices: u32) {
+    let device = super::packet::renderer_device(e, renderer);
+    e.vcall(device, DEVICE_SET_INDICES, &args![indices]);
+}
+
+/// A Direct3D object's count given back (`Release`) (condition 7).
+#[inline(always)]
+pub(crate) fn release(e: &mut Engine, object: u32) {
+    e.vcall(object, SLOT_RELEASE, &args![]);
+}
+
+/// The vertex manager's critical section entered for a lock (held until [`leave_staging`]).
+#[inline(always)]
+pub(crate) fn enter_staging(e: &mut Engine, manager: u32) {
+    e.call(
+        ENTER_CRITICAL_SECTION,
+        &args![manager.wrapping_add(STAGING_SECTION)],
+    );
+}
+
+/// The vertex manager's critical section left at an unlock.
+#[inline(always)]
+pub(crate) fn leave_staging(e: &mut Engine, manager: u32) {
+    e.call(
+        LEAVE_CRITICAL_SECTION,
+        &args![manager.wrapping_add(STAGING_SECTION)],
+    );
+}
+
+/// The vertex manager's staging block made anew for `size` bytes: the old one freed, a new one taken,
+/// both kept with the capacity (condition 5: about one frame in 70 grows it).
+#[inline(always)]
+pub(crate) fn grow_staging(e: &mut Engine, manager: u32, size: u32) {
+    let old = e.global::<u32>(manager.wrapping_add(STAGING_BLOCK));
+    e.call(FREE, &args![old]);
+    let block = e.call(ALLOCATE, &args![size]).u32();
+    e.set_global(manager.wrapping_add(STAGING_BLOCK), block);
+    e.set_global(manager.wrapping_add(STAGING_CAPACITY), size);
+}
+
+/// A skin's bone-matrix buffer made anew for `size` bytes, 16-byte aligned: the old one freed, the new
+/// one kept at +0x28 with its size at +0x24 (condition 5). Answers the new buffer.
+#[inline(always)]
+pub(crate) fn renew_bone_buffer(e: &mut Engine, skin: u32, old: u32, size: u32) -> u32 {
+    e.call(FREE_ALIGNED, &args![old]);
+    let buffer = e.call(ALLOCATE_ALIGNED, &args![size, 0x10u32]).u32();
+    e.set_global(skin.wrapping_add(0x28), buffer);
+    e.set_global(skin.wrapping_add(0x24), size);
+    buffer
+}
+
+/// A block from the memory manager (condition 5).
+#[inline(always)]
+pub(crate) fn allocate_block(e: &mut Engine, size: u32) -> u32 {
+    e.call(MEMORY_ALLOCATE, &args![MEMORY_MANAGER, size]).u32()
+}
+
+/// A block back to the memory manager (condition 4).
+#[inline(always)]
+pub(crate) fn free_block(e: &mut Engine, block: u32) {
+    e.call(MEMORY_FREE, &args![MEMORY_MANAGER, block]);
 }
