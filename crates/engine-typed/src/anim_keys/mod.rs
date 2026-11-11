@@ -15,8 +15,11 @@
 //! stream reads that fill the arrays, the other key types) until a later batch types them.
 //!
 //! A key array is `count` keys of `size` bytes (the size the key type has, handed in as a byte), each
-//! starting with its float time; a rotation key's quaternion follows at +4. [`Keys`] is the only way
-//! the typed code reaches them, so that stage 2 can change where they are in one place.
+//! starting with its float time; a rotation key's quaternion follows at +4. [`Keys`] gives a key's
+//! address, word and time. Not everything goes through it yet, which stage 2 has to change: the
+//! copies of a key's quaternion (`GenInterp`'s first key, the preparation's negation copied
+//! back) and the clamp of `W` read and write at those addresses with `e.mem`, and `GenInterp` hands
+//! raw key addresses to the interpolation functions it calls by address.
 //!
 //! Stage 1: the keys stay in guest memory where the game made them. **Floats.** These run wherever
 //! animations are loaded and updated, not only on the main thread: [`Threads::Both`], and the x87

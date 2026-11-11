@@ -112,6 +112,9 @@ fn copy_quaternion(e: &mut Engine, result: Ptr<NiQuaternion>, from: u32) {
 /// or at time `-FLT_MAX`, the first key's quaternion (+4); else the key search and the type's function
 /// between the keys `index` and `next_index` with the ratio, the last index becoming `index` (a search
 /// running off the end still interpolates, towards the key past the array). Answers `result`.
+/// The exe keeps the key times it loads, and the ratio, in its own `count` argument's slot once it
+/// has read the count; this keeps them in locals, as the translation does, and leaves the argument
+/// words as they came (`cdecl`: the caller drops them).
 #[allow(clippy::too_many_arguments)]
 pub fn gen_interp(
     e: &mut Engine,

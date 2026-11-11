@@ -220,10 +220,30 @@ fn anim_keys_prepare() {
         .assert_same();
 }
 
+/// The times `GenInterp` is tried at, as float bits, around the keys (key `k` at `k + 0.25`): between
+/// two keys (6.0 and 7.0: from the last index 3 the unrolled search finds them at its third and
+/// fourth step), on a key (3.25, 4.25: the restart's and the search's compares at equality), before
+/// the second key and before the first (1.0, -1.0), past key 8 (8.5, 20.0: with 9 keys the search
+/// runs off the end) and NaN.
+const KEY_TIMES: &[u32] = &[
+    0x40c0_0000, // 6.0
+    0x40e0_0000, // 7.0
+    0x4050_0000, // 3.25
+    0x4088_0000, // 4.25
+    0x3f80_0000, // 1.0
+    0x4108_0000, // 8.5
+    0x41a0_0000, // 20.0
+    0xbf80_0000, // -1.0
+    0x7fc0_0000, // NaN
+];
+
 #[test]
 fn anim_keys_gen_interp() {
-    // The time; at -FLT_MAX instead or not; the key type (1, or 4: the whole array); the count; the
-    // last index; the key size; the keys' floats.
+    // The time (KEY_TIMES); at -FLT_MAX instead or not; the key type (1, or 4: the whole array); the
+    // count (9 first: the last index 3 then finds 6.0 in the unrolled search; 2 with the last index
+    // 3 loads no later key, so the ratio's next time is the 0.0 the exe leaves); the last index (3,
+    // a cached one, first; 0 restarts nothing, 8 past 6.0 restarts at key 0); the key size; the
+    // keys' floats.
     Diff::new(entry!(
         0x00a2_8740,
         rot_keys::gen_interp(Ptr<_>, f32, Ptr, u32, u32, Ptr, u8) -> Ptr<_>
@@ -231,11 +251,11 @@ fn anim_keys_gen_interp() {
     .common()
     .inputs(&inputs(&[
         &[
-            Input::F32,
+            Input::Of(KEY_TIMES),
             Input::Of(&[0, 1]),
             Input::Of(&[1, 4]),
-            Input::Of(&[6, 1, 2, 5, 9]),
-            Input::Of(&[0, 1, 3, 8]),
+            Input::Of(&[9, 1, 2, 5, 6]),
+            Input::Of(&[3, 0, 1, 5, 8]),
             Input::Of(&[0x14, 0x24]),
         ],
         &FLOATS8,
@@ -251,7 +271,7 @@ fn anim_keys_gen_interp() {
         let time = if case.word(1) == 1 {
             f32::MIN
         } else {
-            case.f32(0)
+            f32::from_bits(case.word(0))
         };
         vec![
             result,

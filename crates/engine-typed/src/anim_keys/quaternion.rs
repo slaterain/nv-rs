@@ -70,7 +70,9 @@ pub fn negate(
 // Typed from 00a6dc30
 /// The parameter correction `Slerp` makes (`cdecl`, no Xbox PDB name): with `f = 1 - cos * 0.8228`
 /// and `g = f * f * 0.5855` (each rounded to a float), answers `t * (g + (1 + g * t * (2t - 3)))`
-/// rounded to a float, in `ST0`.
+/// rounded to a float, in `ST0`. The exe keeps `f`, `f * f`, `g` and the result in its own `cos`
+/// argument's slot (`[esp+8]`, stored and loaded back as floats); this keeps them in locals, as the
+/// translation does, and leaves the argument words as they came (`cdecl`: the caller drops them).
 pub fn counter_warp(e: &mut Engine, t: f32, cos: f32) -> f64 {
     let scaled = x87_mul(x87_load32(cos.to_bits()), e.global::<f64>(COSINE_FACTOR));
     let f = spill(x87_sub(1.0, scaled));
