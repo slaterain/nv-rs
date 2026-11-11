@@ -175,7 +175,8 @@
 //! As in the DirectInput layer (`super::dinput`), the objects live in engine memory with a vtable
 //! pointer at `+0`, each provided slot a platform function (code addresses from [`CODE_BASE`]);
 //! a slot not provided is left unregistered, so a call to it stops the run as an open function
-//! and is recorded with its address.
+//! and is recorded with its address. A secondary buffer's samples are kept outside engine memory,
+//! which holds them only while the game has the buffer locked ([`Samples`]).
 //!
 //! What the game calls: `BSXenonAudio::Init` (`00aea230`), the sounds of `BSWin32GameSound`
 //! (`00aeb270`, `00aec530`, `00af0630`, `00af1430` and the playing functions around them) and the
@@ -764,11 +765,14 @@ struct Buffer {
     flags: u32,
     /// The listener this primary buffer gave out (0: none yet).
     listener: u32,
-    /// Secondary buffers: the size, the format, the sample memory (engine memory), the 3D
-    /// interface (0: not asked yet).
+    /// Secondary buffers: the size, the format, the samples' block in engine memory (0 when they
+    /// are kept outside it, [`Samples`]), the 3D interface (0: not asked yet).
     bytes: u32,
     format: Format,
     data: u32,
+    /// While the buffer is locked: the block of engine memory its locks hand out (the window,
+    /// [`Samples`]); 0 when not locked.
+    window: u32,
     three_d: u32,
     volume: i32,
     pan: i32,
@@ -863,6 +867,63 @@ pub struct Sound {
     apl: bool,
     /// `NV_REPEATABLE`: the output's device is the virtual clock's ([`repeatable_pull`]).
     virtual_out: Option<VirtualOut>,
+    /// Where secondary buffers keep their samples ([`Samples`]): read from `NV_DSOUND_BUFFERS` at
+    /// the first buffer.
+    samples_in: Option<Samples>,
+    /// The samples of each secondary buffer kept outside engine memory, by buffer (empty while
+    /// every byte is 0, as a new buffer's are).
+    samples: BTreeMap<u32, Vec<u8>>,
+    /// `same-layout`: the buffers found written through an old lock's address after their
+    /// unlock (each named once).
+    written_after_unlock: BTreeSet<u32>,
+}
+
+/// Where a secondary buffer keeps its samples (ADR-0015, the bulk buffers): `NV_DSOUND_BUFFERS`.
+///
+/// - `Host` (the default): outside the game's 32-bit memory, in host memory. The game's memory
+///   holds them only while the game has the buffer locked: the first open `Lock` takes a block
+///   of the buffer's size (the window), fills it with the samples and hands out
+///   `window + offset` (and `window`, where the range wraps), as DirectSound hands out the
+///   buffer's own memory; nested locks share it; each `Unlock` refreshes the voice from it as
+///   before; the last copies it back and gives it back. The exe's four lock sites
+///   (`00aec530`, `00af0630`, `00af1430`, `00af1c00`) keep the pointers in locals, use them before
+///   their `Unlock` and never after, so only the window's address can differ from lock to lock,
+///   as DirectSound's pointers are good only until `Unlock`.
+/// - `SameLayout` (`same-layout`, a proof setting): the samples are kept and handed out as with
+///   `Host`, but the window is the buffer's old block of engine memory, made and freed where it
+///   always was. The game's memory is then laid out as with `Guest`, and a repeatable run
+///   compares byte for byte with one of `Guest`; a first lock that finds the block other than the
+///   kept samples names the buffer once (game code wrote through an old lock's address).
+/// - `Guest` (`guest`): the samples in engine memory for the buffer's whole life, as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Samples {
+    Host,
+    SameLayout,
+    Guest,
+}
+
+impl Samples {
+    fn from_env() -> Samples {
+        match std::env::var("NV_DSOUND_BUFFERS").as_deref() {
+            Ok("guest") => Samples::Guest,
+            Ok("same-layout") => Samples::SameLayout,
+            _ => Samples::Host,
+        }
+    }
+}
+
+/// Where secondary buffers keep their samples in this run ([`Samples`]).
+fn samples_in(e: &mut Engine) -> Samples {
+    *state!(e)
+        .sound
+        .samples_in
+        .get_or_insert_with(Samples::from_env)
+}
+
+/// Sets where secondary buffers keep their samples (tests), before the first buffer.
+#[cfg(test)]
+pub(crate) fn set_samples_in(e: &mut Engine, store: Samples) {
+    state!(e).sound.samples_in = Some(store);
 }
 
 /// `NV_REPEATABLE`'s device ([`repeatable_pull`]): the clock when the output started, and the
@@ -1373,7 +1434,7 @@ pub fn start_output(e: &mut Engine) -> bool {
         let mut v = voices.lock().expect("the voices");
         for (&at, b) in &state_ref!(e).sound.buffers {
             if b.flags & DSBCAPS_PRIMARYBUFFER == 0 {
-                v.all.insert(at, voice_of(e, b));
+                v.all.insert(at, voice_of(e, at, b));
             }
         }
         // The device's converter as the game has left it ([`Sound::apl`]).
@@ -1489,10 +1550,26 @@ fn unheard(e: &mut Engine, example: &str) {
     }
 }
 
-/// A buffer's voice: its samples as they are in engine memory now, its settings, not playing.
-fn voice_of(e: &Engine, b: &Buffer) -> Voice {
+/// The samples of the buffer `b` at `at` as they are now: the window's while it is locked, else
+/// where it keeps them ([`Samples`]: engine memory with the old store, the kept bytes otherwise,
+/// all zero until its first unlock).
+fn buffer_samples(e: &Engine, at: u32, b: &Buffer) -> Vec<u8> {
+    let s = &state_ref!(e).sound;
+    if b.window != 0 {
+        return e.mem.bytes(b.window, b.bytes);
+    }
+    if s.samples_in == Some(Samples::Guest) {
+        return e.mem.bytes(b.data, b.bytes);
+    }
+    let mut kept = s.samples.get(&at).cloned().unwrap_or_default();
+    kept.resize(b.bytes as usize, 0);
+    kept
+}
+
+/// A buffer's voice: its samples as they are now ([`buffer_samples`]), its settings, not playing.
+fn voice_of(e: &Engine, at: u32, b: &Buffer) -> Voice {
     let mut v = Voice::new(
-        e.mem.bytes(b.data, b.bytes),
+        buffer_samples(e, at, b),
         u16::from_le_bytes([b.format[2], b.format[3]]),
         u16::from_le_bytes([b.format[14], b.format[15]]),
     );
@@ -2099,6 +2176,7 @@ fn new_buffer(flags: u32) -> Buffer {
         bytes: 0,
         format: Format::default(),
         data: 0,
+        window: 0,
         three_d: 0,
         volume: 0,
         pan: 0,
@@ -2209,7 +2287,12 @@ fn create_sound_buffer(e: &mut Engine, this: Ptr, desc: Ptr, out: Ptr, outer: u3
         let size = size.div_ceil(align) * align;
         b.bytes = size;
         b.format = Format::of(&f);
-        b.data = e.mem.alloc(size);
+        // The samples (zero): a block of engine memory with the old store and the proof setting
+        // (made here as always, so the game's memory is laid out the same), else outside it
+        // ([`Samples`]): a new buffer's samples are all zero, so the store starts empty.
+        if samples_in(e) != Samples::Host {
+            b.data = e.mem.alloc(size);
+        }
         if result == DS_NO_VIRTUALIZATION {
             let at = insert_buffer(e, b);
             e.mem.set_u32(out.addr(), at);
@@ -2407,7 +2490,7 @@ fn insert_buffer(e: &mut Engine, b: Buffer) -> u32 {
     let table = state!(e).sound.buffer_vtable;
     let at = object(e, table);
     if b.flags & DSBCAPS_PRIMARYBUFFER == 0 {
-        let v = voice_of(e, &b);
+        let v = voice_of(e, at, &b);
         with_voice(e, at, |m, at| {
             m.all.insert(at, v);
         });
@@ -2540,14 +2623,19 @@ fn release_buffer(e: &mut Engine, at: u32) -> u32 {
     left
 }
 
-/// Frees the buffer at `at`: its memory, its voice; its 3D interface stays as a gone one
-/// (`Sound::dead3d`).
+/// Frees the buffer at `at`: its memory (its samples wherever they are kept, the window of a lock
+/// still open), its voice; its 3D interface stays as a gone one (`Sound::dead3d`).
 fn free_buffer(e: &mut Engine, at: u32) {
     let b = state!(e).sound.buffers.remove(&at).expect("the buffer");
     with_voice(e, at, |m, at| {
         m.all.remove(&at);
         m.playing.retain(|&p| p != at);
     });
+    state!(e).sound.samples.remove(&at);
+    state!(e).sound.written_after_unlock.remove(&at);
+    if b.window != 0 && b.window != b.data {
+        e.mem.free(b.window);
+    }
     if b.data != 0 {
         e.mem.free(b.data);
     }
@@ -3191,7 +3279,9 @@ fn get_status(e: &mut Engine, this: Ptr, out: Ptr) -> u32 {
 /// `Lock(offset, bytes, p1, n1, p2, n2, flags)`: with `DSBLOCK_ENTIREBUFFER` (offset 0) or 0,
 /// the region from `offset`, wrapping into a second region at the start. `bytes` 0 or larger
 /// than the buffer without `DSBLOCK_ENTIREBUFFER` is `DSERR_INVALIDPARAM`; the write cursor flag
-/// and a second region the caller has no pointer for are not provided.
+/// and a second region the caller has no pointer for are not provided. The regions lie in the
+/// buffer's samples as the game's memory holds them while it is locked ([`Samples`]): the first
+/// open lock opens the window ([`open_window`]), nested locks hand out the same one.
 #[allow(clippy::too_many_arguments)] // The interface's receiver and its seven words.
 fn lock(
     e: &mut Engine,
@@ -3227,18 +3317,88 @@ fn lock(
         second == 0 || !p2.is_null(),
         "Lock wrapping round without a second pointer is not provided"
     );
-    e.mem.set_u32(p1.addr(), b.data + offset);
+    let base = if b.locks > 0 {
+        if b.window != 0 {
+            b.window
+        } else {
+            b.data
+        }
+    } else {
+        open_window(e, this.addr(), &b)
+    };
+    e.mem.set_u32(p1.addr(), base + offset);
     e.mem.set_u32(n1.addr(), first);
     if !p2.is_null() {
-        e.mem
-            .set_u32(p2.addr(), if second == 0 { 0 } else { b.data });
+        e.mem.set_u32(p2.addr(), if second == 0 { 0 } else { base });
         e.mem.set_u32(n2.addr(), second);
     }
     buffer(e, this).locks += 1;
     DS_OK
 }
 
-/// `Unlock(p1, n1, p2, n2)`: ends a `Lock`; an unlock without a lock is not provided.
+/// The first open lock of the buffer `b` at `at`: the block of engine memory its locks hand out,
+/// holding its samples ([`Samples`]). With the old store that is the buffer's own block; with the
+/// proof setting the same block, filled from the kept samples (a block found other than them was
+/// written through an old lock's address after the unlock: named once); otherwise a new block of
+/// the buffer's size (zeroed) filled from them. Kept as the buffer's window until the last unlock.
+fn open_window(e: &mut Engine, at: u32, b: &Buffer) -> u32 {
+    let store = samples_in(e);
+    if store == Samples::Guest {
+        return b.data;
+    }
+    let window = if store == Samples::SameLayout {
+        b.data
+    } else {
+        e.mem.alloc(b.bytes)
+    };
+    let s = &mut state!(e).sound;
+    if let Some(kept) = s.samples.get(&at) {
+        if store == Samples::SameLayout
+            && e.mem.bytes(window, b.bytes)[..] != kept[..]
+            && s.written_after_unlock.insert(at)
+        {
+            eprintln!(
+                "NV_DSOUND_BUFFERS=same-layout: the sound buffer {at:#x} was written through an \
+                 old lock's address after its unlock ({} bytes)",
+                b.bytes
+            );
+        }
+        // Zero until written: a new block is zeroed, and the kept bytes are the buffer's size.
+        if !kept.is_empty() {
+            e.mem.write(window, kept);
+        }
+    }
+    buffer_at(e, at).window = window;
+    window
+}
+
+/// The last unlock of a buffer with a window ([`open_window`]): its bytes are kept outside the
+/// game's memory, and the window is given back (with the proof setting the block stays, as the
+/// buffer's own).
+fn close_window(e: &mut Engine, at: u32, window: u32, bytes: u32) {
+    let kept = state!(e).sound.samples.entry(at).or_default();
+    kept.resize(bytes as usize, 0);
+    e.mem.read(window, kept);
+    let b = buffer_at(e, at);
+    b.window = 0;
+    let own = b.data;
+    if window != own {
+        e.mem.free(window);
+    }
+}
+
+/// The buffer at `at`.
+fn buffer_at(e: &mut Engine, at: u32) -> &mut Buffer {
+    state!(e)
+        .sound
+        .buffers
+        .get_mut(&at)
+        .expect("a buffer of this layer")
+}
+
+/// `Unlock(p1, n1, p2, n2)`: ends a `Lock`; an unlock without a lock is not provided. Each unlock
+/// refreshes the buffer's voice from its samples (the whole buffer); the last closes its window
+/// ([`close_window`]).
 fn unlock(e: &mut Engine, this: Ptr, _p1: u32, _n1: u32, _p2: u32, _n2: u32) -> u32 {
     let b = buffer(e, this);
     assert!(
@@ -3246,7 +3406,8 @@ fn unlock(e: &mut Engine, this: Ptr, _p1: u32, _n1: u32, _p2: u32, _n2: u32) -> 
         "IDirectSoundBuffer::Unlock without a Lock is not provided"
     );
     b.locks -= 1;
-    let (data, bytes) = (b.data, b.bytes);
+    let (last, window, bytes) = (b.locks == 0, b.window, b.bytes);
+    let data = if window != 0 { window } else { b.data };
     if state!(e).sound.mix.is_some() {
         // `with_voice` written out: the samples are read straight into the voice's copy, which
         // has the buffer's size (a new copy otherwise), instead of into a new one each time.
@@ -3267,6 +3428,9 @@ fn unlock(e: &mut Engine, this: Ptr, _p1: u32, _n1: u32, _p2: u32, _n2: u32) -> 
                 }
             }
         }
+    }
+    if last && window != 0 {
+        close_window(e, this.addr(), window, bytes);
     }
     DS_OK
 }
@@ -4336,39 +4500,215 @@ mod tests {
         assert!(state!(e).sound.buffers.is_empty());
     }
 
+    /// What a lock hands out, whatever the store ([`Samples`]): `p1` at the offset, `p2` the
+    /// window's start where the range wraps, zero until written, then the bytes written through
+    /// an earlier lock; nested locks in one window.
     #[test]
-    fn lock_gives_the_buffer_s_memory() {
+    fn lock_hands_out_the_buffer_s_samples() {
+        for store in [Samples::Host, Samples::SameLayout, Samples::Guest] {
+            let mut e = engine();
+            set_samples_in(&mut e, store);
+            let ds = start_up(&mut e);
+            let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+            assert_eq!(
+                e.vcall(b, 0x2c, &[0, 44100, 0x1a00, 0x1a04, 0, 0, 0]).u32(),
+                DS_OK
+            );
+            let p = e.mem.u32(0x1a00);
+            assert_eq!(e.mem.u32(0x1a04), 44100);
+            assert!(e.mem.bytes(p, 44100).iter().all(|&x| x == 0), "{store:?}");
+            e.mem.write(p, &[7; 16]);
+            assert_eq!(e.vcall(b, 0x4c, &[p, 44100, 0, 0]).u32(), DS_OK);
+            assert_eq!(
+                e.vcall(b, 0x2c, &[0, 0, 0x1a00, 0x1a04, 0x1a08, 0x1a0c, 2])
+                    .u32(),
+                DS_OK
+            );
+            let q = e.mem.u32(0x1a00);
+            assert_eq!([e.mem.u32(0x1a04), e.mem.u32(0x1a08)], [44100, 0]);
+            assert_eq!(e.mem.bytes(q, 17), [[7; 16].as_slice(), &[0]].concat());
+            if store != Samples::Host {
+                assert_eq!(q, p, "{store:?}: the buffer's own block");
+            }
+            // Wrapping round, nested in the open lock: the same window.
+            assert_eq!(
+                e.vcall(b, 0x2c, &[44000, 300, 0x1a10, 0x1a14, 0x1a18, 0x1a1c, 0])
+                    .u32(),
+                DS_OK
+            );
+            assert_eq!(
+                [
+                    e.mem.u32(0x1a10),
+                    e.mem.u32(0x1a14),
+                    e.mem.u32(0x1a18),
+                    e.mem.u32(0x1a1c)
+                ],
+                [q + 44000, 100, q, 200]
+            );
+        }
+    }
+
+    /// The default store: between locks a buffer holds no block of engine memory for its
+    /// samples; the first lock takes one (the window), the last unlock gives it back, and what
+    /// was written through it stays.
+    #[test]
+    fn samples_leave_engine_memory_between_locks() {
         let mut e = engine();
+        set_samples_in(&mut e, Samples::Host);
         let ds = start_up(&mut e);
         let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
-        assert_eq!(
-            e.vcall(b, 0x2c, &[0, 44100, 0x1a00, 0x1a04, 0, 0, 0]).u32(),
-            DS_OK
+        let held = |e: &Engine| {
+            let o = &state_ref!(e).sound.buffers[&b];
+            (o.data, o.window)
+        };
+        assert_eq!(held(&e), (0, 0));
+        e.vcall(b, 0x2c, &[0, 0, 0x1a00, 0x1a04, 0, 0, DSBLOCK_ENTIREBUFFER]);
+        let window = e.mem.u32(0x1a00);
+        assert_eq!(held(&e), (0, window));
+        assert!(
+            e.mem.block_size(window).is_some(),
+            "a heap block while locked"
         );
-        let p = e.mem.u32(0x1a00);
-        assert_eq!(e.mem.u32(0x1a04), 44100);
-        e.mem.write(p, &[7; 16]);
-        assert_eq!(e.vcall(b, 0x4c, &[p, 44100, 0, 0]).u32(), DS_OK);
-        assert_eq!(
-            e.vcall(b, 0x2c, &[0, 0, 0x1a00, 0x1a04, 0x1a08, 0x1a0c, 2])
-                .u32(),
-            DS_OK
+        e.mem.write(window + 100, &[1, 2, 3]);
+        e.vcall(b, 0x4c, &[window, 44100, 0, 0]);
+        assert_eq!(held(&e), (0, 0));
+        assert!(
+            e.mem.block_size(window).is_none(),
+            "given back at the last unlock"
         );
+        assert_eq!(state_ref!(e).sound.samples[&b][100..103], [1, 2, 3]);
+        e.vcall(b, 0x2c, &[100, 3, 0x1a00, 0x1a04, 0, 0, 0]);
+        assert_eq!(e.mem.bytes(e.mem.u32(0x1a00), 3), [1, 2, 3]);
+    }
+
+    /// Nested locks of one buffer share its window; each unlock refreshes the voice from it, as
+    /// before; the window goes at the last unlock.
+    #[test]
+    fn nested_locks_share_the_window_and_each_unlock_is_heard() {
+        let mut e = engine();
+        set_samples_in(&mut e, Samples::Host);
+        let ds = start_up(&mut e);
+        let voices = hear(&mut e);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        e.vcall(b, 0x2c, &[0, 100, 0x1a00, 0x1a04, 0, 0, 0]);
+        e.vcall(b, 0x2c, &[200, 100, 0x1a10, 0x1a14, 0, 0, 0]);
+        let (p, q) = (e.mem.u32(0x1a00), e.mem.u32(0x1a10));
+        assert_eq!(q, p + 200);
+        e.mem.write(q, &[9; 4]);
+        e.vcall(b, 0x4c, &[q, 100, 0, 0]);
+        assert_eq!(voices.lock().unwrap().all[&b].data[200..204], [9; 4]);
+        assert_eq!(state_ref!(e).sound.buffers[&b].window, p, "still open");
+        e.mem.write(p, &[5; 2]);
+        e.vcall(b, 0x4c, &[p, 100, 0, 0]);
+        assert_eq!(state_ref!(e).sound.buffers[&b].window, 0);
+        let v = voices.lock().unwrap();
+        assert_eq!(v.all[&b].data[..2], [5; 2]);
+        assert_eq!(v.all[&b].data[200..204], [9; 4]);
+        assert_eq!(state_ref!(e).sound.samples[&b], v.all[&b].data);
+    }
+
+    /// The game's copy of a sound (`00af0630`): the new buffer and its source locked whole at
+    /// once (two windows), the source's samples copied through the locks, both unlocked: the copy
+    /// keeps them.
+    #[test]
+    fn a_sound_is_copied_through_two_locks() {
+        let mut e = engine();
+        set_samples_in(&mut e, Samples::Host);
+        let ds = start_up(&mut e);
+        let (_, source) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        fill(&mut e, source, 44100, &[3; 22050]);
+        let (_, copy) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        let whole = DSBLOCK_ENTIREBUFFER;
+        e.vcall(copy, 0x2c, &[0, 0, 0x1a00, 0x1a04, 0x1a08, 0x1a0c, whole]);
+        e.vcall(source, 0x2c, &[0, 0, 0x1a10, 0x1a14, 0x1a18, 0x1a1c, whole]);
+        let (to, from) = (e.mem.u32(0x1a00), e.mem.u32(0x1a10));
+        assert_ne!(to, from);
+        let bytes = e.mem.bytes(from, 44100);
+        e.mem.write(to, &bytes);
+        e.vcall(source, 0x4c, &[from, 44100, 0, 0]);
+        e.vcall(copy, 0x4c, &[to, 44100, 0, 0]);
+        let s = &state_ref!(e).sound;
+        assert_eq!(s.samples[&copy], s.samples[&source]);
+        assert_eq!(s.samples[&copy][..4], [3, 0, 3, 0]);
+    }
+
+    /// A buffer released while locked gives back its window and its kept samples.
+    #[test]
+    fn a_buffer_released_while_locked_gives_back_its_window() {
+        let mut e = engine();
+        set_samples_in(&mut e, Samples::Host);
+        let ds = start_up(&mut e);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        fill(&mut e, b, 44100, &[1; 22050]);
+        e.vcall(b, 0x2c, &[0, 10, 0x1a00, 0x1a04, 0, 0, 0]);
+        let window = e.mem.u32(0x1a00);
+        assert_eq!(e.vcall(b, 8, &[]).u32(), 0);
+        assert!(e.mem.block_size(window).is_none());
+        assert!(state_ref!(e).sound.samples.is_empty());
+    }
+
+    /// The proof setting: the buffer's own block is the window (made at creation, kept, at the old
+    /// store's address), the samples are kept outside it, and a write through an old lock's
+    /// address after the unlock is named and does not reach the samples (as with the default).
+    #[test]
+    fn same_layout_keeps_the_block_and_names_a_write_after_the_unlock() {
+        let mut e = engine();
+        set_samples_in(&mut e, Samples::SameLayout);
+        let ds = start_up(&mut e);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        let data = state_ref!(e).sound.buffers[&b].data;
+        assert_ne!(data, 0);
+        fill(&mut e, b, 44100, &[2; 22050]);
+        assert_eq!(e.mem.u32(0x1800), data, "the buffer's own block");
+        assert_eq!(state_ref!(e).sound.samples[&b][..2], [2, 0]);
+        assert!(!state_ref!(e).sound.written_after_unlock.contains(&b));
+        e.mem.write(data, &[9; 2]);
+        e.vcall(b, 0x2c, &[0, 2, 0x1a00, 0x1a04, 0, 0, 0]);
         assert_eq!(
-            [e.mem.u32(0x1a00), e.mem.u32(0x1a04), e.mem.u32(0x1a08)],
-            [p, 44100, 0]
+            e.mem.bytes(e.mem.u32(0x1a00), 2),
+            [2, 0],
+            "the kept samples"
         );
-        assert_eq!(e.mem.bytes(p, 2), [7, 7]);
-        // Wrapping round.
-        assert_eq!(
-            e.vcall(b, 0x2c, &[44000, 300, 0x1a10, 0x1a14, 0x1a18, 0x1a1c, 0])
-                .u32(),
-            DS_OK
-        );
-        assert_eq!(
-            [e.mem.u32(0x1a14), e.mem.u32(0x1a18), e.mem.u32(0x1a1c)],
-            [100, p, 200]
-        );
+        assert!(state_ref!(e).sound.written_after_unlock.contains(&b));
+        e.vcall(b, 0x4c, &[data, 2, 0, 0]);
+        assert_eq!(e.vcall(b, 8, &[]).u32(), 0);
+        assert!(e.mem.block_size(data).is_none(), "freed with the buffer");
+    }
+
+    /// The old store: the samples are the buffer's block of engine memory for its whole life (a
+    /// write between locks is kept, as before).
+    #[test]
+    fn the_guest_store_keeps_the_samples_in_engine_memory() {
+        let mut e = engine();
+        set_samples_in(&mut e, Samples::Guest);
+        let ds = start_up(&mut e);
+        let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+        let data = state_ref!(e).sound.buffers[&b].data;
+        fill(&mut e, b, 44100, &[4; 22050]);
+        assert_eq!(e.mem.u32(0x1800), data);
+        assert_eq!(e.mem.bytes(data, 2), [4, 0]);
+        assert!(state_ref!(e).sound.samples.is_empty());
+        e.mem.write(data, &[6; 2]);
+        e.vcall(b, 0x2c, &[0, 2, 0x1a00, 0x1a04, 0, 0, 0]);
+        assert_eq!(e.mem.bytes(e.mem.u32(0x1a00), 2), [6, 6]);
+        e.vcall(b, 0x4c, &[data, 2, 0, 0]);
+    }
+
+    /// A voice made after the samples were written (the output started later) has them, from
+    /// where the buffer keeps them (every store).
+    #[test]
+    fn a_later_voice_has_the_kept_samples() {
+        for store in [Samples::Host, Samples::SameLayout, Samples::Guest] {
+            let mut e = engine();
+            set_samples_in(&mut e, store);
+            let ds = start_up(&mut e);
+            let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
+            fill(&mut e, b, 44100, &[8; 22050]);
+            let buffer = state_ref!(e).sound.buffers[&b].clone();
+            let v = voice_of(&e, b, &buffer);
+            assert_eq!(v.data.len(), 44100, "{store:?}");
+            assert_eq!(v.data[..2], [8, 0], "{store:?}");
+        }
     }
 
     #[test]
@@ -5940,12 +6280,11 @@ mod tests {
         let voices = hear(&mut e);
         let (_, b) = create(&mut e, ds, 0x2e0, false, 1, 44100);
         // Samples: a ramp, written through Lock/Unlock.
-        let data = state!(e).sound.buffers[&b].data;
         let samples: Vec<u8> = (0..22050i32)
             .flat_map(|i| (((i * 7) % 2000 - 1000) as i16).to_le_bytes())
             .collect();
-        e.mem.write(data, &samples);
         e.vcall(b, 0x2c, &[0, 44100, 0x1a00, 0x1a04, 0, 0, 0]);
+        e.mem.write(e.mem.u32(0x1a00), &samples);
         e.vcall(b, 0x4c, &[e.mem.u32(0x1a00), 44100, 0, 0]);
         let d = effect_desc(&mut e, &GUID_DISTORTION);
         assert_eq!(e.vcall(b, 0x54, &[1, d, 0x1c00]).u32(), DS_OK);
@@ -6055,9 +6394,8 @@ mod tests {
         let samples: Vec<u8> = (0..22050i32)
             .flat_map(|i| (((i * 7) % 2000 - 1000) as i16).to_le_bytes())
             .collect();
-        let data = state!(e).sound.buffers[&b].data;
-        e.mem.write(data, &samples);
         e.vcall(b, 0x2c, &[0, 44100, 0x1a00, 0x1a04, 0, 0, 0]);
+        e.mem.write(e.mem.u32(0x1a00), &samples);
         e.vcall(b, 0x4c, &[e.mem.u32(0x1a00), 44100, 0, 0]);
         let d = effect_desc(&mut e, &GUID_DISTORTION);
         assert_eq!(e.vcall(b, 0x54, &[1, d, 0x1c00]).u32(), DS_OK);

@@ -30,6 +30,18 @@ lists what started when: real ms, frames recorded, game clock ms, then the event
 buffer with its format, music `Render`/`Run`, the movie's track, sound file opens, `mmioOpen`
 names, Ogg opens, pace skips).
 
+**Where the samples live** (ADR-0015, the bulk buffers). A secondary buffer's samples are kept
+outside the game's 32-bit memory; the game's memory holds them only while the game has the buffer
+locked (`dsound.rs`, `Samples`): the first `Lock` takes a block of the buffer's size filled with
+them and hands out addresses in it as DirectSound hands out the buffer's own memory, nested locks
+share it, every `Unlock` refreshes the voice from it as before, and the last copies it back and
+gives the block back. The exe's four lock sites (`00aec530` the load, `00af0630` and `00af1430`
+the copies, `00af1c00` a range) lock, copy and unlock within one function. The voices get the
+same bytes at the same calls, so the mixing is unchanged. `NV_DSOUND_BUFFERS=guest` keeps the
+samples in the game's memory as before; `same-layout` keeps them outside it but hands them out
+through the buffer's old block, so the game's memory is laid out as with `guest` and a repeatable
+run (`NV_REPEATABLE`) compares byte for byte with one of `guest`.
+
 **Pace.** The game reads its buffers' cursors and the music position from the platform clock,
 and the output follows that clock. Within 100 ms it keeps the device's pace. When the clock
 runs ahead it skips on: it mixes the frames and drops them. When the clock falls behind it
