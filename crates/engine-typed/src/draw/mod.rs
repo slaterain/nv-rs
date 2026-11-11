@@ -34,7 +34,14 @@
 //!   declaration, the dynamic geometry group, the vertex manager's staging block), which [`packing`]
 //!   and [`packed`] read and write in place; the shader package's tables, the passes' contents (stages,
 //!   state lists, masks, programs), the shaders' and lighting properties' own fields and the constant
-//!   map entries, filled at load and read in place by [`passes`], [`setups`] and [`constants`]; and the
+//!   map entries, filled at load and read in place by [`passes`], [`setups`] and [`constants`]; in
+//!   group B also its own writes read back in place (the stage textures in [`passes::bind_masked_stages`],
+//!   the constant entries' enabled bytes in [`setups`], the counted constant maps +0x30/+0x34), reads
+//!   that bypass accessors [`packet`] has (a geometry's skin +0xbc and world scale +0x98, the state
+//!   block's +0xc, a property's flags +0x20), frame-changing reads neither routed nor in an accessor
+//!   (the fog property and its index, the fog colour `011a9bd0` with `011a9bd4`, a lighting property's
+//!   camera distance +0x34, the rendered pass's byte +9, the state block's properties, the land table
+//!   +0xc4) and one write past [`own`] (the constant setters' copy into an entry's own buffer); and the
 //!   exe's constant data (the -FLT_MAX and 0.001 the alpha pass compares with, the colour
 //!   scale, the bone scale bounds). A later step can feed the draw from a copied packet and give a
 //!   drawing thread its own state by changing those two files; nothing here copies, defers or moves
@@ -50,8 +57,9 @@
 //!
 //! **Threads and floats.** The drivers and the alpha pass run on the main thread only by the census
 //! (`t3/threads.tsv`); the geometry paths' packing, shape draw and getters also on two other game
-//! threads (about one call in 300 to one in 3,000). The family keeps the shader family's exact x87
-//! helpers (the alpha distances, the particles' quads, the bone matrices): [`Threads::Both`].
+//! threads (about one call in 300 to one in 3,000), and six of the pass begin and end's functions also on
+//! game thread 12. The family keeps the shader family's exact x87 helpers (the alpha distances, the
+//! particles' quads, the bone matrices): [`Threads::Both`].
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};

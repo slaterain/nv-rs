@@ -165,12 +165,12 @@ pub fn begin_types_ca(e: &mut Engine, this: Ptr) {
 }
 
 // Typed from 00b7ded0
-/// The set-up of type 0xca, `thiscall(shader, pass)`, the property `[pass + 0xc]`: the property's
+/// The set-up of type 0xca, `thiscall(shader, property state)`, the property `[state + 0xc]`: the property's
 /// stages, both bound, the view matrix into a local (frame +0x10 of 0x84 bytes), the scaled light
 /// (`00b7c850`, the geometry's world scale +0x98) and the last upload (big +0x50, small +0).
-pub fn setup_type_ca(e: &mut Engine, this: Ptr, pass: Ptr) {
+pub fn setup_type_ca(e: &mut Engine, this: Ptr, state: Ptr) {
     let shader = this.addr();
-    let property = e.global::<u32>(pass.addr().wrapping_add(0xc));
+    let property = e.global::<u32>(state.addr().wrapping_add(0xc));
     property_stages(e, property);
     bind_stage(e, 0);
     bind_stage(e, 1);
@@ -185,13 +185,13 @@ pub fn setup_type_ca(e: &mut Engine, this: Ptr, pass: Ptr) {
 }
 
 // Typed from 00b7dfe0
-/// The set-up of type 0xd1, `thiscall(shader, pass)`: as [`setup_type_ca`] up to the view matrix (frame
-/// +0x14 of 0x88 bytes), then the scaled light with the pass's word +8 (`00b7cb00`); the rendered pass's
+/// The set-up of type 0xd1, `thiscall(shader, property state)`: as [`setup_type_ca`] up to the view matrix
+/// (frame +0x14 of 0x88 bytes), then the scaled light with the state block's word +8 (`00b7cb00`); the rendered pass's
 /// byte +9 less 1.0 as the fourth float of the point `011fa2a0` transformed by the local, which goes to
 /// the vertex constant 0x10; the last upload (big +0x54, small +4).
-pub fn setup_type_d1(e: &mut Engine, this: Ptr, pass: Ptr) {
+pub fn setup_type_d1(e: &mut Engine, this: Ptr, state: Ptr) {
     let shader = this.addr();
-    let property = e.global::<u32>(pass.addr().wrapping_add(0xc));
+    let property = e.global::<u32>(state.addr().wrapping_add(0xc));
     property_stages(e, property);
     bind_stage(e, 0);
     bind_stage(e, 1);
@@ -201,7 +201,7 @@ pub fn setup_type_d1(e: &mut Engine, this: Ptr, pass: Ptr) {
         let holder = packet::rendering_pass(e);
         let object = view_matrix(e, shader, local);
         let scale = x87_quiet_bits(e.global::<u32>(object.wrapping_add(0x98)));
-        let word = e.global::<u32>(pass.addr().wrapping_add(8));
+        let word = e.global::<u32>(state.addr().wrapping_add(8));
         e.call(SCALED_LIGHT_WORD, &args![local, scale, word]);
         let byte = e.global::<u8>(holder.wrapping_add(9));
         let one: f64 = e.global(ONE_DOUBLE);
@@ -217,13 +217,13 @@ pub fn setup_type_d1(e: &mut Engine, this: Ptr, pass: Ptr) {
 }
 
 // Typed from 00b7e150
-/// The set-up of type 0x102, `thiscall(shader, pass)`: the property's stages; stage 3 the property's
+/// The set-up of type 0x102, `thiscall(shader, property state)`: the property's stages; stage 3 the property's
 /// slot 0xf4 answer for (3, 0) (asked again when not 0) or `011f951c`'s word; stages 0, 1 and 3 bound;
 /// the view matrix (frame +0x10 of 0x50 bytes) with the light direction; the geometry's world scale as the
 /// fourth float of the transformed point, the vertex constant 0x10.
-pub fn setup_type_102(e: &mut Engine, this: Ptr, pass: Ptr) {
+pub fn setup_type_102(e: &mut Engine, this: Ptr, state: Ptr) {
     let shader = this.addr();
-    let property = e.global::<u32>(pass.addr().wrapping_add(0xc));
+    let property = e.global::<u32>(state.addr().wrapping_add(0xc));
     property_stages(e, property);
     let stage3 = pass_stage(e, 3);
     let value = if e.vcall(property, 0xf4, &args![3u32, 0u32]).u32() != 0 {
@@ -521,22 +521,23 @@ pub fn select_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
 }
 
 /// The land toggles (`011fa2d0`, four floats), the defaults' second word (`011a9bd4`) and the
-/// geometry's count slot (0xec, 16 bits).
+/// property's count slot (0xec, 16 bits).
 const LAND_TOGGLES: u32 = 0x011f_a2d0;
 const TOGGLE_DEFAULT: u32 = 0x011a_9bd4;
-const GEOMETRY_COUNT: u32 = 0xec;
+const PROPERTY_COUNT: u32 = 0xec;
 
 // Typed from 00c02c30
 /// `ShadowLightShader::UpdateTogglesConstantLand` (Xbox PDB), `thiscall(shader, unread word, flag,
-/// geometry, index)`: the land toggles 1.0; the default's second word, or 1.0 with `flag`; the byte
-/// `index` of the geometry's table (+0xc4) as a float; the geometry's count (its slot 0xec) plus 1.0.
+/// shader property, index)`: the land toggles 1.0; the default's second word, or 1.0 with `flag`; the
+/// byte `index` of the property's table (+0xc4) as a float; the property's count (its slot 0xec) plus
+/// 1.0 (the toggles set-up passes the shader property, the translation calls it the geometry).
 /// Stored second, first, third, fourth, as the exe does.
 pub fn land_toggles(
     e: &mut Engine,
     _this: Ptr,
     _unused: u32,
     flag: u32,
-    geometry: u32,
+    property: u32,
     index: u32,
 ) {
     let second = if flag != 0 {
@@ -544,10 +545,10 @@ pub fn land_toggles(
     } else {
         e.global::<u32>(TOGGLE_DEFAULT)
     };
-    let table = e.mem.u32(geometry.wrapping_add(0xc4));
+    let table = e.mem.u32(property.wrapping_add(0xc4));
     let byte = e.mem.u8(table.wrapping_add(index));
     let third = x87_store32(f64::from(byte));
-    let count = e.vcall(geometry, GEOMETRY_COUNT, &args![]).u16();
+    let count = e.vcall(property, PROPERTY_COUNT, &args![]).u16();
     own::set_constant_word(e, LAND_TOGGLES + 4, second);
     own::set_constant_word(e, LAND_TOGGLES, x87_store32(1.0));
     own::set_constant_word(e, LAND_TOGGLES + 8, third);
