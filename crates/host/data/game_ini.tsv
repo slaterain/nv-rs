@@ -7,6 +7,7 @@
 # [nv-rs Fixes] rows are written commented out, so sPreset decides until a line is uncommented.
 nv-rs General	sPreset	NV_PRESET	fixes	fixes = nv-rs's fixes on (recommended); vanilla = exactly the original game's behaviour.
 nv-rs Display	bBorderless	NV_BORDERLESS	1	1 = the game's window has no frame and fills the screen (the default); 0 = the window as the game makes it.
+nv-rs Display	sRenderer	NV_D3D9	vulkan	vulkan = the game drawn on Vulkan (the default; Direct3D 12 on a graphics card without Vulkan); d3d9 = drawn by Direct3D 9, as the original draws it (the fallback).
 nv-rs Display	iFrameLimit	NV_FRAME_LIMIT	0	Most frames a second in play, with the fixes' uncapped frame rate; 0 = no limit.
 nv-rs Display	iMenuFrameLimit	NV_MENU_FRAME_LIMIT	120	Most frames a second in menus (main menu, Pip-Boy, dialogue, inventory, pause); 0 = no limit of their own.
 nv-rs Threads	bSteppedThreads	NV_THREADS	0	1 = the game's threads take turns, one at a time (the fallback); 0 = side by side on their own cores.

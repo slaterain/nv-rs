@@ -943,8 +943,14 @@ fn plain_end(tail: &str, status: Option<i32>) -> String {
     } else {
         "This preview has bugs left, and the game's code stopped at one of them."
     };
+    // Drawn on Vulkan (wgpu): the original's Direct3D 9 is one setting away.
+    let renderer = if has("NV_D3D9=wgpu: drawing with") || has("NV_D3D9 wgpu: the game's device") {
+        "\n\nIt was drawn on Vulkan. If it stops again there, Settings.cmd's Renderer \"Direct3D 9\" draws the game as the original does."
+    } else {
+        ""
+    };
     format!(
-        "The game stopped (status {}).\n\n{what}\n\nPlease report it at {ISSUES} and attach the log named below. It may show your Windows user name in folder paths.\n\nLast line of the log:\n{last}",
+        "The game stopped (status {}).\n\n{what}{renderer}\n\nPlease report it at {ISSUES} and attach the log named below. It may show your Windows user name in folder paths.\n\nLast line of the log:\n{last}",
         status.map_or("unknown".to_string(), |s| s.to_string())
     )
 }
@@ -1306,12 +1312,12 @@ fn play(
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_clone))
         .creation_flags(CREATE_NO_WINDOW)
-        .env("NV_D3D9", "real")
         .env("NV_SOUND", "out")
         .env("NV_D3D9_ADAPTER", &profile.table)
         .env("NV_DSOUND_TABLE", &sound)
         .env("NV_D3DX_CACHE", package.machine.join("d3dx-cache"))
-        // wgpu's compiled pipelines (only used with NV_D3D9=wgpu), beside the other machine files.
+        // wgpu's compiled pipelines (Vulkan, the default renderer), beside the other machine files.
+        // Who draws is the profile's Fallout.ini's `sRenderer` (the game reads it; `switches`).
         .env("NV_WGPU_CACHE", package.machine.join("wgpu-cache"))
         .env("NV_SAVE_OUT", &profile.saves)
         .env("NV_PREFS_OUT", &profile.prefs)
@@ -1337,9 +1343,10 @@ fn play(
             .to_string()
     };
     package.log(&format!(
-        "starting the game on {}; Fallout.ini: preset {}, frame limit {}, menu frame limit {}; log {}",
+        "starting the game on {}; Fallout.ini: preset {}, renderer {}, frame limit {}, menu frame limit {}; log {}",
         data_argument.display(),
         key("nv-rs General", "sPreset"),
+        key("nv-rs Display", "sRenderer"),
         key("nv-rs Display", "iFrameLimit"),
         key("nv-rs Display", "iMenuFrameLimit"),
         log_path.display()
@@ -1389,7 +1396,7 @@ fn play(
 
 /// The game's variables for the player's options on its command ([`game_ini::switches`]).
 ///
-/// In play the six that would beat the profile's `Fallout.ini` are taken out, not even one left
+/// In play the seven that would beat the profile's `Fallout.ini` are taken out, not even one left
 /// from Play.exe's own environment. When a variable set before the start makes the run a test,
 /// which never reads the file, nothing is taken out and the file's choices are passed on, so the
 /// run plays like the player's game; the line for the log says which variable did it, what was
@@ -1522,6 +1529,11 @@ mod tests {
         )
         .contains("Settings.cmd"));
         assert!(plain_end("", None).contains("the log is empty"));
+        // Drawn on Vulkan: the fallback renderer is named; on the real Direct3D 9 it is not.
+        let vulkan =
+            "NV_D3D9=wgpu: drawing with a card (Vulkan)\nGame's main stopped in frame 9: x\n";
+        assert!(plain_end(vulkan, Some(3)).contains("Renderer \"Direct3D 9\""));
+        assert!(!plain_end(tail, Some(3)).contains("Renderer"));
     }
 
     #[test]
@@ -2256,14 +2268,15 @@ mod tests {
     }
 
     /// The variables on the game's own command (`pass_switches` on a `Command`, as `play` makes
-    /// it). In play the six are taken out and nothing else is said; with a test variable set
+    /// it). In play the seven are taken out and nothing else is said; with a test variable set
     /// before Play.exe, the file's choices are set on the command, nothing is taken out, the one
     /// set before is left to come through as it was, and the log line names all of it.
     #[test]
     fn the_games_command_gets_the_files_choices_only_in_a_test() {
-        let six = [
+        let seven = [
             "NV_PRESET",
             "NV_BORDERLESS",
+            "NV_D3D9",
             "NV_FRAME_LIMIT",
             "NV_MENU_FRAME_LIMIT",
             "NV_THREADS",
@@ -2289,7 +2302,7 @@ mod tests {
         let line = pass_switches(&mut play, &game_ini::switches(&ini, None, |_| false));
         assert_eq!(line, None);
         let mut want: Vec<(String, Option<String>)> =
-            six.iter().map(|name| (name.to_string(), None)).collect();
+            seven.iter().map(|name| (name.to_string(), None)).collect();
         want.push(("NV_SETTINGS".into(), Some("settings.ini".into())));
         want.sort();
         let mut got = envs(&play);
@@ -2304,6 +2317,7 @@ mod tests {
         let mut want: Vec<(String, Option<String>)> = [
             ("NV_PRESET", "vanilla"),
             ("NV_BORDERLESS", "1"),
+            ("NV_D3D9", "wgpu"),
             ("NV_FRAME_LIMIT", "90"),
             ("NV_MENU_FRAME_LIMIT", "120"),
             ("NV_RENDER_THREAD", "1"),
@@ -2322,7 +2336,7 @@ mod tests {
             "{line}"
         );
         assert!(
-            line.contains("NV_PRESET=vanilla, NV_BORDERLESS=1, NV_FRAME_LIMIT=90"),
+            line.contains("NV_PRESET=vanilla, NV_BORDERLESS=1, NV_D3D9=wgpu, NV_FRAME_LIMIT=90"),
             "{line}"
         );
         assert!(line.ends_with("kept as they were: NV_THREADS"), "{line}");
@@ -2554,6 +2568,7 @@ mod tests {
         let mut want: Vec<(String, Option<String>)> = [
             ("NV_PRESET", "fixes"),
             ("NV_BORDERLESS", "1"),
+            ("NV_D3D9", "wgpu"),
             ("NV_FRAME_LIMIT", "60"),
             ("NV_MENU_FRAME_LIMIT", "120"),
             ("NV_THREADS", "stepped"),
@@ -2576,6 +2591,30 @@ mod tests {
         std::fs::remove_file(&game.prefs).unwrap();
         files.start().unwrap();
         assert!(!files.prefs(0).contains("bFull Screen"));
+    }
+
+    /// Settings.cmd's Renderer: Direct3D 9 chosen goes into both profiles' `sRenderer`, Vulkan back
+    /// again; the generated sections start at the game's default, Vulkan.
+    #[test]
+    fn settings_cmd_sets_the_renderer() {
+        let files = Files::new("settings-renderer", None);
+        files.start().unwrap();
+        let renderer = |files: &Files, profile| {
+            settings::ini_value(&text_of(&files.ini(profile)), "nv-rs Display", "sRenderer")
+                .map(str::to_string)
+        };
+        for (choose, want) in [
+            ("", "vulkan"),
+            ("Renderer=d3d9", "d3d9"),
+            ("Renderer=vulkan", "vulkan"),
+        ] {
+            if !choose.is_empty() {
+                settings_window(&files, choose);
+            }
+            for profile in 0..2 {
+                assert_eq!(renderer(&files, profile).as_deref(), Some(want), "{choose}");
+            }
+        }
     }
 
     /// Settings.cmd edits the files in place only when every profile's Fallout.ini has our

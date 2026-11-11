@@ -15,7 +15,7 @@
 //! no test reads them (`crate::fixes::is_play_run`); every scripted, gated or measured run never
 //! does.
 
-use crate::fixes::{Preset, FIXES};
+use crate::fixes::{Preset, Renderer, FIXES};
 use std::path::{Path, PathBuf};
 
 /// The table of our keys: section, key, environment variable, the generated file's value (the
@@ -99,6 +99,7 @@ pub fn value<'a>(text: &'a str, section: &str, key: &str) -> Option<&'a str> {
 pub struct Keys {
     pub preset: Option<Preset>,
     pub borderless: Option<bool>,
+    pub renderer: Option<Renderer>,
     pub frame_limit: Option<u32>,
     pub menu_frame_limit: Option<u32>,
     pub stepped_threads: Option<bool>,
@@ -129,6 +130,10 @@ impl Keys {
                 "bBorderless" => {
                     keys.borderless = flag(raw);
                     keys.borderless.is_some()
+                }
+                "sRenderer" => {
+                    keys.renderer = Renderer::parse(raw);
+                    keys.renderer.is_some()
                 }
                 "iFrameLimit" => {
                     keys.frame_limit = raw.parse().ok();
@@ -280,6 +285,7 @@ mod tests {
             [
                 "sPreset",
                 "bBorderless",
+                "sRenderer",
                 "iFrameLimit",
                 "iMenuFrameLimit",
                 "bSteppedThreads",
@@ -295,6 +301,7 @@ mod tests {
         let keys = Keys::read(&generated());
         assert_eq!(keys.preset, Some(Preset::Fixes));
         assert_eq!(keys.borderless, Some(crate::fixes::PLAY_BORDERLESS));
+        assert_eq!(keys.renderer, Some(crate::fixes::PLAY_RENDERER));
         assert_eq!(keys.frame_limit, Some(0));
         assert_eq!(
             keys.menu_frame_limit,
@@ -439,6 +446,20 @@ mod tests {
             Keys::default()
         );
         assert_eq!(Keys::default().bad_line(), None);
+    }
+
+    /// `sRenderer`: vulkan or d3d9, any case; anything else leaves the default and is named once.
+    #[test]
+    fn the_renderer_is_vulkan_or_d3d9() {
+        let read = |v: &str| Keys::read(&format!("[nv-rs Display]\nsRenderer={v}\n"));
+        assert_eq!(read("vulkan").renderer, Some(Renderer::Vulkan));
+        assert_eq!(read(" D3D9 ").renderer, Some(Renderer::D3d9));
+        assert_eq!(read("\"Vulkan\"").renderer, Some(Renderer::Vulkan));
+        let bad = read("dx12");
+        assert_eq!(bad.renderer, None);
+        assert_eq!(bad.bad, ["sRenderer=dx12"]);
+        assert_eq!(read("").renderer, None);
+        assert!(read("").bad.is_empty());
     }
 
     #[test]

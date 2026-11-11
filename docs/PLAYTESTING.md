@@ -96,7 +96,7 @@ and the host's tests check one against the other. The fix lines are written with
 - The game reads three lines of a `settings.ini` that is there (`Preset`, `FrameLimit`,
   `MenuFrameLimit`), each only when neither `Fallout.ini` nor a variable sets it. When the played
   profile's `Fallout.ini` has no sections (UTF-16, or nothing to make it from), Play.exe passes
-  the six options as variables instead, from settings.ini's lines, else the play defaults; the
+  the seven options as variables instead, from settings.ini's lines, else the play defaults; the
   fix lines and V-sync then do nothing until the file can take them.
 - A section of ours that appears twice counts only where it first appears, as Windows reads a
   repeated section name: a key in the later one is not read (and Play.exe adds a missing key to
@@ -112,7 +112,7 @@ and the host's tests check one against the other. The fix lines are written with
   them once, when the file is moved in).
 - A tester passes a variable by setting it in the environment before starting Play.exe. When it
   makes the run a test (a starred name or a fix's own variable), the game ignores the file, so
-  Play.exe passes the file's choices on as the six variables and the uncommented fix lines (the
+  Play.exe passes the file's choices on as the seven variables and the uncommented fix lines (the
   play default where the file says nothing) and leaves any of them set beforehand as they were:
   the run plays like the player's game, and launcher.log says which variable made it a test and
   what was passed.
@@ -128,6 +128,7 @@ and the host's tests check one against the other. The fix lines are written with
 | `NV_MENU_FRAME_LIMIT=n` (`iMenuFrameLimit`; `MenuFrameLimit=`) | Frames a second at most in menus (0: none) | 120 |
 | `NV_THREADS=stepped` (`bSteppedThreads=1`; `NV_THREADS=`; Settings.cmd's threads option) | The game's threads one at a time (the fallback, and the reference mode) instead of side by side on their own cores | side by side in play; a scripted or measured run is stepped whatever the default |
 | `NV_RENDER_THREAD=0` (`bRenderThread=0`; `NV_RENDER_THREAD=`; Settings.cmd's drawing thread option) | The real Direct3D 9 calls on the game's own threads, as the original makes them, instead of a render thread of their own | render thread in play; a scripted or measured run draws on the game's threads |
+| `NV_D3D9=wgpu`, `real` or `real,wgpu` (`sRenderer=vulkan` or `d3d9`; `Renderer=`; Settings.cmd's renderer) | Who draws the game's window: wgpu (`wgpu`, `sRenderer=vulkan`, `crates/d3d9-wgpu`) on Vulkan, or Direct3D 12 on a card without a Vulkan driver (`NV_WGPU_BACKEND` below); the real Direct3D 9 as the original draws (`real`, `sRenderer=d3d9`: the fallback); or the real one with wgpu drawing every frame off screen beside it (`real,wgpu`, for comparison: with `NV_SHOT` both are captured, numbered alike, wgpu's as `wgpu-frame-*.bmp`). wgpu falls back to the real Direct3D 9 by itself where it finds no graphics card or cannot make the game's device, and the log says so | wgpu on Vulkan in play (a launcher's run that is no test reads `sRenderer`; a test started through Play.exe gets the file's choice passed on); a scripted run without the variable draws nothing |
 | `NV_BORDERLESS=1` or `0` (`bBorderless`; `Borderless=`; Settings.cmd's display mode) | The game's window without a frame, filling the screen (`1`), or the window as the game makes it (`0`) | on in play (a launcher's run that is no test, the one that reads the sections above; a test started through Play.exe gets the file's choice passed on, as above); a scripted or measured run keeps a normal window |
 
 Settings.cmd's resolution, anti-aliasing, anisotropy and V-sync are the game's own keys, not switches: `iSize W`, `iSize H`, `iMultiSample` and `iMaxAnisotropy` in `FalloutPrefs.ini`, `iPresentInterval` in `Fallout.ini` (where the game reads it).
@@ -171,7 +172,6 @@ Play.exe sets these for every run; set them by hand only to run `nv-viewer` with
 
 | Variable | What it does | Default without Play.exe |
 | --- | --- | --- |
-| `NV_D3D9=real`, `wgpu` or `real,wgpu` | The game's own window, drawn by the real Direct3D 9 (`real`), by wgpu alone (`wgpu`, `crates/d3d9-wgpu`: for testing; checked from the main menu into Doc Mitchell's house, the race menu, the Pip-Boy and out onto the Goodsprings street with the game at 4x antialiasing; at 8x antialiasing it runs, its pictures not yet compared), or by the real one with wgpu drawing every frame off screen beside it (`real,wgpu`, for comparison: with `NV_SHOT` both are captured, numbered alike, wgpu's as `wgpu-frame-*.bmp`) | nothing is shown |
 | `NV_SOUND=out` (or `device`) | The game's sound through DirectSound (`device` keeps the device's pace instead of the game's clock) | silent |
 | `NV_D3D9_ADAPTER=FILE` | The display adapter table | `%LOCALAPPDATA%\nv-rs\d3d9_adapter.tsv` |
 | `NV_DSOUND_TABLE=FILE` | The DirectSound devices and mixing table | none: the run stops and says how to capture it |
