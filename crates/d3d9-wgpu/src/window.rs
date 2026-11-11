@@ -93,6 +93,18 @@ impl Backoff {
     }
 }
 
+/// How many times the game's window was activated, its display changed or the machine woke
+/// ([`window_changed`]): a window resting after it gave no frame is asked at once after one.
+static CHANGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The game's window was activated (Alt+Tab back, a click, the screen unlocked), its display
+/// changed, or the machine woke from sleep (the window layer calls it from its window
+/// procedure): a window resting after it gave no frame is asked for one at once, not at the end
+/// of its rest (up to [`RETRY_MOST`] away, and then wgpu's wait for a frame).
+pub fn window_changed() {
+    CHANGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// The game's window and its swap chain.
 pub(crate) struct Window {
     /// The window (an `HWND`).
@@ -118,6 +130,13 @@ pub(crate) struct Window {
     /// for, on every frame.
     suboptimal_at: Option<(u32, u32)>,
     rest: Backoff,
+    /// The [`CHANGED`] count last seen.
+    seen_changes: u64,
+    /// While frames are not shown, the time between them is at least `refresh` (the display's
+    /// refresh interval) and `paced` the last one: a minimised window does not run the game as
+    /// fast as the machine can, for nothing on screen.
+    refresh: Duration,
+    paced: Option<Instant>,
     /// Frames asked for; those not shown since the last one shown, and why the last was not.
     asked: u64,
     skipped: u64,
@@ -204,6 +223,9 @@ impl Window {
             stale: true,
             suboptimal_at: None,
             rest: Backoff::new(),
+            seen_changes: CHANGED.load(std::sync::atomic::Ordering::Relaxed),
+            refresh: refresh_interval(),
+            paced: None,
             asked: 0,
             skipped: 0,
             last_why: None,
@@ -312,6 +334,7 @@ impl Window {
         match self.take(device) {
             Ok(t) => {
                 self.rest.shown();
+                self.paced = None;
                 if self.skipped > 0 {
                     eprintln!(
                         "NV_D3D9 wgpu: frames shown again in the window ({} not shown; the last because {})",
@@ -332,12 +355,32 @@ impl Window {
                 }
                 self.skipped += 1;
                 self.last_why = Some(why);
+                self.pace();
                 None
             }
         }
     }
 
+    /// A frame not shown: the game is held until a display refresh has passed since the last one,
+    /// as a shown frame waits for the display.
+    fn pace(&mut self) {
+        let now = Instant::now();
+        if let Some(last) = self.paced {
+            let since = now.saturating_duration_since(last);
+            if since < self.refresh {
+                std::thread::sleep(self.refresh - since);
+            }
+        }
+        self.paced = Some(Instant::now());
+    }
+
     fn take(&mut self, device: &wgpu::Device) -> Result<wgpu::SurfaceTexture, NoFrame> {
+        // Activated, the display changed or the machine woke: asked at once, rest or not.
+        let changes = CHANGED.load(std::sync::atomic::Ordering::Relaxed);
+        if changes != self.seen_changes {
+            self.seen_changes = changes;
+            self.rest.shown();
+        }
         if self.rest.resting(Instant::now()) {
             return Err(NoFrame::Resting);
         }
@@ -466,6 +509,28 @@ pub(crate) fn client_size(_hwnd: isize) -> Option<(u32, u32)> {
     None
 }
 
+/// The primary display's refresh interval (the borderless window covers it), 60 a second where
+/// the display does not say.
+#[cfg(windows)]
+fn refresh_interval() -> Duration {
+    // A DEVMODEW (220 bytes) as 16-bit words: dmSize at byte 68, dmDisplayFrequency at 184.
+    let mut mode = [0u16; 110];
+    mode[34] = 220;
+    // SAFETY: `mode` is a DEVMODEW-sized buffer with its dmSize set, as the call requires.
+    let read =
+        unsafe { EnumDisplaySettingsW(std::ptr::null(), ENUM_CURRENT_SETTINGS, mode.as_mut_ptr()) }
+            != 0;
+    let hz = u32::from(mode[92]) | u32::from(mode[93]) << 16;
+    // 0 and 1 mean the display's default rate, which it does not name.
+    let hz = if read && hz > 1 { hz } else { 60 };
+    Duration::from_secs_f64(1.0 / f64::from(hz))
+}
+
+#[cfg(not(windows))]
+fn refresh_interval() -> Duration {
+    Duration::from_secs_f64(1.0 / 60.0)
+}
+
 /// Whether the window, or the top-level window it is in, is minimised.
 #[cfg(windows)]
 fn minimised(hwnd: isize) -> bool {
@@ -496,9 +561,11 @@ fn take_dpi_awareness(hwnd: isize) {
 #[cfg(not(windows))]
 fn take_dpi_awareness(_hwnd: isize) {}
 
-/// `GA_ROOT`.
+/// `GA_ROOT`, `ENUM_CURRENT_SETTINGS`.
 #[cfg(windows)]
 const GA_ROOT: u32 = 2;
+#[cfg(windows)]
+const ENUM_CURRENT_SETTINGS: u32 = 0xFFFF_FFFF;
 
 #[cfg(windows)]
 #[link(name = "user32")]
@@ -508,6 +575,7 @@ extern "system" {
     fn IsIconic(hwnd: isize) -> i32;
     fn GetWindowDpiAwarenessContext(hwnd: isize) -> isize;
     fn SetThreadDpiAwarenessContext(context: isize) -> isize;
+    fn EnumDisplaySettingsW(device: *const u16, mode: u32, devmode: *mut u16) -> i32;
 }
 
 #[cfg(test)]

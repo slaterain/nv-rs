@@ -35,6 +35,7 @@ pub fn save_pipeline_caches() {
 pub use answers::{Answer, QueryAnswers};
 use d3d9_stream::{Backend, Cmd, Data, Handle, Reply};
 pub use device::{hardware_adapter, Output};
+pub use window::window_changed;
 
 /// The Direct3D 9 calls carried out on wgpu.
 pub struct WgpuBackend {
