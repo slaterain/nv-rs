@@ -355,7 +355,7 @@ const SHIPPED_LIST: &str = include_str!("../data/pipelines.txt");
 
 impl Listed {
     fn load(dir: &std::path::Path) -> Listed {
-        cache::remove_stale_temporaries(dir);
+        cache::remove_stale_temporaries(dir, &["pipelines"]);
         let file = dir.join("pipelines.txt");
         let mut list = prepare::List::default();
         let (shipped, s1) = list.merge(SHIPPED_LIST);

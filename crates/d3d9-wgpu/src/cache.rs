@@ -91,23 +91,41 @@ pub(crate) fn write_replacing(path: &Path, bytes: &[u8]) -> std::io::Result<()> 
 }
 
 /// Removes the temporaries of writes that never finished (a process killed while writing), older
-/// than ten minutes: another instance's write in progress is younger.
-pub(crate) fn remove_stale_temporaries(dir: &Path) {
+/// than ten minutes (another instance's write in progress is younger), of the files named `stems`
+/// only: [`write_replacing`]'s own names, `STEM.PID-N.tmp`. The folder may be shared
+/// (`NV_WGPU_CACHE` can name any folder), so another program's temporaries are left alone.
+pub(crate) fn remove_stale_temporaries(dir: &Path, stems: &[&str]) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for e in entries.flatten() {
-        let p = e.path();
+        let ours = e
+            .file_name()
+            .to_str()
+            .is_some_and(|name| own_temporary(name, stems));
         let old = e
             .metadata()
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| t.elapsed().ok())
             .is_some_and(|age| age.as_secs() > 600);
-        if old && p.extension().is_some_and(|x| x == "tmp") {
-            let _ = std::fs::remove_file(&p);
+        if ours && old {
+            let _ = std::fs::remove_file(e.path());
         }
     }
+}
+
+/// Whether `name` is a temporary [`write_replacing`] makes for a file whose name without its
+/// extension is one of `stems`: `STEM.PID-N.tmp`, the process id and the writer's count in digits.
+fn own_temporary(name: &str, stems: &[&str]) -> bool {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let Some((stem, id)) = name.strip_suffix(".tmp").and_then(|r| r.rsplit_once('.')) else {
+        return false;
+    };
+    let Some((pid, n)) = id.split_once('-') else {
+        return false;
+    };
+    stems.contains(&stem) && digits(pid) && digits(n)
 }
 
 /// What writes the cache's file: shared by the device and the writer threads, and found by
@@ -214,7 +232,7 @@ impl PipelineCacheFile {
             );
             return None;
         }
-        remove_stale_temporaries(dir);
+        remove_stale_temporaries(dir, &[name.as_str()]);
         let path = dir.join(format!("{name}.bin"));
         let file = match std::fs::metadata(&path) {
             Ok(m) if m.len() > MAX_FILE => Err(format!("{} MB, too large", m.len() >> 20)),
@@ -381,6 +399,49 @@ mod tests {
             vec!["c.bin".to_string(), "d.bin".to_string()],
             "{left:?}"
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Only this port's own stale temporaries go: an old `STEM.PID-N.tmp` of a named stem. Another
+    /// program's `.tmp` in a shared folder stays, so do a young one of ours (a write in progress)
+    /// and the files themselves.
+    #[test]
+    fn only_our_own_stale_temporaries_are_removed() {
+        let exe = std::env::current_exe().unwrap();
+        let dir = exe
+            .parent()
+            .unwrap()
+            .join(format!("d3d9-wgpu-temps-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(1200);
+        let names = [
+            ("pipelines.4242-0.tmp", true, false),
+            (
+                "wgpu_pipeline_cache_vulkan_4318_10137.77-3.tmp",
+                true,
+                false,
+            ),
+            ("pipelines.4242-1.tmp", false, true),
+            ("foreign.tmp", true, true),
+            ("other.4242-0.tmp", true, true),
+            ("pipelines.tmp", true, true),
+            ("pipelines.4242.tmp", true, true),
+            ("pipelines.x-0.tmp", true, true),
+            ("pipelines.txt", true, true),
+        ];
+        for (name, aged, _) in names {
+            let f = std::fs::File::create(dir.join(name)).unwrap();
+            if aged {
+                f.set_modified(old).unwrap();
+            }
+        }
+        remove_stale_temporaries(
+            &dir,
+            &["pipelines", "wgpu_pipeline_cache_vulkan_4318_10137"],
+        );
+        for (name, _, stays) in names {
+            assert_eq!(dir.join(name).exists(), stays, "{name}");
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
