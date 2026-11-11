@@ -288,6 +288,9 @@ pub struct Graphics {
     pub(crate) d3dx_texture_mode: Option<super::d3dx::TextureMode>,
     /// The kinds of what the translation leaves to the DLL or the cache, already printed.
     pub(crate) d3dx_not_translated: Vec<super::d3dx::NotTranslated>,
+    /// The formats the game's device takes for d3dx-tex (`super::d3dx::device_caps`), asked once:
+    /// the device and its lists.
+    pub(crate) d3dx_caps: Option<(u32, d3dx_tex::Caps)>,
     /// The shader compiler's buffers and constant tables (`super::d3dxreal`).
     #[cfg(windows)]
     pub(crate) d3dx: super::d3dxreal::Objects,
@@ -327,6 +330,28 @@ fn adapter(e: &mut Engine) -> &Adapter {
         Some(a) => a,
         None => panic!("the Direct3D 9 adapter table is not loaded: {CAPTURE_HINT}"),
     }
+}
+
+/// What the layer's `CheckDeviceFormat` answers for `words` (adapter, device type, adapter
+/// format, usage, resource type, format), for a kernel-locked caller that asks about more formats
+/// than the game does (`super::d3dx`'s texture format lists): the captured answer as
+/// [`check_device_format`] gives it, `None` where the table has none (that call stops there) or no
+/// table is loaded.
+pub(crate) fn captured_format_check(e: &mut Engine, words: &[u32; 6]) -> Option<u32> {
+    if words[0] != 0 {
+        return Some(D3DERR_INVALIDCALL);
+    }
+    let answer = state!(e)
+        .graphics
+        .adapter
+        .as_deref()?
+        .check("CheckDeviceFormat", words)?;
+    Some(u32::from_str_radix(answer, 16).expect("a hex result"))
+}
+
+/// Whether the player's adapter table is loaded (a run of the game; not unit tests' doubles).
+pub(crate) fn has_adapter_table(e: &mut Engine) -> bool {
+    state!(e).graphics.adapter.is_some()
 }
 
 /// [`adapter`] for a function of `DEVICE_CALLS` (the device's own copy).
