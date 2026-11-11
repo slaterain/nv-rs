@@ -79,6 +79,7 @@ fn write_all(e: &Engine, at: &CensusAt, frame: u64) -> std::io::Result<()> {
     if let Some(moved) = e.moved() {
         heap.push_str(&moved_tsv(moved));
     }
+    heap.push_str(&reservations_tsv(&e.mem, &e.kernel.regions));
     std::fs::write(at.folder.join(format!("heap-{frame}.tsv")), heap)?;
     if e.mem.touch_on() {
         std::fs::write(
@@ -178,6 +179,87 @@ pub fn heap_tsv(mem: &Mem, frame: u64) -> String {
             r.function, r.caller, r.vtable, r.class, r.blocks, r.bytes, r.held
         );
     }
+    out
+}
+
+/// The `VirtualAlloc` reservations (`units::platform`'s regions), after the heap's table: one
+/// comment line each with its bytes reserved and committed and, for one the system placed (address
+/// 0, a heap block of its whole size and 64 KiB more), the function that made the block and its
+/// caller, as the table above names them; then the totals. Such a block counts whole in the table,
+/// committed or not: these lines tell the address space reserved from the bytes in use.
+pub fn reservations_tsv(
+    mem: &Mem,
+    regions: &std::collections::BTreeMap<u32, crate::units::platform::Region>,
+) -> String {
+    let blocks: std::collections::HashSet<u32> = regions.values().map(|r| r.block()).collect();
+    let mut owners: HashMap<u32, (u32, u32)> = HashMap::new();
+    mem.for_each_census_block(
+        |CensusBlock {
+             addr,
+             running,
+             path,
+             ..
+         }| {
+            if blocks.contains(&addr) {
+                let owner = if path.is_empty() {
+                    (running, 0)
+                } else {
+                    let f = allocating_function(path);
+                    let at = path.iter().position(|&p| p == f).unwrap_or(0);
+                    (f, path.get(at + 1).copied().unwrap_or(0))
+                };
+                owners.insert(addr, owner);
+            }
+        },
+    );
+    let mut out = String::new();
+    let (mut reserved, mut committed, mut from_heap, mut in_gap) = (0u64, 0u64, 0usize, 0usize);
+    for (base, r) in regions {
+        reserved += u64::from(r.size());
+        committed += u64::from(r.committed_bytes());
+        let by = if r.in_gap() {
+            in_gap += 1;
+            "placed in the gap below the heap".to_string()
+        } else if r.block() == 0 {
+            "at an address the caller chose".to_string()
+        } else {
+            from_heap += 1;
+            let (function, caller) = owners.get(&r.block()).copied().unwrap_or((0, 0));
+            format!(
+                "heap block {:08x} made by {function:08x} from {caller:08x}",
+                r.block()
+            )
+        };
+        let _ = writeln!(
+            out,
+            "# reservation {base:08x}: {} bytes reserved, {} committed; {by}",
+            r.size(),
+            r.committed_bytes()
+        );
+    }
+    let _ = writeln!(
+        out,
+        "# reservations: {} ({from_heap} of them from the heap, {in_gap} in the gap below it), \
+         {reserved} bytes reserved, {committed} committed",
+        regions.len()
+    );
+    // Nothing else of the port belongs in the gap: a page mapped there outside every reservation
+    // is counted (0 wanted).
+    let gap = crate::units::platform::RESERVE_GAP;
+    let stray = (gap.start..gap.end)
+        .step_by(0x1000)
+        .filter(|&p| mem.is_mapped(p))
+        .filter(|&p| {
+            regions.range(..=p).next_back().map_or(true, |(&b, r)| {
+                u64::from(p) >= u64::from(b) + u64::from(r.size())
+            })
+        })
+        .count();
+    let _ = writeln!(
+        out,
+        "# the gap below the heap ({:08x}..{:08x}): {stray} pages mapped outside a reservation",
+        gap.start, gap.end
+    );
     out
 }
 
@@ -316,6 +398,43 @@ mod tests {
         mem.set_u32(col, 0);
         mem.set_u32(col + 12, td);
         mem.set_cstr(td + 8, name.as_bytes());
+    }
+
+    #[test]
+    fn reservations_tell_reserved_from_committed() {
+        // VirtualAlloc by its import slot: an 8 MiB reservation the system places, 64 KiB of it
+        // committed, as a scrap heap starts.
+        const VIRTUAL_ALLOC: u32 = 0x00fd_f114;
+        let mut e = Engine::new();
+        let import = crate::exe::Import {
+            slot: VIRTUAL_ALLOC,
+            dll: "KERNEL32.dll".into(),
+            name: "VirtualAlloc".into(),
+        };
+        assert_eq!(e.register_imports(&[import]), 1);
+        // One in the gap below the heap (the default), one a heap block (as with the gap off).
+        let mut lines = String::new();
+        for (gap, by) in [
+            (true, "placed in the gap below the heap"),
+            (false, "heap block"),
+        ] {
+            e.kernel.reserve_gap = Some(gap);
+            let base = e.call(VIRTUAL_ALLOC, &[0, 8 << 20, 0x2000, 4]).u32();
+            assert_ne!(base, 0);
+            let committed = e.call(VIRTUAL_ALLOC, &[base, 0x1_0000, 0x1000, 4]).u32();
+            assert_eq!(committed, base);
+            lines = reservations_tsv(&e.mem, &e.kernel.regions);
+            let line =
+                format!("# reservation {base:08x}: 8388608 bytes reserved, 65536 committed; {by}");
+            assert!(lines.contains(&line), "{lines}");
+        }
+        let totals = "# reservations: 2 (1 of them from the heap, 1 in the gap below it), \
+                      16777216 bytes reserved, 131072 committed\n";
+        assert!(lines.contains(totals), "{lines}");
+        assert!(
+            lines.ends_with(": 0 pages mapped outside a reservation\n"),
+            "{lines}"
+        );
     }
 
     #[test]
