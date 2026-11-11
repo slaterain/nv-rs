@@ -19,7 +19,7 @@ use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 use layout::{
     HashListNode, Holder, InterfaceManager, LockFreeMap, LockFreeMapIterator, LockFreeQueue,
-    MapInterface,
+    MapInterface, NodeSlot,
 };
 
 pub mod holder;
@@ -27,6 +27,7 @@ pub mod iface;
 pub mod layout;
 pub mod manager;
 pub mod map;
+pub mod node;
 pub mod queue;
 
 /// The memory-context scope the family's allocating functions run in (`thiscall(scope, context,
@@ -251,5 +252,101 @@ fn funcs() -> Vec<(u32, AbiFn)> {
             0x006c_73b0,
             manager::construct(Ptr<InterfaceManager>, u32) -> Ptr
         ),
+        // Stage-1 additions for stage 2 (the untyped readers and writers of the maps' body).
+        entry!(
+            0x0044_d510,
+            iface::find_in_bucket(Ptr<MapInterface>, u32, u32, Ptr<Holder>) -> u8
+        ),
+        entry!(
+            0x006e_c9b0,
+            iface::find_word_in_bucket(Ptr<MapInterface>, u32, u32, Ptr<u32>) -> u8
+        ),
+        entry!(
+            0x006e_c830,
+            iface::lookup_word(Ptr<MapInterface>, u32, Ptr<u32>) -> u8
+        ),
+        entry!(
+            0x0044_a130,
+            iface::insert_word(Ptr<MapInterface>, u32, Ptr<u32>, u8) -> u8
+        ),
+        entry!(
+            0x0066_5f20,
+            iface::remove_string_map(Ptr<MapInterface>, u32) -> bool
+        ),
+        entry!(
+            0x0066_6510,
+            iface::retire_other(Ptr<MapInterface>, Ptr<HashListNode>)
+        ),
+        entry!(
+            0x0044_d3f0,
+            iface::remove_value_in_bucket(Ptr<MapInterface>, u32, Ptr<u32>) -> bool
+        ),
+        entry!(
+            0x0044_df40,
+            node::construct(Ptr<HashListNode>, u32, Ptr<Holder>) -> Ptr
+        ),
+        entry!(
+            0x006e_cbd0,
+            node::construct_word(Ptr<HashListNode>, u32, Ptr<u32>) -> Ptr
+        ),
+        entry!(0x0044_dd40, node::destroy(Ptr<HashListNode>)),
+        entry!(0x0044_ed50, node::delete(Ptr<HashListNode>, u32) -> Ptr),
+        entry!(
+            0x0044_dde0,
+            node::delete_plain(Ptr<LockFreeMap>, Ptr<HashListNode>)
+        ),
+        entry!(
+            0x0044_edd0,
+            node::delete_counted(Ptr<LockFreeMap>, Ptr<HashListNode>)
+        ),
+        entry!(
+            0x0044_d000,
+            iface::construct(
+                Ptr<MapInterface>,
+                Ptr<LockFreeMap>,
+                Ptr<NodeSlot>,
+                Ptr<NodeSlot>,
+                Ptr<NodeSlot>,
+            ) -> Ptr
+        ),
+        entry!(0x0090_6400, iface::allocate(Ptr<LockFreeMap>, u32) -> Ptr),
+        entry!(
+            0x0066_5e30,
+            iface::allocate_tree(Ptr<LockFreeMap>, u32) -> Ptr
+        ),
+        entry!(0x0044_f200, iface::flush(Ptr<MapInterface>)),
+        entry!(0x0044_ed80, iface::delete(Ptr<MapInterface>, u32) -> Ptr),
+        entry!(0x0066_65c0, manager::destroy(Ptr<InterfaceManager>)),
+        entry!(
+            0x0066_6570,
+            manager::delete(Ptr<InterfaceManager>, u32) -> Ptr
+        ),
+        entry!(
+            0x0090_6af0,
+            iface::first_in_bucket_copy(Ptr<MapInterface>, u32, Ptr<u32>, Ptr<Holder>) -> bool
+        ),
+        entry!(
+            0x0090_6c10,
+            iface::next_in_bucket_copy(Ptr<MapInterface>, u32, Ptr<u32>, Ptr<Holder>) -> bool
+        ),
+        entry!(
+            0x0090_6820,
+            iface::find_counted_value(Ptr<MapInterface>, u32, Ptr<Holder>) -> bool
+        ),
+        entry!(
+            0x0090_66d0,
+            iface::remove_counted_value_in_bucket(Ptr<MapInterface>, u32, Ptr<Holder>) -> bool
+        ),
+        entry!(0x0044_f420, iface::flush_counted(Ptr<MapInterface>)),
+        entry!(
+            0x0052_93c0,
+            iface::delete_counted(Ptr<MapInterface>, u32) -> Ptr
+        ),
+        entry!(0x0052_9330, manager::destroy_counted(Ptr<InterfaceManager>)),
+        entry!(
+            0x0052_9300,
+            manager::delete_counted(Ptr<InterfaceManager>, u32) -> Ptr
+        ),
+        entry!(0x0052_8e40, map::clear_counted(Ptr<LockFreeMap>, u8)),
     ]
 }

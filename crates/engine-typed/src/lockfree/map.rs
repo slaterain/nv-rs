@@ -7,8 +7,8 @@ use super::layout::{
     MapInterface, MapLock, Marked, NodeSlot,
 };
 use super::{
-    field_ptr, iface, manager, FAMILY, OPERATOR_DELETE, OPERATOR_NEW, SCOPE_BEGIN, SCOPE_CONTEXT,
-    SCOPE_END, SCOPE_MODE, SOURCE_FILE,
+    field_ptr, iface, manager, node, FAMILY, OPERATOR_DELETE, OPERATOR_NEW, SCOPE_BEGIN,
+    SCOPE_CONTEXT, SCOPE_END, SCOPE_MODE, SOURCE_FILE,
 };
 use engine_core::ptr::{Field, Layout, Ptr};
 use engine_core::{args, typed_call, Engine};
@@ -138,14 +138,10 @@ pub fn iterate_words(
     found
 }
 
-/// The lip-task map's first and next node of a bucket (`thiscall(bucket, last key, value out)`,
-/// bool): its own copies of `0044ea60` and `0044eb80`.
-const LIP_TASK_FIRST: u32 = 0x0090_6af0;
-const LIP_TASK_NEXT: u32 = 0x0090_6c10;
-
 // Typed from 00906570
 /// [`iterate_words`]'s copy for `LockFreeMap<MobileObject*, NiPointer<LipTask>>`: the same body,
-/// the first node through `00906af0` and the next through `00906c10`.
+/// the first node through `00906af0` and the next through `00906c10` (the map's own copies of
+/// `0044e550` and `0044e680`: the value is assigned to the holder `value_out`).
 pub fn iterate_lip_task_map(
     e: &mut Engine,
     this: Ptr<LockFreeMap>,
@@ -162,12 +158,18 @@ pub fn iterate_lip_task_map(
         key_out,
         keep_going,
         |e, face, bucket, last_key| {
-            e.call(LIP_TASK_FIRST, &args![face, bucket, last_key, value_out])
-                .bool()
+            typed_call!(
+                FAMILY,
+                0x0090_6af0,
+                iface::first_in_bucket_copy(e, face, bucket, last_key, value_out.cast())
+            )
         },
         |e, face, bucket, last_key| {
-            e.call(LIP_TASK_NEXT, &args![face, bucket, last_key, value_out])
-                .bool()
+            typed_call!(
+                FAMILY,
+                0x0090_6c10,
+                iface::next_in_bucket_copy(e, face, bucket, last_key, value_out.cast())
+            )
         },
     );
     e.call(LOCK_LEAVE, &args![lock(this)]);
@@ -233,26 +235,23 @@ pub fn find(e: &mut Engine, this: Ptr<LockFreeMap>, key: u32, value_out: Ptr<Hol
     found
 }
 
-/// The interface's lookup for maps of plain values (`thiscall(key, value out)`, the found byte).
-const FIND_WORD: u32 = 0x006e_c830;
-
 // Typed from 00449530
 /// [`find`]'s copy, the virtual lookup of the maps of plain values (their slot +8): the same body,
 /// the interface finding the key with `006ec830`.
 pub fn find_word(e: &mut Engine, this: Ptr<LockFreeMap>, key: u32, value_out: Ptr<u32>) -> u8 {
     e.call(LOCK_ENTER, &args![lock(this), 0u32]);
     let face = interface(e, this);
-    let found = e.call(FIND_WORD, &args![face, key, value_out]).u8();
+    let found: u8 = typed_call!(
+        FAMILY,
+        0x006e_c830,
+        iface::lookup_word(e, face, key, value_out)
+    );
     e.call(LOCK_LEAVE, &args![lock(this)]);
     found
 }
 
 /// The line `0044c480` names in its scope.
 const CLEAR_LINE: u32 = 0x42c;
-/// The interface manager's scalar deleting destructor (`thiscall(manager, flags)`).
-const MANAGER_DELETE: u32 = 0x0066_6570;
-/// The map's deletion of a node (`thiscall(map, node)`).
-const DELETE_NODE: u32 = 0x0044_dde0;
 
 // Typed from 0044c480
 /// Empties the map (`thiscall(keep none)`), in a memory-context scope; a map with no interface
@@ -276,7 +275,8 @@ pub fn clear(e: &mut Engine, this: Ptr<LockFreeMap>, keep_none: u8) {
         let threads = e.get(manager, InterfaceManager::max_threads);
         let manager = e.get(this, LockFreeMap::pInterfaceManager);
         if !manager.is_null() {
-            e.call(MANAGER_DELETE, &args![manager, 1u32]);
+            let _: Ptr<InterfaceManager> =
+                typed_call!(FAMILY, 0x0066_6570, manager::delete(e, manager, 1));
         }
         e.set(this, LockFreeMap::pInterfaceManager, Ptr::NULL);
         e.set(this, LockFreeMap::iCount, 0);
@@ -292,7 +292,7 @@ pub fn clear(e: &mut Engine, this: Ptr<LockFreeMap>, keep_none: u8) {
                 let next = e.get(node, HashListNode::next).node();
                 e.set(node, HashListNode::next, Marked(0));
                 e.set(node, HashListNode::value, 0);
-                e.call(DELETE_NODE, &args![this, node]);
+                typed_call!(FAMILY, 0x0044_dde0, node::delete_plain(e, this, node));
                 node = next;
             }
             i = i.wrapping_add(1);
@@ -572,15 +572,15 @@ pub fn destroy(e: &mut Engine, this: Ptr<LockFreeMap>) {
 }
 
 /// [`destroy`]'s body, which every map destructor shares with its own vtable; `CLEAR` empties the
-/// map: `0044c480` (typed here) for maps of plain values, `00528e40` (by address) for maps of
-/// counted values.
+/// map: `0044c480` ([`clear`]) for maps of plain values, `00528e40` ([`clear_counted`]) for maps
+/// of counted values.
 #[inline(always)]
 fn destroy_map<const CLEAR: u32>(e: &mut Engine, this: Ptr<LockFreeMap>, vtable: u32) {
     e.set(this, LockFreeMap::vtable, vtable);
     if CLEAR == 0x0044_c480 {
         typed_call!(FAMILY, 0x0044_c480, clear(e, this, 1));
     } else {
-        e.call(CLEAR, &args![this, 1u8]);
+        typed_call!(FAMILY, 0x0052_8e40, clear_counted(e, this, 1));
     }
     let buckets = e.get(this, LockFreeMap::pBuckets);
     e.call(OPERATOR_DELETE, &args![buckets]);
@@ -667,4 +667,63 @@ pub fn destroy_cell_task_map(e: &mut Engine, this: Ptr<LockFreeMap>) {
 /// the vtable `0108864c`, emptied by `00528e40`.
 pub fn destroy_lip_task_map(e: &mut Engine, this: Ptr<LockFreeMap>) {
     destroy_map::<0x0052_8e40>(e, this, 0x0108_864c);
+}
+
+/// `NiPointer<T>::operator=` from an object (`thiscall(holder, object)`; one body for every `T`).
+const HOLDER_SET: u32 = 0x006f_74f0;
+
+// Typed from 00528e40
+/// [`clear`] for the maps of counted values: the same steps, the interface manager deleted with
+/// `00529300`, each node's value released (`006f74f0` with null) and the node deleted with
+/// `0044edd0` (which first hands its key to the map's slot +0x28).
+pub fn clear_counted(e: &mut Engine, this: Ptr<LockFreeMap>, keep_none: u8) {
+    e.with_stack(4, |e, scope| {
+        e.call(
+            SCOPE_BEGIN,
+            &args![scope, SCOPE_CONTEXT, SCOPE_MODE, SOURCE_FILE, CLEAR_LINE],
+        );
+        if e.get(this, LockFreeMap::pInterfaceManager).is_null() {
+            e.call(SCOPE_END, &args![scope]);
+            return;
+        }
+        e.call(LOCK_ENTER, &args![lock(this), 0u32]);
+        let manager = e.get(this, LockFreeMap::pInterfaceManager);
+        let threads = e.get(manager, InterfaceManager::max_threads);
+        let manager = e.get(this, LockFreeMap::pInterfaceManager);
+        if !manager.is_null() {
+            let _: Ptr<InterfaceManager> =
+                typed_call!(FAMILY, 0x0052_9300, manager::delete_counted(e, manager, 1));
+        }
+        e.set(this, LockFreeMap::pInterfaceManager, Ptr::NULL);
+        e.set(this, LockFreeMap::iCount, 0);
+        let mut i = 0u32;
+        while i < e.get(this, LockFreeMap::iNumBuckets) {
+            let buckets = e.get(this, LockFreeMap::pBuckets);
+            let mut node = e
+                .get(LockFreeMap::bucket(buckets, i), BucketHead::head)
+                .node();
+            let buckets = e.get(this, LockFreeMap::pBuckets);
+            e.set(LockFreeMap::bucket(buckets, i), BucketHead::head, Marked(0));
+            while !node.is_null() {
+                let next = e.get(node, HashListNode::next).node();
+                e.set(node, HashListNode::next, Marked(0));
+                e.call(HOLDER_SET, &args![HashListNode::value_holder(node), 0u32]);
+                typed_call!(FAMILY, 0x0044_edd0, node::delete_counted(e, this, node));
+                node = next;
+            }
+            i = i.wrapping_add(1);
+        }
+        if keep_none == 0 {
+            let block: Ptr<InterfaceManager> =
+                Ptr::new(e.call(OPERATOR_NEW, &args![InterfaceManager::SIZE]).u32());
+            let made = if block.is_null() {
+                Ptr::NULL
+            } else {
+                typed_call!(FAMILY, 0x006c_73b0, manager::construct(e, block, threads))
+            };
+            e.set(this, LockFreeMap::pInterfaceManager, made);
+        }
+        e.call(LOCK_LEAVE, &args![lock(this)]);
+        e.call(SCOPE_END, &args![scope]);
+    });
 }

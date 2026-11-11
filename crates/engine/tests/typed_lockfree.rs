@@ -11,7 +11,7 @@
 use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Diff, Input};
-use engine_typed::lockfree::{self, holder, iface, manager, map, queue};
+use engine_typed::lockfree::{self, holder, iface, manager, map, node, queue};
 
 /// Where the test's map functions are registered: past `.text`, one per vtable slot.
 const VT_FN: u32 = 0x00ff_1000;
@@ -263,6 +263,9 @@ impl Cases for Diff {
             .family(&leaf::LEAVES)
             .ignore_calls(INLINED)
             .max_calls(MAX_CALLS)
+            // The translations empty the map through functions that call the manager's and the
+            // interfaces' destructor bodies as plain Rust calls.
+            .translation_calls_plainly(&[0x0066_65c0, 0x0052_9300, 0x0052_9330, 0x0052_93c0])
             .inputs(&[Input::Flag])
             .setup(|e, case| {
                 let w = world(e, true);
@@ -769,6 +772,8 @@ fn map_find_word() {
         map::find_word(Ptr<_>, u32, Ptr<_>) -> u8
     ))
     .map_find_case()
+    // The translation of the interface's lookup (`006ec830`) calls the bucket find plainly.
+    .translation_calls_plainly(&[0x006e_c9b0])
     .run()
     .assert_same();
 }
@@ -863,6 +868,8 @@ fn clear() {
         .family(&leaf::LEAVES)
         .ignore_calls(INLINED)
         .max_calls(MAX_CALLS)
+        // The manager's deleting destructor's translation calls its body as a plain Rust call.
+        .translation_calls_plainly(&[0x0066_65c0])
         .inputs(&[Input::Flag, Input::Flag])
         .setup(|e, case| {
             let w = world(e, true);
@@ -1209,6 +1216,713 @@ fn interface_of() {
         .setup(|e, case| {
             let w = world(e, case.word(0) != 0);
             vec![w.map]
+        })
+        .run()
+        .assert_same();
+}
+
+// Stage-1 additions for stage 2: the untyped readers and writers of the maps' body (the moved
+// form needs every access to the body typed).
+
+#[test]
+fn find_in_bucket() {
+    // Each bucket and key (found, not there, deleted meanwhile); the holder empty or holding
+    // another object.
+    Diff::new(entry!(
+        0x0044_d510,
+        iface::find_in_bucket(Ptr<_>, u32, u32, Ptr<_>) -> u8
+    ))
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(KEYS), Input::Flag])
+    .setup(|e, case| {
+        let w = world(e, true);
+        let held = if case.word(2) != 0 { w.spare } else { 0 };
+        let value_out = holder_of(e, held);
+        vec![w.face, case.word(0), case.word(1), value_out]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn find_word_in_bucket() {
+    Diff::new(entry!(
+        0x006e_c9b0,
+        iface::find_word_in_bucket(Ptr<_>, u32, u32, Ptr<_>) -> u8
+    ))
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(KEYS)])
+    .setup(|e, case| {
+        let w = world(e, true);
+        let value_out = e.mem.alloc(4);
+        e.mem.set_u32(value_out, 0x5a5a_5a5a);
+        vec![w.face, case.word(0), case.word(1), value_out]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn lookup_word() {
+    Diff::new(entry!(
+        0x006e_c830,
+        iface::lookup_word(Ptr<_>, u32, Ptr<_>) -> u8
+    ))
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    // Its translation calls the bucket find as a plain Rust call.
+    .translation_calls_plainly(&[0x006e_c9b0])
+    .inputs(&[Input::Of(KEYS)])
+    .setup(|e, case| {
+        let w = world(e, true);
+        let value_out = e.mem.alloc(4);
+        e.mem.set_u32(value_out, 0x5a5a_5a5a);
+        vec![w.face, case.word(0), value_out]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn insert_word() {
+    // Every key (new, present, deleted), replacing or not.
+    Diff::new(entry!(
+        0x0044_a130,
+        iface::insert_word(Ptr<_>, u32, Ptr<_>, u8) -> u8
+    ))
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .local_at(0x0040_4eb0, 0, 4)
+    .local_at(0x0040_4ee0, 0, 4)
+    .inputs(&[Input::Of(KEYS), Input::Flag])
+    .setup(|e, case| {
+        let w = world(e, true);
+        let word = e.mem.alloc(4);
+        e.mem.set_u32(word, 0x1234_5678);
+        vec![w.face, case.word(0), word, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn remove_string_map() {
+    // Every key; the waiting list well below or one short of a full batch.
+    Diff::new(entry!(
+        0x0066_5f20,
+        iface::remove_string_map(Ptr<_>, u32) -> bool
+    ))
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .inputs(&[Input::Of(KEYS), Input::Flag])
+    .setup(|e, case| {
+        let w = world(e, true);
+        if case.word(1) != 0 {
+            e.mem.set_u32(w.face + 0x20, 99);
+        }
+        vec![w.face, case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn retire_other() {
+    // The waiting list empty or not; the count well below, one short of, or past the batch.
+    Diff::new(entry!(0x0066_6510, iface::retire_other(Ptr<_>, Ptr<_>)))
+        .family(&lockfree::LOCKFREE)
+        .family(&leaf::LEAVES)
+        .ignore_calls(INLINED)
+        .max_calls(MAX_CALLS)
+        .inputs(&[Input::Flag, Input::Of(&[0, 99, 100])])
+        .setup(|e, case| {
+            let w = world(e, true);
+            // The deleted node of bucket 3, unlinked.
+            let seven = e.mem.u32(w.buckets + 12);
+            let eleven = e.mem.u32(seven + 8) & !1;
+            e.mem.set_u32(w.buckets + 12, eleven);
+            if case.word(0) != 0 {
+                let earlier = node(e, 30, 1);
+                e.mem.set_u32(earlier + 4, 0);
+                e.mem.set_u32(w.face + 0x1c, earlier);
+            }
+            e.mem.set_u32(w.face + 0x20, case.word(1));
+            vec![w.face, seven]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn remove_value_in_bucket() {
+    // Each bucket, against the value of each of its nodes, a value nobody holds, and 0; the
+    // waiting list well below or one short of a full batch.
+    Diff::new(entry!(
+        0x0044_d3f0,
+        iface::remove_value_in_bucket(Ptr<_>, u32, Ptr<_>) -> bool
+    ))
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Flag,
+    ])
+    .setup(|e, case| {
+        let w = world(e, true);
+        if case.word(2) != 0 {
+            e.mem.set_u32(w.face + 0x20, 99);
+        }
+        let mut n = e.mem.u32(w.buckets + case.word(0) * 4) & !1;
+        for _ in 0..case.word(1) {
+            if n != 0 {
+                n = e.mem.u32(n + 8) & !1;
+            }
+        }
+        let wanted = match (n, case.word(1)) {
+            (0, 3) => 0,
+            (0, _) => w.spare,
+            (n, _) => e.mem.u32(n + 4),
+        };
+        let value = e.mem.alloc(4);
+        e.mem.set_u32(value, wanted);
+        vec![w.face, case.word(0), value]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A block of `size` bytes filled with a pattern, as an allocation hands out stale bytes.
+fn stale_block(e: &mut Engine, size: u32) -> u32 {
+    let b = e.mem.alloc(size);
+    for off in (0..size).step_by(4) {
+        e.mem.set_u32(b + off, 0x5a5a_0000 | off);
+    }
+    b
+}
+
+#[test]
+fn node_construct() {
+    // A counted value or none.
+    Diff::new(entry!(
+        0x0044_df40,
+        node::construct(Ptr<_>, u32, Ptr<_>) -> Ptr
+    ))
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .inputs(&[Input::Flag])
+    .setup(|e, case| {
+        let w = world(e, true);
+        let block = stale_block(e, 0xc);
+        let value = if case.word(0) != 0 { w.spare } else { 0 };
+        let holder = holder_of(e, value);
+        vec![block, 9, holder]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn node_construct_word() {
+    Diff::new(entry!(
+        0x006e_cbd0,
+        node::construct_word(Ptr<_>, u32, Ptr<_>) -> Ptr
+    ))
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .inputs(&[Input::Of(&[0, 0x1234_5678])])
+    .setup(|e, case| {
+        let _ = world(e, true);
+        let block = stale_block(e, 0xc);
+        let word = e.mem.alloc(4);
+        e.mem.set_u32(word, case.word(0));
+        vec![block, 9, word]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The settings the node, interface and manager tests share, as methods, so that each test is one
+/// `Diff::new(..)` chain from its address to `.run().assert_same()`.
+trait Kinds {
+    /// The family and its leaves, the helpers the typed versions do in place, the call cap.
+    fn node_case(self) -> Diff;
+    /// [`Kinds::node_case`] with the memory-context scope's local compared as a local.
+    fn manager_case(self) -> Diff;
+    /// The counted pointer local of the lip task map's finds: one local, whichever frame holds it.
+    fn counted_local(self) -> Diff;
+}
+
+impl Kinds for Diff {
+    fn node_case(self) -> Diff {
+        self.family(&lockfree::LOCKFREE)
+            .family(&leaf::LEAVES)
+            .ignore_calls(INLINED)
+            .max_calls(MAX_CALLS)
+    }
+
+    fn manager_case(self) -> Diff {
+        self.node_case()
+            .local_at(0x0040_4eb0, 0, 4)
+            .local_at(0x0040_4ee0, 0, 4)
+    }
+
+    fn counted_local(self) -> Diff {
+        self.local_at(0x0044_e370, 0, 4)
+            .local_at(0x0044_cbf0, 0, 4)
+            .local_at(0x004b_0460, 0, 4)
+    }
+}
+
+#[test]
+fn node_destroy() {
+    // A node holding a counted value (its count 3 or 1, so the release frees it or not), or none.
+    Diff::new(entry!(0x0044_dd40, node::destroy(Ptr<_>)))
+        .node_case()
+        .inputs(&[Input::Of(&[0, 1, 3])])
+        .setup(|e, case| {
+            let _ = world(e, true);
+            let n = node(e, 4, 0);
+            match case.word(0) {
+                0 => e.mem.set_u32(n + 4, 0),
+                count => {
+                    let value = e.mem.u32(n + 4);
+                    e.mem.set_u32(value + 8, count);
+                }
+            }
+            vec![n]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn node_delete() {
+    Diff::new(entry!(0x0044_ed50, node::delete(Ptr<_>, u32) -> Ptr))
+        .node_case()
+        .inputs(&[Input::Of(&[0, 1, 3])])
+        .setup(|e, case| {
+            let _ = world(e, true);
+            let n = node(e, 4, 0);
+            vec![n, case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn node_delete_plain() {
+    Diff::new(entry!(0x0044_dde0, node::delete_plain(Ptr<_>, Ptr<_>)))
+        .node_case()
+        .inputs(&[Input::Of(&[4, 9])])
+        .setup(|e, case| {
+            let w = world(e, true);
+            let n = node(e, case.word(0), 0);
+            vec![w.map, n]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn node_delete_counted() {
+    Diff::new(entry!(0x0044_edd0, node::delete_counted(Ptr<_>, Ptr<_>)))
+        .node_case()
+        .inputs(&[Input::Of(&[1, 3])])
+        .setup(|e, case| {
+            let w = world(e, true);
+            let n = node(e, 4, 0);
+            let value = e.mem.u32(n + 4);
+            e.mem.set_u32(value + 8, case.word(0));
+            vec![w.map, n]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn interface_construct() {
+    Diff::new(entry!(
+        0x0044_d000,
+        iface::construct(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr
+    ))
+    .node_case()
+    .inputs(&[Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        let w = world(e, true);
+        let block = stale_block(e, 0x24);
+        let slots = w.refs + 12 * case.word(0);
+        vec![block, w.map, slots, slots + 4, slots + 8]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn allocate_interface() {
+    // Thread 0 or 1's slots.
+    Diff::new(entry!(0x0090_6400, iface::allocate(Ptr<_>, u32) -> Ptr))
+        .node_case()
+        .local_at(0x0040_4eb0, 0, 4)
+        .local_at(0x0040_4ee0, 0, 4)
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            let w = world(e, true);
+            vec![w.map, case.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn allocate_interface_tree() {
+    Diff::new(entry!(
+        0x0066_5e30,
+        iface::allocate_tree(Ptr<_>, u32) -> Ptr
+    ))
+    .node_case()
+    .local_at(0x0040_4eb0, 0, 4)
+    .local_at(0x0040_4ee0, 0, 4)
+    .inputs(&[Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        let w = world(e, true);
+        vec![w.map, case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The interface with a waiting list of three nodes, none of them named by a node slot, or none.
+fn waiting(e: &mut Engine, w: &World, three: bool) {
+    if three {
+        let third = node(e, 40, 0);
+        let second = node(e, 41, 0);
+        let first = node(e, 42, 0);
+        e.mem.set_u32(first + 4, second);
+        e.mem.set_u32(second + 4, third);
+        e.mem.set_u32(third + 4, 0);
+        e.mem.set_u32(w.face + 0x1c, first);
+        e.mem.set_u32(w.face + 0x20, 3);
+    }
+}
+
+#[test]
+fn interface_flush() {
+    Diff::new(entry!(0x0044_f200, iface::flush(Ptr<_>)))
+        .node_case()
+        // Its translation calls the scan as a plain Rust call.
+        .translation_calls_plainly(&[0x0044_f220])
+        .local_at(0x0040_4eb0, 0, 4)
+        .local_at(0x0040_4ee0, 0, 4)
+        .inputs(&[Input::Flag])
+        .setup(|e, case| {
+            let w = world(e, true);
+            waiting(e, &w, case.word(0) != 0);
+            vec![w.face]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn interface_delete() {
+    Diff::new(entry!(0x0044_ed80, iface::delete(Ptr<_>, u32) -> Ptr))
+        .node_case()
+        .translation_calls_plainly(&[0x0044_f220])
+        .local_at(0x0040_4eb0, 0, 4)
+        .local_at(0x0040_4ee0, 0, 4)
+        .inputs(&[Input::Flag, Input::Of(&[0, 1, 3])])
+        .setup(|e, case| {
+            let w = world(e, true);
+            waiting(e, &w, case.word(0) != 0);
+            vec![w.face, case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn manager_destroy() {
+    // The manager with thread 0's interface in its entry (with a waiting list, or none), or no
+    // entry.
+    Diff::new(entry!(0x0066_65c0, manager::destroy(Ptr<_>)))
+        .manager_case()
+        .translation_calls_plainly(&[0x0044_f220])
+        .inputs(&[Input::Flag, Input::Flag])
+        .setup(|e, case| {
+            let w = world(e, true);
+            if case.word(0) != 0 {
+                let entries = e.mem.u32(w.manager + 8);
+                e.mem.set_u32(entries, 0x1234);
+                e.mem.set_u32(entries + 4, w.face);
+            }
+            waiting(e, &w, case.word(1) != 0);
+            vec![w.manager]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn manager_delete() {
+    Diff::new(entry!(0x0066_6570, manager::delete(Ptr<_>, u32) -> Ptr))
+        .manager_case()
+        .translation_calls_plainly(&[0x0066_65c0, 0x0044_f220])
+        .inputs(&[Input::Flag, Input::Of(&[0, 1])])
+        .setup(|e, case| {
+            let w = world(e, true);
+            if case.word(0) != 0 {
+                let entries = e.mem.u32(w.manager + 8);
+                e.mem.set_u32(entries + 4, w.face);
+            }
+            vec![w.manager, case.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn first_in_bucket_copy() {
+    // As `first_in_bucket`: the lip task map's own copy of it.
+    Diff::new(entry!(
+        0x0090_6af0,
+        iface::first_in_bucket_copy(Ptr<_>, u32, Ptr<_>, Ptr<_>) -> bool
+    ))
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(&[0, 1, 2])])
+    .setup(|e, case| {
+        let w = world(e, true);
+        let key_out = e.mem.alloc(4);
+        let bucket = case.word(0);
+        let head = e.mem.u32(w.buckets + bucket * 4);
+        let held = match case.word(1) {
+            0 => 0,
+            1 if head != 0 => e.mem.u32(head + 4),
+            _ => w.spare,
+        };
+        let value_out = holder_of(e, held);
+        vec![w.face, bucket, key_out, value_out]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn next_in_bucket_copy() {
+    // As `next_in_bucket`: the lip task map's own copy of it.
+    Diff::new(entry!(
+        0x0090_6c10,
+        iface::next_in_bucket_copy(Ptr<_>, u32, Ptr<_>, Ptr<_>) -> bool
+    ))
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .inputs(&[Input::Of(&[0, 1, 2, 3]), Input::Of(KEYS), Input::Flag])
+    .setup(|e, case| {
+        let w = world(e, true);
+        let key = e.mem.alloc(4);
+        e.mem.set_u32(key, case.word(1));
+        let held = if case.word(2) != 0 { w.spare } else { 0 };
+        let value_out = holder_of(e, held);
+        vec![w.face, case.word(0), key, value_out]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A holder of the value of the bucket's nth node (marks cleared), of the spare object, or of none.
+fn wanted_holder(e: &mut Engine, w: &World, bucket: u32, nth: u32) -> u32 {
+    let mut n = e.mem.u32(w.buckets + bucket * 4) & !1;
+    for _ in 0..nth {
+        if n != 0 {
+            n = e.mem.u32(n + 8) & !1;
+        }
+    }
+    let wanted = match (n, nth) {
+        (0, 3) => 0,
+        (0, _) => w.spare,
+        (n, _) => e.mem.u32(n + 4),
+    };
+    holder_of(e, wanted)
+}
+
+#[test]
+fn find_counted_value() {
+    // Each bucket, against each of its nodes' objects, the spare one, and none; the waiting list
+    // well below or one short of a full batch.
+    Diff::new(entry!(
+        0x0090_6820,
+        iface::find_counted_value(Ptr<_>, u32, Ptr<_>) -> bool
+    ))
+    .counted_local()
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Flag,
+    ])
+    .setup(|e, case| {
+        let w = world(e, true);
+        if case.word(2) != 0 {
+            e.mem.set_u32(w.face + 0x20, 99);
+        }
+        let wanted = wanted_holder(e, &w, case.word(0), case.word(1));
+        vec![w.face, case.word(0), wanted]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn remove_counted_value_in_bucket() {
+    Diff::new(entry!(
+        0x0090_66d0,
+        iface::remove_counted_value_in_bucket(Ptr<_>, u32, Ptr<_>) -> bool
+    ))
+    .counted_local()
+    .family(&lockfree::LOCKFREE)
+    .family(&leaf::LEAVES)
+    .ignore_calls(INLINED)
+    .max_calls(MAX_CALLS)
+    // Its translation calls the find as a plain Rust call.
+    .translation_calls_plainly(&[0x0090_6820])
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Flag,
+    ])
+    .setup(|e, case| {
+        let w = world(e, true);
+        if case.word(2) != 0 {
+            e.mem.set_u32(w.face + 0x20, 99);
+        }
+        let wanted = wanted_holder(e, &w, case.word(0), case.word(1));
+        vec![w.face, case.word(0), wanted]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn interface_flush_counted() {
+    Diff::new(entry!(0x0044_f420, iface::flush_counted(Ptr<_>)))
+        .node_case()
+        .local_at(0x0040_4eb0, 0, 4)
+        .local_at(0x0040_4ee0, 0, 4)
+        .inputs(&[Input::Flag])
+        .setup(|e, case| {
+            let w = world(e, true);
+            waiting(e, &w, case.word(0) != 0);
+            vec![w.face]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn interface_delete_counted() {
+    Diff::new(entry!(
+        0x0052_93c0,
+        iface::delete_counted(Ptr<_>, u32) -> Ptr
+    ))
+    .node_case()
+    .local_at(0x0040_4eb0, 0, 4)
+    .local_at(0x0040_4ee0, 0, 4)
+    .inputs(&[Input::Flag, Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        let w = world(e, true);
+        waiting(e, &w, case.word(0) != 0);
+        vec![w.face, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn manager_destroy_counted() {
+    // Its translation calls the interface's deleting destructor as a plain Rust call.
+    Diff::new(entry!(0x0052_9330, manager::destroy_counted(Ptr<_>)))
+        .manager_case()
+        .translation_calls_plainly(&[0x0052_93c0])
+        .inputs(&[Input::Flag, Input::Flag])
+        .setup(|e, case| {
+            let w = world(e, true);
+            if case.word(0) != 0 {
+                let entries = e.mem.u32(w.manager + 8);
+                e.mem.set_u32(entries, 0x1234);
+                e.mem.set_u32(entries + 4, w.face);
+            }
+            waiting(e, &w, case.word(1) != 0);
+            vec![w.manager]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn manager_delete_counted() {
+    Diff::new(entry!(
+        0x0052_9300,
+        manager::delete_counted(Ptr<_>, u32) -> Ptr
+    ))
+    .manager_case()
+    .translation_calls_plainly(&[0x0052_9330, 0x0052_93c0])
+    .inputs(&[Input::Flag, Input::Of(&[0, 1])])
+    .setup(|e, case| {
+        let w = world(e, true);
+        if case.word(0) != 0 {
+            let entries = e.mem.u32(w.manager + 8);
+            e.mem.set_u32(entries + 4, w.face);
+        }
+        vec![w.manager, case.word(1)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn clear_counted() {
+    // With an interface manager or none; keeping none or making a new one. Its translation calls
+    // the manager's deleting destructor as a plain Rust call (and that, its body and the
+    // interfaces' deleting destructor).
+    Diff::new(entry!(0x0052_8e40, map::clear_counted(Ptr<_>, u8)))
+        .family(&lockfree::LOCKFREE)
+        .family(&leaf::LEAVES)
+        .ignore_calls(INLINED)
+        .max_calls(MAX_CALLS)
+        .translation_calls_plainly(&[0x0052_9300, 0x0052_9330, 0x0052_93c0])
+        .inputs(&[Input::Flag, Input::Flag])
+        .setup(|e, case| {
+            let w = world(e, true);
+            if case.word(0) == 0 {
+                e.mem.set_u32(w.map + 0x14, 0);
+            }
+            vec![w.map, case.word(1)]
         })
         .run()
         .assert_same();
