@@ -2028,9 +2028,15 @@ mod forms {
     /// (`01017458`, which the destructors write last, and through which nothing calls) lies on the
     /// same page, its slots overlapping the first one's: it is only mapped.
     const VTABLE_PAGE: u32 = 0x0101_7000;
-    const VTABLES: [u32; 2] = [0x0101_747c, 0x0101_760c];
-    /// The test's `AllocateInterface` (vtable slot +4): the family's `00906400`.
+    /// And on their own pages: the tree node map's (`01066454`, plain words, its own
+    /// `AllocateInterface` `00665e30`) and the lip task map's (`0108864c`, counted values).
+    const TREE_VTABLE: u32 = 0x0106_6454;
+    const LIP_VTABLE: u32 = 0x0108_864c;
+    const VTABLES: [u32; 4] = [0x0101_747c, 0x0101_760c, TREE_VTABLE, LIP_VTABLE];
+    /// The test's `AllocateInterface` (vtable slot +4): the family's `00906400`, and for the tree
+    /// node map its `00665e30`.
     const VT_ALLOCATE: u32 = 0x00ff_2000;
+    const VT_ALLOCATE_TREE: u32 = 0x00ff_2010;
     /// The allocator's log: a count, then (1: new or 2: delete, size, address) for each call.
     const LOG: u32 = 0x0310_0000;
     const LOG_BYTES: u32 = 0x1_0000;
@@ -2064,6 +2070,8 @@ mod forms {
         e.typed_apply_for_test(&[&lockfree::LOCKFREE, &leaf::LEAVES], spec);
         e.map(WORLD, 0x1000);
         e.map(VTABLE_PAGE, 0x1000);
+        e.map(TREE_VTABLE & !0xfff, 0x1000);
+        e.map(LIP_VTABLE & !0xfff, 0x1000);
         e.map(LOG, LOG_BYTES);
         for vt in VTABLES {
             for slot in (0..0x48).step_by(4) {
@@ -2071,6 +2079,10 @@ mod forms {
             }
             e.mem.set_u32(vt + 4, VT_ALLOCATE);
         }
+        e.mem.set_u32(TREE_VTABLE + 4, VT_ALLOCATE_TREE);
+        e.register(VT_ALLOCATE_TREE, |e, a| {
+            ret(e.call(0x0066_5e30, &[a[0], a[1]]).u32())
+        });
         e.register(VT_ALLOCATE, |e, a| {
             ret(e.call(0x0090_6400, &[a[0], a[1]]).u32())
         });
@@ -2390,13 +2402,102 @@ mod forms {
         }
     }
 
+    /// The lip task map's life (counted values, its own copies of the bucket walks): `00906160` ..
+    /// `009064e0`, with its value find and remove (`00906820`, `009066d0`) and its iteration
+    /// (`00906570`, through `00906af0` and `00906c10`).
+    fn lip_life(spec: &str) -> Life {
+        let mut r = Run::new(spec);
+        let map = r.map;
+        let made = r.call(0x0090_6160, &[map, 2, 4, 3]);
+        r.answers.push(u32::from(made == map));
+        r.look();
+        let face = r.call(0x0044_9f80, &[map]);
+        for (i, key) in [1u32, 2, 3, 5, 6, 9].into_iter().enumerate() {
+            let h = r.holder(Some(i));
+            r.ask(0x0044_c000, &[face, key, h, 0]);
+        }
+        // Each object by value in its key's bucket, then one no node holds and none.
+        for (i, key) in [1u32, 2, 3, 5, 6, 9].into_iter().enumerate() {
+            let wanted = r.holder(Some(i));
+            r.ask(0x0090_6820, &[face, key % 4, wanted]);
+        }
+        let other = r.holder(Some(7));
+        r.ask(0x0090_6820, &[face, 1, other]);
+        let none = r.holder(None);
+        r.ask(0x0090_6820, &[face, 1, none]);
+        r.look();
+        // The iteration (it takes nothing out).
+        let it = r.iterator();
+        for _ in 0..16 {
+            let key_out = r.e.mem.alloc(4);
+            let value_out = r.holder(None);
+            let found = r.call(0x0090_6570, &[map, it, key_out, value_out, 1]) & 0xff;
+            let key = r.e.mem.u32(key_out);
+            let held = r.held(value_out);
+            r.answers.extend([found, key, held]);
+            if r.e.mem.u8(it + 0xc) & 2 != 0 {
+                break;
+            }
+        }
+        // Two removed by value (one of them twice), and the finds after.
+        for i in [1usize, 4, 1] {
+            let wanted = r.holder(Some(i));
+            let key = [1u32, 2, 3, 5, 6, 9][i];
+            r.ask(0x0090_66d0, &[face, key % 4, wanted]);
+        }
+        for (i, key) in [1u32, 2, 3, 5, 6, 9].into_iter().enumerate() {
+            let wanted = r.holder(Some(i));
+            r.ask(0x0090_6820, &[face, key % 4, wanted]);
+        }
+        r.look();
+        r.call(0x0090_64e0, &[map]);
+        r.note(map);
+        r.end()
+    }
+
+    /// The tree node map's life (plain words; its `AllocateInterface` is `00665e30`): `00665cb0` ..
+    /// `006661e0`, with the find and remove by value (`0044e820`, `0044d3f0`).
+    fn tree_life(spec: &str) -> Life {
+        let mut r = Run::new(spec);
+        let map = r.map;
+        let made = r.call(0x0066_5cb0, &[map, 2, 4, 3]);
+        r.answers.push(u32::from(made == map));
+        r.look();
+        let face = r.call(0x0044_9f80, &[map]);
+        let word = r.e.mem.alloc(4);
+        for key in [1u32, 2, 3, 5, 6, 9] {
+            r.e.mem.set_u32(word, 0x100 + key);
+            r.ask(0x0044_a130, &[face, key, word, 0]);
+        }
+        let value = r.e.mem.alloc(4);
+        for key in [1u32, 2, 3, 5, 6, 9, 10] {
+            r.e.mem.set_u32(value, 0x100 + key);
+            r.ask(0x0044_e820, &[face, key % 4, value]);
+        }
+        r.look();
+        for key in [2u32, 9, 2] {
+            r.e.mem.set_u32(value, 0x100 + key);
+            r.ask(0x0044_d3f0, &[face, key % 4, value]);
+        }
+        let out = r.e.mem.alloc(4);
+        for key in [1u32, 2, 3, 5, 6, 9] {
+            r.e.mem.set_u32(out, 0x5a5a_5a5a);
+            r.ask(0x0044_9530, &[map, key, out]);
+            r.note(out);
+        }
+        r.look();
+        r.call(0x0066_61e0, &[map]);
+        r.note(map);
+        r.end()
+    }
+
     fn every_form(life: fn(&str) -> Life) {
         let stage1 = life("lockfree");
         assert!(
             !stage1.heap.is_empty(),
             "stage 1 allocates in the guest heap"
         );
-        assert!(stage1.answers.len() > 40);
+        assert!(stage1.answers.len() > 20);
         for spec in ["lockfree:dual", "lockfree:moved", "lockfree:freed"] {
             let form = life(spec);
             assert_eq!(form.answers, stage1.answers, "{spec}: the answers");
@@ -2432,5 +2533,15 @@ mod forms {
     #[test]
     fn a_map_of_plain_words_lives_alike_in_every_form() {
         every_form(words_life);
+    }
+
+    #[test]
+    fn the_lip_task_map_lives_alike_in_every_form() {
+        every_form(lip_life);
+    }
+
+    #[test]
+    fn the_tree_node_map_lives_alike_in_every_form() {
+        every_form(tree_life);
     }
 }
