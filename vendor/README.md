@@ -9,7 +9,8 @@ leave their code as published.
 
 - Source: the crates.io package `wgpu-hal` 30.0.1 (gfx-rs developers, https://github.com/gfx-rs/wgpu,
   commit 40f4a34ebaf56f9a046231f54125ad046239d3f3, folder `wgpu-hal`), copied from the local cargo
-  registry. The `examples` folder was left out; nothing else.
+  registry. Left out: the `examples` folder and the packaging files (`Cargo.toml.orig`, `Cargo.lock`,
+  `.cargo_vcs_info.json`); git keeps `src/vulkan/descriptor.rs` with LF line ends like every `.rs`.
 - Licence: MIT OR Apache-2.0, unchanged (`wgpu-hal/LICENSE.MIT`, `wgpu-hal/LICENSE.APACHE`).
 - Why: the Vulkan backend is to make pipelines the way DXVK does (pipeline libraries, fast linking,
   dynamic state, optimised pipelines made in the background), so that a pipeline the game needs for
