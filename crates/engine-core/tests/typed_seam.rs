@@ -27,6 +27,7 @@ static ABOVE: Family = Family {
     id: FAMILY,
     past_gate: true,
     threads: Threads::Both,
+    stage2: false,
     funcs: || vec![entry!(0x00ff_1000, leaf(u32) -> u32)],
 };
 
@@ -100,6 +101,7 @@ fn two_families_go_direct_from_another_crate() {
         id: LEAF_ID,
         past_gate: false,
         threads: Threads::Both,
+        stage2: false,
         funcs: || vec![entry!(0x00ff_3000, leaf(u32) -> u32)],
     };
     static CALLERS: Family = Family {
@@ -107,6 +109,7 @@ fn two_families_go_direct_from_another_crate() {
         id: CALLER_ID,
         past_gate: false,
         threads: Threads::Both,
+        stage2: false,
         funcs: || vec![entry!(0x00ff_3010, caller(u32) -> u32)],
     };
     let report = Diff::new(entry!(0x00ff_3010, caller(u32) -> u32))

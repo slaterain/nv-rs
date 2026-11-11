@@ -1370,8 +1370,11 @@ fn reserve(e: &mut Engine, address: u32, size: u32) -> Option<u32> {
         let end = page_up(address as u64 + size as u64);
         let overlaps = |lo: u32, hi: u32| (base as u64) < hi as u64 && end > lo as u64;
         let moved = crate::typed::moved::MOVED_AREA;
+        // Not into the last 64 KB, which no Windows process has as user space and where the moved
+        // families' poison points (`typed::moved::POISON_BASE`): mapped, a poisoned pointer would
+        // read on instead of stopping.
         if base < ALLOCATION_GRANULARITY
-            || end > 1 << 32
+            || end > u64::from(crate::typed::moved::POISON_BASE)
             || overlaps(crate::exe::IMAGE_BASE, IMAGE_END)
             || overlaps(moved.start, moved.end)
             || overlaps(crate::mem::HEAP_BASE, crate::mem::HEAP_END)
@@ -1461,9 +1464,11 @@ fn set_committed(
 /// passes (`ScrapHeapManager`, `MemoryPool`, the CRT small-block heap):
 /// `MEM_RESERVE` at address 0 takes a 64 KiB-aligned range from the
 /// [`crate::Mem`] heap (as [`memory_manager_allocate`] does); at a chosen
-/// address it succeeds only where nothing is (not the image, the heap's
-/// ranges and the platform's addresses between them, 0x20000000..0xF0000000,
-/// another reservation or mapped memory) and otherwise returns 0,
+/// address it succeeds only where nothing is (not the image, the moved
+/// families' area 0x10000000..0x20000000 (`typed::moved::MOVED_AREA`), the
+/// heap's ranges and the platform's addresses between them,
+/// 0x20000000..0xF0000000, the last 64 KB 0xFFFF0000.. (the moved families'
+/// poison), another reservation or mapped memory) and otherwise returns 0,
 /// which the memory pools' address search relies on. `MEM_COMMIT` commits
 /// whole pages inside a reservation (0 if the range is not inside one), or
 /// reserves and commits at address 0. Reserved pages that are not
@@ -4226,18 +4231,29 @@ mod tests {
         assert_eq!(call(&mut e, VIRTUAL_FREE, &[AT, 0, MEM_RELEASE]), 1);
     }
 
-    /// A reservation that ends where the 4 GB space ends commits and decommits its pages like
-    /// any other. (The page loop before the flat guest memory ran from the range's start to its
-    /// end as 32-bit addresses; that end wraps to 0, so it committed and decommitted nothing.)
+    /// A reservation that ends where user space ends (0xFFFF0000: the last 64 KB stay unmapped,
+    /// the moved families' poison points there) commits and decommits its pages like any other;
+    /// one that reaches into the last 64 KB is refused. (The page loop before the flat guest memory
+    /// ran from the range's start to its end as 32-bit addresses; a reservation to the end of the
+    /// space wrapped to 0 there, so it committed and decommitted nothing.)
     #[test]
     fn a_reservation_at_the_top_of_the_space_commits() {
         let mut e = kernel_engine();
         const AT: u32 = 0xfff0_0000;
+        const TOP: u32 = crate::typed::moved::POISON_BASE;
+        for len in [0x10_0000, TOP - AT + 0x1000] {
+            let at = call(
+                &mut e,
+                VIRTUAL_ALLOC,
+                &[AT, len, MEM_RESERVE, PAGE_READWRITE],
+            );
+            assert_eq!(at, 0, "{len:#x}: into the last 64 KB");
+        }
         assert_eq!(
             call(
                 &mut e,
                 VIRTUAL_ALLOC,
-                &[AT, 0x10_0000, MEM_RESERVE, PAGE_READWRITE]
+                &[AT, TOP - AT, MEM_RESERVE, PAGE_READWRITE]
             ),
             AT
         );
@@ -4245,14 +4261,15 @@ mod tests {
             call(
                 &mut e,
                 VIRTUAL_ALLOC,
-                &[AT, 0x10_0000, MEM_COMMIT, PAGE_READWRITE]
+                &[AT, TOP - AT, MEM_COMMIT, PAGE_READWRITE]
             ),
             AT
         );
-        assert!(e.mem.is_mapped(AT) && e.mem.is_mapped(0xffff_ffff));
-        e.mem.set_u32(0xffff_fffc, 5);
+        assert!(e.mem.is_mapped(AT) && e.mem.is_mapped(TOP - 1));
+        assert!(!e.mem.is_mapped(TOP));
+        e.mem.set_u32(TOP - 4, 5);
         assert_eq!(call(&mut e, VIRTUAL_FREE, &[AT, 0, MEM_DECOMMIT]), 1);
-        assert!(!e.mem.is_mapped(AT) && !e.mem.is_mapped(0xffff_ffff));
+        assert!(!e.mem.is_mapped(AT) && !e.mem.is_mapped(TOP - 1));
         assert_eq!(call(&mut e, VIRTUAL_FREE, &[AT, 0, MEM_RELEASE]), 1);
     }
 

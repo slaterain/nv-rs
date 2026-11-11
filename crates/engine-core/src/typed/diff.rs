@@ -2274,6 +2274,7 @@ mod tests {
         id: FAMILY_ID,
         past_gate: false,
         threads: Threads::Both,
+        stage2: false,
         funcs: || vec![crate::entry!(0x0040_2200, member(u32) -> u32)],
     };
 
@@ -2351,6 +2352,7 @@ mod tests {
             id: FAMILY_ID,
             past_gate: false,
             threads: Threads::Both,
+            stage2: false,
             funcs: || vec![crate::entry!(0x0040_2200, wrong_member(u32) -> u32)],
         };
         fn right(e: &mut Engine, x: u32) -> u32 {
@@ -2918,6 +2920,7 @@ mod tests {
             id: FamilyId::new(13),
             past_gate: false,
             threads: Threads::Both,
+            stage2: false,
             funcs: || vec![crate::entry!(0x0040_2100, member(u32) -> u32)],
         };
         super::super::provide(&CHILD);
@@ -3024,6 +3027,7 @@ mod tests {
         id: LEAF_ID,
         past_gate: false,
         threads: Threads::Both,
+        stage2: false,
         funcs: || vec![crate::entry!(0x0040_2300, leaf_typed(Ptr) -> u32)],
     };
 
@@ -3065,6 +3069,7 @@ mod tests {
         id: CALLER_ID,
         past_gate: false,
         threads: Threads::Both,
+        stage2: false,
         funcs: || vec![crate::entry!(0x0040_2310, caller_typed(Ptr) -> u32)],
     };
 
@@ -3441,6 +3446,7 @@ mod tests {
             id: FamilyId::new(16),
             past_gate: false,
             threads: Threads::Main,
+            stage2: false,
             funcs: || vec![crate::entry!(0x0040_2000, as_on_the_main_thread() -> u32)],
         };
         let diff = || {

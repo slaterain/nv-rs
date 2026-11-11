@@ -51,6 +51,7 @@ pub static CULLING: Family = Family {
     id: FAMILY,
     past_gate: true,
     threads: Threads::Both,
+    stage2: false,
     funcs,
 };
 
