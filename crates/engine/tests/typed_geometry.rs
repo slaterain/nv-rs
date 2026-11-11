@@ -1232,3 +1232,50 @@ fn replace_data() {
     .run()
     .assert_same();
 }
+
+/// NaN bit patterns for the operand order of `00a7ec90`'s sums and products: quiet ones with no and
+/// a small payload, the x87 default, signalling ones with a small and a large payload, and two numbers.
+const NAN_ORDER: &[u32] = &[
+    0x7fc0_0000,
+    0x7fc0_0001,
+    0xffc0_0000,
+    0x7f80_0001,
+    0x7fbf_ffff,
+    0x3f80_0000,
+    0x8000_0000,
+];
+
+/// `00a7ec90` with every word of the source and of the destination one NaN pattern and the scale
+/// another: which NaN comes out of each product and sum (quiet over signalling, then the larger
+/// payload) is where the unrolled and the single-point code's operand orders differ.
+#[test]
+fn add_scaled_points_nans() {
+    Diff::new(entry!(
+        0x00a7_ec90,
+        morph::add_scaled_points(Ptr, f32, Ptr, u32)
+    ))
+    .family(&geometry::GEOMETRY)
+    .inputs(&[
+        Input::Of(&[1, 5]),
+        Input::Of(NAN_ORDER),
+        Input::Of(NAN_ORDER),
+        Input::Of(NAN_ORDER),
+    ])
+    .max_cases(700)
+    .setup(|e, c| {
+        globals(e);
+        let count = c.word(0);
+        let fill = |e: &mut Engine, bits: u32| {
+            let p = e.mem.alloc(12 * count + 4);
+            for w in 0..3 * count {
+                set(e, p + 4 * w, bits);
+            }
+            p
+        };
+        let source = fill(e, c.word(2));
+        let dest = fill(e, c.word(3));
+        vec![dest, c.word(1), source, count]
+    })
+    .run()
+    .assert_same();
+}
