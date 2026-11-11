@@ -49,8 +49,10 @@ pub fn compute_from_data(e: &mut Engine, this: Ptr, count: i32, points: Ptr) {
     let count = count.unsigned_abs();
     let at = points.addr();
     let coordinate = |e: &Engine, point: u32, axis: u32| {
-        e.mem
-            .u32(at.wrapping_add(12u32.wrapping_mul(point)) + 4 * axis)
+        e.mem.u32(
+            at.wrapping_add(12u32.wrapping_mul(point))
+                .wrapping_add(4 * axis),
+        )
     };
     let mut low = [0u32, 1, 2].map(|axis| coordinate(e, 0, axis));
     let mut high = low;

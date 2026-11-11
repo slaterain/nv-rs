@@ -414,11 +414,10 @@ pub fn build_declaration(e: &mut Engine, this: Ptr) -> u32 {
 
 /// What a stream's pack calls: the buffer data's update (`00e8f040`, `thiscall`, one word), the
 /// stream's chip maker (`00e69b40`, `thiscall(buffer data, stream)`), the entry packer (`00e7a200`,
-/// `thiscall`, nine words) and the data's own pack of the derived vectors (`00a855f0`, `thiscall`,
-/// eight words).
+/// `thiscall`, nine words: the geometry family's element pack, a direct call while that family is on)
+/// and the data's own pack of the derived vectors (`00a855f0`, `thiscall`, eight words).
 const BUFFER_DATA_UPDATE: u32 = 0x00e8_f040;
 const NEW_STREAM_CHIP: u32 = 0x00e6_9b40;
-const PACK_ENTRY: u32 = 0x00e7_a200;
 const PACK_DERIVED: u32 = 0x00a8_55f0;
 
 /// What an entry of the declaration does in a stream's pack, by its usage: packed always, packed with
@@ -589,11 +588,22 @@ pub fn pack_stream(
                 };
                 if pack {
                     let step = e.mem.u32(stream_entry.wrapping_add(0xc));
-                    e.call(
-                        PACK_ENTRY,
-                        &args![
-                            base, count, data, derived, partition, at, step, target, eighth, ninth
-                        ],
+                    let _: u32 = typed_call!(
+                        crate::geometry::FAMILY,
+                        0x00e7_a200,
+                        crate::geometry::pack::pack_entry(
+                            e,
+                            Ptr::new(base),
+                            count,
+                            data,
+                            derived,
+                            partition,
+                            at,
+                            step,
+                            target,
+                            eighth,
+                            ninth
+                        )
                     );
                 }
                 index += 1;

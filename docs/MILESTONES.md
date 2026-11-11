@@ -47,8 +47,8 @@ update (the ragdoll bones' blend of node and body, a body moved to its node), pr
 Then `multibound`: the two passes main runs over the loaded world once a frame that keep the multibound culling
 current (each object's shape reset, then tested against the camera's frustum and the occluders), proven the same way.
 The `geometry` family (the code that reads and writes the geometry data's arrays, so a later step can keep them
-outside the 32-bit space; first the renderer's packing of them, the bound, the data's setters and the morpher),
-is in, off until its gate.
+outside the 32-bit space; first the renderer's packing of them, the bound, the data's setters and the morpher, then
+their load, save and release, the tangent space and the pick), is in, off until its gate.
 Then `animation` (merged off on 2026-11-11, on after a batch gate): a skeleton's bones moved from their animation
 each frame, proven by its differential tests.
 

@@ -136,7 +136,7 @@ pub fn gen_morph_interp(e: &mut Engine, this: Ptr, _unused: u32) {
             let items = e.get(controller, MorpherController::m_pkInterpItems);
             let mut weight = 0u32;
             if items != 0 {
-                let at = items.wrapping_add(i * ITEM_SIZE + ITEM_WEIGHT);
+                let at = items.wrapping_add(i.wrapping_mul(ITEM_SIZE).wrapping_add(ITEM_WEIGHT));
                 weight = x87_quiet_bits(e.mem.u32(at));
             }
             e.mem.set_u32(value, weight);
@@ -162,7 +162,8 @@ pub fn gen_morph_interp(e: &mut Engine, this: Ptr, _unused: u32) {
             if store {
                 let items = e.get(controller, MorpherController::m_pkInterpItems);
                 if items != 0 {
-                    let at = items.wrapping_add(i * ITEM_SIZE + ITEM_WEIGHT);
+                    let at =
+                        items.wrapping_add(i.wrapping_mul(ITEM_SIZE).wrapping_add(ITEM_WEIGHT));
                     e.mem.set_u32(at, x87_quiet_bits(e.mem.u32(value)));
                 }
             }
@@ -177,8 +178,10 @@ pub fn gen_morph_interp(e: &mut Engine, this: Ptr, _unused: u32) {
         if items == 0 {
             continue;
         }
-        let weight_bits =
-            x87_quiet_bits(e.mem.u32(items.wrapping_add(i * ITEM_SIZE + ITEM_WEIGHT)));
+        let weight_bits = x87_quiet_bits(
+            e.mem
+                .u32(items.wrapping_add(i.wrapping_mul(ITEM_SIZE).wrapping_add(ITEM_WEIGHT))),
+        );
         let weight = x87_load32(weight_bits);
         let above = x87_load32(e.global::<u32>(WEIGHT_ABOVE));
         let apply = weight >= above || weight <= x87_load32(e.global::<u32>(WEIGHT_BELOW));

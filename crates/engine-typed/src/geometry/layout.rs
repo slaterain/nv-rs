@@ -212,3 +212,31 @@ image! {
         0x15 padding_15: [u8; 3],
     }
 }
+
+image! {
+    /// `NiStream` (Xbox PDB), as far as `NiGeometryData`'s load and save read it.
+    pub struct Stream / StreamImage: 0x254 {
+        0x000 vtable: u32,
+        /// The header's version word, which the loader compares with 0x13 and 0x1b.
+        0x004 m_uiHeaderVersion: u32,
+        0x008 unknown_008: [u32; 52],
+        /// `m_uiNifFileVersion` (Xbox PDB).
+        0x0d8 m_uiNifFileVersion: u32,
+        0x0dc unknown_0dc: u32,
+        /// The file's name (the loader's warning prints it).
+        0x0e0 m_acFileName: [u8; 0x16c],
+        /// `m_pkIstr` and `m_pkOstr` (Xbox PDB): the binary streams read and written.
+        0x24c m_pkIstr: u32,
+        0x250 m_pkOstr: u32,
+    }
+
+    /// `NiBinaryStream` (Xbox PDB), as far as read: its position and its read and write functions.
+    pub struct BinaryStream / BinaryStreamImage: 0x10 {
+        0x0 vtable: u32,
+        /// The position, moved on by each transfer's answer.
+        0x4 m_uiPosition: u32,
+        /// `m_pfnRead` and `m_pfnWrite` (Xbox PDB): `(binary, buffer, bytes, &element size, count)`.
+        0x8 m_pfnRead: u32,
+        0xc m_pfnWrite: u32,
+    }
+}

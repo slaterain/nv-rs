@@ -12,7 +12,13 @@
 //! - [`bound`]: the bound of a run of points, which the setters below compute over the positions;
 //! - [`data`]: the geometry data's setters of a set of arrays (`Replace` gives up the old ones: the
 //!   renderer's release of the arrays a static mesh does not keep after packing goes through it);
-//! - [`morph`]: the geometry morpher, which blends its targets into the position array each update.
+//! - [`morph`]: the geometry morpher, which blends its targets into the position array each update;
+//! - [`lifecycle`]: where the arrays begin and end: the load from a stream (and so the deep copies FaceGen
+//!   makes its heads with), the save, the destructor body, the normals' own allocation and release;
+//! - [`tangent`]: the tangent space a lit geometry gets at load (the binormals and tangents after the
+//!   normals, read from the positions, texture coordinates and normals);
+//! - [`pick`]: the pick of a geometry's triangles (the ray tests of the crosshair, VATS and decals read the
+//!   positions, and for a hit the texture coordinates, normals and colours).
 //!
 //! Stage 1: the arrays and the objects stay in guest memory where the game made them and are read
 //! through their [`layout`]. Each function stays registered at its exe address; a call the exe makes
@@ -31,8 +37,11 @@ use engine_core::{entry, AbiFn};
 pub mod bound;
 pub mod data;
 pub mod layout;
+pub mod lifecycle;
 pub mod morph;
 pub mod pack;
+pub mod pick;
+pub mod tangent;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(23);
@@ -96,5 +105,19 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a3_aa10, morph::gen_morph_interp(Ptr, u32)),
         entry!(0x00a3_b010, morph::vertex_data(Ptr) -> u32),
         entry!(0x00a3_b080, morph::update(Ptr, Ptr)),
+        // Where the arrays begin and end: the load and save, the destructor body, the normals' own.
+        entry!(0x00a6_7ea0, lifecycle::load_binary(Ptr, Ptr)),
+        entry!(0x00a6_8520, lifecycle::save_binary(Ptr, Ptr)),
+        entry!(0x00a6_7ae0, lifecycle::write_texture_coordinates(Ptr, u32, u32) -> u32),
+        entry!(0x00a6_7c70, lifecycle::destruct(Ptr)),
+        entry!(0x00a6_69f0, lifecycle::create_normals(Ptr, u32)),
+        entry!(0x00a6_6a60, lifecycle::set_normal_method(Ptr, u32)),
+        entry!(0x00a6_7000, lifecycle::release_normals(Ptr)),
+        // The tangent space.
+        entry!(0x00b5_4b60, tangent::create_tangent_space(u32) -> u32),
+        // The pick of a geometry's triangles: the general one and the two it hands strips and shapes.
+        entry!(0x00e9_b4f0, pick::pick_geometry(Ptr, Ptr, Ptr, Ptr) -> bool),
+        entry!(0x00e9_93d0, pick::pick_strips(Ptr, Ptr, Ptr, Ptr) -> bool),
+        entry!(0x00e9_a280, pick::pick_shape(Ptr, Ptr, Ptr, Ptr) -> bool),
     ]
 }

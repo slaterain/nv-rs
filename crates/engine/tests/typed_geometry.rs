@@ -1,5 +1,8 @@
 //! The differential tests of the geometry family (`engine_typed::geometry`) against the translations:
-//! the renderer's packing of a geometry's arrays (`pack`).
+//! the renderer's packing of a geometry's arrays (`pack`), the bound, the data's setters and the morpher
+//! (`bound`, `data`, `morph`), where the arrays begin and end (`lifecycle`), the tangent space (`tangent`)
+//! and the pick of a geometry's triangles (`pick`). Each batch's stand-ins are described where its tests
+//! begin; the first batch's here.
 //!
 //! What stands in: the declaration's, the geometry data's and the vertex buffer's virtual functions
 //! (test functions past `.text` answering a word per slot from a table; the ones that fill words they
@@ -875,6 +878,9 @@ struct MorphCase {
     real_slot: bool,
     target_check: u32,
     missing_interpolator: bool,
+    /// 0: the weights as below; 1 or 2: every item's weight and the interpolators' written weight exactly
+    /// 0.001 or -0.001 (the thresholds, where `>=` and `<=` decide).
+    boundary: u32,
 }
 
 /// The morpher's world: a controller (slot 0xc4 answers the item's interpolator from the table, 0xe8
@@ -922,7 +928,11 @@ fn morph_world(e: &mut Engine, m: &MorphCase) -> u32 {
     if m.items {
         let items = e.mem.alloc(8 * count.max(1));
         for i in 0..count {
-            let weight = [0.5f32, 0.0005, -0.75][i as usize % 3];
+            let weight = match m.boundary {
+                1 => 0.001f32,
+                2 => -0.001,
+                _ => [0.5f32, 0.0005, -0.75][i as usize % 3],
+            };
             set(e, items + 8 * i + 4, weight.to_bits());
         }
         set(e, controller + 0x3c, items);
@@ -936,7 +946,12 @@ fn morph_world(e: &mut Engine, m: &MorphCase) -> u32 {
         set(e, RETS + 0x700 + 4 * i, interpolator);
     }
     set(e, RETS + 0x9c, m.answer);
-    set(e, RETS + 0x9c0, m.weight.to_bits());
+    let written = match m.boundary {
+        1 => 0.001f32,
+        2 => -0.001,
+        _ => m.weight,
+    };
+    set(e, RETS + 0x9c0, written.to_bits());
     set(e, RETS + 0x18, m.target_check);
     let other = points(e, 6, u32::MAX, 0.0);
     set(e, RETS + 0xe8, other);
@@ -945,7 +960,8 @@ fn morph_world(e: &mut Engine, m: &MorphCase) -> u32 {
 
 /// `00a3aa10`: no targets, one or three; relative data or not; the base ignored or not; items or
 /// none; the interpolators answering or not with every float the harness has; the slot 0xe8 real or a
-/// stand-in; the target check either way; an item without an interpolator.
+/// stand-in; the target check either way; an item without an interpolator; the weights at exactly the
+/// thresholds 0.001 and -0.001.
 #[test]
 fn gen_morph_interp() {
     Diff::new(entry!(0x00a3_aa10, morph::gen_morph_interp(Ptr, u32)))
@@ -961,6 +977,7 @@ fn gen_morph_interp() {
             Input::Flag,
             Input::Flag,
             Input::Flag,
+            Input::Of(&[0, 1, 2]),
         ])
         .max_cases(600)
         .setup(|e, c| {
@@ -974,6 +991,7 @@ fn gen_morph_interp() {
                 real_slot: c.word(6) != 0,
                 target_check: c.word(7),
                 missing_interpolator: c.word(8) != 0,
+                boundary: c.word(9),
             };
             let controller = morph_world(e, &m);
             vec![controller, 0x7777]
@@ -1051,6 +1069,7 @@ fn update() {
                 real_slot: true,
                 target_check: 1,
                 missing_interpolator: false,
+                boundary: 0,
             };
             let controller = morph_world(e, &m);
             let target = e.mem.u32(controller + 0x2c);
@@ -1374,4 +1393,782 @@ fn pack_entry_additional() {
     })
     .run()
     .assert_same();
+}
+
+// Batch 6: where the arrays begin and end.
+
+use engine_typed::geometry::lifecycle;
+
+/// The binary stream's read and write stand-ins, and where the read takes its answers from: one
+/// queue each for the 1-, 2- and 4-byte reads (presence bytes and flags; counts and flag words; ids
+/// and old presence words), each with its cursor, and a pattern for any longer read (an array).
+const STREAM_READ: u32 = 0x00ff_4000;
+const STREAM_WRITE: u32 = 0x00ff_4010;
+const QUEUE_1: u32 = RETS + 0x100;
+const QUEUE_2: u32 = RETS + 0x140;
+const QUEUE_4: u32 = RETS + 0x180;
+const CURSORS: u32 = RETS + 0x1c0;
+const PATTERN: u32 = RETS + 0x1cc;
+/// The sink the write stand-in appends to (its cursor at +0).
+const SINK: u32 = 0x0310_0000;
+
+/// The memory manager's allocate (a stand-in making a block) and free, and the callees the load and
+/// save make that stand in, each leaving its mark.
+fn lifecycle_globals(e: &mut Engine) {
+    bound_globals(e);
+    // The point length's square root (`004579e0`: a float in, its root in ST0), which the vector normalize
+    // (`004a0c10`) reaches; the C runtime's own would reach the open `GetLastError` import for a negative
+    // or NaN square.
+    e.register(0x0045_79e0, |_, a| Ret {
+        st0: f64::from(f32::from_bits(a[0]).sqrt()),
+        ..Ret::default()
+    });
+    e.map(SINK, 0x10000);
+    set(e, SINK, SINK + 0x10);
+    e.register(0x00aa_3e40, |e, a| {
+        ret(e.mem.alloc(a[1].clamp(4, 0x40_0000)))
+    });
+    for addr in [
+        0x00aa_4060u32,
+        0x00a5_d610,
+        0x00a6_9ac0,
+        0x00a6_45b0,
+        0x00a2_9680,
+        0x00a8_9af0,
+        0x00eb_5410,
+        0x00a5_d3d0,
+        0x00a8_a670,
+        0x00aa_1460,
+    ] {
+        e.register(addr, |e, a| {
+            let mut fold = e.mem.u32(MARK + 0x18);
+            for w in a {
+                fold = fold.rotate_left(11) ^ w;
+            }
+            set(e, MARK + 0x18, fold);
+            ret(0)
+        });
+    }
+    e.register(0x00a6_34e0, |e, _| ret(e.mem.u32(RETS + 0x1d0)));
+    e.register(0x00a6_34f0, |_, a| ret(a[1] ^ 0x5a5a));
+    e.register(STREAM_READ, |e, a| {
+        let (buffer, bytes) = (a[1], a[2]);
+        let queue = match bytes {
+            1 => Some((QUEUE_1, CURSORS)),
+            2 => Some((QUEUE_2, CURSORS + 4)),
+            4 => Some((QUEUE_4, CURSORS + 8)),
+            _ => None,
+        };
+        match queue {
+            Some((at, cursor)) => {
+                let k = e.mem.u32(cursor);
+                set(e, cursor, k + 1);
+                let value = e.mem.u32(at + 4 * (k % 16));
+                for b in 0..bytes {
+                    e.mem.set_u8(buffer + b, (value >> (8 * b)) as u8);
+                }
+            }
+            None => {
+                let mut seed = e.mem.u32(PATTERN);
+                for w in 0..bytes / 4 {
+                    seed = seed.wrapping_mul(0x0101_0101).wrapping_add(0x3c6e_f35f);
+                    set(
+                        e,
+                        buffer + 4 * w,
+                        FLOATS[(seed >> 28) as usize % 12].to_bits() ^ (seed & 0xff),
+                    );
+                }
+                set(e, PATTERN, seed);
+            }
+        }
+        ret(bytes)
+    });
+    e.register(STREAM_WRITE, |e, a| {
+        let (buffer, bytes) = (a[1], a[2]);
+        let at = e.mem.u32(SINK);
+        for b in 0..bytes.min(0x4000) {
+            let byte = e.mem.u8(buffer + b);
+            e.mem.set_u8(at + b, byte);
+        }
+        set(e, SINK, at + bytes.min(0x4000));
+        ret(bytes)
+    });
+}
+
+/// A stream object (vtable `vt`, its slot 0x30 a stand-in) with its file and header versions, a
+/// name, and its two binary streams (read and write stand-ins).
+fn stream(e: &mut Engine, vt: u32, file: u32, header: u32) -> u32 {
+    let s = obj(e, 0x254, vt);
+    set(e, s + 4, header);
+    set(e, s + 0xd8, file);
+    for (k, b) in b"head.nif\0".iter().enumerate() {
+        e.mem.set_u8(s + 0xe0 + k as u32, *b);
+    }
+    let input = e.mem.alloc(0x10);
+    set(e, input + 8, STREAM_READ);
+    let output = e.mem.alloc(0x10);
+    set(e, output + 0xc, STREAM_WRITE);
+    set(e, s + 0x24c, input);
+    set(e, s + 0x250, output);
+    s
+}
+
+/// The data's vtable: the real `GetGroup` (`00a669c0`, the static group) in its slot 0x80.
+fn data_vtable(e: &mut Engine) -> u32 {
+    let vt = vtable(e);
+    let own = e.mem.alloc(0x200);
+    for slot in (0..0x200).step_by(4) {
+        let word = if slot == 0x80 {
+            0x00a6_69c0
+        } else {
+            e.mem.u32(vt + slot)
+        };
+        set(e, own + slot, word);
+    }
+    own
+}
+
+/// File versions around each test the load makes: before 4.1.0.0, before 5.0.0.10, before 10.0.0.2,
+/// before 10.0.1.16, before 10.1.0.114, before 10.3.0.7, and the game's own (20.2.0.7).
+const FILE_VERSIONS: &[u32] = &[
+    0x0400_0002,
+    0x0401_0000,
+    0x0500_000a,
+    0x0a00_0002,
+    0x0a00_0110,
+    0x0a01_0072,
+    0x0a03_0007,
+    0x1402_0007,
+];
+
+/// `00a67ea0`: every file version branch; header versions below 0x13, below 0x1b and the game's;
+/// each array present or not (the presence queue), the save byte set or not, a group from the id or
+/// none, data flags with the method bits and two to four texture sets, the count zero or six.
+#[test]
+fn load_binary() {
+    Diff::new(entry!(0x00a6_7ea0, lifecycle::load_binary(Ptr, Ptr)))
+        .family(&geometry::GEOMETRY)
+        .max_calls(MAX_CALLS)
+        .inputs(&[
+            Input::Of(FILE_VERSIONS),
+            Input::Of(&[0x12, 0x14, 0x22]),
+            Input::Of(&[0x1f, 0, 0x15, 0x0a, 0x1d]),
+            Input::Flag,
+            Input::Of(&[0, 7]),
+            Input::Of(&[0x0001, 0xf001, 0x0003, 0x0000, 0xf004]),
+            Input::Of(&[6, 0]),
+        ])
+        .max_cases(700)
+        .setup(|e, c| {
+            lifecycle_globals(e);
+            let vt = vtable(e);
+            let s = stream(e, vt, c.word(0), c.word(1));
+            // The 1-byte answers: keep, compress, then the presences by the mask's bits.
+            let mask = c.word(2);
+            let ones = [
+                0x13,
+                0x07,
+                mask & 1,
+                mask >> 1 & 1,
+                mask >> 2 & 1,
+                mask >> 3 & 1,
+                mask >> 4 & 1,
+            ];
+            for (k, v) in ones.iter().enumerate() {
+                set(e, QUEUE_1 + 4 * k as u32, *v);
+            }
+            // The 2-byte answers: the count, the data flags, the old flags, the dirty flags.
+            let twos = [c.word(6), c.word(5), c.word(5) | 2, 0x4123];
+            for (k, v) in twos.iter().enumerate() {
+                set(e, QUEUE_2 + 4 * k as u32, *v);
+            }
+            // The 4-byte answers: the group id, then old presence words by the mask, the texture
+            // word.
+            let fours = [c.word(4), mask & 1, mask >> 1 & 1, mask >> 2 & 1, 0x7777];
+            for (k, v) in fours.iter().enumerate() {
+                set(e, QUEUE_4 + 4 * k as u32, *v);
+            }
+            let group = if c.word(4) != 0 {
+                let g = e.mem.alloc(0x10);
+                let pool = e.mem.alloc(0x2000);
+                set(e, g + 8, pool);
+                set(e, g + 0xc, 1);
+                g
+            } else {
+                0
+            };
+            set(e, RETS + 0x1d0, group);
+            let own_vt = data_vtable(e);
+            let data = obj(e, 0x40, own_vt);
+            e.mem.set_u8(data + 0x3c, c.word(3) as u8);
+            set(e, 0x011f_4880, 0);
+            vec![data, s]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `00a68520`: each array present or not, the save byte, texture coordinates with and without the
+/// flags' bit 0, the count zero or six, the method bits, the dirty flags. The translation calls the
+/// texture coordinates' write plainly.
+#[test]
+fn save_binary() {
+    Diff::new(entry!(0x00a6_8520, lifecycle::save_binary(Ptr, Ptr)))
+        .family(&geometry::GEOMETRY)
+        .translation_calls_plainly(&[0x00a6_7ae0])
+        .max_calls(MAX_CALLS)
+        .inputs(&[
+            Input::Of(&[0xf, 0, 1, 2, 4, 8, 7]),
+            Input::Flag,
+            Input::Of(&[0x0001, 0xf001, 0x0000, 0xf000]),
+            Input::Of(&[6, 0]),
+            Input::Of(&[0x7123, 0x0000]),
+        ])
+        .setup(|e, c| {
+            lifecycle_globals(e);
+            let vt = vtable(e);
+            let s = stream(e, vt, 0x1402_0007, 0x22);
+            let data = geometry_data(e, vt, c.word(2));
+            for (bit, field) in [(1u32, 0x20u32), (2, 0x24), (4, 0x28), (8, 0x2c)] {
+                if c.word(0) & bit == 0 {
+                    set(e, data + field, 0);
+                }
+            }
+            e.mem.set_u16(data + 8, c.word(3) as u16);
+            e.mem.set_u16(data + 0xe, c.word(4) as u16);
+            e.mem.set_u8(data + 0x38, 0x11);
+            e.mem.set_u8(data + 0x39, 0x22);
+            e.mem.set_u8(data + 0x3c, c.word(1) as u8);
+            set(e, 0x011f_4880, 0x0bad_9999);
+            vec![data, s]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `00a67ae0`: none, one and six texture coordinates.
+#[test]
+fn write_texture_coordinates() {
+    Diff::new(entry!(
+        0x00a6_7ae0,
+        lifecycle::write_texture_coordinates(Ptr, u32, u32) -> u32
+    ))
+    .family(&geometry::GEOMETRY)
+    .inputs(&[Input::Of(&[0, 1, 6])])
+    .setup(|e, c| {
+        lifecycle_globals(e);
+        let vt = vtable(e);
+        let s = stream(e, vt, 0x1402_0007, 0x22);
+        let textures = points(e, 4, u32::MAX, 0.0);
+        vec![s, textures, c.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `00a67c70`: with and without the object at `011f4748`, the additional data (its count reaching
+/// zero or not) or none, the static group (its count reaching zero or not) or none, each array set or
+/// not.
+#[test]
+fn destruct() {
+    Diff::new(entry!(0x00a6_7c70, lifecycle::destruct(Ptr)))
+        .family(&geometry::GEOMETRY)
+        .inputs(&[
+            Input::Flag,
+            Input::Of(&[0, 1, 2]),
+            Input::Of(&[0, 1, 3]),
+            Input::Of(&[0xf, 0, 1, 6]),
+        ])
+        .setup(|e, c| {
+            lifecycle_globals(e);
+            let vt = vtable(e);
+            slots!(e; 0x04, 0xf0);
+            e.register(0x00fd_f1c4, |e, a| {
+                let count = e.mem.u32(a[0]).wrapping_sub(1);
+                set(e, a[0], count);
+                ret(count)
+            });
+            let renderer = if c.word(0) != 0 { obj(e, 0x10, vt) } else { 0 };
+            set(e, 0x011f_4748, renderer);
+            let data = geometry_data(e, vt, 1);
+            let additional = if c.word(1) != 0 {
+                let a = obj(e, 0x10, vt);
+                set(e, a + 4, c.word(1));
+                a
+            } else {
+                0
+            };
+            set(e, data + 0x30, additional);
+            let group = if c.word(2) != 0 {
+                let g = e.mem.alloc(0x10);
+                set(e, g + 0xc, c.word(2));
+                g
+            } else {
+                0
+            };
+            set(e, 0x011f_4880, group);
+            for (bit, field) in [(1u32, 0x20u32), (2, 0x24), (4, 0x28), (8, 0x2c)] {
+                if c.word(3) & bit == 0 {
+                    set(e, data + field, 0);
+                }
+            }
+            vec![data]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `00a669f0`: normals present or not, no method or one, the flag's low byte set, clear, or set only
+/// above it.
+#[test]
+fn create_normals() {
+    Diff::new(entry!(0x00a6_69f0, lifecycle::create_normals(Ptr, u32)))
+        .family(&geometry::GEOMETRY)
+        .inputs(&[
+            Input::Flag,
+            Input::Of(&[0x0001, 0xf001, 0x1000]),
+            Input::Of(&[0, 1, 0x100]),
+            Input::Of(&[6, 0]),
+        ])
+        .setup(|e, c| {
+            lifecycle_globals(e);
+            let vt = vtable(e);
+            let data = geometry_data(e, vt, c.word(1));
+            if c.word(0) == 0 {
+                set(e, data + 0x24, 0);
+            }
+            e.mem.set_u16(data + 8, c.word(3) as u16);
+            vec![data, c.word(2)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `00a66a60`: the method already set or changed to none, one or another; normals present or not.
+#[test]
+fn set_normal_method() {
+    Diff::new(entry!(0x00a6_6a60, lifecycle::set_normal_method(Ptr, u32)))
+        .family(&geometry::GEOMETRY)
+        .inputs(&[
+            Input::Of(&[0x0001, 0x1001, 0xf001]),
+            Input::Of(&[0, 0x1000, 0xf000]),
+            Input::Flag,
+            Input::Of(&[6, 0]),
+        ])
+        .setup(|e, c| {
+            lifecycle_globals(e);
+            let vt = vtable(e);
+            let data = geometry_data(e, vt, c.word(0));
+            if c.word(2) == 0 {
+                set(e, data + 0x24, 0);
+            }
+            e.mem.set_u16(data + 8, c.word(3) as u16);
+            vec![data, c.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `00a67000`: normals present or not.
+#[test]
+fn release_normals() {
+    Diff::new(entry!(0x00a6_7000, lifecycle::release_normals(Ptr)))
+        .family(&geometry::GEOMETRY)
+        .inputs(&[Input::Flag])
+        .setup(|e, c| {
+            lifecycle_globals(e);
+            let vt = vtable(e);
+            let data = geometry_data(e, vt, 1);
+            if c.word(0) == 0 {
+                set(e, data + 0x24, 0);
+            }
+            vec![data]
+        })
+        .run()
+        .assert_same();
+}
+
+// Batch 3: the tangent space.
+
+use engine_typed::geometry::tangent;
+
+/// `00b54b60`'s world: a geometry (slot 0x1c its triangle shape from the table, slot 0x20 whether it
+/// is strips) with a name or none, its data of six vertices (slot 0xac the triangle indices from a
+/// list holding a repeated vertex), a strip list, the tangent space extra data or none, and the
+/// callees that stand in: the name compare, the new object and its constructor, the fixed strings, the
+/// extra data's lookup and removal, the formatter. `c`'s words: the extra data, the shape, strips,
+/// normals, the triangle count, the name, the case's float and where it goes.
+fn tangent_world(e: &mut Engine, c: &Case) -> u32 {
+    lifecycle_globals(e);
+    e.map(0x0109_b000, 0x1000);
+    set(e, 0x0109_b220, 0x0abc_0000);
+    let vt = vtable(e);
+    slots!(e; 0x00, 0x1c, 0x20);
+    for addr in [0x00ec_7ec0u32, 0x00a5_be90, 0x0040_6d00, 0x00fd_f1c4] {
+        e.register(addr, |e, a| {
+            let mut fold = e.mem.u32(MARK + 0x1c);
+            for w in a {
+                fold = fold.rotate_left(13) ^ w;
+            }
+            set(e, MARK + 0x1c, fold);
+            ret(0)
+        });
+    }
+    e.register(0x00aa_13e0, |e, a| ret(e.mem.alloc(a[0].max(4))));
+    e.register(0x00b6_6810, |e, a| {
+        let vt = e.mem.u32(RETS + 0x800 + 0x20);
+        set(e, a[0], vt);
+        ret(a[0])
+    });
+    e.register(0x00a5_b690, |e, _| {
+        let s = e.mem.alloc(0x20);
+        ret(s + 8)
+    });
+    e.register(0x00a5_bdd0, |e, _| ret(e.mem.u32(RETS + 0x5bd)));
+    e.register(0x00a7_5f10, |e, _| ret(e.mem.u32(RETS + 0x5f1)));
+    // The data's triangle query (slot 0xac): (triangle, &i0, &i1, &i2) from a list of six triangles,
+    // the third with a repeated vertex.
+    e.register(VT_FN + 0xac, |e, a| {
+        const TRIANGLES: [[u32; 3]; 6] = [
+            [0, 1, 2],
+            [2, 1, 3],
+            [3, 3, 4],
+            [4, 5, 0],
+            [5, 1, 4],
+            [1, 0, 5],
+        ];
+        let t = TRIANGLES[(a[1] % 6) as usize];
+        for k in 0..3 {
+            e.mem.set_u16(a[2 + k], t[k] as u16);
+        }
+        ret(0)
+    });
+    set(e, RETS + 0x820, vt);
+    let data = geometry_data(e, vt, 0x0001);
+    // The case's float at one of the positions' or texture coordinates' words.
+    let at = c.word(7);
+    let (positions, coordinates) = (e.mem.u32(data + 0x20), e.mem.u32(data + 0x2c));
+    if at < 18 {
+        set(e, positions + 4 * at, c.f32(6).to_bits());
+    } else if at < 30 {
+        set(e, coordinates + 4 * (at - 18), c.f32(6).to_bits());
+    }
+    if c.word(3) == 0 {
+        set(e, data + 0x24, 0);
+    }
+    e.mem.set_u16(data + 0x40, c.word(4) as u16);
+    let strip = e.mem.alloc(0x20);
+    for (k, v) in [0u16, 1, 2, 3, 4, 5, 0, 2, 4].iter().enumerate() {
+        e.mem.set_u16(strip + 2 * k as u32, *v);
+    }
+    set(e, RETS + 0x5f1, strip);
+    let geometry = obj(e, 0xc0, vt);
+    let name = if c.word(5) != 0 {
+        let n = e.mem.alloc(8);
+        e.mem.write(n, b"STBBrock");
+        n
+    } else {
+        0
+    };
+    set(e, geometry + 8, name);
+    set(e, geometry + 0xb8, data);
+    set(e, RETS + 0x1c, if c.word(1) != 0 { geometry } else { 0 });
+    set(e, RETS + 0x20, c.word(2));
+    let existing = if c.word(0) != 0 {
+        let x = e.mem.alloc(0x10);
+        let halves = points(e, 12, u32::MAX, 0.0);
+        set(e, x + 0xc, halves);
+        x
+    } else {
+        0
+    };
+    set(e, RETS + 0x5bd, existing);
+    geometry
+}
+
+/// `00b54b60`: with the extra data or without; a shape or none; strips or a list; normals or none;
+/// no triangles, two, six; a name or none; the case's float at a position or texture coordinate (or
+/// nowhere), every float the harness has and a sweep.
+#[test]
+fn create_tangent_space() {
+    Diff::new(entry!(0x00b5_4b60, tangent::create_tangent_space(u32) -> u32))
+        .family(&geometry::GEOMETRY)
+        .max_calls(MAX_CALLS)
+        .inputs(&[
+            Input::Of(&[0, 1]),
+            Input::Of(&[1, 0]),
+            Input::Flag,
+            Input::Of(&[1, 0]),
+            Input::Of(&[0, 2, 6]),
+            Input::Flag,
+            Input::F32,
+            Input::Of(&[0, 5, 19, 26, 99]),
+        ])
+        .max_cases(600)
+        .float_sweep(48)
+        .setup(|e, c| {
+            let geometry = tangent_world(e, c);
+            vec![geometry]
+        })
+        .run()
+        .assert_same();
+}
+
+// Batch 3: the pick of a geometry's triangles.
+
+use engine_core::typed::leaf;
+use engine_typed::geometry::pick;
+
+/// What the pick tests make: the ray, the pick, the geometry.
+struct Picked {
+    origin: u32,
+    direction: u32,
+    pick: u32,
+    geometry: u32,
+}
+
+/// `c`'s words for [`pick_world`]: the class (0 general, 1 single strip, 2 strips of two, 3 shape),
+/// the intersect type (0 the centre, 1 or 2 the triangles), a skin, the coordinate type, the ray-test
+/// answers (a bit a triangle), the returns (bits: 1 texture, 2 normal, 4 smooth normal, 8 colour),
+/// the locks (bits: 1 vertices through the additional data, 2 textures, 4 normals, 8 colours), the
+/// arrays the data keeps (bits: 1 positions, 2 normals, 4 colours, 8 texture coordinates), stop at
+/// the first hit, the case's float and where it goes.
+fn pick_world(e: &mut Engine, c: &Case) -> Picked {
+    lifecycle_globals(e);
+    e.map(0x011a_9000, 0x1000);
+    e.map(0x0126_f000, 0x1000);
+    let vt = vtable(e);
+    slots!(e; 0x08, 0x8c);
+    // The stand-ins: the ray-triangle test answers from the table's bits and writes its point,
+    // distance and weights; the data's locks fill their blocks from the table; the strip and triangle
+    // lists come from the table; the class test answers from the table; the record's set marks.
+    e.register(0x00ea_db90, |e, a| {
+        let k = e.mem.u32(RETS + 0x900);
+        set(e, RETS + 0x900, k + 1);
+        let hit = (e.mem.u32(RETS + 0x904) >> (k % 8)) & 1;
+        if hit != 0 {
+            let value = e.mem.u32(RETS + 0x908);
+            for (slot, bits) in [
+                (a[6], 0x3f80_0000u32),
+                (a[6] + 4, value),
+                (a[6] + 8, 0x4000_0000),
+                (a[7], 0x4120_0000),
+                (a[8], 0x3e80_0000),
+                (a[9], 0x3e00_0000),
+            ] {
+                set(e, slot, bits);
+            }
+        }
+        ret(hit)
+    });
+    // The locks: the vertices' (data, block), the texture coordinates' (data, 0, block), the
+    // normals' and the colours' (data, block) fill the block from the table.
+    fn fill_lock(e: &mut Engine, block: u32, at: u32) -> Ret {
+        set(e, block, e.mem.u32(RETS + at));
+        set(e, block + 4, e.mem.u32(RETS + at + 4));
+        ret(0)
+    }
+    e.register(0x00a6_7410, |e, a| fill_lock(e, a[1], 0x910));
+    e.register(0x00a6_7720, |e, a| fill_lock(e, a[2], 0x920));
+    e.register(0x00a6_75b0, |e, a| fill_lock(e, a[1], 0x930));
+    e.register(0x00a6_7660, |e, a| fill_lock(e, a[1], 0x940));
+    e.register(0x00a6_7360, |e, _| ret(e.mem.u32(RETS + 0x950)));
+    e.register(0x00a6_73d0, |e, a| {
+        set(e, MARK + 0x20, e.mem.u32(MARK + 0x20) ^ a[0]);
+        ret(0)
+    });
+    e.register(0x00a7_5f10, |e, _| ret(e.mem.u32(RETS + 0x954)));
+    e.register(0x00a7_b850, |e, _| ret(e.mem.u32(RETS + 0x958)));
+    e.register(0x0043_b300, |e, _| ret(e.mem.u32(RETS + 0x95c)));
+    e.register(0x00e9_8aa0, |e, a| {
+        set(e, a[0] + 0x40, a[1]);
+        ret(0)
+    });
+    e.register(0x0053_4780, |e, a| {
+        for w in 0..4 {
+            set(e, a[2] + 4 * w, (0.25f32 * (a[1] + w) as f32).to_bits());
+        }
+        ret(0)
+    });
+    e.register(VT_FN + 0xac, |e, a| {
+        const TRIANGLES: [[u16; 3]; 4] = [[0, 1, 2], [2, 1, 3], [3, 4, 5], [5, 4, 0]];
+        let t = TRIANGLES[(a[1] % 4) as usize];
+        for k in 0..3 {
+            e.mem.set_u16(a[2 + k], t[k]);
+        }
+        ret(0)
+    });
+    let class = c.word(0);
+    // The data, its arrays as kept, its additional data for the vertex lock.
+    let keeps = c.word(7);
+    let data = geometry_data(e, vt, 0x0001);
+    for (bit, field) in [(1u32, 0x20u32), (2, 0x24), (4, 0x28), (8, 0x2c)] {
+        if keeps & bit == 0 {
+            set(e, data + field, 0);
+        }
+    }
+    let positions = e.mem.u32(data + 0x20);
+    let at = c.word(10);
+    if positions != 0 && at < 18 {
+        set(e, positions + 4 * at, c.f32(9).to_bits());
+    }
+    let locks = c.word(6);
+    let additional = obj(e, 0x10, vt);
+    set(e, data + 0x30, additional);
+    set(e, RETS + 0x8c, locks & 1);
+    set(e, RETS + 0x950, locks & 1);
+    let locked_positions = points(e, 6, u32::MAX, 0.0);
+    set(e, RETS + 0x910, locked_positions);
+    set(e, RETS + 0x914, 12);
+    for (bit, at, stride) in [(2u32, 0x920u32, 8u32), (4, 0x930, 12), (8, 0x940, 16)] {
+        if locks & bit != 0 {
+            let block = points(e, 8, u32::MAX, 0.0);
+            set(e, RETS + at, block);
+            set(e, RETS + at + 4, stride);
+        }
+    }
+    e.mem.set_u16(data + 0x44, if class == 2 { 2 } else { 1 });
+    let strip = e.mem.alloc(0x20);
+    for (k, v) in [0u16, 1, 2, 2, 3, 4, 5, 0].iter().enumerate() {
+        e.mem.set_u16(strip + 2 * k as u32, *v);
+    }
+    set(e, RETS + 0x954, strip);
+    let list = e.mem.alloc(0x20);
+    for (k, v) in [0u16, 1, 2, 3, 4, 5, 2, 4, 0].iter().enumerate() {
+        e.mem.set_u16(list + 2 * k as u32, *v);
+    }
+    set(e, RETS + 0x958, list);
+    set(e, RETS + 0x95c, u32::from(class == 3));
+    set(e, RETS + 0xa8, 3);
+    // The class chain: the strips' record for classes 1 and 2, else a record with no parent.
+    let record = if class == 1 || class == 2 {
+        0x011f_4a20
+    } else {
+        let r = e.mem.alloc(8);
+        set(e, r + 4, 0);
+        r
+    };
+    set(e, RETS + 0x08, record);
+    // The geometry: its bound centre words, rotation, translation and scale, data and skin.
+    let geometry = obj(e, 0xc0, vt);
+    let centre = points(e, 2, u32::MAX, 0.0);
+    set(e, geometry + 0x20, centre);
+    let rotation = [
+        1.0f32, 0.0, 0.0, 0.0, 0.8, -0.6, 0.0, 0.6, 0.8, 5.0, -3.0, 2.0, 1.5,
+    ];
+    for (k, v) in rotation.iter().enumerate() {
+        set(e, geometry + 0x68 + 4 * k as u32, v.to_bits());
+    }
+    set(e, geometry + 0xb8, data);
+    set(e, geometry + 0xbc, c.word(2));
+    // The pick: types, the returns, the results' pool with eight records ready.
+    let p = e.mem.alloc(0x40);
+    set(e, p, 1);
+    set(e, p + 4, c.word(8));
+    set(e, p + 8, c.word(1));
+    set(e, p + 0xc, c.word(3));
+    e.mem.set_u8(p + 0x10, 1);
+    let returns = c.word(5);
+    for (k, bit) in [1u32, 2, 4, 8].iter().enumerate() {
+        e.mem
+            .set_u8(p + 0x30 + k as u32, u8::from(returns & bit != 0));
+    }
+    let records = e.mem.alloc(0x20);
+    for k in 0..8 {
+        let r = e.mem.alloc(0x44);
+        set(e, records + 4 * k, r);
+    }
+    set(e, p + 0x18 + 4, records);
+    e.mem.set_u16(p + 0x18 + 8, 8);
+    e.mem.set_u16(p + 0x18 + 0xa, 8);
+    set(e, RETS + 0x904, c.word(4));
+    set(e, RETS + 0x908, c.f32(9).to_bits());
+    let origin = points(e, 1, u32::MAX, 0.0);
+    let direction = e.mem.alloc(0xc);
+    for (k, v) in [0.0f32, 0.6, 0.8].iter().enumerate() {
+        set(e, direction + 4 * k as u32, v.to_bits());
+    }
+    Picked {
+        origin,
+        direction,
+        pick: p,
+        geometry,
+    }
+}
+
+const PICK_INPUTS: &[Input] = &[
+    Input::Of(&[0, 1, 2, 3]),
+    Input::Of(&[1, 0, 2]),
+    Input::Of(&[0, 1]),
+    Input::Of(&[0, 1]),
+    Input::Of(&[0x5, 0, 0xff, 0x2]),
+    Input::Of(&[0xf, 0, 0xb, 0x3, 0x8]),
+    Input::Of(&[0, 0xf, 0x1, 0x6]),
+    Input::Of(&[0xf, 0, 0x1, 0xe, 0x9]),
+    Input::Of(&[0, 1]),
+    Input::F32,
+    Input::Of(&[0, 4, 13, 99]),
+];
+
+/// `00e9b4f0`: each class (the general triangles, a single strip and two strips, a shape), the
+/// centre for intersect type 0 or a skin, each coordinate type, ray tests hitting some, none or all,
+/// each return, each lock, the arrays kept or not, stopping at the first hit or not, the case's float
+/// in a position. The translation calls the strips' and the shape's picks and the record adder
+/// plainly. The leaves family is named too: the point helpers the picks call make points through
+/// its typed constructor (`00416870`).
+#[test]
+fn pick_geometry() {
+    Diff::new(entry!(
+        0x00e9_b4f0,
+        pick::pick_geometry(Ptr, Ptr, Ptr, Ptr) -> bool
+    ))
+    .family(&geometry::GEOMETRY)
+    .family(&leaf::LEAVES)
+    .translation_calls_plainly(&[0x00e9_93d0, 0x00e9_a280, 0x00e9_9330])
+    .max_calls(MAX_CALLS)
+    .inputs(PICK_INPUTS)
+    .max_cases(800)
+    .float_sweep(32)
+    .setup(|e, c| {
+        let w = pick_world(e, c);
+        vec![w.origin, w.direction, w.pick, w.geometry]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `00e993d0`, called directly: the strips' pick over the same inputs.
+#[test]
+fn pick_strips() {
+    Diff::new(entry!(0x00e9_93d0, pick::pick_strips(Ptr, Ptr, Ptr, Ptr) -> bool))
+        .family(&geometry::GEOMETRY)
+        .family(&leaf::LEAVES)
+        .translation_calls_plainly(&[0x00e9_9330])
+        .max_calls(MAX_CALLS)
+        .inputs(PICK_INPUTS)
+        .max_cases(500)
+        .setup(|e, c| {
+            let w = pick_world(e, c);
+            vec![w.origin, w.direction, w.pick, w.geometry]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `00e9a280`, called directly: the shape's pick over the same inputs.
+#[test]
+fn pick_shape() {
+    Diff::new(entry!(0x00e9_a280, pick::pick_shape(Ptr, Ptr, Ptr, Ptr) -> bool))
+        .family(&geometry::GEOMETRY)
+        .family(&leaf::LEAVES)
+        .translation_calls_plainly(&[0x00e9_9330])
+        .max_calls(MAX_CALLS)
+        .inputs(PICK_INPUTS)
+        .max_cases(500)
+        .setup(|e, c| {
+            let w = pick_world(e, c);
+            vec![w.origin, w.direction, w.pick, w.geometry]
+        })
+        .run()
+        .assert_same();
 }
