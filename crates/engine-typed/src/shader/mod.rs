@@ -103,32 +103,6 @@ pub(crate) fn sub_d(a: f32, b: f64) -> f32 {
     crate::anim_keys::narrow(f64::from(a) - b)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The double-operand steps round once from the exact result where the `f64` holds it, to
-    /// nearest, ties to even.
-    #[test]
-    fn double_steps_round_once() {
-        assert_eq!(mul_d(3.0, 0.5), 1.5);
-        assert_eq!(mul_d(1.0, 1.0 + 2f64.powi(-24)), 1.0);
-        assert_eq!(mul_d(1.0, 1.0 + 3.0 * 2f64.powi(-24)), 1.0 + 2f32.powi(-22));
-        // 3 (1 + 2^-24 + 2^-50) is 0.75 ulp above 3: one rounding gives 3 + 2^-22. Rounding the double
-        // to a float first (1 + 2^-23) would give 3 + 1.5 ulp, then 3 + 2^-21.
-        assert_eq!(
-            mul_d(3.0, 1.0 + 2f64.powi(-24) + 2f64.powi(-50)),
-            3.0 + 2f32.powi(-22)
-        );
-        assert_eq!(div_d(1.0, 3.0), 1.0 / 3.0);
-        assert_eq!(div_d(3.0, 2.0), 1.5);
-        assert_eq!(add_d(1.0, 0.5), 1.5);
-        assert_eq!(add_d(1.0, 2f64.powi(-30)), 1.0);
-        assert_eq!(sub_d(1.0, 0.25), 0.75);
-        assert_eq!(sub_d(1.0, 2f64.powi(-30)), 1.0);
-    }
-}
-
 /// The family's functions, by exe address.
 fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -336,4 +310,30 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b7_cfb0, accumulator::set_pair_textures(u32, u32)),
         entry!(0x00b7_c320, accumulator::restore_states(u32, u32)),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The double-operand steps round once from the exact result where the `f64` holds it, to
+    /// nearest, ties to even.
+    #[test]
+    fn double_steps_round_once() {
+        assert_eq!(mul_d(3.0, 0.5), 1.5);
+        assert_eq!(mul_d(1.0, 1.0 + 2f64.powi(-24)), 1.0);
+        assert_eq!(mul_d(1.0, 1.0 + 3.0 * 2f64.powi(-24)), 1.0 + 2f32.powi(-22));
+        // 3 (1 + 2^-24 + 2^-50) is 0.75 ulp above 3: one rounding gives 3 + 2^-22. Rounding the double
+        // to a float first (1 + 2^-23) would give 3 + 1.5 ulp, then 3 + 2^-21.
+        assert_eq!(
+            mul_d(3.0, 1.0 + 2f64.powi(-24) + 2f64.powi(-50)),
+            3.0 + 2f32.powi(-22)
+        );
+        assert_eq!(div_d(1.0, 3.0), 1.0 / 3.0);
+        assert_eq!(div_d(3.0, 2.0), 1.5);
+        assert_eq!(add_d(1.0, 0.5), 1.5);
+        assert_eq!(add_d(1.0, 2f64.powi(-30)), 1.0);
+        assert_eq!(sub_d(1.0, 0.25), 0.75);
+        assert_eq!(sub_d(1.0, 2f64.powi(-30)), 1.0);
+    }
 }
