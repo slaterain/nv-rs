@@ -1515,6 +1515,7 @@ fn a_handle_made_again_while_bound_is_looked_up_again() {
     draw(&mut g);
     left_red_right_green(&mut g, "made again");
     assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+}
 
 /// With the answers board (the render thread's way to the game's threads), the backend posts each
 /// occlusion count once the GPU has it, through its idle work alone: the same count a reader that
