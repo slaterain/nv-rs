@@ -3669,12 +3669,6 @@ mod native {
             assert_eq!((n, end, unwinds), (1, WalkEnd::Bad, 0));
         }
 
-        /// A walk never waits on the loader. A thread of this program loads and frees a DLL in a
-        /// loop and is suspended, as the sampler suspends the engine's thread, while walks at
-        /// tail-call epilogues run (a plain `jmp` and a `bnd jmp` in turn): every walk comes
-        /// back. Through `RtlVirtualUnwind`, a probe of the same loop got stuck within 9,000 to
-        /// 95,000 walks (the `bnd jmp` alone, 10 times in 30,163 walks); here a watchdog resumes
-        /// the thread after two seconds without a walk coming back, and the test fails.
         /// Samplers on several threads at once name one address alike every time: dbghelp is
         /// single-threaded, and its calls hold the dbghelp lock ([`DBGHELP`]). Without it this
         /// failed 10 runs of 10: 6 to 140 of the 320 names wrong (empty, "?", or the name's first
@@ -3713,6 +3707,12 @@ mod native {
             );
         }
 
+        /// A walk never waits on the loader. A thread of this program loads and frees a DLL in a
+        /// loop and is suspended, as the sampler suspends the engine's thread, while walks at
+        /// tail-call epilogues run (a plain `jmp` and a `bnd jmp` in turn): every walk comes
+        /// back. Through `RtlVirtualUnwind`, a probe of the same loop got stuck within 9,000 to
+        /// 95,000 walks (the `bnd jmp` alone, 10 times in 30,163 walks); here a watchdog resumes
+        /// the thread after two seconds without a walk coming back, and the test fails.
         #[test]
         fn a_walk_at_a_tail_call_never_waits_on_the_loader() {
             use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
