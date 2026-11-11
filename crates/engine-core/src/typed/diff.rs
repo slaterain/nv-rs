@@ -49,6 +49,10 @@
 //!   input stops ([`Diff::expect_stops`]), since it compared nothing past the stop;
 //! - the heap's top and free bytes, the control word and the clock after the call.
 //!
+//! With [`Diff::float_ulps`], the words that read as floats compare within a number of ulps
+//! instead, in all of these places, and ST0 within as many ulps of an `f32`; integers, pointers and
+//! the rest stay exact.
+//!
 //! A stack address stored in memory, held in the bytes behind a stack word, or returned compares by
 //! value, so it fails when the frames differ. With a [`Diff::local_at`] in the test, the stored ones
 //! compare as "some stack address" instead, whichever local they point at.
@@ -411,6 +415,7 @@ pub struct Diff {
     nan_payloads: bool,
     max_calls: usize,
     float_sweep: usize,
+    float_ulps: Option<u32>,
 }
 
 impl Diff {
@@ -434,6 +439,7 @@ impl Diff {
             max_calls: DEFAULT_MAX_CALLS,
             nan_payloads: false,
             float_sweep: 0,
+            float_ulps: None,
         }
     }
 
@@ -599,6 +605,30 @@ impl Diff {
         self
     }
 
+    /// Floats may differ by up to `n` ulps, where native float maths rounds where the exe's x87 code
+    /// did not (ADR-0014's float rule; AGENT-RULES.md, "SPEED FIRST"). Without it every float
+    /// compares bit for bit.
+    ///
+    /// An aligned word compares as an `f32` within `n` ulps when it reads as one on both sides: zero,
+    /// an infinity, a NaN, or a number from 2^-64 to 2^65 in magnitude that is no mapped address of
+    /// its engine. A NaN equals a NaN of any payload, +0 equals -0, and an infinity differs from every
+    /// finite number. Every other word compares exactly: small integers (they read as denormals),
+    /// pointers into mapped memory, flag words that read as tiny numbers, and the words from
+    /// 0xffff0000 up (small negative integers that read as NaNs).
+    ///
+    /// That holds for memory at the start of every outgoing call (its other words still in the
+    /// call's hash) and after the call, for a call's words and for the bytes behind its stack words.
+    /// ST0 compares within `n` ulps of an `f32` at its magnitude, so an x87 result held at a higher
+    /// precision passes against one rounded to a float. [`Report::tolerated`] counts the values that
+    /// differed within the tolerance, [`Report::largest_ulps`] holds the largest difference.
+    ///
+    /// Logic and integers stay exact, so keep `n` small: an integer that reads as a float in range
+    /// (bit 30 set, say) is let through by up to `n` as well.
+    pub fn float_ulps(mut self, n: u32) -> Diff {
+        self.float_ulps = Some(n);
+        self
+    }
+
     /// The control words this runs under, and where they came from.
     fn words_to_run(&self) -> Vec<u16> {
         if let Some(words) = &self.control_words {
@@ -704,6 +734,7 @@ impl Diff {
         branch: Branch,
         report: &mut Report,
     ) {
+        let mut tally = Tally::default();
         let mut found = |what: Found| report.note(case, word, branch, what);
         if a.stop != b.stop {
             found(Found::Stop {
@@ -711,13 +742,21 @@ impl Diff {
                 typed: b.stop.clone(),
             });
         }
-        if !same_ret(&a.ret, &b.ret, self.nan_payloads) {
+        let same_return = match self.float_ulps {
+            Some(n) => {
+                a.ret.eax == b.ret.eax
+                    && a.ret.edx == b.ret.edx
+                    && tally.within(st0_ulps_apart(a.ret.st0, b.ret.st0), n)
+            }
+            None => same_ret(&a.ret, &b.ret, self.nan_payloads),
+        };
+        if !same_return {
             found(Found::Return {
                 translation: a.ret,
                 typed: b.ret,
             });
         }
-        compare_calls(a, b, ignored, plain, &mut found);
+        compare_calls(a, b, ignored, plain, self.float_ulps, &mut tally, &mut found);
         if a.control_word != b.control_word {
             found(Found::ControlWord {
                 translation: a.control_word,
@@ -742,8 +781,12 @@ impl Diff {
             b,
             self.nan_payloads,
             !self.local_words.is_empty(),
+            self.float_ulps,
+            &mut tally,
             &mut found,
         );
+        report.tolerated += tally.tolerated;
+        report.largest_ulps = report.largest_ulps.max(tally.largest);
     }
 
     /// One engine's run of the case.
@@ -811,6 +854,8 @@ impl Diff {
                 local_words: self.local_words.clone(),
                 locals: Vec::new(),
                 next_local: 0,
+                float_ulps: self.float_ulps,
+                first: None,
             })
         });
         x87::set_control_word(word);
@@ -818,9 +863,9 @@ impl Diff {
         let control_word = x87::control_word();
         x87::set_control_word(x87::DEFAULT_CONTROL_WORD);
         e.set_call_hook(None);
-        let calls = RECORDING
+        let (calls, first) = RECORDING
             .with(|r| r.borrow_mut().take())
-            .map(|r| r.calls)
+            .map(|r| (r.calls, r.first.unwrap_or_default()))
             .unwrap_or_default();
         let stack = e.guest_stack_region();
         let (ret, stop) = match result {
@@ -838,6 +883,7 @@ impl Diff {
             ret,
             stop,
             calls,
+            first,
             stack,
             control_word,
             clock,
@@ -893,7 +939,7 @@ fn stop_text(
             Some((lo, hi)) if (lo..hi).contains(&thrown.object) => {
                 format!(
                     "on the stack, {:?}",
-                    stack_word(e, thrown.object, hi, stack_bytes, None)
+                    stack_word(e, thrown.object, hi, stack_bytes, None, false).0
                 )
             }
             _ => format!("{:08x}", thrown.object),
@@ -946,8 +992,16 @@ struct LocalWord {
 struct Seen {
     addr: u32,
     words: Vec<Word>,
-    /// A hash of all mapped memory outside the stack for locals, at the moment of the call.
+    /// A hash of all mapped memory outside the stack for locals, at the moment of the call. Under
+    /// [`Diff::float_ulps`] the `f32` words stand as [`FLOAT_WORD`] in it, and `floats` holds them.
     memory: u64,
+    /// Under [`Diff::float_ulps`]: the `f32` words of memory that differ from the side's first call,
+    /// as (address, value), in address order.
+    floats: Vec<(u32, u32)>,
+    /// Under [`Diff::float_ulps`]: the `f32` words among the call's words (offset `u32::MAX`) and
+    /// behind its stack words, as (word index, offset, value); in `words` they stand as
+    /// [`FLOAT_WORD`].
+    float_words: Vec<(usize, u32, u32)>,
     clock: (u32, u32),
     /// A direct `typed_call!`, noted, not a call by address.
     direct: bool,
@@ -971,6 +1025,152 @@ struct Recording {
     /// ordinals.
     locals: Vec<(u32, u32)>,
     next_local: u32,
+    /// [`Diff::float_ulps`].
+    float_ulps: Option<u32>,
+    /// Under [`Diff::float_ulps`]: memory as it compares at the first call (the function under test),
+    /// by page, for the later calls' `f32` words to be told against.
+    first: Option<Vec<(u32, Vec<u8>)>>,
+}
+
+/// What stands for an `f32` word in a call's words, behind a stack word and in the memory hash under
+/// [`Diff::float_ulps`], its value compared apart within the tolerance. It reads as no float that
+/// the tolerance covers.
+const FLOAT_WORD: u32 = 0xf10a_7f10;
+
+/// Whether word `w` of engine `e` compares as an `f32` under [`Diff::float_ulps`]: zero, an
+/// infinity, a NaN below 0xffff0000, or a number from 2^-64 to 2^65 in magnitude that is not a
+/// mapped address (nor the stand-in for a stack address).
+fn reads_as_float(e: &Engine, w: u32) -> bool {
+    let exponent = (w >> 23) & 0xff;
+    if w & 0x7fff_ffff == 0 {
+        return true;
+    }
+    if exponent == 0xff {
+        return w < 0xffff_0000;
+    }
+    (63..=191).contains(&exponent) && w != SOME_STACK_ADDRESS && !e.mem.is_mapped(w)
+}
+
+/// How many ulps apart two `f32` words are: 0 for the same bits, two NaNs, or +0 and -0; `None` for
+/// a NaN against a number or an infinity against anything else.
+fn f32_ulps_apart(a: u32, b: u32) -> Option<u32> {
+    if a == b {
+        return Some(0);
+    }
+    let (x, y) = (f32::from_bits(a), f32::from_bits(b));
+    if x.is_nan() && y.is_nan() {
+        return Some(0);
+    }
+    if x.is_nan() || y.is_nan() || x.is_infinite() || y.is_infinite() {
+        return None;
+    }
+    // Ordered so that neighbouring floats are neighbouring integers, -0 and +0 both 0.
+    let ordered = |w: u32| {
+        if w & 0x8000_0000 == 0 {
+            i64::from(w)
+        } else {
+            -i64::from(w & 0x7fff_ffff)
+        }
+    };
+    u32::try_from((ordered(a) - ordered(b)).unsigned_abs()).ok()
+}
+
+/// How many `f32` ulps apart two ST0 values are, counted at the larger one's magnitude and rounded
+/// up; the special values as [`f32_ulps_apart`] has them.
+fn st0_ulps_apart(a: f64, b: f64) -> Option<u32> {
+    if a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan()) {
+        return Some(0);
+    }
+    if a.is_nan() || b.is_nan() || a.is_infinite() || b.is_infinite() {
+        return None;
+    }
+    let larger = a.abs().max(b.abs());
+    // The binary exponent of an f32 of that magnitude; f32 denormals share the smallest normal's ulp.
+    let exponent = (((larger.to_bits() >> 52) & 0x7ff) as i32 - 1023).clamp(-126, 127);
+    let apart = ((a - b).abs() / 2f64.powi(exponent - 23)).ceil();
+    (apart <= f64::from(u32::MAX)).then_some(apart as u32)
+}
+
+/// What [`Diff::float_ulps`] let through in one comparison.
+#[derive(Default)]
+struct Tally {
+    tolerated: usize,
+    largest: u32,
+}
+
+impl Tally {
+    /// Whether `apart` is within `n` ulps, counting it when it is but not 0.
+    fn within(&mut self, apart: Option<u32>, n: u32) -> bool {
+        match apart {
+            Some(0) => true,
+            Some(d) if d <= n => {
+                self.tolerated += 1;
+                self.largest = self.largest.max(d);
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+/// The word at `addr` as memory compared at a side's first call ([`Recording::first`]); 0 on a page
+/// mapped since, which starts zeroed (a page only one side maps shows in the call's hash).
+fn first_word(first: &[(u32, Vec<u8>)], addr: u32) -> u32 {
+    let page = addr & !0xfff;
+    let Ok(at) = first.binary_search_by_key(&page, |(p, _)| *p) else {
+        return 0;
+    };
+    let k = (addr - page) as usize;
+    let bytes = &first[at].1;
+    u32::from_le_bytes([bytes[k], bytes[k + 1], bytes[k + 2], bytes[k + 3]])
+}
+
+/// Whether two calls' changed `f32` words of memory ([`Seen::floats`]) agree within `n` ulps; a word
+/// one side changed and the other didn't compares with the other's word at its first call.
+fn floats_within(
+    x: &[(u32, u32)],
+    y: &[(u32, u32)],
+    x_first: &[(u32, Vec<u8>)],
+    y_first: &[(u32, Vec<u8>)],
+    n: u32,
+    tally: &mut Tally,
+) -> bool {
+    let (mut i, mut j) = (0, 0);
+    while i < x.len() || j < y.len() {
+        let (xv, yv) = match (x.get(i), y.get(j)) {
+            (Some(&(ax, vx)), Some(&(ay, vy))) if ax == ay => {
+                i += 1;
+                j += 1;
+                (vx, vy)
+            }
+            (Some(&(ax, vx)), next) if next.map_or(true, |&(ay, _)| ax < ay) => {
+                i += 1;
+                (vx, first_word(y_first, ax))
+            }
+            (_, Some(&(ay, vy))) => {
+                j += 1;
+                (first_word(x_first, ay), vy)
+            }
+            _ => unreachable!("the loop's condition says one list has a word left"),
+        };
+        if !tally.within(f32_ulps_apart(xv, yv), n) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Two calls' [`Seen::float_words`] alike within `n` ulps: the same places, the values within.
+fn float_words_within(
+    x: &[(usize, u32, u32)],
+    y: &[(usize, u32, u32)],
+    n: u32,
+    tally: &mut Tally,
+) -> bool {
+    x.len() == y.len()
+        && x.iter().zip(y).all(|(&(i, o, a), &(j, p, b))| {
+            i == j && o == p && tally.within(f32_ulps_apart(a, b), n)
+        })
 }
 
 thread_local! {
@@ -1014,7 +1214,9 @@ fn seen_call(e: &Engine, addr: u32, words: &[u32], recording: &mut Recording) ->
     recording.locals.retain(|(word, _)| live(*word));
     let loose = !recording.local_words.is_empty();
     let blur = if loose { stack } else { None };
+    let tolerant = recording.float_ulps.is_some();
     let mut seen_words = Vec::with_capacity(words.len());
+    let mut float_words = Vec::new();
     for (i, (canonical, word)) in plain.iter().zip(words).enumerate() {
         let on_stack = stack.is_some_and(|(lo, hi)| (lo..hi).contains(word));
         let local = recording
@@ -1022,7 +1224,7 @@ fn seen_call(e: &Engine, addr: u32, words: &[u32], recording: &mut Recording) ->
             .iter()
             .find(|l| l.callee == addr && l.word == i)
             .copied();
-        seen_words.push(match (on_stack, local) {
+        let (seen, floats) = match (on_stack, local) {
             (true, Some(local)) => {
                 let ordinal = match recording.locals.iter().find(|(w, _)| w == word) {
                     Some((_, ordinal)) => *ordinal,
@@ -1032,22 +1234,32 @@ fn seen_call(e: &Engine, addr: u32, words: &[u32], recording: &mut Recording) ->
                         recording.next_local
                     }
                 };
-                Word::Local {
-                    ordinal,
-                    bytes: bytes_hash(e, *word, local.size, blur),
-                }
+                let (bytes, floats) = bytes_hash(e, *word, local.size, blur, tolerant);
+                (Word::Local { ordinal, bytes }, floats)
             }
             (true, None) => {
                 let end = stack.map_or(0, |(_, hi)| hi);
-                stack_word(e, *word, end, recording.stack_bytes, blur)
+                stack_word(e, *word, end, recording.stack_bytes, blur, tolerant)
             }
-            (false, _) => Word::Plain(*canonical),
-        });
+            (false, _) if tolerant && reads_as_float(e, *word) => {
+                (Word::Plain(FLOAT_WORD), vec![(u32::MAX, *word)])
+            }
+            (false, _) => (Word::Plain(*canonical), Vec::new()),
+        };
+        seen_words.push(seen);
+        float_words.extend(floats.into_iter().map(|(offset, value)| (i, offset, value)));
     }
+    let (memory, floats) = if tolerant {
+        memory_floats(e, stack, loose, &mut recording.first)
+    } else {
+        (memory_hash(e, stack, recording.nan_payloads, loose), Vec::new())
+    };
     Seen {
         addr,
         words: seen_words,
-        memory: memory_hash(e, stack, recording.nan_payloads, loose),
+        memory,
+        floats,
+        float_words,
         clock: (e.clock_ms, e.clock_us),
         direct: e.typed_noted_direct(),
         depth: e.call_stack.len(),
@@ -1055,14 +1267,16 @@ fn seen_call(e: &Engine, addr: u32, words: &[u32], recording: &mut Recording) ->
 }
 
 /// A word on the stack, relative to the live frame that holds it; `blur` is the stack's range when
-/// stack addresses behind it compare as "some stack address".
+/// stack addresses behind it compare as "some stack address". With `tolerant`, the `f32` words
+/// behind it as well ([`bytes_hash`]).
 fn stack_word(
     e: &Engine,
     word: u32,
     stack_end: u32,
     stack_bytes: u32,
     blur: Option<(u32, u32)>,
-) -> Word {
+    tolerant: bool,
+) -> (Word, Vec<(u32, u32)>) {
     let frame = e
         .stack_frames
         .iter()
@@ -1073,20 +1287,90 @@ fn stack_word(
         None => (stack_end - word, 0, stack_end),
     };
     let len = stack_bytes.min(end - word);
-    Word::Stack {
-        offset,
-        frame,
-        bytes: bytes_hash(e, word, len, blur),
-    }
+    let (bytes, floats) = bytes_hash(e, word, len, blur, tolerant);
+    (
+        Word::Stack {
+            offset,
+            frame,
+            bytes,
+        },
+        floats,
+    )
 }
 
-/// A hash of `len` bytes at `word`.
-fn bytes_hash(e: &Engine, word: u32, len: u32, blur: Option<(u32, u32)>) -> u64 {
+/// A hash of `len` bytes at `word`. With `tolerant` ([`Diff::float_ulps`]), the aligned `f32` words
+/// in them (counted from `word`) stand as [`FLOAT_WORD`] in the hash and come back as (offset,
+/// value).
+fn bytes_hash(
+    e: &Engine,
+    word: u32,
+    len: u32,
+    blur: Option<(u32, u32)>,
+    tolerant: bool,
+) -> (u64, Vec<(u32, u32)>) {
     let mut bytes = e.mem.bytes(word, len);
     if let Some(stack) = blur {
         blur_stack_addresses(&mut bytes, stack);
     }
-    hash_bytes(0, &bytes)
+    let floats = if tolerant {
+        take_floats(e, &mut bytes)
+    } else {
+        Vec::new()
+    };
+    (hash_bytes(0, &bytes), floats)
+}
+
+/// The aligned `f32` words of `bytes` ([`reads_as_float`]) as (offset, value), each replaced with
+/// [`FLOAT_WORD`].
+fn take_floats(e: &Engine, bytes: &mut [u8]) -> Vec<(u32, u32)> {
+    let mut floats = Vec::new();
+    for (k, chunk) in (0u32..).zip(bytes.chunks_exact_mut(4)) {
+        let w = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        if reads_as_float(e, w) {
+            floats.push((4 * k, w));
+            chunk.copy_from_slice(&FLOAT_WORD.to_le_bytes());
+        }
+    }
+    floats
+}
+
+/// Memory at a call under [`Diff::float_ulps`]: the hash of every word but the `f32` ones, and the
+/// `f32` words that differ from the side's first call, as (address, value). The first call keeps
+/// its pages in `first`.
+fn memory_floats(
+    e: &Engine,
+    stack: Option<(u32, u32)>,
+    loose: bool,
+    first: &mut Option<Vec<(u32, Vec<u8>)>>,
+) -> (u64, Vec<(u32, u32)>) {
+    let on_stack = |a: u32| stack.is_some_and(|(lo, hi)| (lo..hi).contains(&a));
+    let mut hash = 0;
+    let mut floats = Vec::new();
+    let mut pages = Vec::new();
+    for page in e.mem.mapped_pages() {
+        if on_stack(page) && on_stack(page + 0xfff) {
+            continue;
+        }
+        let bytes = comparable_page(page, &e.mem.page_bytes(page), stack, false, loose);
+        let mut masked = bytes.clone();
+        for (offset, value) in take_floats(e, &mut masked) {
+            // The first call's own floats are the setup's, alike on both sides by construction.
+            if let Some(first) = first.as_deref() {
+                let addr = page + offset;
+                if first_word(first, addr) != value {
+                    floats.push((addr, value));
+                }
+            }
+        }
+        hash = hash_bytes(hash ^ u64::from(page), &masked);
+        if first.is_none() {
+            pages.push((page, bytes));
+        }
+    }
+    if first.is_none() {
+        *first = Some(pages);
+    }
+    (hash, floats)
 }
 
 /// What an aligned word holding an address on the stack compares as, when frames may differ.
@@ -1193,6 +1477,8 @@ struct Side {
     ret: Ret,
     stop: Option<String>,
     calls: Vec<Seen>,
+    /// Under [`Diff::float_ulps`]: memory as it compared at the first call ([`Recording::first`]).
+    first: Vec<(u32, Vec<u8>)>,
     stack: Option<(u32, u32)>,
     control_word: u16,
     clock: (u32, u32),
@@ -1234,12 +1520,15 @@ fn without_subtrees(calls: &[Seen], drop: impl Fn(&Seen) -> bool) -> Vec<&Seen> 
 /// Compares the two sides' calls, in order: the first that differs in address or words, and the
 /// first with different memory or clock at the moment of the call, before that. `ignored` calls
 /// come out as [`Diff::ignore_calls`] says, and `plain` calls (not what they call) out of the
-/// second, the typed version's, at every depth.
+/// second, the typed version's, at every depth. With `ulps` ([`Diff::float_ulps`]) the `f32` words,
+/// in the call's words, behind them and in memory, compare within it.
 fn compare_calls(
     a: &Side,
     b: &Side,
     ignored: &[u32],
     plain: &[u32],
+    ulps: Option<u32>,
+    tally: &mut Tally,
     found: &mut impl FnMut(Found),
 ) {
     // The translation: an ignored call at any depth, with every call made under it (a typed version
@@ -1256,21 +1545,30 @@ fn compare_calls(
     .into_iter()
     .filter(|c| !plain.contains(&c.addr))
     .collect();
-    let same = |x: &Seen, y: &Seen| x.addr == y.addr && x.words == y.words;
+    let n = ulps.unwrap_or(0);
+    let mut same = |x: &Seen, y: &Seen| {
+        x.addr == y.addr
+            && x.words == y.words
+            && float_words_within(&x.float_words, &y.float_words, n, tally)
+    };
     let at = a_calls
         .iter()
         .zip(&b_calls)
         .position(|(x, y)| !same(x, y))
         .unwrap_or(a_calls.len().min(b_calls.len()));
+    let mut same_memory = |x: &Seen, y: &Seen| {
+        x.memory == y.memory && floats_within(&x.floats, &y.floats, &a.first, &b.first, n, tally)
+    };
     let state = a_calls[..at]
         .iter()
         .zip(&b_calls[..at])
-        .position(|(x, y)| x.memory != y.memory || x.clock != y.clock);
+        .position(|(x, y)| !same_memory(x, y) || x.clock != y.clock);
     if let Some(k) = state {
+        let memory = !same_memory(a_calls[k], b_calls[k]);
         found(Found::BeforeCall {
             at: k,
             addr: a_calls[k].addr,
-            memory: a_calls[k].memory != b_calls[k].memory,
+            memory,
             clock: a_calls[k].clock != b_calls[k].clock,
         });
     }
@@ -1291,6 +1589,8 @@ fn compare_memory(
     b: &Side,
     nan_payloads: bool,
     loose: bool,
+    ulps: Option<u32>,
+    tally: &mut Tally,
     found: &mut impl FnMut(Found),
 ) {
     let (mem_a, mem_b) = (&a.engine.mem, &b.engine.mem);
@@ -1301,9 +1601,20 @@ fn compare_memory(
             (Some(&pa), Some(&pb)) if pa == pb => {
                 let (bytes_a, bytes_b) = (mem_a.page_bytes(pa), mem_b.page_bytes(pa));
                 if bytes_a != bytes_b {
-                    let bytes_a = comparable_page(pa, &bytes_a, a.stack, nan_payloads, loose);
-                    let bytes_b = comparable_page(pa, &bytes_b, a.stack, nan_payloads, loose);
-                    compare_page(pa, &bytes_a, &bytes_b, found);
+                    let nans = nan_payloads && ulps.is_none();
+                    let bytes_a = comparable_page(pa, &bytes_a, a.stack, nans, loose);
+                    let bytes_b = comparable_page(pa, &bytes_b, a.stack, nans, loose);
+                    match ulps {
+                        Some(n) => {
+                            let mut same = |x: u32, y: u32| {
+                                reads_as_float(&a.engine, x)
+                                    && reads_as_float(&b.engine, y)
+                                    && tally.within(f32_ulps_apart(x, y), n)
+                            };
+                            compare_page_words(pa, &bytes_a, &bytes_b, &mut same, found);
+                        }
+                        None => compare_page(pa, &bytes_a, &bytes_b, found),
+                    }
                 }
                 i += 1;
                 j += 1;
@@ -1346,6 +1657,39 @@ fn compare_page(page: u32, a: &[u8], b: &[u8], found: &mut impl FnMut(Found)) {
             });
         } else {
             k += 1;
+        }
+    }
+}
+
+/// [`compare_page`] word by word, for [`Diff::float_ulps`]: a word that differs is let through when
+/// `same` says so; the runs of words it doesn't let through are reported.
+fn compare_page_words(
+    page: u32,
+    a: &[u8],
+    b: &[u8],
+    same: &mut impl FnMut(u32, u32) -> bool,
+    found: &mut impl FnMut(Found),
+) {
+    let word = |bytes: &[u8], k: usize| {
+        u32::from_le_bytes([bytes[k], bytes[k + 1], bytes[k + 2], bytes[k + 3]])
+    };
+    let mut run: Option<usize> = None;
+    for k in (0..=a.len()).step_by(4) {
+        let differs = k < a.len() && {
+            let (x, y) = (word(a, k), word(b, k));
+            x != y && !same(x, y)
+        };
+        match (differs, run) {
+            (true, None) => run = Some(k),
+            (false, Some(start)) => {
+                found(Found::Memory {
+                    addr: page + start as u32,
+                    translation: a[start..k].to_vec(),
+                    typed: b[start..k].to_vec(),
+                });
+                run = None;
+            }
+            _ => {}
         }
     }
 }
@@ -1525,6 +1869,12 @@ pub struct Report {
     pub found: usize,
     /// The first of them in full.
     pub first: Vec<Difference>,
+    /// The values that differed within [`Diff::float_ulps`]: return values, call words, the floats
+    /// behind stack words, and memory words at each outgoing call and after the call, each counted
+    /// where it was compared. 0 without the tolerance.
+    pub tolerated: usize,
+    /// The largest difference among them, in ulps.
+    pub largest_ulps: u32,
 }
 
 impl Report {
@@ -1569,6 +1919,13 @@ impl fmt::Display for Report {
         )?;
         for d in &self.first {
             writeln!(f, "  {d}")?;
+        }
+        if self.tolerated > 0 {
+            writeln!(
+                f,
+                "  {} value(s) differed within the float tolerance, the largest by {} ulp(s)",
+                self.tolerated, self.largest_ulps
+            )?;
         }
         Ok(())
     }
@@ -2869,6 +3226,211 @@ mod tests {
         assert_eq!(report.found, 1, "{report}");
         assert!(matches!(report.first[0].what, Found::Return { .. }));
         assert!(diff().allow_nan_payloads().run().is_same());
+    }
+
+    // ---- The float tolerance -------------------------------------------------
+
+    /// 1.0 plus `ulps` ulps in memory, as the callee's word and as the return.
+    fn float_store(e: &mut Engine, p: Ptr, ulps: u32) -> f32 {
+        let bits = 0x3f80_0000 + ulps;
+        e.mem.set_u32(p.addr(), bits);
+        e.call(CALLEE, &[bits]);
+        f32::from_bits(bits)
+    }
+    fn float_exact(e: &mut Engine, p: Ptr) -> f32 {
+        float_store(e, p, 0)
+    }
+    fn float_one_ulp(e: &mut Engine, p: Ptr) -> f32 {
+        float_store(e, p, 1)
+    }
+    fn float_two_ulps(e: &mut Engine, p: Ptr) -> f32 {
+        float_store(e, p, 2)
+    }
+
+    /// A comparison against `translation` of a function taking a fresh 16-byte block, with a callee
+    /// that does nothing.
+    fn float_diff(typed: (u32, AbiFn), translation: (u32, AbiFn)) -> Diff {
+        Diff::new(typed)
+            .translation(translation.1)
+            .inputs(&[Input::Flag])
+            .control_words(&[OTHER_THREADS])
+            .setup(|e, _| {
+                e.register(CALLEE, |_, _| Ret::default());
+                vec![e.mem.alloc(0x10)]
+            })
+    }
+
+    /// One ulp apart in the return, in a call's word and in memory at the call and after: a
+    /// difference by default; let through and counted with `float_ulps(1)`; two ulps apart is not.
+    #[test]
+    fn float_ulps_lets_floats_through_within_the_tolerance() {
+        let exact = crate::entry!(0x0040_2000, float_exact(Ptr) -> f32);
+        let one = crate::entry!(0x0040_2000, float_one_ulp(Ptr) -> f32);
+        let two = crate::entry!(0x0040_2000, float_two_ulps(Ptr) -> f32);
+        let report = float_diff(one, exact).run();
+        assert!(!report.is_same(), "exact by default: {report}");
+        assert_eq!(report.tolerated, 0);
+        let report = float_diff(one, exact).float_ulps(1).run();
+        assert!(report.is_same(), "{report}");
+        // Each run: the return, the call's word, memory at the call and memory after.
+        assert_eq!(report.tolerated, 4 * report.runs, "{report}");
+        assert_eq!(report.largest_ulps, 1);
+        assert!(format!("{report}").contains("within the float tolerance"));
+        let report = float_diff(two, exact).float_ulps(1).run();
+        assert!(!report.is_same(), "{report}");
+        assert!(float_diff(two, exact).float_ulps(2).run().is_same());
+    }
+
+    fn write_5(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr(), 5);
+    }
+    fn write_6(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr(), 6);
+    }
+    fn write_itself(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr(), p.addr());
+    }
+    fn write_next(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr(), p.addr() + 4);
+    }
+    fn write_minus_1(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr(), 0xffff_ffff);
+    }
+    fn write_minus_2(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr(), 0xffff_fffe);
+    }
+    fn write_quiet_nan(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr(), 0x7fc0_0000);
+    }
+    fn write_payload_nan(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr(), 0xffc1_2345);
+    }
+
+    /// Under `float_ulps`, integers and pointers still compare exactly: a small integer one apart (a
+    /// denormal's pattern), a pointer one word on, -1 against -2 (NaN patterns). A NaN's payload may
+    /// differ.
+    #[test]
+    fn float_ulps_keeps_integers_and_pointers_exact() {
+        let same = |a: (u32, AbiFn), b: (u32, AbiFn)| float_diff(b, a).float_ulps(8).run().is_same();
+        assert!(!same(
+            crate::entry!(0x0040_2000, write_5(Ptr)),
+            crate::entry!(0x0040_2000, write_6(Ptr))
+        ));
+        assert!(!same(
+            crate::entry!(0x0040_2000, write_itself(Ptr)),
+            crate::entry!(0x0040_2000, write_next(Ptr))
+        ));
+        assert!(!same(
+            crate::entry!(0x0040_2000, write_minus_1(Ptr)),
+            crate::entry!(0x0040_2000, write_minus_2(Ptr))
+        ));
+        assert!(same(
+            crate::entry!(0x0040_2000, write_quiet_nan(Ptr)),
+            crate::entry!(0x0040_2000, write_payload_nan(Ptr))
+        ));
+    }
+
+    fn store_then_call(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr(), 0x3f80_0000);
+        e.call(CALLEE, &[]);
+    }
+    fn store_one_ulp_across(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr(), 0x3f80_0001);
+        e.call(CALLEE, &[]);
+        e.mem.set_u32(p.addr(), 0x3f80_0000);
+    }
+    fn store_far_across(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr(), 0x3f90_0000);
+        e.call(CALLEE, &[]);
+        e.mem.set_u32(p.addr(), 0x3f80_0000);
+    }
+
+    /// Memory at each outgoing call compares word by word under `float_ulps`: a float that differs
+    /// at the call within the tolerance passes, beyond it the call's memory differs.
+    #[test]
+    fn float_ulps_compares_memory_at_each_call() {
+        let base = crate::entry!(0x0040_2000, store_then_call(Ptr));
+        let near = crate::entry!(0x0040_2000, store_one_ulp_across(Ptr));
+        let far = crate::entry!(0x0040_2000, store_far_across(Ptr));
+        let report = float_diff(near, base).run();
+        assert!(
+            matches!(report.first[0].what, Found::BeforeCall { memory: true, .. }),
+            "{report}"
+        );
+        let report = float_diff(near, base).float_ulps(1).run();
+        assert!(report.is_same(), "{report}");
+        assert_eq!(report.tolerated, report.runs, "{report}");
+        let report = float_diff(far, base).float_ulps(1).run();
+        assert_eq!(report.found, report.runs, "{report}");
+        assert!(
+            matches!(report.first[0].what, Found::BeforeCall { memory: true, .. }),
+            "{report}"
+        );
+    }
+
+    fn local_float(e: &mut Engine, bits: u32) {
+        e.with_stack(8, |e, local| {
+            e.mem.set_u32(local.addr(), bits);
+            e.mem.set_u32(local.addr() + 4, 7);
+            e.call(CALLEE, &[local.addr()]);
+        });
+    }
+    fn local_exact(e: &mut Engine) {
+        local_float(e, 0x3f80_0000);
+    }
+    fn local_one_ulp(e: &mut Engine) {
+        local_float(e, 0x3f80_0001);
+    }
+
+    /// The floats behind a stack word compare within the tolerance too.
+    #[test]
+    fn float_ulps_covers_the_bytes_behind_a_stack_word() {
+        let diff = || {
+            Diff::new(crate::entry!(0x0040_2000, local_one_ulp()))
+                .translation(crate::entry!(0x0040_2000, local_exact()).1)
+                .control_words(&[OTHER_THREADS])
+                .setup(|e, _| {
+                    e.register(CALLEE, |_, _| Ret::default());
+                    vec![]
+                })
+        };
+        let report = diff().run();
+        assert!(
+            matches!(report.first[0].what, Found::Call { at: 1, .. }),
+            "{report}"
+        );
+        let report = diff().float_ulps(1).run();
+        assert!(report.is_same(), "{report}");
+        assert_eq!(report.largest_ulps, 1);
+    }
+
+    /// How the tolerance counts: ulps of an `f32` by its bits, ST0 in `f32` ulps at its magnitude,
+    /// and which words read as floats.
+    #[test]
+    fn float_ulps_counts_as_floats_count() {
+        assert_eq!(f32_ulps_apart(0x3f80_0000, 0x3f80_0001), Some(1));
+        assert_eq!(f32_ulps_apart(0x0000_0000, 0x8000_0000), Some(0));
+        assert_eq!(f32_ulps_apart(0x0000_0001, 0x8000_0001), Some(2));
+        assert_eq!(f32_ulps_apart(0x7fc0_0000, 0xffc1_2345), Some(0));
+        assert_eq!(f32_ulps_apart(0x7f7f_ffff, 0x7f80_0000), None);
+        assert_eq!(f32_ulps_apart(0x7fc0_0000, 0x3f80_0000), None);
+        let epsilon = f64::from(f32::EPSILON);
+        assert_eq!(st0_ulps_apart(1.0, 1.0), Some(0));
+        assert_eq!(st0_ulps_apart(1.0, 1.0 + epsilon), Some(1));
+        // An x87 result held at a double's precision, half an ulp from the float.
+        assert_eq!(st0_ulps_apart(1.0, 1.0 + epsilon / 2.0), Some(1));
+        assert_eq!(st0_ulps_apart(1.0, 1.0 + 3.0 * epsilon), Some(3));
+        assert_eq!(st0_ulps_apart(f64::NAN, -f64::NAN), Some(0));
+        assert_eq!(st0_ulps_apart(f64::INFINITY, f64::from(f32::MAX)), None);
+        let mut e = Engine::new_untyped();
+        let heap = e.mem.alloc(0x10);
+        for float in [0, 0x8000_0000, 0x3f80_0000, 0xbf80_0000, 0x7fc0_0000, 0x7f80_0000] {
+            assert!(reads_as_float(&e, float), "{float:08x}");
+        }
+        // A small integer, -1, a mapped address, a number below 2^-64, the stack's stand-in.
+        for word in [5, 0xffff_ffff, heap, 0x1d00_0000, SOME_STACK_ADDRESS] {
+            assert!(!reads_as_float(&e, word), "{word:08x}");
+        }
     }
 
     /// The values whose rounding shows the difference between x87 and SSE.
