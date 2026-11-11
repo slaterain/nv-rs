@@ -29,6 +29,9 @@ impl Rng {
     }
 }
 
+/// A DDS pixel format: its flags, FourCC, bit count and four masks.
+type DdsPixelFormat = (u32, u32, u32, [u32; 4]);
+
 /// The 128-byte DDS header (with the magic) for a `w` x `h` file of `mips` levels; `pf` is the
 /// pixel format's flags, FourCC, bit count and four masks; `caps2` the cube bits.
 fn header(w: u32, h: u32, mips: u32, pf: (u32, u32, u32, [u32; 4]), caps2: u32) -> Vec<u8> {
@@ -230,12 +233,7 @@ pub fn formats() -> Vec<File> {
 
 /// The files of [`formats`] for a group of formats: the plain ones, or (`edge`) the edge-value
 /// ones in levels one pixel high or wide that the file stores, and in a square one.
-fn format_group(
-    rng: &mut Rng,
-    v: &mut Vec<File>,
-    group: &[(&str, (u32, u32, u32, [u32; 4]))],
-    edge: bool,
-) {
+fn format_group(rng: &mut Rng, v: &mut Vec<File>, group: &[(&str, DdsPixelFormat)], edge: bool) {
     let mut add = |name: String, cube: bool, data: Vec<u8>| v.push(File { name, cube, data });
     for &(name, pf) in group {
         if edge {
