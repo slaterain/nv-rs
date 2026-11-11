@@ -23,6 +23,15 @@
 //!   column on an adapter that clips at the viewport's exact edge, as WARP does: DESIGN.md.)
 //! - **User clip planes** ([`Clip`]): each vertex shader also gives its distance to the six
 //!   planes the device sets in `R.clip`, from its own `oPos`.
+//! - **Interpolation at the centroid** ([`Link::centroid`]): the device asks it of every varying,
+//!   whatever the pixel shader declares. On a multisampled target, a pixel that a thin
+//!   ("sliver") triangle covers only in part is then shaded at a place inside the triangle. At
+//!   the pixel's centre, outside the triangle, the varyings are extrapolated (about 150 times
+//!   their range on some of Doc's house's walls, books and light rays): one over-bright pixel,
+//!   which the game's bloom makes a white orb. NVIDIA's driver profile for the game, which it
+//!   applies by the process's name, keeps the original's Direct3D 9 draws from doing that
+//!   (measure/render-aa/orbs2/verdict); this keeps every draw from doing it, on every adapter
+//!   and API. With one sample a pixel the centroid is the centre: the same picture.
 //!
 //! The minimum and maximum (`min`, `max`) are WGSL's, which the hardware computes the way it
 //! does for Direct3D 9 shaders; the SDK's pseudo-code (`src0 < src1 ? src0 : src1`) differs only
@@ -231,14 +240,21 @@ pub struct Link {
     /// The varyings between the two stages, in location order: a vertex shader writes these
     /// (0 for any it does not write), a pixel shader reads them.
     pub varyings: Vec<Semantic>,
-    /// Whether each varying (as `varyings`) is interpolated at the centroid: the pixel shader's
-    /// `dcl_centroid`, which wgpu wants on both stages.
+    /// Whether each varying (as `varyings`) is interpolated at the centroid, on both stages (wgpu
+    /// wants the two to agree): every one for the device's pairs ([`centroid_everywhere`],
+    /// module documentation), whatever the pixel shader's `dcl_centroid` says.
     pub centroid: Vec<bool>,
     /// How the user clip planes cut (both stages of a pair take the same).
     pub clip: Clip,
     /// Pixel shaders: also write 1 to the occlusion count's target ([`COUNT_TARGET`]): every
     /// sample that passes the depth and stencil tests (and is not discarded) adds one there.
     pub count: bool,
+}
+
+/// [`Link::centroid`] of a pair with `varyings` varyings as the device links it: every one at
+/// the centroid (module documentation).
+pub fn centroid_everywhere(varyings: usize) -> Vec<bool> {
+    vec![true; varyings]
 }
 
 /// How a converted pair applies Direct3D 9's user clip planes (`SetClipPlane`,
@@ -1665,6 +1681,61 @@ mod tests {
                 assert_eq!(p.contains("any(input.k0 < "), discard, "{p}");
                 assert!(p.contains("@location(4) n: vec4<f32>"), "{p}");
                 assert!(p.contains("out.n = vec4<f32>(1.0);"), "{p}");
+            }
+        }
+    }
+
+    /// The device's link puts every varying at the centroid on both stages (the pixel shader
+    /// declares no `_centroid`), with the clip distances' own interpolation kept.
+    #[test]
+    fn every_varying_of_a_pair_is_interpolated_at_the_centroid() {
+        let vs = super::super::tests::small_vertex_shader();
+        // ps_2_0: dcl t0; mov oC0, t0 (no _centroid).
+        let ps = [
+            0xFFFF_0200,
+            0x0200_001F,
+            0x8000_0000,
+            0xB00F_0000,
+            0x0200_0001,
+            0x800F_0800,
+            0xB0E4_0000,
+            super::super::END,
+        ];
+        let varyings = vec![
+            Semantic {
+                usage: usage::TEXCOORD,
+                index: 0,
+            },
+            Semantic {
+                usage: usage::COLOR,
+                index: 0,
+            },
+        ];
+        assert_eq!(centroid_everywhere(2), vec![true, true]);
+        for clip in [Clip::Off, Clip::Discard { per_sample: true }] {
+            let link = |inputs| Link {
+                inputs,
+                varyings: varyings.clone(),
+                centroid: centroid_everywhere(varyings.len()),
+                clip,
+                ..Link::default()
+            };
+            let v = converts(&vs, &link(vec![Input::Float(4)]));
+            let p = converts(&ps, &link(Vec::new()));
+            for source in [&v, &p] {
+                for l in 0..2 {
+                    assert!(
+                        source.contains(&format!(
+                            "@location({l}) @interpolate(perspective, centroid) l{l}: vec4<f32>"
+                        )),
+                        "{source}"
+                    );
+                }
+                assert_eq!(
+                    source.contains("@location(2) @interpolate(perspective, sample) k0"),
+                    clip != Clip::Off,
+                    "{source}"
+                );
             }
         }
     }

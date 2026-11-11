@@ -655,22 +655,20 @@ pub fn check_package(package: &package::Package) -> Vec<(String, String)> {
     for s in &package.shaders {
         let result = tokens(&s.bytecode).and_then(|t| parse(&t)).and_then(|p| {
             let sig = wgsl::signature(&p);
+            let varyings: Vec<_> = match p.stage {
+                Stage::Vertex => sig
+                    .outputs
+                    .iter()
+                    .map(|(_, s)| *s)
+                    .filter(|s| !(s.usage == usage::POSITION && s.index == 0))
+                    .collect(),
+                Stage::Pixel => sig.inputs.iter().map(|(_, s)| *s).collect(),
+            };
             let link = wgsl::Link {
                 inputs: vec![wgsl::Input::Float(4); 16],
-                centroid: if p.stage == Stage::Pixel {
-                    sig.centroid.clone()
-                } else {
-                    Vec::new()
-                },
-                varyings: match p.stage {
-                    Stage::Vertex => sig
-                        .outputs
-                        .iter()
-                        .map(|(_, s)| *s)
-                        .filter(|s| !(s.usage == usage::POSITION && s.index == 0))
-                        .collect(),
-                    Stage::Pixel => sig.inputs.iter().map(|(_, s)| *s).collect(),
-                },
+                // As the device links them: each at the centroid.
+                centroid: wgsl::centroid_everywhere(varyings.len()),
+                varyings,
                 // The clip code too: the hardware's distances in vertex shaders, the discard
                 // (per sample) in pixel shaders.
                 clip: match p.stage {

@@ -658,17 +658,7 @@ pub struct Device {
     sample_mask: u32,
     listed_new: bool,
     made: Made,
-    #[allow(clippy::type_complexity)]
-    vs_modules: Map<
-        (
-            u64,
-            Vec<wgsl::Input>,
-            Vec<wgsl::Semantic>,
-            Vec<bool>,
-            wgsl::Clip,
-        ),
-        Option<wgpu::ShaderModule>,
-    >,
+    vs_modules: Map<VKey, Option<wgpu::ShaderModule>>,
     #[allow(clippy::type_complexity)]
     ps_modules: Map<(u64, Vec<wgsl::Semantic>, bool, wgsl::Clip), Option<wgpu::ShaderModule>>,
     samplers: Map<SamplerKey, wgpu::Sampler>,
@@ -3676,20 +3666,18 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         inputs: &[wgsl::Input],
         varyings: &[wgsl::Semantic],
     ) -> (VKey, PKey, Vec<ModuleTask>) {
-        let vkey = (
-            vs.id,
-            inputs.to_vec(),
-            varyings.to_vec(),
-            ps.sig.centroid.clone(),
-            key.clip,
-        );
+        // Every varying at the centroid, whatever the pixel shader declares: no varying is
+        // extrapolated outside a thin triangle on a multisampled target (the white orbs; the
+        // converter's module documentation).
+        let centroid = wgsl::centroid_everywhere(varyings.len());
+        let vkey = (vs.id, inputs.to_vec(), varyings.to_vec(), key.clip);
         let pkey = (ps.id, varyings.to_vec(), key.count, key.clip);
         let mut tasks = Vec::new();
         if !self.vs_modules.contains_key(&vkey) {
             let link = wgsl::Link {
                 inputs: inputs.to_vec(),
                 varyings: varyings.to_vec(),
-                centroid: ps.sig.centroid.clone(),
+                centroid: centroid.clone(),
                 clip: key.clip,
                 count: false,
             };
@@ -3705,7 +3693,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             let link = wgsl::Link {
                 inputs: Vec::new(),
                 varyings: varyings.to_vec(),
-                centroid: ps.sig.centroid.clone(),
+                centroid,
                 clip: key.clip,
                 count: key.count,
             };
@@ -5418,15 +5406,9 @@ pub(crate) fn surface_for(
     Err("windows of other platforms come with the window layer's port".into())
 }
 
-/// A vertex module's cache key: the shader, the inputs its declaration gives, the varyings and
-/// centroid flags of the pixel shader it feeds, the clip code.
-type VKey = (
-    u64,
-    Vec<wgsl::Input>,
-    Vec<wgsl::Semantic>,
-    Vec<bool>,
-    wgsl::Clip,
-);
+/// A vertex module's cache key: the shader, the inputs its declaration gives, the varyings of the
+/// pixel shader it feeds (each at the centroid), the clip code.
+type VKey = (u64, Vec<wgsl::Input>, Vec<wgsl::Semantic>, wgsl::Clip);
 /// A pixel module's cache key: the shader, its varyings, the occlusion count, the clip code.
 type PKey = (u64, Vec<wgsl::Semantic>, bool, wgsl::Clip);
 
