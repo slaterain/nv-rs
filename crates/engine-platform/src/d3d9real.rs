@@ -3476,6 +3476,7 @@ mod tests {
             depth_stencil: 0,
         });
         if !matches!(made, Reply::Device { created: true, .. }) {
+            eprintln!("no Direct3D 9 device here: the device's half of this test is skipped");
             return;
         }
         for frame in 1..=3 {
