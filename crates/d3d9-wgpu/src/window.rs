@@ -18,10 +18,13 @@
 //! size; a lost surface (the display or its driver gone) is made anew on the same window. Each
 //! stretch of frames not shown is one log line when it starts and one when frames come again.
 //!
-//! The thread that shows the frames takes the window's DPI awareness: the borderless window is
-//! per-monitor aware (`engine-platform`'s window thread) and the game's threads are not, and a
-//! thread that is not reads a scaled size (2048x1152 for a 2560x1440 window at 125% scaling),
-//! the graphics driver's reads for the swap chain on that thread included.
+//! The thread that shows a frame is in the window's DPI awareness while it does ([`DpiScope`]):
+//! the borderless window is per-monitor aware (`engine-platform`'s window thread) and the game's
+//! threads are not, and a thread that is not reads a scaled size (2048x1152 for a 2560x1440 window
+//! at 125% scaling), the graphics driver's reads for the swap chain on that thread included. The
+//! thread is in it from the frame's size to its present and back in its own after: the render
+//! thread, or with it off (`NV_RENDER_THREAD=0`) the game's thread that presents, whose own
+//! awareness the game's other calls keep.
 
 use std::time::{Duration, Instant};
 
@@ -198,7 +201,7 @@ impl Window {
         interval: u32,
         copies: bool,
     ) -> Result<Window, String> {
-        take_dpi_awareness(hwnd);
+        let _dpi = DpiScope::of(hwnd);
         let area = client_size(hwnd).filter(|&(w, h)| w > 0 && h > 0);
         let (width, height) = area.unwrap_or(fallback);
         let mut w = Window {
@@ -325,6 +328,12 @@ impl Window {
         self.interval = interval;
         self.choose();
         self.stale = true;
+    }
+
+    /// The calling thread in the window's DPI awareness until the scope is dropped: held from
+    /// before [`Window::frame`] to after the frame's present.
+    pub(crate) fn dpi_scope(&self) -> DpiScope {
+        DpiScope::of(self.hwnd)
     }
 
     /// The window's next frame, at its size now; `None` when it gives none now (the start and the
@@ -546,20 +555,49 @@ fn minimised(_hwnd: isize) -> bool {
     false
 }
 
-/// The calling thread takes `hwnd`'s DPI awareness.
-#[cfg(windows)]
-fn take_dpi_awareness(hwnd: isize) {
-    // SAFETY: the calling thread's own setting, from a window handle's.
-    unsafe {
-        let context = GetWindowDpiAwarenessContext(hwnd);
-        if context != 0 {
-            SetThreadDpiAwarenessContext(context);
+/// The calling thread in a window's DPI awareness until this is dropped, then back in its own
+/// (nothing done when it already is in it).
+pub(crate) struct DpiScope {
+    /// The thread's own awareness to go back to; 0: nothing was changed.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    before: isize,
+}
+
+impl DpiScope {
+    /// The calling thread in `hwnd`'s DPI awareness.
+    #[cfg(windows)]
+    pub(crate) fn of(hwnd: isize) -> DpiScope {
+        // SAFETY: the calling thread's own setting, from a window handle's.
+        unsafe {
+            let window = GetWindowDpiAwarenessContext(hwnd);
+            if window == 0
+                || AreDpiAwarenessContextsEqual(window, GetThreadDpiAwarenessContext()) != 0
+            {
+                return DpiScope { before: 0 };
+            }
+            DpiScope {
+                before: SetThreadDpiAwarenessContext(window),
+            }
         }
+    }
+
+    #[cfg(not(windows))]
+    pub(crate) fn of(_hwnd: isize) -> DpiScope {
+        DpiScope { before: 0 }
     }
 }
 
-#[cfg(not(windows))]
-fn take_dpi_awareness(_hwnd: isize) {}
+#[cfg(windows)]
+impl Drop for DpiScope {
+    fn drop(&mut self) {
+        if self.before != 0 {
+            // SAFETY: the calling thread's own setting, put back.
+            unsafe {
+                SetThreadDpiAwarenessContext(self.before);
+            }
+        }
+    }
+}
 
 /// `GA_ROOT`, `ENUM_CURRENT_SETTINGS`.
 #[cfg(windows)]
@@ -574,7 +612,9 @@ extern "system" {
     fn GetAncestor(hwnd: isize, flags: u32) -> isize;
     fn IsIconic(hwnd: isize) -> i32;
     fn GetWindowDpiAwarenessContext(hwnd: isize) -> isize;
+    fn GetThreadDpiAwarenessContext() -> isize;
     fn SetThreadDpiAwarenessContext(context: isize) -> isize;
+    fn AreDpiAwarenessContextsEqual(a: isize, b: isize) -> i32;
     fn EnumDisplaySettingsW(device: *const u16, mode: u32, devmode: *mut u16) -> i32;
 }
 

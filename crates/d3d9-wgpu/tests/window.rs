@@ -68,11 +68,13 @@ fn state(hwnd: isize) -> (bool, (i32, i32)) {
 /// The captures' folder, `NV_SHOT` for this process (set once, before any device reads it), every
 /// present the tests make captured (`NV_SHOT_LIST`, 1 to 100), however soon after the last it
 /// comes: by `NV_SHOT`'s interval alone (1 ms at least) a present within 1 ms of the one before
-/// was not (CI's run of #461: the frame after the one with no area).
+/// was not (CI's run of #461: the frame after the one with no area). In cargo's folder for tests'
+/// own files (under the target folder; one folder, emptied by each test), not the user's
+/// temporary folder, where every run of these tests had left one behind.
 fn shots_dir() -> &'static Path {
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
-        let dir = std::env::temp_dir().join(format!("nv-rs-wgpu-window-{}", std::process::id()));
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("wgpu-window-captures");
         std::env::set_var("NV_SHOT", format!("{},1", dir.display()));
         let every: Vec<String> = (1..=100).map(|n: u32| n.to_string()).collect();
         std::env::set_var("NV_SHOT_LIST", every.join(","));
