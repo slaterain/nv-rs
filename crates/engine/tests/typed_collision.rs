@@ -545,6 +545,21 @@ fn collision_update_world_data() {
             &P3,
         ]))
         .max_cases(256)
+        // The typed `hktoNiTransform` in the slot blends the body into the node for an amount that is
+        // neither 0 nor 1 outside update state 2, which reads the node and the Havok object: without
+        // either both sides stop there (the game never has a part-keyframed object without them).
+        .expect_stops(|case| {
+            let w = |i| case.word(i);
+            let (state, havok, amount) = (w(0), w(2), w(4));
+            let runs = state != 3
+                && w(1) == 0
+                && havok != 2
+                && w(3) == 1
+                && (havok != 0 || amount == HALF || w(5) == 1)
+                && w(7) != 0;
+            let blends = (amount == HALF || amount == NAN) && state != 2;
+            runs && blends && (havok == 0 || w(6) == 0)
+        })
         .setup(|e, case| {
             stand_ins(e, case.word(0));
             let c = object(e, 0x28);
