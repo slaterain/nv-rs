@@ -1,6 +1,8 @@
-//! `NV_PAR_RENDER=1`: the culling walk on several cores, registered in the original order (the
-//! parallel-render design, P1 to P5 of DESIGN.md in the measure folder parallel-render). Off by
-//! default; with real or stepped threads (the helpers are engines like a game thread's,
+//! `NV_PAR_RENDER`: the culling walk on several cores, registered in the original order (the
+//! parallel-render design, P1 to P5 of DESIGN.md in the measure folder parallel-render). On by
+//! default with real threads, with the helpers the cores allow (`default_helpers`; none below 8
+//! logical processors); `NV_PAR_RENDER=off` turns it off, `=1` turns it on with real or stepped
+//! threads alike (the helpers are engines like a game thread's,
 //! `engine_core::real_threads::fork_join_first`; with stepped threads they run only inside main's
 //! turn, while it is in the fork, so a repeatable run stays repeatable; they take no memory from
 //! the game's heap, so the run records the same bytes with the switch on as off). Only with the
@@ -47,9 +49,12 @@
 //! bytes their `OnVisible` writes (flags and fade fields, saved before each ran: a second walk would
 //! step their fade again), then one walker walks all the children in order as one task, nodes
 //! below included, into a log of its own; the two are compared entry by entry (the tasks' logs
-//! laid out in order), a difference is printed (the first 20), and the one-task log is the one
-//! replayed. The flags word is put back whole: a change another game thread made to it within the
-//! split is lost (check mode only).
+//! laid out in order), a difference is printed (the first 20, with the objects there), and the
+//! one-task log is the one replayed. The flags word is put back whole: a change another game
+//! thread made to it within the split is lost (check mode only). `NV_PAR_RENDER=recheck` is the
+//! check's control: its first walk is one walker's walk of all the children too, so a difference
+//! there is the scene changing between the two walks (other game threads run beside them with
+//! real threads), not the split.
 
 use super::layout::{
     BSCompoundFrustum, BSCullingProcess, NiCullingProcess, NiFrustumPlanes, NiNode,
@@ -59,7 +64,9 @@ use super::FAMILY;
 use engine_core::ptr::Ptr;
 use engine_core::{typed_call, AbiFn, Engine, Ret};
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{
+    AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering::Relaxed,
+};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
@@ -287,8 +294,16 @@ impl Split {
 /// 0: not read, 1: off, 2: on, 3: check, 4: serial (the helpers made and given each split's process
 /// copy as when on, the walk serial on main: the off side of the stream gate).
 static MODE: AtomicU8 = AtomicU8::new(0);
+/// On by default (the switch unset): the walk splits only with real threads (a repeatable run, a
+/// recorded run and the tests step their threads, and keep the serial walk).
+static AUTO: AtomicBool = AtomicBool::new(false);
 static HELPERS: AtomicUsize = AtomicUsize::new(3);
 static MIN_CHILDREN: AtomicU32 = AtomicU32::new(16);
+/// `NV_PAR_RENDER=recheck`: the check mode's control. Its first walk is one walker's walk of all
+/// the children too (one task, the nodes below not made tasks), so it compares the serial walk
+/// with the check's serial re-walk at the same two moments: what the scene changing between the
+/// two walks does alone, with no split.
+static RECHECK: AtomicBool = AtomicBool::new(false);
 /// Differences the check mode has printed (it stops at 20), and splits it compared.
 static PRINTED: AtomicU32 = AtomicU32::new(0);
 /// Splits walked in tasks (printed at 1024, 2048, 4096, ...: the proof they ran).
@@ -333,22 +348,38 @@ fn mode() -> u8 {
 fn read_switch() -> u8 {
     let value = std::env::var("NV_PAR_RENDER").unwrap_or_default();
     let parts = || value.split(',').map(str::trim);
-    let m = if parts().any(|p| p == "serial") {
+    let threads = std::env::var("NV_PAR_RENDER_THREADS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok());
+    let m = if parts().any(|p| p == "off" || p == "0") {
+        1
+    } else if parts().any(|p| p == "serial") {
         4
     } else if parts().any(|p| p == "check") {
+        3
+    } else if parts().any(|p| p == "recheck") {
+        RECHECK.store(true, Relaxed);
         3
     } else if parts().any(|p| p == "1" || p == "on") {
         2
     } else {
-        1
+        // Unset (or only `time`): on by default with real threads, with the helpers the
+        // machine's cores allow (`default_helpers`); never with stepped threads (`split`).
+        let helpers = threads.unwrap_or_else(|| {
+            default_helpers(std::thread::available_parallelism().map_or(1, usize::from))
+        });
+        if helpers == 0 {
+            1
+        } else {
+            AUTO.store(true, Relaxed);
+            2
+        }
     };
     if m >= 2 {
-        if let Some(n) = std::env::var("NV_PAR_RENDER_THREADS")
-            .ok()
-            .and_then(|v| v.trim().parse::<usize>().ok())
-        {
-            HELPERS.store(n.clamp(1, 15), Relaxed);
-        }
+        let helpers = threads.unwrap_or_else(|| {
+            default_helpers(std::thread::available_parallelism().map_or(1, usize::from)).max(1)
+        });
+        HELPERS.store(helpers.clamp(1, 15), Relaxed);
         if let Some(n) = std::env::var("NV_PAR_RENDER_MIN")
             .ok()
             .and_then(|v| v.trim().parse::<u32>().ok())
@@ -356,14 +387,37 @@ fn read_switch() -> u8 {
             MIN_CHILDREN.store(n.max(2), Relaxed);
         }
         println!(
-            "NV_PAR_RENDER={}: culling walks split over {} helpers at nodes of {}+ children",
-            value.trim(),
+            "NV_PAR_RENDER={}: culling walks split over {} helpers at nodes of {}+ children{}",
+            if value.trim().is_empty() {
+                "(default)"
+            } else {
+                value.trim()
+            },
             HELPERS.load(Relaxed),
-            MIN_CHILDREN.load(Relaxed)
+            MIN_CHILDREN.load(Relaxed),
+            if AUTO.load(Relaxed) {
+                ", with real threads only"
+            } else {
+                ""
+            }
         );
     }
     MODE.store(m, Relaxed);
     m
+}
+
+/// The helpers the parallel walk gets by default on a machine of `logical` logical processors:
+/// three from 8 up, none (the walk stays serial) below 8. Measured on the maintainer's PC (12
+/// cores, 24 logical processors), the crowded street: pinned to 8 logical processors, three
+/// helpers -1.29 ms a frame (+9.3%) and one -0.47 ms (+3.2%); pinned to 4, one helper +0.16 ms
+/// (-1.0%), and +0.33 ms (-4.2%) in the view of the sky. The game keeps main, the render thread,
+/// its AI threads and loaders busy, so a helper needs a processor of its own to pay.
+fn default_helpers(logical: usize) -> usize {
+    if logical >= 8 {
+        3
+    } else {
+        0
+    }
 }
 
 /// For the replay-order test (`crates/engine/tests/par_render.rs`): the switch's mode (`off`, `on`,
@@ -377,6 +431,7 @@ pub fn set_for_tests(mode: &str, helpers: usize, min_children: u32) {
         "serial" => 4,
         _ => 1,
     };
+    AUTO.store(false, Relaxed);
     HELPERS.store(helpers.clamp(1, 15), Relaxed);
     MIN_CHILDREN.store(min_children.max(2), Relaxed);
     MODE.store(m, Relaxed);
@@ -707,7 +762,7 @@ pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32)
     if collecting() {
         return split_below(e, node, process, count);
     }
-    if !on_main(e) {
+    if !on_main(e) || (AUTO.load(Relaxed) && e.real.is_none()) {
         return false;
     }
     if let Some(why) = not_plain(e, process) {
@@ -724,8 +779,16 @@ pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32)
         on_walkers(e, helpers, &Split::new(false, false, false));
         return false;
     }
-    let tasks = Split::new(true, check, timed);
-    let (_, mut top) = tasks.add(&children, task_size(children.len(), helpers, 1), &image);
+    // The check's control (`recheck`): the first walk is one walker's walk of all the children
+    // too, with no tasks from the nodes below.
+    let recheck = check && RECHECK.load(Relaxed);
+    let tasks = Split::new(!recheck, check, timed);
+    let chunk = if recheck {
+        children.len()
+    } else {
+        task_size(children.len(), helpers, 1)
+    };
+    let (_, mut top) = tasks.add(&children, chunk, &image);
     let forked = timed.then(Instant::now);
     if !on_walkers(e, helpers, &tasks) {
         return refused(Refused::Helpers);
@@ -758,7 +821,7 @@ pub(crate) fn split(e: &mut Engine, node: Ptr<NiNode>, process: u32, count: u32)
         let serial = one.logs();
         let mut parallel = Vec::new();
         flatten(&logs, 0..top, &mut parallel);
-        compare(&parallel, serial.first().map_or(&[][..], Vec::as_slice));
+        compare(e, &parallel, serial.first().map_or(&[][..], Vec::as_slice));
         logs = serial;
         top = logs.len();
     }
@@ -846,12 +909,19 @@ fn replay(e: &mut Engine, process: u32, entry: &Entry) {
     }
 }
 
-/// The check mode: the tasks' entries, in order, against one walker's walk of all the children.
-fn compare(parallel: &[&Entry], serial: &[Entry]) {
+/// The check mode: the tasks' entries, in order, against one walker's walk of all the children
+/// (with `recheck`, the first walk is one walker's too). The count so far is printed at 1024,
+/// 2048, 4096, ... and every 16,384; a difference with the objects at it.
+fn compare(e: &Engine, parallel: &[&Entry], serial: &[Entry]) {
+    let label = if RECHECK.load(Relaxed) {
+        "recheck"
+    } else {
+        "check"
+    };
     let compared = COMPARED.fetch_add(1, Relaxed) + 1;
-    if compared.is_power_of_two() && compared >= 1024 {
+    if compared >= 1024 && (compared.is_power_of_two() || compared % 16_384 == 0) {
         println!(
-            "NV_PAR_RENDER=check: {compared} splits compared, {} differed",
+            "NV_PAR_RENDER={label}: {compared} splits compared, {} differed",
             PRINTED.load(Relaxed)
         );
     }
@@ -866,13 +936,60 @@ fn compare(parallel: &[&Entry], serial: &[Entry]) {
         .zip(serial)
         .position(|(a, b)| *a != b)
         .unwrap_or(parallel.len().min(serial.len()));
+    let first = if RECHECK.load(Relaxed) {
+        "first walk"
+    } else {
+        "tasks"
+    };
     println!(
-        "NV_PAR_RENDER=check: the logs differ at entry {at} of {} (tasks) and {} (one task): {:?} against {:?}",
+        "NV_PAR_RENDER={label}: the logs differ at entry {at} of {} ({first}) and {} (one task): {:?} against {:?}",
         parallel.len(),
         serial.len(),
         parallel.get(at),
         serial.get(at)
     );
+    for (side, entry) in [
+        (first, parallel.get(at).copied()),
+        ("one task", serial.get(at)),
+    ] {
+        if let Some(Entry::Visible { object, .. }) = entry {
+            println!("  {side}: {}", describe(e, *object));
+        }
+    }
+}
+
+/// What the check prints of an object at a difference: its vtable, flags and name, and its
+/// parent's (read without faulting: the object may have gone since).
+fn describe(e: &Engine, object: u32) -> String {
+    let word = |a: u32| {
+        let mut b = [0u8; 4];
+        e.mem.peek(a, &mut b).map(|()| u32::from_le_bytes(b)).ok()
+    };
+    let name = |o: u32| {
+        let mut b = [0u8; 40];
+        match word(o.wrapping_add(8)) {
+            Some(p) if p != 0 && e.mem.peek(p, &mut b).is_ok() => {
+                let end = b.iter().position(|c| *c == 0).unwrap_or(b.len());
+                String::from_utf8_lossy(&b[..end]).into_owned()
+            }
+            _ => String::new(),
+        }
+    };
+    let one = |o: u32| match (word(o), word(o.wrapping_add(FADE_FLAGS))) {
+        (Some(vtable), Some(flags)) => {
+            format!(
+                "{o:08x} vtable {vtable:08x} flags {flags:08x} name {:?}",
+                name(o)
+            )
+        }
+        _ => format!("{o:08x} (not readable)"),
+    };
+    let parent = word(object.wrapping_add(0x18)).unwrap_or(0);
+    if parent == 0 {
+        format!("{}; no parent", one(object))
+    } else {
+        format!("{}; parent {}", one(object), one(parent))
+    }
 }
 
 #[cfg(test)]
@@ -924,4 +1041,17 @@ mod tests {
     }
 
     const ONE_BITS: u32 = 0x3f80_0000;
+
+    /// By default three helpers from 8 logical processors up, none below (one helper did not
+    /// pay on 4).
+    #[test]
+    fn default_helpers_need_eight_logical_processors() {
+        for (logical, helpers) in [(1, 0), (4, 0), (7, 0), (8, 3), (24, 3)] {
+            assert_eq!(
+                default_helpers(logical),
+                helpers,
+                "{logical} logical processors"
+            );
+        }
+    }
 }
