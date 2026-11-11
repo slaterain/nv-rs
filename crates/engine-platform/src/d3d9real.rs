@@ -1,7 +1,9 @@
 //! The platform's Direct3D 9 layer forwarded to a backend that draws (ADR-0008), Windows only,
 //! switched on with `NV_D3D9`: `real` (the real `d3d9.dll`), `wgpu` (`d3d9_wgpu`, ADR-0007), or
 //! `real,wgpu` (the real one draws and answers, wgpu gets every command after it off screen, for
-//! comparison: `d3d9_stream::Tee`).
+//! comparison: `d3d9_stream::Tee`); without it, by the run's choice ([`want_backend`]: in a
+//! launcher's play run, `Fallout.ini`'s `sRenderer`, wgpu on Vulkan by default). wgpu falls back to
+//! the real one where it finds no graphics card or cannot make the game's device.
 //!
 //! The game's code keeps calling the modelled objects of `super::d3d9`, `super::d3d9device` and
 //! `super::d3d9resource`, and keeps getting the modelled answers (they were measured against the
@@ -101,26 +103,63 @@ impl Backends {
     }
 }
 
-/// The backends asked for (`NV_D3D9`, read once; a value it can't read is printed once and draws
-/// nothing, as an unset one).
+/// The backends asked for (read once): `NV_D3D9` when it names any (a value it can't read is
+/// printed once and draws nothing, as an unset one), else the run's choice ([`want_backend`]).
 pub fn backends() -> Option<Backends> {
     static ASKED: std::sync::OnceLock<Option<Backends>> = std::sync::OnceLock::new();
     *ASKED.get_or_init(|| {
-        let value = std::env::var("NV_D3D9").ok()?;
-        Backends::parse(&value).unwrap_or_else(|why| {
-            eprintln!("{why}");
-            None
-        })
+        asked(
+            std::env::var("NV_D3D9").ok().as_deref(),
+            BACKEND_CHOICE.load(std::sync::atomic::Ordering::Relaxed),
+        )
     })
 }
+
+/// The backends `NV_D3D9`'s `value` names (`None`: unset), else those of the run's `choice`
+/// ([`BACKEND_CHOICE`]'s value): an empty variable names none.
+fn asked(value: Option<&str>, choice: u8) -> Option<Backends> {
+    match value {
+        Some(value) if !value.trim().is_empty() => Backends::parse(value).unwrap_or_else(|why| {
+            eprintln!("{why}");
+            None
+        }),
+        _ => match choice {
+            1 => Some(Backends::Real),
+            2 => Some(Backends::Wgpu),
+            _ => None,
+        },
+    }
+}
+
+/// The run's choice of backend when `NV_D3D9` names none: 0 none, 1 real, 2 wgpu ([`want_backend`]).
+static BACKEND_CHOICE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Draws with `which` (the real Direct3D 9 or wgpu) unless `NV_D3D9` names a backend: the run's
+/// choice (`host::fixes::Choice::renderer`, `Fallout.ini`'s `[nv-rs Display] sRenderer` in a
+/// launcher's play run, Vulkan by default), made before the game makes its window.
+pub fn want_backend(which: Backends) {
+    let value = match which {
+        Backends::Real => 1,
+        Backends::Wgpu => 2,
+        Backends::RealAndWgpu => return,
+    };
+    BACKEND_CHOICE.store(value, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the real Direct3D 9 draws although wgpu was asked for (wgpu found no graphics card or
+/// could not make the game's device), for the layer's lines ([`tag`]).
+static DRAWING_REAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Whether a backend is asked for (`NV_D3D9`): the real window and the stream are made.
 pub fn wanted() -> bool {
     backends().is_some()
 }
 
-/// The backends' words for the layer's lines (`NV_D3D9=real: ...`, as in play).
+/// The backends' words for the layer's lines (`NV_D3D9=real: ...`, as in play): the one drawing.
 fn tag() -> &'static str {
+    if DRAWING_REAL.load(std::sync::atomic::Ordering::Relaxed) {
+        return "real";
+    }
     backends().map_or("real", Backends::name)
 }
 
@@ -1023,6 +1062,17 @@ pub fn direct3d_created(e: &mut Engine) {
             }
         }
     }
+    let stream = make_stream(e, which);
+    real(e).stream = Some(stream);
+}
+
+/// The stream to the backend `which` (its board or answers for reading queries without waiting
+/// set on the game's side), on the render thread or the calling thread ([`want_render_thread`]),
+/// written to a file with `NV_D3D9_RECORD=FILE`.
+fn make_stream(e: &mut Engine, which: Backends) -> Stream {
+    if which == Backends::Real && backends() != Some(Backends::Real) {
+        DRAWING_REAL.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let name = which.name();
     let wanted_thread = real(e).render_thread;
     let warm = real(e).shader_warm;
@@ -1082,7 +1132,7 @@ pub fn direct3d_created(e: &mut Engine) {
             ),
         }
     }
-    real(e).stream = Some(stream);
+    stream
 }
 
 /// `NV_REPEATABLE`'s end: what `NV_D3D9_RECORD` holds is written out to its file now, so the
@@ -1136,18 +1186,38 @@ pub fn device_created(
     // device lock or on the render thread, not under one lock with them. It must lock itself: the
     // game's own flags have that (0x54), and it is kept whatever flags a caller passes.
     let behavior = behavior | MULTITHREADED;
-    let reply = call(
-        e,
-        Cmd::CreateDevice {
-            device,
-            focus,
-            window,
-            behavior,
-            present: Data::from_words(&words),
-            back_buffers: Data::from_words(back_buffers),
-            depth_stencil,
-        },
-    );
+    let create = |e: &mut Engine| {
+        call(
+            e,
+            Cmd::CreateDevice {
+                device,
+                focus,
+                window,
+                behavior,
+                present: Data::from_words(&words),
+                back_buffers: Data::from_words(back_buffers),
+                depth_stencil,
+            },
+        )
+    };
+    let mut reply = create(e);
+    // wgpu could not make the game's device (a driver that refuses it, a window it cannot show
+    // in): the real Direct3D 9 instead, as when wgpu finds no graphics card (`direct3d_created`),
+    // so the player still gets a picture. The device is the backend's first object: nothing was
+    // made on wgpu that the real one lacks.
+    let failed = matches!(reply, Some(Reply::Device { created: false, .. }));
+    if failed
+        && backends() == Some(Backends::Wgpu)
+        && !DRAWING_REAL.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        eprintln!("NV_D3D9=wgpu: wgpu could not make the game's device: the real Direct3D 9 draws instead");
+        // The wgpu stream is let go first (its render thread ends, its record is written out),
+        // then the real one takes over.
+        real(e).stream = None;
+        let stream = make_stream(e, Backends::Real);
+        real(e).stream = Some(stream);
+        reply = create(e);
+    }
     let Some(Reply::Device {
         created: true,
         native,
@@ -3459,6 +3529,24 @@ mod tests {
         }
         assert!(Backends::Real.real() && Backends::RealAndWgpu.real());
         assert!(!Backends::Wgpu.real());
+    }
+
+    /// `NV_D3D9` names the backends whatever the run's choice (`want_backend`: `sRenderer` in a
+    /// launcher's play run); unset or empty, the choice does; with neither, nothing is drawn.
+    #[test]
+    fn nv_d3d9_wins_over_the_runs_choice() {
+        assert_eq!(asked(Some("real"), 2), Some(Backends::Real));
+        assert_eq!(asked(Some("wgpu"), 1), Some(Backends::Wgpu));
+        assert_eq!(asked(Some("real,wgpu"), 2), Some(Backends::RealAndWgpu));
+        assert_eq!(asked(None, 2), Some(Backends::Wgpu));
+        assert_eq!(asked(None, 1), Some(Backends::Real));
+        assert_eq!(asked(Some(" "), 1), Some(Backends::Real));
+        assert_eq!(asked(None, 0), None);
+        assert_eq!(
+            asked(Some("dx9"), 2),
+            None,
+            "a word it can't read draws nothing"
+        );
     }
 
     /// `NV_D3D9_HIDDEN=1` keeps the window from being shown whatever `NV_D3D9_BACKGROUND` says;

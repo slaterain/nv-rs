@@ -262,6 +262,43 @@ pub const PLAY_RENDER_THREAD: bool = true;
 /// does.
 pub const PLAY_BORDERLESS: bool = true;
 
+/// Who draws the game in play when neither `NV_D3D9` nor `Fallout.ini`'s `sRenderer` says
+/// ([`Choice::renderer`]): wgpu on Vulkan (the maintainer, 2026-11-11: "we are trying to focus solely
+/// on wgpu and vulkan, as those brings the most improvements and compatability"). The one source of
+/// that default, as [`PLAY_BORDERLESS`] is: `crates/host/data/game_ini.tsv`'s `sRenderer` row is held
+/// to it by a test. Only a launcher's play run that is no test takes it ([`is_play_run`]).
+pub const PLAY_RENDERER: Renderer = Renderer::Vulkan;
+
+/// Who draws the game ([`Choice::renderer`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Renderer {
+    /// wgpu on Vulkan (`crates/d3d9-wgpu`): Direct3D 12 on a graphics card without a Vulkan
+    /// driver, and the real Direct3D 9 on one with neither or when wgpu cannot make the game's
+    /// device (`engine_platform::d3d9real`). `NV_D3D9=wgpu`.
+    Vulkan,
+    /// The real Direct3D 9, as the original draws (the fallback). `NV_D3D9=real`.
+    D3d9,
+}
+
+impl Renderer {
+    /// The renderer a word names (`vulkan`, `d3d9`), compared without case.
+    pub(crate) fn parse(word: &str) -> Option<Renderer> {
+        match word.trim().to_ascii_lowercase().as_str() {
+            "vulkan" => Some(Renderer::Vulkan),
+            "d3d9" => Some(Renderer::D3d9),
+            _ => None,
+        }
+    }
+
+    /// Its name in `Fallout.ini` and logs.
+    pub fn name(self) -> &'static str {
+        match self {
+            Renderer::Vulkan => "vulkan",
+            Renderer::D3d9 => "d3d9",
+        }
+    }
+}
+
 /// The player's one line: the fixes set, or the original's behaviour.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Preset {
@@ -318,6 +355,12 @@ pub struct Choice {
     /// in every other run without the variable (a test, a script, a start no launcher made): the
     /// window is as the game makes it, whatever the play default is.
     pub borderless: Option<bool>,
+    /// Who draws the game when `NV_D3D9` names no backend (`engine_platform::d3d9real::want_backend`;
+    /// `NV_D3D9`, which every script sets, always wins there): in a launcher's play run that is no
+    /// test ([`is_play_run`]), `Fallout.ini`'s `[nv-rs Display] sRenderer`, and [`PLAY_RENDERER`] when
+    /// the file doesn't say. `None` in every other run: a test or script without `NV_D3D9` draws
+    /// nothing, whatever the play default is.
+    pub renderer: Option<Renderer>,
     /// The one log line naming `Fallout.ini` values that could not be used
     /// ([`crate::game_ini::Keys::bad_line`]): the default stood for each.
     pub ini_note: Option<String>,
@@ -335,6 +378,7 @@ impl Choice {
             threads: "stepped".to_string(),
             render_thread: false,
             borderless: None,
+            renderer: None,
             ini_note: None,
         }
     }
@@ -484,6 +528,8 @@ impl Choice {
             // The same run takes play's borderless window, with or without a file; any other
             // keeps the window it has (`None`), so a play default never reaches it.
             borderless: ini.borderless.or(play.then_some(PLAY_BORDERLESS)),
+            // The same: play's renderer, the file's choice over it; none for any other run.
+            renderer: ini.renderer.or(play.then_some(PLAY_RENDERER)),
             ini_note: ini.bad_line(),
         };
         for line in settings.unwrap_or("").lines() {
@@ -1273,9 +1319,11 @@ mod tests {
         // No key of ours: the defaults, which for a play run include the borderless window.
         let plain = with_ini(None, "[General]\nbUseThreadedAI=1\n", &[]);
         assert_eq!(plain.borderless, Some(PLAY_BORDERLESS));
+        assert_eq!(plain.renderer, Some(PLAY_RENDERER));
         assert_eq!(
             Choice {
                 borderless: None,
+                renderer: None,
                 ..plain
             },
             Choice::from_parts(None, no_env).unwrap()
@@ -1321,6 +1369,47 @@ mod tests {
         assert_eq!(choice.borderless, Some(true));
         let choice = Choice::from_parts(None, env_of(&[("NV_BORDERLESS", "1")])).unwrap();
         assert_eq!(choice.borderless, Some(true));
+    }
+
+    /// Vulkan is play's renderer (the maintainer, 2026-11-11): a launcher's play run with no usable
+    /// `sRenderer` line, or no file at all, draws on it, and one whose file says `d3d9` on the real
+    /// Direct3D 9. Every other run makes no choice: its `NV_D3D9` names the backend, or nothing
+    /// draws.
+    #[test]
+    fn vulkan_is_plays_renderer_and_a_test_makes_no_choice() {
+        let launcher: &'static [(&str, &str)] = &[("NV_SETTINGS", "x")];
+        assert_eq!(PLAY_RENDERER, Renderer::Vulkan);
+        let no_file = Choice::from_texts(None, None, env_of(launcher)).unwrap();
+        assert_eq!(no_file.renderer, Some(Renderer::Vulkan));
+        for ini in [
+            "",
+            "[nv-rs Display]\nbBorderless=1\n",
+            "[nv-rs Display]\n;sRenderer=d3d9\n",
+            "[nv-rs Display]\nsRenderer=\n",
+            "[Display]\nsRenderer=d3d9\n",
+        ] {
+            let choice = with_ini(None, ini, &[]);
+            assert_eq!(choice.renderer, Some(Renderer::Vulkan), "{ini:?}");
+        }
+        let d3d9 = with_ini(None, "[nv-rs Display]\nsRenderer=D3D9\n", &[]);
+        assert_eq!(d3d9.renderer, Some(Renderer::D3d9));
+        let vulkan = with_ini(None, "[nv-rs Display]\nsRenderer=vulkan\n", &[]);
+        assert_eq!(vulkan.renderer, Some(Renderer::Vulkan));
+        let unusable = with_ini(None, "[nv-rs Display]\nsRenderer=opengl\n", &[]);
+        assert_eq!(unusable.renderer, Some(Renderer::Vulkan));
+        assert!(unusable.ini_note.unwrap().ends_with("sRenderer=opengl"));
+        // No launcher started it, a test, the viewer's test command line: no choice.
+        let file = "[nv-rs Display]\nsRenderer=d3d9\n";
+        let scripted =
+            Choice::from_texts(None, Some(file), env_of(&[("NV_D3D9", "wgpu")])).unwrap();
+        assert_eq!(scripted.renderer, None);
+        for name in TEST_VARIABLES {
+            let pairs: &'static [(&str, &str)] = Box::leak(vec![(*name, "x")].into_boxed_slice());
+            assert_eq!(with_ini(None, file, pairs).renderer, None, "{name}");
+        }
+        let marked = Choice::build(None, Some(file), env_of(launcher), true).unwrap();
+        assert_eq!(marked.renderer, None);
+        assert_eq!(Choice::vanilla().renderer, None);
     }
 
     /// Borderless is play's default (the maintainer, 2026-11-09): a launcher's play run with no

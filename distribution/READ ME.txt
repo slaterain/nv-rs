@@ -90,10 +90,21 @@ tell us. Settings.cmd keeps that choice in Fallout.ini as bRenderThread=0; with 
 own thread.
 
 
+Renderer
+--------
+The game draws on Vulkan (on a graphics card without Vulkan, on Direct3D 12), with the original's
+shaders and look. If something looks wrong or the game stops while drawing in a way it didn't with
+the previous preview, open Settings.cmd, choose "Direct3D 9 (the original's)" under Renderer, and
+please tell us. Settings.cmd keeps that choice in Fallout.ini as sRenderer=d3d9; with sRenderer=vulkan,
+or with no such line, the game draws on Vulkan. Where neither Vulkan nor Direct3D 12 can draw, the
+game draws with Direct3D 9 by itself.
+
+
 What works
 ----------
 The whole game runs on its translated code: the opening, the open world, quests, combat, V.A.T.S.,
-the Pip-Boy, saves and the DLCs, with the original graphics and sound through your own DirectX 9.
+the Pip-Boy, saves and the DLCs, with the original graphics (drawn on Vulkan) and sound (through your
+own DirectX).
 Regular .esp and .esm mods work.
 
 

@@ -448,6 +448,13 @@ pub fn apply_choices(fallout_ini: &str, settings: Option<&Settings>) -> (String,
             "NV_BORDERLESS" => settings
                 .borderless()
                 .map(|on| if on { "1" } else { "0" }.to_string()),
+            // Settings.cmd writes `vulkan` or `d3d9`; any other word chooses nothing here.
+            "NV_D3D9" => line("Renderer").and_then(|v| {
+                ["vulkan", "d3d9"]
+                    .into_iter()
+                    .find(|w| w.eq_ignore_ascii_case(v))
+                    .map(str::to_string)
+            }),
             // Settings.cmd writes `stepped` or `real`; any other word chooses nothing here.
             "NV_THREADS" => line(variable).and_then(|v| {
                 if v.eq_ignore_ascii_case("stepped") {
@@ -500,18 +507,18 @@ pub struct Switches {
 /// The game's variables for the player's options (host `fixes.rs` reads them over the file).
 /// `inherited` says whether a variable is set in Play.exe's own environment.
 ///
-/// In play, all six are taken out, so the profile's `Fallout.ini` decides. When a variable that
+/// In play, all seven are taken out, so the profile's `Fallout.ini` decides. When a variable that
 /// was set before makes the run a test ([`TEST_SWITCHES`], or a fix's own), the game ignores the
 /// file and would run the original's behaviour with a test's defaults. So that a diagnostic run
 /// plays like the player's game, the file's choices are passed on then: its value for each of
-/// the six, or the value a play run has when the file does not say, and each fix line that is
+/// the seven, or the value a play run has when the file does not say, and each fix line that is
 /// not commented out. A variable set before the start stays as it was set: nothing is taken out.
 ///
 /// When the played profile's file has none of our sections (Play.exe leaves a UTF-16 file
 /// alone, and makes none when there is nothing to make it from), the game can't find the
 /// player's options in it, and a `settings.ini` stays: the choices then come from `settings`
 /// (that file, when there is one) over the play defaults, as they would be in the file once
-/// moved in. In play the six are passed from there, each one set (over an inherited one too);
+/// moved in. In play the seven are passed from there, each one set (over an inherited one too);
 /// the fix lines are not, since a fix's own variable would make the run a test.
 pub fn switches(
     fallout_ini: &str,
@@ -575,6 +582,21 @@ pub fn switches(
                     .to_string(),
             ),
             "bBorderless" => Some(flag.unwrap_or(default).to_string()),
+            // Who draws, in `NV_D3D9`'s words: the real Direct3D 9 for d3d9, wgpu (on Vulkan) for
+            // vulkan; a value the game can't use is its default.
+            "sRenderer" => {
+                let word = value
+                    .filter(|v| v.eq_ignore_ascii_case("vulkan") || v.eq_ignore_ascii_case("d3d9"))
+                    .unwrap_or(default);
+                Some(
+                    if word.eq_ignore_ascii_case("d3d9") {
+                        "real"
+                    } else {
+                        "wgpu"
+                    }
+                    .to_string(),
+                )
+            }
             "bSteppedThreads" => Some(
                 if flag.unwrap_or(default) == "1" {
                     "stepped"
@@ -711,8 +733,9 @@ mod tests {
         // The section's own missing keys under it, each with its note, then the other sections
         // as the block has them, an empty line before each.
         let display_rest = format!(
-            "{}{}",
+            "{}{}{}",
             with_note("bBorderless"),
+            with_note("sRenderer"),
             with_note("iMenuFrameLimit")
         );
         assert!(
@@ -950,6 +973,20 @@ mod tests {
         );
     }
 
+    /// Settings.ps1 shows a file whose `sRenderer` says nothing as the game's default: its one
+    /// literal for that (`Get-Setting 'Renderer' 'vulkan'`) must be the host table's default.
+    #[test]
+    fn settings_cmd_shows_the_tables_renderer_default() {
+        let script = include_str!("../../../distribution/Settings.ps1");
+        let shown: Vec<&str> = script
+            .split("Get-Setting 'Renderer' '")
+            .skip(1)
+            .map(|rest| rest.split('\'').next().unwrap_or(""))
+            .collect();
+        let table = rows().find(|row| row.1 == "sRenderer").unwrap().3;
+        assert_eq!(shown, [table], "Settings.ps1's default for the renderer");
+    }
+
     /// The borderless window as the game decides it in a play run: the file's line, else the
     /// default, which is the host's table's and what the generated sections say.
     #[test]
@@ -983,7 +1020,7 @@ mod tests {
     }
 
     /// The played profile's file has none of our sections (UTF-16, or none could be made): in
-    /// play the six are passed from settings.ini over the play defaults, each one set, no fix
+    /// play the seven are passed from settings.ini over the play defaults, each one set, no fix
     /// line; in a test the same choices, what was set before kept.
     #[test]
     fn a_file_without_the_sections_gets_the_choices_as_variables() {
@@ -1003,6 +1040,7 @@ mod tests {
                 pairs(&[
                     ("NV_PRESET", "vanilla"),
                     ("NV_BORDERLESS", "0"),
+                    ("NV_D3D9", "wgpu"),
                     ("NV_FRAME_LIMIT", "60"),
                     ("NV_MENU_FRAME_LIMIT", "120"),
                     ("NV_THREADS", "stepped"),
@@ -1018,6 +1056,7 @@ mod tests {
             pairs(&[
                 ("NV_PRESET", "fixes"),
                 ("NV_BORDERLESS", "1"),
+                ("NV_D3D9", "wgpu"),
                 ("NV_FRAME_LIMIT", "0"),
                 ("NV_MENU_FRAME_LIMIT", "120"),
                 ("NV_THREADS", "real"),
@@ -1034,20 +1073,52 @@ mod tests {
         assert!(!test.passed.iter().any(|(n, _)| *n == "NV_THREADS"));
     }
 
-    /// In play Play.exe takes the six variables out; in a test, which never reads the file, it
+    /// The renderer: the file's `sRenderer` in `NV_D3D9`'s words when a test passes it on (d3d9 is
+    /// `real`; vulkan, and a value the game can't use, `wgpu`); settings.ini's `Renderer=` line moved
+    /// into the key, a word the game doesn't know choosing nothing.
+    #[test]
+    fn the_renderer_is_passed_in_nv_d3d9s_words() {
+        let passed = |ini: &str| {
+            switches(ini, None, |name| name == "NV_SHOT")
+                .passed
+                .into_iter()
+                .find(|(n, _)| *n == "NV_D3D9")
+                .map(|(_, v)| v)
+        };
+        for (ini, want) in [
+            ("[nv-rs Display]\nsRenderer=d3d9\n", "real"),
+            ("[nv-rs Display]\nsRenderer=D3D9\n", "real"),
+            ("[nv-rs Display]\nsRenderer=vulkan\n", "wgpu"),
+            ("[nv-rs Display]\nsRenderer=opengl\n", "wgpu"),
+            ("[nv-rs Display]\nbBorderless=1\n", "wgpu"),
+        ] {
+            assert_eq!(passed(ini).as_deref(), Some(want), "{ini:?}");
+        }
+        let seeded = with_sections(MADE_UP).unwrap().text;
+        let moved = |line: &str| {
+            let (text, _) = apply_choices(&seeded, Some(&Settings::parse(line)));
+            ini_value(&text, "nv-rs Display", "sRenderer").map(str::to_string)
+        };
+        assert_eq!(moved("Renderer=d3d9\n").as_deref(), Some("d3d9"));
+        assert_eq!(moved("Renderer=Vulkan\n").as_deref(), Some("vulkan"));
+        assert_eq!(moved("Renderer=opengl\n").as_deref(), Some("vulkan"));
+    }
+
+    /// In play Play.exe takes the seven variables out; in a test, which never reads the file, it
     /// passes the file's choices on and leaves what was set before as it is.
     #[test]
     fn the_games_variables_follow_the_file_only_in_a_test() {
         let ini = "[nv-rs General]\nsPreset=vanilla\n[nv-rs Display]\nbBorderless=0\niFrameLimit=90\niMenuFrameLimit=bad\n[nv-rs Threads]\nbSteppedThreads=1\n[nv-rs Fixes]\n;bUncap=1\nbGrabPush=0\nbTopicIndex=2\n";
-        let six = [
+        let seven = [
             "NV_PRESET",
             "NV_BORDERLESS",
+            "NV_D3D9",
             "NV_FRAME_LIMIT",
             "NV_MENU_FRAME_LIMIT",
             "NV_THREADS",
             "NV_RENDER_THREAD",
         ];
-        // Play: nothing passed, all six out, whatever else is set.
+        // Play: nothing passed, all seven out, whatever else is set.
         let sets: [&[&str]; 3] = [
             &[],
             &["NV_PRESET", "NV_THREADS"],
@@ -1058,7 +1129,7 @@ mod tests {
             assert_eq!(
                 play,
                 Switches {
-                    removed: six.to_vec(),
+                    removed: seven.to_vec(),
                     ..Switches::default()
                 },
                 "{set:?}"
@@ -1077,6 +1148,7 @@ mod tests {
             pairs(&[
                 ("NV_PRESET", "vanilla"),
                 ("NV_BORDERLESS", "0"),
+                ("NV_D3D9", "wgpu"),
                 ("NV_FRAME_LIMIT", "90"),
                 ("NV_MENU_FRAME_LIMIT", "120"),
                 ("NV_THREADS", "stepped"),
@@ -1091,6 +1163,7 @@ mod tests {
             pairs(&[
                 ("NV_PRESET", "fixes"),
                 ("NV_BORDERLESS", "1"),
+                ("NV_D3D9", "wgpu"),
                 ("NV_FRAME_LIMIT", "0"),
                 ("NV_MENU_FRAME_LIMIT", "120"),
                 ("NV_THREADS", "real"),
@@ -1108,6 +1181,7 @@ mod tests {
             pinned.passed,
             pairs(&[
                 ("NV_BORDERLESS", "0"),
+                ("NV_D3D9", "wgpu"),
                 ("NV_FRAME_LIMIT", "90"),
                 ("NV_MENU_FRAME_LIMIT", "120"),
                 ("NV_RENDER_THREAD", "1"),

@@ -188,6 +188,17 @@ impl Host {
         if let Some(on) = choice.borderless {
             engine_platform::d3d9real::want_borderless(on);
         }
+        // Who draws (`fixes::Choice::renderer`: in a launcher's play run, Fallout.ini's
+        // `[nv-rs Display] sRenderer`, Vulkan by default); `NV_D3D9`, when it names a backend,
+        // decides instead. A test or script without `NV_D3D9` makes no choice: nothing draws.
+        #[cfg(windows)]
+        if let Some(renderer) = choice.renderer {
+            use engine_platform::d3d9real::{want_backend, Backends};
+            want_backend(match renderer {
+                fixes::Renderer::Vulkan => Backends::Wgpu,
+                fixes::Renderer::D3d9 => Backends::Real,
+            });
+        }
         // `NV_SOUND=out`: the game's sound on the player's default device, from when the game
         // makes its DirectSound device on; `NV_SOUND_RECORD=FILE.wav` also records what goes
         // to the device, with a log of what started when (`FILE.log`). Off by default.

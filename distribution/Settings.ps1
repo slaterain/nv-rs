@@ -146,7 +146,7 @@ function Save-Files($writes) {
 }
 
 $own = "Game's setting"
-$known = @('Borderless', 'Resolution', 'AntiAliasing', 'Anisotropy', 'VSync', 'Preset', 'FrameLimit', 'MenuFrameLimit', 'NV_THREADS', 'NV_RENDER_THREAD')
+$known = @('Renderer', 'Borderless', 'Resolution', 'AntiAliasing', 'Anisotropy', 'VSync', 'Preset', 'FrameLimit', 'MenuFrameLimit', 'NV_THREADS', 'NV_RENDER_THREAD')
 # Play.exe makes the game's NV_PRESET, NV_FRAME_LIMIT and NV_MENU_FRAME_LIMIT from Preset, FrameLimit and
 # MenuFrameLimit, and NV_FIXES was never one of the game's switches: such lines would only look as if
 # they did something.
@@ -171,6 +171,7 @@ $kept = New-Object System.Collections.Generic.List[string]
 if ($seeded) {
     $prefs = Read-Ini (Join-Path $games[0] 'FalloutPrefs.ini')
     $times = { param($n) if ($n -eq '0') { 'Off' } elseif ($n -match '^\d+$') { "${n}x" } else { $own } }
+    $cur['Renderer'] = Get-IniValue $ini 'nv-rs Display' 'sRenderer'
     $cur['Borderless'] = Get-IniValue $ini 'nv-rs Display' 'bBorderless'
     $w = Get-IniValue $prefs 'Display' 'iSize W'; $h = Get-IniValue $prefs 'Display' 'iSize H'
     $cur['Resolution'] = if ($w -match '^\d+$' -and $h -match '^\d+$') { "${w}x$h" } else { $own }
@@ -194,6 +195,7 @@ if ($pending) {
             if ($value -eq '') { continue }
             if ($name -eq 'NV_THREADS' -and @('stepped', 'real') -notcontains $value) { continue }
             if ($name -eq 'NV_RENDER_THREAD' -and @('0', '1') -notcontains $value) { continue }
+            if ($name -eq 'Renderer' -and @('vulkan', 'd3d9') -notcontains $value.ToLower()) { continue }
             $cur[$name] = $value
         }
     }
@@ -209,7 +211,7 @@ $form.Text = 'nv-rs settings'
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox = $false
 $form.StartPosition = 'CenterScreen'
-$form.ClientSize = New-Object System.Drawing.Size(360, 470)
+$form.ClientSize = New-Object System.Drawing.Size(360, 506)
 $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
 
 $y = 16
@@ -235,6 +237,15 @@ function New-Combo($items, $selected) {
     $c
 }
 
+# Who draws the game: Vulkan (wgpu; Direct3D 12 on a card without Vulkan), the default, or the original's
+# Direct3D 9, the fallback if a game draws wrongly or stops on Vulkan. A file with no sRenderer line (or one that
+# chooses nothing) shows the game's default. This 'vulkan' is the host table's default for sRenderer
+# (crates/host/data/game_ini.tsv): scripts/launcher's test settings_cmd_shows_the_tables_renderer_default
+# compares the two.
+$vulkan = 'Vulkan (recommended)'
+$d3d9 = 'Direct3D 9 (the original''s)'
+$rd = New-Combo @($vulkan, $d3d9) $(if ((Get-Setting 'Renderer' 'vulkan').Trim().ToLower() -eq 'd3d9') { $d3d9 } else { $vulkan })
+Add-Row 'Renderer' $rd
 # A file with no bBorderless line (or one that chooses nothing) starts as the game's default does,
 # borderless, so that is what is shown. This '1' is the host table's default for bBorderless
 # (crates/host/data/game_ini.tsv): scripts/launcher's test
@@ -280,13 +291,13 @@ $form.Controls.Add($note)
 
 $save = New-Object System.Windows.Forms.Button
 $save.Text = 'Save'
-$save.Location = New-Object System.Drawing.Point(184, 430)
+$save.Location = New-Object System.Drawing.Point(184, 466)
 $save.DialogResult = 'OK'
 $form.Controls.Add($save)
 $form.AcceptButton = $save
 $cancel = New-Object System.Windows.Forms.Button
 $cancel.Text = 'Cancel'
-$cancel.Location = New-Object System.Drawing.Point(268, 430)
+$cancel.Location = New-Object System.Drawing.Point(268, 466)
 $cancel.DialogResult = 'Cancel'
 $form.Controls.Add($cancel)
 $form.CancelButton = $cancel
@@ -294,6 +305,7 @@ $form.CancelButton = $cancel
 # What the window shows, by settings.ini's names and values.
 function Get-Choices {
     [ordered]@{
+        Renderer         = $(if ($rd.SelectedIndex -eq 1) { 'd3d9' } else { 'vulkan' })
         Borderless       = $(if ($mode.SelectedIndex -eq 0) { '1' } else { '0' })
         Resolution       = "$($res.SelectedItem)"
         AntiAliasing     = "$($aa.SelectedItem)"
@@ -334,6 +346,7 @@ if ($noWindow -or $form.ShowDialog() -eq 'OK') {
                 $v = $chosen[$name]
                 if ($v -ceq $shown[$name] -or $v -eq $own) { continue }
                 switch ($name) {
+                    'Renderer' { $newIni = Set-IniKey $newIni 'nv-rs Display' 'sRenderer' $v }
                     'Borderless' { $newIni = Set-IniKey $newIni 'nv-rs Display' 'bBorderless' $v }
                     'Resolution' {
                         $w, $h = $v.Split('x')
@@ -359,7 +372,7 @@ if ($noWindow -or $form.ShowDialog() -eq 'OK') {
     } else {
         # Every option has its line, so each choice shown here wins when Play.exe moves the file in.
         $lines = @('# nv-rs settings (written by Settings.cmd; Play.exe moves them into the game''s files)')
-        foreach ($name in @('Borderless', 'Resolution', 'AntiAliasing', 'Anisotropy', 'VSync', 'Preset', 'FrameLimit', 'MenuFrameLimit')) {
+        foreach ($name in @('Renderer', 'Borderless', 'Resolution', 'AntiAliasing', 'Anisotropy', 'VSync', 'Preset', 'FrameLimit', 'MenuFrameLimit')) {
             $lines += "$name=$($chosen[$name])"
         }
         $lines += "NV_THREADS=$(if ($chosen['NV_THREADS'] -eq 'stepped') { 'stepped' } else { 'real' })"
