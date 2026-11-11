@@ -872,6 +872,13 @@ Diff::new(entry!(0x00abc123, typed_version(Ptr<Thing>, f32) -> f32))
   pointers into mapped memory, tiny flag words and the words from 0xffff0000 up stay exact. The report counts
   the values let through (`tolerated`) and the largest difference (`largest_ulps`). Logic and integers stay
   exact, so `n` stays small: an integer that reads as a float in range is let through by up to `n` too.
+  `float_abs(eps)` also lets a pair of finite floats through when they are at most `eps` apart in value, in the
+  same places (the same words read as floats; ST0 once both are rounded to an `f32`). Where a result cancels to
+  near zero, ulps of it say little: native `Slerp`'s `p + k (q - p)` for a component crossing zero is -2^-26
+  where the exe's 24-bit arithmetic gives -2^-25, 2^23 ulps apart and 1.5e-8 in value next to the unit
+  quaternion around it. State `eps` against the values' size (2^-23, one ulp of 1.0, for unit quaternions). The
+  report counts what only the distance let through (`abs_tolerated`, also in `tolerated`) and the largest such
+  distance (`largest_abs`). Without either setting every float compares bit for bit.
 - **A function new in the setup:** a setup may register at a family member's or a plain callee's address
   where nothing was, when every side gets the same function: anything else stops the run.
 - **A double in the setup:** over a family's member, or over a callee the translation calls plainly,
