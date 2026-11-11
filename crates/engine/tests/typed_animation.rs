@@ -4,12 +4,17 @@
 //! transform controllers with their flags, bones (each with its flags at +0x30) and inline
 //! interpolators: stand-ins whose transform `Update` (slot +0x8c) writes the case's transform, or blend
 //! transform interpolators (the real `Update` in the slot) with their count, flags, single interpolator
-//! and single time; the exe's constants.
+//! and single time, and the items the blend of several reads (two stand-in interpolators, the second
+//! with its w negated, and an empty item); the exe's constants.
 //!
 //! What stands in: the update data's and the transform's constructors, the transform's translation
 //! test and its rotation and scale getters, the bone's translation and scale setters, the matrix's
-//! column set, the quaternion's normalisation, the weights' normalisation and the blend of several
-//! interpolators. Everything else runs translated.
+//! column set, the quaternion's normalisation and negation, the square root and the weights'
+//! normalisation. Everything else runs translated, the blend of several interpolators included.
+//!
+//! The translations call the family's small functions with plain Rust calls (as fast as before), and
+//! the typed versions call them as typed functions: each test lists them as callees the translation
+//! calls plainly, so what they do still compares, not the call itself.
 
 use engine as _;
 use engine_core::prelude::*;
@@ -41,9 +46,21 @@ const OTHER_RTTI: u32 = 0x0120_0000;
 /// `NiBlendTransformInterpolator::Update`, the real function a test puts in slot +0x8c.
 const BLEND_UPDATE: u32 = 0x00a4_1110;
 
-/// The answers a test sets: the translation's test, the blend of several interpolators.
+/// What the translations call with a plain Rust call: the flag 2 test, the rotation and scale
+/// tests, the bone's rotation and `ToRotation` (`bsbipnode.rs`), the single-value store and the blend
+/// of several (`niblendtransforminterpolator.rs`).
+const PLAIN: [u32; 7] = [
+    0x004f_0140,
+    0x004f_02e0,
+    0x004f_0320,
+    0x004f_0160,
+    0x004f_0180,
+    0x00a4_0b30,
+    0x00a4_0c10,
+];
+
+/// The answer a test sets: the translation's test.
 const TAG_TRANSLATE_VALID: u32 = 0x01;
-const TAG_BLEND: u32 = 0x04;
 
 fn ret(eax: u32) -> Ret {
     Ret {
@@ -155,7 +172,11 @@ fn stand_ins(e: &mut Engine) {
         0x0101_5000,
         0x0102_3000,
         0x0102_4000,
+        0x0103_0000,
         0x0109_6000,
+        0x011a_8000,
+        0x011f_3000,
+        0x011f_4000,
     ] {
         e.map(page, 0x1000);
     }
@@ -166,6 +187,15 @@ fn stand_ins(e: &mut Engine) {
     e.mem.set_u32(0x0102_3900, 0x7f7f_ffff);
     e.mem.set_u64(0x0102_41b0, f64::from(f32::MIN).to_bits());
     e.mem.set_u32(0x0109_696c, LOWEST);
+    // The blend of several: 0.0, the double 0.0001, the sums' starting translation and rotation
+    // (zero), and a fresh transform's translation, rotation and scale (the invalid marker).
+    e.mem.set_u32(0x0101_1d78, 0);
+    e.mem.set_u64(0x0103_0f28, 0.0001f64.to_bits());
+    words(e, 0x011f_426c, &[0; 3]);
+    words(e, 0x011f_49ec, &[0; 4]);
+    words(e, 0x011a_8400, &[LOWEST; 3]);
+    words(e, 0x011f_3704, &[LOWEST; 4]);
+    e.mem.set_u32(0x0109_6b8c, LOWEST);
     // The update data's constructor (`thiscall(data, time, a, b)`): the three words.
     e.register(0x0043_d410, |e, a| {
         log(e, 0xd410, a[0]);
@@ -213,10 +243,23 @@ fn stand_ins(e: &mut Engine) {
         }
         ret(a[0])
     });
-    // The weights' normalisation; the blend of several answers what the test set (1 unless set).
+    // The quaternion's negation (`thiscall(quaternion, result)`, answers the result) and the square
+    // root (its double argument in two words, the result in ST0).
+    e.register(0x00a6_dbd0, |e, a| {
+        log(e, 0xdbd0, a[0]);
+        for k in 0..4 {
+            let w = e.mem.u32(a[0] + 4 * k);
+            e.mem.set_u32(a[1] + 4 * k, w ^ 0x8000_0000);
+        }
+        ret(a[1])
+    });
+    e.register(0x00ec_6040, |e, a| {
+        log(e, 0x6040, a[1]);
+        let x = f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32);
+        ret_f(x.sqrt())
+    });
+    // The weights' normalisation.
     e.register(0x00a3_7260, logged::<0x05>);
-    e.register(0x00a4_0c10, logged::<TAG_BLEND>);
-    set_logged_answer(e, TAG_BLEND, 1);
     for s in (0..VT_SLOTS).step_by(4) {
         e.register(VT_FN + s, any_slot);
     }
@@ -246,10 +289,31 @@ fn inputs(parts: &[&[Input]]) -> Vec<Input> {
     parts.iter().flat_map(|p| p.iter().copied()).collect()
 }
 
+/// The items the blend of several reads at a blend transform interpolator `at` (+0xd the array
+/// size, +0x14 the array, 0x18 bytes each: the interpolator, its weight at +8, its update time at
+/// +0x14): a stand-in interpolator giving the case's transform with the weight 0.5, an empty item, and
+/// one giving the transform with its w negated (so the sum's dot product can turn negative) with the
+/// weight `second`; each update time 0.5.
+fn blend_items(e: &mut Engine, case: &Case, at: u32, second: u32, f: usize) {
+    let transform = transform_words(case, f);
+    let mut negated = transform;
+    negated[3] ^= 0x8000_0000;
+    let first = object(e, 0x10, 1, &transform);
+    let other = object(e, 0x10, 1, &negated);
+    let items = e.mem.alloc(3 * 0x18);
+    for (i, (interpolator, weight)) in (0u32..).zip([(first, HALF), (0, HALF), (other, second)]) {
+        let item = items + 0x18 * i;
+        words(e, item, &[interpolator, 0, weight]);
+        e.mem.set_u32(item + 0x14, HALF);
+    }
+    e.mem.set_u8(at + 0xd, 3);
+    e.mem.set_u32(at + 0x14, items);
+}
+
 /// The interpolator at `at` (0x30 bytes inline) by `kind`: 0, a stand-in giving the case's transform;
 /// 1, one giving nothing (its answer 0x100, whose low byte is 0); 2, 3 and 4, a blend transform
 /// interpolator (the real `Update` in its slot) with one interpolator (a stand-in giving the
-/// transform), none, or two (the blend's stand-in).
+/// transform), none, or two ([`blend_items`]).
 fn interpolator(e: &mut Engine, case: &Case, at: u32, kind: u32, f: usize) {
     let transform = transform_words(case, f);
     if kind < 2 {
@@ -265,6 +329,7 @@ fn interpolator(e: &mut Engine, case: &Case, at: u32, kind: u32, f: usize) {
     let single = object(e, 0x10, 1, &transform);
     e.mem.set_u32(at + 0x18, single);
     e.mem.set_u32(at + 0x20, HALF);
+    blend_items(e, case, at, HALF, f);
 }
 
 /// A multi-target transform controller (0x48 bytes, its class from `GetRTTI`) with the word `flags`
@@ -299,11 +364,12 @@ fn controller(
 
 /// A blend transform interpolator (0x30 bytes) with `count` interpolators (+0xe), the flags byte
 /// (+0xc, bit 0: manager controlled), a single interpolator (+0x18: a stand-in answering `gave` with
-/// the case's transform) and the single time (+0x20); the last time (+8) a marker.
+/// the case's transform), the single time (+0x20) and the items of the blend of several
+/// ([`blend_items`], the second weighing `second`); the last time (+8) a marker.
 fn blend_interpolator(
     e: &mut Engine,
     case: &Case,
-    [count, flags, gave, single_time]: [u32; 4],
+    [count, flags, gave, single_time, second]: [u32; 5],
     f: usize,
 ) -> u32 {
     let b = object(e, 0x30, 0, &[]);
@@ -315,6 +381,7 @@ fn blend_interpolator(
     let single = object(e, 0x10, gave, &transform_words(case, f));
     e.mem.set_u32(b + 0x18, single);
     e.mem.set_u32(b + 0x20, single_time);
+    blend_items(e, case, b, second, f);
     b
 }
 
@@ -325,16 +392,20 @@ fn transform_with(e: &mut Engine, case: &Case, at: u32) -> u32 {
     t
 }
 
+/// What every test adds to its comparison: the families, the plain callees (all but the function
+/// under test), the call budget, the float sweep.
 trait Common {
-    fn common(self) -> Diff;
+    fn common(self, function: u32) -> Diff;
 }
 
 impl Common for Diff {
-    fn common(self) -> Diff {
+    fn common(self, function: u32) -> Diff {
+        let plain: Vec<u32> = PLAIN.into_iter().filter(|c| *c != function).collect();
         self.family(&animation::ANIMATION)
             .family(&dispatch::DISPATCH)
             .family(&pathing::PATHING)
             .family(&leaf::LEAVES)
+            .translation_calls_plainly(&plain)
             .max_calls(MAX_CALLS)
             .float_sweep(FLOAT_SWEEP)
     }
@@ -356,7 +427,7 @@ fn animation_update_all_but_bip() {
     // The controller list; the time; the transform. Each multi-target controller is active with three
     // bones, the first and last with flag 2.
     Diff::new(entry!(0x004f_0040, bip::update_all_but_bip(Ptr<_>, f32)))
-        .common()
+        .common(0x004f_0040)
         .inputs(&inputs(&[
             &[Input::Of(&[4, 0, 1, 2, 3, 5]), Input::F32],
             &TRANSFORM,
@@ -391,7 +462,7 @@ fn animation_update_all_but_target() {
         0x004f_0380,
         bip::update_all_but_target(Ptr<_>, f32, u8)
     ))
-    .common()
+    .common(0x004f_0380)
     .inputs(&inputs(&[
         &[
             Input::Of(&[8, 0, 0x0108, 0xfff7]),
@@ -422,7 +493,7 @@ fn animation_update_all_but_target() {
 fn animation_controller_active() {
     // The word at +8: only its low 16 bits are the flags.
     Diff::new(entry!(0x004f_05a0, bip::controller_active(Ptr<_>) -> u32))
-        .common()
+        .common(0x004f_05a0)
         .inputs(&[Input::Of(&[
             8,
             0,
@@ -444,7 +515,7 @@ fn animation_controller_active() {
 fn animation_flags_share() {
     // The word at +8 and the mask: only the low 16 bits of each count.
     Diff::new(entry!(0x004f_0360, bip::flags_share(Ptr<_>, u32) -> u32))
-        .common()
+        .common(0x004f_0360)
         .inputs(&[
             Input::Of(&[8, 0, 1, 0x100, 0x8000, 0xffff, 0x0001_0000, 0xffff_0000]),
             Input::Of(&[
@@ -469,7 +540,7 @@ fn animation_flags_share() {
 #[test]
 fn animation_flag_2() {
     Diff::new(entry!(0x004f_0140, bip::flag_2(Ptr<_>) -> bool))
-        .common()
+        .common(0x004f_0140)
         .inputs(&[Input::Of(&[
             2,
             0,
@@ -493,7 +564,7 @@ fn animation_flag_2() {
 fn animation_rotation_valid() {
     // The rotation's x (+0x10), each operand class: the invalid marker, NaNs, infinities.
     Diff::new(entry!(0x004f_02e0, bip::rotation_valid(Ptr<_>) -> bool))
-        .common()
+        .common(0x004f_02e0)
         .inputs(&[Input::F32])
         .setup(|e, case| {
             stand_ins(e);
@@ -507,7 +578,7 @@ fn animation_rotation_valid() {
 fn animation_scale_valid() {
     // The scale (+0x1c), each operand class.
     Diff::new(entry!(0x004f_0320, bip::scale_valid(Ptr<_>) -> bool))
-        .common()
+        .common(0x004f_0320)
         .inputs(&[Input::F32])
         .setup(|e, case| {
             stand_ins(e);
@@ -521,7 +592,7 @@ fn animation_scale_valid() {
 fn animation_set_rotation() {
     // The quaternion: w from the operand classes, the rest swept.
     Diff::new(entry!(0x004f_0160, bip::set_rotation(Ptr<_>, Ptr<_>)))
-        .common()
+        .common(0x004f_0160)
         .inputs(&[
             Input::F32,
             Input::F32Swept(HALF),
@@ -546,7 +617,7 @@ fn animation_set_rotation() {
 fn animation_to_rotation() {
     // The quaternion (w, x, y, z), each from the operand classes; floats.
     Diff::new(entry!(0x004f_0180, bip::to_rotation(Ptr<_>, Ptr<_>)))
-        .common()
+        .common(0x004f_0180)
         .inputs(&[Input::F32, Input::F32, Input::F32, Input::F32])
         .max_cases(256)
         .float_sweep(64)
@@ -566,18 +637,18 @@ fn animation_to_rotation() {
 
 #[test]
 fn animation_blend_update() {
-    // The count (one: the single store; more: the blend); the blend's answer (0x100: a byte); the
-    // flags; the single interpolator's answer; the single time (the invalid marker, NaN); the time;
-    // the transform.
+    // The count (one: the single store; more: the blend of several); the blend's second item's weight
+    // (none or negative: passed over); the flags; the single interpolator's answer; the single time
+    // (the invalid marker, NaN); the time; the transform.
     Diff::new(entry!(
         0x00a4_1110,
         blend::update_transform(Ptr<_>, f32, Ptr<_>, Ptr<_>) -> bool
     ))
-    .common()
+    .common(0x00a4_1110)
     .inputs(&inputs(&[
         &[
             Input::Of(&[1, 0, 2, 0x80, 0xff]),
-            Input::Of(&[1, 0, 0x100]),
+            Input::Of(&[HALF, 0, MINUS_ONE]),
             Input::Of(&[0, 1, 0xfe]),
             Input::Of(&[1, 0, 0x100]),
             Input::Of(&[HALF, LOWEST, NAN]),
@@ -588,8 +659,13 @@ fn animation_blend_update() {
     .max_cases(512)
     .setup(|e, case| {
         stand_ins(e);
-        set_logged_answer(e, TAG_BLEND, case.word(1));
-        let w = [case.word(0), case.word(2), case.word(3), case.word(4)];
+        let w = [
+            case.word(0),
+            case.word(2),
+            case.word(3),
+            case.word(4),
+            case.word(1),
+        ];
         let b = blend_interpolator(e, case, w, 6);
         let object = block(e, 0x40, &[0x7777_7777; 16]);
         let transform = block(e, 0x20, &[0x6666_6666; 8]);
@@ -607,7 +683,7 @@ fn animation_store_single_value() {
         0x00a4_0b30,
         blend::store_single_value(Ptr<_>, f32, Ptr<_>, Ptr<_>) -> bool
     ))
-    .common()
+    .common(0x00a4_0b30)
     .inputs(&inputs(&[
         &[
             Input::Of(&[0, 1, 0xfe]),
@@ -620,7 +696,7 @@ fn animation_store_single_value() {
     .max_cases(512)
     .setup(|e, case| {
         stand_ins(e);
-        let w = [1, case.word(0), case.word(1), case.word(2)];
+        let w = [1, case.word(0), case.word(1), case.word(2), HALF];
         let b = blend_interpolator(e, case, w, 4);
         let object = block(e, 0x40, &[0x7777_7777; 16]);
         let transform = block(e, 0x20, &[0x6666_6666; 8]);

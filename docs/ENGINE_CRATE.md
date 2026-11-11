@@ -618,7 +618,8 @@ its quaternion, `NiQuaternion::ToRotation`) and scale go into the bone; with the
 `UpdateAllButTarget` and the blend interpolator's `Update` are typed but reached by address only: kNVSE hooks both
 (`overridable.tsv`), so a built-in may replace them. By address as well: the blend of several interpolators and the
 weights' normalisation, an interpolator's own `Update` (the key lookups), the quaternion's normalisation, the
-transform's getters and the bone's setters. Its tests are `crates/engine/tests/typed_animation.rs`. Merged off
+transform's getters and the bone's setters. The translations keep their plain calls of the family's small functions;
+only the bip node's walk calls `UpdateAllButTarget` by address (in every build, so kNVSE's hook runs from there too). Its tests are `crates/engine/tests/typed_animation.rs`. Merged off
 (AGENT-RULES.md, "Typed code merges OFF first"): `NV_TYPED=animation` turns it on until a batch gate runs the
 recorded street run with it on against off; x87 code with the exact helpers, as the other update-half families.
 

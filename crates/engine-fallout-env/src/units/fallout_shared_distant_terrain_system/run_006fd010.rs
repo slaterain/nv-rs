@@ -11,7 +11,7 @@ const TERRAIN_MANAGER_006FCEF0: u32 = 0x006f_cef0;
 /// `006f92a0` (`thiscall`, `RET 4`; in `bgsdistanttreeblock.cpp`).
 const TREE_BLOCK_006F92A0: u32 = 0x006f_92a0;
 /// `00a69400` (`thiscall`, `RET 4`; in `nicullingprocess.cpp`): constructs the 0x90-byte
-/// local; `00a693e0` (`thiscall`) destroys it.
+/// culling process at the start of the 0x94-byte local; `00a693e0` (`thiscall`) destroys it.
 const CULLING_CONSTRUCT_00A69400: u32 = 0x00a6_9400;
 const CULLING_DESTROY_00A693E0: u32 = 0x00a6_93e0;
 /// `0041fd00` (`thiscall`, `RET 4`): the setter the engine map names
@@ -52,8 +52,8 @@ pub fn fn_006fd010(e: &mut Engine, this: Ptr, object: Ptr) {
 }
 
 // Translated from 006fd080 (decompiled, FalloutNV.exe 1.4.0.525)
-/// Unnamed (`thiscall`, `RET 4`, one word). Constructs a 0x90-byte local on the stack
-/// (`00a69400` with 0), gives it the argument (`0041fd00`) and `0045bbe0` of the argument
+/// Unnamed (`thiscall`, `RET 4`, one word). Constructs a 0x90-byte culling process in a local on
+/// the stack (`00a69400` with 0), gives it the argument (`0041fd00`) and `0045bbe0` of the argument
 /// (`00a694a0`); when the word at `this + 4` is non-zero, `006fa6d0(argument, &local)` and
 /// `006f5840()` run. The local is destroyed (`00a693e0`) at the end.
 ///

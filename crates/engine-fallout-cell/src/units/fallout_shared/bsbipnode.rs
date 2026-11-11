@@ -53,16 +53,9 @@ const SET_SCALE: u32 = 0x0044_0490;
 /// The controller's own test `004f05a0` (`thiscall`, a byte) and the
 /// rotation's +4 float `006b9130` (`thiscall`, in ST0).
 const CONTROLLER_ACTIVE: u32 = 0x004f_05a0;
-/// The unit's own functions the bip update and the transform controller reach by address (the animation
-/// family types them): `BSTransCon::UpdateAllButTarget` (`004f0380`), the flag 2 test (`004f0140`), the
-/// transform's rotation and scale tests (`004f02e0`, `004f0320`), the bone's rotation from a quaternion
-/// (`004f0160`) and `NiQuaternion::ToRotation` (`004f0180`).
+/// `BSTransCon::UpdateAllButTarget` (`004f0380`), which the bip node's walk calls by address: kNVSE
+/// hooks it (`overridable.tsv`).
 const UPDATE_ALL_BUT_TARGET: u32 = 0x004f_0380;
-const FLAG_2: u32 = 0x004f_0140;
-const ROTATION_VALID: u32 = 0x004f_02e0;
-const SCALE_VALID: u32 = 0x004f_0320;
-const SET_ROTATION: u32 = 0x004f_0160;
-const TO_ROTATION: u32 = 0x004f_0180;
 const ROTATION_SECOND: u32 = 0x006b_9130;
 /// The multi-target controller's targets: the count (+0x3C, 16-bit), the
 /// target array (+0x38) and the interpolators (+0x34, 0x30 bytes each).
@@ -125,10 +118,7 @@ pub fn fn_004f0110(e: &mut Engine, this: Ptr, matrix: Ptr) {
 /// Unnamed in the engine map: the rotation matrix at `this + 0x34` from
 /// `quaternion` (`NiQuaternion::ToRotation`).
 pub fn fn_004f0160(e: &mut Engine, this: Ptr, quaternion: Ptr) {
-    e.call(
-        TO_ROTATION,
-        &args![quaternion, this.addr().wrapping_add(0x34)],
-    );
+    ni_quaternion_to_rotation(e, quaternion, this.byte_add(0x34));
 }
 
 // Translated from 004f0360 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -311,6 +301,7 @@ pub fn bs_bip_node_update_all_but_bip(e: &mut Engine, this: Ptr, time: f32) {
     let mut controller = e.call(FIRST_CONTROLLER, &args![this]).u32();
     while controller != 0 {
         if e.vcall(controller, 8, &args![]).u32() == MULTI_TARGET_TRANSFORM_RTTI {
+            // By address: kNVSE hooks it (overridable.tsv), and its hook runs from here too.
             e.call(UPDATE_ALL_BUT_TARGET, &args![controller, time_bits, 0u32]);
         } else if e.vcall(controller, 8, &args![]).u32() == TREAD_TRANSFORM_RTTI {
             e.with_stack(0xc, |e, data| {
@@ -345,11 +336,11 @@ fn update_target(
         let translate = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, transform));
         e.call(SET_TRANSLATE, &args![target, translate]);
     }
-    if e.call(ROTATION_VALID, &args![transform]).bool() {
-        let rotate = e.call(ROTATE_OF, &args![transform]).u32();
-        e.call(SET_ROTATION, &args![target, rotate]);
+    if fn_004f02e0(e, transform) {
+        let rotate = e.call(ROTATE_OF, &args![transform]).ptr();
+        fn_004f0160(e, Ptr::new(target), rotate);
     }
-    if e.call(SCALE_VALID, &args![transform]).bool() {
+    if fn_004f0320(e, transform) {
         let scale = e.call(SCALE_OF, &args![transform]).f64();
         e.call(SET_SCALE, &args![target, x87_store32(scale)]);
     }
@@ -384,9 +375,9 @@ pub fn bs_trans_con_update_all_but_target(e: &mut Engine, this: Ptr, time: f32, 
             let target = target_at(e, i);
             let pick = target != 0
                 && if inverse == 0 {
-                    e.call(FLAG_2, &args![target]).bool()
+                    fn_004f0140(e, Ptr::new(target))
                 } else {
-                    !e.call(FLAG_2, &args![target]).bool()
+                    !fn_004f0140(e, Ptr::new(target))
                 };
             if pick {
                 update_target(e, this, i as u32, time_bits, target, transform);
@@ -394,7 +385,7 @@ pub fn bs_trans_con_update_all_but_target(e: &mut Engine, this: Ptr, time: f32, 
             i += 1;
         }
         let target = target_at(e, i);
-        if target == 0 || (inverse == 0 && !e.call(FLAG_2, &args![target]).bool()) {
+        if target == 0 || (inverse == 0 && !fn_004f0140(e, Ptr::new(target))) {
             return;
         }
         update_target(e, this, i as u32, time_bits, target, transform);
