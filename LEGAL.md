@@ -110,6 +110,10 @@ terms, whose notice must be kept:
   LLVM-exception). The copyright line and licence are in
   [crates/nvse/LICENSE-msvc-stl](crates/nvse/LICENSE-msvc-stl), and the module says so
   in its first lines.
+- `vendor/wgpu-hal` is wgpu-hal 30.0.1 (gfx-rs developers, MIT or Apache-2.0), kept in the
+  repository with our changes to its Vulkan and Direct3D 12 backends. Its licence files are
+  beside it; [vendor/README.md](vendor/README.md) lists the changes, and each changed file
+  says so in its first line.
 
 ## Requests from rights holders
 
