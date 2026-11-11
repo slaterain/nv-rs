@@ -382,11 +382,12 @@ fn pass_world(e: &mut Engine, w: [u32; 9]) -> (u32, u32) {
     let grid = e.mem.u32(t + 8);
     let cells = e.mem.u32(grid + 0x10);
     for i in 0..side * side {
-        // Every third slot empty, one cell without loaded data.
-        let c = match (i + k) % 4 {
-            0 => 0,
-            1 => cell(e, 9, false, k),
-            _ => cell(e, 1 + i % 3, with_7 != 0, k + i),
+        // Every fourth slot empty (a loaded grid cell always has its 3D root: the exe walks its land
+        // list without a null test).
+        let c = if (i + k) % 4 == 0 {
+            0
+        } else {
+            cell(e, 1 + i % 3, with_7 != 0, k + i)
         };
         e.mem.set_u32(cells + 4 * i, c);
     }
