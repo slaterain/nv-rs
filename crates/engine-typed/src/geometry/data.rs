@@ -23,7 +23,7 @@ const SLOT_ACTIVE_VERTEX_COUNT: u32 = 0x90;
 
 /// A group's use given up: its count (+0xc) down by one, and at zero the group destroyed and its 16
 /// bytes deleted.
-fn release_group(e: &mut Engine, group: u32) {
+pub(crate) fn release_group(e: &mut Engine, group: u32) {
     let count = e.mem.u32(group.wrapping_add(0xc)).wrapping_sub(1);
     e.mem.set_u32(group.wrapping_add(0xc), count);
     if count == 0 {

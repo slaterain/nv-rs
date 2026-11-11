@@ -13,6 +13,8 @@
 //! - [`data`]: the geometry data's setters of a set of arrays (`Replace` gives up the old ones: the
 //!   renderer's release of the arrays a static mesh does not keep after packing goes through it);
 //! - [`morph`]: the geometry morpher, which blends its targets into the position array each update.
+//! - [`lifecycle`]: where the arrays begin and end: the load from a stream (and so the deep copies FaceGen
+//!   makes its heads with), the save, the destructor body, the normals' own allocation and release.
 //!
 //! Stage 1: the arrays and the objects stay in guest memory where the game made them and are read
 //! through their [`layout`]. Each function stays registered at its exe address; a call the exe makes
@@ -31,6 +33,7 @@ use engine_core::{entry, AbiFn};
 pub mod bound;
 pub mod data;
 pub mod layout;
+pub mod lifecycle;
 pub mod morph;
 pub mod pack;
 
@@ -96,5 +99,13 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00a3_aa10, morph::gen_morph_interp(Ptr, u32)),
         entry!(0x00a3_b010, morph::vertex_data(Ptr) -> u32),
         entry!(0x00a3_b080, morph::update(Ptr, Ptr)),
+        // Where the arrays begin and end: the load and save, the destructor body, the normals' own.
+        entry!(0x00a6_7ea0, lifecycle::load_binary(Ptr, Ptr)),
+        entry!(0x00a6_8520, lifecycle::save_binary(Ptr, Ptr)),
+        entry!(0x00a6_7ae0, lifecycle::write_texture_coordinates(Ptr, u32, u32) -> u32),
+        entry!(0x00a6_7c70, lifecycle::destruct(Ptr)),
+        entry!(0x00a6_69f0, lifecycle::create_normals(Ptr, u32)),
+        entry!(0x00a6_6a60, lifecycle::set_normal_method(Ptr, u32)),
+        entry!(0x00a6_7000, lifecycle::release_normals(Ptr)),
     ]
 }
