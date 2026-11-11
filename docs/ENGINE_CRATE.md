@@ -773,9 +773,10 @@ build, the two builds alternating, 8 runs each):
   the other threads' word, and `f64` rounded at the store under the main thread's. A family with no
   such claim stays `Both`. Inside a `Both` family, a function the thread census shows on the main
   thread only may take plain `f32` too (the shader family's set-ups), its test then on the main
-  thread's word. The helpers are `engine_typed::native`: `wide` and `narrow`, and `mul_d`, `div_d`,
-  `add_d` and `sub_d` for a step with a `double` operand (an exe constant, a callee's ST0), done in
-  `f64` and rounded to a float once, as the x87 rounds the exact result once.
+  thread's word. Helpers so far: `anim_keys::{wide, narrow, rounded}` for `f64` locals, and the
+  shader family's `mul_d`, `div_d`, `add_d` and `sub_d` for a step of `f32` code with a `double`
+  operand (an exe constant, a callee's ST0), done in `f64` and rounded to a float once, as the x87
+  rounds the exact result once.
 - Float to integer goes through `x87::fistp_chop` and its family, never `as`, which saturates where
   the exe gets the integer indefinite. A typed folder's root denies clippy's
   `cast_possible_truncation`, which knows types. It also stops `u32 as u8` and `f64 as f32`: where

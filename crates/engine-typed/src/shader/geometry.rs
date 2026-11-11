@@ -12,12 +12,13 @@
 //! translation's.
 //!
 //! **Floats.** Only the main thread runs these (the thread census; each set-up's one caller is
-//! `SetupGeometryConstants`), so their maths is plain `f32` in the exe's order ([`crate::native`]): the
-//! exe's own rounding at the main thread's 24-bit precision. A float the exe copies through the x87
-//! stack is copied as it is.
+//! `SetupGeometryConstants`), so their maths is plain `f32` in the exe's order (the family's float
+//! rule: [`super`]): the exe's own rounding at the main thread's 24-bit precision. A float the exe
+//! copies through the x87 stack is copied as it is.
 
 use super::{accumulator, constants, lighting, state, FAMILY};
-use crate::native::{div_d, mul_d, narrow, sub_d};
+use super::{div_d, mul_d, sub_d};
+use crate::anim_keys::narrow;
 use engine_core::prelude::*;
 
 /// The rendering object and its pass type (`011f91e0`, `011f91e4`), the current pass (`0126f74c`) and

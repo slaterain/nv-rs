@@ -12,7 +12,7 @@ use super::layout::{
     StageStateCache,
 };
 use super::{elem_addr, low8, FAMILY};
-use crate::native::narrow;
+use crate::anim_keys::narrow;
 use engine_core::ptr::{Field, Ptr};
 use engine_core::typed::leaf;
 use engine_core::{args, typed_call, Engine};

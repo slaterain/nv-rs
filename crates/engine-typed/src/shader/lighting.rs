@@ -4,10 +4,11 @@
 //! scratch rows and, for a light that is not a point light, the ambient colour.
 //!
 //! **Floats.** Only the main thread runs it (the thread census), so its maths is plain `f32`, each
-//! operation the exe's in its order ([`crate::native`]): the exe's own rounding at the main thread's
-//! 24-bit precision. A float the exe copies through the x87 stack is copied as it is.
+//! operation the exe's in its order (the family's float rule: [`super`]): the exe's own rounding at
+//! the main thread's 24-bit precision. A float the exe copies through the x87 stack is copied as it is.
 
-use crate::native::{add_d, mul_d, narrow};
+use super::{add_d, mul_d};
+use crate::anim_keys::narrow;
 use engine_core::prelude::*;
 
 /// The zero colour (4 words, `011a9bd0`).

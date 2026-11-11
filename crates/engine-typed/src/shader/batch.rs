@@ -4,8 +4,9 @@
 //! partition by partition). The alpha lists are sorted back to front by the camera's direction.
 //!
 //! **Floats.** The alpha sort's comparison ([`compare_by_depth`]) runs on the main thread only (the
-//! thread census), so its depths are plain `f32` in the exe's order ([`crate::native`]): the exe's own
-//! rounding at the main thread's 24-bit precision. The other float reads here are comparisons.
+//! thread census), so its depths are plain `f32` in the exe's order (the family's float rule:
+//! [`super`]): the exe's own rounding at the main thread's 24-bit precision. The other float reads here
+//! are comparisons.
 
 use super::layout::{
     ActivePass, BSBatchRenderer, NiGeometry, NiGeometryData, NiProperty, NiSkinInstance,

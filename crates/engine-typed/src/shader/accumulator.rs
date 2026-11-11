@@ -3,21 +3,22 @@
 //! set-ups the shaders call while drawing (the world matrix, the light colour, the fog colour, the
 //! pass textures, the alpha and blend states).
 //!
-//! **Floats** ([`crate::native`]). The world matrix ([`make_matrix`], [`set_world_transform`]) is also
-//! made on another game thread (the thread census), so its maths is `f64` rounded where the exe stores
-//! a float: the exe's own at that thread's 53-bit precision. The light direction, the light colour, the
-//! tint and the alpha run on the main thread only: plain `f32`, the exe's own rounding at its 24-bit
-//! precision.
+//! **Floats** (the family's float rule: [`super`]). The world matrix ([`make_matrix`],
+//! [`set_world_transform`]) is also made on another game thread (the thread census), so its maths is
+//! `f64` rounded where the exe stores a float: the exe's own at that thread's 53-bit precision. The
+//! light direction, the light colour, the tint and the alpha run on the main thread only: plain `f32`,
+//! the exe's own rounding at its 24-bit precision.
 
 use super::batch::{self, pool_give, POOL_LOCK, RENDERING_PASS, RENDERING_PASS_TYPE, SKIN_RTTI};
 use super::layout::{
     BSBatchRenderer, BSShaderAccumulator, BSShaderProperty, NiDX9Renderer, NiGeometry, NiProperty,
     NiSkinInstance, RenderPass, ShaderLight, ShadowSceneNode,
 };
+use super::mul_d;
 use super::state;
 use super::{elem_addr, low8, FAMILY};
+use crate::anim_keys::{narrow, wide};
 use crate::culling::layout::{NiMatrix3, NiPoint3, NiTransform};
-use crate::native::{mul_d, narrow, wide};
 use engine_core::ptr::Ptr;
 use engine_core::{args, typed_call, Engine};
 
