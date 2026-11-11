@@ -199,6 +199,9 @@ struct Bound {
     textures: [Handle; 20],
     streams: [(Handle, u32, u32); 16],
     indices: Handle,
+    /// The vertex and pixel shader, the declaration.
+    shaders: [Handle; 2],
+    declaration: Handle,
 }
 
 impl Bound {
@@ -216,6 +219,14 @@ impl Bound {
         }
         if self.indices == h {
             self.indices = UNKNOWN;
+        }
+        for s in &mut self.shaders {
+            if *s == h {
+                *s = UNKNOWN;
+            }
+        }
+        if self.declaration == h {
+            self.declaration = UNKNOWN;
         }
     }
 }
@@ -1386,6 +1397,7 @@ impl Device {
     }
 
     pub(crate) fn create_shader(&mut self, shader: Handle, tokens: &[u32]) {
+        self.st.bound.forget(shader);
         // One shader object for one bytecode: a shader made again (another handle, the same
         // tokens) shares its modules and pipelines, and the list ([`prepare`]) finds it by hash.
         let stable = prepare::bytecode_hash(tokens);
@@ -1428,6 +1440,7 @@ impl Device {
     }
 
     pub(crate) fn create_declaration(&mut self, declaration: Handle, bytes: &[u8]) {
+        self.st.bound.forget(declaration);
         let mut elements = Vec::new();
         for e in bytes.chunks_exact(8) {
             if e[0] == 0xFF || e[4] == 17 {
@@ -1646,6 +1659,17 @@ impl Device {
                 self.st.scissor = [0, 0, s.width as i32, s.height as i32];
             }
         }
+        // The same target again (the viewport and scissor reset above, as Direct3D 9 does) changes
+        // nothing a block carries; another may change the samples, and with them the alpha to
+        // coverage switch ([`ATOC`]).
+        let same = |a: &Option<Arc<Surf>>, b: &Option<Arc<Surf>>| match (a, b) {
+            (Some(a), Some(b)) => a.id == b.id,
+            (None, None) => true,
+            _ => false,
+        };
+        if self.st.rt.get(index as usize).is_some_and(|r| same(r, &s)) {
+            return;
+        }
         if let Some(slot) = self.st.rt.get_mut(index as usize) {
             *slot = s;
         }
@@ -1654,11 +1678,16 @@ impl Device {
     }
 
     pub(crate) fn set_depth_stencil(&mut self, surface: Handle) {
-        self.st.ds = if surface == 0 {
+        let ds = if surface == 0 {
             None
         } else {
             self.surface_of(surface)
         };
+        // The same depth surface again changes nothing a block carries.
+        if ds.as_ref().map(|d| d.id) == self.st.ds.as_ref().map(|d| d.id) {
+            return;
+        }
+        self.st.ds = ds;
         // The targets' sample count decides the alpha to coverage switch ([`ATOC`]).
         self.st.touch(0);
         self.st.touch(1);
@@ -1682,7 +1711,8 @@ impl Device {
             min_z: f32::from_bits(v[4]),
             max_z: f32::from_bits(v[5]),
         };
-        self.st.touch(0);
+        // Nothing to mark: the vertex block carries the viewport's pixel-centre move, which
+        // [`Device::write_blocks`] compares at each draw.
     }
 
     pub(crate) fn set_scissor(&mut self, r: Rect) {
@@ -1766,6 +1796,11 @@ impl Device {
     }
 
     pub(crate) fn set_shader(&mut self, pixel: bool, shader: Handle) {
+        // The shader bound there already: nothing to look up ([`State::bound`]).
+        if self.st.bound.shaders[usize::from(pixel)] == shader {
+            return;
+        }
+        self.st.bound.shaders[usize::from(pixel)] = shader;
         let s = match self.objects.get(&shader) {
             Some(Obj::Shader(s)) => Some(s.clone()),
             _ => None,
@@ -1778,6 +1813,10 @@ impl Device {
     }
 
     pub(crate) fn set_declaration(&mut self, declaration: Handle) {
+        if self.st.bound.declaration == declaration {
+            return;
+        }
+        self.st.bound.declaration = declaration;
         self.st.decl = match self.objects.get(&declaration) {
             Some(Obj::Decl(d)) => Some(d.clone()),
             _ => None,

@@ -1409,3 +1409,110 @@ fn each_draw_reads_the_upload_before_it_in_one_batch() {
     left_red_right_green(&mut g, "indices");
     assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
 }
+
+/// Bindings skip looking an object up when the same handle is bound again; an object destroyed
+/// and made again at a bound handle is looked up again all the same. Bound to the same handles
+/// with the same offset and stride: a vertex buffer, an index buffer and a pixel shader, each
+/// made again with other contents. Planted bugs it catches: any of the three not looked up again.
+#[test]
+fn a_handle_made_again_while_bound_is_looked_up_again() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    const VB2: u32 = 0x1700;
+    const IB: u32 = 0x1710;
+    let make = |g: &mut Gpu, buffer: u32, index: bool, data: &[u8]| {
+        g.run(Cmd::CreateBuffer {
+            device: DEVICE,
+            buffer,
+            index,
+            length: data.len() as u32,
+            usage: 0,
+            format: if index { 101 } else { 0 },
+            pool: 1,
+        });
+        g.run(Cmd::UploadBuffer {
+            buffer,
+            offset: 0,
+            flags: 0,
+            data: Data::Bytes(data),
+        });
+    };
+    let bind = |g: &mut Gpu| {
+        g.run(Cmd::SetStreamSource {
+            device: DEVICE,
+            stream: 0,
+            buffer: VB2,
+            offset: 0,
+            stride: 16,
+        });
+        g.run(Cmd::SetIndices {
+            device: DEVICE,
+            buffer: IB,
+        });
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel: true,
+            shader: PS,
+        });
+    };
+    let draw = |g: &mut Gpu| {
+        g.run(Cmd::DrawIndexedPrimitive {
+            device: DEVICE,
+            kind: 4,
+            base_vertex: 0,
+            min_index: 0,
+            vertices: 12,
+            start_index: 0,
+            count: 2,
+        });
+    };
+    let indices =
+        |first: u16| -> Vec<u8> { (first..first + 6).flat_map(u16::to_le_bytes).collect() };
+    // Each piece made again so that only the new one draws the right half: a stale vertex buffer
+    // (or index buffer) would draw an off-target rectangle, a stale pixel shader red.
+    let off = rect(5.0, 6.0);
+    // c0 red, c1 green; the left half drawn with the first objects.
+    let regs = floats(&[1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
+    g.run(Cmd::SetConstants {
+        device: DEVICE,
+        kind: 3,
+        start: 0,
+        count: 2,
+        data: Data::Bytes(&regs),
+    });
+    g.clear(3, 0, 1.0);
+    make(
+        &mut g,
+        VB2,
+        false,
+        &floats(&[rect(-3.0, -0.25), off.clone()].concat()),
+    );
+    make(&mut g, IB, true, &indices(0));
+    bind(&mut g);
+    draw(&mut g);
+    // Each destroyed and made again at its handle: the right half in the second six vertices,
+    // indices of those, a pixel shader writing c1.
+    for h in [VB2, IB, PS] {
+        g.run(Cmd::Destroy { object: h });
+    }
+    make(
+        &mut g,
+        VB2,
+        false,
+        &floats(&[off, rect(-0.25, 3.0)].concat()),
+    );
+    make(&mut g, IB, true, &indices(6));
+    let mut ps = vec![0xFFFF_0300];
+    ps.extend(ins(1, &[0x800F_0800, 0xA0E4_0001]));
+    ps.push(END);
+    let t = words(&ps);
+    g.run(Cmd::CreateShader {
+        device: DEVICE,
+        shader: PS,
+        pixel: true,
+        tokens: Data::Bytes(&t),
+    });
+    bind(&mut g);
+    draw(&mut g);
+    left_red_right_green(&mut g, "made again");
+    assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+}
