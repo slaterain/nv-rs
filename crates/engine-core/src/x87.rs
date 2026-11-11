@@ -864,9 +864,12 @@ pub fn x87_fcos(x: X87Ext) -> X87Ext {
     imp::fcos(x)
 }
 
-/// `FSINCOS`: `(sine, cosine)` of ST0 (afterwards ST1 holds the sine and ST0
-/// the cosine). An operand out of range (|x| >= 2^63) pushes nothing on the
-/// FPU, which the code after it does not expect: that stops with a panic.
+/// `FSINCOS` and the two stores after it: `(sine, cosine)` of ST0 (afterwards ST1 holds the sine
+/// and ST0 the cosine, stored in that order: the cosine first). An operand out of range (finite,
+/// |x| >= 2^63) pushes nothing: ST0 keeps the operand, so the cosine's store takes the operand and
+/// the sine's, popping a register there is not, the real indefinite (a masked stack underflow). That
+/// is what the exe's code stores where nothing else is on the FPU stack (the particles' quads), and
+/// what this answers: `(real indefinite, x)`.
 #[inline]
 pub fn x87_fsincos(x: X87Ext) -> (X87Ext, X87Ext) {
     imp::fsincos(x)
@@ -874,16 +877,16 @@ pub fn x87_fsincos(x: X87Ext) -> (X87Ext, X87Ext) {
 
 /// `FLD dword`, `FSINCOS`, `FSTP dword` twice: the sine and cosine of the float with the bit
 /// pattern `bits`, each stored as a float, as `(sine, cosine)` bits. The same as
-/// `x87_fsincos(X87Ext::load32(bits))` with both stored by [`X87Ext::store32`], in one run on
-/// the FPU instead of four.
+/// `x87_fsincos(X87Ext::load32(bits))` with both stored by [`X87Ext::store32`] (out of range too:
+/// `(0xffc00000, bits)`), in one run on the FPU instead of four.
 #[inline]
 pub fn x87_fsincos32(bits: u32) -> (u32, u32) {
     imp::fsincos32(bits)
 }
 
 /// `FPTAN`: the tangent of ST0 (the 1.0 the instruction then pushes is not
-/// returned: the exe pops it). An operand out of range stops as
-/// [`x87_fsincos`] does.
+/// returned: the exe pops it). An operand out of range (|x| >= 2^63) pushes nothing, so the pop
+/// would take the operand: that stops with a panic.
 #[inline]
 pub fn x87_fptan(x: X87Ext) -> X87Ext {
     imp::fptan(x)
@@ -1273,6 +1276,18 @@ mod hw {
         panic!("{name} of {x:?}: operand out of range (|x| >= 2^63), nothing pushed")
     }
 
+    /// After `FSINCOS` and the block's two stores: an operand out of range (C2) pushed nothing, so
+    /// the first store took the operand, still ST0, and the second popped a register the block did
+    /// not have, storing the real indefinite (the stack underflow, masked). Those stores are the
+    /// answer, as the exe's two stores leave them with nothing else on the FPU stack; the FPU is reset
+    /// for the next block.
+    #[inline]
+    fn settle_unpushed(status: u16) {
+        if status & super::X87_STATUS_C2 != 0 {
+            reset();
+        }
+    }
+
     pub fn fsincos(x: X87Ext) -> (X87Ext, X87Ext) {
         let mut f = frame(x.0, [0; 10]);
         run!(
@@ -1283,7 +1298,7 @@ mod hw {
             "fstp tbyte ptr [{f} + 30]",
             "fstp tbyte ptr [{f} + 20]",
         );
-        check_pushed("FSINCOS", || x, f.status);
+        settle_unpushed(f.status);
         (X87Ext(f.r0), X87Ext(f.r1))
     }
 
@@ -1302,7 +1317,7 @@ mod hw {
             "fstp dword ptr [{f} + 30]",
             "fstp dword ptr [{f} + 20]",
         );
-        check_pushed("FSINCOS", || load32(bits), f.status);
+        settle_unpushed(f.status);
         let word = |r: [u8; 10]| u32::from_le_bytes([r[0], r[1], r[2], r[3]]);
         (word(f.r0), word(f.r1))
     }
@@ -1610,6 +1625,11 @@ mod soft {
     }
 
     pub fn fsincos(x: X87Ext) -> (X87Ext, X87Ext) {
+        // Out of range (finite, |x| >= 2^63): the stores the FPU block makes (its
+        // `settle_unpushed`).
+        if (0x3fff + 63..0x7fff).contains(&(x.sign_exponent() & 0x7fff)) {
+            return (load32(0xffc0_0000), x);
+        }
         (fsin(x), fcos(x))
     }
 
@@ -2493,10 +2513,25 @@ mod tests {
         assert_eq!(x87_fsin(huge), huge);
     }
 
+    /// Out of range (|x| >= 2^63) the cosine's store takes the operand and the sine's the real
+    /// indefinite, as the exe's stores do; the next helpers work as before.
     #[test]
-    #[should_panic(expected = "out of range")]
-    fn fsincos_out_of_range_stops() {
-        x87_fsincos(ext(2f64.powi(64)));
+    fn fsincos_out_of_range_stores_the_operand_and_the_indefinite() {
+        let indefinite = X87Ext::load32(0xffc0_0000);
+        for x in [
+            2f64.powi(63),
+            -(2f64.powi(63)),
+            2f64.powi(64),
+            f64::from(f32::MAX),
+        ] {
+            assert_eq!(x87_fsincos(ext(x)), (indefinite, ext(x)), "{x:e}");
+            let (sin, cos) = x87_fsincos(ext(0.5));
+            assert_eq!(sin, x87_fsin(ext(0.5)));
+            assert_eq!(cos, x87_fcos(ext(0.5)));
+        }
+        // Just below the range: computed.
+        let below = ext(2f64.powi(63) - 1024.0);
+        assert_ne!(x87_fsincos(below).1, below);
     }
 
     #[test]
@@ -2917,11 +2952,6 @@ mod tests {
             with_word(word, || {
                 for &b in &bits {
                     let x = X87Ext::load32(b);
-                    let exponent = x.sign_exponent() & 0x7fff;
-                    // |x| >= 2^63 stops (both ways): below.
-                    if (0x3fff + 63..0x7fff).contains(&exponent) {
-                        continue;
-                    }
                     let four = std::panic::catch_unwind(|| {
                         let (sine, cosine) = x87_fsincos(x);
                         (sine.store32(), cosine.store32())
@@ -2933,17 +2963,27 @@ mod tests {
         }
     }
 
+    /// Out of range the fused version stores what the exe's `FSTP dword`s do: the cosine's place the
+    /// operand, the sine's the real indefinite.
     #[test]
-    #[should_panic(
-        expected = "FSINCOS of X87Ext([0, 0, 0, 0, 0, 0, 0, 128, 63, 64]): operand out of range"
-    )]
-    fn the_fused_sine_and_cosine_stop_out_of_range() {
-        x87_fsincos32(0x5f80_0000);
+    fn the_fused_sine_and_cosine_out_of_range_store_the_operand_and_the_indefinite() {
+        for bits in [
+            0x5f00_0000u32,
+            0xdf00_0000,
+            0x5f80_0000,
+            0x7f7f_ffff,
+            0xff7f_ffff,
+        ] {
+            assert_eq!(x87_fsincos32(bits), (0xffc0_0000, bits), "{bits:#010x}");
+        }
+        // Just below 2^63: computed.
+        assert_ne!(x87_fsincos32(0x5eff_ffff).1, 0x5eff_ffff);
     }
 
     /// The register stack is empty after every helper (each pops what it pushes; nine helpers
     /// in a row would overflow it otherwise), flags raised by earlier helpers don't reach the
-    /// status word `FPREM` reports, and after a stop out of range the next helpers work as before.
+    /// status word `FPREM` reports, and after an operand out of range (the sine and cosine's
+    /// stores, the tangent's stop) the next helpers work as before.
     #[test]
     fn the_helpers_leave_the_fpu_as_they_found_it() {
         let fresh = x87_fprem(ext(7.0), ext(3.0));
@@ -2969,8 +3009,7 @@ mod tests {
         }
         assert_eq!(x87_fprem(ext(7.0), ext(3.0)), fresh);
         for _ in 0..3 {
-            let stopped = std::panic::catch_unwind(|| x87_fsincos32(0x5f80_0000));
-            assert!(stopped.is_err());
+            assert_eq!(x87_fsincos32(0x5f80_0000), (0xffc0_0000, 0x5f80_0000));
             let stopped = std::panic::catch_unwind(|| x87_fptan(ext(2f64.powi(64))));
             assert!(stopped.is_err());
         }

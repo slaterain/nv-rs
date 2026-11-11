@@ -15,15 +15,34 @@
 //!   [`skin`] (the skinned shader classes' bone set-up and the renderer's bone matrices) and [`packing`]
 //!   (a skin partition's buffer, a shader declaration's stream pack and build, chips, the vertex lock);
 //!   [`layout`] has the classes they read;
+//! - the pass begin and end the batch renderer's draws reach through a shader's vtable (group B):
+//!   [`passes`] (`BSShader`'s slots: the pass's render states set and put back, the alpha function and
+//!   test of a geometry, the end's states, the begin's end; the render state put back by state, the
+//!   masked stages, the fog property), [`setups`] (the shadow light shader's: the pass choice, the type
+//!   groups' begins and per-geometry set-ups, the tail of the pass kinds 1 to 5, the pass constants, the
+//!   land toggles, the lighting property's fade) and [`constants`] (the vertex shader's constant
+//!   setters);
 //! - [`packet`] and [`own`]: the accessors. Everything the draw reads that the rest of the frame
 //!   changes goes through [`packet`]; everything it writes that is its own through [`own`], one section
 //!   for each of the pipeline probe's conditions that live here (1: the pass lists the next frame's
 //!   registration fills again; 2: blend, clip and depth state and the device's transform, streams and
-//!   indices; 3: the changed flags and buffers of the geometry it packs and draws; 4: the blocks it
-//!   frees; 5: the blocks it allocates; 7: the reference counts). Not routed yet: the packing's own
-//!   objects (the buffer data's streams and chips, the shader declaration, the dynamic geometry group,
-//!   the vertex manager's staging block), which [`packing`] and [`packed`] read and write in place,
-//!   and the exe's constant data (the -FLT_MAX and 0.001 the alpha pass compares with, the colour
+//!   indices, and the shader state a pass begin leaves (the current pass, its stage textures, the
+//!   constant switches, the fog and toggle constants, the device's vertex shader constants); 3: the
+//!   changed flags and buffers of the geometry it packs and draws; 4: the blocks it frees; 5: the blocks
+//!   it allocates; 7: the reference counts, with the shader's counted pointers the pass choice sets).
+//!   Not routed yet: the packing's own objects (the buffer data's streams and chips, the shader
+//!   declaration, the dynamic geometry group, the vertex manager's staging block), which [`packing`]
+//!   and [`packed`] read and write in place; the shader package's tables, the passes' contents (stages,
+//!   state lists, masks, programs), the shaders' and lighting properties' own fields and the constant
+//!   map entries, filled at load and read in place by [`passes`], [`setups`] and [`constants`]; in
+//!   group B also its own writes read back in place (the stage textures in [`passes::bind_masked_stages`],
+//!   the constant entries' enabled bytes in [`setups`], the counted constant maps +0x30/+0x34), reads
+//!   that bypass accessors [`packet`] has (a geometry's skin +0xbc and world scale +0x98, the state
+//!   block's +0xc, a property's flags +0x20), frame-changing reads neither routed nor in an accessor
+//!   (the fog property and its index, the fog colour `011a9bd0` with `011a9bd4`, a lighting property's
+//!   camera distance +0x34, the rendered pass's byte +9, the state block's properties, the land table
+//!   +0xc4) and one write past [`own`] (the constant setters' copy into an entry's own buffer); and the
+//!   exe's constant data (the -FLT_MAX and 0.001 the alpha pass compares with, the colour
 //!   scale, the bone scale bounds). A later step can feed the draw from a copied packet and give a
 //!   drawing thread its own state by changing those two files; nothing here copies, defers or moves
 //!   anything yet.
@@ -38,20 +57,24 @@
 //!
 //! **Threads and floats.** The drivers and the alpha pass run on the main thread only by the census
 //! (`t3/threads.tsv`); the geometry paths' packing, shape draw and getters also on two other game
-//! threads (about one call in 300 to one in 3,000). The family keeps the shader family's exact x87
-//! helpers (the alpha distances, the particles' quads, the bone matrices): [`Threads::Both`].
+//! threads (about one call in 300 to one in 3,000), and six of the pass begin and end's functions also on
+//! game thread 12. The family keeps the shader family's exact x87 helpers (the alpha distances, the
+//! particles' quads, the bone matrices): [`Threads::Both`].
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
 pub mod alpha;
+pub mod constants;
 pub mod drivers;
 pub mod layout;
 pub mod own;
 pub mod packed;
 pub mod packet;
 pub mod packing;
+pub mod passes;
+pub mod setups;
 pub mod shapes;
 pub mod skin;
 
@@ -141,5 +164,30 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e8_bff0, packing::lock_vertices(Ptr<_>, u32, u32, u32, u32) -> u32),
         entry!(0x00e8_c0d0, packing::unlock_vertices(Ptr<_>, u32) -> bool),
         entry!(0x00e9_5550, packing::create_chip(Ptr<_>, u32, u32) -> u32),
+        // The pass begin and end (group B): the BSShader slots, the render state put back, the masked stages.
+        entry!(0x00be_0eb0, passes::set_pass_states(u32, u32)),
+        entry!(0x00be_0ee0, passes::restore_pass_states(u32, u32)),
+        entry!(0x00b9_8610, passes::restore_state(u32, u32)),
+        entry!(0x00be_20b0, passes::alpha_function_of(u32, u32)),
+        entry!(0x00be_20e0, passes::alpha_test_of(u32, u32, bool)),
+        entry!(0x00be_0e50, passes::end_states(u32, u32)),
+        entry!(0x00be_0e90, passes::end_states_restored(u32)),
+        entry!(0x00be_21b0, passes::bind_masked_stages()),
+        entry!(0x00be_1f90, passes::begin_done(u32, u32)),
+        entry!(0x00b5_5520, passes::fog_property(u32) -> u32),
+        // The shadow light shader's pass set-ups (group B).
+        entry!(0x00b7_dd50, setups::begin_types_fc(Ptr<_>)),
+        entry!(0x00b7_deb0, setups::begin_types_ca(Ptr<_>)),
+        entry!(0x00b7_ded0, setups::setup_type_ca(Ptr<_>, Ptr<_>)),
+        entry!(0x00b7_dfe0, setups::setup_type_d1(Ptr<_>, Ptr<_>)),
+        entry!(0x00b7_e150, setups::setup_type_102(Ptr<_>, Ptr<_>)),
+        entry!(0x00b7_ac20, setups::tail_kinds_1_to_5(Ptr<_>, u32)),
+        entry!(0x00b7_b450, setups::setup_pass_constants(Ptr<_>, u32)),
+        entry!(0x00b7_af80, setups::select_pass(Ptr<_>, u32)),
+        entry!(0x00c0_2c30, setups::land_toggles(Ptr<_>, u32, u32, u32, u32)),
+        entry!(0x00b6_6b80, setups::property_fade(Ptr<_>) -> f32),
+        // The vertex shader's constant setters (group B).
+        entry!(0x00e8_9ba0, constants::set_constant(Ptr<_>, Ptr<_>, u32, u32) -> bool),
+        entry!(0x00e8_9c70, constants::set_constant_array(Ptr<_>, Ptr<_>, u32, u32, u32, u32) -> bool),
     ]
 }

@@ -785,6 +785,19 @@ const POINTS_REAL_SLOT: u32 = 0x40;
 const POINTS_SKIPPED: u32 = 0x80;
 const POINTS_LOCK_FAILS: u32 = 0x200;
 const POINTS_DECLARED: u32 = 0x400;
+/// The property answers no pass (its slot 0x90), or a second one after the first (its slot 0x94).
+const POINTS_NO_PASSES: u32 = 0x800;
+const POINTS_SECOND_PASS: u32 = 0x1000;
+/// `00e8f360` and `00e8fc50` answer no index buffer.
+const POINTS_NO_INDEX_BUFFER: u32 = 0x2000;
+/// The buffer data has no streams (the zero page mapped, so the stream read there is 0), or its
+/// chip no vertex buffer.
+const POINTS_NO_STREAMS: u32 = 0x4000;
+const POINTS_NO_VERTEX_BUFFER: u32 = 0x8000;
+/// The points' property: its slot 0x90 answers `RETS + 0x7a0`, its slot 0x94 `RETS + 0x7a4`, counted
+/// down at each answer.
+const PASSES_FN: u32 = 0x00ff_3030;
+const NEXT_PASS_FN: u32 = 0x00ff_3040;
 
 /// A float array of `n` entries from `seed`.
 fn floats(e: &mut Engine, n: u32, seed: f32) -> u32 {
@@ -872,7 +885,11 @@ fn points_world(e: &mut Engine, switches: u32, count: u32, limit: u32, size: u32
     let group_vt = vtable(e, &[]);
     let group = obj(e, 0x20, group_vt);
     set(e, buffer + 8, group);
-    set(e, buffer + 0x20, 1);
+    if switches & POINTS_NO_STREAMS != 0 {
+        e.map(0, 0x1000);
+    } else {
+        set(e, buffer + 0x20, 1);
+    }
     let strides = e.mem.alloc(8);
     set(e, buffer + 0x24, strides);
     let chips = e.mem.alloc(8);
@@ -880,7 +897,9 @@ fn points_world(e: &mut Engine, switches: u32, count: u32, limit: u32, size: u32
     let lock_vt = vtable(e, &[(0x2c, LOCK_FN)]);
     let vertex_buffer = obj(e, 0x10, lock_vt);
     let chip = e.mem.alloc(0x18);
-    set(e, chip + 8, vertex_buffer);
+    if switches & POINTS_NO_VERTEX_BUFFER == 0 {
+        set(e, chip + 8, vertex_buffer);
+    }
     set(e, chip + 0xc, 0x40);
     set(e, chip + 0x10, 0x2000);
     set(e, chips, chip);
@@ -904,11 +923,28 @@ fn points_world(e: &mut Engine, switches: u32, count: u32, limit: u32, size: u32
     if switches & POINTS_NEW_INDEX_BUFFER == 0 {
         set(e, buffer + 0x34, index_buffer);
     }
-    set(e, RETS + 0x60c, index_buffer);
-    set(e, RETS + 0x608, index_buffer);
-    // The property: one pass (slot 0x90 answers 1, 0x94 none after it).
-    let property = obj(e, 0x20, vt);
-    set(e, RETS + 0x94, 0);
+    let made = if switches & POINTS_NO_INDEX_BUFFER != 0 {
+        0
+    } else {
+        index_buffer
+    };
+    set(e, RETS + 0x60c, made);
+    set(e, RETS + 0x608, made);
+    // The property: one pass, none, or two.
+    e.register(PASSES_FN, |e, _| ret(e.mem.u32(RETS + 0x7a0)));
+    e.register(NEXT_PASS_FN, |e, _| {
+        let left = e.mem.u32(RETS + 0x7a4);
+        e.mem.set_u32(RETS + 0x7a4, left.saturating_sub(1));
+        ret(left)
+    });
+    let property_vt = vtable(e, &[(0x90, PASSES_FN), (0x94, NEXT_PASS_FN)]);
+    let property = obj(e, 0x20, property_vt);
+    set(e, RETS + 0x7a0, u32::from(switches & POINTS_NO_PASSES == 0));
+    set(
+        e,
+        RETS + 0x7a4,
+        u32::from(switches & POINTS_SECOND_PASS != 0),
+    );
     // The geometry: bound, world transform (rotation, translation, scale), property state, data,
     // property.
     let geometry = obj(e, 0xc4, vt);
@@ -963,6 +999,12 @@ fn draw_points() {
                 POINTS_SKIPPED,
                 POINTS_LOCK_FAILS,
                 POINTS_INDICES | POINTS_LOCK_FAILS,
+                POINTS_NO_PASSES,
+                POINTS_SECOND_PASS | POINTS_COLORS,
+                POINTS_NO_INDEX_BUFFER,
+                POINTS_NO_INDEX_BUFFER | POINTS_INDICES | POINTS_NEW_INDEX_BUFFER,
+                POINTS_NO_STREAMS,
+                POINTS_NO_VERTEX_BUFFER,
             ]),
             Input::Of(&[2, 0, 1]),
             Input::Of(&[ONE, 0, 0xbf80_0000, 0x7fc0_0000]),
@@ -982,6 +1024,20 @@ fn draw_points() {
 /// The quad builders' inputs: the count, with colours, with angles (2: the first a NaN), the camera
 /// vector floats.
 fn quads_setup(e: &mut Engine, c: &Case, bytes: bool) -> Vec<u32> {
+    let floats = (c.f32(3).to_bits(), c.f32(4));
+    quads_world(e, c.word(0), c.word(1) != 0, c.word(2), floats, bytes)
+}
+
+/// [`quads_setup`]'s world: `n` points, with colours or not, the angles (`angles_way` 0 none, 1 some,
+/// 2 the first a NaN), the float for the first point's x and the camera's right z, the scale float.
+fn quads_world(
+    e: &mut Engine,
+    n: u32,
+    colored: bool,
+    angles_way: u32,
+    (float, scale): (u32, f32),
+    bytes: bool,
+) -> Vec<u32> {
     stand_ins(e);
     let r = renderer_world(e, &[]);
     for (i, at) in [0x64cu32, 0x650, 0x654, 0x658, 0x65c, 0x660]
@@ -989,26 +1045,25 @@ fn quads_setup(e: &mut Engine, c: &Case, bytes: bool) -> Vec<u32> {
         .enumerate()
     {
         let value = if i == 2 {
-            c.f32(3).to_bits()
+            float
         } else {
             [ONE, HALF, 0, TWO, 0xbf80_0000, 0][i]
         };
         set(e, r.renderer + at, value);
     }
-    let n = c.word(0);
     let vertices = e.mem.alloc(0x28 * 4 * n.max(1));
     let positions = floats(e, 3 * n, 1.25);
     // The first point's x is the case's float (a signalling NaN keeps its form only as a memory operand).
-    set(e, positions, c.f32(3).to_bits());
-    let colors = if c.word(1) != 0 {
-        floats(e, 4 * n, 0.5)
+    set(e, positions, float);
+    let colors = if colored { floats(e, 4 * n, 0.5) } else { 0 };
+    let sizes = floats(e, n, 0.5);
+    let scales = floats(e, n, scale);
+    let angles = if angles_way != 0 {
+        floats(e, n, 0.7)
     } else {
         0
     };
-    let sizes = floats(e, n, 0.5);
-    let scales = floats(e, n, c.f32(4));
-    let angles = if c.word(2) != 0 { floats(e, n, 0.7) } else { 0 };
-    if c.word(2) == 2 {
+    if angles_way == 2 {
         // The first angle the x87 default NaN: the first quad's offsets are then a quiet NaN whose
         // payload is below a quieted signalling NaN's, so which operand form the fourth corner's x
         // takes (memory or loaded) decides which NaN it keeps.
@@ -1060,6 +1115,56 @@ fn build_quads_with_byte() {
     .inputs(QUAD_INPUTS)
     .float_sweep(48)
     .setup(|e, c| quads_setup(e, c, true))
+    .run()
+    .assert_same();
+}
+
+/// The quad builders with a signalling NaN in one operand at a time: the first point's x, y or z,
+/// the camera's right or up vector's x, y or z (each read as a memory operand or loaded somewhere),
+/// three NaNs (positive, negative, a larger payload), the angles none, some or the first a quiet NaN,
+/// with colours or not.
+fn quads_nan_setup(e: &mut Engine, c: &Case, bytes: bool) -> Vec<u32> {
+    let words = quads_world(e, 3, c.word(3) != 0, c.word(2), (ONE, 1.0), bytes);
+    let (renderer, positions) = (words[0], words[2]);
+    let operand = c.word(0);
+    let at = if operand < 3 {
+        positions + 4 * operand
+    } else {
+        renderer + 0x64c + 4 * (operand - 3)
+    };
+    set(e, at, c.word(1));
+    words
+}
+
+const QUAD_NAN_INPUTS: &[Input] = &[
+    Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8]),
+    Input::Of(&[0x7f80_0001, 0xff80_0001, 0x7fa0_0000]),
+    Input::Of(&[0, 1, 2]),
+    Input::Of(TWO_WAYS),
+];
+
+#[test]
+fn build_quads_nans() {
+    Diff::new(entry!(
+        0x00e6_9ea0,
+        packed::build_quads(Ptr<_>, u32, u32, u32, u32, u32, u32, u16)
+    ))
+    .common()
+    .inputs(QUAD_NAN_INPUTS)
+    .setup(|e, c| quads_nan_setup(e, c, false))
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn build_quads_with_byte_nans() {
+    Diff::new(entry!(
+        0x00e6_ab40,
+        packed::build_quads_with_byte(Ptr<_>, u32, u32, u32, u32, u32, u32, u32, u16)
+    ))
+    .common()
+    .inputs(QUAD_NAN_INPUTS)
+    .setup(|e, c| quads_nan_setup(e, c, true))
     .run()
     .assert_same();
 }
@@ -1238,7 +1343,8 @@ fn bone_matrices() {
 }
 
 /// `bone_setup` (`00b7a2c0`): the switch present and on or not, the shader's own bone constants or
-/// not, a partition or none, +0x38 set or not; the bone fill finds the skin filled already.
+/// not, a partition or none, +0x38 set or not; the bone fill finds the skin filled already, or an
+/// empty skin (no bones) to fill.
 #[test]
 fn bone_setup() {
     Diff::new(entry!(
@@ -1258,9 +1364,15 @@ fn bone_setup() {
         Input::Of(TWO_WAYS),
         Input::Of(TWO_WAYS),
         Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
     ])
     .setup(|e, c| {
-        let (_, skin, world) = bone_world(e, 1, 1, 3, 0x400, ONE);
+        // The skin filled already, or an empty one (no bones) not filled yet.
+        let (_, skin, world) = if c.word(4) != 0 {
+            bone_world(e, 0, 0, 3, 0x400, ONE)
+        } else {
+            bone_world(e, 1, 1, 3, 0x400, ONE)
+        };
         let vt = vtable(e, &[]);
         let switch = match c.word(0) {
             0 => 0,
@@ -1374,7 +1486,9 @@ fn chip_world(e: &mut Engine, real: bool) -> (u32, u32) {
 
 /// `create_chip` (`00e95550`): one stream (key from the data or from the stride; the record found,
 /// found null or absent; the chip found or made) or several (the arrays grown or not, the cursor
-/// wrapping, the record and the chip in the arrays or made).
+/// wrapping, the record and the chip in the arrays or made); the strides 0: with several streams a size
+/// of 0, with one the offset's division by the stride faults (the exe's `DIV` too), a stop both sides
+/// make.
 #[test]
 fn create_chip() {
     Diff::new(entry!(
@@ -1390,11 +1504,19 @@ fn create_chip() {
         Input::Of(TWO_WAYS),
         Input::Of(TWO_WAYS),
         Input::Of(&[0, 3]),
+        Input::Of(TWO_WAYS),
     ])
-    .max_cases(300)
+    .max_cases(432)
+    .expect_stops(|c| c.word(0) == 1 && c.word(6) != 0)
     .setup(|e, c| {
         stand_ins(e);
         let (data, group) = chip_world(e, false);
+        if c.word(6) != 0 {
+            let strides = e.mem.u32(data + 0x24);
+            for i in 0..4u32 {
+                set(e, strides + 4 * i, 0);
+            }
+        }
         let streams = c.word(0);
         set(e, data + 0x20, streams);
         if c.word(3) != 0 {
@@ -1589,7 +1711,8 @@ fn build_declaration() {
 /// `pack_stream` (`00e76770`): a partition or the data's count (none: the chip answered), the slot 0xb0
 /// answering set or not, the renderer's byte +0x5d4, a locked address or the chip kept, remade or
 /// failing, the derived vectors kept for the data's own pack or packed, the flags, the unlock's answer,
-/// the stream (stream 1's usages 13, 14, 1, 0; stream 0's 0, 3, 4, 7).
+/// the stream (stream 1's usages 13, 14, 1, 0, 16; stream 0's 0, 3, 4, 7, 15: above 14 packed always), the
+/// vertex lock answering null (the buffer's Lock failing).
 #[test]
 fn pack_stream() {
     Diff::new(entry!(
@@ -1606,10 +1729,11 @@ fn pack_stream() {
         Input::Of(TWO_WAYS),
         Input::Of(&[0, 1]),
         Input::Of(&[1, 0]),
+        Input::Of(TWO_WAYS),
     ])
-    .max_cases(600)
+    .max_cases(800)
     .setup(|e, c| {
-        let declaration = declaration_world(e, 2, 4, &[0, 3, 4, 7, 13, 14, 1], 0, 0, 0);
+        let declaration = declaration_world(e, 2, 5, &[0, 3, 4, 7, 15, 13, 14, 1, 0, 16], 0, 0, 0);
         set(e, RETS + 0x708, c.word(1) * 0x0bd0_0002);
         let renderer = e.mem.u32(declaration + 8);
         e.mem.set_u8(renderer + 0x5d4, c.word(2) as u8);
@@ -1650,7 +1774,12 @@ fn pack_stream() {
         set(e, RETS + 0x634, chip);
         let locked = e.mem.alloc(0x200);
         set(e, RETS + 0x700, locked);
-        set(e, RETS + 0x704, 0);
+        // The vertex buffer's Lock fails (the vertex lock then answers null) or works.
+        set(
+            e,
+            RETS + 0x704,
+            if c.word(8) != 0 { 0x8000_0001 } else { 0 },
+        );
         set(e, RETS + 0x30, c.word(6));
         let (chip_word, locked_word) = match c.word(3) {
             0 => (0, 0),

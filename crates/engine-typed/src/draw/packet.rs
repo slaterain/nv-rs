@@ -594,3 +594,78 @@ pub(crate) fn bone_node(e: &Engine, list: u32, bone: u32) -> u32 {
 pub(crate) fn bone_scale(e: &Engine, node: u32) -> u32 {
     e.global::<u32>(node.wrapping_add(0x98))
 }
+
+// ---- The pass begin and end (group B): the current pass, the pass being rendered. ----
+//
+// The current shader pass (`0126f74c`) is what the pass begin picks (own.rs writes it); the pass
+// being rendered (`011f91e0`, its type `011f91e4`) and the render-state cache's stored values are the
+// batch renderer's, changed as the frame draws. Not routed: the shader package's tables and the
+// passes' own contents (stages, state lists, masks, programs), filled at load and only read here.
+
+/// The current shader pass (`0126f74c`).
+pub(crate) const CURRENT_PASS: u32 = 0x0126_f74c;
+/// The pass being rendered (`011f91e0`) and its type (`011f91e4`).
+const RENDERING_PASS: u32 = 0x011f_91e0;
+const RENDERING_PASS_TYPE: u32 = 0x011f_91e4;
+
+/// The current shader pass.
+#[inline(always)]
+pub(crate) fn current_pass(e: &Engine) -> u32 {
+    e.global::<u32>(CURRENT_PASS)
+}
+
+/// The current pass's constants holder (+0x5c).
+#[inline(always)]
+pub(crate) fn pass_constants_holder(e: &Engine) -> u32 {
+    e.global::<u32>(current_pass(e).wrapping_add(0x5c))
+}
+
+/// The device the current pass's constants go to (its constants holder's +0x20).
+#[inline(always)]
+pub(crate) fn pass_device(e: &Engine) -> u32 {
+    e.global::<u32>(pass_constants_holder(e).wrapping_add(0x20))
+}
+
+/// The pass being rendered.
+#[inline(always)]
+pub(crate) fn rendering_pass(e: &Engine) -> u32 {
+    e.global::<u32>(RENDERING_PASS)
+}
+
+/// The pass being rendered's geometry (its first word).
+#[inline(always)]
+pub(crate) fn rendering_geometry(e: &Engine) -> u32 {
+    e.global::<u32>(rendering_pass(e))
+}
+
+/// The type of the pass being rendered.
+#[inline(always)]
+pub(crate) fn rendering_pass_type(e: &Engine) -> u32 {
+    e.global::<u32>(RENDERING_PASS_TYPE)
+}
+
+/// The renderer's render-state cache (+0x8b8).
+#[inline(always)]
+pub(crate) fn render_state_cache(e: &Engine, renderer: u32) -> u32 {
+    e.global::<u32>(renderer.wrapping_add(0x8b8))
+}
+
+/// The render-state cache's stored value of `state` (+0x124 + 8 · state).
+#[inline(always)]
+pub(crate) fn stored_render_state(e: &Engine, cache: u32, state: u32) -> u32 {
+    e.global::<u32>(
+        cache
+            .wrapping_add(state.wrapping_mul(8))
+            .wrapping_add(0x124),
+    )
+}
+
+/// The shadow scene nodes (`011f91c8`, a word an index).
+const SHADOW_SCENE_NODES: u32 = 0x011f_91c8;
+
+/// Shadow scene node `index`'s fog property (+0x134).
+#[inline(always)]
+pub(crate) fn scene_fog_property(e: &Engine, index: u32) -> u32 {
+    let node = e.global::<u32>(SHADOW_SCENE_NODES.wrapping_add(index.wrapping_mul(4)));
+    e.global::<u32>(node.wrapping_add(0x134))
+}

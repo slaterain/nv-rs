@@ -512,8 +512,21 @@ secondary scenes' draw (`00b6c0d0`). Group D, the geometry paths the batch rende
 immediate draws (the triangle shape, the segmented shape with its segment merge, the particles), the renderer's
 shape, skin partition and points draws with the particles' quad builders and vertex declarations, the skinned
 shader classes' bone set-up and the renderer's bone-matrix fill, a skin partition's buffer pack, a shader
-declaration's stream pack and build, the chips and the vertex lock, and the geometry data getters; the lock,
-unlock and chip functions and the folded "false" (`0047c850`) are game-wide too. The tests: group A's in
+declaration's stream pack and build, the chips and the vertex lock, and the geometry data getters. Used outside
+the world draw too (`draw:off` gives those callers the translations again): the geometry data getters, which sit in
+the data classes' vtables (the vertex count `00a669e0` in seven, the strip lists `00a75f10` in 24) and are asked by
+whoever holds a data object, the strip lists getter also called directly from nine places (among them the
+tangent-space creation, `PackGeometryBuffer`, `PrecacheGeometry`, the cached geometry and `ClipMesh`); the lock,
+unlock and chip functions; and the folded "false" (`0047c850`). Group B, the pass begin and end the batch
+renderer's draws reach through a shader's vtable: `BSShader`'s pass slots as the shadow light shader keeps them (the
+render states set and put back, the alpha function and test, the end's states and their restore, the begin's end),
+the render state put back by state (`00b98610`), the masked stage binding (`00be21b0`), the fog property
+(`00b55520`), the shadow light shader's pass choice, pass constants, type group begins, per-geometry set-ups, kinds 1
+to 5 tail and land toggles, a lighting property's fade (`00b66b80`) and the vertex shader's two constant setters
+(`00e89ba0`, `00e89c70`). Used outside the world draw too (`draw:off` gives those callers the translations again):
+`GetFogProperty` (`00b55520`), the lighting fade (`00b66b80`, in the lighting properties' vtables), the constant
+setters (every shader's constant maps), `00b98610`, the `BSShader` slots every `BSShader` class shares, and
+`00be21b0` (slot 0x10c of many shaders' vtables). The tests: groups A's and B's in
 `crates/engine/tests/typed_shader.rs` (the shader family's world), group D's in `crates/engine/tests/typed_draw.rs`.
 The accessors: what the drivers and the alpha pass read that the rest of the frame changes goes through
 `draw::packet`, and what they write that is their own through `draw::own`, one section per condition of the
@@ -521,9 +534,15 @@ pipeline probe that lives there (the pass lists the next frame's registration fi
 cursors, blend, clip and depth state and the device's transform, streams and indices, the changed flags of the
 geometry drawn, the blocks the draw frees and allocates, the reference counts). Not routed yet: the packing's own
 objects (the buffer data's streams and chips, the shader declaration, the dynamic geometry group, the vertex
-manager's staging block), which `draw::packing` and `draw::packed` read and write in place, and the exe's constant
-data (the -FLT_MAX and 0.001 the alpha pass compares with, the colour scale, the bone scale bounds). A later step
-changes those two files to feed the draw from a copied packet. On since its gate (the recorded street run
+manager's staging block), which `draw::packing` and `draw::packed` read and write in place; the exe's constant
+data (the -FLT_MAX and 0.001 the alpha pass compares with, the colour scale, the bone scale bounds); and in group B,
+its own writes read back in place (the stage textures, the constant entries' enabled bytes, the counted constant
+maps +0x30/+0x34), reads that bypass accessors `draw::packet` has (a geometry's skin +0xbc and world scale +0x98,
+the state block's +0xc, a property's flags +0x20), frame-changing reads neither routed nor in an accessor (the fog
+property and its index, the fog colour `011a9bd0` with `011a9bd4`, a lighting property's camera distance +0x34, the
+rendered pass's byte +9, the state block's properties, the land table +0xc4) and one write past `draw::own` (the
+constant setters' copy into an entry's own buffer). A later step changes those two files to feed the draw from a
+copied packet. On since its gate (the recorded street run
 byte-identical with `NV_TYPED=draw:off`); not a speed change by itself.
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
