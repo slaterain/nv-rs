@@ -1415,28 +1415,32 @@ pub enum ReserveGap {
 }
 
 fn reserve_gap(kernel: &Kernel) -> ReserveGap {
+    kernel.reserve_gap.unwrap_or_else(reserve_gap_setting)
+}
+
+/// `NV_RESERVE_GAP` as this process has it, read once (a fault's note asks it too).
+pub fn reserve_gap_setting() -> ReserveGap {
     static FROM_ENV: std::sync::OnceLock<ReserveGap> = std::sync::OnceLock::new();
-    kernel.reserve_gap.unwrap_or_else(|| {
-        *FROM_ENV.get_or_init(|| {
-            match std::env::var("NV_RESERVE_GAP").as_deref().map(str::trim) {
-                Ok("on") => {
-                    println!(
-                        "NV_RESERVE_GAP=on: address-0 reservations go in the gap below the heap"
-                    );
-                    ReserveGap::On
-                }
-                Ok("held") => {
-                    println!(
-                        "NV_RESERVE_GAP=held: address-0 reservations go in the gap below the heap, \
-                         each keeping the heap block it would take off (unused: the heap's layout \
-                         is off's, for the gate)"
-                    );
-                    ReserveGap::Held
-                }
-                _ => ReserveGap::Off,
-            }
-        })
-    })
+    *FROM_ENV.get_or_init(reserve_gap_from_env)
+}
+
+/// `NV_RESERVE_GAP` (`on`, `held`; anything else is off), said once when not off.
+fn reserve_gap_from_env() -> ReserveGap {
+    match std::env::var("NV_RESERVE_GAP").as_deref().map(str::trim) {
+        Ok("on") => {
+            println!("NV_RESERVE_GAP=on: address-0 reservations go in the gap below the heap");
+            ReserveGap::On
+        }
+        Ok("held") => {
+            println!(
+                "NV_RESERVE_GAP=held: address-0 reservations go in the gap below the heap, each \
+                 keeping the heap block it would take off (unused: the heap's layout is off's, for \
+                 the gate)"
+            );
+            ReserveGap::Held
+        }
+        _ => ReserveGap::Off,
+    }
 }
 
 /// The lowest 64 KiB-aligned base in [`RESERVE_GAP`] where `len` bytes overlap no reservation and
@@ -2970,6 +2974,8 @@ mod tests {
             })
             .collect();
         assert_eq!(e.register_imports(&imports), slots.len());
+        // A developer shell's NV_RESERVE_GAP never reaches a test: the gap tests set it themselves.
+        e.kernel.reserve_gap = Some(ReserveGap::Off);
         e
     }
 
@@ -4497,7 +4503,7 @@ mod tests {
         assert!(off >= crate::mem::HEAP_BASE, "{off:08x}");
         assert_eq!((on, held), (RESERVE_GAP.start, RESERVE_GAP.start));
         assert_ne!(on_next, off_next, "on, the heap does not move");
-        assert_eq!(held_next, off_next, "held, the next block lies where it lies off");
+        assert_eq!(held_next, off_next, "held: the next block lies as off");
         let block = e.kernel.regions[&held].block();
         assert!(e.kernel.regions[&held].in_gap());
         assert!(e.mem.block_size(block).is_some(), "the kept block is live");

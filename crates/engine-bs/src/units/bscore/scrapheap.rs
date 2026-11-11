@@ -1399,6 +1399,8 @@ mod tests {
             })
             .collect();
         assert_eq!(e.register_imports(&imports), slots.len());
+        // A developer shell's NV_RESERVE_GAP never reaches these tests.
+        e.kernel.reserve_gap = Some(crate::units::platform::ReserveGap::Off);
         e
     }
 
