@@ -820,7 +820,7 @@ pub fn end_pass(e: &mut Engine) {
                 typed_call!(
                     crate::draw::FAMILY,
                     0x00be_0e90,
-                    crate::draw::passes::end_states_restored(e)
+                    crate::draw::passes::end_states_restored(e, shader)
                 );
             } else {
                 e.vcall(shader, slot::END_RESTORE, &[]);

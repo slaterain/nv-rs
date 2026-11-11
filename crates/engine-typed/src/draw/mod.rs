@@ -163,7 +163,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00be_20b0, passes::alpha_function_of(u32, u32)),
         entry!(0x00be_20e0, passes::alpha_test_of(u32, u32, bool)),
         entry!(0x00be_0e50, passes::end_states(u32, u32)),
-        entry!(0x00be_0e90, passes::end_states_restored()),
+        entry!(0x00be_0e90, passes::end_states_restored(u32)),
         entry!(0x00be_21b0, passes::bind_masked_stages()),
         entry!(0x00be_1f90, passes::begin_done(u32, u32)),
         entry!(0x00b5_5520, passes::fog_property(u32) -> u32),

@@ -3717,8 +3717,15 @@ impl Geometry for Diff {
             .family(&pathing::PATHING)
             .family(&render::RENDER)
             .translation_calls_plainly(SET_UP_PLAIN)
-            // The draw family's partition draw, skinned packer and strip lists, as in `common`.
-            .goes_by_address(&[0x00e6_d310, 0x00e6_d780, 0x00a7_5f10])
+            // The draw family's partition draw, skinned packer and strip lists, land toggles and fog
+            // property, as in `common`.
+            .goes_by_address(&[
+                0x00e6_d310,
+                0x00e6_d780,
+                0x00a7_5f10,
+                0x00c0_2c30,
+                0x00b5_5520,
+            ])
             .max_calls(MAX_CALLS)
             .max_cases(160)
     }
@@ -5756,6 +5763,19 @@ fn render_skinned_typed_bone_setup() {
 
 use engine_typed::draw::{constants as dconstants, passes, setups};
 
+trait PassCommon {
+    fn pass_common(self) -> Diff;
+}
+
+impl PassCommon for Diff {
+    /// Group B's settings: the draw family named; the translations its tests reach call the shader
+    /// family's setters by address (the cull mode setter too, which other draws' translations call
+    /// plainly), so nothing is listed as called plainly.
+    fn pass_common(self) -> Diff {
+        self.common().family(&draw::DRAW).float_sweep(0)
+    }
+}
+
 /// The setters `restore_state` calls by address.
 const RESTORE_SETTERS: &[u32] = &[
     0x0071_4a40,
@@ -5789,24 +5809,38 @@ fn marked(e: &mut Engine, a: &[u32]) -> Ret {
     ret(0)
 }
 
-/// What [`pass_world`] adds: the current pass, its stages, the object at its +0x44, the shader's
-/// counted pointer sources.
+/// The device's float vertex constants (slot 0x178) stood in: the register and the registers' words
+/// folded into a mark (`RETS + 0x784`), so what a set-up uploads shows. Answers 0 (success).
+fn folded_constants(e: &mut Engine, a: &[u32]) -> Ret {
+    let mut h = e.mem.u32(RETS + 0x784).wrapping_mul(31).wrapping_add(a[1]);
+    for k in 0..a[3].min(16) * 4 {
+        h = h
+            .wrapping_mul(17)
+            .wrapping_add(e.mem.u32(a[2].wrapping_add(4 * k)));
+    }
+    e.mem.set_u32(RETS + 0x784, h);
+    ret(0)
+}
+
+/// What [`pass_world`] makes: the draw world and its current pass.
 #[derive(Clone, Copy)]
 struct PassW {
     d: DrawW,
     pass: u32,
-    stages: [u32; 6],
-    second: u32,
 }
 
 /// The draw world with a fuller current pass ([`PassW`]): `states` as its render state list (state,
-/// value), `mask` its mask byte; the first pass's geometry being rendered, of type `pass_type`.
+/// value), `mask` its mask byte; the first pass's geometry being rendered, of type `pass_type`. The
+/// render family's stage bind (`00e7eb00`, which these tests don't name) stands in: each bind leaves a
+/// mark, so which stages are bound shows.
 fn pass_world(e: &mut Engine, states: &[(u32, u32)], mask: u8, pass_type: u32) -> PassW {
     let d = draw_world(e);
     let w = d.w;
+    e.register(0x00e7_eb00, marked);
     for addr in RESTORE_SETTERS {
         e.register(*addr, marked);
     }
+    e.register(VT_FN + 0x178, folded_constants);
     let vt = vtable(e, &[]);
     // The constants holder: it answers through its slots 0x84 and 0x7c; the device at +0x20.
     let holder = obj(e, 0x24, vt);
@@ -5824,15 +5858,14 @@ fn pass_world(e: &mut Engine, states: &[(u32, u32)], mask: u8, pass_type: u32) -
         next = node;
     }
     set(e, list + 0x10, next);
-    let array = e.mem.alloc(0x18);
-    let mut stages = [0u32; 6];
-    for (i, s) in stages.iter_mut().enumerate() {
-        let i = i as u32;
-        *s = e.mem.alloc(0x14);
-        set(e, *s + 4, i);
-        set(e, *s + 8, if i == 2 { 0 } else { 0x7e00_0000 + i });
-        set(e, *s + 0x10, w.stage_cache);
-        set(e, array + 4 * i, *s);
+    // Sixteen stages (the pair textures reach stage 14), the pass counting six.
+    let array = e.mem.alloc(0x40);
+    for i in 0..16u32 {
+        let s = e.mem.alloc(0x14);
+        set(e, s + 4, i);
+        set(e, s + 8, if i == 2 { 0 } else { 0x7e00_0000 + i });
+        set(e, s + 0x10, w.stage_cache);
+        set(e, array + 4 * i, s);
     }
     set(e, pass + 0x18, 6);
     set(e, pass + 0x24, array);
@@ -5849,12 +5882,7 @@ fn pass_world(e: &mut Engine, states: &[(u32, u32)], mask: u8, pass_type: u32) -
     let rendering = e.mem.u32(0x011f_91e0);
     set(e, rendering, geometry);
     set(e, 0x011f_91e4, pass_type);
-    PassW {
-        d,
-        pass,
-        stages,
-        second,
-    }
+    PassW { d, pass }
 }
 
 const PASS_STATES: &[(u32, u32)] = &[(7, 1), (0x13, 5), (0x16, 2), (0xbe, 0x3f80_0000), (0x89, 0)];
@@ -5864,7 +5892,7 @@ const PASS_STATES: &[(u32, u32)] = &[(7, 1), (0x13, 5), (0x16, 2), (0xbe, 0x3f80
 #[test]
 fn restore_state() {
     Diff::new(entry!(0x00b9_8610, passes::restore_state(u32, u32)))
-        .draw_common_at(0x00b9_8610)
+        .pass_common()
         .inputs(&[
             Input::Of(&[
                 7, 0xe, 0xf, 0x13, 0x14, 0x17, 0x18, 0x19, 0x1b, 0x34, 0x36, 0x39, 0x3b, 0x98,
@@ -5895,7 +5923,7 @@ fn restore_state() {
 /// The pass's render states set (slot 0x100) and put back (slot 0x104): no states, one, several.
 #[test]
 fn set_and_restore_pass_states() {
-    for (addr, typed) in [
+    for (_addr, typed) in [
         (
             0x00be_0eb0u32,
             entry!(0x00be_0eb0, passes::set_pass_states(u32, u32)),
@@ -5906,7 +5934,7 @@ fn set_and_restore_pass_states() {
         ),
     ] {
         Diff::new(typed)
-            .draw_common_at(addr)
+            .pass_common()
             .inputs(&[Input::Of(&[0, 1, 5]), Input::Of(&[0, 1, 2])])
             .setup(|e, c| {
                 let states = &PASS_STATES[..c.word(0) as usize];
@@ -5927,7 +5955,7 @@ fn set_and_restore_pass_states() {
 #[test]
 fn alpha_function_and_test_of() {
     Diff::new(entry!(0x00be_20b0, passes::alpha_function_of(u32, u32)))
-        .draw_common_at(0x00be_20b0)
+        .pass_common()
         .inputs(&[
             Input::Of(&[0, 0x1c00, 0x0e01, 0xffff]),
             Input::Of(&[0, 0x80, 0xff]),
@@ -5945,7 +5973,7 @@ fn alpha_function_and_test_of() {
         .run()
         .assert_same();
     Diff::new(entry!(0x00be_20e0, passes::alpha_test_of(u32, u32, bool)))
-        .draw_common_at(0x00be_20e0)
+        .pass_common()
         .inputs(&[
             Input::Of(&[0, 1, 2, 3]),
             Input::Of(&[0, 0x200, 0xc00, 0xe00]),
@@ -5982,7 +6010,7 @@ fn alpha_function_and_test_of() {
 #[test]
 fn end_states() {
     Diff::new(entry!(0x00be_0e50, passes::end_states(u32, u32)))
-        .draw_common_at(0x00be_0e50)
+        .pass_common()
         .inputs(&[
             Input::Of(&[0x10, 0x251, 0x252, 0x254, 0x256, 0x257]),
             Input::Of(&[0, 1]),
@@ -5996,15 +6024,15 @@ fn end_states() {
         })
         .run()
         .assert_same();
-    Diff::new(entry!(0x00be_0e90, passes::end_states_restored()))
-        .draw_common_at(0x00be_0e90)
+    Diff::new(entry!(0x00be_0e90, passes::end_states_restored(u32)))
+        .pass_common()
         .inputs(&[Input::Of(&[0, 1])])
         .setup(|e, c| {
             let p = pass_world(e, &[], 0, 0);
             for k in [0x1b, 0xe, 0x17] {
                 e.mem.set_u8(p.d.w.cache + 0x920 + k, c.word(0) as u8);
             }
-            vec![]
+            vec![p.d.w.shader]
         })
         .run()
         .assert_same();
@@ -6015,7 +6043,7 @@ fn end_states() {
 #[test]
 fn bind_masked_stages() {
     Diff::new(entry!(0x00be_21b0, passes::bind_masked_stages()))
-        .draw_common_at(0x00be_21b0)
+        .pass_common()
         .goes_by_address(&[0x00e7_eb00])
         .inputs(&[
             Input::Of(&[0, 1, 0x0b, 0x7f, 0x80, 0xff]),
@@ -6024,7 +6052,8 @@ fn bind_masked_stages() {
         .setup(|e, c| {
             let p = pass_world(e, &[], c.word(0) as u8, 0);
             for i in 0..8u32 {
-                set(e, 0x011a_e640 + 4 * i, 1 << i);
+                // Stage 5's bit above the mask byte: only a sign-extended mask has it.
+                set(e, 0x011a_e640 + 4 * i, if i == 5 { 0x100 } else { 1 << i });
             }
             if c.word(1) != 0 {
                 let array = e.mem.u32(p.pass + 0x24);
@@ -6041,7 +6070,7 @@ fn bind_masked_stages() {
 #[test]
 fn begin_done() {
     Diff::new(entry!(0x00be_1f90, passes::begin_done(u32, u32)))
-        .draw_common_at(0x00be_1f90)
+        .pass_common()
         .inputs(&[Input::Of(TWO_WAYS), Input::Of(TWO_WAYS)])
         .setup(|e, c| {
             let p = pass_world(e, &[], 0, 0);
@@ -6072,7 +6101,7 @@ fn begin_done() {
 #[test]
 fn fog_property() {
     Diff::new(entry!(0x00b5_5520, passes::fog_property(u32) -> u32))
-        .draw_common_at(0x00b5_5520)
+        .pass_common()
         .inputs(&[Input::Of(&[0, 1, 2])])
         .setup(|e, c| {
             pass_world(e, &[], 0, 0);
@@ -6120,7 +6149,7 @@ fn setup_state(e: &mut Engine, p: &PassW, fourth: u32) -> u32 {
 /// pass's object +0x44 there or not.
 #[test]
 fn begin_types() {
-    for (addr, typed) in [
+    for (_addr, typed) in [
         (
             0x00b7_dd50u32,
             entry!(0x00b7_dd50, setups::begin_types_fc(Ptr<_>)),
@@ -6131,7 +6160,7 @@ fn begin_types() {
         ),
     ] {
         Diff::new(typed)
-            .draw_common_at(addr)
+            .pass_common()
             .goes_by_address(&[0x00e7_eb00])
             .inputs(&[Input::Of(TWO_WAYS), Input::Of(TWO_WAYS)])
             .setup(|e, c| {
@@ -6159,7 +6188,7 @@ fn begin_types() {
 /// rendered pass's byte +9, the rendered geometry's scale over the special floats.
 #[test]
 fn setup_types() {
-    for (addr, typed) in [
+    for (_addr, typed) in [
         (
             0x00b7_ded0u32,
             entry!(0x00b7_ded0, setups::setup_type_ca(Ptr<_>, Ptr<_>)),
@@ -6174,7 +6203,7 @@ fn setup_types() {
         ),
     ] {
         Diff::new(typed)
-            .draw_common_at(addr)
+            .pass_common()
             .goes_by_address(&[0x00e7_eb00, 0x00c4_c2d0])
             .inputs(&[
                 Input::Of(&[0, 0x7e00_00f4]),
@@ -6221,7 +6250,7 @@ fn entries(e: &mut Engine) {
 #[test]
 fn tail_kinds_1_to_5() {
     Diff::new(entry!(0x00b7_ac20, setups::tail_kinds_1_to_5(Ptr<_>, u32)))
-        .draw_common_at(0x00b7_ac20)
+        .pass_common()
         .inputs(&[
             Input::Of(&[0, 0x0000_0006, 0x00a5_a5a4, 0xffff_ffff]),
             Input::Of(&[0, 0x0000_0018, 0x5a5a_5a5a]),
@@ -6246,7 +6275,7 @@ fn setup_pass_constants() {
         0x00b7_b450,
         setups::setup_pass_constants(Ptr<_>, u32)
     ))
-    .draw_common_at(0x00b7_b450)
+    .pass_common()
     .inputs(&[
         Input::Of(&[0x10, 0x250, 0x251, 0x2f0]),
         Input::Of(&[0, 0x0000_0200, 0xffff_ffff]),
@@ -6308,7 +6337,7 @@ static EVERY_PASS_TYPE: [u32; 0x2f0] = {
 #[test]
 fn select_pass() {
     Diff::new(entry!(0x00b7_af80, setups::select_pass(Ptr<_>, u32)))
-        .draw_common_at(0x00b7_af80)
+        .pass_common()
         .inputs(&[Input::Of(&EVERY_PASS_TYPE), Input::Of(&[0, 1, 2])])
         .max_cases(0x2f0 * 3)
         .setup(|e, c| {
@@ -6348,7 +6377,7 @@ fn land_toggles() {
         0x00c0_2c30,
         setups::land_toggles(Ptr<_>, u32, u32, u32, u32)
     ))
-    .draw_common_at(0x00c0_2c30)
+    .pass_common()
     .inputs(&[
         Input::Of(TWO_WAYS),
         Input::Of(&[0, 1, 3]),
@@ -6376,7 +6405,7 @@ fn land_toggles() {
 #[test]
 fn property_fade() {
     Diff::new(entry!(0x00b6_6b80, setups::property_fade(Ptr<_>) -> f32))
-        .draw_common_at(0x00b6_6b80)
+        .pass_common()
         .inputs(&[
             Input::Of(TWO_WAYS),
             Input::Of(&[0, 0x0080_0000]),
@@ -6438,7 +6467,7 @@ fn set_vertex_constant() {
         0x00e8_9ba0,
         dconstants::set_constant(Ptr<_>, Ptr<_>, u32, u32) -> bool
     ))
-    .draw_common_at(0x00e8_9ba0)
+    .pass_common()
     .goes_by_address(&[0x00ec_44d0])
     .inputs(&[
         Input::Of(&[0, 1, 2, 3, 4]),
@@ -6470,7 +6499,7 @@ fn set_vertex_constant_array() {
         0x00e8_9c70,
         dconstants::set_constant_array(Ptr<_>, Ptr<_>, u32, u32, u32, u32) -> bool
     ))
-    .draw_common_at(0x00e8_9c70)
+    .pass_common()
     .goes_by_address(&[0x00ec_44d0])
     .inputs(&[
         Input::Of(&[0, 2, 3, 4]),
@@ -6489,6 +6518,172 @@ fn set_vertex_constant_array() {
             e.mem.set_u16(indices + 2 * k as u32, *i);
         }
         vec![shader, entry, data, c.word(2), c.word(3), indices]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A shader like the world's whose slots hold the shadow light shader's typed functions: 0x80
+/// blending, 0x84 the alpha function, 0x88 the alpha test, 0x110 the end's states, 0xf0 the pass
+/// choice, 0xf4 the begin's end, 0xf8 the pair textures, 0xfc the pass constants, 0x100 the render
+/// states, 0x104 the states put back, 0x114 the end's states put back. Its counted pointers' sources
+/// are counted objects; the pass table gives `p`'s pass for every type; the pass's constants target
+/// (`00e7f7c0`) is stood in by a cache-like object.
+fn typed_slot_shader(e: &mut Engine, p: &PassW) -> u32 {
+    let vt = vtable(
+        e,
+        &[
+            (0x80, 0x00be_1ff0),
+            (0x84, 0x00be_20b0),
+            (0x88, 0x00be_20e0),
+            (0x110, 0x00be_0e50),
+            (0xf0, 0x00b7_af80),
+            (0xf4, 0x00be_1f90),
+            (0xf8, 0x00b7_cfb0),
+            (0xfc, 0x00b7_b450),
+            (0x100, 0x00be_0eb0),
+            (0x104, 0x00be_0ee0),
+            (0x114, 0x00be_0e90),
+        ],
+    );
+    let shader = obj(e, 0x90, vt);
+    for off in (4..0x90).step_by(4) {
+        let word = e.mem.u32(p.d.w.shader + off);
+        set(e, shader + off, word);
+    }
+    let plain = vtable(e, &[]);
+    for k in 0..8u32 {
+        let o = obj(e, 0x10, plain);
+        set(e, o + 4, 2);
+        set(e, shader + 0x6c + 4 * k, o);
+    }
+    set(e, shader + 0x18, p.d.w.renderer);
+    for t in 0..0x2f0u32 {
+        set(e, 0x011f_dff8 + 4 * t, p.pass);
+    }
+    let target = obj(e, 0x1114, plain);
+    for k in (4..0x1114).step_by(4) {
+        let word = e.mem.u32(p.d.w.cache + k);
+        set(e, target + k, word);
+    }
+    set(e, RETS + 0x7f8, target);
+    e.register(0x00e7_f7c0, |e, _| ret(e.mem.u32(RETS + 0x7f8)));
+    for addr in SETUP_CALLEES {
+        e.register(*addr, marked);
+    }
+    entries(e);
+    shader
+}
+
+/// `begin_pass` with the typed slots: each pass type group (its own begin, or the slots 0xfc, 0xf8,
+/// 0x100), the pass before (none, this shader's), the restore owed or not: every slot call direct.
+#[test]
+fn begin_pass_typed_slots() {
+    Diff::new(entry!(0x00b9_9390, batch::begin_pass(u32, u32)))
+        .pass_common()
+        .inputs(&[
+            Input::Of(&[0x10, 0xca, 0xfc, 0x102, 0x250]),
+            Input::Of(&[0, 1, 2]),
+            Input::Of(TWO_WAYS),
+        ])
+        .setup(|e, c| {
+            let p = pass_world(e, PASS_STATES, 0x0b, 0);
+            let shader = typed_slot_shader(e, &p);
+            let (pass_type, current) = match c.word(1) {
+                0 => (0, 0),
+                1 => (0x11, shader),
+                _ => (0x10b, shader),
+            };
+            set(e, 0x011f_fe30, pass_type);
+            set(e, 0x011f_fe2c, current);
+            e.mem.set_u8(0x011a_d8ec, c.word(2) as u8);
+            vec![c.word(0), shader]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `end_pass` with the typed slots (0x104, 0x114): the restore owed or not, a type that also sets a
+/// sampler back.
+#[test]
+fn end_pass_typed_slots() {
+    Diff::new(entry!(0x00b9_88e0, batch::end_pass()))
+        .pass_common()
+        .inputs(&[Input::Of(&[0x10, 0xfe, 0x230]), Input::Of(TWO_WAYS)])
+        .setup(|e, c| {
+            let p = pass_world(e, PASS_STATES, 0, 0);
+            let shader = typed_slot_shader(e, &p);
+            set(e, 0x011f_fe30, c.word(0));
+            set(e, 0x011f_fe2c, shader);
+            e.mem.set_u8(0x011a_d8ec, c.word(1) as u8);
+            vec![]
+        })
+        .run()
+        .assert_same();
+}
+
+/// `render_standard` with the typed per-geometry slots (0x80, 0x84, 0x88, 0x110): a pass with its
+/// sort flag or without, the three flags, the restore owed or not.
+#[test]
+fn render_standard_typed_pass_slots() {
+    Diff::new(entry!(
+        0x00b9_8e80,
+        batch::render_standard(Ptr<_>, u32, u32, u32)
+    ))
+    .pass_common()
+    .inputs(&[
+        Input::Of(&[0, 2]),
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+    ])
+    .setup(|e, c| {
+        let p = pass_world(e, &[], 0, 0);
+        let shader = typed_slot_shader(e, &p);
+        let pass = p.d.w.passes[c.word(0) as usize];
+        let geometry = e.mem.u32(pass);
+        set(e, geometry + 0xc0, shader);
+        e.mem.set_u8(0x011a_d8ec, c.word(4) as u8);
+        vec![pass, c.word(1), c.word(2), c.word(3)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The toggles set-up reaching the land toggles (types 0x1f7 to 0x22e) and the fog property: both
+/// calls direct.
+#[test]
+fn toggles_typed_land_and_fog() {
+    Diff::new(entry!(
+        0x00b7_95b0,
+        geometry::toggles(Ptr<_>, u32, u32, Ptr<_>, u32, u32, Ptr<_>)
+    ))
+    .pass_common()
+    .inputs(&[Input::Of(&[0x10, 0x1f7, 0x22e])])
+    .setup(|e, c| {
+        let p = pass_world(e, &[], 0, 0);
+        entries(e);
+        // Pixel entry 4 on.
+        let entry = e.mem.u32(0x011f_ec30 + 4 * 4);
+        e.mem.set_u8(entry + 8, 1);
+        e.register(VT_FN + 0xec, slot_answer::<0xec>);
+        e.register(VT_FN + 0x154, slot_answer::<0x154>);
+        let w = p.d.w;
+        let table = e.mem.alloc(4);
+        set(e, w.property + 0xc4, table);
+        let node = e.mem.alloc(0x140);
+        set(e, node + 0x134, 0x0f06_0134);
+        set(e, 0x011f_91c8, node);
+        vec![
+            w.shader,
+            c.word(0),
+            w.geometry,
+            w.property,
+            0x0f06_0000,
+            0,
+            w.alpha,
+        ]
     })
     .run()
     .assert_same();

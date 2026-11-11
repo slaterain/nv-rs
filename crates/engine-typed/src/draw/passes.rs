@@ -171,9 +171,9 @@ pub fn end_states(e: &mut Engine, _this: u32, _unused: u32) {
 }
 
 // Typed from 00be0e90
-/// The pass end's states put back (a shader's slot 0x114), no words: alpha blending off, z-writes on
-/// and the z function 3, unlocked.
-pub fn end_states_restored(e: &mut Engine) {
+/// The pass end's states put back (a shader's slot 0x114), `thiscall(shader)` with no stack words:
+/// alpha blending off, z-writes on and the z function 3, unlocked.
+pub fn end_states_restored(e: &mut Engine, _this: u32) {
     typed_call!(
         shader::FAMILY,
         0x00b9_7fa0,
