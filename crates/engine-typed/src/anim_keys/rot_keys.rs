@@ -47,8 +47,7 @@ fn search(e: &Engine, time: f64, keys: Keys, count: u32, last_index: u32) -> Sea
     let remaining = count
         .wrapping_sub(1)
         .wrapping_sub(next_index)
-        .wrapping_add(1)
-        .cast_signed();
+        .wrapping_add(1) as i32;
     if remaining >= 4 {
         loop {
             for step in 0..4u32 {
@@ -210,7 +209,7 @@ pub fn prepare(e: &mut Engine, keys: Ptr, count: u32, size: u8) {
     let low = x87_load32(e.global::<u32>(MINUS_ONE_FLOAT));
     let w = |k: u32| keys.at(k).wrapping_add(4);
     let mut done = 0u32;
-    if count.cast_signed() >= 4 {
+    if count as i32 >= 4 {
         let mut groups = (count.wrapping_sub(4) >> 2).wrapping_add(1);
         done = groups.wrapping_mul(4);
         let mut first = 0u32;

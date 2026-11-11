@@ -5,7 +5,9 @@
 
 use super::{NiQuaternion, FAMILY};
 use engine_core::ptr::{Field, Ptr};
-use engine_core::x87::{x87_add, x87_load32, x87_m32, x87_mul, x87_quiet_bits, x87_store32, x87_sub};
+use engine_core::x87::{
+    x87_add, x87_load32, x87_m32, x87_mul, x87_quiet_bits, x87_store32, x87_sub,
+};
 use engine_core::{args, typed_call, Engine};
 
 /// `NiQuaternion::FastNormalize` (Xbox PDB), `00a4ff00` (`thiscall`): stays by address.
@@ -95,9 +97,8 @@ pub fn slerp(
     p: Ptr<NiQuaternion>,
     q: Ptr<NiQuaternion>,
 ) {
-    let products = COMPONENTS.map(|field| {
-        x87_mul(x87_load32(e.get(p, field)), x87_m32(e.get(q, field)))
-    });
+    let products =
+        COMPONENTS.map(|field| x87_mul(x87_load32(e.get(p, field)), x87_m32(e.get(q, field))));
     let [d0, d1, d2, d3] = products;
     let dot = x87_store32(x87_add(x87_add(x87_add(d0, d1), d2), d3));
     let half = x87_load32(e.global::<u32>(HALF_FLOAT));

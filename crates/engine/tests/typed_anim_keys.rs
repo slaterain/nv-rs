@@ -72,7 +72,8 @@ fn stand_ins(e: &mut Engine) {
 fn quaternion_of(e: &mut Engine, case: &Case, first: usize) -> u32 {
     let q = e.mem.alloc(0x10);
     for i in 0..4 {
-        e.mem.set_u32(q + 4 * i as u32, case.f32(first + i).to_bits());
+        e.mem
+            .set_u32(q + 4 * i as u32, case.f32(first + i).to_bits());
     }
     q
 }
