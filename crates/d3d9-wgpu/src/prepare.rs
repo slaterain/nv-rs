@@ -14,18 +14,17 @@
 //! still detected (two different bytecodes with one hash) and those entries are not prepared.
 //!
 //! One entry a line, all numbers, in an order that does not change:
-//! `p1 VS PS DECL STRIDES TOPOLOGY INDEX32 COLOURS DEPTH STATES SAMPLES FILTERABLE ATOC COUNT CLIP`
-//! (hashes and the declaration in hexadecimal, lists comma-separated, `-` for none).
+//! `p2 VS PS DECL STRIDES TOPOLOGY INDEX32 COLOURS DEPTH STATES SAMPLES FILTERABLE ATOC COUNT CLIP`
+//! (hashes and the declaration in hexadecimal, lists comma-separated, `-` for none). `p1` lines
+//! (the first version, whose shader hashes came from the map hasher) are not read: a list a run
+//! wrote before keeps only its `p2` lines when it is written again.
 
-use crate::fxhash::FxHasher;
-use std::hash::{Hash, Hasher};
-
-/// A shader's bytecode hash: the same tokens give the same hash in every run.
+/// A shader's bytecode hash, fixed by its definition so the shipped list matches in every build:
+/// 64-bit FNV-1a over the tokens as little-endian bytes ([`crate::cache::hash`]), not the map
+/// hasher, whose output (and the way the standard library feeds a `[u32]` to it) may change.
 pub(crate) fn bytecode_hash(tokens: &[u32]) -> u64 {
-    let mut h = FxHasher::default();
-    tokens.hash(&mut h);
-    // A second mix, so the high bits depend on every token too.
-    h.finish().rotate_left(29) ^ (tokens.len() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    let bytes: Vec<u8> = tokens.iter().flat_map(|t| t.to_le_bytes()).collect();
+    crate::cache::hash(&bytes)
 }
 
 /// One pipeline as the list keeps it.
@@ -74,7 +73,7 @@ impl Entry {
                 .join(",")
         };
         format!(
-            "p1 {:016x} {:016x} {decl} {} {} {} {} {} {} {} {} {} {} {}",
+            "p2 {:016x} {:016x} {decl} {} {} {} {} {} {} {} {} {} {} {}",
             self.vs,
             self.ps,
             list(self.strides),
@@ -95,7 +94,7 @@ impl Entry {
     /// line), which is skipped.
     pub(crate) fn parse(line: &str) -> Option<Entry> {
         let f: Vec<&str> = line.split_ascii_whitespace().collect();
-        if f.len() != 15 || f[0] != "p1" {
+        if f.len() != 15 || f[0] != "p2" {
             return None;
         }
         let hex = |s: &str| u64::from_str_radix(s, 16).ok();
@@ -241,9 +240,11 @@ mod tests {
         for bad in [
             "",
             "p2 0 0",
+            // The first version, whose hashes came from the map hasher.
+            &line.replacen("p2", "p1", 1),
             &line[..line.len() - 2],
             &line.replace(" 8 ", " eight "),
-            &line.replacen("p1", "p0", 1),
+            &line.replacen("p2", "p0", 1),
             "junk junk junk junk junk junk junk junk junk junk junk junk junk junk junk",
         ] {
             assert_eq!(Entry::parse(bad), None, "{bad}");
@@ -269,5 +270,8 @@ mod tests {
         assert_eq!(bytecode_hash(&a), bytecode_hash(&a));
         assert_ne!(bytecode_hash(&a), bytecode_hash(&b));
         assert_ne!(bytecode_hash(&a), bytecode_hash(&a[..4]));
+        // Pinned: 64-bit FNV-1a of these five tokens' 20 little-endian bytes. A change here would make
+        // the shipped list (`data/pipelines.txt`) match nothing.
+        assert_eq!(bytecode_hash(&a), 0x19e4_37ae_3a91_6934);
     }
 }
