@@ -49,12 +49,12 @@ current (each object's shape reset, then tested against the camera's frustum and
 The `geometry` family (the code that reads and writes the geometry data's arrays, so a later step can keep them
 outside the 32-bit space; first the renderer's packing of them, the bound, the data's setters and the morpher, then
 their load, save and release, the tangent space and the pick), is in, off until its gate.
-Then `animation` (merged off on 2026-11-11, on after a batch gate): a skeleton's bones moved from their animation
-each frame, proven by its differential tests.
-And `draw_f`, merged off too: the small helpers the typed families call most (the larger and smaller of two numbers,
+Then `animation` (on since 2026-11-11, on its tests and review): a skeleton's bones moved from their animation
+each frame, in native float maths.
+And `draw_f` (on since 2026-11-11): the small helpers the typed families call most (the larger and smaller of two numbers,
 the class test, a list node from the shared pool).
 The `anim_keys` family (the code that reads and writes an animation's key arrays, so a later step can keep them
-outside the 32-bit space; first the rotation keys' search, `Slerp` and their preparation) is in, off until its gate.
+outside the 32-bit space; first the rotation keys' search, `Slerp` and their preparation) is in, on since 2026-11-11.
 
 An interim Windows preview (maintainer, 2026-11-06) can be built with `scripts/package-playtest.ps1`:
 a ZIP a player can run with no build, labelled a preview, wgpu remaining the big release. It has only

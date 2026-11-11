@@ -142,10 +142,11 @@ mod tests {
         ]
     }
 
-    /// Which of this crate's families are past their gate, and so on with no switch: all but the geometry,
-    /// animation, draw_f and anim_keys families (on only when `NV_TYPED` names them until their gates),
-    /// the first six since their speed gate together (2026-11-08), render since its own (2026-11-09),
-    /// draw, scene, particles, collision and multibound since their recorded-run gates (2026-11-10);
+    /// Which of this crate's families are past their gate, and so on with no switch: all but the geometry
+    /// family (on only when `NV_TYPED` names it until its gate), the first six since their speed gate
+    /// together (2026-11-08), render since its own (2026-11-09), draw, scene, particles, collision and
+    /// multibound since their recorded-run gates (2026-11-10), animation, draw_f and anim_keys on their
+    /// tests and reviews (2026-11-11: no comparison runs for native code);
     /// `NV_TYPED=off` or `<family>:off` turns one off.
     #[test]
     fn families_past_their_gate_are_on_by_default() {
@@ -169,7 +170,10 @@ mod tests {
                 "scene",
                 "particles",
                 "collision",
-                "multibound"
+                "multibound",
+                "animation",
+                "draw_f",
+                "anim_keys"
             ]
         );
         let defaults = parse_switch(None, &families).unwrap();
@@ -180,7 +184,7 @@ mod tests {
         assert!(off.iter().all(|m| *m == Mode::Off));
         let one_off = parse_switch(Some("shader:off"), &families).unwrap();
         assert_eq!(one_off[3], Mode::Off);
-        assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 11);
+        assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 14);
     }
 
     /// No two of this crate's families (with the core's) hold the same address, past their gate or not:

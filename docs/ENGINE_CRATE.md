@@ -431,9 +431,10 @@ family is `leaves` (`typed/leaf.rs`): the small functions the translations call 
 speed gate passed (G1, 2026-11-06: Goodsprings +7.1%, Doc's room +3.0%). It is no longer the only one on: by default
 `leaves`, `topic_search`, `topic_order` and, since their speed gate (2026-11-08), `lockfree`, `culling`,
 `pathing`, `shader`, `crt` and `dispatch` are on, and since their gates `render` (2026-11-09), `draw`, `scene`,
-`particles`, `collision` and `multibound` (2026-11-10) (below); `NV_TYPED=off` turns every family off, and
-`<family>:off` one. A family merged off (`geometry`, `animation`, `draw_f`, below) stays off until its gate, and
-`NV_TYPED=<family>` turns it on. A run compared call for call with the original's record (nv-trace's `NV_TRACE_OUT`,
+`particles`, `collision` and `multibound` (2026-11-10), and on their tests and reviews `animation`, `draw_f` and
+`anim_keys` (2026-11-11: no comparison runs for native code) (below); `NV_TYPED=off` turns every family off, and
+`<family>:off` one. A family merged off (`geometry`, below) stays off until its gate, and `NV_TYPED=<family>` turns it
+on. A run compared call for call with the original's record (nv-trace's `NV_TRACE_OUT`,
 `NV_TRACE_LIST`) has every family off unless `NV_TYPED` says otherwise (`typed::switch_for`).
 The second is `topic_search` (`crates/engine-fallout-forms/src/topic_search.rs`, provided from that
 crate): the search for the topic that holds a topic info (`TESTopic::GetOwnerTopic`) and the functions
@@ -623,9 +624,8 @@ its quaternion, `NiQuaternion::ToRotation`) and scale go into the bone; with the
 (`overridable.tsv`), so a built-in may replace them. By address as well: the blend of several interpolators and the
 weights' normalisation, an interpolator's own `Update` (the key lookups), the quaternion's normalisation, the
 transform's getters and the bone's setters. The translations keep their plain calls of the family's small functions;
-only the bip node's walk calls `UpdateAllButTarget` by address (in every build, so kNVSE's hook runs from there too). Its tests are `crates/engine/tests/typed_animation.rs`. Merged off
-(AGENT-RULES.md, "Typed code merges OFF first"): `NV_TYPED=animation` turns it on until a batch gate runs the
-recorded street run with it on against off. Its float maths is native (ADR-0014) at the running thread's precision: plain `f32` on
+only the bip node's walk calls `UpdateAllButTarget` by address (in every build, so kNVSE's hook runs from there too). Its tests are `crates/engine/tests/typed_animation.rs`. On by default
+since 2026-11-11, on those tests, their planted mutants and review (`NV_TYPED=animation:off` turns it off). Its float maths is native (ADR-0014) at the running thread's precision: plain `f32` on
 main, `f64` locals rounded at each float store on the AI threads (one rule for both rounded main's sums twice, by more
 than an ulp near zero), not the exact x87 helpers; its tests compare floats within an ulp
 (`Diff::float_ulps(1)`).
@@ -635,8 +635,8 @@ by address most. The float maximum (`00404010`) and minimum (`0040ebd0`); the cl
 under the pool's lock, the dispatch family's, the pool refilled by address when empty, its first node taken and
 cleared). The draw, shader and render families call them with `typed_call!`. The other callers that reach them by address
 (most: the AI, the menus, the sound, the forms) get the typed ones too when it is on; the few translations that
-call them as Rust functions keep the translation, which does the same. Merged off: on its
-differential tests, its planted mutants and review, with a later gate to turn it on (`NV_TYPED=draw_f` until then).
+call them as Rust functions keep the translation, which does the same. On by default since 2026-11-11, on its
+differential tests, its planted mutants and review (`NV_TYPED=draw_f:off` turns it off).
 While it is on, the translation's speech diagnostic (`NV_SPEECH_CHECK`, not the exe's) takes no notes at the node
 allocation. Its tests are in `crates/engine/tests/typed_draw.rs`.
 And `anim_keys` (same crate, id 27): the code that reads and writes the key arrays an animation keeps
@@ -648,7 +648,8 @@ rotation key array (neighbours in one hemisphere, `W` clamped). The key types' i
 `NiQuaternion::FastNormalize` and the loading of the keys stay by address. `anim_keys::Keys` gives a key's address,
 word and time; the quaternion copies, the clamp of `W` and the negation's copy back still read and write at those
 addresses directly, and `GenInterp` hands raw key addresses to the interpolation functions: stage 2 routes those
-too. Its tests are `crates/engine/tests/typed_anim_keys.rs`. Off until its gate (`NV_TYPED=anim_keys` turns it on).
+too. Its tests are `crates/engine/tests/typed_anim_keys.rs`. On by default since 2026-11-11, on those tests, their
+planted mutants and review (`NV_TYPED=anim_keys:off` turns it off).
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with

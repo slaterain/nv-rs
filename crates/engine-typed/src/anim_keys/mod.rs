@@ -43,12 +43,12 @@ pub mod rot_keys;
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(27);
 
-/// `NV_TYPED=anim_keys`. Off until its gate (the recorded run, both presets, byte-identical with it
-/// on against off): its differential tests, planted mutants and review are what it merges on.
+/// `NV_TYPED=anim_keys:off` turns it off. On by default since 2026-11-11, on its differential tests,
+/// planted mutants and review (no comparison run for native code, AGENT-RULES.md).
 pub static ANIM_KEYS: Family = Family {
     name: "anim_keys",
     id: FAMILY,
-    past_gate: false,
+    past_gate: true,
     threads: Threads::Both,
     stage2: false,
     funcs,

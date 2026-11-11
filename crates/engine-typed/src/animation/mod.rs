@@ -18,8 +18,8 @@
 //! controller's update.
 //!
 //! Stage 1: the objects stay in guest memory; each function stays registered at its exe address.
-//! **Off by default** (`NV_TYPED=animation` turns it on) until a batch gate (AGENT-RULES.md, "Typed
-//! code merges OFF first"). **Floats.** The actors' animation runs on the AI threads as well as main,
+//! **On by default** since 2026-11-11 (`NV_TYPED=animation:off` turns it off): on its differential tests,
+//! planted mutants and review, with no comparison run for native code (AGENT-RULES.md). **Floats.** The actors' animation runs on the AI threads as well as main,
 //! so the row is [`Threads::Both`] and the float maths is native (ADR-0014) at the running thread's
 //! precision: plain `f32` on main (24 bits), `f64` locals rounded at each float store on the AI threads (53
 //! bits); compares and copies plain (no x87 helper; the NaN
@@ -36,12 +36,12 @@ pub mod blend;
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(24);
 
-/// `NV_TYPED=animation`. Proved by its differential tests (each planted mutant caught); off until a
-/// batch gate runs the recorded street run with it on against off.
+/// `NV_TYPED=animation:off` turns it off. On by default, proved by its differential tests (each planted
+/// mutant caught) and review.
 pub static ANIMATION: Family = Family {
     name: "animation",
     id: FAMILY,
-    past_gate: false,
+    past_gate: true,
     threads: Threads::Both,
     stage2: false,
     funcs,
