@@ -24,6 +24,7 @@ leave their code as published.
 | Change | Files |
 | --- | --- |
 | Direct3D 12: compiled shaders kept as owned bytes, not as the compiler's blobs, whose reference count is not thread-safe (a use-after-free when several threads make pipelines from one shader with FXC, gfx-rs/wgpu #10547). Backport of upstream #10805, merged 2026-11-11 after 30.0.1 was published. | `src/dx12/mod.rs`, `src/dx12/device.rs`, `src/dx12/shader_compilation.rs` |
+| Vulkan: dynamic rendering (`vkCmdBeginRendering`, Vulkan 1.3) in place of render pass and framebuffer objects on Vulkan 1.3 devices; older devices keep render passes. Pipelines are made for their attachment formats (`VkPipelineRenderingCreateInfo`) instead of a compatible render pass, which pipeline libraries need. | new `src/vulkan/dynamic_rendering.rs` and `src/vulkan/extras.rs` (the features our changes enable); calls from `src/vulkan/mod.rs`, `adapter.rs`, `command.rs`, `device.rs` |
 
 ### Updating to a newer wgpu-hal
 

@@ -1,3 +1,4 @@
+// Changed for nv-rs: dynamic rendering on Vulkan 1.3 devices (dynamic_rendering.rs, extras.rs); vendor/README.md.
 use alloc::{borrow::ToOwned as _, boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
 use core::{ffi::CStr, marker::PhantomData};
 
@@ -146,6 +147,9 @@ pub struct PhysicalDeviceFeatures {
     vulkan_memory_model: Option<vk::PhysicalDeviceVulkanMemoryModelFeaturesKHR<'static>>,
 
     shader_draw_parameters: Option<vk::PhysicalDeviceShaderDrawParametersFeatures<'static>>,
+
+    /// Features nv-rs's additions use (`extras.rs`).
+    extras: super::extras::Features,
 }
 
 impl PhysicalDeviceFeatures {
@@ -237,7 +241,7 @@ impl PhysicalDeviceFeatures {
         if let Some(ref mut feature) = self.shader_draw_parameters {
             info = info.push_next(feature);
         }
-        info
+        self.extras.add_to_device_create(info)
     }
 
     fn supports_storage_input_output_16(&self) -> bool {
@@ -648,6 +652,7 @@ impl PhysicalDeviceFeatures {
             } else {
                 None
             },
+            extras: super::extras::Features::enabled(&private_caps.extras),
         }
     }
 
@@ -2205,6 +2210,15 @@ impl super::InstanceShared {
                 features2 = features2.push_next(next);
             }
 
+            // The device functionality the instance lets us use: up to Vulkan 1.3 (the version
+            // `Instance::init` asks for) once the instance has 1.1, else 1.0.
+            let api_version = if self.instance_api_version >= vk::API_VERSION_1_1 {
+                capabilities.device_api_version.min(vk::API_VERSION_1_3)
+            } else {
+                vk::API_VERSION_1_0
+            };
+            features2 = features.extras.query(api_version, features2);
+
             unsafe { get_device_properties.get_physical_device_features2(phd, &mut features2) };
             features2.features
         } else {
@@ -2459,6 +2473,7 @@ impl super::Instance {
                 .unwrap_or(0),
             scratch_buffer_alignment: alignments.ray_tracing_scratch_buffer_alignment,
             ray_tracing_pipeline_group_data_size: alignments.ray_tracing_pipeline_group_data_size,
+            extras: phd_features.extras.caps(),
         };
         let capabilities = crate::Capabilities {
             limits: phd_capabilities.to_wgpu_limits(),

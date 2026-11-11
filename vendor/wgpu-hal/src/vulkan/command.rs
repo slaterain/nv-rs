@@ -1,3 +1,4 @@
+// Changed for nv-rs: dynamic rendering on Vulkan 1.3 devices (dynamic_rendering.rs, extras.rs); vendor/README.md.
 use super::conv;
 use arrayvec::ArrayVec;
 use ash::vk;
@@ -79,7 +80,7 @@ impl super::CommandEncoder {
         })
     }
 
-    fn make_temp_texture_view(
+    pub(super) fn make_temp_texture_view(
         &mut self,
         key: super::TempTextureViewKey,
     ) -> Result<super::IdentifiedTextureView, crate::DeviceError> {
@@ -783,6 +784,10 @@ impl crate::CommandEncoder for super::CommandEncoder {
         &mut self,
         desc: &crate::RenderPassDescriptor<super::QuerySet, super::TextureView>,
     ) -> Result<(), crate::DeviceError> {
+        // nv-rs: without render pass objects where the device can (dynamic_rendering.rs).
+        if self.device.private_caps.extras.dynamic_rendering {
+            return unsafe { self.begin_rendering(desc) };
+        }
         let mut vk_clear_values =
             ArrayVec::<vk::ClearValue, { super::MAX_TOTAL_ATTACHMENTS }>::new();
         let mut rp_key = super::RenderPassKey {
@@ -912,7 +917,12 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
     unsafe fn end_render_pass(&mut self) {
         unsafe {
-            self.device.raw.cmd_end_render_pass(self.active);
+            // nv-rs: a pass begun by `begin_rendering` (dynamic_rendering.rs).
+            if self.device.private_caps.extras.dynamic_rendering {
+                self.device.raw.cmd_end_rendering(self.active);
+            } else {
+                self.device.raw.cmd_end_render_pass(self.active);
+            }
         }
 
         // After all other commands but before debug marker, so this is still seen as part of this pass.
