@@ -1543,7 +1543,11 @@ impl Device {
             .drain(..)
             .map(|f| match f {
                 Finishing::Ready(b) => b,
-                Finishing::Pending(r) => r.recv().expect("a finishing thread finishes its encoder"),
+                Finishing::Pending(r) => match r.recv() {
+                    Ok(Ok(b)) => b,
+                    Ok(Err(why)) => panic!("a finishing thread could not finish an encoder: {why}"),
+                    Err(_) => panic!("a finishing thread stopped before it finished an encoder"),
+                },
             })
             .collect();
         if let Some(e) = self.encoder.take() {
@@ -5600,13 +5604,13 @@ const SPLIT_DRAWS: u32 = 256;
 /// An earlier encoder of the batch: finished, or on its way from a finishing thread.
 enum Finishing {
     Ready(wgpu::CommandBuffer),
-    Pending(std::sync::mpsc::Receiver<wgpu::CommandBuffer>),
+    Pending(std::sync::mpsc::Receiver<Result<wgpu::CommandBuffer, String>>),
 }
 
 /// A job for a finishing thread: the encoder, and where its command buffer goes.
 type FinishJob = (
     wgpu::CommandEncoder,
-    std::sync::mpsc::SyncSender<wgpu::CommandBuffer>,
+    std::sync::mpsc::SyncSender<Result<wgpu::CommandBuffer, String>>,
 );
 
 /// The threads that finish the render thread's encoders ([`Device::send_encoder`]). wgpu records a
@@ -5643,9 +5647,18 @@ impl Finisher {
                     .spawn(move || loop {
                         let job = queue.lock().unwrap_or_else(|e| e.into_inner()).recv();
                         let Ok((encoder, back)) = job else { break };
-                        // The render thread waits for it at the submit; gone (the device dropped),
-                        // the buffer is dropped too.
-                        let _ = back.send(encoder.finish());
+                        // The render thread waits for it at the submit (a panic's message too, so
+                        // it can say why); gone (the device dropped), the buffer is dropped too.
+                        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            encoder.finish()
+                        }))
+                        .map_err(|p| {
+                            p.downcast_ref::<&str>()
+                                .map(|s| s.to_string())
+                                .or_else(|| p.downcast_ref::<String>().cloned())
+                                .unwrap_or_else(|| "a panic without a message".to_string())
+                        });
+                        let _ = back.send(done);
                     })
                     .expect("a finishing thread starts")
             })

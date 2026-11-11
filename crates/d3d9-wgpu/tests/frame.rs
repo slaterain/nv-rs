@@ -1608,3 +1608,43 @@ fn draws_split_across_finished_encoders_keep_their_order_and_count() {
     }
     assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
 }
+
+/// The cuts between finished encoders keep what a multisampled target and its depth hold: with a
+/// real depth test (LESSEQUAL), 300 draws at depth 0.25 in red, then 600 at depth 0.75 in green
+/// that cross two cuts (every 256 draws). Only the red draws pass, so the count over all of them
+/// is the red draws' samples and every resolved pixel is red; a cut that cleared or dropped the
+/// colour or the depth (of any sample) would let green through or leave a pixel black.
+#[test]
+fn cuts_between_finished_encoders_keep_multisampled_colour_and_depth() {
+    for samples in [1u32, 4, 8] {
+        let Some(mut g) = Gpu::new(4, samples) else {
+            return;
+        };
+        g.run(Cmd::CreateQuery {
+            device: DEVICE,
+            query: 0x2000,
+            kind: 9,
+        });
+        g.state(ZFUNC, 4);
+        g.clear(3, 0, 1.0);
+        let count = g.count(0x2000, |g| {
+            g.colour([1.0, 0.0, 0.0, 1.0]);
+            for _ in 0..300 {
+                g.cover(0.25);
+            }
+            g.colour([0.0, 1.0, 0.0, 1.0]);
+            for _ in 0..600 {
+                g.cover(0.75);
+            }
+        });
+        assert_eq!(
+            count,
+            300 * 16 * samples,
+            "{samples} samples: only the red draws pass"
+        );
+        for p in g.pixels() {
+            assert_eq!(p, [0, 0, 255, 255], "{samples} samples: red everywhere");
+        }
+        assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+    }
+}
