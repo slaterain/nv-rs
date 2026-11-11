@@ -2057,8 +2057,8 @@ pub fn tes_world_space_load_cell(e: &mut Engine, this: Ptr<TESWorldSpace>, x: i3
             for index in 0..count {
                 let file = form_get_file(e, this.addr(), index);
                 let file = thread_safe_file(e, file);
-                let found = !file.is_null()
-                    && e.call(FIND_CELL_IN_FILE, &args![this, file, x, y]).bool();
+                let found =
+                    !file.is_null() && e.call(FIND_CELL_IN_FILE, &args![this, file, x, y]).bool();
                 if !found {
                     continue;
                 }

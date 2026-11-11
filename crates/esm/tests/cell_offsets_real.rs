@@ -28,7 +28,9 @@ fn built_tables_are_the_masters_own() {
         .collect();
     names.sort();
     assert!(
-        names.iter().any(|p| p.file_name().is_some_and(|n| n == "FalloutNV.esm")),
+        names
+            .iter()
+            .any(|p| p.file_name().is_some_and(|n| n == "FalloutNV.esm")),
         "FalloutNV.esm is in {}",
         data.display()
     );
@@ -51,7 +53,9 @@ fn built_tables_are_the_masters_own() {
                 world.stored.as_ref().map_or(0, Vec::len),
                 cells,
             );
-            let Some(stored) = &world.stored else { continue };
+            let Some(stored) = &world.stored else {
+                continue;
+            };
             let built = world
                 .built
                 .as_ref()
@@ -62,7 +66,9 @@ fn built_tables_are_the_masters_own() {
                 "{name} {:08x}: table size",
                 world.form_id
             );
-            let differ: Vec<usize> = (0..built.len()).filter(|&i| built[i] != stored[i]).collect();
+            let differ: Vec<usize> = (0..built.len())
+                .filter(|&i| built[i] != stored[i])
+                .collect();
             assert!(
                 differ.is_empty(),
                 "{name} {:08x}: {} of {} entries differ, first at {} (built {:#x}, own {:#x})",

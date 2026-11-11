@@ -261,7 +261,13 @@ pub fn give_table(
 
 /// `TESWorldSpace::FindCellInFile` with the row: a file that is not a master is found by its
 /// table when this fix gave it one, as the translation finds a master's; else the translation.
-pub fn find_cell_in_file(e: &mut Engine, this: Ptr<TESWorldSpace>, file: Ptr, x: i32, y: i32) -> bool {
+pub fn find_cell_in_file(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    file: Ptr,
+    x: i32,
+    y: i32,
+) -> bool {
     if !file.is_null() && !e.call(FILE_IS_MASTER, &args![file]).bool() {
         let data: Ptr<OffsetData> = e.call(OFFSET_DATA_OF_FILE, &args![this, file]).ptr();
         if !data.is_null()
@@ -273,7 +279,9 @@ pub fn find_cell_in_file(e: &mut Engine, this: Ptr<TESWorldSpace>, file: Ptr, x:
                 return false;
             }
             let table = e.get(data, OffsetData::pCellFileOffsets).addr();
-            let entry = e.mem.u32(table.wrapping_add((index as u32).wrapping_mul(4)));
+            let entry = e
+                .mem
+                .u32(table.wrapping_add((index as u32).wrapping_mul(4)));
             if entry == 0 {
                 return false;
             }
@@ -341,7 +349,10 @@ mod tests {
             if e.mem.u32(DATA) == 0 {
                 let data = e.mem.u32(DATA_BLOCK);
                 e.mem.set_u32(data, 0);
-                for (i, bits) in [f32::MAX, f32::MAX, -f32::MAX, -f32::MAX].iter().enumerate() {
+                for (i, bits) in [f32::MAX, f32::MAX, -f32::MAX, -f32::MAX]
+                    .iter()
+                    .enumerate()
+                {
                     e.mem.set_u32(data + 4 + 4 * i as u32, bits.to_bits());
                 }
                 e.mem.set_u32(data + 0x14, 0);
@@ -389,7 +400,8 @@ mod tests {
     }
 
     fn find(w: &mut World, x: i32, y: i32) -> bool {
-        w.e.call(FIND_CELL_IN_FILE, &args![w.world, w.file, x, y]).bool()
+        w.e.call(FIND_CELL_IN_FILE, &args![w.world, w.file, x, y])
+            .bool()
     }
 
     fn data(w: &World) -> Ptr<OffsetData> {
@@ -411,7 +423,9 @@ mod tests {
         give_table(&mut w.e, w.world, w.file, false, &built());
         let data = data(&w);
         assert_eq!(w.e.get(data, OffsetData::iFileOffset), RECORD);
-        let corners: Vec<u32> = (0..4).map(|i| w.e.mem.u32(data.addr() + 4 + 4 * i)).collect();
+        let corners: Vec<u32> = (0..4)
+            .map(|i| w.e.mem.u32(data.addr() + 4 + 4 * i))
+            .collect();
         assert_eq!(corners, [MIN[0], MIN[1], MAX[0], MAX[1]]);
         assert!(find(&mut w, 0, 0));
         assert_eq!(w.e.mem.u32(SET_OFFSET), RECORD + 0x40);
@@ -448,7 +462,11 @@ mod tests {
         // Given the row's table, the stale one is freed and replaced.
         give_table(&mut w.e, w.world, w.file, false, &built());
         assert_eq!(w.e.mem.u32(FREED), stale);
-        assert_ne!(w.e.get(Ptr::<OffsetData>::new(data), OffsetData::pCellFileOffsets).addr(), stale);
+        assert_ne!(
+            w.e.get(Ptr::<OffsetData>::new(data), OffsetData::pCellFileOffsets)
+                .addr(),
+            stale
+        );
         assert!(find(&mut w, 0, 0));
     }
 
@@ -500,11 +518,27 @@ mod tests {
         }
         fn record(tag: &[u8; 4], form_id: u32, data: &[u8]) -> Vec<u8> {
             let size = (data.len() as u32).to_le_bytes();
-            [&tag[..], &size, &[0; 4], &form_id.to_le_bytes(), &[0; 8], data].concat()
+            [
+                &tag[..],
+                &size,
+                &[0; 4],
+                &form_id.to_le_bytes(),
+                &[0; 8],
+                data,
+            ]
+            .concat()
         }
         fn group(label: u32, kind: u32, content: &[u8]) -> Vec<u8> {
             let size = (24 + content.len() as u32).to_le_bytes();
-            [&b"GRUP"[..], &size, &label.to_le_bytes(), &kind.to_le_bytes(), &[0; 8], content].concat()
+            [
+                &b"GRUP"[..],
+                &size,
+                &label.to_le_bytes(),
+                &kind.to_le_bytes(),
+                &[0; 8],
+                content,
+            ]
+            .concat()
         }
         let corners = |c: [u32; 2]| [c[0].to_le_bytes(), c[1].to_le_bytes()].concat();
         let wrld = record(
@@ -517,7 +551,11 @@ mod tests {
         let children = group(0x50, 1, &cell);
         let bytes = [
             record(b"TES4", 0, &sub(b"HEDR", &[0; 12])),
-            group(u32::from_le_bytes(*b"WRLD"), 0, &[wrld.clone(), children].concat()),
+            group(
+                u32::from_le_bytes(*b"WRLD"),
+                0,
+                &[wrld.clone(), children].concat(),
+            ),
         ]
         .concat();
         let dir = std::env::temp_dir().join(format!("nv-cell-offsets-{}", std::process::id()));
@@ -526,14 +564,20 @@ mod tests {
 
         let w = world(false, true);
         let folder = format!("{}\\Data\\", dir.display());
-        w.e.mem.set_cstr(w.file.addr() + FILE_PATH, folder.as_bytes());
+        w.e.mem
+            .set_cstr(w.file.addr() + FILE_PATH, folder.as_bytes());
         w.e.mem.set_cstr(w.file.addr() + FILE_NAME, b"Test.esp");
         let path = plugin_path(&w.e, w.file);
         let worlds = tables_of(path).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(worlds.len(), 1);
         let world = &worlds[0];
-        let at = |needle: &[u8]| bytes.windows(needle.len()).position(|x| x == needle).unwrap();
+        let at = |needle: &[u8]| {
+            bytes
+                .windows(needle.len())
+                .position(|x| x == needle)
+                .unwrap()
+        };
         assert_eq!(world.record_offset as usize, at(&wrld));
         let table = world.built.as_ref().unwrap();
         let index = esm::cell_offsets::grid_index((-2, -2, 1, 1), 0, 0).unwrap();

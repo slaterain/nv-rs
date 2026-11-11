@@ -125,7 +125,8 @@ pub fn grid_index(grid: (i32, i32, i32, i32), x: i32, y: i32) -> Option<usize> {
         return None;
     }
     let width = i64::from(max_x) - i64::from(min_x) + 1;
-    usize::try_from(width * (i64::from(y) - i64::from(min_y)) + i64::from(x) - i64::from(min_x)).ok()
+    usize::try_from(width * (i64::from(y) - i64::from(min_y)) + i64::from(x) - i64::from(min_x))
+        .ok()
 }
 
 /// The block and sub-block keys of a cell (`00544280`, `005442c0`: the coordinates shifted right
@@ -417,9 +418,8 @@ fn parse_content<R: Read + Seek>(
                     world_record(offset, &header, &[])
                 }
             };
-            after_unwanted_world = depth == 0
-                && header.flags() & IGNORED == 0
-                && !group.wanted.table(&offsets);
+            after_unwanted_world =
+                depth == 0 && header.flags() & IGNORED == 0 && !group.wanted.table(&offsets);
             group.worlds.push(WorldRecord {
                 node: group.nodes.len(),
                 offsets,
@@ -684,7 +684,11 @@ mod tests {
     /// The file: a header record, a weapon group, then the world space group with `content`.
     fn plugin(content: &[Vec<u8>]) -> Vec<u8> {
         let header = record(b"TES4", 1, 0, &sub(b"HEDR", &[0; 12]));
-        let weapons = group(u32::from_le_bytes(*b"WEAP"), 0, &[record(b"WEAP", 0, 7, &[])]);
+        let weapons = group(
+            u32::from_le_bytes(*b"WEAP"),
+            0,
+            &[record(b"WEAP", 0, 7, &[])],
+        );
         [header, weapons, group(u32::from_le_bytes(WRLD), 0, content)].concat()
     }
 
@@ -694,12 +698,19 @@ mod tests {
 
     /// Where `needle` (a record) starts in `bytes`.
     fn at(bytes: &[u8], needle: &[u8]) -> u32 {
-        bytes.windows(needle.len()).position(|w| w == needle).unwrap() as u32
+        bytes
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .unwrap() as u32
     }
 
     /// A cell's children group (temporary references).
     fn cell_children() -> Vec<u8> {
-        group(0x200, 6, &[group(0x200, 9, &[record(b"REFR", 0, 0x300, &[])])])
+        group(
+            0x200,
+            6,
+            &[group(0x200, 9, &[record(b"REFR", 0, 0x300, &[])])],
+        )
     }
 
     /// One world's children as the game's tools lay them out: the persistent cell and its
@@ -710,7 +721,10 @@ mod tests {
         for c in cells {
             let (x, y) = position_of(c);
             let (b, s) = (block(x, y), sub_block(x, y));
-            let list = match sub_blocks.iter_mut().position(|(bb, ss, _)| *bb == b && *ss == s) {
+            let list = match sub_blocks
+                .iter_mut()
+                .position(|(bb, ss, _)| *bb == b && *ss == s)
+            {
                 Some(i) => &mut sub_blocks[i].2,
                 None => {
                     sub_blocks.push((b, s, Vec::new()));
@@ -751,7 +765,11 @@ mod tests {
         assert_eq!(table.len(), 16);
         for c in &cells {
             let (x, y) = position_of(c);
-            assert_eq!(table[slot(x, y)], at(&bytes, c) - w.record_offset, "cell {x}, {y}");
+            assert_eq!(
+                table[slot(x, y)],
+                at(&bytes, c) - w.record_offset,
+                "cell {x}, {y}"
+            );
         }
         assert_eq!(table.iter().filter(|&&o| o != 0).count(), 4);
     }
@@ -843,7 +861,10 @@ mod tests {
     fn a_found_cell_outside_the_corners_declines() {
         let cells = [cell(0x10, 0, 0), cell(0x11, 5, 0)];
         let bytes = plugin(&[world(0x50), children(0x50, &cells)]);
-        assert_eq!(offsets(&bytes, false)[0].built, Err(Decline::CellOutsideGrid));
+        assert_eq!(
+            offsets(&bytes, false)[0].built,
+            Err(Decline::CellOutsideGrid)
+        );
     }
 
     #[test]
@@ -876,7 +897,15 @@ mod tests {
         let mut plugin = bytes.clone();
         plugin[8] = 0;
         let w = &offsets(&plugin, false)[0];
-        assert_eq!(w.built.as_ref().unwrap().iter().filter(|&&o| o != 0).count(), 1);
+        assert_eq!(
+            w.built
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|&&o| o != 0)
+                .count(),
+            1
+        );
     }
 
     /// A zlib stream of one stored block.
@@ -915,10 +944,16 @@ mod tests {
 
     #[test]
     fn two_records_of_one_world_space_decline() {
-        let bytes = plugin(&[world(0x50), children(0x50, &[cell(0x10, 0, 0)]), world(0x50)]);
+        let bytes = plugin(&[
+            world(0x50),
+            children(0x50, &[cell(0x10, 0, 0)]),
+            world(0x50),
+        ]);
         let worlds = offsets(&bytes, false);
         assert_eq!(worlds.len(), 2);
-        assert!(worlds.iter().all(|w| w.built == Err(Decline::DuplicateRecord)));
+        assert!(worlds
+            .iter()
+            .all(|w| w.built == Err(Decline::DuplicateRecord)));
     }
 
     #[test]
@@ -970,7 +1005,11 @@ mod tests {
     #[test]
     fn the_next_world_space_ends_the_search() {
         // The second world's cell is not the first world's.
-        let bytes = plugin(&[world(0x50), world(0x51), children(0x51, &[cell(0x10, 0, 0)])]);
+        let bytes = plugin(&[
+            world(0x50),
+            world(0x51),
+            children(0x51, &[cell(0x10, 0, 0)]),
+        ]);
         let worlds = offsets(&bytes, false);
         assert!(worlds[0].built.as_ref().unwrap().iter().all(|&o| o == 0));
         let second = worlds[1].built.as_ref().unwrap();
