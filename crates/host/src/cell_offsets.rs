@@ -35,7 +35,7 @@ use engine::prelude::*;
 use engine::units::fallout_shared::tesworldspace::{
     fn_00583560, tes_world_space_find_cell_in_file, OffsetData, TESWorldSpace,
 };
-use esm::cell_offsets::{world_offsets, WorldOffsets};
+use esm::cell_offsets::{world_offsets, Decline, WorldOffsets};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -117,16 +117,25 @@ fn build(key: &Key) -> Tables {
     let file = std::fs::File::open(&key.path).ok()?;
     match world_offsets(file, false) {
         Ok(worlds) => {
-            let built = worlds
+            let built = worlds.iter().filter(|w| w.built.is_ok()).count();
+            let searched: Vec<String> = worlds
                 .iter()
-                .filter(|w| w.stored.is_none() && w.built.is_ok())
-                .count();
-            if built > 0 {
+                .filter_map(|w| match w.built {
+                    Err(Decline::NotAsked) | Ok(_) => None,
+                    Err(why) => Some(format!("{:08x} {why:?}", w.form_id)),
+                })
+                .collect();
+            if built > 0 || !searched.is_empty() {
                 eprintln!(
-                    "cell offsets: {}: {built} of {} world spaces given a table in {:.1} ms",
+                    "cell offsets: {}: {built} of {} world spaces given a table in {:.1} ms{}",
                     key.path.file_name().unwrap_or_default().to_string_lossy(),
                     worlds.len(),
-                    start.elapsed().as_secs_f64() * 1000.0
+                    start.elapsed().as_secs_f64() * 1000.0,
+                    if searched.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; searched as before: {}", searched.join(", "))
+                    }
                 );
             }
             Some(Arc::new(worlds))
@@ -289,7 +298,6 @@ pub fn install(e: &mut Engine) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use esm::cell_offsets::Decline;
 
     /// The test's own words, in the mapped data area: the `OFFSET_DATA` the world space has for the
     /// file (0: none), the block `CreateOffsetData` makes it in, the last `SetOffset` and their
@@ -516,7 +524,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("Data")).unwrap();
         std::fs::write(dir.join("Data").join("Test.esp"), &bytes).unwrap();
 
-        let mut w = world(false, true);
+        let w = world(false, true);
         let folder = format!("{}\\Data\\", dir.display());
         w.e.mem.set_cstr(w.file.addr() + FILE_PATH, folder.as_bytes());
         w.e.mem.set_cstr(w.file.addr() + FILE_NAME, b"Test.esp");

@@ -67,7 +67,8 @@ pub enum Decline {
     /// A record the search would read (a cell or the world space) is compressed and does not
     /// inflate, or a header-only record (`TOFT`) is inside the world space group.
     Unreadable,
-    /// Not built: the record has its own `OFST` and only missing tables were asked for.
+    /// Not built: a master's record with its own `OFST` (the game reads that one), and not all
+    /// tables were asked for.
     NotAsked,
 }
 
@@ -135,8 +136,8 @@ fn keys(x: i32, y: i32) -> (u32, u32) {
 }
 
 /// Every world space record of the plugin `file`, in file order, with the table built for each
-/// when `build_all` is set or the record has no `OFST` of its own (for a master file with one,
-/// the game reads that). An error is the file's: it could not be read, or it is not laid out as
+/// the game would use (every record of a file that is not a master, and a master's records
+/// with no `OFST` of their own: a master reads its own), or for all of them with `build_all`. An error is the file's: it could not be read, or it is not laid out as
 /// a plugin (a group or record running past its group or the file).
 pub fn world_offsets<R: Read + Seek>(file: R, build_all: bool) -> io::Result<Vec<WorldOffsets>> {
     let mut source = Source::new(file)?;
@@ -147,6 +148,8 @@ pub fn world_offsets<R: Read + Seek>(file: R, build_all: bool) -> io::Result<Vec
         return Err(malformed("no file header"));
     }
     let header = source.header(at)?;
+    // The file header record's flags: bit 0, a master (`TESFile::GetMaster`, `00471c20`).
+    let master = header.flags() & 1 != 0;
     at += HEADER_LEN + u64::from(header.size);
     while at + HEADER_LEN <= source.len {
         let header = source.header(at)?;
@@ -160,8 +163,9 @@ pub fn world_offsets<R: Read + Seek>(file: R, build_all: bool) -> io::Result<Vec
             return Err(malformed("a top group runs past the file"));
         }
         if header.label == u32::from_le_bytes(WRLD) && header.form_id == 0 {
-            let group = parse_group(&mut source, at + HEADER_LEN, end)?;
-            worlds.extend(group.worlds(build_all));
+            let wanted = Wanted { master, build_all };
+            let group = parse_group(&mut source, at + HEADER_LEN, end, wanted)?;
+            worlds.extend(group.worlds());
         }
         at = end;
     }
@@ -311,19 +315,40 @@ struct WorldRecord {
     offsets: WorldOffsets,
 }
 
+/// Which tables are built: all of them, or the ones the game needs (every world space record of
+/// a file that is not a master, and those of a master with no `OFST`).
+#[derive(Clone, Copy)]
+struct Wanted {
+    master: bool,
+    build_all: bool,
+}
+
+impl Wanted {
+    fn table(self, world: &WorldOffsets) -> bool {
+        self.build_all || !self.master || world.stored.is_none()
+    }
+}
+
 struct Group {
     nodes: Vec<Node>,
     worlds: Vec<WorldRecord>,
     unreadable: bool,
+    wanted: Wanted,
 }
 
 /// Reads the world space group's content (`start..end`): every header the search can meet,
 /// with the content of world children, block and sub-block groups (the only ones it enters).
-fn parse_group<R: Read + Seek>(source: &mut Source<R>, start: u64, end: u64) -> io::Result<Group> {
+fn parse_group<R: Read + Seek>(
+    source: &mut Source<R>,
+    start: u64,
+    end: u64,
+    wanted: Wanted,
+) -> io::Result<Group> {
     let mut group = Group {
         nodes: Vec::new(),
         worlds: Vec::new(),
         unreadable: false,
+        wanted,
     };
     parse_content(source, start, end, 0, &mut group)?;
     group.nodes.push(Node::Stop);
@@ -338,11 +363,15 @@ fn parse_content<R: Read + Seek>(
     group: &mut Group,
 ) -> io::Result<()> {
     let mut at = start;
+    // At the top: whether the last header was a world space record (not flagged ignored) with no
+    // table wanted. The children group after it is not read: no other record's walk gets past it.
+    let mut after_unwanted_world = false;
     while at < end {
         if at + HEADER_LEN > end {
             return Err(malformed("a header runs past its group"));
         }
         let header = source.header(at)?;
+        let skip_children = std::mem::take(&mut after_unwanted_world);
         if header.tag == GRUP {
             let size = u64::from(header.size);
             if size < HEADER_LEN || at + size > end {
@@ -354,7 +383,8 @@ fn parse_content<R: Read + Seek>(
                 label: header.label,
                 end: 0,
             });
-            if matches!(header.form_id, 1 | 4 | 5) {
+            let skipped = depth == 0 && header.form_id == 1 && skip_children;
+            if matches!(header.form_id, 1 | 4 | 5) && !skipped {
                 parse_content(source, at + HEADER_LEN, at + size, depth + 1, group)?;
             }
             let after = group.nodes.len();
@@ -387,6 +417,9 @@ fn parse_content<R: Read + Seek>(
                     world_record(offset, &header, &[])
                 }
             };
+            after_unwanted_world = depth == 0
+                && header.flags() & IGNORED == 0
+                && !group.wanted.table(&offsets);
             group.worlds.push(WorldRecord {
                 node: group.nodes.len(),
                 offsets,
@@ -456,14 +489,14 @@ fn world_record(offset: u32, header: &Header, data: &[u8]) -> WorldOffsets {
 }
 
 impl Group {
-    fn worlds(mut self, build_all: bool) -> Vec<WorldOffsets> {
+    fn worlds(mut self) -> Vec<WorldOffsets> {
         let mut ids: HashMap<u32, usize> = HashMap::new();
         for world in &self.worlds {
             *ids.entry(world.offsets.form_id).or_default() += 1;
         }
         let mut out = Vec::with_capacity(self.worlds.len());
         for mut world in std::mem::take(&mut self.worlds) {
-            if build_all || world.offsets.stored.is_none() {
+            if self.wanted.table(&world.offsets) {
                 world.offsets.built = if self.unreadable {
                     Err(Decline::Unreadable)
                 } else if ids[&world.offsets.form_id] > 1 {
@@ -839,6 +872,11 @@ mod tests {
         let w = &offsets(&bytes, true)[0];
         let built = w.built.as_ref().unwrap();
         assert_eq!(built.iter().filter(|&&o| o != 0).count(), 1);
+        // A plugin that is not a master: the game never reads its `OFST`, so its table is built.
+        let mut plugin = bytes.clone();
+        plugin[8] = 0;
+        let w = &offsets(&plugin, false)[0];
+        assert_eq!(w.built.as_ref().unwrap().iter().filter(|&&o| o != 0).count(), 1);
     }
 
     /// A zlib stream of one stored block.
@@ -881,6 +919,52 @@ mod tests {
         let worlds = offsets(&bytes, false);
         assert_eq!(worlds.len(), 2);
         assert!(worlds.iter().all(|w| w.built == Err(Decline::DuplicateRecord)));
+    }
+
+    #[test]
+    fn past_an_ignored_world_space_record_the_walk_goes_on_into_its_children() {
+        // A master: world 0x50 without a table, then 0x51 with its own, flagged ignored. The
+        // search for (1, 1) in 0x50 ends on the cell (0, 0) with nothing after it in 0x50's
+        // groups; NextForm(1) then passes over 0x51's record into 0x51's children and finds its
+        // cell. So 0x51's children are read even though its own table is not built; unflagged,
+        // the record ends the walk and they are not.
+        let own: Vec<u8> = (1..=16u32).flat_map(|n| n.to_le_bytes()).collect();
+        let second = |flags: u32| {
+            let data = [
+                sub(b"NAM0", &corner(-8192.0, -8192.0)),
+                sub(b"NAM9", &corner(8191.0, 8191.0)),
+                sub(b"OFST", &own),
+            ]
+            .concat();
+            record(b"WRLD", flags, 0x51, &data)
+        };
+        let first_children = group(
+            0x50,
+            1,
+            &[group(
+                block(0, 0),
+                4,
+                &[group(sub_block(0, 0), 5, &[cell(0x10, 0, 0)])],
+            )],
+        );
+        let far = cell(0x11, 1, 1);
+        for (flags, found) in [(IGNORED, true), (0, false)] {
+            let bytes = plugin(&[
+                world(0x50),
+                first_children.clone(),
+                second(flags),
+                children(0x51, &[far.clone()]),
+            ]);
+            let worlds = offsets(&bytes, false);
+            assert_eq!(worlds[1].built, Err(Decline::NotAsked));
+            let w = &worlds[0];
+            let entry = w.built.as_ref().unwrap()[slot(1, 1)];
+            if found {
+                assert_eq!(entry, at(&bytes, &far) - w.record_offset);
+            } else {
+                assert_eq!(entry, 0);
+            }
+        }
     }
 
     #[test]
