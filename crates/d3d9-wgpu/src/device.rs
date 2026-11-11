@@ -598,6 +598,8 @@ pub struct Device {
     pub(crate) queue: wgpu::Queue,
     adapter: wgpu::Adapter,
     adapter_name: String,
+    /// The adapter's graphics API ([`pipeline_threads`]).
+    backend: wgpu::Backend,
     /// The game's window and its swap chain ([`crate::window::Window`]), with [`Output::Window`].
     surface: Option<crate::window::Window>,
     objects: Map<Handle, Obj>,
@@ -966,6 +968,7 @@ impl Device {
             queue,
             adapter: adapter.clone(),
             adapter_name,
+            backend: info.backend,
             surface: None,
             objects: Map::default(),
             back_buffers: Vec::new(),
@@ -3614,7 +3617,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.list = Some(l);
             return;
         }
-        let threads = worker_threads();
+        let threads = pipeline_threads(self.backend);
         let mut tasks = Vec::new();
         let mut keys = Vec::new();
         for r in &ready {
@@ -6219,6 +6222,21 @@ fn worker_threads() -> usize {
         .clamp(1, 16)
 }
 
+/// How many threads make the listed pipelines ahead ([`Device::prepare_listed`]) on `backend`: the
+/// worker threads, but one on Direct3D 12. There wgpu 30.0.1 keeps each shader stage's compiled
+/// FXC bytecode in a cache shared by the pipelines made from it, and FXC counts the bytecode's
+/// references without atomics: two threads making pipelines from one shader can free it while the
+/// cache still holds it, a use-after-free that corrupts the heap (wgpu #10547, fixed after 30.0.1
+/// by #10805). Listed pipelines share shaders (a vertex shader serves many). Until the wgpu we
+/// build with has the fix, Direct3D 12 makes them one at a time (its modules too: they are cheap).
+fn pipeline_threads(backend: wgpu::Backend) -> usize {
+    if backend == wgpu::Backend::Dx12 {
+        1
+    } else {
+        worker_threads()
+    }
+}
+
 /// Draws an encoder takes before it goes to a finishing thread ([`Device::send_encoder`]).
 const SPLIT_DRAWS: u32 = 256;
 
@@ -6329,6 +6347,16 @@ impl Drop for Device {
 mod tests {
     use super::*;
     use wgpu::TextureFormat as F;
+
+    /// Direct3D 12 makes the listed pipelines on one thread (wgpu 30.0.1 can free a shader's FXC
+    /// bytecode while another thread's pipeline still uses it: wgpu #10547); every other API on
+    /// the worker threads.
+    #[test]
+    fn direct3d_12_makes_the_listed_pipelines_on_one_thread() {
+        assert_eq!(pipeline_threads(wgpu::Backend::Dx12), 1);
+        assert_eq!(pipeline_threads(wgpu::Backend::Vulkan), worker_threads());
+        assert_eq!(pipeline_threads(wgpu::Backend::Metal), worker_threads());
+    }
 
     /// A render target and its depth surface, asked for 8x apart, get the same count: the
     /// largest that both (and the rest of the game's multisampled formats and the occlusion
