@@ -465,9 +465,12 @@ pub fn has_listed_pass(e: &mut Engine, acc: Ptr<BSShaderAccumulator>, low: u32, 
     let mut i = 0u32;
     while i < packet::renderer_count(e, acc) && !found {
         let renderer = packet::renderer(e, acc, i);
-        let mut words = Vec::new();
-        super::detach::candidates(e, renderer.addr(), &mut words);
-        found = super::detach::suspended_for(e, &words, |e| {
+        let words = |e: &Engine| {
+            let mut words = Vec::new();
+            super::detach::candidates(e, renderer.addr(), &mut words);
+            words
+        };
+        found = super::detach::suspended_for(e, words, |e| {
             e.call(HAS_LISTED_PASS, &args![renderer, low, high]).u8()
         }) != 0;
         i += 1;

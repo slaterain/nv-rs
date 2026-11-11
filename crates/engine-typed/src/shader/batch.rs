@@ -1480,8 +1480,8 @@ pub fn clear_renderer(e: &mut Engine, this: Ptr<BSBatchRenderer>, _unused: u32) 
         item = next;
     }
     let active = this.at(BSBatchRenderer::kActivePassIndexList);
-    let words = [active.addr(), active.addr().wrapping_add(4)];
-    crate::draw::detach::suspended_for(e, &words, |e| e.call(ACTIVE_LIST_CLEAR, &args![active]));
+    let words = |_: &Engine| vec![active.addr(), active.addr().wrapping_add(4)];
+    crate::draw::detach::suspended_for(e, words, |e| e.call(ACTIVE_LIST_CLEAR, &args![active]));
 }
 
 // Typed from 00b63e90

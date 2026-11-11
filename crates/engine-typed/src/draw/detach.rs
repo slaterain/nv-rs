@@ -60,8 +60,12 @@ pub fn open(e: &mut Engine, addrs: &[u32]) {
     OPEN.store(true, Relaxed);
 }
 
-/// Closes this run's view: every word goes back to guest memory. Nothing when none is open.
+/// Closes this run's view: every word goes back to guest memory. Nothing when none is open (one relaxed load
+/// when no run has one: the switch off).
 pub fn close(e: &mut Engine) {
+    if !OPEN.load(Relaxed) {
+        return;
+    }
     let id = run(e);
     let words = {
         let mut views = VIEWS.lock().unwrap_or_else(|p| p.into_inner());
@@ -268,12 +272,18 @@ pub fn suspended<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
     answer
 }
 
-/// [`suspended`] for the words at `addrs` only (those the view holds): they go back to guest memory for `f`, and
-/// are taken again after it.
-pub fn suspended_for<R>(e: &mut Engine, addrs: &[u32], f: impl FnOnce(&mut Engine) -> R) -> R {
+/// [`suspended`] for the words `words` names only (those the view holds): they go back to guest memory for `f`,
+/// and are taken again after it. `words` makes the list only when a view is open, so with the switch off this is
+/// `f` behind one relaxed load.
+pub fn suspended_for<R>(
+    e: &mut Engine,
+    words: impl FnOnce(&Engine) -> Vec<u32>,
+    f: impl FnOnce(&mut Engine) -> R,
+) -> R {
     if !OPEN.load(Relaxed) {
         return f(e);
     }
+    let addrs = words(e);
     let id = run(e);
     let mut moved = Vec::new();
     {
@@ -282,7 +292,7 @@ pub fn suspended_for<R>(e: &mut Engine, addrs: &[u32], f: impl FnOnce(&mut Engin
             drop(views);
             return f(e);
         };
-        for addr in addrs {
+        for addr in &addrs {
             if let Some(value) = words.remove(addr) {
                 moved.push((*addr, value));
             }
@@ -369,12 +379,16 @@ mod tests {
         let mut e = Engine::new();
         let at = block(&mut e, 3);
         open(&mut e, &[at, at + 4]);
-        let seen = suspended_for(&mut e, &[at, at + 8], |e| {
-            let seen = (e.mem.u32(at), e.mem.u32(at + 4), e.mem.u32(at + 8));
-            e.mem.set_u32(at, 7);
-            e.mem.set_u32(at + 8, 9);
-            seen
-        });
+        let seen = suspended_for(
+            &mut e,
+            |_| vec![at, at + 8],
+            |e| {
+                let seen = (e.mem.u32(at), e.mem.u32(at + 4), e.mem.u32(at + 8));
+                e.mem.set_u32(at, 7);
+                e.mem.set_u32(at + 8, 9);
+                seen
+            },
+        );
         assert_eq!(seen, (1, 0, 3));
         assert_eq!([e.mem.u32(at), e.mem.u32(at + 8)], [0, 9]);
         assert_eq!([word(&e, at), word(&e, at + 4)], [7, 2]);
@@ -395,6 +409,6 @@ mod tests {
         assert!(!is_open(&e));
         set_word(&mut e, at, 5);
         assert_eq!((word(&e, at), e.mem.u32(at)), (5, 5));
-        assert_eq!(suspended_for(&mut e, &[at], |e| e.mem.u32(at)), 5);
+        assert_eq!(suspended_for(&mut e, |_| vec![at], |e| e.mem.u32(at)), 5);
     }
 }

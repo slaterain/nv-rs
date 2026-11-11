@@ -230,17 +230,20 @@ pub fn draw_and_clear_type(
 /// renderer's active list cleared (with a renderer) and the holder's count.
 pub fn draw_holder(e: &mut Engine, holder: u32, flag: u32) {
     // By address: the drawing thread's step 1 hands these the holder's words in place (still live).
-    let words = super::detach::holder_words(e, holder);
-    super::detach::suspended_for(e, &words, |e| {
-        if packet::keeps_own(e, holder) {
-            e.call(OWN_LIST_DRAW, &args![holder.wrapping_add(0xc), flag]);
-        } else {
-            let renderer = packet::holder_renderer(e, holder);
-            if renderer != 0 {
-                e.vcall(renderer, SLOT_DRAW_TYPES, &args![1u32, 0x2f1u32, flag]);
+    super::detach::suspended_for(
+        e,
+        |e| super::detach::holder_words(e, holder),
+        |e| {
+            if packet::keeps_own(e, holder) {
+                e.call(OWN_LIST_DRAW, &args![holder.wrapping_add(0xc), flag]);
+            } else {
+                let renderer = packet::holder_renderer(e, holder);
+                if renderer != 0 {
+                    e.vcall(renderer, SLOT_DRAW_TYPES, &args![1u32, 0x2f1u32, flag]);
+                }
             }
-        }
-    });
+        },
+    );
     let renderer = packet::holder_renderer(e, holder);
     if renderer != 0 {
         own::clear_active_list(e, renderer);
@@ -355,14 +358,17 @@ pub fn render_next_alpha(
                 break;
             }
             let own_renderer = packet::holder_renderer(e, sorted);
-            let words = super::detach::holder_words(e, sorted);
-            super::detach::suspended_for(e, &words, |e| {
-                if packet::keeps_own(e, sorted) {
-                    e.call(OWN_LIST_DRAW, &args![sorted.wrapping_add(0xc), 1u32]);
-                } else if own_renderer != 0 {
-                    e.vcall(own_renderer, SLOT_DRAW_TYPES, &args![1u32, 0x2f1u32, 1u32]);
-                }
-            });
+            super::detach::suspended_for(
+                e,
+                |e| super::detach::holder_words(e, sorted),
+                |e| {
+                    if packet::keeps_own(e, sorted) {
+                        e.call(OWN_LIST_DRAW, &args![sorted.wrapping_add(0xc), 1u32]);
+                    } else if own_renderer != 0 {
+                        e.vcall(own_renderer, SLOT_DRAW_TYPES, &args![1u32, 0x2f1u32, 1u32]);
+                    }
+                },
+            );
             let own_renderer = packet::holder_renderer(e, sorted);
             if own_renderer != 0 {
                 own::clear_active_list(e, own_renderer);
