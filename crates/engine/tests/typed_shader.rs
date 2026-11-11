@@ -63,16 +63,21 @@ fn bits(case: &Case, i: usize) -> u32 {
 }
 
 /// A float as play has it on the paths whose maths is native (ADR-0014's float rule): its magnitude
-/// folded into 2^-20 to 2^20, its sign and mantissa kept; zeros, infinities and NaNs as they come. On
-/// the main thread that maths is plain `f32`, which rounds as the exe's 24-bit x87 code does while
-/// every step stays inside the float range, where the x87 keeps a wider exponent: from these values
-/// no step of the set-ups leaves it (the largest product of four is 2^80).
+/// folded into 2^-12 to 2^12, its sign and mantissa kept; zeros and infinities as they come; a NaN the
+/// quiet NaN 0x7fc00000. On the main thread that maths is plain `f32`, which rounds as the exe's 24-bit
+/// x87 code does while every step stays inside the float range, where the x87 keeps a wider exponent:
+/// from these values no step of the set-ups leaves it, and a product of five stays within 2^-60 to
+/// 2^60, where the comparison reads words as floats. Play has no signalling NaNs or NaN payloads: the
+/// exe quiets a signalling NaN it copies through the x87 stack where native code copies it as it is.
 fn play(bits: u32) -> u32 {
     let exponent = (bits >> 23) & 0xff;
-    if exponent == 0xff || bits & 0x7fff_ffff == 0 || (107..147).contains(&exponent) {
+    if exponent == 0xff && bits & 0x007f_ffff != 0 {
+        return 0x7fc0_0000;
+    }
+    if exponent == 0xff || bits & 0x7fff_ffff == 0 || (115..139).contains(&exponent) {
         return bits;
     }
-    (bits & 0x807f_ffff) | ((107 + exponent % 40) << 23)
+    (bits & 0x807f_ffff) | ((115 + exponent % 24) << 23)
 }
 
 /// The case's float `i` as play has it ([`play`]).
@@ -2099,6 +2104,8 @@ fn add_to_group() {
         Input::F32,
         Input::Of(&[0, 0x0040_0000]),
         Input::Of(&[0, 1, 2]),
+        // The fade alpha: opaque, or below 1 (the blocked test's second half).
+        Input::Of(&[ONE, HALF]),
     ])
     .translation_calls_plainly(&[
         0x00b9_8e20,
@@ -2120,6 +2127,7 @@ fn add_to_group() {
             i => w.passes[i as usize],
         };
         set(e, w.property + 0x28, bits(c, 2));
+        set(e, w.property + 0x2c, c.word(5));
         set(e, w.property + 0x24, c.word(3));
         // The alpha property: blends without bit 0, or none.
         match c.word(4) {
@@ -2441,9 +2449,13 @@ fn world_transform_words(e: &mut Engine, c: &Case, fold: fn(u32) -> u32) -> Vec<
 }
 
 /// A float as a rotation's entry, a direction's component or a scale has it in play: its magnitude
-/// folded into 2^-4 to 4 (sign and mantissa kept; zeros, infinities and NaNs as they come).
+/// folded into 2^-4 to 4 (sign and mantissa kept; zeros and infinities as they come; a NaN the quiet
+/// NaN 0x7fc00000, as [`play`]).
 fn unit(bits: u32) -> u32 {
     let exponent = (bits >> 23) & 0xff;
+    if exponent == 0xff && bits & 0x007f_ffff != 0 {
+        return 0x7fc0_0000;
+    }
     if exponent == 0xff || bits & 0x7fff_ffff == 0 || (123..129).contains(&exponent) {
         return bits;
     }
@@ -2500,19 +2512,21 @@ fn world_transform() {
     report.assert_same();
 }
 
-/// `set_world_view_constants`' words: the transform's scale from the case.
-fn world_view_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+/// `set_world_view_constants`' words: the transform's scale from the case, as it came or folded by
+/// `fold`.
+fn world_view_words(e: &mut Engine, c: &Case, fold: fn(u32) -> u32) -> Vec<u32> {
     let w = world(e);
     let this = e.mem.alloc(0x20);
     set(e, this + 0x18, w.renderer);
-    set(e, w.transform + 0x30, bits(c, 0));
+    set(e, w.transform + 0x30, fold(bits(c, 0)));
     vec![this, c.word(1), w.transform]
 }
 
 /// The world-view constants' world transform is `f64` (it also runs on another game thread): under the
-/// other threads' word bit for bit; under the main thread's within 3 ulps, where the exe rounds each
-/// product and sum of the model directions to 24 bits (the world's rotation and directions keep the
-/// sums from cancelling: see `world_transform`).
+/// other threads' word bit for bit, every input; under the main thread's with the scale as play has it
+/// ([`play`]: a denormal scale makes denormal entries, which the exe rounds twice and which compare
+/// exactly), within 3 ulps, where the exe rounds each product and sum of the model directions to 24
+/// bits (the world's rotation and directions keep the sums from cancelling: see `world_transform`).
 #[test]
 fn world_view_constants() {
     Diff::new(entry!(
@@ -2524,7 +2538,7 @@ fn world_view_constants() {
     .inputs(&[Input::F32, Input::Word])
     .translation_calls_plainly(&[])
     .float_sweep(0)
-    .setup(world_view_words)
+    .setup(|e, c| world_view_words(e, c, |b| b))
     .run()
     .assert_same();
     Diff::new(entry!(
@@ -2536,7 +2550,7 @@ fn world_view_constants() {
     .inputs(&[Input::F32, Input::Word])
     .translation_calls_plainly(&[])
     .float_sweep(0)
-    .setup(world_view_words)
+    .setup(|e, c| world_view_words(e, c, play))
     .run()
     .assert_same();
 }
@@ -2794,19 +2808,20 @@ fn compare_by_depth_stores_before_the_radius() {
 }
 
 /// `world_transform_typed_slot`'s words: the cache's slot 0x30 the typed `00e879e0`, the transform's
-/// first rotation entry and its scale from the case.
-fn world_transform_slot_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+/// first rotation entry and its scale from the case, as they came or folded by `fold`.
+fn world_transform_slot_words(e: &mut Engine, c: &Case, fold: fn(u32) -> u32) -> Vec<u32> {
     let w = world(e);
     let vt = vtable(e, &[(0x68, 0x00e8_8780), (0x30, 0x00e8_79e0)]);
     set(e, w.cache, vt);
-    set(e, w.transform, bits(c, 0));
-    set(e, w.transform + 0x30, bits(c, 1));
+    set(e, w.transform, fold(bits(c, 0)));
+    set(e, w.transform + 0x30, fold(bits(c, 1)));
     vec![w.renderer, w.transform, c.word(2)]
 }
 
 /// `set_world_transform` with the render state cache's slot 0x30 holding the typed `00e879e0`: that call
-/// made direct (the plain world has a stand-in there). Under the other threads' word bit for bit; under
-/// the main thread's within 3 ulps (the world's rotation and directions keep the sums from cancelling).
+/// made direct (the plain world has a stand-in there). Under the other threads' word bit for bit, every
+/// input; under the main thread's with the floats as play has them ([`play`]), within 3 ulps (the
+/// world's rotation and directions keep the sums from cancelling).
 #[test]
 fn world_transform_typed_slot() {
     Diff::new(entry!(
@@ -2818,7 +2833,7 @@ fn world_transform_typed_slot() {
     .inputs(&[Input::F32, Input::F32, Input::Of(BYTES)])
     .translation_calls_plainly(&[])
     .float_sweep(0)
-    .setup(world_transform_slot_words)
+    .setup(|e, c| world_transform_slot_words(e, c, |b| b))
     .run()
     .assert_same();
     Diff::new(entry!(
@@ -2830,7 +2845,7 @@ fn world_transform_typed_slot() {
     .inputs(&[Input::F32, Input::F32, Input::Of(BYTES)])
     .translation_calls_plainly(&[])
     .float_sweep(0)
-    .setup(world_transform_slot_words)
+    .setup(|e, c| world_transform_slot_words(e, c, play))
     .run()
     .assert_same();
 }
@@ -6399,21 +6414,32 @@ const SETUP_TYPE_INPUTS: &[Input] = &[
 ];
 
 fn setup_type_setup(e: &mut Engine, c: &Case) -> Vec<u32> {
+    setup_type_words(e, c, |b| b)
+}
+
+/// [`setup_type_setup`] with the scale as play has it ([`play`]): the main thread's comparison.
+fn setup_type_play(e: &mut Engine, c: &Case) -> Vec<u32> {
+    setup_type_words(e, c, play)
+}
+
+/// A pass set-up's words, the geometry's scale from the case folded by `fold`.
+fn setup_type_words(e: &mut Engine, c: &Case, fold: fn(u32) -> u32) -> Vec<u32> {
     let p = pass_world(e, &[], 0, 0);
     let state = setup_state(e, &p, c.word(0));
     let rendering = e.mem.u32(0x011f_91e0);
     e.mem.set_u8(rendering + 9, c.word(1) as u8);
     let geometry = e.mem.u32(rendering);
-    set(e, geometry + 0x98, bits(c, 2));
+    set(e, geometry + 0x98, fold(bits(c, 2)));
     set(e, 0x011f_951c, 0x7e00_951c);
     vec![p.d.w.shader, state]
 }
 
 // The three pass set-ups reach the shader family's world transform (through the world-view constants)
 // with the case's float as the geometry's scale: its maths is native `f64`. Under the other threads'
-// word bit for bit (NaN payloads aside: the scale it hands the matrix is no longer quieted); under the
-// main thread's within one ulp (the exe rounds each product and sum of the model directions to 24 bits,
-// and a denormal scale's products twice).
+// word bit for bit (NaN payloads aside: the scale it hands the matrix is no longer quieted), every
+// input; under the main thread's with the scale as play has it (a denormal scale makes denormal
+// entries, which the exe rounds twice and which compare exactly), within one ulp (the exe rounds each
+// product and sum of the model directions to 24 bits).
 
 #[test]
 fn setup_type_ca() {
@@ -6432,7 +6458,7 @@ fn setup_type_ca() {
         .goes_by_address(&[0x00e7_eb00, 0x00c4_c2d0])
         .inputs(SETUP_TYPE_INPUTS)
         .max_cases(160)
-        .setup(setup_type_setup)
+        .setup(setup_type_play)
         .run()
         .assert_same();
 }
@@ -6454,7 +6480,7 @@ fn setup_type_d1() {
         .goes_by_address(&[0x00e7_eb00, 0x00c4_c2d0])
         .inputs(SETUP_TYPE_INPUTS)
         .max_cases(160)
-        .setup(setup_type_setup)
+        .setup(setup_type_play)
         .run()
         .assert_same();
 }
@@ -6476,7 +6502,7 @@ fn setup_type_102() {
         .goes_by_address(&[0x00e7_eb00, 0x00c4_c2d0])
         .inputs(SETUP_TYPE_INPUTS)
         .max_cases(160)
-        .setup(setup_type_setup)
+        .setup(setup_type_play)
         .run()
         .assert_same();
 }

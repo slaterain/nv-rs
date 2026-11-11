@@ -72,6 +72,7 @@ mod tests {
         assert_eq!(narrow(1.0 + 3.0 * 2f64.powi(-24)), 1.0 + 2f32.powi(-22));
         assert_eq!(mul_d(3.0, 0.5), 1.5);
         assert_eq!(div_d(1.0, 3.0), 1.0 / 3.0);
+        assert_eq!(add_d(1.0, 0.5), 1.5);
         assert_eq!(add_d(1.0, 2f64.powi(-30)), 1.0);
         assert_eq!(sub_d(1.0, 0.25), 0.75);
         assert_eq!(wide(0x3f80_0000), 1.0);
