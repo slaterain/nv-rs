@@ -68,21 +68,30 @@ pub enum Backends {
 }
 
 impl Backends {
-    /// The backends a value of `NV_D3D9` names (case and spaces aside), `None` for none.
+    /// The backends a value of `NV_D3D9` names (case and spaces aside), `None` for none. The
+    /// Renderer setting's words name them too (`sRenderer`, which a launcher's test run passes as
+    /// `NV_D3D9`): `vulkan` is wgpu (Vulkan first), `d3d9` the real Direct3D 9.
     pub fn parse(value: &str) -> Result<Option<Backends>, String> {
         let words: Vec<String> = value
             .split(',')
             .map(|w| w.trim().to_ascii_lowercase())
             .filter(|w| !w.is_empty())
             .collect();
-        let words: Vec<&str> = words.iter().map(String::as_str).collect();
+        let words: Vec<&str> = words
+            .iter()
+            .map(|w| match w.as_str() {
+                "vulkan" => "wgpu",
+                "d3d9" => "real",
+                w => w,
+            })
+            .collect();
         match words.as_slice() {
             [] => Ok(None),
             ["real"] => Ok(Some(Backends::Real)),
             ["wgpu"] => Ok(Some(Backends::Wgpu)),
             ["real", "wgpu"] => Ok(Some(Backends::RealAndWgpu)),
             _ => Err(format!(
-                "NV_D3D9={}: use real, wgpu or real,wgpu (nothing is drawn)",
+                "NV_D3D9={}: use vulkan (or wgpu), d3d9 (or real) or real,wgpu (nothing is drawn)",
                 value.trim()
             )),
         }
@@ -3507,8 +3516,9 @@ mod tests {
         assert!(real_window(&e, window).is_none(), "NV_D3D9 is not set here");
     }
 
-    /// `NV_D3D9`'s words: the real `d3d9.dll`, wgpu, or both (the real one answering), any case
-    /// and spaces; anything else is refused (nothing is drawn) rather than guessed.
+    /// `NV_D3D9`'s words: the real `d3d9.dll` (`real`, or the Renderer setting's `d3d9`), wgpu
+    /// (`wgpu`, or `vulkan`), or both (the real one answering), any case and spaces; anything
+    /// else is refused (nothing is drawn) rather than guessed.
     #[test]
     fn nv_d3d9_names_the_backends() {
         assert_eq!(Backends::parse("real"), Ok(Some(Backends::Real)));
@@ -3520,7 +3530,16 @@ mod tests {
         );
         assert_eq!(Backends::parse(""), Ok(None));
         assert_eq!(Backends::parse(" , "), Ok(None));
-        for wrong in ["wgpu,real", "real,real", "dx9", "1"] {
+        // The Renderer setting's words.
+        assert_eq!(Backends::parse("vulkan"), Ok(Some(Backends::Wgpu)));
+        assert_eq!(Backends::parse(" Vulkan "), Ok(Some(Backends::Wgpu)));
+        assert_eq!(Backends::parse("d3d9"), Ok(Some(Backends::Real)));
+        assert_eq!(Backends::parse("D3D9"), Ok(Some(Backends::Real)));
+        assert_eq!(
+            Backends::parse("d3d9,vulkan"),
+            Ok(Some(Backends::RealAndWgpu))
+        );
+        for wrong in ["wgpu,real", "real,real", "dx9", "1", "vulkan,d3d9"] {
             let why = Backends::parse(wrong).unwrap_err();
             assert!(why.contains(wrong) && why.contains("real,wgpu"), "{why}");
         }
