@@ -87,7 +87,8 @@ These are open for the maintainer, and nothing in this record settles them:
 - Stage 1 alone does not remove the 4 GB limit, and the migration alone does not reach 200+ fps:
   the plan forecasts about 108 fps in Doc's house and 46 in town, from older uncapped figures; the 2026-11-06 baseline is already about 103 and 45, so the forecast needs redoing. Threads and the render thread have
   to follow; both get easier on typed code.
-- Direct calls change how the thread host's time slice counts calls, so each batch that adds them
-  checks the hand-offs per frame.
+- Direct calls step the thread host's time slice as calls by address do (2026-11-10, after the
+  scene family's recorded run showed the hand-offs moving without it), so a batch of them leaves a
+  repeatable run's hand-offs where they were.
 - The first step adds no cost: `Engine::call`'s fast path is untouched
   ([docs/ENGINE_CRATE.md](../ENGINE_CRATE.md), "Typed code").

@@ -378,6 +378,23 @@ impl Engine {
         self.typed.forced
     }
 
+    /// A direct `typed_call!`'s step of the thread host's time slice, as [`Engine::call`] counts a
+    /// call by address: the slice counted down, or, used up, its hook run at `addr`. So the stepped
+    /// threads hand over where the calls by address put them, and a repeatable run with a family on
+    /// is the run with it off. Without slicing (`slice_hook` unset, as with real threads) a test
+    /// of the hook and nothing more.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn typed_slice_step(&mut self, addr: u32) {
+        if let Some(hook) = self.slice_hook {
+            if self.slice_left == 0 {
+                hook(self, addr);
+            } else {
+                self.slice_left -= 1;
+            }
+        }
+    }
+
     /// The differential test's direct run: a direct `typed_call!` shows in the call log and the
     /// call hook as the call by address does, so the two runs compare call for call.
     #[doc(hidden)]
@@ -629,6 +646,7 @@ macro_rules! typed_call {
             if cfg!(debug_assertions) && $e.typed_noting_direct() {
                 $e.typed_note_direct($addr, &words);
             }
+            $e.typed_slice_step($addr);
             $($f)::+($e)
         } else {
             $crate::abi::RetVal::from_ret($e.call($addr, &words))
@@ -647,6 +665,7 @@ macro_rules! typed_call {
             if cfg!(debug_assertions) && $e.typed_noting_direct() {
                 $e.typed_note_direct($addr, &$crate::args![$($bound),*]);
             }
+            $e.typed_slice_step($addr);
             $($f)*($e, $($bound),*)
         } else {
             $crate::abi::RetVal::from_ret($e.call($addr, &$crate::args![$($bound),*]))
@@ -734,13 +753,14 @@ mod tests {
         static CALLS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
     }
 
-    /// Records every call by address with no per-call diagnostic on: a used-up slice asks the hook
-    /// at each call, on [`Engine::call`]'s fast path.
+    /// Records every step of the time slice with no per-call diagnostic on: a used-up slice asks the
+    /// hook at each call by address, on [`Engine::call`]'s fast path, and at each direct call
+    /// ([`Engine::typed_slice_step`]).
     fn record_call(_: &mut Engine, addr: u32) {
         CALLS.with(|c| c.borrow_mut().push(addr));
     }
 
-    /// What one engine does: (the answer, the calls by address in order, the words logged).
+    /// What one engine does: (the answer, the slice's steps in order, the words logged).
     fn observe(e: &mut Engine) -> (u32, Vec<u32>, Vec<(u32, Vec<u32>)>) {
         CALLS.with(|c| c.borrow_mut().clear());
         e.slice_hook = Some(record_call);
@@ -757,7 +777,8 @@ mod tests {
     /// The acceptance test of the seam: with no family, or the family off, a caller that goes
     /// through `typed_call!` makes the same calls in the same order with the same words as the
     /// same caller written with `e.call`. The family on (direct) shows the test can see a
-    /// difference.
+    /// difference, in the answer and the words; its direct call still steps the time slice where the
+    /// call by address did, so the stepped threads hand over at the same points.
     #[test]
     fn with_no_family_or_off_the_same_calls_in_the_same_order() {
         let want = observe(&mut engine(plain()));
@@ -780,17 +801,35 @@ mod tests {
             assert_eq!(observe(&mut off), want, "{spec:?}");
         }
 
-        // On: the typed answer, and the leaf is no longer a call.
+        // On: the typed answer; the leaf is a Rust call, which steps the slice at its address as the
+        // call by address did.
         let mut on = engine(typed());
         apply_families(&mut on, &[&STAND_IN], Some("stand_in"));
         let (answer, calls, log) = observe(&mut on);
         assert_eq!(answer, 1005 + 2010);
-        assert_eq!(calls, [CALLER, OTHER]);
+        assert_eq!(calls, [CALLER, LEAF, OTHER]);
         // With the log on it is a call again, to the typed version: every tool sees it.
         assert_eq!(
             log,
             [(CALLER, vec![5]), (LEAF, vec![5]), (OTHER, vec![1005]),]
         );
+    }
+
+    /// A direct call counts the time slice down as the call by address does: the caller with the
+    /// family on leaves the same slice as with it off (three calls: the caller, the leaf, the other).
+    #[test]
+    fn a_direct_call_counts_the_slice_as_a_call_by_address_does() {
+        fn no_switch(_: &mut Engine, _: u32) {}
+        let left = |spec: Option<&str>| {
+            let mut e = engine(typed());
+            apply_families(&mut e, &[&STAND_IN], spec);
+            e.slice_hook = Some(no_switch);
+            e.slice_left = 100;
+            e.call(CALLER, &[5]);
+            e.slice_left
+        };
+        assert_eq!(left(Some("off")), 97);
+        assert_eq!(left(Some("stand_in")), 97);
     }
 
     /// Which families are past their gate, and so on with no switch: `leaves` since G1 (2026-11-06), the rest

@@ -480,7 +480,8 @@ pub(crate) fn ensure_main(e: &mut Engine) {
 /// The game threads as one line (a diagnostic): each thread's id, start, run state (a sleeper's
 /// wake time from now, in ms), suspend count when not 0, and how many turns it has had.
 pub fn describe(e: &mut Engine) -> String {
-    let now = e.clock_now_us();
+    // A peek: a diagnostic must not move a repeatable run's clock (each reading does).
+    let now = e.clock_peek_us();
     e.kernel
         .threads
         .list
@@ -1645,5 +1646,18 @@ mod main_thread_tests {
             panic!("a stop");
         };
         assert!(why.contains("00abcdef"), "{why}");
+    }
+
+    /// A diagnostic must not move a repeatable run's clock (each reading moves it 1 us): `describe`,
+    /// which `NV_MOVE_THREADS` prints at each status line (every 5 s of wall time, so at frames that
+    /// differ between runs), peeks at the clock.
+    #[test]
+    fn describe_leaves_a_repeatable_clock_where_it_was() {
+        let mut e = Engine::new();
+        e.start_repeatable_clock();
+        let before = e.clock_peek_us();
+        let _ = describe(&mut e);
+        let _ = describe(&mut e);
+        assert_eq!(e.clock_peek_us(), before);
     }
 }
