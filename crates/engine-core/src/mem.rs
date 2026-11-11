@@ -812,26 +812,35 @@ const FREED_WORDS: u32 = HEAP_END;
 fn moved_note(a: u32) -> String {
     use crate::typed::moved;
     if moved::is_handle(a) {
-        return " (a stage-2 slab handle: a moved object reached by untyped code)".into();
+        return " (stage 2's slab range: if a family is moved, a moved object reached by untyped \
+                code)"
+            .into();
     }
     if moved::is_token(a) {
-        return " (a stage-2 buffer token: a moved array reached by untyped code)".into();
+        return " (stage 2's buffer tokens: if a family is moved, a moved array reached by \
+                untyped code)"
+            .into();
     }
     if moved::is_stub(a) {
-        return " (a stage-2 stub page that was never handed out)".into();
+        return " (stage 2's stub range: if a family is moved, a stub page never handed out)"
+            .into();
     }
     if a >= moved::POISON_BASE {
         return match moved::poison_parts(a & !3) {
             Some((family, field)) => format!(
-                " (stage 2's poison: a moved field of family {family}, +{field:x} or near it, \
-                 followed as a pointer by untyped code)"
+                " (the last 64 KB, which nothing maps: if a family is moved, stage 2's poison of \
+                 family {family}'s field +{field:x} or near it, followed as a pointer by untyped \
+                 code)"
             ),
             None => " (the last 64 KB, which nothing maps)".into(),
         };
     }
     let freed = (a & 0x0fff_ffff) << 4;
     if a >= FREED_WORDS && moved::is_handle(freed) {
-        return format!(" (a pointer read from a freed moved object, at or below {freed:08x})");
+        return format!(
+            " (if a family is moved: a pointer read from a freed moved object, at or below \
+             {freed:08x})"
+        );
     }
     String::new()
 }

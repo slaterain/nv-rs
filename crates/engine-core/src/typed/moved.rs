@@ -413,6 +413,7 @@ impl Slab {
         while a.quarantine_bytes > SLAB_QUARANTINE {
             let (q, size) = a.quarantine.pop_front().expect("bytes wait");
             a.quarantine_bytes -= u64::from(size);
+            self.check_freed(q, size);
             a.free.entry(size).or_default().push(q);
         }
         if let Some(row) = a.census.get_mut(&(block.family, block.tag)) {
@@ -421,6 +422,23 @@ impl Slab {
             row.2 -= u64::from(block.shadow != 0);
         }
         block
+    }
+
+    /// A freed block leaving the quarantine: every word still the freed word it was filled with, or
+    /// the run stops naming the first one written since (a stale handle's store, which the freed words
+    /// alone would not show).
+    fn check_freed(&self, h: u32, size: u32) {
+        let freed = crate::mem::freed_word(h);
+        for w in (h..h + size).step_by(4) {
+            let now = self.load(w);
+            if now != freed {
+                panic!(
+                    "moved object: the freed block {h:08x} was written after its free: +{:x} holds \
+                     {now:08x}, not the freed word {freed:08x}",
+                    w - h
+                );
+            }
+        }
     }
 
     /// The live block that starts at `h`.
@@ -653,6 +671,11 @@ pub const RECLAIM_AT: u64 = 64 << 20;
 /// Big arrays moved out of the game's heap ([module documentation](self)): a buffer of host bytes
 /// behind a start-only token in [`TOKEN_RANGE`]. A typed function reads and writes it by token and
 /// offset ([`Buffers::read`], [`Buffers::write`]); no 32-bit address of a place inside it exists.
+///
+/// Who may read or write a buffer: the game threads and the render helpers only, the threads the thread
+/// host's barrier counts. A host thread outside the barrier (the Direct3D 9 stream's render thread, the
+/// sound mixer, the save copy-out) never may: a freed buffer's bytes go back to the host at the barrier
+/// ([`Buffers::reclaim`]), which such a thread would not wait for.
 pub struct Buffers {
     table: Chunks<BufferEntry>,
     alloc: Mutex<TokenAlloc>,
@@ -905,7 +928,7 @@ impl Dual {
     pub fn add(&self, guest: u32, len: u32, handle: u32) {
         let mut m = lock(&self.mirror);
         let end = guest.saturating_add(len);
-        debug_assert!(
+        assert!(
             m.range(..end)
                 .next_back()
                 .map_or(true, |(&s, &(l, _))| s.saturating_add(l) <= guest),
@@ -1005,10 +1028,12 @@ pub enum Store {
     /// Guest objects the truth; each block the family allocates mirrored in the slab, every access
     /// made on both and compared. Game threads stay stepped meanwhile and the render helpers do not
     /// fork (`real_threads`), so one access at a time changes the guest word and then its mirror.
-    /// For the same reason the `by_address` call a store method makes in this form (the family's
-    /// compare-and-swap, interlocked add, allocator, copy) must never reach a wait: a thread switch
-    /// between the guest word and its mirror would let another thread's access in between, and
-    /// the two would then differ in order alone.
+    /// For the same reason a store method in this form runs the `by_address` call that makes the
+    /// guest effect (the family's compare-and-swap, interlocked add, allocator, copy) and its mirror's
+    /// part in one turn of the stepped host (`one_turn`): a turn may otherwise end at any call
+    /// (a slice's end, its hard cap, a wake delay), and another thread's access between the guest
+    /// word and its mirror would make them differ in order alone. The call must still reach no
+    /// wait (a blocking call would hand the turn on all the same).
     Dual {
         moved: &'static Moved,
         family: FamilyId,
@@ -1048,6 +1073,21 @@ impl std::fmt::Debug for Store {
             } => write!(f, "Moved({}, shadows {shadows})", family.number()),
         }
     }
+}
+
+/// Runs `f` with the engine's time-slice hook taken out, as `real_threads::fork` and the host's
+/// thread-races row do around their locked calls: under the stepped host no turn ends inside (a
+/// slice's end, its hard cap and the wake delay after a signal all come through that hook, at any
+/// call). The dual store runs both halves of an access in it, the guest effect (a call by address)
+/// and the mirror's, so no other thread's access comes between them. A wake asked for meanwhile sets
+/// the hook itself; it is then kept.
+fn one_turn<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
+    let hook = e.slice_hook.take();
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(e)));
+    if e.slice_hook.is_none() {
+        e.slice_hook = hook;
+    }
+    r.unwrap_or_else(|stop| std::panic::resume_unwind(stop))
 }
 
 impl Store {
@@ -1154,14 +1194,18 @@ impl Store {
     ) -> bool {
         match self {
             Store::Guest => by_address(e),
-            Store::Moved { moved, .. } => {
+            Store::Moved { moved, family, .. } => {
                 if is_handle(a) {
                     moved.slab.cas(a, expected, new)
                 } else {
+                    let w = e.mem.u32(a);
+                    if w >= POISON_BASE {
+                        poison_read(family, a, w);
+                    }
                     by_address(e)
                 }
             }
-            Store::Dual { moved, family } => {
+            Store::Dual { moved, family } => one_turn(e, |e| {
                 let done = by_address(e);
                 if let Some(m) = moved.dual.mirror_of(a) {
                     let d = &moved.dual;
@@ -1169,7 +1213,7 @@ impl Store {
                     d.check_bool(family, a, done, seen, e.call_stack.last().copied());
                 }
                 done
-            }
+            }),
         }
     }
 
@@ -1186,14 +1230,18 @@ impl Store {
     ) -> u32 {
         match self {
             Store::Guest => by_address(e),
-            Store::Moved { moved, .. } => {
+            Store::Moved { moved, family, .. } => {
                 if is_handle(a) {
                     moved.slab.add(a, v)
                 } else {
+                    let w = e.mem.u32(a);
+                    if w >= POISON_BASE {
+                        poison_read(family, a, w);
+                    }
                     by_address(e)
                 }
             }
-            Store::Dual { moved, family } => {
+            Store::Dual { moved, family } => one_turn(e, |e| {
                 let done = by_address(e);
                 if let Some(m) = moved.dual.mirror_of(a) {
                     let seen = moved.slab.add(m, v);
@@ -1202,7 +1250,7 @@ impl Store {
                         .check(family, a, done, seen, e.call_stack.last().copied());
                 }
                 done
-            }
+            }),
         }
     }
 
@@ -1242,10 +1290,10 @@ impl Store {
                     self.store(e, to + 4 * i, w);
                 }
             }
-            Store::Dual { .. } => {
+            Store::Dual { .. } => one_turn(e, |e| {
                 by_address(e);
                 self.resync(e, to, words);
-            }
+            }),
         }
     }
 
@@ -1263,7 +1311,7 @@ impl Store {
     ) -> u32 {
         match self {
             Store::Guest => by_address(e),
-            Store::Dual { moved, family } => {
+            Store::Dual { moved, family } => one_turn(e, |e| {
                 let g = by_address(e);
                 if g != 0 {
                     let h = moved
@@ -1277,7 +1325,7 @@ impl Store {
                     moved.dual.add(g, size, h);
                 }
                 g
-            }
+            }),
             Store::Moved {
                 moved,
                 family,
@@ -1318,12 +1366,12 @@ impl Store {
                     by_address(e, a)
                 }
             }
-            Store::Dual { moved, .. } => {
+            Store::Dual { moved, .. } => one_turn(e, |e| {
                 if let Some(h) = moved.dual.remove(a) {
                     moved.slab.free(h);
                 }
                 by_address(e, a)
-            }
+            }),
         }
     }
 }
@@ -2117,7 +2165,7 @@ mod tests {
         }))
         .expect_err("a handle is no guest memory");
         let why = why.downcast_ref::<String>().cloned().unwrap_or_default();
-        assert!(why.contains("slab handle"), "{why}");
+        assert!(why.contains("slab range"), "{why}");
     }
 
     /// Slab handles and tokens are never mapped as guest memory; stub pages are.
@@ -2253,8 +2301,74 @@ mod tests {
         assert!(why.contains("+8") && why.contains("00001234"), "{why}");
     }
 
-    /// Mirrored ranges never overlap: a block mirrored inside another stops a debug build.
-    #[cfg(debug_assertions)]
+    /// A stale handle's store into a freed block is caught when the block leaves the quarantine.
+    #[test]
+    fn a_store_into_a_freed_block_stops_when_it_leaves_the_quarantine() {
+        let slab = Slab::new();
+        let stale = slab.alloc(16, TOY, NODE_TAG, 0).expect("room");
+        slab.free(stale);
+        slab.store(stale + 8, 0x1234);
+        let big = u32::try_from(SLAB_QUARANTINE).expect("a word");
+        let other = slab.alloc(big, TOY, NODE_TAG, 0).expect("room");
+        let why = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slab.free(other)))
+            .expect_err("the stale store shows");
+        let why = why.downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(
+            why.contains("written after its free") && why.contains("+8"),
+            "{why}"
+        );
+    }
+
+    /// The moved store's compare-and-swap and interlocked add stop, as its load does, on a K1
+    /// object's moved field reached without `K1::place` (its poison).
+    #[test]
+    fn cas_and_add_stop_on_the_poison_too() {
+        let mut e = engine("toy:moved");
+        let toy = toy_new(&mut e);
+        let s = store_of(&e, toy);
+        let at = toy + HEAD;
+        let cas = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            s.cas(&mut e, at, 0, 1, |_| true)
+        }));
+        let why = cas.expect_err("cas on the poison");
+        let why = why.downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(why.contains("without K1::place"), "{why}");
+        let add =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.add(&mut e, at, 1, |_| 0)));
+        assert!(add.is_err(), "add on the poison");
+    }
+
+    /// The dual store runs an access's two halves in one turn: the time-slice hook is out while the
+    /// call by address runs, and back after.
+    #[test]
+    fn the_dual_store_keeps_both_halves_in_one_turn() {
+        fn hook(_: &mut Engine, _: u32) {}
+        let mut e = engine("toy:dual");
+        let s = e.typed_store(TOY);
+        let a = s.alloc(&mut e, 8, NODE_TAG, |e| e.call(NEW, &[8]).u32());
+        e.slice_hook = Some(hook);
+        let done = s.cas(&mut e, a, 0, 5, |e| {
+            assert!(e.slice_hook.is_none(), "no turn ends between the halves");
+            e.mem.set_u32(a, 5);
+            true
+        });
+        assert!(done && e.slice_hook.is_some());
+        let n = s.add(&mut e, a, 1, |e| {
+            assert!(e.slice_hook.is_none());
+            e.mem.set_u32(a, 6);
+            6
+        });
+        assert_eq!(n, 6);
+        s.free(&mut e, a, |e, b| {
+            assert!(e.slice_hook.is_none());
+            e.mem.free(b);
+        });
+        assert!(e.slice_hook.is_some());
+        assert_eq!(e.moved().expect("made").dual.counts(TOY).1, 0);
+    }
+
+    /// Mirrored ranges never overlap: a block mirrored inside another stops the run (release builds
+    /// too: dual runs use them).
     #[test]
     fn mirrored_blocks_never_overlap() {
         let d = Dual::default();
