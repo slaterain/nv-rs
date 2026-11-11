@@ -120,12 +120,23 @@ pub fn float_constants_read(p: &Program) -> u32 {
     n.min(FLOAT_CONSTANTS)
 }
 
-/// The binding of sampler register `n`'s texture in group 1 (its sampler is the next one):
-/// pixel samplers from 0, vertex samplers from 32.
+/// The binding of sampler register `n`'s texture as the device keys a pair's samplers (its
+/// sampler is the next one): pixel samplers from 0, vertex samplers from 32. In its stage's
+/// own group ([`sampler_group`]) the binding is this one less the stage's first (`b % 32`).
 pub fn texture_binding(stage: Stage, n: u32) -> u32 {
     match stage {
         Stage::Pixel => 2 * n,
         Stage::Vertex => 32 + 2 * n,
+    }
+}
+
+/// The bind group of a stage's textures and samplers: the pixel shader's 1, the vertex
+/// shader's 2, each numbered from 0 within it. A module's layout then does not depend on what
+/// its partner samples (FAST-LINK step 1A: a library per shader).
+pub fn sampler_group(stage: Stage) -> u32 {
+    match stage {
+        Stage::Pixel => 1,
+        Stage::Vertex => 2,
     }
 }
 
@@ -573,10 +584,11 @@ impl Gen<'_> {
                 Dim::Cube => "texture_cube<f32>",
                 Dim::D3 => "texture_3d<f32>",
             };
-            let b = texture_binding(self.p.stage, n);
+            let g = sampler_group(self.p.stage);
+            let b = texture_binding(self.p.stage, n) % 32;
             let _ = writeln!(
                 self.out,
-                "@group(1) @binding({b}) var t{n}: {ty};\n@group(1) @binding({}) var s{n}: sampler;",
+                "@group({g}) @binding({b}) var t{n}: {ty};\n@group({g}) @binding({}) var s{n}: sampler;",
                 b + 1
             );
         }

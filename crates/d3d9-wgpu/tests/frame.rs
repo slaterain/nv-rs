@@ -656,6 +656,105 @@ fn declarations_of_other_kinds_or_a_missing_element_get_their_own_modules() {
     );
 }
 
+/// Each stage's samplers in a bind group of its own (the pixel shader's 1, the vertex shader's
+/// 2): a vertex shader sampling vertex texture 0 (`texldl`, a green texel) feeds a pixel shader
+/// that samples nothing, and the target shows the green; then a pixel shader that also samples
+/// its texture 0 (a red texel) adds the two: yellow.
+#[test]
+fn each_stage_samples_from_its_own_group() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    const VS_TEX: u32 = 0x1600;
+    const PS_TEX: u32 = 0x1602;
+    for (texture, bgra) in [(VS_TEX, [0u8, 255, 0, 255]), (PS_TEX, [0, 0, 255, 255])] {
+        let level = texture + 1;
+        let levels = words(&[level]);
+        g.run(Cmd::CreateTexture {
+            device: DEVICE,
+            texture,
+            levels: Data::Bytes(&levels),
+            width: 1,
+            height: 1,
+            usage: 0,
+            format: A8R8G8B8,
+            pool: 1,
+        });
+        g.run(Cmd::UploadSurface {
+            surface: level,
+            row: 4,
+            rows: 1,
+            data: Data::Bytes(&bgra),
+        });
+    }
+    // D3DVERTEXTEXTURESAMPLER0 and pixel sampler 0.
+    for (sampler, texture) in [(257, VS_TEX), (0, PS_TEX)] {
+        g.run(Cmd::SetTexture {
+            device: DEVICE,
+            sampler,
+            texture,
+        });
+    }
+    // vs_3_0: dcl_position v0; dcl_position o0; dcl_texcoord0 o1; dcl_2d s0; mov o0, v0;
+    // texldl o1, c0, s0 (c0: the texel's centre, level 0).
+    let mut vs = vec![0xFFFE_0300];
+    vs.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    vs.extend(ins(31, &[0x8000_0000, 0xE00F_0000]));
+    vs.extend(ins(31, &[0x8000_0005, 0xE00F_0001]));
+    vs.extend(ins(31, &[0x9000_0000, 0xA00F_0800]));
+    vs.extend(ins(1, &[0xE00F_0000, 0x90E4_0000]));
+    vs.extend(ins(95, &[0xE00F_0001, 0xA0E4_0000, 0xA0E4_0800]));
+    vs.push(END);
+    let regs = floats(&[0.5, 0.5, 0.0, 0.0]);
+    g.run(Cmd::SetConstants {
+        device: DEVICE,
+        kind: 0,
+        start: 0,
+        count: 1,
+        data: Data::Bytes(&regs),
+    });
+    // ps_3_0: dcl_texcoord0 v0; mov oC0, v0.
+    let mut ps_plain = vec![0xFFFF_0300];
+    ps_plain.extend(ins(31, &[0x8000_0005, 0x900F_0000]));
+    ps_plain.extend(ins(1, &[0x800F_0800, 0x90E4_0000]));
+    ps_plain.push(END);
+    // ps_3_0: dcl_texcoord0 v0; dcl_2d s0; texld r0, v0, s0; add oC0, r0, v0.
+    let mut ps_sampling = vec![0xFFFF_0300];
+    ps_sampling.extend(ins(31, &[0x8000_0005, 0x900F_0000]));
+    ps_sampling.extend(ins(31, &[0x9000_0000, 0xA00F_0800]));
+    ps_sampling.extend(ins(66, &[0x800F_0000, 0x90E4_0000, 0xA0E4_0800]));
+    ps_sampling.extend(ins(2, &[0x800F_0800, 0x80E4_0000, 0x90E4_0000]));
+    ps_sampling.push(END);
+    for (shader, pixel, tokens) in [
+        (VS + 2, false, vs),
+        (PS + 5, true, ps_plain),
+        (PS + 6, true, ps_sampling),
+    ] {
+        let t = words(&tokens);
+        g.run(Cmd::CreateShader {
+            device: DEVICE,
+            shader,
+            pixel,
+            tokens: Data::Bytes(&t),
+        });
+    }
+    g.run(Cmd::SetShader {
+        device: DEVICE,
+        pixel: false,
+        shader: VS + 2,
+    });
+    for (ps, want) in [(PS + 5, [0, 255, 0, 255]), (PS + 6, [0, 255, 255, 255])] {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel: true,
+            shader: ps,
+        });
+        g.clear(3, 0, 1.0);
+        g.cover(0.5);
+        assert_eq!(g.pixels(), vec![want; 16], "pixel shader {ps:#x}");
+    }
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+}
+
 /// Fixed varying locations: one vertex shader writing TEXCOORD0 (red) and TEXCOORD1 (green)
 /// serves a pixel shader reading TEXCOORD0 and one reading TEXCOORD1 with one module, each pair
 /// drawing its own colour; a pixel shader reading TEXCOORD2, which the vertex shader does not

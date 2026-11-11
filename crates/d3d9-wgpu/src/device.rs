@@ -524,7 +524,8 @@ impl Listed {
 struct PassBinds {
     pipeline: Option<wgpu::RenderPipeline>,
     blocks: Option<(u32, u32)>,
-    group: Option<wgpu::BindGroup>,
+    /// The pixel shader's sampler group (bind group 1) and the vertex shader's (2).
+    groups: [Option<wgpu::BindGroup>; 2],
     viewport: Option<[u32; 6]>,
     scissor: Option<(u32, u32, u32, u32)>,
     stencil: Option<u32>,
@@ -654,17 +655,18 @@ pub struct Device {
     blocks: (u32, u32),
     /// The float constants each stage's last written block carries.
     block_fregs: [u32; 2],
+    /// A pair's sampler layouts by its samplers' key ([`Device::sampler_layout`]): the pixel
+    /// shader's group and the vertex shader's, and the pipeline layout of the two.
     #[allow(clippy::type_complexity)]
-    sampler_layouts: Map<Vec<(u32, u8, bool)>, (wgpu::BindGroupLayout, wgpu::PipelineLayout)>,
-    pipelines: Map<PipeKey, Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout)>>,
-    /// The last draw's pipeline key and pipeline, its bind group's key and group, its vertex
-    /// link; the vertex links by shader and declaration; what the open pass was given.
-    #[allow(clippy::type_complexity)]
-    last_pipeline: Option<(
-        PipeKey,
-        Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
-    )>,
-    last_group: (GroupKey, Option<wgpu::BindGroup>),
+    sampler_layouts: Map<Vec<(u32, u8, bool)>, ([wgpu::BindGroupLayout; 2], wgpu::PipelineLayout)>,
+    pipelines: Map<PipeKey, Option<Pipe>>,
+    /// The last draw's pipeline key and pipeline, each stage's sampler group's key and group
+    /// (the pixel shader's first), its vertex link; the vertex links by shader and declaration;
+    /// what the open pass was given.
+    last_pipeline: Option<(PipeKey, Option<Pipe>)>,
+    last_groups: [(GroupKey, Option<wgpu::BindGroup>); 2],
+    /// Each stage's empty sampler group (a stage without samplers).
+    empty_groups: [Option<wgpu::BindGroup>; 2],
     last_link: Option<((u64, u64), Arc<VertexLink>)>,
     vertex_links: Map<(u64, u64), Arc<VertexLink>>,
     binds: PassBinds,
@@ -1042,7 +1044,8 @@ impl Device {
             sampler_layouts: Map::default(),
             pipelines: Map::default(),
             last_pipeline: None,
-            last_group: (Vec::new(), None),
+            last_groups: [(Vec::new(), None), (Vec::new(), None)],
+            empty_groups: [None, None],
             last_link: None,
             vertex_links: Map::default(),
             binds: PassBinds::default(),
@@ -1580,8 +1583,10 @@ impl Device {
         let gone = std::mem::take(&mut self.destroyed);
         let holds = |k: &GroupKey| k.iter().any(|e| gone.contains(&e.2));
         self.groups.retain(|k, _| !holds(k));
-        if holds(&self.last_group.0) {
-            self.last_group = (Vec::new(), None);
+        for last in &mut self.last_groups {
+            if holds(&last.0) {
+                *last = (Vec::new(), None);
+            }
         }
         self.depth_parts.retain(|k, _| !gone.contains(&k.0));
     }
@@ -2821,52 +2826,137 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         })
     }
 
+    /// The bind group of one stage's samplers (`k`: 0 the pixel shader's, 1 the vertex
+    /// shader's) as `key` and `samplers` give them: the last draw's again, else the cache's, else
+    /// a new one in `layout`, each binding numbered within the stage's group.
+    fn stage_group(
+        &mut self,
+        k: usize,
+        key: &[(u32, u8, u64, Option<SamplerKey>)],
+        samplers: &[((u32, u8, bool), usize)],
+        copies: &[Option<Arc<Tex>>; 20],
+        layout: &wgpu::BindGroupLayout,
+    ) -> wgpu::BindGroup {
+        if let (last, Some(g)) = &self.last_groups[k] {
+            if last.as_slice() == key {
+                return g.clone();
+            }
+        }
+        let group = if key.is_empty() {
+            // A stage without samplers (most vertex shaders): one empty group, made once.
+            if self.empty_groups[k].is_none() {
+                self.empty_groups[k] =
+                    Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: None,
+                        layout,
+                        entries: &[],
+                    }));
+            }
+            self.empty_groups[k].clone().expect("made above")
+        } else {
+            if !self.groups.contains_key(key) {
+                if self.groups.len() > 8192 {
+                    self.groups.clear();
+                }
+                let mut views = Vec::new();
+                let mut samps = Vec::new();
+                for &((binding, dim, filterable), slot) in samplers {
+                    let view = match copies[slot].as_ref().or(self.st.textures[slot].as_ref()) {
+                        Some(t) if (dim == 1) == t.cube => t.view.clone(),
+                        _ => self.dummy[dim as usize].clone(),
+                    };
+                    let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
+                    views.push((binding % 32, view));
+                    samps.push((binding % 32 + 1, self.sampler(sk)));
+                }
+                let mut entries = Vec::new();
+                for (b, v) in &views {
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: *b,
+                        resource: wgpu::BindingResource::TextureView(v),
+                    });
+                }
+                for (b, s) in &samps {
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: *b,
+                        resource: wgpu::BindingResource::Sampler(s),
+                    });
+                }
+                let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout,
+                    entries: &entries,
+                });
+                self.groups.insert(key.to_vec(), group);
+            }
+            self.groups[key].clone()
+        };
+        self.last_groups[k].0.clear();
+        self.last_groups[k].0.extend_from_slice(key);
+        self.last_groups[k].1 = Some(group.clone());
+        group
+    }
+
+    /// The pipeline layout of a pair whose samplers are `key` ([`Device::sampler_bindings`]):
+    /// the registers' group (0), the pixel shader's samplers' (1) and the vertex shader's (2),
+    /// each stage's numbered from 0 in its own group ([`wgsl::sampler_group`]).
     fn sampler_layout(&mut self, key: &[(u32, u8, bool)]) -> wgpu::PipelineLayout {
         if let Some((_, p)) = self.sampler_layouts.get(key) {
             return p.clone();
         }
-        let mut entries = Vec::new();
-        for &(binding, dim, filterable) in key {
-            entries.push(wgpu::BindGroupLayoutEntry {
-                binding,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable },
-                    view_dimension: match dim {
-                        1 => wgpu::TextureViewDimension::Cube,
-                        2 => wgpu::TextureViewDimension::D3,
-                        _ => wgpu::TextureViewDimension::D2,
-                    },
-                    multisampled: false,
-                },
-                count: None,
-            });
-            entries.push(wgpu::BindGroupLayoutEntry {
-                binding: binding + 1,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Sampler(if filterable {
-                    wgpu::SamplerBindingType::Filtering
+        let layouts = [false, true].map(|vertex| {
+            let mut entries = Vec::new();
+            for &(binding, dim, filterable) in key.iter().filter(|k| (k.0 >= 32) == vertex) {
+                let binding = binding % 32;
+                let visibility = if vertex {
+                    wgpu::ShaderStages::VERTEX
                 } else {
-                    wgpu::SamplerBindingType::NonFiltering
-                }),
-                count: None,
-            });
-        }
-        let layout = self
-            .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: None,
-                entries: &entries,
-            });
+                    wgpu::ShaderStages::FRAGMENT
+                };
+                entries.push(wgpu::BindGroupLayoutEntry {
+                    binding,
+                    visibility,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable },
+                        view_dimension: match dim {
+                            1 => wgpu::TextureViewDimension::Cube,
+                            2 => wgpu::TextureViewDimension::D3,
+                            _ => wgpu::TextureViewDimension::D2,
+                        },
+                        multisampled: false,
+                    },
+                    count: None,
+                });
+                entries.push(wgpu::BindGroupLayoutEntry {
+                    binding: binding + 1,
+                    visibility,
+                    ty: wgpu::BindingType::Sampler(if filterable {
+                        wgpu::SamplerBindingType::Filtering
+                    } else {
+                        wgpu::SamplerBindingType::NonFiltering
+                    }),
+                    count: None,
+                });
+            }
+            self.device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: None,
+                    entries: &entries,
+                })
+        });
         let pipeline_layout = self
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
-                bind_group_layouts: &[Some(&self.uniform_layout), Some(&layout)],
+                bind_group_layouts: &[
+                    Some(&self.uniform_layout),
+                    Some(&layouts[0]),
+                    Some(&layouts[1]),
+                ],
                 immediate_size: 0,
             });
         self.sampler_layouts
-            .insert(key.to_vec(), (layout, pipeline_layout.clone()));
+            .insert(key.to_vec(), (layouts, pipeline_layout.clone()));
         pipeline_layout
     }
 
@@ -3241,7 +3331,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 p
             }
         };
-        let Some((pipeline, group_layout)) = made else {
+        let Some((pipeline, group_layouts)) = made else {
             self.skipped += 1;
             return;
         };
@@ -3272,51 +3362,28 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             *g = (binding, dim, tex_id, Some(sk));
         }
         let group_key = &group_key[..samplers.len()];
-        let group = match &self.last_group {
-            (k, Some(g)) if k.as_slice() == group_key => g.clone(),
-            _ => {
-                if !self.groups.contains_key(group_key) {
-                    if self.groups.len() > 8192 {
-                        self.groups.clear();
-                    }
-                    let mut views = Vec::new();
-                    let mut samps = Vec::new();
-                    for &((binding, dim, filterable), slot) in samplers {
-                        let view = match copies[slot].as_ref().or(self.st.textures[slot].as_ref()) {
-                            Some(t) if (dim == 1) == t.cube => t.view.clone(),
-                            _ => self.dummy[dim as usize].clone(),
-                        };
-                        let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
-                        views.push((binding, view));
-                        samps.push((binding + 1, self.sampler(sk)));
-                    }
-                    let mut entries = Vec::new();
-                    for (b, v) in &views {
-                        entries.push(wgpu::BindGroupEntry {
-                            binding: *b,
-                            resource: wgpu::BindingResource::TextureView(v),
-                        });
-                    }
-                    for (b, s) in &samps {
-                        entries.push(wgpu::BindGroupEntry {
-                            binding: *b,
-                            resource: wgpu::BindingResource::Sampler(s),
-                        });
-                    }
-                    let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: None,
-                        layout: &group_layout,
-                        entries: &entries,
-                    });
-                    self.groups.insert(group_key.to_vec(), group);
-                }
-                let group = self.groups[group_key].clone();
-                self.last_group.0.clear();
-                self.last_group.0.extend_from_slice(group_key);
-                self.last_group.1 = Some(group.clone());
-                group
-            }
-        };
+        // Each stage's own group ([`wgsl::sampler_group`]): the vertex shader's samplers come
+        // first in the pair's list ([`Device::sampler_bindings`]).
+        let vertex = samplers
+            .iter()
+            .take_while(|((b, _, _), _)| *b >= 32)
+            .count();
+        let groups = [
+            self.stage_group(
+                0,
+                &group_key[vertex..],
+                &samplers[vertex..],
+                &copies,
+                &group_layouts[0],
+            ),
+            self.stage_group(
+                1,
+                &group_key[..vertex],
+                &samplers[..vertex],
+                &copies,
+                &group_layouts[1],
+            ),
+        ];
         // Vertices from DrawPrimitiveUP go into the batch's ring.
         let up_offset = if let Some((bytes, _)) = up {
             if self.up.len() + bytes.len() > UP_RING as usize {
@@ -3449,9 +3516,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             pass.set_bind_group(0, &self.ring_group, &[blocks.0, blocks.1]);
             b.blocks = Some(blocks);
         }
-        if b.group.as_ref() != Some(&group) {
-            pass.set_bind_group(1, &group, &[]);
-            b.group = Some(group);
+        for (k, group) in groups.into_iter().enumerate() {
+            if b.groups[k].as_ref() != Some(&group) {
+                pass.set_bind_group(1 + k as u32, &group, &[]);
+                b.groups[k] = Some(group);
+            }
         }
         if b.viewport != Some(viewport) {
             let f = viewport.map(f32::from_bits);
@@ -3728,7 +3797,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         for ((key, j), b) in jobs.into_iter().zip(built) {
             match b {
                 Ok(p) => {
-                    self.pipelines.insert(key, Some((p, j.group_layout)));
+                    self.pipelines.insert(key, Some((p, j.group_layouts)));
                 }
                 Err(e) => {
                     refused += 1;
@@ -3883,7 +3952,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let vm = self.vs_modules.get(vkey)?.clone()?;
         let pm = self.ps_modules.get(pkey)?.clone()?;
         let layout = self.sampler_layout(samplers);
-        let group_layout = self.sampler_layouts[samplers].0.clone();
+        let group_layouts = self.sampler_layouts[samplers].0.clone();
         // One layout per stream slot up to the last used (a slot's index is its stream's number).
         let last = attributes
             .iter()
@@ -3947,7 +4016,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         );
         Some(PipelineJob {
             layout,
-            group_layout,
+            group_layouts,
             vm,
             pm,
             buffers,
@@ -3986,7 +4055,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         attributes: &[Vec<wgpu::VertexAttribute>; 8],
         topology: wgpu::PrimitiveTopology,
         samplers: &[(u32, u8, bool)],
-    ) -> Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout)> {
+    ) -> Option<Pipe> {
         self.made_on_draws += 1;
         let started = std::time::Instant::now();
         let (vkey, pkey, tasks) = self.module_tasks(key, vs, ps, inputs);
@@ -4013,7 +4082,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             );
         }
         match made {
-            Ok(p) => Some((p, job.group_layout)),
+            Ok(p) => Some((p, job.group_layouts)),
             Err(e) => {
                 self.warn(format!("a pipeline wgpu refuses: {e}"));
                 None
@@ -5772,6 +5841,10 @@ pub(crate) fn surface_for(
     Err("windows of other platforms come with the window layer's port".into())
 }
 
+/// A pipeline and the layouts of its two sampler groups (the pixel shader's, the vertex
+/// shader's).
+type Pipe = (wgpu::RenderPipeline, [wgpu::BindGroupLayout; 2]);
+
 /// A vertex module's cache key: the shader, the inputs its declaration gives, the varyings it
 /// writes (each at the centroid; [`Device::module_tasks`]), the clip code, whether at fixed
 /// locations.
@@ -5842,7 +5915,8 @@ struct ModuleTask {
 /// Everything a render pipeline is made from, owned, so worker threads can make it.
 struct PipelineJob {
     layout: wgpu::PipelineLayout,
-    group_layout: wgpu::BindGroupLayout,
+    /// The pixel shader's and the vertex shader's sampler group layouts.
+    group_layouts: [wgpu::BindGroupLayout; 2],
     vm: wgpu::ShaderModule,
     pm: wgpu::ShaderModule,
     /// Each stream slot up to the last used: its stride and attributes.
