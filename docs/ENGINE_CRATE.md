@@ -618,18 +618,28 @@ code is the same as before, instruction for instruction, apart from field offset
 by 48 bytes). The full path, taken on a cache miss or with a diagnostic on, gains one load and one
 branch while no family is on. A `typed_call!` with the flag set is one load and one test before the
 Rust call, in play and release builds, and the checks above exist only with debug assertions on. A
-direct call doesn't count against the thread host's time slice and isn't on `call_stack`.
+direct call steps the thread host's time slice as a call by address does (`Engine::typed_slice_step`:
+the slice counted down, or its hook run when it is used up), so the stepped threads of a repeatable
+run hand over where the calls by address put them; it isn't on `call_stack`. Until 2026-11-10 it
+didn't step the slice: the scene family's recorded run moved the AI and loader threads' turns and
+the heap with them. One difference stays: a callee a translation reaches with a plain Rust call
+while typed code calls it with `typed_call!` steps once more on the typed side (the dispatch
+family's plain callees `004019d0`, `00408860`, `00476930`, `00476980`, `004769c0`, `004f0000`,
+`004a3e90`, `00560e50`), which matters only to a comparison of dispatch itself on against off.
 
-The thread host keeps a count of calls by address (`Threads::calls`), and `NV_MOVE_THREADS` prints it
-with who ran when, per frame, beside the status line (`thread calls: N order: id:calls .. f ..`).
+The thread host keeps a count of the slice's steps (`Threads::calls`: calls by address and direct
+calls), and `NV_MOVE_THREADS` prints it with who ran when, per frame, beside the status line
+(`thread calls: N order: id:calls .. f ..`). The diagnostic only peeks at the clock: a reading would
+move a repeatable run's clock, and the status line comes every 5 s of wall time, at frames that
+differ between runs.
 
 **A risk for later.** The thread host hands over at calls by address: the time slice counts them and
 its hook runs at them. A typed loop that waits on guest memory for another game thread, making only
 direct calls or none, never reaches that hook, so it hangs where the translation handed off. Such
 a loop has to make a call by address, or the platform wait the exe makes, in each pass. With real
 threads it is also a correctness rule: guest memory is plain loads and stores (`mem.rs`, "Threads"),
-so without an opaque call in the loop the compiler may read the memory once and never again. The same
-count is why each batch of direct calls checks `WAKE_DELAY_CALLS` and the hand-offs per frame.
+so without an opaque call in the loop the compiler may read the memory once and never again. A direct
+call steps the slice but runs nothing else of a call by address, so this holds as before.
 
 Measured on 2026-11-06 (`spread_dispatch_speed`, 48,000 functions registered, 8,000 called, release
 build, the two builds alternating, 8 runs each):
