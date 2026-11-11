@@ -3453,8 +3453,16 @@ mod tests {
         let visible = |w: isize| unsafe { IsWindowVisible(HWND(w as *mut _)) }.as_bool();
         let style = |w: isize| unsafe { GetWindowLongW(HWND(w as *mut _), GWL_STYLE) } as u32;
         assert!(!visible(top) && !visible(child));
-        assert_eq!(style(top) & WS_VISIBLE.0, 0, "the top-level window never shown");
-        assert_ne!(style(child) & WS_VISIBLE.0, 0, "the child as the game made it");
+        assert_eq!(
+            style(top) & WS_VISIBLE.0,
+            0,
+            "the top-level window never shown"
+        );
+        assert_ne!(
+            style(child) & WS_VISIBLE.0,
+            0,
+            "the child as the game made it"
+        );
         let mut b = crate::d3d9backend::RealBackend::new();
         let device = 0x1000;
         let present = test_present();
@@ -3492,7 +3500,10 @@ mod tests {
             });
         }
         assert!(b.logged.is_empty(), "differing answers: {:?}", b.logged);
-        assert!(!visible(top) && !visible(child), "the device shows no window");
+        assert!(
+            !visible(top) && !visible(child),
+            "the device shows no window"
+        );
     }
 
     /// An F12 report's `log-start.txt`: the log's first bytes, cut back to a whole line.
