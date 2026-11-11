@@ -32,7 +32,7 @@ mod tee;
 pub mod wire;
 
 pub use cmd::{Backend, Cmd, Data, Handle, Native, Rect, Reply, Rows};
-pub use runner::{Settings, Stream};
+pub use runner::{Settings, Stream, IDLE_POLL};
 pub use tee::Tee;
 
 #[cfg(test)]

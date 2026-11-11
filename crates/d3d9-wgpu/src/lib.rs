@@ -13,6 +13,7 @@
 //! - `device`: resources, passes, pipelines, draws and `Present`.
 //! - `shot`: `NV_SHOT` captures numbered like the forwarding layer's.
 
+mod answers;
 mod cache;
 pub mod device;
 pub mod format;
@@ -29,6 +30,7 @@ pub fn save_pipeline_caches() {
     cache::save_all_now();
     device::save_lists_now();
 }
+pub use answers::{Answer, QueryAnswers};
 use d3d9_stream::{Backend, Cmd, Data, Handle, Reply};
 pub use device::{hardware_adapter, Output};
 
@@ -40,6 +42,8 @@ pub struct WgpuBackend {
     game_device: Handle,
     /// Where the driver's compiled pipelines are kept between runs ([`WgpuBackend::with_cache_dir`]).
     cache_dir: Option<std::path::PathBuf>,
+    /// Where occlusion counts are posted for the game's threads ([`WgpuBackend::with_answers`]).
+    answers: Option<std::sync::Arc<QueryAnswers>>,
 }
 
 impl WgpuBackend {
@@ -51,6 +55,7 @@ impl WgpuBackend {
             device: None,
             game_device: 0,
             cache_dir: None,
+            answers: None,
         }
     }
 
@@ -60,6 +65,22 @@ impl WgpuBackend {
     pub fn with_cache_dir(mut self, dir: std::path::PathBuf) -> Self {
         self.cache_dir = Some(dir);
         self
+    }
+
+    /// Posts each occlusion count to `answers` once the GPU has it, for the game's threads to
+    /// read without waiting for the render thread ([`QueryAnswers`]).
+    pub fn with_answers(mut self, answers: std::sync::Arc<QueryAnswers>) -> Self {
+        self.answer_to(answers);
+        self
+    }
+
+    /// [`WgpuBackend::with_answers`] on a backend that may have made its device already: the
+    /// queries made from now on are posted.
+    pub fn answer_to(&mut self, answers: std::sync::Arc<QueryAnswers>) {
+        if let Some(d) = self.device.as_mut() {
+            d.answers = Some(std::sync::Arc::clone(&answers));
+        }
+        self.answers = Some(answers);
     }
 
     /// The wgpu device, once the game made its own.
@@ -103,7 +124,8 @@ impl Backend for WgpuBackend {
                 *depth_stencil,
                 self.cache_dir.as_deref(),
             ) {
-                Ok(d) => {
+                Ok(mut d) => {
+                    d.answers = self.answers.clone();
                     self.device = Some(d);
                     self.game_device = *device;
                     // No D3DX side channel: the texture loader cannot use a wgpu device.
@@ -328,5 +350,11 @@ impl Backend for WgpuBackend {
             | Cmd::SetLod { .. } => {}
         }
         Reply::None
+    }
+
+    /// The awaited occlusion counts polled and posted ([`QueryAnswers`]); more turns while any is
+    /// still on the GPU.
+    fn idle(&mut self) -> bool {
+        self.device.as_mut().is_some_and(device::Device::idle)
     }
 }

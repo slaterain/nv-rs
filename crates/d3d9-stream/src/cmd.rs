@@ -617,10 +617,22 @@ impl fmt::Debug for Native {
 pub trait Backend: Send {
     /// Carries out `cmd`; a sync command's answer is its reply, any other's [`Reply::None`].
     fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply;
+
+    /// The threaded runner's render thread has no command to carry out: the backend's own work
+    /// while idle (the GPU polled for answers the game's threads read without waiting). Whether
+    /// it has more of it: the render thread then calls again after a short sleep
+    /// ([`crate::IDLE_POLL`]) instead of sleeping until the next command.
+    fn idle(&mut self) -> bool {
+        false
+    }
 }
 
 impl<B: Backend + ?Sized> Backend for Box<B> {
     fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
         (**self).execute(cmd)
+    }
+
+    fn idle(&mut self) -> bool {
+        (**self).idle()
     }
 }
