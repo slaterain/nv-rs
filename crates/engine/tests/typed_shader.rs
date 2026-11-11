@@ -5884,6 +5884,8 @@ fn pass_world(e: &mut Engine, states: &[(u32, u32)], mask: u8, pass_type: u32) -
     set(e, 0x011f_91e4, pass_type);
     // The shader's renderer (+0x18), which its world-view constants go through.
     set(e, w.shader + 0x18, w.renderer);
+    // The exe's 1.0 (a double, `01012070`) the set-ups and the land toggles add or take off.
+    e.mem.set_u64(0x0101_2070, 1.0f64.to_bits());
     PassW { d, pass }
 }
 
@@ -6407,7 +6409,6 @@ fn land_toggles() {
     .setup(|e, c| {
         let p = pass_world(e, &[], 0, 0);
         e.register(VT_FN + 0xec, slot_answer::<0xec>);
-        e.mem.set_u64(0x0101_2070, 1.0f64.to_bits());
         let vt = vtable(e, &[]);
         let geometry = obj(e, 0xc8, vt);
         let table = e.mem.alloc(4);
