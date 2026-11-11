@@ -618,8 +618,9 @@ impl Diff {
     ///
     /// That holds for memory at the start of every outgoing call (its other words still in the
     /// call's hash) and after the call, for a call's words and for the bytes behind its stack words.
-    /// ST0 compares within `n` ulps of an `f32` at its magnitude, so an x87 result held at a higher
-    /// precision passes against one rounded to a float. [`Report::tolerated`] counts the values that
+    /// ST0 compares within `n` ulps once both values are rounded to an `f32` (a difference the rounding
+    /// hides counts as one), so an x87 result held at a higher precision passes against one rounded to
+    /// a float. [`Report::tolerated`] counts the values that
     /// differed within the tolerance, [`Report::largest_ulps`] holds the largest difference.
     ///
     /// Logic and integers stay exact, so keep `n` small: an integer that reads as a float in range
@@ -756,7 +757,15 @@ impl Diff {
                 typed: b.ret,
             });
         }
-        compare_calls(a, b, ignored, plain, self.float_ulps, &mut tally, &mut found);
+        compare_calls(
+            a,
+            b,
+            ignored,
+            plain,
+            self.float_ulps,
+            &mut tally,
+            &mut found,
+        );
         if a.control_word != b.control_word {
             found(Found::ControlWord {
                 translation: a.control_word,
@@ -1075,8 +1084,9 @@ fn f32_ulps_apart(a: u32, b: u32) -> Option<u32> {
     u32::try_from((ordered(a) - ordered(b)).unsigned_abs()).ok()
 }
 
-/// How many `f32` ulps apart two ST0 values are, counted at the larger one's magnitude and rounded
-/// up; the special values as [`f32_ulps_apart`] has them.
+/// How many `f32` ulps apart two ST0 values are: each rounded to an `f32`, then counted as
+/// [`f32_ulps_apart`] counts the words, and a difference the rounding hides counted as one. The
+/// special values as there; a value an `f32` can't hold (it rounds to an infinity) is `None`.
 fn st0_ulps_apart(a: f64, b: f64) -> Option<u32> {
     if a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan()) {
         return Some(0);
@@ -1084,11 +1094,11 @@ fn st0_ulps_apart(a: f64, b: f64) -> Option<u32> {
     if a.is_nan() || b.is_nan() || a.is_infinite() || b.is_infinite() {
         return None;
     }
-    let larger = a.abs().max(b.abs());
-    // The binary exponent of an f32 of that magnitude; f32 denormals share the smallest normal's ulp.
-    let exponent = (((larger.to_bits() >> 52) & 0x7ff) as i32 - 1023).clamp(-126, 127);
-    let apart = ((a - b).abs() / 2f64.powi(exponent - 23)).ceil();
-    (apart <= f64::from(u32::MAX)).then_some(apart as u32)
+    let (x, y) = (a as f32, b as f32);
+    if x.is_infinite() || y.is_infinite() {
+        return None;
+    }
+    f32_ulps_apart(x.to_bits(), y.to_bits()).map(|apart| apart.max(1))
 }
 
 /// What [`Diff::float_ulps`] let through in one comparison.
@@ -1252,7 +1262,10 @@ fn seen_call(e: &Engine, addr: u32, words: &[u32], recording: &mut Recording) ->
     let (memory, floats) = if tolerant {
         memory_floats(e, stack, loose, &mut recording.first)
     } else {
-        (memory_hash(e, stack, recording.nan_payloads, loose), Vec::new())
+        (
+            memory_hash(e, stack, recording.nan_payloads, loose),
+            Vec::new(),
+        )
     };
     Seen {
         addr,
@@ -3311,7 +3324,8 @@ mod tests {
     /// differ.
     #[test]
     fn float_ulps_keeps_integers_and_pointers_exact() {
-        let same = |a: (u32, AbiFn), b: (u32, AbiFn)| float_diff(b, a).float_ulps(8).run().is_same();
+        let same =
+            |a: (u32, AbiFn), b: (u32, AbiFn)| float_diff(b, a).float_ulps(8).run().is_same();
         assert!(!same(
             crate::entry!(0x0040_2000, write_5(Ptr)),
             crate::entry!(0x0040_2000, write_6(Ptr))
@@ -3417,14 +3431,22 @@ mod tests {
         let epsilon = f64::from(f32::EPSILON);
         assert_eq!(st0_ulps_apart(1.0, 1.0), Some(0));
         assert_eq!(st0_ulps_apart(1.0, 1.0 + epsilon), Some(1));
-        // An x87 result held at a double's precision, half an ulp from the float.
+        // An x87 result held at a double's precision, half an ulp from the float (a difference the
+        // rounding hides counts as one).
         assert_eq!(st0_ulps_apart(1.0, 1.0 + epsilon / 2.0), Some(1));
         assert_eq!(st0_ulps_apart(1.0, 1.0 + 3.0 * epsilon), Some(3));
         assert_eq!(st0_ulps_apart(f64::NAN, -f64::NAN), Some(0));
         assert_eq!(st0_ulps_apart(f64::INFINITY, f64::from(f32::MAX)), None);
         let mut e = Engine::new_untyped();
         let heap = e.mem.alloc(0x10);
-        for float in [0, 0x8000_0000, 0x3f80_0000, 0xbf80_0000, 0x7fc0_0000, 0x7f80_0000] {
+        for float in [
+            0,
+            0x8000_0000,
+            0x3f80_0000,
+            0xbf80_0000,
+            0x7fc0_0000,
+            0x7f80_0000,
+        ] {
             assert!(reads_as_float(&e, float), "{float:08x}");
         }
         // A small integer, -1, a mapped address, a number below 2^-64, the stack's stand-in.

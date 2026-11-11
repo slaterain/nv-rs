@@ -832,7 +832,7 @@ Diff::new(entry!(0x00abc123, typed_version(Ptr<Thing>, f32) -> f32))
   An aligned word compares as an `f32` within `n` ulps when it reads as one on both sides (zero, an infinity, a
   NaN of any payload, or a number from 2^-64 to 2^65 that is no mapped address), in memory at every outgoing
   call (word by word, its other words in the call's hash) and after the call, in a call's words and behind its
-  stack words; ST0 within `n` ulps of an `f32` at its magnitude. Small integers (they read as denormals),
+  stack words; ST0 within `n` ulps once both are rounded to an `f32` (a difference the rounding hides counts as one). Small integers (they read as denormals),
   pointers into mapped memory, tiny flag words and the words from 0xffff0000 up stay exact. The report counts
   the values let through (`tolerated`) and the largest difference (`largest_ulps`). Logic and integers stay
   exact, so `n` stays small: an integer that reads as a float in range is let through by up to `n` too.
