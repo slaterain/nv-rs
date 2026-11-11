@@ -214,9 +214,12 @@ impl Window {
             return Err("the window's surface offers this adapter no format".into());
         }
         if area.is_none() || minimised(hwnd) {
+            eprintln!(
+                "NV_D3D9 wgpu: the window is minimised or has no area: its swap chain is made at its first frame with one"
+            );
             return Ok(w);
         }
-        if w.configure(device).is_err() {
+        if let Err(first) = w.configure(device) {
             w.choose();
             if let Err(again) = w.configure(device) {
                 return Err(format!(
@@ -224,6 +227,11 @@ impl Window {
                     w.config.width, w.config.height, w.config.present_mode
                 ));
             }
+            eprintln!(
+                "NV_D3D9 wgpu: the window's swap chain was refused once, then taken: {first}"
+            );
+            // The first refusal in play is logged again.
+            w.refused = 0;
         }
         Ok(w)
     }
