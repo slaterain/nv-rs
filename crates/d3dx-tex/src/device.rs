@@ -93,6 +93,12 @@ const TABLE: &[Row] = &[
     row(cc(b" R16"), 0, 48, [0, 0, 16, 16, 16], false),
 ];
 
+/// The formats of D3DX's format table, in its order: the ones a device is asked about (a caller
+/// builds [`crate::Caps`]' lists from its device's answers for these).
+pub fn table_formats() -> impl Iterator<Item = u32> {
+    TABLE.iter().map(|r| r.format)
+}
+
 /// The row D3DX uses for a format its table does not have (0x406ae8).
 const OTHER: Row = row(0, 0, 32, [0, 8, 8, 8, 8], false);
 

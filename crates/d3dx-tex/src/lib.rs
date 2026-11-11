@@ -47,7 +47,7 @@
 //! and a refusal where the 32-bit DLL crashes, before anything is allocated from their headers.
 
 pub(crate) mod dds;
-pub(crate) mod device;
+mod device;
 #[doc(hidden)]
 pub mod dxt;
 #[doc(hidden)]
@@ -59,6 +59,7 @@ pub(crate) mod pixel;
 #[doc(hidden)]
 pub mod synthetic;
 
+pub use device::table_formats;
 pub use filter::set_max_threads;
 pub use load::{
     create_cube_texture_from_file_in_memory, create_texture_from_file_in_memory,

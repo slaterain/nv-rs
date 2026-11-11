@@ -28,8 +28,8 @@ pub struct Caps {
     /// The formats the device takes for a texture and for a cube texture: of D3DX's format table,
     /// those `IDirect3D9::CheckDeviceFormat` answers yes for (usage 0, on the display mode's
     /// format), as D3DX asks (0x60d069).
-    pub texture_formats: &'static [u32],
-    pub cube_formats: &'static [u32],
+    pub texture_formats: Vec<u32>,
+    pub cube_formats: Vec<u32>,
 }
 
 impl Default for Caps {
@@ -40,8 +40,8 @@ impl Default for Caps {
             max_width: 16384,
             max_height: 16384,
             pow2: false,
-            texture_formats: REFERENCE_TEXTURE_FORMATS,
-            cube_formats: REFERENCE_CUBE_FORMATS,
+            texture_formats: REFERENCE_TEXTURE_FORMATS.to_vec(),
+            cube_formats: REFERENCE_CUBE_FORMATS.to_vec(),
         }
     }
 }
@@ -288,14 +288,9 @@ fn create(data: &[u8], caps: &Caps, rtype: u32, precision: Precision) -> Result<
     // The format (0x61025e): R8G8B8 becomes X8R8G8B8 outside D3DPOOL_SCRATCH; then the one the
     // device takes (0x60d069), the file's or the nearest.
     let file_format = img.format;
-    let not_provided = |f: u32| {
-        Err(Error::NotProvided(
-            Untranslated::PixelFormat,
-            format!("DDS pixel format {f:#x}"),
-        ))
-    };
+    let not_provided = |why: String| Err(Error::NotProvided(Untranslated::PixelFormat, why));
     if !filter::reads(file_format) {
-        return not_provided(file_format);
+        return not_provided(format!("DDS pixel format {file_format:#x}"));
     }
     let wanted = if file_format == format::R8G8B8 {
         format::X8R8G8B8
@@ -303,18 +298,20 @@ fn create(data: &[u8], caps: &Caps, rtype: u32, precision: Precision) -> Result<
         file_format
     };
     let takes = if rtype == RTYPE_CUBE {
-        caps.cube_formats
+        &caps.cube_formats
     } else {
-        caps.texture_formats
+        &caps.texture_formats
     };
     let tex_format = crate::device::choose(wanted, |f| takes.contains(&f));
     if tex_format == 0 {
         return Err(Error::D3dx(crate::D3DERR_NOTAVAILABLE));
     }
-    // A texture format this crate does not make (one the reference device does not take, on a
-    // device that does): left to the caller.
+    // A texture format this crate does not make (D3DX's pick on a device that takes other formats
+    // than the reference one): left to the caller.
     if !filter::makes(tex_format) {
-        return not_provided(tex_format);
+        return not_provided(format!(
+            "texture format {tex_format:#x} (D3DX's pick for DDS pixel format {file_format:#x})"
+        ));
     }
     // A level whose size the loader's 32-bit arithmetic wrapped into one the file holds: the
     // 32-bit DLL reads past the file and crashes (measured); refused as a file shorter than its

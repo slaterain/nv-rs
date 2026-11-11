@@ -2,7 +2,7 @@
 //! by its codec factory 0x61d9b7, each a decoder and an encoder: R8G8B8 0x61b1c5 (decoded only:
 //! its textures are X8R8G8B8), A8R8G8B8 0x61b288 / 0x6148a1, X8R8G8B8 0x61b330 / 0x614c75, R5G6B5 0x61b3f4 / 0x614fb7,
 //! X1R5G5B5 0x61b4d2 / 0x6152e5, A1R5G5B5 0x61b5b0 / 0x615611, A4R4G4B4 0x61b69c / 0x6159bc,
-//! X4R4G4B4 0x61bedc (decoded only: the reference device makes its textures X1R5G5B5)).
+//! X4R4G4B4 0x61bedc / 0x61663a).
 
 use crate::dxt::Color;
 use crate::format;
@@ -10,12 +10,11 @@ use crate::num::{fistp, Rz, INV15, INV255, INV31, INV63, Z};
 
 /// The formats this crate reads row by row: files of them load.
 pub fn decodes(f: u32) -> bool {
-    matches!(f, format::R8G8B8 | format::X4R4G4B4) || encodes(f)
+    f == format::R8G8B8 || encodes(f)
 }
 
-/// The formats this crate writes row by row: textures of them are made. Only formats the
-/// reference device takes ([`crate::REFERENCE_TEXTURE_FORMATS`]); a file of R8G8B8 or X4R4G4B4 is
-/// read into the format D3DX picks for it there (X8R8G8B8, X1R5G5B5), never made in its own.
+/// The formats this crate writes row by row: textures of them are made (R8G8B8 never is: D3DX
+/// makes its textures X8R8G8B8 outside the scratch pool).
 pub fn encodes(f: u32) -> bool {
     matches!(
         f,
@@ -25,6 +24,7 @@ pub fn encodes(f: u32) -> bool {
             | format::X1R5G5B5
             | format::A1R5G5B5
             | format::A4R4G4B4
+            | format::X4R4G4B4
     )
 }
 
@@ -219,21 +219,29 @@ pub fn encode_row(f: u32, colors: &[Color], y: u32, dither: bool, out: &mut [u8]
                     | quantize(c[2], 31.0, t, 31);
                 out[x * 2..x * 2 + 2].copy_from_slice(&(v as u16).to_le_bytes());
             }
+            // 0x61663a: the top four bits written 0.
+            format::X4R4G4B4 => {
+                let v = quantize(c[0], 15.0, t, 15) << 8
+                    | quantize(c[1], 15.0, t, 15) << 4
+                    | quantize(c[2], 15.0, t, 15);
+                out[x * 2..x * 2 + 2].copy_from_slice(&(v as u16).to_le_bytes());
+            }
             _ => unreachable!("encode_row of an unsupported format"),
         }
     }
 }
 
 /// The channels of the 16-bit formats D3DX's box filter averages in integers, (shift, bits) each:
-/// R5G6B5 0x623ced, X1R5G5B5 0x623e17, A1R5G5B5 0x623f12, A4R4G4B4 0x62403f. Each sums the fields
-/// of the four pixels in place with a bias of 2 per field and shifts right by 2; the bits outside
-/// these fields (X1R5G5B5's top bit) come out 0.
+/// R5G6B5 0x623ced, X1R5G5B5 0x623e17, A1R5G5B5 0x623f12, A4R4G4B4 0x62403f, X4R4G4B4
+/// 0x624442. Each sums the fields of the four pixels in place with a bias of 2 per field and
+/// shifts right by 2; the bits outside these fields (the X bits) come out 0.
 fn fields16(f: u32) -> Option<&'static [(u32, u32)]> {
     Some(match f {
         format::R5G6B5 => &[(11, 5), (5, 6), (0, 5)],
         format::X1R5G5B5 => &[(10, 5), (5, 5), (0, 5)],
         format::A1R5G5B5 => &[(15, 1), (10, 5), (5, 5), (0, 5)],
         format::A4R4G4B4 => &[(12, 4), (8, 4), (4, 4), (0, 4)],
+        format::X4R4G4B4 => &[(8, 4), (4, 4), (0, 4)],
         _ => return None,
     })
 }
