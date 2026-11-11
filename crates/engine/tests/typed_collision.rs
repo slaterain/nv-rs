@@ -450,7 +450,16 @@ fn collision_ni_to_hk() {
         ]))
         .max_cases(256)
         .setup(|e, case| {
-            let w = [2, 1, case.word(0), 0, 0, case.word(1), case.word(2), case.word(3)];
+            let w = [
+                2,
+                1,
+                case.word(0),
+                0,
+                0,
+                case.word(1),
+                case.word(2),
+                case.word(3),
+            ];
             ni_to_hk_world(e, case, w, 4)
         })
         .run()
