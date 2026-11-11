@@ -979,7 +979,8 @@ fn draw_points() {
         .assert_same();
 }
 
-/// The quad builders' inputs: the count, with colours, with angles, the camera vector floats.
+/// The quad builders' inputs: the count, with colours, with angles (2: the first a NaN), the camera
+/// vector floats.
 fn quads_setup(e: &mut Engine, c: &Case, bytes: bool) -> Vec<u32> {
     stand_ins(e);
     let r = renderer_world(e, &[]);
@@ -1007,6 +1008,12 @@ fn quads_setup(e: &mut Engine, c: &Case, bytes: bool) -> Vec<u32> {
     let sizes = floats(e, n, 0.5);
     let scales = floats(e, n, c.f32(4));
     let angles = if c.word(2) != 0 { floats(e, n, 0.7) } else { 0 };
+    if c.word(2) == 2 {
+        // The first angle the x87 default NaN: the first quad's offsets are then a quiet NaN whose
+        // payload is below a quieted signalling NaN's, so which operand form the fourth corner's x
+        // takes (memory or loaded) decides which NaN it keeps.
+        set(e, angles, 0xffc0_0000);
+    }
     let mut words = vec![
         r.renderer, vertices, positions, colors, sizes, scales, angles,
     ];
@@ -1024,7 +1031,7 @@ fn quads_setup(e: &mut Engine, c: &Case, bytes: bool) -> Vec<u32> {
 const QUAD_INPUTS: &[Input] = &[
     Input::Of(&[1, 0, 3]),
     Input::Of(TWO_WAYS),
-    Input::Of(TWO_WAYS),
+    Input::Of(&[0, 1, 2]),
     Input::F32,
     Input::F32Swept(ONE),
 ];
