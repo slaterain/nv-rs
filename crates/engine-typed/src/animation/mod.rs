@@ -20,8 +20,9 @@
 //! Stage 1: the objects stay in guest memory; each function stays registered at its exe address.
 //! **Off by default** (`NV_TYPED=animation` turns it on) until a batch gate (AGENT-RULES.md, "Typed
 //! code merges OFF first"). **Floats.** The actors' animation runs on the AI threads as well as main,
-//! so the row is [`Threads::Both`] and the float maths is native by ADR-0014's rule for such code: `f64`
-//! locals rounded at each of the exe's float stores, compares and copies plain (no x87 helper; the NaN
+//! so the row is [`Threads::Both`] and the float maths is native (ADR-0014) at the running thread's
+//! precision: plain `f32` on main (24 bits), `f64` locals rounded at each float store on the AI threads (53
+//! bits); compares and copies plain (no x87 helper; the NaN
 //! quieting an x87 load does is gone, which only a signalling NaN's payload could show). Its tests
 //! compare floats within an ulp (`Diff::float_ulps`).
 

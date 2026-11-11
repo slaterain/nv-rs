@@ -175,6 +175,12 @@ pub fn flags_share(e: &mut Engine, this: Ptr, mask: u32) -> u32 {
     u32::from(flags & low_16(mask) != 0)
 }
 
+/// Whether the running game thread computes at a float's precision (its x87 control word's precision
+/// bits 00: main, once Direct3D set them), where plain `f32` maths rounds each step as the exe's code does.
+fn float_precision() -> bool {
+    engine_core::x87::control_word() & 0x0300 == 0
+}
+
 /// A float store of an `f64` local (ADR-0014's float rule): rounded to the nearest float.
 #[allow(clippy::cast_possible_truncation)]
 fn to_float(value: f64) -> f32 {
@@ -234,23 +240,46 @@ pub fn set_rotation(e: &mut Engine, this: Ptr, quaternion: Ptr) {
 /// is `(1 - (yy + zz), xy + wz, xz - wy)`, column 1 `(xy - wz, 1 - (xx + zz), yz + wx)`, column 2
 /// `(xz + wy, yz - wx, 1 - (xx + yy))`, each column's third value computed first.
 ///
-/// Native float maths (ADR-0014's float rule; the animation runs on the AI threads as well as main):
-/// `f64` locals, rounded to a float at each of the exe's float stores. A product of two floats is
-/// exact in an `f64`, so the products round once as the exe's do on every thread; a sum of two can
-/// round twice on main's 24-bit precision where the exe rounds once, within an ulp.
+/// Native float maths (ADR-0014's float rule), at the running thread's precision, since the animation
+/// runs on main and the AI threads: on main (24 bits, once Direct3D set it) plain `f32` maths rounds
+/// each step as the exe's x87 code does; on the AI threads (53 bits) `f64` locals rounded at each float
+/// store do. A product of two floats is exact in an `f64`, so it rounds once either way. (One rule for
+/// both, `f64` locals everywhere, rounds the sums of main twice: in `1 - (a + b)` near zero that came
+/// to more than an ulp of the result.)
 pub fn to_rotation(e: &mut Engine, this: Ptr, matrix: Ptr) {
     let q = this.addr();
     let two = f64::from_bits(e.global::<u64>(TWO));
-    let load = |e: &Engine, at: u32| f64::from(f32::from_bits(e.mem.u32(at)));
+    let load = |e: &Engine, at: u32| f32::from_bits(e.mem.u32(at));
     let (w, x, y, z) = (load(e, q), load(e, q + 4), load(e, q + 8), load(e, q + 0xc));
-    let (x2, y2, z2) = (to_float(x * two), to_float(y * two), to_float(z * two));
-    let product = |factor: f32, by: f64| f64::from(to_float(f64::from(factor) * by));
+    let double = |v: f32| to_float(f64::from(v) * two);
+    let (x2, y2, z2) = (double(x), double(y), double(z));
+    let product = |a: f32, b: f32| to_float(f64::from(a) * f64::from(b));
     let (wx, wy, wz) = (product(x2, w), product(y2, w), product(z2, w));
     let (xx, xy, xz) = (product(x2, x), product(y2, x), product(z2, x));
     let (yy, yz, zz) = (product(y2, y), product(z2, y), product(z2, z));
-    let sub = |a: f64, b: f64| to_float(a - b);
-    let add = |a: f64, b: f64| to_float(a + b);
-    let one_minus = |a: f64, b: f64| to_float(1.0 - (a + b));
+    let single = float_precision();
+    let wide = f64::from;
+    let sub = |a: f32, b: f32| {
+        if single {
+            a - b
+        } else {
+            to_float(wide(a) - wide(b))
+        }
+    };
+    let add = |a: f32, b: f32| {
+        if single {
+            a + b
+        } else {
+            to_float(wide(a) + wide(b))
+        }
+    };
+    let one_minus = |a: f32, b: f32| {
+        if single {
+            1.0 - (a + b)
+        } else {
+            to_float(1.0 - (wide(a) + wide(b)))
+        }
+    };
     let columns = [
         [one_minus(yy, zz), add(xy, wz), sub(xz, wy)],
         [sub(xy, wz), one_minus(xx, zz), add(yz, wx)],
