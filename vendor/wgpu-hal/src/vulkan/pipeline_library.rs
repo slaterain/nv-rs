@@ -56,7 +56,7 @@
 // path dependency its warnings are not capped, so a warning here fails every build.
 #![deny(warnings)]
 
-use alloc::{boxed::Box, ffi::CString, string::String, sync::Arc, sync::Weak, vec::Vec};
+use alloc::{boxed::Box, string::String, sync::Arc, sync::Weak, vec::Vec};
 use core::{
     fmt::{self, Write as _},
     sync::atomic::{AtomicU64, Ordering},
@@ -400,12 +400,57 @@ struct VertexInputKey {
     primitive_restart: bool,
 }
 
+/// A shader module as library keys name it: wgpu-hal keeps one either as a `VkShaderModule` or as naga
+/// IR to write SPIR-V from per pipeline (`Workarounds::SEPARATE_ENTRY_POINTS`, on every device, and
+/// modules with overrides), which gets an id when it is made ([`next_module_id`]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum ModuleKey {
+    /// No shader: a pipeline without a fragment stage.
+    None,
+    Raw(vk::ShaderModule),
+    Ir(u64),
+}
+
+/// A new naga-IR module's id ([`ModuleKey::Ir`]): never the same twice in a run.
+pub(super) fn next_module_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+impl ModuleKey {
+    fn of(stage: Option<&crate::ProgrammableStage<'_, super::ShaderModule>>) -> Self {
+        match stage.map(|s| s.module) {
+            None => Self::None,
+            Some(super::ShaderModule::Raw(raw)) => Self::Raw(*raw),
+            Some(super::ShaderModule::Intermediate { id, .. }) => Self::Ir(*id),
+        }
+    }
+}
+
+/// A stage's pipeline-overridable constants as a key: by name, sorted, their values' bits.
+fn constants_key(
+    stage: Option<&crate::ProgrammableStage<'_, super::ShaderModule>>,
+) -> Box<[(Box<str>, u64)]> {
+    let mut constants: Vec<(Box<str>, u64)> = stage
+        .map(|s| {
+            s.constants
+                .iter()
+                .map(|(k, v)| (k.as_str().into(), v.to_bits()))
+                .collect()
+        })
+        .unwrap_or_default();
+    constants.sort();
+    constants.into()
+}
+
 /// A shader library's state: the module, its entry point, the stage's layout, and the static
 /// rasterisation state of a pre-rasterisation library.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct StageKey {
-    module: vk::ShaderModule,
+    module: ModuleKey,
     entry_point: Box<str>,
+    /// The pipeline-overridable constants, by name, sorted (their values' bits).
+    constants: Box<[(Box<str>, u64)]>,
     layout: LayoutKey,
     polygon_mode: vk::PolygonMode,
     unclipped_depth: bool,
@@ -490,7 +535,7 @@ fn add_time(total: &AtomicU64, max: &AtomicU64, ns: u64) {
 impl Cache {
     /// Forgets the shader libraries of a module that is being destroyed (pipelines linked from
     /// them keep them until they go).
-    pub(super) fn forget_module(&self, module: vk::ShaderModule) {
+    pub(super) fn forget_module(&self, module: ModuleKey) {
         let mut maps = self.maps.lock();
         maps.pre_rasterization.retain(|k, _| k.module != module);
         maps.fragment_shader.retain(|k, _| k.module != module);
@@ -590,16 +635,7 @@ pub(super) fn create(device: &super::Device, desc: &Desc<'_>) -> Option<super::R
     if desc.multiview_mask.is_some() {
         return None;
     }
-    let super::ShaderModule::Raw(vertex_module) = *vertex_stage.module else {
-        return None;
-    };
-    let fragment = match desc.fragment_stage {
-        Some(ref stage) => match *stage.module {
-            super::ShaderModule::Raw(module) => Some((module, stage.entry_point)),
-            super::ShaderModule::Intermediate { .. } => return None,
-        },
-        None => None,
-    };
+    let fragment_stage = desc.fragment_stage.as_ref();
     let start = Instant::now();
     let cache_raw = desc.cache.map_or(vk::PipelineCache::null(), |c| c.raw);
     let cache = &shared.pipeline_libraries;
@@ -615,8 +651,9 @@ pub(super) fn create(device: &super::Device, desc: &Desc<'_>) -> Option<super::R
     )?;
 
     let vs_key = StageKey {
-        module: vertex_module,
+        module: ModuleKey::of(Some(vertex_stage)),
         entry_point: vertex_stage.entry_point.into(),
+        constants: constants_key(Some(vertex_stage)),
         layout: parts.vertex.key.clone(),
         polygon_mode: conv::map_polygon_mode(desc.primitive.polygon_mode),
         unclipped_depth: desc.primitive.unclipped_depth,
@@ -627,12 +664,22 @@ pub(super) fn create(device: &super::Device, desc: &Desc<'_>) -> Option<super::R
         |m| &mut m.pre_rasterization,
         &vs_key,
         &mut made,
-        || make_pre_rasterization(shared, cache_raw, &vs_key, &parts.vertex),
+        || {
+            make_pre_rasterization(
+                device,
+                cache_raw,
+                &vs_key,
+                vertex_stage,
+                desc,
+                &parts.vertex,
+            )
+        },
     )?;
 
     let fs_key = StageKey {
-        module: fragment.map_or(vk::ShaderModule::null(), |f| f.0),
-        entry_point: fragment.map_or("", |f| f.1).into(),
+        module: ModuleKey::of(fragment_stage),
+        entry_point: fragment_stage.map_or("", |s| s.entry_point).into(),
+        constants: constants_key(fragment_stage),
         layout: parts.fragment.key.clone(),
         polygon_mode: vk::PolygonMode::FILL,
         unclipped_depth: false,
@@ -643,7 +690,7 @@ pub(super) fn create(device: &super::Device, desc: &Desc<'_>) -> Option<super::R
         |m| &mut m.fragment_shader,
         &fs_key,
         &mut made,
-        || make_fragment_shader(shared, cache_raw, &fs_key, &parts.fragment),
+        || make_fragment_shader(device, cache_raw, fragment_stage, desc, &parts.fragment),
     )?;
 
     let fo_key = fragment_output_key(shared, desc);
@@ -858,23 +905,12 @@ fn make_vertex_input(
     Some(library(raw, None, device))
 }
 
-/// The shader stage create info for a module wgpu-hal keeps as a `VkShaderModule`, as
-/// `Device::compile_stage` makes it.
-fn stage_info<'a>(
-    device: &super::DeviceShared,
-    stage: vk::ShaderStageFlags,
-    module: vk::ShaderModule,
-    entry_point: &'a CString,
-) -> vk::PipelineShaderStageCreateInfo<'a> {
-    let mut flags = vk::PipelineShaderStageCreateFlags::empty();
-    if device.features.contains(wgt::Features::SUBGROUP) {
-        flags |= vk::PipelineShaderStageCreateFlags::ALLOW_VARYING_SUBGROUP_SIZE
+/// The module `compile_stage` wrote for a naga-IR stage, once the library is made from it (a library
+/// keeps nothing of the module it was made from).
+fn destroy_temporary(device: &super::Device, compiled: &super::device::CompiledStage) {
+    if let Some(module) = compiled.temp_raw_module {
+        unsafe { device.shared.raw.destroy_shader_module(module, None) };
     }
-    vk::PipelineShaderStageCreateInfo::default()
-        .flags(flags)
-        .stage(stage)
-        .module(module)
-        .name(entry_point)
 }
 
 /// DXVK's `DxvkShaderPipelineLibrary::compileVertexShaderPipeline`: viewport and scissor (one
@@ -882,18 +918,19 @@ fn stage_info<'a>(
 /// conservative rasterisation as the pipeline asks (a DXVK pipeline that needs them is made
 /// whole; here they are part of the library's key).
 fn make_pre_rasterization(
-    device: &super::DeviceShared,
+    device: &super::Device,
     cache: vk::PipelineCache,
     key: &StageKey,
+    stage: &crate::ProgrammableStage<'_, super::ShaderModule>,
+    desc: &Desc<'_>,
     layout: &Arc<StageLayout>,
 ) -> Option<Library> {
-    let entry_point = CString::new(&*key.entry_point).ok()?;
-    let stages = [stage_info(
-        device,
-        vk::ShaderStageFlags::VERTEX,
-        key.module,
-        &entry_point,
-    )];
+    // The stage as wgpu-hal makes it for a whole pipeline (SPIR-V from naga IR for this layout,
+    // or its own module); a stage it cannot make is left to that path, which reports why.
+    let compiled = device
+        .compile_stage(stage, naga::ShaderStage::Vertex, &desc.layout.binding_map)
+        .ok()?;
+    let stages = [compiled.create_info];
     let dynamic_states = [
         vk::DynamicState::VIEWPORT,
         vk::DynamicState::SCISSOR,
@@ -928,8 +965,9 @@ fn make_pre_rasterization(
         .base_pipeline_index(-1)
         .push_next(&mut library_info)
         .push_next(&mut rendering);
-    let raw = create_pipeline(device, cache, &info, "vertex shader library")?;
-    Some(library(raw, Some(layout), device))
+    let raw = create_pipeline(&device.shared, cache, &info, "vertex shader library");
+    destroy_temporary(device, &compiled);
+    Some(library(raw?, Some(layout), &device.shared))
 }
 
 /// DXVK's `DxvkShaderPipelineLibrary::compileFragmentShaderPipeline`: the depth and stencil tests
@@ -937,25 +975,22 @@ fn make_pre_rasterization(
 /// pipeline here asks for sample shading. A pipeline without a fragment shader gets a library
 /// without one.
 fn make_fragment_shader(
-    device: &super::DeviceShared,
+    device: &super::Device,
     cache: vk::PipelineCache,
-    key: &StageKey,
+    stage: Option<&crate::ProgrammableStage<'_, super::ShaderModule>>,
+    desc: &Desc<'_>,
     layout: &Arc<StageLayout>,
 ) -> Option<Library> {
-    let entry_point = CString::new(&*key.entry_point).ok()?;
-    let stage;
-    let stages: &[vk::PipelineShaderStageCreateInfo<'_>] = if key.module == vk::ShaderModule::null()
-    {
-        &[]
-    } else {
-        stage = [stage_info(
-            device,
-            vk::ShaderStageFlags::FRAGMENT,
-            key.module,
-            &entry_point,
-        )];
-        &stage
+    let compiled = match stage {
+        Some(stage) => Some(
+            device
+                .compile_stage(stage, naga::ShaderStage::Fragment, &desc.layout.binding_map)
+                .ok()?,
+        ),
+        None => None,
     };
+    let stages: ArrayVec<vk::PipelineShaderStageCreateInfo<'_>, 1> =
+        compiled.iter().map(|c| c.create_info).collect();
     let dynamic_states = [
         vk::DynamicState::DEPTH_TEST_ENABLE,
         vk::DynamicState::DEPTH_WRITE_ENABLE,
@@ -973,15 +1008,18 @@ fn make_fragment_shader(
         .flags(vk::GraphicsPipelineLibraryFlagsEXT::FRAGMENT_SHADER);
     let info = vk::GraphicsPipelineCreateInfo::default()
         .flags(vk::PipelineCreateFlags::LIBRARY_KHR)
-        .stages(stages)
+        .stages(&stages)
         .depth_stencil_state(&depth_stencil)
         .dynamic_state(&dynamic)
         .layout(layout.raw)
         .base_pipeline_index(-1)
         .push_next(&mut library_info)
         .push_next(&mut rendering);
-    let raw = create_pipeline(device, cache, &info, "pixel shader library")?;
-    Some(library(raw, Some(layout), device))
+    let raw = create_pipeline(&device.shared, cache, &info, "pixel shader library");
+    if let Some(ref compiled) = compiled {
+        destroy_temporary(device, compiled);
+    }
+    Some(library(raw?, Some(layout), &device.shared))
 }
 
 /// DXVK's `DxvkGraphicsPipelineFragmentOutputLibrary`: the targets' formats, blending and write

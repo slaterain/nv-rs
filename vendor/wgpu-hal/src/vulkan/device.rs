@@ -250,10 +250,11 @@ impl super::DeviceShared {
     }
 }
 
-struct CompiledStage {
-    create_info: vk::PipelineShaderStageCreateInfo<'static>,
+// nv-rs: also used by pipeline_library.rs.
+pub(super) struct CompiledStage {
+    pub(super) create_info: vk::PipelineShaderStageCreateInfo<'static>,
     _entry_point: CString,
-    temp_raw_module: Option<vk::ShaderModule>,
+    pub(super) temp_raw_module: Option<vk::ShaderModule>,
 }
 
 struct MemoryProperties {
@@ -697,7 +698,7 @@ impl super::Device {
         Ok(raw)
     }
 
-    fn compile_stage(
+    pub(super) fn compile_stage(
         &self,
         stage: &crate::ProgrammableStage<super::ShaderModule>,
         naga_stage: naga::ShaderStage,
@@ -709,6 +710,7 @@ impl super::Device {
             super::ShaderModule::Intermediate {
                 ref naga_shader,
                 runtime_checks,
+                ..
             } => {
                 let pipeline_options = naga::back::spv::PipelineOptions {
                     entry_point: stage.entry_point.to_owned(),
@@ -1880,6 +1882,7 @@ impl crate::Device for super::Device {
                 super::ShaderModule::Intermediate {
                     naga_shader,
                     runtime_checks: desc.runtime_checks,
+                    id: super::pipeline_library::next_module_id(),
                 }
             }
             crate::ShaderInput::Naga(naga_shader) => {
@@ -1929,10 +1932,17 @@ impl crate::Device for super::Device {
         match module {
             super::ShaderModule::Raw(raw) => {
                 // nv-rs: its pipeline libraries are not made again (pipeline_library.rs).
-                self.shared.pipeline_libraries.forget_module(raw);
+                self.shared
+                    .pipeline_libraries
+                    .forget_module(super::pipeline_library::ModuleKey::Raw(raw));
                 unsafe { self.shared.raw.destroy_shader_module(raw, None) };
             }
-            super::ShaderModule::Intermediate { .. } => {}
+            super::ShaderModule::Intermediate { id, .. } => {
+                // nv-rs: its pipeline libraries are not made again (pipeline_library.rs).
+                self.shared
+                    .pipeline_libraries
+                    .forget_module(super::pipeline_library::ModuleKey::Ir(id));
+            }
         }
 
         self.counters.shader_modules.sub(1);

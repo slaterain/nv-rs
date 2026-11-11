@@ -1166,6 +1166,8 @@ pub enum ShaderModule {
     Intermediate {
         naga_shader: crate::NagaShader,
         runtime_checks: wgt::ShaderRuntimeChecks,
+        /// nv-rs: which module this is, for the pipeline libraries made from it (`pipeline_library.rs`).
+        id: u64,
     },
 }
 
