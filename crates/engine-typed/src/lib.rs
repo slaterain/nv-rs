@@ -20,6 +20,7 @@ pub mod crt;
 pub mod culling;
 pub mod dispatch;
 pub mod draw;
+pub mod geometry;
 pub mod lockfree;
 pub mod multibound;
 pub mod particles;
@@ -100,6 +101,7 @@ pub mod units {
         engine_core::typed::provide(&crate::particles::PARTICLES);
         engine_core::typed::provide(&crate::collision::COLLISION);
         engine_core::typed::provide(&crate::multibound::MULTIBOUND);
+        engine_core::typed::provide(&crate::geometry::GEOMETRY);
         crate::render::stream::note_head_check();
     }
 }
@@ -113,7 +115,7 @@ mod tests {
     use engine_core::typed::{parse_switch, Family, Mode};
 
     /// This crate's families, in the order `units::funcs` provides them.
-    fn families() -> [&'static Family; 12] {
+    fn families() -> [&'static Family; 13] {
         [
             &crate::lockfree::LOCKFREE,
             &crate::culling::CULLING,
@@ -127,12 +129,14 @@ mod tests {
             &crate::particles::PARTICLES,
             &crate::collision::COLLISION,
             &crate::multibound::MULTIBOUND,
+            &crate::geometry::GEOMETRY,
         ]
     }
 
-    /// Which of this crate's families are past their gate, and so on with no switch: all twelve, the
-    /// first six since their speed gate together (2026-11-08), render since its own (2026-11-09),
-    /// draw, scene, particles, collision and multibound since their recorded-run gates (2026-11-10);
+    /// Which of this crate's families are past their gate, and so on with no switch: all but the geometry
+    /// family (on only when `NV_TYPED` names it until its gate), the first six since their speed gate
+    /// together (2026-11-08), render since its own (2026-11-09), draw, scene, particles, collision and
+    /// multibound since their recorded-run gates (2026-11-10);
     /// `NV_TYPED=off` or `<family>:off` turns one off.
     #[test]
     fn families_past_their_gate_are_on_by_default() {
@@ -170,8 +174,26 @@ mod tests {
         assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 11);
     }
 
-    /// With no switch, `Engine::new` registers every function of each family, and its calls between
-    /// typed functions go direct. Not the default, so not checked: a test process started with
+    /// No two of this crate's families (with the core's) hold the same address, past their gate or not:
+    /// two that are on together stop `typed::apply` ("in typed family .. and another family that is
+    /// on"), and a family off by default is still turned on by `NV_TYPED` beside the others.
+    #[test]
+    fn no_two_families_share_an_address() {
+        let mut seen = std::collections::BTreeMap::new();
+        let all = families()
+            .into_iter()
+            .chain(engine_core::typed::FAMILIES.iter().copied());
+        for f in all {
+            for (addr, _) in (f.funcs)() {
+                if let Some(other) = seen.insert(addr, f.name) {
+                    panic!("{addr:08x} is in both {other} and {}", f.name);
+                }
+            }
+        }
+    }
+
+    /// With no switch, `Engine::new` registers every function of each family past its gate, and its
+    /// calls between typed functions go direct. Not the default, so not checked: a test process started with
     /// `NV_TYPED` set (the differential runs) or as a run compared with the original's record
     /// (`typed::COMPARED_RUN_VARIABLES`, every family off). A diagnostic the shell has on at start (a
     /// profile, a block check, a census, the touch record) keeps every call by address: the functions
@@ -196,7 +218,7 @@ mod tests {
         .iter()
         .any(|n| set(n));
         let e = engine_core::Engine::new();
-        for f in families() {
+        for f in families().into_iter().filter(|f| f.past_gate) {
             for (addr, _) in (f.funcs)() {
                 assert!(e.is_registered(addr), "{} at {addr:08x}", f.name);
                 if !diagnosing {
