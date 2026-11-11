@@ -1,3 +1,4 @@
+// Changed for nv-rs: compiled shaders kept as owned bytes (backport of gfx-rs/wgpu #10805); vendor/README.md.
 use alloc::borrow::ToOwned;
 use alloc::{
     borrow::Cow,
@@ -401,9 +402,7 @@ impl super::Device {
                 shader_model: naga_options.shader_model,
             },
             super::ShaderModuleSource::DxilPassthrough(passthrough) => {
-                return Ok(super::CompiledShader::Precompiled(
-                    passthrough.shader.clone(),
-                ))
+                return Ok(passthrough.shader.as_slice().into())
             }
         };
 

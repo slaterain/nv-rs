@@ -1,3 +1,4 @@
+// Changed for nv-rs: compiled shaders kept as owned bytes (backport of gfx-rs/wgpu #10805); vendor/README.md.
 use alloc::{string::String, vec::Vec};
 use core::ffi::CStr;
 use std::path::PathBuf;
@@ -253,8 +254,8 @@ fn compile_fxc(
 
     match hr {
         Ok(()) => {
-            let shader_data = shader_data.unwrap();
-            Ok(super::CompiledShader::Fxc(shader_data))
+            let shader_data = super::D3DBlob(shader_data.unwrap());
+            Ok(unsafe { shader_data.as_slice() }.into())
         }
         Err(e) => {
             let mut full_msg = format!("FXC D3DCompile error ({e})");
@@ -446,5 +447,8 @@ fn compile_dxc(
 
     let blob = get_output::<Dxc::IDxcBlob>(&compile_res, Dxc::DXC_OUT_OBJECT)?;
 
-    Ok(crate::dx12::CompiledShader::Dxc(blob))
+    let bytecode = unsafe {
+        core::slice::from_raw_parts(blob.GetBufferPointer().cast::<u8>(), blob.GetBufferSize())
+    };
+    Ok(bytecode.into())
 }

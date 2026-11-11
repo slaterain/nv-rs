@@ -20,7 +20,9 @@ leave their code as published.
 
 ### Changes
 
-None yet: this is the published code.
+| Change | Files |
+| --- | --- |
+| Direct3D 12: compiled shaders kept as owned bytes, not as the compiler's blobs, whose reference count is not thread-safe (a use-after-free when several threads make pipelines from one shader with FXC, gfx-rs/wgpu #10547). Backport of upstream #10805, merged 2026-11-11 after 30.0.1 was published. | `src/dx12/mod.rs`, `src/dx12/device.rs`, `src/dx12/shader_compilation.rs` |
 
 ### Updating to a newer wgpu-hal
 
