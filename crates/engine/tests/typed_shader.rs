@@ -5471,16 +5471,24 @@ fn draw_and_clear_type() {
 fn draw_holder() {
     Diff::new(entry!(0x00b9_a4d0, dalpha::draw_holder(u32, u32)))
         .draw_common_at(0x00b9_a4d0)
+        // `RenderBatches`' accumulator getter is the render family's (its own tests).
+        .goes_by_address(&[0x00b4_f5c0])
         .inputs(&[
             Input::Of(TWO_WAYS),
             Input::Of(TWO_WAYS),
             Input::Of(&[0, 1, 0x33]),
+            // The renderer's slot 0x90: a stand-in, or `RenderBatches` (then the typed one, direct).
+            Input::Of(TWO_WAYS),
         ])
         .setup(|e, c| {
             let d = draw_world(e);
             let holder = d.w.holders[c.word(0) as usize];
             if c.word(1) == 0 {
                 set(e, holder + 8, 0);
+            }
+            if c.word(3) != 0 {
+                let vt = e.mem.u32(d.w.br);
+                set(e, vt + 0x90, 0x00b9_9e20);
             }
             vec![holder, c.word(2)]
         })
@@ -6763,6 +6771,127 @@ fn toggles_typed_land_and_fog() {
             0,
             w.alpha,
         ]
+    })
+    .run()
+    .assert_same();
+}
+
+// ---- The list draws the world draw made through translations (the drawing thread's still-live list) ----
+
+use engine_typed::draw::lists as dlists;
+
+#[test]
+fn own_list_draw() {
+    Diff::new(entry!(0x00b9_9990, dlists::own_list_draw(Ptr<_>, u32)))
+        .draw_common_at(0x00b9_9990)
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4]), Input::Of(&[0, 1, 0x33])])
+        .setup(|e, c| {
+            let d = draw_world(e);
+            let w = &d.w;
+            let list = e.mem.alloc(0x14);
+            match c.word(0) {
+                // Empty: nothing drawn, nothing ended.
+                0 => {}
+                1 => list_at(e, list, &[w.passes[0]]),
+                2 => list_at(e, list, &[w.passes[0], w.passes[1], w.skin_pass]),
+                // A null pass stops the walk; a pass without a geometry is not drawn.
+                3 => list_at(e, list, &[w.passes[2], 0, w.passes[1]]),
+                _ => {
+                    let bare = e.mem.alloc(8);
+                    e.mem.set_u16(bare + 4, 0x10);
+                    list_at(e, list, &[bare, w.passes[3]]);
+                }
+            }
+            vec![list, c.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn render_batches() {
+    Diff::new(entry!(
+        0x00b9_9e20,
+        dlists::render_batches(Ptr<_>, u32, u32, u32)
+    ))
+    .draw_common_at(0x00b9_9e20)
+    // The accumulator getter is the render family's: stood in here.
+    .goes_by_address(&[0x00b4_f5c0])
+    .inputs(&[
+        Input::Of(&[0, 1, 2]),
+        // The active list: empty, one type, three, or type 0 at the head with one after it.
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 0x5a]),
+    ])
+    .setup(|e, c| {
+        let d = draw_world(e);
+        let w = &d.w;
+        let acc = w.acc;
+        set(e, RETS + 0xf80, acc);
+        e.register(0x00b4_f5c0, |e, _| ret(e.mem.u32(RETS + 0xf80)));
+        e.map(0x011a_9000, 0x1000);
+        e.map(0x0120_1000, 0x1000);
+        // Groups 0 to 3 (the map stand-in answers the type's low two bits): every other list holds passes.
+        for group in 0..4u32 {
+            for list in 0..5u32 {
+                let at = group_list(e, w, group, list);
+                if (group + list) % 2 == 0 {
+                    let items = [
+                        w.passes[(list % 4) as usize],
+                        w.passes[((list + 1) % 4) as usize],
+                    ];
+                    list_at(e, at, &items);
+                } else {
+                    list_at(e, at, &[]);
+                }
+            }
+            set(e, e.mem.u32(w.br + 8) + group * 0x68 + 0x64, 2);
+        }
+        // The active list: empty, one type, or three (the inline head and two nodes).
+        let head = w.br + 0x2c;
+        match c.word(1) {
+            0 => {
+                e.mem.set_u16(head, 0);
+                set(e, head + 4, 0);
+            }
+            1 => {
+                e.mem.set_u16(head, 0x10);
+                set(e, head + 4, 0);
+            }
+            3 => {
+                let next = e.mem.alloc(8);
+                e.mem.set_u16(head, 0);
+                set(e, head + 4, next);
+                e.mem.set_u16(next, 0x10);
+                set(e, next + 4, 0);
+            }
+            _ => {
+                let second = e.mem.alloc(8);
+                let third_node = e.mem.alloc(8);
+                e.mem.set_u16(head, 0x11);
+                set(e, head + 4, second);
+                e.mem.set_u16(second, 0x10);
+                set(e, second + 4, third_node);
+                e.mem.set_u16(third_node, 0x13);
+                set(e, third_node + 4, 0);
+            }
+        }
+        e.mem.set_u8(0x011f_94a6, c.word(2) as u8);
+        e.mem.set_u8(0x011f_9421, c.word(3) as u8);
+        // The accumulator's two bytes that make a shadow pass (odd types here) only clear its group.
+        e.mem.set_u8(acc + 0x164, u8::from(c.word(4) == 1));
+        e.mem.set_u8(acc + 0x165, u8::from(c.word(4) == 2));
+        set(e, 0x011f_fa24, 2);
+        set(e, 0x011f_f9e8, 1);
+        let (first, last) = match c.word(0) {
+            0 => (0, 0x1234_56ff),
+            1 => (0x10, 0x11),
+            _ => (0x12, 0x2f1),
+        };
+        vec![w.br, first, last, c.word(5)]
     })
     .run()
     .assert_same();

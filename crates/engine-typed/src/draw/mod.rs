@@ -72,6 +72,7 @@ pub mod constants;
 pub mod detach;
 pub mod drivers;
 pub mod layout;
+pub mod lists;
 pub mod own;
 pub mod packed;
 pub mod packet;
@@ -124,6 +125,9 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b9_a3c0, alpha::draw_and_clear_type(Ptr<_>, u32, u32, u32, u32) -> bool),
         entry!(0x00b9_a4d0, alpha::draw_holder(u32, u32)),
         entry!(0x00b9_af60, alpha::render_next_alpha(Ptr<_>, u32, u32, u32, f32)),
+        // The list draws the world draw made through translations (the drawing thread's still-live list).
+        entry!(0x00b9_9990, lists::own_list_draw(Ptr<_>, u32)),
+        entry!(0x00b9_9e20, lists::render_batches(Ptr<_>, u32, u32, u32)),
         // The decal pass and the fog-coloured ambient.
         entry!(0x00b6_4e30, drivers::decal_pass(Ptr<_>)),
         entry!(0x00bb_b840, own::fog_ambient()),

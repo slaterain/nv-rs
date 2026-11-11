@@ -16,9 +16,7 @@ use engine_core::{args, typed_call, Engine};
 /// draw's loop compares with (`010241b0`).
 const NO_DISTANCE: u32 = 0x0101_5f5c;
 const NO_DISTANCE_DOUBLE: u32 = 0x0102_41b0;
-/// A holder's own pass list draw (`00b99990`, `thiscall(list, flag)`), and a batch renderer's slot
-/// that draws its pass types (0x90, `(1, 0x2f1, flag)`).
-const OWN_LIST_DRAW: u32 = 0x00b9_9990;
+/// A batch renderer's slot that draws its pass types (0x90, `(1, 0x2f1, flag)`; `RenderBatches`, `00b99e20`).
 const SLOT_DRAW_TYPES: u32 = 0x90;
 /// The pass map's `GetAt` (`00853130`, `thiscall(map, key, out)`).
 const MAP_GET_AT: u32 = 0x0085_3130;
@@ -224,26 +222,45 @@ pub fn draw_and_clear_type(
     )
 }
 
+/// A holder's renderer's pass types 1..=0x2f1 drawn through its slot 0x90 (`RenderBatches`, made direct when the
+/// slot holds it; another class's slot is called with the holder's words back in place for the drawing thread's
+/// view, as a translation by address).
+fn draw_types_of(e: &mut Engine, renderer: u32, flag: u32) {
+    if crate::slot_target(e, renderer, SLOT_DRAW_TYPES) == 0x00b9_9e20 {
+        typed_call!(
+            FAMILY,
+            0x00b9_9e20,
+            super::lists::render_batches(e, Ptr::new(renderer), 1u32, 0x2f1u32, flag)
+        );
+    } else {
+        let words = |e: &Engine| {
+            let mut words = Vec::new();
+            super::detach::candidates(e, renderer, &mut words);
+            words
+        };
+        super::detach::suspended_for(e, words, |e| {
+            e.vcall(renderer, SLOT_DRAW_TYPES, &args![1u32, 0x2f1u32, flag]);
+        });
+    }
+}
+
 // Typed from 00b9a4d0
 /// `thiscall(holder, flag)`: draws a register group holder: its own pass list (`00b99990`) when it
 /// keeps one, else its batch renderer's pass types (slot 0x90 with 1, 0x2f1, `flag`); then the
 /// renderer's active list cleared (with a renderer) and the holder's count.
 pub fn draw_holder(e: &mut Engine, holder: u32, flag: u32) {
-    // By address: the drawing thread's step 1 hands these the holder's words in place (still live).
-    super::detach::suspended_for(
-        e,
-        |e| super::detach::holder_words(e, holder),
-        |e| {
-            if packet::keeps_own(e, holder) {
-                e.call(OWN_LIST_DRAW, &args![holder.wrapping_add(0xc), flag]);
-            } else {
-                let renderer = packet::holder_renderer(e, holder);
-                if renderer != 0 {
-                    e.vcall(renderer, SLOT_DRAW_TYPES, &args![1u32, 0x2f1u32, flag]);
-                }
-            }
-        },
-    );
+    if packet::keeps_own(e, holder) {
+        typed_call!(
+            FAMILY,
+            0x00b9_9990,
+            super::lists::own_list_draw(e, Ptr::new(holder.wrapping_add(0xc)), flag)
+        );
+    } else {
+        let renderer = packet::holder_renderer(e, holder);
+        if renderer != 0 {
+            draw_types_of(e, renderer, flag);
+        }
+    }
     let renderer = packet::holder_renderer(e, holder);
     if renderer != 0 {
         own::clear_active_list(e, renderer);
@@ -358,17 +375,15 @@ pub fn render_next_alpha(
                 break;
             }
             let own_renderer = packet::holder_renderer(e, sorted);
-            super::detach::suspended_for(
-                e,
-                |e| super::detach::holder_words(e, sorted),
-                |e| {
-                    if packet::keeps_own(e, sorted) {
-                        e.call(OWN_LIST_DRAW, &args![sorted.wrapping_add(0xc), 1u32]);
-                    } else if own_renderer != 0 {
-                        e.vcall(own_renderer, SLOT_DRAW_TYPES, &args![1u32, 0x2f1u32, 1u32]);
-                    }
-                },
-            );
+            if packet::keeps_own(e, sorted) {
+                typed_call!(
+                    FAMILY,
+                    0x00b9_9990,
+                    super::lists::own_list_draw(e, Ptr::new(sorted.wrapping_add(0xc)), 1u32)
+                );
+            } else if own_renderer != 0 {
+                draw_types_of(e, own_renderer, 1);
+            }
             let own_renderer = packet::holder_renderer(e, sorted);
             if own_renderer != 0 {
                 own::clear_active_list(e, own_renderer);
