@@ -1047,6 +1047,60 @@ fn an_unwritten_varying_reads_as_on_the_real_direct3d_9() {
     }
 }
 
+/// The list names each plane state a pipeline's draws had: with the clip distances one pipeline
+/// serves a draw with no plane on and one with a plane on, but an adapter without them
+/// (Direct3D 12) needs a pipeline for each, so a list written here holds both lines (clip 0 and
+/// a plane's code), as one written there does. (The list file holds the shipped entries too: a
+/// run that draws with no plane only gives what a run with both states adds to.)
+#[test]
+fn the_list_names_each_plane_state_a_pipeline_drew_with() {
+    let run = |name: &str, with_plane: bool| -> Option<Vec<String>> {
+        let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+            "pipeline-list-planes-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let mut g = Gpu::with_cache(4, 1, Some(dir.clone()))?;
+            let plane = [1.0f32, 0.0, 0.0, -0.25].map(f32::to_bits);
+            g.run(Cmd::SetClipPlane {
+                device: DEVICE,
+                index: 0,
+                plane,
+            });
+            g.colour([1.0, 1.0, 1.0, 1.0]);
+            g.clear(3, 0, 1.0);
+            g.cover(0.5);
+            if with_plane {
+                g.state(CLIPPLANEENABLE, 1);
+                g.cover(0.5);
+            }
+            // The device goes: its list is written.
+        }
+        let list = std::fs::read_to_string(dir.join("pipelines.txt")).expect("the list written");
+        let _ = std::fs::remove_dir_all(&dir);
+        Some(list.lines().map(str::to_string).collect())
+    };
+    let Some(none) = run("none", false) else {
+        return;
+    };
+    let both = run("both", true).unwrap();
+    let added: Vec<&String> = both.iter().filter(|l| !none.contains(l)).collect();
+    assert_eq!(added.len(), 1, "one more line with a plane on: {added:?}");
+    let fields: Vec<&str> = added[0].split_ascii_whitespace().collect();
+    assert_ne!(fields.last(), Some(&"0"), "{}", added[0]);
+    // The same pipeline (on Vulkan) or its twin (Direct3D 12) with no plane on: the run without
+    // a plane listed it with clip 0.
+    let mut zero = fields.clone();
+    *zero.last_mut().unwrap() = "0";
+    assert!(
+        none.contains(&zero.join(" ")),
+        "the line with no plane on: {}",
+        zero.join(" ")
+    );
+}
+
 #[test]
 fn user_clip_planes_cut_where_the_distance_is_negative() {
     let Some(mut g) = Gpu::new(4, 1) else { return };

@@ -659,11 +659,13 @@ pub struct Device {
     /// shader's group and the vertex shader's, and the pipeline layout of the two.
     #[allow(clippy::type_complexity)]
     sampler_layouts: Map<Vec<(u32, u8, bool)>, ([wgpu::BindGroupLayout; 2], wgpu::PipelineLayout)>,
-    pipelines: Map<PipeKey, Option<Pipe>>,
+    /// The pipelines by key (none: refused), each with the plane states its draws were listed
+    /// with this run (bit 0 none on, bit 1 one on; [`clip_code`]).
+    pipelines: Map<PipeKey, (Option<Pipe>, u8)>,
     /// The last draw's pipeline key and pipeline, each stage's sampler group's key and group
     /// (the pixel shader's first), its vertex link; the vertex links by shader and declaration;
     /// what the open pass was given.
-    last_pipeline: Option<(PipeKey, Option<Pipe>)>,
+    last_pipeline: Option<(PipeKey, Option<Pipe>, bool)>,
     last_groups: [(GroupKey, Option<wgpu::BindGroup>); 2],
     /// Each stage's empty sampler group (a stage without samplers).
     empty_groups: [Option<wgpu::BindGroup>; 2],
@@ -3275,8 +3277,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             clip: self.clip_link(samples),
         };
         // The last draw's pipeline again (most draws), else the cache's, else a new one.
+        // With a list, the plane state too: one pipeline with the clip distances serves draws
+        // with a plane on and with none, but an adapter without them needs one for each, so each
+        // state its draws have is listed ([`clip_code`]).
+        let planes = self.list.is_some() && self.planes_on();
         let made = match &self.last_pipeline {
-            Some((k, p)) if *k == key => p.clone(),
+            Some((k, p, on)) if *k == key && *on == planes => p.clone(),
             _ => {
                 if !self.pipelines.contains_key(&key) {
                     // Bounded: render states with continuous values (depth bias) could grow it
@@ -3295,39 +3301,46 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         topology,
                         &sampler_keys,
                     );
-                    self.pipelines.insert(key.clone(), pipeline);
-                    // Listed, so the next start makes it before play ([`prepare`]).
-                    if self.list.is_some() {
-                        let entry = prepare::Entry {
-                            vs: vs.stable,
-                            ps: ps.stable,
-                            decl: decl
-                                .elements
-                                .iter()
-                                .map(|e| (e.stream, e.offset, e.ty, e.usage, e.index))
-                                .collect(),
-                            strides,
-                            topology: kind as u8,
-                            index32,
-                            colours: std::array::from_fn(|i| {
-                                self.st.rt[i].as_ref().map(|s| s.format.d3d)
-                            }),
-                            depth: depth.as_ref().map(|d| d.format.d3d),
-                            states: key.states,
-                            samples,
-                            filterable,
-                            atoc,
-                            count: key.count,
-                            clip: clip_code(key.clip, self.planes_on()),
-                        };
-                        let presents = self.presents;
-                        if let Some(l) = &mut self.list {
-                            l.add(entry, presents);
-                        }
+                    self.pipelines.insert(key.clone(), (pipeline, 0));
+                }
+                // Listed, so the next start makes it before play ([`prepare`]): once for each
+                // plane state its draws have.
+                let bit = 1u8 << u8::from(planes);
+                let unlisted = self.pipelines.get_mut(&key).is_some_and(|(_, m)| {
+                    let new = *m & bit == 0;
+                    *m |= bit;
+                    new
+                });
+                if unlisted && self.list.is_some() {
+                    let entry = prepare::Entry {
+                        vs: vs.stable,
+                        ps: ps.stable,
+                        decl: decl
+                            .elements
+                            .iter()
+                            .map(|e| (e.stream, e.offset, e.ty, e.usage, e.index))
+                            .collect(),
+                        strides,
+                        topology: kind as u8,
+                        index32,
+                        colours: std::array::from_fn(|i| {
+                            self.st.rt[i].as_ref().map(|s| s.format.d3d)
+                        }),
+                        depth: depth.as_ref().map(|d| d.format.d3d),
+                        states: key.states,
+                        samples,
+                        filterable,
+                        atoc,
+                        count: key.count,
+                        clip: clip_code(key.clip, planes),
+                    };
+                    let presents = self.presents;
+                    if let Some(l) = &mut self.list {
+                        l.add(entry, presents);
                     }
                 }
-                let p = self.pipelines.get(&key).cloned().flatten();
-                self.last_pipeline = Some((key, p.clone()));
+                let p = self.pipelines.get(&key).and_then(|(p, _)| p.clone());
+                self.last_pipeline = Some((key, p.clone(), planes));
                 p
             }
         };
@@ -3797,12 +3810,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         for ((key, j), b) in jobs.into_iter().zip(built) {
             match b {
                 Ok(p) => {
-                    self.pipelines.insert(key, Some((p, j.group_layouts)));
+                    self.pipelines.insert(key, (Some((p, j.group_layouts)), 0));
                 }
                 Err(e) => {
                     refused += 1;
                     self.warn(format!("a pipeline wgpu refuses: {e}"));
-                    self.pipelines.insert(key, None);
+                    self.pipelines.insert(key, (None, 0));
                 }
             }
         }
