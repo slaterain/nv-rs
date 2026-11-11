@@ -131,7 +131,10 @@ pub fn destroy(e: &mut Engine, this: Ptr<InterfaceManager>) {
     let mut i = 0u32;
     while i < e.get(this, InterfaceManager::max_threads) {
         let entries = e.get(this, InterfaceManager::entries);
-        let face = e.get(InterfaceManager::entry(entries, i), InterfaceEntry::interface);
+        let face = e.get(
+            InterfaceManager::entry(entries, i),
+            InterfaceEntry::interface,
+        );
         if !face.is_null() {
             let _: Ptr<MapInterface> =
                 typed_call!(FAMILY, 0x0044_ed80, super::iface::delete(e, face, 1));
@@ -162,7 +165,10 @@ pub fn destroy_counted(e: &mut Engine, this: Ptr<InterfaceManager>) {
     let mut i = 0u32;
     while i < e.get(this, InterfaceManager::max_threads) {
         let entries = e.get(this, InterfaceManager::entries);
-        let face = e.get(InterfaceManager::entry(entries, i), InterfaceEntry::interface);
+        let face = e.get(
+            InterfaceManager::entry(entries, i),
+            InterfaceEntry::interface,
+        );
         if !face.is_null() {
             let _: Ptr<MapInterface> = typed_call!(
                 FAMILY,

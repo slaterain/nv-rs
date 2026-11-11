@@ -342,10 +342,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
             0x0052_93c0,
             iface::delete_counted(Ptr<MapInterface>, u32) -> Ptr
         ),
-        entry!(
-            0x0052_9330,
-            manager::destroy_counted(Ptr<InterfaceManager>)
-        ),
+        entry!(0x0052_9330, manager::destroy_counted(Ptr<InterfaceManager>)),
         entry!(
             0x0052_9300,
             manager::delete_counted(Ptr<InterfaceManager>, u32) -> Ptr

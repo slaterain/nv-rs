@@ -7,8 +7,8 @@ use super::layout::{
     MapInterface, MapLock, Marked, NodeSlot,
 };
 use super::{
-    field_ptr, iface, manager, node, FAMILY, OPERATOR_DELETE, OPERATOR_NEW, SCOPE_BEGIN, SCOPE_CONTEXT,
-    SCOPE_END, SCOPE_MODE, SOURCE_FILE,
+    field_ptr, iface, manager, node, FAMILY, OPERATOR_DELETE, OPERATOR_NEW, SCOPE_BEGIN,
+    SCOPE_CONTEXT, SCOPE_END, SCOPE_MODE, SOURCE_FILE,
 };
 use engine_core::ptr::{Field, Layout, Ptr};
 use engine_core::{args, typed_call, Engine};

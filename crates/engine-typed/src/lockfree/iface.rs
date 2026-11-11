@@ -974,7 +974,10 @@ pub fn construct(
     current_slot: Ptr<NodeSlot>,
     previous_slot: Ptr<NodeSlot>,
 ) -> Ptr<MapInterface> {
-    e.call(MARKED_CONSTRUCT, &args![field_of(this, MapInterface::current)]);
+    e.call(
+        MARKED_CONSTRUCT,
+        &args![field_of(this, MapInterface::current)],
+    );
     e.call(MARKED_CONSTRUCT, &args![field_of(this, MapInterface::next)]);
     e.set(this, MapInterface::map, map);
     e.set(this, MapInterface::next_slot, next_slot);
