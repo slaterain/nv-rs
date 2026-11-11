@@ -312,6 +312,16 @@ struct Made {
     over_16ms: u32,
     /// The longest time between two presents on the device's thread (the render thread).
     longest_frame: std::time::Duration,
+    /// The pipeline work on the device's thread since the last present: pipelines made on draws
+    /// with their modules, and listed ones made ahead ([`Device::prepare_listed`]).
+    work: std::time::Duration,
+    /// The most of it one present held, and that present; the presents that held more than
+    /// 20 ms of it; the pipelines made on draws that took more than 1 ms. The first-use gate
+    /// (measure/wgpu/FAST-LINK.md): none over 20 ms in a present, none over 1 ms on a draw.
+    worst_work: std::time::Duration,
+    worst_at: u64,
+    work_over_20ms: u32,
+    over_1ms: u32,
 }
 
 impl Made {
@@ -325,8 +335,23 @@ impl Made {
         self.pipeline += pipeline;
         self.longest = self.longest.max(all);
         self.whole += all;
+        self.work += all;
         if all.as_millis() > 16 {
             self.over_16ms += 1;
+        }
+        if all > std::time::Duration::from_millis(1) {
+            self.over_1ms += 1;
+        }
+    }
+    /// Present `present` is done: the pipeline work it held counted.
+    fn end_present(&mut self, present: u64) {
+        let work = std::mem::take(&mut self.work);
+        if work > self.worst_work {
+            self.worst_work = work;
+            self.worst_at = present;
+        }
+        if work > std::time::Duration::from_millis(20) {
+            self.work_over_20ms += 1;
         }
     }
 }
@@ -3698,6 +3723,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         if let Some(c) = &self.pipeline_cache {
             c.touched(self.presents);
         }
+        self.made.work += started.elapsed();
         let left = l.done.iter().filter(|&&d| d == 0).count();
         eprintln!(
             "NV_D3D9 wgpu: made ahead: {made} pipelines and {modules} shader modules in {:.0} ms (modules {:.0} ms) on {threads} threads, {refused} refused; {left} listed not yet possible (present {})",
@@ -4918,6 +4944,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.prepare_listed();
         self.end_pass();
         self.presents += 1;
+        self.made.end_present(self.presents);
         // The start is over once the game has shown a picture (the GPU's gate already stopped
         // the screen), or at the backstop.
         if let Some(why) = self
@@ -5134,6 +5161,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             ms(m.longest),
             m.over_16ms,
             ms(m.longest_frame)
+        );
+        eprintln!(
+            "NV_D3D9 wgpu: pipeline work since the last report: at most {:.1} ms in one present (present {}), {} presents over 20 ms, {} pipelines made on draws over 1 ms",
+            ms(m.worst_work),
+            m.worst_at,
+            m.work_over_20ms,
+            m.over_1ms
         );
     }
 
@@ -6329,6 +6363,29 @@ impl Drop for Device {
 mod tests {
     use super::*;
     use wgpu::TextureFormat as F;
+
+    /// The first-use gate's counts: the pipeline work a present held (pipelines made on its draws,
+    /// with their modules, and listed ones made ahead), the most in one present and where, the
+    /// presents over 20 ms, the pipelines over 1 ms; a present with none counts nothing.
+    #[test]
+    fn the_pipeline_work_each_present_held_is_counted_for_the_gate() {
+        let ms = std::time::Duration::from_millis;
+        let mut m = Made::default();
+        m.add_pipeline(ms(10), ms(12));
+        m.add_pipeline(ms(9), ms(12));
+        m.end_present(5);
+        m.add_pipeline(ms(0), std::time::Duration::from_micros(500));
+        m.end_present(6);
+        m.work += ms(21);
+        m.end_present(7);
+        m.end_present(8);
+        assert_eq!(m.worst_work, ms(24));
+        assert_eq!(m.worst_at, 5);
+        assert_eq!(m.work_over_20ms, 2, "presents 5 and 7");
+        assert_eq!(m.over_1ms, 2, "the two 12 ms pipelines");
+        assert_eq!(m.work, std::time::Duration::ZERO);
+        assert_eq!(m.pipelines, 3);
+    }
 
     /// A render target and its depth surface, asked for 8x apart, get the same count: the
     /// largest that both (and the rest of the game's multisampled formats and the occlusion
