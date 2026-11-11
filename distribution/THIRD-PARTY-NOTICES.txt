@@ -612,7 +612,7 @@ wgpu-core-deps-windows-linux-android 30.0.1
 wgpu-hal 30.0.1
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/gfx-rs/wgpu
-  Modified: built from a copy in the source tree (vendor/wgpu-hal) with nv-rs changes to its Vulkan and Direct3D 12 backends; vendor/README.md lists them, and each changed file says so in its first line.
+  Modified: built from a copy in the source tree (vendor/wgpu-hal) with the nv-rs changes vendor/README.md lists; each changed file says so in its first line.
   Bundled license files:
     wgpu-hal-30.0.1/LICENSE.APACHE
     wgpu-hal-30.0.1/LICENSE.MIT
