@@ -668,6 +668,103 @@ fn capture_synthetic(out: &std::path::Path, serve: &str, set: &str) {
     std::fs::write(out, text).unwrap();
 }
 
+/// `--capture-proxy <out.tsv> --serve <d3dx-measure.exe>`: D3DX on devices that take other formats
+/// than this machine's (`d3dx-measure serve proxy`: a proxy of the device whose `CheckDeviceFormat`
+/// answers from given lists; textures of formats the real one lacks made in the scratch pool). Six
+/// devices: one taking only the 16-bit and DXT formats (its cube list without R5G6B5 and
+/// X4R4G4B4), one taking every format of D3DX's table, four with random lists (each format taken
+/// with probability 1/2, as a texture and as a cube apart). For each: a `device` line (its lists),
+/// a `pick` line per format of D3DX's table (`D3DXCheckTextureRequirements`' answer and format,
+/// the cube one's), and a `file` line per synthetic file (`files` and `formats`: the create call's
+/// answer, levels, faces, surfaces as `--capture-synthetic` writes them).
+/// `crates/d3dx-tex/data/proxy_32bit.tsv` (`proxy_32bit_double.tsv` with `--double`).
+fn capture_proxy(out: &std::path::Path, serve: &str) {
+    use std::io::Read;
+    let mut child = std::process::Command::new(serve)
+        .arg("serve")
+        .arg("proxy")
+        .args(DOUBLE.load(Ordering::Relaxed).then_some("thread"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("d3dx-measure serve proxy");
+    fn rd(o: &mut impl Read) -> u32 {
+        let mut b = [0u8; 4];
+        o.read_exact(&mut b).unwrap();
+        u32::from_le_bytes(b)
+    }
+    fn ask(child: &mut std::process::Child, kind: u32, data: &[u8]) {
+        let stdin = child.stdin.as_mut().unwrap();
+        stdin.write_all(&kind.to_le_bytes()).unwrap();
+        stdin.write_all(&(data.len() as u32).to_le_bytes()).unwrap();
+        stdin.write_all(data).unwrap();
+        stdin.flush().unwrap();
+    }
+    let table: Vec<u32> = d3dx_tex::table_formats().collect();
+    let cc = |s: &[u8; 4]| u32::from_le_bytes(*s);
+    let sixteen = vec![23, 24, 25, 26, 30, cc(b"DXT1"), cc(b"DXT3"), cc(b"DXT5")];
+    let sixteen_cube = vec![24, 25, 26, cc(b"DXT1"), cc(b"DXT3"), cc(b"DXT5")];
+    let mut devices = vec![(sixteen, sixteen_cube), (table.clone(), table.clone())];
+    let mut seed = 0x5eed_0000_d3d9_0476u64;
+    let mut coin = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed >> 63 == 1
+    };
+    for _ in 0..4 {
+        let tex: Vec<u32> = table.iter().copied().filter(|_| coin()).collect();
+        let cube: Vec<u32> = table.iter().copied().filter(|_| coin()).collect();
+        devices.push((tex, cube));
+    }
+    let files: Vec<d3dx_tex::synthetic::File> = d3dx_tex::synthetic::files()
+        .into_iter()
+        .chain(d3dx_tex::synthetic::formats())
+        .collect();
+    let list = |v: &[u32]| v.iter().map(|f| format!("{f:x}")).collect::<Vec<_>>().join(",");
+    let mut text = format!("# D3DX on proxy devices taking the formats listed (d3dx-measure serve proxy, x87 control word {:#x}): device N, texture formats, cube formats; pick N, format, texture answer and format, cube answer and format; file N, name, call, answer, levels, faces, per surface format,width,height,fnv1a64\n", control_word());
+    for (n, (tex, cube)) in devices.iter().enumerate() {
+        let mut words = vec![tex.len() as u32];
+        words.extend(tex);
+        words.push(cube.len() as u32);
+        words.extend(cube);
+        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        ask(&mut child, 4, &bytes);
+        assert_eq!(rd(child.stdout.as_mut().unwrap()), 0, "the lists");
+        text += &format!("device\t{n}\t{}\t{}\n", list(tex), list(cube));
+        ask(&mut child, 5, &[]);
+        for &f in &table {
+            let o = child.stdout.as_mut().unwrap();
+            let (tr, tf, cr, cf) = (rd(o), rd(o), rd(o), rd(o));
+            text += &format!("pick\t{n}\t{f:x}\t{tr:08x}\t{tf:x}\t{cr:08x}\t{cf:x}\n");
+        }
+        for f in &files {
+            ask(&mut child, if f.cube { 2 } else { 1 }, &f.data);
+            let o = child.stdout.as_mut().unwrap();
+            let (hr, levels, faces) = (rd(o), rd(o), rd(o));
+            let mut parts = Vec::new();
+            for _ in 0..levels * faces {
+                let (format, w, h, len) = (rd(o), rd(o), rd(o), rd(o));
+                let mut bytes = vec![0u8; len as usize];
+                o.read_exact(&mut bytes).unwrap();
+                parts.push(format!(
+                    "{format:x},{w},{h},{:016x}",
+                    d3dx_tex::synthetic::fnv(&bytes)
+                ));
+            }
+            text += &format!(
+                "file\t{n}\t{}\t{}\t{hr:08x}\t{levels}\t{faces}\t{}\n",
+                f.name,
+                if f.cube { "cube" } else { "texture" },
+                parts.join(";")
+            );
+        }
+    }
+    drop(child.stdin.take());
+    child.wait().unwrap();
+    std::fs::write(out, text).unwrap();
+}
+
 /// `--capture-blocks <out.tsv> --oracle <d3dx-measure.exe>`: blocks of the fuzz kinds through the
 /// 32-bit DLL's DXT encoders at single precision (`--double`: double), with and without dither,
 /// one line each: format, dither, the 64 floats' bits, the DLL's block.
@@ -1118,6 +1215,10 @@ fn main() {
                 capture_synth = Some((PathBuf::from(&args[i + 1]), "formats"));
                 i += 1;
             }
+            "--capture-proxy" => {
+                capture_synth = Some((PathBuf::from(&args[i + 1]), "proxy"));
+                i += 1;
+            }
             "--capture-blocks" => {
                 capture_blk = Some(PathBuf::from(&args[i + 1]));
                 i += 1;
@@ -1169,6 +1270,10 @@ fn main() {
             &out,
             serve_exe.as_deref().expect("--serve <d3dx-measure.exe>"),
         );
+        return;
+    }
+    if let Some((out, "proxy")) = &capture_synth {
+        capture_proxy(out, serve_exe.as_deref().expect("--serve <d3dx-measure.exe>"));
         return;
     }
     if let Some((out, set)) = capture_synth {

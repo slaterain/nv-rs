@@ -219,8 +219,15 @@ fn read_u32(input: &mut impl std::io::Read) -> Option<u32> {
 /// threads (`BSTaskThread`, 00c42da0) call D3DX while its main thread made the device; otherwise
 /// all on this thread, at the single precision the device sets. The control word the calls
 /// start at, and any change a call leaves, go to stderr.
-pub unsafe fn serve(module: *mut c_void, on_thread: bool) {
-    let device = device();
+/// `proxy`: the calls go to a proxy of the device (`crate::proxy`): request 4 gives it the formats it
+/// takes (the count of texture formats, the formats, the count of cube formats, the formats;
+/// answered with 0), request 5 asks D3DX's picks on it for every format of its table (answered
+/// per format: `D3DXCheckTextureRequirements`' answer and format, then the cube one's).
+pub unsafe fn serve(module: *mut c_void, on_thread: bool, proxy: bool) {
+    let mut device = device();
+    if proxy {
+        device = crate::proxy::proxy(device);
+    }
     if !on_thread {
         return serve_calls(module as usize, device as usize);
     }
@@ -253,6 +260,34 @@ unsafe fn serve_calls(module: usize, device: usize) {
         let len = read_u32(&mut input).expect("a length") as usize;
         let mut data = vec![0u8; len];
         std::io::Read::read_exact(&mut input, &mut data).expect("the data");
+        if kind == 4 {
+            let words: Vec<u32> = data.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+            let n = words[0] as usize;
+            let texture = words[1..1 + n].to_vec();
+            let m = words[1 + n] as usize;
+            let cube = words[2 + n..2 + n + m].to_vec();
+            crate::proxy::set_lists(texture, cube);
+            out.write_all(&0u32.to_le_bytes()).unwrap();
+            out.flush().unwrap();
+            continue;
+        }
+        if kind == 5 {
+            type TexReq = unsafe extern "system" fn(*mut c_void, *mut u32, *mut u32, *mut u32, u32, *mut u32, u32) -> u32;
+            type CubeReq = unsafe extern "system" fn(*mut c_void, *mut u32, *mut u32, u32, *mut u32, u32) -> u32;
+            let tex_req: TexReq = std::mem::transmute(crate::GetProcAddress(module, b"D3DXCheckTextureRequirements\0".as_ptr()));
+            let cube_req: CubeReq = std::mem::transmute(crate::GetProcAddress(module, b"D3DXCheckCubeTextureRequirements\0".as_ptr()));
+            for &f in TABLE_FORMATS {
+                let (mut w, mut h, mut levels, mut tf) = (64u32, 64u32, 0u32, f);
+                let tr = tex_req(device, &mut w, &mut h, &mut levels, 0, &mut tf, 1);
+                let (mut s, mut cl, mut cf) = (64u32, 0u32, f);
+                let cr = cube_req(device, &mut s, &mut cl, 0, &mut cf, 1);
+                for word in [tr, tf, cr, cf] {
+                    out.write_all(&word.to_le_bytes()).unwrap();
+                }
+            }
+            out.flush().unwrap();
+            continue;
+        }
         if kind == 3 {
             // `D3DXGetImageInfoFromFileInMemory`: the answer, then the seven words.
             type Info = unsafe extern "system" fn(*const u8, u32, *mut u32) -> u32;
