@@ -38,8 +38,6 @@ const LIGHT_KINDS: u32 = 0x011f_a070;
 const LAST_LIGHT_FLAG: u32 = 0x011f_91a6;
 /// The neutral colour a point light gets below full `scale` (3 words, `011f4998`).
 const DIMMED_COLOUR: u32 = 0x011f_4998;
-/// The float minimum `0040ebd0` (`cdecl`: two floats, the result in ST0).
-const MINIMUM: u32 = 0x0040_ebd0;
 
 fn float_word(e: &Engine, address: u32) -> f64 {
     x87_load32(e.mem.u32(address))
@@ -198,7 +196,13 @@ pub fn light_setup(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
         if !skipped {
             let mut strength = x87_quiet_bits(e.mem.u32(data.wrapping_add(0xc4)));
             if e.global::<u8>(HDR) == 0 {
-                strength = x87_store32(e.call(MINIMUM, &args![1.0f32, strength]).f64());
+                // The smaller of 1 and the strength (`0040ebd0`, `cdecl(a, b)`, answering in ST0).
+                let smaller = typed_call!(
+                    crate::draw_f::FAMILY,
+                    0x0040_ebd0,
+                    crate::draw_f::helpers::float_min(e, 1.0, f32::from_bits(strength))
+                );
+                strength = x87_store32(f64::from(smaller));
             }
             let strength = x87_load32(strength);
             let base: [f64; 3] =

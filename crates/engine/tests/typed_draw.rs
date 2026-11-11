@@ -14,10 +14,11 @@
 
 use engine as _;
 use engine_core::prelude::*;
-use engine_core::typed::diff::{Case, Diff, Input};
+use engine_core::typed::diff::{Case, Diff, Input, F32_VALUES};
 use engine_core::typed::leaf;
 use engine_core::{entry, Engine};
 use engine_typed::draw::{self, packed, packing, shapes, skin, thunks};
+use engine_typed::draw_f;
 use engine_typed::render::{self, stream};
 use engine_typed::{crt, culling, dispatch, pathing, shader};
 
@@ -38,6 +39,10 @@ const TWO: u32 = 0x4000_0000;
 const HALF: u32 = 0x3f00_0000;
 
 const TWO_WAYS: &[u32] = &[0, 1];
+
+/// draw_f's helpers (`engine_typed::draw_f`): the float maximum and minimum, the class test, the list
+/// node pool's allocation.
+const DRAW_F_HELPERS: &[u32] = &[0x0040_4010, 0x0040_ebd0, 0x0043_b300, 0x0043_a010];
 
 fn ret(eax: u32) -> Ret {
     Ret {
@@ -245,6 +250,8 @@ impl Common for Diff {
             .family(&pathing::PATHING)
             .family(&culling::CULLING)
             .family(&crt::CRT)
+            // draw_f's helpers: off until its gate, so by address, as in play; run in their own tests.
+            .goes_by_address(DRAW_F_HELPERS)
             .max_calls(MAX_CALLS)
             .max_cases(240)
     }
@@ -2132,6 +2139,175 @@ fn plane_transform_thunk() {
         Input::Of(THUNK_WORDS),
     ])
     .setup(|e, c| thunk_world(e, c, 3))
+    .run()
+    .assert_same();
+}
+
+// ---- Group F: the helpers the typed families call by address most (`draw_f`). ----
+
+/// Every pair of the floats the harness tries ([`F32_VALUES`]: NaNs quiet and signalling, zeros of
+/// both signs, denormals, infinities), and random pairs with full mantissas.
+const FLOAT_PAIRS: usize = F32_VALUES.len() * F32_VALUES.len();
+
+#[test]
+fn float_max() {
+    Diff::new(entry!(0x0040_4010, draw_f::helpers::float_max(f32, f32) -> f32))
+        .family(&draw_f::DRAW_F)
+        .inputs(&[Input::F32, Input::F32])
+        .max_cases(FLOAT_PAIRS)
+        .float_sweep(256)
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn float_min() {
+    Diff::new(entry!(0x0040_ebd0, draw_f::helpers::float_min(f32, f32) -> f32))
+        .family(&draw_f::DRAW_F)
+        .inputs(&[Input::F32, Input::F32])
+        .max_cases(FLOAT_PAIRS)
+        .float_sweep(256)
+        .run()
+        .assert_same();
+}
+
+/// The class test's stand-in for an object's vtable slot 8 (its RTTI record): the object's word at +4.
+const KIND_FN: u32 = 0x00ff_3100;
+
+/// The class test's world from `c` = [the object: none (0), of the class asked about (1), of a class
+/// derived from it (2), of its base (3), of a class beside it (4); the record asked about: the class
+/// (0), its base (1), none (2)]. The records chain to their bases through +4, as the game's do.
+fn kind_world(e: &mut Engine, c: &Case) -> Vec<u32> {
+    e.map(RETS, 0x1000);
+    e.register(KIND_FN, |e, a| {
+        mark(e, a);
+        ret(e.mem.u32(a[0].wrapping_add(4)))
+    });
+    let record = |e: &mut Engine, base: u32| {
+        let r = e.mem.alloc(8);
+        e.mem.set_u32(r + 4, base);
+        r
+    };
+    let base = record(e, 0);
+    let class = record(e, base);
+    let derived = record(e, class);
+    let beside = record(e, base);
+    let vtable = e.mem.alloc(0xc);
+    e.mem.set_u32(vtable + 8, KIND_FN);
+    let of = |e: &mut Engine, r: u32| {
+        let o = e.mem.alloc(8);
+        e.mem.set_u32(o, vtable);
+        e.mem.set_u32(o + 4, r);
+        o
+    };
+    let object = match c.word(0) {
+        0 => 0,
+        1 => of(e, class),
+        2 => of(e, derived),
+        3 => of(e, base),
+        _ => of(e, beside),
+    };
+    let asked = match c.word(1) {
+        0 => class,
+        1 => base,
+        _ => 0,
+    };
+    vec![asked, object]
+}
+
+#[test]
+fn is_kind_of() {
+    Diff::new(entry!(
+        0x0043_b300,
+        draw_f::helpers::is_kind_of(u32, Ptr<_>) -> bool
+    ))
+    .family(&draw_f::DRAW_F)
+    // `NiObject::IsKindOf` and the record walk it calls, as in play.
+    .family(&dispatch::DISPATCH)
+    .family(&leaf::LEAVES)
+    .inputs(&[Input::Of(&[0, 1, 2, 3, 4]), Input::Of(&[0, 1, 2])])
+    .setup(kind_world)
+    .run()
+    .assert_same();
+}
+
+/// The list node pool: its free list, its blocks and its nodes per block (its lock is at `011c5f80`).
+const POOL_FREE: u32 = 0x011c_5f58;
+const POOL_BLOCKS: u32 = 0x011c_5f54;
+const POOL_BLOCK_NODES: u32 = 0x0118_8f7c;
+/// A node the lock's stand-in gives back to the pool before it answers (another thread's, freed while
+/// this one waited), so a read of the free list moved above the lock shows.
+const FREED_AT_LOCK: u32 = RETS + 0x700;
+
+/// The pool's world from `c` = [the free list: empty (0), one node (1), two (2); the nodes per block
+/// the refill makes (3, 4, 8); a block listed before (1) or none; a node freed while the lock is taken
+/// (1) or none; the receiver, which nothing reads]. The refill (`0043a080`) is the real one with its
+/// allocation (`00401000`) stood in; the lock and unlock (the dispatch family's, run in its tests)
+/// stand in by address: each marks its words, the unlock with the pool's state.
+fn pool_world(e: &mut Engine, c: &Case) -> Vec<u32> {
+    e.map(RETS, 0x1000);
+    e.map(POOL_FREE & !0xfff, 0x1000);
+    e.map(POOL_BLOCK_NODES & !0xfff, 0x1000);
+    e.register(0x0040_fbf0, |e, a| {
+        mark(e, a);
+        let freed = e.mem.u32(FREED_AT_LOCK);
+        if freed != 0 {
+            let head = e.mem.u32(POOL_FREE);
+            e.mem.set_u32(freed, head);
+            e.mem.set_u32(POOL_FREE, freed);
+        }
+        ret(0)
+    });
+    e.register(0x0040_fba0, |e, a| {
+        let state = [a[0], e.mem.u32(POOL_FREE), e.mem.u32(POOL_BLOCKS)];
+        mark(e, &state);
+        ret(0)
+    });
+    e.register(0x0040_1000, |e, a| {
+        mark(e, a);
+        ret(e.mem.alloc(a[0].max(4)))
+    });
+    e.mem.set_u32(POOL_BLOCK_NODES, c.word(1));
+    // Nodes with words in them, so the clears show.
+    let node = |e: &mut Engine, next: u32| {
+        let n = e.mem.alloc(0xc);
+        e.mem.set_u32(n, next);
+        e.mem.set_u32(n + 4, 0x1111_1111);
+        e.mem.set_u32(n + 8, 0x2222_2222);
+        n
+    };
+    let mut head = 0;
+    for _ in 0..c.word(0) {
+        head = node(e, head);
+    }
+    e.mem.set_u32(POOL_FREE, head);
+    if c.word(2) != 0 {
+        let block = node(e, 0);
+        e.mem.set_u32(POOL_BLOCKS, block);
+    }
+    if c.word(3) != 0 {
+        let freed = node(e, 0x3333_3333);
+        e.mem.set_u32(FREED_AT_LOCK, freed);
+    }
+    vec![c.word(4)]
+}
+
+#[test]
+fn allocate_node() {
+    Diff::new(entry!(
+        0x0043_a010,
+        draw_f::helpers::allocate_node(Ptr<_>) -> Ptr<_>
+    ))
+    .family(&draw_f::DRAW_F)
+    .goes_by_address(&[0x0040_fbf0, 0x0040_fba0])
+    .inputs(&[
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[3, 4, 8]),
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+        Input::Of(&[0, 0x0bad_0010]),
+    ])
+    .setup(pool_world)
     .run()
     .assert_same();
 }

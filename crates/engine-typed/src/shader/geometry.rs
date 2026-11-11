@@ -181,8 +181,6 @@ const TO_Y: u32 = 0x011f_9630;
 const FROM_X: u32 = 0x011f_9634;
 const FROM_Y: u32 = 0x011f_9638;
 const RUNNING: u32 = 0x011f_94aa;
-const FLOAT_MAX: u32 = 0x0040_4010;
-const FLOAT_MIN: u32 = 0x0040_ebd0;
 
 // Typed from 00b791f0
 /// Unnamed in the engine map, `thiscall` with three words: the pass
@@ -225,10 +223,20 @@ pub fn vertex_entry_21(e: &mut Engine, _this: Ptr, pass_type: u32, first: Ptr, s
             let _unread = e.mem.u32(second + 0x94);
             let ratio = x87_store32(x87_div(elapsed, scale));
             let ratio = x87_quiet_bits(ratio);
-            let raised = e.call(FLOAT_MAX, &args![0u32, ratio]).f64();
-            let raised = x87_store32(raised);
-            let factor = e.call(FLOAT_MIN, &args![1.0f32.to_bits(), raised]).f64();
-            let factor = x87_store32(factor);
+            // The larger of 0 and the ratio (`00404010`), then the smaller of 1 and that (`0040ebd0`):
+            // `cdecl(a, b)`, each answering in ST0.
+            let raised = typed_call!(
+                crate::draw_f::FAMILY,
+                0x0040_4010,
+                crate::draw_f::helpers::float_max(e, 0.0, f32::from_bits(ratio))
+            );
+            let raised = x87_store32(f64::from(raised));
+            let factor = typed_call!(
+                crate::draw_f::FAMILY,
+                0x0040_ebd0,
+                crate::draw_f::helpers::float_min(e, 1.0, f32::from_bits(raised))
+            );
+            let factor = x87_store32(f64::from(factor));
             let to_x = x87_load32(e.global::<u32>(TO_X));
             let span_x = x87_store32(x87_sub(to_x, x87_m32(e.global::<u32>(FROM_X))));
             let to_y = x87_load32(e.global::<u32>(TO_Y));

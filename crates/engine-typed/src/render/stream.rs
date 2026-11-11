@@ -30,7 +30,6 @@ const STREAM_LIMIT: u32 = 0x011b_f558;
 /// own RTTI chain) and the strip data (`IsKindOf`, `0043b300`).
 const TRI_LIST_DATA_RTTI: u32 = 0x011f_4a88;
 const STRIP_DATA_RTTI: u32 = 0x011f_4a70;
-const IS_KIND_OF: u32 = 0x0043_b300;
 /// `NiTriShapeData::GetTriList` (`00a7b850`).
 const GET_TRI_LIST: u32 = 0x00a7_b850;
 /// `NiD3DHLSLVertexShader::GetEntryPoint` (`00e8bf90`, on the renderer's +0x8bc), the buffer data's
@@ -277,7 +276,11 @@ pub fn pack_geometry_buffer(
         lengths = 0;
         strips = 1;
         index_count = base_count.wrapping_mul(3);
-    } else if e.call(IS_KIND_OF, &args![STRIP_DATA_RTTI, data]).u8() != 0 {
+    } else if typed_call!(
+        crate::draw_f::FAMILY,
+        0x0043_b300,
+        crate::draw_f::helpers::is_kind_of(e, STRIP_DATA_RTTI, Ptr::new(data))
+    ) {
         triangles = u32::from(crate::draw::shapes::triangle_count(e, d));
         base_count = u32::from(e.mem.u16(d.wrapping_add(0x40)));
         list = typed_call!(

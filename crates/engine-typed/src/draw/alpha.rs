@@ -16,8 +16,6 @@ use engine_core::{args, typed_call, Engine};
 /// draw's loop compares with (`010241b0`).
 const NO_DISTANCE: u32 = 0x0101_5f5c;
 const NO_DISTANCE_DOUBLE: u32 = 0x0102_41b0;
-/// The larger of two floats (`00404010`, `cdecl(a, b)`, answering in `ST0`).
-const FLOAT_MAX: u32 = 0x0040_4010;
 /// A holder's own pass list draw (`00b99990`, `thiscall(list, flag)`), and a batch renderer's slot
 /// that draws its pass types (0x90, `(1, 0x2f1, flag)`).
 const OWN_LIST_DRAW: u32 = 0x00b9_9990;
@@ -166,7 +164,16 @@ pub fn alpha_distance(
     } else {
         x87_store32(centre_distance(e, bound, d, false))
     };
-    e.call(FLOAT_MAX, &args![list_distance, distance]).st0
+    // The larger of the two (`00404010`, `cdecl(a, b)`, answering in ST0).
+    f64::from(typed_call!(
+        crate::draw_f::FAMILY,
+        0x0040_4010,
+        crate::draw_f::helpers::float_max(
+            e,
+            f32::from_bits(list_distance),
+            f32::from_bits(distance)
+        )
+    ))
 }
 
 // Typed from 00b64f20
