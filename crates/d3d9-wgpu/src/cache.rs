@@ -90,6 +90,26 @@ pub(crate) fn write_replacing(path: &Path, bytes: &[u8]) -> std::io::Result<()> 
     r
 }
 
+/// Removes the temporaries of writes that never finished (a process killed while writing), older
+/// than ten minutes: another instance's write in progress is younger.
+pub(crate) fn remove_stale_temporaries(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age.as_secs() > 600);
+        if old && p.extension().is_some_and(|x| x == "tmp") {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
+}
+
 /// What writes the cache's file: shared by the device and the writer threads, and found by
 /// [`save_all_now`] at the end of the run.
 struct Saver {
@@ -167,7 +187,8 @@ pub(crate) struct PipelineCacheFile {
     dirty: std::cell::Cell<bool>,
     /// The present of the last new pipeline, and of the last save.
     touched_at: std::cell::Cell<u64>,
-    saved_at: u64,
+    /// The present of the first pipeline the file does not have yet.
+    first_touched_at: std::cell::Cell<u64>,
 }
 
 impl PipelineCacheFile {
@@ -193,6 +214,7 @@ impl PipelineCacheFile {
             );
             return None;
         }
+        remove_stale_temporaries(dir);
         let path = dir.join(format!("{name}.bin"));
         let file = match std::fs::metadata(&path) {
             Ok(m) if m.len() > MAX_FILE => Err(format!("{} MB, too large", m.len() >> 20)),
@@ -265,12 +287,15 @@ impl PipelineCacheFile {
             note,
             dirty: std::cell::Cell::new(false),
             touched_at: std::cell::Cell::new(0),
-            saved_at: 0,
+            first_touched_at: std::cell::Cell::new(0),
         })
     }
 
     /// A pipeline was made with the cache at present `presents`.
     pub(crate) fn touched(&self, presents: u64) {
+        if !self.dirty.get() {
+            self.first_touched_at.set(presents);
+        }
         self.dirty.set(true);
         self.touched_at.set(presents);
     }
@@ -284,12 +309,11 @@ impl PipelineCacheFile {
             return;
         }
         let quiet = presents.saturating_sub(self.touched_at.get()) >= QUIET_PRESENTS;
-        let long = presents.saturating_sub(self.saved_at) >= SAVE_EVERY;
+        let long = presents.saturating_sub(self.first_touched_at.get()) >= SAVE_EVERY;
         if !(now || quiet || long) {
             return;
         }
         self.dirty.set(false);
-        self.saved_at = presents;
         let saver = self.saver.clone();
         if now {
             saver.save();

@@ -1068,7 +1068,10 @@ fn the_pipeline_cache_file_is_kept_and_a_bad_one_is_ignored() {
     assert_eq!(first, plain);
     let Some(note) = note else {
         // No pipeline cache on this backend: nothing kept, nothing to read back.
-        assert!(std::fs::read_dir(&folder).map_or(true, |d| d.count() == 0));
+        // (The pipeline list, `pipelines.txt`, is kept on every backend.)
+        assert!(std::fs::read_dir(&folder).map_or(true, |d| d
+            .flatten()
+            .all(|e| e.path().extension() != Some(std::ffi::OsStr::new("bin")))));
         eprintln!("this backend keeps no pipeline cache");
         return;
     };
@@ -1180,4 +1183,101 @@ fn the_loading_screen_shows_the_logo_the_text_and_the_bar() {
     }
     #[cfg(not(windows))]
     let _ = other;
+}
+
+/// The pipelines a run made are listed in the cache folder; the next run makes them at the first
+/// `Present` after their shaders exist, so its draws make none (and draw the same pixels). A
+/// damaged list is skipped line by line, never a failed start.
+#[test]
+fn listed_pipelines_are_made_before_the_draws_that_need_them() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("pipeline-list-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let present = |g: &mut Gpu| {
+        g.run(Cmd::Present {
+            device: DEVICE,
+            source: None,
+            dest: None,
+            window: 0,
+            dirty: false,
+            model: 0,
+            frame: 1,
+        });
+    };
+    let run = |cache: &std::path::Path| -> Option<(Vec<u8>, u64)> {
+        let mut g = Gpu::with_cache(4, 1, Some(cache.to_path_buf()))?;
+        present(&mut g);
+        g.colour([1.0, 0.5, 0.25, 1.0]);
+        g.clear(1, 0, 1.0);
+        g.cover(0.5);
+        let reds = g.reds();
+        let made = g.b.device().expect("the device").pipelines_made_on_draws();
+        Some((reds, made))
+    };
+    let Some((first, made_first)) = run(&dir) else {
+        return;
+    };
+    assert!(
+        made_first >= 1,
+        "the first run makes its pipeline on the draw"
+    );
+    let list = std::fs::read_to_string(dir.join("pipelines.txt")).expect("the list written");
+    assert!(list.lines().count() >= 1, "{list}");
+    let (second, made_second) = run(&dir).unwrap();
+    assert_eq!(
+        second, first,
+        "the same pixels from the pipeline made ahead"
+    );
+    assert_eq!(made_second, 0, "no pipeline made on a draw: {list}");
+    // A damaged list: the readable lines are still made ahead.
+    std::fs::write(
+        dir.join("pipelines.txt"),
+        format!("junk\n{list}p1 broken\n"),
+    )
+    .unwrap();
+    let (third, made_third) = run(&dir).unwrap();
+    assert_eq!(third, first);
+    assert_eq!(made_third, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A multisampled entry is made ahead at the run's own multisample count, whatever count it was
+/// recorded at (the shipped list is recorded at one antialiasing setting): the list a 4x run
+/// wrote leaves an 8x run no pipeline to make on its draws, and the same pixels as an 8x run
+/// without a list.
+#[test]
+fn a_list_recorded_at_4x_serves_a_run_at_8x() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("pipeline-list-8x-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let run = |samples: u32, cache: Option<&std::path::Path>| -> Option<(Vec<u8>, u64)> {
+        let mut g = Gpu::with_cache(4, samples, cache.map(std::path::Path::to_path_buf))?;
+        g.run(Cmd::Present {
+            device: DEVICE,
+            source: None,
+            dest: None,
+            window: 0,
+            dirty: false,
+            model: 0,
+            frame: 1,
+        });
+        g.colour([1.0, 0.5, 0.25, 1.0]);
+        g.clear(1, 0, 1.0);
+        g.cover(0.5);
+        let reds = g.reds();
+        let made = g.b.device().expect("the device").pipelines_made_on_draws();
+        Some((reds, made))
+    };
+    let Some((_, made_4x)) = run(4, Some(&dir)) else {
+        return;
+    };
+    assert!(made_4x >= 1, "the 4x run makes its pipeline on the draw");
+    let list = std::fs::read_to_string(dir.join("pipelines.txt")).expect("the list written");
+    let (plain, _) = run(8, None).unwrap();
+    let (listed, made_8x) = run(8, Some(&dir)).unwrap();
+    assert_eq!(made_8x, 0, "the 8x run makes no pipeline on a draw: {list}");
+    assert_eq!(listed, plain, "the same pixels as an 8x run without a list");
+    let _ = std::fs::remove_dir_all(&dir);
 }

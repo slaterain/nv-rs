@@ -206,6 +206,9 @@ fn main() {
             if let Some(path) = &lists {
                 write_lists(game, path);
             }
+            // What the platform layer runs before it ends a run itself (the window closed): the
+            // game's own Quit ends here, and its last pipelines are written too.
+            host::run_exit_hooks();
             std::process::exit(end.status());
         },
     ));
