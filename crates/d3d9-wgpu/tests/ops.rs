@@ -663,6 +663,25 @@ fn a_texel_aligned_quad_copies_its_texture_exactly() {
     });
     let (_, _, px) = b.device().unwrap().read_surface_pixels(RT2).unwrap();
     assert_eq!(px, texels);
+    // The texture destroyed: at the next Present the bind group that sampled it is dropped from
+    // the cache (it held the texture's memory until the cache filled up).
+    let cached = b.device().unwrap().cached_bind_groups();
+    b.execute(Cmd::Destroy { object: TEX });
+    assert_eq!(
+        b.device().unwrap().cached_bind_groups(),
+        cached,
+        "kept until the Present"
+    );
+    b.execute(Cmd::Present {
+        device: DEVICE,
+        source: None,
+        dest: None,
+        window: 0,
+        dirty: false,
+        model: 0,
+        frame: 1,
+    });
+    assert_eq!(b.device().unwrap().cached_bind_groups(), cached - 1);
 }
 
 /// A draw that samples the texture it draws into (its level 0 the render target), as the game's

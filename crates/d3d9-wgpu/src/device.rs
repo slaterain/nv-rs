@@ -710,6 +710,9 @@ pub struct Device {
     /// The copies of textures a draw samples while drawing into them, by the texture's id
     /// ([`Device::copy_for_sampling`]).
     target_copies: Map<u64, Arc<Tex>>,
+    /// Textures and surfaces destroyed since the last `Present`, by id: the cached bind groups and
+    /// depth stand-ins that hold them are dropped then ([`Device::purge_destroyed`]).
+    destroyed: HashSet<u64>,
     next_id: u64,
     presents: u64,
     shots: Option<Shots>,
@@ -1015,6 +1018,7 @@ impl Device {
             next_count_slot: 0,
             reduce: Map::default(),
             target_copies: Map::default(),
+            destroyed: HashSet::new(),
             next_id: 1,
             presents: 0,
             shots: Shots::from_env(),
@@ -1505,12 +1509,44 @@ impl Device {
             self.end_pass();
             self.counting = None;
         }
-        if let Some(Obj::Texture(t, surfaces)) = self.objects.remove(&object) {
-            self.target_copies.remove(&t.id);
-            for s in surfaces {
-                self.objects.remove(&s);
+        match self.objects.remove(&object) {
+            Some(Obj::Texture(t, surfaces)) => {
+                if let Some(c) = self.target_copies.remove(&t.id) {
+                    self.destroyed.insert(c.id);
+                }
+                self.destroyed.insert(t.id);
+                for s in surfaces {
+                    self.objects.remove(&s);
+                }
             }
+            Some(Obj::Surface(s)) => {
+                self.destroyed.insert(s.id);
+            }
+            _ => {}
         }
+    }
+
+    /// The cached bind groups that sample a texture destroyed since the last `Present`, and the depth
+    /// stand-ins made for a destroyed depth surface, dropped: they held the texture (its video
+    /// memory) until the cache filled up (8,192 groups), so over a long walk the textures of
+    /// unloaded cells stayed. Once a frame, so a cell change that destroys hundreds of textures
+    /// costs one pass over the cache.
+    fn purge_destroyed(&mut self) {
+        if self.destroyed.is_empty() {
+            return;
+        }
+        let gone = std::mem::take(&mut self.destroyed);
+        let holds = |k: &GroupKey| k.iter().any(|e| gone.contains(&e.2));
+        self.groups.retain(|k, _| !holds(k));
+        if holds(&self.last_group.0) {
+            self.last_group = (Vec::new(), None);
+        }
+        self.depth_parts.retain(|k, _| !gone.contains(&k.0));
+    }
+
+    /// How many bind groups are cached (tests).
+    pub fn cached_bind_groups(&self) -> usize {
+        self.groups.len()
     }
 
     /// Sends the frame's commands so far, so a later upload cannot change what they draw.
@@ -4908,6 +4944,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 }
             }
         }
+        // Bind groups of textures destroyed this frame dropped.
+        self.purge_destroyed();
         // The counts the GPU has now posted for the game's threads.
         self.post_answers();
         if let Some(c) = &mut self.pipeline_cache {
@@ -4920,10 +4958,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             // The bytes kept for read-backs (`ReadSurface`), printed for their memory cost.
             let kept: usize = self.kept.values().map(Vec::len).sum();
             eprintln!(
-                "NV_D3D9 wgpu: present {frame}: {} draws, {} skipped, {} pipelines, {} wgpu errors, {:.1} MB kept for read-backs ({} levels)",
+                "NV_D3D9 wgpu: present {frame}: {} draws, {} skipped, {} pipelines, {} bind groups, {} wgpu errors, {:.1} MB kept for read-backs ({} levels)",
                 self.draws,
                 self.skipped,
                 self.pipelines.len(),
+                self.groups.len(),
                 self.errors.load(Ordering::Relaxed),
                 kept as f64 / 1_048_576.0,
                 self.kept.values().filter(|k| !k.is_empty()).count()
