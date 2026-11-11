@@ -42,14 +42,13 @@ const NULL_BOUND: u32 = 0x011f_4288;
 /// `BSSkinInstance`'s type (`011f49d8`), what the skin's slot 8 answers for a dismember skin.
 pub(crate) const SKIN_RTTI: u32 = 0x011f_49d8;
 
-/// Callees by address: the map's `GetAt` (`thiscall(map, key, out)`) and `SetAt`, the node pool's
-/// allocation (`thiscall(list + 0x10)`), the active list's clear, the memory manager and `operator
-/// new`, the batch renderer's constructor, the shadow-pass test, the shadow light shader's per-geometry
-/// set-ups (the draw family's, compared by address), the renderer's skinned test, the geometry holder's
-/// draw, a shader's pass tail of kind 0x11, the node pool lock.
+/// Callees by address: the map's `GetAt` (`thiscall(map, key, out)`) and `SetAt`, the active list's
+/// clear, the memory manager and `operator new`, the batch renderer's constructor, the shadow-pass
+/// test, the shadow light shader's per-geometry set-ups (the draw family's, compared by address), the
+/// renderer's skinned test, the geometry holder's draw, a shader's pass tail of kind 0x11, the node
+/// pool lock. The node pool's allocation is draw_f's (`0043a010`).
 const MAP_GET_AT: u32 = 0x0085_3130;
 const MAP_SET_AT: u32 = 0x0084_4700;
-const LIST_NODE_ALLOCATE: u32 = 0x0043_a010;
 const ACTIVE_LIST_CLEAR: u32 = 0x00b6_4ec0;
 const MEMORY_MANAGER: u32 = 0x011f_6238;
 const MEMORY_ALLOCATE: u32 = 0x00aa_3e40;
@@ -1228,13 +1227,14 @@ pub fn sort_list(e: &mut Engine, this: Ptr<PassList>, compare: u32) {
 fn take_node(e: &mut Engine, list: Ptr<PassList>) -> Ptr<PassNode> {
     let spare = e.get(list, PassList::pSpare);
     if spare == 0 {
-        Ptr::new(
-            e.call(
-                LIST_NODE_ALLOCATE,
-                &args![list.addr().wrapping_add(PassList::uiCount.off)],
-            )
-            .u32(),
-        )
+        // The node pool's allocation (`0043a010`, `thiscall` on the list's count).
+        let count = Ptr::new(list.addr().wrapping_add(PassList::uiCount.off));
+        let node: Ptr = typed_call!(
+            crate::draw_f::FAMILY,
+            0x0043_a010,
+            crate::draw_f::helpers::allocate_node(e, count)
+        );
+        Ptr::new(node.addr())
     } else {
         let next = e.global::<u32>(spare);
         e.set(list, PassList::pSpare, next);

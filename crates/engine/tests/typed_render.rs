@@ -323,6 +323,8 @@ impl Common for Diff {
                 0x00ee_6dce,
                 0x00ee_6dc8,
             ])
+            // draw_f's helpers: off until its gate, so by address, as in play; run in typed_draw.
+            .goes_by_address(DRAW_F_HELPERS)
             .max_calls(MAX_CALLS)
             .max_cases(200);
         if real_shader {
@@ -334,6 +336,10 @@ impl Common for Diff {
 }
 
 const TWO_WAYS: &[u32] = &[0, 1];
+
+/// draw_f's helpers (`engine_typed::draw_f`): the float maximum and minimum, the class test, the list
+/// node pool's allocation.
+const DRAW_F_HELPERS: &[u32] = &[0x0040_4010, 0x0040_ebd0, 0x0043_b300, 0x0043_a010];
 
 #[test]
 fn bind() {

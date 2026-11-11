@@ -432,7 +432,8 @@ speed gate passed (G1, 2026-11-06: Goodsprings +7.1%, Doc's room +3.0%). It is n
 `leaves`, `topic_search`, `topic_order` and, since their speed gate (2026-11-08), `lockfree`, `culling`,
 `pathing`, `shader`, `crt` and `dispatch` are on, and since their gates `render` (2026-11-09), `draw`, `scene`,
 `particles`, `collision` and `multibound` (2026-11-10) (below); `NV_TYPED=off` turns every family off, and
-`<family>:off` one. A run compared call for call with the original's record (nv-trace's `NV_TRACE_OUT`,
+`<family>:off` one. A family merged off (`geometry`, `animation`, `draw_f`, below) stays off until its gate, and
+`NV_TYPED=<family>` turns it on. A run compared call for call with the original's record (nv-trace's `NV_TRACE_OUT`,
 `NV_TRACE_LIST`) has every family off unless `NV_TYPED` says otherwise (`typed::switch_for`).
 The second is `topic_search` (`crates/engine-fallout-forms/src/topic_search.rs`, provided from that
 crate): the search for the topic that holds a topic info (`TESTopic::GetOwnerTopic`) and the functions
@@ -625,6 +626,16 @@ transform's getters and the bone's setters. The translations keep their plain ca
 only the bip node's walk calls `UpdateAllButTarget` by address (in every build, so kNVSE's hook runs from there too). Its tests are `crates/engine/tests/typed_animation.rs`. Merged off
 (AGENT-RULES.md, "Typed code merges OFF first"): `NV_TYPED=animation` turns it on until a batch gate runs the
 recorded street run with it on against off; x87 code with the exact helpers, as the other update-half families.
+And `draw_f` (same crate, id 25), group F of the world draw's worklist: the small helpers the typed families called
+by address most. The float maximum (`00404010`) and minimum (`0040ebd0`); the class test with its null check
+(`0043b300`, which calls the dispatch family's `NiObject::IsKindOf`); the list node pool's allocation (`0043a010`:
+under the pool's lock, the dispatch family's, the pool refilled by address when empty, its first node taken and
+cleared). The draw, shader and render families call them with `typed_call!`. The other callers that reach them by address
+(most: the AI, the menus, the sound, the forms) get the typed ones too when it is on; the few translations that
+call them as Rust functions keep the translation, which does the same. Merged off: on its
+differential tests, its planted mutants and review, with a later gate to turn it on (`NV_TYPED=draw_f` until then).
+While it is on, the translation's speech diagnostic (`NV_SPEECH_CHECK`, not the exe's) takes no notes at the node
+allocation. Its tests are in `crates/engine/tests/typed_draw.rs`.
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with
