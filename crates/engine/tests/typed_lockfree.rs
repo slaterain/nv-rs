@@ -1928,8 +1928,9 @@ fn clear_counted() {
         .assert_same();
 }
 
-/// Stage 2 (the K1 pilot): one map's life run through the switch in every form of the family.
 mod forms {
+    //! Stage 2 (the K1 pilot): one map's life run through the switch in every form of the family.
+    //!
     //! A map's life (made, filled, looked up, removed from, emptied by a taking iteration and a
     //! clear, filled again, destroyed), for a map of counted values and one of plain words, run the
     //! same in stage 1, the dual run, K1 (`lockfree:moved`, shadows) and K2 (`lockfree:freed`): the
