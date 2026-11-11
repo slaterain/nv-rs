@@ -6,9 +6,9 @@
 //! grows to that, a batch at a time:
 //!
 //! - [`pack`]: the renderer's packing of a geometry's arrays into its vertex buffer (the hottest reader:
-//!   about 52 million reads on the census route): the shader declaration's per-stream pack, the element
-//!   pack that picks an array, the converters that can receive one, the texture set getter, and the
-//!   fixed-function packer with its strided copy.
+//!   about 52 million reads on the census route): the element pack that picks an array for each entry
+//!   of a shader declaration's stream (the draw family's per-stream pack calls it), the converters that
+//!   can receive one, the texture set getter, and the fixed-function packer with its strided copy.
 //!
 //! Stage 1: the arrays and the objects stay in guest memory where the game made them and are read
 //! through their [`layout`]. Each function stays registered at its exe address; a call the exe makes
@@ -64,8 +64,7 @@ pub(crate) fn low_byte(word: u32) -> u8 {
 #[rustfmt::skip]
 fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
-        // The per-stream pack and the element pack.
-        entry!(0x00e7_6770, pack::pack_stream(Ptr, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
+        // The element pack.
         entry!(0x00e7_a200, pack::pack_entry(Ptr, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
         // The converters that can receive an array.
         entry!(0x00e7_8f80, pack::copy_same(u32) -> u32),

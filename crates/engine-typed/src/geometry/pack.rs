@@ -1,21 +1,22 @@
-//! The renderer's packing of a geometry's arrays into its vertex buffer: the shader declaration's
-//! per-stream pack (its slot 0xac, which `PackGeometryBuffer` runs for each stream), the element pack
-//! that picks an array for a declaration entry and hands it to a converter through a packer entry on
-//! its stack, the converters that can receive one of the arrays (float sources: the positions, the
-//! normals with the binormals and tangents after them, the colours and the texture coordinates), the
-//! texture set getter, and the fixed-function packer (`PackUntransformedVB`) with its strided copy.
+//! The renderer's packing of a geometry's arrays into its vertex buffer: the element pack that picks
+//! an array for a declaration entry and hands it to a converter through a packer entry on its stack
+//! (the shader declaration's per-stream pack, its slot 0xac, calls it for each entry; that one is the
+//! draw family's, and only passes the data on), the converters that can receive one of the arrays
+//! (float sources: the positions, the normals with the binormals and tangents after them, the colours
+//! and the texture coordinates), the texture set getter, and the fixed-function packer
+//! (`PackUntransformedVB`) with its strided copy.
 //!
 //! The converters `00e78560` stores for the other source formats read a skin partition's weights and
 //! bone indices or the additional data's streams, never these arrays: they stay calls by address.
 //!
-//! What stays as the exe has it: every call by address (the declaration's slots, the buffer data's
-//! update, the manager's new buffer, lock and unlock, `memcpy`, `memset`, `_ftol2`, the additional
-//! data's lookup, the derived vectors' pack `00a855f0`, the skinned positions' pack `00687d40`), and the
-//! reads of a packer entry's fields where the exe reads them (again after each vertex where it does).
+//! What stays as the exe has it: every call by address (the manager's buffer check and lock, the
+//! vertex buffer's description and unlock, `memcpy`, `memset`, `_ftol2`, the additional data's
+//! lookup, the skinned positions' pack `00687d40`), and the reads of a packer entry's fields where the
+//! exe reads them (again after each vertex where it does).
 
 use super::layout::{
-    DeclarationEntry, GeometryBufferData, GeometryData, PackerEntry, ShaderDeclaration,
-    SkinPartition, StreamEntry, VBChip, VertexBufferManager,
+    DeclarationEntry, GeometryBufferData, GeometryData, PackerEntry, SkinPartition, VBChip,
+    VertexBufferManager,
 };
 use super::{low_byte, low_half, word_of, FAMILY};
 use engine_core::ptr::Ptr;
@@ -447,12 +448,14 @@ impl Picked {
 /// (1 to 3 floats: formats 1 to 3; 4 floats as 12 bytes of a 16-byte stride, format 3; no partition:
 /// 0); 2 its bone palette (no partition or palette: 0) by the same (bytes, formats 0x19 to 0x1c); 3
 /// the normals (12 bytes, 3); 4 the colours (16 bytes, 4); 5 to 12 texture set `usage - 5` (`00a66960`,
-/// 8 bytes, 2); 13 and 14 the binormals and tangents after the normals (the normals plus the vertex
-/// count times 0x18 or 0xc, when there are normals and the data flags have any of the bits 0xf000;
-/// else none), 12 bytes, 3; a negative usage asks the additional data (`00a72720`; failing: no source,
-/// format 0). The converter for the format then runs ([`convert`]) on a packer entry built on the
-/// stack, with the partition's vertex map as the index array unless the usage is 1 or 2 (or there is
-/// no partition), and its answer is answered; 0 without a converter or a source.
+/// 8 bytes, 2); 13 the tangents, the third block of the normal array (the normals plus the vertex
+/// count times 0x18), and 14 the binormals, its second block (times 0xc), when there are normals and
+/// the data flags have any of the bits 0xf000, else none, 12 bytes, 3 (13 and 14 are Gamebryo's
+/// tangent and binormal parameters, as the community headers number them; the blocks are the exe's);
+/// a negative usage asks the additional data (`00a72720`; failing: no source, format 0). The
+/// converter for the format then runs ([`convert`]) on a packer entry built on the stack, with the
+/// partition's vertex map as the index array unless the usage is 1 or 2 (or there is no partition),
+/// and its answer is answered; 0 without a converter or a source.
 ///
 /// Usages 15 and up, and partitions with other than 1 to 4 bones a vertex for usages 1 and 2, leave the
 /// source, element size and stride words as the exe's stack held them; as the translation, they are 0
@@ -552,6 +555,7 @@ pub fn pack_entry(
                 typed_call!(FAMILY, 0x00a6_6960, texture_set(e, geometry.cast(), set));
             Picked::fixed(source, 8, 2)
         }
+        // Usage 13 (the tangents) and 14 (the binormals).
         14 => after_normals(e, 0x18),
         15 => after_normals(e, 0xc),
         _ if (usage as i32) < 0 => e.with_stack(0x18, |e, slots| {
@@ -625,262 +629,14 @@ pub fn pack_entry(
     })
 }
 
-/// What the per-stream pack calls: the buffer data's update `00e8f040` (`thiscall`, one word), the
-/// manager's buffer check `00e8bfa0` (`thiscall`: the buffer data and the stream; a `bool`), the new
-/// chip `00e69b40` (`stdcall`-like: the buffer data and the stream; answers the chip), the lock
-/// `00e8bff0` (`thiscall` on the manager: the buffer, offset, size, flags; answers the address), the
-/// unlock `00e8c0d0` (`thiscall` on the manager: the buffer; a `bool`) and the derived vectors' pack
-/// `00a855f0` (nine words: the geometry data that packs them, its positions, normals and vertex count,
-/// the four destinations and the stride).
-const BUFFER_DATA_UPDATE: u32 = 0x00e8_f040;
+/// The manager's buffer check `00e8bfa0` (`thiscall`: the buffer data and the stream; a `bool`) and
+/// its lock `00e8bff0` (`thiscall`: the buffer, offset, size, flags; answers the address), which the
+/// fixed-function packer calls.
 const CHIP_CHECK: u32 = 0x00e8_bfa0;
-const NEW_CHIP: u32 = 0x00e6_9b40;
 const LOCK: u32 = 0x00e8_bff0;
-const UNLOCK: u32 = 0x00e8_c0d0;
-const PACK_DERIVED: u32 = 0x00a8_55f0;
 
 /// `D3DFMT_VERTEXDATA` (100): the format a chip's buffer must describe itself with to be kept.
 const VERTEX_DATA_FORMAT: u32 = 100;
-
-/// What a declaration entry's usage does in the per-stream pack (the exe's byte table `00e76a68` and
-/// jump table `00e76a4c`).
-enum Usage {
-    /// Packed always.
-    Pack,
-    /// Packed when the flags have this bit.
-    Bit(u8),
-    /// Positions, normals, binormals and tangents: packed when the flags have this bit, unless the
-    /// second geometry word packs them itself, which then gets the address in this slot (0
-    /// binormals, 1 tangents, 2 normals, 3 positions).
-    Derived(u8, usize),
-}
-
-fn usage_case(usage: u32) -> Usage {
-    match usage {
-        0 => Usage::Derived(1, 3),
-        3 => Usage::Derived(2, 2),
-        4 => Usage::Bit(4),
-        5..=12 => Usage::Bit(8),
-        13 => Usage::Derived(2, 0),
-        14 => Usage::Derived(2, 1),
-        _ => Usage::Pack,
-    }
-}
-
-/// With `NV_HEAD_CHECK` set, one line saying this family's per-stream pack takes none of that
-/// diagnostic's notes (the translation of `00e76770` does): `NV_TYPED=geometry:off` for them.
-pub fn note_head_check() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    if std::env::var_os("NV_HEAD_CHECK").is_some() {
-        ONCE.call_once(|| {
-            println!(
-                "head check: the geometry family's stream pack takes no notes; NV_TYPED=geometry:off for them"
-            );
-        });
-    }
-}
-
-// Typed from 00e76770
-/// The shader declaration's per-stream pack (its slot 0xac; unnamed in the engine map), `thiscall`
-/// with nine words: the geometry data, a second geometry word (data that packs the derived vectors
-/// itself; read for nothing else), the skin partition, the flags, the chip, the stream, a locked
-/// address, and two words for the converters. The vertex count is the partition's (without one, the
-/// data's slot 0x90); with none the chip is answered. The declaration's slot 0xb0 must answer set
-/// (it gives a word for `00e8f040` and another), else 0. The buffer data (the partition's, else the
-/// data's) is updated, takes the stream's stride and, with the renderer's byte +0x5d4 set, the byte the
-/// declaration's slot 0xa8 answers. With a locked address the chip is used as it is; otherwise the chip
-/// is kept when its vertex buffer describes itself (`GetDesc`, slot 0x34) as vertex data big enough
-/// for the count times the declaration's slot 0xa0 for the stream, else a new one is made (`00e8bfa0`
-/// must answer set, else 0; `00e69b40`; the flags become 0xfff), and it is locked (`00e8bff0`). Each
-/// declaration entry of the stream is then packed ([`pack_entry`]) at the locked address plus its
-/// offset: the derived vectors (usages 0, 3, 13, 14) only with their flag bit and, with the second word
-/// and no partition, kept for `00a855f0` instead, which then packs them; usages 4 and 5 to 12 need the
-/// flag bits 4 and 8. Without a locked address the chip's buffer is unlocked (`00e8c0d0`; 0 when that
-/// answers 0). Answers the chip.
-///
-/// The translation also takes the `NV_HEAD_CHECK` diagnostic's notes here (not exe behaviour); this
-/// version does not ([`note_head_check`]).
-#[allow(clippy::too_many_arguments)]
-pub fn pack_stream(
-    e: &mut Engine,
-    this: Ptr,
-    data: u32,
-    derived: u32,
-    partition: u32,
-    flags: u32,
-    chip: u32,
-    stream: u32,
-    locked: u32,
-    eighth: u32,
-    ninth: u32,
-) -> u32 {
-    let declaration = this.cast::<ShaderDeclaration>();
-    let base = this.addr();
-    let geometry = Ptr::<GeometryData>::new(data);
-    let skin = Ptr::<SkinPartition>::new(partition);
-    let count = if partition != 0 {
-        u32::from(e.get(skin, SkinPartition::m_usVertices))
-    } else {
-        e.vcall(data, 0x90, &args![]).u32() & 0xffff
-    };
-    if count == 0 {
-        return chip;
-    }
-    // The locals passed by address: the two words of slot 0xb0 (+0, +4) and the vertex buffer's
-    // description (+8: format, +0x18: size).
-    e.with_stack(0x20, |e, locals| {
-        let locals = locals.addr();
-        let first = locals;
-        let second = locals + 4;
-        let description = locals + 8;
-        if !e.vcall(base, 0xb0, &args![first, second]).bool() {
-            return 0;
-        }
-        let buffer_data = if partition != 0 {
-            e.get(skin, SkinPartition::m_pkBuffData)
-        } else {
-            e.get(geometry, GeometryData::m_pkBuffData)
-        };
-        let buffers = Ptr::<GeometryBufferData>::new(buffer_data);
-        let word = e.mem.u32(first);
-        e.call(BUFFER_DATA_UPDATE, &args![buffer_data, word]);
-        if stream < e.get(buffers, GeometryBufferData::m_uiStreamCount) {
-            let streams = e.get(declaration, ShaderDeclaration::m_pkStreamEntries);
-            let stream_entry =
-                Ptr::<StreamEntry>::new(streams.wrapping_add(stream.wrapping_shl(4)));
-            let stride = e.get(stream_entry, StreamEntry::uiStride);
-            let strides = e.get(buffers, GeometryBufferData::m_puiVertexStride);
-            e.mem
-                .set_u32(strides.wrapping_add(stream.wrapping_mul(4)), stride);
-        }
-        let renderer = e.get(declaration, ShaderDeclaration::m_pkRenderer);
-        if e.mem.u8(renderer.wrapping_add(0x5d4)) != 0 {
-            let byte = low_byte(e.vcall(base, 0xa8, &args![]).u32());
-            e.set(buffers, GeometryBufferData::m_bSoftwareVP, byte);
-        }
-        let mut unlock = true;
-        let mut flags = flags;
-        let mut result = chip;
-        let mut address = locked;
-        if locked != 0 {
-            unlock = false;
-        } else {
-            let mut keep = false;
-            if chip != 0 {
-                let buffer = e.get(Ptr::<VBChip>::new(chip), VBChip::pVB);
-                if buffer != 0 {
-                    e.vcall(buffer, 0x34, &args![description]);
-                    if e.mem.u32(description) == VERTEX_DATA_FORMAT {
-                        let per_vertex = e.vcall(base, 0xa0, &args![stream]).u32();
-                        if e.mem.u32(description + 0x10) >= per_vertex.wrapping_mul(count) {
-                            keep = true;
-                        }
-                    }
-                }
-            }
-            if !keep {
-                let manager = e.get(declaration, ShaderDeclaration::m_pkVBManager);
-                if !e
-                    .call(CHIP_CHECK, &args![manager, buffer_data, stream])
-                    .bool()
-                {
-                    return 0;
-                }
-                result = e.call(NEW_CHIP, &args![buffer_data, stream]).u32();
-                flags = 0xfff;
-            }
-            let manager = e.get(declaration, ShaderDeclaration::m_pkVBManager);
-            let used = Ptr::<VBChip>::new(result);
-            let buffer = e.get(used, VBChip::pVB);
-            let offset = e.get(used, VBChip::uiOffset);
-            let size = e.get(used, VBChip::uiSize);
-            let lock_flags = e.get(used, VBChip::uiLockFlags);
-            address = e
-                .call(LOCK, &args![manager, buffer, offset, size, lock_flags])
-                .u32();
-        }
-        let packs_itself = derived != 0 && partition == 0;
-        let stream_entry = e
-            .get(declaration, ShaderDeclaration::m_pkStreamEntries)
-            .wrapping_add(stream.wrapping_shl(4));
-        // The derived vectors' addresses, by their slot.
-        let mut kept = [0u32; 4];
-        if stream_entry != 0 {
-            let stream_ptr = Ptr::<StreamEntry>::new(stream_entry);
-            let mut index = 0u32;
-            let mut offset = 0u32;
-            while index < e.get(declaration, ShaderDeclaration::m_uiMaxStreamEntryCount) {
-                let entries = e.get(stream_ptr, StreamEntry::pEntries);
-                let at = Ptr::<DeclarationEntry>::new(entries.wrapping_add(offset));
-                let target = e.get(at, DeclarationEntry::uiOffset).wrapping_add(address);
-                let pack = match usage_case(e.get(at, DeclarationEntry::uiUsage)) {
-                    Usage::Pack => true,
-                    Usage::Bit(bit) => low_byte(flags) & bit != 0,
-                    Usage::Derived(bit, slot) => {
-                        if low_byte(flags) & bit == 0 {
-                            false
-                        } else if packs_itself {
-                            kept[slot] = target;
-                            false
-                        } else {
-                            true
-                        }
-                    }
-                };
-                if pack {
-                    let step = e.get(stream_ptr, StreamEntry::uiStride);
-                    let _: u32 = typed_call!(
-                        FAMILY,
-                        0x00e7_a200,
-                        pack_entry(
-                            e,
-                            this,
-                            count,
-                            data,
-                            derived,
-                            partition,
-                            at.addr(),
-                            step,
-                            target,
-                            eighth,
-                            ninth
-                        )
-                    );
-                }
-                index += 1;
-                offset = offset.wrapping_add(0x1c);
-            }
-        }
-        if packs_itself {
-            let step = e.get(Ptr::<StreamEntry>::new(stream_entry), StreamEntry::uiStride);
-            let vertices = e.get(geometry, GeometryData::m_pkVertex);
-            let normals = e.get(geometry, GeometryData::m_pkNormal);
-            let vertex_count = u32::from(e.get(geometry, GeometryData::m_usVertices));
-            e.call(
-                PACK_DERIVED,
-                &args![
-                    derived,
-                    vertices,
-                    normals,
-                    vertex_count,
-                    kept[3],
-                    kept[2],
-                    kept[1],
-                    kept[0],
-                    step
-                ],
-            );
-        }
-        if unlock {
-            let manager = e.get(declaration, ShaderDeclaration::m_pkVBManager);
-            let buffer = e.get(Ptr::<VBChip>::new(result), VBChip::pVB);
-            if !e.call(UNLOCK, &args![manager, buffer]).bool() {
-                return 0;
-            }
-        }
-        result
-    })
-}
 
 // Typed from 00a66960
 /// `NiGeometryData::GetTextureSet` (Xbox PDB), `thiscall` with the set: answers the texture

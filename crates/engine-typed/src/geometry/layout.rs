@@ -95,35 +95,6 @@ image! {
         0x0c uiType: u32,
     }
 
-    /// A stream of a shader declaration (16 bytes), as far as read.
-    pub struct StreamEntry / StreamEntryImage: 0x10 {
-        0x00 unknown_00: u32,
-        0x04 unknown_04: u32,
-        /// The stream's entries (`DeclarationEntry`, 0x1c bytes each).
-        0x08 pEntries: u32,
-        /// The stream's stride.
-        0x0c uiStride: u32,
-    }
-
-    /// `NiD3DShaderDeclaration` (Xbox PDB), as far as read.
-    pub struct ShaderDeclaration / ShaderDeclarationImage: 0x28 {
-        0x00 vtable: u32,
-        0x04 m_uiRefCount: u32,
-        /// `m_pkRenderer` (Xbox PDB).
-        0x08 m_pkRenderer: u32,
-        /// The renderer's vertex buffer manager.
-        0x0c m_pkVBManager: u32,
-        /// `m_pkD3DDevice` (Xbox PDB).
-        0x10 m_pkD3DDevice: u32,
-        0x14 unknown_14: [u32; 2],
-        /// The entry count of every stream.
-        0x1c m_uiMaxStreamEntryCount: u32,
-        /// `m_uiStreamCount` (Xbox PDB).
-        0x20 m_uiStreamCount: u32,
-        /// `m_pkStreamEntries` (Xbox PDB): the streams, 16 bytes each.
-        0x24 m_pkStreamEntries: u32,
-    }
-
     /// `NiGeometryBufferData` (Xbox PDB), as far as read.
     pub struct GeometryBufferData / GeometryBufferDataImage: 0x2c {
         0x00 unknown_00: [u32; 5],

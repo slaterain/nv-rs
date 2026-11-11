@@ -103,7 +103,6 @@ pub mod units {
         engine_core::typed::provide(&crate::multibound::MULTIBOUND);
         engine_core::typed::provide(&crate::geometry::GEOMETRY);
         crate::render::stream::note_head_check();
-        crate::geometry::pack::note_head_check();
     }
 }
 
@@ -173,6 +172,24 @@ mod tests {
         let one_off = parse_switch(Some("shader:off"), &families).unwrap();
         assert_eq!(one_off[3], Mode::Off);
         assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 11);
+    }
+
+    /// No two of this crate's families (with the core's) hold the same address, past their gate or not:
+    /// two that are on together stop `typed::apply` ("in typed family .. and another family that is
+    /// on"), and a family off by default is still turned on by `NV_TYPED` beside the others.
+    #[test]
+    fn no_two_families_share_an_address() {
+        let mut seen = std::collections::BTreeMap::new();
+        let all = families()
+            .into_iter()
+            .chain(engine_core::typed::FAMILIES.iter().copied());
+        for f in all {
+            for (addr, _) in (f.funcs)() {
+                if let Some(other) = seen.insert(addr, f.name) {
+                    panic!("{addr:08x} is in both {other} and {}", f.name);
+                }
+            }
+        }
     }
 
     /// With no switch, `Engine::new` registers every function of each family past its gate, and its
