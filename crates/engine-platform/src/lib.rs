@@ -174,6 +174,16 @@ pub fn run_exit_hooks() {
     }
 }
 
+/// Ends the process with `code`, as `std::process::exit` does, once the profiler's sampler has
+/// stopped (`engine_core::profile::stop`; nothing when the profiler is off). Ending a process
+/// stops its other threads wherever they are: a sampler stopped between suspending a thread and
+/// resuming it left the thread ending the process suspended, and the process never ended
+/// (2026-11-11). Every end of a game run goes through here.
+pub fn end_process(code: i32) -> ! {
+    engine_core::profile::stop();
+    std::process::exit(code)
+}
+
 #[cfg(test)]
 mod exit_hook_tests {
     use super::*;

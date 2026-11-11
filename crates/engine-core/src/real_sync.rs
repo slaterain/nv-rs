@@ -436,23 +436,25 @@ fn wait(e: &mut Engine, handles: &[u32], objects: &[Arc<Object>], all: bool, tim
             None => None,
         };
         let watched = std::time::Instant::now();
+        let mut parked = false;
         if !watch_briefly(&me.woken, left) {
             match left {
                 Some(t) => {
                     let rest = t.saturating_sub(watched.elapsed());
                     if !rest.is_zero() {
                         std::thread::park_timeout(rest);
+                        parked = true;
                     }
                 }
-                None => std::thread::park(),
+                None => {
+                    std::thread::park();
+                    parked = true;
+                }
             }
         }
         // A pass of the blocked wait (watched or parked), counted as the kernel lock's path counts
-        // its passes.
-        w.wakes.fetch_add(1, Ordering::Relaxed);
-        if let Some(s) = lock_stats() {
-            s.wakes[role()].fetch_add(1, Ordering::Relaxed);
-        }
+        // its passes; one whose park returned without a wake is counted apart too.
+        w.count_pass(parked && !me.woken.load(Ordering::SeqCst));
     };
     for o in objects {
         o.waiting.fetch_sub(1, Ordering::SeqCst);

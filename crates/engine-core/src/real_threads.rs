@@ -609,6 +609,12 @@ pub struct World {
     sync_epoch: AtomicU64,
     /// How many times blocked threads woke from waits on objects (all threads, the whole run).
     wakes: AtomicU64,
+    /// Of [`World::wakes`], the passes whose park returned without a wake: at the wait's timeout,
+    /// or early, as the system may return a park (`std::thread::park_timeout` allows it; Windows'
+    /// waits on an address returned early hundreds of times a second while other threads of the
+    /// process woke threads on many addresses, measured 2026-11-11). Such a pass looks once and
+    /// parks again; it is not a wake.
+    unwoken: AtomicU64,
     /// Threads parked by a suspend now, and parks so far ([`park_if_suspended`]).
     parked: AtomicU32,
     parks: AtomicU32,
@@ -656,6 +662,7 @@ impl World {
             sync: Mutex::new(AddrMap::default()),
             sync_epoch: AtomicU64::new(0),
             wakes: AtomicU64::new(0),
+            unwoken: AtomicU64::new(0),
             parked: AtomicU32::new(0),
             parks: AtomicU32::new(0),
             suspends: AtomicU32::new(0),
@@ -858,6 +865,7 @@ impl World {
         let held = self.kernel.release_all();
         let was = self.leave_guest();
         let watched = std::time::Instant::now();
+        let mut parked = false;
         if !me.woken.load(Ordering::SeqCst) && !watch_briefly(&me.woken, timeout) {
             match timeout {
                 // What is left of the timeout after the watch.
@@ -865,16 +873,31 @@ impl World {
                     let left = t.saturating_sub(watched.elapsed());
                     if !left.is_zero() {
                         std::thread::park_timeout(left);
+                        parked = true;
                     }
                 }
-                None => std::thread::park(),
+                None => {
+                    std::thread::park();
+                    parked = true;
+                }
             }
         }
+        let unwoken = parked && !me.woken.load(Ordering::SeqCst);
         if was {
             self.enter_guest();
         }
         self.kernel.take_again(self, held);
-        self.wakes.fetch_add(1, Ordering::Relaxed);
+        self.count_pass(unwoken);
+    }
+
+    /// Counts a pass of a blocked wait ([`World::wakes`]); `unwoken`: its park returned without a
+    /// wake ([`World::unwoken`]). The pass is counted first, so a reader that loads `unwoken`
+    /// before `wakes` never sees more unwoken passes than passes.
+    fn count_pass(&self, unwoken: bool) {
+        self.wakes.fetch_add(1, Ordering::SeqCst);
+        if unwoken {
+            self.unwoken.fetch_add(1, Ordering::SeqCst);
+        }
         if let Some(s) = lock_stats() {
             s.wakes[role()].fetch_add(1, Ordering::Relaxed);
         }
@@ -3731,8 +3754,23 @@ mod tests {
         e.call(slot("SetEvent"), &args![end]);
     }
 
+    /// The passes of blocked waits so far that a wake ended or that did not park at all, and the
+    /// passes whose park returned without a wake ([`World::unwoken`]: a timeout, or the system's
+    /// early return of a park). Those early returns are not this module's doing: other tests in
+    /// this process wake threads on many addresses, and then parks on Windows return early
+    /// (hundreds of times a second, 2026-11-11); a wait loop looks once and parks again.
+    fn woken_passes(world: &World) -> (u64, u64) {
+        // Read first: a pass counts in `wakes` before `unwoken` ([`World::count_pass`]), so a pass
+        // between the two loads is at most one too many here (a difference of two readings takes
+        // it with `saturating_sub`).
+        let unwoken = world.unwoken.load(Ordering::SeqCst);
+        let all = world.wakes.load(Ordering::SeqCst);
+        (all - unwoken, unwoken)
+    }
+
     /// A wait for all of a semaphore with a unit and a live thread's handle waits (parked) for
-    /// its timeout, taking nothing, rather than looking again and again.
+    /// its timeout, taking nothing, rather than looking again and again. Counted: the passes a
+    /// wake or no park ended ([`woken_passes`]); a spinning wait makes thousands.
     #[test]
     fn a_wait_for_all_with_one_object_free_does_not_spin() {
         let (mut e, slot) = engine_with_imports();
@@ -3746,16 +3784,21 @@ mod tests {
         e.mem.set_u32(list, sem);
         e.mem.set_u32(list + 4, thread);
         let world = ctx(&e).world;
-        let before = world.wakes.load(Ordering::SeqCst);
+        let (before, unwoken_before) = woken_passes(world);
         let got = e
             .call(
                 slot("WaitForMultipleObjects"),
                 &args![2u32, list, 1u32, 200u32],
             )
             .eax;
-        let passes = world.wakes.load(Ordering::SeqCst) - before;
+        let (after, unwoken_after) = woken_passes(world);
+        let (passes, unwoken) = (after.saturating_sub(before), unwoken_after - unwoken_before);
+        eprintln!("a 200 ms wait for all: {passes} passes, {unwoken} parks returned unwoken");
         assert_eq!(got, 0x102);
-        assert!(passes < 50, "{passes} passes in a 200 ms wait");
+        assert!(
+            passes < 50,
+            "{passes} passes in a 200 ms wait (and {unwoken} parks that returned without a wake)"
+        );
         assert_eq!(
             e.call(slot("WaitForSingleObject"), &args![sem, 0u32]).eax,
             0,
@@ -3765,7 +3808,9 @@ mod tests {
     }
 
     /// Two game threads waiting for all of a set manual-reset event and a reset auto-reset one
-    /// do not wake each other while the second stays reset; each goes on when it is set.
+    /// do not wake each other while the second stays reset; each goes on when it is set. Counted
+    /// once both wait: the passes a wake or no park ended ([`woken_passes`]); two waits that wake
+    /// each other make thousands.
     #[test]
     fn two_waits_for_all_do_not_wake_each_other() {
         /// `WaitForMultipleObjects(2, +0, all, INFINITE)` (at +8), then stores 1 at +0xc.
@@ -3797,11 +3842,25 @@ mod tests {
             })
             .collect();
         let world = ctx(&e).world;
-        std::thread::sleep(Duration::from_millis(50));
-        let before = world.wakes.load(Ordering::SeqCst);
+        // Both queued on both events before the count starts (a busy machine may start them late).
+        let queued = |h: u32| world.sync_object(h).map_or(0, |o| o.queued());
+        let since = std::time::Instant::now();
+        while queued(manual) < 2 || queued(auto) < 2 {
+            assert!(
+                since.elapsed() < Duration::from_secs(10),
+                "the waiters never waited"
+            );
+            std::thread::yield_now();
+        }
+        let (before, unwoken_before) = woken_passes(world);
         std::thread::sleep(Duration::from_millis(100));
-        let passes = world.wakes.load(Ordering::SeqCst) - before;
-        assert!(passes < 20, "{passes} passes in 100 ms with nothing set");
+        let (after, unwoken_after) = woken_passes(world);
+        let (passes, unwoken) = (after.saturating_sub(before), unwoken_after - unwoken_before);
+        eprintln!("two waits for all, 100 ms: {passes} passes, {unwoken} parks returned unwoken");
+        assert!(
+            passes < 20,
+            "{passes} passes in 100 ms with nothing set (and {unwoken} parks that returned without a wake)"
+        );
         let set = slot("SetEvent");
         for _ in 0..2 {
             e.call(set, &args![auto]);

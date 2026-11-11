@@ -624,6 +624,69 @@ fn import_names() -> &'static Mutex<HashMap<u32, String>> {
     NAMES.get_or_init(Default::default)
 }
 
+/// [`stop`] asked the sampler to end: it ends at its next tick, never inside a sample, and
+/// [`start`] starts none from then on.
+static STOPPING: AtomicBool = AtomicBool::new(false);
+
+/// The sampling thread, for [`stop`] to wait on.
+static SAMPLER: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
+
+/// How long [`stop`] waits for the sampler at most: a table being printed can take seconds (the
+/// first loads the program's symbols), and a sampler that never came back must not keep the
+/// process from ending.
+const STOP_WAIT: Duration = Duration::from_secs(10);
+
+/// Ends the sampling thread and waits for it ([`STOP_WAIT`] at most); nothing when none runs.
+/// Every end of the process comes here first (`engine_platform::end_process`): ending a process
+/// stops its other threads wherever they are, and a sampler stopped between suspending a thread
+/// and resuming it leaves that thread suspended for good. When that thread was the one ending the
+/// process, the process never ended (2026-11-11: a profiled run printed its tables and "the run
+/// ends", then waited with its one thread suspended until it was resumed by hand 16 minutes
+/// later). The sampler looks for the stop after each tick, before it samples: once this returns,
+/// no sample is in flight and none starts. Answers whether a running sampler ended.
+pub fn stop() -> bool {
+    STOPPING.store(true, std::sync::atomic::Ordering::SeqCst);
+    let Some(sampler) = SAMPLER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
+    else {
+        return false;
+    };
+    if sampler.thread().id() == std::thread::current().id() {
+        return false;
+    }
+    let since = Instant::now();
+    while !sampler.is_finished() {
+        if since.elapsed() >= STOP_WAIT {
+            eprintln!(
+                "NV_PROFILE: the sampler did not stop within {} s; the process ends anyway",
+                STOP_WAIT.as_secs()
+            );
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let _ = sampler.join();
+    true
+}
+
+/// Starts the sampling thread with `settings` unless [`stop`] came first (the process is
+/// ending); [`stop`] waits for it.
+fn spawn_sampler(settings: Settings) {
+    let mut slot = SAMPLER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Under the lock: a stop either sees the thread made here or is seen here.
+    if STOPPING.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    *slot = std::thread::Builder::new()
+        .name("nv-profile".into())
+        .spawn(move || sampler(settings))
+        .ok();
+}
+
 /// Starts the sampling thread once (profiler on only).
 pub fn start() {
     if !on() {
@@ -654,15 +717,12 @@ pub fn start() {
         if let Some(notice) = under_notice(std::env::var("NV_PROFILE_UNDER").ok().as_deref()) {
             println!("{notice}");
         }
-        let settings = Settings {
+        spawn_sampler(Settings {
             period,
             top,
             calls_top,
             depth,
-        };
-        let _ = std::thread::Builder::new()
-            .name("nv-profile".into())
-            .spawn(move || sampler(settings));
+        });
     });
 }
 
@@ -779,6 +839,10 @@ fn sampler(settings: Settings) {
     let mut symbols_noted = false;
     loop {
         sampler.wait_tick();
+        // The process is ending ([`stop`]): no sample from here.
+        if STOPPING.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         tick += 1;
         let phase = Phase::from_u8(PHASE.load(Relaxed));
         let os_thread = OS_THREAD.load(Relaxed);
@@ -2397,6 +2461,20 @@ mod native {
     ) -> u64;
     type SymRefreshModuleList = unsafe extern "system" fn(Handle) -> i32;
 
+    /// dbghelp is single-threaded: Microsoft's documentation says every DbgHelp function is, and
+    /// that calls from several threads at once must be synchronised. The game has one sampler
+    /// thread, but the tests run several samplers at once: 8 threads each naming one address got
+    /// up to 140 of 320 names wrong (empty, "?", or the first bytes of the name zeroed), and 2 of
+    /// 10 such runs ended in heap corruption (0xC0000374; 2026-11-11). Every dbghelp call holds
+    /// this lock (process-wide, as dbghelp's state is).
+    static DBGHELP: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn dbghelp() -> std::sync::MutexGuard<'static, ()> {
+        DBGHELP
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub struct Sampler {
         threads: HashMap<u32, Handle>,
         timer: Handle,
@@ -2816,8 +2894,9 @@ mod native {
                 return;
             }
             self.sym_tried = true;
+            let _dbghelp = dbghelp();
             // SAFETY: dbghelp.dll is a system DLL; the procedures are looked up by name and
-            // called with their documented signatures. Only this thread uses dbghelp.
+            // called with their documented signatures, under the dbghelp lock ([`DBGHELP`]).
             unsafe {
                 let dll = LoadLibraryA(b"dbghelp.dll\0".as_ptr());
                 if dll.is_null() {
@@ -2908,10 +2987,15 @@ mod native {
             // LineNumbers at 1652, GlobalSymbols at 1656.
             let mut buf = vec![0u64; 1680 / 8];
             let bytes = buf.as_mut_ptr() as *mut u8;
-            // SAFETY: `buf` is 8-aligned and 1680 bytes, its size in its first word.
+            // SAFETY: `buf` is 8-aligned and 1680 bytes, its size in its first word; called under
+            // the dbghelp lock ([`DBGHELP`]).
             unsafe {
                 *(bytes as *mut u32) = 1680;
-                if info(GetCurrentProcess(), base, bytes) == 0 {
+                let found = {
+                    let _dbghelp = dbghelp();
+                    info(GetCurrentProcess(), base, bytes)
+                };
+                if found == 0 {
                     return "no symbols for the program".into();
                 }
                 let all = std::slice::from_raw_parts(bytes, 1680);
@@ -2974,11 +3058,16 @@ mod native {
                 let mut buf = vec![0u64; (88 + 1024) / 8 + 1];
                 let bytes = buf.as_mut_ptr() as *mut u8;
                 let mut displacement = 0u64;
-                // SAFETY: `buf` is 8-aligned and holds the structure plus 1024 name bytes.
+                // SAFETY: `buf` is 8-aligned and holds the structure plus 1024 name bytes; called
+                // under the dbghelp lock ([`DBGHELP`]).
                 unsafe {
                     *(bytes as *mut u32) = 88;
                     *(bytes.add(80) as *mut u32) = 1024;
-                    if from_addr(GetCurrentProcess(), addr, &mut displacement, bytes) != 0 {
+                    let found = {
+                        let _dbghelp = dbghelp();
+                        from_addr(GetCurrentProcess(), addr, &mut displacement, bytes)
+                    };
+                    if found != 0 {
                         let len = (*(bytes.add(76) as *const u32)).min(1024) as usize;
                         let name = std::slice::from_raw_parts(bytes.add(84), len);
                         symbol = super::readable_symbol(&String::from_utf8_lossy(name));
@@ -3580,6 +3669,44 @@ mod native {
             assert_eq!((n, end, unwinds), (1, WalkEnd::Bad, 0));
         }
 
+        /// Samplers on several threads at once name one address alike every time: dbghelp is
+        /// single-threaded, and its calls hold the dbghelp lock ([`DBGHELP`]). Without it this
+        /// failed 10 runs of 10: 6 to 140 of the 320 names wrong (empty, "?", or the name's first
+        /// bytes zeroed) or the process ended in heap corruption (2026-11-11), the way
+        /// `a_busy_thread_is_sampled_in_this_program` can fail while other tests sample.
+        #[test]
+        fn samplers_on_several_threads_name_an_address_alike() {
+            extern "C" {
+                fn nv_profile_test_framed();
+            }
+            let framed = nv_profile_test_framed as unsafe extern "C" fn() as usize as u64;
+            let wrong = std::sync::Mutex::new(Vec::new());
+            std::thread::scope(|s| {
+                for _ in 0..8 {
+                    s.spawn(|| {
+                        let mut sampler = Sampler::new();
+                        for _ in 0..40 {
+                            // Each round as a new sampler's first lookup: dbghelp set up again
+                            // (the setup's calls raced most), then the name looked up afresh.
+                            sampler.sym_tried = false;
+                            sampler.names.clear();
+                            let (_, symbol) = sampler.name(framed + 1);
+                            if symbol != "nv_profile_test_framed" {
+                                wrong.lock().unwrap().push(symbol);
+                            }
+                        }
+                    });
+                }
+            });
+            let wrong = wrong.into_inner().unwrap();
+            assert!(
+                wrong.is_empty(),
+                "{} of 320 names wrong, the first: {:?}",
+                wrong.len(),
+                &wrong[..wrong.len().min(5)]
+            );
+        }
+
         /// A walk never waits on the loader. A thread of this program loads and frees a DLL in a
         /// loop and is suspended, as the sampler suspends the engine's thread, while walks at
         /// tail-call epilogues run (a plain `jmp` and a `bnd jmp` in turn): every walk comes
@@ -4141,6 +4268,29 @@ mod tests {
             sampler.instruction_pointer(native::current_thread_id()),
             None
         );
+    }
+
+    /// A stopped sampler has ended, waited for, and none starts after: so no sample is in flight
+    /// when the process ends (a profiled run's end hung on a thread the sampler had suspended,
+    /// 2026-11-11). The profiler is off in tests: the sampler is started here as `start` does.
+    #[test]
+    fn a_stopped_sampler_has_ended_and_none_starts_after() {
+        let settings = Settings {
+            period: Duration::from_secs(3600),
+            top: 1,
+            calls_top: 0,
+            depth: 0,
+        };
+        spawn_sampler(settings);
+        // A few of its ticks.
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(stop(), "the running sampler ended and was waited for");
+        spawn_sampler(settings);
+        assert!(
+            SAMPLER.lock().unwrap().is_none(),
+            "no sampler starts after a stop"
+        );
+        assert!(!stop(), "nothing left to stop");
     }
 
     /// Calls are counted by target: a target's own slot, and the next free one for a target
