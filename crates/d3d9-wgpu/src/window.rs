@@ -159,11 +159,15 @@ impl NoFrame {
 
 impl Window {
     /// The swap chain of `surface` (made on `instance` for `adapter`) on the window `hwnd`, at the
-    /// window's size, or at `fallback` (the back buffer's) when the window has none to read, in
-    /// the present mode for the game's present `interval`; with `copies`, its frames can be copied
-    /// out (`NV_SHOT`'s captures of the window's frame). The calling thread, the one that shows
-    /// the frames, takes the window's DPI awareness. A configuration wgpu refuses leaves the
-    /// window without frames until one is taken (tried again after each rest).
+    /// window's size, in the present mode for the game's present `interval`; with `copies`, its
+    /// frames can be copied out (`NV_SHOT`'s captures of the window's frame). The calling thread,
+    /// the one that shows the frames, takes the window's DPI awareness. A window minimised or
+    /// without an area now gets its swap chain at its first frame with one (`fallback`, the back
+    /// buffer's size, until then). A configuration wgpu refuses is asked once more, from what the
+    /// surface offers then; refused again, this device cannot show the game in the window: why,
+    /// for [`crate::device::Device::new`] to try the next graphics API (after the last, the
+    /// platform draws with Direct3D 9). Later refusals (a resized or restored window) leave the
+    /// window without frames until a configuration is taken (tried again after each rest).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         hwnd: isize,
@@ -174,11 +178,10 @@ impl Window {
         fallback: (u32, u32),
         interval: u32,
         copies: bool,
-    ) -> Window {
+    ) -> Result<Window, String> {
         take_dpi_awareness(hwnd);
-        let (width, height) = client_size(hwnd)
-            .filter(|&(w, h)| w > 0 && h > 0)
-            .unwrap_or(fallback);
+        let area = client_size(hwnd).filter(|&(w, h)| w > 0 && h > 0);
+        let (width, height) = area.unwrap_or(fallback);
         let mut w = Window {
             hwnd,
             instance,
@@ -207,10 +210,22 @@ impl Window {
             configures: 0,
             refused: 0,
         };
-        if w.choose() {
-            w.configure(device);
+        if !w.choose() {
+            return Err("the window's surface offers this adapter no format".into());
         }
-        w
+        if area.is_none() || minimised(hwnd) {
+            return Ok(w);
+        }
+        if w.configure(device).is_err() {
+            w.choose();
+            if let Err(again) = w.configure(device) {
+                return Err(format!(
+                    "the window's swap chain ({}x{}, {:?}) was refused twice: {again}",
+                    w.config.width, w.config.height, w.config.present_mode
+                ));
+            }
+        }
+        Ok(w)
     }
 
     /// The configuration's format, present mode, alpha and usage chosen from what the surface
@@ -228,6 +243,9 @@ impl Window {
             .find(|f| *f == wgpu::TextureFormat::Bgra8Unorm)
             .or_else(|| caps.formats.iter().copied().find(|f| !f.is_srgb()))
             .unwrap_or(first);
+        if crate::device::refused_for_tests(self.adapter.get_info().backend) {
+            c.format = wgpu::TextureFormat::R8Unorm;
+        }
         c.present_mode = present_mode(self.interval, &caps);
         c.alpha_mode = caps
             .alpha_modes
@@ -244,9 +262,10 @@ impl Window {
     }
 
     /// The swap chain configured with [`Window::config`], wgpu's errors caught here (not passed to
-    /// the device's handler): whether wgpu took it. Refused, it is stale (configured again before
-    /// the next frame) and no frame is asked of the surface until a configuration is taken.
-    fn configure(&mut self, device: &wgpu::Device) -> bool {
+    /// the device's handler): what wgpu said when it refused it. Refused, it is stale (configured
+    /// again before the next frame) and no frame is asked of the surface until a configuration is
+    /// taken.
+    fn configure(&mut self, device: &wgpu::Device) -> Result<(), String> {
         let scopes = [
             wgpu::ErrorFilter::Internal,
             wgpu::ErrorFilter::OutOfMemory,
@@ -263,16 +282,11 @@ impl Window {
         self.configures += 1;
         self.configured = refused.is_none();
         self.stale = !self.configured;
-        if let Some(e) = refused {
-            self.refused += 1;
-            if self.refused == 1 {
-                eprintln!(
-                    "NV_D3D9 wgpu: the window's swap chain ({}x{}, {:?}) was refused: {e} (tried again after a rest)",
-                    self.config.width, self.config.height, self.config.present_mode
-                );
-            }
-        }
-        self.configured
+        let Some(e) = refused else {
+            return Ok(());
+        };
+        self.refused += 1;
+        Err(e.to_string())
     }
 
     /// The device's `Reset` with the game's present `interval`: the swap chain is configured again
@@ -378,7 +392,13 @@ impl Window {
         if always || resized || self.stale || !self.configured {
             self.config.width = width;
             self.config.height = height;
-            if !self.configure(device) {
+            if let Err(e) = self.configure(device) {
+                if self.refused == 1 {
+                    eprintln!(
+                        "NV_D3D9 wgpu: the window's swap chain ({}x{}, {:?}) was refused: {e}",
+                        self.config.width, self.config.height, self.config.present_mode
+                    );
+                }
                 return Err(NoFrame::NotConfigured);
             }
         }

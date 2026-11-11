@@ -11,7 +11,7 @@
 
 #![cfg(windows)]
 
-use d3d9_stream::{Backend, Cmd, Data};
+use d3d9_stream::{Backend, Cmd, Data, Reply};
 use d3d9_wgpu::{Output, WgpuBackend};
 use std::path::{Path, PathBuf};
 
@@ -394,4 +394,82 @@ fn a_refused_configuration_never_has_a_frame_asked_of_it() {
             "taken again, frames again ({new_surface})"
         );
     }
+}
+
+/// `CreateDevice` on a fresh hidden window with a 32x24 back buffer: the reply, and the backend.
+fn create(window: isize) -> (Reply, WgpuBackend) {
+    let mut b = WgpuBackend::new(Output::Window);
+    let present = words(&[32, 24, A8R8G8B8, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0]);
+    let reply = b.execute(Cmd::CreateDevice {
+        device: DEVICE,
+        focus: window,
+        window,
+        behavior: 0x54,
+        present: Data::Bytes(&present),
+        back_buffers: Data::Bytes(&words(&[BACK])),
+        depth_stencil: 0,
+    });
+    (reply, b)
+}
+
+/// A device that cannot show the game in its window is not made, and a graphics API whose swap
+/// chain fails gives way to the next: with the swap chain refused twice on every API (a format no
+/// window offers), and with a panic while the device is made, `CreateDevice` answers not created
+/// (the platform then draws with Direct3D 9) and the window is left free (a device made on it
+/// afterwards shows frames in it). Refused on Vulkan alone, the device is made on Direct3D 12.
+#[test]
+fn a_device_that_cannot_show_frames_is_not_made_and_the_next_api_is_tried() {
+    // A machine with an adapter only (a device made as usual first).
+    drop(match Rig::new((40, 30), (40, 30)) {
+        Some(g) => g,
+        None => return,
+    });
+    let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let hwnd = hidden_window(48, 36);
+    assert_ne!(hwnd, 0, "the test window");
+    for (refused, panic) in [
+        (wgpu::Backends::all(), false),
+        (wgpu::Backends::empty(), true),
+    ] {
+        d3d9_wgpu::device::fail_devices_for_tests(refused, panic);
+        let (reply, mut b) = create(hwnd);
+        d3d9_wgpu::device::fail_devices_for_tests(wgpu::Backends::empty(), false);
+        assert!(
+            matches!(reply, Reply::Device { created: false, .. }),
+            "refused {refused:?}, panic {panic}: {reply:?}"
+        );
+        assert!(b.device().is_none());
+    }
+    // Refused on Vulkan only: Direct3D 12 (where the run tries it after Vulkan).
+    d3d9_wgpu::device::fail_devices_for_tests(wgpu::Backends::VULKAN, false);
+    let (reply, mut b) = create(hwnd);
+    d3d9_wgpu::device::fail_devices_for_tests(wgpu::Backends::empty(), false);
+    assert!(
+        matches!(reply, Reply::Device { created: true, .. }),
+        "{reply:?}"
+    );
+    let name = b.device().expect("the device").adapter_name().to_string();
+    assert!(name.ends_with("(Dx12)"), "{name}");
+    drop(b);
+    // As usual on the same window afterwards: the window's size, the colour over all of it.
+    let (reply, b) = create(hwnd);
+    assert!(
+        matches!(reply, Reply::Device { created: true, .. }),
+        "{reply:?}"
+    );
+    let dir = shots_dir();
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir).expect("the captures' folder");
+    let mut g = Rig {
+        b,
+        hwnd,
+        dir,
+        _turn: turn,
+    };
+    g.show(1, 0xFF60_7080);
+    assert_eq!(
+        g.window_frame(1),
+        Some((48, 36, vec![bgra(0xFF60_7080)])),
+        "a device on the window the failed ones were made on"
+    );
 }
