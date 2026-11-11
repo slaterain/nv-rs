@@ -3806,7 +3806,7 @@ mod tests {
     #[test]
     fn kept_pages_stay_under_the_limit() {
         let mut m = Mem::new();
-        const AT: u32 = 0x1000_0000;
+        const AT: u32 = 0x0800_0000;
         let pages = KEEP_MAX as u32 + 2;
         m.map(AT, pages << PAGE_BITS);
         for i in 0..pages {
@@ -3958,7 +3958,7 @@ mod tests {
         // below them, where the hand (still at page 0) comes first: the next unmap of the half
         // hands that run back in one call and keeps its own pages.
         let first = (AT >> PAGE_BITS) as usize;
-        let run = 0x1000_0000;
+        let run = 0x0800_0000;
         m.map(AT, (2 * half) << PAGE_BITS);
         m.map(run, half << PAGE_BITS);
         m.unmap(run, half << PAGE_BITS);
@@ -3981,7 +3981,7 @@ mod tests {
     #[test]
     fn a_hand_back_that_reaches_the_end_of_the_space_goes_on_from_its_start() {
         let mut m = Mem::new();
-        const LOW: u32 = 0x1000_0000;
+        const LOW: u32 = 0x0800_0000;
         let page = |a: u32| (a >> PAGE_BITS) as usize;
         // The last page of the space, then 4095 pages in one run at LOW: 4096 kept.
         m.map(0xffff_f000, 0x1000);

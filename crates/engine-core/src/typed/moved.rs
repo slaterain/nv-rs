@@ -639,7 +639,9 @@ struct TokenAlloc {
     /// Live buffers and bytes by (family, tag).
     census: BTreeMap<(u8, u16), (u64, u64)>,
     /// Freed buffers' bytes not yet handed back to the host ([`Buffers::reclaim`]), and their
-    /// count of bytes.
+    /// count of bytes. Kept boxed: the table pointed at each box, and an access that loaded that
+    /// pointer before the free may still read through it until `reclaim`.
+    #[allow(clippy::vec_box)]
     retired: Vec<Box<HostBytes>>,
     retired_bytes: u64,
 }
@@ -1717,13 +1719,14 @@ mod tests {
         moved.stubs.free(&e.mem, TOY, stub);
         assert_eq!(moved.stubs.resolve(stub), None);
         assert_eq!(e.mem.u32(stub), poison(TOY, 0));
-        // The next one takes the freed place.
-        assert_eq!(moved.stubs.alloc(&mut e.mem, TOY, VTABLE, h), Some(stub));
+        // The next one does not take the freed place (it waits: `tokens_and_stubs_wait_before_reuse`).
+        let next = moved.stubs.alloc(&mut e.mem, TOY, VTABLE, h);
+        assert_eq!(next, Some(stub + STUB_BYTES));
     }
 
     /// A buffer takes one token, 16 bytes of the 32-bit space, whatever its size; its bytes start
-    /// zero, are read and written by offset, and are gone with it; a token freed is handed out
-    /// again; reads past the end and of a freed token stop.
+    /// zero, are read and written by offset, and are gone with it (back to the host at `reclaim`);
+    /// reads past the end and of a freed token stop, and so does a second free.
     #[test]
     fn a_buffer_takes_one_token_whatever_its_size() {
         let buffers = Buffers::new();
@@ -1836,7 +1839,7 @@ mod tests {
     /// pointer taken from them stops the run naming a freed moved object.
     #[test]
     fn freed_blocks_wait_in_a_quarantine() {
-        let mut e = engine("toy:freed");
+        let e = engine("toy:freed");
         let moved = e.moved().expect("made");
         let slab = &moved.slab;
         let stale = slab.alloc(16, TOY, NODE_TAG, 0).expect("room");
