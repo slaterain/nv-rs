@@ -328,7 +328,7 @@ extern "system" fn window_procedure(
         // runs on its own thread, so this covers only the jobs main has already handed on: a save
         // written in the frame still running on main when the window closes can be lost.
         crate::run_exit_hooks();
-        std::process::exit(0);
+        crate::end_process(0);
     }
     match message {
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP | WM_LBUTTONDOWN | WM_LBUTTONUP

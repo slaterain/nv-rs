@@ -408,6 +408,14 @@ pub fn run_exit_hooks() {
     engine_platform::run_exit_hooks();
 }
 
+/// Ends the process with `code` once the profiler's sampler has stopped
+/// (`engine_platform::end_process`): the viewer ends a run only through here, so no sample is in
+/// flight when the process ends (one left the thread ending the process suspended, and the
+/// process never ended, 2026-11-11).
+pub fn end_process(code: i32) -> ! {
+    engine_platform::end_process(code)
+}
+
 /// Where the wgpu backend keeps the driver's compiled pipelines between runs (`d3d9-wgpu`'s
 /// `cache.rs`): `NV_WGPU_CACHE`, which the launcher sets to its `userdata\machine\wgpu-cache`
 /// beside the other machine files. Without it nothing is kept: no default in the player's

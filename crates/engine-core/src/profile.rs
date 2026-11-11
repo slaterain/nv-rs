@@ -624,6 +624,69 @@ fn import_names() -> &'static Mutex<HashMap<u32, String>> {
     NAMES.get_or_init(Default::default)
 }
 
+/// [`stop`] asked the sampler to end: it ends at its next tick, never inside a sample, and
+/// [`start`] starts none from then on.
+static STOPPING: AtomicBool = AtomicBool::new(false);
+
+/// The sampling thread, for [`stop`] to wait on.
+static SAMPLER: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
+
+/// How long [`stop`] waits for the sampler at most: a table being printed can take seconds (the
+/// first loads the program's symbols), and a sampler that never came back must not keep the
+/// process from ending.
+const STOP_WAIT: Duration = Duration::from_secs(10);
+
+/// Ends the sampling thread and waits for it ([`STOP_WAIT`] at most); nothing when none runs.
+/// Every end of the process comes here first (`engine_platform::end_process`): ending a process
+/// stops its other threads wherever they are, and a sampler stopped between suspending a thread
+/// and resuming it leaves that thread suspended for good. When that thread was the one ending the
+/// process, the process never ended (2026-11-11: a profiled run printed its tables and "the run
+/// ends", then waited with its one thread suspended until it was resumed by hand 16 minutes
+/// later). The sampler looks for the stop after each tick, before it samples: once this returns,
+/// no sample is in flight and none starts. Answers whether a running sampler ended.
+pub fn stop() -> bool {
+    STOPPING.store(true, std::sync::atomic::Ordering::SeqCst);
+    let Some(sampler) = SAMPLER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
+    else {
+        return false;
+    };
+    if sampler.thread().id() == std::thread::current().id() {
+        return false;
+    }
+    let since = Instant::now();
+    while !sampler.is_finished() {
+        if since.elapsed() >= STOP_WAIT {
+            eprintln!(
+                "NV_PROFILE: the sampler did not stop within {} s; the process ends anyway",
+                STOP_WAIT.as_secs()
+            );
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let _ = sampler.join();
+    true
+}
+
+/// Starts the sampling thread with `settings` unless [`stop`] came first (the process is
+/// ending); [`stop`] waits for it.
+fn spawn_sampler(settings: Settings) {
+    let mut slot = SAMPLER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Under the lock: a stop either sees the thread made here or is seen here.
+    if STOPPING.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    *slot = std::thread::Builder::new()
+        .name("nv-profile".into())
+        .spawn(move || sampler(settings))
+        .ok();
+}
+
 /// Starts the sampling thread once (profiler on only).
 pub fn start() {
     if !on() {
@@ -654,15 +717,12 @@ pub fn start() {
         if let Some(notice) = under_notice(std::env::var("NV_PROFILE_UNDER").ok().as_deref()) {
             println!("{notice}");
         }
-        let settings = Settings {
+        spawn_sampler(Settings {
             period,
             top,
             calls_top,
             depth,
-        };
-        let _ = std::thread::Builder::new()
-            .name("nv-profile".into())
-            .spawn(move || sampler(settings));
+        });
     });
 }
 
@@ -779,6 +839,10 @@ fn sampler(settings: Settings) {
     let mut symbols_noted = false;
     loop {
         sampler.wait_tick();
+        // The process is ending ([`stop`]): no sample from here.
+        if STOPPING.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         tick += 1;
         let phase = Phase::from_u8(PHASE.load(Relaxed));
         let os_thread = OS_THREAD.load(Relaxed);
@@ -4204,6 +4268,29 @@ mod tests {
             sampler.instruction_pointer(native::current_thread_id()),
             None
         );
+    }
+
+    /// A stopped sampler has ended, waited for, and none starts after: so no sample is in flight
+    /// when the process ends (a profiled run's end hung on a thread the sampler had suspended,
+    /// 2026-11-11). The profiler is off in tests: the sampler is started here as `start` does.
+    #[test]
+    fn a_stopped_sampler_has_ended_and_none_starts_after() {
+        let settings = Settings {
+            period: Duration::from_secs(3600),
+            top: 1,
+            calls_top: 0,
+            depth: 0,
+        };
+        spawn_sampler(settings);
+        // A few of its ticks.
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(stop(), "the running sampler ended and was waited for");
+        spawn_sampler(settings);
+        assert!(
+            SAMPLER.lock().unwrap().is_none(),
+            "no sampler starts after a stop"
+        );
+        assert!(!stop(), "nothing left to stop");
     }
 
     /// Calls are counted by target: a target's own slot, and the next free one for a target

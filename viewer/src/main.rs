@@ -141,7 +141,7 @@ fn main() {
         }
         Err(message) => {
             eprintln!("error: {message}\n\n{USAGE}");
-            std::process::exit(2);
+            host::end_process(2);
         }
     };
     if !args.ignored.is_empty() {
@@ -154,7 +154,7 @@ fn main() {
         Ok(data) => data,
         Err(e) => {
             eprintln!("error: {e}");
-            std::process::exit(1);
+            host::end_process(1);
         }
     };
     if args.check {
@@ -167,7 +167,7 @@ fn main() {
             }
             Err(e) => {
                 eprintln!("error: {e}");
-                std::process::exit(1);
+                host::end_process(1);
             }
         }
     }
@@ -183,14 +183,14 @@ fn main() {
         Ok(choice) => choice,
         Err(e) => {
             eprintln!("error: {e}");
-            std::process::exit(1);
+            host::end_process(1);
         }
     };
     let mut game = match host::Host::start_with(&data, &choice) {
         Ok(host) => host,
         Err(e) => {
             eprintln!("error: {e}");
-            std::process::exit(1);
+            host::end_process(1);
         }
     };
     println!("{}", game.describe());
@@ -209,7 +209,7 @@ fn main() {
             // What the platform layer runs before it ends a run itself (the window closed): the
             // game's own Quit ends here, and its last pipelines are written too.
             host::run_exit_hooks();
-            std::process::exit(end.status());
+            host::end_process(end.status());
         },
     ));
     // An end in the start-up.
@@ -228,7 +228,7 @@ fn main() {
         }
         // `NV_REPEATABLE=FRAMES` (a test mode): the run ends after FRAMES of main's frames.
         if game.repeatable_end() {
-            std::process::exit(0);
+            host::end_process(0);
         }
         if let Some(log) = &mut frame_log {
             log.record(&mut game.engine);
@@ -249,7 +249,7 @@ fn main() {
         "error: the game's main is not running ({})",
         game.movement.summary()
     );
-    std::process::exit(1);
+    host::end_process(1);
 }
 
 #[cfg(test)]
