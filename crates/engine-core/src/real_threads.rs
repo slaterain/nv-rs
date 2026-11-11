@@ -3792,12 +3792,12 @@ mod tests {
             )
             .eax;
         let (after, unwoken_after) = woken_passes(world);
-        let passes = after.saturating_sub(before);
+        let (passes, unwoken) = (after.saturating_sub(before), unwoken_after - unwoken_before);
+        eprintln!("a 200 ms wait for all: {passes} passes, {unwoken} parks returned unwoken");
         assert_eq!(got, 0x102);
         assert!(
             passes < 50,
-            "{passes} passes in a 200 ms wait (and {} parks that returned without a wake)",
-            unwoken_after - unwoken_before
+            "{passes} passes in a 200 ms wait (and {unwoken} parks that returned without a wake)"
         );
         assert_eq!(
             e.call(slot("WaitForSingleObject"), &args![sem, 0u32]).eax,
@@ -3855,11 +3855,11 @@ mod tests {
         let (before, unwoken_before) = woken_passes(world);
         std::thread::sleep(Duration::from_millis(100));
         let (after, unwoken_after) = woken_passes(world);
-        let passes = after.saturating_sub(before);
+        let (passes, unwoken) = (after.saturating_sub(before), unwoken_after - unwoken_before);
+        eprintln!("two waits for all, 100 ms: {passes} passes, {unwoken} parks returned unwoken");
         assert!(
             passes < 20,
-            "{passes} passes in 100 ms with nothing set (and {} parks that returned without a wake)",
-            unwoken_after - unwoken_before
+            "{passes} passes in 100 ms with nothing set (and {unwoken} parks that returned without a wake)"
         );
         let set = slot("SetEvent");
         for _ in 0..2 {
