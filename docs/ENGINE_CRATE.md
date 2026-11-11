@@ -595,6 +595,13 @@ x; the translation kept them in Rust locals, so it read whatever the stack held 
 `crates/engine/tests/typed_multibound.rs`. On since its gate (the differential tests with each planted mutant caught,
 and the recorded street run byte-identical with `NV_TYPED=multibound:off` in the fixes and vanilla presets);
 integers only, not a speed change by itself.
+And `geometry` (same crate, id 23): the code that reads and writes `NiGeometryData`'s arrays (positions, normals
+with the binormals and tangents after them, colours, texture coordinates), typed so that stage 2 can keep those
+arrays outside the 32-bit space (about 23 to 40 MB of the guest heap on the census route, and what mesh mods grow).
+Its first batch is the renderer's packing of the arrays into a vertex buffer: the element pack that picks an array
+for a declaration entry (the draw family's stream pack calls it), the six converters that can receive one, the
+texture set getter and the fixed-function packer with its strided copy; its tests are
+`crates/engine/tests/typed_geometry.rs`. Off until its gate (`NV_TYPED=geometry` turns it on).
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with

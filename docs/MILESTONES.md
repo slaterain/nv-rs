@@ -46,6 +46,8 @@ frame is shown, proven the same way. Then `collision`: the Havok collision objec
 update (the ragdoll bones' blend of node and body, a body moved to its node), proven the same way.
 Then `multibound`: the two passes main runs over the loaded world once a frame that keep the multibound culling
 current (each object's shape reset, then tested against the camera's frustum and the occluders), proven the same way.
+The `geometry` family (the code that reads and writes the geometry data's arrays, so a later step can keep them
+outside the 32-bit space; first the renderer's packing of them), is in, off until its gate.
 
 An interim Windows preview (maintainer, 2026-11-06) can be built with `scripts/package-playtest.ps1`:
 a ZIP a player can run with no build, labelled a preview, wgpu remaining the big release. It has only
