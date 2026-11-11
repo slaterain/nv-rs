@@ -385,6 +385,48 @@ and of the loading thread's tasks (measure/smooth-200/BORDERS.md, runs fd-dg1, f
   queued loads at the crossing: there is no wait, and the row changes nothing (the same state every
   frame, the same loading tasks in the same order).
 
+### Cell offsets for every plugin
+
+Each plugin that holds a world space record keeps an `OFFSET_DATA` for it: the record's position, the
+grid its `NAM0` / `NAM9` corners span, and a table of where each cell record of the grid is (`OFST`,
+made by Bethesda's tools). `TESWorldSpace::FindCellInFile` (`005854f0`) uses the table only for a
+master file (`00585502`), and `TESWorldSpace::Load` (`00583560`) stores the position and corners only
+for a master (`005835bc`, `00583dc0`, `00583ea8`). Any other file, and a master whose tables were
+stripped (YUP's and TTW's: the tools that make them drop `OFST`), is searched record by record from the
+world space record each time one of its cells loads, on the one loading thread: the cell tasks took 5.5
+to 7.5 ms each in the base game and 14 to 25 ms with YUP (measure/smooth-200/BORDERS.md, run fd-dg2).
+
+- **The row** (Cell Offset Generator's idea; `crates/host/src/cell_offsets.rs`). Registered over `Load`
+  and `FindCellInFile`. `Load` runs the translation, then gives the record's `OFFSET_DATA` the table its
+  search would give, built from the plugin's own records (`crates/esm/src/cell_offsets.rs`: one pass over
+  the plugin's world space group, on a host thread that the run's first world space record starts for
+  every plugin of the load order, in load order; `Load` waits for a plugin that is not done yet). A
+  master keeps the position and corners the translation stored and gains a table only where it has
+  none; any other file gets them as a master would, and its table replaces an `OFST` it may carry,
+  which the original never reads for it. `FindCellInFile` finds a cell of a file that is not a master
+  by that table, as the translation finds a master's; anything else goes to the translation. The tables
+  are in the game's heap like the masters' own and go with the world space (`00588c80`).
+- **The same cells.** The builder runs the search's own walk once per block and sub-block key: the
+  groups it enters and skips, the records flagged ignored that `TESFile::NextForm(1)` passes over (but
+  not right after a skipped group), `TLOD`, where it stops; a persistent cell is never found, and a cell
+  without a grid position is at 0, 0. Each position's entry is the record the search finds first. Where
+  a table cannot give the search's answer for every position (a cell the search finds outside the
+  corners, no corners, a grid of no squares or more than 4,194,304, two records of one world space in a
+  file, a cell that does not inflate) that world space gets none and is searched as before. The one
+  place a table answers differently is a cell asked for at x = 2,147,483,647, where the search finds
+  the persistent cell; no cell can be there. Built from the base game's masters' records, every one of
+  their 41 tables is the masters' own `OFST`, entry for entry (`crates/esm/tests/cell_offsets_real.rs`,
+  run on FalloutNV.esm, the four add-ons and Gun Runners' Arsenal).
+- **Not taken from Cell Offset Generator.** Its cache of tables on disk (`Data\CellOffsets`, checked
+  with an xxHash of the whole plugin): it builds a table by running the game's search for every square
+  of the grid, which is slow; one pass over the records reads less of a plugin than hashing it would,
+  so nothing is kept between runs and nothing is written. Its other patches, which the cell loads don't
+  need: `LoadPartial`'s master checks (the row stores the corners itself), the world space's and the
+  cell's `FindInFileFast` (`005858dc`, `005502a1`: a plugin's `TESFile::FindForm`), the editor-ID
+  lookup's "optimized file" test (`00461db1`, used by the console's `coc`) and its null check
+  (`0058598f`: an `OFFSET_DATA` with no table, which the row never makes).
+- **Measured** MEASURED
+
 ### Dialogue topic index
 
 `TESTopic::GetOwnerTopic` (`0061a310`) walks the data handler's topic list and asks each topic (`00619e10`, first to
@@ -544,3 +586,6 @@ translated from them in these fixes.
 - **TEMPO** (Fallout 3): scaling the grab's per-frame pull by the frame's time times 60, at most 4.
 - **Viva New Vegas** (ModdingLinked, MIT): the guide's frame-rate rules, which these numbers were checked
   against.
+- **Cell Offset Generator**, WallSoGB, GPL-3.0: offset tables for every plugin and the engine's master-only
+  checks (`CellOffsetGenerator.cpp`), the idea of the cell offsets row; its tables are built another way here
+  and none of its code is used.

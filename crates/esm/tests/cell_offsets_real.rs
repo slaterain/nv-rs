@@ -81,7 +81,22 @@ fn built_tables_are_the_masters_own() {
             );
             compared += 1;
         }
-        println!("{name}: {} world space records, {took:.2?}", worlds.len());
+        // As the game asks: only what it would use, the rest not built (and not read).
+        let start = Instant::now();
+        let asked = world_offsets(File::open(&path).unwrap(), false).unwrap();
+        let took_asked = start.elapsed();
+        assert_eq!(asked.len(), worlds.len());
+        for (asked, all) in asked.iter().zip(&worlds) {
+            if let Ok(table) = &asked.built {
+                assert_eq!(Ok(table), all.built.as_ref(), "{name} {:08x}", all.form_id);
+            }
+        }
+        let given = asked.iter().filter(|w| w.built.is_ok()).count();
+        println!(
+            "{name}: {} world space records, all built in {took:.2?}; the {given} the game would \
+             use in {took_asked:.2?}",
+            worlds.len()
+        );
     }
     println!("{compared} tables the same as the masters' own");
     assert!(compared > 0);
