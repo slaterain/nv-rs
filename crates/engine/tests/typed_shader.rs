@@ -662,6 +662,8 @@ impl Common for Diff {
                 0x00b7_ac20,
                 0x00c0_2c30,
                 0x00b5_5520,
+                // The render family's stage bind, which the pass set-ups call.
+                0x00e7_eb00,
             ])
             .max_calls(MAX_CALLS)
             .max_cases(160)
