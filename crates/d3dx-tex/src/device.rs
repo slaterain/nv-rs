@@ -143,7 +143,7 @@ fn distance(want: &Row, candidate: &Row) -> Option<u32> {
 /// says (0x60d069): `wanted` when taken; else, in the table's order, the taken row that may stand
 /// in with the smallest distance, a tie going to fewer bits per pixel; 0 when none (D3DX then
 /// answers `D3DERR_NOTAVAILABLE`).
-pub(crate) fn choose(wanted: u32, takes: impl Fn(u32) -> bool) -> u32 {
+pub fn choose(wanted: u32, takes: impl Fn(u32) -> bool) -> u32 {
     let want = TABLE.iter().find(|r| r.format == wanted).unwrap_or(&OTHER);
     let (mut best, mut chosen) = (u32::MAX, &OTHER);
     for row in TABLE {

@@ -59,6 +59,8 @@ pub(crate) mod pixel;
 #[doc(hidden)]
 pub mod synthetic;
 
+#[doc(hidden)]
+pub use device::choose;
 pub use device::table_formats;
 pub use filter::set_max_threads;
 pub use load::{

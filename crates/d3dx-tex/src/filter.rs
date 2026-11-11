@@ -22,12 +22,12 @@ pub struct Level {
 }
 
 /// Whether this crate reads files of `f`.
-pub(crate) fn reads(f: u32) -> bool {
+pub fn reads(f: u32) -> bool {
     dxt_translated(f) || pixel::decodes(f)
 }
 
 /// Whether this crate makes textures of `f`.
-pub(crate) fn makes(f: u32) -> bool {
+pub fn makes(f: u32) -> bool {
     dxt_translated(f) || pixel::encodes(f)
 }
 
