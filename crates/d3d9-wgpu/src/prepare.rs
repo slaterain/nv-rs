@@ -45,8 +45,10 @@ pub(crate) struct Entry {
     pub filterable: u32,
     pub atoc: bool,
     pub count: bool,
-    /// The user clip planes: 0 off; on as 1 (clip distances), 2 (discard) or 3 (discard per
-    /// sample), as the adapter that recorded it cut them: another adapter cuts them its own way.
+    /// The user clip planes: 0 off; 1 the clip distances (every draw on an adapter that has
+    /// them, planes on or off; before that, planes on); 2 (discard) or 3 (discard per sample)
+    /// with a plane on, as the adapter that recorded it cut them: another adapter cuts them its
+    /// own way.
     pub clip: u8,
 }
 

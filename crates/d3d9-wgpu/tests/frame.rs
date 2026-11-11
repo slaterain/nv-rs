@@ -396,6 +396,12 @@ fn user_clip_planes_cut_where_the_distance_is_negative() {
     g.state(CLIPPING, 0);
     g.cover(0.5);
     assert_eq!(g.reds(), vec![255; 16], "clipping off");
+    // With the hardware's clip distances (Vulkan, Metal) every draw takes them, planes on or
+    // off: the three draws above share one pipeline. Without (Direct3D 12) a plane on is the
+    // pixel shader's discard, another pipeline.
+    let d = g.b.device().expect("the device");
+    let want = if d.has_clip_distances() { 1 } else { 2 };
+    assert_eq!(d.pipelines_made_on_draws(), want, "{}", d.adapter_name());
 }
 
 #[test]
