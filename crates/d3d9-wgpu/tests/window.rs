@@ -571,25 +571,62 @@ fn a_window_minimised_at_create_device_still_gets_the_device() {
     assert_eq!(d.wgpu_errors(), 0, "wgpu reported no error");
 }
 
-/// The backend's loading screen (`show_progress`: the first start's "Preparing shaders") as the
-/// window shows it, from its captures (`wgpu-loading-N.bmp`): at the window's size, not black
-/// (the logo, the text and the bar over black), the bar at its share done; and so again after
-/// the window was sized anew (the swap chain follows the window).
+/// The backend's loading screen as the window shows it, from its captures (`wgpu-loading-N.bmp`
+/// for the screen's own frames, `wgpu-window-N.bmp` for the game's presents), at the window's
+/// size and not black (the logo, the text and the bar over black):
+/// - from the device's creation ("Starting");
+/// - over the game's frames while the game has drawn nothing (all black), never over a frame
+///   that draws anything, and not again after one (a black frame then stays black);
+/// - for a long step of the backend's own (`show_progress`), its bar at the share done, again
+///   after the window was sized anew; the game's next `Present` shows the game.
 #[test]
-fn the_loading_screen_is_shown_in_the_window_not_black() {
+fn the_loading_screen_is_shown_until_the_game_draws_and_is_not_black() {
     let Some(mut g) = Rig::new((320, 240), (32, 24)) else {
         return;
     };
+    // Lit: any channel over 24 (the logo, the text, the bar); the bar's colour where it is
+    // done (0.9, 0.75, 0.35), B, G, R.
+    let lit = |px: &[u8]| {
+        px.chunks_exact(4)
+            .filter(|p| p[0] > 24 || p[1] > 24 || p[2] > 24)
+            .count() as u32
+    };
+    let bar =
+        |p: &[u8]| p[0].abs_diff(89) <= 2 && p[1].abs_diff(191) <= 2 && p[2].abs_diff(230) <= 2;
+    let (w, h, px) = g
+        .capture("wgpu-loading", 1)
+        .expect("the screen from the device's creation");
+    assert_eq!((w, h), (320, 240), "the window's size");
+    assert!(lit(&px) > w * h / 50, "not black: {} lit", lit(&px));
+    // The game's black frames show the screen; the first frame that draws anything is the
+    // game's own, and a black frame after it is black.
+    g.show(1, 0xFF00_0000);
+    let (w, h, px) = g.capture("wgpu-window", 1).expect("the window's frame 1");
+    assert_eq!((w, h), (320, 240));
+    assert!(
+        lit(&px) > w * h / 50,
+        "the screen over a black frame: {} lit",
+        lit(&px)
+    );
+    g.show(2, 0xFF20_4060);
+    assert_eq!(
+        g.window_frame(2),
+        Some((320, 240, vec![bgra(0xFF20_4060)])),
+        "the game's first frame that draws: the game's own"
+    );
+    g.show(3, 0xFF00_0000);
+    assert_eq!(
+        g.window_frame(3),
+        Some((320, 240, vec![bgra(0xFF00_0000)])),
+        "black after the game has drawn: black"
+    );
     let progress = |done: f32| d3d9_wgpu::loading::Progress {
         title: "Loading".into(),
         status: "Preparing shaders 1 of 2".into(),
         done,
     };
-    // The bar's colour where it is done (0.9, 0.75, 0.35), B, G, R.
-    let bar =
-        |p: &[u8]| p[0].abs_diff(89) <= 2 && p[1].abs_diff(191) <= 2 && p[2].abs_diff(230) <= 2;
-    for (n, (w, h), done) in [(1u32, (320u32, 240u32), 0.5f32), (2, (640, 360), 1.0)] {
-        if n == 2 {
+    for (n, (w, h), done) in [(2u32, (320u32, 240u32), 0.5f32), (3, (640, 360), 1.0)] {
+        if n == 3 {
             g.size(w as i32, h as i32);
         }
         g.b.device()
@@ -599,13 +636,10 @@ fn the_loading_screen_is_shown_in_the_window_not_black() {
             .capture("wgpu-loading", n)
             .expect("the loading screen's frame");
         assert_eq!((cw, ch), (w, h), "frame {n}: the window's size");
-        let lit = px
-            .chunks_exact(4)
-            .filter(|p| p[0] > 24 || p[1] > 24 || p[2] > 24)
-            .count();
         assert!(
-            lit as u32 > w * h / 50,
-            "frame {n}: not black ({lit} of {} pixels lit)",
+            lit(&px) > w * h / 50,
+            "frame {n}: not black ({} of {} pixels lit)",
+            lit(&px),
             w * h
         );
         let done_px = px.chunks_exact(4).filter(|p| bar(p)).count();
@@ -615,10 +649,9 @@ fn the_loading_screen_is_shown_in_the_window_not_black() {
             "frame {n}: the bar done {done} ({done_px} pixels)"
         );
     }
-    // The game's next Present shows the game again.
-    g.show(1, 0xFF20_4060);
+    g.show(4, 0xFF20_4060);
     assert_eq!(
-        g.window_frame(1),
+        g.window_frame(4),
         Some((640, 360, vec![bgra(0xFF20_4060)])),
         "the game's frame after the loading screen"
     );
