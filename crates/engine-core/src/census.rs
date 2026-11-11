@@ -387,6 +387,7 @@ pub fn touch_spec() -> Option<TouchSpec> {
 mod tests {
     use super::*;
     use crate::abi::Ret;
+    use crate::units::platform::ReserveGap;
 
     /// A class's vtable at `vtable` with the exe's RTTI behind it: the complete object locator in
     /// the word before, its type descriptor, the mangled name in that.
@@ -412,11 +413,11 @@ mod tests {
             name: "VirtualAlloc".into(),
         };
         assert_eq!(e.register_imports(&[import]), 1);
-        // One in the gap below the heap (the default), one a heap block (as with the gap off).
+        // One in the gap below the heap (`NV_RESERVE_GAP=on`), one a heap block (the gap off).
         let mut lines = String::new();
         for (gap, by) in [
-            (true, "placed in the gap below the heap"),
-            (false, "heap block"),
+            (ReserveGap::On, "placed in the gap below the heap"),
+            (ReserveGap::Off, "heap block"),
         ] {
             e.kernel.reserve_gap = Some(gap);
             let base = e.call(VIRTUAL_ALLOC, &[0, 8 << 20, 0x2000, 4]).u32();
