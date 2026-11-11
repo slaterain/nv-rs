@@ -636,6 +636,16 @@ call them as Rust functions keep the translation, which does the same. Merged of
 differential tests, its planted mutants and review, with a later gate to turn it on (`NV_TYPED=draw_f` until then).
 While it is on, the translation's speech diagnostic (`NV_SPEECH_CHECK`, not the exe's) takes no notes at the node
 allocation. Its tests are in `crates/engine/tests/typed_draw.rs`.
+And `anim_keys` (same crate, id 27): the code that reads and writes the key arrays an animation keeps
+(`NiTransformData`'s rotation, position and scale keys, about 12 MB of the guest heap on the smoothness route), typed so
+that stage 2 can keep them outside the 32-bit space as plain byte buffers. Its first batch is what the touch census saw
+reaching rotation keys: `NiQuaternion`'s constructor from four floats, its negation, `Slerp` with its parameter
+correction, `NiRotKey::GenInterp` with the key search the `GenInterp` functions share, and the preparation of a
+rotation key array (neighbours in one hemisphere, `W` clamped). The key types' interpolation functions,
+`NiQuaternion::FastNormalize` and the loading of the keys stay by address. `anim_keys::Keys` gives a key's address,
+word and time; the quaternion copies, the clamp of `W` and the negation's copy back still read and write at those
+addresses directly, and `GenInterp` hands raw key addresses to the interpolation functions: stage 2 routes those
+too. Its tests are `crates/engine/tests/typed_anim_keys.rs`. Off until its gate (`NV_TYPED=anim_keys` turns it on).
 
 **The switch.** `NV_TYPED` is read once per process, and `Engine::new` runs `typed::apply` after
 all registration: each family that is on is registered over the translations with
