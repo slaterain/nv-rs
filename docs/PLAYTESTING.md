@@ -200,7 +200,8 @@ None of these is for players.
 | `NV_RENDER_THREAD_STATS=1` | With the render thread: a line a second on its hand-overs and the game's waits | off |
 | `NV_D3D9_STREAM_CHECK=1` | With the render thread: every command hashed as recorded and as carried out, the run stopped at a difference | off |
 | `NV_D3D9_RECORD=FILE` | Every Direct3D 9 command to FILE (`d3d9_stream::wire`), to replay into another backend | off |
-| `NV_D3D9_BACKGROUND=1` | The window opens without taking the focus (scripted runs) | off |
+| `NV_D3D9_BACKGROUND=1` | The window opens without taking the focus, behind the other windows (scripted runs) | off |
+| `NV_D3D9_HIDDEN=1` | The window is never shown: nothing on any monitor, not even for a moment as it opens, and no taskbar button. The real Direct3D 9 device draws and presents into it as into a shown one and the game sees the same window, so a recorded run is byte for byte the same as with `NV_D3D9_BACKGROUND` (for the scripted runs whose recordings are compared; it wins over `NV_D3D9_BACKGROUND`). Nobody can close such a window: the run ends by its frame count or time limit | off |
 | `NV_SLICE=n` | Stepped threads: calls between turns (0: only at waits and sleeps) | 200000 |
 | `NV_WAKE_DELAY=n` | Stepped threads: calls after a signal before the threads it woke run | built-in |
 | `NV_TEXTURES=dll` | The game's textures from the player's 64-bit `d3dx9_38.dll` (with `NV_D3D9=real`) or the texture cache, as before `crates/d3dx-tex`; files `crates/d3dx-tex` does not translate, and a thread at 64-bit precision, go to the DLL in any case, and without one are refused as D3DX refuses a file it cannot read | `crates/d3dx-tex` makes them, byte for byte the 32-bit DLL's |

@@ -28,7 +28,9 @@
 //!
 //! The real window lives on a thread of its own that only creates it and pumps its messages, so
 //! it never waits on the game's threads, whatever the backend: each one draws into it (wgpu's
-//! surface is made on it), and its keyboard and mouse feed the game's DirectInput.
+//! surface is made on it), and its keyboard and mouse feed the game's DirectInput. Scripted runs
+//! show it behind the other windows (`NV_D3D9_BACKGROUND`) or not at all (`NV_D3D9_HIDDEN=1`,
+//! `Showing`).
 //!
 //! The real device is created with `D3DCREATE_FPU_PRESERVE` added to the game's flags: the
 //! game's x87 precision switch is modelled (`crate::direct3d_device_created`,
@@ -587,13 +589,15 @@ fn window_input(_window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) {
 }
 
 /// A window to make on the window thread: title, style, extended style, rectangle, the real
-/// parent (0 for a top-level window), and where the handle goes (0 when it failed).
+/// parent (0 for a top-level window), how a top-level `WS_VISIBLE` one is shown, and where the
+/// handle goes (0 when it failed).
 struct Request {
     title: Vec<u8>,
     style: u32,
     ex_style: u32,
     rect: [i32; 4],
     parent: isize,
+    show: Showing,
     reply: std::sync::mpsc::Sender<isize>,
 }
 
@@ -617,6 +621,45 @@ fn window_thread() -> &'static std::sync::Mutex<std::sync::mpsc::Sender<Request>
 /// shown as the game's `WS_VISIBLE` window is: activated.
 fn shown_in_background() -> bool {
     std::env::var_os("NV_D3D9_BACKGROUND").is_some()
+}
+
+/// How the window thread shows a top-level window the game made visible (`WS_VISIBLE`). The real
+/// top-level window is made without `WS_VISIBLE` in every case and shown afterwards, or not at
+/// all. What the game reads about its window comes from the modelled one (`super::window`: its
+/// style with `WS_VISIBLE`, its rectangle, the active window), never from the real one, so the
+/// game sees the same window whichever this is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Showing {
+    /// Shown and activated, as Windows shows the game's window.
+    Activated,
+    /// Shown without the focus, at the bottom of the window stack ([`shown_in_background`]).
+    Background,
+    /// Never shown (`NV_D3D9_HIDDEN=1`, for the scripted runs whose recordings are compared):
+    /// nothing on any monitor, not even for a moment as it is made, and no taskbar button. The
+    /// game's child window inside it, the borderless window and the device on it are made as for
+    /// a shown one; the device draws and presents into it all the same.
+    Never,
+}
+
+impl Showing {
+    /// The run's choice: `NV_D3D9_HIDDEN=1` before `NV_D3D9_BACKGROUND`.
+    fn asked() -> Showing {
+        Showing::of(
+            std::env::var("NV_D3D9_HIDDEN").ok().as_deref(),
+            shown_in_background(),
+        )
+    }
+
+    /// The choice for `NV_D3D9_HIDDEN`'s value (`None` unset) and `NV_D3D9_BACKGROUND`.
+    fn of(hidden: Option<&str>, background: bool) -> Showing {
+        if hidden == Some("1") {
+            Showing::Never
+        } else if background {
+            Showing::Background
+        } else {
+            Showing::Activated
+        }
+    }
 }
 
 /// Whether the game's window is borderless and covers the primary monitor (`NV_BORDERLESS`, the
@@ -667,8 +710,8 @@ unsafe fn run_window_thread(rx: std::sync::mpsc::Receiver<Request>) {
             title.push(0);
             let [left, top, right, bottom] = request.rect;
             let child = request.parent != 0;
-            // A top-level window is shown afterwards (activated, or in the background for the
-            // scripted runs: [`shown_in_background`]).
+            // A top-level window is shown afterwards (activated, in the background for the
+            // scripted runs, or never: [`Showing`]).
             let borderless = !child && borderless();
             let fills = child
                 && request.parent != 0
@@ -714,26 +757,30 @@ unsafe fn run_window_thread(rx: std::sync::mpsc::Receiver<Request>) {
                         BORDERLESS_WINDOW.store(w.0 as isize, std::sync::atomic::Ordering::Relaxed);
                     }
                     if !child && request.style & WS_VISIBLE.0 != 0 {
-                        let show = if shown_in_background() {
-                            SW_SHOWNOACTIVATE
-                        } else {
-                            SW_SHOW
-                        };
-                        let _ = ShowWindow(w, show);
-                        // In the background a new window still lands on top of the stack, in
-                        // front of whatever the person at the machine is using: put it at the
-                        // bottom instead (it keeps drawing there; the game's own `SetWindowPos`
-                        // calls keep the order, `SWP_NOZORDER` in `window_moved`).
-                        if shown_in_background() {
-                            let _ = SetWindowPos(
-                                w,
-                                HWND_BOTTOM,
-                                0,
-                                0,
-                                0,
-                                0,
-                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                            );
+                        match request.show {
+                            Showing::Activated => {
+                                let _ = ShowWindow(w, SW_SHOW);
+                            }
+                            Showing::Background => {
+                                let _ = ShowWindow(w, SW_SHOWNOACTIVATE);
+                                // In the background a new window still lands on top of the
+                                // stack, in front of whatever the person at the machine is
+                                // using: put it at the bottom instead (it keeps drawing there;
+                                // the game's own `SetWindowPos` calls keep the order,
+                                // `SWP_NOZORDER` in `window_moved`).
+                                let _ = SetWindowPos(
+                                    w,
+                                    HWND_BOTTOM,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                                );
+                            }
+                            // Nothing shows it later either: `window_moved` never passes
+                            // `SWP_SHOWWINDOW`, and the windowed device does not show its window.
+                            Showing::Never => {}
                         }
                     }
                     w.0 as isize
@@ -788,6 +835,7 @@ pub fn window_created(
         ex_style,
         rect,
         parent: real_parent,
+        show: Showing::asked(),
         reply,
     };
     let sent = window_thread()
@@ -3128,6 +3176,7 @@ pub(crate) fn test_window() -> Option<isize> {
                 ex_style: 0,
                 rect: [0, 0, 64, 64],
                 parent: 0,
+                show: Showing::Never,
                 reply,
             })
             .is_ok()
@@ -3354,6 +3403,108 @@ mod tests {
         }
         assert!(Backends::Real.real() && Backends::RealAndWgpu.real());
         assert!(!Backends::Wgpu.real());
+    }
+
+    /// `NV_D3D9_HIDDEN=1` keeps the window from being shown whatever `NV_D3D9_BACKGROUND` says;
+    /// any other value of it leaves the window as `NV_D3D9_BACKGROUND` has it.
+    #[test]
+    fn nv_d3d9_hidden_wins_over_the_background() {
+        assert_eq!(Showing::of(None, false), Showing::Activated);
+        assert_eq!(Showing::of(None, true), Showing::Background);
+        assert_eq!(Showing::of(Some("1"), false), Showing::Never);
+        assert_eq!(Showing::of(Some("1"), true), Showing::Never);
+        for other in ["0", "", "yes", " 1"] {
+            assert_eq!(Showing::of(Some(other), false), Showing::Activated);
+            assert_eq!(Showing::of(Some(other), true), Showing::Background);
+        }
+    }
+
+    /// A game window that is never shown ([`Showing::Never`]): the top-level window, asked for
+    /// with `WS_VISIBLE` as the game asks (its styles as its runs print them), and the child window
+    /// in it are made, the child keeping the `WS_VISIBLE` the game gave it, and neither is visible.
+    /// A windowed real device on the child, the top-level window its focus window, clears and
+    /// presents with `D3D_OK` (the model's answers: nothing is printed as differing) and shows no
+    /// window. Skipped where Direct3D 9 has no device (no display adapter, as on CI).
+    #[test]
+    fn a_window_never_shown_stays_hidden_and_its_device_presents() {
+        use d3d9_stream::Backend as _;
+        let _turn = real_turn();
+        let make = |style: u32, rect: [i32; 4], parent: isize| -> Option<isize> {
+            let (reply, answer) = std::sync::mpsc::channel();
+            let sent = window_thread()
+                .lock()
+                .map(|tx| {
+                    tx.send(Request {
+                        title: b"nv-rs hidden test".to_vec(),
+                        style,
+                        ex_style: 0,
+                        rect,
+                        parent,
+                        show: Showing::Never,
+                        reply,
+                    })
+                    .is_ok()
+                })
+                .unwrap_or(false);
+            answer.recv().ok().filter(|&w| sent && w != 0)
+        };
+        let top = make(0x14c0_0000, [0, 0, 320, 240], 0).expect("the top-level window");
+        let child = make(0x5000_0000, [0, 0, 64, 64], top).expect("the child window");
+        let visible = |w: isize| unsafe { IsWindowVisible(HWND(w as *mut _)) }.as_bool();
+        let style = |w: isize| unsafe { GetWindowLongW(HWND(w as *mut _), GWL_STYLE) } as u32;
+        assert!(!visible(top) && !visible(child));
+        assert_eq!(
+            style(top) & WS_VISIBLE.0,
+            0,
+            "the top-level window never shown"
+        );
+        assert_ne!(
+            style(child) & WS_VISIBLE.0,
+            0,
+            "the child as the game made it"
+        );
+        let mut b = crate::d3d9backend::RealBackend::new();
+        let device = 0x1000;
+        let present = test_present();
+        let made = b.execute(Cmd::CreateDevice {
+            device,
+            focus: top,
+            window: child,
+            behavior: 0x54,
+            present: Data::from_words(&present),
+            back_buffers: Data::from_words(&[]),
+            depth_stencil: 0,
+        });
+        if !matches!(made, Reply::Device { created: true, .. }) {
+            eprintln!("no Direct3D 9 device here: the device's half of this test is skipped");
+            return;
+        }
+        for frame in 1..=3 {
+            b.execute(Cmd::Clear {
+                device,
+                count: 0,
+                rects: None,
+                flags: 1,
+                colour: 0xff20_4060,
+                z: 0,
+                stencil: 0,
+                model: 0,
+            });
+            b.execute(Cmd::Present {
+                device,
+                source: None,
+                dest: None,
+                window: 0,
+                dirty: false,
+                model: 0,
+                frame,
+            });
+        }
+        assert!(b.logged.is_empty(), "differing answers: {:?}", b.logged);
+        assert!(
+            !visible(top) && !visible(child),
+            "the device shows no window"
+        );
     }
 
     /// An F12 report's `log-start.txt`: the log's first bytes, cut back to a whole line.
