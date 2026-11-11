@@ -6548,7 +6548,7 @@ fn set_vertex_constant_array() {
 /// blending, 0x84 the alpha function, 0x88 the alpha test, 0x110 the end's states, 0xf0 the pass
 /// choice, 0xf4 the begin's end, 0xf8 the pair textures, 0xfc the pass constants, 0x100 the render
 /// states, 0x104 the states put back, 0x114 the end's states put back. Its counted pointers' sources
-/// are counted objects; the pass table gives `p`'s pass for every type; the pass's constants target
+/// are counted objects; the pass table gives a copy of `p`'s pass for every type; the pass's constants target
 /// (`00e7f7c0`) is stood in by a cache-like object.
 fn typed_slot_shader(e: &mut Engine, p: &PassW) -> u32 {
     let vt = vtable(
@@ -6579,8 +6579,21 @@ fn typed_slot_shader(e: &mut Engine, p: &PassW) -> u32 {
         set(e, shader + 0x6c + 4 * k, o);
     }
     set(e, shader + 0x18, p.d.w.renderer);
+    // The pass table gives another pass than the current one (`p`'s copy with a render state list of
+    // its own), so the pass choice shows in what the later slots read.
+    let other = e.mem.alloc(0x60);
+    for k in (0..0x60).step_by(4) {
+        let word = e.mem.u32(p.pass + k);
+        set(e, other + k, word);
+    }
+    let list = e.mem.alloc(0x20);
+    let node = e.mem.alloc(0xc);
+    set(e, node, 0x89);
+    set(e, node + 4, 7);
+    set(e, list + 0x10, node);
+    set(e, other + 0x30, list);
     for t in 0..0x2f0u32 {
-        set(e, 0x011f_dff8 + 4 * t, p.pass);
+        set(e, 0x011f_dff8 + 4 * t, other);
     }
     let target = obj(e, 0x1114, plain);
     for k in (4..0x1114).step_by(4) {
