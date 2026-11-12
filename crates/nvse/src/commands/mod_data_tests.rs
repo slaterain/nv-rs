@@ -283,3 +283,96 @@ fn a_set_statement_gets_a_temporary_string() {
     assert!(vars::string(&e, got).is_none(), "a temporary string");
     assert_eq!(vars::string(&e, id).unwrap(), b"old");
 }
+
+thread_local! {
+    static BOXES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    static HEARD: std::cell::RefCell<Vec<(u32, Vec<u8>, u32)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn boxes() -> Vec<String> {
+    BOXES.with(|b| std::mem::take(&mut *b.borrow_mut()))
+}
+
+fn heard(e: &mut Engine, m: &crate::plugins::Message) {
+    let text = crate::table::guest_text(e, m.data);
+    HEARD.with(|h| h.borrow_mut().push((m.kind, text, m.len)));
+}
+
+/// A built-in plugin "TestPlugin" of version 7 with a listener, and one not listed; the message
+/// box records its text; the calling script's editor id is "MyScript".
+fn with_plugins(e: &mut Engine) {
+    BOXES.with(|b| b.borrow_mut().clear());
+    HEARD.with(|h| h.borrow_mut().clear());
+    let plugin = |name, listed, base| crate::plugins::BuiltIn {
+        file: name,
+        name,
+        version: 7,
+        opcode_base: base,
+        listed,
+        listener: Some(heard),
+        save: None,
+        load: None,
+        pre_load: None,
+        new_game: None,
+    };
+    crate::plugins::register(e, plugin("TestPlugin", true, 0x9000));
+    crate::plugins::register(e, plugin("Hidden", false, 0x9100));
+    e.register(0x0070_3e80, |e, a| {
+        let text = String::from_utf8(crate::table::guest_text(e, a[0])).unwrap();
+        assert_eq!(crate::table::guest_text(e, a[8]), b"Ok");
+        assert_eq!(a[3], 0x005b_4a70);
+        BOXES.with(|b| b.borrow_mut().push(text));
+        eax(1)
+    });
+    // No console: the "not found" line goes nowhere.
+    e.register(0x0071_b160, |_, _| eax(0));
+    let vtable = 0x0300_9000;
+    e.mem.set_u32(SCRIPT, vtable);
+    e.mem.set_u32(vtable + 0x130, 0x0060_3000);
+    e.register(0x0060_3000, |e, _| eax(crate::table::guest_str(e, b"MyScript")));
+}
+
+/// `PluginVersion`: a plugin that is missing, or older than asked, or an xNVSE older than asked,
+/// shows one message box and stops the line; a plugin name warned of once (in any case) is not
+/// warned of again. A requirement met shows nothing.
+#[test]
+fn plugin_version_warns_once() {
+    let mut e = setup();
+    with_plugins(&mut e);
+    assert_eq!(run(&mut e, 0x1676, &[text("TestPlugin"), num(7.0)]).0, 1);
+    assert_eq!(run(&mut e, 0x1676, &[text("nvse"), num(f64::from(0x0604_0090))]).0, 1);
+    assert!(boxes().is_empty());
+    assert_eq!(run(&mut e, 0x1676, &[text("Missing"), num(1.0)]).0, 0);
+    assert_eq!(run(&mut e, 0x1676, &[text("Hidden"), num(1.0)]).0, 0);
+    assert_eq!(run(&mut e, 0x1676, &[text("MISSING"), num(1.0)]).0, 1);
+    assert_eq!(run(&mut e, 0x1676, &[text("testplugin"), num(8.0)]).0, 0);
+    assert_eq!(run(&mut e, 0x1676, &[text("NVSE"), num(f64::from(0x0700_0010))]).0, 0);
+    assert_eq!(
+        boxes(),
+        [
+            "A script ('MyScript') requires the plugin named 'Missing' but it was not found. Your game will NOT work correctly. Please locate the plugin.",
+            "A script ('MyScript') requires the plugin named 'Hidden' but it was not found. Your game will NOT work correctly. Please locate the plugin.",
+            "A script ('MyScript') requires the plugin 'testplugin' >= '8' (You have version 7).\nYour game will NOT work correctly. Please update the plugin.",
+            "A script ('MyScript') requires xNVSE version >= 7.0.1 (You have version 6.4.9).\nYour game will NOT work correctly. Please update xNVSE.",
+        ]
+    );
+    // One argument: nothing.
+    assert_eq!(run(&mut e, 0x1676, &[text("Other")]).0, 1);
+    assert!(boxes().is_empty());
+}
+
+/// `ReloadPluginConfig`: the message (25, the name, its length with the 0) to the named loaded
+/// plugin only, and 1; any other name prints "not found" and answers 0.
+#[test]
+fn reload_plugin_config_tells_that_plugin() {
+    let mut e = setup();
+    with_plugins(&mut e);
+    assert_eq!(call(&mut e, 0x167a, 0, &[s("testplugin")]), (1, 1.0));
+    assert_eq!(
+        HEARD.with(|h| h.borrow().clone()),
+        [(25, b"testplugin".to_vec(), 11)]
+    );
+    assert_eq!(call(&mut e, 0x167a, 0, &[s("Hidden")]), (1, 0.0));
+    assert_eq!(HEARD.with(|h| h.borrow().len()), 1);
+}
