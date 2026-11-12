@@ -2504,6 +2504,12 @@ pub const MOST_HELPERS: usize = ((crate::mem::HELPER_AREA.end - crate::mem::HELP
     / crate::mem::HELPER_SLOT) as usize
     - 1;
 
+/// Whether a pool of `helpers` fits the helper area beside the drawing helper's slot (one helper
+/// at least).
+fn pool_fits(helpers: usize) -> bool {
+    helpers != 0 && helpers <= MOST_HELPERS
+}
+
 /// A job for [`fork_join`]: called once on each helper with its engine and number (1 to n), and on
 /// the caller with number 0.
 pub type HelperJob<'a> = &'a (dyn Fn(&mut Engine, usize) + Sync);
@@ -2592,7 +2598,12 @@ pub fn fork_join_first(e: &mut Engine, helpers: usize, job: HelperJob<'_>) -> bo
 
 /// [`fork_join`] (`every`: each helper runs the job) or [`fork_join_first`].
 fn fork(e: &mut Engine, helpers: usize, job: HelperJob<'_>, every: bool) -> bool {
-    if helpers == 0 || helpers > MOST_HELPERS || HELPER.with(Cell::get) {
+    if !pool_fits(helpers) || HELPER.with(Cell::get) {
+        return false;
+    }
+    // A per-call diagnostic (a trace, a profile, a call log) sees the caller's calls only: the
+    // caller does the work alone, so its record stays whole.
+    if diagnostic_on(e).is_some() {
         return false;
     }
     // A typed family's dual run changes a guest word and then its mirror, one access at a time
@@ -2649,10 +2660,13 @@ fn fork(e: &mut Engine, helpers: usize, job: HelperJob<'_>, every: bool) -> bool
     // no other call replaces the job meanwhile (`busy`).
     let erased: HelperJob<'static> =
         unsafe { std::mem::transmute::<HelperJob<'_>, HelperJob<'static>>(job) };
+    // The caller's x87 control word as `FSTCW` reads it (the engine's copy, which the register
+    // always matches): each helper takes both for the job.
+    let control_word = crate::units::crt::x87_control_word(e);
     {
         let mut s = guard(&pool.state);
         s.job = Some(erased);
-        s.control_word = crate::x87::control_word();
+        s.control_word = control_word;
         s.to_take = helpers;
         s.running = 0;
         s.helpers = helpers;
@@ -2813,7 +2827,10 @@ fn run_helper(
         if world.is_some() {
             sync_registered(&mut e);
         }
-        crate::x87::set_control_word(control_word);
+        // The engine's copy (what `FSTCW` reads, and what the CRT's `fabs` saves and restores
+        // through `_ctrlfp`) and the register both: with the register alone, the helper's first
+        // `fabs` would load its own block's default word, 53-bit precision.
+        crate::units::crt::set_x87_control_word(&mut e, control_word);
         if let Some(world) = world {
             world.enter_guest();
         }
@@ -2842,6 +2859,13 @@ fn run_helper(
 
 /// The drawing helper's slot of [`crate::mem::HELPER_AREA`]: the one past the pool's.
 const DRAW_SLOT: u32 = MOST_HELPERS as u32;
+// The area's last slot, and no pool slot: the drawing helper's TLS block and stack are nobody
+// else's, and nothing past the area (the extenders' code begins there).
+const _: () = assert!(
+    crate::mem::HELPER_AREA.start + (DRAW_SLOT + 1) * crate::mem::HELPER_SLOT
+        == crate::mem::HELPER_AREA.end
+        && MOST_HELPERS as u32 <= DRAW_SLOT
+);
 /// The id the drawing helper answers `GetCurrentThreadId` with, and its thread index: past the
 /// pool's.
 const DRAW_ID: u32 = HELPER_ID_BASE + 0x100;
@@ -2902,17 +2926,31 @@ pub fn on_draw_helper() -> bool {
 }
 
 /// Posts `job` to the drawing helper (made at the first post, on an OS thread named `nv-draw`),
-/// which takes the poster's x87 control word for it. With real threads it starts at once, counted
-/// as running game code for the page barrier while it runs; with stepped threads it runs when the
-/// poster waits for it ([`wait_draw`], [`join_draw`]), so a run stays deterministic: the job's
-/// place in the run is the poster's wait. Answers false and posts nothing (the poster does the work
-/// itself) on a helper, while a typed family runs dual (`typed::moved::Store::Dual`, as
-/// [`fork_join`]), while an earlier job is posted and not joined, or when the memory cannot be
-/// shared (a memory diagnostic). With stepped threads the memory becomes shared at the first post,
-/// as `fork_join` makes it. One drawing helper per process, for the run that first posts: a
-/// poster from another run stops with a panic.
+/// which takes the poster's x87 control word for it (the engine's copy and the register, as
+/// `FLDCW` loads them). With real threads it starts at once, counted as running game code for the
+/// page barrier while it runs; with stepped threads it runs when the poster waits for it
+/// ([`wait_draw`], [`join_draw`]), so a run stays deterministic: the job's place in the run is the
+/// poster's wait. Answers false and posts nothing (the poster does the work itself) on a helper,
+/// while a typed family runs dual (`typed::moved::Store::Dual`, as [`fork_join`]), while a per-call
+/// diagnostic is on (its record stays whole), while an earlier job is posted and not joined, or
+/// when the memory cannot be shared (a memory diagnostic). With stepped threads the memory becomes
+/// shared at the first post, as `fork_join` makes it. One drawing helper per process, for the run
+/// that first posts: a poster from another run stops with a panic.
+///
+/// The job's thread, as the game sees it: with stepped threads it runs as the poster (main):
+/// `GetCurrentThreadId` answers main's id and the TLS and FLS values are main's. With real threads
+/// it is a thread of its own, id `DRAW_ID` (0x10100), whose TLS and FLS values start empty (a slot
+/// main set reads 0 there), as a new thread's do; a guest lock main holds (a critical section, a
+/// spin lock owned by thread id) is waited for as by any other thread. A stop in the job (an
+/// untranslated function, a fault) is a stop of the run, as a game thread's is: it names
+/// `nv-draw` and the job's innermost functions, and a thread waiting on a lock the job held stops
+/// with it; the payload comes back at [`join_draw`].
 pub fn post_draw(e: &mut Engine, job: DrawJob) -> bool {
-    if HELPER.with(Cell::get) || on_draw_helper() || e.typed_any_dual() {
+    if HELPER.with(Cell::get)
+        || on_draw_helper()
+        || e.typed_any_dual()
+        || diagnostic_on(e).is_some()
+    {
         return false;
     }
     let world = e.real.as_ref().map(|r| r.world);
@@ -2933,6 +2971,7 @@ pub fn post_draw(e: &mut Engine, job: DrawJob) -> bool {
     }
     let d = *DRAW.get_or_init(|| make_draw_helper(e, world));
     d.assert_same_run(e.kernel.id(), world_id);
+    let control_word = crate::units::crt::x87_control_word(e);
     {
         let mut s = guard(&d.state);
         if s.posted {
@@ -2941,7 +2980,7 @@ pub fn post_draw(e: &mut Engine, job: DrawJob) -> bool {
         s.posted = true;
         s.finished = false;
         s.panic = None;
-        s.control_word = crate::x87::control_word();
+        s.control_word = control_word;
         s.job = Some(job);
         s.go = world.is_some();
     }
@@ -2956,7 +2995,9 @@ pub fn draw_posted() -> bool {
 
 /// Returns once the posted job has finished; with stepped threads it runs now, while the poster
 /// waits. False when none is posted. The poster does not count as running game code while it
-/// waits, so a barrier does not wait for it. The job's panic waits for [`join_draw`].
+/// waits, so a barrier does not wait for it, and it gives back the kernel and device locks it
+/// holds until the job is done (the job's platform and device calls take them), as a wait on an
+/// object gives back the kernel lock. The job's panic waits for [`join_draw`].
 pub fn wait_draw(e: &Engine) -> bool {
     let Some(d) = DRAW.get() else {
         return false;
@@ -2973,16 +3014,21 @@ pub fn wait_draw(e: &Engine) -> bool {
     }
     d.start.notify_all();
     let world = e.real.as_ref().map(|r| r.world);
+    let held = world.map(|w| (w.kernel.release_all(), w.device.release_all()));
     let counted = world.is_some_and(World::leave_guest);
     let mut s = guard(&d.state);
     while !s.finished {
         s = wait(&d.done, s);
     }
     drop(s);
-    if counted {
-        if let Some(world) = world {
+    if let Some(world) = world {
+        if counted {
             world.enter_guest();
         }
+        // In the order they are taken: the device lock around a device call's kernel calls.
+        let (kernel, device) = held.unwrap_or_default();
+        world.device.take_again(world, device);
+        world.kernel.take_again(world, kernel);
     }
     true
 }
@@ -3047,13 +3093,24 @@ fn run_draw_helper(engine: SendEngine, world: Option<&'static World>, d: &'stati
         if world.is_some() {
             sync_registered(&mut e);
         }
-        crate::x87::set_control_word(control_word);
+        // Both copies, as the pool's helpers take theirs ([`run_helper`]).
+        crate::units::crt::set_x87_control_word(&mut e, control_word);
         if let Some(world) = world {
             world.enter_guest();
         }
+        let mark = e.guest_stack_mark();
         let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&mut e)));
         if let Some(world) = world {
             world.leave_guest();
+        }
+        if let Err(payload) = &out {
+            if let Some(world) = world {
+                draw_stopped(world, &e, &**payload);
+            }
+            // The stopped job's frames go: the next job starts at the same stack top.
+            e.guest_stack_restore(mark);
+            e.call_stack.clear();
+            e.stack_frames.clear();
         }
         {
             let mut s = guard(&d.state);
@@ -3065,6 +3122,39 @@ fn run_draw_helper(engine: SendEngine, world: Option<&'static World>, d: &'stati
         }
         d.done.notify_all();
     }
+}
+
+/// A stop in the drawing job (real threads) is the run's, as a game thread's is ([`run_thread`]):
+/// named with `nv-draw` and the job's innermost functions, recorded for the main thread, and every
+/// waiter woken, so a thread waiting on a lock the job held stops instead of waiting for ever.
+fn draw_stopped(world: &'static World, e: &Engine, payload: &(dyn std::any::Any + Send)) {
+    let text = payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default();
+    let first = text.lines().next().unwrap_or("");
+    let path: Vec<String> = e
+        .call_stack
+        .iter()
+        .rev()
+        .take(6)
+        .map(|a| format!("{a:08x}"))
+        .collect();
+    let line = if path.is_empty() {
+        format!("{first} (in the drawing helper nv-draw)")
+    } else {
+        format!(
+            "{first} (in {}, in the drawing helper nv-draw)",
+            path.join(" < ")
+        )
+    };
+    eprintln!("real threads: {line}");
+    world.kernel.lock(world);
+    guard(&world.stopped).get_or_insert(line);
+    world.any_stop.store(true, Ordering::SeqCst);
+    world.wake_all_waiters();
+    world.kernel.unlock();
 }
 
 #[cfg(test)]
@@ -4552,7 +4642,9 @@ mod tests {
         assert!(!fork_join(&mut e, 0, &|_: &mut Engine, _: usize| {}));
         // Making the helpers and forking takes nothing from the heap: what it can still hand out
         // and the highest address it has reached stay as they were, and each helper's stack for
-        // locals and TLS block lie in the helpers' own area.
+        // locals and TLS block lie in the helpers' own area. (Main's TLS block first: the game's
+        // main thread has had one since its start, and a fork reads main's x87 word there.)
+        let _ = crate::units::crt::x87_control_word(&mut e);
         let heap = (e.mem.heap_available(), e.mem.heap_top());
         let ran = AtomicUsize::new(0);
         let outside = AtomicUsize::new(0);
@@ -4574,6 +4666,32 @@ mod tests {
         assert_eq!(ran.load(Ordering::SeqCst), 3);
         assert_eq!(outside.load(Ordering::SeqCst), 0);
         assert_eq!((e.mem.heap_available(), e.mem.heap_top()), heap);
+        // Each helper runs with the caller's x87 control word, the engine's copy too: the CRT's
+        // `fabs` saves and restores it through `_ctrlfp` (00ec6cde), so the culling walkers keep
+        // main's precision (single, 24 bits) past their first `fabs`.
+        let main_word = crate::units::crt::x87_control_word(&mut e);
+        crate::units::crt::set_x87_control_word(&mut e, 0x007f);
+        let wrong = AtomicUsize::new(0);
+        assert!(fork_join(&mut e, 2, &|w: &mut Engine, n: usize| {
+            if n != 0 {
+                let fstcw = crate::units::crt::x87_control_word(w);
+                let old = crate::units::crt::ctrlfp(w, 0x133f, 0xffff);
+                crate::units::crt::ctrlfp(w, old as u32, 0xffff);
+                if fstcw != 0x007f || crate::x87::control_word() != 0x007f {
+                    wrong.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        }));
+        crate::units::crt::set_x87_control_word(&mut e, main_word);
+        assert_eq!(
+            wrong.load(Ordering::SeqCst),
+            0,
+            "a helper without main's word"
+        );
+        // While a per-call diagnostic is on, the caller does the work alone.
+        e.call_log = Some(Vec::new());
+        assert!(!fork_join(&mut e, 2, &|_: &mut Engine, _: usize| {}));
+        e.call_log = None;
         assert!(!fork_join(
             &mut e,
             MOST_HELPERS + 1,
@@ -4689,25 +4807,48 @@ mod tests {
         world.leave_guest();
     }
 
+    /// A pool fits the helper area beside the drawing helper's slot: one helper at least, and no
+    /// more than the slots before the last.
+    #[test]
+    fn a_pool_fits_beside_the_drawing_helper() {
+        assert!(pool_fits(1) && pool_fits(MOST_HELPERS));
+        assert!(!pool_fits(0) && !pool_fits(MOST_HELPERS + 1));
+        let draw =
+            (crate::mem::HELPER_AREA.end - crate::mem::HELPER_SLOT)..crate::mem::HELPER_AREA.end;
+        assert!(
+            crate::mem::HELPER_AREA.start + MOST_HELPERS as u32 * crate::mem::HELPER_SLOT
+                <= draw.start,
+            "the pool's highest slot ends below the drawing helper's"
+        );
+    }
+
     /// The drawing helper (one per process, so one test makes it), with real threads: a posted job
     /// runs beside its poster (it waits for a signal the poster gives after `post_draw` returns),
-    /// on the helper's own engine with the poster's x87 control word, its TLS block and stack in
-    /// the helper area's last slot, taking nothing from the heap; one job at a time; `wait_draw`
-    /// waits without joining; a job's panic comes back at the join and the helper takes jobs after
-    /// it; a post from inside the job is refused.
+    /// on the helper's own engine with the poster's x87 control word (the engine's copy too, so the
+    /// CRT's save and restore through `_ctrlfp` keeps it), its TLS block and stack in the helper
+    /// area's last slot, taking nothing from the heap, and TLS values of its own; one job at a
+    /// time; a post is refused while a per-call diagnostic is on; `wait_draw` waits without joining
+    /// and gives the poster's kernel and device locks to the job meanwhile; a job's stop holding a
+    /// critical section stops the poster waiting for it with the job's message, comes back at the
+    /// join, and the next job starts at the same stack top; a post from inside the job is refused.
     #[test]
     fn the_drawing_helper_runs_beside_its_poster_and_joins() {
-        let (mut e, _slot) = engine_with_imports();
+        let (mut e, slot) = engine_with_imports();
         start(&mut e).expect("real threads on");
         let world = ctx(&e).world;
         world.enter_guest();
         assert!(!wait_draw(&e) && !join_draw(&e), "nothing posted");
+        // Main's TLS block first (the game's main thread has had one since its start).
+        let main_word = crate::units::crt::x87_control_word(&mut e);
         let heap = (e.mem.heap_available(), e.mem.heap_top());
-        let main_word = crate::x87::control_word();
         // Single precision, rounding to nearest: not the helper thread's own default.
-        crate::x87::set_control_word(0x007f);
+        crate::units::crt::set_x87_control_word(&mut e, 0x007f);
+        // A TLS value of main's: the job's thread has values of its own.
+        let index = e.call(slot("TlsAlloc"), &[]).eax;
+        e.call(slot("TlsSetValue"), &args![index, 0x1234u32]);
+        let tls_get = slot("TlsGetValue");
         let go = std::sync::Arc::new(AtomicBool::new(false));
-        type Seen = (bool, u16, u32, (u32, u32), u32);
+        type Seen = (bool, [u16; 3], u32, (u32, u32), u32, u32);
         let seen: std::sync::Arc<Mutex<Option<Seen>>> = std::sync::Arc::default();
         let (job_go, job_seen) = (go.clone(), seen.clone());
         assert!(post_draw(
@@ -4719,16 +4860,21 @@ mod tests {
                 let local = w.with_stack(16, |_, local| local.addr());
                 let stack = w.guest_stack_region().expect("the helper's stack");
                 let tls = w.tls();
-                *job_seen.lock().unwrap() = Some((
-                    on_draw_helper(),
+                // `fabs`'s save and restore of the control word (00ec6cde through `_ctrlfp`).
+                let fstcw = crate::units::crt::x87_control_word(w);
+                let old = crate::units::crt::ctrlfp(w, 0x133f, 0xffff);
+                crate::units::crt::ctrlfp(w, old as u32, 0xffff);
+                let words = [
                     crate::x87::control_word(),
-                    tls,
-                    stack,
-                    local,
-                ));
+                    fstcw,
+                    crate::x87::control_word(),
+                ];
+                let value = w.call(tls_get, &args![index]).eax;
+                *job_seen.lock().unwrap() =
+                    Some((on_draw_helper(), words, tls, stack, local, value));
             })
         ));
-        crate::x87::set_control_word(main_word);
+        crate::units::crt::set_x87_control_word(&mut e, main_word);
         assert!(draw_posted());
         assert!(!post_draw(&mut e, Box::new(|_| {})), "one job at a time");
         assert!(!on_draw_helper());
@@ -4736,11 +4882,16 @@ mod tests {
         go.store(true, Ordering::SeqCst);
         assert!(join_draw(&e));
         assert!(!draw_posted());
-        let (helper, word, tls, stack, local) = seen.lock().unwrap().take().expect("the job ran");
+        let (helper, words, tls, stack, local, value) =
+            seen.lock().unwrap().take().expect("the job ran");
         assert!(helper, "on_draw_helper on the helper");
-        assert_eq!(word, 0x007f, "the poster's control word");
-        let slot = crate::mem::HELPER_AREA.start + DRAW_SLOT * crate::mem::HELPER_SLOT;
-        let own = slot..slot + crate::mem::HELPER_SLOT;
+        assert_eq!(
+            words, [0x007f; 3],
+            "the poster's control word: the register, FSTCW, and the register after fabs's ctrlfp"
+        );
+        assert_eq!(value, 0, "TLS values of its own");
+        let own =
+            (crate::mem::HELPER_AREA.end - crate::mem::HELPER_SLOT)..crate::mem::HELPER_AREA.end;
         assert!(
             own.contains(&tls)
                 && own.contains(&stack.0)
@@ -4753,23 +4904,32 @@ mod tests {
             own.end
         );
         assert_eq!((e.mem.heap_available(), e.mem.heap_top()), heap);
-        // A panic in the job comes back at the join; the helper takes jobs after it.
-        assert!(post_draw(&mut e, Box::new(|_| panic!("the job's panic"))));
-        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| join_draw(&e)));
-        assert!(caught.is_err(), "the job's panic is resumed at the join");
-        assert!(!draw_posted());
-        let ran = std::sync::Arc::new(AtomicUsize::new(0));
-        let job_ran = ran.clone();
+        // While a per-call diagnostic is on, the poster draws itself.
+        e.call_log = Some(Vec::new());
+        assert!(!post_draw(&mut e, Box::new(|_| {})), "a call log is on");
+        e.call_log = None;
+        // `wait_draw` gives the poster's kernel and device locks to the job while it waits.
+        world.device.lock(world);
+        world.kernel.lock(world);
         assert!(post_draw(
             &mut e,
-            Box::new(move |_| {
-                job_ran.fetch_add(1, Ordering::SeqCst);
+            Box::new(|w: &mut Engine| {
+                let world = ctx(w).world;
+                world.device.lock(world);
+                world.kernel.lock(world);
+                world.kernel.unlock();
+                world.device.unlock();
             })
         ));
         assert!(wait_draw(&e));
-        assert_eq!(ran.load(Ordering::SeqCst), 1);
         assert!(draw_posted(), "waited for, not joined");
         assert!(wait_draw(&e), "a second wait answers at once");
+        assert!(
+            world.kernel.held_here() && world.device.held_here(),
+            "taken again"
+        );
+        world.kernel.unlock();
+        world.device.unlock();
         assert!(join_draw(&e));
         // From inside the drawing job, a post is refused.
         let inner = std::sync::Arc::new(AtomicBool::new(true));
@@ -4782,6 +4942,51 @@ mod tests {
         ));
         assert!(join_draw(&e));
         assert!(!inner.load(Ordering::SeqCst));
+        // A job that stops while it holds a critical section main waits for: main stops with the
+        // job's message instead of waiting for ever; the payload comes back at the join.
+        let section = e.mem.alloc(0x18);
+        let enter = slot("EnterCriticalSection");
+        let holds = std::sync::Arc::new(AtomicBool::new(false));
+        let job_holds = holds.clone();
+        assert!(post_draw(
+            &mut e,
+            Box::new(move |w: &mut Engine| {
+                w.call(enter, &args![section]);
+                job_holds.store(true, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(50));
+                w.with_stack(16, |_, _| panic!("the job's stop"));
+            })
+        ));
+        while !holds.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        let waited = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.call(enter, &args![section]);
+        }));
+        let payload = waited.expect_err("main stops");
+        let why = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert!(
+            why.contains("the job's stop") && why.contains("nv-draw"),
+            "main's stop: {why}"
+        );
+        let joined = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| join_draw(&e)));
+        assert!(joined.is_err(), "the job's panic is resumed at the join");
+        assert!(!draw_posted());
+        // The helper takes jobs after it, at the stack top it had.
+        let next = std::sync::Arc::new(AtomicU32::new(0));
+        let job_next = next.clone();
+        assert!(post_draw(
+            &mut e,
+            Box::new(move |w: &mut Engine| {
+                job_next.store(w.with_stack(16, |_, l| l.addr()), Ordering::SeqCst);
+            })
+        ));
+        assert!(join_draw(&e));
+        assert_eq!(next.load(Ordering::SeqCst), local, "the same first local");
         world.leave_guest();
     }
 }
