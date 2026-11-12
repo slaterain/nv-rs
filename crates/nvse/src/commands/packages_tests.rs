@@ -225,6 +225,8 @@ fn current_package_of_the_actor() {
     assert_eq!(call(&mut e, 0x1513, 0, &[]).1, 0.0);
     console_on(&mut e);
     call(&mut e, 0x1513, ACTOR, &[]);
+    // An actor without a process: no line either.
+    call(&mut e, 0x1513, IDLE_ACTOR, &[]);
     e.mem.set_u32(PROCESS + 0x100, 0);
     call(&mut e, 0x1513, ACTOR, &[]);
     call(&mut e, 0x1513, THING, &[]);
