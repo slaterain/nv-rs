@@ -1471,3 +1471,384 @@ fn the_render_thread_gives_idle_work_turns_until_it_is_done() {
     s.finish();
     assert_eq!(settled(), before + 1);
 }
+
+// --- Two producers (`Stream::cut`) ---
+
+/// TEST DATA: one command of a frame, owning its payload.
+#[derive(Clone)]
+enum Part {
+    State(u32, u32),
+    Texture(u32, u32),
+    Constants(u32, Vec<u32>),
+    Upload(u32, Vec<u32>),
+    Declaration(u32, Vec<u32>),
+    Draw(u32),
+    Issue(u32),
+    Read(u32),
+    Present,
+}
+
+impl Part {
+    fn cmd(&self) -> Cmd<Data<'_>> {
+        match self {
+            Part::State(state, value) => Cmd::SetRenderState {
+                device: 0x1000,
+                state: *state,
+                value: *value,
+            },
+            Part::Texture(sampler, texture) => Cmd::SetTexture {
+                device: 0x1000,
+                sampler: *sampler,
+                texture: *texture,
+            },
+            Part::Constants(start, words) => Cmd::SetConstants {
+                device: 0x1000,
+                kind: 0,
+                start: *start,
+                count: words.len() as u32 / 4,
+                data: Data::from_words(words),
+            },
+            Part::Upload(buffer, words) => Cmd::UploadBuffer {
+                buffer: *buffer,
+                offset: 0,
+                flags: 0,
+                data: Data::from_words(words),
+            },
+            Part::Declaration(declaration, words) => Cmd::CreateDeclaration {
+                device: 0x1000,
+                declaration: *declaration,
+                elements: Data::from_words(words),
+            },
+            Part::Draw(count) => Cmd::DrawIndexedPrimitive {
+                device: 0x1000,
+                kind: 4,
+                base_vertex: 0,
+                min_index: 0,
+                vertices: 3 * count,
+                start_index: 0,
+                count: *count,
+            },
+            Part::Issue(query) => Cmd::QueryIssue {
+                query: *query,
+                flags: 1,
+            },
+            Part::Read(query) => Cmd::QueryGetData {
+                query: *query,
+                flags: 1,
+            },
+            Part::Present => Cmd::Present {
+                device: 0x1000,
+                source: None,
+                dest: None,
+                window: 0,
+                dirty: false,
+                model: 0,
+                frame: 0,
+            },
+        }
+    }
+}
+
+/// TEST DATA: `frames` frames, each in three parts: main's commands before the cut, the drawing
+/// side's (states, textures, constants, uploads, a creation, draws, a query issued and read back:
+/// a sync call whose answer counts the draws before it), and main's after the cut (more states
+/// and draws, a large upload, the present). Some states repeat a value already set.
+fn three_part_frames(frames: u32) -> Vec<[Vec<Part>; 3]> {
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let mut list = Vec::new();
+    for frame in 0..frames {
+        let mut part = |draws: u32, uploads: bool| {
+            let mut v = Vec::new();
+            for _ in 0..draws {
+                v.push(Part::State(7 + rng.next() % 4, rng.next() % 3));
+                v.push(Part::Texture(
+                    rng.next() % 4,
+                    0x4000 + 8 * (rng.next() % 16),
+                ));
+                let words: Vec<u32> = (0..4 * (1 + rng.next() % 4)).map(|_| rng.next()).collect();
+                v.push(Part::Constants(rng.next() % 32, words));
+                if uploads && rng.next() % 4 == 0 {
+                    let words: Vec<u32> = (0..16 + rng.next() % 64).map(|_| rng.next()).collect();
+                    v.push(Part::Upload(0x6000 + 4 * (rng.next() % 8), words));
+                }
+                v.push(Part::Draw(1 + rng.next() % 50));
+            }
+            v
+        };
+        let before = part(5, false);
+        let mut draw = part(30, true);
+        draw.insert(0, Part::Declaration(0x7000 + frame, vec![frame; 8]));
+        draw.push(Part::Issue(0x8000));
+        draw.push(Part::Read(0x8000));
+        let mut after = part(10, false);
+        after.push(Part::Upload(0x6100, (0..20_000).collect()));
+        after.push(Part::Present);
+        list.push([before, draw, after]);
+    }
+    list
+}
+
+/// The frames through `stream` in the serial order, all from main: the backend's log is this.
+fn serial(stream: &mut Stream, frames: &[[Vec<Part>; 3]]) -> Vec<String> {
+    let mut replies = Vec::new();
+    for parts in frames {
+        for p in parts.iter().flatten() {
+            replies.push(format!("{:?}", stream.submit(p.cmd())));
+        }
+    }
+    replies
+}
+
+/// The frames with two producers: main submits its part before the cut, cuts, and submits its
+/// part after the cut while a drawing thread submits the middle part through the slot at the
+/// same time (each side yielding at random); at the next frame main waits for the slot as the
+/// layer above does (`cut_waiter`, outside any lock). The drawing side's replies, in order.
+fn two_producers(stream: &mut Stream, frames: &[[Vec<Part>; 3]]) -> Vec<String> {
+    let mut replies = Vec::new();
+    let mut rng = Rng(0x1234_5678_9abc_def1);
+    std::thread::scope(|scope| {
+        for parts in frames {
+            if let Some(waiter) = stream.cut_waiter() {
+                waiter.wait();
+            }
+            for p in &parts[0] {
+                stream.submit(p.cmd());
+            }
+            let mut slot = stream.cut();
+            let pause = rng.next() % 3;
+            let draw = scope.spawn(move || {
+                let mut answers = Vec::new();
+                let mut rng = Rng(u64::from(pause) + 7);
+                for p in &parts[1] {
+                    if rng.next() % 16 == 0 {
+                        std::thread::yield_now();
+                    }
+                    answers.push(format!("{:?}", slot.submit(p.cmd())));
+                }
+                slot.close();
+                answers
+            });
+            for p in &parts[2] {
+                if rng.next() % 8 == 0 {
+                    std::thread::yield_now();
+                }
+                stream.submit(p.cmd());
+            }
+            replies.extend(draw.join().unwrap());
+        }
+    });
+    stream.finish();
+    replies
+}
+
+/// The replies of the drawing side's commands in a serial run.
+fn draw_replies(all: &[String], frames: &[[Vec<Part>; 3]]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    for parts in frames {
+        i += parts[0].len();
+        out.extend(all[i..i + parts[1].len()].iter().cloned());
+        i += parts[1].len() + parts[2].len();
+    }
+    out
+}
+
+fn settings_to_try() -> Vec<Settings> {
+    vec![
+        Settings::default(),
+        Settings {
+            chunk_commands: 3,
+            chunk_bytes: 300,
+            check: true,
+            ..Settings::default()
+        },
+        // No frame in flight and a queue past its limit at once: while a cut is open, main must
+        // not wait for the render thread (which waits at the cut for the drawing side).
+        Settings {
+            frames_in_flight: 0,
+            max_queued_bytes: 4 << 10,
+            max_queued_chunks: 2,
+            chunk_commands: 7,
+            ..Settings::default()
+        },
+    ]
+}
+
+#[test]
+fn two_producers_are_carried_out_in_the_serial_order() {
+    let frames = three_part_frames(40);
+    let log = Log::default();
+    let lines = log.lines();
+    let mut s = Stream::direct(Box::new(log));
+    let serial_replies = serial(&mut s, &frames);
+    drop(s);
+    let serial_lines = lines.lock().unwrap().clone();
+    let want_replies = draw_replies(&serial_replies, &frames);
+    assert!(
+        serial_lines.len() > 5_000,
+        "{} commands",
+        serial_lines.len()
+    );
+    type Make = Box<dyn Fn(Box<dyn Backend>) -> Stream>;
+    let mut runs: Vec<(String, Make)> = vec![("direct".into(), Box::new(Stream::direct))];
+    for settings in settings_to_try() {
+        let name = format!("threaded {settings:?}");
+        runs.push((
+            name,
+            Box::new(move |b| Stream::threaded(b, settings.clone())),
+        ));
+    }
+    for (name, make) in runs {
+        let log = Log::default();
+        let lines = log.lines();
+        let mut s = make(Box::new(log));
+        let replies = two_producers(&mut s, &frames);
+        drop(s);
+        same(&lines.lock().unwrap(), &serial_lines, &name);
+        assert_eq!(replies, want_replies, "{name}: the drawing side's replies");
+    }
+}
+
+#[test]
+fn a_record_of_two_producers_is_the_serial_file() {
+    let frames = three_part_frames(12);
+    let record = |two: bool, make: &dyn Fn() -> Stream| {
+        let file = File::default();
+        let mut s = make();
+        s.record_to(Box::new(file.clone())).unwrap();
+        if two {
+            two_producers(&mut s, &frames);
+        } else {
+            serial(&mut s, &frames);
+        }
+        drop(s);
+        let bytes = file.0.lock().unwrap().clone();
+        bytes
+    };
+    let direct = || Stream::direct(Box::new(Log::default()));
+    let threaded = || Stream::threaded(Box::new(Log::default()), Settings::default());
+    let want = record(false, &direct);
+    assert!(want.len() > 100_000);
+    assert!(record(true, &direct) == want, "direct: the file differs");
+    assert!(
+        record(true, &threaded) == want,
+        "threaded: the file differs"
+    );
+}
+
+#[test]
+fn the_state_digests_of_two_producers_are_the_serial_ones() {
+    let frames = three_part_frames(20);
+    let (digest, serial_digests) = StateDigest::new();
+    let mut s = Stream::direct(Box::new(digest));
+    serial(&mut s, &frames);
+    drop(s);
+    let want = serial_digests.lock().unwrap().clone();
+    assert_eq!(want.len(), 20 * 45);
+    for threaded in [false, true] {
+        let (digest, digests) = StateDigest::new();
+        let mut s = if threaded {
+            Stream::threaded(Box::new(digest), Settings::default())
+        } else {
+            Stream::direct(Box::new(digest))
+        };
+        two_producers(&mut s, &frames);
+        drop(s);
+        assert!(
+            *digests.lock().unwrap() == want,
+            "threaded {threaded}: the digests differ"
+        );
+    }
+}
+
+/// The digest sees a draw's state, not the commands that made it: a state set again to its value
+/// changes nothing; any other change to what a draw sees changes that draw's digest, none before.
+#[test]
+fn a_state_digest_changes_with_what_a_draw_sees_only() {
+    let digests = |cmds: &[Part]| {
+        let (mut d, list) = StateDigest::new();
+        for p in cmds {
+            d.execute(p.cmd());
+        }
+        let v = list.lock().unwrap().clone();
+        v
+    };
+    let base = vec![
+        Part::State(7, 1),
+        Part::Constants(4, vec![1, 2, 3, 4, 5, 6, 7, 8]),
+        Part::Draw(3),
+        Part::Texture(0, 0x4000),
+        Part::Draw(3),
+    ];
+    let want = digests(&base);
+    assert_eq!(want.len(), 2);
+    assert_ne!(want[0], want[1], "the texture changes the second draw");
+    // The same state set twice, a constant register set again to its value: the same digests.
+    let mut again = base.clone();
+    again.insert(1, Part::State(7, 1));
+    again.insert(4, Part::Constants(5, vec![5, 6, 7, 8]));
+    assert_eq!(digests(&again), want);
+    // Another value, another register, an upload before a draw: the digests differ from there.
+    for (at, part) in [
+        (1, Part::State(7, 2)),
+        (1, Part::Constants(6, vec![0, 0, 0, 0])),
+        (4, Part::Upload(0x6000, vec![1])),
+    ] {
+        let mut other = base.clone();
+        other.insert(at, part);
+        let got = digests(&other);
+        let first = if at < 3 { 0 } else { 1 };
+        assert_eq!(got[..first], want[..first]);
+        assert_ne!(got[first], want[first], "inserted at {at}");
+    }
+}
+
+#[test]
+fn a_dropped_slot_closes_and_main_goes_on() {
+    for threaded in [false, true] {
+        let log = Log::default();
+        let lines = log.lines();
+        let mut s = if threaded {
+            Stream::threaded(Box::new(log), Settings::default())
+        } else {
+            Stream::direct(Box::new(log))
+        };
+        s.submit(Part::State(7, 1).cmd());
+        let mut slot = s.cut();
+        s.submit(Part::State(7, 3).cmd());
+        slot.submit(Part::State(7, 2).cmd());
+        drop(slot);
+        assert!(!s.cut_open(), "threaded {threaded}");
+        s.submit(Part::Draw(1).cmd());
+        s.finish();
+        let got: Vec<String> = lines.lock().unwrap().clone();
+        let want: Vec<String> = [
+            Part::State(7, 1),
+            Part::State(7, 2),
+            Part::State(7, 3),
+            Part::Draw(1),
+        ]
+        .iter()
+        .map(|p| format!("{:?}", p.cmd()))
+        .collect();
+        same(&got, &want, &format!("threaded {threaded}"));
+        let (cut, _) = s.last_cut_carried_out().expect("the cut was carried out");
+        assert_eq!(cut, 1);
+    }
+}
+
+#[test]
+#[should_panic(expected = "main's sync call")]
+fn a_sync_call_of_mains_while_a_slot_is_open_panics() {
+    let mut s = Stream::threaded(Box::new(Log::default()), Settings::default());
+    let _slot = s.cut();
+    s.submit(Part::Read(0x8000).cmd());
+}
+
+#[test]
+#[should_panic(expected = "a cut is open")]
+fn a_second_cut_before_the_slot_closes_panics() {
+    let mut s = Stream::direct(Box::new(Log::default()));
+    let _slot = s.cut();
+    let _again = s.cut();
+}

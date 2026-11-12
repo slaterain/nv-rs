@@ -33,6 +33,9 @@ pub(crate) struct Chunk {
     pub(crate) reply_wanted: bool,
     /// `NV_D3D9_STREAM_CHECK`: the recording side's hash after its last command.
     pub(crate) check: Option<u64>,
+    /// A cut of main's stream ([`crate::Stream::cut`]), with no command of its own: the render
+    /// thread carries out that cut's slot here, before main's next chunk.
+    pub(crate) cut: Option<u64>,
 }
 
 impl Chunk {
@@ -79,6 +82,7 @@ impl Chunk {
         self.presents = 0;
         self.reply_wanted = false;
         self.check = None;
+        self.cut = None;
     }
 }
 

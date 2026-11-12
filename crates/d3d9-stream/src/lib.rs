@@ -18,6 +18,9 @@
 //!   to a render thread; a sync command waits for its reply, which comes after every earlier
 //!   command; a `Present` returns once at most one earlier frame is left to carry out. The game
 //!   thread keeps only the model's work and the recording.
+//! - [`Stream::cut`]: a second producer (the drawing thread) records part of a frame through a
+//!   [`Slot`] while main goes on; the backend sees the serial order. [`StateDigest`], a backend
+//!   for checks, hashes each draw's device state.
 //! - [`Tee`]: two backends fed the same commands, the primary answering.
 //! - [`wire`]: commands as bytes: a file of them (recorded once, replayed into any backend), and
 //!   the hashes that check the hand-over (`NV_D3D9_STREAM_CHECK=1`).
@@ -27,12 +30,14 @@
 
 mod chunk;
 mod cmd;
+mod digest;
 mod runner;
 mod tee;
 pub mod wire;
 
 pub use cmd::{Backend, Cmd, Data, Handle, Native, Rect, Reply, Rows};
-pub use runner::{Settings, Stream, IDLE_POLL};
+pub use digest::StateDigest;
+pub use runner::{CutWaiter, Settings, Slot, Stream, IDLE_POLL};
 pub use tee::Tee;
 
 #[cfg(test)]
