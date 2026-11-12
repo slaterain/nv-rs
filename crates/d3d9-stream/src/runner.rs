@@ -266,6 +266,15 @@ impl Stream {
         if let Err(why) = cmd.check() {
             panic!("a malformed command: {why}");
         }
+        // Every call but a cut's, a recording's or a Present: straight to the runner, the command passed on as
+        // it came and the reply returned as the backend gives it (no copy of either on the way).
+        if self.cut.is_none() && self.record.is_none() && !matches!(cmd, Cmd::Present { .. }) {
+            return match &mut self.runner {
+                Runner::Direct(backend) => backend.execute(cmd),
+                Runner::Threaded(t) => t.submit(cmd, false),
+                Runner::Shared(backend) => lock_any(backend).execute(cmd),
+            };
+        }
         if let Cmd::Present { frame, .. } = &mut cmd {
             self.presents = self.presents.wrapping_add(1);
             *frame = self.presents;
