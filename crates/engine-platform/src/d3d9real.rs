@@ -1413,6 +1413,13 @@ fn rect_words(e: &Engine, at: u32) -> Option<[u32; 4]> {
     (at != 0).then(|| words(e, at))
 }
 
+/// The Presents submitted to the backend so far (the last one's number) and the last one it has
+/// carried out, with when (`NV_FRAME_LOG`'s delay columns). None before the backend's stream.
+pub fn presents(e: &mut Engine) -> Option<(u32, Option<(u32, std::time::Instant)>)> {
+    let s = real(e).stream.as_ref()?;
+    Some((s.presents(), s.last_present_carried_out()))
+}
+
 pub fn present(
     e: &mut Engine,
     this: u32,
