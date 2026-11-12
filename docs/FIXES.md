@@ -502,9 +502,10 @@ needs Mod Limit Fix). The row does the same, built from the exe (`crates/host/sr
   as in the original). A seek from the start reads the game's 32-bit position as unsigned, so positions
   and sizes up to 4 GB work; past 2 GB the original refused the seek and gave the size as 0 (a file of
   4 GB or more still answers 0). A relative seek of 2 GB or more, on or back, goes where the game's 32-bit
-  sum points (the original's `fseek` refused it or went astray); a move before the start is still refused
-  unless that sum is a position inside the file, which only a file over 2 GB has, so in a file under 2 GB
-  every one is refused as before. An archive's files stored at 2 GB or more are found and read;
+  sum points (the original's `fseek` refused it or went astray). A move before the start is still refused
+  in a file under 2 GB, where its sum is always past the end; in a file of 2 GB or more it lands at the
+  sum even past the end, as a move on past the end does, so an archive's bad entry reads nothing instead of
+  leaving the whole archive unreadable. An archive's files stored at 2 GB or more are found and read;
   in an archive under 2 GB nothing changes (no offset there sets bit 31). The C runtime's undefined cases
   answer as Windows does, as with Mod Limit Fix: a read of a file opened only for writing answers 0 (the
   C runtime answered 0, or copied bytes out of its own write buffer), and a write right after a read
@@ -514,17 +515,20 @@ needs Mod Limit Fix). The row does the same, built from the exe (`crates/host/sr
   signed, and it opens text-mode files in binary. The row keeps each mode's meaning, and text mode on the
   C runtime.
 - **Tested** (`direct_files.rs`; the archive functions also in `engine-bs`'s `archive.rs` and
-  `queuedfiles.rs`): the same answers, bytes, positions and files as the C runtime's path for reading (31
+  `queuedfiles.rs`, registered from the one list the row registers, `archive::full_offset_range`, and
+  called at their addresses): the same answers, bytes, positions and files as the C runtime's path for reading (31
   steps: through, around, inside and outside the buffer, at and past the end, a refused seek), for
   `NiFile`'s two write modes and for `BSFile`'s three binary modes, a missing file in each (and only the
   file's own handle left open), and its size asked before any open in each binary mode; 600 files held
   open at once and each read while all 512 of the C runtime's are taken, where the original's open fails;
   a 3 GB sparse scratch file read at 2.25 GB and at its end, reached from the start, the position and the
   end, with its size (the original: the seek refused, the size 0), and relative seeks of 2 GB and more
-  on and back reaching their markers, while one before the start is refused; a 5 GB sparse file
-  answering size 0, as the original does past 2 GB; a 2.5 GB sparse archive with files below, across and
-  past 2 GB, made by `00afa550` (the original makes none for the one past 2 GB) and read by `00afb7a0` in
-  an order that moves its file back and on by more than 2 GB; the archive functions on a file at
+  on and back reaching their markers, and one before the start whose sum is past the end landing there,
+  the file still good; a 5 GB sparse file answering size 0, as the original does past 2 GB; a 2.5 GB
+  sparse archive with files below, across and past 2 GB, made by `00afa550` (the original makes none for
+  the one past 2 GB) and read by `00afb7a0` in an order that moves its file back and on by more than 2 GB;
+  an entry past such an archive's end, read after one near its start: nothing read, and the archive still
+  good for the next file; the archive functions on a file at
   `0x80000300`: data, a file object starting there, the lookup finding it, and each invalidation clearing
   the whole word; the IO thread not started, and its calls answered at once.
 - **Measured** (2026-11-11, the short route, real threads, Vulkan, the play profile; a warm-up run, then the

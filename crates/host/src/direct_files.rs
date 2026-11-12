@@ -70,8 +70,9 @@
 //!   original's `ftell` answers -1 and its size 0); a file of 4 GB or more answers size 0, as the
 //!   original answers for any file past 2 GB;
 //! - a relative seek of 2 GB or more lands at the game's 32-bit sum (`seek_relative`), where the
-//!   original's went the other way or was refused; one before the start of a file is refused as
-//!   before, unless the sum is a position inside the file (only a file of over 2 GB has one);
+//!   original's went the other way or was refused; one before the start of a file under 2 GB is
+//!   refused as before (its sum is past the end), and in a file of 2 GB or more it lands at the
+//!   sum even past the end, so an archive's bad entry reads nothing and the archive stays good;
 //! - an archive's files stored at 2 GB or more have data and are read; bit 31 of an entry's
 //!   offset word is no longer a mark (on PC no archive under 2 GB sets it);
 //! - the C runtime's 4 KB buffer between `NiFile`'s own buffer and the file is gone: the same bytes
@@ -85,8 +86,7 @@
 use crate::fixes::Fix;
 use engine::prelude::*;
 use engine::units::bscore::oei_io_thread::{self, IO_THREAD};
-use engine::units::bsmain::queuedfiles;
-use engine::units::bssystem::archive::{self, Archive};
+use engine::units::bssystem::archive;
 use engine::units::bssystem::bsfile::{self, BSFile};
 use engine::units::crt;
 use engine::units::fallout_shared::modelloader;
@@ -179,47 +179,13 @@ pub fn install(e: &mut Engine) {
         ),
         engine::entry!(0x00b0_04e0, bs_file_size_direct(Ptr<BSFile>) -> u32),
         engine::entry!(
-            0x00af_b2a0,
-            archive::fn_00afb2a0_full_offsets(Ptr<Archive>, Ptr, bool) -> bool
-        ),
-        engine::entry!(
-            0x00af_a550,
-            archive::fn_00afa550_full_offsets(Ptr<Archive>, u32, u32, u32, u32) -> u32
-        ),
-        engine::entry!(
-            0x00af_a750,
-            archive::fn_00afa750_full_offsets(Ptr<Archive>, Ptr, u32, u32) -> u32
-        ),
-        engine::entry!(
-            0x00af_b190,
-            archive::fn_00afb190_full_offsets(Ptr<Archive>, Ptr, Ptr) -> bool
-        ),
-        engine::entry!(
-            0x00af_ac20,
-            archive::fn_00afac20_full_offsets(Ptr<Archive>, Ptr, Ptr, u32) -> bool
-        ),
-        engine::entry!(
-            0x00af_ac90,
-            archive::fn_00afac90_full_offsets(Ptr<Archive>, u32, Ptr, u32) -> bool
-        ),
-        engine::entry!(
-            0x00af_ad00,
-            archive::fn_00afad00_full_offsets(Ptr<Archive>) -> u32
-        ),
-        engine::entry!(
             0x0043_c3b0,
             modelloader::fn_0043c3b0_full_offsets(Ptr) -> u32
         ),
-        engine::entry!(
-            0x00c3_d0e0,
-            queuedfiles::queued_file_entry_get_description_full_offsets(u32, u32, u32, u32) -> bool
-        ),
-        engine::entry!(
-            0x00c3_d440,
-            queuedfiles::queued_file_entry_generate_key_full_offsets(u32)
-        ),
     ];
-    for (at, f) in entries {
+    // The full offset range's other nine: engine-bs's list, which its tests register and call at
+    // each address.
+    for (at, f) in entries.into_iter().chain(archive::full_offset_range()) {
         e.register(at, f);
     }
 }
@@ -350,8 +316,10 @@ fn set_pointer(e: &mut Engine, handle: u32, distance: i64, origin: u32) -> Optio
 /// the same word as one of under 2 GB the other way. The word is moved by as signed, as the C
 /// runtime's `fseek` reads it, and where that leaves 0..4 GB the game's own 32-bit sum is the
 /// target: past 4 GB, the sum less 4 GB (a move back); before the start, the sum, a move on of 2 GB
-/// or more, when the file is that long. Otherwise a move before the start is refused, as the C
-/// runtime refuses it (in a file of under 2 GB, every one).
+/// or more. In a file of 2 GB or more that sum is taken even past the end, as a move on lands past
+/// the end (`SetFilePointer` allows it), so an archive's bad entry reads no bytes and the archive,
+/// which every one of its files reads through, stays good. In a file of under 2 GB every such sum
+/// is past the end, and the move is refused, as the C runtime refuses it.
 fn seek_relative(e: &mut Engine, handle: u32, offset: u32) -> Option<u64> {
     let distance = i64::from(offset as i32);
     match set_pointer(e, handle, distance, FILE_CURRENT) {
@@ -367,7 +335,7 @@ fn seek_relative(e: &mut Engine, handle: u32, offset: u32) -> Option<u64> {
         None => {
             let from = set_pointer(e, handle, 0, FILE_CURRENT)?;
             let target = from.checked_add(u64::from(offset))?;
-            if target >> 32 != 0 || target > host_size_64(e, handle)? {
+            if target >> 32 != 0 || host_size_64(e, handle)? < 1 << 31 {
                 return None;
             }
             set_pointer(e, handle, target as i64, FILE_BEGIN)
@@ -641,6 +609,7 @@ pub fn bs_file_size_direct(e: &mut Engine, this: Ptr<BSFile>) -> u32 {
 mod tests {
     use super::*;
     use engine::exe::Import;
+    use engine::units::bssystem::archive::Archive;
 
     // The C runtime's data and functions its stream calls reach (`crates/engine-core/src/units/
     // crt.rs`), as `engine-platform`'s `crt_stdio_tests` set them up.
@@ -1389,10 +1358,15 @@ mod tests {
             assert_eq!(e.get(row, NiFile::m_uiAbsoluteCurrentPos), to);
             assert_eq!(read(&mut e), marker, "{from:#x} by {word:#x}");
         }
-        // Before the start where the sum is past the end: refused, as the original refuses it.
+        // Before the start where the sum is past the end: in a file of 2 GB or more, the sum even
+        // past the end, where nothing is read and the file stays good (the original refused it;
+        // a file under 2 GB still refuses it, the 31 steps' last seek).
         e.call(NI_FILE_SEEK, &args![row, 0x10u32, 0u32]);
         e.call(NI_FILE_SEEK, &args![row, -0x8000i32, 1u32]);
-        assert_eq!(e.get(row, NiFile::m_bGood), 0);
+        assert_eq!(e.get(row, NiFile::m_bGood), 1);
+        assert_eq!(e.get(row, NiFile::m_uiCurrentFilePos), 0xffff_8010);
+        assert_eq!(read(&mut e), b"");
+        assert_eq!(e.get(row, NiFile::m_bGood), 1);
         e.call(NI_FILE_DELETE, &args![row, 0u32]);
         e.call(NI_FILE_DELETE, &args![original, 0u32]);
         // 5 GB: more than the game's 32-bit sizes hold, so 0, as the original answers past 2 GB.
@@ -1508,6 +1482,64 @@ mod tests {
             assert_eq!(e.get(own, NiFile::m_uiCurrentFilePos), at);
             assert_eq!(e.get(own, NiFile::m_bGood), 1);
         }
+    }
+
+    /// A 2.5 GB sparse archive with an entry past its end (a bad entry). Read after the file near
+    /// its start, it moves the archive's file on by more than 2 GB to past the end: nothing is
+    /// read there, and the archive's file, which all of its files read through, stays good, so the
+    /// good file reads its own bytes again after it.
+    #[test]
+    fn an_entry_past_a_big_archives_end_reads_nothing_and_the_archive_stays_good() {
+        use std::io::{Seek, SeekFrom, Write};
+        const SIZE: u64 = 0xa000_0000;
+        let near: &[u8] = b"near the start!!";
+        let files = [(0x1000u32, 16u32), (0xb000_0000, 16)];
+        let path = std::env::temp_dir().join(format!(
+            "nv-direct-files-{}-past-end.bsa",
+            std::process::id()
+        ));
+        let _gone = Remove(path.clone());
+        {
+            let mut file = std::fs::File::create(&path).unwrap();
+            sparse(&file);
+            file.set_len(SIZE).unwrap();
+            file.seek(SeekFrom::Start(0x1000)).unwrap();
+            file.write_all(near).unwrap();
+        }
+        let name = path.to_string_lossy().into_owned();
+        let mut e = engine(20, 3);
+        install(&mut e);
+        let archive = archive_on(&mut e, &name, &files);
+        let own: Ptr<NiFile> = archive.cast();
+        // Its size, as the archive's open asks it (the reads are checked against it).
+        assert_eq!(e.vcall(archive.addr(), 0x28, &args![]).u32(), SIZE as u32);
+        let path_text = c_string(&mut e, "textures\\lod\\x.dds");
+        let make = |e: &mut Engine, index: u32| {
+            let file = e
+                .call(
+                    ARCHIVE_FILE_BY_INDICES,
+                    &args![archive, 0u32, index, 0u32, path_text],
+                )
+                .u32();
+            assert_ne!(file, 0, "file {index}");
+            file
+        };
+        let buffer = e.mem.alloc(0x40);
+        let read = |e: &mut Engine, file: u32| {
+            let got = e
+                .call(ARCHIVE_READ, &args![file, buffer, 16u32, 0u32])
+                .u32();
+            e.mem.bytes(buffer, got)
+        };
+        let good = make(&mut e, 0);
+        assert_eq!(read(&mut e, good), near);
+        assert_eq!(e.get(own, NiFile::m_bGood), 1, "after the good file");
+        let bad = make(&mut e, 1);
+        assert_eq!(e.get(own, NiFile::m_bGood), 1, "after making the bad one");
+        assert_eq!(read(&mut e, bad), b"", "the entry past the end");
+        assert_eq!(e.get(own, NiFile::m_bGood), 1, "after reading the bad one");
+        assert_eq!(read(&mut e, good), near);
+        assert_eq!(e.get(own, NiFile::m_bGood), 1);
     }
 
     /// The IO thread is not started and its stop does nothing; the wrappers answer at once, a C

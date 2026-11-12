@@ -480,6 +480,49 @@ pub fn fn_00afb2a0(e: &mut Engine, this: Ptr<Archive>, entry: Ptr, any: bool) ->
     e.mem.u32(entry.addr() + 0xc) & 0x7fff_ffff != 0
 }
 
+/// JohnnyGuitar NVSE's full offset range at the nine sites of this crate that read or clear an
+/// archive file entry's offset word: this module's seven and `bsmain::queuedfiles`' two. The
+/// direct file access row (`crates/host`) registers this list, and this crate's tests register
+/// it and call each function by its address, so no address can be paired with another function.
+pub fn full_offset_range() -> [(u32, AbiFn); 9] {
+    use crate::units::bsmain::queuedfiles;
+    [
+        entry!(
+            0x00af_b2a0,
+            fn_00afb2a0_full_offsets(Ptr<Archive>, Ptr, bool) -> bool
+        ),
+        entry!(
+            0x00af_a550,
+            fn_00afa550_full_offsets(Ptr<Archive>, u32, u32, u32, u32) -> u32
+        ),
+        entry!(
+            0x00af_a750,
+            fn_00afa750_full_offsets(Ptr<Archive>, Ptr, u32, u32) -> u32
+        ),
+        entry!(
+            0x00af_b190,
+            fn_00afb190_full_offsets(Ptr<Archive>, Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00af_ac20,
+            fn_00afac20_full_offsets(Ptr<Archive>, Ptr, Ptr, u32) -> bool
+        ),
+        entry!(
+            0x00af_ac90,
+            fn_00afac90_full_offsets(Ptr<Archive>, u32, Ptr, u32) -> bool
+        ),
+        entry!(0x00af_ad00, fn_00afad00_full_offsets(Ptr<Archive>) -> u32),
+        entry!(
+            0x00c3_d0e0,
+            queuedfiles::queued_file_entry_get_description_full_offsets(u32, u32, u32, u32) -> bool
+        ),
+        entry!(
+            0x00c3_d440,
+            queuedfiles::queued_file_entry_generate_key_full_offsets(u32)
+        ),
+    ]
+}
+
 /// [`fn_00afb2a0`] with JohnnyGuitar NVSE's full offset range (its patch at `00afb2a6`; the
 /// direct file access row in `crates/host` registers it): whether the entry's word at +0xc is
 /// nonzero. All 32 bits of that word are the file's offset there, so a file can start anywhere
@@ -7797,37 +7840,10 @@ mod tests {
         }
     }
 
-    /// The full offset range's forms at their addresses, as the direct file access row
-    /// (`crates/host`) registers them.
+    /// The full offset range's forms at their addresses: [`full_offset_range`], the list the
+    /// direct file access row (`crates/host`) registers.
     fn full_offsets(e: &mut Engine) {
-        let entries = [
-            entry!(
-                0x00af_b2a0,
-                fn_00afb2a0_full_offsets(Ptr<Archive>, Ptr, bool) -> bool
-            ),
-            entry!(
-                0x00af_b190,
-                fn_00afb190_full_offsets(Ptr<Archive>, Ptr, Ptr) -> bool
-            ),
-            entry!(
-                0x00af_a550,
-                fn_00afa550_full_offsets(Ptr<Archive>, u32, u32, u32, u32) -> u32
-            ),
-            entry!(
-                0x00af_a750,
-                fn_00afa750_full_offsets(Ptr<Archive>, Ptr, u32, u32) -> u32
-            ),
-            entry!(
-                0x00af_ac20,
-                fn_00afac20_full_offsets(Ptr<Archive>, Ptr, Ptr, u32) -> bool
-            ),
-            entry!(
-                0x00af_ac90,
-                fn_00afac90_full_offsets(Ptr<Archive>, u32, Ptr, u32) -> bool
-            ),
-            entry!(0x00af_ad00, fn_00afad00_full_offsets(Ptr<Archive>) -> u32),
-        ];
-        for (at, f) in entries {
+        for (at, f) in full_offset_range() {
             e.register(at, f);
         }
     }
@@ -7931,5 +7947,14 @@ mod tests {
         assert_eq!(e.call(0x00af_ad00, &args![a]).u32(), 2);
         assert_eq!(e.mem.u32(word), 0);
         assert_eq!(e.mem.u32(files + 0xc), 0);
+        // Its second branch, the listed files (`ArchiveInvalidation.txt`'s): no directory listed,
+        // the far file's hash listed, its directory on disk.
+        e.mem.set_u32(word, 0x8000_0300);
+        e.set_global(BLOCK_ARRAY_011F816C, 0u32);
+        let listed_files = hash_array(&mut e, &[9]);
+        e.set_global(BLOCK_ARRAY_011F8168, listed_files);
+        existing.borrow_mut().push(b"Data\\meshes".to_vec());
+        e.call(0x00af_ad00, &args![a]);
+        assert_eq!(e.mem.u32(word), 0);
     }
 }

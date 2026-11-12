@@ -967,6 +967,17 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
     ]
 }
 
+/// Tests: the entry of the full offset range's list
+/// ([`crate::units::bssystem::archive::full_offset_range`], what the direct file access row
+/// registers) at `address`.
+#[cfg(test)]
+fn full_offset_entry(address: u32) -> (u32, AbiFn) {
+    crate::units::bssystem::archive::full_offset_range()
+        .into_iter()
+        .find(|&(at, _)| at == address)
+        .expect("an address of the full offset range's list")
+}
+
 #[cfg(test)]
 mod b018_tests {
     use super::*;
@@ -1338,10 +1349,7 @@ mod b018_tests {
         let key = u64::from(e.mem.u32(this + KEY)) | u64::from(e.mem.u32(this + KEY + 4)) << 32;
         assert_eq!(key, 0xff00_0001_23ab_0011);
         // The full offset range keys all 32 bits of the offset word: bit 31 lands at bit 55.
-        let (at, full) = entry!(
-            0x00c3_d440,
-            queued_file_entry_generate_key_full_offsets(u32)
-        );
+        let (at, full) = full_offset_entry(0x00c3_d440);
         e.register(at, full);
         e.mem.set_u32(this + KEY, 0x00ab_0000);
         e.call(0x00c3_d440, &[this]);
@@ -1430,10 +1438,7 @@ mod n069_tests {
     ) -> (Vec<u32>, Vec<Vec<u8>>) {
         let mut e = Engine::new();
         if full {
-            let (at, f) = entry!(
-                0x00c3_d0e0,
-                queued_file_entry_get_description_full_offsets(u32, u32, u32, u32) -> bool
-            );
+            let (at, f) = full_offset_entry(0x00c3_d0e0);
             e.register(at, f);
         }
         let printed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
