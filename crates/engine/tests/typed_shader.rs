@@ -5055,8 +5055,9 @@ fn draw_stand_ins(e: &mut Engine) {
     }
     // A batch renderer's slot 0x90 (its pass types drawn).
     e.register(VT_FN + 0x90, slot_answer::<0x90>);
-    // The render object's camera data slot, and its check for the "SetCameraData" extra: present.
-    e.register(VT_FN + 0x18c, slot_answer::<0x18c>);
+    // The render object's camera data slot (copying what its pointers point to, so the digest compares the
+    // camera the draw hands over), and its check for the "SetCameraData" extra: present.
+    e.register(VT_FN + 0x18c, camera_data_answer);
     e.register(0x004a_0e10, |e, _| ret(e.mem.u32(RETS + 0x7f0)));
     set(e, RETS + 0x7f0, 1);
     // The fog-coloured ambient's targets and its enable object.
@@ -5078,6 +5079,26 @@ fn draw_stand_ins(e: &mut Engine) {
     e.register(0x00ff_2904, |_, _| ret(0));
     set(e, 0x011f_9f40, 0x00ff_2900);
     set(e, 0x011f_9f40 + 12, 0x00ff_2904);
+}
+
+/// Where [`camera_data_answer`] copies the camera data it is handed (in the block `draw_stand_ins` maps).
+const CAMERA_DATA_COPY: u32 = 0x0120_1800;
+
+/// The render object's slot 0x18c, `thiscall(object, translate, column 0, column 1, column 2, port, frustum)`:
+/// the bytes each pointer points to (a point and three columns of 0xc bytes, the port's 0x10, the frustum's
+/// 0x1c) copied to [`CAMERA_DATA_COPY`], an unmapped one left out; then the slot's answer.
+fn camera_data_answer(e: &mut Engine, a: &[u32]) -> Ret {
+    let mut at = CAMERA_DATA_COPY;
+    for (i, size) in [0xcu32, 0xc, 0xc, 0xc, 0x10, 0x1c].into_iter().enumerate() {
+        let mut bytes = vec![0u8; size as usize];
+        if let Some(&from) = a.get(i + 1) {
+            if e.mem.try_read(from, &mut bytes).is_ok() {
+                e.mem.write(at, &bytes);
+            }
+        }
+        at += size;
+    }
+    slot_answer::<0x18c>(e, a)
 }
 
 /// What the draw adds to the world: a second renderer and the alpha holders of both.
@@ -9320,4 +9341,156 @@ fn the_first_half_reads_the_packet_the_cut_fills() {
         reads += report.reads;
     }
     assert!(reads > 0, "the first half read nothing through the packet");
+}
+
+/// The whole world draw with `NV_DRAW_THREAD=poison`, the way the world pass runs it: render mode 0 (the
+/// accumulator's own slots 0xa8 and 0xac), the first half then the second, with the cut's packet open from the
+/// cut to the join. The lists hold pass groups through each renderer's pass map, register group and alpha holders,
+/// sorted alpha groups at +0x78 and grouped alphas at +0x90, in one renderer or two; the second half copies the
+/// water reflection (+0x38 set, a pass of the types 0x288..0x2ce listed) or not. Every read through the packet
+/// must find what the cut took (a miss stops a POISON run), nothing scribbled may be written, and the draw must
+/// leave the memory as it does with the switch off: so the cut's walk covers every list the draw renders.
+#[test]
+fn the_whole_draw_reads_the_packet_the_cut_fills() {
+    let first = entry!(0x00b6_ba20, drivers::world_draw_first(u32, Ptr<_>, u32)).1;
+    let second = entry!(0x00b6_b930, drivers::world_draw_second(u32, Ptr<_>, u32)).1;
+    let mut reads = 0;
+    for case in product(&[TWO_WAYS, &[1, 2], &[0, 1, 2], &[0, 5, 0xf]]) {
+        let setup = |e: &mut Engine| {
+            let d = draw_world(e);
+            acc_slots(e, d.w.acc, true);
+            set(e, d.w.acc + 0x19c, 0);
+            held(e, d.w.acc, 1);
+            for g in [d.w.geometry, d.w.skinned] {
+                set(e, g + 4, 1);
+            }
+            e.mem.set_u8(d.w.acc + 0x38, case[0] as u8);
+            set(e, d.w.acc + 0x18c, case[1]);
+            active_lists(e, &d, case[2]);
+            // The sorted alpha groups of both alpha groups (bits 2r, 2r + 1 of the case's word, as alpha_state).
+            for group in 0..2 {
+                alpha_state(e, &d, group, 3, case[3], HALF);
+            }
+            set(e, 0x011f_9438, 0x4242);
+            set(e, 0x011f_943c, 0x4343);
+            let camera = full_camera(e, &d.w);
+            e.with_stack(4, |_, _| ());
+            vec![camera, d.w.acc, 1]
+        };
+        let mut plain = Engine::new();
+        let a = setup(&mut plain);
+        let answer = (first(&mut plain, &a), second(&mut plain, &a));
+        let mut poisoned = Engine::new();
+        let b = setup(&mut poisoned);
+        capture::set_thread_mode(Some(capture::Mode::Poison));
+        let poisoned_answer = (first(&mut poisoned, &b), second(&mut poisoned, &b));
+        capture::set_thread_mode(None);
+        let report = cut::last_report().expect("the cut opened a packet and the join closed it");
+        assert!(
+            !capture::is_open(&poisoned),
+            "{case:x?}: the packet stayed open"
+        );
+        assert_eq!(answer, poisoned_answer, "{case:x?}: the answers differ");
+        assert_eq!(
+            memory_digest_beside_stack(&plain),
+            memory_digest_beside_stack(&poisoned),
+            "{case:x?}: the memory differs"
+        );
+        assert_eq!(
+            (report.misses, report.written),
+            (0, 0),
+            "{case:x?}: {report:?}"
+        );
+        assert!(report.held > 0, "{case:x?}: no geometry held: {report:?}");
+        reads += report.reads;
+    }
+    assert!(reads > 0, "the draw read nothing through the packet");
+}
+
+/// The alpha draw's next pass (`00b9af60`) reads the camera's direction and the passes' bounds through the packet:
+/// scribbled, either would change the order of the sorted groups or which are within the limit.
+#[test]
+fn render_next_alpha_reads_the_packet() {
+    packet_same(
+        "render_next_alpha",
+        entry!(
+            0x00b9_af60,
+            dalpha::render_next_alpha(Ptr<_>, u32, u32, u32, f32)
+        )
+        .1,
+        &product(&[
+            TWO_WAYS,
+            &[1, 3],
+            &[1, 2, 0xf],
+            &[0, 1, 0x101],
+            &[HALF, ONE, TWO, 0x3eaa_aaab],
+        ]),
+        |e, c| {
+            let d = draw_world(e);
+            let group = c.word(0);
+            alpha_state(e, &d, group, c.word(1), c.word(2), HALF);
+            let camera = full_camera(e, &d.w);
+            (
+                vec![d.w.br, group, camera, c.word(3), c.word(4)],
+                vec![camera, d.w.geometry],
+            )
+        },
+        |e, w| {
+            cut::take_camera(e, w[0]);
+            cut::take_geometry_values(e, w[1]);
+        },
+    );
+}
+
+/// The pass constants with vertex entry 8 on (the fog constants and the fog colour's copies): the fog index and
+/// the fog property's distances, power and colour come through the packet the cut's frame values fill, in both
+/// branches (no distances: the far default and the fog colour; distances: far, span, power and the property's
+/// colour).
+#[test]
+fn setup_pass_constants_reads_the_fog_through_the_packet() {
+    packet_same(
+        "setup_pass_constants",
+        entry!(0x00b7_b450, setups::setup_pass_constants(Ptr<_>, u32)).1,
+        &product(&[
+            &[0x10, 0x2f0],
+            &[0x0000_0200, 0xffff_ffff],
+            &[1, 2, 3],
+            TWO_WAYS,
+        ]),
+        |e, c| {
+            let p = pass_world(e, &[], 0, 0);
+            for addr in SETUP_CALLEES {
+                e.register(*addr, marked);
+            }
+            entries(e);
+            let pass_type = c.word(0);
+            set(e, 0x011f_cc80 + 4 * pass_type, c.word(1));
+            set(e, 0x011f_c0a0 + 4 * pass_type, c.word(1).rotate_left(3));
+            e.map(0x010a_d000, 0x1000);
+            set(e, 0x010a_d6e0, 0x48f4_2400);
+            e.mem.set_u8(0x011f_91c4, 1);
+            let node = e.mem.alloc(0x140);
+            set(e, 0x011f_91c8 + 4, node);
+            let fog = e.mem.alloc(0x64);
+            for (k, word) in [ONE, HALF, 0x3e80_0000].iter().enumerate() {
+                set(e, fog + 0x20 + 4 * k as u32, *word);
+            }
+            match c.word(2) {
+                2 => {
+                    set(e, fog + 0x2c, 0x3f40_0000);
+                    set(e, fog + 0x30, TWO);
+                    set(e, fog + 0x60, 0x3f40_0000);
+                }
+                3 => set(e, fog + 0x2c, ONE),
+                _ => {}
+            }
+            set(e, node + 0x134, fog);
+            let geometry = e.mem.u32(e.mem.u32(0x011f_91e0));
+            let skin = if c.word(3) != 0 { p.d.w.skin } else { 0 };
+            set(e, geometry + 0xbc, skin);
+            set(e, p.d.w.shader + 0x18, p.d.w.renderer);
+            (vec![p.d.w.shader, pass_type], vec![p.d.w.camera, p.d.w.acc])
+        },
+        |e, w| cut::take_frame(e, w[0], Ptr::new(w[1])),
+    );
 }

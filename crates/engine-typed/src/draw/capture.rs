@@ -99,9 +99,20 @@ struct Packet {
     held: Vec<u32>,
     misses: Cell<u64>,
     reads: Cell<u64>,
+    /// Between the world draw's two halves ([`pause`]): the accessors read guest memory and, with POISON, the
+    /// guest bytes are back.
+    paused: bool,
+    /// POISON: scribbled bytes found written at a [`pause`].
+    written: u64,
 }
 
 impl Packet {
+    /// Whether the accessors read this packet for `e`: its run, and not paused.
+    #[inline(always)]
+    fn serves(&self, e: &Engine) -> bool {
+        self.run == run(e) && !self.paused
+    }
+
     /// The range of `object` that holds `[offset, offset + len)`, if one does.
     #[inline(always)]
     fn find(&self, object: u32, offset: u32, len: u32) -> Option<Range> {
@@ -142,7 +153,29 @@ impl Packet {
         let found = self.read_into(object, offset, out);
         let count = if found { &self.reads } else { &self.misses };
         count.set(count.get() + 1);
+        if !found {
+            missed(object, offset, self.scribble.is_some());
+        }
         found
+    }
+}
+
+/// How many misses [`missed`] prints, for the whole run.
+const MISSES_SHOWN: u32 = 8;
+
+/// A read through the packet that found no copy: the run's first few are printed (object and offset), so an
+/// on run shows what the cut left out; with POISON, a stop (a check run's coverage signal: the draw read live
+/// bytes the frame's tail may change).
+#[cold]
+#[inline(never)]
+fn missed(object: u32, offset: u32, poison: bool) {
+    static SHOWN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    assert!(
+        !poison,
+        "NV_DRAW_THREAD=poison: the draw read {object:#010x}+{offset:#x} through the value packet, which the cut did not take"
+    );
+    if SHOWN.fetch_add(1, Relaxed) < MISSES_SHOWN {
+        eprintln!("nv-draw packet: a read the cut did not take: {object:#010x}+{offset:#x}");
     }
 }
 
@@ -180,6 +213,8 @@ pub fn begin(e: &Engine) -> bool {
             held: Vec::new(),
             misses: Cell::new(0),
             reads: Cell::new(0),
+            paused: false,
+            written: 0,
         });
         true
     });
@@ -267,41 +302,94 @@ pub fn hold(e: &mut Engine, object: u32) {
     });
 }
 
+/// Runs `f` on this thread's open packet for `e`'s run, taken off the thread for the call (so `f` may use the
+/// engine's memory freely). `None` without one.
+fn with_packet<R>(e: &mut Engine, f: impl FnOnce(&mut Engine, &mut Packet) -> R) -> Option<R> {
+    let mut packet = PACKET.with(|p| {
+        let mut p = p.borrow_mut();
+        if p.as_ref().is_some_and(|p| p.run == run(e)) {
+            p.take()
+        } else {
+            None
+        }
+    })?;
+    let r = f(e, &mut packet);
+    PACKET.with(|p| *p.borrow_mut() = Some(packet));
+    Some(r)
+}
+
+/// Every guest byte the packet holds saved and set to `scribble`, in the order taken.
+fn scribble_all(e: &mut Engine, p: &mut Packet, scribble: u8) {
+    p.saved = vec![0; p.bytes.len()];
+    for &(object, index) in &p.order {
+        let r = p.ranges[index as usize];
+        let addr = object.wrapping_add(r.from);
+        let at = r.at as usize;
+        let len = (r.to - r.from) as usize;
+        e.mem.read(addr, &mut p.saved[at..at + len]);
+        e.mem.write(addr, &vec![scribble; len]);
+    }
+}
+
+/// The scribbled guest bytes put back, in the reverse order; a byte no longer the scribble (written while the
+/// draw ran) is left as written and counted.
+fn unscribble_all(e: &mut Engine, p: &Packet, scribble: u8) -> u64 {
+    let mut written = 0;
+    for &(object, index) in p.order.iter().rev() {
+        let r = p.ranges[index as usize];
+        let addr = object.wrapping_add(r.from);
+        let mut live = vec![0u8; (r.to - r.from) as usize];
+        e.mem.read(addr, &mut live);
+        let saved = &p.saved[r.at as usize..r.at as usize + live.len()];
+        for (byte, old) in live.iter_mut().zip(saved) {
+            if *byte == scribble {
+                *byte = *old;
+            } else {
+                written += 1;
+            }
+        }
+        e.mem.write(addr, &live);
+    }
+    written
+}
+
 /// POISON: every guest byte the packet holds is saved and set to `scribble`, in the order taken. Once a packet;
 /// nothing without one.
 pub fn poison(e: &mut Engine, scribble: u8) {
-    let ranges = PACKET.with(|p| {
-        let mut p = p.borrow_mut();
-        let p = p.as_mut()?;
-        if p.run != run(e) || p.scribble.is_some() {
-            return None;
-        }
-        p.scribble = Some(scribble);
-        p.saved = vec![0; p.bytes.len()];
-        Some(
-            p.order
-                .iter()
-                .map(|&(object, index)| (object, p.ranges[index as usize]))
-                .collect::<Vec<_>>(),
-        )
-    });
-    let Some(ranges) = ranges else {
-        return;
-    };
-    let mut saved = Vec::with_capacity(ranges.len());
-    for (object, r) in &ranges {
-        let addr = object.wrapping_add(r.from);
-        let mut bytes = vec![0u8; (r.to - r.from) as usize];
-        e.mem.read(addr, &mut bytes);
-        e.mem.write(addr, &vec![scribble; bytes.len()]);
-        saved.push((r.at, bytes));
-    }
-    PACKET.with(|p| {
-        if let Some(p) = p.borrow_mut().as_mut() {
-            for (at, bytes) in saved {
-                let at = at as usize;
-                p.saved[at..at + bytes.len()].copy_from_slice(&bytes);
+    with_packet(e, |e, p| {
+        if p.scribble.is_none() {
+            p.scribble = Some(scribble);
+            if !p.paused {
+                scribble_all(e, p, scribble);
             }
+        }
+    });
+}
+
+/// The world draw's first half has returned: until [`resume`], the packet is not read (the accessors answer guest
+/// memory: what runs between the halves, such as the VATS target's draw, is main's), and with POISON the guest
+/// bytes are put back (those written meanwhile counted). Nothing without an open packet, or when paused already.
+pub fn pause(e: &mut Engine) {
+    with_packet(e, |e, p| {
+        if p.paused {
+            return;
+        }
+        p.paused = true;
+        if let Some(scribble) = p.scribble {
+            p.written += unscribble_all(e, p, scribble);
+        }
+    });
+}
+
+/// The world draw's second half starts: the packet is read again ([`pause`]), and with POISON scribbled again.
+pub fn resume(e: &mut Engine) {
+    with_packet(e, |e, p| {
+        if !p.paused {
+            return;
+        }
+        p.paused = false;
+        if let Some(scribble) = p.scribble {
+            scribble_all(e, p, scribble);
         }
     });
 }
@@ -340,22 +428,10 @@ pub fn end(e: &mut Engine) -> Report {
         return Report::default();
     };
     OPEN.fetch_sub(1, Relaxed);
-    let mut written = 0;
+    let mut written = packet.written;
     if let Some(scribble) = packet.scribble {
-        for &(object, index) in packet.order.iter().rev() {
-            let r = packet.ranges[index as usize];
-            let addr = object.wrapping_add(r.from);
-            let mut live = vec![0u8; (r.to - r.from) as usize];
-            e.mem.read(addr, &mut live);
-            let saved = &packet.saved[r.at as usize..r.at as usize + live.len()];
-            for (byte, old) in live.iter_mut().zip(saved) {
-                if *byte == scribble {
-                    *byte = *old;
-                } else {
-                    written += 1;
-                }
-            }
-            e.mem.write(addr, &live);
+        if !packet.paused {
+            written += unscribble_all(e, &packet, scribble);
         }
     }
     for object in &packet.held {
@@ -382,7 +458,7 @@ fn copied<const N: usize>(e: &Engine, object: u32, offset: u32) -> Option<[u8; N
     PACKET.with(|p| {
         let p = p.borrow();
         let p = p.as_ref()?;
-        if p.run != run(e) {
+        if !p.serves(e) {
             return None;
         }
         let mut out = [0u8; N];
@@ -430,7 +506,7 @@ pub fn words<const N: usize>(e: &Engine, object: u32, offset: u32) -> [u32; N] {
         let held = PACKET.with(|p| {
             let p = p.borrow();
             let p = p.as_ref()?;
-            if p.run != run(e) {
+            if !p.serves(e) {
                 return None;
             }
             let len = u32::try_from(4 * N).unwrap_or(u32::MAX);
@@ -483,7 +559,7 @@ pub fn span(e: &Engine, object: u32, from: u32, to: u32) -> Span {
         PACKET.with(|p| {
             let p = p.borrow();
             let p = p.as_ref()?;
-            if p.run != run(e) {
+            if !p.serves(e) {
                 return None;
             }
             let mut bytes = vec![0u8; (to - from) as usize];
@@ -548,7 +624,7 @@ pub fn image<R>(
     let held = PACKET.with(|p| {
         let p = p.borrow();
         let p = p.as_ref()?;
-        if p.run != run(e) {
+        if !p.serves(e) {
             return None;
         }
         let mut bytes = vec![0u8; (to - from) as usize];
@@ -661,6 +737,52 @@ mod tests {
             ],
             [1, 0x77, 3, 4, 1, 2]
         );
+    }
+
+    /// Between the halves the packet is not read and the scribble is off guest memory; a write there is main's
+    /// (kept, counted with POISON); the second half reads the copy and sees the scribble again.
+    #[test]
+    fn a_paused_packet_answers_guest_memory_and_puts_the_scribble_back() {
+        let mut e = Engine::new();
+        let at = block(&mut e, 2);
+        assert!(begin(&e));
+        take(&e, at, 0, 8);
+        poison(&mut e, SCRIBBLE);
+        let s = u32::from_le_bytes([SCRIBBLE; 4]);
+        assert_eq!([word(&e, at, 0), e.mem.u32(at)], [1, s]);
+        pause(&mut e);
+        pause(&mut e);
+        assert_eq!(
+            [word(&e, at, 0), e.mem.u32(at), e.mem.u32(at + 4)],
+            [1, 1, 2]
+        );
+        e.mem.set_u32(at + 4, 0x99);
+        assert_eq!(word(&e, at, 4), 0x99);
+        resume(&mut e);
+        assert_eq!([word(&e, at, 0), word(&e, at, 4), e.mem.u32(at)], [1, 2, s]);
+        let report = end(&mut e);
+        assert_eq!((report.misses, report.written), (0, 0));
+        assert_eq!([e.mem.u32(at), e.mem.u32(at + 4)], [1, 0x99]);
+        // Paused at the end: nothing scribbled is left.
+        assert!(begin(&e));
+        take(&e, at, 0, 4);
+        poison(&mut e, SCRIBBLE_OTHER);
+        e.mem.set_u32(at, 0x55);
+        pause(&mut e);
+        let report = end(&mut e);
+        assert_eq!((report.written, e.mem.u32(at)), (4, 0x55));
+    }
+
+    /// A read the cut did not take stops a POISON packet.
+    #[test]
+    #[should_panic(expected = "which the cut did not take")]
+    fn a_miss_stops_a_poison_packet() {
+        let mut e = Engine::new();
+        let at = block(&mut e, 2);
+        assert!(begin(&e));
+        take(&e, at, 0, 4);
+        poison(&mut e, SCRIBBLE);
+        let _ = word(&e, at, 4);
     }
 
     #[test]

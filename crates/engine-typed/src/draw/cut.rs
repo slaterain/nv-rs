@@ -341,9 +341,25 @@ pub fn cut(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) {
     }
     fill(e, camera, acc);
     if mode == capture::Mode::Poison {
-        capture::poison(e, capture::SCRIBBLE);
+        // The two scribbles take turns, cut by cut: a byte the draw writes with one is caught by the other.
+        let cuts = CUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let scribble = if cuts % 2 == 0 {
+            capture::SCRIBBLE
+        } else {
+            capture::SCRIBBLE_OTHER
+        };
+        capture::poison(e, scribble);
     }
 }
+
+/// The cuts made with POISON, for the scribbles' turns.
+static CUTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How often (in joins) the run's totals are printed after the first: about every ten seconds of play.
+const TOTALS_EVERY: u64 = 600;
+
+/// The joins made, for [`TOTALS_EVERY`].
+static JOINS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The join, as the world draw's second half ends: the packet closed ([`capture::end`]) and its report added to
 /// the run's [`totals`] and kept as this thread's [`last_report`]. Nothing without an open packet.
@@ -360,6 +376,21 @@ pub fn join(e: &mut Engine) {
     totals.ranges += report.ranges;
     totals.bytes += report.bytes;
     totals.held += report.held;
+    let joins = JOINS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if joins % TOTALS_EVERY == 0 {
+        // With the switch on, the run's coverage: a miss is a read the cut left out (the first few are printed
+        // as they happen).
+        eprintln!(
+            "nv-draw packet: {} joins: misses {}, reads {}, written {}, ranges {}, bytes {}, held {}",
+            joins + 1,
+            totals.misses,
+            totals.reads,
+            totals.written,
+            totals.ranges,
+            totals.bytes,
+            totals.held
+        );
+    }
 }
 
 thread_local! {
