@@ -83,7 +83,11 @@ fn names_and_entry_points() {
     assert!(nvse::plugins::ln_events(&e).is_none());
     assert_eq!(get_ln_event_mask(&mut e, b"oncellenter"), 1);
     assert_eq!(get_ln_event_mask(&mut e, b"OnControlUp"), 1 << 11);
-    assert_eq!(get_ln_event_mask(&mut e, b"OnTriggerDown"), 0, "not a name xNVSE asks");
+    assert_eq!(
+        get_ln_event_mask(&mut e, b"OnTriggerDown"),
+        0,
+        "not a name xNVSE asks"
+    );
     assert_eq!(get_ln_event_mask(&mut e, b"OnActivate"), 0);
     let e = world(true);
     assert!(nvse::plugins::ln_events(&e).is_some());
@@ -95,14 +99,26 @@ fn names_and_entry_points() {
 fn list_handlers() {
     let mut e = world(true);
     assert!(handler(&mut e, id::CELL_ENTER, S1, true, CELL_A, 0));
-    assert!(!handler(&mut e, id::CELL_ENTER, S1, true, CELL_A, 0), "twice");
-    assert!(!handler(&mut e, id::CELL_EXIT, S1, true, BASE_A, 0), "a cell event takes a cell");
+    assert!(
+        !handler(&mut e, id::CELL_ENTER, S1, true, CELL_A, 0),
+        "twice"
+    );
+    assert!(
+        !handler(&mut e, id::CELL_EXIT, S1, true, BASE_A, 0),
+        "a cell event takes a cell"
+    );
     // An empty form list: refused; with a form: kind 3.
     assert!(!handler(&mut e, id::PLAYER_GRAB, S1, true, LIST, 0));
     e.mem.set_u32(LIST + 0x18, BASE_A);
     assert!(handler(&mut e, id::PLAYER_GRAB, S1, true, LIST, 0));
-    assert!(handler(&mut e, id::PLAYER_GRAB, S2, true, REF_A, 0), "a reference: kind 1");
-    assert!(handler(&mut e, id::PLAYER_GRAB, S2, true, BASE_A, 0), "a base form: kind 2");
+    assert!(
+        handler(&mut e, id::PLAYER_GRAB, S2, true, REF_A, 0),
+        "a reference: kind 1"
+    );
+    assert!(
+        handler(&mut e, id::PLAYER_GRAB, S2, true, BASE_A, 0),
+        "a base form: kind 2"
+    );
     let kinds: Vec<u8> = state(&mut e).events[usize::from(id::PLAYER_GRAB)]
         .iter()
         .map(|h| h.filter_type)
@@ -116,17 +132,26 @@ fn list_handlers() {
     // The buttons need a mask to add.
     assert!(!handler(&mut e, id::BUTTON_DOWN, S1, true, 0, 0));
     assert!(handler(&mut e, id::BUTTON_DOWN, S1, true, 0, 0x1000));
-    assert!(!handler(&mut e, id::BUTTON_DOWN, S1, true, 0, 0x3000), "a shared bit: there");
+    assert!(
+        !handler(&mut e, id::BUTTON_DOWN, S1, true, 0, 0x3000),
+        "a shared bit: there"
+    );
     assert!(handler(&mut e, id::BUTTON_DOWN, S1, true, 0, 0x2000));
     assert_ne!(state(&mut e).flags & mask(id::BUTTON_DOWN), 0);
     // Removals: a stored handler with a filter needs its exact filter (a shared bit is not
     // enough); the flag goes with the last.
-    assert!(!handler(&mut e, id::BUTTON_DOWN, S1, false, 0, 0), "no filter: not a filtered one");
+    assert!(
+        !handler(&mut e, id::BUTTON_DOWN, S1, false, 0, 0),
+        "no filter: not a filtered one"
+    );
     assert!(!handler(&mut e, id::BUTTON_DOWN, S1, false, 0, 0x3000));
     assert!(handler(&mut e, id::BUTTON_DOWN, S1, false, 0, 0x1000));
     assert!(handler(&mut e, id::BUTTON_DOWN, S1, false, 0, 0x2000));
     assert_eq!(state(&mut e).flags & mask(id::BUTTON_DOWN), 0);
-    assert!(!handler(&mut e, id::CELL_ENTER, S2, false, 0, 0), "another script's");
+    assert!(
+        !handler(&mut e, id::CELL_ENTER, S2, false, 0, 0),
+        "another script's"
+    );
     // A stored handler without a filter: any removal of the script takes it.
     assert!(handler(&mut e, id::CROSSHAIR_OFF, S2, true, 0, 0));
     assert!(handler(&mut e, id::CROSSHAIR_OFF, S2, false, REF_A, 0));
@@ -141,12 +166,18 @@ fn input_handlers() {
     assert!(handler(&mut e, id::KEY_DOWN, S1, true, 0, 0x11));
     assert!(!handler(&mut e, id::KEY_DOWN, S1, true, 0, 0x11), "twice");
     assert!(handler(&mut e, id::KEY_UP, S1, true, 0, 0x11));
-    assert!(!handler(&mut e, id::KEY_DOWN, S1, true, 0, 0), "key 0 is not valid");
+    assert!(
+        !handler(&mut e, id::KEY_DOWN, S1, true, 0, 0),
+        "key 0 is not valid"
+    );
     assert!(!handler(&mut e, id::KEY_DOWN, S1, true, 0, 300));
     assert!(handler(&mut e, id::KEY_DOWN, S2, true, 0, 0x1e));
     assert!(handler(&mut e, id::CONTROL_DOWN, S1, true, 0, 4));
     assert!(!handler(&mut e, id::CONTROL_DOWN, S1, true, 0, 28));
-    assert_eq!(state(&mut e).flags & (ON_KEY | ON_CONTROL), ON_KEY | ON_CONTROL);
+    assert_eq!(
+        state(&mut e).flags & (ON_KEY | ON_CONTROL),
+        ON_KEY | ON_CONTROL
+    );
     // S1's down handlers out of every key.
     assert!(handler(&mut e, id::KEY_DOWN, S1, false, 0, u32::MAX));
     assert!(!state(&mut e).keys[&0x11].on_down.contains(&S1));
@@ -179,7 +210,10 @@ fn a_frame() {
     handler(&mut e, id::CROSSHAIR_ON, S1, true, 0, 0x28);
     e.mem.set_u32(PLAYER_REF + 0x40, CELL_A);
     process(&mut e);
-    assert!(calls().is_empty(), "the first frame after the start: nothing");
+    assert!(
+        calls().is_empty(),
+        "the first frame after the start: nothing"
+    );
     // A key and its control go down.
     key(&mut e, 0x11).raw_state = true;
     process(&mut e);
@@ -188,7 +222,11 @@ fn a_frame() {
     assert!(calls().is_empty(), "no change");
     key(&mut e, 0x11).raw_state = false;
     process(&mut e);
-    assert_eq!(calls(), [(S2, 0, vec![0x11])], "up; the control has no up handler");
+    assert_eq!(
+        calls(),
+        [(S2, 0, vec![0x11])],
+        "up; the control has no up handler"
+    );
     // Into cell B: the exit (no filter) with A, the enter (filtered to B) with B.
     e.mem.set_u32(PLAYER_REF + 0x40, CELL_B);
     process(&mut e);
@@ -244,7 +282,11 @@ fn the_pad() {
     e.ext::<Jip>().input.pad.left_trigger = 0;
     e.ext::<Jip>().input.pad.right_trigger = 1;
     process(&mut e);
-    assert_eq!(calls(), [(S2, 0, vec![0x2000])], "B went up; the triggers' other sets empty");
+    assert_eq!(
+        calls(),
+        [(S2, 0, vec![0x2000])],
+        "B went up; the triggers' other sets empty"
+    );
     e.ext::<Jip>().input.pad.right_trigger = 0;
     process(&mut e);
     assert_eq!(calls(), [(S2, 0, vec![1])], "the right trigger up");

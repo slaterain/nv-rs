@@ -426,7 +426,11 @@ fn ln_event(
     if event_mask == 0 {
         return None;
     }
-    let number = if number.is_empty() { 0 } else { atoi(number) as u32 };
+    let number = if number.is_empty() {
+        0
+    } else {
+        atoi(number) as u32
+    };
     let mut form = cb.source;
     if add {
         if priority != PRIORITY_DEFAULT {
@@ -457,7 +461,8 @@ fn ln_event(
                         form = e.call(LOOKUP_FORM_BY_ID, &args![*id]).u32();
                     }
                     other => {
-                        let text = crate::commands::scripting_more::element_representation(e, other);
+                        let text =
+                            crate::commands::scripting_more::element_representation(e, other);
                         ev.error_text(format!(
                             "Cannot use non-form filter {} for an LN event.",
                             String::from_utf8_lossy(&text)
@@ -473,6 +478,12 @@ fn ln_event(
 
 /// `LookupFormByID` (`0x004839C0`).
 const LOOKUP_FORM_BY_ID: u32 = 0x0048_39c0;
+
+/// [`atoi`] for the tests.
+#[cfg(test)]
+pub(crate) fn tests_atoi(text: &[u8]) -> i32 {
+    atoi(text)
+}
 
 fn set_with(e: &mut Engine, ev: &mut Eval, toks: &[Tok], old: bool, new: bool) -> Option<f64> {
     let mut priority = PRIORITY_DEFAULT;

@@ -36,8 +36,8 @@ pub mod identity;
 pub mod input;
 pub mod ln_events;
 pub mod main_loop;
-pub mod script_call;
 pub mod overrides;
+pub mod script_call;
 #[rustfmt::skip]
 pub mod slots;
 #[cfg(test)]
@@ -118,6 +118,8 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
         nvse::table::TABLE_AT,
         "xNVSE is installed before JIP, its plugin"
     );
+    // First: a built command's record is named only when JIP answers "installed".
+    e.ext::<Jip>().answers_installed = answers_installed;
     table::install(e, answers_installed);
     identity::install(e, answers_installed);
     overrides::install(e, answers_installed);
@@ -130,9 +132,7 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
     ln_events::install(e, answers_installed);
     main_loop::install(e);
     nvse::plugins::register(e, plugin(answers_installed));
-    let jip = e.ext::<Jip>();
-    jip.installed = true;
-    jip.answers_installed = answers_installed;
+    e.ext::<Jip>().installed = true;
     // The game's state, not one engine's: real threads' engines share it.
     e.share_ext::<Jip>();
 }

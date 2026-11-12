@@ -38,7 +38,7 @@ fn world() -> Engine {
     e.mem.set_u32(FORM_MAP + 0x40, 0);
     e.mem.set_u32(FORM_MAP + 0x44, 0x0100_0001);
     e.mem.set_u32(FORM_MAP + 0x48, OTHER_REF);
-    crate::install_as(&mut e, false);
+    crate::install_as(&mut e, true);
     script_ref(&mut e, 1, SCRIPT_FORM);
     e
 }
@@ -59,7 +59,7 @@ fn callbacks(e: &mut Engine) -> Vec<Callback> {
     state(e).callbacks.clone()
 }
 
-/// Built whatever JIP answers; the query, the add on the player (no reference), the frames
+/// Built once JIP answers "installed"; the query, the add on the player (no reference), the frames
 /// counted in game mode only for flags 1, the call every second frame with no arguments, the
 /// keep (delay 0 is 1, frames left as they were, new flags), the removal at the next cycle.
 #[test]
@@ -97,7 +97,11 @@ fn a_callback_through_the_command() {
     assert_eq!((c.call_delay, c.flags, c.cycle_count), (1, 0xb, 2));
     cycle(&mut e);
     cycle(&mut e);
-    assert_eq!(calls(), [(SCRIPT_FORM, PLAYER_REF, vec![])], "menu mode now counts");
+    assert_eq!(
+        calls(),
+        [(SCRIPT_FORM, PLAYER_REF, vec![])],
+        "menu mode now counts"
+    );
     // Removed: marked, gone at the next cycle's end, not called.
     sgmlc(&mut e, 0, &[0]);
     assert!(callbacks(&mut e)[0].remove);
@@ -135,4 +139,27 @@ fn a_load_takes_mode_8() {
     cycle(&mut e);
     assert_eq!(callbacks(&mut e).len(), 1);
     assert_eq!(callbacks(&mut e)[0].this_obj, OTHER_REF);
+}
+
+/// While JIP answers "not installed" the command's whole record (0x28 bytes and its parameter
+/// list) is what #502's table leaves: no handler, no name, as without the DLL.
+#[test]
+fn not_installed_the_record_is_502s() {
+    let snapshot = |e: &Engine| {
+        let at = e.script_tables().record(SET_GAME_MAIN_LOOP_CALLBACK);
+        let mut bytes = e.mem.bytes(at, 0x28);
+        let (count, params) = (e.mem.u16(at + 0x12), e.mem.u32(at + 0x14));
+        bytes.extend(e.mem.bytes(params, 12 * u32::from(count)));
+        bytes
+    };
+    let mut table_only = engine();
+    crate::table::install(&mut table_only, false);
+    let mut off = engine();
+    crate::install_as(&mut off, false);
+    assert_eq!(snapshot(&off), snapshot(&table_only));
+    assert_eq!(
+        off.mem
+            .u32(off.script_tables().record(SET_GAME_MAIN_LOOP_CALLBACK) + 0x18),
+        0
+    );
 }
