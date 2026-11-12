@@ -7741,6 +7741,10 @@ fn tall_grass_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
         vtable(e, &[])
     };
     let this = obj(e, 0x1e0, shader_vt);
+    // The alpha row marked, so a word the set-up leaves shows.
+    for k in 0..4u32 {
+        set(e, this + 0x1d0 + 4 * k, 0x7777_0000 + k);
+    }
     set(e, this + 0x18, w.renderer);
     let array = e.mem.alloc(0x30);
     set(e, this + 0x1a4, array);
