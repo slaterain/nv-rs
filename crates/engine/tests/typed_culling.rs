@@ -862,17 +862,34 @@ fn bs_process_scene() {
 
 #[test]
 fn fade_culler_process() {
-    // A fade node or none; its bound's centre x and radius.
+    // A fade node or none; its bound's centre x and radius; where the bound is: its centre z 1, 6 or -11
+    // (x and the radius the case's), or exactly at the edge of the plane facing +x (centre (-11, 0, 1),
+    // radius 1: the distance is minus the radius). The plane facing +z sits at -5 instead of -10, so the
+    // box is not symmetric in z: a z term of the wrong sign would mirror the test, which symmetric planes
+    // cannot see.
     Diff::new(entry!(
         0x00bc_2b30,
         process::fade_culler_process(Ptr<_>, u32)
     ))
     .common()
-    .inputs(&[Input::Flag, Input::F32, Input::F32])
+    .inputs(&[
+        Input::Flag,
+        Input::F32,
+        Input::F32,
+        Input::Of(&[0, 1, 2, 3]),
+    ])
     .max_cases(256)
     .setup(|e, case| {
         let s = scene(e);
-        let b = bound_of(e, case.f32(1).to_bits(), 0, ONE, case.f32(2).to_bits());
+        e.mem
+            .set_u32(s.process + 0x2c + 0x10 * 4 + 0xc, 0xc0a0_0000);
+        let (x, z, r) = match case.word(3) {
+            0 => (case.f32(1).to_bits(), ONE, case.f32(2).to_bits()),
+            1 => (case.f32(1).to_bits(), 0x40c0_0000, case.f32(2).to_bits()),
+            2 => (case.f32(1).to_bits(), 0xc130_0000, case.f32(2).to_bits()),
+            _ => (0xc130_0000, ONE, ONE),
+        };
+        let b = bound_of(e, x, 0, z, r);
         let node = object(e, 0xac, s.stand_in_vt, b, 0x0010_0001);
         let reference = e.mem.alloc(0x20);
         e.mem.set_u32(reference, s.stand_in_vt);
