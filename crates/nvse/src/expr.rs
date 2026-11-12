@@ -521,11 +521,15 @@ impl Eval {
             b'X' | b'x' => {
                 let ref_idx = self.read16(e);
                 let opcode = u32::from(self.read16(e));
-                // A record with no handler (a command not built yet, a plugin's slot no
-                // built-in fills) reads as an opcode the table does not have: the expression
-                // fails here, as it does in the game without the DLL that owns the opcode.
+                // A plugin's slot with no handler (a plugin nv-rs has not built, or a command of
+                // it not built yet) reads as an opcode the table does not have: the expression
+                // fails here, as it does in the game without the DLL that owns the opcode. One of
+                // xNVSE's own not built yet is read, and fails only if it runs
+                // ([`Eval::execute_command`]), so a short circuit passes over it as in xNVSE.
                 let record = record_of(e, opcode);
-                if record == 0 || e.mem.u32(record + 0x18) == 0 {
+                let unresolved = record == 0
+                    || (opcode >= crate::names::PLUGIN_OPCODES && e.mem.u32(record + 0x18) == 0);
+                if unresolved {
                     self.error(format!("Failed to resolve command with opcode {opcode:X}"));
                     return None;
                 }
@@ -652,7 +656,16 @@ impl Eval {
     // ExpressionEvaluator::Evaluate.
     /// Evaluates one expression from the read position; `None` on an error.
     pub fn evaluate(&mut self, e: &mut Engine) -> Option<Tok> {
-        let list = self.parse(e)?;
+        // xNVSE parses a line's tokens once and keeps them in the script's cache
+        // (`ExpressionEvaluator::GetTokens`), reading the line again only while the cache is empty
+        // (after a parse that failed); here they are parsed at each evaluation. The two differ
+        // only if a token's read could answer otherwise the second time (a command record that
+        // gained a handler between two runs of the line), which the built-ins' tables never do
+        // after the game starts.
+        let Some(list) = self.parse(e) else {
+            self.error("Failed to parse script data");
+            return None;
+        };
         let mut operands: Vec<Tok> = Vec::new();
         let mut sc_info: Vec<(Option<u8>, usize, usize)> = Vec::new();
         let mut i = 0;
@@ -853,6 +866,11 @@ impl Eval {
         expect_return_type(e, Returns::Default);
         let params = e.mem.u32(record + 0x14);
         let execute = e.mem.u32(record + 0x18);
+        // One of xNVSE's own commands not built yet: it fails as a command that returns false.
+        if execute == 0 {
+            self.error("Command failed to execute");
+            return None;
+        }
         let (ok, result) = e.with_stack(16, |e, frame| {
             let res = frame.addr();
             let off = res + 8;
@@ -2228,14 +2246,14 @@ mod tests {
         assert_eq!(format_g(1.0 / 3.0), "0.333333");
     }
 
-    /// A command token whose record has no handler (here a plugin slot no built-in fills) fails
-    /// to read, with the error a missing opcode gives, and never calls address 0; one with a
-    /// handler reads as a command.
-    #[test]
-    fn a_command_without_a_handler_fails_to_read() {
+    /// The table with a plugin's empty slot at `0x2200` and xNVSE's `GetNVSERevision` (`0x1401`)
+    /// standing in for one of its commands not built yet (no handler), and a command's data.
+    fn engine_with_unbuilt_commands() -> (Engine, crate::CommandArgs) {
         let mut e = crate::table::tests::engine_with_exe_tables();
         crate::table::install(&mut e);
         crate::table::grow_to(&mut e, 0x2201);
+        let unbuilt = e.script_tables().record(0x1401);
+        e.mem.set_u32(unbuilt + 0x18, 0);
         e.map(0x0200_0000, 0x1_0000);
         let a = crate::CommandArgs {
             data: 0x0200_0000,
@@ -2245,28 +2263,87 @@ mod tests {
             opcode_offset: 0x0200_0f00,
             ..Default::default()
         };
-        let read = |e: &mut Engine, opcode: u16| {
-            e.mem.set_u32(a.opcode_offset, 4);
-            let mut at = a.data + 4;
-            for b in [b'X', 0, 0] {
-                e.mem.set_u8(at, b);
-                at += 1;
-            }
-            e.mem.set_u16(at, opcode);
-            e.mem.set_u16(at + 2, 2);
-            let mut ev = Eval::new(e, &a);
-            let tok = ev.read_one_token(e);
+        (e, a)
+    }
+
+    /// A command token: no calling reference, the opcode, no arguments.
+    fn command_token(opcode: u16) -> Vec<u8> {
+        let mut t = vec![b'X', 0, 0];
+        t.extend_from_slice(&opcode.to_le_bytes());
+        t.extend_from_slice(&2u16.to_le_bytes());
+        t
+    }
+
+    /// Writes `bytes` as the command's argument data (after its 4-byte opcode and length) and
+    /// makes an evaluator over it.
+    fn evaluator(e: &mut Engine, a: &crate::CommandArgs, bytes: &[u8]) -> Eval {
+        e.mem.set_u32(a.opcode_offset, 4);
+        e.mem.write(a.data + 4, bytes);
+        Eval::new(e, a)
+    }
+
+    /// An expression of `tokens`, its length first.
+    fn expression(tokens: &[&[u8]]) -> Vec<u8> {
+        let body: Vec<u8> = tokens.concat();
+        let mut out = ((body.len() + 2) as u16).to_le_bytes().to_vec();
+        out.extend(body);
+        out
+    }
+
+    /// A command token at a plugin's slot with no handler (a plugin nv-rs has not built) fails to
+    /// read, with the error a missing opcode gives, as does one past the table's end; one of
+    /// xNVSE's own with no handler reads as a command, as one with a handler does.
+    #[test]
+    fn a_plugin_slot_without_a_handler_fails_to_read() {
+        let (mut e, a) = engine_with_unbuilt_commands();
+        let mut read = |opcode: u16| {
+            let mut ev = evaluator(&mut e, &a, &command_token(opcode));
+            let tok = ev.read_one_token(&mut e);
             (tok, ev.errors)
         };
-        let (tok, errors) = read(&mut e, 0x2200);
+        let (tok, errors) = read(0x2200);
         assert!(tok.is_none());
         assert_eq!(errors, ["Failed to resolve command with opcode 2200"]);
-        let (tok, errors) = read(&mut e, 0x2201);
+        let (tok, errors) = read(0x2201);
         assert!(tok.is_none(), "past the end");
         assert_eq!(errors, ["Failed to resolve command with opcode 2201"]);
-        let (tok, errors) = read(&mut e, 0x1400);
-        assert!(matches!(tok, Some(Tok::Command { opcode: 0x1400, .. })));
-        assert!(errors.is_empty());
+        for opcode in [0x1400, 0x1401] {
+            let (tok, errors) = read(opcode as u16);
+            assert!(
+                matches!(tok, Some(Tok::Command { opcode: o, .. }) if o == opcode),
+                "{opcode:04x}"
+            );
+            assert!(errors.is_empty());
+        }
+    }
+
+    /// In an expression: a plugin slot with no handler fails the parse (`GetTokens`' "Failed to
+    /// parse script data" after the token's error); one of xNVSE's own not built yet is passed
+    /// over by a short circuit (`0 && GetNVSERevision` is 0, no error) and fails only when it
+    /// runs, as a command that returns false, never calling address 0.
+    #[test]
+    fn unbuilt_commands_in_an_expression() {
+        let (mut e, a) = engine_with_unbuilt_commands();
+        let and = [op::LOGICAL_AND];
+        let zero = [b'B', 0];
+        let unbuilt = command_token(0x1401);
+        let mut ev = evaluator(&mut e, &a, &expression(&[&zero, &unbuilt, &and]));
+        let tok = ev.evaluate(&mut e);
+        assert!(matches!(tok, Some(Tok::Number { v, .. }) if v == 0.0));
+        assert!(ev.errors.is_empty(), "{:?}", ev.errors);
+        let mut ev = evaluator(&mut e, &a, &expression(&[&unbuilt]));
+        assert!(ev.evaluate(&mut e).is_none());
+        assert_eq!(ev.errors, ["Command failed to execute"]);
+        let slot = command_token(0x2200);
+        let mut ev = evaluator(&mut e, &a, &expression(&[&zero, &slot, &and]));
+        assert!(ev.evaluate(&mut e).is_none());
+        assert_eq!(
+            ev.errors,
+            [
+                "Failed to resolve command with opcode 2200",
+                "Failed to parse script data"
+            ]
+        );
     }
 
     #[test]

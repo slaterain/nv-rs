@@ -76,9 +76,6 @@ fn the_versions() {
     assert_eq!(nvse_version_full(), 6.49);
 }
 
-// JIP answers "not installed" until the plan's step 3.10 turns the flag on (and this line off).
-const _: () = assert!(!crate::ANSWERS_INSTALLED);
-
 /// JIP's names: `JIP NVSE Plugin` and `lutana_nvse` without case, and every name beginning with
 /// `JIP LN NVSE`; nothing else.
 #[test]

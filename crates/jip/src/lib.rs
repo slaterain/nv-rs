@@ -31,11 +31,17 @@ pub mod utility;
 use engine_core::prelude::*;
 
 /// Whether JIP LN NVSE answers "installed": its identity commands work, `IsPluginInstalled`
-/// and `GetPluginVersion` answer for its names, and its empty slots run as JIP's do. Off until
-/// the commands mods call are built (the plan's step 3.10): a mod that checks for JIP then stops
-/// with its own "requires JIP" message, as without the DLL, instead of halfway through a
-/// script. The one place to turn it on.
+/// and `GetPluginVersion` answer for its names, its commands' names are in the command table,
+/// and its empty slots run as JIP's do. Off until the commands mods call are built (the plan's
+/// step 3.10): a mod that checks for JIP then stops with its own "requires JIP" message, as
+/// without the DLL, instead of halfway through a script. The one place to turn it on.
 pub const ANSWERS_INSTALLED: bool = false;
+
+// Held off in every build until step 3.10, which turns the flag on and removes this line.
+const _: () = assert!(
+    !ANSWERS_INSTALLED,
+    "JIP answers \"installed\" only from the plan's step 3.10"
+);
 
 /// JIP built in on this engine: its state, one slot per engine ([`Engine::ext`]), shared by the
 /// game's threads once installed.

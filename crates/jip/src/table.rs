@@ -11,8 +11,10 @@
 //! reference, its parameter list (written once per list into the built-ins' data, shared as
 //! JIP's records share them), its condition flag and its return type. A command not built yet
 //! has no handler and no eval: a script line that calls it fails and the script stops for that
-//! run, as it does without the DLL; a condition that names it is false. Built commands get their
-//! handlers through [`set_handlers`]. An empty slot holds `kEmptyCommand` (`internal/jip_core.cpp`):
+//! run, as it does without the DLL; a condition that names it is false. While JIP answers "not
+//! installed" ([`crate::ANSWERS_INSTALLED`]) an unbuilt command has no name either, so no name
+//! finds it (the console, `help`), as without the DLL. Built commands get their handlers and
+//! names through [`set_handlers`]. An empty slot holds `kEmptyCommand` (`internal/jip_core.cpp`):
 //! named `NONE`, three optional integers listed but none counted, and the exe's `005d4a40`
 //! (which answers true) as its execute once JIP answers "installed".
 
@@ -181,40 +183,54 @@ fn guest_params(e: &mut Engine, params: &'static Params) -> u32 {
     at
 }
 
+/// A slot's record as JIP registers it, with the handler words given; its names only when
+/// `named` (an unbuilt command of a JIP that answers "not installed" has none, so no name finds
+/// it, as none would without the DLL).
+fn plugin_record(
+    e: &mut Engine,
+    slot: &'static Slot,
+    named: bool,
+    execute: u32,
+    eval: u32,
+) -> PluginRecord<'static> {
+    let (name, short) = if named {
+        (slot.name, slot.alias)
+    } else {
+        ("", "")
+    };
+    PluginRecord {
+        name,
+        short,
+        needs_ref: slot.needs_ref,
+        param_count: slot.param_count(),
+        params: guest_params(e, slot.params),
+        execute,
+        eval,
+        flags: slot.kind.flags(),
+        expression: slot.kind == Kind::Expression,
+        returns: slot.returns,
+    }
+}
+
 /// Grows xNVSE's table to JIP's last opcode and writes JIP's 1,150 records, with no handlers;
-/// the empty slots get `kEmptyCommand`'s execute when JIP answers "installed".
+/// answering "installed", they are named and the empty slots get `kEmptyCommand`'s execute.
 pub fn install(e: &mut Engine, answers_installed: bool) {
     nvse::table::grow_to(e, LAST_OPCODE + 1);
     for slot in crate::slots::SLOTS.iter() {
-        let params = guest_params(e, slot.params);
         let execute = if slot.kind == Kind::Empty && answers_installed {
             EMPTY_EXECUTE
         } else {
             0
         };
-        add_plugin_record(
-            e,
-            slot.opcode,
-            &PluginRecord {
-                name: slot.name,
-                short: slot.alias,
-                needs_ref: slot.needs_ref,
-                param_count: slot.param_count(),
-                params,
-                execute,
-                eval: 0,
-                flags: slot.kind.flags(),
-                expression: slot.kind == Kind::Expression,
-                returns: slot.returns,
-            },
-        );
+        let record = plugin_record(e, slot, answers_installed, execute, 0);
+        add_plugin_record(e, slot.opcode, &record);
     }
 }
 
-/// Gives a built JIP command its handlers, written into its record: its execute at its place in
-/// the extenders' code ([`execute_address`], as xNVSE's commands have theirs) and, for a command a
-/// condition can use, its eval ([`nvse::table::eval_address`]). A condition-only command has no
-/// execute.
+/// Gives a built JIP command its handlers, written into its record with its names (a built
+/// command answers whatever JIP does): its execute at its place in the extenders' code
+/// ([`execute_address`], as xNVSE's commands have theirs) and, for a command a condition can use,
+/// its eval ([`nvse::table::eval_address`]). A condition-only command has no execute.
 pub fn set_handlers(e: &mut Engine, opcode: u32, execute: Option<AbiFn>, eval: Option<AbiFn>) {
     let slot = slot(opcode).unwrap_or_else(|| panic!("{opcode:04x}: not a JIP slot"));
     let fits = match slot.kind {
@@ -224,16 +240,17 @@ pub fn set_handlers(e: &mut Engine, opcode: u32, execute: Option<AbiFn>, eval: O
         Kind::Empty => false,
     };
     assert!(fits, "{opcode:04x}: handlers that do not match its kind");
-    let record = e.script_tables().record(opcode);
+    let mut words = (0, 0);
     if let Some(f) = execute {
         e.register(execute_address(opcode), f);
-        e.mem.set_u32(record + 0x18, execute_address(opcode));
+        words.0 = execute_address(opcode);
     }
     if let Some(f) = eval {
-        let at = nvse::table::eval_address(opcode);
-        e.register(at, f);
-        e.mem.set_u32(record + 0x20, at);
+        e.register(nvse::table::eval_address(opcode), f);
+        words.1 = nvse::table::eval_address(opcode);
     }
+    let record = plugin_record(e, slot, true, words.0, words.1);
+    add_plugin_record(e, opcode, &record);
 }
 
 #[cfg(test)]

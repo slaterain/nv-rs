@@ -291,7 +291,12 @@ pub fn install(e: &mut Engine) {
     // (`005aea50`) reads (`end + 8`).
     let size = (count + 1) * RECORD;
     assert!(size <= TABLE_ROOM);
-    e.map(TABLE_AT, mapped_size(count));
+    // The whole room is mapped, zeros past the table's end: the condition code (`00681600`) and
+    // a condition's `InitItem` (`006819e0`) read a function's record by its number with no test
+    // of the table's end, so a condition naming a function of a plugin nv-rs does not have (a
+    // VNV mod's JohnnyGuitar or ShowOff condition) reads a record with no eval and is false, not
+    // memory that is not there.
+    e.map(TABLE_AT, TABLE_ROOM);
     // `g_scriptCommands.Read`: the exe's records as they are.
     let bytes = e.mem.bytes(exe.start, vanilla as u32 * RECORD);
     for (i, b) in bytes.iter().enumerate() {
@@ -390,12 +395,6 @@ pub fn install(e: &mut Engine) {
 /// installs, end at `0x410E`).
 pub const ROOM_END: u32 = ScriptTables::FIRST_OPCODE + TABLE_ROOM / RECORD - 1;
 
-/// The bytes `count` records from `0x1000` and the one past the end take, rounded to whole pages:
-/// what is mapped of the table.
-fn mapped_size(count: u32) -> u32 {
-    ((count + 1) * RECORD).next_multiple_of(0x1000)
-}
-
 /// Grows the table for a plugin built in, to `max_opcode` (one past its highest opcode), as
 /// xNVSE's `PluginManager::SetOpcodeBase` pads it up to a plugin's base (`CommandTable::PadTo`
 /// (xNVSE)) with one difference: the new slots are empty (no names, no parameters, no handler),
@@ -415,12 +414,8 @@ pub fn grow_to(e: &mut Engine, max_opcode: u32) {
     if max_opcode <= t.max_opcode {
         return;
     }
-    let old = t.max_opcode - ScriptTables::FIRST_OPCODE;
+    // The room is mapped already (`install`).
     let count = max_opcode - ScriptTables::FIRST_OPCODE;
-    let (mapped, needed) = (mapped_size(old), mapped_size(count));
-    if needed > mapped {
-        e.map(TABLE_AT + mapped, needed - mapped);
-    }
     let empty = guest_str(e, b"");
     for opcode in t.max_opcode..max_opcode {
         Record {
@@ -477,14 +472,15 @@ pub struct PluginRecord<'a> {
 /// Writes a plugin command's record at `opcode` in the grown table (`CommandTable::Add` (xNVSE),
 /// at the plugin's current opcode) and its return type beside it. As xNVSE does, whatever a
 /// plugin registers at `0x22C0` (JIP LN NVSE's `ar_Cat`, whose names xNVSE's own `ar_Cat` has)
-/// is renamed `JIP_ar_Cat`, short name `JIP_pinto_Cat`.
+/// is renamed `JIP_ar_Cat`, short name `JIP_pinto_Cat`; a record written with no name (a plugin
+/// that answers "not installed" keeps its unbuilt commands' names out of the table) stays so.
 pub fn add_plugin_record(e: &mut Engine, opcode: u32, r: &PluginRecord) {
     let t = e.script_tables();
     assert!(
         (crate::names::PLUGIN_OPCODES..t.max_opcode).contains(&opcode),
         "{opcode:04x}: not a plugin opcode of the table"
     );
-    let (name, short) = if opcode == 0x22c0 {
+    let (name, short) = if opcode == 0x22c0 && !r.name.is_empty() {
         ("JIP_ar_Cat", "JIP_pinto_Cat")
     } else {
         (r.name, r.short)
@@ -710,9 +706,34 @@ pub(crate) mod tests {
         assert!(past.is_err());
     }
 
+    /// The whole room is mapped: the words the condition code (`00681600`: the eval at `+0x20`,
+    /// the reference byte at `+0x10`) and a condition's `InitItem` (`006819e0`: the eval, then the
+    /// name at `+0`) read for a function past the table's end, up to the room's last, are zeros,
+    /// as are the parameters `00682320` reads (`+0x12`, `+0x14`).
+    #[test]
+    fn records_past_the_end_read_as_none() {
+        let mut e = engine_with_exe_tables();
+        install(&mut e);
+        let t = e.script_tables();
+        for opcode in [0x2100, 0x3100, 0x3c93, 0x4000, ROOM_END - 1] {
+            let at = t.record(opcode);
+            assert_eq!(
+                (
+                    e.mem.u32(at),
+                    e.mem.u8(at + 0x10),
+                    e.mem.u16(at + 0x12),
+                    e.mem.u32(at + 0x14),
+                    e.mem.u32(at + 0x20)
+                ),
+                (0, 0, 0, 0, 0),
+                "{opcode:04x}"
+            );
+        }
+    }
+
     /// A plugin's record holds what the plugin registers, with the default parser and an empty
-    /// help text, and its return type beside it; xNVSE renames what is registered at `0x22C0`.
-    /// Only opcodes from `0x2000` to the table's end take one.
+    /// help text, and its return type beside it; xNVSE renames what is registered at `0x22C0`
+    /// (not an unnamed record). Only opcodes from `0x2000` to the table's end take one.
     #[test]
     fn a_plugin_record_is_written_as_registered() {
         let mut e = engine_with_exe_tables();
@@ -752,6 +773,17 @@ pub(crate) mod tests {
         assert_eq!(guest_text(&e, r.long_name), b"SomeCommand");
         assert_eq!(guest_text(&e, r.short_name), b"Some");
         assert_eq!(return_type(&e, 0x2201), Returns::Array);
+        add_plugin_record(
+            &mut e,
+            0x22c0,
+            &PluginRecord {
+                name: "",
+                short: "",
+                ..record(0)
+            },
+        );
+        let r = Record::read(&e, t.record(0x22c0));
+        assert_eq!(guest_text(&e, r.long_name), b"", "unnamed: no rename");
         add_plugin_record(&mut e, 0x22c0, &record(0x7e80_0004));
         let r = Record::read(&e, t.record(0x22c0));
         assert_eq!(guest_text(&e, r.long_name), b"JIP_ar_Cat");

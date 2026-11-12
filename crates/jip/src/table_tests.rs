@@ -188,23 +188,33 @@ fn the_counts() {
 }
 
 /// Installed, xNVSE's table reaches `0x2943` and holds JIP's records as JIP registers them (its
-/// names, the empty help, needing a reference, the counted parameters and the list they are in,
-/// no handler and no eval, the default parser, the flags, the return type; `ar_Cat` renamed by
-/// xNVSE), the parameter lists shared as JIP's are, xNVSE's own records unchanged, and the slots
-/// no built-in fills empty.
+/// names when it answers "installed", the empty help, needing a reference, the counted
+/// parameters and the list they are in, no handler and no eval, the default parser, the flags,
+/// the return type; `ar_Cat` renamed by xNVSE), the parameter lists shared as JIP's are, xNVSE's
+/// own records unchanged, and the slots no built-in fills empty.
 #[test]
 fn installed_the_table_holds_jips_records() {
+    for installed in [false, true] {
+        installed_records(installed);
+    }
+}
+
+fn installed_records(installed: bool) {
     let mut e = engine();
     let xnvse_before = Record::read(&e, record_of(&e, 0x15df));
-    crate::install_as(&mut e, false);
+    crate::install_as(&mut e, installed);
     let t = e.script_tables();
     assert_eq!(t.max_opcode, LAST_OPCODE + 1);
     assert_eq!(e.mem.u32(t.end + 8), LAST_OPCODE + 1);
-    assert_eq!(Record::read(&e, record_of(&e, 0x15df)), xnvse_before);
+    if !installed {
+        assert_eq!(Record::read(&e, record_of(&e, 0x15df)), xnvse_before);
+    }
     for slot in SLOTS.iter() {
         let at = record_of(&e, slot.opcode);
         let r = Record::read(&e, at);
-        let (name, alias) = if slot.opcode == 0x22c0 {
+        let (name, alias) = if !installed {
+            ("", "")
+        } else if slot.opcode == 0x22c0 {
             ("JIP_ar_Cat", "JIP_pinto_Cat")
         } else {
             (slot.name, slot.alias)
@@ -218,9 +228,16 @@ fn installed_the_table_holds_jips_records() {
             (o, u16::from(slot.needs_ref), slot.param_count()),
             "{o:04x}"
         );
+        let execute = if installed && slot.kind == Kind::Empty {
+            EMPTY_EXECUTE
+        } else if installed && (o == 0x2200 || o == 0x2210) {
+            nvse::table::execute_address(o)
+        } else {
+            0
+        };
         assert_eq!(
             (r.execute, r.parse, r.eval, r.flags),
-            (0, DEFAULT_PARSE, 0, slot.kind.flags()),
+            (execute, DEFAULT_PARSE, 0, slot.kind.flags()),
             "{o:04x}"
         );
         assert_eq!(r.params == 0, slot.params.list.is_empty(), "{o:04x}");
@@ -237,7 +254,6 @@ fn installed_the_table_holds_jips_records() {
     }
     // `GetGameDaysPassed` lists what `kEmptyCommand` lists, in the same place.
     let days = Record::read(&e, record_of(&e, 0x282f));
-    assert_eq!(guest_text(&e, days.long_name), b"GetGameDaysPassed");
     assert_eq!(days.params, Record::read(&e, record_of(&e, 0x2213)).params);
     for opcode in [0x168e, 0x2131, 0x2132, 0x21ff, 0x233b, 0x25ff] {
         let r = Record::read(&e, record_of(&e, opcode));
@@ -248,9 +264,55 @@ fn installed_the_table_holds_jips_records() {
         );
     }
     // A second install changes nothing.
-    crate::install_as(&mut e, true);
+    crate::install_as(&mut e, !installed);
     assert_eq!(e.script_tables(), t);
-    assert_eq!(execute_of(&e, 0x2213), 0);
+    let empty = if installed { EMPTY_EXECUTE } else { 0 };
+    assert_eq!(execute_of(&e, 0x2213), empty);
+}
+
+/// Answering "not installed", a scan of the names in the plugins' part of the table (as the
+/// console's and `help`'s name lookups make) finds none of JIP's: no name, alias or xNVSE's
+/// rename of its `ar_Cat` (xNVSE's own `ar_Cat`, below, is xNVSE's).
+#[test]
+fn not_installed_no_name_finds_jip() {
+    let mut e = engine();
+    crate::install_as(&mut e, false);
+    let mut jip: Vec<&[u8]> = SLOTS
+        .iter()
+        .flat_map(|s| [s.name.as_bytes(), s.alias.as_bytes()])
+        .filter(|n| !n.is_empty())
+        .collect();
+    jip.extend([&b"JIP_ar_Cat"[..], b"JIP_pinto_Cat"]);
+    let t = e.script_tables();
+    for opcode in nvse::names::PLUGIN_OPCODES..t.max_opcode {
+        let r = Record::read(&e, t.record(opcode));
+        for name in [r.long_name, r.short_name] {
+            let text = guest_text(&e, name);
+            assert!(
+                text.is_empty() || !jip.iter().any(|j| j.eq_ignore_ascii_case(&text)),
+                "{opcode:04x}: {}",
+                String::from_utf8_lossy(&text)
+            );
+        }
+    }
+}
+
+/// A condition naming a function past JIP's end reads what the condition code (`00681600`: the
+/// eval at `+0x20`, the reference byte at `+0x10`) and a condition's `InitItem` (`006819e0`:
+/// the eval, then the name at `+0`) read: zeros (no eval: the condition is false), up to the
+/// room's last opcode, a slot between xNVSE's and JIP's an empty record. Opcodes `0x2100`
+/// (between) and those of JohnnyGuitar (`0x3100`), ShowOff (`0x3C93`) and ITR (`0x4000`).
+#[test]
+fn other_plugins_conditions_read_no_eval() {
+    let mut e = engine();
+    crate::install_as(&mut e, false);
+    let t = e.script_tables();
+    for opcode in [0x2100, 0x3100, 0x31ff, 0x3c93, 0x4000, 0x410e, 0x4331] {
+        let at = t.record(opcode);
+        let (eval, reference) = (e.mem.u32(at + 0x20), e.mem.u8(at + 0x10));
+        let name = guest_text(&e, e.mem.u32(at));
+        assert_eq!((eval, reference, name), (0, 0, Vec::new()), "{opcode:04x}");
+    }
 }
 
 /// A JIP command not built yet fails as it does without the DLL: its record has no handler
@@ -279,24 +341,25 @@ fn an_unbuilt_command_fails() {
     assert_eq!(ev.errors, ["Failed to resolve command with opcode 2201"]);
 }
 
-/// Answering "installed", an empty slot runs `kEmptyCommand`'s execute, the exe's `005d4a40`
-/// (true); not answering, it has none.
+/// Answering "installed", an empty slot is `NONE` and runs `kEmptyCommand`'s execute, the exe's
+/// `005d4a40` (true); not answering, it has neither a name nor an execute.
 #[test]
 fn empty_slots_run_as_jips_once_installed() {
-    for (installed, execute) in [(false, 0), (true, EMPTY_EXECUTE)] {
+    for (installed, execute, name) in [(false, 0, &b""[..]), (true, EMPTY_EXECUTE, b"NONE")] {
         let mut e = engine();
         crate::install_as(&mut e, installed);
         for s in SLOTS.iter().filter(|s| s.kind == Kind::Empty) {
             let r = Record::read(&e, record_of(&e, s.opcode));
-            assert_eq!(guest_text(&e, r.long_name), b"NONE");
+            assert_eq!(guest_text(&e, r.long_name), name);
             assert_eq!((r.execute, r.param_count), (execute, 0));
             assert_ne!(r.params, 0, "three optional integers listed");
         }
     }
 }
 
-/// A built command's handlers go to its record, at the extenders' places for its opcode; ones
-/// that do not match its kind are refused.
+/// A built command's handlers go to its record, at the extenders' places for its opcode, and
+/// its names with them (a built command answers whatever JIP does); handlers that do not match
+/// its kind are refused.
 #[test]
 fn handlers_match_the_kind() {
     fn ok(_: &mut Engine, _: &[u32]) -> Ret {
@@ -313,6 +376,8 @@ fn handlers_match_the_kind() {
             nvse::table::eval_address(0x2204)
         )
     );
+    assert_eq!(guest_text(&e, r.long_name), b"IsButtonPressed");
+    assert_eq!(r.param_count, 1);
     assert_eq!(e.call(r.execute, &[0; 8]).eax, 1);
     set_handlers(&mut e, 0x27b1, None, Some(ok));
     assert_eq!(execute_of(&e, 0x27b1), 0, "condition-only");
