@@ -1148,6 +1148,15 @@ impl fmt::Debug for Linked {
 }
 
 impl super::Device {
+    /// Whether this device links render pipelines from pipeline libraries (Vulkan with
+    /// `VK_EXT_graphics_pipeline_library` and dynamic rendering, not switched off by
+    /// `NV_WGPU_LIBRARIES=off` or `NV_WGPU_DYNAMIC_RENDERING=off`): where a shader's library can be
+    /// made ahead of its draws by making a pipeline with it. A pipeline whose layout has a group
+    /// with bindings no draw stage sees is still made whole.
+    pub fn uses_pipeline_libraries(&self) -> bool {
+        self.shared.private_caps.extras.pipeline_library
+    }
+
     /// What pipeline libraries were made so far and what linking cost, in one line; `None` on a
     /// device that makes its render pipelines whole.
     pub fn pipeline_library_report(&self) -> Option<String> {
