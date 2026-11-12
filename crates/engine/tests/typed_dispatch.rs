@@ -2274,6 +2274,51 @@ fn rotate_at_24_bits_rounds_each_sum() {
     }
 }
 
+/// The products' sums in the exe's order, `(a0 b0 + a1 b1) + a2 b2`, under both control words: with the
+/// row (2^31, -2^31, 1 + 2^-23) and the vector (1, 1, 1) the first sum cancels exactly to 0, so the
+/// entry is 1 + 2^-23, where `a0 b0 + (a1 b1 + a2 b2)` rounds -2^31 + 1 + 2^-23 to 53 bits (a tie that
+/// goes to the even -(2^31 - 1)) and gives 1.0. The matrix product's first entry is the same sum, with
+/// the column (1, 1, 1).
+#[test]
+fn products_sum_in_the_exe_order() {
+    let mut e = Engine::new_untyped_for_test();
+    stand_ins(&mut e);
+    let row = [0x4f00_0000, 0xcf00_0000, ONE + 1];
+    let m = block(&mut e, 0x24, &[row[0], row[1], row[2], 0, 0, 0, 0, 0, 0]);
+    let v = block(&mut e, 0xc, &[ONE, ONE, ONE]);
+    let b = block(&mut e, 0x24, &[ONE, 0, 0, ONE, 0, 0, ONE, 0, 0]);
+    for word in [0x007f, 0x027f] {
+        let out = e.mem.alloc(0xc);
+        let got = under(&mut e, word, |e| {
+            e.call(0x004b_4500, &engine_core::args![m, out, v]);
+            e.mem.u32(out)
+        });
+        assert_eq!(got, ONE + 1, "rotate, translation, control word {word:04x}");
+        let out = e.mem.alloc(0xc);
+        let got = under(&mut e, word, |e| {
+            math::rotate(e, Ptr::new(m), Ptr::new(out), Ptr::new(v));
+            e.mem.u32(out)
+        });
+        assert_eq!(got, ONE + 1, "rotate, typed, control word {word:04x}");
+        let out = e.mem.alloc(0x24);
+        let got = under(&mut e, word, |e| {
+            e.call(0x0043_f8d0, &engine_core::args![m, out, b]);
+            e.mem.u32(out)
+        });
+        assert_eq!(
+            got,
+            ONE + 1,
+            "multiply, translation, control word {word:04x}"
+        );
+        let out = e.mem.alloc(0x24);
+        let got = under(&mut e, word, |e| {
+            math::multiply(e, Ptr::new(m), Ptr::new(out), Ptr::new(b));
+            e.mem.u32(out)
+        });
+        assert_eq!(got, ONE + 1, "multiply, typed, control word {word:04x}");
+    }
+}
+
 /// An actor's height `h = k * 2^-52` with `k = (2^54 + 2^30 + 1) / 3`, so `0.75 * h` is exactly
 /// `1 + 2^-24 + 2^-54`. Under 24 bits `FMUL` rounds that up (above the tie) to 1 + 2^-23; under
 /// 53 bits it rounds to 1 + 2^-24 (a quarter of a unit is dropped) and `FSTP` then breaks the tie to
