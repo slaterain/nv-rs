@@ -1133,7 +1133,9 @@ fn dump_event_handlers_filters_and_filter_text() {
     let lines = || LINES.with(|l| std::mem::take(&mut *l.borrow_mut()));
     lines();
     let r1 = "[id: 10001, edid: \"\", name: \"<no name>\"]";
-    let r2 = "[id: 10002, edid: \"\", name: \"<no name>\"]";
+    // REF_2 answers the full-name cast in this layout (its class words fall on the base's
+    // vtable), with no text: an empty name.
+    let r2 = "[id: 10002, edid: \"\", name: \"\"]";
     let fa = "[id: 5000A00, edid: \"\", name: \"<no name>\"]";
     let fb = "[id: 5000B00, edid: \"\", name: \"<no name>\"]";
     let line_a = format!(">> Priority: 5, handler: {fa}, filters: 1::{r1}");
@@ -1141,8 +1143,12 @@ fn dump_event_handlers_filters_and_filter_text() {
     run(&mut e, DUMP_EVENT_HANDLERS, &[text("OnHit")]);
     assert_eq!(lines()[2..], [line_a.clone(), line_b]);
     // Priority 5 only (with the script filter that matches it).
-    run(&mut e, DUMP_EVENT_HANDLERS, &[text("OnHit"), form(1), num(5.0)]);
-    assert_eq!(lines()[2..], [line_a.clone()]);
+    run(
+        &mut e,
+        DUMP_EVENT_HANDLERS,
+        &[text("OnHit"), form(1), num(5.0)],
+    );
+    assert_eq!(lines()[2..], *std::slice::from_ref(&line_a));
     // An argument to filter by: REF_1 keeps the first handler, drops the second.
     run(
         &mut e,

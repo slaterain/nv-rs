@@ -635,17 +635,47 @@ fn ternary_udf_calls_the_function_it_picks() {
             e.mem.set_u32(f.addr() + 8, 0x40);
             e.call(
                 handler,
-                &[params, data, this_obj, containing, script, list, f.addr(), f.addr() + 8],
+                &[
+                    params,
+                    data,
+                    this_obj,
+                    containing,
+                    script,
+                    list,
+                    f.addr(),
+                    f.addr() + 8,
+                ],
             );
         });
         eax(0)
     });
-    assert_eq!(run_expr(&mut e, 0x1639, REF, &[num(1.0), refer(R_OBJ_A), refer(R_OBJ_B)]).1, 4.5);
-    let form = run_expr(&mut e, 0x1639, REF, &[num(0.0), refer(R_OBJ_A), refer(R_OBJ_B)]).1;
+    assert_eq!(
+        run_expr(
+            &mut e,
+            0x1639,
+            REF,
+            &[num(1.0), refer(R_OBJ_A), refer(R_OBJ_B)]
+        )
+        .1,
+        4.5
+    );
+    let form = run_expr(
+        &mut e,
+        0x1639,
+        REF,
+        &[num(0.0), refer(R_OBJ_A), refer(R_OBJ_B)],
+    )
+    .1;
     assert_eq!(form.to_bits() as u32, PLAIN);
     function_script(&mut e, QUEST_SCRIPT);
     assert_eq!(
-        run_expr(&mut e, 0x1639, REF, &[num(1.0), refer(R_QUEST_SCRIPT), refer(R_OBJ_B)]).1,
+        run_expr(
+            &mut e,
+            0x1639,
+            REF,
+            &[num(1.0), refer(R_QUEST_SCRIPT), refer(R_OBJ_B)]
+        )
+        .1,
         0.0
     );
 }

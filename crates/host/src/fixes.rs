@@ -47,8 +47,8 @@ pub static FIXES: &[Fix] = &[
     SCRIPT_SIZE_CAPS,
     SCRIPT_NULL_GUARD,
     SCRIPT_CYCLE_GUARD,
-    SCRIPT_LIST_GUARD,
     SCRIPT_UI_SORT_PATHS,
+    SCRIPT_LIST_GUARD,
     SHADER_WARM,
     IO_WAIT_ENDS_ON_COMPLETION,
     crate::half_loaded_move::FIX,
@@ -366,8 +366,8 @@ const NO_ADDRESS: &[&str] = &[
     SCRIPT_SIZE_CAPS.name,
     SCRIPT_NULL_GUARD.name,
     SCRIPT_CYCLE_GUARD.name,
-    SCRIPT_LIST_GUARD.name,
     SCRIPT_UI_SORT_PATHS.name,
+    SCRIPT_LIST_GUARD.name,
     SHADER_WARM.name,
 ];
 

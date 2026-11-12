@@ -678,13 +678,27 @@ fn nested_destination_and_increment_paths() {
         }
         call(&mut e, 0x14d6, 0, &[s("InventoryMenu/list"), s(spec)]);
         seen.iter()
-            .flat_map(|&(t, c)| [value_num(&e, value_of(&e, t, 0x1001)), value_num(&e, value_of(&e, c, 0x1005))])
+            .flat_map(|&(t, c)| {
+                [
+                    value_num(&e, value_of(&e, t, 0x1001)),
+                    value_num(&e, value_of(&e, c, 0x1005)),
+                ]
+            })
             .collect()
     };
     // Destination through the child: the items in order 1, 2, 3 (heights 100, 1, 10).
     assert_eq!(run(false, "num$a/num"), [-1.0, -1.0, -1.0, -1.0, -1.0, 0.0]);
-    assert_eq!(run(true, "num$a/num"), [-1.0, 100.0, -1.0, 101.0, -1.0, 0.0]);
+    assert_eq!(
+        run(true, "num$a/num"),
+        [-1.0, 100.0, -1.0, 101.0, -1.0, 0.0]
+    );
     // Increment through the child, destination the item's own width.
-    assert_eq!(run(false, "num$width$a/height"), [-1.0, -1.0, -1.0, -1.0, 0.0, -1.0]);
-    assert_eq!(run(true, "num$width$a/height"), [100.0, -1.0, 101.0, -1.0, 0.0, -1.0]);
+    assert_eq!(
+        run(false, "num$width$a/height"),
+        [-1.0, -1.0, -1.0, -1.0, 0.0, -1.0]
+    );
+    assert_eq!(
+        run(true, "num$width$a/height"),
+        [100.0, -1.0, 101.0, -1.0, 0.0, -1.0]
+    );
 }
