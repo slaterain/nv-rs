@@ -281,7 +281,10 @@ mod tests {
             [a(0), a(1), a(4), a(5), a(8), a(9), a(0x20), a(0x21)],
             [4, 4, 4, 8, 8, 16, 0x20, 0x40]
         );
-        assert_eq!((a(0x8000), a(0x8001), a(u32::MAX)), (0x8000, 0x8000, 0x8000));
+        assert_eq!(
+            (a(0x8000), a(0x8001), a(u32::MAX)),
+            (0x8000, 0x8000, 0x8000)
+        );
     }
 
     /// The hash of a text: blind to case (A to Z only), stopping at a 0, as JIP's assembly runs
@@ -302,7 +305,11 @@ mod tests {
             assert_eq!(str_hash_ci(t), manual(t), "{t:?}");
         }
         assert_eq!(str_hash_ci(b"MyVar"), str_hash_ci(b"myvar"));
-        assert_ne!(str_hash_ci(b"\xc1"), str_hash_ci(b"\xe1"), "only A to Z fold");
+        assert_ne!(
+            str_hash_ci(b"\xc1"),
+            str_hash_ci(b"\xe1"),
+            "only A to Z fold"
+        );
         assert_eq!(str_hash_ci(b"ab\0cd"), str_hash_ci(b"ab"));
         assert_eq!(str_hash_ci(b""), STR_HASH_SEED);
     }
@@ -311,7 +318,10 @@ mod tests {
     fn keys_hash_by_type() {
         assert_eq!(0x14u32.hash(), 0x14 * 13);
         assert_eq!(0x0001_8000u32.hash(), (0x0001_8000u32 * 13) ^ 3);
-        assert_eq!(0xffff_ffffu32.hash(), 0xffff_ffffu32.wrapping_mul(13) ^ 0x1_ffff);
+        assert_eq!(
+            0xffff_ffffu32.hash(),
+            0xffff_ffffu32.wrapping_mul(13) ^ 0x1_ffff
+        );
         assert_eq!(Uint(0x1234).hash(), 0x1234);
         assert!(Name(b"Abc".to_vec()).same(&Name(b"aBC".to_vec()), str_hash_ci(b"aBC")));
     }
@@ -351,7 +361,11 @@ mod tests {
         assert!(new && *v == 1);
         let (v, new) = m.emplace_with(Name(b"vAR".to_vec()), || 2);
         assert!(!new && *v == 1);
-        assert_eq!(m.iter().next().unwrap().0 .0, b"Var", "the first spelling kept");
+        assert_eq!(
+            m.iter().next().unwrap().0 .0,
+            b"Var",
+            "the first spelling kept"
+        );
     }
 
     #[test]

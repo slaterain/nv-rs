@@ -773,6 +773,6 @@ fn a_built_in_plugin_has_its_own_section() {
     delete_game(&mut e, NAME);
     assert_eq!(
         plugin_saw(),
-        ["message 11 C:\Saves\Save 7.nvse", "message 15 Save 7.fos"]
+        [r"message 11 C:\Saves\Save 7.nvse", "message 15 Save 7.fos"]
     );
 }

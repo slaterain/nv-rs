@@ -416,13 +416,16 @@ impl<'a> Bytes<'a> {
         self.take(1).map(|s| s[0])
     }
     fn u16(&mut self) -> Option<u16> {
-        self.take(2).map(|s| u16::from_le_bytes(s.try_into().unwrap()))
+        self.take(2)
+            .map(|s| u16::from_le_bytes(s.try_into().unwrap()))
     }
     fn u32(&mut self) -> Option<u32> {
-        self.take(4).map(|s| u32::from_le_bytes(s.try_into().unwrap()))
+        self.take(4)
+            .map(|s| u32::from_le_bytes(s.try_into().unwrap()))
     }
     fn u64(&mut self) -> Option<u64> {
-        self.take(8).map(|s| u64::from_le_bytes(s.try_into().unwrap()))
+        self.take(8)
+            .map(|s| u64::from_le_bytes(s.try_into().unwrap()))
     }
     fn skip(&mut self, n: usize) -> Option<()> {
         self.take(n).map(|_| ())
@@ -575,7 +578,10 @@ fn load_script_vars(e: &mut Engine, b: &mut Bytes, jg: bool) -> Option<()> {
                 // `Script::AddVariable` keeps every variable but a temporary one.
                 if name.first() != Some(&b'*') {
                     // `s_scriptVariablesBuffer()[ownerID]`: a map of 4 buckets (`ScriptVariablesMap`).
-                    let owner = saved(e).script_vars.emplace_with(id, || UnorderedMap::new(4)).0;
+                    let owner = saved(e)
+                        .script_vars
+                        .emplace_with(id, || UnorderedMap::new(4))
+                        .0;
                     *owner.emplace(Name(name)) = ScriptVar { mod_index, value };
                 }
             }
@@ -626,7 +632,9 @@ fn load_aux_vars(e: &mut Engine, b: &mut Bytes) -> Option<()> {
                     .aux_vars
                     .emplace_with(m, || UnorderedMap::new(align_bucket_count(u32::from(left))))
                     .0
-                    .emplace_with(id, || UnorderedMap::new(align_bucket_count(u32::from(room))));
+                    .emplace_with(id, || {
+                        UnorderedMap::new(align_bucket_count(u32::from(room)))
+                    });
                 while vars != 0 {
                     let len = b.u8()?;
                     if len == 0 {
@@ -913,13 +921,16 @@ fn load_appearance_undo(e: &mut Engine, b: &mut Bytes) -> Option<()> {
         }
     }
     let npc = player_base(e);
-    *saved(e).appearance_undo.emplace_with(npc, || AppearanceUndo {
-        head: Vec::new(),
-        race: 0,
-        hair: 0,
-        eyes: 0,
-        head_parts: Vec::new(),
-    }).0 = AppearanceUndo {
+    *saved(e)
+        .appearance_undo
+        .emplace_with(npc, || AppearanceUndo {
+            head: Vec::new(),
+            race: 0,
+            hair: 0,
+            eyes: 0,
+            head_parts: Vec::new(),
+        })
+        .0 = AppearanceUndo {
         head,
         race,
         hair,
@@ -990,7 +1001,11 @@ pub fn save(e: &mut Engine, r: &mut Records) {
     let jg = saved(e).jg_fixes;
     let s = e.ext::<Jip>().saved.clone();
     if !s.script_vars.is_empty() {
-        r.record(kind::SCRIPT_VARS, SCRIPT_VARS_VERSION, &(s.script_vars.len() as u16).to_le_bytes());
+        r.record(
+            kind::SCRIPT_VARS,
+            SCRIPT_VARS_VERSION,
+            &(s.script_vars.len() as u16).to_le_bytes(),
+        );
         for (owner, vars) in s.script_vars.iter() {
             r.u32(*owner);
             r.u16(vars.len() as u16);
@@ -1003,7 +1018,11 @@ pub fn save(e: &mut Engine, r: &mut Records) {
         }
     }
     if !s.aux_vars.is_empty() {
-        r.record(kind::AUX_VARS, VARS_VERSION, &(s.aux_vars.len() as u16).to_le_bytes());
+        r.record(
+            kind::AUX_VARS,
+            VARS_VERSION,
+            &(s.aux_vars.len() as u16).to_le_bytes(),
+        );
         for (mod_index, owners) in s.aux_vars.iter() {
             r.u8(*mod_index as u8);
             r.u16(owners.len() as u16);
@@ -1022,7 +1041,11 @@ pub fn save(e: &mut Engine, r: &mut Records) {
         }
     }
     if !s.ref_maps.is_empty() {
-        r.record(kind::REF_MAPS, VARS_VERSION, &(s.ref_maps.len() as u16).to_le_bytes());
+        r.record(
+            kind::REF_MAPS,
+            VARS_VERSION,
+            &(s.ref_maps.len() as u16).to_le_bytes(),
+        );
         for (mod_index, names) in s.ref_maps.iter() {
             r.u8(*mod_index as u8);
             r.u16(names.len() as u16);
@@ -1069,7 +1092,11 @@ pub fn save(e: &mut Engine, r: &mut Records) {
         }
     }
     if !s.linked_refs.is_empty() {
-        r.record(kind::LINKED_REFS, LINKED_REFS_VERSION, &(s.linked_refs.len() as u16).to_le_bytes());
+        r.record(
+            kind::LINKED_REFS,
+            LINKED_REFS_VERSION,
+            &(s.linked_refs.len() as u16).to_le_bytes(),
+        );
         for (id, link) in s.linked_refs.iter() {
             r.u32(*id);
             r.u32(link.link_id);
@@ -1092,7 +1119,11 @@ pub fn save(e: &mut Engine, r: &mut Records) {
     // `JPNP` holds only what JIP's NPC perks patch gave (step 3.9's switch), which also decides
     // which actors' perks stay at a save (alive, a teammate or loaded, ...).
     if s.npc_perks_patch && !s.npc_perks.is_empty() {
-        r.record(kind::NPC_PERKS, NPC_PERKS_VERSION, &(s.npc_perks.len() as u16).to_le_bytes());
+        r.record(
+            kind::NPC_PERKS,
+            NPC_PERKS_VERSION,
+            &(s.npc_perks.len() as u16).to_le_bytes(),
+        );
         for (id, info) in s.npc_perks.iter() {
             r.u32(*id);
             r.u8(info.ranks.len() as u8);

@@ -280,7 +280,10 @@ fn script_variables() {
     let mut w = World::new();
     let data = record(&mut w);
     set_johnny_guitar_fixes(&mut w.e, true);
-    load_file(&mut w.e, &cosave(&[chunk(kind::SCRIPT_VARS, 9, data.clone())]));
+    load_file(
+        &mut w.e,
+        &cosave(&[chunk(kind::SCRIPT_VARS, 9, data.clone())]),
+    );
     // Buckets of 8: 0x01000DEF hashes to 3, 0x01000ABC to 4.
     assert_eq!(mixed_hash(0x0100_0def) & 7, 3);
     assert_eq!(mixed_hash(0x0100_0abc) & 7, 4);
@@ -414,7 +417,10 @@ fn aux_variables() {
     assert_eq!(written(&mut w.e), before, "not changed: kept, not read");
     s(&mut w.e).changed = changed::AUX_VARS;
     load_file(&mut w.e, &cosave(&[chunk(kind::AUX_VARS, 9, Vec::new())]));
-    assert!(written(&mut w.e).is_empty(), "cleared, the old version not read");
+    assert!(
+        written(&mut w.e).is_empty(),
+        "cleared, the old version not read"
+    );
 }
 
 /// `JPRM`: by mod, name and reference; a reference neither loaded nor changed goes; written in
@@ -445,7 +451,11 @@ fn ref_maps() {
     load_file(&mut w.e, &cosave(&[chunk(kind::REF_MAPS, 10, data)]));
     // Ids in a map of 4 buckets (room for 3 references): 0x06000001 and 0x06000002 by hash.
     let (a, b) = (mixed_hash(0x0600_0001) & 3, mixed_hash(0x0600_0002) & 3);
-    let one = Out::default().u32(0x0600_0001).u8(1).u64(0.5f64.to_bits()).0;
+    let one = Out::default()
+        .u32(0x0600_0001)
+        .u8(1)
+        .u64(0.5f64.to_bits())
+        .0;
     let two = Out::default().u32(0x0600_0002).u8(4).u16(1).bytes(b"z").0;
     let refs = if a <= b {
         [one, two].concat()
@@ -485,7 +495,13 @@ fn extra_mod(index: u8, used: u32, forms: u32, values: &[u32], texts: [&[u8]; 2]
 #[test]
 fn extra_data_in_both_formats() {
     let body = |per_mod: u32| {
-        let m1 = extra_mod(6, 0b111, 0b010, &[0x4000_0000, 0x0300_0009, 5], [b"ab", b""]);
+        let m1 = extra_mod(
+            6,
+            0b111,
+            0b010,
+            &[0x4000_0000, 0x0300_0009, 5],
+            [b"ab", b""],
+        );
         let m2 = extra_mod(9, 0b1, 0, &[7], [b"", b"xyz"]);
         let size = 2 * per_mod + (8 + 12 + 2) + (8 + 4 + 3);
         Out::default()
@@ -519,7 +535,10 @@ fn extra_data_in_both_formats() {
             &mut w.e,
             &cosave(&[chunk(kind::EXTRA_DATA, other, body(per_mod))]),
         );
-        assert!(written(&mut w.e).is_empty(), "jg {jg} reads no version {other}");
+        assert!(
+            written(&mut w.e).is_empty(),
+            "jg {jg} reads no version {other}"
+        );
     }
     // A form id of a file no longer loaded: its index goes unused, its form bit with it.
     let mut w = World::new();
@@ -538,15 +557,8 @@ fn extra_data_in_both_formats() {
 #[test]
 fn a_skipped_extra_data_key() {
     let m = extra_mod(6, 1, 0, &[1], [b"", b""]);
-    let key = |key: u32, id: u32, size: u32| {
-        Out::default()
-            .u32(key)
-            .u32(id)
-            .u8(1)
-            .u32(size)
-            .bytes(&m)
-            .0
-    };
+    let key =
+        |key: u32, id: u32, size: u32| Out::default().u32(key).u32(id).u8(1).u32(size).bytes(&m).0;
     for (jg, version, per_mod, second_read) in [(false, 1, 5, false), (true, 2, 9, true)] {
         let mut w = World::new();
         w.changed(0x0700_0020);
@@ -598,7 +610,12 @@ fn linked_references() {
     w.file(0xfe, 0xff);
     s(&mut w.e).changed = changed::ALL;
     load_file(&mut w.e, &cosave(&[chunk(kind::LINKED_REFS, 9, data)]));
-    let expect = Out::default().u16(1).u32(0x0600_0001).u32(0x0600_0002).u8(6).0;
+    let expect = Out::default()
+        .u16(1)
+        .u32(0x0600_0001)
+        .u32(0x0600_0002)
+        .u8(6)
+        .0;
     assert_eq!(written(&mut w.e), [chunk(kind::LINKED_REFS, 9, expect)]);
     assert_eq!(
         s(&mut w.e).linked_refs_temp.get(&0x0600_0001),
@@ -612,8 +629,14 @@ fn linked_references() {
 fn saved_flags() {
     let mut w = World::new();
     let data = Out::default().u32(1).u32(0.5f32.to_bits()).0;
-    load_file(&mut w.e, &cosave(&[chunk(kind::SERIALIZED_VARS, 1, data.clone())]));
-    assert_eq!(saved_chunks(&mut w.e), [chunk(kind::SERIALIZED_VARS, 1, data)]);
+    load_file(
+        &mut w.e,
+        &cosave(&[chunk(kind::SERIALIZED_VARS, 1, data.clone())]),
+    );
+    assert_eq!(
+        saved_chunks(&mut w.e),
+        [chunk(kind::SERIALIZED_VARS, 1, data)]
+    );
     listen(
         &mut w.e,
         &Message {
@@ -623,7 +646,10 @@ fn saved_flags() {
         },
     );
     let reset = Out::default().u32(0).u32(1.0f32.to_bits()).0;
-    assert_eq!(saved_chunks(&mut w.e), [chunk(kind::SERIALIZED_VARS, 1, reset)]);
+    assert_eq!(
+        saved_chunks(&mut w.e),
+        [chunk(kind::SERIALIZED_VARS, 1, reset)]
+    );
 }
 
 /// `JPUA`: the player's appearance undo, its forms resolved and a gone race, hair or eyes
@@ -688,7 +714,10 @@ fn npc_perks() {
         .u8(1)
         .0;
     s(&mut w.e).changed = changed::ALL;
-    load_file(&mut w.e, &cosave(&[chunk(kind::NPC_PERKS, 10, data.clone())]));
+    load_file(
+        &mut w.e,
+        &cosave(&[chunk(kind::NPC_PERKS, 10, data.clone())]),
+    );
     assert!(written(&mut w.e).is_empty(), "no patch: not read");
     s(&mut w.e).npc_perks_patch = true;
     s(&mut w.e).changed = changed::ALL;
@@ -736,7 +765,10 @@ fn what_a_load_reads_again() {
         .u64(1)
         .0;
     tell(&mut w, msg::PRE_LOAD_GAME, b"Save 1");
-    assert_eq!((s(&mut w.e).changed, &s(&mut w.e).last_path[..]), (changed::ALL, &b"Save 1"[..]));
+    assert_eq!(
+        (s(&mut w.e).changed, &s(&mut w.e).last_path[..]),
+        (changed::ALL, &b"Save 1"[..])
+    );
     load_file(&mut w.e, &cosave(&[chunk(kind::AUX_VARS, 10, aux.clone())]));
     // `PostLoadGame`'s data is the success byte.
     listen(
@@ -755,7 +787,10 @@ fn what_a_load_reads_again() {
     load_file(&mut w.e, &cosave(&[chunk(kind::AUX_VARS, 10, Vec::new())]));
     assert_eq!(written(&mut w.e).len(), 1);
     tell(&mut w, msg::SAVE_GAME, b"Save 2");
-    assert_eq!((s(&mut w.e).changed, &s(&mut w.e).last_path[..]), (0, &b"Save 2"[..]));
+    assert_eq!(
+        (s(&mut w.e).changed, &s(&mut w.e).last_path[..]),
+        (0, &b"Save 2"[..])
+    );
     tell(&mut w, msg::PRE_LOAD_GAME, b"Save 1");
     assert_eq!(s(&mut w.e).changed, changed::ALL);
     tell(&mut w, msg::EXIT_TO_MAIN_MENU, b"");
