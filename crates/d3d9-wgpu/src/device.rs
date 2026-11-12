@@ -3948,7 +3948,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// threads. Shaders the game creates later are made in the background or on the draw that
     /// needs them, and counted ([`Made::late_shaders`]).
     fn wait_for_start(&mut self) {
-        if self.start_done {
+        // Not before the game has a shader (a multisampled target made first asks for this too).
+        if self.start_done || self.shader_bytecode.is_empty() {
             return;
         }
         self.start_done = true;
