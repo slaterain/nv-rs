@@ -86,12 +86,13 @@ const LIGHT_COLOURS: u32 = 0x011f_f6e8;
 /// The exe's 10.0 (`double`, `01020758`) and 1.0 (`double`, `01012070`).
 const TEN: u32 = 0x0102_0758;
 const ONE_DOUBLE: u32 = 0x0101_2070;
-/// The render-state setters of `bsrenderstate_xenon.cpp` this calls by address (`cdecl`): `00b98070`,
-/// `00b98180`, `00b980c0` and `00b98230`.
-const STATE_00B98070: u32 = 0x00b9_8070;
-const STATE_00B98180: u32 = 0x00b9_8180;
-const STATE_00B980C0: u32 = 0x00b9_80c0;
-const STATE_00B98230: u32 = 0x00b9_8230;
+/// The stencil state setters this calls by address (`cdecl`, the render state's): the stencil test on or
+/// off (`00b98070`, `D3DRS_STENCILENABLE`), its function, reference and mask (`00b98180`), its operations
+/// (`00b980c0`: fail, z fail, pass) and its write mask (`00b98230`).
+const STENCIL_ENABLE: u32 = 0x00b9_8070;
+const STENCIL_FUNCTION: u32 = 0x00b9_8180;
+const STENCIL_OPERATIONS: u32 = 0x00b9_80c0;
+const STENCIL_WRITE_MASK: u32 = 0x00b9_8230;
 
 // Typed from 00b864d0
 /// The water shader's slot 0x7c, `thiscall(shader, state)`. With the rendered geometry and the state's
@@ -200,18 +201,18 @@ pub fn setup_constants(e: &mut Engine, this: Ptr, state: Ptr) {
     }
     let stencil = packet::water_word(e, property, 0x84);
     if pass_type == 0x288 || pass_type == 0x289 {
-        e.call(STATE_00B98230, &args![stencil, 0u32]);
+        e.call(STENCIL_WRITE_MASK, &args![stencil, 0u32]);
     } else if packet::water_byte(e, property, 0x60) != 0 {
-        e.call(STATE_00B98070, &args![1u32, 0u32]);
+        e.call(STENCIL_ENABLE, &args![1u32, 0u32]);
         let stencil = packet::water_word(e, property, 0x84);
-        e.call(STATE_00B98180, &args![2u32, 0xffu32, stencil, 0u32]);
+        e.call(STENCIL_FUNCTION, &args![2u32, 0xffu32, stencil, 0u32]);
         let third = if pass_type == 0x29a || pass_type == 0x2ab {
             0u32
         } else {
             3
         };
-        e.call(STATE_00B980C0, &args![0u32, 0u32, third, 0u32]);
-        e.call(STATE_00B98230, &args![0xffu32, 0u32]);
+        e.call(STENCIL_OPERATIONS, &args![0u32, 0u32, third, 0u32]);
+        e.call(STENCIL_WRITE_MASK, &args![0xffu32, 0u32]);
     }
     let shade = f32::from(packet::water_byte(e, property, 0x82)).to_bits();
     for k in 0..4u32 {

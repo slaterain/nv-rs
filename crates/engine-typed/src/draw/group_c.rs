@@ -159,15 +159,12 @@ pub(super) fn map_constants(
     }
 }
 
-/// A float truncated to a 64-bit integer as `FISTP qword` does under a chopping control word, its low
-/// word: a NaN or a magnitude from 2^63 up gives the integer indefinite, whose low word is 0.
-#[allow(clippy::cast_possible_truncation)]
+/// A float truncated to a 64-bit integer as `FISTP qword` does under a chopping control word
+/// (`x87::fistp_chop64`), its low word: a NaN or a magnitude from 2^63 up gives the integer indefinite,
+/// whose low word is 0.
 pub(super) fn chop_low_word(x: f32) -> u32 {
-    if x.abs() < 9_223_372_036_854_775_808.0 {
-        (x as i64) as u32
-    } else {
-        0
-    }
+    let [b0, b1, b2, b3, ..] = engine_core::x87::fistp_chop64(f64::from(x)).to_le_bytes();
+    u32::from_le_bytes([b0, b1, b2, b3])
 }
 
 /// The pass types' flag tables `00b815e0` reads (a word each, filled at load: `011ff248`, `011ff120`),
