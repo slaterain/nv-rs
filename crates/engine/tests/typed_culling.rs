@@ -571,6 +571,36 @@ const MERGE_INPUTS: [Input; 8] = [
     Input::F32Swept(HALF_F),
 ];
 
+/// A NaN as the one quiet NaN 0x7fc00000, any other float as it is. The merge hands the squared
+/// distance of NaN centres to the square root, whose error path copies it through memory the
+/// comparison reads byte for byte; x87 and SSE pick the payload of a NaN made from two differently, and
+/// with one NaN in the inputs both pick the same.
+fn quiet_nans(bits: u32) -> u32 {
+    if (bits >> 23) & 0xff == 0xff && bits & 0x007f_ffff != 0 {
+        0x7fc0_0000
+    } else {
+        bits
+    }
+}
+
+/// A float as an integer from -64 to 64 (its bits modulo 129): centres whose differences square and
+/// sum exactly at 24 bits, so a merge's squared distance, which goes to the square root as a call's
+/// words (compared exactly), is the exe's on the main thread too.
+fn small_int(bits: u32) -> u32 {
+    (f32::from(u16::try_from(bits % 129).unwrap_or(0)) - 64.0).to_bits()
+}
+
+/// `merge`'s words for the main thread's comparison: the centres as [`small_int`]s, the radii in 2^-4
+/// to 4 ([`unit`]).
+fn merge_main_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    stand_ins(e);
+    let c = |i: usize| small_int(bits(case, i));
+    let r = |i: usize| unit(bits(case, i));
+    let a = bound_of(e, c(0), c(4), c(5), r(1));
+    let b = bound_of(e, c(2), c(6), c(7), r(3));
+    vec![a, b]
+}
+
 /// `merge`'s words for a case of [`MERGE_INPUTS`].
 fn merge_words(e: &mut Engine, case: &Case) -> Vec<u32> {
     stand_ins(e);
@@ -593,25 +623,27 @@ fn merge_words(e: &mut Engine, case: &Case) -> Vec<u32> {
 
 #[test]
 fn merge() {
-    // Under the other threads' control word bit for bit, every input.
+    // Under the other threads' control word bit for bit, every input (a NaN the one quiet NaN:
+    // [`quiet_nans`]).
     Diff::new(entry!(0x00a7_f3f0, bound::merge(Ptr<_>, Ptr<_>)))
         .common()
         .other_threads()
         .inputs(&MERGE_INPUTS)
         .max_cases(384)
-        .setup(merge_words)
+        .setup(|e, case| merge_words(e, &folded(case, quiet_nans)))
         .run()
         .assert_same();
-    // Under the main thread's, the centres and radii in 2^-4 to 4 ([`unit`]): the squared distance, the
-    // parameter and the radius are sums and quotients the exe rounds at each step and native code once,
-    // so the centre and the radius part by a few ulps of their size. Within 4 ulps, or 2^-16 in value.
+    // Under the main thread's, the centres small integers and the radii in 2^-4 to 4
+    // ([`merge_main_words`]): the parameter and the radius are sums and quotients the exe rounds at each
+    // step and native code once, so the centre and the radius part by a few ulps of their size (up to
+    // 256). Within 4 ulps, or 2^-14 in value.
     let report = Diff::new(entry!(0x00a7_f3f0, bound::merge(Ptr<_>, Ptr<_>)))
         .common()
         .main_thread(4)
-        .float_abs(2f32.powi(-16))
+        .float_abs(2f32.powi(-14))
         .inputs(&MERGE_INPUTS)
         .max_cases(384)
-        .setup(|e, case| merge_words(e, &folded(case, unit)))
+        .setup(merge_main_words)
         .run();
     println!("merge on the main thread: {report}");
     report.assert_same();
@@ -1195,12 +1227,13 @@ fn node_update_world_bound() {
         })
         .run()
         .assert_same();
-    // Under the main thread's, the floats in 2^-4 to 4 ([`unit`]): the merge of the later children's
-    // bounds (see `merge`). Within 4 ulps, or 2^-16 in value.
+    // Under the main thread's, the floats in 2^-4 to 4 ([`unit`]) and the children's centres small
+    // integers (see `merge`: the squared distances exact, the merges within their tolerance). Within 4
+    // ulps, or 2^-14 in value.
     let report = Diff::new(entry!(0x00a5_e2d0, update::node_update_world_bound(Ptr<_>)))
         .common()
         .main_thread(4)
-        .float_abs(2f32.powi(-16))
+        .float_abs(2f32.powi(-14))
         .inputs(&[
             Input::Of(&[0x0008_0000, 0, 0x0008_2000]),
             Input::F32,
@@ -1218,6 +1251,16 @@ fn node_update_world_bound() {
             e.mem.set_u32(last + 0xc, case.word(2));
             if case.word(3) == 0 {
                 e.mem.set_u32(s.node + 0x20, 0);
+            }
+            for (child, centre) in [
+                (0, [1.0f32, 2.0, 3.0]),
+                (1, [4.0, -2.0, 1.0]),
+                (3, [-3.0, 5.0, 2.0]),
+            ] {
+                let bound = e.mem.u32(s.children[child] + 0x20);
+                for (k, v) in (0u32..).zip(centre) {
+                    e.mem.set_f32(bound + 4 * k, v);
+                }
             }
             vec![s.node]
         })
@@ -1638,4 +1681,114 @@ fn update_world_transform_with_dispatch() {
         })
         .run()
         .assert_same();
+}
+
+// ---- The sums of products in the exe's order ----
+//
+// The differential tests compare the typed versions with their translations on generated floats, where
+// another order of an `f64` sum of float products almost never rounds to another float. These check the
+// order with values worked out by hand: the terms 2^31, -2^31 and 1 + 2^-23 cancel exactly to 1 + 2^-23
+// when the first two are summed first, and give 1.0 when the last two are (-2^31 + 1 + 2^-23 rounds to
+// 53 bits as a tie, to the even -(2^31 - 1)). On an engine with the translations only
+// ([`Engine::new_untyped_for_test`]): with the family on, as it is by default, a call by address would
+// reach the typed version.
+
+/// Runs `f` under the control word `word` (the thread's, as the CRT keeps it), then back to 53 bits.
+fn under(e: &mut Engine, word: u16, f: impl FnOnce(&mut Engine) -> u32) -> u32 {
+    engine_core::units::crt::set_x87_control_word(e, word);
+    let r = f(e);
+    engine_core::units::crt::set_x87_control_word(e, 0x027f);
+    r
+}
+
+/// 2^31, -2^31 and 1 + 2^-23 as floats.
+const CANCEL: [u32; 3] = [0x4f00_0000, 0xcf00_0000, 0x3f80_0001];
+
+/// `plane_through` sums `(ny py + nx px) + nz pz`; `bound_transform` its first row `(e01 y + e00 x) + e02 z`
+/// and its others in order; `frustum_planes_set` the near plane's constant `(n1 t1 + n0 t0) + n2 t2`
+/// (its normal the rotation's first column, its point the translation with a near distance of 0).
+#[test]
+fn sums_in_the_exe_order() {
+    let mut e = Engine::new_untyped_for_test();
+    stand_ins(&mut e);
+    let [big, minus_big, one_up] = CANCEL;
+    // The plane through (1, 1, 1) with the normal (nx, ny, nz) = (-2^31, 2^31, 1 + 2^-23).
+    let normal = bound_of(&mut e, minus_big, big, one_up, 0);
+    let point = bound_of(&mut e, ONE, ONE, ONE, 0);
+    // The bound at (1, 1, 1) moved by rows (e00, e01, e02) = (-2^31, 2^31, 1 + 2^-23), (2^31, -2^31,
+    // 1 + 2^-23), (2^31, -2^31, 1 + 2^-23), scale 1, no translation.
+    let t = e.mem.alloc(0x34);
+    transform_at(
+        &mut e,
+        t,
+        [
+            minus_big, big, one_up, big, minus_big, one_up, big, minus_big, one_up,
+        ],
+        [0, 0, 0],
+        ONE,
+    );
+    // The frustum: perspective, edges 1, near 0 (the near plane through the translation (1, 1, 1)); its
+    // transform's first column (m00, m10, m20) = (-2^31, 2^31, 1 + 2^-23).
+    let frustum = e.mem.alloc(0x1c);
+    for (i, w) in [ONE, ONE, ONE, ONE, 0, ONE].iter().enumerate() {
+        e.mem.set_u32(frustum + 4 * i as u32, *w);
+    }
+    let ft = e.mem.alloc(0x34);
+    transform_at(
+        &mut e,
+        ft,
+        [minus_big, 0, 0, big, ONE, 0, one_up, 0, ONE],
+        [ONE, ONE, ONE],
+        ONE,
+    );
+    for word in [0x007f, 0x027f] {
+        let plane = bound_of(&mut e, 0, 0, 0, 0);
+        let got = under(&mut e, word, |e| {
+            e.call(PLANE_THROUGH, &engine_core::args![plane, normal, point]);
+            e.mem.u32(plane + 0xc)
+        });
+        assert_eq!(
+            got, one_up,
+            "plane_through, translation, control word {word:04x}"
+        );
+        let plane = bound_of(&mut e, 0, 0, 0, 0);
+        let got = under(&mut e, word, |e| {
+            update::plane_through(e, Ptr::new(plane), Ptr::new(normal), Ptr::new(point));
+            e.mem.u32(plane + 0xc)
+        });
+        assert_eq!(got, one_up, "plane_through, typed, control word {word:04x}");
+        for typed in [false, true] {
+            let b = bound_of(&mut e, ONE, ONE, ONE, ONE);
+            let centre = under(&mut e, word, |e| {
+                if typed {
+                    update::bound_transform(e, Ptr::new(b), Ptr::new(t));
+                } else {
+                    e.call(0x00a7_fea0, &engine_core::args![b, t]);
+                }
+                e.mem.u32(b)
+            });
+            assert_eq!(
+                centre, one_up,
+                "bound_transform, typed {typed}, control word {word:04x}"
+            );
+            let planes = e.mem.alloc(0x64);
+            let constant = under(&mut e, word, |e| {
+                if typed {
+                    planes::frustum_planes_set(
+                        e,
+                        Ptr::new(planes),
+                        Ptr::new(frustum),
+                        Ptr::new(ft),
+                    );
+                } else {
+                    e.call(0x00a7_4e10, &engine_core::args![planes, frustum, ft]);
+                }
+                e.mem.u32(planes + 0xc)
+            });
+            assert_eq!(
+                constant, one_up,
+                "frustum_planes_set, typed {typed}, control word {word:04x}"
+            );
+        }
+    }
 }

@@ -746,6 +746,47 @@ fn particles_bound_update() {
         modifiers::bound_update(Ptr<_>, f32, Ptr<_>)
     ))
     .common()
+    .control_words(&[0x027f])
+    .allow_nan_payloads()
+    .inputs(&inputs(&[
+        &[
+            Input::Of(&[100, 150, 200]),
+            Input::Of(&[3, 4]),
+            Input::Of(&[0, 1, 2]),
+        ],
+        &P3,
+    ]))
+    .max_cases(128)
+    .setup(|e, case| {
+        stand_ins(e);
+        let count = case.word(0);
+        let d = particle_data(e, case, count, count, 3);
+        let chain = block(e, 8, &[0x0120_2558, 0]);
+        set_answer(e, d, chain);
+        let s = particle_system(e, case, d, &[], 3);
+        let m = modifier(e, 0x20, s);
+        e.mem.set_u16(m + 0x18, case.word(1) as u16);
+        e.mem.set_u16(m + 0x1a, case.word(2) as u16);
+        let bounds = e.mem.alloc(0x10 * 4);
+        for i in 0..4 {
+            words(
+                e,
+                bounds + 0x10 * i,
+                &[ONE, TWO, HALF, [ONE, TWO, 0, HALF][i as usize]],
+            );
+        }
+        e.mem.set_u32(m + 0x1c, bounds);
+        vec![m, bits(case, 3), d]
+    })
+    .run()
+    .assert_same();
+    // The same on the main thread's word with the merge by address.
+    Diff::new(entry!(
+        0x00c2_df20,
+        modifiers::bound_update(Ptr<_>, f32, Ptr<_>)
+    ))
+    .culling_translated()
+    .control_words(&[0x007f])
     .inputs(&inputs(&[
         &[
             Input::Of(&[100, 150, 200]),

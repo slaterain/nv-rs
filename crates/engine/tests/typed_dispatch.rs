@@ -2768,11 +2768,41 @@ fn scene_skin_bound() {
     // The bones (0: only the first bone's bound); bone 1's world scale (1.0 among the values takes
     // the fast path); bone 1's radius; the root-to-skin scale, the transforms' first entries and bone
     // 0's radius.
+    // Under the other threads' control word bit for bit, every input; under the main thread's with the
+    // culling family's merge and bound updates by address ([`Common::culling_translated`]): their native sums
+    // part from the exe in the last bits there, which their own tests compare.
     Diff::new(entry!(
         0x00a8_6530,
         engine_typed::scene::skin::skin_bound(Ptr<_>, Ptr<_>)
     ))
     .common(0x00a8_6530)
+    .control_words(&[OTHER_THREADS])
+    // The transform product copies the scale as it is (a signalling NaN radius's scale keeps its payload).
+    .allow_nan_payloads()
+    .inputs(&inputs(&[
+        &[
+            Input::Of(&[0, 1, 2, 3]),
+            Input::Of(&[ONE, TWO, HALF, 0x7fc0_0000, 0]),
+            Input::Of(RADII),
+        ],
+        &P3,
+    ]))
+    .max_cases(256)
+    .setup(|e, case| {
+        stand_ins(e);
+        merge_constants(e);
+        let s = skin(e, case, case.word(0), case.word(1), case.word(2), 3);
+        let bound = block(e, 0x10, &[ONE, TWO, HALF, THIRD]);
+        vec![s, bound]
+    })
+    .run()
+    .assert_same();
+    Diff::new(entry!(
+        0x00a8_6530,
+        engine_typed::scene::skin::skin_bound(Ptr<_>, Ptr<_>)
+    ))
+    .culling_translated(0x00a8_6530)
+    .control_words(&[MAIN_THREAD])
     // The transform product copies the scale as it is (a signalling NaN radius's scale keeps its payload).
     .allow_nan_payloads()
     .inputs(&inputs(&[
@@ -2827,15 +2857,16 @@ fn scene_skin_bound_from_culling() {
     })
     .run()
     .assert_same();
-    // Under the main thread's, the floats in 2^-4 to 4 ([`unit`]): the bound moved by the world transform (the
-    // culling family's `bound_transform`, its rows' sums of products in `f64`). Within 4 ulps, or 2^-13 in value.
+    // Under the main thread's with the culling family's other functions by address
+    // ([`Common::culling_translated`]): the bound moved by the world transform and the skin's merges run
+    // translated (their native sums part from the exe in the last bits there, which their own tests
+    // compare); this function's own work, bit for bit.
     let report = Diff::new(entry!(
         0x00a8_0710,
         culling::update::geometry_update_world_bound(Ptr<_>)
     ))
-    .common(0x00a8_0710)
-    .main_thread(4)
-    .float_abs(2f32.powi(-13))
+    .culling_translated(0x00a8_0710)
+    .main_thread(0)
     .inputs(&inputs(&[
         &[
             Input::Of(&[1, 2, 3]),
@@ -2846,7 +2877,6 @@ fn scene_skin_bound_from_culling() {
     ]))
     .max_cases(96)
     .setup(|e, case| {
-        let case = &folded(case, unit);
         stand_ins(e);
         merge_constants(e);
         let g = geometry(e, case, case.word(2), 3);
