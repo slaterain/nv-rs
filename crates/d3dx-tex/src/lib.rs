@@ -35,14 +35,17 @@
 //! precisions (`data/formats_32bit*.tsv`), against its picks for every format of its table on the
 //! reference GPU (`data/device_formats_32bit.tsv`), and on proxy devices that take other formats
 //! (`data/proxy_32bit*.tsv`, `d3dx-measure serve proxy`: its picks and the textures it makes).
+//! And the levels D3DX resamples (`triangle`): a side that is not a power of two (yUI's HUD icons:
+//! 8x24, 24x24, 48x48, 32x48) or a DXT side that is not a multiple of 4 makes a larger texture,
+//! and each level the file has is resampled into it with D3DX's triangle filter (its edges
+//! wrapped, mirrored in a cube map); checked against the DLL at both precisions
+//! (`data/npot_32bit*.tsv`, 12 of whose 16 files the DLL makes differently at 24 and 53 bits).
 //!
 //! What D3DX also does and this crate does not (yet) is [`Error::NotProvided`]: image files
-//! other than DDS, volume textures, DDS pixel formats other than DXT1/3/5, A8R8G8B8, X8R8G8B8,
-//! R8G8B8, A4R4G4B4 and the ones above, and a top level D3DX resamples (a size that is not a
-//! power of two, a DXT side that is not a multiple of 4; its triangle filter), each with its
-//! kind ([`Untranslated`]). None of the game's textures needs them. DDS files whose FourCC
-//! D3DX's DDS table does not have (ATI1, ATI2/BC5, DX10) are refused by the DLL itself
-//! (`D3DXERR_INVALIDDATA`), and so here.
+//! other than DDS, volume textures, and DDS pixel formats other than DXT1/3/5, A8R8G8B8,
+//! X8R8G8B8, R8G8B8, A4R4G4B4 and the ones above, each with its kind ([`Untranslated`]). None of
+//! the game's textures needs them. DDS files whose FourCC D3DX's DDS table does not have (ATI1,
+//! ATI2/BC5, DX10) are refused by the DLL itself (`D3DXERR_INVALIDDATA`), and so here.
 //!
 //! Speed (2026-11-08, all the game's textures, `d3dx-tex-verify --time` against the 64-bit DLL
 //! creating on a real device and reading back): on one core about 10% faster than the 64-bit DLL
@@ -64,6 +67,7 @@ pub mod num;
 pub(crate) mod pixel;
 #[doc(hidden)]
 pub mod synthetic;
+mod triangle;
 
 #[doc(hidden)]
 pub use device::choose;

@@ -542,6 +542,8 @@ fn time_both(
 /// `--capture-formats <out.tsv> --serve <d3dx-measure.exe>`: the same for
 /// `d3dx_tex::synthetic::formats` (the formats translated for mods' textures):
 /// `crates/d3dx-tex/data/formats_32bit.tsv`, `formats_32bit_double.tsv` with `--double`.
+/// `--capture-npot <out.tsv> --serve <d3dx-measure.exe>`: the same for `d3dx_tex::synthetic::npot`
+/// (files D3DX resamples): `crates/d3dx-tex/data/npot_32bit.tsv`, `npot_32bit_double.tsv`.
 /// `--capture-headers <out.tsv> --serve <d3dx-measure.exe>`: `d3dx_tex::synthetic::header_files`
 /// (headers that push D3DX's DDS loader's sizes) through the 32-bit DLL's image info and create
 /// calls, each file in a process of its own, so a crash ends only its own answer. One line each:
@@ -619,6 +621,7 @@ fn capture_synthetic(out: &std::path::Path, serve: &str, set: &str) {
     let files = match set {
         "files" => d3dx_tex::synthetic::files(),
         "formats" => d3dx_tex::synthetic::formats(),
+        "npot" => d3dx_tex::synthetic::npot(),
         other => panic!("no synthetic set {other}"),
     };
     let mut child = std::process::Command::new(serve)
@@ -773,6 +776,121 @@ fn capture_proxy(out: &std::path::Path, serve: &str) {
     drop(child.stdin.take());
     child.wait().unwrap();
     std::fs::write(out, text).unwrap();
+}
+
+/// `--compare <folder> --serve <d3dx-measure.exe> [--double]`: every DDS texture of a mod folder
+/// (its BSAs' entries and its loose files, read only) through the 32-bit DLL (`d3dx-measure
+/// serve`, on this machine's device; the cube call for a cube map, as the game picks by the image
+/// info) and through `d3dx-tex` (with the reference device's lists: this machine's), compared
+/// level by level: answer, level and face counts, every surface's format, size and bytes. Prints
+/// the counts and each file that is not the same.
+fn compare_folder(dir: &std::path::Path, serve: &str) {
+    use std::io::Read;
+    fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    let mut items: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut paths = Vec::new();
+    walk(dir, &mut paths);
+    paths.sort();
+    let is_dds = |p: &str| p.to_ascii_lowercase().ends_with(".dds");
+    for p in &paths {
+        let rel = p.strip_prefix(dir).unwrap().to_string_lossy().to_string();
+        if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("bsa")) {
+            let archive = bsa::Archive::open(p).expect("an archive");
+            for e in archive.files().iter().filter(|e| is_dds(&e.path)) {
+                items.push((format!("{rel}:{}", e.path), archive.read(e).expect("an entry")));
+            }
+        } else if is_dds(&rel) {
+            items.push((rel, std::fs::read(p).unwrap()));
+        }
+    }
+    let mut child = std::process::Command::new(serve)
+        .arg("serve")
+        .args(DOUBLE.load(Ordering::Relaxed).then_some("thread"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("d3dx-measure serve");
+    fn rd(o: &mut impl Read) -> u32 {
+        let mut b = [0u8; 4];
+        o.read_exact(&mut b).unwrap();
+        u32::from_le_bytes(b)
+    }
+    fn send(child: &mut std::process::Child, kind: u32, data: &[u8]) {
+        let stdin = child.stdin.as_mut().unwrap();
+        stdin.write_all(&kind.to_le_bytes()).unwrap();
+        stdin.write_all(&(data.len() as u32).to_le_bytes()).unwrap();
+        stdin.write_all(data).unwrap();
+        stdin.flush().unwrap();
+    }
+    let caps = d3dx_tex::Caps::default();
+    let (mut same, mut left, mut differ) = (0, 0, Vec::new());
+    for (name, data) in &items {
+        send(&mut child, 3, data);
+        let o = child.stdout.as_mut().unwrap();
+        let hr = rd(o);
+        let words: Vec<u32> = (0..7).map(|_| rd(o)).collect();
+        let cube = hr == 0 && words[5] == 5;
+        send(&mut child, if cube { 2 } else { 1 }, data);
+        let o = child.stdout.as_mut().unwrap();
+        let (hr, levels, faces) = (rd(o), rd(o), rd(o));
+        let mut theirs = Vec::new();
+        for _ in 0..levels * faces {
+            let (format, w, h, len) = (rd(o), rd(o), rd(o), rd(o));
+            let mut bytes = vec![0u8; len as usize];
+            o.read_exact(&mut bytes).unwrap();
+            theirs.push((format, w, h, bytes));
+        }
+        let ours = if cube {
+            d3dx_tex::create_cube_texture_from_file_in_memory(data, &caps, precision())
+        } else {
+            d3dx_tex::create_texture_from_file_in_memory(data, &caps, precision())
+        };
+        match ours {
+            Err(d3dx_tex::Error::NotProvided(_, why)) => {
+                left += 1;
+                println!("left to the DLL: {name}: {why} (the DLL: {hr:#x})");
+            }
+            Err(d3dx_tex::Error::D3dx(ours)) if ours == hr => same += 1,
+            Err(d3dx_tex::Error::D3dx(ours)) => {
+                differ.push(format!("{name}: ours {ours:#x}, the DLL's {hr:#x}"))
+            }
+            Ok(t) => {
+                let ok = hr == 0
+                    && (t.levels, t.faces) == (levels, faces)
+                    && t.surfaces.iter().zip(&theirs).all(|(s, (f, w, h, b))| {
+                        (s.format, s.width, s.height) == (*f, *w, *h) && s.bytes == *b
+                    });
+                if ok {
+                    same += 1;
+                } else {
+                    differ.push(format!(
+                        "{name}: {}x{} format {:#x}, {} levels",
+                        t.surfaces[0].width, t.surfaces[0].height, t.surfaces[0].format, t.levels
+                    ));
+                }
+            }
+        }
+    }
+    drop(child.stdin.take());
+    child.wait().unwrap();
+    for d in &differ {
+        println!("DIFFERS: {d}");
+    }
+    println!(
+        "{} textures at x87 control word {:#x}: {same} the same as the DLL's, {left} left to the DLL, {} different",
+        items.len(),
+        control_word(),
+        differ.len()
+    );
 }
 
 /// `--capture-rows <out.tsv> --serve <d3dx-measure.exe>`: D3DX's same-size conversion of
@@ -1280,6 +1398,14 @@ fn main() {
                 capture_synth = Some((PathBuf::from(&args[i + 1]), "formats"));
                 i += 1;
             }
+            "--compare" => {
+                capture_synth = Some((PathBuf::from(&args[i + 1]), "compare"));
+                i += 1;
+            }
+            "--capture-npot" => {
+                capture_synth = Some((PathBuf::from(&args[i + 1]), "npot"));
+                i += 1;
+            }
             "--capture-proxy" => {
                 capture_synth = Some((PathBuf::from(&args[i + 1]), "proxy"));
                 i += 1;
@@ -1339,6 +1465,10 @@ fn main() {
             &out,
             serve_exe.as_deref().expect("--serve <d3dx-measure.exe>"),
         );
+        return;
+    }
+    if let Some((dir, "compare")) = &capture_synth {
+        compare_folder(dir, serve_exe.as_deref().expect("--serve <d3dx-measure.exe>"));
         return;
     }
     if let Some((out, "proxy")) = &capture_synth {
