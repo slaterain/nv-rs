@@ -9833,11 +9833,12 @@ fn lighting30_fog() {
     .common()
     .main_thread(0)
     .inputs(&[
-        Input::Of(&[0, u32::MAX]),
+        Input::Of(&[u32::MAX, 0]),
         Input::F32,
         Input::F32Swept(0x3f00_0000),
         Input::F32Swept(0x4120_0000),
-        Input::Flag,
+        // The fog distances: both 0.0, both set, only the far one, only the near one.
+        Input::Of(&[0, 1, 2, 3]),
         Input::F32Swept(0x4680_0000),
         Input::F32Swept(0x4500_0000),
     ])
@@ -9853,8 +9854,10 @@ fn lighting30_fog() {
             set(e, 0x011f_9604 + 4 * k, v);
         }
         set(e, 0x011f_9610, 0x4400_0000);
-        if c.word(4) != 0 {
+        if c.word(4) == 1 || c.word(4) == 2 {
             set(e, 0x011f_9618, play_bits(c, 5));
+        }
+        if c.word(4) == 1 || c.word(4) == 3 {
             set(e, 0x011f_9614, play_bits(c, 6));
         }
         set(e, 0x0101_2054, 0xbf80_0000);
@@ -9951,14 +9954,14 @@ fn lighting30_setup_switches() {
 /// the alpha property (none in mode 8 only, its flags 0, 9, field 2); the old ambient fog byte; the
 /// light-scaled path's alpha test answer and first active light (none, one).
 const LIGHTING30_MATERIAL: &[Input] = &[
-    Input::Of(&[8, 10, 3]),
+    Input::Of(&[3, 8, 10]),
     Input::Of(&[0x1bd, 0x1c3, 0x1c4]),
     Input::F32,
-    Input::Of(&[0, 0x2_0000, 0x8000]),
+    Input::Of(&[0x8000, 0, 0x2_0000]),
     Input::Of(&[0, 1, 2, 3]),
     Input::Flag,
     Input::Of(&[0, 1]),
-    Input::Of(&[0, 1]),
+    Input::Of(&[1, 0]),
 ];
 
 /// The material's words: the entries, the defaults (`011a9be0`), the exe's 255.0; the property (its
@@ -10012,9 +10015,17 @@ fn lighting30_material_words(e: &mut Engine, c: &Case) -> Vec<u32> {
             ..Ret::default()
         }
     });
-    for addr in [0x0043_9ef0u32, 0x0063_3b40] {
-        e.register(addr, marked);
-    }
+    e.register(0x0043_9ef0, marked);
+    // A point times a scalar (`00633b40`: the point, the result, the scale): the result written, so the
+    // light's colour length (scaled by its fade) can exceed the sun's and be the one chosen.
+    e.register(0x0063_3b40, |e, a| {
+        let scale = f32::from_bits(a[2]);
+        for k in 0..3u32 {
+            let value = f32::from_bits(e.mem.u32(a[0] + 4 * k)) * scale;
+            e.mem.set_u32(a[1] + 4 * k, value.to_bits());
+        }
+        ret(a[1])
+    });
     let node = e.mem.alloc(0x200);
     let list = e.mem.alloc(0x100);
     let sun = e.mem.alloc(0x100);
@@ -10229,6 +10240,8 @@ const LIGHTING30_LIGHTS: &[Input] = &[
     Input::Of(&[0, 0x3f80_0000, 0x4000_0000, 0x3fc0_0000]),
     Input::Flag,
     Input::F32,
+    // The exe's limit on the light count: above the pass's two lights, and below them.
+    Input::Of(&[4, 1]),
 ];
 
 /// The lights' words: the entries, the setters stood in (each writing its index into the light colour
@@ -10262,7 +10275,7 @@ fn lighting30_lights_words(e: &mut Engine, c: &Case) -> Vec<u32> {
         set(e, 0x011a_9bd0 + 4 * k, 0x3d00_0000 + k);
         set(e, 0x0120_1b30 + 4 * k, 0x3d80_0000 + k);
     }
-    set(e, 0x011a_e60c, 4);
+    set(e, 0x011a_e60c, c.word(8));
     set(e, 0x0101_6248, HALF);
     let active = c.word(4);
     set(e, RETS + 0x3f8, active * 2);
@@ -10367,11 +10380,13 @@ const LIGHTING30_HELPERS: &[u32] = &[
 const LIGHTING30_CONSTANTS: &[Input] = &[
     Input::Of(&[0x1d4, 0x1e0, 0xe, 0x1c4, 0x1c7, 0x30]),
     Input::Flag,
-    Input::Of(&[0, u32::MAX]),
+    Input::Of(&[u32::MAX, 0]),
     Input::Of(&[0, 1, 2, 3]),
     Input::Flag,
     Input::Of(&[0, 1, 2]),
     Input::F32,
+    // The refraction count (+0xe4, an integer): small, one past a float's 24 bits, negative.
+    Input::Of(&[3, 0x0100_0001, 0xffff_fffd]),
 ];
 
 /// The geometry set-up's words: the world's renderer as the shader's (its light matrices at +0x980 and
@@ -10458,7 +10473,7 @@ fn lighting30_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
     set(e, 0x011f_91e0, pass);
     set(e, 0x011f_91e4, pass_type);
     let property = lighting30_property(e, 0, 0, HALF);
-    set(e, property + 0xe4, 3);
+    set(e, property + 0xe4, c.word(7));
     // No lights on the property (its light list empty), and the exe's limit on the light count.
     let list = e.mem.alloc(8);
     set(e, property + 0xb4, list);
