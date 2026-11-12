@@ -136,7 +136,7 @@ pub(crate) fn form_representation(e: &mut Engine, form: u32) -> Vec<u8> {
 // ArrayElement::GetStringRepresentation.
 /// An element: its number, its form (or "null" for an id no form has), its string in quotes or
 /// its array (or "invalid array").
-fn element_representation(e: &mut Engine, data: &Data) -> Vec<u8> {
+pub(crate) fn element_representation(e: &mut Engine, data: &Data) -> Vec<u8> {
     match data {
         Data::Invalid => b"invalid".to_vec(),
         Data::Number(v) => g(e, *v),

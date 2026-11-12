@@ -419,8 +419,9 @@ fn list_boxes_are_sorted_by_their_keys() {
 
 /// `SortUIListBox` by numbers: a string trait read as a number with `#` ("9" before "25" before
 /// "100", not as text), a float trait, a float trait reversed; positions written to the spec's
-/// own destination with `_y` left alone. A key through a child (`a/num`) is looked up whole for
-/// every item (xNVSE finds it only for the first; see the module's notes).
+/// own destination with `_y` left alone. A key through a child (`a/num`): vanilla finds it only for
+/// the first item met (xNVSE cuts the spec's path at its slash), so only that one moves; with the
+/// fixes row every item is found.
 #[test]
 fn list_boxes_sort_by_numbers_into_their_own_destination() {
     let mut e = setup();
@@ -473,13 +474,13 @@ fn list_boxes_sort_by_numbers_into_their_own_destination() {
         &[s("InventoryMenu/list"), s("-num$width")],
     );
     assert_eq!(read(&e, 0x1001), [10.0, 0.0, 11.0]);
-    // The same order through a child's trait, for every item.
-    call(
-        &mut e,
-        0x14d6,
-        0,
-        &[s("InventoryMenu/list"), s("a/num$width")],
-    );
+    // Through a child's trait: only the first item met (hundred) is found, and goes to 0.
+    let nested = [s("InventoryMenu/list"), s("a/num$width")];
+    call(&mut e, 0x14d6, 0, &nested);
+    assert_eq!(read(&e, 0x1001), [0.0, 0.0, 11.0]);
+    // With the row, every item: the order 1, 2, 3.
+    super::super::array::set_fix(&mut e, super::super::array::UI_SORT_PATHS, true);
+    call(&mut e, 0x14d6, 0, &nested);
     assert_eq!(read(&e, 0x1001), [100.0, 101.0, 0.0]);
     assert_eq!(read(&e, 0x1003), [-1.0, -1.0, -1.0]);
 }

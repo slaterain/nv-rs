@@ -49,7 +49,7 @@ pub const MAX_MADE: usize = 1 << 23;
 /// reads them.
 #[derive(Default)]
 pub struct CommandFixes {
-    rows: [AtomicBool; 4],
+    rows: [AtomicBool; 5],
 }
 
 /// `NV_NVSE_SIZE_CAPS`: arrays made or grown here stop at [`MAX_MADE`] elements, an empty text
@@ -67,6 +67,9 @@ pub const CYCLE_GUARD: usize = 2;
 /// vtable (`inventory_items.rs`, `new_extra_list`), and the token commands search on without xNVSE's
 /// null reads (`inventory_info.rs`, `null_read_in_the_token_search`).
 pub const LIST_GUARD: usize = 3;
+/// `NV_NVSE_UI_SORT_PATHS`: `SortUIListBox` looks every item's key, destination and increment up with
+/// the whole path; xNVSE cuts a path at its first slash after its first lookup (`ui.rs`).
+pub const UI_SORT_PATHS: usize = 4;
 
 /// Turns one of the rows on or off (the host's fix rows; before the game's threads start).
 pub fn set_fix(e: &mut Engine, row: usize, on: bool) {

@@ -173,6 +173,7 @@ Each also has a `[nv-rs Fixes]` key in `Fallout.ini` (`bUncap` ... `bNVSEListGua
 | `NV_NVSE_NULL_GUARD` | Script missing array guard | `host/fixes.rs` |
 | `NV_NVSE_CYCLE_GUARD` | Script array cycle guard | `host/fixes.rs` |
 | `NV_NVSE_LIST_GUARD` | Script list and scan guard | `host/fixes.rs` |
+| `NV_NVSE_UI_SORT_PATHS` | Script UI list sort by nested paths | `host/fixes.rs` |
 
 ### 3. Set by Play.exe
 

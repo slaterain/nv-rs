@@ -1,8 +1,8 @@
 //! xNVSE's `Commands_Script.cpp` (xNVSE), the rest after `script.rs`: a form's script read, set
 //! and taken away (`IsScripted`, `GetScript`, `RemoveScript`, `SetScript`, `RunScript`), another
 //! script's variables by name (`GetVariable` and its kin, `SetVariable` and its kin), scripts
-//! compared, a script's variables reset, its literal references counted and read, and the calling
-//! script.
+//! compared, a script's variables reset, its literal references counted and read, the calling
+//! script, and the ternary operator as a command (`Ternary`, `TernaryUDF`).
 //!
 //! Read from xNVSE's source (xNVSE 6.4.9, `0ccd23a`). Kept as xNVSE has them:
 //! `GetNthExplicitRef` looks the FIRST literal reference up again on every pass of its loop, so
@@ -60,6 +60,18 @@ const SET_STR_VARIABLE: &[Param] = &[
     p("quest", QUEST, true),
 ];
 const COMPARE_SCRIPTS: &[Param] = &[p("script", OBJECT_ID, false), p("script", OBJECT_ID, false)];
+/// `kNVSEParams_Ternary` (a boolean, then two results of any type) and `kNVSEParams_TernaryUDF` (a
+/// value, then two forms: the functions).
+const TERNARY: &[Param] = &[
+    p("condition", 0x8002, false),
+    p("resultIfTrue", 0, false),
+    p("resultIfFalse", 0, false),
+];
+const TERNARY_UDF: &[Param] = &[
+    p("value", 0x804d, false),
+    p("callIfTrue (UDF)", 0x8008, false),
+    p("callIfFalse (UDF)", 0x8008, false),
+];
 
 const fn cmd(
     opcode: u32,
@@ -105,6 +117,8 @@ pub static COMMANDS: &[Command] = &[
     cmd(0x15be, "SetVariable", "", "sets the value of a variable by name", SET_NUM_VARIABLE, set_variable, RD),
     cmd(0x15bf, "SetRefVariable", "", "sets the value of a variable by name", SET_REF_VARIABLE, set_ref_variable, RD),
     cmd(0x167c, "GetStringVariable", "", "looks up a string variable by name on the calling object or specified quest", GET_VARIABLE, get_string_variable, Returns::String),
+    cmd(0x1639, "TernaryUDF", "", "The ternary operator as a function, calling one of 2 UDFs.", TERNARY_UDF, ternary_udf, Returns::Ambiguous),
+    cmd(0x166e, "Ternary", "", "The ternary operator as a function, for real this time", TERNARY, ternary, Returns::Ambiguous),
     cmd(0x167d, "SetStringVariable", "", "sets the value of a variable by name", SET_STR_VARIABLE, set_string_variable, RD),
 ];
 
@@ -701,6 +715,78 @@ fn get_current_script(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let id = form_id(e, a.script);
     e.mem.set_u32(a.result, id);
+    handled(true)
+}
+
+// ---- the ternary operator ----
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Script.cpp:
+// TernaryEvaluator::ExtractArgs, Cmd_Ternary_Execute.
+/// Three expressions: the condition, then only the one it picks is evaluated (the other is stepped
+/// over), and that one's value is the result, by its own type. Not three arguments, or a condition
+/// or result that fails: the result stays 0 (xNVSE reads through a failed condition and stops the
+/// game).
+fn ternary(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    a.set_result(e, 0.0);
+    let mut ev = crate::expr::Eval::new(e, &a);
+    crate::expr::with_evaluator(e, |e| {
+        if ev.read_byte(e) != 3 {
+            return;
+        }
+        let Some(condition) = ev.evaluate(e) else {
+            return;
+        };
+        let chosen = if ev.get_bool(e, &condition) {
+            let r = ev.evaluate(e);
+            ev.skip_expression(e);
+            r
+        } else {
+            ev.skip_expression(e);
+            ev.evaluate(e)
+        };
+        if let Some(t) = chosen {
+            ev.assign_result(e, &t);
+        }
+    });
+    crate::expr::report(e, &ev);
+    handled(true)
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Script.cpp:
+// Cmd_TernaryUDF_Execute.
+/// The first value's truth picks one of two functions, called with no arguments on the calling
+/// reference; its answer is the result, by its own type. Nothing for a value with no basic type or
+/// a pick that is not a function.
+fn ternary_udf(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    a.set_result(e, 0.0);
+    let mut ev = crate::expr::Eval::new(e, &a);
+    crate::expr::with_evaluator(e, |e| {
+        let Some(toks) = ev.extract_args(e) else {
+            return;
+        };
+        let Some(value) = toks
+            .first()
+            .and_then(|t| crate::functions::to_basic(e, &ev, t))
+        else {
+            return;
+        };
+        let pick = if ev.get_bool(e, &value) { 1 } else { 2 };
+        let function = match toks.get(pick) {
+            Some(t) => crate::tick::user_function(e, &ev, t),
+            None => 0,
+        };
+        if function == 0 {
+            return;
+        }
+        let caller =
+            crate::functions::Caller::internal(function, a.this_obj, a.containing_obj, Vec::new());
+        if let Some(t) = crate::functions::call(e, caller) {
+            ev.assign_result(e, &t);
+        }
+    });
+    crate::expr::report(e, &ev);
     handled(true)
 }
 

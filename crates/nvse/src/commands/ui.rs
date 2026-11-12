@@ -11,14 +11,16 @@
 //! items with MSVC's `std::sort` (not stable), so items that compare equal end where it puts
 //! them.
 //!
-//! Two differences, both kept on purpose. xNVSE keeps the trait values it found in one cache
-//! keyed by the path alone, shared by the lookups with and without `Alt`, and empties it whenever
-//! a tile is made or destroyed. Here every call looks the value up: the answers differ only when a
-//! script reads the same path both ways under a parent with several children of one name, where
-//! xNVSE answers the first form's child for both until a tile changes. And `SortUIListBox` with a
-//! `/` in a key, destination or increment path: xNVSE's lookup writes a 0 over the path's slashes
-//! in the spec itself, so only the first shown item is found by it and every later item is
-//! skipped (the list does not sort). Here every item is looked up with the whole path.
+//! One difference, kept on purpose. xNVSE keeps the trait values it found in one cache keyed by
+//! the path alone, shared by the lookups with and without `Alt`, and empties it whenever a tile is
+//! made or destroyed. Here every call looks the value up: the answers differ only when a script
+//! reads the same path both ways under a parent with several children of one name, where xNVSE
+//! answers the first form's child for both until a tile changes.
+//!
+//! A fixes row ([`super::array::UI_SORT_PATHS`]): `SortUIListBox` with a `/` in a key, destination
+//! or increment path. xNVSE's lookup writes a 0 over the path's slashes in the spec itself, so
+//! only the first shown item is found by it and every later item is skipped (the list does not
+//! sort); that is vanilla. With the row every item is looked up with the whole path.
 
 use super::string::{format_string_args_at, Formatted};
 use super::{console_print, double_words, is_console_mode, Read};
@@ -810,6 +812,21 @@ fn sorts_before(keys: &[(Vec<u8>, u32)], l: &[SortValue], r: &[SortValue]) -> bo
     false
 }
 
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameTiles.cpp: Tile::GetComponent, as
+// SortUIListBox calls it on its spec's own strings.
+/// A spec path's value on `tile`. xNVSE's lookup writes a 0 over each slash it walks past, in the
+/// spec's string itself, so after the first lookup the path ends at its first slash; the fixes
+/// row ([`super::array::UI_SORT_PATHS`], `whole`) keeps the whole path for every item.
+fn spec_lookup(e: &mut Engine, tile: u32, path: &mut Vec<u8>, whole: bool) -> u32 {
+    let value = component_value(e, tile, path);
+    if !whole {
+        if let Some(at) = slash_pos(path) {
+            path.truncate(at);
+        }
+    }
+    value
+}
+
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_UI.cpp: Cmd_SortUIListBox_Execute.
 /// The visible items of a list box (`listindex` 0 or more, every key there) put in order: each
 /// item's destination trait (`_y`) set to the running sum of the items' increment traits
@@ -821,7 +838,8 @@ fn sort_ui_list_box(e: &mut Engine, w: &[u32]) -> Ret {
     if !read.ok {
         return handled(true);
     }
-    let spec = parse_spec(&read.text(1));
+    let mut spec = parse_spec(&read.text(1));
+    let whole = super::array::fix_on(e, super::array::UI_SORT_PATHS);
     let parent = menu_component_tile(e, &read.text(0));
     if parent == 0 {
         return handled(true);
@@ -844,8 +862,9 @@ fn sort_ui_list_box(e: &mut Engine, w: &[u32]) -> Ret {
             if shown {
                 let mut values = Vec::new();
                 let mut skip = false;
-                for (path, flags) in &spec.keys {
-                    let value = component_value(e, tile, path);
+                for (path, flags) in spec.keys.iter_mut() {
+                    let flags = *flags;
+                    let value = spec_lookup(e, tile, path, whole);
                     if value == 0 {
                         skip = true;
                         break;
@@ -882,12 +901,12 @@ fn sort_ui_list_box(e: &mut Engine, w: &[u32]) -> Ret {
     let mut current: f32 = 0.0;
     for &i in &order {
         let tile = items[i].0;
-        let increment = component_value(e, tile, &spec.increment);
+        let increment = spec_lookup(e, tile, &mut spec.increment, whole);
         if increment == 0 {
             continue;
         }
         let step = value_num(e, increment);
-        let destination = component_value(e, tile, &spec.destination);
+        let destination = spec_lookup(e, tile, &mut spec.destination, whole);
         if destination == 0 {
             continue;
         }

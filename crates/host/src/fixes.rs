@@ -48,6 +48,7 @@ pub static FIXES: &[Fix] = &[
     SCRIPT_NULL_GUARD,
     SCRIPT_CYCLE_GUARD,
     SCRIPT_LIST_GUARD,
+    SCRIPT_UI_SORT_PATHS,
     SHADER_WARM,
     IO_WAIT_ENDS_ON_COMPLETION,
     crate::half_loaded_move::FIX,
@@ -338,6 +339,19 @@ fn install_script_list_guard(e: &mut Engine) {
     nvse::commands::array::set_fix(e, nvse::commands::array::LIST_GUARD, true);
 }
 
+pub const SCRIPT_UI_SORT_PATHS: Fix = Fix {
+    name: "script UI list sort by nested paths",
+    env: "NV_NVSE_UI_SORT_PATHS",
+    addresses: &[],
+    summary:
+        "SortUIListBox with a key, destination or increment path through a child tile finds it on every item; xNVSE finds it only on the first and the list does not sort",
+    install: install_script_ui_sort_paths,
+};
+
+fn install_script_ui_sort_paths(e: &mut Engine) {
+    nvse::commands::array::set_fix(e, nvse::commands::array::UI_SORT_PATHS, true);
+}
+
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
 /// the extender's rows set flags `crates/nvse` reads.
 #[cfg(test)]
@@ -353,6 +367,7 @@ const NO_ADDRESS: &[&str] = &[
     SCRIPT_NULL_GUARD.name,
     SCRIPT_CYCLE_GUARD.name,
     SCRIPT_LIST_GUARD.name,
+    SCRIPT_UI_SORT_PATHS.name,
     SHADER_WARM.name,
 ];
 
