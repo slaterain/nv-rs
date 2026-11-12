@@ -294,7 +294,7 @@ fn type_of(e: &Engine, form: u32) -> u8 {
 }
 
 /// `TESObjectREFR::GetEventList` (xNVSE): the event list of the reference's `ExtraScript`.
-fn reference_event_list(e: &mut Engine, reference: u32) -> u32 {
+pub(crate) fn reference_event_list(e: &mut Engine, reference: u32) -> u32 {
     let extra = e
         .call(EXTRA_GET_BY_TYPE, &args![reference + 0x44, EXTRA_SCRIPT])
         .u32();
@@ -484,7 +484,7 @@ fn string_variable(e: &Engine, id: u32) -> Option<Vec<u8>> {
 /// `Script::GetVariableByName` (xNVSE): the variable list (`varList`, `Script +0x4C`; each
 /// `VariableInfo` has its id at `+0` and its name, a `String`, at `+0x18`), compared without case
 /// (`StrCompare`, upper-casing each byte).
-fn script_variable_by_name(e: &Engine, script: u32, name: &[u8]) -> Option<u32> {
+pub(crate) fn script_variable_by_name(e: &Engine, script: u32, name: &[u8]) -> Option<u32> {
     let mut node = script + 0x4c;
     while node != 0 {
         let info = e.mem.u32(node);

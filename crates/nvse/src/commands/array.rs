@@ -565,7 +565,7 @@ fn data_equals(e: &mut Engine, a: &Data, b: &Data, deep: bool) -> bool {
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ArrayVar.cpp: ArrayVar::CompareArrays.
-fn compare_arrays(e: &mut Engine, a: u32, b: u32, deep: bool) -> bool {
+pub(super) fn compare_arrays(e: &mut Engine, a: u32, b: u32, deep: bool) -> bool {
     let guard = fix_on(e, CYCLE_GUARD);
     compare_in(e, a, b, deep, guard.then(Vec::new).as_mut())
 }
@@ -783,7 +783,7 @@ fn copy_in(
 
 /// `BasicTokenToElem`: the token as a number, a string, a form or an array, in that order, after
 /// `ToBasicToken`; `None` when it is none of them.
-fn basic_elem(e: &mut Engine, ev: &Eval, t: &Tok) -> Option<Data> {
+pub(super) fn basic_elem(e: &mut Engine, ev: &Eval, t: &Tok) -> Option<Data> {
     let b = functions::to_basic(e, ev, t)?;
     as_elem(e, ev, &b)
 }

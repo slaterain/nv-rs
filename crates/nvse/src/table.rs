@@ -268,6 +268,35 @@ fn console_record(e: &Engine, name: &[u8]) -> Option<u32> {
         .find(|&at| guest_text(e, e.mem.u32(at)).eq_ignore_ascii_case(name))
 }
 
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), CommandTable.cpp: CommandTable::Add's
+// g_cmdTableCache, CommandTable::GetByName and GetByOpcode.
+/// The script command `name` names, as xNVSE's one name map finds it. Every record's long and
+/// short name goes into the map under its case-insensitive hash (`StrHashCI`), the first record to
+/// bring a hash keeping it: the console table's records first (they come in first, from opcode
+/// 0x100), then the script table's in opcode order. A missing short name is the empty name. A name
+/// the console table brought first maps to a console opcode, which the script table does not have:
+/// `None`, as for no name.
+pub fn opcode_by_name(e: &Engine, name: &[u8]) -> Option<u32> {
+    let want = crate::events::hash_name(name);
+    let names = |at: u32| [e.mem.u32(at), e.mem.u32(at + 4)];
+    let matches = |ptr: u32| {
+        let text = if ptr == 0 {
+            Vec::new()
+        } else {
+            guest_text(e, ptr)
+        };
+        crate::events::hash_name(&text) == want
+    };
+    for i in 0..CONSOLE_COUNT {
+        if names(CONSOLE_TABLE + i * RECORD).into_iter().any(matches) {
+            return None;
+        }
+    }
+    let tables = e.script_tables();
+    (ScriptTables::FIRST_OPCODE..tables.max_opcode)
+        .find(|&opcode| names(tables.record(opcode)).into_iter().any(matches))
+}
+
 /// The execute address of built command `opcode` of xNVSE's range.
 pub fn execute_address(opcode: u32) -> u32 {
     EXECUTE_BASE + 4 * (opcode - FIRST_OPCODE)
@@ -615,7 +644,7 @@ pub(crate) mod tests {
         opcodes.dedup();
         assert_eq!(opcodes.len(), built.len(), "two commands at one opcode");
         let console = NAMES.iter().filter(|(n, _)| n.starts_with("con_")).count();
-        assert_eq!((built.len(), console), (565, 20));
+        assert_eq!((built.len(), console), (610, 20));
     }
 
     /// Every xNVSE opcode has its names; a console re-export copies the console record with the

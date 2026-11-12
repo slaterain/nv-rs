@@ -232,6 +232,8 @@ pub struct Nvse {
     pub game: commands::game::State,
     /// The mods whose scripts' debug lines print (`SetDebugMode`).
     pub console: commands::console::State,
+    /// The data mods keep in memory across loaded saves (`SetModLocalData`).
+    pub mod_data: commands::mod_data::State,
     /// The DirectInput hook's keys and the input commands' controls (I-11).
     pub input: input::State,
     /// The first frame recorded the main thread (`s_recordedMainThreadID`): xNVSE prints to the
