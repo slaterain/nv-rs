@@ -35,6 +35,10 @@
 //! preset): VNV installs JohnnyGuitar, so its players' co-saves are version 2.
 
 use crate::containers::{align_bucket_count, Name, Uint, UnorderedMap};
+use crate::game::{
+    self, BGSPerk, BGSSaveLoadGame, ExtraLinkedRef, ExtraScript, NiTMapItem, NiTPointerMap,
+    TESForm, TESObjectREFR, TESQuest,
+};
 use crate::Jip;
 use engine_core::prelude::*;
 use nvse::cosave::{OutOfRange, Reader};
@@ -266,35 +270,24 @@ pub fn set_johnny_guitar_fixes(e: &mut Engine, on: bool) {
 
 // ---- the game's tables JIP reads (internal/jip_core.cpp) ----
 
-/// `g_BGSSaveLoadGame` (`BGSSaveLoadGame::GetSingleton`) and its `saveMods` (`+0x44`): what each
-/// file of the save is loaded as today, 0xFF for not loaded; its changed forms (`+0`).
+/// `g_BGSSaveLoadGame` (`BGSSaveLoadGame::GetSingleton`).
 const SAVE_LOAD_GAME: u32 = 0x011d_df38;
-const SAVE_MODS: u32 = 0x44;
-/// The game's map of every form by id (`NiTPointerMap`, its pointer at `0x011C54C0`): the bucket
-/// count at +4, the buckets at +8; an entry is next, id, form.
+/// The game's map of every form by id (`NiTPointerMap`, its pointer at `0x011C54C0`).
 const ALL_FORMS: u32 = 0x011c_54c0;
-/// `PlayerCharacter` (`0x011DEA3C`) and a reference's base form (`+0x20`).
+/// `PlayerCharacter` (`0x011DEA3C`).
 const PLAYER: u32 = 0x011d_ea3c;
-const BASE_FORM: u32 = 0x20;
-/// A form's type (`+4`) and id (`+0xC`); a vtable's entries that answer true (`0x008D0360`) for
-/// a reference (`+0xF0`) and an actor (`+0x100`): JIP's `IS_REFERENCE` and `IS_ACTOR`.
-const FORM_TYPE: u32 = 4;
-const FORM_ID: u32 = 0xc;
+/// A vtable's entries that answer true (`0x008D0360`) for a reference (`+0xF0`) and an actor
+/// (`+0x100`): JIP's `IS_REFERENCE` and `IS_ACTOR`.
 const RETURN_TRUE: u32 = 0x008d_0360;
 const VT_IS_REFERENCE: u32 = 0xf0;
 const VT_IS_ACTOR: u32 = 0x100;
 const QUEST: u8 = 0x47;
 const PERK: u8 = 0x56;
-/// `BaseExtraList::GetByType` (`thiscall`), `ExtraScript` (`0x0D`: its script at +0xC and event
-/// list at +0x10), a reference's extra list (`+0x44`), a quest's script (`+0x1C`) and event
-/// list (`+0x5C`), and a perk's rank count (`data.numRanks`, `+0x3A`).
+/// `BaseExtraList::GetByType` (`thiscall`) and the extra data types `ExtraScript` (`0x0D`) and
+/// `ExtraLinkedRef` (`0x51`).
 const EXTRA_GET_BY_TYPE: u32 = 0x0041_0220;
 const EXTRA_SCRIPT: u32 = 0x0d;
-/// `ExtraLinkedRef` (`0x51`): its linked reference at +0xC.
 const EXTRA_LINKED_REF: u32 = 0x51;
-const QUEST_SCRIPT: u32 = 0x1c;
-const QUEST_EVENT_LIST: u32 = 0x5c;
-const PERK_RANKS: u32 = 0x3a;
 /// Default appearance forms (the `JPUA` load): race, female and male hair, eyes.
 const DEFAULT_RACE: u32 = 0x19;
 const DEFAULT_HAIR_FEMALE: u32 = 0x0002_2e4e;
@@ -307,9 +300,7 @@ pub fn resolved_mod_index(e: &Engine, index: u8) -> Option<u8> {
     if index == 0xff {
         return Some(0xff);
     }
-    let now = e
-        .mem
-        .u8(e.mem.u32(SAVE_LOAD_GAME) + SAVE_MODS + u32::from(index));
+    let now = e.mem.u8(e.mem.u32(SAVE_LOAD_GAME) + game::save_mod(index));
     (now != 0xff).then_some(now)
 }
 
@@ -326,16 +317,17 @@ pub fn resolved_ref_id(e: &Engine, id: u32) -> u32 {
     }
 }
 
-/// A walk of one of the game's `NiTMap`s of ids (bucket count +4, buckets +8, entry: next, id):
-/// the entry of `id`, 0 for none.
+/// A walk of one of the game's `NiTMap`s of ids: the entry of `id`, 0 for none.
 fn map_entry(e: &Engine, map: u32, id: u32) -> u32 {
-    let count = e.mem.u32(map + 4);
+    let map = Ptr::<NiTPointerMap>::new(map);
+    let count = e.get(map, NiTPointerMap::m_uiHashSize);
     if count == 0 {
         return 0;
     }
-    let mut entry = e.mem.u32(e.mem.u32(map + 8) + 4 * (id % count));
-    while entry != 0 && e.mem.u32(entry + 4) != id {
-        entry = e.mem.u32(entry);
+    let buckets = e.get(map, NiTPointerMap::m_ppkHashTable);
+    let mut entry = e.mem.u32(buckets + 4 * (id % count));
+    while entry != 0 && e.get(Ptr::<NiTMapItem>::new(entry), NiTMapItem::m_key) != id {
+        entry = e.get(Ptr::<NiTMapItem>::new(entry), NiTMapItem::m_pkNext);
     }
     entry
 }
@@ -345,14 +337,15 @@ fn map_entry(e: &Engine, map: u32, id: u32) -> u32 {
 pub fn lookup_form(e: &Engine, id: u32) -> u32 {
     match map_entry(e, e.mem.u32(ALL_FORMS), id) {
         0 => 0,
-        entry => e.mem.u32(entry + 8),
+        entry => e.get(Ptr::<NiTMapItem>::new(entry), NiTMapItem::m_val),
     }
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: HasChangeData.
 /// Whether the save holds changes of the form `id` (the load's changes map).
 pub fn has_change_data(e: &Engine, id: u32) -> bool {
-    map_entry(e, e.mem.u32(e.mem.u32(SAVE_LOAD_GAME)), id) != 0
+    let sl = Ptr::<BGSSaveLoadGame>::new(e.mem.u32(SAVE_LOAD_GAME));
+    map_entry(e, e.get(sl, BGSSaveLoadGame::pChangesMap), id) != 0
 }
 
 fn vtable_says(e: &Engine, form: u32, slot: u32) -> bool {
@@ -365,16 +358,21 @@ fn vtable_says(e: &Engine, form: u32, slot: u32) -> bool {
 fn script_and_event_list(e: &mut Engine, form: u32) -> Option<(u32, u32)> {
     let (script, events) = if vtable_says(e, form, VT_IS_REFERENCE) {
         let extra = e
-            .call(EXTRA_GET_BY_TYPE, &args![form + 0x44, EXTRA_SCRIPT])
+            .call(EXTRA_GET_BY_TYPE, &args![extra_list(form), EXTRA_SCRIPT])
             .u32();
         if extra == 0 {
             return None;
         }
-        (e.mem.u32(extra + 0xc), e.mem.u32(extra + 0x10))
-    } else if e.mem.u8(form + FORM_TYPE) == QUEST {
+        let extra = Ptr::<ExtraScript>::new(extra);
         (
-            e.mem.u32(form + QUEST_SCRIPT),
-            e.mem.u32(form + QUEST_EVENT_LIST),
+            e.get(extra, ExtraScript::pScript),
+            e.get(extra, ExtraScript::pScriptVars),
+        )
+    } else if form_type(e, form) == QUEST {
+        let quest = Ptr::<TESQuest>::new(form);
+        (
+            e.get(quest, TESQuest::pFormScript),
+            e.get(quest, TESQuest::pScriptLocals),
         )
     } else {
         return None;
@@ -387,13 +385,26 @@ fn form_id(e: &Engine, form: u32) -> u32 {
     if form == 0 {
         0
     } else {
-        e.mem.u32(form + FORM_ID)
+        e.get(Ptr::<TESForm>::new(form), TESForm::iFormID)
     }
+}
+
+/// A form's type.
+fn form_type(e: &Engine, form: u32) -> u8 {
+    e.get(Ptr::<TESForm>::new(form), TESForm::cFormType)
+}
+
+/// A reference's extra data list.
+fn extra_list(form: u32) -> u32 {
+    Ptr::<TESObjectREFR>::new(form)
+        .at(TESObjectREFR::ExtraData)
+        .addr()
 }
 
 /// The player's base form (`g_thePlayer->baseForm`).
 fn player_base(e: &Engine) -> u32 {
-    e.mem.u32(e.mem.u32(PLAYER) + BASE_FORM)
+    let player = Ptr::<TESObjectREFR>::new(e.mem.u32(PLAYER));
+    e.get(player, TESObjectREFR::pObjectReference)
 }
 
 // ---- reading a record ----
@@ -526,11 +537,15 @@ pub fn load(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
             continue;
         }
         if kind == kind::SERIALIZED_VARS {
+            // `ReadRecordData(&s_serializedVars, length)`: the bytes read over the values the
+            // load's start reset (a shorter record leaves the rest as they were).
             let bytes = r.read_data(length)?;
+            let s = saved(e);
             let mut raw = [0u8; 8];
+            raw[..4].copy_from_slice(&s.serialized.flags.to_le_bytes());
+            raw[4..].copy_from_slice(&s.serialized.dmg_armor_max_percent.to_le_bytes());
             let n = bytes.len().min(8);
             raw[..n].copy_from_slice(&bytes[..n]);
-            let s = saved(e);
             s.serialized.flags = u32::from_le_bytes(raw[..4].try_into().unwrap());
             s.serialized.dmg_armor_max_percent = u32::from_le_bytes(raw[4..].try_into().unwrap());
             continue;
@@ -874,9 +889,17 @@ fn load_linked_refs(e: &mut Engine, b: &mut Bytes) -> Option<()> {
             continue;
         }
         let extra = e
-            .call(EXTRA_GET_BY_TYPE, &args![this + 0x44, EXTRA_LINKED_REF])
+            .call(
+                EXTRA_GET_BY_TYPE,
+                &args![extra_list(this), EXTRA_LINKED_REF],
+            )
             .u32();
-        if extra != 0 && e.mem.u32(extra + 0xc) == 0 {
+        if extra != 0
+            && e.get(
+                Ptr::<ExtraLinkedRef>::new(extra),
+                ExtraLinkedRef::pLinkedRef,
+            ) == 0
+        {
             continue;
         }
         let link_id = form_id(e, other);
@@ -963,10 +986,10 @@ fn load_npc_perks(e: &mut Engine, b: &mut Bytes) -> Option<()> {
             } else {
                 0
             };
-            if perk == 0 || e.mem.u8(perk + FORM_TYPE) != PERK {
+            if perk == 0 || form_type(e, perk) != PERK {
                 continue;
             }
-            let rank = rank.min(e.mem.u8(perk + PERK_RANKS));
+            let rank = rank.min(e.get(Ptr::<BGSPerk>::new(perk), BGSPerk::cNumRanks));
             saved(e).npc_perks.emplace(id).ranks.insert(perk, rank);
         }
     }

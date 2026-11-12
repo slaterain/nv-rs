@@ -8,8 +8,9 @@
 //!   `.fos` (`CREATE_ALWAYS`): xNVSE's own plugin with the loaded files (`MODS`), the array
 //!   variables (`ARVS`, an `ARVR` per array with references, `ARVE`) and the string variables
 //!   (`STVS`, `STVR`s, `STVE`), each map cleaned of its temporaries first and listed in its hash
-//!   map's order ([`vars::HashOrder`]); with the fixes preset's row, other plugins' sections
-//!   kept from the loaded game after it, when today's files are the ones they were saved with.
+//!   map's order ([`vars::HashOrder`]); then each plugin built in writes its own section
+//!   ([`crate::plugins`]); with the fixes preset's row, the sections of plugins not built in are
+//!   kept from the loaded game after them, when today's files are the ones they were saved with.
 //!   One is written on every save, an empty one too, as xNVSE does whenever it is installed: a
 //!   save without one loads as a new game for the extender without the reset.
 //! - **Reading** is xNVSE's, with one guard: a count of references or elements larger than the
@@ -36,12 +37,13 @@
 //! `CloseHandle`, `DeleteFileA`) and its C runtime's `rename`, as the `.fos` does, so the platform
 //! layer keeps them where it keeps the save. The messages of these moments go to the events
 //! ([`crate::events`]): `SaveGame`, `PreLoadGame`, `LoadGame`, `PostLoadGame` (the seam at
-//! `0x00848C91`, the load's end), `NewGame`, `DeleteGame(Name)`, `Rename(New)Game(Name)`. Not here
-//! yet: the messages to plugins and JIP LN NVSE's chunks (I-13).
+//! `0x00848C91`, the load's end), `NewGame`, `DeleteGame(Name)`, `Rename(New)Game(Name)`, and
+//! then to the plugins built in ([`crate::plugins`]), whose sections their own callbacks read
+//! (JIP LN NVSE's: `crates/jip`).
 
 use crate::cosave::{self, tag, Chunk, ChunkWriter, OutOfRange, Plugin, Reader};
-use crate::vars::{self, ArrayVar, Container, Data, Element, StringVar};
 use crate::plugins::{self, msg};
+use crate::vars::{self, ArrayVar, Container, Data, Element, StringVar};
 use crate::{events, tick, Nvse};
 use engine_core::extend::{Owner, SiteSlot};
 use engine_core::prelude::*;
@@ -952,7 +954,12 @@ fn delete_game(e: &mut Engine, path: u32) {
     let co = co_save_path(e, path);
     let name = save_name(&crate::table::guest_text(e, path));
     tell_text(e, events::id::DELETE_GAME, msg::DELETE_GAME, &co);
-    tell_text(e, events::id::DELETE_GAME_NAME, msg::DELETE_GAME_NAME, &name);
+    tell_text(
+        e,
+        events::id::DELETE_GAME_NAME,
+        msg::DELETE_GAME_NAME,
+        &name,
+    );
     delete_file(e, &co);
 }
 
@@ -961,7 +968,12 @@ fn rename_game(e: &mut Engine, old: u32, new: u32) {
     let (from, to) = (co_save_path(e, old), co_save_path(e, new));
     // xNVSE sends the paths again where the names would be.
     tell_text(e, events::id::RENAME_GAME, msg::RENAME_GAME, &from);
-    tell_text(e, events::id::RENAME_GAME_NAME, msg::RENAME_GAME_NAME, &from);
+    tell_text(
+        e,
+        events::id::RENAME_GAME_NAME,
+        msg::RENAME_GAME_NAME,
+        &from,
+    );
     tell_text(e, events::id::RENAME_NEW_GAME, msg::RENAME_NEW_GAME, &to);
     tell_text(
         e,

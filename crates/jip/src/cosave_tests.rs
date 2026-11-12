@@ -27,7 +27,7 @@ struct World {
 
 /// The extra list's `GetByType` stub: a stand-in form keeps its extras at +0x80 and +0x84.
 fn get_by_type(e: &mut Engine, a: &[u32]) -> Ret {
-    let form = a[0] - 0x44;
+    let form = a[0] - TESObjectREFR::ExtraData.off;
     let at = match a[1] {
         0x0d => e.mem.u32(form + XSCRIPT),
         0x51 => e.mem.u32(form + XLINKED),
@@ -50,7 +50,7 @@ impl World {
         e.mem.set_u32(SAVE_LOAD_GAME, SL);
         e.mem.set_u32(SL, CHANGES);
         for i in 0..0xffu32 {
-            e.mem.set_u8(SL + SAVE_MODS + i, i as u8);
+            e.mem.set_u8(SL + game::save_mod(i as u8), i as u8);
         }
         for (map, buckets) in [(CHANGES, 16u32), (FORMS, 16)] {
             e.mem.set_u32(map + 4, buckets);
@@ -58,7 +58,8 @@ impl World {
         }
         e.mem.set_u32(ALL_FORMS, FORMS);
         e.mem.set_u32(PLAYER, PLAYER_REF);
-        e.mem.set_u32(PLAYER_REF + BASE_FORM, PLAYER_NPC);
+        e.mem
+            .set_u32(PLAYER_REF + TESObjectREFR::pObjectReference.off, PLAYER_NPC);
         e.mem.set_u32(REF_VT + VT_IS_REFERENCE, RETURN_TRUE);
         e.mem.set_u32(REF_VT + VT_IS_ACTOR, RETURN_TRUE);
         e.register(EXTRA_GET_BY_TYPE, get_by_type);
@@ -85,8 +86,8 @@ impl World {
         self.next_form += 0x100;
         let vt = if reference { REF_VT } else { PLAIN_VT };
         self.e.mem.set_u32(at, vt);
-        self.e.mem.set_u8(at + FORM_TYPE, kind);
-        self.e.mem.set_u32(at + FORM_ID, id);
+        self.e.mem.set_u8(at + TESForm::cFormType.off, kind);
+        self.e.mem.set_u32(at + TESForm::iFormID.off, id);
         self.insert(FORMS, id, at);
         at
     }
@@ -107,7 +108,7 @@ impl World {
 
     /// The save's file `saved` loaded as `now` today (0xFF: not loaded).
     fn file(&mut self, saved: u8, now: u8) {
-        self.e.mem.set_u8(SL + SAVE_MODS + u32::from(saved), now);
+        self.e.mem.set_u8(SL + game::save_mod(saved), now);
     }
 }
 
@@ -650,6 +651,16 @@ fn saved_flags() {
         saved_chunks(&mut w.e),
         [chunk(kind::SERIALIZED_VARS, 1, reset)]
     );
+    // A record of only the flags reads over the reset values: the cap stays 1.0.
+    load_file(
+        &mut w.e,
+        &cosave(&[chunk(kind::SERIALIZED_VARS, 1, 1u32.to_le_bytes().to_vec())]),
+    );
+    let short = Out::default().u32(1).u32(1.0f32.to_bits()).0;
+    assert_eq!(
+        saved_chunks(&mut w.e),
+        [chunk(kind::SERIALIZED_VARS, 1, short)]
+    );
 }
 
 /// `JPUA`: the player's appearance undo, its forms resolved and a gone race, hair or eyes
@@ -702,7 +713,7 @@ fn npc_perks() {
     let mut w = World::new();
     w.form(0x0600_0001, 0x2a, true);
     let perk = w.form(0x0600_0010, PERK, false);
-    w.e.mem.set_u8(perk + PERK_RANKS, 2);
+    w.e.mem.set_u8(perk + BGSPerk::cNumRanks.off, 2);
     w.form(0x0600_0011, 0x0e, false);
     let data = Out::default()
         .u16(1)
@@ -796,4 +807,110 @@ fn what_a_load_reads_again() {
     tell(&mut w, msg::EXIT_TO_MAIN_MENU, b"");
     assert!(written(&mut w.e).is_empty());
     assert!(s(&mut w.e).last_path.is_empty());
+}
+
+/// Two co-saves the real game wrote with xNVSE 6.4.9 and JIP LN NVSE 57.30 (the scratch copy
+/// `game-xnvse`, 2026-11-07: `nvsecos1.nvse`, and `nvsecos4.nvse`, byte for byte `nvsecos2.nvse`).
+/// JIP's section in each holds only `JPGF` (no flags, a cap of 1.0): no co-save of JIP's other
+/// records, or of JIP with JohnnyGuitar NVSE, has been made yet.
+const REAL_COSAVES: [(&str, &[&str]); 2] = [
+    (
+        "nvsecos1",
+        &[
+            "4e5653450100000006000400d02000040200000000140000060000001c01000053444f4d00000000b20000000a0d0046",
+            "616c6c6f75744e562e65736d0d00446561644d6f6e65792e65736d1000486f6e6573744865617274732e65736d11004f",
+            "6c64576f726c64426c7565732e65736d10004c6f6e65736f6d65526f61642e65736d0e0054726962616c5061636b2e65",
+            "736d11004d657263656e6172795061636b2e65736d0f00436c61737369635061636b2e65736d0f004361726176616e50",
+            "61636b2e65736d150047756e52756e6e657273417273656e616c2e65736d535652410200000000000000525652410200",
+            "000022000000ff03000000010101000000ff0200000001000000000000f83f0100000000000004404556524102000000",
+            "000000005356545300000000000000004556545300000000000000000022000001000000140000004a50474601000000",
+            "08000000000000000000803f",
+        ],
+    ),
+    (
+        "nvsecos4",
+        &[
+            "4e5653450100000006000400d020000402000000001400000b000000d401000053444f4d00000000b20000000a0d0046",
+            "616c6c6f75744e562e65736d0d00446561644d6f6e65792e65736d1000486f6e6573744865617274732e65736d11004f",
+            "6c64576f726c64426c7565732e65736d10004c6f6e65736f6d65526f61642e65736d0e0054726962616c5061636b2e65",
+            "736d11004d657263656e6172795061636b2e65736d0f00436c61737369635061636b2e65736d0f004361726176616e50",
+            "61636b2e65736d150047756e52756e6e657273417273656e616c2e65736d535652410200000000000000525652410200",
+            "0000280000000205000000030001000000010200000001004101000000000000f03f0100620100000000000000405256",
+            "5241020000002700000001020000000101010000000104000000010000000000000a4003010078023412000104050000",
+            "0052565241020000002b00000003090000000100010000000302000000000000000000f0bf0214000000000000000000",
+            "254003030074656e45565241020000000000000053565453000000000000000052565453000000000c00000000010000",
+            "000500616c70686152565453000000000d000000010400000006004dfc6c6c657252565453000000000b000000040700",
+            "00000400666f75724556545300000000000000000022000001000000140000004a504746010000000800000000000000",
+            "0000803f",
+        ],
+    ),
+];
+
+fn unhex(lines: &[&str]) -> Vec<u8> {
+    let hex: String = lines.concat();
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+/// The real co-saves round trip byte for byte: JIP's section read by JIP's load callback and
+/// written again by its save callback (after the `PreLoadGame` and `PostLoadGame` messages, as
+/// a load from the menu sends them), xNVSE's own section passed through as it was read, the whole
+/// file written again equal to the real one; with JohnnyGuitar's row on and off.
+#[test]
+fn real_co_saves_round_trip() {
+    for (name, lines) in REAL_COSAVES {
+        let file = unhex(lines);
+        for jg in [false, true] {
+            let mut w = World::new();
+            set_johnny_guitar_fixes(&mut w.e, jg);
+            listen(
+                &mut w.e,
+                &Message {
+                    kind: msg::PRE_LOAD_GAME,
+                    data: 0,
+                    len: 0,
+                },
+            );
+            let mut r = Reader::open(&file).unwrap();
+            let mut sections = Vec::new();
+            let mut jip_bytes = Vec::new();
+            while let Some(p) = r.next_plugin().unwrap() {
+                let start = r.offset();
+                let chunks = if p.opcode_base == 0x2200 {
+                    jip_bytes = file[start..start + p.length as usize].to_vec();
+                    load(&mut w.e, &mut r).unwrap();
+                    saved_chunks(&mut w.e)
+                } else {
+                    let mut chunks = Vec::new();
+                    while let Some((kind, version, len)) = r.next_record().unwrap() {
+                        let data = r.read_data(len).unwrap();
+                        chunks.push(chunk(kind, version, data));
+                    }
+                    chunks
+                };
+                r.end_plugin();
+                sections.push(nvse::cosave::Plugin {
+                    opcode_base: p.opcode_base,
+                    chunks,
+                });
+            }
+            listen(
+                &mut w.e,
+                &Message {
+                    kind: msg::POST_LOAD_GAME,
+                    data: 1,
+                    len: 1,
+                },
+            );
+            let jip = &sections.last().unwrap().chunks;
+            assert_eq!(section(jip), jip_bytes, "{name} jg {jg}: JIP's section");
+            assert_eq!(
+                nvse::cosave::write(&sections),
+                file,
+                "{name} jg {jg}: the whole co-save"
+            );
+        }
+    }
 }

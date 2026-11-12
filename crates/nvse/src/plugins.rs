@@ -258,7 +258,12 @@ mod tests {
         let files: Vec<&str> = built_ins(&e).iter().map(|p| p.file).collect();
         assert_eq!(
             files,
-            ["hot_reload.dll", "jip_nvse.dll", "johnnyguitarnvse.dll", "ShowOffNVSE.dll"]
+            [
+                "hot_reload.dll",
+                "jip_nvse.dll",
+                "johnnyguitarnvse.dll",
+                "ShowOffNVSE.dll"
+            ]
         );
         assert_eq!(by_opcode_base(&e, 0x2200).unwrap().name, "JIP LN NVSE");
         assert!(by_opcode_base(&e, 0x2600).is_none());
