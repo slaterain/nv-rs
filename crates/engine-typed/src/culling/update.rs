@@ -6,13 +6,10 @@ use super::layout::{
     NiAVObject, NiBound, NiGeometry, NiGeometryData, NiMatrix3, NiNode, NiPlane, NiPoint3,
     NiTransform,
 };
-use super::{
-    bound, copy_float, fld, fld_local, fstp, m32, m32_local, radius_not_zero, FAMILY, NULL_BOUND,
-    POINT_ZERO,
-};
+use super::{bound, copy_float, radius_not_zero, FAMILY, NULL_BOUND, POINT_ZERO};
+use crate::anim_keys::narrow;
 use crate::dispatch;
 use engine_core::ptr::{Field, Ptr};
-use engine_core::x87::{x87_add, x87_mul};
 use engine_core::{args, typed_call, Engine};
 
 /// The collision object's world update, virtual slot 0x90 (`thiscall(collision object, word)`).
@@ -92,8 +89,8 @@ pub fn update_world_data(e: &mut Engine, this: Ptr<NiAVObject>, word: u32) {
 }
 
 /// Row `row` of `matrix` times `point`, summed in the order `first + second + third` the caller
-/// gives as `(entry column, point component)` pairs, each entry loaded and each point component a
-/// memory operand; stored to a float.
+/// gives as `(entry column, point component)` pairs; in `f64`, rounded to a float where the exe
+/// stores it.
 #[inline(always)]
 fn row_dot(
     e: &Engine,
@@ -103,43 +100,23 @@ fn row_dot(
     order: [(u32, Field<NiPoint3, f32>); 3],
 ) -> f32 {
     let product = |(column, component): (u32, Field<NiPoint3, f32>)| {
-        x87_mul(
-            fld(e, matrix, NiMatrix3::entry(row, column)),
-            m32(e, point, component),
-        )
+        f64::from(e.get(matrix, NiMatrix3::entry(row, column))) * f64::from(e.get(point, component))
     };
-    fstp(x87_add(
-        x87_add(product(order[0]), product(order[1])),
-        product(order[2]),
-    ))
+    narrow((product(order[0]) + product(order[1])) + product(order[2]))
 }
 
 /// The rows' dot products scaled, plus the translation, stored: the part `00a7fdd0` and `00a7fea0`
 /// share once the three dot products are stored.
 #[inline(always)]
 fn scale_and_translate(e: &Engine, transform: Ptr<NiTransform>, rows: [f32; 3]) -> [f32; 3] {
-    // FLD scale; FSTP (a stack slot); then FLD row0; FLD scale; FLD ST0; FMULP ST2; FXCH; FSTP;
-    // FLD row1; FMUL ST1; FSTP; FMUL row2 (memory); FSTP.
-    let scale = fld_local(fstp(fld(e, transform, NiTransform::m_fScale)));
-    let scaled = [
-        fstp(x87_mul(fld_local(rows[0]), scale)),
-        fstp(x87_mul(fld_local(rows[1]), scale)),
-        fstp(x87_mul(scale, m32_local(rows[2]))),
-    ];
+    // The scale through a stack slot, then each row times it and plus the translation, stored.
+    let scale = e.get(transform, NiTransform::m_fScale);
+    let scaled = [rows[0] * scale, rows[1] * scale, scale * rows[2]];
     let translate = transform.at(NiTransform::m_Translate);
     [
-        fstp(x87_add(
-            fld(e, translate, NiPoint3::x),
-            m32_local(scaled[0]),
-        )),
-        fstp(x87_add(
-            fld(e, translate, NiPoint3::y),
-            m32_local(scaled[1]),
-        )),
-        fstp(x87_add(
-            fld(e, translate, NiPoint3::z),
-            m32_local(scaled[2]),
-        )),
+        e.get(translate, NiPoint3::x) + scaled[0],
+        e.get(translate, NiPoint3::y) + scaled[1],
+        e.get(translate, NiPoint3::z) + scaled[2],
     ]
 }
 
@@ -154,9 +131,9 @@ fn set_center(e: &mut Engine, bound: Ptr<NiBound>, center: [f32; 3]) {
 
 // Typed from 00a7fdd0
 /// `NiBound::Update` (Xbox PDB, `thiscall(this, bound, transform)`): `this` becomes `bound` moved by
-/// the transform: centre = translation + scale * (rotation * centre), each row's dot product and
-/// each step stored to a float; radius = radius * scale. The first row multiplies its second term
-/// the other way round (`centre.x` loaded, the entry a memory operand), as the exe does.
+/// the transform: centre = translation + scale * (rotation * centre), each row's dot product (in
+/// `f64`) and each step stored to a float; radius = radius * scale. The first row sums
+/// `e01*y + x*e00` first, as the exe does.
 pub fn bound_update(
     e: &mut Engine,
     this: Ptr<NiBound>,
@@ -165,38 +142,24 @@ pub fn bound_update(
 ) {
     let matrix = transform.at(NiTransform::m_Rotate);
     let center = from.at(NiBound::m_kCenter);
-    let row0 = fstp(x87_add(
-        x87_add(
-            x87_mul(
-                fld(e, matrix, NiMatrix3::entry(0, 1)),
-                m32(e, center, NiPoint3::y),
-            ),
-            x87_mul(
-                fld(e, center, NiPoint3::x),
-                m32(e, matrix, NiMatrix3::entry(0, 0)),
-            ),
-        ),
-        x87_mul(
-            fld(e, matrix, NiMatrix3::entry(0, 2)),
-            m32(e, center, NiPoint3::z),
-        ),
-    ));
+    let entry = |e: &Engine, column: u32| f64::from(e.get(matrix, NiMatrix3::entry(0, column)));
+    let at = |e: &Engine, f: Field<NiPoint3, f32>| f64::from(e.get(center, f));
+    let row0 = narrow(
+        (entry(e, 1) * at(e, NiPoint3::y) + at(e, NiPoint3::x) * entry(e, 0))
+            + entry(e, 2) * at(e, NiPoint3::z),
+    );
     let natural = [(0, NiPoint3::x), (1, NiPoint3::y), (2, NiPoint3::z)];
     let row1 = row_dot(e, matrix, 1, center, natural);
     let row2 = row_dot(e, matrix, 2, center, natural);
     let moved = scale_and_translate(e, transform, [row0, row1, row2]);
     set_center(e, this, moved);
-    let radius = fstp(x87_mul(
-        fld(e, from, NiBound::m_fRadius),
-        m32(e, transform, NiTransform::m_fScale),
-    ));
+    let radius = e.get(from, NiBound::m_fRadius) * e.get(transform, NiTransform::m_fScale);
     e.set(this, NiBound::m_fRadius, radius);
 }
 
 // Typed from 00a7fea0
 /// The in-place form of [`bound_update`] (`thiscall(bound, transform)`): the same steps on the
-/// bound itself, its first row summed `e01*y + e00*x` (both entries loaded); the radius is the
-/// scale loaded times the radius as a memory operand.
+/// bound itself, its first row summed `e01*y + e00*x`; the radius is the scale times the radius.
 pub fn bound_transform(e: &mut Engine, this: Ptr<NiBound>, transform: Ptr<NiTransform>) {
     let matrix = transform.at(NiTransform::m_Rotate);
     let center = this.at(NiBound::m_kCenter);
@@ -212,10 +175,7 @@ pub fn bound_transform(e: &mut Engine, this: Ptr<NiBound>, transform: Ptr<NiTran
     let row2 = row_dot(e, matrix, 2, center, natural);
     let moved = scale_and_translate(e, transform, [row0, row1, row2]);
     set_center(e, this, moved);
-    let radius = fstp(x87_mul(
-        fld(e, transform, NiTransform::m_fScale),
-        m32(e, this, NiBound::m_fRadius),
-    ));
+    let radius = e.get(transform, NiTransform::m_fScale) * e.get(this, NiBound::m_fRadius);
     e.set(this, NiBound::m_fRadius, radius);
 }
 
@@ -290,7 +250,7 @@ pub fn geometry_update_world_bound(e: &mut Engine, this: Ptr<NiGeometry>) {
 
 // Typed from 004a51d0
 /// `NiBound::SetCenterAndRadius` (`thiscall(bound, centre, radius)`): the centre's words copied,
-/// the radius through the x87 stack (a signalling NaN quieted).
+/// the radius stored.
 pub fn set_center_and_radius(
     e: &mut Engine,
     this: Ptr<NiBound>,
@@ -301,7 +261,7 @@ pub fn set_center_and_radius(
     copy_float(e, center, NiPoint3::x, to, NiPoint3::x);
     copy_float(e, center, NiPoint3::y, to, NiPoint3::y);
     copy_float(e, center, NiPoint3::z, to, NiPoint3::z);
-    e.set(this, NiBound::m_fRadius, fstp(fld_local(radius)));
+    e.set(this, NiBound::m_fRadius, radius);
 }
 
 // Typed from 005467e0
@@ -362,8 +322,8 @@ pub fn node_update_world_bound(e: &mut Engine, this: Ptr<NiNode>) {
     typed_call!(FAMILY, 0x0054_67e0, ensure_world_bound(e, object));
     let source = e.get(first, NiAVObject::m_kWorldBound);
     let source = if source.is_null() { NULL_BOUND } else { source };
-    // FLD radius; FSTP local; FLD local; ... FSTP into the node's bound.
-    let radius = fstp(fld_local(fstp(fld(e, source, NiBound::m_fRadius))));
+    // FLD radius; FSTP local; FLD local; ... FSTP into the node's bound: a copy.
+    let radius = e.get(source, NiBound::m_fRadius);
     let own = e.get(object, NiAVObject::m_kWorldBound);
     let (from, to) = (source.at(NiBound::m_kCenter), own.at(NiBound::m_kCenter));
     copy_float(e, from, NiPoint3::x, to, NiPoint3::x);
@@ -387,8 +347,8 @@ pub fn node_update_world_bound(e: &mut Engine, this: Ptr<NiNode>) {
 
 // Typed from 00a69990
 /// `NiPlane::NiPlane` (Xbox PDB, `thiscall(plane, normal, point)`): the normal's words copied, the
-/// constant `(ny*py + nx*px) + nz*pz` from the normal given (not the copy), stored. Returns the
-/// plane, as a constructor does.
+/// constant `(ny*py + nx*px) + nz*pz` from the normal given (not the copy), in `f64` and stored.
+/// Returns the plane, as a constructor does.
 pub fn plane_through(
     e: &mut Engine,
     this: Ptr<NiPlane>,
@@ -399,9 +359,14 @@ pub fn plane_through(
     copy_float(e, normal, NiPoint3::x, to, NiPoint3::x);
     copy_float(e, normal, NiPoint3::y, to, NiPoint3::y);
     copy_float(e, normal, NiPoint3::z, to, NiPoint3::z);
-    let y = x87_mul(fld(e, normal, NiPoint3::y), m32(e, point, NiPoint3::y));
-    let x = x87_mul(fld(e, normal, NiPoint3::x), m32(e, point, NiPoint3::x));
-    let z = x87_mul(fld(e, normal, NiPoint3::z), m32(e, point, NiPoint3::z));
-    e.set(this, NiPlane::m_fConstant, fstp(x87_add(x87_add(y, x), z)));
+    let product = |e: &Engine, f: Field<NiPoint3, f32>| {
+        f64::from(e.get(normal, f)) * f64::from(e.get(point, f))
+    };
+    let (y, x, z) = (
+        product(e, NiPoint3::y),
+        product(e, NiPoint3::x),
+        product(e, NiPoint3::z),
+    );
+    e.set(this, NiPlane::m_fConstant, narrow((y + x) + z));
     this
 }

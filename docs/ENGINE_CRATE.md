@@ -454,7 +454,9 @@ too; the float check `0040eb10`; the priority `00526ae0`; `TESTopic`'s editor id
 Then `lockfree` (`crates/engine-typed`, a crate above the core that provides its family): the
 lock-free maps, their interfaces, iterators and holder, stage 1 (objects stay in guest memory); its
 differential tests are `crates/engine/tests/typed_lockfree.rs`. And `culling` (same crate): the culling
-walk, stage 1; its tests are `crates/engine/tests/typed_culling.rs`. And `pathing` (same crate): what the AI's pathfinding threads
+walk, stage 1, its float maths native since 2026-11-11 (the bounds' and planes' sums of products and the merge in
+`f64` rounded at the stores, a single operation on two floats in plain `f32`, the main-thread-only fade-node culler in
+`f32`); its tests are `crates/engine/tests/typed_culling.rs`. And `pathing` (same crate): what the AI's pathfinding threads
 run most (navmesh getters, matching edges, the triangle under a point, the search's keys, goal test and
 arrays, the point-of-view geometry, pathing locations, the point helpers), stage 1; its tests are
 `crates/engine/tests/typed_pathing.rs`.

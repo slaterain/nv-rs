@@ -408,23 +408,36 @@ trait Common {
     /// (the dispatch family's own tests compare it there, within their tolerance). This family's maths,
     /// compared on that word, runs them translated.
     fn dispatch_translated(self) -> Diff;
+    /// [`Common::common`] with the culling family's merge of bounds (`00a7f3f0`, which the bound update
+    /// calls) by address, to its translation on both sides, for the same reason: its native maths parts
+    /// from the exe in the last bits on the main thread's word (its own tests compare it there).
+    fn culling_translated(self) -> Diff;
 }
 
 impl Common for Diff {
     fn common(self) -> Diff {
-        families(self.family(&dispatch::DISPATCH))
+        families(self.family(&dispatch::DISPATCH).family(&culling::CULLING))
     }
 
     fn dispatch_translated(self) -> Diff {
-        families(self.goes_by_address(DISPATCH_CALLED))
+        families(
+            self.goes_by_address(DISPATCH_CALLED)
+                .family(&culling::CULLING),
+        )
+    }
+
+    fn culling_translated(self) -> Diff {
+        families(
+            self.family(&dispatch::DISPATCH)
+                .goes_by_address(&[0x00a7_f3f0]),
+        )
     }
 }
 
-/// [`Common`]'s families but dispatch, and the rest it adds.
+/// [`Common`]'s families but dispatch and culling, and the rest it adds.
 fn families(d: Diff) -> Diff {
     d.family(&particles::PARTICLES)
         .family(&pathing::PATHING)
-        .family(&culling::CULLING)
         .family(&leaf::LEAVES)
         .goes_by_address(&[0x00ec_6040])
         // What the translations of the dispatch family's matrix functions and of the controller walk
@@ -633,11 +646,14 @@ fn particles_grow_fade() {
 fn particles_bound_update() {
     // The count (60 makes the step's limit 2); the skip (-1 sets it from the capacity); the update
     // count; plain, mesh or strip data; the particles' floats.
+    // Under the other threads' control word bit for bit, every input.
     Diff::new(entry!(
         0x00c2_df20,
         modifiers::bound_update(Ptr<_>, f32, Ptr<_>)
     ))
     .common()
+    .control_words(&[0x027f])
+    .allow_nan_payloads()
     .inputs(&inputs(&[
         &[
             Input::Of(&[0, 1, 3, 60]),
@@ -676,6 +692,52 @@ fn particles_bound_update() {
     })
     .run()
     .assert_same();
+    // Under the main thread's with the culling family's merge by address ([`Common::culling_translated`]): bit for bit.
+    let report = Diff::new(entry!(
+        0x00c2_df20,
+        modifiers::bound_update(Ptr<_>, f32, Ptr<_>)
+    ))
+    .culling_translated()
+    .control_words(&[0x007f])
+    .inputs(&inputs(&[
+        &[
+            Input::Of(&[0, 1, 3, 60]),
+            Input::Of(&[0xffff, 1, 2, 3]),
+            Input::Of(&[0, 1, 2]),
+            Input::Of(&[0, MESH_PSYS_DATA_RTTI, STRIP_PSYS_DATA_RTTI]),
+        ],
+        &P3,
+    ]))
+    .max_cases(256)
+    .setup(|e, case| {
+        stand_ins(e);
+        let count = case.word(0);
+        let d = particle_data(e, case, count, count.max(3), 4);
+        // The data's RTTI chain: its own record, whose base is the asked one (none for plain data).
+        let chain = block(e, 8, &[0x0120_2558, case.word(3)]);
+        set_answer(e, d, chain);
+        let s = particle_system(e, case, d, &[], 4);
+        let m = modifier(e, 0x20, s);
+        let skip = case.word(1) as u16;
+        e.mem.set_u16(m + 0x18, skip);
+        // The update count stays below the skip bounds the modifier has: a skip of -1 makes as few
+        // as one new one.
+        let update_count = if skip == 0xffff { 0 } else { case.word(2) };
+        e.mem.set_u16(m + 0x1a, update_count as u16);
+        let bounds = e.mem.alloc(0x10 * 4);
+        for i in 0..4 {
+            words(
+                e,
+                bounds + 0x10 * i,
+                &[ONE, TWO, HALF, [0, ONE, TWO, 0][i as usize]],
+            );
+        }
+        e.mem.set_u32(m + 0x1c, bounds);
+        vec![m, bits(case, 4), d]
+    })
+    .run();
+    println!("particles_bound_update on the main thread: {report}");
+    report.assert_same();
     // The merge's zero-radius skip: 100 or more particles make the step's limit 3 or more, so with a
     // skip of 3 or 4 the bounds after the first merge, bound 2's radius zero (left out unless the
     // update count is 2 and has just written it).
@@ -684,6 +746,47 @@ fn particles_bound_update() {
         modifiers::bound_update(Ptr<_>, f32, Ptr<_>)
     ))
     .common()
+    .control_words(&[0x027f])
+    .allow_nan_payloads()
+    .inputs(&inputs(&[
+        &[
+            Input::Of(&[100, 150, 200]),
+            Input::Of(&[3, 4]),
+            Input::Of(&[0, 1, 2]),
+        ],
+        &P3,
+    ]))
+    .max_cases(128)
+    .setup(|e, case| {
+        stand_ins(e);
+        let count = case.word(0);
+        let d = particle_data(e, case, count, count, 3);
+        let chain = block(e, 8, &[0x0120_2558, 0]);
+        set_answer(e, d, chain);
+        let s = particle_system(e, case, d, &[], 3);
+        let m = modifier(e, 0x20, s);
+        e.mem.set_u16(m + 0x18, case.word(1) as u16);
+        e.mem.set_u16(m + 0x1a, case.word(2) as u16);
+        let bounds = e.mem.alloc(0x10 * 4);
+        for i in 0..4 {
+            words(
+                e,
+                bounds + 0x10 * i,
+                &[ONE, TWO, HALF, [ONE, TWO, 0, HALF][i as usize]],
+            );
+        }
+        e.mem.set_u32(m + 0x1c, bounds);
+        vec![m, bits(case, 3), d]
+    })
+    .run()
+    .assert_same();
+    // The same on the main thread's word with the merge by address.
+    Diff::new(entry!(
+        0x00c2_df20,
+        modifiers::bound_update(Ptr<_>, f32, Ptr<_>)
+    ))
+    .culling_translated()
+    .control_words(&[0x007f])
     .inputs(&inputs(&[
         &[
             Input::Of(&[100, 150, 200]),

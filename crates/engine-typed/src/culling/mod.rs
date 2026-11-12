@@ -11,11 +11,17 @@
 //!
 //! **Floats.** The per-thread census (measure/typed/t3, `threads.tsv`) has the culling walk on the
 //! main thread and on game thread 12 (`00aa64d0`; about 1 call in 700), and the bound updates on
-//! threads 14 to 16 as well. So the family's row is [`Threads::Both`], and its x87 code keeps the
-//! exact helpers ([`engine_core::x87`]), which round as the running thread's control word says:
-//! plain `f32` would match the main thread only, `f64` rounded at each store the other threads only.
-//! Every load, operation and store below is the exe's, in its order, with its memory operands kept
-//! as memory operands (a signalling NaN there is not quieted before the operation).
+//! threads 14 to 16 as well. So the family's row is [`Threads::Both`], and its maths is native by
+//! ADR-0014's float rule (since 2026-11-11): what also runs off the main thread in `f64` locals
+//! rounded where the exe stores a float ([`crate::anim_keys::narrow`]), in the exe's order, which on
+//! the other threads' 53-bit precision is the exe's arithmetic bit for bit (the bounds' and planes'
+//! dot products, the merge); a single operation on two floats stored at once in plain `f32`, which
+//! rounds to the same float (a product of two floats is exact in an `f64`; a sum, difference or
+//! quotient rounded to 53 bits and then to 24 rounds as once, since 53 >= 2 * 24 + 2); what only the
+//! main thread runs (the fade-node culler) in plain `f32`, the exe's 24-bit arithmetic there.
+//! Comparisons read the floats plainly, NaN-aware as the exe; a float the exe copies through the x87
+//! stack is copied as it is (a signalling NaN keeps its payload). The x87 helpers below stay for the
+//! families whose maths is not native yet (pathing reads them from here).
 
 use engine_core::ptr::{Field, Ptr};
 use engine_core::typed::{Family, FamilyId, Threads};
@@ -107,12 +113,10 @@ pub(crate) fn copy_float<S, D>(
 }
 
 /// `FLDZ; FCOMP radius; FNSTSW; TEST AH,0x44; JP`: whether a radius is anything but zero (a NaN
-/// radius is not zero).
+/// radius is not zero: unordered sets C3 and C2, even parity, taken; equal sets C3 alone).
 #[inline(always)]
 pub(crate) fn radius_not_zero(e: &Engine, bound: Ptr<NiBound>) -> bool {
-    let radius = m32(e, bound, NiBound::m_fRadius);
-    // Unordered sets C3 and C2 (even parity, taken); equal sets C3 alone (odd, not taken).
-    radius.is_nan() || radius != 0.0
+    e.get(bound, NiBound::m_fRadius) != 0.0
 }
 
 /// The family's functions, by exe address.
