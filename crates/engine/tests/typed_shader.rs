@@ -7116,6 +7116,87 @@ fn own_list_draw() {
         .assert_same();
 }
 
+/// The world of `render_batches`' cases (its test and its view check).
+fn render_batches_world(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let d = draw_world(e);
+    let w = &d.w;
+    let acc = w.acc;
+    set(e, RETS + 0xf80, acc);
+    e.register(0x00b4_f5c0, |e, _| ret(e.mem.u32(RETS + 0xf80)));
+    e.map(0x011a_9000, 0x1000);
+    e.map(0x0120_1000, 0x1000);
+    // Groups 0 to 3 (the map stand-in answers the type's low two bits). Group 0 (type 0x10): every list holds
+    // two passes of its own type with the sort byte set, so each list's blend byte reaches the pass draw.
+    // Group 1 (type 0x11): its lists 2 and 3 hold a pass of its own type with the sort byte set. The rest:
+    // every other list holds passes of other types.
+    let own_11 = e.mem.alloc(8);
+    set(e, own_11, w.geometry);
+    e.mem.set_u16(own_11 + 4, 0x11);
+    e.mem.set_u8(own_11 + 6, 4);
+    e.mem.set_u8(own_11 + 7, 1);
+    for group in 0..4u32 {
+        for list in 0..5u32 {
+            let at = group_list(e, w, group, list);
+            if group == 0 {
+                list_at(e, at, &[w.passes[0], w.passes[1]]);
+            } else if group == 1 && (list == 2 || list == 3) {
+                list_at(e, at, &[own_11, w.passes[2]]);
+            } else if (group + list) % 2 == 0 {
+                let items = [
+                    w.passes[(list % 4) as usize],
+                    w.passes[((list + 1) % 4) as usize],
+                ];
+                list_at(e, at, &items);
+            } else {
+                list_at(e, at, &[]);
+            }
+        }
+        set(e, e.mem.u32(w.br + 8) + group * 0x68 + 0x64, 2);
+    }
+    // The active list: empty, one type, or three (the inline head and two nodes).
+    let head = w.br + 0x2c;
+    match c.word(1) {
+        0 => {
+            e.mem.set_u16(head, 0);
+            set(e, head + 4, 0);
+        }
+        1 => {
+            e.mem.set_u16(head, 0x10);
+            set(e, head + 4, 0);
+        }
+        3 => {
+            let next = e.mem.alloc(8);
+            e.mem.set_u16(head, 0);
+            set(e, head + 4, next);
+            e.mem.set_u16(next, 0x10);
+            set(e, next + 4, 0);
+        }
+        _ => {
+            let second = e.mem.alloc(8);
+            let third_node = e.mem.alloc(8);
+            e.mem.set_u16(head, 0x11);
+            set(e, head + 4, second);
+            e.mem.set_u16(second, 0x10);
+            set(e, second + 4, third_node);
+            e.mem.set_u16(third_node, 0x13);
+            set(e, third_node + 4, 0);
+        }
+    }
+    e.mem.set_u8(0x011f_94a6, c.word(2) as u8);
+    e.mem.set_u8(0x011f_9421, c.word(3) as u8);
+    // The accumulator's two bytes that make a shadow pass (odd types here) only clear its group.
+    e.mem.set_u8(acc + 0x164, u8::from(c.word(4) == 1));
+    e.mem.set_u8(acc + 0x165, u8::from(c.word(4) == 2));
+    set(e, 0x011f_fa24, 2);
+    set(e, 0x011f_f9e8, 1);
+    let (first, last) = match c.word(0) {
+        0 => (0, 0x1234_56ff),
+        1 => (0x10, 0x11),
+        _ => (0x12, 0x2f1),
+    };
+    vec![w.br, first, last, c.word(5)]
+}
+
 #[test]
 fn render_batches() {
     Diff::new(entry!(
@@ -7134,73 +7215,105 @@ fn render_batches() {
         Input::Of(&[0, 1, 2]),
         Input::Of(&[0, 0x5a]),
     ])
-    .setup(|e, c| {
-        let d = draw_world(e);
-        let w = &d.w;
-        let acc = w.acc;
-        set(e, RETS + 0xf80, acc);
-        e.register(0x00b4_f5c0, |e, _| ret(e.mem.u32(RETS + 0xf80)));
-        e.map(0x011a_9000, 0x1000);
-        e.map(0x0120_1000, 0x1000);
-        // Groups 0 to 3 (the map stand-in answers the type's low two bits): every other list holds passes.
-        for group in 0..4u32 {
-            for list in 0..5u32 {
-                let at = group_list(e, w, group, list);
-                if (group + list) % 2 == 0 {
-                    let items = [
-                        w.passes[(list % 4) as usize],
-                        w.passes[((list + 1) % 4) as usize],
-                    ];
-                    list_at(e, at, &items);
-                } else {
-                    list_at(e, at, &[]);
-                }
-            }
-            set(e, e.mem.u32(w.br + 8) + group * 0x68 + 0x64, 2);
-        }
-        // The active list: empty, one type, or three (the inline head and two nodes).
-        let head = w.br + 0x2c;
-        match c.word(1) {
-            0 => {
-                e.mem.set_u16(head, 0);
-                set(e, head + 4, 0);
-            }
-            1 => {
-                e.mem.set_u16(head, 0x10);
-                set(e, head + 4, 0);
-            }
-            3 => {
-                let next = e.mem.alloc(8);
-                e.mem.set_u16(head, 0);
-                set(e, head + 4, next);
-                e.mem.set_u16(next, 0x10);
-                set(e, next + 4, 0);
-            }
-            _ => {
-                let second = e.mem.alloc(8);
-                let third_node = e.mem.alloc(8);
-                e.mem.set_u16(head, 0x11);
-                set(e, head + 4, second);
-                e.mem.set_u16(second, 0x10);
-                set(e, second + 4, third_node);
-                e.mem.set_u16(third_node, 0x13);
-                set(e, third_node + 4, 0);
-            }
-        }
-        e.mem.set_u8(0x011f_94a6, c.word(2) as u8);
-        e.mem.set_u8(0x011f_9421, c.word(3) as u8);
-        // The accumulator's two bytes that make a shadow pass (odd types here) only clear its group.
-        e.mem.set_u8(acc + 0x164, u8::from(c.word(4) == 1));
-        e.mem.set_u8(acc + 0x165, u8::from(c.word(4) == 2));
-        set(e, 0x011f_fa24, 2);
-        set(e, 0x011f_f9e8, 1);
-        let (first, last) = match c.word(0) {
-            0 => (0, 0x1234_56ff),
-            1 => (0x10, 0x11),
-            _ => (0x12, 0x2f1),
-        };
-        vec![w.br, first, last, c.word(5)]
-    })
+    .setup(render_batches_world)
     .run()
     .assert_same();
+}
+
+// ---- The two list draws against the drawing thread's view (`draw::detach`) ----
+
+use engine_core::typed::diff::{memory_digest, Value};
+use engine_typed::draw::detach;
+
+/// `f` run on two engines `setup` makes alike for each case: one with the lists of the renderer `setup` names
+/// (its second answer) detached into the drawing thread's view around the call, as the cut does, one with no
+/// view. Both must answer the same and leave the same memory: a list word the draw read or wrote in place
+/// would differ (it reads 0 there while the view holds it), and the close stops a test build on a held word
+/// written in place.
+fn list_draw_view_same(
+    name: &str,
+    f: AbiFn,
+    cases: &[Vec<u32>],
+    setup: impl Fn(&mut Engine, &Case) -> (Vec<u32>, u32),
+) {
+    let mut total = 0;
+    for words in cases {
+        let case = Case(words.iter().map(|w| Value::Word(*w)).collect());
+        let mut plain = Engine::new();
+        let (a, _) = setup(&mut plain, &case);
+        let answer = f(&mut plain, &a);
+        let mut viewed = Engine::new();
+        let (b, renderer) = setup(&mut viewed, &case);
+        assert_eq!(a, b, "{name} {words:x?}: the setups differ");
+        let mut held = Vec::new();
+        detach::list_words(&viewed, renderer, &mut held);
+        total += held.len();
+        detach::open(&mut viewed, &held);
+        let viewed_answer = f(&mut viewed, &b);
+        detach::close(&mut viewed);
+        assert_eq!(
+            answer, viewed_answer,
+            "{name} {words:x?}: the answers differ"
+        );
+        assert_eq!(
+            memory_digest(&plain),
+            memory_digest(&viewed),
+            "{name} {words:x?}: the memory differs"
+        );
+    }
+    assert!(total > 0, "{name}: no case held a list word");
+}
+
+/// Every combination of `values` per argument.
+fn product(values: &[&[u32]]) -> Vec<Vec<u32>> {
+    values.iter().fold(vec![vec![]], |cases, vs| {
+        cases
+            .iter()
+            .flat_map(|c| {
+                vs.iter().map(move |v| {
+                    let mut c = c.clone();
+                    c.push(*v);
+                    c
+                })
+            })
+            .collect()
+    })
+}
+
+/// The own list draw on the holder that keeps its own list (`draw_world`'s holder 1), its renderer's lists
+/// detached.
+#[test]
+fn own_list_draw_with_the_lists_detached() {
+    list_draw_view_same(
+        "own_list_draw",
+        entry!(0x00b9_9990, dlists::own_list_draw(Ptr<_>, u32)).1,
+        &product(&[&[0, 1, 0x33]]),
+        |e, c| {
+            let d = draw_world(e);
+            let holder = d.w.holders[1];
+            (vec![holder + 0xc, c.word(0)], d.w.br)
+        },
+    );
+}
+
+/// `RenderBatches` on the world renderer, its lists detached, over its test's cases.
+#[test]
+fn render_batches_with_the_lists_detached() {
+    list_draw_view_same(
+        "render_batches",
+        entry!(0x00b9_9e20, dlists::render_batches(Ptr<_>, u32, u32, u32)).1,
+        &product(&[
+            &[0, 1, 2],
+            &[0, 1, 2, 3],
+            TWO_WAYS,
+            TWO_WAYS,
+            &[0, 1, 2],
+            &[0x5a],
+        ]),
+        |e, c| {
+            let words = render_batches_world(e, c);
+            let renderer = words[0];
+            (words, renderer)
+        },
+    );
 }

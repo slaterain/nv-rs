@@ -38,7 +38,8 @@
 //!   state lists, masks, programs), the shaders' own fields (their renderer, the counted pointers'
 //!   sources), the shader property's texture source +0xac and land table bytes, the constant map entries'
 //!   fields and the pass type tables, the default stage texture `011f951c`, the fade distances
-//!   `011f9454`/`011f9458`, the element bits `011ae640`, the constant kinds `011f5fc4` and the vertex shader's
+//!   `011f9454`/`011f9458`, the card's alpha-to-coverage switch `011f9421` (read by [`lists`]), the element bits
+//!   `011ae640`, the constant kinds `011f5fc4` and the vertex shader's
 //!   renderer's device word (+0x10f8), all filled at load and read in place by [`passes`], [`setups`] and
 //!   [`constants`] (group B's other reads and writes, its own writes read back included, go through
 //!   [`packet`] and [`own`]); and the exe's constant data (the -FLT_MAX and 0.001 the alpha pass
