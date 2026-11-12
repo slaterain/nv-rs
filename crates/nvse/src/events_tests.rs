@@ -1035,6 +1035,8 @@ fn dump_event_handlers_lists_them_in_the_console() {
     }
     e.mem.set_u32(AREA + 0x6900 + 0x130, NO);
     e.mem.set_u32(REFR_VTABLE + 0x130, NO);
+    // The calling script's editor id (none) for the error line.
+    e.mem.set_u32(SCRIPT, AREA + 0x6900);
     scripts(&mut e, &[(1, 4), (2, 4)]);
     set_script_ref(&mut e, 1, FN_A);
     set_script_ref(&mut e, 2, REF_1);

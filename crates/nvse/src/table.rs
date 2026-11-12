@@ -685,6 +685,9 @@ pub(crate) mod tests {
     #[test]
     fn every_console_re_export_is_its_console_record() {
         let mut e = engine_with_exe_tables();
+        // The helper names record 3 "SetVel": rename it, so the names below are found on theirs.
+        let other = guest_str(&mut e, b"C3");
+        e.mem.set_u32(CONSOLE_TABLE + 3 * RECORD, other);
         let exports: Vec<(usize, &str)> = NAMES
             .iter()
             .enumerate()

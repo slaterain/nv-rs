@@ -541,6 +541,9 @@ fn run_expr(e: &mut Engine, opcode: u32, this_obj: u32, tokens: &[Vec<u8>]) -> (
 #[test]
 fn ternary_evaluates_only_the_branch_it_picks() {
     let mut e = setup();
+    // Before the first frame: the failing branch's error is not printed (its text names the
+    // script).
+    e.ext::<crate::Nvse>().main_thread_recorded = false;
     // An operator without operands: evaluating it fails.
     let broken = vec![crate::expr::op::ADD];
     let end = 4 + (9 + 2) * 2 + (1 + 2);
