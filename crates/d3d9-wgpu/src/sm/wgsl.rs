@@ -1626,7 +1626,10 @@ mod tests {
         assert_eq!(float_constants_read(&p), 4);
         assert_eq!(REGS_C_OFFSET % 16, 0);
         assert_eq!(REGS_SIZE, 608 + 16 * 256);
-        assert!(PRELUDE.contains("clip: array<vec4<f32>, 6>,\n    c: array<vec4<f32>, 256>,\n}"));
+        // The header ends with the clip planes; the float constants are their own binding.
+        assert!(PRELUDE.contains("clip: array<vec4<f32>, 6>,\n}"));
+        assert!(PRELUDE.contains("struct Consts {\n    c: array<vec4<f32>, 256>,\n}"));
+        assert_eq!(CONSTS_SIZE, 16 * 256);
     }
 
     fn converts(tokens: &[u32], link: &Link) -> String {
