@@ -398,7 +398,12 @@ fn get_array_variable_needs_an_expression() {
     let mut e = setup();
     declare(&mut e, OBJ_A, 1, "list");
     local(&mut e, REF_EVENTS, 1, 3.0);
+    // Before the first frame the error is not printed (its text names the script).
+    e.ext::<crate::Nvse>().main_thread_recorded = false;
     assert_eq!(call(&mut e, 0x1531, REF, &[s("list")]).0, 0);
+    // Inside an expression it reads as `GetVariable`.
+    let got = crate::expr::with_evaluator(&mut e, |e| call(e, 0x1531, REF, &[s("list")]));
+    assert_eq!(got, (1, 3.0));
 }
 
 // ---- whole scripts ----
