@@ -7271,7 +7271,7 @@ fn worker_threads() -> usize {
 }
 
 /// Draws an encoder takes before it goes to a finishing thread ([`Device::send_encoder`]).
-const SPLIT_DRAWS: u32 = 256;
+const SPLIT_DRAWS: u32 = 512;
 
 /// An earlier encoder of the batch: finished, or on its way from a finishing thread.
 enum Finishing {
