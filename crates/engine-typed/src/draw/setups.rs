@@ -91,17 +91,21 @@ fn bind_stage(e: &mut Engine, index: u32) {
 /// constants set from it; answers the geometry (the first word of the pass being rendered).
 fn view_matrix(e: &mut Engine, shader: u32, out: u32) -> u32 {
     let object = packet::rendering_geometry(e);
-    let matrix = object.wrapping_add(0x68);
-    typed_call!(
-        crate::dispatch::FAMILY,
-        0x00c4_c2d0,
-        crate::dispatch::math::inverse_4x4(e, Ptr::new(matrix), 0u32, Ptr::new(out))
-    );
-    typed_call!(
-        shader::FAMILY,
-        0x00b7_c750,
-        accumulator::set_world_view_constants(e, shader, object, matrix)
-    );
+    // The transform as the value packet holds it ([`super::capture::image`]); the unused word stays the object.
+    let (from, to) = super::cut::WORLD;
+    super::capture::image(e, object, from, to, |e, image| {
+        let matrix = image.wrapping_add(0x68);
+        typed_call!(
+            crate::dispatch::FAMILY,
+            0x00c4_c2d0,
+            crate::dispatch::math::inverse_4x4(e, Ptr::new(matrix), 0u32, Ptr::new(out))
+        );
+        typed_call!(
+            shader::FAMILY,
+            0x00b7_c750,
+            accumulator::set_world_view_constants(e, shader, object, matrix)
+        );
+    });
     object
 }
 

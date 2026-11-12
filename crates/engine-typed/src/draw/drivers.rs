@@ -53,6 +53,11 @@ fn start(e: &mut Engine, camera: u32, acc: u32) -> bool {
 /// [`accumulator_draw`]) with the three words still on the stack. The jump stays a call through the
 /// slot: a direct call could not hand on those words.
 pub fn world_draw_first(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>, third: u32) {
+    if camera != 0 && packet::scene_renderer(e) != 0 {
+        // The drawing thread's cut (step 2): with `NV_DRAW_THREAD` set, what the draw reads that the frame's tail
+        // may change is copied into the value packet before the draw reads any of it.
+        super::cut::cut(e, camera, acc);
+    }
     if !start(e, camera, acc.addr()) {
         return;
     }
@@ -64,7 +69,25 @@ pub fn world_draw_first(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulato
         }
         super::detach::open(e, &words);
     }
-    e.vcall(acc.addr(), SLOT_DRAW, &args![camera, acc, third]);
+    with_packet_guard(e, |e| {
+        e.vcall(acc.addr(), SLOT_DRAW, &args![camera, acc, third]);
+    });
+    // What runs before the second half (the VATS target's draw) is not the world draw: it reads guest memory.
+    super::capture::pause(e);
+}
+
+/// Runs `f`; while a value packet is open, a stop unwinding out of `f` first closes it (the join: POISON's
+/// scribble put back, the held references given back), so nothing is left scribbled or held.
+#[inline(always)]
+fn with_packet_guard(e: &mut Engine, f: impl FnOnce(&mut Engine)) {
+    if !super::capture::is_open(e) {
+        f(e);
+        return;
+    }
+    if let Err(stop) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(e))) {
+        super::cut::join(e);
+        std::panic::resume_unwind(stop);
+    }
 }
 
 // Typed from 00b6b930
@@ -72,9 +95,14 @@ pub fn world_draw_first(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulato
 /// 0xac (the render mode's finish, [`accumulator_finish`]) with the three words still on the stack,
 /// kept a call through the slot for them.
 pub fn world_draw_second(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>, third: u32) {
-    e.vcall(acc.addr(), SLOT_FINISH, &args![camera, acc, third]);
+    super::capture::resume(e);
+    with_packet_guard(e, |e| {
+        e.vcall(acc.addr(), SLOT_FINISH, &args![camera, acc, third]);
+    });
     // Step 1 of the drawing thread: the view's words back to guest memory as the draw ends.
     super::detach::close(e);
+    // Step 2's join: the value packet closed.
+    super::cut::join(e);
 }
 
 // Typed from 00b6c0d0

@@ -2385,3 +2385,125 @@ fn allocate_node() {
     .run()
     .assert_same();
 }
+
+// ---- The value packet (the drawing thread's step 2: `draw::capture`, `draw::cut`) ----
+
+use engine_core::typed::diff::{memory_digest_beside_stack, Value};
+use engine_typed::draw::{capture, cut};
+
+/// `f` run, for each case and both scribbles, on two engines `setup` makes alike: one plain, one with the value
+/// packet open around the call, filled by `fill` with what the cut takes and scribbled (POISON). Both must answer
+/// the same and leave the same memory beside the stack for locals; every read made through the packet must have
+/// found its copy, and no scribbled byte may have been written. Some case must read through the packet.
+fn packet_same(
+    name: &str,
+    f: AbiFn,
+    cases: &[Vec<u32>],
+    setup: impl Fn(&mut Engine, &Case) -> Vec<u32>,
+    fill: impl Fn(&mut Engine, &[u32]),
+) {
+    let mut reads = 0;
+    for words in cases {
+        for scribble in [capture::SCRIBBLE, capture::SCRIBBLE_OTHER] {
+            let case = Case(words.iter().map(|w| Value::Word(*w)).collect());
+            let mut plain = Engine::new();
+            let a = setup(&mut plain, &case);
+            plain.with_stack(4, |_, _| ());
+            let answer = f(&mut plain, &a);
+            let mut poisoned = Engine::new();
+            let b = setup(&mut poisoned, &case);
+            poisoned.with_stack(4, |_, _| ());
+            assert_eq!(a, b, "{name} {words:x?}: the setups differ");
+            assert!(capture::begin(&poisoned), "{name}: a packet was left open");
+            fill(&mut poisoned, &b);
+            capture::poison(&mut poisoned, scribble);
+            let poisoned_answer = f(&mut poisoned, &b);
+            let report = capture::end(&mut poisoned);
+            assert_eq!(
+                answer, poisoned_answer,
+                "{name} {words:x?} {scribble:#x}: the answers differ"
+            );
+            assert_eq!(
+                memory_digest_beside_stack(&plain),
+                memory_digest_beside_stack(&poisoned),
+                "{name} {words:x?} {scribble:#x}: the memory differs"
+            );
+            assert_eq!(
+                (report.misses, report.written),
+                (0, 0),
+                "{name} {words:x?} {scribble:#x}: {report:?}"
+            );
+            reads += report.reads;
+        }
+    }
+    assert!(reads > 0, "{name}: no case read through the packet");
+}
+
+/// Every combination of `values` per argument.
+fn product(values: &[&[u32]]) -> Vec<Vec<u32>> {
+    values.iter().fold(vec![vec![]], |cases, vs| {
+        cases
+            .iter()
+            .flat_map(|c| {
+                vs.iter().map(move |v| {
+                    let mut c = c.clone();
+                    c.push(*v);
+                    c
+                })
+            })
+            .collect()
+    })
+}
+
+/// The points draw reads its geometry's world transform and bound, the particles' count and every array through
+/// the packet: with the packet's guest bytes scribbled it draws what it draws without the packet. The data's
+/// count slot is the particles' (`00a923a0`) and the geometry's immediate draw the particles' (`00a9b1f0`), as the
+/// cut finds particles.
+#[test]
+fn draw_points_reads_the_packet() {
+    packet_same(
+        "draw_points",
+        entry!(0x00e7_0140, packed::draw_points(Ptr<_>, Ptr<_>)).1,
+        &product(&[
+            &[
+                POINTS_REAL_SLOT,
+                POINTS_REAL_SLOT | POINTS_COLORS | POINTS_ANGLES | POINTS_BYTES,
+                POINTS_REAL_SLOT | POINTS_BYTES | POINTS_INDICES,
+                POINTS_REAL_SLOT | POINTS_INDICES | POINTS_NEW_INDEX_BUFFER | POINTS_COLORS,
+                POINTS_REAL_SLOT | POINTS_ANGLES | POINTS_DECLARED,
+            ],
+            &[2, 1],
+            &[ONE],
+            &[ONE, 0x3fc0_0000],
+        ]),
+        |e, c| {
+            let (renderer, geometry) = points_world(e, c.word(0), c.word(1), c.word(2), c.word(3));
+            let vt = vtable(e, &[(0xe0, 0x00a9_b1f0)]);
+            set(e, geometry, vt);
+            vec![renderer, geometry]
+        },
+        |e, a| cut::take_geometry_values(e, a[1]),
+    );
+}
+
+/// The bone fill reads the skin's root and bones' world transforms and the bones' scales through the packet
+/// (the transforms handed to the product and inverse as images of the copies).
+#[test]
+fn bone_matrices_read_the_packet() {
+    packet_same(
+        "bone_matrices",
+        entry!(
+            0x00e6_fe30,
+            skin::bone_matrices(Ptr<_>, Ptr<_>, Ptr<_>, u8, u32, u8)
+        )
+        .1,
+        &product(&[&[2, 1], &[3, 4], &[0, 1], &[0, 1], &[ONE, 0x3fc0_0000]]),
+        |e, c| {
+            let registers = c.word(1);
+            let (renderer, skin, world) =
+                bone_world(e, c.word(0), 0, registers ^ 7, 0x400, c.word(4));
+            vec![renderer, skin, world, c.word(2), registers, c.word(3)]
+        },
+        |e, a| cut::take_skin_values(e, a[1]),
+    );
+}

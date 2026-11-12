@@ -69,7 +69,9 @@ use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
 pub mod alpha;
+pub mod capture;
 pub mod constants;
+pub mod cut;
 pub mod detach;
 pub mod drivers;
 pub mod group_c;

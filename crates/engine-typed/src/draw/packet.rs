@@ -3,6 +3,7 @@
 //! packet would be filled from these ([`super`] has the plan). Each reads what the exe reads, where it
 //! reads it.
 
+use super::capture;
 use crate::shader::elem_addr;
 use crate::shader::layout::{BSBatchRenderer, BSShaderAccumulator, PassHolder};
 use engine_core::ptr::Ptr;
@@ -75,10 +76,11 @@ pub(crate) fn subtract_radius(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> u8 {
     e.get(acc, BSShaderAccumulator::ucSubtractRadius)
 }
 
-/// Whether the second half copies the water reflection first (+0x38).
+/// Whether the second half copies the water reflection first (+0x38; main clears it after the draw: the
+/// packet's).
 #[inline(always)]
 pub(crate) fn copy_reflection(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
-    e.get(acc, BSShaderAccumulator::ucCopyReflection) != 0
+    capture::byte(e, acc.addr(), BSShaderAccumulator::ucCopyReflection.off) != 0
 }
 
 /// Whether the first half splits its pass types at 0x237 with clip planes off for the rest
@@ -280,18 +282,17 @@ pub(crate) fn bound_of(e: &Engine, geometry: u32) -> u32 {
     }
 }
 
-/// Word `index` of a bound (the centre's x, y, z, then the radius).
+/// Word `index` of a bound (the centre's x, y, z, then the radius; the packet's).
 #[inline(always)]
 pub(crate) fn bound_word(e: &Engine, bound: u32, index: u32) -> u32 {
-    e.global::<u32>(bound.wrapping_add(index.wrapping_mul(4)))
+    capture::word(e, bound, index.wrapping_mul(4))
 }
 
 /// The camera's view direction (+0x68, +0x74, +0x80), each through an `FLD` and `FSTP` into a
 /// local, so quieted, and loaded again.
 #[inline(always)]
 pub(crate) fn camera_direction(e: &Engine, camera: u32) -> [f64; 3] {
-    [0x68u32, 0x74, 0x80]
-        .map(|offset| x87_load32(x87_quiet_bits(e.global::<u32>(camera.wrapping_add(offset)))))
+    [0x68u32, 0x74, 0x80].map(|offset| x87_load32(x87_quiet_bits(capture::word(e, camera, offset))))
 }
 
 // ---- The packet's own inputs, written as the draw starts and ends. ----
@@ -327,7 +328,7 @@ pub fn finish_accumulating(e: &mut Engine, this: Ptr<BSShaderAccumulator>) {
 /// The camera direction's words as the exe keeps them in locals (each through `FLD`/`FSTP`, so quieted).
 #[inline(always)]
 pub(crate) fn camera_direction_words(e: &Engine, camera: u32) -> [u32; 3] {
-    [0x68u32, 0x74, 0x80].map(|offset| x87_quiet_bits(e.global::<u32>(camera.wrapping_add(offset))))
+    [0x68u32, 0x74, 0x80].map(|offset| x87_quiet_bits(capture::word(e, camera, offset)))
 }
 
 // ---- The camera handed to the scene renderer as the draw starts. ----
@@ -396,8 +397,17 @@ pub fn rotation_column_2(e: &mut Engine, object: u32, out: u32) -> u32 {
 
 // Typed from 004e9bb0
 /// `thiscall(renderer, camera)`: the camera to the scene renderer: its frustum, its port, the three
-/// columns of its rotation (2, 1, 0, into a local) and its translate go to [`pass_camera_data`].
+/// columns of its rotation (2, 1, 0, into a local) and its translate go to [`pass_camera_data`]. While the value
+/// packet holds the camera, the addresses point into its image of the camera ([`capture::image`]).
 pub fn hand_camera(e: &mut Engine, renderer: u32, camera: u32) {
+    let (from, to) = super::cut::CAMERA;
+    capture::image(e, camera, from, to, |e, camera| {
+        hand_camera_from(e, renderer, camera);
+    });
+}
+
+/// [`hand_camera`]'s body, with the camera's address (or its image's).
+fn hand_camera_from(e: &mut Engine, renderer: u32, camera: u32) {
     e.with_stack(0x24, |e, columns| {
         let columns = columns.addr();
         let frustum = typed_call!(super::FAMILY, 0x004a_0d10, camera_frustum(e, camera));
@@ -498,11 +508,11 @@ pub(crate) fn skin_instance(e: &Engine, geometry: u32) -> u32 {
     e.global::<u32>(geometry.wrapping_add(0xbc))
 }
 
-/// A geometry's world transform (`m_kWorld`, +0x68, 13 words) copied word by word to `to`.
+/// A geometry's world transform (`m_kWorld`, +0x68, 13 words; the packet's) copied word by word to `to`.
 #[inline(always)]
 pub(crate) fn copy_world_transform(e: &mut Engine, geometry: u32, to: u32) {
-    for i in 0..13u32 {
-        let word = e.global::<u32>(geometry.wrapping_add(0x68 + 4 * i));
+    let words = capture::words::<13>(e, geometry, 0x68);
+    for (i, word) in (0u32..).zip(words) {
         e.set_global(to.wrapping_add(4 * i), word);
     }
 }
@@ -519,10 +529,10 @@ pub(crate) fn data_vertices(e: &Engine, data: u32) -> u16 {
     e.global::<u16>(data.wrapping_add(8))
 }
 
-/// A particle data's active count (+0x50).
+/// A particle data's active count (+0x50; the packet's).
 #[inline(always)]
 pub(crate) fn active_particles(e: &Engine, data: u32) -> u16 {
-    e.global::<u16>(data.wrapping_add(0x50))
+    capture::half(e, data, 0x50)
 }
 
 /// A triangle data's triangle count (`m_usTriangles`, +0x40).
@@ -603,11 +613,11 @@ pub(crate) fn bone_node(e: &Engine, list: u32, bone: u32) -> u32 {
     e.global::<u32>(list.wrapping_add(bone.wrapping_mul(4)))
 }
 
-/// An object's world scale (`NiAVObject` +0x98), as its word: a bone node's in the bone fill, the rendered
-/// geometry's in the pass set-ups.
+/// An object's world scale (`NiAVObject` +0x98, the packet's), as its word: a bone node's in the bone fill, the
+/// rendered geometry's in the pass set-ups.
 #[inline(always)]
 pub(crate) fn bone_scale(e: &Engine, node: u32) -> u32 {
-    e.global::<u32>(node.wrapping_add(0x98))
+    capture::word(e, node, 0x98)
 }
 
 // ---- The pass begin and end (group B): the current pass, the pass being rendered. ----
@@ -704,10 +714,10 @@ pub(crate) fn alpha_reference(e: &Engine, property: u32) -> u8 {
     e.global::<u8>(property.wrapping_add(0x1a))
 }
 
-/// The pass being rendered's byte +9.
+/// The pass being rendered's byte +9 (its light count, the packet's).
 #[inline(always)]
 pub(crate) fn rendering_pass_byte9(e: &Engine, pass: u32) -> u8 {
-    e.global::<u8>(pass.wrapping_add(9))
+    capture::byte(e, pass, 9)
 }
 
 /// The fog property index byte (`011f91c4`), the scene node whose fog property the passes use.
@@ -715,14 +725,14 @@ const FOG_INDEX: u32 = 0x011f_91c4;
 
 #[inline(always)]
 pub(crate) fn fog_index(e: &Engine) -> u8 {
-    e.global::<u8>(FOG_INDEX)
+    capture::byte(e, FOG_INDEX, 0)
 }
 
 /// A fog property's word at `offset` (+0x20, +0x24, +0x28 its colour, +0x2c the near distance, +0x30
-/// the far one, +0x60 its power).
+/// the far one, +0x60 its power; the packet's).
 #[inline(always)]
 pub(crate) fn fog_field(e: &Engine, fog: u32, offset: u32) -> u32 {
-    e.global::<u32>(fog.wrapping_add(offset))
+    capture::word(e, fog, offset)
 }
 
 /// The fog colour (`011a9bd0`, four floats): word `index`.
@@ -742,11 +752,11 @@ pub(crate) fn land_table(e: &Engine, property: u32) -> u32 {
 /// A lighting property's second flags word (+0x24) and its distance from the camera (+0x34).
 #[inline(always)]
 pub(crate) fn property_flags_24(e: &Engine, property: u32) -> u32 {
-    e.mem.u32(property.wrapping_add(0x24))
+    capture::word(e, property, 0x24)
 }
 #[inline(always)]
 pub(crate) fn property_distance(e: &Engine, property: u32) -> u32 {
-    e.mem.u32(property.wrapping_add(0x34))
+    capture::word(e, property, 0x34)
 }
 
 // ---- Group C: the reads of the shader set-ups the world draw reached as translations. ----

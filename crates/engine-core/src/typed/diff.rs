@@ -1486,6 +1486,13 @@ pub fn memory_digest(e: &Engine) -> u64 {
     memory_hash(e, None, false, false)
 }
 
+/// [`memory_digest`] beside the running thread's stack for locals: its bytes left out and a word anywhere that
+/// points into it taken as one address. For two runs whose locals differ (the drawing thread's value packet check,
+/// `draw::capture`, hands helpers images of copied objects on the stack).
+pub fn memory_digest_beside_stack(e: &Engine) -> u64 {
+    memory_hash(e, e.guest_stack_region(), false, true)
+}
+
 fn memory_hash(e: &Engine, stack: Option<(u32, u32)>, nan_payloads: bool, loose: bool) -> u64 {
     let mut hash = 0;
     let on_stack = |a: u32| stack.is_some_and(|(lo, hi)| (lo..hi).contains(&a));
