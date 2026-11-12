@@ -9,9 +9,10 @@
 //! takes the slot's chunks as they come once it reaches the cut; the direct runner carries the
 //! slot's commands out as they come (main's before the cut are done) and holds main's later ones
 //! until the slot is closed; `NV_D3D9_RECORD` writes the same order. While a cut is open, main
-//! never waits for the render thread (no full-queue wait; `Present` lets at least one frame be in
-//! flight) and makes no sync call: the layer above waits for the slot first, outside its own lock,
-//! which the drawing side needs.
+//! never waits for the render thread past the cut's mark (no full-queue wait; a `Present` waits
+//! only for the Presents before the mark) and makes no sync call: the layer above waits for the
+//! slot first, outside its own lock, which the drawing side needs. The stream outlives its slots
+//! in the game; dropped first, it leaves the slot's later commands undone (see [`Slot`]).
 
 use crate::chunk::Chunk;
 use crate::cmd::{Backend, Cmd, Data, Reply};
@@ -231,8 +232,16 @@ impl Stream {
         Ok(())
     }
 
-    /// Writes out what is recorded so far (`NV_REPEATABLE`'s end, before the process ends).
+    /// Writes out what is recorded so far (`NV_REPEATABLE`'s end, before the process ends). Main's
+    /// commands held for a slot that is closed now are written first; while the slot is still
+    /// open they are left out (a line says so), so the layer closes the last slot before this.
     pub fn finish_recording(&mut self) {
+        if self.holding() && self.record.is_some() {
+            eprintln!(
+                "NV_D3D9_RECORD: the drawing side's slot is still open at the recording's end: \
+                 main's commands after its cut are left out"
+            );
+        }
         if let Some(r) = &self.record {
             if let Err(error) = lock_any(r).out.flush() {
                 eprintln!("NV_D3D9_RECORD: the command file could not be written ({error})");
@@ -243,7 +252,8 @@ impl Stream {
     /// Carries out `cmd` or queues it. A sync command ([`Cmd::is_sync`]) returns its reply once
     /// every command before it is carried out; a [`Cmd::Present`] gets its `frame` number here and
     /// returns once no more than [`Settings::frames_in_flight`] presents are left to carry out
-    /// (one at least while a cut is open); any other returns [`Reply::None`] at once.
+    /// (while a cut is open, at most the Presents before its mark are waited for); any other
+    /// returns [`Reply::None`] at once.
     ///
     /// # Panics
     /// On a sync command while a cut's slot is open: its reply would come after the slot's
@@ -257,8 +267,7 @@ impl Stream {
             self.presents = self.presents.wrapping_add(1);
             *frame = self.presents;
         }
-        self.settle_cut();
-        let holding = self.cut.is_some();
+        let holding = self.holding();
         if holding && cmd.is_sync() {
             panic!(
                 "main's sync call ({}) while the drawing side's slot is open: its reply would come \
@@ -294,26 +303,22 @@ impl Stream {
     /// # Panics
     /// While another cut is open.
     pub fn cut(&mut self) -> Slot {
-        self.settle_cut();
-        assert!(
-            self.cut.is_none(),
-            "a cut is open: one drawing slot at a time"
-        );
+        assert!(!self.holding(), "a cut is open: one drawing slot at a time");
         self.cuts += 1;
         let id = self.cuts;
         let closed = Arc::new(AtomicU64::new(0));
         if let Runner::Direct(_) = self.runner {
-            let Runner::Direct(backend) = std::mem::replace(
-                &mut self.runner,
-                Runner::Shared(Arc::new(Mutex::new(Box::new(Nothing)))),
-            ) else {
+            // Shared with the slot until it is closed and settled ([`Stream::settle_cut`]).
+            let Runner::Direct(backend) =
+                std::mem::replace(&mut self.runner, Runner::Direct(Box::new(Nothing)))
+            else {
                 unreachable!()
             };
             self.runner = Runner::Shared(Arc::new(Mutex::new(backend)));
         }
         let side = match &mut self.runner {
             Runner::Direct(_) => unreachable!("made shared above"),
-            Runner::Shared(backend) => SlotSide::Direct(Arc::clone(backend)),
+            Runner::Shared(backend) => SlotSide::Direct(Some(Arc::clone(backend))),
             Runner::Threaded(t) => SlotSide::Threaded(t.cut(id)),
         };
         self.cut = Some(OpenCut {
@@ -332,16 +337,17 @@ impl Stream {
         }
     }
 
-    /// Whether a cut is open: its slot not closed yet, or closed and not yet seen here.
+    /// Whether a cut is open: its slot not closed yet (a slot closed since is settled here).
     pub fn cut_open(&mut self) -> bool {
-        self.settle_cut();
-        self.cut.is_some()
+        self.holding()
     }
 
     /// What waits for the open cut's slot to be closed, without the stream: the layer above
     /// holds it while its own lock is released ([`CutWaiter::wait`]). `None` without an open cut.
     pub fn cut_waiter(&mut self) -> Option<CutWaiter> {
-        self.settle_cut();
+        if !self.holding() {
+            return None;
+        }
         self.cut.as_ref().map(|open| CutWaiter {
             id: open.id,
             closed: Arc::clone(&open.closed),
@@ -351,7 +357,7 @@ impl Stream {
     /// Main's commands held back for a slot that is closed now are carried out (direct runner)
     /// and written (recording): what [`Stream::submit`] does first anyway.
     pub fn settle(&mut self) {
-        self.settle_cut();
+        self.holding();
     }
 
     /// The last cut whose slot the backend has carried out, and when (the render thread's clock
@@ -363,15 +369,31 @@ impl Stream {
         }
     }
 
-    /// The open cut's slot closed: main's held commands go on.
-    fn settle_cut(&mut self) {
-        let Some(open) = &self.cut else {
-            return;
-        };
-        if open.closed.load(Ordering::Acquire) < open.id {
-            return;
+    /// Whether a cut is open: its slot not closed yet. A slot closed since is settled first
+    /// ([`Stream::settle_cut`]). Without a cut (every call but the world draw's), one test.
+    #[inline(always)]
+    fn holding(&mut self) -> bool {
+        self.cut.is_some() && self.cut_still_open()
+    }
+
+    /// [`Stream::holding`] with a cut: false, and the cut settled, once its slot is closed.
+    #[cold]
+    #[inline(never)]
+    fn cut_still_open(&mut self) -> bool {
+        match &self.cut {
+            Some(open) if open.closed.load(Ordering::Acquire) < open.id => true,
+            Some(_) => {
+                self.settle_cut();
+                false
+            }
+            None => false,
         }
-        let open = self.cut.take().expect("checked above");
+    }
+
+    /// The open cut's slot is closed: main's held commands go on (written to the recording,
+    /// carried out on the direct runner, whose backend is main's alone again).
+    fn settle_cut(&mut self) {
+        let open = self.cut.take().expect("a closed cut to settle");
         if let Some(r) = &self.record {
             lock_any(r).write(&open.held_record);
         }
@@ -380,6 +402,20 @@ impl Stream {
             for i in 0..open.held.len() {
                 backend.execute(open.held.get(i));
             }
+        }
+        if let Runner::Shared(_) = self.runner {
+            let Runner::Shared(shared) =
+                std::mem::replace(&mut self.runner, Runner::Direct(Box::new(Nothing)))
+            else {
+                unreachable!()
+            };
+            // The slot let go of it before it was marked closed ([`Slot::end`]).
+            self.runner = match Arc::try_unwrap(shared) {
+                Ok(backend) => {
+                    Runner::Direct(backend.into_inner().unwrap_or_else(PoisonError::into_inner))
+                }
+                Err(shared) => Runner::Shared(shared),
+            };
         }
     }
 
@@ -394,8 +430,9 @@ impl Stream {
 
     /// Hands what is recorded to the render thread now, without waiting.
     pub fn flush(&mut self) {
+        let holding = self.holding();
         if let Runner::Threaded(t) = &mut self.runner {
-            t.hand_over(self.cut.is_some());
+            t.hand_over(holding);
         }
     }
 
@@ -411,11 +448,39 @@ impl Stream {
         }
     }
 
+    /// The cuts' slots on the render thread's queue, not yet carried out: the chunks waiting in
+    /// each, oldest first (tests).
+    #[cfg(test)]
+    pub(crate) fn queued_slots(&self) -> Vec<usize> {
+        match &self.runner {
+            Runner::Threaded(t) => lock(&t.shared.queue)
+                .slots
+                .iter()
+                .map(|s| s.chunks.len())
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Whether the direct runner's backend is shared with a slot (tests).
+    #[cfg(test)]
+    pub(crate) fn backend_shared(&self) -> bool {
+        matches!(self.runner, Runner::Shared(_))
+    }
+
+    /// The render thread panics in its own bookkeeping at the next cut's mark (tests).
+    #[cfg(test)]
+    pub(crate) fn fail_at_next_mark(&self) {
+        if let Runner::Threaded(t) = &self.runner {
+            lock(&t.shared.queue).fail_at_mark = true;
+        }
+    }
+
     /// Returns once every command submitted is carried out (after an open cut's slot is closed).
     pub fn finish(&mut self) {
         if let Some(waiter) = self.cut_waiter() {
             waiter.wait();
-            self.settle_cut();
+            self.holding();
         }
         if let Runner::Threaded(t) = &mut self.runner {
             t.hand_over(false);
@@ -457,6 +522,12 @@ impl CutWaiter {
 
 /// The drawing side's place in main's stream ([`Stream::cut`]): its commands are carried out
 /// after main's before the cut and before main's after it. [`Slot::close`] (or dropping it) ends it.
+///
+/// The stream outlives its slots in the game (the drawing job is joined first). Dropped while a
+/// slot is open, the stream goes without the rest of it: on the threaded runner the slot's later
+/// commands are dropped and its sync calls answer [`Reply::None`] (a reply already given is still
+/// taken); on the direct runner the slot keeps the backend and carries them out, and main's held
+/// commands are dropped.
 pub struct Slot {
     cut: u64,
     side: SlotSide,
@@ -469,8 +540,9 @@ pub struct Slot {
 // One slot a cut, made once and kept where it was made: unboxed, as [`Runner`].
 #[allow(clippy::large_enum_variant)]
 enum SlotSide {
-    /// The direct runner's backend: the slot's commands are carried out as they come.
-    Direct(Arc<Mutex<Box<dyn Backend>>>),
+    /// The direct runner's backend: the slot's commands are carried out as they come. Let go of
+    /// at the close, so main has it alone again.
+    Direct(Option<Arc<Mutex<Box<dyn Backend>>>>),
     Threaded(SlotThreaded),
 }
 
@@ -505,7 +577,9 @@ impl Slot {
             lock_any(r).write_cmd(cmd);
         }
         match &mut self.side {
-            SlotSide::Direct(backend) => lock_any(backend).execute(cmd),
+            SlotSide::Direct(backend) => {
+                lock_any(backend.as_ref().expect("an open slot holds the backend")).execute(cmd)
+            }
             SlotSide::Threaded(t) => t.submit(cmd),
         }
     }
@@ -521,7 +595,11 @@ impl Slot {
         }
         self.done = true;
         match &mut self.side {
-            SlotSide::Direct(_) => *lock_any(&self.cut_done) = Some((self.cut, Instant::now())),
+            SlotSide::Direct(backend) => {
+                // Let go of before the slot is seen closed: main takes the backend back whole.
+                *backend = None;
+                *lock_any(&self.cut_done) = Some((self.cut, Instant::now()));
+            }
             SlotSide::Threaded(t) => t.close(),
         }
         self.closed.store(self.cut, Ordering::Release);
@@ -536,7 +614,7 @@ impl Drop for Slot {
 
 /// What [`Stream::record_repeatable`] writes for `cmd`: the window handles as 0, a query read not
 /// at all.
-fn repeatable_form(cmd: Cmd<Data<'_>>) -> Option<Cmd<Data<'_>>> {
+pub(crate) fn repeatable_form(cmd: Cmd<Data<'_>>) -> Option<Cmd<Data<'_>>> {
     Some(match cmd {
         Cmd::CreateDevice {
             device,
@@ -592,7 +670,7 @@ fn repeatable_form(cmd: Cmd<Data<'_>>) -> Option<Cmd<Data<'_>>> {
 impl Drop for Stream {
     fn drop(&mut self) {
         // A slot closed meanwhile: main's held commands are carried out and written first.
-        self.settle_cut();
+        self.holding();
         if let Some(r) = &self.record {
             let _ = lock_any(r).out.flush();
         }
@@ -605,6 +683,9 @@ struct Threaded {
     chunk: Chunk,
     settings: Settings,
     presents: u64,
+    /// The Presents main submitted before the last cut's mark: while the cut is open, the most a
+    /// Present waits for.
+    cut_presents: u64,
     /// `check`: the hash of every command main recorded.
     hash: u64,
     encoded: Vec<u8>,
@@ -649,6 +730,9 @@ struct Queue {
     renderer_sleeps: bool,
     /// Recording threads waiting for progress (main, the drawing side).
     waiters: u32,
+    /// [`Stream::fail_at_next_mark`].
+    #[cfg(test)]
+    fail_at_mark: bool,
 }
 
 /// One cut's slot on the queue: its chunks as the drawing side hands them over, their bytes,
@@ -660,6 +744,9 @@ struct SlotQueue {
     bytes: usize,
     closed: bool,
     reply: Option<Reply>,
+    /// The stream closed before the slot did: the render thread went on without the rest of it
+    /// (see [`Slot`]).
+    gone: bool,
 }
 
 impl Queue {
@@ -669,6 +756,11 @@ impl Queue {
             .iter_mut()
             .find(|s| s.cut == cut)
             .expect("a slot is on the queue until it is carried out")
+    }
+
+    /// Cut `cut`'s slot while the render thread still takes its commands.
+    fn open_slot(&mut self, cut: u64) -> Option<&mut SlotQueue> {
+        self.slots.iter_mut().find(|s| s.cut == cut && !s.gone)
     }
 }
 
@@ -712,7 +804,20 @@ impl Threaded {
         let check = settings.check;
         let thread = std::thread::Builder::new()
             .name("nv-render".into())
-            .spawn(move || render(&theirs, backend, check))
+            .spawn(move || {
+                // The backend's panics are caught where it is called; one of the render thread's
+                // own (its slot bookkeeping) stops both recording sides with its reason too, so
+                // neither waits for it forever.
+                let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    render(&theirs, backend, check)
+                }));
+                if let Err(panic) = ran {
+                    let q = lock(&theirs.queue);
+                    if q.dead.is_none() {
+                        die(&theirs, q, &*panic);
+                    }
+                }
+            })
             .expect("the render thread starts");
         Threaded {
             shared,
@@ -723,13 +828,14 @@ impl Threaded {
             },
             settings,
             presents: 0,
+            cut_presents: 0,
             hash: wire::HASH_START,
             encoded: Vec::new(),
             thread: Some(thread),
         }
     }
 
-    /// `holding`: a cut is open (no full-queue wait, at least a frame in flight).
+    /// `holding`: a cut is open (no full-queue wait, no Present after the mark waited for).
     fn submit(&mut self, cmd: Cmd<Data<'_>>, holding: bool) -> Reply {
         if self.shared.dead.load(Ordering::Relaxed) {
             stopped(&lock(&self.shared.queue));
@@ -758,14 +864,12 @@ impl Threaded {
         } else if present {
             self.presents += 1;
             self.hand_over(holding);
-            // With a cut open, the render thread may be waiting at the cut for the drawing side:
-            // this Present must not wait for itself.
-            let in_flight = if holding {
-                self.settings.frames_in_flight.max(1)
-            } else {
-                self.settings.frames_in_flight
-            };
-            let need = self.presents.saturating_sub(in_flight);
+            let mut need = self.presents.saturating_sub(self.settings.frames_in_flight);
+            if holding {
+                // The render thread may be waiting at the cut's mark for the drawing side, which
+                // may be waiting for main: only the Presents before the mark are waited for.
+                need = need.min(self.cut_presents);
+            }
             let t = Instant::now();
             drop(self.wait(|q| q.presents_done >= need));
             self.stats.present.add(t.elapsed());
@@ -830,6 +934,7 @@ impl Threaded {
     /// stops at to carry out the slot.
     fn cut(&mut self, id: u64) -> SlotThreaded {
         self.hand_over(false);
+        self.cut_presents = self.presents;
         {
             let mut q = lock(&self.shared.queue);
             stopped(&q);
@@ -888,13 +993,18 @@ impl SlotThreaded {
             self.chunk.reply_wanted = true;
             self.hand_over();
             let cut = self.cut;
+            // Nothing once the stream went on without the slot (a reply given is still taken).
             wait_for(&self.shared, |q| {
-                q.slots.iter().any(|s| s.cut == cut && s.reply.is_some())
+                q.slots
+                    .iter()
+                    .find(|s| s.cut == cut)
+                    .map_or(true, |s| s.reply.is_some() || s.gone)
             })
-            .slot(cut)
-            .reply
-            .take()
-            .expect("the reply waited for")
+            .slots
+            .iter_mut()
+            .find(|s| s.cut == cut)
+            .and_then(|s| s.reply.take())
+            .unwrap_or(Reply::None)
         } else {
             if self.chunk.len() >= self.settings.chunk_commands
                 || self.chunk.bytes >= self.settings.chunk_bytes
@@ -907,7 +1017,7 @@ impl SlotThreaded {
 
     /// The slot's chunk goes to the render thread; past the queue's limit, waits until the render
     /// thread has carried out half of the slot's (it does once it reaches the cut, which needs
-    /// nothing of main's after it).
+    /// nothing of main's after it). Dropped once the stream went on without the slot.
     fn hand_over(&mut self) {
         if self.shared.dead.load(Ordering::Relaxed) {
             stopped(&lock(&self.shared.queue));
@@ -921,6 +1031,10 @@ impl SlotThreaded {
         let (wake, full) = {
             let mut q = lock(&self.shared.queue);
             stopped(&q);
+            if q.open_slot(self.cut).is_none() {
+                self.chunk.clear();
+                return;
+            }
             let next = q.free.pop().unwrap_or_default();
             let chunk = std::mem::replace(&mut self.chunk, next);
             let renderer_sleeps = q.renderer_sleeps;
@@ -943,10 +1057,9 @@ impl SlotThreaded {
             );
             let cut = self.cut;
             drop(wait_for(&self.shared, |q| {
-                q.slots
-                    .iter()
-                    .find(|s| s.cut == cut)
-                    .map_or(true, |s| s.bytes <= bytes && s.chunks.len() <= chunks)
+                q.slots.iter().find(|s| s.cut == cut).map_or(true, |s| {
+                    s.gone || (s.bytes <= bytes && s.chunks.len() <= chunks)
+                })
             }));
         }
     }
@@ -1063,7 +1176,12 @@ fn render(shared: &Shared, mut backend: Box<dyn Backend>, check: bool) {
                         .unwrap_or_else(PoisonError::into_inner)
                         .0
                 } else {
-                    shared.work.wait(q).unwrap_or_else(PoisonError::into_inner)
+                    // Until a chunk comes or the stream closes: a wake-up with neither (the system
+                    // may wake a sleeper for nothing) gives the idle work no turn it did not ask for.
+                    shared
+                        .work
+                        .wait_while(q, |q| q.chunks.is_empty() && !q.closing)
+                        .unwrap_or_else(PoisonError::into_inner)
                 };
                 q.renderer_sleeps = false;
             }
@@ -1110,6 +1228,10 @@ fn carry_out_slot(shared: &Shared, backend: &mut dyn Backend, check: bool, cut: 
     loop {
         let mut chunk = {
             let mut q = lock(&shared.queue);
+            #[cfg(test)]
+            if std::mem::take(&mut q.fail_at_mark) {
+                panic!("a test's panic in the render thread's slot bookkeeping");
+            }
             loop {
                 let closing = q.closing;
                 let slot = q
@@ -1120,19 +1242,25 @@ fn carry_out_slot(shared: &Shared, backend: &mut dyn Backend, check: bool, cut: 
                 if let Some(chunk) = slot.chunks.pop_front() {
                     break chunk;
                 }
-                if slot.closed || closing {
+                if slot.closed {
                     q.slots.pop_front();
                     q.cut_done = Some((cut, Instant::now()));
-                    let wake = q.waiters > 0;
-                    drop(q);
-                    if wake {
-                        shared.progress.notify_all();
-                    }
-                    return true;
+                } else if closing {
+                    // The stream closes before the slot does: main's commands after the mark go
+                    // on without the rest of it (the entry stays for a reply not yet taken).
+                    slot.gone = true;
+                } else {
+                    q.renderer_sleeps = true;
+                    q = shared.work.wait(q).unwrap_or_else(PoisonError::into_inner);
+                    q.renderer_sleeps = false;
+                    continue;
                 }
-                q.renderer_sleeps = true;
-                q = shared.work.wait(q).unwrap_or_else(PoisonError::into_inner);
-                q.renderer_sleeps = false;
+                let wake = q.waiters > 0;
+                drop(q);
+                if wake {
+                    shared.progress.notify_all();
+                }
+                return true;
             }
         };
         let started = Instant::now();
