@@ -1,4 +1,4 @@
-// Changed for nv-rs: dynamic rendering on Vulkan 1.3 devices (dynamic_rendering.rs, extras.rs); vendor/README.md.
+// Changed for nv-rs: dynamic rendering and pipeline libraries on Vulkan 1.3 devices (dynamic_rendering.rs, pipeline_library.rs, extras.rs); vendor/README.md.
 use alloc::{borrow::ToOwned as _, boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
 use core::{ffi::CStr, marker::PhantomData};
 
@@ -2210,20 +2210,25 @@ impl super::InstanceShared {
                 features2 = features2.push_next(next);
             }
 
-            // The device functionality the instance lets us use: up to Vulkan 1.3 (the version
-            // `Instance::init` asks for) once the instance has 1.1, else 1.0.
-            let api_version = if self.instance_api_version >= vk::API_VERSION_1_1 {
-                capabilities.device_api_version.min(vk::API_VERSION_1_3)
-            } else {
-                vk::API_VERSION_1_0
-            };
-            features2 = features.extras.query(api_version, features2);
-
             unsafe { get_device_properties.get_physical_device_features2(phd, &mut features2) };
             features2.features
         } else {
             unsafe { self.raw.get_physical_device_features(phd) }
         };
+
+        // nv-rs (extras.rs). The device functionality the instance lets us use: up to Vulkan 1.3
+        // (the version `Instance::init` asks for) once the instance has 1.1, else 1.0.
+        let api_version = if self.instance_api_version >= vk::API_VERSION_1_1 {
+            capabilities.device_api_version.min(vk::API_VERSION_1_3)
+        } else {
+            vk::API_VERSION_1_0
+        };
+        features.extras = super::extras::Features::query(
+            self.get_physical_device_properties.as_ref(),
+            phd,
+            api_version,
+            |name| capabilities.supports_extension(name),
+        );
 
         (capabilities, features)
     }
@@ -2542,6 +2547,9 @@ impl super::Adapter {
         }
 
         log::debug!("Supported extensions: {supported_extensions:?}");
+        let mut supported_extensions = supported_extensions;
+        // nv-rs: the extensions our additions use, when the device has them (extras.rs).
+        supported_extensions.extend(self.private_caps.extras.extensions());
         supported_extensions
     }
 
@@ -2950,6 +2958,7 @@ impl super::Adapter {
             texture_identity_factory: super::ResourceIdentityFactory::new(),
             texture_view_identity_factory: super::ResourceIdentityFactory::new(),
             empty_descriptor_set_layout,
+            pipeline_libraries: super::pipeline_library::Cache::new(),
         });
 
         let relay_semaphores = super::RelaySemaphores::new(&shared)?;

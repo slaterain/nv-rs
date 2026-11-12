@@ -33,6 +33,21 @@ const ALPHAFUNC: u32 = 25;
 const CLIPPING: u32 = 136;
 const CLIPPLANEENABLE: u32 = 152;
 const ADAPTIVETESS_Y: u32 = 181;
+const STENCILENABLE: u32 = 52;
+const STENCILFAIL: u32 = 53;
+const STENCILZFAIL: u32 = 54;
+const STENCILPASS: u32 = 55;
+const STENCILFUNC: u32 = 56;
+const STENCILREF: u32 = 57;
+const STENCILMASK: u32 = 58;
+const STENCILWRITEMASK: u32 = 59;
+const SLOPESCALEDEPTHBIAS: u32 = 175;
+const TWOSIDEDSTENCILMODE: u32 = 185;
+const CCW_STENCILFAIL: u32 = 186;
+const CCW_STENCILZFAIL: u32 = 187;
+const CCW_STENCILPASS: u32 = 188;
+const CCW_STENCILFUNC: u32 = 189;
+const DEPTHBIAS: u32 = 195;
 
 fn ins(op: u32, params: &[u32]) -> Vec<u32> {
     let mut v = vec![op | ((params.len() as u32) << 24)];
@@ -72,8 +87,26 @@ impl Gpu {
 
     /// As [`Gpu::new`], keeping the driver's pipelines in `cache` ([`WgpuBackend::with_cache_dir`]).
     fn with_cache(size: u32, samples: u32, cache: Option<std::path::PathBuf>) -> Option<Gpu> {
+        Gpu::make(size, samples, cache, &[])
+    }
+
+    /// As [`Gpu::new`], with the environment variables `env` set while the device is made (on
+    /// this test's turn, so no other test's device sees them).
+    fn with_env(size: u32, samples: u32, env: &[(&str, &str)]) -> Option<Gpu> {
+        Gpu::make(size, samples, None, env)
+    }
+
+    fn make(
+        size: u32,
+        samples: u32,
+        cache: Option<std::path::PathBuf>,
+        env: &[(&str, &str)],
+    ) -> Option<Gpu> {
         // A failed test leaves the lock poisoned; the next one still takes its turn.
         let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        for (name, value) in env {
+            std::env::set_var(name, value);
+        }
         let mut b = WgpuBackend::new(Output::Offscreen);
         if let Some(dir) = cache {
             b = b.with_cache_dir(dir);
@@ -89,6 +122,9 @@ impl Gpu {
             back_buffers: Data::Bytes(&back),
             depth_stencil: 0,
         });
+        for (name, _) in env {
+            std::env::remove_var(name);
+        }
         if b.device().is_none() {
             eprintln!("no GPU adapter: the frame tests are skipped");
             return None;
@@ -2649,4 +2685,314 @@ fn cuts_between_finished_encoders_keep_multisampled_colour_and_depth() {
         }
         assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
     }
+}
+
+/// The vertex buffer of [`dynamic_state_scene`]: every shape in it once, uploaded before the
+/// first draw, so that no upload falls between the draws (an upload can end the render pass, and
+/// with it what the command buffer is known to have set). Each shape's first vertex.
+struct Shapes {
+    data: Vec<f32>,
+}
+
+impl Shapes {
+    /// Clip-space vertices (x, y, z; w 1); the first vertex's number.
+    fn add(&mut self, v: &[[f32; 3]]) -> u32 {
+        let first = (self.data.len() / 4) as u32;
+        self.data
+            .extend(v.iter().flat_map(|p| [p[0], p[1], p[2], 1.0]));
+        first
+    }
+
+    /// Clip x from `x0` to `x1` over the viewport's height, at depth `z0` on the left and `z1` on
+    /// the right: two triangles wound clockwise on screen (Direct3D 9's front faces), or
+    /// counter-clockwise.
+    fn band(&mut self, x0: f32, x1: f32, z0: f32, z1: f32, clockwise: bool) -> u32 {
+        let (a, b, c) = ([x0, -1.0, z0], [x0, 1.0, z0], [x1, -1.0, z1]);
+        let (d, e, f) = ([x1, -1.0, z1], [x0, 1.0, z0], [x1, 1.0, z1]);
+        if clockwise {
+            self.add(&[a, b, c, d, e, f])
+        } else {
+            self.add(&[a, c, b, d, f, e])
+        }
+    }
+}
+
+/// `count` triangles from vertex `first` of the scene's buffer.
+fn draw(g: &mut Gpu, first: u32, count: u32) {
+    g.run(Cmd::DrawPrimitive {
+        device: DEVICE,
+        kind: 4,
+        start: first,
+        count,
+    });
+}
+
+/// The left and top pixel of cell `i` of a 32 by 32 target cut into 8 by 8 cells, row by row.
+fn cell(i: u32) -> (u32, u32) {
+    ((i % 4) * 8, (i / 4) * 8)
+}
+
+/// What [`dynamic_state_scene`] leaves at a pixel: x, y, the B G R A bytes, and why.
+type Want = (u32, u32, [u8; 4], &'static str);
+
+/// Each state a linked pipeline leaves dynamic (vendor/wgpu-hal, pipeline_library.rs: cull mode,
+/// front face, the depth test, write and compare, one- and two-sided stencil, constant and
+/// slope-scaled depth bias), changed between draws in one command buffer, each in its own cell of a
+/// 32 by 32 target; what Direct3D 9 draws there, left and right of the cell's middle. Where a draw's
+/// result depends on a state the draw before it set differently, nothing but render states and
+/// the viewport changes between them (no upload, no new colour), so that the change is made within
+/// one render pass, where a bind sets only the states that changed.
+fn dynamic_state_scene(g: &mut Gpu) -> Vec<Want> {
+    const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+    const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+    const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+    let (red, green, blue, none) = (
+        [0, 0, 255, 255],
+        [0, 255, 0, 255],
+        [255, 0, 0, 255],
+        [0, 0, 0, 0],
+    );
+    let mut s = Shapes { data: Vec::new() };
+    let cw_tri = [[-3.0, -3.0, 0.5], [-3.0, 9.0, 0.5], [9.0, -3.0, 0.5]];
+    let cw = s.add(&cw_tri);
+    let ccw = s.add(&[cw_tri[0], cw_tri[2], cw_tri[1]]);
+    let full = s.band(-1.0, 1.0, 0.5, 0.5, true);
+    let left = s.band(-1.0, 0.0, 0.5, 0.5, true);
+    let left_ccw = s.band(-1.0, 0.0, 0.5, 0.5, false);
+    let right = s.band(0.0, 1.0, 0.5, 0.5, true);
+    let far = s.band(-1.0, 1.0, 0.75, 0.75, true);
+    let sloped = s.band(-1.0, 1.0, 0.25, 0.75, true);
+    let bytes = floats(&s.data);
+    assert!(bytes.len() <= 48 * 64, "the scene's shapes fit the buffer");
+    g.run(Cmd::UploadBuffer {
+        buffer: VB,
+        offset: 0,
+        flags: 0,
+        data: Data::Bytes(&bytes),
+    });
+    g.run(Cmd::SetStreamSource {
+        device: DEVICE,
+        stream: 0,
+        buffer: VB,
+        offset: 0,
+        stride: 16,
+    });
+    let at = |g: &mut Gpu, i: u32| {
+        let (x, y) = cell(i);
+        g.viewport(x, y, 8, 8, 0.0, 1.0);
+    };
+    let mut want = Vec::new();
+    let mut expect = |i: u32, left: [u8; 4], right: [u8; 4], what: &'static str| {
+        let (x, y) = cell(i);
+        want.push((x + 2, y + 4, left, what));
+        want.push((x + 6, y + 4, right, what));
+    };
+    g.viewport(0, 0, 32, 32, 0.0, 1.0);
+    g.clear(7, 0, 1.0);
+
+    // Cull mode and front face: CULLMODE 2 culls triangles clockwise on screen, 3
+    // counter-clockwise ones. One colour: only the cull mode and the viewport change.
+    g.state(ZENABLE, 0);
+    g.colour(GREEN);
+    for (i, cull, tri) in [(0, 2, cw), (1, 2, ccw), (2, 3, cw), (3, 3, ccw)] {
+        g.state(CULLMODE, cull);
+        at(g, i);
+        draw(g, tri, 1);
+    }
+    expect(0, none, none, "CULLMODE 2 culls a clockwise triangle");
+    expect(1, green, green, "CULLMODE 2 keeps a counter-clockwise one");
+    expect(2, green, green, "CULLMODE 3 keeps a clockwise triangle");
+    expect(3, none, none, "CULLMODE 3 culls a counter-clockwise one");
+    g.state(CULLMODE, 1);
+
+    // Depth writes switched on alone (the same ZFUNC, the same colour): the third draw
+    // (GREATER, further away) passes only where the second wrote its depth.
+    g.state(ZENABLE, 1);
+    g.state(ZFUNC, 4);
+    at(g, 4);
+    g.colour(BLUE);
+    g.state(ZWRITEENABLE, 0);
+    draw(g, full, 2);
+    g.state(ZWRITEENABLE, 1);
+    draw(g, left, 2);
+    g.state(ZFUNC, 5);
+    g.state(ZWRITEENABLE, 0);
+    g.colour(GREEN);
+    draw(g, far, 2);
+    expect(4, green, blue, "ZWRITEENABLE 1 after 0 writes depth");
+    g.state(ZFUNC, 4);
+    g.state(ZWRITEENABLE, 1);
+    g.state(ZENABLE, 0);
+
+    // One-sided stencil: REPLACE with 1 on the left, then EQUAL 1 over the cell (one colour).
+    at(g, 5);
+    g.state(STENCILENABLE, 1);
+    g.state(STENCILMASK, 0xFF);
+    g.state(STENCILWRITEMASK, 0xFF);
+    g.state(STENCILFAIL, 1);
+    g.state(STENCILZFAIL, 1);
+    g.state(STENCILFUNC, 8);
+    g.state(STENCILPASS, 3);
+    g.state(STENCILREF, 1);
+    g.colour(RED);
+    draw(g, left, 2);
+    g.state(STENCILFUNC, 3);
+    g.state(STENCILPASS, 1);
+    g.state(STENCILREF, 1);
+    draw(g, right, 2);
+    g.colour(GREEN);
+    draw(g, full, 2);
+    expect(
+        5,
+        green,
+        none,
+        "STENCILFUNC EQUAL passes where REPLACE wrote, nowhere else",
+    );
+
+    // Two-sided stencil: counter-clockwise faces REPLACE with 2 (the CCW_ states), clockwise ones
+    // KEEP 0; then EQUAL 2, one-sided, over the cell.
+    at(g, 6);
+    g.state(TWOSIDEDSTENCILMODE, 1);
+    g.state(STENCILFUNC, 8);
+    g.state(STENCILPASS, 1);
+    g.state(CCW_STENCILFUNC, 8);
+    g.state(CCW_STENCILFAIL, 1);
+    g.state(CCW_STENCILZFAIL, 1);
+    g.state(CCW_STENCILPASS, 3);
+    g.state(STENCILREF, 2);
+    g.colour(RED);
+    draw(g, left_ccw, 2);
+    draw(g, right, 2);
+    g.state(TWOSIDEDSTENCILMODE, 0);
+    g.state(STENCILFUNC, 3);
+    g.colour(GREEN);
+    draw(g, full, 2);
+    expect(
+        6,
+        green,
+        red,
+        "two-sided stencil: the counter-clockwise faces' REPLACE",
+    );
+    g.state(STENCILENABLE, 0);
+
+    // Depth bias: a coplanar draw biased nearer passes LESS against the first.
+    g.state(ZENABLE, 1);
+    at(g, 7);
+    g.colour(RED);
+    draw(g, full, 2);
+    g.colour(GREEN);
+    g.state(ZFUNC, 2);
+    g.state(DEPTHBIAS, (-0.001f32).to_bits());
+    draw(g, full, 2);
+    g.state(DEPTHBIAS, 0);
+    expect(7, green, green, "DEPTHBIAS brings a coplanar draw in front");
+
+    // Slope-scaled depth bias, on a band whose depth runs from 0.25 to 0.75 across the cell.
+    g.state(ZFUNC, 4);
+    at(g, 8);
+    g.colour(RED);
+    draw(g, sloped, 2);
+    g.colour(GREEN);
+    g.state(ZFUNC, 2);
+    g.state(SLOPESCALEDEPTHBIAS, (-2.0f32).to_bits());
+    draw(g, sloped, 2);
+    g.state(SLOPESCALEDEPTHBIAS, 0);
+    g.state(ZFUNC, 4);
+    expect(
+        8,
+        green,
+        green,
+        "SLOPESCALEDEPTHBIAS brings a coplanar sloped draw in front",
+    );
+    want
+}
+
+/// The scene's pixels as [`dynamic_state_scene`] says Direct3D 9 draws them, and no wgpu error.
+fn check_scene(g: &mut Gpu, want: &[Want]) {
+    let px = g.pixels();
+    for &(x, y, p, what) in want {
+        assert_eq!(px[(y * 32 + x) as usize], p, "{what} (pixel {x}, {y})");
+    }
+    assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+}
+
+/// Whether this machine's device links pipelines from libraries; if not, says the test is skipped.
+fn has_libraries(g: &mut Gpu) -> bool {
+    let has = g.b.device().is_some_and(|d| d.uses_pipeline_libraries());
+    if !has {
+        eprintln!("no pipeline libraries on this device (Vulkan with VK_EXT_graphics_pipeline_library): skipped");
+    }
+    has
+}
+
+/// The states a linked pipeline leaves dynamic reach its draws as a whole pipeline's baked ones
+/// do, in one command buffer where each draw changes one of them: cull mode and front face (the
+/// world inside out if the front face were wrong), a change of the depth write alone, stencil one-
+/// and two-sided, constant and slope-scaled depth bias. Every pipeline is linked.
+#[test]
+fn linked_pipelines_draw_cull_depth_stencil_and_bias_as_direct3d_9_does() {
+    let Some(mut g) = Gpu::new(32, 1) else { return };
+    if !has_libraries(&mut g) {
+        return;
+    }
+    let want = dynamic_state_scene(&mut g);
+    check_scene(&mut g, &want);
+    let report = g.b.device().and_then(|d| d.pipeline_library_report());
+    let report = report.expect("a report where pipelines are linked");
+    assert!(report.contains("made whole: 0"), "{report}");
+}
+
+/// `NV_WGPU_LIBRARIES=off` on a device that links from libraries: no libraries (no report), and
+/// the same scene drawn by whole pipelines as Direct3D 9 draws it.
+#[test]
+fn the_libraries_switch_off_makes_every_pipeline_whole() {
+    {
+        let Some(mut g) = Gpu::new(32, 1) else { return };
+        if !has_libraries(&mut g) {
+            return;
+        }
+    }
+    let Some(mut g) = Gpu::with_env(32, 1, &[("NV_WGPU_LIBRARIES", "off")]) else {
+        return;
+    };
+    let d = g.b.device().expect("the device");
+    assert!(!d.uses_pipeline_libraries(), "switched off");
+    assert_eq!(d.pipeline_library_report(), None);
+    let want = dynamic_state_scene(&mut g);
+    check_scene(&mut g, &want);
+}
+
+/// A library the driver refuses leaves its pipelines to the whole path on a device that links
+/// (the test hook `NV_WGPU_LIBRARIES_TEST_REFUSE` refuses every pixel shader library): every
+/// pipeline made whole, with the independent-sets layout the linked ones are bound with, and the
+/// scene's pixels exactly the linked run's.
+#[test]
+fn a_refused_library_leaves_its_pipelines_whole_with_the_same_pixels() {
+    let linked = {
+        let Some(mut g) = Gpu::new(32, 1) else { return };
+        if !has_libraries(&mut g) {
+            return;
+        }
+        dynamic_state_scene(&mut g);
+        g.pixels()
+    };
+    let refuse = [("NV_WGPU_LIBRARIES_TEST_REFUSE", "pixel-shader")];
+    let Some(mut g) = Gpu::with_env(32, 1, &refuse) else {
+        return;
+    };
+    let want = dynamic_state_scene(&mut g);
+    check_scene(&mut g, &want);
+    let report = g.b.device().and_then(|d| d.pipeline_library_report());
+    let report = report.expect("a report: the device still has libraries");
+    assert!(
+        report.contains("pipelines linked from libraries that existed: 0 ")
+            && report.contains("after making a library: 0 ")
+            && !report.contains("made whole: 0"),
+        "every pipeline whole: {report}"
+    );
+    assert_eq!(
+        g.pixels(),
+        linked,
+        "the whole path draws the linked path's pixels"
+    );
 }

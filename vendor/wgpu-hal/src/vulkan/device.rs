@@ -1,4 +1,4 @@
-// Changed for nv-rs: dynamic rendering on Vulkan 1.3 devices (dynamic_rendering.rs, extras.rs); vendor/README.md.
+// Changed for nv-rs: dynamic rendering and pipeline libraries on Vulkan 1.3 devices (dynamic_rendering.rs, pipeline_library.rs, extras.rs); vendor/README.md.
 use alloc::{borrow::ToOwned as _, collections::BTreeMap, ffi::CString, sync::Arc, vec::Vec};
 use core::{
     ffi::CStr,
@@ -250,10 +250,11 @@ impl super::DeviceShared {
     }
 }
 
-struct CompiledStage {
-    create_info: vk::PipelineShaderStageCreateInfo<'static>,
+// nv-rs: also used by pipeline_library.rs.
+pub(super) struct CompiledStage {
+    pub(super) create_info: vk::PipelineShaderStageCreateInfo<'static>,
     _entry_point: CString,
-    temp_raw_module: Option<vk::ShaderModule>,
+    pub(super) temp_raw_module: Option<vk::ShaderModule>,
 }
 
 struct MemoryProperties {
@@ -697,7 +698,7 @@ impl super::Device {
         Ok(raw)
     }
 
-    fn compile_stage(
+    pub(super) fn compile_stage(
         &self,
         stage: &crate::ProgrammableStage<super::ShaderModule>,
         naga_stage: naga::ShaderStage,
@@ -709,6 +710,7 @@ impl super::Device {
             super::ShaderModule::Intermediate {
                 ref naga_shader,
                 runtime_checks,
+                ..
             } => {
                 let pipeline_options = naga::back::spv::PipelineOptions {
                     entry_point: stage.entry_point.to_owned(),
@@ -1401,6 +1403,7 @@ impl crate::Device for super::Device {
             temp_texture_views: Default::default(),
             counters: Arc::clone(&self.counters),
             current_pipeline_is_multiview: false,
+            dynamic_state: None,
         })
     }
 
@@ -1630,8 +1633,18 @@ impl crate::Device for super::Device {
             }
         }
 
+        // nv-rs: the independent-sets variant and the stage layouts linked pipelines use
+        // (pipeline_library.rs).
+        let libraries =
+            super::pipeline_library::LayoutParts::new(&self.shared, desc, vk_immediates_ranges)
+                .inspect_err(|_| unsafe { self.shared.raw.destroy_pipeline_layout(raw, None) })?;
+
         self.counters.pipeline_layouts.add(1);
-        Ok(super::PipelineLayout { raw, binding_map })
+        Ok(super::PipelineLayout {
+            raw,
+            binding_map,
+            libraries,
+        })
     }
     unsafe fn destroy_pipeline_layout(&self, pipeline_layout: super::PipelineLayout) {
         unsafe {
@@ -1869,6 +1882,7 @@ impl crate::Device for super::Device {
                 super::ShaderModule::Intermediate {
                     naga_shader,
                     runtime_checks: desc.runtime_checks,
+                    id: super::pipeline_library::next_module_id(),
                 }
             }
             crate::ShaderInput::Naga(naga_shader) => {
@@ -1917,9 +1931,18 @@ impl crate::Device for super::Device {
     unsafe fn destroy_shader_module(&self, module: super::ShaderModule) {
         match module {
             super::ShaderModule::Raw(raw) => {
+                // nv-rs: its pipeline libraries are not made again (pipeline_library.rs).
+                self.shared
+                    .pipeline_libraries
+                    .forget_module(super::pipeline_library::ModuleKey::Raw(raw));
                 unsafe { self.shared.raw.destroy_shader_module(raw, None) };
             }
-            super::ShaderModule::Intermediate { .. } => {}
+            super::ShaderModule::Intermediate { id, .. } => {
+                // nv-rs: its pipeline libraries are not made again (pipeline_library.rs).
+                self.shared
+                    .pipeline_libraries
+                    .forget_module(super::pipeline_library::ModuleKey::Ir(id));
+            }
         }
 
         self.counters.shader_modules.sub(1);
@@ -1933,6 +1956,10 @@ impl crate::Device for super::Device {
             super::PipelineCache,
         >,
     ) -> Result<super::RenderPipeline, crate::PipelineError> {
+        // nv-rs: linked from pipeline libraries where it can be (pipeline_library.rs).
+        if let Some(pipeline) = super::pipeline_library::create(self, desc) {
+            return Ok(pipeline);
+        }
         let dynamic_states = [
             vk::DynamicState::VIEWPORT,
             vk::DynamicState::SCISSOR,
@@ -2162,7 +2189,8 @@ impl crate::Device for super::Device {
 
         let vk_infos = [{
             let info = vk::GraphicsPipelineCreateInfo::default()
-                .layout(desc.layout.raw)
+                // nv-rs: the layout descriptor sets for draws are bound with (pipeline_library.rs).
+                .layout(desc.layout.raw_for(vk::PipelineBindPoint::GRAPHICS))
                 .stages(&stages)
                 .vertex_input_state(&vk_vertex_input)
                 .input_assembly_state(&vk_input_assembly)
@@ -2228,16 +2256,22 @@ impl crate::Device for super::Device {
             unsafe { self.shared.raw.destroy_shader_module(raw_module, None) };
         }
 
+        super::pipeline_library::count_whole(&self.shared);
         self.counters.render_pipelines.add(1);
 
         Ok(super::RenderPipeline {
             raw,
             is_multiview: desc.multiview_mask.is_some(),
+            dynamic: None,
+            linked: None,
         })
     }
 
     unsafe fn destroy_render_pipeline(&self, pipeline: super::RenderPipeline) {
-        unsafe { self.shared.raw.destroy_pipeline(pipeline.raw, None) };
+        // nv-rs: a linked pipeline goes with the last pipeline that uses it (pipeline_library.rs).
+        if pipeline.linked.is_none() {
+            unsafe { self.shared.raw.destroy_pipeline(pipeline.raw, None) };
+        }
 
         self.counters.render_pipelines.sub(1);
     }

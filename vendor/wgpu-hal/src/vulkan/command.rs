@@ -1,4 +1,4 @@
-// Changed for nv-rs: dynamic rendering on Vulkan 1.3 devices (dynamic_rendering.rs, extras.rs); vendor/README.md.
+// Changed for nv-rs: dynamic rendering and pipeline libraries on Vulkan 1.3 devices (dynamic_rendering.rs, pipeline_library.rs, extras.rs); vendor/README.md.
 use super::conv;
 use arrayvec::ArrayVec;
 use ash::vk;
@@ -210,6 +210,8 @@ impl crate::CommandEncoder for super::CommandEncoder {
         // Reset some state in case the last renderpass was never ended.
         self.rpass_debug_marker_active = false;
         self.end_of_pass_timer_query = None;
+        // nv-rs: a new command buffer has no dynamic state (pipeline_library.rs).
+        self.dynamic_state = None;
 
         let vk_info = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -972,12 +974,17 @@ impl crate::CommandEncoder for super::CommandEncoder {
         group: &super::BindGroup,
         dynamic_offsets: &[wgt::DynamicOffset],
     ) {
+        // nv-rs: a group without bindings is left out of the layout draws use (pipeline_library.rs).
+        if layout.skips_group(self.bind_point, index) {
+            return;
+        }
         let sets = [group.set.raw()];
         unsafe {
             self.device.raw.cmd_bind_descriptor_sets(
                 self.active,
                 self.bind_point,
-                layout.raw,
+                // nv-rs: the layout pipelines at this bind point are made with (pipeline_library.rs).
+                layout.raw_for(self.bind_point),
                 index,
                 &sets,
                 dynamic_offsets,
@@ -993,7 +1000,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         unsafe {
             self.device.raw.cmd_push_constants(
                 self.active,
-                layout.raw,
+                layout.raw_for(self.bind_point),
                 vk::ShaderStageFlags::ALL,
                 offset_bytes,
                 bytemuck::cast_slice(data),
@@ -1030,6 +1037,8 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 pipeline.raw,
             )
         };
+        // nv-rs: the states a linked pipeline leaves dynamic (pipeline_library.rs).
+        unsafe { self.bind_dynamic_state(pipeline) };
     }
 
     unsafe fn set_index_buffer<'a>(
