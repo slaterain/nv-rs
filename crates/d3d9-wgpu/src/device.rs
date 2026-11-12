@@ -481,21 +481,27 @@ impl Listed {
 
     /// `e` listed (it was made on a draw at present `presents`), unless it is already.
     fn add(&mut self, e: prepare::Entry, presents: u64) {
-        let line = e.line();
         let samples = 1u32 << e.samples.min(31);
-        if self.list.add(e) {
-            self.done.push(samples);
-            if !self.dirty {
-                self.first_added_at = presents;
-            }
-            self.dirty = true;
-            self.added_at = presents;
-            self.shared
-                .lines
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(line);
+        if !self.list.add(e) {
+            return;
         }
+        // Its line, formatted only for a new entry (the list's last).
+        let line = self
+            .list
+            .entries
+            .last()
+            .map_or_else(String::new, prepare::Entry::line);
+        self.done.push(samples);
+        if !self.dirty {
+            self.first_added_at = presents;
+        }
+        self.dirty = true;
+        self.added_at = presents;
+        self.shared
+            .lines
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(line);
     }
 
     /// Writes the list 300 presents after the last new entry (or every 3600 while they keep
@@ -753,6 +759,9 @@ pub struct Device {
     pub(crate) skipped: u64,
     /// Pipelines made on the draw that needed them (not ahead from the list).
     made_on_draws: u64,
+    /// Entries the draws offered the pipeline list: each pipeline once for each plane state it
+    /// was drawn with this run.
+    list_offers: u64,
     /// Where the occlusion counts are posted for the game's threads ([`QueryAnswers`]), and the
     /// `END`s (query, number) whose counts are awaited.
     pub(crate) answers: Option<Arc<QueryAnswers>>,
@@ -1052,6 +1061,7 @@ impl Device {
             vertex_links: Map::default(),
             binds: PassBinds::default(),
             made_on_draws: 0,
+            list_offers: 0,
             pipeline_cache,
             last_present: None,
             loading: None,
@@ -3284,34 +3294,39 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let made = match &self.last_pipeline {
             Some((k, p, on)) if *k == key && *on == planes => p.clone(),
             _ => {
-                if !self.pipelines.contains_key(&key) {
-                    // Bounded: render states with continuous values (depth bias) could grow it
-                    // without end.
-                    if self.pipelines.len() >= 4096 {
-                        self.pipelines.clear();
-                    }
-                    let sampler_keys: Vec<(u32, u8, bool)> =
-                        samplers.iter().map(|(k, _)| *k).collect();
-                    let pipeline = self.make_pipeline(
-                        &key,
-                        &vs,
-                        &ps,
-                        &link.inputs,
-                        attributes,
-                        topology,
-                        &sampler_keys,
-                    );
-                    self.pipelines.insert(key.clone(), (pipeline, 0));
-                }
                 // Listed, so the next start makes it before play ([`prepare`]): once for each
-                // plane state its draws have.
+                // plane state its draws have (a bit for each beside the pipeline). One lookup
+                // when the cache has it.
                 let bit = 1u8 << u8::from(planes);
-                let unlisted = self.pipelines.get_mut(&key).is_some_and(|(_, m)| {
-                    let new = *m & bit == 0;
-                    *m |= bit;
-                    new
-                });
+                let (p, unlisted) = match self.pipelines.get_mut(&key) {
+                    Some((p, m)) => {
+                        let new = *m & bit == 0;
+                        *m |= bit;
+                        (p.clone(), new)
+                    }
+                    None => {
+                        // Bounded: render states with continuous values (depth bias) could grow
+                        // it without end.
+                        if self.pipelines.len() >= 4096 {
+                            self.pipelines.clear();
+                        }
+                        let sampler_keys: Vec<(u32, u8, bool)> =
+                            samplers.iter().map(|(k, _)| *k).collect();
+                        let p = self.make_pipeline(
+                            &key,
+                            &vs,
+                            &ps,
+                            &link.inputs,
+                            attributes,
+                            topology,
+                            &sampler_keys,
+                        );
+                        self.pipelines.insert(key.clone(), (p.clone(), bit));
+                        (p, true)
+                    }
+                };
                 if unlisted && self.list.is_some() {
+                    self.list_offers += 1;
                     let entry = prepare::Entry {
                         vs: vs.stable,
                         ps: ps.stable,
@@ -3339,7 +3354,6 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         l.add(entry, presents);
                     }
                 }
-                let p = self.pipelines.get(&key).and_then(|(p, _)| p.clone());
                 self.last_pipeline = Some((key, p.clone(), planes));
                 p
             }
@@ -3809,6 +3823,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let made = jobs.len();
         for ((key, j), b) in jobs.into_iter().zip(built) {
             match b {
+                // No draw has listed it in a plane state yet: the first draw in each state adds
+                // that state's line if the list lacks it (a list may name it in one state only:
+                // the shipped list was written before both were listed).
                 Ok(p) => {
                     self.pipelines.insert(key, (Some((p, j.group_layouts)), 0));
                 }
@@ -5391,6 +5408,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// How many pipelines were made on the draw that needed them, not ahead from the list (tests).
     pub fn pipelines_made_on_draws(&self) -> u64 {
         self.made_on_draws
+    }
+
+    /// How many entries the draws offered the pipeline list: each pipeline once for each plane
+    /// state it was drawn with this run, however often (tests).
+    pub fn list_offers(&self) -> u64 {
+        self.list_offers
     }
 
     /// How many vertex and pixel shader modules the device has made, not counting any wgpu or

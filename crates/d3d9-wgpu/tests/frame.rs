@@ -1050,19 +1050,41 @@ fn an_unwritten_varying_reads_as_on_the_real_direct3d_9() {
 /// The list names each plane state a pipeline's draws had: with the clip distances one pipeline
 /// serves a draw with no plane on and one with a plane on, but an adapter without them
 /// (Direct3D 12) needs a pipeline for each, so a list written here holds both lines (clip 0 and
-/// a plane's code), as one written there does. (The list file holds the shipped entries too: a
-/// run that draws with no plane only gives what a run with both states adds to.)
+/// a plane's code), as one written there does. A pipeline made ahead from a list that names only
+/// its clip-0 line (the shipped list's, from before both were listed) still adds the plane
+/// state's line when a draw has a plane on. A pipeline drawn again in a state it was listed with
+/// offers the list nothing. (The list file holds the shipped entries too: a run that draws with
+/// no plane only gives what the other runs add to.)
 #[test]
 fn the_list_names_each_plane_state_a_pipeline_drew_with() {
-    let run = |name: &str, with_plane: bool| -> Option<Vec<String>> {
+    let folder = |name: &str| {
         let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
             "pipeline-list-planes-{name}-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        {
-            let mut g = Gpu::with_cache(4, 1, Some(dir.clone()))?;
+        dir
+    };
+    // A run with its list in `dir`: with `ahead` a `Present` first, so the listed pipelines are
+    // made before the draws; then a draw in each plane state of `planes`, in order. The list the
+    // device left, the pipelines made on draws, the entries the draws offered the list, whether
+    // the adapter has clip distances, and its name.
+    type Run = (Vec<String>, u64, u64, bool, String);
+    let run = |dir: &std::path::Path, ahead: bool, planes: &[bool]| -> Option<Run> {
+        let (made, offers, distances, adapter) = {
+            let mut g = Gpu::with_cache(4, 1, Some(dir.to_path_buf()))?;
+            if ahead {
+                g.run(Cmd::Present {
+                    device: DEVICE,
+                    source: None,
+                    dest: None,
+                    window: 0,
+                    dirty: false,
+                    model: 0,
+                    frame: 1,
+                });
+            }
             let plane = [1.0f32, 0.0, 0.0, -0.25].map(f32::to_bits);
             g.run(Cmd::SetClipPlane {
                 device: DEVICE,
@@ -1071,34 +1093,75 @@ fn the_list_names_each_plane_state_a_pipeline_drew_with() {
             });
             g.colour([1.0, 1.0, 1.0, 1.0]);
             g.clear(3, 0, 1.0);
-            g.cover(0.5);
-            if with_plane {
-                g.state(CLIPPLANEENABLE, 1);
+            for &on in planes {
+                g.state(CLIPPLANEENABLE, u32::from(on));
                 g.cover(0.5);
             }
+            let d = g.b.device().expect("the device");
+            (
+                d.pipelines_made_on_draws(),
+                d.list_offers(),
+                d.has_clip_distances(),
+                d.adapter_name().to_string(),
+            )
             // The device goes: its list is written.
-        }
+        };
         let list = std::fs::read_to_string(dir.join("pipelines.txt")).expect("the list written");
-        let _ = std::fs::remove_dir_all(&dir);
-        Some(list.lines().map(str::to_string).collect())
+        let list = list.lines().map(str::to_string).collect();
+        Some((list, made, offers, distances, adapter))
     };
-    let Some(none) = run("none", false) else {
+    let none_dir = folder("none");
+    let Some((none, made, offers, distances, adapter)) = run(&none_dir, false, &[false]) else {
         return;
     };
-    let both = run("both", true).unwrap();
-    let added: Vec<&String> = both.iter().filter(|l| !none.contains(l)).collect();
-    assert_eq!(added.len(), 1, "one more line with a plane on: {added:?}");
-    let fields: Vec<&str> = added[0].split_ascii_whitespace().collect();
-    assert_ne!(fields.last(), Some(&"0"), "{}", added[0]);
-    // The same pipeline (on Vulkan) or its twin (Direct3D 12) with no plane on: the run without
-    // a plane listed it with clip 0.
-    let mut zero = fields.clone();
-    *zero.last_mut().unwrap() = "0";
-    assert!(
-        none.contains(&zero.join(" ")),
-        "the line with no plane on: {}",
-        zero.join(" ")
+    assert_eq!(
+        (made, offers),
+        (1, 1),
+        "one pipeline, offered to the list once"
     );
+    // What a run adds to the list of the run without a plane: one line, with a plane's code,
+    // whose clip-0 twin that run listed (the same pipeline with the clip distances, else the
+    // one without a plane).
+    let plane_line = |list: &[String], what: &str| {
+        let added: Vec<&String> = list.iter().filter(|l| !none.contains(l)).collect();
+        assert_eq!(
+            added.len(),
+            1,
+            "{what}: one more line, a plane on: {added:?}"
+        );
+        let mut fields: Vec<&str> = added[0].split_ascii_whitespace().collect();
+        assert_ne!(fields.last(), Some(&"0"), "{what}: {}", added[0]);
+        *fields.last_mut().unwrap() = "0";
+        let zero = fields.join(" ");
+        assert!(
+            none.contains(&zero),
+            "{what}: the line with no plane on: {zero}"
+        );
+    };
+    // No plane, a plane, and each again: each state offered to the list once.
+    let both_dir = folder("both");
+    let (both, made, offers, ..) = run(&both_dir, false, &[false, true, false, true]).unwrap();
+    plane_line(&both, "both");
+    assert_eq!(offers, 2, "each plane state offered once");
+    if distances {
+        assert_eq!(made, 1, "{adapter}: one pipeline for both plane states");
+    } else {
+        assert_eq!(made, 2, "{adapter}: a pipeline for each plane state");
+        eprintln!(
+            "{adapter}: no clip distances, so a plane on is a pipeline of its own, listed as any \
+             new one: one pipeline listed in two states is not reached here"
+        );
+    }
+    // The first run's list again, drawing only with a plane on: its clip-0 line makes the
+    // pipeline ahead, and the draw still adds the plane state's line. With the clip distances
+    // that pipeline serves the draw; without, the plane state is a pipeline of its own.
+    let (ahead, made, offers, ..) = run(&none_dir, true, &[true]).unwrap();
+    plane_line(&ahead, "made ahead");
+    assert_eq!(offers, 1, "the plane state offered");
+    let want = if distances { 0 } else { 1 };
+    assert_eq!(made, want, "{adapter}: pipelines made on the draw");
+    let _ = std::fs::remove_dir_all(&none_dir);
+    let _ = std::fs::remove_dir_all(&both_dir);
 }
 
 #[test]
