@@ -1227,9 +1227,10 @@ fn node_update_world_bound() {
         })
         .run()
         .assert_same();
-    // Under the main thread's, the floats in 2^-4 to 4 ([`unit`]) and the children's centres small
-    // integers (see `merge`: the squared distances exact, the merges within their tolerance). Within 4
-    // ulps, or 2^-14 in value.
+    // Under the main thread's, the floats in 2^-4 to 4 ([`unit`]), the children's centres small
+    // integers and the last child's radius 0, so one merge runs (see `merge`: its squared distance
+    // exact, the rest within the tolerance; a second merge would hand the root the first's moved centre,
+    // whose last bits are native, as the call's words). Within 4 ulps, or 2^-14 in value.
     let report = Diff::new(entry!(0x00a5_e2d0, update::node_update_world_bound(Ptr<_>)))
         .common()
         .main_thread(4)
@@ -1252,6 +1253,7 @@ fn node_update_world_bound() {
             if case.word(3) == 0 {
                 e.mem.set_u32(s.node + 0x20, 0);
             }
+            e.mem.set_u32(last + 0xc, 0);
             for (child, centre) in [
                 (0, [1.0f32, 2.0, 3.0]),
                 (1, [4.0, -2.0, 1.0]),
