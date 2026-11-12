@@ -9,8 +9,16 @@
 //! xNVSE's singly linked list type over the game's doubly linked one (the first child, then the
 //! last back to the second); the `Alt` forms walk them in order. And `SortUIListBox` orders the
 //! items with MSVC's `std::sort` (not stable), so items that compare equal end where it puts
-//! them. xNVSE keeps the trait values it found in a cache it empties whenever a tile is made or
-//! destroyed; that only saves the lookup, so here every call looks the value up.
+//! them.
+//!
+//! Two differences, both kept on purpose. xNVSE keeps the trait values it found in one cache
+//! keyed by the path alone, shared by the lookups with and without `Alt`, and empties it whenever
+//! a tile is made or destroyed. Here every call looks the value up: the answers differ only when a
+//! script reads the same path both ways under a parent with several children of one name, where
+//! xNVSE answers the first form's child for both until a tile changes. And `SortUIListBox` with a
+//! `/` in a key, destination or increment path: xNVSE's lookup writes a 0 over the path's slashes
+//! in the spec itself, so only the first shown item is found by it and every later item is
+//! skipped (the list does not sort). Here every item is looked up with the whole path.
 
 use super::string::{format_string_args_at, Formatted};
 use super::{console_print, double_words, is_console_mode, Read};
@@ -526,6 +534,10 @@ fn set_ui_string_ex(e: &mut Engine, w: &[u32]) -> Ret {
     get_set_ui_value(e, w, Action::SetFormattedString)
 }
 
+/// The `Alt` commands' and `GetUIFloatInherited`'s path buffer (`char component[0x200]`): a
+/// path of this many bytes or more runs past it ([`super::arg_in_buffer`]).
+const ALT_BUFFER: usize = 0x200;
+
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_UI.cpp: Cmd_GetUIFloatAlt_Execute.
 /// The trait's number ([`component_value_alt`]), -999 without it; the console prints it.
 fn get_ui_float_alt(e: &mut Engine, w: &[u32]) -> Ret {
@@ -533,7 +545,8 @@ fn get_ui_float_alt(e: &mut Engine, w: &[u32]) -> Ret {
     a.set_result(e, NOT_FOUND);
     let read = Read::of(e, &a);
     if read.ok {
-        let value = menu_component_value(e, &read.text(0), true);
+        let path = super::arg_in_buffer(e, &read, 0, ALT_BUFFER, "GetUIFloatAlt");
+        let value = menu_component_value(e, &path, true);
         if value != 0 {
             let num = f64::from(value_num(e, value));
             a.set_result(e, num);
@@ -553,7 +566,9 @@ fn set_or_mod_ui_float(e: &mut Engine, w: &[u32], add: bool) -> Ret {
     a.set_result(e, 0.0);
     let read = Read::of(e, &a);
     if read.ok {
-        let value = menu_component_value(e, &read.text(0), true);
+        let command = if add { "ModUIFloat" } else { "SetUIFloatAlt" };
+        let path = super::arg_in_buffer(e, &read, 0, ALT_BUFFER, command);
+        let value = menu_component_value(e, &path, true);
         if value != 0 {
             let num = read.float(1, 0.0);
             let num = if add { value_num(e, value) + num } else { num };
@@ -580,7 +595,8 @@ fn set_ui_string_alt(e: &mut Engine, w: &[u32]) -> Ret {
     a.set_result(e, 0.0);
     let f = format_string_args_at(e, &a, 1, 22);
     if f.ok {
-        let value = menu_component_value(e, &arg_text(&f.leading, 0), true);
+        let path = super::args_in_buffer(e, &f.leading, 0, ALT_BUFFER, "SetUIStringAlt");
+        let value = menu_component_value(e, &path, true);
         if value != 0 {
             set_string(e, value, &f.text);
             a.set_result(e, 1.0);
@@ -602,7 +618,7 @@ fn get_ui_float_inherited(e: &mut Engine, w: &[u32]) -> Ret {
     if !read.ok {
         return handled(true);
     }
-    let component = read.text(0);
+    let component = super::arg_in_buffer(e, &read, 0, ALT_BUFFER, "GetUIFloatInherited");
     let exclude_menu_root = read.int(1, 0) != 0;
     let (menu, slash) = menu_by_path(e, &component);
     let Some(slash) = slash.filter(|_| menu != 0) else {

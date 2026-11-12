@@ -344,6 +344,21 @@ fn to_string_and_type_of() {
     assert_eq!(string_of(&e, id), "Stimpak");
     let id = run(&mut e, 0x1540, &[var(4, 2)]);
     assert_eq!(string_of(&e, id), "<no name>");
+    // A form that does not resolve is "<NULL>" (xNVSE's `GetFullName`), never a read of it:
+    // an unset ref variable, one holding an id `LookupFormByID` does not know, and an array
+    // element holding such an id.
+    add_local(&mut e, 3, "unset", 0.0);
+    add_local(&mut e, 4, "gone", f64::from_bits(0x0700_0000));
+    let id = run(&mut e, 0x1540, &[var(4, 3)]);
+    assert_eq!(string_of(&e, id), "<NULL>");
+    let id = run(&mut e, 0x1540, &[var(4, 4)]);
+    assert_eq!(string_of(&e, id), "<NULL>");
+    let held = vars::create_array(&mut e, KEY_NUMBER, true, 5);
+    vars::set_element(&mut e, held, &Key::Number(0.0), Value::Form(0x0700_0000));
+    add_local(&mut e, 5, "held", f64::from(held));
+    let element = [var(3, 5), num(0.0), vec![crate::expr::op::LEFT_BRACKET]].concat();
+    let id = run(&mut e, 0x1540, &[element]);
+    assert_eq!(string_of(&e, id), "<NULL>");
     let packed = vars::create_array(&mut e, KEY_NUMBER, true, 5);
     let map = vars::create_array(&mut e, KEY_NUMBER, false, 5);
     let strings = vars::create_array(&mut e, KEY_STRING, false, 5);
@@ -460,6 +475,15 @@ fn is_form_valid_checks_the_form_or_the_caller() {
     assert_eq!(call(&mut e, 0x14ba, 0, &[r(1)]), (1, 1.0));
     assert_eq!(call(&mut e, 0x14ba, 0, &[]), (1, 0.0));
     assert_eq!(lines(), ["Invalid Form", "Valid Form!"]);
+    // A reference argument that resolves to nothing fails the read: 0 and no line, even with a
+    // calling reference whose base form is valid. One index has no ref-list entry; one is a ref
+    // variable whose local holds an id `LookupFormByID` does not know.
+    assert_eq!(call(&mut e, 0x14ba, refr, &[r(9)]), (1, 0.0));
+    add_local(&mut e, 4, "gone", f64::from_bits(0x0700_0000));
+    set_script_ref(&mut e, 2, 0);
+    e.mem.set_u32(0x0300_a000 + 2 * 0x10 + 0xc, 4);
+    assert_eq!(call(&mut e, 0x14ba, refr, &[r(2)]), (1, 0.0));
+    assert!(lines().is_empty());
 }
 
 /// `IsReference`: 1 when the argument reads as a reference, 0 for any other form; the console

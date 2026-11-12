@@ -76,6 +76,8 @@ fn setup() -> Engine {
         eax(id)
     });
     e.register(SET_FLOAT_VALUE, |e, a| {
+        // The last argument makes the value stick on traits the menu computes.
+        assert_eq!(a[3], 1, "SetFloatValue propagates");
         let num = f32::from_bits(a[2]);
         SET.with(|s| s.borrow_mut().push((a[0], a[1], format!("{num}"))));
         // The tile's value follows, as the game's setter makes it.
@@ -86,6 +88,7 @@ fn setup() -> Engine {
         eax(0)
     });
     e.register(SET_STRING_VALUE, |e, a| {
+        assert_eq!(a[3], 1, "SetStringValue propagates");
         let text = String::from_utf8(guest_text(e, a[2])).unwrap();
         SET.with(|s| s.borrow_mut().push((a[0], a[1], text)));
         eax(0)
@@ -412,6 +415,129 @@ fn list_boxes_are_sorted_by_their_keys() {
         .map(|(_, _, v)| v)
         .collect();
     assert!(x.is_empty(), "no item has an x trait: {x:?}");
+}
+
+/// `SortUIListBox` by numbers: a string trait read as a number with `#` ("9" before "25" before
+/// "100", not as text), a float trait, a float trait reversed; positions written to the spec's
+/// own destination with `_y` left alone. A key through a child (`a/num`) is looked up whole for
+/// every item (xNVSE finds it only for the first; see the module's notes).
+#[test]
+fn list_boxes_sort_by_numbers_into_their_own_destination() {
+    let mut e = setup();
+    let inv = menu(&mut e, 0x3ea, "InventoryMenu", &[]);
+    let list = tile(&mut e, inv, "list", &[], &[]);
+    let item = |e: &mut Engine, text: &str, num: f32, height: f32| {
+        let t = tile(
+            e,
+            list,
+            "item",
+            &[
+                ("listindex", 0.0),
+                ("_y", -1.0),
+                ("width", -1.0),
+                ("num", num),
+                ("height", height),
+            ],
+            &[("string", text)],
+        );
+        tile(e, t, "a", &[("num", num)], &[]);
+        t
+    };
+    let hundred = item(&mut e, "100", 2.0, 1.0);
+    let twenty_five = item(&mut e, "25", 3.0, 10.0);
+    let nine = item(&mut e, "9", 1.0, 100.0);
+    let all = [hundred, twenty_five, nine];
+    let read = |e: &Engine, id: u32| all.map(|t| value_num(e, value_of(e, t, id)));
+    // By the strings as numbers: 9, 25, 100.
+    call(
+        &mut e,
+        0x14d6,
+        0,
+        &[s("InventoryMenu/list"), s("#string$width")],
+    );
+    assert_eq!(read(&e, 0x1001), [110.0, 100.0, 0.0]);
+    assert_eq!(read(&e, 0x1003), [-1.0, -1.0, -1.0]);
+    // By the float trait: 1 (nine), 2 (hundred), 3 (twenty_five).
+    call(
+        &mut e,
+        0x14d6,
+        0,
+        &[s("InventoryMenu/list"), s("num$width")],
+    );
+    assert_eq!(read(&e, 0x1001), [100.0, 101.0, 0.0]);
+    // Reversed: 3, 2, 1.
+    call(
+        &mut e,
+        0x14d6,
+        0,
+        &[s("InventoryMenu/list"), s("-num$width")],
+    );
+    assert_eq!(read(&e, 0x1001), [10.0, 0.0, 11.0]);
+    // The same order through a child's trait, for every item.
+    call(
+        &mut e,
+        0x14d6,
+        0,
+        &[s("InventoryMenu/list"), s("a/num$width")],
+    );
+    assert_eq!(read(&e, 0x1001), [100.0, 101.0, 0.0]);
+    assert_eq!(read(&e, 0x1003), [-1.0, -1.0, -1.0]);
+}
+
+/// A known menu that is not open (its slot in the menus' array 0) is the most common missing
+/// tile: the readers answer -999 (`GetUIFloat` says "Trait not found" in console mode, as
+/// `SetUIFloat` does, the others print nothing), the setters set nothing (the `Alt` ones answer
+/// 0), and `SortUIListBox` sets nothing.
+#[test]
+fn a_closed_menu_has_no_traits() {
+    let mut e = setup();
+    console_on(&mut e);
+    assert_eq!(call(&mut e, 0x14a4, 0, &[s("StartMenu/x/y")]).1, -999.0);
+    assert_eq!(
+        call(&mut e, 0x14a5, 0, &[s("StartMenu/x/y"), z(1.0)]),
+        (1, 0.0)
+    );
+    assert_eq!(lines(), ["Trait not found", "Trait not found"]);
+    assert_eq!(call(&mut e, 0x161f, 0, &[s("StartMenu/x/y")]).1, -999.0);
+    assert_eq!(
+        call(&mut e, 0x168b, 0, &[s("StartMenu/x/y"), n(0)]).1,
+        -999.0
+    );
+    assert!(lines().is_empty());
+    assert_eq!(
+        call(&mut e, 0x1620, 0, &[s("StartMenu/x/y"), z(1.0)]),
+        (1, 0.0)
+    );
+    assert_eq!(
+        call(&mut e, 0x1621, 0, &[s("StartMenu/x/y"), s("text")]),
+        (1, 0.0)
+    );
+    call(&mut e, 0x14d6, 0, &[s("StartMenu/x"), s("num")]);
+    assert!(set().is_empty());
+}
+
+/// Paths written with backslashes, and a child named in another case, find the same tiles.
+#[test]
+fn backslashes_and_case_in_paths() {
+    let mut e = setup();
+    let hud = menu(&mut e, 0x3ec, "HUDMainMenu", &[("x", 1.0), ("locus", 1.0)]);
+    let a = tile(&mut e, hud, "a", &[], &[]);
+    tile(&mut e, a, "b", &[("val", 2.5), ("x", 3.0)], &[]);
+    for v in [1.0, 2.0] {
+        tile(&mut e, hud, "dup", &[("val", v)], &[]);
+    }
+    assert_eq!(
+        call(&mut e, 0x14a4, 0, &[s("HUDMainMenu\\a\\b\\val")]).1,
+        2.5
+    );
+    assert_eq!(
+        call(&mut e, 0x161f, 0, &[s("HUDMainMenu\\DUP:1\\val")]).1,
+        2.0
+    );
+    assert_eq!(
+        call(&mut e, 0x168b, 0, &[s("HUDMainMenu\\a\\b\\x"), n(0)]).1,
+        4.0
+    );
 }
 
 /// `std::sort` as MSVC's library sorts: what is ordered ends in order, and equal elements keep

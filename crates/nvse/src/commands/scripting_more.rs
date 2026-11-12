@@ -247,9 +247,9 @@ fn to_string(e: &mut Engine, w: &[u32]) -> Ret {
             let v = ev.get_number(e, &t);
             text = g(e, v);
         } else if ev.can_convert(e, &t, Ty::Form) {
+            // `GetFullName(TESForm *)`: "<NULL>" for a form that does not resolve.
             let form = ev.get_form(e, &t);
-            let name = super::misc_ref::full_name_text(e, form);
-            text = guest_text(e, name);
+            text = super::string::full_name(e, form);
         }
     });
     assign_to_string_var(e, &a, &text);
