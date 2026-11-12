@@ -860,43 +860,103 @@ fn bs_process_scene() {
     .assert_same();
 }
 
+/// A float as play has it: its magnitude in 2^-12 to 2^12, so no product or sum of the fade culler
+/// leaves the float's normal range (otherwise as [`unit`]).
+fn play(bits: u32) -> u32 {
+    fold(bits, 115, 24)
+}
+
+/// The fade culler's planes: general normals (no two mirror images, every component with a full
+/// mantissa) and constants all different, the first the case's.
+const FADE_NORMALS: [[f32; 3]; 6] = [
+    [0.8, 0.36, 0.48],
+    [-0.6, 0.48, 0.64],
+    [0.0, -0.8, 0.6],
+    [-0.48, -0.36, -0.8],
+    [0.36, -0.48, 0.8],
+    [-0.64, 0.6, -0.48],
+];
+const FADE_CONSTANTS: [f32; 5] = [-9.5, -8.25, -10.75, -7.0, -11.5];
+
+/// The fade culler's inputs: a fade node or none; its bound's centre (x, y, z) and radius; the first
+/// plane's constant; the bound as it comes or at the edge of its nearest plane.
+const FADE: &[Input] = &[
+    Input::Flag,
+    Input::F32,
+    Input::F32Swept(TWO),
+    Input::F32Swept(MINUS_TEN),
+    Input::F32,
+    Input::F32Swept(0xc120_0000),
+    Input::Of(&[0, 1]),
+];
+
+/// The fade culler's words: the scene's process with [`FADE_NORMALS`] and the constants, the fade node's
+/// bound from the case (as play has its floats). At the edge, the radius is minus the smallest of the
+/// six distances, each worked out in `f32` as the exe does on the main thread (`(ny cy + nx cx) + cz nz`
+/// less the constant): that plane's test is then exactly an equality.
+fn fade_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    let s = scene(e);
+    let f = |i: usize| f32::from_bits(play(bits(case, i)));
+    let constant0 = f(5);
+    let planes = s.process + 0x2c;
+    for (k, normal) in (0u32..).zip(FADE_NORMALS) {
+        let plane = planes + 0x10 * k;
+        for (c, v) in (0u32..).zip(normal) {
+            e.mem.set_f32(plane + 4 * c, v);
+        }
+        let constant = if k == 0 {
+            constant0
+        } else {
+            FADE_CONSTANTS[k as usize - 1]
+        };
+        e.mem.set_f32(plane + 0xc, constant);
+    }
+    let (cx, cy, cz) = (f(1), f(2), f(3));
+    let mut radius = f(4);
+    if case.word(6) != 0 {
+        let smallest = (0..6)
+            .map(|k| {
+                let n = FADE_NORMALS[k];
+                let constant = if k == 0 {
+                    constant0
+                } else {
+                    FADE_CONSTANTS[k - 1]
+                };
+                ((n[1] * cy + n[0] * cx) + cz * n[2]) - constant
+            })
+            .fold(f32::INFINITY, f32::min);
+        radius = -smallest;
+    }
+    let b = bound_of(
+        e,
+        cx.to_bits(),
+        cy.to_bits(),
+        cz.to_bits(),
+        radius.to_bits(),
+    );
+    let node = object(e, 0xac, s.stand_in_vt, b, 0x0010_0001);
+    let reference = e.mem.alloc(0x20);
+    e.mem.set_u32(reference, s.stand_in_vt);
+    e.mem
+        .set_u32(reference + 0x10, if case.word(0) != 0 { node } else { 0 });
+    vec![s.process, reference]
+}
+
+/// `BSFadeNodeCuller::Process`: main-thread code in plain `f32`, the exe's 24-bit arithmetic there,
+/// so on the main thread's word only, bit for bit (NaN payloads aside), with play's floats. General
+/// planes (a symmetric box would mirror a wrong sign away) and bounds at a plane's edge (the behind test
+/// an exact equality, which a `>` or a distance rounded otherwise breaks).
 #[test]
 fn fade_culler_process() {
-    // A fade node or none; its bound's centre x and radius; where the bound is: its centre z 1, 6 or -11
-    // (x and the radius the case's), or exactly at the edge of the plane facing +x (centre (-11, 0, 1),
-    // radius 1: the distance is minus the radius). The plane facing +z sits at -5 instead of -10, so the
-    // box is not symmetric in z: a z term of the wrong sign would mirror the test, which symmetric planes
-    // cannot see.
     Diff::new(entry!(
         0x00bc_2b30,
         process::fade_culler_process(Ptr<_>, u32)
     ))
     .common()
-    .inputs(&[
-        Input::Flag,
-        Input::F32,
-        Input::F32,
-        Input::Of(&[0, 1, 2, 3]),
-    ])
+    .main_thread(0)
+    .inputs(FADE)
     .max_cases(256)
-    .setup(|e, case| {
-        let s = scene(e);
-        e.mem
-            .set_u32(s.process + 0x2c + 0x10 * 4 + 0xc, 0xc0a0_0000);
-        let (x, z, r) = match case.word(3) {
-            0 => (case.f32(1).to_bits(), ONE, case.f32(2).to_bits()),
-            1 => (case.f32(1).to_bits(), 0x40c0_0000, case.f32(2).to_bits()),
-            2 => (case.f32(1).to_bits(), 0xc130_0000, case.f32(2).to_bits()),
-            _ => (0xc130_0000, ONE, ONE),
-        };
-        let b = bound_of(e, x, 0, z, r);
-        let node = object(e, 0xac, s.stand_in_vt, b, 0x0010_0001);
-        let reference = e.mem.alloc(0x20);
-        e.mem.set_u32(reference, s.stand_in_vt);
-        e.mem
-            .set_u32(reference + 0x10, if case.word(0) != 0 { node } else { 0 });
-        vec![s.process, reference]
-    })
+    .setup(fade_words)
     .run()
     .assert_same();
 }
@@ -1724,7 +1784,8 @@ fn under(e: &mut Engine, word: u16, f: impl FnOnce(&mut Engine) -> u32) -> u32 {
 const CANCEL: [u32; 3] = [0x4f00_0000, 0xcf00_0000, 0x3f80_0001];
 
 /// `plane_through` sums `(ny py + nx px) + nz pz`; `bound_transform` its first row `(e01 y + e00 x) + e02 z`
-/// and its others in order; `frustum_planes_set` the near plane's constant `(n1 t1 + n0 t0) + n2 t2`
+/// and its others in order, `bound_update` its first row `(e01 y + x e00) + e02 z` (each centre component
+/// checked); `frustum_planes_set` the near plane's constant `(n1 t1 + n0 t0) + n2 t2`
 /// (its normal the rotation's first column, its point the translation with a near distance of 0).
 #[test]
 fn sums_in_the_exe_order() {
@@ -1778,18 +1839,40 @@ fn sums_in_the_exe_order() {
         assert_eq!(got, one_up, "plane_through, typed, control word {word:04x}");
         for typed in [false, true] {
             let b = bound_of(&mut e, ONE, ONE, ONE, ONE);
-            let centre = under(&mut e, word, |e| {
+            under(&mut e, word, |e| {
                 if typed {
                     update::bound_transform(e, Ptr::new(b), Ptr::new(t));
                 } else {
                     e.call(0x00a7_fea0, &engine_core::args![b, t]);
                 }
-                e.mem.u32(b)
+                0
             });
-            assert_eq!(
-                centre, one_up,
-                "bound_transform, typed {typed}, control word {word:04x}"
-            );
+            for k in 0..3u32 {
+                assert_eq!(
+                    e.mem.u32(b + 4 * k),
+                    one_up,
+                    "bound_transform's centre {k}, typed {typed}, control word {word:04x}"
+                );
+            }
+            // `bound_update` from the same bound into another: its first row sums `e01 y + x e00`
+            // first.
+            let from = bound_of(&mut e, ONE, ONE, ONE, ONE);
+            let out = bound_of(&mut e, 0, 0, 0, 0);
+            under(&mut e, word, |e| {
+                if typed {
+                    update::bound_update(e, Ptr::new(out), Ptr::new(from), Ptr::new(t));
+                } else {
+                    e.call(0x00a7_fdd0, &engine_core::args![out, from, t]);
+                }
+                0
+            });
+            for k in 0..3u32 {
+                assert_eq!(
+                    e.mem.u32(out + 4 * k),
+                    one_up,
+                    "bound_update's centre {k}, typed {typed}, control word {word:04x}"
+                );
+            }
             let planes = e.mem.alloc(0x64);
             let constant = under(&mut e, word, |e| {
                 if typed {
