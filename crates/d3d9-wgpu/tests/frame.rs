@@ -3496,3 +3496,64 @@ fn a_refused_library_leaves_its_pipelines_whole_with_the_same_pixels() {
         "the whole path draws the linked path's pixels"
     );
 }
+
+/// A shader's header (the registers but the float constants, written only when it changes) is
+/// written again between two draws of one batch when only a header value changed, with no
+/// read-back between the draws: the pixel shader's alpha reference, the vertex shader's clip
+/// planes, and a draw after only the other stage's header changed (the unchanged one kept).
+#[test]
+fn a_header_change_between_two_draws_of_one_batch_reaches_the_second() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    // The pixel shader's header: alpha 0.5 is GREATER than 0x40, not than 0xC0. The halves have
+    // the same viewport size, so the vertex shader's header is the same for both.
+    g.colour([1.0, 1.0, 1.0, 0.5]);
+    g.clear(3, 0, 1.0);
+    g.state(ALPHATESTENABLE, 1);
+    g.state(ALPHAFUNC, 5);
+    g.state(ALPHAREF, 0x40);
+    g.viewport(0, 0, 2, 4, 0.0, 1.0);
+    g.cover(0.5);
+    g.state(ALPHAREF, 0xC0);
+    g.viewport(2, 0, 2, 4, 0.0, 1.0);
+    g.cover(0.5);
+    assert_eq!(
+        g.reds(),
+        [255, 255, 0, 0].repeat(4),
+        "the alpha reference changed between the draws"
+    );
+    // The vertex shader's header: plane 0 on for the second draw only (kept where x - 0.25 w is
+    // at least 0: the last column), red under green.
+    g.state(ALPHATESTENABLE, 0);
+    g.viewport(0, 0, 4, 4, 0.0, 1.0);
+    g.run(Cmd::SetClipPlane {
+        device: DEVICE,
+        index: 0,
+        plane: [1.0f32, 0.0, 0.0, -0.25].map(f32::to_bits),
+    });
+    g.clear(3, 0, 1.0);
+    g.colour([1.0, 0.0, 0.0, 1.0]);
+    g.cover(0.5);
+    g.state(CLIPPLANEENABLE, 1);
+    g.colour([0.0, 1.0, 0.0, 1.0]);
+    g.cover(0.25);
+    assert_eq!(
+        g.reds(),
+        [255, 255, 255, 0].repeat(4),
+        "the clip planes changed between the draws"
+    );
+    // Only the vertex shader's header changes (the planes) between two draws the pixel
+    // shader's alpha test refuses: its header stays, and nothing is drawn.
+    g.state(CLIPPLANEENABLE, 0);
+    g.clear(3, 0, 1.0);
+    g.state(ALPHATESTENABLE, 1);
+    g.state(ALPHAREF, 0xC0);
+    g.colour([1.0, 1.0, 1.0, 0.5]);
+    g.cover(0.5);
+    g.state(CLIPPLANEENABLE, 1);
+    g.cover(0.25);
+    assert_eq!(
+        g.reds(),
+        vec![0; 16],
+        "the pixel shader's header kept while the planes changed"
+    );
+}

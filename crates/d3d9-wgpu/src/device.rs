@@ -533,7 +533,7 @@ impl Listed {
 #[derive(Default)]
 struct PassBinds {
     pipeline: Option<wgpu::RenderPipeline>,
-    blocks: Option<(u32, u32)>,
+    blocks: Option<[u32; 4]>,
     /// The pixel shader's sampler group (bind group 1) and the vertex shader's (2).
     groups: [Option<wgpu::BindGroup>; 2],
     viewport: Option<[u32; 6]>,
@@ -625,6 +625,16 @@ fn common_sample_count(
 }
 
 /// The uniform block of one stage in the ring, rounded up to the offset alignment.
+/// The size of register binding `binding` of group 0: the vertex and the pixel shader's header
+/// (0, 1), then their float constants (2, 3), each at its own dynamic offset in the ring.
+fn regs_binding(binding: u32) -> u64 {
+    if binding < 2 {
+        wgsl::REGS_C_OFFSET
+    } else {
+        wgsl::CONSTS_SIZE
+    }
+}
+
 const BLOCK: u64 = wgsl::REGS_SIZE.div_ceil(256) * 256;
 /// The ring of uniform blocks and `DrawPrimitiveUP` vertices sent with each batch.
 const RING: u64 = 32 << 20;
@@ -662,7 +672,7 @@ pub struct Device {
     up_buffer: wgpu::Buffer,
     stage: Vec<u8>,
     stage_buffer: wgpu::Buffer,
-    blocks: (u32, u32),
+    blocks: [u32; 4],
     /// The float constants each stage's last written block carries.
     block_fregs: [u32; 2],
     /// A pair's sampler layouts by its samplers' key ([`Device::sampler_layout`]): the pixel
@@ -997,13 +1007,13 @@ impl Device {
         let adapter_name = format!("{} ({:?})", info.name, info.backend);
         let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("registers"),
-            entries: &[0, 1].map(|binding| wgpu::BindGroupLayoutEntry {
+            entries: &[0, 1, 2, 3].map(|binding| wgpu::BindGroupLayoutEntry {
                 binding,
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
-                    min_binding_size: std::num::NonZeroU64::new(wgsl::REGS_SIZE),
+                    min_binding_size: std::num::NonZeroU64::new(regs_binding(binding)),
                 },
                 count: None,
             }),
@@ -1017,12 +1027,12 @@ impl Device {
         let ring_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("registers"),
             layout: &uniform_layout,
-            entries: &[0, 1].map(|binding| wgpu::BindGroupEntry {
+            entries: &[0, 1, 2, 3].map(|binding| wgpu::BindGroupEntry {
                 binding,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &ring_buffer,
                     offset: 0,
-                    size: std::num::NonZeroU64::new(wgsl::REGS_SIZE),
+                    size: std::num::NonZeroU64::new(regs_binding(binding)),
                 }),
             }),
         });
@@ -1098,7 +1108,7 @@ impl Device {
             up_buffer,
             stage: Vec::new(),
             stage_buffer,
-            blocks: (0, 0),
+            blocks: [0; 4],
             block_fregs: [0; 2],
             sampler_layouts: Map::default(),
             pipelines: Map::default(),
@@ -3200,7 +3210,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // something it carries changed ([`State::header_dirty`]); the float constants, which
         // most draws change, are copied as they are held.
         if vs_due {
-            if st.header_dirty[0] || centre != self.header_centre {
+            let vs_head = st.header_dirty[0] || centre != self.header_centre;
+            if vs_head {
                 // The planes `D3DRS_CLIPPLANEENABLE` turns on (all off without `D3DRS_CLIPPING`);
                 // a plane that is off is zero, which keeps everything.
                 let mut clip = [[0u32; 4]; wgsl::CLIP_PLANES];
@@ -3218,17 +3229,18 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     block_header(&st.vsi, &st.vsb, vs_sys, per_sampler(16..20), &clip);
                 self.header_centre = centre;
             }
-            self.blocks.0 = write_block(
-                &mut self.ring,
-                &self.headers[0],
-                &self.st.vsf[..16 * fregs[0] as usize],
-            );
+            if fresh || vs_head {
+                self.blocks[0] = write_block(&mut self.ring, &self.headers[0], &[]);
+            }
+            let f = &self.st.vsf[..16 * fregs[0] as usize];
+            self.blocks[2] = write_block(&mut self.ring, &[], f);
             self.block_centre = centre;
             self.block_fregs[0] = fregs[0];
         }
         let st = &self.st;
         if ps_due {
-            if st.header_dirty[1] || atoc != self.header_atoc {
+            let ps_head = st.header_dirty[1] || atoc != self.header_atoc;
+            if ps_head {
                 // The alpha test, unless alpha to coverage stands in for it ([`ATOC`]: then the
                 // comparisons NEVER, LESS, EQUAL and LESSEQUAL draw nothing, the others pass
                 // everything and the coverage comes from the alpha alone).
@@ -3249,11 +3261,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 );
                 self.header_atoc = atoc;
             }
-            self.blocks.1 = write_block(
-                &mut self.ring,
-                &self.headers[1],
-                &self.st.psf[..16 * fregs[1] as usize],
-            );
+            if fresh || ps_head {
+                self.blocks[1] = write_block(&mut self.ring, &self.headers[1], &[]);
+            }
+            let f = &self.st.psf[..16 * fregs[1] as usize];
+            self.blocks[3] = write_block(&mut self.ring, &[], f);
             self.block_fregs[1] = fregs[1];
         }
         if vs_due {
@@ -3620,7 +3632,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             b.pipeline = Some(pipeline.clone());
         }
         if b.blocks != Some(blocks) {
-            pass.set_bind_group(0, &self.ring_group, &[blocks.0, blocks.1]);
+            pass.set_bind_group(0, &self.ring_group, &blocks);
             b.blocks = Some(blocks);
         }
         for (k, (_, group)) in self.last_groups.iter().enumerate() {
@@ -6191,11 +6203,11 @@ fn block_header(
 /// One stage's register block at the end of the ring: its header ([`block_header`]), then the
 /// float registers' bytes `f` (those the stage's shader reads: the rest of the block's range is
 /// never read). Its offset; the ring grows by the block rounded up to the offset alignment.
-fn write_block(ring: &mut Vec<u8>, header: &[u8; HEADER], f: &[u8]) -> u32 {
+fn write_block(ring: &mut Vec<u8>, header: &[u8], f: &[u8]) -> u32 {
     let at = ring.len();
     ring.extend_from_slice(header);
     ring.extend_from_slice(f);
-    ring.resize(at + (HEADER + f.len()).div_ceil(256) * 256, 0);
+    ring.resize(at + (header.len() + f.len()).div_ceil(256) * 256, 0);
     at as u32
 }
 
