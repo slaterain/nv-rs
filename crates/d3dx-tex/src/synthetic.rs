@@ -447,7 +447,42 @@ pub fn npot() -> Vec<File> {
     add("dxt1-6x6-one", false, dxt(&mut rng, b"DXT1", 6, 6, 1));
     add("dxt1-2x2-one", false, dxt(&mut rng, b"DXT1", 2, 2, 1));
     add("argb-cube-24-one", true, plain_cube(&mut rng, argb, 24, 1));
+    // From #496's review: mip counts past the file's chain (D3DX loads the extra 1x1 levels into
+    // the larger texture), stored DXT levels resampled, a DXT cube with its chain, a DXT side of 1.
+    add("argb-24x24-six", false, plain(&mut rng, argb, 24, 24, 6));
+    add("dxt1-1x1-three", false, dxt(&mut rng, b"DXT1", 1, 1, 3));
+    add("dxt1-24x40-full", false, dxt(&mut rng, b"DXT1", 24, 40, 6));
+    add("dxt5-12x12-full", false, dxt(&mut rng, b"DXT5", 12, 12, 4));
+    add("dxt1-1x5-one", false, dxt(&mut rng, b"DXT1", 1, 5, 1));
+    let mut cube = header(12, 12, 4, fourcc(b"DXT1"), 0xfe00);
+    for _ in 0..6 {
+        for l in 0..4u32 {
+            let s = (12u32 >> l).max(1);
+            let n = (s.div_ceil(4) * s.div_ceil(4)) as usize;
+            cube.extend(dxt_blocks(&mut rng, n, 8, true));
+        }
+    }
+    add("dxt1-cube-12-full", true, cube);
     v
+}
+
+/// Large files D3DX resamples, for timing (`d3dx-tex-verify --time-npot`): 1920x1080 DXT5 and
+/// A8R8G8B8, one level each (a 2048x2048 texture: the top level resampled, the rest boxed).
+pub fn large_npot() -> Vec<File> {
+    let mut rng = Rng(0x5eed_d3d8_1920_1080);
+    let argb = (0x41, 0, 32, [0xff_0000, 0xff00, 0xff, 0xff00_0000]);
+    vec![
+        File {
+            name: "dxt5-1920x1080-one".into(),
+            cube: false,
+            data: dxt(&mut rng, b"DXT5", 1920, 1080, 1),
+        },
+        File {
+            name: "argb-1920x1080-one".into(),
+            cube: false,
+            data: plain(&mut rng, argb, 1920, 1080, 1),
+        },
+    ]
 }
 
 /// Headers whose sizes push D3DX's DDS loader (`data/headers_32bit.tsv`: the 32-bit DLL's image

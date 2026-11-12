@@ -168,8 +168,10 @@ pub struct Image {
     pub resource_type: u32,
     /// 1, or 6 for a cube map.
     pub faces: u32,
-    /// The levels kept per face: the file's, at most down to 1x1 (a mip count past the whole
-    /// chain only adds 1x1 levels D3DX reads but never loads).
+    /// The levels kept per face: the file's, down to 1x1 and at most two 1x1 levels past its whole
+    /// chain (a mip count past the chain adds 1x1 levels: D3DX loads them into a texture that has
+    /// the levels for them, one rounded up from a side that is not a power of two or a DXT side
+    /// under 4, at most two levels longer; it reads the rest but never loads them).
     pub stored: u32,
     /// Face by face, level by level (`stored` each).
     pub levels: Vec<Level>,
@@ -274,7 +276,8 @@ const MAX_LEVELS: u64 = 1 << 16;
 /// (measured against the 32-bit DLL, `data/headers_32bit.tsv`): a level of 2^31 to 2^32 bytes is
 /// not in the file; one past 2^32 wraps to a size that may be ([`Image::past_file`]); a side of 0
 /// gives levels of no bytes, which every file holds. A mip count past the whole chain must still
-/// have its 1x1 levels in the data, as D3DX reads them; only the chain's levels are kept. Past
+/// have its 1x1 levels in the data, as D3DX reads them; the chain's levels and two 1x1 levels past
+/// it are kept. Past
 /// [`MAX_LEVELS`] levels a face is refused (the DLL overflows its stack there).
 pub fn parse(data: &[u8]) -> Option<Image> {
     if data.len() < 4 || word(data, 0) != u32::from_le_bytes(*b"DDS ") || data.len() - 4 < 0x7c {
@@ -330,9 +333,10 @@ pub fn parse(data: &[u8]) -> Option<Image> {
         left -= 0x400;
     }
     let bits = format_bits(format);
-    // The whole chain: down to 1x1x1.
+    // The whole chain: down to 1x1x1; and two 1x1 levels past it, which a texture longer than the
+    // file's chain loads ([`Image::stored`]).
     let chain = 32 - width.max(height).max(depth).max(1).leading_zeros();
-    let stored = mips.min(chain);
+    let stored = mips.min(chain + 2);
     let mut levels = Vec::new();
     let mut past_file = false;
     for _ in 0..faces {
@@ -359,8 +363,10 @@ pub fn parse(data: &[u8]) -> Option<Image> {
                     return None;
                 }
                 past_file |= wrapped;
-                if l < stored {
-                    levels.push(level);
+                // The 1x1 levels kept, each at its own place.
+                for k in l..stored {
+                    let offset = (at + size64 * u64::from(k - l)) as usize;
+                    levels.push(Level { offset, ..level });
                 }
                 at += size64 * rest;
                 left -= size64 * rest;
@@ -414,13 +420,20 @@ mod tests {
         d
     }
 
-    /// A mip count past the chain needs its 1x1 levels in the data and keeps only the chain.
+    /// A mip count past the chain needs its 1x1 levels in the data; two of them past the chain are
+    /// kept, each at its own place, the rest only checked.
     #[test]
-    fn mip_counts_past_the_chain_are_checked_not_kept() {
+    fn mip_counts_past_the_chain_are_checked_and_two_kept() {
         let mut d = header(8, 8, 6, b"DXT1");
         d.extend(vec![0u8; 32 + 8 + 8 + 8 * 3]);
         let img = parse(&d).expect("8x8: 4 levels, then 2 more 1x1 ones");
-        assert_eq!((img.mip_levels, img.stored, img.levels.len()), (6, 4, 4));
+        assert_eq!((img.mip_levels, img.stored, img.levels.len()), (6, 6, 6));
+        let offsets: Vec<usize> = img.levels.iter().map(|l| l.offset).collect();
+        assert_eq!(offsets, [128, 160, 168, 176, 184, 192]);
+        let mut seven = header(8, 8, 7, b"DXT1");
+        seven.extend(vec![0u8; 32 + 8 + 8 + 8 * 4]);
+        let img = parse(&seven).expect("8x8: 4 levels, then 3 more 1x1 ones");
+        assert_eq!((img.mip_levels, img.stored, img.levels.len()), (7, 6, 6));
         d.pop();
         assert!(parse(&d).is_none(), "one byte short of the last 1x1 level");
         let mut d = header(4, 4, u32::MAX, b"DXT1");

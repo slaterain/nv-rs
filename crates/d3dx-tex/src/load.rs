@@ -142,6 +142,22 @@ pub enum Untranslated {
     Volume,
     /// A DDS pixel format this crate does not read or make.
     PixelFormat,
+    /// A cube map whose faces are not square (no real one has them: D3DX squares the cube, and a
+    /// broken file of 16384x1 faces would make one of gigabytes), or a texture of more bytes than
+    /// a 32-bit D3DX could allocate ([`MAX_TEXTURE_BYTES`]).
+    Size,
+}
+
+/// The most bytes a texture made here holds, every level and face: what a 32-bit D3DX could ever
+/// allocate (2 GiB, its process's address space). Past it the 32-bit DLL fails to make the texture;
+/// here it is left to the caller.
+pub const MAX_TEXTURE_BYTES: u64 = 1 << 31;
+
+/// The bytes of one face of a `w` x `h` texture of `f` with `levels` levels.
+fn texture_bytes(f: u32, w: u32, h: u32, levels: u32) -> u64 {
+    (0..levels)
+        .map(|l| format::level_size(f, (w >> l).max(1), (h >> l).max(1)) as u64)
+        .sum()
 }
 
 /// `D3DXIMAGE_INFO`'s seven words.
@@ -344,7 +360,22 @@ fn create(data: &[u8], caps: &Caps, rtype: u32, precision: Precision) -> Result<
         w = w.saturating_add(3) & !3;
         h = h.saturating_add(3) & !3;
     }
+    // A cube map whose faces are not square: no real one is, and D3DX squares it, so a broken file
+    // (faces of 16384x1) would be resampled into a cube of gigabytes. Left to the caller.
+    if rtype == RTYPE_CUBE && img.width != img.height {
+        return Err(Error::NotProvided(
+            Untranslated::Size,
+            format!("a cube map of {}x{} faces", img.width, img.height),
+        ));
+    }
     let levels = bit_count(w).max(bit_count(h));
+    let bytes = texture_bytes(tex_format, w, h, levels) * u64::from(faces);
+    if bytes > MAX_TEXTURE_BYTES {
+        return Err(Error::NotProvided(
+            Untranslated::Size,
+            format!("a {w}x{h} texture of {bytes} bytes, past what a 32-bit D3DX can allocate"),
+        ));
+    }
     // A file level of another size than the texture's (a side that is not a power of two, a DXT
     // side that is not a multiple of 4) is resampled with D3DX's triangle filter; its edges wrap
     // round, except in a cube map, for which D3DX adds the mirror flags (0x61025e).
@@ -395,4 +426,20 @@ fn create(data: &[u8], caps: &Caps, rtype: u32, precision: Precision) -> Result<
         faces,
         surfaces,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bound: a 16384x16384 A8R8G8B8 texture with its whole chain (about 1.33 GiB) is within
+    /// it, a cube of six such faces past it, a DXT1 cube of 16384 within it.
+    #[test]
+    fn the_largest_textures_a_32_bit_d3dx_could_make() {
+        let chain = bit_count(16384);
+        let argb = texture_bytes(format::A8R8G8B8, 16384, 16384, chain);
+        assert!(argb <= MAX_TEXTURE_BYTES && 6 * argb > MAX_TEXTURE_BYTES);
+        assert!(6 * texture_bytes(format::DXT1, 16384, 16384, chain) <= MAX_TEXTURE_BYTES);
+        assert_eq!(texture_bytes(format::DXT1, 8, 8, 4), 32 + 8 + 8 + 8);
+    }
 }

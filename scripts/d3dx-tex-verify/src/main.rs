@@ -616,6 +616,30 @@ fn capture_headers(out: &std::path::Path, serve: &str) {
     std::fs::write(out, text).unwrap();
 }
 
+/// `--time-npot`: d3dx-tex's create call on `d3dx_tex::synthetic::large_npot`'s 1920x1080 files
+/// (DXT5 and A8R8G8B8, one level: a 2048x2048 texture, its top level resampled) at both
+/// precisions, on one thread: the best of five, in milliseconds.
+fn time_npot() {
+    let caps = d3dx_tex::Caps::default();
+    for f in d3dx_tex::synthetic::large_npot() {
+        for (p, name) in [
+            (d3dx_tex::Precision::Single, "single"),
+            (d3dx_tex::Precision::Double, "double"),
+        ] {
+            let best = (0..5)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    let made = d3dx_tex::create_texture_from_file_in_memory(&f.data, &caps, p);
+                    std::hint::black_box(made.expect("made"));
+                    start.elapsed()
+                })
+                .min()
+                .unwrap();
+            println!("{}\t{name}\t{:.1} ms", f.name, best.as_secs_f64() * 1e3);
+        }
+    }
+}
+
 fn capture_synthetic(out: &std::path::Path, serve: &str, set: &str) {
     use std::io::Read;
     let files = match set {
@@ -806,7 +830,10 @@ fn compare_folder(dir: &std::path::Path, serve: &str) {
         if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("bsa")) {
             let archive = bsa::Archive::open(p).expect("an archive");
             for e in archive.files().iter().filter(|e| is_dds(&e.path)) {
-                items.push((format!("{rel}:{}", e.path), archive.read(e).expect("an entry")));
+                items.push((
+                    format!("{rel}:{}", e.path),
+                    archive.read(e).expect("an entry"),
+                ));
             }
         } else if is_dds(&rel) {
             items.push((rel, std::fs::read(p).unwrap()));
@@ -1406,6 +1433,10 @@ fn main() {
                 capture_synth = Some((PathBuf::from(&args[i + 1]), "npot"));
                 i += 1;
             }
+            "--time-npot" => {
+                time_npot();
+                return;
+            }
             "--capture-proxy" => {
                 capture_synth = Some((PathBuf::from(&args[i + 1]), "proxy"));
                 i += 1;
@@ -1468,7 +1499,10 @@ fn main() {
         return;
     }
     if let Some((dir, "compare")) = &capture_synth {
-        compare_folder(dir, serve_exe.as_deref().expect("--serve <d3dx-measure.exe>"));
+        compare_folder(
+            dir,
+            serve_exe.as_deref().expect("--serve <d3dx-measure.exe>"),
+        );
         return;
     }
     if let Some((out, "proxy")) = &capture_synth {

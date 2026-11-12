@@ -98,21 +98,25 @@ pub(crate) fn weights<P: Fpu>(src: usize, dst: usize, wrap: bool) -> Vec<Vec<(us
 }
 
 /// D3DX's clamp of a finished row of a format of the first kind (every format this crate makes):
-/// each channel into [0, 1], a NaN to 0.
+/// each channel into [0, 1], a NaN to 1 (neither comparison holds for it).
 fn clamp01(v: f32) -> f32 {
-    if 0.0 <= v {
-        if 1.0 <= v {
-            1.0
-        } else {
-            v
-        }
-    } else {
+    if v < 0.0 {
         0.0
+    } else if v < 1.0 {
+        v
+    } else {
+        1.0
     }
 }
 
+/// Destination pixels per thread below which a level is not split.
+const PIXELS_PER_THREAD: usize = 64 * 1024;
+
 /// D3DX's triangle filter (0x626872) from a `w` x `h` level of `src_format` (`bytes`, rows packed)
-/// into a `dw` x `dh` level of `dst_format`, with its dither, at the thread's precision `P`.
+/// into a `dw` x `dh` level of `dst_format`, with its dither, at the thread's precision `P`. A large
+/// level is split into bands of destination rows (whole block rows for DXT) between this thread
+/// and helpers ([`filter::set_max_threads`]); each band adds up its rows' sums in the order the
+/// whole level does, so the bytes are the same.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn triangle<P: Fpu>(
     src_format: u32,
@@ -124,35 +128,108 @@ pub(crate) fn triangle<P: Fpu>(
     dh: u32,
     wrap: bool,
 ) -> Vec<u8> {
-    let n = <P::N as Reg>::ld;
     let (w, h, dw, dh) = (w as usize, h as usize, dw as usize, dh as usize);
     let wx = weights::<P>(w, dw, wrap);
     let wy = weights::<P>(h, dh, wrap);
-    // How many source rows each destination row still waits for.
-    let mut pending = vec![0usize; dh];
-    for list in &wy {
+    let mut out = vec![0u8; format::level_size(dst_format, dw as u32, dh as u32)];
+    // A band is a whole number of `unit` destination rows, `unit_bytes` of the output each.
+    let unit = if format::is_dxt(dst_format) { 4 } else { 1 };
+    let unit_bytes = format::level_size(dst_format, dw as u32, unit as u32);
+    let work = |first: usize, chunk: &mut [u8]| {
+        let y0 = first * unit;
+        let y1 = (y0 + chunk.len() / unit_bytes * unit).min(dh);
+        band::<P>(
+            src_format,
+            w,
+            h,
+            bytes,
+            &wx,
+            &wy,
+            dst_format,
+            dw,
+            y0..y1,
+            chunk,
+        );
+    };
+    let pixels = dw * dh;
+    let want = if pixels < 2 * PIXELS_PER_THREAD {
+        0
+    } else {
+        pixels / PIXELS_PER_THREAD - 1
+    };
+    let helpers = filter::Helpers::take(want);
+    if helpers.0 == 0 {
+        work(0, &mut out);
+    } else {
+        let per = dh.div_ceil(unit).div_ceil(helpers.0 + 1);
+        std::thread::scope(|s| {
+            let mut chunks = out.chunks_mut(per * unit_bytes).enumerate();
+            let own = chunks.next();
+            for (i, chunk) in chunks {
+                let work = &work;
+                s.spawn(move || work(i * per, chunk));
+            }
+            if let Some((_, chunk)) = own {
+                work(0, chunk);
+            }
+        });
+    }
+    drop(helpers);
+    out
+}
+
+/// The destination rows `rows` of [`triangle`] into `out` (their bytes; for DXT whole block rows,
+/// the band starting at one): every source row that reaches them, in the source's order.
+#[allow(clippy::too_many_arguments)]
+fn band<P: Fpu>(
+    src_format: u32,
+    w: usize,
+    h: usize,
+    bytes: &[u8],
+    wx: &[Vec<(usize, f32)>],
+    wy: &[Vec<(usize, f32)>],
+    dst_format: u32,
+    dw: usize,
+    rows: std::ops::Range<usize>,
+    out: &mut [u8],
+) {
+    let n = <P::N as Reg>::ld;
+    let (y0, count) = (rows.start, rows.len());
+    // How many source rows each destination row of the band still waits for.
+    let mut pending = vec![0usize; count];
+    for list in wy {
         for &(dy, _) in list {
-            pending[dy] += 1;
+            if rows.contains(&dy) {
+                pending[dy - y0] += 1;
+            }
         }
     }
-    let mut sums: Vec<Option<Vec<Color>>> = vec![None; dh];
-    let mut out = vec![0u8; format::level_size(dst_format, dw as u32, dh as u32)];
+    let mut sums: Vec<Option<Vec<Color>>> = vec![None; count];
     let dst_dxt = format::is_dxt(dst_format);
     // DXT: the finished rows of each block row until all of its rows are there.
-    let mut finished: Vec<Option<Vec<Color>>> = vec![None; if dst_dxt { dh } else { 0 }];
+    let mut finished: Vec<Option<Vec<Color>>> = vec![None; if dst_dxt { count } else { 0 }];
     let src_dxt = format::is_dxt(src_format);
-    let mut band = vec![[0.0f32; 4]; if src_dxt { 4 * w } else { 0 }];
+    let mut block_rows = vec![[0.0f32; 4]; if src_dxt { 4 * w } else { 0 }];
+    // The source block row in `block_rows`.
+    let mut decoded = usize::MAX;
     let mut row = vec![[0.0f32; 4]; w];
     let src_row = format::level_size(src_format, w as u32, 1);
+    let rb = format::level_size(dst_format, dw as u32, 1);
     for (sy, ylist) in wy.iter().enumerate() {
+        if !ylist.iter().any(|&(dy, _)| rows.contains(&dy)) {
+            continue;
+        }
         for &(dy, _) in ylist {
-            sums[dy].get_or_insert_with(|| vec![[0.0; 4]; dw]);
+            if rows.contains(&dy) {
+                sums[dy - y0].get_or_insert_with(|| vec![[0.0; 4]; dw]);
+            }
         }
         if src_dxt {
-            if sy % 4 == 0 {
-                filter::decode_block_rows::<P>(src_format, w, h, bytes, sy / 4, 1, &mut band);
+            if sy / 4 != decoded {
+                filter::decode_block_rows::<P>(src_format, w, h, bytes, sy / 4, 1, &mut block_rows);
+                decoded = sy / 4;
             }
-            row.copy_from_slice(&band[(sy % 4) * w..(sy % 4 + 1) * w]);
+            row.copy_from_slice(&block_rows[(sy % 4) * w..(sy % 4 + 1) * w]);
         } else {
             pixel::decode_row(
                 src_format,
@@ -161,9 +238,14 @@ pub(crate) fn triangle<P: Fpu>(
                 &mut row,
             );
         }
-        for (c, xlist) in row.iter().zip(&wx) {
+        for (c, xlist) in row.iter().zip(wx) {
             for &(dy, wyv) in ylist {
-                let sum = sums[dy].as_mut().expect("allocated for this source row");
+                if !rows.contains(&dy) {
+                    continue;
+                }
+                let sum = sums[dy - y0]
+                    .as_mut()
+                    .expect("allocated for this source row");
                 for &(dx, wxv) in xlist {
                     let weight = wxv * wyv;
                     let o = &mut sum[dx];
@@ -174,36 +256,39 @@ pub(crate) fn triangle<P: Fpu>(
             }
         }
         for &(dy, _) in ylist {
-            pending[dy] -= 1;
-            if pending[dy] != 0 {
+            if !rows.contains(&dy) {
                 continue;
             }
-            let mut done = sums[dy].take().expect("a row with its sums");
+            let r = dy - y0;
+            pending[r] -= 1;
+            if pending[r] != 0 {
+                continue;
+            }
+            let mut done = sums[r].take().expect("a row with its sums");
             for o in done.iter_mut() {
                 for v in o.iter_mut() {
                     *v = clamp01(*v);
                 }
             }
             if dst_dxt {
-                finished[dy] = Some(done);
-                encode_block_row::<P>(dst_format, dw, dh, dy / 4, &mut finished, &mut out);
+                finished[r] = Some(done);
+                encode_block_row::<P>(dst_format, dw, count, r / 4, &mut finished, out);
             } else {
-                let rb = format::level_size(dst_format, dw as u32, 1);
                 pixel::encode_row::<P>(
                     dst_format,
                     &done,
                     dy as u32,
                     true,
-                    &mut out[dy * rb..(dy + 1) * rb],
+                    &mut out[r * rb..(r + 1) * rb],
                 );
             }
         }
     }
-    out
 }
 
-/// A DXT destination's block row `by`, once every row of it within the level is finished (the
-/// DXT codec 0x61d2bc keeps a block row's rows until then): its blocks with the dither.
+/// A DXT destination's block row `by` of a band of `dh` rows, once every row of it within the band
+/// is finished (the DXT codec 0x61d2bc keeps a block row's rows until then; only the level's last
+/// block row can be short): its blocks with the dither.
 fn encode_block_row<P: Fpu>(
     f: u32,
     dw: usize,
@@ -239,7 +324,7 @@ mod tests {
     use crate::num::P24;
 
     /// D3DX's clamp of a finished row (0x626872, for a format of the first kind): each channel into
-    /// [0, 1], a NaN to 0. The weights are not negative and sum to about 1, so a sum passes 1 by a
+    /// [0, 1], a NaN to 1. The weights are not negative and sum to about 1, so a sum passes 1 by a
     /// rounding at most, and the encoders' own integer clamps hide that in the DLL's answers for the
     /// formats this crate makes: the clamp is pinned here.
     #[test]
@@ -249,7 +334,7 @@ mod tests {
         assert_eq!(clamp01(1.0), 1.0);
         assert_eq!(clamp01(0.75), 0.75);
         assert_eq!(clamp01(-0.25), 0.0);
-        assert_eq!(clamp01(f32::NAN), 0.0);
+        assert_eq!(clamp01(f32::NAN), 1.0);
     }
 
     /// Every synthetic file D3DX resamples is made (its bytes are checked against the DLL's in

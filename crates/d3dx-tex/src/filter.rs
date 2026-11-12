@@ -203,11 +203,11 @@ pub fn set_max_threads(n: usize) {
 }
 
 /// Helper threads taken from the process-wide budget, given back when dropped.
-struct Helpers(usize);
+pub(crate) struct Helpers(pub(crate) usize);
 
 impl Helpers {
     /// Up to `want` helpers, as many as the budget has left (possibly none).
-    fn take(want: usize) -> Helpers {
+    pub(crate) fn take(want: usize) -> Helpers {
         let cap = match MAX_THREADS.load(Ordering::Relaxed) {
             0 => std::thread::available_parallelism().map_or(1, |n| n.get()),
             n => n,

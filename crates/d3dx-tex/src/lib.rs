@@ -45,7 +45,9 @@
 //! other than DDS, volume textures, and DDS pixel formats other than DXT1/3/5, A8R8G8B8,
 //! X8R8G8B8, R8G8B8, A4R4G4B4 and the ones above, each with its kind ([`Untranslated`]). None of
 //! the game's textures needs them. DDS files whose FourCC D3DX's DDS table does not have (ATI1,
-//! ATI2/BC5, DX10) are refused by the DLL itself (`D3DXERR_INVALIDDATA`), and so here.
+//! ATI2/BC5, DX10) are refused by the DLL itself (`D3DXERR_INVALIDDATA`), and so here. Cube maps
+//! whose faces are not square (no real one; D3DX would square them into cubes of gigabytes) and
+//! textures past 2 GiB (more than the 32-bit DLL can allocate) are [`Untranslated::Size`].
 //!
 //! Speed (2026-11-08, all the game's textures, `d3dx-tex-verify --time` against the 64-bit DLL
 //! creating on a real device and reading back): on one core about 10% faster than the 64-bit DLL
