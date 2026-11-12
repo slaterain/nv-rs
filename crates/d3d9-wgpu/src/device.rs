@@ -780,6 +780,14 @@ pub struct Device {
     /// where wgpu-hal links render pipelines from libraries (Vulkan with
     /// `VK_EXT_graphics_pipeline_library`; [`Device::library_ahead`]).
     libraries: bool,
+    /// The pipeline cache file was read (a warm start, [`cache::PipelineCacheFile::warm`]): only
+    /// the shaders the pipeline list names get their libraries made ahead ([`listed_shaders`]);
+    /// the rest come from the driver's cache on first use, about a millisecond each.
+    ///
+    /// [`listed_shaders`]: Device::listed_shaders
+    warm_start: bool,
+    /// The shaders (bytecode hashes) the pipeline list names (shipped and this player's).
+    listed_shaders: HashSet<u64>,
     /// The game's start is over: its first draw or `Present` after its first shaders
     /// ([`Device::wait_for_start`]); shaders created after it are counted as late.
     start_done: bool,
@@ -971,6 +979,11 @@ impl Device {
             cache_dir.and_then(|d| cache::PipelineCacheFile::open(&device, &adapter.get_info(), d));
         // The pipelines to make before play: the shipped list and this machine's.
         let list = cache_dir.map(Listed::load);
+        let warm_start = pipeline_cache.as_ref().is_some_and(|c| c.warm);
+        let listed_shaders: HashSet<u64> = list
+            .as_ref()
+            .map(|l| l.list.entries.iter().flat_map(|e| [e.vs, e.ps]).collect())
+            .unwrap_or_default();
         let errors = Arc::new(AtomicU64::new(0));
         {
             let errors = errors.clone();
@@ -1101,6 +1114,8 @@ impl Device {
             modules_ahead: None,
             ahead_burst: (0, std::time::Duration::ZERO, 0),
             libraries,
+            warm_start,
+            listed_shaders,
             start_done: false,
             late_shaders: 0,
             start_jobs: 0,
@@ -4017,13 +4032,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         );
         // Where the threads' time went (the log line below): converting, modules, libraries.
         let mut spent = [std::time::Duration::ZERO; 3];
+        let mut libraries = 0usize;
         let mut add = |m: &ModuleMade| {
             spent[0] += m.convert;
             spent[1] += m.made;
-            spent[2] += m
-                .library
-                .as_ref()
-                .map_or(std::time::Duration::ZERO, |l| l.0);
+            if let Some(l) = &m.library {
+                spent[2] += l.0;
+                libraries += 1;
+            }
         };
         for ((k, _), m) in taken.into_iter().zip(made) {
             if let Some(m) = m {
@@ -4070,7 +4086,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.made.work += started.elapsed();
         let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
         eprintln!(
-            "NV_D3D9 wgpu: the start: {waiting} shader modules and their pipeline libraries, {:.0} ms on {cores} cores (threads' time: converting {:.0} ms, modules {:.0} ms, libraries {:.0} ms)",
+            "NV_D3D9 wgpu: the start: {waiting} shader modules, {libraries} with their pipeline library ({}), {:.0} ms on {cores} cores (threads' time: converting {:.0} ms, modules {:.0} ms, libraries {:.0} ms)",
+            if self.warm_start {
+                "the pipeline cache warm: the listed shaders'"
+            } else {
+                "the pipeline cache cold: every shader's"
+            },
             ms(started.elapsed()),
             ms(spent[0]),
             ms(spent[1]),
@@ -4160,12 +4181,17 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // Its library too, until the start: after it, a shader's library is made on the draw that
         // first needs it, never in the background during play (the driver held frames up to about
         // 130 ms while making one); none once wgpu refused one.
-        let library =
-            if self.libraries && !self.start_done && self.libraries_ahead.load(Ordering::Relaxed) {
-                self.library_ahead(s, &link)
-            } else {
-                None
-            };
+        // On a warm start only a listed shader's: the others' libraries come from the driver's
+        // cache on first use, about a millisecond each (cold, about 100 ms: then all are made).
+        let library = if self.libraries
+            && !self.start_done
+            && self.libraries_ahead.load(Ordering::Relaxed)
+            && (!self.warm_start || self.listed_shaders.contains(&s.stable))
+        {
+            self.library_ahead(s, &link)
+        } else {
+            None
+        };
         let device = self.device.clone();
         let q = self
             .modules_ahead

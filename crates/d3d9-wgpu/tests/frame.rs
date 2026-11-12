@@ -2663,6 +2663,88 @@ fn listed_pipelines_are_made_before_the_draws_that_need_them() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// With pipeline libraries, a cold start (no pipeline cache file) makes every shader's library
+/// ahead; a warm one (the file the cold run wrote, read back) only the listed shaders' (the pair
+/// the cold run drew), and a pair no list names makes its libraries on its first draw (from the
+/// driver's cache: about a millisecond each).
+#[test]
+fn a_warm_start_makes_only_the_listed_shaders_libraries() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("warm-start-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // A run: the harness's pair drawn first (the start), with another pair made before it; that
+    // pair drawn after (`other`). The cache note, the jobs the start waited for, and the library
+    // counts after the start and at the end.
+    type Run = (String, usize, (u64, u64), (u64, u64));
+    let run = |other: bool| -> Option<Run> {
+        let mut g = Gpu::with_cache(4, 1, Some(dir.clone()))?;
+        texcoord_pair(&mut g, VS + 12, PS + 20);
+        for (pixel, shader) in [(false, VS), (true, PS)] {
+            g.run(Cmd::SetShader {
+                device: DEVICE,
+                pixel,
+                shader,
+            });
+        }
+        g.colour([1.0, 1.0, 1.0, 1.0]);
+        g.clear(3, 0, 1.0);
+        g.cover(0.5);
+        let d = g.b.device().expect("the device");
+        let note = d.pipeline_cache_note().unwrap_or_default();
+        let waited = d.start_waited_for();
+        let start = library_counts(d)?;
+        if other {
+            for (pixel, shader) in [(false, VS + 12), (true, PS + 20)] {
+                g.run(Cmd::SetShader {
+                    device: DEVICE,
+                    pixel,
+                    shader,
+                });
+            }
+            let vertices: Vec<u8> = floats(
+                &TRIANGLE
+                    .iter()
+                    .flat_map(|p| [p[0], p[1], 0.5, 1.0, 0.2, 0.4, 0.6, 1.0])
+                    .collect::<Vec<f32>>(),
+            );
+            g.clear(3, 0, 1.0);
+            draw_with(
+                &mut g,
+                DECL + 10,
+                &[(0, 3, 0, 0), (16, 3, 5, 0)],
+                &vertices,
+                32,
+            );
+            assert_eq!(g.pixels(), vec![[153, 102, 51, 255]; 16]);
+        }
+        let end = library_counts(g.b.device().expect("the device"))?;
+        Some((note, waited, start, end))
+        // The device goes: the list and the pipeline cache file are written.
+    };
+    let Some((note, waited, start, end)) = run(false) else {
+        eprintln!("no pipeline libraries here, so the case is not reached");
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    };
+    // Cold: every shader's library at the start: the four and the stand-ins (two vertex shaders
+    // for the two pixel shaders' varyings, one pixel shader).
+    assert!(note.starts_with("none yet"), "{note}");
+    assert_eq!((waited, start, end), (4, (4, 3), (4, 3)), "cold");
+    let (note, waited, start, end) = run(true).expect("the second run");
+    // Warm: the listed pair's libraries and their stand-ins' only (the other pair's modules
+    // are still made ahead); its draw makes the other pair's two.
+    assert!(note.ends_with("KB read"), "{note}");
+    assert_eq!(waited, 4, "every module waited for");
+    assert_eq!(
+        start,
+        (2, 2),
+        "warm: the listed pair's and their stand-ins'"
+    );
+    assert_eq!(end, (3, 3), "the other pair's on its first draw");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A multisampled entry is made ahead at the run's own multisample count, whatever count it was
 /// recorded at (the shipped list is recorded at one antialiasing setting): the list a 4x run
 /// wrote leaves an 8x run no pipeline to make on its draws, and the same pixels as an 8x run
