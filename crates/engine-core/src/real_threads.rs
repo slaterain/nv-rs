@@ -2498,9 +2498,11 @@ const HELPER_ID_BASE: u32 = 0x0001_0000;
 /// thread's (the thread list holds a few dozen), so `SuspendThread` of a game thread never finds it.
 const HELPER_INDEX_BASE: usize = 1000;
 
-/// The most helpers a pool can have: the slots of [`crate::mem::HELPER_AREA`].
+/// The most helpers a pool can have: the slots of [`crate::mem::HELPER_AREA`] but the last, the
+/// drawing helper's ([`DRAW_SLOT`]).
 pub const MOST_HELPERS: usize = ((crate::mem::HELPER_AREA.end - crate::mem::HELPER_AREA.start)
-    / crate::mem::HELPER_SLOT) as usize;
+    / crate::mem::HELPER_SLOT) as usize
+    - 1;
 
 /// A job for [`fork_join`]: called once on each helper with its engine and number (1 to n), and on
 /// the caller with number 0.
@@ -2827,6 +2829,241 @@ fn run_helper(
         if s.running == 0 && s.to_take == 0 {
             pool.done.notify_all();
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The drawing helper (step 2: the world's draw on a thread of its own, measure/scope-1111/PLAN.md
+// piece 7): one engine that runs a job posted to it beside the thread that posted it, which goes
+// on and joins it later, where `fork_join`'s helpers run only while their caller waits. Not a game
+// thread either: no handle, not in the thread list, never seen by the game. Its TLS block and
+// stack for locals are the last slot of `HELPER_AREA` ([`DRAW_SLOT`]), which the pool never takes.
+// ---------------------------------------------------------------------------------------------
+
+/// The drawing helper's slot of [`crate::mem::HELPER_AREA`]: the one past the pool's.
+const DRAW_SLOT: u32 = MOST_HELPERS as u32;
+/// The id the drawing helper answers `GetCurrentThreadId` with, and its thread index: past the
+/// pool's.
+const DRAW_ID: u32 = HELPER_ID_BASE + 0x100;
+const DRAW_INDEX: usize = HELPER_INDEX_BASE + 0x100;
+
+/// A job for [`post_draw`]: run once on the drawing helper's engine.
+pub type DrawJob = Box<dyn FnOnce(&mut Engine) + Send>;
+
+/// The drawing helper and what it shares with the thread that posts to it.
+struct DrawHelper {
+    state: Mutex<DrawState>,
+    /// The job may run.
+    start: Condvar,
+    /// The job finished.
+    done: Condvar,
+    /// The run it was made in, as [`Pool`]'s.
+    kernel: usize,
+    world: Option<usize>,
+}
+
+#[derive(Default)]
+struct DrawState {
+    /// A job is posted and not joined yet.
+    posted: bool,
+    /// The job, until the helper takes it.
+    job: Option<DrawJob>,
+    /// It may run now: at once with real threads, once its poster waits for it with stepped ones.
+    go: bool,
+    finished: bool,
+    /// The poster's x87 control word, which the helper takes for the job.
+    control_word: u16,
+    /// The job's panic, resumed at [`join_draw`].
+    panic: Option<Box<dyn std::any::Any + Send>>,
+}
+
+impl DrawHelper {
+    /// Stops a poster from another run than the helper's, as [`Pool::assert_same_run`].
+    fn assert_same_run(&self, kernel: usize, world: Option<usize>) {
+        assert!(
+            self.kernel == kernel && self.world == world,
+            "post_draw: the drawing helper belongs to another run (its engine is a view of that \
+             run's memory and kernel); one run per process may post"
+        );
+    }
+}
+
+static DRAW: std::sync::OnceLock<&'static DrawHelper> = std::sync::OnceLock::new();
+
+thread_local! {
+    /// This OS thread is the drawing helper.
+    static DRAW_HELPER: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether this OS thread is the drawing helper (the device model sends its calls to the drawing
+/// side's state and command slot).
+pub fn on_draw_helper() -> bool {
+    DRAW_HELPER.with(Cell::get)
+}
+
+/// Posts `job` to the drawing helper (made at the first post, on an OS thread named `nv-draw`),
+/// which takes the poster's x87 control word for it. With real threads it starts at once, counted
+/// as running game code for the page barrier while it runs; with stepped threads it runs when the
+/// poster waits for it ([`wait_draw`], [`join_draw`]), so a run stays deterministic: the job's
+/// place in the run is the poster's wait. Answers false and posts nothing (the poster does the work
+/// itself) on a helper, while a typed family runs dual (`typed::moved::Store::Dual`, as
+/// [`fork_join`]), while an earlier job is posted and not joined, or when the memory cannot be
+/// shared (a memory diagnostic). With stepped threads the memory becomes shared at the first post,
+/// as `fork_join` makes it. One drawing helper per process, for the run that first posts: a
+/// poster from another run stops with a panic.
+pub fn post_draw(e: &mut Engine, job: DrawJob) -> bool {
+    if HELPER.with(Cell::get) || on_draw_helper() || e.typed_any_dual() {
+        return false;
+    }
+    let world = e.real.as_ref().map(|r| r.world);
+    let world_id = world.map(|w| w as *const World as usize);
+    if let Some(d) = DRAW.get() {
+        d.assert_same_run(e.kernel.id(), world_id);
+        if guard(&d.state).posted {
+            return false;
+        }
+    }
+    if world.is_none() && !e.mem.is_shared() {
+        if !e.mem.can_share() {
+            return false;
+        }
+        e.kernel.leak();
+        e.device.leak();
+        e.mem.start_sharing();
+    }
+    let d = *DRAW.get_or_init(|| make_draw_helper(e, world));
+    d.assert_same_run(e.kernel.id(), world_id);
+    {
+        let mut s = guard(&d.state);
+        if s.posted {
+            return false;
+        }
+        s.posted = true;
+        s.finished = false;
+        s.panic = None;
+        s.control_word = crate::x87::control_word();
+        s.job = Some(job);
+        s.go = world.is_some();
+    }
+    d.start.notify_all();
+    true
+}
+
+/// Whether a job is posted to the drawing helper and not joined yet.
+pub fn draw_posted() -> bool {
+    DRAW.get().is_some_and(|d| guard(&d.state).posted)
+}
+
+/// Returns once the posted job has finished; with stepped threads it runs now, while the poster
+/// waits. False when none is posted. The poster does not count as running game code while it
+/// waits, so a barrier does not wait for it. The job's panic waits for [`join_draw`].
+pub fn wait_draw(e: &Engine) -> bool {
+    let Some(d) = DRAW.get() else {
+        return false;
+    };
+    {
+        let mut s = guard(&d.state);
+        if !s.posted {
+            return false;
+        }
+        if s.finished {
+            return true;
+        }
+        s.go = true;
+    }
+    d.start.notify_all();
+    let world = e.real.as_ref().map(|r| r.world);
+    let counted = world.is_some_and(World::leave_guest);
+    let mut s = guard(&d.state);
+    while !s.finished {
+        s = wait(&d.done, s);
+    }
+    drop(s);
+    if counted {
+        if let Some(world) = world {
+            world.enter_guest();
+        }
+    }
+    true
+}
+
+/// [`wait_draw`], then the job is joined (another may be posted) and its panic, if it had one, is
+/// resumed here. False when none was posted.
+pub fn join_draw(e: &Engine) -> bool {
+    if !wait_draw(e) {
+        return false;
+    }
+    let d = DRAW.get().expect("a job was posted");
+    let panic = {
+        let mut s = guard(&d.state);
+        s.posted = false;
+        s.panic.take()
+    };
+    if let Some(payload) = panic {
+        std::panic::resume_unwind(payload);
+    }
+    true
+}
+
+/// The drawing helper and its OS thread, with an engine made on this thread.
+fn make_draw_helper(e: &mut Engine, world: Option<&'static World>) -> &'static DrawHelper {
+    let d: &'static DrawHelper = Box::leak(Box::new(DrawHelper {
+        state: Mutex::new(DrawState::default()),
+        start: Condvar::new(),
+        done: Condvar::new(),
+        kernel: e.kernel.id(),
+        world: world.map(|w| w as *const World as usize),
+    }));
+    let mut helper = match world {
+        Some(world) => world.context(DRAW_ID, DRAW_INDEX),
+        None => e.helper_context(),
+    };
+    // Its TLS block and stack for locals at its own fixed place outside the heap, as the pool's.
+    helper.place_thread_memory(
+        crate::mem::HELPER_AREA.start + DRAW_SLOT * crate::mem::HELPER_SLOT,
+        crate::mem::HELPER_SLOT,
+    );
+    let engine = SendEngine(Box::new(helper));
+    std::thread::Builder::new()
+        .name("nv-draw".into())
+        .stack_size(THREAD_STACK)
+        .spawn(move || run_draw_helper(engine, world, d))
+        .expect("the drawing helper's thread");
+    d
+}
+
+/// The drawing helper's body: waits for each job, runs it on its engine, marks it finished.
+fn run_draw_helper(engine: SendEngine, world: Option<&'static World>, d: &'static DrawHelper) {
+    DRAW_HELPER.with(|h| h.set(true));
+    let mut e = engine.0;
+    loop {
+        let (job, control_word) = {
+            let mut s = guard(&d.state);
+            while !(s.go && s.job.is_some()) {
+                s = wait(&d.start, s);
+            }
+            (s.job.take().expect("checked above"), s.control_word)
+        };
+        if world.is_some() {
+            sync_registered(&mut e);
+        }
+        crate::x87::set_control_word(control_word);
+        if let Some(world) = world {
+            world.enter_guest();
+        }
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&mut e)));
+        if let Some(world) = world {
+            world.leave_guest();
+        }
+        {
+            let mut s = guard(&d.state);
+            if let Err(payload) = out {
+                s.panic = Some(payload);
+            }
+            s.finished = true;
+            s.go = false;
+        }
+        d.done.notify_all();
     }
 }
 
@@ -4449,6 +4686,102 @@ mod tests {
         }
         barriers.join().expect("the barrier thread");
         assert!(forks > 0);
+        world.leave_guest();
+    }
+
+    /// The drawing helper (one per process, so one test makes it), with real threads: a posted job
+    /// runs beside its poster (it waits for a signal the poster gives after `post_draw` returns),
+    /// on the helper's own engine with the poster's x87 control word, its TLS block and stack in
+    /// the helper area's last slot, taking nothing from the heap; one job at a time; `wait_draw`
+    /// waits without joining; a job's panic comes back at the join and the helper takes jobs after
+    /// it; a post from inside the job is refused.
+    #[test]
+    fn the_drawing_helper_runs_beside_its_poster_and_joins() {
+        let (mut e, _slot) = engine_with_imports();
+        start(&mut e).expect("real threads on");
+        let world = ctx(&e).world;
+        world.enter_guest();
+        assert!(!wait_draw(&e) && !join_draw(&e), "nothing posted");
+        let heap = (e.mem.heap_available(), e.mem.heap_top());
+        let main_word = crate::x87::control_word();
+        // Single precision, rounding to nearest: not the helper thread's own default.
+        crate::x87::set_control_word(0x007f);
+        let go = std::sync::Arc::new(AtomicBool::new(false));
+        type Seen = (bool, u16, u32, (u32, u32), u32);
+        let seen: std::sync::Arc<Mutex<Option<Seen>>> = std::sync::Arc::default();
+        let (job_go, job_seen) = (go.clone(), seen.clone());
+        assert!(post_draw(
+            &mut e,
+            Box::new(move |w: &mut Engine| {
+                while !job_go.load(Ordering::SeqCst) {
+                    std::thread::yield_now();
+                }
+                let local = w.with_stack(16, |_, local| local.addr());
+                let stack = w.guest_stack_region().expect("the helper's stack");
+                let tls = w.tls();
+                *job_seen.lock().unwrap() = Some((
+                    on_draw_helper(),
+                    crate::x87::control_word(),
+                    tls,
+                    stack,
+                    local,
+                ));
+            })
+        ));
+        crate::x87::set_control_word(main_word);
+        assert!(draw_posted());
+        assert!(!post_draw(&mut e, Box::new(|_| {})), "one job at a time");
+        assert!(!on_draw_helper());
+        // The job can only finish after this: it runs beside main.
+        go.store(true, Ordering::SeqCst);
+        assert!(join_draw(&e));
+        assert!(!draw_posted());
+        let (helper, word, tls, stack, local) = seen.lock().unwrap().take().expect("the job ran");
+        assert!(helper, "on_draw_helper on the helper");
+        assert_eq!(word, 0x007f, "the poster's control word");
+        let slot = crate::mem::HELPER_AREA.start + DRAW_SLOT * crate::mem::HELPER_SLOT;
+        let own = slot..slot + crate::mem::HELPER_SLOT;
+        assert!(
+            own.contains(&tls)
+                && own.contains(&stack.0)
+                && stack.1 <= own.end
+                && (stack.0..stack.1).contains(&local),
+            "TLS {tls:08x}, stack {:08x}..{:08x}, local {local:08x}: not in {:08x}..{:08x}",
+            stack.0,
+            stack.1,
+            own.start,
+            own.end
+        );
+        assert_eq!((e.mem.heap_available(), e.mem.heap_top()), heap);
+        // A panic in the job comes back at the join; the helper takes jobs after it.
+        assert!(post_draw(&mut e, Box::new(|_| panic!("the job's panic"))));
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| join_draw(&e)));
+        assert!(caught.is_err(), "the job's panic is resumed at the join");
+        assert!(!draw_posted());
+        let ran = std::sync::Arc::new(AtomicUsize::new(0));
+        let job_ran = ran.clone();
+        assert!(post_draw(
+            &mut e,
+            Box::new(move |_| {
+                job_ran.fetch_add(1, Ordering::SeqCst);
+            })
+        ));
+        assert!(wait_draw(&e));
+        assert_eq!(ran.load(Ordering::SeqCst), 1);
+        assert!(draw_posted(), "waited for, not joined");
+        assert!(wait_draw(&e), "a second wait answers at once");
+        assert!(join_draw(&e));
+        // From inside the drawing job, a post is refused.
+        let inner = std::sync::Arc::new(AtomicBool::new(true));
+        let job_inner = inner.clone();
+        assert!(post_draw(
+            &mut e,
+            Box::new(move |w: &mut Engine| {
+                job_inner.store(post_draw(w, Box::new(|_| {})), Ordering::SeqCst);
+            })
+        ));
+        assert!(join_draw(&e));
+        assert!(!inner.load(Ordering::SeqCst));
         world.leave_guest();
     }
 }
