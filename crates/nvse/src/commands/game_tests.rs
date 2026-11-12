@@ -297,6 +297,15 @@ fn the_records_match_the_dll() {
         ((0x15e6, "GetGridsToLoad", "", &[]), Returns::Default),
         (
             (
+                0x15e7,
+                "OutputLocalMapPicturesOverride",
+                "OLMPOR",
+                &[],
+            ),
+            Returns::Default,
+        ),
+        (
+            (
                 0x15e8,
                 "SetOutputLocalMapPicturesGrids",
                 "SetOLMPGrids",
@@ -658,6 +667,46 @@ fn grids_and_their_override() {
     e.set_global(GRIDS_TO_LOAD, 13u32);
     assert_eq!(run(&mut e, 0x15e8, 0, &[n(13)]), 1.0);
     assert_eq!(grids(&mut e), -87);
+}
+
+/// `OutputLocalMapPicturesOverride`: without a kept square the game's own command with the same
+/// arguments; with one, the busy flag set, the map menu reset, one picture per square cell, the
+/// flag cleared. A square of 128 or more counts sign-extended (about four billion pictures, as in
+/// xNVSE: not run here); with the list and scan guard row it counts unsigned.
+#[test]
+fn local_map_pictures_with_the_override() {
+    thread_local! {
+        static PICTURES: RefCell<(u32, u32, Vec<u32>)> = const { RefCell::new((0, 0, Vec::new())) };
+    }
+    let mut e = setup();
+    e.map(0x0120_0000, 0x1000);
+    e.register(0x005d_4580, |_, a| {
+        PICTURES.with(|p| p.borrow_mut().2 = a[..8].to_vec());
+        Ret::default()
+    });
+    e.register(0x005d_45c0, |e, _| {
+        assert_eq!(e.mem.u8(0x0120_04fc), 1, "busy while it runs");
+        PICTURES.with(|p| p.borrow_mut().0 += 1);
+        Ret::default()
+    });
+    e.register(0x005d_45e0, |_, _| {
+        PICTURES.with(|p| p.borrow_mut().1 += 1);
+        Ret::default()
+    });
+    let take = || PICTURES.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    run(&mut e, 0x15e7, 0, &[]);
+    let (resets, pictures, args) = take();
+    assert_eq!((resets, pictures), (0, 0));
+    assert_eq!(args.len(), 8, "the game's command ran with the arguments");
+    e.set_global(GRIDS_TO_LOAD, 13u32);
+    run(&mut e, 0x15e8, 0, &[n(7)]);
+    run(&mut e, 0x15e7, 0, &[]);
+    assert_eq!(take(), (1, 49, Vec::new()));
+    assert_eq!(e.mem.u8(0x0120_04fc), 0);
+    run(&mut e, 0x15e8, 0, &[n(13)]);
+    super::super::array::set_fix(&mut e, super::super::array::LIST_GUARD, true);
+    run(&mut e, 0x15e7, 0, &[]);
+    assert_eq!(take(), (1, 169, Vec::new()));
 }
 
 /// `AddSpellNS` runs the game's AddSpell with its own arguments while `QueueUIMessage` returns at
