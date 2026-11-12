@@ -1,0 +1,7 @@
+# Patch data (crates/host/src/patch_data.rs; docs/FIXES.md, "Patch data"): changes the fixes preset
+# makes to records of the player's own game files as they load. Each is one author's change, kept as
+# the record, the field and the value (the maintainer's decision of 2026-11-01: no game file ships,
+# each change can be switched, each is credited). Columns: the plugin, the record's form id in it
+# (hex), the record type, the field, the change ("or HEX": those bits set in the field), the row's
+# switch (crates/host/src/fixes.rs), what it does and who made it.
+FalloutNV.esm	0013b308	WRLD	DATA	or 10	NV_STRIP_LOD_WATER	"No LOD Water" on TheStripWorldNew (The Strip): its distant (LOD) water lies under the Strip's ground and is never seen, but the game still makes it and turns its water system on for it (004e4c80). Aqua Performa's author found it (about 20 fps on the Strip); YUP, UPNVSE Plus and Tale of Two Wastelands 3.3.3b set the same flag.

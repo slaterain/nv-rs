@@ -17,6 +17,7 @@
 004a0370	1	NVTF
 004a03c0	1	NVTF
 004ab400	1	JIP
+004b5d10	2	nv-rs thread races
 004bd570	2	ITR
 004bd820	1	JIP
 004bda70	4	JIP
@@ -32,7 +33,7 @@
 00525a90	0	JIP
 00525b20	3	yUI
 005702e0	0	ITR
-00583560	1	nv-rs cell offsets for every plugin
+00583560	2	nv-rs cell offsets for every plugin, nv-rs no distant water under the Strip
 005854f0	1	nv-rs cell offsets for every plugin
 0058e9d0	1	JIP
 00593870	2	script or frame function
@@ -65,12 +66,17 @@
 00652140	0	nv-rs thread races
 00652160	0	nv-rs thread races
 00652190	0	nv-rs thread races
+0066e010	0	nv-rs causes keep no witness lists
+0066e440	0	nv-rs causes keep no witness lists
 0068f320	1	ITR
 007052f0	0	xNVSE
 0071d0a0	1	nv-rs thread races
 0077a480	0	JIP
 007838a0	1	nv-rs mod fit worn question
 0078ac60	2	JIP
+007f3e00	0	nv-rs V.A.T.S. waits only for the camera
+008300c0	0	nv-rs radio song lengths
+00830b30	0	nv-rs radio song lengths
 008492b0	1	nv-rs half-loaded actor's level change
 00866770	0	HeapReplacer
 00866d10	1	HeapReplacer

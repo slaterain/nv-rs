@@ -540,6 +540,9 @@ const STATIC_BRIGHTNESS_TRAIT_2: u32 = 0x011d_b19c;
 const FLAG_011DB0CE: u32 = 0x011d_b0ce;
 /// the timer's milliseconds when the recalculation mode started.
 const RECALCULATION_TIME: u32 = 0x011d_b0dc;
+/// The scan of the target's parts ([`fn_007f3e00`]), called by address: the fixes preset's
+/// V.A.T.S. lag row registers over it (`crates/engine-core/data/overridable.tsv`).
+const SCAN_UPDATE: u32 = 0x007f_3e00;
 /// the text `_MeterPercent`.
 const TEXT_METER_PERCENT: u32 = 0x0107_7df4;
 /// the text `_LimbName`.
@@ -2310,8 +2313,8 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
         }
     }
 
-    // 007ed343
-    if !fn_007f3e00(e, this) {
+    // 007ed343: by address, so the fixes preset's V.A.T.S. lag row applies here.
+    if !e.call(SCAN_UPDATE, &args![this]).bool() {
         return;
     }
     let player = e.global::<u32>(PLAYER);
@@ -5582,6 +5585,22 @@ fn scan_pick_limb(e: &mut Engine, this: Ptr<VatsMenu>, item: u32, limb_zero: u32
 /// on screen is measured the limb is picked (`scan_pick_limb`), the
 /// target's chances are marked calculated and mode 2 starts.
 pub fn fn_007f3e00(e: &mut Engine, this: Ptr<VatsMenu>) -> bool {
+    scan(e, this, false)
+}
+
+/// [`fn_007f3e00`] whose 2000 ms wait before the parts without a chance get the average
+/// (`007f4058`) also ends once the camera has turned to the target (`bHeadingReached`, +0xf8):
+/// the fixes preset's V.A.T.S. lag row (`crates/host`), lStewieAl's VATS Lag Fix. The wait is
+/// a fixed timer, not work: in the original V.A.T.S. shows a target's chances up to 2 s after the
+/// camera has arrived. As with the plugin, a part on screen that the scan has not measured yet
+/// when the heading is reached gets the measured parts' average instead of its own chance (the
+/// original would measure it in the frames that follow). Unlike the plugin, the heading ends the
+/// wait only once a part has been measured: with none, the average is 0/0.
+pub fn fn_007f3e00_heading_ends_wait(e: &mut Engine, this: Ptr<VatsMenu>) -> bool {
+    scan(e, this, true)
+}
+
+fn scan(e: &mut Engine, this: Ptr<VatsMenu>, heading_ends_wait: bool) -> bool {
     let m = this.addr();
     if e.global::<u32>(TARGET_REFERENCE) == 0 || e.mem.u8(m + 0xfb) != 0 {
         return false;
@@ -5656,7 +5675,8 @@ pub fn fn_007f3e00(e: &mut Engine, this: Ptr<VatsMenu>) -> bool {
         e.set_global::<u32>(RECALCULATION_TIME, time);
     } else {
         let time = e.call(TIMER_MILLISECONDS, &args![TIMER]).u32();
-        if time.wrapping_sub(e.global::<u32>(RECALCULATION_TIME)) > 2000 {
+        let waited = time.wrapping_sub(e.global::<u32>(RECALCULATION_TIME)) > 2000;
+        if waited || (heading_ends_wait && e.mem.u8(m + 0xf8) != 0) {
             let mut count = 0i32;
             let mut sum = 0.0f32;
             let mut node = item.wrapping_add(8);
@@ -5671,32 +5691,38 @@ pub fn fn_007f3e00(e: &mut Engine, this: Ptr<VatsMenu>) -> bool {
                 }
                 node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
             }
-            let object = e.call(OBJECT_00705910, &[]).u32();
-            e.call(SET_008009D0, &args![object]);
-            let mut node = item.wrapping_add(8);
-            while node != 0
-                && !typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, node))
-            {
-                let part = node_part(e, node);
-                if e.mem.u8(part + 0x2d) == 0 {
+            // The row's heading ends the wait only once a part has been measured: with none
+            // the average is 0/0, and every part still without a chance would get no number at
+            // all (shown as 0%, no attack taken). It waits for the first measured part, or for
+            // the 2000 ms as the original.
+            if waited || count > 0 {
+                let object = e.call(OBJECT_00705910, &[]).u32();
+                e.call(SET_008009D0, &args![object]);
+                let mut node = item.wrapping_add(8);
+                while node != 0
+                    && !typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, node))
+                {
                     let part = node_part(e, node);
-                    // `TEST AH,0x41; JP`: the average when not above 0.0.
-                    if at_most(load_f32(e, part + 0x28) as f64, double_zero(e)) {
-                        let average = sum as f64 / count as f64;
+                    if e.mem.u8(part + 0x2d) == 0 {
                         let part = node_part(e, node);
-                        e.mem.set_f32(part + 0x28, average as f32);
+                        // `TEST AH,0x41; JP`: the average when not above 0.0.
+                        if at_most(load_f32(e, part + 0x28) as f64, double_zero(e)) {
+                            let average = sum as f64 / count as f64;
+                            let part = node_part(e, node);
+                            e.mem.set_f32(part + 0x28, average as f32);
+                        }
+                        let part = node_part(e, node);
+                        e.mem.set_u8(part + 0x2d, 1);
+                        let part = node_part(e, node);
+                        e.mem.set_u8(part + 0x2e, 1);
+                        let part = node_part(e, node);
+                        e.mem.set_u8(part + 0x2f, 0);
                     }
-                    let part = node_part(e, node);
-                    e.mem.set_u8(part + 0x2d, 1);
-                    let part = node_part(e, node);
-                    e.mem.set_u8(part + 0x2e, 1);
-                    let part = node_part(e, node);
-                    e.mem.set_u8(part + 0x2f, 0);
+                    node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
                 }
-                node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
+                let time = e.call(TIMER_MILLISECONDS, &args![TIMER]).u32();
+                e.set_global::<u32>(RECALCULATION_TIME, time);
             }
-            let time = e.call(TIMER_MILLISECONDS, &args![TIMER]).u32();
-            e.set_global::<u32>(RECALCULATION_TIME, time);
         }
     }
     vats_menu_update_ammo(e, this);
@@ -9403,6 +9429,144 @@ mod tests {
         assert_eq!(calls(&e, SET_00800D50), vec![vec![0, s.reference]]);
         assert_eq!(calls(&e, SET_00800E50), vec![vec![0, s.reference]]);
         assert_eq!(calls(&e, SCENE_0044AC20).len(), 1);
+    }
+
+    /// Mode 3 with the camera at its heading, 500 ms after the scan began: a part whose chance
+    /// was measured (40) and one without. The original waits out its 2000 ms before the second
+    /// gets the average; the V.A.T.S. lag row's scan gives it at once, and only once the heading
+    /// is reached; after 2000 ms both give it. Returns the second part's chance and whether it
+    /// counts as calculated (+0x2d).
+    fn scan_in_mode_three(heading: u8, elapsed: u32, heading_ends_wait: bool) -> (f32, u8) {
+        let mut e = engine();
+        let s = scene(&mut e);
+        let second = part(&mut e, 2);
+        list_at(&mut e, s.target + 8, &[s.part, second]);
+        e.mem.set_u8(s.part + 0x2d, 1);
+        e.mem.set_f32(s.part + 0x28, 40.0);
+        e.mem.set_u32(VATS + 8, 3);
+        e.mem.set_u8(s.menu + 0xf8, heading);
+        e.set_global::<u32>(RECALCULATION_TIME, 1000);
+        e.register_double(TIMER_MILLISECONDS, move |_, _| word(1000 + elapsed));
+        // `00705910`'s object, its byte +0x2b4 set (`007f4810`): the target is not lit again.
+        let object = e.mem.alloc(0x2c0);
+        e.mem.set_u8(object + 0x2b4, 1);
+        e.register_double(OBJECT_00705910, move |_, _| word(object));
+        // The scan is followed up to the ammo update, right after the wait (its first tile).
+        let reached = std::rc::Rc::new(std::cell::Cell::new(false));
+        let past = reached.clone();
+        e.register_double(TILE_SET_INT, move |_, _| {
+            past.set(true);
+            std::panic::resume_unwind(Box::new("past the wait"))
+        });
+        let menu = Ptr::new(s.menu);
+        let scan = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if heading_ends_wait {
+                fn_007f3e00_heading_ends_wait(&mut e, menu)
+            } else {
+                fn_007f3e00(&mut e, menu)
+            }
+        }));
+        assert!(
+            scan.is_err() && reached.get(),
+            "the scan reaches the ammo update"
+        );
+        (e.mem.f32(second + 0x28), e.mem.u8(second + 0x2d))
+    }
+
+    /// The scan's call in mode 3 with the camera at its heading, 500 ms after the scan began
+    /// (the camera arrived within a few frames): a first part on screen and shown, measured
+    /// (40) when `first_measured`, and a second part on screen that has not been shown or
+    /// measured yet. Followed until `stop` (a callee it panics at). Returns the second part's
+    /// chance, whether it counts as measured (+0x2d) and shown (+0x2e), and whether it is the
+    /// menu's current part (+0x100).
+    fn scan_at_the_heading(first_measured: bool, row: bool, stop: u32) -> (f32, u8, u8, bool) {
+        let mut e = engine();
+        let s = scene(&mut e);
+        let second = part(&mut e, 2);
+        list_at(&mut e, s.target + 8, &[s.part, second]);
+        for part in [s.part, second] {
+            e.mem.set_u8(part + 0x2c, 1);
+        }
+        e.mem.set_u8(s.part + 0x2e, 1);
+        if first_measured {
+            e.mem.set_u8(s.part + 0x2d, 1);
+            e.mem.set_f32(s.part + 0x28, 40.0);
+        }
+        e.mem.set_u32(VATS + 8, 3);
+        e.mem.set_u8(s.menu + 0xf8, 1);
+        e.set_global::<u32>(RECALCULATION_TIME, 1000);
+        e.register_double(TIMER_MILLISECONDS, |_, _| word(1500));
+        // `00705910`'s object, its byte +0x2b4 set (`007f4810`): the target is not lit again.
+        let object = e.mem.alloc(0x2c0);
+        e.mem.set_u8(object + 0x2b4, 1);
+        e.register_double(OBJECT_00705910, move |_, _| word(object));
+        let reached = std::rc::Rc::new(std::cell::Cell::new(false));
+        let past = reached.clone();
+        e.register_double(stop, move |_, _| {
+            past.set(true);
+            std::panic::resume_unwind(Box::new("stopped"))
+        });
+        let menu = Ptr::new(s.menu);
+        let scan = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if row {
+                fn_007f3e00_heading_ends_wait(&mut e, menu)
+            } else {
+                fn_007f3e00(&mut e, menu)
+            }
+        }));
+        assert!(
+            scan.is_err() && reached.get(),
+            "the scan reaches {stop:08x}"
+        );
+        (
+            e.mem.f32(second + 0x28),
+            e.mem.u8(second + 0x2d),
+            e.mem.u8(second + 0x2e),
+            e.mem.u32(s.menu + 0x100) == second,
+        )
+    }
+
+    /// A part on screen not yet shown when the camera reaches its heading: the original shows it
+    /// then (the menu's current part) and measures it in the frames that follow, where it gets
+    /// its own chance (`007f1290`); the row gives it the measured part's chance as the average at
+    /// once and marks it measured, so it is never measured. With no part measured yet the row
+    /// does not end the wait (the average would be 0/0): it shows the part as the original does.
+    #[test]
+    fn at_the_heading_the_row_averages_a_part_the_original_would_measure_next() {
+        let shown_next = (0.0, 0, 1, true);
+        // The original, followed to its first measuring (00800a00), after the part is shown.
+        assert_eq!(
+            scan_at_the_heading(true, false, SCREEN_PERCENT_00800A00),
+            shown_next
+        );
+        // The row: the average, measured and shown before the ammo update.
+        assert_eq!(
+            scan_at_the_heading(true, true, TILE_SET_INT),
+            (40.0, 1, 1, false)
+        );
+        // Nothing measured yet: the row waits as the original.
+        for row in [false, true] {
+            assert_eq!(
+                scan_at_the_heading(false, row, SCREEN_PERCENT_00800A00),
+                shown_next,
+                "row: {row}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_scan_waits_2000_ms_unless_the_heading_ends_the_wait() {
+        let given = (40.0, 1);
+        let waiting = (0.0, 0);
+        // The original: the wait whatever the heading.
+        assert_eq!(scan_in_mode_three(1, 500, false), waiting);
+        assert_eq!(scan_in_mode_three(0, 500, false), waiting);
+        assert_eq!(scan_in_mode_three(1, 2001, false), given);
+        // The row: the heading reached ends it; without the heading it is the original's.
+        assert_eq!(scan_in_mode_three(1, 500, true), given);
+        assert_eq!(scan_in_mode_three(0, 500, true), waiting);
+        assert_eq!(scan_in_mode_three(0, 2000, true), waiting);
+        assert_eq!(scan_in_mode_three(0, 2001, true), given);
     }
 
     #[test]

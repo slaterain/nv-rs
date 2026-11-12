@@ -103,10 +103,14 @@ The game's own `iFPSClamp` ignores `FrameLimit`: a clamp is a fixed step with no
 | Script list and scan guard | none (a flag the extender reads) | `NV_NVSE_LIST_GUARD` | (Once "Script inventory list guard": the variable and the Fallout.ini key `bNVSEListGuard` keep that name.) Lists and walks that cannot end are ended. A game list the inventory commands walk (a container's stacks, a stack's extra data lists), or one the form list commands walk (a form list's forms for `ListGetCount`, `ListGetFormIndex`, `IsRefInList`, `ListAddForm`, `ListRemoveForm`, `ListClear`, `ForEachInList` and the rest; the lists `GetListForms`, `GetRaceHairs` and the other array commands and the generic list commands walk), that runs back into itself ends the walk after 1,048,576 nodes, and `GetPaired` ends where it would ask for the same stack again (a stack list with an empty node). A cell scan (`GetFirstRef`, `GetNextRef`, `GetNumRefs`, `GetRefs`, their `InCell` forms, `GetInGrid`, `GetInGridInCell`) whose depth takes the walk past the cell grid's 8-bit positions (the cell's x or y plus the depth above 127, as with `GetNumRefs 0 200`, or a depth of -2, taken as 254) ends when the walk is back where it started, every cell position it can reach visited once: `GetNumRefs` and `GetRefs` give the references of the cells passed; `GetFirstRef` and `GetNextRef` go on answering the same references round and round as xNVSE does, and only a call that goes the whole way round without finding one answers 0. xNVSE walks on for ever and the game hangs; off (vanilla), the port stops the game there instead. A name xNVSE copies into a 256- or 512-byte buffer on its stack, its terminator included, is used whole with the row. `GetAgeClass`'s race name in capitals runs into the saved frame and the return address at 256 bytes or more; off (vanilla), the port stops the game there, where xNVSE faults. `AddAnimation`'s and `DelAnimation`'s name argument: off (vanilla), the port also stops at 256 bytes, which is a deviation: there `AddAnimation` in xNVSE adds the name with the bytes that follow it in its frame (an answer that depends on the run), and `DelAnimation` compares the node's index byte as the name's 257th (an answer the list fixes, kept under the same stop as one rule) and faults only from 257 or 260 bytes (`AddAnimation`, without or with a form argument) and 265 or 272 (`DelAnimation`); see below. The same rule for the 512-byte name arguments of `GetNumericGameSetting`, `SetNumericGameSetting`, `GetNumericIniSetting`, `SetNumericIniSetting`, `IsModLoaded` and `GetModIndex` (a `$` string variable's text is copied whole): off (vanilla), the port stops at 512 bytes, where `IsModLoaded` faults; the others first write their next bytes into locals (see below). And for the 256-byte plugin names of `IsPluginInstalled` and `GetPluginVersion`, where both fault (the saved frame is right above their buffers). And two places where xNVSE itself stops the game no longer do: the extra data list `SetHotkeyItem` gives a stack that had none (stimpaks, for one) has the game's own vtable, so the game can free it when the stack is used up, dropped or the inventory torn down; the token commands (`GetTokenValue`, `GetTokenRef`, `SetTokenValue`, `SetTokenRef`, `SetTokenValueAndRef`, `GetPaired`) on an item that is in the reference's base container without a stack of its own (the player's Pip-Boy, for one) answer with that item's base health and no owner, and the setters add it and set its new stack to the value given, as they do for an item not held (except that `SetTokenRef`, which gives no value, keeps the item's base health, where xNVSE's not-held path would store 0). xNVSE's list has no vtable, and its token search reads the item's health through the missing changes entry or counts on through an index the command did not pass: the game crashes; off (vanilla), the port stops there too. Below |
 | IO wait ends on completion | `00c3dfa0` | `NV_IO_WAIT` | The IO manager's wait for queued loads (`00c3dfa0`; main at a cell border, a load, a save) sleeps 50 ms a turn while the completed work is short of what is in flight, then takes what came in. Here that sleep ends as soon as it is not (looked at after each 1 ms sleep; a turn still ends after 50 ms by the clock, or after 50 looks), so the wait for queued loads ends when they are done, not at its next 50 ms step: the same work in the same order. With stepped threads each 1 ms sleep is a switch point, where the IO thread runs. `IOManager::LoadQueuedPriority` (`00456520`) calls it by address now, so the row applies there too. |
 | Half-loaded actor's level change | `00881d30`, `00882b90`, `00883240`, `00883800`, `00932a00`, `00932b70` | `NV_HALF_LOADED_MOVE` | An actor moved to another AI level while its saved data loads (one loading thread between the two passes over a cell's saved changes, another setting its animation: running fast across cells) has its saved reference ids taken out for the move and put back where the original's copy puts them, for the second pass to resolve. The original follows the saved target id as an object (marks it, then calls through the word at the id as a vtable): its own crash. Below |
-| Thread races | `00aa42e0`, `00aa3a40`, `00a0e770`, `00a0df80`, `00a0f8b0`, `0071d0a0`, `00652140`, `00652160`, `00652190` | `NV_THREAD_RACES` | Three places where the original shares state between its threads without the lock it needs, which the port meets because it runs the game's threads side by side: a new thread's scrap heap (the first look-up on a thread inserts into an unlocked map, so two threads starting at once can lose one, and a block is later freed into the wrong heap), the debug texts and the console (printed from any thread while the main thread handles and times out the same queue), and the face-gen lock's count (counted down after the release with a plain read and write, so counts are lost and the model cache is never emptied, or emptied under another thread). From lStewieAl's Tweaks. Below |
+| Thread races | `00aa42e0`, `00aa3a40`, `00a0e770`, `00a0df80`, `00a0f8b0`, `0071d0a0`, `00652140`, `00652160`, `00652190`, `004b5d10` | `NV_THREAD_RACES` | Four places where the original shares state between its threads without the lock it needs, which the port meets because it runs the game's threads side by side: a new thread's scrap heap (the first look-up on a thread inserts into an unlocked map, so two threads starting at once can lose one, and a block is later freed into the wrong heap), the debug texts and the console (printed from any thread while the main thread handles and times out the same queue), the face-gen lock's count (counted down after the release with a plain read and write, so counts are lost and the model cache is never emptied, or emptied under another thread), and the editor-marker pass every loaded model gets (its controller in a global that a pass on another thread clears between two reads, and the virtual call then goes through 0). The first three from lStewieAl's Tweaks, the fourth from Psycho. Below |
 | Texture files read before the renderer's lock | `00e6dc40` | `NV_TEXTURE_READ_FIRST` | The loading thread makes a texture's renderer data (`00e6dc40`) under the renderer's source-data lock (`m_kSourceDataCriticalSection`, the renderer's +0x180), and the making reads the texture's file and unpacks it from its archive inside that lock (`00e68a80`: `NiFile::GetFile`, `00462d80`), so main, which takes the same lock to bind or make another texture's data, waited for the read: 6-13 ms in 5-6 frames of each run across cell borders (measure/smooth-200/BORDERS.md). Here the file is read first, on the same thread with the same calls, when the texture is loaded by its file name (the common case: each making opens its own file; a texture holding a file object of its own is made as before, its file read under the lock), and only the rest stays under the lock in the exe's order: the renderer data's allocation and construction, the image description, the Direct3D texture's creation, the texture taking its data. The lock guards the textures' renderer data (+0x24) and the renderer's texture state; the read touches only the file and a buffer of its own. A texture another thread gives data meanwhile frees the buffer read for nothing (its file, opened for this making alone, is already deleted). The same textures with the same bytes, made and handed to the renderer in the same order; what differs with the row on is the guest heap's order of allocation (the file's buffer is taken before the renderer data's object), so heap addresses differ, not what is drawn. |
 | Cell entry waits for its own cell | `00446b50` | `NV_CELL_ENTRY_WAIT` | Crossing into a new outdoor cell, the game waits for the loads the new cell needs at once. The original waits for more: at the same crossing it queues the row of cells three cells ahead as a pre-load, at the same top priority, and the wait takes them too, one cell after another on the one loading thread: a wait of 45 to 82 ms for 1.5 ms of the entered cell's own loads, 68 to 150 ms with YUP. With the row the cells ahead that are still queued get the priority their references get (1 or 3, `TES::GetCellPriority`'s rule) before the wait, through the IO manager's own requeue, and load right after it, in the background. A cell load already running, and one for the entered cell itself, are waited for as before. Measured, one run each: the wait went from 82 to 20 ms in the base game and from 68 to 4 ms with YUP; the frame it falls in went from 122 to 55 ms and from 102 to 31 ms. The frames next to it keep the border's other work, so the crossing's longest frame went from 122 to 70 ms and from 102 to 65 ms: about half. Below |
 | Cell offsets for every plugin | `00583560`, `005854f0` | `NV_CELL_OFFSETS` | The game finds a cell of a master file by the table of cell positions the master carries (`OFST`); a plugin, and a master whose tables were stripped (YUP's, TTW's), it searches record by record each time a cell loads, on the one loading thread. With the row each such world space record gets the table its search would give, built from the plugin's own records at load on a host thread (Cell Offset Generator's idea), and a plugin's cells are found by it as a master's are. The same cells are found: where a table could not give the search's answer for every position, the world space is searched as before. Below |
+| V.A.T.S. waits only for the camera | `007f3e00` | `NV_VATS_LAG` | V.A.T.S. measures a target's body parts one by one as the camera turns to it; the parts it has not measured get the average of the measured ones only after a fixed timer: 2000 ms since the scan began (`007f4058`). With the row they also get it as soon as the camera's heading is reached (the menu's `bHeadingReached`), once at least one part is measured, so the chances show when the camera arrives instead of up to 2 seconds later. The measured parts keep their own chances; a part on screen that the scan has not measured yet when the heading is reached (the camera arrived within a few frames) gets the measured parts' average instead of the chance the original would measure for it in the following frames. lStewieAl's VATS Lag Fix, except that it does not end the wait before a part is measured (its average would be 0/0: no chance at all on the other parts). Below |
+| Causes keep no witness lists | `0066e010`, `0066e440` | `NV_ACTOR_CAUSE` | An actor's projectile or explosion carries a cause (`ActorCause`), which copied the actor's whole detection list when it was made; every saved cause wrote all of it (one 42-byte record per actor detected), so saves grew with the shots fired in company. With the row the cause copies nothing (its constructor no longer asks the actor's process for the copy) and a save's records are read and dropped, so they are not written again. Nothing in the game reads the list but the cause's own functions (freeing it, removing an actor from it, saving and loading it), and a cause made for an actor without a full process never had one. Saves stay readable both ways. lStewieAl's ActorCause Save Bloat Fix. Below |
+| Radio song lengths | `008300c0`, `00830b30` | `NV_RADIO_LENGTHS` | Two bugs of the music and radio channels, from Psycho. A file opened on a channel left that channel's last duration in place until the new file's thread ran, and a radio station asks for the new song's duration at once and keeps a positive answer: a song opened while the channel's last song still faded out (a quick change of station) got that song's length, so it was cut short or followed by silence. With the row the duration is cleared when the file opens, and a channel's thread writes its file's duration only while the channel is still that file's (the fading thread wrote its length back once more before it noticed the new song). And the music thread brings the time since a station's start into the song's length by taking the length off while it is longer: a length of 0 never ends that loop, and the music thread spins for good (silence, one core busy). With the row a length of 0 skips that seek, and the rest gets the loop's own answer in one step. Below |
+| No distant water under the Strip | `00583560` | `NV_STRIP_LOD_WATER` | Patch data (below): The Strip's world space (`TheStripWorldNew`) gets the "No LOD Water" flag as it loads. Its distant water lies under the Strip's ground and is never seen, but the game makes it and turns its water system on for it. YUP, UPNVSE Plus and Tale of Two Wastelands 3.3.3b set the same flag; Aqua Performa's author reported about 20 frames a second on the Strip from it (not measured in nv-rs). Below |
 
 ### What high frame rates do to the original's code
 
@@ -308,6 +312,17 @@ too. None has been seen in a port run: the evidence is the exe and a test with r
   the counts are locked increments and decrements at the same points. Tweaks also takes the lock out
   of three of the model map's functions (`00650200`, `00650930`, `00650ba0`); the exe gives no reason
   why that is safe, so that part is not built.
+- **The editor-marker pass of a loaded model** (from Psycho, `docs/model_postprocess_serialization_engine_fix.md`
+  in its repository). `InitModel` (`0043ace0`) runs `RemoveEditorMarkers` (`004b5d10`) on each model it
+  loads, at `0043afac`, the pass's only caller from outside (`004b5efb` is its recursion): on the IO
+  thread for queued models, on the main thread for models loaded at once. The pass keeps its root
+  (`011c6328`) and a controller value (`011c6324`) in globals, tests the value once and reads it again
+  before each of its four virtual calls; a pass on another thread that ends meanwhile clears it, and
+  the call goes through 0 (Psycho's crash dump, in the original: `004b5e11`). With the row the outer
+  call runs whole inside a critical section of the row's own, made the game's way at start-up
+  (`InitializeCriticalSection`; recursive, as Psycho's lock is), so the recursion is inside it and the
+  lock is taken once per model. A thread waiting for it waits as on any of the game's sections, under
+  either threads scheme.
 - **Tested.** The real-thread tests (`crates/host/tests/thread_races*.rs`) run four OS threads side
   by side (skipped below four cores): up to 20,000 rounds of first calls into a one-bucket map, so
   every insert meets another, and 100,000 takes and releases each of the face-gen lock. One binary
@@ -318,7 +333,9 @@ too. None has been seen in a port run: the evidence is the exe and a test with r
   time slice at the map look-up; it finishes, where the first version hung. Single-thread tests
   install the row and drive all nine addresses: 200 engines in a row each find their own heap, a
   heap looked up during the teardown is not kept, and the debug-text section is taken first and left
-  as often as taken.
+  as often as taken. The editor-marker pass: with the row its outer call enters the run's section
+  first and leaves it last, also when the pass stops; without it no section is taken. Not run with
+  real threads: the race needs two models with editor markers loading at once.
 
 ### Cell entry waits for its own cell
 
@@ -473,6 +490,137 @@ switched, default typed families, so "off" is the typed walk):
   end. So no fixed saving is claimed here.
 - Continue (save to world) 3.2-4.0 s with the fix on and off.
 
+### V.A.T.S. waits only for the camera
+
+lStewieAl's VATS Lag Fix (`VATSLagFix.dll`, read in its disassembly), built from the exe. In mode 3
+the V.A.T.S. menu's scan (`007f3e00`) measures the target's parts one by one (their place on screen,
+`00800a00`; whether each is visible, `007f06d0`); a part not measured yet stays without a chance until
+the scan gives up on it: at `007f4058` the code that gives every such part the average chance of the
+measured ones (and marks it measured and shown) runs only when more than 2000 ms (`0x7d0`) have passed
+on the interface timer (`011f6394`) since the scan began (`011db0dc`); then the menu goes to mode 2 and
+shows the chances. The plugin keeps that jump but sends it to its own test: once the menu's
+`bHeadingReached` (+0xf8, Xbox PDB; set by `007f3bd0` when the camera has turned to the target) is set,
+the give-up runs at once. The row is that test, in a copy of the scan registered at `007f3e00` (the
+menu's update calls the scan by address now); vanilla's scan is the translation as it was. One
+difference from the plugin: the heading ends the wait only once at least one part has been measured.
+With none, the give-up's average is 0/0, and every part still without a chance would get no number
+at all (shown as 0%, and V.A.T.S. takes no attack on it). The row then waits for the first measured
+part, or for the 2000 ms as the original.
+
+What a player sees: the hit chances appear as soon as the camera arrives, where the original could sit
+for up to 2 seconds first, mostly when a part is hidden or off screen. The measured parts keep their own
+chances, and the parts the original gives up on get the same average, only sooner. One more difference,
+the plugin's too: the scan shows and measures one part a frame, so when the camera arrives within a few
+frames of the scan's start, a part on screen that it has not measured yet gets the measured parts'
+average at once, where the original would measure it in the following frames and give it its own
+chance.
+
+Tested: `vatsmenu.rs`'s `the_scan_waits_2000_ms_unless_the_heading_ends_the_wait` runs the scan in mode 3
+with a measured part (40) and one without: the original gives the second the average only after 2000 ms
+whatever the heading; the row gives it at once with the heading reached, and waits as the original
+without it. `at_the_heading_the_row_averages_a_part_the_original_would_measure_next` takes a part on
+screen not yet shown when the heading is reached: the original shows it (to measure it next), the row
+gives it the measured part's 40 and marks it measured; with no part measured yet the row shows it as
+the original does.
+
+### Causes keep no witness lists
+
+lStewieAl's ActorCause Save Bloat Fix (`ActorCauseSaveBloatFix.dll`, read in its disassembly), built from
+the exe. An `ActorCause` (Xbox PDB; 0x1c bytes) is made for each projectile, explosion and other thing an
+actor causes (`0066e010`): its actor, a list at +4 (`pWitnesses`, Xbox PDB), its origin, an id. The
+constructor fills the list with what the actor's process answers at its slot +0xf4: a copy of the
+actor's detection states, one 0x24-byte record per actor it detects. Every cause on the game's cause list
+is saved (`0066e390`): each record as a form id and eight values with their spacers, 42 bytes (40 before
+the save's form version 8). The plugin skips the copy (a jump at `0066e099`), skips the save's loop
+(`0066e3de`) and, on load, reads the count and skips its records by their size (`0066e499`).
+
+The row: the constructor (`0066e010`) asks for the actor's process as before but does not call its slot
++0xf4, so the list stays empty, as it is for a cause of an actor without a full process in the original
+too; the load (`0066e440`) reads each saved record with the original's reader (`008d7140`) into a record
+on the stack and drops it, so a save written by the original or by vanilla is read to the same byte
+(spacers and the version's extra byte included) and keeps no list. The save itself is left as it is: with
+no list made or loaded it writes a count of 0, the same bytes the plugin writes. Who reads the list:
+only the cause's own functions (`0066df40` frees it, `0066e100` removes an actor's record, `0066e200`
+resets it, `0066e390`/`0066e440` save and load it, `0066e640` resolves its form ids after a load); the
+Xbox PDB has no accessor for it. So what a player sees is smaller saves that save and load faster in long
+fights (the guides quote 15-30%; not measured in nv-rs). A save made with the row loads in vanilla and in
+the original (count 0), and one made without it loads with the row.
+
+Tested: `run_0066e010.rs`'s `without_witnesses_the_process_is_asked_but_nothing_is_copied` (the same words
+as the original's except +4, and the process's slot never called) and `actorcause.rs`'s
+`load_game_without_witnesses_reads_each_record_and_keeps_none` (three records read by `008d7140`, nothing
+allocated, no list) and `the_list_loads_each_cause_by_address`.
+
+### Radio song lengths
+
+From Psycho's radio fix (`psycho-engine-fixes/src/mods/perf/radio/music.rs` and
+`docs/radio_scan_hitch_evidence.md` in its repository), built from the exe; two of its parts.
+
+- **The duration left on a channel.** Music plays on two channels that cross-fade (`FalloutAudioMedia`).
+  Opening a file (`008300c0`) sets up the next channel and wakes its thread, which publishes the file's
+  position and duration (`011dd320` for channel A, `011dd354` for B) once it runs. Until then the channel
+  holds what its last file published: a channel is cleared only when its file's thread ends, after its
+  fade-out. A radio station asks for the duration right after opening the song (`008308c0`) and keeps a
+  positive answer as the song's length, which decides when it moves to the next song. A song opened while
+  the channel's last song still faded out (a quick change of station) got that song's length: cut short,
+  or followed by silence. With the row the opened channel's duration is cleared under the lock before its
+  thread is woken, so the station gets 0 and asks again later, as it does for any song whose thread has
+  not answered yet. The clear alone leaves a window: each channel has one thread, and the last song's
+  thread, still fading out, runs on until the end of its round (up to one update, at most 100 ms), where
+  it sees the new ID and stops. That round first writes its own length to the channel again, and the new
+  song's thread starts only after it, so a station asking meanwhile still got the old length. So the row
+  also takes Psycho's check at the four places the thread writes the duration (its start-up and each
+  round, for either channel: `00830c97`, `00830d2c`, `0083135d`, `008313d7`): the write happens only while
+  the channel's ID is still the thread's, under the same lock as the open. The duration then stays 0 from
+  the open until the new song's own thread publishes its length. Psycho also ties the station's progress
+  to the songs' ends; that part is not taken.
+- **The sync loop.** Each round the music thread (`00830b30`, the loop at `00831790`) brings the time since
+  the channel's synch start into the file's length by taking the length off while it is longer, then seeks
+  when the position is off by more than the tolerance. With a length of 0 (none known: the thread's first
+  rounds, or a failed duration query) that loop never ends: the music stops and the thread spins on one
+  core for good. With a clock behind the synch start the time wraps to about four billion milliseconds,
+  taken down one length at a time before the clamp to 0. With the row a length of 0 with time to bring in
+  skips the seek (playback goes on where it is, as Psycho does), and otherwise the time is
+  `(time - 1) % length + 1`, the loop's own answer, in one step. Where the loop ends the row's answer is
+  the loop's.
+
+The media object's open (`00830010`) and the channel thread (`0082f7b0`) call the two by address now, so the
+row applies there too. Tested: `falloutaudiomedia.rs`'s `the_radio_open_clears_the_duration_before_waking_the_thread`
+(the duration the thread sees when woken: the last file's without the row, 0 with it; the other channel
+keeps its own), `a_fading_thread_no_longer_writes_its_length_over_the_next_song` (a song opened on a
+channel while its last song's thread runs one more round: with the original's thread proc that round
+writes the old 10 s back and the station gets it; with the row's the station gets 0 until the new song's
+thread publishes its own 20 s), `bring_into_length_is_the_loops_answer` (against the loop for lengths 1 to 2^31-1),
+`the_bounded_sync_plays_as_the_original_within_the_length` (the same calls as the original's thread
+proc on the play test) and `the_bounded_sync_skips_the_seek_without_a_length` (a length of 0 ends the
+run with no seek, where the original's never ends).
+
+### Patch data
+
+Data mods come as patch data (the maintainer, 2026-11-01): each author's change, kept as the record, the
+field and the value in nv-rs's own table (`crates/host/data/patch_data.tsv`, read by
+`crates/host/src/patch_data.rs`), applied to the player's own game files as they load. No game file ships;
+each change belongs to a fixes row, so it is switched with that row and is off in vanilla, and each row
+names who made the change.
+
+- **No distant water under the Strip** (`NV_STRIP_LOD_WATER`): FalloutNV.esm's world space `0013b308`
+  (`TheStripWorldNew`), whose `DATA` is 0x01, gets 0x10, "No LOD Water". The flag is the world space's
+  `cFlags` bit 4 (+0x4c), and the exe reads it in one place: `004e4c80`, which makes the distant water
+  (a temporary reference of the world's LOD water with a water shader, in a fade node) and turns the water
+  system on, returns nothing when the current or the given world space has it. The Strip's distant water
+  lies under its ground and is never seen. Applied after `TESWorldSpace::Load` (`00583560`, reached only
+  through the form's vtable): the record loads as the original reads it, then the bit is set; a plugin that
+  overrides the record later loads it again and gets the bit again. Credit: Aqua Performa's author found
+  it (about 20 frames a second on the Strip on their machines); YUP, UPNVSE Plus and Tale of Two Wastelands
+  3.3.3b ship the same flag. Not measured in nv-rs: the short route does not reach the Strip.
+  VNV's and TBoT's `bForceHighDetailReflections=0` (water reflecting the distant world instead of drawing
+  the scene a second time) changes the picture, so it is not part of this row; it is left to the
+  maintainer as a preset choice.
+
+Tested: `patch_data.rs`'s `the_table_reads_and_every_row_is_applied`, `the_strip_gets_no_lod_water` and
+`the_load_in_both_modes` (the record's flags as loaded in vanilla, 0x11 for the Strip with the row, nothing
+for another world space or another record type).
+
 ### The script extender
 
 The built-in xNVSE (ADR-0016) is the same in both presets, except for these rows and the
@@ -604,3 +752,8 @@ translated from them in these fixes.
 - **Cell Offset Generator**, WallSoGB, GPL-3.0: offset tables for every plugin and the engine's master-only
   checks (`CellOffsetGenerator.cpp`), the idea of the cell offsets row; its tables are built another way here
   and none of its code is used.
+- **lStewieAl's Tweaks, VATS Lag Fix and ActorCause Save Bloat Fix**: the thread races' first three
+  places, the V.A.T.S. wait that ends with the camera, and the causes' witness lists.
+- **Psycho** (acidpointer): the editor-marker pass's lock and the radio's two music fixes.
+- **Aqua Performa**'s author, **YUP** (Yukichigai Unofficial Patch), **UPNVSE Plus** and **Tale of Two
+  Wastelands**: "No LOD Water" on the Strip, as patch data.

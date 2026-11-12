@@ -158,6 +158,10 @@ Each also has a `[nv-rs Fixes]` key in `Fallout.ini` (`bUncap` ... `bNVSEListGua
 | `NV_TEXTURE_READ_FIRST` | Texture files read before the renderer's lock | `host/fixes.rs` |
 | `NV_CELL_ENTRY_WAIT` | Cell entry waits for its own cell | `host/cell_entry_wait.rs` |
 | `NV_CELL_OFFSETS` | Cell offsets for every plugin | `host/cell_offsets.rs` |
+| `NV_VATS_LAG` | V.A.T.S. waits only for the camera | `host/fixes.rs` |
+| `NV_ACTOR_CAUSE` | Causes keep no witness lists | `host/fixes.rs` |
+| `NV_RADIO_LENGTHS` | Radio song lengths | `host/fixes.rs` |
+| `NV_STRIP_LOD_WATER` | No distant water under the Strip (patch data) | `host/patch_data.rs` |
 | `NV_COSAVE_KEEP` | Co-save keeps other plugins | `host/fixes.rs` (flag read by `nvse`) |
 | `NV_NVSE_ERROR_GUARD` | Script error loop guard | `host/fixes.rs` |
 | `NV_NVSE_IMOD_CHECK` | Image-space event form check | `host/fixes.rs` |

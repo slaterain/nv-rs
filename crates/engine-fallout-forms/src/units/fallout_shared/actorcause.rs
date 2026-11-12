@@ -373,12 +373,39 @@ pub fn actor_cause_get_actor_cause_by_id(e: &mut Engine, id: i32) -> u32 {
 /// is a new detection record (0x24 bytes, [`fn_0066e590`]) loaded
 /// (`008d7140`) and added to it (`005ae3d0`).
 pub fn actor_cause_load_game(e: &mut Engine, this: Ptr<ActorCause>, buffer: u32) {
+    load_game(e, this, buffer, true);
+}
+
+/// [`actor_cause_load_game`] that keeps no witnesses: each saved detection record is read by the
+/// original's reader (`008d7140`) into a record on the stack and dropped, so the save is read
+/// to the same byte, spacers and form version (the 8th adds a byte) included, and no list is
+/// made. The fixes preset's ActorCause row (`crates/host`), with
+/// [`super::run_0066e010::fn_0066e010_without_witnesses`]: lStewieAl's ActorCause Save Bloat Fix
+/// skips the records by their size (40 or 42 bytes) at `0066e499`.
+pub fn actor_cause_load_game_without_witnesses(e: &mut Engine, this: Ptr<ActorCause>, buffer: u32) {
+    load_game(e, this, buffer, false);
+}
+
+/// The bytes of a detection record (`0066e440` allocates them for each witness).
+const DETECTION_STATE_SIZE: u32 = 0x24;
+/// `DetectionState::LoadGame` (engine map; `thiscall`, `RET 4`: the buffer).
+const DETECTION_STATE_LOAD: u32 = 0x008d_7140;
+
+fn load_game(e: &mut Engine, this: Ptr<ActorCause>, buffer: u32, keep_witnesses: bool) {
     let base = this.addr();
     e.call(LOAD_DATA, &args![buffer, base + 8, 0xcu32]);
     e.call(LOAD_DATA, &args![buffer, base + 0x14, 4u32]);
     e.call(LOAD_FORM_ID, &args![buffer, this]);
     let count = e.call(LOAD_VARIABLE_SIZED_VALUE, &args![buffer]).u32();
     if count == 0 {
+        return;
+    }
+    if !keep_witnesses {
+        for _ in 0..count {
+            e.with_stack(DETECTION_STATE_SIZE, |e, record| {
+                e.call(DETECTION_STATE_LOAD, &args![record, buffer]);
+            });
+        }
         return;
     }
     let witnesses = e.get(this, ActorCause::pWitnesses);
@@ -394,13 +421,13 @@ pub fn actor_cause_load_game(e: &mut Engine, this: Ptr<ActorCause>, buffer: u32)
         e.set(this, ActorCause::pWitnesses, list);
     }
     for _ in 0..count {
-        let block = e.call(OPERATOR_NEW, &args![0x24u32]).u32();
+        let block = e.call(OPERATOR_NEW, &args![DETECTION_STATE_SIZE]).u32();
         let state = if block == 0 {
             0
         } else {
             fn_0066e590(e, Ptr::new(block)).addr()
         };
-        e.call(0x008d_7140, &args![state, buffer]);
+        e.call(DETECTION_STATE_LOAD, &args![state, buffer]);
         e.with_stack(4, |e, slot| {
             e.mem.set_u32(slot.addr(), state);
             let witnesses = e.get(this, ActorCause::pWitnesses);
@@ -454,9 +481,14 @@ pub fn actor_cause_load_actor_causes_list(e: &mut Engine, buffer: u32) {
         } else {
             fn_0066deb0(e, Ptr::new(block))
         };
-        actor_cause_load_game(e, cause, buffer);
+        // By address, so the fixes preset's ActorCause row applies here.
+        e.call(ACTOR_CAUSE_LOAD_GAME, &args![cause, buffer]);
     }
 }
+
+/// `ActorCause::LoadGame` ([`actor_cause_load_game`]), called by address: the fixes preset's
+/// ActorCause row registers over it (`crates/engine-core/data/overridable.tsv`).
+const ACTOR_CAUSE_LOAD_GAME: u32 = 0x0066_e440;
 
 // Translated from 0066e810 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `ActorCause::InitLoadActorCausesList` (engine map), `cdecl`: walks the
@@ -918,6 +950,55 @@ mod n036_tests {
         e.call(0x0066_e440, &args![cause, 0x9000u32]);
         let log = e.call_log.take().unwrap();
         assert_eq!(calls_to(&log, 0x0047_0470), vec![vec![list]]);
+    }
+
+    /// The ActorCause row's load: the same fields, and each saved record read by the original's
+    /// reader into a record on the stack, which is dropped: nothing allocated, no list.
+    #[test]
+    fn load_game_without_witnesses_reads_each_record_and_keeps_none() {
+        let mut e = list_engine();
+        e.register(LOAD_DATA, |_, _| Ret::default());
+        e.register(LOAD_FORM_ID, |_, _| Ret::default());
+        e.register(LOAD_VARIABLE_SIZED_VALUE, |_, _| 3u32.into_ret());
+        e.register(OPERATOR_NEW, |_, _| panic!("a record was allocated"));
+        e.register(0x0096_a2d0, |_, _| panic!("a list was made"));
+        e.register(DETECTION_STATE_LOAD, |_, _| Ret::default());
+        e.register(0x0066_e440, |e, a| {
+            actor_cause_load_game_without_witnesses(e, Ptr::new(a[0]), a[1]);
+            Ret::default()
+        });
+        let cause = e.new_object::<ActorCause>();
+        e.call_log = Some(vec![]);
+        e.call(0x0066_e440, &args![cause, 0x9000u32]);
+        let log = e.call_log.take().unwrap();
+        let base = cause.addr();
+        assert_eq!(
+            calls_to(&log, LOAD_DATA),
+            vec![vec![0x9000, base + 8, 0xc], vec![0x9000, base + 0x14, 4]]
+        );
+        assert_eq!(calls_to(&log, LOAD_FORM_ID), vec![vec![0x9000, base]]);
+        let records = calls_to(&log, DETECTION_STATE_LOAD);
+        assert_eq!(records.len(), 3);
+        assert!(records.iter().all(|w| w[1] == 0x9000 && w[0] != 0));
+        assert_eq!(e.get(cause, ActorCause::pWitnesses), 0);
+        assert!(calls_to(&log, LIST_APPEND).is_empty());
+    }
+
+    /// The list's load calls `ActorCause::LoadGame` by address, so the row applies there.
+    #[test]
+    fn the_list_loads_each_cause_by_address() {
+        let mut e = list_engine();
+        e.register(LOAD_DATA, |_, _| Ret::default());
+        e.register_double(LOAD_VARIABLE_SIZED_VALUE, |_, _| 2u32.into_ret());
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        let loaded = std::rc::Rc::new(std::cell::Cell::new(0));
+        let count = loaded.clone();
+        e.register_double(ACTOR_CAUSE_LOAD_GAME, move |_, _| {
+            count.set(count.get() + 1);
+            Ret::default()
+        });
+        e.call(0x0066_e750, &args![0x9000u32]);
+        assert_eq!(loaded.get(), 2);
     }
 
     #[test]

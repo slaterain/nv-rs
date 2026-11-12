@@ -37,6 +37,17 @@
 //! feet. Here the counts are locked increments and decrements (atomics), at the same
 //! points. (Tweaks also leaves out the lock in three of the model map's functions; the exe gives
 //! no reason that this is safe, so that part is not taken.)
+//!
+//! **The editor-marker pass of a loaded model** (`RemoveEditorMarkers`, `004b5d10`, Xbox PDB).
+//! `InitModel` (`0043ace0`) runs it on each model it loads, at `0043afac`, its only caller from
+//! outside (`004b5efb` is its own recursion), on the IO thread for queued models and on the main
+//! thread for models loaded at once. The pass keeps its root (`011c6328`) and a controller value
+//! (`011c6324`) in globals, tests the value once and reads it again before each of its four
+//! virtual calls: a pass on another thread that ends meanwhile clears it, and the call goes
+//! through 0 (Psycho's crash dump: `004b5e11`, the second read). The port runs those threads side
+//! by side in play, as Windows does. Here the outer call runs whole inside a critical section of
+//! the row's own, as Psycho does (a recursive lock around the call at `0043afac`); its recursion
+//! is inside it.
 
 use crate::fixes::Fix;
 use engine::prelude::*;
@@ -45,9 +56,11 @@ use engine::units::bsmenu::debugtext::{
     debug_text_handle_queued_prints, debug_text_print, fn_00a0df80,
 };
 use engine::units::fallout_interface::menuconsole::fn_0071d0a0;
+use engine::units::fallout_shared::globalfunc::remove_editor_markers;
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// `MemoryManager::GetThreadScrapHeap` and the memory manager's teardown (`00aa3a40`).
 pub const GET_THREAD_SCRAP_HEAP: u32 = 0x00aa_42e0;
@@ -62,6 +75,8 @@ pub const CONSOLE_PRINT: u32 = 0x0071_d0a0;
 pub const FACE_GEN_ENTER: u32 = 0x0065_2140;
 pub const FACE_GEN_TRY: u32 = 0x0065_2160;
 pub const FACE_GEN_LEAVE: u32 = 0x0065_2190;
+/// `RemoveEditorMarkers` (Xbox PDB), run on each loaded model.
+pub const REMOVE_EDITOR_MARKERS: u32 = 0x004b_5d10;
 
 /// The row in [`crate::fixes::FIXES`].
 pub const FIX: Fix = Fix {
@@ -77,17 +92,19 @@ pub const FIX: Fix = Fix {
         FACE_GEN_ENTER,
         FACE_GEN_TRY,
         FACE_GEN_LEAVE,
+        REMOVE_EDITOR_MARKERS,
     ],
-    summary:
-        "the scrap heap of a new thread, the debug texts and console prints, and the face-gen \
-              lock's depth are safe when threads meet",
+    summary: "the scrap heap of a new thread, the debug texts and console prints, the face-gen \
+              lock's depth and the editor-marker pass of a loaded model are safe when threads meet",
     install,
 };
 
-/// Registers the row's nine functions.
+/// Registers the row's ten functions.
 pub fn install(e: &mut Engine) {
     // A new run may sit at an old run's kernel address: what any thread kept is not used again.
     forget_found_heaps();
+    make_marker_section(e);
+    e.register(REMOVE_EDITOR_MARKERS, remove_editor_markers_entry);
     e.register(GET_THREAD_SCRAP_HEAP, thread_scrap_heap_entry);
     e.register(MEMORY_MANAGER_TEARDOWN, teardown_entry);
     e.register(HANDLE_QUEUED_PRINTS, handle_queued_prints_entry);
@@ -361,6 +378,62 @@ pub fn face_gen_leave(e: &mut Engine) {
     count_depth(e, false);
 }
 
+// ---------------------------------------------------------------------------------------------
+// The editor-marker pass
+// ---------------------------------------------------------------------------------------------
+
+/// The import slot of `InitializeCriticalSection`, and the size of a `CRITICAL_SECTION`.
+const INITIALIZE_CRITICAL_SECTION: u32 = 0x00fd_f054;
+const CRITICAL_SECTION_SIZE: u32 = 0x18;
+
+/// Each run's critical section for the pass ([`crate::fixes`] installs the row once per run,
+/// before the first frame), by the run ([`engine::units::platform::KernelRef::id`]).
+fn marker_sections() -> MutexGuard<'static, HashMap<usize, u32>> {
+    static SECTIONS: OnceLock<Mutex<HashMap<usize, u32>>> = OnceLock::new();
+    SECTIONS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// A critical section in the game's memory for this run, made the game's way
+/// (`InitializeCriticalSection`, bound in every run of the game; an engine without the exe's
+/// imports, a unit test's, keeps the zeroed block, which both of the port's kernels take as a
+/// free section). A Windows section is recursive, as Psycho's lock is; a thread waiting on it
+/// waits as on any of the game's sections, under either threads scheme.
+fn make_marker_section(e: &mut Engine) {
+    let section = e.mem.alloc(CRITICAL_SECTION_SIZE);
+    if e.is_registered(INITIALIZE_CRITICAL_SECTION) {
+        e.call(INITIALIZE_CRITICAL_SECTION, &args![section]);
+    }
+    marker_sections().insert(e.kernel.id(), section);
+}
+
+/// The run's section for the pass.
+pub fn marker_section(e: &Engine) -> Option<u32> {
+    marker_sections().get(&e.kernel.id()).copied()
+}
+
+fn remove_editor_markers_entry(e: &mut Engine, a: &[u32]) -> Ret {
+    remove_editor_markers_locked(e, Ptr::new(a[0])).into_ret()
+}
+
+/// `004b5d10` with the row: the original's pass, its recursion included, inside the run's
+/// section, left however the pass ends.
+pub fn remove_editor_markers_locked(e: &mut Engine, node: Ptr) -> bool {
+    let section = marker_section(e);
+    if let Some(section) = section {
+        e.call(ENTER_CRITICAL_SECTION, &args![section]);
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        remove_editor_markers(e, node)
+    }));
+    if let Some(section) = section {
+        e.call(LEAVE_CRITICAL_SECTION, &args![section]);
+    }
+    result.unwrap_or_else(|stop| std::panic::resume_unwind(stop))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -582,6 +655,63 @@ mod tests {
         e.call(MEMORY_MANAGER_TEARDOWN, &args![manager]);
         e.call(GET_THREAD_SCRAP_HEAP, &args![manager]);
         assert_eq!(looked_up.get(), 2);
+    }
+
+    /// The editor-marker pass: with the row its outer call runs whole inside the run's own
+    /// section (made at the install with `InitializeCriticalSection`), entered first and left
+    /// last, also when the pass stops; without the row no section is taken.
+    #[test]
+    fn the_editor_marker_pass_runs_inside_the_runs_section() {
+        let _serial = serial();
+        for fix in [false, true] {
+            let mut e = Engine::new();
+            let made = std::rc::Rc::new(Cell::new(0u32));
+            let seen = made.clone();
+            e.register_double(INITIALIZE_CRITICAL_SECTION, move |_, a| {
+                seen.set(a[0]);
+                Ret::default()
+            });
+            e.register(ENTER_CRITICAL_SECTION, |_, _| Ret::default());
+            e.register(LEAVE_CRITICAL_SECTION, |_, _| Ret::default());
+            if fix {
+                install(&mut e);
+                assert_ne!(made.get(), 0);
+                assert_eq!(marker_section(&e), Some(made.get()));
+            }
+            e.call_log = Some(vec![]);
+            // A null node: the pass answers false at once.
+            assert!(!e.call(REMOVE_EDITOR_MARKERS, &args![0u32]).bool());
+            let log = calls(&e);
+            let sections: Vec<&(u32, Vec<u32>)> = log
+                .iter()
+                .filter(|(at, _)| *at == ENTER_CRITICAL_SECTION || *at == LEAVE_CRITICAL_SECTION)
+                .collect();
+            if fix {
+                let section = made.get();
+                assert_eq!(log[1], (ENTER_CRITICAL_SECTION, vec![section]));
+                assert_eq!(
+                    log.last().unwrap(),
+                    &(LEAVE_CRITICAL_SECTION, vec![section])
+                );
+                assert_eq!(sections.len(), 2, "{log:x?}");
+                // A pass that stops (its first callee here) still leaves the section.
+                e.map(0x011c_6000, 0x1000);
+                e.register(0x0044_8a80, |_, _| panic!("a stop inside the pass"));
+                let node = e.mem.alloc(0x40);
+                e.call_log = Some(vec![]);
+                let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    e.call(REMOVE_EDITOR_MARKERS, &args![node])
+                }));
+                assert!(stopped.is_err());
+                let log = calls(&e);
+                assert_eq!(
+                    log.last().unwrap(),
+                    &(LEAVE_CRITICAL_SECTION, vec![section])
+                );
+            } else {
+                assert!(sections.is_empty(), "{log:x?}");
+            }
+        }
     }
 
     /// Engines made one after another in one process, each installing the row: a later one whose
