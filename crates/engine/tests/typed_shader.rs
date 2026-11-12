@@ -8627,7 +8627,7 @@ fn water_setup_textures() {
 /// The water's slot 0x7c's inputs: the pass type (the two stencil-only ones, the two with the third word
 /// 0, another); the property's switch +0x60; a fog property or none; the property's +0x104 (play's float:
 /// below 10, past it); the sun's x and a light's red (play's floats); the light list (none, one light,
-/// a null light then two); the light count (a small one, one past 2^31); the constant maps (none,
+/// a null light first, then two); the light count (a small one, one past 2^31); the constant maps (none,
 /// stand-ins).
 const WATER_CONSTANTS: &[Input] = &[
     Input::Of(&[0x288, 0x289, 0x29a, 0x2ab, 0x30]),
@@ -8711,7 +8711,7 @@ fn water_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
             let count = if kind == 1 { 1 } else { 3 };
             for n in 0..count {
                 let node = e.mem.alloc(0xc);
-                let light = if kind == 2 && n == 0 {
+                let light = if kind == 2 && n == count - 1 {
                     0
                 } else {
                     let light = e.mem.alloc(0xe4);
