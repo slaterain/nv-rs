@@ -5946,7 +5946,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         self.flush();
         let presents = self.presents;
-        if let Some(map) = self.start.as_mut().and_then(|s| s.read_after_submit(presents)) {
+        if let Some(map) = self
+            .start
+            .as_mut()
+            .and_then(|s| s.read_after_submit(presents))
+        {
             self.on_queue(map);
         }
         // Presented right after the frame's submit, on the queue thread in the window's DPI
