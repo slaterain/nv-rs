@@ -9343,6 +9343,31 @@ fn the_first_half_reads_the_packet_the_cut_fills() {
     assert!(reads > 0, "the first half read nothing through the packet");
 }
 
+/// A pass like the world's first, of a geometry of its own (the world's geometry copied, with its own bound),
+/// counted once as the scene graph's geometries are.
+fn own_geometry_pass(e: &mut Engine, d: &DrawW) -> u32 {
+    let geometry = e.mem.alloc(0xc4);
+    for k in 0..0xc4 / 4 {
+        let word = e.mem.u32(d.w.geometry + 4 * k);
+        set(e, geometry + 4 * k, word);
+    }
+    set(e, geometry + 4, 1);
+    let bound = e.mem.alloc(0x10);
+    let from = e.mem.u32(d.w.geometry + 0x20);
+    for k in 0..4 {
+        let word = e.mem.u32(from + 4 * k);
+        set(e, bound + 4 * k, word);
+    }
+    set(e, geometry + 0x20, bound);
+    let pass = e.mem.alloc(0x10);
+    for k in 0..4 {
+        let word = e.mem.u32(d.w.passes[0] + 4 * k);
+        set(e, pass + 4 * k, word);
+    }
+    set(e, pass, geometry);
+    pass
+}
+
 /// The whole world draw with `NV_DRAW_THREAD=poison`, the way the world pass runs it: render mode 0 (the
 /// accumulator's own slots 0xa8 and 0xac), the first half then the second, with the cut's packet open from the
 /// cut to the join. The lists hold pass groups through each renderer's pass map, register group and alpha holders,
@@ -9358,6 +9383,7 @@ fn the_whole_draw_reads_the_packet_the_cut_fills() {
     for case in product(&[TWO_WAYS, &[1, 2], &[0, 1, 2], &[0, 5, 0xf]]) {
         let setup = |e: &mut Engine| {
             let d = draw_world(e);
+            let mut own = Vec::new();
             acc_slots(e, d.w.acc, true);
             set(e, d.w.acc + 0x19c, 0);
             held(e, d.w.acc, 1);
@@ -9367,23 +9393,63 @@ fn the_whole_draw_reads_the_packet_the_cut_fills() {
             e.mem.set_u8(d.w.acc + 0x38, case[0] as u8);
             set(e, d.w.acc + 0x18c, case[1]);
             active_lists(e, &d, case[2]);
-            // The sorted alpha groups of both alpha groups (bits 2r, 2r + 1 of the case's word, as alpha_state).
+            // The sorted alpha groups of both alpha groups (bits 2r, 2r + 1 of the case's word, as alpha_state),
+            // each keeping its own list with a pass of a geometry of its own; and the grouped alphas (+0x90) each
+            // a holder whose pass's geometry is its own too. A list the cut's walk left out would then leave a
+            // geometry out of the packet, and the draw's read of it would miss.
             for group in 0..2 {
                 alpha_state(e, &d, group, 3, case[3], HALF);
+                for (r, br) in d.renderers().into_iter().enumerate() {
+                    // Only the renderers the accumulator counts are drawn (and walked).
+                    let drawn = (r as u32) < case[1];
+                    let mut node = e.mem.u32(br + 0x78 + 0xc * group);
+                    while node != 0 {
+                        let g = e.mem.u32(node + 8);
+                        e.mem.set_u8(g, 1);
+                        e.mem.set_u16(g + 2, 1);
+                        set(e, g + 4, 4);
+                        let pass = own_geometry_pass(e, &d);
+                        if drawn {
+                            own.push(e.mem.u32(pass));
+                        }
+                        list_at(e, g + 0xc, &[pass]);
+                        node = e.mem.u32(node);
+                    }
+                    let h = e.mem.alloc(0x20);
+                    e.mem.set_u16(h + 2, 1);
+                    set(e, h + 4, 4);
+                    set(e, h + 8, br);
+                    let pass = own_geometry_pass(e, &d);
+                    if drawn {
+                        own.push(e.mem.u32(pass));
+                    }
+                    list_at(e, h + 0xc, &[pass]);
+                    set(e, br + 0x90 + 4 * group, h);
+                }
             }
             set(e, 0x011f_9438, 0x4242);
             set(e, 0x011f_943c, 0x4343);
             let camera = full_camera(e, &d.w);
             e.with_stack(4, |_, _| ());
-            vec![camera, d.w.acc, 1]
+            (vec![camera, d.w.acc, 1], own)
         };
         let mut plain = Engine::new();
-        let a = setup(&mut plain);
+        let (a, _) = setup(&mut plain);
         let answer = (first(&mut plain, &a), second(&mut plain, &a));
         let mut poisoned = Engine::new();
-        let b = setup(&mut poisoned);
+        let (b, own) = setup(&mut poisoned);
         capture::set_thread_mode(Some(capture::Mode::Poison));
-        let poisoned_answer = (first(&mut poisoned, &b), second(&mut poisoned, &b));
+        let poisoned_first = first(&mut poisoned, &b);
+        // Between the halves the packet holds every listed geometry: the sorted groups' and the grouped alphas'
+        // own included (counted once by the scene graph, once by the packet).
+        for g in &own {
+            assert_eq!(
+                poisoned.mem.u32(g + 4),
+                2,
+                "{case:x?}: geometry {g:#x} not held by the cut"
+            );
+        }
+        let poisoned_answer = (poisoned_first, second(&mut poisoned, &b));
         capture::set_thread_mode(None);
         let report = cut::last_report().expect("the cut opened a packet and the join closed it");
         assert!(
