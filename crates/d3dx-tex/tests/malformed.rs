@@ -115,6 +115,37 @@ fn extra_one_by_one_levels_are_read_and_dropped() {
     assert_eq!(made, Ok((4, 1)));
 }
 
+/// Broken cube maps whose faces are not square (16384x1 and 1x16384 A8R8G8B8, 16384x4 DXT1):
+/// D3DX squares a cube, so each would be resampled into a 16384x16384 cube of gigabytes (the
+/// 32-bit DLL cannot allocate it). They are left to the caller at once, as before resampling.
+#[test]
+fn cubes_with_faces_that_are_not_square_are_left_to_the_caller() {
+    let argb = (0x41, 0, 32, [0xff_0000, 0xff00, 0xff, 0xff00_0000]);
+    for (w, h, pf, face) in [
+        (16384u32, 1u32, argb, 16384 * 4),
+        (1, 16384, argb, 16384 * 4),
+        (16384, 4, dxt1(), 4096 * 8),
+    ] {
+        let mut d = header(w, h, 1, 0x1007, pf, 0xfe00);
+        d.extend(vec![0x5au8; 6 * face]);
+        let (info, made) = answers(d, true);
+        assert!(
+            matches!(info, Ok(i) if (i[0], i[1]) == (w, h)),
+            "{w}x{h}: {info:?}"
+        );
+        assert!(
+            matches!(
+                made,
+                Err(d3dx_tex::Error::NotProvided(
+                    d3dx_tex::Untranslated::Size,
+                    _
+                ))
+            ),
+            "{w}x{h}: {made:?}"
+        );
+    }
+}
+
 #[test]
 fn random_small_headers_answer() {
     let mut seed = 0x1234_5678_9abc_def1u64;

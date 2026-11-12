@@ -408,6 +408,83 @@ fn edges(rng: &mut Rng, pf: (u32, u32, u32, [u32; 4]), w: u32, h: u32, mips: u32
     d
 }
 
+/// Files whose levels D3DX resamples with its triangle filter (`d3dx-tex-verify --capture-npot`,
+/// `data/npot_32bit.tsv` and `npot_32bit_double.tsv`): sides that are not powers of two (yUI's HUD
+/// icons' sizes among them: 8x24, 24x24, 48x48, 32x48), DXT sides that are not multiples of 4, a
+/// single row and a single column, several levels stored, a cube map (its edges mirrored, not
+/// wrapped).
+pub fn npot() -> Vec<File> {
+    let mut rng = Rng(0x5eed_d3d8_4e50_7412);
+    let mut v = Vec::new();
+    let mut add = |name: &str, cube: bool, data: Vec<u8>| {
+        v.push(File {
+            name: name.into(),
+            cube,
+            data,
+        })
+    };
+    let argb = (0x41, 0, 32, [0xff_0000, 0xff00, 0xff, 0xff00_0000]);
+    let xrgb = (0x40, 0, 32, [0xff_0000, 0xff00, 0xff, 0]);
+    let r565 = (0x40, 0, 16, [0xf800, 0x7e0, 0x1f, 0]);
+    let l8 = (0x2_0000, 0, 8, [0xff, 0, 0, 0]);
+    add("dxt5-8x24-one", false, dxt(&mut rng, b"DXT5", 8, 24, 1));
+    add("argb-24x24-one", false, plain(&mut rng, argb, 24, 24, 1));
+    add("argb-48x48-one", false, plain(&mut rng, argb, 48, 48, 1));
+    add("dxt5-32x48-one", false, dxt(&mut rng, b"DXT5", 32, 48, 1));
+    add("dxt1-24x40-one", false, dxt(&mut rng, b"DXT1", 24, 40, 1));
+    add("dxt3-12x12-one", false, dxt(&mut rng, b"DXT3", 12, 12, 1));
+    add("argb-24x24-full", false, plain(&mut rng, argb, 24, 24, 5));
+    add("xrgb-100x60-one", false, plain(&mut rng, xrgb, 100, 60, 1));
+    add("argb-3x5-one", false, plain(&mut rng, argb, 3, 5, 1));
+    add("argb-7x1-one", false, plain(&mut rng, argb, 7, 1, 1));
+    add("argb-1x9-one", false, plain(&mut rng, argb, 1, 9, 1));
+    add(
+        "r5g6b5-12x20-three",
+        false,
+        plain(&mut rng, r565, 12, 20, 3),
+    );
+    add("l8-20x12-one", false, plain(&mut rng, l8, 20, 12, 1));
+    add("dxt1-6x6-one", false, dxt(&mut rng, b"DXT1", 6, 6, 1));
+    add("dxt1-2x2-one", false, dxt(&mut rng, b"DXT1", 2, 2, 1));
+    add("argb-cube-24-one", true, plain_cube(&mut rng, argb, 24, 1));
+    // From #496's review: mip counts past the file's chain (D3DX loads the extra 1x1 levels into
+    // the larger texture), stored DXT levels resampled, a DXT cube with its chain, a DXT side of 1.
+    add("argb-24x24-six", false, plain(&mut rng, argb, 24, 24, 6));
+    add("dxt1-1x1-three", false, dxt(&mut rng, b"DXT1", 1, 1, 3));
+    add("dxt1-24x40-full", false, dxt(&mut rng, b"DXT1", 24, 40, 6));
+    add("dxt5-12x12-full", false, dxt(&mut rng, b"DXT5", 12, 12, 4));
+    add("dxt1-1x5-one", false, dxt(&mut rng, b"DXT1", 1, 5, 1));
+    let mut cube = header(12, 12, 4, fourcc(b"DXT1"), 0xfe00);
+    for _ in 0..6 {
+        for l in 0..4u32 {
+            let s = (12u32 >> l).max(1);
+            let n = (s.div_ceil(4) * s.div_ceil(4)) as usize;
+            cube.extend(dxt_blocks(&mut rng, n, 8, true));
+        }
+    }
+    add("dxt1-cube-12-full", true, cube);
+    v
+}
+
+/// Large files D3DX resamples, for timing (`d3dx-tex-verify --time-npot`): 1920x1080 DXT5 and
+/// A8R8G8B8, one level each (a 2048x2048 texture: the top level resampled, the rest boxed).
+pub fn large_npot() -> Vec<File> {
+    let mut rng = Rng(0x5eed_d3d8_1920_1080);
+    let argb = (0x41, 0, 32, [0xff_0000, 0xff00, 0xff, 0xff00_0000]);
+    vec![
+        File {
+            name: "dxt5-1920x1080-one".into(),
+            cube: false,
+            data: dxt(&mut rng, b"DXT5", 1920, 1080, 1),
+        },
+        File {
+            name: "argb-1920x1080-one".into(),
+            cube: false,
+            data: plain(&mut rng, argb, 1920, 1080, 1),
+        },
+    ]
+}
+
 /// Headers whose sizes push D3DX's DDS loader (`data/headers_32bit.tsv`: the 32-bit DLL's image
 /// info and create answers, `d3dx-tex-verify --capture-headers`): sides of 0 (levels of no
 /// bytes), levels between 2^31 and 2^32 bytes, levels past 2^32 bytes (the loader's 32-bit

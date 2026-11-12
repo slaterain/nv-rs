@@ -151,6 +151,29 @@ fn rows(data: &str, precision: d3dx_tex::Precision) {
     assert_eq!(n, 10);
 }
 
+/// `data/npot_32bit.tsv`: files whose levels D3DX resamples with its triangle filter
+/// (`d3dx_tex::synthetic::npot`: sides that are not powers of two, yUI's HUD icons' sizes among
+/// them; DXT sides that are not multiples of 4; a row, a column; a cube map): the texture's size,
+/// formats and bytes are the DLL's.
+#[test]
+fn resampled_textures_are_the_32_bit_dlls() {
+    synthetic(
+        include_str!("../data/npot_32bit.tsv"),
+        d3dx_tex::Precision::Single,
+        d3dx_tex::synthetic::npot(),
+    );
+}
+
+/// `data/npot_32bit_double.tsv`: the same at 53-bit precision, on a new thread.
+#[test]
+fn resampled_textures_are_the_32_bit_dlls_at_double_precision() {
+    synthetic(
+        include_str!("../data/npot_32bit_double.tsv"),
+        d3dx_tex::Precision::Double,
+        d3dx_tex::synthetic::npot(),
+    );
+}
+
 fn synthetic(data: &str, precision: d3dx_tex::Precision, files: Vec<d3dx_tex::synthetic::File>) {
     let caps = d3dx_tex::Caps::default();
     let lines: Vec<&str> = data.lines().filter(|l| !l.starts_with('#')).collect();
@@ -201,7 +224,10 @@ fn synthetic(data: &str, precision: d3dx_tex::Precision, files: Vec<d3dx_tex::sy
 #[test]
 fn image_info_follows_the_header() {
     let files = d3dx_tex::synthetic::files();
-    for file in files.into_iter().chain(d3dx_tex::synthetic::formats()) {
+    let more = d3dx_tex::synthetic::formats()
+        .into_iter()
+        .chain(d3dx_tex::synthetic::npot());
+    for file in files.into_iter().chain(more) {
         match d3dx_tex::get_image_info_from_file_in_memory(&file.data) {
             Ok(info) => {
                 let w = |at: usize| u32::from_le_bytes(file.data[at..at + 4].try_into().unwrap());

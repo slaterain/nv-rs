@@ -37,7 +37,7 @@ fn dxt_translated(f: u32) -> bool {
 }
 
 /// The bytes of one block of the DXT format `f`.
-fn block_bytes(f: u32) -> usize {
+pub(crate) fn block_bytes(f: u32) -> usize {
     if f == format::DXT1 {
         8
     } else {
@@ -57,7 +57,7 @@ fn decode_block<P: Fpu>(f: u32, b: &[u8]) -> [Color; 16] {
 /// Block rows `first..first + n` of a DXT level (`w` x `h`) to the working colour: rows
 /// `4 first..` of the level, `w` pixels each, into `out` (rows past the level's bottom are
 /// left as they are).
-fn decode_block_rows<P: Fpu>(
+pub(crate) fn decode_block_rows<P: Fpu>(
     f: u32,
     w: usize,
     h: usize,
@@ -119,7 +119,7 @@ fn decode_p<P: Fpu>(f: u32, w: usize, h: usize, bytes: &[u8]) -> Vec<Color> {
 /// each, `vh` of them valid), as D3DX's DXT encoder gathers them: a block reaching past the
 /// level's right or bottom edge repeats its pixels (columns, then rows, from the pattern 0, 0,
 /// 0, 1).
-fn band_block(rows: &[Color], w: usize, vh: usize, bx: usize) -> [Color; 16] {
+pub(crate) fn band_block(rows: &[Color], w: usize, vh: usize, bx: usize) -> [Color; 16] {
     const REP: [usize; 4] = [0, 0, 0, 1];
     let mut px = [[0.0f32; 4]; 16];
     let vw = w - bx * 4;
@@ -149,7 +149,7 @@ pub fn block_pixels(colors: &[Color], w: usize, h: usize, bx: usize, by: usize) 
 }
 
 /// One DXT block of `f`, into `out`.
-fn encode_block_into<P: Fpu>(f: u32, px: &[Color; 16], dither: bool, out: &mut [u8]) {
+pub(crate) fn encode_block_into<P: Fpu>(f: u32, px: &[Color; 16], dither: bool, out: &mut [u8]) {
     match f {
         format::DXT1 => out.copy_from_slice(&dxt::encode_dxt1::<P>(px, dither)),
         format::DXT2 | format::DXT3 => out.copy_from_slice(&dxt::encode_dxt3::<P>(px, dither)),
@@ -203,11 +203,11 @@ pub fn set_max_threads(n: usize) {
 }
 
 /// Helper threads taken from the process-wide budget, given back when dropped.
-struct Helpers(usize);
+pub(crate) struct Helpers(pub(crate) usize);
 
 impl Helpers {
     /// Up to `want` helpers, as many as the budget has left (possibly none).
-    fn take(want: usize) -> Helpers {
+    pub(crate) fn take(want: usize) -> Helpers {
         let cap = match MAX_THREADS.load(Ordering::Relaxed) {
             0 => std::thread::available_parallelism().map_or(1, |n| n.get()),
             n => n,
