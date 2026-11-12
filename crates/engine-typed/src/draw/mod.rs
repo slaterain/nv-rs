@@ -72,8 +72,10 @@ pub mod alpha;
 pub mod constants;
 pub mod detach;
 pub mod drivers;
+pub mod group_c;
 pub mod layout;
 pub mod lists;
+pub mod no_lighting;
 pub mod own;
 pub mod packed;
 pub mod packet;
@@ -82,7 +84,11 @@ pub mod passes;
 pub mod setups;
 pub mod shapes;
 pub mod skin;
+pub mod sky;
+pub mod speedtree;
+pub mod tall_grass;
 pub mod thunks;
+pub mod water;
 
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(18);
@@ -208,5 +214,36 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ee_6de0, thunks::matrix_multiply(Ptr<()>, Ptr<()>, Ptr<()>) -> Ptr<()>),
         entry!(0x00ee_6dce, thunks::plane_normalize(Ptr<()>, Ptr<()>) -> Ptr<()>),
         entry!(0x00ee_6dc8, thunks::plane_transform(Ptr<()>, Ptr<()>, Ptr<()>) -> Ptr<()>),
+        // Group C: the render states' lock counters.
+        entry!(0x0071_4a40, group_c::release_z_enable(u32)),
+        entry!(0x0071_4a60, group_c::release_z_write(u32)),
+        entry!(0x0071_4aa0, group_c::release_alpha_test(u32)),
+        entry!(0x0071_4ae0, group_c::release_alpha_blend(u32)),
+        entry!(0x004e_ced0, group_c::release_color_write(u32)),
+        // Group C: the tall grass shader.
+        entry!(0x00ba_ac10, tall_grass::setup_geometry(Ptr<()>, u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00ba_c950, tall_grass::setup_textures(Ptr<()>, Ptr<()>)),
+        entry!(0x00ba_af40, tall_grass::copy_instances(Ptr<()>, u32, Ptr<()>)),
+        entry!(0x00ba_c9c0, tall_grass::setup_constants(Ptr<()>, Ptr<()>)),
+        // Group C: the no-lighting shader.
+        entry!(0x00bc_6970, no_lighting::select_pass(Ptr<()>, u32)),
+        entry!(0x00bc_6de0, no_lighting::setup_fog(Ptr<()>, u32)),
+        entry!(0x00bc_6fa0, no_lighting::copy_subtextures(Ptr<()>, Ptr<()>, u32)),
+        entry!(0x00bc_6fe0, no_lighting::material_constants(Ptr<()>, Ptr<()>, Ptr<()>)),
+        entry!(0x00bc_7100, no_lighting::light_fog(Ptr<()>)),
+        entry!(0x00bc_8e00, no_lighting::texture_matrix(Ptr<()>, Ptr<()>)),
+        entry!(0x00bc_8d40, no_lighting::setup_textures(Ptr<()>, Ptr<()>)),
+        entry!(0x00bc_9a50, no_lighting::setup_constants(Ptr<()>, Ptr<()>)),
+        // Group C: the sky shader.
+        entry!(0x00b8_9cc0, sky::setup_textures(Ptr<()>, Ptr<()>)),
+        entry!(0x00b8_9d80, sky::setup_constants(Ptr<()>, Ptr<()>)),
+        // Group C: the water shader, the SpeedTree leaf shader, the pass flags, a material's colour.
+        entry!(0x00b8_63a0, water::setup_textures(Ptr<()>, Ptr<()>)),
+        entry!(0x00b8_64d0, water::setup_constants(Ptr<()>, Ptr<()>)),
+        entry!(0x00bb_25d0, speedtree::setup_geometry(Ptr<()>, u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00bb_2760, speedtree::setup_constants(Ptr<()>, Ptr<()>)),
+        entry!(0x00bb_1b50, speedtree::setup_fog(Ptr<()>, u32)),
+        entry!(0x00b8_15e0, group_c::pass_flags(u32)),
+        entry!(0x00c0_3180, group_c::material_colour_constant(u32)),
     ]
 }

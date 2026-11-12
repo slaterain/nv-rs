@@ -19,6 +19,7 @@ use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
 use engine_core::{entry, Engine};
+use engine_typed::draw::group_c;
 use engine_typed::shader::{
     self, accumulator as acc, batch, constants, geometry, lighting, state, textures,
 };
@@ -687,50 +688,75 @@ fn world_all(e: &mut Engine, render: bool, dispatch: bool, draw: bool) -> W {
 
 trait Common {
     fn common(self) -> Diff;
+    /// As [`Common::common`], but the shader family not named: the shader functions Group C's
+    /// set-ups reach ([`SHADER_CALLED`]) run by address, their translations on both sides. The world
+    /// transform is that family's code for any thread (`f64` maths, its own tests compare it on the main
+    /// thread's word within ulps), while these set-ups' own maths is the exe's there, bit for bit.
+    fn shader_translated(self) -> Diff;
 }
+
+/// The shader family's functions Group C's set-ups call: the world transform, the alpha function, the
+/// blend, z writes and the z test, a stage's address modes, a constant map's `SetShaderConstants`.
+const SHADER_CALLED: &[u32] = &[
+    0x00e6_fbb0,
+    0x00b9_7f20,
+    0x00b9_7ff0,
+    0x00b9_7e30,
+    0x00b9_7de0,
+    0x00e7_de90,
+    0x00e8_26d0,
+];
 
 impl Common for Diff {
     fn common(self) -> Diff {
-        self.family(&shader::SHADER)
-            .family(&leaf::LEAVES)
-            // The plain geometry pass (pass types 0xfc, 0xfd) and the renderer's skinned test are the
-            // render family's (their own tests).
-            // The draw family's partition draw, skinned packer and strip lists, which the batch renderer's
-            // skinned draw and the render family's packing call, and its pass set-ups, land toggles and
-            // fog property, which the batch renderer and the toggles set-up call, are stood in here or
-            // run by address and run in its tests.
-            .goes_by_address(&[
-                0x00b7_dde0,
-                0x00e7_2c20,
-                0x00e6_d310,
-                0x00e6_d780,
-                0x00a7_5f10,
-                0x00b7_dd50,
-                0x00b7_deb0,
-                0x00b7_ded0,
-                0x00b7_dfe0,
-                0x00b7_e150,
-                0x00b7_ac20,
-                0x00c0_2c30,
-                0x00b5_5520,
-                // The render family's stage bind, which the pass set-ups call.
-                0x00e7_eb00,
-                // The draw family's D3DX thunks, which the set-ups call.
-                0x00ee_6dfe,
-                0x00ee_6dec,
-                0x00ee_6df2,
-                0x00ee_6df8,
-                0x00ee_6dd4,
-                0x00ee_6dda,
-                0x00ee_6de0,
-                0x00ee_6dce,
-                0x00ee_6dc8,
-            ])
-            // draw_f's helpers: off until its gate, so by address, as in play; run in typed_draw.
-            .goes_by_address(DRAW_F_HELPERS)
-            .max_calls(MAX_CALLS)
-            .max_cases(160)
+        shared(self.family(&shader::SHADER))
     }
+
+    fn shader_translated(self) -> Diff {
+        shared(self).goes_by_address(SHADER_CALLED)
+    }
+}
+
+/// What [`Common`]'s settings share: the leaves, what runs by address, the limits.
+fn shared(d: Diff) -> Diff {
+    d.family(&leaf::LEAVES)
+        // The plain geometry pass (pass types 0xfc, 0xfd) and the renderer's skinned test are the
+        // render family's (their own tests).
+        // The draw family's partition draw, skinned packer and strip lists, which the batch renderer's
+        // skinned draw and the render family's packing call, and its pass set-ups, land toggles and
+        // fog property, which the batch renderer and the toggles set-up call, are stood in here or
+        // run by address and run in its tests.
+        .goes_by_address(&[
+            0x00b7_dde0,
+            0x00e7_2c20,
+            0x00e6_d310,
+            0x00e6_d780,
+            0x00a7_5f10,
+            0x00b7_dd50,
+            0x00b7_deb0,
+            0x00b7_ded0,
+            0x00b7_dfe0,
+            0x00b7_e150,
+            0x00b7_ac20,
+            0x00c0_2c30,
+            0x00b5_5520,
+            // The render family's stage bind, which the pass set-ups call.
+            0x00e7_eb00,
+            // The draw family's D3DX thunks, which the set-ups call.
+            0x00ee_6dfe,
+            0x00ee_6dec,
+            0x00ee_6df2,
+            0x00ee_6df8,
+            0x00ee_6dd4,
+            0x00ee_6dda,
+            0x00ee_6de0,
+            0x00ee_6dce,
+            0x00ee_6dc8,
+        ])
+        // draw_f's helpers: off until its gate, so by address, as in play; run in typed_draw.
+        .goes_by_address(DRAW_F_HELPERS)
+        .max_calls(MAX_CALLS)
+        .max_cases(160)
 }
 
 /// draw_f's helpers (`engine_typed::draw_f`): the float maximum and minimum, the class test, the list
@@ -6091,6 +6117,15 @@ const RESTORE_SETTERS: &[u32] = &[
     0x0071_4bf0,
 ];
 
+/// The setters among them that are the draw family's (group C's lock counters).
+const DRAW_COUNTERS: &[u32] = &[
+    0x0071_4a40,
+    0x0071_4a60,
+    0x0071_4aa0,
+    0x0071_4ae0,
+    0x004e_ced0,
+];
+
 /// A stand-in that folds its words into a mark (`RETS + 0x780`), so the calls' order and words show.
 fn marked(e: &mut Engine, a: &[u32]) -> Ret {
     let mut h = e
@@ -6134,7 +6169,10 @@ fn pass_world(e: &mut Engine, states: &[(u32, u32)], mask: u8, pass_type: u32) -
     let w = d.w;
     e.register(0x00e7_eb00, marked);
     for addr in RESTORE_SETTERS {
-        e.register(*addr, marked);
+        // The draw family's own counters (group C) run as themselves: these tests name the family.
+        if !DRAW_COUNTERS.contains(addr) {
+            e.register(*addr, marked);
+        }
     }
     e.register(VT_FN + 0x178, folded_constants);
     let vt = vtable(e, &[]);
@@ -7316,4 +7354,1750 @@ fn render_batches_with_the_lists_detached() {
             (words, renderer)
         },
     );
+}
+
+// ---- Group C: the render states' lock counters (the draw family's `group_c`) ----
+
+/// The lock counters' inputs: the count given back; the counter's value before (none left, one,
+/// several); the state's cached lock byte and value.
+const RELEASE: &[Input] = &[
+    Input::Of(&[0, 1, 3]),
+    Input::Of(&[0, 1, 2, 5]),
+    Input::Of(TWO_WAYS),
+    Input::Of(TWO_WAYS),
+];
+
+/// A lock counter's words: its counter at `at` and the state `state`'s cache from the case.
+fn release_words(e: &mut Engine, c: &Case, at: u32, state: u32) -> Vec<u32> {
+    let w = world(e);
+    set(e, at, c.word(1));
+    cached_state(e, &w, state, c.word(2), c.word(3));
+    vec![c.word(0)]
+}
+
+#[test]
+fn release_z_enable() {
+    Diff::new(entry!(0x0071_4a40, group_c::release_z_enable(u32)))
+        .common()
+        .inputs(RELEASE)
+        .translation_calls_plainly(&[])
+        .float_sweep(0)
+        .setup(|e, c| release_words(e, c, 0x011f_f9d8, 7))
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn release_z_write() {
+    Diff::new(entry!(0x0071_4a60, group_c::release_z_write(u32)))
+        .common()
+        .inputs(RELEASE)
+        .translation_calls_plainly(&[])
+        .float_sweep(0)
+        .setup(|e, c| release_words(e, c, 0x011f_f9dc, 14))
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn release_alpha_test() {
+    Diff::new(entry!(0x0071_4aa0, group_c::release_alpha_test(u32)))
+        .common()
+        .inputs(RELEASE)
+        .translation_calls_plainly(&[])
+        .float_sweep(0)
+        .setup(|e, c| release_words(e, c, 0x011f_f9e8, 15))
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn release_alpha_blend() {
+    Diff::new(entry!(0x0071_4ae0, group_c::release_alpha_blend(u32)))
+        .common()
+        .inputs(RELEASE)
+        .translation_calls_plainly(&[])
+        .float_sweep(0)
+        .setup(|e, c| release_words(e, c, 0x011f_f9f0, 27))
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn release_color_write() {
+    Diff::new(entry!(0x004e_ced0, group_c::release_color_write(u32)))
+        .common()
+        .inputs(RELEASE)
+        .translation_calls_plainly(&[])
+        .float_sweep(0)
+        .setup(|e, c| release_words(e, c, 0x011f_fa18, 0xa8))
+        .run()
+        .assert_same();
+}
+
+// ---- Group C: the tall grass shader (the draw family's `tall_grass`) ----
+
+/// Where the tall grass test keeps what its stand-ins answer: the shadow pass test, the active lights.
+const TALL_GRASS_SWITCHES: u32 = RETS + 0x400;
+
+/// The tall grass set-up's inputs: the transform's scale and first entry; the property's kind (4 has
+/// the light work); a scene light or none; a shadow pass or not; the point lights on or off; the
+/// property's active lights (none or two).
+const TALL_GRASS: &[Input] = &[
+    Input::F32,
+    Input::F32Swept(ONE),
+    Input::Of(&[4, 1]),
+    Input::Of(TWO_WAYS),
+    Input::Of(TWO_WAYS),
+    Input::Of(TWO_WAYS),
+    Input::Of(&[0, 2]),
+];
+
+/// `D3DXMatrixInverse`'s import (`00fdf428`) stood in: the matrix's words in reverse order.
+fn matrix_inverse_stand_in(e: &mut Engine) {
+    e.register(0x00fd_f428, |e, a| {
+        for k in 0..16u32 {
+            let word = e.mem.u32(a[2] + 4 * (15 - k));
+            e.mem.set_u32(a[0] + 4 * k, word);
+        }
+        ret(a[0])
+    });
+}
+
+/// The tall grass set-up's words: the world's renderer as the shader's, a transform of play's floats
+/// (the scale and the first entry the case's, a small rotation, a translation), the state's property,
+/// the accumulator's light list; the callees it reaches by address stood in (the shadow test, the
+/// active lights' count, the point lights' and the shadow's set-ups, the base set-up answering 0x4242).
+fn tall_grass_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let w = world(e);
+    e.map(0x0120_0000, 0x1000);
+    matrix_inverse_stand_in(e);
+    e.register(0x00b6_30f0, |e, _| ret(e.mem.u32(TALL_GRASS_SWITCHES)));
+    e.register(0x00b7_07d0, |e, _| ret(e.mem.u32(TALL_GRASS_SWITCHES + 4)));
+    e.register(0x00ba_a720, |_, _| ret(0));
+    e.register(0x00ba_a850, |_, _| ret(0));
+    e.register(0x00e8_07d0, |_, _| ret(0x4242));
+    set(e, TALL_GRASS_SWITCHES, c.word(4));
+    set(e, TALL_GRASS_SWITCHES + 4, c.word(6));
+    e.mem.set_u8(0x011f_9ef0, c.word(5) as u8);
+    set(e, 0x011f_95ec, w.acc);
+    set(e, 0x011f_91e4, 0x31);
+    let vt = vtable(e, &[]);
+    let this = obj(e, 0x1e0, vt);
+    set(e, this + 0x18, w.renderer);
+    let t = e.mem.alloc(0x34);
+    let words = [
+        play_bits(c, 1),
+        0x3dcc_6c67,
+        0,
+        0xbdcc_6c67,
+        ONE,
+        0,
+        0,
+        0,
+        ONE,
+        0x40a0_0000,
+        0x40c0_0000,
+        0x40e0_0000,
+        play_bits(c, 0),
+    ];
+    for (i, v) in (0u32..).zip(words) {
+        set(e, t + 4 * i, v);
+    }
+    let state = e.mem.alloc(0x10);
+    let property = obj(e, 0x20, vt);
+    set(e, property + 0x1c, c.word(2));
+    set(e, state + 0xc, property);
+    let middle = e.mem.alloc(0xe4);
+    let lights = e.mem.alloc(0xfc);
+    let light = e.mem.alloc(0x100);
+    set(e, w.acc + 0x194, middle);
+    set(e, middle + 0xe0, lights);
+    set(e, lights + 0xf8, if c.word(3) != 0 { light } else { 0 });
+    for (k, v) in (0u32..).zip([0x3dcc_cccd, 0x3e4c_cccd, 0x3e99_999a]) {
+        set(e, light + 0xc8 + 4 * k, v);
+    }
+    for (k, v) in (0u32..).zip([0x3ecc_cccd, HALF, 0x3f19_999a]) {
+        set(e, light + 0xd4 + 4 * k, v);
+    }
+    for (k, v) in (0u32..).zip([ONE, 0xc000_0000, 0x4040_0000]) {
+        set(e, light + 0xf0 + 4 * k, v);
+    }
+    vec![this, 1, 2, 3, 4, state, 6, t, 8]
+}
+
+/// `TallGrassShader::SetupGeometry` (`00baac10`): main-thread code (`f32`, the exe's 24-bit products
+/// with play's floats), so on the main thread's word only, bit for bit (NaN payloads aside). The
+/// shader family's functions it calls run by address ([`Common::shader_translated`]).
+#[test]
+fn tall_grass_setup_geometry() {
+    Diff::new(entry!(
+        0x00ba_ac10,
+        engine_typed::draw::tall_grass::setup_geometry(
+            Ptr<_>,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+        ) -> u32
+    ))
+    .shader_translated()
+    // The shader manager's accumulator getter (the render family's) and the unitize (the dispatch
+    // family's), each with its own tests: by address, their translations on both sides.
+    .goes_by_address(&[0x00b4_f5c0, 0x004a_0c10])
+    .main_thread(0)
+    .inputs(TALL_GRASS)
+    .translation_calls_plainly(&[])
+    .float_sweep(FLOAT_SWEEP)
+    .setup(tall_grass_words)
+    .run()
+    .assert_same();
+}
+
+/// The tall grass's slot 0x78's inputs: the pass type (the shadow passes 0x284 to 0x287 and either
+/// side); the property's texture.
+const TALL_GRASS_TEXTURES: &[Input] = &[
+    Input::Of(&[0x283, 0x284, 0x286, 0x287, 0x288]),
+    Input::Of(&[0, 0x7e57_0000]),
+];
+
+/// The tall grass's slot 0x78's words: the shader (its slot 0x108 stood in), the state's property
+/// (its slot 0xb4 answering the case's texture), the current pass's two stages, the rendered pass's
+/// first scene light with a shadow map (`GetTexture` stood in: its answer from its words).
+fn tall_grass_textures_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let _ = world(e);
+    e.register(VT_FN + 0xb4, slot_answer::<0xb4>);
+    e.register(VT_FN + 0x108, |_, _| ret(0));
+    e.register(0x004b_c320, |_, a| ret(a[0] ^ 0x5a5a_0000 ^ a[1]));
+    set(e, RETS + 0xb4, c.word(1));
+    set(e, 0x011f_91e4, c.word(0));
+    let vt = vtable(e, &[]);
+    let this = obj(e, 0x1e0, vt);
+    let property = obj(e, 0x80, vt);
+    let state = e.mem.alloc(0x10);
+    set(e, state + 0xc, property);
+    let pass = e.mem.alloc(0x60);
+    let stages = e.mem.alloc(8);
+    for k in 0..2u32 {
+        let stage = e.mem.alloc(0x10);
+        set(e, stage + 8, 0x0101_0101 * (k + 1));
+        set(e, stages + 4 * k, stage);
+    }
+    set(e, pass + 0x24, stages);
+    set(e, 0x0126_f74c, pass);
+    let light = e.mem.alloc(0x110);
+    set(e, light + 0x10c, 0x0d0d_0000);
+    let lights = e.mem.alloc(4);
+    set(e, lights, light);
+    let record = e.mem.alloc(0x10);
+    set(e, record + 0xc, lights);
+    set(e, 0x011f_91e0, record);
+    vec![this, state]
+}
+
+/// The tall grass shader's slot 0x78 (`00bac950`): no floats; the main thread's word.
+#[test]
+fn tall_grass_setup_textures() {
+    Diff::new(entry!(
+        0x00ba_c950,
+        engine_typed::draw::tall_grass::setup_textures(Ptr<_>, Ptr<_>)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(TALL_GRASS_TEXTURES)
+    .setup(tall_grass_textures_words)
+    .run()
+    .assert_same();
+}
+
+/// The instance copy's inputs: the instance count; the active count (all, one fewer, none); an
+/// instance entry or none.
+const TALL_GRASS_INSTANCES: &[Input] =
+    &[Input::Of(&[3, 0x101]), Input::Of(&[0, 1, 2]), Input::Flag];
+
+/// The tall grass's instance data at `data`: its geometry, `count` instances of a pattern, `active` of
+/// them active, one instance's triangles 0x2ab (so the 16-bit product wraps for large counts), the
+/// wind's speed `speed`; the geometry's model data has 0x1234 triangles and its slot 0xa4 stood in.
+fn grass_instances(e: &mut Engine, geometry: u32, count: u32, active: u32, speed: u32) -> u32 {
+    let vt = vtable(e, &[]);
+    let model = obj(e, 0x60, vt);
+    e.mem.set_u16(model + 0x40, 0x1234);
+    set(e, model + 0x34, 0x0bbf_0000);
+    set(e, geometry + 0xb8, model);
+    let shape = e.mem.alloc(0x40);
+    e.mem.set_u16(shape + 0x34, 0x2ab);
+    let source = e.mem.alloc(count * 0x10);
+    for i in 0..count * 4 {
+        set(e, source + 4 * i, 0x1000_0000 + i);
+    }
+    let data = e.mem.alloc(0x40);
+    set(e, data, geometry);
+    set(e, data + 8, shape);
+    e.mem.set_u16(data + 0x10, count as u16);
+    e.mem.set_u16(data + 0x12, active as u16);
+    set(e, data + 0x14, source);
+    set(e, data + 0x34, speed);
+    data
+}
+
+/// The instance copy's words: the shader with its instance array and entry (or none), the property's
+/// instance data ([`grass_instances`]).
+fn tall_grass_instances_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let _ = world(e);
+    let count = c.word(0);
+    let active = match c.word(1) {
+        0 => count,
+        1 => count - 1,
+        _ => 0,
+    };
+    let vt = vtable(e, &[]);
+    let this = obj(e, 0x1e0, vt);
+    let array = e.mem.alloc(count * 0x10);
+    set(e, this + 0x1a4, array);
+    if c.word(2) != 0 {
+        let entry = e.mem.alloc(0x30);
+        set(e, this + 0x1a8, entry);
+    }
+    let geometry = e.mem.alloc(0xc0);
+    let data = grass_instances(e, geometry, count, active, ONE);
+    let property = obj(e, 0x80, vt);
+    set(e, property + 0x7c, data);
+    vec![this, 0x0bad_0001, property]
+}
+
+/// The tall grass's instance copy (`00baaf40`): no floats; the main thread's word. The copy is the CRT
+/// family's `_memcpy` (its own tests), by address here.
+#[test]
+fn tall_grass_copy_instances() {
+    Diff::new(entry!(
+        0x00ba_af40,
+        engine_typed::draw::tall_grass::copy_instances(Ptr<_>, u32, Ptr<_>)
+    ))
+    .common()
+    .goes_by_address(&[0x00ec_44d0])
+    .main_thread(0)
+    .inputs(TALL_GRASS_INSTANCES)
+    .setup(tall_grass_instances_words)
+    .run()
+    .assert_same();
+}
+
+/// The tall grass's slot 0x7c's inputs: its `SetupGeometry` slot the real one or a stand-in; full
+/// bright; an alpha property or none; the game time and the wind's speed (play's floats: the phase
+/// below or past the cycle, NaN, infinities); the property's bit 0x800; HDR; the shader level; the
+/// shadows (on, skipped, without textures, the flag off) and their fade (0.5 truncates to 0, 1.5 to 1,
+/// -1.5 to -1, a NaN and 2^64 to the indefinite, whose low word is 0); the constant maps (none,
+/// stand-ins, empty real ones with one program).
+const TALL_GRASS_CONSTANTS: &[Input] = &[
+    Input::Flag,
+    Input::Flag,
+    Input::Flag,
+    Input::F32,
+    Input::F32Swept(0x4040_0000),
+    Input::Flag,
+    Input::Flag,
+    Input::Of(&[1, 2, 3]),
+    Input::Of(&[0, 1, 2, 3]),
+    Input::Of(&[HALF, 0x3fc0_0000, 0xbfc0_0000, 0x7fc0_0000, 0x5f80_0000]),
+    Input::Of(&[0, 1, 2]),
+];
+
+/// A float as play has it, an infinity (never one there) made 2^24 of its sign: an infinite wind phase
+/// would take the CRT's `fmod` into its error path, which the tests' memory doesn't hold.
+fn finite(bits: u32) -> u32 {
+    if bits & 0x7fff_ffff == 0x7f80_0000 {
+        (bits & 0x8000_0000) | 0x4b80_0000
+    } else {
+        bits
+    }
+}
+
+/// The tall grass's slot 0x7c's words: the world's renderer as the shader's; the rendered geometry
+/// (a transform, a bound, a skin word, its model data's buffers) with a property of kind 1 (so the real
+/// `SetupGeometry` stops after its up axis) whose instance data has the case's wind speed; the exe's
+/// constants (255, 3600 and the cycle, `double`s); the frame's values from the case; the constant maps
+/// as the case says (a real map is `NiD3DShaderConstantMap`'s `SetShaderConstants` with no entries, which
+/// keeps the program).
+fn tall_grass_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let w = world(e);
+    matrix_inverse_stand_in(e);
+    e.map(0x0120_0000, 0x1000);
+    e.map(0x0104_e000, 0x1000);
+    for (addr, value) in [
+        (0x0101_2640u32, 3600.0f64.to_bits()),
+        (0x0104_eea0, 0x4019_21fa_0000_0000),
+        (0x0101_e568, 255.0f64.to_bits()),
+    ] {
+        e.mem.set_u64(addr, value);
+    }
+    e.register(VT_FN + 0x60, |_, _| ret(0));
+    e.register(0x00e8_07d0, |_, _| ret(0x4242));
+    let shader_vt = if c.word(0) != 0 {
+        vtable(e, &[(0x60, 0x00ba_ac10)])
+    } else {
+        vtable(e, &[])
+    };
+    let this = obj(e, 0x1e0, shader_vt);
+    set(e, this + 0x18, w.renderer);
+    let array = e.mem.alloc(0x30);
+    set(e, this + 0x1a4, array);
+    let entry = e.mem.alloc(0x30);
+    set(e, this + 0x1a8, entry);
+    // The rendered geometry: a transform (a small rotation, a translation, scale 2), a bound, a skin
+    // word.
+    let geometry = e.mem.alloc(0xc0);
+    let words = [
+        0x3f7e_8a6e,
+        0xbdcc_6c67,
+        0,
+        0x3dcc_6c67,
+        0x3f7e_8a6e,
+        0,
+        0,
+        0,
+        ONE,
+        0x40a0_0000,
+        0x40c0_0000,
+        0x40e0_0000,
+        TWO,
+    ];
+    for (i, v) in (0u32..).zip(words) {
+        set(e, geometry + 0x68 + 4 * i, v);
+    }
+    let bound = e.mem.alloc(0x10);
+    set(e, geometry + 0x20, bound);
+    set(e, geometry + 0xbc, 0x5c1d_0000);
+    let record = e.mem.alloc(0x10);
+    set(e, record, geometry);
+    set(e, 0x011f_91e0, record);
+    set(e, 0x011f_91e4, 0x31);
+    let data = grass_instances(e, geometry, 3, 2, finite(play_bits(c, 4)));
+    let vt = vtable(e, &[]);
+    let property = obj(e, 0x80, vt);
+    set(e, property + 0x1c, 1);
+    set(
+        e,
+        property + 0x24,
+        if c.word(5) != 0 { 0x0800 } else { 0x0400 },
+    );
+    set(e, property + 0x7c, data);
+    let state = e.mem.alloc(0x10);
+    set(e, state + 0xc, property);
+    if c.word(2) != 0 {
+        let alpha = obj(e, 0x20, vt);
+        e.mem.set_u16(alpha + 0x18, 0x1aed);
+        e.mem.set_u8(alpha + 0x1a, 0x80);
+        set(e, state, alpha);
+    }
+    // The frame's values.
+    e.mem.set_u8(0x011f_91a7, c.word(1) as u8);
+    for (k, v) in (0u32..).zip([0x3e80_0000, HALF, 0x3f40_0000, ONE]) {
+        set(e, 0x011f_9ee0 + 4 * k, v);
+        set(e, 0x011a_9bd0 + 4 * k, v ^ 0x0000_0101);
+    }
+    set(e, 0x011f_940c, finite(play_bits(c, 3)));
+    e.mem.set_u8(0x011f_941e, c.word(6) as u8);
+    set(e, 0x011f_9188, 0x3fa0_0000);
+    set(e, 0x011f_91c0, c.word(7));
+    let shadows = c.word(8);
+    e.mem.set_u8(0x011f_9427, u8::from(shadows == 1));
+    set(e, 0x011f_95e4, u32::from(shadows != 2));
+    e.mem
+        .set_u8(0x011f_91d8, if shadows == 3 { 0x1f } else { 0x3f });
+    set(e, 0x011f_d890, c.word(9));
+    for (k, at) in (0u32..).zip([0x011f_d874u32, 0x011f_d878, 0x011a_dce0, 0x011f_d880]) {
+        set(e, at, 0x3d00_0000 + k);
+    }
+    // The current pass's programs and the shader's constant maps.
+    let pass = e.mem.alloc(0x60);
+    set(e, 0x0126_f74c, pass);
+    match c.word(10) {
+        0 => {}
+        1 => {
+            set(e, pass + 0x44, 0x0b0b_0044);
+            set(e, pass + 0x5c, 0x0b0b_005c);
+            for at in [0x30u32, 0x34] {
+                let map = obj(e, 0x40, vt);
+                set(e, this + at, map);
+            }
+        }
+        _ => {
+            set(e, pass + 0x44, 0x0b0b_0044);
+            let map_vt = vtable(e, &[(0x78, 0x00e8_26d0)]);
+            for at in [0x30u32, 0x34] {
+                let map = obj(e, 0x40, map_vt);
+                set(e, this + at, map);
+            }
+        }
+    }
+    vec![this, state]
+}
+
+/// The tall grass shader's slot 0x7c (`00bac9c0`): main-thread code (`f32`; the steps with a `double`
+/// constant in `f64`, rounded once, and with the exe's constants, which have 24 significant bits or
+/// fewer, that is one rounding as the x87's) on the main thread's word, bit for bit (NaN payloads
+/// aside), with play's floats. Its `SetupGeometry`, the instance copy, the CRT's `_CIfmod` and
+/// `_memcpy` run by address here (their own tests); the instance copy is a plain call in the
+/// translation. So do the shader family's ([`Common::shader_translated`]).
+#[test]
+fn tall_grass_setup_constants() {
+    Diff::new(entry!(
+        0x00ba_c9c0,
+        engine_typed::draw::tall_grass::setup_constants(Ptr<_>, Ptr<_>)
+    ))
+    .shader_translated()
+    .goes_by_address(&[0x00ba_ac10, 0x00ba_af40, 0x00ec_913a, 0x00ec_44d0])
+    .translation_calls_plainly(&[0x00ba_af40])
+    .main_thread(0)
+    .inputs(TALL_GRASS_CONSTANTS)
+    .float_sweep(FLOAT_SWEEP)
+    // Without an alpha property the alpha function's read of its flags stops (the exe tests it for
+    // null only for the alpha row): below shader level 2 or without HDR.
+    .expect_stops(|c| c.word(2) == 0 && (c.word(7) < 2 || c.word(6) == 0))
+    .setup(tall_grass_constants_words)
+    .run()
+    .assert_same();
+}
+
+// ---- Group C: the no-lighting shader (the draw family's `no_lighting`) ----
+
+/// The no-lighting shader for these tests: its passes (+0x6c to +0xe0) and declarations (+0x184 to
+/// +0x1b0) marked, each declaration a counted object; its entries +0x170, +0x174 and +0x178; the world's
+/// renderer as its own (+0x18).
+fn no_lighting_shader(e: &mut Engine, w: &W) -> u32 {
+    let vt = vtable(e, &[]);
+    let shader = obj(e, 0x1b4, vt);
+    set(e, shader + 0x18, w.renderer);
+    for at in (0x6cu32..=0xe0).step_by(4) {
+        set(e, shader + at, 0x0a55_0000 + at);
+    }
+    for at in (0x184u32..=0x1b0).step_by(4) {
+        let declaration = obj(e, 0x10, vt);
+        set(e, declaration + 4, 1);
+        set(e, shader + at, declaration);
+    }
+    for at in [0x170u32, 0x174, 0x178] {
+        let entry = e.mem.alloc(0x30);
+        e.mem.set_u8(entry + 8, 0x77);
+        set(e, shader + at, entry);
+    }
+    shader
+}
+
+/// The no-lighting pass choice's pass types: each of the exe's jump tables' cases, the default inside
+/// the second table, and either side of each range.
+const NO_LIGHTING_PASSES: &[u32] = &[
+    0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x50,
+    0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x2db, 0x2dc, 0x2dd, 0x2de, 0x2e2, 0x2e3,
+    0x2e4, 0x2e8, 0x2e9, 0x2ee, 0x2ef, 0x2f0,
+];
+
+/// The no-lighting shader's pass choice (`00bc6970`): every pass type of its tables, with the counted
+/// pointer +0x28 empty, holding an object counted once (released and deleted when cleared) or twice.
+#[test]
+fn no_lighting_select_pass() {
+    Diff::new(entry!(
+        0x00bc_6970,
+        engine_typed::draw::no_lighting::select_pass(Ptr<_>, u32)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(&[Input::Of(NO_LIGHTING_PASSES), Input::Of(&[0, 1, 2])])
+    .max_cases(200)
+    .setup(|e, c| {
+        let w = world(e);
+        let shader = no_lighting_shader(e, &w);
+        if c.word(1) != 0 {
+            let vt = vtable(e, &[]);
+            let held = obj(e, 0x10, vt);
+            set(e, held + 4, c.word(1));
+            set(e, shader + 0x28, held);
+        }
+        vec![shader, c.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The no-lighting fog's inputs: the pass type (around each switch's range); the fog property (none,
+/// its distances both 0.0, the case's); its far and near distances (play's floats).
+const NO_LIGHTING_FOG: &[Input] = &[
+    Input::Of(&[0x49, 0x4a, 0x51, 0x52, 0x55, 0x56, 0x57, 0x58]),
+    Input::Of(&[0, 1, 2]),
+    Input::F32,
+    Input::F32Swept(0x4120_0000),
+];
+
+/// The no-lighting fog's words: the shader; the scene's fog property (shadow scene node 2's, the fog
+/// index 2) with a colour and a power, its distances as the case says; the default far distance and
+/// the fog colour.
+fn no_lighting_fog_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let w = world(e);
+    e.map(0x0120_2000, 0x1000);
+    e.map(0x010a_d000, 0x1000);
+    let shader = no_lighting_shader(e, &w);
+    let fog = if c.word(1) != 0 {
+        let fog = e.mem.alloc(0x80);
+        for (k, v) in (0u32..).zip([0x3e00_0000, 0x3e80_0000, 0x3f00_0000]) {
+            set(e, fog + 0x20 + 4 * k, v);
+        }
+        set(e, fog + 0x60, 0x4040_0000);
+        if c.word(1) == 2 {
+            set(e, fog + 0x30, play_bits(c, 2));
+            set(e, fog + 0x2c, play_bits(c, 3));
+        }
+        fog
+    } else {
+        0
+    };
+    let node = e.mem.alloc(0x140);
+    set(e, node + 0x134, fog);
+    set(e, 0x011f_91c8 + 8, node);
+    e.mem.set_u8(0x011f_91c4, 2);
+    set(e, 0x010a_d6e0, 0x4680_0000);
+    for k in 0..4u32 {
+        set(e, 0x011a_9bd0 + 4 * k, 0x3d00_0000 + k);
+    }
+    vec![shader, c.word(0)]
+}
+
+/// The no-lighting shader's slot 0xfc (`00bc6de0`): main-thread code (`f32`) on the main thread's
+/// word, bit for bit (NaN payloads aside), with play's floats. The fog property's getter is the draw
+/// family's (its own test), by address here.
+#[test]
+fn no_lighting_setup_fog() {
+    Diff::new(entry!(
+        0x00bc_6de0,
+        engine_typed::draw::no_lighting::setup_fog(Ptr<_>, u32)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(NO_LIGHTING_FOG)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(no_lighting_fog_words)
+    .run()
+    .assert_same();
+}
+
+/// The no-lighting shader's sub-texture copy (`00bc6fa0`): no, one or five entries. No floats; the
+/// main thread's word. The copy is the CRT family's `_memcpy` (its own tests), by address here.
+#[test]
+fn no_lighting_copy_subtextures() {
+    Diff::new(entry!(
+        0x00bc_6fa0,
+        engine_typed::draw::no_lighting::copy_subtextures(Ptr<_>, Ptr<_>, u32)
+    ))
+    .common()
+    .goes_by_address(&[0x00ec_44d0])
+    .main_thread(0)
+    .inputs(&[Input::Of(&[0, 1, 5])])
+    .setup(|e, c| {
+        let w = world(e);
+        e.map(0x0120_2000, 0x1000);
+        let shader = no_lighting_shader(e, &w);
+        let count = c.word(0);
+        let entries = e.mem.alloc(0x50);
+        for i in 0..0x14u32 {
+            set(e, entries + 4 * i, 0x5b00_0000 + i);
+        }
+        let data = e.mem.alloc(0x70);
+        set(e, data + 0x68, entries);
+        e.mem.set_u8(data + 0x6c, count as u8);
+        let geometry = e.mem.alloc(0xc0);
+        set(e, geometry + 0xb8, data);
+        vec![shader, geometry, 0x0bad_0002]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The material constants' inputs: the property's alpha; the material's colour through its pointer or
+/// its own; the colour (play's floats; green and blue below 0.1 unless swept); HDR; the scale; the
+/// neutral colour equal to the colour as the exe leaves it or not.
+const NO_LIGHTING_MATERIAL: &[Input] = &[
+    Input::F32,
+    Input::Flag,
+    Input::F32,
+    Input::F32Swept(0x3d4c_cccd),
+    Input::F32Swept(0x3ca3_d70a),
+    Input::Flag,
+    Input::F32Swept(0x4000_0000),
+    Input::Flag,
+];
+
+/// The material constants' words: the property's alpha, the material's colour (through its pointer or
+/// its own) and scale, HDR, the exe's 0.1 (`0101ffa0`), the neutral colour (the colour as the exe
+/// scales it, worked out in `f32`, or another) and the replacement colour.
+fn no_lighting_material_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let w = world(e);
+    e.map(0x0120_2000, 0x1000);
+    e.mem.set_u64(0x0101_ffa0, 0x3fb9_9999_a000_0000);
+    let shader = no_lighting_shader(e, &w);
+    let vt = vtable(e, &[]);
+    let property = obj(e, 0x80, vt);
+    set(e, property + 0x28, play_bits(c, 0));
+    let material = e.mem.alloc(0x48);
+    let colour = [play_bits(c, 2), play_bits(c, 3), play_bits(c, 4)];
+    let at = if c.word(1) != 0 {
+        let own = e.mem.alloc(0x10);
+        set(e, material + 0x34, own);
+        own
+    } else {
+        material + 0x28
+    };
+    for (k, v) in (0u32..).zip(colour) {
+        set(e, at + 4 * k, v);
+    }
+    let scale = play_bits(c, 6);
+    set(e, material + 0x40, scale);
+    let hdr = c.word(5) != 0;
+    e.mem.set_u8(0x011f_941e, u8::from(hdr));
+    let values = colour.map(f32::from_bits);
+    let scaled = hdr || values.iter().all(|v| f64::from(0.1f32) > f64::from(*v));
+    let left = if scaled {
+        values.map(|v| v * f32::from_bits(scale))
+    } else {
+        values
+    };
+    for k in 0..3u32 {
+        let neutral = if c.word(7) != 0 {
+            left[k as usize].to_bits()
+        } else {
+            0x3f00_0000 + k
+        };
+        set(e, 0x011f_4998 + 4 * k, neutral);
+        set(e, 0x011a_9b7c + 4 * k, 0x3e00_0000 + k);
+    }
+    vec![shader, property, material]
+}
+
+/// The no-lighting material constants (`00bc6fe0`): main-thread code (`f32`; the comparisons with the
+/// exe's `double` 0.1 in `f64`, exact) on the main thread's word, bit for bit (NaN payloads aside), with
+/// play's floats.
+#[test]
+fn no_lighting_material_constants() {
+    Diff::new(entry!(
+        0x00bc_6fe0,
+        engine_typed::draw::no_lighting::material_constants(Ptr<_>, Ptr<_>, Ptr<_>)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(NO_LIGHTING_MATERIAL)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(no_lighting_material_words)
+    .run()
+    .assert_same();
+}
+
+/// The light fog's inputs: the pass type (either side of 0x2d8 to 0x2ef); the light's direction and
+/// colour, the fog's offset and far value (play's floats).
+const NO_LIGHTING_LIGHT_FOG: &[Input] = &[
+    Input::Of(&[0x2d7, 0x2d8, 0x2e5, 0x2ef, 0x2f0]),
+    Input::F32,
+    Input::F32Swept(0x3f00_0000),
+    Input::F32Swept(0xbf40_0000),
+    Input::F32,
+    Input::F32Swept(0x3f20_0000),
+    Input::F32Swept(0x3e80_0000),
+    Input::F32Swept(0x3dcc_cccd),
+    Input::F32Swept(0x4680_0000),
+];
+
+/// The no-lighting light fog (`00bc7100`): main-thread code (`f32`, the dot product in the exe's order)
+/// on the main thread's word, bit for bit (NaN payloads aside), with play's floats.
+#[test]
+fn no_lighting_light_fog() {
+    Diff::new(entry!(
+        0x00bc_7100,
+        engine_typed::draw::no_lighting::light_fog(Ptr<_>)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(NO_LIGHTING_LIGHT_FOG)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(|e, c| {
+        let w = world(e);
+        e.map(0x0120_2000, 0x1000);
+        let shader = no_lighting_shader(e, &w);
+        set(e, 0x011f_91e4, c.word(0));
+        for k in 0..3u32 {
+            set(e, 0x011f_a2a0 + 4 * k, play_bits(c, 1 + k as usize));
+            set(e, 0x011f_9604 + 4 * k, play_bits(c, 4 + k as usize));
+        }
+        set(e, 0x011f_9610, play_bits(c, 7));
+        set(e, 0x011f_9618, play_bits(c, 8));
+        vec![shader]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The texture matrix's inputs: the state's texturing property (none, no first map, a map without a
+/// transform, a transform as it is, a transform marked changed).
+const NO_LIGHTING_TEXTURE_MATRIX: &[Input] = &[Input::Of(&[0, 1, 2, 3, 4])];
+
+/// The no-lighting texture matrix (`00bc8e00`): no arithmetic; the main thread's word. The transform's
+/// update (`00a88cd0`) is stood in: a mark in its matrix, the changed byte cleared.
+#[test]
+fn no_lighting_texture_matrix() {
+    Diff::new(entry!(
+        0x00bc_8e00,
+        engine_typed::draw::no_lighting::texture_matrix(Ptr<_>, Ptr<_>)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(NO_LIGHTING_TEXTURE_MATRIX)
+    .setup(|e, c| {
+        let w = world(e);
+        e.map(0x0120_1000, 0x2000);
+        e.register(0x00a8_8cd0, |e, a| {
+            e.mem.set_u32(a[0] + 0x20, 0x3f80_0001);
+            e.mem.set_u8(a[0] + 0x1c, 0);
+            ret(0)
+        });
+        let shader = no_lighting_shader(e, &w);
+        let state = e.mem.alloc(0x18);
+        let kind = c.word(0);
+        if kind != 0 {
+            let texturing = e.mem.alloc(0x30);
+            let maps = e.mem.alloc(8);
+            set(e, texturing + 0x20, maps);
+            if kind >= 2 {
+                let map = e.mem.alloc(0x10);
+                set(e, maps, map);
+                if kind >= 3 {
+                    let transform = e.mem.alloc(0x50);
+                    for i in 0..9u32 {
+                        set(e, transform + 0x20 + 4 * i, 0x3e00_0000 + 0x10_0000 * i);
+                    }
+                    e.mem.set_u8(transform + 0x1c, u8::from(kind == 4));
+                    set(e, map + 0xc, transform);
+                }
+            }
+            set(e, state + 0x14, texturing);
+        }
+        vec![shader, state]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The no-lighting shader's slot 0x78 (`00bc8d40`): no stage 0, or a stage with the property's texture
+/// (none or one) and its clamp mode (the property's slot 0xcc). No floats; the main thread's word. The
+/// stage's address modes are the shader family's; its bind (the render family's) stands in, a mark of
+/// its words.
+#[test]
+fn no_lighting_setup_textures() {
+    Diff::new(entry!(
+        0x00bc_8d40,
+        engine_typed::draw::no_lighting::setup_textures(Ptr<_>, Ptr<_>)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(&[
+        Input::Flag,
+        Input::Of(&[0, 0x7e57_0000]),
+        Input::Of(&[0, 1, 2]),
+    ])
+    .setup(|e, c| {
+        let w = world(e);
+        e.register(0x00e7_eb00, marked);
+        e.register(VT_FN + 0xb4, slot_answer::<0xb4>);
+        set(e, RETS + 0xb4, c.word(1));
+        set(e, RETS + 0xcc, c.word(2));
+        let shader = no_lighting_shader(e, &w);
+        let vt = vtable(e, &[]);
+        let property = obj(e, 0x80, vt);
+        let state = e.mem.alloc(0x18);
+        set(e, state + 0xc, property);
+        let pass = e.mem.alloc(0x60);
+        let stages = e.mem.alloc(8);
+        set(e, stages, if c.word(0) != 0 { w.stage } else { 0 });
+        set(e, pass + 0x24, stages);
+        set(e, 0x0126_f74c, pass);
+        vec![shader, state]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The no-lighting geometry constants' inputs: a skin or none; the pass type (the sub-textures' range,
+/// the falloff's zero types, others); the property's flags +0x20 (bit 0x40, bit 31) and +0x24 (bit 0);
+/// the alpha property (none, its flags field 0, 1, 2); the state's fifth property (none, flag 0 clear
+/// or set); the constant maps (none, stand-ins).
+const NO_LIGHTING_CONSTANTS: &[Input] = &[
+    Input::Flag,
+    Input::Of(&[0x42, 0x52, 0x56, 0x57, 0x2d8]),
+    Input::Of(&[0, 0x40, 0x8000_0000, 0x8000_0040]),
+    Input::Flag,
+    Input::Of(&[0, 1, 2, 3]),
+    Input::Of(&[0, 1, 2]),
+    Input::Flag,
+];
+
+/// The no-lighting geometry constants' words: the shader; the rendered geometry (a transform, a bound,
+/// a skin word, its model data's buffers and sub-textures); the state's properties as the case says
+/// (the material with its own colour); the skinned origin; `NiTransform::MakeIdentity` stood in (an
+/// identity into its frame).
+fn no_lighting_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let w = world(e);
+    e.map(0x0120_1000, 0x2000);
+    e.register(0x00a8_6bf0, |e, a| {
+        for (i, v) in (0u32..).zip([ONE, 0, 0, 0, ONE, 0, 0, 0, ONE, 0, 0, 0, ONE]) {
+            e.mem.set_u32(a[0] + 4 * i, v);
+        }
+        ret(a[0])
+    });
+    let shader = no_lighting_shader(e, &w);
+    let vt = vtable(e, &[]);
+    let target = obj(e, 0x10, vt);
+    set(e, shader + 0x1c, target);
+    let geometry = e.mem.alloc(0xc0);
+    for (i, v) in (0u32..).zip([
+        ONE,
+        0,
+        0,
+        0,
+        ONE,
+        0,
+        0,
+        0,
+        ONE,
+        0x40a0_0000,
+        0x40c0_0000,
+        0x40e0_0000,
+        ONE,
+    ]) {
+        set(e, geometry + 0x68 + 4 * i, v);
+    }
+    let bound = e.mem.alloc(0x10);
+    set(e, geometry + 0x20, bound);
+    if c.word(0) != 0 {
+        set(e, geometry + 0xbc, 0x5c1d_0000);
+    }
+    let data = e.mem.alloc(0x70);
+    set(e, data + 0x34, 0x0bbf_0000);
+    let entries = e.mem.alloc(0x20);
+    set(e, data + 0x68, entries);
+    e.mem.set_u8(data + 0x6c, 2);
+    set(e, geometry + 0xb8, data);
+    let record = e.mem.alloc(0x10);
+    set(e, record, geometry);
+    set(e, 0x011f_91e0, record);
+    set(e, 0x011f_91e4, c.word(1));
+    for k in 0..3u32 {
+        set(e, 0x011f_474c + 4 * k, 0x4100_0000 + 0x10_0000 * k);
+    }
+    let property = obj(e, 0x80, vt);
+    set(e, property + 0x20, c.word(2));
+    set(e, property + 0x24, c.word(3));
+    set(e, property + 0x28, HALF);
+    for k in 0..4u32 {
+        set(e, property + 0x70 + 4 * k, 0x3f10_0000 + k);
+    }
+    let material = e.mem.alloc(0x48);
+    for (k, v) in (0u32..).zip([HALF, 0x3e80_0000, ONE]) {
+        set(e, material + 0x28 + 4 * k, v);
+    }
+    set(e, material + 0x40, ONE);
+    let state = e.mem.alloc(0x18);
+    set(e, state + 8, material);
+    set(e, state + 0xc, property);
+    if c.word(4) != 0 {
+        let alpha = obj(e, 0x20, vt);
+        let field = [0u16, 1, 2][c.word(4) as usize - 1];
+        e.mem.set_u16(alpha + 0x18, field << 5);
+        set(e, state, alpha);
+    }
+    if c.word(5) != 0 {
+        let other = obj(e, 0x20, vt);
+        e.mem.set_u16(other + 0x18, (c.word(5) - 1) as u16);
+        set(e, state + 0x10, other);
+    }
+    let pass = e.mem.alloc(0x60);
+    set(e, 0x0126_f74c, pass);
+    if c.word(6) != 0 {
+        set(e, pass + 0x44, 0x0b0b_0044);
+        set(e, pass + 0x5c, 0x0b0b_005c);
+        for at in [0x30u32, 0x34] {
+            let map = obj(e, 0x40, vt);
+            set(e, shader + at, map);
+        }
+    }
+    vec![shader, state]
+}
+
+/// `BSShaderNoLighting::SetupGeometryConstants` (`00bc9a50`): the main thread's word, bit for bit (NaN
+/// payloads aside). Its helpers (the sub-textures, the texture matrix, the light fog, the material
+/// constants: their own tests above) are plain calls in the translation and run by address here; so do
+/// `_memcpy` and the stage bind. So do the shader family's ([`Common::shader_translated`]).
+#[test]
+fn no_lighting_setup_constants() {
+    Diff::new(entry!(
+        0x00bc_9a50,
+        engine_typed::draw::no_lighting::setup_constants(Ptr<_>, Ptr<_>)
+    ))
+    .shader_translated()
+    .goes_by_address(&[
+        0x00bc_6fa0,
+        0x00bc_8e00,
+        0x00bc_7100,
+        0x00bc_6fe0,
+        0x00ec_44d0,
+    ])
+    .translation_calls_plainly(&[0x00bc_6fa0, 0x00bc_8e00, 0x00bc_7100, 0x00bc_6fe0])
+    .main_thread(0)
+    .inputs(NO_LIGHTING_CONSTANTS)
+    .setup(no_lighting_constants_words)
+    .run()
+    .assert_same();
+}
+
+// ---- Group C: the sky shader (the draw family's `sky`) ----
+
+/// A second texture stage like the world's (`w.stage`): stage 1, the same stage cache.
+fn second_stage(e: &mut Engine, w: &W) -> u32 {
+    let stage = e.mem.alloc(0x14);
+    set(e, stage + 4, 2);
+    let cache = e.mem.u32(w.stage + 0x10);
+    set(e, stage + 0x10, cache);
+    stage
+}
+
+/// The sky's slot 0x78's inputs: the property's first and second textures (none or one); the pass type
+/// (the six that take the first texture twice, and others); a stage 1 or none; the property's clamp
+/// mode.
+const SKY_TEXTURES: &[Input] = &[
+    Input::Of(&[0, 0x7e57_0070]),
+    Input::Of(&[0, 0x7e57_0080]),
+    Input::Of(&[0x2d4, 0x23c, 0x23a, 0x2d2, 0x23d, 0x23e, 0x2d3, 0x30]),
+    Input::Flag,
+    Input::Of(&[0, 2]),
+];
+
+/// The sky shader's slot 0x78 (`00b89cc0`): no floats; the main thread's word. The stages' address
+/// modes are the shader family's; their bind (the render family's) stands in, a mark of its words.
+#[test]
+fn sky_setup_textures() {
+    Diff::new(entry!(
+        0x00b8_9cc0,
+        engine_typed::draw::sky::setup_textures(Ptr<_>, Ptr<_>)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(SKY_TEXTURES)
+    .max_cases(200)
+    .setup(|e, c| {
+        let w = world(e);
+        e.register(0x00e7_eb00, marked);
+        set(e, RETS + 0xcc, c.word(4));
+        set(e, 0x011f_91e4, c.word(2));
+        let vt = vtable(e, &[]);
+        let shader = obj(e, 0xf0, vt);
+        let property = obj(e, 0x90, vt);
+        set(e, property + 0x70, c.word(0));
+        set(e, property + 0x80, c.word(1));
+        let state = e.mem.alloc(0x18);
+        set(e, state + 0xc, property);
+        let pass = e.mem.alloc(0x60);
+        let stages = e.mem.alloc(8);
+        set(e, stages, w.stage);
+        if c.word(3) != 0 {
+            let stage = second_stage(e, &w);
+            set(e, stages + 4, stage);
+        }
+        set(e, pass + 0x24, stages);
+        set(e, 0x0126_f74c, pass);
+        vec![shader, state]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The sky's slot 0x7c's inputs: the held accumulator skips type 13 or not; it has a camera or not; the
+/// pass type (5 and another); the property's kind (each of the exe's switch's ways); HDR; the sun's x
+/// and the origin's x, the sky's height (play's floats); the constant maps (none, stand-ins); the
+/// state's fifth property (none, flag 0 clear or set).
+const SKY_CONSTANTS: &[Input] = &[
+    Input::Flag,
+    Input::Flag,
+    Input::Of(&[5, 6]),
+    Input::Of(&[0, 1, 2, 3, 4, 6, 8]),
+    Input::Flag,
+    Input::F32,
+    Input::F32Swept(0x4500_0000),
+    Input::F32Swept(0x4396_0000),
+    Input::Flag,
+    Input::Of(&[0, 1, 2]),
+];
+
+/// The sky's slot 0x7c's words: the world's renderer as the shader's; the rendered geometry (a
+/// transform with a translation, a bound, a skin word, its model data's buffers); the held accumulator
+/// (`011f95f0`) with the case's byte +0x164 and camera; the scene camera (`011f95d8`); the sun, the origin,
+/// the sky's height and the exe's 7.0; the property (its kind, value, blend index, four colours); the
+/// blend values, the sky colours, the HDR value; the maps and the fifth property as the case says.
+fn sky_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let w = world(e);
+    e.mem.set_u64(0x0101_5a40, 7.0f64.to_bits());
+    let vt = vtable(e, &[]);
+    let shader = obj(e, 0xf0, vt);
+    set(e, shader + 0x18, w.renderer);
+    let target = obj(e, 0x10, vt);
+    set(e, shader + 0x1c, target);
+    let geometry = e.mem.alloc(0xc0);
+    for (i, v) in (0u32..).zip([
+        ONE,
+        0,
+        0,
+        0,
+        ONE,
+        0,
+        0,
+        0,
+        ONE,
+        0x4580_0000,
+        0xc520_0000,
+        0x4400_0000,
+        ONE,
+    ]) {
+        set(e, geometry + 0x68 + 4 * i, v);
+    }
+    let bound = e.mem.alloc(0x10);
+    set(e, geometry + 0x20, bound);
+    set(e, geometry + 0xbc, 0x5c1d_0000);
+    let data = e.mem.alloc(0x40);
+    set(e, data + 0x34, 0x0bbf_0000);
+    set(e, geometry + 0xb8, data);
+    let record = e.mem.alloc(0x10);
+    set(e, record, geometry);
+    set(e, 0x011f_91e0, record);
+    set(e, 0x011f_91e4, c.word(2));
+    let acc = e.mem.alloc(0x1ac);
+    e.mem.set_u8(acc + 0x164, c.word(0) as u8);
+    if c.word(1) != 0 {
+        let camera = e.mem.alloc(0xa0);
+        for (k, v) in (0u32..).zip([0x4480_0000, 0x4300_0000, 0xc2c8_0000]) {
+            set(e, camera + 0x8c + 4 * k, v);
+        }
+        set(e, acc + 8, camera);
+    }
+    set(e, 0x011f_95f0, acc);
+    let scene_camera = e.mem.alloc(0xa0);
+    for (k, v) in (0u32..).zip([0x4570_0000, 0xc500_0000, 0x4420_0000]) {
+        set(e, scene_camera + 0x8c + 4 * k, v);
+    }
+    set(e, 0x011f_95d8, scene_camera);
+    for (k, v) in (0u32..).zip([play_bits(c, 5), 0x4600_0000, 0x4680_0000]) {
+        set(e, 0x011f_a2a0 + 4 * k, v);
+    }
+    for (k, v) in (0u32..).zip([play_bits(c, 6), 0x4500_0000, 0x4300_0000]) {
+        set(e, 0x011f_474c + 4 * k, v);
+    }
+    set(e, 0x011f_f8a8, play_bits(c, 7));
+    let property = obj(e, 0x90, vt);
+    set(e, property + 0x8c, c.word(3));
+    set(e, property + 0x84, 0x3f40_0000);
+    e.mem.set_u16(property + 0x88, 2);
+    for k in 0..4u32 {
+        set(e, property + 0x60 + 4 * k, 0x3e00_0000 + k);
+    }
+    for k in 0..4u32 {
+        set(e, 0x011f_f8b4 + 4 * k, 0x3d00_0000 + k);
+    }
+    for k in 0..12u32 {
+        set(e, 0x011f_f8e0 + 4 * k, 0x3c00_0000 + k);
+        set(e, 0x011f_f910 + 4 * k, 0x7777_0000 + k);
+    }
+    e.mem.set_u8(0x011f_941e, c.word(4) as u8);
+    set(e, 0x011a_d87c, 0x3fc0_0000);
+    let state = e.mem.alloc(0x18);
+    set(e, state + 0xc, property);
+    if c.word(9) != 0 {
+        let other = obj(e, 0x20, vt);
+        e.mem.set_u16(other + 0x18, (c.word(9) - 1) as u16);
+        set(e, state + 0x10, other);
+    }
+    let pass = e.mem.alloc(0x60);
+    set(e, 0x0126_f74c, pass);
+    if c.word(8) != 0 {
+        set(e, pass + 0x44, 0x0b0b_0044);
+        set(e, pass + 0x5c, 0x0b0b_005c);
+        for at in [0x30u32, 0x34] {
+            let map = obj(e, 0x40, vt);
+            set(e, shader + at, map);
+        }
+    }
+    vec![shader, state]
+}
+
+/// The sky shader's slot 0x7c (`00b89d80`): main-thread code (`f32`; the height over the exe's 7.0 in
+/// `f64`, rounded once: 7.0 has three significant bits, so one rounding as the x87's) on the main
+/// thread's word, bit for bit (NaN payloads aside), with play's floats. The held accumulator's getter
+/// runs by address (a translation: one word). So do the shader family's
+/// ([`Common::shader_translated`]).
+#[test]
+fn sky_setup_constants() {
+    Diff::new(entry!(
+        0x00b8_9d80,
+        engine_typed::draw::sky::setup_constants(Ptr<_>, Ptr<_>)
+    ))
+    .shader_translated()
+    .main_thread(0)
+    .inputs(SKY_CONSTANTS)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(sky_constants_words)
+    .run()
+    .assert_same();
+}
+
+// ---- Group C: the water shader (the draw family's `water`) ----
+
+/// A current pass with `count` stages (each 0x10 bytes, its texture word marked), at `0126f74c`.
+fn pass_with_stages(e: &mut Engine, count: u32) -> u32 {
+    let pass = e.mem.alloc(0x60);
+    let stages = e.mem.alloc(4 * count);
+    for k in 0..count {
+        let stage = e.mem.alloc(0x10);
+        set(e, stage + 8, 0x0101_0101 * (k + 1));
+        set(e, stages + 4 * k, stage);
+    }
+    set(e, pass + 0x24, stages);
+    set(e, 0x0126_f74c, pass);
+    pass
+}
+
+/// The water's slot 0x78's inputs: the pass type (the two that only clear, another); the reflection and
+/// its switch (+0x80); the second rendered texture and its switch (+0x81); the third texture (+0x138);
+/// the fourth's switch (+0x60) and texture (+0x148); the fifth texture (+0x144) and its switch (+0x63).
+const WATER_TEXTURES: &[Input] = &[
+    Input::Of(&[0x288, 0x289, 0x30]),
+    Input::Of(&[0, 0x7e57_013c]),
+    Input::Flag,
+    Input::Of(&[0, 0x7e57_943c]),
+    Input::Flag,
+    Input::Of(&[0, 0x7e57_0138]),
+    Input::Flag,
+    Input::Of(&[0, 0x7e57_0148]),
+    Input::Of(&[0, 0x7e57_0144]),
+    Input::Flag,
+];
+
+/// The water shader's slot 0x78 (`00b863a0`): no floats; the main thread's word. `GetTexture` stands
+/// in: its answer from its words.
+#[test]
+fn water_setup_textures() {
+    Diff::new(entry!(
+        0x00b8_63a0,
+        engine_typed::draw::water::setup_textures(Ptr<_>, Ptr<_>)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(WATER_TEXTURES)
+    .max_cases(200)
+    .setup(|e, c| {
+        let _ = world(e);
+        e.register(VT_FN + 0x108, |_, _| ret(0));
+        e.register(0x004b_c320, |_, a| ret(a[0] ^ 0x5a5a_0000 ^ a[1]));
+        set(e, 0x011f_91e4, c.word(0));
+        set(e, 0x011f_9510, 0x0def_0000);
+        set(e, 0x011f_943c, c.word(3));
+        let vt = vtable(e, &[]);
+        let this = obj(e, 0x100, vt);
+        let property = obj(e, 0x150, vt);
+        set(e, property + 0x13c, c.word(1));
+        e.mem.set_u8(property + 0x80, c.word(2) as u8);
+        e.mem.set_u8(property + 0x81, c.word(4) as u8);
+        set(e, property + 0x138, c.word(5));
+        e.mem.set_u8(property + 0x60, c.word(6) as u8);
+        set(e, property + 0x148, c.word(7));
+        set(e, property + 0x144, c.word(8));
+        e.mem.set_u8(property + 0x63, c.word(9) as u8);
+        let state = e.mem.alloc(0x18);
+        set(e, state + 0xc, property);
+        pass_with_stages(e, 5);
+        vec![this, state]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The water's slot 0x7c's inputs: the pass type (the two stencil-only ones, the two with the third word
+/// 0, another); the property's switch +0x60; a fog property or none; the property's +0x104 (play's float:
+/// below 10, past it); the sun's x and a light's red (play's floats); the light list (none, one light,
+/// a null light then two); the light count (a small one, one past 2^31); the constant maps (none,
+/// stand-ins).
+const WATER_CONSTANTS: &[Input] = &[
+    Input::Of(&[0x288, 0x289, 0x29a, 0x2ab, 0x30]),
+    Input::Flag,
+    Input::Flag,
+    Input::F32,
+    Input::F32Swept(0x4500_0000),
+    Input::F32Swept(0x3f40_0000),
+    Input::Of(&[0, 1, 2]),
+    Input::Of(&[3, 0x8000_0001]),
+    Input::Flag,
+];
+
+/// The water's slot 0x7c's words: the world's renderer as the shader's; the rendered geometry; the
+/// water property (its colours, values, stencil, shade, the case's +0x104 and switch, a light list);
+/// the sun, the origin, the water system's values; the fog property of scene node 2; the exe's 10.0, 1.0
+/// and 2^32; the stencil state setters stood in (each a mark of its words).
+fn water_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let w = world(e);
+    e.map(0x0102_0000, 0x1000);
+    e.map(0x0109_9000, 0x1000);
+    e.mem.set_u64(0x0102_0758, 10.0f64.to_bits());
+    e.mem.set_u64(0x0101_2070, 1.0f64.to_bits());
+    set(e, 0x0109_9378, 0x4f80_0000);
+    for addr in [0x00b9_8180u32, 0x00b9_80c0, 0x00b9_8230] {
+        e.register(addr, marked);
+    }
+    let vt = vtable(e, &[]);
+    let this = obj(e, 0x100, vt);
+    set(e, this + 0x18, w.renderer);
+    let geometry = e.mem.alloc(0xc0);
+    for (i, v) in (0u32..).zip([
+        ONE,
+        0,
+        0,
+        0,
+        ONE,
+        0,
+        0,
+        0,
+        ONE,
+        0x4580_0000,
+        0xc520_0000,
+        0x4400_0000,
+        ONE,
+    ]) {
+        set(e, geometry + 0x68 + 4 * i, v);
+    }
+    let bound = e.mem.alloc(0x10);
+    set(e, geometry + 0x20, bound);
+    let data = e.mem.alloc(0x40);
+    set(e, data + 0x34, 0x0bbf_0000);
+    set(e, geometry + 0xb8, data);
+    let record = e.mem.alloc(0x10);
+    set(e, record, geometry);
+    set(e, 0x011f_91e0, record);
+    set(e, 0x011f_91e4, c.word(0));
+    for (k, v) in (0u32..).zip([play_bits(c, 4), 0x4600_0000, 0x4680_0000]) {
+        set(e, 0x011f_a2a0 + 4 * k, v);
+    }
+    for (k, v) in (0u32..).zip([0x4500_0000, 0x4300_0000, 0x4200_0000]) {
+        set(e, 0x011f_474c + 4 * k, v);
+    }
+    set(e, 0x011f_f108, 0x3e40_0000);
+    for k in 0..8u32 {
+        set(e, 0x011f_f398 + 4 * k, 0x3c80_0000 + k);
+    }
+    let property = obj(e, 0x150, vt);
+    for at in (0x6cu32..0x130).step_by(4) {
+        set(e, property + at, 0x3d00_0000 + at);
+    }
+    set(e, property + 0x104, play_bits(c, 3));
+    set(e, property + 0x84, 0x55);
+    e.mem.set_u8(property + 0x60, c.word(1) as u8);
+    e.mem.set_u8(property + 0x82, 0x33);
+    set(e, property + 0x130, c.word(7));
+    let lights = match c.word(6) {
+        0 => 0,
+        kind => {
+            let mut next = 0;
+            let count = if kind == 1 { 1 } else { 3 };
+            for n in 0..count {
+                let node = e.mem.alloc(0xc);
+                let light = if kind == 2 && n == 0 {
+                    0
+                } else {
+                    let light = e.mem.alloc(0xe4);
+                    for (k, offset) in (0u32..).zip([0x8cu32, 0x90, 0x94, 0xe0]) {
+                        set(e, light + offset, 0x4100_0000 + k + 0x10 * n);
+                    }
+                    set(e, light + 0xc4, 0x3fc0_0000);
+                    set(e, light + 0xd4, play_bits(c, 5));
+                    set(e, light + 0xd8, 0x3f00_0000);
+                    set(e, light + 0xdc, 0x3e80_0000);
+                    light
+                };
+                set(e, node + 8, light);
+                set(e, node, next);
+                next = node;
+            }
+            next
+        }
+    };
+    set(e, property + 0x128, lights);
+    let state = e.mem.alloc(0x18);
+    set(e, state + 0xc, property);
+    let fog = if c.word(2) != 0 {
+        let fog = e.mem.alloc(0x80);
+        for (k, v) in (0u32..).zip([0x3e00_0000, 0x3e80_0000, 0x3f00_0000]) {
+            set(e, fog + 0x20 + 4 * k, v);
+        }
+        set(e, fog + 0x2c, 0x4120_0000);
+        set(e, fog + 0x30, 0x4500_0000);
+        set(e, fog + 0x60, 0x4040_0000);
+        fog
+    } else {
+        0
+    };
+    let node = e.mem.alloc(0x140);
+    set(e, node + 0x134, fog);
+    set(e, 0x011f_91c8 + 8, node);
+    e.mem.set_u8(0x011f_91c4, 2);
+    let pass = e.mem.alloc(0x60);
+    set(e, 0x0126_f74c, pass);
+    if c.word(8) != 0 {
+        set(e, pass + 0x44, 0x0b0b_0044);
+        set(e, pass + 0x5c, 0x0b0b_005c);
+        for at in [0x30u32, 0x34] {
+            let map = obj(e, 0x40, vt);
+            set(e, this + at, map);
+        }
+    }
+    vec![this, state]
+}
+
+/// The water shader's slot 0x7c (`00b864d0`): main-thread code (`f32`; the property's +0x104 over the
+/// exe's 10.0 in `f64`, rounded once: 10.0 has three significant bits, so one rounding as the x87's; the
+/// light count, an unsigned integer, rounded once) on the main thread's word, bit for bit (NaN payloads
+/// aside), with play's floats. The fog property's getter (the draw family's) and the shader family's
+/// functions run by address ([`Common::shader_translated`]).
+#[test]
+fn water_setup_constants() {
+    Diff::new(entry!(
+        0x00b8_64d0,
+        engine_typed::draw::water::setup_constants(Ptr<_>, Ptr<_>)
+    ))
+    .shader_translated()
+    .main_thread(0)
+    .inputs(WATER_CONSTANTS)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(water_constants_words)
+    .run()
+    .assert_same();
+}
+
+// ---- Group C: the SpeedTree leaf shader (the draw family's `speedtree`) ----
+
+/// The leaf `SetupGeometry`'s inputs: the transform's scale and first entry (play's floats); the
+/// state's shader property of kind 6, of another kind, or none.
+const LEAF_GEOMETRY: &[Input] = &[Input::F32, Input::F32Swept(ONE), Input::Of(&[6, 5, 0])];
+
+/// The leaf `SetupGeometry`'s words: the world's renderer as the shader's, a transform of play's floats
+/// (the scale and the first entry the case's, a small rotation, a translation), the state's property;
+/// the light set-up and the camera rows stood in (each a mark of its words), `D3DXMatrixInverse`'s import
+/// stood in.
+fn leaf_geometry_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let w = world(e);
+    matrix_inverse_stand_in(e);
+    e.register(0x00bb_1960, marked);
+    e.register(0x00bb_1a90, marked);
+    let vt = vtable(e, &[]);
+    let this = obj(e, 0x38c, vt);
+    set(e, this + 0x18, w.renderer);
+    let t = e.mem.alloc(0x34);
+    let words = [
+        play_bits(c, 1),
+        0x3dcc_6c67,
+        0,
+        0xbdcc_6c67,
+        ONE,
+        0,
+        0,
+        0,
+        ONE,
+        0x40a0_0000,
+        0x40c0_0000,
+        0x40e0_0000,
+        play_bits(c, 0),
+    ];
+    for (i, v) in (0u32..).zip(words) {
+        set(e, t + 4 * i, v);
+    }
+    let state = e.mem.alloc(0x18);
+    if c.word(2) != 0 {
+        let property = obj(e, 0x80, vt);
+        set(e, property + 0x1c, c.word(2));
+        set(e, state + 0xc, property);
+    }
+    vec![this, 1, 2, 3, 4, state, 6, t, 8]
+}
+
+/// The leaf shader's `SetupGeometry` (`00bb25d0`): main-thread code (`f32`, the exe's 24-bit products
+/// with play's floats) on the main thread's word, bit for bit (NaN payloads aside). The shader family's
+/// functions run by address ([`Common::shader_translated`]).
+#[test]
+fn leaf_setup_geometry() {
+    Diff::new(entry!(
+        0x00bb_25d0,
+        engine_typed::draw::speedtree::setup_geometry(
+            Ptr<_>,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+        ) -> u32
+    ))
+    .shader_translated()
+    .main_thread(0)
+    .inputs(LEAF_GEOMETRY)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(leaf_geometry_words)
+    .run()
+    .assert_same();
+}
+
+/// The leaf slot 0x7c's inputs: its `SetupGeometry` slot the real one or a stand-in; the pass's scene
+/// lights (none, two); full bright; shader mode 9 or another; the leaf data's +0x18 (play's float); the
+/// constant maps (none, stand-ins).
+const LEAF_CONSTANTS: &[Input] = &[
+    Input::Flag,
+    Input::Of(&[0, 2]),
+    Input::Flag,
+    Input::Of(&[9, 8]),
+    Input::F32,
+    Input::Flag,
+];
+
+/// The leaf slot 0x7c's words: the world's renderer as the shader's; the rendered pass (its light count
+/// and lights) and geometry; the state's leaf property, whose slots 0x100 (the leaves, 0x300 bytes of a
+/// pattern) and 0xfc (the leaf data) answer through the stand-ins; the leaf scales, the exe's float for
+/// mode 9; the scene lights' set-up stood in (a mark of its words) and what the real `SetupGeometry`
+/// calls stood in as in [`leaf_geometry_words`].
+fn leaf_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let w = world(e);
+    e.map(0x0120_0000, 0x1000);
+    e.map(0x0102_3000, 0x1000);
+    matrix_inverse_stand_in(e);
+    e.register(0x00bb_1960, marked);
+    e.register(0x00bb_1a90, marked);
+    e.register(0x00b7_1360, marked);
+    e.register(VT_FN + 0x60, |_, _| ret(0));
+    let shader_vt = if c.word(0) != 0 {
+        vtable(e, &[(0x60, 0x00bb_25d0)])
+    } else {
+        vtable(e, &[])
+    };
+    let this = obj(e, 0x38c, shader_vt);
+    set(e, this + 0x18, w.renderer);
+    let geometry = e.mem.alloc(0xc0);
+    for (i, v) in (0u32..).zip([
+        ONE,
+        0,
+        0,
+        0,
+        ONE,
+        0,
+        0,
+        0,
+        ONE,
+        0x4580_0000,
+        0xc520_0000,
+        0x4400_0000,
+        ONE,
+    ]) {
+        set(e, geometry + 0x68 + 4 * i, v);
+    }
+    let bound = e.mem.alloc(0x10);
+    set(e, geometry + 0x20, bound);
+    set(e, geometry + 0xbc, 0x5c1d_0000);
+    let data = e.mem.alloc(0x40);
+    set(e, data + 0x34, 0x0bbf_0000);
+    set(e, geometry + 0xb8, data);
+    let record = e.mem.alloc(0x10);
+    set(e, record, geometry);
+    let count = c.word(1);
+    e.mem.set_u8(record + 9, count as u8);
+    let lights = e.mem.alloc(8);
+    for k in 0..2u32 {
+        set(e, lights + 4 * k, 0x1170_0000 + k);
+    }
+    set(e, record + 0xc, lights);
+    set(e, 0x011f_91e0, record);
+    set(e, 0x011f_91e4, 0x31);
+    e.mem.set_u8(0x011f_91a7, c.word(2) as u8);
+    set(e, 0x011f_91b8, c.word(3));
+    set(e, 0x0102_31a8, 0x3f40_0000);
+    set(e, 0x0120_0608, 0x4000_0000);
+    set(e, 0x0120_060c, 0x3f00_0000);
+    let vt = vtable(e, &[]);
+    let property = obj(e, 0x80, vt);
+    set(e, property + 0x1c, 6);
+    set(e, property + 0x6c, 0x3f20_0000);
+    let leaves = e.mem.alloc(0x300);
+    for k in 0..0xc0u32 {
+        set(e, leaves + 4 * k, 0x1eaf_0000 + k);
+    }
+    set(e, RETS + 0x100, leaves);
+    let leaf_data = e.mem.alloc(0x20);
+    for (k, v) in (0u32..).zip([
+        0x3e00_0000,
+        0x3e80_0000,
+        0x3f00_0000,
+        play_bits(c, 4),
+        0x3fc0_0000,
+    ]) {
+        set(e, leaf_data + 0xc + 4 * k, v);
+    }
+    set(e, RETS + 0xfc, leaf_data);
+    let state = e.mem.alloc(0x18);
+    set(e, state + 0xc, property);
+    let pass = e.mem.alloc(0x60);
+    set(e, 0x0126_f74c, pass);
+    if c.word(5) != 0 {
+        set(e, pass + 0x44, 0x0b0b_0044);
+        set(e, pass + 0x5c, 0x0b0b_005c);
+        for at in [0x30u32, 0x34] {
+            let map = obj(e, 0x40, vt);
+            set(e, this + at, map);
+        }
+    }
+    vec![this, state]
+}
+
+/// The leaf shader's slot 0x7c (`00bb2760`): main-thread code (`f32`) on the main thread's word, bit for
+/// bit (NaN payloads aside), with play's floats. Its `SetupGeometry` and `_memcpy` run by address here
+/// (their own tests), so do the shader family's ([`Common::shader_translated`]).
+#[test]
+fn leaf_setup_constants() {
+    Diff::new(entry!(
+        0x00bb_2760,
+        engine_typed::draw::speedtree::setup_constants(Ptr<_>, Ptr<_>)
+    ))
+    .shader_translated()
+    .goes_by_address(&[0x00bb_25d0, 0x00ec_44d0])
+    .main_thread(0)
+    .inputs(LEAF_CONSTANTS)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(leaf_constants_words)
+    .run()
+    .assert_same();
+}
+
+/// The leaf shader's slot 0xfc (`00bb1b50`): main-thread code (`f32`) on the main thread's word, bit for
+/// bit (NaN payloads aside), with play's floats: no fog property, or one with the case's distances. The
+/// fog property's getter (the draw family's) runs by address.
+#[test]
+fn leaf_setup_fog() {
+    Diff::new(entry!(
+        0x00bb_1b50,
+        engine_typed::draw::speedtree::setup_fog(Ptr<_>, u32)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(&[Input::Flag, Input::F32, Input::F32Swept(0x4120_0000)])
+    .float_sweep(FLOAT_SWEEP)
+    .setup(|e, c| {
+        let _ = world(e);
+        let vt = vtable(e, &[]);
+        let this = obj(e, 0x38c, vt);
+        let fog = if c.word(0) != 0 {
+            let fog = e.mem.alloc(0x80);
+            for (k, v) in (0u32..).zip([0x3e00_0000, 0x3e80_0000, 0x3f00_0000]) {
+                set(e, fog + 0x20 + 4 * k, v);
+            }
+            set(e, fog + 0x30, play_bits(c, 1));
+            set(e, fog + 0x2c, play_bits(c, 2));
+            set(e, fog + 0x60, 0x4040_0000);
+            fog
+        } else {
+            0
+        };
+        let node = e.mem.alloc(0x140);
+        set(e, node + 0x134, fog);
+        set(e, 0x011f_91c8 + 8, node);
+        e.mem.set_u8(0x011f_91c4, 2);
+        vec![this, 0x0bad_0003]
+    })
+    .run()
+    .assert_same();
+}
+
+// ---- Group C: what the set-ups share (the draw family's `group_c`) ----
+
+/// The pass types' flag bits (`00b815e0`): a pass type whose words have every pattern of the bits read;
+/// each entry present or not. No floats; the main thread's word.
+#[test]
+fn pass_flags() {
+    Diff::new(entry!(0x00b8_15e0, group_c::pass_flags(u32)))
+        .common()
+        .main_thread(0)
+        .inputs(&[Input::Of(&[1, 2, 5]), Input::Of(&[0, 0x1ff, 0x0a5])])
+        .setup(|e, c| {
+            let _ = world(e);
+            for pass in 0..8u32 {
+                set(e, 0x011f_f248 + 4 * pass, 0x5a5a_5a5a ^ (pass * 0x2f));
+                set(e, 0x011f_f120 + 4 * pass, 0xa5a5_a5a5 ^ (pass * 0x63));
+            }
+            for k in 0..9u32 {
+                let entry = if c.word(1) & (1 << k) != 0 {
+                    let entry = e.mem.alloc(0x10);
+                    e.mem.set_u8(entry + 8, 0x77);
+                    entry
+                } else {
+                    0
+                };
+                set(e, 0x011f_f4a0 + 4 * k, entry);
+            }
+            vec![c.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// A material's colour constant (`00c03180`): main-thread code (`f32`) on the main thread's word, bit
+/// for bit (NaN payloads aside), with play's floats: its colour through its pointer or its own; HDR on or
+/// off with the image space's scale and the material's.
+#[test]
+fn material_colour_constant() {
+    Diff::new(entry!(0x00c0_3180, group_c::material_colour_constant(u32)))
+        .common()
+        .main_thread(0)
+        .inputs(&[
+            Input::Flag,
+            Input::Flag,
+            Input::F32,
+            Input::F32Swept(0x3fc0_0000),
+            Input::F32Swept(0x4000_0000),
+        ])
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, c| {
+            let _ = world(e);
+            let material = e.mem.alloc(0x48);
+            let at = if c.word(0) != 0 {
+                let own = e.mem.alloc(0x10);
+                set(e, material + 0x34, own);
+                own
+            } else {
+                material + 0x28
+            };
+            for (k, v) in (0u32..).zip([play_bits(c, 2), 0x3f00_0000, 0x3e80_0000]) {
+                set(e, at + 4 * k, v);
+            }
+            set(e, material + 0x40, play_bits(c, 3));
+            e.mem.set_u8(0x011f_941e, c.word(1) as u8);
+            let data = e.mem.alloc(0x10);
+            set(e, data + 0xc, play_bits(c, 4));
+            let effect = e.mem.alloc(0x70);
+            set(e, effect + 0x6c, data);
+            let effects = e.mem.alloc(8);
+            set(e, effects + 4, effect);
+            let manager = e.mem.alloc(0x10);
+            set(e, manager + 8, effects);
+            set(e, 0x011f_91ac, manager);
+            vec![material]
+        })
+        .run()
+        .assert_same();
 }

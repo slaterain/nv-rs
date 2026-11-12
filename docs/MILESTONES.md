@@ -37,7 +37,9 @@ texture lookup, geometry pass, render passes and stream set-up, with direct call
 typed functions), is on since 2026-11-09: the whole family on against main's default with it off, the crowded
 street +4.6% (t 10). An eleventh, `draw` (the main world draw's drivers and alpha pass, the geometry paths
 its draws reach and the shader passes' begin and end, the first step towards drawing on a thread of its own),
-is on after its gate: the recorded street run byte-identical with it off; no speed claim of its own.
+is on after its gate: the recorded street run byte-identical with it off; no speed claim of its own. Its group C,
+the shader set-ups the world draw still reached as translations (the tall grass, no-lighting, sky, water and SpeedTree leaf shaders first),
+is typed with native maths and reads the frame only through the draw's packet accessors.
 The update half (what main runs besides drawing) began on 2026-11-10 with `scene`: the scene graph's
 downward update pass across geometries, fade nodes and particle systems, and the skinned bound, on once proven
 identical (differential tests, the recorded run byte-identical with it off); not a speed change by itself.

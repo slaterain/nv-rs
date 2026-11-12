@@ -787,3 +787,77 @@ pub(crate) fn copy_constants(e: &mut Engine, to: u32, from: u32, size: u32) {
         crate::crt::mem::memcpy(e, to, from, size)
     );
 }
+
+// ---- Group C: the render states' lock counters (condition 2). ----
+//
+// The passes' state restore gives back the locks a set-up took on a render state, then sets the state
+// (`00714a40` and its neighbours, [`super::group_c`]). The counters are the draw's own: a second drawer
+// would keep its own.
+
+/// The z test's locks (`011ff9d8`), the z writes' (`011ff9dc`), the alpha test's (`011ff9e8`) and the
+/// alpha blend's (`011ff9f0`).
+pub(crate) const Z_ENABLE_LOCKS: u32 = 0x011f_f9d8;
+pub(crate) const Z_WRITE_LOCKS: u32 = 0x011f_f9dc;
+pub(crate) const ALPHA_TEST_LOCKS: u32 = 0x011f_f9e8;
+pub(crate) const ALPHA_BLEND_LOCKS: u32 = 0x011f_f9f0;
+/// The colour writes' locks (`011ffa18`).
+pub(crate) const COLOR_WRITE_LOCKS: u32 = 0x011f_fa18;
+
+/// `count` locks given back on the render state whose counter is at `counter` (wrapping, as the exe
+/// subtracts).
+#[inline(always)]
+pub(crate) fn release_state_locks(e: &mut Engine, counter: u32, count: u32) {
+    let value = e.global::<u32>(counter).wrapping_sub(count);
+    e.set_global(counter, value);
+}
+
+// ---- Group C: the shader constants' globals a set-up fills (condition 2). ----
+
+/// A shader constant's word at `at` written: the globals a set-up fills for its pass (the tall grass's
+/// up direction `01200550`, its light's direction `01200510`, colours `01200520` and `01200570`, its
+/// ambient, flags, wind phase and shadow words), the shader's own constant storage (the tall grass's
+/// alpha row +0x1d0 and phase +0x11c) and a constant entry's words (the instance count +0x20).
+#[inline(always)]
+pub(crate) fn set_shader_global(e: &mut Engine, at: u32, value: u32) {
+    e.set_global(at, value);
+}
+
+/// A word of a shader's own constant storage, read back (the tall grass's phase +0x11c).
+#[inline(always)]
+pub(crate) fn shader_word(e: &Engine, at: u32) -> u32 {
+    e.global::<u32>(at)
+}
+
+/// The count a geometry data draws, set through its slot 0xa4 (a 16-bit count; condition 3).
+#[inline(always)]
+pub(crate) fn set_draw_count(e: &mut Engine, data: u32, count: u16) {
+    e.vcall(data, 0xa4, &args![u32::from(count)]);
+}
+
+/// The counted pointer at `slot` released and cleared, the exe's own code (condition 7): when it holds
+/// an object, its count goes down (deleted at 0, its slot 4) and the slot is cleared.
+pub(crate) fn clear_counted(e: &mut Engine, slot: u32) {
+    let old = e.global::<u32>(slot);
+    if old != 0 {
+        let left = e
+            .call(INTERLOCKED_DECREMENT, &args![old.wrapping_add(4)])
+            .u32();
+        if left == 0 {
+            e.vcall(old, SLOT_DELETE, &[]);
+        }
+        e.set_global(slot, 0u32);
+    }
+}
+
+/// A texture transform marked changed brought up to date (`00a88cd0`, by address; it writes the
+/// transform's matrix).
+#[inline(always)]
+pub(crate) fn update_texture_transform(e: &mut Engine, transform: u32) {
+    e.call(0x00a8_8cd0, &args![transform]);
+}
+
+/// A byte of the shader constants a set-up fills (the pass flags `011ff110` and `011ff118`).
+#[inline(always)]
+pub(crate) fn set_constant_byte(e: &mut Engine, at: u32, value: u8) {
+    e.set_global(at, value);
+}
