@@ -861,3 +861,27 @@ pub(crate) fn update_texture_transform(e: &mut Engine, transform: u32) {
 pub(crate) fn set_constant_byte(e: &mut Engine, at: u32, value: u8) {
     e.set_global(at, value);
 }
+
+/// A word and a byte of the shader constants the draw itself filled, read back (the lighting 3.0
+/// shader's material alpha, ambient, light colour and data; its ambient fog byte).
+#[inline(always)]
+pub(crate) fn constant_word(e: &Engine, at: u32) -> u32 {
+    e.global::<u32>(at)
+}
+#[inline(always)]
+pub(crate) fn constant_byte(e: &Engine, at: u32) -> u8 {
+    e.global::<u8>(at)
+}
+
+/// A constant entry's word at `offset` set (the light data entry's count, +0x20) (condition 2).
+#[inline(always)]
+pub(crate) fn set_entry_word(e: &mut Engine, entry: u32, offset: u32, value: u32) {
+    e.set_global(entry.wrapping_add(offset), value);
+}
+
+/// A clip plane set on the device (`IDirect3DDevice9::SetClipPlane`, slot 0xdc: the index and the plane)
+/// (condition 2).
+#[inline(always)]
+pub(crate) fn device_clip_plane(e: &mut Engine, device: u32, index: u32, plane: u32) {
+    e.vcall(device, 0xdc, &args![index, plane]);
+}

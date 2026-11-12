@@ -76,6 +76,7 @@ pub mod detach;
 pub mod drivers;
 pub mod group_c;
 pub mod layout;
+pub mod lighting30;
 pub mod lists;
 pub mod no_lighting;
 pub mod own;
@@ -247,5 +248,23 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00bb_1b50, speedtree::setup_fog(Ptr<()>, u32)),
         entry!(0x00b8_15e0, group_c::pass_flags(u32)),
         entry!(0x00c0_3180, group_c::material_colour_constant(u32)),
+        // Group C: the lighting 3.0 shader and the shared leftovers.
+        entry!(0x00bb_e650, lighting30::setup_textures(Ptr<()>, Ptr<()>)),
+        entry!(0x00bb_bda0, lighting30::emittance(Ptr<()>, Ptr<()>)),
+        entry!(0x00bb_bdf0, lighting30::glow(Ptr<()>, Ptr<()>)),
+        entry!(0x00bb_be30, lighting30::alpha(Ptr<()>)),
+        entry!(0x00bb_bcf0, lighting30::eye_position(Ptr<()>, Ptr<()>)),
+        entry!(0x00bb_ba00, lighting30::world_matrix(Ptr<()>, u32, Ptr<()>)),
+        entry!(0x00bb_b890, lighting30::light_position(Ptr<()>, [u32; 16], Ptr<()>)),
+        entry!(0x00bb_be80, lighting30::fog(Ptr<()>)),
+        entry!(0x00bb_e9c0, lighting30::material(Ptr<()>, u32, Ptr<()>, Ptr<()>, u32)),
+        entry!(0x00bb_ecd0, lighting30::colour(Ptr<()>, Ptr<()>, Ptr<()>)),
+        entry!(0x00bb_e6b0, lighting30::view_matrix(Ptr<()>, Ptr<()>, u32, u32, Ptr<()>)),
+        entry!(0x00bb_c050, lighting30::lights(Ptr<()>, Ptr<()>, Ptr<()>, u32, Ptr<()>, u32, u32, Ptr<()>)),
+        entry!(0x00bb_ef90, lighting30::setup_constants(Ptr<()>, Ptr<()>)),
+        entry!(0x00bb_e120, lighting30::setup_switches(Ptr<()>, u32)),
+        entry!(0x00bd_02e0, lighting30::setup_stage_textures(Ptr<()>, Ptr<()>)),
+        entry!(0x00bb_95e0, group_c::set_light_entry(u32, u32, u32, u32, u32, u32, u32, u32, u32)),
+        entry!(0x00bb_96d0, group_c::pass_end_flags(Ptr<()>, u32)),
     ]
 }

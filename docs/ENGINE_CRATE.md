@@ -547,7 +547,12 @@ no-lighting shader (the pass choice `00bc6970`, its slots 0x78 `00bc8d40`, 0x7c 
 sub-textures `00bc6fa0`, the material constants `00bc6fe0`, the light fog `00bc7100`, the texture matrix
 `00bc8e00`); the sky shader (its slots 0x78 `00b89cc0` and 0x7c `00b89d80`); the water shader (its slots 0x78 `00b863a0` and
 0x7c `00b864d0`); the SpeedTree leaf shader (`SetupGeometry` `00bb25d0`, its slots 0x7c `00bb2760` and 0xfc
-`00bb1b50`); the pass types' flag bits (`00b815e0`) and a material's colour constant (`00c03180`). Each reads the frame only through
+`00bb1b50`); the pass types' flag bits (`00b815e0`) and a material's colour constant (`00c03180`); the lighting 3.0 shader (its
+slots 0x78 `00bbe650`, 0x7c `00bbef90` and 0xfc `00bbe120`, the helpers its slot 0x7c called as plain calls: the
+lights `00bbc050`, the view `00bbe6b0` and world `00bbba00` matrices, the eye `00bbbcf0` and light `00bbb890`
+positions, the emittance `00bbbda0`, the material `00bbe9c0`, the colour `00bbecd0`, the glow `00bbbdf0`, the alpha
+`00bbbe30`, the fog `00bbbe80`), the `010bb980` shader's slot 0x78 (`00bd02e0`), the light table entry (`00bb95e0`)
+and the pass end's flags (`00bb96d0`). Each reads the frame only through
 `draw::packet` and writes its constants, render states and counters through `draw::own` (each file's "Group C"
 section), with what is filled at load read in place (the shaders' own words, the passes' contents, the exe's
 constants).
