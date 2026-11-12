@@ -5777,7 +5777,8 @@ type PKey = (u64, Vec<wgsl::Semantic>, bool, wgsl::Clip, bool);
 /// The varyings a vertex shader writes for a pixel shader with fixed varying locations
 /// ([`Shader::fixed`]), in location order: every one it writes that has a fixed location (the
 /// same for every pixel shader that reads only those), and any the pixel shader reads that it
-/// does not write, as 0 (the pair's own module then).
+/// does not write, written with the real Direct3D 9's value for it ([`wgsl::unwritten`]; the pair's
+/// own module then).
 fn pair_varyings(vs: &Shader, ps: &Shader) -> Vec<wgsl::Semantic> {
     let mut v: Vec<wgsl::Semantic> = vs
         .sig
