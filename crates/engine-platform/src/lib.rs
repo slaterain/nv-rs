@@ -86,6 +86,7 @@ pub mod d3d9;
 #[cfg(windows)]
 pub mod d3d9backend;
 pub mod d3d9device;
+pub mod d3d9draw;
 pub mod d3d9query;
 #[cfg(windows)]
 pub mod d3d9real;

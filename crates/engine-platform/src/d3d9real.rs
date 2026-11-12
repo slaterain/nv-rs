@@ -39,7 +39,7 @@
 //! from the game's own flags), and the backend's thread's floating-point state is not the game's.
 
 use crate::Engine;
-use d3d9_stream::{Cmd, Data, Reply, Stream};
+use d3d9_stream::{Cmd, Data, Reply, Slot, Stream};
 use std::collections::{HashMap, HashSet};
 use windows::core::PCSTR;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -186,6 +186,11 @@ pub struct Real {
     windows: HashMap<u32, isize>,
     /// The stream to the backend, made with the first `IDirect3D9`.
     stream: Option<Stream>,
+    /// The open cut's slot (`super::d3d9draw`): where the drawing side's calls record, until the
+    /// drawing side closes it.
+    slot: Option<Slot>,
+    /// The drawing side's open locks of forwarded buffers, as [`Real::locks`] for main.
+    draw_locks: engine_core::AddrMap<u32, Vec<(u32, u32, u32)>>,
     /// The modelled devices the backend has a device for, each with the real device it handed to
     /// the layer's side channel (D3DX's texture loading on the game's threads), if any.
     devices: Vec<(u32, Option<IDirect3DDevice9>)>,
@@ -276,10 +281,37 @@ fn words<const N: usize>(e: &Engine, at: u32) -> [u32; N] {
 
 /// The stream, when the backend has a device for the modelled device `this` (the game makes
 /// one: one compare).
+/// Where a call's commands go: main's stream, or the open cut's slot for a call from the drawing
+/// side (`super::d3d9draw`).
+enum Sink<'a> {
+    Main(&'a mut Stream),
+    Slot(&'a mut Slot),
+}
+
+impl Sink<'_> {
+    fn submit(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+        match self {
+            Sink::Main(s) => s.submit(cmd),
+            Sink::Slot(s) => s.submit(cmd),
+        }
+    }
+}
+
+/// This call's sink: the slot for the drawing side while it is open, main's stream otherwise.
 #[inline]
-fn stream_of(r: &mut Real, this: u32) -> Option<&mut Stream> {
+fn sink(r: &mut Real) -> Option<Sink<'_>> {
+    if super::d3d9draw::drawing_thread() {
+        if let Some(slot) = r.slot.as_mut() {
+            return Some(Sink::Slot(slot));
+        }
+    }
+    r.stream.as_mut().map(Sink::Main)
+}
+
+#[inline]
+fn stream_of(r: &mut Real, this: u32) -> Option<Sink<'_>> {
     if r.devices.iter().any(|(d, _)| *d == this) {
-        r.stream.as_mut()
+        sink(r)
     } else {
         None
     }
@@ -288,7 +320,7 @@ fn stream_of(r: &mut Real, this: u32) -> Option<&mut Stream> {
 /// Records `cmd`, a call on the modelled device `this`, when the backend has its device.
 #[inline]
 fn record(e: &mut Engine, this: u32, cmd: Cmd<Data<'_>>) {
-    if let Some(s) = stream_of(real(e), this) {
+    if let Some(mut s) = stream_of(real(e), this) {
         s.submit(cmd);
     }
 }
@@ -299,15 +331,49 @@ fn record(e: &mut Engine, this: u32, cmd: Cmd<Data<'_>>) {
 fn record_on(e: &mut Engine, object: u32, cmd: Cmd<Data<'_>>) {
     let r = real(e);
     if r.forwarded.contains(&object) {
-        if let Some(s) = r.stream.as_mut() {
+        if let Some(mut s) = sink(r) {
             s.submit(cmd);
         }
     }
 }
 
-/// A sync command's reply (`None` without a stream).
+/// A sync command's reply (`None` without a stream). A sync call of main's while a cut is open
+/// (`super::d3d9draw`) first waits for the drawing job, the device lock given back meanwhile: its
+/// reply comes after the slot's commands, which the drawing side records under that lock.
 fn call(e: &mut Engine, cmd: Cmd<Data<'_>>) -> Option<Reply> {
-    real(e).stream.as_mut().map(|s| s.submit(cmd))
+    if !super::d3d9draw::drawing_thread() && real(e).stream.as_mut().is_some_and(Stream::cut_open) {
+        engine_core::real_threads::without_device_lock(e, || {
+            engine_core::real_threads::wait_draw(e)
+        });
+    }
+    sink(real(e)).map(|mut s| s.submit(cmd))
+}
+
+/// The cut (`super::d3d9draw::draw_cut`): main's stream cut where the drawing side's commands
+/// go, its slot kept for the drawing side's calls. Nothing when the backend lacks the device.
+pub(super) fn cut(e: &mut Engine, device: u32) {
+    let r = real(e);
+    if !r.devices.iter().any(|(d, _)| *d == device) {
+        return;
+    }
+    let slot = r.stream.as_mut().map(Stream::cut);
+    r.slot = slot;
+    r.draw_locks.clear();
+}
+
+/// The drawing side's commands are complete: its slot is closed (main's after the cut follow).
+pub(super) fn close(e: &mut Engine) {
+    if let Some(slot) = real(e).slot.take() {
+        slot.close();
+    }
+}
+
+/// The join: main's commands held back for the closed slot go on (the direct runner, the
+/// recording).
+pub(super) fn settle(e: &mut Engine) {
+    if let Some(s) = real(e).stream.as_mut() {
+        s.settle();
+    }
 }
 
 /// The real device behind the modelled device `this`, counted, for a caller that hands it to
@@ -1657,7 +1723,9 @@ pub fn texture_created(
     pool: u32,
 ) {
     let r = real(e);
-    let Some(s) = stream_of(r, this) else { return };
+    let Some(mut s) = stream_of(r, this) else {
+        return;
+    };
     s.submit(Cmd::CreateTexture {
         device: this,
         texture,
@@ -1686,7 +1754,9 @@ pub fn cube_created(
     pool: u32,
 ) {
     let r = real(e);
-    let Some(s) = stream_of(r, this) else { return };
+    let Some(mut s) = stream_of(r, this) else {
+        return;
+    };
     s.submit(Cmd::CreateCubeTexture {
         device: this,
         texture,
@@ -1716,7 +1786,9 @@ pub fn surface_created(
     flag: u32,
 ) {
     let r = real(e);
-    let Some(s) = stream_of(r, this) else { return };
+    let Some(mut s) = stream_of(r, this) else {
+        return;
+    };
     s.submit(Cmd::CreateSurface {
         device: this,
         surface,
@@ -1796,7 +1868,7 @@ pub fn surface_unlocked(
     let held = crate::device_held(e);
     let mem = &e.mem;
     let r = &mut crate::device_mut(&mut e.device, held).real;
-    let Some(s) = r.stream.as_mut() else {
+    let Some(mut s) = sink(r) else {
         return false;
     };
     let read = |offset: u32, into: &mut [u8]| read_rows(mem, bits, pitch, row, offset, into);
@@ -1831,7 +1903,9 @@ pub fn buffer_created(
     pool: u32,
 ) {
     let r = real(e);
-    let Some(s) = stream_of(r, this) else { return };
+    let Some(mut s) = stream_of(r, this) else {
+        return;
+    };
     s.submit(Cmd::CreateBuffer {
         device: this,
         buffer,
@@ -1851,10 +1925,12 @@ pub fn buffer_locked(e: &mut Engine, buffer: u32, offset: u32, size: u32, flags:
     if model != 0 || !r.forwarded.contains(&buffer) {
         return;
     }
-    r.locks
-        .entry(buffer)
-        .or_default()
-        .push((offset, size, flags));
+    let locks = if super::d3d9draw::drawing_thread() && r.slot.is_some() {
+        &mut r.draw_locks
+    } else {
+        &mut r.locks
+    };
+    locks.entry(buffer).or_default().push((offset, size, flags));
 }
 
 /// The game unlocked the modelled buffer `buffer`, whose memory is `bits` (`length` bytes):
@@ -1866,13 +1942,18 @@ pub fn buffer_unlocked(e: &mut Engine, buffer: u32, bits: u32, length: u32, mode
     let held = crate::device_held(e);
     let mem = &e.mem;
     let r = &mut crate::device_mut(&mut e.device, held).real;
-    let Some((offset, size, flags)) = r.locks.get_mut(&buffer).and_then(|l| l.pop()) else {
+    let locks = if super::d3d9draw::drawing_thread() && r.slot.is_some() {
+        &mut r.draw_locks
+    } else {
+        &mut r.locks
+    };
+    let Some((offset, size, flags)) = locks.get_mut(&buffer).and_then(|l| l.pop()) else {
         return;
     };
     if flags & LOCK_READONLY != 0 {
         return;
     }
-    let Some(s) = r.stream.as_mut() else { return };
+    let Some(mut s) = sink(r) else { return };
     let size = if size == 0 { length - offset } else { size };
     let read = |at: u32, into: &mut [u8]| mem.read(bits + offset + at, into);
     s.submit(Cmd::UploadBuffer {
@@ -1890,7 +1971,9 @@ pub fn buffer_unlocked(e: &mut Engine, buffer: u32, bits: u32, length: u32, mode
 /// tokens.
 pub fn shader_created(e: &mut Engine, this: u32, shader: u32, pixel: bool, tokens: &[u8]) {
     let r = real(e);
-    let Some(s) = stream_of(r, this) else { return };
+    let Some(mut s) = stream_of(r, this) else {
+        return;
+    };
     // The tokens end with the end token: whole words (a stray tail padded, as the real call
     // reads words).
     let words = as_words(tokens);
@@ -1918,7 +2001,9 @@ fn as_words(bytes: &[u8]) -> Vec<u32> {
 /// (`D3DDECL_END` included).
 pub fn declaration_created(e: &mut Engine, this: u32, declaration: u32, elements: &[u8]) {
     let r = real(e);
-    let Some(s) = stream_of(r, this) else { return };
+    let Some(mut s) = stream_of(r, this) else {
+        return;
+    };
     s.submit(Cmd::CreateDeclaration {
         device: this,
         declaration,
@@ -1978,10 +2063,11 @@ pub fn set_constants(
     let held = crate::device_held(e);
     let mem = &e.mem;
     let g = crate::device_mut(&mut e.device, held);
-    let Some(s) = stream_of(&mut g.real, this) else {
+    let Some(mut s) = stream_of(&mut g.real, this) else {
         return;
     };
     let registers = super::d3d9resource::constant_registers(
+        &g.device_objects.draw,
         &g.device_objects.resources,
         this,
         kind,
@@ -2026,7 +2112,7 @@ pub fn set_constants(
 #[allow(clippy::too_many_arguments)]
 fn set_constants_as_given(
     mem: &engine_core::Mem,
-    s: &mut Stream,
+    mut s: Sink<'_>,
     this: u32,
     kind: u8,
     start: u32,
@@ -2139,7 +2225,9 @@ pub fn draw_primitive_up(
     let held = crate::device_held(e);
     let mem = &e.mem;
     let r = &mut crate::device_mut(&mut e.device, held).real;
-    let Some(s) = stream_of(r, this) else { return };
+    let Some(mut s) = stream_of(r, this) else {
+        return;
+    };
     let read = |at: u32, into: &mut [u8]| mem.read(data + at, into);
     s.submit(Cmd::DrawPrimitiveUp {
         device: this,
@@ -2258,7 +2346,9 @@ pub fn set_software_vertex_processing(e: &mut Engine, this: u32, software: u32, 
 /// `CreateQuery` made the modelled query `query` of type `kind`: the real query.
 pub fn query_created(e: &mut Engine, this: u32, query: u32, kind: u32) {
     let r = real(e);
-    let Some(s) = stream_of(r, this) else { return };
+    let Some(mut s) = stream_of(r, this) else {
+        return;
+    };
     s.submit(Cmd::CreateQuery {
         device: this,
         query,
@@ -2420,7 +2510,9 @@ pub fn offscreen_created(
     pool: u32,
 ) {
     let r = real(e);
-    let Some(s) = stream_of(r, this) else { return };
+    let Some(mut s) = stream_of(r, this) else {
+        return;
+    };
     s.submit(Cmd::CreateOffscreenSurface {
         device: this,
         surface,

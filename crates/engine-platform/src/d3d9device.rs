@@ -470,6 +470,10 @@ pub struct Objects {
     /// block, and those that did not; the bytes compared.
     round_trips: [u64; 2],
     round_trip_bytes: u64,
+    /// The open cut of step 2's two producers (`super::d3d9draw`), and the drawing side's copies
+    /// of the devices' state while it is open.
+    pub(super) draw: super::d3d9draw::DrawSide,
+    draw_devices: engine_core::AddrMap<u32, Device>,
 }
 
 /// Where texture levels keep their pixels in this run ([`Store`]).
@@ -1313,12 +1317,34 @@ pub fn create_device(
     D3D_OK
 }
 
+/// The device's state as this call sees it: the drawing side's copy for a call from the drawing
+/// side of an open cut (`super::d3d9draw`), main's otherwise.
 fn device(e: &mut Engine, this: Ptr) -> &mut Device {
+    let objects = &mut device!(e).device_objects;
+    if super::d3d9draw::drawing_side(&objects.draw) {
+        if let Some(d) = objects.draw_devices.get_mut(&this.addr()) {
+            return d;
+        }
+    }
+    objects
+        .devices
+        .get_mut(&this.addr())
+        .expect("an IDirect3DDevice9 of this layer")
+}
+
+/// The device itself (its references, its present parameters, whether it is lost): main's, from
+/// either side.
+fn main_device(e: &mut Engine, this: Ptr) -> &mut Device {
     device!(e)
         .device_objects
         .devices
         .get_mut(&this.addr())
         .expect("an IDirect3DDevice9 of this layer")
+}
+
+/// Notes that main set `key` while a cut is open (`super::d3d9draw::main_set`).
+fn mark(e: &mut Engine, key: super::d3d9draw::Key) {
+    super::d3d9draw::main_set(&mut device!(e).device_objects.draw, key);
 }
 
 /// Whether the device is between `BeginScene` and `EndScene`.
@@ -1351,7 +1377,7 @@ fn device_query_interface(e: &mut Engine, this: Ptr, iid: Ptr, out: Ptr) -> u32 
 }
 
 pub(super) fn device_add_ref(e: &mut Engine, this: Ptr) -> u32 {
-    let d = device(e, this);
+    let d = main_device(e, this);
     d.references += 1;
     d.references
 }
@@ -1359,7 +1385,7 @@ pub(super) fn device_add_ref(e: &mut Engine, this: Ptr) -> u32 {
 /// `Release()`: the last reference destroys the device: its implicit surfaces go, the surfaces
 /// it holds in its render target and depth slots are released, and its `IDirect3D9` reference.
 pub(super) fn device_release(e: &mut Engine, this: Ptr) -> u32 {
-    let d = device(e, this);
+    let d = main_device(e, this);
     d.references -= 1;
     let left = d.references;
     if left == 0 {
@@ -1500,11 +1526,14 @@ fn set_render_target(e: &mut Engine, this: Ptr, index: u32, surface: u32) -> u32
     if surface != 0 {
         surface_add_ref(e, Ptr::new(surface));
     }
+    mark(e, super::d3d9draw::Key::RenderTarget(index));
     let old = std::mem::replace(&mut device(e, this).render_targets[index as usize], surface);
     if old != 0 {
         surface_release(e, Ptr::new(old));
     }
     if let (0, Some(desc)) = (index, desc) {
+        mark(e, super::d3d9draw::Key::Viewport);
+        mark(e, super::d3d9draw::Key::Scissor);
         device(e, this).viewport = [0, 0, desc[6], desc[7], 0f32.to_bits(), 1f32.to_bits()];
         device(e, this).scissor = [0, 0, desc[6], desc[7]];
     }
@@ -1541,6 +1570,7 @@ fn set_depth_stencil_surface(e: &mut Engine, this: Ptr, surface: u32) -> u32 {
         }
         surface_add_ref(e, Ptr::new(surface));
     }
+    mark(e, super::d3d9draw::Key::DepthStencil);
     let old = std::mem::replace(&mut device(e, this).depth_stencil, surface);
     if old != 0 {
         surface_release(e, Ptr::new(old));
@@ -1577,6 +1607,7 @@ fn set_viewport(e: &mut Engine, this: Ptr, viewport: Ptr) -> u32 {
     if right > u64::from(desc[6]) || bottom > u64::from(desc[7]) {
         return D3DERR_INVALIDCALL;
     }
+    mark(e, super::d3d9draw::Key::Viewport);
     let d = device(e, this);
     d.viewport.copy_from_slice(&words);
     D3D_OK
@@ -1714,6 +1745,7 @@ fn set_transform(e: &mut Engine, this: Ptr, state: u32, matrix: Ptr) -> u32 {
     for (i, word) in m.iter_mut().enumerate() {
         *word = e.mem.u32(matrix.addr() + 4 * i as u32);
     }
+    mark(e, super::d3d9draw::Key::Transform(state));
     device(e, this).transforms.insert(state, m);
     D3D_OK
 }
@@ -1744,6 +1776,7 @@ fn set_scissor_rect(e: &mut Engine, this: Ptr, rect: Ptr) -> u32 {
     for (i, word) in r.iter_mut().enumerate() {
         *word = e.mem.u32(rect.addr() + 4 * i as u32);
     }
+    mark(e, super::d3d9draw::Key::Scissor);
     device(e, this).scissor = r;
     D3D_OK
 }
@@ -1772,6 +1805,7 @@ fn set_clip_plane(e: &mut Engine, this: Ptr, index: u32, plane: Ptr) -> u32 {
     for (i, word) in p.iter_mut().enumerate() {
         *word = e.mem.u32(plane.addr() + 4 * i as u32);
     }
+    mark(e, super::d3d9draw::Key::ClipPlane(index));
     device(e, this).clip_planes.insert(index, p);
     D3D_OK
 }
@@ -1795,6 +1829,7 @@ fn begin_scene(e: &mut Engine, this: Ptr) -> u32 {
             D3D_OK
         }
     };
+    mark(e, super::d3d9draw::Key::InScene);
     #[cfg(windows)]
     super::d3d9real::begin_scene(e, this.addr(), model);
     model
@@ -1811,6 +1846,7 @@ fn end_scene(e: &mut Engine, this: Ptr) -> u32 {
             D3D_OK
         }
     };
+    mark(e, super::d3d9draw::Key::InScene);
     #[cfg(windows)]
     super::d3d9real::end_scene(e, this.addr(), model);
     model
@@ -1877,7 +1913,12 @@ fn present(e: &mut Engine, this: Ptr, source: u32, dest: u32, window: u32, dirty
         // Diagnostic only (`NV_QUEUE_CHECK`, not exe behaviour): the frame ends here.
         crate::queue_check::frame(e);
     }
-    if !device!(e).device_objects.unlocked_staging.is_empty() {
+    let objects = &mut device!(e).device_objects;
+    if objects.draw.device.is_some() {
+        // A cut is open: the drawing side may still be in the frame's blocks; they are freed at
+        // the join (`super::d3d9draw::draw_join`).
+        objects.draw.presented = true;
+    } else if !objects.unlocked_staging.is_empty() {
         // The texture levels' and buffers' staging blocks unlocked in the frame.
         free_all_unlocked_staging(e);
     }
@@ -1921,6 +1962,7 @@ fn set_gamma_ramp(e: &mut Engine, this: Ptr, swap_chain: u32, flags: u32, ramp: 
         ramp.addr()
     );
     let table = (0..0x300).map(|i| e.mem.u16(ramp.addr() + 2 * i)).collect();
+    mark(e, super::d3d9draw::Key::GammaRamp);
     device(e, this).gamma_ramp = Some(table);
     D3D_OK
 }
@@ -1933,6 +1975,7 @@ fn set_render_state(e: &mut Engine, this: Ptr, state: u32, value: u32) -> u32 {
         state < 256,
         "IDirect3DDevice9::SetRenderState({state}) is not provided"
     );
+    mark(e, super::d3d9draw::Key::Render(state));
     device(e, this).render_states.set(state as usize, value);
     D3D_OK
 }
@@ -1961,6 +2004,7 @@ fn set_texture_stage_state(e: &mut Engine, this: Ptr, stage: u32, kind: u32, val
         "IDirect3DDevice9::SetTextureStageState(type {kind}) is not provided"
     );
     let index = stage_index(stage, kind).expect("a type 1 to 32");
+    mark(e, super::d3d9draw::Key::Stage(index as u32));
     device(e, this).stage_states.set(index, value);
     D3D_OK
 }
@@ -1988,6 +2032,7 @@ fn set_sampler_state(e: &mut Engine, this: Ptr, sampler: u32, kind: u32, value: 
         "IDirect3DDevice9::SetSamplerState(type {kind}) is not provided"
     );
     let index = sampler_index(sampler, kind).expect("a type 1 to 13");
+    mark(e, super::d3d9draw::Key::Sampler(index as u32));
     device(e, this).sampler_states.set(index, value);
     D3D_OK
 }
@@ -2015,14 +2060,22 @@ fn set_texture(e: &mut Engine, this: Ptr, sampler: u32, texture: u32) -> u32 {
     if !is_sampler(sampler) {
         return D3DERR_INVALIDCALL;
     }
-    // The texture and the device are looked up once each (they are apart in `Objects`).
+    // The texture and the device are looked up once each (they are apart in `Objects`), the
+    // device's state as this call sees it (main's, or the drawing side's copy).
     let objects = &mut device!(e).device_objects;
+    super::d3d9draw::main_set(&mut objects.draw, super::d3d9draw::Key::Texture(sampler));
+    let devices = if super::d3d9draw::drawing_side(&objects.draw)
+        && objects.draw_devices.contains_key(&this.addr())
+    {
+        &mut objects.draw_devices
+    } else {
+        &mut objects.devices
+    };
     // The texture the sampler holds already: it is a texture of this layer (a bound texture lives
     // on), and counting it once more and letting go of it once changes nothing, as below, without
     // looking it up.
     if texture != 0
-        && objects
-            .devices
+        && devices
             .get(&this.addr())
             .is_some_and(|d| d.textures.get(&sampler) == Some(&texture))
     {
@@ -2038,8 +2091,7 @@ fn set_texture(e: &mut Engine, this: Ptr, sampler: u32, texture: u32) -> u32 {
     } else {
         None
     };
-    let d = objects
-        .devices
+    let d = devices
         .get_mut(&this.addr())
         .expect("an IDirect3DDevice9 of this layer");
     let old = if let Some(t) = held {
@@ -3062,6 +3114,12 @@ fn texture_unbind(e: &mut Engine, this: Ptr) {
 }
 
 fn texture_destroy(e: &mut Engine, this: Ptr) {
+    // On the drawing side of an open cut the texture waits for the join (`super::d3d9draw`).
+    let objects = &mut device!(e).device_objects;
+    if super::d3d9draw::drawing_side(&objects.draw) {
+        objects.draw.ending.push(this.addr());
+        return;
+    }
     note_reference(e, this, "destroyed", 0);
     {
         let t = device!(e)
@@ -3510,6 +3568,188 @@ fn free_all_unlocked_staging(e: &mut Engine) {
     }
 }
 
+/// At the join: `object` (a texture a release or unbinding on the drawing side would have ended)
+/// ends now if nothing holds it.
+pub(super) fn end_if_unheld(e: &mut Engine, object: u32) {
+    if let Some(t) = device!(e).device_objects.textures.get(&object) {
+        if t.references == 0 && t.bound == 0 {
+            texture_destroy(e, Ptr::new(object));
+        }
+    }
+}
+
+/// Whether `device` is a device of this layer.
+pub(super) fn has_device(e: &mut Engine, device: u32) -> bool {
+    device!(e).device_objects.devices.contains_key(&device)
+}
+
+/// The join of a cut during which main presented: the frame's unlocked staging blocks freed, as
+/// that `Present` would have.
+pub(super) fn free_frame_staging(e: &mut Engine) {
+    free_all_unlocked_staging(e);
+}
+
+/// The cut (`super::d3d9draw::draw_cut`): main's state of `device` copied for the drawing side,
+/// what it binds held once more by the copy: its textures (their samplers' count, which the
+/// program never sees) and its render targets and depth surface (a reference each, as
+/// `SetRenderTarget` takes one: while the cut is open, `AddRef` and `Release` of those surfaces
+/// answer one more).
+pub(super) fn copy_for_drawing(e: &mut Engine, device: u32) {
+    let copy = device!(e).device_objects.devices[&device].clone();
+    for &t in copy.textures.values() {
+        texture(e, Ptr::new(t)).bound += 1;
+    }
+    for &s in copy.render_targets.iter().chain([&copy.depth_stencil]) {
+        if s != 0 {
+            surface_add_ref(e, Ptr::new(s));
+        }
+    }
+    device!(e).device_objects.draw_devices.insert(device, copy);
+}
+
+/// `main`'s value for each key `take` refuses, `draw`'s for the others.
+fn merge_map<V: Copy>(
+    main: &mut engine_core::AddrMap<u32, V>,
+    draw: &engine_core::AddrMap<u32, V>,
+    take: impl Fn(u32) -> bool,
+) {
+    let keys: std::collections::BTreeSet<u32> = main.keys().chain(draw.keys()).copied().collect();
+    for k in keys {
+        if take(k) {
+            match draw.get(&k) {
+                Some(v) => {
+                    main.insert(k, *v);
+                }
+                None => {
+                    main.remove(&k);
+                }
+            }
+        }
+    }
+}
+
+/// The join (`super::d3d9draw::draw_join`): main's state of `device` becomes the serial order's,
+/// main's value for each piece in `set` (set by main after the cut), the drawing side's copy's for
+/// every other; the copy's holds are let go of, and main's for what the copy's values replace.
+pub(super) fn merge_drawing(
+    e: &mut Engine,
+    device: u32,
+    set: &std::collections::HashSet<super::d3d9draw::Key>,
+) {
+    use super::d3d9draw::Key;
+    let Some(draw) = device!(e).device_objects.draw_devices.remove(&device) else {
+        return;
+    };
+    let take = |k: Key| !set.contains(&k);
+    let mut unbind = Vec::new();
+    let mut targets = Vec::new();
+    {
+        let main = device!(e)
+            .device_objects
+            .devices
+            .get_mut(&device)
+            .expect("the device of the cut");
+        for i in 0..RENDER_STATES {
+            if take(Key::Render(i as u32)) {
+                main.render_states.0[i] = draw.render_states.0[i];
+            }
+        }
+        for i in 0..STAGE_STATES {
+            if take(Key::Stage(i as u32)) {
+                main.stage_states.0[i] = draw.stage_states.0[i];
+            }
+        }
+        for i in 0..SAMPLER_STATES {
+            if take(Key::Sampler(i as u32)) {
+                main.sampler_states.0[i] = draw.sampler_states.0[i];
+            }
+        }
+        merge_map(&mut main.transforms, &draw.transforms, |s| {
+            take(Key::Transform(s))
+        });
+        merge_map(&mut main.clip_planes, &draw.clip_planes, |i| {
+            take(Key::ClipPlane(i))
+        });
+        merge_map(&mut main.lights, &draw.lights, |i| take(Key::Light(i)));
+        let lights: std::collections::BTreeSet<u32> = main
+            .enabled_lights
+            .union(&draw.enabled_lights)
+            .copied()
+            .collect();
+        for i in lights {
+            if take(Key::LightEnable(i)) {
+                if draw.enabled_lights.contains(&i) {
+                    main.enabled_lights.insert(i);
+                } else {
+                    main.enabled_lights.remove(&i);
+                }
+            }
+        }
+        if take(Key::Viewport) {
+            main.viewport = draw.viewport;
+        }
+        if take(Key::Scissor) {
+            main.scissor = draw.scissor;
+        }
+        if take(Key::InScene) {
+            main.in_scene = draw.in_scene;
+        }
+        if take(Key::Material) {
+            main.material = draw.material;
+        }
+        if take(Key::SoftwareVertexProcessing) {
+            main.software_vertex_processing = draw.software_vertex_processing;
+        }
+        if take(Key::GammaRamp) {
+            main.gamma_ramp.clone_from(&draw.gamma_ramp);
+        }
+        // The targets: each held by main and by the copy; the one not kept lets go.
+        for i in 0..RENDER_TARGETS {
+            if take(Key::RenderTarget(i as u32)) {
+                targets.push(main.render_targets[i]);
+                main.render_targets[i] = draw.render_targets[i];
+            } else {
+                targets.push(draw.render_targets[i]);
+            }
+        }
+        if take(Key::DepthStencil) {
+            targets.push(main.depth_stencil);
+            main.depth_stencil = draw.depth_stencil;
+        } else {
+            targets.push(draw.depth_stencil);
+        }
+        let samplers: std::collections::BTreeSet<u32> = main
+            .textures
+            .keys()
+            .chain(draw.textures.keys())
+            .copied()
+            .collect();
+        for s in samplers {
+            let (old, copy) = (
+                main.textures.get(&s).copied(),
+                draw.textures.get(&s).copied(),
+            );
+            if take(Key::Texture(s)) {
+                match copy {
+                    Some(t) => main.textures.insert(s, t),
+                    None => main.textures.remove(&s),
+                };
+                unbind.extend(old);
+            } else {
+                unbind.extend(copy);
+            }
+        }
+    }
+    for surface in targets {
+        if surface != 0 {
+            surface_release(e, Ptr::new(surface));
+        }
+    }
+    for t in unbind {
+        texture_unbind(e, Ptr::new(t));
+    }
+}
+
 /// Frees a staging block waiting since its unlock; with `check` it is first compared with what
 /// it held at the unlock (a difference is printed once per level or buffer).
 fn free_unlocked_staging(
@@ -3568,6 +3808,7 @@ fn set_material(e: &mut Engine, this: Ptr, material: Ptr) -> u32 {
         panic!("IDirect3DDevice9::SetMaterial(NULL) is not provided (the runtime faulted)");
     }
     let words: [u32; 17] = std::array::from_fn(|i| e.mem.u32(material.addr() + 4 * i as u32));
+    mark(e, super::d3d9draw::Key::Material);
     device(e, this).material = Some(words);
     D3D_OK
 }
@@ -3582,6 +3823,7 @@ fn set_light(e: &mut Engine, this: Ptr, index: u32, light: Ptr) -> u32 {
         panic!("IDirect3DDevice9::SetLight({index}, NULL) is not provided (the runtime faulted)");
     }
     let words: [u32; 26] = std::array::from_fn(|i| e.mem.u32(light.addr() + 4 * i as u32));
+    mark(e, super::d3d9draw::Key::Light(index));
     device(e, this).lights.insert(index, words);
     D3D_OK
 }
@@ -3604,6 +3846,8 @@ fn default_light() -> [u32; 26] {
 /// `D3D_OK`; an index never set first gets [`default_light`]. The runtime set no limit (ten more
 /// lights than any caps count were taken).
 fn light_enable(e: &mut Engine, this: Ptr, index: u32, enable: u32) -> u32 {
+    mark(e, super::d3d9draw::Key::Light(index));
+    mark(e, super::d3d9draw::Key::LightEnable(index));
     let d = device(e, this);
     d.lights.entry(index).or_insert_with(default_light);
     if enable != 0 {
@@ -3626,6 +3870,7 @@ fn set_software_vertex_processing(e: &mut Engine, this: Ptr, software: u32) -> u
     let d = device(e, this);
     if d.creation[3] & D3DCREATE_MIXED_VERTEXPROCESSING != 0 {
         d.software_vertex_processing = software != 0;
+        mark(e, super::d3d9draw::Key::SoftwareVertexProcessing);
         return D3D_OK;
     }
     if software == 0 {
@@ -6248,5 +6493,149 @@ pub(crate) mod tests {
         eprintln!(
             "static_buffers_on_a_real_device_keep_their_bytes_in_host_memory: ran on a real device"
         );
+    }
+
+    // --- Step 2's two producers (`super::super::d3d9draw`) ---
+
+    /// `GetRenderState(state)` as the calling side sees it.
+    fn render_state(e: &mut Engine, device: u32, state: u32) -> u32 {
+        let out = e.mem.alloc(4);
+        assert_eq!(
+            get_render_state(e, Ptr::new(device), state, Ptr::new(out)),
+            D3D_OK
+        );
+        let v = e.mem.u32(out);
+        e.mem.free(out);
+        v
+    }
+
+    /// `GetTexture(sampler)` as the calling side sees it (the count it adds given back).
+    fn texture_at(e: &mut Engine, device: u32, sampler: u32) -> u32 {
+        let out = e.mem.alloc(4);
+        assert_eq!(
+            get_texture(e, Ptr::new(device), sampler, Ptr::new(out)),
+            D3D_OK
+        );
+        let t = e.mem.u32(out);
+        e.mem.free(out);
+        if t != 0 {
+            texture_release(e, Ptr::new(t));
+        }
+        t
+    }
+
+    /// The drawing side of a cut starts from main's state, changes only its own, and the join
+    /// gives main the serial order's state: the drawing side's value where main set nothing after
+    /// the cut, main's where it did (also when it set a state again to the value it had). A second
+    /// cut while one is open is refused, and so is a cut from the drawing side.
+    #[test]
+    fn the_drawing_side_has_its_own_state_and_the_join_gives_the_serial_one() {
+        use super::super::d3d9draw::{as_drawing_side, draw_cut, draw_join, draw_open};
+        let (mut e, dev) = texture_device(Store::Host);
+        let d = Ptr::new(dev);
+        for (state, value) in [(7, 1), (8, 1), (9, 1), (10, 1)] {
+            set_render_state(&mut e, d, state, value);
+        }
+        set_viewport_words(&mut e, dev, [0, 0, 320, 240]);
+        assert!(draw_cut(&mut e, dev));
+        assert!(draw_open(&mut e));
+        assert!(!draw_cut(&mut e, dev), "one cut at a time");
+        as_drawing_side(|| {
+            assert!(!draw_cut(&mut e, dev), "not from the drawing side");
+            assert_eq!(render_state(&mut e, dev, 7), 1, "main's state at the cut");
+            set_render_state(&mut e, d, 7, 2);
+            set_render_state(&mut e, d, 8, 2);
+            set_render_state(&mut e, d, 10, 2);
+            set_viewport_words(&mut e, dev, [0, 0, 100, 100]);
+            assert_eq!(render_state(&mut e, dev, 7), 2);
+        });
+        // Main, meanwhile: its own state, the drawing side's changes unseen.
+        assert_eq!(render_state(&mut e, dev, 7), 1);
+        assert_eq!(render_state(&mut e, dev, 10), 1);
+        assert_eq!(device(&mut e, d).viewport[2], 320);
+        set_render_state(&mut e, d, 8, 3);
+        // Set again to the value it has: still main's after the join (it came after the draw).
+        set_render_state(&mut e, d, 10, 1);
+        as_drawing_side(|| set_render_state(&mut e, d, 9, 5));
+        draw_join(&mut e);
+        assert!(!draw_open(&mut e));
+        assert_eq!(
+            render_state(&mut e, dev, 7),
+            2,
+            "the drawing side's: main left it"
+        );
+        assert_eq!(render_state(&mut e, dev, 8), 3, "main's: set after the cut");
+        assert_eq!(render_state(&mut e, dev, 9), 5, "the drawing side's");
+        assert_eq!(
+            render_state(&mut e, dev, 10),
+            1,
+            "main's: set again after the cut"
+        );
+        assert_eq!(
+            device(&mut e, d).viewport[2],
+            100,
+            "the drawing side's viewport"
+        );
+        // The next cut starts from the joined state.
+        assert!(draw_cut(&mut e, dev));
+        as_drawing_side(|| assert_eq!(render_state(&mut e, dev, 8), 3));
+        draw_join(&mut e);
+    }
+
+    /// A texture both sides bind is held by each: main unbinding and releasing it during the cut
+    /// leaves it alive for the drawing side, which still answers it; at the join main's choice
+    /// (no texture, set after the cut) stands and the texture goes. One the drawing side binds
+    /// alone becomes main's at the join, held once.
+    #[test]
+    fn a_texture_the_drawing_side_binds_lives_until_the_join() {
+        use super::super::d3d9draw::{as_drawing_side, draw_cut, draw_join};
+        let (mut e, dev) = texture_device(Store::Host);
+        let d = Ptr::new(dev);
+        let first = new_texture(&mut e, dev, [16, 16, 1, 0, A8R8G8B8, 1]);
+        let second = new_texture(&mut e, dev, [16, 16, 1, 0, A8R8G8B8, 1]);
+        assert_eq!(set_texture(&mut e, d, 0, first), D3D_OK);
+        assert!(draw_cut(&mut e, dev));
+        assert_eq!(
+            texture(&mut e, Ptr::new(first)).bound,
+            2,
+            "held by main and the copy"
+        );
+        // Main lets go of it altogether.
+        assert_eq!(set_texture(&mut e, d, 0, 0), D3D_OK);
+        assert_eq!(texture_release(&mut e, Ptr::new(first)), 0);
+        assert!(
+            device!(e).device_objects.textures.contains_key(&first),
+            "alive"
+        );
+        as_drawing_side(|| {
+            assert_eq!(texture_at(&mut e, dev, 0), first);
+            assert_eq!(set_texture(&mut e, d, 1, second), D3D_OK);
+        });
+        draw_join(&mut e);
+        assert!(
+            !device!(e).device_objects.textures.contains_key(&first),
+            "main's choice stands and nothing holds it any more"
+        );
+        assert_eq!(texture_at(&mut e, dev, 0), 0);
+        assert_eq!(
+            texture_at(&mut e, dev, 1),
+            second,
+            "the drawing side's binding"
+        );
+        assert_eq!(texture(&mut e, Ptr::new(second)).bound, 1, "held once");
+    }
+
+    /// The viewport's words through `SetViewport`.
+    fn set_viewport_words(e: &mut Engine, device: u32, rect: [u32; 4]) {
+        let v = e.mem.alloc(24);
+        for (i, w) in rect
+            .iter()
+            .chain(&[0f32.to_bits(), 1f32.to_bits()])
+            .enumerate()
+        {
+            e.mem.set_u32(v + 4 * i as u32, *w);
+        }
+        assert_eq!(set_viewport(e, Ptr::new(device), Ptr::new(v)), D3D_OK);
+        e.mem.free(v);
     }
 }
