@@ -47,7 +47,7 @@
 //! the shader it is paired with when the bind groups are separate per stage.
 //!
 //! Render pipelines this cannot make (a shader module wgpu-hal keeps as naga IR, mesh shaders,
-//! multiview, a layout with a gap or with a group no draw stage sees) are made whole, as published
+//! multiview, a layout with a group whose bindings no draw stage sees) are made whole, as published
 //! wgpu-hal makes them, with the same layout. A pipeline layout's sets are bound for draws with
 //! its independent-sets variant ([`super::PipelineLayout::raw_for`]): layouts with and without the
 //! flag are not compatible, and compute pipelines cannot use the flag.
@@ -115,7 +115,7 @@ struct LayoutKey {
 
 impl LayoutParts {
     /// The parts of a new pipeline layout, or `None` where its render pipelines are made whole:
-    /// a device without libraries, a gap in the groups, or a group no draw stage can see (the
+    /// a device without libraries, or a group with bindings no draw stage can see (the
     /// union of the libraries' layouts would then differ from the layout descriptor sets are
     /// bound with).
     pub(super) fn new(
@@ -126,23 +126,27 @@ impl LayoutParts {
         if !device.private_caps.extras.pipeline_library {
             return Ok(None);
         }
+        // Each set: its layout and its entries. A gap is the published layout's empty set, and an empty
+        // set (a gap, or a group without bindings) is in every stage's layout: no shader reads it, and
+        // every stage then has it identically defined.
         let draw_stages = wgt::ShaderStages::VERTEX | wgt::ShaderStages::FRAGMENT;
-        let mut groups = Vec::with_capacity(desc.bind_group_layouts.len());
+        let mut groups: Vec<(vk::DescriptorSetLayout, Arc<[wgt::BindGroupLayoutEntry]>)> =
+            Vec::with_capacity(desc.bind_group_layouts.len());
         for bgl in desc.bind_group_layouts {
             match bgl {
+                None => groups.push((device.empty_descriptor_set_layout, Arc::from([]))),
                 Some(bgl)
-                    if bgl
-                        .entries
-                        .iter()
-                        .any(|e| e.visibility.intersects(draw_stages)) =>
+                    if bgl.entries.is_empty()
+                        || bgl
+                            .entries
+                            .iter()
+                            .any(|e| e.visibility.intersects(draw_stages)) =>
                 {
-                    groups.push(*bgl)
+                    groups.push((bgl.raw, Arc::from(&bgl.entries[..])))
                 }
                 _ => return Ok(None),
             }
         }
-        let entries: Vec<Arc<[wgt::BindGroupLayoutEntry]>> =
-            groups.iter().map(|g| Arc::from(&g.entries[..])).collect();
         let create = |sets: &[vk::DescriptorSetLayout]| {
             let info = vk::PipelineLayoutCreateInfo::default()
                 .flags(vk::PipelineLayoutCreateFlags::INDEPENDENT_SETS_EXT)
@@ -154,13 +158,9 @@ impl LayoutParts {
         let stage = |visible: wgt::ShaderStages| -> Result<Arc<StageLayout>, crate::DeviceError> {
             let mut sets = Vec::with_capacity(groups.len());
             let mut key = Vec::with_capacity(groups.len());
-            for (group, entries) in groups.iter().zip(&entries) {
-                if group
-                    .entries
-                    .iter()
-                    .any(|e| e.visibility.intersects(visible))
-                {
-                    sets.push(group.raw);
+            for &(raw, ref entries) in &groups {
+                if entries.is_empty() || entries.iter().any(|e| e.visibility.intersects(visible)) {
+                    sets.push(raw);
                     key.push(Some(Arc::clone(entries)));
                 } else {
                     sets.push(vk::DescriptorSetLayout::null());
@@ -178,7 +178,7 @@ impl LayoutParts {
         };
         let vertex = stage(wgt::ShaderStages::VERTEX)?;
         let fragment = stage(wgt::ShaderStages::FRAGMENT)?;
-        let all: Vec<vk::DescriptorSetLayout> = groups.iter().map(|g| g.raw).collect();
+        let all: Vec<vk::DescriptorSetLayout> = groups.iter().map(|&(raw, _)| raw).collect();
         Ok(Some(Self {
             independent: create(&all)?,
             vertex,
