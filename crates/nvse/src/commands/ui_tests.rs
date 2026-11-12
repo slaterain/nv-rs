@@ -648,3 +648,43 @@ fn call_counted(e: &mut Engine, opcode: u32, count: u16, args: &[Vec<u8>]) -> (u
         .eax;
     (ok & 0xff, e.mem.f64(RESULT))
 }
+
+/// `SortUIListBox` with a slash in the destination or the increment path: vanilla finds it only
+/// for the first sorted item (xNVSE cuts the spec's path at its slash), so only that item is
+/// placed and the later ones are left; with the fixes row every item is placed.
+#[test]
+fn nested_destination_and_increment_paths() {
+    let run = |row: bool, spec: &str| -> Vec<f32> {
+        let mut e = setup();
+        super::super::array::set_fix(&mut e, super::super::array::UI_SORT_PATHS, row);
+        let inv = menu(&mut e, 0x3ea, "InventoryMenu", &[]);
+        let list = tile(&mut e, inv, "list", &[], &[]);
+        let mut seen = Vec::new();
+        for (num, height) in [(2.0, 1.0), (3.0, 10.0), (1.0, 100.0)] {
+            let t = tile(
+                &mut e,
+                list,
+                "item",
+                &[
+                    ("listindex", 0.0),
+                    ("num", num),
+                    ("height", height),
+                    ("width", -1.0),
+                ],
+                &[],
+            );
+            let child = tile(&mut e, t, "a", &[("num", -1.0), ("height", height)], &[]);
+            seen.push((t, child));
+        }
+        call(&mut e, 0x14d6, 0, &[s("InventoryMenu/list"), s(spec)]);
+        seen.iter()
+            .flat_map(|&(t, c)| [value_num(&e, value_of(&e, t, 0x1001)), value_num(&e, value_of(&e, c, 0x1005))])
+            .collect()
+    };
+    // Destination through the child: the items in order 1, 2, 3 (heights 100, 1, 10).
+    assert_eq!(run(false, "num$a/num"), [-1.0, -1.0, -1.0, -1.0, -1.0, 0.0]);
+    assert_eq!(run(true, "num$a/num"), [-1.0, 100.0, -1.0, 101.0, -1.0, 0.0]);
+    // Increment through the child, destination the item's own width.
+    assert_eq!(run(false, "num$width$a/height"), [-1.0, -1.0, -1.0, -1.0, 0.0, -1.0]);
+    assert_eq!(run(true, "num$width$a/height"), [100.0, -1.0, 101.0, -1.0, 0.0, -1.0]);
+}

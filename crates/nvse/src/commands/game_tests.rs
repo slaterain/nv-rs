@@ -716,6 +716,14 @@ fn local_map_pictures_with_the_override() {
     super::super::array::set_fix(&mut e, super::super::array::LIST_GUARD, true);
     run(&mut e, 0x15e7, 0, &[]);
     assert_eq!(take(), (1, 169, Vec::new()));
+    // 17 grids: the byte wraps to 33 in vanilla; the row draws the whole square, 289.
+    e.set_global(GRIDS_TO_LOAD, 17u32);
+    run(&mut e, 0x15e8, 0, &[n(17)]);
+    run(&mut e, 0x15e7, 0, &[]);
+    assert_eq!(take(), (1, 289, Vec::new()));
+    super::super::array::set_fix(&mut e, super::super::array::LIST_GUARD, false);
+    run(&mut e, 0x15e7, 0, &[]);
+    assert_eq!(take(), (1, 33, Vec::new()));
 }
 
 /// `AddSpellNS` runs the game's AddSpell with its own arguments while `QueueUIMessage` returns at

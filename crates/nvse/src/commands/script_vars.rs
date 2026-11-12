@@ -723,9 +723,9 @@ fn get_current_script(e: &mut Engine, w: &[u32]) -> Ret {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Script.cpp:
 // TernaryEvaluator::ExtractArgs, Cmd_Ternary_Execute.
 /// Three expressions: the condition, then only the one it picks is evaluated (the other is stepped
-/// over), and that one's value is the result, by its own type. Not three arguments, or a condition
-/// or result that fails: the result stays 0 (xNVSE reads through a failed condition and stops the
-/// game).
+/// over), and that one's value is the result, by its own type. Not three arguments, or a result
+/// that fails: the result stays 0. A condition that fails: xNVSE reads through the null token and
+/// the game stops, as here in vanilla; with the null guard row ([`super::array::NULL_GUARD`]) 0.
 fn ternary(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     a.set_result(e, 0.0);
@@ -735,6 +735,11 @@ fn ternary(e: &mut Engine, w: &[u32]) -> Ret {
             return;
         }
         let Some(condition) = ev.evaluate(e) else {
+            // `cond->GetBool()` through the null token xNVSE's failed `Evaluate` gives: its vtable
+            // read at 0, and the game stops. The null guard row answers 0 instead.
+            if !super::array::fix_on(e, super::array::NULL_GUARD) {
+                let _ = e.mem.u32(0);
+            }
             return;
         };
         let chosen = if ev.get_bool(e, &condition) {

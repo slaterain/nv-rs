@@ -384,3 +384,39 @@ fn reload_plugin_config_tells_that_plugin() {
     assert_eq!(call(&mut e, 0x167a, 0, &[s("Hidden")]), (1, 0.0));
     assert_eq!(HEARD.with(|h| h.borrow().len()), 1);
 }
+
+/// `ReloadPluginConfig`'s console line for a name no loaded plugin has, and a loaded plugin with
+/// no listener: 1, nothing heard.
+#[test]
+fn reload_plugin_config_line_and_a_silent_plugin() {
+    let mut e = setup();
+    with_plugins(&mut e);
+    crate::plugins::register(
+        &mut e,
+        crate::plugins::BuiltIn {
+            file: "Quiet",
+            name: "Quiet",
+            version: 1,
+            opcode_base: 0x9200,
+            listed: true,
+            listener: None,
+            save: None,
+            load: None,
+            pre_load: None,
+            new_game: None,
+        },
+    );
+    e.register(0x0071_b160, |_, _| eax(0x0200_f000));
+    e.register(0x0071_d0a0, |e, a| {
+        let format = crate::table::guest_text(e, a[1]);
+        let list = e.mem.bytes(a[2], 16);
+        let line = super::super::printf::ucrt_format(e, &format, &list);
+        BOXES.with(|b| b.borrow_mut().push(String::from_utf8(line).unwrap()));
+        eax(0)
+    });
+    assert_eq!(call(&mut e, 0x167a, 0, &[s("Nobody")]), (1, 0.0));
+    assert_eq!(boxes(), ["ReloadPluginConfig: plugin 'Nobody' not found"]);
+    assert_eq!(call(&mut e, 0x167a, 0, &[s("quiet")]), (1, 1.0));
+    assert!(boxes().is_empty());
+    assert!(HEARD.with(|h| h.borrow().is_empty()));
+}
