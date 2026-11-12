@@ -6677,6 +6677,52 @@ pub(crate) mod tests {
         assert_eq!(bound(&mut e, 105), i2, "main's: set after the cut");
     }
 
+    /// A buffer whose last reference the drawing side lets go of during a cut ends only at the
+    /// join: main's calls meanwhile still find it alive.
+    #[test]
+    fn a_buffer_the_drawing_side_releases_ends_at_the_join() {
+        use super::super::d3d9draw::{as_drawing_side, draw_cut, draw_join};
+        use super::super::d3d9resource::alive;
+        let (mut e, dev) = texture_device(Store::Host);
+        let x = new_buffer(&mut e, dev, false, 0x100, 0, 0);
+        assert!(draw_cut(&mut e, dev));
+        as_drawing_side(|| assert_eq!(e.vcall(x, 4 * 2, &[]).u32(), 0, "its last reference"));
+        assert!(alive(&mut e, x), "kept until the join");
+        draw_join(&mut e);
+        assert!(!alive(&mut e, x), "ended at the join");
+    }
+
+    /// A lock from the drawing side gets a block of its own holding the range's bytes as they are:
+    /// its writes never reach the buffer's own bytes, which main's locks keep finding.
+    #[test]
+    fn the_drawing_side_locks_a_buffer_in_a_block_of_its_own() {
+        use super::super::d3d9draw::{as_drawing_side, draw_cut, draw_join};
+        let (mut e, dev) = texture_device(Store::Host);
+        let x = new_buffer(&mut e, dev, false, 0x100, 0, 0);
+        let (hr, main_at) = lock_buffer(&mut e, x, 0, 16, 0);
+        assert_eq!(hr, D3D_OK);
+        e.mem.set_u32(main_at, 0x1234_5678);
+        assert_eq!(e.vcall(x, 4 * 12, &[]).u32(), D3D_OK);
+        assert!(draw_cut(&mut e, dev));
+        let draw_at = as_drawing_side(|| {
+            let (hr, at) = lock_buffer(&mut e, x, 0, 16, 0);
+            assert_eq!(hr, D3D_OK);
+            assert_eq!(e.mem.u32(at), 0x1234_5678, "the range's bytes as they are");
+            e.mem.set_u32(at, 0x9abc_def0);
+            assert_eq!(e.vcall(x, 4 * 12, &[]).u32(), D3D_OK);
+            at
+        });
+        let (hr, again) = lock_buffer(&mut e, x, 0, 16, 0);
+        assert_eq!(hr, D3D_OK);
+        assert_ne!(
+            again, draw_at,
+            "main's lock never meets the drawing side's block"
+        );
+        assert_eq!(e.mem.u32(again), 0x1234_5678, "the buffer's own bytes");
+        assert_eq!(e.vcall(x, 4 * 12, &[]).u32(), D3D_OK);
+        draw_join(&mut e);
+    }
+
     /// The viewport's words through `SetViewport`.
     fn set_viewport_words(e: &mut Engine, device: u32, rect: [u32; 4]) {
         let v = e.mem.alloc(24);

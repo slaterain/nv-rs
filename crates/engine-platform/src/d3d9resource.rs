@@ -571,6 +571,12 @@ fn unbind(e: &mut Engine, this: Ptr) {
     }
 }
 
+/// Whether `object` is a live object of this module (tests).
+#[cfg(test)]
+pub(super) fn alive(e: &mut Engine, object: u32) -> bool {
+    resources(e).objects.contains_key(&object)
+}
+
 fn destroy(e: &mut Engine, this: Ptr) {
     // On the drawing side of an open cut the object waits for the join (`super::d3d9draw`).
     let objects = &mut device!(e).device_objects;
