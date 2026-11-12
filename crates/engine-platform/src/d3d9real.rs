@@ -342,9 +342,8 @@ fn record_on(e: &mut Engine, object: u32, cmd: Cmd<Data<'_>>) {
 /// reply comes after the slot's commands, which the drawing side records under that lock.
 fn call(e: &mut Engine, cmd: Cmd<Data<'_>>) -> Option<Reply> {
     if !super::d3d9draw::drawing_thread() && real(e).stream.as_mut().is_some_and(Stream::cut_open) {
-        engine_core::real_threads::without_device_lock(e, || {
-            engine_core::real_threads::wait_draw(e)
-        });
+        // `wait_draw` gives the device lock back while it waits.
+        engine_core::real_threads::wait_draw(e);
     }
     sink(real(e)).map(|mut s| s.submit(cmd))
 }

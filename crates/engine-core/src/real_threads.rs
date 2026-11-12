@@ -1456,29 +1456,6 @@ pub fn without_kernel_lock<R>(e: &Engine, f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// Runs `f` with this thread's holds of the device lock given back, then takes it again with the
-/// same holds (also if `f` panics): a device function that must wait for the drawing helper
-/// ([`wait_draw`]), whose own device calls need the lock. The caller holds no reference into the
-/// device's state across `f`. Without real threads, or without the lock held here, it just runs
-/// `f`.
-pub fn without_device_lock<R>(e: &Engine, f: impl FnOnce() -> R) -> R {
-    let Some(world) = e.real.as_ref().map(|r| r.world) else {
-        return f();
-    };
-    if !world.device.held_here() {
-        return f();
-    }
-    /// Takes the device lock back with the holds given up, however `f` ends.
-    struct Retake(&'static World, u32);
-    impl Drop for Retake {
-        fn drop(&mut self) {
-            self.0.device.take_again(self.0, self.1);
-        }
-    }
-    let _retake = Retake(world, world.device.release_all());
-    f()
-}
-
 /// Whether this thread may reach the device's state: it holds the device lock, or there are no
 /// real threads (one game thread runs at a time). For debug assertions in the platform layer.
 pub fn device_lock_held(e: &Engine) -> bool {
