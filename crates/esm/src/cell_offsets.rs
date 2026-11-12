@@ -138,7 +138,8 @@ fn keys(x: i32, y: i32) -> (u32, u32) {
 
 /// Every world space record of the plugin `file`, in file order, with the table built for each
 /// the game would use (every record of a file that is not a master, and a master's records
-/// with no `OFST` of their own: a master reads its own), or for all of them with `build_all`. An error is the file's: it could not be read, or it is not laid out as
+/// with no `OFST` of their own: a master reads its own), or for all of them with `build_all`.
+/// An error is the file's: it could not be read, or it is not laid out as
 /// a plugin (a group or record running past its group or the file).
 pub fn world_offsets<R: Read + Seek>(file: R, build_all: bool) -> io::Result<Vec<WorldOffsets>> {
     let mut source = Source::new(file)?;

@@ -393,8 +393,10 @@ made by Bethesda's tools). `TESWorldSpace::FindCellInFile` (`005854f0`) uses the
 master file (`00585502`), and `TESWorldSpace::Load` (`00583560`) stores the position and corners only
 for a master (`005835bc`, `00583dc0`, `00583ea8`). Any other file, and a master whose tables were
 stripped (YUP's and TTW's: the tools that make them drop `OFST`), is searched record by record from the
-world space record each time one of its cells loads, on the one loading thread: the cell tasks took 5.5
-to 7.5 ms each in the base game and 14 to 25 ms with YUP (measure/smooth-200/BORDERS.md, run fd-dg2).
+world space record each time one of its cells loads, once for each such file, on the one loading thread
+(Cell Offset Generator's author measured up to 20 ms a file a cell in the original). A cell task took 5.5
+to 7.5 ms in the base game and 14 to 25 ms with YUP (measure/smooth-200/BORDERS.md, run fd-dg2), which
+was thought to be mostly that search; it is not (below).
 
 - **The row** (Cell Offset Generator's idea; `crates/host/src/cell_offsets.rs`). Registered over `Load`
   and `FindCellInFile`. `Load` runs the translation, then gives the record's `OFFSET_DATA` the table its
@@ -416,7 +418,8 @@ to 7.5 ms each in the base game and 14 to 25 ms with YUP (measure/smooth-200/BOR
   place a table answers differently is a cell asked for at x = 2,147,483,647, where the search finds
   the persistent cell; no cell can be there. Built from the base game's masters' records, every one of
   their 41 tables is the masters' own `OFST`, entry for entry (`crates/esm/tests/cell_offsets_real.rs`,
-  run on FalloutNV.esm, the four add-ons and Gun Runners' Arsenal).
+  run on FalloutNV.esm and the four story add-ons, Dead Money, Honest Hearts, Old World Blues and Lonesome
+  Road).
 - **Not taken from Cell Offset Generator.** Its cache of tables on disk (`Data\CellOffsets`, checked
   with an xxHash of the whole plugin): it builds a table by running the game's search for every square
   of the grid, which is slow; one pass over the records reads less of a plugin than hashing it would,
@@ -425,7 +428,19 @@ to 7.5 ms each in the base game and 14 to 25 ms with YUP (measure/smooth-200/BOR
   cell's `FindInFileFast` (`005858dc`, `005502a1`: a plugin's `TESFile::FindForm`), the editor-ID
   lookup's "optimized file" test (`00461db1`, used by the console's `coc`) and its null check
   (`0058598f`: an `OFFSET_DATA` with no table, which the row never makes).
-- **Measured** MEASURED
+- **Measured** (2026-11-11, one check run each way: the short route, `NV_REPEATABLE=5400` with stepped
+  threads, YUP and SR556 loaded, the fixes preset with the row off and on; other agents' builds were
+  running, so the times are a check, not a timing sitting). Both runs pass the route check and load the
+  same 26 cells in the same order (the coc into Goodsprings). YUP's 28 world spaces got their tables in
+  8.4 ms on the host thread (the builder alone, release build, warm: 1.9 ms; FalloutNV.esm, which needs
+  none, is passed over in 3.2 ms). The cell loads took 335.6 ms in all with the row off and 317.6 ms with
+  it on (mean 12.9 and 12.2 ms, median 11.7 and 11.2): about 0.7 ms a cell, inside this run's noise (the
+  same cell's two loads differ by up to 10 ms either way). So in nv-rs the search of one plugin is a
+  small part of a cell load; most of it is the cell's own records, which the row does not change, and
+  the 14 to 25 ms cell tasks with YUP above are mostly those. What the row saves is one search per cell
+  for each plugin that edits a world space, so it grows with long load orders and TTW. The tables (about
+  370 KB of the game's heap with YUP) move later heap blocks, so the two runs are not byte for byte the
+  same: the player's height on the street at the end differs by 0.02 units.
 
 ### Dialogue topic index
 

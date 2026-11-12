@@ -8,9 +8,9 @@
 //! master file gets the position and the corners (`TESWorldSpace::Load`, `00583560`, at
 //! `005835bc`, `00583dc0` and `00583ea8`), and `TESWorldSpace::FindCellInFile` (`005854f0`)
 //! uses a table only for a master (`00585502`). Every other file, and a master whose table was
-//! stripped (YUP's and TTW's are), is searched record by record from the world space record for
-//! each cell loaded: 5.5 to 7.5 ms a cell in the base game, 14 to 25 ms with YUP, on the one
-//! loading thread (measure/smooth-200/BORDERS.md).
+//! stripped (YUP's and TTW's are), is searched record by record from the world space record, once
+//! for each cell loaded and each such file, on the one loading thread (Cell Offset Generator's
+//! author measured up to 20 ms a file a cell in the original; docs/FIXES.md has the cost here).
 //!
 //! **What this does.** Registered over `Load` and `FindCellInFile`.
 //! - `Load` runs the translation, then gives the record's `OFFSET_DATA` the table its search
@@ -28,7 +28,8 @@
 //! (`esm::cell_offsets` declines otherwise, and that world space is searched as before), so the
 //! same cells are found, sooner. The tables live in the game's heap like the masters' own, freed
 //! with the world space (`00588c80`). Nothing is written to disk: building a plugin's tables
-//! reads less of it than hashing it for a cache would (YUP's 28 tables in about 3 ms).
+//! reads less of it than hashing it for a cache would (YUP's 28 tables: 1.9 ms in a release build,
+//! 8.4 ms in the play profile).
 
 use crate::fixes::Fix;
 use engine::prelude::*;
