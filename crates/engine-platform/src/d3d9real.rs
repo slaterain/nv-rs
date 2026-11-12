@@ -255,6 +255,15 @@ fn real(e: &mut Engine) -> &mut Real {
     &mut device!(e).real
 }
 
+/// Tests: `stream` as the backend's for the modelled device `device`, as a made device has one, so its
+/// calls are recorded (the two-producer tests watch the order the backend sees).
+#[cfg(test)]
+pub(crate) fn test_stream(e: &mut Engine, device: u32, stream: Stream) {
+    let r = real(e);
+    r.stream = Some(stream);
+    r.devices.push((device, None));
+}
+
 /// The real window of a modelled window handle, when it has one (under the device lock with real
 /// threads: the window functions make them, the device presents in them).
 pub fn real_window(e: &Engine, handle: u32) -> Option<isize> {

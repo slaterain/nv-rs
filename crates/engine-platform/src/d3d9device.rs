@@ -6725,6 +6725,45 @@ pub(crate) mod tests {
         draw_join(&mut e);
     }
 
+    /// The calls of both sides reach the backend in the serial order: main's before the cut, the
+    /// drawing side's (through the cut's slot, while main goes on), then main's after the cut, held
+    /// until the join, and main's after the join.
+    #[cfg(windows)]
+    #[test]
+    fn the_backend_sees_the_two_sides_calls_in_the_serial_order() {
+        use super::super::d3d9draw::{as_drawing_side, draw_cut, draw_join};
+        use d3d9_stream::{Backend, Cmd, Data, Reply, Stream};
+        struct States(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+        impl Backend for States {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                if let Cmd::SetRenderState { state, value, .. } = cmd {
+                    self.0.lock().unwrap().push(format!("{state}={value}"));
+                }
+                Reply::None
+            }
+        }
+        let (mut e, dev) = texture_device(Store::Host);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let backend = States(std::sync::Arc::clone(&seen));
+        super::super::d3d9real::test_stream(&mut e, dev, Stream::direct(Box::new(backend)));
+        // `SetRenderState` through the device's table: the model, then the backend's stream.
+        let state = |e: &mut Engine, s: u32, v: u32| {
+            assert_eq!(e.vcall(dev, 4 * 57, &[s, v]).u32(), D3D_OK);
+        };
+        state(&mut e, 7, 1);
+        assert!(draw_cut(&mut e, dev));
+        state(&mut e, 8, 3);
+        as_drawing_side(|| state(&mut e, 9, 2));
+        assert_eq!(
+            *seen.lock().unwrap(),
+            ["7=1", "9=2"],
+            "main's after the cut held"
+        );
+        draw_join(&mut e);
+        state(&mut e, 10, 4);
+        assert_eq!(*seen.lock().unwrap(), ["7=1", "9=2", "8=3", "10=4"]);
+    }
+
     /// The viewport's words through `SetViewport`.
     fn set_viewport_words(e: &mut Engine, device: u32, rect: [u32; 4]) {
         let v = e.mem.alloc(24);
