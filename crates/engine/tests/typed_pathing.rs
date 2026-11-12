@@ -4060,3 +4060,221 @@ fn crossed_edge_end_on_corner() {
         .assert_same();
     }
 }
+
+// ---- The review's cases (#521): more main-thread checks, and game sizes ----
+
+/// The crossing test run directly under the main thread's control word (both copies of it): whether
+/// it crosses, and the point it writes. Its translation computes in doubles there ([`MAIN_WORD_DIFFERS`]),
+/// so these cases check the typed version against the exe's arithmetic worked out by hand (each step
+/// rounded to a float, found with a float emulation).
+fn crossing_on_main(points: [[u32; 2]; 4]) -> (bool, [u32; 2]) {
+    let mut e = Engine::new_untyped_for_test();
+    stand_ins(&mut e);
+    let [p1, p2, p3, p4] = crossing_points(&mut e, points);
+    let out = e.mem.alloc(8);
+    engine_core::units::crt::set_x87_control_word(&mut e, MAIN_THREAD);
+    let hit = pov::crossing(
+        &mut e,
+        Ptr::new(p1),
+        Ptr::new(p2),
+        Ptr::new(p3),
+        Ptr::new(p4),
+        Ptr::new(out),
+    );
+    engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
+    (hit, [e.mem.u32(out), e.mem.u32(out + 4)])
+}
+
+#[test]
+fn rounding_crossing_fraction_main_thread() {
+    // Four points whose crossing fraction alone, taken as a double and rounded once, would move the
+    // crossing's y by one ulp (0x4088b83e): rounded each step it is 0x4088b83f.
+    let (hit, at) = crossing_on_main([
+        [0x40ce_5cd2, 0xc03e_724c],
+        [0x4084_a8fd, 0x417b_eadb],
+        [0xc014_78c0, 0x4084_32fa],
+        [0x4178_1583, 0x408e_6dd0],
+    ]);
+    assert!(hit);
+    assert_eq!(at, [0x40b1_d396, 0x4088_b83f]);
+}
+
+#[test]
+fn crossing_measured_again_main_thread() {
+    // p2 = (3, -3) exactly on the line through p3 = (-10, 10) and p4 = (10, -10): on the main thread
+    // the sum of the other side tests comes out a little off zero, below 0.001, so the side is measured
+    // again, an exact zero: no crossing (kept, the sum would cross at p2).
+    let (hit, _) = crossing_on_main([
+        [0x402e_c163, 0xc18f_f364],
+        [0x4040_0000, 0xc040_0000],
+        [0xc120_0000, TEN],
+        [TEN, 0xc120_0000],
+    ]);
+    assert!(!hit);
+}
+
+#[test]
+fn crossed_edge_rounding() {
+    // A segment past triangle 0's corner (10, 0) where a side test rounds differently step by step
+    // than once: on the main thread's word the second edge is crossed, on the other threads' none
+    // (-1), and each matches the exe on its word.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x0069_8320,
+            navmesh::crossed_edge(Ptr<_>, u16, i32, Ptr<_>, Ptr<_>) -> i32
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_8320)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            let w = world(e);
+            let a = point(e, [0x4115_90a8, 0xc09c_14de, 0]);
+            let b = point(e, [0x412b_cd2c, 0x40b0_8574, 0]);
+            vec![w.mesh, 0, 0xffff_ffff, a, b]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+/// Coordinates of the size the game's navmeshes have (about 1e5, with fractional parts).
+const FAR_X: f32 = 100_001.37;
+const FAR_Y: f32 = 50_003.81;
+
+#[test]
+fn triangle_for_game_size() {
+    // The grid moved out to (99990.5, 49990.25) and the point at (100001.37, 50003.81): its offsets and
+    // cell indices at that size, under both words bit for bit.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x0069_6a50,
+            navmesh::triangle_for(Ptr<_>, Ptr<_>, u32) -> u16
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_6a50)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            let w = world(e);
+            let g = w.mesh + 0xa8;
+            let (min_x, min_y) = (99_990.5f32, 49_990.25f32);
+            point_at(e, g + 0x10, [min_x.to_bits(), min_y.to_bits(), 0]);
+            point_at(
+                e,
+                g + 0x18,
+                [(min_x + 20.0).to_bits(), (min_y + 20.0).to_bits(), TEN],
+            );
+            e.mem.set_u32(w.mesh + 0x24, w.info);
+            let p = point(e, [FAR_X.to_bits(), FAR_Y.to_bits(), 0x3e99_999a]);
+            vec![w.mesh, p, 0x1234]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn closest_triangle_game_size() {
+    // The point at (100001.37, 50003.81, 5.5), outside the grid, so every triangle; no height found, so
+    // the nearest centre by squared distances of about 1e10, under both words bit for bit.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x0069_6cf0,
+            navmesh::closest_triangle(Ptr<_>, Ptr<_>, Ptr, Ptr) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_6cf0)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            let w = world(e);
+            e.register(0x0069_7730, |_, _| ret(0));
+            let p = point(e, [FAR_X.to_bits(), FAR_Y.to_bits(), 0x40b0_0000]);
+            let o = outs(e);
+            vec![w.mesh, p, o, o + 4]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+/// The crossing case at game size: two segments crossing near (100005, 50003).
+const FAR_CROSSING: [[u32; 2]; 4] = [
+    [0x47c3_4d90, 0x4743_4b60],
+    [0x47c3_52d0, 0x4743_54e0],
+    [0x47c3_4b40, 0x4743_5a40],
+    [0x47c3_5560, 0x4743_4680],
+];
+
+#[test]
+fn crossing_game_size() {
+    // Under the other threads' word against the translation ([`MAIN_WORD_DIFFERS`]); under the main
+    // thread's against the exe's arithmetic by hand: (0x47c35052, 0x4743505d) on both.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x006b_9e90,
+            pov::crossing(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x006b_9e90)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            stand_ins(e);
+            let [p1, p2, p3, p4] = crossing_points(e, FAR_CROSSING);
+            let out = e.mem.alloc(8);
+            vec![p1, p2, p3, p4, out]
+        })
+        .run()
+        .assert_same();
+    }
+    assert_eq!(crossing_on_main(FAR_CROSSING), (true, [0x47c3_5052, 0x4743_505d]));
+}
+
+/// The goal test with the node about 1e5 from the goal in x (on another triangle) and the request's
+/// radius `t`: whether it is the goal under `word`, run directly.
+fn far_goal_on(word: u16, t: u32) -> bool {
+    let mut e = Engine::new_untyped_for_test();
+    let w = world(&mut e);
+    far_goal_setup(&mut e, &w, t);
+    engine_core::units::crt::set_x87_control_word(&mut e, word);
+    let goal = search::is_goal(&mut e, Ptr::new(w.search), Ptr::new(w.node));
+    engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
+    goal
+}
+
+/// [`far_goal_on`]'s node and request: the node at x = 1 - 100000.37 (the goal at 1), y 1.5.
+fn far_goal_setup(e: &mut Engine, w: &World, t: u32) {
+    point_at(e, w.node + 0x10, [0xc7c3_4faf, 0x3fc0_0000, ONE]);
+    e.mem.set_u16(w.node + 0xc, 1);
+    let request = e.mem.u32(w.search + 0x2058);
+    e.mem.set_u32(request + 0x68, t);
+    e.mem.set_u32(request + 0x74, t);
+}
+
+#[test]
+fn is_goal_game_size() {
+    // The squared distance is about 1e10 (0x50150341). With t = 200000.75 the limit t * (t * 0.25) is
+    // above it on both words (the goal); with t = 2 * 100000.37 rounded down, the limit rounds onto it
+    // on the main thread (not below: no goal), and is not above it on the others either. Under the
+    // other threads' word against the translation, under the main thread's by hand.
+    for t in [0x4843_5030u32, 0x4843_502f] {
+        for base in ROUNDING_BY_THREAD {
+            Diff::new(entry!(0x006a_79c0, search::is_goal(Ptr<_>, Ptr) -> bool))
+                .common()
+                .by(base)
+                .plain(0x006a_79c0)
+                .inputs(&FIXED)
+                .setup(move |e, _| {
+                    let w = world(e);
+                    far_goal_setup(e, &w, t);
+                    vec![w.search, w.node]
+                })
+                .run()
+                .assert_same();
+        }
+    }
+    assert!(far_goal_on(MAIN_THREAD, 0x4843_5030));
+    assert!(!far_goal_on(MAIN_THREAD, 0x4843_502f));
+}
