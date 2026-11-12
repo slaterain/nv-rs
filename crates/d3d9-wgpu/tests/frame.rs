@@ -2687,44 +2687,44 @@ fn cuts_between_finished_encoders_keep_multisampled_colour_and_depth() {
     }
 }
 
-/// A triangle list from clip-space vertices (x, y, z; w 1), in its own part of the buffer (at
-/// most two triangles).
-fn tris(g: &mut Gpu, v: &[[f32; 3]]) {
-    let data: Vec<f32> = v.iter().flat_map(|p| [p[0], p[1], p[2], 1.0]).collect();
-    let bytes = floats(&data);
-    let offset = 96 * (g.next % 32);
-    g.next += 1;
-    g.run(Cmd::UploadBuffer {
-        buffer: VB,
-        offset,
-        flags: 0,
-        data: Data::Bytes(&bytes),
-    });
-    g.run(Cmd::SetStreamSource {
-        device: DEVICE,
-        stream: 0,
-        buffer: VB,
-        offset,
-        stride: 16,
-    });
+/// The vertex buffer of [`dynamic_state_scene`]: every shape in it once, uploaded before the
+/// first draw, so that no upload falls between the draws (an upload can end the render pass, and
+/// with it what the command buffer is known to have set). Each shape's first vertex.
+struct Shapes {
+    data: Vec<f32>,
+}
+
+impl Shapes {
+    /// Clip-space vertices (x, y, z; w 1); the first vertex's number.
+    fn add(&mut self, v: &[[f32; 3]]) -> u32 {
+        let first = (self.data.len() / 4) as u32;
+        self.data
+            .extend(v.iter().flat_map(|p| [p[0], p[1], p[2], 1.0]));
+        first
+    }
+
+    /// Clip x from `x0` to `x1` over the viewport's height, at depth `z0` on the left and `z1` on
+    /// the right: two triangles wound clockwise on screen (Direct3D 9's front faces), or
+    /// counter-clockwise.
+    fn band(&mut self, x0: f32, x1: f32, z0: f32, z1: f32, clockwise: bool) -> u32 {
+        let (a, b, c) = ([x0, -1.0, z0], [x0, 1.0, z0], [x1, -1.0, z1]);
+        let (d, e, f) = ([x1, -1.0, z1], [x0, 1.0, z0], [x1, 1.0, z1]);
+        if clockwise {
+            self.add(&[a, b, c, d, e, f])
+        } else {
+            self.add(&[a, c, b, d, f, e])
+        }
+    }
+}
+
+/// `count` triangles from vertex `first` of the scene's buffer.
+fn draw(g: &mut Gpu, first: u32, count: u32) {
     g.run(Cmd::DrawPrimitive {
         device: DEVICE,
         kind: 4,
-        start: 0,
-        count: (v.len() / 3) as u32,
+        start: first,
+        count,
     });
-}
-
-/// Clip x from `x0` to `x1` over the viewport's height, at depth `z0` on the left and `z1` on the
-/// right: two triangles wound clockwise on screen (Direct3D 9's front faces), or counter-clockwise.
-fn band(g: &mut Gpu, x0: f32, x1: f32, z0: f32, z1: f32, clockwise: bool) {
-    let (a, b, c) = ([x0, -1.0, z0], [x0, 1.0, z0], [x1, -1.0, z1]);
-    let (d, e, f) = ([x1, -1.0, z1], [x0, 1.0, z0], [x1, 1.0, z1]);
-    if clockwise {
-        tris(g, &[a, b, c, d, e, f]);
-    } else {
-        tris(g, &[a, c, b, d, f, e]);
-    }
 }
 
 /// The left and top pixel of cell `i` of a 32 by 32 target cut into 8 by 8 cells, row by row.
@@ -2738,7 +2738,10 @@ type Want = (u32, u32, [u8; 4], &'static str);
 /// Each state a linked pipeline leaves dynamic (vendor/wgpu-hal, pipeline_library.rs: cull mode,
 /// front face, the depth test, write and compare, one- and two-sided stencil, constant and
 /// slope-scaled depth bias), changed between draws in one command buffer, each in its own cell of a
-/// 32 by 32 target; what Direct3D 9 draws there, left and right of the cell's middle.
+/// 32 by 32 target; what Direct3D 9 draws there, left and right of the cell's middle. Where a draw's
+/// result depends on a state the draw before it set differently, nothing but render states and
+/// the viewport changes between them (no upload, no new colour), so that the change is made within
+/// one render pass, where a bind sets only the states that changed.
 fn dynamic_state_scene(g: &mut Gpu) -> Vec<Want> {
     const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
     const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
@@ -2749,6 +2752,31 @@ fn dynamic_state_scene(g: &mut Gpu) -> Vec<Want> {
         [255, 0, 0, 255],
         [0, 0, 0, 0],
     );
+    let mut s = Shapes { data: Vec::new() };
+    let cw_tri = [[-3.0, -3.0, 0.5], [-3.0, 9.0, 0.5], [9.0, -3.0, 0.5]];
+    let cw = s.add(&cw_tri);
+    let ccw = s.add(&[cw_tri[0], cw_tri[2], cw_tri[1]]);
+    let full = s.band(-1.0, 1.0, 0.5, 0.5, true);
+    let left = s.band(-1.0, 0.0, 0.5, 0.5, true);
+    let left_ccw = s.band(-1.0, 0.0, 0.5, 0.5, false);
+    let right = s.band(0.0, 1.0, 0.5, 0.5, true);
+    let far = s.band(-1.0, 1.0, 0.75, 0.75, true);
+    let sloped = s.band(-1.0, 1.0, 0.25, 0.75, true);
+    let bytes = floats(&s.data);
+    assert!(bytes.len() <= 48 * 64, "the scene's shapes fit the buffer");
+    g.run(Cmd::UploadBuffer {
+        buffer: VB,
+        offset: 0,
+        flags: 0,
+        data: Data::Bytes(&bytes),
+    });
+    g.run(Cmd::SetStreamSource {
+        device: DEVICE,
+        stream: 0,
+        buffer: VB,
+        offset: 0,
+        stride: 16,
+    });
     let at = |g: &mut Gpu, i: u32| {
         let (x, y) = cell(i);
         g.viewport(x, y, 8, 8, 0.0, 1.0);
@@ -2763,15 +2791,13 @@ fn dynamic_state_scene(g: &mut Gpu) -> Vec<Want> {
     g.clear(7, 0, 1.0);
 
     // Cull mode and front face: CULLMODE 2 culls triangles clockwise on screen, 3
-    // counter-clockwise ones; the pipelines differ only in the cull mode.
+    // counter-clockwise ones. One colour: only the cull mode and the viewport change.
     g.state(ZENABLE, 0);
     g.colour(GREEN);
-    let cw = [[-3.0, -3.0, 0.5], [-3.0, 9.0, 0.5], [9.0, -3.0, 0.5]];
-    let ccw = [cw[0], cw[2], cw[1]];
     for (i, cull, tri) in [(0, 2, cw), (1, 2, ccw), (2, 3, cw), (3, 3, ccw)] {
         g.state(CULLMODE, cull);
         at(g, i);
-        tris(g, &tri);
+        draw(g, tri, 1);
     }
     expect(0, none, none, "CULLMODE 2 culls a clockwise triangle");
     expect(1, green, green, "CULLMODE 2 keeps a counter-clockwise one");
@@ -2779,27 +2805,26 @@ fn dynamic_state_scene(g: &mut Gpu) -> Vec<Want> {
     expect(3, none, none, "CULLMODE 3 culls a counter-clockwise one");
     g.state(CULLMODE, 1);
 
-    // Depth writes switched on alone (the same ZFUNC): the third draw (GREATER, further away)
-    // passes only where the second wrote its depth.
+    // Depth writes switched on alone (the same ZFUNC, the same colour): the third draw
+    // (GREATER, further away) passes only where the second wrote its depth.
     g.state(ZENABLE, 1);
     g.state(ZFUNC, 4);
     at(g, 4);
-    g.state(ZWRITEENABLE, 0);
     g.colour(BLUE);
-    band(g, -1.0, 1.0, 0.5, 0.5, true);
+    g.state(ZWRITEENABLE, 0);
+    draw(g, full, 2);
     g.state(ZWRITEENABLE, 1);
-    g.colour(RED);
-    band(g, -1.0, 0.0, 0.5, 0.5, true);
+    draw(g, left, 2);
     g.state(ZFUNC, 5);
     g.state(ZWRITEENABLE, 0);
     g.colour(GREEN);
-    band(g, -1.0, 1.0, 0.75, 0.75, true);
+    draw(g, far, 2);
     expect(4, green, blue, "ZWRITEENABLE 1 after 0 writes depth");
     g.state(ZFUNC, 4);
     g.state(ZWRITEENABLE, 1);
     g.state(ZENABLE, 0);
 
-    // One-sided stencil: REPLACE with 1 on the left, then EQUAL 1 over the cell.
+    // One-sided stencil: REPLACE with 1 on the left, then EQUAL 1 over the cell (one colour).
     at(g, 5);
     g.state(STENCILENABLE, 1);
     g.state(STENCILMASK, 0xFF);
@@ -2810,16 +2835,18 @@ fn dynamic_state_scene(g: &mut Gpu) -> Vec<Want> {
     g.state(STENCILPASS, 3);
     g.state(STENCILREF, 1);
     g.colour(RED);
-    band(g, -1.0, 0.0, 0.5, 0.5, true);
+    draw(g, left, 2);
     g.state(STENCILFUNC, 3);
     g.state(STENCILPASS, 1);
+    g.state(STENCILREF, 1);
+    draw(g, right, 2);
     g.colour(GREEN);
-    band(g, -1.0, 1.0, 0.5, 0.5, true);
+    draw(g, full, 2);
     expect(
         5,
         green,
         none,
-        "STENCILFUNC EQUAL passes where REPLACE wrote",
+        "STENCILFUNC EQUAL passes where REPLACE wrote, nowhere else",
     );
 
     // Two-sided stencil: counter-clockwise faces REPLACE with 2 (the CCW_ states), clockwise ones
@@ -2834,12 +2861,12 @@ fn dynamic_state_scene(g: &mut Gpu) -> Vec<Want> {
     g.state(CCW_STENCILPASS, 3);
     g.state(STENCILREF, 2);
     g.colour(RED);
-    band(g, -1.0, 0.0, 0.5, 0.5, false);
-    band(g, 0.0, 1.0, 0.5, 0.5, true);
+    draw(g, left_ccw, 2);
+    draw(g, right, 2);
     g.state(TWOSIDEDSTENCILMODE, 0);
     g.state(STENCILFUNC, 3);
     g.colour(GREEN);
-    band(g, -1.0, 1.0, 0.5, 0.5, true);
+    draw(g, full, 2);
     expect(
         6,
         green,
@@ -2852,11 +2879,11 @@ fn dynamic_state_scene(g: &mut Gpu) -> Vec<Want> {
     g.state(ZENABLE, 1);
     at(g, 7);
     g.colour(RED);
-    band(g, -1.0, 1.0, 0.5, 0.5, true);
+    draw(g, full, 2);
+    g.colour(GREEN);
     g.state(ZFUNC, 2);
     g.state(DEPTHBIAS, (-0.001f32).to_bits());
-    g.colour(GREEN);
-    band(g, -1.0, 1.0, 0.5, 0.5, true);
+    draw(g, full, 2);
     g.state(DEPTHBIAS, 0);
     expect(7, green, green, "DEPTHBIAS brings a coplanar draw in front");
 
@@ -2864,11 +2891,11 @@ fn dynamic_state_scene(g: &mut Gpu) -> Vec<Want> {
     g.state(ZFUNC, 4);
     at(g, 8);
     g.colour(RED);
-    band(g, -1.0, 1.0, 0.25, 0.75, true);
+    draw(g, sloped, 2);
+    g.colour(GREEN);
     g.state(ZFUNC, 2);
     g.state(SLOPESCALEDEPTHBIAS, (-2.0f32).to_bits());
-    g.colour(GREEN);
-    band(g, -1.0, 1.0, 0.25, 0.75, true);
+    draw(g, sloped, 2);
     g.state(SLOPESCALEDEPTHBIAS, 0);
     g.state(ZFUNC, 4);
     expect(
