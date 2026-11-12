@@ -585,12 +585,17 @@ replaces it), as do the Havok calls (motion type, hard keyframe, the velocities'
 `crates/engine/tests/typed_collision.rs`. On since its gate (the differential tests with each planted mutant caught,
 and the recorded street run byte-identical with `NV_TYPED=collision:off` in the fixes and vanilla presets); not a speed
 change by itself.
-The three update-half families (`scene`, `particles`, `collision`) keep the exact x87 helpers instead of the float
-rule's `f64` locals rounded at each `float` store (ADR-0014, below): they run on the main thread at 24-bit precision,
-where an `f64` local rounded only at the store can differ in the last bit from the exe, which rounds at every step, and
-byte identity with the translations needs each step rounded as the exe rounds it. The recording the rule asks for is
-each family's gate: the recorded street run, byte-identical with `NV_TYPED=scene:off`, `particles:off,scene:off` and
-`collision:off` in the fixes and vanilla presets.
+`particles`' float maths is native (ADR-0014, below; since 2026-11-11): each function written once over
+`engine-typed`'s `native::Real`, run as plain `f32` on the main thread (its 24-bit precision rounds every step to a float,
+as the exe's code does there) and as `f64` locals rounded at each `float` store on the AI threads (the exe's 53-bit
+arithmetic bit for bit), chosen per call from the thread's control word (the position modifier, every step of which is
+one operation on two floats, plain `f32` on every thread: one operation rounds to the same float); square roots by
+`FSQRT`; floats the exe only moves through the x87 copied plain. Its tests run each comparison under both control words:
+bit for bit (NaN payloads aside) on the other threads' and within one ulp on the main thread's (the dispatch and
+culling functions it calls by address there); and for the rotation, grow-fade, simple colour and bound update
+modifiers and the update controller's emitter test, bit for bit under both at a fixed input where rounding every step
+and rounding once part. `scene` and `collision` keep the exact x87 helpers until their turn, so that byte identity
+with the translations holds where the main thread rounds at every step.
 And `multibound` (same crate, id 22), the update half's fourth group: the two passes main runs over the loaded world
 once a frame that keep the multibound culling current. The reset pass (`0045bc80`) takes every object's multibound
 shape back to "not tested"; the visibility pass (`0045b070`) tests each again from the camera through the shadow

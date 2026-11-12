@@ -2,9 +2,9 @@
 
 use super::modifiers;
 use super::{NiParticleSystem, NiTimeController, FAMILY};
+use crate::native::{float_precision, Real};
 use crate::slot_target;
 use engine_core::ptr::Ptr;
-use engine_core::x87::{x87_load32, x87_m32, x87_quiet_bits, x87_sub};
 use engine_core::{args, typed_call, Engine};
 
 /// The key times the update controller sets first (`-FLT_MAX` at `01015f5c`, and `010be6a8`) and
@@ -66,9 +66,11 @@ const NEW_PARTICLES_FLAG: u32 = 0x0040_0000;
 /// `DontDoUpdate` with the time, both key times 0, and with a target and no skip the target's
 /// `UpdateSystem` (+0xf0) with the scaled time: [`update_system`] directly when the slot holds it.
 pub fn update_ctlr(e: &mut Engine, this: Ptr<NiTimeController>, time: Ptr) {
-    let lo_start = x87_quiet_bits(e.global::<u32>(LO_KEY_TIME_START));
+    // The key times, the last time and the time words the exe moves through the x87 are copied plain
+    // (ADR-0014: only a signalling NaN's payload could differ).
+    let lo_start = e.global::<u32>(LO_KEY_TIME_START);
     e.set(this, NiTimeController::m_fLoKeyTime, lo_start);
-    let hi_start = x87_quiet_bits(e.global::<u32>(HI_KEY_TIME_START));
+    let hi_start = e.global::<u32>(HI_KEY_TIME_START);
     e.set(this, NiTimeController::m_fHiKeyTime, hi_start);
     let flags = e.get(this, NiTimeController::m_uFlags);
     e.set(this, NiTimeController::m_uFlags, (flags & 0xfffd) | 4);
@@ -95,28 +97,33 @@ pub fn update_ctlr(e: &mut Engine, this: Ptr<NiTimeController>, time: Ptr) {
     // `FCOMP double; TEST AH,0x44; JNP`: on when not equal or unordered.
     let last = e.get(this, NiTimeController::m_fLastTime);
     let no_time = f64::from_bits(e.global::<u64>(NO_TIME_DOUBLE));
-    if !(x87_load32(last) == no_time)
+    if !(f64::from(f32::from_bits(last)) == no_time)
         && emitter_ctlr != 0
         && e.mem.u8(emitter_ctlr.wrapping_add(CONTROLLER_FLAGS)) & 6 == 0
     {
         let now = e.mem.u32(time.addr());
         let last = e.get(this, NiTimeController::m_fLastTime);
-        let elapsed = x87_sub(x87_load32(now), x87_m32(last));
-        let life_span = x87_load32(e.mem.u32(emitter.wrapping_add(EMITTER_LIFE_SPAN)));
-        // `FLD life; FCOMPP; TEST AH,5; JP`: on when the life span is below.
-        if life_span < elapsed {
+        let life_span = e.mem.u32(emitter.wrapping_add(EMITTER_LIFE_SPAN));
+        // `FLD life; FCOMPP; TEST AH,5; JP`: on when the life span is below the difference, which the
+        // exe keeps in a register at the running thread's precision.
+        let below = if float_precision() {
+            life_span_below::<f32>(life_span, now, last)
+        } else {
+            life_span_below::<f64>(life_span, now, last)
+        };
+        if below {
             let now = e.mem.u32(time.addr());
-            e.set(this, NiTimeController::m_fLastTime, x87_quiet_bits(now));
+            e.set(this, NiTimeController::m_fLastTime, now);
         }
     }
 
-    let now = x87_quiet_bits(e.mem.u32(time.addr()));
+    let now = e.mem.u32(time.addr());
     let skip = e.call(DONT_DO_UPDATE, &args![this, now]).bool();
     e.set(this, NiTimeController::m_fHiKeyTime, 0);
     e.set(this, NiTimeController::m_fLoKeyTime, 0);
     let target = e.get(this, NiTimeController::m_pkTarget);
     if target != 0 && !skip {
-        let scaled = x87_quiet_bits(e.get(this, NiTimeController::m_fScaledTime));
+        let scaled = e.get(this, NiTimeController::m_fScaledTime);
         if slot_target(e, target, SLOT_UPDATE_SYSTEM) == 0x00c1_ae40 {
             typed_call!(
                 FAMILY,
@@ -137,7 +144,7 @@ pub fn update_ctlr(e: &mut Engine, this: Ptr<NiTimeController>, time: Ptr) {
 /// other case) `Do_UpdateSystem` (+0xf4) with the time: [`do_update_system`] directly when the slot
 /// holds it.
 pub fn update_system(e: &mut Engine, this: Ptr<NiParticleSystem>, time: f32) {
-    let time_bits = x87_quiet_bits(time.to_bits());
+    let time_bits = time.to_bits();
     if e.global::<u8>(HANDOFF_SWITCH) != 0 {
         let manager = e.global::<u32>(HANDOFF_MANAGER);
         if manager != 0 && e.mem.u8(manager.wrapping_add(0x1b0)) != 0 {
@@ -182,7 +189,7 @@ pub fn update_system(e: &mut Engine, this: Ptr<NiParticleSystem>, time: f32) {
 /// longer is, the first of the system's parents (its +0x18, then each parent's +0x18) whose slot +0x10
 /// answers nonzero gets the flag `0x400000`; the walk starts at the parent, not at the system.
 pub fn do_update_system(e: &mut Engine, this: Ptr<NiParticleSystem>, time: f32) {
-    let time_bits = x87_quiet_bits(time.to_bits());
+    let time_bits = time.to_bits();
     let data = e.mem.u32(this.addr().wrapping_add(MODEL_DATA));
     let was_empty = e.mem.u32(data.wrapping_add(0x1c)) == 0;
     e.vcall(data, SLOT_RESOLVE_ADDED, &args![]);
@@ -231,4 +238,10 @@ pub fn do_update_system(e: &mut Engine, this: Ptr<NiParticleSystem>, time: f32) 
             object = e.mem.u32(object.wrapping_add(0x18));
         }
     }
+}
+
+/// Whether `life span < now - last` (the update controller's emitter test) in `R`: the difference
+/// unrounded, as the exe keeps it in a register.
+fn life_span_below<R: Real>(life_span: u32, now: u32, last: u32) -> bool {
+    R::load(life_span) < R::load(now) - R::load(last)
 }

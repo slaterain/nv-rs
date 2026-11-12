@@ -26,6 +26,7 @@ pub mod draw_f;
 pub mod geometry;
 pub mod lockfree;
 pub mod multibound;
+pub(crate) mod native;
 pub mod particles;
 pub mod pathing;
 pub mod render;
