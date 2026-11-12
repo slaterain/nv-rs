@@ -8422,20 +8422,23 @@ fn sky_setup_textures() {
 }
 
 /// The sky's slot 0x7c's inputs: the held accumulator skips type 13 or not; it has a camera or not; the
-/// pass type (5 and another); the property's kind (each of the exe's switch's ways); HDR; the sun's x
-/// and the origin's x, the sky's height (play's floats); the constant maps (none, stand-ins); the
-/// state's fifth property (none, flag 0 clear or set).
+/// pass type (5 and another); the property's kind (every way of the exe's switch: 0 to 7, and 8 past
+/// it); HDR; the sun's x and the origin's x, the sky's height (play's floats); the constant maps (none,
+/// stand-ins); the state's fifth property (none, flag 0 clear or set); the geometry's x translation and
+/// the held accumulator camera's x (play's floats, so the camera move's rounding order is compared).
 const SKY_CONSTANTS: &[Input] = &[
     Input::Flag,
     Input::Flag,
     Input::Of(&[5, 6]),
-    Input::Of(&[0, 1, 2, 3, 4, 6, 8]),
+    Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8]),
     Input::Flag,
     Input::F32,
     Input::F32Swept(0x4500_0000),
     Input::F32Swept(0x4396_0000),
     Input::Flag,
     Input::Of(&[0, 1, 2]),
+    Input::F32Swept(0x4580_0000),
+    Input::F32Swept(0x4480_0000),
 ];
 
 /// The sky's slot 0x7c's words: the world's renderer as the shader's; the rendered geometry (a
@@ -8462,7 +8465,7 @@ fn sky_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
         0,
         0,
         ONE,
-        0x4580_0000,
+        play_bits(c, 10),
         0xc520_0000,
         0x4400_0000,
         ONE,
@@ -8483,7 +8486,7 @@ fn sky_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
     e.mem.set_u8(acc + 0x164, c.word(0) as u8);
     if c.word(1) != 0 {
         let camera = e.mem.alloc(0xa0);
-        for (k, v) in (0u32..).zip([0x4480_0000, 0x4300_0000, 0xc2c8_0000]) {
+        for (k, v) in (0u32..).zip([play_bits(c, 11), 0x4300_0000, 0xc2c8_0000]) {
             set(e, camera + 0x8c + 4 * k, v);
         }
         set(e, acc + 8, camera);
