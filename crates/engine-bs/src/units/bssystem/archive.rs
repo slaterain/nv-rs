@@ -454,6 +454,15 @@ pub fn fn_00afb170(_e: &mut Engine, _unused_0: Ptr, value: u8, kind: u32) -> u8 
     }
 }
 
+/// `00afb2a0`, `00afb190`, `00afa550`, `00afa750` and `00afad00` (this file; `00afac20` is
+/// `ARCHIVE_PER_FILE`), called by their addresses: the direct file access row (`crates/host`)
+/// replaces them with their full-offset forms.
+const VALID_FILE: u32 = 0x00af_b2a0;
+const INVALIDATE_WHEN_ON_DISK: u32 = 0x00af_b190;
+const FILE_BY_INDICES: u32 = 0x00af_a550;
+const FILE_BY_ENTRY: u32 = 0x00af_a750;
+const INVALIDATE_AT_OPEN: u32 = 0x00af_ad00;
+
 // Translated from 00afb2a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (thiscall on an `Archive`, two words): whether
 /// the file `entry` has data: false when `any` is clear and bit 31 of the
@@ -471,6 +480,86 @@ pub fn fn_00afb2a0(e: &mut Engine, this: Ptr<Archive>, entry: Ptr, any: bool) ->
     e.mem.u32(entry.addr() + 0xc) & 0x7fff_ffff != 0
 }
 
+/// JohnnyGuitar NVSE's full offset range at the nine sites of this crate that read or clear an
+/// archive file entry's offset word: this module's seven and `bsmain::queuedfiles`' two. The
+/// direct file access row (`crates/host`) registers this list, and this crate's tests register
+/// it and call each function by its address, so no address can be paired with another function.
+pub fn full_offset_range() -> [(u32, AbiFn); 9] {
+    use crate::units::bsmain::queuedfiles;
+    [
+        entry!(
+            0x00af_b2a0,
+            fn_00afb2a0_full_offsets(Ptr<Archive>, Ptr, bool) -> bool
+        ),
+        entry!(
+            0x00af_a550,
+            fn_00afa550_full_offsets(Ptr<Archive>, u32, u32, u32, u32) -> u32
+        ),
+        entry!(
+            0x00af_a750,
+            fn_00afa750_full_offsets(Ptr<Archive>, Ptr, u32, u32) -> u32
+        ),
+        entry!(
+            0x00af_b190,
+            fn_00afb190_full_offsets(Ptr<Archive>, Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00af_ac20,
+            fn_00afac20_full_offsets(Ptr<Archive>, Ptr, Ptr, u32) -> bool
+        ),
+        entry!(
+            0x00af_ac90,
+            fn_00afac90_full_offsets(Ptr<Archive>, u32, Ptr, u32) -> bool
+        ),
+        entry!(0x00af_ad00, fn_00afad00_full_offsets(Ptr<Archive>) -> u32),
+        entry!(
+            0x00c3_d0e0,
+            queuedfiles::queued_file_entry_get_description_full_offsets(u32, u32, u32, u32) -> bool
+        ),
+        entry!(
+            0x00c3_d440,
+            queuedfiles::queued_file_entry_generate_key_full_offsets(u32)
+        ),
+    ]
+}
+
+/// [`fn_00afb2a0`] with JohnnyGuitar NVSE's full offset range (its patch at `00afb2a6`; the
+/// direct file access row in `crates/host` registers it): whether the entry's word at +0xc is
+/// nonzero. All 32 bits of that word are the file's offset there, so a file can start anywhere
+/// in an archive of up to 4 GB; the original reads bit 31 as a mark to compare with bit 3 of
+/// `cArchiveFlags` (an archive opened for its header alone, which has no file entries), so a
+/// file stored at 2 GB or more had no data. `any` makes no difference.
+pub fn fn_00afb2a0_full_offsets(
+    e: &mut Engine,
+    _this: Ptr<Archive>,
+    entry: Ptr,
+    _any: bool,
+) -> bool {
+    e.mem.u32(entry.addr() + 0xc) != 0
+}
+
+/// The whole of a file entry's offset word (+0xc) with JohnnyGuitar NVSE's full offset range
+/// (`full`, the direct file access row), its low 31 bits in the original, where bit 31 is a
+/// mark ([`fn_00afb2a0`]).
+fn entry_offset(e: &Engine, entry: u32, full: bool) -> u32 {
+    let word = e.mem.u32(entry.wrapping_add(0xc));
+    if full {
+        word
+    } else {
+        word & 0x7fff_ffff
+    }
+}
+
+/// An invalidated file: its entry's offset (+0xc) cleared, which leaves it no data. The
+/// original keeps bit 31 (its mark); with the full offset range (`full`) the whole word is
+/// cleared, since bit 31 is an offset bit there (JohnnyGuitar NVSE's patches at `00afb221`,
+/// `00afac68`, `00afacd6`, `00afaeb6` and `00afb0f0`).
+fn clear_offset(e: &mut Engine, entry: u32, full: bool) {
+    let word = e.mem.u32(entry.wrapping_add(0xc));
+    let kept = if full { 0 } else { word & 0x8000_0000 };
+    e.mem.set_u32(entry.wrapping_add(0xc), kept);
+}
+
 // Translated from 00afb190 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00afb190 - the /GS stack cookie check (00ec408c) at the exit is not translated
 /// Unnamed in the engine map (thiscall on an `Archive`, unused; two words):
@@ -483,6 +572,21 @@ pub fn fn_00afb2a0(e: &mut Engine, this: Ptr<Archive>, entry: Ptr, any: bool) ->
 /// The exe's "otherwise" also holds a branch clearing that bit instead,
 /// behind a constant-true test; it is kept below.
 pub fn fn_00afb190(e: &mut Engine, _unused_0: Ptr<Archive>, entry: Ptr, name: Ptr) -> bool {
+    invalidate_when_on_disk(e, entry, name, false)
+}
+
+/// [`fn_00afb190`] with the full offset range (`clear_offset`): a file found on disk has its
+/// entry's whole offset word cleared. The direct file access row (`crates/host`) registers it.
+pub fn fn_00afb190_full_offsets(
+    e: &mut Engine,
+    _unused_0: Ptr<Archive>,
+    entry: Ptr,
+    name: Ptr,
+) -> bool {
+    invalidate_when_on_disk(e, entry, name, true)
+}
+
+fn invalidate_when_on_disk(e: &mut Engine, entry: Ptr, name: Ptr, full: bool) -> bool {
     if e.global::<u8>(FLAG_011ACDF9) == 0 || e.mem.u32(entry.addr() + 8) & 0x8000_0000 != 0 {
         return false;
     }
@@ -493,8 +597,7 @@ pub fn fn_00afb190(e: &mut Engine, _unused_0: Ptr<Archive>, entry: Ptr, name: Pt
             e.call(ACCESS, &args![local, 0u32]).i32() != -1
         });
         if found {
-            let word = e.mem.u32(entry.addr() + 0xc);
-            e.mem.set_u32(entry.addr() + 0xc, word & 0x8000_0000);
+            clear_offset(e, entry.addr(), full);
             return true;
         }
     }
@@ -1150,8 +1253,12 @@ pub fn fn_00afa120(
     let last = e.get(this, Archive::iLastFileIndex);
     if last < e.mem.u32(entry + 8) {
         let file = (last << 4).wrapping_add(e.mem.u32(entry + 0xc));
-        if fn_00afb2a0(e, this, Ptr::new(file), any) && fn_00afce90(e, hash, Ptr::new(file)) == 0 {
-            if fn_00afb190(e, this, Ptr::new(file), name) {
+        if e.call(VALID_FILE, &args![this, file, any]).bool()
+            && fn_00afce90(e, hash, Ptr::new(file)) == 0
+        {
+            if e.call(INVALIDATE_WHEN_ON_DISK, &args![this, file, name])
+                .bool()
+            {
                 return false;
             }
             e.mem.set_u32(index_out.addr(), last);
@@ -1170,8 +1277,11 @@ pub fn fn_00afa120(
     if compared != 0 {
         return false;
     }
-    let file = Ptr::new(files.wrapping_add(index << 4));
-    if !fn_00afb2a0(e, this, file, any) || fn_00afb190(e, this, file, name) {
+    let file = files.wrapping_add(index << 4);
+    if !e.call(VALID_FILE, &args![this, file, any]).bool()
+        || e.call(INVALIDATE_WHEN_ON_DISK, &args![this, file, name])
+            .bool()
+    {
         return false;
     }
     e.mem.set_u32(index_out.addr(), index);
@@ -2133,7 +2243,12 @@ pub fn archive_manager_get_file(e: &mut Engine, path: Ptr, passed: u32, types: u
             {
                 let directory = e.mem.u32(base + 0x10);
                 let file = e.mem.u32(base + 0x14);
-                let made = fn_00afa550(e, Ptr::new(archive), directory, file, passed, path);
+                let made = e
+                    .call(
+                        FILE_BY_INDICES,
+                        &args![archive, directory, file, passed, path],
+                    )
+                    .u32();
                 release(e, archive);
                 return made;
             }
@@ -2154,8 +2269,9 @@ const COMPRESSED_ARCHIVE_FILE_SIZE: u32 = 0x178;
 /// by `00afa550` and `00afa750`, inlined in both): an `ArchiveFile` when
 /// bit 2 of the archive's `oFlags` equals bit 30 of the entry's size word
 /// (+8), a `CompressedArchiveFile` otherwise, each constructed with
-/// `(path, archive, offset (+0xc, low 31 bits), size (+8, low 30 bits),
-/// passed)`; null when the allocation fails.
+/// `(path, archive, offset (+0xc, low 31 bits; all 32 with the full offset
+/// range, `entry_offset`), size (+8, low 30 bits), passed)`; null when the
+/// allocation fails.
 fn make_file(
     e: &mut Engine,
     archive: Ptr<Archive>,
@@ -2216,15 +2332,41 @@ pub fn fn_00afa550(
     passed: u32,
     path: u32,
 ) -> u32 {
+    file_by_indices(e, this, directory, file, passed, path, false)
+}
+
+/// [`fn_00afa550`] with the full offset range (`entry_offset`; JohnnyGuitar NVSE's patch at
+/// `00afa5c0`): the file object starts at the entry's whole offset word. The direct file
+/// access row (`crates/host`) registers it.
+pub fn fn_00afa550_full_offsets(
+    e: &mut Engine,
+    this: Ptr<Archive>,
+    directory: u32,
+    file: u32,
+    passed: u32,
+    path: u32,
+) -> u32 {
+    file_by_indices(e, this, directory, file, passed, path, true)
+}
+
+fn file_by_indices(
+    e: &mut Engine,
+    this: Ptr<Archive>,
+    directory: u32,
+    file: u32,
+    passed: u32,
+    path: u32,
+    full: bool,
+) -> u32 {
     let directories = e.get(this, Archive::pDirectories);
     let files = e
         .mem
         .u32(directories.wrapping_add(directory << 4).wrapping_add(0xc));
     let entry = (file << 4).wrapping_add(files);
-    if entry == 0 || !fn_00afb2a0(e, this, Ptr::new(entry), false) {
+    if entry == 0 || !e.call(VALID_FILE, &args![this, entry, false]).bool() {
         return 0;
     }
-    let offset = e.mem.u32(entry + 0xc) & 0x7fff_ffff;
+    let offset = entry_offset(e, entry, full);
     make_file(e, this, entry, offset, passed, path)
 }
 
@@ -2234,10 +2376,34 @@ pub fn fn_00afa550(
 /// [`fn_00afa550`] for a file `entry` given directly (null for a null
 /// entry).
 pub fn fn_00afa750(e: &mut Engine, this: Ptr<Archive>, entry: Ptr, passed: u32, path: u32) -> u32 {
-    if entry.is_null() || !fn_00afb2a0(e, this, entry, false) {
+    file_by_entry(e, this, entry, passed, path, false)
+}
+
+/// [`fn_00afa750`] with the full offset range (`entry_offset`; JohnnyGuitar NVSE's patches at
+/// `00afa804` and `00afa87e`, one for each kind of file object). The direct file access row
+/// (`crates/host`) registers it.
+pub fn fn_00afa750_full_offsets(
+    e: &mut Engine,
+    this: Ptr<Archive>,
+    entry: Ptr,
+    passed: u32,
+    path: u32,
+) -> u32 {
+    file_by_entry(e, this, entry, passed, path, true)
+}
+
+fn file_by_entry(
+    e: &mut Engine,
+    this: Ptr<Archive>,
+    entry: Ptr,
+    passed: u32,
+    path: u32,
+    full: bool,
+) -> u32 {
+    if entry.is_null() || !e.call(VALID_FILE, &args![this, entry, false]).bool() {
         return 0;
     }
-    let offset = e.mem.u32(entry.addr() + 0xc) & 0x7fff_ffff;
+    let offset = entry_offset(e, entry.addr(), full);
     make_file(e, this, entry.addr(), offset, passed, path)
 }
 
@@ -2315,7 +2481,9 @@ pub fn fn_00af6340(e: &mut Engine, _unused_0: u32, entry: Ptr, passed: u32, path
         add_ref(e, archive);
     }
     if archive != 0 {
-        made = fn_00afa750(e, Ptr::new(archive), entry, passed, path);
+        made = e
+            .call(FILE_BY_ENTRY, &args![archive, entry, passed, path])
+            .u32();
     }
     if archive != 0 {
         release(e, archive);
@@ -2699,12 +2867,6 @@ fn hash_listed(e: &mut Engine, array: u32, value: u32) -> bool {
     false
 }
 
-/// Keeps bit 31 of a file entry's word at +0xc and clears the rest.
-fn clear_entry_offset(e: &mut Engine, entry: u32) {
-    let word = e.mem.u32(entry + 0xc);
-    e.mem.set_u32(entry + 0xc, word & 0x8000_0000);
-}
-
 // Translated from 00afad00 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00afad00 - the /GS stack cookie check (00ec408c) at the exit is not translated
 /// Unnamed in the engine map (thiscall on an `Archive`): applies the
@@ -2716,6 +2878,16 @@ fn clear_entry_offset(e: &mut Engine, entry: u32) {
 /// invalidates all its files; else, when `"Data\" + directory name` exists
 /// on disk, each of its files listed in `011f8168` is invalidated.
 pub fn fn_00afad00(e: &mut Engine, this: Ptr<Archive>) -> u32 {
+    invalidate_listed(e, this, false)
+}
+
+/// [`fn_00afad00`] with the full offset range (`clear_offset`): an invalidated entry's whole
+/// offset word is cleared. The direct file access row (`crates/host`) registers it.
+pub fn fn_00afad00_full_offsets(e: &mut Engine, this: Ptr<Archive>) -> u32 {
+    invalidate_listed(e, this, true)
+}
+
+fn invalidate_listed(e: &mut Engine, this: Ptr<Archive>, full: bool) -> u32 {
     let mut invalidated = 0u32;
     if e.global::<u32>(BLOCK_ARRAY_011F816C) == 0 && e.global::<u32>(BLOCK_ARRAY_011F8168) == 0 {
         return 0;
@@ -2739,7 +2911,7 @@ pub fn fn_00afad00(e: &mut Engine, this: Ptr<Archive>) -> u32 {
             let mut file = 0u32;
             while file < e.mem.u32(directory + 8) {
                 let entry = (file << 4).wrapping_add(e.mem.u32(directory + 0xc));
-                clear_entry_offset(e, entry);
+                clear_offset(e, entry, full);
                 file += 1;
             }
             invalidated = invalidated.wrapping_add(e.mem.u32(directory + 8));
@@ -2758,7 +2930,7 @@ pub fn fn_00afad00(e: &mut Engine, this: Ptr<Archive>) -> u32 {
                 let entry = (file << 4).wrapping_add(e.mem.u32(directory + 0xc));
                 let files = e.global::<u32>(BLOCK_ARRAY_011F8168);
                 if files != 0 && hash_listed(e, files, entry) {
-                    clear_entry_offset(e, entry);
+                    clear_offset(e, entry, full);
                     invalidated = invalidated.wrapping_add(1);
                 }
                 file += 1;
@@ -2909,7 +3081,7 @@ pub fn fn_00af7060(
         let mut file = 0u32;
         while file < e.mem.u32(directory + 8) {
             let entry = (file << 4).wrapping_add(e.mem.u32(directory + 0xc));
-            if fn_00afb2a0(e, archive, Ptr::new(entry), false) {
+            if e.call(VALID_FILE, &args![archive, entry, false]).bool() {
                 let compared = fn_00afcf00(e, pattern_hash, Ptr::new(entry));
                 if compared == 0 {
                     let mut listed = false;
@@ -3529,7 +3701,7 @@ pub fn fn_00af7eb0(
     if e.get(this, Archive::cArchiveFlags) & 8 == 0 {
         if e.global::<u8>(FLAG_011ACDF9) != 0 {
             let _start = e.call(GET_TICK_COUNT, &args![]).u32();
-            fn_00afad00(e, this);
+            e.call(INVALIDATE_AT_OPEN, &args![this]);
             let _end = e.call(GET_TICK_COUNT, &args![]).u32();
         }
         if per_file != 0 {
@@ -3919,13 +4091,8 @@ pub fn archive_manager_invalidate_file(e: &mut Engine, path: u32) -> bool {
                 add_ref(e, archive);
             }
             if archive != 0
-                && fn_00afac20(
-                    e,
-                    Ptr::new(archive),
-                    Ptr::new(directory),
-                    Ptr::new(file),
-                    path,
-                )
+                && e.call(ARCHIVE_PER_FILE, &args![archive, directory, file, path])
+                    .bool()
             {
                 if archive != 0 {
                     release(e, archive);
@@ -4397,12 +4564,6 @@ pub fn fn_00afa8e0(
     })
 }
 
-/// Clears the low 31 bits of a file entry's word +0xc (its offset), keeping bit 31.
-fn clear_offset_keep_top_bit(e: &mut Engine, file: u32) {
-    let word = e.mem.u32(file.wrapping_add(0xc));
-    e.mem.set_u32(file.wrapping_add(0xc), word & 0x8000_0000);
-}
-
 // Translated from 00afac20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (thiscall on an `Archive`, three words; the third is not read):
 /// when the hashes find a file ([`fn_00af9bf0`] with no name), clears its entry's offset
@@ -4413,6 +4574,28 @@ pub fn fn_00afac20(
     directory: Ptr,
     file: Ptr,
     _unused_3: u32,
+) -> bool {
+    invalidate_by_hashes(e, this, directory, file, false)
+}
+
+/// [`fn_00afac20`] with the full offset range (`clear_offset`): the whole offset word is
+/// cleared. The direct file access row (`crates/host`) registers it.
+pub fn fn_00afac20_full_offsets(
+    e: &mut Engine,
+    this: Ptr<Archive>,
+    directory: Ptr,
+    file: Ptr,
+    _unused_3: u32,
+) -> bool {
+    invalidate_by_hashes(e, this, directory, file, true)
+}
+
+fn invalidate_by_hashes(
+    e: &mut Engine,
+    this: Ptr<Archive>,
+    directory: Ptr,
+    file: Ptr,
+    full: bool,
 ) -> bool {
     e.with_stack(8, |e, indices| {
         let directory_index = indices.addr();
@@ -4431,7 +4614,7 @@ pub fn fn_00afac20(
         let record =
             (e.mem.u32(directory_index) << 4).wrapping_add(e.get(this, Archive::pDirectories));
         let entry = (e.mem.u32(file_index) << 4).wrapping_add(e.mem.u32(record.wrapping_add(0xc)));
-        clear_offset_keep_top_bit(e, entry);
+        clear_offset(e, entry, full);
         true
     })
 }
@@ -4447,6 +4630,28 @@ pub fn fn_00afac90(
     file: Ptr,
     _unused_3: u32,
 ) -> bool {
+    invalidate_in_directory(e, this, directory, file, false)
+}
+
+/// [`fn_00afac90`] with the full offset range (`clear_offset`): the whole offset word is
+/// cleared. The direct file access row (`crates/host`) registers it.
+pub fn fn_00afac90_full_offsets(
+    e: &mut Engine,
+    this: Ptr<Archive>,
+    directory: u32,
+    file: Ptr,
+    _unused_3: u32,
+) -> bool {
+    invalidate_in_directory(e, this, directory, file, true)
+}
+
+fn invalidate_in_directory(
+    e: &mut Engine,
+    this: Ptr<Archive>,
+    directory: u32,
+    file: Ptr,
+    full: bool,
+) -> bool {
     e.with_stack(4, |e, index| {
         if !fn_00afa120(e, this, directory, file, index, Ptr::NULL, false) {
             return false;
@@ -4454,7 +4659,7 @@ pub fn fn_00afac90(
         let record = (directory << 4).wrapping_add(e.get(this, Archive::pDirectories));
         let entry =
             (e.mem.u32(index.addr()) << 4).wrapping_add(e.mem.u32(record.wrapping_add(0xc)));
-        clear_offset_keep_top_bit(e, entry);
+        clear_offset(e, entry, full);
         true
     })
 }
@@ -7633,5 +7838,123 @@ mod tests {
             assert_eq!(calls_to(&e, SIMPLE_ARRAY_CLEAR_00A1BFA0).len(), 1);
             assert_eq!(calls_to(&e, MEMORY_MANAGER_DEALLOCATE).len(), freed);
         }
+    }
+
+    /// The full offset range's forms at their addresses: [`full_offset_range`], the list the
+    /// direct file access row (`crates/host`) registers.
+    fn full_offsets(e: &mut Engine) {
+        for (at, f) in full_offset_range() {
+            e.register(at, f);
+        }
+    }
+
+    /// JohnnyGuitar NVSE's full offset range: all 32 bits of an entry's offset word are the
+    /// offset. A file stored at 2 GB or more has data whatever `any` and the headers-only bit
+    /// say, its file object starts there (by indices and by entry), the lookup that asks the
+    /// check by address finds it, and every invalidation clears the whole word (the original
+    /// keeps bit 31: `loose_override_marks_the_entry`, `invalidation_clears_listed_entries`,
+    /// `n083_directory_file_offset_is_cleared`).
+    #[test]
+    fn the_full_offset_range_reads_and_clears_the_whole_word() {
+        let (mut e, existing) = engine();
+        strings(&mut e);
+        let this = archive(&mut e);
+        let entry = Ptr::new(e.mem.alloc(16));
+        for flags in [0u8, 8] {
+            e.set(this, Archive::cArchiveFlags, flags);
+            for any in [false, true] {
+                for (word, data) in [
+                    (0u32, false),
+                    (0x10, true),
+                    (0x8000_0000, true),
+                    (0x9000_0010, true),
+                ] {
+                    e.mem.set_u32(entry.addr() + 0xc, word);
+                    assert_eq!(
+                        fn_00afb2a0_full_offsets(&mut e, this, entry, any),
+                        data,
+                        "{word:#x}, any {any}, flags {flags}"
+                    );
+                }
+            }
+        }
+        // The file at 0x8000_0300 (directory 1, file 1: compressed against the archive's
+        // default): none in the original, a file object starting there with the range.
+        e.register(BSFILE_BASE_CONSTRUCTOR, |_, _| Ret::default());
+        e.register(BSFILE_SET_ENDIAN_SWAP, |_, _| Ret::default());
+        e.register(ARCHIVE_FILE_READ, |e, w| {
+            e.mem.set_u32(w[1], 0x40);
+            4u32.into_ret()
+        });
+        e.register(INFLATE_INIT, |_, _| 0u32.into_ret());
+        let a = searchable(&mut e);
+        e.set_global(ARCHIVE_FILE_BUFFER_SIZE, 0x1000u32);
+        let path = text(&mut e, b"x");
+        let nine = hash(&mut e, 9);
+        let index = Ptr::new(e.mem.alloc(4));
+        assert_eq!(
+            e.call(0x00af_a550, &args![a, 1u32, 1u32, 0u32, path]).u32(),
+            0
+        );
+        assert!(!fn_00afa120(
+            &mut e,
+            a,
+            1,
+            Ptr::new(nine),
+            index,
+            Ptr::NULL,
+            false
+        ));
+        full_offsets(&mut e);
+        let far = e.call(0x00af_a550, &args![a, 1u32, 1u32, 0u32, path]).u32();
+        assert_eq!(e.mem.u32(far), COMPRESSED_ARCHIVE_FILE_VTABLE);
+        assert_eq!(e.mem.u32(far + 0x15c), 0x8000_0300);
+        let files = e.mem.u32(e.get(a, Archive::pDirectories) + 0x1c);
+        let far_entry = files + 0x10;
+        let by_entry = e.call(0x00af_a750, &args![a, far_entry, 0u32, path]).u32();
+        assert_eq!(e.mem.u32(by_entry + 0x15c), 0x8000_0300);
+        assert!(fn_00afa120(
+            &mut e,
+            a,
+            1,
+            Ptr::new(nine),
+            index,
+            Ptr::NULL,
+            false
+        ));
+        assert_eq!(e.mem.u32(index.addr()), 1);
+        // The invalidations: in a directory, by hashes, found on disk, a listed directory.
+        let word = far_entry + 0xc;
+        assert!(e.call(0x00af_ac90, &args![a, 1u32, nine, 0u32]).bool());
+        assert_eq!(e.mem.u32(word), 0);
+        e.mem.set_u32(word, 0x8000_0300);
+        let twenty = hash(&mut e, 0x20);
+        assert!(e.call(0x00af_ac20, &args![a, twenty, nine, 0u32]).bool());
+        assert_eq!(e.mem.u32(word), 0);
+        e.mem.set_u32(word, 0x8000_0300);
+        e.set_global(FLAG_011ACDF9, 1u8);
+        existing.borrow_mut().push(b"Data\\a.nif".to_vec());
+        let name = text(&mut e, b"a.nif");
+        assert!(e.call(0x00af_b190, &args![a, far_entry, name]).bool());
+        assert_eq!(e.mem.u32(word), 0);
+        e.set_global(FLAG_011ACDF9, 0u8);
+        e.mem.set_u32(word, 0x8000_0300);
+        e.set(a, Archive::oFlags, 3);
+        let listed = hash_array(&mut e, &[0x20]);
+        e.set_global(BLOCK_ARRAY_011F816C, listed);
+        let directory_name = text(&mut e, b"meshes");
+        e.register_double(DIRECTORY_NAME, move |_, _| directory_name.into_ret());
+        assert_eq!(e.call(0x00af_ad00, &args![a]).u32(), 2);
+        assert_eq!(e.mem.u32(word), 0);
+        assert_eq!(e.mem.u32(files + 0xc), 0);
+        // Its second branch, the listed files (`ArchiveInvalidation.txt`'s): no directory listed,
+        // the far file's hash listed, its directory on disk.
+        e.mem.set_u32(word, 0x8000_0300);
+        e.set_global(BLOCK_ARRAY_011F816C, 0u32);
+        let listed_files = hash_array(&mut e, &[9]);
+        e.set_global(BLOCK_ARRAY_011F8168, listed_files);
+        existing.borrow_mut().push(b"Data\\meshes".to_vec());
+        e.call(0x00af_ad00, &args![a]);
+        assert_eq!(e.mem.u32(word), 0);
     }
 }

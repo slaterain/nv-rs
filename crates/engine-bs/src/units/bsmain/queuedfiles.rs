@@ -551,6 +551,21 @@ pub fn queued_file_scalar_deleting_destructor(e: &mut Engine, this: u32, flags: 
 /// entry's word +0xC & 0x7FFFFFFF) << 24 | (byte 0 of `Key >> 16`, `__allshr`) << 16 | the
 /// low 16 bits of the incremented counter at `01202d9c`; without one, `IOTask::GenerateKey`.
 pub fn queued_file_entry_generate_key(e: &mut Engine, this: u32) {
+    generate_key(e, this, OFFSET_BITS);
+}
+
+/// [`queued_file_entry_generate_key`] with all 32 bits of the entry's offset word in the key
+/// (JohnnyGuitar NVSE's full offset range, its patch at `00c3d483`, where bit 31 is an offset
+/// bit: the archive files of the direct file access row in `crates/host`, which registers it).
+pub fn queued_file_entry_generate_key_full_offsets(e: &mut Engine, this: u32) {
+    generate_key(e, this, u32::MAX);
+}
+
+/// The offset bits of an archive file entry's word +0xc in the original (bit 31 is a mark;
+/// `engine-bs`'s `bssystem::archive`).
+const OFFSET_BITS: u32 = 0x7fff_ffff;
+
+fn generate_key(e: &mut Engine, this: u32, offset_bits: u32) {
     let entry = e.mem.u32(this + FILE_ENTRY);
     if entry == 0 {
         e.call(IO_TASK_GENERATE_KEY, &args![this]);
@@ -560,7 +575,7 @@ pub fn queued_file_entry_generate_key(e: &mut Engine, this: u32) {
     let key = e.mem.u64(this + KEY);
     let shifted = e.call(ALLSHR, &args![key, 0x10u8]).u8();
     let entry = e.mem.u32(this + FILE_ENTRY);
-    let index = e.mem.u32(entry + 0xc) & 0x7fff_ffff;
+    let index = e.mem.u32(entry + 0xc) & offset_bits;
     let file_index = e.vcall(this, 0x2c, &[]).u8() as i8;
     let high = e
         .call(ALLSHL, &args![i64::from(file_index) as u64, 0x38u8])
@@ -737,8 +752,8 @@ const DESCRIPTION_NAME_ONLY: u32 = 0x010c_158c;
 const CHILD_SEPARATOR: u32 = 0x010c_1584;
 /// The size of the stack buffer a child's description is written into.
 const CHILD_DESCRIPTION_SIZE: u32 = 0x32c8;
-/// The archive entry's words the description prints: the offset (+0xC, low 31 bits) and the
-/// size (+8, low 30 bits).
+/// The archive entry's words the description prints: the offset (+0xC, low 31 bits, all 32
+/// with the full offset range) and the size (+8, low 30 bits).
 const ENTRY_OFFSET: u32 = 0xc;
 const ENTRY_SIZE: u32 = 0x8;
 
@@ -759,10 +774,34 @@ pub fn queued_file_entry_get_description(
     size: u32,
     text: u32,
 ) -> bool {
+    write_description(e, this, buffer, size, text, OFFSET_BITS)
+}
+
+/// [`queued_file_entry_get_description`] printing all 32 bits of the entry's offset word
+/// (JohnnyGuitar NVSE's full offset range, its patches at `00c3d171` and `00c3d21a`; still
+/// through `%i`, as there). The direct file access row (`crates/host`) registers it.
+pub fn queued_file_entry_get_description_full_offsets(
+    e: &mut Engine,
+    this: u32,
+    buffer: u32,
+    size: u32,
+    text: u32,
+) -> bool {
+    write_description(e, this, buffer, size, text, u32::MAX)
+}
+
+fn write_description(
+    e: &mut Engine,
+    this: u32,
+    buffer: u32,
+    size: u32,
+    text: u32,
+    offset_bits: u32,
+) -> bool {
     let entry = e.mem.u32(this + FILE_ENTRY);
     let name = e.mem.u32(this + FILE_NAME);
     if entry != 0 && name != 0 {
-        let offset = e.mem.u32(entry + ENTRY_OFFSET) & 0x7fff_ffff;
+        let offset = e.mem.u32(entry + ENTRY_OFFSET) & offset_bits;
         let length = e.mem.u32(entry + ENTRY_SIZE) & 0x3fff_ffff;
         e.call(
             SPRINTF_S,
@@ -778,7 +817,7 @@ pub fn queued_file_entry_get_description(
         );
     } else if entry != 0 {
         let length = e.mem.u32(entry + ENTRY_SIZE) & 0x3fff_ffff;
-        let offset = e.mem.u32(entry + ENTRY_OFFSET) & 0x7fff_ffff;
+        let offset = e.mem.u32(entry + ENTRY_OFFSET) & offset_bits;
         e.call(
             SPRINTF_S,
             &args![buffer, size, DESCRIPTION_WITHOUT_NAME, text, offset, length],
@@ -926,6 +965,17 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c3_d930, fn_00c3d930(u32)),
         entry!(0x00c3_d980, fn_00c3d980(u32, u32)),
     ]
+}
+
+/// Tests: the entry of the full offset range's list
+/// ([`crate::units::bssystem::archive::full_offset_range`], what the direct file access row
+/// registers) at `address`.
+#[cfg(test)]
+fn full_offset_entry(address: u32) -> (u32, AbiFn) {
+    crate::units::bssystem::archive::full_offset_range()
+        .into_iter()
+        .find(|&(at, _)| at == address)
+        .expect("an address of the full offset range's list")
 }
 
 #[cfg(test)]
@@ -1298,6 +1348,13 @@ mod b018_tests {
         // File index -1 sign-extended fills the bits from 56 up.
         let key = u64::from(e.mem.u32(this + KEY)) | u64::from(e.mem.u32(this + KEY + 4)) << 32;
         assert_eq!(key, 0xff00_0001_23ab_0011);
+        // The full offset range keys all 32 bits of the offset word: bit 31 lands at bit 55.
+        let (at, full) = full_offset_entry(0x00c3_d440);
+        e.register(at, full);
+        e.mem.set_u32(this + KEY, 0x00ab_0000);
+        e.call(0x00c3_d440, &[this]);
+        let key = u64::from(e.mem.u32(this + KEY)) | u64::from(e.mem.u32(this + KEY + 4)) << 32;
+        assert_eq!(key, 0xff80_0001_23ab_0012);
     }
 }
 
@@ -1369,7 +1426,21 @@ mod n069_tests {
     /// Runs the description of an entry with the given file entry and name; answers the
     /// `sprintf_s` arguments and the `strcat_s` sources (as text).
     fn describe(entry: bool, name: bool, children: &[(u32, bool)]) -> (Vec<u32>, Vec<Vec<u8>>) {
+        describe_with(entry, name, children, false)
+    }
+
+    /// [`describe`], with the full offset range's description at its address when `full`.
+    fn describe_with(
+        entry: bool,
+        name: bool,
+        children: &[(u32, bool)],
+        full: bool,
+    ) -> (Vec<u32>, Vec<Vec<u8>>) {
         let mut e = Engine::new();
+        if full {
+            let (at, f) = full_offset_entry(0x00c3_d0e0);
+            e.register(at, f);
+        }
         let printed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let inner = printed.clone();
         e.register_double(SPRINTF_S, move |_, a| {
@@ -1456,6 +1527,14 @@ mod n069_tests {
             describe(false, true, &[]).0,
             vec![0x900, 0x40, DESCRIPTION_NAME_ONLY, 0x0700_0000, 0x0600_0000]
         );
+    }
+
+    #[test]
+    fn the_full_offset_range_prints_the_whole_offset_word() {
+        let with_name = describe_with(true, true, &[], true).0;
+        assert_eq!(with_name[5..], [0x8000_0020, 0x10]);
+        let without_name = describe_with(true, false, &[], true).0;
+        assert_eq!(without_name[4..], [0x8000_0020, 0x10]);
     }
 
     #[test]
