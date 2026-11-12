@@ -728,6 +728,16 @@ impl Diff {
             Branch::ByAddress,
             report,
         );
+        // The case's word holds through the call on both sides, or the comparison ran another precision
+        // than the one it names.
+        let held = (word & 0x1f3f) | 0x40;
+        if translation.stop.is_none()
+            && typed.stop.is_none()
+            && (translation.control_word != held || typed.control_word != held)
+        {
+            let (translation, typed) = (translation.control_word, typed.control_word);
+            report.note(case, word, Branch::ByAddress, Found::WordChanged { translation, typed });
+        }
         // Each `typed_call!`'s direct branch, against the same function by address. Only where debug
         // assertions make the macro note its calls, so the logs can match.
         if cfg!(debug_assertions) {
@@ -892,7 +902,9 @@ impl Diff {
                 first: None,
             })
         });
-        x87::set_control_word(word);
+        // The case's word in the register and in the thread block's copy, which `FSTCW` reads and a
+        // callee that saves and restores the word (the C runtime's `fabs`, `floor`, `sqrt`) restores.
+        crate::units::crt::set_x87_control_word(&mut e, word);
         let result = catch_unwind(AssertUnwindSafe(|| e.call(self.addr, &words)));
         let control_word = x87::control_word();
         x87::set_control_word(x87::DEFAULT_CONTROL_WORD);
@@ -1832,6 +1844,8 @@ pub enum Found {
     },
     /// The control word after the call.
     ControlWord { translation: u16, typed: u16 },
+    /// A side's control word after the call is not the case's.
+    WordChanged { translation: u16, typed: u16 },
     /// The clock after the call, milliseconds and microseconds.
     Clock {
         translation: (u32, u32),
@@ -1929,6 +1943,10 @@ impl fmt::Display for Difference {
             Found::ControlWord { translation, typed } => write!(
                 f,
                 "control word after: translation {translation:04x}, typed {typed:04x}"
+            ),
+            Found::WordChanged { translation, typed } => write!(
+                f,
+                "control word after differs from the case's: translation {translation:04x}, typed {typed:04x}"
             ),
             Found::Clock { translation, typed } => write!(
                 f,
@@ -2575,7 +2593,7 @@ mod tests {
         );
     }
 
-    /// A control word left changed.
+    /// A control word left changed: the sides differ, and the typed side's word is not the case's.
     #[test]
     fn a_changed_control_word_is_caught() {
         fn leaves_it(_: &mut Engine) {}
@@ -2586,7 +2604,7 @@ mod tests {
             .translation(crate::entry!(0x0040_2000, leaves_it()).1)
             .control_words(&[OTHER_THREADS])
             .run();
-        assert_eq!(report.found, 1, "{report}");
+        assert_eq!(report.found, 2, "{report}");
         assert_eq!(
             report.first[0].what,
             Found::ControlWord {
@@ -2594,6 +2612,57 @@ mod tests {
                 typed: MAIN_THREAD,
             }
         );
+        assert_eq!(
+            report.first[1].what,
+            Found::WordChanged {
+                translation: OTHER_THREADS,
+                typed: MAIN_THREAD,
+            }
+        );
+    }
+
+    /// Both sides changing the word alike still fail: the comparison ran at another precision than
+    /// the case's from that point on.
+    #[test]
+    fn a_word_changed_alike_is_caught() {
+        fn changes_it(_: &mut Engine) {
+            crate::x87::set_control_word(OTHER_THREADS);
+        }
+        fn changes_it_too(_: &mut Engine) {
+            crate::x87::set_control_word(OTHER_THREADS);
+        }
+        let report = Diff::new(crate::entry!(0x0040_2000, changes_it()))
+            .translation(crate::entry!(0x0040_2000, changes_it_too()).1)
+            .control_words(&[MAIN_THREAD])
+            .run();
+        assert_eq!(report.found, 1, "{report}");
+        assert_eq!(
+            report.first[0].what,
+            Found::WordChanged {
+                translation: OTHER_THREADS,
+                typed: OTHER_THREADS,
+            }
+        );
+    }
+
+    /// The thread block's copy of the word (what `FSTCW` reads) holds the case's word, so a callee
+    /// that saves and restores it (the C runtime's `fabs`, through `_ctrlfp`) restores the case's.
+    #[test]
+    fn the_thread_blocks_copy_holds_the_cases_word() {
+        fn saves_and_restores(e: &mut Engine) -> u32 {
+            let saved = crate::units::crt::ctrlfp(e, 0x133f, 0xffff);
+            crate::units::crt::ctrlfp(e, u32::from_ne_bytes(saved.to_ne_bytes()), 0xffff);
+            u32::from(crate::units::crt::x87_control_word(e))
+        }
+        fn reads_it(e: &mut Engine) -> u32 {
+            u32::from(crate::units::crt::x87_control_word(e))
+        }
+        let report = Diff::new(crate::entry!(0x0040_2000, saves_and_restores() -> u32))
+            .translation(crate::entry!(0x0040_2000, reads_it() -> u32).1)
+            .control_words(&[MAIN_THREAD, OTHER_THREADS])
+            .run();
+        assert_eq!(report.found, 0, "{report}");
+        assert_eq!(report.runs, 2);
     }
 
     #[test]
