@@ -278,22 +278,18 @@ fn list_form(e: &mut Engine, form_at: u32, items: &[u32]) {
     }
 }
 
-/// `GetItemCount`: the base container's entries summed with the reference's changes entry (none
-/// below 0), the entry alone when it holds a leveled item or the base has none, a form list's
-/// forms summed, 0 for a base without a container.
-#[test]
-fn item_counts() {
-    let mut e = world(true);
-    let (apple, pear) = (AREA + 0x9000, AREA + 0x9100);
-    // A container base (type 0x1B) with apple x2 and apple x3, pear x1.
-    form(&mut e, BASE, 0x0100_0010, CONTAINER, VTABLES + 0x200, &[]);
-    form(&mut e, REFR, 0x0100_0011, 0x3a, VTABLES, &[VT_IS_REFERENCE]);
+/// A container base with `objects` (count, form) and a reference of it, as the exe lays them out:
+/// `TESContainer::objectList` is a `BSSimpleList<ContainerObject *>` with its first node inline at
+/// the container's `+4` (engine-fallout-forms `tescontainer.rs`: `ContainerObject` is count `+0`,
+/// form `+4`, extra `+8`); a container base's `TESContainer` is at `+0x30` (`tesobjectcont.rs`).
+fn container_world(e: &mut Engine, objects: &[(i32, u32)]) {
+    form(e, BASE, 0x0100_0010, CONTAINER, VTABLES + 0x200, &[]);
+    form(e, REFR, 0x0100_0011, 0x3a, VTABLES, &[VT_IS_REFERENCE]);
     e.mem.set_u32(REFR + 0x20, BASE);
-    let objects = [(2, apple), (3, apple), (1, pear)];
     let list = BASE + 0x30 + 4;
     for (i, (count, item)) in objects.iter().enumerate() {
-        let object = LISTS + 0x100 + 8 * i as u32;
-        e.mem.set_u32(object, *count as u32);
+        let object = LISTS + 0x100 + 0x10 * i as u32;
+        e.mem.set_i32(object, *count);
         e.mem.set_u32(object + 4, *item);
         let node = if i == 0 {
             list
@@ -308,32 +304,39 @@ fn item_counts() {
         };
         e.mem.set_u32(node + 4, next);
     }
-    // No changes yet.
-    e.register(GET_BY_TYPE, |_, _| Ret::default());
-    assert_eq!(item_count(&mut e, REFR, apple), 5);
-    assert_eq!(item_count(&mut e, REFR, 0), 0, "no form");
-    // Changes: apple -7 (5 - 7 = -2: 0), pear +2 with a leveled item (2 alone).
-    let changes_extra = LISTS + 0x400;
-    let data = LISTS + 0x440;
-    let entries = [(apple, -7i32, 0u32), (pear, 2, LISTS + 0x500)];
-    e.mem.set_u32(changes_extra + 0xc, data);
-    e.mem.set_u32(data, LISTS + 0x480);
+}
+
+/// The reference's container changes, as the exe lays them out: `ExtraContainerChanges::pChanges`
+/// (`+0xC`) is an `InventoryChanges*` whose `pListofChanges` (`+0`) is a
+/// `BSSimpleList<ItemChange *>*`, the list's first node itself; an `ItemChange` is
+/// `pExtraObjectList` `+0` (a `BSSimpleList<ExtraDataList *>*`, again the first node itself:
+/// `ItemChange::GetExtraTotalDefaultCount`, `004bc980`, walks from `*this`), `iNumber` `+4`,
+/// `pContainerObj` `+8` (engine-fallout-forms `inventorychanges.rs`). `entries` are (form, count
+/// change, the entry's extra data lists).
+fn changes(e: &mut Engine, entries: &[(u32, i32, &[u32])]) {
+    let extra = LISTS + 0x400;
+    let inventory = LISTS + 0x440;
+    e.mem.set_u32(extra + 0xc, inventory);
+    e.mem.set_u32(inventory, LISTS + 0x480);
+    let mut spare = LISTS + 0x700;
     for (i, (item, delta, lists)) in entries.iter().enumerate() {
         let entry = LISTS + 0x4c0 + 0x10 * i as u32;
-        e.mem.set_u32(entry, *lists);
+        let head = if lists.is_empty() { 0 } else { spare };
+        for (j, list) in lists.iter().enumerate() {
+            let node = spare;
+            spare += 8;
+            e.mem.set_u32(node, *list);
+            let next = if j + 1 < lists.len() { spare } else { 0 };
+            e.mem.set_u32(node + 4, next);
+        }
+        e.mem.set_u32(entry, head);
         e.mem.set_i32(entry + 4, *delta);
         e.mem.set_u32(entry + 8, *item);
         let node = LISTS + 0x480 + 8 * i as u32;
         e.mem.set_u32(node, entry);
-        let next = if i == 0 { node + 8 } else { 0 };
+        let next = if i + 1 < entries.len() { node + 8 } else { 0 };
         e.mem.set_u32(node + 4, next);
     }
-    // The pear's extra data lists: one with the leveled item bit (type 0x2F).
-    let xlist = LISTS + 0x600;
-    e.mem.set_u32(LISTS + 0x500, LISTS + 0x508);
-    e.mem.set_u32(LISTS + 0x508, xlist);
-    e.mem.set_u32(LISTS + 0x50c, 0);
-    e.mem.set_u8(xlist + 0xd, 0x80);
     e.register(GET_BY_TYPE, |_, a| Ret {
         eax: if a[1] == EXTRA_CONTAINER_CHANGES {
             LISTS + 0x400
@@ -342,14 +345,64 @@ fn item_counts() {
         },
         ..Ret::default()
     });
+}
+
+/// An `ExtraDataList` at `at`: a vtable word, its first extra (`+4`) and the presence bits from
+/// `+8`, with type 0x2F (`ExtraLeveledItem`, byte `+0xD` bit `0x80`) as given.
+fn extra_list(e: &mut Engine, at: u32, vtable: u32, leveled: bool) {
+    e.mem.set_u32(at, vtable);
+    e.mem.set_u32(at + 4, 0);
+    e.mem.set_u8(at + 0xd, if leveled { 0x80 } else { 0 });
+}
+
+/// `GetItemCount`: the base container's entries summed with the reference's changes entry (none
+/// below 0), the entry alone when one of its extra data lists holds a leveled item (the first or a
+/// later one) or the base has none, a form list's forms summed, 0 for a base without a
+/// container. The extra data lists are walked from the node `pExtraObjectList` points to: a list
+/// whose own vtable word points at a word with the leveled bit is not taken for a leveled one (a
+/// walk that reads one pointer too deep would).
+#[test]
+fn item_counts() {
+    let mut e = world(true);
+    let (apple, pear) = (AREA + 0x9000, AREA + 0x9100);
+    container_world(&mut e, &[(2, apple), (3, apple), (1, pear)]);
+    e.register(GET_BY_TYPE, |_, _| Ret::default());
+    assert_eq!(item_count(&mut e, REFR, apple), 5, "no changes");
+    assert_eq!(item_count(&mut e, REFR, 0), 0, "no form");
+    let (leveled, plain, decoy) = (AREA + 0xc000, AREA + 0xc100, AREA + 0xc200);
+    extra_list(&mut e, leveled, VTABLES + 0xa00, true);
+    // A list whose vtable word points at a "list" with the leveled bit.
+    extra_list(&mut e, plain, decoy, false);
+    extra_list(&mut e, decoy, 0, true);
+    // apple -7: 5 - 7 below 0: 0. pear +2 with the leveled list first: 2 alone.
+    changes(&mut e, &[(apple, -7, &[]), (pear, 2, &[leveled])]);
     assert_eq!(item_count(&mut e, REFR, apple), 0, "none below 0");
-    assert_eq!(item_count(&mut e, REFR, pear), 2, "the leveled entry alone");
-    e.mem.set_u8(xlist + 0xd, 0);
+    assert_eq!(
+        item_count(&mut e, REFR, pear),
+        2,
+        "the leveled list first: alone"
+    );
+    // The leveled list second.
+    changes(&mut e, &[(pear, 2, &[plain, leveled])]);
+    assert_eq!(
+        item_count(&mut e, REFR, pear),
+        2,
+        "the leveled list later: alone"
+    );
+    // No leveled list (the decoy only through its vtable word): added to the base's.
+    changes(&mut e, &[(pear, 2, &[plain])]);
     assert_eq!(item_count(&mut e, REFR, pear), 3, "added to the base's");
+    // The base has none of the form: the entry alone, none below 0.
+    let plum = AREA + 0x9400;
+    changes(&mut e, &[(plum, 4, &[plain]), (pear, -1, &[])]);
+    assert_eq!(item_count(&mut e, REFR, plum), 4, "the base has none");
+    changes(&mut e, &[(plum, -4, &[])]);
+    assert_eq!(item_count(&mut e, REFR, plum), 0);
     // A form list of both.
+    changes(&mut e, &[(pear, 2, &[plain])]);
     let fl = AREA + 0x9200;
     list_form(&mut e, fl, &[apple, 0, pear]);
-    assert_eq!(item_count(&mut e, REFR, fl), 3);
+    assert_eq!(item_count(&mut e, REFR, fl), 5 + 3);
     // A base without a container.
     e.mem.set_u8(BASE + 4, 0x28);
     assert_eq!(item_count(&mut e, REFR, apple), 0);
@@ -611,4 +664,532 @@ fn evals() {
     assert_eq!(result(&e), 0.0);
     is_ref_in_list_eval(&mut e, &[0, fl, b, res]);
     assert_eq!(result(&e), 1.0);
+}
+
+// ---- through the commands' records ----
+
+thread_local! {
+    static LINES: RefCell<Vec<(String, Vec<u32>)>> = const { RefCell::new(Vec::new()) };
+}
+
+fn lines() -> Vec<(String, Vec<u32>)> {
+    LINES.with(|l| std::mem::take(&mut *l.borrow_mut()))
+}
+
+const CONSOLE: u32 = 0x0500_f000;
+
+/// The game's records of the seven vanilla commands as the exe has them (read from
+/// FalloutNV.exe's table at `0x01190910`): names, parameter lists (`MenuMode`: an optional
+/// Integer; `GetItemCount`: an ObjectID, type 0x32; `IsInList`: a Form List, 0x25; `HasPerk`: a
+/// Perk, 0x27, and an optional Integer `Alt`; `GetContainer`, `GetHitLocation`,
+/// `ClearTrackedCells` at 0x127D: none). The stand-in exe table has empty records.
+/// A record's opcode, name and parameters (type, optional).
+type VanillaRecord = (u32, &'static str, &'static [(u32, u32)]);
+
+fn vanilla_records(e: &mut Engine) {
+    let lists: [VanillaRecord; 7] = [
+        (0x1024, "MenuMode", &[(0x01, 1)]),
+        (0x102f, "GetItemCount", &[(0x32, 0)]),
+        (0x10cf, "GetContainer", &[]),
+        (0x1174, "IsInList", &[(0x25, 0)]),
+        (0x1187, "GetHitLocation", &[]),
+        (0x11c1, "HasPerk", &[(0x27, 0), (0x01, 1)]),
+        (0x127d, "ClearTrackedCells", &[]),
+    ];
+    for (i, (opcode, name, params)) in lists.iter().enumerate() {
+        let at = AREA + 0xd000 + 0x80 * i as u32;
+        e.mem.write(at + 0x40, name.as_bytes());
+        e.mem.set_u8(at + 0x40 + name.len() as u32, 0);
+        for (j, (kind, optional)) in params.iter().enumerate() {
+            let p = at + 12 * j as u32;
+            e.mem.set_u32(p + 4, *kind);
+            e.mem.set_u32(p + 8, *optional);
+        }
+        let record = e.script_tables().record(*opcode);
+        e.mem.set_u32(record, at + 0x40);
+        e.mem.set_u16(record + 0x12, params.len() as u16);
+        e.mem
+            .set_u32(record + 0x14, if params.is_empty() { 0 } else { at });
+    }
+}
+
+/// JIP answering "installed" with the row on, the vanilla records filled first, the console's
+/// print kept, a stand-in `EvaluateLine` (the echo prints only for a line of its own).
+fn commands_world() -> Engine {
+    LINES.with(|l| l.borrow_mut().clear());
+    calls();
+    let mut e = engine();
+    e.map(AREA, 0x1_0000);
+    for page in [
+        0x011d_8000,
+        0x011f_3000,
+        0x011c_a000,
+        0x011c_8000,
+        0x011f_9000,
+        0x011c_c000,
+        0x011c_3000,
+    ] {
+        e.map(page, 0x1000);
+    }
+    e.mem.set_u32(INTERFACE_MANAGER, MANAGER);
+    vanilla_records(&mut e);
+    set_vanilla_commands(&mut e, true);
+    crate::install_as(&mut e, true);
+    e.register(0x0071_b160, |_, _| Ret {
+        eax: CONSOLE,
+        ..Ret::default()
+    });
+    e.register(0x0071_d0a0, |e, a| {
+        let format = String::from_utf8_lossy(&nvse::table::guest_text(e, a[1])).into_owned();
+        let words = if a[2] == a[1] {
+            Vec::new()
+        } else {
+            vec![e.mem.u32(a[2]), e.mem.u32(a[2] + 4)]
+        };
+        LINES.with(|l| l.borrow_mut().push((format, words)));
+        Ret::default()
+    });
+    e.register(0x005e_1550, |e, w| e.call(w[0], &w[1..9]));
+    e
+}
+
+/// Script reference `index` (from 1) is `form`: the reference list at the script's `+0x44`, each
+/// entry's form at `+8` (as `nvse::args` reads an `r` argument).
+fn set_script_ref(e: &mut Engine, index: u16, form: u32) {
+    let script = crate::test_support::SCRIPT;
+    let i = u32::from(index);
+    let ref_var = 0x0300_a000 + i * 0x10;
+    e.mem.set_u32(ref_var + 8, form);
+    e.mem.set_u32(ref_var + 0xc, 0);
+    let mut node = script + 0x44;
+    for at in 1..i {
+        let next = e.mem.u32(node + 4);
+        node = if next == 0 {
+            let made = 0x0300_b000 + (at + 1) * 8;
+            e.mem.set_u32(node + 4, made);
+            made
+        } else {
+            next
+        };
+    }
+    e.mem.set_u32(node, ref_var);
+}
+
+fn form_arg(index: u16) -> Vec<u8> {
+    let mut b = vec![b'r'];
+    b.extend_from_slice(&index.to_le_bytes());
+    b
+}
+
+fn int_arg(v: i32) -> Vec<u8> {
+    let mut b = vec![b'n'];
+    b.extend_from_slice(&v.to_le_bytes());
+    b
+}
+
+fn double_arg(v: f64) -> Vec<u8> {
+    let mut b = vec![b'z'];
+    b.extend_from_slice(&v.to_le_bytes());
+    b
+}
+
+/// Runs `opcode` through its record's execute on `this`, as a line of its own, in the console
+/// when `console` (the echo's condition): the handler's `al` and the result (`start` first).
+fn run(
+    e: &mut Engine,
+    opcode: u32,
+    this: u32,
+    args: &[Vec<u8>],
+    console: bool,
+    start: f64,
+) -> (u32, f64) {
+    crate::test_support::console(e, console);
+    let mut words = crate::test_support::line(e, opcode, args);
+    words[2] = this;
+    e.mem.set_f64(crate::test_support::RESULT, start);
+    let execute = crate::test_support::execute_of(e, opcode);
+    let mut w = vec![execute];
+    w.extend_from_slice(&words);
+    let ok = e.call(0x005e_1550, &w).eax & 0xff;
+    crate::test_support::console(e, false);
+    (ok, e.mem.f64(crate::test_support::RESULT))
+}
+
+/// `MenuMode` through its record: the mode asked (no argument: 0), the result 1 or left; the
+/// console line `MenuMode %d >> %d`.
+#[test]
+fn menu_mode_command() {
+    let mut e = commands_world();
+    e.mem.set_u32(MANAGER + 0xc, 2);
+    assert_eq!(
+        run(&mut e, 0x1024, 0, &[], false, 0.0),
+        (1, 1.0),
+        "no argument: 0"
+    );
+    e.mem.set_u32(MANAGER + 0xc, 1);
+    assert_eq!(
+        run(&mut e, 0x1024, 0, &[], false, 0.5),
+        (1, 0.5),
+        "false: left"
+    );
+    // In the console (its open byte set): mode 3 is true.
+    assert_eq!(run(&mut e, 0x1024, 0, &[int_arg(3)], true, 0.0), (1, 1.0));
+    assert_eq!(lines(), [("MenuMode %d >> %d".to_string(), vec![3, 1])]);
+}
+
+/// `GetItemCount` through its record: the count; a form the parameter refuses (not an inventory
+/// type) leaves the result; the console echo; the eval.
+#[test]
+fn get_item_count_command() {
+    let mut e = commands_world();
+    let apple = AREA + 0x9000;
+    form(&mut e, apple, 0x0100_0030, 0x2f, VTABLES + 0xb00, &[]);
+    container_world(&mut e, &[(2, apple)]);
+    e.register(GET_BY_TYPE, |_, _| Ret::default());
+    set_script_ref(&mut e, 1, apple);
+    assert_eq!(
+        run(&mut e, 0x102f, REFR, &[form_arg(1)], true, 0.0),
+        (1, 2.0)
+    );
+    assert_eq!(lines(), [("GetItemCount >> 2".to_string(), vec![])]);
+    let race = AREA + 0x9500;
+    form(&mut e, race, 0x0100_0031, 0x0c, VTABLES + 0xb00, &[]);
+    set_script_ref(&mut e, 2, race);
+    assert_eq!(
+        run(&mut e, 0x102f, REFR, &[form_arg(2)], false, 0.5),
+        (1, 0.5),
+        "refused: left"
+    );
+    let res = crate::test_support::RESULT;
+    get_item_count_eval(&mut e, &[REFR, apple, 0, res]);
+    assert_eq!(result(&e), 2.0);
+}
+
+/// `GetContainer` through its record: the container the script runs in; an inventory
+/// reference's container (`nvse::invref`); neither: left.
+#[test]
+fn get_container_command() {
+    let mut e = commands_world();
+    form(&mut e, REFR, 0x0100_0011, 0x3a, VTABLES, &[VT_IS_REFERENCE]);
+    form(&mut e, BASE, 0x0100_0077, 0x3a, VTABLES, &[VT_IS_REFERENCE]);
+    let mut words = crate::test_support::line(&mut e, 0x10cf, &[]);
+    words[2] = REFR;
+    words[3] = BASE;
+    let execute = crate::test_support::execute_of(&e, 0x10cf);
+    e.mem.set_f64(crate::test_support::RESULT, 0.0);
+    e.call(execute, &words);
+    assert_eq!(
+        e.mem.u32(crate::test_support::RESULT),
+        0x0100_0077,
+        "the containing reference"
+    );
+    assert_eq!(
+        run(&mut e, 0x10cf, REFR, &[], false, 0.0),
+        (1, 0.0),
+        "neither: left"
+    );
+    // An inventory reference: its temporary reference (the game's allocator and constructor,
+    // stood in) stands for a stack in BASE.
+    let temp = AREA + 0xe000;
+    e.register(0x0040_1000, |_, _| Ret {
+        eax: AREA + 0xe000,
+        ..Ret::default()
+    });
+    e.register(0x0055_a2f0, |e, a| {
+        e.mem.set_u32(a[0] + 0xc, 0xff00_0100);
+        Ret::default()
+    });
+    let refr = nvse::invref::create(&mut e, BASE, nvse::invref::Data::default(), false);
+    assert_eq!(refr, temp);
+    assert_eq!(run(&mut e, 0x10cf, temp, &[], false, 0.0).0, 1);
+    assert_eq!(
+        e.mem.u32(crate::test_support::RESULT),
+        0x0100_0077,
+        "the stack's container"
+    );
+}
+
+/// `IsInList` through its record: 1 for the reference's base form in the list, 0 otherwise; a
+/// form the parameter refuses (not a form list) leaves the result; the console echo.
+#[test]
+fn is_in_list_command() {
+    let mut e = commands_world();
+    let (a, b) = (AREA + 0x9000, AREA + 0x9100);
+    let fl = AREA + 0x9200;
+    list_form(&mut e, fl, &[a, b]);
+    e.mem.set_u32(fl + 0xc, 0x0100_0040);
+    form(&mut e, REFR, 0x0100_0011, 0x3a, VTABLES, &[VT_IS_REFERENCE]);
+    e.mem.set_u32(REFR + 0x20, b);
+    e.mem.set_u32(b + 0xc, 0x0100_0020);
+    set_script_ref(&mut e, 1, fl);
+    assert_eq!(
+        run(&mut e, 0x1174, REFR, &[form_arg(1)], true, 0.0),
+        (1, 1.0)
+    );
+    assert_eq!(lines(), [("IsInList >> 1".to_string(), vec![])]);
+    e.mem.set_u32(REFR + 0x20, AREA + 0x9300);
+    assert_eq!(
+        run(&mut e, 0x1174, REFR, &[form_arg(1)], false, 0.5),
+        (1, 0.5)
+    );
+    set_script_ref(&mut e, 2, b);
+    e.mem.set_u8(b + 4, 0x28);
+    assert_eq!(
+        run(&mut e, 0x1174, REFR, &[form_arg(2)], false, 0.5),
+        (1, 0.5),
+        "refused: left"
+    );
+}
+
+/// `GetHitLocation` through its record: the hit data's word; -1 without a process.
+#[test]
+fn get_hit_location_command() {
+    let mut e = commands_world();
+    form(&mut e, REFR, 0x0100_0011, 0x3b, VTABLES, &[VT_IS_ACTOR]);
+    assert_eq!(run(&mut e, 0x1187, REFR, &[], false, 0.0), (1, -1.0));
+    let process = AREA + 0xb000;
+    e.mem.set_u32(process, VTABLES + 0x800);
+    e.mem
+        .set_u32(VTABLES + 0x800 + VT_GET_HIT_DATA, 0x0700_2000);
+    e.register(0x0700_2000, |_, _| Ret {
+        eax: AREA + 0xb100,
+        ..Ret::default()
+    });
+    e.mem.set_i32(AREA + 0xb100 + 0x60, 7);
+    e.mem.set_u32(REFR + 0x68, process);
+    assert_eq!(run(&mut e, 0x1187, REFR, &[], false, 0.0), (1, 7.0));
+}
+
+/// The player at `PLAYER`, whose `GetPerkRank` (slot `+0x4A0`, `(perk, alt)`, `AL`: the exe's
+/// `LevelUpMenu` calls it so) logs its arguments and answers rank 2; an actor whose own answers 1.
+fn perk_world(e: &mut Engine) -> (u32, u32) {
+    let player = AREA + 0xa000;
+    let npc = AREA + 0xa100;
+    let (player_vt, npc_vt) = (VTABLES + 0x600, VTABLES + 0xc00);
+    form(e, player, PLAYER_ID, 0x3b, player_vt, &[VT_IS_ACTOR]);
+    form(e, npc, 0x0100_0050, 0x2b, npc_vt, &[VT_IS_ACTOR]);
+    e.mem.set_u32(player_vt + VT_GET_PERK_RANK, 0x0700_1000);
+    e.mem.set_u32(npc_vt + VT_GET_PERK_RANK, 0x0700_1100);
+    e.register(0x0700_1000, |_, a| {
+        log(format!("player {:x} {}", a[1], a[2]));
+        Ret {
+            eax: 0x102,
+            ..Ret::default()
+        }
+    });
+    e.register(0x0700_1100, |_, a| {
+        log(format!("own {:x} {}", a[1], a[2]));
+        Ret {
+            eax: 1,
+            ..Ret::default()
+        }
+    });
+    e.mem.set_u32(PLAYER, player);
+    (player, npc)
+}
+
+/// `HasPerk`: the player's rank for the player and for a teammate, `alt` or-ed with the teammate
+/// flag both ways; with the NPC perks patch the actor's own; through its record the result and
+/// the game's console line (its format at `0x01035F1C`, `Perk Rank >> %d` in the exe); the eval.
+#[test]
+fn has_perk_command() {
+    let mut e = commands_world();
+    let (player, npc) = perk_world(&mut e);
+    let perk = AREA + 0x9600;
+    form(&mut e, perk, 0x0100_0060, 0x56, VTABLES + 0xd00, &[]);
+    calls();
+    assert_eq!(perk_rank(&mut e, player, perk, true), 2);
+    e.mem.set_u8(npc + 0x18d, 1);
+    assert_eq!(perk_rank(&mut e, npc, perk, false), 2);
+    assert_eq!(perk_rank(&mut e, player, perk, false), 2);
+    assert_eq!(
+        calls(),
+        [
+            format!("player {perk:x} 1"),
+            format!("player {perk:x} 1"),
+            format!("player {perk:x} 0")
+        ]
+    );
+    e.ext::<Jip>().saved.npc_perks_patch = true;
+    assert_eq!(perk_rank(&mut e, npc, perk, false), 1);
+    assert_eq!(calls(), [format!("own {perk:x} 0")]);
+    e.ext::<Jip>().saved.npc_perks_patch = false;
+    e.map(0x0103_5000, 0x1000);
+    e.mem.write(0x0103_5f1c, b"Perk Rank >> %d\0");
+    set_script_ref(&mut e, 1, perk);
+    assert_eq!(
+        run(&mut e, 0x11c1, player, &[form_arg(1)], true, 0.0),
+        (1, 1.0)
+    );
+    assert_eq!(lines(), [("Perk Rank >> %d".to_string(), vec![2, 0])]);
+    calls();
+    let res = crate::test_support::RESULT;
+    e.mem.set_f64(res, 0.0);
+    has_perk_eval(&mut e, &[npc, perk, 0, res]);
+    assert_eq!(result(&e), 1.0);
+    e.mem.set_u8(npc + 0x18d, 0);
+    e.mem.set_f64(res, 0.0);
+    has_perk_eval(&mut e, &[npc, perk, 0, res]);
+    assert_eq!(result(&e), 0.0, "not a teammate");
+}
+
+/// `GetNVSEVersionFull` at the game's `0x127D`: 6.49.
+#[test]
+fn nvse_version_at_0x127d() {
+    let mut e = commands_world();
+    assert_eq!(run(&mut e, 0x127d, 0, &[], false, 0.0), (1, 6.49));
+}
+
+/// The setting commands through their records: get by name, -1 for a string setting's name or an
+/// unknown one, "SETTING NOT FOUND" in the console for an unknown one; set with a double (1), an
+/// unknown one or a string setting's name leaving the result.
+#[test]
+fn setting_commands() {
+    let mut e = commands_world();
+    let s1 = SETTINGS;
+    setting(&mut e, s1, b"fJumpHeight", 2.5f32.to_bits());
+    let games = AREA + 0x7000;
+    e.mem.set_u32(GAME_SETTINGS, games);
+    e.mem.set_u32(games + 0x110, 1);
+    e.mem.set_u32(games + 0x114, games + 0x200);
+    e.mem.set_u32(games + 0x200, games + 0x300);
+    e.mem.set_u32(games + 0x300, 0);
+    e.mem.set_u32(games + 0x308, s1);
+    for (i, at) in INI_COLLECTIONS.iter().enumerate() {
+        let coll = AREA + 0x8000 + 0x200 * i as u32;
+        e.mem.set_u32(*at, coll);
+        e.mem.set_u32(coll + 0x10c, 0);
+    }
+    for op in [0x149a, 0x149c] {
+        assert_eq!(
+            run(&mut e, op, 0, &[s(b"fJumpHeight")], false, 0.0),
+            (1, 2.5)
+        );
+        assert_eq!(run(&mut e, op, 0, &[s(b"sJump")], true, 0.0), (1, -1.0));
+        assert!(lines().is_empty(), "a string setting's name: no line");
+        assert_eq!(run(&mut e, op, 0, &[s(b"fNone")], true, 0.0), (1, -1.0));
+        let formats: Vec<String> = lines().into_iter().map(|l| l.0).collect();
+        assert_eq!(formats, ["SETTING NOT FOUND"]);
+    }
+    for (op, v) in [(0x149b, 4.0), (0x149d, 0.25)] {
+        let args = [s(b"fjumpheight"), double_arg(v)];
+        assert_eq!(run(&mut e, op, 0, &args, false, 0.0), (1, 1.0));
+        assert_eq!(e.mem.f32(s1 + 4), v as f32);
+        let args = [s(b"fNone"), double_arg(v)];
+        assert_eq!(run(&mut e, op, 0, &args, false, 0.5), (1, 0.5));
+        let args = [s(b"sJump"), double_arg(v)];
+        assert_eq!(run(&mut e, op, 0, &args, false, 0.5), (1, 0.5));
+    }
+}
+
+/// `IsRefInList` through its record: the index; a read that fails (no arguments): -1.
+#[test]
+fn is_ref_in_list_command() {
+    let mut e = commands_world();
+    let (a, b) = (AREA + 0x9000, AREA + 0x9100);
+    let fl = AREA + 0x9200;
+    list_form(&mut e, fl, &[a, b]);
+    e.mem.set_u32(fl + 0xc, 0x0100_0040);
+    form(&mut e, b, 0x0100_0020, 0x28, VTABLES + 0xe00, &[]);
+    set_script_ref(&mut e, 1, fl);
+    set_script_ref(&mut e, 2, b);
+    let args = [form_arg(1), form_arg(2)];
+    assert_eq!(run(&mut e, 0x1511, 0, &args, false, 0.0), (1, 1.0));
+    assert_eq!(
+        run(&mut e, 0x1511, 0, &[], false, 0.0),
+        (1, -1.0),
+        "no list: -1"
+    );
+}
+
+/// The string a command answered (its id in the result).
+fn result_text(e: &Engine) -> Vec<u8> {
+    let id = result(e) as u32;
+    nvse::vars::string(e, id).unwrap_or_default()
+}
+
+/// `GetModelPath` through its record: the calling reference's base form's path; a reference
+/// given: its base form's; a base form given: its own; neither: empty. (A weapon's model, its
+/// `TESModelTextureSwap`, is at `+0x3C`, its text at `+0x40`: engine-fallout-forms
+/// `tesobjectweap.rs`, `tesmodel.rs`.)
+#[test]
+fn get_model_path_command() {
+    let mut e = commands_world();
+    let (weapon, other) = (AREA + 0x9700, AREA + 0x9800);
+    for (at, id, text) in [
+        (weapon, 0x0100_0070, b"gun.nif\0"),
+        (other, 0x0100_0071, b"bat.nif\0"),
+    ] {
+        form(&mut e, at, id, 0x28, VTABLES + 0xf00, &[]);
+        e.mem.write(at + 0x80, text);
+        e.mem.set_u32(at + 0x40, at + 0x80);
+    }
+    form(&mut e, REFR, 0x0100_0011, 0x3a, VTABLES, &[VT_IS_REFERENCE]);
+    e.mem.set_u32(REFR + 0x20, weapon);
+    let refr2 = AREA + 0x9900;
+    form(
+        &mut e,
+        refr2,
+        0x0100_0012,
+        0x3a,
+        VTABLES,
+        &[VT_IS_REFERENCE],
+    );
+    e.mem.set_u32(refr2 + 0x20, other);
+    run(&mut e, 0x158e, REFR, &[], false, 0.0);
+    assert_eq!(result_text(&e), b"gun.nif", "the calling reference's base");
+    set_script_ref(&mut e, 1, refr2);
+    run(&mut e, 0x158e, REFR, &[form_arg(1)], false, 0.0);
+    assert_eq!(result_text(&e), b"bat.nif", "a reference given: its base");
+    set_script_ref(&mut e, 2, weapon);
+    run(&mut e, 0x158e, 0, &[form_arg(2)], false, 0.0);
+    assert_eq!(result_text(&e), b"gun.nif", "a base form given");
+    run(&mut e, 0x158e, 0, &[], false, 0.0);
+    assert_eq!(result_text(&e), b"", "neither: empty");
+}
+
+/// The whole records (0x28 bytes and the parameter list) of every touched opcode while JIP does
+/// not answer "installed", row on and off (given before and after JIP's start), against xNVSE's
+/// table alone; with JIP answering "installed" but the row off, the seven vanilla records
+/// unchanged.
+#[test]
+fn records_untouched_when_off() {
+    let snapshot = |e: &Engine| -> Vec<Vec<u8>> {
+        XNVSE
+            .iter()
+            .chain(VANILLA)
+            .map(|o| {
+                let record = e.script_tables().record(o.opcode);
+                let mut bytes = e.mem.bytes(record, 0x28);
+                let (count, params) = (e.mem.u16(record + 0x12), e.mem.u32(record + 0x14));
+                if params != 0 {
+                    bytes.extend(e.mem.bytes(params, 12 * u32::from(count)));
+                }
+                bytes
+            })
+            .collect()
+    };
+    let mut plain = engine();
+    plain.map(AREA, 0x1_0000);
+    vanilla_records(&mut plain);
+    let want = snapshot(&plain);
+    for row in [false, true] {
+        let mut e = engine();
+        e.map(AREA, 0x1_0000);
+        vanilla_records(&mut e);
+        set_vanilla_commands(&mut e, row);
+        crate::install_as(&mut e, false);
+        set_vanilla_commands(&mut e, row);
+        assert_eq!(snapshot(&e), want, "not installed, row {row}");
+    }
+    let mut e = engine();
+    e.map(AREA, 0x1_0000);
+    vanilla_records(&mut e);
+    crate::install_as(&mut e, true);
+    let got = snapshot(&e);
+    assert_eq!(
+        got[XNVSE.len()..],
+        want[XNVSE.len()..],
+        "installed, row off: vanilla untouched"
+    );
 }

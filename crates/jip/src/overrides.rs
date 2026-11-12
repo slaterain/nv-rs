@@ -551,10 +551,9 @@ fn has_extra_leveled_item(e: &Engine, entry: u32) -> bool {
         Ptr::<ContChangesEntry>::new(entry),
         ContChangesEntry::extendData,
     );
-    if lists == 0 {
-        return false;
-    }
-    let mut node = e.mem.u32(lists);
+    // `extendData` is the list's first node itself (`tList<ExtraDataList>*`: data at +0, next at
+    // +4): JIP's asm loads it (`mov eax, [ecx]`) and walks from there.
+    let mut node = lists;
     while node != 0 {
         let n = Ptr::<ListNode>::new(node);
         let list = e.get(n, ListNode::data);
@@ -709,7 +708,8 @@ fn is_in_list_eval(e: &mut Engine, w: &[u32]) -> Ret {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_cmd.h:
 // Hook_GetHitLocation_Execute.
-/// An actor's last hit location as JIP's `CopyHitDataHook` stores it in the hit data (step 3.5),
+/// An actor's last hit location as JIP's `CopyHitDataHook` stores it in the hit data (step 3.5:
+/// until that hook exists the word read is the game's own `iRefCount`, not a location),
 /// -1 for none.
 fn get_hit_location(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
@@ -746,7 +746,7 @@ fn perk_rank(e: &mut Engine, actor: u32, perk: u32, for_teammates: bool) -> u8 {
             .u32();
         return rank as u8;
     }
-    let teammate = e.get(Ptr::<Actor>::new(actor), Actor::bIsTeammate) != 0;
+    let teammate = e.get(Ptr::<Actor>::new(actor), Actor::bPlayerTeammate) != 0;
     if form_id(e, actor) == PLAYER_ID || teammate {
         let player = e.mem.u32(PLAYER);
         let alt = u32::from(for_teammates || teammate);
