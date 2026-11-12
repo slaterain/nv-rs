@@ -10390,7 +10390,9 @@ const LIGHTING30_HELPERS: &[u32] = &[
 /// constant maps (none, stand-ins); the state's fifth property (none, flag 0 clear or set); the game time
 /// (play's float).
 const LIGHTING30_CONSTANTS: &[Input] = &[
-    Input::Of(&[0x1d4, 0x1e0, 0xe, 0x1c4, 0x1c7, 0x30, 0x1e1, 0xf, 0x1d3, 0x1d6]),
+    Input::Of(&[
+        0x1d4, 0x1e0, 0xe, 0x1c4, 0x1c7, 0x30, 0x1e1, 0xf, 0x1d3, 0x1d6,
+    ]),
     Input::Flag,
     Input::Of(&[u32::MAX, 0]),
     Input::Of(&[0, 1, 2, 3]),
