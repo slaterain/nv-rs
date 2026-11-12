@@ -59,7 +59,8 @@ From 2026-11-11 native float maths replaces the exact x87 helpers in the familie
 expensive in the crowded street first (ADR-0014's float rule; proven by differential tests within stated ulps and
 planted mutants): first `shader`, whose set-ups the main thread alone runs in plain `f32` and whose world transform
 in `f64`; then `dispatch` (the transforms' and matrices' arithmetic, which every thread runs: its sums of products
-in `f64`, a single operation in `f32`).
+in `f64`, a single operation in `f32`); then `culling` (the bounds, the planes and the merge the visibility walk and
+the bound updates use, on the main thread and the helper threads: likewise).
 
 An interim Windows preview (maintainer, 2026-11-06) can be built with `scripts/package-playtest.ps1`:
 a ZIP a player can run with no build, labelled a preview, wgpu remaining the big release. It has only
