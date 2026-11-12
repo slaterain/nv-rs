@@ -10,12 +10,8 @@ use crate::shader::{self, batch, state};
 use engine_core::ptr::Ptr;
 use engine_core::{args, typed_call, Engine};
 
-/// The byte that makes `RenderBatches` first run the fog and ambient copy (`011f94a6`).
-const BATCH_SETUP_FLAG: u32 = 0x011f_94a6;
 /// Whether the card has alpha to coverage (`011f9421`).
 const COVERAGE_AVAILABLE: u32 = 0x011f_9421;
-/// The counters a list's draw drops when they are not zero (`011ffa24`, then `011ff9e8`).
-const LIST_COUNTERS: [u32; 2] = [0x011f_fa24, 0x011f_f9e8];
 /// `IsShadowPass` (`00b630f0`, `cdecl(type)`, by address).
 const IS_SHADOW_PASS: u32 = 0x00b6_30f0;
 /// The pass map's `GetAt` (`00853130`, `thiscall(map, key, out)`, by address).
@@ -96,7 +92,7 @@ pub fn render_batches(
     } else {
         (first, last)
     };
-    if e.global::<u8>(BATCH_SETUP_FLAG) != 0 {
+    if super::packet::fog_ambient(e) {
         typed_call!(super::FAMILY, 0x00bb_b840, super::own::fog_ambient(e));
     }
     let head = base.wrapping_add(BSBatchRenderer::kActivePassIndexList.off);
@@ -119,13 +115,13 @@ pub fn render_batches(
                     0x00b4_f5c0,
                     crate::render::passes::shader_accumulator(e)
                 );
-                e.global::<u8>(acc.wrapping_add(0x164)) != 0 || {
+                super::packet::skip_type_13(e, Ptr::new(acc)) || {
                     let acc = typed_call!(
                         crate::render::FAMILY,
                         0x00b4_f5c0,
                         crate::render::passes::shader_accumulator(e)
                     );
-                    e.global::<u8>(acc.wrapping_add(0x165)) != 0
+                    super::packet::shadow_groups_set(e, Ptr::new(acc))
                 }
             };
             let offset = group.wrapping_mul(0x68);
@@ -175,8 +171,7 @@ pub fn render_batches(
                         );
                     }
                     if e.global::<u8>(COVERAGE_AVAILABLE) != 0 {
-                        let count = e.global::<u32>(state::COVERAGE_COUNTER).wrapping_sub(1);
-                        e.set_global(state::COVERAGE_COUNTER, count);
+                        super::own::coverage_count_down(e);
                         typed_call!(
                             shader::FAMILY,
                             0x00b9_8540,
@@ -188,12 +183,7 @@ pub fn render_batches(
                         0x00b9_8540,
                         state::set_alpha_to_coverage(e, 0u8, 0u32)
                     );
-                    for counter in LIST_COUNTERS {
-                        let count = e.global::<u32>(counter);
-                        if count != 0 {
-                            e.set_global(counter, count - 1);
-                        }
-                    }
+                    super::own::list_counters_down(e);
                 }
             }
             let groups = e.get(this, BSBatchRenderer::pRenderPassA);
