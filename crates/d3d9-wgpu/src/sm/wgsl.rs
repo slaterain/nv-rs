@@ -95,7 +95,9 @@ pub const BOOL_CONSTANTS: u32 = 16;
 /// `sys` (4 vectors of the device's values), `fix` (each sampler's fill mode, 16 words), `bias`
 /// (each sampler's LOD bias), `clip` (the user clip planes, [`CLIP_PLANES`]) and last `c`, so a
 /// block can stop after the float constants its shader reads ([`float_constants_read`]).
-pub const REGS_SIZE: u64 = REGS_C_OFFSET + 16 * 256;
+pub const REGS_SIZE: u64 = REGS_C_OFFSET + CONSTS_SIZE;
+/// The float constants' own binding (`Consts`), in bytes.
+pub const CONSTS_SIZE: u64 = 16 * 256;
 /// Where `c` starts in `Regs`.
 pub const REGS_C_OFFSET: u64 =
     16 * 16 + 16 * 4 + 16 * 4 + 16 * 4 + 16 * 4 + 16 * CLIP_PLANES as u64;
@@ -433,6 +435,11 @@ struct Regs {
     fix: array<vec4<u32>, 4>,
     bias: array<vec4<f32>, 4>,
     clip: array<vec4<f32>, 6>,
+}
+
+// The float constants: their own binding, written for each draw that changes them (the header
+// above only when it changes).
+struct Consts {
     c: array<vec4<f32>, 256>,
 }
 
@@ -643,9 +650,10 @@ impl Gen<'_> {
         }
         self.out.push_str(PRELUDE);
         let group0 = if self.vertex() { 0 } else { 1 };
+        let group1 = group0 + 2;
         let _ = writeln!(
             self.out,
-            "@group(0) @binding({group0}) var<uniform> R: Regs;\n"
+            "@group(0) @binding({group0}) var<uniform> R: Regs;\n@group(0) @binding({group1}) var<uniform> C: Consts;\n"
         );
         if !self.sig.samplers.is_empty() {
             self.out.push_str(FIX);
@@ -723,9 +731,9 @@ impl Gen<'_> {
                     float(v[3])
                 );
             }
-            self.out.push_str("        default: { if (i < 0 || i > 255) { return vec4<f32>(0.0); } return R.c[i]; }\n    }\n}\n");
+            self.out.push_str("        default: { if (i < 0 || i > 255) { return vec4<f32>(0.0); } return C.c[i]; }\n    }\n}\n");
         } else if self.relative_constants {
-            self.out.push_str("fn cr(i: i32) -> vec4<f32> {\n    if (i < 0 || i > 255) { return vec4<f32>(0.0); }\n    return R.c[i];\n}\n");
+            self.out.push_str("fn cr(i: i32) -> vec4<f32> {\n    if (i < 0 || i > 255) { return vec4<f32>(0.0); }\n    return C.c[i];\n}\n");
         }
         // The body: the main program, then each subroutine.
         let ins = &self.p.ins;
@@ -974,7 +982,7 @@ impl Gen<'_> {
                         float(v[2]),
                         float(v[3])
                     ),
-                    None => format!("R.c[{n}]"),
+                    None => format!("C.c[{n}]"),
                 },
             },
             reg::CONSTINT => format!("vec4<f32>({})", self.int_constant(n)),
@@ -1584,7 +1592,7 @@ mod tests {
         };
         let source = convert(&p, &link).unwrap();
         validate(&source);
-        assert!(source.contains("o_pos = vec4<f32>(dp4(v0, R.c[0]), dp4(v0, R.c[1]), dp4(v0, R.c[2]), dp4(v0, R.c[3]));"), "{source}");
+        assert!(source.contains("o_pos = vec4<f32>(dp4(v0, C.c[0]), dp4(v0, C.c[1]), dp4(v0, C.c[2]), dp4(v0, C.c[3]));"), "{source}");
         assert!(
             source.contains("o0 = select(o0, (v0).yxzw, vec4<bool>(true, true, false, false));"),
             "{source}"
@@ -1592,10 +1600,10 @@ mod tests {
         assert!(source.contains("out.l0 = o0;"), "{source}");
     }
 
-    /// The highest `R.c[n]` a converted shader reads, plus one.
+    /// The highest `C.c[n]` a converted shader reads, plus one.
     fn constants_in(source: &str) -> u32 {
         source
-            .match_indices("R.c[")
+            .match_indices("C.c[")
             .filter_map(|(at, _)| {
                 let rest = &source[at + 4..];
                 rest[..rest.find(']')?].parse::<u32>().ok()
