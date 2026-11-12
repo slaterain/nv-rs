@@ -1,3 +1,4 @@
+// Changed for nv-rs: dynamic rendering on Vulkan 1.3 devices (dynamic_rendering.rs, extras.rs); vendor/README.md.
 /*!
 # Vulkan API internals.
 
@@ -30,6 +31,8 @@ pub mod conv;
 mod descriptor;
 mod device;
 mod drm;
+mod dynamic_rendering;
+mod extras;
 mod instance;
 mod sampler;
 mod semaphore_list;
@@ -428,6 +431,9 @@ struct PrivateCapabilities {
     /// The data size parameter is just this * the group count, so we store this to not
     /// require an unnecessary parameter.
     ray_tracing_pipeline_group_data_size: u32,
+
+    /// What nv-rs's additions use on this device (`extras.rs`).
+    extras: extras::Caps,
 }
 
 bitflags::bitflags!(
