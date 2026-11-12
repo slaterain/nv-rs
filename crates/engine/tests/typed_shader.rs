@@ -7706,16 +7706,6 @@ const TALL_GRASS_CONSTANTS: &[Input] = &[
     Input::Of(&[0, 1, 2]),
 ];
 
-/// A float as play has it, an infinity (never one there) made 2^24 of its sign: an infinite wind phase
-/// would take the CRT's `fmod` into its error path, which the tests' memory doesn't hold.
-fn finite(bits: u32) -> u32 {
-    if bits & 0x7fff_ffff == 0x7f80_0000 {
-        (bits & 0x8000_0000) | 0x4b80_0000
-    } else {
-        bits
-    }
-}
-
 /// The tall grass's slot 0x7c's words: the world's renderer as the shader's; the rendered geometry
 /// (a transform, a bound, a skin word, its model data's buffers) with a property of kind 1 (so the real
 /// `SetupGeometry` stops after its up axis) whose instance data has the case's wind speed; the exe's
@@ -7736,6 +7726,15 @@ fn tall_grass_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
     }
     e.register(VT_FN + 0x60, |_, _| ret(0));
     e.register(0x00e8_07d0, |_, _| ret(0x4242));
+    // `_CIfmod` (the CRT family's, its own tests) stands in: the exe's tables it reads through its
+    // descriptor are not in the tests' memory. Both sides get `fmod` of the two doubles.
+    e.register(0x00ec_913a, |_, a| {
+        let double = |i: usize| f64::from_bits(u64::from(a[i]) | (u64::from(a[i + 1]) << 32));
+        Ret {
+            st0: double(0) % double(2),
+            ..Ret::default()
+        }
+    });
     let shader_vt = if c.word(0) != 0 {
         vtable(e, &[(0x60, 0x00ba_ac10)])
     } else {
@@ -7775,7 +7774,7 @@ fn tall_grass_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
     set(e, record, geometry);
     set(e, 0x011f_91e0, record);
     set(e, 0x011f_91e4, 0x31);
-    let data = grass_instances(e, geometry, 3, 2, finite(play_bits(c, 4)));
+    let data = grass_instances(e, geometry, 3, 2, play_bits(c, 4));
     let vt = vtable(e, &[]);
     let property = obj(e, 0x80, vt);
     set(e, property + 0x1c, 1);
@@ -7799,7 +7798,7 @@ fn tall_grass_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
         set(e, 0x011f_9ee0 + 4 * k, v);
         set(e, 0x011a_9bd0 + 4 * k, v ^ 0x0000_0101);
     }
-    set(e, 0x011f_940c, finite(play_bits(c, 3)));
+    set(e, 0x011f_940c, play_bits(c, 3));
     e.mem.set_u8(0x011f_941e, c.word(6) as u8);
     set(e, 0x011f_9188, 0x3fa0_0000);
     set(e, 0x011f_91c0, c.word(7));
@@ -7840,9 +7839,9 @@ fn tall_grass_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
 /// The tall grass shader's slot 0x7c (`00bac9c0`): main-thread code (`f32`; the steps with a `double`
 /// constant in `f64`, rounded once, and with the exe's constants, which have 24 significant bits or
 /// fewer, that is one rounding as the x87's) on the main thread's word, bit for bit (NaN payloads
-/// aside), with play's floats. Its `SetupGeometry`, the instance copy, the CRT's `_CIfmod` and
-/// `_memcpy` run by address here (their own tests); the instance copy is a plain call in the
-/// translation. So do the shader family's ([`Common::shader_translated`]).
+/// aside), with play's floats. Its `SetupGeometry`, the instance copy and the CRT's `_memcpy` run by
+/// address here (their own tests; the instance copy is a plain call in the translation), and so do
+/// the shader family's ([`Common::shader_translated`]); the CRT's `_CIfmod` stands in.
 #[test]
 fn tall_grass_setup_constants() {
     Diff::new(entry!(
