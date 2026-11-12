@@ -1344,7 +1344,9 @@ fn main_device(e: &mut Engine, this: Ptr) -> &mut Device {
 
 /// Notes that main set `key` while a cut is open (`super::d3d9draw::main_set`).
 fn mark(e: &mut Engine, key: super::d3d9draw::Key) {
-    super::d3d9draw::main_set(&mut device!(e).device_objects.draw, key);
+    if super::d3d9draw::any_cut() {
+        super::d3d9draw::main_set(&mut device!(e).device_objects.draw, key);
+    }
 }
 
 /// Whether the device is between `BeginScene` and `EndScene`.

@@ -103,6 +103,16 @@ pub(super) fn drawing_side(side: &DrawSide) -> bool {
     side.device.is_some() && drawing_thread()
 }
 
+/// The cuts open in the process ([`draw_cut`] to [`draw_join`]): main's setters note what they set only
+/// while one is, so without the drawing thread a setter pays one load ([`any_cut`]).
+static OPEN_CUTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Whether a cut is open anywhere ([`OPEN_CUTS`]): the setters' test before they note anything.
+#[inline]
+pub(super) fn any_cut() -> bool {
+    OPEN_CUTS.load(std::sync::atomic::Ordering::Relaxed) != 0
+}
+
 /// Notes that main set `key` while a cut is open (nothing otherwise).
 #[inline]
 pub(super) fn main_set(side: &mut DrawSide, key: Key) {
@@ -162,6 +172,7 @@ pub fn draw_cut(e: &mut Engine, device: u32) -> bool {
     super::d3d9device::copy_for_drawing(e, device);
     super::d3d9resource::copy_for_drawing(e, device);
     #[cfg(windows)]
+    OPEN_CUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     super::d3d9real::cut(e, device);
     true
 }
@@ -213,6 +224,7 @@ pub fn draw_join(e: &mut Engine) {
         noted,
         ..DrawSide::default()
     };
+    OPEN_CUTS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     if presented {
         super::d3d9device::free_frame_staging(e);
     }
