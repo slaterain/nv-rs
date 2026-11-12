@@ -201,6 +201,9 @@ pub(crate) struct PipelineCacheFile {
     saver: Arc<Saver>,
     /// What [`PipelineCacheFile::open`] made of the file (a log line's words; tests read it).
     pub(crate) note: String,
+    /// The file was read and wgpu took it (the same adapter, backend and driver): the driver's
+    /// compiled pipelines and libraries come back from it.
+    pub(crate) warm: bool,
     /// Pipelines were made since the last save.
     dirty: std::cell::Cell<bool>,
     /// The present of the last new pipeline, and of the last save.
@@ -303,6 +306,7 @@ impl PipelineCacheFile {
             cache,
             saver,
             note,
+            warm: read != 0,
             dirty: std::cell::Cell::new(false),
             touched_at: std::cell::Cell::new(0),
             first_touched_at: std::cell::Cell::new(0),
