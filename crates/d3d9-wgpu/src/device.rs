@@ -784,6 +784,11 @@ pub struct Device {
     /// ([`Device::wait_for_start`]); shaders created after it are counted as late.
     start_done: bool,
     late_shaders: u64,
+    /// How many module jobs the start waited for ([`Device::start_waited_for`]).
+    start_jobs: usize,
+    /// Libraries are still made ahead: a refused one stops it (said once), so no shader makes
+    /// a pipeline for nothing. Shared with the module jobs.
+    libraries_ahead: Arc<std::sync::atomic::AtomicBool>,
     /// The stand-in partners those are made with (or why wgpu refused one): a vertex shader for
     /// each set of varyings and clip code ([`wgsl::stand_in_vertex`]), and the pixel shader
     /// ([`wgsl::STAND_IN_PIXEL`]). Kept: wgpu-hal forgets a module's libraries when it goes.
@@ -1098,6 +1103,8 @@ impl Device {
             libraries,
             start_done: false,
             late_shaders: 0,
+            start_jobs: 0,
+            libraries_ahead: Arc::new(std::sync::atomic::AtomicBool::new(libraries)),
             stand_in_vertex: Map::default(),
             stand_in_pixel: None,
             pipeline_cache,
@@ -3749,14 +3756,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             return;
         }
         self.listed_new = false;
-        self.wait_for_start();
-        let Some(mut l) = self.list.take() else {
-            return;
-        };
+        let mut list = self.list.take();
         let started = std::time::Instant::now();
         let mut ready = Vec::new();
         let mut ahead = HashSet::new();
-        for i in 0..l.list.entries.len() {
+        for i in 0..list.as_ref().map_or(0, |l| l.list.entries.len()) {
+            let Some(l) = &mut list else { break };
             let e = &l.list.entries[i];
             let want = if e.samples > 1 {
                 self.sample_mask & !0b11
@@ -3793,6 +3798,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 }
             }
         }
+        // The game's start (once): every shader's module and library first, the listed
+        // pipelines below then only link; one progress bar for both.
+        let before = self.wait_for_start(ready.len());
+        let Some(l) = list else {
+            return;
+        };
         if ready.is_empty() {
             self.list = Some(l);
             return;
@@ -3826,15 +3837,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // The loading screen while it runs, when it is a long step (the start's; a few pipelines
         // ready later, after a new sample count, are made without it): the modules taken back,
         // then any other the pipelines need, then the pipelines.
-        let total = std::cell::Cell::new(taken.len() + ready.len());
-        let shown = total.get() >= 32;
+        let total = std::cell::Cell::new(before + taken.len() + ready.len());
+        let shown = before > 0 || total.get() >= 32;
         let mut surface = self.surface.take();
         let mut screen = self.loading.take();
         let (device, queue) = (self.device.clone(), self.queue.clone());
         let mut shots = self.shots.take();
         let mut step = |done: usize| {
             if shown {
-                let p = shader_progress(done, total.get());
+                let p = shader_progress(before + done, total.get());
                 show_on(
                     &mut surface,
                     &mut screen,
@@ -3904,7 +3915,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             |(_, j)| build_pipeline(&device, cache, j),
             &mut |d| step(modules + d),
         );
-        step(total.get());
+        step(total.get() - before);
         drop(step);
         self.surface = surface;
         self.loading = screen;
@@ -3947,25 +3958,82 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// up to about 130 ms while the driver made it (d1, driver cold), whatever the number of
     /// threads. Shaders the game creates later are made in the background or on the draw that
     /// needs them, and counted ([`Made::late_shaders`]).
-    fn wait_for_start(&mut self) {
+    ///
+    /// The start uses every core at normal priority: the jobs no module thread has started are
+    /// taken back and made here on [`all_cores`] threads (the game waits at its next frame
+    /// anyway), the ones a module thread is doing are waited for with the threads raised. The
+    /// loading screen counts them with the `then` listed pipelines that follow, one bar. How
+    /// many it waited for (`0`: none).
+    fn wait_for_start(&mut self, then: usize) -> usize {
         // Not before the game has a shader (a multisampled target made first asks for this too).
         if self.start_done || self.shader_bytecode.is_empty() {
-            return;
+            return 0;
         }
         self.start_done = true;
         let waiting = self.modules_ahead.as_ref().map_or(0, |q| q.pending());
         if !self.libraries || waiting == 0 {
-            return;
+            return 0;
         }
+        self.start_jobs = waiting;
         let started = std::time::Instant::now();
+        let total = waiting + then;
+        let cores = all_cores();
         let mut surface = self.surface.take();
         let mut screen = self.loading.take();
         let mut shots = self.shots.take();
         let (device, queue) = (self.device.clone(), self.queue.clone());
-        if let Some(q) = &self.modules_ahead {
-            q.boost(true);
+        let mut show = |done: usize| {
+            let p = shader_progress(done, total);
+            show_on(
+                &mut surface,
+                &mut screen,
+                &device,
+                &queue,
+                shots.as_mut(),
+                &p,
+            );
+        };
+        let taken: Vec<(
+            ModKey,
+            std::sync::Mutex<Option<crate::ahead::Job<ModuleMade>>>,
+        )> = match &mut self.modules_ahead {
+            Some(q) => {
+                q.boost(true);
+                q.take_all_queued()
+                    .into_iter()
+                    .map(|(k, job)| (k, std::sync::Mutex::new(Some(job))))
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        let made = on_workers(
+            &taken,
+            cores,
+            |(_, job)| {
+                let job = job.lock().unwrap_or_else(|e| e.into_inner()).take();
+                job.map(|job| job())
+            },
+            &mut show,
+        );
+        // Where the threads' time went (the log line below): converting, modules, libraries.
+        let mut spent = [std::time::Duration::ZERO; 3];
+        let mut add = |m: &ModuleMade| {
+            spent[0] += m.convert;
+            spent[1] += m.made;
+            spent[2] += m
+                .library
+                .as_ref()
+                .map_or(std::time::Duration::ZERO, |l| l.0);
+        };
+        for ((k, _), m) in taken.into_iter().zip(made) {
+            if let Some(m) = m {
+                add(&m);
+                self.library_made(&m.library);
+                self.keep_module(k, m.module);
+            }
         }
-        // The loading screen about four times a second.
+        // The ones the module threads were doing; the loading screen about four times a second.
+        let deadline = START_DEADLINE_FOR_TESTS.load(Ordering::Relaxed);
         let mut last: Option<std::time::Instant> = None;
         loop {
             let (done, left) = match &mut self.modules_ahead {
@@ -3973,39 +4041,60 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 None => (Vec::new(), 0),
             };
             for (k, m) in done {
+                add(&m);
                 self.ahead_burst.0 += 1;
                 self.ahead_burst.1 += m.convert + m.made;
                 self.keep_library(&m.library);
                 self.keep_module(k, m.module);
             }
             if !matches!(last, Some(t) if t.elapsed().as_millis() < 250) {
-                let p = shader_progress(waiting - left, waiting);
-                show_on(
-                    &mut surface,
-                    &mut screen,
-                    &device,
-                    &queue,
-                    shots.as_mut(),
-                    &p,
-                );
+                show(waiting - left);
                 last = Some(std::time::Instant::now());
             }
             if left == 0 {
                 break;
             }
+            assert!(
+                deadline == 0 || started.elapsed().as_millis() < u128::from(deadline),
+                "the start waited over {deadline} ms (tests)"
+            );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         if let Some(q) = &self.modules_ahead {
             q.boost(false);
         }
+        drop(show);
         self.surface = surface;
         self.loading = screen;
         self.shots = shots;
         self.made.work += started.elapsed();
+        let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
         eprintln!(
-            "NV_D3D9 wgpu: the start: {waiting} shader modules and their pipeline libraries waited for, {:.0} ms",
-            started.elapsed().as_secs_f64() * 1000.0
+            "NV_D3D9 wgpu: the start: {waiting} shader modules and their pipeline libraries, {:.0} ms on {cores} cores (threads' time: converting {:.0} ms, modules {:.0} ms, libraries {:.0} ms)",
+            ms(started.elapsed()),
+            ms(spent[0]),
+            ms(spent[1]),
+            ms(spent[2])
         );
+        waiting
+    }
+
+    /// How many shader modules (with their libraries) the game's start waited for (tests).
+    pub fn start_waited_for(&self) -> usize {
+        self.start_jobs
+    }
+
+    /// How many shader modules the module threads have not handed out yet (tests).
+    pub fn modules_pending(&self) -> usize {
+        self.modules_ahead.as_ref().map_or(0, |q| q.pending())
+    }
+
+    /// The module threads' priorities now (`0` normal, `-1` below normal; tests).
+    #[cfg(windows)]
+    pub fn module_thread_priorities(&self) -> Vec<i32> {
+        self.modules_ahead
+            .as_ref()
+            .map_or_else(Vec::new, |q| q.priorities())
     }
 
     /// Shaders the game created after its start (tests; the report says how many in each
@@ -4068,16 +4157,21 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         if made {
             return;
         }
-        let library = if self.libraries {
-            self.library_ahead(s, &link)
-        } else {
-            None
-        };
+        // Its library too, until the start: after it, a shader's library is made on the draw that
+        // first needs it, never in the background during play (the driver held frames up to about
+        // 130 ms while making one); none once wgpu refused one.
+        let library =
+            if self.libraries && !self.start_done && self.libraries_ahead.load(Ordering::Relaxed) {
+                self.library_ahead(s, &link)
+            } else {
+                None
+            };
         let device = self.device.clone();
         let q = self
             .modules_ahead
             .get_or_insert_with(|| crate::ahead::Queue::new(worker_threads(), "nv-wgpu-modules"));
-        q.push(key, module_job(device, s.clone(), link, library));
+        let ahead = self.libraries_ahead.clone();
+        q.push(key, module_job(device, s.clone(), link, library, ahead));
     }
 
     /// What making `s`'s pipeline library takes, right after its module (made with `link`) on
@@ -4239,7 +4333,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 }
             }
             Some((_, Err(e))) => {
-                self.warn(format!("a shader's pipeline library made ahead: {e}"));
+                self.libraries_ahead.store(false, Ordering::Relaxed);
+                self.warn(format!(
+                    "a shader's pipeline library made ahead: {e}; no more are made ahead"
+                ));
             }
             None => {}
         }
@@ -6516,8 +6613,13 @@ fn module_job(
     shader: Arc<Shader>,
     link: wgsl::Link,
     library: Option<LibraryAhead>,
+    ahead: Arc<std::sync::atomic::AtomicBool>,
 ) -> crate::ahead::Job<ModuleMade> {
     Box::new(move || {
+        let delay = MODULE_DELAY_FOR_TESTS.load(Ordering::Relaxed);
+        if delay > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(u64::from(delay)));
+        }
         let t = std::time::Instant::now();
         let source = wgsl::convert(&shader.program, &link);
         let convert = t.elapsed();
@@ -6529,8 +6631,9 @@ fn module_job(
         let made = t.elapsed();
         // The shader's pipeline library: a pipeline of the module and the stand-in, dropped
         // (wgpu-hal keeps the library).
+        // None once one was refused (said once by the device): no pipeline made for nothing.
         let library = match (&module, library) {
-            (Ok(m), Some(l)) => {
+            (Ok(m), Some(l)) if ahead.load(Ordering::Relaxed) => {
                 let t = std::time::Instant::now();
                 let (vm, pm) = match shader.program.stage {
                     Stage::Vertex => (m.clone(), l.partner),
@@ -6548,6 +6651,9 @@ fn module_job(
                     targets: l.targets,
                 };
                 let made = build_pipeline(&device, l.cache.as_ref(), &job).map(drop);
+                if made.is_err() {
+                    ahead.store(false, Ordering::Relaxed);
+                }
                 Some((t.elapsed(), made))
             }
             _ => None,
@@ -6969,9 +7075,10 @@ fn build_pipeline(
     }
 }
 
-/// `f` of each of `items`, on up to `threads` worker threads below normal priority (1: on this
-/// thread), the results in the items' order. `tick` runs on this thread meanwhile, about four
-/// times a second, with how many are done (the loading screen).
+/// `f` of each of `items`, on up to `threads` worker threads (1: on this thread), the results in
+/// the items' order. `tick` runs on this thread meanwhile, about four times a second, with how
+/// many are done (the loading screen). The threads keep normal priority: the game waits for them
+/// (its start, behind the loading screen).
 fn on_workers<T: Sync, R: Send>(
     items: &[T],
     threads: usize,
@@ -6999,15 +7106,12 @@ fn on_workers<T: Sync, R: Send>(
     std::thread::scope(|s| {
         let mut workers = Vec::new();
         for _ in 0..threads.min(items.len()) {
-            workers.push(s.spawn(|| {
-                crate::ahead::lower_priority();
-                loop {
-                    let i = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(item) = items.get(i) else { break };
-                    let r = f(item);
-                    *results[i].lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
-                    done.fetch_add(1, Ordering::Relaxed);
-                }
+            workers.push(s.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                let Some(item) = items.get(i) else { break };
+                let r = f(item);
+                *results[i].lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+                done.fetch_add(1, Ordering::Relaxed);
             }));
         }
         // Until every worker is out (also one that panicked: the scope then passes it on).
@@ -7037,6 +7141,24 @@ fn on_workers<T: Sync, R: Send>(
 
 /// How many worker threads make pipelines ahead: fewer than the machine's cores (two left for
 /// the game's main thread and the render thread), at least one.
+/// Every core (the logical processors), for the game's start while it waits ([`Device::wait_for_start`]).
+fn all_cores() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get())
+}
+
+/// Tests only: each module job waits this many milliseconds before it starts (jobs in flight
+/// across the game's start), and the start fails past this many (a wait that would not end).
+static MODULE_DELAY_FOR_TESTS: AtomicU32 = AtomicU32::new(0);
+static START_DEADLINE_FOR_TESTS: AtomicU32 = AtomicU32::new(0);
+
+/// Tests only: [`MODULE_DELAY_FOR_TESTS`] and [`START_DEADLINE_FOR_TESTS`] in milliseconds
+/// (0: none).
+#[doc(hidden)]
+pub fn module_timing_for_tests(delay_ms: u32, start_deadline_ms: u32) {
+    MODULE_DELAY_FOR_TESTS.store(delay_ms, Ordering::Relaxed);
+    START_DEADLINE_FOR_TESTS.store(start_deadline_ms, Ordering::Relaxed);
+}
+
 fn worker_threads() -> usize {
     std::thread::available_parallelism()
         .map_or(1, |n| n.get())

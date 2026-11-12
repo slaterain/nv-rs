@@ -22,6 +22,8 @@ const VB: u32 = 0x1500;
 /// `D3DFMT_A8R8G8B8`, `D3DFMT_D24S8`.
 const A8R8G8B8: u32 = 21;
 const D24S8: u32 = 75;
+/// The depth texture format a pixel shader can sample (`MAKEFOURCC('I', 'N', 'T', 'Z')`).
+const INTZ: u32 = u32::from_le_bytes(*b"INTZ");
 /// Render states.
 const ZENABLE: u32 = 7;
 const ZWRITEENABLE: u32 = 14;
@@ -707,6 +709,99 @@ fn declarations_of_other_kinds_or_a_missing_element_get_their_own_modules() {
 #[test]
 fn each_stage_samples_from_its_own_group() {
     let Some(mut g) = Gpu::new(4, 1) else { return };
+    stage_samplers(&mut g);
+    g.run(Cmd::SetShader {
+        device: DEVICE,
+        pixel: false,
+        shader: VS + 2,
+    });
+    for (ps, want) in [(PS + 5, [0, 255, 0, 255]), (PS + 6, [0, 255, 255, 255])] {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel: true,
+            shader: ps,
+        });
+        g.clear(3, 0, 1.0);
+        g.cover(0.5);
+        assert_eq!(g.pixels(), vec![want; 16], "pixel shader {ps:#x}");
+    }
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+}
+
+/// With pipeline libraries, a textured shader's library made ahead is the one its draws link:
+/// the vertex shader sampling a vertex texture and the pixel shader sampling its own make no
+/// library on their draws (their textures filterable, as the layout made ahead assumes). A
+/// draw whose pixel shader samples a depth texture (not filterable) makes exactly one pixel
+/// shader library.
+#[test]
+fn a_textured_shaders_library_made_ahead_is_the_one_its_draws_link() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    stage_samplers(&mut g);
+    let d = g.b.device().expect("the device");
+    let Some(_) = d.pipeline_library_report() else {
+        eprintln!(
+            "{}: no pipeline libraries, so the case is not reached here",
+            d.adapter_name()
+        );
+        return;
+    };
+    d.wait_for_modules();
+    let made = library_counts(d).expect("the counts");
+    g.run(Cmd::SetShader {
+        device: DEVICE,
+        pixel: false,
+        shader: VS + 2,
+    });
+    for ps in [PS + 5, PS + 6] {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel: true,
+            shader: ps,
+        });
+        g.clear(3, 0, 1.0);
+        g.cover(0.5);
+    }
+    let d = g.b.device().expect("the device");
+    assert_eq!(
+        library_counts(d),
+        Some(made),
+        "the draws linked the ones made ahead"
+    );
+    // An INTZ depth texture (1 by 1) for the pixel shader's sampler 0: not filterable.
+    const DEPTH_TEX: u32 = 0x1604;
+    let levels = words(&[DEPTH_TEX + 1]);
+    g.run(Cmd::CreateTexture {
+        device: DEVICE,
+        texture: DEPTH_TEX,
+        levels: Data::Bytes(&levels),
+        width: 1,
+        height: 1,
+        usage: 2,
+        format: INTZ,
+        pool: 1,
+    });
+    g.run(Cmd::SetTexture {
+        device: DEVICE,
+        sampler: 0,
+        texture: DEPTH_TEX,
+    });
+    g.clear(3, 0, 1.0);
+    g.cover(0.5);
+    let d = g.b.device().expect("the device");
+    assert_eq!(
+        library_counts(d),
+        Some((made.0, made.1 + 1)),
+        "one more pixel shader library, for the other layout"
+    );
+    assert_eq!(d.wgpu_errors(), 0);
+}
+
+/// Textures and shaders for each stage's own sampler group: a 1 by 1 green texture for vertex
+/// sampler 0 and a red one for pixel sampler 0; a vs_3_0 (`VS + 2`) that samples its texture
+/// (`texldl`) into TEXCOORD0; a ps_3_0 (`PS + 5`) that draws TEXCOORD0 and one (`PS + 6`) that
+/// adds its own texture's texel to it.
+fn stage_samplers(g: &mut Gpu) {
     const VS_TEX: u32 = 0x1600;
     const PS_TEX: u32 = 0x1602;
     for (texture, bgra) in [(VS_TEX, [0u8, 255, 0, 255]), (PS_TEX, [0, 0, 255, 255])] {
@@ -780,23 +875,6 @@ fn each_stage_samples_from_its_own_group() {
             tokens: Data::Bytes(&t),
         });
     }
-    g.run(Cmd::SetShader {
-        device: DEVICE,
-        pixel: false,
-        shader: VS + 2,
-    });
-    for (ps, want) in [(PS + 5, [0, 255, 0, 255]), (PS + 6, [0, 255, 255, 255])] {
-        g.run(Cmd::SetShader {
-            device: DEVICE,
-            pixel: true,
-            shader: ps,
-        });
-        g.clear(3, 0, 1.0);
-        g.cover(0.5);
-        assert_eq!(g.pixels(), vec![want; 16], "pixel shader {ps:#x}");
-    }
-    let d = g.b.device().expect("the device");
-    assert_eq!(d.wgpu_errors(), 0);
 }
 
 /// Fixed varying locations: one vertex shader writing TEXCOORD0 (red) and TEXCOORD1 (green)
@@ -1291,8 +1369,21 @@ fn a_draw_takes_back_the_modules_no_thread_has_started() {
 /// shader library itself. A shader the game creates after its start is counted.
 #[test]
 fn the_start_waits_for_every_shaders_library_and_counts_later_shaders() {
+    // Each module job a second late, so jobs are in flight across the start's draw; a start that
+    // waited 20 s fails instead of hanging. Undone when the test ends, however it ends.
+    struct Timing;
+    impl Drop for Timing {
+        fn drop(&mut self) {
+            d3d9_wgpu::device::module_timing_for_tests(0, 0);
+        }
+    }
+    let _timing = Timing;
+    d3d9_wgpu::device::module_timing_for_tests(1000, 20_000);
     let Some(mut g) = Gpu::new(4, 1) else { return };
-    // Created before the start, with the harness's two.
+    // The harness's two shaders' jobs are in flight (each module thread has one); two more
+    // created with the threads held stay queued, for the start to take back.
+    let d = g.b.device().expect("the device");
+    d.hold_modules(true);
     texcoord_pair(&mut g, VS + 12, PS + 20);
     for (pixel, shader) in [(false, VS), (true, PS)] {
         g.run(Cmd::SetShader {
@@ -1303,27 +1394,39 @@ fn the_start_waits_for_every_shaders_library_and_counts_later_shaders() {
     }
     let d = g.b.device().expect("the device");
     assert_eq!(d.shaders_created_after_start(), 0);
+    assert_eq!(d.modules_pending(), 4);
     let libraries = d.pipeline_library_report().is_some();
     g.colour([1.0, 1.0, 1.0, 1.0]);
     g.clear(3, 0, 1.0);
     g.cover(0.5);
     assert_eq!(g.reds(), vec![255; 16]);
     let d = g.b.device().expect("the device");
+    let before = library_counts(d);
     if libraries {
-        assert_eq!(d.modules_made_here(), 0, "the start waited, took none back");
-        let report = d.pipeline_library_report().expect("the report");
+        assert_eq!(d.start_waited_for(), 4, "the start waited for all four");
+        assert_eq!(d.modules_pending(), 0, "nothing left after the start");
+        assert_eq!(
+            d.modules_made_here(),
+            0,
+            "the start's draw made none itself"
+        );
         // The four shaders' libraries and the stand-ins' (one pixel shader, two vertex
         // shaders: the harness's pixel shader reads nothing, the other TEXCOORD0).
+        assert_eq!(before, Some((4, 3)));
+        #[cfg(windows)]
         assert!(
-            report.contains(" 4 vertex shader (") && report.contains(" 3 pixel shader ("),
-            "{report}"
+            d.module_thread_priorities().iter().all(|&p| p == -1),
+            "the module threads below normal again: {:?}",
+            d.module_thread_priorities()
         );
     } else {
         eprintln!(
             "{}: no pipeline libraries, so the start does not wait",
             d.adapter_name()
         );
+        assert_eq!(d.start_waited_for(), 0);
     }
+    d.hold_modules(false);
     // Two new shaders after the start (vs_2_0: dcl_position v0; dcl_color v1; mov oPos, v0;
     // mov oD0, v1. ps_2_0: dcl v0; mov oC0, v0), and one made again (the same bytecode as one
     // made before: nothing new to make, not counted).
@@ -1349,6 +1452,27 @@ fn the_start_waits_for_every_shaders_library_and_counts_later_shaders() {
     texcoord_pair(&mut g, VS + 14, PS + 22);
     let d = g.b.device().expect("the device");
     assert_eq!(d.shaders_created_after_start(), 2);
+    // Their modules only: no library is made in the background during play.
+    d.wait_for_modules();
+    assert_eq!(library_counts(d), before, "no library for a later shader");
+}
+
+/// wgpu-hal's counts of the vertex and pixel shader libraries made so far; `None` without
+/// libraries.
+fn library_counts(d: &d3d9_wgpu::device::Device) -> Option<(u64, u64)> {
+    let report = d.pipeline_library_report()?;
+    // The number before `what` in wgpu-hal's line.
+    let count = |what: &str| -> u64 {
+        let end = report
+            .find(what)
+            .unwrap_or_else(|| panic!("no {what:?}: {report}"));
+        report[..end]
+            .rsplit(|c: char| !c.is_ascii_digit())
+            .next()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("no count before {what:?}: {report}"))
+    };
+    Some((count(" vertex shader ("), count(" pixel shader (")))
 }
 
 /// A shader model 1 or 2 vertex shader always writes its two colours, as Direct3D 9's values
