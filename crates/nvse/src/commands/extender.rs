@@ -129,6 +129,13 @@ fn plugin_by_name<'a>(plugins: &'a [Plugin], name: &[u8]) -> Option<&'a Plugin> 
         .find(|p| p.name.as_bytes().eq_ignore_ascii_case(name))
 }
 
+/// The built-in plugin a plugin asks for by name (`GetPluginInfoByName`, xNVSE's command table
+/// interface (xNVSE), which is `PluginManager::GetInfoByName`): JIP LN NVSE's own versions of
+/// the two plugin commands ask it.
+pub fn plugin_info(name: &[u8]) -> Option<&'static Plugin> {
+    plugin_by_name(BUILT_IN_PLUGINS, name)
+}
+
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), PluginManager.cpp:
 // Cmd_IsPluginInstalled_Execute.
 /// 1 for a plugin of that name, else 0 (written only after a read that answered). Its name is

@@ -1,0 +1,11 @@
+[package]
+name = "jip"
+version = "0.1.0"
+description = "JIP LN NVSE (xNVSE's largest plugin) built in: its command table, identity and, step by step, its commands (ADR-0016)"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+engine-core = { path = "../engine-core" }
+nvse = { path = "../nvse" }

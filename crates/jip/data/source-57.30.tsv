@@ -1,0 +1,1156 @@
+# JIP LN NVSE 57.30 (5a30ac4): every slot as the source registers it, listed independently of the
+# table generator by the scope of 2026-11-11 (jip_commands.tsv): opcode, registration (REG_CMD and its
+# typed forms, or EMPTY), name, the DEFINE_ macro, alias, needs a reference, parameter list, and the
+# file of the DEFINE_ line (without .h). Its two DEFINE_CMD_COND_ONLY rows (27B1, 293E), which that
+# list left unread, are completed from their DEFINE_ lines.
+opcode	registration	name	define	alias	needs_ref	params	file
+2200	CMD	GetLNVersion	COMMAND_ALT_PLUGIN	GetJIPLNVersion	0	nullptr	ln_fn_utility
+2201	CMD	FileExists	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalInt	ln_fn_utility
+2202	CMD_STR	GetTimeStamp	COMMAND_PLUGIN		0	nullptr	ln_fn_utility
+2203	CMD	GetController	COMMAND_PLUGIN		0	nullptr	ln_fn_gamepad
+2204	CMD	IsButtonPressed	CMD_COND_PLUGIN		0	kParams_OneInt	ln_fn_gamepad
+2205	CMD	GetLeftStickX	CMD_ALT_COND_PLUGIN	GetLSX	0	nullptr	ln_fn_gamepad
+2206	CMD	GetLeftStickY	CMD_ALT_COND_PLUGIN	GetLSY	0	nullptr	ln_fn_gamepad
+2207	CMD	GetRightStickX	CMD_ALT_COND_PLUGIN	GetRSX	0	nullptr	ln_fn_gamepad
+2208	CMD	GetRightStickY	CMD_ALT_COND_PLUGIN	GetRSY	0	nullptr	ln_fn_gamepad
+2209	CMD	GetLeftTrigger	CMD_ALT_COND_PLUGIN	GetLTr	0	nullptr	ln_fn_gamepad
+220A	CMD	GetRightTrigger	CMD_ALT_COND_PLUGIN	GetRTr	0	nullptr	ln_fn_gamepad
+220B	CMD	GetDeadZoneLS	COMMAND_PLUGIN		0	nullptr	ln_fn_gamepad
+220C	CMD	GetDeadZoneRS	COMMAND_PLUGIN		0	nullptr	ln_fn_gamepad
+220D	CMD	SetDeadZoneLS	COMMAND_PLUGIN		0	kParams_OneDouble	ln_fn_gamepad
+220E	CMD	SetDeadZoneRS	COMMAND_PLUGIN		0	kParams_OneDouble	ln_fn_gamepad
+220F	CMD	GetPressedButtons	COMMAND_ALT_PLUGIN	GetButtons	0	nullptr	ln_fn_gamepad
+2210	CMD	GetNVSEVersionFull	COMMAND_PLUGIN		0	nullptr	patches_cmd
+2211	CMD	GetLoadedType	COMMAND_ALT_PLUGIN	GLT	0	kParams_OneList_OneInt_TwoOptionalInts	ln_fn_game_data
+2212	CMD_ARR	ListToArray	COMMAND_PLUGIN		0	kParams_FormList	ln_fn_utility
+2213	EMPTY						
+2214	CMD_FRM	GetCombatStyle	COMMAND_PLUGIN		0	kParams_OneOptionalActorBase	ln_fn_actor
+2215	EMPTY						
+2216	CMD_ARR	SaveHotkeys	COMMAND_PLUGIN		0	nullptr	ln_fn_inventory
+2217	CMD	RestoreHotkeys	COMMAND_PLUGIN		0	kParams_OneOptionalInt	ln_fn_inventory
+2218	CMD_FRM	GetBipedModelList	COMMAND_ALT_PLUGIN	GetBMList	0	kParams_OneOptionalObjectID	ln_fn_miscellaneous
+2219	CMD	SetBipedModelList	COMMAND_ALT_PLUGIN	SetBMList	0	kParams_OneForm_OneOptionalForm	ln_fn_miscellaneous
+221A	CMD_STR	GetModName	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalInt	ln_fn_game_data
+221B	CMD	HasPerkRank	COMMAND_PLUGIN		1	kParams_OneForm_OneOptionalInt	ln_fn_perk
+221C	CMD	SetGlobalValue	COMMAND_ALT_PLUGIN	SGV	0	kParams_OneString_OneFloat	ln_fn_miscellaneous
+221D	CMD	GetSelfModIndex	COMMAND_PLUGIN		0	nullptr	ln_fn_game_data
+221E	CMD	LeveledListAddForm	COMMAND_ALT_PLUGIN	LListAddForm	0	kParams_TwoForms_TwoInts_OneFloat	ln_fn_leveled_list
+221F	CMD	LeveledListRemoveForm	COMMAND_ALT_PLUGIN	LListRemoveForm	0	kParams_TwoForms	ln_fn_leveled_list
+2220	CMD	GetLevItemIndexByForm	COMMAND_ALT_PLUGIN	LListGetFormIndex	0	kParams_TwoForms	ln_fn_leveled_list
+2221	CMD	GetLevItemIndexByLevel	COMMAND_ALT_PLUGIN	LListGetLevelIndex	0	kParams_OneForm_OneInt	ln_fn_leveled_list
+2222	CMD	GetChanceNone	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_leveled_list
+2223	CMD	SetChanceNone	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	ln_fn_leveled_list
+2224	CMD	GetNumLevItems	COMMAND_ALT_PLUGIN	LListGetCount	0	kParams_OneForm	ln_fn_leveled_list
+2225	CMD_FRM	GetNthLevItem	COMMAND_ALT_PLUGIN	LListGetNthForm	0	kParams_OneForm_OneInt	ln_fn_leveled_list
+2226	CMD	GetNthLevItemLevel	COMMAND_ALT_PLUGIN	LListGetNthLevel	0	kParams_OneForm_OneInt	ln_fn_leveled_list
+2227	CMD	GetNthLevItemCount	COMMAND_ALT_PLUGIN	LListGetNthCount	0	kParams_OneForm_OneInt	ln_fn_leveled_list
+2228	CMD	RemoveNthLevItem	COMMAND_ALT_PLUGIN	LListRemoveNthForm	0	kParams_OneForm_OneInt	ln_fn_leveled_list
+2229	CMD	LeveledListClear	COMMAND_ALT_PLUGIN	LListClear	0	kParams_OneForm	ln_fn_leveled_list
+222A	CMD	DumpLevList	COMMAND_ALT_PLUGIN	LListDump	0	kParams_OneForm	ln_fn_leveled_list
+222B	CMD	GetChanceNoneGlobal	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_leveled_list
+222C	CMD	ClearAllHotkeys	COMMAND_PLUGIN		0	nullptr	ln_fn_inventory
+222D	CMD_FRM	GetMapMarkerRep	COMMAND_PLUGIN		1	nullptr	ln_fn_map_marker
+222E	CMD	SetMapMarkerRep	COMMAND_PLUGIN		1	kParams_OneOptionalForm	ln_fn_map_marker
+222F	CMD_STR	GetMapMarkerName	COMMAND_PLUGIN		1	nullptr	ln_fn_map_marker
+2230	CMD	SetMapMarkerName	COMMAND_PLUGIN		1	kParams_OneString	ln_fn_map_marker
+2231	CMD	GetMapMarkerType	COMMAND_PLUGIN		1	nullptr	ln_fn_map_marker
+2232	CMD	SetMapMarkerType	COMMAND_PLUGIN		1	kParams_OneInt	ln_fn_map_marker
+2233	EMPTY						
+2234	CMD	SetMapMarkerVisible	COMMAND_PLUGIN		1	kParams_OneInt	ln_fn_map_marker
+2235	CMD	GetMapMarkerHidden	COMMAND_PLUGIN		1	nullptr	ln_fn_map_marker
+2236	CMD	SetMapMarkerHidden	COMMAND_PLUGIN		1	kParams_OneInt	ln_fn_map_marker
+2237	CMD	GetMapMarkerTravel	COMMAND_PLUGIN		1	nullptr	ln_fn_map_marker
+2238	CMD	SetMapMarkerTravel	COMMAND_PLUGIN		1	kParams_OneInt	ln_fn_map_marker
+2239	CMD_ARR	GetFormMods	COMMAND_PLUGIN		0	kParams_OneOptionalForm	ln_fn_game_data
+223A	CMD	IsFormOverridden	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_game_data
+223B	CMD	SetPerkRank	COMMAND_PLUGIN		1	kParams_OneForm_OneInt_OneOptionalInt	ln_fn_perk
+223C	CMD_FRM	GetMerchantContainer	COMMAND_PLUGIN		1	nullptr	ln_fn_actor
+223D	CMD	GetRadioBroadcastType	COMMAND_PLUGIN		1	nullptr	ln_fn_radio_ref
+223E	CMD	SetRadioBroadcastType	COMMAND_PLUGIN		1	kParams_OneInt	ln_fn_radio_ref
+223F	CMD	GetRadioRadius	COMMAND_PLUGIN		1	nullptr	ln_fn_radio_ref
+2240	CMD	SetRadioRadius	COMMAND_PLUGIN		1	kParams_OneFloat	ln_fn_radio_ref
+2241	CMD	GetRadioStatic	COMMAND_PLUGIN		1	nullptr	ln_fn_radio_ref
+2242	CMD	SetRadioStatic	COMMAND_PLUGIN		1	kParams_OneFloat	ln_fn_radio_ref
+2243	CMD	GetRadioPosRef	COMMAND_PLUGIN		1	nullptr	ln_fn_radio_ref
+2244	CMD	SetRadioPosRef	COMMAND_PLUGIN		1	kParams_OneObjectRef	ln_fn_radio_ref
+2245	CMD	IsRadioRef	COMMAND_PLUGIN		1	nullptr	ln_fn_radio_ref
+2246	CMD	Search	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalString	ln_fn_game_data
+2247	CMD	LNGetAggroRadius	COMMAND_PLUGIN		0	kParams_OneOptionalActorBase	ln_fn_actor
+2248	CMD	LNSetAggroRadius	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalActorBase	ln_fn_actor
+2249	CMD	IsMapMarker	COMMAND_PLUGIN		1	nullptr	ln_fn_map_marker
+224A	CMD_ARR	GetCellCoords	COMMAND_PLUGIN		0	kParams_OneOptionalForm	ln_fn_miscellaneous
+224B	CMD	GetLockedOut	COMMAND_PLUGIN		0	kParams_OneOptionalObjectRef	ln_fn_terminal
+224C	CMD	SetLockedOut	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalObjectRef	ln_fn_terminal
+224D	CMD	GetCreatureType	COMMAND_PLUGIN		0	kParams_OneOptionalActorBase	ln_fn_actor
+224E	CMD_ARR	GetLoadedTypeArray	COMMAND_ALT_PLUGIN	GLTA	0	kParams_OneInt_OneOptionalInt	ln_fn_game_data
+224F	CMD_FRM	GetPasswordNote	COMMAND_PLUGIN		0	kParams_OneOptionalForm	ln_fn_terminal
+2250	CMD	SetPasswordNote	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	ln_fn_terminal
+2251	CMD_ARR	GetFormRefs	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalInt	ln_fn_game_data
+2252	CMD_FRM	GetCellLightingTemplate	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_cell
+2253	CMD	SetCellLightingTemplate	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	ln_fn_cell
+2254	CMD_ARR	GetRecipeInputForms	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_recipe
+2255	CMD_ARR	GetRecipeOutputForms	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_recipe
+2256	CMD	GetRecipeInputCount	COMMAND_PLUGIN		0	kParams_TwoForms	ln_fn_recipe
+2257	CMD	SetRecipeInputCount	COMMAND_PLUGIN		0	kParams_TwoForms_OneInt	ln_fn_recipe
+2258	CMD	GetRecipeOutputCount	COMMAND_PLUGIN		0	kParams_TwoForms	ln_fn_recipe
+2259	CMD	SetRecipeOutputCount	COMMAND_PLUGIN		0	kParams_TwoForms_OneInt	ln_fn_recipe
+225A	CMD	GetRecipeRequiredSkill	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_recipe
+225B	CMD	SetRecipeRequiredSkill	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	ln_fn_recipe
+225C	CMD	GetRecipeRequiredSkillLevel	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_recipe
+225D	CMD	SetRecipeRequiredSkillLevel	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	ln_fn_recipe
+225E	CMD	ReplaceRecipeInputForm	COMMAND_PLUGIN		0	kParams_ThreeForms	ln_fn_recipe
+225F	CMD	ReplaceRecipeOutputForm	COMMAND_PLUGIN		0	kParams_ThreeForms	ln_fn_recipe
+2260	CMD_ARR	GetFormRecipes	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	ln_fn_recipe
+2261	CMD_ARR	GetFormRecipeOutputs	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	ln_fn_recipe
+2262	CMD_FRM	GetWorldspaceParentWorldspace	COMMAND_ALT_PLUGIN	GetWorldParentWorld	0	kParams_OneWorldspace	ln_fn_miscellaneous
+2263	CMD	GetTerminalLock	COMMAND_PLUGIN		0	kParams_OneOptionalForm	ln_fn_terminal
+2264	CMD	GetArmorClass	CMD_ALT_COND_PLUGIN	GetAC	0	kParams_OneOptionalObjectID	ln_fn_miscellaneous
+2265	CMD	IsRaceInList	CMD_COND_PLUGIN		1	kParams_FormList	ln_fn_actor
+2266	CMD_FRM	GetFormFromMod	COMMAND_ALT_PLUGIN	GFFM	0	kParams_TwoStrings	ln_fn_game_data
+2267	CMD	GetPerkEntryCount	COMMAND_PLUGIN		0	kParams_OnePerk	ln_fn_perk
+2268	CMD	GetNthPerkEntryType	COMMAND_PLUGIN		0	kParams_OnePerk_OneInt	ln_fn_perk
+2269	CMD	GetNthPerkEntryFunction	COMMAND_PLUGIN		0	kParams_OnePerk_OneInt	ln_fn_perk
+226A	CMD	SetNthPerkEntryFunction	COMMAND_PLUGIN		0	kParams_OnePerk_TwoInts	ln_fn_perk
+226B	CMD_FRM	GetNthPerkEntryForm	COMMAND_PLUGIN		0	kParams_OnePerk_OneInt	ln_fn_perk
+226C	CMD	SetNthPerkEntryForm	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm	ln_fn_perk
+226D	CMD	GetNthPerkEntryValue1	COMMAND_PLUGIN		0	kParams_OnePerk_OneInt	ln_fn_perk
+226E	CMD	SetNthPerkEntryValue1	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFloat	ln_fn_perk
+226F	CMD	GetNthPerkEntryValue2	COMMAND_PLUGIN		0	kParams_OnePerk_OneInt	ln_fn_perk
+2270	CMD	SetNthPerkEntryValue2	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFloat	ln_fn_perk
+2271	CMD_STR	GetNthPerkEntryString	COMMAND_PLUGIN		0	kParams_OnePerk_OneInt	ln_fn_perk
+2272	CMD	SetNthPerkEntryString	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneString	ln_fn_perk
+2273	CMD_FRM	GetActivatorRadioStation	COMMAND_PLUGIN		0	kParams_OneOptionalForm	ln_fn_activator
+2274	CMD	SetActivatorRadioStation	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	ln_fn_activator
+2275	CMD_STR	GetActivatorPrompt	COMMAND_PLUGIN		0	kParams_OneOptionalForm	ln_fn_activator
+2276	CMD	SetActivatorPrompt	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalForm	ln_fn_activator
+2277	CMD_FRM	GetActivatorWaterType	COMMAND_PLUGIN		0	kParams_OneOptionalForm	ln_fn_activator
+2278	CMD	SetActivatorWaterType	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	ln_fn_activator
+2279	CMD_FRM	GetActiveQuest	COMMAND_PLUGIN		0	nullptr	ln_fn_miscellaneous
+227A	CMD	GetINIFloat	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalString	ln_fn_utility
+227B	CMD_STR	GetINIString	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalString	ln_fn_utility
+227C	CMD	SetINIFloat	COMMAND_PLUGIN		0	kParams_OneString_OneDouble_OneOptionalString	ln_fn_utility
+227D	CMD	SetINIString	COMMAND_PLUGIN		0	kParams_TwoString_OneOptionalString	ln_fn_utility
+227E	CMD_ARR	GetINISection	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalString_OneOptionalInt	ln_fn_utility
+227F	CMD	SetINISection	COMMAND_PLUGIN		0	kParams_OneString_OneInt_OneOptionalString	ln_fn_utility
+2280	CMD	IsParentActivateOnly	COMMAND_PLUGIN		0	kParams_OneOptionalObjectRef	ln_fn_misc_ref
+2281	CMD	SetLinkedReference	COMMAND_ALT_PLUGIN	SetLinkedRef	1	kParams_OneOptionalObjectRef	jip_fn_misc_ref
+2282	CMD	SetBaseForm	COMMAND_PLUGIN		1	kParams_OneBoundObject	ln_fn_misc_ref
+2283	CMD_STR	GetStringSetting	COMMAND_PLUGIN		0	kParams_OneString	ln_fn_game_data
+2284	CMD	SetStringSetting	COMMAND_PLUGIN		0	kParams_TwoStrings	ln_fn_game_data
+2285	CMD_ARR	GetINISectionNames	COMMAND_PLUGIN		0	kParams_OneOptionalString	ln_fn_utility
+2286	CMD	GetRaceVoice	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	ln_fn_race
+2287	CMD	SetRaceVoice	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm	ln_fn_race
+2288	CMD	GetRaceAgeRace	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	ln_fn_race
+2289	CMD	SetRaceAgeRace	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm	ln_fn_race
+228A	CMD_ARR	GetFilesInFolder	COMMAND_ALT_PLUGIN	GetFiles	0	kParams_OneString_OneOptionalString	ln_fn_utility
+228B	EMPTY						
+228C	EMPTY						
+228D	EMPTY						
+228E	CMD	GetLeveledListFlags	COMMAND_ALT_PLUGIN	LListGetFlags	0	kParams_OneForm	ln_fn_leveled_list
+228F	CMD	SetLeveledListFlags	COMMAND_ALT_PLUGIN	LListSetFlags	0	kParams_OneForm_OneInt	ln_fn_leveled_list
+2290	CMD_FRM	GetActivatorSoundLooping	COMMAND_PLUGIN		0	kParams_OneOptionalForm	ln_fn_activator
+2291	CMD	SetActivatorSoundLooping	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	ln_fn_activator
+2292	CMD_FRM	GetActivatorSoundActivate	COMMAND_PLUGIN		0	kParams_OneOptionalForm	ln_fn_activator
+2293	CMD	SetActivatorSoundActivate	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	ln_fn_activator
+2294	CMD	EnableButton	COMMAND_PLUGIN		0	kParams_OneInt	ln_fn_gamepad
+2295	CMD	DisableButton	COMMAND_PLUGIN		0	kParams_OneInt	ln_fn_gamepad
+2296	CMD	IsButtonDisabled	CMD_COND_PLUGIN		0	kParams_OneInt	ln_fn_gamepad
+2297	CMD	HoldButton	COMMAND_PLUGIN		0	kParams_OneInt	ln_fn_gamepad
+2298	CMD	ReleaseButton	COMMAND_PLUGIN		0	kParams_OneInt	ln_fn_gamepad
+2299	CMD	IsButtonHeld	CMD_COND_PLUGIN		0	kParams_OneInt	ln_fn_gamepad
+229A	CMD	IsTrait	COMMAND_PLUGIN		0	kParams_OnePerk	ln_fn_perk
+229B	CMD_STR	GetLoadScreenTexture	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_load_screen
+229C	CMD	SetLoadScreenTexture	COMMAND_PLUGIN		0	kParams_OneForm_OneString	ln_fn_load_screen
+229D	CMD_FRM	GetLoadScreenType	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_load_screen
+229E	CMD	SetLoadScreenType	COMMAND_PLUGIN		0	kParams_TwoForms	ln_fn_load_screen
+229F	CMD_ARR	GetLoadScreenTypeTextRGB	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_load_screen
+22A0	CMD	SetLoadScreenTypeTextRGB	COMMAND_PLUGIN		0	kParams_OneForm_ThreeFloats	ln_fn_load_screen
+22A1	CMD	CopyFaceGenFrom	COMMAND_PLUGIN		1	kParams_OneOptionalActorBase	ln_fn_actor
+22A2	CMD	SetRace	COMMAND_PLUGIN		0	kParams_TwoForms	ln_fn_race
+22A3	CMD_ARR	GetFoldersInFolder	COMMAND_ALT_PLUGIN	GetFolders	0	kParams_OneString_OneOptionalString	ln_fn_utility
+22A4	CMD	EnableTrigger	COMMAND_PLUGIN		0	kParams_OneInt	ln_fn_gamepad
+22A5	CMD	DisableTrigger	COMMAND_PLUGIN		0	kParams_OneInt	ln_fn_gamepad
+22A6	CMD	IsTriggerDisabled	CMD_COND_PLUGIN		0	kParams_OneInt	ln_fn_gamepad
+22A7	CMD	HoldTrigger	COMMAND_PLUGIN		0	kParams_OneInt	ln_fn_gamepad
+22A8	CMD	ReleaseTrigger	COMMAND_PLUGIN		0	kParams_OneInt	ln_fn_gamepad
+22A9	CMD	IsTriggerHeld	CMD_COND_PLUGIN		0	kParams_OneInt	ln_fn_gamepad
+22AA	CMD	GetPCCanUsePowerArmor	COMMAND_PLUGIN		0	nullptr	ln_fn_miscellaneous
+22AB	CMD_STR	GetIdleAnimPath	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_miscellaneous
+22AC	CMD	SetIdleAnimPath	COMMAND_PLUGIN		0	kParams_OneForm_OneString	ln_fn_miscellaneous
+22AD	CMD_STR	LNGetName	COMMAND_PLUGIN		0	kParams_OneOptionalForm	ln_fn_miscellaneous
+22AE	CMD	RemoveINIKey	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalString	ln_fn_utility
+22AF	CMD	RemoveINISection	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalString	ln_fn_utility
+22B0	CMD	GetGlobalTimeMultiplier	COMMAND_ALT_PLUGIN	ggtm	0	nullptr	ln_fn_miscellaneous
+22B1	CMD	GetCasinoMaxWinnings	COMMAND_PLUGIN		0	kParams_OneCasino	ln_fn_casino
+22B2	CMD	SetCasinoMaxWinnings	COMMAND_PLUGIN		0	kParams_OneCasino_OneInt	ln_fn_casino
+22B3	CMD	GetCasinoBJPayout	COMMAND_PLUGIN		0	kParams_OneCasino	ln_fn_casino
+22B4	CMD	SetCasinoBJPayout	COMMAND_PLUGIN		0	kParams_OneCasino_OneFloat	ln_fn_casino
+22B5	CMD	GetCasinoBJ17Stand	COMMAND_PLUGIN		0	kParams_OneCasino	ln_fn_casino
+22B6	CMD	SetCasinoBJ17Stand	COMMAND_PLUGIN		0	kParams_OneCasino_OneInt	ln_fn_casino
+22B7	CMD	GetCasinoNumDecks	COMMAND_PLUGIN		0	kParams_OneCasino	ln_fn_casino
+22B8	CMD	SetCasinoNumDecks	COMMAND_PLUGIN		0	kParams_OneCasino_OneInt	ln_fn_casino
+22B9	CMD	GetCasinoShufflePercent	COMMAND_PLUGIN		0	kParams_OneCasino	ln_fn_casino
+22BA	CMD	SetCasinoShufflePercent	COMMAND_PLUGIN		0	kParams_OneCasino_OneFloat	ln_fn_casino
+22BB	CMD	GetCasinoReelStops	COMMAND_PLUGIN		0	kParams_OneCasino_OneInt	ln_fn_casino
+22BC	CMD	SetCasinoReelStops	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	ln_fn_casino
+22BD	CMD	AddNoteNS	COMMAND_PLUGIN		0	kParams_OneNote	ln_fn_miscellaneous
+22BE	CMD_FRM	GetCellWaterForm	COMMAND_PLUGIN		0	kParams_OneOptionalForm	ln_fn_cell
+22BF	CMD_FRM	GetWaterFormEffect	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_miscellaneous
+22C0	CMD	ar_Cat	COMMAND_ALT_PLUGIN	pinto_Cat	0	kParams_TwoInts_OneOptionalInt	ln_fn_miscellaneous
+22C1	CMD	GetInventoryWeight	COMMAND_ALT_PLUGIN	GetInvWeight	1	kParams_OneOptionalInt	ln_fn_misc_ref
+22C2	CMD	GetChallengeType	COMMAND_PLUGIN		0	kParams_OneChallenge	ln_fn_challenge
+22C3	CMD	GetChallengeThreshold	COMMAND_PLUGIN		0	kParams_OneChallenge	ln_fn_challenge
+22C4	CMD	SetChallengeThreshold	COMMAND_PLUGIN		0	kParams_OneChallenge_OneInt	ln_fn_challenge
+22C5	CMD	GetChallengeInterval	COMMAND_PLUGIN		0	kParams_OneChallenge	ln_fn_challenge
+22C6	CMD	SetChallengeInterval	COMMAND_PLUGIN		0	kParams_OneChallenge_OneInt	ln_fn_challenge
+22C7	CMD	GetChallengeValue1	COMMAND_PLUGIN		0	kParams_OneChallenge	ln_fn_challenge
+22C8	CMD	SetChallengeValue1	COMMAND_PLUGIN		0	kParams_OneChallenge_OneInt	ln_fn_challenge
+22C9	CMD	GetChallengeValue2	COMMAND_PLUGIN		0	kParams_OneChallenge	ln_fn_challenge
+22CA	CMD	SetChallengeValue2	COMMAND_PLUGIN		0	kParams_OneChallenge_OneInt	ln_fn_challenge
+22CB	CMD	GetChallengeValue3	COMMAND_PLUGIN		0	kParams_OneChallenge	ln_fn_challenge
+22CC	CMD	SetChallengeValue3	COMMAND_PLUGIN		0	kParams_OneChallenge_OneInt	ln_fn_challenge
+22CD	CMD_FRM	GetChallengeForm1	COMMAND_PLUGIN		0	kParams_OneChallenge	ln_fn_challenge
+22CE	CMD	SetChallengeForm1	COMMAND_PLUGIN		0	kParams_OneChallenge_OneForm	ln_fn_challenge
+22CF	CMD_FRM	GetChallengeForm2	COMMAND_PLUGIN		0	kParams_OneChallenge	ln_fn_challenge
+22D0	CMD	SetChallengeForm2	COMMAND_PLUGIN		0	kParams_OneChallenge_OneForm	ln_fn_challenge
+22D1	CMD_FRM	GetRecipeCategory	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_recipe
+22D2	CMD	SetRecipeCategory	COMMAND_PLUGIN		0	kParams_TwoForms	ln_fn_recipe
+22D3	CMD_FRM	GetRecipeSubcategory	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_recipe
+22D4	CMD	SetRecipeSubcategory	COMMAND_PLUGIN		0	kParams_TwoForms	ln_fn_recipe
+22D5	EMPTY						
+22D6	CMD	GetReferenceFlag	CMD_ALT_COND_PLUGIN	GetRefFlag	1	kParams_OneInt	ln_fn_misc_ref
+22D7	CMD	SetReferenceFlag	COMMAND_ALT_PLUGIN	SetRefFlag	1	kParams_TwoInts	ln_fn_misc_ref
+22D8	CMD	AddRecipeInputForm	COMMAND_PLUGIN		0	kParams_TwoForms_OneInt	ln_fn_recipe
+22D9	CMD	AddRecipeOutputForm	COMMAND_PLUGIN		0	kParams_TwoForms_OneInt	ln_fn_recipe
+22DA	CMD	RemoveRecipeInputForm	COMMAND_PLUGIN		0	kParams_TwoForms	ln_fn_recipe
+22DB	CMD	RemoveRecipeOutputForm	COMMAND_PLUGIN		0	kParams_TwoForms	ln_fn_recipe
+22DC	CMD	AddRecipeCondition	COMMAND_PLUGIN		0	kParams_FormCondition	ln_fn_recipe
+22DD	EMPTY						
+22DE	CMD	GetFormFlag	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	ln_fn_miscellaneous
+22DF	CMD	SetFormFlag	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	ln_fn_miscellaneous
+22E0	CMD	GetDistance2D	CMD_COND_PLUGIN		1	kParams_OneObjectRef	ln_fn_math
+22E1	CMD	GetDistance3D	CMD_COND_PLUGIN		1	kParams_OneObjectRef	ln_fn_math
+22E2	CMD	GetIngestibleFlag	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	ln_fn_miscellaneous
+22E3	CMD	SetIngestibleFlag	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	ln_fn_miscellaneous
+22E4	CMD	IsSkillMagazine	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_miscellaneous
+22E5	EMPTY						
+22E6	CMD	GetServiceFlag	COMMAND_PLUGIN		0	kParams_OneActorBase_OneInt	ln_fn_actor
+22E7	CMD	SetServiceFlag	COMMAND_PLUGIN		0	kParams_OneActorBase_TwoInts	ln_fn_actor
+22E8	CMD	LeveledListReplaceForm	COMMAND_ALT_PLUGIN	LListReplaceForm	0	kParams_ThreeForms	ln_fn_leveled_list
+22E9	EMPTY						
+22EA	CMD_FRM	GetCellImageSpace	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_cell
+22EB	CMD	PlayerHasKey	CMD_COND_PLUGIN		1	nullptr	ln_fn_miscellaneous
+22EC	CMD	GetCellFlag	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	ln_fn_cell
+22ED	CMD	SetCellFlag	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	ln_fn_cell
+22EE	EMPTY						
+22EF	EMPTY						
+22F0	CMD	fsqrt	COMMAND_PLUGIN		0	kParams_OneDouble	ln_fn_math
+22F1	CMD	GetCellWaterHeight	COMMAND_PLUGIN		0	kParams_OneOptionalForm	ln_fn_cell
+22F2	CMD	SetCellWaterHeight	COMMAND_PLUGIN		0	kParams_OneFloat_OneOptionalForm	ln_fn_cell
+22F3	CMD_FRM	GetAnimObjectIdle	COMMAND_ALT_PLUGIN	GetANIOIdle	0	kParams_OneForm	ln_fn_miscellaneous
+22F4	CMD	SetAnimObjectIdle	COMMAND_ALT_PLUGIN	SetANIOIdle	0	kParams_TwoForms	ln_fn_miscellaneous
+22F5	CMD	GetActorTemplateFlag	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalActorBase	ln_fn_actor
+22F6	CMD	SetActorTemplateFlag	COMMAND_PLUGIN		0	kParams_TwoInts_OneOptionalActorBase	ln_fn_actor
+22F7	CMD	BaseGetItemCount	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	ln_fn_inventory
+22F8	CMD	BaseAddItem	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalForm	ln_fn_inventory
+22F9	CMD	BaseRemoveItem	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalForm	ln_fn_inventory
+22FA	CMD	LNSetActorTemplate	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalActorBase	ln_fn_actor
+22FB	CMD	BaseAddItemHealth	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFloat_OneOptionalForm	ln_fn_inventory
+22FC	CMD	LNSetName	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalForm	ln_fn_miscellaneous
+22FD	CMD	fSin	COMMAND_PLUGIN		0	kParams_OneFloat	ln_fn_math
+22FE	CMD	fCos	COMMAND_PLUGIN		0	kParams_OneFloat	ln_fn_math
+22FF	CMD_ARR	SortFormsByType	COMMAND_PLUGIN		0	kParams_TwoInts	ln_fn_utility
+2300	CMD	GetFormCountType	COMMAND_PLUGIN		0	kParams_TwoInts	ln_fn_utility
+2301	CMD_FRM	GetPickupSound	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_miscellaneous
+2302	CMD	SetPickupSound	COMMAND_PLUGIN		0	kParams_TwoForms	ln_fn_miscellaneous
+2303	CMD_FRM	GetPutdownSound	COMMAND_PLUGIN		0	kParams_OneForm	ln_fn_miscellaneous
+2304	CMD	SetPutdownSound	COMMAND_PLUGIN		0	kParams_TwoForms	ln_fn_miscellaneous
+2305	CMD_FRM	GetContainerOpenSound	COMMAND_PLUGIN		0	kParams_OneOptionalForm	ln_fn_miscellaneous
+2306	CMD	SetContainerOpenSound	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	ln_fn_miscellaneous
+2307	CMD_FRM	GetContainerCloseSound	COMMAND_PLUGIN		0	kParams_OneOptionalForm	ln_fn_miscellaneous
+2308	CMD	SetContainerCloseSound	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	ln_fn_miscellaneous
+2309	EMPTY						
+230A	CMD_ARR	GetPlayerRegions	COMMAND_PLUGIN		0	nullptr	ln_fn_miscellaneous
+230B	CMD	fAtan	COMMAND_PLUGIN		0	kParams_OneFloat	ln_fn_math
+230C	CMD	GetPerkLevel	COMMAND_PLUGIN		0	kParams_OnePerk	ln_fn_perk
+230D	CMD	GetZoneFlag	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	ln_fn_miscellaneous
+230E	CMD	SetZoneFlag	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	ln_fn_miscellaneous
+230F	CMD	fAsin	COMMAND_PLUGIN		0	kParams_OneFloat	ln_fn_math
+2310	CMD	fAcos	COMMAND_PLUGIN		0	kParams_OneFloat	ln_fn_math
+2311	CMD	SetNthLevItem	COMMAND_ALT_PLUGIN	LListsetNthForm	0	kParams_OneForm_OneInt_OneForm	ln_fn_leveled_list
+2312	CMD	SetNthLevItemLevel	COMMAND_ALT_PLUGIN	LListSetNthLevel	0	kParams_OneForm_TwoInts	ln_fn_leveled_list
+2313	CMD	SetNthLevItemCount	COMMAND_ALT_PLUGIN	LListSetNthCount	0	kParams_OneForm_TwoInts	ln_fn_leveled_list
+2314	CMD	GetBaseFactionRank	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalActorBase	ln_fn_actor
+2315	CMD	SetBaseFactionRank	COMMAND_PLUGIN		0	kParams_OneFaction_OneInt_OneOptionalActorBase	ln_fn_actor
+2316	CMD_FRM	GetImpactDataSet	COMMAND_PLUGIN		0	kParams_OneObjectID	ln_fn_miscellaneous
+2317	CMD	SetImpactDataSet	COMMAND_PLUGIN		0	kParams_TwoForms	ln_fn_miscellaneous
+2318	CMD	HasActionRef	COMMAND_PLUGIN		1	nullptr	ln_fn_misc_ref
+2319	CMD	SetHotkey	COMMAND_PLUGIN		0	kParams_OneInt_OneForm_OneOptionalFloat_OneOptionalInt	ln_fn_inventory
+231A	CMD	GetChallengeFlags	COMMAND_PLUGIN		0	kParams_OneChallenge	ln_fn_challenge
+231B	CMD	SetChallengeFlags	COMMAND_PLUGIN		0	kParams_OneChallenge_OneInt	ln_fn_challenge
+231C	CMD	LNIsPlayable	COMMAND_PLUGIN		0	kParams_OneOptionalForm	ln_fn_miscellaneous
+231D	CMD	LNSetIsPlayable	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalForm	ln_fn_miscellaneous
+231E	CMD	GetZone	COMMAND_PLUGIN		1	nullptr	ln_fn_miscellaneous
+231F	CMD	GetBaseKarma	COMMAND_PLUGIN		0	kParams_OneOptionalActorBase	ln_fn_actor
+2320	CMD	SetBaseKarma	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalActorBase	ln_fn_actor
+2321	CMD	ActorHasEffect	CMD_COND_PLUGIN		1	kParams_OneEffect	ln_fn_actor
+2322	EMPTY						
+2323	CMD_ARR	GetEquippedData	COMMAND_ALT_PLUGIN	GetEqData	1	kParams_OneInt	ln_fn_actor
+2324	CMD	SetEquippedData	COMMAND_ALT_PLUGIN	SetEqData	1	kParams_OneInt_TwoOptionalInts	ln_fn_actor
+2325	CMD	EquipItemData	COMMAND_PLUGIN		1	kParams_OneObjectID_OneOptionalFloat_ThreeOptionalInts	ln_fn_actor
+2326	CMD	Console	COMMAND_PLUGIN		0	kParams_FormatString	ln_fn_utility
+2327	CMD	GetDefaultMessageTime	COMMAND_ALT_PLUGIN	GetDMT	0	nullptr	ln_fn_utility
+2328	CMD	SetDefaultMessageTime	COMMAND_ALT_PLUGIN	SetDMT	0	kParams_OneFloat	ln_fn_utility
+2329	EMPTY						
+232A	EMPTY						
+232B	CMD	GetWeaponKillImpulse	COMMAND_PLUGIN		0	kParams_OneObjectID	ln_fn_weapon
+232C	CMD	SetWeaponKillImpulse	COMMAND_PLUGIN		0	kParams_OneForm_OneFloat	ln_fn_weapon
+232D	CMD	GetWeaponImpulseDistance	COMMAND_PLUGIN		0	kParams_OneObjectID	ln_fn_weapon
+232E	CMD	SetWeaponImpulseDistance	COMMAND_PLUGIN		0	kParams_OneForm_OneFloat	ln_fn_weapon
+232F	CMD_FRM	GetWeaponVATSEffect	COMMAND_PLUGIN		0	kParams_OneObjectID	ln_fn_weapon
+2330	CMD	SetWeaponVATSEffect	COMMAND_PLUGIN		0	kParams_TwoForms	ln_fn_weapon
+2331	CMD	GetWeaponCritFlags	COMMAND_PLUGIN		0	kParams_OneObjectID	ln_fn_weapon
+2332	CMD	SetWeaponCritFlags	COMMAND_PLUGIN		0	kParams_OneObjectID_OneInt	ln_fn_weapon
+2333	CMD_FRM	GetBodyPartData	COMMAND_PLUGIN		0	kParams_OneActorBase	ln_fn_actor
+2334	CMD	GetRadius	COMMAND_PLUGIN		0	kParams_OneOptionalForm	ln_fn_misc_ref
+2335	CMD	SetRadius	COMMAND_PLUGIN		0	kParams_OneFloat_OneOptionalForm	ln_fn_misc_ref
+2336	CMD	CrosshairRefInList	COMMAND_PLUGIN		0	kParams_FormList	ln_fn_miscellaneous
+2337	CMD_ARR	GetGameSettings	COMMAND_PLUGIN		0	kParams_OneOptionalInt	ln_fn_game_data
+2338	CMD	GetShowQuestItems	COMMAND_PLUGIN		0	nullptr	ln_fn_miscellaneous
+2339	CMD	GetWaterTrait	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	ln_fn_miscellaneous
+233A	CMD	SetWaterTrait	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneDouble	ln_fn_miscellaneous
+2600	CMD	SetPersistent	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_misc_ref
+2601	CMD_FRM	GetActorTemplate	COMMAND_PLUGIN		0	kParams_OneOptionalActorBase	jip_fn_actor
+2602	CMD_FRM	GetLeveledActorBase	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2603	CMD	GetCreatureDamage	COMMAND_PLUGIN		0	kParams_OneOptionalActorBase	jip_fn_actor
+2604	CMD	SetCreatureDamage	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalActorBase	jip_fn_actor
+2605	CMD	GetIsPoisoned	CMD_COND_PLUGIN		1	nullptr	jip_fn_actor
+2606	CMD	AddItemAlt	COMMAND_PLUGIN		1	kParams_OneItemOrList_OneOptInt_OneOptFloat_TwoOptInts	jip_fn_inventory
+2607	CMD	GetValueAlt	COMMAND_PLUGIN		0	kParams_OneOptionalObjectID	jip_fn_inventory
+2608	CMD	IsComponentLoaded	COMMAND_PLUGIN		0	kParams_OneString	jip_fn_ui
+2609	CMD	InjectUIXML	COMMAND_PLUGIN		0	kParams_TwoStrings	jip_fn_ui
+260A	CMD	InjectUIComponent	COMMAND_PLUGIN		0	kParams_OneString_OneFormatString	jip_fn_ui
+260B	CMD	GetAmmoTraitNumeric	COMMAND_PLUGIN		0	kParams_OneObjectID_OneInt	jip_fn_ammo
+260C	CMD	SetAmmoTraitNumeric	COMMAND_PLUGIN		0	kParams_OneObjectID_OneInt_OneFloat	jip_fn_ammo
+260D	CMD_FRM	GetAmmoProjectile	COMMAND_PLUGIN		0	kParams_OneObjectID	jip_fn_ammo
+260E	CMD	SetAmmoProjectile	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	jip_fn_ammo
+260F	CMD	GetNumAmmoEffects	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_ammo_effect
+2610	CMD_FRM	GetNthAmmoEffect	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_ammo_effect
+2611	CMD	AddAmmoEffect	COMMAND_PLUGIN		0	kParams_TwoForms	jip_fn_ammo_effect
+2612	CMD	RemoveAmmoEffect	COMMAND_PLUGIN		0	kParams_TwoForms	jip_fn_ammo_effect
+2613	CMD	GetAmmoEffectTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_ammo_effect
+2614	CMD	SetAmmoEffectTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFloat	jip_fn_ammo_effect
+2615	CMD	GetProjectileTraitNumeric	COMMAND_PLUGIN		0	kParams_OneBoundObject_OneInt	jip_fn_projectile
+2616	CMD	SetProjectileTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFloat	jip_fn_projectile
+2617	CMD	GetProjectileFlag	COMMAND_PLUGIN		0	kParams_OneBoundObject_OneInt	jip_fn_projectile
+2618	CMD	SetProjectileFlag	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	jip_fn_projectile
+2619	CMD_FRM	GetProjectileExplosion	COMMAND_PLUGIN		0	kParams_OneBoundObject	jip_fn_projectile
+261A	CMD	SetProjectileExplosion	COMMAND_PLUGIN		0	kParams_OneBoundObject_OneOptionalBoundObject	jip_fn_projectile
+261B	CMD	GetExplosionTraitNumeric	COMMAND_PLUGIN		0	kParams_OneBoundObject_OneInt	jip_fn_explosion
+261C	CMD	SetExplosionTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFloat	jip_fn_explosion
+261D	CMD_FRM	GetExplosionTraitForm	COMMAND_PLUGIN		0	kParams_OneBoundObject_OneInt	jip_fn_explosion
+261E	CMD	SetExplosionTraitForm	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalForm	jip_fn_explosion
+261F	CMD	GetExplosionFlag	COMMAND_PLUGIN		0	kParams_OneBoundObject_OneInt	jip_fn_explosion
+2620	CMD	SetExplosionFlag	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	jip_fn_explosion
+2621	CMD	AddScriptVariable	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalQuest	jip_fn_script
+2622	CMD	GetDelayElapsed	COMMAND_PLUGIN		0	kParams_OneQuest	jip_fn_script
+2623	CMD	SetDelayElapsed	COMMAND_PLUGIN		0	kParams_OneQuest_OneFloat	jip_fn_script
+2624	CMD	GetPackageFlag	COMMAND_PLUGIN		0	kParams_OneAIPackage_OneInt	jip_fn_package
+2625	CMD	SetPackageFlag	COMMAND_PLUGIN		0	kParams_OneAIPackage_TwoInts	jip_fn_package
+2626	CMD	GetGlobalVariable	COMMAND_PLUGIN		0	kParams_OneGlobal	jip_fn_global_var
+2627	CMD	SetGlobalVariable	COMMAND_PLUGIN		0	kParams_OneGlobal_OneFloat	jip_fn_global_var
+2628	CMD_FRM	GetFactionReputationType	COMMAND_PLUGIN		0	kParams_OneFaction	jip_fn_faction
+2629	CMD	SetFactionReputationType	COMMAND_PLUGIN		0	kParams_OneFaction_OneOptionalReputation	jip_fn_faction
+262A	CMD_STR	RefToString	COMMAND_PLUGIN		0	kParams_OneOptionalForm	jip_fn_utility
+262B	CMD_FRM	StringToRef	COMMAND_PLUGIN		0	kParams_OneString	jip_fn_utility
+262C	CMD	GetObjectDimensions	COMMAND_ALT_PLUGIN	GetObjDim	0	kParams_OneAxis_OneOptionalBoundObject	jip_fn_misc_ref
+262D	CMD	GetIsItem	COMMAND_PLUGIN		0	kParams_OneOptionalObjectID	jip_fn_misc_ref
+262E	CMD	GetMinOf	COMMAND_PLUGIN		0	kParams_TwoDoubles_ThreeOptionalDoubles	jip_fn_utility
+262F	CMD	GetMaxOf	COMMAND_PLUGIN		0	kParams_TwoDoubles_ThreeOptionalDoubles	jip_fn_utility
+2630	CMD	GetCombatStyleTraitNumeric	COMMAND_PLUGIN		0	kParams_OneCombatStyle_OneInt	jip_fn_combat_style
+2631	CMD	SetCombatStyleTraitNumeric	COMMAND_PLUGIN		0	kParams_OneCombatStyle_OneInt_OneFloat	jip_fn_combat_style
+2632	CMD	GetCombatStyleFlag	COMMAND_PLUGIN		0	kParams_OneCombatStyle_OneInt	jip_fn_combat_style
+2633	CMD	SetCombatStyleFlag	COMMAND_PLUGIN		0	kParams_OneCombatStyle_TwoInts	jip_fn_combat_style
+2634	CMD	SetLinkedReference	COMMAND_ALT_PLUGIN	SetLinkedRef	1	kParams_OneOptionalObjectRef	jip_fn_misc_ref
+2635	CMD_ARR	GetEnableChildren	COMMAND_PLUGIN		1	nullptr	jip_fn_misc_ref
+2636	CMD_ARR	GetLinkedChildren	COMMAND_PLUGIN		1	nullptr	jip_fn_misc_ref
+2637	CMD_ARR	GetFollowers	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2638	CMD	GetCursorPos	COMMAND_PLUGIN		0	kParams_OneAxis	jip_fn_ui
+2639	CMD_STR	GetUIString	COMMAND_PLUGIN		0	kParams_OneString	jip_fn_ui
+263A	CMD_ARR	ReadArrayFromFile	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalInt	jip_fn_utility
+263B	CMD_STR	ReadStringFromFile	COMMAND_PLUGIN		0	kParams_OneString_TwoOptionalInts	jip_fn_utility
+263C	CMD	WriteArrayToFile	COMMAND_PLUGIN		0	kParams_OneString_TwoInts_OneOptionalInt	jip_fn_utility
+263D	CMD	WriteStringToFile	COMMAND_PLUGIN		0	kParams_OneString_OneInt_OneFormatString	jip_fn_utility
+263E	CMD	GetClassTraitNumeric	COMMAND_PLUGIN		0	kParams_OneClass_OneInt	jip_fn_class
+263F	CMD	SetClassTraitNumeric	COMMAND_PLUGIN		0	kParams_OneClass_TwoInts	jip_fn_class
+2640	CMD	GetClassFlag	COMMAND_PLUGIN		0	kParams_OneClass_OneInt	jip_fn_class
+2641	CMD	SetClassFlag	COMMAND_PLUGIN		0	kParams_OneClass_TwoInts	jip_fn_class
+2642	CMD	GetLightTraitNumeric	COMMAND_PLUGIN		0	kParams_OneBoundObject_OneInt	jip_fn_light
+2643	CMD	SetLightTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFloat	jip_fn_light
+2644	CMD	GetLightFlag	COMMAND_PLUGIN		0	kParams_OneBoundObject_OneInt	jip_fn_light
+2645	CMD	SetLightFlag	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	jip_fn_light
+2646	CMD	GetSoundTraitNumeric	COMMAND_PLUGIN		0	kParams_OneSound_OneInt	jip_fn_sound
+2647	CMD	SetSoundTraitNumeric	COMMAND_PLUGIN		0	kParams_OneSound_OneInt_OneFloat	jip_fn_sound
+2648	CMD	GetSoundFlag	COMMAND_PLUGIN		0	kParams_OneSound_OneInt	jip_fn_sound
+2649	CMD	SetSoundFlag	COMMAND_PLUGIN		0	kParams_OneSound_TwoInts	jip_fn_sound
+264A	CMD	GetWeaponDetectionSoundLevel	COMMAND_PLUGIN		0	kParams_OneObjectID	jip_fn_weapon
+264B	CMD	SetWeaponDetectionSoundLevel	COMMAND_PLUGIN		0	kParams_OneObjectID_OneInt	jip_fn_weapon
+264C	CMD	IsEquippedWeaponSilenced	CMD_COND_PLUGIN		1	nullptr	jip_fn_weapon
+264D	CMD	IsEquippedWeaponScoped	CMD_COND_PLUGIN		1	nullptr	jip_fn_weapon
+264E	CMD_FRM	GetWeaponSound	COMMAND_PLUGIN		0	kParams_OneObjectID_OneInt	jip_fn_weapon
+264F	CMD	SetWeaponSound	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalSound	jip_fn_weapon
+2650	CMD	SetWeaponItemMod	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalObjectID	jip_fn_weapon
+2651	CMD	SetWeaponItemModEffect	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	jip_fn_weapon
+2652	CMD	SetWeaponItemModValue	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFloat	jip_fn_weapon
+2653	CMD_FRM	GetWeatherImageSpaceMod	COMMAND_PLUGIN		0	kParams_OneWeatherID_OneInt	jip_fn_weather
+2654	CMD	SetWeatherImageSpaceMod	COMMAND_PLUGIN		0	kParams_OneWeatherID_OneInt_OneOptionalImageSpaceMod	jip_fn_weather
+2655	CMD_STR	GetWeatherTexture	COMMAND_PLUGIN		0	kParams_OneWeatherID_OneInt	jip_fn_weather
+2656	CMD	SetWeatherTexture	COMMAND_PLUGIN		0	kParams_OneWeatherID_OneInt_OneString	jip_fn_weather
+2657	CMD_STR	GetWeatherPrecipitationModel	COMMAND_PLUGIN		0	kParams_OneWeatherID	jip_fn_weather
+2658	CMD	SetWeatherPrecipitationModel	COMMAND_PLUGIN		0	kParams_OneWeatherID_OneString	jip_fn_weather
+2659	CMD	GetWeatherTraitNumeric	COMMAND_PLUGIN		0	kParams_OneWeatherID_OneInt	jip_fn_weather
+265A	CMD	SetWeatherTraitNumeric	COMMAND_PLUGIN		0	kParams_OneWeatherID_OneInt_OneDouble	jip_fn_weather
+265B	CMD	GetWeatherRGBColor	COMMAND_PLUGIN		0	kParams_OneWeatherID_TwoInts_OneOptionalInt	jip_fn_weather
+265C	CMD	SetWeatherRGBColor	COMMAND_PLUGIN		0	kParams_OneWeatherID_ThreeInts_OneOptionalInt	jip_fn_weather
+265D	CMD_FRM	GetLandTextureTextureSet	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_land_texture
+265E	CMD	SetLandTextureTextureSet	COMMAND_PLUGIN		0	kParams_TwoForms	jip_fn_land_texture
+265F	CMD	GetLandTextureTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_land_texture
+2660	CMD	SetLandTextureTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	jip_fn_land_texture
+2661	CMD	GetLandTextureNumGrasses	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_land_texture
+2662	CMD_FRM	GetLandTextureNthGrass	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_land_texture
+2663	CMD	LandTextureAddGrass	COMMAND_PLUGIN		0	kParams_TwoForms	jip_fn_land_texture
+2664	CMD	LandTextureRemoveGrass	COMMAND_PLUGIN		0	kParams_TwoForms	jip_fn_land_texture
+2665	CMD_STR	GetTextureSetTexture	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_texture_set
+2666	CMD	SetTextureSetTexture	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneString	jip_fn_texture_set
+2667	CMD	GetTextureSetTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_texture_set
+2668	CMD	SetTextureSetTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneDouble	jip_fn_texture_set
+2669	CMD	GetTextureSetFlag	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_texture_set
+266A	CMD	SetTextureSetFlag	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	jip_fn_texture_set
+266B	CMD_STR	GetClimateSunTexture	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_climate
+266C	CMD	SetClimateSunTexture	COMMAND_PLUGIN		0	kParams_OneForm_OneString	jip_fn_climate
+266D	CMD_STR	GetClimateSunGlareTexture	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_climate
+266E	CMD	SetClimateSunGlareTexture	COMMAND_PLUGIN		0	kParams_OneForm_OneString	jip_fn_climate
+266F	CMD_STR	GetClimateNightSkyModel	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_climate
+2670	CMD	SetClimateNightSkyModel	COMMAND_PLUGIN		0	kParams_OneForm_OneString	jip_fn_climate
+2671	CMD	GetClimateTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_climate
+2672	CMD	SetClimateTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	jip_fn_climate
+2673	CMD	GetClimateNumWeatherTypes	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_climate
+2674	CMD_FRM	GetClimateNthWeatherType	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_climate
+2675	CMD	GetClimateNthWeatherChance	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_climate
+2676	CMD_FRM	GetClimateNthWeatherGlobal	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_climate
+2677	CMD	ClimateAddWeatherType	COMMAND_PLUGIN		0	kParams_OneForm_OneWeatherID_OneInt_OneOptionalGlobal	jip_fn_climate
+2678	CMD	ClimateRemoveWeatherType	COMMAND_PLUGIN		0	kParams_OneForm_OneWeatherID	jip_fn_climate
+2679	CMD	GetPrimitiveBound	COMMAND_PLUGIN		1	kParams_OneAxis	jip_fn_misc_ref
+267A	CMD	SetPrimitiveBound	COMMAND_PLUGIN		1	kParams_OneAxis_OneFloat	jip_fn_misc_ref
+267B	CMD	GetNumEffects	COMMAND_PLUGIN		0	kParams_OneMagicItem	jip_fn_effect
+267C	CMD_FRM	GetNthEffectBase	COMMAND_PLUGIN		0	kParams_OneMagicItem_OneInt	jip_fn_effect
+267D	CMD	GetNthEffectTraitNumeric	COMMAND_PLUGIN		0	kParams_OneMagicItem_TwoInts	jip_fn_effect
+267E	CMD	SetNthEffectTraitNumeric	COMMAND_PLUGIN		0	kParams_OneMagicItem_ThreeInts	jip_fn_effect
+267F	CMD	GetNumActorEffects	COMMAND_PLUGIN		0	kParams_OneOptionalActorBase	jip_fn_effect
+2680	CMD	GetNthActorEffect	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalActorBase	jip_fn_effect
+2681	CMD	GetActiveMenuMode	COMMAND_PLUGIN		0	nullptr	jip_fn_ui
+2682	CMD_STR	GetActiveUIComponentName	COMMAND_PLUGIN		0	nullptr	jip_fn_ui
+2683	CMD_STR	GetActiveUIComponentFullName	COMMAND_PLUGIN		0	nullptr	jip_fn_ui
+2684	CMD	GetActiveUIComponentID	COMMAND_PLUGIN		0	nullptr	jip_fn_ui
+2685	CMD_FRM	GetMenuTargetRef	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_ui
+2686	CMD	GetMenuItemFilter	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalInt	jip_fn_ui
+2687	CMD	ClickMenuButton	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalInt	jip_fn_ui
+2688	CMD	RemoveItemTarget	COMMAND_PLUGIN		1	kParams_OneItemOrList_OneContainer_TwoOptionalInts	jip_fn_inventory
+2689	CMD	GetActorLevelingData	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalActorBase	jip_fn_actor
+268A	CMD	SetActorLevelingData	COMMAND_PLUGIN		0	kParams_OneInt_OneFloat_OneOptionalActorBase	jip_fn_actor
+268B	CMD	SetNthEffectBase	COMMAND_PLUGIN		0	kParams_OneMagicItem_OneInt_OneMagicEffect	jip_fn_effect
+268C	CMD	HasVariableAdded	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalQuest	jip_fn_script
+268D	CMD	RemoveScriptVariable	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalQuest	jip_fn_script
+268E	CMD	GetLoadOrderChanged	COMMAND_PLUGIN		0	nullptr	jip_fn_utility
+268F	CMD	ValidateModIndex	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_utility
+2690	CMD	RemoveAllAddedVariables	COMMAND_PLUGIN		0	kParams_OneOptionalQuest	jip_fn_script
+2691	CMD	AuxiliaryVariableGetSize	COMMAND_ALT_PLUGIN	AuxVarSize	0	kParams_OneString_OneOptionalForm	jip_fn_aux_variable
+2692	CMD	AuxiliaryVariableGetType	COMMAND_ALT_PLUGIN	AuxVarType	0	kParams_OneString_OneOptionalInt_OneOptionalForm	jip_fn_aux_variable
+2693	CMD	AuxiliaryVariableGetFloat	COMMAND_ALT_PLUGIN	AuxVarGetFlt	0	kParams_OneString_OneOptionalInt_OneOptionalForm	jip_fn_aux_variable
+2694	CMD	AuxiliaryVariableSetFloat	COMMAND_ALT_PLUGIN	AuxVarSetFlt	0	kParams_OneString_OneDouble_OneOptionalInt_OneOptionalForm	jip_fn_aux_variable
+2695	CMD_FRM	AuxiliaryVariableGetRef	COMMAND_ALT_PLUGIN	AuxVarGetRef	0	kParams_OneString_OneOptionalInt_OneOptionalForm	jip_fn_aux_variable
+2696	CMD	AuxiliaryVariableSetRef	COMMAND_ALT_PLUGIN	AuxVarSetRef	0	kParams_OneString_OneForm_OneOptionalInt_OneOptionalForm	jip_fn_aux_variable
+2697	CMD_STR	AuxiliaryVariableGetString	COMMAND_ALT_PLUGIN	AuxVarGetStr	0	kParams_OneString_OneOptionalInt_OneOptionalForm	jip_fn_aux_variable
+2698	CMD	AuxiliaryVariableSetString	COMMAND_ALT_PLUGIN	AuxVarSetStr	0	kParams_TwoStrings_OneOptionalInt_OneOptionalForm	jip_fn_aux_variable
+2699	CMD_ARR	AuxiliaryVariableGetAll	COMMAND_ALT_PLUGIN	AuxVarGetAll	0	kParams_OneInt_OneOptionalForm	jip_fn_aux_variable
+269A	CMD	AuxiliaryVariableErase	COMMAND_ALT_PLUGIN	AuxVarErase	0	kParams_OneString_OneOptionalInt_OneOptionalForm	jip_fn_aux_variable
+269B	CMD	AuxiliaryVariableEraseAll	COMMAND_ALT_PLUGIN	AuxVarEraseAll	0	kParams_OneInt_OneOptionalForm	jip_fn_aux_variable
+269C	CMD	RefMapArrayGetSize	COMMAND_ALT_PLUGIN	RefMapSize	0	kParams_OneString	jip_fn_ref_map
+269D	CMD	RefMapArrayGetType	COMMAND_ALT_PLUGIN	RefMapGetType	0	kParams_OneString_OneOptionalForm	jip_fn_ref_map
+269E	CMD_ARR	RefMapArrayGetFirst	COMMAND_ALT_PLUGIN	RefMapFirst	0	kParams_OneString	jip_fn_ref_map
+269F	CMD_ARR	RefMapArrayGetNext	COMMAND_ALT_PLUGIN	RefMapNext	0	kParams_OneString	jip_fn_ref_map
+26A0	CMD_ARR	RefMapArrayGetKeys	COMMAND_ALT_PLUGIN	RefMapKeys	0	kParams_OneString	jip_fn_ref_map
+26A1	CMD_ARR	RefMapArrayGetAll	COMMAND_ALT_PLUGIN	RefMapGetAll	0	kParams_OneInt	jip_fn_ref_map
+26A2	CMD	RefMapArrayErase	COMMAND_ALT_PLUGIN	RefMapErase	0	kParams_OneString_OneOptionalForm	jip_fn_ref_map
+26A3	CMD	RefMapArrayDestroy	COMMAND_ALT_PLUGIN	RefMapDestroy	0	kParams_OneString	jip_fn_ref_map
+26A4	CMD	RefMapArrayGetFloat	COMMAND_ALT_PLUGIN	RefMapGetFlt	0	kParams_OneString_OneOptionalForm	jip_fn_ref_map
+26A5	CMD	RefMapArraySetFloat	COMMAND_ALT_PLUGIN	RefMapSetFlt	0	kParams_OneString_OneDouble_OneOptionalForm	jip_fn_ref_map
+26A6	CMD_FRM	RefMapArrayGetRef	COMMAND_ALT_PLUGIN	RefMapGetRef	0	kParams_OneString_OneOptionalForm	jip_fn_ref_map
+26A7	CMD	RefMapArraySetRef	COMMAND_ALT_PLUGIN	RefMapSetRef	0	kParams_OneString_OneForm_OneOptionalForm	jip_fn_ref_map
+26A8	CMD_STR	RefMapArrayGetString	COMMAND_ALT_PLUGIN	RefMapGetStr	0	kParams_OneString_OneOptionalForm	jip_fn_ref_map
+26A9	CMD	RefMapArraySetString	COMMAND_ALT_PLUGIN	RefMapSetStr	0	kParams_TwoStrings_OneOptionalForm	jip_fn_ref_map
+26AA	CMD	ClearJIPSavedData	COMMAND_PLUGIN		0	kParams_FourInts	jip_fn_utility
+26AB	CMD	SetValueAlt	COMMAND_PLUGIN		0	kParams_OneObjectID_OneInt	jip_fn_inventory
+26AC	CMD_STR	GetBodyPartDataSkeleton	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_body_part_data
+26AD	CMD	SetBodyPartDataSkeleton	COMMAND_PLUGIN		0	kParams_OneForm_OneString	jip_fn_body_part_data
+26AE	CMD_FRM	GetBodyPartDataRagdoll	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_body_part_data
+26AF	CMD	SetBodyPartDataRagdoll	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	jip_fn_body_part_data
+26B0	CMD	GetBodyPartDataHasPart	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_body_part_data
+26B1	CMD	GetBodyPartTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	jip_fn_body_part_data
+26B2	CMD	SetBodyPartTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts_OneFloat	jip_fn_body_part_data
+26B3	CMD_FRM	GetBodyPartTraitForm	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	jip_fn_body_part_data
+26B4	CMD	SetBodyPartTraitForm	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts_OneOptionalForm	jip_fn_body_part_data
+26B5	CMD_STR	GetBodyPartName	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_body_part_data
+26B6	CMD	SetBodyPartName	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneString	jip_fn_body_part_data
+26B7	CMD_STR	GetBodyPartReplacementModel	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_body_part_data
+26B8	CMD	SetBodyPartReplacementModel	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneString	jip_fn_body_part_data
+26B9	CMD	GetBodyPartFlag	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	jip_fn_body_part_data
+26BA	CMD	SetBodyPartFlag	COMMAND_PLUGIN		0	kParams_OneForm_ThreeInts	jip_fn_body_part_data
+26BB	CMD	GetWeaponModReloadAnim	COMMAND_PLUGIN		0	kParams_OneObjectID	jip_fn_weapon
+26BC	CMD	SetWeaponModReloadAnim	COMMAND_PLUGIN		0	kParams_OneObjectID_OneInt	jip_fn_weapon
+26BD	CMD_ARR	AuxiliaryVariableGetAsArray	COMMAND_ALT_PLUGIN	AuxVarGetAsArr	0	kParams_OneString_OneOptionalForm	jip_fn_aux_variable
+26BE	CMD	AuxiliaryVariableSetFromArray	COMMAND_ALT_PLUGIN	AuxVarSetFromArr	0	kParams_OneString_OneInt_OneOptionalForm	jip_fn_aux_variable
+26BF	CMD_STR	GetSoundSourceFile	COMMAND_PLUGIN		0	kParams_OneSound	jip_fn_sound
+26C0	CMD	SetSoundSourceFile	COMMAND_PLUGIN		0	kParams_OneSound_OneString	jip_fn_sound
+26C1	CMD	GetDestructionDataHealth	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_destruction_data
+26C2	CMD	SetDestructionDataHealth	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_destruction_data
+26C3	CMD	GetDestructionDataTargetable	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_destruction_data
+26C4	CMD	SetDestructionDataTargetable	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_destruction_data
+26C5	CMD	GetDestructionDataNumStages	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_destruction_data
+26C6	CMD	GetNthDestructionStageTrait	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	jip_fn_destruction_data
+26C7	CMD	SetNthDestructionStageTrait	COMMAND_PLUGIN		0	kParams_OneForm_ThreeInts	jip_fn_destruction_data
+26C8	CMD_FRM	GetNthDestructionStageExplosion	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_destruction_data
+26C9	CMD	SetNthDestructionStageExplosion	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalForm	jip_fn_destruction_data
+26CA	CMD_FRM	GetNthDestructionStageDebris	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_destruction_data
+26CB	CMD	SetNthDestructionStageDebris	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalForm	jip_fn_destruction_data
+26CC	CMD_STR	GetNthDestructionStageReplacement	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_destruction_data
+26CD	CMD	SetNthDestructionStageReplacement	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneString	jip_fn_destruction_data
+26CE	CMD_ARR	GetTeammates	COMMAND_PLUGIN		0	nullptr	jip_fn_misc_ref
+26CF	CMD_FRM	GetCurrentWeather	COMMAND_PLUGIN		0	nullptr	jip_fn_weather
+26D0	CMD_FRM	GetCurrentClimate	COMMAND_PLUGIN		0	nullptr	jip_fn_climate
+26D1	CMD	SetCurrentClimate	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_climate
+26D2	CMD	RefreshCurrentClimate	COMMAND_PLUGIN		0	nullptr	jip_fn_climate
+26D3	CMD_FRM	GetWorldspaceClimate	COMMAND_PLUGIN		0	kParams_OneWorldspace	jip_fn_worldspace
+26D4	CMD	SetWorldspaceClimate	COMMAND_PLUGIN		0	kParams_OneWorldspace_OneOptionalForm	jip_fn_worldspace
+26D5	CMD_FRM	GetActorVoiceType	COMMAND_PLUGIN		0	kParams_OneOptionalActorBase	jip_fn_actor
+26D6	CMD	SetActorVoiceType	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalActorBase	jip_fn_actor
+26D7	CMD	GetCreatureReach	COMMAND_PLUGIN		0	kParams_OneOptionalActorBase	jip_fn_actor
+26D8	CMD	GetIsImmobile	COMMAND_PLUGIN		0	kParams_OneOptionalActorBase	jip_fn_actor
+26D9	CMD	PickFromList	COMMAND_PLUGIN		1	kParams_OneList_TwoOptionalInts	jip_fn_actor
+26DA	CMD	SetStageAlt	COMMAND_PLUGIN		0	kParams_OneQuest_OneInt	jip_fn_quest
+26DB	CMD	ToggleNoZPosReset	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_misc_ref
+26DC	CMD_FRM	GetProjectileRefSource	COMMAND_PLUGIN		1	nullptr	jip_fn_projectile
+26DD	CMD	SetProjectileRefSource	COMMAND_PLUGIN		1	kParams_OneOptionalObjectRef	jip_fn_projectile
+26DE	CMD_FRM	GetProjectileRefWeapon	COMMAND_PLUGIN		1	nullptr	jip_fn_projectile
+26DF	CMD	SetProjectileRefWeapon	COMMAND_PLUGIN		1	kParams_OneObjectID	jip_fn_projectile
+26E0	CMD	GetProjectileRefLifeTime	COMMAND_PLUGIN		1	nullptr	jip_fn_projectile
+26E1	CMD	GetProjectileRefDistanceTraveled	COMMAND_PLUGIN		1	nullptr	jip_fn_projectile
+26E2	CMD	GetProjectileRefDamage	COMMAND_PLUGIN		1	nullptr	jip_fn_projectile
+26E3	CMD	SetProjectileRefDamage	COMMAND_PLUGIN		1	kParams_OneFloat	jip_fn_projectile
+26E4	CMD	GetProjectileRefSpeedMult	COMMAND_PLUGIN		1	nullptr	jip_fn_projectile
+26E5	CMD	SetProjectileRefSpeedMult	COMMAND_PLUGIN		1	kParams_OneFloat	jip_fn_projectile
+26E6	EMPTY						
+26E7	CMD	GetWorldspaceFlag	COMMAND_PLUGIN		0	kParams_OneWorldspace_OneInt	jip_fn_worldspace
+26E8	CMD	SetWorldspaceFlag	COMMAND_PLUGIN		0	kParams_OneWorldspace_TwoInts	jip_fn_worldspace
+26E9	CMD	GetIdleLoopTimes	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_miscellaneous
+26EA	CMD	ToggleCreatureModel	COMMAND_PLUGIN		0	kParams_OneString_OneInt_OneOptionalActorBase	jip_fn_actor
+26EB	CMD	CreatureHasModel	COMMAND_PLUGIN		0	kParams_OneString_OneOptionalActorBase	jip_fn_actor
+26EC	CMD_ARR	GetCreatureModels	COMMAND_PLUGIN		0	kParams_OneOptionalActorBase	jip_fn_actor
+26ED	CMD	DisableNavMeshAlt	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_miscellaneous
+26EE	CMD	EnableNavMeshAlt	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_miscellaneous
+26EF	CMD	GetTerrainHeight	COMMAND_PLUGIN		0	kParams_TwoFloats	jip_fn_miscellaneous
+26F0	CMD	RefMapArrayValidate	COMMAND_ALT_PLUGIN	RefMapValidate	0	kParams_OneString	jip_fn_ref_map
+26F1	CMD	HasPrimitive	COMMAND_PLUGIN		1	nullptr	jip_fn_misc_ref
+26F2	CMD	AddPrimitive	COMMAND_PLUGIN		1	kParams_OneInt_ThreeFloats	jip_fn_misc_ref
+26F3	CMD	AddDestructionStage	COMMAND_PLUGIN		0	kParams_OneForm_ThreeInts	jip_fn_destruction_data
+26F4	CMD	RemoveDestructionStage	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_destruction_data
+26F5	CMD_STR	GetWeaponShellCasingModel	COMMAND_PLUGIN		0	kParams_OneObjectID	jip_fn_weapon
+26F6	CMD	SetWeaponShellCasingModel	COMMAND_PLUGIN		0	kParams_OneForm_OneString	jip_fn_weapon
+26F7	CMD	AddNewEffect	COMMAND_PLUGIN		0	kParams_OneMagicItem_OneEffect_TwoInts_ThreeOptionalInts	jip_fn_effect
+26F8	CMD	RemoveNthEffect	COMMAND_PLUGIN		0	kParams_OneMagicItem_OneInt	jip_fn_effect
+26F9	CMD	SetObjectEffect	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	jip_fn_effect
+26FA	CMD_FRM	GetActorUnarmedEffect	COMMAND_PLUGIN		0	kParams_OneOptionalActorBase	jip_fn_effect
+26FB	CMD	SetActorUnarmedEffect	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalActorBase	jip_fn_effect
+26FC	CMD	IsPCInCombat	CMD_COND_PLUGIN		0	nullptr	jip_fn_miscellaneous
+26FD	CMD	CCCOnLoad	COMMAND_PLUGIN		0	nullptr	jip_fn_ccc
+26FE	CMD	CCCSetFloat	COMMAND_PLUGIN		0	kParams_OneInt_OneFloat	jip_fn_ccc
+26FF	CMD	CCCSetString	COMMAND_PLUGIN		0	kParams_OneInt_OneFormatString	jip_fn_ccc
+2700	CMD	CCCSetTrait	COMMAND_PLUGIN		0	kParams_TwoInts_OneOptionalInt	jip_fn_ccc
+2701	CMD	CCCGetDistance	COMMAND_PLUGIN		1	kParams_OneObjectRef_OneOptionalInt	jip_fn_ccc
+2702	CMD	CCCTaskPackageFlags	COMMAND_PLUGIN		0	kParams_OneAIPackage_ThreeInts	jip_fn_ccc
+2703	CMD	CCCSetEquipped	COMMAND_PLUGIN		0	nullptr	jip_fn_ccc
+2704	CMD	CCCInFaction	COMMAND_PLUGIN		1	kParams_OneFaction_OneOptionalInt	jip_fn_ccc
+2705	CMD	CCCSetNCCS	COMMAND_PLUGIN		1	kParams_OneOptionalInt	jip_fn_ccc
+2706	CMD	GetEncumbranceRate	CMD_COND_PLUGIN		1	nullptr	jip_fn_ccc
+2707	CMD	CCCLoadNCCS	COMMAND_PLUGIN		0	nullptr	jip_fn_ccc
+2708	CMD_FRM	CCCSavedForm	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_ccc
+2709	CMD_STR	CCCLocationName	COMMAND_PLUGIN		1	nullptr	jip_fn_ccc
+270A	CMD_FRM	CCCGetReputation	COMMAND_PLUGIN		1	nullptr	jip_fn_ccc
+270B	CMD_FRM	GetSelectedItemRef	COMMAND_PLUGIN		0	nullptr	jip_fn_ui
+270C	CMD	GetWeaponRefModFlags	COMMAND_PLUGIN		1	nullptr	jip_fn_inventory
+270D	CMD	SetWeaponRefModFlags	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_inventory
+270E	CMD_ARR	GetBarterItems	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_ui
+270F	CMD	GetItemRefCurrentHealth	COMMAND_PLUGIN		1	kParams_OneOptionalInt	jip_fn_inventory
+2710	CMD	SetItemRefCurrentHealth	COMMAND_PLUGIN		1	kParams_OneFloat_OneOptionalInt	jip_fn_inventory
+2711	CMD	GetBarterGoldAlt	COMMAND_PLUGIN		0	nullptr	jip_fn_ui
+2712	CMD_FRM	GetRecipeMenuSelection	COMMAND_PLUGIN		0	nullptr	jip_fn_ui
+2713	CMD_FRM	GetRecipeMenuCategory	COMMAND_PLUGIN		0	nullptr	jip_fn_ui
+2714	CMD	UnlockRecipeMenuQuantity	COMMAND_PLUGIN		0	kParams_OneOptionalInt	jip_fn_ui
+2715	CMD	GetRecipeMenuNumSubcategories	COMMAND_PLUGIN		0	nullptr	jip_fn_ui
+2716	CMD	SetHotkeyItemRef	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_inventory
+2717	CMD	EquipItemAlt	COMMAND_PLUGIN		1	kParams_OneObjectID_TwoOptionalInts	jip_fn_inventory
+2718	CMD	UnequipItemAlt	COMMAND_PLUGIN		1	kParams_OneObjectID_TwoOptionalInts	jip_fn_inventory
+2719	CMD	DropAlt	COMMAND_PLUGIN		1	kParams_OneItemOrList_TwoOptionalInts	jip_fn_inventory
+271A	CMD	DropMeAlt	COMMAND_PLUGIN		1	kParams_TwoOptionalInts	jip_fn_inventory
+271B	CMD_STR	GetFormDescription	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_miscellaneous
+271C	CMD_FRM	GetAddictionEffect	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_effect
+271D	CMD	SetAddictionEffect	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	jip_fn_effect
+271E	CMD	GetAddictionChance	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_effect
+271F	CMD	SetAddictionChance	COMMAND_PLUGIN		0	kParams_OneForm_OneFloat	jip_fn_effect
+2720	CMD	GetIsPoison	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_effect
+2721	CMD	GetContainerRespawns	COMMAND_PLUGIN		0	kParams_OneOptionalForm	jip_fn_miscellaneous
+2722	CMD	SetContainerRespawns	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalForm	jip_fn_miscellaneous
+2723	CMD	ModBaseActorValue	COMMAND_ALT_PLUGIN	ModBaseAV	0	kParams_OneActorValue_OneFloat_OneOptionalActorBase	jip_fn_actor
+2724	CMD	GetGrassTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_grass
+2725	CMD	SetGrassTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFloat	jip_fn_grass
+2726	CMD_STR	GetGrassModel	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_grass
+2727	CMD	SetGrassModel	COMMAND_PLUGIN		0	kParams_OneForm_OneString	jip_fn_grass
+2728	CMD	GetWheelDisabled	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2729	CMD	SetWheelDisabled	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_actor
+272A	CMD_FRM	GetInterruptPackage	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+272B	CMD	EnableImprovedRecipeMenu	COMMAND_PLUGIN		0	nullptr	jip_fn_ui
+272C	CMD	InitItemFilter	COMMAND_PLUGIN		0	nullptr	jip_fn_ui
+272D	CMD	SetItemFilter	COMMAND_PLUGIN		0	kParams_OneOptionalString	jip_fn_ui
+272E	CMD	GetSessionTime	COMMAND_PLUGIN		0	nullptr	jip_fn_utility
+272F	CMD	GetQuestTargetsChanged	COMMAND_PLUGIN		0	nullptr	jip_fn_quest
+2730	CMD	GetWorldMapPosMults	COMMAND_PLUGIN		1	kParams_TwoScriptVars	jip_fn_ui
+2731	EMPTY						
+2732	EMPTY						
+2733	CMD_ARR	GetActiveEffects	COMMAND_PLUGIN		1	kParams_OneOptionalInt	jip_fn_effect
+2734	CMD	GetActorProcessingLevel	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2735	CMD_ARR	GetActorsByProcessingLevel	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_actor
+2736	CMD_FRM	GetExteriorCell	COMMAND_PLUGIN		0	kParams_OneWorldspace_TwoInts	jip_fn_miscellaneous
+2737	CMD	GetCellBuffered	COMMAND_PLUGIN		0	kParams_OneOptionalForm	jip_fn_miscellaneous
+2738	CMD	MessageExAlt	COMMAND_PLUGIN		0	kParams_OneFloat_OneFormatString	jip_fn_ui
+2739	CMD_ARR	GetTempEffects	COMMAND_PLUGIN		1	nullptr	jip_fn_effect
+273A	CMD	RemoveNthTempEffect	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_effect
+273B	CMD	GetActorLightAmount	CMD_COND_PLUGIN		1	nullptr	jip_fn_actor
+273C	CMD	GetActorAlpha	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+273D	CMD	GetActorDiveBreath	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+273E	CMD	SetActorDiveBreath	COMMAND_PLUGIN		1	kParams_OneFloat	jip_fn_actor
+273F	CMD	GetGameDifficulty	CMD_COND_PLUGIN		0	nullptr	jip_fn_miscellaneous
+2740	CMD	ToggleFirstPerson	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_miscellaneous
+2741	CMD	StopIdle	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2742	CMD_ARR	GetCombatTargets	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2743	CMD_ARR	GetCombatAllies	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2744	CMD_ARR	GetDetectedActors	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2745	CMD_ARR	GetDetectingActors	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2746	CMD	ClearActiveQuest	COMMAND_PLUGIN		0	nullptr	jip_fn_quest
+2747	CMD	SetFormDescription	COMMAND_PLUGIN		0	kParams_OneForm_OneFormatString	jip_fn_miscellaneous
+2748	CMD	GetPCFastTravelled	COMMAND_PLUGIN		0	nullptr	jip_fn_miscellaneous
+2749	CMD	GetPCMovedCell	COMMAND_PLUGIN		0	nullptr	jip_fn_miscellaneous
+274A	CMD	GetPCDetectionState	CMD_COND_PLUGIN		0	nullptr	jip_fn_miscellaneous
+274B	CMD_STR	GetFontFile	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_ui
+274C	CMD	SetFontFile	COMMAND_PLUGIN		0	kParams_OneInt_OneString	jip_fn_ui
+274D	CMD	ShowTextInputMenu	COMMAND_PLUGIN		0	kParams_OneForm_TwoFloats_OneFormatString	jip_fn_ui
+274E	EMPTY						
+274F	EMPTY						
+2750	EMPTY						
+2751	CMD_FRM	GetPipboyRadio	CMD_COND_PLUGIN		0	nullptr	jip_fn_miscellaneous
+2752	CMD	CCCSayTo	COMMAND_PLUGIN		1	kParams_OneActor_OneTopic_TwoOptionalInts	jip_fn_ccc
+2753	CMD	CCCRunResultScripts	COMMAND_PLUGIN		1	kParams_OneTopic	jip_fn_ccc
+2754	CMD	GetCombatDisabled	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2755	CMD	SetCombatDisabled	COMMAND_PLUGIN		1	kParams_OneInt_OneOptionalActor	jip_fn_actor
+2756	CMD	ToggleNoHealthReset	COMMAND_PLUGIN		0	kParams_OneInt_OneFloat	jip_fn_actor
+2757	CMD_FRM	GetCurrentStablePackage	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2758	CMD	MoveToCell	COMMAND_PLUGIN		1	kParams_OneForm_ThreeFloats	jip_fn_misc_ref
+2759	CMD	MoveToEditorPosition	COMMAND_PLUGIN		1	kParams_OneOptionalInt	jip_fn_misc_ref
+275A	CMD	GetTeammateUsingAmmo	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+275B	CMD	SetTeammateUsingAmmo	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_actor
+275C	CMD	ToggleDetectionFix	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_actor
+275D	EMPTY						
+275E	EMPTY						
+275F	CMD	ToggleIgnoreLockedDoors	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_actor
+2760	CMD	CCCSetFollowState	COMMAND_PLUGIN		1	kParams_OneOptionalInt	jip_fn_ccc
+2761	CMD	IsInCombatWith	COMMAND_PLUGIN		1	kParams_OneActor	jip_fn_actor
+2762	CMD_STR	RefToPosStr	COMMAND_PLUGIN		1	nullptr	jip_fn_ccc
+2763	CMD	MoveToPosStr	COMMAND_PLUGIN		1	kParams_OneString	jip_fn_ccc
+2764	CMD_ARR	RefMapArrayGetValue	COMMAND_ALT_PLUGIN	RefMapGetVal	0	kParams_OneString_OneOptionalForm	jip_fn_ref_map
+2765	CMD	RefMapArraySetValue	COMMAND_ALT_PLUGIN	RefMapSetVal	0	kParams_OneString_OneInt_OneOptionalForm	jip_fn_ref_map
+2766	CMD_ARR	GetAllItems	COMMAND_PLUGIN		1	kParams_FourOptionalInts_OneOptionalList	jip_fn_inventory
+2767	CMD_ARR	GetAllItemRefs	COMMAND_PLUGIN		1	kParams_FourOptionalInts_OneOptionalList	jip_fn_inventory
+2768	CMD	LockEquipment	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_ccc
+2769	CMD	IsAttacking	CMD_COND_PLUGIN		1	nullptr	jip_fn_actor
+276A	CMD	GetPCUsingScope	CMD_COND_PLUGIN		0	nullptr	jip_fn_miscellaneous
+276B	CMD	HolsterWeapon	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+276C	CMD	GetFallTimeElapsed	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+276D	CMD	GetFallTimeRemaining	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+276E	CMD	ResetFallTime	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+276F	CMD	GetCenterPos	COMMAND_PLUGIN		1	kParams_OneAxis	jip_fn_misc_ref
+2770	CMD	SetIdleLoopTimes	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	jip_fn_miscellaneous
+2771	CMD	CCCSMS	COMMAND_PLUGIN		0	kParams_OneOptionalObjectRef	jip_fn_ccc
+2772	CMD	GetDetonationTimer	COMMAND_PLUGIN		1	nullptr	jip_fn_projectile
+2773	CMD	SetDetonationTimer	COMMAND_PLUGIN		1	kParams_OneFloat	jip_fn_projectile
+2774	CMD	GetMineArmed	COMMAND_PLUGIN		1	nullptr	jip_fn_projectile
+2775	CMD	GetRefType	COMMAND_PLUGIN		0	kParams_OneOptionalObjectRef	jip_fn_misc_ref
+2776	CMD	GetEffectFlag	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_effect
+2777	CMD	SetEffectFlag	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	jip_fn_effect
+2778	CMD	GetBaseEffectFlag	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_effect
+2779	CMD	SetBaseEffectFlag	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	jip_fn_effect
+277A	CMD	GetPCUsingIronSights	CMD_COND_PLUGIN		0	nullptr	jip_fn_miscellaneous
+277B	CMD_FRM	GetPCLastExteriorDoor	COMMAND_PLUGIN		0	nullptr	jip_fn_miscellaneous
+277C	CMD	GetRadiationLevelAlt	CMD_COND_PLUGIN		1	nullptr	jip_fn_actor
+277D	CMD	IsInWater	CMD_COND_PLUGIN		1	nullptr	jip_fn_actor
+277E	CMD	SetEmbeddedWeaponNode	COMMAND_PLUGIN		0	kParams_OneForm_OneString	jip_fn_weapon
+277F	CMD	SetEmbeddedWeaponAV	COMMAND_PLUGIN		0	kParams_OneObjectID_OneActorValue	jip_fn_weapon
+2780	CMD_ARR	GetDroppedRefs	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2781	CMD	MoveAwayFromPlayer	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2782	CMD	FaceObject	COMMAND_PLUGIN		1	kParams_OneObjectRef	jip_fn_actor
+2783	CMD	Turn	COMMAND_PLUGIN		1	kParams_OneFloat	jip_fn_actor
+2784	CMD	SetMessageDisabled	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_ui
+2785	CMD	GetMessageDisabled	COMMAND_PLUGIN		0	kParams_OneMessage	jip_fn_ui
+2786	CMD_FRM	GetAshPileSource	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2787	CMD	GetMessageFlags	COMMAND_PLUGIN		0	kParams_OneMessage	jip_fn_ui
+2788	CMD	SetMessageFlags	COMMAND_PLUGIN		0	kParams_OneMessage_OneInt	jip_fn_ui
+2789	CMD	ToggleObjectCollision	COMMAND_ALT_PLUGIN	TOC	1	kParams_OneInt	jip_fn_misc_ref
+278A	CMD	IsSoundPlaying	COMMAND_PLUGIN		0	kParams_OneSound_OneOptionalObjectRef	jip_fn_sound
+278B	CMD	SwapTextureEx	COMMAND_PLUGIN		0	kParams_OneObjectRef_TwoStrings_OneOtionalInt	jip_fn_miscellaneous
+278C	CMD	GetMaterialPropertyValue	COMMAND_ALT_PLUGIN	GetMatrPropVal	1	kParams_OneString_OneInt	jip_fn_misc_ref
+278D	CMD	SetMaterialPropertyValue	COMMAND_ALT_PLUGIN	SetMatrPropVal	1	kParams_OneString_OneInt_OneFloat	jip_fn_misc_ref
+278E	CMD_ARR	GetSoundPlayers	COMMAND_PLUGIN		0	kParams_OneSound	jip_fn_sound
+278F	CMD	SetMessageDisplayTime	COMMAND_PLUGIN		0	kParams_OneMessage_OneInt	jip_fn_ui
+2790	CMD_STR	GetImpactDataModel	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_impact_data
+2791	CMD	SetImpactDataModel	COMMAND_PLUGIN		0	kParams_OneForm_OneString	jip_fn_impact_data
+2792	CMD_AMB	GetImpactDataTrait	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_impact_data
+2793	CMD	SetImpactDataTraitNumeric	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneDouble	jip_fn_impact_data
+2794	CMD	SetImpactDataTraitForm	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalForm	jip_fn_impact_data
+2795	CMD	sv_RegexMatch	COMMAND_PLUGIN		0	kParams_OneInt_OneFormatString	jip_fn_string
+2796	CMD_ARR	sv_RegexSearch	COMMAND_PLUGIN		0	kParams_OneInt_OneFormatString	jip_fn_string
+2797	CMD_STR	sv_RegexReplace	COMMAND_PLUGIN		0	kParams_OneInt_OneFormatString	jip_fn_string
+2798	CMD	SetOnMenuClickEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneString	jip_fn_ui
+2799	CMD	SetOnFastTravelEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_miscellaneous
+279A	CMD	SetOnMenuOpenEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalInt	jip_fn_ui
+279B	CMD	SetOnMenuCloseEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalInt	jip_fn_ui
+279C	CMD	SetOnAnimActionEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm_OneInt	jip_fn_actor
+279D	CMD	SetOnPlayGroupEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm_OneAnimGroup	jip_fn_actor
+279E	CMD	SetOnHealthDamageEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm	jip_fn_actor
+279F	CMD	SetOnCrippledLimbEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm	jip_fn_actor
+27A0	CMD	SetOnFireWeaponEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalForm	jip_fn_actor
+27A1	CMD_FRM	GetCurrentAmmo	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+27A2	CMD	GetCurrentAmmoRounds	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+27A3	CMD_STR	GetMoonTexture	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_miscellaneous
+27A4	CMD	SetMoonTexture	COMMAND_PLUGIN		0	kParams_OneInt_OneString	jip_fn_miscellaneous
+27A5	CMD	SetFullNameAlt	COMMAND_ALT_PLUGIN	SetActorFullNameAlt	0	kParams_OneString_OneOptionalForm	jip_fn_actor
+27A6	CMD	SetWeatherTransitionTimeOverride	COMMAND_PLUGIN		0	kParams_OneOptionalInt	jip_fn_weather
+27A7	CMD	GetDetectionValue	COMMAND_PLUGIN		1	kParams_OneActor	jip_fn_actor
+27A8	CMD	GetBaseActorValueAlt	COMMAND_ALT_PLUGIN	GetBaseAVAlt	0	kParams_OneActorValue_OneOptionalActorBase	jip_fn_actor
+27A9	CMD	SetOnMouseoverChangeEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalInt	jip_fn_ui
+27AA	CMD	GetAlwaysRun	CMD_COND_PLUGIN		0	nullptr	jip_fn_miscellaneous
+27AB	CMD	GetAutoMove	CMD_COND_PLUGIN		0	nullptr	jip_fn_miscellaneous
+27AC	CMD	SetSpeedMult	COMMAND_PLUGIN		1	kParams_OneOptionalInt	jip_fn_actor
+27AD	CMD	GetIsRagdolled	CMD_COND_PLUGIN		1	nullptr	jip_fn_actor
+27AE	CMD	ForceActorDetectionValue	COMMAND_PLUGIN		1	kParams_TwoOptionalInts	jip_fn_actor
+27AF	CMD	SetOnPCTargetChangeEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_miscellaneous
+27B0	CMD	FreePlayer	COMMAND_ALT_PLUGIN	GoodbyeWorldspace	0	nullptr	jip_fn_miscellaneous
+27B1	CMD	AuxVarGetFltCond	CMD_COND_ONLY		1	kParams_OneQuest_OneInt	jip_fn_aux_variable
+27B2	CMD	GetLocalGravity	COMMAND_PLUGIN		0	kParams_OneAxis	jip_fn_miscellaneous
+27B3	CMD	SetLocalGravityVector	COMMAND_PLUGIN		0	kParams_ThreeFloats	jip_fn_miscellaneous
+27B4	CMD	GetActorVelocity	COMMAND_PLUGIN		1	kParams_OneOptionalAxis	jip_fn_actor
+27B5	CMD	IsInAir	CMD_COND_PLUGIN		1	nullptr	jip_fn_actor
+27B6	CMD	GetHasContact	COMMAND_PLUGIN		1	kParams_OneForm	jip_fn_misc_ref
+27B7	CMD_ARR	GetContactRefs	COMMAND_PLUGIN		1	nullptr	jip_fn_misc_ref
+27B8	CMD	GetHasContactBase	COMMAND_PLUGIN		1	kParams_OneForm	jip_fn_misc_ref
+27B9	CMD	GetHasContactType	CMD_COND_PLUGIN		1	kParams_OneInt	jip_fn_misc_ref
+27BA	CMD_FRM	GetObjectUnderFeet	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+27BB	CMD	GetHasPhantom	COMMAND_PLUGIN		1	nullptr	jip_fn_misc_ref
+27BC	CMD_STR	GetArmorRCT	COMMAND_PLUGIN		0	kParams_OneObjectID	jip_fn_armor
+27BD	CMD	SetArmorRCT	COMMAND_PLUGIN		0	kParams_OneForm_OneString	jip_fn_armor
+27BE	CMD	GetPerkFlag	COMMAND_PLUGIN		0	kParams_OnePerk_OneInt	jip_fn_perk
+27BF	CMD	SetPerkFlag	COMMAND_PLUGIN		0	kParams_OnePerk_TwoInts	jip_fn_perk
+27C0	CMD	ModLogPrint	COMMAND_PLUGIN		0	kParams_OneInt_OneFormatString	jip_fn_utility
+27C1	CMD_FRM	GetBaseEffectScript	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_effect
+27C2	CMD	SetBaseEffectScript	COMMAND_PLUGIN		0	kParams_TwoForms	jip_fn_effect
+27C3	CMD_STR	GetWaterNoiseTexture	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_water
+27C4	CMD	SetWaterNoiseTexture	COMMAND_PLUGIN		0	kParams_OneForm_OneString	jip_fn_water
+27C5	CMD_FRM	SetWaterFormEffect	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	jip_fn_water
+27C6	CMD_FRM	GetWaterSound	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_water
+27C7	CMD	SetWaterSound	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	jip_fn_water
+27C8	CMD	GetInteractionDisabled	COMMAND_PLUGIN		0	kParams_OneOptionalBoundObject	jip_fn_misc_ref
+27C9	CMD	SetInteractionDisabled	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalBoundObject	jip_fn_misc_ref
+27CA	CMD	GetInteractionDisabledType	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_misc_ref
+27CB	CMD	SetInteractionDisabledType	COMMAND_PLUGIN		0	kParams_TwoInts	jip_fn_misc_ref
+27CC	CMD	GetImageSpaceTrait	COMMAND_PLUGIN		0	kParams_OneImageSpace_OneInt	jip_fn_imagespace
+27CD	CMD	SetImageSpaceTrait	COMMAND_PLUGIN		0	kParams_OneImageSpace_OneInt_OneFloat	jip_fn_imagespace
+27CE	CMD	GetImageSpaceModTrait	COMMAND_PLUGIN		0	kParams_OneIMOD_OneInt	jip_fn_imagespace
+27CF	CMD	SetImageSpaceModTrait	COMMAND_PLUGIN		0	kParams_OneIMOD_OneInt_OneFloat	jip_fn_imagespace
+27D0	CMD	SetOnKeyDownEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalInt	jip_fn_input
+27D1	CMD	SetOnKeyUpEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalInt	jip_fn_input
+27D2	CMD	SetOnControlDownEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalInt	jip_fn_input
+27D3	CMD	SetOnControlUpEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalInt	jip_fn_input
+27D4	CMD	SetGameMainLoopCallback	COMMAND_ALT_PLUGIN	SGMLC	0	kParams_OneForm_ThreeOptionalInts	jip_fn_script
+27D5	CMD_FRM	GetGlobalRef	COMMAND_PLUGIN		0	kParams_OneGlobal	jip_fn_global_var
+27D6	CMD	SetGlobalRef	COMMAND_PLUGIN		0	kParams_OneGlobal_OneOptionalForm	jip_fn_global_var
+27D7	CMD_STR	GetWorldspaceNoiseTexture	COMMAND_PLUGIN		0	kParams_OneWorldspace	jip_fn_worldspace
+27D8	CMD	SetWorldspaceNoiseTexture	COMMAND_PLUGIN		0	kParams_OneForm_OneString	jip_fn_worldspace
+27D9	CMD_FRM	GetWorldspaceWaterType	COMMAND_PLUGIN		0	kParams_OneWorldspace	jip_fn_worldspace
+27DA	CMD	SetWorldspaceWaterType	COMMAND_PLUGIN		0	kParams_OneWorldspace_OneOptionalForm	jip_fn_worldspace
+27DB	CMD_FRM	GetWorldspaceImagespace	COMMAND_PLUGIN		0	kParams_OneWorldspace	jip_fn_worldspace
+27DC	CMD	SetWorldspaceImagespace	COMMAND_PLUGIN		0	kParams_OneWorldspace_OneOptionalForm	jip_fn_worldspace
+27DD	CMD	SetCellWaterForm	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	jip_fn_cell
+27DE	CMD_FRM	GetCellClimate	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_cell
+27DF	CMD	SetCellClimate	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalForm	jip_fn_cell
+27E0	CMD_STR	GetCellNoiseTexture	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_cell
+27E1	CMD	SetCellNoiseTexture	COMMAND_PLUGIN		0	kParams_OneForm_OneString	jip_fn_cell
+27E2	CMD	RemoveMeIRAlt	COMMAND_PLUGIN		1	kParams_TwoOptionalInts_OneOptionalContainer	jip_fn_inventory
+27E3	CMD	GetScriptDisabled	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_script
+27E4	CMD	SetScriptDisabled	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_script
+27E5	CMD	GetScriptEventDisabled	COMMAND_PLUGIN		0	kParams_OneForm_OneString	jip_fn_script
+27E6	CMD	SetScriptEventDisabled	COMMAND_PLUGIN		0	kParams_OneForm_OneString_OneInt	jip_fn_script
+27E7	CMD	FakeScriptEvent	COMMAND_PLUGIN		1	kParams_OneString_OneOptionalForm	jip_fn_script
+27E8	CMD	RefreshItemsList	COMMAND_PLUGIN		0	nullptr	jip_fn_ui
+27E9	CMD	AddRefMapMarker	COMMAND_PLUGIN		1	nullptr	jip_fn_misc_ref
+27EA	CMD	RemoveRefMapMarker	COMMAND_PLUGIN		1	nullptr	jip_fn_misc_ref
+27EB	CMD	RefHasMapMarker	COMMAND_PLUGIN		1	nullptr	jip_fn_misc_ref
+27EC	CMD	IsSpellTargetAlt	CMD_COND_PLUGIN		1	kParams_OneMagicItem	jip_fn_effect
+27ED	CMD	GetCalculatedWeaponDamage	COMMAND_PLUGIN		0	kParams_OneOptionalObjectID	jip_fn_weapon
+27EE	CMD	GetOptionalPatch	COMMAND_PLUGIN		0	kParams_OneString	jip_fn_utility
+27EF	CMD	SetOptionalPatch	COMMAND_PLUGIN		0	kParams_OneString_OneInt	jip_fn_utility
+27F0	CMD	SetPosEx	COMMAND_PLUGIN		1	kParams_ThreeFloats_OneOptionalInt	jip_fn_misc_ref
+27F1	CMD_ARR	GetReticlePos	COMMAND_PLUGIN		0	kParams_OneOptionalInt_OneOptionalFloat	jip_fn_miscellaneous
+27F2	CMD	GetReticleRange	COMMAND_PLUGIN		0	kParams_OneOptionalInt_OneOptionalFloat_OneOptionalInt	jip_fn_miscellaneous
+27F3	CMD	MoveToReticle	COMMAND_PLUGIN		1	kParams_FourOptionalFloats_OneOptionalInt	jip_fn_misc_ref
+27F4	CMD	SetRefName	COMMAND_PLUGIN		1	kParams_OneOptionalString	jip_fn_misc_ref
+27F5	CMD	GetActorValueModifier	COMMAND_ALT_PLUGIN	GetAVMod	1	kParams_OneActorValue_OneOptionalInt	jip_fn_actor
+27F6	CMD	GetPerkModifier	COMMAND_PLUGIN		1	kParams_OneInt_OneFloat_TwoOptionalForms	jip_fn_actor
+27F7	CMD	SetOnQuestStageEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneQuest_OneInt_OneOptionalInt	jip_fn_script
+27F8	CMD	SetAngleEx	COMMAND_PLUGIN		1	kParams_ThreeFloats_OneOptionalInt	jip_fn_misc_ref
+27F9	CMD_FRM	GetTeleportDoor	COMMAND_PLUGIN		1	nullptr	jip_fn_misc_ref
+27FA	CMD	GetBarterPriceMult	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_ui
+27FB	CMD	SetBarterPriceMult	COMMAND_PLUGIN		0	kParams_OneInt_OneFloat	jip_fn_ui
+27FC	CMD	SetOnDialogTopicEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm	jip_fn_miscellaneous
+27FD	CMD	TapButton	COMMAND_PLUGIN		0	kParams_OneInt	ln_fn_gamepad
+27FE	CMD	TapTrigger	COMMAND_PLUGIN		0	kParams_OneInt	ln_fn_gamepad
+27FF	CMD	SetOnTriggerDownEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	ln_fn_gamepad
+2800	CMD	SetOnTriggerUpEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	ln_fn_gamepad
+2801	CMD	SetOnCriticalHitEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_ThreeOptionalForms	jip_fn_misc_ref
+2802	CMD	GetHitHealthDamage	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2803	CMD	GetHitLimbDamage	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2804	CMD	CrippleLimb	COMMAND_PLUGIN		1	kParams_OneInt_OneOptionalObjectRef	jip_fn_actor
+2805	CMD	HoldControl	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_input
+2806	CMD	ReleaseControl	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_input
+2807	CMD	PlayIdleEx	COMMAND_PLUGIN		1	kParams_OneOptionalIdleForm	jip_fn_actor
+2808	CMD	SetBipedModelPathAlt	COMMAND_PLUGIN		0	kParams_OneObjectID_OneInt_OneFormatString	jip_fn_armor
+2809	CMD	GetKillXP	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+280A	EMPTY						
+280B	CMD_FRM	GetKiller	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+280C	CMD	KillActorAlt	COMMAND_PLUGIN		1	kParams_OneOptionalObjectRef_TwoOptionalInts	jip_fn_actor
+280D	CMD	ReloadEquippedModels	COMMAND_ALT_PLUGIN	ReloadModels	1	kParams_OneOptionalInt	jip_fn_actor
+280E	CMD	MoveToFadeDelay	COMMAND_PLUGIN		1	kParams_OneObjectRef_OneFloat	jip_fn_misc_ref
+280F	CMD	RunScriptSnippet	COMMAND_PLUGIN		0	kParams_OneInt_OneFormatString	jip_fn_script
+2810	CMD	ScriptWait	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_script
+2811	CMD	IsScriptWaiting	COMMAND_PLUGIN		0	kParams_OneOptionalQuest	jip_fn_script
+2812	CMD	StopScriptWaiting	COMMAND_PLUGIN		0	kParams_OneOptionalQuest	jip_fn_script
+2813	CMD_FRM	GetCrosshairWater	COMMAND_PLUGIN		0	nullptr	jip_fn_misc_ref
+2814	CMD	GetScriptBlockDisabled	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_script
+2815	CMD	SetScriptBlockDisabled	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalInt	jip_fn_script
+2816	CMD_FRM	GetPlayedIdle	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2817	CMD	IsIdlePlayingEx	CMD_COND_PLUGIN		1	kParams_OneIdleForm	jip_fn_actor
+2818	CMD_ARR	GetObjectiveTargets	COMMAND_PLUGIN		0	kParams_OneQuest_OneInt	jip_fn_quest
+2819	CMD	SetObjectiveNthTarget	COMMAND_PLUGIN		0	kParams_OneQuest_TwoInts_OneObjectRef	jip_fn_quest
+281A	CMD	GetObjectiveHasTarget	COMMAND_PLUGIN		0	kParams_OneQuest_OneInt_OneObjectRef	jip_fn_quest
+281B	CMD	AddObjectiveTarget	COMMAND_PLUGIN		0	kParams_OneQuest_OneInt_OneObjectRef	jip_fn_quest
+281C	CMD	RemoveObjectiveTarget	COMMAND_PLUGIN		0	kParams_OneQuest_OneInt_OneObjectRef	jip_fn_quest
+281D	CMD_STR	GetObjectiveText	COMMAND_PLUGIN		0	kParams_OneQuest_OneInt	jip_fn_quest
+281E	CMD	SetObjectiveText	COMMAND_PLUGIN		0	kParams_OneQuest_OneInt_OneFormatString	jip_fn_quest
+281F	CMD_FRM	GetArmorAudioTemplate	COMMAND_PLUGIN		0	kParams_OneObjectID	jip_fn_armor
+2820	CMD	SetArmorAudioTemplate	COMMAND_PLUGIN		0	kParams_OneObjectID_OneOptionalObjectID	jip_fn_armor
+2821	CMD	SetWeaponOut	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_actor
+2822	CMD	SetTerminalUIModel	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalString	jip_fn_ui
+2823	CMD	AddBaseEffectListEffect	COMMAND_PLUGIN		0	kParams_OneSpellItem_OneOptionalActorBase	jip_fn_actor
+2824	CMD	RemoveBaseEffectListEffect	COMMAND_PLUGIN		0	kParams_OneSpellItem_OneOptionalActorBase	jip_fn_actor
+2825	CMD	ShowQuantityMenu	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalInt	jip_fn_ui
+2826	CMD	MessageBoxExAlt	COMMAND_PLUGIN		0	kParams_OneForm_OneFormatString	jip_fn_ui
+2827	CMD_ARR	GetVATSTargets	COMMAND_PLUGIN		0	nullptr	jip_fn_ui
+2828	CMD	HasScriptBlock	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalForm	jip_fn_script
+2829	CMD	CastImmediate	COMMAND_PLUGIN		1	kParams_OneMagicItem_OneOptionalActor	jip_fn_effect
+282A	CMD	IsInCharGen	CMD_COND_PLUGIN		0	nullptr	jip_fn_ui
+282B	CMD	DisableScriptedActivate	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_script
+282C	CMD_FRM	GetHitAttacker	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+282D	CMD_FRM	GetHitProjectile	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+282E	CMD_FRM	GetHitWeapon	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+282F	CMD	GetGameDaysPassed	COMMAND_PLUGIN		0	kParams_ThreeOptionalInts	jip_fn_miscellaneous
+2830	CMD	GetWaterImmersionPerc	CMD_COND_PLUGIN		1	nullptr	jip_fn_actor
+2831	CMD_STR	GetProjectileMuzzleFlash	COMMAND_PLUGIN		0	kParams_OneBoundObject	jip_fn_projectile
+2832	CMD	SetProjectileMuzzleFlash	COMMAND_PLUGIN		0	kParams_OneForm_OneString	jip_fn_projectile
+2833	CMD	DismemberLimb	COMMAND_PLUGIN		1	kParams_OneInt_OneOptionalInt	jip_fn_actor
+2834	CMD	RunBatchScript	COMMAND_PLUGIN		0	kParams_OneString	jip_fn_script
+2835	CMD	IsArmorAddon	COMMAND_PLUGIN		0	kParams_OneObjectID	jip_fn_armor
+2836	CMD	ToggleCraftingMessages	COMMAND_PLUGIN		0	kParams_OneOptionalInt	jip_fn_ui
+2837	CMD	ToggleHardcoreTracking	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_miscellaneous
+2838	CMD	SetGameDifficulty	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_miscellaneous
+2839	CMD_FRM	GetEquippedItemRef	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_inventory
+283A	CMD	ExecuteScript	COMMAND_PLUGIN		1	nullptr	jip_fn_script
+283B	EMPTY						
+283C	CMD	IsFleeing	CMD_COND_PLUGIN		1	nullptr	jip_fn_actor
+283D	CMD_FRM	GetEnemyHealthTarget	COMMAND_PLUGIN		0	nullptr	jip_fn_miscellaneous
+283E	CMD	SetCurrentAmmoRounds	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_actor
+283F	CMD	IsAnimPlayingEx	COMMAND_PLUGIN		1	kParams_OneInt_ThreeOptionalInts	jip_fn_misc_ref
+2840	CMD	AttachAshPileEx	COMMAND_PLUGIN		1	kParams_OneForm	jip_fn_actor
+2841	CMD	MarkActivatorAshPile	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_miscellaneous
+2842	CMD	SetActorVelocity	COMMAND_PLUGIN		1	kParams_OneAxis_OneFloat	jip_fn_actor
+2843	CMD	GetRigidBodyMass	COMMAND_PLUGIN		1	nullptr	jip_fn_misc_ref
+2844	CMD	PushObject	COMMAND_PLUGIN		1	kParams_FourFloats_OneOptionalObjectRef	jip_fn_misc_ref
+2845	CMD_STR	GetSkeletonModel	COMMAND_PLUGIN		0	kParams_OneActorBase	jip_fn_actor
+2846	CMD	SetNPCSkeletonModel	COMMAND_PLUGIN		0	kParams_OneActorBase_OneOptionalString	jip_fn_actor
+2847	CMD	SetCRESkeletonModel	COMMAND_PLUGIN		0	kParams_OneActorBase_OneString	jip_fn_actor
+2848	CMD	SetBodyPartData	COMMAND_PLUGIN		0	kParams_OneActorBase_OneForm	ln_fn_actor
+2849	CMD	GetTargetUnreachable	CMD_COND_PLUGIN		1	nullptr	jip_fn_actor
+284A	CMD	MoveToContainer	COMMAND_PLUGIN		1	kParams_OneObjectRef_OneOptionalInt	jip_fn_misc_ref
+284B	CMD_ARR	GetNifBlockTranslation	COMMAND_ALT_PLUGIN	GetNifTrans	1	kParams_OneString_TwoOptionalInts	jip_fn_misc_ref
+284C	CMD	SetNifBlockTranslation	COMMAND_ALT_PLUGIN	SetNifTrans	1	kParams_OneString_ThreeFloats_TwoOptionalInts	jip_fn_misc_ref
+284D	CMD_ARR	GetNifBlockRotation	COMMAND_ALT_PLUGIN	GetNifRot	1	kParams_OneString_TwoOptionalInts	jip_fn_misc_ref
+284E	CMD	SetNifBlockRotation	COMMAND_ALT_PLUGIN	SetNifRot	1	kParams_OneString_ThreeFloats_TwoOptionalInts	jip_fn_misc_ref
+284F	CMD	GetNifBlockScale	COMMAND_ALT_PLUGIN	GetNifScale	1	kParams_OneString_OneOptionalInt	jip_fn_misc_ref
+2850	CMD	SetNifBlockScale	COMMAND_ALT_PLUGIN	SetNifScale	1	kParams_OneString_OneFloat_OneOptionalInt	jip_fn_misc_ref
+2851	CMD	GetNifBlockFlag	COMMAND_ALT_PLUGIN	GetNifFlag	1	kParams_OneString_OneInt_OneOptionalInt	jip_fn_misc_ref
+2852	CMD	SetNifBlockFlag	COMMAND_ALT_PLUGIN	SetNifFlag	1	kParams_OneString_TwoInts_OneOptionalInt	jip_fn_misc_ref
+2853	CMD_ARR	GetBufferedCells	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_miscellaneous
+2854	CMD	SetVATSTargetable	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_actor
+2855	CMD	GetWindDirection	COMMAND_PLUGIN		0	nullptr	jip_fn_weather
+2856	CMD	SetWindDirection	COMMAND_PLUGIN		0	kParams_OneFloat	jip_fn_weather
+2857	CMD_FRM	GetCreatureWeaponList	COMMAND_PLUGIN		0	kParams_OneOptionalActorBase	jip_fn_actor
+2858	CMD	SetWindSpeedMult	COMMAND_PLUGIN		0	kParams_OneFloat	jip_fn_weather
+2859	CMD	TriggerLightningFX	COMMAND_PLUGIN		0	nullptr	jip_fn_weather
+285A	CMD	GetObjectVelocity	COMMAND_PLUGIN		1	kParams_OneOptionalAxis	jip_fn_misc_ref
+285B	CMD	GetAngularVelocity	COMMAND_ALT_PLUGIN	GetAngVel	1	kParams_OneString_OneOptionalAxis	jip_fn_misc_ref
+285C	CMD	SetAngularVelocity	COMMAND_ALT_PLUGIN	SetAngVel	1	kParams_OneString_OneAxis_OneFloat	jip_fn_misc_ref
+285D	CMD	PlaceAtCell	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm_ThreeFloats	jip_fn_misc_ref
+285E	CMD	GetRayCastPos	COMMAND_PLUGIN		1	kParams_ThreeGlobals_OneOptFloat_OneOptInt_OneOptString_OneOptFloat	jip_fn_misc_ref
+285F	CMD	GetAnimSequenceFrequency	COMMAND_ALT_PLUGIN	GetAnimSeqFreq	1	kParams_OneString	jip_fn_misc_ref
+2860	CMD	SetAnimSequenceFrequency	COMMAND_ALT_PLUGIN	SetAnimSeqFreq	1	kParams_OneString_OneFloat	jip_fn_misc_ref
+2861	CMD	StopSound	COMMAND_PLUGIN		0	kParams_OneSound_OneOptionalObjectRef	jip_fn_sound
+2862	CMD	IsMusicPlaying	COMMAND_PLUGIN		0	kParams_OneOptionalForm	jip_fn_sound
+2863	CMD	SetMusicState	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_sound
+2864	CMD	GetNoUnequip	COMMAND_PLUGIN		1	nullptr	jip_fn_inventory
+2865	CMD	SetNoUnequip	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_inventory
+2866	CMD	SetCursorPos	COMMAND_PLUGIN		0	kParams_TwoFloats	jip_fn_ui
+2867	CMD	MoveToNode	COMMAND_PLUGIN		1	kParams_OneObjectRef_OneString_ThreeOptionalFloats	jip_fn_misc_ref
+2868	CMD_FRM	GetDeathItem	COMMAND_PLUGIN		0	kParams_OneOptionalActorBase	jip_fn_actor
+2869	CMD	SetDeathItem	COMMAND_PLUGIN		0	kParams_OneObjectID_OneOptionalActorBase	jip_fn_actor
+286A	CMD_FRM	GetActorLeveledList	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+286B	CMD_ARR	GetPlayerPerks	COMMAND_PLUGIN		0	nullptr	jip_fn_misc_ref
+286C	CMD	UnloadUIComponent	COMMAND_PLUGIN		0	kParams_OneString	jip_fn_ui
+286D	CMD_ARR	GetQuests	COMMAND_PLUGIN		0	kParams_OneOptionalInt	jip_fn_quest
+286E	CMD_ARR	GetQuestObjectives	COMMAND_PLUGIN		0	kParams_OneQuest_OneInt	jip_fn_quest
+286F	CMD_ARR	GetActiveObjectives	COMMAND_PLUGIN		0	nullptr	jip_fn_quest
+2870	CMD_ARR	GetObjectiveTeleportLinks	COMMAND_PLUGIN		0	kParams_OneQuest_OneInt	jip_fn_quest
+2871	CMD_ARR	GetNifBlockParentNodes	COMMAND_ALT_PLUGIN	GetNifParents	1	kParams_OneString_OneOptionalInt	jip_fn_misc_ref
+2872	CMD	ClearMessageQueue	COMMAND_PLUGIN		0	nullptr	jip_fn_ui
+2873	CMD	InitMiniMap	COMMAND_PLUGIN		0	nullptr	jip_fn_minimap
+2874	CMD	UpdateMiniMap	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalInt	jip_fn_minimap
+2875	CMD_FRM	GetCrosshairRefEx	COMMAND_PLUGIN		0	nullptr	jip_fn_misc_ref
+2876	CMD	IsMobile	COMMAND_PLUGIN		1	nullptr	jip_fn_misc_ref
+2877	CMD	IsGrabbable	COMMAND_PLUGIN		1	nullptr	jip_fn_misc_ref
+2878	CMD	SetOnLocationDiscoverEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_miscellaneous
+2879	CMD	AttachLight	COMMAND_PLUGIN		1	kParams_OneString_OneForm_ThreeOptionalFloats	jip_fn_misc_ref
+287A	CMD	RemoveLight	COMMAND_PLUGIN		1	kParams_OneString	jip_fn_misc_ref
+287B	CMD	SetOnCraftingEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_miscellaneous
+287C	CMD	IsInKillCam	CMD_COND_PLUGIN		0	nullptr	jip_fn_miscellaneous
+287D	CMD	SwapObjectLOD	COMMAND_PLUGIN		0	kParams_OneForm_TwoInts	jip_fn_miscellaneous
+287E	CMD	ResetClouds	COMMAND_PLUGIN		0	nullptr	jip_fn_weather
+287F	CMD	GetPluginHeaderVersion	COMMAND_PLUGIN		0	kParams_OneString	jip_fn_utility
+2880	CMD	SetOnHitEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalForm	jip_fn_actor
+2881	CMD	SetSystemColor	COMMAND_PLUGIN		0	kParams_FourInts	jip_fn_ui
+2882	EMPTY						
+2883	CMD	GetArmourPenetrated	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2884	CMD	GetImpactMaterialType	COMMAND_PLUGIN		0	kParams_OneOptionalActorBase	jip_fn_actor
+2885	CMD	SetImpactMaterialType	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalActorBase	jip_fn_actor
+2886	CMD_FRM	GetImpactDataSetForm	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_impact_data
+2887	CMD	SetImpactDataSetForm	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneOptionalForm	jip_fn_impact_data
+2888	CMD	SetQuestFlag	COMMAND_PLUGIN		0	kParams_OneQuest_TwoInts	jip_fn_quest
+2889	CMD	GetQuestFlag	COMMAND_PLUGIN		0	kParams_OneQuest_OneInt	jip_fn_quest
+288A	CMD	PushActorAwayAlt	COMMAND_PLUGIN		1	kParams_OneFloat_ThreeOptionalFloats_OneOptionalInt	jip_fn_actor
+288B	CMD	SetGameHour	COMMAND_PLUGIN		0	kParams_OneFloat	jip_fn_miscellaneous
+288C	CMD	GetGameVolume	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_sound
+288D	CMD	SetGameVolume	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalInt	jip_fn_sound
+288E	CMD	MoveAwayFrom	COMMAND_PLUGIN		1	kParams_OneObjectRef_OneFloat_OneOptionalInt	jip_fn_actor
+288F	CMD_FRM	GetEquippedWeaponPoison	COMMAND_PLUGIN		1	nullptr	jip_fn_inventory
+2890	CMD	SuppressQuestMessages	COMMAND_PLUGIN		0	nullptr	jip_fn_ui
+2891	CMD	TravelToRef	COMMAND_PLUGIN		1	kParams_OneObjectRef_OneOptionalInt	jip_fn_actor
+2892	CMD	GetIsLAA	COMMAND_PLUGIN		0	nullptr	jip_fn_utility
+2893	CMD	fTan	COMMAND_PLUGIN		0	kParams_OneFloat	ln_fn_math
+2894	CMD	fAtan2	COMMAND_PLUGIN		0	kParams_TwoFloats	ln_fn_math
+2895	CMD	DonnerReedKuruParty	COMMAND_ALT_PLUGIN	TheOtherOtherWhiteMeat	1	kParams_OneInt	jip_fn_actor
+2896	CMD	SetArmorClass	COMMAND_PLUGIN		0	kParams_OneObjectID_OneInt	jip_fn_armor
+2897	CMD_FRM	GetEquippedEx	COMMAND_PLUGIN		1	kParams_FormList	jip_fn_actor
+2898	CMD	TestEquippedSlots	COMMAND_PLUGIN		1	kParams_OneObjectID	jip_fn_actor
+2899	CMD	GetWeaponOnHitSetting	COMMAND_PLUGIN		0	kParams_OneObjectID	jip_fn_weapon
+289A	CMD	SetWeaponOnHitSetting	COMMAND_PLUGIN		0	kParams_OneObjectID_OneInt	jip_fn_weapon
+289B	CMD	GetWeaponSemiAutoFireDelay	COMMAND_PLUGIN		0	kParams_OneObjectID_OneInt	jip_fn_weapon
+289C	CMD	SetWeaponSemiAutoFireDelay	COMMAND_PLUGIN		0	kParams_OneObjectID_OneInt_OneFloat	jip_fn_weapon
+289D	CMD	IsStickDisabled	CMD_COND_PLUGIN		0	kParams_OneInt	ln_fn_gamepad
+289E	CMD	SetStickDisabled	COMMAND_PLUGIN		0	kParams_TwoInts	ln_fn_gamepad
+289F	EMPTY						
+28A0	CMD_ARR	GetActiveIMODs	COMMAND_PLUGIN		0	nullptr	jip_fn_imagespace
+28A1	CMD	ToggleItemUnique	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_inventory
+28A2	CMD	SetTextInputExtendedProps	COMMAND_PLUGIN		0	kParams_TwoFloats_ThreeOptionalInts	jip_fn_ui
+28A3	CMD	SetTextInputString	COMMAND_PLUGIN		0	kParams_FormatString	jip_fn_ui
+28A4	CMD	ClickMenuTile	COMMAND_PLUGIN		0	kParams_OneString	jip_fn_ui
+28A5	CMD	StringToActorValue	COMMAND_PLUGIN		0	kParams_OneString	jip_fn_miscellaneous
+28A6	CMD_ARR	GetFactions	COMMAND_PLUGIN		0	kParams_OneOptionalActorBase	jip_fn_actor
+28A7	CMD_ARR	GetBaseItems	COMMAND_PLUGIN		0	kParams_OneOptionalForm	jip_fn_inventory
+28A8	CMD_ARR	GetHit3DData	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_actor
+28A9	CMD_STR	GetWeaponModel	COMMAND_PLUGIN		0	kParams_OneObjectID_OneInt	jip_fn_weapon
+28AA	CMD	SetWeaponModel	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneString	jip_fn_weapon
+28AB	CMD_FRM	GetOwnerOfCell	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_cell
+28AC	CMD	TogglePipBoyLight	COMMAND_PLUGIN		0	kParams_OneOptionalInt	jip_fn_ui
+28AD	CMD	GetHardcoreTracking	CMD_COND_PLUGIN		0	nullptr	jip_fn_miscellaneous
+28AE	CMD	SetPerkLevel	COMMAND_PLUGIN		0	kParams_OnePerk_OneInt	ln_fn_perk
+28AF	CMD_FRM	GetProjectileRefImpactRef	COMMAND_PLUGIN		1	nullptr	jip_fn_projectile
+28B0	CMD	SetOnProjectileImpactEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm	jip_fn_projectile
+28B1	CMD	GetNoteRead	CMD_COND_PLUGIN		0	kParams_OneNote	jip_fn_miscellaneous
+28B2	CMD	SetOnNoteAddedEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_miscellaneous
+28B3	CMD	SetOnUseAidItemEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneForm	jip_fn_inventory
+28B4	CMD	ToggleVanityWheel	COMMAND_PLUGIN		0	kParams_OneOptionalInt	jip_fn_input
+28B5	CMD	ToggleHUDCursor	COMMAND_PLUGIN		0	kParams_OneOptionalInt	jip_fn_ui
+28B6	CMD	GetHardcoreStageThreshold	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_miscellaneous
+28B7	CMD	SetHardcoreStageThreshold	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_miscellaneous
+28B8	CMD_FRM	GetHardcoreStageEffect	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_miscellaneous
+28B9	CMD	SetHardcoreStageEffect	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalSpellItem	jip_fn_miscellaneous
+28BA	CMD	ClearModelAltTextures	COMMAND_PLUGIN		0	kParams_OneObjectID	jip_fn_armor
+28BB	CMD_FRM	GetCreatureSoundsTemplate	COMMAND_PLUGIN		0	kParams_OneActorBase	jip_fn_actor
+28BC	CMD	SetCreatureSoundsTemplate	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalActorBase	jip_fn_actor
+28BD	CMD	GetDebugModeState	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_miscellaneous
+28BE	CMD	GetProjectileRefImpactMaterial	COMMAND_PLUGIN		1	nullptr	jip_fn_projectile
+28BF	CMD	FreezeTime	COMMAND_PLUGIN		0	kParams_OneOptionalInt	jip_fn_miscellaneous
+28C0	CMD	GetConditionDamagePenalty	COMMAND_PLUGIN		0	nullptr	jip_fn_miscellaneous
+28C1	CMD	SetConditionDamagePenalty	COMMAND_PLUGIN		0	kParams_OneFloat	jip_fn_miscellaneous
+28C2	EMPTY						
+28C3	EMPTY						
+28C4	CMD	ToggleBipedSlotVisibility	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalInt	jip_fn_miscellaneous
+28C5	CMD	SetOnReloadWeaponEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_actor
+28C6	CMD	AddTileFromTemplate	COMMAND_PLUGIN		0	kParams_FormatString	jip_fn_ui
+28C7	CMD	UpdatePlayer3D	COMMAND_PLUGIN		0	nullptr	jip_fn_actor
+28C8	CMD_AMB	GetArrayValue	COMMAND_PLUGIN		0	kParams_TwoInts	jip_fn_utility
+28C9	CMD	SetOnRagdollEventHandler	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_actor
+28CA	CMD	PushActorNoRagdoll	COMMAND_PLUGIN		1	kParams_TwoFloats_OneOptionalObjectRef_OneOptionalInt	jip_fn_actor
+28CB	CMD	SetUIFloatGradual	COMMAND_PLUGIN		0	kParams_OneString_ThreeOptionalFloats_OneOptionalInt	jip_fn_ui
+28CC	CMD	CloseActiveMenu	COMMAND_PLUGIN		0	kParams_OneOptionalInt	jip_fn_ui
+28CD	CMD	ReloadCloudTextures	COMMAND_PLUGIN		0	nullptr	jip_fn_weather
+28CE	CMD	ToggleImmortalMode	COMMAND_ALT_PLUGIN	TIMM	0	kParams_OneOptionalInt	jip_fn_miscellaneous
+28CF	CMD_STR	GetBodyPartVATSTarget	COMMAND_PLUGIN		0	kParams_OneInt_OneOptionalActorBase	jip_fn_actor
+28D0	CMD	SetLinearVelocity	COMMAND_PLUGIN		1	kParams_OneString_ThreeFloats_OneOptionalInt	jip_fn_misc_ref
+28D1	CMD_ARR	GetEquippedArmorRefs	COMMAND_PLUGIN		1	nullptr	jip_fn_inventory
+28D2	CMD_STR	GetHitNode	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+28D3	CMD	InsertNode	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFormatString	jip_fn_misc_ref
+28D4	CMD	AttachModel	COMMAND_PLUGIN		0	kParams_OneForm_OneInt_OneFormatString	jip_fn_misc_ref
+28D5	CMD	SynchronizePosition	COMMAND_ALT_PLUGIN	SyncPos	0	kParams_OneOptionalObjectRef_OneOptionalInt_OneOptionalFloat_OneOptionalString	jip_fn_misc_ref
+28D6	CMD	ToggleCameraCollision	COMMAND_PLUGIN		0	kParams_OneOptionalInt	jip_fn_miscellaneous
+28D7	CMD	InitRockItLauncher	COMMAND_PLUGIN		0	kParams_OneObjectID	jip_fn_miscellaneous
+28D8	CMD	ForceClimate	COMMAND_PLUGIN		0	kParams_OneOptionalForm	jip_fn_climate
+28D9	CMD	GetInFactionList	CMD_COND_PLUGIN		1	kParams_FormList	jip_fn_actor
+28DA	CMD	LeveledListHasFormDeep	COMMAND_ALT_PLUGIN	LListHasFormDeep	0	kParams_TwoForms	ln_fn_leveled_list
+28DB	CMD	GetActorTiltAngle	COMMAND_PLUGIN		1	kParams_OneAxis	jip_fn_actor
+28DC	CMD	SetActorTiltAngle	COMMAND_PLUGIN		1	kParams_OneAxis_OneFloat	jip_fn_actor
+28DD	CMD	ReloadCharController	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+28DE	CMD	GetRandomInRange	COMMAND_PLUGIN		0	kParams_TwoInts	jip_fn_utility
+28DF	CMD	ModelHasBlock	COMMAND_PLUGIN		0	kParams_OneForm_OneFormatString	jip_fn_misc_ref
+28E0	CMD	GetGroundMaterial	CMD_COND_PLUGIN		1	nullptr	jip_fn_actor
+28E1	CMD	ShowLevelUpMenuEx	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_ui
+28E2	CMD_FRM	GetRayCastRef	COMMAND_PLUGIN		1	kParams_OneOptionalInt_OneOptionalString	jip_fn_misc_ref
+28E3	CMD	GetRayCastMaterial	COMMAND_PLUGIN		1	kParams_OneOptionalInt_OneOptionalString	jip_fn_misc_ref
+28E4	CMD	FireWeaponEx	COMMAND_PLUGIN		1	kParams_OneObjectID_OneOptionalString	jip_fn_actor
+28E5	CMD	GetArmorEffectiveDT	COMMAND_PLUGIN		1	nullptr	jip_fn_inventory
+28E6	CMD	GetArmorEffectiveDR	COMMAND_PLUGIN		1	nullptr	jip_fn_inventory
+28E7	CMD	GetActorGravityMult	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+28E8	CMD	SetActorGravityMult	COMMAND_PLUGIN		1	kParams_OneFloat	jip_fn_actor
+28E9	CMD	ToggleHitEffects	COMMAND_PLUGIN		0	kParams_OneOptionalInt	jip_fn_miscellaneous
+28EA	CMD	ToggleNoMovementCombat	COMMAND_PLUGIN		0	kParams_OneOptionalInt	jip_fn_miscellaneous
+28EB	CMD	ToggleTeammateKillable	COMMAND_ALT_PLUGIN	SetTeammateKillable	1	kParams_OneOptionalInt	jip_fn_actor
+28EC	CMD	ToggleNoGunWobble	COMMAND_ALT_PLUGIN	SetNoGunWobble	1	kParams_OneOptionalInt	jip_fn_actor
+28ED	CMD	RewardXPExact	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_miscellaneous
+28EE	CMD	GetHitExtendedFlag	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_actor
+28EF	CMD	ClearDeadActors	COMMAND_PLUGIN		0	nullptr	jip_fn_miscellaneous
+28F0	CMD	GetCameraMovement	COMMAND_PLUGIN		0	kParams_TwoScriptVars	jip_fn_miscellaneous
+28F1	CMD_FRM	GetHotkeyItemRef	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_inventory
+28F2	CMD_ARR	GetCollisionNodes	COMMAND_PLUGIN		1	nullptr	jip_fn_misc_ref
+28F3	CMD_ARR	GetChildBlocks	COMMAND_PLUGIN		1	kParams_OneOptionalString_TwoOptionalInts	jip_fn_misc_ref
+28F4	CMD_ARR	GetBlockTextureSet	COMMAND_PLUGIN		1	kParams_OneString	jip_fn_misc_ref
+28F5	CMD_STR	GetReticleNode	COMMAND_PLUGIN		0	kParams_OneOptionalFloat_OneOptionalInt	jip_fn_miscellaneous
+28F6	EMPTY						
+28F7	CMD	EquippedWeaponHasModType	CMD_COND_PLUGIN		1	kParams_OneInt	jip_fn_weapon
+28F8	CMD	GetPosEx	COMMAND_PLUGIN		1	kParams_ThreeScriptVars	jip_fn_misc_ref
+28F9	CMD	GetAngleEx	COMMAND_PLUGIN		1	kParams_ThreeScriptVars_OneOptionalInt	jip_fn_misc_ref
+28FA	CMD	ToggleMouseMovement	COMMAND_PLUGIN		0	kParams_OneOptionalInt	jip_fn_input
+28FB	CMD	SetTextureTransformKey	COMMAND_ALT_PLUGIN	SetTexTransKey	1	kParams_OneString_TwoInts_OneFloat	jip_fn_misc_ref
+28FC	CMD	AttachExtraCamera	COMMAND_ALT_PLUGIN	AttachCam	1	kParams_OneString_OneInt_OneOptionalString_OneOptionalInt	jip_fn_misc_ref
+28FD	CMD	ProjectExtraCamera	COMMAND_ALT_PLUGIN	ProjCam	0	kParams_TwoStrings_OneFloat_ThreeOptionalInts	jip_fn_misc_ref
+28FE	CMD	AttachUIXML	COMMAND_PLUGIN		1	kParams_TwoStrings	jip_fn_ui
+28FF	CMD	AttachUIComponent	COMMAND_PLUGIN		1	kParams_OneString_OneFormatString	jip_fn_ui
+2900	CMD	RenameNifBlock	COMMAND_PLUGIN		1	kParams_TwoStrings_OneOptionalInt	jip_fn_misc_ref
+2901	CMD	RemoveNifBlock	COMMAND_PLUGIN		1	kParams_OneString_OneOptionalInt	jip_fn_misc_ref
+2902	CMD	SetInternalMarker	COMMAND_PLUGIN		0	kParams_OneForm_OneOptionalInt	jip_fn_miscellaneous
+2903	CMD	FailQuest	COMMAND_PLUGIN		0	kParams_OneQuest	jip_fn_quest
+2904	CMD	PlayAnimSequence	COMMAND_PLUGIN		1	kParams_OneString_OneOptionalString	jip_fn_misc_ref
+2905	CMD	RemoveAllPerks	COMMAND_PLUGIN		1	kParams_OneOptionalInt	jip_fn_actor
+2906	CMD	GetPointRayCastPos	COMMAND_PLUGIN		0	kParams_FiveFloats_ThreeScriptVars_OneOptionalInt_OneOptionalFloat	jip_fn_miscellaneous
+2907	CMD	TogglePlayerSneaking	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_miscellaneous
+2908	CMD	GetActorMovementFlags	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+2909	CMD	GetTranslatedPos	COMMAND_PLUGIN		1	kParams_ThreeFloats_ThreeScriptVars	jip_fn_misc_ref
+290A	CMD	GetHitBaseWeaponDamage	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+290B	CMD	GetHitFatigueDamage	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+290C	CMD	RefreshAnimData	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+290D	CMD	GetNifBlockTranslationAlt	COMMAND_ALT_PLUGIN	GetNifTransAlt	1	kParams_OneString_ThreeScriptVars_TwoOptionalInts	jip_fn_misc_ref
+290E	CMD	GetNifBlockRotationAlt	COMMAND_ALT_PLUGIN	GetNifRotAlt	1	kParams_OneString_ThreeScriptVars_TwoOptionalInts	jip_fn_misc_ref
+290F	CMD	GetLinearVelocityAlt	COMMAND_ALT_PLUGIN	GetLinVelAlt	1	kParams_OneString_ThreeScriptVars_OneOptionalInt	jip_fn_misc_ref
+2910	CMD	GetAngularVelocityAlt	COMMAND_ALT_PLUGIN	GetAngVelAlt	1	kParams_OneString_ThreeScriptVars_OneOptionalInt	jip_fn_misc_ref
+2911	CMD	SetAngularVelocityEx	COMMAND_ALT_PLUGIN	SetAngVelEx	1	kParams_OneString_ThreeFloats_OneOptionalInt	jip_fn_misc_ref
+2912	CMD	GetActorVelocityAlt	COMMAND_PLUGIN		1	kParams_ThreeScriptVars_OneOptionalInt	jip_fn_actor
+2913	CMD	GetCollisionObjProperty	COMMAND_ALT_PLUGIN	GetCollProp	1	kParams_OneString_OneInt	jip_fn_misc_ref
+2914	CMD	SetCollisionObjProperty	COMMAND_ALT_PLUGIN	SetCollProp	1	kParams_OneString_OneInt_OneFloat	jip_fn_misc_ref
+2915	CMD	GetCollisionObjLayerType	COMMAND_ALT_PLUGIN	GetCollLayer	1	kParams_OneString	jip_fn_misc_ref
+2916	CMD	SetCollisionObjLayerType	COMMAND_ALT_PLUGIN	SetCollLayer	1	kParams_OneString_OneInt	jip_fn_misc_ref
+2917	CMD	SetRefrModelPath	COMMAND_ALT_PLUGIN	SetRefModel	1	kParams_OneOptionalString	jip_fn_misc_ref
+2918	EMPTY						
+2919	CMD	AttachLine	COMMAND_PLUGIN		1	kParams_TwoStrings_FiveFloats	jip_fn_misc_ref
+291A	CMD	IsSpellTargetList	CMD_COND_PLUGIN		1	kParams_FormList	jip_fn_effect
+291B	CMD	GetExcludedCombatActions	COMMAND_PLUGIN		1	nullptr	jip_fn_actor
+291C	CMD	SetExcludedCombatActions	COMMAND_PLUGIN		1	kParams_OneInt	jip_fn_actor
+291D	CMD	SetArmorConditionPenalty	COMMAND_PLUGIN		0	kParams_OneOptionalFloat	jip_fn_miscellaneous
+291E	CMD	PlaySound3DNode	COMMAND_PLUGIN		1	kParams_OneSound_OneString	jip_fn_sound
+291F	CMD	GetReticlePosAlt	COMMAND_PLUGIN		0	kParams_ThreeScriptVars_OneOptionalInt_OneOptionalFloat	jip_fn_miscellaneous
+2920	CMD	GetLightAmountAtPoint	COMMAND_PLUGIN		0	kParams_ThreeFloats	jip_fn_miscellaneous
+2921	CMD	TransformWorldToLocal	COMMAND_PLUGIN		0	kParams_NineFloats_TwoScriptVars	jip_fn_miscellaneous
+2922	CMD	GetAnglesBetweenPoints	COMMAND_PLUGIN		0	kParams_SixFloats_TwoScriptVars	jip_fn_miscellaneous
+2923	CMD	GetP2PRayCastRange	COMMAND_PLUGIN		0	kParams_SixFloats_OneOptionalInt	jip_fn_miscellaneous
+2924	CMD	WeaponHasModType	COMMAND_PLUGIN		0	kParams_OneForm_OneInt	jip_fn_weapon
+2925	CMD	ProjectUITile	COMMAND_PLUGIN		1	kParams_TwoStrings_FourFloats	jip_fn_ui
+2926	CMD	RotateAroundPoint	COMMAND_PLUGIN		1	kParams_SixFloats_OneOptionalInt	jip_fn_misc_ref
+2927	CMD	GetStringUIDimensions	COMMAND_PLUGIN		0	kParams_OneString_OneInt_OneFloat_ThreeScriptVars	jip_fn_ui
+2928	CMD	ToggleNodeCollision	COMMAND_PLUGIN		1	kParams_OneString_OneInt	jip_fn_misc_ref
+2929	CMD_ARR	GetAllPerks	COMMAND_PLUGIN		1	kParams_TwoOptionalInts	jip_fn_actor
+292A	CMD_FRM	GetEditorPosition	COMMAND_PLUGIN		1	kParams_ThreeScriptVars_ThreeOptionalScriptVars	jip_fn_misc_ref
+292B	CMD_FRM	GetWorldspacePersistentCell	COMMAND_PLUGIN		0	kParams_OneWorldspace	jip_fn_worldspace
+292C	CMD	ScrollMouseWheel	COMMAND_PLUGIN		0	kParams_OneOptionalInt	jip_fn_input
+292D	CMD	GetCellNorthRotation	COMMAND_PLUGIN		0	kParams_OneForm	jip_fn_cell
+292E	CMD	RefHasExtraData	COMMAND_PLUGIN		1	kParams_OneOptionalInt	jip_fn_misc_ref
+292F	CMD_AMB	GetRefExtraData	COMMAND_PLUGIN_EXP		1	kParams_NVSE_OneNum_OneOptionalNum	jip_fn_misc_ref
+2930	CMD	SetRefExtraData	COMMAND_PLUGIN_EXP		1	kParams_NVSE_OneOptionalNum_OneOptionalBasicType	jip_fn_misc_ref
+2931	CMD	TogglePurgeOnUnload	COMMAND_ALT_PLUGIN	TPOU	1	kParams_OneOptionalInt	jip_fn_misc_ref
+2932	CMD_FRM	GetProjectileLight	COMMAND_PLUGIN		0	kParams_OneBoundObject	jip_fn_projectile
+2933	CMD	SetProjectileLight	COMMAND_PLUGIN		0	kParams_OneBoundObject_OneOptionalBoundObject	jip_fn_projectile
+2934	CMD	IsItemUnique	COMMAND_PLUGIN		0	kParams_OneObjectID	jip_fn_inventory
+2935	CMD_ARR	GetMenuItemListRefs	COMMAND_PLUGIN		0	kParams_TwoOptionalInts	jip_fn_ui
+2936	CMD_FRM	GetSelfAsInventoryRef	COMMAND_PLUGIN		1	nullptr	jip_fn_inventory
+2937	CMD	SetDamageToArmorMaxPercent	COMMAND_ALT_PLUGIN	DTAMP	0	kParams_OneOptionalFloat	jip_fn_miscellaneous
+2938	CMD	RegisterSRScript	COMMAND_PLUGIN		0	kParams_OneString	jip_fn_script
+2939	CMD	SetAmmoCasing	COMMAND_PLUGIN		0	kParams_OneObjectID_OneOptionalObjectID	jip_fn_ammo
+293A	CMD	AssignKeyword	COMMAND_PLUGIN		0	kParams_OneForm_OneString	jip_fn_miscellaneous
+293B	CMD	HasKeyword	COMMAND_PLUGIN		0	kParams_OneForm_OneString	jip_fn_miscellaneous
+293C	CMD_ARR	GetKeywordForms	COMMAND_PLUGIN		0	kParams_OneString	jip_fn_miscellaneous
+293D	CMD	ToggleDepthClear	COMMAND_PLUGIN		0	kParams_OneInt	jip_fn_miscellaneous
+293E	CMD	HasKeywordCond	CMD_COND_ONLY		1	kParams_OneInt	jip_fn_miscellaneous
+293F	CMD	GetStringHash	COMMAND_ALT_PLUGIN	GetHash	0	kParams_OneString_TwoOptionalInts	jip_fn_string
+2940	CMD	CalculateShotsPerSec	COMMAND_PLUGIN		1	kParams_OneForm	jip_fn_weapon
+2941	CMD	IsAttackQueued	CMD_COND_PLUGIN		0	nullptr	jip_fn_weapon
+2942	CMD	GetReticleTargetLimb	COMMAND_PLUGIN		0	kParams_OneOptionalFloat	jip_fn_miscellaneous

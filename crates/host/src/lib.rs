@@ -120,6 +120,9 @@ impl Host {
         // registered. Vanilla content calls no extender opcode, and every change it makes to
         // vanilla commands is a row.
         nvse::install(&mut engine);
+        // JIP LN NVSE, xNVSE's plugin, right after it: its command slots, with no command built
+        // yet, and answering "not installed" until the commands mods call are in (`crates/jip`).
+        jip::install(&mut engine);
         eprintln!("{}", choice.describe());
         if let Some(note) = &choice.ini_note {
             eprintln!("{note}");

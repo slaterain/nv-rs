@@ -6,7 +6,8 @@
 //! - I-2 [`table`]: the script command table in guest memory, as xNVSE builds it (the exe's 0x280
 //!   records, xNVSE's padding to `0x1400`, its 654 commands), and the engine's
 //!   [`ScriptTables`](engine_core::extend::ScriptTables) moved onto it, the analogue of xNVSE
-//!   patching the exe's 19 immediates.
+//!   patching the exe's 19 immediates; a plugin built in (`crates/jip`) grows it to its own
+//!   opcodes and writes its records there, as xNVSE registers a plugin DLL's commands.
 //! - I-3 [`context`]: the script context xNVSE keeps per thread around `ScriptRunner::Run` and
 //!   `InitActionList`, and the line `EvaluateLine` is running.
 //! - I-4 [`args`]: xNVSE's argument reader (`ExtractArgsEx`), the one its own commands use and,
@@ -90,6 +91,11 @@ use engine_core::prelude::*;
 /// carries it ([`cosave::NVSE_VERSION`]); change it here when the built-in catches up with a newer
 /// release.
 pub const VERSION: (u32, u32, u32) = (6, 4, 9);
+
+/// [`VERSION`] packed as xNVSE gives it to its plugins (`NVSEInterface::nvseVersion`,
+/// `PACKED_NVSE_VERSION` (xNVSE), `MAKE_NEW_VEGAS_VERSION(6, 4, 9)`): `0x06040090`.
+pub const PACKED_VERSION: u32 =
+    ((VERSION.0 & 0xff) << 24) | ((VERSION.1 & 0xff) << 16) | ((VERSION.2 & 0xfff) << 4);
 
 /// The eight words a command handler gets (`COMMAND_ARGS` (xNVSE)): the exe's `EvaluateLine`
 /// (`005e1550`) and the operand reader (`005ac7a0`) call the handler word of a `CommandInfo`

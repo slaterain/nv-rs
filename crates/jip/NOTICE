@@ -1,0 +1,17 @@
+This crate translates parts of JIP LN NVSE, the largest plugin of xNVSE (the New Vegas Script
+Extender), into Rust (ADR-0016), with its authors' permission (the maintainer, 2026-11-03),
+JIP's own code and the part that came from the former lutana plugin included. Source: JIP LN
+NVSE 57.30, https://github.com/jazzisparis/JIP-LN-NVSE, commit 5a30ac4. No C++ is included.
+
+Credits: JIP LN NVSE is written by jazzisparis. Its block of commands at opcode 0x2200
+(`functions_ln/`, `internal/lutana.h`) began as the lutana NVSE plugin (`lutana_nvse`), whose
+author JIP's source does not name; JIP still answers to that plugin's name.
+
+JIP LN NVSE is licensed under the GNU General Public License, version 3 (its LICENSE file, the
+same text as this repository's LICENSE), and this translation is distributed under it.
+
+JIP's `nvse/` folder holds NVSE's headers as xNVSE has them; NVSE's and xNVSE's credits and
+notices are in crates/nvse/NOTICE.
+
+The lists in `data/` are facts read from JIP's source and from its shipped DLL (jip_nvse.dll
+57.30): names, opcodes, parameter types and flags. No bytes of the DLL are included.

@@ -45,6 +45,7 @@ fn run(e: &mut Engine, opcode: u32, args: &[Vec<u8>]) -> f64 {
 fn the_version_is_xnvse_6_4_9_in_one_place() {
     assert_eq!(crate::VERSION, (6, 4, 9));
     assert_eq!(crate::cosave::NVSE_VERSION, (6, 4));
+    assert_eq!(crate::PACKED_VERSION, 0x0604_0090, "what plugins are given");
 }
 
 /// `GetNVSEVersion`, `GetNVSERevision` and `GetNVSEBeta` answer 6, 4 and 9 as commands and as
