@@ -167,7 +167,7 @@ fn the_colours() {
     assert_eq!(get(&mut e, &[r(1), n(3), n(6)]), 0.0, "time 6");
     // Set.
     call(&mut e, 0x265c, &[r(1), n(9), n(5), n(255_000_001)]);
-    assert_eq!(e.mem.u32(WEATHER + 0x108 + 59 * 4), 0x0100_00ff);
+    assert_eq!(e.mem.u32(WEATHER + 0x108 + 59 * 4), 0x0001_00ff);
     call(&mut e, 0x265c, &[r(1), n(2), n(0), n(1_002_003), n(3)]);
     assert_eq!(e.mem.u32(WEATHER + 0x68 + 18 * 4), 0x0003_0201);
     call(&mut e, 0x265c, &[r(1), n(1), n(0), n(255_255_256)]);

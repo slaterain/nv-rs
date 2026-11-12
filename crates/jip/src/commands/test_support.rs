@@ -6,7 +6,7 @@
 //! Memory: forms from [`FORMS`], the stand-in heap from [`HEAP`], the vtables at their real
 //! addresses (`TESModel`'s `0101CF44`, `TESModelTextureSwap`'s `0101D124`, `Clouds`' `0104EC08`).
 
-pub use crate::test_support::{call, console, DATA, RESULT, SCRIPT};
+pub use crate::test_support::{call, console, RESULT, SCRIPT};
 use engine_core::prelude::*;
 use std::cell::RefCell;
 

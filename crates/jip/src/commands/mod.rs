@@ -37,6 +37,11 @@ pub fn built() -> usize {
     ALL.iter().map(|list| list.len()).sum()
 }
 
+/// Whether `opcode` is a built command.
+pub fn is_built(opcode: u32) -> bool {
+    ALL.iter().any(|list| list.iter().any(|&(o, _)| o == opcode))
+}
+
 /// Gives every built command its handler.
 pub fn install(e: &mut Engine) {
     for list in ALL {
@@ -255,21 +260,60 @@ mod tests {
         assert_eq!(cvttsd2si(-2.9), -2);
         assert_eq!(cvttsd2si(f64::NAN), i32::MIN);
         assert_eq!(cvttsd2si(3e9), i32::MIN);
-        assert_eq!(cvttsd2si(-2_147_483_648.5), i32::MIN + 0);
+        assert_eq!(cvttsd2si(-2_147_483_648.5), i32::MIN);
         assert_eq!(cvttss2si(255.9), 255);
         assert_eq!(cvtd2ul(4_294_967_295.9), u32::MAX);
         assert_eq!(cvtd2ul(-1.0), u32::MAX);
         assert_eq!(cvtd2ul(f64::NAN), 0);
     }
 
+    /// Each module lists only commands of its own JIP source file, once each, and the count is
+    /// README's ("JIP LN: 63 of 1,118").
+    #[test]
+    fn each_module_holds_its_own_file() {
+        let files = [
+            "jip_fn_body_part_data",
+            "jip_fn_climate",
+            "jip_fn_destruction_data",
+            "jip_fn_weather",
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for (list, file) in ALL.iter().zip(files) {
+            for &(opcode, _) in list.iter() {
+                let slot = crate::table::slot(opcode).expect("a JIP slot");
+                assert!(slot.file.ends_with(file), "{opcode:04x} {}", slot.name);
+                assert!(seen.insert(opcode), "{opcode:04x} listed twice");
+            }
+        }
+        assert_eq!(ALL.len(), files.len());
+        assert_eq!(built(), 63);
+    }
+
+    /// A built command has its execute and its name in its record; an unbuilt one has neither.
+    #[test]
+    fn built_commands_are_in_the_table() {
+        let e = test_support::engine();
+        let execute = |e: &Engine, op: u32| crate::test_support::execute_of(e, op);
+        assert_eq!(execute(&e, 0x266b), nvse::table::execute_address(0x266b));
+        let record = nvse::table::record_of(&e, 0x266b);
+        assert_eq!(
+            nvse::table::guest_text(&e, e.mem.u32(record)),
+            b"GetClimateSunTexture"
+        );
+        // ForceClimate waits for JIP's hook: no handler, no name while JIP is not installed.
+        assert_eq!(execute(&e, 0x28d8), 0);
+        let record = nvse::table::record_of(&e, 0x28d8);
+        assert_eq!(nvse::table::guest_text(&e, e.mem.u32(record)), b"");
+    }
+
     /// `kBaseComponentOffsets`: a weapon (type 0x28, `0x0F2D1A0C`) has its destructible
-    /// component at 0x1A words; a climate (0x36) has none.
+    /// component at 0x2D words (byte 2 of the entry); a climate (0x36) has none.
     #[test]
     fn destructible_components_by_type() {
-        let mut e = test_support::engine();
+        let e = test_support::engine();
         let form = 0x0200_0000;
         e.mem.set_u8(form + 4, 0x28);
-        assert_eq!(destructible_form(&e, form), form + 0x1a * 4);
+        assert_eq!(destructible_form(&e, form), form + 0x2d * 4);
         e.mem.set_u8(form + 4, 0x36);
         assert_eq!(destructible_form(&e, form), 0);
         // A negative byte (type 0x22, `0x0CFE00FB`: byte 2 is 0xFE) goes back two words.

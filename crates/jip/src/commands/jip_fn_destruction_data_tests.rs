@@ -1,5 +1,5 @@
 //! Tests of the destruction data commands. The object is a weapon (form type 0x28, whose
-//! destructible component JIP's `kBaseComponentOffsets` puts at word 0x1A, `+0x68`); its data
+//! destructible component JIP's `kBaseComponentOffsets` puts at word 0x2D, `+0xB4`); its data
 //! and stages are built at the offsets of JIP's header and the engine's own layouts
 //! (`DestructibleObjectData`, `DestructibleObjectStage`). Expected answers come from JIP's C++.
 
@@ -7,7 +7,7 @@ use super::*;
 use crate::commands::test_support::*;
 
 const WEAPON: u32 = FORMS + 0x1000;
-const DEST: u32 = WEAPON + 0x68;
+const DEST: u32 = WEAPON + 0xb4;
 const DATA: u32 = FORMS + 0x2000;
 const STAGES: u32 = FORMS + 0x2100;
 const STAGE0: u32 = FORMS + 0x2200;
@@ -136,7 +136,7 @@ fn the_stage_replacement() {
     assert_eq!(res, 1.0);
     let swap = e.mem.u32(STAGE1 + 0x14);
     assert_ne!(swap, 0);
-    assert_eq!(e.mem.u32(swap), TES_MODEL_TEXTURE_SWAP_VTBL);
+    assert_eq!(e.mem.u32(swap), 0x0101_d124, "TESModelTextureSwap's vtable");
     assert_eq!(e.mem.bytes(swap + 0xc, 0x14), vec![0; 0x14]);
     assert_eq!(text_at(&e, swap + 4), b"broken.nif");
     assert_eq!(calls()[0], (0x00aa_3e40, vec![0x011f_6238, 0x20]));
