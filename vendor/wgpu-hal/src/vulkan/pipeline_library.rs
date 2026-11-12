@@ -46,11 +46,12 @@
 //! (`VK_PIPELINE_LAYOUT_CREATE_INDEPENDENT_SETS_BIT_EXT`), so a shader's library does not depend on
 //! the shader it is paired with when the bind groups are separate per stage.
 //!
-//! Render pipelines this cannot make (a shader module wgpu-hal keeps as naga IR, mesh shaders,
-//! multiview, a layout with a group whose bindings no draw stage sees) are made whole, as published
-//! wgpu-hal makes them, with the same layout. A pipeline layout's sets are bound for draws with
-//! its independent-sets variant ([`super::PipelineLayout::raw_for`]): layouts with and without the
-//! flag are not compatible, and compute pipelines cannot use the flag.
+//! A pipeline without a fragment shader links DXVK's empty one. Render pipelines this cannot make
+//! (mesh shaders, multiview, a fragment shader run per sample on a multisampled target, a layout
+//! with a group whose bindings no draw stage sees, a library the driver refuses) are made whole,
+//! as published wgpu-hal makes them, with the same layout. A pipeline layout's sets are bound for
+//! draws with its independent-sets variant ([`super::PipelineLayout::raw_for`]): layouts with and
+//! without the flag are not compatible, and compute pipelines cannot use the flag.
 
 // Our code in a vendored crate: no CI step lints it (`vendor/` is out of the workspace), and as a
 // path dependency its warnings are not capped, so a warning here fails every build.
@@ -82,8 +83,10 @@ pub(super) struct LayoutParts {
     /// The groups without a binding (bit per group index): left out of every layout here, so their
     /// (empty) descriptor sets are not bound for draws ([`super::PipelineLayout::skips_group`]).
     empty_groups: u32,
-    vertex: Arc<StageLayout>,
-    fragment: Arc<StageLayout>,
+    /// The layouts the vertex and pixel shader libraries are made with; `None` where a group has
+    /// bindings no draw stage sees (the union of the libraries' layouts would then lack a set
+    /// `independent` has): its render pipelines are made whole, with `independent`.
+    stages: Option<[Arc<StageLayout>; 2]>,
     device: ash::Device,
 }
 
@@ -117,10 +120,10 @@ struct LayoutKey {
 }
 
 impl LayoutParts {
-    /// The parts of a new pipeline layout, or `None` where its render pipelines are made whole:
-    /// a device without libraries, or a group with bindings no draw stage can see (the
-    /// union of the libraries' layouts would then differ from the layout descriptor sets are
-    /// bound with).
+    /// The parts of a new pipeline layout on a device with libraries (`None` on one without).
+    /// Every layout has the independent-sets variant, so that the sets of all draws are bound
+    /// with compatible layouts, linked pipelines or not (layouts with and without the flag are
+    /// not); [`LayoutParts::stages`] where its pipelines can be linked.
     pub(super) fn new(
         device: &super::DeviceShared,
         desc: &crate::PipelineLayoutDescriptor<super::BindGroupLayout>,
@@ -136,16 +139,14 @@ impl LayoutParts {
         let mut groups: Vec<Option<(vk::DescriptorSetLayout, Arc<[wgt::BindGroupLayoutEntry]>)>> =
             Vec::with_capacity(desc.bind_group_layouts.len());
         let mut empty_groups = 0;
+        let mut linkable = true;
         for (index, bgl) in desc.bind_group_layouts.iter().enumerate() {
             match bgl {
                 Some(bgl) if !bgl.entries.is_empty() => {
-                    if !bgl
+                    linkable &= bgl
                         .entries
                         .iter()
-                        .any(|e| e.visibility.intersects(draw_stages))
-                    {
-                        return Ok(None);
-                    }
+                        .any(|e| e.visibility.intersects(draw_stages));
                     groups.push(Some((bgl.raw, Arc::from(&bgl.entries[..]))));
                 }
                 _ => {
@@ -186,8 +187,14 @@ impl LayoutParts {
                 device: device.raw.clone(),
             }))
         };
-        let vertex = stage(wgt::ShaderStages::VERTEX)?;
-        let fragment = stage(wgt::ShaderStages::FRAGMENT)?;
+        let stages = if linkable {
+            Some([
+                stage(wgt::ShaderStages::VERTEX)?,
+                stage(wgt::ShaderStages::FRAGMENT)?,
+            ])
+        } else {
+            None
+        };
         let all: Vec<vk::DescriptorSetLayout> = groups
             .iter()
             .map(|g| {
@@ -198,8 +205,7 @@ impl LayoutParts {
         Ok(Some(Self {
             independent: create(&all)?,
             empty_groups,
-            vertex,
-            fragment,
+            stages,
             device: device.raw.clone(),
         }))
     }
@@ -325,6 +331,41 @@ impl DynamicState {
     }
 }
 
+/// The groups of dynamic state a bind sets ([`DynamicState::groups_to_set`]), as bits.
+const CULL: u8 = 1;
+const BIAS: u8 = 2;
+const DEPTH: u8 = 4;
+const STENCIL: u8 = 8;
+
+impl DynamicState {
+    /// The groups of state to set when a pipeline with these states is bound after one with
+    /// `old` (`None`: nothing is known of what the command buffer has, so all of them): each group
+    /// whose values differ. Every field is in exactly one group.
+    fn groups_to_set(old: Option<&Self>, new: &Self) -> u8 {
+        let Some(old) = old else {
+            return CULL | BIAS | DEPTH | STENCIL;
+        };
+        let mut groups = 0;
+        if (old.cull_mode, old.front_face) != (new.cull_mode, new.front_face) {
+            groups |= CULL;
+        }
+        // By the bits, so that a NaN factor counts as a change once, not on every bind.
+        let bias = |s: &Self| (s.depth_bias_enable, s.depth_bias.map(f32::to_bits));
+        if bias(old) != bias(new) {
+            groups |= BIAS;
+        }
+        let depth = |s: &Self| (s.depth_test, s.depth_write, s.depth_compare);
+        if depth(old) != depth(new) {
+            groups |= DEPTH;
+        }
+        let stencil = |s: &Self| (s.stencil_test, s.stencil_front, s.stencil_back);
+        if stencil(old) != stencil(new) {
+            groups |= STENCIL;
+        }
+        groups
+    }
+}
+
 impl super::CommandEncoder {
     /// After a render pipeline is bound: its dynamic states set where they differ from what this
     /// command buffer has (DXVK's `DxvkContext::updateDynamicState`). A whole pipeline sets every
@@ -335,43 +376,24 @@ impl super::CommandEncoder {
             return;
         };
         let old = self.dynamic_state.replace(new);
-        let changed =
-            |part: fn(&DynamicState) -> [u32; 4]| old.is_none_or(|o| part(&o) != part(&new));
+        let groups = DynamicState::groups_to_set(old.as_ref(), &new);
         let (raw, cb) = (&self.device.raw, self.active);
         unsafe {
-            if changed(|s| [s.cull_mode.as_raw(), s.front_face.as_raw() as u32, 0, 0]) {
+            if groups & CULL != 0 {
                 raw.cmd_set_cull_mode(cb, new.cull_mode);
                 raw.cmd_set_front_face(cb, new.front_face);
             }
-            if changed(|s| {
-                let [c, cl, sl] = s.depth_bias;
-                [
-                    u32::from(s.depth_bias_enable),
-                    c.to_bits(),
-                    cl.to_bits(),
-                    sl.to_bits(),
-                ]
-            }) {
+            if groups & BIAS != 0 {
                 raw.cmd_set_depth_bias_enable(cb, new.depth_bias_enable);
                 let [constant, clamp, slope] = new.depth_bias;
                 raw.cmd_set_depth_bias(cb, constant, clamp, slope);
             }
-            if changed(|s| {
-                [
-                    u32::from(s.depth_test),
-                    u32::from(s.depth_write),
-                    s.depth_compare.as_raw() as u32,
-                    0,
-                ]
-            }) {
+            if groups & DEPTH != 0 {
                 raw.cmd_set_depth_test_enable(cb, new.depth_test);
                 raw.cmd_set_depth_write_enable(cb, new.depth_write);
                 raw.cmd_set_depth_compare_op(cb, new.depth_compare);
             }
-            if old.is_none_or(|o| {
-                (o.stencil_test, o.stencil_front, o.stencil_back)
-                    != (new.stencil_test, new.stencil_front, new.stencil_back)
-            }) {
+            if groups & STENCIL != 0 {
                 raw.cmd_set_stencil_test_enable(cb, new.stencil_test);
                 for (face, s) in [
                     (vk::StencilFaceFlags::FRONT, new.stencil_front),
@@ -516,11 +538,43 @@ struct FragmentOutputKey {
 /// at once wait for one compile (DXVK keeps a lock per library).
 type Slot = Arc<OnceLock<Option<Arc<Library>>>>;
 
+/// Why a library was not made: `Transient` for what a later try may not meet (memory ran out,
+/// the device was lost), `Lasting` for the rest (the driver or the stage refuses this key).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Refused {
+    Lasting,
+    Transient,
+}
+
+impl From<vk::Result> for Refused {
+    fn from(e: vk::Result) -> Self {
+        match e {
+            vk::Result::ERROR_OUT_OF_HOST_MEMORY
+            | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY
+            | vk::Result::ERROR_DEVICE_LOST => Self::Transient,
+            _ => Self::Lasting,
+        }
+    }
+}
+
+impl From<crate::PipelineError> for Refused {
+    fn from(e: crate::PipelineError) -> Self {
+        match e {
+            crate::PipelineError::Device(_) => Self::Transient,
+            _ => Self::Lasting,
+        }
+    }
+}
+
 /// The device's libraries and linked pipelines, and what making them cost.
 #[derive(Default)]
 pub(super) struct Cache {
     maps: Mutex<Maps>,
     stats: Stats,
+    /// A test hook: the kind of library refused as if the driver had (`NV_WGPU_LIBRARIES_TEST_REFUSE`
+    /// = `vertex-input`, `vertex-shader`, `pixel-shader` or `output`), so that every pipeline takes the
+    /// whole path on a device with libraries.
+    refuse: Option<usize>,
 }
 
 #[derive(Default)]
@@ -561,6 +615,23 @@ fn add_time(total: &AtomicU64, max: &AtomicU64, ns: u64) {
 }
 
 impl Cache {
+    /// A device's cache; reads the test hook's variable ([`Cache::refuse`]).
+    pub(super) fn new() -> Self {
+        let refuse = std::env::var("NV_WGPU_LIBRARIES_TEST_REFUSE")
+            .ok()
+            .and_then(|v| match v.trim() {
+                "vertex-input" => Some(VERTEX_INPUT),
+                "vertex-shader" => Some(PRE_RASTERIZATION),
+                "pixel-shader" => Some(FRAGMENT_SHADER),
+                "output" => Some(FRAGMENT_OUTPUT),
+                _ => None,
+            });
+        Self {
+            refuse,
+            ..Self::default()
+        }
+    }
+
     /// Forgets the shader libraries of a module that is being destroyed (pipelines linked from
     /// them keep them until they go).
     pub(super) fn forget_module(&self, module: ModuleKey) {
@@ -611,33 +682,54 @@ impl Cache {
     }
 
     /// The library under `key` in `map`, made by `make` if new (on this thread; others asking
-    /// for it wait). `made` is set when it was not there yet (made here or waited for).
+    /// for it wait). `made` is set when it was not there yet (made here or waited for). A
+    /// refusal is kept, so the key is not compiled again, unless it was transient: then the slot
+    /// is taken out again (if the map still holds it), and a later pipeline tries again.
     fn library<K: Clone + Eq + core::hash::Hash>(
         &self,
         kind: usize,
         map: fn(&mut Maps) -> &mut FastHashMap<K, Slot>,
         key: &K,
         made: &mut bool,
-        make: impl FnOnce() -> Option<Library>,
+        make: impl FnOnce() -> Result<Library, Refused>,
     ) -> Option<Arc<Library>> {
+        if self.refuse == Some(kind) {
+            return None;
+        }
         let slot = {
             let mut maps = self.maps.lock();
             Arc::clone(map(&mut maps).entry(key.clone()).or_default())
         };
         *made |= slot.get().is_none();
-        slot.get_or_init(|| {
-            let start = Instant::now();
-            let library = make().map(Arc::new);
-            let ns = start.elapsed().as_nanos() as u64;
-            self.stats.libraries[kind].fetch_add(1, Ordering::Relaxed);
-            add_time(
-                &self.stats.library_ns[kind],
-                &self.stats.library_max_ns[kind],
-                ns,
-            );
-            library
-        })
-        .clone()
+        let mut transient = false;
+        let library = slot
+            .get_or_init(|| {
+                let start = Instant::now();
+                let library = match make() {
+                    Ok(library) => Some(Arc::new(library)),
+                    Err(refused) => {
+                        transient = refused == Refused::Transient;
+                        None
+                    }
+                };
+                let ns = start.elapsed().as_nanos() as u64;
+                self.stats.libraries[kind].fetch_add(1, Ordering::Relaxed);
+                add_time(
+                    &self.stats.library_ns[kind],
+                    &self.stats.library_max_ns[kind],
+                    ns,
+                );
+                library
+            })
+            .clone();
+        if transient {
+            let mut maps = self.maps.lock();
+            let map = map(&mut maps);
+            if map.get(key).is_some_and(|s| Arc::ptr_eq(s, &slot)) {
+                map.remove(key);
+            }
+        }
+        library
     }
 }
 
@@ -653,6 +745,7 @@ type Desc<'a> = crate::RenderPipelineDescriptor<
 pub(super) fn create(device: &super::Device, desc: &Desc<'_>) -> Option<super::RenderPipeline> {
     let shared = &device.shared;
     let parts = desc.layout.libraries.as_ref()?;
+    let [vertex_layout, fragment_layout] = parts.stages.as_ref()?;
     let crate::VertexProcessor::Standard {
         vertex_buffers,
         vertex_stage,
@@ -664,6 +757,12 @@ pub(super) fn create(device: &super::Device, desc: &Desc<'_>) -> Option<super::R
         return None;
     }
     let fragment_stage = desc.fragment_stage.as_ref();
+    // A fragment shader run per sample needs the multisample state in its library
+    // (VUID-VkGraphicsPipelineCreateInfo-pMultisampleState-06629), which ours leave to the output
+    // library: on a multisampled target such a pipeline is made whole.
+    if desc.multisample.count > 1 && fragment_stage.is_some_and(runs_per_sample) {
+        return None;
+    }
     let start = Instant::now();
     let cache_raw = desc.cache.map_or(vk::PipelineCache::null(), |c| c.raw);
     let cache = &shared.pipeline_libraries;
@@ -682,7 +781,7 @@ pub(super) fn create(device: &super::Device, desc: &Desc<'_>) -> Option<super::R
         module: ModuleKey::of(Some(vertex_stage)),
         entry_point: vertex_stage.entry_point.into(),
         constants: constants_key(Some(vertex_stage)),
-        layout: parts.vertex.key.clone(),
+        layout: vertex_layout.key.clone(),
         polygon_mode: conv::map_polygon_mode(desc.primitive.polygon_mode),
         unclipped_depth: desc.primitive.unclipped_depth,
         conservative: desc.primitive.conservative,
@@ -699,7 +798,7 @@ pub(super) fn create(device: &super::Device, desc: &Desc<'_>) -> Option<super::R
                 &vs_key,
                 vertex_stage,
                 desc,
-                &parts.vertex,
+                vertex_layout,
             )
         },
     )?;
@@ -708,7 +807,7 @@ pub(super) fn create(device: &super::Device, desc: &Desc<'_>) -> Option<super::R
         module: ModuleKey::of(fragment_stage),
         entry_point: fragment_stage.map_or("", |s| s.entry_point).into(),
         constants: constants_key(fragment_stage),
-        layout: parts.fragment.key.clone(),
+        layout: fragment_layout.key.clone(),
         polygon_mode: vk::PolygonMode::FILL,
         unclipped_depth: false,
         conservative: false,
@@ -718,7 +817,7 @@ pub(super) fn create(device: &super::Device, desc: &Desc<'_>) -> Option<super::R
         |m| &mut m.fragment_shader,
         &fs_key,
         &mut made,
-        || make_fragment_shader(device, cache_raw, fragment_stage, desc, &parts.fragment),
+        || make_fragment_shader(device, cache_raw, fragment_stage, desc, fragment_layout),
     )?;
 
     let fo_key = fragment_output_key(shared, desc);
@@ -767,6 +866,41 @@ pub(super) fn create(device: &super::Device, desc: &Desc<'_>) -> Option<super::R
             desc.depth_stencil.as_ref(),
         )),
         linked: Some(linked),
+    })
+}
+
+/// Whether a fragment stage runs per sample: an input at the sample index, or one interpolated
+/// at each sample. A module of SPIR-V wgpu-hal does not read is taken to.
+fn runs_per_sample(stage: &crate::ProgrammableStage<'_, super::ShaderModule>) -> bool {
+    let super::ShaderModule::Intermediate { naga_shader, .. } = stage.module else {
+        return true;
+    };
+    let module = &naga_shader.module;
+    let Some(entry) = module
+        .entry_points
+        .iter()
+        .find(|e| e.stage == naga::ShaderStage::Fragment && e.name == stage.entry_point)
+    else {
+        return true;
+    };
+    let per_sample = |binding: &Option<naga::Binding>| {
+        matches!(
+            binding,
+            Some(naga::Binding::BuiltIn(naga::BuiltIn::SampleIndex))
+                | Some(naga::Binding::Location {
+                    sampling: Some(naga::Sampling::Sample),
+                    ..
+                })
+        )
+    };
+    entry.function.arguments.iter().any(|arg| {
+        per_sample(&arg.binding)
+            || match module.types[arg.ty].inner {
+                naga::TypeInner::Struct { ref members, .. } => {
+                    members.iter().any(|m| per_sample(&m.binding))
+                }
+                _ => false,
+            }
     })
 }
 
@@ -853,22 +987,23 @@ fn fragment_output_key(device: &super::DeviceShared, desc: &Desc<'_>) -> Fragmen
     }
 }
 
-/// `vkCreateGraphicsPipelines` for one pipeline; `None` (and a log line) if the driver refuses.
+/// `vkCreateGraphicsPipelines` for one pipeline; the driver's error (and a log line) if it
+/// refuses.
 fn create_pipeline(
     device: &super::DeviceShared,
     cache: vk::PipelineCache,
     info: &vk::GraphicsPipelineCreateInfo<'_>,
     what: &str,
-) -> Option<vk::Pipeline> {
+) -> Result<vk::Pipeline, vk::Result> {
     match unsafe {
         device
             .raw
             .create_graphics_pipelines(cache, core::slice::from_ref(info), None)
     } {
-        Ok(mut raw) => raw.pop(),
+        Ok(mut raw) => raw.pop().ok_or(vk::Result::ERROR_UNKNOWN),
         Err((_, e)) => {
             log::warn!("Vulkan pipeline library: the {what} was refused ({e:?})");
-            None
+            Err(e)
         }
     }
 }
@@ -891,7 +1026,7 @@ fn make_vertex_input(
     device: &super::DeviceShared,
     cache: vk::PipelineCache,
     key: &VertexInputKey,
-) -> Option<Library> {
+) -> Result<Library, Refused> {
     let bindings: Vec<vk::VertexInputBindingDescription> = key
         .bindings
         .iter()
@@ -930,7 +1065,7 @@ fn make_vertex_input(
         .base_pipeline_index(-1)
         .push_next(&mut library_info);
     let raw = create_pipeline(device, cache, &info, "vertex input library")?;
-    Some(library(raw, None, device))
+    Ok(library(raw, None, device))
 }
 
 /// The module `compile_stage` wrote for a naga-IR stage, once the library is made from it (a library
@@ -952,12 +1087,11 @@ fn make_pre_rasterization(
     stage: &crate::ProgrammableStage<'_, super::ShaderModule>,
     desc: &Desc<'_>,
     layout: &Arc<StageLayout>,
-) -> Option<Library> {
+) -> Result<Library, Refused> {
     // The stage as wgpu-hal makes it for a whole pipeline (SPIR-V from naga IR for this layout,
     // or its own module); a stage it cannot make is left to that path, which reports why.
-    let compiled = device
-        .compile_stage(stage, naga::ShaderStage::Vertex, &desc.layout.binding_map)
-        .ok()?;
+    let compiled =
+        device.compile_stage(stage, naga::ShaderStage::Vertex, &desc.layout.binding_map)?;
     let stages = [compiled.create_info];
     let dynamic_states = [
         vk::DynamicState::VIEWPORT,
@@ -995,30 +1129,81 @@ fn make_pre_rasterization(
         .push_next(&mut rendering);
     let raw = create_pipeline(&device.shared, cache, &info, "vertex shader library");
     destroy_temporary(device, &compiled);
-    Some(library(raw?, Some(layout), &device.shared))
+    Ok(library(raw?, Some(layout), &device.shared))
 }
 
+/// A fragment shader that does nothing (SPIR-V 1.0: `OpEntryPoint Fragment "main"`,
+/// `OriginUpperLeft`, an empty body): DXVK's stand-in for a pipeline without one, as a fragment
+/// shader library must have a fragment shader (VUID-VkGraphicsPipelineCreateInfo-flags-06644).
+/// With no colour targets (wgpu gives a pipeline without a fragment stage none) it changes nothing:
+/// depth and stencil are tested and written as without a shader.
+const EMPTY_FRAGMENT_SHADER: [u32; 32] = [
+    0x0723_0203,
+    0x0001_0000,
+    0,
+    5,
+    0, // header: magic, version 1.0, generator, bound, schema
+    0x0002_0011,
+    1, // OpCapability Shader
+    0x0003_000E,
+    0,
+    1, // OpMemoryModel Logical GLSL450
+    0x0005_000F,
+    4,
+    3,
+    0x6E69_616D,
+    0, // OpEntryPoint Fragment %3 "main"
+    0x0003_0010,
+    3,
+    7, // OpExecutionMode %3 OriginUpperLeft
+    0x0002_0013,
+    1, // %1 = OpTypeVoid
+    0x0003_0021,
+    2,
+    1, // %2 = OpTypeFunction %1
+    0x0005_0036,
+    1,
+    3,
+    0,
+    2, // %3 = OpFunction %1 None %2
+    0x0002_00F8,
+    4,           // %4 = OpLabel
+    0x0001_00FD, // OpReturn
+    0x0001_0038, // OpFunctionEnd
+];
+
 /// DXVK's `DxvkShaderPipelineLibrary::compileFragmentShaderPipeline`: the depth and stencil tests
-/// dynamic (depth bounds stay off, as wgpu never tests them); no multisample state, as no wgpu
-/// pipeline here asks for sample shading. A pipeline without a fragment shader gets a library
-/// without one.
+/// dynamic (depth bounds stay off, as wgpu never tests them); no multisample state, so a fragment
+/// shader that runs per sample is not linked ([`create`]). A pipeline without a fragment shader
+/// gets [`EMPTY_FRAGMENT_SHADER`], as in DXVK.
 fn make_fragment_shader(
     device: &super::Device,
     cache: vk::PipelineCache,
     stage: Option<&crate::ProgrammableStage<'_, super::ShaderModule>>,
     desc: &Desc<'_>,
     layout: &Arc<StageLayout>,
-) -> Option<Library> {
-    let compiled = match stage {
-        Some(stage) => Some(
-            device
-                .compile_stage(stage, naga::ShaderStage::Fragment, &desc.layout.binding_map)
-                .ok()?,
-        ),
-        None => None,
+) -> Result<Library, Refused> {
+    // The stage, and what to destroy once the library is made from it.
+    let (stage_info, compiled, empty) = match stage {
+        Some(stage) => {
+            let compiled = device.compile_stage(
+                stage,
+                naga::ShaderStage::Fragment,
+                &desc.layout.binding_map,
+            )?;
+            (compiled.create_info, Some(compiled), None)
+        }
+        None => {
+            let info = vk::ShaderModuleCreateInfo::default().code(&EMPTY_FRAGMENT_SHADER);
+            let module = unsafe { device.shared.raw.create_shader_module(&info, None) }?;
+            let stage_info = vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(module)
+                .name(c"main");
+            (stage_info, None, Some(module))
+        }
     };
-    let stages: ArrayVec<vk::PipelineShaderStageCreateInfo<'_>, 1> =
-        compiled.iter().map(|c| c.create_info).collect();
+    let stages = [stage_info];
     let dynamic_states = [
         vk::DynamicState::DEPTH_TEST_ENABLE,
         vk::DynamicState::DEPTH_WRITE_ENABLE,
@@ -1047,7 +1232,10 @@ fn make_fragment_shader(
     if let Some(ref compiled) = compiled {
         destroy_temporary(device, compiled);
     }
-    Some(library(raw?, Some(layout), &device.shared))
+    if let Some(module) = empty {
+        unsafe { device.shared.raw.destroy_shader_module(module, None) };
+    }
+    Ok(library(raw?, Some(layout), &device.shared))
 }
 
 /// DXVK's `DxvkGraphicsPipelineFragmentOutputLibrary`: the targets' formats, blending and write
@@ -1056,7 +1244,7 @@ fn make_fragment_output(
     device: &super::DeviceShared,
     cache: vk::PipelineCache,
     key: &FragmentOutputKey,
-) -> Option<Library> {
+) -> Result<Library, Refused> {
     let mut formats = ArrayVec::<vk::Format, { crate::MAX_COLOR_ATTACHMENTS }>::new();
     let mut attachments =
         ArrayVec::<vk::PipelineColorBlendAttachmentState, { crate::MAX_COLOR_ATTACHMENTS }>::new();
@@ -1105,7 +1293,7 @@ fn make_fragment_output(
         .push_next(&mut library_info)
         .push_next(&mut rendering);
     let raw = create_pipeline(device, cache, &info, "output library")?;
-    Some(library(raw, None, device))
+    Ok(library(raw, None, device))
 }
 
 /// DXVK's `DxvkGraphicsPipeline::createBasePipeline`: the four libraries linked without
@@ -1123,7 +1311,7 @@ fn link(
         .layout(layout)
         .base_pipeline_index(-1)
         .push_next(&mut library_info);
-    let raw = create_pipeline(device, cache, &info, "linked pipeline")?;
+    let raw = create_pipeline(device, cache, &info, "linked pipeline").ok()?;
     Some(Linked {
         raw,
         _libraries: libraries,
@@ -1135,8 +1323,11 @@ impl fmt::Debug for LayoutParts {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LayoutParts")
             .field("independent", &self.independent)
-            .field("vertex", &self.vertex.raw)
-            .field("fragment", &self.fragment.raw)
+            .field("empty_groups", &self.empty_groups)
+            .field(
+                "stages",
+                &self.stages.as_ref().map(|s| s.each_ref().map(|l| l.raw)),
+            )
             .finish()
     }
 }
@@ -1151,8 +1342,10 @@ impl super::Device {
     /// Whether this device links render pipelines from pipeline libraries (Vulkan with
     /// `VK_EXT_graphics_pipeline_library` and dynamic rendering, not switched off by
     /// `NV_WGPU_LIBRARIES=off` or `NV_WGPU_DYNAMIC_RENDERING=off`): where a shader's library can be
-    /// made ahead of its draws by making a pipeline with it. A pipeline whose layout has a group
-    /// with bindings no draw stage sees is still made whole.
+    /// made ahead of its draws by making a pipeline with it (a vertex shader's alone too: a pipeline
+    /// without a fragment stage links an empty one). A pipeline whose layout has a group with
+    /// bindings no draw stage sees, or whose fragment shader runs per sample on a multisampled
+    /// target, is still made whole.
     pub fn uses_pipeline_libraries(&self) -> bool {
         self.shared.private_caps.extras.pipeline_library
     }
@@ -1169,5 +1362,288 @@ impl super::Device {
             };
             format!("{}{fast}", self.shared.pipeline_libraries.report())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The rasterisation and depth-stencil states `Device::create_render_pipeline` bakes into a
+    /// whole pipeline (device.rs, the `vk_rasterization` and `vk_depth_stencil` it builds), copied
+    /// here as the reference a linked pipeline's dynamic states must equal (vendor/README.md:
+    /// compare it with that function when updating).
+    fn whole(
+        primitive: &wgt::PrimitiveState,
+        depth_stencil: Option<&wgt::DepthStencilState>,
+    ) -> (
+        vk::PipelineRasterizationStateCreateInfo<'static>,
+        vk::PipelineDepthStencilStateCreateInfo<'static>,
+    ) {
+        let mut vk_rasterization = vk::PipelineRasterizationStateCreateInfo::default()
+            .front_face(conv::map_front_face(primitive.front_face));
+        if let Some(face) = primitive.cull_mode {
+            vk_rasterization = vk_rasterization.cull_mode(conv::map_cull_face(face))
+        }
+        let mut vk_depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default();
+        if let Some(ds) = depth_stencil {
+            if ds.is_depth_enabled() {
+                vk_depth_stencil = vk_depth_stencil
+                    .depth_test_enable(true)
+                    .depth_write_enable(ds.depth_write_enabled.unwrap_or_default())
+                    .depth_compare_op(conv::map_comparison(ds.depth_compare.unwrap_or_default()));
+            }
+            if ds.stencil.is_enabled() {
+                let s = &ds.stencil;
+                let front = conv::map_stencil_face(&s.front, s.read_mask, s.write_mask);
+                let back = conv::map_stencil_face(&s.back, s.read_mask, s.write_mask);
+                vk_depth_stencil = vk_depth_stencil
+                    .stencil_test_enable(true)
+                    .front(front)
+                    .back(back);
+            }
+            if ds.bias.is_enabled() {
+                vk_rasterization = vk_rasterization
+                    .depth_bias_enable(true)
+                    .depth_bias_constant_factor(ds.bias.constant as f32)
+                    .depth_bias_clamp(ds.bias.clamp)
+                    .depth_bias_slope_factor(ds.bias.slope_scale);
+            }
+        }
+        (vk_rasterization, vk_depth_stencil)
+    }
+
+    type Face = (
+        vk::StencilOp,
+        vk::StencilOp,
+        vk::StencilOp,
+        vk::CompareOp,
+        u32,
+        u32,
+    );
+
+    fn face(s: &StencilFace) -> Face {
+        (
+            s.fail,
+            s.pass,
+            s.depth_fail,
+            s.compare,
+            s.compare_mask,
+            s.write_mask,
+        )
+    }
+
+    fn vk_face(s: &vk::StencilOpState) -> Face {
+        (
+            s.fail_op,
+            s.pass_op,
+            s.depth_fail_op,
+            s.compare_op,
+            s.compare_mask,
+            s.write_mask,
+        )
+    }
+
+    /// Depth-stencil states that differ in every field the whole path reads.
+    fn depth_stencils() -> Vec<Option<wgt::DepthStencilState>> {
+        use wgt::{CompareFunction as C, StencilOperation as O};
+        let base = wgt::DepthStencilState {
+            format: wgt::TextureFormat::Depth24PlusStencil8,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(C::LessEqual),
+            stencil: wgt::StencilState::default(),
+            bias: wgt::DepthBiasState::default(),
+        };
+        let stencil = wgt::StencilState {
+            front: wgt::StencilFaceState {
+                compare: C::Equal,
+                fail_op: O::Zero,
+                depth_fail_op: O::IncrementClamp,
+                pass_op: O::Replace,
+            },
+            back: wgt::StencilFaceState {
+                compare: C::Greater,
+                fail_op: O::Invert,
+                depth_fail_op: O::DecrementWrap,
+                pass_op: O::IncrementWrap,
+            },
+            read_mask: 0x3c,
+            write_mask: 0xa5,
+        };
+        let mut all = vec![None, Some(base.clone())];
+        for (write, compare) in [
+            (Some(false), Some(C::Always)),
+            (Some(false), Some(C::Less)),
+            (Some(true), Some(C::Always)),
+            (None, None),
+            (Some(true), None),
+        ] {
+            all.push(Some(wgt::DepthStencilState {
+                depth_write_enabled: write,
+                depth_compare: compare,
+                ..base.clone()
+            }));
+        }
+        all.push(Some(wgt::DepthStencilState {
+            stencil: stencil.clone(),
+            ..base.clone()
+        }));
+        all.push(Some(wgt::DepthStencilState {
+            stencil,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(C::Always),
+            ..base.clone()
+        }));
+        for (constant, slope_scale, clamp) in [(3, 0.0, 0.0), (0, 1.5, 0.25), (-7, -2.0, 0.5)] {
+            all.push(Some(wgt::DepthStencilState {
+                bias: wgt::DepthBiasState {
+                    constant,
+                    slope_scale,
+                    clamp,
+                },
+                ..base.clone()
+            }));
+        }
+        all
+    }
+
+    #[test]
+    fn dynamic_state_equals_what_a_whole_pipeline_bakes() {
+        let mut checked = 0;
+        for cull_mode in [None, Some(wgt::Face::Front), Some(wgt::Face::Back)] {
+            for front_face in [wgt::FrontFace::Ccw, wgt::FrontFace::Cw] {
+                let primitive = wgt::PrimitiveState {
+                    cull_mode,
+                    front_face,
+                    ..Default::default()
+                };
+                for ds in depth_stencils() {
+                    let d = DynamicState::new(&primitive, ds.as_ref());
+                    let (r, z) = whole(&primitive, ds.as_ref());
+                    let what = format!("{primitive:?} {ds:?}");
+                    assert_eq!(
+                        (d.cull_mode, d.front_face),
+                        (r.cull_mode, r.front_face),
+                        "{what}"
+                    );
+                    let bias = [
+                        r.depth_bias_constant_factor,
+                        r.depth_bias_clamp,
+                        r.depth_bias_slope_factor,
+                    ];
+                    assert_eq!(
+                        (d.depth_bias_enable, d.depth_bias),
+                        (r.depth_bias_enable == vk::TRUE, bias),
+                        "{what}"
+                    );
+                    assert_eq!(
+                        (d.depth_test, d.depth_write, d.depth_compare),
+                        (
+                            z.depth_test_enable == vk::TRUE,
+                            z.depth_write_enable == vk::TRUE,
+                            z.depth_compare_op
+                        ),
+                        "{what}"
+                    );
+                    assert_eq!(d.stencil_test, z.stencil_test_enable == vk::TRUE, "{what}");
+                    assert_eq!(face(&d.stencil_front), vk_face(&z.front), "{what}");
+                    assert_eq!(face(&d.stencil_back), vk_face(&z.back), "{what}");
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 6 * 12);
+    }
+
+    #[test]
+    fn a_bind_sets_the_groups_that_changed_and_only_them() {
+        let primitive = wgt::PrimitiveState {
+            cull_mode: Some(wgt::Face::Back),
+            ..Default::default()
+        };
+        let all = depth_stencils();
+        let base = DynamicState::new(&primitive, all[1].as_ref());
+        assert_eq!(
+            DynamicState::groups_to_set(None, &base),
+            CULL | BIAS | DEPTH | STENCIL,
+            "nothing known: every group"
+        );
+        assert_eq!(DynamicState::groups_to_set(Some(&base), &base), 0);
+        let stencil = StencilFace {
+            pass: vk::StencilOp::REPLACE,
+            ..base.stencil_front
+        };
+        // No cull mode, the depth test off, the stencil test on and a bias: every group differs.
+        let everything = wgt::DepthStencilState {
+            bias: wgt::DepthBiasState {
+                constant: 3,
+                slope_scale: 0.0,
+                clamp: 0.0,
+            },
+            ..all[8]
+                .clone()
+                .expect("the stencil state without the depth test")
+        };
+        let with = |f: &dyn Fn(&mut DynamicState)| {
+            let mut s = base;
+            f(&mut s);
+            s
+        };
+        let changes: [(&str, DynamicState, u8); 14] = [
+            (
+                "cull mode",
+                with(&|s| s.cull_mode = vk::CullModeFlags::FRONT),
+                CULL,
+            ),
+            (
+                "front face",
+                with(&|s| s.front_face = vk::FrontFace::CLOCKWISE),
+                CULL,
+            ),
+            ("bias on", with(&|s| s.depth_bias_enable = true), BIAS),
+            ("bias constant", with(&|s| s.depth_bias[0] = 1.0), BIAS),
+            ("bias clamp", with(&|s| s.depth_bias[1] = 1.0), BIAS),
+            ("bias slope", with(&|s| s.depth_bias[2] = 1.0), BIAS),
+            ("depth test", with(&|s| s.depth_test = !s.depth_test), DEPTH),
+            (
+                "depth write",
+                with(&|s| s.depth_write = !s.depth_write),
+                DEPTH,
+            ),
+            (
+                "depth compare",
+                with(&|s| s.depth_compare = vk::CompareOp::GREATER),
+                DEPTH,
+            ),
+            ("stencil test", with(&|s| s.stencil_test = true), STENCIL),
+            (
+                "stencil front",
+                with(&|s| s.stencil_front = stencil),
+                STENCIL,
+            ),
+            ("stencil back", with(&|s| s.stencil_back = stencil), STENCIL),
+            (
+                "stencil mask",
+                with(&|s| s.stencil_back.write_mask = 0x0f),
+                STENCIL,
+            ),
+            (
+                "everything",
+                DynamicState::new(&wgt::PrimitiveState::default(), Some(&everything)),
+                CULL | BIAS | DEPTH | STENCIL,
+            ),
+        ];
+        for (what, new, groups) in changes {
+            assert_eq!(
+                DynamicState::groups_to_set(Some(&base), &new),
+                groups,
+                "{what}"
+            );
+            assert_eq!(
+                DynamicState::groups_to_set(Some(&new), &base),
+                groups,
+                "{what} back"
+            );
+        }
     }
 }
