@@ -464,3 +464,29 @@ fn remove_packages() {
     assert_eq!(call(&mut e, 0x151a, ACTOR, &[]).1, 0.0);
     assert_eq!(call(&mut e, 0x151a, THING, &[]).1, 0.0);
 }
+
+/// The list commands' early exits: no argument and no calling reference, or an actor whose base
+/// form is missing: 0, the list unchanged, nothing freed.
+#[test]
+fn list_commands_without_a_list() {
+    let mut e = setup();
+    set_list(&mut e, &[P[0], P[1]]);
+    set_script_ref(&mut e, 1, P[2]);
+    let calls: [(u32, Vec<Vec<u8>>); 6] = [
+        (0x1515, vec![]),
+        (0x1516, vec![n(0)]),
+        (0x1517, vec![r(1), n(0)]),
+        (0x1518, vec![r(1), n(0)]),
+        (0x1519, vec![n(0)]),
+        (0x151a, vec![]),
+    ];
+    for (opcode, args) in &calls {
+        assert_eq!(call(&mut e, *opcode, 0, args).1, 0.0, "{opcode:#x} no caller");
+    }
+    e.mem.set_u32(ACTOR + 0x20, 0);
+    for (opcode, args) in &calls {
+        assert_eq!(call(&mut e, *opcode, ACTOR, args).1, 0.0, "{opcode:#x} no base");
+    }
+    assert_eq!(list(&e), [P[0], P[1]]);
+    assert!(freed().is_empty());
+}

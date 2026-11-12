@@ -225,23 +225,32 @@ fn lookup(e: &mut Engine, owner: u8, key: &[u8]) -> Option<Value> {
 fn get_mod_local_data(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let owner = script_mod(e, a.script);
-    expect_return_type(e, Returns::Default);
     a.set_result(e, 0.0);
-    let Some(key) = key_argument(e, &a) else {
-        return handled(true);
-    };
-    match lookup(e, owner, &key) {
-        Some(Value::Number(v)) => a.set_result(e, v),
-        Some(Value::Form(id)) => {
-            a.set_form_result(e, id);
-            expect_return_type(e, Returns::Form);
+    // All inside the command's own evaluator, as xNVSE's local `ExpressionEvaluator` lives
+    // through the whole command: the string goes out as an expression's result (never into a
+    // `set` statement's variable), and the expected type reaches the caller when it closes.
+    with_eval(e, &a, |e, ev, toks| {
+        expect_return_type(e, Returns::Default);
+        let Some(toks) = toks.filter(|t| t.len() == 1) else {
+            return;
+        };
+        if !ev.can_convert(e, &toks[0], Ty::String) {
+            return;
         }
-        Some(Value::Str(s)) => {
-            assign_to_string_var(e, &a, &s);
-            expect_return_type(e, Returns::String);
+        let key = ev.get_string(e, &toks[0]);
+        match lookup(e, owner, &key) {
+            Some(Value::Number(v)) => a.set_result(e, v),
+            Some(Value::Form(id)) => {
+                a.set_form_result(e, id);
+                expect_return_type(e, Returns::Form);
+            }
+            Some(Value::Str(s)) => {
+                assign_to_string_var(e, &a, &s);
+                expect_return_type(e, Returns::String);
+            }
+            _ => {}
         }
-        _ => {}
-    }
+    });
     handled(true)
 }
 

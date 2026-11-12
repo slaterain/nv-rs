@@ -197,6 +197,15 @@ fn command_opcodes_by_name() {
     assert_eq!(op(&mut e, "NoSuchCommand"), 0.0);
     // The test engine's console records have no names: the empty name is theirs.
     assert_eq!(op(&mut e, ""), 0.0);
+    // Two script records with one short name: the lower opcode.
+    let short = crate::table::guest_str(&mut e, b"ThisAlt");
+    let old = crate::table::record_of(&e, 0x164a);
+    e.mem.set_u32(old + 4, short);
+    assert_eq!(op(&mut e, "thisalt"), f64::from(0x164a));
+    // A console record with a script command's name: the console's, so 0.
+    let name = crate::table::guest_str(&mut e, b"GetUserTime");
+    e.mem.set_u32(0x0118_e8e0 + 5 * 0x28, name);
+    assert_eq!(op(&mut e, "GetUserTime"), 0.0);
 }
 
 /// `MatchesAnyOf` compares by the first value's kind: numbers within 0.0001 (as floats), strings
@@ -234,4 +243,40 @@ fn matches_any_of_by_the_first_kind() {
     // An array that does not exist matches nothing (xNVSE would stop the game).
     add_local(&mut e, 13, "gone", 9999.0);
     assert_eq!(m(&mut e, &[var(3, 10), var(3, 13)]), 0.0);
+}
+
+/// `set s to GetModLocalData "name"` (a classic set line) with a string kept: the command's own
+/// evaluator is open when the string goes out, so the answer is a new temporary string, and the
+/// variable's own string is left as it was (xNVSE's `ExpressionEvaluator` lives through the
+/// command).
+#[test]
+fn a_set_statement_gets_a_temporary_string() {
+    let mut e = setup();
+    run(&mut e, 0x1549, &[text("name"), text("Doc")]);
+    let id = vars::add_string(&mut e, 5, b"old", false);
+    add_local(&mut e, 3, "s", f64::from(id));
+    // The statement, the variable, the expression's length, a space, the command token, then the
+    // command's own arguments: the count and one expression.
+    let mut line = vec![0x15, 0, 0, 0, b's', 3, 0, 0, 0, b' ', b'X'];
+    line.extend_from_slice(&0x1548u16.to_le_bytes());
+    let key = text("name");
+    let mut args = vec![1u8];
+    args.extend_from_slice(&(key.len() as u16 + 2).to_le_bytes());
+    args.extend(key);
+    line.extend_from_slice(&(args.len() as u16).to_le_bytes());
+    line.extend(args);
+    let at = DATA + 0x100;
+    e.mem.write(at, &line);
+    let record = crate::table::record_of(&e, 0x1548);
+    let (params, execute) = (e.mem.u32(record + 0x14), e.mem.u32(record + 0x18));
+    e.mem.set_u32(OFFSET, 5);
+    e.mem.set_f64(RESULT, 0.0);
+    e.call(execute, &[params, at + 10, 0, 0, SCRIPT, LIST, RESULT, OFFSET]);
+    let got = e.mem.f64(RESULT) as u32;
+    assert_ne!(got, id);
+    assert_eq!(vars::string(&e, got).unwrap(), b"Doc");
+    assert_eq!(vars::string(&e, id).unwrap(), b"old");
+    vars::clean_strings(&mut e);
+    assert!(vars::string(&e, got).is_none(), "a temporary string");
+    assert_eq!(vars::string(&e, id).unwrap(), b"old");
 }

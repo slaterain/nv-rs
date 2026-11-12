@@ -428,6 +428,11 @@ fn reset_all_variables_on_the_caller_or_the_script() {
     let own = add_local(&mut e, 1, "x", 9.0);
     assert_eq!(call(&mut e, 0x1533, 0, &[]).1, 1.0);
     assert_eq!(e.mem.f64(own + 8), 0.0);
+    // A calling reference without an ExtraScript: nothing reset, the calling script's local kept.
+    e.mem.set_f64(own + 8, 9.0);
+    e.mem.set_u32(REF + 0x44 + 0x100 + 4 * 0x0d, 0);
+    assert_eq!(call(&mut e, 0x1533, REF, &[]).1, 0.0);
+    assert_eq!(e.mem.f64(own + 8), 9.0);
 }
 
 /// A literal reference (`varIdx` 0) and a reference variable in a script's reference list.
