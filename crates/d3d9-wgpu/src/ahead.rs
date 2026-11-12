@@ -154,6 +154,16 @@ where
         Some(job)
     }
 
+    /// Every job no thread has started, taken back for the caller to do (the game's start does
+    /// them on every core).
+    pub(crate) fn take_all_queued(&mut self) -> Vec<(K, Job<R>)> {
+        let jobs: Vec<(K, Job<R>)> = lock(&self.shared.queued).jobs.drain(..).collect();
+        for (k, _) in &jobs {
+            self.pending.remove(k);
+        }
+        jobs
+    }
+
     /// The results done so far, without waiting (a job that panicked on a thread gives none).
     pub(crate) fn finished(&mut self) -> Vec<(K, R)> {
         let mut out = Vec::new();
@@ -201,6 +211,21 @@ where
             use std::os::windows::io::AsRawHandle;
             set_priority(Some(t.as_raw_handle() as isize), on);
         }
+    }
+
+    /// Each thread's priority now (`THREAD_PRIORITY_*`: 0 normal, -1 below normal; tests).
+    #[cfg(windows)]
+    pub(crate) fn priorities(&self) -> Vec<i32> {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetThreadPriority(thread: isize) -> i32;
+        }
+        use std::os::windows::io::AsRawHandle;
+        self.threads
+            .iter()
+            // SAFETY: a handle of a thread the queue holds (joined only when it is dropped).
+            .map(|t| unsafe { GetThreadPriority(t.as_raw_handle() as isize) })
+            .collect()
     }
 }
 
@@ -314,6 +339,41 @@ mod tests {
         assert_eq!(runs.load(Ordering::Relaxed), 50);
         assert!(!q.has(&7));
         assert!(matches!(q.take(&7), Taken::None));
+    }
+
+    /// Every job no thread has started is taken back at once, each once, the one a thread is
+    /// doing left to it.
+    #[test]
+    fn every_job_no_thread_started_is_taken_back() {
+        let gate = gate();
+        let started = Arc::new(AtomicU32::new(0));
+        let mut q: Queue<u32, u32> = Queue::new(1, "test");
+        let (g, s) = (gate.clone(), started.clone());
+        q.push(
+            1,
+            Box::new(move || {
+                s.store(1, Ordering::SeqCst);
+                wait_at(&g);
+                10
+            }),
+        );
+        for k in 2..6 {
+            q.push(k, Box::new(move || k * 10));
+        }
+        while started.load(Ordering::SeqCst) == 0 {
+            std::thread::yield_now();
+        }
+        let mut back: Vec<(u32, u32)> = q
+            .take_all_queued()
+            .into_iter()
+            .map(|(k, job)| (k, job()))
+            .collect();
+        back.sort_unstable();
+        assert_eq!(back, vec![(2, 20), (3, 30), (4, 40), (5, 50)]);
+        assert_eq!(q.pending(), 1, "job 1 still with its thread");
+        assert!(q.take_all_queued().is_empty());
+        open(&gate);
+        assert_eq!(q.wait_all(), vec![(1, 10)]);
     }
 
     /// A gate a job waits at until it is opened.
