@@ -7,10 +7,9 @@
 //! `cvttss2si` to a 32-bit integer, its low byte stored.
 
 use super::forms::{form_type, BGSBodyPart, BGSBodyPartData};
-use super::{DBL_180_D_PI, FLT_PI_D_180};
 use super::{
     assign_string, buffer_arg, cvttss2si, model_path, set_form_result, set_model_path, string_set,
-    string_text, type_of, Handlers,
+    string_text, type_of, Handlers, DBL_180_D_PI, FLT_PI_D_180,
 };
 use engine_core::prelude::*;
 use engine_core::ptr::Field;

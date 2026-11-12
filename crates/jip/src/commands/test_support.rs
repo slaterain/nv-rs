@@ -15,8 +15,8 @@ pub const HEAP: u32 = 0x0400_0000;
 const HEAP_SIZE: u32 = 0x10_0000;
 /// The heap's next free byte.
 const HEAP_TOP: u32 = HEAP + HEAP_SIZE - 4;
-/// `""`, what the game's `GetModelPath` (`00408DA0`) answers for a model with no path (its
-/// `DAT_01011584`).
+/// `""`, what the game's `GetModelPath` (`00408DA0`) answers for a model with no path (the empty
+/// text at `01011584`).
 pub const EMPTY_TEXT: u32 = 0x0101_1584;
 pub const TES_MODEL_VTBL: u32 = 0x0101_cf44;
 pub const TES_MODEL_TEXTURE_SWAP_VTBL: u32 = 0x0101_d124;

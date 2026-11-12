@@ -14,10 +14,9 @@
 //! compiled C++'s conversion: `cvttsd2si` to a 32-bit integer, its low byte stored.
 
 use super::forms::{Clouds, Sky, TESTexture, TESWeather, SKY, SKY_OBJECT_UPDATE};
-use super::{DBL_180_D_PI, FLT_PI_D_180};
 use super::{
     assign_string, buffer_arg, cvtd2ul, cvttsd2si, model_path, rgb_dec_to_hex, rgb_hex_to_dec,
-    set_form_result, set_model_path, string_set, string_text, Handlers,
+    set_form_result, set_model_path, string_set, string_text, Handlers, DBL_180_D_PI, FLT_PI_D_180,
 };
 use crate::console::{print_form, print_result};
 use engine_core::prelude::*;
