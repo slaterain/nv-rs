@@ -4,7 +4,7 @@
 //! cannot load into nv-rs: it is rebuilt here, on the built-in xNVSE (`crates/nvse`), the way
 //! xNVSE runs it as a plugin.
 //!
-//! What is here so far (step 3.1, its table and identity):
+//! What is here so far (steps 3.1 and 3.2):
 //! - [`table`], [`slots`]: JIP's 1,150 command slots in the script command table at their real
 //!   opcodes (`0x2200..=0x233A` and `0x2600..=0x2942`), each record as JIP registers it, with no
 //!   handler yet: a script that calls a JIP command fails at that call, as it does without the
@@ -13,6 +13,11 @@
 //!   versions of `IsPluginInstalled` and `GetPluginVersion`), behind one flag,
 //!   [`ANSWERS_INSTALLED`], that keeps JIP "not installed" until the commands mods call are
 //!   built.
+//! - [`cosave`]: JIP's co-save section (its eight records, in JIP's format and in JohnnyGuitar
+//!   NVSE's corrected one) and its listener for xNVSE's messages, registered with xNVSE as a
+//!   plugin (`nvse::plugins`); [`containers`]: JIP's hash maps, whose walking order decides the
+//!   order of the records it writes.
+//! - [`game`]: the game's classes JIP reads, as layouts.
 //! - [`console`], [`utility`]: JIP's console echo of a command's result and the text helpers it
 //!   uses.
 //!
@@ -20,9 +25,14 @@
 //! `host::Host::start_with`, never in the engine crates' own tests.
 
 pub mod console;
+pub mod containers;
+pub mod cosave;
+pub mod game;
 pub mod identity;
 #[rustfmt::skip]
 pub mod slots;
+#[cfg(test)]
+mod saveload_tests;
 pub mod table;
 #[cfg(test)]
 mod test_support;
@@ -53,6 +63,26 @@ pub struct Jip {
     pub answers_installed: bool,
     /// The parameter lists written for JIP's records.
     pub table: table::State,
+    /// The data JIP keeps in its co-save section, and what decides its loads.
+    pub saved: cosave::Saved,
+}
+
+/// JIP as xNVSE knows it once loaded (`NVSEPlugin_Query`, `NVSEPlugin_Load`): its DLL, name,
+/// version and first opcode base, its listener and its co-save callbacks; in xNVSE's list of
+/// plugins only when it answers "installed".
+fn plugin(answers_installed: bool) -> nvse::plugins::BuiltIn {
+    nvse::plugins::BuiltIn {
+        file: "jip_nvse.dll",
+        name: "JIP LN NVSE",
+        version: identity::VERSION_INT,
+        opcode_base: table::FIRST_OPCODE,
+        listed: answers_installed,
+        listener: Some(cosave::listen),
+        save: Some(cosave::save),
+        load: Some(cosave::load),
+        pre_load: None,
+        new_game: None,
+    }
 }
 
 /// Builds JIP into the engine, after xNVSE: its slots in the command table and, when it answers
@@ -73,6 +103,7 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
     );
     table::install(e, answers_installed);
     identity::install(e, answers_installed);
+    nvse::plugins::register(e, plugin(answers_installed));
     let jip = e.ext::<Jip>();
     jip.installed = true;
     jip.answers_installed = answers_installed;

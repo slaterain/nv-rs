@@ -130,7 +130,13 @@ pub fn show(e: &mut Engine, script: u32, message: &str) {
             e,
             crate::events::id::RUNTIME_SCRIPT_ERROR,
             message.as_bytes(),
-        )
+        );
+        crate::plugins::dispatch_text_as(
+            e,
+            crate::plugins::msg::RUNTIME_SCRIPT_ERROR,
+            message.as_bytes(),
+            4,
+        );
     }));
     if !inside {
         e.ext::<Nvse>()

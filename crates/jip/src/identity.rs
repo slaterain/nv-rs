@@ -139,7 +139,7 @@ fn is_plugin_installed(e: &mut Engine, w: &[u32]) -> Ret {
     let read = Read::of(e, &a);
     if read.ok {
         let name = name_in_buffer(e, &read, "IsPluginInstalled");
-        if plugin_info(&name).is_some() || is_jip_alias(&name) {
+        if plugin_info(e, &name).is_some() || is_jip_alias(&name) {
             a.set_result(e, 1.0);
         }
     }
@@ -159,7 +159,7 @@ fn get_plugin_version(e: &mut Engine, w: &[u32]) -> Ret {
         let name = name_in_buffer(e, &read, "GetPluginVersion");
         if is_jip_alias(&name) {
             a.set_result(e, version());
-        } else if let Some(plugin) = plugin_info(&name) {
+        } else if let Some(plugin) = plugin_info(e, &name) {
             a.set_result(e, f64::from(plugin.version as i32));
         }
     }

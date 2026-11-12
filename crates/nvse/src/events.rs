@@ -2352,16 +2352,19 @@ fn set_action_flag(e: &mut Engine, a: &[u32]) -> Ret {
 
 fn quit_console(e: &mut Engine, _: &[u32]) -> Option<u32> {
     message(e, id::QQQ, 0);
+    crate::plugins::dispatch(e, crate::plugins::msg::EXIT_GAME_CONSOLE, 0, 0);
     None
 }
 
 fn quit_to_main_menu(e: &mut Engine, _: &[u32]) -> Option<u32> {
     message(e, id::EXIT_TO_MAIN_MENU, 0);
+    crate::plugins::dispatch(e, crate::plugins::msg::EXIT_TO_MAIN_MENU, 0, 0);
     None
 }
 
 fn quit_from_menu(e: &mut Engine, _: &[u32]) -> Option<u32> {
     message(e, id::EXIT_GAME, 0);
+    crate::plugins::dispatch(e, crate::plugins::msg::EXIT_GAME, 0, 0);
     None
 }
 

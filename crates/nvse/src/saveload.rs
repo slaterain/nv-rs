@@ -8,8 +8,9 @@
 //!   `.fos` (`CREATE_ALWAYS`): xNVSE's own plugin with the loaded files (`MODS`), the array
 //!   variables (`ARVS`, an `ARVR` per array with references, `ARVE`) and the string variables
 //!   (`STVS`, `STVR`s, `STVE`), each map cleaned of its temporaries first and listed in its hash
-//!   map's order ([`vars::HashOrder`]); with the fixes preset's row, other plugins' sections
-//!   kept from the loaded game after it, when today's files are the ones they were saved with.
+//!   map's order ([`vars::HashOrder`]); then each plugin built in writes its own section
+//!   ([`crate::plugins`]); with the fixes preset's row, the sections of plugins not built in are
+//!   kept from the loaded game after them, when today's files are the ones they were saved with.
 //!   One is written on every save, an empty one too, as xNVSE does whenever it is installed: a
 //!   save without one loads as a new game for the extender without the reset.
 //! - **Reading** is xNVSE's, with one guard: a count of references or elements larger than the
@@ -36,10 +37,12 @@
 //! `CloseHandle`, `DeleteFileA`) and its C runtime's `rename`, as the `.fos` does, so the platform
 //! layer keeps them where it keeps the save. The messages of these moments go to the events
 //! ([`crate::events`]): `SaveGame`, `PreLoadGame`, `LoadGame`, `PostLoadGame` (the seam at
-//! `0x00848C91`, the load's end), `NewGame`, `DeleteGame(Name)`, `Rename(New)Game(Name)`. Not here
-//! yet: the messages to plugins and JIP LN NVSE's chunks (I-13).
+//! `0x00848C91`, the load's end), `NewGame`, `DeleteGame(Name)`, `Rename(New)Game(Name)`, and
+//! then to the plugins built in ([`crate::plugins`]), whose sections their own callbacks read
+//! (JIP LN NVSE's: `crates/jip`).
 
 use crate::cosave::{self, tag, Chunk, ChunkWriter, OutOfRange, Plugin, Reader};
+use crate::plugins::{self, msg};
 use crate::vars::{self, ArrayVar, Container, Data, Element, StringVar};
 use crate::{events, tick, Nvse};
 use engine_core::extend::{Owner, SiteSlot};
@@ -448,19 +451,31 @@ fn element_at(a: &ArrayVar, i: usize) -> &Element {
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Serialization.cpp: HandleSaveGame.
-/// The co-save of the save called `name` (a guest string), written whole.
+/// The co-save of the save called `name` (a guest string), written whole: the `SaveGame`
+/// message, then xNVSE's own section and each built-in plugin's, in their order.
 pub fn save_game(e: &mut Engine, name: u32) {
     events::message(e, events::id::SAVE_GAME, name);
+    plugins::dispatch_guest_text(e, msg::SAVE_GAME, name);
     let path = co_save_path(e, name);
-    let chunks = core_chunks(e);
+    let mut sections = vec![Plugin {
+        opcode_base: cosave::CORE_OPCODE_BASE,
+        chunks: core_chunks(e),
+    }];
+    for p in plugins::built_ins(e) {
+        if let Some(save) = p.save {
+            let mut records = plugins::Records::default();
+            save(e, &mut records);
+            sections.push(Plugin {
+                opcode_base: p.opcode_base,
+                chunks: records.chunks,
+            });
+        }
+    }
+    // The kept sections go after the built-ins', not in xNVSE's order of plugins (by DLL name):
+    // no reader depends on the order, xNVSE and every plugin find a section by its opcode base
+    // (`LookupHandleFromBaseOpcode` (xNVSE)).
     let kept = kept_to_write(e);
-    let bytes = cosave::write_with(
-        &[Plugin {
-            opcode_base: cosave::CORE_OPCODE_BASE,
-            chunks,
-        }],
-        &kept,
-    );
+    let bytes = cosave::write_with(&sections, &kept);
     write_file(e, &path, &bytes);
 }
 
@@ -473,11 +488,19 @@ fn kept_to_write(e: &mut Engine) -> Vec<cosave::Kept> {
     if !st.keep_other_plugins || st.kept.is_empty() {
         return Vec::new();
     }
-    let (kept, kept_mods) = (st.kept.clone(), st.kept_mods.clone());
-    if kept_mods != loaded_mods(e) {
+    let kept = st.kept.clone();
+    if !files_as_saved(e) {
         return Vec::new();
     }
     kept
+}
+
+/// Whether today's loaded files are the ones the last co-save read lists (`MODS`), in its order:
+/// only then do the mod indexes inside bytes kept from it, unread, name the same files. A new
+/// game, or no co-save read, lists none.
+pub fn files_as_saved(e: &Engine) -> bool {
+    let saved: &[Vec<u8>] = e.ext_get::<Nvse>().map_or(&[], |n| &n.saveload.kept_mods);
+    saved == loaded_mods(e)
 }
 
 // ---- loading ----
@@ -517,16 +540,36 @@ fn handle_load(e: &mut Engine, name: u32, pass: Pass) -> bool {
     true
 }
 
+/// A built-in's callback for `pass`.
+fn callback_for(p: &plugins::BuiltIn, pass: Pass) -> Option<plugins::LoadCallback> {
+    match pass {
+        Pass::PreLoad => p.pre_load,
+        Pass::Load => p.load,
+    }
+}
+
 fn read_plugins(e: &mut Engine, r: &mut Reader, pass: Pass) -> Result<(), OutOfRange> {
+    let built_ins = plugins::built_ins(e);
+    let mut had_data = vec![false; built_ins.len()];
     let mut core_had_data = false;
     while let Some(plugin) = r.next_plugin()? {
         let start = r.offset();
+        let built_in = built_ins
+            .iter()
+            .position(|p| p.opcode_base == plugin.opcode_base);
         if plugin.opcode_base == cosave::CORE_OPCODE_BASE {
             core_had_data = true;
             core_callback(e, r, pass)?;
+        } else if let Some(i) = built_in {
+            // A plugin built in reads its own section; without a callback for this pass xNVSE
+            // skips it.
+            had_data[i] = true;
+            match callback_for(&built_ins[i], pass) {
+                Some(read) => read(e, r)?,
+                None => r.skip(plugin.length)?,
+            }
         } else if pass == Pass::PreLoad && e.ext::<Nvse>().saveload.keep_other_plugins {
-            // A plugin that is not built in (JIP LN NVSE's chunks come with I-13): kept for
-            // the next save (the fixes preset's row).
+            // A plugin that is not built in: kept for the next save (the fixes preset's row).
             let data = r.take_plugin(plugin.length)?;
             e.ext::<Nvse>().saveload.kept.push(cosave::Kept {
                 opcode_base: plugin.opcode_base,
@@ -543,9 +586,16 @@ fn read_plugins(e: &mut Engine, r: &mut Reader, pass: Pass) -> Result<(), OutOfR
         }
         r.end_plugin();
     }
+    // The callbacks of the plugins that had no section, xNVSE's own first, with no records.
     if !core_had_data {
         r.no_records();
         core_callback(e, r, pass)?;
+    }
+    for (p, had) in built_ins.iter().zip(had_data) {
+        if let (false, Some(read)) = (had, callback_for(p, pass)) {
+            r.no_records();
+            read(e, r)?;
+        }
     }
     Ok(())
 }
@@ -854,10 +904,16 @@ fn new_game_callback(e: &mut Engine) {
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Serialization.cpp: HandleNewGame.
-/// The `NewGame` message, then the new-game callbacks.
+/// The `NewGame` message, then the new-game callbacks: xNVSE's own, then the built-ins'.
 fn handle_new_game(e: &mut Engine) {
     events::message(e, events::id::NEW_GAME, 0);
+    plugins::dispatch(e, msg::NEW_GAME, 0, 0);
     new_game_callback(e);
+    for p in plugins::built_ins(e) {
+        if let Some(new_game) = p.new_game {
+            new_game(e);
+        }
+    }
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_SaveLoad.cpp: NewGameHook.
@@ -873,6 +929,7 @@ pub fn new_game(e: &mut Engine) {
 /// Before the `.fos` (`Serialization::HandlePreLoadGame`).
 pub fn pre_load(e: &mut Engine, name: u32) {
     events::message(e, events::id::PRE_LOAD_GAME, name);
+    plugins::dispatch_guest_text(e, msg::PRE_LOAD_GAME, name);
     // The other plugins' sections kept are the loaded game's, or none.
     let st = &mut e.ext::<Nvse>().saveload;
     st.kept.clear();
@@ -883,7 +940,14 @@ pub fn pre_load(e: &mut Engine, name: u32) {
 /// After the `.fos` (`Serialization::HandleLoadGame`).
 pub fn load(e: &mut Engine, name: u32) {
     events::message(e, events::id::LOAD_GAME, name);
+    plugins::dispatch_guest_text(e, msg::LOAD_GAME, name);
     handle_load(e, name, Pass::Load);
+}
+
+/// A message with a host text to the events, then to the plugins (`Dispatch_Message`).
+fn tell_text(e: &mut Engine, event: usize, kind: u32, text: &[u8]) {
+    events::message_text(e, event, text);
+    plugins::dispatch_text(e, kind, text);
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Serialization.cpp: GetSaveName.
@@ -900,8 +964,13 @@ pub fn save_name(path: &[u8]) -> Vec<u8> {
 fn delete_game(e: &mut Engine, path: u32) {
     let co = co_save_path(e, path);
     let name = save_name(&crate::table::guest_text(e, path));
-    events::message_text(e, events::id::DELETE_GAME, &co);
-    events::message_text(e, events::id::DELETE_GAME_NAME, &name);
+    tell_text(e, events::id::DELETE_GAME, msg::DELETE_GAME, &co);
+    tell_text(
+        e,
+        events::id::DELETE_GAME_NAME,
+        msg::DELETE_GAME_NAME,
+        &name,
+    );
     delete_file(e, &co);
 }
 
@@ -909,10 +978,20 @@ fn delete_game(e: &mut Engine, path: u32) {
 fn rename_game(e: &mut Engine, old: u32, new: u32) {
     let (from, to) = (co_save_path(e, old), co_save_path(e, new));
     // xNVSE sends the paths again where the names would be.
-    events::message_text(e, events::id::RENAME_GAME, &from);
-    events::message_text(e, events::id::RENAME_GAME_NAME, &from);
-    events::message_text(e, events::id::RENAME_NEW_GAME, &to);
-    events::message_text(e, events::id::RENAME_NEW_GAME_NAME, &to);
+    tell_text(e, events::id::RENAME_GAME, msg::RENAME_GAME, &from);
+    tell_text(
+        e,
+        events::id::RENAME_GAME_NAME,
+        msg::RENAME_GAME_NAME,
+        &from,
+    );
+    tell_text(e, events::id::RENAME_NEW_GAME, msg::RENAME_NEW_GAME, &to);
+    tell_text(
+        e,
+        events::id::RENAME_NEW_GAME_NAME,
+        msg::RENAME_NEW_GAME_NAME,
+        &to,
+    );
     delete_file(e, &to);
     rename_file(e, &from, &to);
 }
@@ -922,6 +1001,7 @@ fn rename_game(e: &mut Engine, old: u32, new: u32) {
 /// The load's end: the `PostLoadGame` message with whether it succeeded.
 fn post_load_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     events::message(e, events::id::POST_LOAD_GAME, a[0] & 0xff);
+    plugins::dispatch(e, msg::POST_LOAD_GAME, a[0] & 0xff, 1);
     None
 }
 

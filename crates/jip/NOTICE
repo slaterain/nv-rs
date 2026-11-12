@@ -10,6 +10,15 @@ author JIP's source does not name; JIP still answers to that plugin's name.
 JIP LN NVSE is licensed under the GNU General Public License, version 3 (its LICENSE file, the
 same text as this repository's LICENSE), and this translation is distributed under it.
 
+The co-save's corrected format (`src/cosave.rs`, the fixes row "JIP co-save fixes") translates
+JohnnyGuitar NVSE's corrections of JIP's co-save (`JG/internal/JIP/JIPFixes.cpp`,
+`SerializationFixes`), with its authors' permission (the maintainer, 2026-11-03). Source:
+JohnnyGuitar NVSE, https://github.com/carxt/JohnnyGuitarNVSE, commit c87905e (VNV pins its
+release 5.28). Credits: JohnnyGuitar NVSE is written by carxt and its contributors. It is
+licensed under the GNU Lesser General Public License, version 2.1, whose section 3 lets its code
+be distributed under the GNU General Public License instead, as this translation is (version 3).
+No C++ is included.
+
 JIP's `nvse/` folder holds NVSE's headers as xNVSE has them; NVSE's and xNVSE's credits and
 notices are in crates/nvse/NOTICE.
 
