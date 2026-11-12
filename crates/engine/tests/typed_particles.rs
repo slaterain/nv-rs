@@ -575,6 +575,34 @@ fn particles_age_death() {
         .run()
         .assert_same();
     }
+    // Rounding: the time 1.5 less a last update just below 0.5 is 1 + 2^-25; plus the age 2^-24 that
+    // is 1 when the difference rounds to a float first (a tie to even) and 1 + 2^-23 when the sum
+    // rounds once. With the life span 1 the particle lives on the main thread's word and dies (and
+    // spawns) on the other threads', so the removal branch itself parts as well as the stored age.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x00c2_f010,
+            modifiers::age_death(Ptr<_>, f32, Ptr<_>)
+        ))
+        .by(base)
+        .inputs(&FIXED)
+        .setup(|e, case| {
+            stand_ins(e);
+            let d = particle_data(e, case, 1, 1, 0);
+            let info = e.mem.u32(d + 0x70);
+            e.mem.set_u32(info + 0x0c, 0x3380_0000);
+            e.mem.set_u32(info + 0x10, ONE);
+            e.mem.set_u32(info + 0x14, 0x3eff_ffff);
+            let s = particle_system(e, case, d, &[], 0);
+            let m = modifier(e, 0x20, s);
+            e.mem.set_u8(m + 0x18, 1);
+            let spawner = object(e, 0x40);
+            e.mem.set_u32(m + 0x1c, spawner);
+            vec![m, 0x3fc0_0000, d]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
