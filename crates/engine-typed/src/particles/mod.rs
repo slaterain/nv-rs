@@ -17,9 +17,16 @@
 //!
 //! **Floats.** The systems update inside the scene graph's downward pass, so they run wherever the
 //! scene family's pass runs (the main thread, and the AI threads for the actors' animated scenes): the
-//! row is [`Threads::Both`], and the x87 code keeps the exact helpers ([`engine_core::x87`]): each
-//! load, operation and store the exe's, in its order, as the translations have them. Float fields are
-//! declared as their bits, as the code moves them.
+//! row is [`Threads::Both`]. The family's float maths is native (ADR-0014; [`crate::native::Real`]): each
+//! function is written once and runs as plain `f32` on main (the exe's 24-bit precision there rounds every
+//! operation to a float) and as `f64` locals rounded at each float store on the AI threads (53 bits: the
+//! exe's own arithmetic, bit for bit), chosen once per call from the thread's control word. The position
+//! modifier, every step of which is one operation on two floats stored as a float, is plain `f32` on every
+//! thread: one operation rounds to the same float at either precision. Operations stay
+//! in the exe's order; the square roots are `FSQRT`'s, not the CRT's; comparisons are NaN-aware as the
+//! exe's flag tests; floats the exe only moves through the x87 are copied plain (only a signalling NaN's
+//! payload could show the difference). No x87 helper is left in the family. Float fields are declared as
+//! their bits, as the code moves them.
 
 use crate::culling::layout::{
     NiBound, NiBoundImage, NiGeometry, NiGeometryImage, NiPoint3, NiPoint3Image,
