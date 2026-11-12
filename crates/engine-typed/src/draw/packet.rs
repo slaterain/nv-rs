@@ -955,8 +955,8 @@ pub(crate) fn replacement_colour_word(e: &Engine, index: u32) -> u32 {
 pub(crate) fn sun_word(e: &Engine, index: u32) -> u32 {
     e.global::<u32>(0x011f_a2a0 + 4 * index)
 }
-/// The fog plane (`011f9604`, word `index`), its offset (`011f9610`), and the fog's far and near
-/// distances (`011f9618`, `011f9614`).
+/// The fog plane (`011f9604`, word `index`), its offset (`011f9610`), and the fog's far distance
+/// (`011f9618`).
 #[inline(always)]
 pub(crate) fn fog_plane_word(e: &Engine, index: u32) -> u32 {
     e.global::<u32>(0x011f_9604 + 4 * index)
@@ -968,10 +968,6 @@ pub(crate) fn fog_plane_offset(e: &Engine) -> u32 {
 #[inline(always)]
 pub(crate) fn fog_far(e: &Engine) -> u32 {
     e.global::<u32>(0x011f_9618)
-}
-#[inline(always)]
-pub(crate) fn fog_near(e: &Engine) -> u32 {
-    e.global::<u32>(0x011f_9614)
 }
 
 /// A texturing property's first map (the first word of its maps, +0x20), a map's texture transform
