@@ -1103,7 +1103,7 @@ const INVALID_HANDLE_VALUE: u32 = 0xffff_ffff;
 /// `fopen_s(path, "a+"/"w+")`, the text and `fclose`, through the game's file calls: `"w+"`
 /// makes the file anew, `"a+"` opens or makes it and writes at its end. False when it cannot be
 /// opened.
-fn write_text_file(e: &mut Engine, path: &[u8], append: bool, text: &[u8]) -> bool {
+pub(crate) fn write_text_file(e: &mut Engine, path: &[u8], append: bool, text: &[u8]) -> bool {
     let disposition = if append { OPEN_ALWAYS } else { CREATE_ALWAYS };
     let handle = crate::events::with_guest_text(e, path, |e, p| {
         e.call(

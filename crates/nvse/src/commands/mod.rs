@@ -3,6 +3,7 @@
 
 pub mod algohol;
 pub mod array;
+pub mod console;
 pub mod extender;
 pub mod factions;
 pub mod game;
@@ -22,8 +23,11 @@ pub mod misc_ref_more;
 pub mod misc_ref_npc;
 pub mod printf;
 pub mod quest;
+pub mod script;
 pub mod scripting;
+pub mod scripting_more;
 pub mod string;
+pub mod ui;
 pub mod weapons;
 
 use crate::args::{extract_args_ex, Arg};
@@ -57,6 +61,10 @@ pub fn all() -> Vec<&'static Command> {
         .chain(string::COMMANDS)
         .chain(array::COMMANDS)
         .chain(input::COMMANDS)
+        .chain(console::COMMANDS)
+        .chain(scripting_more::COMMANDS)
+        .chain(script::COMMANDS)
+        .chain(ui::COMMANDS)
         .chain(crate::functions::COMMANDS)
         .chain(crate::tick::COMMANDS)
         .chain(crate::event_commands::COMMANDS)

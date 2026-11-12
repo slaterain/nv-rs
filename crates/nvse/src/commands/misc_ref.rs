@@ -392,7 +392,43 @@ pub static COMMANDS: &[Command] = &[
         SET_DOOR_TELEPORT,
         set_door_teleport,
     ),
+    cmd(
+        0x152d,
+        "Update3D",
+        "",
+        "updates the visual representation of the calling reference",
+        true,
+        &[],
+        update_3d,
+    ),
 ];
+
+/// `TESObjectREFR::Set3D` (the `+0x1CC` virtual function: the node, and whether to unload the
+/// art), the model loader (`ModelLoader::GetSingleton`, `*0x011C3B3C`) and its
+/// `QueueReference` (`0x00444850`, `thiscall`: the reference, a word, whether on the main
+/// thread).
+const SET_3D: u32 = 0x1cc;
+const MODEL_LOADER: u32 = 0x011c_3b3c;
+const QUEUE_REFERENCE: u32 = 0x0044_4850;
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_MiscRef.cpp:
+// Cmd_Update3D_Execute; GameObjects.cpp: TESObjectREFR::Update3D and Update3D_v1c (the same in
+// a release build, so `alternateUpdate3D` changes nothing).
+/// The reference's 3D let go and queued to load again, and 1. Not here yet: for the player
+/// xNVSE also writes a byte into `PlayerCharacter::Set3D` (`0x0094EB7A`, a jump over the check
+/// that refuses to let the player's 3D go in some game states); that check has no seam in the
+/// translation, so the player's 3D is let go only where the game allows it.
+fn update_3d(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    a.set_result(e, 0.0);
+    if a.this_obj != 0 {
+        e.vcall(a.this_obj, SET_3D, &args![0u32, 1u32]);
+        let loader = e.global::<u32>(MODEL_LOADER);
+        e.call(QUEUE_REFERENCE, &args![loader, a.this_obj, 1u32, 0u32]);
+        a.set_result(e, 1.0);
+    }
+    handled(true)
+}
 
 fn form_id(e: &Engine, form: u32) -> u32 {
     e.mem.u32(form + FORM_ID)
