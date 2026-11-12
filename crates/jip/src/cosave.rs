@@ -25,7 +25,10 @@
 //! a script variable is kept but not yet made in its script and event list (`Script::AddVariable`),
 //! a linked reference is kept but not set on its reference (`SetLinkedRefID`), NPC perks are not
 //! given to the actors, and the appearance undo is not applied. Until then a save holds what the
-//! co-save loaded held.
+//! co-save loaded held. What JIP would pass over unread (another record type, a version it does
+//! not read, the NPC perks without its NPC perks patch, `JPGF`'s bytes past its 8) is carried byte
+//! for byte to the next save, so a co-save from a real JIP installation loses nothing in nv-rs.
+//! While JIP answers "not installed" and holds nothing it writes no section, as without the DLL.
 //!
 //! JohnnyGuitar NVSE corrects JIP's extra data record (`JIPFixes.cpp`, `SerializationFixes`):
 //! JIP counts 5 bytes for each mod entry's header where it writes 9, so its version 1 records hold
