@@ -5,11 +5,11 @@
 //!
 //! Read from xNVSE's source and checked in the shipped DLL (xNVSE 6.4.9's `nvse_1_4.dll`,
 //! executes `10025250` to `10025D63`; the records found by name: names, parameters, help texts).
-//! Not here yet, each for want of a seam in a translation (xNVSE writes into the game's code):
-//! `OutputLocalMapPicturesOverride` (it writes the loop count of `005d4580`, the byte at
-//! `005D45A5`, around its call) and the six per-mod player controls commands
-//! (`DisablePlayerControlsAlt`, `EnablePlayerControlsAlt`, `GetPlayerControlsDisabledAlt` and
-//! their `Ex` forms: `TogglePlayerControlsAlt` in `Hooks_Gameplay.cpp` patches fourteen places of
+//! `OutputLocalMapPicturesOverride` writes the loop count of `005d4580` (the byte at `005D45A5`)
+//! around its call: here the routine with that count is run instead of the game's, through its two
+//! callees. Not here yet, for want of seams in the translation (xNVSE writes into the game's
+//! code): the six per-mod player controls commands (`DisablePlayerControlsAlt`,
+//! `EnablePlayerControlsAlt`, `GetPlayerControlsDisabledAlt` and their `Ex` forms: `TogglePlayerControlsAlt` in `Hooks_Gameplay.cpp` patches fourteen places of
 //! the game's code to read its flags).
 
 use super::string::{
@@ -129,6 +129,7 @@ pub static COMMANDS: &[Command] = &[
     cmd(0x14db, "MessageEx", "", "prints a formatted message", &FORMAT_STRING, message_ex, RD),
     cmd(0x14dc, "MessageBoxEx", "", "displays a formatted message box", &FORMAT_STRING, message_box_ex, RD),
     cmd(0x15e6, "GetGridsToLoad", "", "returns the effective value of the uGridsToLoad ini setting", &[], get_grids_to_load, RD),
+    cmd(0x15e7, "OutputLocalMapPicturesOverride", "OLMPOR", "identical to the OutputLocalMapPictures console command, but overrides the uGridsToLoad ini setting", &[], output_local_map_pictures_override, RD),
     cmd(0x15e8, "SetOutputLocalMapPicturesGrids", "SetOLMPGrids", "sets the value with which to override uGridsToLoad when generating local maps with OLMPOR", ONE_INT, set_output_local_map_pictures_grids, RD),
     cmd(0x15ef, "AddSpellNS", "", "identical to AddSpell but without the UI message", ONE_SPELL_ITEM, add_spell_ns, RD),
 ];
@@ -142,8 +143,11 @@ pub struct State {
     /// forgotten while the game runs.
     pub(crate) restarted_informed: HashSet<u32>,
     /// `sGridsToLoad_Override` (-1: none), the square `SetOutputLocalMapPicturesGrids` stored for
-    /// `OutputLocalMapPicturesOverride`, which is not built yet.
+    /// `OutputLocalMapPicturesOverride`.
     pub grids_override: i8,
+    /// The whole square that byte was cut from (0 with none): what the list and scan guard row
+    /// draws.
+    pub grids_square: u32,
 }
 
 impl Default for State {
@@ -152,6 +156,7 @@ impl Default for State {
             loaded_informed: HashSet::new(),
             restarted_informed: HashSet::new(),
             grids_override: -1,
+            grids_square: 0,
         }
     }
 }
@@ -660,7 +665,48 @@ fn set_output_local_map_pictures_grids(e: &mut Engine, w: &[u32]) -> Ret {
         a.set_result(e, 1.0);
         let low = grids as i8;
         e.ext::<Nvse>().game.grids_override = low.wrapping_mul(low);
+        e.ext::<Nvse>().game.grids_square = (grids as u32).wrapping_mul(grids as u32);
     }
+    handled(true)
+}
+
+/// `Cmd_OutputLocalMapPictures_Execute` (`005d4580`), the flag it sets while it runs, and the two
+/// routines it calls: the map menu's reset (`005d45c0`) and one local map picture (`005d45e0`).
+const OUTPUT_LOCAL_MAP_PICTURES: u32 = 0x005d_4580;
+const LOCAL_MAP_BUSY: u32 = 0x0120_04fc;
+const LOCAL_MAP_RESET: u32 = 0x005d_45c0;
+const LOCAL_MAP_PICTURE: u32 = 0x005d_45e0;
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Game.cpp:
+// Cmd_OutputLocalMapPicturesOverride_Execute, with FalloutNV.exe's 005d4580 as its byte at
+// 005D45A5 makes it.
+/// The console's `OutputLocalMapPictures` (the busy flag set, the map menu reset, a picture per
+/// grid cell, the flag cleared), its count the square `SetOutputLocalMapPicturesGrids` kept in
+/// place of 25. xNVSE writes the square's low byte as the `cmp`'s 8-bit immediate, which the
+/// game reads sign-extended against an unsigned loop counter: a byte of 0x80 or more (13 and 15
+/// grids, 169 and 225) runs about four billion pictures, and larger grids wrap (17 grids, 289,
+/// draws 33). With the list and scan guard row ([`super::array::LIST_GUARD`]) the whole square.
+/// Without a kept square, the game's own command with the same arguments.
+fn output_local_map_pictures_override(e: &mut Engine, w: &[u32]) -> Ret {
+    let (square, whole) = {
+        let g = &e.ext::<Nvse>().game;
+        (g.grids_override, g.grids_square)
+    };
+    if square == -1 {
+        e.call(OUTPUT_LOCAL_MAP_PICTURES, w);
+        return handled(true);
+    }
+    let count = if super::array::fix_on(e, super::array::LIST_GUARD) {
+        whole
+    } else {
+        i32::from(square) as u32
+    };
+    e.mem.set_u8(LOCAL_MAP_BUSY, 1);
+    e.call(LOCAL_MAP_RESET, &[]);
+    for _ in 0..count {
+        e.call(LOCAL_MAP_PICTURE, &[]);
+    }
+    e.mem.set_u8(LOCAL_MAP_BUSY, 0);
     handled(true)
 }
 

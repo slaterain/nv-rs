@@ -502,3 +502,180 @@ fn current_script() {
     e.mem.set_u32(SCRIPT + 0xc, 0x0500_0d00);
     assert_eq!(low(call(&mut e, 0x1537, 0, &[]).1), 0x0500_0d00);
 }
+
+// ---- the ternary operator ----
+
+fn num(v: f64) -> Vec<u8> {
+    let mut b = vec![b'Z'];
+    b.extend_from_slice(&v.to_le_bytes());
+    b
+}
+
+/// An expression command's call: the count, then each expression with its length word; `al`,
+/// the result, and where the offset word ended.
+fn run_expr(e: &mut Engine, opcode: u32, this_obj: u32, tokens: &[Vec<u8>]) -> (u32, f64, u32) {
+    let mut bytes = vec![tokens.len() as u8];
+    for t in tokens {
+        bytes.extend_from_slice(&(t.len() as u16 + 2).to_le_bytes());
+        bytes.extend_from_slice(t);
+    }
+    e.mem.set_u16(DATA, opcode as u16);
+    e.mem.set_u16(DATA + 2, bytes.len() as u16);
+    e.mem.write(DATA + 4, &bytes);
+    e.mem.set_u32(OFFSET, 4);
+    e.mem.set_f64(RESULT, 0.0);
+    let record = crate::table::record_of(e, opcode);
+    let (params, execute) = (e.mem.u32(record + 0x14), e.mem.u32(record + 0x18));
+    let ok = e
+        .call(
+            execute,
+            &[params, DATA, this_obj, 0, SCRIPT, LIST, RESULT, OFFSET],
+        )
+        .eax;
+    (ok & 0xff, e.mem.f64(RESULT), e.mem.u32(OFFSET))
+}
+
+/// `Ternary`: only the branch the condition picks is evaluated, the other stepped over (an
+/// expression that cannot be evaluated is harmless there); the offset word ends past all three
+/// either way. Not three expressions: 0.
+#[test]
+fn ternary_evaluates_only_the_branch_it_picks() {
+    let mut e = setup();
+    // Before the first frame: the failing branch's error is not printed (its text names the
+    // script).
+    e.ext::<crate::Nvse>().main_thread_recorded = false;
+    // An operator without operands: evaluating it fails.
+    let broken = vec![crate::expr::op::ADD];
+    let end = 4 + (9 + 2) * 2 + (1 + 2);
+    assert_eq!(
+        run_expr(&mut e, 0x166e, 0, &[num(1.0), num(5.0), broken.clone()]),
+        (1, 5.0, end)
+    );
+    assert_eq!(
+        run_expr(&mut e, 0x166e, 0, &[num(0.0), broken.clone(), num(7.0)]),
+        (1, 7.0, end)
+    );
+    // The picked branch failing: the result stays 0.
+    assert_eq!(
+        run_expr(&mut e, 0x166e, 0, &[num(1.0), broken, num(7.0)]).1,
+        0.0
+    );
+    assert_eq!(run_expr(&mut e, 0x166e, 0, &[num(1.0), num(5.0)]).1, 0.0);
+    // A condition that fails: vanilla stops the game (xNVSE reads through the null token); the
+    // null guard row answers 0.
+    let failing = [vec![crate::expr::op::ADD], num(5.0), num(7.0)];
+    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_expr(&mut e, 0x166e, 0, &failing)
+    }));
+    assert!(stopped.is_err());
+    super::super::array::set_fix(&mut e, super::super::array::NULL_GUARD, true);
+    assert_eq!(run_expr(&mut e, 0x166e, 0, &failing).1, 0.0);
+}
+
+/// A function script `at` (id its address) taking no parameters.
+fn function_script(e: &mut Engine, at: u32) {
+    let data = at + 0x100;
+    let mut d = vec![0x1d, 0, 0, 0, 0x10, 0];
+    let block = vec![0x0d, 0, 0, 0, 0, 0, 1, 0];
+    d.extend_from_slice(&(block.len() as u16).to_le_bytes());
+    d.extend(block);
+    d.resize(0x40, 0);
+    e.mem.write(data, &d);
+    e.mem.set_u32(at + 0x30, data);
+    e.mem.set_u32(at + 0x20, d.len() as u32);
+}
+
+/// `TernaryUDF`: the first value's truth picks the function (the second or third argument),
+/// called on the calling reference; a pick that is not a function calls nothing.
+#[test]
+fn ternary_udf_calls_the_function_it_picks() {
+    let mut e = setup();
+    e.register(0x0048_39c0, |_, a| eax(a[0]));
+    e.register(crate::functions::EVENT_LIST_DESTROY, |_, _| eax(0));
+    crate::functions::install(&mut e);
+    function_script(&mut e, OBJ_A);
+    function_script(&mut e, OBJ_B);
+    let refer = |i: u16| {
+        let mut b = vec![b'R'];
+        b.extend_from_slice(&i.to_le_bytes());
+        b
+    };
+    let ran = |e: &mut Engine, cond: f64, f: u16, g: u16| {
+        calls();
+        run_expr(e, 0x1639, REF, &[num(cond), refer(f), refer(g)]);
+        calls()
+            .into_iter()
+            .filter(|(addr, _)| *addr == crate::functions::SCRIPT_EXECUTE)
+            .map(|(_, a)| (a[0], a[1]))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ran(&mut e, 1.0, R_OBJ_A, R_OBJ_B), [(OBJ_A, REF)]);
+    assert_eq!(ran(&mut e, 0.0, R_OBJ_A, R_OBJ_B), [(OBJ_B, REF)]);
+    assert!(ran(&mut e, 1.0, R_PLAIN, R_OBJ_B).is_empty());
+    // The picked function's answer is the result: OBJ_A answers 4.5, OBJ_B the form PLAIN; one
+    // that answers nothing leaves 0.
+    // OBJ_B's own reference list holds PLAIN as its reference 1.
+    ref_entry(&mut e, OBJ_B, PLAIN, 0);
+    for (script, value) in [(OBJ_A, num(4.5)), (OBJ_B, refer(1))] {
+        let mut body = vec![1u8];
+        body.extend_from_slice(&(value.len() as u16 + 2).to_le_bytes());
+        body.extend(value);
+        let data = e.mem.u32(script + 0x30);
+        e.mem.write(data + 0x40, &body);
+    }
+    e.register(crate::functions::SCRIPT_EXECUTE, |e, a| {
+        let (script, this_obj, list, containing) = (a[0], a[1], a[2], a[3]);
+        if script == QUEST_SCRIPT {
+            return eax(0);
+        }
+        let data = e.mem.u32(script + 0x30);
+        let record = crate::table::record_of(e, crate::functions::OP_SET_FUNCTION_VALUE);
+        let (params, handler) = (e.mem.u32(record + 0x14), e.mem.u32(record + 0x18));
+        e.with_stack(12, |e, f| {
+            e.mem.set_u32(f.addr() + 8, 0x40);
+            e.call(
+                handler,
+                &[
+                    params,
+                    data,
+                    this_obj,
+                    containing,
+                    script,
+                    list,
+                    f.addr(),
+                    f.addr() + 8,
+                ],
+            );
+        });
+        eax(0)
+    });
+    assert_eq!(
+        run_expr(
+            &mut e,
+            0x1639,
+            REF,
+            &[num(1.0), refer(R_OBJ_A), refer(R_OBJ_B)]
+        )
+        .1,
+        4.5
+    );
+    let form = run_expr(
+        &mut e,
+        0x1639,
+        REF,
+        &[num(0.0), refer(R_OBJ_A), refer(R_OBJ_B)],
+    )
+    .1;
+    assert_eq!(form.to_bits() as u32, PLAIN);
+    function_script(&mut e, QUEST_SCRIPT);
+    assert_eq!(
+        run_expr(
+            &mut e,
+            0x1639,
+            REF,
+            &[num(1.0), refer(R_QUEST_SCRIPT), refer(R_OBJ_B)]
+        )
+        .1,
+        0.0
+    );
+}

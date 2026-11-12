@@ -633,9 +633,10 @@ pub(crate) mod tests {
         assert_eq!(record_of(&e, 0x1400), t.record(0x1400));
     }
 
-    /// How many of xNVSE's 654 commands are in: the built ones, each at an opcode of its own (the
-    /// README's count, in its system table, says this number: change them together), and the
-    /// console commands xNVSE re-exports, which are copied records and not counted.
+    /// How many of xNVSE's 654 commands are in: the built ones, each at an opcode of its own, and
+    /// the console commands xNVSE re-exports, which are copies of the console's records
+    /// ([`every_console_re_export_is_its_console_record`]). README's count, in its system table,
+    /// is their sum: change them together.
     #[test]
     fn the_count_of_built_commands() {
         let built = crate::commands::all();
@@ -644,7 +645,8 @@ pub(crate) mod tests {
         opcodes.dedup();
         assert_eq!(opcodes.len(), built.len(), "two commands at one opcode");
         let console = NAMES.iter().filter(|(n, _)| n.starts_with("con_")).count();
-        assert_eq!((built.len(), console), (610, 20));
+        assert_eq!((built.len(), console), (616, 20));
+        assert_eq!(built.len() + console, 636);
     }
 
     /// Every xNVSE opcode has its names; a console re-export copies the console record with the
@@ -675,6 +677,54 @@ pub(crate) mod tests {
             }
         );
         assert_eq!(r.execute, 0x0060_0003);
+    }
+
+    /// Each of the 20 console re-exports is its console record under the script opcode, with the
+    /// `con_` name and no short name (`ImportConsoleCommand`): the console's handler, parser and
+    /// parameters, so a script runs it as the console does.
+    #[test]
+    fn every_console_re_export_is_its_console_record() {
+        let mut e = engine_with_exe_tables();
+        // The helper names record 3 "SetVel": rename it, so the names below are found on theirs.
+        let other = guest_str(&mut e, b"C3");
+        e.mem.set_u32(CONSOLE_TABLE + 3 * RECORD, other);
+        let exports: Vec<(usize, &str)> = NAMES
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (n, _))| n.strip_prefix("con_").map(|c| (i, c)))
+            .collect();
+        assert_eq!(exports.len(), 20);
+        // Each name on a console record of its own, its handler and parameters told apart.
+        for (k, (_, name)) in exports.iter().enumerate() {
+            let at = CONSOLE_TABLE + (10 + k as u32) * RECORD;
+            let text = guest_str(&mut e, name.as_bytes());
+            e.mem.set_u32(at, text);
+            e.mem.set_u32(at + 0x14, 0x0070_0000 + k as u32);
+            e.mem.set_u32(at + 0x18, 0x0060_1000 + k as u32);
+            e.mem.set_u32(at + 0x1c, 0x0060_2000 + k as u32);
+        }
+        install(&mut e);
+        let t = e.script_tables();
+        for (k, (i, name)) in exports.iter().enumerate() {
+            let opcode = 0x1400 + *i as u32;
+            let r = Record::read(&e, t.record(opcode));
+            let console = Record::read(&e, CONSOLE_TABLE + (10 + k as u32) * RECORD);
+            assert_eq!(
+                guest_text(&e, r.long_name),
+                format!("con_{name}").as_bytes()
+            );
+            assert_eq!(guest_text(&e, r.short_name), b"");
+            assert_eq!(
+                r,
+                Record {
+                    long_name: r.long_name,
+                    short_name: r.short_name,
+                    opcode,
+                    ..console
+                },
+                "{name}"
+            );
+        }
     }
 
     /// Return types: the 13 vanilla form commands, and numbers elsewhere.

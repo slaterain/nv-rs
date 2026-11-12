@@ -47,6 +47,7 @@ pub static FIXES: &[Fix] = &[
     SCRIPT_SIZE_CAPS,
     SCRIPT_NULL_GUARD,
     SCRIPT_CYCLE_GUARD,
+    SCRIPT_UI_SORT_PATHS,
     SCRIPT_LIST_GUARD,
     SHADER_WARM,
     IO_WAIT_ENDS_ON_COMPLETION,
@@ -330,12 +331,25 @@ pub const SCRIPT_LIST_GUARD: Fix = Fix {
     env: "NV_NVSE_LIST_GUARD",
     addresses: &[],
     summary:
-        "an inventory list or a form list the script commands walk that runs back into itself, GetPaired asking for the same stack again, or a cell scan (GetFirstRef, GetNumRefs, GetRefs and the rest) whose depth takes it past the cell grid's 8-bit positions ends the walk; a name xNVSE copies into a 256- or 512-byte buffer (GetAgeClass's race name, AddAnimation's and DelAnimation's name, the setting and file names GetNumericGameSetting, IsModLoaded and the rest take) is read whole when it is longer; the list SetHotkeyItem gives a stack gets the game's vtable; the token commands (GetTokenValue, SetTokenValue and the rest) answer for an item only in the base container (the Pip-Boy, for one); none of these stops or hangs the game",
+        "an inventory list or a form list the script commands walk that runs back into itself, GetPaired asking for the same stack again, or a cell scan (GetFirstRef, GetNumRefs, GetRefs and the rest) whose depth takes it past the cell grid's 8-bit positions ends the walk; a name xNVSE copies into a 256- or 512-byte buffer (GetAgeClass's race name, AddAnimation's and DelAnimation's name, the setting and file names GetNumericGameSetting, IsModLoaded and the rest take) is read whole when it is longer; the list SetHotkeyItem gives a stack gets the game's vtable; the token commands (GetTokenValue, SetTokenValue and the rest) answer for an item only in the base container (the Pip-Boy, for one); OutputLocalMapPicturesOverride draws the whole grid square; none of these stops or hangs the game",
     install: install_script_list_guard,
 };
 
 fn install_script_list_guard(e: &mut Engine) {
     nvse::commands::array::set_fix(e, nvse::commands::array::LIST_GUARD, true);
+}
+
+pub const SCRIPT_UI_SORT_PATHS: Fix = Fix {
+    name: "script UI list sort by nested paths",
+    env: "NV_NVSE_UI_SORT_PATHS",
+    addresses: &[],
+    summary:
+        "SortUIListBox with a key, destination or increment path through a child tile finds it on every item; xNVSE finds it only on the first and the list does not sort",
+    install: install_script_ui_sort_paths,
+};
+
+fn install_script_ui_sort_paths(e: &mut Engine) {
+    nvse::commands::array::set_fix(e, nvse::commands::array::UI_SORT_PATHS, true);
 }
 
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
@@ -352,6 +366,7 @@ const NO_ADDRESS: &[&str] = &[
     SCRIPT_SIZE_CAPS.name,
     SCRIPT_NULL_GUARD.name,
     SCRIPT_CYCLE_GUARD.name,
+    SCRIPT_UI_SORT_PATHS.name,
     SCRIPT_LIST_GUARD.name,
     SHADER_WARM.name,
 ];

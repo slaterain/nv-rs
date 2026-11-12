@@ -457,6 +457,16 @@ impl Eval {
         self.read8(e)
     }
 
+    /// Steps over the next expression without evaluating it, by its length word (which counts
+    /// itself), as `TernaryEvaluator` skips the branch not taken: the read position and the offset
+    /// word both move by it.
+    pub fn skip_expression(&mut self, e: &mut Engine) {
+        let len = u32::from(e.mem.u16(self.at));
+        self.at = self.at.wrapping_add(len);
+        let offset = e.mem.u32(self.offset_ptr);
+        e.mem.set_u32(self.offset_ptr, offset.wrapping_add(len));
+    }
+
     /// `ScriptToken::Read`: one token as it is stored, not evaluated (`Call`'s version 0
     /// script argument).
     pub fn read_one_token(&mut self, e: &mut Engine) -> Option<Tok> {

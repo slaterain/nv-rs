@@ -1,8 +1,9 @@
 //! xNVSE's mod-local data and the small commands of `Commands_Scripting.cpp` and
 //! `Commands_Script.cpp` around it (xNVSE): the user's clock as a string map (`GetUserTime`),
 //! data a mod keeps in memory across loaded saves (`SetModLocalData` and its kin), the calling
-//! reference (`GetSelfAlt`), a command's opcode by name, and a value matched against a list
-//! (`MatchesAnyOf`).
+//! reference (`GetSelfAlt`), a command's opcode by name, a value matched against a list
+//! (`MatchesAnyOf`), and the plugin commands `PluginVersion` and `ReloadPluginConfig` over the
+//! built-in plugins ([`crate::plugins`]).
 //!
 //! Read from xNVSE's source (xNVSE 6.4.9, `0ccd23a`). Kept as xNVSE has them: the mod-local data's
 //! map finds a key by its case-insensitive hash alone (`UnorderedMap<char*>` keeps the hash and
@@ -35,6 +36,11 @@ const BASIC_TYPE: u32 = 0x804d;
 const ONE_STRING: &[Param] = &[p("string", STRING, false)];
 const ONE_NVSE_STRING: &[Param] = &[p("string", NVSE_STRING, false)];
 const SET_MOD_LOCAL_DATA: &[Param] = &[p("key", NVSE_STRING, false), p("data", NVSE_DATA, false)];
+/// `kNVSEParams_PluginVersion`: the plugin's name and the version it must have.
+const PLUGIN_VERSION: &[Param] = &[
+    p("plugin name", NVSE_STRING, false),
+    p("plugin version", 0x8001, false),
+];
 /// `kNVSEParams_MatchesAnyOf`: the value, one value to match, then nineteen optional ones.
 const MATCHES_ANY_OF: &[Param] = &[
     p("valueToMatch", BASIC_TYPE, false),
@@ -98,6 +104,8 @@ pub static COMMANDS: &[Command] = &[
     cmd(0x164a, "GetSelfAlt_OLD", "ThisAlt_OLD", SELF_HELP, &[], get_self_alt, Returns::Form),
     cmd(0x166f, "MatchesAnyOf", "", "Returns true/false if the first value matches any of the other values.", MATCHES_ANY_OF, matches_any_of, RD),
     cmd(0x1669, "GetSelfAlt", "ThisAlt", SELF_HELP, &[], get_self_alt, Returns::Form),
+    cmd(0x1676, "PluginVersion", "", "Internal only - declares a nvse / plugin requirement for a script.", PLUGIN_VERSION, plugin_version, RD),
+    cmd(0x167a, "ReloadPluginConfig", "", "sends kMessage_ReloadConfig to the specified plugin", ONE_STRING, reload_plugin_config, RD),
 ];
 
 /// `GetLocalTime` (the KERNEL32 import slot, `stdcall`: a `SYSTEMTIME` of eight words).
@@ -109,6 +117,8 @@ const GET_LOCAL_TIME: u32 = 0x00fd_f0d8;
 #[derive(Default)]
 pub struct State {
     data: HashMap<u8, HashMap<u32, (Vec<u8>, Value)>>,
+    /// `pluginWarnings`: the plugin names (in lower case) `PluginVersion` warned of once.
+    plugin_warnings: std::collections::HashSet<Vec<u8>>,
 }
 
 fn state(e: &mut Engine) -> &mut State {
@@ -392,6 +402,156 @@ fn matches_any_of(e: &mut Engine, w: &[u32]) -> Ret {
     if found {
         a.set_result(e, 1.0);
     }
+    handled(true)
+}
+
+// ---- plugins ----
+
+/// `ShowMessageBox` and the answer callback xNVSE's `DisplayMessage` passes (`GameAPI.cpp`), and
+/// the guest's "Ok".
+const SHOW_MESSAGE_BOX: u32 = 0x0070_3e80;
+const MESSAGE_BOX_CALLBACK: u32 = 0x005b_4a70;
+/// `TESForm::GetName` (virtual `+0x130`): a script's editor id.
+const FORM_NAME: u32 = 0x130;
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Utilities.cpp: DisplayMessage.
+/// The text in the game's message box with one "Ok" button.
+fn display_message(e: &mut Engine, text: &str) {
+    let ok = crate::table::guest_str(e, b"Ok");
+    crate::events::with_guest_text(e, text.as_bytes(), |e, at| {
+        e.call(
+            SHOW_MESSAGE_BOX,
+            &[at, 0, 0, MESSAGE_BOX_CALLBACK, 0, 0x17, 0, 0, ok, 0],
+        );
+    });
+}
+
+/// The plugins xNVSE knows by name (`LookupHandleFromName`): "NVSE" itself (its handle 0), else
+/// a loaded plugin's version, compared without case.
+enum PluginHandle {
+    Nvse,
+    Plugin(u32),
+    Invalid,
+}
+
+fn lookup_handle(e: &mut Engine, name: &[u8]) -> PluginHandle {
+    let upper = vars::upper_table(e);
+    if vars::str_compare(&upper, b"NVSE", name) == std::cmp::Ordering::Equal {
+        return PluginHandle::Nvse;
+    }
+    match crate::plugins::built_ins(e)
+        .into_iter()
+        .filter(|p| p.listed)
+        .find(|p| vars::str_compare(&upper, p.name.as_bytes(), name) == std::cmp::Ordering::Equal)
+    {
+        Some(p) => PluginHandle::Plugin(p.version),
+        None => PluginHandle::Invalid,
+    }
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Scripting.cpp:
+// Cmd_PluginVersion_Execute.
+/// A script's requirement of a plugin (or of xNVSE, "nvse", whose version is packed as
+/// `PACKED_NVSE_VERSION`): met, nothing; not met, a message box saying so, once per plugin name
+/// for the whole run, and the line stops (`false`). Not two arguments, or a name that is not a
+/// string: nothing.
+fn plugin_version(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let mut go_on = true;
+    with_eval(e, &a, |e, ev, toks| {
+        let Some(toks) = toks.filter(|t| t.len() == 2) else {
+            return;
+        };
+        if !ev.can_convert(e, &toks[0], Ty::String) {
+            return;
+        }
+        let name = ev.get_string(e, &toks[0]);
+        let wanted = super::string::dtoui3(ev.get_number(e, &toks[1]));
+        let name_at = e.vcall(a.script, FORM_NAME, &args![]).u32();
+        let script_name = if name_at == 0 {
+            Vec::new()
+        } else {
+            crate::table::guest_text(e, name_at)
+        };
+        let script_name = String::from_utf8_lossy(&script_name).into_owned();
+        let lowered = name.to_ascii_lowercase();
+        if state(e).plugin_warnings.contains(&lowered) {
+            return;
+        }
+        let shown = String::from_utf8_lossy(&name).into_owned();
+        let message = match lookup_handle(e, &name) {
+            PluginHandle::Invalid => format!(
+                "A script ('{script_name}') requires the plugin named '{shown}' but it was not found. Your game will NOT work correctly. Please locate the plugin."
+            ),
+            PluginHandle::Nvse if name.eq_ignore_ascii_case(b"nvse") => {
+                if crate::PACKED_VERSION >= wanted {
+                    return;
+                }
+                let (major, minor, beta) = (
+                    (wanted >> 24) & 0xff,
+                    (wanted >> 16) & 0xff,
+                    (wanted >> 4) & 0xfff,
+                );
+                let (have_major, have_minor, have_beta) = crate::VERSION;
+                format!(
+                    "A script ('{script_name}') requires xNVSE version >= {major}.{minor}.{beta} (You have version {have_major}.{have_minor}.{have_beta}).\nYour game will NOT work correctly. Please update xNVSE."
+                )
+            }
+            // xNVSE reads handle 0's information (its own) for a name other than "nvse" that
+            // `StrCompare` takes as "NVSE": with the game's case table there is none.
+            PluginHandle::Nvse => return,
+            PluginHandle::Plugin(version) => {
+                if version >= wanted {
+                    return;
+                }
+                format!(
+                    "A script ('{script_name}') requires the plugin '{shown}' >= '{wanted}' (You have version {version}).\nYour game will NOT work correctly. Please update the plugin."
+                )
+            }
+        };
+        display_message(e, &message);
+        state(e).plugin_warnings.insert(lowered);
+        go_on = false;
+    });
+    handled(go_on)
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), PluginManager.cpp:
+// Cmd_ReloadPluginConfig_Execute, PluginManager::Dispatch_Message (to one receiver).
+/// `kMessage_ReloadConfig` (the plugin's name as its data, the length with its 0) to the named
+/// loaded plugin's listener only, and 1; a name no loaded plugin has prints "not found" and
+/// answers 0. Its name is read into a 256-byte buffer ([`super::arg_in_buffer`]).
+fn reload_plugin_config(e: &mut Engine, w: &[u32]) -> Ret {
+    const RELOAD_CONFIG: u32 = 25;
+    let a = CommandArgs::new(w);
+    a.set_result(e, 0.0);
+    let read = super::Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let name = super::arg_in_buffer(e, &read, 0, 0x100, "ReloadPluginConfig");
+    if crate::plugins::listed(e, &name).is_none() {
+        crate::events::with_guest_text(e, &name, |e, at| {
+            super::console_print(e, "ReloadPluginConfig: plugin '%s' not found", &[at]);
+        });
+        return handled(true);
+    }
+    let upper = vars::upper_table(e);
+    let target = crate::plugins::built_ins(e)
+        .into_iter()
+        .filter(|p| p.listed)
+        .find(|p| vars::str_compare(&upper, p.name.as_bytes(), &name) == std::cmp::Ordering::Equal);
+    if let Some(listen) = target.and_then(|p| p.listener) {
+        crate::events::with_guest_text(e, &name, |e, at| {
+            let message = crate::plugins::Message {
+                kind: RELOAD_CONFIG,
+                data: at,
+                len: name.len() as u32 + 1,
+            };
+            listen(e, &message);
+        });
+    }
+    a.set_result(e, 1.0);
     handled(true)
 }
 

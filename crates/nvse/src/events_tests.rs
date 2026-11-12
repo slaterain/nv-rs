@@ -1004,5 +1004,157 @@ fn the_error_guard_is_per_thread() {
     assert_eq!(state(&mut e).in_error_event, [other]);
 }
 
+thread_local! {
+    static LINES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+const DUMP_EVENT_HANDLERS: u32 = 0x1648;
+
+/// `DumpEventHandlers`: "Beginning dump.", then per event its name and each handler that passes
+/// the filters (event name, script, priority, arguments) as `>> Priority: p, handler: <script's
+/// text>, filters: <filters' text>`; `(None)` for a handler without filters. Arguments to filter
+/// by without an event name stop after the first line. The result stays 0.
+#[test]
+fn dump_event_handlers_lists_them_in_the_console() {
+    let mut e = setup();
+    e.ext::<Nvse>().main_thread_recorded = true;
+    e.register(0x0071_b160, |_, _| Ret {
+        eax: AREA + 0x7000,
+        ..Ret::default()
+    });
+    e.register(0x0071_d0a0, |e, a| {
+        let format = crate::table::guest_text(e, a[1]);
+        let list = e.mem.bytes(a[2], 16);
+        let line = crate::commands::printf::ucrt_format(e, &format, &list);
+        LINES.with(|l| l.borrow_mut().push(String::from_utf8(line).unwrap()));
+        Ret::default()
+    });
+    // Editor ids (none) for the forms' texts.
+    for form in [FN_A, FN_B] {
+        e.mem.set_u32(form, AREA + 0x6900);
+    }
+    e.mem.set_u32(AREA + 0x6900 + 0x130, NO);
+    e.mem.set_u32(REFR_VTABLE + 0x130, NO);
+    // The calling script's editor id (none) for the error line.
+    e.mem.set_u32(SCRIPT, AREA + 0x6900);
+    scripts(&mut e, &[(1, 4), (2, 4)]);
+    set_script_ref(&mut e, 1, FN_A);
+    set_script_ref(&mut e, 2, REF_1);
+    set_script_ref(&mut e, 3, FN_B);
+    let first_ref = pair(text("first"), form(2));
+    run(
+        &mut e,
+        SET_EVENT_HANDLER,
+        &[text("OnHit"), form(1), first_ref],
+    );
+    run(&mut e, SET_EVENT_HANDLER, &[text("OnHit"), form(3)]);
+    let lines = || LINES.with(|l| std::mem::take(&mut *l.borrow_mut()));
+    lines();
+    let a = "[id: 5000A00, edid: \"\", name: \"<no name>\"]";
+    let b = "[id: 5000B00, edid: \"\", name: \"<no name>\"]";
+    let r = "[id: 10001, edid: \"\", name: \"<no name>\"]";
+    assert_eq!(run(&mut e, DUMP_EVENT_HANDLERS, &[text("onhit")]), 0.0);
+    assert_eq!(
+        lines(),
+        [
+            "DumpEventHandlers >> Beginning dump.".to_string(),
+            "== Dumping for event onhit ==".to_string(),
+            format!(">> Priority: 1, handler: {a}, filters: \"first\"::{r}"),
+            format!(">> Priority: 1, handler: {b}, filters: (None)"),
+        ]
+    );
+    run(&mut e, DUMP_EVENT_HANDLERS, &[text("OnHit"), form(3)]);
+    assert_eq!(
+        lines()[2..],
+        [format!(">> Priority: 1, handler: {b}, filters: (None)")]
+    );
+    run(
+        &mut e,
+        DUMP_EVENT_HANDLERS,
+        &[text("OnHit"), form(3), num(5.0)],
+    );
+    assert_eq!(lines().len(), 2);
+    // An unknown event name: nothing at all.
+    run(&mut e, DUMP_EVENT_HANDLERS, &[text("NoSuchEvent")]);
+    assert!(lines().is_empty());
+    // No event name: every event's name line, the handlers under theirs.
+    run(&mut e, DUMP_EVENT_HANDLERS, &[]);
+    let all = lines();
+    assert_eq!(all.len(), 1 + 60 + 2);
+    assert_eq!(all[1], "== Dumping for event onadd ==");
+    // Arguments without an event name: the first line, then no event lines.
+    run(
+        &mut e,
+        DUMP_EVENT_HANDLERS,
+        &[text(""), form(1), num(1.0), form(2)],
+    );
+    let got = lines();
+    assert_eq!(got[0], "DumpEventHandlers >> Beginning dump.");
+    assert!(got.iter().all(|l| !l.starts_with("== Dumping")), "{got:?}");
+}
+
 #[path = "call_sites_tests.rs"]
 mod call_sites_tests;
+
+/// `DumpEventHandlers` with filters: a priority lists only that priority's handler; an argument
+/// to filter by keeps the handler whose numbered filter it matches and drops the other; a
+/// handler's filters print `"second"::` then each numbered one, joined by ", ".
+#[test]
+fn dump_event_handlers_filters_and_filter_text() {
+    let mut e = setup();
+    e.ext::<Nvse>().main_thread_recorded = true;
+    e.register(0x0071_b160, |_, _| Ret {
+        eax: AREA + 0x7000,
+        ..Ret::default()
+    });
+    e.register(0x0071_d0a0, |e, a| {
+        let format = crate::table::guest_text(e, a[1]);
+        let list = e.mem.bytes(a[2], 16);
+        let line = crate::commands::printf::ucrt_format(e, &format, &list);
+        LINES.with(|l| l.borrow_mut().push(String::from_utf8(line).unwrap()));
+        Ret::default()
+    });
+    for form in [FN_A, FN_B] {
+        e.mem.set_u32(form, AREA + 0x6900);
+    }
+    e.mem.set_u32(AREA + 0x6900 + 0x130, NO);
+    e.mem.set_u32(REFR_VTABLE + 0x130, NO);
+    e.mem.set_u32(SCRIPT, AREA + 0x6900);
+    scripts(&mut e, &[(1, 4), (2, 4)]);
+    set_script_ref(&mut e, 1, FN_A);
+    set_script_ref(&mut e, 2, REF_1);
+    let mut a = Callback::new(FN_A);
+    a.filters.insert(1, Data::Form(0x0001_0001));
+    assert!(set_handler(&mut e, b"OnHit", a, 5, None));
+    let mut b = Callback::new(FN_B);
+    b.object = REF_2;
+    b.filters.insert(1, Data::Form(0x0001_0002));
+    assert!(set_handler(&mut e, b"OnHit", b, 1, None));
+    let lines = || LINES.with(|l| std::mem::take(&mut *l.borrow_mut()));
+    lines();
+    let r1 = "[id: 10001, edid: \"\", name: \"<no name>\"]";
+    // REF_2 answers the full-name cast in this layout (its class words fall on the base's
+    // vtable), with no text: an empty name.
+    let r2 = "[id: 10002, edid: \"\", name: \"\"]";
+    let fa = "[id: 5000A00, edid: \"\", name: \"<no name>\"]";
+    let fb = "[id: 5000B00, edid: \"\", name: \"<no name>\"]";
+    let line_a = format!(">> Priority: 5, handler: {fa}, filters: 1::{r1}");
+    let line_b = format!(">> Priority: 1, handler: {fb}, filters: \"second\"::{r2}, 1::{r2}");
+    run(&mut e, DUMP_EVENT_HANDLERS, &[text("OnHit")]);
+    assert_eq!(lines()[2..], [line_a.clone(), line_b]);
+    // Priority 5 only (with the script filter that matches it).
+    run(
+        &mut e,
+        DUMP_EVENT_HANDLERS,
+        &[text("OnHit"), form(1), num(5.0)],
+    );
+    assert_eq!(lines()[2..], *std::slice::from_ref(&line_a));
+    // Arguments to filter by (OnHit takes two): REF_1 first keeps the first handler and drops
+    // the second.
+    run(
+        &mut e,
+        DUMP_EVENT_HANDLERS,
+        &[text("OnHit"), num(0.0), num(0.0), form(2), form(2)],
+    );
+    assert_eq!(lines()[2..], [line_a]);
+}
