@@ -180,6 +180,8 @@ pub fn run_exit_hooks() {
 /// resuming it left the thread ending the process suspended, and the process never ended
 /// (2026-11-11). Every end of a game run goes through here.
 pub fn end_process(code: i32) -> ! {
+    // What the start screen's capture still holds reaches the console and the log first.
+    d3d9_wgpu::loading::finish_output();
     engine_core::profile::stop();
     std::process::exit(code)
 }

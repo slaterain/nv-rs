@@ -1181,10 +1181,22 @@ impl Device {
             return Err("the device was lost while it was made".into());
         }
         // The loading screen from the start (the maintainer's rule for the port's waits: the
-        // logo, "Loading" and the step), until the game's first picture ([`Start`]).
+        // logo, "Loading" and the step), until the game's first picture ([`Start`]), with the
+        // lines the run prints meanwhile; its bar through the game's start against how long the
+        // last start took (a file beside the pipeline cache).
         if d.surface.is_some() {
-            d.start = Some(Start::new(&d.device));
-            d.show_progress(&Start::progress());
+            let mut start = Start::new(&d.device);
+            start.capture = loading::capture_output();
+            start.record = cache_dir.map(|c| c.join("start-time.txt"));
+            start.expected = start
+                .record
+                .as_ref()
+                .and_then(|f| std::fs::read_to_string(f).ok())
+                .and_then(|s| s.trim().parse().ok())
+                .map(std::time::Duration::from_millis);
+            let p = start.progress();
+            d.start = Some(start);
+            d.show_progress(&p);
         }
         let shown = match (&d.surface, output) {
             (Some(w), _) => format!(
@@ -5643,7 +5655,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             Some(s) if s.format == format => s,
             _ => loading::Screen::new(&device, &queue, format),
         };
-        let p = Start::progress();
+        let p = start.progress();
         let encoder = self.encoder();
         screen.draw(
             &device,
@@ -5672,6 +5684,21 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// also writes one log line with the same numbers (for a launcher). The game's own frames
     /// are not touched: the next `Present` shows the game again.
     pub fn show_progress(&mut self, p: &loading::Progress) {
+        // Through the game's start the step's share fills the bar's first part only ([`Start`]).
+        let mapped;
+        let p = match (&mut self.start, p.done) {
+            (Some(s), Some(d)) => {
+                if d >= 1.0 {
+                    s.prepared.get_or_insert_with(std::time::Instant::now);
+                }
+                mapped = loading::Progress {
+                    done: Some(d.min(1.0) * PREPARED),
+                    ..p.clone()
+                };
+                &mapped
+            }
+            _ => p,
+        };
         show_on(
             &mut self.surface,
             &mut self.loading,
@@ -5703,7 +5730,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             .and_then(|s| s.over(&self.device, self.presents))
         {
             eprintln!("NV_D3D9 wgpu: the start's loading screen ended: {why}");
-            self.start = None;
+            if let (Some(s), true) = (self.start.take(), why.starts_with("the game's first")) {
+                if let Some(f) = &s.record {
+                    let _ = std::fs::write(
+                        f,
+                        format!("{}\n", s.prepared.unwrap_or(s.began).elapsed().as_millis()),
+                    );
+                }
+            }
         }
         let frame = u64::from(frame);
         let back = self.back_buffers.first().and_then(|&h| self.surface_of(h));
@@ -6766,9 +6800,21 @@ struct Start {
     reading: Vec<(wgpu::Buffer, u64, Arc<std::sync::atomic::AtomicU8>)>,
     /// When the game's first present came, and which it was.
     first: Option<(std::time::Instant, u64)>,
+    /// When the device was made, how long the last start took to its first picture, and the
+    /// file that keeps it ([`Start::progress`]).
+    began: std::time::Instant,
+    expected: Option<std::time::Duration>,
+    record: Option<std::path::PathBuf>,
+    /// When the start's shader preparation ended (its bar full): the time part of the bar, and the
+    /// time kept, count from here.
+    prepared: Option<std::time::Instant>,
+    /// The run's output on the screen while the start lasts ([`loading::capture_output`]).
+    capture: Option<loading::Capture>,
 }
 
 /// The start ends without a picture this many presents after the game's first ([`Start`]).
+/// The share of the start screen's bar the shader preparation fills; the time estimate fills the rest.
+const PREPARED: f32 = 0.5;
 const BACKSTOP_PRESENTS: u64 = 600;
 /// ... or this long after it.
 const BACKSTOP: std::time::Duration = std::time::Duration::from_secs(10);
@@ -6875,15 +6921,33 @@ impl Start {
             unsent: None,
             reading: Vec::new(),
             first: None,
+            began: std::time::Instant::now(),
+            expected: None,
+            record: None,
+            prepared: None,
+            capture: None,
         }
     }
 
-    /// What the screen says through the start: no bar (its length is not known).
-    fn progress() -> loading::Progress {
+    /// What the screen says through the start: the bar at the time since the device was made
+    /// against the last start's time to its first picture (short of full until it shows), empty
+    /// on a first start.
+    fn progress(&self) -> loading::Progress {
+        // The shader preparation fills the first part ([`PREPARED`], [`Device::show_progress`]);
+        // after it, the time since it ended against the last start's time fills the rest.
+        let done = match (self.prepared, self.expected) {
+            (Some(at), Some(e)) => {
+                let t = (at.elapsed().as_secs_f32() / e.as_secs_f32().max(0.001)).min(0.97);
+                PREPARED + (1.0 - PREPARED) * t
+            }
+            (Some(_), None) => PREPARED,
+            _ => 0.0,
+        };
+        let done = Some(done);
         loading::Progress {
             title: "Loading".into(),
             status: "Starting the game".into(),
-            done: None,
+            done,
         }
     }
 

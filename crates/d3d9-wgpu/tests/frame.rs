@@ -2546,9 +2546,9 @@ fn the_pipeline_cache_file_is_kept_and_a_bad_one_is_ignored() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The backend's own loading screen: black at the corners and the logo lit in the middle; the
-/// bar filled to the fraction done (a quarter against three quarters: some row has the fill's
-/// colour at three quarters where it has the empty bar's grey at a quarter); and (on Windows,
+/// The backend's own loading screen, a sepia test card: the logo in its first ring; the bar
+/// filled to the fraction done (a quarter against three quarters: some row has the ink fill at
+/// three quarters where it has the paper inside the bar at a quarter); and (on Windows,
 /// where GDI draws the text) another status line changes pixels. A window narrower than the bar
 /// still draws.
 #[test]
@@ -2572,20 +2572,26 @@ fn the_loading_screen_shows_the_logo_the_text_and_the_bar() {
         let i = ((y * w + x) * 4) as usize;
         [px[i], px[i + 1], px[i + 2]]
     };
-    for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
-        assert_eq!(at(&quarter, x, y), [0, 0, 0], "corner {x},{y}");
-    }
-    let lit = (h / 4..h / 2)
-        .flat_map(|y| (w / 3..2 * w / 3).map(move |x| (x, y)))
-        .filter(|&(x, y)| at(&quarter, x, y).iter().any(|&c| c > 64))
+    // The card: sepia paper (red well above blue) over most of it.
+    let sepia = quarter
+        .chunks_exact(4)
+        .filter(|p| p[2] > 80 && p[2] > p[0].saturating_add(30))
         .count();
-    assert!(lit > 500, "{lit} pixels of the logo lit");
-    // The bar: from x = w/3, w/3 wide; at x = w/3 + w/6 (half of it) the fill (B G R about 89, 191,
-    // 230) at three quarters, the empty bar's grey (about 64) at a quarter, in the same row.
-    let x = w / 3 + w / 6;
-    let fill = |c: [u8; 3]| c[2] > 180 && c[1] > 140 && c[0] < 140;
-    let grey = |c: [u8; 3]| c.iter().all(|&v| (40..=90).contains(&v));
-    let row = (0..h).find(|&y| fill(at(&most, x, y)) && grey(at(&quarter, x, y)));
+    assert!(sepia > (w * h / 2) as usize, "{sepia} sepia pixels");
+    // The logo in the first ring (the card has no ink there): dark pixels near the centre.
+    let (cx, cy, r) = (w / 2, h * 44 / 100, h / 2 * 30 / 100);
+    let dark = (cy - r..cy + r)
+        .flat_map(|y| (cx - r..cx + r).map(move |x| (x, y)))
+        .filter(|&(x, y)| x.abs_diff(cx).pow(2) + y.abs_diff(cy).pow(2) < r * r)
+        .filter(|&(x, y)| at(&quarter, x, y).iter().all(|&c| c < 90))
+        .count();
+    assert!(dark > 200, "{dark} dark pixels of the logo");
+    // The bar, centred under the banner: in its middle column the ink fill (dark) at three
+    // quarters where a quarter shows the paper inside it, in the same row.
+    let x = w / 2;
+    let fill = |c: [u8; 3]| c.iter().all(|&v| v < 90);
+    let paper = |c: [u8; 3]| c[2] > 150;
+    let row = (0..h).find(|&y| fill(at(&most, x, y)) && paper(at(&quarter, x, y)));
     assert!(
         row.is_some(),
         "no row with the bar filled at 3/4 and empty at 1/4"
@@ -2604,6 +2610,35 @@ fn the_loading_screen_shows_the_logo_the_text_and_the_bar() {
     }
     #[cfg(not(windows))]
     let _ = other;
+    // NV_LOADING_PICTURE=<file.bmp>: the card at 1920 by 1080 with some of a run's lines, to
+    // look at.
+    if let Some(file) = std::env::var_os("NV_LOADING_PICTURE") {
+        d3d9_wgpu::loading::show_lines(&[
+            "NV_D3D9 wgpu: pipeline cache wgpu_pipeline_cache_vulkan.bin: 18908 KB read",
+            "NV_D3D9 wgpu: pipeline list: 272 entries (272 shipped, 0 more; 0 lines not read)",
+            "NV_D3D9 wgpu: the game's device on the adapter (Vulkan) (1920x1080, format 22)",
+            "NV_D3D9 wgpu: Loading: Preparing shaders 263 of 1038 (25%)",
+            "NV_D3D9 wgpu: Loading: Preparing shaders 508 of 1038 (49%)",
+        ]);
+        let (w, h) = (1920u32, 1080u32);
+        let px = d.progress_pixels(w, h, &p("Preparing shaders 508 of 1038", 0.49));
+        d3d9_wgpu::loading::show_lines(&[]);
+        let mut bmp = b"BM".to_vec();
+        for v in [
+            54 + w * h * 4,
+            0,
+            54,
+            40,
+            w,
+            (h as i32).wrapping_neg() as u32,
+        ] {
+            bmp.extend_from_slice(&v.to_le_bytes());
+        }
+        bmp.extend_from_slice(&[1, 0, 32, 0]);
+        bmp.extend_from_slice(&[0; 24]);
+        bmp.extend_from_slice(&px);
+        std::fs::write(file, bmp).expect("the picture");
+    }
 }
 
 /// The pipelines a run made are listed in the cache folder; the next run makes them at the first

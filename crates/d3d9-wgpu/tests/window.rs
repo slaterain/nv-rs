@@ -591,11 +591,11 @@ fn a_window_minimised_at_create_device_still_gets_the_device() {
 /// The backend's loading screen as the window shows it, from its captures (`wgpu-loading-N.bmp`
 /// for the screen's own frames, `wgpu-window-N.bmp` for the game's presents), at the window's
 /// size and not black (the logo and the text over black):
-/// - from the device's creation ("Starting the game", no bar: its length is not known);
+/// - from the device's creation ("Starting the game", the bar empty: nothing done yet);
 /// - over the game's frames until its first picture (a frame with at least 1% of its pixels above
-///   24 of 255): the same over a black frame as over a dark one (16 of 255), with no bar also
-///   after a long step of the backend's own showed one; never over a picture, and not again
-///   after one (a black frame then stays black);
+///   24 of 255): the same over a black frame as over a dark one (16 of 255), with the bar
+///   never shrinking, also after the shader preparation filled its half; never over a
+///   picture, and not again after one (a black frame then stays black);
 /// - for a long step of the backend's own (`show_progress`), its bar at the share done, again
 ///   after the window was sized anew; the game's next `Present` shows the game.
 #[test]
@@ -609,45 +609,57 @@ fn the_loading_screen_is_shown_until_the_games_first_picture_and_is_not_black() 
             .filter(|p| p[0] > 24 || p[1] > 24 || p[2] > 24)
             .count() as u32
     };
-    // The bar: its colour where it is done (0.9, 0.75, 0.35; B, G, R), and its track (0.25 grey),
-    // a row of at least 48 such pixels (the bar is at least 64 wide).
-    let gold =
-        |p: &[u8]| p[0].abs_diff(89) <= 2 && p[1].abs_diff(191) <= 2 && p[2].abs_diff(230) <= 2;
-    let bar_shown = |px: &[u8], w: u32| {
-        px.chunks_exact(4).any(gold)
-            || px.chunks_exact(w as usize * 4).any(|row| {
-                row.chunks_exact(4)
-                    .filter(|p| p[..3].iter().all(|c| c.abs_diff(64) <= 1))
-                    .count()
-                    >= 48
+    // The bar's fill: the share of its middle row inside the frame that is ink (every channel
+    // under 90) rather than paper (the card's layout, `loading::Screen::draw`).
+    let fill = |px: &[u8], w: u32, h: u32| -> f32 {
+        let u = w.min(h) as f32 / 2.0;
+        let r = |v: f32| (v * u).round();
+        let cy = (h as f32 * 0.44).round();
+        let (bw, bh) = (r(1.1).min(w as f32 - 16.0).max(8.0), r(0.045).max(5.0));
+        let (bx, by) = ((w as f32 - bw) / 2.0, cy + r(0.62) + r(0.05));
+        let y = (by + bh / 2.0) as u32;
+        let (x0, x1) = ((bx + 4.0) as u32, (bx + bw - 4.0) as u32);
+        let ink = (x0..x1)
+            .filter(|&x| {
+                let i = ((y * w + x) * 4) as usize;
+                px[i..i + 3].iter().all(|&c| c < 90)
             })
+            .count();
+        ink as f32 / (x1 - x0).max(1) as f32
     };
     let (w, h, px) = g
         .capture("wgpu-loading", 1)
         .expect("the screen from the device's creation");
     assert_eq!((w, h), (320, 240), "the window's size");
     assert!(lit(&px) > w * h / 50, "not black: {} lit", lit(&px));
-    assert!(!bar_shown(&px, w), "no bar at the start");
+    let mut last = fill(&px, w, h);
+    assert!(last < 0.02, "nothing done at the start: {last}");
     let progress = |done: f32| d3d9_wgpu::loading::Progress {
         title: "Loading".into(),
         status: "Preparing shaders 1 of 2".into(),
         done: Some(done),
     };
     // The game's frames before its first picture show the screen in their place: black, then
-    // (after a long step of the backend's own showed its full bar) black again, then dark (as
-    // the game's legal screen fading in from almost black): the same screen each time, no bar.
+    // (after the shader preparation filled its part of the bar: half) black again, then dark
+    // (as the game's legal screen fading in from almost black). The bar never shrinks.
     let mut shown = Vec::new();
     for (frame, colour, what) in [
         (1, 0xFF00_0000u32, "black"),
-        (2, 0xFF00_0000, "black after a full bar"),
+        (2, 0xFF00_0000, "black after the preparation"),
         (3, 0xFF10_1010, "dark"),
     ] {
         if frame == 2 {
             g.b.device()
                 .expect("the device")
                 .show_progress(&progress(1.0));
-            let (_, _, px) = g.capture("wgpu-loading", 2).expect("the long step's frame");
-            assert!(bar_shown(&px, 320), "the long step's bar");
+            let (w, h, px) = g.capture("wgpu-loading", 2).expect("the long step's frame");
+            let f = fill(&px, w, h);
+            assert!(
+                (0.45..0.55).contains(&f),
+                "the preparation's half of the bar: {f}"
+            );
+            assert!(f >= last - 0.01, "the bar shrank: {last} to {f}");
+            last = f;
         }
         g.show(frame, colour);
         let (w, h, px) = g.capture("wgpu-window", frame).expect("the window's frame");
@@ -657,11 +669,16 @@ fn the_loading_screen_is_shown_until_the_games_first_picture_and_is_not_black() 
             "the screen over a {what} frame: {} lit",
             lit(&px)
         );
-        assert!(!bar_shown(&px, w), "no bar over a {what} frame");
+        let f = fill(&px, w, h);
+        assert!(
+            f >= last - 0.01,
+            "the bar shrank over a {what} frame: {last} to {f}"
+        );
+        last = f;
         shown.push(px);
     }
     assert!(
-        shown[0] == shown[1] && shown[1] == shown[2],
+        shown[1] == shown[2],
         "the screen stands in for the whole frame, black or dark"
     );
     g.show(4, 0xFF20_4060);
@@ -676,7 +693,7 @@ fn the_loading_screen_is_shown_until_the_games_first_picture_and_is_not_black() 
         Some((320, 240, vec![bgra(0xFF00_0000)])),
         "black after the first picture: black"
     );
-    for (n, (w, h), done) in [(3u32, (320u32, 240u32), 0.5f32), (4, (640, 360), 1.0)] {
+    for (n, (w, h), done) in [(3u32, (320u32, 240u32), 0.75f32), (4, (640, 360), 1.0)] {
         if n == 4 {
             g.size(w as i32, h as i32);
         }
@@ -693,12 +710,10 @@ fn the_loading_screen_is_shown_until_the_games_first_picture_and_is_not_black() 
             lit(&px),
             w * h
         );
-        let done_px = px.chunks_exact(4).filter(|p| gold(p)).count();
-        let want = ((w / 3).max(64) as f32 * done) as usize;
-        assert!(
-            done_px >= want.saturating_sub(2) * (h / 200).max(3) as usize,
-            "frame {n}: the bar done {done} ({done_px} pixels)"
-        );
+        let f = fill(&px, w, h);
+        assert!(f >= done - 0.04, "frame {n}: the bar done {done} ({f})");
+        assert!(f >= last - 0.01, "frame {n}: the bar shrank: {last} to {f}");
+        last = f;
     }
     g.show(6, 0xFF20_4060);
     assert_eq!(

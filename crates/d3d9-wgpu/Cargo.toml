@@ -9,6 +9,8 @@ publish = false
 
 [dependencies]
 d3d9-stream = { path = "../d3d9-stream" }
+# The icon's 256-pixel logo is a PNG: its zlib stream read with the plugin reader's decoder.
+esm = { path = "../esm" }
 # The converter's WGSL is checked with naga's reader and validator: the version wgpu 30.0.1 uses,
 # pinned (ADR-0007).
 naga = { version = "=30.0.1", features = ["wgsl-in"] }

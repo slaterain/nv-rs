@@ -141,6 +141,7 @@ name = "d3d9-wgpu"
 version = "0.1.0"
 dependencies = [
  "d3d9-stream",
+ "esm",
  "naga",
  "raw-window-handle",
  "wgpu",
