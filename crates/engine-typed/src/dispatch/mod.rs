@@ -20,16 +20,25 @@
 //! registered at its exe address; a call inside the family, or into another family, is a
 //! `typed_call!`.
 //!
-//! **Floats.** These run on the main thread and on others ([`Threads::Both`]), so the x87 code keeps
-//! the exact helpers ([`engine_core::x87`]): every load, operation and store is the exe's, in its
-//! order, with a memory operand kept a memory operand.
+//! **Floats.** These run on the main thread and on others ([`Threads::Both`]; the thread census has a
+//! quarter of the transforms' calls and most of the reference location's off the main thread), so
+//! their maths is native by ADR-0014's float rule: `f64` locals rounded where the exe stores a float
+//! ([`crate::anim_keys::wide`], [`crate::anim_keys::narrow`]), in the exe's order. On the other
+//! threads' 53-bit precision that is the exe's arithmetic bit for bit. A single operation on two
+//! floats stored at once (a product, a quotient, a difference) is plain `f32`: its `f64` form rounds
+//! to the same float (a product of two floats is exact in an `f64`; a quotient or a difference rounded
+//! to 53 bits and then to 24 rounds as once, since 53 >= 2 * 24 + 2), and on the main thread's 24-bit
+//! precision it is the exe's float too while the result stays in the float's normal range. The matrix
+//! and vector products' sums (`dot3`) are where the main thread's result may differ from the exe's in
+//! its last bits: the exe rounds each product and each sum to 24 bits there, native code once. No x87
+//! helper is left in the family; a float the exe copies through the x87 stack is copied as it is (a
+//! signalling NaN keeps its payload).
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
 use crate::culling::layout::{NiAVObject, NiMatrix3, NiNode, NiPoint3, NiTransform};
-pub(crate) use crate::culling::{fld, fld_local, fstp, m32_local};
 
 pub mod layout;
 pub mod math;

@@ -466,8 +466,9 @@ make those calls, so they become Rust calls (the transforms' and matrices' arith
 controller and children walks and getters, counted references, the recursive spin lock, the AI's and the
 inventory's getters; since 2026-11-10 also the word map's lookup `00853130`, which a quicksave makes about
 230,000 times in its frame through the save's 37-bucket references map), stage 1 (its calls into `leaves`,
-`culling` and `pathing` go direct only when those are on); its tests are
-`crates/engine/tests/typed_dispatch.rs`. And `shader` (same crate, id 17): the shader
+`culling` and `pathing` go direct only when those are on), its float maths native since 2026-11-11 (the matrix and
+vector products' sums in `f64` rounded at the stores, a single operation on two floats in plain `f32`, which rounds
+to the same float; no x87 helper left); its tests are `crates/engine/tests/typed_dispatch.rs`. And `shader` (same crate, id 17): the shader
 set-up and batch renderer (render state setters and caches, the batch renderer's lists and passes, the
 accumulator's registration and the shaders' per-geometry set-ups), stage 1, its float maths native since
 2026-11-11 by where each function runs (what the main thread alone runs in plain `f32`; the world transform

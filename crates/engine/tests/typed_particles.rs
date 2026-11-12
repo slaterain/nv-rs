@@ -394,33 +394,51 @@ fn inputs(parts: &[&[Input]]) -> Vec<Input> {
     parts.iter().flat_map(|p| p.iter().copied()).collect()
 }
 
+/// The dispatch family's functions the bomb modifier calls: `invert_non_uniform`, `compose`, `rotate`
+/// and `normalize`.
+const DISPATCH_CALLED: &[u32] = &[0x004b_4880, 0x0062_c250, 0x004b_4500, 0x004a_0c10];
+
 /// What every test adds to its comparison: the families, the call budget and the float sweep. The
 /// square root's callers reach its stand-in by address (the crt family has its own test).
 trait Common {
     fn common(self) -> Diff;
+    /// [`Common::common`] with the dispatch family's functions by address, to their translations on
+    /// both sides. Their maths is native: a sum of products rounds once where the exe's 24-bit code
+    /// rounds each step, so on the main thread's control word it parts from the exe in the last bits
+    /// (the dispatch family's own tests compare it there, within their tolerance). This family's maths,
+    /// compared on that word, runs them translated.
+    fn dispatch_translated(self) -> Diff;
 }
 
 impl Common for Diff {
     fn common(self) -> Diff {
-        self.family(&particles::PARTICLES)
-            .family(&dispatch::DISPATCH)
-            .family(&pathing::PATHING)
-            .family(&culling::CULLING)
-            .family(&leaf::LEAVES)
-            .goes_by_address(&[0x00ec_6040])
-            // What the translations of the dispatch family's matrix functions and of the controller walk
-            // call plainly (its PLAIN list).
-            .translation_calls_plainly(&[
-                0x0040_19d0,
-                0x0040_8860,
-                0x0047_6930,
-                0x0047_6980,
-                0x0047_69c0,
-                0x004f_0000,
-            ])
-            .max_calls(MAX_CALLS)
-            .float_sweep(FLOAT_SWEEP)
+        families(self.family(&dispatch::DISPATCH))
     }
+
+    fn dispatch_translated(self) -> Diff {
+        families(self.goes_by_address(DISPATCH_CALLED))
+    }
+}
+
+/// [`Common`]'s families but dispatch, and the rest it adds.
+fn families(d: Diff) -> Diff {
+    d.family(&particles::PARTICLES)
+        .family(&pathing::PATHING)
+        .family(&culling::CULLING)
+        .family(&leaf::LEAVES)
+        .goes_by_address(&[0x00ec_6040])
+        // What the translations of the dispatch family's matrix functions and of the controller walk
+        // call plainly (its PLAIN list).
+        .translation_calls_plainly(&[
+            0x0040_19d0,
+            0x0040_8860,
+            0x0047_6930,
+            0x0047_6980,
+            0x0047_69c0,
+            0x004f_0000,
+        ])
+        .max_calls(MAX_CALLS)
+        .float_sweep(FLOAT_SWEEP)
 }
 
 // ---- The modifiers ----
@@ -772,49 +790,105 @@ fn particles_simple_color() {
     .assert_same();
 }
 
+/// `particles_bomb`'s inputs: the count; a bomb object or none; the decay type; the symmetry type; the
+/// time, the decay and delta-v; the particles' floats.
+fn bomb_inputs() -> Vec<Input> {
+    inputs(&[
+        &[
+            Input::Of(COUNTS),
+            Input::Flag,
+            Input::Of(&[0, 1, 2]),
+            Input::Of(&[0, 1, 2, 3]),
+            Input::F32Swept(TEN),
+            Input::F32Swept(0x40a0_0000),
+        ],
+        &P3,
+    ])
+}
+
+/// `particles_bomb`'s words for a case of [`bomb_inputs`].
+fn bomb_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    stand_ins(e);
+    let d = particle_data(e, case, case.word(0), 3, 6);
+    let s = particle_system(e, case, d, &[], 6);
+    let m = modifier(e, 0x38, s);
+    if case.word(1) != 0 {
+        let o = object(e, 0xb0);
+        transform_at(e, o + 0x68, case, 7);
+        e.mem.set_u32(m + 0x18, o);
+    }
+    words(
+        e,
+        m + 0x1c,
+        &[
+            HALF,
+            bits(case, 7),
+            ONE,
+            bits(case, 5),
+            TWO,
+            case.word(2),
+            case.word(3),
+        ],
+    );
+    vec![m, bits(case, 4), d]
+}
+
+/// The placed particle's inputs: the count; the decay type; the symmetry type; where particle 0 is;
+/// the particles' floats.
+fn bomb_placed_inputs() -> Vec<Input> {
+    inputs(&[
+        &[
+            Input::Of(&[1, 3]),
+            Input::Of(&[0, 1, 2]),
+            Input::Of(&[0, 1, 2, 3]),
+            Input::Of(&[0, 1, 2]),
+        ],
+        &P3,
+    ])
+}
+
+/// The placed particle's words for a case of [`bomb_placed_inputs`].
+fn bomb_placed_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    stand_ins(e);
+    let d = particle_data(e, case, case.word(0), 3, 4);
+    let s = particle_system(e, case, d, &[], 4);
+    let m = modifier(e, 0x38, s);
+    words(
+        e,
+        m + 0x1c,
+        &[0, 0, ONE, TEN, TWO, case.word(1), case.word(2)],
+    );
+    let vertex = e.mem.u32(d + 0x20);
+    let info = e.mem.u32(d + 0x70);
+    match case.word(3) {
+        0 => words(e, vertex, &[HALF, 0, TWO]),
+        1 => words(e, vertex, &[HALF, 0, 0x4040_0000]),
+        _ => {}
+    }
+    let last = if case.word(3) == 2 { TEN } else { 0 };
+    e.mem.set_u32(info + 0x14, last);
+    vec![m, TEN, d]
+}
+
 #[test]
 fn particles_bomb() {
-    // The count; a bomb object or none; the decay type; the symmetry type; the time, the decay
-    // and delta-v; the particles' floats.
+    // Each comparison twice: under the other threads' control word with the modifier's calls into the
+    // dispatch family direct, bit for bit; under the main thread's with them by address
+    // ([`Common::dispatch_translated`]).
     Diff::new(entry!(0x00c2_e670, modifiers::bomb(Ptr<_>, f32, Ptr<_>)))
         .common()
-        .inputs(&inputs(&[
-            &[
-                Input::Of(COUNTS),
-                Input::Flag,
-                Input::Of(&[0, 1, 2]),
-                Input::Of(&[0, 1, 2, 3]),
-                Input::F32Swept(TEN),
-                Input::F32Swept(0x40a0_0000),
-            ],
-            &P3,
-        ]))
+        .control_words(&[0x027f])
+        .inputs(&bomb_inputs())
         .max_cases(256)
-        .setup(|e, case| {
-            stand_ins(e);
-            let d = particle_data(e, case, case.word(0), 3, 6);
-            let s = particle_system(e, case, d, &[], 6);
-            let m = modifier(e, 0x38, s);
-            if case.word(1) != 0 {
-                let o = object(e, 0xb0);
-                transform_at(e, o + 0x68, case, 7);
-                e.mem.set_u32(m + 0x18, o);
-            }
-            words(
-                e,
-                m + 0x1c,
-                &[
-                    HALF,
-                    bits(case, 7),
-                    ONE,
-                    bits(case, 5),
-                    TWO,
-                    case.word(2),
-                    case.word(3),
-                ],
-            );
-            vec![m, bits(case, 4), d]
-        })
+        .setup(bomb_words)
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x00c2_e670, modifiers::bomb(Ptr<_>, f32, Ptr<_>)))
+        .dispatch_translated()
+        .control_words(&[0x007f])
+        .inputs(&bomb_inputs())
+        .max_cases(256)
+        .setup(bomb_words)
         .run()
         .assert_same();
     // Without a bomb object (the bomb at the zero point (0.5, 0, 2)) and the axis (0, 0, 1), particle 0
@@ -823,37 +897,18 @@ fn particles_bomb() {
     // with its last update equal to the time (skipped); each decay and symmetry type; the time 10.
     Diff::new(entry!(0x00c2_e670, modifiers::bomb(Ptr<_>, f32, Ptr<_>)))
         .common()
-        .inputs(&inputs(&[
-            &[
-                Input::Of(&[1, 3]),
-                Input::Of(&[0, 1, 2]),
-                Input::Of(&[0, 1, 2, 3]),
-                Input::Of(&[0, 1, 2]),
-            ],
-            &P3,
-        ]))
+        .control_words(&[0x027f])
+        .inputs(&bomb_placed_inputs())
         .max_cases(256)
-        .setup(|e, case| {
-            stand_ins(e);
-            let d = particle_data(e, case, case.word(0), 3, 4);
-            let s = particle_system(e, case, d, &[], 4);
-            let m = modifier(e, 0x38, s);
-            words(
-                e,
-                m + 0x1c,
-                &[0, 0, ONE, TEN, TWO, case.word(1), case.word(2)],
-            );
-            let vertex = e.mem.u32(d + 0x20);
-            let info = e.mem.u32(d + 0x70);
-            match case.word(3) {
-                0 => words(e, vertex, &[HALF, 0, TWO]),
-                1 => words(e, vertex, &[HALF, 0, 0x4040_0000]),
-                _ => {}
-            }
-            let last = if case.word(3) == 2 { TEN } else { 0 };
-            e.mem.set_u32(info + 0x14, last);
-            vec![m, TEN, d]
-        })
+        .setup(bomb_placed_words)
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x00c2_e670, modifiers::bomb(Ptr<_>, f32, Ptr<_>)))
+        .dispatch_translated()
+        .control_words(&[0x007f])
+        .inputs(&bomb_placed_inputs())
+        .max_cases(256)
+        .setup(bomb_placed_words)
         .run()
         .assert_same();
 }

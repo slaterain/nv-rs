@@ -2,12 +2,12 @@
 //! the AI, the inventory, the HUD's compass and the process levels call on every actor.
 
 use super::layout::{LightLock, ListNode, RefObject};
-use super::{fld, fstp, m32_local, FAMILY};
+use super::FAMILY;
+use crate::anim_keys::narrow;
 use crate::culling::layout::NiPoint3;
-use crate::pathing::{self, fcom, m64_global, parity_even};
+use crate::pathing;
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
-use engine_core::x87::{x87_add, x87_mul, x87_quiet, x87_sub};
 use engine_core::{args, typed_call, Engine};
 
 /// The imports `InterlockedIncrement`, `InterlockedDecrement`, `InterlockedCompareExchange` and
@@ -339,13 +339,14 @@ pub fn entry_for(e: &mut Engine, this: Ptr, form: u32, _unused: u32, reference: 
 /// has the flag at `+0x14d` and a water height (`0057b0a0`) that isn't `-FLT_MAX`, a copy of it in the
 /// next of five slots of the ring at `011df7a0`, its z raised by the actor's height (`008853a0`) times
 /// the factor at `0101de30`, but at most to the water height minus the margin at `01020998`, in a
-/// cell with water (`004518e0`). All in x87, each operand as the exe reads it.
+/// cell with water (`004518e0`). The water and the rise in `f64`, rounded where the exe stores them.
+#[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN-aware as the exe: not above, including unordered.
 pub fn location_on_reference(e: &mut Engine, this: Ptr) -> u32 {
     if typed_call!(FAMILY, 0x005a_2030, byte_14d(e, this)) == 0 {
         return typed_call!(FAMILY, 0x0043_6aa0, position(e, this)).addr();
     }
     let water = e.call(WATER_HEIGHT, &args![this]).f64();
-    if !parity_even(fcom(water, m64_global(e, NO_WATER)), 0x44) {
+    if water == e.global::<f64>(NO_WATER) {
         return typed_call!(FAMILY, 0x0043_6aa0, position(e, this)).addr();
     }
     let index = e.global::<i32>(LOCATION_RING_INDEX).wrapping_add(1);
@@ -358,21 +359,17 @@ pub fn location_on_reference(e: &mut Engine, this: Ptr) -> u32 {
     super::copy_words(e, position, slot(e), 3);
     let cell = e.call(PARENT_CELL, &args![this]).u32();
     if cell != 0 && e.call(CELL_HAS_WATER, &args![cell]).u32() & 0xff != 0 {
-        let ceiling = fstp(x87_sub(
-            e.call(WATER_HEIGHT, &args![this]).f64(),
-            m64_global(e, WATER_MARGIN),
-        ));
-        let rise = fstp(x87_mul(
-            e.call(ACTOR_HEIGHT, &args![this]).f64(),
-            m64_global(e, HEIGHT_FACTOR),
-        ));
+        let ceiling =
+            narrow(e.call(WATER_HEIGHT, &args![this]).f64() - e.global::<f64>(WATER_MARGIN));
+        let rise =
+            narrow(e.call(ACTOR_HEIGHT, &args![this]).f64() * e.global::<f64>(HEIGHT_FACTOR));
         let z = Ptr::<NiPoint3>::new(slot(e));
-        let top = x87_add(fld(e, z, NiPoint3::z), m32_local(rise));
-        if fcom(super::fld_local(ceiling), top) & 0x41 != 0 {
-            e.set(z, NiPoint3::z, x87_quiet(ceiling));
+        let top = f64::from(e.get(z, NiPoint3::z)) + f64::from(rise);
+        if !(f64::from(ceiling) > top) {
+            e.set(z, NiPoint3::z, ceiling);
         } else {
             let z = Ptr::<NiPoint3>::new(slot(e));
-            let raised = fstp(x87_add(fld(e, z, NiPoint3::z), m32_local(rise)));
+            let raised = narrow(f64::from(e.get(z, NiPoint3::z)) + f64::from(rise));
             e.set(z, NiPoint3::z, raised);
         }
     }
@@ -414,7 +411,7 @@ pub fn word_108(e: &mut Engine, this: Ptr) -> u32 {
 /// game's hour (`00693d50`) and the date `month << 9 | day | year << 13` (`007037c0`; the day byte
 /// sign-extended).
 pub fn compute_last_time_processed(e: &mut Engine, this: Ptr) {
-    let hour = x87_quiet(e.global::<f32>(GAME_HOUR));
+    let hour = e.global::<f32>(GAME_HOUR);
     typed_call!(FAMILY, 0x0069_3d50, set_hour(e, this, hour));
     let month = e.global::<u32>(GAME_MONTH);
     let day = i32::from(e.global::<i8>(GAME_DAY)) as u32;
@@ -427,9 +424,9 @@ pub fn compute_last_time_processed(e: &mut Engine, this: Ptr) {
 }
 
 // Typed from 00693d50
-/// The float at `+0x20` becomes `value`, through the x87 stack.
+/// The float at `+0x20` becomes `value`.
 pub fn set_hour(e: &mut Engine, this: Ptr, value: f32) {
-    e.mem.set_f32(this.addr() + 0x20, x87_quiet(value));
+    e.mem.set_f32(this.addr() + 0x20, value);
 }
 
 // Typed from 007037c0
