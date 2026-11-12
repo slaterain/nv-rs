@@ -33,6 +33,10 @@ pub mod containers;
 pub mod cosave;
 pub mod game;
 pub mod identity;
+pub mod input;
+pub mod ln_events;
+pub mod main_loop;
+pub mod script_call;
 pub mod overrides;
 #[rustfmt::skip]
 pub mod slots;
@@ -72,6 +76,12 @@ pub struct Jip {
     pub saved: cosave::Saved,
     /// JIP's versions of xNVSE's and the game's commands.
     pub overrides: overrides::State,
+    /// JIP's gamepad state and its changes to what the game reads.
+    pub input: input::State,
+    /// JIP's main-loop callbacks.
+    pub main_loop: main_loop::State,
+    /// JIP's LN events.
+    pub ln_events: ln_events::State,
 }
 
 /// JIP as xNVSE knows it once loaded (`NVSEPlugin_Query`, `NVSEPlugin_Load`): its DLL, name,
@@ -116,6 +126,9 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
     if answers_installed {
         commands::install(e);
     }
+    input::install(e, answers_installed);
+    ln_events::install(e, answers_installed);
+    main_loop::install(e);
     nvse::plugins::register(e, plugin(answers_installed));
     let jip = e.ext::<Jip>();
     jip.installed = true;

@@ -13,11 +13,12 @@
 //!   them: the frame's seconds (`TimeGlobal` `0x011F6394`, `+0xC`) times V.A.T.S.'s multiplier
 //!   (`009c8cc0` on `0x011F2250`), summed (`g_gameSecondsPassed`); menu mode from `00702360`;
 //!   "paused" when the start menu (`0x011DAAC0`) or the console is open.
+//! - **The plugins' messages** ([`crate::plugins`]): `DeferredInit` at the end of the first frame,
+//!   `MainGameLoop` every frame before the rest.
 //!
 //! Not here yet: the first frame's `bWarnScriptErrors` choice (read from `nvse_config.ini` or
-//! `MyGECKMods.txt`; off, as without either file), the plugins' load errors and their
-//! `DeferredInit` and `MainGameLoop` messages (JIP, I-13), the user function files and the
-//! locale fix (with the run-time compiler, I-14).
+//! `MyGECKMods.txt`; off, as without either file), the plugins' load errors, the user function
+//! files and the locale fix (with the run-time compiler, I-14).
 
 use crate::expr::{Eval, Tok};
 use crate::functions::{self, Caller};
@@ -128,6 +129,7 @@ fn tick(e: &mut Engine, _: &[u32]) -> Option<u32> {
     if !e.ext::<Nvse>().main_thread_recorded {
         first_frame(e);
     }
+    crate::plugins::dispatch(e, crate::plugins::msg::MAIN_GAME_LOOP, 0, 0);
     // Any temporary inventory references go (their deferred actions run).
     if crate::invref::any(e) {
         crate::invref::clear(e);
@@ -167,6 +169,7 @@ fn first_frame(e: &mut Engine) {
     crate::errors::print_long(e, line.as_bytes());
     let thread = engine_core::thread_host::current_id(e);
     state(e).main_thread = thread;
+    crate::plugins::dispatch(e, crate::plugins::msg::DEFERRED_INIT, 0, 0);
 }
 
 /// `IsGamePaused`: the start menu or the console is open.

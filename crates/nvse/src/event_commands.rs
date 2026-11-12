@@ -381,10 +381,109 @@ fn extract_callback(
     Some((name, cb))
 }
 
+/// `atoi` as the C runtime has it: leading white space, a sign, digits up to the first other
+/// byte; past the range of an `int`, its end (MSVC's `atoi` saturates).
+fn atoi(text: &[u8]) -> i32 {
+    let mut i = 0;
+    while i < text.len() && matches!(text[i], b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r') {
+        i += 1;
+    }
+    let negative = i < text.len() && text[i] == b'-';
+    if i < text.len() && (text[i] == b'-' || text[i] == b'+') {
+        i += 1;
+    }
+    let mut v: i64 = 0;
+    while i < text.len() && text[i].is_ascii_digit() {
+        v = (v * 10 + i64::from(text[i] - b'0')).min(1 << 40);
+        i += 1;
+    }
+    let v = if negative { -v } else { v };
+    v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Script.cpp: ProcessEventHandler
+// (its part for JIP LN NVSE's LN events).
+/// When JIP has given its LN events and `name` up to a colon is one of them: the handler set or
+/// removed by JIP (`Some` of JIP's answer), with the number after the colon (`atoi`) and the
+/// callback's `source` filter (a removal without one may give the form as filter 1). Adding takes
+/// only the default priority and not `SetEventHandlerAlt`; removing takes the default or no
+/// priority. `None` for any other event, which xNVSE's own manager handles.
+fn ln_event(
+    e: &mut Engine,
+    ev: &mut Eval,
+    name: &[u8],
+    cb: &Callback,
+    add: bool,
+    priority: i32,
+    alt: bool,
+) -> Option<bool> {
+    let ln = crate::plugins::ln_events(e)?;
+    let (base, number) = match name.iter().position(|&b| b == b':') {
+        Some(at) => (&name[..at], &name[at + 1..]),
+        None => (name, &name[name.len()..]),
+    };
+    let event_mask = (ln.mask)(e, base);
+    if event_mask == 0 {
+        return None;
+    }
+    let number = if number.is_empty() { 0 } else { atoi(number) as u32 };
+    let mut form = cb.source;
+    if add {
+        if priority != PRIORITY_DEFAULT {
+            ev.error_text(format!(
+                "Cannot use non-default (non-{PRIORITY_DEFAULT}) priority {priority} for adding an LN event handler."
+            ));
+            return Some(false);
+        }
+        if alt {
+            ev.error_text(
+                "Cannot use SetEventHandlerAlt for LN events; use SetEventHandler instead."
+                    .to_string(),
+            );
+            return Some(false);
+        }
+    } else {
+        if priority != PRIORITY_DEFAULT && priority != PRIORITY_INVALID {
+            ev.error_text(format!(
+                "Cannot use non-default (non-{PRIORITY_DEFAULT}) and non-invalid (non-{PRIORITY_INVALID}) priority {priority} for removing an LN event."
+            ));
+            return Some(false);
+        }
+        if form == 0 {
+            // Support for using 1::SomeFilter instead of "source"::SomeFilter.
+            if let Some(filter) = cb.filters.get(&1) {
+                match filter {
+                    Data::Form(id) => {
+                        form = e.call(LOOKUP_FORM_BY_ID, &args![*id]).u32();
+                    }
+                    other => {
+                        let text = crate::commands::scripting_more::element_representation(e, other);
+                        ev.error_text(format!(
+                            "Cannot use non-form filter {} for an LN event.",
+                            String::from_utf8_lossy(&text)
+                        ));
+                        return Some(false);
+                    }
+                }
+            }
+        }
+    }
+    Some((ln.handler)(e, event_mask, cb.script, add, form, number))
+}
+
+/// `LookupFormByID` (`0x004839C0`).
+const LOOKUP_FORM_BY_ID: u32 = 0x0048_39c0;
+
 fn set_with(e: &mut Engine, ev: &mut Eval, toks: &[Tok], old: bool, new: bool) -> Option<f64> {
     let mut priority = PRIORITY_DEFAULT;
     let ok = match extract_callback(e, ev, toks, old, new, &mut priority) {
-        Some((name, cb)) => events::set_handler(e, &name, cb, priority, Some(ev)),
+        Some((name, cb)) => match ln_event(e, ev, &name, &cb, true, priority, new && !old) {
+            Some(ok) => {
+                events::release(e, &cb);
+                ok
+            }
+            None => events::set_handler(e, &name, cb, priority, Some(ev)),
+        },
         None => false,
     };
     Some(f64::from(u8::from(ok)))
@@ -403,7 +502,10 @@ fn remove_event_handler(e: &mut Engine, w: &[u32]) -> Ret {
         let mut priority = PRIORITY_INVALID;
         let ok = match extract_callback(e, ev, &toks, true, true, &mut priority) {
             Some((name, cb)) => {
-                let ok = events::remove_handler(e, &name, &cb, priority, Some(ev));
+                let ok = match ln_event(e, ev, &name, &cb, false, priority, false) {
+                    Some(ok) => ok,
+                    None => events::remove_handler(e, &name, &cb, priority, Some(ev)),
+                };
                 events::release(e, &cb);
                 ok
             }

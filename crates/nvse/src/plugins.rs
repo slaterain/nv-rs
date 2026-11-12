@@ -125,6 +125,29 @@ pub struct BuiltIn {
 #[derive(Default)]
 pub struct State {
     pub built_ins: Vec<BuiltIn>,
+    /// JIP LN NVSE's LN events, once it answers "installed" ([`set_ln_events`]).
+    pub ln_events: Option<LnEvents>,
+}
+
+/// JIP LN NVSE's LN events as xNVSE reaches them (`GetLNEventMask`, `ProcessLNEventHandler`:
+/// xNVSE takes them from JIP's DLL by ordinals 10 and 11, `PluginManager.cpp` (xNVSE), and
+/// `SetEventHandler` and `RemoveEventHandler` ask them first, `Commands_Script.cpp`'s
+/// `ProcessEventHandler`): an event's mask by name (0 for none), and a handler set or removed
+/// (the mask, the script, whether to add, the source form, the number after the name's colon).
+#[derive(Clone, Copy)]
+pub struct LnEvents {
+    pub mask: fn(&mut Engine, &[u8]) -> u32,
+    pub handler: fn(&mut Engine, u32, u32, bool, u32, u32) -> bool,
+}
+
+/// Gives xNVSE JIP's LN events (JIP's start, when it answers "installed").
+pub fn set_ln_events(e: &mut Engine, ln: LnEvents) {
+    e.ext::<Nvse>().plugins.ln_events = Some(ln);
+}
+
+/// JIP's LN events, when JIP gave them.
+pub fn ln_events(e: &Engine) -> Option<LnEvents> {
+    e.ext_get::<Nvse>().and_then(|n| n.plugins.ln_events)
 }
 
 /// Registers a built-in, in xNVSE's order of plugins (`InstallPlugins` after `std::sort` of the

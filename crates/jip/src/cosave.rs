@@ -1283,10 +1283,14 @@ fn message_text(e: &Engine, m: &Message) -> Vec<u8> {
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h:
-// DoPreLoadGameHousekeeping (its saved data's part: the player's appearance undo goes).
+// DoPreLoadGameHousekeeping (the parts built so far: the player's appearance undo goes, the
+// main-loop callbacks set to go at a load are marked (`CleanMLCallbacks`), the LN events' first
+// frame after the load reports no change).
 fn pre_load_housekeeping(e: &mut Engine) {
     let npc = player_base(e);
     saved(e).appearance_undo.erase(&npc);
+    crate::main_loop::clean(e);
+    crate::ln_events::pre_load(e);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), jip_nvse.cpp: NVSEMessageHandler (the save,
@@ -1328,6 +1332,14 @@ pub fn listen(e: &mut Engine, m: &Message) {
             s.carried.clear();
             s.serialized_tail.clear();
             s.had_section = false;
+        }
+        msg::MAIN_GAME_LOOP => {
+            // The callbacks, then the LN events when any has a handler. (JIP's HUD cursor and
+            // item list box parts come with their UI commands.)
+            if !e.ext::<Jip>().main_loop.callbacks.is_empty() {
+                crate::main_loop::cycle(e);
+            }
+            crate::ln_events::process(e);
         }
         _ => {}
     }
