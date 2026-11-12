@@ -471,6 +471,9 @@ pub fn save_game(e: &mut Engine, name: u32) {
             });
         }
     }
+    // The kept sections go after the built-ins', not in xNVSE's order of plugins (by DLL name):
+    // no reader depends on the order, xNVSE and every plugin find a section by its opcode base
+    // (`LookupHandleFromBaseOpcode` (xNVSE)).
     let kept = kept_to_write(e);
     let bytes = cosave::write_with(&sections, &kept);
     write_file(e, &path, &bytes);
@@ -485,11 +488,19 @@ fn kept_to_write(e: &mut Engine) -> Vec<cosave::Kept> {
     if !st.keep_other_plugins || st.kept.is_empty() {
         return Vec::new();
     }
-    let (kept, kept_mods) = (st.kept.clone(), st.kept_mods.clone());
-    if kept_mods != loaded_mods(e) {
+    let kept = st.kept.clone();
+    if !files_as_saved(e) {
         return Vec::new();
     }
     kept
+}
+
+/// Whether today's loaded files are the ones the last co-save read lists (`MODS`), in its order:
+/// only then do the mod indexes inside bytes kept from it, unread, name the same files. A new
+/// game, or no co-save read, lists none.
+pub fn files_as_saved(e: &Engine) -> bool {
+    let saved: &[Vec<u8>] = e.ext_get::<Nvse>().map_or(&[], |n| &n.saveload.kept_mods);
+    saved == loaded_mods(e)
 }
 
 // ---- loading ----

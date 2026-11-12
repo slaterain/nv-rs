@@ -22,7 +22,9 @@
 //! them since (`s_dataChangedFlags`); the commands come later (step 3.6).
 //!
 //! What a load does to the game besides keeping the data comes with JIP's saved data (step 3.3):
-//! a script variable is kept but not yet made in its script and event list (`Script::AddVariable`),
+//! a script variable is kept but not yet made in its script and event list (`Script::AddVariable`,
+//! which also refuses a name the script already has unless JIP added it this session: until then
+//! such a variable is kept and written back where JIP would leave it out),
 //! a linked reference is kept but not set on its reference (`SetLinkedRefID`), NPC perks are not
 //! given to the actors, and the appearance undo is not applied. Until then a save holds what the
 //! co-save loaded held. What JIP would pass over unread (another record type, a version it does
@@ -121,10 +123,14 @@ pub struct ExtraJipData {
     pub strings: [Vec<u8>; 2],
 }
 
+/// The bits of [`ExtraJipData::used`] and `forms` that name one of its 18 values.
+const EXTRA_VALUES_MASK: u32 = (1 << 18) - 1;
+
 impl ExtraJipData {
     /// The used indexes' count: past the highest used bit (`GetMaxIndex`).
     pub fn max_index(&self) -> u32 {
-        32 - self.used.leading_zeros()
+        // At most the 18 values (the load clears the bits past them).
+        (32 - self.used.leading_zeros()).min(self.values.len() as u32)
     }
 
     /// The bytes written for it before its texts (`GetSaveSize`): the two bit words and the
@@ -543,6 +549,15 @@ const KINDS: [u32; 8] = [
 pub fn load(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
     let flags = saved(e).changed;
     process_changed_flags(e, flags);
+    // nv-rs's own: a section cut short (a record running past the file's end) ends JIP's read
+    // where it breaks, with what was read kept; xNVSE then goes on at the section's end, so the
+    // rest of the co-save still loads.
+    let _ = read_records(e, r, flags);
+    Ok(())
+}
+
+/// [`load`]'s records.
+fn read_records(e: &mut Engine, r: &mut Reader, flags: u8) -> Result<(), OutOfRange> {
     while let Some((kind, version, length)) = r.next_record()? {
         saved(e).had_section = true;
         let (jg, perks_patch) = {
@@ -876,6 +891,11 @@ fn load_extra_data(e: &mut Engine, b: &mut Bytes) -> Option<()> {
                     .cloned()
                     .unwrap_or_default();
                 data.copy_head(head);
+                // nv-rs's own guard: only 18 values exist; bits for indexes past them (damaged or
+                // edited data, which JIP would read into the texts' fields) are cleared, so no
+                // read goes past the values and the size written matches the bytes written.
+                data.used &= EXTRA_VALUES_MASK;
+                data.forms &= EXTRA_VALUES_MASK;
                 resolve_extra_ids(e, &mut data);
                 if len1 != 0 {
                     data.strings[0] = string1.to_vec();
@@ -1081,13 +1101,17 @@ pub fn save(e: &mut Engine, r: &mut Records) {
     }
     let mut own = Records::default();
     save_own(e, &mut own);
+    // The keep row's rule: carried bytes hold mod indexes of the co-save they came from, so they
+    // go back only while today's files are the ones it lists.
+    let carry = nvse::saveload::files_as_saved(e);
     let s = &e.ext::<Jip>().saved;
+    let carried: &[Chunk] = if carry { &s.carried } else { &[] };
     for k in KINDS {
-        for c in own.chunks.iter().chain(&s.carried).filter(|c| c.kind == k) {
+        for c in own.chunks.iter().chain(carried).filter(|c| c.kind == k) {
             r.record(c.kind, c.version, &c.data);
         }
     }
-    for c in s.carried.iter().filter(|c| !KINDS.contains(&c.kind)) {
+    for c in carried.iter().filter(|c| !KINDS.contains(&c.kind)) {
         r.record(c.kind, c.version, &c.data);
     }
 }

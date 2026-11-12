@@ -31,6 +31,8 @@ pub mod game;
 pub mod identity;
 #[rustfmt::skip]
 pub mod slots;
+#[cfg(test)]
+mod saveload_tests;
 pub mod table;
 #[cfg(test)]
 mod test_support;

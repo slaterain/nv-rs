@@ -3,6 +3,7 @@
 //! changed forms, the player), and the messages that decide what a load reads.
 
 use super::*;
+use crate::test_support::{unhex, REAL_COSAVES};
 use nvse::cosave::{tag, Chunk};
 
 const SL: u32 = 0x0500_0000;
@@ -41,7 +42,7 @@ fn get_by_type(e: &mut Engine, a: &[u32]) -> Ret {
 impl World {
     fn new() -> World {
         let mut e = Engine::new();
-        for page in [0x011d_d000, 0x011c_5000, 0x011d_e000] {
+        for page in [0x011d_d000, 0x011c_5000, 0x011d_e000, 0x011c_3000] {
             e.map(page, 0x1000);
         }
         e.map(0x0500_0000, 0x0030_0000);
@@ -811,51 +812,6 @@ fn what_a_load_reads_again() {
     assert!(s(&mut w.e).last_path.is_empty());
 }
 
-/// Two co-saves the real game wrote with xNVSE 6.4.9 and JIP LN NVSE 57.30 (the scratch copy
-/// `game-xnvse`, 2026-11-07: `nvsecos1.nvse`, and `nvsecos4.nvse`, byte for byte `nvsecos2.nvse`).
-/// JIP's section in each holds only `JPGF` (no flags, a cap of 1.0): no co-save of JIP's other
-/// records, or of JIP with JohnnyGuitar NVSE, has been made yet.
-const REAL_COSAVES: [(&str, &[&str]); 2] = [
-    (
-        "nvsecos1",
-        &[
-            "4e5653450100000006000400d02000040200000000140000060000001c01000053444f4d00000000b20000000a0d0046",
-            "616c6c6f75744e562e65736d0d00446561644d6f6e65792e65736d1000486f6e6573744865617274732e65736d11004f",
-            "6c64576f726c64426c7565732e65736d10004c6f6e65736f6d65526f61642e65736d0e0054726962616c5061636b2e65",
-            "736d11004d657263656e6172795061636b2e65736d0f00436c61737369635061636b2e65736d0f004361726176616e50",
-            "61636b2e65736d150047756e52756e6e657273417273656e616c2e65736d535652410200000000000000525652410200",
-            "000022000000ff03000000010101000000ff0200000001000000000000f83f0100000000000004404556524102000000",
-            "000000005356545300000000000000004556545300000000000000000022000001000000140000004a50474601000000",
-            "08000000000000000000803f",
-        ],
-    ),
-    (
-        "nvsecos4",
-        &[
-            "4e5653450100000006000400d020000402000000001400000b000000d401000053444f4d00000000b20000000a0d0046",
-            "616c6c6f75744e562e65736d0d00446561644d6f6e65792e65736d1000486f6e6573744865617274732e65736d11004f",
-            "6c64576f726c64426c7565732e65736d10004c6f6e65736f6d65526f61642e65736d0e0054726962616c5061636b2e65",
-            "736d11004d657263656e6172795061636b2e65736d0f00436c61737369635061636b2e65736d0f004361726176616e50",
-            "61636b2e65736d150047756e52756e6e657273417273656e616c2e65736d535652410200000000000000525652410200",
-            "0000280000000205000000030001000000010200000001004101000000000000f03f0100620100000000000000405256",
-            "5241020000002700000001020000000101010000000104000000010000000000000a4003010078023412000104050000",
-            "0052565241020000002b00000003090000000100010000000302000000000000000000f0bf0214000000000000000000",
-            "254003030074656e45565241020000000000000053565453000000000000000052565453000000000c00000000010000",
-            "000500616c70686152565453000000000d000000010400000006004dfc6c6c657252565453000000000b000000040700",
-            "00000400666f75724556545300000000000000000022000001000000140000004a504746010000000800000000000000",
-            "0000803f",
-        ],
-    ),
-];
-
-fn unhex(lines: &[&str]) -> Vec<u8> {
-    let hex: String = lines.concat();
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
-        .collect()
-}
-
 /// The real co-saves round trip byte for byte: JIP's section read by JIP's load callback and
 /// written again by its save callback (after the `PreLoadGame` and `PostLoadGame` messages, as
 /// a load from the menu sends them), xNVSE's own section passed through as it was read, the whole
@@ -985,4 +941,95 @@ fn no_section_in_no_section_out() {
     );
     load_file(&mut w.e, &cosave(std::slice::from_ref(&flags)));
     assert_eq!(saved_chunks(&mut w.e), [flags], "a section loaded");
+}
+
+/// A `JPED` entry whose bit words name indexes past the 18 values (damaged or edited data), with
+/// the largest head JIP takes (0x50 bytes): loads without a read past the values, the bits past
+/// them cleared, and saves with a head size that matches the bytes written.
+#[test]
+fn extra_data_bits_past_the_values() {
+    let mut head = Out::default()
+        .u32((1 << 20) | 1)
+        .u32(1 << 20)
+        .u32(0x1111_1111);
+    for i in 1..18u32 {
+        head = head.u32(0x2000_0000 + i);
+    }
+    let head = head.0;
+    assert_eq!(head.len(), 0x50);
+    let data = Out::default()
+        .u32(1)
+        .u32(0x55)
+        .u32(0x0700_0010)
+        .u8(1)
+        .u32(5 + 0x50)
+        .u8(6)
+        .u32(0x50)
+        .u16(0)
+        .u16(0)
+        .bytes(&head)
+        .0;
+    let mut w = World::new();
+    w.changed(0x0700_0010);
+    s(&mut w.e).changed = changed::ALL;
+    load_file(&mut w.e, &cosave(&[chunk(kind::EXTRA_DATA, 1, data)]));
+    // Index 0 alone is left: a head of 12 bytes (the two words and one value), the key's size
+    // as JIP counts it (5 for the mod's header, which is 9 bytes) 5 + 12.
+    let expect = Out::default()
+        .u32(1)
+        .u32(0x55)
+        .u32(0x0700_0010)
+        .u8(1)
+        .u32(5 + 12)
+        .u8(6)
+        .u32(12)
+        .u16(0)
+        .u16(0)
+        .u32(1)
+        .u32(0)
+        .u32(0x1111_1111)
+        .0;
+    assert_eq!(written(&mut w.e), [chunk(kind::EXTRA_DATA, 1, expect)]);
+}
+
+/// Counts and lengths from the file never index or allocate past the bytes there: an absurd key
+/// count with three bytes behind it, an absurd owner count, a record whose length runs far past
+/// the file and a record cut short all load without a panic, keeping what was read before.
+#[test]
+fn damaged_records_end_the_read() {
+    let mut w = World::new();
+    s(&mut w.e).changed = changed::ALL;
+    let absurd = [
+        chunk(
+            kind::EXTRA_DATA,
+            1,
+            Out::default().u32(u32::MAX).bytes(&[1, 2, 3]).0,
+        ),
+        chunk(kind::SCRIPT_VARS, 9, Out::default().u16(u16::MAX).0),
+        chunk(kind::NPC_PERKS, 10, Out::default().u16(u16::MAX).u32(5).0),
+    ];
+    load_file(&mut w.e, &cosave(&absurd));
+    assert!(s(&mut w.e).extra_data.is_empty());
+    assert!(s(&mut w.e).script_vars.is_empty());
+    // A record after `JPGF` whose length says 0x7FFFFFF0 bytes.
+    let flags = chunk(
+        kind::SERIALIZED_VARS,
+        1,
+        Out::default().u32(1).u32(0.5f32.to_bits()).0,
+    );
+    let mut file = cosave(&[flags.clone(), chunk(kind::AUX_VARS, 10, vec![0; 4])]);
+    let at = file.len() - 4 - 4;
+    file[at..at + 4].copy_from_slice(&0x7fff_fff0u32.to_le_bytes());
+    s(&mut w.e).changed = changed::ALL;
+    load_file(&mut w.e, &file);
+    assert_eq!(
+        saved_chunks(&mut w.e),
+        std::slice::from_ref(&flags),
+        "oversized"
+    );
+    // The same file cut in the middle of its second record.
+    let full = cosave(&[flags.clone(), chunk(kind::AUX_VARS, 10, vec![0; 8])]);
+    s(&mut w.e).changed = changed::ALL;
+    load_file(&mut w.e, &full[..full.len() - 3]);
+    assert_eq!(saved_chunks(&mut w.e), [flags], "truncated");
 }
