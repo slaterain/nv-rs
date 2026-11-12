@@ -2309,11 +2309,13 @@ fn location_on_reference_at_24_bits_rounds_the_rise_once() {
 /// The lock's long wait, which the differential test leaves out (10,000 tries, each call compared
 /// with a hash of memory, is too slow there): an owner that lets go only at a `Sleep(1)` gets 10,000
 /// `Sleep(0)`s, then one `Sleep(1)`, then the lock is this thread's with a count of 1. The translation
-/// and the typed version, counted the same way.
+/// and the typed version, counted the same way, on an engine with the translations only
+/// ([`Engine::new_untyped_for_test`]): with the family on, as it is by default, the call by address
+/// would reach the typed version.
 #[test]
 fn lock_sleeps_a_millisecond_after_ten_thousand_tries() {
     fn run(typed: bool) -> (u32, u32, u32, u32) {
-        let mut e = Engine::new();
+        let mut e = Engine::new_untyped_for_test();
         stand_ins(&mut e);
         // `Sleep`: counts by its argument; the owner lets go at a `Sleep(1)`.
         e.register(0x0040_fca0, |e, a| {
