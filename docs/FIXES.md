@@ -106,6 +106,7 @@ The game's own `iFPSClamp` ignores `FrameLimit`: a clamp is a fixed step with no
 | Thread races | `00aa42e0`, `00aa3a40`, `00a0e770`, `00a0df80`, `00a0f8b0`, `0071d0a0`, `00652140`, `00652160`, `00652190` | `NV_THREAD_RACES` | Three places where the original shares state between its threads without the lock it needs, which the port meets because it runs the game's threads side by side: a new thread's scrap heap (the first look-up on a thread inserts into an unlocked map, so two threads starting at once can lose one, and a block is later freed into the wrong heap), the debug texts and the console (printed from any thread while the main thread handles and times out the same queue), and the face-gen lock's count (counted down after the release with a plain read and write, so counts are lost and the model cache is never emptied, or emptied under another thread). From lStewieAl's Tweaks. Below |
 | Texture files read before the renderer's lock | `00e6dc40` | `NV_TEXTURE_READ_FIRST` | The loading thread makes a texture's renderer data (`00e6dc40`) under the renderer's source-data lock (`m_kSourceDataCriticalSection`, the renderer's +0x180), and the making reads the texture's file and unpacks it from its archive inside that lock (`00e68a80`: `NiFile::GetFile`, `00462d80`), so main, which takes the same lock to bind or make another texture's data, waited for the read: 6-13 ms in 5-6 frames of each run across cell borders (measure/smooth-200/BORDERS.md). Here the file is read first, on the same thread with the same calls, when the texture is loaded by its file name (the common case: each making opens its own file; a texture holding a file object of its own is made as before, its file read under the lock), and only the rest stays under the lock in the exe's order: the renderer data's allocation and construction, the image description, the Direct3D texture's creation, the texture taking its data. The lock guards the textures' renderer data (+0x24) and the renderer's texture state; the read touches only the file and a buffer of its own. A texture another thread gives data meanwhile frees the buffer read for nothing (its file, opened for this making alone, is already deleted). The same textures with the same bytes, made and handed to the renderer in the same order; what differs with the row on is the guest heap's order of allocation (the file's buffer is taken before the renderer data's object), so heap addresses differ, not what is drawn. |
 | Cell entry waits for its own cell | `00446b50` | `NV_CELL_ENTRY_WAIT` | Crossing into a new outdoor cell, the game waits for the loads the new cell needs at once. The original waits for more: at the same crossing it queues the row of cells three cells ahead as a pre-load, at the same top priority, and the wait takes them too, one cell after another on the one loading thread: a wait of 45 to 82 ms for 1.5 ms of the entered cell's own loads, 68 to 150 ms with YUP. With the row the cells ahead that are still queued get the priority their references get (1 or 3, `TES::GetCellPriority`'s rule) before the wait, through the IO manager's own requeue, and load right after it, in the background. A cell load already running, and one for the entered cell itself, are waited for as before. Measured, one run each: the wait went from 82 to 20 ms in the base game and from 68 to 4 ms with YUP; the frame it falls in went from 122 to 55 ms and from 102 to 31 ms. The frames next to it keep the border's other work, so the crossing's longest frame went from 122 to 70 ms and from 102 to 65 ms: about half. Below |
+| Cell offsets for every plugin | `00583560`, `005854f0` | `NV_CELL_OFFSETS` | The game finds a cell of a master file by the table of cell positions the master carries (`OFST`); a plugin, and a master whose tables were stripped (YUP's, TTW's), it searches record by record each time a cell loads, on the one loading thread. With the row each such world space record gets the table its search would give, built from the plugin's own records at load on a host thread (Cell Offset Generator's idea), and a plugin's cells are found by it as a master's are. The same cells are found: where a table could not give the search's answer for every position, the world space is searched as before. Below |
 
 ### What high frame rates do to the original's code
 
@@ -384,6 +385,63 @@ and of the loading thread's tasks (measure/smooth-200/BORDERS.md, runs fd-dg1, f
   queued loads at the crossing: there is no wait, and the row changes nothing (the same state every
   frame, the same loading tasks in the same order).
 
+### Cell offsets for every plugin
+
+Each plugin that holds a world space record keeps an `OFFSET_DATA` for it: the record's position, the
+grid its `NAM0` / `NAM9` corners span, and a table of where each cell record of the grid is (`OFST`,
+made by Bethesda's tools). `TESWorldSpace::FindCellInFile` (`005854f0`) uses the table only for a
+master file (`00585502`), and `TESWorldSpace::Load` (`00583560`) stores the position and corners only
+for a master (`005835bc`, `00583dc0`, `00583ea8`). Any other file, and a master whose tables were
+stripped (YUP's and TTW's: the tools that make them drop `OFST`), is searched record by record from the
+world space record each time one of its cells loads, once for each such file, on the one loading thread
+(Cell Offset Generator's author measured up to 20 ms a file a cell in the original). A cell task took 5.5
+to 7.5 ms in the base game and 14 to 25 ms with YUP (measure/smooth-200/BORDERS.md, run fd-dg2), which
+was thought to be mostly that search; it is not (below).
+
+- **The row** (Cell Offset Generator's idea; `crates/host/src/cell_offsets.rs`). Registered over `Load`
+  and `FindCellInFile`. `Load` runs the translation, then gives the record's `OFFSET_DATA` the table its
+  search would give, built from the plugin's own records (`crates/esm/src/cell_offsets.rs`: one pass over
+  the plugin's world space group, on a host thread that the run's first world space record starts for
+  every plugin of the load order, in load order; `Load` waits for a plugin that is not done yet). A
+  master keeps the position and corners the translation stored and gains a table only where it has
+  none; any other file gets them as a master would, and its table replaces an `OFST` it may carry,
+  which the original never reads for it. `FindCellInFile` finds a cell of a file that is not a master
+  by that table, as the translation finds a master's; anything else goes to the translation. The tables
+  are in the game's heap like the masters' own and go with the world space (`00588c80`).
+- **The same cells.** The builder runs the search's own walk once per block and sub-block key: the
+  groups it enters and skips, the records flagged ignored that `TESFile::NextForm(1)` passes over (but
+  not right after a skipped group), `TLOD`, where it stops; a persistent cell is never found, and a cell
+  without a grid position is at 0, 0. Each position's entry is the record the search finds first. Where
+  a table cannot give the search's answer for every position (a cell the search finds outside the
+  corners, no corners, a grid of no squares or more than 4,194,304, two records of one world space in a
+  file, a cell that does not inflate) that world space gets none and is searched as before. The one
+  place a table answers differently is a cell asked for at x = 2,147,483,647, where the search finds
+  the persistent cell; no cell can be there. Built from the base game's masters' records, every one of
+  their 41 tables is the masters' own `OFST`, entry for entry (`crates/esm/tests/cell_offsets_real.rs`,
+  run on FalloutNV.esm and the four story add-ons, Dead Money, Honest Hearts, Old World Blues and Lonesome
+  Road).
+- **Not taken from Cell Offset Generator.** Its cache of tables on disk (`Data\CellOffsets`, checked
+  with an xxHash of the whole plugin): it builds a table by running the game's search for every square
+  of the grid, which is slow; one pass over the records reads less of a plugin than hashing it would,
+  so nothing is kept between runs and nothing is written. Its other patches, which the cell loads don't
+  need: `LoadPartial`'s master checks (the row stores the corners itself), the world space's and the
+  cell's `FindInFileFast` (`005858dc`, `005502a1`: a plugin's `TESFile::FindForm`), the editor-ID
+  lookup's "optimized file" test (`00461db1`, used by the console's `coc`) and its null check
+  (`0058598f`: an `OFFSET_DATA` with no table, which the row never makes).
+- **Measured** (2026-11-11, one check run each way: the short route, `NV_REPEATABLE=5400` with stepped
+  threads, YUP and SR556 loaded, the fixes preset with the row off and on; other agents' builds were
+  running, so the times are a check, not a timing sitting). Both runs pass the route check and load the
+  same 26 cells in the same order (the coc into Goodsprings). YUP's 28 world spaces got their tables in
+  8.4 ms on the host thread (the builder alone, release build, warm: 1.9 ms; FalloutNV.esm, which needs
+  none, is passed over in 3.2 ms). The cell loads took 335.6 ms in all with the row off and 317.6 ms with
+  it on (mean 12.9 and 12.2 ms, median 11.7 and 11.2): about 0.7 ms a cell, inside this run's noise (the
+  same cell's two loads differ by up to 10 ms either way). So in nv-rs the search of one plugin is a
+  small part of a cell load; most of it is the cell's own records, which the row does not change, and
+  the 14 to 25 ms cell tasks with YUP above are mostly those. What the row saves is one search per cell
+  for each plugin that edits a world space, so it grows with long load orders and TTW. The tables (about
+  370 KB of the game's heap with YUP) move later heap blocks, so the two runs are not byte for byte the
+  same: the player's height on the street at the end differs by 0.02 units.
+
 ### Dialogue topic index
 
 `TESTopic::GetOwnerTopic` (`0061a310`) walks the data handler's topic list and asks each topic (`00619e10`, first to
@@ -543,3 +601,6 @@ translated from them in these fixes.
 - **TEMPO** (Fallout 3): scaling the grab's per-frame pull by the frame's time times 60, at most 4.
 - **Viva New Vegas** (ModdingLinked, MIT): the guide's frame-rate rules, which these numbers were checked
   against.
+- **Cell Offset Generator**, WallSoGB, GPL-3.0: offset tables for every plugin and the engine's master-only
+  checks (`CellOffsetGenerator.cpp`), the idea of the cell offsets row; its tables are built another way here
+  and none of its code is used.

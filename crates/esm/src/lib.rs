@@ -22,6 +22,7 @@
 //! # Ok::<(), esm::Error>(())
 //! ```
 
+pub mod cell_offsets;
 mod cursor;
 pub mod error;
 pub mod inflate;

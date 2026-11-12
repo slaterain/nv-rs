@@ -390,6 +390,9 @@ const SET_PARENT_WORLD: u32 = 0x0058_63d0;
 const PARENT_FOR: u32 = 0x0058_6390;
 /// `fLODWaterHeight` getter (`0045cd80`, a float in ST0).
 const GET_LOD_WATER_HEIGHT: u32 = 0x0045_cd80;
+/// `TESWorldSpace::FindCellInFile` (`005854f0`, below), called by address as the exe calls
+/// it: a fix may replace it (crates/engine-core/data/overridable.tsv).
+const FIND_CELL_IN_FILE: u32 = 0x0058_54f0;
 /// The `OFFSET_DATA` of a file (`00588a90`, a later function of this
 /// file), `CreateOffsetData(file)` (`00588b00`).
 const OFFSET_DATA_OF_FILE: u32 = 0x0058_8a90;
@@ -2055,7 +2058,7 @@ pub fn tes_world_space_load_cell(e: &mut Engine, this: Ptr<TESWorldSpace>, x: i3
                 let file = form_get_file(e, this.addr(), index);
                 let file = thread_safe_file(e, file);
                 let found =
-                    !file.is_null() && tes_world_space_find_cell_in_file(e, this, file, x, y);
+                    !file.is_null() && e.call(FIND_CELL_IN_FILE, &args![this, file, x, y]).bool();
                 if !found {
                     continue;
                 }
@@ -2177,7 +2180,7 @@ pub fn tes_world_space_find_land_data_in_file(
         let file = form_get_file(e, this.addr(), index);
         let file = thread_safe_file(e, file);
         if !file.is_null()
-            && tes_world_space_find_cell_in_file(e, this, file, x, y)
+            && e.call(FIND_CELL_IN_FILE, &args![this, file, x, y]).bool()
             && e.call(CELL_FIND_LAND_DATA_IN_FILE, &args![file]).bool()
         {
             e.mem.set_u32(out_file.addr(), file.addr());
