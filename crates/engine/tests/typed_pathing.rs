@@ -3887,3 +3887,176 @@ fn rounding_is_goal_main_thread() {
     engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
     assert!(!goal);
 }
+
+// ---- Branches the swept cases do not reach ----
+//
+// Each a fixed input, bit for bit under both control words ([`ROUNDING_BY_THREAD`]: the values are
+// exact or rounded alike at either precision), reaching one branch of the family's logic.
+
+#[test]
+fn closest_triangle_by_centre() {
+    // No triangle's height is found, so the search falls back to the nearest centre: the point (14.5,
+    // 6.5) lies in grid cell (1, 0), whose list holds triangles 0 to 2 (1 skipped, flagged), and
+    // triangle 2's centre (13.3, 3.3) is nearer than triangle 0's.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x0069_6cf0,
+            navmesh::closest_triangle(Ptr<_>, Ptr<_>, Ptr, Ptr) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_6cf0)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            let w = world(e);
+            e.register(0x0069_7730, |_, _| ret(0));
+            let p = point(e, [0x4168_0000, 0x40d0_0000, 0]);
+            let o = outs(e);
+            vec![w.mesh, p, o, o + 4]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn triangle_for_under_water() {
+    // A mesh with water (its height 10, so the limit is 60) and the point at height 0, under it: the
+    // only found height, triangle 0's -190 (below -180), counts there; above the water it would not.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x0069_6a50,
+            navmesh::triangle_for(Ptr<_>, Ptr<_>, u32) -> u16
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_6a50)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            let w = world(e);
+            e.mem.set_u32(w.mesh + 0x24, w.info);
+            e.register(0x0069_7810, |e, a| {
+                if a[1] & 0xffff == 0 {
+                    e.mem.set_u32(a[3], 0xc33e_0000);
+                    ret(1)
+                } else {
+                    ret(0)
+                }
+            });
+            let p = point(e, [TWO, TWO, 0]);
+            vec![w.mesh, p, 0x1234]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn intersection_far_end_on_line() {
+    // b = (0, 5) lies exactly on the line through c = (10, 0) and d = (-10, 10) (its side test is an
+    // exact zero) while a = (0, 0) does not: no intersection.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x006b_a240,
+            pov::intersection(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x006b_a240)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            stand_ins(e);
+            let a = point(e, [0, 0, 0]);
+            let b = point(e, [0, 0x40a0_0000, 0]);
+            let c = point(e, [TEN, 0, ONE]);
+            let d = point(e, [0xc120_0000, TEN, ONE]);
+            let out = e.mem.alloc(0xc);
+            vec![a, b, c, d, out]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn crossing_measured_again() {
+    // p2 = (5, -5) lies exactly on the line through p3 = (-10, 10) and p4 = (10, -10): the sum of the
+    // other side tests comes out a little off zero, below 0.001, so the side is measured again, an
+    // exact zero, and there is no crossing (with the sum kept it would cross at p2). Under the other
+    // threads' word ([`MAIN_WORD_DIFFERS`]).
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x006b_9e90,
+            pov::crossing(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x006b_9e90)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            stand_ins(e);
+            let [p1, p2, p3, p4] = crossing_points(
+                e,
+                [
+                    [0x4168_c03f, 0xc0f1_0369],
+                    [0x40a0_0000, 0xc0a0_0000],
+                    [0xc120_0000, TEN],
+                    [TEN, 0xc120_0000],
+                ],
+            );
+            let out = e.mem.alloc(8);
+            vec![p1, p2, p3, p4, out]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn triangle_z_one_sided() {
+    // Triangle 0 (heights 0, 1 and 2 at its corners) under the point (2, 2, 5.6): the point is about 5
+    // above it, inside 10 above and 1 below; the other way round it would be 5 below, outside.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x0069_7980,
+            navmesh::triangle_z(Ptr<_>, u16, Ptr<_>, f32, f32, Ptr) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_7980)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            let w = world(e);
+            let p = point(e, [TWO, TWO, 0x40b3_3333]);
+            let out = e.mem.alloc(4);
+            vec![w.mesh, 0, p, TEN, ONE, out]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn crossed_edge_end_on_corner() {
+    // The segment from (10, -5) to (10, 5) passes through triangle 0's corner (10, 0): on the first
+    // edge that corner lies exactly on the segment's line, so it is not the crossed edge; the second
+    // edge is.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x0069_8320,
+            navmesh::crossed_edge(Ptr<_>, u16, i32, Ptr<_>, Ptr<_>) -> i32
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_8320)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            let w = world(e);
+            let a = point(e, [TEN, 0xc0a0_0000, 0]);
+            let b = point(e, [TEN, 0x40a0_0000, 0]);
+            vec![w.mesh, 0, 0xffff_ffff, a, b]
+        })
+        .run()
+        .assert_same();
+    }
+}
