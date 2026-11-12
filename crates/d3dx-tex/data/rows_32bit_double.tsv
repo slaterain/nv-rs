@@ -1,0 +1,11 @@
+# d3dx_tex::synthetic::rows_source() (A8R8G8B8, 256x64) through the 32-bit d3dx9_38.dll's D3DXLoadSurfaceFromMemory into a scratch surface of each format, D3DX_FILTER_NONE without and with D3DX_FILTER_DITHER (d3dx-measure serve, x87 control word 0x27f): format, dither, answer, byte count, fnv1a64
+32	0	00000000	16384	65eb1e806b48b4f8
+32	1	00000000	16384	8c37c0564fbd1ccb
+33	0	00000000	32768	1bb23d29185fd7be
+33	1	00000000	32768	0e4f20dda8db76c9
+34	0	00000000	16384	f8d42ffe507a1ab2
+34	1	00000000	16384	75c682e32bfbd66a
+51	0	00000000	32768	8ad8814248cbb67e
+51	1	00000000	32768	4b7a005431f100d0
+1c	0	00000000	16384	291141bae1d695d3
+1c	1	00000000	16384	291141bae1d695d3

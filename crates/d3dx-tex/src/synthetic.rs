@@ -206,7 +206,8 @@ fn plain_cube(rng: &mut Rng, pf: (u32, u32, u32, [u32; 4]), s: u32, mips: u32) -
 /// and encoder without dither), some levels stored, and a cube map; then files of edge values
 /// ([`edges`]). The 16-bit formats first, then the luminance and alpha ones. X4R4G4B4 and A4L4
 /// are read into X1R5G5B5 and A4R4G4B4 (the formats D3DX picks on the reference device) with the
-/// ordered dither. The pixels are noise over gradients, so the X bits are set in some.
+/// ordered dither. The pixels are noise over gradients, so the X bits are set in some. Last, three
+/// files of values whose box averages fall halfway between two ([`pairs`]).
 pub fn formats() -> Vec<File> {
     let mut rng = Rng(0x5eed_d3d8_16b1_2026);
     let mut v = Vec::new();
@@ -228,8 +229,101 @@ pub fn formats() -> Vec<File> {
     format_group(&mut rng, &mut v, &sixteen, true);
     format_group(&mut rng, &mut v, &luminance, false);
     format_group(&mut rng, &mut v, &luminance, true);
+    pairs(&mut v, luminance[0].1, luminance[1].1, luminance[4].1);
     v
 }
+
+/// Pairs of 8-bit values a box of a one-pixel-wide level averages halfway between two values:
+/// four that sum to 19 (from #480's review), the same reversed, then others of odd sums across
+/// the range.
+const PAIRS8: [(u8, u8); 16] = [
+    (3, 16),
+    (4, 15),
+    (5, 14),
+    (6, 13),
+    (16, 3),
+    (15, 4),
+    (14, 5),
+    (13, 6),
+    (0, 1),
+    (127, 128),
+    (254, 255),
+    (0, 255),
+    (1, 254),
+    (100, 155),
+    (77, 200),
+    (128, 129),
+];
+
+/// The files of [`formats`] whose box averages fall halfway between two values, through the box
+/// filter's working-colour path (levels one pixel wide or high), so the luminance encoders'
+/// rounding and L16's decoder show: L8 and A8L8 one pixel wide and 32 high, rows in the pairs of
+/// [`PAIRS8`] (A8L8's alpha in the next pair's values, reversed); L16 64 wide and one high, pixels
+/// in the pairs (257, 514) and (257, 522), each of which D3DX's float 1/65535 decodes to a tie
+/// between two floats (dividing by 65535 rounds the other way).
+fn pairs(v: &mut Vec<File>, l8: DdsPixelFormat, a8l8: DdsPixelFormat, l16: DdsPixelFormat) {
+    let mut d = header(1, 32, 1, l8, 0);
+    for (a, b) in PAIRS8 {
+        d.extend_from_slice(&[a, b]);
+    }
+    v.push(File {
+        name: "l8-1x32-pairs-one".into(),
+        cube: false,
+        data: d,
+    });
+    let mut d = header(1, 32, 1, a8l8, 0);
+    for (i, (a, b)) in PAIRS8.into_iter().enumerate() {
+        let (x, y) = PAIRS8[(i + 1) % PAIRS8.len()];
+        d.extend_from_slice(&[a, y, b, x]);
+    }
+    v.push(File {
+        name: "a8l8-1x32-pairs-one".into(),
+        cube: false,
+        data: d,
+    });
+    let mut d = header(64, 1, 1, l16, 0);
+    for i in 0..32 {
+        let b: u16 = if i % 2 == 0 { 514 } else { 522 };
+        d.extend_from_slice(&257u16.to_le_bytes());
+        d.extend_from_slice(&b.to_le_bytes());
+    }
+    v.push(File {
+        name: "l16-64x1-pairs-one".into(),
+        cube: false,
+        data: d,
+    });
+}
+
+/// The source of the encoder checks (`d3dx-tex-verify --capture-rows`, `data/rows_32bit.tsv` and
+/// `rows_32bit_double.tsv`: D3DX's same-size conversion into each luminance and alpha format,
+/// with the dither and without): an A8R8G8B8 image [`ROWS_SIZE`], rows packed, of colours that are
+/// not grey, so each weight of the luminance step shows. Row 0 has every combination of 0, 1, 254
+/// and 255 in the four channels, row 1 of 0, 127, 128 and 255; the rest is noise.
+pub fn rows_source() -> Vec<u8> {
+    let (w, h) = ROWS_SIZE;
+    let mut rng = Rng(0x5eed_d3d8_1a4e_0480);
+    let mut d = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let ends: Option<[u8; 4]> = match y {
+                0 => Some([0, 1, 254, 255]),
+                1 => Some([0, 127, 128, 255]),
+                _ => None,
+            };
+            for k in 0..4 {
+                d.push(match ends {
+                    Some(e) => e[((x >> (2 * k)) & 3) as usize],
+                    None => rng.byte(),
+                });
+            }
+        }
+    }
+    d
+}
+
+/// The width and height of [`rows_source`] (a row of 256 holds every combination of four values
+/// in four channels).
+pub const ROWS_SIZE: (u32, u32) = (256, 64);
 
 /// The files of [`formats`] for a group of formats: the plain ones, or (`edge`) the edge-value
 /// ones in levels one pixel high or wide that the file stores, and in a square one.

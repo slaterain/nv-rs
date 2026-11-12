@@ -372,6 +372,47 @@ pub fn box_colors(src: &Level, precision: Precision) -> Vec<Color> {
     out
 }
 
+/// D3DX's same-size conversion through the working colour (0x624879) with the dither or without
+/// (`D3DXLoadSurfaceFromMemory` with `D3DX_FILTER_NONE`, `| D3DX_FILTER_DITHER` when `dither`), at
+/// the thread's `precision`: each row of the `w` x `h` image of `src_format` (not DXT; rows
+/// packed) decoded and encoded into `dst_format` (not DXT). For the tests against the DLL's
+/// encoders (`data/rows_32bit*.tsv`); the textures go through [`load_same_size`].
+pub fn convert_rows(
+    src_format: u32,
+    dst_format: u32,
+    w: u32,
+    h: u32,
+    bytes: &[u8],
+    dither: bool,
+    precision: Precision,
+) -> Vec<u8> {
+    fn rows<P: Fpu>(src: u32, dst: u32, w: usize, h: usize, bytes: &[u8], dither: bool) -> Vec<u8> {
+        let (from, to) = (
+            format::level_size(src, w as u32, 1),
+            format::level_size(dst, w as u32, 1),
+        );
+        let mut out = vec![0u8; to * h];
+        let mut colors = vec![[0.0f32; 4]; w];
+        for y in 0..h {
+            pixel::decode_row(src, &bytes[y * from..(y + 1) * from], w, &mut colors);
+            pixel::encode_row::<P>(
+                dst,
+                &colors,
+                y as u32,
+                dither,
+                &mut out[y * to..(y + 1) * to],
+            );
+        }
+        out
+    }
+    assert!(pixel::decodes(src_format) && pixel::encodes(dst_format));
+    let (w, h) = (w as usize, h as usize);
+    match precision {
+        Precision::Single => rows::<P24>(src_format, dst_format, w, h, bytes, dither),
+        Precision::Double => rows::<P53>(src_format, dst_format, w, h, bytes, dither),
+    }
+}
+
 /// What D3DX does with a level of the file it loads into a level of the same size
 /// (`D3DXLoadSurfaceFromMemory` with `D3DX_FILTER_TRIANGLE | D3DX_FILTER_DITHER`): the bytes as
 /// they are when the formats match and, for DXT, the level is whole blocks (0x624779, 0x6237ae);
