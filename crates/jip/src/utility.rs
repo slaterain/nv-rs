@@ -158,7 +158,11 @@ mod tests {
         assert_eq!(str_compare_ci(b"abd", b"ABC"), (1, 2));
         assert_eq!(str_compare_ci(b"abcd", b"abc"), (1, 3));
         assert_eq!(str_compare_ci(b"abc", b"abcd"), (-1, 3));
-        assert_eq!(str_compare_ci(b"ab\xe9", b"ab"), (-1, 2), "0xE9 is a negative byte");
+        assert_eq!(
+            str_compare_ci(b"ab\xe9", b"ab"),
+            (-1, 2),
+            "0xE9 is a negative byte"
+        );
         assert_eq!(str_compare_ci(b"\xc1", b"\xe1"), (0, 1));
         assert_eq!(str_compare_ci(b"\xc0", b"\xe0"), (-1, 0));
         // A text stops at its terminator.

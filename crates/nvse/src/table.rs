@@ -404,8 +404,14 @@ fn mapped_size(count: u32) -> u32 {
 /// the end and the engine's [`ScriptTables`] with it. A table already as long stays as it is.
 pub fn grow_to(e: &mut Engine, max_opcode: u32) {
     let t = e.script_tables();
-    assert_eq!(t.start, TABLE_AT, "xNVSE's table is built before a plugin's");
-    assert!(max_opcode <= ROOM_END, "{max_opcode:04x}: past the table's room");
+    assert_eq!(
+        t.start, TABLE_AT,
+        "xNVSE's table is built before a plugin's"
+    );
+    assert!(
+        max_opcode <= ROOM_END,
+        "{max_opcode:04x}: past the table's room"
+    );
     if max_opcode <= t.max_opcode {
         return;
     }

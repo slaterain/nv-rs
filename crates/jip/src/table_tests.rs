@@ -31,7 +31,11 @@ fn every_slot_is_the_sources() {
         let opcode = hex(row[0]);
         assert_eq!(slot.opcode, opcode);
         if row[1] == "EMPTY" {
-            assert_eq!((slot.kind, slot.name), (Kind::Empty, "NONE"), "{opcode:04x}");
+            assert_eq!(
+                (slot.kind, slot.name),
+                (Kind::Empty, "NONE"),
+                "{opcode:04x}"
+            );
             continue;
         }
         let returns = match row[1] {
@@ -59,18 +63,14 @@ fn every_slot_is_the_sources() {
                 slot.kind,
                 slot.file
             ),
-            (
-                row[2],
-                row[4],
-                row[5] == "1",
-                row[6],
-                returns,
-                kind,
-                row[7]
-            ),
+            (row[2], row[4], row[5] == "1", row[6], returns, kind, row[7]),
             "{opcode:04x}"
         );
-        assert_eq!(row[3].contains("_ALT_"), !slot.alias.is_empty(), "{opcode:04x}");
+        assert_eq!(
+            row[3].contains("_ALT_"),
+            !slot.alias.is_empty(),
+            "{opcode:04x}"
+        );
     }
 }
 
@@ -140,7 +140,10 @@ fn the_counts() {
             .count()
     };
     assert_eq!((count(&LN_BLOCK, false), count(&LN_BLOCK, true)), (299, 16));
-    assert_eq!((count(&JIP_BLOCK, false), count(&JIP_BLOCK, true)), (819, 16));
+    assert_eq!(
+        (count(&JIP_BLOCK, false), count(&JIP_BLOCK, true)),
+        (819, 16)
+    );
     for (i, s) in SLOTS.iter().enumerate() {
         assert_eq!(slot(s.opcode).map(|t| t.opcode), Some(s.opcode), "{i}");
     }

@@ -48,6 +48,12 @@ pub const ROUTINES: u32 = ROUTINE_BASE + 0x1000;
 pub const IS_PLUGIN_INSTALLED: u32 = ROUTINES;
 pub const GET_PLUGIN_VERSION: u32 = ROUTINES + 4;
 
+// Above xNVSE's last routines (its fake DirectInput device's 32 slots) and inside the range.
+const _: () = assert!(
+    nvse::input::DEVICE_CODE + 4 * 32 <= ROUTINES
+        && GET_PLUGIN_VERSION < engine_core::mem::EXTENDER_CODE.end
+);
+
 /// The opcodes: xNVSE's two plugin commands and JIP's two version commands.
 pub const XNVSE_IS_PLUGIN_INSTALLED: u32 = 0x15df;
 pub const XNVSE_GET_PLUGIN_VERSION: u32 = 0x15e0;
@@ -69,10 +75,14 @@ pub fn install(e: &mut Engine, answers_installed: bool) {
     e.register(IS_PLUGIN_INSTALLED, is_plugin_installed);
     e.register(GET_PLUGIN_VERSION, get_plugin_version);
     let t = e.script_tables();
-    e.mem
-        .set_u32(t.record(XNVSE_IS_PLUGIN_INSTALLED) + 0x18, IS_PLUGIN_INSTALLED);
-    e.mem
-        .set_u32(t.record(XNVSE_GET_PLUGIN_VERSION) + 0x18, GET_PLUGIN_VERSION);
+    e.mem.set_u32(
+        t.record(XNVSE_IS_PLUGIN_INSTALLED) + 0x18,
+        IS_PLUGIN_INSTALLED,
+    );
+    e.mem.set_u32(
+        t.record(XNVSE_GET_PLUGIN_VERSION) + 0x18,
+        GET_PLUGIN_VERSION,
+    );
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_utility.h:
