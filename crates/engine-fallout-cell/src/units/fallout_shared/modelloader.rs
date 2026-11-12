@@ -1701,7 +1701,7 @@ pub(crate) fn queued_texture_run_in_context(e: &mut Engine, this: Ptr<QueuedText
         let file_entry = queued_file_entry(e, this);
         let size = e.call(FILE_ENTRY_GET_SIZE, &args![file_entry]).u32();
         let file_entry = queued_file_entry(e, this);
-        let offset = fn_0043c3b0(e, Ptr::new(file_entry));
+        let offset = e.call(FILE_ENTRY_OFFSET, &args![file_entry]).u32();
         e.call(LOG, &args![NO_FILE_FOR_TEXTURE_ENTRY_MESSAGE, offset, size]);
     } else if queued_file_name(e, this) != 0 {
         let name = queued_file_name(e, this);
@@ -1709,10 +1709,20 @@ pub(crate) fn queued_texture_run_in_context(e: &mut Engine, this: Ptr<QueuedText
     }
 }
 
+/// `0043c3b0` (below), called by its address: the direct file access row (`crates/host`)
+/// replaces it with [`fn_0043c3b0_full_offsets`].
+const FILE_ENTRY_OFFSET: u32 = 0x0043_c3b0;
+
 // Translated from 0043c3b0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `BSFileEntry::iOffset` with the top bit masked off (the dword at +0xC).
 pub fn fn_0043c3b0(e: &mut Engine, this: Ptr) -> u32 {
     e.mem.u32(this.addr() + 0xc) & 0x7fff_ffff
+}
+
+/// [`fn_0043c3b0`] with JohnnyGuitar NVSE's full offset range (its patch at `0043c3bd`): the
+/// whole dword at +0xC, bit 31 included, since that bit is an offset bit there.
+pub fn fn_0043c3b0_full_offsets(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0xc)
 }
 
 // Translated from 0043c3d0 (decompiled, FalloutNV.exe 1.4.0.525)

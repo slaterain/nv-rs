@@ -52,7 +52,12 @@ of the data handler's file loading (`00463070`).
    load.", `004738a0`).
 5. **The load order** is the active files in list order, at most 255
    ("Too many selected files to compile!"); each gets its index (the top
-   byte of its form IDs).
+   byte of its form IDs). In the original a long list runs out of open
+   files first: its C runtime holds 512, and the game keeps one on each
+   plugin for each of its form-loading threads (about 140 plugins, Mod
+   Limit Fix's author). The fixes preset's direct file access takes the
+   game's files off that table ([FIXES.md](FIXES.md), "Direct file
+   access"), so only the 255 remain.
 6. **Master sizes.** For plugins without the master flag, each master's
    size is compared with the size stored after its `MAST` (`DATA`); a
    difference gives the warning "One of the files that "%s" is dependent

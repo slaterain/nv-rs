@@ -31,6 +31,7 @@ nv-rs Fixes	bVatsLag	NV_VATS_LAG	1	V.A.T.S. waits only for the camera: a target'
 nv-rs Fixes	bActorCause	NV_ACTOR_CAUSE	1	Causes keep no witness lists: projectiles and explosions no longer copy their actor's detection list, which every save wrote out (save bloat).
 nv-rs Fixes	bRadioLengths	NV_RADIO_LENGTHS	1	Radio song lengths: a radio song never takes the length of the song before it on its channel, and a song with no length no longer hangs the music thread.
 nv-rs Fixes	bStripLodWater	NV_STRIP_LOD_WATER	1	No distant water under the Strip: The Strip gets "No LOD Water" as it loads, so the distant water under its ground, never seen, is never made.
+nv-rs Fixes	bDirectFiles	NV_DIRECT_FILES	1	Direct file access: the game's files are opened, read and written by the thread that asks, without the file thread, the limit of 512 open files (about 140 plugins) or the 2 GB limit on a file or an archive.
 nv-rs Fixes	bCosaveKeep	NV_COSAVE_KEEP	1	Co-save keeps other plugins: a co-save's parts from plugins not built in (JIP LN NVSE's) are written back while the same files are loaded.
 nv-rs Fixes	bNVSEErrorGuard	NV_NVSE_ERROR_GUARD	1	Script error loop guard: an error inside a script's error handler is not sent to the handlers again.
 nv-rs Fixes	bNVSEImodCheck	NV_NVSE_IMOD_CHECK	1	Image-space event form check: OnRemoveIMOD only for an image-space modifier form's instance that ran out, not for depth of field or blur.

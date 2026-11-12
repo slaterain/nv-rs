@@ -6,6 +6,7 @@
 # missed), nv-rs's own fixes preset (crates/host/src/fixes.rs), and the four fixes-preset guards the audit left.
 00418b10	0	JIP
 0041af70	0	YUP,xNVSE
+0043c3b0	0	JG,nv-rs direct file access
 00446b50	1	nv-rs cell entry waits for its own cell
 004512a0	0	xNVSE
 00455490	0	script or frame function
@@ -133,6 +134,9 @@
 00a41110	0	kNVSE
 00a5b460	0	JG
 00a5b690	0	JG,JIP
+00aa14d0	0	ModLimitFix,nv-rs direct file access
+00aa15f0	1	ModLimitFix,nv-rs direct file access
+00aa16d0	1	ModLimitFix,nv-rs direct file access
 00aa3a40	1	nv-rs thread races
 00aa3e40	0	HeapReplacer
 00aa4060	0	HeapReplacer
@@ -154,17 +158,29 @@
 00aa7030	0	HeapReplacer
 00aa7290	0	HeapReplacer
 00aa7300	1	HeapReplacer
-00aa85c0	0	CellOffsetGenerator
-00aa8610	0	CellOffsetGenerator
-00aa8660	0	CellOffsetGenerator
+00aa7eb0	0	ModLimitFix,CellOffsetGenerator,nv-rs direct file access
+00aa81d0	1	nv-rs direct file access
+00aa85c0	0	CellOffsetGenerator,ModLimitFix,nv-rs direct file access
+00aa8610	0	CellOffsetGenerator,ModLimitFix,nv-rs direct file access
+00aa8660	0	CellOffsetGenerator,ModLimitFix,nv-rs direct file access
 00ad89e0	0	ITR
 00ad8b60	0	ITR
 00ae5a50	2	ITR
-00afad00	1	JG
+00afa550	0	JG,nv-rs direct file access
+00afa750	0	JG,nv-rs direct file access
+00afac20	0	JG,nv-rs direct file access
+00afac90	0	JG,nv-rs direct file access
+00afad00	0	JG,nv-rs direct file access
+00afb190	0	JG,nv-rs direct file access
+00afb2a0	0	JG,nv-rs direct file access
+00aff300	1	ModLimitFix,nv-rs direct file access
+00b004e0	1	ModLimitFix,nv-rs direct file access
 00b54090	0	DepthResolve
 00bdf3e0	1	VanillaPlusTerrain
 00be0fe0	0	ShaderLoader
 00be1750	0	ShaderLoader
+00c3d0e0	0	JG,nv-rs direct file access
+00c3d440	0	JG,nv-rs direct file access
 00c3dfa0	0	nv-rs IO wait ends on completion
 00c44280	0	nv-rs full screen taken as the borderless window
 00c65a80	1	nv-rs smooth physics drawing
@@ -179,6 +195,7 @@
 00e6dc40	0	nv-rs texture files read before the renderer's lock
 00e90c70	0	fixes preset guard
 00ec89e9	0	ImprovedConsole
+00ec9907	1	ModLimitFix,nv-rs direct file access
 00eccf5d	0	HeapReplacer
 00ecd1c7	0	HeapReplacer
 00ecd291	30	HeapReplacer

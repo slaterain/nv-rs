@@ -57,6 +57,7 @@ pub static FIXES: &[Fix] = &[
     ACTOR_CAUSE_WITNESSES,
     RADIO_LENGTHS,
     crate::patch_data::STRIP_LOD_WATER,
+    crate::direct_files::FIX,
 ];
 
 /// The IO manager's wait for queued loads (`00c3dfa0`: main at a cell border, a load, a save) sleeps

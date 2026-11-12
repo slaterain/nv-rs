@@ -111,6 +111,7 @@ The game's own `iFPSClamp` ignores `FrameLimit`: a clamp is a fixed step with no
 | Causes keep no witness lists | `0066e010`, `0066e440` | `NV_ACTOR_CAUSE` | An actor's projectile or explosion carries a cause (`ActorCause`), which copied the actor's whole detection list when it was made; every saved cause wrote all of it (one 42-byte record per actor detected), so saves grew with the shots fired in company. With the row the cause copies nothing (its constructor no longer asks the actor's process for the copy) and a save's records are read and dropped, so they are not written again. Nothing in the game reads the list but the cause's own functions (freeing it, removing an actor from it, saving and loading it), and a cause made for an actor without a full process never had one. Saves stay readable both ways. lStewieAl's ActorCause Save Bloat Fix. Below |
 | Radio song lengths | `008300c0`, `00830b30` | `NV_RADIO_LENGTHS` | Two bugs of the music and radio channels, from Psycho. A file opened on a channel left that channel's last duration in place until the new file's thread ran, and a radio station asks for the new song's duration at once and keeps a positive answer: a song opened while the channel's last song still faded out (a quick change of station) got that song's length, so it was cut short or followed by silence. With the row the duration is cleared when the file opens, and a channel's thread writes its file's duration only while the channel is still that file's (the fading thread wrote its length back once more before it noticed the new song). And the music thread brings the time since a station's start into the song's length by taking the length off while it is longer: a length of 0 never ends that loop, and the music thread spins for good (silence, one core busy). With the row a length of 0 skips that seek, and the rest gets the loop's own answer in one step. Below |
 | No distant water under the Strip | `00583560` | `NV_STRIP_LOD_WATER` | Patch data (below): The Strip's world space (`TheStripWorldNew`) gets the "No LOD Water" flag as it loads. Its distant water lies under the Strip's ground and is never seen, but the game makes it and turns its water system on for it. YUP, UPNVSE Plus and Tale of Two Wastelands 3.3.3b set the same flag; Aqua Performa's author reported about 20 frames a second on the Strip from it (not measured in nv-rs). Below |
+| Direct file access | `00aa14d0`, `00aa15f0`, `00aa16d0`, `00aa85c0`, `00aa8610`, `00aa8660`, `00aa7eb0`, `00aa81d0`, `00ec9907`, `00aff300`, `00b004e0`, `00afb2a0`, `00afa550`, `00afa750`, `00afb190`, `00afac20`, `00afac90`, `00afad00`, `0043c3b0`, `00c3d0e0`, `00c3d440` | `NV_DIRECT_FILES` | The game's files are opened, read and written by the thread that asks, as Mod Limit Fix 7 and Cell Offset Generator have them: no IO thread that every read waits for, no limit of 512 open files (about 140 plugins), and files and archives up to 4 GB: seeks and sizes past 2 GB, and an archive's files stored past 2 GB found and read, as with JohnnyGuitar NVSE (the original stops at 2 GB, where TTW's and VNV's generated LOD archives go on). Below |
 
 ### What high frame rates do to the original's code
 
@@ -459,6 +460,79 @@ was thought to be mostly that search; it is not (below).
   370 KB of the game's heap with YUP) move later heap blocks, so the two runs are not byte for byte the
   same: the player's height on the street at the end differs by 0.02 units.
 
+### Direct file access
+
+Mod Limit Fix 7 and Cell Offset Generator 1.08 (WallSoGB, GPL-3.0; Viva New Vegas and TTW's guide install
+both) change how the game reaches its files, and JohnnyGuitar NVSE (LGPL-2.1, in both guides) lets its
+archives' files lie anywhere in an archive of up to 4 GB (its `bFullOffsetRange`, on by default, which
+needs Mod Limit Fix). The row does the same, built from the exe (`crates/host/src/direct_files.rs`).
+
+- **The original.** `NiFile` and its subclass `BSFile`, which read every plugin, archive and loose file,
+  keep a C runtime `FILE` and reach it through Obsidian's "Serialized IO Thread": each read, write and
+  seek is queued to that one thread, which runs `fread`, `fwrite` or `fseek` and then wakes the caller.
+  The C runtime holds at most 512 open files, and the game keeps one on each plugin for each of its
+  form-loading threads: about 140 plugins fill it (Mod Limit Fix's author). Its `fseek` takes a signed
+  32-bit offset and its `ftell` refuses a position past 2 GB, so a file larger than 2 GB can't be read
+  past that point, and its size reads as 0. And an archive keeps each file's offset in 31 bits: the
+  32nd is a mark the PC game never sets (the check that a file has data compares it with the archive's
+  headers-only bit), so a file stored at 2 GB or more in an archive has no data. Generated object LOD
+  textures are "often exceeding 2GB, especially with Tale of Two Wastelands" (VNV's LOD guide), and
+  packed into one archive: in the original, every texture stored past 2 GB is missing.
+- **The row.** `NiFile`'s and `BSFile`'s opens (`00aa14d0`, `00aff300`) open the file with the platform's
+  `CreateFileA` as the C runtime's `fopen` of the same mode does (the same access and creation), and keep
+  the handle, marked by its low bit, where the `FILE` was. The IO thread's three calls (`00aa85c0`,
+  `00aa8610`, `00aa8660`) read, write and seek it on the calling thread with `ReadFile`, `WriteFile` and
+  `SetFilePointer`; `NiFile`'s seek (`00aa16d0`) moves it with 64-bit positions; the sizes (`00aa15f0`,
+  `00b004e0`) come from `GetFileSizeEx`; `fclose` (`00ec9907`) closes it. The IO thread is not started
+  (`00aa7eb0`) and its stop at the end has nothing to stop (`00aa81d0`); nothing else in the exe waits on
+  it. A `BSFile` in text mode (the game's own dumps) and a `FILE` handed to one keep the C runtime, whose
+  calls now run on the calling thread too. The archive functions that read a file's offset word take all
+  32 bits of it, at JohnnyGuitar's sites: the check that a file has data (`00afb2a0`), the making of a
+  file's object by its indices and by its entry (`00afa550`, `00afa750`), the invalidations of a file
+  that is loose on disk (`00afb190`, `00afac20`, `00afac90`, `00afad00`: they clear the whole word, since
+  an offset of 0 is what marks a file with no data), and the readers for a log line, a queued file's
+  description and its place in the loading queue (`0043c3b0`, `00c3d0e0`, `00c3d440`). An archive's read
+  (`00afb7a0`) moves its file by the difference of two 32-bit positions, a relative seek: the row's seek
+  lands such a move where the game's 32-bit sum puts it, so every position of an archive of up to 4 GB is
+  reached (JohnnyGuitar instead splits the move at `00afb99b` into steps that Mod Limit Fix's signed seek
+  can take).
+- **What differs from the original.** No limit on open files. A read, write or seek runs on the thread
+  that asks instead of waiting for the IO thread's turn (with real threads the platform's file calls
+  still run one at a time, under its lock, and an archive keeps its own lock around each seek and read,
+  as in the original). A seek from the start reads the game's 32-bit position as unsigned, so positions
+  and sizes up to 4 GB work; past 2 GB the original refused the seek and gave the size as 0 (a file of
+  4 GB or more still answers 0). A relative seek of 2 GB or more, on or back, goes where the game's 32-bit
+  sum points (the original's `fseek` refused it or went astray); a move before the start is still refused
+  unless that sum is a position inside the file, which only a file over 2 GB has, so in a file under 2 GB
+  every one is refused as before. An archive's files stored at 2 GB or more are found and read;
+  in an archive under 2 GB nothing changes (no offset there sets bit 31). The C runtime's undefined cases
+  answer as Windows does, as with Mod Limit Fix: a read of a file opened only for writing answers 0 (the
+  C runtime answered 0, or copied bytes out of its own write buffer), and a write right after a read
+  through one file opened for update is written (the C runtime dropped it, or refused it).
+- **Not taken from Mod Limit Fix.** Its opens differ from the C runtime's in the write modes (`"wb"`
+  opened without emptying the file, `"ab"` failing on a missing file), it reads every seek offset as
+  signed, and it opens text-mode files in binary. The row keeps each mode's meaning, and text mode on the
+  C runtime.
+- **Tested** (`direct_files.rs`; the archive functions also in `engine-bs`'s `archive.rs` and
+  `queuedfiles.rs`): the same answers, bytes, positions and files as the C runtime's path for reading (31
+  steps: through, around, inside and outside the buffer, at and past the end, a refused seek), for
+  `NiFile`'s two write modes and for `BSFile`'s three binary modes, a missing file in each (and only the
+  file's own handle left open), and its size asked before any open in each binary mode; 600 files held
+  open at once and each read while all 512 of the C runtime's are taken, where the original's open fails;
+  a 3 GB sparse scratch file read at 2.25 GB and at its end, reached from the start, the position and the
+  end, with its size (the original: the seek refused, the size 0), and relative seeks of 2 GB and more
+  on and back reaching their markers, while one before the start is refused; a 5 GB sparse file
+  answering size 0, as the original does past 2 GB; a 2.5 GB sparse archive with files below, across and
+  past 2 GB, made by `00afa550` (the original makes none for the one past 2 GB) and read by `00afb7a0` in
+  an order that moves its file back and on by more than 2 GB; the archive functions on a file at
+  `0x80000300`: data, a file object starting there, the lookup finding it, and each invalidation clearing
+  the whole word; the IO thread not started, and its calls answered at once.
+- **Measured** (2026-11-11, the short route, real threads, Vulkan, the play profile; a warm-up run, then the
+  row off, on, on, off, on a machine busy with builds): the Goodsprings `coc` load took 3.0 and 3.1 s with
+  the row and 4.0 to 5.7 s without it (every run without it, the warm-up included); the save's load from
+  the menu 3.7 and 4.4 s against 4.1 to 7.4 s. The route check passed in all five
+  (`measure/vnv-batch1/host-file-io/runs/c1`).
+
 ### Dialogue topic index
 
 `TESTopic::GetOwnerTopic` (`0061a310`) walks the data handler's topic list and asks each topic (`00619e10`, first to
@@ -747,6 +821,10 @@ translated from them in these fixes.
 - **ITR NVSE** (Into the Rough contributors, MIT): `SlowMotionPhysicsFix`, read for what slow motion does
   to physics.
 - **TEMPO** (Fallout 3): scaling the grab's per-frame pull by the frame's time times 60, at most 4.
+- **Mod Limit Fix 7** and **Cell Offset Generator 1.08**, WallSoGB (Mod Limit Fix first by iranrmrf),
+  GPL-3.0: which file calls to take off the C runtime and the IO thread, and that the IO thread can go.
+- **JohnnyGuitar NVSE** (its contributors, LGPL-2.1): the full archive offset range, which places read an
+  archive file's offset word and that its 32nd bit is free on PC.
 - **Viva New Vegas** (ModdingLinked, MIT): the guide's frame-rate rules, which these numbers were checked
   against.
 - **Cell Offset Generator**, WallSoGB, GPL-3.0: offset tables for every plugin and the engine's master-only
