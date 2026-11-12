@@ -4,7 +4,7 @@
 //! cannot load into nv-rs: it is rebuilt here, on the built-in xNVSE (`crates/nvse`), the way
 //! xNVSE runs it as a plugin.
 //!
-//! What is here so far (steps 3.1 and 3.2):
+//! What is here so far (steps 3.1, 3.2 and part of 3.4):
 //! - [`table`], [`slots`]: JIP's 1,150 command slots in the script command table at their real
 //!   opcodes (`0x2200..=0x233A` and `0x2600..=0x2942`), each record as JIP registers it, with no
 //!   handler yet: a script that calls a JIP command fails at that call, as it does without the
@@ -17,6 +17,8 @@
 //!   NVSE's corrected one) and its listener for xNVSE's messages, registered with xNVSE as a
 //!   plugin (`nvse::plugins`); [`containers`]: JIP's hash maps, whose walking order decides the
 //!   order of the records it writes.
+//! - [`overrides`]: JIP's versions of xNVSE's and the game's commands (`InitCmdPatches`), also
+//!   behind [`ANSWERS_INSTALLED`] (the game's own ones also behind a fixes row).
 //! - [`game`]: the game's classes JIP reads, as layouts.
 //! - [`console`], [`utility`]: JIP's console echo of a command's result and the text helpers it
 //!   uses.

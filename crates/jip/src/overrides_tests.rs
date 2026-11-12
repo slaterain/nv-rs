@@ -530,3 +530,85 @@ fn perk_ranks() {
     form(&mut e, thing, 0x0100_0051, 0x1f, VTABLES + 0x700, &[]);
     assert_eq!(perk_rank(&mut e, thing, perk, false), 0);
 }
+
+/// A handler's eight words with `this` and `containing`, the result at the test result.
+fn words(this: u32, containing: u32) -> [u32; 8] {
+    use crate::test_support::RESULT;
+    [0, 0, this, containing, 0, 0, RESULT, 0]
+}
+
+fn result(e: &Engine) -> f64 {
+    e.mem.f64(crate::test_support::RESULT)
+}
+
+/// `GetContainer`: the container the script runs in (its id in the result's low word); without
+/// one, and with no inventory reference for the calling reference, the result left as it was.
+#[test]
+fn containers() {
+    let mut e = world(true);
+    form(&mut e, REFR, 0x0100_0011, 0x3a, VTABLES, &[VT_IS_REFERENCE]);
+    form(&mut e, BASE, 0x0100_0077, 0x3a, VTABLES, &[VT_IS_REFERENCE]);
+    e.mem.set_f64(crate::test_support::RESULT, 0.0);
+    get_container(&mut e, &words(REFR, BASE));
+    assert_eq!(e.mem.u32(crate::test_support::RESULT), 0x0100_0077);
+    e.mem.set_f64(crate::test_support::RESULT, 0.0);
+    get_container(&mut e, &words(REFR, 0));
+    assert_eq!(result(&e), 0.0, "no inventory reference: left");
+}
+
+/// `GetHitLocation`: the actor's process's hit data's location; -1 without a process, hit data
+/// or for a non-actor.
+#[test]
+fn hit_locations() {
+    let mut e = world(true);
+    let process = AREA + 0xb000;
+    let process_vt = VTABLES + 0x800;
+    let hit = AREA + 0xb100;
+    let get_hit = 0x0700_2000;
+    form(&mut e, REFR, 0x0100_0011, 0x3b, VTABLES, &[VT_IS_ACTOR]);
+    e.mem.set_u32(process, process_vt);
+    e.mem.set_u32(process_vt + VT_GET_HIT_DATA, get_hit);
+    e.register(get_hit, |_, _| Ret {
+        eax: AREA + 0xb100,
+        ..Ret::default()
+    });
+    e.mem.set_i32(hit + 0x60, 3);
+    get_hit_location(&mut e, &words(REFR, 0));
+    assert_eq!(result(&e), -1.0, "no process");
+    e.mem.set_u32(REFR + 0x68, process);
+    get_hit_location(&mut e, &words(REFR, 0));
+    assert_eq!(result(&e), 3.0);
+    let thing = AREA + 0xb200;
+    form(&mut e, thing, 0x0100_0012, 0x1f, VTABLES + 0x900, &[]);
+    get_hit_location(&mut e, &words(thing, 0));
+    assert_eq!(result(&e), -1.0, "not an actor");
+}
+
+/// The evals: `MenuMode` writes 1 only when true (the condition code's 0 stays otherwise);
+/// `IsInList` writes 0 or 1; `IsRefInList` the index.
+#[test]
+fn evals() {
+    let mut e = world(true);
+    let res = crate::test_support::RESULT;
+    e.mem.set_u32(MANAGER + 0xc, 1);
+    e.mem.set_f64(res, 0.5);
+    menu_mode_eval(&mut e, &[0, 0, 0, res]);
+    assert_eq!(result(&e), 0.5, "false: left");
+    e.mem.set_u32(MANAGER + 0xc, 2);
+    menu_mode_eval(&mut e, &[0, 0, 0, res]);
+    assert_eq!(result(&e), 1.0);
+    let (a, b) = (AREA + 0x9000, AREA + 0x9100);
+    let fl = AREA + 0x9200;
+    list_form(&mut e, fl, &[a, b]);
+    form(&mut e, REFR, 0x0100_0011, 0x3a, VTABLES, &[VT_IS_REFERENCE]);
+    e.mem.set_u32(REFR + 0x20, a);
+    e.mem.set_u32(a + 0xc, 0x0100_0020);
+    e.mem.set_f64(res, 0.5);
+    is_in_list_eval(&mut e, &[REFR, fl, 0, res]);
+    assert_eq!(result(&e), 1.0);
+    e.mem.set_u32(REFR + 0x20, AREA + 0x9300);
+    is_in_list_eval(&mut e, &[REFR, fl, 0, res]);
+    assert_eq!(result(&e), 0.0);
+    is_ref_in_list_eval(&mut e, &[0, fl, b, res]);
+    assert_eq!(result(&e), 1.0);
+}
