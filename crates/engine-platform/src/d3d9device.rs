@@ -7779,6 +7779,17 @@ pub(crate) mod tests {
             assert!(main_lock_waits() > waits, "it waited");
             draw_join(&mut e);
             assert_eq!(word(&mut e, 0x10, 0), 0x2222_2222);
+            // A READONLY lock of main's before the drawing side writes there: no write of main's,
+            // so the join keeps the drawing side's bytes.
+            assert!(draw_cut(&mut e, dev));
+            assert_eq!(
+                word(&mut e, 0x18, 0x10),
+                0,
+                "main reads the buffer's own bytes"
+            );
+            as_drawing_side(|| put(&mut e, 0x18, 0x5555_5555, 0x1000));
+            draw_join(&mut e);
+            assert_eq!(word(&mut e, 0x18, 0), 0x5555_5555, "the drawing side's");
             // DISCARD and NOOVERWRITE: no wait; main's bytes stand in its range.
             for flags in [0x2000, 0x1000] {
                 assert!(draw_cut(&mut e, dev));
