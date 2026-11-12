@@ -213,7 +213,7 @@ fn installed_records(installed: bool) {
         let at = record_of(&e, slot.opcode);
         let r = Record::read(&e, at);
         let built = crate::commands::is_built(slot.opcode);
-        let (name, alias) = if !installed && !built {
+        let (name, alias) = if !installed {
             ("", "")
         } else if slot.opcode == 0x22c0 {
             ("JIP_ar_Cat", "JIP_pinto_Cat")
@@ -231,7 +231,7 @@ fn installed_records(installed: bool) {
         );
         let execute = if installed && slot.kind == Kind::Empty {
             EMPTY_EXECUTE
-        } else if built || (installed && (o == 0x2200 || o == 0x2210)) {
+        } else if installed && (built || o == 0x2200 || o == 0x2210) {
             nvse::table::execute_address(o)
         } else {
             0
@@ -278,10 +278,8 @@ fn installed_records(installed: bool) {
 fn not_installed_no_name_finds_jip() {
     let mut e = engine();
     crate::install_as(&mut e, false);
-    // Built commands (`crate::commands`) answer whatever JIP does, named.
     let mut jip: Vec<&[u8]> = SLOTS
         .iter()
-        .filter(|s| !crate::commands::is_built(s.opcode))
         .flat_map(|s| [s.name.as_bytes(), s.alias.as_bytes()])
         .filter(|n| !n.is_empty())
         .collect();

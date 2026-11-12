@@ -296,7 +296,8 @@ mod tests {
         assert_eq!(built(), 63);
     }
 
-    /// A built command has its execute and its name in its record; an unbuilt one has neither.
+    /// Answering "installed", a built command has its execute and its name in its record; an
+    /// unbuilt one has neither.
     #[test]
     fn built_commands_are_in_the_table() {
         let e = test_support::engine();
@@ -307,10 +308,31 @@ mod tests {
             nvse::table::guest_text(&e, e.mem.u32(record)),
             b"GetClimateSunTexture"
         );
-        // ForceClimate waits for JIP's hook: no handler, no name while JIP is not installed.
+        // ForceClimate waits for JIP's hook: no handler.
         assert_eq!(execute(&e, 0x28d8), 0);
-        let record = nvse::table::record_of(&e, 0x28d8);
-        assert_eq!(nvse::table::guest_text(&e, e.mem.u32(record)), b"");
+    }
+
+    /// Answering "not installed" (players' state until step 3.10), every opcode built here is as
+    /// without the DLL: its whole record what the table alone leaves (no name, no execute, no
+    /// eval), as an unbuilt one's.
+    #[test]
+    fn not_installed_the_built_commands_are_as_without_the_dll() {
+        let mut e = crate::test_support::engine();
+        crate::install_as(&mut e, false);
+        let mut plain = crate::test_support::engine();
+        crate::table::install(&mut plain, false);
+        let words = |e: &Engine, op: u32| -> Vec<u32> {
+            let at = nvse::table::record_of(e, op);
+            (0..10).map(|i| e.mem.u32(at + 4 * i)).collect()
+        };
+        for list in ALL {
+            for &(op, _) in list.iter() {
+                let w = words(&e, op);
+                assert_eq!(w, words(&plain, op), "{op:04x}");
+                assert_eq!((w[6], w[8]), (0, 0), "{op:04x}: no execute, no eval");
+                assert_eq!(nvse::table::guest_text(&e, w[0]), b"", "{op:04x}: no name");
+            }
+        }
     }
 
     /// `kBaseComponentOffsets`: a weapon (type 0x28, `0x0F2D1A0C`) has its destructible

@@ -100,12 +100,13 @@ fn set_model_path(e: &mut Engine, w: &[u32]) -> Ret {
     eax(0)
 }
 
-/// The engine: xNVSE's table, JIP installed (answering "not installed", as today), forms and
-/// heap memory, the stand-ins registered.
+/// The engine: xNVSE's table, JIP installed answering "installed" (built commands have their
+/// handlers only then: until step 3.10 every JIP opcode is as without the DLL), forms and heap
+/// memory, the stand-ins registered.
 pub fn engine() -> Engine {
     CALLS.with(|c| c.borrow_mut().clear());
     let mut e = crate::test_support::engine();
-    crate::install(&mut e);
+    crate::install_as(&mut e, true);
     e.map(FORMS, 0x10_0000);
     e.map(HEAP, HEAP_SIZE);
     e.mem.set_u32(HEAP_TOP, HEAP);

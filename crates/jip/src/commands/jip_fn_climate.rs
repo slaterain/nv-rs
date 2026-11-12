@@ -10,12 +10,13 @@
 //! new time set on the current climate is seen at its next change or refresh, as with JIP, which
 //! writes the climate only.
 
-use super::forms::{form_type, BSSimpleList, Sky, TESClimate, TESTexture, WeatherEntry, SKY};
+use super::forms::{form_type, Sky, TESClimate, TESTexture, WeatherEntry, SKY};
 use super::{
     assign_string, buffer_arg, heap_alloc, heap_free, model_path, set_form_result, set_model_path,
     string_set, string_text, type_of, Handlers,
 };
 use crate::console::print_form;
+use crate::game::ListNode;
 use engine_core::prelude::*;
 use engine_core::ptr::Layout;
 use nvse::commands::Read;
@@ -204,36 +205,36 @@ fn set_climate_trait_numeric(e: &mut Engine, w: &[u32]) -> Ret {
 }
 
 /// `tList::Count` (JIP LN NVSE): 0 for an empty first node, else every node.
-fn list_count(e: &Engine, head: Ptr<BSSimpleList>) -> u32 {
-    if e.get(head, BSSimpleList::m_item) == 0 {
+fn list_count(e: &Engine, head: Ptr<ListNode>) -> u32 {
+    if e.get(head, ListNode::data) == 0 {
         return 0;
     }
     let mut count = 1;
-    let mut node = e.get(head, BSSimpleList::m_pkNext);
+    let mut node = e.get(head, ListNode::next);
     while node != 0 {
         count += 1;
-        node = e.get(Ptr::<BSSimpleList>::new(node), BSSimpleList::m_pkNext);
+        node = e.get(Ptr::<ListNode>::new(node), ListNode::next);
     }
     count
 }
 
 /// `tList::GetNthItem` (JIP LN NVSE): the item of node `index` (a negative index none), 0 past
 /// the end.
-fn nth_item(e: &Engine, head: Ptr<BSSimpleList>, index: i32) -> u32 {
+fn nth_item(e: &Engine, head: Ptr<ListNode>, index: i32) -> u32 {
     if index < 0 {
         return 0;
     }
     let mut node = head;
     for _ in 0..index {
-        node = Ptr::new(e.get(node, BSSimpleList::m_pkNext));
+        node = Ptr::new(e.get(node, ListNode::next));
         if node.is_null() {
             return 0;
         }
     }
-    e.get(node, BSSimpleList::m_item)
+    e.get(node, ListNode::data)
 }
 
-fn weathers(c: Ptr<TESClimate>) -> Ptr<BSSimpleList> {
+fn weathers(c: Ptr<TESClimate>) -> Ptr<ListNode> {
     c.at(TESClimate::weatherTypes)
 }
 
@@ -306,34 +307,34 @@ fn get_climate_nth_weather_global(e: &mut Engine, w: &[u32]) -> Ret {
 fn weather_entry(e: &mut Engine, c: Ptr<TESClimate>, weather: u32, remove: bool) -> Option<u32> {
     let head = weathers(c);
     let mut node = head;
-    let mut prev = Ptr::<BSSimpleList>::NULL;
+    let mut prev = Ptr::<ListNode>::NULL;
     loop {
-        let entry = e.get(node, BSSimpleList::m_item);
+        let entry = e.get(node, ListNode::data);
         if entry != 0 && e.get(Ptr::<WeatherEntry>::new(entry), WeatherEntry::weather) == weather {
             if remove {
                 if !prev.is_null() {
-                    let gone = e.get(prev, BSSimpleList::m_pkNext);
-                    let after = e.get(Ptr::<BSSimpleList>::new(gone), BSSimpleList::m_pkNext);
-                    e.set(prev, BSSimpleList::m_pkNext, after);
+                    let gone = e.get(prev, ListNode::next);
+                    let after = e.get(Ptr::<ListNode>::new(gone), ListNode::next);
+                    e.set(prev, ListNode::next, after);
                     heap_free(e, gone);
                 } else {
-                    let next = e.get(node, BSSimpleList::m_pkNext);
+                    let next = e.get(node, ListNode::next);
                     if next != 0 {
-                        let next_node = Ptr::<BSSimpleList>::new(next);
-                        let item = e.get(next_node, BSSimpleList::m_item);
-                        let after = e.get(next_node, BSSimpleList::m_pkNext);
-                        e.set(node, BSSimpleList::m_item, item);
-                        e.set(node, BSSimpleList::m_pkNext, after);
+                        let next_node = Ptr::<ListNode>::new(next);
+                        let item = e.get(next_node, ListNode::data);
+                        let after = e.get(next_node, ListNode::next);
+                        e.set(node, ListNode::data, item);
+                        e.set(node, ListNode::next, after);
                         heap_free(e, next);
                     } else {
-                        e.set(node, BSSimpleList::m_item, 0);
+                        e.set(node, ListNode::data, 0);
                     }
                 }
             }
             return Some(entry);
         }
         prev = node;
-        node = Ptr::new(e.get(node, BSSimpleList::m_pkNext));
+        node = Ptr::new(e.get(node, ListNode::next));
         if node.is_null() {
             break;
         }
@@ -344,17 +345,17 @@ fn weather_entry(e: &mut Engine, c: Ptr<TESClimate>, weather: u32, remove: bool)
     let entry = heap_alloc(e, WeatherEntry::SIZE);
     // `tList::Prepend`: into an empty first node, else `ListNode::Insert` (the first item moves
     // to a new node after the first).
-    if e.get(head, BSSimpleList::m_item) != 0 {
-        let added = heap_alloc(e, BSSimpleList::SIZE);
-        let added_node = Ptr::<BSSimpleList>::new(added);
-        let first = e.get(head, BSSimpleList::m_item);
-        let next = e.get(head, BSSimpleList::m_pkNext);
-        e.set(added_node, BSSimpleList::m_item, first);
-        e.set(head, BSSimpleList::m_item, entry);
-        e.set(added_node, BSSimpleList::m_pkNext, next);
-        e.set(head, BSSimpleList::m_pkNext, added);
+    if e.get(head, ListNode::data) != 0 {
+        let added = heap_alloc(e, ListNode::SIZE);
+        let added_node = Ptr::<ListNode>::new(added);
+        let first = e.get(head, ListNode::data);
+        let next = e.get(head, ListNode::next);
+        e.set(added_node, ListNode::data, first);
+        e.set(head, ListNode::data, entry);
+        e.set(added_node, ListNode::next, next);
+        e.set(head, ListNode::next, added);
     } else {
-        e.set(head, BSSimpleList::m_item, entry);
+        e.set(head, ListNode::data, entry);
     }
     Some(entry)
 }

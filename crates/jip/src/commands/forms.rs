@@ -1,12 +1,13 @@
 //! The game's classes JIP LN NVSE's form accessors read and write, with the fields they need, at
 //! their PC offsets. The names are JIP's (`nvse/GameForms.h`, `nvse/GameData.h` (JIP LN NVSE));
 //! each offset is checked against the exe, and the function it was read from is named at the
-//! class. Classes `engine_core::types` already has (`TESForm`, `BSStringT`, `BSSimpleList`) are
-//! used from there.
+//! class. Classes `engine_core::types` (`TESForm`, `BSStringT`) or `crate::game` (`ListNode`)
+//! already have are used from there.
 
+pub use crate::game::ListNode;
 use engine_core::layout;
 use engine_core::ptr::Inline;
-pub use engine_core::types::{BSSimpleList, BSStringT, TESForm};
+pub use engine_core::types::{BSStringT, TESForm};
 
 /// `TESModel`'s virtual functions JIP calls (`GetModelPath`, `SetModelPath`): the slots at
 /// `+0x14` and `+0x18` of `TESModel`'s vtable (`0101CF44`: `00408DA0`, which answers the path's
@@ -43,7 +44,7 @@ layout! {
     pub struct TESClimate: 0x58 {
         0x18 nightSkyModel: Inline<TESModel>,
         /// `weatherTypes` (JIP LN NVSE): a `tList<WeatherEntry>`, its first node inline.
-        0x30 weatherTypes: Inline<BSSimpleList>,
+        0x30 weatherTypes: Inline<ListNode>,
         0x38 sunTexture: Inline<TESTexture>,
         0x44 sunGlareTexture: Inline<TESTexture>,
         0x50 sunriseBegin: u8,

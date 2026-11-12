@@ -172,7 +172,7 @@ fn a_path_longer_than_the_buffer_stops() {
 #[test]
 fn the_numeric_traits() {
     let mut e = setup();
-    for (i, v) in [36u8, 60, 108, 132, 75, 0xc5].iter().enumerate() {
+    for (i, v) in [36u8, 60, 108, 132, 75, 0xe5].iter().enumerate() {
         e.mem.set_u8(CLIMATE + 0x50 + i as u32, *v);
     }
     let get = |e: &mut Engine, t: i32| call(e, 0x2671, &[r(1), n(t)]).1;
@@ -181,8 +181,8 @@ fn the_numeric_traits() {
     assert_eq!(get(&mut e, 2), 1080.0);
     assert_eq!(get(&mut e, 3), 1320.0);
     assert_eq!(get(&mut e, 4), 75.0);
-    assert_eq!(get(&mut e, 5), 3.0, "0xC5 >> 6");
-    assert_eq!(get(&mut e, 6), 5.0, "0xC5 & 63");
+    assert_eq!(get(&mut e, 5), 3.0, "0xE5 >> 6");
+    assert_eq!(get(&mut e, 6), 37.0, "0xE5 & 63");
     assert_eq!(get(&mut e, 7), 0.0);
     assert_eq!(get(&mut e, -1), 0.0);
     assert_eq!(call(&mut e, 0x2671, &[r(2), n(4)]).1, 0.0, "not a climate");
