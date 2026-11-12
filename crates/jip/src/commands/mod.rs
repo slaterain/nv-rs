@@ -39,7 +39,8 @@ pub fn built() -> usize {
 
 /// Whether `opcode` is a built command.
 pub fn is_built(opcode: u32) -> bool {
-    ALL.iter().any(|list| list.iter().any(|&(o, _)| o == opcode))
+    ALL.iter()
+        .any(|list| list.iter().any(|&(o, _)| o == opcode))
 }
 
 /// Gives every built command its handler.
@@ -190,6 +191,12 @@ pub fn set_model_path(e: &mut Engine, model: u32, path: &[u8]) {
 }
 
 // ---- numbers ----
+
+/// `Dbl180dPI` and `FltPId180` (JIP LN NVSE, `internal/utility.h`), as JIP writes them (the float
+/// literal has more digits than an `f32` keeps; it rounds to the float JIP's code holds).
+pub const DBL_180_D_PI: f64 = 57.295_779_513_082_32;
+#[allow(clippy::excessive_precision)]
+pub const FLT_PI_D_180: f32 = 0.017_453_292_38;
 
 /// `cvttsd2si`, as the compiled C++ converts a double to an integer (and through it to a
 /// narrower one): toward zero, the integer indefinite (`i32::MIN`) for NaN and past the range.

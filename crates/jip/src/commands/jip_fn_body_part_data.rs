@@ -7,9 +7,10 @@
 //! `cvttss2si` to a 32-bit integer, its low byte stored.
 
 use super::forms::{form_type, BGSBodyPart, BGSBodyPartData};
+use super::{DBL_180_D_PI, FLT_PI_D_180};
 use super::{
-    assign_string, buffer_arg, cvttss2si, model_path, set_form_result, set_model_path,
-    string_set, string_text, type_of, Handlers,
+    assign_string, buffer_arg, cvttss2si, model_path, set_form_result, set_model_path, string_set,
+    string_text, type_of, Handlers,
 };
 use engine_core::prelude::*;
 use engine_core::ptr::Field;
@@ -40,9 +41,6 @@ const PATH_BUFFER: usize = 0x80;
 const NAME_BUFFER: usize = 0x40;
 /// The last part index (`eBodyPart_Weapon`, 14).
 const LAST_PART: u32 = 14;
-/// `Dbl180dPI`, `FltPId180` (JIP LN NVSE, `internal/utility.h`).
-const DBL_180_D_PI: f64 = 57.295_779_513_082_32;
-const FLT_PI_D_180: f32 = 0.017_453_292_38;
 
 /// The body part data argument 0 when the read succeeded and it is one.
 fn data_arg(e: &Engine, read: &Read) -> Option<Ptr<BGSBodyPartData>> {

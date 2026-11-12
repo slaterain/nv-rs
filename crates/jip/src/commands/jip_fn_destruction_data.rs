@@ -262,13 +262,20 @@ fn get_nth_destruction_stage_replacement(e: &mut Engine, w: &[u32]) -> Ret {
 fn set_nth_destruction_stage_replacement(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let read = Read::of(e, &a);
-    let path = buffer_arg(e, &read, 2, PATH_BUFFER, "SetNthDestructionStageReplacement");
+    let path = buffer_arg(
+        e,
+        &read,
+        2,
+        PATH_BUFFER,
+        "SetNthDestructionStageReplacement",
+    );
     if let Some(stage) = stage_arg(e, &read) {
         let mut replacement = e.get(stage, DestructionStage::replacement);
         if replacement == 0 {
             replacement = heap_alloc(e, TES_MODEL_TEXTURE_SWAP_SIZE);
             e.set(stage, DestructionStage::replacement, replacement);
-            e.mem.write(replacement, &[0; TES_MODEL_TEXTURE_SWAP_SIZE as usize]);
+            e.mem
+                .write(replacement, &[0; TES_MODEL_TEXTURE_SWAP_SIZE as usize]);
             e.mem.set_u32(replacement, TES_MODEL_TEXTURE_SWAP_VTBL);
         }
         set_model_path(e, replacement, &path);
@@ -316,12 +323,15 @@ fn add_destruction_stage(e: &mut Engine, w: &[u32]) -> Ret {
     let mut idx = read.int(1, 0) as i32;
     let (health, damage_stage) = (read.int(2, 0), read.int(3, 0));
     let data = e.get(dest, BGSDestructibleObjectForm::data);
-    let count = if data != 0 && e.get(Ptr::<DestructibleData>::new(data), DestructibleData::stages) != 0
-    {
-        i32::from(e.get(Ptr::<DestructibleData>::new(data), DestructibleData::stageCount))
-    } else {
-        0
-    };
+    let count =
+        if data != 0 && e.get(Ptr::<DestructibleData>::new(data), DestructibleData::stages) != 0 {
+            i32::from(e.get(
+                Ptr::<DestructibleData>::new(data),
+                DestructibleData::stageCount,
+            ))
+        } else {
+            0
+        };
     if idx > count {
         return handled(true);
     }
@@ -340,7 +350,8 @@ fn add_destruction_stage(e: &mut Engine, w: &[u32]) -> Ret {
         e.set(dest, BGSDestructibleObjectForm::data, new);
         e.set(d, DestructibleData::health, 0);
         // The count, the targetable flag and the two bytes after them, as one word.
-        e.mem.set_u32(new + DestructibleData::stageCount.off, NEW_DATA_COUNT_WORD);
+        e.mem
+            .set_u32(new + DestructibleData::stageCount.off, NEW_DATA_COUNT_WORD);
         e.set(d, DestructibleData::stages, 0);
         e.set(d, DestructibleData::unk0C, 0);
         e.set(d, DestructibleData::unk10, 0);
@@ -352,7 +363,12 @@ fn add_destruction_stage(e: &mut Engine, w: &[u32]) -> Ret {
     if stages != 0 {
         let new = heap_alloc(e, 4 * (n + 1));
         move_words(e, new, stages, idx);
-        move_words(e, new + 4 * (idx + 1), stages + 4 * idx, n.wrapping_sub(idx));
+        move_words(
+            e,
+            new + 4 * (idx + 1),
+            stages + 4 * idx,
+            n.wrapping_sub(idx),
+        );
         heap_free(e, stages);
         e.set(d, DestructibleData::stages, new);
         e.mem.set_u32(new + 4 * idx, stage);

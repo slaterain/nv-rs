@@ -64,7 +64,11 @@ fn the_ragdoll() {
     call(&mut e, 0x26ae, &[r(1)]);
     assert_eq!(form_result(&e), 0x0a61);
     call(&mut e, 0x26af, &[r(1), r(3)]);
-    assert_eq!(e.mem.u32(DATA + 0x70), RAGDOLL, "an explosion is no ragdoll");
+    assert_eq!(
+        e.mem.u32(DATA + 0x70),
+        RAGDOLL,
+        "an explosion is no ragdoll"
+    );
     call(&mut e, 0x26af, &[r(1)]);
     assert_eq!(e.mem.u32(DATA + 0x70), 0, "cleared without one");
     e.mem.set_u32(OTHER + 0x70, 0x55);
@@ -121,7 +125,11 @@ fn the_numeric_traits_set() {
         call(e, 0x26b2, &[r(1), n(1), n(t), z(v)]);
     };
     set(&mut e, 0, 300.9);
-    assert_eq!(e.mem.u8(PART + 0x63), (300 & 0xff) as u8, "the low byte of 300");
+    assert_eq!(
+        e.mem.u8(PART + 0x63),
+        (300 & 0xff) as u8,
+        "the low byte of 300"
+    );
     set(&mut e, 1, 1.5);
     assert_eq!(e.mem.f32(PART + 0x5c), 1.5);
     set(&mut e, 7, 9.99);
@@ -133,7 +141,7 @@ fn the_numeric_traits_set() {
     set(&mut e, 14, 5.0);
     assert_eq!(e.mem.f32(PART + 0x88 + 4), 5.0);
     set(&mut e, 18, 90.0);
-    assert_eq!(e.mem.f32(PART + 0x94 + 8), 90.0f32 * 0.017_453_292_38f32);
+    assert_eq!(e.mem.f32(PART + 0x94 + 8), 90.0f32 * FLT_PI_D_180);
     // A negative value, or a trait past 18: nothing.
     set(&mut e, 1, -0.5);
     assert_eq!(e.mem.f32(PART + 0x5c), 1.5);
@@ -150,7 +158,10 @@ fn the_form_traits() {
     let ids = [0x0e51, 0x0e51, 0x0d52, 0x0d52, 0x015f, 0x015f];
     for t in 0..6 {
         call(&mut e, 0x26b4, &[r(1), n(1), n(t as i32), r(forms[t])]);
-        assert_eq!(e.mem.u32(PART + fields[t]), FORMS + 0x3000 + 0x100 * u32::from(forms[t] - 2));
+        assert_eq!(
+            e.mem.u32(PART + fields[t]),
+            FORMS + 0x3000 + 0x100 * u32::from(forms[t] - 2)
+        );
         call(&mut e, 0x26b3, &[r(1), n(1), n(t as i32)]);
         assert_eq!(form_result(&e), ids[t], "trait {t}");
         // A form of another type clears it.

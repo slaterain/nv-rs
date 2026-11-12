@@ -79,7 +79,9 @@ pub fn print_form(e: &mut Engine, a: &CommandArgs, form: u32) {
         line.push(b'0');
     } else {
         line.extend(uint_to_hex(crate::commands::ref_id(e, form)));
-        let edid = e.vcall(form, crate::commands::forms::GET_EDITOR_ID, &[]).u32();
+        let edid = e
+            .vcall(form, crate::commands::forms::GET_EDITOR_ID, &[])
+            .u32();
         if edid != 0 && e.mem.u8(edid) != 0 {
             line.extend_from_slice(b" \"");
             line.extend(nvse::table::guest_text(e, edid));

@@ -53,7 +53,11 @@ fn the_image_space_modifiers() {
 #[test]
 fn the_cloud_textures() {
     let mut e = setup();
-    string(&mut e, WEATHER + 0x34 + 0xc * 3 + 4, Some(b"sky\\clouds3.dds"));
+    string(
+        &mut e,
+        WEATHER + 0x34 + 0xc * 3 + 4,
+        Some(b"sky\\clouds3.dds"),
+    );
     let (_, res) = call(&mut e, 0x2655, &[r(1), n(3)]);
     assert_eq!(string_result(&e, res), b"sky\\clouds3.dds");
     let (_, res) = call(&mut e, 0x2655, &[r(1), n(4)]);
@@ -63,7 +67,11 @@ fn the_cloud_textures() {
     call(&mut e, 0x2656, &[r(1), n(0), s(b"sky\\new.dds")]);
     assert_eq!(text_at(&e, WEATHER + 0x34 + 4), b"sky\\new.dds");
     call(&mut e, 0x2656, &[r(1), n(4), s(b"x")]);
-    assert_eq!(e.mem.u32(WEATHER + 0x34 + 0xc * 4 + 4), 0, "layer 4: nothing");
+    assert_eq!(
+        e.mem.u32(WEATHER + 0x34 + 0xc * 4 + 4),
+        0,
+        "layer 4: nothing"
+    );
 }
 
 #[test]
@@ -188,10 +196,7 @@ fn the_sky_now() {
     let (_, res) = call(&mut e, 0x2855, &[]);
     assert_eq!(res, 0.5 * -57.295_779_513_082_32);
     call(&mut e, 0x2856, &[z(90.0)]);
-    assert_eq!(
-        e.mem.f32(SKY_OBJECT + 0xd0),
-        90.0f32 * -0.017_453_292_38f32
-    );
+    assert_eq!(e.mem.f32(SKY_OBJECT + 0xd0), 90.0f32 * -FLT_PI_D_180);
 }
 
 #[test]

@@ -14,6 +14,7 @@
 //! compiled C++'s conversion: `cvttsd2si` to a 32-bit integer, its low byte stored.
 
 use super::forms::{Clouds, Sky, TESTexture, TESWeather, SKY, SKY_OBJECT_UPDATE};
+use super::{DBL_180_D_PI, FLT_PI_D_180};
 use super::{
     assign_string, buffer_arg, cvtd2ul, cvttsd2si, model_path, rgb_dec_to_hex, rgb_hex_to_dec,
     set_form_result, set_model_path, string_set, string_text, Handlers,
@@ -46,9 +47,6 @@ pub static COMMANDS: Handlers = &[
 
 /// JIP's path buffers (`char path[0x80]`).
 const PATH_BUFFER: usize = 0x80;
-/// `Dbl180dPI`, `FltPId180` (JIP LN NVSE, `internal/utility.h`).
-const DBL_180_D_PI: f64 = 57.295_779_513_082_32;
-const FLT_PI_D_180: f32 = 0.017_453_292_38;
 /// The 16 bytes `ResetClouds` zeroes (`_mm_storeu_ps((float*)0x11FF8B4, 0)`).
 const CLOUD_OFFSETS: u32 = 0x011f_f8b4;
 
@@ -90,7 +88,11 @@ fn set_weather_image_space_mod(e: &mut Engine, w: &[u32]) -> Ret {
     let read = Read::of(e, &a);
     let time = read.int(1, 0);
     if let Some(weather) = weather_arg(&read).filter(|_| time <= 5) {
-        e.set(nth(weather, time, 4), TESWeather::imageSpaceMods, read.form(2));
+        e.set(
+            nth(weather, time, 4),
+            TESWeather::imageSpaceMods,
+            read.form(2),
+        );
     }
     handled(true)
 }
@@ -214,19 +216,35 @@ fn set_weather_trait_numeric(e: &mut Engine, w: &[u32]) -> Ret {
     };
     match trait_id {
         0..=3 => {
-            let speed = if value > 0.1 { 255 } else { to_byte(value * 2550.0) };
+            let speed = if value > 0.1 {
+                255
+            } else {
+                to_byte(value * 2550.0)
+            };
             e.set(nth(weather, trait_id, 1), TESWeather::cloudSpeed, speed);
         }
         4 => {
-            let speed = if value > 1.0 { 255 } else { to_byte(value * 255.0) };
+            let speed = if value > 1.0 {
+                255
+            } else {
+                to_byte(value * 255.0)
+            };
             e.set(weather, TESWeather::windSpeed, speed);
         }
         5 => {
-            let delta = if value > 0.25 { 255 } else { to_byte(value * 1000.0) };
+            let delta = if value > 0.25 {
+                255
+            } else {
+                to_byte(value * 1000.0)
+            };
             e.set(weather, TESWeather::transDelta, delta);
         }
         6..=12 => {
-            let byte = if value > 1.0 { 255 } else { to_byte(value * 255.0) };
+            let byte = if value > 1.0 {
+                255
+            } else {
+                to_byte(value * 255.0)
+            };
             e.set(trait_byte(weather, trait_id), TESWeather::sunGlare, byte);
         }
         13 => {
@@ -336,11 +354,7 @@ fn set_wind_direction(e: &mut Engine, w: &[u32]) -> Ret {
     let read = Read::of(e, &a);
     if read.ok {
         let s = sky(e);
-        e.set(
-            s,
-            Sky::windDirection,
-            read.float(0, 0.0) * -FLT_PI_D_180,
-        );
+        e.set(s, Sky::windDirection, read.float(0, 0.0) * -FLT_PI_D_180);
     }
     handled(true)
 }
@@ -349,9 +363,8 @@ fn set_wind_direction(e: &mut Engine, w: &[u32]) -> Ret {
 /// The current weather (else the one fading out) is a rain weather (classification 4) and the
 /// weather's progress is not below 1 (`comiss 1.0, weatherPercent; setbe`: also true for NaN).
 fn is_raining(e: &Engine, s: Ptr<Sky>) -> bool {
-    let rainy = |w: u32| {
-        w != 0 && e.get(Ptr::<TESWeather>::new(w), TESWeather::weatherClassification) == 4
-    };
+    let rainy =
+        |w: u32| w != 0 && e.get(Ptr::<TESWeather>::new(w), TESWeather::weatherClassification) == 4;
     if !rainy(e.get(s, Sky::currWeather)) && !rainy(e.get(s, Sky::transWeather)) {
         return false;
     }

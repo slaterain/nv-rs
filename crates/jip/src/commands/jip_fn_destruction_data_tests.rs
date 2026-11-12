@@ -97,7 +97,11 @@ fn the_stage_traits_set() {
     assert_eq!(e.mem.u8(STAGE1), 1);
     e.mem.set_u8(STAGE1 + 3, 0xaa);
     set(&mut e, 1, 3, 0xff);
-    assert_eq!(e.mem.u16(STAGE1 + 2), 7, "a 16-bit write: the next byte cleared");
+    assert_eq!(
+        e.mem.u16(STAGE1 + 2),
+        7,
+        "a 16-bit write: the next byte cleared"
+    );
     set(&mut e, 1, 4, 99);
     assert_eq!(e.mem.u32(STAGE1 + 0x10), 99);
     set(&mut e, 2, 4, 1);
@@ -210,7 +214,11 @@ fn a_first_stage_makes_the_data() {
         .filter(|c| c.0 == 0x00aa_3e40)
         .map(|c| c.1[1])
         .collect();
-    assert_eq!(allocs, vec![0x18, 0x14, 4], "the stage, the data, the array");
+    assert_eq!(
+        allocs,
+        vec![0x18, 0x14, 4],
+        "the stage, the data, the array"
+    );
     // With data but no array, index 1 is past the count of 0.
     e.mem.set_u32(data + 8, 0);
     assert_eq!(call(&mut e, 0x26f3, &[r(1), n(1), n(1), n(1)]).1, -1.0);
@@ -244,7 +252,11 @@ fn a_later_stage_removed() {
     assert_eq!(res, 1.0);
     assert_eq!(stages(&e), vec![STAGE0]);
     assert_eq!(e.mem.u32(STAGES + 4), 0);
-    assert_eq!(call(&mut e, 0x26f4, &[r(1), n(1)]).1, -1.0, "past the count");
+    assert_eq!(
+        call(&mut e, 0x26f4, &[r(1), n(1)]).1,
+        -1.0,
+        "past the count"
+    );
     // Count but no array: -1.
     e.mem.set_u32(DATA + 8, 0);
     assert_eq!(call(&mut e, 0x26f4, &[r(1), n(0)]).1, -1.0);

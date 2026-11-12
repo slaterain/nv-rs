@@ -12,8 +12,8 @@
 
 use super::forms::{form_type, BSSimpleList, Sky, TESClimate, TESTexture, WeatherEntry, SKY};
 use super::{
-    assign_string, buffer_arg, heap_alloc, heap_free, model_path, set_form_result,
-    set_model_path, string_set, string_text, type_of, Handlers,
+    assign_string, buffer_arg, heap_alloc, heap_free, model_path, set_form_result, set_model_path,
+    string_set, string_text, type_of, Handlers,
 };
 use crate::console::print_form;
 use engine_core::prelude::*;
@@ -309,8 +309,7 @@ fn weather_entry(e: &mut Engine, c: Ptr<TESClimate>, weather: u32, remove: bool)
     let mut prev = Ptr::<BSSimpleList>::NULL;
     loop {
         let entry = e.get(node, BSSimpleList::m_item);
-        if entry != 0 && e.get(Ptr::<WeatherEntry>::new(entry), WeatherEntry::weather) == weather
-        {
+        if entry != 0 && e.get(Ptr::<WeatherEntry>::new(entry), WeatherEntry::weather) == weather {
             if remove {
                 if !prev.is_null() {
                     let gone = e.get(prev, BSSimpleList::m_pkNext);

@@ -202,7 +202,11 @@ fn the_numeric_traits_set() {
     set(&mut e, 2, 655);
     assert_eq!(e.mem.u8(CLIMATE + 0x52), 65);
     set(&mut e, 3, -1);
-    assert_eq!(e.mem.u8(CLIMATE + 0x53), 143, "an unsigned value above 1430");
+    assert_eq!(
+        e.mem.u8(CLIMATE + 0x53),
+        143,
+        "an unsigned value above 1430"
+    );
     set(&mut e, 4, 300);
     assert_eq!(e.mem.u8(CLIMATE + 0x54), 255);
     set(&mut e, 4, 200);
