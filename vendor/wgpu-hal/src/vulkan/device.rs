@@ -1,3 +1,4 @@
+// Changed for nv-rs: dynamic rendering on Vulkan 1.3 devices (dynamic_rendering.rs, extras.rs); vendor/README.md.
 use alloc::{borrow::ToOwned as _, collections::BTreeMap, ffi::CString, sync::Arc, vec::Vec};
 use core::{
     ffi::CStr,
@@ -2144,10 +2145,23 @@ impl crate::Device for super::Device {
         let vk_dynamic_state =
             vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
 
-        let raw_pass = self.shared.make_render_pass(compatible_rp_key)?;
+        // nv-rs: made for the attachment formats where passes have no render pass objects
+        // (dynamic_rendering.rs).
+        let rendering_formats = super::dynamic_rendering::RenderingFormats::of_pipeline(
+            &self.shared,
+            desc.color_targets,
+            desc.depth_stencil.as_ref(),
+            desc.multiview_mask,
+        );
+        let mut vk_rendering = rendering_formats.as_ref().map(|f| f.info());
+        let raw_pass = if rendering_formats.is_some() {
+            vk::RenderPass::null()
+        } else {
+            self.shared.make_render_pass(compatible_rp_key)?
+        };
 
         let vk_infos = [{
-            vk::GraphicsPipelineCreateInfo::default()
+            let info = vk::GraphicsPipelineCreateInfo::default()
                 .layout(desc.layout.raw)
                 .stages(&stages)
                 .vertex_input_state(&vk_vertex_input)
@@ -2158,7 +2172,11 @@ impl crate::Device for super::Device {
                 .depth_stencil_state(&vk_depth_stencil)
                 .color_blend_state(&vk_color_blend)
                 .dynamic_state(&vk_dynamic_state)
-                .render_pass(raw_pass)
+                .render_pass(raw_pass);
+            match vk_rendering.as_mut() {
+                Some(rendering) => info.push_next(rendering),
+                None => info,
+            }
         }];
 
         let pipeline_cache = desc
