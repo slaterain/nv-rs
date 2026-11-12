@@ -90,6 +90,34 @@ pub(crate) fn write_replacing(path: &Path, bytes: &[u8]) -> std::io::Result<()> 
     r
 }
 
+/// Removes the pipeline cache files earlier builds wrote for this adapter (another sources'
+/// fingerprint, or none), so a new build's first start is cold and old files don't pile up.
+pub(crate) fn remove_other_builds(dir: &Path, adapter: &str, current: &str) {
+    // Only names wgpu's key gives (`wgpu_pipeline_cache_BACKEND_...`), so nothing else in the
+    // folder can match: `ADAPTER.bin` (before the fingerprint) and `ADAPTER-XXXXXXXX.bin` (eight
+    // hex digits) other than `current`. A file renamed aside (`ADAPTER.bin.bak`) is not ours.
+    if !adapter.starts_with("wgpu_pipeline_cache_") {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let Some(stem) = name.to_str().and_then(|n| n.strip_suffix(".bin")) else {
+            continue;
+        };
+        let earlier = stem == adapter
+            || stem
+                .strip_prefix(adapter)
+                .and_then(|rest| rest.strip_prefix('-'))
+                .is_some_and(|fp| fp.len() == 8 && fp.bytes().all(|b| b.is_ascii_hexdigit()));
+        if earlier && stem != current {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
 /// Removes the temporaries of writes that never finished (a process killed while writing), older
 /// than ten minutes (another instance's write in progress is younger), of the files named `stems`
 /// only: [`write_replacing`]'s own names, `STEM.PID-N.tmp`. The folder may be shared
@@ -224,7 +252,13 @@ impl PipelineCacheFile {
         if !device.features().contains(wgpu::Features::PIPELINE_CACHE) {
             return None;
         }
-        let name = wgpu::util::pipeline_cache_key(info)?;
+        // wgpu's name for this adapter, then the sources' fingerprint (build.rs): a build whose
+        // converted shaders or layouts may differ gets a new file, so its first start is cold and
+        // makes every library at the start, instead of a "warm" start whose unlisted shaders'
+        // libraries no longer match the driver's cache. Files of earlier builds are removed.
+        let adapter = wgpu::util::pipeline_cache_key(info)?;
+        let name = format!("{adapter}-{}", &env!("D3D9_WGPU_PIPELINE_SOURCES")[..8]);
+        remove_other_builds(dir, &adapter, &name);
         // A folder that cannot be made (a read-only place, a path that is no folder) means no
         // cache, with one line: never a failed start. A relative path is taken from the working
         // folder, as any other path the host is given.
@@ -446,6 +480,54 @@ mod tests {
         for (name, _, stays) in names {
             assert_eq!(dir.join(name).exists(), stays, "{name}");
         }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The sources' fingerprint is sixteen hex digits, and a build's cache file name carries its
+    /// first eight: another build of the converter or the layouts names another file, so its
+    /// first start is cold.
+    #[test]
+    fn the_cache_file_name_carries_the_sources_fingerprint() {
+        let fp = env!("D3D9_WGPU_PIPELINE_SOURCES");
+        assert_eq!(fp.len(), 16, "{fp}");
+        assert!(fp.bytes().all(|b| b.is_ascii_hexdigit()), "{fp}");
+    }
+
+    /// Only this adapter's cache files of other builds go: the one without a fingerprint and
+    /// those with another; the current one, another adapter's, a file renamed aside, the
+    /// pipeline list and other names stay.
+    #[test]
+    fn other_builds_cache_files_are_removed() {
+        let exe = std::env::current_exe().unwrap();
+        let dir = exe
+            .parent()
+            .unwrap()
+            .join(format!("d3d9-wgpu-builds-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let adapter = "wgpu_pipeline_cache_vulkan_4318_12120";
+        let current = format!("{adapter}-0123abcd");
+        let names = [
+            (format!("{adapter}.bin"), false),
+            (format!("{adapter}-89abcdef.bin"), false),
+            (format!("{current}.bin"), true),
+            (
+                "wgpu_pipeline_cache_vulkan_4318_10137-89abcdef.bin".to_string(),
+                true,
+            ),
+            (format!("{adapter}.bin.before-nov12d"), true),
+            (format!("{adapter}-short.bin"), true),
+            ("pipelines.txt".to_string(), true),
+        ];
+        for (name, _) in &names {
+            std::fs::File::create(dir.join(name)).unwrap();
+        }
+        remove_other_builds(&dir, adapter, &current);
+        for (name, stays) in &names {
+            assert_eq!(dir.join(name).exists(), *stays, "{name}");
+        }
+        // Not a wgpu key: nothing is touched.
+        remove_other_builds(&dir, "pipelines", "x");
+        assert!(dir.join("pipelines.txt").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
