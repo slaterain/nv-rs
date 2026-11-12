@@ -1,7 +1,9 @@
 //! The stream against a backend that logs: the threaded runner carries out the same commands in
 //! the same order as the direct one, a sync command sees every command before it, at most one
 //! frame is in flight, a backend's panic stops the recording side, the queue stays bounded, files
-//! replay, and a tee feeds both backends.
+//! replay, and a tee feeds both backends. Two producers ([`Stream::cut`]) are carried out, recorded
+//! and digested in the serial order, and main never waits for the render thread while a slot is
+//! open (a wait that would freeze the game fails the test after a time limit instead of hanging).
 
 use crate::cmd::NAMES;
 use crate::*;
@@ -1069,7 +1071,8 @@ fn same(a: &[String], b: &[String], what: &str) {
 
 /// The recording side's cost a command, against a backend that does nothing: carried out at once
 /// (direct) and recorded for the render thread (threaded), over frames shaped like the town's
-/// (about 7,000 commands: 640 draws of 11 calls, constants of 4 registers).
+/// (about 7,000 commands: 640 draws of 11 calls, constants of 4 registers); then the same with a
+/// cut each frame, a quarter of the draws through its slot on the same thread (as stepped).
 /// `cargo test --release -p d3d9-stream cost_of_recording -- --ignored --nocapture`.
 #[test]
 #[ignore]
@@ -1082,52 +1085,25 @@ fn cost_of_recording() {
         }
     }
     let registers: Vec<u32> = (0..16).collect();
-    let frame = |stream: &mut Stream| {
-        for i in 0..640u32 {
-            for kind in [0u8, 0, 0, 3, 3] {
-                stream.submit(Cmd::SetConstants {
-                    device: 1,
-                    kind,
-                    start: i % 200,
-                    count: 4,
-                    data: Data::from_words(&registers),
+    let frame = |stream: &mut Stream, cut: bool| {
+        let (slot_from, slot_to) = if cut { (320, 480) } else { (640, 640) };
+        for i in 0..slot_from {
+            town_draw(i, &registers, |c| {
+                stream.submit(c);
+            });
+        }
+        if cut {
+            let mut slot = stream.cut();
+            for i in slot_from..slot_to {
+                town_draw(i, &registers, |c| {
+                    slot.submit(c);
                 });
             }
-            stream.submit(Cmd::SetSamplerState {
-                device: 1,
-                sampler: i % 8,
-                kind: 5,
-                value: i,
-            });
-            stream.submit(Cmd::SetTexture {
-                device: 1,
-                sampler: i % 8,
-                texture: 0x4000 + i,
-            });
-            stream.submit(Cmd::SetRenderState {
-                device: 1,
-                state: 7,
-                value: i,
-            });
-            stream.submit(Cmd::SetStreamSource {
-                device: 1,
-                stream: 0,
-                buffer: 0x5000 + i,
-                offset: 0,
-                stride: 32,
-            });
-            stream.submit(Cmd::SetIndices {
-                device: 1,
-                buffer: 0x6000 + i,
-            });
-            stream.submit(Cmd::DrawIndexedPrimitive {
-                device: 1,
-                kind: 4,
-                base_vertex: 0,
-                min_index: 0,
-                vertices: 100,
-                start_index: 0,
-                count: 50,
+            slot.close();
+        }
+        for i in slot_to..640 {
+            town_draw(i, &registers, |c| {
+                stream.submit(c);
             });
         }
         stream.submit(Cmd::Present {
@@ -1142,24 +1118,76 @@ fn cost_of_recording() {
     };
     let frames = 300;
     let commands = f64::from(frames * (640 * 11 + 1));
-    for threaded in [false, true] {
-        let mut stream = if threaded {
-            Stream::threaded(Box::new(Nothing), Settings::default())
-        } else {
-            Stream::direct(Box::new(Nothing))
-        };
-        frame(&mut stream);
-        let t = std::time::Instant::now();
-        for _ in 0..frames {
-            frame(&mut stream);
+    for cut in [false, true] {
+        for threaded in [false, true] {
+            let mut stream = if threaded {
+                Stream::threaded(Box::new(Nothing), Settings::default())
+            } else {
+                Stream::direct(Box::new(Nothing))
+            };
+            frame(&mut stream, cut);
+            let t = std::time::Instant::now();
+            for _ in 0..frames {
+                frame(&mut stream, cut);
+            }
+            let ns = t.elapsed().as_nanos() as f64 / commands;
+            eprintln!(
+                "{}{}: {ns:.1} ns a command, {:.3} ms a frame of 7,041",
+                if threaded { "threaded" } else { "direct" },
+                if cut { ", a cut each frame" } else { "" },
+                ns * 7041.0 / 1e6
+            );
         }
-        let ns = t.elapsed().as_nanos() as f64 / commands;
-        eprintln!(
-            "{}: {ns:.1} ns a command, {:.3} ms a frame of 7,041",
-            if threaded { "threaded" } else { "direct" },
-            ns * 7041.0 / 1e6
-        );
     }
+}
+
+/// [`cost_of_recording`]'s draw `i`: its 11 calls through `submit`.
+fn town_draw(i: u32, registers: &[u32], mut submit: impl FnMut(Cmd<Data<'_>>)) {
+    for kind in [0u8, 0, 0, 3, 3] {
+        submit(Cmd::SetConstants {
+            device: 1,
+            kind,
+            start: i % 200,
+            count: 4,
+            data: Data::from_words(registers),
+        });
+    }
+    submit(Cmd::SetSamplerState {
+        device: 1,
+        sampler: i % 8,
+        kind: 5,
+        value: i,
+    });
+    submit(Cmd::SetTexture {
+        device: 1,
+        sampler: i % 8,
+        texture: 0x4000 + i,
+    });
+    submit(Cmd::SetRenderState {
+        device: 1,
+        state: 7,
+        value: i,
+    });
+    submit(Cmd::SetStreamSource {
+        device: 1,
+        stream: 0,
+        buffer: 0x5000 + i,
+        offset: 0,
+        stride: 32,
+    });
+    submit(Cmd::SetIndices {
+        device: 1,
+        buffer: 0x6000 + i,
+    });
+    submit(Cmd::DrawIndexedPrimitive {
+        device: 1,
+        kind: 4,
+        base_vertex: 0,
+        min_index: 0,
+        vertices: 100,
+        start_index: 0,
+        count: 50,
+    });
 }
 
 /// [`cost_of_recording`]'s chunk part alone: the commands pushed into a chunk and the chunk
@@ -1470,4 +1498,974 @@ fn the_render_thread_gives_idle_work_turns_until_it_is_done() {
     s.submit(Cmd::SetFvf { device: 1, fvf: 1 });
     s.finish();
     assert_eq!(settled(), before + 1);
+}
+
+// --- Two producers (`Stream::cut`) ---
+
+/// TEST DATA: one command of a frame, owning its payload; or main's flush.
+#[derive(Clone)]
+enum Part {
+    State(u32, u32),
+    Texture(u32, u32),
+    Constants(u32, Vec<u32>),
+    Upload(u32, Vec<u32>),
+    Declaration(u32, Vec<u32>),
+    Draw(u32),
+    Issue(u32),
+    Read(u32),
+    Present,
+    /// [`Stream::flush`] (main's only): no command.
+    Flush,
+}
+
+impl Part {
+    fn cmd(&self) -> Cmd<Data<'_>> {
+        match self {
+            Part::State(state, value) => Cmd::SetRenderState {
+                device: 0x1000,
+                state: *state,
+                value: *value,
+            },
+            Part::Texture(sampler, texture) => Cmd::SetTexture {
+                device: 0x1000,
+                sampler: *sampler,
+                texture: *texture,
+            },
+            Part::Constants(start, words) => Cmd::SetConstants {
+                device: 0x1000,
+                kind: 0,
+                start: *start,
+                count: words.len() as u32 / 4,
+                data: Data::from_words(words),
+            },
+            Part::Upload(buffer, words) => Cmd::UploadBuffer {
+                buffer: *buffer,
+                offset: 0,
+                flags: 0,
+                data: Data::from_words(words),
+            },
+            Part::Declaration(declaration, words) => Cmd::CreateDeclaration {
+                device: 0x1000,
+                declaration: *declaration,
+                elements: Data::from_words(words),
+            },
+            Part::Draw(count) => Cmd::DrawIndexedPrimitive {
+                device: 0x1000,
+                kind: 4,
+                base_vertex: 0,
+                min_index: 0,
+                vertices: 3 * count,
+                start_index: 0,
+                count: *count,
+            },
+            Part::Issue(query) => Cmd::QueryIssue {
+                query: *query,
+                flags: 1,
+            },
+            Part::Read(query) => Cmd::QueryGetData {
+                query: *query,
+                flags: 1,
+            },
+            Part::Present => Cmd::Present {
+                device: 0x1000,
+                source: None,
+                dest: None,
+                window: 0,
+                dirty: false,
+                model: 0,
+                frame: 0,
+            },
+            Part::Flush => unreachable!("a flush is no command"),
+        }
+    }
+}
+
+/// Main's part `p` through `stream`: its reply as it prints (a flush hands over what is recorded).
+fn send(stream: &mut Stream, p: &Part) -> String {
+    match p {
+        Part::Flush => {
+            stream.flush();
+            "flushed".to_string()
+        }
+        p => format!("{:?}", stream.submit(p.cmd())),
+    }
+}
+
+/// TEST DATA: `frames` frames, each in three parts: main's commands before the cut (a query read
+/// first: main's sync call after the last frame's slot, then states and draws), the drawing side's
+/// (a creation, then states, textures, constants, uploads and draws, with a query issued and read
+/// back between them: a sync call whose answer counts the draws before it; none in some frames,
+/// two in others, and every fifth slot empty), and main's after the cut (more states and draws, a
+/// large upload, the present). Some states repeat a value already set.
+fn three_part_frames(frames: u32) -> Vec<[Vec<Part>; 3]> {
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let mut list = Vec::new();
+    for frame in 0..frames {
+        let mut part = |draws: u32, uploads: bool| {
+            let mut v = Vec::new();
+            for _ in 0..draws {
+                v.push(Part::State(7 + rng.next() % 4, rng.next() % 3));
+                v.push(Part::Texture(
+                    rng.next() % 4,
+                    0x4000 + 8 * (rng.next() % 16),
+                ));
+                let words: Vec<u32> = (0..4 * (1 + rng.next() % 4)).map(|_| rng.next()).collect();
+                v.push(Part::Constants(rng.next() % 32, words));
+                if uploads && rng.next() % 4 == 0 {
+                    let words: Vec<u32> = (0..16 + rng.next() % 64).map(|_| rng.next()).collect();
+                    v.push(Part::Upload(0x6000 + 4 * (rng.next() % 8), words));
+                }
+                v.push(Part::Draw(1 + rng.next() % 50));
+            }
+            v
+        };
+        let mut before = vec![Part::Read(0x8001)];
+        before.extend(part(5, false));
+        let mut draw = Vec::new();
+        if frame % 5 != 4 {
+            draw.push(Part::Declaration(0x7000 + frame, vec![frame; 8]));
+            draw.extend(part(10, true));
+            for _ in 0..[1, 0, 2, 1][frame as usize % 5] {
+                draw.push(Part::Issue(0x8000));
+                draw.push(Part::Read(0x8000));
+                draw.extend(part(10, true));
+            }
+        }
+        let mut after = part(10, false);
+        after.push(Part::Upload(0x6100, (0..20_000).collect()));
+        after.push(Part::Present);
+        list.push([before, draw, after]);
+    }
+    list
+}
+
+/// The draws in `frames`.
+fn draws_in(frames: &[[Vec<Part>; 3]]) -> usize {
+    frames
+        .iter()
+        .flatten()
+        .flatten()
+        .filter(|p| matches!(p, Part::Draw(_)))
+        .count()
+}
+
+/// The frames through `stream` in the serial order, all from main: the backend's log is this.
+/// Every reply, in order.
+fn serial(stream: &mut Stream, frames: &[[Vec<Part>; 3]]) -> Vec<String> {
+    let mut replies = Vec::new();
+    for parts in frames {
+        for p in parts.iter().flatten() {
+            replies.push(send(stream, p));
+        }
+    }
+    replies
+}
+
+/// The frames with two producers, as the game's layer makes them: main submits its part before
+/// the cut, cuts, and submits its part after the cut while a drawing thread submits the middle
+/// part through the slot at the same time (each side yielding at random), every call under the
+/// device lock (a mutex both take for each call, as the layer's does); at the next frame main
+/// waits for the slot as the layer does (`cut_waiter`, the lock let go of) and makes its sync
+/// call. Every reply, in the serial order.
+fn two_producers(stream: &mut Stream, frames: &[[Vec<Part>; 3]]) -> Vec<String> {
+    let device = Mutex::new(());
+    let device = &device;
+    let mut replies = Vec::new();
+    let mut rng = Rng(0x1234_5678_9abc_def1);
+    std::thread::scope(|scope| {
+        for parts in frames {
+            if let Some(waiter) = stream.cut_waiter() {
+                waiter.wait();
+            }
+            for p in &parts[0] {
+                let _lock = device.lock().unwrap();
+                replies.push(send(stream, p));
+            }
+            let mut slot = {
+                let _lock = device.lock().unwrap();
+                stream.cut()
+            };
+            let pause = rng.next() % 3;
+            let draw = scope.spawn(move || {
+                let mut answers = Vec::new();
+                let mut rng = Rng(u64::from(pause) + 7);
+                for p in &parts[1] {
+                    if rng.next() % 16 == 0 {
+                        std::thread::yield_now();
+                    }
+                    let _lock = device.lock().unwrap();
+                    answers.push(format!("{:?}", slot.submit(p.cmd())));
+                }
+                slot.close();
+                answers
+            });
+            let mut after = Vec::new();
+            for p in &parts[2] {
+                if rng.next() % 8 == 0 {
+                    std::thread::yield_now();
+                }
+                let _lock = device.lock().unwrap();
+                after.push(send(stream, p));
+            }
+            replies.extend(draw.join().unwrap());
+            replies.extend(after);
+        }
+    });
+    stream.finish();
+    replies
+}
+
+/// The frames as with stepped threads, where the drawing job runs only once main waits for it:
+/// main submits its part before the cut, cuts, and submits its whole part after the cut before the
+/// drawing side records anything; then main takes the cut's waiter (the slot still open), lets the
+/// drawing side go and waits for the slot as the layer does, and the slot is settled. Every reply,
+/// in the serial order.
+fn stepped(stream: &mut Stream, frames: &[[Vec<Part>; 3]]) -> Vec<String> {
+    let mut replies = Vec::new();
+    std::thread::scope(|scope| {
+        for parts in frames {
+            for p in &parts[0] {
+                replies.push(send(stream, p));
+            }
+            let mut slot = stream.cut();
+            let (go, told) = std::sync::mpsc::channel::<()>();
+            let draw = scope.spawn(move || {
+                told.recv().expect("main lets the drawing side go");
+                let answers: Vec<String> = parts[1]
+                    .iter()
+                    .map(|p| format!("{:?}", slot.submit(p.cmd())))
+                    .collect();
+                slot.close();
+                answers
+            });
+            let after: Vec<String> = parts[2].iter().map(|p| send(stream, p)).collect();
+            let waiter = stream
+                .cut_waiter()
+                .expect("the slot is open: the drawing side has not begun");
+            assert!(!waiter.is_closed());
+            go.send(()).unwrap();
+            waiter.wait();
+            assert!(!stream.cut_open(), "the slot is closed and settled");
+            replies.extend(draw.join().unwrap());
+            replies.extend(after);
+        }
+    });
+    stream.finish();
+    replies
+}
+
+/// TEST DATA: frames for [`stepped`]: after the cut, main submits a burst of uploads past a small
+/// queue's limit (a cell loading), a few commands a flush hands over into the full queue, and two
+/// Presents; the slot has a sync call between its draws; main's first command of a frame is a sync
+/// call (after the last frame's slot).
+fn stepped_frames(frames: u32) -> Vec<[Vec<Part>; 3]> {
+    (0..frames)
+        .map(|frame| {
+            let before = vec![Part::Read(0x8001), Part::State(7, frame), Part::Draw(3)];
+            let mut draw = vec![Part::Declaration(0x7000 + frame, vec![frame; 8])];
+            for i in 0..12 {
+                draw.extend([Part::State(8, i), Part::Draw(1 + i)]);
+            }
+            draw.extend([Part::Issue(0x8000), Part::Read(0x8000), Part::Draw(2)]);
+            let mut after = Vec::new();
+            for i in 0..40 {
+                after.extend([
+                    Part::Upload(0x6000 + 4 * (i % 8), vec![i; 512]),
+                    Part::Draw(1),
+                ]);
+            }
+            after.extend([Part::State(9, frame), Part::Draw(4), Part::Flush]);
+            after.extend([
+                Part::Present,
+                Part::State(10, frame),
+                Part::Draw(5),
+                Part::Present,
+            ]);
+            [before, draw, after]
+        })
+        .collect()
+}
+
+/// Runs `body` on a thread of its own and fails when it has not ended within half a minute: a wait
+/// that would freeze the game (main waiting for the render thread, which waits at a cut's mark for
+/// the drawing side, which waits for main) fails the test instead of hanging the run.
+fn within<T: Send + 'static>(what: &str, body: impl FnOnce() -> T + Send + 'static) -> T {
+    let (done, told) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done.send(std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)));
+    });
+    match told.recv_timeout(Duration::from_secs(30)) {
+        Ok(Ok(v)) => v,
+        Ok(Err(panic)) => std::panic::resume_unwind(panic),
+        Err(_) => panic!("{what}: still waiting after 30 s: a freeze"),
+    }
+}
+
+/// A flag threads wait for.
+#[derive(Default)]
+struct Latch(Mutex<bool>, std::sync::Condvar);
+
+impl Latch {
+    fn set(&self) {
+        *self.0.lock().unwrap() = true;
+        self.1.notify_all();
+    }
+
+    fn wait(&self) {
+        let mut set = self.0.lock().unwrap();
+        while !*set {
+            set = self.1.wait(set).unwrap();
+        }
+    }
+}
+
+/// TEST DATA: a [`Log`] that holds the render thread at a gate: at a `SetRenderState` of state 99
+/// (logged first) it says it arrived, and waits until the test opens the gate.
+struct Gated {
+    log: Log,
+    arrived: Arc<Latch>,
+    open: Arc<Latch>,
+}
+
+impl Backend for Gated {
+    fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+        let gate = matches!(cmd, Cmd::SetRenderState { state: 99, .. });
+        let reply = self.log.execute(cmd);
+        if gate {
+            self.arrived.set();
+            self.open.wait();
+        }
+        reply
+    }
+}
+
+/// [`Gated`]: the backend, the latch saying the render thread is at the gate, and the one that
+/// opens it.
+fn gated(log: Log) -> (Box<dyn Backend>, Arc<Latch>, Arc<Latch>) {
+    let (arrived, open) = (Arc::new(Latch::default()), Arc::new(Latch::default()));
+    let backend = Gated {
+        log,
+        arrived: Arc::clone(&arrived),
+        open: Arc::clone(&open),
+    };
+    (Box::new(backend), arrived, open)
+}
+
+fn settings_to_try() -> Vec<Settings> {
+    vec![
+        Settings::default(),
+        Settings {
+            chunk_commands: 3,
+            chunk_bytes: 300,
+            check: true,
+            ..Settings::default()
+        },
+        // No frame in flight and a queue past its limit at once: while a cut is open, main must
+        // not wait for the render thread (which waits at the cut for the drawing side).
+        Settings {
+            frames_in_flight: 0,
+            max_queued_bytes: 4 << 10,
+            max_queued_chunks: 2,
+            chunk_commands: 7,
+            ..Settings::default()
+        },
+    ]
+}
+
+#[test]
+fn two_producers_are_carried_out_in_the_serial_order() {
+    let frames = three_part_frames(40);
+    let log = Log::default();
+    let lines = log.lines();
+    let mut s = Stream::direct(Box::new(log));
+    let serial_replies = serial(&mut s, &frames);
+    drop(s);
+    let serial_lines = lines.lock().unwrap().clone();
+    assert!(
+        serial_lines.len() > 4_000,
+        "{} commands",
+        serial_lines.len()
+    );
+    type Make = Box<dyn Fn(Box<dyn Backend>) -> Stream>;
+    let mut runs: Vec<(String, Make)> = vec![("direct".into(), Box::new(Stream::direct))];
+    for settings in settings_to_try() {
+        let name = format!("threaded {settings:?}");
+        runs.push((
+            name,
+            Box::new(move |b| Stream::threaded(b, settings.clone())),
+        ));
+    }
+    for (name, make) in runs {
+        let log = Log::default();
+        let lines = log.lines();
+        let mut s = make(Box::new(log));
+        let replies = two_producers(&mut s, &frames);
+        drop(s);
+        same(&lines.lock().unwrap(), &serial_lines, &name);
+        same(&replies, &serial_replies, &format!("{name}: the replies"));
+    }
+}
+
+/// As with stepped threads, the drawing side records nothing until main has submitted its whole
+/// part after the cut: a burst past the queue's limit, a flush into the full queue, and two
+/// Presents with no frame in flight. None of it may wait for the render thread, which waits at the
+/// cut's mark for the slot (in the game the drawing side needs the device lock main holds in each
+/// call: the game would freeze). Then main waits for the slot as the layer does, and its sync call
+/// after it answers every draw; the commands are carried out in the serial order on every runner.
+#[test]
+fn main_never_waits_for_the_render_thread_while_a_slot_is_open() {
+    let small = Settings {
+        frames_in_flight: 0,
+        max_queued_bytes: 4 << 10,
+        max_queued_chunks: 2,
+        chunk_commands: 7,
+        ..Settings::default()
+    };
+    let runs = [
+        None,
+        Some(Settings {
+            frames_in_flight: 0,
+            ..Settings::default()
+        }),
+        Some(small.clone()),
+        Some(Settings {
+            chunk_commands: 3,
+            chunk_bytes: 300,
+            check: true,
+            ..small
+        }),
+    ];
+    for settings in runs {
+        let name = format!("{settings:?}");
+        within(&name.clone(), move || {
+            let frames = stepped_frames(3);
+            let log = Log::default();
+            let lines = log.lines();
+            let mut s = Stream::direct(Box::new(log));
+            let want_replies = serial(&mut s, &frames);
+            drop(s);
+            let want = lines.lock().unwrap().clone();
+            let log = Log::default();
+            let lines = log.lines();
+            let mut s = match settings {
+                None => Stream::direct(Box::new(log)),
+                Some(settings) => Stream::threaded(Box::new(log), settings),
+            };
+            let replies = stepped(&mut s, &frames);
+            drop(s);
+            same(&lines.lock().unwrap(), &want, &name);
+            same(&replies, &want_replies, &format!("{name}: the replies"));
+        });
+    }
+}
+
+/// The render thread a frame behind (held at a gate before the first cut's mark) while slots close
+/// and the next cuts are made: a closed slot of several chunks with no sync call, an empty one, and
+/// an open one whose sync call waits for the render thread wait on the queue behind each other,
+/// with main's commands between them. Once the gate opens, everything is carried out in the serial
+/// order: the slot's sync call answers the draws before it, main's after the slot every draw.
+#[test]
+fn closed_slots_wait_in_order_for_a_render_thread_behind() {
+    let several = Settings {
+        chunk_commands: 3,
+        ..Settings::default()
+    };
+    for settings in [Settings::default(), several] {
+        within("the render thread behind", move || behind(settings));
+    }
+}
+
+/// [`closed_slots_wait_in_order_for_a_render_thread_behind`] with `settings`.
+fn behind(settings: Settings) {
+    let a = vec![Part::State(7, 1), Part::Draw(2), Part::State(99, 0)];
+    let b: Vec<Part> = (0..10)
+        .flat_map(|i| [Part::State(8, i), Part::Draw(1 + i)])
+        .collect();
+    let c = vec![Part::State(7, 2), Part::Draw(3)];
+    let c2 = vec![Part::State(7, 3), Part::Draw(4)];
+    let d1: Vec<Part> = (0..6)
+        .flat_map(|i| [Part::Texture(0, 0x4000 + 8 * i), Part::Draw(5 + i)])
+        .collect();
+    let d2 = vec![Part::State(8, 0), Part::Draw(7)];
+    let e: Vec<Part> = (0..8)
+        .flat_map(|i| [Part::State(9, i), Part::Draw(1)])
+        .collect();
+    let (slot_read, main_read) = (Part::Read(0x8000), Part::Read(0x8001));
+    // The serial order: A, slot 1 (B), C, slot 2 (empty), C2, slot 3 (D1, its read, D2), E, and
+    // main's read after slot 3.
+    let order: Vec<Part> = [
+        &a[..],
+        &b[..],
+        &c[..],
+        &c2[..],
+        &d1[..],
+        std::slice::from_ref(&slot_read),
+        &d2[..],
+        &e[..],
+        std::slice::from_ref(&main_read),
+    ]
+    .concat();
+    let (want, want_replies, want_file) = {
+        let file = File::default();
+        let log = Log::default();
+        let lines = log.lines();
+        let mut s = Stream::direct(Box::new(log));
+        s.record_to(Box::new(file.clone())).unwrap();
+        let replies: Vec<String> = order.iter().map(|p| send(&mut s, p)).collect();
+        drop(s);
+        let lines = lines.lock().unwrap().clone();
+        let bytes = file.0.lock().unwrap().clone();
+        (lines, replies, bytes)
+    };
+    let want_slot = &want_replies[a.len() + b.len() + c.len() + c2.len() + d1.len()];
+    let want_main = want_replies.last().unwrap();
+
+    let file = File::default();
+    let log = Log::default();
+    let lines = log.lines();
+    let (backend, arrived, open) = gated(log);
+    let mut s = Stream::threaded(backend, settings);
+    s.record_to(Box::new(file.clone())).unwrap();
+    for p in &a {
+        s.submit(p.cmd());
+    }
+    // Cut 1 hands A over: the render thread carries it out and stops at the gate, before the mark.
+    let mut slot = s.cut();
+    arrived.wait();
+    for p in &b {
+        slot.submit(p.cmd());
+    }
+    slot.close();
+    for p in &c {
+        s.submit(p.cmd());
+    }
+    s.cut().close();
+    for p in &c2 {
+        s.submit(p.cmd());
+    }
+    let mut slot = s.cut();
+    let (ready, told) = std::sync::mpsc::channel();
+    let draw = std::thread::spawn(move || {
+        for p in &d1 {
+            slot.submit(p.cmd());
+        }
+        ready.send(()).unwrap();
+        let answer = format!("{:?}", slot.submit(slot_read.cmd()));
+        for p in &d2 {
+            slot.submit(p.cmd());
+        }
+        slot.close();
+        answer
+    });
+    for p in &e {
+        s.submit(p.cmd());
+    }
+    told.recv().unwrap();
+    assert_eq!(
+        lines.lock().unwrap().len(),
+        a.len(),
+        "the render thread waits at the gate"
+    );
+    assert_eq!(
+        s.queued_slots().len(),
+        3,
+        "the three cuts' slots wait on the queue"
+    );
+    open.set();
+    let slot_answer = draw.join().unwrap();
+    if let Some(waiter) = s.cut_waiter() {
+        waiter.wait();
+    }
+    assert!(!s.cut_open());
+    let main_answer = send(&mut s, &main_read);
+    s.finish();
+    drop(s);
+    same(&lines.lock().unwrap(), &want, "the log");
+    assert_eq!(
+        &slot_answer, want_slot,
+        "the slot's read: the draws before it"
+    );
+    assert_eq!(
+        &main_answer, want_main,
+        "main's read after the slot: every draw"
+    );
+    assert!(*file.0.lock().unwrap() == want_file, "the record differs");
+}
+
+#[test]
+fn a_record_of_two_producers_is_the_serial_file() {
+    let frames = three_part_frames(12);
+    let record = |two: bool, make: &dyn Fn() -> Stream| {
+        let file = File::default();
+        let mut s = make();
+        s.record_to(Box::new(file.clone())).unwrap();
+        if two {
+            two_producers(&mut s, &frames);
+        } else {
+            serial(&mut s, &frames);
+        }
+        drop(s);
+        let bytes = file.0.lock().unwrap().clone();
+        bytes
+    };
+    let direct = || Stream::direct(Box::new(Log::default()));
+    let threaded = || Stream::threaded(Box::new(Log::default()), Settings::default());
+    let want = record(false, &direct);
+    assert!(want.len() > 100_000);
+    assert!(record(true, &direct) == want, "direct: the file differs");
+    assert!(
+        record(true, &threaded) == want,
+        "threaded: the file differs"
+    );
+}
+
+/// `finish_recording` (`NV_REPEATABLE`'s end) right after a slot closed, with no command since:
+/// main's commands held for the slot are written, and the file is the serial one.
+#[test]
+fn finish_recording_writes_main_s_commands_held_for_a_closed_slot() {
+    let file_of = |two: Option<bool>| {
+        let file = File::default();
+        let mut s = match two {
+            Some(true) => Stream::threaded(Box::new(Log::default()), Settings::default()),
+            _ => Stream::direct(Box::new(Log::default())),
+        };
+        s.record_to(Box::new(file.clone())).unwrap();
+        s.submit(Part::State(7, 1).cmd());
+        if two.is_some() {
+            let mut slot = s.cut();
+            s.submit(Part::State(7, 3).cmd());
+            s.submit(Part::Draw(1).cmd());
+            slot.submit(Part::State(7, 2).cmd());
+            slot.close();
+        } else {
+            for p in [Part::State(7, 2), Part::State(7, 3), Part::Draw(1)] {
+                s.submit(p.cmd());
+            }
+        }
+        s.finish_recording();
+        let bytes = file.0.lock().unwrap().clone();
+        drop(s);
+        bytes
+    };
+    let want = file_of(None);
+    for threaded in [false, true] {
+        assert!(
+            file_of(Some(threaded)) == want,
+            "threaded {threaded}: the file differs"
+        );
+    }
+}
+
+/// The direct runner shares its backend with a slot only while the cut is open: once main sees the
+/// slot closed, the backend is its own again (each call without the shared lock).
+#[test]
+fn the_direct_runner_has_its_backend_alone_again_after_a_cut() {
+    let mut s = Stream::direct(Box::new(Log::default()));
+    let mut slot = s.cut();
+    assert!(s.backend_shared());
+    slot.submit(Part::Draw(1).cmd());
+    slot.close();
+    assert!(s.backend_shared(), "until main sees the slot closed");
+    s.settle();
+    assert!(!s.backend_shared());
+    drop(s.cut());
+    s.submit(Part::Draw(2).cmd());
+    assert!(!s.backend_shared(), "a dropped slot, seen at the next call");
+}
+
+#[test]
+fn the_state_digests_of_two_producers_are_the_serial_ones() {
+    let frames = three_part_frames(20);
+    let (digest, serial_digests) = StateDigest::new();
+    let mut s = Stream::direct(Box::new(digest));
+    serial(&mut s, &frames);
+    drop(s);
+    let want = serial_digests.lock().unwrap().clone();
+    assert_eq!(
+        want.len(),
+        draws_in(&frames) + 1,
+        "a digest a draw, and the destroys'"
+    );
+    for threaded in [false, true] {
+        let (digest, digests) = StateDigest::new();
+        let mut s = if threaded {
+            Stream::threaded(Box::new(digest), Settings::default())
+        } else {
+            Stream::direct(Box::new(digest))
+        };
+        two_producers(&mut s, &frames);
+        drop(s);
+        assert!(
+            *digests.lock().unwrap() == want,
+            "threaded {threaded}: the digests differ"
+        );
+    }
+}
+
+/// The digests of `cmds` carried out one by one (the destroys' value last).
+fn digests_of(cmds: &[Cmd<Data<'_>>]) -> Vec<u64> {
+    let (mut d, list) = StateDigest::new();
+    for &c in cmds {
+        d.execute(c);
+    }
+    drop(d);
+    let v = list.lock().unwrap().clone();
+    v
+}
+
+/// The digest sees a draw's state, not the commands that made it: a state set again to its value
+/// changes nothing; any other change to what a draw sees changes that draw's digest, none before.
+#[test]
+fn a_state_digest_changes_with_what_a_draw_sees_only() {
+    let digests = |parts: &[Part]| digests_of(&parts.iter().map(Part::cmd).collect::<Vec<_>>());
+    let base = vec![
+        Part::State(7, 1),
+        Part::Constants(4, vec![1, 2, 3, 4, 5, 6, 7, 8]),
+        Part::Draw(3),
+        Part::Texture(0, 0x4000),
+        Part::Draw(3),
+    ];
+    let want = digests(&base);
+    assert_eq!(want.len(), 3);
+    assert_ne!(want[0], want[1], "the texture changes the second draw");
+    // The same state set twice, a constant register set again to its value: the same digests.
+    let mut again = base.clone();
+    again.insert(1, Part::State(7, 1));
+    again.insert(4, Part::Constants(5, vec![5, 6, 7, 8]));
+    assert_eq!(digests(&again), want);
+    // Another value, another register, an upload before a draw: the digests differ from there.
+    for (at, part) in [
+        (1, Part::State(7, 2)),
+        (1, Part::Constants(6, vec![0, 0, 0, 0])),
+        (4, Part::Upload(0x6000, vec![1])),
+    ] {
+        let mut other = base.clone();
+        other.insert(at, part);
+        let got = digests(&other);
+        let first = if at < 3 { 0 } else { 1 };
+        assert_eq!(got[..first], want[..first]);
+        assert_ne!(got[first], want[first], "inserted at {at}");
+    }
+}
+
+/// A new render target 0 sets the viewport and the scissor rectangle to its whole size, and
+/// `Reset` every state to the device's, so what was set before them is not what a draw after
+/// them sees. The query reads and the windows' handles change no digest; the destroys count as a
+/// set, in the last value.
+#[test]
+fn a_state_digest_resets_as_the_device_does() {
+    let viewport = Cmd::SetViewport {
+        device: 0x1000,
+        viewport: [0, 0, 100, 100, 0, 1f32.to_bits()],
+    };
+    let scissor = Cmd::SetScissorRect {
+        device: 0x1000,
+        rect: [0, 0, 100, 100],
+    };
+    let target = |index: u32| Cmd::SetRenderTarget {
+        device: 0x1000,
+        index,
+        surface: 0x9000 + index,
+    };
+    let parts = [Part::Draw(1), Part::State(7, 1), Part::Read(0x8000)];
+    let (draw, state, read) = (parts[0].cmd(), parts[1].cmd(), parts[2].cmd());
+    for set in [viewport, scissor] {
+        assert_ne!(
+            digests_of(&[set, target(0), draw]),
+            digests_of(&[set, target(0), set, draw]),
+            "set before a target change: {}",
+            set.name()
+        );
+        assert_ne!(
+            digests_of(&[target(0), set, target(0), draw]),
+            digests_of(&[target(0), set, draw]),
+            "the same target set again: {}",
+            set.name()
+        );
+        assert_eq!(
+            digests_of(&[set, target(1), draw]),
+            digests_of(&[set, target(1), set, draw]),
+            "another target index leaves {} alone",
+            set.name()
+        );
+    }
+    let present: Vec<u32> = vec![0; 14];
+    let reset = |window: isize| Cmd::Reset {
+        device: 0x1000,
+        window,
+        present: Data::from_words(&present),
+        back_buffers: Data::from_words(&[0x9000]),
+        depth_stencil: 0,
+    };
+    assert_ne!(
+        digests_of(&[state, reset(5), state, draw]),
+        digests_of(&[state, reset(5), draw]),
+        "a state set before Reset is not set after it"
+    );
+    assert_eq!(
+        digests_of(&[reset(5), draw]),
+        digests_of(&[reset(6), draw]),
+        "the window's handle"
+    );
+    assert_eq!(
+        digests_of(&[state, read, draw, read]),
+        digests_of(&[state, draw]),
+        "the query reads"
+    );
+    let destroy = |object: u32| Cmd::Destroy { object };
+    assert_eq!(
+        digests_of(&[destroy(1), draw, destroy(2), draw]),
+        digests_of(&[draw, destroy(2), draw, destroy(1)]),
+        "the destroys in another order"
+    );
+    assert_ne!(
+        digests_of(&[destroy(1), draw]),
+        digests_of(&[draw]),
+        "a destroy left out"
+    );
+}
+
+#[test]
+fn a_dropped_slot_closes_and_main_goes_on() {
+    for threaded in [false, true] {
+        let log = Log::default();
+        let lines = log.lines();
+        let mut s = if threaded {
+            Stream::threaded(Box::new(log), Settings::default())
+        } else {
+            Stream::direct(Box::new(log))
+        };
+        s.submit(Part::State(7, 1).cmd());
+        let mut slot = s.cut();
+        s.submit(Part::State(7, 3).cmd());
+        slot.submit(Part::State(7, 2).cmd());
+        drop(slot);
+        assert!(!s.cut_open(), "threaded {threaded}");
+        s.submit(Part::Draw(1).cmd());
+        s.finish();
+        let got: Vec<String> = lines.lock().unwrap().clone();
+        let want: Vec<String> = [
+            Part::State(7, 1),
+            Part::State(7, 2),
+            Part::State(7, 3),
+            Part::Draw(1),
+        ]
+        .iter()
+        .map(|p| format!("{:?}", p.cmd()))
+        .collect();
+        same(&got, &want, &format!("threaded {threaded}"));
+        let (cut, _) = s.last_cut_carried_out().expect("the cut was carried out");
+        assert_eq!(cut, 1);
+    }
+}
+
+/// The stream dropped while a slot is open (in the game the drawing job is joined first): the
+/// drawing side is not left waiting. What it records once the stream went on without it is
+/// dropped, its sync call answers nothing and closing it returns; main's commands after the cut
+/// are carried out.
+#[test]
+fn a_slot_left_open_when_the_stream_goes_never_waits() {
+    within("a slot after its stream", || {
+        let log = Log::default();
+        let lines = log.lines();
+        let mut s = Stream::threaded(Box::new(log), Settings::default());
+        s.submit(Part::Draw(1).cmd());
+        let mut slot = s.cut();
+        slot.submit(Part::Draw(2).cmd());
+        s.submit(Part::Draw(3).cmd());
+        drop(s);
+        slot.submit(Part::Draw(4).cmd());
+        assert!(matches!(slot.submit(Part::Read(0x8000).cmd()), Reply::None));
+        slot.close();
+        let want: Vec<String> = [Part::Draw(1), Part::Draw(3)]
+            .iter()
+            .map(|p| format!("{:?}", p.cmd()))
+            .collect();
+        same(&lines.lock().unwrap(), &want, "main's commands");
+    });
+}
+
+/// ... and a slot waiting for its sync call's answer as the stream goes gets it: the render thread
+/// carries out what was handed over before it goes on without the slot.
+#[test]
+fn a_slot_waiting_for_an_answer_as_the_stream_goes_gets_it() {
+    within("a slot's answer as its stream goes", || {
+        let log = Log::default();
+        let lines = log.lines();
+        let (backend, arrived, open) = gated(log);
+        let mut s = Stream::threaded(backend, Settings::default());
+        s.submit(Part::State(99, 0).cmd());
+        let mut slot = s.cut();
+        arrived.wait();
+        let draw = std::thread::spawn(move || {
+            slot.submit(Part::Draw(2).cmd());
+            let answer = format!("{:?}", slot.submit(Part::Read(0x8000).cmd()));
+            slot.submit(Part::Draw(4).cmd());
+            slot.close();
+            answer
+        });
+        // The read is on the queue (the slot's only chunk before its close) ...
+        while s.queued_slots() != [1] {
+            std::thread::yield_now();
+        }
+        s.submit(Part::Draw(3).cmd());
+        // ... when the stream goes (its drop waits for the render thread, held at the gate).
+        let dropping = std::thread::spawn(move || drop(s));
+        std::thread::sleep(Duration::from_millis(20));
+        open.set();
+        dropping.join().unwrap();
+        let answer = draw.join().unwrap();
+        assert_eq!(answer, format!("{:?}", Reply::Query(Some((0, 1)))));
+        let line = |p: Part| format!("{:?}", p.cmd());
+        let got = lines.lock().unwrap().clone();
+        let mut want = vec![
+            line(Part::State(99, 0)),
+            line(Part::Draw(2)),
+            line(Part::Read(0x8000)),
+        ];
+        // The slot's last draw comes too when the slot closed before the render thread went on.
+        if got.len() == 5 {
+            want.push(line(Part::Draw(4)));
+        }
+        want.push(line(Part::Draw(3)));
+        same(&got, &want, "the log");
+    });
+}
+
+/// A panic of the render thread's own (its slot bookkeeping, not the backend) stops both producers
+/// with its message, as a backend's panic does: neither waits for it forever.
+#[test]
+fn a_panic_at_a_mark_stops_both_producers_with_its_message() {
+    within("a panic at a mark", || {
+        let mut s = Stream::threaded(Box::new(Log::default()), Settings::default());
+        s.fail_at_next_mark();
+        s.submit(Part::Draw(1).cmd());
+        let mut slot = s.cut();
+        let draw = std::thread::spawn(move || {
+            slot.submit(Part::Draw(2).cmd());
+            slot.submit(Part::Read(0x8000).cmd());
+        });
+        let why = "a test's panic in the render thread's slot bookkeeping";
+        let drawing = crate::runner::panic_message(&*draw.join().expect_err("the drawing side"));
+        assert!(drawing.contains(why), "{drawing}");
+        let main = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.finish()));
+        let main = crate::runner::panic_message(&*main.expect_err("main stops"));
+        assert!(main.contains(why), "{main}");
+    });
+}
+
+#[test]
+#[should_panic(expected = "main's sync call")]
+fn a_sync_call_of_mains_while_a_slot_is_open_panics() {
+    let mut s = Stream::threaded(Box::new(Log::default()), Settings::default());
+    let _slot = s.cut();
+    s.submit(Part::Read(0x8000).cmd());
+}
+
+#[test]
+#[should_panic(expected = "a cut is open")]
+fn a_second_cut_before_the_slot_closes_panics() {
+    let mut s = Stream::direct(Box::new(Log::default()));
+    let _slot = s.cut();
+    let _again = s.cut();
 }
