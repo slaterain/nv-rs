@@ -9897,6 +9897,11 @@ fn lighting30_setup_switches() {
     .setup(|e, c| {
         let _ = world(e);
         lighting30_entries(e, c.word(1));
+        if c.word(1) == 0x0555_5555 {
+            // A null entry pointer in each table (the switches skip it, the flag bytes still set).
+            set(e, 0x0120_1088, 0);
+            set(e, 0x0120_10cc, 0);
+        }
         for k in 0..0x80u32 {
             set(
                 e,
@@ -9958,7 +9963,7 @@ const LIGHTING30_MATERIAL: &[Input] = &[
     Input::Of(&[0x1bd, 0x1c3, 0x1c4]),
     Input::F32,
     Input::Of(&[0x8000, 0, 0x2_0000]),
-    Input::Of(&[0, 1, 2, 3]),
+    Input::Of(&[0, 1, 2, 3, 4]),
     Input::Flag,
     Input::Of(&[0, 1]),
     Input::Of(&[1, 0]),
@@ -10048,6 +10053,7 @@ fn lighting30_material_words(e: &mut Engine, c: &Case) -> Vec<u32> {
         let flags: u16 = match c.word(4) {
             1 => 1,
             2 => 1 << 9,
+            4 => 1 << 5,
             _ => 2 << 5,
         };
         e.mem.set_u16(alpha + 0x18, flags);
@@ -10177,7 +10183,7 @@ fn lighting30_view_matrix() {
     .inputs(&[
         Input::Of(&[0, u32::MAX, 0x0000_0040]),
         Input::Of(&[0, 1, 2]),
-        Input::Of(&[0x1bd, 0x2d8, 0x1c4, 0x30]),
+        Input::Of(&[0x1bd, 0x2d8, 0x1c4, 0x30, 0x1c3, 0x2ef, 0x1c7, 0x1c8]),
         Input::Flag,
         Input::F32,
     ])
@@ -10233,15 +10239,18 @@ fn lighting30_view_matrix() {
 /// whole numbers below 3 and others); the flag word; the transform's scale (play's float).
 const LIGHTING30_LIGHTS: &[Input] = &[
     Input::Of(&[0xf, 0xa, 3]),
-    Input::Of(&[0x30, 0x1c3, 0x1c4, 0x1c6, 0x1d0]),
-    Input::Of(&[0, 1, 2]),
+    Input::Of(&[0x30, 0x1c3, 0x1c4, 0x1c5, 0x1c6, 0x1d0]),
+    // The pass: two lights, none, a shadow type with two, one, as many as the limit (4), more (6).
+    Input::Of(&[0, 1, 2, 3, 4, 5]),
     Input::Of(&[0, 1, 2, 3]),
     Input::Flag,
     Input::Of(&[0, 0x3f80_0000, 0x4000_0000, 0x3fc0_0000]),
     Input::Flag,
     Input::F32,
-    // The exe's limit on the light count: above the pass's two lights, and below them.
+    // The exe's limit on the light count: 4, or 1 (below the pass's lights).
     Input::Of(&[4, 1]),
+    // The property's bit 0x400 (+0x20), apart from HDR, so all four combinations run.
+    Input::Flag,
 ];
 
 /// The lights' words: the entries, the setters stood in (each writing its index into the light colour
@@ -10298,10 +10307,13 @@ fn lighting30_lights_words(e: &mut Engine, c: &Case) -> Vec<u32> {
     let (kind, count) = match c.word(2) {
         0 => (0x30, 2),
         1 => (0x30, 0),
-        _ => (0x1c5, 2),
+        2 => (0x1c5, 2),
+        3 => (0x30, 1),
+        4 => (0x30, 4),
+        _ => (0x30, 6),
     };
     let pass = lighting30_pass(e, kind, count, false);
-    let property = lighting30_property(e, if hdr != 0 { 0x400 } else { 0 }, 0, HALF);
+    let property = lighting30_property(e, if c.word(9) != 0 { 0x400 } else { 0 }, 0, HALF);
     let material = e.mem.alloc(0x48);
     set(e, material + 0x38, 0x3f30_0000);
     let matrix = e.mem.alloc(0x40);
@@ -10348,7 +10360,7 @@ fn lighting30_lights() {
     .ignore_calls(&[0x00b4_f5d0])
     .main_thread(0)
     .inputs(LIGHTING30_LIGHTS)
-    .max_cases(240)
+    .max_cases(400)
     .float_sweep(FLOAT_SWEEP)
     .setup(lighting30_lights_words)
     .run()
@@ -10378,7 +10390,7 @@ const LIGHTING30_HELPERS: &[u32] = &[
 /// constant maps (none, stand-ins); the state's fifth property (none, flag 0 clear or set); the game time
 /// (play's float).
 const LIGHTING30_CONSTANTS: &[Input] = &[
-    Input::Of(&[0x1d4, 0x1e0, 0xe, 0x1c4, 0x1c7, 0x30]),
+    Input::Of(&[0x1d4, 0x1e0, 0xe, 0x1c4, 0x1c7, 0x30, 0x1e1, 0xf, 0x1d3, 0x1d6]),
     Input::Flag,
     Input::Of(&[u32::MAX, 0]),
     Input::Of(&[0, 1, 2, 3]),
@@ -10387,6 +10399,8 @@ const LIGHTING30_CONSTANTS: &[Input] = &[
     Input::F32,
     // The refraction count (+0xe4, an integer): small, one past a float's 24 bits, negative.
     Input::Of(&[3, 0x0100_0001, 0xffff_fffd]),
+    // Skinned or not (the geometry's skin instance +0xbc: the flag the helpers take).
+    Input::Flag,
 ];
 
 /// The geometry set-up's words: the world's renderer as the shader's (its light matrices at +0x980 and
@@ -10469,6 +10483,10 @@ fn lighting30_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
     let data = e.mem.alloc(0x40);
     set(e, data + 0x34, 0x0bbf_0000);
     set(e, geometry + 0xb8, data);
+    if c.word(8) != 0 {
+        // A skin instance (only its being there is read: the helpers take it as their flag).
+        set(e, geometry + 0xbc, 0x5c1d_0000);
+    }
     set(e, pass, geometry);
     set(e, 0x011f_91e0, pass);
     set(e, 0x011f_91e4, pass_type);
@@ -10525,7 +10543,7 @@ fn lighting30_setup_constants() {
     .translation_calls_plainly(LIGHTING30_HELPERS)
     .main_thread(0)
     .inputs(LIGHTING30_CONSTANTS)
-    .max_cases(200)
+    .max_cases(320)
     .float_sweep(FLOAT_SWEEP)
     .setup(lighting30_constants_words)
     .run()
