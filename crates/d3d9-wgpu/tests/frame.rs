@@ -3557,3 +3557,83 @@ fn a_header_change_between_two_draws_of_one_batch_reaches_the_second() {
         "the pixel shader's header kept while the planes changed"
     );
 }
+
+/// A batch handed to the queue thread and still held there (the thread made slow): an upload made
+/// meanwhile into a buffer the held batch draws from lands after the batch's draws, as when the
+/// batch was submitted at once. The left rectangle is uploaded and drawn red; one `GetData` with
+/// `D3DGETDATA_FLUSH` hands the batch over without waiting; the right rectangle is uploaded into the
+/// same buffer and drawn green. An upload that reached the queue before the held batch's submit
+/// would make the red draw read the right rectangle too, leaving the left half black.
+#[test]
+fn an_upload_while_the_queue_thread_holds_a_batch_lands_after_it() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    struct Slow;
+    impl Drop for Slow {
+        fn drop(&mut self) {
+            d3d9_wgpu::device::submit_delay_for_tests(0);
+        }
+    }
+    let _slow = Slow;
+    d3d9_wgpu::device::submit_delay_for_tests(300);
+    const VB2: u32 = 0x1800;
+    const QUERY: u32 = 0x2000;
+    g.run(Cmd::CreateBuffer {
+        device: DEVICE,
+        buffer: VB2,
+        index: false,
+        length: 96,
+        usage: 0,
+        format: 0,
+        pool: 1,
+    });
+    g.run(Cmd::CreateQuery {
+        device: DEVICE,
+        query: QUERY,
+        kind: 9,
+    });
+    let upload = |g: &mut Gpu, data: &[u8]| {
+        g.run(Cmd::UploadBuffer {
+            buffer: VB2,
+            offset: 0,
+            flags: 0,
+            data: Data::Bytes(data),
+        });
+    };
+    let draw = |g: &mut Gpu| {
+        g.run(Cmd::DrawPrimitive {
+            device: DEVICE,
+            kind: 4,
+            start: 0,
+            count: 2,
+        });
+    };
+    g.clear(3, 0, 1.0);
+    g.run(Cmd::SetStreamSource {
+        device: DEVICE,
+        stream: 0,
+        buffer: VB2,
+        offset: 0,
+        stride: 16,
+    });
+    upload(&mut g, &floats(&rect(-3.0, -0.25)));
+    g.colour([1.0, 0.0, 0.0, 1.0]);
+    g.run(Cmd::QueryIssue {
+        query: QUERY,
+        flags: 2,
+    });
+    draw(&mut g);
+    g.run(Cmd::QueryIssue {
+        query: QUERY,
+        flags: 1,
+    });
+    // The batch handed over (held there), not waited for.
+    g.run(Cmd::QueryGetData {
+        query: QUERY,
+        flags: 1,
+    });
+    upload(&mut g, &floats(&rect(-0.25, 3.0)));
+    g.colour([0.0, 1.0, 0.0, 1.0]);
+    draw(&mut g);
+    left_red_right_green(&mut g, "an upload while a batch is held");
+    assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+}

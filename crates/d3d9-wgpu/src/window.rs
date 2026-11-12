@@ -24,7 +24,8 @@
 //! at 125% scaling), the graphics driver's reads for the swap chain on that thread included. The
 //! thread is in it from the frame's size to its present and back in its own after: the render
 //! thread, or with it off (`NV_RENDER_THREAD=0`) the game's thread that presents, whose own
-//! awareness the game's other calls keep.
+//! awareness the game's other calls keep. The present itself runs on the device's queue thread
+//! (after the frame's submit), which takes the window's awareness for it the same way.
 
 use std::time::{Duration, Instant};
 
@@ -334,6 +335,11 @@ impl Window {
     /// before [`Window::frame`] to after the frame's present.
     pub(crate) fn dpi_scope(&self) -> DpiScope {
         DpiScope::of(self.hwnd)
+    }
+
+    /// The window's handle (the queue thread takes its DPI awareness for the present).
+    pub(crate) fn hwnd(&self) -> isize {
+        self.hwnd
     }
 
     /// The window's next frame, at its size now; `None` when it gives none now (the start and the

@@ -659,6 +659,9 @@ pub struct Device {
     /// command buffers sent with the batch before the open encoder's ([`Device::send_encoder`]).
     finishing: Vec<Finishing>,
     finisher: Option<Finisher>,
+    /// The queue thread: every submit, present and queue write in order ([`Device::flush`],
+    /// [`Device::on_queue`]); none where there are no finishing threads.
+    submitter: Option<Submitter>,
     /// Draws recorded into the open encoder.
     encoder_draws: u32,
     pass: Option<wgpu::RenderPass<'static>>,
@@ -1060,6 +1063,8 @@ impl Device {
         // SAFETY: the hal device is only asked a capability it keeps (no Vulkan call).
         let libraries = unsafe { device.as_hal::<wgpu::hal::api::Vulkan>() }
             .is_some_and(|hal| hal.uses_pipeline_libraries());
+        let finisher = Finisher::for_this_machine();
+        let submitter = finisher.as_ref().map(|_| Submitter::new(queue.clone()));
         let mut d = Device {
             device,
             queue,
@@ -1095,7 +1100,8 @@ impl Device {
             },
             encoder: None,
             finishing: Vec::new(),
-            finisher: Finisher::for_this_machine(),
+            finisher,
+            submitter,
             encoder_draws: 0,
             pass: None,
             pass_targets: None,
@@ -1695,44 +1701,92 @@ impl Device {
         self.groups.len()
     }
 
-    /// Sends the frame's commands so far, so a later upload cannot change what they draw.
+    /// Sends the frame's commands so far, so a later upload cannot change what they draw. With
+    /// the queue thread ([`Submitter`]) the batch is handed to it whole, and this thread goes on
+    /// recording the next one into a fresh register ring, UP vertices and upload stage while it is
+    /// finished and submitted (in order with every other queue operation).
     fn flush(&mut self) {
         self.end_pass();
-        if !self.ring.is_empty() {
-            self.queue.write_buffer(&self.ring_buffer, 0, &self.ring);
-            self.ring.clear();
-        }
-        if !self.up.is_empty() {
-            self.queue.write_buffer(&self.up_buffer, 0, &self.up);
-            self.up.clear();
-        }
-        if !self.stage.is_empty() {
-            self.queue.write_buffer(&self.stage_buffer, 0, &self.stage);
-            self.stage.clear();
-        }
-        // The batch's encoders in order: the earlier ones as their finishing threads finish them,
-        // the open one finished here.
-        let mut buffers: Vec<wgpu::CommandBuffer> = self
-            .finishing
-            .drain(..)
-            .map(|f| match f {
-                Finishing::Ready(b) => b,
-                Finishing::Pending(r) => match r.recv() {
-                    Ok(Ok(b)) => b,
-                    Ok(Err(why)) => panic!("a finishing thread could not finish an encoder: {why}"),
-                    Err(_) => panic!("a finishing thread stopped before it finished an encoder"),
-                },
-            })
-            .collect();
-        if let Some(e) = self.encoder.take() {
-            buffers.push(e.finish());
-        }
-        if !buffers.is_empty() {
-            self.queue.submit(buffers);
-        }
+        let finishing = std::mem::take(&mut self.finishing);
+        let encoder = self.encoder.take();
         self.encoder_draws = 0;
         self.batch += 1;
         self.st.dirty = [true; 2];
+        let Some(s) = &self.submitter else {
+            for (buffer, bytes) in [
+                (&self.ring_buffer, &mut self.ring),
+                (&self.up_buffer, &mut self.up),
+                (&self.stage_buffer, &mut self.stage),
+            ] {
+                if !bytes.is_empty() {
+                    self.queue.write_buffer(buffer, 0, bytes);
+                    bytes.clear();
+                }
+            }
+            let buffers = finish_batch(finishing, encoder);
+            if !buffers.is_empty() {
+                self.queue.submit(buffers);
+            }
+            return;
+        };
+        s.raise_failure();
+        let empty = self.ring.is_empty() && self.up.is_empty() && self.stage.is_empty();
+        if empty && finishing.is_empty() && encoder.is_none() {
+            return;
+        }
+        let mut fresh = s.take_bytes();
+        let bytes = [
+            std::mem::replace(&mut self.ring, std::mem::take(&mut fresh[0])),
+            std::mem::replace(&mut self.up, std::mem::take(&mut fresh[1])),
+            std::mem::replace(&mut self.stage, std::mem::take(&mut fresh[2])),
+        ];
+        let targets = [
+            self.ring_buffer.clone(),
+            self.up_buffer.clone(),
+            self.stage_buffer.clone(),
+        ];
+        let pool = Arc::clone(&s.pool);
+        s.send(Box::new(move |queue: &wgpu::Queue| {
+            let delay = SUBMIT_DELAY_FOR_TESTS.load(Ordering::Relaxed);
+            if delay > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(u64::from(delay)));
+            }
+            let mut bytes = bytes;
+            for (buffer, b) in targets.iter().zip(bytes.iter_mut()) {
+                if !b.is_empty() {
+                    queue.write_buffer(buffer, 0, b);
+                    b.clear();
+                }
+            }
+            let buffers = finish_batch(finishing, encoder);
+            if !buffers.is_empty() {
+                queue.submit(buffers);
+            }
+            pool.lock().unwrap_or_else(|e| e.into_inner()).push(bytes);
+        }));
+    }
+
+    /// `job` run with the queue in order with the queue operations before it: on the queue thread
+    /// ([`Submitter`]), or here on a machine without one.
+    fn on_queue(&self, job: impl FnOnce(&wgpu::Queue) + Send + 'static) {
+        match &self.submitter {
+            Some(s) => s.send(Box::new(job)),
+            None => job(&self.queue),
+        }
+    }
+
+    /// Whether a queue operation made here now comes after every one handed to the queue thread
+    /// (it has none outstanding, or there is none).
+    fn queue_idle(&self) -> bool {
+        self.submitter.as_ref().map_or(true, Submitter::idle)
+    }
+
+    /// Waits until the queue thread has run everything handed to it (a read-back, a frame of the
+    /// window, a screen that submits by itself, the end); its failure, if one, said here.
+    fn sync(&self) {
+        if let Some(s) = &self.submitter {
+            s.sync();
+        }
     }
 
     pub(crate) fn upload_surface(&mut self, surface: Handle, data: &[u8]) {
@@ -1769,29 +1823,39 @@ impl Device {
         } else {
             (s.width, s.height)
         };
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &tex.texture,
-                mip_level: s.level,
-                origin: wgpu::Origin3d {
-                    x: 0,
-                    y: 0,
-                    z: s.layer,
+        let (texture, level, layer) = (tex.texture.clone(), s.level, s.layer);
+        let write = move |queue: &wgpu::Queue, bytes: &[u8]| {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: level,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: layer,
+                    },
+                    aspect: wgpu::TextureAspect::All,
                 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            &bytes,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(row),
-                rows_per_image: Some(rows),
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
+                bytes,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: Some(rows),
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        };
+        // After the batches handed to the queue thread, as when they were submitted here.
+        if self.queue_idle() {
+            write(&self.queue, &bytes);
+        } else {
+            let bytes = bytes.into_owned();
+            self.on_queue(move |queue| write(queue, &bytes));
+        }
     }
 
     pub(crate) fn upload_buffer(
@@ -1839,9 +1903,15 @@ impl Device {
             self.flush();
         }
         // Not drawn from by the open batch: written before the batch's commands run.
+        // After the batches handed to the queue thread, as when they were submitted here.
         if let Some(Obj::Buffer(_, shadow)) = self.objects.get(&buffer) {
-            self.queue
-                .write_buffer(&b.buffer, start as u64, &shadow[start..end]);
+            if self.queue_idle() {
+                self.queue
+                    .write_buffer(&b.buffer, start as u64, &shadow[start..end]);
+            } else {
+                let (target, bytes) = (b.buffer.clone(), shadow[start..end].to_vec());
+                self.on_queue(move |queue| queue.write_buffer(&target, start as u64, &bytes));
+            }
         }
     }
 
@@ -3882,6 +3952,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // then any other the pipelines need, then the pipelines.
         let total = std::cell::Cell::new(before + taken.len() + ready.len());
         let shown = before > 0 || total.get() >= 32;
+        if shown {
+            // The screen submits and presents by itself.
+            self.sync();
+        }
         let mut surface = self.surface.take();
         let mut screen = self.loading.take();
         let (device, queue) = (self.device.clone(), self.queue.clone());
@@ -4021,6 +4095,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let started = std::time::Instant::now();
         let total = waiting + then;
         let cores = all_cores();
+        // The screen submits and presents by itself.
+        self.sync();
         let mut surface = self.surface.take();
         let mut screen = self.loading.take();
         let mut shots = self.shots.take();
@@ -5358,11 +5434,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     .device
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
                 e.copy_buffer_to_buffer(&self.count_buffer, u64::from(slot) * 4, &buffer, 0, 4);
-                self.queue.submit([e.finish()]);
+                let copy = e.finish();
                 let state = Arc::new(AtomicU8::new(0));
                 let mapped = state.clone();
-                buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-                    mapped.store(if r.is_ok() { 1 } else { 2 }, Ordering::Release);
+                // Submitted after the batch that counted, and mapped after that submit.
+                let target = buffer.clone();
+                self.on_queue(move |queue| {
+                    queue.submit([copy]);
+                    target.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                        mapped.store(if r.is_ok() { 1 } else { 2 }, Ordering::Release);
+                    });
                 });
                 let read = CountRead { buffer, state };
                 if let Some(Obj::Query(q)) = self.objects.get_mut(&query) {
@@ -5467,6 +5548,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             },
         );
         self.flush();
+        self.sync();
         buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
         let mut out = Vec::with_capacity((s.width * bpp * s.height) as usize);
@@ -5711,6 +5793,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
             _ => p,
         };
+        // The screen submits and presents by itself.
+        self.sync();
         show_on(
             &mut self.surface,
             &mut self.loading,
@@ -5797,6 +5881,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // The window's frame at its size now ([`crate::window`]); none while it is minimised,
         // gives none in time or is lost (the frame is skipped, as Direct3D 9's Present then shows
         // nothing, and the game goes on).
+        // The last frame presented by the queue thread first (one frame is taken at a time, and
+        // the swap chain is not configured again while a present runs). Offscreen too, so the
+        // render thread is never more than a frame ahead of the queue thread.
+        self.sync();
         let taken = match (&mut self.surface, &back) {
             (Some(w), Some(_)) => w.frame(&self.device).map(|t| (t, w.config.usage)),
             _ => None,
@@ -5858,11 +5946,20 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         self.flush();
         let presents = self.presents;
-        if let Some(s) = &mut self.start {
-            s.read_after_submit(presents);
+        if let Some(map) = self.start.as_mut().and_then(|s| s.read_after_submit(presents)) {
+            self.on_queue(map);
         }
+        // Presented right after the frame's submit, on the queue thread in the window's DPI
+        // awareness (as this thread is from the frame's size to here).
         if let Some(t) = frame_texture {
-            self.queue.present(t);
+            let hwnd = self.surface.as_ref().map(crate::window::Window::hwnd);
+            self.on_queue(move |queue| {
+                let _dpi = hwnd.map(crate::window::DpiScope::of);
+                queue.present(t);
+            });
+        }
+        if window_shot.is_some() || readback.is_some() {
+            self.sync();
         }
         if let Some((buffer, row, width, height)) = window_shot {
             buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
@@ -6002,6 +6099,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
 
     /// The errors wgpu reported so far (a refused pass or submit among them; tests).
     pub fn wgpu_errors(&self) -> u64 {
+        self.sync();
         self.errors.load(Ordering::Relaxed)
     }
 
@@ -6019,6 +6117,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// Loses the device, as a driver reset (TDR) or a removed graphics card does: from now on
     /// nothing reaches the GPU and nothing is read back from it (tests).
     pub fn lose(&self) {
+        self.sync();
         self.device.destroy();
     }
 
@@ -6026,6 +6125,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// and never configured with `new_surface` (as after a lost one); a format the surface does not
     /// offer is refused by wgpu, as a configuration a driver refuses (tests).
     pub fn reconfigure_window_for_tests(&mut self, format: wgpu::TextureFormat, new_surface: bool) {
+        self.sync();
         if let Some(w) = &mut self.surface {
             w.retarget_for_tests(format, new_surface);
         }
@@ -6050,6 +6150,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             view_formats: &[],
         });
         let view = tex.create_view(&Default::default());
+        self.sync();
         let mut screen = loading::Screen::new(&self.device, &self.queue, format);
         let mut encoder = self.device.create_command_encoder(&Default::default());
         screen.draw(
@@ -6127,6 +6228,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
 
     pub(crate) fn reset(&mut self, pp: &PresentParameters, back_buffers: &[Handle], depth: Handle) {
         self.flush();
+        self.sync();
         // The swap chain stays the window's size; configured again before the next frame, in the
         // new present interval's mode.
         if let Some(w) = &mut self.surface {
@@ -6963,17 +7065,22 @@ impl Start {
         }
     }
 
-    /// The copy recorded with present `present`, just sent, mapped.
-    fn read_after_submit(&mut self, present: u64) {
-        if let Some(copy) = self.unsent.take() {
-            let state = Arc::new(std::sync::atomic::AtomicU8::new(MAP_PENDING));
-            let answered = state.clone();
+    /// The copy recorded with present `present`, just sent: the job that maps it, run after the
+    /// submit ([`Device::on_queue`]).
+    fn read_after_submit(
+        &mut self,
+        present: u64,
+    ) -> Option<impl FnOnce(&wgpu::Queue) + Send + 'static> {
+        let copy = self.unsent.take()?;
+        let state = Arc::new(std::sync::atomic::AtomicU8::new(MAP_PENDING));
+        let answered = state.clone();
+        self.reading.push((copy.clone(), present, state));
+        Some(move |_: &wgpu::Queue| {
             copy.slice(..).map_async(wgpu::MapMode::Read, move |r| {
                 let s = if r.is_ok() { MAP_DONE } else { MAP_FAILED };
                 answered.store(s, Ordering::Release);
             });
-            self.reading.push((copy, present, state));
-        }
+        })
     }
 
     /// At present `present` (counted before it is made): why the start is over, if it is (the
@@ -7275,6 +7382,16 @@ pub fn module_timing_for_tests(delay_ms: u32, start_deadline_ms: u32) {
     START_DEADLINE_FOR_TESTS.store(start_deadline_ms, Ordering::Relaxed);
 }
 
+/// Tests only: the queue thread holds each batch this many milliseconds before it writes and
+/// submits it (queue operations made meanwhile are queued behind it; 0: none).
+static SUBMIT_DELAY_FOR_TESTS: AtomicU32 = AtomicU32::new(0);
+
+/// Tests only: [`SUBMIT_DELAY_FOR_TESTS`] in milliseconds.
+#[doc(hidden)]
+pub fn submit_delay_for_tests(delay_ms: u32) {
+    SUBMIT_DELAY_FOR_TESTS.store(delay_ms, Ordering::Relaxed);
+}
+
 fn worker_threads() -> usize {
     std::thread::available_parallelism()
         .map_or(1, |n| n.get())
@@ -7375,9 +7492,159 @@ impl Drop for Finisher {
     }
 }
 
+/// The batch's command buffers in order: the earlier encoders' as their finishing threads finish
+/// them, then the open encoder's, finished here.
+fn finish_batch(
+    finishing: Vec<Finishing>,
+    encoder: Option<wgpu::CommandEncoder>,
+) -> Vec<wgpu::CommandBuffer> {
+    let mut buffers: Vec<wgpu::CommandBuffer> = finishing
+        .into_iter()
+        .map(|f| match f {
+            Finishing::Ready(b) => b,
+            Finishing::Pending(r) => match r.recv() {
+                Ok(Ok(b)) => b,
+                Ok(Err(why)) => panic!("a finishing thread could not finish an encoder: {why}"),
+                Err(_) => panic!("a finishing thread stopped before it finished an encoder"),
+            },
+        })
+        .collect();
+    if let Some(e) = encoder {
+        buffers.push(e.finish());
+    }
+    buffers
+}
+
+/// A job for the queue thread ([`Submitter`]).
+type QueueJob = Box<dyn FnOnce(&wgpu::Queue) + Send>;
+
+/// A batch's register ring, `DrawPrimitiveUP` vertices and upload stage ([`Device::flush`]).
+type BatchBytes = [Vec<u8>; 3];
+
+/// The queue thread: runs the render thread's queue operations in the order it hands them over
+/// (each batch's buffer writes, its wait for the finishing threads and its submit; the writes
+/// between batches; presents), so the render thread does not wait at a flush for the finishing
+/// threads (8% of its time in the d1 replay) and goes on recording the next batch.
+struct Submitter {
+    jobs: Option<std::sync::mpsc::Sender<QueueJob>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    /// The queue, for a job sent after the thread is gone (run on the sender's thread).
+    queue: wgpu::Queue,
+    /// Jobs handed over and not yet run.
+    outstanding: Arc<std::sync::atomic::AtomicUsize>,
+    /// The first job that failed (a finishing thread's failure or a panic): its message, said on
+    /// the render thread ([`Submitter::raise_failure`]).
+    failed: Arc<std::sync::Mutex<Option<String>>>,
+    /// Batch vectors the queue thread is done with, for the render thread's next batches (the
+    /// register ring double-buffered: one filled here while the other is written there).
+    pool: Arc<std::sync::Mutex<Vec<BatchBytes>>>,
+}
+
+impl Submitter {
+    fn new(queue: wgpu::Queue) -> Submitter {
+        let (jobs, rx) = std::sync::mpsc::channel::<QueueJob>();
+        let outstanding = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let failed = Arc::new(std::sync::Mutex::new(None::<String>));
+        let thread = {
+            let (queue, outstanding, failed) =
+                (queue.clone(), Arc::clone(&outstanding), Arc::clone(&failed));
+            std::thread::Builder::new()
+                .name("nv-wgpu-submit".into())
+                .spawn(move || {
+                    for job in rx {
+                        let done =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&queue)));
+                        if let Err(p) = done {
+                            let why = p
+                                .downcast_ref::<&str>()
+                                .map(|s| s.to_string())
+                                .or_else(|| p.downcast_ref::<String>().cloned())
+                                .unwrap_or_else(|| "a panic without a message".to_string());
+                            failed
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .get_or_insert(why);
+                        }
+                        outstanding.fetch_sub(1, Ordering::Release);
+                    }
+                })
+                .expect("the queue thread starts")
+        };
+        Submitter {
+            jobs: Some(jobs),
+            thread: Some(thread),
+            queue,
+            outstanding,
+            failed,
+            pool: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    fn send(&self, job: QueueJob) {
+        self.outstanding.fetch_add(1, Ordering::AcqRel);
+        if let Some(Err(std::sync::mpsc::SendError(job))) = self.jobs.as_ref().map(|j| j.send(job))
+        {
+            // The thread is gone: run here, still after everything it ran.
+            self.outstanding.fetch_sub(1, Ordering::AcqRel);
+            job(&self.queue);
+        }
+    }
+
+    /// Nothing handed over is still to run.
+    fn idle(&self) -> bool {
+        self.outstanding.load(Ordering::Acquire) == 0
+    }
+
+    /// Empty vectors for the next batch: ones the queue thread gave back, else new.
+    fn take_bytes(&self) -> BatchBytes {
+        self.pool
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop()
+            .unwrap_or_default()
+    }
+
+    /// Waits until everything handed over has run, then says a failure, if one.
+    fn sync(&self) {
+        self.wait();
+        self.raise_failure();
+    }
+
+    fn wait(&self) {
+        if self.idle() {
+            return;
+        }
+        let (done, wait) = std::sync::mpsc::sync_channel::<()>(1);
+        self.send(Box::new(move |_| {
+            let _ = done.send(());
+        }));
+        let _ = wait.recv();
+    }
+
+    /// A job's failure, as the render thread said it before the submits moved here.
+    fn raise_failure(&self) {
+        let why = self.failed.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(why) = why {
+            panic!("{why}");
+        }
+    }
+}
+
+impl Drop for Submitter {
+    /// Everything handed over run, then the thread ends.
+    fn drop(&mut self) {
+        self.jobs = None;
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
 impl Drop for Device {
     /// The pipeline cache written once more when pipelines were made since its last save.
     fn drop(&mut self) {
+        // The queue thread's work done and the thread ended first (it submits and presents).
+        drop(self.submitter.take());
         self.report_made();
         if let Some(c) = &mut self.pipeline_cache {
             c.save_if_due(self.presents, true);
