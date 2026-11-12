@@ -1102,6 +1102,8 @@ pub(crate) struct Formatted {
     pub(crate) ok: bool,
     pub(crate) text: Vec<u8>,
     args: Vec<Arg>,
+    /// The parameters before the format string ([`format_string_args_at`]'s `fmt_pos`).
+    pub(crate) leading: Vec<Arg>,
 }
 
 impl Formatted {
@@ -1116,14 +1118,27 @@ impl Formatted {
     }
 }
 
-// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameAPI.cpp: ExtractFormatStringArgs
-// (format string first, `fmtStringPos` 0 for every caller) and the ScriptFormatStringArgs
-// constructor.
+/// [`format_string_args_at`] with the format string first (`fmtStringPos` 0).
 pub(crate) fn format_string_args(e: &mut Engine, a: &CommandArgs, max_params: u32) -> Formatted {
+    format_string_args_at(e, a, 0, max_params)
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameAPI.cpp: ExtractFormatStringArgs
+// and the ScriptFormatStringArgs constructor.
+/// The format string at parameter `fmt_pos`: the parameters before it read first (into
+/// [`Formatted::leading`]), then the format string and its arguments, then any normal parameters
+/// after the format string's 20.
+pub(crate) fn format_string_args_at(
+    e: &mut Engine,
+    a: &CommandArgs,
+    fmt_pos: u32,
+    max_params: u32,
+) -> Formatted {
     let fail = Formatted {
         ok: false,
         text: Vec::new(),
         args: Vec::new(),
+        leading: Vec::new(),
     };
     let start = a.data.wrapping_add(e.mem.u32(a.opcode_offset));
     let count = e.mem.u16(start) as i16;
@@ -1131,6 +1146,22 @@ pub(crate) fn format_string_args(e: &mut Engine, a: &CommandArgs, max_params: u3
         return fail;
     }
     let mut at = start + 2;
+    let mut leading = Vec::new();
+    if fmt_pos > 0 {
+        let read = args::read_args_at(
+            e,
+            fmt_pos,
+            a.params,
+            &mut at,
+            a.data,
+            a.script,
+            a.event_list,
+        );
+        if !read.ok {
+            return fail;
+        }
+        leading = read.args;
+    }
     let format = if e.mem.u16(at) == 0xffff {
         match expr::inline_argument(e, 0, &mut at, a.data, a.script, a.event_list) {
             Some(Arg::Str { text, .. }) => text,
@@ -1165,7 +1196,7 @@ pub(crate) fn format_string_args(e: &mut Engine, a: &CommandArgs, max_params: u3
         text
     };
     let mut fa = FmtArgs {
-        num_args: i32::from(count - 1) as u32,
+        num_args: (i32::from(count) - fmt_pos as i32 - 1) as u32,
         at,
         data: a.data,
         script: a.script,
@@ -1176,21 +1207,23 @@ pub(crate) fn format_string_args(e: &mut Engine, a: &CommandArgs, max_params: u3
     };
     let mut num = fa.num_args as i16;
     if num > 0 {
-        if i32::from(num) + 21 > max_params as i32 {
-            num = (max_params as i32 - 21) as i16;
+        let fixed = fmt_pos as i32 + 21;
+        if i32::from(num) + fixed > max_params as i32 {
+            num = (max_params as i32 - fixed) as i16;
         }
         if num <= 0 {
             return Formatted {
                 ok: num == 0,
                 text,
                 args: Vec::new(),
+                leading,
             };
         }
         let mut pos = fa.at;
         let read = args::read_args_at(
             e,
             num as u32,
-            a.params + 12 * 21,
+            a.params + 12 * fixed as u32,
             &mut pos,
             a.data,
             a.script,
@@ -1200,12 +1233,14 @@ pub(crate) fn format_string_args(e: &mut Engine, a: &CommandArgs, max_params: u3
             ok: read.ok,
             text,
             args: read.args,
+            leading,
         };
     }
     Formatted {
         ok: true,
         text,
         args: Vec::new(),
+        leading,
     }
 }
 

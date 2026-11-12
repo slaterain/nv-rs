@@ -3,6 +3,7 @@
 
 pub mod algohol;
 pub mod array;
+pub mod console;
 pub mod extender;
 pub mod factions;
 pub mod game;
@@ -22,8 +23,11 @@ pub mod misc_ref_more;
 pub mod misc_ref_npc;
 pub mod printf;
 pub mod quest;
+pub mod script;
 pub mod scripting;
+pub mod scripting_more;
 pub mod string;
+pub mod ui;
 pub mod weapons;
 
 use crate::args::{extract_args_ex, Arg};
@@ -57,6 +61,10 @@ pub fn all() -> Vec<&'static Command> {
         .chain(string::COMMANDS)
         .chain(array::COMMANDS)
         .chain(input::COMMANDS)
+        .chain(console::COMMANDS)
+        .chain(scripting_more::COMMANDS)
+        .chain(script::COMMANDS)
+        .chain(ui::COMMANDS)
         .chain(crate::functions::COMMANDS)
         .chain(crate::tick::COMMANDS)
         .chain(crate::event_commands::COMMANDS)
@@ -119,7 +127,12 @@ impl Read {
 /// xNVSE's answer past the buffer depends on what its frame holds there, and no script means to
 /// give such a name.
 pub fn arg_in_buffer(e: &Engine, read: &Read, i: usize, size: usize, command: &str) -> Vec<u8> {
-    let written = match read.args.get(i) {
+    args_in_buffer(e, &read.args, i, size, command)
+}
+
+/// [`arg_in_buffer`] on arguments read some other way (a formatted string's leading ones).
+pub fn args_in_buffer(e: &Engine, args: &[Arg], i: usize, size: usize, command: &str) -> Vec<u8> {
+    let written = match args.get(i) {
         Some(Arg::Str { raw, text }) => raw.len().max(text.len()),
         _ => 0,
     };
@@ -129,7 +142,8 @@ pub fn arg_in_buffer(e: &Engine, read: &Read, i: usize, size: usize, command: &s
              frame: the port stops here (NV_NVSE_LIST_GUARD reads it whole)"
         );
     }
-    string::c_str(&read.text(i)).to_vec()
+    let text = args.get(i).and_then(Arg::text).unwrap_or_default();
+    string::c_str(text).to_vec()
 }
 
 /// The form a base-form command works on: the given form's base form when it is a reference

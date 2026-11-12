@@ -227,6 +227,8 @@ pub struct Nvse {
     /// What `Commands_Game.cpp`'s commands keep: the scripts told of a loaded or restarted game,
     /// the local map grids' override.
     pub game: commands::game::State,
+    /// The mods whose scripts' debug lines print (`SetDebugMode`).
+    pub console: commands::console::State,
     /// The DirectInput hook's keys and the input commands' controls (I-11).
     pub input: input::State,
     /// The first frame recorded the main thread (`s_recordedMainThreadID`): xNVSE prints to the

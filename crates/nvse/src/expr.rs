@@ -1917,7 +1917,7 @@ fn full_name(e: &mut Engine, form: u32) -> Vec<u8> {
 }
 
 /// `EventListFromForm`: a quest's event list (`+0x5C`) or a reference's script's.
-fn event_list_from_form(e: &mut Engine, form: u32) -> u32 {
+pub(crate) fn event_list_from_form(e: &mut Engine, form: u32) -> u32 {
     let kind = e.mem.u8(form + 4);
     if kind == 0x47 {
         return e.mem.u32(form + 0x5c);
