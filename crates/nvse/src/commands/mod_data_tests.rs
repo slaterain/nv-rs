@@ -114,6 +114,29 @@ fn mod_local_data_by_key() {
     assert_eq!(run(&mut e, 0x154a, &[text("Count")]).1, 0.0);
 }
 
+/// `GetModLocalData` tells the running expression what it answered: a form, a string, else a
+/// number (also for no value).
+#[test]
+fn mod_local_data_return_types() {
+    let mut e = setup();
+    run(&mut e, 0x1549, &[text("s"), text("x")]);
+    run(&mut e, 0x1549, &[text("n"), num(2.0)]);
+    add_local(&mut e, 1, "who", f64::from_bits(0x0200_1000));
+    run(&mut e, 0x1549, &[text("f"), var(4, 1)]);
+    let expected = |e: &mut Engine, key: &str| {
+        crate::expr::with_evaluator(e, |e| {
+            crate::expr::expect_return_type(e, crate::table::Returns::Ambiguous);
+            get(e, key);
+            crate::expr::expected_return_type(e)
+        })
+    };
+    use crate::table::Returns;
+    assert_eq!(expected(&mut e, "s"), Some(Returns::String));
+    assert_eq!(expected(&mut e, "f"), Some(Returns::Form));
+    assert_eq!(expected(&mut e, "n"), Some(Returns::Default));
+    assert_eq!(expected(&mut e, "none"), Some(Returns::Default));
+}
+
 /// `GetUserTime`: the local clock as a string map of the calling mod; the day of the week from 1
 /// (Sunday).
 #[test]

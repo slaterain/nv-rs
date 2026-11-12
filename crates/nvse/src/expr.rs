@@ -307,6 +307,15 @@ pub fn expect_return_type(e: &mut Engine, ty: Returns) {
     }
 }
 
+/// What the running evaluator on this thread expects the command's result to be; `None` without
+/// one.
+pub fn expected_return_type(e: &Engine) -> Option<Returns> {
+    let thread = current_id(e);
+    e.ext_get::<Nvse>()
+        .and_then(|n| n.expr.expected.get(&thread))
+        .and_then(|s| s.last().copied())
+}
+
 /// Whether an evaluator runs on this thread (`ExpressionEvaluator::Active`).
 pub fn active(e: &Engine) -> bool {
     let thread = current_id(e);
