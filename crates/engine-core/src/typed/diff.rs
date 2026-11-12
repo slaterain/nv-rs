@@ -736,7 +736,12 @@ impl Diff {
             && (translation.control_word != held || typed.control_word != held)
         {
             let (translation, typed) = (translation.control_word, typed.control_word);
-            report.note(case, word, Branch::ByAddress, Found::WordChanged { translation, typed });
+            report.note(
+                case,
+                word,
+                Branch::ByAddress,
+                Found::WordChanged { translation, typed },
+            );
         }
         // Each `typed_call!`'s direct branch, against the same function by address. Only where debug
         // assertions make the macro note its calls, so the logs can match.
@@ -1552,7 +1557,9 @@ fn comparable_page(
 
 /// Every word that reads as an `f32` NaN becomes one NaN; one that reads as the high word of an
 /// `f64` NaN also clears the word below it. An `f64` infinity (high word 0x7ff00000, low word 0)
-/// is left alone, so it still differs from a NaN.
+/// is left alone, so it still differs from a NaN. Each word is read with the float's quiet bit set,
+/// so a signalling NaN on one side and its quieted copy on the other (the x87 quiets what it moves,
+/// native code copies it as it is) decide alike: 0x7fb00000 and 0x7ff00000 both clear the word below.
 fn canonical_nans(words: &mut [u32]) {
     for i in 0..words.len() {
         let word = words[i];
@@ -1560,10 +1567,12 @@ fn canonical_nans(words: &mut [u32]) {
         if magnitude <= 0x7f80_0000 {
             continue;
         }
-        if magnitude == 0x7ff0_0000 && i > 0 && words[i - 1] == 0 {
+        let quiet = magnitude | 0x0040_0000;
+        if quiet == 0x7ff0_0000 && i > 0 && words[i - 1] == 0 {
+            words[i] = word | 0x0040_0000;
             continue;
         }
-        if magnitude >= 0x7ff0_0000 && i > 0 {
+        if quiet >= 0x7ff0_0000 && i > 0 {
             words[i - 1] = 0;
         }
         words[i] = 0x7fc0_0000;
@@ -3523,6 +3532,38 @@ mod tests {
     }
     fn write_payload_nan(e: &mut Engine, p: Ptr) {
         e.mem.set_u32(p.addr(), 0xffc1_2345);
+    }
+    fn write_signalling_after_word(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr(), 0x1234_5678);
+        e.mem.set_u32(p.addr() + 4, 0x7fb0_0000);
+    }
+    fn write_quieted_after_word(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr(), 0x1234_5678);
+        e.mem.set_u32(p.addr() + 4, 0x7ff0_0000);
+    }
+    fn write_signalling_after_zero(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr() + 4, 0x7fb0_0000);
+    }
+    fn write_quieted_after_zero(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr() + 4, 0x7ff0_0000);
+    }
+
+    /// A signalling `f32` NaN that one side copies and the other quiets (0x7fb00000, 0x7ff00000) is
+    /// the same NaN under `allow_nan_payloads`, whatever the word below it holds: both sides read it
+    /// alike, so the word below is handled alike.
+    #[test]
+    fn a_quieted_nan_is_read_alike_on_both_sides() {
+        let same = |a: (u32, AbiFn), b: (u32, AbiFn)| {
+            float_diff(b, a).allow_nan_payloads().run().is_same()
+        };
+        assert!(same(
+            crate::entry!(0x0040_2000, write_signalling_after_word(Ptr)),
+            crate::entry!(0x0040_2000, write_quieted_after_word(Ptr))
+        ));
+        assert!(same(
+            crate::entry!(0x0040_2000, write_signalling_after_zero(Ptr)),
+            crate::entry!(0x0040_2000, write_quieted_after_zero(Ptr))
+        ));
     }
 
     /// Under `float_ulps`, integers and pointers still compare exactly: a small integer one apart (a
