@@ -203,6 +203,8 @@ pub struct Resources {
     /// game makes one), found by comparing the device, where a hash map's probe of its large
     /// entries cost more on each of the thousands of calls a frame.
     bindings: Vec<(u32, Bindings)>,
+    /// The drawing side's copies of the bindings while a cut is open (`super::d3d9draw`).
+    draw_bindings: Vec<(u32, Bindings)>,
     /// `NV_D3D9_BUFFERS=check`: the last unlocks whose buffer read back the same as its staging
     /// block, and those that did not; the bytes compared.
     round_trips: [u64; 2],
@@ -220,8 +222,65 @@ fn object(e: &mut Engine, this: Ptr) -> &mut Object {
         .expect("a Direct3D 9 buffer, shader or declaration of this layer")
 }
 
+/// The bindings of `device` as this call sees them: the drawing side's copy for a call from the
+/// drawing side of an open cut, main's otherwise.
 fn bindings(e: &mut Engine, device: Ptr) -> &mut Bindings {
-    bindings_in(&mut resources(e).bindings, device.addr())
+    let objects = &mut device!(e).device_objects;
+    let list = side_list(&objects.draw, &mut objects.resources);
+    bindings_in(list, device.addr())
+}
+
+/// Tests: a binding of `device` as this call sees it, by name: `declaration`, `vertex shader`,
+/// `pixel shader`, `fvf`, `indices`, `drawn from memory`, `stream N` (buffer, offset, stride,
+/// empty stride) or `constant K R` (kind `K`'s register `R`: its words and whether it is set).
+#[cfg(test)]
+pub(super) fn binding(e: &mut Engine, device: u32, what: &str) -> Vec<u32> {
+    let b = bindings(e, Ptr::new(device));
+    let words: Vec<&str> = what.split(' ').collect();
+    match words.as_slice() {
+        ["declaration"] => vec![b.declaration],
+        ["vertex", "shader"] => vec![b.vertex_shader],
+        ["pixel", "shader"] => vec![b.pixel_shader],
+        ["fvf"] => vec![b.fvf],
+        ["indices"] => vec![b.indices],
+        ["drawn", "from", "memory"] => vec![u32::from(b.drawn_from_memory)],
+        ["stream", n] => {
+            let n: u32 = n.parse().unwrap();
+            let (buffer, offset, stride) = b.streams.get(&n).copied().unwrap_or_default();
+            let empty = b.empty_strides.get(&n).copied().unwrap_or(u32::MAX);
+            vec![buffer, offset, stride, empty]
+        }
+        ["constant", k, r] => {
+            let slot = k.parse::<usize>().unwrap() * CONSTANT_SLOTS + r.parse::<usize>().unwrap();
+            let set = b
+                .constants_set
+                .get(slot / 64)
+                .is_some_and(|w| w & (1 << (slot % 64)) != 0);
+            let words = b.constants.get(slot).copied().unwrap_or_default();
+            words.into_iter().chain([u32::from(set)]).collect()
+        }
+        _ => panic!("no binding {what}"),
+    }
+}
+
+/// The bindings list a call sees ([`bindings`]).
+#[inline]
+fn side_list<'a>(
+    draw: &super::d3d9draw::DrawSide,
+    r: &'a mut Resources,
+) -> &'a mut Vec<(u32, Bindings)> {
+    if super::d3d9draw::drawing_side(draw) {
+        &mut r.draw_bindings
+    } else {
+        &mut r.bindings
+    }
+}
+
+/// Notes that main set `key` while a cut is open.
+fn mark(e: &mut Engine, key: super::d3d9draw::Key) {
+    if super::d3d9draw::any_cut() {
+        super::d3d9draw::main_set(&mut device!(e).device_objects.draw, key);
+    }
 }
 
 /// The bindings of `device` in `list`, made empty at its first use.
@@ -287,6 +346,15 @@ pub(super) fn register_code(e: &mut Engine) {
 /// Makes an object of `code`'s kind for `device` (counted once; the device counted too).
 fn make(e: &mut Engine, device: Ptr, code: u32, kind: Kind) -> u32 {
     register_code(e);
+    if super::d3d9draw::drawing_side(&device!(e).device_objects.draw) {
+        let what = match code {
+            VERTEX_BUFFER_CODE => "vertex buffer",
+            INDEX_BUFFER_CODE => "index buffer",
+            DECLARATION_CODE => "vertex declaration",
+            _ => "shader",
+        };
+        super::d3d9draw::created_on_drawing_side(e, what);
+    }
     let object = e.mem.alloc(8);
     let table = resources(e).vtables[&code];
     e.mem.set_u32(object, table);
@@ -538,7 +606,19 @@ fn unbind(e: &mut Engine, this: Ptr) {
     }
 }
 
+/// Whether `object` is a live object of this module (tests).
+#[cfg(test)]
+pub(super) fn alive(e: &mut Engine, object: u32) -> bool {
+    resources(e).objects.contains_key(&object)
+}
+
 fn destroy(e: &mut Engine, this: Ptr) {
+    // On the drawing side of an open cut the object waits for the join (`super::d3d9draw`).
+    let objects = &mut device!(e).device_objects;
+    if super::d3d9draw::drawing_side(&objects.draw) {
+        objects.draw.ending.push(this.addr());
+        return;
+    }
     {
         let o = resources(e)
             .objects
@@ -585,7 +665,13 @@ fn get_type(e: &mut Engine, this: Ptr) -> u32 {
 /// the buffer's and stay. A buffer kept outside the game's memory (`Kind::Buffer`'s `kept`) is
 /// handed out in a staging block, one for all its open locks.
 fn lock(e: &mut Engine, this: Ptr, offset: u32, size: u32, out: Ptr, flags: u32) -> u32 {
+    if super::d3d9draw::drawing_side(&device!(e).device_objects.draw) {
+        return lock_drawing(e, this, offset, size, out, flags);
+    }
     let model = lock_model(e, this, offset, size, out);
+    if super::d3d9draw::any_cut() && model == D3D_OK {
+        note_main_lock(e, this, offset, size);
+    }
     #[cfg(windows)]
     super::d3d9real::buffer_locked(e, this.addr(), offset, size, flags, model);
     let _ = flags;
@@ -624,6 +710,9 @@ fn lock_model(e: &mut Engine, this: Ptr, offset: u32, size: u32, out: Ptr) -> u3
 /// the lock's range goes to the real buffer; the last unlock of a buffer kept outside the
 /// game's memory takes its staging block's bytes back ([`unstage_buffer`]).
 fn unlock(e: &mut Engine, this: Ptr) -> u32 {
+    if super::d3d9draw::drawing_side(&device!(e).device_objects.draw) {
+        return unlock_drawing(e, this);
+    }
     let o = object(e, this);
     let Kind::Buffer {
         locks,
@@ -845,10 +934,24 @@ enum Held {
 /// answers `D3DERR_INVALIDCALL`; else the word is replaced and [`hold`] counts the new object
 /// and releases the old one, with one lookup of the new object and of the bindings.
 fn bind(e: &mut Engine, this: Ptr, new: u32, code: u32, which: Held) -> u32 {
+    mark(
+        e,
+        match which {
+            Held::Indices => super::d3d9draw::Key::Indices,
+            Held::Declaration => super::d3d9draw::Key::Declaration,
+            Held::VertexShader => super::d3d9draw::Key::VertexShader,
+            Held::PixelShader => super::d3d9draw::Key::PixelShader,
+        },
+    );
+    let device_objects = &mut device!(e).device_objects;
+    let drawing = super::d3d9draw::drawing_side(&device_objects.draw);
     let Resources {
-        objects, bindings, ..
-    } = resources(e);
-    let b = bindings_in(bindings, this.addr());
+        objects,
+        bindings,
+        draw_bindings,
+        ..
+    } = &mut device_objects.resources;
+    let b = bindings_in(if drawing { draw_bindings } else { bindings }, this.addr());
     let word = match which {
         Held::Indices => &mut b.indices,
         Held::Declaration => &mut b.declaration,
@@ -891,10 +994,16 @@ pub(super) fn set_stream_source(
     if stream >= STREAMS {
         return D3DERR_INVALIDCALL;
     }
+    mark(e, super::d3d9draw::Key::Stream(stream));
+    let device_objects = &mut device!(e).device_objects;
+    let drawing = super::d3d9draw::drawing_side(&device_objects.draw);
     let Resources {
-        objects, bindings, ..
-    } = resources(e);
-    let b = bindings_in(bindings, this.addr());
+        objects,
+        bindings,
+        draw_bindings,
+        ..
+    } = &mut device_objects.resources;
+    let b = bindings_in(if drawing { draw_bindings } else { bindings }, this.addr());
     // The buffer the stream holds already: it is a vertex buffer (checked when it was bound, and
     // a bound buffer lives on), so only the offset and stride change, as below, without looking
     // the buffer up.
@@ -1013,6 +1122,7 @@ pub(super) fn get_vertex_declaration(e: &mut Engine, this: Ptr, out: Ptr) -> u32
 /// implicit declaration is not modelled yet, so a `GetVertexDeclaration` after it is not
 /// provided.)
 pub(super) fn set_fvf(e: &mut Engine, this: Ptr, fvf: u32) -> u32 {
+    mark(e, super::d3d9draw::Key::Fvf);
     bindings(e, this).fvf = fvf;
     D3D_OK
 }
@@ -1094,8 +1204,10 @@ fn set_constants(e: &mut Engine, this: Ptr, kind: u8, start: u32, data: Ptr, cou
         .checked_add((4 * words * count).saturating_sub(1));
     if last.is_some_and(|last| e.mem.is_mapped(data.addr()) && e.mem.is_mapped(last)) {
         let mem = &e.mem;
+        let device_objects = &mut device!(e).device_objects;
+        super::d3d9draw::main_set_constants(&mut device_objects.draw, first, count as usize);
         let b = bindings_in(
-            &mut device!(e).device_objects.resources.bindings,
+            side_list(&device_objects.draw, &mut device_objects.resources),
             this.addr(),
         );
         if b.constants.is_empty() {
@@ -1133,6 +1245,7 @@ fn set_constants(e: &mut Engine, this: Ptr, kind: u8, start: u32, data: Ptr, cou
             *slot = e.mem.u32(at + 4 * w as u32);
         }
     }
+    super::d3d9draw::main_set_constants(&mut device!(e).device_objects.draw, first, count as usize);
     let b = bindings(e, this);
     if b.constants.is_empty() {
         b.constants = vec![[0; 4]; 6 * CONSTANT_SLOTS];
@@ -1151,14 +1264,20 @@ fn set_constants(e: &mut Engine, this: Ptr, kind: u8, start: u32, data: Ptr, cou
 /// `Set*ShaderConstant*` calls stored, read from the program's memory. `None` before the
 /// device's first set.
 #[cfg(windows)]
-pub(super) fn constant_registers(
-    resources: &Resources,
+pub(super) fn constant_registers<'a>(
+    draw: &super::d3d9draw::DrawSide,
+    resources: &'a Resources,
     device: u32,
     kind: u8,
     start: u32,
     count: u32,
-) -> Option<&[[u32; 4]]> {
-    let (_, b) = resources.bindings.iter().find(|(d, _)| *d == device)?;
+) -> Option<&'a [[u32; 4]]> {
+    let list = if super::d3d9draw::drawing_side(draw) {
+        &resources.draw_bindings
+    } else {
+        &resources.bindings
+    };
+    let (_, b) = list.iter().find(|(d, _)| *d == device)?;
     let first = usize::from(kind) * CONSTANT_SLOTS + start as usize;
     b.constants.get(first..first + count as usize)
 }
@@ -1332,6 +1451,7 @@ pub(super) fn draw_indexed_primitive(
 /// Leaves stream 0 as a draw from memory leaves it: `buffer` (0 for none, released if it was
 /// another), `offset` and `stride` (kept for `GetStreamSource` with no buffer too).
 fn leave_stream_zero(e: &mut Engine, this: Ptr, buffer: u32, offset: u32, stride: u32) {
+    mark(e, super::d3d9draw::Key::Stream(0));
     let old = if buffer != 0 {
         bindings(e, this)
             .streams
@@ -1385,6 +1505,7 @@ pub(super) fn draw_primitive_up(
             leave_stream_zero(e, this, held, 0, 0);
             return D3DERR_INVALIDCALL;
         }
+        mark(e, super::d3d9draw::Key::DrawnFromMemory);
         bindings(e, this).drawn_from_memory = true;
         leave_stream_zero(e, this, 0, 0, 0);
         return D3D_OK;
@@ -1493,4 +1614,307 @@ pub(super) fn fwd_draw_primitive_up(
         );
     }
     model
+}
+
+// ---------------------------------------------------------------------------------------------
+// Two producers (`super::d3d9draw`): the drawing side's locks, and its copy of the bindings.
+// ---------------------------------------------------------------------------------------------
+
+/// `Lock` from the drawing side of an open cut: a block of its own (freed at the join) holding
+/// the buffer's bytes of the range as they are now, so main's locks of the same buffer (the
+/// renderer's staging block, the dynamic buffers) never meet it; its unlock's upload goes into
+/// the slot. The buffer's own bytes are not changed: the drawing side's writes reach the backend.
+fn lock_drawing(e: &mut Engine, this: Ptr, offset: u32, size: u32, out: Ptr, flags: u32) -> u32 {
+    let (length, bits) = match &object(e, this).kind {
+        Kind::Buffer { desc, bits, .. } => (desc[4], *bits),
+        _ => unreachable!("Lock is a buffer's slot"),
+    };
+    if out.is_null() || u64::from(offset) + u64::from(size) > u64::from(length) {
+        return D3DERR_INVALIDCALL;
+    }
+    let size = if size == 0 { length - offset } else { size };
+    let block = e.mem.alloc(size.max(1));
+    let now = if bits != 0 {
+        e.mem.bytes(bits + offset, size)
+    } else {
+        match &object(e, this).kind {
+            Kind::Buffer {
+                kept: Some(kept), ..
+            } => {
+                let from = (offset as usize).min(kept.len());
+                let to = (offset as usize + size as usize).min(kept.len());
+                kept[from..to].to_vec()
+            }
+            _ => Vec::new(),
+        }
+    };
+    if !now.is_empty() {
+        e.mem.write(block, &now);
+    }
+    let draw = &mut device!(e).device_objects.draw;
+    // What the drawing side wrote before in this cut, over the buffer's bytes: the serial order's.
+    for (at, bytes) in draw.written.get(&this.addr()).into_iter().flatten() {
+        let from = (*at).max(offset);
+        let to = (*at + bytes.len() as u32).min(offset + size);
+        if from < to {
+            let part = &bytes[(from - at) as usize..(to - at) as usize];
+            e.mem.write(block + (from - offset), part);
+        }
+    }
+    draw.locks
+        .entry(this.addr())
+        .or_default()
+        .push((block, offset, size));
+    draw.blocks.push(block);
+    e.mem.set_u32(out.addr(), block);
+    #[cfg(windows)]
+    super::d3d9real::buffer_locked(e, this.addr(), offset, size, flags, D3D_OK);
+    let _ = flags;
+    D3D_OK
+}
+
+/// `Unlock` from the drawing side ([`lock_drawing`]): the range's upload from its block.
+fn unlock_drawing(e: &mut Engine, this: Ptr) -> u32 {
+    let draw = &mut device!(e).device_objects.draw;
+    let Some((block, offset, size)) = draw.locks.get_mut(&this.addr()).and_then(Vec::pop) else {
+        return D3DERR_INVALIDCALL;
+    };
+    // Every byte of the block counts as written (a lock hands out the bytes the buffer has, so the
+    // ones the game left are the same).
+    let bytes = e.mem.bytes(block, size);
+    device!(e)
+        .device_objects
+        .draw
+        .written
+        .entry(this.addr())
+        .or_default()
+        .push((offset, bytes));
+    // The upload reads `memory + offset`: the block itself.
+    #[cfg(windows)]
+    super::d3d9real::buffer_unlocked(
+        e,
+        this.addr(),
+        block.wrapping_sub(offset),
+        offset + size,
+        D3D_OK,
+    );
+    let _ = (block, offset, size);
+    D3D_OK
+}
+
+/// Main locked `offset..offset + size` (0: to the end) of `this` while a cut may be open: noted
+/// for the join ([`merge_buffer_bytes`]), nothing without one.
+#[cold]
+fn note_main_lock(e: &mut Engine, this: Ptr, offset: u32, size: u32) {
+    let size = if size == 0 {
+        match &object(e, this).kind {
+            Kind::Buffer { desc, .. } => desc[4] - offset,
+            _ => unreachable!("Lock is a buffer's slot"),
+        }
+    } else {
+        size
+    };
+    let draw = &mut device!(e).device_objects.draw;
+    if draw.device.is_some() {
+        draw.main_locked
+            .entry(this.addr())
+            .or_default()
+            .push((offset, size));
+    }
+}
+
+/// The join: the drawing side's writes into buffers ([`DrawSide::written`], in unlock order) put
+/// into the buffers' bytes, the serial order's, except where main locked the buffer after the
+/// cut (`main_locked`: main's bytes come later). A buffer gone since is skipped; one main has
+/// locked now gets them in its staging block too, which its last unlock keeps.
+///
+/// [`DrawSide::written`]: super::d3d9draw::DrawSide
+pub(super) fn merge_buffer_bytes(
+    e: &mut Engine,
+    written: engine_core::AddrMap<u32, Vec<(u32, Vec<u8>)>>,
+    main_locked: &engine_core::AddrMap<u32, Vec<(u32, u32)>>,
+) {
+    for (buffer, ranges) in written {
+        let Some(o) = resources(e).objects.get_mut(&buffer) else {
+            continue;
+        };
+        let Kind::Buffer {
+            desc,
+            bits,
+            staging,
+            ..
+        } = &o.kind
+        else {
+            continue;
+        };
+        let (bits, staging, length) = (*bits, *staging, desc[4]);
+        let mains = main_locked.get(&buffer).map_or(&[][..], Vec::as_slice);
+        for (at, bytes) in ranges {
+            // The runs of this range main did not lock after the cut.
+            let mut keep = vec![true; bytes.len()];
+            for &(m, size) in mains {
+                let from = m.max(at);
+                let to = (m + size).min(at + bytes.len() as u32);
+                if from < to {
+                    keep[(from - at) as usize..(to - at) as usize].fill(false);
+                }
+            }
+            let mut i = 0;
+            while i < bytes.len() {
+                if !keep[i] {
+                    i += 1;
+                    continue;
+                }
+                let start = i;
+                while i < bytes.len() && keep[i] {
+                    i += 1;
+                }
+                let run = &bytes[start..i];
+                let place = at + start as u32;
+                if bits != 0 {
+                    e.mem.write(bits + place, run);
+                    continue;
+                }
+                if staging != 0 {
+                    e.mem.write(staging + place, run);
+                }
+                let o = resources(e)
+                    .objects
+                    .get_mut(&buffer)
+                    .expect("looked up above");
+                if let Kind::Buffer {
+                    kept: Some(kept), ..
+                } = &mut o.kind
+                {
+                    if kept.len() < length as usize {
+                        kept.resize(length as usize, 0);
+                    }
+                    kept[place as usize..place as usize + run.len()].copy_from_slice(run);
+                }
+            }
+        }
+    }
+}
+
+/// The objects a bindings copy holds (streams' buffers, indices, declaration, shaders).
+fn held_by(b: &Bindings) -> Vec<u32> {
+    b.streams
+        .values()
+        .map(|s| s.0)
+        .chain([b.indices, b.declaration, b.vertex_shader, b.pixel_shader])
+        .filter(|&o| o != 0)
+        .collect()
+}
+
+/// The cut: main's bindings of `device` copied for the drawing side, what they hold held once
+/// more by the copy (the device's count of bindings, which the program never sees).
+pub(super) fn copy_for_drawing(e: &mut Engine, device: u32) {
+    let copy = bindings_in(&mut resources(e).bindings, device).clone();
+    for o in held_by(&copy) {
+        object(e, Ptr::new(o)).bound += 1;
+    }
+    let r = resources(e);
+    r.draw_bindings.retain(|(d, _)| *d != device);
+    r.draw_bindings.push((device, copy));
+}
+
+/// The join: main's bindings of `device` become the serial order's, main's value for each
+/// binding in `set` (and each constant register `constants` marks) set by main after the cut,
+/// the drawing side's copy's for every other; the copy's holds are let go of, and main's for what
+/// the copy's values replace.
+pub(super) fn merge_drawing(
+    e: &mut Engine,
+    device: u32,
+    set: &std::collections::HashSet<super::d3d9draw::Key>,
+    constants: &[u64],
+) {
+    use super::d3d9draw::Key;
+    let r = resources(e);
+    let Some(at) = r.draw_bindings.iter().position(|(d, _)| *d == device) else {
+        return;
+    };
+    let (_, draw) = r.draw_bindings.swap_remove(at);
+    let take = |k: Key| !set.contains(&k);
+    let mut unbound = Vec::new();
+    {
+        let main = bindings_in(&mut resources(e).bindings, device);
+        let streams: std::collections::BTreeSet<u32> = main
+            .streams
+            .keys()
+            .chain(draw.streams.keys())
+            .chain(main.empty_strides.keys())
+            .chain(draw.empty_strides.keys())
+            .copied()
+            .collect();
+        for s in streams {
+            let (old, copy) = (main.streams.get(&s).copied(), draw.streams.get(&s).copied());
+            if take(Key::Stream(s)) {
+                match copy {
+                    Some(v) => main.streams.insert(s, v),
+                    None => main.streams.remove(&s),
+                };
+                match draw.empty_strides.get(&s) {
+                    Some(&v) => main.empty_strides.insert(s, v),
+                    None => main.empty_strides.remove(&s),
+                };
+                unbound.extend(old.map(|o| o.0));
+            } else {
+                unbound.extend(copy.map(|c| c.0));
+            }
+        }
+        for (key, word, copy) in [
+            (Key::Indices, &mut main.indices, draw.indices),
+            (Key::Declaration, &mut main.declaration, draw.declaration),
+            (
+                Key::VertexShader,
+                &mut main.vertex_shader,
+                draw.vertex_shader,
+            ),
+            (Key::PixelShader, &mut main.pixel_shader, draw.pixel_shader),
+        ] {
+            if take(key) {
+                unbound.push(std::mem::replace(word, copy));
+            } else {
+                unbound.push(copy);
+            }
+        }
+        if take(Key::Fvf) {
+            main.fvf = draw.fvf;
+        }
+        if take(Key::DrawnFromMemory) {
+            main.drawn_from_memory = draw.drawn_from_memory;
+        }
+        if !draw.constants.is_empty() {
+            if main.constants.is_empty() {
+                main.constants = vec![[0; 4]; 6 * CONSTANT_SLOTS];
+                main.constants_set = vec![0; 6 * CONSTANT_SLOTS / 64];
+            }
+            for slot in 0..6 * CONSTANT_SLOTS {
+                let main_set = constants
+                    .get(slot / 64)
+                    .is_some_and(|w| w & (1 << (slot % 64)) != 0);
+                if !main_set {
+                    main.constants[slot] = draw.constants[slot];
+                    let bit = 1u64 << (slot % 64);
+                    let word = &mut main.constants_set[slot / 64];
+                    *word = (*word & !bit) | (draw.constants_set[slot / 64] & bit);
+                }
+            }
+        }
+    }
+    for o in unbound.into_iter().filter(|&o| o != 0) {
+        unbind(e, Ptr::new(o));
+    }
+}
+
+/// At the join: `object` (a buffer, shader or declaration a release or unbinding on the drawing
+/// side would have ended) ends now if nothing holds it. False when it is no object of this module.
+pub(super) fn end_if_unheld(e: &mut Engine, object: u32) -> bool {
+    let Some(o) = resources(e).objects.get(&object) else {
+        return false;
+    };
+    if o.references == 0 && o.bound == 0 {
+        destroy(e, Ptr::new(object));
+    }
+    true
 }
