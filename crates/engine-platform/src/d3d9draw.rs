@@ -171,8 +171,8 @@ pub fn draw_cut(e: &mut Engine, device: u32) -> bool {
     };
     super::d3d9device::copy_for_drawing(e, device);
     super::d3d9resource::copy_for_drawing(e, device);
-    #[cfg(windows)]
     OPEN_CUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(windows)]
     super::d3d9real::cut(e, device);
     true
 }

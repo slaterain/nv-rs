@@ -6764,6 +6764,133 @@ pub(crate) mod tests {
         assert_eq!(*seen.lock().unwrap(), ["7=1", "9=2", "8=3", "10=4"]);
     }
 
+    /// With real threads, a sync call of main's while a cut is open (a surface read back, under
+    /// the device lock as a device function holds it) waits for the drawing job, which runs on the
+    /// drawing helper and needs that lock for its own calls: the lock is given back meanwhile, and
+    /// the reply comes after the drawing side's commands and main's held ones, on the direct and
+    /// the threaded runner. A job that ends without closing its slot (one that stopped, say) does
+    /// not leave main's call stuck or refused: the slot is closed for it. Under a time limit: a
+    /// lock kept through the wait would leave both threads waiting for ever.
+    #[cfg(windows)]
+    #[test]
+    fn mains_sync_call_during_a_cut_waits_for_the_drawing_job_with_real_threads() {
+        let (done, finished) = std::sync::mpsc::channel();
+        let body = std::thread::Builder::new()
+            .name("sync-during-cut".into())
+            .stack_size(16 << 20)
+            .spawn(move || {
+                sync_call_during_a_cut();
+                let _ = done.send(());
+            })
+            .expect("the test's thread");
+        match finished.recv_timeout(std::time::Duration::from_secs(30)) {
+            Ok(()) => body.join().expect("the test's thread"),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                if let Err(payload) = body.join() {
+                    std::panic::resume_unwind(payload);
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                panic!("main's sync call and the drawing job waited for each other (30 s)")
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    fn sync_call_during_a_cut() {
+        use super::super::d3d9draw::{draw_close, draw_cut, draw_join};
+        use d3d9_stream::{Backend, Cmd, Data, Reply, Settings, Stream};
+        use engine_core::real_threads::{device_guard, join_draw, post_draw};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+        struct Log(Arc<Mutex<Vec<String>>>);
+        impl Backend for Log {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                match cmd {
+                    Cmd::SetRenderState { state, value, .. } => {
+                        self.0.lock().unwrap().push(format!("{state}={value}"));
+                        Reply::None
+                    }
+                    Cmd::ReadSurface { size, .. } => {
+                        self.0.lock().unwrap().push("read".into());
+                        Reply::Bytes(Some(vec![0x5a; size as usize]))
+                    }
+                    _ => Reply::None,
+                }
+            }
+        }
+        const SURFACE: u32 = 0x0bad_5000;
+        let (mut e, dev) = texture_device(Store::Host);
+        engine_core::real_threads::start(&mut e).expect("real threads on");
+        let at = e.mem.alloc(16);
+        // `SetRenderState` through the device's table, under the device lock as the game's call
+        // takes it (`real_threads::device_call`; this test's table is not in the layer's ranges).
+        fn state(e: &mut Engine, dev: u32, s: u32, v: u32) {
+            let _device = device_guard(e);
+            assert_eq!(e.vcall(dev, 4 * 57, &[s, v]).u32(), D3D_OK);
+        }
+        for threaded in [false, true] {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let backend = Box::new(Log(Arc::clone(&seen)));
+            let stream = if threaded {
+                Stream::threaded(backend, Settings::default())
+            } else {
+                Stream::direct(backend)
+            };
+            {
+                let _device = device_guard(&e);
+                super::super::d3d9real::test_stream(&mut e, dev, stream);
+                super::super::d3d9real::test_forwarded(&mut e, SURFACE);
+            }
+            // Twice: a job that closes its slot, and one that ends without closing it.
+            for closes in [true, false] {
+                seen.lock().unwrap().clear();
+                state(&mut e, dev, 7, 1);
+                assert!(draw_cut(&mut e, dev));
+                let go = Arc::new(AtomicBool::new(false));
+                let job_go = Arc::clone(&go);
+                assert!(post_draw(
+                    &mut e,
+                    Box::new(move |w: &mut Engine| {
+                        // Only once main is about to make its sync call, and late enough that a
+                        // reply not waiting for the job would come first.
+                        while !job_go.load(Ordering::SeqCst) {
+                            std::thread::yield_now();
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(30));
+                        state(w, dev, 9, 2);
+                        if closes {
+                            draw_close(w);
+                        }
+                    })
+                ));
+                state(&mut e, dev, 8, 3);
+                let read = {
+                    let _device = device_guard(&e);
+                    go.store(true, Ordering::SeqCst);
+                    let read = super::super::d3d9real::read_surface(&mut e, SURFACE, at, 16);
+                    assert!(crate::device_held(&e), "the device lock is taken again");
+                    read
+                };
+                let runner = if threaded { "threaded" } else { "direct" };
+                let how = if closes { "closed" } else { "left open" };
+                assert!(read, "{runner}, slot {how}: the surface read back");
+                assert_eq!(e.mem.u32(at), 0x5a5a_5a5a, "{runner}, slot {how}");
+                assert_eq!(
+                    *seen.lock().unwrap(),
+                    ["7=1", "9=2", "8=3", "read"],
+                    "{runner}, slot {how}: the drawing side's commands, main's held ones, then \
+                     the read"
+                );
+                assert!(join_draw(&e));
+                draw_join(&mut e);
+                let _device = device_guard(&e);
+                assert_eq!(render_state(&mut e, dev, 9), 2, "the serial order's state");
+                assert_eq!(render_state(&mut e, dev, 8), 3);
+            }
+        }
+    }
+
     /// The viewport's words through `SetViewport`.
     fn set_viewport_words(e: &mut Engine, device: u32, rect: [u32; 4]) {
         let v = e.mem.alloc(24);

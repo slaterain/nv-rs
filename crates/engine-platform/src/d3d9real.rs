@@ -264,6 +264,13 @@ pub(crate) fn test_stream(e: &mut Engine, device: u32, stream: Stream) {
     r.devices.push((device, None));
 }
 
+/// Tests: the modelled object `object` as one the backend was asked for (its calls are recorded;
+/// a surface reads back through [`read_surface`]).
+#[cfg(test)]
+pub(crate) fn test_forwarded(e: &mut Engine, object: u32) {
+    real(e).forwarded.insert(object);
+}
+
 /// The real window of a modelled window handle, when it has one (under the device lock with real
 /// threads: the window functions make them, the device presents in them).
 pub fn real_window(e: &Engine, handle: u32) -> Option<isize> {
@@ -353,6 +360,12 @@ fn call(e: &mut Engine, cmd: Cmd<Data<'_>>) -> Option<Reply> {
     if !super::d3d9draw::drawing_thread() && real(e).stream.as_mut().is_some_and(Stream::cut_open) {
         // `wait_draw` gives the device lock back while it waits.
         engine_core::real_threads::wait_draw(e);
+        if real(e).stream.as_mut().is_some_and(Stream::cut_open) {
+            // The job has finished (or none was posted: the drawing side's calls, if any, came
+            // from this thread already) without closing its slot (a job that stopped, say):
+            // nothing can add to it now, so it is closed here and the reply still comes after it.
+            close(e);
+        }
     }
     sink(real(e)).map(|mut s| s.submit(cmd))
 }
