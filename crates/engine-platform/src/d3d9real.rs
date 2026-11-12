@@ -316,10 +316,9 @@ impl Sink<'_> {
 /// This call's sink: the slot for the drawing side while it is open, main's stream otherwise.
 #[inline]
 fn sink(r: &mut Real) -> Option<Sink<'_>> {
-    if super::d3d9draw::drawing_thread() {
-        if let Some(slot) = r.slot.as_mut() {
-            return Some(Sink::Slot(slot));
-        }
+    // Without an open slot (every call but the world draw's): one test, no thread-local read.
+    if r.slot.is_some() && super::d3d9draw::drawing_thread() {
+        return r.slot.as_mut().map(Sink::Slot);
     }
     r.stream.as_mut().map(Sink::Main)
 }
@@ -357,10 +356,11 @@ fn record_on(e: &mut Engine, object: u32, cmd: Cmd<Data<'_>>) {
 /// (`super::d3d9draw`) first waits for the drawing job, the device lock given back meanwhile: its
 /// reply comes after the slot's commands, which the drawing side records under that lock.
 fn call(e: &mut Engine, cmd: Cmd<Data<'_>>) -> Option<Reply> {
-    if !super::d3d9draw::drawing_thread() && real(e).stream.as_mut().is_some_and(Stream::cut_open) {
+    // The slot is open from the cut until the drawing side closes it ([`close`]).
+    if real(e).slot.is_some() && !super::d3d9draw::drawing_thread() {
         // `wait_draw` gives the device lock back while it waits.
         engine_core::real_threads::wait_draw(e);
-        if real(e).stream.as_mut().is_some_and(Stream::cut_open) {
+        if real(e).slot.is_some() {
             // The job has finished (or none was posted: the drawing side's calls, if any, came
             // from this thread already) without closing its slot (a job that stopped, say):
             // nothing can add to it now, so it is closed here and the reply still comes after it.
@@ -1946,7 +1946,7 @@ pub fn buffer_locked(e: &mut Engine, buffer: u32, offset: u32, size: u32, flags:
     if model != 0 || !r.forwarded.contains(&buffer) {
         return;
     }
-    let locks = if super::d3d9draw::drawing_thread() && r.slot.is_some() {
+    let locks = if r.slot.is_some() && super::d3d9draw::drawing_thread() {
         &mut r.draw_locks
     } else {
         &mut r.locks
@@ -1963,7 +1963,7 @@ pub fn buffer_unlocked(e: &mut Engine, buffer: u32, bits: u32, length: u32, mode
     let held = crate::device_held(e);
     let mem = &e.mem;
     let r = &mut crate::device_mut(&mut e.device, held).real;
-    let locks = if super::d3d9draw::drawing_thread() && r.slot.is_some() {
+    let locks = if r.slot.is_some() && super::d3d9draw::drawing_thread() {
         &mut r.draw_locks
     } else {
         &mut r.locks

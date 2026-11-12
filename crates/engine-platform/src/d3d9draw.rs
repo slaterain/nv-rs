@@ -29,6 +29,7 @@
 //! main's value; for every other, the drawing side's. The holds follow.
 
 use crate::Engine;
+#[cfg(test)]
 use std::cell::Cell;
 
 /// A piece of a device's state, for what main set after the cut ([`DrawSide::main_set`]).
@@ -79,12 +80,20 @@ pub(crate) struct DrawSide {
     /// last, and every block, freed at the join.
     pub(super) locks: engine_core::AddrMap<u32, Vec<(u32, u32, u32)>>,
     pub(super) blocks: Vec<u32>,
+    /// What the drawing side wrote into buffers, by buffer: each unlocked range's offset and
+    /// bytes, in unlock order. Its later locks start from them; the join writes them into the
+    /// buffers' bytes.
+    pub(super) written: engine_core::AddrMap<u32, Vec<(u32, Vec<u8>)>>,
+    /// The ranges (offset, size) main locked in buffers after the cut: main's bytes there come
+    /// after the drawing side's in the serial order, so the join leaves them.
+    pub(super) main_locked: engine_core::AddrMap<u32, Vec<(u32, u32)>>,
     /// Main presented during the cut: the frame's unlocked staging blocks are freed at the join.
     pub(super) presented: bool,
     /// The note about creations is printed once a run.
     pub(super) noted: bool,
 }
 
+#[cfg(test)]
 thread_local! {
     /// Tests: this thread calls as the drawing side, without the drawing helper.
     static AS_DRAWING_SIDE: Cell<bool> = const { Cell::new(false) };
@@ -94,7 +103,11 @@ thread_local! {
 /// for it).
 #[inline]
 pub(super) fn drawing_thread() -> bool {
-    engine_core::real_threads::on_draw_helper() || AS_DRAWING_SIDE.with(Cell::get)
+    #[cfg(test)]
+    if AS_DRAWING_SIDE.with(Cell::get) {
+        return true;
+    }
+    engine_core::real_threads::on_draw_helper()
 }
 
 /// Whether a call with `side` open comes from the drawing side.
@@ -204,6 +217,9 @@ pub fn draw_join(e: &mut Engine) {
     let constants = std::mem::take(&mut side(e).main_constants);
     super::d3d9device::merge_drawing(e, device, &set);
     super::d3d9resource::merge_drawing(e, device, &set, &constants);
+    let written = std::mem::take(&mut side(e).written);
+    let main_locked = std::mem::take(&mut side(e).main_locked);
+    super::d3d9resource::merge_buffer_bytes(e, written, &main_locked);
     // The objects the drawing side's releases left, ended now if nothing holds them (on main:
     // the cut is still open until below, so they are ended here, not deferred again).
     let ending = std::mem::take(&mut side(e).ending);
