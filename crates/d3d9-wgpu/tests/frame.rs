@@ -412,6 +412,250 @@ fn a_vertex_shader_has_one_module_for_float_inputs_of_any_size() {
     );
 }
 
+/// Draws one triangle over the whole target from `vertices` (`stride` bytes each) through a new
+/// declaration `decl` of `elements` (stream 0: offset, `D3DDECLTYPE`, usage, usage index).
+fn draw_with(g: &mut Gpu, decl: u32, elements: &[(u16, u8, u8, u8)], vertices: &[u8], stride: u32) {
+    let mut bytes = Vec::new();
+    for &(offset, ty, usage, index) in elements {
+        bytes.extend_from_slice(&[0, 0]);
+        bytes.extend_from_slice(&offset.to_le_bytes());
+        bytes.extend_from_slice(&[ty, 0, usage, index]);
+    }
+    bytes.extend_from_slice(&[0xFF, 0, 0, 0, 17, 0, 0, 0]);
+    g.run(Cmd::CreateDeclaration {
+        device: DEVICE,
+        declaration: decl,
+        elements: Data::Bytes(&bytes),
+    });
+    g.run(Cmd::SetVertexDeclaration {
+        device: DEVICE,
+        declaration: decl,
+    });
+    let offset = 256 * (g.next % 12);
+    g.next += 1;
+    g.run(Cmd::UploadBuffer {
+        buffer: VB,
+        offset,
+        flags: 0,
+        data: Data::Bytes(vertices),
+    });
+    g.run(Cmd::SetStreamSource {
+        device: DEVICE,
+        stream: 0,
+        buffer: VB,
+        offset,
+        stride,
+    });
+    g.run(Cmd::DrawPrimitive {
+        device: DEVICE,
+        kind: 4,
+        start: 0,
+        count: 1,
+    });
+}
+
+/// The corners of a triangle over the whole target (clip x and y).
+const TRIANGLE: [[f32; 2]; 3] = [[-3.0, -3.0], [-3.0, 9.0], [9.0, -3.0]];
+
+/// A vs_2_0 passing POSITION and TEXCOORD0 on (dcl_position v0; dcl_texcoord0 v1; mov oPos, v0;
+/// mov oT0, v1) and a ps_2_0 drawing its TEXCOORD0 (dcl t0; mov oC0, t0), made and set.
+fn texcoord_pair(g: &mut Gpu, vs: u32, ps: u32) {
+    let mut v = vec![0xFFFE_0200];
+    v.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    v.extend(ins(31, &[0x8000_0005, 0x900F_0001]));
+    v.extend(ins(1, &[0xC00F_0000, 0x90E4_0000]));
+    v.extend(ins(1, &[0xE00F_0000, 0x90E4_0001]));
+    v.push(END);
+    let mut p = vec![0xFFFF_0200];
+    p.extend(ins(31, &[0x8000_0000, 0xB00F_0000]));
+    p.extend(ins(1, &[0x800F_0800, 0xB0E4_0000]));
+    p.push(END);
+    for (shader, pixel, tokens) in [(vs, false, v), (ps, true, p)] {
+        let t = words(&tokens);
+        g.run(Cmd::CreateShader {
+            device: DEVICE,
+            shader,
+            pixel,
+            tokens: Data::Bytes(&t),
+        });
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+}
+
+/// FLOAT3 and FLOAT1 are filled to (x, y, z, 1) and (x, 0, 0, 1) as Direct3D 9 expands them, by
+/// the hardware, with one vertex module for them and FLOAT4. Each is followed in memory by a
+/// value a wider read would take: a FLOAT3 TEXCOORD0 of (0.2, 0.4, 0.6) followed by 0.0 draws
+/// alpha 1, where a w read from memory would give 0; a FLOAT1 TEXCOORD0 of 0.4 followed by 0.6
+/// draws (0.4, 0, 0, 1), where a second component read from memory would give green. (The FLOAT3
+/// positions are followed by 0.0 too, but a triangle whose w is 0 everywhere still covers the
+/// target on this machine's card, so the colour carries the check.)
+#[test]
+fn float3_and_float1_elements_are_filled_as_direct3d_9_expands_them() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    texcoord_pair(&mut g, VS + 5, PS + 14);
+    // POSITION FLOAT4 (x, y, 0.5, 1) and TEXCOORD0 FLOAT4 (0.2, 0.4, 0.6, 1): 32 bytes each.
+    let four: Vec<u8> = floats(
+        &TRIANGLE
+            .iter()
+            .flat_map(|p| [p[0], p[1], 0.5, 1.0, 0.2, 0.4, 0.6, 1.0])
+            .collect::<Vec<f32>>(),
+    );
+    g.clear(3, 0, 1.0);
+    draw_with(&mut g, DECL + 10, &[(0, 3, 0, 0), (16, 3, 5, 0)], &four, 32);
+    // (0.2, 0.4, 0.6, 1) as B, G, R, A bytes (whole numbers of 1/255: no rounding tie).
+    assert_eq!(g.pixels(), vec![[153, 102, 51, 255]; 16], "FLOAT4");
+    // POSITION FLOAT3 (x, y, 0) and TEXCOORD0 FLOAT3 (0.2, 0.4, 0.6), each with 0.0 after it.
+    let three: Vec<u8> = floats(
+        &TRIANGLE
+            .iter()
+            .flat_map(|p| [p[0], p[1], 0.0, 0.0, 0.2, 0.4, 0.6, 0.0])
+            .collect::<Vec<f32>>(),
+    );
+    g.clear(3, 0, 1.0);
+    draw_with(
+        &mut g,
+        DECL + 11,
+        &[(0, 2, 0, 0), (16, 2, 5, 0)],
+        &three,
+        32,
+    );
+    assert_eq!(
+        g.pixels(),
+        vec![[153, 102, 51, 255]; 16],
+        "FLOAT3 read as (0.2, 0.4, 0.6, 1)"
+    );
+    // POSITION FLOAT3 (x, y, 0) and 0.0 after it, TEXCOORD0 FLOAT1 0.4 and 0.6 after it.
+    let one: Vec<u8> = floats(
+        &TRIANGLE
+            .iter()
+            .flat_map(|p| [p[0], p[1], 0.0, 0.0, 0.4, 0.6])
+            .collect::<Vec<f32>>(),
+    );
+    g.clear(3, 0, 1.0);
+    draw_with(&mut g, DECL + 13, &[(0, 2, 0, 0), (16, 0, 5, 0)], &one, 24);
+    assert_eq!(
+        g.pixels(),
+        vec![[0, 0, 102, 255]; 16],
+        "FLOAT1 read as (0.4, 0, 0, 1)"
+    );
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.module_counts().0, 1, "one vertex module for all three");
+}
+
+/// A `D3DCOLOR` element reaches the shader with its bytes in Direct3D 9's order (memory B, G, R,
+/// A: the shader's x is the third byte), and a `SHORT4` element as whole numbers, not normalised:
+/// a position of (-3, -3, 0, 1) and the like covers the target.
+#[test]
+fn d3dcolor_and_short4_elements_read_as_direct3d_9_reads_them() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    // vs_2_0: dcl_position v0; dcl_color v1; mov oPos, v0; mov oD0, v1.
+    let mut v = vec![0xFFFE_0200];
+    v.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    v.extend(ins(31, &[0x8000_000A, 0x900F_0001]));
+    v.extend(ins(1, &[0xC00F_0000, 0x90E4_0000]));
+    v.extend(ins(1, &[0xD00F_0000, 0x90E4_0001]));
+    v.push(END);
+    // ps_2_0: dcl v0; mov oC0, v0.
+    let mut p = vec![0xFFFF_0200];
+    p.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    p.extend(ins(1, &[0x800F_0800, 0x90E4_0000]));
+    p.push(END);
+    for (shader, pixel, tokens) in [(VS + 6, false, v), (PS + 15, true, p)] {
+        let t = words(&tokens);
+        g.run(Cmd::CreateShader {
+            device: DEVICE,
+            shader,
+            pixel,
+            tokens: Data::Bytes(&t),
+        });
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    // POSITION SHORT4 (x, y, 0, 1), COLOR0 D3DCOLOR bytes 0x10, 0x80, 0xF0, 0xFF: 12 bytes.
+    let mut vertices = Vec::new();
+    for p in TRIANGLE {
+        for c in [p[0] as i16, p[1] as i16, 0, 1] {
+            vertices.extend_from_slice(&c.to_le_bytes());
+        }
+        vertices.extend_from_slice(&[0x10, 0x80, 0xF0, 0xFF]);
+    }
+    g.clear(3, 0, 1.0);
+    draw_with(
+        &mut g,
+        DECL + 12,
+        &[(0, 7, 0, 0), (8, 4, 10, 0)],
+        &vertices,
+        12,
+    );
+    // The target's B, G, R, A bytes are the colour's own: R 0xF0, B 0x10.
+    assert_eq!(g.pixels(), vec![[0x10, 0x80, 0xF0, 0xFF]; 16]);
+}
+
+/// The coarser key still separates what a module depends on: one vertex shader drawn with a
+/// float position, a signed one (`SHORT4`) and a declaration without its TEXCOORD0 (read as
+/// (0, 0, 0, 1)) takes three modules, and each draw is its own declaration's.
+#[test]
+fn declarations_of_other_kinds_or_a_missing_element_get_their_own_modules() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    texcoord_pair(&mut g, VS + 7, PS + 16);
+    // Float: POSITION FLOAT4, TEXCOORD0 FLOAT4 (0.2, 0.4, 0.6, 1).
+    let float: Vec<u8> = floats(
+        &TRIANGLE
+            .iter()
+            .flat_map(|p| [p[0], p[1], 0.5, 1.0, 0.2, 0.4, 0.6, 1.0])
+            .collect::<Vec<f32>>(),
+    );
+    g.clear(3, 0, 1.0);
+    draw_with(
+        &mut g,
+        DECL + 13,
+        &[(0, 3, 0, 0), (16, 3, 5, 0)],
+        &float,
+        32,
+    );
+    assert_eq!(g.pixels(), vec![[153, 102, 51, 255]; 16], "float position");
+    // Signed: POSITION SHORT4 (x, y, 0, 1), the same TEXCOORD0 after it.
+    let mut signed = Vec::new();
+    for p in TRIANGLE {
+        for c in [p[0] as i16, p[1] as i16, 0, 1] {
+            signed.extend_from_slice(&c.to_le_bytes());
+        }
+        signed.extend(floats(&[0.2, 0.4, 0.6, 1.0]));
+    }
+    g.clear(3, 0, 1.0);
+    draw_with(
+        &mut g,
+        DECL + 14,
+        &[(0, 7, 0, 0), (8, 3, 5, 0)],
+        &signed,
+        24,
+    );
+    assert_eq!(g.pixels(), vec![[153, 102, 51, 255]; 16], "signed position");
+    // No TEXCOORD0: the shader reads (0, 0, 0, 1), opaque black.
+    let bare: Vec<u8> = floats(
+        &TRIANGLE
+            .iter()
+            .flat_map(|p| [p[0], p[1], 0.5, 1.0])
+            .collect::<Vec<f32>>(),
+    );
+    g.clear(3, 0x8080_8080, 1.0);
+    draw_with(&mut g, DECL + 15, &[(0, 3, 0, 0)], &bare, 16);
+    assert_eq!(g.pixels(), vec![[0, 0, 0, 255]; 16], "TEXCOORD0 missing");
+    let d = g.b.device().expect("the device");
+    assert_eq!(
+        d.module_counts().0,
+        3,
+        "a vertex module for float, for signed and for the missing input"
+    );
+}
+
 /// Fixed varying locations: one vertex shader writing TEXCOORD0 (red) and TEXCOORD1 (green)
 /// serves a pixel shader reading TEXCOORD0 and one reading TEXCOORD1 with one module, each pair
 /// drawing its own colour; a pixel shader reading TEXCOORD2, which the vertex shader does not
