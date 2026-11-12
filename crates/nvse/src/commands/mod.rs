@@ -21,6 +21,7 @@ pub mod misc_ref;
 pub mod misc_ref_cells;
 pub mod misc_ref_more;
 pub mod misc_ref_npc;
+pub mod packages;
 pub mod printf;
 pub mod quest;
 pub mod script;
@@ -65,6 +66,7 @@ pub fn all() -> Vec<&'static Command> {
         .chain(scripting_more::COMMANDS)
         .chain(script::COMMANDS)
         .chain(ui::COMMANDS)
+        .chain(packages::COMMANDS)
         .chain(crate::functions::COMMANDS)
         .chain(crate::tick::COMMANDS)
         .chain(crate::event_commands::COMMANDS)
@@ -229,6 +231,8 @@ pub mod rtti {
     pub const TES_PACKAGE: u32 = 0x0118_46a0;
     pub const TES_CREATURE: u32 = 0x0118_3a00;
     pub const BGS_HEAD_PART: u32 = 0x0118_63b8;
+    pub const TES_AI_FORM: u32 = 0x0118_6cd4;
+    pub const DIALOGUE_PACKAGE: u32 = 0x0119_9c3c;
 }
 
 /// `DYNAMIC_CAST(obj, from, to)` (xNVSE): the exe's `__RTDynamicCast`; 0 for a null object or
@@ -357,6 +361,8 @@ pub(crate) mod test_support {
             rtti::TES_PACKAGE => (1 << 40, 0),
             rtti::TES_CREATURE => (1 << 41, 0),
             rtti::BGS_HEAD_PART => (1 << 42, 0),
+            rtti::TES_AI_FORM => (1 << 43, 0x640),
+            rtti::DIALOGUE_PACKAGE => (1 << 44, 0),
             _ => (0, 0),
         }
     }

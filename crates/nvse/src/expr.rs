@@ -1903,17 +1903,11 @@ pub fn numeric_representation(s: &[u8], from_hex: bool) -> (f64, bool) {
     }
 }
 
-/// `GetFullName(form)`'s text (`"<no name>"` for none).
+/// `GetFullName(form)`'s text (`Eval_ToString_Form`): `"<NULL>"` for no form, `"<no name>"` for
+/// a form without one; a reference's name is its base form's, a cell's falls back to its
+/// world's (the game's `TESForm::GetFullName`), as `ToString` answers.
 fn full_name(e: &mut Engine, form: u32) -> Vec<u8> {
-    const TES_FULL_NAME: u32 = 0x0118_3158;
-    let name = cast(e, form, RTTI_TES_FORM, TES_FULL_NAME);
-    if name != 0 {
-        let (data, len) = (e.mem.u32(name + 4), e.mem.u16(name + 8));
-        if data != 0 && len != 0 {
-            return crate::table::guest_text(e, data);
-        }
-    }
-    b"<no name>".to_vec()
+    crate::commands::string::full_name(e, form)
 }
 
 /// `EventListFromForm`: a quest's event list (`+0x5C`) or a reference's script's.

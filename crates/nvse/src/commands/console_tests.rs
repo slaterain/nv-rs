@@ -359,6 +359,12 @@ fn to_string_and_type_of() {
     let element = [var(3, 5), num(0.0), vec![crate::expr::op::LEFT_BRACKET]].concat();
     let id = run(&mut e, 0x1540, &[element]);
     assert_eq!(string_of(&e, id), "<NULL>");
+    // The `$` operator answers the same (`Eval_ToString_Form` calls `GetFullName`).
+    let dollar = |v: Vec<u8>| [v, vec![crate::expr::op::TO_STRING]].concat();
+    for local in [1, 2, 3, 4] {
+        run(&mut e, 0x1541, &[dollar(var(4, local))]);
+    }
+    assert_eq!(lines(), ["Stimpak", "<no name>", "<NULL>", "<NULL>"]);
     let packed = vars::create_array(&mut e, KEY_NUMBER, true, 5);
     let map = vars::create_array(&mut e, KEY_NUMBER, false, 5);
     let strings = vars::create_array(&mut e, KEY_STRING, false, 5);
