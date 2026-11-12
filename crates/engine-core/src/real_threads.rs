@@ -3033,6 +3033,83 @@ pub fn wait_draw(e: &Engine) -> bool {
     true
 }
 
+/// What [`finish_draw_at_exit`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawAtExit {
+    /// No job was posted (or it was joined already).
+    None,
+    /// A job that had not started (stepped threads run it only when the poster waits; real ones
+    /// once the helper wakes) is dropped unrun.
+    Dropped,
+    /// The job finished (at once or within the limit) and is joined; a panic it had is dropped.
+    Joined,
+    /// The job was still running at the limit: the process ends without it.
+    StillRunning,
+}
+
+/// At the end of the process (the platform layer's exit path, from any thread): the drawing job,
+/// if one is posted, is finished before the device and the command stream go. One that has not
+/// started is dropped unrun; a running one is waited for up to `limit`, the kernel and device
+/// locks this thread holds given back meanwhile (taken again after a join, not after the limit),
+/// so the process never hangs at exit on a job that cannot end. Never runs game code here.
+pub fn finish_draw_at_exit(limit: Duration) -> DrawAtExit {
+    if on_draw_helper() {
+        return DrawAtExit::StillRunning;
+    }
+    let Some(d) = DRAW.get() else {
+        return DrawAtExit::None;
+    };
+    let mut s = guard(&d.state);
+    if !s.posted {
+        return DrawAtExit::None;
+    }
+    // Not taken by the helper yet (stepped threads, or real ones before it woke): never run.
+    if s.job.is_some() {
+        s.job = None;
+        s.posted = false;
+        return DrawAtExit::Dropped;
+    }
+    if s.finished {
+        s.posted = false;
+        s.panic = None;
+        return DrawAtExit::Joined;
+    }
+    drop(s);
+    // The ending thread gives back the kernel and device locks it holds while it waits (main ends
+    // the run inside its frame, holding the kernel lock), and does not count as running game code,
+    // as [`wait_draw`] does: the job's calls take those locks.
+    // SAFETY: the run's world is leaked at `start` and lives for good; the helper keeps its address.
+    let world: Option<&'static World> = d.world.map(|w| unsafe { &*(w as *const World) });
+    let held = world.map(|w| (w.kernel.release_all(), w.device.release_all()));
+    let counted = world.is_some_and(World::leave_guest);
+    let until = std::time::Instant::now() + limit;
+    let found = {
+        let mut s = guard(&d.state);
+        loop {
+            if s.finished {
+                s.posted = false;
+                s.panic = None;
+                break DrawAtExit::Joined;
+            }
+            let now = std::time::Instant::now();
+            if now >= until {
+                break DrawAtExit::StillRunning;
+            }
+            s = wait_for(&d.done, s, until - now);
+        }
+    };
+    // Taken again only after a join: a job still running may hold them, and the process is ending.
+    if let (Some(world), DrawAtExit::Joined) = (world, found) {
+        if counted {
+            world.enter_guest();
+        }
+        let (kernel, device) = held.unwrap_or_default();
+        world.device.take_again(world, device);
+        world.kernel.take_again(world, kernel);
+    }
+    found
+}
+
 /// [`wait_draw`], then the job is joined (another may be posted) and its panic, if it had one, is
 /// resumed here. False when none was posted.
 pub fn join_draw(e: &Engine) -> bool {

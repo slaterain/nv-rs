@@ -2904,12 +2904,17 @@ fn default_pool_alive(e: &Engine, device: u32) -> bool {
 /// Not provided (the run stops): a full-screen device, a size taken from the window (0),
 /// multisampling.
 fn reset(e: &mut Engine, this: Ptr, present: Ptr) -> u32 {
-    // The drawing thread's cut is joined before a reset (`super::d3d9draw`; the plan's piece 8
-    // waits for the job first): the drawing side's copy holds the surfaces a reset frees.
-    debug_assert!(
-        device!(e).device_objects.draw.device.is_none(),
-        "IDirect3DDevice9::Reset while a drawing cut is open (join it first)"
-    );
+    // The drawing thread's cut is joined before a reset (piece 8 waits for the job first): the
+    // drawing side's copy holds the surfaces a reset frees. One still open is joined here.
+    if device!(e).device_objects.draw.device.is_some() && !super::d3d9draw::drawing_thread() {
+        static NOTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !NOTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            eprintln!(
+                "NV_DRAW_THREAD: IDirect3DDevice9::Reset while a drawing cut is open: joined first"
+            );
+        }
+        super::d3d9draw::draw_finish(e);
+    }
     if present.is_null() {
         return D3DERR_INVALIDCALL;
     }
@@ -6710,7 +6715,8 @@ pub(crate) mod tests {
     }
 
     /// A lock from the drawing side gets a block of its own holding the range's bytes as they are:
-    /// its writes never reach the buffer's own bytes, which main's locks keep finding.
+    /// its writes do not reach the buffer's own bytes during the cut, which a lock of main's that
+    /// reads nothing (NOOVERWRITE, as the game's buffer manager locks without reading back) finds.
     #[test]
     fn the_drawing_side_locks_a_buffer_in_a_block_of_its_own() {
         use super::super::d3d9draw::{as_drawing_side, draw_cut, draw_join};
@@ -6729,7 +6735,7 @@ pub(crate) mod tests {
             assert_eq!(e.vcall(x, 4 * 12, &[]).u32(), D3D_OK);
             at
         });
-        let (hr, again) = lock_buffer(&mut e, x, 0, 16, 0);
+        let (hr, again) = lock_buffer(&mut e, x, 0, 16, 0x1000);
         assert_eq!(hr, D3D_OK);
         assert_ne!(
             again, draw_at,
@@ -6904,6 +6910,107 @@ pub(crate) mod tests {
                 assert_eq!(render_state(&mut e, dev, 8), 3);
             }
         }
+        draw_finish_and_the_end_of_the_process(&mut e, dev);
+    }
+
+    /// The rest of the real-threads test (the drawing helper is one per process, so one test
+    /// posts): `draw_finish` joins a job and the cut in one call; at the end of the process a slow
+    /// job is waited for, one that never closes its slot is joined, and one that cannot end in
+    /// time is left behind after the limit, so the end never hangs.
+    #[cfg(windows)]
+    fn draw_finish_and_the_end_of_the_process(e: &mut Engine, dev: u32) {
+        use super::super::d3d9draw::{draw_close, draw_cut, draw_finish, draw_join, draw_open};
+        use engine_core::real_threads::{draw_posted, join_draw, post_draw, DrawAtExit};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+        fn state(e: &mut Engine, dev: u32, s: u32, v: u32) {
+            let _device = engine_core::real_threads::device_guard(e);
+            assert_eq!(e.vcall(dev, 4 * 57, &[s, v]).u32(), D3D_OK);
+        }
+        let read_state = |e: &mut Engine, s: u32| {
+            let _device = engine_core::real_threads::device_guard(e);
+            render_state(e, dev, s)
+        };
+        // draw_finish: the job's change is main's after one call, the cut closed.
+        assert!(draw_cut(e, dev));
+        assert!(post_draw(
+            e,
+            Box::new(move |w: &mut Engine| {
+                std::thread::sleep(Duration::from_millis(20));
+                state(w, dev, 11, 6);
+                draw_close(w);
+            })
+        ));
+        draw_finish(e);
+        assert!(!draw_posted() && !draw_open(e), "joined, cut closed");
+        assert_eq!(read_state(e, 11), 6);
+        // A job posted and taken by the helper (one not taken yet is dropped unrun at the end).
+        fn post_running(e: &mut Engine, job: impl FnOnce(&mut Engine) + Send + 'static) {
+            let running = Arc::new(AtomicBool::new(false));
+            let flag = Arc::clone(&running);
+            assert!(post_draw(
+                e,
+                Box::new(move |w: &mut Engine| {
+                    flag.store(true, Ordering::SeqCst);
+                    job(w)
+                })
+            ));
+            while !running.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+        }
+        // The end of the process, a slow job: waited for, joined.
+        assert!(draw_cut(e, dev));
+        post_running(e, move |w: &mut Engine| {
+            std::thread::sleep(Duration::from_millis(150));
+            state(w, dev, 12, 7);
+            draw_close(w);
+        });
+        let started = Instant::now();
+        assert_eq!(
+            crate::finish_drawing_at_exit(Duration::from_secs(5)),
+            DrawAtExit::Joined
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(100),
+            "it waited for the job"
+        );
+        assert!(!draw_posted());
+        assert_eq!(
+            crate::finish_drawing_at_exit(Duration::from_secs(5)),
+            DrawAtExit::None,
+            "a second call finds nothing"
+        );
+        draw_join(e);
+        // A job that never closes its slot: joined all the same.
+        assert!(draw_cut(e, dev));
+        post_running(e, move |w: &mut Engine| state(w, dev, 13, 8));
+        assert_eq!(
+            crate::finish_drawing_at_exit(Duration::from_secs(5)),
+            DrawAtExit::Joined
+        );
+        draw_join(e);
+        assert!(!draw_open(e));
+        // A job that cannot end in time: left after the limit, no hang.
+        let release = Arc::new(AtomicBool::new(false));
+        let job_release = Arc::clone(&release);
+        post_running(e, move |_| {
+            while !job_release.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        let started = Instant::now();
+        assert_eq!(
+            crate::finish_drawing_at_exit(Duration::from_millis(100)),
+            DrawAtExit::StillRunning
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the limit holds"
+        );
+        release.store(true, Ordering::SeqCst);
+        assert!(join_draw(e), "still posted, joined once it ends");
     }
 
     /// A device with mixed vertex processing (so `SetSoftwareVertexProcessing` takes both
@@ -7613,19 +7720,105 @@ pub(crate) mod tests {
         );
     }
 
-    /// A Reset while a cut is open is a mistake of the caller's (the cut is joined first): a
-    /// debug assertion says so.
-    #[cfg(debug_assertions)]
+    /// A Reset while a cut is open joins it first (piece 8 waits before a reset; this covers a
+    /// reset it missed, in release builds too): the copy's holds of the back buffer go before the
+    /// reset frees it, so the reset succeeds and the device has its new back buffer.
     #[test]
-    #[should_panic(expected = "Reset while a drawing cut is open")]
-    fn a_reset_during_a_cut_is_refused_in_debug_builds() {
-        use super::super::d3d9draw::draw_cut;
+    fn a_reset_during_a_cut_joins_it_first() {
+        use super::super::d3d9draw::{as_drawing_side, draw_cut, draw_open};
         let (mut e, d3d, present) = d3d();
         let out = e.mem.alloc(4);
         e.vcall(d3d, CREATE_DEVICE, &[0, 1, 0x11c, 0x40, present, out]);
         let dev = e.mem.u32(out);
+        let old = got(&mut e, dev, 38, &[0], 1)[0];
+        e.vcall(old, 4 * 2, &[]);
         assert!(draw_cut(&mut e, dev));
-        e.vcall(dev, 4 * 16, &[present]);
+        as_drawing_side(|| assert_eq!(e.vcall(dev, 4 * 57, &[9, 5]).u32(), D3D_OK));
+        assert_eq!(e.vcall(dev, 4 * 16, &[present]).u32(), D3D_OK, "the reset");
+        assert!(!draw_open(&mut e), "joined");
+        let new = got(&mut e, dev, 38, &[0], 1)[0];
+        assert!(new != 0 && device!(e).device_objects.surfaces.contains_key(&new));
+        e.vcall(new, 4 * 2, &[]);
+    }
+
+    /// Main's locks of a buffer the drawing side wrote in the cut, by how they read: one that reads
+    /// the buffer (no flags, or READONLY) waits for the drawing job and sees the drawing side's
+    /// bytes; a READONLY one does not count as main's write, so the join keeps the drawing side's
+    /// bytes there; one with DISCARD or NOOVERWRITE reads nothing and does not wait, and its bytes
+    /// stand at the join (main's came later), the drawing side's elsewhere.
+    #[test]
+    fn mains_locks_during_a_cut_wait_only_when_they_read() {
+        use super::super::d3d9draw::{as_drawing_side, draw_cut, draw_join};
+        use super::super::d3d9resource::main_lock_waits;
+        for dynamic in [false, true] {
+            let (mut e, dev) = texture_device(Store::Host);
+            let (usage, pool) = if dynamic { (0x200, 0) } else { (0, 1) };
+            let x = new_buffer(&mut e, dev, false, 0x100, usage, pool);
+            let word = |e: &mut Engine, at: u32, flags: u32| {
+                let (hr, p) = lock_buffer(e, x, at, 4, flags);
+                assert_eq!(hr, D3D_OK);
+                let w = e.mem.u32(p);
+                assert_eq!(e.vcall(x, 4 * 12, &[]).u32(), D3D_OK);
+                w
+            };
+            let put = |e: &mut Engine, at: u32, w: u32, flags: u32| {
+                let (hr, p) = lock_buffer(e, x, at, 4, flags);
+                assert_eq!(hr, D3D_OK);
+                e.mem.set_u32(p, w);
+                assert_eq!(e.vcall(x, 4 * 12, &[]).u32(), D3D_OK);
+            };
+            // READONLY: waits, reads the drawing side's bytes, and is no write of main's.
+            assert!(draw_cut(&mut e, dev));
+            as_drawing_side(|| put(&mut e, 0x10, 0x2222_2222, 0));
+            let waits = main_lock_waits();
+            assert_eq!(
+                word(&mut e, 0x10, 0x10),
+                0x2222_2222,
+                "main reads the drawing side's"
+            );
+            assert!(main_lock_waits() > waits, "it waited");
+            draw_join(&mut e);
+            assert_eq!(word(&mut e, 0x10, 0), 0x2222_2222);
+            // DISCARD and NOOVERWRITE: no wait; main's bytes stand in its range.
+            for flags in [0x2000, 0x1000] {
+                assert!(draw_cut(&mut e, dev));
+                as_drawing_side(|| {
+                    put(&mut e, 0x20, 0x3333_3333, 0);
+                    put(&mut e, 0x30, 0x3333_3333, 0);
+                });
+                let before = word(&mut e, 0, 0x1000);
+                put(&mut e, 0x20, 0x4444_4444, flags);
+                assert_eq!(
+                    before, 0,
+                    "a lock that reads nothing sees the buffer's own bytes"
+                );
+                draw_join(&mut e);
+                assert_eq!(word(&mut e, 0x20, 0), 0x4444_4444, "main's, locked later");
+                assert_eq!(word(&mut e, 0x30, 0), 0x3333_3333, "the drawing side's");
+            }
+        }
+    }
+
+    /// The drawing side locking, to read, bytes main locked after the cut would read main's later
+    /// bytes: a debug assertion names it (piece 4 keeps the two sides' locks apart).
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "that main locked after the cut")]
+    fn a_drawing_lock_reading_mains_later_bytes_is_caught_in_debug_builds() {
+        use super::super::d3d9draw::{as_drawing_side, draw_cut};
+        let (mut e, dev) = texture_device(Store::Host);
+        let x = new_buffer(&mut e, dev, false, 0x100, 0x200, 0);
+        assert!(draw_cut(&mut e, dev));
+        let (hr, _) = lock_buffer(&mut e, x, 0x40, 16, 0x1000);
+        assert_eq!(hr, D3D_OK);
+        assert_eq!(e.vcall(x, 4 * 12, &[]).u32(), D3D_OK);
+        as_drawing_side(|| {
+            // Reading nothing (NOOVERWRITE) is fine; reading (no flags) is not.
+            let (hr, _) = lock_buffer(&mut e, x, 0x40, 16, 0x1000);
+            assert_eq!(hr, D3D_OK);
+            assert_eq!(e.vcall(x, 4 * 12, &[]).u32(), D3D_OK);
+            lock_buffer(&mut e, x, 0x48, 4, 0);
+        });
     }
 
     /// The drawing side's upload of a buffer range reaches the slot with its bytes at the lock's

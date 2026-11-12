@@ -664,12 +664,23 @@ fn get_type(e: &mut Engine, this: Ptr) -> u32 {
 /// The flags (`D3DLOCK_DISCARD`, `D3DLOCK_NOOVERWRITE`, ...) change nothing here: the bytes are
 /// the buffer's and stay. A buffer kept outside the game's memory (`Kind::Buffer`'s `kept`) is
 /// handed out in a staging block, one for all its open locks.
+/// `D3DLOCK_READONLY`, `D3DLOCK_DISCARD`, `D3DLOCK_NOOVERWRITE`.
+const D3DLOCK_READONLY: u32 = 0x10;
+const D3DLOCK_DISCARD: u32 = 0x2000;
+const D3DLOCK_NOOVERWRITE: u32 = 0x1000;
+
 fn lock(e: &mut Engine, this: Ptr, offset: u32, size: u32, out: Ptr, flags: u32) -> u32 {
     if super::d3d9draw::drawing_side(&device!(e).device_objects.draw) {
         return lock_drawing(e, this, offset, size, out, flags);
     }
+    // A lock that reads the buffer (neither DISCARD nor NOOVERWRITE, as the game's buffer manager
+    // reads it) during a cut.
+    if super::d3d9draw::any_cut() && flags & (D3DLOCK_DISCARD | D3DLOCK_NOOVERWRITE) == 0 {
+        main_lock_during_cut(e, this);
+    }
     let model = lock_model(e, this, offset, size, out);
-    if super::d3d9draw::any_cut() && model == D3D_OK {
+    // A read-only lock writes nothing: the drawing side's bytes there still come first.
+    if super::d3d9draw::any_cut() && model == D3D_OK && flags & D3DLOCK_READONLY == 0 {
         note_main_lock(e, this, offset, size);
     }
     #[cfg(windows)]
@@ -1633,6 +1644,22 @@ fn lock_drawing(e: &mut Engine, this: Ptr, offset: u32, size: u32, out: Ptr, fla
         return D3DERR_INVALIDCALL;
     }
     let size = if size == 0 { length - offset } else { size };
+    // Main's bytes locked after the cut come after the drawing side's in the serial order, so this
+    // lock must not start from them; piece 4 keeps the two sides' lock memory apart, so it does not
+    // happen (`super::d3d9draw`'s notes). Caught here in debug builds.
+    debug_assert!(
+        flags & (D3DLOCK_DISCARD | D3DLOCK_NOOVERWRITE) != 0
+            || !device!(e)
+            .device_objects
+            .draw
+            .main_locked
+            .get(&this.addr())
+            .is_some_and(|m| m
+                .iter()
+                .any(|&(at, n)| at < offset + size && offset < at + n)),
+        "NV_DRAW_THREAD: the drawing side locked bytes of buffer {:#x} that main locked after the cut",
+        this.addr()
+    );
     let block = e.mem.alloc(size.max(1));
     let now = if bits != 0 {
         e.mem.bytes(bits + offset, size)
@@ -1735,8 +1762,64 @@ pub(super) fn merge_buffer_bytes(
     main_locked: &engine_core::AddrMap<u32, Vec<(u32, u32)>>,
 ) {
     for (buffer, ranges) in written {
-        let Some(o) = resources(e).objects.get_mut(&buffer) else {
-            continue;
+        let mains = main_locked.get(&buffer).map_or(&[][..], Vec::as_slice);
+        put_drawing_bytes(e, buffer, ranges, mains);
+    }
+}
+
+/// Main's lock of a buffer during a cut. When the drawing side has locked or written it in this
+/// cut, main's lock comes after those writes in the serial order, so it waits for the drawing job
+/// (`engine_core::real_threads::wait_draw`, the device lock given back meanwhile, as a sync call
+/// waits) and the drawing side's bytes become the buffer's first ([`put_drawing_bytes`], except
+/// where main locked it after the cut before). Counted, with a note the first time in a run:
+/// piece 4 gives each side its own lock memory, so this should stay rare.
+#[cold]
+fn main_lock_during_cut(e: &mut Engine, this: Ptr) {
+    let draw = &device!(e).device_objects.draw;
+    if draw.device.is_none()
+        || !(draw.written.contains_key(&this.addr())
+            || draw.locks.get(&this.addr()).is_some_and(|l| !l.is_empty()))
+    {
+        return;
+    }
+    let waits = MAIN_LOCK_WAITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if waits == 0 {
+        eprintln!(
+            "NV_DRAW_THREAD: main locked a buffer the drawing side uses in the same frame: main \
+             waits for the drawing job (counted from here)"
+        );
+    }
+    engine_core::real_threads::wait_draw(e);
+    let draw = &mut device!(e).device_objects.draw;
+    let ranges = draw.written.remove(&this.addr()).unwrap_or_default();
+    let mains = draw
+        .main_locked
+        .get(&this.addr())
+        .cloned()
+        .unwrap_or_default();
+    put_drawing_bytes(e, this.addr(), ranges, &mains);
+}
+
+/// The times main's lock waited for the drawing job ([`main_lock_during_cut`]).
+static MAIN_LOCK_WAITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Tests: [`MAIN_LOCK_WAITS`].
+#[cfg(test)]
+pub(super) fn main_lock_waits() -> u64 {
+    MAIN_LOCK_WAITS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The drawing side's writes into `buffer` (`ranges`, in unlock order) put into its bytes, except
+/// where main locked it after the cut (`mains`). Nothing for a buffer gone since.
+fn put_drawing_bytes(
+    e: &mut Engine,
+    buffer: u32,
+    ranges: Vec<(u32, Vec<u8>)>,
+    mains: &[(u32, u32)],
+) {
+    {
+        let Some(o) = resources(e).objects.get(&buffer) else {
+            return;
         };
         let Kind::Buffer {
             desc,
@@ -1745,10 +1828,9 @@ pub(super) fn merge_buffer_bytes(
             ..
         } = &o.kind
         else {
-            continue;
+            return;
         };
         let (bits, staging, length) = (*bits, *staging, desc[4]);
-        let mains = main_locked.get(&buffer).map_or(&[][..], Vec::as_slice);
         for (at, bytes) in ranges {
             // The runs of this range main did not lock after the cut.
             let mut keep = vec![true; bytes.len()];
