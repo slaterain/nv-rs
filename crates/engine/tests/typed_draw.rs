@@ -235,26 +235,52 @@ fn stand_ins(e: &mut Engine) {
     }
 }
 
+/// The dispatch family's functions the draw, render and shader families' typed code calls: `compose`,
+/// `invert_non_uniform`, `inverse_4x4`, `normalize`, the RTTI cast and the two immediate renders.
+const DISPATCH_CALLED: &[u32] = &[
+    0x0062_c250,
+    0x004b_4880,
+    0x00c4_c2d0,
+    0x004a_0c10,
+    0x0065_3290,
+    0x00a8_0610,
+    0x00a7_1d70,
+];
+
 trait Common {
     fn common(self) -> Diff;
+    /// [`Common::common`] with the dispatch family's functions by address, to their translations on
+    /// both sides. Their maths is native: a sum of products rounds once where the exe's 24-bit code
+    /// rounds each step, so on the main thread's control word it parts from the exe in the last bits
+    /// (the dispatch family's own tests compare it there, within their tolerance). The other families'
+    /// maths, compared on that word, runs them translated.
+    fn dispatch_translated(self) -> Diff;
 }
 
 impl Common for Diff {
     /// Every family the paths reach, on.
     fn common(self) -> Diff {
-        self.family(&draw::DRAW)
-            .family(&render::RENDER)
-            .family(&shader::SHADER)
-            .family(&leaf::LEAVES)
-            .family(&dispatch::DISPATCH)
-            .family(&pathing::PATHING)
-            .family(&culling::CULLING)
-            .family(&crt::CRT)
-            // draw_f's helpers: off until its gate, so by address, as in play; run in their own tests.
-            .goes_by_address(DRAW_F_HELPERS)
-            .max_calls(MAX_CALLS)
-            .max_cases(240)
+        families(self.family(&dispatch::DISPATCH))
     }
+
+    fn dispatch_translated(self) -> Diff {
+        families(self.goes_by_address(DISPATCH_CALLED))
+    }
+}
+
+/// [`Common`]'s families but dispatch, and the rest it adds.
+fn families(d: Diff) -> Diff {
+    d.family(&draw::DRAW)
+        .family(&render::RENDER)
+        .family(&shader::SHADER)
+        .family(&leaf::LEAVES)
+        .family(&pathing::PATHING)
+        .family(&culling::CULLING)
+        .family(&crt::CRT)
+        // draw_f's helpers: off until its gate, so by address, as in play; run in their own tests.
+        .goes_by_address(DRAW_F_HELPERS)
+        .max_calls(MAX_CALLS)
+        .max_cases(240)
 }
 
 /// The renderer: its device (+0x288), its draw mode and immediate byte, the vertex and index
@@ -1361,7 +1387,8 @@ const BONE_PLAIN: &[u32] = &[
 /// shader family's `make_matrix`, whose maths is native `f64` (it also runs on another game thread):
 /// under the other threads' word bit for bit, every input; under the main thread's with the scale as
 /// play has it ([`play`]), within one ulp (the translation's difference of two floats far apart in
-/// size rounds once, the native one to 53 bits first).
+/// size rounds once, the native one to 53 bits first), the dispatch family's transform product by
+/// address there ([`Common::dispatch_translated`]).
 #[test]
 fn bone_matrices() {
     Diff::new(entry!(
@@ -1370,6 +1397,9 @@ fn bone_matrices() {
     ))
     .common()
     .control_words(&[OTHER_THREADS])
+    // The dispatch family's transform product copies the scale as it is (a signalling NaN keeps its
+    // payload).
+    .allow_nan_payloads()
     .translation_calls_plainly(BONE_PLAIN)
     .inputs(BONE_MATRICES_INPUTS)
     .max_cases(400)
@@ -1381,7 +1411,7 @@ fn bone_matrices() {
         0x00e6_fe30,
         skin::bone_matrices(Ptr<_>, Ptr<_>, Ptr<_>, u8, u32, u8)
     ))
-    .common()
+    .dispatch_translated()
     .control_words(&[MAIN_THREAD])
     .float_ulps(1)
     .translation_calls_plainly(BONE_PLAIN)

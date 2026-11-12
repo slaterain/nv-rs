@@ -22,7 +22,7 @@ use engine_core::{entry, Engine};
 use engine_typed::shader::{
     self, accumulator as acc, batch, constants, geometry, lighting, state, textures,
 };
-use engine_typed::{crt, culling, dispatch, pathing, render};
+use engine_typed::{crt, culling, pathing, render};
 
 /// The stand-in virtual functions, one per slot, and the table of what each answers.
 const VT_FN: u32 = 0x00ff_2000;
@@ -3943,6 +3943,13 @@ fn geometry_shape(e: &mut Engine, s: &Shape) -> Geo {
     }
 }
 
+/// The dispatch family's functions the set-ups call (the 4x4 inverse, the normalisation): by address in
+/// the set-ups' tests, to their translations on both sides. Their maths is native, rounding a sum of
+/// products once where the exe's 24-bit code rounds each step, so on the main thread's word, the only
+/// one the set-ups run on, they part from the exe in the last bits (the dispatch family's own tests
+/// compare them there, within their tolerance; the render family's tests run them direct).
+const SET_UP_DISPATCH: &[u32] = &[0x00c4_c2d0, 0x004a_0c10];
+
 /// What the translations of the dispatch and pathing callees the set-ups now reach for real call
 /// plainly (a Rust call, not logged), as typed_dispatch.rs lists them: the model matrix's (`00c4c2d0`)
 /// matrix row, columns and entry helpers (`00476930`, `00476980`, `004769c0`) and the square roots
@@ -3979,9 +3986,9 @@ impl Geometry for Diff {
     fn set_ups(self) -> Diff {
         self.family(&shader::SHADER)
             .family(&leaf::LEAVES)
-            .family(&dispatch::DISPATCH)
             .family(&pathing::PATHING)
             .family(&render::RENDER)
+            .goes_by_address(SET_UP_DISPATCH)
             .translation_calls_plainly(SET_UP_PLAIN)
             // The draw family's partition draw, skinned packer and strip lists, land toggles, fog
             // property and D3DX thunks, as in `common`.
