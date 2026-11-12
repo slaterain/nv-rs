@@ -326,6 +326,10 @@ struct Made {
     worst_at: u64,
     work_over_20ms: u32,
     over_1ms: u32,
+    /// Shaders the game created after its start ([`Device::wait_for_start`]): made in the
+    /// background or on the draw that needs them (a mod's, mid-game). One made again with
+    /// bytecode the device has makes nothing and is not counted.
+    late_shaders: u32,
 }
 
 impl Made {
@@ -769,8 +773,22 @@ pub struct Device {
     /// ([`Device::queue_modules`]); started with the first.
     modules_ahead: Option<crate::ahead::Queue<ModKey, ModuleMade>>,
     /// The modules the module threads made since their queue last ran empty, and their time
-    /// (said in one line when it does: [`Device::collect_modules`]).
-    ahead_burst: (u32, std::time::Duration),
+    /// (said in one line when it does: [`Device::collect_modules`]); of them, those whose
+    /// pipeline library was made too.
+    ahead_burst: (u32, std::time::Duration, u32),
+    /// Whether each shader's pipeline libraries are made with its modules (FAST-LINK step 3):
+    /// where wgpu-hal links render pipelines from libraries (Vulkan with
+    /// `VK_EXT_graphics_pipeline_library`; [`Device::library_ahead`]).
+    libraries: bool,
+    /// The game's start is over: its first draw or `Present` after its first shaders
+    /// ([`Device::wait_for_start`]); shaders created after it are counted as late.
+    start_done: bool,
+    late_shaders: u64,
+    /// The stand-in partners those are made with (or why wgpu refused one): a vertex shader for
+    /// each set of varyings and clip code ([`wgsl::stand_in_vertex`]), and the pixel shader
+    /// ([`wgsl::STAND_IN_PIXEL`]). Kept: wgpu-hal forgets a module's libraries when it goes.
+    stand_in_vertex: Map<(Vec<wgsl::Semantic>, wgsl::Clip), Result<wgpu::ShaderModule, String>>,
+    stand_in_pixel: Option<Result<wgpu::ShaderModule, String>>,
     /// Where the occlusion counts are posted for the game's threads ([`QueryAnswers`]), and the
     /// `END`s (query, number) whose counts are awaited.
     pub(crate) answers: Option<Arc<QueryAnswers>>,
@@ -1011,6 +1029,9 @@ impl Device {
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        // SAFETY: the hal device is only asked a capability it keeps (no Vulkan call).
+        let libraries = unsafe { device.as_hal::<wgpu::hal::api::Vulkan>() }
+            .is_some_and(|hal| hal.uses_pipeline_libraries());
         let mut d = Device {
             device,
             queue,
@@ -1073,7 +1094,12 @@ impl Device {
             list_offers: 0,
             modules_here: 0,
             modules_ahead: None,
-            ahead_burst: (0, std::time::Duration::ZERO),
+            ahead_burst: (0, std::time::Duration::ZERO, 0),
+            libraries,
+            start_done: false,
+            late_shaders: 0,
+            stand_in_vertex: Map::default(),
+            stand_in_pixel: None,
             pipeline_cache,
             last_present: None,
             loading: None,
@@ -1516,6 +1542,10 @@ impl Device {
                 self.objects.insert(shader, Obj::Shader(s.clone()));
                 self.listed_new = true;
                 self.queue_modules(&s);
+                if self.start_done {
+                    self.made.late_shaders += 1;
+                    self.late_shaders += 1;
+                }
             }
             Err(e) => self.warn(format!("a shader the converter cannot read: {e}")),
         }
@@ -3719,6 +3749,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             return;
         }
         self.listed_new = false;
+        self.wait_for_start();
         let Some(mut l) = self.list.take() else {
             return;
         };
@@ -3829,6 +3860,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             );
             for ((k, _), m) in taken.into_iter().zip(made) {
                 if let Some(m) = m {
+                    self.library_made(&m.library);
                     self.keep_module(k, m.module);
                 }
             }
@@ -3908,6 +3940,79 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.list = Some(l);
     }
 
+    /// The game's start, its first draw or `Present` after its first shaders: with pipeline
+    /// libraries (FAST-LINK step 3), every shader's module and library the module threads have
+    /// queued is waited for, behind the loading screen and with the threads at normal priority,
+    /// so none is made during play. A library made in the background during play cost frames
+    /// up to about 130 ms while the driver made it (d1, driver cold), whatever the number of
+    /// threads. Shaders the game creates later are made in the background or on the draw that
+    /// needs them, and counted ([`Made::late_shaders`]).
+    fn wait_for_start(&mut self) {
+        if self.start_done {
+            return;
+        }
+        self.start_done = true;
+        let waiting = self.modules_ahead.as_ref().map_or(0, |q| q.pending());
+        if !self.libraries || waiting == 0 {
+            return;
+        }
+        let started = std::time::Instant::now();
+        let mut surface = self.surface.take();
+        let mut screen = self.loading.take();
+        let mut shots = self.shots.take();
+        let (device, queue) = (self.device.clone(), self.queue.clone());
+        if let Some(q) = &self.modules_ahead {
+            q.boost(true);
+        }
+        // The loading screen about four times a second.
+        let mut last: Option<std::time::Instant> = None;
+        loop {
+            let (done, left) = match &mut self.modules_ahead {
+                Some(q) => (q.finished(), q.pending()),
+                None => (Vec::new(), 0),
+            };
+            for (k, m) in done {
+                self.ahead_burst.0 += 1;
+                self.ahead_burst.1 += m.convert + m.made;
+                self.keep_library(&m.library);
+                self.keep_module(k, m.module);
+            }
+            if !matches!(last, Some(t) if t.elapsed().as_millis() < 250) {
+                let p = shader_progress(waiting - left, waiting);
+                show_on(
+                    &mut surface,
+                    &mut screen,
+                    &device,
+                    &queue,
+                    shots.as_mut(),
+                    &p,
+                );
+                last = Some(std::time::Instant::now());
+            }
+            if left == 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if let Some(q) = &self.modules_ahead {
+            q.boost(false);
+        }
+        self.surface = surface;
+        self.loading = screen;
+        self.shots = shots;
+        self.made.work += started.elapsed();
+        eprintln!(
+            "NV_D3D9 wgpu: the start: {waiting} shader modules and their pipeline libraries waited for, {:.0} ms",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+
+    /// Shaders the game created after its start (tests; the report says how many in each
+    /// stretch).
+    pub fn shaders_created_after_start(&self) -> u64 {
+        self.late_shaders
+    }
+
     /// Queues the modules a draw of shader `s` will most likely take, for the module threads to
     /// make before any draw needs them (FAST-LINK step 1A; the game creates its shaders before
     /// its first frame): a pixel shader's own module where its varyings have fixed locations,
@@ -3962,11 +4067,123 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         if made {
             return;
         }
+        let library = if self.libraries {
+            self.library_ahead(s, &link)
+        } else {
+            None
+        };
         let device = self.device.clone();
         let q = self
             .modules_ahead
             .get_or_insert_with(|| crate::ahead::Queue::new(worker_threads(), "nv-wgpu-modules"));
-        q.push(key, module_job(device, s.clone(), link));
+        q.push(key, module_job(device, s.clone(), link, library));
+    }
+
+    /// What making `s`'s pipeline library takes, right after its module (made with `link`) on
+    /// the module thread (FAST-LINK step 3, DXVK's way): a pipeline of the module and a stand-in
+    /// for the other stage, made and dropped. wgpu-hal keeps the shader's library (it depends on
+    /// the module, its entry point and the groups its stage sees), so the draws' pipelines with
+    /// that module link it, about a command's cost, instead of compiling it. The layout is a
+    /// draw's when the shader's textures are filterable (most draws; a draw with another takes a
+    /// library of its own). The stand-in's library is made once.
+    fn library_ahead(&mut self, s: &Shader, link: &wgsl::Link) -> Option<LibraryAhead> {
+        let stage = s.program.stage;
+        // The shader's samplers in its stage's group, as [`Device::sampler_bindings`] numbers them.
+        let samplers: Vec<(u32, u8, bool)> = s
+            .sig
+            .samplers
+            .iter()
+            .filter(|&&(n, _)| match stage {
+                Stage::Pixel => n < 16,
+                Stage::Vertex => n < 4,
+            })
+            .map(|&(n, dim)| (wgsl::texture_binding(stage, n), dim_code(dim), true))
+            .collect();
+        let layout = self.sampler_layout(&samplers);
+        let group_layouts = self.sampler_layouts[&samplers[..]].0.clone();
+        let target = Some(wgpu::ColorTargetState {
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        });
+        let (partner, buffers, targets, depth_stencil): (Result<_, String>, _, _, _) = match stage {
+            Stage::Vertex => {
+                let device = &self.device;
+                let partner = self
+                    .stand_in_pixel
+                    .get_or_insert_with(|| create_module(device, wgsl::STAND_IN_PIXEL.into()))
+                    .clone();
+                // Each input the module reads (all of them, as floats: [`Device::queue_modules`]).
+                let attributes: Vec<wgpu::VertexAttribute> = s
+                    .sig
+                    .inputs
+                    .iter()
+                    .filter(|(r, _)| r.n < 16)
+                    .enumerate()
+                    .map(|(i, (r, _))| wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: 16 * i as u64,
+                        shader_location: r.n,
+                    })
+                    .collect();
+                let buffers = if attributes.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![Some((16 * attributes.len() as u64, attributes))]
+                };
+                (partner, buffers, vec![target], None)
+            }
+            Stage::Pixel => {
+                let device = &self.device;
+                let partner = self
+                    .stand_in_vertex
+                    .entry((link.varyings.clone(), link.clip))
+                    .or_insert_with(|| create_module(device, wgsl::stand_in_vertex(link)))
+                    .clone();
+                // A target for each colour it writes (the module writes target 0 when it writes
+                // none and no depth), a depth target when it writes depth.
+                let mut targets: Vec<Option<wgpu::ColorTargetState>> = (0..4)
+                    .map(|k| {
+                        if s.sig.colours & (1 << k) != 0 {
+                            target.clone()
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if s.sig.colours == 0 && !s.sig.depth {
+                    targets[0] = target;
+                }
+                while targets.last().is_some_and(|t| t.is_none()) {
+                    targets.pop();
+                }
+                let depth_stencil = s.sig.depth.then(|| wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Always),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                });
+                (partner, Vec::new(), targets, depth_stencil)
+            }
+        };
+        // A stand-in wgpu refused (said once): the draws make the library.
+        let partner = match partner {
+            Ok(p) => p,
+            Err(e) => {
+                self.warn(format!("a stand-in shader for pipeline libraries: {e}"));
+                return None;
+            }
+        };
+        Some(LibraryAhead {
+            layout,
+            group_layouts,
+            partner,
+            buffers,
+            targets,
+            depth_stencil,
+            cache: self.pipeline_cache.as_ref().map(|c| c.cache.clone()),
+        })
     }
 
     /// The modules the module threads have made so far, kept ([`Device::queue_modules`]).
@@ -3979,16 +4196,51 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         for (k, m) in done {
             self.ahead_burst.0 += 1;
             self.ahead_burst.1 += m.convert + m.made;
+            self.keep_library(&m.library);
             self.keep_module(k, m.module);
         }
         // One line for each burst (the game's shaders at its start; a mod's later).
         if empty && self.ahead_burst.0 > 0 {
-            let (n, t) = std::mem::take(&mut self.ahead_burst);
+            let (n, t, libraries) = std::mem::take(&mut self.ahead_burst);
+            let libraries = if self.libraries {
+                format!(", {libraries} with their pipeline library")
+            } else {
+                String::new()
+            };
             eprintln!(
-                "NV_D3D9 wgpu: {n} shader modules made ahead on the module threads ({:.0} ms of their time; present {})",
+                "NV_D3D9 wgpu: {n} shader modules made ahead on the module threads{libraries} ({:.0} ms of their time; present {})",
                 t.as_secs_f64() * 1000.0,
                 self.presents
             );
+        }
+    }
+
+    /// Notes a shader's pipeline library the module threads made with its module
+    /// ([`Device::library_ahead`]): its time in this burst's, then as [`Device::library_made`].
+    fn keep_library(&mut self, library: &Option<(std::time::Duration, Result<(), String>)>) {
+        if let Some((took, made)) = library {
+            self.ahead_burst.1 += *took;
+            if made.is_ok() {
+                self.ahead_burst.2 += 1;
+            }
+        }
+        self.library_made(library);
+    }
+
+    /// Notes a shader's pipeline library made with its module, wherever: the driver's cache to
+    /// be saved (it holds the library), a pipeline wgpu refused said once (the draws then make
+    /// the library).
+    fn library_made(&mut self, library: &Option<(std::time::Duration, Result<(), String>)>) {
+        match library {
+            Some((_, Ok(()))) => {
+                if let Some(c) = &self.pipeline_cache {
+                    c.touched(self.presents);
+                }
+            }
+            Some((_, Err(e))) => {
+                self.warn(format!("a shader's pipeline library made ahead: {e}"));
+            }
+            None => {}
         }
     }
 
@@ -4002,15 +4254,19 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             return;
         }
         match q.take(k) {
+            // Its library too, if any: its time is the draw's, as the draw's pipeline would
+            // have made it.
             crate::ahead::Taken::Job(job) => {
                 let m = job();
                 self.modules_here += 1;
                 self.made.add_module(m.convert, m.made);
+                self.library_made(&m.library);
                 self.keep_module(k.clone(), m.module);
             }
             crate::ahead::Taken::Done(m) => {
                 self.ahead_burst.0 += 1;
                 self.ahead_burst.1 += m.convert + m.made;
+                self.keep_library(&m.library);
                 self.keep_module(k.clone(), m.module);
             }
             // Its job panicked on a thread: made the usual way.
@@ -4056,6 +4312,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             for (k, m) in pending {
                 self.ahead_burst.0 += 1;
                 self.ahead_burst.1 += m.convert + m.made;
+                self.keep_library(&m.library);
                 self.keep_module(k, m.module);
             }
         }
@@ -5528,11 +5785,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             ms(m.longest_frame)
         );
         eprintln!(
-            "NV_D3D9 wgpu: pipeline work since the last report: at most {:.1} ms in one present (present {}), {} presents over 20 ms, {} pipelines made on draws over 1 ms",
+            "NV_D3D9 wgpu: pipeline work since the last report: at most {:.1} ms in one present (present {}), {} presents over 20 ms, {} pipelines made on draws over 1 ms; {} shaders the game created after its start",
             ms(m.worst_work),
             m.worst_at,
             m.work_over_20ms,
-            m.over_1ms
+            m.over_1ms,
+            m.late_shaders
         );
         if let Some(line) = self.pipeline_library_report() {
             eprintln!("NV_D3D9 wgpu: {line}");
@@ -6220,11 +6478,35 @@ fn clip_code(c: wgsl::Clip, on: bool) -> u8 {
 }
 
 /// A module made on a module thread ([`Device::queue_modules`]): the module or why there is
-/// none, and what converting and making it took.
+/// none, and what converting and making it took; with pipeline libraries, what making the
+/// shader's library took and whether wgpu made its pipeline ([`Device::library_ahead`]).
 struct ModuleMade {
     module: Result<wgpu::ShaderModule, String>,
     convert: std::time::Duration,
     made: std::time::Duration,
+    library: Option<(std::time::Duration, Result<(), String>)>,
+}
+
+/// What making a shader's pipeline library takes besides its module ([`Device::library_ahead`]):
+/// the pipeline's layout, the stand-in for the other stage, a vertex shader's inputs, a pixel
+/// shader's targets.
+struct LibraryAhead {
+    layout: wgpu::PipelineLayout,
+    group_layouts: [wgpu::BindGroupLayout; 2],
+    partner: wgpu::ShaderModule,
+    buffers: Vec<Option<(u64, Vec<wgpu::VertexAttribute>)>>,
+    targets: Vec<Option<wgpu::ColorTargetState>>,
+    depth_stencil: Option<wgpu::DepthStencilState>,
+    cache: Option<wgpu::PipelineCache>,
+}
+
+/// A sampler's dimension as [`Device::sampler_layout`]'s keys code it.
+fn dim_code(dim: wgsl::Dim) -> u8 {
+    match dim {
+        wgsl::Dim::D2 => 0,
+        wgsl::Dim::Cube => 1,
+        wgsl::Dim::D3 => 2,
+    }
 }
 
 /// The job of making `program`'s module linked as `link`, on a module thread.
@@ -6232,6 +6514,7 @@ fn module_job(
     device: wgpu::Device,
     shader: Arc<Shader>,
     link: wgsl::Link,
+    library: Option<LibraryAhead>,
 ) -> crate::ahead::Job<ModuleMade> {
     Box::new(move || {
         let t = std::time::Instant::now();
@@ -6242,10 +6525,37 @@ fn module_job(
             Ok(s) => create_module(&device, s),
             Err(e) => Err(e.to_string()),
         };
+        let made = t.elapsed();
+        // The shader's pipeline library: a pipeline of the module and the stand-in, dropped
+        // (wgpu-hal keeps the library).
+        let library = match (&module, library) {
+            (Ok(m), Some(l)) => {
+                let t = std::time::Instant::now();
+                let (vm, pm) = match shader.program.stage {
+                    Stage::Vertex => (m.clone(), l.partner),
+                    Stage::Pixel => (l.partner, m.clone()),
+                };
+                let job = PipelineJob {
+                    layout: l.layout,
+                    group_layouts: l.group_layouts,
+                    vm,
+                    pm,
+                    buffers: l.buffers,
+                    primitive: wgpu::PrimitiveState::default(),
+                    depth_stencil: l.depth_stencil,
+                    multisample: wgpu::MultisampleState::default(),
+                    targets: l.targets,
+                };
+                let made = build_pipeline(&device, l.cache.as_ref(), &job).map(drop);
+                Some((t.elapsed(), made))
+            }
+            _ => None,
+        };
         ModuleMade {
             module,
             convert,
-            made: t.elapsed(),
+            made,
+            library,
         }
     })
 }

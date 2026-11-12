@@ -284,6 +284,78 @@ pub fn centroid_everywhere(varyings: usize) -> Vec<bool> {
     vec![true; varyings]
 }
 
+/// The location of `link`'s varying `l` (`v`): its place in [`Link::varyings`], or its fixed slot
+/// ([`Link::fixed`], which [`convert`] checks every varying has).
+fn varying_location(link: &Link, l: usize, v: Semantic) -> u32 {
+    match fixed_slot(v) {
+        Some(slot) if link.fixed => slot,
+        _ => l as u32,
+    }
+}
+
+/// The members of `link`'s varyings in the vertex shader's output and the pixel shader's input,
+/// declared alike on both stages (wgpu wants their interpolation to agree).
+fn varying_fields(link: &Link) -> String {
+    let mut s = String::new();
+    for (l, v) in link.varyings.iter().enumerate() {
+        let interp = if link.centroid.get(l).copied().unwrap_or(false) {
+            " @interpolate(perspective, centroid)"
+        } else {
+            ""
+        };
+        let at = varying_location(link, l, *v);
+        let _ = writeln!(s, "    @location({at}){interp} l{l}: vec4<f32>,  // {v:?}");
+    }
+    s
+}
+
+/// The user clip distances' members of the vertex shader's output (`vertex`; and, with
+/// [`Clip::Discard`], of the pixel shader's input: two varyings after the linked ones).
+fn clip_fields(link: &Link, vertex: bool) -> String {
+    let (k0, k1) = if link.fixed {
+        (CLIP_SLOTS[0], CLIP_SLOTS[1])
+    } else {
+        let l = link.varyings.len() as u32;
+        (l, l + 1)
+    };
+    match link.clip {
+        Clip::Distances if vertex => {
+            format!("    @builtin(clip_distances) clip: array<f32, {CLIP_PLANES}>,\n")
+        }
+        Clip::Distances | Clip::Off => String::new(),
+        Clip::Discard { per_sample } => {
+            let interp = if per_sample {
+                " @interpolate(perspective, sample)"
+            } else {
+                ""
+            };
+            format!(
+                "    @location({k0}){interp} k0: vec4<f32>,\n    @location({k1}){interp} k1: vec4<f32>,\n"
+            )
+        }
+    }
+}
+
+/// A vertex shader that writes what a pixel shader linked by `link` reads, each varying 0 and
+/// declared as [`convert`] declares it, and reads nothing: the partner a pixel shader's pipeline
+/// is made with to make the pixel shader's pipeline library before its draws need it, where that
+/// library depends on the pixel shader alone (the device, with pipeline libraries).
+pub fn stand_in_vertex(link: &Link) -> String {
+    let mut s = String::from("struct Out {\n    @builtin(position) position: vec4<f32>,\n");
+    s.push_str(&varying_fields(link));
+    // The clip varyings a pixel shader reads (the discard's), not the clip distances.
+    s.push_str(&clip_fields(link, false));
+    s.push_str("}\n@vertex\nfn main() -> Out {\n    var out: Out;\n");
+    s.push_str("    out.position = vec4<f32>(0.0, 0.0, 0.0, 1.0);\n    return out;\n}\n");
+    s
+}
+
+/// A pixel shader that reads nothing and writes 0 to target 0: the partner a vertex shader's
+/// pipeline is made with to make the vertex shader's pipeline library before its draws need it
+/// (as [`stand_in_vertex`]).
+pub const STAND_IN_PIXEL: &str =
+    "@fragment\nfn main() -> @location(0) vec4<f32> {\n    return vec4<f32>(0.0);\n}\n";
+
 /// A varying's location in a module made for any partner ([`Link::fixed`]; DXVK's fixed linker
 /// slots): TEXCOORD0 to 7 at 0 to 7 and COLOR0 and 1 at 8 and 9, which are all the game's
 /// shaders pass (every package's vertex outputs and pixel inputs); then FOG at 12 and TEXCOORD8
@@ -742,16 +814,8 @@ impl Gen<'_> {
         }
         // The position is invariant (module documentation).
         s.push_str("}\nstruct Out {\n    @builtin(position) @invariant position: vec4<f32>,\n");
-        for (l, v) in self.link.varyings.iter().enumerate() {
-            let interp = if self.link.centroid.get(l).copied().unwrap_or(false) {
-                " @interpolate(perspective, centroid)"
-            } else {
-                ""
-            };
-            let at = self.location(l, *v);
-            let _ = writeln!(s, "    @location({at}){interp} l{l}: vec4<f32>,  // {v:?}");
-        }
-        s.push_str(&self.clip_fields());
+        s.push_str(&varying_fields(self.link));
+        s.push_str(&clip_fields(self.link, true));
         s.push_str("}\n@vertex\nfn main(input: In) -> Out {\n");
         for l in &loads {
             s.push_str(l);
@@ -822,16 +886,8 @@ impl Gen<'_> {
         if self.sig.face {
             s.push_str("    @builtin(front_facing) front: bool,\n");
         }
-        for (l, v) in self.link.varyings.iter().enumerate() {
-            let interp = if self.link.centroid.get(l).copied().unwrap_or(false) {
-                " @interpolate(perspective, centroid)"
-            } else {
-                ""
-            };
-            let at = self.location(l, *v);
-            let _ = writeln!(s, "    @location({at}){interp} l{l}: vec4<f32>,  // {v:?}");
-        }
-        s.push_str(&self.clip_fields());
+        s.push_str(&varying_fields(self.link));
+        s.push_str(&clip_fields(self.link, false));
         s.push_str("}\nstruct Out {\n");
         for k in 0..4 {
             if self.sig.colours & (1 << k) != 0 {
@@ -891,42 +947,6 @@ impl Gen<'_> {
         }
         s.push_str("    return out;\n}\n");
         self.out.push_str(&s);
-    }
-
-    /// The location of the link's varying `l` (`v`): its place in [`Link::varyings`], or its
-    /// fixed slot ([`Link::fixed`], which [`convert`] checks every varying has).
-    fn location(&self, l: usize, v: Semantic) -> u32 {
-        match fixed_slot(v) {
-            Some(slot) if self.link.fixed => slot,
-            _ => l as u32,
-        }
-    }
-
-    /// The user clip distances' members of the vertex shader's output (and, with
-    /// [`Clip::Discard`], of the pixel shader's input: two varyings after the linked ones).
-    fn clip_fields(&self) -> String {
-        let (k0, k1) = if self.link.fixed {
-            (CLIP_SLOTS[0], CLIP_SLOTS[1])
-        } else {
-            let l = self.link.varyings.len() as u32;
-            (l, l + 1)
-        };
-        match self.link.clip {
-            Clip::Distances if self.vertex() => {
-                format!("    @builtin(clip_distances) clip: array<f32, {CLIP_PLANES}>,\n")
-            }
-            Clip::Distances | Clip::Off => String::new(),
-            Clip::Discard { per_sample } => {
-                let interp = if per_sample {
-                    " @interpolate(perspective, sample)"
-                } else {
-                    ""
-                };
-                format!(
-                    "    @location({k0}){interp} k0: vec4<f32>,\n    @location({k1}){interp} k1: vec4<f32>,\n"
-                )
-            }
-        }
     }
 
     /// A source register's value as a vec4 expression, before swizzle and modifier.
@@ -1894,6 +1914,74 @@ mod tests {
             index: 0,
         };
         assert!(convert(&parse(&vs).unwrap(), &link(vec![normal])).is_err());
+    }
+
+    /// The stand-in partners are valid, and the stand-in vertex shader declares each varying as a
+    /// pixel shader linked the same way reads it, the discard's clip varyings too (wgpu wants the
+    /// two stages to agree), for each clip code, with fixed locations and without.
+    #[test]
+    fn a_stand_in_vertex_shader_writes_what_the_pixel_shader_reads() {
+        validate(STAND_IN_PIXEL);
+        // ps_2_0: dcl t0; dcl v1; add oC0, t0, v1.
+        let ps = [
+            0xFFFF_0200,
+            0x0200_001F,
+            0x8000_0000,
+            0xB00F_0000,
+            0x0200_001F,
+            0x8000_0000,
+            0x900F_0001,
+            0x0300_0002,
+            0x800F_0800,
+            0xB0E4_0000,
+            0x90E4_0001,
+            super::super::END,
+        ];
+        let varyings = vec![
+            Semantic {
+                usage: usage::TEXCOORD,
+                index: 0,
+            },
+            Semantic {
+                usage: usage::COLOR,
+                index: 1,
+            },
+        ];
+        let clips = [
+            Clip::Off,
+            Clip::Distances,
+            Clip::Discard { per_sample: false },
+            Clip::Discard { per_sample: true },
+        ];
+        for clip in clips {
+            for fixed in [true, false] {
+                let link = Link {
+                    centroid: centroid_everywhere(varyings.len()),
+                    varyings: varyings.clone(),
+                    clip,
+                    fixed,
+                    ..Link::default()
+                };
+                let p = converts(&ps, &link);
+                let v = stand_in_vertex(&link);
+                validate(&v);
+                let read: Vec<&str> = p
+                    .lines()
+                    .skip_while(|l| !l.starts_with("struct In"))
+                    .take_while(|l| *l != "}")
+                    .filter(|l| l.contains("@location("))
+                    .collect();
+                let clip_varyings = if matches!(clip, Clip::Discard { .. }) {
+                    2
+                } else {
+                    0
+                };
+                assert_eq!(read.len(), 2 + clip_varyings, "{p}");
+                for l in read {
+                    assert!(v.contains(l), "{clip:?}, fixed {fixed}: {l}\n{v}");
+                }
+            }
+        }
     }
 
     /// A varying the vertex shader does not write reads as on the real Direct3D 9: COLOR0 white,

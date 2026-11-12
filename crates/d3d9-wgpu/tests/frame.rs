@@ -1240,12 +1240,16 @@ fn a_shaders_modules_are_made_when_the_game_creates_it() {
 
 /// A draw that needs modules no module thread has started (the threads held) takes both jobs
 /// back and makes them itself, and draws; let go, the threads make neither again, and a second
-/// draw makes none.
+/// draw makes none. (After the game's start, its first draw, which waits for what is queued.)
 #[test]
 fn a_draw_takes_back_the_modules_no_thread_has_started() {
     let Some(mut g) = Gpu::new(4, 1) else { return };
+    g.colour([1.0, 1.0, 1.0, 1.0]);
+    g.clear(3, 0, 1.0);
+    g.cover(0.5);
     let d = g.b.device().expect("the device");
     d.wait_for_modules();
+    let before = d.modules_made_here();
     d.hold_modules(true);
     texcoord_pair(&mut g, VS + 11, PS + 19);
     // POSITION FLOAT4 and TEXCOORD0 FLOAT4 (0.2, 0.4, 0.6, 1): the module made ahead's inputs.
@@ -1265,7 +1269,7 @@ fn a_draw_takes_back_the_modules_no_thread_has_started() {
     );
     assert_eq!(g.pixels(), vec![[153, 102, 51, 255]; 16]);
     let d = g.b.device().expect("the device");
-    assert_eq!(d.modules_made_here(), 2, "both jobs taken back");
+    assert_eq!(d.modules_made_here() - before, 2, "both jobs taken back");
     d.hold_modules(false);
     d.wait_for_modules();
     g.clear(3, 0, 1.0);
@@ -1278,8 +1282,73 @@ fn a_draw_takes_back_the_modules_no_thread_has_started() {
     );
     assert_eq!(g.pixels(), vec![[153, 102, 51, 255]; 16]);
     let d = g.b.device().expect("the device");
-    assert_eq!(d.modules_made_here(), 2, "none made again");
+    assert_eq!(d.modules_made_here() - before, 2, "none made again");
     assert_eq!(d.module_counts(), (1 + 1, 1 + 1));
+}
+
+/// The game's start, its first draw: with pipeline libraries it waits for every shader's
+/// module and library the module threads have queued, so it takes none back and makes no
+/// shader library itself. A shader the game creates after its start is counted.
+#[test]
+fn the_start_waits_for_every_shaders_library_and_counts_later_shaders() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    // Created before the start, with the harness's two.
+    texcoord_pair(&mut g, VS + 12, PS + 20);
+    for (pixel, shader) in [(false, VS), (true, PS)] {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.shaders_created_after_start(), 0);
+    let libraries = d.pipeline_library_report().is_some();
+    g.colour([1.0, 1.0, 1.0, 1.0]);
+    g.clear(3, 0, 1.0);
+    g.cover(0.5);
+    assert_eq!(g.reds(), vec![255; 16]);
+    let d = g.b.device().expect("the device");
+    if libraries {
+        assert_eq!(d.modules_made_here(), 0, "the start waited, took none back");
+        let report = d.pipeline_library_report().expect("the report");
+        // The four shaders' libraries and the stand-ins' (one pixel shader, two vertex
+        // shaders: the harness's pixel shader reads nothing, the other TEXCOORD0).
+        assert!(
+            report.contains(" 4 vertex shader (") && report.contains(" 3 pixel shader ("),
+            "{report}"
+        );
+    } else {
+        eprintln!(
+            "{}: no pipeline libraries, so the start does not wait",
+            d.adapter_name()
+        );
+    }
+    // Two new shaders after the start (vs_2_0: dcl_position v0; dcl_color v1; mov oPos, v0;
+    // mov oD0, v1. ps_2_0: dcl v0; mov oC0, v0), and one made again (the same bytecode as one
+    // made before: nothing new to make, not counted).
+    let mut v = vec![0xFFFE_0200];
+    v.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    v.extend(ins(31, &[0x8000_000A, 0x900F_0001]));
+    v.extend(ins(1, &[0xC00F_0000, 0x90E4_0000]));
+    v.extend(ins(1, &[0xD00F_0000, 0x90E4_0001]));
+    v.push(END);
+    let mut p = vec![0xFFFF_0200];
+    p.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    p.extend(ins(1, &[0x800F_0800, 0x90E4_0000]));
+    p.push(END);
+    for (shader, pixel, tokens) in [(VS + 13, false, v), (PS + 21, true, p)] {
+        let t = words(&tokens);
+        g.run(Cmd::CreateShader {
+            device: DEVICE,
+            shader,
+            pixel,
+            tokens: Data::Bytes(&t),
+        });
+    }
+    texcoord_pair(&mut g, VS + 14, PS + 22);
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.shaders_created_after_start(), 2);
 }
 
 /// A shader model 1 or 2 vertex shader always writes its two colours, as Direct3D 9's values
@@ -1344,6 +1413,50 @@ fn a_shader_model_1_or_2_vertex_shaders_own_module_serves_its_colours_readers() 
         (2, 1 + 2),
         "a vertex module for each vertex shader, its own"
     );
+}
+
+/// With pipeline libraries (wgpu-hal's, on Vulkan where the driver has them), each shader's
+/// library is made with its module when the game creates it: the first draw of the pair then
+/// makes no shader library (it links the two), and draws as before.
+#[test]
+fn a_shaders_pipeline_library_is_made_when_the_game_creates_it() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    g.colour([1.0, 0.5, 0.25, 1.0]);
+    g.clear(3, 0, 1.0);
+    let d = g.b.device().expect("the device");
+    d.wait_for_modules();
+    let Some(report) = d.pipeline_library_report() else {
+        eprintln!(
+            "{}: no pipeline libraries, so the case is not reached here",
+            d.adapter_name()
+        );
+        return;
+    };
+    // The number before `what` in wgpu-hal's line.
+    let count = |report: &str, what: &str| -> u64 {
+        let end = report
+            .find(what)
+            .unwrap_or_else(|| panic!("no {what:?}: {report}"));
+        report[..end]
+            .rsplit(|c: char| !c.is_ascii_digit())
+            .next()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("no count before {what:?}: {report}"))
+    };
+    let shaders = |r: &str| (count(r, " vertex shader ("), count(r, " pixel shader ("));
+    let made = shaders(&report);
+    // The harness's two shaders' and the stand-ins' they were made with.
+    assert_eq!(made, (2, 2), "{report}");
+    g.cover(0.5);
+    assert_eq!(g.reds(), vec![255; 16]);
+    let d = g.b.device().expect("the device");
+    let after = d.pipeline_library_report().expect("the report");
+    assert_eq!(
+        shaders(&after),
+        made,
+        "a shader library made on the draw: {after}"
+    );
+    assert_eq!(d.pipelines_made_on_draws(), 1);
 }
 
 #[test]
