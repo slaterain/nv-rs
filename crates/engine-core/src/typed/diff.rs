@@ -1480,6 +1480,12 @@ fn hash_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
 }
 
 /// All mapped memory outside the stack for locals, as one hash.
+/// A hash of every mapped page of `e`'s memory, byte for byte: for a test that runs the same work on two
+/// engines made alike and compares what each leaves (the drawing thread's view check, `draw::detach`).
+pub fn memory_digest(e: &Engine) -> u64 {
+    memory_hash(e, None, false, false)
+}
+
 fn memory_hash(e: &Engine, stack: Option<(u32, u32)>, nan_payloads: bool, loose: bool) -> u64 {
     let mut hash = 0;
     let on_stack = |a: u32| stack.is_some_and(|(lo, hi)| (lo..hi).contains(&a));

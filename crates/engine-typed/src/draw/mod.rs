@@ -38,7 +38,8 @@
 //!   state lists, masks, programs), the shaders' own fields (their renderer, the counted pointers'
 //!   sources), the shader property's texture source +0xac and land table bytes, the constant map entries'
 //!   fields and the pass type tables, the default stage texture `011f951c`, the fade distances
-//!   `011f9454`/`011f9458`, the element bits `011ae640`, the constant kinds `011f5fc4` and the vertex shader's
+//!   `011f9454`/`011f9458`, the card's alpha-to-coverage switch `011f9421` (read by [`lists`]), the element bits
+//!   `011ae640`, the constant kinds `011f5fc4` and the vertex shader's
 //!   renderer's device word (+0x10f8), all filled at load and read in place by [`passes`], [`setups`] and
 //!   [`constants`] (group B's other reads and writes, its own writes read back included, go through
 //!   [`packet`] and [`own`]); and the exe's constant data (the -FLT_MAX and 0.001 the alpha pass
@@ -72,6 +73,7 @@ pub mod constants;
 pub mod detach;
 pub mod drivers;
 pub mod layout;
+pub mod lists;
 pub mod own;
 pub mod packed;
 pub mod packet;
@@ -124,6 +126,9 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b9_a3c0, alpha::draw_and_clear_type(Ptr<_>, u32, u32, u32, u32) -> bool),
         entry!(0x00b9_a4d0, alpha::draw_holder(u32, u32)),
         entry!(0x00b9_af60, alpha::render_next_alpha(Ptr<_>, u32, u32, u32, f32)),
+        // The list draws the world draw made through translations (the drawing thread's still-live list).
+        entry!(0x00b9_9990, lists::own_list_draw(Ptr<_>, u32)),
+        entry!(0x00b9_9e20, lists::render_batches(Ptr<_>, u32, u32, u32)),
         // The decal pass and the fog-coloured ambient.
         entry!(0x00b6_4e30, drivers::decal_pass(Ptr<_>)),
         entry!(0x00bb_b840, own::fog_ambient()),

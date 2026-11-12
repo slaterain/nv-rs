@@ -209,6 +209,26 @@ const SET_CLIP_PLANES: u32 = 0x00b9_8280;
 /// The word the first half sets to 1 around render group 0 (`011a9608`).
 const GROUP_ZERO_FLAG: u32 = 0x011a_9608;
 
+/// The coverage counter (`011ffa28`) counted down, as a list's draw ends with alpha to coverage where the card has
+/// it (condition 2).
+#[inline(always)]
+pub(crate) fn coverage_count_down(e: &mut Engine) {
+    let count = e.global::<u32>(state::COVERAGE_COUNTER).wrapping_sub(1);
+    e.set_global(state::COVERAGE_COUNTER, count);
+}
+
+/// The two list counters (`011ffa24`, then `011ff9e8`) counted down when not zero, as a list's draw ends
+/// (condition 2).
+#[inline(always)]
+pub(crate) fn list_counters_down(e: &mut Engine) {
+    for counter in [0x011f_fa24u32, 0x011f_f9e8] {
+        let count = e.global::<u32>(counter);
+        if count != 0 {
+            e.set_global(counter, count - 1);
+        }
+    }
+}
+
 /// Alpha blending off (`00b97fa0(0, 0)`, the shader family's) (condition 2).
 #[inline(always)]
 pub(crate) fn alpha_blend_off(e: &mut Engine) {

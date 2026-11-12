@@ -107,6 +107,20 @@ pub(crate) fn render_decals(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
     e.get(acc, BSShaderAccumulator::bRenderDecals) != 0
 }
 
+/// The accumulator's +0x164 alone (`ucSkipType13`): what `RenderBatches` reads first, from its own getter call, to
+/// tell a shadow pass that only has its group cleared.
+#[inline(always)]
+pub(crate) fn skip_type_13(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
+    e.get(acc, BSShaderAccumulator::ucSkipType13) != 0
+}
+
+/// The accumulator's +0x165 alone (`ucShadowGroups`): what `RenderBatches` reads, from a second getter call, when
+/// +0x164 is clear.
+#[inline(always)]
+pub(crate) fn shadow_groups_set(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
+    e.get(acc, BSShaderAccumulator::ucShadowGroups) != 0
+}
+
 /// The fog-coloured ambient flag of the lighting shaders (`011f94a6`).
 #[inline(always)]
 pub(crate) fn fog_ambient(e: &Engine) -> bool {

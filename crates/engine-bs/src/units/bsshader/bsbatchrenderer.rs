@@ -1411,7 +1411,8 @@ pub fn fn_00b99990(e: &mut Engine, list: Ptr, second: u32) {
     if e.mem.u32(list + 0x10) == 0 {
         return;
     }
-    bs_batch_renderer_end_pass(e);
+    // By address, as the pass draw it calls ends one: the typed list draw compares the call.
+    e.call(0x00b9_88e0, &[]);
     let node = e.mem.u32(list + 4);
     if node != 0 {
         let mut next = e.mem.u32(node);
@@ -1441,7 +1442,7 @@ pub fn fn_00b99990(e: &mut Engine, list: Ptr, second: u32) {
     e.mem.set_u32(list + 4, 0);
     e.mem.set_u32(list + 8, 0);
     e.mem.set_u32(list + 0x10, 0);
-    bs_batch_renderer_end_pass(e);
+    e.call(0x00b9_88e0, &[]);
 }
 
 // Translated from 00b99a10 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2615,7 +2616,7 @@ pub fn bs_batch_renderer_render_batches(
     }
     fn_00b984d0(e, 1, 0);
     e.call(SET_ALPHA_TEST_ENABLE, &[0, 0]);
-    bs_batch_renderer_end_pass(e);
+    e.call(0x00b9_88e0, &[]);
 }
 
 // Translated from 00b9a3c0 (decompiled, FalloutNV.exe 1.4.0.525)
