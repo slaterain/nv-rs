@@ -327,7 +327,8 @@ fn collision_quaternion_from_rotation() {
             0x00a6_df40,
             body::quaternion_from_rotation(Ptr<_>, Ptr<_>)
         ))
-        .common().by(base)
+        .common()
+        .by(base)
         .inputs(&inputs(&[
             &[Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7])],
             &P3,
