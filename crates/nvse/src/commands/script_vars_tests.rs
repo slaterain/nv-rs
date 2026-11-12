@@ -527,7 +527,10 @@ fn run_expr(e: &mut Engine, opcode: u32, this_obj: u32, tokens: &[Vec<u8>]) -> (
     let record = crate::table::record_of(e, opcode);
     let (params, execute) = (e.mem.u32(record + 0x14), e.mem.u32(record + 0x18));
     let ok = e
-        .call(execute, &[params, DATA, this_obj, 0, SCRIPT, LIST, RESULT, OFFSET])
+        .call(
+            execute,
+            &[params, DATA, this_obj, 0, SCRIPT, LIST, RESULT, OFFSET],
+        )
         .eax;
     (ok & 0xff, e.mem.f64(RESULT), e.mem.u32(OFFSET))
 }

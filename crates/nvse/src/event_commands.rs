@@ -665,7 +665,8 @@ fn dump_event_handlers(e: &mut Engine, w: &[u32]) -> Ret {
                 events::with_guest_text(e, &info.name, |e, name| {
                     console_print(e, "== Dumping for event %s ==", &[name]);
                 });
-                if !types.is_empty() && !events::validate_dispatched_types(e, at, &types, Some(ev)) {
+                if !types.is_empty() && !events::validate_dispatched_types(e, at, &types, Some(ev))
+                {
                     return;
                 }
                 let accurate = if info.flags & events::FLAG_UNKNOWN_ARG_TYPES != 0 {
@@ -691,7 +692,8 @@ fn dump_event_handlers(e: &mut Engine, w: &[u32]) -> Ret {
                                 Some(ev),
                             ));
                     if matches {
-                        let mut line = format!(">> Priority: {}, handler: ", x.priority).into_bytes();
+                        let mut line =
+                            format!(">> Priority: {}, handler: ", x.priority).into_bytes();
                         line.extend(crate::commands::scripting_more::form_representation(
                             e, cb.script,
                         ));

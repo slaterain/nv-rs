@@ -706,7 +706,10 @@ pub(crate) mod tests {
             let opcode = 0x1400 + *i as u32;
             let r = Record::read(&e, t.record(opcode));
             let console = Record::read(&e, CONSOLE_TABLE + (10 + k as u32) * RECORD);
-            assert_eq!(guest_text(&e, r.long_name), format!("con_{name}").as_bytes());
+            assert_eq!(
+                guest_text(&e, r.long_name),
+                format!("con_{name}").as_bytes()
+            );
             assert_eq!(guest_text(&e, r.short_name), b"");
             assert_eq!(
                 r,

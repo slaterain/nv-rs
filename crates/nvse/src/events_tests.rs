@@ -1040,7 +1040,11 @@ fn dump_event_handlers_lists_them_in_the_console() {
     set_script_ref(&mut e, 2, REF_1);
     set_script_ref(&mut e, 3, FN_B);
     let first_ref = pair(text("first"), form(2));
-    run(&mut e, SET_EVENT_HANDLER, &[text("OnHit"), form(1), first_ref]);
+    run(
+        &mut e,
+        SET_EVENT_HANDLER,
+        &[text("OnHit"), form(1), first_ref],
+    );
     run(
         &mut e,
         SET_EVENT_HANDLER_ALT,

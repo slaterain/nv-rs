@@ -330,7 +330,9 @@ fn with_plugins(e: &mut Engine) {
     let vtable = 0x0300_9000;
     e.mem.set_u32(SCRIPT, vtable);
     e.mem.set_u32(vtable + 0x130, 0x0060_3000);
-    e.register(0x0060_3000, |e, _| eax(crate::table::guest_str(e, b"MyScript")));
+    e.register(0x0060_3000, |e, _| {
+        eax(crate::table::guest_str(e, b"MyScript"))
+    });
 }
 
 /// `PluginVersion`: a plugin that is missing, or older than asked, or an xNVSE older than asked,
@@ -341,13 +343,19 @@ fn plugin_version_warns_once() {
     let mut e = setup();
     with_plugins(&mut e);
     assert_eq!(run(&mut e, 0x1676, &[text("TestPlugin"), num(7.0)]).0, 1);
-    assert_eq!(run(&mut e, 0x1676, &[text("nvse"), num(f64::from(0x0604_0090))]).0, 1);
+    assert_eq!(
+        run(&mut e, 0x1676, &[text("nvse"), num(f64::from(0x0604_0090))]).0,
+        1
+    );
     assert!(boxes().is_empty());
     assert_eq!(run(&mut e, 0x1676, &[text("Missing"), num(1.0)]).0, 0);
     assert_eq!(run(&mut e, 0x1676, &[text("Hidden"), num(1.0)]).0, 0);
     assert_eq!(run(&mut e, 0x1676, &[text("MISSING"), num(1.0)]).0, 1);
     assert_eq!(run(&mut e, 0x1676, &[text("testplugin"), num(8.0)]).0, 0);
-    assert_eq!(run(&mut e, 0x1676, &[text("NVSE"), num(f64::from(0x0700_0010))]).0, 0);
+    assert_eq!(
+        run(&mut e, 0x1676, &[text("NVSE"), num(f64::from(0x0700_0010))]).0,
+        0
+    );
     assert_eq!(
         boxes(),
         [
