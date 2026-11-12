@@ -280,7 +280,11 @@ fn package_locations() {
     ] {
         e.mem.set_u8(location, kind);
         e.mem.set_u32(location + 8, object);
-        assert_eq!(id(call(&mut e, 0x1514, 0, &[r(1)]).1), answer, "kind {kind}");
+        assert_eq!(
+            id(call(&mut e, 0x1514, 0, &[r(1)]).1),
+            answer,
+            "kind {kind}"
+        );
     }
 }
 
@@ -318,7 +322,11 @@ fn package_targets() {
     let target = e.mem.u32(P[0] + 0x30);
     assert_ne!(target, 0);
     assert_eq!(
-        (e.mem.u8(target), e.mem.u32(target + 4), e.mem.u32(target + 8)),
+        (
+            e.mem.u8(target),
+            e.mem.u32(target + 4),
+            e.mem.u32(target + 8)
+        ),
         (0, THING, 150)
     );
     assert_eq!(call(&mut e, 0x151e, 0, &[r(1)]).1, 150.0);
@@ -377,7 +385,12 @@ fn nth_package() {
     set_list(&mut e, &[P[0], P[1], P[2]]);
     let nth = |e: &mut Engine, i: i32| id(call(e, 0x1516, ACTOR, &[n(i)]).1);
     assert_eq!(
-        [nth(&mut e, 0), nth(&mut e, 1), nth(&mut e, 2), nth(&mut e, -2)],
+        [
+            nth(&mut e, 0),
+            nth(&mut e, 1),
+            nth(&mut e, 2),
+            nth(&mut e, -2)
+        ],
         [P[0], P[1], P[2], P[2]]
     );
     assert_eq!([nth(&mut e, -1), nth(&mut e, 3)], [0, 0]);
