@@ -96,7 +96,7 @@ fn get_ln_version(e: &mut Engine, w: &[u32]) -> Ret {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_cmd.h:
 // Cmd_GetNVSEVersionFull_Execute.
-fn get_nvse_version_full(e: &mut Engine, w: &[u32]) -> Ret {
+pub(crate) fn get_nvse_version_full(e: &mut Engine, w: &[u32]) -> Ret {
     CommandArgs::new(w).set_result(e, nvse_version_full());
     handled(true)
 }
@@ -114,7 +114,7 @@ pub fn is_jip_alias(name: &[u8]) -> bool {
 /// text of 128 bytes or more runs past the buffer into JIP's frame; the rule xNVSE's buffers have
 /// (`nvse::commands::arg_in_buffer`): with the list guard row it is read whole, without it the
 /// port stops there.
-fn name_in_buffer(e: &Engine, read: &Read, command: &str) -> Vec<u8> {
+pub(crate) fn name_in_buffer(e: &Engine, read: &Read, command: &str) -> Vec<u8> {
     let written = match read.args.first() {
         Some(Arg::Str { raw, text }) => raw.len().max(text.len()),
         _ => 0,

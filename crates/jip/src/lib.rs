@@ -29,6 +29,7 @@ pub mod containers;
 pub mod cosave;
 pub mod game;
 pub mod identity;
+pub mod overrides;
 #[rustfmt::skip]
 pub mod slots;
 #[cfg(test)]
@@ -65,6 +66,8 @@ pub struct Jip {
     pub table: table::State,
     /// The data JIP keeps in its co-save section, and what decides its loads.
     pub saved: cosave::Saved,
+    /// JIP's versions of xNVSE's and the game's commands.
+    pub overrides: overrides::State,
 }
 
 /// JIP as xNVSE knows it once loaded (`NVSEPlugin_Query`, `NVSEPlugin_Load`): its DLL, name,
@@ -103,6 +106,7 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
     );
     table::install(e, answers_installed);
     identity::install(e, answers_installed);
+    overrides::install(e, answers_installed);
     nvse::plugins::register(e, plugin(answers_installed));
     let jip = e.ext::<Jip>();
     jip.installed = true;
