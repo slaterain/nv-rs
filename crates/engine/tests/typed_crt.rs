@@ -302,6 +302,7 @@ fn math_exit() {
         math::math_exit(u32, u32, f64, u32, u32, u32, u32) -> f64
     ))
     .common()
+    .sets_control_word()
     .inputs(&[
         Input::Of(&[5, 0x12]),
         Input::F64,
@@ -333,6 +334,7 @@ fn start_one_arg_error_handling() {
         math::start_one_arg_error_handling(u32, u32, u32, f64, u32, u32, u32, u32) -> f64
     ))
     .common()
+    .sets_control_word()
     .inputs(&[
         Input::Of(&[8, 1, 2, 3, 4, 5, 6, 7, 9]),
         Input::Of(&[5, 0x10, 0x16, 0x1d]),
@@ -364,6 +366,7 @@ fn start_one_arg_error_handling() {
 fn except_87() {
     Diff::new(entry!(0x00ee_1b04, math::except_87(u32, Ptr, Ptr)))
         .common()
+        .sets_control_word()
         .inputs(&[
             Input::Of(&[5, 0x10, 0x16, 0x1d]),
             Input::Of(&[8, 1, 2, 3, 4, 5, 6, 7, 0]),

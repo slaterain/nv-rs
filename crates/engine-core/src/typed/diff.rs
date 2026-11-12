@@ -410,6 +410,8 @@ pub struct Diff {
     by_address: Vec<u32>,
     local_words: Vec<LocalWord>,
     control_words: Option<Vec<u16>>,
+    /// [`Diff::sets_control_word`]: the function under test changes the control word on purpose.
+    sets_control_word: bool,
     max_cases: usize,
     stop_cases: Option<StopCases>,
     stack_bytes: u32,
@@ -435,6 +437,7 @@ impl Diff {
             by_address: Vec::new(),
             local_words: Vec::new(),
             control_words: None,
+            sets_control_word: false,
             max_cases: 512,
             stop_cases: None,
             stack_bytes: 64,
@@ -554,6 +557,14 @@ impl Diff {
     /// [`MAIN_THREAD`].
     pub fn control_words(mut self, words: &[u16]) -> Diff {
         self.control_words = Some(words.to_vec());
+        self
+    }
+
+    /// The function under test sets the x87 control word on purpose (the C runtime's `_ctrlfp`, its
+    /// math bodies' word load and exit): its word after the call need not be the case's. The two
+    /// sides' words after the call still compare.
+    pub fn sets_control_word(mut self) -> Diff {
+        self.sets_control_word = true;
         self
     }
 
@@ -731,7 +742,8 @@ impl Diff {
         // The case's word holds through the call on both sides, or the comparison ran another precision
         // than the one it names.
         let held = (word & 0x1f3f) | 0x40;
-        if translation.stop.is_none()
+        if !self.sets_control_word
+            && translation.stop.is_none()
             && typed.stop.is_none()
             && (translation.control_word != held || typed.control_word != held)
         {
@@ -845,6 +857,10 @@ impl Diff {
         // blocks after it: a typed version with native locals may never make them.
         e.with_stack(8, |_, _| ());
         e.tls();
+        // The case's word in the thread block's copy too, which `FSTCW` reads and a callee that saves
+        // and restores the word (the C runtime's `fabs`, `floor`, `sqrt`) restores; before the setup, so
+        // a setup can still place another word there on purpose.
+        crate::units::crt::set_x87_control_word(&mut e, word);
         // What a setup can't replace: see `translation_calls_plainly` and `family`.
         let mut watched = self.plain_callees.clone();
         for family in &self.families {
@@ -907,9 +923,7 @@ impl Diff {
                 first: None,
             })
         });
-        // The case's word in the register and in the thread block's copy, which `FSTCW` reads and a
-        // callee that saves and restores the word (the C runtime's `fabs`, `floor`, `sqrt`) restores.
-        crate::units::crt::set_x87_control_word(&mut e, word);
+        x87::set_control_word(word);
         let result = catch_unwind(AssertUnwindSafe(|| e.call(self.addr, &words)));
         let control_word = x87::control_word();
         x87::set_control_word(x87::DEFAULT_CONTROL_WORD);
