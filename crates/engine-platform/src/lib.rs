@@ -165,6 +165,10 @@ pub fn on_exit_late(hook: fn()) {
 /// Runs the hooks [`on_exit`] registered, in order, then those [`on_exit_late`] registered (the
 /// platform layer is ending the process).
 pub fn run_exit_hooks() {
+    // (Not in this crate's tests, whose exit-hook test runs beside the drawing helper's: that
+    // test calls `finish_drawing_at_exit` itself.)
+    #[cfg(not(test))]
+    finish_drawing_at_exit(DRAW_EXIT_LIMIT);
     let hooks = EXIT_HOOKS.lock().unwrap_or_else(|p| p.into_inner()).clone();
     let late = LATE_EXIT_HOOKS
         .lock()
@@ -175,12 +179,37 @@ pub fn run_exit_hooks() {
     }
 }
 
+/// How long the end of the process waits for a drawing job still running
+/// ([`finish_drawing_at_exit`]).
+const DRAW_EXIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// At the end of the process (before the exit hooks, and again in [`end_process`] for the ends
+/// that skip them: the game's `ExitProcess` and a stop reach the host's end of main, the window's
+/// close comes from its own thread): the drawing thread's job, if one is posted, is finished
+/// before the device and the command stream go, waiting at most `limit`
+/// (`engine_core::real_threads::finish_draw_at_exit`), so the process never hangs at exit. A
+/// second call finds nothing to do.
+pub(crate) fn finish_drawing_at_exit(
+    limit: std::time::Duration,
+) -> engine_core::real_threads::DrawAtExit {
+    let found = engine_core::real_threads::finish_draw_at_exit(limit);
+    if found == engine_core::real_threads::DrawAtExit::StillRunning {
+        eprintln!(
+            "NV_DRAW_THREAD: the drawing job was still running at the end ({} ms waited): the run \
+             ends without it",
+            limit.as_millis()
+        );
+    }
+    found
+}
+
 /// Ends the process with `code`, as `std::process::exit` does, once the profiler's sampler has
 /// stopped (`engine_core::profile::stop`; nothing when the profiler is off). Ending a process
 /// stops its other threads wherever they are: a sampler stopped between suspending a thread and
 /// resuming it left the thread ending the process suspended, and the process never ended
 /// (2026-11-11). Every end of a game run goes through here.
 pub fn end_process(code: i32) -> ! {
+    finish_drawing_at_exit(DRAW_EXIT_LIMIT);
     // What the start screen's capture still holds reaches the console and the log first.
     d3d9_wgpu::loading::finish_output();
     engine_core::profile::stop();

@@ -14,8 +14,34 @@
 //! - What the drawing side's copy binds it holds, as main's state holds what it binds (the holds
 //!   are counted at the cut), so main letting go of an object does not end it while the drawing
 //!   side draws with it.
-//! - The drawing side's buffer locks hand out memory of its own, filled with the buffer's bytes;
-//!   its uploads go into the slot; the blocks are freed at the join.
+//! - The drawing side's buffer locks hand out memory of its own, filled with the buffer's bytes
+//!   and its own earlier writes in the cut; its uploads go into the slot; the blocks are freed at
+//!   the join, and its writes become the buffer's bytes there (except where main locked the
+//!   buffer after the cut, for writing: main's bytes come later in the serial order).
+//! - Buffers both sides touch in one cut. The serial order is the drawing side's locks, then
+//!   main's after the cut. How the game locks decides what matters: its buffer manager's lock
+//!   (00e8bff0) locks the buffer and hands out its own scratch block, copying the buffer's bytes
+//!   into it only when the flags have neither DISCARD nor NOOVERWRITE; its unlock (00e8c0d0) copies
+//!   the whole scratch range back and unlocks. So a lock with DISCARD or NOOVERWRITE reads nothing
+//!   from the buffer and writes the whole range; only a lock without them reads the bytes.
+//!   - Main locks, without DISCARD or NOOVERWRITE, a buffer the drawing side has locked or written
+//!     in this cut: main reads bytes the drawing side wrote earlier in the serial order, so main's
+//!     lock waits for the drawing job, as a sync call does, and the drawing side's bytes become the
+//!     buffer's first. Counted, with a note the first time in a run. With DISCARD or NOOVERWRITE
+//!     it reads nothing and does not wait; the join keeps main's bytes in its range.
+//!   - The drawing side locks, without DISCARD or NOOVERWRITE, bytes main locked after the cut: it
+//!     would read main's later bytes, and it cannot wait for main. With piece 4 in this does not
+//!     happen: the world draw's locks go through the manager into the drawing side's own scratch,
+//!     vertex staging and dynamic geometry blocks (per side; `measure/smooth-200/PROBE.md`), and
+//!     a world-draw lock that reads the buffer is of the world's own buffers, which the frame's
+//!     tail does not lock. A debug assertion in the drawing side's lock catches it. With DISCARD
+//!     or NOOVERWRITE the drawing side reads nothing, so the bytes its block starts from do not
+//!     matter.
+//! - [`draw_finish`] is the one call for main's waits (before a reset, a save, a load and piece
+//!   8's other wait points): the job joined, then the join. Reset with a cut open does it itself.
+//! - At the end of the process the job is finished first (`crate::run_exit_hooks`,
+//!   `crate::end_process`), within a time limit, so the device and the stream never go while it
+//!   is inside a call, and the process never hangs at exit.
 //! - Creations on the drawing side are made as on main (counted, with a note the first time); a
 //!   release there that would end an object leaves it to the join.
 //! - Present's freeing of the frame's unlocked staging blocks waits for the join while a cut is
@@ -243,6 +269,25 @@ pub fn draw_join(e: &mut Engine) {
     OPEN_CUTS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     if presented {
         super::d3d9device::free_frame_staging(e);
+    }
+}
+
+/// Main's wait for the drawing thread (piece 8's wait points: before 008746d0, 00874920, 00875e40
+/// and 006426a0, a device reset, a save, a load): the drawing job joined
+/// (`engine_core::real_threads::join_draw`, the device and kernel locks given back while it waits),
+/// then [`draw_join`]. A panic of the job's is resumed after the join, so the device state is
+/// whole either way. Nothing without a posted job or an open cut.
+pub fn draw_finish(e: &mut Engine) {
+    if drawing_thread() {
+        // Not from the drawing side: it would wait for itself.
+        return;
+    }
+    let joined = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        engine_core::real_threads::join_draw(e);
+    }));
+    draw_join(e);
+    if let Err(payload) = joined {
+        std::panic::resume_unwind(payload);
     }
 }
 
