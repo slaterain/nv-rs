@@ -167,6 +167,9 @@ pub struct Input {
     mouse_motion: [i32; 3],
     mouse_buttons: [bool; 8],
     sequence: u32,
+    /// When the game last read the keyboard (`GetDeviceState`): the frame's poll of the controls, for
+    /// the delay log ([`controls_polled_at`]).
+    polled_at: Option<std::time::Instant>,
 }
 
 impl Input {
@@ -547,6 +550,7 @@ fn get_device_state(e: &mut Engine, this: Ptr, size: u32, data: Ptr) -> u32 {
     let keyboard = d.keyboard;
     let at = data.addr();
     if keyboard {
+        state!(e).input.polled_at = Some(std::time::Instant::now());
         for code in 0..KEYBOARD_KEYS {
             let down = state!(e).input.key_down(code as usize);
             e.mem.set_u8(at + code, if down { 0x80 } else { 0 });
@@ -641,6 +645,12 @@ fn get_device_data(
 /// A key (DirectInput key code, the scan code) going down or up: the keyboard state, and an
 /// event in each acquired, buffered keyboard device (a full buffer loses it and reports the
 /// overflow). The time stamp is the platform's tick count (`GetTickCount`).
+/// When the game last read the keyboard's state: its poll of the controls in the frame
+/// (`Main::OnIdle_PollControls`, 0086f390), for `NV_FRAME_LOG`'s delay columns.
+pub fn controls_polled_at(e: &mut Engine) -> Option<std::time::Instant> {
+    state!(e).input.polled_at
+}
+
 pub fn key(e: &mut Engine, code: u8, down: bool) {
     let input = &mut state!(e).input;
     if input.keys.len() < KEYBOARD_KEYS as usize {

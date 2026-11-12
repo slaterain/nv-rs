@@ -2469,3 +2469,26 @@ fn a_second_cut_before_the_slot_closes_panics() {
     let _slot = s.cut();
     let _again = s.cut();
 }
+
+/// The last Present the backend carried out, with when: on the direct runner at once; on the
+/// threaded one once the render thread has carried it out (all of them after `finish`).
+#[test]
+fn the_last_present_carried_out_is_known_with_when() {
+    for threaded in [false, true] {
+        let mut s = if threaded {
+            Stream::threaded(Box::new(Log::default()), Settings::default())
+        } else {
+            Stream::direct(Box::new(Log::default()))
+        };
+        assert!(s.last_present_carried_out().is_none());
+        let mut before = std::time::Instant::now();
+        for _ in 0..3 {
+            before = std::time::Instant::now();
+            s.submit(Part::Present.cmd());
+        }
+        s.finish();
+        let (frame, at) = s.last_present_carried_out().expect("carried out");
+        assert_eq!(frame, 3, "threaded {threaded}");
+        assert!(at >= before, "threaded {threaded}: after its submit began");
+    }
+}

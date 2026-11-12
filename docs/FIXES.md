@@ -70,8 +70,12 @@ how long main waited in the frame-end barrier (`barrier_us`) and the waits for t
 main's and the other threads' (`main_device_*`, `game_device_*`). Beside it, `FILE.sites` lists, for each
 frame in which main's sleeps and object waits passed 50 ms, those sleeps and waits and the other threads'
 by the exe function that made them (the caller of `Sleep` or the wait), with the sleep's milliseconds,
-the first handle main waited on, or the thread's id. `NV_FRAME_LOG`'s last column, `qpc`, is the
-Windows performance counter, for an outside sampler's timestamps.
+the first handle main waited on, or the thread's id. `NV_FRAME_LOG`'s column `qpc` is the Windows
+performance counter, for an outside sampler's timestamps. Its delay columns give the input delay: when the
+frame polled the controls (`poll_qpc`), its Present's number (`present`), the last Present the renderer
+carried out (`shown`, `shown_qpc`), and that frame's time from its poll to its Present carried out
+(`input_to_present_us`); every 1000 frames a `# input to present` line gives the median and the 95th
+percentile since the last one.
 
 `NV_PHYS_BLEND_LOG=FILE`, with the smooth physics drawing on (say `NV_PRESET=fixes`: the variable pins
 vanilla otherwise), writes per drawn frame each free body's node as the original draws it and as the

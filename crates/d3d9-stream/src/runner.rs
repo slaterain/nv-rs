@@ -91,6 +91,8 @@ pub struct Stream {
     cut: Option<OpenCut>,
     /// The last cut whose slot the backend carried out, and when ([`Stream::last_cut_carried_out`]).
     cut_done: Arc<Mutex<Option<(u64, Instant)>>>,
+    /// The direct runner's last Present carried out: its number and when ([`Stream::last_present_carried_out`]).
+    presented: Option<(u32, Instant)>,
 }
 
 // One stream a run, made once and never moved on the way of a call: kept unboxed, so each
@@ -183,6 +185,7 @@ impl Stream {
             cuts: 0,
             cut: None,
             cut_done: Arc::new(Mutex::new(None)),
+            presented: None,
         }
     }
 
@@ -282,17 +285,25 @@ impl Stream {
                 None => r.write_cmd(cmd),
             }
         }
-        match &mut self.runner {
+        let frame = match cmd {
+            Cmd::Present { frame, .. } => Some(frame),
+            _ => None,
+        };
+        let reply = match &mut self.runner {
             Runner::Direct(backend) => backend.execute(cmd),
             Runner::Shared(backend) => match &mut self.cut {
                 Some(open) => {
                     open.held.push(cmd);
-                    Reply::None
+                    return Reply::None;
                 }
                 None => lock_any(backend).execute(cmd),
             },
-            Runner::Threaded(t) => t.submit(cmd, holding),
+            Runner::Threaded(t) => return t.submit(cmd, holding),
+        };
+        if let Some(frame) = frame {
+            self.presented = Some((frame, Instant::now()));
         }
+        reply
     }
 
     /// A cut of main's stream: what the drawing side records through the returned [`Slot`] is
@@ -360,6 +371,19 @@ impl Stream {
         self.holding();
     }
 
+    /// The last Present the backend has carried out: its number ([`Cmd::Present`]'s `frame`) and when
+    /// (the render thread's clock on the threaded runner, at the end of the chunk it ended; the
+    /// call's return on the direct one). The delay log (`NV_FRAME_LOG`) pairs it with the frame's
+    /// poll of the controls.
+    pub fn last_present_carried_out(&self) -> Option<(u32, Instant)> {
+        match &self.runner {
+            Runner::Threaded(t) => lock(&t.shared.queue)
+                .present_done
+                .map(|(n, at)| (n as u32, at)),
+            _ => self.presented,
+        }
+    }
+
     /// The last cut whose slot the backend has carried out, and when (the render thread's clock
     /// on the threaded runner; the slot's close on the direct one).
     pub fn last_cut_carried_out(&self) -> Option<(u64, Instant)> {
@@ -400,7 +424,11 @@ impl Stream {
         if let Runner::Shared(backend) = &self.runner {
             let mut backend = lock_any(backend);
             for i in 0..open.held.len() {
-                backend.execute(open.held.get(i));
+                let cmd = open.held.get(i);
+                backend.execute(cmd);
+                if let Cmd::Present { frame, .. } = cmd {
+                    self.presented = Some((frame, Instant::now()));
+                }
             }
         }
         if let Runner::Shared(_) = self.runner {
@@ -722,6 +750,8 @@ struct Queue {
     slots: VecDeque<SlotQueue>,
     /// The last cut whose slot was carried out, and when.
     cut_done: Option<(u64, Instant)>,
+    /// The last Present carried out (its number, `presents_done` then) and when.
+    present_done: Option<(u64, Instant)>,
     /// The render thread's time carrying commands out.
     busy: Duration,
     closing: bool,
@@ -1202,6 +1232,9 @@ fn render(shared: &Shared, mut backend: Box<dyn Backend>, check: bool) {
             Ok(reply) => {
                 q.queued_bytes -= chunk.bytes;
                 q.presents_done += chunk.presents;
+                if chunk.presents > 0 {
+                    q.present_done = Some((q.presents_done, Instant::now()));
+                }
                 if chunk.reply_wanted {
                     q.reply = Some(reply);
                 }
