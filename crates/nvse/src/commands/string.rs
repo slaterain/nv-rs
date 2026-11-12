@@ -720,7 +720,7 @@ pub(crate) fn set_statement_var(e: &mut Engine, a: &CommandArgs) -> Option<(f64,
 /// A string command's result: the `set` statement's string set (no longer temporary) or a new
 /// string; inside an expression a new temporary string. Text of `kMaxMessageLength` or more is
 /// assigned as `""`.
-pub(crate) fn assign_to_string_var(e: &mut Engine, a: &CommandArgs, text: &[u8]) {
+pub fn assign_to_string_var(e: &mut Engine, a: &CommandArgs, text: &[u8]) {
     let text = if text.len() >= MAX_MESSAGE_LENGTH {
         &[][..]
     } else {

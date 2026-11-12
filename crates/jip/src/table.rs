@@ -183,6 +183,12 @@ fn guest_params(e: &mut Engine, params: &'static Params) -> u32 {
     at
 }
 
+/// A parameter list's address in the built-ins' data, written once (JIP's lists that are not
+/// a slot's, such as the ones its versions of xNVSE's commands take).
+pub(crate) fn params_address(e: &mut Engine, params: &'static Params) -> u32 {
+    guest_params(e, params)
+}
+
 /// A slot's record as JIP registers it, with the handler words given; its names only when
 /// `named` (an unbuilt command of a JIP that answers "not installed" has none, so no name finds
 /// it, as none would without the DLL).

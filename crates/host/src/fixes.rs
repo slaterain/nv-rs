@@ -40,6 +40,7 @@ pub static FIXES: &[Fix] = &[
     crate::topic_index::FIX,
     KEEP_COSAVE_PLUGINS,
     JIP_COSAVE_FIXES,
+    JIP_VANILLA_COMMANDS,
     SCRIPT_ERROR_GUARD,
     IMOD_EVENT_FORM_CHECK,
     INVENTORY_REFERENCE_CHECKS,
@@ -208,6 +209,23 @@ fn install_jip_cosave_fixes(e: &mut Engine) {
     jip::cosave::set_johnny_guitar_fixes(e, true);
 }
 
+/// JIP LN NVSE's versions of seven of the game's own commands (`InitCmdPatches`: `MenuMode`,
+/// `GetItemCount`, `GetContainer`, `IsInList`, `GetHitLocation`, `HasPerk`, `GetNVSEVersionFull` at
+/// `0x127D`), a flag `crates/jip` reads: they change vanilla commands, so they are a row (ADR-0016
+/// §5). They take effect only once JIP answers "installed" (`jip::ANSWERS_INSTALLED`, step 3.10).
+pub const JIP_VANILLA_COMMANDS: Fix = Fix {
+    name: "JIP vanilla commands",
+    env: "NV_JIP_VANILLA_CMDS",
+    addresses: &[],
+    summary:
+        "JIP LN NVSE's versions of seven of the game's commands (MenuMode, GetItemCount, IsInList, HasPerk for followers, ...), once JIP is built in",
+    install: install_jip_vanilla_commands,
+};
+
+fn install_jip_vanilla_commands(e: &mut Engine) {
+    jip::overrides::set_vanilla_commands(e, true);
+}
+
 /// The driver compiles a Direct3D 9 shader at its first draw: the first shot's frame took 25-46 ms
 /// (7 shaders the game made at start-up, first drawn with at the shot), and the NVIDIA driver
 /// compiles a pixel shader again for a multisampled target. With the row the real backend draws
@@ -327,6 +345,7 @@ const NO_ADDRESS: &[&str] = &[
     crate::uncap::MENU_FIX.name,
     KEEP_COSAVE_PLUGINS.name,
     JIP_COSAVE_FIXES.name,
+    JIP_VANILLA_COMMANDS.name,
     SCRIPT_ERROR_GUARD.name,
     IMOD_EVENT_FORM_CHECK.name,
     INVENTORY_REFERENCE_CHECKS.name,
