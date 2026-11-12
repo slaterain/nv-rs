@@ -26,10 +26,10 @@
 //!
 //! A table is only made where it gives the same record as the search for every cell position
 //! (`esm::cell_offsets` declines otherwise, and that world space is searched as before), so the
-//! same cells are found, sooner. The tables live in the game's heap like the masters' own, freed
-//! with the world space (`00588c80`). Nothing is written to disk: building a plugin's tables
-//! reads less of it than hashing it for a cache would (YUP's 28 tables: 1.9 ms in a release build,
-//! 8.4 ms in the play profile).
+//! same cells are found without the search. The tables live in the game's heap like the masters'
+//! own, freed with the world space (`00588c80`). Nothing is written to disk: building a plugin's
+//! tables reads less of it than hashing it for a cache would (YUP's 28 tables: 1.9 ms in a release
+//! build, 8.4 ms in the play profile).
 
 use crate::fixes::Fix;
 use engine::prelude::*;
@@ -307,6 +307,8 @@ pub fn install(e: &mut Engine) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     /// The test's own words, in the mapped data area: the `OFFSET_DATA` the world space has for the
     /// file (0: none), the block `CreateOffsetData` makes it in, the last `SetOffset` and their
@@ -510,48 +512,81 @@ mod tests {
         assert_eq!(w.e.mem.u32(SEARCHES), 1);
     }
 
+    fn sub(tag: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        [&tag[..], &(data.len() as u16).to_le_bytes(), data].concat()
+    }
+
+    fn record(tag: &[u8; 4], flags: u32, form_id: u32, data: &[u8]) -> Vec<u8> {
+        let size = (data.len() as u32).to_le_bytes();
+        [
+            &tag[..],
+            &size,
+            &flags.to_le_bytes(),
+            &form_id.to_le_bytes(),
+            &[0; 8],
+            data,
+        ]
+        .concat()
+    }
+
+    fn group(label: u32, kind: u32, content: &[u8]) -> Vec<u8> {
+        let size = (24 + content.len() as u32).to_le_bytes();
+        [
+            &b"GRUP"[..],
+            &size,
+            &label.to_le_bytes(),
+            &kind.to_le_bytes(),
+            &[0; 8],
+            content,
+        ]
+        .concat()
+    }
+
+    fn corners(c: [u32; 2]) -> Vec<u8> {
+        [c[0].to_le_bytes(), c[1].to_le_bytes()].concat()
+    }
+
+    /// An exterior cell record at (`x`, `y`).
+    fn cell_at(form_id: u32, x: i32, y: i32) -> Vec<u8> {
+        let grid: Vec<u8> = [x, y, 0].iter().flat_map(|v| v.to_le_bytes()).collect();
+        record(b"CELL", 0, form_id, &sub(b"XCLC", &grid))
+    }
+
+    /// Where `needle` starts in `bytes`.
+    fn find_in(bytes: &[u8], needle: &[u8]) -> u32 {
+        bytes
+            .windows(needle.len())
+            .position(|x| x == needle)
+            .unwrap() as u32
+    }
+
+    /// Writes `bytes` as `Data\name` in a folder of the test's own (`tag`), and points `file`'s
+    /// `m_Path` and `m_Filename` at it as the game keeps them. Returns the folder.
+    fn plugin_file(e: &mut Engine, file: Ptr, tag: &str, name: &str, bytes: &[u8]) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("nv-cell-offsets-{}-{tag}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Data")).unwrap();
+        std::fs::write(dir.join("Data").join(name), bytes).unwrap();
+        let folder = format!("{}\\Data\\", dir.display());
+        e.mem.set_cstr(file.addr() + FILE_PATH, folder.as_bytes());
+        e.mem.set_cstr(file.addr() + FILE_NAME, name.as_bytes());
+        dir
+    }
+
     #[test]
     fn a_plugins_tables_are_read_from_its_file() {
         // A plugin with one world space record (no `OFST`) and one cell, in a Data folder of its
         // own; the file's path as the game keeps it in the `TESFile`.
-        fn sub(tag: &[u8; 4], data: &[u8]) -> Vec<u8> {
-            [&tag[..], &(data.len() as u16).to_le_bytes(), data].concat()
-        }
-        fn record(tag: &[u8; 4], form_id: u32, data: &[u8]) -> Vec<u8> {
-            let size = (data.len() as u32).to_le_bytes();
-            [
-                &tag[..],
-                &size,
-                &[0; 4],
-                &form_id.to_le_bytes(),
-                &[0; 8],
-                data,
-            ]
-            .concat()
-        }
-        fn group(label: u32, kind: u32, content: &[u8]) -> Vec<u8> {
-            let size = (24 + content.len() as u32).to_le_bytes();
-            [
-                &b"GRUP"[..],
-                &size,
-                &label.to_le_bytes(),
-                &kind.to_le_bytes(),
-                &[0; 8],
-                content,
-            ]
-            .concat()
-        }
-        let corners = |c: [u32; 2]| [c[0].to_le_bytes(), c[1].to_le_bytes()].concat();
         let wrld = record(
             b"WRLD",
+            0,
             0x50,
             &[sub(b"NAM0", &corners(MIN)), sub(b"NAM9", &corners(MAX))].concat(),
         );
-        let grid: Vec<u8> = [0i32, 0, 0].iter().flat_map(|v| v.to_le_bytes()).collect();
-        let cell = record(b"CELL", 0x60, &sub(b"XCLC", &grid));
+        let cell = cell_at(0x60, 0, 0);
         let children = group(0x50, 1, &cell);
         let bytes = [
-            record(b"TES4", 0, &sub(b"HEDR", &[0; 12])),
+            record(b"TES4", 0, 0, &sub(b"HEDR", &[0; 12])),
             group(
                 u32::from_le_bytes(*b"WRLD"),
                 0,
@@ -559,29 +594,345 @@ mod tests {
             ),
         ]
         .concat();
-        let dir = std::env::temp_dir().join(format!("nv-cell-offsets-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("Data")).unwrap();
-        std::fs::write(dir.join("Data").join("Test.esp"), &bytes).unwrap();
-
-        let w = world(false, true);
-        let folder = format!("{}\\Data\\", dir.display());
-        w.e.mem
-            .set_cstr(w.file.addr() + FILE_PATH, folder.as_bytes());
-        w.e.mem.set_cstr(w.file.addr() + FILE_NAME, b"Test.esp");
+        let mut w = world(false, true);
+        let dir = plugin_file(&mut w.e, w.file, "read", "Test.esp", &bytes);
         let path = plugin_path(&w.e, w.file);
         let worlds = tables_of(path).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(worlds.len(), 1);
         let world = &worlds[0];
-        let at = |needle: &[u8]| {
-            bytes
-                .windows(needle.len())
-                .position(|x| x == needle)
-                .unwrap()
-        };
-        assert_eq!(world.record_offset as usize, at(&wrld));
+        assert_eq!(world.record_offset, find_in(&bytes, &wrld));
         let table = world.built.as_ref().unwrap();
         let index = esm::cell_offsets::grid_index((-2, -2, 1, 1), 0, 0).unwrap();
-        assert_eq!(table[index] as usize, at(&cell) - at(&wrld));
+        assert_eq!(
+            table[index],
+            find_in(&bytes, &cell) - find_in(&bytes, &wrld)
+        );
+    }
+
+    // ---- `Load` through its exe address, with the translation ----------------------------
+
+    /// `TESFile::GetRecordType` (`00472660`) and the chunk functions `Load` reads its record
+    /// with: the current chunk's tag (`004726b0`), the step to the next (`004726f0`), its size
+    /// (`00401660`), its data (`00472890`), whether the file is byte-swapped (`00401680`).
+    const FILE_RECORD_TYPE: u32 = 0x0047_2660;
+    const FILE_NEXT_CHUNK: u32 = 0x0047_26b0;
+    const FILE_ADVANCE_CHUNK: u32 = 0x0047_26f0;
+    const FILE_CHUNK_SIZE: u32 = 0x0040_1660;
+    const FILE_READ_CHUNK: u32 = 0x0047_2890;
+    const FILE_NEEDS_SWAP: u32 = 0x0040_1680;
+    /// `TESForm::Load` and the form's state setter (`00485110`, `00484ab0`).
+    const FORM_LOAD: u32 = 0x0048_5110;
+    const FORM_SET_STATE: u32 = 0x0048_4ab0;
+
+    /// A record's chunks as `TESFile`'s chunk functions serve them, and the one they are on.
+    #[derive(Default)]
+    struct Chunks {
+        list: Vec<([u8; 4], Vec<u8>)>,
+        at: usize,
+    }
+
+    /// An engine for `Load` with the doubles of [`world`] (the file a master when `master`, the
+    /// row installed when `fix`), but an `OFFSET_DATA` for each world space (`CreateOffsetData`
+    /// makes one with the defaults, the map finds it or gives 0), the record's chunks from
+    /// [`Chunks`], and `Load`'s other callees doing nothing. `TESFile::m_fileoffset` (+0x264) is
+    /// set for each record loaded; the translation's own `FindForm` and `SetOffset` are counted.
+    struct Loader {
+        e: Box<Engine>,
+        file: Ptr,
+        chunks: Rc<RefCell<Chunks>>,
+        made: Rc<RefCell<HashMap<u32, u32>>>,
+    }
+
+    fn loader(master: bool, fix: bool) -> Loader {
+        let World { mut e, file, .. } = world(master, fix);
+        let made: Rc<RefCell<HashMap<u32, u32>>> = Rc::default();
+        let m = made.clone();
+        e.register_double(OFFSET_DATA_OF_FILE, move |_, a| {
+            m.borrow().get(&a[0]).copied().unwrap_or(0).into_ret()
+        });
+        let m = made.clone();
+        e.register_double(CREATE_OFFSET_DATA, move |e, a| {
+            let mut m = m.borrow_mut();
+            let data = *m.entry(a[0]).or_insert_with(|| {
+                let data = e.mem.alloc(0x18);
+                for (i, bits) in [f32::MAX, f32::MAX, -f32::MAX, -f32::MAX]
+                    .iter()
+                    .enumerate()
+                {
+                    e.mem.set_u32(data + 4 + 4 * i as u32, bits.to_bits());
+                }
+                data
+            });
+            data.into_ret()
+        });
+        let chunks: Rc<RefCell<Chunks>> = Rc::default();
+        let c = chunks.clone();
+        e.register_double(FILE_NEXT_CHUNK, move |_, _| {
+            let c = c.borrow();
+            c.list
+                .get(c.at)
+                .map_or(0, |(tag, _)| u32::from_le_bytes(*tag))
+                .into_ret()
+        });
+        let c = chunks.clone();
+        e.register_double(FILE_ADVANCE_CHUNK, move |_, _| {
+            let mut c = c.borrow_mut();
+            c.at += 1;
+            (c.at < c.list.len()).into_ret()
+        });
+        let c = chunks.clone();
+        e.register_double(FILE_CHUNK_SIZE, move |_, _| {
+            let c = c.borrow();
+            (c.list[c.at].1.len() as u32).into_ret()
+        });
+        let c = chunks.clone();
+        e.register_double(FILE_READ_CHUNK, move |e, a| {
+            let c = c.borrow();
+            let data = &c.list[c.at].1;
+            // A size of 0: the whole chunk.
+            let n = if a[2] == 0 {
+                data.len()
+            } else {
+                (a[2] as usize).min(data.len())
+            };
+            e.mem.write(a[1], &data[..n]);
+            (n as u32).into_ret()
+        });
+        e.register(FILE_NEEDS_SWAP, |_, _| false.into_ret());
+        e.register(FILE_RECORD_TYPE, |_, _| 0x41u32.into_ret());
+        e.register(FORM_LOAD, |_, _| Ret::default());
+        e.register(FORM_SET_STATE, |_, _| Ret::default());
+        Loader {
+            e,
+            file,
+            chunks,
+            made,
+        }
+    }
+
+    impl Loader {
+        /// A world space object whose cell map holds a cell (so `Load` keeps the map).
+        fn world_space(&mut self) -> Ptr<TESWorldSpace> {
+            let world: Ptr<TESWorldSpace> = self.e.new_object();
+            let map = self.e.mem.alloc(0x10);
+            self.e.mem.set_u32(map + 0xc, 1);
+            self.e.set(world, TESWorldSpace::pCellMap, Ptr::new(map));
+            world
+        }
+
+        /// `Load` called at its exe address, as the game calls it, on the record at `offset`
+        /// (the file's `m_fileoffset`) with its `chunks`, into `world`.
+        fn load(&mut self, world: Ptr<TESWorldSpace>, offset: u32, chunks: &[Chunk]) -> bool {
+            self.e.mem.set_u32(self.file.addr() + FILE_OFFSET, offset);
+            *self.chunks.borrow_mut() = Chunks {
+                list: chunks.to_vec(),
+                at: 0,
+            };
+            self.e.call(LOAD, &args![world, self.file]).bool()
+        }
+
+        /// `world`'s `OFFSET_DATA` for the file (null: none).
+        fn data(&self, world: Ptr<TESWorldSpace>) -> Ptr<OffsetData> {
+            Ptr::new(self.made.borrow().get(&world.addr()).copied().unwrap_or(0))
+        }
+
+        /// The position, the corners' bits and the first `len` table entries of `world`'s
+        /// `OFFSET_DATA` (no entries without a table).
+        fn offsets(&self, world: Ptr<TESWorldSpace>, len: u32) -> (u32, Vec<u32>, Vec<u32>) {
+            let data = self.data(world);
+            assert!(!data.is_null(), "an OFFSET_DATA");
+            let corners = (0..4)
+                .map(|i| self.e.mem.u32(data.addr() + 4 + 4 * i))
+                .collect();
+            let table = self.e.get(data, OffsetData::pCellFileOffsets);
+            let entries = if table.is_null() {
+                Vec::new()
+            } else {
+                (0..len)
+                    .map(|i| self.e.mem.u32(table.addr() + 4 * i))
+                    .collect()
+            };
+            (self.e.get(data, OffsetData::iFileOffset), corners, entries)
+        }
+
+        fn find(&mut self, world: Ptr<TESWorldSpace>, x: i32, y: i32) -> bool {
+            self.e
+                .call(FIND_CELL_IN_FILE, &args![world, self.file, x, y])
+                .bool()
+        }
+    }
+
+    type Chunk = ([u8; 4], Vec<u8>);
+
+    /// The second world space's corners: the cells (0, 0) to (3, 3).
+    fn second_corners() -> ([u32; 2], [u32; 2]) {
+        let at = |c: f32| (c * 4096.0).to_bits();
+        ([at(0.0), at(0.0)], [at(3.0), at(3.0)])
+    }
+
+    /// A file (a master when `master`) with two world space records over different grids, each
+    /// followed by its cells: 0x50 over [`MIN`] to [`MAX`] with cells at (0, 0) and (-2, 1),
+    /// 0x51 over [`second_corners`] with a cell at (1, 1) and `own` as its `OFST` when given.
+    struct TwoWorlds {
+        bytes: Vec<u8>,
+        records: [Vec<u8>; 2],
+        cells: [Vec<u8>; 3],
+        chunks: [Vec<Chunk>; 2],
+    }
+
+    impl TwoWorlds {
+        fn new(master: bool, own: Option<&[u8]>) -> TwoWorlds {
+            let (second_min, second_max) = second_corners();
+            let mut chunks = [
+                vec![(*b"NAM0", corners(MIN)), (*b"NAM9", corners(MAX))],
+                vec![
+                    (*b"NAM0", corners(second_min)),
+                    (*b"NAM9", corners(second_max)),
+                ],
+            ];
+            if let Some(own) = own {
+                chunks[1].push((*b"OFST", own.to_vec()));
+            }
+            let records = [0, 1].map(|i| {
+                let data: Vec<u8> = chunks[i]
+                    .iter()
+                    .flat_map(|(tag, data)| sub(tag, data))
+                    .collect();
+                record(b"WRLD", 0, 0x50 + i as u32, &data)
+            });
+            let cells = [
+                cell_at(0x60, 0, 0),
+                cell_at(0x61, -2, 1),
+                cell_at(0x62, 1, 1),
+            ];
+            let content = [
+                records[0].clone(),
+                group(0x50, 1, &[cells[0].clone(), cells[1].clone()].concat()),
+                records[1].clone(),
+                group(0x51, 1, &cells[2]),
+            ]
+            .concat();
+            let bytes = [
+                record(b"TES4", u32::from(master), 0, &sub(b"HEDR", &[0; 12])),
+                group(u32::from_le_bytes(*b"WRLD"), 0, &content),
+            ]
+            .concat();
+            TwoWorlds {
+                bytes,
+                records,
+                cells,
+                chunks,
+            }
+        }
+
+        fn record(&self, i: usize) -> u32 {
+            find_in(&self.bytes, &self.records[i])
+        }
+
+        fn cell(&self, i: usize) -> u32 {
+            find_in(&self.bytes, &self.cells[i])
+        }
+
+        /// The first world space's table: its two cells, from its record.
+        fn first_table(&self) -> Vec<u32> {
+            let mut table = vec![0; 16];
+            let slot = |x, y| esm::cell_offsets::grid_index((-2, -2, 1, 1), x, y).unwrap();
+            table[slot(0, 0)] = self.cell(0) - self.record(0);
+            table[slot(-2, 1)] = self.cell(1) - self.record(0);
+            table
+        }
+
+        /// The second's: its one cell.
+        fn second_table(&self) -> Vec<u32> {
+            let mut table = vec![0; 16];
+            let slot = esm::cell_offsets::grid_index((0, 0, 3, 3), 1, 1).unwrap();
+            table[slot] = self.cell(2) - self.record(1);
+            table
+        }
+    }
+
+    #[test]
+    fn load_gives_each_world_space_of_a_plugin_the_table_of_the_record_it_reads() {
+        // The second record carries an `OFST`, which the translation reads for a plugin too but
+        // never uses: the row's table replaces it.
+        let stale: Vec<u8> = (0..16u32)
+            .flat_map(|i| (0x2000 + i).to_le_bytes())
+            .collect();
+        let two = TwoWorlds::new(false, Some(&stale));
+        let mut l = loader(false, true);
+        let dir = plugin_file(&mut l.e, l.file, "load-plugin", "Two.esp", &two.bytes);
+        let (first, second) = (l.world_space(), l.world_space());
+        // The second record first: each world space gets the table of the record the file is on.
+        assert!(l.load(second, two.record(1), &two.chunks[1]));
+        assert_ne!(l.e.mem.u32(FREED), 0, "the stale table freed");
+        assert!(l.load(first, two.record(0), &two.chunks[0]));
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let (second_min, second_max) = second_corners();
+        assert_eq!(
+            l.offsets(first, 16),
+            (
+                two.record(0),
+                vec![MIN[0], MIN[1], MAX[0], MAX[1]],
+                two.first_table()
+            )
+        );
+        assert_eq!(
+            l.offsets(second, 16),
+            (
+                two.record(1),
+                vec![second_min[0], second_min[1], second_max[0], second_max[1]],
+                two.second_table()
+            )
+        );
+        // Each cell found by its world space's table; the file never searched.
+        assert!(l.find(first, -2, 1));
+        assert_eq!(l.e.mem.u32(SET_OFFSET), two.cell(1));
+        assert!(l.find(second, 1, 1));
+        assert_eq!(l.e.mem.u32(SET_OFFSET), two.cell(2));
+        assert!(!l.find(first, 1, 1));
+        assert_eq!(l.e.mem.u32(SET_OFFSET_COUNT), 2);
+        assert_eq!(l.e.mem.u32(SEARCHES), 0);
+
+        // Vanilla: the same load gives a plugin no offset data, and its cells are searched for.
+        let mut l = loader(false, false);
+        let first = l.world_space();
+        assert!(l.load(first, two.record(0), &two.chunks[0]));
+        assert!(l.data(first).is_null());
+        assert!(!l.find(first, 0, 0));
+        assert_eq!(l.e.mem.u32(SEARCHES), 1);
+    }
+
+    #[test]
+    fn load_gives_a_masters_record_without_offsets_its_table_and_keeps_a_masters_own() {
+        let own: Vec<u8> = (0..16u32)
+            .flat_map(|i| (0x1000 + i).to_le_bytes())
+            .collect();
+        let two = TwoWorlds::new(true, Some(&own));
+        let mut l = loader(true, true);
+        let dir = plugin_file(&mut l.e, l.file, "load-master", "Two.esm", &two.bytes);
+        let (first, second) = (l.world_space(), l.world_space());
+        assert!(l.load(first, two.record(0), &two.chunks[0]));
+        assert!(l.load(second, two.record(1), &two.chunks[1]));
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // The first: the position and corners the translation stored, and the built table.
+        assert_eq!(
+            l.offsets(first, 16),
+            (
+                two.record(0),
+                vec![MIN[0], MIN[1], MAX[0], MAX[1]],
+                two.first_table()
+            )
+        );
+        // The second: the master's own table, as the translation read it.
+        let (position, _, table) = l.offsets(second, 16);
+        assert_eq!(position, two.record(1));
+        assert_eq!(table, (0..16).map(|i| 0x1000 + i).collect::<Vec<u32>>());
+        // The translation finds the first's cell by the table it was given.
+        assert!(l.find(first, -2, 1));
+        assert_eq!(l.e.mem.u32(SET_OFFSET), two.cell(1));
+        assert_eq!(l.e.mem.u32(SEARCHES), 0);
     }
 }

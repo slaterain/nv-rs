@@ -152,7 +152,9 @@ pub fn world_offsets<R: Read + Seek>(file: R, build_all: bool) -> io::Result<Vec
     let header = source.header(at)?;
     // The file header record's flags: bit 0, a master (`TESFile::GetMaster`, `00471c20`).
     let master = header.flags() & 1 != 0;
+    let wanted = Wanted { master, build_all };
     at += HEADER_LEN + u64::from(header.size);
+    let mut groups = Vec::new();
     while at + HEADER_LEN <= source.len {
         let header = source.header(at)?;
         if header.tag != GRUP {
@@ -165,11 +167,18 @@ pub fn world_offsets<R: Read + Seek>(file: R, build_all: bool) -> io::Result<Vec
             return Err(malformed("a top group runs past the file"));
         }
         if header.label == u32::from_le_bytes(WRLD) && header.form_id == 0 {
-            let wanted = Wanted { master, build_all };
-            let group = parse_group(&mut source, at + HEADER_LEN, end, wanted)?;
-            worlds.extend(group.worlds());
+            groups.push(parse_group(&mut source, at + HEADER_LEN, end, wanted)?);
         }
         at = end;
+    }
+    // A form ID with two world space records in the file, in one world space group or in two:
+    // which record the game's search starts from is not settled here, so neither gets a table.
+    let mut ids: HashMap<u32, usize> = HashMap::new();
+    for world in groups.iter().flat_map(|group| &group.worlds) {
+        *ids.entry(world.offsets.form_id).or_default() += 1;
+    }
+    for group in groups {
+        worlds.extend(group.worlds(&ids));
     }
     Ok(worlds)
 }
@@ -490,11 +499,9 @@ fn world_record(offset: u32, header: &Header, data: &[u8]) -> WorldOffsets {
 }
 
 impl Group {
-    fn worlds(mut self) -> Vec<WorldOffsets> {
-        let mut ids: HashMap<u32, usize> = HashMap::new();
-        for world in &self.worlds {
-            *ids.entry(world.offsets.form_id).or_default() += 1;
-        }
+    /// The group's world space records with their tables built (where wanted); `ids` counts the
+    /// records of each form ID in the whole file.
+    fn worlds(mut self, ids: &HashMap<u32, usize>) -> Vec<WorldOffsets> {
         let mut out = Vec::with_capacity(self.worlds.len());
         for mut world in std::mem::take(&mut self.worlds) {
             if self.wanted.table(&world.offsets) {
@@ -1019,6 +1026,212 @@ mod tests {
         assert!(worlds[0].built.as_ref().unwrap().iter().all(|&o| o == 0));
         let second = worlds[1].built.as_ref().unwrap();
         assert_eq!(second.iter().filter(|&&o| o != 0).count(), 1);
+    }
+
+    #[test]
+    fn the_keys_are_the_cell_shifted_by_five_and_by_three_x_high() {
+        // Written out, not worked out with `keys`: block (x >> 5, y >> 5), sub-block (x >> 3,
+        // y >> 3), each packed with x in the high 16 bits.
+        assert_eq!(keys(0, 0), (0, 0));
+        assert_eq!(keys(40, -70), (0x0001_fffd, 0x0005_fff7));
+        assert_eq!(keys(39, -70), (0x0001_fffd, 0x0004_fff7));
+        assert_eq!(keys(40, -73), (0x0001_fffd, 0x0005_fff6));
+        assert_eq!(keys(-1, 31), (0xffff_0000, 0xffff_0003));
+    }
+
+    /// A world space record over the cells `min` to `max` (each corner the cell's lower one).
+    fn world_over(form_id: u32, min: (i32, i32), max: (i32, i32)) -> Vec<u8> {
+        let at = |c: i32| (c * 4096) as f32;
+        let data = [
+            sub(b"NAM0", &corner(at(min.0), at(min.1))),
+            sub(b"NAM9", &corner(at(max.0), at(max.1))),
+        ]
+        .concat();
+        record(b"WRLD", 0, form_id, &data)
+    }
+
+    /// The block (1, -3): cells 32 to 63 east, -96 to -65 north. Its block key and the
+    /// sub-block keys of the cells used below, written out.
+    const FAR: ((i32, i32), (i32, i32)) = ((32, -96), (63, -65));
+    const FAR_BLOCK: u32 = 0x0001_fffd;
+    /// The sub-blocks (4, -9), (5, -9) and (5, -10).
+    const SUB_39_70: u32 = 0x0004_fff7;
+    const SUB_40_70: u32 = 0x0005_fff7;
+    const SUB_40_73: u32 = 0x0005_fff6;
+
+    fn far_slot(x: i32, y: i32) -> usize {
+        let ((min_x, min_y), (max_x, max_y)) = FAR;
+        grid_index((min_x, min_y, max_x, max_y), x, y).unwrap()
+    }
+
+    #[test]
+    fn cells_in_sub_blocks_of_one_block_away_from_the_origin_are_each_found() {
+        // Where the block key and the sub-block key differ: a walk with the keys swapped, another
+        // shift or another packing skips these groups.
+        let cells = [
+            cell(0x10, 39, -70),
+            cell(0x11, 40, -70),
+            cell(0x12, 40, -73),
+        ];
+        let content = group(
+            0x50,
+            1,
+            &[group(
+                FAR_BLOCK,
+                4,
+                &[
+                    group(SUB_39_70, 5, &[cells[0].clone(), cell_children()]),
+                    group(SUB_40_70, 5, &[cells[1].clone(), cell_children()]),
+                    group(SUB_40_73, 5, &[cells[2].clone(), cell_children()]),
+                ],
+            )],
+        );
+        let bytes = plugin(&[world_over(0x50, FAR.0, FAR.1), content]);
+        let w = &offsets(&bytes, false)[0];
+        assert_eq!(w.grid(), Some((32, -96, 63, -65)));
+        let table = w.built.as_ref().unwrap();
+        assert_eq!(table.len(), 32 * 32);
+        for c in &cells {
+            let (x, y) = position_of(c);
+            assert_eq!(
+                table[far_slot(x, y)],
+                at(&bytes, c) - w.record_offset,
+                "cell {x}, {y}"
+            );
+        }
+        assert_eq!(table.iter().filter(|&&o| o != 0).count(), 3);
+    }
+
+    #[test]
+    fn a_block_group_labelled_with_the_sub_block_key_is_entered() {
+        // The search enters a block group (type 4) whose label is the cell's block key or its
+        // sub-block key; one labelled with another sub-block's key it skips.
+        let c = cell(0x11, 40, -70);
+        for (label, found) in [(SUB_40_70, true), (SUB_39_70, false), (FAR_BLOCK, true)] {
+            let content = group(0x50, 1, &[group(label, 4, std::slice::from_ref(&c))]);
+            let bytes = plugin(&[world_over(0x50, FAR.0, FAR.1), content]);
+            let w = &offsets(&bytes, false)[0];
+            let entry = w.built.as_ref().unwrap()[far_slot(40, -70)];
+            let expected = if found {
+                at(&bytes, &c) - w.record_offset
+            } else {
+                0
+            };
+            assert_eq!(entry, expected, "block group labelled {label:#010x}");
+        }
+    }
+
+    #[test]
+    fn a_sub_block_group_is_entered_only_for_its_own_key() {
+        // A sub-block group (type 5) labelled with the cell's block key is skipped.
+        let c = cell(0x11, 40, -70);
+        for (label, found) in [(SUB_40_70, true), (FAR_BLOCK, false), (SUB_40_73, false)] {
+            let content = group(0x50, 1, &[group(label, 5, std::slice::from_ref(&c))]);
+            let bytes = plugin(&[world_over(0x50, FAR.0, FAR.1), content]);
+            let w = &offsets(&bytes, false)[0];
+            let entry = w.built.as_ref().unwrap()[far_slot(40, -70)];
+            assert_eq!(entry != 0, found, "sub-block group labelled {label:#010x}");
+        }
+    }
+
+    #[test]
+    fn group_types_other_than_the_cell_groups_end_the_search() {
+        // Cell children (6, 8, 9) are skipped and the walk goes on to the cell after them; any
+        // other group type the search meets (top, interior blocks, topic children, distant
+        // children) ends it.
+        let c = cell(0x10, 0, 0);
+        for kind in [0, 2, 3, 6, 7, 8, 9, 10] {
+            let content = group(0x50, 1, &[group(0x60, kind, &[]), c.clone()]);
+            let bytes = plugin(&[world(0x50), content]);
+            let w = &offsets(&bytes, false)[0];
+            let entry = w.built.as_ref().unwrap()[slot(0, 0)];
+            let expected = if matches!(kind, 6 | 8 | 9) {
+                at(&bytes, &c) - w.record_offset
+            } else {
+                0
+            };
+            assert_eq!(entry, expected, "group type {kind}");
+        }
+    }
+
+    #[test]
+    fn corners_spanning_no_square_or_too_many_decline() {
+        let c = || children(0x50, &[cell(0x10, 0, 0)]);
+        let built = |w: Vec<u8>| offsets(&plugin(&[w, c()]), false).remove(0).built;
+        // No square: the west corner one cell east of the east one, or the south one north of
+        // the north one (a width or height of 0), or further.
+        for (min, max) in [((1, 0), (0, 0)), ((0, 1), (0, 0)), ((2, 0), (0, 0))] {
+            assert_eq!(
+                built(world_over(0x50, min, max)),
+                Err(Decline::GridSize),
+                "{min:?} to {max:?}"
+            );
+        }
+        // One square, and 4096 by 1024 (the most): built; one row more: declined.
+        assert_eq!(built(world_over(0x50, (0, 0), (0, 0))).unwrap().len(), 1);
+        let most = built(world_over(0x50, (0, 0), (4095, 1023))).unwrap();
+        assert_eq!(most.len() as u64, MAX_CELLS);
+        assert_ne!(most[0], 0);
+        assert_eq!(
+            built(world_over(0x50, (0, 0), (4095, 1024))),
+            Err(Decline::GridSize)
+        );
+    }
+
+    #[test]
+    fn a_compressed_cell_that_does_not_inflate_declines() {
+        let mut packed = 30u32.to_le_bytes().to_vec();
+        packed.extend_from_slice(&[0x78, 0x01, 0xde, 0xad, 0xbe, 0xef]);
+        let broken = record(b"CELL", COMPRESSED, 0x10, &packed);
+        let content = group(
+            0x50,
+            1,
+            &[group(
+                block(0, 0),
+                4,
+                &[group(sub_block(0, 0), 5, &[cell(0x11, 0, 0), broken])],
+            )],
+        );
+        let bytes = plugin(&[world(0x50), content]);
+        assert_eq!(offsets(&bytes, false)[0].built, Err(Decline::Unreadable));
+    }
+
+    #[test]
+    fn a_header_only_record_in_the_world_space_group_declines() {
+        // `TOFT`: the game's reader takes the bytes after its header as the next record.
+        let content = group(
+            0x50,
+            1,
+            &[
+                cell(0x10, 0, 0),
+                record(b"TOFT", 0, 0, &[0; 8]),
+                cell(0x11, 1, 1),
+            ],
+        );
+        let bytes = plugin(&[world(0x50), content]);
+        assert_eq!(offsets(&bytes, false)[0].built, Err(Decline::Unreadable));
+    }
+
+    #[test]
+    fn two_records_of_one_world_space_in_two_world_space_groups_decline() {
+        let header = record(b"TES4", 0, 0, &sub(b"HEDR", &[0; 12]));
+        let wrld = |content: &[Vec<u8>]| group(u32::from_le_bytes(WRLD), 0, content);
+        let file = |second: u32| {
+            [
+                header.clone(),
+                wrld(&[world(0x50), children(0x50, &[cell(0x10, 0, 0)])]),
+                wrld(&[world(second), children(second, &[cell(0x11, 1, 1)])]),
+            ]
+            .concat()
+        };
+        let worlds = offsets(&file(0x50), false);
+        assert_eq!(worlds.len(), 2);
+        assert!(worlds
+            .iter()
+            .all(|w| w.built == Err(Decline::DuplicateRecord)));
+        // Two world spaces, one in each group: both built.
+        let worlds = offsets(&file(0x51), false);
+        assert!(worlds.iter().all(|w| w.built.is_ok()));
     }
 
     #[test]
