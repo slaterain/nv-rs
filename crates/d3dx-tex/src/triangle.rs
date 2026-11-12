@@ -128,6 +128,32 @@ pub(crate) fn triangle<P: Fpu>(
     dh: u32,
     wrap: bool,
 ) -> Vec<u8> {
+    let pixels = dw as usize * dh as usize;
+    let want = if pixels < 2 * PIXELS_PER_THREAD {
+        0
+    } else {
+        pixels / PIXELS_PER_THREAD - 1
+    };
+    let helpers = filter::Helpers::take(want);
+    let out = resample::<P>(src_format, w, h, bytes, dst_format, dw, dh, wrap, helpers.0);
+    drop(helpers);
+    out
+}
+
+/// [`triangle`] in `helpers + 1` bands, `helpers` of them on threads of their own (none: the
+/// whole level in one band, on this thread).
+#[allow(clippy::too_many_arguments)]
+fn resample<P: Fpu>(
+    src_format: u32,
+    w: u32,
+    h: u32,
+    bytes: &[u8],
+    dst_format: u32,
+    dw: u32,
+    dh: u32,
+    wrap: bool,
+    helpers: usize,
+) -> Vec<u8> {
     let (w, h, dw, dh) = (w as usize, h as usize, dw as usize, dh as usize);
     let wx = weights::<P>(w, dw, wrap);
     let wy = weights::<P>(h, dh, wrap);
@@ -151,17 +177,10 @@ pub(crate) fn triangle<P: Fpu>(
             chunk,
         );
     };
-    let pixels = dw * dh;
-    let want = if pixels < 2 * PIXELS_PER_THREAD {
-        0
-    } else {
-        pixels / PIXELS_PER_THREAD - 1
-    };
-    let helpers = filter::Helpers::take(want);
-    if helpers.0 == 0 {
+    if helpers == 0 {
         work(0, &mut out);
     } else {
-        let per = dh.div_ceil(unit).div_ceil(helpers.0 + 1);
+        let per = dh.div_ceil(unit).div_ceil(helpers + 1);
         std::thread::scope(|s| {
             let mut chunks = out.chunks_mut(per * unit_bytes).enumerate();
             let own = chunks.next();
@@ -174,7 +193,6 @@ pub(crate) fn triangle<P: Fpu>(
             }
         });
     }
-    drop(helpers);
     out
 }
 
@@ -371,6 +389,46 @@ mod tests {
                     }
                 }
                 assert!(reached.iter().all(|&r| r), "{src}->{dst} {wrap}");
+            }
+        }
+    }
+
+    /// Deterministic bytes (xorshift) for a `w` x `h` level of `f`.
+    fn level_bytes(f: u32, w: u32, h: u32, mut s: u64) -> Vec<u8> {
+        (0..format::level_size(f, w, h))
+            .map(|_| {
+                s ^= s << 13;
+                s ^= s >> 7;
+                s ^= s << 17;
+                (s >> 24) as u8
+            })
+            .collect()
+    }
+
+    /// The bands: a level split between helpers gives the bytes the whole level gives on one
+    /// thread. Odd source sizes (a DXT source's last block row partly used), bands of unequal
+    /// height (three for 32 block rows or 128 rows), A8R8G8B8 and DXT5, a texture's wrapped edges
+    /// and a cube face's mirrored ones, at both precisions. The helpers are given, not taken from
+    /// the budget, so the level is split whatever its size.
+    #[test]
+    fn bands_give_the_bytes_of_one_thread() {
+        use crate::num::P53;
+        for (w, h, wrap) in [(121u32, 67u32, true), (67, 121, true), (75, 75, false)] {
+            for f in [format::A8R8G8B8, format::DXT5] {
+                let bytes = level_bytes(f, w, h, u64::from(w * 1000 + h) | 1);
+                let run = |helpers: usize, double: bool| {
+                    if double {
+                        resample::<P53>(f, w, h, &bytes, f, 128, 128, wrap, helpers)
+                    } else {
+                        resample::<P24>(f, w, h, &bytes, f, 128, 128, wrap, helpers)
+                    }
+                };
+                for double in [false, true] {
+                    assert!(
+                        run(0, double) == run(2, double),
+                        "{w}x{h} {f:#x}, double {double}"
+                    );
+                }
             }
         }
     }
