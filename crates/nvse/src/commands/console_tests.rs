@@ -316,7 +316,7 @@ fn print_shows_the_string_representation() {
             "[]",
         ]
     );
-    let long: String = (0..1200)
+    let long: String = (0..1010)
         .map(|i| char::from(b'a' + (i % 26) as u8))
         .collect();
     run(&mut e, 0x1541, &[text(&long)]);

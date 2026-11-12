@@ -254,6 +254,13 @@ fn the_setters_set_the_traits_tile() {
         0,
         &[s("HUDMainMenu/a/string"), s("%g pts"), z(5.0)],
     );
+    // A format with more specifiers than arguments sets nothing.
+    call(
+        &mut e,
+        0x14e2,
+        0,
+        &[s("HUDMainMenu/a/string"), s("%g and %g"), z(5.0)],
+    );
     call(&mut e, 0x14a5, 0, &[s("HUDMainMenu/a/width"), z(4.0)]);
     assert_eq!(
         set(),
