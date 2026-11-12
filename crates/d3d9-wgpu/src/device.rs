@@ -2184,7 +2184,7 @@ impl Device {
     fn current_targets(&mut self) -> Targets {
         Targets {
             colours: std::array::from_fn(|i| self.st.rt[i].as_ref().map(|s| s.id)),
-            depth: self.usable_depth().map(|s| s.id),
+            depth: self.usable_depth_with(|s| s.id),
             counting: self.counting.is_some(),
         }
     }
@@ -2194,8 +2194,8 @@ impl Device {
         match self.st.rt.iter().flatten().next() {
             Some(s) => (s.width, s.height, s.samples),
             None => self
-                .usable_depth()
-                .map_or((1, 1, 1), |d| (d.width, d.height, d.samples)),
+                .usable_depth_with(|d| (d.width, d.height, d.samples))
+                .unwrap_or((1, 1, 1)),
         }
     }
 
@@ -2443,35 +2443,34 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// target's size kept for that pair, whose contents are its own (the game clears it). None
     /// when the sample counts differ (Direct3D 9 refuses to draw so).
     fn usable_depth(&mut self) -> Option<Arc<Surf>> {
-        let ds = self.st.ds.clone()?;
-        let Some(rt) = self.st.rt.iter().flatten().next().cloned() else {
-            return Some(ds);
+        self.usable_depth_with(Arc::clone)
+    }
+
+    /// `f` of [`Device::usable_depth`]'s surface, read in place: each draw asks two or three
+    /// times, and no reference to a surface is taken and dropped for it.
+    fn usable_depth_with<R>(&mut self, f: impl FnOnce(&Arc<Surf>) -> R) -> Option<R> {
+        let ds = self.st.ds.as_ref()?;
+        let Some(rt) = self.st.rt.iter().flatten().next() else {
+            return Some(f(ds));
         };
         if rt.samples != ds.samples {
             return None;
         }
         if rt.width == ds.width && rt.height == ds.height {
-            return Some(ds);
+            return Some(f(ds));
         }
         if rt.width > ds.width || rt.height > ds.height {
             return None;
         }
         let key = (ds.id, rt.width, rt.height);
         if let Some(s) = self.depth_parts.get(&key) {
-            return Some(s.clone());
+            return Some(f(s));
         }
-        let tex = self.new_texture(
-            rt.width,
-            rt.height,
-            1,
-            ds.format.d3d,
-            false,
-            false,
-            ds.samples,
-        )?;
+        let (format, samples) = (ds.format.d3d, ds.samples);
+        let tex = self.new_texture(key.1, key.2, 1, format, false, false, samples)?;
         let s = self.level_surface(&tex, 0, 0);
         self.depth_parts.insert(key, s.clone());
-        Some(s)
+        Some(f(&s))
     }
 
     /// Opens a render pass on the current targets (loading what they hold), or clears them as it
@@ -2912,11 +2911,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         key: &[(u32, u8, u64, Option<SamplerKey>)],
         samplers: &[((u32, u8, bool), usize)],
         copies: &[Option<Arc<Tex>>; 20],
-        layout: &wgpu::BindGroupLayout,
-    ) -> wgpu::BindGroup {
-        if let (last, Some(g)) = &self.last_groups[k] {
+    ) {
+        if let (last, Some(_)) = &self.last_groups[k] {
             if last.as_slice() == key {
-                return g.clone();
+                return;
             }
         }
         let group = if key.is_empty() {
@@ -2925,53 +2923,52 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 self.empty_groups[k] =
                     Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: None,
-                        layout,
+                        layout: draw_layout(&self.last_pipeline, k),
                         entries: &[],
                     }));
             }
             self.empty_groups[k].clone().expect("made above")
+        } else if let Some(g) = self.groups.get(key) {
+            g.clone()
         } else {
-            if !self.groups.contains_key(key) {
-                if self.groups.len() > 8192 {
-                    self.groups.clear();
-                }
-                let mut views = Vec::new();
-                let mut samps = Vec::new();
-                for &((binding, dim, filterable), slot) in samplers {
-                    let view = match copies[slot].as_ref().or(self.st.textures[slot].as_ref()) {
-                        Some(t) if (dim == 1) == t.cube => t.view.clone(),
-                        _ => self.dummy[dim as usize].clone(),
-                    };
-                    let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
-                    views.push((binding % 32, view));
-                    samps.push((binding % 32 + 1, self.sampler(sk)));
-                }
-                let mut entries = Vec::new();
-                for (b, v) in &views {
-                    entries.push(wgpu::BindGroupEntry {
-                        binding: *b,
-                        resource: wgpu::BindingResource::TextureView(v),
-                    });
-                }
-                for (b, s) in &samps {
-                    entries.push(wgpu::BindGroupEntry {
-                        binding: *b,
-                        resource: wgpu::BindingResource::Sampler(s),
-                    });
-                }
-                let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
-                    layout,
-                    entries: &entries,
-                });
-                self.groups.insert(key.to_vec(), group);
+            if self.groups.len() > 8192 {
+                self.groups.clear();
             }
-            self.groups[key].clone()
+            let mut views = Vec::new();
+            let mut samps = Vec::new();
+            for &((binding, dim, filterable), slot) in samplers {
+                let view = match copies[slot].as_ref().or(self.st.textures[slot].as_ref()) {
+                    Some(t) if (dim == 1) == t.cube => t.view.clone(),
+                    _ => self.dummy[dim as usize].clone(),
+                };
+                let sk = SamplerKey::new(&self.st.samplers[slot], filterable);
+                views.push((binding % 32, view));
+                samps.push((binding % 32 + 1, self.sampler(sk)));
+            }
+            let mut entries = Vec::new();
+            for (b, v) in &views {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: *b,
+                    resource: wgpu::BindingResource::TextureView(v),
+                });
+            }
+            for (b, s) in &samps {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: *b,
+                    resource: wgpu::BindingResource::Sampler(s),
+                });
+            }
+            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: draw_layout(&self.last_pipeline, k),
+                entries: &entries,
+            });
+            self.groups.insert(key.to_vec(), group.clone());
+            group
         };
         self.last_groups[k].0.clear();
         self.last_groups[k].0.extend_from_slice(key);
-        self.last_groups[k].1 = Some(group.clone());
-        group
+        self.last_groups[k].1 = Some(group);
     }
 
     /// The pipeline layout of a pair whose samplers are `key` ([`Device::sampler_bindings`]):
@@ -3320,7 +3317,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             .enumerate()
             .fold(0u32, |m, (i, &((_, _, f), _))| m | (u32::from(f) << i));
         let index32 = indexed && self.st.indices.as_ref().is_some_and(|b| b.index32);
-        let depth = self.usable_depth();
+        // The depth surface's format (wgpu's, Direct3D 9's), samples and size.
+        let depth =
+            self.usable_depth_with(|d| (d.format.wgpu, d.format.d3d, d.samples, d.width, d.height));
         let atoc = self.atoc();
         let samples = self
             .st
@@ -3329,7 +3328,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             .flatten()
             .next()
             .map(|s| s.samples)
-            .or(depth.as_ref().map(|d| d.samples))
+            .or(depth.map(|d| d.2))
             .unwrap_or(1);
         let key = PipeKey {
             vs: vs.id,
@@ -3343,7 +3342,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     .as_ref()
                     .map(|s| (s.format.wgpu, s.format.opaque))
             }),
-            depth: depth.as_ref().map(|d| d.format.wgpu),
+            depth: depth.map(|d| d.0),
             states: PIPELINE_STATES.map(|s| self.st.rs[s]),
             samples,
             filterable,
@@ -3356,77 +3355,77 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // with a plane on and with none, but an adapter without them needs one for each, so each
         // state its draws have is listed ([`clip_code`]).
         let planes = self.list.is_some() && self.planes_on();
-        let made = match &self.last_pipeline {
-            Some((k, p, on)) if *k == key && *on == planes => p.clone(),
-            _ => {
-                // Listed, so the next start makes it before play ([`prepare`]): once for each
-                // plane state its draws have (a bit for each beside the pipeline). One lookup
-                // when the cache has it.
-                let bit = 1u8 << u8::from(planes);
-                let (p, unlisted) = match self.pipelines.get_mut(&key) {
-                    Some((p, m)) => {
-                        let new = *m & bit == 0;
-                        *m |= bit;
-                        (p.clone(), new)
-                    }
-                    None => {
-                        // Bounded: render states with continuous values (depth bias) could grow
-                        // it without end.
-                        if self.pipelines.len() >= 4096 {
-                            self.pipelines.clear();
-                        }
-                        let sampler_keys: Vec<(u32, u8, bool)> =
-                            samplers.iter().map(|(k, _)| *k).collect();
-                        let p = self.make_pipeline(
-                            &key,
-                            &vs,
-                            &ps,
-                            &link.inputs,
-                            attributes,
-                            topology,
-                            &sampler_keys,
-                        );
-                        self.pipelines.insert(key.clone(), (p.clone(), bit));
-                        (p, true)
-                    }
-                };
-                if unlisted && self.list.is_some() {
-                    self.list_offers += 1;
-                    let entry = prepare::Entry {
-                        vs: vs.stable,
-                        ps: ps.stable,
-                        decl: decl
-                            .elements
-                            .iter()
-                            .map(|e| (e.stream, e.offset, e.ty, e.usage, e.index))
-                            .collect(),
-                        strides,
-                        topology: kind as u8,
-                        index32,
-                        colours: std::array::from_fn(|i| {
-                            self.st.rt[i].as_ref().map(|s| s.format.d3d)
-                        }),
-                        depth: depth.as_ref().map(|d| d.format.d3d),
-                        states: key.states,
-                        samples,
-                        filterable,
-                        atoc,
-                        count: key.count,
-                        clip: clip_code(key.clip, planes),
-                    };
-                    let presents = self.presents;
-                    if let Some(l) = &mut self.list {
-                        l.add(entry, presents);
-                    }
+        if !matches!(&self.last_pipeline, Some((k, _, on)) if *k == key && *on == planes) {
+            // Listed, so the next start makes it before play ([`prepare`]): once for each
+            // plane state its draws have (a bit for each beside the pipeline). One lookup
+            // when the cache has it.
+            let bit = 1u8 << u8::from(planes);
+            let (p, unlisted) = match self.pipelines.get_mut(&key) {
+                Some((p, m)) => {
+                    let new = *m & bit == 0;
+                    *m |= bit;
+                    (p.clone(), new)
                 }
-                self.last_pipeline = Some((key, p.clone(), planes));
-                p
+                None => {
+                    // Bounded: render states with continuous values (depth bias) could grow
+                    // it without end.
+                    if self.pipelines.len() >= 4096 {
+                        self.pipelines.clear();
+                    }
+                    let sampler_keys: Vec<(u32, u8, bool)> =
+                        samplers.iter().map(|(k, _)| *k).collect();
+                    let p = self.make_pipeline(
+                        &key,
+                        &vs,
+                        &ps,
+                        &link.inputs,
+                        attributes,
+                        topology,
+                        &sampler_keys,
+                    );
+                    self.pipelines.insert(key.clone(), (p.clone(), bit));
+                    (p, true)
+                }
+            };
+            if unlisted && self.list.is_some() {
+                self.list_offers += 1;
+                let entry = prepare::Entry {
+                    vs: vs.stable,
+                    ps: ps.stable,
+                    decl: decl
+                        .elements
+                        .iter()
+                        .map(|e| (e.stream, e.offset, e.ty, e.usage, e.index))
+                        .collect(),
+                    strides,
+                    topology: kind as u8,
+                    index32,
+                    colours: std::array::from_fn(|i| self.st.rt[i].as_ref().map(|s| s.format.d3d)),
+                    depth: depth.map(|d| d.1),
+                    states: key.states,
+                    samples,
+                    filterable,
+                    atoc,
+                    count: key.count,
+                    clip: clip_code(key.clip, planes),
+                };
+                let presents = self.presents;
+                if let Some(l) = &mut self.list {
+                    l.add(entry, presents);
+                }
             }
-        };
-        let Some((pipeline, group_layouts)) = made else {
+            self.last_pipeline = Some((key, p, planes));
+        }
+        // The draw's pipeline and its group layouts are the last pipeline's from here, read in
+        // place (no reference to them taken and dropped on each draw).
+        if !self
+            .last_pipeline
+            .as_ref()
+            .is_some_and(|(_, p, _)| p.is_some())
+        {
             self.skipped += 1;
             return;
-        };
+        }
         // A texture the draw samples that is also one of its colour targets (a level or a face of
         // it): Direct3D 9 draws so, and wgpu refuses such a pass and with it the whole submit. The
         // game does it when the water displacement is set up near water: its texture-offset pass
@@ -3437,11 +3436,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // ([`Device::copy_for_sampling`]): what the target held before this draw.
         let mut copies: [Option<Arc<Tex>>; 20] = Default::default();
         for &(_, slot) in samplers {
-            if let Some(t) = self.st.textures[slot].clone() {
-                if self.is_colour_target(&t) {
-                    copies[slot] = self.copy_for_sampling(&t);
-                }
-            }
+            let t = match &self.st.textures[slot] {
+                Some(t) if self.is_colour_target(t) => t.clone(),
+                _ => continue,
+            };
+            copies[slot] = self.copy_for_sampling(&t);
         }
         // The textures and samplers: the last draw's bind group again, else the cache's.
         let mut group_key = [(0u32, 0u8, 0u64, None::<SamplerKey>); 20];
@@ -3460,22 +3459,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             .iter()
             .take_while(|((b, _, _), _)| *b >= 32)
             .count();
-        let groups = [
-            self.stage_group(
-                0,
-                &group_key[vertex..],
-                &samplers[vertex..],
-                &copies,
-                &group_layouts[0],
-            ),
-            self.stage_group(
-                1,
-                &group_key[..vertex],
-                &samplers[..vertex],
-                &copies,
-                &group_layouts[1],
-            ),
-        ];
+        self.stage_group(0, &group_key[vertex..], &samplers[vertex..], &copies);
+        self.stage_group(1, &group_key[..vertex], &samplers[..vertex], &copies);
         // Vertices from DrawPrimitiveUP go into the batch's ring.
         let up_offset = if let Some((bytes, _)) = up {
             if self.up.len() + bytes.len() > UP_RING as usize {
@@ -3496,7 +3481,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             .flatten()
             .next()
             .map(|s| (s.width, s.height))
-            .or(depth.as_ref().map(|d| (d.width, d.height)))
+            .or(depth.map(|d| (d.3, d.4)))
             .unwrap_or((1, 1));
         let vx = v.x.min(tw.saturating_sub(1));
         let vy = v.y.min(th.saturating_sub(1));
@@ -3542,7 +3527,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         return;
                     }
                     b.batch.store(self.batch, Ordering::Relaxed);
-                    streams[k] = Some((b.buffer.clone(), offset));
+                    // Bound already (most draws): nothing to set and no reference taken.
+                    if !self.binds.streams[k]
+                        .as_ref()
+                        .is_some_and(|(x, o)| *x == b.buffer && *o == offset)
+                    {
+                        streams[k] = Some((b.buffer.clone(), offset));
+                    }
                 }
                 None => {
                     self.warn("a draw with a stream the declaration uses unbound: skipped");
@@ -3563,7 +3554,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         return;
                     }
                     b.batch.store(self.batch, Ordering::Relaxed);
-                    Some((b.buffer.clone(), b.index32))
+                    // The buffer to set, None when it is bound already (most draws).
+                    let bound = self
+                        .binds
+                        .index
+                        .as_ref()
+                        .is_some_and(|(x, i)| *x == b.buffer && *i == b.index32);
+                    Some((!bound).then(|| (b.buffer.clone(), b.index32)))
                 }
                 None => {
                     self.skipped += 1;
@@ -3600,18 +3597,25 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         .map(f32::to_bits);
         let b = &mut self.binds;
         let pass = self.pass.as_mut().expect("a pass is open");
-        if b.pipeline.as_ref() != Some(&pipeline) {
-            pass.set_pipeline(&pipeline);
-            b.pipeline = Some(pipeline);
+        let pipeline = &self
+            .last_pipeline
+            .as_ref()
+            .and_then(|(_, p, _)| p.as_ref())
+            .expect("the draw's pipeline, checked above")
+            .0;
+        if b.pipeline.as_ref() != Some(pipeline) {
+            pass.set_pipeline(pipeline);
+            b.pipeline = Some(pipeline.clone());
         }
         if b.blocks != Some(blocks) {
             pass.set_bind_group(0, &self.ring_group, &[blocks.0, blocks.1]);
             b.blocks = Some(blocks);
         }
-        for (k, group) in groups.into_iter().enumerate() {
-            if b.groups[k].as_ref() != Some(&group) {
-                pass.set_bind_group(1 + k as u32, &group, &[]);
-                b.groups[k] = Some(group);
+        for (k, (_, group)) in self.last_groups.iter().enumerate() {
+            let group = group.as_ref().expect("the draw's groups, set above");
+            if b.groups[k].as_ref() != Some(group) {
+                pass.set_bind_group(1 + k as u32, group, &[]);
+                b.groups[k] = Some(group.clone());
             }
         }
         if b.viewport != Some(viewport) {
@@ -3646,8 +3650,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             b.streams[slot] = s;
         }
         match index {
-            Some(i) => {
-                if b.index.as_ref() != Some(&i) {
+            Some(new) => {
+                if let Some(i) = new {
                     pass.set_index_buffer(
                         i.0.slice(..),
                         if i.1 {
@@ -6522,6 +6526,16 @@ pub(crate) fn surface_for(
 /// A pipeline and the layouts of its two sampler groups (the pixel shader's, the vertex
 /// shader's).
 type Pipe = (wgpu::RenderPipeline, [wgpu::BindGroupLayout; 2]);
+
+/// Stage `k`'s group layout of the draw's pipeline, the last one ([`Device::draw`] makes sure of
+/// one before it asks for groups).
+fn draw_layout(last: &Option<(PipeKey, Option<Pipe>, bool)>, k: usize) -> &wgpu::BindGroupLayout {
+    &last
+        .as_ref()
+        .and_then(|(_, p, _)| p.as_ref())
+        .expect("the draw's pipeline")
+        .1[k]
+}
 
 /// A vertex module's cache key: the shader, the inputs its declaration gives, the varyings it
 /// writes (each at the centroid; [`Device::module_tasks`]), the clip code, whether at fixed
