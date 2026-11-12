@@ -32,6 +32,20 @@ const LIST_ADD: u32 = 0x005a_e3d0;
 /// counter `011d60cc` (then incremented), and adds the record to the list at `011d6124`
 /// (`005ae3d0`, given the address of a local holding `this`). Returns `this`.
 pub fn fn_0066e010(e: &mut Engine, this: Ptr, reference: u32) -> Ptr {
+    construct(e, this, reference, true)
+}
+
+/// [`fn_0066e010`] without the copy of the reference's detection list into +4
+/// (`pWitnesses`, Xbox PDB): the process is still asked for (`008d8520`), its slot +0xf4 is
+/// not called, so the cause keeps no witnesses, as one made for a reference without a process
+/// does. The fixes preset's ActorCause row (`crates/host`): lStewieAl's ActorCause Save Bloat
+/// Fix, whose jump at `0066e099` passes over that call. Nothing outside the cause's own
+/// functions reads the list, and each saved cause wrote all of it.
+pub fn fn_0066e010_without_witnesses(e: &mut Engine, this: Ptr, reference: u32) -> Ptr {
+    construct(e, this, reference, false)
+}
+
+fn construct(e: &mut Engine, this: Ptr, reference: u32, copy_witnesses: bool) -> Ptr {
     let base = this.addr();
     typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, base + 8));
     e.mem.set_u32(base, reference);
@@ -51,7 +65,7 @@ pub fn fn_0066e010(e: &mut Engine, this: Ptr, reference: u32) -> Ptr {
     } else {
         0
     };
-    if process != 0 {
+    if process != 0 && copy_witnesses {
         let stored = e.mem.u32(base);
         let answer = e.vcall(process, 0xf4, &args![stored]).u32();
         e.mem.set_u32(base + 4, answer);
@@ -134,5 +148,35 @@ mod tests {
         assert_eq!(e.mem.u32(this + 8), 0x55);
         assert_eq!(e.mem.u32(this + 4), 0);
         assert_eq!(e.mem.u32(this + 0x14), 41);
+    }
+
+    /// The ActorCause row's constructor: the same calls and words as the original's, but the
+    /// process's slot +0xf4 (the copy of its detection list) is never called and +4 stays 0.
+    #[test]
+    fn without_witnesses_the_process_is_asked_but_nothing_is_copied() {
+        let mut e = fixture();
+        let position = e.mem.alloc(0xc);
+        e.register_double(REFERENCE_POSITION, move |_, _| position.into_ret());
+        e.put_vtable(0x0150_0000, &[0; 0x3e]);
+        e.mem.set_u32(0x0150_00f4, 0x0150_1000);
+        e.register(0x0150_1000, |_, _| panic!("the detection list was copied"));
+        let process = e.mem.alloc(4);
+        e.mem.set_u32(process, 0x0150_0000);
+        e.register_double(REFERENCE_PROCESS, move |_, _| process.into_ret());
+        e.register(0x0066_e010, |e, a| {
+            fn_0066e010_without_witnesses(e, Ptr::new(a[0]), a[1])
+                .addr()
+                .into_ret()
+        });
+        let this = e.mem.alloc(0x1c);
+        e.mem.set_u32(this + 4, 7);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0066_e010, &args![this, 0x6000u32]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        assert!(log.contains(&(REFERENCE_PROCESS, vec![0x6000])));
+        assert_eq!(log.last().unwrap().0, LIST_ADD);
+        let words: Vec<u32> = (0..7).map(|i| e.mem.u32(this + 4 * i)).collect();
+        assert_eq!(words, [0x6000, 0, 0, 0, 0, 41, 0]);
+        assert_eq!(e.mem.u32(RECORD_COUNTER), 42);
     }
 }

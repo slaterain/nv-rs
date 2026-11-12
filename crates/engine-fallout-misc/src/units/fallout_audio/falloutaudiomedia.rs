@@ -347,7 +347,8 @@ pub fn fam_thread_thread_proc(e: &mut Engine, this: Ptr<FamThread>) -> u32 {
         fam_thread_wait(e, this);
         e.call(0x00c8_0130, &args![this.addr() + 0x40]);
         if e.get(this, FamThread::m_state) & 1 != 0 {
-            fallout_audio_media_thread_proc(e, Ptr::new(this.addr() + 0x34));
+            // By address, so the fixes preset's radio row applies here.
+            e.call(MEDIA_THREAD_PROC, &args![this.addr() + 0x34]);
         }
     }
     let state = e.get(this, FamThread::m_state);
@@ -655,17 +656,26 @@ pub fn fn_00830010(e: &mut Engine, object: Ptr) {
     let attenuation = fn_00830080(e, object);
     let looping = fn_00830050(e, object);
     let file_name = e.call(0x0059_1a40, &args![object]).u32();
-    fn_008300c0(
-        e,
-        6,
-        Ptr::new(file_name),
-        1000,
-        looping as u8,
-        0,
-        attenuation,
-        0,
+    // By address, so the fixes preset's radio row applies here.
+    e.call(
+        OPEN_MEDIA,
+        &args![
+            6i32,
+            file_name,
+            1000u32,
+            looping as u8,
+            0u8,
+            attenuation,
+            0u32
+        ],
     );
 }
+
+/// The media open ([`fn_008300c0`]) and `FalloutAudioMedia::ThreadProc`
+/// ([`fallout_audio_media_thread_proc`]), called by address: the fixes preset's radio row
+/// registers over both (`crates/engine-core/data/overridable.tsv`).
+const OPEN_MEDIA: u32 = 0x0083_00c0;
+const MEDIA_THREAD_PROC: u32 = 0x0083_0b30;
 
 // Translated from 00830050 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map: whether the float at +0x24 of `this` is
@@ -709,6 +719,64 @@ pub fn fn_008300c0(
     force: u8,
     attenuation: f32,
     synch_time: u32,
+) {
+    open_media(
+        e,
+        kind,
+        file_name,
+        fade_time,
+        looping,
+        force,
+        attenuation,
+        synch_time,
+        false,
+    );
+}
+
+/// [`fn_008300c0`] that also clears the opened channel's duration (`011dd320` or `011dd354`)
+/// under the lock, before its thread is woken: the fixes preset's radio row (`crates/host`),
+/// from Psycho's radio fix. The original leaves the duration the channel's last file published
+/// until the new file's thread runs (a channel is cleared only when its file's thread ends, after
+/// its fade-out), and the station asks for the new song's duration right after opening it
+/// (`008308c0`) and keeps a positive answer: opened while the channel's last song still fades
+/// out (a quick change of station), the song gets that song's length, and is cut short or
+/// followed by silence. The row's thread proc ([`fallout_audio_media_thread_proc_radio_row`])
+/// keeps the cleared word: that fading thread can no longer write its length back.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_008300c0_clearing_duration(
+    e: &mut Engine,
+    kind: i32,
+    file_name: Ptr,
+    fade_time: u32,
+    looping: u8,
+    force: u8,
+    attenuation: f32,
+    synch_time: u32,
+) {
+    open_media(
+        e,
+        kind,
+        file_name,
+        fade_time,
+        looping,
+        force,
+        attenuation,
+        synch_time,
+        true,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn open_media(
+    e: &mut Engine,
+    kind: i32,
+    file_name: Ptr,
+    fade_time: u32,
+    looping: u8,
+    force: u8,
+    attenuation: f32,
+    synch_time: u32,
+    clear_duration: bool,
 ) {
     fn_00830470(e);
     if kind == 9 {
@@ -775,6 +843,9 @@ pub fn fn_008300c0(
     e.set_global(NEXT_MEDIA_ID, id.wrapping_add(1));
     let next: u32 = e.global(NEXT_CHANNEL);
     e.set_global(THREAD_INFO_CHANNEL, next);
+    if clear_duration {
+        e.set_global(opened.duration, 0u32);
+    }
     let thread = next
         .wrapping_mul(0x4c)
         .wrapping_add(e.global::<u32>(THREADS));
@@ -1054,9 +1125,17 @@ struct ChannelView {
 
 /// Publishes the thread's volume, clock and positions to its channel and
 /// reads the channel's settings back (both channels: 0 = A, else B).
+///
+/// With `owner` (the radio row: the thread's media ID), the duration is published only while
+/// the channel's ID is still that one, as Psycho checks at the thread's four duration stores
+/// (`00830c97`, `00830d2c`, `0083135d`, `008313d7`): a thread whose channel has been opened
+/// again (it fades out and sees the new ID only at the end of its round) no longer writes its
+/// file's length over the new file's. The caller holds the media lock, as the open does.
+#[allow(clippy::too_many_arguments)]
 fn exchange_channel(
     e: &mut Engine,
     channel: u32,
+    owner: Option<u32>,
     volume: f32,
     now: u32,
     position: u32,
@@ -1067,7 +1146,13 @@ fn exchange_channel(
     e.set_global(c.volume, quiet(volume));
     e.set_global(c.last_update, now);
     e.set_global(c.current_position, position);
-    e.set_global(c.duration, duration);
+    let owned = match owner {
+        Some(id) => e.global::<u32>(c.id) == id,
+        None => true,
+    };
+    if owned {
+        e.set_global(c.duration, duration);
+    }
     e.set_global(c.sub_duration, sub_duration);
     ChannelView {
         fade_start: global_float(e, c.fade_start_volume),
@@ -1131,13 +1216,50 @@ fn failed(result: u32) -> bool {
 /// are released. Returns 0.
 pub fn fallout_audio_media_thread_proc(e: &mut Engine, info: Ptr) -> u32 {
     e.with_stack(frame::SIZE, |e, block| {
-        thread_proc_body(e, info, block.addr() + frame::SIZE)
+        thread_proc_body(e, info, block.addr() + frame::SIZE, false)
     })
 }
 
-fn thread_proc_body(e: &mut Engine, info: Ptr, ebp: u32) -> u32 {
+/// [`fallout_audio_media_thread_proc`] with the fixes preset's radio row (`crates/host`), from
+/// Psycho's radio fix: two changes.
+///
+/// The position sync (the loop at `00831790`) cannot hang. The original brings the time since
+/// the synch start into the file's length by taking the length off while it is longer: with a
+/// length of 0 (none known yet, or a failed query) that never ends and the music thread spins for
+/// good; with a clock behind the synch start the time wraps to about four billion milliseconds,
+/// taken down one length at a time before the clamp to 0. Here a length of 0 with time to bring
+/// in skips the seek, and the rest is `(time - 1) % length + 1`, the loop's own answer, in one
+/// step.
+///
+/// And the thread publishes its file's duration (at start-up and each round) only while its
+/// channel is still its file's ([`exchange_channel`]'s `owner`). In the original a thread fading
+/// out on a channel that has been opened again writes its length there once more before it sees
+/// the new ID at the end of its round, after the radio row's open ([`fn_008300c0_clearing_duration`])
+/// cleared it; a station asking in that window took the old song's length.
+pub fn fallout_audio_media_thread_proc_radio_row(e: &mut Engine, info: Ptr) -> u32 {
+    e.with_stack(frame::SIZE, |e, block| {
+        thread_proc_body(e, info, block.addr() + frame::SIZE, true)
+    })
+}
+
+/// The radio row's form of the sync loop (`00831790`: `while time > length: time -= length`):
+/// the same answer, `(time - 1) % length + 1`, in one step. False, with `time` as it was, when
+/// the length is 0 and there is time to bring into it, where the loop never ends.
+fn bring_into_length(time: &mut u32, length: u32) -> bool {
+    if *time > length {
+        if length == 0 {
+            return false;
+        }
+        *time = (*time - 1) % length + 1;
+    }
+    true
+}
+
+fn thread_proc_body(e: &mut Engine, info: Ptr, ebp: u32, radio_row: bool) -> u32 {
     let channel = e.mem.u32(info.addr() + 4);
     let id = e.mem.u32(info.addr());
+    // With the radio row, the duration goes to the channel only while it is this ID's.
+    let owner = radio_row.then_some(id);
     let mut playing = true;
     let mut volume = 0.0f32;
     let mut position = 0u32;
@@ -1156,7 +1278,7 @@ fn thread_proc_body(e: &mut Engine, info: Ptr, ebp: u32) -> u32 {
         playing = false;
     }
     let mut now = audio_clock(e);
-    exchange_channel(e, channel, volume, now, position, duration, 0);
+    exchange_channel(e, channel, owner, volume, now, position, duration, 0);
     let source = if channel == 0 {
         CHANNEL_A.file_name
     } else {
@@ -1279,7 +1401,16 @@ fn thread_proc_body(e: &mut Engine, info: Ptr, ebp: u32) -> u32 {
         now = audio_clock(e);
         position = position_ms(e, ebp, 0x24);
         duration = position_ms(e, ebp, 0x1c);
-        let view = exchange_channel(e, channel, volume, now, position, duration, sub_duration);
+        let view = exchange_channel(
+            e,
+            channel,
+            owner,
+            volume,
+            now,
+            position,
+            duration,
+            sub_duration,
+        );
         fn_00830490(e);
 
         let target = if view.flags & 8 != 0 {
@@ -1339,22 +1470,31 @@ fn thread_proc_body(e: &mut Engine, info: Ptr, ebp: u32) -> u32 {
             let current = position_ms(e, ebp, 0x24);
             let clock = audio_clock(e);
             let mut expected = clock.wrapping_sub(view.synch_start);
-            while expected > duration {
-                expected -= duration;
-            }
-            if clock < view.synch_start {
-                expected = 0;
-                e.call(LOG, &args![0x0107_ccc0u32, clock, view.synch_start]);
-            }
-            let difference = current.abs_diff(expected);
-            if difference > tolerance && ((difference as i32) < 80000 || current == 0) {
-                e.call(LOG, &args![0x0107_cc8cu32, difference, expected, current]);
-                expected = expected.wrapping_add(50);
-                let graph = e.mem.u32(ebp - frame::GRAPH);
-                let position_object = e.mem.u32(ebp - frame::POSITION);
-                if graph != 0 && position_object != 0 {
-                    let seconds = expected as f64 / thousand;
-                    e.vcall(position_object, 0x20, &args![seconds]);
+            // With the radio row, no length to bring the time into means no seek: playback goes
+            // on where it is.
+            let seek = if radio_row {
+                bring_into_length(&mut expected, duration)
+            } else {
+                while expected > duration {
+                    expected -= duration;
+                }
+                true
+            };
+            if seek {
+                if clock < view.synch_start {
+                    expected = 0;
+                    e.call(LOG, &args![0x0107_ccc0u32, clock, view.synch_start]);
+                }
+                let difference = current.abs_diff(expected);
+                if difference > tolerance && ((difference as i32) < 80000 || current == 0) {
+                    e.call(LOG, &args![0x0107_cc8cu32, difference, expected, current]);
+                    expected = expected.wrapping_add(50);
+                    let graph = e.mem.u32(ebp - frame::GRAPH);
+                    let position_object = e.mem.u32(ebp - frame::POSITION);
+                    if graph != 0 && position_object != 0 {
+                        let seconds = expected as f64 / thousand;
+                        e.vcall(position_object, 0x20, &args![seconds]);
+                    }
                 }
             }
         }
@@ -2346,6 +2486,12 @@ mod tests {
             }
             ret(0)
         });
+        one_event(e);
+    }
+
+    /// The events interface's `GetEvent` (slot 0x20): one event (code 1, the end of a file that
+    /// does not loop), then nothing more; a thread playing through it ends after one round.
+    fn one_event(e: &mut Engine) {
         let mut events = 0;
         e.register_double(COM_SLOT + 0x20, move |e, a| {
             if a[0] != EVENTS {
@@ -2365,6 +2511,228 @@ mod tests {
 
     #[test]
     fn thread_proc_plays_fades_synchs_and_stops_at_the_end() {
+        let (mut e, info) = play_engine();
+
+        assert_eq!(e.call(0x0083_0b30, &args![info]).u32(), 0);
+        play_checks(&e);
+    }
+
+    /// The radio row's thread proc plays the same file the same way: the same calls in the same
+    /// order (its sync takes the same answer from the one-step form here, where the time since
+    /// the synch start is within the length).
+    #[test]
+    fn the_bounded_sync_plays_as_the_original_within_the_length() {
+        let (mut e, info) = play_engine();
+        e.register(0x0083_0b30, |e, a| {
+            fallout_audio_media_thread_proc_radio_row(e, Ptr::new(a[0])).into_ret()
+        });
+        let original = {
+            let (mut e, info) = play_engine();
+            assert_eq!(e.call(0x0083_0b30, &args![info]).u32(), 0);
+            e.call_log.take().unwrap()
+        };
+        assert_eq!(e.call(0x0083_0b30, &args![info]).u32(), 0);
+        play_checks(&e);
+        assert_eq!(e.call_log.take().unwrap()[1..], original[1..]);
+    }
+
+    /// With no length (the position object answers 0 s), the original's sync never ends; the
+    /// radio row's thread proc skips the seek and plays on.
+    #[test]
+    fn the_bounded_sync_skips_the_seek_without_a_length() {
+        let (mut e, info) = play_engine();
+        e.register(0x0083_0b30, |e, a| {
+            fallout_audio_media_thread_proc_radio_row(e, Ptr::new(a[0])).into_ret()
+        });
+        e.register(COM_SLOT + 0x1c, |e, a| {
+            if a[0] == POSITION {
+                e.mem.set_f64(a[1], 0.0);
+            }
+            ret(0)
+        });
+        assert_eq!(e.call(0x0083_0b30, &args![info]).u32(), 0);
+        assert!(calls_to(&e, LOG).is_empty(), "no sync line");
+        assert!(calls_to(&e, COM_SLOT + 0x20)
+            .iter()
+            .all(|a| a[0] != POSITION));
+        assert!(calls_to(&e, COM_SLOT + 0x1c).contains(&vec![CONTROL]));
+        assert_eq!(e.global::<u32>(CHANNEL_A.id), 0);
+    }
+
+    /// The one-step form gives the loop's answer: a time above the length comes down to
+    /// (0, length], one at or below it stays; a length of 0 with time above it is refused.
+    #[test]
+    fn bring_into_length_is_the_loops_answer() {
+        let looped = |mut time: u32, length: u32| {
+            while time > length {
+                time -= length;
+            }
+            time
+        };
+        for length in [1u32, 2, 3, 7, 1000, 180_000, 0x7fff_ffff] {
+            for time in [
+                0u32, 1, 2, 3, 6, 7, 8, 999, 1000, 1001, 2000, 2001, 359_999, 360_001,
+            ] {
+                let mut brought = time;
+                assert!(bring_into_length(&mut brought, length));
+                assert_eq!(brought, looped(time, length), "{time} into {length}");
+            }
+        }
+        // A clock behind the synch start: the wrapped time, in one step.
+        let mut brought = 0u32.wrapping_sub(5);
+        assert!(bring_into_length(&mut brought, 180_000));
+        assert_eq!(brought, (u32::MAX - 5) % 180_000 + 1);
+        let mut brought = 5;
+        assert!(!bring_into_length(&mut brought, 0));
+        assert_eq!(brought, 5);
+        let mut brought = 0;
+        assert!(bring_into_length(&mut brought, 0));
+    }
+
+    /// The radio row's open clears the opened channel's duration before its thread is woken;
+    /// the original leaves the last file's.
+    #[test]
+    fn the_radio_open_clears_the_duration_before_waking_the_thread() {
+        for clear in [false, true] {
+            let mut e = setup();
+            open_doubles(&mut e, true);
+            if clear {
+                e.register(0x0083_00c0, |e, a| {
+                    fn_008300c0_clearing_duration(
+                        e,
+                        a[0] as i32,
+                        Ptr::new(a[1]),
+                        a[2],
+                        a[3] as u8,
+                        a[4] as u8,
+                        f32::from_bits(a[5]),
+                        a[6],
+                    );
+                    Ret::default()
+                });
+            }
+            let name = e.mem.alloc(16);
+            e.mem.set_cstr(name, b"m.mp3");
+            e.set_global(THREADS, 0x8000u32);
+            e.set_global(CHANNEL_A.duration, 180_000u32);
+            e.set_global(CHANNEL_B.duration, 200_000u32);
+            let seen = std::rc::Rc::new(std::cell::Cell::new(u32::MAX));
+            let at_wake = seen.clone();
+            e.register_double(FAM_THREAD_START, move |e, _| {
+                at_wake.set(e.global::<u32>(CHANNEL_A.duration));
+                Ret::default()
+            });
+            open(&mut e, 7, name, 0, 0);
+            let expected = if clear { 0 } else { 180_000 };
+            assert_eq!(seen.get(), expected, "clear: {clear}");
+            assert_eq!(e.global::<u32>(CHANNEL_A.duration), expected);
+            // The other channel, fading out, keeps its own.
+            assert_eq!(e.global::<u32>(CHANNEL_B.duration), 200_000);
+        }
+    }
+
+    /// The race the clear alone leaves: song X plays on channel A (its thread's ID 5, a 10 s
+    /// file); within its fade-out the station opens song Z on A (a second quick change of
+    /// station), and X's thread runs one more round before it sees, at the round's end, that A
+    /// is no longer its own. With the row's open but the original's thread proc that round
+    /// writes X's length over the cleared word, and a station asking for Z's length then gets
+    /// X's. With the row's thread proc the round leaves it: the station gets 0 (and asks again)
+    /// until Z's own thread publishes Z's length (20 s).
+    #[test]
+    fn a_fading_thread_no_longer_writes_its_length_over_the_next_song() {
+        for guarded in [false, true] {
+            let (mut e, info) = play_engine();
+            open_doubles(&mut e, true);
+            e.register(OPEN_MEDIA, |e, a| {
+                fn_008300c0_clearing_duration(
+                    e,
+                    a[0] as i32,
+                    Ptr::new(a[1]),
+                    a[2],
+                    a[3] as u8,
+                    a[4] as u8,
+                    f32::from_bits(a[5]),
+                    a[6],
+                );
+                Ret::default()
+            });
+            if guarded {
+                e.register(MEDIA_THREAD_PROC, |e, a| {
+                    fallout_audio_media_thread_proc_radio_row(e, Ptr::new(a[0])).into_ret()
+                });
+            }
+            let name = e.mem.alloc(16);
+            e.mem.set_cstr(name, b"z.mp3");
+            e.set_global(THREADS, 0x8000u32);
+            e.set_global(NEXT_CHANNEL, 0u32);
+            e.set_global(NEXT_MEDIA_ID, 6u32);
+            e.set_global(CHANNEL_B.kind, 0u32);
+            // While X's thread waits for its round, Z opens on A.
+            e.register_double(WAIT_FOR_SINGLE_OBJECT, move |e, _| {
+                e.call(
+                    OPEN_MEDIA,
+                    &args![7i32, name, 1000u32, 0u8, 0u8, 0.0f32, 77u32],
+                );
+                ret(0)
+            });
+            assert_eq!(e.call(MEDIA_THREAD_PROC, &args![info]).u32(), 0);
+            assert_eq!(e.global::<u32>(CHANNEL_A.id), 6, "A is Z's");
+            let left = if guarded { 0 } else { 10_000 };
+            assert_eq!(
+                e.global::<u32>(CHANNEL_A.duration),
+                left,
+                "guarded: {guarded}"
+            );
+            assert_eq!(fn_008308c0(&mut e, 7), left, "the station's answer");
+            if !guarded {
+                continue;
+            }
+
+            // Z's thread: the station still gets 0 when its round begins, and Z's own length
+            // once the round has published it (seen at the volume call that follows).
+            one_event(&mut e);
+            let seen = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+            let at_wait = seen.clone();
+            e.register_double(WAIT_FOR_SINGLE_OBJECT, move |e, _| {
+                at_wait.borrow_mut().push(fn_008308c0(e, 7));
+                ret(0)
+            });
+            let at_volume = seen.clone();
+            e.register_double(COM_SLOT + 0x1c, move |e, a| {
+                if a[0] == POSITION {
+                    e.mem.set_f64(a[1], 20.0);
+                }
+                if a[0] == AUDIO_OBJECT {
+                    at_volume.borrow_mut().push(fn_008308c0(e, 7));
+                }
+                ret(0)
+            });
+            let next = e.mem.alloc(8);
+            e.mem.set_u32(next, 6);
+            assert_eq!(e.call(MEDIA_THREAD_PROC, &args![next]).u32(), 0);
+            assert_eq!(*seen.borrow(), vec![0, 20_000]);
+        }
+    }
+
+    /// A media object's file is opened by address, so the radio row applies there too.
+    #[test]
+    fn a_media_object_opens_by_address() {
+        let mut e = setup();
+        let object = e.mem.alloc(0x28);
+        e.register(0x0059_1a40, |_, _| ret(0x4000));
+        let opened = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let seen = opened.clone();
+        e.register_double(OPEN_MEDIA, move |_, a| {
+            seen.set(a[1]);
+            Ret::default()
+        });
+        e.call(0x0083_0010, &args![object]);
+        assert_eq!(opened.get(), 0x4000);
+    }
+
+    /// The play test's engine: one channel (A) fading in, its file opened and played through the
+    /// COM doubles, the synch start 500 ms before the clock and the position at 1.5 s of 10 s.
+    fn play_engine() -> (Engine, u32) {
         let mut e = setup();
         volume_math(&mut e, 1.0, 1.0);
         let setting = e.mem.alloc(4);
@@ -2425,21 +2793,23 @@ mod tests {
         e.set_global(UPDATE_EVENT, 0x66u32);
         let info = e.mem.alloc(8);
         e.mem.set_u32(info, 5);
+        (e, info)
+    }
 
-        assert_eq!(e.call(0x0083_0b30, &args![info]).u32(), 0);
-
-        let create = calls_to(&e, CO_CREATE_INSTANCE);
+    /// What the play test's run did, call by call.
+    fn play_checks(e: &Engine) {
+        let create = calls_to(e, CO_CREATE_INSTANCE);
         assert_eq!(create[0][..4], [0x0107_cb18, 0, 1, 0x0109_3c0c]);
-        assert_eq!(calls_to(&e, 0x009f_9d30).len(), 1);
+        assert_eq!(calls_to(e, 0x009f_9d30).len(), 1);
         assert_eq!(
-            calls_to(&e, COM_SLOT + 0x30)
+            calls_to(e, COM_SLOT + 0x30)
                 .into_iter()
                 .filter(|a| a[0] == BUILDER)
                 .collect::<Vec<_>>(),
             vec![vec![BUILDER, 0x6300_000c]]
         );
-        assert_eq!(calls_to(&e, WAIT_FOR_SINGLE_OBJECT), vec![vec![0x66, 100]]);
-        let volume = calls_to(&e, COM_SLOT + 0x1c)
+        assert_eq!(calls_to(e, WAIT_FOR_SINGLE_OBJECT), vec![vec![0x66, 100]]);
+        let volume = calls_to(e, COM_SLOT + 0x1c)
             .into_iter()
             .find(|a| a[0] == AUDIO_OBJECT)
             .unwrap();
@@ -2447,30 +2817,30 @@ mod tests {
         let level = ((0.5f64.log10() as f32) as f64 * 2000.0).trunc() as i32;
         assert_eq!(volume, vec![AUDIO_OBJECT, level as u32]);
         // Expected 500 ms, at 1500 ms: logged and moved to 550 ms.
-        assert_eq!(calls_to(&e, LOG), vec![vec![0x0107_cc8c, 1000, 500, 1500]]);
-        let moved: Vec<_> = calls_to(&e, COM_SLOT + 0x20)
+        assert_eq!(calls_to(e, LOG), vec![vec![0x0107_cc8c, 1000, 500, 1500]]);
+        let moved: Vec<_> = calls_to(e, COM_SLOT + 0x20)
             .into_iter()
             .filter(|a| a[0] == POSITION)
             .collect();
         assert_eq!(moved.len(), 1);
         assert_eq!(word_f64(&moved[0], 1), 550.0 / 1000.0);
         // Running: event 1 freed twice, then the end (no loop flag).
-        assert!(calls_to(&e, COM_SLOT + 0x1c).contains(&vec![CONTROL]));
-        assert_eq!(calls_to(&e, 0x0083_1e00), vec![vec![AUDIO + 0x14]]);
+        assert!(calls_to(e, COM_SLOT + 0x1c).contains(&vec![CONTROL]));
+        assert_eq!(calls_to(e, 0x0083_1e00), vec![vec![AUDIO + 0x14]]);
         assert_eq!(
-            calls_to(&e, COM_SLOT + 0x30)
+            calls_to(e, COM_SLOT + 0x30)
                 .into_iter()
                 .filter(|a| a[0] == EVENTS)
                 .collect::<Vec<_>>(),
             vec![vec![EVENTS, 1, 0x10, 0x20], vec![EVENTS, 1, 0x10, 0x20]]
         );
-        let released: Vec<u32> = calls_to(&e, COM_SLOT + 8).iter().map(|a| a[0]).collect();
+        let released: Vec<u32> = calls_to(e, COM_SLOT + 8).iter().map(|a| a[0]).collect();
         assert_eq!(
             released,
             vec![EVENTS, POSITION, CONTROL, AUDIO_OBJECT, BUILDER, GRAPH]
         );
-        assert_eq!(calls_to(&e, 0x7400_0008).len(), 1);
-        assert_eq!(calls_to(&e, 0x7400_0000)[0][1], 1);
+        assert_eq!(calls_to(e, 0x7400_0008).len(), 1);
+        assert_eq!(calls_to(e, 0x7400_0000)[0][1], 1);
         assert_eq!(e.global::<u32>(CHANNEL_A.id), 0);
         assert_eq!(e.global::<u32>(THREAD_COUNT), 0);
     }

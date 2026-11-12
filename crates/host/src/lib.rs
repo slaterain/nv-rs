@@ -27,6 +27,7 @@ pub mod game_ini;
 pub mod half_loaded_move;
 pub mod mod_fit_worn;
 pub mod native_inflate;
+pub mod patch_data;
 pub mod phys_blend;
 pub mod player_move;
 pub mod save_out;
