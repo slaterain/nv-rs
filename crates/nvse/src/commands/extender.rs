@@ -7,11 +7,12 @@
 //!   `NVSE_VERSION_INTEGER_BETA` (9). That constant is the one place to change when the built-in
 //!   catches up with a newer release; the co-save header reads it too ([`crate::cosave`]).
 //! - **Plugins:** xNVSE answers from the plugin DLLs it loaded (`PluginManager::GetInfoByName`).
-//!   No plugin DLL ever loads in nv-rs, so the answer is what nv-rs builds in, [`BUILT_IN_PLUGINS`]:
-//!   none yet, so every name answers "not installed" (`IsPluginInstalled` 0, `GetPluginVersion`
-//!   -1, xNVSE's answer for a plugin it did not load). This changes when JIP LN NVSE's commands are
-//!   built in (I-13): JIP puts its own versions of these two in xNVSE's records at load
-//!   (`patches_cmd.h` (JIP LN NVSE)), which also answer for JIP's names.
+//!   No plugin DLL ever loads in nv-rs, so the answer is what nv-rs builds in and lets answer
+//!   "installed", [`loaded_plugins`] (`crate::plugins`): none yet, so every name answers "not
+//!   installed" (`IsPluginInstalled` 0, `GetPluginVersion` -1, xNVSE's answer for a plugin it did
+//!   not load). When JIP LN NVSE answers "installed" (`jip::ANSWERS_INSTALLED`), it also puts
+//!   its own versions of these two in xNVSE's records (`patches_cmd.h` (JIP LN NVSE)), which
+//!   answer for JIP's names too.
 //!
 //! Read from xNVSE's source and checked in the shipped DLL (xNVSE 6.4.9's `nvse_1_4.dll`: the
 //! version executes and evals `10056380` to `10056470`, the plugin executes `100ADB40` and
@@ -115,9 +116,18 @@ pub struct Plugin {
     pub version: u32,
 }
 
-/// The plugins nv-rs builds in: none yet (no plugin DLL ever loads in nv-rs; JIP LN NVSE's
-/// commands come with I-13).
-pub const BUILT_IN_PLUGINS: &[Plugin] = &[];
+/// The plugins nv-rs builds in that answer "installed" ([`crate::plugins`]), as xNVSE's list of
+/// loaded plugins holds them, in its order (no plugin DLL ever loads in nv-rs).
+pub fn loaded_plugins(e: &Engine) -> Vec<Plugin> {
+    crate::plugins::built_ins(e)
+        .into_iter()
+        .filter(|p| p.listed)
+        .map(|p| Plugin {
+            name: p.name,
+            version: p.version,
+        })
+        .collect()
+}
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), PluginManager.cpp:
 // PluginManager::GetInfoByName.
@@ -132,8 +142,11 @@ fn plugin_by_name<'a>(plugins: &'a [Plugin], name: &[u8]) -> Option<&'a Plugin> 
 /// The built-in plugin a plugin asks for by name (`GetPluginInfoByName`, xNVSE's command table
 /// interface (xNVSE), which is `PluginManager::GetInfoByName`): JIP LN NVSE's own versions of
 /// the two plugin commands ask it.
-pub fn plugin_info(name: &[u8]) -> Option<&'static Plugin> {
-    plugin_by_name(BUILT_IN_PLUGINS, name)
+pub fn plugin_info(e: &Engine, name: &[u8]) -> Option<Plugin> {
+    plugin_by_name(&loaded_plugins(e), name).map(|p| Plugin {
+        name: p.name,
+        version: p.version,
+    })
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), PluginManager.cpp:
@@ -146,7 +159,7 @@ fn is_plugin_installed(e: &mut Engine, w: &[u32]) -> Ret {
     let read = Read::of(e, &a);
     if read.ok {
         let name = super::arg_in_buffer(e, &read, 0, NAME_BUFFER, "IsPluginInstalled");
-        let v = installed(BUILT_IN_PLUGINS, &name);
+        let v = installed(&loaded_plugins(e), &name);
         a.set_result(e, v);
     }
     handled(true)
@@ -171,7 +184,7 @@ fn get_plugin_version(e: &mut Engine, w: &[u32]) -> Ret {
     let read = Read::of(e, &a);
     if read.ok {
         let name = super::arg_in_buffer(e, &read, 0, NAME_BUFFER, "GetPluginVersion");
-        if let Some(v) = version_of(BUILT_IN_PLUGINS, &name) {
+        if let Some(v) = version_of(&loaded_plugins(e), &name) {
             a.set_result(e, v);
         }
     }

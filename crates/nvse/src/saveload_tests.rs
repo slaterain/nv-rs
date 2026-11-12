@@ -671,3 +671,108 @@ fn a_load_or_a_new_game_tells_the_scripts_again() {
         .restarted_informed
         .contains(&0x0500_0d00));
 }
+
+thread_local! {
+    /// What the stand-in built-in plugin saw: the messages (type and text) and the records its
+    /// load callback read (type, version, data), `None` for a call with no records.
+    static PLUGIN_SAW: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+fn plugin_listener(e: &mut Engine, m: &plugins::Message) {
+    let data = if m.len > 1 {
+        String::from_utf8_lossy(&e.mem.bytes(m.data, m.len)).into_owned()
+    } else {
+        m.data.to_string()
+    };
+    PLUGIN_SAW.with(|s| s.borrow_mut().push(format!("message {} {data}", m.kind)));
+}
+
+fn plugin_save(_: &mut Engine, r: &mut plugins::Records) {
+    r.record(tag(b"TEST"), 3, b"abc");
+}
+
+fn plugin_load(_: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
+    let mut any = false;
+    while let Some((k, v, len)) = r.next_record()? {
+        any = true;
+        let data = r.read_data(len)?;
+        PLUGIN_SAW.with(|s| {
+            s.borrow_mut().push(format!(
+                "load {} {v} {}",
+                String::from_utf8_lossy(&k.to_be_bytes()),
+                String::from_utf8_lossy(&data)
+            ))
+        });
+    }
+    if !any {
+        PLUGIN_SAW.with(|s| s.borrow_mut().push("load none".into()));
+    }
+    Ok(())
+}
+
+fn test_plugin() -> plugins::BuiltIn {
+    plugins::BuiltIn {
+        file: "test_nvse.dll",
+        name: "Test",
+        version: 1,
+        opcode_base: 0x2200,
+        listed: false,
+        listener: Some(plugin_listener),
+        save: Some(plugin_save),
+        load: Some(plugin_load),
+        pre_load: None,
+        new_game: None,
+    }
+}
+
+fn plugin_saw() -> Vec<String> {
+    PLUGIN_SAW.with(|s| std::mem::take(&mut *s.borrow_mut()))
+}
+
+/// A built-in plugin is told the save and load moments after the events, writes its own section
+/// after xNVSE's, and reads it back at the load after the `.fos` (it has no pre-load callback, so
+/// that pass passes over it); the keep row does not keep its section. A co-save without its
+/// section calls its load callback with no records.
+#[test]
+fn a_built_in_plugin_has_its_own_section() {
+    plugin_saw();
+    let mut e = engine();
+    set_files(&mut e, &["FalloutNV.esm"]);
+    set_keep_other_plugins(&mut e, true);
+    plugins::register(&mut e, test_plugin());
+    save_game(&mut e, NAME);
+    let bytes = file(CO_SAVE).unwrap();
+    let mut r = Reader::open(&bytes).unwrap();
+    let mut bases = Vec::new();
+    while let Some(p) = r.next_plugin().unwrap() {
+        bases.push(p.opcode_base);
+        r.skip(p.length).unwrap();
+        r.end_plugin();
+    }
+    assert_eq!(bases, [0x1400, 0x2200]);
+    pre_load(&mut e, NAME);
+    assert!(e.ext::<Nvse>().saveload.kept.is_empty(), "not kept");
+    e.site(LOAD.addr(), &[NAME]);
+    e.site(POST_LOAD.addr(), &[1]);
+    assert_eq!(
+        plugin_saw(),
+        [
+            "message 4 Save 7.fos",
+            "message 6 Save 7.fos",
+            "message 3 Save 7.fos",
+            "load TEST 3 abc",
+            "message 8 1",
+        ]
+    );
+    // Without its section.
+    put_arrays(Vec::new(), &[]);
+    e.site(LOAD.addr(), &[NAME]);
+    assert_eq!(plugin_saw(), ["message 3 Save 7.fos", "load none"]);
+    new_game(&mut e);
+    assert_eq!(plugin_saw(), ["message 14 0"]);
+    delete_game(&mut e, NAME);
+    assert_eq!(
+        plugin_saw(),
+        ["message 11 C:\Saves\Save 7.nvse", "message 15 Save 7.fos"]
+    );
+}
