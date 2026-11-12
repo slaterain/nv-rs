@@ -754,6 +754,18 @@ save) should get.
   size count and its skip; checked in the DLL (`jip_nvse.dll` at `10015B33`, `10016761`,
   `100167EA` and `100156BA`). VNV installs JohnnyGuitar, so on by default its players' co-saves
   load and save as they do there.
+- **JIP vanilla commands** (the row above): JIP LN NVSE 57.30's `InitCmdPatches`
+  (`internal/patches_cmd.h`), which writes its own handlers into seven of the game's records. Against
+  the game's own: `MenuMode` adds JIP's modes 0 to 4 (not in game mode, the Pip-Boy up, a menu in the
+  stack, the console open, the loading screens) and prints `MenuMode %d >> %d` in the console;
+  `GetItemCount` counts from the base container and the reference's changes the way JIP does, and
+  sums a form list's forms; `GetContainer` also answers an inventory reference's container;
+  `IsInList` takes a temporary actor by its leveled base form; `GetHitLocation` reads the place in
+  the hit data where JIP's `CopyHitDataHook` (step 3.5) writes the location (until that hook exists
+  the word there is the game's own, `HitData::iRefCount`); `HasPerk` counts a follower's perks on
+  followers (the player's rank, as for teammates); `0x127D` (the game's `ClearTrackedCells`, which
+  does nothing) becomes `GetNVSEVersionFull`. All inert until JIP answers "installed" (step 3.10);
+  off, and before that, the game's own.
 - **Script error loop guard** (the row above): the maintainer's decision, 2026-11-08 (review of
   #329). One error reaches the handlers once; the console still shows every error. Kept per game
   thread: an error another thread raises meanwhile is its own and reaches the handlers.
