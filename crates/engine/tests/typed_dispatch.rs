@@ -386,28 +386,58 @@ const PLAIN: &[(u32, &[u32])] = &[
 ];
 
 /// What every test adds to its comparison: the families, the plain callees, the call budget.
+/// The culling family's functions other families call (by `typed_call!` or a vtable slot): the plane
+/// side, the world transform and data, the frustum's set-up, the bounds' merge and updates, the
+/// geometry's world bound, the box's frustum test and the compound frustum's camera.
+const CULLING_CALLED: &[u32] = &[
+    0x004b_6100,
+    0x00a6_8bf0,
+    0x00a6_8c60,
+    0x00a6_94a0,
+    0x00a7_f3f0,
+    0x00a7_fdd0,
+    0x00a7_fea0,
+    0x00a8_0710,
+    0x00c3_87f0,
+    0x00c4_7980,
+];
+
 trait Common {
     fn common(self, function: u32) -> Diff;
+    /// [`Common::common`] with the culling family's functions by address, to their translations on
+    /// both sides. Its maths is native: what also runs off the main thread rounds a sum of products
+    /// once where the exe's 24-bit code rounds each step, so on the main thread's control word it parts
+    /// from the exe in the last bits (the culling family's own tests compare it there, within their
+    /// tolerance). The scene family's maths, compared on that word, runs it translated.
+    fn culling_translated(self, function: u32) -> Diff;
 }
 
 impl Common for Diff {
     fn common(self, function: u32) -> Diff {
-        let mut callees = vec![0x0040_19d0, 0x0040_8860];
-        if let Some((_, more)) = PLAIN.iter().find(|(f, _)| *f == function) {
-            callees.extend_from_slice(more);
-        }
-        callees.retain(|c| *c != function);
-        self.family(&dispatch::DISPATCH)
-            .family(&engine_typed::scene::SCENE)
-            .family(&pathing::PATHING)
-            .family(&culling::CULLING)
-            .family(&leaf::LEAVES)
-            .translation_calls_plainly(&callees)
-            // The draw family's `D3DXMatrixInverse` thunk, which the 4x4 inverse calls.
-            .goes_by_address(&[0x00ee_6dda])
-            .max_calls(MAX_CALLS)
-            .float_sweep(FLOAT_SWEEP)
+        families(self.family(&culling::CULLING), function)
     }
+
+    fn culling_translated(self, function: u32) -> Diff {
+        families(self.goes_by_address(CULLING_CALLED), function)
+    }
+}
+
+/// [`Common`]'s families but culling, the plain callees of `function`'s translation, and the rest.
+fn families(d: Diff, function: u32) -> Diff {
+    let mut callees = vec![0x0040_19d0, 0x0040_8860];
+    if let Some((_, more)) = PLAIN.iter().find(|(f, _)| *f == function) {
+        callees.extend_from_slice(more);
+    }
+    callees.retain(|c| *c != function);
+    d.family(&dispatch::DISPATCH)
+        .family(&engine_typed::scene::SCENE)
+        .family(&pathing::PATHING)
+        .family(&leaf::LEAVES)
+        .translation_calls_plainly(&callees)
+        // The draw family's `D3DXMatrixInverse` thunk, which the 4x4 inverse calls.
+        .goes_by_address(&[0x00ee_6dda])
+        .max_calls(MAX_CALLS)
+        .float_sweep(FLOAT_SWEEP)
 }
 
 // ---- Native float maths ----
@@ -2486,11 +2516,13 @@ const DATA_FLAGS: &[u32] = &[0, 1, 0x100, 0x101];
 #[test]
 fn scene_object_update_downward() {
     // The object's flags, the data's, the world data and bound slots stand-ins or the typed ones.
+    // Under the other threads' control word bit for bit, every input.
     Diff::new(entry!(
         0x00a5_9f90,
         engine_typed::scene::walk::object_update_downward(Ptr<_>, Ptr<_>, u32)
     ))
     .common(0x00a5_9f90)
+    .other_threads()
     .inputs(&inputs(&[
         &[
             Input::Of(NODE_FLAGS),
@@ -2513,6 +2545,36 @@ fn scene_object_update_downward() {
     })
     .run()
     .assert_same();
+    // Under the main thread's with the culling family by address ([`Common::culling_translated`]): bit for bit.
+    let report = Diff::new(entry!(
+        0x00a5_9f90,
+        engine_typed::scene::walk::object_update_downward(Ptr<_>, Ptr<_>, u32)
+    ))
+    .culling_translated(0x00a5_9f90)
+    .main_thread(0)
+    .inputs(&inputs(&[
+        &[
+            Input::Of(NODE_FLAGS),
+            Input::Of(DATA_FLAGS),
+            Input::Of(&[0, 1, 2, 3]),
+        ],
+        &P3,
+    ]))
+    .max_cases(256)
+    .setup(|e, case| {
+        stand_ins(e);
+        let g = geometry(e, case, case.word(0), 3);
+        if case.word(2) & 1 != 0 {
+            set_slot(e, g, 0xb8, 0x00a6_8c60);
+        }
+        if case.word(2) & 2 != 0 {
+            set_slot(e, g, 0xbc, 0x00a8_0710);
+        }
+        vec![g, block(e, 8, &[ONE, case.word(1)]), 0x55]
+    })
+    .run();
+    println!("scene_object_update_downward on the main thread: {report}");
+    report.assert_same();
 }
 
 #[test]
@@ -2739,11 +2801,13 @@ fn scene_skin_bound() {
 fn scene_skin_bound_from_culling() {
     // The bones; bone 1's world scale; the geometry's flags (bit 19 forces the update; without it
     // the old radius decides); the case's floats.
+    // Under the other threads' control word bit for bit, every input.
     Diff::new(entry!(
         0x00a8_0710,
         culling::update::geometry_update_world_bound(Ptr<_>)
     ))
     .common(0x00a8_0710)
+    .other_threads()
     .inputs(&inputs(&[
         &[
             Input::Of(&[1, 2, 3]),
@@ -2763,6 +2827,36 @@ fn scene_skin_bound_from_culling() {
     })
     .run()
     .assert_same();
+    // Under the main thread's, the floats in 2^-4 to 4 ([`unit`]): the bound moved by the world transform (the
+    // culling family's `bound_transform`, its rows' sums of products in `f64`). Within 4 ulps, or 2^-13 in value.
+    let report = Diff::new(entry!(
+        0x00a8_0710,
+        culling::update::geometry_update_world_bound(Ptr<_>)
+    ))
+    .common(0x00a8_0710)
+    .main_thread(4)
+    .float_abs(2f32.powi(-13))
+    .inputs(&inputs(&[
+        &[
+            Input::Of(&[1, 2, 3]),
+            Input::Of(&[ONE, TWO]),
+            Input::Of(&[0, 0x0008_0000, 0x0048_0000]),
+        ],
+        &P3,
+    ]))
+    .max_cases(96)
+    .setup(|e, case| {
+        let case = &folded(case, unit);
+        stand_ins(e);
+        merge_constants(e);
+        let g = geometry(e, case, case.word(2), 3);
+        let s = skin(e, case, case.word(0), case.word(1), TWO, 3);
+        e.mem.set_u32(g + 0xbc, s);
+        vec![g]
+    })
+    .run();
+    println!("scene_skin_bound_from_culling on the main thread: {report}");
+    report.assert_same();
 }
 
 #[test]
