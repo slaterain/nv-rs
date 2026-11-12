@@ -90,6 +90,62 @@ pub(crate) fn write_replacing(path: &Path, bytes: &[u8]) -> std::io::Result<()> 
     r
 }
 
+/// The fingerprint of every source that decides what the driver compiles (`build.rs`,
+/// `src/fingerprint.rs`): sixteen hex digits.
+const SOURCES: &str = env!("D3D9_WGPU_PIPELINE_SOURCES");
+
+/// The pipeline cache file's name without `.bin`: wgpu's name for the adapter, then the first eight
+/// digits of the sources' fingerprint.
+pub(crate) fn cache_stem(adapter: &str, sources: &str) -> String {
+    format!("{adapter}-{}", &sources[..8])
+}
+
+/// Removes the pipeline cache files earlier builds wrote for this adapter (another sources'
+/// fingerprint, or none), so a new build's first start is cold and old files don't pile up.
+pub(crate) fn remove_other_builds(dir: &Path, adapter: &str, current: &str) {
+    // Only names wgpu's key gives (`wgpu_pipeline_cache_BACKEND_...`), so nothing else in the
+    // folder can match: `ADAPTER.bin` (before the fingerprint) and `ADAPTER-XXXXXXXX.bin` (eight
+    // hex digits) other than `current`. A file renamed aside (`ADAPTER.bin.bak`) is not ours.
+    if !adapter.starts_with("wgpu_pipeline_cache_") {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let earlier = |stem: &str| {
+        stem != current
+            && (stem == adapter
+                || stem
+                    .strip_prefix(adapter)
+                    .and_then(|rest| rest.strip_prefix('-'))
+                    .is_some_and(|fp| fp.len() == 8 && fp.bytes().all(|b| b.is_ascii_hexdigit())))
+    };
+    for e in entries.flatten() {
+        let Some(name) = e.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if name.strip_suffix(".bin").is_some_and(earlier) {
+            let _ = std::fs::remove_file(e.path());
+            continue;
+        }
+        // An earlier build's unfinished write (`STEM.PID-N.tmp`), past the ten minutes another
+        // instance's write in progress could take (as remove_stale_temporaries).
+        let stale = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age.as_secs() > 600);
+        if stale {
+            if let Some(stem) = name.split('.').next() {
+                if earlier(stem) && own_temporary(&name, &[stem]) {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    }
+}
+
 /// Removes the temporaries of writes that never finished (a process killed while writing), older
 /// than ten minutes (another instance's write in progress is younger), of the files named `stems`
 /// only: [`write_replacing`]'s own names, `STEM.PID-N.tmp`. The folder may be shared
@@ -224,7 +280,13 @@ impl PipelineCacheFile {
         if !device.features().contains(wgpu::Features::PIPELINE_CACHE) {
             return None;
         }
-        let name = wgpu::util::pipeline_cache_key(info)?;
+        // wgpu's name for this adapter, then the sources' fingerprint (build.rs): a build whose
+        // converted shaders or layouts may differ gets a new file, so its first start is cold and
+        // makes every library at the start, instead of a "warm" start whose unlisted shaders'
+        // libraries no longer match the driver's cache. Files of earlier builds are removed.
+        let adapter = wgpu::util::pipeline_cache_key(info)?;
+        let name = cache_stem(&adapter, SOURCES);
+        remove_other_builds(dir, &adapter, &name);
         // A folder that cannot be made (a read-only place, a path that is no folder) means no
         // cache, with one line: never a failed start. A relative path is taken from the working
         // folder, as any other path the host is given.
@@ -446,6 +508,114 @@ mod tests {
         for (name, _, stays) in names {
             assert_eq!(dir.join(name).exists(), stays, "{name}");
         }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The sources' fingerprint is sixteen hex digits, and a build's cache file name carries its
+    /// first eight: another build of the converter or the layouts names another file, so its
+    /// first start is cold.
+    #[test]
+    fn the_cache_file_name_carries_the_sources_fingerprint() {
+        assert_eq!(SOURCES.len(), 16, "{SOURCES}");
+        assert!(SOURCES.bytes().all(|b| b.is_ascii_hexdigit()), "{SOURCES}");
+        // Something was hashed (not FNV-1a's offset basis).
+        assert_ne!(SOURCES, format!("{:016x}", crate::fingerprint::EMPTY));
+        assert_eq!(
+            cache_stem("wgpu_pipeline_cache_vulkan_4318_12120", SOURCES),
+            format!("wgpu_pipeline_cache_vulkan_4318_12120-{}", &SOURCES[..8])
+        );
+    }
+
+    /// The fingerprint follows the files: a changed byte, an added file and a renamed file each
+    /// change it; the same files in another folder give the same value.
+    #[test]
+    fn the_fingerprint_follows_the_sources() {
+        use crate::fingerprint::{files_under, fingerprint};
+        let exe = std::env::current_exe().unwrap();
+        let base = exe
+            .parent()
+            .unwrap()
+            .join(format!("d3d9-wgpu-fp-{}", std::process::id()));
+        let tree = |root: &Path, files: &[(&str, &str)]| {
+            let _ = std::fs::remove_dir_all(root);
+            for (name, text) in files {
+                let p = root.join(name);
+                std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+                std::fs::write(p, text).unwrap();
+            }
+            let mut all = Vec::new();
+            files_under(root, &mut all);
+            fingerprint(root, &all)
+        };
+        let a = base.join("a");
+        let b = base.join("b");
+        let one = [
+            ("src/sm/wgsl.rs", "fn a() {}"),
+            ("src/device.rs", "fn b() {}"),
+        ];
+        let first = tree(&a, &one);
+        assert_eq!(tree(&b, &one), first, "the same files elsewhere");
+        let changed = [
+            ("src/sm/wgsl.rs", "fn a() { }"),
+            ("src/device.rs", "fn b() {}"),
+        ];
+        assert_ne!(tree(&a, &changed), first, "a changed byte");
+        let added = [
+            ("src/sm/wgsl.rs", "fn a() {}"),
+            ("src/device.rs", "fn b() {}"),
+            ("src/new.rs", ""),
+        ];
+        assert_ne!(tree(&a, &added), first, "an added file");
+        let renamed = [
+            ("src/sm/wgsl2.rs", "fn a() {}"),
+            ("src/device.rs", "fn b() {}"),
+        ];
+        assert_ne!(tree(&a, &renamed), first, "a renamed file");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// Only this adapter's cache files of other builds go: the one without a fingerprint and
+    /// those with another; the current one, another adapter's, a file renamed aside, the
+    /// pipeline list and other names stay.
+    #[test]
+    fn other_builds_cache_files_are_removed() {
+        let exe = std::env::current_exe().unwrap();
+        let dir = exe
+            .parent()
+            .unwrap()
+            .join(format!("d3d9-wgpu-builds-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let adapter = "wgpu_pipeline_cache_vulkan_4318_12120";
+        let current = format!("{adapter}-0123abcd");
+        let names = [
+            (format!("{adapter}.bin"), false),
+            (format!("{adapter}-89abcdef.bin"), false),
+            (format!("{current}.bin"), true),
+            (
+                "wgpu_pipeline_cache_vulkan_4318_10137-89abcdef.bin".to_string(),
+                true,
+            ),
+            (format!("{adapter}.bin.before-nov12d"), true),
+            (format!("{adapter}-short.bin"), true),
+            ("pipelines.txt".to_string(), true),
+            // An earlier build's unfinished write, old: removed; the current build's: kept (left
+            // to remove_stale_temporaries).
+            (format!("{adapter}-89abcdef.77-3.tmp"), false),
+            (format!("{adapter}.77-4.tmp"), false),
+            (format!("{current}.77-5.tmp"), true),
+        ];
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(1200);
+        for (name, _) in &names {
+            let f = std::fs::File::create(dir.join(name)).unwrap();
+            f.set_modified(old).unwrap();
+        }
+        remove_other_builds(&dir, adapter, &current);
+        for (name, stays) in &names {
+            assert_eq!(dir.join(name).exists(), *stays, "{name}");
+        }
+        // Not a wgpu key: nothing is touched.
+        remove_other_builds(&dir, "pipelines", "x");
+        assert!(dir.join("pipelines.txt").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
