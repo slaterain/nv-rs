@@ -419,6 +419,9 @@ fn the_queue_stays_bounded_while_the_render_thread_is_behind() {
         most = most.max(bytes);
         assert!(chunks <= 9, "{chunks} chunks waiting");
     }
+    // Each upload passes chunk_bytes, so the recording side handed chunks over as it went (#510's
+    // Threaded::record must hand over at the chunk's limits, as Threaded::submit does).
+    assert!(most > 0, "nothing handed over before finish");
     assert!(most <= (1 << 20) + 2 * 100_000, "{most} bytes waiting");
     stream.finish();
     assert_eq!(stream.queued(), (0, 0));
