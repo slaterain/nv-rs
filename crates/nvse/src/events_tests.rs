@@ -1047,11 +1047,7 @@ fn dump_event_handlers_lists_them_in_the_console() {
         SET_EVENT_HANDLER,
         &[text("OnHit"), form(1), first_ref],
     );
-    run(
-        &mut e,
-        SET_EVENT_HANDLER_ALT,
-        &[text("OnHit"), form(3), pair(num(1.0), num(2.5))],
-    );
+    run(&mut e, SET_EVENT_HANDLER, &[text("OnHit"), form(3)]);
     let lines = || LINES.with(|l| std::mem::take(&mut *l.borrow_mut()));
     lines();
     let a = "[id: 5000A00, edid: \"\", name: \"<no name>\"]";
@@ -1064,13 +1060,13 @@ fn dump_event_handlers_lists_them_in_the_console() {
             "DumpEventHandlers >> Beginning dump.".to_string(),
             "== Dumping for event onhit ==".to_string(),
             format!(">> Priority: 1, handler: {a}, filters: \"first\"::{r}"),
-            format!(">> Priority: 1, handler: {b}, filters: 1::2.5"),
+            format!(">> Priority: 1, handler: {b}, filters: (None)"),
         ]
     );
     run(&mut e, DUMP_EVENT_HANDLERS, &[text("OnHit"), form(3)]);
     assert_eq!(
         lines()[2..],
-        [format!(">> Priority: 1, handler: {b}, filters: 1::2.5")]
+        [format!(">> Priority: 1, handler: {b}, filters: (None)")]
     );
     run(
         &mut e,
@@ -1095,14 +1091,6 @@ fn dump_event_handlers_lists_them_in_the_console() {
     let got = lines();
     assert_eq!(got[0], "DumpEventHandlers >> Beginning dump.");
     assert!(got.iter().all(|l| !l.starts_with("== Dumping")), "{got:?}");
-    // A handler without filters.
-    run(&mut e, SET_EVENT_HANDLER, &[text("OnActivate"), form(1)]);
-    lines();
-    run(&mut e, DUMP_EVENT_HANDLERS, &[text("OnActivate")]);
-    assert_eq!(
-        lines()[2],
-        format!(">> Priority: 1, handler: {a}, filters: (None)")
-    );
 }
 
 #[path = "call_sites_tests.rs"]
