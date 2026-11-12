@@ -748,3 +748,405 @@ pub(crate) fn property_flags_24(e: &Engine, property: u32) -> u32 {
 pub(crate) fn property_distance(e: &Engine, property: u32) -> u32 {
     e.mem.u32(property.wrapping_add(0x34))
 }
+
+// ---- Group C: the reads of the shader set-ups the world draw reached as translations. ----
+//
+// Each reads guest memory today; the drawing thread's piece 2 backs them with the frame's captured
+// values (`measure/typed-draw/GROUP-C.md`). Read in place, not routed: a shader's renderer (+0x18, set
+// when the shader is made).
+
+/// A world transform's word at `offset` (+0 to +0x20 the rotation's entries, +0x24 to +0x2c the
+/// translation, +0x30 the scale), as a set-up reads the geometry's transform it is handed.
+#[inline(always)]
+pub(crate) fn transform_word(e: &Engine, transform: u32, offset: u32) -> u32 {
+    e.global::<u32>(transform.wrapping_add(offset))
+}
+
+/// The scene's light list of an accumulator: its camera's (+0x194) word +0xe0.
+#[inline(always)]
+pub(crate) fn accumulator_lights(e: &Engine, accumulator: u32) -> u32 {
+    let camera = e.global::<u32>(accumulator.wrapping_add(0x194));
+    e.global::<u32>(camera.wrapping_add(0xe0))
+}
+
+/// A light list's first light (+0xf8), none when 0.
+#[inline(always)]
+pub(crate) fn first_light(e: &Engine, lights: u32) -> u32 {
+    e.global::<u32>(lights.wrapping_add(0xf8))
+}
+
+/// A light's word at `offset` (+0xc8 and +0xd4 its two colours, +0xf0 to +0xf8 its direction).
+#[inline(always)]
+pub(crate) fn light_word(e: &Engine, light: u32, offset: u32) -> u32 {
+    e.global::<u32>(light.wrapping_add(offset))
+}
+
+/// The byte that turns the point lights on (`011f9ef0`).
+#[inline(always)]
+pub(crate) fn point_lights_on(e: &Engine) -> u8 {
+    e.global::<u8>(0x011f_9ef0)
+}
+
+/// The pass being rendered's first scene light (the first word of its light list, +0xc).
+#[inline(always)]
+pub(crate) fn rendering_first_light(e: &Engine) -> u32 {
+    let lights = e.global::<u32>(rendering_pass(e).wrapping_add(0xc));
+    e.global::<u32>(lights)
+}
+
+/// A scene light's word at `offset` (+0x10c its shadow map, a rendered texture).
+#[inline(always)]
+pub(crate) fn scene_light_word(e: &Engine, light: u32, offset: u32) -> u32 {
+    e.global::<u32>(light.wrapping_add(offset))
+}
+
+/// A geometry data's renderer buffers (`m_pkBuffData`, +0x34).
+#[inline(always)]
+pub(crate) fn buffer_data(e: &Engine, data: u32) -> u32 {
+    e.global::<u32>(data.wrapping_add(0x34))
+}
+
+/// A tall grass property's instance data (+0x7c).
+#[inline(always)]
+pub(crate) fn grass_instances(e: &Engine, property: u32) -> u32 {
+    e.global::<u32>(property.wrapping_add(0x7c))
+}
+
+/// An instance data's geometry (its first word).
+#[inline(always)]
+pub(crate) fn grass_geometry(e: &Engine, data: u32) -> u32 {
+    e.global::<u32>(data)
+}
+
+/// An instance data's count of instances (`u16` +0x10) and how many are active (`u16` +0x12).
+#[inline(always)]
+pub(crate) fn grass_instance_count(e: &Engine, data: u32) -> u16 {
+    e.global::<u16>(data.wrapping_add(0x10))
+}
+#[inline(always)]
+pub(crate) fn grass_active_instances(e: &Engine, data: u32) -> u16 {
+    e.global::<u16>(data.wrapping_add(0x12))
+}
+
+/// An instance data's array of 0x10-byte instances (+0x14).
+#[inline(always)]
+pub(crate) fn grass_instance_array(e: &Engine, data: u32) -> u32 {
+    e.global::<u32>(data.wrapping_add(0x14))
+}
+
+/// An instance data's triangles of one instance (the `u16` +0x34 of its +8).
+#[inline(always)]
+pub(crate) fn grass_instance_triangles(e: &Engine, data: u32) -> u16 {
+    let shape = e.global::<u32>(data.wrapping_add(8));
+    e.global::<u16>(shape.wrapping_add(0x34))
+}
+
+/// An instance data's float that scales the wind phase (+0x34), as the word.
+#[inline(always)]
+pub(crate) fn grass_wind_speed(e: &Engine, data: u32) -> u32 {
+    e.global::<u32>(data.wrapping_add(0x34))
+}
+
+/// The shader manager's frame values the set-ups read: full bright (`011f91a7`), the game time the
+/// shaders animate with (`011f940c`, a float's word), the ambient colour (`011f9ee0`, four words),
+/// HDR on (`011f941e`) and its value (`011f9188`), the shader level (`011f91c0`), shadows skipped
+/// (`011f9427`), the shadow textures (`011f95e4`), the shader flags' low byte (`011f91d8`), the
+/// shadow fade (`011fd890`) and the shadow's four words (`011fd874`, `011fd878`, `011adce0`,
+/// `011fd880`).
+#[inline(always)]
+pub(crate) fn full_bright(e: &Engine) -> u8 {
+    e.global::<u8>(0x011f_91a7)
+}
+#[inline(always)]
+pub(crate) fn game_time(e: &Engine) -> u32 {
+    e.global::<u32>(0x011f_940c)
+}
+#[inline(always)]
+pub(crate) fn ambient_word(e: &Engine, index: u32) -> u32 {
+    e.global::<u32>(0x011f_9ee0u32.wrapping_add(index.wrapping_mul(4)))
+}
+#[inline(always)]
+pub(crate) fn hdr_on(e: &Engine) -> u8 {
+    e.global::<u8>(0x011f_941e)
+}
+#[inline(always)]
+pub(crate) fn hdr_value(e: &Engine) -> u32 {
+    e.global::<u32>(0x011f_9188)
+}
+#[inline(always)]
+pub(crate) fn shader_level(e: &Engine) -> i32 {
+    e.global::<i32>(0x011f_91c0)
+}
+#[inline(always)]
+pub(crate) fn shadows_skipped(e: &Engine) -> u8 {
+    e.global::<u8>(0x011f_9427)
+}
+#[inline(always)]
+pub(crate) fn shadow_textures(e: &Engine) -> u32 {
+    e.global::<u32>(0x011f_95e4)
+}
+#[inline(always)]
+pub(crate) fn shader_flags_byte(e: &Engine) -> u8 {
+    e.global::<u8>(0x011f_91d8)
+}
+#[inline(always)]
+pub(crate) fn shadow_fade(e: &Engine) -> u32 {
+    e.global::<u32>(0x011f_d890)
+}
+const SHADOW_WORDS: [u32; 4] = [0x011f_d874, 0x011f_d878, 0x011a_dce0, 0x011f_d880];
+#[inline(always)]
+pub(crate) fn shadow_word(e: &Engine, index: u32) -> u32 {
+    e.global::<u32>(SHADOW_WORDS[index as usize])
+}
+
+/// A geometry data's sub-textures: their count (a byte, +0x6c) and their 0x10-byte entries (+0x68).
+#[inline(always)]
+pub(crate) fn subtexture_count(e: &Engine, data: u32) -> u8 {
+    e.global::<u8>(data.wrapping_add(0x6c))
+}
+#[inline(always)]
+pub(crate) fn subtextures(e: &Engine, data: u32) -> u32 {
+    e.global::<u32>(data.wrapping_add(0x68))
+}
+
+/// A shader property's alpha (+0x28, a float's word).
+#[inline(always)]
+pub(crate) fn property_alpha(e: &Engine, property: u32) -> u32 {
+    e.global::<u32>(property.wrapping_add(0x28))
+}
+
+/// A shader property's falloff word `index` (+0x70 to +0x7c).
+#[inline(always)]
+pub(crate) fn property_falloff_word(e: &Engine, property: u32, index: u32) -> u32 {
+    e.global::<u32>(property.wrapping_add(0x70 + 4 * index))
+}
+
+/// A material's colour pointer (+0x34; without one its own colour is at +0x28) and its scale (+0x40, a
+/// float's word).
+#[inline(always)]
+pub(crate) fn material_colour(e: &Engine, material: u32) -> u32 {
+    e.global::<u32>(material.wrapping_add(0x34))
+}
+#[inline(always)]
+pub(crate) fn material_scale(e: &Engine, material: u32) -> u32 {
+    e.global::<u32>(material.wrapping_add(0x40))
+}
+
+/// A colour's word `index` (red, green, blue).
+#[inline(always)]
+pub(crate) fn colour_word(e: &Engine, colour: u32, index: u32) -> u32 {
+    e.global::<u32>(colour.wrapping_add(4 * index))
+}
+
+/// The neutral colour (`011f4998`) a material colour is compared with, and the one that then replaces
+/// it (`011a9b7c`): word `index` of each.
+#[inline(always)]
+pub(crate) fn neutral_colour_word(e: &Engine, index: u32) -> u32 {
+    e.global::<u32>(0x011f_4998 + 4 * index)
+}
+#[inline(always)]
+pub(crate) fn replacement_colour_word(e: &Engine, index: u32) -> u32 {
+    e.global::<u32>(0x011a_9b7c + 4 * index)
+}
+
+/// The sun's vector (`011fa2a0`, word `index`): what the no-lighting light fog dots the fog plane with,
+/// the sky's eye position less the origin.
+#[inline(always)]
+pub(crate) fn sun_word(e: &Engine, index: u32) -> u32 {
+    e.global::<u32>(0x011f_a2a0 + 4 * index)
+}
+/// The fog plane (`011f9604`, word `index`), its offset (`011f9610`), and the fog's far distance
+/// (`011f9618`).
+#[inline(always)]
+pub(crate) fn fog_plane_word(e: &Engine, index: u32) -> u32 {
+    e.global::<u32>(0x011f_9604 + 4 * index)
+}
+#[inline(always)]
+pub(crate) fn fog_plane_offset(e: &Engine) -> u32 {
+    e.global::<u32>(0x011f_9610)
+}
+#[inline(always)]
+pub(crate) fn fog_far(e: &Engine) -> u32 {
+    e.global::<u32>(0x011f_9618)
+}
+
+/// A texturing property's first map (the first word of its maps, +0x20), a map's texture transform
+/// (+0xc), and a texture transform's changed byte (+0x1c) and matrix word `index` (+0x20, nine).
+#[inline(always)]
+pub(crate) fn first_texture_map(e: &Engine, texturing: u32) -> u32 {
+    let maps = e.global::<u32>(texturing.wrapping_add(0x20));
+    e.global::<u32>(maps)
+}
+#[inline(always)]
+pub(crate) fn map_transform(e: &Engine, map: u32) -> u32 {
+    e.global::<u32>(map.wrapping_add(0xc))
+}
+#[inline(always)]
+pub(crate) fn texture_transform_changed(e: &Engine, transform: u32) -> u8 {
+    e.global::<u8>(transform.wrapping_add(0x1c))
+}
+#[inline(always)]
+pub(crate) fn texture_transform_word(e: &Engine, transform: u32, index: u32) -> u32 {
+    e.global::<u32>(transform.wrapping_add(0x20 + 4 * index))
+}
+
+/// The origin the draw takes positions from (`011f474c`, word `index`): a skinned geometry's identity
+/// world transform takes it as its translation, the sky's eye position is the sun less it.
+#[inline(always)]
+pub(crate) fn origin_word(e: &Engine, index: u32) -> u32 {
+    e.global::<u32>(0x011f_474c + 4 * index)
+}
+
+/// A sky property's first texture (+0x70) and second (+0x80).
+#[inline(always)]
+pub(crate) fn sky_first_texture(e: &Engine, property: u32) -> u32 {
+    e.global::<u32>(property.wrapping_add(0x70))
+}
+#[inline(always)]
+pub(crate) fn sky_second_texture(e: &Engine, property: u32) -> u32 {
+    e.global::<u32>(property.wrapping_add(0x80))
+}
+
+/// A sky property's kind (+0x8c), value (+0x84, a float's word), blend index (`u16` +0x88) and colour
+/// word `index` (+0x60, four).
+#[inline(always)]
+pub(crate) fn sky_kind(e: &Engine, property: u32) -> u32 {
+    e.global::<u32>(property.wrapping_add(0x8c))
+}
+#[inline(always)]
+pub(crate) fn sky_value(e: &Engine, property: u32) -> u32 {
+    e.global::<u32>(property.wrapping_add(0x84))
+}
+#[inline(always)]
+pub(crate) fn sky_blend_index(e: &Engine, property: u32) -> u16 {
+    e.global::<u16>(property.wrapping_add(0x88))
+}
+#[inline(always)]
+pub(crate) fn sky_colour_word(e: &Engine, property: u32, index: u32) -> u32 {
+    e.global::<u32>(property.wrapping_add(0x60 + 4 * index))
+}
+
+/// The sky's frame values: its height (`011ff8a8`), blend value `index` (`011ff8b4`), sky colour word
+/// `index` (`011ff8e0`, twelve) and HDR value (`011ad87c`).
+#[inline(always)]
+pub(crate) fn sky_height(e: &Engine) -> u32 {
+    e.global::<u32>(0x011f_f8a8)
+}
+#[inline(always)]
+pub(crate) fn sky_blend_value(e: &Engine, index: u32) -> u32 {
+    e.global::<u32>(0x011f_f8b4u32.wrapping_add(index.wrapping_mul(4)))
+}
+#[inline(always)]
+pub(crate) fn sky_colours_word(e: &Engine, index: u32) -> u32 {
+    e.global::<u32>(0x011f_f8e0 + 4 * index)
+}
+#[inline(always)]
+pub(crate) fn sky_hdr_value(e: &Engine) -> u32 {
+    e.global::<u32>(0x011a_d87c)
+}
+
+/// Whether an accumulator skips type 13 (`ucSkipType13`, +0x164), as the sky set-up reads the held
+/// one: the sky then moved to the accumulator's camera.
+#[inline(always)]
+pub(crate) fn skips_type13(e: &Engine, acc: u32) -> u8 {
+    e.get(
+        Ptr::<BSShaderAccumulator>::new(acc),
+        BSShaderAccumulator::ucSkipType13,
+    )
+}
+
+/// The scene camera (`011f95d8`).
+#[inline(always)]
+pub(crate) fn scene_camera(e: &Engine) -> u32 {
+    e.global::<u32>(0x011f_95d8)
+}
+
+/// An object's world translation word `index` (+0x8c, `m_kWorld`'s translation).
+#[inline(always)]
+pub(crate) fn world_translation_word(e: &Engine, object: u32, index: u32) -> u32 {
+    e.global::<u32>(object.wrapping_add(0x8c + 4 * index))
+}
+
+/// A water property's word at `offset`: its colours (+0x88, twelve), its values (+0x6c, +0x70, +0x74,
+/// +0x78, +0xb8 to +0xc4, +0xd0, +0xd4 the lights' factor, +0xd8 to +0xe4, +0x100, +0x104, +0x118, +0x120,
+/// +0x124), its stencil reference (+0x84), its light count (+0x130) and textures (+0x138, +0x13c the
+/// reflection, +0x144, +0x148).
+#[inline(always)]
+pub(crate) fn water_word(e: &Engine, property: u32, offset: u32) -> u32 {
+    e.global::<u32>(property.wrapping_add(offset))
+}
+
+/// A water property's byte at `offset`: its switches (+0x60, +0x63, +0x80, +0x81) and shade (+0x82).
+#[inline(always)]
+pub(crate) fn water_byte(e: &Engine, property: u32, offset: u32) -> u8 {
+    e.global::<u8>(property.wrapping_add(offset))
+}
+
+/// A water property's light list (+0x128, the first node), a node's light (+8) and the next node (+0).
+#[inline(always)]
+pub(crate) fn water_lights(e: &Engine, property: u32) -> u32 {
+    e.global::<u32>(property.wrapping_add(0x128))
+}
+#[inline(always)]
+pub(crate) fn light_node_light(e: &Engine, node: u32) -> u32 {
+    e.global::<u32>(node.wrapping_add(8))
+}
+#[inline(always)]
+pub(crate) fn light_node_next(e: &Engine, node: u32) -> u32 {
+    e.global::<u32>(node)
+}
+
+/// The default texture (`011f9510`), the water's second rendered texture (`011f943c`), the water
+/// system's value (`011ff108`) and eight words (`011ff398`, word `index`).
+#[inline(always)]
+pub(crate) fn default_texture(e: &Engine) -> u32 {
+    e.global::<u32>(0x011f_9510)
+}
+#[inline(always)]
+pub(crate) fn water_rendered_texture(e: &Engine) -> u32 {
+    e.global::<u32>(0x011f_943c)
+}
+#[inline(always)]
+pub(crate) fn water_value(e: &Engine) -> u32 {
+    e.global::<u32>(0x011f_f108)
+}
+#[inline(always)]
+pub(crate) fn water_extra_word(e: &Engine, index: u32) -> u32 {
+    e.global::<u32>(0x011f_f398 + 4 * index)
+}
+
+/// The pass being rendered's scene light `index` (its lights, +0xc, a word each).
+#[inline(always)]
+pub(crate) fn rendering_light(e: &Engine, pass: u32, index: u32) -> u32 {
+    let lights = e.global::<u32>(pass.wrapping_add(0xc));
+    e.global::<u32>(lights.wrapping_add(index.wrapping_mul(4)))
+}
+
+/// A leaf property's light value (+0x6c, a float's word).
+#[inline(always)]
+pub(crate) fn leaf_light_value(e: &Engine, property: u32) -> u32 {
+    e.global::<u32>(property.wrapping_add(0x6c))
+}
+
+/// A leaf data's word at `offset` (+0xc, +0x10, +0x14, +0x18, +0x1c).
+#[inline(always)]
+pub(crate) fn leaf_data_word(e: &Engine, data: u32, offset: u32) -> u32 {
+    e.global::<u32>(data.wrapping_add(offset))
+}
+
+/// The leaf scales (`01200608`, `0120060c`: word `index`).
+#[inline(always)]
+pub(crate) fn leaf_scale_word(e: &Engine, index: u32) -> u32 {
+    e.global::<u32>(0x0120_0608 + 4 * index)
+}
+
+/// The HDR scale of the image space (`011f91ac`): its effect 1's (the second of its list, +8) data
+/// (+0x6c) word +0xc, a float's word.
+#[inline(always)]
+pub(crate) fn hdr_effect_scale(e: &Engine) -> u32 {
+    let manager = e.global::<u32>(0x011f_91ac);
+    let effects = e.global::<u32>(manager.wrapping_add(8));
+    let effect = e.global::<u32>(effects.wrapping_add(4));
+    let data = e.global::<u32>(effect.wrapping_add(0x6c));
+    e.global::<u32>(data.wrapping_add(0xc))
+}

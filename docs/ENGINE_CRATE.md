@@ -539,8 +539,20 @@ setters (every shader's constant maps), `00b98610`, the `BSShader` slots every `
 `00ee6de0`, `PlaneNormalize` `00ee6dce`, `PlaneTransform` `00ee6dc8`): each calls its import slot, which the
 platform layer answers (part crates do not depend on `engine-platform`, so the typed callers save the thunk's call,
 not the import's); every caller in the exe reaches them, so `draw:off` gives all of them the translations again.
-The tests: groups A's and B's in `crates/engine/tests/typed_shader.rs` (the shader family's world), groups D's and
-E's in `crates/engine/tests/typed_draw.rs`.
+Group C, the shader classes' set-ups the world draw reached through a shader's vtable as translations, typed with
+native maths (main-thread `f32`: the drawing thread replays main's control word): the render states' lock counters
+the passes' state restore calls (`00714a40`, `00714a60`, `00714aa0`, `00714ae0`, `004eced0`); the tall grass shader
+(`SetupGeometry` `00baac10`, its slots 0x78 `00bac950` and 0x7c `00bac9c0`, the instance copy `00baaf40`); the
+no-lighting shader (the pass choice `00bc6970`, its slots 0x78 `00bc8d40`, 0x7c `00bc9a50` and 0xfc `00bc6de0`, the
+sub-textures `00bc6fa0`, the material constants `00bc6fe0`, the light fog `00bc7100`, the texture matrix
+`00bc8e00`); the sky shader (its slots 0x78 `00b89cc0` and 0x7c `00b89d80`); the water shader (its slots 0x78 `00b863a0` and
+0x7c `00b864d0`); the SpeedTree leaf shader (`SetupGeometry` `00bb25d0`, its slots 0x7c `00bb2760` and 0xfc
+`00bb1b50`); the pass types' flag bits (`00b815e0`) and a material's colour constant (`00c03180`). Each reads the frame only through
+`draw::packet` and writes its constants, render states and counters through `draw::own` (each file's "Group C"
+section), with what is filled at load read in place (the shaders' own words, the passes' contents, the exe's
+constants).
+The tests: groups A's, B's and C's in `crates/engine/tests/typed_shader.rs` (the shader family's world), groups D's
+and E's in `crates/engine/tests/typed_draw.rs`.
 The accessors: what the drivers and the alpha pass read that the rest of the frame changes goes through
 `draw::packet`, and what they write that is their own through `draw::own`, one section per condition of the
 pipeline probe that lives there (the pass lists the next frame's registration fills again with the range draw's
