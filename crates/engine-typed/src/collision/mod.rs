@@ -18,8 +18,11 @@
 //!
 //! Stage 1: the objects stay in guest memory. **Floats.** These run inside the scene graph's update, so
 //! wherever the scene family's pass runs (the main thread, and the AI threads for the actors' animated
-//! scenes): [`Threads::Both`]. The x87 parts keep the exact helpers; the SSE parts (Havok's vectors)
-//! compute in `f32` lane by lane in the exe's operand order ([`engine_core::sse`]).
+//! scenes): [`Threads::Both`]. The x87 parts are native maths (ADR-0014's float rule): the quaternion
+//! of a rotation at the running thread's precision over `native::Real` (`f32` on the main thread, `f64`
+//! rounded at the float stores on the others), its square roots `FSQRT` in place of the CRT's
+//! `_CIsqrt`; the SSE parts (Havok's vectors) compute in `f32` lane by lane in the exe's operand order
+//! ([`engine_core::sse`]).
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};

@@ -12,6 +12,7 @@
 use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
+use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
 use engine_typed::collision::{self, blend, body};
 use engine_typed::{culling, dispatch, pathing};
 
@@ -180,10 +181,7 @@ fn stand_ins(e: &mut Engine, state: u32) {
     words(e, LOCK, &[0, 0]);
     let tls = e.tls();
     e.mem.set_u32(tls + TLS_UPDATE_STATE, state);
-    e.register(0x00ec_6040, |e, a| {
-        log(e, 0x6040, a[1]);
-        ret_f(f64_arg(a, 0).sqrt())
-    });
+    e.register(0x00ec_6040, |_, a| ret_f(f64_arg(a, 0).sqrt()));
     e.register(0x00ec_6054, |_, a| ret_f(f64_arg(a, 0).sqrt()));
     // The imports the lock and the thread id reach.
     e.register(0x00fd_f1bc, |e, a| {
@@ -262,9 +260,46 @@ fn inputs(parts: &[&[Input]]) -> Vec<Input> {
 
 trait Common {
     fn common(self) -> Diff;
+    /// One of [`BY_THREAD`]'s settings, kept in the comparison's own chain.
+    fn by(self, run: fn(Diff) -> Diff) -> Diff;
+}
+
+/// The quaternion's comparisons run twice, split by thread (ADR-0014): under the other threads' control
+/// word bit for bit (NaN payloads aside: the family copies floats plain where the exe moved them
+/// through the x87), and under the main thread's within one ulp (plain `f32` rounds each step to 24
+/// bits as the exe's code does there; the x87's wider exponent can part in the last bit).
+const BY_THREAD: [fn(Diff) -> Diff; 2] = [other_threads, main_thread];
+
+/// [`BY_THREAD`]'s run under the other threads' control word.
+fn other_threads(d: Diff) -> Diff {
+    d.control_words(&[OTHER_THREADS]).allow_nan_payloads()
+}
+
+/// [`BY_THREAD`]'s run under the main thread's control word.
+fn main_thread(d: Diff) -> Diff {
+    d.control_words(&[MAIN_THREAD]).float_ulps(1)
+}
+
+/// The fixed rounding check runs under both control words bit for bit, without the float sweep: its
+/// input is one where rounding every step to a float (the main thread) and rounding once (the other
+/// threads) part, so maths in the wrong precision for the thread fails.
+const ROUNDING_BY_THREAD: [fn(Diff) -> Diff; 2] = [other_threads_fixed, main_thread_exact];
+
+/// [`ROUNDING_BY_THREAD`]'s run under the other threads' control word.
+fn other_threads_fixed(d: Diff) -> Diff {
+    other_threads(d).float_sweep(0)
+}
+
+/// [`ROUNDING_BY_THREAD`]'s run under the main thread's control word, bit for bit.
+fn main_thread_exact(d: Diff) -> Diff {
+    d.control_words(&[MAIN_THREAD]).float_sweep(0)
 }
 
 impl Common for Diff {
+    fn by(self, run: fn(Diff) -> Diff) -> Diff {
+        run(self)
+    }
+
     fn common(self) -> Diff {
         self.family(&collision::COLLISION)
             .family(&dispatch::DISPATCH)
@@ -272,6 +307,8 @@ impl Common for Diff {
             .family(&culling::CULLING)
             .family(&leaf::LEAVES)
             .goes_by_address(&[0x00ec_6040])
+            // The native quaternion takes its square roots with `FSQRT`, not the CRT's `_CIsqrt`.
+            .ignore_calls(&[0x00ec_6040])
             // What the dispatch family's translations call plainly (its PLAIN list): the Havok position's
             // helper and the body vector's part.
             .translation_calls_plainly(&[0x0040_19d0, 0x0040_8860, 0x004a_3e90, 0x0056_0e50])
@@ -285,50 +322,80 @@ fn collision_quaternion_from_rotation() {
     // The diagonal: positive trace, each element the largest, NaN, two elements tied for the largest (a
     // 180-degree turn about (1, 1, 0) has the diagonal (0, 0, -1)), where the exe's strict "below"
     // picks the index; the rest from the case.
-    Diff::new(entry!(
-        0x00a6_df40,
-        body::quaternion_from_rotation(Ptr<_>, Ptr<_>)
-    ))
-    .common()
-    .inputs(&inputs(&[
-        &[Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7])],
-        &P3,
-        &[Input::F32Swept(HALF), Input::F32Swept(THIRD)],
-    ]))
-    .max_cases(256)
-    .setup(|e, case| {
-        stand_ins(e, 0);
-        let diagonals: [[u32; 3]; 8] = [
-            [ONE, ONE, ONE],
-            [TWO, MINUS_ONE, MINUS_ONE],
-            [MINUS_ONE, TWO, MINUS_ONE],
-            [MINUS_ONE, MINUS_ONE, TWO],
-            [NAN, ONE, MINUS_ONE],
-            [0, 0, MINUS_ONE],
-            [MINUS_ONE, 0, 0],
-            [0, MINUS_ONE, 0],
-        ];
-        let d = diagonals[case.word(0) as usize];
-        let m = block(
-            e,
-            0x24,
-            &[
-                d[0],
-                bits(case, 1),
-                bits(case, 2),
-                bits(case, 3),
-                d[1],
-                bits(case, 4),
-                bits(case, 5),
-                HALF,
-                d[2],
-            ],
-        );
-        let q = e.mem.alloc(0x10);
-        vec![q, m]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x00a6_df40,
+            body::quaternion_from_rotation(Ptr<_>, Ptr<_>)
+        ))
+        .common().by(base)
+        .inputs(&inputs(&[
+            &[Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7])],
+            &P3,
+            &[Input::F32Swept(HALF), Input::F32Swept(THIRD)],
+        ]))
+        .max_cases(256)
+        .setup(|e, case| {
+            stand_ins(e, 0);
+            let diagonals: [[u32; 3]; 8] = [
+                [ONE, ONE, ONE],
+                [TWO, MINUS_ONE, MINUS_ONE],
+                [MINUS_ONE, TWO, MINUS_ONE],
+                [MINUS_ONE, MINUS_ONE, TWO],
+                [NAN, ONE, MINUS_ONE],
+                [0, 0, MINUS_ONE],
+                [MINUS_ONE, 0, 0],
+                [0, MINUS_ONE, 0],
+            ];
+            let d = diagonals[case.word(0) as usize];
+            let m = block(
+                e,
+                0x24,
+                &[
+                    d[0],
+                    bits(case, 1),
+                    bits(case, 2),
+                    bits(case, 3),
+                    d[1],
+                    bits(case, 4),
+                    bits(case, 5),
+                    HALF,
+                    d[2],
+                ],
+            );
+            let q = e.mem.alloc(0x10);
+            vec![q, m]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn collision_quaternion_rounding() {
+    // The diagonal (0x3f1f4b68, 0x3f3e2695, 0x3f76f2d6): its trace rounded each step and rounded once
+    // part, and so does w (0x3f6990f7 against 0x3f6990f8), so the quaternion computed in the wrong
+    // precision for the thread fails.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x00a6_df40,
+            body::quaternion_from_rotation(Ptr<_>, Ptr<_>)
+        ))
+        .common()
+        .by(base)
+        .inputs(&[Input::F32Swept(ONE)])
+        .setup(|e, _| {
+            stand_ins(e, 0);
+            let m = block(
+                e,
+                0x24,
+                &[0x3f1f_4b68, 0, 0, 0, 0x3f3e_2695, 0, 0, 0, 0x3f76_f2d6],
+            );
+            let q = e.mem.alloc(0x10);
+            vec![q, m]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]

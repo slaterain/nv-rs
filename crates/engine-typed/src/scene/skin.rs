@@ -5,7 +5,6 @@ use super::FAMILY;
 use crate::culling::layout::{NiBound, NiMatrix3, NiPoint3, NiTransform};
 use crate::{culling, dispatch, pathing};
 use engine_core::ptr::Ptr;
-use engine_core::x87::{x87_add, x87_load32, x87_m32, x87_quiet_bits, x87_store32};
 use engine_core::{args, typed_call, Engine};
 
 /// `NiSkinInstance`: the skin data (+8), the root parent (+0x10), the bones (+0x14).
@@ -56,21 +55,22 @@ pub fn skin_bound(e: &mut Engine, this: Ptr, bound: Ptr) {
         let mut index = 1u32;
         while index < count {
             let bone = e.mem.u32(e.mem.u32(base + BONES).wrapping_add(4 * index));
-            if 1.0 == x87_m32(e.mem.u32(bone.wrapping_add(WORLD_SCALE))) {
-                let radius = x87_quiet_bits(e.mem.u32(source + 0xc));
+            if e.mem.f32(bone.wrapping_add(WORLD_SCALE)) == 1.0 {
+                // The radius passes through the x87 stack in the exe: copied plain.
+                let radius = e.mem.u32(source + 0xc);
                 e.mem.set_u32(local + 0xc, radius);
                 for axis in 0..3 {
                     let value = e.mem.u32(source + 4 * axis);
                     e.mem.set_u32(local + 4 * axis, value);
                 }
-                let mut moved = [0u32; 3];
+                // Each axis one sum of two floats, stored: plain `f32` on every thread (ADR-0014).
+                let mut moved = [0f32; 3];
                 for (axis, slot) in (0u32..).zip(moved.iter_mut()) {
-                    let offset =
-                        x87_load32(e.mem.u32(bone.wrapping_add(WORLD_TRANSLATE + 4 * axis)));
-                    *slot = x87_store32(x87_add(offset, x87_m32(e.mem.u32(local + 4 * axis))));
+                    *slot = e.mem.f32(bone.wrapping_add(WORLD_TRANSLATE + 4 * axis))
+                        + e.mem.f32(local + 4 * axis);
                 }
                 for (axis, value) in (0u32..).zip(moved) {
-                    e.mem.set_u32(local + 4 * axis, value);
+                    e.mem.set_u32(local + 4 * axis, value.to_bits());
                 }
             } else {
                 typed_call!(
