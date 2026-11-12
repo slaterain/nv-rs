@@ -6625,6 +6625,58 @@ pub(crate) mod tests {
         assert_eq!(texture(&mut e, Ptr::new(second)).bound, 1, "held once");
     }
 
+    /// The bindings at a cut, as the states: the drawing side starts from main's (stream 0, the
+    /// indices), its own changes are unseen by main, and the join gives the serial order's: the
+    /// drawing side's stream where main set none after the cut, main's indices set after it.
+    #[test]
+    fn the_drawing_side_has_its_own_bindings_and_the_join_gives_the_serial_ones() {
+        use super::super::d3d9draw::{as_drawing_side, draw_cut, draw_join};
+        let (mut e, dev) = texture_device(Store::Host);
+        let a = new_buffer(&mut e, dev, false, 0x100, 0, 0);
+        let b = new_buffer(&mut e, dev, false, 0x100, 0, 0);
+        let i1 = new_buffer(&mut e, dev, true, 0x100, 0, 0);
+        let i2 = new_buffer(&mut e, dev, true, 0x100, 0, 0);
+        // `GetStreamSource(0)` and `GetIndices` as the calling side sees them (the count they add
+        // given back).
+        let bound = |e: &mut Engine, slot: u32| {
+            let out = e.mem.alloc(12);
+            let args: &[u32] = if slot == 101 {
+                &[0, out, out + 4, out + 8]
+            } else {
+                &[out]
+            };
+            assert_eq!(e.vcall(dev, 4 * slot, args).u32(), D3D_OK);
+            let buffer = e.mem.u32(out);
+            e.mem.free(out);
+            if buffer != 0 {
+                e.vcall(buffer, 4 * 2, &[]);
+            }
+            buffer
+        };
+        assert_eq!(e.vcall(dev, 4 * 100, &[0, a, 0, 32]).u32(), D3D_OK);
+        assert_eq!(e.vcall(dev, 4 * 104, &[i1]).u32(), D3D_OK);
+        assert!(draw_cut(&mut e, dev));
+        as_drawing_side(|| {
+            assert_eq!(bound(&mut e, 101), a, "main's stream at the cut");
+            assert_eq!(bound(&mut e, 105), i1, "main's indices at the cut");
+            assert_eq!(e.vcall(dev, 4 * 100, &[0, b, 0, 32]).u32(), D3D_OK);
+            assert_eq!(bound(&mut e, 101), b);
+        });
+        assert_eq!(
+            bound(&mut e, 101),
+            a,
+            "main's own, the drawing side's unseen"
+        );
+        assert_eq!(e.vcall(dev, 4 * 104, &[i2]).u32(), D3D_OK);
+        draw_join(&mut e);
+        assert_eq!(
+            bound(&mut e, 101),
+            b,
+            "the drawing side's: main set none after the cut"
+        );
+        assert_eq!(bound(&mut e, 105), i2, "main's: set after the cut");
+    }
+
     /// The viewport's words through `SetViewport`.
     fn set_viewport_words(e: &mut Engine, device: u32, rect: [u32; 4]) {
         let v = e.mem.alloc(24);
