@@ -1185,8 +1185,8 @@ impl Device {
         // lines the run prints meanwhile; its bar through the game's start against how long the
         // last start took (a file beside the pipeline cache).
         if d.surface.is_some() {
-            loading::capture_output();
             let mut start = Start::new(&d.device);
+            start.capture = loading::capture_output();
             start.record = cache_dir.map(|c| c.join("start-time.txt"));
             start.expected = start
                 .record
@@ -5680,6 +5680,21 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// also writes one log line with the same numbers (for a launcher). The game's own frames
     /// are not touched: the next `Present` shows the game again.
     pub fn show_progress(&mut self, p: &loading::Progress) {
+        // Through the game's start the step's share fills the bar's first part only ([`Start`]).
+        let mapped;
+        let p = match (&mut self.start, p.done) {
+            (Some(s), Some(d)) => {
+                if d >= 1.0 {
+                    s.prepared.get_or_insert_with(std::time::Instant::now);
+                }
+                mapped = loading::Progress {
+                    done: Some(d.min(1.0) * PREPARED),
+                    ..p.clone()
+                };
+                &mapped
+            }
+            _ => p,
+        };
         show_on(
             &mut self.surface,
             &mut self.loading,
@@ -5713,10 +5728,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             eprintln!("NV_D3D9 wgpu: the start's loading screen ended: {why}");
             if let (Some(s), true) = (self.start.take(), why.starts_with("the game's first")) {
                 if let Some(f) = &s.record {
-                    let _ = std::fs::write(f, format!("{}\n", s.began.elapsed().as_millis()));
+                    let _ = std::fs::write(
+                        f,
+                        format!("{}\n", s.prepared.unwrap_or(s.began).elapsed().as_millis()),
+                    );
                 }
             }
-            loading::release_output();
         }
         let frame = u64::from(frame);
         let back = self.back_buffers.first().and_then(|&h| self.surface_of(h));
@@ -6774,9 +6791,16 @@ struct Start {
     began: std::time::Instant,
     expected: Option<std::time::Duration>,
     record: Option<std::path::PathBuf>,
+    /// When the start's shader preparation ended (its bar full): the time part of the bar, and the
+    /// time kept, count from here.
+    prepared: Option<std::time::Instant>,
+    /// The run's output on the screen while the start lasts ([`loading::capture_output`]).
+    capture: Option<loading::Capture>,
 }
 
 /// The start ends without a picture this many presents after the game's first ([`Start`]).
+/// The share of the start screen's bar the shader preparation fills; the time estimate fills the rest.
+const PREPARED: f32 = 0.5;
 const BACKSTOP_PRESENTS: u64 = 600;
 /// ... or this long after it.
 const BACKSTOP: std::time::Duration = std::time::Duration::from_secs(10);
@@ -6886,6 +6910,8 @@ impl Start {
             began: std::time::Instant::now(),
             expected: None,
             record: None,
+            prepared: None,
+            capture: None,
         }
     }
 
@@ -6893,9 +6919,17 @@ impl Start {
     /// against the last start's time to its first picture (short of full until it shows), empty
     /// on a first start.
     fn progress(&self) -> loading::Progress {
-        let done = self
-            .expected
-            .map(|e| (self.began.elapsed().as_secs_f32() / e.as_secs_f32().max(0.001)).min(0.97));
+        // The shader preparation fills the first part ([`PREPARED`], [`Device::show_progress`]);
+        // after it, the time since it ended against the last start's time fills the rest.
+        let done = match (self.prepared, self.expected) {
+            (Some(at), Some(e)) => {
+                let t = (at.elapsed().as_secs_f32() / e.as_secs_f32().max(0.001)).min(0.97);
+                PREPARED + (1.0 - PREPARED) * t
+            }
+            (Some(_), None) => PREPARED,
+            _ => 0.0,
+        };
+        let done = Some(done);
         loading::Progress {
             title: "Loading".into(),
             status: "Starting the game".into(),

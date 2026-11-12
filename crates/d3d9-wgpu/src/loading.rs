@@ -314,9 +314,6 @@ const LOG_LINES: usize = 8;
 /// The run's last lines while its output is captured ([`capture_output`]).
 static RECENT: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 
-/// The standard output's and error's own handles while they are captured.
-static CAPTURED: Mutex<Option<[isize; 2]>> = Mutex::new(None);
-
 /// Sets the lines the card shows as if the run had printed them (a picture of the card in a
 /// test); none clears them.
 #[doc(hidden)]
@@ -335,41 +332,113 @@ fn recent_lines() -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// From here until [`release_output`], what the run prints to its standard output and error
-/// (Rust's `print!` and `eprint!`, which look the handles up on each write) goes through a pipe
-/// each, whose thread passes it on unchanged to where it went before (the console, the log file)
-/// and keeps the last lines for the card. Windows only; once.
+/// The capture ([`capture_output`]): one pipe for each place the output went (one when standard
+/// output and error go to the same file or console, so their lines keep their order).
+struct Pipe {
+    /// The pipe's write end, standing in for the std handles `which`.
+    write: isize,
+    which: Vec<u32>,
+    /// Where they went before: the reader passes everything on to it.
+    original: isize,
+    reader: std::thread::JoinHandle<()>,
+    done: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// The pipes while the output is captured; `true` once the std handles are back.
+static CAPTURED: Mutex<Option<(Vec<Pipe>, bool)>> = Mutex::new(None);
+
+/// While it lives (the start screen's [`crate::device::Device`] start owns it) the run's output
+/// goes through the capture; dropped, the std handles are their own again ([`release_output`]).
+pub(crate) struct Capture(());
+
+impl Drop for Capture {
+    fn drop(&mut self) {
+        release_output();
+    }
+}
+
 #[cfg(windows)]
-pub(crate) fn capture_output() {
+mod win {
     use std::ffi::c_void;
     #[link(name = "kernel32")]
     extern "system" {
-        fn CreatePipe(read: *mut isize, write: *mut isize, attrs: *const c_void, size: u32) -> i32;
-        fn GetStdHandle(which: u32) -> isize;
-        fn SetStdHandle(which: u32, handle: isize) -> i32;
-        fn ReadFile(h: isize, buf: *mut u8, len: u32, read: *mut u32, ov: *mut c_void) -> i32;
-        fn WriteFile(h: isize, buf: *const u8, len: u32, wrote: *mut u32, ov: *mut c_void) -> i32;
+        pub fn CreatePipe(
+            read: *mut isize,
+            write: *mut isize,
+            attrs: *const c_void,
+            size: u32,
+        ) -> i32;
+        pub fn GetStdHandle(which: u32) -> isize;
+        pub fn SetStdHandle(which: u32, handle: isize) -> i32;
+        pub fn ReadFile(h: isize, buf: *mut u8, len: u32, read: *mut u32, ov: *mut c_void) -> i32;
+        pub fn WriteFile(
+            h: isize,
+            buf: *const u8,
+            len: u32,
+            wrote: *mut u32,
+            ov: *mut c_void,
+        ) -> i32;
+        pub fn CloseHandle(h: isize) -> i32;
+        pub fn GetFileType(h: isize) -> u32;
+        pub fn GetFileInformationByHandle(h: isize, info: *mut [u32; 13]) -> i32;
     }
-    let Ok(mut captured) = CAPTURED.lock() else {
-        return;
-    };
-    if captured.is_some() {
-        return;
-    }
-    let mut original = [0isize; 2];
-    // STD_OUTPUT_HANDLE, STD_ERROR_HANDLE.
-    for (k, which) in [(-11i32) as u32, (-12i32) as u32].into_iter().enumerate() {
-        let (mut read, mut write) = (0isize, 0isize);
-        // SAFETY: plain kernel32 calls; the pipe's handles stay open for the run (a late write
-        // into one still reaches its thread, which passes it on).
-        unsafe {
-            original[k] = GetStdHandle(which);
-            if CreatePipe(&mut read, &mut write, std::ptr::null(), 1 << 16) == 0 {
-                continue;
-            }
+    /// `STD_OUTPUT_HANDLE`, `STD_ERROR_HANDLE`.
+    pub const OUT: u32 = -11i32 as u32;
+    pub const ERR: u32 = -12i32 as u32;
+
+    /// Whether handles `a` and `b` lead to the same place: the same handle, both a console, or
+    /// the same file (its volume and index).
+    pub fn same_place(a: isize, b: isize) -> bool {
+        if a == b {
+            return true;
         }
-        let own = original[k];
-        let spawned = std::thread::Builder::new()
+        // SAFETY: plain kernel32 queries on the process's own handles, into a local.
+        unsafe {
+            let (ta, tb) = (GetFileType(a), GetFileType(b));
+            if ta == 2 && tb == 2 {
+                return true;
+            }
+            let (mut ia, mut ib) = ([0u32; 13], [0u32; 13]);
+            ta == 1
+                && tb == 1
+                && GetFileInformationByHandle(a, &mut ia) != 0
+                && GetFileInformationByHandle(b, &mut ib) != 0
+                && (ia[7], ia[11], ia[12]) == (ib[7], ib[11], ib[12])
+        }
+    }
+}
+
+/// From here until [`release_output`], what the run prints to its standard output and error
+/// (Rust's `print!` and `eprint!`, which look the handles up on each write) goes through a pipe,
+/// whose thread passes it on unchanged to where it went before (the console, the log file) and
+/// keeps the last lines for the card. A panic, and the end of the process
+/// (`engine_platform::end_process`), hand everything still in a pipe on first
+/// ([`finish_output`]). Windows only; once.
+#[cfg(windows)]
+pub(crate) fn capture_output() -> Option<Capture> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use win::*;
+    let mut captured = CAPTURED.lock().ok()?;
+    if captured.is_some() {
+        return None;
+    }
+    // SAFETY: plain kernel32 calls.
+    let (out, err) = unsafe { (GetStdHandle(OUT), GetStdHandle(ERR)) };
+    let groups: Vec<(Vec<u32>, isize)> = if same_place(out, err) {
+        vec![(vec![OUT, ERR], out)]
+    } else {
+        vec![(vec![OUT], out), (vec![ERR], err)]
+    };
+    let mut pipes = Vec::new();
+    for (which, original) in groups {
+        let (mut read, mut write) = (0isize, 0isize);
+        // SAFETY: as above; the handles stay open until `finish_output`.
+        if unsafe { CreatePipe(&mut read, &mut write, std::ptr::null(), 1 << 16) } == 0 {
+            continue;
+        }
+        let done = std::sync::Arc::new(AtomicBool::new(false));
+        let (served, ended) = (which.clone(), done.clone());
+        let reader = std::thread::Builder::new()
             .name("nv-rs output".into())
             .spawn(move || {
                 let (mut buf, mut line) = ([0u8; 4096], Vec::new());
@@ -377,23 +446,17 @@ pub(crate) fn capture_output() {
                     let mut n = 0u32;
                     // SAFETY: reads into `buf` within its length; writes what was read.
                     let ok = unsafe {
-                        ReadFile(
-                            read,
-                            buf.as_mut_ptr(),
-                            buf.len() as u32,
-                            &mut n,
-                            std::ptr::null_mut(),
-                        )
+                        ReadFile(read, buf.as_mut_ptr(), 4096, &mut n, std::ptr::null_mut())
                     };
                     if ok == 0 || n == 0 {
-                        return;
+                        break;
                     }
                     let data = &buf[..n as usize];
-                    if own != 0 && own != -1 {
+                    if original != 0 && original != -1 {
                         let mut wrote = 0u32;
                         // SAFETY: as above.
                         unsafe {
-                            WriteFile(own, data.as_ptr(), n, &mut wrote, std::ptr::null_mut())
+                            WriteFile(original, data.as_ptr(), n, &mut wrote, std::ptr::null_mut())
                         };
                     }
                     for &b in data {
@@ -413,35 +476,99 @@ pub(crate) fn capture_output() {
                         }
                     }
                 }
+                // Ended or failed: a std handle still on this pipe goes back to its own, so no
+                // print waits on a pipe nobody reads.
+                for &w in &served {
+                    // SAFETY: as above.
+                    unsafe {
+                        if GetStdHandle(w) == write {
+                            SetStdHandle(w, original);
+                        }
+                    }
+                }
+                // SAFETY: the read end, closed once, by its reader.
+                unsafe { CloseHandle(read) };
+                ended.store(true, Ordering::Release);
             });
-        if spawned.is_ok() {
+        match reader {
+            Ok(reader) => {
+                for &w in &which {
+                    // SAFETY: as above.
+                    unsafe { SetStdHandle(w, write) };
+                }
+                pipes.push(Pipe {
+                    write,
+                    which,
+                    original,
+                    reader,
+                    done,
+                });
+            }
             // SAFETY: as above.
-            unsafe { SetStdHandle(which, write) };
+            Err(_) => unsafe {
+                CloseHandle(read);
+                CloseHandle(write);
+            },
         }
     }
-    *captured = Some(original);
+    *captured = Some((pipes, false));
+    drop(captured);
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        finish_output();
+        previous(info);
+    }));
+    Some(Capture(()))
 }
 
 #[cfg(not(windows))]
-pub(crate) fn capture_output() {}
+pub(crate) fn capture_output() -> Option<Capture> {
+    None
+}
 
-/// The standard output and error back to their own handles (the screen is gone).
-#[cfg(windows)]
+/// The standard output and error back to their own handles (the screen is gone); the pipes stay
+/// open, so a print that had already looked its handle up still gets passed on.
 pub(crate) fn release_output() {
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn SetStdHandle(which: u32, handle: isize) -> i32;
-    }
-    if let Some(original) = CAPTURED.lock().ok().and_then(|mut c| c.take()) {
-        for (k, which) in [(-11i32) as u32, (-12i32) as u32].into_iter().enumerate() {
-            // SAFETY: a plain kernel32 call with the handle it had before.
-            unsafe { SetStdHandle(which, original[k]) };
+    #[cfg(windows)]
+    if let Ok(mut c) = CAPTURED.lock() {
+        if let Some((pipes, restored)) = c.as_mut() {
+            for p in pipes.iter() {
+                for &w in &p.which {
+                    // SAFETY: a plain kernel32 call with the handle it had before.
+                    unsafe { win::SetStdHandle(w, p.original) };
+                }
+            }
+            *restored = true;
         }
     }
 }
 
-#[cfg(not(windows))]
-pub(crate) fn release_output() {}
+/// The capture ended for the end of the process or a panic: the std handles back, each pipe's
+/// write end closed so its reader passes on everything left and ends, and the readers waited
+/// for (at most about 200 ms in all). Nothing when nothing was captured.
+pub fn finish_output() {
+    #[cfg(windows)]
+    {
+        use std::sync::atomic::Ordering;
+        release_output();
+        let Some((pipes, _)) = CAPTURED.lock().ok().and_then(|mut c| c.take()) else {
+            return;
+        };
+        for p in &pipes {
+            // SAFETY: the write end made by `capture_output`, closed once (taken out above).
+            unsafe { win::CloseHandle(p.write) };
+        }
+        let until = std::time::Instant::now() + std::time::Duration::from_millis(200);
+        for p in pipes {
+            while !p.done.load(Ordering::Acquire) && std::time::Instant::now() < until {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            if p.done.load(Ordering::Acquire) {
+                let _ = p.reader.join();
+            }
+        }
+    }
+}
 
 const SHADER: &str = "
 struct Q { rect: vec4<f32>, colour: vec4<f32> }
@@ -543,6 +670,8 @@ pub(crate) struct Screen {
     white: wgpu::TextureView,
     /// The last text drawn and its texture, by line.
     text: Vec<(String, u32, (u32, u32, wgpu::TextureView))>,
+    /// The share the bar last showed: it never shows less.
+    shown: f32,
     /// A gate that never stops the screen (zero: the game has shown no picture): the screen
     /// drawn on its own.
     ungated: wgpu::Buffer,
@@ -706,6 +835,7 @@ impl Screen {
             white,
             text: Vec::new(),
             ungated,
+            shown: 0.0,
         }
     }
 
@@ -787,8 +917,13 @@ impl Screen {
             [bx + 2.0, by + 2.0, bw - 4.0, bh - 4.0],
             paper,
         ));
-        if let Some(done) = p.done {
-            let fill = ((bw - 6.0) * done.clamp(0.0, 1.0)).round();
+        // Never less than the last frame drew: one bar through the whole start.
+        let done = p
+            .done
+            .map_or(self.shown, |d| d.clamp(0.0, 1.0).max(self.shown));
+        self.shown = done;
+        if done > 0.0 {
+            let fill = ((bw - 6.0) * done).round();
             quads.push((
                 self.white.clone(),
                 [bx + 3.0, by + 3.0, fill, bh - 6.0],
@@ -952,5 +1087,58 @@ mod tests {
         let (_, two, _) = super::text_image("one\ntwo", 12, super::LOG_FONT).expect("GDI");
         let (_, one, _) = super::text_image("one", 12, super::LOG_FONT).expect("GDI");
         assert_eq!(two, 2 * one);
+    }
+
+    /// A run that ends while its output is captured loses none of it: the child (this test run
+    /// again) captures, prints 2,000 lines of 100 bytes on each stream in turn (more than a pipe holds, so a
+    /// pipe is full when it ends) and ends as
+    /// `engine_platform::end_process` does; each line reaches its own stream exactly once.
+    #[cfg(windows)]
+    #[test]
+    fn a_run_ending_while_captured_loses_no_line() {
+        if std::env::var_os("NV_CAPTURE_CHILD").is_some() {
+            let _capture = super::capture_output();
+            // The test harness's "test ... " has no line end yet.
+            println!();
+            let pad = "x".repeat(90);
+            for i in 0..2000 {
+                println!("out {i} {pad}");
+                eprintln!("err {i} {pad}");
+            }
+            // Last a line of 200,000 bytes on each: most of it still in the pipe at the end.
+            println!("{}", "y".repeat(200_000));
+            eprintln!("{}", "z".repeat(200_000));
+            super::finish_output();
+            std::process::exit(0);
+        }
+        let me = std::env::current_exe().expect("the test binary");
+        let out = std::process::Command::new(me)
+            .args([
+                "loading::tests::a_run_ending_while_captured_loses_no_line",
+                "--exact",
+                "--nocapture",
+                "--test-threads",
+                "1",
+            ])
+            .env("NV_CAPTURE_CHILD", "1")
+            .output()
+            .expect("the child");
+        let (o, e) = (
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        let (y, z) = ("y".repeat(200_000), "z".repeat(200_000));
+        assert_eq!(o.lines().filter(|l| *l == y).count(), 1, "the last line out");
+        assert_eq!(e.lines().filter(|l| *l == z).count(), 1, "the last line err");
+        let pad = "x".repeat(90);
+        for i in 0..2000 {
+            let (want_o, want_e) = (format!("out {i} {pad}"), format!("err {i} {pad}"));
+            assert_eq!(o.lines().filter(|l| *l == want_o).count(), 1, "{want_o}");
+            assert_eq!(
+                e.lines().filter(|l| *l == want_e).count(),
+                1,
+                "{want_e}"
+            );
+        }
     }
 }
