@@ -2108,10 +2108,12 @@ mod tests {
 
     /// What a pixel shader reads from a varying its vertex shader does not write, on the real
     /// Direct3D 9 (the driver the game ran on): the values the wgpu backend writes for it
-    /// (`d3d9_wgpu::sm::wgsl::unwritten`). They are DXVK's: COLOR0 (1, 1, 1, 1); COLOR1
-    /// (0, 0, 0, 1) from a shader model 2 vertex shader, (0, 0, 0, 0) from vs_3_0; TEXCOORD0
-    /// (0, 0, 0, 0). Measured here and asserted; ignored, since it needs a display adapter and
-    /// the real driver (`-- --ignored --nocapture unwritten`; each value printed as B, G, R, A).
+    /// (`d3d9_wgpu::sm::wgsl::unwritten`). COLOR0 (1, 1, 1, 1) after vs_1_1, vs_2_0 and vs_3_0;
+    /// COLOR1 (0, 0, 0, 1) after vs_1_1 and vs_2_0, (0, 0, 0, 0) after vs_3_0; TEXCOORD0
+    /// (0, 0, 0, 0). A colour written only in x, y and z keeps that value's alpha: 1, and 0 for
+    /// COLOR1 after vs_3_0. Measured here and asserted; ignored, since it needs a display adapter
+    /// and the real driver (`-- --ignored --nocapture unwritten`; each value printed as B, G, R,
+    /// A).
     #[test]
     #[ignore]
     fn what_an_unwritten_varying_reads_on_the_real_direct3d_9() {
@@ -2190,6 +2192,52 @@ mod tests {
             0x90e4_0000,
             END,
         ];
+        // vs_1_1: dcl_position v0; mov oPos, v0 (shader model 1 tokens carry no length).
+        let vs1 = vec![
+            0xfffe_0101,
+            0x0000_001f,
+            0x8000_0000,
+            0x900f_0000,
+            0x0000_0001,
+            0xc00f_0000,
+            0x90e4_0000,
+            END,
+        ];
+        // The same, also writing only x, y and z of a colour output from c0 (mov oDn.xyz, c0).
+        let partial1 = |n: u32| {
+            let mut v = vs1[..vs1.len() - 1].to_vec();
+            v.extend([0x0000_0001, 0xd007_0000 | n, 0xa0e4_0000, END]);
+            v
+        };
+        let partial2 = |n: u32| {
+            let mut v = vs2[..vs2.len() - 1].to_vec();
+            v.extend([0x0200_0001, 0xd007_0000 | n, 0xa0e4_0000, END]);
+            v
+        };
+        // vs_3_0 with dcl_colorN o1.xyz; mov o1.xyz, c0.
+        // (Declarations before the instructions: dcl_position v0; dcl_position o0;
+        // dcl_colorN o1.xyz; mov o0, v0; mov o1.xyz, c0.)
+        let partial3 = |usage: u32| {
+            vec![
+                0xfffe_0300,
+                0x0200_001f,
+                0x8000_0000,
+                0x900f_0000,
+                0x0200_001f,
+                0x8000_0000,
+                0xe00f_0000,
+                0x0200_001f,
+                usage,
+                0xe007_0001,
+                0x0200_0001,
+                0xe00f_0000,
+                0x90e4_0000,
+                0x0200_0001,
+                0xe007_0001,
+                0xa0e4_0000,
+                END,
+            ]
+        };
         // ps_2_0: dcl REG; mov oC0, REG.
         let ps2 = |dcl: u32, src: u32| {
             vec![
@@ -2216,14 +2264,48 @@ mod tests {
                 END,
             ]
         };
+        let (c0, c1) = (ps2(0x900f_0000, 0x90e4_0000), ps2(0x900f_0001, 0x90e4_0001));
         let pairs = [
-            ("vs_2_0 COLOR0", &vs2, ps2(0x900f_0000, 0x90e4_0000)),
-            ("vs_2_0 COLOR1", &vs2, ps2(0x900f_0001, 0x90e4_0001)),
-            ("vs_2_0 TEXCOORD0", &vs2, ps2(0xb00f_0000, 0xb0e4_0000)),
-            ("vs_3_0 COLOR0", &vs3, ps3(0x8000_000a, 0)),
-            ("vs_3_0 COLOR1", &vs3, ps3(0x8001_000a, 1)),
-            ("vs_3_0 TEXCOORD0", &vs3, ps3(0x8000_0005, 2)),
+            ("vs_1_1 COLOR0", vs1.clone(), c0.clone()),
+            ("vs_1_1 COLOR1", vs1.clone(), c1.clone()),
+            ("vs_2_0 COLOR0", vs2.clone(), c0.clone()),
+            ("vs_2_0 COLOR1", vs2.clone(), c1.clone()),
+            (
+                "vs_2_0 TEXCOORD0",
+                vs2.clone(),
+                ps2(0xb00f_0000, 0xb0e4_0000),
+            ),
+            ("vs_3_0 COLOR0", vs3.clone(), ps3(0x8000_000a, 0)),
+            ("vs_3_0 COLOR1", vs3.clone(), ps3(0x8001_000a, 1)),
+            ("vs_3_0 TEXCOORD0", vs3.clone(), ps3(0x8000_0005, 2)),
+            // Written in part: x, y and z from c0 (0.25, 0.5, 0.75), the alpha not.
+            ("vs_1_1 COLOR0.xyz", partial1(0), c0.clone()),
+            ("vs_1_1 COLOR1.xyz", partial1(1), c1.clone()),
+            ("vs_2_0 COLOR0.xyz", partial2(0), c0.clone()),
+            ("vs_2_0 COLOR1.xyz", partial2(1), c1.clone()),
+            (
+                "vs_3_0 COLOR0.xyz",
+                partial3(0x8000_000a),
+                ps3(0x8000_000a, 0),
+            ),
+            (
+                "vs_3_0 COLOR1.xyz",
+                partial3(0x8001_000a),
+                ps3(0x8001_000a, 1),
+            ),
         ];
+        // c0 of the vertex shaders: (0.25, 0.5, 0.75, 0.375).
+        let regs: Vec<u32> = [0.25f32, 0.5, 0.75, 0.375]
+            .iter()
+            .map(|f| f.to_bits())
+            .collect();
+        b.execute(Cmd::SetConstants {
+            device: DEVICE,
+            kind: 0,
+            start: 0,
+            count: 1,
+            data: Data::from_words(&regs),
+        });
         // A triangle over the whole target, at depth 0.5.
         let triangle: Vec<u32> = [
             -3.0f32, -3.0, 0.5, 1.0, -3.0, 9.0, 0.5, 1.0, 9.0, -3.0, 0.5, 1.0,
@@ -2285,20 +2367,30 @@ mod tests {
             seen.push((*name, px));
         }
         assert!(b.logged.is_empty(), "differing answers: {:?}", b.logged);
-        // Measured on 2026-11-11 (NVIDIA RTX 5070 Ti Laptop, its Direct3D 9 driver): DXVK's
-        // values, COLOR0 white from either model.
+        // Measured on 2026-11-11 (NVIDIA RTX 5070 Ti Laptop, its Direct3D 9 driver). A partial
+        // write (x, y, z from c0: B 191, G 127, R 64) keeps the unwritten value's alpha.
         let white = [255, 255, 255, 255];
         let black = [0, 0, 0, 255];
         let zero = [0, 0, 0, 0];
+        let rgb_1 = [191, 127, 64, 255];
+        let rgb_0 = [191, 127, 64, 0];
         assert_eq!(
             seen,
             [
+                ("vs_1_1 COLOR0", white),
+                ("vs_1_1 COLOR1", black),
                 ("vs_2_0 COLOR0", white),
                 ("vs_2_0 COLOR1", black),
                 ("vs_2_0 TEXCOORD0", zero),
                 ("vs_3_0 COLOR0", white),
                 ("vs_3_0 COLOR1", zero),
                 ("vs_3_0 TEXCOORD0", zero),
+                ("vs_1_1 COLOR0.xyz", rgb_1),
+                ("vs_1_1 COLOR1.xyz", rgb_1),
+                ("vs_2_0 COLOR0.xyz", rgb_1),
+                ("vs_2_0 COLOR1.xyz", rgb_1),
+                ("vs_3_0 COLOR0.xyz", rgb_1),
+                ("vs_3_0 COLOR1.xyz", rgb_0),
             ]
         );
     }

@@ -25,7 +25,8 @@
 //!   each varying has one location for every shader (TEXCOORD n at n, COLOR n at 8 + n), so a
 //!   pixel shader's module serves every vertex shader, and a vertex shader's every pixel shader
 //!   that reads only what it writes (it writes all of its varyings; a pixel shader reading one it
-//!   does not write gets a module of the vertex shader that writes that one as 0).
+//!   does not write gets a module of the vertex shader that writes it with the value the real
+//!   Direct3D 9 gives such a varying, [`unwritten`]).
 //! - **Invariant position**: every vertex shader's position is `@invariant`, so two draws whose
 //!   shaders compute it the same way get the same bits, and a second pass over the same geometry
 //!   with an equal depth test meets the first (DXVK's `d3d9.invariantPosition`, on by default).
@@ -245,8 +246,9 @@ pub fn signature(p: &Program) -> Signature {
 pub struct Link {
     /// Vertex shaders: how each input register `v#` arrives (by register number, 16 at most).
     pub inputs: Vec<Input>,
-    /// The varyings between the two stages, in location order: a vertex shader writes these
-    /// (0 for any it does not write), a pixel shader reads them.
+    /// The varyings between the two stages, in location order: a vertex shader writes these (the
+    /// real Direct3D 9's value, [`unwritten`], for any it does not write), a pixel shader reads
+    /// them.
     pub varyings: Vec<Semantic>,
     /// Whether each varying (as `varyings`) is interpolated at the centroid, on both stages (wgpu
     /// wants the two to agree): every one for the device's pairs ([`centroid_everywhere`],
@@ -289,8 +291,11 @@ pub const CLIP_SLOTS: [u32; 2] = [10, 11];
 
 /// What a pixel shader reads from a varying its vertex shader (of shader model `vs_major`) does
 /// not write, as the real Direct3D 9 gives it: COLOR0 white; COLOR1 (0, 0, 0, 1) after a shader
-/// model 1 or 2 vertex shader and 0 after vs_3_0; anything else 0. Measured on NVIDIA's driver
-/// (engine-platform's `what_an_unwritten_varying_reads_on_the_real_direct3d_9`), and DXVK's values.
+/// model 1 or 2 vertex shader and 0 after vs_3_0; anything else 0. The components a shader
+/// leaves unwritten of an output it writes in part keep this value too (`mov oD0.xyz, c0` reads
+/// alpha 1). Measured on NVIDIA's driver with vs_1_1, vs_2_0 and vs_3_0 (engine-platform's
+/// `what_an_unwritten_varying_reads_on_the_real_direct3d_9`); DXVK also reads an unwritten
+/// COLOR0 as white.
 pub fn unwritten(v: Semantic, vs_major: u8) -> &'static str {
     match (v.usage, v.index) {
         (usage::COLOR, 0) => "vec4<f32>(1.0)",
@@ -585,10 +590,19 @@ impl Gen<'_> {
                 let _ = writeln!(self.out, "var<private> v{}: vec4<f32>;", r.n);
             }
             let _ = writeln!(self.out, "var<private> o_pos: vec4<f32>;");
-            // `oPos` is `o_pos` (above); every other output register its own variable.
-            for (r, _) in &self.sig.outputs.clone() {
+            // `oPos` is `o_pos` (above); every other output register its own variable. It starts
+            // at what the real Direct3D 9 gives the components a shader leaves unwritten of it
+            // ([`unwritten`]: `mov oD0.xyz, c0` reads alpha 1, measured), so a partial write
+            // keeps the rest as the original does.
+            let major = self.p.major;
+            for (r, s) in &self.sig.outputs.clone() {
                 if !(r.ty == reg::RASTOUT && r.n == 0) {
-                    let _ = writeln!(self.out, "var<private> {}: vec4<f32>;", out_name(*r));
+                    let _ = writeln!(
+                        self.out,
+                        "var<private> {}: vec4<f32> = {};",
+                        out_name(*r),
+                        unwritten(*s, major)
+                    );
                 }
             }
         } else {
@@ -1858,6 +1872,8 @@ mod tests {
             "{v}"
         );
         assert!(v.contains("@location(1) k0: vec4<f32>"), "{v}");
+        // The pair's own link writes the unwritten COLOR1 as the real Direct3D 9 gives it too.
+        assert!(v.contains("out.l0 = vec4<f32>(0.0, 0.0, 0.0, 1.0);"), "{v}");
         // A varying without a fixed location.
         let normal = Semantic {
             usage: usage::NORMAL,
@@ -1885,6 +1901,43 @@ mod tests {
         assert_eq!(unwritten(s(usage::COLOR, 2), 2), "vec4<f32>(0.0)");
         assert_eq!(unwritten(s(usage::TEXCOORD, 0), 2), "vec4<f32>(0.0)");
         assert_eq!(unwritten(s(usage::FOG, 0), 1), "vec4<f32>(0.0)");
+        // A vertex shader's output registers start at that value, so what a partial write
+        // leaves keeps it: vs_2_0 dcl_position v0; mov oPos, v0; mov oD0.xyz, c0;
+        // mov oD1.xyz, c0.
+        let vs = [
+            0xFFFE_0200,
+            0x0200_001F,
+            0x8000_0000,
+            0x900F_0000,
+            0x0200_0001,
+            0xC00F_0000,
+            0x90E4_0000,
+            0x0200_0001,
+            0xD007_0000,
+            0xA0E4_0000,
+            0x0200_0001,
+            0xD007_0001,
+            0xA0E4_0000,
+            super::super::END,
+        ];
+        let varyings = vec![s(usage::COLOR, 0), s(usage::COLOR, 1)];
+        let v = converts(
+            &vs,
+            &Link {
+                inputs: vec![Input::Float(4)],
+                centroid: centroid_everywhere(varyings.len()),
+                varyings,
+                ..Link::default()
+            },
+        );
+        assert!(
+            v.contains("var<private> oD0: vec4<f32> = vec4<f32>(1.0);"),
+            "{v}"
+        );
+        assert!(
+            v.contains("var<private> oD1: vec4<f32> = vec4<f32>(0.0, 0.0, 0.0, 1.0);"),
+            "{v}"
+        );
     }
 
     /// The device's link puts every varying at the centroid on both stages (the pixel shader
