@@ -56,8 +56,10 @@ pub fn world_draw_first(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulato
     if !start(e, camera, acc.addr()) {
         return;
     }
-    if super::detach::switch_on() {
-        // The drawing thread's step 1: the lists the draw walks leave guest memory for the draw's view.
+    // The drawing thread's step 1: the lists the draw walks leave guest memory for the draw's view. Only with the
+    // shader family on: its list walks and clears are what read the view (by address, the translations would read
+    // the zeroed words, draw nothing by pass type and never clear the lists).
+    if super::detach::switch_on() && e.typed_mode(shader::FAMILY) != engine_core::typed::Mode::Off {
         let mut words = Vec::new();
         for i in 0..packet::renderer_count(e, acc) {
             super::detach::list_words(e, packet::renderer(e, acc, i).addr(), &mut words);

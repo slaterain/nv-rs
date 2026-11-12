@@ -4455,6 +4455,73 @@ fn overridable_addresses_are_called_by_address() {
     );
 }
 
+/// The world draw's list fields go through the drawing thread's view (`draw::detach`; #473's review): no raw
+/// `e.get` or `e.set` of a pass list's head, tail or count, an active pass entry, a group's or a holder's count
+/// or a holder's flags in the draw family or the batch renderer. A word read in place is a word the view
+/// cannot hand to a drawing thread. A ratchet at none.
+#[test]
+fn draw_list_fields_go_through_the_view() {
+    const FIELDS: [&str; 8] = [
+        "PassList::pHead",
+        "PassList::pTail",
+        "PassList::uiCount",
+        "ActivePass::usItem",
+        "ActivePass::pNext",
+        "PassGroup::uiCount",
+        "PassHolder::usCount",
+        "PassHolder::ucFlags",
+    ];
+    let root = repo_root();
+    let mut files = 0;
+    let mut found = Vec::new();
+    for file in list_files(&root).files {
+        let rel = file.rel.as_str();
+        let in_scope = (rel.starts_with("crates/engine-typed/src/draw/")
+            || rel == "crates/engine-typed/src/shader/batch.rs")
+            && rel.ends_with(".rs");
+        if !in_scope {
+            continue;
+        }
+        files += 1;
+        let text = fs::read(&file.path)
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default();
+        let code = code_only(&text);
+        for call in ["e.get(", "e.set("] {
+            for (at, _) in code.match_indices(call) {
+                // The call's own arguments: what lies directly inside its parentheses, nested calls (a `vget`
+                // inside, which goes through the view) left out.
+                let mut depth = 0usize;
+                let mut own = String::new();
+                for c in code[at + call.len() - 1..].chars() {
+                    match c {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ if depth == 1 => own.push(c),
+                        _ => {}
+                    }
+                }
+                if let Some(field) = FIELDS.iter().find(|f| own.contains(**f)) {
+                    let line = code[..at].matches('\n').count() + 1;
+                    found.push(format!("{rel}:{line}: {call}..{field}"));
+                }
+            }
+        }
+    }
+    assert!(files >= 10, "only {files} draw sources");
+    assert!(
+        found.is_empty(),
+        "{} raw list field access(es), go through draw::detach:\n{}",
+        found.len(),
+        found.join("\n")
+    );
+}
+
 mod typed_rules {
     use super::*;
 

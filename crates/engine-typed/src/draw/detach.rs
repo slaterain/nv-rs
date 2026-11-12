@@ -7,19 +7,23 @@
 //! would be. The draw's list walks and clears read and write them through [`word`] and [`set_word`], which
 //! answer the view while it is open. As the second half ends the view's words go back to guest memory and the
 //! view closes. Serially nothing else runs between, so the frame ends with the same memory as without the
-//! switch; a list read that bypasses the view would see a zeroed word instead, and the recorded run would
-//! differ. That is what this step proves: the draw's list state is complete in the view, so a drawing thread
-//! can take it while main fills the guest lists again.
+//! switch, and a list read that bypasses the view sees a zeroed word instead. A byte-identical recorded run
+//! therefore shows that the list readers the route reaches go through the view. It does not show the view is
+//! complete: a word left out of it stays in guest memory and reads correctly. The checks here catch what they
+//! can of that: every held word must still read 0 in guest memory when the view closes and after each hand-back
+//! ([`suspended`], [`suspended_for`]), or something wrote it in place.
 //!
 //! Each list's spare node chain stays in guest memory: the draw's clears hand this frame's nodes to it as
 //! today. A drawing thread will need those handed back at its end instead (the design's "deferred return").
 //!
 //! Off by default; off, [`word`] and [`set_word`] are the guest reads and writes they replace, behind one relaxed
-//! load. The view is per run (the kernel table's address keys it), so tests' engines keep their own.
+//! load. A view belongs to the run (the kernel table's address) and to the engine that opened it: another
+//! engine of the same run (a real thread's) reads guest memory. With it on, the first cut and every thousandth
+//! print a line (cuts, words taken, hand-backs, words found written in place).
 
 use engine_core::Engine;
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::{Mutex, OnceLock};
 
 /// `NV_DRAW_DETACH=1` (or `on`), read once.
@@ -33,19 +37,86 @@ pub fn switch_on() -> bool {
     })
 }
 
-/// Whether any run has a view open: the accessors' one check while none has.
+/// Whether any engine has a view open: the accessors' one check while none has.
 static OPEN: AtomicBool = AtomicBool::new(false);
 
-/// The open views, by run (the kernel table's address).
-static VIEWS: Mutex<Vec<(usize, HashMap<u32, u32>)>> = Mutex::new(Vec::new());
-
-fn run(e: &Engine) -> usize {
-    e.kernel.id()
+/// An open view: the run and the engine that opened it, and the words it holds.
+struct View {
+    run: usize,
+    engine: usize,
+    words: HashMap<u32, u32>,
 }
 
-/// Opens this run's view with the guest words at `addrs` (4-byte aligned): each word's value goes into it and the
-/// guest word is zeroed. A word named twice is taken once.
+/// The open views.
+static VIEWS: Mutex<Vec<View>> = Mutex::new(Vec::new());
+
+/// What the views have done: cuts, words taken, hand-backs, words found written in place.
+static CUTS: AtomicU64 = AtomicU64::new(0);
+static WORDS: AtomicU64 = AtomicU64::new(0);
+static HAND_BACKS: AtomicU64 = AtomicU64::new(0);
+static IN_PLACE: AtomicU64 = AtomicU64::new(0);
+
+/// The view's owner: the run (the kernel table's address, shared by every real thread's engine) and the engine.
+fn key(e: &Engine) -> (usize, usize) {
+    (e.kernel.id(), e as *const Engine as usize)
+}
+
+fn views() -> std::sync::MutexGuard<'static, Vec<View>> {
+    VIEWS.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Takes this engine's view out of the list, if it has one.
+fn take_view(e: &Engine) -> Option<View> {
+    let (run, engine) = key(e);
+    let mut views = views();
+    let at = views
+        .iter()
+        .position(|v| v.run == run && v.engine == engine)?;
+    let view = views.swap_remove(at);
+    if views.is_empty() {
+        OPEN.store(false, Relaxed);
+    }
+    Some(view)
+}
+
+/// Puts `view` back in the list.
+fn put_view(view: View) {
+    let mut views = views();
+    views.push(view);
+    OPEN.store(true, Relaxed);
+}
+
+/// The held words that no longer read 0 in guest memory: something wrote them in place. Counted, and a test
+/// build stops on one.
+fn check_zero(e: &Engine, words: &HashMap<u32, u32>, when: &str) {
+    let mut written: Vec<u32> = words
+        .keys()
+        .copied()
+        .filter(|addr| e.global::<u32>(*addr) != 0)
+        .collect();
+    if written.is_empty() {
+        return;
+    }
+    written.sort_unstable();
+    IN_PLACE.fetch_add(written.len() as u64, Relaxed);
+    debug_assert!(
+        false,
+        "NV_DRAW_DETACH: {} held word(s) written in place {when}, the first at {:08x}",
+        written.len(),
+        written[0]
+    );
+}
+
+/// Opens this engine's view with the guest words at `addrs` (4-byte aligned): each word's value goes into it and
+/// the guest word is zeroed. A word named twice is taken once. A view this engine left open (a second half that
+/// never ran) is closed first, its words back in guest memory; a test build stops on one.
 pub fn open(e: &mut Engine, addrs: &[u32]) {
+    if OPEN.load(Relaxed) {
+        if let Some(left) = take_view(e) {
+            restore(e, left);
+            debug_assert!(false, "NV_DRAW_DETACH: a view was left open");
+        }
+    }
     let mut words = HashMap::with_capacity(addrs.len());
     for &addr in addrs {
         if let std::collections::hash_map::Entry::Vacant(slot) = words.entry(addr) {
@@ -53,64 +124,66 @@ pub fn open(e: &mut Engine, addrs: &[u32]) {
             e.set_global(addr, 0u32);
         }
     }
-    let id = run(e);
-    let mut views = VIEWS.lock().unwrap_or_else(|p| p.into_inner());
-    views.retain(|(r, _)| *r != id);
-    views.push((id, words));
-    OPEN.store(true, Relaxed);
+    let cuts = CUTS.fetch_add(1, Relaxed) + 1;
+    let taken = WORDS.fetch_add(words.len() as u64, Relaxed) + words.len() as u64;
+    if cuts == 1 || cuts % 1000 == 0 {
+        eprintln!(
+            "NV_DRAW_DETACH: {cuts} cuts, {taken} words taken ({} this cut), {} hand-backs, {} words written in place",
+            words.len(),
+            HAND_BACKS.load(Relaxed),
+            IN_PLACE.load(Relaxed)
+        );
+    }
+    let (run, engine) = key(e);
+    put_view(View { run, engine, words });
 }
 
-/// Closes this run's view: every word goes back to guest memory. Nothing when none is open (one relaxed load
-/// when no run has one: the switch off).
-pub fn close(e: &mut Engine) {
-    if !OPEN.load(Relaxed) {
-        return;
-    }
-    let id = run(e);
-    let words = {
-        let mut views = VIEWS.lock().unwrap_or_else(|p| p.into_inner());
-        let Some(at) = views.iter().position(|(r, _)| *r == id) else {
-            return;
-        };
-        let (_, words) = views.swap_remove(at);
-        if views.is_empty() {
-            OPEN.store(false, Relaxed);
-        }
-        words
-    };
-    let mut words: Vec<(u32, u32)> = words.into_iter().collect();
+/// The view's words back in guest memory, in address order.
+fn restore(e: &mut Engine, view: View) {
+    let mut words: Vec<(u32, u32)> = view.words.into_iter().collect();
     words.sort_unstable();
     for (addr, value) in words {
         e.set_global(addr, value);
     }
 }
 
-/// Whether this run has a view open.
+/// Closes this engine's view: every word it holds must still read 0 in guest memory, then goes back there.
+/// Nothing when it has none (one relaxed load while no engine has one: the switch off).
+pub fn close(e: &mut Engine) {
+    if !OPEN.load(Relaxed) {
+        return;
+    }
+    let Some(view) = take_view(e) else {
+        return;
+    };
+    check_zero(e, &view.words, "at the close");
+    restore(e, view);
+}
+
+/// Whether this engine has a view open.
 pub fn is_open(e: &Engine) -> bool {
     if !OPEN.load(Relaxed) {
         return false;
     }
-    let id = run(e);
-    let views = VIEWS.lock().unwrap_or_else(|p| p.into_inner());
-    views.iter().any(|(r, _)| *r == id)
+    let (run, engine) = key(e);
+    views().iter().any(|v| v.run == run && v.engine == engine)
 }
 
 fn in_view(e: &Engine, addr: u32) -> Option<u32> {
-    let id = run(e);
-    let views = VIEWS.lock().unwrap_or_else(|p| p.into_inner());
-    views
+    let (run, engine) = key(e);
+    views()
         .iter()
-        .find(|(r, _)| *r == id)
-        .and_then(|(_, words)| words.get(&addr).copied())
+        .find(|v| v.run == run && v.engine == engine)
+        .and_then(|v| v.words.get(&addr).copied())
 }
 
 fn store_in_view(e: &Engine, addr: u32, value: u32) -> bool {
-    let id = run(e);
-    let mut views = VIEWS.lock().unwrap_or_else(|p| p.into_inner());
+    let (run, engine) = key(e);
+    let mut views = views();
     match views
         .iter_mut()
-        .find(|(r, _)| *r == id)
-        .and_then(|(_, words)| words.get_mut(&addr))
+        .find(|v| v.run == run && v.engine == engine)
+        .and_then(|v| v.words.get_mut(&addr))
     {
         Some(word) => {
             *word = value;
@@ -120,7 +193,7 @@ fn store_in_view(e: &Engine, addr: u32, value: u32) -> bool {
     }
 }
 
-/// The word at `addr`: the view's while it holds that word, else guest memory's.
+/// The word at `addr`: the view's while this engine's holds that word, else guest memory's.
 #[inline(always)]
 pub fn word(e: &Engine, addr: u32) -> u32 {
     if OPEN.load(Relaxed) {
@@ -131,7 +204,7 @@ pub fn word(e: &Engine, addr: u32) -> u32 {
     e.global::<u32>(addr)
 }
 
-/// Writes the word at `addr`: into the view while it holds that word, else into guest memory.
+/// Writes the word at `addr`: into the view while this engine's holds that word, else into guest memory.
 #[inline(always)]
 pub fn set_word(e: &mut Engine, addr: u32, value: u32) {
     if OPEN.load(Relaxed) && store_in_view(e, addr, value) {
@@ -189,8 +262,14 @@ pub fn list_words(e: &Engine, renderer: u32, out: &mut Vec<u32>) {
 
 /// Every word [`list_words`] looks at in renderer `renderer` and its holders' renderers, whatever its value. The
 /// structure it walks (the group array, the pass map, the holders and their renderers) is never in the view.
+/// Each renderer is walked once, so holders whose renderers point back at each other end.
 pub fn candidates(e: &Engine, renderer: u32, out: &mut Vec<u32>) {
-    if renderer == 0 {
+    let mut seen = HashSet::new();
+    candidates_of(e, renderer, out, &mut seen);
+}
+
+fn candidates_of(e: &Engine, renderer: u32, out: &mut Vec<u32>, seen: &mut HashSet<u32>) {
+    if renderer == 0 || !seen.insert(renderer) {
         return;
     }
     let mut take = |_: &Engine, addr: u32| out.push(addr);
@@ -235,9 +314,7 @@ pub fn candidates(e: &Engine, renderer: u32, out: &mut Vec<u32>) {
         nested.push(e.global::<u32>(holder.wrapping_add(8)));
     }
     for inner in nested {
-        if inner != renderer {
-            candidates(e, inner, out);
-        }
+        candidates_of(e, inner, out, seen);
     }
 }
 
@@ -249,32 +326,34 @@ pub fn suspended<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
     if !OPEN.load(Relaxed) {
         return f(e);
     }
-    let id = run(e);
-    let words = {
-        let mut views = VIEWS.lock().unwrap_or_else(|p| p.into_inner());
-        let Some(at) = views.iter().position(|(r, _)| *r == id) else {
-            drop(views);
-            return f(e);
-        };
-        let (_, words) = views.swap_remove(at);
-        if views.is_empty() {
-            OPEN.store(false, Relaxed);
-        }
-        words
+    let Some(view) = take_view(e) else {
+        return f(e);
     };
-    let mut addrs: Vec<u32> = words.keys().copied().collect();
+    HAND_BACKS.fetch_add(1, Relaxed);
+    let mut addrs: Vec<u32> = view.words.keys().copied().collect();
     addrs.sort_unstable();
-    for addr in &addrs {
-        e.set_global(*addr, words[addr]);
-    }
+    let View { run, engine, .. } = view;
+    restore(
+        e,
+        View {
+            run,
+            engine,
+            words: view.words,
+        },
+    );
     let answer = f(e);
-    open(e, &addrs);
+    let mut words = HashMap::with_capacity(addrs.len());
+    for addr in addrs {
+        words.insert(addr, e.global::<u32>(addr));
+        e.set_global(addr, 0u32);
+    }
+    put_view(View { run, engine, words });
     answer
 }
 
 /// [`suspended`] for the words `words` names only (those the view holds): they go back to guest memory for `f`,
-/// and are taken again after it. `words` makes the list only when a view is open, so with the switch off this is
-/// `f` behind one relaxed load.
+/// and are taken again after it; every other word the view holds must still read 0 in guest memory then. `words`
+/// makes the list only when a view is open, so with the switch off this is `f` behind one relaxed load.
 pub fn suspended_for<R>(
     e: &mut Engine,
     words: impl FnOnce(&Engine) -> Vec<u32>,
@@ -284,31 +363,26 @@ pub fn suspended_for<R>(
         return f(e);
     }
     let addrs = words(e);
-    let id = run(e);
+    let Some(mut view) = take_view(e) else {
+        return f(e);
+    };
+    HAND_BACKS.fetch_add(1, Relaxed);
     let mut moved = Vec::new();
-    {
-        let mut views = VIEWS.lock().unwrap_or_else(|p| p.into_inner());
-        let Some((_, words)) = views.iter_mut().find(|(r, _)| *r == id) else {
-            drop(views);
-            return f(e);
-        };
-        for addr in &addrs {
-            if let Some(value) = words.remove(addr) {
-                moved.push((*addr, value));
-            }
+    for addr in &addrs {
+        if let Some(value) = view.words.remove(addr) {
+            moved.push((*addr, value));
         }
     }
     for (addr, value) in &moved {
         e.set_global(*addr, *value);
     }
     let answer = f(e);
-    let mut views = VIEWS.lock().unwrap_or_else(|p| p.into_inner());
-    if let Some((_, words)) = views.iter_mut().find(|(r, _)| *r == id) {
-        for (addr, _) in moved {
-            words.insert(addr, e.global::<u32>(addr));
-            e.set_global(addr, 0u32);
-        }
+    for (addr, _) in moved {
+        view.words.insert(addr, e.global::<u32>(addr));
+        e.set_global(addr, 0u32);
     }
+    check_zero(e, &view.words, "by a call handed only some words");
+    put_view(view);
     answer
 }
 
@@ -410,5 +484,143 @@ mod tests {
         set_word(&mut e, at, 5);
         assert_eq!((word(&e, at), e.mem.u32(at)), (5, 5));
         assert_eq!(suspended_for(&mut e, |_| vec![at], |e| e.mem.u32(at)), 5);
+    }
+
+    /// A batch renderer as the world accumulator's: groups, a pass map naming two of them, an active list,
+    /// the alpha group lists and grouped alphas, and two holders whose renderers point back at each other.
+    /// Every word the view should take holds a value. Answers the renderer and its candidate words.
+    fn renderer_world(e: &mut Engine) -> (u32, Vec<u32>) {
+        let renderer = e.mem.alloc(0x98);
+        let groups = e.mem.alloc(4 * 0x68);
+        let buckets = e.mem.alloc(4 * 37);
+        e.mem.set_u32(renderer + 0x08, groups);
+        e.mem.set_u32(renderer + 0x10, 37);
+        e.mem.set_u32(renderer + 0x14, buckets);
+        // Two map items in one bucket: pass types 0x10 and 0x11 to groups 1 and 3.
+        let second = e.mem.alloc(0xc);
+        e.mem.set_u32(second + 4, 0x11);
+        e.mem.set_u32(second + 8, 3);
+        let first = e.mem.alloc(0xc);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(first + 4, 0x10);
+        e.mem.set_u32(first + 8, 1);
+        e.mem.set_u32(buckets + 4 * 5, first);
+        let inner = e.mem.alloc(0x98);
+        let mut words = Vec::new();
+        for r in [renderer, inner] {
+            for offset in [
+                0x2cu32, 0x30, 0x78, 0x7c, 0x80, 0x84, 0x88, 0x8c, 0x90, 0x94,
+            ] {
+                words.push(r + offset);
+            }
+        }
+        for g in [1u32, 3] {
+            for list in 0..5u32 {
+                for offset in [4u32, 8, 0x10] {
+                    words.push(groups + g * 0x68 + list * 0x14 + offset);
+                }
+            }
+            words.push(groups + g * 0x68 + 0x64);
+        }
+        for (slot, owner) in [(0x3cu32, renderer), (0x74, inner)] {
+            let holder = e.mem.alloc(0x24);
+            e.mem.set_u32(owner + slot, holder);
+            e.mem
+                .set_u32(holder + 8, if owner == renderer { inner } else { renderer });
+            for offset in [0u32, 0x10, 0x14, 0x1c] {
+                words.push(holder + offset);
+            }
+        }
+        for (i, w) in (0u32..).zip(words.iter()) {
+            e.mem.set_u32(*w, 0x100 + i);
+        }
+        (renderer, words)
+    }
+
+    /// After the cut the guest structure reads as an empty frame: every word the view should hold reads 0 in
+    /// guest memory and its own value through the view; the structure itself is untouched.
+    #[test]
+    fn after_the_cut_the_lists_read_as_an_empty_frame() {
+        let mut e = Engine::new();
+        let (renderer, expected) = renderer_world(&mut e);
+        let mut found = Vec::new();
+        candidates(&e, renderer, &mut found);
+        let mut sorted_found = found.clone();
+        sorted_found.sort_unstable();
+        sorted_found.dedup();
+        let mut sorted_expected = expected.clone();
+        sorted_expected.sort_unstable();
+        assert_eq!(sorted_found, sorted_expected);
+        let mut taken = Vec::new();
+        list_words(&e, renderer, &mut taken);
+        open(&mut e, &taken);
+        for (i, w) in (0u32..).zip(expected.iter()) {
+            assert_eq!(e.mem.u32(*w), 0, "{w:08x} still in guest memory");
+            assert_eq!(word(&e, *w), 0x100 + i, "{w:08x} through the view");
+        }
+        assert_ne!(
+            e.mem.u32(renderer + 0x08),
+            0,
+            "the group array is not per frame"
+        );
+        close(&mut e);
+        for (i, w) in (0u32..).zip(expected.iter()) {
+            assert_eq!(e.mem.u32(*w), 0x100 + i);
+        }
+    }
+
+    /// A view left open (a second half that never ran) is closed by the next open, its words back first.
+    #[test]
+    #[cfg_attr(debug_assertions, should_panic(expected = "a view was left open"))]
+    fn a_view_left_open_is_put_back_by_the_next() {
+        let mut e = Engine::new();
+        let at = block(&mut e, 2);
+        open(&mut e, &[at]);
+        set_word(&mut e, at, 9);
+        open(&mut e, &[at + 4]);
+        assert_eq!(e.mem.u32(at), 9);
+        close(&mut e);
+        assert!(!is_open(&e));
+        assert_eq!([e.mem.u32(at), e.mem.u32(at + 4)], [9, 2]);
+    }
+
+    /// A held word written in place shows at the close.
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        should_panic(expected = "written in place at the close")
+    )]
+    fn a_word_written_in_place_shows_at_the_close() {
+        let mut e = Engine::new();
+        let at = block(&mut e, 2);
+        open(&mut e, &[at, at + 4]);
+        e.mem.set_u32(at + 4, 5);
+        close(&mut e);
+    }
+
+    /// A word a call handed only some words wrote in place shows when the view takes them again.
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        should_panic(expected = "by a call handed only some words")
+    )]
+    fn a_hand_back_that_writes_another_word_shows() {
+        let mut e = Engine::new();
+        let at = block(&mut e, 2);
+        open(&mut e, &[at, at + 4]);
+        suspended_for(&mut e, |_| vec![at], |e| e.mem.set_u32(at + 4, 6));
+        close(&mut e);
+    }
+
+    /// Another engine (another kernel here, as another run) reads guest memory, not this engine's view.
+    #[test]
+    fn another_engine_does_not_see_the_view() {
+        let mut e = Engine::new();
+        let other = Engine::new();
+        let at = block(&mut e, 1);
+        open(&mut e, &[at]);
+        assert!(!is_open(&other));
+        assert_eq!(word(&e, at), 1);
+        close(&mut e);
     }
 }

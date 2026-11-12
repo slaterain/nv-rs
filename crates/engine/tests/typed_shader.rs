@@ -7310,3 +7310,162 @@ fn render_batches_with_the_lists_detached() {
         },
     );
 }
+
+// ---- The drawing thread's view (`draw::detach`, #473's review): the drivers with the lists detached ----
+
+/// Runs the typed driver `f` on two engines `setup` makes alike for each case: one plain, one with the
+/// accumulator's lists (its first word) detached into the drawing thread's view around the call, as the cut
+/// does. Both must answer the same and leave the same memory: every list word the driver and its callees read or
+/// write goes through the view (a word read in place would read 0), and no held word is written in place (the
+/// close checks that, and stops a test build).
+fn view_same(
+    name: &str,
+    f: AbiFn,
+    cases: &[Vec<u32>],
+    setup: impl Fn(&mut Engine, &Case) -> Vec<u32>,
+) {
+    let mut total = 0;
+    for words in cases {
+        let case = Case(words.iter().map(|w| Value::Word(*w)).collect());
+        let mut plain = Engine::new();
+        let a = setup(&mut plain, &case);
+        let answer = f(&mut plain, &a);
+        let mut viewed = Engine::new();
+        let b = setup(&mut viewed, &case);
+        assert_eq!(a, b, "{name} {words:x?}: the setups differ");
+        let acc = b[0];
+        let mut held = Vec::new();
+        for i in 0..viewed.mem.u32(acc + 0x18c) {
+            let renderer = viewed.mem.u32(acc + 0x174 + 4 * i);
+            detach::list_words(&viewed, renderer, &mut held);
+        }
+        total += held.len();
+        detach::open(&mut viewed, &held);
+        let viewed_answer = f(&mut viewed, &b);
+        detach::close(&mut viewed);
+        assert_eq!(
+            answer, viewed_answer,
+            "{name} {words:x?}: the answers differ"
+        );
+        assert_eq!(
+            memory_digest(&plain),
+            memory_digest(&viewed),
+            "{name} {words:x?}: the memory differs"
+        );
+    }
+    assert!(total > 0, "{name}: no case held a list word");
+}
+
+
+#[test]
+fn first_half_with_the_lists_detached() {
+    view_same(
+        "first_half",
+        entry!(0x00b6_5ae0, drivers::first_half(Ptr<_>)).1,
+        &product(&[
+            &[0, 7, 8],
+            TWO_WAYS,
+            TWO_WAYS,
+            TWO_WAYS,
+            TWO_WAYS,
+            &[1, 2],
+            &[0, 1, 2],
+        ]),
+        |e, c| {
+            let d = draw_world(e);
+            set(e, d.w.acc + 0x19c, c.word(0));
+            if c.word(1) == 0 {
+                set(e, d.w.acc + 8, 0);
+            }
+            e.mem.set_u8(d.w.acc + 0x164, c.word(2) as u8);
+            e.mem.set_u8(0x011f_9fc1, c.word(3) as u8);
+            e.mem.set_u8(d.w.acc + 0x167, c.word(4) as u8);
+            set(e, d.w.acc + 0x18c, c.word(5));
+            active_lists(e, &d, c.word(6));
+            set(e, 0x011a_9608, 0x77);
+            vec![d.w.acc]
+        },
+    );
+}
+
+#[test]
+fn second_half_with_the_lists_detached() {
+    view_same(
+        "second_half",
+        entry!(0x00b6_5c60, drivers::second_half(Ptr<_>)).1,
+        &product(&[TWO_WAYS, &[0, 1, 2], TWO_WAYS, TWO_WAYS, &[1, 2]]),
+        |e, c| {
+            let d = draw_world(e);
+            e.mem.set_u8(d.w.acc + 0x38, c.word(0) as u8);
+            active_lists(e, &d, c.word(1));
+            set(e, 0x011f_9438, c.word(2) * 0x4242);
+            set(e, 0x011f_943c, c.word(3) * 0x4343);
+            set(e, d.w.acc + 0x18c, c.word(4));
+            vec![d.w.acc]
+        },
+    );
+}
+
+#[test]
+fn draw_types_with_the_lists_detached() {
+    view_same(
+        "draw_types",
+        entry!(0x00b6_3770, drivers::draw_types(Ptr<_>, u32, u32, u32, i32)).1,
+        &product(&[
+            &[0, 1, 2],
+            &[u32::MAX, 1],
+            &[1, 2],
+            &[0, 1, 2],
+            &[0, 1, 0x100],
+            &[1],
+            &[0, 1],
+        ]),
+        |e, c| {
+            let d = draw_world(e);
+            let (low, high) = [(1, 0x2f1), (0x10, 0x10), (0x1c4, 0x290)][c.word(0) as usize];
+            set(e, d.w.acc + 0x18c, c.word(2));
+            active_lists(e, &d, c.word(3));
+            e.mem.set_u8(d.w.acc + 0x164, c.word(4) as u8);
+            e.mem.set_u8(d.w.acc + 0x165, (c.word(4) >> 8) as u8);
+            e.mem.set_u8(0x011f_94a6, c.word(5) as u8);
+            vec![d.w.acc, low, high, c.word(6), c.word(1)]
+        },
+    );
+}
+
+#[test]
+fn draw_group_with_the_lists_detached() {
+    view_same(
+        "draw_group",
+        entry!(0x00b6_39e0, drivers::draw_group(Ptr<_>, u32, u32)).1,
+        &product(&[&[0, 1, 2, 9, 12], &[0, 1], &[1, 2], TWO_WAYS]),
+        |e, c| {
+            let d = draw_world(e);
+            set(e, d.w.acc + 0x18c, c.word(2));
+            if c.word(3) != 0 {
+                set(e, d.w.br + 0x3c + 4 * c.word(0), 0);
+            }
+            vec![d.w.acc, c.word(0), c.word(1)]
+        },
+    );
+}
+
+#[test]
+fn has_listed_pass_with_the_lists_detached() {
+    view_same(
+        "has_listed_pass",
+        entry!(
+            0x00b6_3120,
+            drivers::has_listed_pass(Ptr<_>, u32, u32) -> bool
+        )
+        .1,
+        &product(&[&[0, 1, 2], &[0, 1, 2], &[0, 1]]),
+        |e, c| {
+            let d = draw_world(e);
+            set(e, d.w.acc + 0x18c, c.word(0));
+            active_lists(e, &d, c.word(1));
+            let (low, high) = [(0x288, 0x2ce), (0x10, 0x11)][c.word(2) as usize];
+            vec![d.w.acc, low, high]
+        },
+    );
+}
