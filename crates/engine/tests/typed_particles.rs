@@ -458,8 +458,8 @@ fn families(d: Diff) -> Diff {
             0x004f_0000,
         ])
         // The native modifiers take their square roots with `FSQRT`, not the CRT's `_CIsqrt` the
-        // translations call.
-        .ignore_calls(&[0x00ec_6040])
+        // translations call; the pathing family's square root likewise, not the CRT's `sqrt`.
+        .ignore_calls(&[0x00ec_6040, 0x00ec_6054])
         .max_calls(MAX_CALLS)
         .float_sweep(FLOAT_SWEEP)
 }

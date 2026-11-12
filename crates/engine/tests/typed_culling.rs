@@ -16,7 +16,7 @@ use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input, Value};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
 use engine_typed::culling::{self, bound, compound, planes, process, update, visible};
-use engine_typed::{dispatch, pathing};
+use engine_typed::dispatch;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
 const VT_FN: u32 = 0x00ff_2000;
@@ -448,12 +448,28 @@ impl Native for Diff {
     }
 }
 
+/// The pathing family's functions the dispatch family calls: the point helpers, the absolute value,
+/// and the word maps' key test and hash.
+const PATHING_CALLED: &[u32] = &[
+    0x0040_8840,
+    0x0043_9e90,
+    0x0043_9ef0,
+    0x0045_7990,
+    0x004a_0bd0,
+    0x004a_3760,
+    0x004a_7290,
+    0x006b_81d0,
+    0x006c_6a60,
+];
+
 /// What every test adds to its comparison: the families and the call budget.
 trait Common {
     fn common(self) -> Diff;
-    /// The same with the dispatch family on too, and pathing, which it calls: the walk's calls into
-    /// dispatch (the transform product `0062c250`, the box's corners `00c39270`) go direct, as in play
-    /// with every family on. The translations dispatch reaches call its two counted helpers plainly.
+    /// The same with the dispatch family on too: the walk's calls into dispatch (the transform product
+    /// `0062c250`, the box's corners `00c39270`) go direct, as in play with every family on. The
+    /// pathing functions dispatch calls go by address to their translations ([`PATHING_CALLED`]):
+    /// their maths is native, and their own tests compare it (NaN payloads, where two NaNs meet,
+    /// within the float rule). The translations dispatch reaches call its two counted helpers plainly.
     fn with_dispatch(self) -> Diff;
 }
 
@@ -472,7 +488,7 @@ impl Common for Diff {
         self.family(&culling::CULLING)
             .family(&leaf::LEAVES)
             .family(&dispatch::DISPATCH)
-            .family(&pathing::PATHING)
+            .goes_by_address(PATHING_CALLED)
             .translation_calls_plainly(&[0x0040_19d0, 0x0040_8860])
             .max_calls(MAX_CALLS)
             .float_sweep(FLOAT_SWEEP)

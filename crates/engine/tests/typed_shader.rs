@@ -3061,6 +3061,8 @@ fn register_object_typed_render_passes() {
     .common()
     .family(&render::RENDER)
     .family(&pathing::PATHING)
+    // The pathing family's square root takes `FSQRT` where the translation calls the C runtime's `sqrt`.
+    .ignore_calls(&[0x00ec_6054])
     .family(&crt::CRT)
     .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(TWO_WAYS)])
     .translation_calls_plainly(&[
@@ -4010,6 +4012,9 @@ impl Geometry for Diff {
         self.family(&shader::SHADER)
             .family(&leaf::LEAVES)
             .family(&pathing::PATHING)
+            // The pathing family's square root takes `FSQRT` where the translation calls the C
+            // runtime's `sqrt`.
+            .ignore_calls(&[0x00ec_6054])
             .family(&render::RENDER)
             .goes_by_address(SET_UP_DISPATCH)
             .translation_calls_plainly(SET_UP_PLAIN)

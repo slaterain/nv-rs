@@ -14,8 +14,8 @@ use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input, Value};
 use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
+use engine_typed::culling;
 use engine_typed::dispatch::{self, math, refs, scene};
-use engine_typed::{culling, pathing};
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
 const VT_FN: u32 = 0x00ff_2000;
@@ -402,6 +402,20 @@ const CULLING_CALLED: &[u32] = &[
     0x00c4_7980,
 ];
 
+/// The pathing family's functions the dispatch and scene families call: the point helpers, the
+/// absolute value, and the word maps' key test and hash.
+const PATHING_CALLED: &[u32] = &[
+    0x0040_8840,
+    0x0043_9e90,
+    0x0043_9ef0,
+    0x0045_7990,
+    0x004a_0bd0,
+    0x004a_3760,
+    0x004a_7290,
+    0x006b_81d0,
+    0x006c_6a60,
+];
+
 trait Common {
     fn common(self, function: u32) -> Diff;
     /// [`Common::common`] with the culling family's functions by address, to their translations on
@@ -464,7 +478,10 @@ fn scene_families(d: Diff, function: u32) -> Diff {
     }
     callees.retain(|c| *c != function);
     d.family(&engine_typed::scene::SCENE)
-        .family(&pathing::PATHING)
+        // The pathing family's functions this family calls, by address to their translations: their maths
+        // is native, and its own tests compare it on both words (NaN payloads and the main thread's last
+        // bit within their tolerance), which these comparisons, bit for bit, would not allow.
+        .goes_by_address(PATHING_CALLED)
         .family(&leaf::LEAVES)
         .translation_calls_plainly(&callees)
         // The draw family's `D3DXMatrixInverse` thunk, which the 4x4 inverse calls.

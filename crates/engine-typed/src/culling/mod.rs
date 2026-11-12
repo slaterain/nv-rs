@@ -20,12 +20,10 @@
 //! quotient rounded to 53 bits and then to 24 rounds as once, since 53 >= 2 * 24 + 2); what only the
 //! main thread runs (the fade-node culler) in plain `f32`, the exe's 24-bit arithmetic there.
 //! Comparisons read the floats plainly, NaN-aware as the exe; a float the exe copies through the x87
-//! stack is copied as it is (a signalling NaN keeps its payload). The x87 helpers below stay for the
-//! families whose maths is not native yet (pathing reads them from here).
+//! stack is copied as it is (a signalling NaN keeps its payload).
 
 use engine_core::ptr::{Field, Ptr};
 use engine_core::typed::{Family, FamilyId, Threads};
-use engine_core::x87::{x87_load32, x87_m32, x87_store32};
 use engine_core::{entry, AbiFn, Engine};
 use layout::{
     BSCompoundFrustum, BSCullingProcess, BSMultiBoundAABB, BSMultiBoundNode, NiAVObject, NiBound,
@@ -68,36 +66,6 @@ pub const FLAG_APP_CULLED: u32 = 0x1;
 pub const NULL_BOUND: Ptr<NiBound> = Ptr::new(0x011f_4288);
 /// `NiPoint3::ZERO`.
 pub const POINT_ZERO: u32 = 0x011f_426c;
-
-/// `FLD dword` of a float field: the value the x87 stack holds (a signalling NaN quieted).
-#[inline(always)]
-pub(crate) fn fld<S>(e: &Engine, p: Ptr<S>, f: Field<S, f32>) -> f64 {
-    x87_load32(e.get(p, f).to_bits())
-}
-
-/// A float field as the memory operand of an x87 arithmetic instruction (signalling kept).
-#[inline(always)]
-pub(crate) fn m32<S>(e: &Engine, p: Ptr<S>, f: Field<S, f32>) -> f64 {
-    x87_m32(e.get(p, f).to_bits())
-}
-
-/// `FSTP dword`: the stack value rounded to a float.
-#[inline(always)]
-pub(crate) fn fstp(value: f64) -> f32 {
-    f32::from_bits(x87_store32(value))
-}
-
-/// `FLD dword` of a float held in a local.
-#[inline(always)]
-pub(crate) fn fld_local(value: f32) -> f64 {
-    x87_load32(value.to_bits())
-}
-
-/// A float local as the memory operand of an x87 arithmetic instruction.
-#[inline(always)]
-pub(crate) fn m32_local(value: f32) -> f64 {
-    x87_m32(value.to_bits())
-}
 
 /// The float bits of a field moved by `MOV` (a copy that never touches the x87 stack).
 #[inline(always)]

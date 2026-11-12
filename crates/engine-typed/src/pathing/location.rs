@@ -2,7 +2,7 @@
 
 use super::layout::{NavMeshInfo, PathingLocation, PATHING_LOCATION_VTABLE};
 use super::navmesh::{is_loaded, parent_world_space, resolve, NO_TRIANGLE};
-use super::{copy_point, fld_global, fstp, FAMILY, FLOAT_MAX};
+use super::{copy_point, float_global, FAMILY, FLOAT_MAX};
 use crate::culling::layout::NiPoint3;
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
@@ -133,7 +133,7 @@ pub fn new(e: &mut Engine, this: Ptr<PathingLocation>) -> Ptr<PathingLocation> {
     construct_base(e, this);
     let point = this.at(PathingLocation::point);
     for f in [NiPoint3::x, NiPoint3::y, NiPoint3::z] {
-        let v = fstp(fld_global(e, FLOAT_MAX));
+        let v = float_global(e, FLOAT_MAX);
         e.set(point, f, v);
     }
     e.set(this, PathingLocation::cell, 0);
