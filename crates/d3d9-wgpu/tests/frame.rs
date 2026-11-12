@@ -1238,6 +1238,50 @@ fn a_shaders_modules_are_made_when_the_game_creates_it() {
     assert_eq!(d.pipelines_made_on_draws(), 1);
 }
 
+/// A draw that needs modules no module thread has started (the threads held) takes both jobs
+/// back and makes them itself, and draws; let go, the threads make neither again, and a second
+/// draw makes none.
+#[test]
+fn a_draw_takes_back_the_modules_no_thread_has_started() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    let d = g.b.device().expect("the device");
+    d.wait_for_modules();
+    d.hold_modules(true);
+    texcoord_pair(&mut g, VS + 11, PS + 19);
+    // POSITION FLOAT4 and TEXCOORD0 FLOAT4 (0.2, 0.4, 0.6, 1): the module made ahead's inputs.
+    let vertices: Vec<u8> = floats(
+        &TRIANGLE
+            .iter()
+            .flat_map(|p| [p[0], p[1], 0.5, 1.0, 0.2, 0.4, 0.6, 1.0])
+            .collect::<Vec<f32>>(),
+    );
+    g.clear(3, 0, 1.0);
+    draw_with(
+        &mut g,
+        DECL + 10,
+        &[(0, 3, 0, 0), (16, 3, 5, 0)],
+        &vertices,
+        32,
+    );
+    assert_eq!(g.pixels(), vec![[153, 102, 51, 255]; 16]);
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.modules_made_here(), 2, "both jobs taken back");
+    d.hold_modules(false);
+    d.wait_for_modules();
+    g.clear(3, 0, 1.0);
+    draw_with(
+        &mut g,
+        DECL + 11,
+        &[(0, 3, 0, 0), (16, 3, 5, 0)],
+        &vertices,
+        32,
+    );
+    assert_eq!(g.pixels(), vec![[153, 102, 51, 255]; 16]);
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.modules_made_here(), 2, "none made again");
+    assert_eq!(d.module_counts(), (1 + 1, 1 + 1));
+}
+
 /// A shader model 1 or 2 vertex shader always writes its two colours, as Direct3D 9's values
 /// where it does not (COLOR0 white, COLOR1 (0, 0, 0, 1)), so its own module, made when the game
 /// creates it, serves a pixel shader that reads a colour it does not write: the draws make no

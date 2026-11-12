@@ -3767,35 +3767,43 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             return;
         }
         let threads = worker_threads();
-        // The modules the module threads are making (the game's shaders, created just before):
-        // all of them first, on those threads, so none is taken back to be made here alone.
-        self.wait_for_modules();
-        let mut tasks = Vec::new();
-        let mut keys = Vec::new();
-        for r in &ready {
-            let (vk, pk, t) = self.module_tasks(&r.key, &r.vs, &r.ps, &r.link.inputs);
-            tasks.extend(t);
-            keys.push((vk, pk));
-        }
-        let modules = {
+        // The listed pipelines' modules the module threads have not made yet (the game's
+        // shaders, created just before): those still queued are taken back and made on the
+        // worker threads here, all at once; those a thread is making are waited for, each alone.
+        // The game's other shaders' modules stay with the module threads.
+        self.collect_modules();
+        let mut wanted = Vec::new();
+        let mut taken = Vec::new();
+        {
             let mut seen = HashSet::new();
-            tasks.iter().filter(|t| seen.insert(t.key.clone())).count()
-        };
+            for r in &ready {
+                let (vk, pk) = self.module_keys(&r.key, &r.vs, &r.ps, &r.link.inputs);
+                for k in [ModKey::V(vk), ModKey::P(pk)] {
+                    if seen.insert(k.clone()) {
+                        wanted.push(k);
+                    }
+                }
+            }
+            if let Some(q) = &mut self.modules_ahead {
+                for k in &wanted {
+                    if let Some(job) = q.take_queued(k) {
+                        taken.push((k.clone(), std::sync::Mutex::new(Some(job))));
+                    }
+                }
+            }
+        }
         // The loading screen while it runs, when it is a long step (the start's; a few pipelines
-        // ready later, after a new sample count, are made without it).
-        let total = modules + ready.len();
-        let shown = total >= 32;
+        // ready later, after a new sample count, are made without it): the modules taken back,
+        // then any other the pipelines need, then the pipelines.
+        let total = std::cell::Cell::new(taken.len() + ready.len());
+        let shown = total.get() >= 32;
         let mut surface = self.surface.take();
         let mut screen = self.loading.take();
         let (device, queue) = (self.device.clone(), self.queue.clone());
         let mut shots = self.shots.take();
         let mut step = |done: usize| {
             if shown {
-                let p = loading::Progress {
-                    title: "Loading".into(),
-                    status: format!("Preparing shaders {} of {}", done.min(total), total),
-                    done: Some(done as f32 / total.max(1) as f32),
-                };
+                let p = shader_progress(done, total.get());
                 show_on(
                     &mut surface,
                     &mut screen,
@@ -3807,7 +3815,41 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
         };
         let t = std::time::Instant::now();
-        self.make_modules(tasks, threads, false, &mut step);
+        let back = taken.len();
+        if back > 0 {
+            self.modules_here += back as u64;
+            let made = on_workers(
+                &taken,
+                threads,
+                |(_, job)| {
+                    let job = job.lock().unwrap_or_else(|e| e.into_inner()).take();
+                    job.map(|job| job())
+                },
+                &mut step,
+            );
+            for ((k, _), m) in taken.into_iter().zip(made) {
+                if let Some(m) = m {
+                    self.keep_module(k, m.module);
+                }
+            }
+        }
+        for k in &wanted {
+            self.settle_module(k);
+        }
+        let mut tasks = Vec::new();
+        let mut keys = Vec::new();
+        for r in &ready {
+            let (vk, pk, t) = self.module_tasks(&r.key, &r.vs, &r.ps, &r.link.inputs);
+            tasks.extend(t);
+            keys.push((vk, pk));
+        }
+        let modules = {
+            let mut seen = HashSet::new();
+            tasks.iter().filter(|t| seen.insert(t.key.clone())).count()
+        };
+        total.set(total.get() + modules);
+        self.make_modules(tasks, threads, false, &mut |d| step(back + d));
+        let modules = back + modules;
         let modules_took = t.elapsed();
         let mut jobs = Vec::new();
         for (r, (vk, pk)) in ready.iter().zip(&keys) {
@@ -3830,7 +3872,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             |(_, j)| build_pipeline(&device, cache, j),
             &mut |d| step(modules + d),
         );
-        step(total);
+        step(total.get());
         drop(step);
         self.surface = surface;
         self.loading = screen;
@@ -3999,8 +4041,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
     }
 
-    /// Waits until the module threads have made every module queued, and keeps them (the
-    /// start's listed pipelines, [`Device::prepare_listed`]; tests).
+    /// The module threads start no module while `on`, then go on (tests: a draw that needs a
+    /// module no thread has started takes it back).
+    pub fn hold_modules(&mut self, on: bool) {
+        self.modules_ahead
+            .get_or_insert_with(|| crate::ahead::Queue::new(worker_threads(), "nv-wgpu-modules"))
+            .hold(on);
+    }
+
+    /// Waits until the module threads have made every module queued, and keeps them (tests).
     pub fn wait_for_modules(&mut self) {
         if let Some(q) = &mut self.modules_ahead {
             let pending = q.wait_all();
@@ -4018,12 +4067,34 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.modules_here
     }
 
-    /// The cache keys of the two modules a pipeline of `key` takes, and the work to make each
-    /// one not made yet (its WGSL converted here, the module made by [`Device::make_modules`]).
-    /// With fixed varying locations (a pixel shader whose varyings all have one,
-    /// [`wgsl::fixed_slot`]), the pixel module is the shader's own whatever its partner, and the
-    /// vertex module the shader's own for every pixel shader that reads only what it writes
-    /// ([`pair_varyings`]); else both are made for the pair, as the pixel shader's varyings.
+    /// The cache keys of the two modules a pipeline of `key` takes. With fixed varying locations
+    /// (a pixel shader whose varyings all have one, [`wgsl::fixed_slot`]), the pixel module is
+    /// the shader's own whatever its partner, and the vertex module the shader's own for every
+    /// pixel shader that reads only what it writes ([`pair_varyings`]); else both are made for
+    /// the pair, as the pixel shader's varyings.
+    fn module_keys(
+        &self,
+        key: &PipeKey,
+        vs: &Shader,
+        ps: &Shader,
+        inputs: &[wgsl::Input],
+    ) -> (VKey, PKey) {
+        let fixed = ps.fixed;
+        let ps_varyings = ps.varyings.clone();
+        let vs_varyings = if fixed {
+            pair_varyings(vs, ps)
+        } else {
+            ps_varyings.clone()
+        };
+        (
+            (vs.id, inputs.to_vec(), vs_varyings, key.clip, fixed),
+            (ps.id, ps_varyings, key.count, key.clip, fixed),
+        )
+    }
+
+    /// The modules of a pipeline of `key`, as [`Device::module_keys`] keys them, and the work to
+    /// make each one not made yet (its WGSL converted here, the module made by
+    /// [`Device::make_modules`]).
     fn module_tasks(
         &mut self,
         key: &PipeKey,
@@ -4032,14 +4103,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         inputs: &[wgsl::Input],
     ) -> (VKey, PKey, Vec<ModuleTask>) {
         let fixed = ps.fixed;
-        let ps_varyings = ps.varyings.clone();
-        let vs_varyings = if fixed {
-            pair_varyings(vs, ps)
-        } else {
-            ps_varyings.clone()
-        };
-        let vkey = (vs.id, inputs.to_vec(), vs_varyings.clone(), key.clip, fixed);
-        let pkey = (ps.id, ps_varyings.clone(), key.count, key.clip, fixed);
+        let (vkey, pkey) = self.module_keys(key, vs, ps, inputs);
+        let (vs_varyings, ps_varyings) = (vkey.2.clone(), pkey.1.clone());
         // Made ahead, or being made, on the module threads ([`Device::queue_modules`]).
         self.collect_modules();
         self.settle_module(&ModKey::V(vkey.clone()));
@@ -6183,6 +6248,15 @@ fn module_job(
             made: t.elapsed(),
         }
     })
+}
+
+/// The loading screen's words while the start prepares the shaders: `done` of `total`.
+fn shader_progress(done: usize, total: usize) -> loading::Progress {
+    loading::Progress {
+        title: "Loading".into(),
+        status: format!("Preparing shaders {} of {}", done.min(total), total),
+        done: Some(done as f32 / total.max(1) as f32),
+    }
 }
 
 /// One module to make: its WGSL (or why there is none) and what converting it took.

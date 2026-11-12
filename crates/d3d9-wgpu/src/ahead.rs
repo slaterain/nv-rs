@@ -25,11 +25,15 @@ pub(crate) enum Taken<R> {
 struct Shared<K, R> {
     queued: Mutex<Queued<K, R>>,
     work: Condvar,
+    /// The threads at normal priority, not below it ([`Queue::boost`]).
+    boosted: std::sync::atomic::AtomicBool,
 }
 
 struct Queued<K, R> {
     jobs: VecDeque<(K, Job<R>)>,
     stop: bool,
+    /// No job started while set ([`Queue::hold`]; tests).
+    held: bool,
 }
 
 /// Jobs by key, done on worker threads in the order pushed.
@@ -55,8 +59,10 @@ where
             queued: Mutex::new(Queued {
                 jobs: VecDeque::new(),
                 stop: false,
+                held: false,
             }),
             work: Condvar::new(),
+            boosted: std::sync::atomic::AtomicBool::new(false),
         });
         let (send, results) = mpsc::channel();
         let threads = (0..threads.max(1))
@@ -105,28 +111,47 @@ where
         if !self.pending.contains(key) {
             return Taken::None;
         }
-        {
-            let mut q = lock(&self.shared.queued);
-            if let Some(i) = q.jobs.iter().position(|(k, _)| k == key) {
-                let (_, job) = q.jobs.remove(i).expect("found above");
-                drop(q);
-                self.pending.remove(key);
-                return Taken::Job(job);
-            }
+        if let Some(job) = self.take_queued(key) {
+            return Taken::Job(job);
         }
         let result = match self.early.iter().position(|(k, _)| k == key) {
             Some(i) => self.early.swap_remove(i).1,
-            None => loop {
-                match self.results.recv() {
-                    Ok((k, r)) if &k == key => break r,
-                    Ok(other) => self.early.push(other),
-                    // Every thread gone: no result will come.
-                    Err(_) => break None,
-                }
-            },
+            None => {
+                self.boost(true);
+                let r = loop {
+                    match self.results.recv() {
+                        Ok((k, r)) if &k == key => break r,
+                        Ok(other) => self.early.push(other),
+                        // Every thread gone: no result will come.
+                        Err(_) => break None,
+                    }
+                };
+                self.boost(false);
+                r
+            }
         };
         self.pending.remove(key);
         result.map_or(Taken::None, Taken::Done)
+    }
+
+    /// No thread starts a job while `on` (the jobs a thread is doing go on); then they go on
+    /// (tests: a caller that needs a job no thread has started takes it back).
+    pub(crate) fn hold(&self, on: bool) {
+        lock(&self.shared.queued).held = on;
+        if !on {
+            self.shared.work.notify_all();
+        }
+    }
+
+    /// The job of `key` if no thread has started it, taken back for the caller to do; else
+    /// none, without waiting (a thread's job stays with it).
+    pub(crate) fn take_queued(&mut self, key: &K) -> Option<Job<R>> {
+        let mut q = lock(&self.shared.queued);
+        let i = q.jobs.iter().position(|(k, _)| k == key)?;
+        let (_, job) = q.jobs.remove(i)?;
+        drop(q);
+        self.pending.remove(key);
+        Some(job)
     }
 
     /// The results done so far, without waiting (a job that panicked on a thread gives none).
@@ -142,9 +167,13 @@ where
         out
     }
 
-    /// Every result, waiting until no job is pending (tests).
+    /// Every result, waiting until no job is pending.
     pub(crate) fn wait_all(&mut self) -> Vec<(K, R)> {
         let mut out = self.finished();
+        if self.pending.is_empty() {
+            return out;
+        }
+        self.boost(true);
         while !self.pending.is_empty() {
             match self.results.recv() {
                 Ok((k, r)) => {
@@ -156,7 +185,22 @@ where
                 Err(_) => break,
             }
         }
+        self.boost(false);
         out
+    }
+
+    /// The threads at normal priority while a caller waits on them (`true`), or back below it:
+    /// a waiting caller (a draw, the game's start) is not held to their low priority. A thread
+    /// doing a job changes at once; one waiting for a job, from its next.
+    pub(crate) fn boost(&self, on: bool) {
+        self.shared
+            .boosted
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+        #[cfg(windows)]
+        for t in &self.threads {
+            use std::os::windows::io::AsRawHandle;
+            set_priority(Some(t.as_raw_handle() as isize), on);
+        }
     }
 }
 
@@ -183,6 +227,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// no result (its key's taker then makes its own).
 fn work<K, R>(shared: &Shared<K, R>, send: &mpsc::Sender<(K, Option<R>)>) {
     lower_priority();
+    let mut normal = false;
     loop {
         let (key, job) = {
             let mut q = lock(&shared.queued);
@@ -190,12 +235,19 @@ fn work<K, R>(shared: &Shared<K, R>, send: &mpsc::Sender<(K, Option<R>)>) {
                 if q.stop {
                     return;
                 }
-                if let Some(next) = q.jobs.pop_front() {
-                    break next;
+                if !q.held {
+                    if let Some(next) = q.jobs.pop_front() {
+                        break next;
+                    }
                 }
                 q = shared.work.wait(q).unwrap_or_else(|e| e.into_inner());
             }
         };
+        let boosted = shared.boosted.load(std::sync::atomic::Ordering::Relaxed);
+        if boosted != normal {
+            set_priority(None, boosted);
+            normal = boosted;
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).ok();
         if send.send((key, result)).is_err() {
             return;
@@ -205,6 +257,12 @@ fn work<K, R>(shared: &Shared<K, R>, send: &mpsc::Sender<(K, Option<R>)>) {
 
 /// The calling thread below normal priority, so the game's own threads keep theirs.
 pub(crate) fn lower_priority() {
+    set_priority(None, false);
+}
+
+/// A thread at normal priority (`normal`) or below it: the thread of `handle`, or the calling
+/// thread.
+fn set_priority(handle: Option<isize>, normal: bool) {
     #[cfg(windows)]
     {
         #[link(name = "kernel32")]
@@ -212,13 +270,20 @@ pub(crate) fn lower_priority() {
             fn GetCurrentThread() -> isize;
             fn SetThreadPriority(thread: isize, priority: i32) -> i32;
         }
-        /// `THREAD_PRIORITY_BELOW_NORMAL`.
-        const BELOW_NORMAL: i32 = -1;
-        // SAFETY: the current thread's pseudo handle and a documented priority value.
+        // `THREAD_PRIORITY_NORMAL` and `THREAD_PRIORITY_BELOW_NORMAL`.
+        let value = if normal { 0 } else { -1 };
+        // SAFETY: a handle of a thread the queue holds (joined only when it is dropped) or the
+        // calling thread's pseudo handle, and a documented priority value.
         unsafe {
-            SetThreadPriority(GetCurrentThread(), BELOW_NORMAL);
+            let thread = match handle {
+                Some(h) => h,
+                None => GetCurrentThread(),
+            };
+            SetThreadPriority(thread, value);
         }
     }
+    #[cfg(not(windows))]
+    let _ = (handle, normal);
 }
 
 #[cfg(test)]
@@ -249,6 +314,158 @@ mod tests {
         assert_eq!(runs.load(Ordering::Relaxed), 50);
         assert!(!q.has(&7));
         assert!(matches!(q.take(&7), Taken::None));
+    }
+
+    /// A gate a job waits at until it is opened.
+    type Gate = Arc<(Mutex<bool>, Condvar)>;
+
+    fn gate() -> Gate {
+        Arc::new((Mutex::new(false), Condvar::new()))
+    }
+
+    fn wait_at(g: &Gate) {
+        let (open, cv) = &**g;
+        let mut o = open.lock().unwrap();
+        while !*o {
+            o = cv.wait(o).unwrap();
+        }
+    }
+
+    fn open(g: &Gate) {
+        let (open, cv) = &**g;
+        *open.lock().unwrap() = true;
+        cv.notify_all();
+    }
+
+    /// `f` of the queue on a helper thread, the queue handed back: a call that waits for a job
+    /// held at a gate, or for a result that was lost, fails the test after 10 s instead of
+    /// hanging it.
+    fn in_time<T: Send + 'static>(
+        q: Queue<u32, u32>,
+        what: &str,
+        f: fn(&mut Queue<u32, u32>) -> T,
+    ) -> (Queue<u32, u32>, T) {
+        let (send, back) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut q = q;
+            let r = f(&mut q);
+            let _ = send.send((q, r));
+        });
+        back.recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap_or_else(|_| panic!("{what}: still waiting after 10 s"))
+    }
+
+    /// A result that comes in while `take` waits for another key is kept: `has` still names
+    /// it, and `take` of its key and `finished` hand it out later, once each. And `take` waits
+    /// for its own job alone: job 1's result comes while job 4 is still held.
+    #[test]
+    fn results_that_come_while_take_waits_are_kept_for_later() {
+        let (a, b) = (gate(), gate());
+        let started = Arc::new(AtomicU32::new(0));
+        let mut q: Queue<u32, u32> = Queue::new(2, "test");
+        // One thread does job 1 (held at gate A); the other 2, 5, then 3 (which opens gate A),
+        // then 4 (held at gate B).
+        let (a1, s1) = (a.clone(), started.clone());
+        q.push(
+            1,
+            Box::new(move || {
+                s1.store(1, Ordering::SeqCst);
+                wait_at(&a1);
+                10
+            }),
+        );
+        q.push(2, Box::new(|| 20));
+        q.push(5, Box::new(|| 50));
+        let a3 = a.clone();
+        q.push(
+            3,
+            Box::new(move || {
+                open(&a3);
+                30
+            }),
+        );
+        let b4 = b.clone();
+        q.push(
+            4,
+            Box::new(move || {
+                wait_at(&b4);
+                40
+            }),
+        );
+        // Job 1 has left the queue: `take` waits for it rather than taking it back.
+        while started.load(Ordering::SeqCst) == 0 {
+            std::thread::yield_now();
+        }
+        let (q, one) = in_time(q, "take(&1) with job 4 held", |q| match q.take(&1) {
+            Taken::Done(r) => Some(r),
+            _ => None,
+        });
+        // Job 4 goes on now, so a failed check below drops the queue (which waits for its
+        // threads) without waiting for gate B.
+        open(&b);
+        assert_eq!(one, Some(10));
+        assert!(q.has(&2), "job 2's result is kept");
+        let (mut q, two) = in_time(q, "take(&2) of a kept result", |q| match q.take(&2) {
+            Taken::Done(r) => Some(r),
+            _ => None,
+        });
+        assert_eq!(two, Some(20));
+        let mut rest = q.finished();
+        assert!(rest.contains(&(5, 50)), "job 5's kept result: {rest:?}");
+        let (mut q, all) = in_time(q, "wait_all", Queue::wait_all);
+        rest.extend(all);
+        rest.extend(q.finished());
+        rest.sort_unstable();
+        assert_eq!(rest, vec![(3, 30), (4, 40), (5, 50)], "each once");
+        assert_eq!(q.pending(), 0);
+    }
+
+    /// While a caller waits on the threads (`take` of a job a thread is doing, `wait_all`), they
+    /// run at normal priority; below it again after.
+    #[cfg(windows)]
+    #[test]
+    fn the_threads_a_caller_waits_on_run_at_normal_priority() {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetCurrentThread() -> isize;
+            fn GetThreadPriority(thread: isize) -> i32;
+        }
+        fn now() -> i32 {
+            // SAFETY: the calling thread's pseudo handle.
+            unsafe { GetThreadPriority(GetCurrentThread()) }
+        }
+        // A job that waits (10 s at most) until its thread runs at normal priority, and gives
+        // the priority it ends with.
+        fn until_normal() -> i32 {
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while now() != 0 && std::time::Instant::now() < end {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            now()
+        }
+        let started = Arc::new(AtomicU32::new(0));
+        let mut q: Queue<u32, i32> = Queue::new(1, "test");
+        let s = started.clone();
+        q.push(
+            1,
+            Box::new(move || {
+                s.store(1, Ordering::SeqCst);
+                until_normal()
+            }),
+        );
+        while started.load(Ordering::SeqCst) == 0 {
+            std::thread::yield_now();
+        }
+        assert!(matches!(q.take(&1), Taken::Done(0)), "boosted for take");
+        q.push(2, Box::new(now));
+        let mut got = Vec::new();
+        while got.is_empty() {
+            got = q.finished();
+            std::thread::yield_now();
+        }
+        assert_eq!(got, vec![(2, -1)], "below normal after");
+        q.push(3, Box::new(until_normal));
+        assert_eq!(q.wait_all(), vec![(3, 0)], "boosted for wait_all");
     }
 
     /// A job still queued (its one thread busy) is taken back for the caller to do; one a thread
