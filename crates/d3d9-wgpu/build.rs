@@ -1,57 +1,59 @@
-//! The pipeline cache's source fingerprint: a hash of every source file that decides what the driver
-//! compiles (this crate's `src`, with the shader converter and the pipeline layouts, and the vendored
-//! `wgpu-hal`'s `src`), given to the crate as `D3D9_WGPU_PIPELINE_SOURCES`.
+//! The pipeline cache's source fingerprint (`src/fingerprint.rs`), given to the crate as
+//! `D3D9_WGPU_PIPELINE_SOURCES`: every source that decides what the driver compiles. That is this
+//! crate's `src` (the shader converter and the pipeline layouts) and `Cargo.toml`, the vendored
+//! `wgpu-hal` (its `src`, `Cargo.toml` and `build.rs`), and the workspace's `Cargo.lock`, which pins
+//! naga, wgpu-core and the other crates that turn the converted shaders into SPIR-V.
 //!
-//! The pipeline cache file's name carries it ([`cache::PipelineCacheFile::open`]), so a build whose
+//! The pipeline cache file's name carries it (`cache::PipelineCacheFile::open`), so a build whose
 //! converted shaders or layouts may differ starts with a new cache: its first start makes every
 //! shader's library behind the start screen (a cold start), instead of finding a cache wgpu accepts
 //! but whose libraries no longer match (#514's lesson: a "warm" start then left the unlisted shaders'
-//! libraries to be compiled on their first draw, in play).
+//! libraries to be compiled on their first draw, in play). Any dependency update also gives one cold
+//! start: the safe side.
 
-use std::path::{Path, PathBuf};
+#[path = "src/fingerprint.rs"]
+mod fingerprint;
 
-fn files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in entries.flatten() {
-        let path = e.path();
-        if path.is_dir() {
-            files(&path, out);
-        } else if path.extension().is_some_and(|x| x == "rs" || x == "wgsl") {
-            out.push(path);
-        }
-    }
-}
+use std::path::PathBuf;
 
 fn main() {
-    let here = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("set by cargo"));
-    let roots = [here.join("src"), here.join("../../vendor/wgpu-hal/src")];
+    // Canonical paths, so every input is named relative to the workspace (the same in any checkout).
+    let here = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("set by cargo"))
+        .canonicalize()
+        .expect("the crate's folder");
+    let workspace = here
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("crates/d3d9-wgpu sits two folders below the workspace")
+        .to_path_buf();
+    let roots = [here.join("src"), workspace.join("vendor/wgpu-hal/src")];
+    let single = [
+        here.join("Cargo.toml"),
+        workspace.join("Cargo.lock"),
+        workspace.join("vendor/wgpu-hal/Cargo.toml"),
+        workspace.join("vendor/wgpu-hal/build.rs"),
+    ];
     let mut all = Vec::new();
     for root in &roots {
-        if root.is_dir() {
-            println!("cargo:rerun-if-changed={}", root.display());
-            files(root, &mut all);
-        }
+        // A missing root would silently drop what it decides from the fingerprint: refuse.
+        assert!(
+            root.is_dir(),
+            "the pipeline fingerprint's folder {} is missing",
+            root.display()
+        );
+        println!("cargo:rerun-if-changed={}", root.display());
+        fingerprint::files_under(root, &mut all);
     }
-    all.sort();
-    // FNV-1a, 64-bit: over each file's path (relative to the crate) and its bytes, line endings as
-    // stored, so the same sources give the same fingerprint on any machine checked out alike.
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut feed = |bytes: &[u8]| {
-        for &b in bytes {
-            hash ^= u64::from(b);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    };
-    for path in &all {
-        let rel = path.strip_prefix(&here).unwrap_or(path);
-        feed(rel.to_string_lossy().replace('\\', "/").as_bytes());
-        feed(&[0]);
-        if let Ok(bytes) = std::fs::read(path) {
-            feed(&bytes);
-        }
-        feed(&[0]);
+    for file in &single {
+        assert!(
+            file.is_file(),
+            "the pipeline fingerprint's file {} is missing",
+            file.display()
+        );
+        println!("cargo:rerun-if-changed={}", file.display());
+        all.push(file.clone());
     }
+    let hash = fingerprint::fingerprint(&workspace, &all);
+    assert_ne!(hash, fingerprint::EMPTY, "nothing was hashed");
     println!("cargo:rustc-env=D3D9_WGPU_PIPELINE_SOURCES={hash:016x}");
 }

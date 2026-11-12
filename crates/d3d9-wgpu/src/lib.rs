@@ -18,6 +18,8 @@ mod ahead;
 mod answers;
 mod cache;
 pub mod device;
+#[cfg(test)]
+mod fingerprint;
 pub mod format;
 mod fxhash;
 pub mod loading;
