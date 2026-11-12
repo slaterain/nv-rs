@@ -1149,11 +1149,12 @@ fn dump_event_handlers_filters_and_filter_text() {
         &[text("OnHit"), form(1), num(5.0)],
     );
     assert_eq!(lines()[2..], *std::slice::from_ref(&line_a));
-    // An argument to filter by: REF_1 keeps the first handler, drops the second.
+    // Arguments to filter by (OnHit takes two): REF_1 first keeps the first handler and drops
+    // the second.
     run(
         &mut e,
         DUMP_EVENT_HANDLERS,
-        &[text("OnHit"), num(0.0), num(0.0), form(2)],
+        &[text("OnHit"), num(0.0), num(0.0), form(2), form(2)],
     );
     assert_eq!(lines()[2..], [line_a]);
 }
