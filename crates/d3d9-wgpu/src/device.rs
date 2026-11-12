@@ -2792,24 +2792,30 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
 
     // Draws.
 
+    /// A `D3DDECLTYPE`'s vertex format, and how the vertex shader takes it: by its kind only
+    /// (float, unsigned, signed), always four components. A format with fewer is filled with
+    /// 0, 0 and 1 by the hardware (Vulkan's and Direct3D 12's vertex input rule), which is
+    /// Direct3D 9's own expansion of each type (`FLOAT2` to (x, y, 0, 1), `SHORT2` likewise), and
+    /// wgpu matches a format to the shader by kind alone; so a vertex shader has one module for
+    /// every declaration of the same kinds (FAST-LINK step 1A).
     fn input_of(ty: u8) -> Option<(wgpu::VertexFormat, wgsl::Input)> {
         use wgpu::VertexFormat as V;
         use wgsl::Input as I;
         Some(match ty {
-            0 => (V::Float32, I::Float(1)),
-            1 => (V::Float32x2, I::Float(2)),
-            2 => (V::Float32x3, I::Float(3)),
+            0 => (V::Float32, I::Float(4)),
+            1 => (V::Float32x2, I::Float(4)),
+            2 => (V::Float32x3, I::Float(4)),
             3 => (V::Float32x4, I::Float(4)),
             4 => (V::Unorm8x4Bgra, I::Float(4)),
             5 => (V::Uint8x4, I::Uint4),
-            6 => (V::Sint16x2, I::Sint(2)),
+            6 => (V::Sint16x2, I::Sint(4)),
             7 => (V::Sint16x4, I::Sint(4)),
             8 => (V::Unorm8x4, I::Float(4)),
-            9 => (V::Snorm16x2, I::Float(2)),
+            9 => (V::Snorm16x2, I::Float(4)),
             10 => (V::Snorm16x4, I::Float(4)),
-            11 => (V::Unorm16x2, I::Float(2)),
+            11 => (V::Unorm16x2, I::Float(4)),
             12 => (V::Unorm16x4, I::Float(4)),
-            15 => (V::Float16x2, I::Float(2)),
+            15 => (V::Float16x2, I::Float(4)),
             16 => (V::Float16x4, I::Float(4)),
             _ => return None,
         })
