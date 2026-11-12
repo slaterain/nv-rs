@@ -11,7 +11,7 @@
 //! it reads that the frame changes (the world transform, the bound, the particles' arrays) through
 //! [`super::packet`].
 
-use super::{own, packet, packing, shapes, FAMILY};
+use super::{capture, own, packet, packing, shapes, FAMILY};
 use crate::shader::{self, accumulator, state};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
@@ -296,7 +296,7 @@ pub fn draw_points(e: &mut Engine, this: Ptr, geometry: Ptr) {
         packet::copy_world_transform(e, g, f + 0x48);
         let bound = packet::bound_or_empty(e, g);
         for i in 0..4 {
-            let word = e.mem.u32(bound.wrapping_add(4 * i));
+            let word = packet::bound_word(e, bound, i);
             e.mem.set_u32(f + 0x38 + 4 * i, word);
         }
         let count = u32::from(shapes::vertex_count(e, data));
@@ -372,10 +372,12 @@ pub fn draw_points(e: &mut Engine, this: Ptr, geometry: Ptr) {
                 return;
             }
             let array = packet::point_indices(e, data);
+            // The indices as the value packet holds them (the particles the draw started with).
+            let indices = capture::span(e, array, 0, count.wrapping_mul(2));
             let mut at = e.mem.u32(f + 0x1c);
             let mut point = 0u32;
             while point < count {
-                let first = u32::from(e.mem.u16(array.wrapping_add(point * 2))) * 4;
+                let first = u32::from(indices.half(e, point * 2)) * 4;
                 for value in [first, first + 1, first + 2, first, first + 2, first + 3] {
                     e.mem.set_u16(at, low16(value));
                     at = at.wrapping_add(2);
@@ -642,19 +644,19 @@ fn quad_times(value: f64, bits: u32, memory: bool) -> u32 {
     x87_store32(x87_mul(value, quad_operand(bits, memory)))
 }
 
-/// The packed colour of an `NiColorA` (r, g, b, a): each channel times 255.0, stored as a float and
-/// converted with `FISTP` (round to nearest), packed `((a << 8 | r) << 8 | g) << 8 | b`.
-fn quad_color(e: &Engine, color: u32) -> u32 {
+/// The packed colour of the `NiColorA` (r, g, b, a) at `at` in the colours: each channel times 255.0, stored as a
+/// float and converted with `FISTP` (round to nearest), packed `((a << 8 | r) << 8 | g) << 8 | b`.
+fn quad_color(e: &Engine, colors: &capture::Span, at: u32) -> u32 {
     let scale = f64::from_bits(e.mem.u64(SCALE_TO_BYTE));
-    let channel = |at: u32| {
-        let product = x87_store32(x87_mul(x87_load32(e.mem.u32(at)), scale));
+    let channel = |offset: u32| {
+        let product = x87_store32(x87_mul(x87_load32(colors.word(e, offset)), scale));
         let rounded: i32 = fistp(x87_load32(product));
         rounded as u32
     };
-    let alpha = channel(color.wrapping_add(0xc));
-    let red = channel(color);
-    let green = channel(color.wrapping_add(4));
-    let blue = channel(color.wrapping_add(8));
+    let alpha = channel(at.wrapping_add(0xc));
+    let red = channel(at);
+    let green = channel(at.wrapping_add(4));
+    let blue = channel(at.wrapping_add(8));
     (((((alpha << 8) | red) << 8) | green) << 8) | blue
 }
 
@@ -713,19 +715,20 @@ fn rotated_offsets(
 }
 
 /// One quad: four vertices `stride` bytes apart (position, the normal, the colour, two texture
-/// coordinates, then with `extra` its byte as a float). The corners are the position minus the first
-/// offset (u 0, v 1), minus the second (1, 1), plus the first (1, 0) and plus the second (0, 0); each
-/// corner reads the position again, then writes the vertex, then reads the byte.
+/// coordinates, then with `extra` its byte as a float). The corners are the position (at `position` in the
+/// positions) minus the first offset (u 0, v 1), minus the second (1, 1), plus the first (1, 0) and plus the
+/// second (0, 0); each corner reads the position again, then writes the vertex, then reads the byte.
 #[allow(clippy::too_many_arguments)]
 fn write_quad(
     e: &mut Engine,
     dest: u32,
     stride: u32,
+    positions: &capture::Span,
     position: u32,
     color: u32,
     offsets: &([u32; 3], [u32; 3]),
     normal: &[u32; 3],
-    extra: Option<u32>,
+    extra: Option<(&capture::Span, u32)>,
     corner3_x_memory: bool,
 ) {
     const ONE_BITS: u32 = 0x3f80_0000;
@@ -739,7 +742,7 @@ fn write_quad(
         };
         let mut xyz = [0u32; 3];
         for j in 0..3u32 {
-            let p = e.mem.u32(position.wrapping_add(4 * j));
+            let p = positions.word(e, position.wrapping_add(4 * j));
             let o = x87_load32(offset[j as usize]);
             xyz[j as usize] = if corner < 2 {
                 x87_store32(x87_sub(x87_load32(p), o))
@@ -757,8 +760,8 @@ fn write_quad(
         let (u, v) = uv[corner as usize];
         e.mem.set_u32(vertex.wrapping_add(0x1c), u);
         e.mem.set_u32(vertex.wrapping_add(0x20), v);
-        if let Some(bytes) = extra {
-            let value = e.mem.u8(bytes);
+        if let Some((bytes, at)) = extra {
+            let value = bytes.byte(e, at);
             e.mem
                 .set_u32(vertex.wrapping_add(0x24), x87_store32(f64::from(value)));
         }
@@ -787,17 +790,27 @@ fn quads(
     ops: &QuadOperands,
 ) {
     let t = this.addr();
-    let QuadArrays {
-        mut positions,
-        mut colors,
-        mut sizes,
-        mut scales,
-        mut angles,
-        mut extra,
-    } = arrays;
+    let rotated = arrays.angles != 0;
+    let with_colors = arrays.colors != 0;
+    // The arrays as the value packet holds them (the particles the draw started with), else guest memory.
+    let n = u32::from(count);
+    let positions = capture::span(e, arrays.positions, 0, n.wrapping_mul(0xc));
+    let colors = capture::span(
+        e,
+        arrays.colors,
+        0,
+        if with_colors { n.wrapping_mul(0x10) } else { 0 },
+    );
+    let sizes = capture::span(e, arrays.sizes, 0, n.wrapping_mul(4));
+    let scales = capture::span(e, arrays.scales, 0, n.wrapping_mul(4));
+    let angles = capture::span(
+        e,
+        arrays.angles,
+        0,
+        if rotated { n.wrapping_mul(4) } else { 0 },
+    );
+    let extra = arrays.extra.map(|bytes| capture::span(e, bytes, 0, n));
     let normal = quad_normal(e, t, ops);
-    let rotated = angles != 0;
-    let with_colors = colors != 0;
     let (sum, difference) = if rotated {
         ([0u32; 3], [0u32; 3])
     } else {
@@ -814,16 +827,16 @@ fn quads(
         ];
         (sum, difference)
     };
-    let mut left = u32::from(count);
-    while left != 0 {
+    let mut point = 0u32;
+    while point != n {
         let color = if with_colors {
-            quad_color(e, colors)
+            quad_color(e, &colors, point.wrapping_mul(0x10))
         } else {
             0xffff_ffff
         };
         let size = x87_store32(x87_mul(
-            x87_load32(e.mem.u32(sizes)),
-            x87_m32(e.mem.u32(scales)),
+            x87_load32(sizes.word(e, point.wrapping_mul(4))),
+            x87_m32(scales.word(e, point.wrapping_mul(4))),
         ));
         let offsets = if rotated {
             let kinds = if with_colors {
@@ -831,7 +844,7 @@ fn quads(
             } else {
                 &ops.rotated_plain
             };
-            rotated_offsets(e, t, e.mem.u32(angles), size, kinds)
+            rotated_offsets(e, t, angles.word(e, point.wrapping_mul(4)), size, kinds)
         } else {
             let s = x87_load32(size);
             let first: [u32; 3] =
@@ -844,25 +857,16 @@ fn quads(
             e,
             dest,
             stride,
-            positions,
+            &positions,
+            point.wrapping_mul(0xc),
             color,
             &offsets,
             &normal,
-            extra,
+            extra.as_ref().map(|bytes| (bytes, point)),
             ops.corner3_x_memory,
         );
-        if with_colors {
-            colors = colors.wrapping_add(0x10);
-        }
-        sizes = sizes.wrapping_add(4);
-        scales = scales.wrapping_add(4);
-        if rotated {
-            angles = angles.wrapping_add(4);
-        }
-        positions = positions.wrapping_add(0xc);
-        extra = extra.map(|bytes| bytes.wrapping_add(1));
         dest = dest.wrapping_add(4 * stride);
-        left -= 1;
+        point += 1;
     }
 }
 

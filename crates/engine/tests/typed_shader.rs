@@ -445,8 +445,9 @@ fn world_all(e: &mut Engine, render: bool, dispatch: bool, draw: bool) -> W {
         set(e, skinned + off, w);
     }
     set(e, skinned + 0xbc, skin);
+    // A pass of the size the cut reads (0x10: its light count +9 and lights +0xc, none here).
     let pass_of = |e: &mut Engine, geometry: u32, pass_type: u16, kind: u8, flag: u8| {
-        let p = e.mem.alloc(8);
+        let p = e.mem.alloc(0x10);
         set(e, p, geometry);
         e.mem.set_u16(p + 4, pass_type);
         e.mem.set_u8(p + 6, kind);
@@ -9106,4 +9107,217 @@ fn material_colour_constant() {
         })
         .run()
         .assert_same();
+}
+
+// ---- The value packet (the drawing thread's step 2: `draw::capture`, `draw::cut`) ----
+
+use engine_core::typed::diff::memory_digest_beside_stack;
+use engine_typed::draw::{capture, cut};
+
+/// `f` run, for each case and both scribbles, on two engines `setup` makes alike (it answers the call's words and
+/// the words `fill` takes from): one plain, one with the value packet open around the call, filled by `fill` with
+/// what the cut takes and scribbled (POISON). Both must answer the same and leave the same memory beside the stack
+/// for locals; every read made through the packet must have found its copy, and no scribbled byte may have been
+/// written. Some case must read through the packet.
+fn packet_same(
+    name: &str,
+    f: AbiFn,
+    cases: &[Vec<u32>],
+    setup: impl Fn(&mut Engine, &Case) -> (Vec<u32>, Vec<u32>),
+    fill: impl Fn(&mut Engine, &[u32]),
+) {
+    let mut reads = 0;
+    for words in cases {
+        for scribble in [capture::SCRIBBLE, capture::SCRIBBLE_OTHER] {
+            let case = Case(words.iter().map(|w| Value::Word(*w)).collect());
+            let mut plain = Engine::new();
+            let (a, _) = setup(&mut plain, &case);
+            plain.with_stack(4, |_, _| ());
+            let answer = f(&mut plain, &a);
+            let mut poisoned = Engine::new();
+            let (b, from) = setup(&mut poisoned, &case);
+            poisoned.with_stack(4, |_, _| ());
+            assert_eq!(a, b, "{name} {words:x?}: the setups differ");
+            assert!(capture::begin(&poisoned), "{name}: a packet was left open");
+            fill(&mut poisoned, &from);
+            capture::poison(&mut poisoned, scribble);
+            let poisoned_answer = f(&mut poisoned, &b);
+            let report = capture::end(&mut poisoned);
+            assert_eq!(
+                answer, poisoned_answer,
+                "{name} {words:x?} {scribble:#x}: the answers differ"
+            );
+            assert_eq!(
+                memory_digest_beside_stack(&plain),
+                memory_digest_beside_stack(&poisoned),
+                "{name} {words:x?} {scribble:#x}: the memory differs"
+            );
+            assert_eq!(
+                (report.misses, report.written),
+                (0, 0),
+                "{name} {words:x?} {scribble:#x}: {report:?}"
+            );
+            reads += report.reads;
+        }
+    }
+    assert!(reads > 0, "{name}: no case read through the packet");
+}
+
+/// A camera of the size `NiCamera` has (0x114 bytes, as the cut takes it) with the test world's camera's words,
+/// in its place in the accumulator.
+fn full_camera(e: &mut Engine, w: &W) -> u32 {
+    let camera = e.mem.alloc(0x114);
+    for k in 0..0x90 / 4 {
+        let word = e.mem.u32(w.camera + 4 * k);
+        set(e, camera + 4 * k, word);
+    }
+    for k in 0x90 / 4..0x114 / 4 {
+        set(e, camera + 4 * k, 0x3e80_0000 + k);
+    }
+    set(e, w.acc + 8, camera);
+    camera
+}
+
+/// The alpha distance reads the camera's direction and the first pass's bound through the packet.
+#[test]
+fn alpha_distance_reads_the_packet() {
+    packet_same(
+        "alpha_distance",
+        entry!(
+            0x00b9_8c80,
+            dalpha::alpha_distance(Ptr<_>, u32, u32, u32) -> f64
+        )
+        .1,
+        &product(&[&[0, 1], &[1, 3], &[0, 1, 2], &[0, 1, 0x101]]),
+        |e, c| {
+            let d = draw_world(e);
+            let group = c.word(0);
+            alpha_state(e, &d, group, c.word(1), c.word(2), HALF);
+            let camera = full_camera(e, &d.w);
+            (
+                vec![d.w.br, group, camera, c.word(3)],
+                vec![camera, d.w.geometry],
+            )
+        },
+        |e, w| {
+            cut::take_camera(e, w[0]);
+            cut::take_geometry_values(e, w[1]);
+        },
+    );
+}
+
+/// The per-geometry pass set-ups read the rendered geometry's world transform (its inverse and the world-view
+/// constants take an image of the copy), its scale and the rendered pass's light count through the packet.
+#[test]
+fn pass_setups_read_the_packet() {
+    for (name, f) in [
+        (
+            "setup_type_ca",
+            entry!(0x00b7_ded0, setups::setup_type_ca(Ptr<_>, Ptr<_>)).1,
+        ),
+        (
+            "setup_type_d1",
+            entry!(0x00b7_dfe0, setups::setup_type_d1(Ptr<_>, Ptr<_>)).1,
+        ),
+        (
+            "setup_type_102",
+            entry!(0x00b7_e150, setups::setup_type_102(Ptr<_>, Ptr<_>)).1,
+        ),
+    ] {
+        packet_same(
+            name,
+            f,
+            &product(&[&[0, 0x7e00_00f4], &[0, 1, 0xff], &[ONE, 0x3fc0_0000, 0]]),
+            |e, c| {
+                let p = pass_world(e, &[], 0, 0);
+                let state = setup_state(e, &p, c.word(0));
+                let rendering = e.mem.u32(0x011f_91e0);
+                e.mem.set_u8(rendering + 9, c.word(1) as u8);
+                let geometry = e.mem.u32(rendering);
+                set(e, geometry + 0x98, c.word(2));
+                set(e, 0x011f_951c, 0x7e00_951c);
+                (vec![p.d.w.shader, state], vec![rendering, geometry])
+            },
+            |e, w| {
+                capture::take(e, w[0], 9, 0xa);
+                cut::take_geometry_values(e, w[1]);
+            },
+        );
+    }
+}
+
+/// A lighting property's fade reads its second flags and its distance through the packet.
+#[test]
+fn property_fade_reads_the_packet() {
+    packet_same(
+        "property_fade",
+        entry!(0x00b6_6b80, setups::property_fade(Ptr<_>) -> f32).1,
+        &product(&[
+            &[0, 1],
+            &[0, 0x0080_0000],
+            &[ONE, 0x4100_0000, 0],
+            &[TWO],
+            &[0x4080_0000],
+        ]),
+        |e, c| {
+            let p = pass_world(e, &[], 0, 0);
+            let property = p.d.w.property;
+            set(e, property + 0x20, c.word(0));
+            set(e, property + 0x24, c.word(1));
+            set(e, property + 0x34, c.word(2));
+            set(e, 0x011f_9454, c.word(3));
+            set(e, 0x011f_9458, c.word(4));
+            (vec![property], vec![p.d.w.geometry])
+        },
+        |e, w| cut::take_geometry_values(e, w[0]),
+    );
+}
+
+/// The world draw's first half with `NV_DRAW_THREAD=poison` (this thread's mode): the cut fills the packet from
+/// the accumulator's lists (each listed geometry held) and scribbles it, and the half (the camera handed to the
+/// scene renderer through an image of the copy, the render mode's draw) does what it does with the switch off.
+/// The join gives the references back.
+#[test]
+fn the_first_half_reads_the_packet_the_cut_fills() {
+    let f = entry!(0x00b6_ba20, drivers::world_draw_first(u32, Ptr<_>, u32)).1;
+    let mut reads = 0;
+    for case in product(&[&[0, 1], &[0, 1, 2, 3]]) {
+        let setup = |e: &mut Engine| {
+            let d = draw_world(e);
+            acc_slots(e, d.w.acc, case[0] != 0);
+            set(e, d.w.acc + 0x19c, 3);
+            held(e, d.w.acc, case[1]);
+            // The listed geometries are the scene graph's: counted once already.
+            for g in [d.w.geometry, d.w.skinned] {
+                set(e, g + 4, 1);
+            }
+            let camera = full_camera(e, &d.w);
+            e.with_stack(4, |_, _| ());
+            vec![camera, d.w.acc, 1]
+        };
+        let mut plain = Engine::new();
+        let a = setup(&mut plain);
+        let answer = f(&mut plain, &a);
+        let mut poisoned = Engine::new();
+        let b = setup(&mut poisoned);
+        capture::set_thread_mode(Some(capture::Mode::Poison));
+        let poisoned_answer = f(&mut poisoned, &b);
+        cut::join(&mut poisoned);
+        capture::set_thread_mode(None);
+        let report = cut::last_report().expect("the cut opened a packet");
+        assert_eq!(answer, poisoned_answer, "{case:x?}: the answers differ");
+        assert_eq!(
+            memory_digest_beside_stack(&plain),
+            memory_digest_beside_stack(&poisoned),
+            "{case:x?}: the memory differs"
+        );
+        assert_eq!(
+            (report.misses, report.written),
+            (0, 0),
+            "{case:x?}: {report:?}"
+        );
+        assert!(report.held > 0, "{case:x?}: no geometry held: {report:?}");
+        reads += report.reads;
+    }
+    assert!(reads > 0, "the first half read nothing through the packet");
 }

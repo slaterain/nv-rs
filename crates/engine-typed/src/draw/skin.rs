@@ -9,7 +9,8 @@
 //! bone report and `NV_HEAD_CHECK`'s bone and skinning lines); with this family on those take no notes
 //! from here: `NV_TYPED=draw:off` for them.
 
-use super::{own, packet, FAMILY};
+use super::cut::WORLD;
+use super::{capture, own, packet, FAMILY};
 use crate::shader::{self, accumulator};
 use engine_core::ptr::Ptr;
 use engine_core::x87::{x87_load32, x87_m32, x87_mul, x87_quiet_bits, x87_store32, x87_sub};
@@ -238,15 +239,19 @@ pub fn bone_matrices(
         let root = frame.addr() + 0x4c;
         let scratch = frame.addr() + 0x80;
         let skin_root = packet::skin_root(e, skin);
-        typed_call!(
-            crate::dispatch::FAMILY,
-            0x004b_4880,
-            crate::dispatch::math::invert_non_uniform(
-                e,
-                Ptr::new(skin_root.wrapping_add(0x68)),
-                Ptr::new(product)
-            )
-        );
+        // The root's world transform as the value packet holds it ([`capture::image`]).
+        let (from, to) = WORLD;
+        capture::image(e, skin_root, from, to, |e, skin_root| {
+            typed_call!(
+                crate::dispatch::FAMILY,
+                0x004b_4880,
+                crate::dispatch::math::invert_non_uniform(
+                    e,
+                    Ptr::new(skin_root.wrapping_add(0x68)),
+                    Ptr::new(product)
+                )
+            );
+        });
         let result = compose(e, data.wrapping_add(0xc), root, product);
         copy_transform(e, product, result);
         let result = compose(e, world, scratch, product);
@@ -269,7 +274,9 @@ pub fn bone_matrices(
         let mut bone = 0u32;
         while bone < bones {
             let node = packet::bone_node(e, bone_list, bone);
-            compose(e, node.wrapping_add(0x68), product, bind);
+            capture::image(e, node, from, to, |e, node| {
+                compose(e, node.wrapping_add(0x68), product, bind);
+            });
             let node = packet::bone_node(e, bone_list, bone);
             if bone_scale_outside(e, packet::bone_scale(e, node)) {
                 outside = true;

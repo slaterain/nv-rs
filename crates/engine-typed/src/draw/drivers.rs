@@ -53,6 +53,11 @@ fn start(e: &mut Engine, camera: u32, acc: u32) -> bool {
 /// [`accumulator_draw`]) with the three words still on the stack. The jump stays a call through the
 /// slot: a direct call could not hand on those words.
 pub fn world_draw_first(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>, third: u32) {
+    if camera != 0 && packet::scene_renderer(e) != 0 {
+        // The drawing thread's cut (step 2): with `NV_DRAW_THREAD` set, what the draw reads that the frame's tail
+        // may change is copied into the value packet before the draw reads any of it.
+        super::cut::cut(e, camera, acc);
+    }
     if !start(e, camera, acc.addr()) {
         return;
     }
@@ -75,6 +80,8 @@ pub fn world_draw_second(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulat
     e.vcall(acc.addr(), SLOT_FINISH, &args![camera, acc, third]);
     // Step 1 of the drawing thread: the view's words back to guest memory as the draw ends.
     super::detach::close(e);
+    // Step 2's join: the value packet closed.
+    super::cut::join(e);
 }
 
 // Typed from 00b6c0d0
