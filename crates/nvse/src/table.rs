@@ -15,6 +15,10 @@
 //! A command not built yet keeps its record (its names, so the script error log names it) with no
 //! handler and no parameters: a line that calls it fails and the script stops for that run, as
 //! it does without the DLL. Its record is completed when its command is built.
+//!
+//! A plugin built in (JIP LN NVSE, `crates/jip`) grows the table past xNVSE's commands to its own
+//! opcodes ([`grow_to`]) and writes its records there ([`add_plugin_record`]), as xNVSE's
+//! `PluginManager` registers a plugin DLL's commands; the slots no built-in fills stay empty.
 
 use crate::names::{FIRST_OPCODE, NAMES};
 use crate::Nvse;
@@ -287,7 +291,7 @@ pub fn install(e: &mut Engine) {
     // (`005aea50`) reads (`end + 8`).
     let size = (count + 1) * RECORD;
     assert!(size <= TABLE_ROOM);
-    e.map(TABLE_AT, size.next_multiple_of(0x1000));
+    e.map(TABLE_AT, mapped_size(count));
     // `g_scriptCommands.Read`: the exe's records as they are.
     let bytes = e.mem.bytes(exe.start, vanilla as u32 * RECORD);
     for (i, b) in bytes.iter().enumerate() {
@@ -379,6 +383,121 @@ pub fn install(e: &mut Engine) {
         end: TABLE_AT + count * RECORD,
         max_opcode,
     });
+}
+
+/// One past the highest opcode the table has room for: the records from `0x1000` below it and
+/// the one past the end fill [`TABLE_ROOM`] (ITR's commands, the highest of the plugins VNV
+/// installs, end at `0x410E`).
+pub const ROOM_END: u32 = ScriptTables::FIRST_OPCODE + TABLE_ROOM / RECORD - 1;
+
+/// The bytes `count` records from `0x1000` and the one past the end take, rounded to whole pages:
+/// what is mapped of the table.
+fn mapped_size(count: u32) -> u32 {
+    ((count + 1) * RECORD).next_multiple_of(0x1000)
+}
+
+/// Grows the table for a plugin built in, to `max_opcode` (one past its highest opcode), as
+/// xNVSE's `PluginManager::SetOpcodeBase` pads it up to a plugin's base (`CommandTable::PadTo`
+/// (xNVSE)) with one difference: the new slots are empty (no names, no parameters, no handler),
+/// not xNVSE's padding command, so a call to an opcode no built-in fills fails, as it does in
+/// the game without the plugin that owns it (ADR-0016 §2). The record past the end moves with
+/// the end and the engine's [`ScriptTables`] with it. A table already as long stays as it is.
+pub fn grow_to(e: &mut Engine, max_opcode: u32) {
+    let t = e.script_tables();
+    assert_eq!(t.start, TABLE_AT, "xNVSE's table is built before a plugin's");
+    assert!(max_opcode <= ROOM_END, "{max_opcode:04x}: past the table's room");
+    if max_opcode <= t.max_opcode {
+        return;
+    }
+    let old = t.max_opcode - ScriptTables::FIRST_OPCODE;
+    let count = max_opcode - ScriptTables::FIRST_OPCODE;
+    let (mapped, needed) = (mapped_size(old), mapped_size(count));
+    if needed > mapped {
+        e.map(TABLE_AT + mapped, needed - mapped);
+    }
+    let empty = guest_str(e, b"");
+    for opcode in t.max_opcode..max_opcode {
+        Record {
+            long_name: empty,
+            short_name: empty,
+            opcode,
+            help: empty,
+            parse: DEFAULT_PARSE,
+            ..Record::default()
+        }
+        .write(e, TABLE_AT + (opcode - ScriptTables::FIRST_OPCODE) * RECORD);
+    }
+    Record {
+        opcode: max_opcode,
+        ..Record::default()
+    }
+    .write(e, TABLE_AT + count * RECORD);
+    e.ext::<Nvse>()
+        .table
+        .returns
+        .resize(count as usize, Returns::Default);
+    e.set_script_tables(ScriptTables {
+        start: TABLE_AT,
+        end: TABLE_AT + count * RECORD,
+        max_opcode,
+    });
+}
+
+/// A plugin command's record as the plugin hands it to xNVSE (`PluginManager::RegisterCommand`
+/// and `RegisterTypedCommand` (xNVSE)): its `CommandInfo` fields, guest addresses for the
+/// parameter list and the routines, and the return type it registers with. xNVSE gives it an
+/// empty help text and short name where the plugin has none, and its default parser.
+#[derive(Clone, Copy, Debug)]
+pub struct PluginRecord<'a> {
+    pub name: &'a str,
+    /// Empty for none.
+    pub short: &'a str,
+    pub needs_ref: bool,
+    pub param_count: u16,
+    /// The parameter list (0: none).
+    pub params: u32,
+    /// The execute (0: none yet, so a call fails).
+    pub execute: u32,
+    /// The condition eval (0: none).
+    pub eval: u32,
+    pub flags: u32,
+    /// The plugin asks for xNVSE's expression parser (`Cmd_Expression_Plugin_Parse`), which
+    /// xNVSE gives as `Cmd_Expression_Parse`. Only the script compiler calls a parser; until the
+    /// run-time compiler is built in (ADR-0016's I-14) the record has the default one.
+    pub expression: bool,
+    pub returns: Returns,
+}
+
+/// Writes a plugin command's record at `opcode` in the grown table (`CommandTable::Add` (xNVSE),
+/// at the plugin's current opcode) and its return type beside it. As xNVSE does, whatever a
+/// plugin registers at `0x22C0` (JIP LN NVSE's `ar_Cat`, whose names xNVSE's own `ar_Cat` has)
+/// is renamed `JIP_ar_Cat`, short name `JIP_pinto_Cat`.
+pub fn add_plugin_record(e: &mut Engine, opcode: u32, r: &PluginRecord) {
+    let t = e.script_tables();
+    assert!(
+        (crate::names::PLUGIN_OPCODES..t.max_opcode).contains(&opcode),
+        "{opcode:04x}: not a plugin opcode of the table"
+    );
+    let (name, short) = if opcode == 0x22c0 {
+        ("JIP_ar_Cat", "JIP_pinto_Cat")
+    } else {
+        (r.name, r.short)
+    };
+    Record {
+        long_name: guest_str(e, name.as_bytes()),
+        short_name: guest_str(e, short.as_bytes()),
+        opcode,
+        help: guest_str(e, b""),
+        needs_ref: u16::from(r.needs_ref),
+        param_count: r.param_count,
+        params: r.params,
+        execute: r.execute,
+        parse: DEFAULT_PARSE,
+        eval: r.eval,
+        flags: r.flags,
+    }
+    .write(e, t.record(opcode));
+    e.ext::<Nvse>().table.returns[(opcode - ScriptTables::FIRST_OPCODE) as usize] = r.returns;
 }
 
 /// The return type of `opcode` (xNVSE's `GetReturnType`): `Default` outside the table.
@@ -535,6 +654,109 @@ pub(crate) mod tests {
         assert_eq!(return_type(&e, 0x1025), Returns::Form);
         assert_eq!(return_type(&e, 0x1026), Returns::Default);
         assert_eq!(return_type(&e, 0x9000), Returns::Default);
+    }
+
+    /// A plugin's opcodes grow the table: the new slots are empty records (their opcode, empty
+    /// names and help, the default parser, no handler, no parameters), the record past the end
+    /// and the engine's descriptor move, xNVSE's records stay, and a shorter grow changes nothing.
+    #[test]
+    fn a_plugin_grows_the_table_with_empty_slots() {
+        let mut e = engine_with_exe_tables();
+        install(&mut e);
+        let before = Record::read(&e, e.script_tables().record(0x15df));
+        grow_to(&mut e, 0x2943);
+        let t = e.script_tables();
+        assert_eq!(
+            (t.start, t.end, t.max_opcode),
+            (TABLE_AT, TABLE_AT + 0x1943 * RECORD, 0x2943)
+        );
+        assert_eq!(e.mem.u32(t.end + 8), 0x2943, "the record past the end");
+        assert_eq!(Record::read(&e, t.record(0x15df)), before);
+        let empty = guest_str(&mut e, b"");
+        for opcode in [0x168e, 0x1fff, 0x2132, 0x2942] {
+            assert_eq!(
+                Record::read(&e, t.record(opcode)),
+                Record {
+                    long_name: empty,
+                    short_name: empty,
+                    opcode,
+                    help: empty,
+                    parse: DEFAULT_PARSE,
+                    ..Record::default()
+                },
+                "{opcode:04x}"
+            );
+            assert_eq!(return_type(&e, opcode), Returns::Default);
+        }
+        assert_eq!(record_of(&e, 0x2942), t.record(0x2942));
+        assert_eq!(record_of(&e, 0x2943), 0);
+        grow_to(&mut e, 0x2300);
+        assert_eq!(e.script_tables(), t);
+        // The table's room ends where its strings begin: the record past the end fits, one
+        // more would not.
+        grow_to(&mut e, ROOM_END);
+        let end = e.script_tables().end;
+        assert!(end + RECORD <= DATA_AT && end + 2 * RECORD > DATA_AT);
+        assert_eq!(e.mem.u32(end + 8), ROOM_END);
+        let past = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            grow_to(&mut e, ROOM_END + 1)
+        }));
+        assert!(past.is_err());
+    }
+
+    /// A plugin's record holds what the plugin registers, with the default parser and an empty
+    /// help text, and its return type beside it; xNVSE renames what is registered at `0x22C0`.
+    /// Only opcodes from `0x2000` to the table's end take one.
+    #[test]
+    fn a_plugin_record_is_written_as_registered() {
+        let mut e = engine_with_exe_tables();
+        install(&mut e);
+        grow_to(&mut e, 0x2600);
+        let record = |execute| PluginRecord {
+            name: "SomeCommand",
+            short: "Some",
+            needs_ref: true,
+            param_count: 2,
+            params: 0x7f12_3450,
+            execute,
+            eval: 0x7ec0_1234,
+            flags: 1,
+            expression: false,
+            returns: Returns::Array,
+        };
+        add_plugin_record(&mut e, 0x2201, &record(0));
+        let t = e.script_tables();
+        let r = Record::read(&e, t.record(0x2201));
+        assert_eq!(
+            r,
+            Record {
+                long_name: r.long_name,
+                short_name: r.short_name,
+                opcode: 0x2201,
+                help: guest_str(&mut e, b""),
+                needs_ref: 1,
+                param_count: 2,
+                params: 0x7f12_3450,
+                execute: 0,
+                parse: DEFAULT_PARSE,
+                eval: 0x7ec0_1234,
+                flags: 1,
+            }
+        );
+        assert_eq!(guest_text(&e, r.long_name), b"SomeCommand");
+        assert_eq!(guest_text(&e, r.short_name), b"Some");
+        assert_eq!(return_type(&e, 0x2201), Returns::Array);
+        add_plugin_record(&mut e, 0x22c0, &record(0x7e80_0004));
+        let r = Record::read(&e, t.record(0x22c0));
+        assert_eq!(guest_text(&e, r.long_name), b"JIP_ar_Cat");
+        assert_eq!(guest_text(&e, r.short_name), b"JIP_pinto_Cat");
+        assert_eq!(r.execute, 0x7e80_0004);
+        for opcode in [0x1fff, 0x2600] {
+            let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                add_plugin_record(&mut e, opcode, &record(0))
+            }));
+            assert!(refused.is_err(), "{opcode:04x}");
+        }
     }
 
     /// Strings are written once.

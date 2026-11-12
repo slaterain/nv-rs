@@ -1,0 +1,1159 @@
+# JIP LN NVSE 57.30 (jip_nvse.dll, sha256 9d2779647ed0ce63043390f47fc978e3234af8e558dc6cb6bcb231478a2d74d4): every
+# slot it registers, read once from the DLL by a script beside the lead's tools (measure/jip/dll-slots.pl):
+# the CommandInfo records, in the order their registration code pushes them, at the opcodes the
+# two SetOpcodeBase calls give (0x2200, then 0x2600); the parameter types and optional flags read
+# through each record's list (type:optional, hex type); whether the list pointer is set; the execute
+# (dll: a handler of its own, 0: none, else the exe address), the parse (0 or expression: xNVSE's
+# Cmd_Expression_Plugin_Parse), the eval (dll or 0), the flags, and the return type pushed for
+# RegisterTypedCommand (0 for RegisterCommand). What the bytes say, not the bytes.
+opcode	name	short	needs_ref	param_count	params	params_ptr	execute	parse	eval	flags	returns
+2200	GetLNVersion	GetJIPLNVersion	0	0		0	dll	0	0	0	0
+2201	FileExists		0	2	0:0,1:1	1	dll	0	0	0	0
+2202	GetTimeStamp		0	0		0	dll	0	0	0	2
+2203	GetController		0	0		0	dll	0	0	0	0
+2204	IsButtonPressed		0	1	1:0	1	dll	0	dll	1	0
+2205	GetLeftStickX	GetLSX	0	0		0	dll	0	dll	1	0
+2206	GetLeftStickY	GetLSY	0	0		0	dll	0	dll	1	0
+2207	GetRightStickX	GetRSX	0	0		0	dll	0	dll	1	0
+2208	GetRightStickY	GetRSY	0	0		0	dll	0	dll	1	0
+2209	GetLeftTrigger	GetLTr	0	0		0	dll	0	dll	1	0
+220A	GetRightTrigger	GetRTr	0	0		0	dll	0	dll	1	0
+220B	GetDeadZoneLS		0	0		0	dll	0	0	0	0
+220C	GetDeadZoneRS		0	0		0	dll	0	0	0	0
+220D	SetDeadZoneLS		0	1	2c:0	1	dll	0	0	0	0
+220E	SetDeadZoneRS		0	1	2c:0	1	dll	0	0	0	0
+220F	GetPressedButtons	GetButtons	0	0		0	dll	0	0	0	0
+2210	GetNVSEVersionFull		0	0		0	dll	0	0	0	0
+2211	GetLoadedType	GLT	0	4	25:0,1:0,1:1,1:1	1	dll	0	0	0	0
+2212	ListToArray		0	1	25:0	1	dll	0	0	0	3
+2213	NONE		0	0		1	005d4a40	0	0	0	0
+2214	GetCombatStyle		0	1	19:1	1	dll	0	0	0	1
+2215	NONE		0	0		1	005d4a40	0	0	0	0
+2216	SaveHotkeys		0	0		0	dll	0	0	0	3
+2217	RestoreHotkeys		0	1	1:1	1	dll	0	0	0	0
+2218	GetBipedModelList	GetBMList	0	1	3:1	1	dll	0	0	0	1
+2219	SetBipedModelList	SetBMList	0	2	3d:0,3d:1	1	dll	0	0	0	0
+221A	GetModName		0	2	1:0,1:1	1	dll	0	0	0	2
+221B	HasPerkRank		1	2	3d:0,1:1	1	dll	0	0	0	0
+221C	SetGlobalValue	SGV	0	2	0:0,2:0	1	dll	0	0	0	0
+221D	GetSelfModIndex		0	0		0	dll	0	0	0	0
+221E	LeveledListAddForm	LListAddForm	0	5	3d:0,3d:0,1:0,1:0,2:0	1	dll	0	0	0	0
+221F	LeveledListRemoveForm	LListRemoveForm	0	2	3d:0,3d:0	1	dll	0	0	0	0
+2220	GetLevItemIndexByForm	LListGetFormIndex	0	2	3d:0,3d:0	1	dll	0	0	0	0
+2221	GetLevItemIndexByLevel	LListGetLevelIndex	0	2	3d:0,1:0	1	dll	0	0	0	0
+2222	GetChanceNone		0	1	3d:0	1	dll	0	0	0	0
+2223	SetChanceNone		0	2	3d:0,1:0	1	dll	0	0	0	0
+2224	GetNumLevItems	LListGetCount	0	1	3d:0	1	dll	0	0	0	0
+2225	GetNthLevItem	LListGetNthForm	0	2	3d:0,1:0	1	dll	0	0	0	1
+2226	GetNthLevItemLevel	LListGetNthLevel	0	2	3d:0,1:0	1	dll	0	0	0	0
+2227	GetNthLevItemCount	LListGetNthCount	0	2	3d:0,1:0	1	dll	0	0	0	0
+2228	RemoveNthLevItem	LListRemoveNthForm	0	2	3d:0,1:0	1	dll	0	0	0	0
+2229	LeveledListClear	LListClear	0	1	3d:0	1	dll	0	0	0	0
+222A	DumpLevList	LListDump	0	1	3d:0	1	dll	0	0	0	0
+222B	GetChanceNoneGlobal		0	1	3d:0	1	dll	0	0	0	0
+222C	ClearAllHotkeys		0	0		0	dll	0	0	0	0
+222D	GetMapMarkerRep		1	0		0	dll	0	0	0	1
+222E	SetMapMarkerRep		1	1	3d:1	1	dll	0	0	0	0
+222F	GetMapMarkerName		1	0		0	dll	0	0	0	2
+2230	SetMapMarkerName		1	1	0:0	1	dll	0	0	0	0
+2231	GetMapMarkerType		1	0		0	dll	0	0	0	0
+2232	SetMapMarkerType		1	1	1:0	1	dll	0	0	0	0
+2233	NONE		0	0		1	005d4a40	0	0	0	0
+2234	SetMapMarkerVisible		1	1	1:0	1	dll	0	0	0	0
+2235	GetMapMarkerHidden		1	0		0	dll	0	0	0	0
+2236	SetMapMarkerHidden		1	1	1:0	1	dll	0	0	0	0
+2237	GetMapMarkerTravel		1	0		0	dll	0	0	0	0
+2238	SetMapMarkerTravel		1	1	1:0	1	dll	0	0	0	0
+2239	GetFormMods		0	1	3d:1	1	dll	0	0	0	3
+223A	IsFormOverridden		0	1	3d:0	1	dll	0	0	0	0
+223B	SetPerkRank		1	3	3d:0,1:0,1:1	1	dll	0	0	0	0
+223C	GetMerchantContainer		1	0		0	dll	0	0	0	1
+223D	GetRadioBroadcastType		1	0		0	dll	0	0	0	0
+223E	SetRadioBroadcastType		1	1	1:0	1	dll	0	0	0	0
+223F	GetRadioRadius		1	0		0	dll	0	0	0	0
+2240	SetRadioRadius		1	1	2:0	1	dll	0	0	0	0
+2241	GetRadioStatic		1	0		0	dll	0	0	0	0
+2242	SetRadioStatic		1	1	2:0	1	dll	0	0	0	0
+2243	GetRadioPosRef		1	0		0	dll	0	0	0	0
+2244	SetRadioPosRef		1	1	4:0	1	dll	0	0	0	0
+2245	IsRadioRef		1	0		0	dll	0	0	0	0
+2246	Search		0	2	0:0,0:1	1	dll	0	0	0	0
+2247	LNGetAggroRadius		0	1	19:1	1	dll	0	0	0	0
+2248	LNSetAggroRadius		0	2	1:0,19:1	1	dll	0	0	0	0
+2249	IsMapMarker		1	0		0	dll	0	0	0	0
+224A	GetCellCoords		0	1	3d:1	1	dll	0	0	0	3
+224B	GetLockedOut		0	1	4:1	1	dll	0	0	0	0
+224C	SetLockedOut		0	2	1:0,4:1	1	dll	0	0	0	0
+224D	GetCreatureType		0	1	19:1	1	dll	0	0	0	0
+224E	GetLoadedTypeArray	GLTA	0	2	1:0,1:1	1	dll	0	0	0	3
+224F	GetPasswordNote		0	1	3d:1	1	dll	0	0	0	1
+2250	SetPasswordNote		0	2	3d:0,3d:1	1	dll	0	0	0	0
+2251	GetFormRefs		0	2	3d:0,1:1	1	dll	0	0	0	3
+2252	GetCellLightingTemplate		0	1	3d:0	1	dll	0	0	0	1
+2253	SetCellLightingTemplate		0	2	3d:0,3d:1	1	dll	0	0	0	0
+2254	GetRecipeInputForms		0	1	3d:0	1	dll	0	0	0	3
+2255	GetRecipeOutputForms		0	1	3d:0	1	dll	0	0	0	3
+2256	GetRecipeInputCount		0	2	3d:0,3d:0	1	dll	0	0	0	0
+2257	SetRecipeInputCount		0	3	3d:0,3d:0,1:0	1	dll	0	0	0	0
+2258	GetRecipeOutputCount		0	2	3d:0,3d:0	1	dll	0	0	0	0
+2259	SetRecipeOutputCount		0	3	3d:0,3d:0,1:0	1	dll	0	0	0	0
+225A	GetRecipeRequiredSkill		0	1	3d:0	1	dll	0	0	0	0
+225B	SetRecipeRequiredSkill		0	2	3d:0,1:0	1	dll	0	0	0	0
+225C	GetRecipeRequiredSkillLevel		0	1	3d:0	1	dll	0	0	0	0
+225D	SetRecipeRequiredSkillLevel		0	2	3d:0,1:0	1	dll	0	0	0	0
+225E	ReplaceRecipeInputForm		0	3	3d:0,3d:0,3d:0	1	dll	0	0	0	0
+225F	ReplaceRecipeOutputForm		0	3	3d:0,3d:0,3d:0	1	dll	0	0	0	0
+2260	GetFormRecipes		0	2	3d:0,3d:1	1	dll	0	0	0	3
+2261	GetFormRecipeOutputs		0	2	3d:0,3d:1	1	dll	0	0	0	3
+2262	GetWorldspaceParentWorldspace	GetWorldParentWorld	0	1	1b:0	1	dll	0	0	0	1
+2263	GetTerminalLock		0	1	3d:1	1	dll	0	0	0	0
+2264	GetArmorClass	GetAC	0	1	3:1	1	dll	0	dll	1	0
+2265	IsRaceInList		1	1	25:0	1	dll	0	dll	1	0
+2266	GetFormFromMod	GFFM	0	2	0:0,0:0	1	dll	0	0	0	1
+2267	GetPerkEntryCount		0	1	27:0	1	dll	0	0	0	0
+2268	GetNthPerkEntryType		0	2	27:0,1:0	1	dll	0	0	0	0
+2269	GetNthPerkEntryFunction		0	2	27:0,1:0	1	dll	0	0	0	0
+226A	SetNthPerkEntryFunction		0	3	27:0,1:0,1:0	1	dll	0	0	0	0
+226B	GetNthPerkEntryForm		0	2	27:0,1:0	1	dll	0	0	0	1
+226C	SetNthPerkEntryForm		0	3	3d:0,1:0,3d:0	1	dll	0	0	0	0
+226D	GetNthPerkEntryValue1		0	2	27:0,1:0	1	dll	0	0	0	0
+226E	SetNthPerkEntryValue1		0	3	3d:0,1:0,2:0	1	dll	0	0	0	0
+226F	GetNthPerkEntryValue2		0	2	27:0,1:0	1	dll	0	0	0	0
+2270	SetNthPerkEntryValue2		0	3	3d:0,1:0,2:0	1	dll	0	0	0	0
+2271	GetNthPerkEntryString		0	2	27:0,1:0	1	dll	0	0	0	2
+2272	SetNthPerkEntryString		0	3	3d:0,1:0,0:0	1	dll	0	0	0	0
+2273	GetActivatorRadioStation		0	1	3d:1	1	dll	0	0	0	1
+2274	SetActivatorRadioStation		0	2	3d:0,3d:1	1	dll	0	0	0	0
+2275	GetActivatorPrompt		0	1	3d:1	1	dll	0	0	0	2
+2276	SetActivatorPrompt		0	2	0:0,3d:1	1	dll	0	0	0	0
+2277	GetActivatorWaterType		0	1	3d:1	1	dll	0	0	0	1
+2278	SetActivatorWaterType		0	2	3d:0,3d:1	1	dll	0	0	0	0
+2279	GetActiveQuest		0	0		0	dll	0	0	0	1
+227A	GetINIFloat		0	2	0:0,0:1	1	dll	0	0	0	0
+227B	GetINIString		0	2	0:0,0:1	1	dll	0	0	0	2
+227C	SetINIFloat		0	3	0:0,2c:0,0:1	1	dll	0	0	0	0
+227D	SetINIString		0	3	0:0,0:0,0:1	1	dll	0	0	0	0
+227E	GetINISection		0	3	0:0,0:1,1:1	1	dll	0	0	0	3
+227F	SetINISection		0	3	0:0,1:0,0:1	1	dll	0	0	0	0
+2280	IsParentActivateOnly		0	1	4:1	1	dll	0	0	0	0
+2281	SetLinkedReference	SetLinkedRef	1	1	4:1	1	dll	0	0	0	0
+2282	SetBaseForm		1	1	15:0	1	dll	0	0	0	0
+2283	GetStringSetting		0	1	0:0	1	dll	0	0	0	2
+2284	SetStringSetting		0	2	0:0,0:0	1	dll	0	0	0	0
+2285	GetINISectionNames		0	1	0:1	1	dll	0	0	0	3
+2286	GetRaceVoice		0	2	3d:0,1:0	1	dll	0	0	0	0
+2287	SetRaceVoice		0	3	3d:0,1:0,3d:0	1	dll	0	0	0	0
+2288	GetRaceAgeRace		0	2	3d:0,1:0	1	dll	0	0	0	0
+2289	SetRaceAgeRace		0	3	3d:0,1:0,3d:0	1	dll	0	0	0	0
+228A	GetFilesInFolder	GetFiles	0	2	0:0,0:1	1	dll	0	0	0	3
+228B	NONE		0	0		1	005d4a40	0	0	0	0
+228C	NONE		0	0		1	005d4a40	0	0	0	0
+228D	NONE		0	0		1	005d4a40	0	0	0	0
+228E	GetLeveledListFlags	LListGetFlags	0	1	3d:0	1	dll	0	0	0	0
+228F	SetLeveledListFlags	LListSetFlags	0	2	3d:0,1:0	1	dll	0	0	0	0
+2290	GetActivatorSoundLooping		0	1	3d:1	1	dll	0	0	0	1
+2291	SetActivatorSoundLooping		0	2	3d:0,3d:1	1	dll	0	0	0	0
+2292	GetActivatorSoundActivate		0	1	3d:1	1	dll	0	0	0	1
+2293	SetActivatorSoundActivate		0	2	3d:0,3d:1	1	dll	0	0	0	0
+2294	EnableButton		0	1	1:0	1	dll	0	0	0	0
+2295	DisableButton		0	1	1:0	1	dll	0	0	0	0
+2296	IsButtonDisabled		0	1	1:0	1	dll	0	dll	1	0
+2297	HoldButton		0	1	1:0	1	dll	0	0	0	0
+2298	ReleaseButton		0	1	1:0	1	dll	0	0	0	0
+2299	IsButtonHeld		0	1	1:0	1	dll	0	dll	1	0
+229A	IsTrait		0	1	27:0	1	dll	0	0	0	0
+229B	GetLoadScreenTexture		0	1	3d:0	1	dll	0	0	0	2
+229C	SetLoadScreenTexture		0	2	3d:0,0:0	1	dll	0	0	0	0
+229D	GetLoadScreenType		0	1	3d:0	1	dll	0	0	0	1
+229E	SetLoadScreenType		0	2	3d:0,3d:0	1	dll	0	0	0	0
+229F	GetLoadScreenTypeTextRGB		0	1	3d:0	1	dll	0	0	0	3
+22A0	SetLoadScreenTypeTextRGB		0	4	3d:0,2:0,2:0,2:0	1	dll	0	0	0	0
+22A1	CopyFaceGenFrom		1	1	19:1	1	dll	0	0	0	0
+22A2	SetRace		0	2	3d:0,3d:0	1	dll	0	0	0	0
+22A3	GetFoldersInFolder	GetFolders	0	2	0:0,0:1	1	dll	0	0	0	3
+22A4	EnableTrigger		0	1	1:0	1	dll	0	0	0	0
+22A5	DisableTrigger		0	1	1:0	1	dll	0	0	0	0
+22A6	IsTriggerDisabled		0	1	1:0	1	dll	0	dll	1	0
+22A7	HoldTrigger		0	1	1:0	1	dll	0	0	0	0
+22A8	ReleaseTrigger		0	1	1:0	1	dll	0	0	0	0
+22A9	IsTriggerHeld		0	1	1:0	1	dll	0	dll	1	0
+22AA	GetPCCanUsePowerArmor		0	0		0	dll	0	0	0	0
+22AB	GetIdleAnimPath		0	1	3d:0	1	dll	0	0	0	2
+22AC	SetIdleAnimPath		0	2	3d:0,0:0	1	dll	0	0	0	0
+22AD	LNGetName		0	1	3d:1	1	dll	0	0	0	2
+22AE	RemoveINIKey		0	2	0:0,0:1	1	dll	0	0	0	0
+22AF	RemoveINISection		0	2	0:0,0:1	1	dll	0	0	0	0
+22B0	GetGlobalTimeMultiplier	ggtm	0	0		0	dll	0	0	0	0
+22B1	GetCasinoMaxWinnings		0	1	3f:0	1	dll	0	0	0	0
+22B2	SetCasinoMaxWinnings		0	2	3f:0,1:0	1	dll	0	0	0	0
+22B3	GetCasinoBJPayout		0	1	3f:0	1	dll	0	0	0	0
+22B4	SetCasinoBJPayout		0	2	3f:0,2:0	1	dll	0	0	0	0
+22B5	GetCasinoBJ17Stand		0	1	3f:0	1	dll	0	0	0	0
+22B6	SetCasinoBJ17Stand		0	2	3f:0,1:0	1	dll	0	0	0	0
+22B7	GetCasinoNumDecks		0	1	3f:0	1	dll	0	0	0	0
+22B8	SetCasinoNumDecks		0	2	3f:0,1:0	1	dll	0	0	0	0
+22B9	GetCasinoShufflePercent		0	1	3f:0	1	dll	0	0	0	0
+22BA	SetCasinoShufflePercent		0	2	3f:0,2:0	1	dll	0	0	0	0
+22BB	GetCasinoReelStops		0	2	3f:0,1:0	1	dll	0	0	0	0
+22BC	SetCasinoReelStops		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+22BD	AddNoteNS		0	1	28:0	1	dll	0	0	0	0
+22BE	GetCellWaterForm		0	1	3d:1	1	dll	0	0	0	1
+22BF	GetWaterFormEffect		0	1	3d:0	1	dll	0	0	0	1
+22C0	ar_Cat	pinto_Cat	0	3	1:0,1:0,1:1	1	dll	0	0	0	0
+22C1	GetInventoryWeight	GetInvWeight	1	1	1:1	1	dll	0	0	0	0
+22C2	GetChallengeType		0	1	41:0	1	dll	0	0	0	0
+22C3	GetChallengeThreshold		0	1	41:0	1	dll	0	0	0	0
+22C4	SetChallengeThreshold		0	2	41:0,1:0	1	dll	0	0	0	0
+22C5	GetChallengeInterval		0	1	41:0	1	dll	0	0	0	0
+22C6	SetChallengeInterval		0	2	41:0,1:0	1	dll	0	0	0	0
+22C7	GetChallengeValue1		0	1	41:0	1	dll	0	0	0	0
+22C8	SetChallengeValue1		0	2	41:0,1:0	1	dll	0	0	0	0
+22C9	GetChallengeValue2		0	1	41:0	1	dll	0	0	0	0
+22CA	SetChallengeValue2		0	2	41:0,1:0	1	dll	0	0	0	0
+22CB	GetChallengeValue3		0	1	41:0	1	dll	0	0	0	0
+22CC	SetChallengeValue3		0	2	41:0,1:0	1	dll	0	0	0	0
+22CD	GetChallengeForm1		0	1	41:0	1	dll	0	0	0	1
+22CE	SetChallengeForm1		0	2	41:0,3d:0	1	dll	0	0	0	0
+22CF	GetChallengeForm2		0	1	41:0	1	dll	0	0	0	1
+22D0	SetChallengeForm2		0	2	41:0,3d:0	1	dll	0	0	0	0
+22D1	GetRecipeCategory		0	1	3d:0	1	dll	0	0	0	1
+22D2	SetRecipeCategory		0	2	3d:0,3d:0	1	dll	0	0	0	0
+22D3	GetRecipeSubcategory		0	1	3d:0	1	dll	0	0	0	1
+22D4	SetRecipeSubcategory		0	2	3d:0,3d:0	1	dll	0	0	0	0
+22D5	NONE		0	0		1	005d4a40	0	0	0	0
+22D6	GetReferenceFlag	GetRefFlag	1	1	1:0	1	dll	0	dll	1	0
+22D7	SetReferenceFlag	SetRefFlag	1	2	1:0,1:0	1	dll	0	0	0	0
+22D8	AddRecipeInputForm		0	3	3d:0,3d:0,1:0	1	dll	0	0	0	0
+22D9	AddRecipeOutputForm		0	3	3d:0,3d:0,1:0	1	dll	0	0	0	0
+22DA	RemoveRecipeInputForm		0	2	3d:0,3d:0	1	dll	0	0	0	0
+22DB	RemoveRecipeOutputForm		0	2	3d:0,3d:0	1	dll	0	0	0	0
+22DC	AddRecipeCondition		0	5	3d:0,1:0,3d:0,1:0,2:0	1	dll	0	0	0	0
+22DD	NONE		0	0		1	005d4a40	0	0	0	0
+22DE	GetFormFlag		0	2	3d:0,1:0	1	dll	0	0	0	0
+22DF	SetFormFlag		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+22E0	GetDistance2D		1	1	4:0	1	dll	0	dll	1	0
+22E1	GetDistance3D		1	1	4:0	1	dll	0	dll	1	0
+22E2	GetIngestibleFlag		0	2	3d:0,1:0	1	dll	0	0	0	0
+22E3	SetIngestibleFlag		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+22E4	IsSkillMagazine		0	1	3d:0	1	dll	0	0	0	0
+22E5	NONE		0	0		1	005d4a40	0	0	0	0
+22E6	GetServiceFlag		0	2	19:0,1:0	1	dll	0	0	0	0
+22E7	SetServiceFlag		0	3	19:0,1:0,1:0	1	dll	0	0	0	0
+22E8	LeveledListReplaceForm	LListReplaceForm	0	3	3d:0,3d:0,3d:0	1	dll	0	0	0	0
+22E9	NONE		0	0		1	005d4a40	0	0	0	0
+22EA	GetCellImageSpace		0	1	3d:0	1	dll	0	0	0	1
+22EB	PlayerHasKey		1	0		0	dll	0	dll	1	0
+22EC	GetCellFlag		0	2	3d:0,1:0	1	dll	0	0	0	0
+22ED	SetCellFlag		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+22EE	NONE		0	0		1	005d4a40	0	0	0	0
+22EF	NONE		0	0		1	005d4a40	0	0	0	0
+22F0	fsqrt		0	1	2c:0	1	dll	0	0	0	0
+22F1	GetCellWaterHeight		0	1	3d:1	1	dll	0	0	0	0
+22F2	SetCellWaterHeight		0	2	2:0,3d:1	1	dll	0	0	0	0
+22F3	GetAnimObjectIdle	GetANIOIdle	0	1	3d:0	1	dll	0	0	0	1
+22F4	SetAnimObjectIdle	SetANIOIdle	0	2	3d:0,3d:0	1	dll	0	0	0	0
+22F5	GetActorTemplateFlag		0	2	1:0,19:1	1	dll	0	0	0	0
+22F6	SetActorTemplateFlag		0	3	1:0,1:0,19:1	1	dll	0	0	0	0
+22F7	BaseGetItemCount		0	2	3d:0,3d:1	1	dll	0	0	0	0
+22F8	BaseAddItem		0	3	3d:0,1:0,3d:1	1	dll	0	0	0	0
+22F9	BaseRemoveItem		0	3	3d:0,1:0,3d:1	1	dll	0	0	0	0
+22FA	LNSetActorTemplate		0	2	3d:0,19:1	1	dll	0	0	0	0
+22FB	BaseAddItemHealth		0	4	3d:0,1:0,2:0,3d:1	1	dll	0	0	0	0
+22FC	LNSetName		0	2	0:0,3d:1	1	dll	0	0	0	0
+22FD	fSin		0	1	2:0	1	dll	0	0	0	0
+22FE	fCos		0	1	2:0	1	dll	0	0	0	0
+22FF	SortFormsByType		0	2	1:0,1:0	1	dll	0	0	0	3
+2300	GetFormCountType		0	2	1:0,1:0	1	dll	0	0	0	0
+2301	GetPickupSound		0	1	3d:0	1	dll	0	0	0	1
+2302	SetPickupSound		0	2	3d:0,3d:0	1	dll	0	0	0	0
+2303	GetPutdownSound		0	1	3d:0	1	dll	0	0	0	1
+2304	SetPutdownSound		0	2	3d:0,3d:0	1	dll	0	0	0	0
+2305	GetContainerOpenSound		0	1	3d:1	1	dll	0	0	0	1
+2306	SetContainerOpenSound		0	2	3d:0,3d:1	1	dll	0	0	0	0
+2307	GetContainerCloseSound		0	1	3d:1	1	dll	0	0	0	1
+2308	SetContainerCloseSound		0	2	3d:0,3d:1	1	dll	0	0	0	0
+2309	NONE		0	0		1	005d4a40	0	0	0	0
+230A	GetPlayerRegions		0	0		0	dll	0	0	0	3
+230B	fAtan		0	1	2:0	1	dll	0	0	0	0
+230C	GetPerkLevel		0	1	27:0	1	dll	0	0	0	0
+230D	GetZoneFlag		0	2	3d:0,1:0	1	dll	0	0	0	0
+230E	SetZoneFlag		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+230F	fAsin		0	1	2:0	1	dll	0	0	0	0
+2310	fAcos		0	1	2:0	1	dll	0	0	0	0
+2311	SetNthLevItem	LListsetNthForm	0	3	3d:0,1:0,3d:0	1	dll	0	0	0	0
+2312	SetNthLevItemLevel	LListSetNthLevel	0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+2313	SetNthLevItemCount	LListSetNthCount	0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+2314	GetBaseFactionRank		0	2	3d:0,19:1	1	dll	0	0	0	0
+2315	SetBaseFactionRank		0	3	11:0,1:0,19:1	1	dll	0	0	0	0
+2316	GetImpactDataSet		0	1	3:0	1	dll	0	0	0	1
+2317	SetImpactDataSet		0	2	3d:0,3d:0	1	dll	0	0	0	0
+2318	HasActionRef		1	0		0	dll	0	0	0	0
+2319	SetHotkey		0	4	1:0,3d:0,2:1,1:1	1	dll	0	0	0	0
+231A	GetChallengeFlags		0	1	41:0	1	dll	0	0	0	0
+231B	SetChallengeFlags		0	2	41:0,1:0	1	dll	0	0	0	0
+231C	LNIsPlayable		0	1	3d:1	1	dll	0	0	0	0
+231D	LNSetIsPlayable		0	2	1:0,3d:1	1	dll	0	0	0	0
+231E	GetZone		1	0		0	dll	0	0	0	0
+231F	GetBaseKarma		0	1	19:1	1	dll	0	0	0	0
+2320	SetBaseKarma		0	2	1:0,19:1	1	dll	0	0	0	0
+2321	ActorHasEffect		1	1	1f:0	1	dll	0	dll	1	0
+2322	NONE		0	0		1	005d4a40	0	0	0	0
+2323	GetEquippedData	GetEqData	1	1	1:0	1	dll	0	0	0	3
+2324	SetEquippedData	SetEqData	1	3	1:0,1:1,1:1	1	dll	0	0	0	0
+2325	EquipItemData		1	5	3:0,2:1,1:1,1:1,1:1	1	dll	0	0	0	0
+2326	Console		0	21	0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+2327	GetDefaultMessageTime	GetDMT	0	0		0	dll	0	0	0	0
+2328	SetDefaultMessageTime	SetDMT	0	1	2:0	1	dll	0	0	0	0
+2329	NONE		0	0		1	005d4a40	0	0	0	0
+232A	NONE		0	0		1	005d4a40	0	0	0	0
+232B	GetWeaponKillImpulse		0	1	3:0	1	dll	0	0	0	0
+232C	SetWeaponKillImpulse		0	2	3d:0,2:0	1	dll	0	0	0	0
+232D	GetWeaponImpulseDistance		0	1	3:0	1	dll	0	0	0	0
+232E	SetWeaponImpulseDistance		0	2	3d:0,2:0	1	dll	0	0	0	0
+232F	GetWeaponVATSEffect		0	1	3:0	1	dll	0	0	0	1
+2330	SetWeaponVATSEffect		0	2	3d:0,3d:0	1	dll	0	0	0	0
+2331	GetWeaponCritFlags		0	1	3:0	1	dll	0	0	0	0
+2332	SetWeaponCritFlags		0	2	3:0,1:0	1	dll	0	0	0	0
+2333	GetBodyPartData		0	1	19:0	1	dll	0	0	0	1
+2334	GetRadius		0	1	3d:1	1	dll	0	0	0	0
+2335	SetRadius		0	2	2:0,3d:1	1	dll	0	0	0	0
+2336	CrosshairRefInList		0	1	25:0	1	dll	0	0	0	0
+2337	GetGameSettings		0	1	1:1	1	dll	0	0	0	3
+2338	GetShowQuestItems		0	0		0	dll	0	0	0	0
+2339	GetWaterTrait		0	2	3d:0,1:0	1	dll	0	0	0	0
+233A	SetWaterTrait		0	3	3d:0,1:0,2c:0	1	dll	0	0	0	0
+2600	SetPersistent		1	1	1:0	1	dll	0	0	0	0
+2601	GetActorTemplate		0	1	19:1	1	dll	0	0	0	1
+2602	GetLeveledActorBase		1	0		0	dll	0	0	0	1
+2603	GetCreatureDamage		0	1	19:1	1	dll	0	0	0	0
+2604	SetCreatureDamage		0	2	1:0,19:1	1	dll	0	0	0	0
+2605	GetIsPoisoned		1	0		0	dll	0	dll	1	0
+2606	AddItemAlt		1	5	32:0,1:1,2:1,1:1,1:1	1	dll	0	0	0	0
+2607	GetValueAlt		0	1	3:1	1	dll	0	0	0	0
+2608	IsComponentLoaded		0	1	0:0	1	dll	0	0	0	0
+2609	InjectUIXML		0	2	0:0,0:0	1	dll	0	0	0	0
+260A	InjectUIComponent		0	22	0:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+260B	GetAmmoTraitNumeric		0	2	3:0,1:0	1	dll	0	0	0	0
+260C	SetAmmoTraitNumeric		0	3	3:0,1:0,2:0	1	dll	0	0	0	0
+260D	GetAmmoProjectile		0	1	3:0	1	dll	0	0	0	1
+260E	SetAmmoProjectile		0	2	3d:0,3d:1	1	dll	0	0	0	0
+260F	GetNumAmmoEffects		0	1	3d:0	1	dll	0	0	0	0
+2610	GetNthAmmoEffect		0	2	3d:0,1:0	1	dll	0	0	0	1
+2611	AddAmmoEffect		0	2	3d:0,3d:0	1	dll	0	0	0	0
+2612	RemoveAmmoEffect		0	2	3d:0,3d:0	1	dll	0	0	0	0
+2613	GetAmmoEffectTraitNumeric		0	2	3d:0,1:0	1	dll	0	0	0	0
+2614	SetAmmoEffectTraitNumeric		0	3	3d:0,1:0,2:0	1	dll	0	0	0	0
+2615	GetProjectileTraitNumeric		0	2	15:0,1:0	1	dll	0	0	0	0
+2616	SetProjectileTraitNumeric		0	3	3d:0,1:0,2:0	1	dll	0	0	0	0
+2617	GetProjectileFlag		0	2	15:0,1:0	1	dll	0	0	0	0
+2618	SetProjectileFlag		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+2619	GetProjectileExplosion		0	1	15:0	1	dll	0	0	0	1
+261A	SetProjectileExplosion		0	2	15:0,15:1	1	dll	0	0	0	0
+261B	GetExplosionTraitNumeric		0	2	15:0,1:0	1	dll	0	0	0	0
+261C	SetExplosionTraitNumeric		0	3	3d:0,1:0,2:0	1	dll	0	0	0	0
+261D	GetExplosionTraitForm		0	2	15:0,1:0	1	dll	0	0	0	1
+261E	SetExplosionTraitForm		0	3	3d:0,1:0,3d:1	1	dll	0	0	0	0
+261F	GetExplosionFlag		0	2	15:0,1:0	1	dll	0	0	0	0
+2620	SetExplosionFlag		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+2621	AddScriptVariable		0	2	0:0,e:1	1	dll	0	0	0	0
+2622	GetDelayElapsed		0	1	e:0	1	dll	0	0	0	0
+2623	SetDelayElapsed		0	2	e:0,2:0	1	dll	0	0	0	0
+2624	GetPackageFlag		0	2	1d:0,1:0	1	dll	0	0	0	0
+2625	SetPackageFlag		0	3	1d:0,1:0,1:0	1	dll	0	0	0	0
+2626	GetGlobalVariable		0	1	13:0	1	dll	0	0	0	0
+2627	SetGlobalVariable		0	2	13:0,2:0	1	dll	0	0	0	0
+2628	GetFactionReputationType		0	1	11:0	1	dll	0	0	0	1
+2629	SetFactionReputationType		0	2	11:0,3e:1	1	dll	0	0	0	0
+262A	RefToString		0	1	3d:1	1	dll	0	0	0	2
+262B	StringToRef		0	1	0:0	1	dll	0	0	0	1
+262C	GetObjectDimensions	GetObjDim	0	2	8:0,15:1	1	dll	0	0	0	0
+262D	GetIsItem		0	1	3:1	1	dll	0	0	0	0
+262E	GetMinOf		0	5	2c:0,2c:0,2c:1,2c:1,2c:1	1	dll	0	0	0	0
+262F	GetMaxOf		0	5	2c:0,2c:0,2c:1,2c:1,2c:1	1	dll	0	0	0	0
+2630	GetCombatStyleTraitNumeric		0	2	1e:0,1:0	1	dll	0	0	0	0
+2631	SetCombatStyleTraitNumeric		0	3	1e:0,1:0,2:0	1	dll	0	0	0	0
+2632	GetCombatStyleFlag		0	2	1e:0,1:0	1	dll	0	0	0	0
+2633	SetCombatStyleFlag		0	3	1e:0,1:0,1:0	1	dll	0	0	0	0
+2634	SetLinkedReference	SetLinkedRef	1	1	4:1	1	dll	0	0	0	0
+2635	GetEnableChildren		1	0		0	dll	0	0	0	3
+2636	GetLinkedChildren		1	0		0	dll	0	0	0	3
+2637	GetFollowers		1	0		0	dll	0	0	0	3
+2638	GetCursorPos		0	1	8:0	1	dll	0	0	0	0
+2639	GetUIString		0	1	0:0	1	dll	0	0	0	2
+263A	ReadArrayFromFile		0	2	0:0,1:1	1	dll	0	0	0	3
+263B	ReadStringFromFile		0	3	0:0,1:1,1:1	1	dll	0	0	0	2
+263C	WriteArrayToFile		0	4	0:0,1:0,1:0,1:1	1	dll	0	0	0	0
+263D	WriteStringToFile		0	23	0:0,1:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+263E	GetClassTraitNumeric		0	2	10:0,1:0	1	dll	0	0	0	0
+263F	SetClassTraitNumeric		0	3	10:0,1:0,1:0	1	dll	0	0	0	0
+2640	GetClassFlag		0	2	10:0,1:0	1	dll	0	0	0	0
+2641	SetClassFlag		0	3	10:0,1:0,1:0	1	dll	0	0	0	0
+2642	GetLightTraitNumeric		0	2	15:0,1:0	1	dll	0	0	0	0
+2643	SetLightTraitNumeric		0	3	3d:0,1:0,2:0	1	dll	0	0	0	0
+2644	GetLightFlag		0	2	15:0,1:0	1	dll	0	0	0	0
+2645	SetLightFlag		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+2646	GetSoundTraitNumeric		0	2	c:0,1:0	1	dll	0	0	0	0
+2647	SetSoundTraitNumeric		0	3	c:0,1:0,2:0	1	dll	0	0	0	0
+2648	GetSoundFlag		0	2	c:0,1:0	1	dll	0	0	0	0
+2649	SetSoundFlag		0	3	c:0,1:0,1:0	1	dll	0	0	0	0
+264A	GetWeaponDetectionSoundLevel		0	1	3:0	1	dll	0	0	0	0
+264B	SetWeaponDetectionSoundLevel		0	2	3:0,1:0	1	dll	0	0	0	0
+264C	IsEquippedWeaponSilenced		1	0		0	dll	0	dll	1	0
+264D	IsEquippedWeaponScoped		1	0		0	dll	0	dll	1	0
+264E	GetWeaponSound		0	2	3:0,1:0	1	dll	0	0	0	1
+264F	SetWeaponSound		0	3	3d:0,1:0,c:1	1	dll	0	0	0	0
+2650	SetWeaponItemMod		0	3	3d:0,1:0,3:1	1	dll	0	0	0	0
+2651	SetWeaponItemModEffect		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+2652	SetWeaponItemModValue		0	3	3d:0,1:0,2:0	1	dll	0	0	0	0
+2653	GetWeatherImageSpaceMod		0	2	21:0,1:0	1	dll	0	0	0	1
+2654	SetWeatherImageSpaceMod		0	3	21:0,1:0,2a:1	1	dll	0	0	0	0
+2655	GetWeatherTexture		0	2	21:0,1:0	1	dll	0	0	0	2
+2656	SetWeatherTexture		0	3	21:0,1:0,0:0	1	dll	0	0	0	0
+2657	GetWeatherPrecipitationModel		0	1	21:0	1	dll	0	0	0	2
+2658	SetWeatherPrecipitationModel		0	2	21:0,0:0	1	dll	0	0	0	0
+2659	GetWeatherTraitNumeric		0	2	21:0,1:0	1	dll	0	0	0	0
+265A	SetWeatherTraitNumeric		0	3	21:0,1:0,2c:0	1	dll	0	0	0	0
+265B	GetWeatherRGBColor		0	4	21:0,1:0,1:0,1:1	1	dll	0	0	0	0
+265C	SetWeatherRGBColor		0	5	21:0,1:0,1:0,1:0,1:1	1	dll	0	0	0	0
+265D	GetLandTextureTextureSet		0	1	3d:0	1	dll	0	0	0	1
+265E	SetLandTextureTextureSet		0	2	3d:0,3d:0	1	dll	0	0	0	0
+265F	GetLandTextureTraitNumeric		0	2	3d:0,1:0	1	dll	0	0	0	0
+2660	SetLandTextureTraitNumeric		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+2661	GetLandTextureNumGrasses		0	1	3d:0	1	dll	0	0	0	0
+2662	GetLandTextureNthGrass		0	2	3d:0,1:0	1	dll	0	0	0	1
+2663	LandTextureAddGrass		0	2	3d:0,3d:0	1	dll	0	0	0	0
+2664	LandTextureRemoveGrass		0	2	3d:0,3d:0	1	dll	0	0	0	0
+2665	GetTextureSetTexture		0	2	3d:0,1:0	1	dll	0	0	0	2
+2666	SetTextureSetTexture		0	3	3d:0,1:0,0:0	1	dll	0	0	0	0
+2667	GetTextureSetTraitNumeric		0	2	3d:0,1:0	1	dll	0	0	0	0
+2668	SetTextureSetTraitNumeric		0	3	3d:0,1:0,2c:0	1	dll	0	0	0	0
+2669	GetTextureSetFlag		0	2	3d:0,1:0	1	dll	0	0	0	0
+266A	SetTextureSetFlag		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+266B	GetClimateSunTexture		0	1	3d:0	1	dll	0	0	0	2
+266C	SetClimateSunTexture		0	2	3d:0,0:0	1	dll	0	0	0	0
+266D	GetClimateSunGlareTexture		0	1	3d:0	1	dll	0	0	0	2
+266E	SetClimateSunGlareTexture		0	2	3d:0,0:0	1	dll	0	0	0	0
+266F	GetClimateNightSkyModel		0	1	3d:0	1	dll	0	0	0	2
+2670	SetClimateNightSkyModel		0	2	3d:0,0:0	1	dll	0	0	0	0
+2671	GetClimateTraitNumeric		0	2	3d:0,1:0	1	dll	0	0	0	0
+2672	SetClimateTraitNumeric		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+2673	GetClimateNumWeatherTypes		0	1	3d:0	1	dll	0	0	0	0
+2674	GetClimateNthWeatherType		0	2	3d:0,1:0	1	dll	0	0	0	1
+2675	GetClimateNthWeatherChance		0	2	3d:0,1:0	1	dll	0	0	0	0
+2676	GetClimateNthWeatherGlobal		0	2	3d:0,1:0	1	dll	0	0	0	1
+2677	ClimateAddWeatherType		0	4	3d:0,21:0,1:0,13:1	1	dll	0	0	0	0
+2678	ClimateRemoveWeatherType		0	2	3d:0,21:0	1	dll	0	0	0	0
+2679	GetPrimitiveBound		1	1	8:0	1	dll	0	0	0	0
+267A	SetPrimitiveBound		1	2	8:0,2:0	1	dll	0	0	0	0
+267B	GetNumEffects		0	1	b:0	1	dll	0	0	0	0
+267C	GetNthEffectBase		0	2	b:0,1:0	1	dll	0	0	0	1
+267D	GetNthEffectTraitNumeric		0	3	b:0,1:0,1:0	1	dll	0	0	0	0
+267E	SetNthEffectTraitNumeric		0	4	b:0,1:0,1:0,1:0	1	dll	0	0	0	0
+267F	GetNumActorEffects		0	1	19:1	1	dll	0	0	0	0
+2680	GetNthActorEffect		0	2	1:0,19:1	1	dll	0	0	0	0
+2681	GetActiveMenuMode		0	0		0	dll	0	0	0	0
+2682	GetActiveUIComponentName		0	0		0	dll	0	0	0	2
+2683	GetActiveUIComponentFullName		0	0		0	dll	0	0	0	2
+2684	GetActiveUIComponentID		0	0		0	dll	0	0	0	0
+2685	GetMenuTargetRef		0	1	1:0	1	dll	0	0	0	1
+2686	GetMenuItemFilter		0	2	1:0,1:1	1	dll	0	0	0	0
+2687	ClickMenuButton		0	2	0:0,1:1	1	dll	0	0	0	0
+2688	RemoveItemTarget		1	4	32:0,1a:0,1:1,1:1	1	dll	0	0	0	0
+2689	GetActorLevelingData		0	2	1:0,19:1	1	dll	0	0	0	0
+268A	SetActorLevelingData		0	3	1:0,2:0,19:1	1	dll	0	0	0	0
+268B	SetNthEffectBase		0	3	b:0,1:0,1f:0	1	dll	0	0	0	0
+268C	HasVariableAdded		0	2	0:0,e:1	1	dll	0	0	0	0
+268D	RemoveScriptVariable		0	2	0:0,e:1	1	dll	0	0	0	0
+268E	GetLoadOrderChanged		0	0		0	dll	0	0	0	0
+268F	ValidateModIndex		0	1	1:0	1	dll	0	0	0	0
+2690	RemoveAllAddedVariables		0	1	e:1	1	dll	0	0	0	0
+2691	AuxiliaryVariableGetSize	AuxVarSize	0	2	0:0,3d:1	1	dll	0	0	0	0
+2692	AuxiliaryVariableGetType	AuxVarType	0	3	0:0,1:1,3d:1	1	dll	0	0	0	0
+2693	AuxiliaryVariableGetFloat	AuxVarGetFlt	0	3	0:0,1:1,3d:1	1	dll	0	0	0	0
+2694	AuxiliaryVariableSetFloat	AuxVarSetFlt	0	4	0:0,2c:0,1:1,3d:1	1	dll	0	0	0	0
+2695	AuxiliaryVariableGetRef	AuxVarGetRef	0	3	0:0,1:1,3d:1	1	dll	0	0	0	1
+2696	AuxiliaryVariableSetRef	AuxVarSetRef	0	4	0:0,3d:0,1:1,3d:1	1	dll	0	0	0	0
+2697	AuxiliaryVariableGetString	AuxVarGetStr	0	3	0:0,1:1,3d:1	1	dll	0	0	0	2
+2698	AuxiliaryVariableSetString	AuxVarSetStr	0	4	0:0,0:0,1:1,3d:1	1	dll	0	0	0	0
+2699	AuxiliaryVariableGetAll	AuxVarGetAll	0	2	1:0,3d:1	1	dll	0	0	0	3
+269A	AuxiliaryVariableErase	AuxVarErase	0	3	0:0,1:1,3d:1	1	dll	0	0	0	0
+269B	AuxiliaryVariableEraseAll	AuxVarEraseAll	0	2	1:0,3d:1	1	dll	0	0	0	0
+269C	RefMapArrayGetSize	RefMapSize	0	1	0:0	1	dll	0	0	0	0
+269D	RefMapArrayGetType	RefMapGetType	0	2	0:0,3d:1	1	dll	0	0	0	0
+269E	RefMapArrayGetFirst	RefMapFirst	0	1	0:0	1	dll	0	0	0	3
+269F	RefMapArrayGetNext	RefMapNext	0	1	0:0	1	dll	0	0	0	3
+26A0	RefMapArrayGetKeys	RefMapKeys	0	1	0:0	1	dll	0	0	0	3
+26A1	RefMapArrayGetAll	RefMapGetAll	0	1	1:0	1	dll	0	0	0	3
+26A2	RefMapArrayErase	RefMapErase	0	2	0:0,3d:1	1	dll	0	0	0	0
+26A3	RefMapArrayDestroy	RefMapDestroy	0	1	0:0	1	dll	0	0	0	0
+26A4	RefMapArrayGetFloat	RefMapGetFlt	0	2	0:0,3d:1	1	dll	0	0	0	0
+26A5	RefMapArraySetFloat	RefMapSetFlt	0	3	0:0,2c:0,3d:1	1	dll	0	0	0	0
+26A6	RefMapArrayGetRef	RefMapGetRef	0	2	0:0,3d:1	1	dll	0	0	0	1
+26A7	RefMapArraySetRef	RefMapSetRef	0	3	0:0,3d:0,3d:1	1	dll	0	0	0	0
+26A8	RefMapArrayGetString	RefMapGetStr	0	2	0:0,3d:1	1	dll	0	0	0	2
+26A9	RefMapArraySetString	RefMapSetStr	0	3	0:0,0:0,3d:1	1	dll	0	0	0	0
+26AA	ClearJIPSavedData		0	4	1:0,1:0,1:0,1:0	1	dll	0	0	0	0
+26AB	SetValueAlt		0	2	3:0,1:0	1	dll	0	0	0	0
+26AC	GetBodyPartDataSkeleton		0	1	3d:0	1	dll	0	0	0	2
+26AD	SetBodyPartDataSkeleton		0	2	3d:0,0:0	1	dll	0	0	0	0
+26AE	GetBodyPartDataRagdoll		0	1	3d:0	1	dll	0	0	0	1
+26AF	SetBodyPartDataRagdoll		0	2	3d:0,3d:1	1	dll	0	0	0	0
+26B0	GetBodyPartDataHasPart		0	2	3d:0,1:0	1	dll	0	0	0	0
+26B1	GetBodyPartTraitNumeric		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+26B2	SetBodyPartTraitNumeric		0	4	3d:0,1:0,1:0,2:0	1	dll	0	0	0	0
+26B3	GetBodyPartTraitForm		0	3	3d:0,1:0,1:0	1	dll	0	0	0	1
+26B4	SetBodyPartTraitForm		0	4	3d:0,1:0,1:0,3d:1	1	dll	0	0	0	0
+26B5	GetBodyPartName		0	2	3d:0,1:0	1	dll	0	0	0	2
+26B6	SetBodyPartName		0	3	3d:0,1:0,0:0	1	dll	0	0	0	0
+26B7	GetBodyPartReplacementModel		0	2	3d:0,1:0	1	dll	0	0	0	2
+26B8	SetBodyPartReplacementModel		0	3	3d:0,1:0,0:0	1	dll	0	0	0	0
+26B9	GetBodyPartFlag		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+26BA	SetBodyPartFlag		0	4	3d:0,1:0,1:0,1:0	1	dll	0	0	0	0
+26BB	GetWeaponModReloadAnim		0	1	3:0	1	dll	0	0	0	0
+26BC	SetWeaponModReloadAnim		0	2	3:0,1:0	1	dll	0	0	0	0
+26BD	AuxiliaryVariableGetAsArray	AuxVarGetAsArr	0	2	0:0,3d:1	1	dll	0	0	0	3
+26BE	AuxiliaryVariableSetFromArray	AuxVarSetFromArr	0	3	0:0,1:0,3d:1	1	dll	0	0	0	0
+26BF	GetSoundSourceFile		0	1	c:0	1	dll	0	0	0	2
+26C0	SetSoundSourceFile		0	2	c:0,0:0	1	dll	0	0	0	0
+26C1	GetDestructionDataHealth		0	1	3d:0	1	dll	0	0	0	0
+26C2	SetDestructionDataHealth		0	2	3d:0,1:0	1	dll	0	0	0	0
+26C3	GetDestructionDataTargetable		0	1	3d:0	1	dll	0	0	0	0
+26C4	SetDestructionDataTargetable		0	2	3d:0,1:0	1	dll	0	0	0	0
+26C5	GetDestructionDataNumStages		0	1	3d:0	1	dll	0	0	0	0
+26C6	GetNthDestructionStageTrait		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+26C7	SetNthDestructionStageTrait		0	4	3d:0,1:0,1:0,1:0	1	dll	0	0	0	0
+26C8	GetNthDestructionStageExplosion		0	2	3d:0,1:0	1	dll	0	0	0	1
+26C9	SetNthDestructionStageExplosion		0	3	3d:0,1:0,3d:1	1	dll	0	0	0	0
+26CA	GetNthDestructionStageDebris		0	2	3d:0,1:0	1	dll	0	0	0	1
+26CB	SetNthDestructionStageDebris		0	3	3d:0,1:0,3d:1	1	dll	0	0	0	0
+26CC	GetNthDestructionStageReplacement		0	2	3d:0,1:0	1	dll	0	0	0	2
+26CD	SetNthDestructionStageReplacement		0	3	3d:0,1:0,0:0	1	dll	0	0	0	0
+26CE	GetTeammates		0	0		0	dll	0	0	0	3
+26CF	GetCurrentWeather		0	0		0	dll	0	0	0	1
+26D0	GetCurrentClimate		0	0		0	dll	0	0	0	1
+26D1	SetCurrentClimate		0	1	3d:0	1	dll	0	0	0	0
+26D2	RefreshCurrentClimate		0	0		0	dll	0	0	0	0
+26D3	GetWorldspaceClimate		0	1	1b:0	1	dll	0	0	0	1
+26D4	SetWorldspaceClimate		0	2	1b:0,3d:1	1	dll	0	0	0	0
+26D5	GetActorVoiceType		0	1	19:1	1	dll	0	0	0	1
+26D6	SetActorVoiceType		0	2	3d:0,19:1	1	dll	0	0	0	0
+26D7	GetCreatureReach		0	1	19:1	1	dll	0	0	0	0
+26D8	GetIsImmobile		0	1	19:1	1	dll	0	0	0	0
+26D9	PickFromList		1	3	25:0,1:1,1:1	1	dll	0	0	0	0
+26DA	SetStageAlt		0	2	e:0,1:0	1	dll	0	0	0	0
+26DB	ToggleNoZPosReset		1	1	1:0	1	dll	0	0	0	0
+26DC	GetProjectileRefSource		1	0		0	dll	0	0	0	1
+26DD	SetProjectileRefSource		1	1	4:1	1	dll	0	0	0	0
+26DE	GetProjectileRefWeapon		1	0		0	dll	0	0	0	1
+26DF	SetProjectileRefWeapon		1	1	3:0	1	dll	0	0	0	0
+26E0	GetProjectileRefLifeTime		1	0		0	dll	0	0	0	0
+26E1	GetProjectileRefDistanceTraveled		1	0		0	dll	0	0	0	0
+26E2	GetProjectileRefDamage		1	0		0	dll	0	0	0	0
+26E3	SetProjectileRefDamage		1	1	2:0	1	dll	0	0	0	0
+26E4	GetProjectileRefSpeedMult		1	0		0	dll	0	0	0	0
+26E5	SetProjectileRefSpeedMult		1	1	2:0	1	dll	0	0	0	0
+26E6	NONE		0	0		1	005d4a40	0	0	0	0
+26E7	GetWorldspaceFlag		0	2	1b:0,1:0	1	dll	0	0	0	0
+26E8	SetWorldspaceFlag		0	3	1b:0,1:0,1:0	1	dll	0	0	0	0
+26E9	GetIdleLoopTimes		0	2	3d:0,1:0	1	dll	0	0	0	0
+26EA	ToggleCreatureModel		0	3	0:0,1:0,19:1	1	dll	0	0	0	0
+26EB	CreatureHasModel		0	2	0:0,19:1	1	dll	0	0	0	0
+26EC	GetCreatureModels		0	1	19:1	1	dll	0	0	0	3
+26ED	DisableNavMeshAlt		0	1	3d:0	1	dll	0	0	0	0
+26EE	EnableNavMeshAlt		0	1	3d:0	1	dll	0	0	0	0
+26EF	GetTerrainHeight		0	2	2:0,2:0	1	dll	0	0	0	0
+26F0	RefMapArrayValidate	RefMapValidate	0	1	0:0	1	dll	0	0	0	0
+26F1	HasPrimitive		1	0		0	dll	0	0	0	0
+26F2	AddPrimitive		1	4	1:0,2:0,2:0,2:0	1	dll	0	0	0	0
+26F3	AddDestructionStage		0	4	3d:0,1:0,1:0,1:0	1	dll	0	0	0	0
+26F4	RemoveDestructionStage		0	2	3d:0,1:0	1	dll	0	0	0	0
+26F5	GetWeaponShellCasingModel		0	1	3:0	1	dll	0	0	0	2
+26F6	SetWeaponShellCasingModel		0	2	3d:0,0:0	1	dll	0	0	0	0
+26F7	AddNewEffect		0	7	b:0,1f:0,1:0,1:0,1:1,1:1,1:1	1	dll	0	0	0	0
+26F8	RemoveNthEffect		0	2	b:0,1:0	1	dll	0	0	0	0
+26F9	SetObjectEffect		0	2	3d:0,3d:1	1	dll	0	0	0	0
+26FA	GetActorUnarmedEffect		0	1	19:1	1	dll	0	0	0	1
+26FB	SetActorUnarmedEffect		0	2	3d:0,19:1	1	dll	0	0	0	0
+26FC	IsPCInCombat		0	0		0	dll	0	dll	1	0
+26FD	CCCOnLoad		0	0		0	dll	0	0	0	0
+26FE	CCCSetFloat		0	2	1:0,2:0	1	dll	0	0	0	0
+26FF	CCCSetString		0	22	1:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+2700	CCCSetTrait		0	3	1:0,1:0,1:1	1	dll	0	0	0	0
+2701	CCCGetDistance		1	2	4:0,1:1	1	dll	0	0	0	0
+2702	CCCTaskPackageFlags		0	4	1d:0,1:0,1:0,1:0	1	dll	0	0	0	0
+2703	CCCSetEquipped		0	0		0	dll	0	0	0	0
+2704	CCCInFaction		1	2	11:0,1:1	1	dll	0	0	0	0
+2705	CCCSetNCCS		1	1	1:1	1	dll	0	0	0	0
+2706	GetEncumbranceRate		1	0		0	dll	0	dll	1	0
+2707	CCCLoadNCCS		0	0		0	dll	0	0	0	0
+2708	CCCSavedForm		0	1	1:0	1	dll	0	0	0	1
+2709	CCCLocationName		1	0		0	dll	0	0	0	2
+270A	CCCGetReputation		1	0		0	dll	0	0	0	1
+270B	GetSelectedItemRef		0	0		0	dll	0	0	0	1
+270C	GetWeaponRefModFlags		1	0		0	dll	0	0	0	0
+270D	SetWeaponRefModFlags		1	1	1:0	1	dll	0	0	0	0
+270E	GetBarterItems		0	1	1:0	1	dll	0	0	0	3
+270F	GetItemRefCurrentHealth		1	1	1:1	1	dll	0	0	0	0
+2710	SetItemRefCurrentHealth		1	2	2:0,1:1	1	dll	0	0	0	0
+2711	GetBarterGoldAlt		0	0		0	dll	0	0	0	0
+2712	GetRecipeMenuSelection		0	0		0	dll	0	0	0	1
+2713	GetRecipeMenuCategory		0	0		0	dll	0	0	0	1
+2714	UnlockRecipeMenuQuantity		0	1	1:1	1	dll	0	0	0	0
+2715	GetRecipeMenuNumSubcategories		0	0		0	dll	0	0	0	0
+2716	SetHotkeyItemRef		1	1	1:0	1	dll	0	0	0	0
+2717	EquipItemAlt		1	3	3:0,1:1,1:1	1	dll	0	0	0	0
+2718	UnequipItemAlt		1	3	3:0,1:1,1:1	1	dll	0	0	0	0
+2719	DropAlt		1	3	32:0,1:1,1:1	1	dll	0	0	0	0
+271A	DropMeAlt		1	2	1:1,1:1	1	dll	0	0	0	0
+271B	GetFormDescription		0	1	3d:0	1	dll	0	0	0	2
+271C	GetAddictionEffect		0	1	3d:0	1	dll	0	0	0	1
+271D	SetAddictionEffect		0	2	3d:0,3d:1	1	dll	0	0	0	0
+271E	GetAddictionChance		0	1	3d:0	1	dll	0	0	0	0
+271F	SetAddictionChance		0	2	3d:0,2:0	1	dll	0	0	0	0
+2720	GetIsPoison		0	1	3d:0	1	dll	0	0	0	0
+2721	GetContainerRespawns		0	1	3d:1	1	dll	0	0	0	0
+2722	SetContainerRespawns		0	2	1:0,3d:1	1	dll	0	0	0	0
+2723	ModBaseActorValue	ModBaseAV	0	3	5:0,2:0,19:1	1	dll	0	0	0	0
+2724	GetGrassTraitNumeric		0	2	3d:0,1:0	1	dll	0	0	0	0
+2725	SetGrassTraitNumeric		0	3	3d:0,1:0,2:0	1	dll	0	0	0	0
+2726	GetGrassModel		0	1	3d:0	1	dll	0	0	0	2
+2727	SetGrassModel		0	2	3d:0,0:0	1	dll	0	0	0	0
+2728	GetWheelDisabled		1	0		0	dll	0	0	0	0
+2729	SetWheelDisabled		1	1	1:0	1	dll	0	0	0	0
+272A	GetInterruptPackage		1	0		0	dll	0	0	0	1
+272B	EnableImprovedRecipeMenu		0	0		0	dll	0	0	0	0
+272C	InitItemFilter		0	0		0	dll	0	0	0	0
+272D	SetItemFilter		0	1	0:1	1	dll	0	0	0	0
+272E	GetSessionTime		0	0		0	dll	0	0	0	0
+272F	GetQuestTargetsChanged		0	0		0	dll	0	0	0	0
+2730	GetWorldMapPosMults		1	2	2d:0,2d:0	1	dll	0	0	0	0
+2731	NONE		0	0		1	005d4a40	0	0	0	0
+2732	NONE		0	0		1	005d4a40	0	0	0	0
+2733	GetActiveEffects		1	1	1:1	1	dll	0	0	0	3
+2734	GetActorProcessingLevel		1	0		0	dll	0	0	0	0
+2735	GetActorsByProcessingLevel		0	1	1:0	1	dll	0	0	0	3
+2736	GetExteriorCell		0	3	1b:0,1:0,1:0	1	dll	0	0	0	1
+2737	GetCellBuffered		0	1	3d:1	1	dll	0	0	0	0
+2738	MessageExAlt		0	22	2:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+2739	GetTempEffects		1	0		0	dll	0	0	0	3
+273A	RemoveNthTempEffect		1	1	1:0	1	dll	0	0	0	0
+273B	GetActorLightAmount		1	0		0	dll	0	dll	1	0
+273C	GetActorAlpha		1	0		0	dll	0	0	0	0
+273D	GetActorDiveBreath		1	0		0	dll	0	0	0	0
+273E	SetActorDiveBreath		1	1	2:0	1	dll	0	0	0	0
+273F	GetGameDifficulty		0	0		0	dll	0	dll	1	0
+2740	ToggleFirstPerson		0	1	1:0	1	dll	0	0	0	0
+2741	StopIdle		1	0		0	dll	0	0	0	0
+2742	GetCombatTargets		1	0		0	dll	0	0	0	3
+2743	GetCombatAllies		1	0		0	dll	0	0	0	3
+2744	GetDetectedActors		1	0		0	dll	0	0	0	3
+2745	GetDetectingActors		1	0		0	dll	0	0	0	3
+2746	ClearActiveQuest		0	0		0	dll	0	0	0	0
+2747	SetFormDescription		0	22	3d:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+2748	GetPCFastTravelled		0	0		0	dll	0	0	0	0
+2749	GetPCMovedCell		0	0		0	dll	0	0	0	0
+274A	GetPCDetectionState		0	0		0	dll	0	dll	1	0
+274B	GetFontFile		0	1	1:0	1	dll	0	0	0	2
+274C	SetFontFile		0	2	1:0,0:0	1	dll	0	0	0	0
+274D	ShowTextInputMenu		0	24	3d:0,2:0,2:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+274E	NONE		0	0		1	005d4a40	0	0	0	0
+274F	NONE		0	0		1	005d4a40	0	0	0	0
+2750	NONE		0	0		1	005d4a40	0	0	0	0
+2751	GetPipboyRadio		0	0		0	dll	0	dll	1	1
+2752	CCCSayTo		1	4	6:0,d:0,1:1,1:1	1	dll	0	0	0	0
+2753	CCCRunResultScripts		1	1	d:0	1	dll	0	0	0	0
+2754	GetCombatDisabled		1	0		0	dll	0	0	0	0
+2755	SetCombatDisabled		1	2	1:0,6:1	1	dll	0	0	0	0
+2756	ToggleNoHealthReset		0	2	1:0,2:0	1	dll	0	0	0	0
+2757	GetCurrentStablePackage		1	0		0	dll	0	0	0	1
+2758	MoveToCell		1	4	3d:0,2:0,2:0,2:0	1	dll	0	0	0	0
+2759	MoveToEditorPosition		1	1	1:1	1	dll	0	0	0	0
+275A	GetTeammateUsingAmmo		1	0		0	dll	0	0	0	0
+275B	SetTeammateUsingAmmo		1	1	1:0	1	dll	0	0	0	0
+275C	ToggleDetectionFix		1	1	1:0	1	dll	0	0	0	0
+275D	NONE		0	0		1	005d4a40	0	0	0	0
+275E	NONE		0	0		1	005d4a40	0	0	0	0
+275F	ToggleIgnoreLockedDoors		0	1	1:0	1	dll	0	0	0	0
+2760	CCCSetFollowState		1	1	1:1	1	dll	0	0	0	0
+2761	IsInCombatWith		1	1	6:0	1	dll	0	0	0	0
+2762	RefToPosStr		1	0		0	dll	0	0	0	2
+2763	MoveToPosStr		1	1	0:0	1	dll	0	0	0	0
+2764	RefMapArrayGetValue	RefMapGetVal	0	2	0:0,3d:1	1	dll	0	0	0	3
+2765	RefMapArraySetValue	RefMapSetVal	0	3	0:0,1:0,3d:1	1	dll	0	0	0	0
+2766	GetAllItems		1	5	1:1,1:1,1:1,1:1,25:1	1	dll	0	0	0	3
+2767	GetAllItemRefs		1	5	1:1,1:1,1:1,1:1,25:1	1	dll	0	0	0	3
+2768	LockEquipment		1	1	1:0	1	dll	0	0	0	0
+2769	IsAttacking		1	0		0	dll	0	dll	1	0
+276A	GetPCUsingScope		0	0		0	dll	0	dll	1	0
+276B	HolsterWeapon		1	0		0	dll	0	0	0	0
+276C	GetFallTimeElapsed		1	0		0	dll	0	0	0	0
+276D	GetFallTimeRemaining		1	0		0	dll	0	0	0	0
+276E	ResetFallTime		1	0		0	dll	0	0	0	0
+276F	GetCenterPos		1	1	8:0	1	dll	0	0	0	0
+2770	SetIdleLoopTimes		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+2771	CCCSMS		0	1	4:1	1	dll	0	0	0	0
+2772	GetDetonationTimer		1	0		0	dll	0	0	0	0
+2773	SetDetonationTimer		1	1	2:0	1	dll	0	0	0	0
+2774	GetMineArmed		1	0		0	dll	0	0	0	0
+2775	GetRefType		0	1	4:1	1	dll	0	0	0	0
+2776	GetEffectFlag		0	2	3d:0,1:0	1	dll	0	0	0	0
+2777	SetEffectFlag		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+2778	GetBaseEffectFlag		0	2	3d:0,1:0	1	dll	0	0	0	0
+2779	SetBaseEffectFlag		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+277A	GetPCUsingIronSights		0	0		0	dll	0	dll	1	0
+277B	GetPCLastExteriorDoor		0	0		0	dll	0	0	0	1
+277C	GetRadiationLevelAlt		1	0		0	dll	0	dll	1	0
+277D	IsInWater		1	0		0	dll	0	dll	1	0
+277E	SetEmbeddedWeaponNode		0	2	3d:0,0:0	1	dll	0	0	0	0
+277F	SetEmbeddedWeaponAV		0	2	3:0,5:0	1	dll	0	0	0	0
+2780	GetDroppedRefs		1	0		0	dll	0	0	0	3
+2781	MoveAwayFromPlayer		1	0		0	dll	0	0	0	0
+2782	FaceObject		1	1	4:0	1	dll	0	0	0	0
+2783	Turn		1	1	2:0	1	dll	0	0	0	0
+2784	SetMessageDisabled		0	2	3d:0,1:0	1	dll	0	0	0	0
+2785	GetMessageDisabled		0	1	31:0	1	dll	0	0	0	0
+2786	GetAshPileSource		1	0		0	dll	0	0	0	1
+2787	GetMessageFlags		0	1	31:0	1	dll	0	0	0	0
+2788	SetMessageFlags		0	2	31:0,1:0	1	dll	0	0	0	0
+2789	ToggleObjectCollision	TOC	1	1	1:0	1	dll	0	0	0	0
+278A	IsSoundPlaying		0	2	c:0,4:1	1	dll	0	0	0	0
+278B	SwapTextureEx		0	4	4:0,0:0,0:0,1:1	1	dll	0	0	0	0
+278C	GetMaterialPropertyValue	GetMatrPropVal	1	2	0:0,1:0	1	dll	0	0	0	0
+278D	SetMaterialPropertyValue	SetMatrPropVal	1	3	0:0,1:0,2:0	1	dll	0	0	0	0
+278E	GetSoundPlayers		0	1	c:0	1	dll	0	0	0	3
+278F	SetMessageDisplayTime		0	2	31:0,1:0	1	dll	0	0	0	0
+2790	GetImpactDataModel		0	1	3d:0	1	dll	0	0	0	2
+2791	SetImpactDataModel		0	2	3d:0,0:0	1	dll	0	0	0	0
+2792	GetImpactDataTrait		0	2	3d:0,1:0	1	dll	0	0	0	5
+2793	SetImpactDataTraitNumeric		0	3	3d:0,1:0,2c:0	1	dll	0	0	0	0
+2794	SetImpactDataTraitForm		0	3	3d:0,1:0,3d:1	1	dll	0	0	0	0
+2795	sv_RegexMatch		0	22	1:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+2796	sv_RegexSearch		0	22	1:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	3
+2797	sv_RegexReplace		0	22	1:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	2
+2798	SetOnMenuClickEventHandler		0	3	3d:0,1:0,0:0	1	dll	0	0	0	0
+2799	SetOnFastTravelEventHandler		0	2	3d:0,1:0	1	dll	0	0	0	0
+279A	SetOnMenuOpenEventHandler		0	3	3d:0,1:0,1:1	1	dll	0	0	0	0
+279B	SetOnMenuCloseEventHandler		0	3	3d:0,1:0,1:1	1	dll	0	0	0	0
+279C	SetOnAnimActionEventHandler		0	4	3d:0,1:0,3d:0,1:0	1	dll	0	0	0	0
+279D	SetOnPlayGroupEventHandler		0	4	3d:0,1:0,3d:0,a:0	1	dll	0	0	0	0
+279E	SetOnHealthDamageEventHandler		0	3	3d:0,1:0,3d:0	1	dll	0	0	0	0
+279F	SetOnCrippledLimbEventHandler		0	3	3d:0,1:0,3d:0	1	dll	0	0	0	0
+27A0	SetOnFireWeaponEventHandler		0	3	3d:0,1:0,3d:1	1	dll	0	0	0	0
+27A1	GetCurrentAmmo		1	0		0	dll	0	0	0	1
+27A2	GetCurrentAmmoRounds		1	0		0	dll	0	0	0	0
+27A3	GetMoonTexture		0	1	1:0	1	dll	0	0	0	2
+27A4	SetMoonTexture		0	2	1:0,0:0	1	dll	0	0	0	0
+27A5	SetFullNameAlt	SetActorFullNameAlt	0	2	0:0,3d:1	1	dll	0	0	0	0
+27A6	SetWeatherTransitionTimeOverride		0	1	1:1	1	dll	0	0	0	0
+27A7	GetDetectionValue		1	1	6:0	1	dll	0	0	0	0
+27A8	GetBaseActorValueAlt	GetBaseAVAlt	0	2	5:0,19:1	1	dll	0	0	0	0
+27A9	SetOnMouseoverChangeEventHandler		0	3	3d:0,1:0,1:1	1	dll	0	0	0	0
+27AA	GetAlwaysRun		0	0		0	dll	0	dll	1	0
+27AB	GetAutoMove		0	0		0	dll	0	dll	1	0
+27AC	SetSpeedMult		1	1	1:1	1	dll	0	0	0	0
+27AD	GetIsRagdolled		1	0		0	dll	0	dll	1	0
+27AE	ForceActorDetectionValue		1	2	1:1,1:1	1	dll	0	0	0	0
+27AF	SetOnPCTargetChangeEventHandler		0	2	3d:0,1:0	1	dll	0	0	0	0
+27B0	FreePlayer	GoodbyeWorldspace	0	0		0	dll	0	0	0	0
+27B1	AuxVarGetFltCond		1	2	e:0,1:0	1	0	0	dll	1	0
+27B2	GetLocalGravity		0	1	8:0	1	dll	0	0	0	0
+27B3	SetLocalGravityVector		0	3	2:0,2:0,2:0	1	dll	0	0	0	0
+27B4	GetActorVelocity		1	1	8:1	1	dll	0	0	0	0
+27B5	IsInAir		1	0		0	dll	0	dll	1	0
+27B6	GetHasContact		1	1	3d:0	1	dll	0	0	0	0
+27B7	GetContactRefs		1	0		0	dll	0	0	0	3
+27B8	GetHasContactBase		1	1	3d:0	1	dll	0	0	0	0
+27B9	GetHasContactType		1	1	1:0	1	dll	0	dll	1	0
+27BA	GetObjectUnderFeet		1	0		0	dll	0	0	0	1
+27BB	GetHasPhantom		1	0		0	dll	0	0	0	0
+27BC	GetArmorRCT		0	1	3:0	1	dll	0	0	0	2
+27BD	SetArmorRCT		0	2	3d:0,0:0	1	dll	0	0	0	0
+27BE	GetPerkFlag		0	2	27:0,1:0	1	dll	0	0	0	0
+27BF	SetPerkFlag		0	3	27:0,1:0,1:0	1	dll	0	0	0	0
+27C0	ModLogPrint		0	22	1:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+27C1	GetBaseEffectScript		0	1	3d:0	1	dll	0	0	0	1
+27C2	SetBaseEffectScript		0	2	3d:0,3d:0	1	dll	0	0	0	0
+27C3	GetWaterNoiseTexture		0	1	3d:0	1	dll	0	0	0	2
+27C4	SetWaterNoiseTexture		0	2	3d:0,0:0	1	dll	0	0	0	0
+27C5	SetWaterFormEffect		0	2	3d:0,3d:1	1	dll	0	0	0	1
+27C6	GetWaterSound		0	1	3d:0	1	dll	0	0	0	1
+27C7	SetWaterSound		0	2	3d:0,3d:1	1	dll	0	0	0	0
+27C8	GetInteractionDisabled		0	1	15:1	1	dll	0	0	0	0
+27C9	SetInteractionDisabled		0	2	1:0,15:1	1	dll	0	0	0	0
+27CA	GetInteractionDisabledType		0	1	1:0	1	dll	0	0	0	0
+27CB	SetInteractionDisabledType		0	2	1:0,1:0	1	dll	0	0	0	0
+27CC	GetImageSpaceTrait		0	2	2b:0,1:0	1	dll	0	0	0	0
+27CD	SetImageSpaceTrait		0	3	2b:0,1:0,2:0	1	dll	0	0	0	0
+27CE	GetImageSpaceModTrait		0	2	2a:0,1:0	1	dll	0	0	0	0
+27CF	SetImageSpaceModTrait		0	3	2a:0,1:0,2:0	1	dll	0	0	0	0
+27D0	SetOnKeyDownEventHandler		0	3	3d:0,1:0,1:1	1	dll	0	0	0	0
+27D1	SetOnKeyUpEventHandler		0	3	3d:0,1:0,1:1	1	dll	0	0	0	0
+27D2	SetOnControlDownEventHandler		0	3	3d:0,1:0,1:1	1	dll	0	0	0	0
+27D3	SetOnControlUpEventHandler		0	3	3d:0,1:0,1:1	1	dll	0	0	0	0
+27D4	SetGameMainLoopCallback	SGMLC	0	4	3d:0,1:1,1:1,1:1	1	dll	0	0	0	0
+27D5	GetGlobalRef		0	1	13:0	1	dll	0	0	0	1
+27D6	SetGlobalRef		0	2	13:0,3d:1	1	dll	0	0	0	0
+27D7	GetWorldspaceNoiseTexture		0	1	1b:0	1	dll	0	0	0	2
+27D8	SetWorldspaceNoiseTexture		0	2	3d:0,0:0	1	dll	0	0	0	0
+27D9	GetWorldspaceWaterType		0	1	1b:0	1	dll	0	0	0	1
+27DA	SetWorldspaceWaterType		0	2	1b:0,3d:1	1	dll	0	0	0	0
+27DB	GetWorldspaceImagespace		0	1	1b:0	1	dll	0	0	0	1
+27DC	SetWorldspaceImagespace		0	2	1b:0,3d:1	1	dll	0	0	0	0
+27DD	SetCellWaterForm		0	2	3d:0,3d:1	1	dll	0	0	0	0
+27DE	GetCellClimate		0	1	3d:0	1	dll	0	0	0	1
+27DF	SetCellClimate		0	2	3d:0,3d:1	1	dll	0	0	0	0
+27E0	GetCellNoiseTexture		0	1	3d:0	1	dll	0	0	0	2
+27E1	SetCellNoiseTexture		0	2	3d:0,0:0	1	dll	0	0	0	0
+27E2	RemoveMeIRAlt		1	3	1:1,1:1,1a:1	1	dll	0	0	0	0
+27E3	GetScriptDisabled		0	1	3d:0	1	dll	0	0	0	0
+27E4	SetScriptDisabled		0	2	3d:0,1:0	1	dll	0	0	0	0
+27E5	GetScriptEventDisabled		0	2	3d:0,0:0	1	dll	0	0	0	0
+27E6	SetScriptEventDisabled		0	3	3d:0,0:0,1:0	1	dll	0	0	0	0
+27E7	FakeScriptEvent		1	2	0:0,3d:1	1	dll	0	0	0	0
+27E8	RefreshItemsList		0	0		0	dll	0	0	0	0
+27E9	AddRefMapMarker		1	0		0	dll	0	0	0	0
+27EA	RemoveRefMapMarker		1	0		0	dll	0	0	0	0
+27EB	RefHasMapMarker		1	0		0	dll	0	0	0	0
+27EC	IsSpellTargetAlt		1	1	b:0	1	dll	0	dll	1	0
+27ED	GetCalculatedWeaponDamage		0	1	3:1	1	dll	0	0	0	0
+27EE	GetOptionalPatch		0	1	0:0	1	dll	0	0	0	0
+27EF	SetOptionalPatch		0	2	0:0,1:0	1	dll	0	0	0	0
+27F0	SetPosEx		1	4	2:0,2:0,2:0,1:1	1	dll	0	0	0	0
+27F1	GetReticlePos		0	2	1:1,2:1	1	dll	0	0	0	3
+27F2	GetReticleRange		0	3	1:1,2:1,1:1	1	dll	0	0	0	0
+27F3	MoveToReticle		1	5	2:1,2:1,2:1,2:1,1:1	1	dll	0	0	0	0
+27F4	SetRefName		1	1	0:1	1	dll	0	0	0	0
+27F5	GetActorValueModifier	GetAVMod	1	2	5:0,1:1	1	dll	0	0	0	0
+27F6	GetPerkModifier		1	4	1:0,2:0,3d:1,3d:1	1	dll	0	0	0	0
+27F7	SetOnQuestStageEventHandler		0	5	3d:0,1:0,e:0,1:0,1:1	1	dll	0	0	0	0
+27F8	SetAngleEx		1	4	2:0,2:0,2:0,1:1	1	dll	0	0	0	0
+27F9	GetTeleportDoor		1	0		0	dll	0	0	0	1
+27FA	GetBarterPriceMult		0	1	1:0	1	dll	0	0	0	0
+27FB	SetBarterPriceMult		0	2	1:0,2:0	1	dll	0	0	0	0
+27FC	SetOnDialogTopicEventHandler		0	3	3d:0,1:0,3d:0	1	dll	0	0	0	0
+27FD	TapButton		0	1	1:0	1	dll	0	0	0	0
+27FE	TapTrigger		0	1	1:0	1	dll	0	0	0	0
+27FF	SetOnTriggerDownEventHandler		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+2800	SetOnTriggerUpEventHandler		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+2801	SetOnCriticalHitEventHandler		0	5	3d:0,1:0,3d:1,3d:1,3d:1	1	dll	0	0	0	0
+2802	GetHitHealthDamage		1	0		0	dll	0	0	0	0
+2803	GetHitLimbDamage		1	0		0	dll	0	0	0	0
+2804	CrippleLimb		1	2	1:0,4:1	1	dll	0	0	0	0
+2805	HoldControl		0	1	1:0	1	dll	0	0	0	0
+2806	ReleaseControl		0	1	1:0	1	dll	0	0	0	0
+2807	PlayIdleEx		1	1	30:1	1	dll	0	0	0	0
+2808	SetBipedModelPathAlt		0	23	3:0,1:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+2809	GetKillXP		1	0		0	dll	0	0	0	0
+280A	NONE		0	0		1	005d4a40	0	0	0	0
+280B	GetKiller		1	0		0	dll	0	0	0	1
+280C	KillActorAlt		1	3	4:1,1:1,1:1	1	dll	0	0	0	0
+280D	ReloadEquippedModels	ReloadModels	1	1	1:1	1	dll	0	0	0	0
+280E	MoveToFadeDelay		1	2	4:0,2:0	1	dll	0	0	0	0
+280F	RunScriptSnippet		0	22	1:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+2810	ScriptWait		0	1	1:0	1	dll	0	0	0	0
+2811	IsScriptWaiting		0	1	e:1	1	dll	0	0	0	0
+2812	StopScriptWaiting		0	1	e:1	1	dll	0	0	0	0
+2813	GetCrosshairWater		0	0		0	dll	0	0	0	1
+2814	GetScriptBlockDisabled		0	2	3d:0,1:0	1	dll	0	0	0	0
+2815	SetScriptBlockDisabled		0	3	3d:0,1:0,1:1	1	dll	0	0	0	0
+2816	GetPlayedIdle		1	0		0	dll	0	0	0	1
+2817	IsIdlePlayingEx		1	1	30:0	1	dll	0	dll	1	0
+2818	GetObjectiveTargets		0	2	e:0,1:0	1	dll	0	0	0	3
+2819	SetObjectiveNthTarget		0	4	e:0,1:0,1:0,4:0	1	dll	0	0	0	0
+281A	GetObjectiveHasTarget		0	3	e:0,1:0,4:0	1	dll	0	0	0	0
+281B	AddObjectiveTarget		0	3	e:0,1:0,4:0	1	dll	0	0	0	0
+281C	RemoveObjectiveTarget		0	3	e:0,1:0,4:0	1	dll	0	0	0	0
+281D	GetObjectiveText		0	2	e:0,1:0	1	dll	0	0	0	2
+281E	SetObjectiveText		0	23	e:0,1:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+281F	GetArmorAudioTemplate		0	1	3:0	1	dll	0	0	0	1
+2820	SetArmorAudioTemplate		0	2	3:0,3:1	1	dll	0	0	0	0
+2821	SetWeaponOut		1	1	1:0	1	dll	0	0	0	0
+2822	SetTerminalUIModel		0	2	3d:0,0:1	1	dll	0	0	0	0
+2823	AddBaseEffectListEffect		0	2	7:0,19:1	1	dll	0	0	0	0
+2824	RemoveBaseEffectListEffect		0	2	7:0,19:1	1	dll	0	0	0	0
+2825	ShowQuantityMenu		0	3	3d:0,1:0,1:1	1	dll	0	0	0	0
+2826	MessageBoxExAlt		0	22	3d:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+2827	GetVATSTargets		0	0		0	dll	0	0	0	3
+2828	HasScriptBlock		0	2	1:0,3d:1	1	dll	0	0	0	0
+2829	CastImmediate		1	2	b:0,6:1	1	dll	0	0	0	0
+282A	IsInCharGen		0	0		0	dll	0	dll	1	0
+282B	DisableScriptedActivate		1	1	1:0	1	dll	0	0	0	0
+282C	GetHitAttacker		1	0		0	dll	0	0	0	1
+282D	GetHitProjectile		1	0		0	dll	0	0	0	1
+282E	GetHitWeapon		1	0		0	dll	0	0	0	1
+282F	GetGameDaysPassed		0	3	1:1,1:1,1:1	1	dll	0	0	0	0
+2830	GetWaterImmersionPerc		1	0		0	dll	0	dll	1	0
+2831	GetProjectileMuzzleFlash		0	1	15:0	1	dll	0	0	0	2
+2832	SetProjectileMuzzleFlash		0	2	3d:0,0:0	1	dll	0	0	0	0
+2833	DismemberLimb		1	2	1:0,1:1	1	dll	0	0	0	0
+2834	RunBatchScript		0	1	0:0	1	dll	0	0	0	0
+2835	IsArmorAddon		0	1	3:0	1	dll	0	0	0	0
+2836	ToggleCraftingMessages		0	1	1:1	1	dll	0	0	0	0
+2837	ToggleHardcoreTracking		0	1	1:0	1	dll	0	0	0	0
+2838	SetGameDifficulty		0	1	1:0	1	dll	0	0	0	0
+2839	GetEquippedItemRef		1	1	1:0	1	dll	0	0	0	1
+283A	ExecuteScript		1	0		0	dll	0	0	0	0
+283B	NONE		0	0		1	005d4a40	0	0	0	0
+283C	IsFleeing		1	0		0	dll	0	dll	1	0
+283D	GetEnemyHealthTarget		0	0		0	dll	0	0	0	1
+283E	SetCurrentAmmoRounds		1	1	1:0	1	dll	0	0	0	0
+283F	IsAnimPlayingEx		1	4	1:0,1:1,1:1,1:1	1	dll	0	0	0	0
+2840	AttachAshPileEx		1	1	3d:0	1	dll	0	0	0	0
+2841	MarkActivatorAshPile		0	1	3d:0	1	dll	0	0	0	0
+2842	SetActorVelocity		1	2	8:0,2:0	1	dll	0	0	0	0
+2843	GetRigidBodyMass		1	0		0	dll	0	0	0	0
+2844	PushObject		1	5	2:0,2:0,2:0,2:0,4:1	1	dll	0	0	0	0
+2845	GetSkeletonModel		0	1	19:0	1	dll	0	0	0	2
+2846	SetNPCSkeletonModel		0	2	19:0,0:1	1	dll	0	0	0	0
+2847	SetCRESkeletonModel		0	2	19:0,0:0	1	dll	0	0	0	0
+2848	SetBodyPartData		0	2	19:0,3d:0	1	dll	0	0	0	0
+2849	GetTargetUnreachable		1	0		0	dll	0	dll	1	0
+284A	MoveToContainer		1	2	4:0,1:1	1	dll	0	0	0	0
+284B	GetNifBlockTranslation	GetNifTrans	1	3	0:0,1:1,1:1	1	dll	0	0	0	3
+284C	SetNifBlockTranslation	SetNifTrans	1	6	0:0,2:0,2:0,2:0,1:1,1:1	1	dll	0	0	0	0
+284D	GetNifBlockRotation	GetNifRot	1	3	0:0,1:1,1:1	1	dll	0	0	0	3
+284E	SetNifBlockRotation	SetNifRot	1	6	0:0,2:0,2:0,2:0,1:1,1:1	1	dll	0	0	0	0
+284F	GetNifBlockScale	GetNifScale	1	2	0:0,1:1	1	dll	0	0	0	0
+2850	SetNifBlockScale	SetNifScale	1	3	0:0,2:0,1:1	1	dll	0	0	0	0
+2851	GetNifBlockFlag	GetNifFlag	1	3	0:0,1:0,1:1	1	dll	0	0	0	0
+2852	SetNifBlockFlag	SetNifFlag	1	4	0:0,1:0,1:0,1:1	1	dll	0	0	0	0
+2853	GetBufferedCells		0	1	1:0	1	dll	0	0	0	3
+2854	SetVATSTargetable		1	1	1:0	1	dll	0	0	0	0
+2855	GetWindDirection		0	0		0	dll	0	0	0	0
+2856	SetWindDirection		0	1	2:0	1	dll	0	0	0	0
+2857	GetCreatureWeaponList		0	1	19:1	1	dll	0	0	0	1
+2858	SetWindSpeedMult		0	1	2:0	1	dll	0	0	0	0
+2859	TriggerLightningFX		0	0		0	dll	0	0	0	0
+285A	GetObjectVelocity		1	1	8:1	1	dll	0	0	0	0
+285B	GetAngularVelocity	GetAngVel	1	2	0:0,8:1	1	dll	0	0	0	0
+285C	SetAngularVelocity	SetAngVel	1	3	0:0,8:0,2:0	1	dll	0	0	0	0
+285D	PlaceAtCell		0	6	3d:0,1:0,3d:0,2:0,2:0,2:0	1	dll	0	0	0	0
+285E	GetRayCastPos		1	7	13:0,13:0,13:0,2:1,1:1,0:1,2:1	1	dll	0	0	0	0
+285F	GetAnimSequenceFrequency	GetAnimSeqFreq	1	1	0:0	1	dll	0	0	0	0
+2860	SetAnimSequenceFrequency	SetAnimSeqFreq	1	2	0:0,2:0	1	dll	0	0	0	0
+2861	StopSound		0	2	c:0,4:1	1	dll	0	0	0	0
+2862	IsMusicPlaying		0	1	3d:1	1	dll	0	0	0	0
+2863	SetMusicState		0	1	1:0	1	dll	0	0	0	0
+2864	GetNoUnequip		1	0		0	dll	0	0	0	0
+2865	SetNoUnequip		1	1	1:0	1	dll	0	0	0	0
+2866	SetCursorPos		0	2	2:0,2:0	1	dll	0	0	0	0
+2867	MoveToNode		1	5	4:0,0:0,2:1,2:1,2:1	1	dll	0	0	0	0
+2868	GetDeathItem		0	1	19:1	1	dll	0	0	0	1
+2869	SetDeathItem		0	2	3:0,19:1	1	dll	0	0	0	0
+286A	GetActorLeveledList		1	0		0	dll	0	0	0	1
+286B	GetPlayerPerks		0	0		0	dll	0	0	0	3
+286C	UnloadUIComponent		0	1	0:0	1	dll	0	0	0	0
+286D	GetQuests		0	1	1:1	1	dll	0	0	0	3
+286E	GetQuestObjectives		0	2	e:0,1:0	1	dll	0	0	0	3
+286F	GetActiveObjectives		0	0		0	dll	0	0	0	3
+2870	GetObjectiveTeleportLinks		0	2	e:0,1:0	1	dll	0	0	0	3
+2871	GetNifBlockParentNodes	GetNifParents	1	2	0:0,1:1	1	dll	0	0	0	3
+2872	ClearMessageQueue		0	0		0	dll	0	0	0	0
+2873	InitMiniMap		0	0		0	dll	0	0	0	0
+2874	UpdateMiniMap		0	2	1:0,1:1	1	dll	0	0	0	0
+2875	GetCrosshairRefEx		0	0		0	dll	0	0	0	1
+2876	IsMobile		1	0		0	dll	0	0	0	0
+2877	IsGrabbable		1	0		0	dll	0	0	0	0
+2878	SetOnLocationDiscoverEventHandler		0	2	3d:0,1:0	1	dll	0	0	0	0
+2879	AttachLight		1	5	0:0,3d:0,2:1,2:1,2:1	1	dll	0	0	0	0
+287A	RemoveLight		1	1	0:0	1	dll	0	0	0	0
+287B	SetOnCraftingEventHandler		0	2	3d:0,1:0	1	dll	0	0	0	0
+287C	IsInKillCam		0	0		0	dll	0	dll	1	0
+287D	SwapObjectLOD		0	3	3d:0,1:0,1:0	1	dll	0	0	0	0
+287E	ResetClouds		0	0		0	dll	0	0	0	0
+287F	GetPluginHeaderVersion		0	1	0:0	1	dll	0	0	0	0
+2880	SetOnHitEventHandler		0	3	3d:0,1:0,3d:1	1	dll	0	0	0	0
+2881	SetSystemColor		0	4	1:0,1:0,1:0,1:0	1	dll	0	0	0	0
+2882	NONE		0	0		1	005d4a40	0	0	0	0
+2883	GetArmourPenetrated		1	0		0	dll	0	0	0	0
+2884	GetImpactMaterialType		0	1	19:1	1	dll	0	0	0	0
+2885	SetImpactMaterialType		0	2	1:0,19:1	1	dll	0	0	0	0
+2886	GetImpactDataSetForm		0	2	3d:0,1:0	1	dll	0	0	0	1
+2887	SetImpactDataSetForm		0	3	3d:0,1:0,3d:1	1	dll	0	0	0	0
+2888	SetQuestFlag		0	3	e:0,1:0,1:0	1	dll	0	0	0	0
+2889	GetQuestFlag		0	2	e:0,1:0	1	dll	0	0	0	0
+288A	PushActorAwayAlt		1	5	2:0,2:1,2:1,2:1,1:1	1	dll	0	0	0	0
+288B	SetGameHour		0	1	2:0	1	dll	0	0	0	0
+288C	GetGameVolume		0	1	1:0	1	dll	0	0	0	0
+288D	SetGameVolume		0	2	1:0,1:1	1	dll	0	0	0	0
+288E	MoveAwayFrom		1	3	4:0,2:0,1:1	1	dll	0	0	0	0
+288F	GetEquippedWeaponPoison		1	0		0	dll	0	0	0	1
+2890	SuppressQuestMessages		0	0		0	dll	0	0	0	0
+2891	TravelToRef		1	2	4:0,1:1	1	dll	0	0	0	0
+2892	GetIsLAA		0	0		0	dll	0	0	0	0
+2893	fTan		0	1	2:0	1	dll	0	0	0	0
+2894	fAtan2		0	2	2:0,2:0	1	dll	0	0	0	0
+2895	DonnerReedKuruParty	TheOtherOtherWhiteMeat	1	1	1:0	1	dll	0	0	0	0
+2896	SetArmorClass		0	2	3:0,1:0	1	dll	0	0	0	0
+2897	GetEquippedEx		1	1	25:0	1	dll	0	0	0	1
+2898	TestEquippedSlots		1	1	3:0	1	dll	0	0	0	0
+2899	GetWeaponOnHitSetting		0	1	3:0	1	dll	0	0	0	0
+289A	SetWeaponOnHitSetting		0	2	3:0,1:0	1	dll	0	0	0	0
+289B	GetWeaponSemiAutoFireDelay		0	2	3:0,1:0	1	dll	0	0	0	0
+289C	SetWeaponSemiAutoFireDelay		0	3	3:0,1:0,2:0	1	dll	0	0	0	0
+289D	IsStickDisabled		0	1	1:0	1	dll	0	dll	1	0
+289E	SetStickDisabled		0	2	1:0,1:0	1	dll	0	0	0	0
+289F	NONE		0	0		1	005d4a40	0	0	0	0
+28A0	GetActiveIMODs		0	0		0	dll	0	0	0	3
+28A1	ToggleItemUnique		0	2	3d:0,1:0	1	dll	0	0	0	0
+28A2	SetTextInputExtendedProps		0	5	2:0,2:0,1:1,1:1,1:1	1	dll	0	0	0	0
+28A3	SetTextInputString		0	21	0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+28A4	ClickMenuTile		0	1	0:0	1	dll	0	0	0	0
+28A5	StringToActorValue		0	1	0:0	1	dll	0	0	0	0
+28A6	GetFactions		0	1	19:1	1	dll	0	0	0	3
+28A7	GetBaseItems		0	1	3d:1	1	dll	0	0	0	3
+28A8	GetHit3DData		1	1	1:0	1	dll	0	0	0	3
+28A9	GetWeaponModel		0	2	3:0,1:0	1	dll	0	0	0	2
+28AA	SetWeaponModel		0	3	3d:0,1:0,0:0	1	dll	0	0	0	0
+28AB	GetOwnerOfCell		0	1	3d:0	1	dll	0	0	0	1
+28AC	TogglePipBoyLight		0	1	1:1	1	dll	0	0	0	0
+28AD	GetHardcoreTracking		0	0		0	dll	0	dll	1	0
+28AE	SetPerkLevel		0	2	27:0,1:0	1	dll	0	0	0	0
+28AF	GetProjectileRefImpactRef		1	0		0	dll	0	0	0	1
+28B0	SetOnProjectileImpactEventHandler		0	3	3d:0,1:0,3d:0	1	dll	0	0	0	0
+28B1	GetNoteRead		0	1	28:0	1	dll	0	dll	1	0
+28B2	SetOnNoteAddedEventHandler		0	2	3d:0,1:0	1	dll	0	0	0	0
+28B3	SetOnUseAidItemEventHandler		0	3	3d:0,1:0,3d:0	1	dll	0	0	0	0
+28B4	ToggleVanityWheel		0	1	1:1	1	dll	0	0	0	0
+28B5	ToggleHUDCursor		0	1	1:1	1	dll	0	0	0	0
+28B6	GetHardcoreStageThreshold		0	1	3d:0	1	dll	0	0	0	0
+28B7	SetHardcoreStageThreshold		0	2	3d:0,1:0	1	dll	0	0	0	0
+28B8	GetHardcoreStageEffect		0	1	3d:0	1	dll	0	0	0	1
+28B9	SetHardcoreStageEffect		0	2	3d:0,7:1	1	dll	0	0	0	0
+28BA	ClearModelAltTextures		0	1	3:0	1	dll	0	0	0	0
+28BB	GetCreatureSoundsTemplate		0	1	19:0	1	dll	0	0	0	1
+28BC	SetCreatureSoundsTemplate		0	2	3d:0,19:1	1	dll	0	0	0	0
+28BD	GetDebugModeState		0	1	1:0	1	dll	0	0	0	0
+28BE	GetProjectileRefImpactMaterial		1	0		0	dll	0	0	0	0
+28BF	FreezeTime		0	1	1:1	1	dll	0	0	0	0
+28C0	GetConditionDamagePenalty		0	0		0	dll	0	0	0	0
+28C1	SetConditionDamagePenalty		0	1	2:0	1	dll	0	0	0	0
+28C2	NONE		0	0		1	005d4a40	0	0	0	0
+28C3	NONE		0	0		1	005d4a40	0	0	0	0
+28C4	ToggleBipedSlotVisibility		0	2	1:0,1:1	1	dll	0	0	0	0
+28C5	SetOnReloadWeaponEventHandler		0	2	3d:0,1:0	1	dll	0	0	0	0
+28C6	AddTileFromTemplate		0	21	0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+28C7	UpdatePlayer3D		0	0		0	dll	0	0	0	0
+28C8	GetArrayValue		0	2	1:0,1:0	1	dll	0	0	0	5
+28C9	SetOnRagdollEventHandler		0	2	3d:0,1:0	1	dll	0	0	0	0
+28CA	PushActorNoRagdoll		1	4	2:0,2:0,4:1,1:1	1	dll	0	0	0	0
+28CB	SetUIFloatGradual		0	5	0:0,2:1,2:1,2:1,1:1	1	dll	0	0	0	0
+28CC	CloseActiveMenu		0	1	1:1	1	dll	0	0	0	0
+28CD	ReloadCloudTextures		0	0		0	dll	0	0	0	0
+28CE	ToggleImmortalMode	TIMM	0	1	1:1	1	dll	0	0	0	0
+28CF	GetBodyPartVATSTarget		0	2	1:0,19:1	1	dll	0	0	0	2
+28D0	SetLinearVelocity		1	5	0:0,2:0,2:0,2:0,1:1	1	dll	0	0	0	0
+28D1	GetEquippedArmorRefs		1	0		0	dll	0	0	0	3
+28D2	GetHitNode		1	0		0	dll	0	0	0	2
+28D3	InsertNode		0	23	3d:0,1:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+28D4	AttachModel		0	23	3d:0,1:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+28D5	SynchronizePosition	SyncPos	0	4	4:1,1:1,2:1,0:1	1	dll	0	0	0	0
+28D6	ToggleCameraCollision		0	1	1:1	1	dll	0	0	0	0
+28D7	InitRockItLauncher		0	1	3:0	1	dll	0	0	0	0
+28D8	ForceClimate		0	1	3d:1	1	dll	0	0	0	0
+28D9	GetInFactionList		1	1	25:0	1	dll	0	dll	1	0
+28DA	LeveledListHasFormDeep	LListHasFormDeep	0	2	3d:0,3d:0	1	dll	0	0	0	0
+28DB	GetActorTiltAngle		1	1	8:0	1	dll	0	0	0	0
+28DC	SetActorTiltAngle		1	2	8:0,2:0	1	dll	0	0	0	0
+28DD	ReloadCharController		1	0		0	dll	0	0	0	0
+28DE	GetRandomInRange		0	2	1:0,1:0	1	dll	0	0	0	0
+28DF	ModelHasBlock		0	22	3d:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+28E0	GetGroundMaterial		1	0		0	dll	0	dll	1	0
+28E1	ShowLevelUpMenuEx		0	1	1:0	1	dll	0	0	0	0
+28E2	GetRayCastRef		1	2	1:1,0:1	1	dll	0	0	0	1
+28E3	GetRayCastMaterial		1	2	1:1,0:1	1	dll	0	0	0	0
+28E4	FireWeaponEx		1	2	3:0,0:1	1	dll	0	0	0	0
+28E5	GetArmorEffectiveDT		1	0		0	dll	0	0	0	0
+28E6	GetArmorEffectiveDR		1	0		0	dll	0	0	0	0
+28E7	GetActorGravityMult		1	0		0	dll	0	0	0	0
+28E8	SetActorGravityMult		1	1	2:0	1	dll	0	0	0	0
+28E9	ToggleHitEffects		0	1	1:1	1	dll	0	0	0	0
+28EA	ToggleNoMovementCombat		0	1	1:1	1	dll	0	0	0	0
+28EB	ToggleTeammateKillable	SetTeammateKillable	1	1	1:1	1	dll	0	0	0	0
+28EC	ToggleNoGunWobble	SetNoGunWobble	1	1	1:1	1	dll	0	0	0	0
+28ED	RewardXPExact		0	1	1:0	1	dll	0	0	0	0
+28EE	GetHitExtendedFlag		1	1	1:0	1	dll	0	0	0	0
+28EF	ClearDeadActors		0	0		0	dll	0	0	0	0
+28F0	GetCameraMovement		0	2	2d:0,2d:0	1	dll	0	0	0	0
+28F1	GetHotkeyItemRef		0	1	1:0	1	dll	0	0	0	1
+28F2	GetCollisionNodes		1	0		0	dll	0	0	0	3
+28F3	GetChildBlocks		1	3	0:1,1:1,1:1	1	dll	0	0	0	3
+28F4	GetBlockTextureSet		1	1	0:0	1	dll	0	0	0	3
+28F5	GetReticleNode		0	2	2:1,1:1	1	dll	0	0	0	2
+28F6	NONE		0	0		1	005d4a40	0	0	0	0
+28F7	EquippedWeaponHasModType		1	1	1:0	1	dll	0	dll	1	0
+28F8	GetPosEx		1	3	2d:0,2d:0,2d:0	1	dll	0	0	0	0
+28F9	GetAngleEx		1	4	2d:0,2d:0,2d:0,1:1	1	dll	0	0	0	0
+28FA	ToggleMouseMovement		0	1	1:1	1	dll	0	0	0	0
+28FB	SetTextureTransformKey	SetTexTransKey	1	4	0:0,1:0,1:0,2:0	1	dll	0	0	0	0
+28FC	AttachExtraCamera	AttachCam	1	4	0:0,1:0,0:1,1:1	1	dll	0	0	0	0
+28FD	ProjectExtraCamera	ProjCam	0	6	0:0,0:0,2:0,1:1,1:1,1:1	1	dll	0	0	0	0
+28FE	AttachUIXML		1	2	0:0,0:0	1	dll	0	0	0	0
+28FF	AttachUIComponent		1	22	0:0,0:0,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1,2:1	1	dll	0	0	0	0
+2900	RenameNifBlock		1	3	0:0,0:0,1:1	1	dll	0	0	0	0
+2901	RemoveNifBlock		1	2	0:0,1:1	1	dll	0	0	0	0
+2902	SetInternalMarker		0	2	3d:0,1:1	1	dll	0	0	0	0
+2903	FailQuest		0	1	e:0	1	dll	0	0	0	0
+2904	PlayAnimSequence		1	2	0:0,0:1	1	dll	0	0	0	0
+2905	RemoveAllPerks		1	1	1:1	1	dll	0	0	0	0
+2906	GetPointRayCastPos		0	10	2:0,2:0,2:0,2:0,2:0,2d:0,2d:0,2d:0,1:1,2:1	1	dll	0	0	0	0
+2907	TogglePlayerSneaking		0	1	1:0	1	dll	0	0	0	0
+2908	GetActorMovementFlags		1	0		0	dll	0	0	0	0
+2909	GetTranslatedPos		1	6	2:0,2:0,2:0,2d:0,2d:0,2d:0	1	dll	0	0	0	0
+290A	GetHitBaseWeaponDamage		1	0		0	dll	0	0	0	0
+290B	GetHitFatigueDamage		1	0		0	dll	0	0	0	0
+290C	RefreshAnimData		1	0		0	dll	0	0	0	0
+290D	GetNifBlockTranslationAlt	GetNifTransAlt	1	6	0:0,2d:0,2d:0,2d:0,1:1,1:1	1	dll	0	0	0	0
+290E	GetNifBlockRotationAlt	GetNifRotAlt	1	6	0:0,2d:0,2d:0,2d:0,1:1,1:1	1	dll	0	0	0	0
+290F	GetLinearVelocityAlt	GetLinVelAlt	1	5	0:0,2d:0,2d:0,2d:0,1:1	1	dll	0	0	0	0
+2910	GetAngularVelocityAlt	GetAngVelAlt	1	5	0:0,2d:0,2d:0,2d:0,1:1	1	dll	0	0	0	0
+2911	SetAngularVelocityEx	SetAngVelEx	1	5	0:0,2:0,2:0,2:0,1:1	1	dll	0	0	0	0
+2912	GetActorVelocityAlt		1	4	2d:0,2d:0,2d:0,1:1	1	dll	0	0	0	0
+2913	GetCollisionObjProperty	GetCollProp	1	2	0:0,1:0	1	dll	0	0	0	0
+2914	SetCollisionObjProperty	SetCollProp	1	3	0:0,1:0,2:0	1	dll	0	0	0	0
+2915	GetCollisionObjLayerType	GetCollLayer	1	1	0:0	1	dll	0	0	0	0
+2916	SetCollisionObjLayerType	SetCollLayer	1	2	0:0,1:0	1	dll	0	0	0	0
+2917	SetRefrModelPath	SetRefModel	1	1	0:1	1	dll	0	0	0	0
+2918	NONE		0	0		1	005d4a40	0	0	0	0
+2919	AttachLine		1	7	0:0,0:0,2:0,2:0,2:0,2:0,2:0	1	dll	0	0	0	0
+291A	IsSpellTargetList		1	1	25:0	1	dll	0	dll	1	0
+291B	GetExcludedCombatActions		1	0		0	dll	0	0	0	0
+291C	SetExcludedCombatActions		1	1	1:0	1	dll	0	0	0	0
+291D	SetArmorConditionPenalty		0	1	2:1	1	dll	0	0	0	0
+291E	PlaySound3DNode		1	2	c:0,0:0	1	dll	0	0	0	0
+291F	GetReticlePosAlt		0	5	2d:0,2d:0,2d:0,1:1,2:1	1	dll	0	0	0	0
+2920	GetLightAmountAtPoint		0	3	2:0,2:0,2:0	1	dll	0	0	0	0
+2921	TransformWorldToLocal		0	11	2:0,2:0,2:0,2:0,2:0,2:0,2:0,2:0,2:0,2d:0,2d:0	1	dll	0	0	0	0
+2922	GetAnglesBetweenPoints		0	8	2:0,2:0,2:0,2:0,2:0,2:0,2d:0,2d:0	1	dll	0	0	0	0
+2923	GetP2PRayCastRange		0	7	2:0,2:0,2:0,2:0,2:0,2:0,1:1	1	dll	0	0	0	0
+2924	WeaponHasModType		0	2	3d:0,1:0	1	dll	0	0	0	0
+2925	ProjectUITile		1	6	0:0,0:0,2:0,2:0,2:0,2:0	1	dll	0	0	0	0
+2926	RotateAroundPoint		1	7	2:0,2:0,2:0,2:0,2:0,2:0,1:1	1	dll	0	0	0	0
+2927	GetStringUIDimensions		0	6	0:0,1:0,2:0,2d:0,2d:0,2d:0	1	dll	0	0	0	0
+2928	ToggleNodeCollision		1	2	0:0,1:0	1	dll	0	0	0	0
+2929	GetAllPerks		1	2	1:1,1:1	1	dll	0	0	0	3
+292A	GetEditorPosition		1	6	2d:0,2d:0,2d:0,2d:1,2d:1,2d:1	1	dll	0	0	0	1
+292B	GetWorldspacePersistentCell		0	1	1b:0	1	dll	0	0	0	1
+292C	ScrollMouseWheel		0	1	1:1	1	dll	0	0	0	0
+292D	GetCellNorthRotation		0	1	3d:0	1	dll	0	0	0	0
+292E	RefHasExtraData		1	1	1:1	1	dll	0	0	0	0
+292F	GetRefExtraData		1	2	8001:0,8001:1	1	dll	expression	0	0	5
+2930	SetRefExtraData		1	2	8001:1,804d:1	1	dll	expression	0	0	0
+2931	TogglePurgeOnUnload	TPOU	1	1	1:1	1	dll	0	0	0	0
+2932	GetProjectileLight		0	1	15:0	1	dll	0	0	0	1
+2933	SetProjectileLight		0	2	15:0,15:1	1	dll	0	0	0	0
+2934	IsItemUnique		0	1	3:0	1	dll	0	0	0	0
+2935	GetMenuItemListRefs		0	2	1:1,1:1	1	dll	0	0	0	3
+2936	GetSelfAsInventoryRef		1	0		0	dll	0	0	0	1
+2937	SetDamageToArmorMaxPercent	DTAMP	0	1	2:1	1	dll	0	0	0	0
+2938	RegisterSRScript		0	1	0:0	1	dll	0	0	0	0
+2939	SetAmmoCasing		0	2	3:0,3:1	1	dll	0	0	0	0
+293A	AssignKeyword		0	2	3d:0,0:0	1	dll	0	0	0	0
+293B	HasKeyword		0	2	3d:0,0:0	1	dll	0	0	0	0
+293C	GetKeywordForms		0	1	0:0	1	dll	0	0	0	3
+293D	ToggleDepthClear		0	1	1:0	1	dll	0	0	0	0
+293E	HasKeywordCond		1	1	1:0	1	0	0	dll	1	0
+293F	GetStringHash	GetHash	0	3	0:0,1:1,1:1	1	dll	0	0	0	0
+2940	CalculateShotsPerSec		1	1	3d:0	1	dll	0	0	0	0
+2941	IsAttackQueued		0	0		0	dll	0	dll	1	0
+2942	GetReticleTargetLimb		0	1	2:1	1	dll	0	0	0	0

@@ -521,7 +521,11 @@ impl Eval {
             b'X' | b'x' => {
                 let ref_idx = self.read16(e);
                 let opcode = u32::from(self.read16(e));
-                if record_of(e, opcode) == 0 {
+                // A record with no handler (a command not built yet, a plugin's slot no
+                // built-in fills) reads as an opcode the table does not have: the expression
+                // fails here, as it does in the game without the DLL that owns the opcode.
+                let record = record_of(e, opcode);
+                if record == 0 || e.mem.u32(record + 0x18) == 0 {
                     self.error(format!("Failed to resolve command with opcode {opcode:X}"));
                     return None;
                 }
@@ -2222,6 +2226,47 @@ mod tests {
         assert_eq!(format_g(0.00001), "1e-05");
         assert_eq!(format_g(-2.5), "-2.5");
         assert_eq!(format_g(1.0 / 3.0), "0.333333");
+    }
+
+    /// A command token whose record has no handler (here a plugin slot no built-in fills) fails
+    /// to read, with the error a missing opcode gives, and never calls address 0; one with a
+    /// handler reads as a command.
+    #[test]
+    fn a_command_without_a_handler_fails_to_read() {
+        let mut e = crate::table::tests::engine_with_exe_tables();
+        crate::table::install(&mut e);
+        crate::table::grow_to(&mut e, 0x2201);
+        e.map(0x0200_0000, 0x1_0000);
+        let a = crate::CommandArgs {
+            data: 0x0200_0000,
+            script: 0x0200_1000,
+            event_list: 0x0200_2000,
+            result: 0x0200_0f08,
+            opcode_offset: 0x0200_0f00,
+            ..Default::default()
+        };
+        let read = |e: &mut Engine, opcode: u16| {
+            e.mem.set_u32(a.opcode_offset, 4);
+            let mut at = a.data + 4;
+            for b in [b'X', 0, 0] {
+                e.mem.set_u8(at, b);
+                at += 1;
+            }
+            e.mem.set_u16(at, opcode);
+            e.mem.set_u16(at + 2, 2);
+            let mut ev = Eval::new(e, &a);
+            let tok = ev.read_one_token(e);
+            (tok, ev.errors)
+        };
+        let (tok, errors) = read(&mut e, 0x2200);
+        assert!(tok.is_none());
+        assert_eq!(errors, ["Failed to resolve command with opcode 2200"]);
+        let (tok, errors) = read(&mut e, 0x2201);
+        assert!(tok.is_none(), "past the end");
+        assert_eq!(errors, ["Failed to resolve command with opcode 2201"]);
+        let (tok, errors) = read(&mut e, 0x1400);
+        assert!(matches!(tok, Some(Tok::Command { opcode: 0x1400, .. })));
+        assert!(errors.is_empty());
     }
 
     #[test]
