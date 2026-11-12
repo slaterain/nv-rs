@@ -769,6 +769,8 @@ pub struct Device {
     destroyed: HashSet<u64>,
     next_id: u64,
     presents: u64,
+    /// The window's frames presented ([`Device::frames_shown`]).
+    frames_shown: u64,
     shots: Option<Shots>,
     warned: HashSet<String>,
     errors: Arc<AtomicU64>,
@@ -1063,7 +1065,11 @@ impl Device {
         // SAFETY: the hal device is only asked a capability it keeps (no Vulkan call).
         let libraries = unsafe { device.as_hal::<wgpu::hal::api::Vulkan>() }
             .is_some_and(|hal| hal.uses_pipeline_libraries());
-        let finisher = Finisher::for_this_machine();
+        let finisher = if NO_QUEUE_THREADS_FOR_TESTS.load(Ordering::Relaxed) {
+            None
+        } else {
+            Finisher::for_this_machine()
+        };
         let submitter = finisher.as_ref().map(|_| Submitter::new(queue.clone()));
         let mut d = Device {
             device,
@@ -1178,6 +1184,7 @@ impl Device {
             destroyed: HashSet::new(),
             next_id: 1,
             presents: 0,
+            frames_shown: 0,
             shots,
             warned: HashSet::new(),
             errors,
@@ -1750,6 +1757,9 @@ impl Device {
             let delay = SUBMIT_DELAY_FOR_TESTS.load(Ordering::Relaxed);
             if delay > 0 {
                 std::thread::sleep(std::time::Duration::from_millis(u64::from(delay)));
+            }
+            if planted(PLANT_PANIC) {
+                panic!("a planted queue thread panic (tests)");
             }
             let mut bytes = bytes;
             for (buffer, b) in targets.iter().zip(bytes.iter_mut()) {
@@ -5956,6 +5966,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // Presented right after the frame's submit, on the queue thread in the window's DPI
         // awareness (as this thread is from the frame's size to here).
         if let Some(t) = frame_texture {
+            self.frames_shown += 1;
             let hwnd = self.surface.as_ref().map(crate::window::Window::hwnd);
             self.on_queue(move |queue| {
                 let _dpi = hwnd.map(crate::window::DpiScope::of);
@@ -6099,6 +6110,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// Whether the start's loading screen still stands in for the game's frames ([`Start`]; tests).
     pub fn starting(&self) -> bool {
         self.start.is_some()
+    }
+
+    /// The window's frames presented so far (tests).
+    pub fn frames_shown(&self) -> u64 {
+        self.frames_shown
+    }
+
+    /// Whether the device submits on a queue thread ([`Submitter`]; tests).
+    pub fn has_queue_thread(&self) -> bool {
+        self.submitter.is_some()
     }
 
     /// The errors wgpu reported so far (a refused pass or submit among them; tests).
@@ -7396,6 +7417,39 @@ pub fn submit_delay_for_tests(delay_ms: u32) {
     SUBMIT_DELAY_FOR_TESTS.store(delay_ms, Ordering::Relaxed);
 }
 
+/// Tests only: devices made while this is set have no finishing threads and no queue thread, as
+/// on a machine with fewer than four logical processors (everything runs on the render thread).
+static NO_QUEUE_THREADS_FOR_TESTS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Tests only: whether devices made from now on have their finishing and queue threads.
+#[doc(hidden)]
+pub fn queue_threads_for_tests(on: bool) {
+    NO_QUEUE_THREADS_FOR_TESTS.store(!on, Ordering::Relaxed);
+}
+
+/// Tests only: a failure planted for once ([`plant_queue_failure_for_tests`]): the next batch job
+/// panics on the queue thread; the next encoder a finishing thread takes fails; the queue thread
+/// ends after its next job.
+pub const PLANT_PANIC: u32 = 1;
+pub const PLANT_FINISHING: u32 = 2;
+pub const PLANT_THREAD_ENDS: u32 = 3;
+static PLANT_FOR_TESTS: AtomicU32 = AtomicU32::new(0);
+
+/// Tests only: plants `kind` (one of the `PLANT_*`; 0 clears it).
+#[doc(hidden)]
+pub fn plant_queue_failure_for_tests(kind: u32) {
+    PLANT_FOR_TESTS.store(kind, Ordering::Relaxed);
+}
+
+/// Whether `kind` was planted (it is then used up).
+fn planted(kind: u32) -> bool {
+    PLANT_FOR_TESTS.load(Ordering::Relaxed) == kind
+        && PLANT_FOR_TESTS
+            .compare_exchange(kind, 0, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+}
+
 fn worker_threads() -> usize {
     std::thread::available_parallelism()
         .map_or(1, |n| n.get())
@@ -7455,6 +7509,9 @@ impl Finisher {
                         // The render thread waits for it at the submit (a panic's message too, so
                         // it can say why); gone (the device dropped), the buffer is dropped too.
                         let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            if planted(PLANT_FINISHING) {
+                                panic!("a planted finishing failure (tests)");
+                            }
                             encoder.finish()
                         }))
                         .map_err(|p| {
@@ -7570,6 +7627,9 @@ impl Submitter {
                                 .get_or_insert(why);
                         }
                         outstanding.fetch_sub(1, Ordering::Release);
+                        if planted(PLANT_THREAD_ENDS) {
+                            break;
+                        }
                     }
                 })
                 .expect("the queue thread starts")
@@ -7622,7 +7682,12 @@ impl Submitter {
         self.send(Box::new(move |_| {
             let _ = done.send(());
         }));
+        // The answer comes from inside the last job, just before the thread counts it run (or,
+        // the thread gone, never: the channel's end is dropped with it).
         let _ = wait.recv();
+        while !self.idle() && self.thread.as_ref().is_some_and(|t| !t.is_finished()) {
+            std::thread::yield_now();
+        }
     }
 
     /// A job's failure, as the render thread said it before the submits moved here.
@@ -7635,11 +7700,16 @@ impl Submitter {
 }
 
 impl Drop for Submitter {
-    /// Everything handed over run, then the thread ends.
+    /// Everything handed over run, then the thread ends; a failure never said on the render
+    /// thread (none flushed or waited after it) is printed, so it is never silent.
     fn drop(&mut self) {
         self.jobs = None;
         if let Some(t) = self.thread.take() {
             let _ = t.join();
+        }
+        let why = self.failed.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(why) = why {
+            eprintln!("NV_D3D9 wgpu: the queue thread failed after the last submit: {why}");
         }
     }
 }

@@ -98,17 +98,34 @@ impl Gpu {
         Gpu::make(size, samples, None, env)
     }
 
+    /// As [`Gpu::new`], the device with its finishing and queue threads or (`false`) without, as
+    /// on a machine with fewer than four logical processors.
+    fn with_threads(size: u32, samples: u32, threads: bool) -> Option<Gpu> {
+        Gpu::make_with(size, samples, None, &[], threads)
+    }
+
     fn make(
         size: u32,
         samples: u32,
         cache: Option<std::path::PathBuf>,
         env: &[(&str, &str)],
     ) -> Option<Gpu> {
+        Gpu::make_with(size, samples, cache, env, true)
+    }
+
+    fn make_with(
+        size: u32,
+        samples: u32,
+        cache: Option<std::path::PathBuf>,
+        env: &[(&str, &str)],
+        threads: bool,
+    ) -> Option<Gpu> {
         // A failed test leaves the lock poisoned; the next one still takes its turn.
         let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
         for (name, value) in env {
             std::env::set_var(name, value);
         }
+        d3d9_wgpu::device::queue_threads_for_tests(threads);
         let mut b = WgpuBackend::new(Output::Offscreen);
         if let Some(dir) = cache {
             b = b.with_cache_dir(dir);
@@ -127,6 +144,7 @@ impl Gpu {
         for (name, _) in env {
             std::env::remove_var(name);
         }
+        d3d9_wgpu::device::queue_threads_for_tests(true);
         if b.device().is_none() {
             eprintln!("no GPU adapter: the frame tests are skipped");
             return None;
@@ -3558,82 +3576,334 @@ fn a_header_change_between_two_draws_of_one_batch_reaches_the_second() {
     );
 }
 
+/// The queue thread held this many milliseconds on each batch while it lives (tests that hand a
+/// batch over and make queue operations behind it), none again after.
+struct Slow;
+
+impl Slow {
+    fn hold(ms: u32) -> Slow {
+        d3d9_wgpu::device::submit_delay_for_tests(ms);
+        Slow
+    }
+}
+
+impl Drop for Slow {
+    fn drop(&mut self) {
+        d3d9_wgpu::device::submit_delay_for_tests(0);
+    }
+}
+
+/// `GetData` with `D3DGETDATA_FLUSH` once around one draw: the batch handed over (to the queue
+/// thread, held there; or submitted at once without one), not waited for.
+fn hand_over(g: &mut Gpu, query: u32, draw: impl FnOnce(&mut Gpu)) {
+    g.run(Cmd::QueryIssue { query, flags: 2 });
+    draw(g);
+    g.run(Cmd::QueryIssue { query, flags: 1 });
+    g.run(Cmd::QueryGetData { query, flags: 1 });
+}
+
 /// A batch handed to the queue thread and still held there (the thread made slow): an upload made
 /// meanwhile into a buffer the held batch draws from lands after the batch's draws, as when the
 /// batch was submitted at once. The left rectangle is uploaded and drawn red; one `GetData` with
 /// `D3DGETDATA_FLUSH` hands the batch over without waiting; the right rectangle is uploaded into the
 /// same buffer and drawn green. An upload that reached the queue before the held batch's submit
-/// would make the red draw read the right rectangle too, leaving the left half black.
+/// would make the red draw read the right rectangle too, leaving the left half black. With the
+/// queue thread and without it (fewer than four logical processors).
 #[test]
 fn an_upload_while_the_queue_thread_holds_a_batch_lands_after_it() {
-    let Some(mut g) = Gpu::new(4, 1) else { return };
-    struct Slow;
-    impl Drop for Slow {
-        fn drop(&mut self) {
-            d3d9_wgpu::device::submit_delay_for_tests(0);
-        }
+    for threads in [true, false] {
+        let Some(mut g) = Gpu::with_threads(4, 1, threads) else {
+            return;
+        };
+        let _slow = Slow::hold(300);
+        const VB2: u32 = 0x1800;
+        const QUERY: u32 = 0x2000;
+        g.run(Cmd::CreateBuffer {
+            device: DEVICE,
+            buffer: VB2,
+            index: false,
+            length: 96,
+            usage: 0,
+            format: 0,
+            pool: 1,
+        });
+        g.run(Cmd::CreateQuery {
+            device: DEVICE,
+            query: QUERY,
+            kind: 9,
+        });
+        let upload = |g: &mut Gpu, data: &[u8]| {
+            g.run(Cmd::UploadBuffer {
+                buffer: VB2,
+                offset: 0,
+                flags: 0,
+                data: Data::Bytes(data),
+            });
+        };
+        let draw = |g: &mut Gpu| {
+            g.run(Cmd::DrawPrimitive {
+                device: DEVICE,
+                kind: 4,
+                start: 0,
+                count: 2,
+            });
+        };
+        g.clear(3, 0, 1.0);
+        g.run(Cmd::SetStreamSource {
+            device: DEVICE,
+            stream: 0,
+            buffer: VB2,
+            offset: 0,
+            stride: 16,
+        });
+        upload(&mut g, &floats(&rect(-3.0, -0.25)));
+        g.colour([1.0, 0.0, 0.0, 1.0]);
+        hand_over(&mut g, QUERY, draw);
+        upload(&mut g, &floats(&rect(-0.25, 3.0)));
+        g.colour([0.0, 1.0, 0.0, 1.0]);
+        draw(&mut g);
+        left_red_right_green(&mut g, &format!("threads {threads}"));
+        assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
     }
-    let _slow = Slow;
-    d3d9_wgpu::device::submit_delay_for_tests(300);
-    const VB2: u32 = 0x1800;
-    const QUERY: u32 = 0x2000;
-    g.run(Cmd::CreateBuffer {
-        device: DEVICE,
-        buffer: VB2,
-        index: false,
-        length: 96,
-        usage: 0,
-        format: 0,
-        pool: 1,
-    });
-    g.run(Cmd::CreateQuery {
-        device: DEVICE,
-        query: QUERY,
-        kind: 9,
-    });
-    let upload = |g: &mut Gpu, data: &[u8]| {
+}
+
+/// The same for a texture: a draw sampling it, the batch handed over and held, new texels
+/// uploaded into it, a second draw sampling it. The vertex shader samples a 1 by 1 texture
+/// (`stage_samplers`): green when the left half is drawn, red uploaded while the batch is held,
+/// then the right half drawn. The left half stays green (the old texel), the right is red (the
+/// new); an upload that reached the queue before the held batch's submit would turn both red.
+#[test]
+fn a_texture_upload_while_the_queue_thread_holds_a_batch_lands_after_it() {
+    for threads in [true, false] {
+        let Some(mut g) = Gpu::with_threads(4, 1, threads) else {
+            return;
+        };
+        stage_samplers(&mut g);
+        for (pixel, shader) in [(false, VS + 2), (true, PS + 5)] {
+            g.run(Cmd::SetShader {
+                device: DEVICE,
+                pixel,
+                shader,
+            });
+        }
+        const VB2: u32 = 0x1800;
+        const QUERY: u32 = 0x2000;
+        // The vertex texture's level (`stage_samplers`).
+        const VS_TEX_LEVEL: u32 = 0x1601;
+        g.run(Cmd::CreateBuffer {
+            device: DEVICE,
+            buffer: VB2,
+            index: false,
+            length: 192,
+            usage: 0,
+            format: 0,
+            pool: 1,
+        });
+        g.run(Cmd::CreateQuery {
+            device: DEVICE,
+            query: QUERY,
+            kind: 9,
+        });
+        let both: Vec<f32> = [rect(-3.0, -0.25), rect(-0.25, 3.0)].concat();
         g.run(Cmd::UploadBuffer {
             buffer: VB2,
             offset: 0,
             flags: 0,
-            data: Data::Bytes(data),
+            data: Data::Bytes(&floats(&both)),
         });
-    };
-    let draw = |g: &mut Gpu| {
-        g.run(Cmd::DrawPrimitive {
+        g.run(Cmd::SetStreamSource {
             device: DEVICE,
-            kind: 4,
-            start: 0,
-            count: 2,
+            stream: 0,
+            buffer: VB2,
+            offset: 0,
+            stride: 16,
+        });
+        let draw = |g: &mut Gpu, start: u32| {
+            g.run(Cmd::DrawPrimitive {
+                device: DEVICE,
+                kind: 4,
+                start,
+                count: 2,
+            });
+        };
+        g.clear(3, 0, 1.0);
+        let _slow = Slow::hold(300);
+        hand_over(&mut g, QUERY, |g| draw(g, 0));
+        g.run(Cmd::UploadSurface {
+            surface: VS_TEX_LEVEL,
+            row: 4,
+            rows: 1,
+            data: Data::Bytes(&[0, 0, 255, 255]),
+        });
+        draw(&mut g, 6);
+        let px = g.pixels();
+        for (i, p) in px.iter().enumerate() {
+            let want = if i % 4 < 2 {
+                [0, 255, 0, 255]
+            } else {
+                [0, 0, 255, 255]
+            };
+            assert_eq!(*p, want, "threads {threads}: pixel {i} of {px:?}");
+        }
+        assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+    }
+}
+
+/// An occlusion query whose batch is held by the queue thread: `GetData` answers not ready while
+/// it is held (it never waits), then the count of the held batch's draw (all 16 samples of the
+/// 4 by 4 target, then the left half's 8). With the queue thread and without it.
+#[test]
+fn an_occlusion_count_of_a_held_batch_is_that_batchs() {
+    for threads in [true, false] {
+        let Some(mut g) = Gpu::with_threads(4, 1, threads) else {
+            return;
+        };
+        let _slow = Slow::hold(300);
+        const QUERY: u32 = 0x2000;
+        g.run(Cmd::CreateQuery {
+            device: DEVICE,
+            query: QUERY,
+            kind: 9,
+        });
+        g.state(ZFUNC, 8);
+        g.clear(3, 0, 1.0);
+        assert_eq!(
+            g.count(QUERY, |g| g.cover(0.5)),
+            16,
+            "threads {threads}: the whole target"
+        );
+        g.clear(3, 0, 1.0);
+        let left = g.count(QUERY, |g| {
+            g.quad(0.5);
+            g.viewport(0, 0, 2, 4, 0.0, 1.0);
+            g.quad(0.5);
+            g.viewport(0, 0, 4, 4, 0.0, 1.0);
+        });
+        assert_eq!(
+            left,
+            16 + 8,
+            "threads {threads}: the quad, then its left half"
+        );
+        assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+    }
+}
+
+/// What a panic carried: its message.
+fn panic_message(p: Box<dyn std::any::Any + Send>) -> String {
+    p.downcast_ref::<String>()
+        .cloned()
+        .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default()
+}
+
+/// A failure on the queue thread comes back to the render thread with its message: a panic in a
+/// batch's job, and a finishing thread's failure (600 draws, so encoders go to the finishing
+/// threads). Each is planted, the batch handed over by a `Present` (which does not wait for it);
+/// then the next wait (`wgpu_errors`) raises it, and once raised the device goes on. Planted again,
+/// the next flush (`GetData` with `D3DGETDATA_FLUSH`) raises it after the queue thread has run the
+/// batch. Planted again and never raised (no flush or wait after it), the device is dropped
+/// without blocking or panicking. A queue thread that has ended: waits, flushes and reads still
+/// finish (its jobs run on the render thread).
+#[test]
+fn a_failure_on_the_queue_thread_is_raised_on_the_render_thread() {
+    use d3d9_wgpu::device::{
+        plant_queue_failure_for_tests as plant, PLANT_FINISHING, PLANT_PANIC, PLANT_THREAD_ENDS,
+    };
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    struct Clear;
+    impl Drop for Clear {
+        fn drop(&mut self) {
+            plant(0);
+        }
+    }
+    let _clear = Clear;
+    const QUERY: u32 = 0x2000;
+    let present = |g: &mut Gpu| {
+        g.run(Cmd::Present {
+            device: DEVICE,
+            source: None,
+            dest: None,
+            window: 0,
+            dirty: false,
+            model: 0,
+            frame: 1,
         });
     };
+    for (kind, says) in [
+        (PLANT_PANIC, "a planted queue thread panic (tests)"),
+        (PLANT_FINISHING, "a planted finishing failure (tests)"),
+    ] {
+        let Some(mut g) = Gpu::new(4, 1) else { return };
+        if g.b.device().is_some_and(|d| !d.has_queue_thread()) {
+            eprintln!("no queue thread on this machine: skipped");
+            return;
+        }
+        g.run(Cmd::CreateQuery {
+            device: DEVICE,
+            query: QUERY,
+            kind: 9,
+        });
+        let draws = |g: &mut Gpu| {
+            for _ in 0..600 {
+                g.cover(0.5);
+            }
+        };
+        // At the next wait.
+        plant(kind);
+        draws(&mut g);
+        present(&mut g);
+        let raised = catch_unwind(AssertUnwindSafe(|| g.b.device().map(|d| d.wgpu_errors())));
+        let why = panic_message(raised.expect_err("raised at the wait"));
+        assert!(why.contains(says), "{kind}: {why}");
+        // Raised once; the device goes on.
+        draws(&mut g);
+        present(&mut g);
+        assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0), "{kind}");
+        // At the next flush, the queue thread done with the failed batch first.
+        plant(kind);
+        draws(&mut g);
+        present(&mut g);
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        g.run(Cmd::QueryIssue {
+            query: QUERY,
+            flags: 2,
+        });
+        g.cover(0.5);
+        g.run(Cmd::QueryIssue {
+            query: QUERY,
+            flags: 1,
+        });
+        let raised = catch_unwind(AssertUnwindSafe(|| {
+            g.run(Cmd::QueryGetData {
+                query: QUERY,
+                flags: 1,
+            })
+        }));
+        let why = panic_message(raised.expect_err("raised at the flush"));
+        assert!(why.contains(says), "{kind}: {why}");
+        // Never raised: the device dropped all the same.
+        plant(kind);
+        draws(&mut g);
+        present(&mut g);
+        drop(g);
+    }
+    // The queue thread ended (after the wait's own job): later waits, flushes, presents and
+    // reads finish, their jobs run on the render thread.
+    let Some(mut g) = Gpu::new(4, 1) else { return };
     g.clear(3, 0, 1.0);
-    g.run(Cmd::SetStreamSource {
-        device: DEVICE,
-        stream: 0,
-        buffer: VB2,
-        offset: 0,
-        stride: 16,
-    });
-    upload(&mut g, &floats(&rect(-3.0, -0.25)));
+    g.cover(0.75);
+    plant(PLANT_THREAD_ENDS);
+    present(&mut g);
+    assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+    std::thread::sleep(std::time::Duration::from_millis(200));
     g.colour([1.0, 0.0, 0.0, 1.0]);
-    g.run(Cmd::QueryIssue {
-        query: QUERY,
-        flags: 2,
-    });
-    draw(&mut g);
-    g.run(Cmd::QueryIssue {
-        query: QUERY,
-        flags: 1,
-    });
-    // The batch handed over (held there), not waited for.
-    g.run(Cmd::QueryGetData {
-        query: QUERY,
-        flags: 1,
-    });
-    upload(&mut g, &floats(&rect(-0.25, 3.0)));
+    g.cover(0.5);
+    present(&mut g);
     g.colour([0.0, 1.0, 0.0, 1.0]);
-    draw(&mut g);
-    left_red_right_green(&mut g, "an upload while a batch is held");
+    g.cover(0.25);
+    present(&mut g);
+    for p in g.pixels() {
+        assert_eq!(p, [0, 255, 0, 255], "drawn after the queue thread ended");
+    }
     assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
 }

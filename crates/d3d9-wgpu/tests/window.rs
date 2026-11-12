@@ -96,10 +96,35 @@ struct Rig {
 impl Rig {
     /// `None` (with a line) where there is no GPU adapter.
     fn new(window: (i32, i32), back: (u32, u32)) -> Option<Rig> {
+        Rig::with_threads(window, back, true)
+    }
+
+    /// As [`Rig::new`], the device with its finishing and queue threads or (`false`) without, as
+    /// on a machine with fewer than four logical processors.
+    fn with_threads(window: (i32, i32), back: (u32, u32), threads: bool) -> Option<Rig> {
+        Rig::make(window, back, threads, true)
+    }
+
+    /// As [`Rig::new`] with no captures (a capture waits for the GPU at its `Present`).
+    fn without_captures(window: (i32, i32), back: (u32, u32)) -> Option<Rig> {
+        Rig::make(window, back, true, false)
+    }
+
+    fn make(window: (i32, i32), back: (u32, u32), threads: bool, shots: bool) -> Option<Rig> {
         let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        d3d9_wgpu::device::queue_threads_for_tests(threads);
         let dir = shots_dir();
         let _ = std::fs::remove_dir_all(dir);
         std::fs::create_dir_all(dir).expect("the captures' folder");
+        let kept: Vec<(&str, Option<std::ffi::OsString>)> = ["NV_SHOT", "NV_SHOT_LIST"]
+            .into_iter()
+            .map(|k| (k, std::env::var_os(k)))
+            .collect();
+        if !shots {
+            for (k, _) in &kept {
+                std::env::remove_var(k);
+            }
+        }
         let hwnd = hidden_window(window.0, window.1);
         assert_ne!(hwnd, 0, "the test window");
         let mut b = WgpuBackend::new(Output::Window);
@@ -113,6 +138,12 @@ impl Rig {
             back_buffers: Data::Bytes(&words(&[BACK])),
             depth_stencil: 0,
         });
+        d3d9_wgpu::device::queue_threads_for_tests(true);
+        for (k, v) in kept {
+            if let Some(v) = v {
+                std::env::set_var(k, v);
+            }
+        }
         if b.device().is_none() {
             eprintln!("no GPU adapter: the window test is skipped");
             // SAFETY: the test's own window.
@@ -732,10 +763,16 @@ fn rgb(px: &[u8]) -> Vec<[u8; 3]> {
 /// Seven lit pixels on black, in two frames running, are no picture either time (each frame is
 /// counted from zero): the screen stands in for both. Eight are a picture: the game's own frame,
 /// and within two presents the start is over (its passes stop). A whole frame at 30 of 255 is a
-/// picture (lit is above 24).
+/// picture (lit is above 24). With the queue thread and without it.
 #[test]
 fn the_start_ends_at_one_percent_of_the_pixels_lit_and_its_passes_stop() {
-    let Some(mut g) = Rig::new((32, 24), (32, 24)) else {
+    for threads in [true, false] {
+        start_gate(threads);
+    }
+}
+
+fn start_gate(threads: bool) {
+    let Some(mut g) = Rig::with_threads((32, 24), (32, 24), threads) else {
         return;
     };
     let lit_pixels = |g: &mut Rig, n: i32, frame: u32| {
@@ -771,7 +808,7 @@ fn the_start_ends_at_one_percent_of_the_pixels_lit_and_its_passes_stop() {
     );
     assert_eq!(d.wgpu_errors(), 0, "wgpu reported no error");
     drop(g);
-    let Some(mut g) = Rig::new((32, 24), (32, 24)) else {
+    let Some(mut g) = Rig::with_threads((32, 24), (32, 24), threads) else {
         return;
     };
     g.show(1, 0xFF1E_1E1E);
@@ -780,4 +817,44 @@ fn the_start_ends_at_one_percent_of_the_pixels_lit_and_its_passes_stop() {
         Some((32, 24, vec![bgra(0xFF1E_1E1E)])),
         "a whole frame at 30 of 255 is a picture"
     );
+}
+
+/// The window's presents with the queue thread behind (it holds each batch 50 ms, and no capture
+/// waits for the GPU at a `Present`): twelve frames, the window sized between two of them and a
+/// `Reset` between two others. Each `Present` takes the window's frame only once the last one is
+/// presented, so every frame is shown and wgpu reports no error (a frame taken while the last is
+/// still to be presented is refused, and a swap chain configured again under a present is wgpu's
+/// error).
+#[test]
+fn every_frame_is_shown_while_the_queue_thread_is_behind() {
+    let Some(mut g) = Rig::without_captures((64, 48), (32, 24)) else {
+        return;
+    };
+    struct Slow;
+    impl Drop for Slow {
+        fn drop(&mut self) {
+            d3d9_wgpu::device::submit_delay_for_tests(0);
+        }
+    }
+    let _slow = Slow;
+    d3d9_wgpu::device::submit_delay_for_tests(50);
+    let present = words(&[16, 16, A8R8G8B8, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0]);
+    for frame in 1..=12u32 {
+        if frame == 5 {
+            g.size(100, 30);
+        }
+        if frame == 9 {
+            g.b.execute(Cmd::Reset {
+                device: DEVICE,
+                window: g.hwnd,
+                present: Data::Bytes(&present),
+                back_buffers: Data::Bytes(&words(&[BACK])),
+                depth_stencil: 0,
+            });
+        }
+        g.show(frame, 0xFF20_4060 + frame);
+    }
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0, "wgpu reported no error");
+    assert_eq!(d.frames_shown(), 12, "every frame shown");
 }
