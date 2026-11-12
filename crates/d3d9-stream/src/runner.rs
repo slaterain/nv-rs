@@ -261,13 +261,33 @@ impl Stream {
     /// # Panics
     /// On a sync command while a cut's slot is open: its reply would come after the slot's
     /// commands, which the drawing side may be waiting to record (see the module's notes).
-    pub fn submit(&mut self, mut cmd: Cmd<Data<'_>>) -> Reply {
+    #[inline]
+    pub fn submit(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
         #[cfg(debug_assertions)]
         if let Err(why) = cmd.check() {
             panic!("a malformed command: {why}");
         }
         // Every call but a cut's, a recording's or a Present: straight to the runner, the command passed on as
-        // it came and the reply returned as the backend gives it (no copy of either on the way).
+        // it came and the reply returned as the backend gives it (no copy of either on the way). This part is
+        // inlined into the caller; everything else is in `submit_rest`, out of line, so the common call pays
+        // for none of its registers or stack.
+        if self.cut.is_none() && self.record.is_none() && !matches!(cmd, Cmd::Present { .. }) {
+            match &mut self.runner {
+                Runner::Direct(backend) => return backend.execute(cmd),
+                Runner::Threaded(t) if !cmd.is_sync() => {
+                    t.record(cmd);
+                    return Reply::None;
+                }
+                _ => {}
+            }
+        }
+        self.submit_rest(cmd)
+    }
+
+    /// [`Stream::submit`] for everything but the common call: a cut, a recording, a Present, a sync call on
+    /// the threaded runner, or the shared runner.
+    #[inline(never)]
+    fn submit_rest(&mut self, mut cmd: Cmd<Data<'_>>) -> Reply {
         if self.cut.is_none() && self.record.is_none() && !matches!(cmd, Cmd::Present { .. }) {
             return match &mut self.runner {
                 Runner::Direct(backend) => backend.execute(cmd),
@@ -872,6 +892,34 @@ impl Threaded {
             encoded: Vec::new(),
             thread: Some(thread),
         }
+    }
+
+    /// [`Threaded::submit`] for the common command (no cut open, not a sync call, not a Present): only
+    /// what it needs, inlined into [`Stream::submit`]'s fast path, with no copy of the command on the
+    /// way to [`Chunk::push`] and no name looked up (the name is only read for a sync call's stats).
+    #[inline(always)]
+    fn record(&mut self, cmd: Cmd<Data<'_>>) {
+        if self.shared.dead.load(Ordering::Relaxed) {
+            stopped(&lock(&self.shared.queue));
+        }
+        if self.settings.check {
+            self.check_hash(&cmd);
+        }
+        self.stats.commands += 1;
+        self.chunk.push(cmd);
+        if self.chunk.len() >= self.settings.chunk_commands
+            || self.chunk.bytes >= self.settings.chunk_bytes
+        {
+            self.hand_over(false);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn check_hash(&mut self, cmd: &Cmd<Data<'_>>) {
+        self.encoded.clear();
+        wire::encode(cmd, &mut self.encoded);
+        self.hash = wire::hash(self.hash, &self.encoded);
     }
 
     /// `holding`: a cut is open (no full-queue wait, no Present after the mark waited for).
