@@ -41,7 +41,7 @@ use crate::game::{
 };
 use crate::Jip;
 use engine_core::prelude::*;
-use nvse::cosave::{OutOfRange, Reader};
+use nvse::cosave::{Chunk, OutOfRange, Reader};
 use nvse::plugins::{msg, Message, Records};
 use std::collections::BTreeMap;
 
@@ -237,6 +237,14 @@ pub struct Saved {
     pub appearance_undo: UnorderedMap<u32, AppearanceUndo>,
     /// `s_NPCPerksInfoMap`, by actor id.
     pub npc_perks: UnorderedMap<u32, NpcPerks>,
+    /// nv-rs's own: the records of the last co-save loaded that JIP would pass over without
+    /// reading, in their order, written back at the next save ([`load`]).
+    pub carried: Vec<Chunk>,
+    /// nv-rs's own: the bytes of the last `JPGF` past the 8 JIP reads, written back after them.
+    pub serialized_tail: Vec<u8>,
+    /// nv-rs's own: the last co-save loaded had a section of JIP's (xNVSE writes one only for a
+    /// plugin that writes a record).
+    pub had_section: bool,
 }
 
 impl Default for Saved {
@@ -255,6 +263,9 @@ impl Default for Saved {
             serialized: SerializedVars::default(),
             appearance_undo: UnorderedMap::new(8),
             npc_perks: UnorderedMap::new(0x80),
+            carried: Vec::new(),
+            serialized_tail: Vec::new(),
+            had_section: false,
         }
     }
 }
@@ -501,25 +512,42 @@ pub fn process_changed_flags(e: &mut Engine, flags: u8) {
     if flags & changed::NPC_PERKS != 0 {
         s.npc_perks.clear();
     }
+    // nv-rs's own: what the last co-save loaded held that nv-rs carries without reading.
+    s.carried.clear();
+    s.serialized_tail.clear();
+    s.had_section = false;
 }
 
+/// The record types JIP reads and writes, in the order it writes them.
+const KINDS: [u32; 8] = [
+    kind::SCRIPT_VARS,
+    kind::AUX_VARS,
+    kind::REF_MAPS,
+    kind::EXTRA_DATA,
+    kind::LINKED_REFS,
+    kind::SERIALIZED_VARS,
+    kind::APPEARANCE_UNDO,
+    kind::NPC_PERKS,
+];
+
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h: LoadGameCallback.
-/// The load callback: what changed is cleared, then each of JIP's records is read (the rest
-/// passed over).
+/// The load callback: what changed is cleared, then each of JIP's records is read. What JIP
+/// would pass over without reading (a record of another type, a version it does not read, the
+/// NPC perks without the NPC perks patch, the saved flags' bytes past their 8) is carried byte for
+/// byte to the next save instead ([`Saved::carried`]), so a co-save of a real JIP installation
+/// loses nothing in nv-rs before the parts that use it are built. A record not read because the
+/// same save is loaded again with nothing changed keeps the data loaded before, as in JIP.
 pub fn load(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
     let flags = saved(e).changed;
     process_changed_flags(e, flags);
     while let Some((kind, version, length)) = r.next_record()? {
-        if kind & 0xffff != u32::from(u16::from_be_bytes(*b"PJ")) {
-            continue;
-        }
+        saved(e).had_section = true;
         let (jg, perks_patch) = {
             let s = saved(e);
             (s.jg_fixes, s.npc_perks_patch)
         };
-        let gated = match kind {
-            kind::AUX_VARS => flags & changed::AUX_VARS == 0 || version < VARS_VERSION,
-            kind::REF_MAPS => flags & changed::REF_MAPS == 0 || version < VARS_VERSION,
+        let unread = match kind {
+            kind::AUX_VARS | kind::REF_MAPS => version < VARS_VERSION,
             kind::EXTRA_DATA => {
                 let newest = if jg {
                     EXTRA_DATA_VERSION_JG
@@ -527,10 +555,26 @@ pub fn load(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
                     EXTRA_DATA_VERSION
                 };
                 // JohnnyGuitar gives up on JIP's own version: its sizes are wrong.
-                flags & changed::EXTRA_DATA == 0 || version > newest || (jg && version == 1)
+                version > newest || (jg && version == 1)
             }
+            kind::NPC_PERKS => !perks_patch,
+            k => !KINDS.contains(&k),
+        };
+        if unread {
+            let data = r.read_data(length)?;
+            saved(e).carried.push(Chunk {
+                kind,
+                version,
+                data,
+            });
+            continue;
+        }
+        let gated = match kind {
+            kind::AUX_VARS => flags & changed::AUX_VARS == 0,
+            kind::REF_MAPS => flags & changed::REF_MAPS == 0,
+            kind::EXTRA_DATA => flags & changed::EXTRA_DATA == 0,
             kind::LINKED_REFS => flags & changed::LINKED_REFS == 0,
-            kind::NPC_PERKS => !perks_patch || flags & changed::NPC_PERKS == 0,
+            kind::NPC_PERKS => flags & changed::NPC_PERKS == 0,
             _ => false,
         };
         if gated {
@@ -538,7 +582,8 @@ pub fn load(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
         }
         if kind == kind::SERIALIZED_VARS {
             // `ReadRecordData(&s_serializedVars, length)`: the bytes read over the values the
-            // load's start reset (a shorter record leaves the rest as they were).
+            // load's start reset (a shorter record leaves the rest as they were); bytes past
+            // the 8 JIP reads (its own read would overrun) are carried.
             let bytes = r.read_data(length)?;
             let s = saved(e);
             let mut raw = [0u8; 8];
@@ -548,6 +593,7 @@ pub fn load(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
             raw[..n].copy_from_slice(&bytes[..n]);
             s.serialized.flags = u32::from_le_bytes(raw[..4].try_into().unwrap());
             s.serialized.dmg_armor_max_percent = u32::from_le_bytes(raw[4..].try_into().unwrap());
+            s.serialized_tail = bytes[n..].to_vec();
             continue;
         }
         let data = r.read_data(length)?;
@@ -1017,9 +1063,52 @@ fn write_value(r: &mut Records, v: &Value) {
     }
 }
 
-// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h: SaveGameCallback.
-/// The save callback: JIP's records, each written when it holds anything, walking its maps.
+/// The save callback: JIP's own records ([`save_own`]), each followed by the carried records of
+/// its type, then the carried records of other types, all in the order they were read.
+///
+/// While JIP answers "not installed" ([`crate::ANSWERS_INSTALLED`]) it writes nothing when it
+/// holds nothing (no section loaded, no data a command made, its flags as reset), so the co-save
+/// is the one xNVSE writes without JIP: xNVSE writes a plugin's section only when the plugin
+/// opens a record (`HandleSaveGame`, `if (s_pluginHeader.numChunks)` (xNVSE)), and JIP writes
+/// `JPGF` on every save.
 pub fn save(e: &mut Engine, r: &mut Records) {
+    let installed = e.ext::<Jip>().answers_installed;
+    if !installed && holds_nothing(e) {
+        return;
+    }
+    let mut own = Records::default();
+    save_own(e, &mut own);
+    let s = &e.ext::<Jip>().saved;
+    for k in KINDS {
+        for c in own.chunks.iter().chain(&s.carried).filter(|c| c.kind == k) {
+            r.record(c.kind, c.version, &c.data);
+        }
+    }
+    for c in s.carried.iter().filter(|c| !KINDS.contains(&c.kind)) {
+        r.record(c.kind, c.version, &c.data);
+    }
+}
+
+/// Nothing to save: no section loaded and every map empty, the flags as reset.
+fn holds_nothing(e: &mut Engine) -> bool {
+    let player = player_base(e);
+    let s = saved(e);
+    !s.had_section
+        && s.carried.is_empty()
+        && s.serialized_tail.is_empty()
+        && s.serialized == SerializedVars::default()
+        && s.script_vars.is_empty()
+        && s.aux_vars.is_empty()
+        && s.ref_maps.is_empty()
+        && s.extra_data.is_empty()
+        && s.linked_refs.is_empty()
+        && s.appearance_undo.get(&player).is_none()
+        && (!s.npc_perks_patch || s.npc_perks.is_empty())
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h: SaveGameCallback.
+/// JIP's own records, each written when it holds anything, walking its maps.
+fn save_own(e: &mut Engine, r: &mut Records) {
     let player = player_base(e);
     let jg = saved(e).jg_fixes;
     let s = e.ext::<Jip>().saved.clone();
@@ -1128,6 +1217,7 @@ pub fn save(e: &mut Engine, r: &mut Records) {
     }
     let mut serialized = s.serialized.flags.to_le_bytes().to_vec();
     serialized.extend_from_slice(&s.serialized.dmg_armor_max_percent.to_le_bytes());
+    serialized.extend_from_slice(&s.serialized_tail);
     r.record(kind::SERIALIZED_VARS, SERIALIZED_VARS_VERSION, &serialized);
     if let Some(undo) = s.appearance_undo.get(&player) {
         r.record(kind::APPEARANCE_UNDO, APPEARANCE_UNDO_VERSION, &undo.head);
@@ -1204,7 +1294,14 @@ pub fn listen(e: &mut Engine, m: &Message) {
                 saved(e).changed = 0;
             }
         }
-        msg::NEW_GAME => saved(e).serialized = SerializedVars::default(),
+        msg::NEW_GAME => {
+            let s = saved(e);
+            s.serialized = SerializedVars::default();
+            // nv-rs's own: nothing of the last co-save loaded goes into a new game's.
+            s.carried.clear();
+            s.serialized_tail.clear();
+            s.had_section = false;
+        }
         _ => {}
     }
 }

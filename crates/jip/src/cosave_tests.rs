@@ -3,7 +3,6 @@
 //! changed forms, the player), and the messages that decide what a load reads.
 
 use super::*;
-use crate::containers::mixed_hash;
 use nvse::cosave::{tag, Chunk};
 
 const SL: u32 = 0x0500_0000;
@@ -285,9 +284,10 @@ fn script_variables() {
         &mut w.e,
         &cosave(&[chunk(kind::SCRIPT_VARS, 9, data.clone())]),
     );
-    // Buckets of 8: 0x01000DEF hashes to 3, 0x01000ABC to 4.
-    assert_eq!(mixed_hash(0x0100_0def) & 7, 3);
-    assert_eq!(mixed_hash(0x0100_0abc) & 7, 4);
+    // The order worked out by hand from JIP's C++ (`HashKey`: `(k * 13) ^ (k >> 15)`; `StrHashCI`,
+    // seed 0xD39CA509): in the owners' map of 8 buckets 0x01000DEF hashes to 0x0D00B723 (bucket
+    // 3) and 0x01000ABC to 0x0D00898C (bucket 4); in the names' map of 4, "Foo" (0x8DE884B7) and
+    // "Bar" (0x8B7E7C77) share bucket 3, the newer first.
     let expect = Out::default()
         .u16(2)
         .u32(0x0100_0def)
@@ -296,16 +296,13 @@ fn script_variables() {
         .name(b"Cee")
         .u64(7)
         .u32(0x0100_0abc)
-        .u16(2);
-    // The owner's names in a map of 4 buckets: by bucket, the newer first in one.
-    let mut names = [
-        (0, b"Foo".to_vec(), 1u8, 2.5f64.to_bits()),
-        (1, b"Bar".to_vec(), 3, 0x0300_0123),
-    ];
-    names.sort_by_key(|(i, n, _, _)| (str_hash_ci_bucket(n), std::cmp::Reverse(*i)));
-    let expect = names
-        .iter()
-        .fold(expect, |o, (_, n, m, v)| o.u8(*m).name(n).u64(*v));
+        .u16(2)
+        .u8(3)
+        .name(b"Bar")
+        .u64(0x0300_0123)
+        .u8(1)
+        .name(b"Foo")
+        .u64(2.5f64.to_bits());
     assert_eq!(written(&mut w.e), [chunk(kind::SCRIPT_VARS, 9, expect.0)]);
     // JIP's own skip, one byte short: the third owner is read from the wrong place.
     let mut w = World::new();
@@ -313,12 +310,6 @@ fn script_variables() {
     load_file(&mut w.e, &cosave(&[chunk(kind::SCRIPT_VARS, 9, data)]));
     assert!(s(&mut w.e).script_vars.get(&0x0100_0def).is_none());
     assert!(s(&mut w.e).script_vars.get(&0x0100_0abc).is_some());
-}
-
-/// The bucket a name falls in, in a map of 4 buckets, with the order inside it (newest first:
-/// the second inserted before the first when they share one).
-fn str_hash_ci_bucket(name: &[u8]) -> u32 {
-    crate::containers::str_hash_ci(name) & 3
 }
 
 /// `JPAV`: mods from 6 up and loaded, owners loaded or changed in the save; values of each type,
@@ -410,18 +401,22 @@ fn aux_variables() {
         .bytes(&text(b"hi"))
         .0;
     assert_eq!(written(&mut w.e), [chunk(kind::AUX_VARS, 10, expect)]);
-    // A record older than version 10, or a load that did not change the aux variables, is
-    // not read; the data loaded before stays.
+    // A load that did not change the aux variables does not read them; the data loaded before
+    // stays. A record older than version 10 is not read either (the data is cleared) and is
+    // carried as it was.
     let before = written(&mut w.e);
     s(&mut w.e).changed = changed::REF_MAPS;
     load_file(&mut w.e, &cosave(&[chunk(kind::AUX_VARS, 10, Vec::new())]));
     assert_eq!(written(&mut w.e), before, "not changed: kept, not read");
     s(&mut w.e).changed = changed::AUX_VARS;
-    load_file(&mut w.e, &cosave(&[chunk(kind::AUX_VARS, 9, Vec::new())]));
-    assert!(
-        written(&mut w.e).is_empty(),
-        "cleared, the old version not read"
+    let old = Out::default().u16(0).u8(0xab).0;
+    load_file(&mut w.e, &cosave(&[chunk(kind::AUX_VARS, 9, old.clone())]));
+    assert_eq!(
+        written(&mut w.e),
+        [chunk(kind::AUX_VARS, 9, old)],
+        "cleared, the old version carried, not read"
     );
+    assert!(s(&mut w.e).aux_vars.is_empty());
 }
 
 /// `JPRM`: by mod, name and reference; a reference neither loaded nor changed goes; written in
@@ -450,26 +445,21 @@ fn ref_maps() {
         .0;
     s(&mut w.e).changed = changed::REF_MAPS;
     load_file(&mut w.e, &cosave(&[chunk(kind::REF_MAPS, 10, data)]));
-    // Ids in a map of 4 buckets (room for 3 references): 0x06000001 and 0x06000002 by hash.
-    let (a, b) = (mixed_hash(0x0600_0001) & 3, mixed_hash(0x0600_0002) & 3);
-    let one = Out::default()
-        .u32(0x0600_0001)
-        .u8(1)
-        .u64(0.5f64.to_bits())
-        .0;
-    let two = Out::default().u32(0x0600_0002).u8(4).u16(1).bytes(b"z").0;
-    let refs = if a <= b {
-        [one, two].concat()
-    } else {
-        [two, one].concat()
-    };
+    // Ids in a map of 4 buckets (room for 3 references), worked out by hand from `HashKey`:
+    // 0x06000001 hashes to 0x4E000C0D (bucket 1), 0x06000002 to 0x4E000C1A (bucket 2).
     let expect = Out::default()
         .u16(1)
         .u8(6)
         .u16(1)
         .name(b"Map")
         .u16(2)
-        .bytes(&refs)
+        .u32(0x0600_0001)
+        .u8(1)
+        .u64(0.5f64.to_bits())
+        .u32(0x0600_0002)
+        .u8(4)
+        .u16(1)
+        .bytes(b"z")
         .0;
     assert_eq!(written(&mut w.e), [chunk(kind::REF_MAPS, 10, expect)]);
 }
@@ -529,16 +519,18 @@ fn extra_data_in_both_formats() {
             [chunk(kind::EXTRA_DATA, version, body(per_mod))],
             "jg {jg}"
         );
-        // The other format is not read.
+        // The other format is not read, and is carried as it was.
         s(&mut w.e).changed = changed::ALL;
         let other = 3 - version;
         load_file(
             &mut w.e,
             &cosave(&[chunk(kind::EXTRA_DATA, other, body(per_mod))]),
         );
-        assert!(
-            written(&mut w.e).is_empty(),
-            "jg {jg} reads no version {other}"
+        assert!(s(&mut w.e).extra_data.is_empty(), "jg {jg}");
+        assert_eq!(
+            written(&mut w.e),
+            [chunk(kind::EXTRA_DATA, other, body(per_mod))],
+            "jg {jg} reads no version {other}, carries it"
         );
     }
     // A form id of a file no longer loaded: its index goes unused, its form bit with it.
@@ -646,6 +638,11 @@ fn saved_flags() {
             len: 0,
         },
     );
+    // A new game holds nothing: while JIP is not installed it writes no section (xNVSE writes
+    // none for a plugin that opens no record); installed, `JPGF` as reset, as JIP writes on every
+    // save.
+    assert!(saved_chunks(&mut w.e).is_empty(), "not installed");
+    w.e.ext::<Jip>().answers_installed = true;
     let reset = Out::default().u32(0).u32(1.0f32.to_bits()).0;
     assert_eq!(
         saved_chunks(&mut w.e),
@@ -729,7 +726,12 @@ fn npc_perks() {
         &mut w.e,
         &cosave(&[chunk(kind::NPC_PERKS, 10, data.clone())]),
     );
-    assert!(written(&mut w.e).is_empty(), "no patch: not read");
+    assert!(s(&mut w.e).npc_perks.is_empty(), "no patch: not read");
+    assert_eq!(
+        written(&mut w.e),
+        [chunk(kind::NPC_PERKS, 10, data.clone())],
+        "no patch: carried as it was"
+    );
     s(&mut w.e).npc_perks_patch = true;
     s(&mut w.e).changed = changed::ALL;
     load_file(&mut w.e, &cosave(&[chunk(kind::NPC_PERKS, 10, data)]));
@@ -913,4 +915,74 @@ fn real_co_saves_round_trip() {
             );
         }
     }
+}
+
+/// What nv-rs does not read is carried byte for byte: an aux variables record of an old version,
+/// the saved flags' bytes past their 8, the NPC perks without the patch, a `PJ` type JIP does not
+/// know and a type of another kind come back in the same order, the section identical; again
+/// after the same save is loaded a second time with nothing changed. A new game drops them.
+#[test]
+fn records_nv_rs_does_not_read_are_carried() {
+    let jpgf = Out::default()
+        .u32(1)
+        .u32(0.5f32.to_bits())
+        .u32(0xdead_beef)
+        .0;
+    let chunks = [
+        chunk(kind::AUX_VARS, 9, Out::default().u16(1).u8(7).u16(0).0),
+        chunk(kind::SERIALIZED_VARS, 1, jpgf),
+        chunk(
+            kind::NPC_PERKS,
+            10,
+            Out::default().u16(1).u32(0x0600_0001).u8(0).0,
+        ),
+        chunk(tag(b"ZZPJ"), 3, b"unknown".to_vec()),
+        chunk(u32::from_le_bytes(*b"ABCD"), 1, vec![1, 2, 3]),
+    ];
+    let mut w = World::new();
+    s(&mut w.e).changed = changed::ALL;
+    load_file(&mut w.e, &cosave(&chunks));
+    assert_eq!(saved_chunks(&mut w.e), chunks);
+    assert_eq!(section(&saved_chunks(&mut w.e)), section(&chunks));
+    // The same save again, nothing changed.
+    s(&mut w.e).changed = 0;
+    load_file(&mut w.e, &cosave(&chunks));
+    assert_eq!(saved_chunks(&mut w.e), chunks, "loaded again");
+    listen(
+        &mut w.e,
+        &Message {
+            kind: msg::NEW_GAME,
+            data: 0,
+            len: 0,
+        },
+    );
+    assert!(saved_chunks(&mut w.e).is_empty(), "a new game");
+}
+
+/// While JIP is not installed, a co-save without JIP's section (its load callback called with no
+/// records, as xNVSE calls it) leaves nothing to save, so the next co-save has no section of
+/// JIP's either, as the real game writes without the DLL; one with a section is written back.
+#[test]
+fn no_section_in_no_section_out() {
+    let mut w = World::new();
+    assert!(saved_chunks(&mut w.e).is_empty(), "nothing loaded");
+    let file = nvse::cosave::write(&[nvse::cosave::Plugin {
+        opcode_base: 0x1400,
+        chunks: vec![chunk(tag(b"SDOM"), 0, vec![0])],
+    }]);
+    let mut r = Reader::open(&file).unwrap();
+    while let Some(p) = r.next_plugin().unwrap() {
+        r.skip(p.length).unwrap();
+        r.end_plugin();
+    }
+    r.no_records();
+    load(&mut w.e, &mut r).unwrap();
+    assert!(saved_chunks(&mut w.e).is_empty(), "no section loaded");
+    let flags = chunk(
+        kind::SERIALIZED_VARS,
+        1,
+        Out::default().u32(0).u32(1.0f32.to_bits()).0,
+    );
+    load_file(&mut w.e, &cosave(std::slice::from_ref(&flags)));
+    assert_eq!(saved_chunks(&mut w.e), [flags], "a section loaded");
 }
