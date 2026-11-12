@@ -1128,17 +1128,21 @@ mod tests {
             String::from_utf8_lossy(&out.stderr),
         );
         let (y, z) = ("y".repeat(200_000), "z".repeat(200_000));
-        assert_eq!(o.lines().filter(|l| *l == y).count(), 1, "the last line out");
-        assert_eq!(e.lines().filter(|l| *l == z).count(), 1, "the last line err");
+        assert_eq!(
+            o.lines().filter(|l| *l == y).count(),
+            1,
+            "the last line out"
+        );
+        assert_eq!(
+            e.lines().filter(|l| *l == z).count(),
+            1,
+            "the last line err"
+        );
         let pad = "x".repeat(90);
         for i in 0..2000 {
             let (want_o, want_e) = (format!("out {i} {pad}"), format!("err {i} {pad}"));
             assert_eq!(o.lines().filter(|l| *l == want_o).count(), 1, "{want_o}");
-            assert_eq!(
-                e.lines().filter(|l| *l == want_e).count(),
-                1,
-                "{want_e}"
-            );
+            assert_eq!(e.lines().filter(|l| *l == want_e).count(), 1, "{want_e}");
         }
     }
 }
