@@ -481,11 +481,19 @@ fn list_commands_without_a_list() {
         (0x151a, vec![]),
     ];
     for (opcode, args) in &calls {
-        assert_eq!(call(&mut e, *opcode, 0, args).1, 0.0, "{opcode:#x} no caller");
+        assert_eq!(
+            call(&mut e, *opcode, 0, args).1,
+            0.0,
+            "{opcode:#x} no caller"
+        );
     }
     e.mem.set_u32(ACTOR + 0x20, 0);
     for (opcode, args) in &calls {
-        assert_eq!(call(&mut e, *opcode, ACTOR, args).1, 0.0, "{opcode:#x} no base");
+        assert_eq!(
+            call(&mut e, *opcode, ACTOR, args).1,
+            0.0,
+            "{opcode:#x} no base"
+        );
     }
     assert_eq!(list(&e), [P[0], P[1]]);
     assert!(freed().is_empty());

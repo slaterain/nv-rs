@@ -271,7 +271,10 @@ fn a_set_statement_gets_a_temporary_string() {
     let (params, execute) = (e.mem.u32(record + 0x14), e.mem.u32(record + 0x18));
     e.mem.set_u32(OFFSET, 5);
     e.mem.set_f64(RESULT, 0.0);
-    e.call(execute, &[params, at + 10, 0, 0, SCRIPT, LIST, RESULT, OFFSET]);
+    e.call(
+        execute,
+        &[params, at + 10, 0, 0, SCRIPT, LIST, RESULT, OFFSET],
+    );
     let got = e.mem.f64(RESULT) as u32;
     assert_ne!(got, id);
     assert_eq!(vars::string(&e, got).unwrap(), b"Doc");
