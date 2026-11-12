@@ -164,6 +164,13 @@ pub fn wanted() -> bool {
     backends().is_some()
 }
 
+/// Whether wgpu draws (asked for alone, and not replaced by the real Direct3D 9): the game's
+/// textures are then made on wgpu, in the formats `d3d9_wgpu::format` provides, so the textures
+/// D3DX makes leave out the rest (`super::d3dx`). With `real,wgpu` the real one draws.
+pub fn wgpu_draws() -> bool {
+    backends() == Some(Backends::Wgpu) && !DRAWING_REAL.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The backends' words for the layer's lines (`NV_D3D9=real: ...`, as in play): the one drawing.
 fn tag() -> &'static str {
     if DRAWING_REAL.load(std::sync::atomic::Ordering::Relaxed) {

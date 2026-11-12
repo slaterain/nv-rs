@@ -105,6 +105,52 @@ fn mod_formats_are_the_32_bit_dlls_at_double_precision() {
     );
 }
 
+/// `data/rows_32bit.tsv`: colours that are not grey (`d3dx_tex::synthetic::rows_source`) through
+/// the DLL's same-size conversion (`D3DXLoadSurfaceFromMemory`) into L8, A8L8, A4L4, L16 and A8,
+/// without and with the dither, on the thread that made the device: ours are byte for byte the
+/// same. Grey files cannot tell the luminance step's weights apart (they sum to 1); these pin
+/// each weight, the order and rounding of its sum, and the dithered encoders.
+#[test]
+fn luminance_encoders_are_the_32_bit_dlls() {
+    rows(
+        include_str!("../data/rows_32bit.tsv"),
+        d3dx_tex::Precision::Single,
+    );
+}
+
+/// `data/rows_32bit_double.tsv`: the same at 53-bit precision, on a new thread.
+#[test]
+fn luminance_encoders_are_the_32_bit_dlls_at_double_precision() {
+    rows(
+        include_str!("../data/rows_32bit_double.tsv"),
+        d3dx_tex::Precision::Double,
+    );
+}
+
+fn rows(data: &str, precision: d3dx_tex::Precision) {
+    let (w, h) = d3dx_tex::synthetic::ROWS_SIZE;
+    let source = d3dx_tex::synthetic::rows_source();
+    let mut n = 0;
+    for line in data.lines().filter(|l| !l.starts_with('#')) {
+        let f: Vec<&str> = line.split('\t').collect();
+        let format = u32::from_str_radix(f[0], 16).unwrap();
+        assert_eq!(f[2], "00000000", "{line}");
+        let ours = d3dx_tex::filter::convert_rows(
+            d3dx_tex::format::A8R8G8B8,
+            format,
+            w,
+            h,
+            &source,
+            f[1] == "1",
+            precision,
+        );
+        let ours = format!("{}\t{:016x}", ours.len(), d3dx_tex::synthetic::fnv(&ours));
+        assert_eq!(ours, f[3..].join("\t"), "{line}");
+        n += 1;
+    }
+    assert_eq!(n, 10);
+}
+
 fn synthetic(data: &str, precision: d3dx_tex::Precision, files: Vec<d3dx_tex::synthetic::File>) {
     let caps = d3dx_tex::Caps::default();
     let lines: Vec<&str> = data.lines().filter(|l| !l.starts_with('#')).collect();

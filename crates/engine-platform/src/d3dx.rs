@@ -1083,6 +1083,9 @@ pub enum NotTranslated {
     Crate(d3dx_tex::Untranslated),
     /// A calling thread at an x87 precision other than 24 or 53 bits.
     Precision,
+    /// A texture the translation made that the device refuses to create (a format its adapter
+    /// table does not take after all).
+    Refused,
 }
 
 /// Prints once per kind (with the first case's details) what the translation left to the DLL or
@@ -1123,7 +1126,8 @@ const DIRECT3D_GET_ADAPTER_DISPLAY_MODE: u32 = 4 * 8;
 /// (`super::d3d9device`: the device's adapter and type, the adapter's display mode's format, usage
 /// 0), so every format picked is one they take. A format the player's adapter table has no answer
 /// for counts as not taken. Asked once per device. Without a table (unit tests' doubles) the
-/// reference machine's lists.
+/// reference machine's lists. When wgpu draws, a format it cannot make is not taken either
+/// ([`leave_out_what_wgpu_lacks`]).
 fn device_caps(e: &mut Engine, device: Ptr) -> d3dx_tex::Caps {
     if let Some((d, caps)) = &state!(e).graphics.d3dx_caps {
         if *d == device.addr() {
@@ -1175,8 +1179,30 @@ fn device_caps(e: &mut Engine, device: Ptr) -> d3dx_tex::Caps {
         caps.texture_formats = takes(D3DRTYPE_TEXTURE);
         caps.cube_formats = takes(D3DRTYPE_CUBETEXTURE);
     }
+    #[cfg(windows)]
+    {
+        let on_wgpu = super::d3d9real::wgpu_draws();
+        #[cfg(test)]
+        let on_wgpu = on_wgpu || tests::WGPU_DRAWS.with(std::cell::Cell::get);
+        if on_wgpu {
+            leave_out_what_wgpu_lacks(&mut caps);
+        }
+    }
     state!(e).graphics.d3dx_caps = Some((device.addr(), caps.clone()));
     caps
+}
+
+/// On wgpu, the formats `d3d9_wgpu` does not provide are left out of what the card takes: a
+/// texture in one would never be made (wgpu draws its stand-in), so D3DX picks among the rest, as
+/// on a card without them (A4L4 files become A4R4G4B4, the same nibbles). Of D3DX's table, wgpu
+/// lacks 22 of 57: R8G8B8, R3G3B2, A8R3G3B2, A2R10G10B10, A8P8 and P8, A4L4, L6V5U5, X8L8V8U8,
+/// V16U16, A2W10V10U10, Q16W16V16U16, CxV8U8, UYVY, YUY2, R8G8_B8G8, G8R8_G8B8, D15S1, D24X4S4,
+/// D24FS8 and the FourCCs AL16 and ` R16`.
+#[cfg(windows)]
+fn leave_out_what_wgpu_lacks(caps: &mut d3dx_tex::Caps) {
+    let makes = |f: &u32| d3d9_wgpu::format::format(*f).is_some();
+    caps.texture_formats.retain(makes);
+    caps.cube_formats.retain(makes);
 }
 
 /// `d3dx_tex`'s answer for the create calls at the calling thread's `precision`, on a device that
@@ -1474,8 +1500,7 @@ fn create_from_file(
                                     "a texture of format {:#x} the device refuses ({hr:#x})",
                                     entry.surfaces[0].format
                                 );
-                                let kind = d3dx_tex::Untranslated::PixelFormat;
-                                note_not_translated(e, NotTranslated::Crate(kind), &why);
+                                note_not_translated(e, NotTranslated::Refused, &why);
                                 if let Some(hr) = unreadable_without_dll(e, Some(device.addr())) {
                                     return hr;
                                 }
@@ -2508,6 +2533,97 @@ mod tests {
         assert_eq!(asked.get(), 1, "asked once");
     }
 
+    #[cfg(windows)]
+    thread_local! {
+        /// Whether wgpu draws, for [`device_caps`] on this test's thread (the run-wide answer,
+        /// `d3d9real::wgpu_draws`, is `NV_D3D9`'s).
+        pub(super) static WGPU_DRAWS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// On wgpu the formats d3dx-tex picks among leave out every one `d3d9_wgpu` does not make
+    /// (a texture in one would be drawn as wgpu's stand-in): on a card taking all 57 of D3DX's
+    /// table, the 35 wgpu makes, so an A4L4 file becomes A4R4G4B4 (the same nibbles), not an A4L4
+    /// texture wgpu draws black. Without wgpu the card's answers stand.
+    #[cfg(windows)]
+    #[test]
+    fn on_wgpu_the_texture_formats_leave_out_what_wgpu_lacks() {
+        let every: Vec<u32> = d3dx_tex::table_formats().collect();
+        let hex: Vec<String> = every.iter().map(|f| format!("{f:x}")).collect();
+        let taken: Vec<String> = hex.iter().map(|f| format!("{f}=0")).collect();
+        let table = format!(
+            "Domain\td0\t{}\n\
+             CheckDeviceFormat\t0 1 16 0 3\t8876086a\t{}\td0\n\
+             CheckDeviceFormat\t0 1 16 0 5\t8876086a\t{}\td0",
+            hex.join(","),
+            taken.join(","),
+            taken.join(",")
+        );
+        let caps_of = |wgpu: bool| {
+            let mut e = Engine::new();
+            super::super::d3d9::load_adapter_table(&mut e, &table);
+            let (device, _) = format_doubles(&mut e);
+            WGPU_DRAWS.with(|w| w.set(wgpu));
+            let caps = device_caps(&mut e, Ptr::new(device));
+            WGPU_DRAWS.with(|w| w.set(false));
+            caps
+        };
+        let card = caps_of(false);
+        assert_eq!(card.texture_formats, every);
+        assert_eq!(card.cube_formats, every);
+        let cc = |s: &[u8; 4]| u32::from_le_bytes(*s);
+        let lacking = [
+            20,
+            40,
+            41,
+            27,
+            29,
+            35,
+            52,
+            61,
+            62,
+            64,
+            67,
+            110,
+            117,
+            cc(b"UYVY"),
+            cc(b"RGBG"),
+            cc(b"YUY2"),
+            cc(b"GRGB"),
+            73,
+            79,
+            83,
+            cc(b"AL16"),
+            cc(b" R16"),
+        ];
+        let kept: Vec<u32> = every
+            .iter()
+            .copied()
+            .filter(|f| !lacking.contains(f))
+            .collect();
+        assert_eq!(kept.len(), 35);
+        for &f in &every {
+            let makes = d3d9_wgpu::format::format(f).is_some();
+            assert_eq!(makes, kept.contains(&f), "{f:#x}");
+        }
+        let wgpu = caps_of(true);
+        assert_eq!(wgpu.texture_formats, kept);
+        assert_eq!(wgpu.cube_formats, kept);
+        let file = d3dx_tex::synthetic::formats()
+            .into_iter()
+            .find(|f| f.name == "a4l4-32-one")
+            .expect("an A4L4 file");
+        let made = |caps: &d3dx_tex::Caps| {
+            let t = d3dx_tex::create_texture_from_file_in_memory(
+                &file.data,
+                caps,
+                d3dx_tex::Precision::Single,
+            );
+            t.expect("made").surfaces[0].format
+        };
+        assert_eq!(made(&card), d3dx_tex::format::A4L4);
+        assert_eq!(made(&wgpu), d3dx_tex::format::A4R4G4B4);
+    }
+
     /// A texture the device refuses to make is left to the DLL as an untranslated one is: without
     /// the DLL (here) the answer is `D3DXERR_INVALIDDATA`, and the run does not stop.
     #[test]
@@ -2527,6 +2643,11 @@ mod tests {
             Ptr::new(out),
         );
         assert_eq!(hr, D3DXERR_INVALIDDATA);
+        // Noted under a kind of its own, so an earlier pixel-format note does not hide it.
+        assert_eq!(
+            state!(e).graphics.d3dx_not_translated,
+            vec![NotTranslated::Refused]
+        );
         engine_core::units::crt::set_x87_control_word(&mut e, 0x027f);
     }
 }

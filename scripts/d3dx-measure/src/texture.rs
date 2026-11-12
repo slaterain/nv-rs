@@ -212,7 +212,9 @@ fn read_u32(input: &mut impl std::io::Read) -> Option<u32> {
 /// 3 `D3DXGetImageInfoFromFileInMemory`; the data's length u32; the data) and answers each on
 /// stdout: the HRESULT, then for 3 the image info's seven words; for 1 and 2 the level count,
 /// the face count (1, or 6 for a cube), then for each face and level its format, width,
-/// height, byte count and the level's bytes (rows packed). Ends at the end of stdin.
+/// height, byte count and the level's bytes (rows packed). Request 6 is
+/// `D3DXLoadSurfaceFromMemory` into a scratch surface of the source's size (the codecs' encoders
+/// with or without dither, `d3dx-tex-verify --capture-rows`). Ends at the end of stdin.
 ///
 /// `on_thread`: the device is made on this thread and the calls are made on a new thread, at
 /// the control word a thread starts with (0x27f, 53-bit precision), as the game's loading
@@ -297,6 +299,46 @@ unsafe fn serve_calls(module: usize, device: usize) {
             for w in words {
                 out.write_all(&w.to_le_bytes()).unwrap();
             }
+            out.flush().unwrap();
+            continue;
+        }
+        if kind == 6 {
+            // `D3DXLoadSurfaceFromMemory` into the level of a one-level scratch texture of the
+            // source's size (D3DPOOL_SCRATCH takes any format): the words destination format,
+            // source format, width, height and filter, then the source's rows, packed. Answered
+            // with the HRESULT, the level's byte count and its bytes (rows packed).
+            type Load = unsafe extern "system" fn(*mut c_void, *const c_void, *const u32, *const u8, u32, u32, *const c_void, *const u32, u32, u32) -> u32;
+            type CreateTexture = unsafe extern "system" fn(*mut c_void, u32, u32, u32, u32, u32, u32, *mut *mut c_void, *mut c_void) -> u32;
+            type SurfaceLevel = unsafe extern "system" fn(*mut c_void, u32, *mut *mut c_void) -> u32;
+            let word = |i: usize| u32::from_le_bytes(data[4 * i..4 * i + 4].try_into().unwrap());
+            let (dst, src, w, h, filter) = (word(0), word(1), word(2), word(3), word(4));
+            let load: Load = std::mem::transmute(crate::GetProcAddress(module, b"D3DXLoadSurfaceFromMemory\0".as_ptr()));
+            let mut texture: *mut c_void = std::ptr::null_mut();
+            let cr = (std::mem::transmute::<usize, CreateTexture>(vt(device, 23)))(device, w, h, 1, 0, dst, 3, &mut texture, std::ptr::null_mut());
+            assert_eq!(cr, 0, "a scratch texture of format {dst}");
+            let mut surface: *mut c_void = std::ptr::null_mut();
+            let sr = (std::mem::transmute::<usize, SurfaceLevel>(vt(texture, 18)))(texture, 0, &mut surface);
+            assert_eq!(sr, 0, "GetSurfaceLevel");
+            let pitch = w * pixel_bytes(src).expect("a source format of known size") as u32;
+            let rect = [0u32, 0, w, h];
+            let hr = load(surface, std::ptr::null(), std::ptr::null(), data[20..].as_ptr(), src, pitch, std::ptr::null(), rect.as_ptr(), filter, 0);
+            let now = crate::x87_control_word();
+            if now != start && !changed {
+                eprintln!("serve: a call left the control word at {now:04x} (was {start:04x})");
+                changed = true;
+            }
+            (std::mem::transmute::<usize, Release>(vt(surface, 2)))(surface);
+            let mut desc = [0u32; 8];
+            (std::mem::transmute::<usize, Desc>(vt(texture, 17)))(texture, 0, desc.as_mut_ptr());
+            let mut locked = [0u32; 2];
+            let lr = (std::mem::transmute::<usize, Lock>(vt(texture, 19)))(texture, 0, locked.as_mut_ptr(), std::ptr::null(), 0x10);
+            assert_eq!(lr, 0, "LockRect");
+            let bytes = level_bytes(&desc, locked[0] as usize, locked[1] as usize as *const u8);
+            (std::mem::transmute::<usize, Unlock>(vt(texture, 20)))(texture, 0);
+            (std::mem::transmute::<usize, Release>(vt(texture, 2)))(texture);
+            out.write_all(&hr.to_le_bytes()).unwrap();
+            out.write_all(&(bytes.len() as u32).to_le_bytes()).unwrap();
+            out.write_all(&bytes).unwrap();
             out.flush().unwrap();
             continue;
         }

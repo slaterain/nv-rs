@@ -1,12 +1,16 @@
 //! Rows of the non-block formats to and from D3DX's working colour (`d3dx9_38.dll` codecs, made
-//! by its codec factory 0x61d9b7, each a decoder and an encoder: R8G8B8 0x61b1c5 (decoded only:
-//! its textures are X8R8G8B8), A8R8G8B8 0x61b288 / 0x6148a1, X8R8G8B8 0x61b330 / 0x614c75, R5G6B5 0x61b3f4 / 0x614fb7,
-//! X1R5G5B5 0x61b4d2 / 0x6152e5, A1R5G5B5 0x61b5b0 / 0x615611, A4R4G4B4 0x61b69c / 0x6159bc,
-//! X4R4G4B4 0x61bedc / 0x61663a).
+//! by its codec factory 0x61d9b7, each a decoder and an encoder): A8R8G8B8 0x61b288 / 0x6148a1,
+//! X8R8G8B8 0x61b330 / 0x614c75, R5G6B5 0x61b3f4 / 0x614fb7, X1R5G5B5 0x61b4d2 / 0x6152e5,
+//! A1R5G5B5 0x61b5b0 / 0x615611, A4R4G4B4 0x61b69c / 0x6159bc, X4R4G4B4 0x61bedc / 0x61663a, A8
+//! 0x61bd91 / 0x6160b0, L8 0x61c092 / 0x6181f4, A8L8 0x61c11d / 0x6183ec, A4L4 0x61c1c5 /
+//! 0x6186be, L16 0x61c267 / 0x61a3b0; R8G8B8 0x61b1c5, decoded only (D3DX makes its textures
+//! X8R8G8B8).
 
 use crate::dxt::Color;
 use crate::format;
-use crate::num::{fistp, Rz, INV15, INV255, INV31, INV63, Z};
+use crate::num::{
+    fistp, Fpu, Reg, Rz, INV15, INV255, INV31, INV63, INV65535, LUM_B, LUM_G, LUM_R, Z,
+};
 
 /// The formats this crate reads row by row: files of them load.
 pub fn decodes(f: u32) -> bool {
@@ -25,6 +29,11 @@ pub fn encodes(f: u32) -> bool {
             | format::A1R5G5B5
             | format::A4R4G4B4
             | format::X4R4G4B4
+            | format::A8
+            | format::L8
+            | format::A8L8
+            | format::A4L4
+            | format::L16
     )
 }
 
@@ -126,6 +135,40 @@ pub fn decode_row(f: u32, row: &[u8], w: usize, out: &mut [Color]) {
                 ];
             }
         }
+        // 0x61bd91: black, the alpha.
+        format::A8 => {
+            for (o, &v) in out[..w].iter_mut().zip(row) {
+                *o = [0.0, 0.0, 0.0, f32::from(v) * INV255];
+            }
+        }
+        // 0x61c092: grey.
+        format::L8 => {
+            for (o, &v) in out[..w].iter_mut().zip(row) {
+                let l = f32::from(v) * INV255;
+                *o = [l, l, l, 1.0];
+            }
+        }
+        // 0x61c11d: grey, the alpha in the high byte.
+        format::A8L8 => {
+            for (o, p) in out[..w].iter_mut().zip(row.chunks_exact(2)) {
+                let l = f32::from(p[0]) * INV255;
+                *o = [l, l, l, f32::from(p[1]) * INV255];
+            }
+        }
+        // 0x61c1c5: grey, the alpha in the high four bits.
+        format::A4L4 => {
+            for (o, &v) in out[..w].iter_mut().zip(row) {
+                let l = f32::from(v & 0xf) * INV15;
+                *o = [l, l, l, f32::from(v >> 4) * INV15];
+            }
+        }
+        // 0x61c267: grey.
+        format::L16 => {
+            for (o, p) in out[..w].iter_mut().zip(row.chunks_exact(2)) {
+                let l = word16(p) as f32 * INV65535;
+                *o = [l, l, l, 1.0];
+            }
+        }
         _ => unreachable!("decode_row of an unsupported format"),
     }
 }
@@ -163,11 +206,22 @@ fn quantize_unscaled(c: f32, t: f32, max: i32) -> u32 {
     v.clamp(0, max) as u32
 }
 
+/// The luminance D3DX's luminance encoders store in place of a pixel's red before they quantize
+/// (L8 0x61829d, A8L8 0x61849c, L16 0x61a45a): `((g * 0.7154) + (r * 0.2125)) + (b * 0.0721)`
+/// with the rounding control already truncating, in the thread's precision, stored to a float.
+#[inline(always)]
+fn luminance<P: Fpu>(c: &Color) -> f32 {
+    let ld = <P::T as Reg>::ld;
+    (ld(c[1]) * ld(LUM_G) + ld(c[0]) * ld(LUM_R) + ld(c[2]) * ld(LUM_B)).st()
+}
+
 /// One row of the working colour to `f`: row `y` of the surface (the encoders go right to
 /// left on odd rows, which picks the threshold of each pixel: the n-th pixel written takes
 /// column `n & 3`). `dither`: D3DX's ordered dither, else every threshold is 0.5 (rounding).
+/// The thread's precision `P` matters only for the luminance formats' first step
+/// ([`luminance`]); the rest rounds the same at either.
 #[inline(never)]
-pub fn encode_row(f: u32, colors: &[Color], y: u32, dither: bool, out: &mut [u8]) {
+pub(crate) fn encode_row<P: Fpu>(f: u32, colors: &[Color], y: u32, dither: bool, out: &mut [u8]) {
     // The encoders truncate in their pixel loops (0x61493f to 0x614c66 and the like).
     let _rz = Rz::new();
     let w = colors.len();
@@ -226,30 +280,53 @@ pub fn encode_row(f: u32, colors: &[Color], y: u32, dither: bool, out: &mut [u8]
                     | quantize(c[2], 15.0, t, 15);
                 out[x * 2..x * 2 + 2].copy_from_slice(&(v as u16).to_le_bytes());
             }
+            // 0x6160b0.
+            format::A8 => out[x] = quantize(c[3], 255.0, t, 255) as u8,
+            // 0x6181f4.
+            format::L8 => out[x] = quantize(luminance::<P>(c), 255.0, t, 255) as u8,
+            // 0x6183ec: the luminance in the low byte, the alpha in the high one.
+            format::A8L8 => {
+                out[x * 2] = quantize(luminance::<P>(c), 255.0, t, 255) as u8;
+                out[x * 2 + 1] = quantize(c[3], 255.0, t, 255) as u8;
+            }
+            // 0x6186be: the luminance in the low four bits, the alpha in the high ones.
+            format::A4L4 => {
+                let v = quantize(c[3], 15.0, t, 15) << 4 | quantize(luminance::<P>(c), 15.0, t, 15);
+                out[x] = v as u8;
+            }
+            // 0x61a3b0.
+            format::L16 => {
+                let v = quantize(luminance::<P>(c), 65535.0, t, 65535);
+                out[x * 2..x * 2 + 2].copy_from_slice(&(v as u16).to_le_bytes());
+            }
             _ => unreachable!("encode_row of an unsupported format"),
         }
     }
 }
 
-/// The channels of the 16-bit formats D3DX's box filter averages in integers, (shift, bits) each:
-/// R5G6B5 0x623ced, X1R5G5B5 0x623e17, A1R5G5B5 0x623f12, A4R4G4B4 0x62403f, X4R4G4B4
-/// 0x624442. Each sums the fields of the four pixels in place with a bias of 2 per field and
-/// shifts right by 2; the bits outside these fields (the X bits) come out 0.
-fn fields16(f: u32) -> Option<&'static [(u32, u32)]> {
+/// The formats other than 8888 and X888 that D3DX's box filter averages in integers: bytes per
+/// pixel and channels, (shift, bits) each: R5G6B5 0x623ced, X1R5G5B5 0x623e17, A1R5G5B5
+/// 0x623f12, A4R4G4B4 0x62403f, X4R4G4B4 0x624442, A8 and L8 0x624287, A8L8 0x62453d, A4L4
+/// 0x62465e. Each sums the fields of the four pixels in place with a bias of 2 per field and shifts
+/// right by 2; the bits outside these fields (the X bits) come out 0.
+fn int_fields(f: u32) -> Option<(usize, &'static [(u32, u32)])> {
     Some(match f {
-        format::R5G6B5 => &[(11, 5), (5, 6), (0, 5)],
-        format::X1R5G5B5 => &[(10, 5), (5, 5), (0, 5)],
-        format::A1R5G5B5 => &[(15, 1), (10, 5), (5, 5), (0, 5)],
-        format::A4R4G4B4 => &[(12, 4), (8, 4), (4, 4), (0, 4)],
-        format::X4R4G4B4 => &[(8, 4), (4, 4), (0, 4)],
+        format::R5G6B5 => (2, &[(11, 5), (5, 6), (0, 5)]),
+        format::X1R5G5B5 => (2, &[(10, 5), (5, 5), (0, 5)]),
+        format::A1R5G5B5 => (2, &[(15, 1), (10, 5), (5, 5), (0, 5)]),
+        format::A4R4G4B4 => (2, &[(12, 4), (8, 4), (4, 4), (0, 4)]),
+        format::X4R4G4B4 => (2, &[(8, 4), (4, 4), (0, 4)]),
+        format::A8 | format::L8 => (1, &[(0, 8)]),
+        format::A8L8 => (2, &[(8, 8), (0, 8)]),
+        format::A4L4 => (1, &[(4, 4), (0, 4)]),
         _ => return None,
     })
 }
 
 /// D3DX's integer box filter for a level half the size of `src` in both directions (8888 and
-/// X888: 0x623b32 with MMX, 0x6238f6 without; the 16-bit formats: [`fields16`]): each channel
-/// the sum of the four source pixels plus 2, shifted right by 2. `src` is `w` x `h` (both at
-/// least 2), rows packed.
+/// X888: 0x623b32 with MMX, 0x6238f6 without; the others: [`int_fields`]): each channel the sum
+/// of the four source pixels plus 2, shifted right by 2. `src` is `w` x `h` (both at least 2),
+/// rows packed.
 pub fn box_integer(f: u32, src: &[u8], w: usize, h: usize) -> Vec<u8> {
     let (w2, h2) = (w / 2, h / 2);
     match f {
@@ -271,9 +348,16 @@ pub fn box_integer(f: u32, src: &[u8], w: usize, h: usize) -> Vec<u8> {
             out
         }
         f => {
-            let fields = fields16(f).expect("box_integer of an unsupported format");
-            let mut out = vec![0u8; w2 * h2 * 2];
-            let px = |row: usize, x: usize| -> u32 { word16(&src[(row * w + x) * 2..]) };
+            let (bytes, fields) = int_fields(f).expect("box_integer of an unsupported format");
+            let mut out = vec![0u8; w2 * h2 * bytes];
+            let px = |row: usize, x: usize| -> u32 {
+                let at = (row * w + x) * bytes;
+                if bytes == 1 {
+                    u32::from(src[at])
+                } else {
+                    word16(&src[at..])
+                }
+            };
             for y in 0..h2 {
                 for x in 0..w2 {
                     let p = [
@@ -288,8 +372,8 @@ pub fn box_integer(f: u32, src: &[u8], w: usize, h: usize) -> Vec<u8> {
                         let s: u32 = p.iter().map(|q| (q >> shift) & mask).sum();
                         v |= ((s + 2) >> 2) << shift;
                     }
-                    out[(y * w2 + x) * 2..(y * w2 + x) * 2 + 2]
-                        .copy_from_slice(&(v as u16).to_le_bytes());
+                    let at = (y * w2 + x) * bytes;
+                    out[at..at + bytes].copy_from_slice(&v.to_le_bytes()[..bytes]);
                 }
             }
             out
@@ -299,5 +383,5 @@ pub fn box_integer(f: u32, src: &[u8], w: usize, h: usize) -> Vec<u8> {
 
 /// Whether D3DX's box filter has an integer path for `f` (and the source is at least 2x2).
 pub fn has_integer_box(f: u32) -> bool {
-    matches!(f, format::A8R8G8B8 | format::X8R8G8B8) || fields16(f).is_some()
+    matches!(f, format::A8R8G8B8 | format::X8R8G8B8) || int_fields(f).is_some()
 }

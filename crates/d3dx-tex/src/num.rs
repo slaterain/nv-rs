@@ -551,6 +551,13 @@ pub const INV7: f32 = 1.0 / 7.0;
 pub const INV5: f32 = 1.0 / 5.0;
 pub const THIRD: f32 = 1.0 / 3.0;
 pub const TWO_THIRDS: f32 = 2.0 / 3.0;
+/// `1/65535` (L16's decoder).
+pub const INV65535: f32 = 1.0 / 65535.0;
+
+/// The luminance weights of D3DX's luminance encoders, red, green, blue.
+pub const LUM_R: f32 = 0.2125;
+pub const LUM_G: f32 = 0.7154;
+pub const LUM_B: f32 = 0.0721;
 
 /// The error diffusion weights (Floyd-Steinberg) the DLL's encoders use.
 pub const W7: f32 = 7.0 / 16.0;
@@ -563,7 +570,8 @@ mod tests {
     use super::*;
 
     /// The constants are the DLL's (its doubles at 0x407c10, 0x407c00, 0x4014f8, 0x407e58,
-    /// 0x407ee0, 0x408128, 0x407e70, 0x405bd0), read from its 32-bit `d3dx9_38.dll`.
+    /// 0x407ee0, 0x408128, 0x407e70, 0x405bd0, 0x406738, 0x4053f8, 0x4053f0, 0x4053e8), read
+    /// from its 32-bit `d3dx9_38.dll`.
     #[test]
     fn constants_are_the_dlls() {
         let dll = [
@@ -575,6 +583,10 @@ mod tests {
             (INV5, 0x3fc9_9999_a000_0000),
             (THIRD, 0x3fd5_5555_6000_0000),
             (TWO_THIRDS, 0x3fe5_5555_6000_0000),
+            (INV65535, 0x3ef0_0010_0000_0000),
+            (LUM_R, 0x3fcb_3333_4000_0000),
+            (LUM_G, 0x3fe6_e48e_8000_0000),
+            (LUM_B, 0x3fb2_7525_4000_0000),
         ];
         for (ours, theirs) in dll {
             assert_eq!(f64::from(ours).to_bits(), theirs);

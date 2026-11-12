@@ -1,11 +1,12 @@
 //! The crate against the 32-bit `d3dx9_38.dll` on devices that take other formats than the
 //! reference machine's: `data/proxy_32bit.tsv` (`proxy_32bit_double.tsv` on a thread at 53 bits),
 //! captured with `scripts/d3dx-tex-verify --capture-proxy` through `d3dx-measure serve proxy` (a
-//! proxy of a real device whose `CheckDeviceFormat` answers from given lists). Six devices: one
+//! proxy of a real device whose `CheckDeviceFormat` answers from given lists). Seven devices: one
 //! with only the 16-bit and DXT formats (a cube list of its own), one taking every format of D3DX's
-//! table, four with random lists. For each, D3DX's pick for every format of its table as a texture
-//! and as a cube, and the textures it makes of the synthetic files there: conversions into
-//! R5G6B5 and A1R5G5B5 with the dither, X4R4G4B4 kept, the cube list used for cube maps.
+//! table, four with random lists, one taking only X8R8G8B8, L8 and DXT. For each, D3DX's pick for
+//! every format of its table as a texture and as a cube, and the textures it makes of the synthetic
+//! files there: conversions into R5G6B5 and A1R5G5B5 with the dither, X4R4G4B4 and A4L4 kept, L16
+//! made L8 with the dither, the cube list used for cube maps.
 
 fn hex(s: &str) -> u32 {
     u32::from_str_radix(s, 16).unwrap()
@@ -124,16 +125,21 @@ fn proxy(data: &str, precision: d3dx_tex::Precision) {
             other => panic!("a line of kind {other}"),
         }
     }
-    // Six devices, every format of D3DX's table as a texture and as a cube; most files made.
-    assert_eq!(picks, 6 * 57 * 2);
+    // Seven devices, every format of D3DX's table as a texture and as a cube; most files made.
+    assert_eq!(picks, 7 * 57 * 2);
     assert!(made > 3 * left, "{made} made, {left} left to the caller");
     // What only these devices reach: on the 16-bit one, A8R8G8B8 made A1R5G5B5 and X8R8G8B8 made
-    // R5G6B5 (the dithered encoders); on the one taking everything, X4R4G4B4 kept.
+    // R5G6B5 (the dithered encoders), L8 made R5G6B5; on the one taking everything, X4R4G4B4 and
+    // A4L4 kept; on the one taking L8, L16 made L8 (L8's dithered encoder).
     for (device, file, format) in [
         ("0", "a8r8g8b8-32-one", 25),
         ("0", "x8r8g8b8-32x8-one", 23),
         ("1", "x4r4g4b4-32-one", 30),
         ("1", "x4r4g4b4-64x1-edges-one", 30),
+        ("1", "a4l4-32-one", 52),
+        ("0", "l8-32-one", 23),
+        ("6", "l16-32-one", 50),
+        ("6", "l16-64x1-pairs-one", 50),
     ] {
         let key = (device.to_string(), file.to_string(), format);
         assert!(textures.contains(&key), "{key:?} not made");
