@@ -79,6 +79,9 @@ pub(super) struct LayoutParts {
     /// The layout's sets with `VK_PIPELINE_LAYOUT_CREATE_INDEPENDENT_SETS_BIT_EXT`: render
     /// pipelines are made with it, and descriptor sets for draws are bound with it.
     independent: vk::PipelineLayout,
+    /// The groups without a binding (bit per group index): left out of every layout here, so their
+    /// (empty) descriptor sets are not bound for draws ([`super::PipelineLayout::skips_group`]).
+    empty_groups: u32,
     vertex: Arc<StageLayout>,
     fragment: Arc<StageLayout>,
     device: ash::Device,
@@ -126,25 +129,29 @@ impl LayoutParts {
         if !device.private_caps.extras.pipeline_library {
             return Ok(None);
         }
-        // Each set: its layout and its entries. A gap is the published layout's empty set, and an empty
-        // set (a gap, or a group without bindings) is in every stage's layout: no shader reads it, and
-        // every stage then has it identically defined.
+        // Each group with a binding: its set layout and entries. A group without one (a gap, or an
+        // empty group) is left out of every layout here (`VK_NULL_HANDLE`): no shader reads it, and a
+        // stage's library key then does not depend on whether its partner's group is empty.
         let draw_stages = wgt::ShaderStages::VERTEX | wgt::ShaderStages::FRAGMENT;
-        let mut groups: Vec<(vk::DescriptorSetLayout, Arc<[wgt::BindGroupLayoutEntry]>)> =
+        let mut groups: Vec<Option<(vk::DescriptorSetLayout, Arc<[wgt::BindGroupLayoutEntry]>)>> =
             Vec::with_capacity(desc.bind_group_layouts.len());
-        for bgl in desc.bind_group_layouts {
+        let mut empty_groups = 0;
+        for (index, bgl) in desc.bind_group_layouts.iter().enumerate() {
             match bgl {
-                None => groups.push((device.empty_descriptor_set_layout, Arc::from([]))),
-                Some(bgl)
-                    if bgl.entries.is_empty()
-                        || bgl
-                            .entries
-                            .iter()
-                            .any(|e| e.visibility.intersects(draw_stages)) =>
-                {
-                    groups.push((bgl.raw, Arc::from(&bgl.entries[..])))
+                Some(bgl) if !bgl.entries.is_empty() => {
+                    if !bgl
+                        .entries
+                        .iter()
+                        .any(|e| e.visibility.intersects(draw_stages))
+                    {
+                        return Ok(None);
+                    }
+                    groups.push(Some((bgl.raw, Arc::from(&bgl.entries[..]))));
                 }
-                _ => return Ok(None),
+                _ => {
+                    empty_groups |= 1 << index;
+                    groups.push(None);
+                }
             }
         }
         let create = |sets: &[vk::DescriptorSetLayout]| {
@@ -158,9 +165,12 @@ impl LayoutParts {
         let stage = |visible: wgt::ShaderStages| -> Result<Arc<StageLayout>, crate::DeviceError> {
             let mut sets = Vec::with_capacity(groups.len());
             let mut key = Vec::with_capacity(groups.len());
-            for &(raw, ref entries) in &groups {
-                if entries.is_empty() || entries.iter().any(|e| e.visibility.intersects(visible)) {
-                    sets.push(raw);
+            for group in &groups {
+                if let Some((raw, entries)) = group
+                    .as_ref()
+                    .filter(|(_, e)| e.iter().any(|e| e.visibility.intersects(visible)))
+                {
+                    sets.push(*raw);
                     key.push(Some(Arc::clone(entries)));
                 } else {
                     sets.push(vk::DescriptorSetLayout::null());
@@ -178,9 +188,16 @@ impl LayoutParts {
         };
         let vertex = stage(wgt::ShaderStages::VERTEX)?;
         let fragment = stage(wgt::ShaderStages::FRAGMENT)?;
-        let all: Vec<vk::DescriptorSetLayout> = groups.iter().map(|&(raw, _)| raw).collect();
+        let all: Vec<vk::DescriptorSetLayout> = groups
+            .iter()
+            .map(|g| {
+                g.as_ref()
+                    .map_or(vk::DescriptorSetLayout::null(), |&(raw, _)| raw)
+            })
+            .collect();
         Ok(Some(Self {
             independent: create(&all)?,
+            empty_groups,
             vertex,
             fragment,
             device: device.raw.clone(),
@@ -195,6 +212,17 @@ impl super::PipelineLayout {
         match self.libraries {
             Some(ref parts) if bind_point == vk::PipelineBindPoint::GRAPHICS => parts.independent,
             _ => self.raw,
+        }
+    }
+
+    /// Whether a group's descriptor set is not bound at `bind_point`: one without a binding, which
+    /// the independent-sets layout leaves out (no shader reads it).
+    pub(super) fn skips_group(&self, bind_point: vk::PipelineBindPoint, index: u32) -> bool {
+        match self.libraries {
+            Some(ref parts) if bind_point == vk::PipelineBindPoint::GRAPHICS => {
+                parts.empty_groups & (1 << index) != 0
+            }
+            _ => false,
         }
     }
 }

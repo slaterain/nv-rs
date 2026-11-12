@@ -974,6 +974,10 @@ impl crate::CommandEncoder for super::CommandEncoder {
         group: &super::BindGroup,
         dynamic_offsets: &[wgt::DynamicOffset],
     ) {
+        // nv-rs: a group without bindings is left out of the layout draws use (pipeline_library.rs).
+        if layout.skips_group(self.bind_point, index) {
+            return;
+        }
         let sets = [group.set.raw()];
         unsafe {
             self.device.raw.cmd_bind_descriptor_sets(
