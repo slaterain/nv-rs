@@ -254,12 +254,13 @@ fn the_setters_set_the_traits_tile() {
         0,
         &[s("HUDMainMenu/a/string"), s("%g pts"), z(5.0)],
     );
-    // A format with more specifiers than arguments sets nothing.
-    call(
+    // A format with more specifiers than the counted arguments sets nothing (the bytes after
+    // them, here another number, are not read).
+    call_counted(
         &mut e,
         0x14e2,
-        0,
-        &[s("HUDMainMenu/a/string"), s("%g and %g"), z(5.0)],
+        3,
+        &[s("HUDMainMenu/a/string"), s("%g and %g"), z(5.0), z(7.0)],
     );
     call(&mut e, 0x14a5, 0, &[s("HUDMainMenu/a/width"), z(4.0)]);
     assert_eq!(
@@ -501,4 +502,22 @@ fn the_sort_matches_msvcs_own() {
             .collect();
         assert_eq!(v, want, "{head}");
     }
+}
+
+/// [`call`] with the arguments' count word set to `count`, whatever follows the counted
+/// arguments left in the data (as the next bytes of a compiled script are).
+fn call_counted(e: &mut Engine, opcode: u32, count: u16, args: &[Vec<u8>]) -> (u32, f64) {
+    let bytes: Vec<u8> = args.concat();
+    e.mem.set_u16(DATA, opcode as u16);
+    e.mem.set_u16(DATA + 2, bytes.len() as u16 + 2);
+    e.mem.set_u16(DATA + 4, count);
+    e.mem.write(DATA + 6, &bytes);
+    e.mem.set_u32(OFFSET, 4);
+    e.mem.set_f64(RESULT, 0.0);
+    let record = crate::table::record_of(e, opcode);
+    let (params, execute) = (e.mem.u32(record + 0x14), e.mem.u32(record + 0x18));
+    let ok = e
+        .call(execute, &[params, DATA, 0, 0, SCRIPT, LIST, RESULT, OFFSET])
+        .eax;
+    (ok & 0xff, e.mem.f64(RESULT))
 }
