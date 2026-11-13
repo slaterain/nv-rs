@@ -18,7 +18,7 @@ const GLOBAL: u32 = AREA + 0x6200;
 pub(crate) const VTABLE: u32 = AREA + 0x7000;
 const HEAP_TOP: u32 = AREA + 0x7ffc;
 const HEAP: u32 = AREA + 0x8000;
-const NAME_FN: u32 = 0x7eff_e100;
+pub(crate) const NAME_FN: u32 = 0x7eff_e100;
 
 /// The exe's `g_gameScriptOperators` (`0x0118CAD0`), its 128 bytes.
 const OPERATOR_BYTES: &str = "00000000002800000100000000290000020000000126260003000000027c7c00\
@@ -55,7 +55,7 @@ pub(crate) fn text_at(e: &mut Engine, s: &str) -> u32 {
 }
 
 /// `TESForm::GetName` of the stand-in forms: the text pointer at `+0x60`.
-fn name_fn(e: &mut Engine, a: &[u32]) -> Ret {
+pub(crate) fn name_fn(e: &mut Engine, a: &[u32]) -> Ret {
     Ret {
         eax: e.mem.u32(a[0] + 0x60),
         ..Ret::default()
@@ -1060,17 +1060,17 @@ fn vanilla_shapes_decompile_by_the_rules() {
 // ---- the player's compiled scripts ----
 
 /// The exe's form type table: 0x79 entries of 12 bytes, `+4` the record signature's text.
-const FORM_TYPE_TABLE: u32 = 0x0118_7000;
+pub(crate) const FORM_TYPE_TABLE: u32 = 0x0118_7000;
 
 /// Stand-in forms for a real script's references: each a block with the name vtable, its id, its
 /// form type (the exe's table, by its record's signature) and, for a global, its editor id as
 /// its name (`TESGlobal::name`, which the game keeps).
-struct RealForms {
-    by_id: std::collections::HashMap<u32, u32>,
-    vtable: u32,
+pub(crate) struct RealForms {
+    pub(crate) by_id: std::collections::HashMap<u32, u32>,
+    pub(crate) vtable: u32,
 }
 
-fn real_form(
+pub(crate) fn real_form(
     e: &mut Engine,
     forms: &mut RealForms,
     plugin: &esm::Plugin,
@@ -1122,7 +1122,7 @@ fn real_form(
 
 /// A fake `__RTDynamicCast` for the stand-in forms, by form type: a reference (0x3A..=0x40,
 /// 0x69), a global (0x06), a quest (0x47).
-fn real_cast(e: &mut Engine, a: &[u32]) -> Ret {
+pub(crate) fn real_cast(e: &mut Engine, a: &[u32]) -> Ret {
     let (object, to) = (a[0], a[3]);
     let t = if object == 0 { 0 } else { e.mem.u8(object + 4) };
     let is = match to {
@@ -1142,7 +1142,7 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-fn real_lookup(_: &mut Engine, a: &[u32]) -> Ret {
+pub(crate) fn real_lookup(_: &mut Engine, a: &[u32]) -> Ret {
     Ret {
         eax: REAL_FORMS.with(|f| f.borrow().get(&a[0]).copied().unwrap_or(0)),
         ..Ret::default()
@@ -1152,7 +1152,7 @@ fn real_lookup(_: &mut Engine, a: &[u32]) -> Ret {
 /// A `Script` of the player's `FalloutNV.esm` as the game loads it: `SCHR` at `+0x18`, `SCDA` as
 /// its data, `SCRO`/`SCRV` as its reference list, `SLSD`/`SCVR` as its locals; its name the
 /// editor id (what `GetName` answers in the GECK and for the script files xNVSE writes).
-fn real_script(
+pub(crate) fn real_script(
     e: &mut Engine,
     forms: &mut RealForms,
     plugin: &esm::Plugin,

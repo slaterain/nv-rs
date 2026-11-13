@@ -2239,7 +2239,20 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 86);
+        assert_eq!(SITES.len(), 93);
+        // The run-time compiler's (I-14), xNVSE's.
+        for a in [
+            0x005a_ebb1,
+            0x005a_ed78,
+            0x005a_eda0,
+            0x005a_fedb,
+            0x005b_0a3f,
+            0x005b_0f68,
+            0x005b_19ba,
+            0x005b_3a8d,
+        ] {
+            assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
+        }
         // JIP LN NVSE's UI hooks (step 3.5a) and actor hooks (step 3.5b), JIP's alone.
         for a in [
             0x005b_46aa,

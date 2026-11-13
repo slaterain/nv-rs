@@ -24,6 +24,8 @@ const COMPILER: u32 = AREA + 0x3_f800;
 const GET_V: u32 = 0x1002;
 /// A test record parsed by xNVSE's expression parser: two parameters.
 const TWO: u32 = 0x1003;
+/// A reference that is not persistent (`GetFormByID("LooseRef")`).
+const LOOSE_REF: u32 = AREA + 0x2_a000;
 
 thread_local! {
     static CONSOLE_LINES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
@@ -32,7 +34,10 @@ thread_local! {
 
 fn console_print(e: &mut Engine, a: &[u32]) -> Ret {
     let text = guest_text(e, e.mem.u32(a[2]));
-    CONSOLE_LINES.with(|c| c.borrow_mut().push(String::from_utf8_lossy(&text).into_owned()));
+    CONSOLE_LINES.with(|c| {
+        c.borrow_mut()
+            .push(String::from_utf8_lossy(&text).into_owned())
+    });
     Ret::default()
 }
 
@@ -46,7 +51,8 @@ fn seen() -> Vec<String> {
 
 fn heap(e: &mut Engine, a: &[u32]) -> Ret {
     let at = e.mem.u32(HEAP_TOP).max(HEAP);
-    e.mem.set_u32(HEAP_TOP, at + a[0].max(1).next_multiple_of(8));
+    e.mem
+        .set_u32(HEAP_TOP, at + a[0].max(1).next_multiple_of(8));
     Ret {
         eax: at,
         ..Ret::default()
@@ -64,7 +70,9 @@ fn upper(_: &mut Engine, a: &[u32]) -> Ret {
 fn form_by_id(e: &mut Engine, a: &[u32]) -> Ret {
     let name = guest_text(e, a[0]);
     Ret {
-        eax: if name == b"PlayerRef" {
+        eax: if name == b"LooseRef" {
+            LOOSE_REF
+        } else if name == b"PlayerRef" {
             crate::decompile::tests::FORM_A
         } else if name == b"TestQuest" {
             crate::decompile::tests::FORM_B
@@ -283,7 +291,13 @@ fn numbers_and_precedence_compile_as_the_rules_write_them() {
     let mut e = engine();
     assert_eq!(
         compiled(&mut e, EVAL, "1 + 2 * 3"),
-        args_of(&[arg(&[b"B\x01", b"B\x02", b"B\x03", &[op::MULTIPLY], &[op::ADD]])])
+        args_of(&[arg(&[
+            b"B\x01",
+            b"B\x02",
+            b"B\x03",
+            &[op::MULTIPLY],
+            &[op::ADD]
+        ])])
     );
     let mut z = vec![b'Z'];
     z.extend_from_slice(&2.5f64.to_le_bytes());
@@ -461,8 +475,14 @@ fn arguments_end_at_a_comparison() {
         printed(),
         ["Error on line 7\n\nInvalid expression for parameter 2. Expected str."]
     );
-    assert_eq!(compiled(&mut e, TWO, "(4 == 5)"), args_of(&[arg(&[b"B\x04", b"B\x05", &[op::EQUALS]])]));
-    assert_eq!(compiled(&mut e, TWO, "1 2 == 0"), args_of(&[arg(&[b"B\x01"])]));
+    assert_eq!(
+        compiled(&mut e, TWO, "(4 == 5)"),
+        args_of(&[arg(&[b"B\x04", b"B\x05", &[op::EQUALS]])])
+    );
+    assert_eq!(
+        compiled(&mut e, TWO, "1 2 == 0"),
+        args_of(&[arg(&[b"B\x01"])])
+    );
 }
 
 /// Variables declared inside an expression get the next index, join the buffer's list and keep
@@ -475,7 +495,10 @@ fn variables_declared_in_an_expression() {
         args_of(&[arg(&[&v(1, 6), b"B\x05", &[op::ASSIGNMENT]])])
     );
     assert_eq!(e.mem.u32(BUF + sb::VAR_COUNT), 6);
-    let vars = crate::compile_hooks::buffer_variables(&e, BUF);
+    let vars: Vec<(u32, Vec<u8>)> = list_items(&e, BUF + sb::VARS)
+        .into_iter()
+        .map(|info| (e.mem.u32(info), string_cstr(&e, info + 0x18)))
+        .collect();
     assert_eq!(vars.last(), Some(&(6, b"j".to_vec())));
     assert_eq!(
         compiled(&mut e, LET, "int j := 6"),
@@ -502,16 +525,26 @@ fn errors_print_xnvses_texts() {
     for (text, want) in [
         ("(1 + 2", "Error line 7\n\nMismatched brackets."),
         ("\"abc", "Error line 7\n\nMismatched quotes."),
-        ("\"a\" + 1", "Error line 7\n\nInvalid operands for operator +"),
+        (
+            "\"a\" + 1",
+            "Error line 7\n\nInvalid operands for operator +",
+        ),
         ("1 )", "Error line 7\n\nMismatched brackets."),
         ("rx.zz", "Error line 7\n\nUnknown variable 'zz'."),
-        ("1 2", "Error line 7\n\nMore args provided than expected by function or command."),
+        (
+            "1 2",
+            "Error line 7\n\nMore args provided than expected by function or command.",
+        ),
         ("x->", "Error line 7\n\nToo many operators."),
     ] {
         let (ok, _) = compile(&mut e, EVAL, text);
         assert!(!ok, "{text}");
         let lines = printed();
-        assert_eq!(lines.first().map(String::as_str), Some(want), "{text}: {lines:?}");
+        assert_eq!(
+            lines.first().map(String::as_str),
+            Some(want),
+            "{text}: {lines:?}"
+        );
     }
     let (ok, _) = compile(&mut e, LET, "");
     assert!(!ok);
@@ -524,7 +557,10 @@ fn errors_print_xnvses_texts() {
         ("0x1G", "Error on line 7\n\nInvalid hexadecimal syntax"),
         ("0b", "Error on line 7\n\nInvalid binary syntax"),
         ("0b102", "Error on line 7\n\nInvalid binary syntax"),
-        ("0x100000000", "Error on line 7\n\nInvalid hexadecimal syntax"),
+        (
+            "0x100000000",
+            "Error on line 7\n\nInvalid hexadecimal syntax",
+        ),
     ] {
         let (ok, _) = compile(&mut e, EVAL, text);
         assert!(!ok, "{text}");
@@ -545,7 +581,11 @@ fn the_output_is_held_to_its_buffer() {
     assert!(lines
         .iter()
         .any(|l| l == "Line data buffer overflow! To fix this make the line shorter in length."));
-    assert_eq!(e.mem.u32(LINE + ln::NUMBER), 7, "the line's fields are untouched");
+    assert_eq!(
+        e.mem.u32(LINE + ln::NUMBER),
+        7,
+        "the line's fields are untouched"
+    );
 }
 
 /// `while`: room for the jump word (where the script's data will hold it is kept), then the
@@ -588,7 +628,9 @@ fn a_function_definition_lists_its_parameters() {
     e.mem.set_u8(BUF_TEXT + text.len() as u32, 0);
     let (ok, _) = compile(&mut e, FUNCTION, "{nope}");
     assert!(!ok);
-    assert!(printed()[0].starts_with("Error line 7\n\nCould not parse user function parameter list"));
+    assert!(
+        printed()[0].starts_with("Error line 7\n\nCould not parse user function parameter list")
+    );
 }
 
 /// `Call`: a function in a reference variable has no text to check its arguments with: ten
@@ -649,7 +691,11 @@ fn lambdas_compile_as_scripts_of_their_own() {
     e.mem.set_u32(0x011c_adbc, 0x1234);
     // A lambda is a form: a reference variable takes it.
     assert_eq!(
-        compiled(&mut e, LET, "rx := begin function {} SetFunctionValue 5 end"),
+        compiled(
+            &mut e,
+            LET,
+            "rx := begin function {} SetFunctionValue 5 end"
+        ),
         args_of(&[arg(&[&v(4, 3), &f, &[op::ASSIGNMENT]])])
     );
     let (text, name, line) = LAMBDA.with(|l| l.borrow().clone());
@@ -745,11 +791,17 @@ fn a_compile_starts_and_ends() {
     let at = text.find('#').unwrap() as u32;
     assert_eq!(e.mem.u8(BUF_TEXT + at), b';');
     // The preprocessor saw `int i`.
-    assert_eq!(crate::compile_hooks::saved_var_type(&mut e, SCRIPT, b"i"), vt::INTEGER);
+    assert_eq!(
+        crate::compile_hooks::saved_var_type(&mut e, SCRIPT, b"i"),
+        vt::INTEGER
+    );
     assert_eq!(e.site(0x005a_eda0, &[1, BUF]), Some(1));
     assert!(crate::compile_hooks::compiling(&mut e).is_empty());
     assert_eq!(e.mem.u8(BUF_TEXT + at), b'#');
-    assert_eq!(crate::compile_hooks::saved_var_type(&mut e, SCRIPT, b"i"), vt::INVALID);
+    assert_eq!(
+        crate::compile_hooks::saved_var_type(&mut e, SCRIPT, b"i"),
+        vt::INVALID
+    );
     // A tag naming a plugin that is not built in fails the compile.
     set_buf_text(&mut e, "#version(\"Nope\", 1)\r\n");
     assert_eq!(e.site(0x005a_ebb1, &[SCRIPT, BUF]), Some(0));
@@ -765,14 +817,35 @@ fn a_compile_starts_and_ends() {
 fn the_preprocessor_checks_blocks_loops_and_declarations() {
     let mut e = installed();
     for (text, want) in [
-        ("if x\r\nendif\r\nendif\r\n", Some("Invalid If/EndIf block structure on line 3.")),
-        ("while x\r\nendif\r\n", Some("Invalid Loop block structure on line 2.")),
-        ("break\r\n", Some("Error line 1:\nFunction break must be called from within a loop.")),
-        ("while x\r\nreturn\r\nloop\r\n", Some("Error line 2:\nReturn cannot be called within the body of a loop.")),
+        (
+            "if x\r\nendif\r\nendif\r\n",
+            Some("Invalid If/EndIf block structure on line 3."),
+        ),
+        (
+            "while x\r\nendif\r\n",
+            Some("Invalid Loop block structure on line 2."),
+        ),
+        (
+            "break\r\n",
+            Some("Error line 1:\nFunction break must be called from within a loop."),
+        ),
+        (
+            "while x\r\nreturn\r\nloop\r\n",
+            Some("Error line 2:\nReturn cannot be called within the body of a loop."),
+        ),
         ("if x\r\n", Some("Error: Mismatched block structure.")),
-        ("array_var a\r\nset a to 1\r\n", Some("Error line 2:\nSet may not be used to assign to an array variable")),
-        ("int a\r\nfloat a\r\n", Some("Variable redefinition with a different type (saw first 'int', then 'float')")),
-        ("if x ; endif\r\n\r\nendif\r\nwhile x\r\ncontinue\r\nloop\r\nint b = 1\r\nfloat b\r\n", None),
+        (
+            "array_var a\r\nset a to 1\r\n",
+            Some("Error line 2:\nSet may not be used to assign to an array variable"),
+        ),
+        (
+            "int a\r\nfloat a\r\n",
+            Some("Variable redefinition with a different type (saw first 'int', then 'float')"),
+        ),
+        (
+            "if x ; endif\r\n\r\nendif\r\nwhile x\r\ncontinue\r\nloop\r\nint b = 1\r\nfloat b\r\n",
+            None,
+        ),
         ("/* if x */ int c\r\n", None),
     ] {
         set_buf_text(&mut e, text);
@@ -800,7 +873,11 @@ fn the_preprocessor_checks_blocks_loops_and_declarations() {
 fn the_compilers_seams_answer_as_xnvses_hooks() {
     let mut e = installed();
     let word = AREA + 0x2_8000;
-    for (name, want) in [("Let", Some(0x1539)), ("LET", Some(0x1539)), ("nothing", None)] {
+    for (name, want) in [
+        ("Let", Some(0x1539)),
+        ("LET", Some(0x1539)),
+        ("nothing", None),
+    ] {
         e.mem.write(word, &[0; 0x214]);
         e.mem.write(word, name.as_bytes());
         let answer = e.site(0x005b_19ba, &[word]);
@@ -846,7 +923,10 @@ fn the_script_data_grows_past_its_block() {
     assert_eq!(e.site(0x005b_0f68, &[BUF, LINE]), Some(1));
     let grown = e.mem.u32(BUF + sb::DATA);
     assert_ne!(grown, data);
-    assert_eq!(e.mem.bytes(grown, 0x40), [vec![7; 0x10], vec![0; 0x30]].concat());
+    assert_eq!(
+        e.mem.bytes(grown, 0x40),
+        [vec![7; 0x10], vec![0; 0x30]].concat()
+    );
 }
 
 // ---- the text readers ----
@@ -857,7 +937,8 @@ fn the_script_data_grows_past_its_block() {
 fn declared_types_come_from_the_text() {
     let mut e = engine();
     let text = b"scn A\nshort a, b ; comment\nbegin function {ref r, c}\nstring_var d\n";
-    let t = |e: &mut Engine, n: &[u8]| crate::compile_hooks::declared_variable_type(e, n, text, 0x77);
+    let t =
+        |e: &mut Engine, n: &[u8]| crate::compile_hooks::declared_variable_type(e, n, text, 0x77);
     assert_eq!(t(&mut e, b"b"), vt::INTEGER);
     assert_eq!(t(&mut e, b"r"), vt::REF);
     assert_eq!(t(&mut e, b"c"), vt::INVALID);
@@ -878,7 +959,16 @@ fn declared_types_come_from_the_text() {
 #[test]
 fn the_script_tokenizer_leaves_comments_out() {
     use crate::compile_hooks::ScriptTokenizer;
-    let text = b"  a b;c\r\n\r\n/* x\r\n y */ d \"e f\"\n; g\nh/* i */ j\n/*;*/ k\n";
+    let text =
+        b"  a b;c
+
+/* x
+ y */ d \"e f\"
+; g
+h/* i */ j
+/*;*/ k
+m n;
+";
     let mut t = ScriptTokenizer::new(text);
     let mut lines = Vec::new();
     while t.load_next_line() {
@@ -892,5 +982,363 @@ fn the_script_tokenizer_leaves_comments_out() {
         }
         lines.push(words.join(","));
     }
-    assert_eq!(lines, ["a,b;c", "d,\"e f\"", "h,j"]);
+    assert_eq!(lines, ["a,b;c", "d,\"e f\"", "h,j", "m,n"]);
+}
+
+// ---- (c) the player's plugins ----
+
+/// A compiled script's lines (`SCDA`): the opcode, whether it is called on a reference (`0x1C`
+/// first), the bytes after the length word.
+fn compiled_lines(data: &[u8]) -> Vec<(u32, bool, Vec<u8>)> {
+    let word = |i: usize| usize::from(u16::from_le_bytes([data[i], data[i + 1]]));
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 4 <= data.len() {
+        let (op, len, at, on_ref) = if word(i) == 0x1c {
+            if i + 8 > data.len() {
+                break;
+            }
+            (word(i + 4), word(i + 6), i + 8, true)
+        } else {
+            (word(i), word(i + 2), i + 4, false)
+        };
+        let end = (at + len).min(data.len());
+        out.push((op as u32, on_ref, data[at..end].to_vec()));
+        i = at + len;
+    }
+    out
+}
+
+/// A script source's lines that compile to a line of data: comments left out, blank lines and
+/// declarations passed over.
+fn code_lines(text: &[u8]) -> Vec<String> {
+    let text = crate::compile_hooks::remove_multi_line_comments(text);
+    let mut out = Vec::new();
+    for raw in text.split(|&c| c == b'\n') {
+        let mut line = Vec::new();
+        let mut quoted = false;
+        for &c in raw {
+            if c == b'"' {
+                quoted = !quoted;
+            }
+            if c == b';' && !quoted {
+                break;
+            }
+            line.push(c);
+        }
+        let line = String::from_utf8_lossy(&line).trim().to_string();
+        let first = line
+            .split([' ', '\t'])
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let declaration = [
+            "short",
+            "long",
+            "float",
+            "int",
+            "ref",
+            "reference",
+            "string_var",
+            "array_var",
+        ]
+        .contains(&first.as_str());
+        if !line.is_empty() && !declaration {
+            out.push(line);
+        }
+    }
+    out
+}
+
+thread_local! {
+    static NEEDS_GAME_PARSER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static PLUGIN_NAMES: RefCell<Vec<(Vec<u8>, u32)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The lines of the player's scripts that xNVSE's compiler wrote (the commands parsed by its
+/// parse routines), compiled again here from their source (`SCTX`) and compared byte for byte
+/// with the plugin's compiled data (`SCDA`). The plugins are `NV_COMPILE_PLUGINS` (names in
+/// `NV_DATA`, separated by commas); the exe beside `NV_DATA` gives the game's records. A line
+/// called on a reference, or whose command calls the game's own parser inside it, is passed
+/// over (counted). With `NV_COMPILE_DUMP` (a file path) every compared line is written there.
+/// Nothing of the files is kept in the repository.
+#[test]
+#[ignore = "needs the player's FalloutNV.exe and plugins compiled with xNVSE (NV_DATA, NV_COMPILE_PLUGINS)"]
+fn the_players_xnvse_lines_compile_to_their_bytes() {
+    use crate::decompile::tests::{real_cast, real_lookup, real_script, RealForms};
+    let data = std::path::PathBuf::from(std::env::var("NV_DATA").expect("NV_DATA"));
+    let plugins = std::env::var("NV_COMPILE_PLUGINS").expect("NV_COMPILE_PLUGINS");
+    let exe = data
+        .parent()
+        .expect("the game's folder")
+        .join("FalloutNV.exe");
+    let mut e = Engine::with_exe(&exe).expect("FalloutNV.exe");
+    crate::table::install(&mut e);
+    let vtable = e.mem.alloc(0x200);
+    e.mem.write(vtable, &[0; 0x200]);
+    e.mem
+        .set_u32(vtable + 0x130, crate::decompile::tests::NAME_FN);
+    e.register(
+        crate::decompile::tests::NAME_FN,
+        crate::decompile::tests::name_fn,
+    );
+    let is_ref = 0x7eff_e200;
+    e.mem.set_u32(vtable + 0xf0, is_ref);
+    e.register(is_ref, |e, a| Ret {
+        eax: u32::from((0x3a..=0x40).contains(&e.mem.u8(a[0] + 4))),
+        ..Ret::default()
+    });
+    e.register(DYNAMIC_CAST, real_cast);
+    e.register(LOOKUP_FORM, real_lookup);
+    e.register(0x0041_0220, |_, _| Ret::default());
+    e.register(FORM_HEAP_ALLOCATE, |e, a| Ret {
+        eax: e.mem.alloc(a[0].max(1)),
+        ..Ret::default()
+    });
+    e.register(FORM_HEAP_FREE, nothing);
+    e.register(0x00ec_a7f4, upper);
+    e.register(0x0071_b160, nothing);
+    e.register(0x005b_1ba0, |_, _| {
+        NEEDS_GAME_PARSER.with(|n| n.set(true));
+        Ret::default()
+    });
+    e.register(FORM_BY_EDITOR_ID, |e, a| {
+        let name = guest_text(e, a[0]);
+        let id = PLUGIN_NAMES.with(|p| {
+            p.borrow()
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(&name))
+                .map(|(_, id)| *id)
+        });
+        Ret {
+            eax: id.map_or(0, |id| real_lookup(e, &[id]).eax),
+            ..Ret::default()
+        }
+    });
+    let mut types = std::collections::HashMap::new();
+    for t in 0..0x79u32 {
+        let at = e
+            .mem
+            .u32(crate::decompile::tests::FORM_TYPE_TABLE + 12 * t + 4);
+        if at != 0 {
+            let s = e.mem.bytes(at, 4);
+            types.insert([s[0], s[1], s[2], s[3]], t as u8);
+        }
+    }
+    let parse_words = [
+        crate::table::EXPRESSION_PARSE,
+        crate::table::LET_PARSE,
+        crate::table::BEGIN_LOOP_PARSE,
+        crate::table::LOOP_PARSE,
+        crate::table::NULL_PARSE,
+        crate::table::FUNCTION_PARSE,
+        crate::table::CALL_PARSE,
+    ];
+    let ours = |e: &Engine, op: u32| {
+        let r = record_of(e, op);
+        r != 0 && parse_words.contains(&e.mem.u32(r + 0x1c))
+    };
+    let buf = e.mem.alloc(sb::SIZE);
+    let line = e.mem.alloc(ln::STRUCT);
+    let (mut compared, mut passed_over) = (0, 0);
+    let mut mismatches = Vec::new();
+    let mut dump = String::new();
+    for file in plugins.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        let plugin = esm::Plugin::open(data.join(file)).expect("the plugin");
+        let mut forms = RealForms {
+            by_id: std::collections::HashMap::new(),
+            vtable,
+        };
+        for entry in plugin.records_of_type(esm::FourCC(*b"SCPT")) {
+            let scpt = plugin.record(entry).expect("SCPT");
+            let sub = |k: &[u8; 4]| {
+                scpt.get(esm::FourCC(*k))
+                    .map(|s| s.data.clone())
+                    .unwrap_or_default()
+            };
+            let (source, code) = (sub(b"SCTX"), sub(b"SCDA"));
+            let lines = compiled_lines(&code);
+            if !lines.iter().any(|(op, _, _)| ours(&e, *op)) {
+                continue;
+            }
+            let texts = code_lines(&source);
+            if texts.len() != lines.len() {
+                passed_over += 1;
+                continue;
+            }
+            let script_name = scpt.editor_id().unwrap_or_default();
+            let script = real_script(&mut e, &mut forms, &plugin, &types, &scpt);
+            // The reference list's names: the forms' editor ids (the player's as the source
+            // writes it).
+            let lower = String::from_utf8_lossy(&source).to_ascii_lowercase();
+            let mut names = Vec::new();
+            for r in list_items(&e, script + sc::REFS) {
+                let form = e.mem.u32(r + 8);
+                if form == 0 {
+                    continue;
+                }
+                let id = e.mem.u32(form + 0xc);
+                let edid = plugin
+                    .get(esm::FormId(id))
+                    .and_then(|x| plugin.editor_id_of(x).ok().flatten())
+                    .unwrap_or_default();
+                let name = if id == 0x14 && lower.contains("player") && !lower.contains("playerref")
+                {
+                    "player".to_string()
+                } else {
+                    edid
+                };
+                string_set(&mut e, r, name.as_bytes());
+                names.push((name.into_bytes(), id));
+            }
+            PLUGIN_NAMES.with(|p| *p.borrow_mut() = names);
+            e.mem.write(buf, &[0; sb::SIZE as usize]);
+            let text = heap_text(&mut e, &source);
+            e.mem.set_u32(buf + sb::TEXT, text);
+            e.mem.set_u32(script + sc::TEXT, text);
+            e.mem.set_u32(buf + sb::CURRENT_SCRIPT, script);
+            for at in [0u32, 4, 8, 0xc] {
+                let v = e.mem.u32(script + sc::UNUSED_VARS + at);
+                e.mem.set_u32(buf + sb::UNUSED_VARS + at, v);
+            }
+            let kind = e.mem.u16(script + 0x28);
+            e.mem.set_u16(buf + sb::TYPE, kind);
+            let refs = e.mem.bytes(script + sc::REFS, 8);
+            e.mem.write(buf + sb::REFS, &refs);
+            let vars = e.mem.bytes(script + sc::VARS, 8);
+            e.mem.write(buf + sb::VARS, &vars);
+            for (number, (text, (op, on_ref, want))) in texts.iter().zip(&lines).enumerate() {
+                if !ours(&e, *op) {
+                    continue;
+                }
+                let record = record_of(&e, *op);
+                let (first, rest) = text
+                    .split_once([' ', '\t'])
+                    .unwrap_or((text.as_str(), ""));
+                if *on_ref || crate::table::opcode_by_name(&e, first.as_bytes()) != Some(*op) {
+                    passed_over += 1;
+                    continue;
+                }
+                e.mem.write(line, &[0; ln::STRUCT as usize]);
+                e.mem.set_u32(line + ln::NUMBER, number as u32 + 1);
+                let rest = rest.as_bytes();
+                e.mem
+                    .write(line + ln::TEXT, &rest[..rest.len().min(0x1ff)]);
+                e.mem.set_u32(line + ln::OPCODE, *op);
+                NEEDS_GAME_PARSER.with(|n| n.set(false));
+                let parse = e.mem.u32(record + 0x1c);
+                let count = u32::from(e.mem.u16(record + 0x12));
+                let params = e.mem.u32(record + 0x14);
+                let ok = e.call(parse, &[count, params, line, buf]).bool();
+                if NEEDS_GAME_PARSER.with(std::cell::Cell::get) {
+                    passed_over += 1;
+                    continue;
+                }
+                let len = e.mem.u32(line + ln::DATA_LEN).min(ln::SIZE);
+                let got = e.mem.bytes(line + ln::DATA, len);
+                compared += 1;
+                dump.push_str(&format!(
+                    "{script_name}: {text}\n  want {want:02x?}\n  got  {got:02x?}\n"
+                ));
+                if !ok || got != *want {
+                    mismatches.push(format!("{script_name}: {text}"));
+                }
+            }
+        }
+    }
+    if let Some(path) = std::env::var_os("NV_COMPILE_DUMP") {
+        std::fs::write(path, &dump).expect("the dump file");
+    }
+    eprintln!("compared {compared} lines, passed over {passed_over}");
+    assert!(compared > 0, "no line of xNVSE's compiler in {plugins}");
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+// ---- more rules ----
+
+/// The number widths' edges: 255 is a byte, 256 a short, 65535 a short, 65536 an int.
+#[test]
+fn number_widths_change_at_their_edges() {
+    let mut e = engine();
+    assert_eq!(
+        compiled(&mut e, EVAL, "255 + 256 + 65535 + 65536"),
+        args_of(&[arg(&[
+            b"B\xff",
+            b"I\x00\x01",
+            &[op::ADD],
+            b"I\xff\xff",
+            &[op::ADD],
+            b"L\x00\x00\x01\x00",
+            &[op::ADD],
+        ])])
+    );
+}
+
+/// An operator's rules: an asymmetric rule only one way round (`2 := x` is refused), the
+/// logical operators give their right operand's type (a string variable takes `x && "a"`).
+#[test]
+fn operator_rules_choose_the_result_type() {
+    let mut e = engine();
+    let (ok, _) = compile(&mut e, LET, "2 := x");
+    assert!(!ok);
+    assert_eq!(
+        printed(),
+        ["Error line 7\n\nInvalid operands for operator :="]
+    );
+    assert_eq!(
+        compiled(&mut e, LET, "s := x && \"a\""),
+        args_of(&[arg(&[
+            &v(2, 4),
+            &v(0, 1),
+            b"S\x01\x00a",
+            &[op::LOGICAL_AND],
+            &[op::ASSIGNMENT],
+        ])])
+    );
+    assert!(printed().is_empty());
+}
+
+/// A command inside an expression takes the rest of the text: what its own arguments leave is
+/// not a second argument's error inside (`TypeOf x 5` is `TypeOf x`); the line goes on past it.
+#[test]
+fn a_nested_command_takes_the_rest_of_the_line() {
+    let mut e = engine();
+    let short = compiled(&mut e, EVAL, "TypeOf x");
+    assert_eq!(compiled(&mut e, EVAL, "TypeOf x 5"), short);
+    assert!(printed().is_empty());
+}
+
+/// A reference that is not persistent cannot be named in a script: the word is a string, with
+/// the warning.
+#[test]
+fn a_reference_that_is_not_persistent_is_a_string() {
+    let mut e = engine();
+    e.mem.write(LOOSE_REF, &[0; 0x800]);
+    crate::commands::test_support::set_classes(&mut e, LOOSE_REF, 1);
+    assert_eq!(
+        compiled(&mut e, EVAL, "LooseRef"),
+        args_of(&[arg(&[b"S\x08\x00LooseRef"])])
+    );
+    assert_eq!(printed().len(), 1);
+    e.mem.set_u32(LOOSE_REF + 8, 0x400);
+    assert_eq!(compiled(&mut e, EVAL, "LooseRef"), args_of(&[arg(&[b"R\x04\x00"])]));
+}
+
+/// The dot syntax on a command's result: the right-hand command takes its calling reference
+/// from the stack (`x`), the dot is written after it, and the type is the right-hand command's.
+#[test]
+fn a_dot_after_a_result_calls_on_the_stack() {
+    let mut e = engine();
+    e.ext::<Nvse>().table.returns[(GET_V - 0x1000) as usize] = Returns::Form;
+    let mut first = vec![b'X', 0, 0];
+    first.extend_from_slice(&(GET_V as u16).to_le_bytes());
+    first.extend_from_slice(&[9, 0, 1, 0, b'n', 1, 0, 0, 0]);
+    let mut second = vec![b'x', 0, 0];
+    second.extend_from_slice(&(GET_V as u16).to_le_bytes());
+    second.extend_from_slice(&[9, 0, 1, 0, b'n', 2, 0, 0, 0]);
+    assert_eq!(
+        compiled(&mut e, EVAL, "(GetV 1).GetV 2"),
+        args_of(&[arg(&[&first, &second, &[op::DOT]])])
+    );
+    assert!(printed().is_empty());
 }

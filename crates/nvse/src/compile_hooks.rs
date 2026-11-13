@@ -31,7 +31,7 @@
 //! rather than xNVSE's compiler.
 
 use crate::compiler::{
-    self, is_space, list_items, ln, opt_text, sb, sc, show_error, state, str_equal, vt,
+    self, is_space, ln, opt_text, sb, sc, show_error, state, str_equal, vt,
 };
 use crate::table::opcode_by_name;
 use engine_core::extend::{Owner, SiteSlot};
@@ -101,9 +101,7 @@ fn check_references(e: &mut Engine, _: &[u32]) -> Option<u32> {
 fn script_size_limit(e: &mut Engine, w: &[u32]) -> Option<u32> {
     let (buf, line) = (w[0], w[1]);
     let data = e.mem.u32(buf + sb::DATA);
-    let size = e
-        .call(HEAP_MEMORY_SIZE, &args![HEAP_MANAGER, data])
-        .u32();
+    let size = e.call(HEAP_MEMORY_SIZE, &args![HEAP_MANAGER, data]).u32();
     let offset = e.mem.u32(buf + sb::DATA_OFFSET);
     let need = offset
         .wrapping_add(e.mem.u32(line + ln::DATA_LEN))
@@ -117,9 +115,7 @@ fn script_size_limit(e: &mut Engine, w: &[u32]) -> Option<u32> {
         return None;
     }
     let grown = size * 2;
-    let block = e
-        .call(compiler::FORM_HEAP_ALLOCATE, &args![grown])
-        .u32();
+    let block = e.call(compiler::FORM_HEAP_ALLOCATE, &args![grown]).u32();
     e.mem.write(block, &vec![0; grown as usize]);
     let old = e.mem.bytes(data, offset.min(grown));
     e.mem.write(block, &old);
@@ -400,7 +396,7 @@ impl<'a> Tokenizer<'a> {
     }
 
     // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Utilities.cpp: Tokenizer::ToNewLine.
-    fn to_new_line(&mut self) -> Vec<u8> {
+    fn rest_of_line(&mut self) -> Vec<u8> {
         if self.offset == self.data.len() {
             return Vec::new();
         }
@@ -496,8 +492,8 @@ impl<'a> ScriptTokenizer<'a> {
                     if view_end - pos < 2 || t[pos] != b'/' || t[pos + 1] != b'*' {
                         break;
                     }
-                    let spans_lines = pos + 2 == line_end
-                        || find(&t[..view_end], b"*/", pos).is_none();
+                    let spans_lines =
+                        pos + 2 == line_end || find(&t[..view_end], b"*/", pos).is_none();
                     if spans_lines {
                         self.in_comment = true;
                         self.offset = find_first_not_of(t, BLANKS, line_end).unwrap_or(len);
@@ -821,7 +817,7 @@ const BLOCKS: [(&[u8], Block, bool, bool); 7] = [
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptUtils.cpp:
 // Preprocessor::RemoveMultiLineComments.
 /// `RemoveMultiLineComments`: `/* ... */` left out outside strings.
-fn remove_multi_line_comments(text: &[u8]) -> Vec<u8> {
+pub(crate) fn remove_multi_line_comments(text: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(text.len());
     let mut in_string = false;
     let mut in_comment = false;
@@ -1008,11 +1004,11 @@ fn preprocess(e: &mut Engine, buf: u32) -> bool {
             } else {
                 let var_type = compiler::variable_type_by_name(e, &token);
                 if var_type != vt::INVALID {
-                    let rest = tokens.to_new_line();
+                    let rest = tokens.rest_of_line();
                     // `int i = 0` and the like are left alone.
-                    let plain = rest
-                        .iter()
-                        .all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c == b',' || is_space(c));
+                    let plain = rest.iter().all(|&c| {
+                        c.is_ascii_alphanumeric() || c == b'_' || c == b',' || is_space(c)
+                    });
                     if plain {
                         for part in rest.split(|&c| c == b',') {
                             let name: Vec<u8> =
@@ -1059,15 +1055,7 @@ fn set_to_array(e: &mut Engine, buf: u32, var_token: &[u8]) -> bool {
     declared_variable_type(e, &name, &text, current) == vt::ARRAY
 }
 
-/// The scripts on the compile stack (`g_currentScriptStack`), for tests and the decompiler.
+/// The scripts being compiled, the innermost last (`g_currentScriptStack`).
 pub fn compiling(e: &mut Engine) -> Vec<u32> {
     state(e).scripts.clone()
-}
-
-/// Every variable list's names in the buffer (a test helper's view of what a compile made).
-pub(crate) fn buffer_variables(e: &Engine, buf: u32) -> Vec<(u32, Vec<u8>)> {
-    list_items(e, buf + sb::VARS)
-        .into_iter()
-        .map(|info| (e.mem.u32(info), compiler::string_cstr(e, info + 0x18)))
-        .collect()
 }

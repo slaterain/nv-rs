@@ -830,7 +830,11 @@ pub(crate) mod tests {
             0x1400 + NAMES.iter().position(|n| n.0 == "continue").unwrap() as u32,
             NULL_PARSE,
         ))) {
-            assert_eq!(Record::read(&e, t.record(opcode)).parse, word, "{opcode:04x}");
+            assert_eq!(
+                Record::read(&e, t.record(opcode)).parse,
+                word,
+                "{opcode:04x}"
+            );
         }
         e.mem.write(0x0100_f000, &[0; 16]);
         assert_eq!(e.call(NULL_PARSE, &words).eax, 1);

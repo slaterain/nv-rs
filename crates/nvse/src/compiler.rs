@@ -299,10 +299,20 @@ const LEFT_BRACKET: &[Rule] = &[
     ra(AR, NU, AE), ra(AR, ST, AE), ra(AE, NU, AS), ra(SV, NU, AS), ra(AE, SL, AS), ra(SV, SL, AS),
     ra(ST, NU, ST), ra(AR, SL, AR), ra(ST, SL, ST),
 ];
-const MEMBER_ACCESS: &[Rule] = &[ra(AR, AM, AE), ra(AM, ST, AE), ra(AM, AM, AE), ra(AR, ST, AE)];
+const MEMBER_ACCESS: &[Rule] = &[
+    ra(AR, AM, AE),
+    ra(AM, ST, AE),
+    ra(AM, AM, AE),
+    ra(AR, ST, AE),
+];
 #[rustfmt::skip]
 const SLICE: &[Rule] = &[r(AM, AM, SL), r(AM, NU, SL), r(AM, ST, SL), r(ST, ST, SL), r(NU, NU, SL)];
-const IN: &[Rule] = &[ra(AV, AM, FE), ra(AV, AR, FE), ra(SV, ST, FE), ra(RV, FO, FE)];
+const IN: &[Rule] = &[
+    ra(AV, AM, FE),
+    ra(AV, AR, FE),
+    ra(SV, ST, FE),
+    ra(RV, FO, FE),
+];
 #[rustfmt::skip]
 const TO_STRING: &[Rule] = &[ra(AM, IV, ST), ra(ST, IV, ST), ra(NU, IV, ST), ra(FO, IV, ST), ra(AR, IV, ST)];
 const TO_NUMBER: &[Rule] = &[ra(AM, IV, NU), ra(ST, IV, NU), ra(NU, IV, NU)];
@@ -399,7 +409,10 @@ fn is_right_associative(o: u8) -> bool {
 }
 /// `Operator::Precedes`: whether `top` (on the stack) is popped before `o` is pushed.
 fn precedes(top: u8, o: u8) -> bool {
-    let (tp, p) = (crate::expr::op_precedence(top), crate::expr::op_precedence(o));
+    let (tp, p) = (
+        crate::expr::op_precedence(top),
+        crate::expr::op_precedence(o),
+    );
     if is_right_associative(top) {
         p < tp
     } else {
@@ -778,14 +791,28 @@ pub(crate) enum Tok {
     Number(f64),
     Str(Vec<u8>),
     /// A form of the reference list (`RefVariable`, its index).
-    Ref { ref_var: u32, idx: u16 },
-    Global { idx: u16 },
+    Ref {
+        ref_var: u32,
+        idx: u16,
+    },
+    Global {
+        idx: u16,
+    },
     /// A command (its record), its calling reference's index, and whether it takes its calling
     /// reference from the stack (the dot syntax).
-    Command { record: u32, idx: u16, from_stack: bool },
+    Command {
+        record: u32,
+        idx: u16,
+        from_stack: bool,
+    },
     /// A variable (`VariableInfo`): its token type (`INVALID` when its type is unknown), its
     /// variable type, its reference's index.
-    Var { code: Code, var_type: u8, idx: u16, info: u32 },
+    Var {
+        code: Code,
+        var_type: u8,
+        idx: u16,
+        info: u32,
+    },
     Lambda(u32),
     OptionalEmpty,
 }
@@ -1000,45 +1027,15 @@ const MAX_UDF_PARAMS: usize = 15;
 const USER_FUNCTION_VERSION: u8 = 1;
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptUtils.cpp:
-// ExpressionParser::ValidateArgType.
-/// `ValidateArgType`: whether an argument of type `arg` fits a parameter of `kind` (xNVSE's
-/// types, or the game's for a command of the game's syntax).
-pub(crate) fn validate_arg_type(e: &Engine, kind: u32, arg: Code, nvse: bool, record: u32) -> bool {
-    if nvse {
-        if kind == NO_TYPE_CHECK {
-            return true;
-        }
-        return (0..tt::INVALID).any(|i| kind & (1 << i) != 0 && convert(arg, i));
-    }
-    if arg == tt::AMBIGUOUS {
+// ExpressionParser::ValidateArgType (its part for xNVSE's parameter types: at run time every
+// caller passes them; the game's types are checked only by the GECK's inline expressions).
+/// `ValidateArgType`: whether an argument of type `arg` fits a parameter of `kind`: any type
+/// for no check, else one of the kind's types that the argument converts to.
+pub(crate) fn validate_arg_type(kind: u32, arg: Code) -> bool {
+    if kind == NO_TYPE_CHECK {
         return true;
     }
-    match kind {
-        // String, axis, sex.
-        0x00 | 0x08 | 0x12 => convert(arg, tt::STRING),
-        // Float, double, integer, quest stage, crime type.
-        0x02 | 0x2c | 0x01 | 0x17 | 0x1c => {
-            if arg != tt::STRING_VAR && convert(arg, tt::STRING) && record != 0 {
-                // xNVSE also compares the parameters with its own `kParams_FormatString`, a
-                // header's static copy no command of another file uses: never equal.
-                let name = guest_text(e, e.mem.u32(record));
-                if name.starts_with(b"sv_") || e.mem.u16(record + 0x12) >= 20 {
-                    return true;
-                }
-            }
-            convert(arg, tt::NUMBER) || convert(arg, tt::STRING_VAR) || convert(arg, tt::VARIABLE)
-        }
-        // Animation group, actor value.
-        0x0a | 0x05 => convert(arg, tt::STRING) || convert(arg, tt::NUMBER),
-        // Variable name, form type: conditions only.
-        0x16 | 0x20 => false,
-        // Magic effect.
-        0x1f => convert(arg, tt::STRING) || convert(arg, tt::NUMBER) || convert(arg, tt::FORM),
-        // Array, script variable.
-        0x100 => convert(arg, tt::ARRAY),
-        0x2d => convert(arg, tt::VARIABLE),
-        _ => convert(arg, tt::FORM),
-    }
+    (0..tt::INVALID).any(|i| kind & (1 << i) != 0 && convert(arg, i))
 }
 
 // ---- text helpers ----
@@ -1077,7 +1074,7 @@ fn stoul_whole(t: &[u8], radix: u32) -> Option<u32> {
         && t.len() > 2
         && t[0] == b'0'
         && (t[1] | 0x20) == b'x'
-        && (t[2] as char).is_digit(16)
+        && (t[2] as char).is_ascii_hexdigit()
     {
         i = 2;
     }
@@ -2006,13 +2003,13 @@ impl Parser {
     // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptUtils.cpp:
     // ExpressionParser::ParseArgs.
     /// `ParseArgs`: the arguments of a command, each an expression checked against its
-    /// parameter, after a count byte.
+    /// parameter (xNVSE's types: every run-time caller passes them), after a count byte; the
+    /// cursor is left past the arguments (the whole line's parse: no run-time caller asks for
+    /// less).
     pub(crate) fn parse_args(
         &mut self,
         e: &mut Engine,
         params: &Params,
-        nvse_types: bool,
-        whole_line: bool,
     ) -> bool {
         let count_at = data_len(e, self.line);
         set_data_len(e, self.line, count_at.wrapping_add(1));
@@ -2097,9 +2094,7 @@ impl Parser {
                 break;
             }
             let p = params.get(e, self.args_parsed);
-            let opcode = e.mem.u32(self.line + ln::OPCODE);
-            let record = record_of(e, opcode);
-            if !validate_arg_type(e, p.kind, t, nvse_types, record) {
+            if !validate_arg_type(p.kind, t) {
                 let text = format(
                     "Invalid expression for parameter %d. Expected %s.",
                     &[A::D(i64::from(self.args_parsed) + 1), A::S(&p.name)],
@@ -2110,13 +2105,11 @@ impl Parser {
             }
             self.args_parsed += 1;
         }
-        if self.offset(e) < args_end && state(e).depth == 1 && whole_line {
+        if self.offset(e) < args_end && state(e).depth == 1 {
             self.message(e, Msg::TooManyArgs, &[]);
             return false;
         }
-        if whole_line {
-            self.set_offset(e, end_offset.wrapping_add(1));
-        }
+        self.set_offset(e, end_offset.wrapping_add(1));
         let mut expected = 0;
         while expected < num_params && !params.get(e, expected).optional {
             expected += 1;
@@ -2126,10 +2119,7 @@ impl Parser {
             self.message(
                 e,
                 Msg::MissingParam,
-                &[
-                    A::S(&missing.name),
-                    A::D(i64::from(self.args_parsed) + 1),
-                ],
+                &[A::S(&missing.name), A::D(i64::from(self.args_parsed) + 1)],
             );
             return false;
         }
@@ -2237,11 +2227,11 @@ impl Parser {
             };
             let dynamic = dynamic_params(&params);
             return with_parser(e, self.buf, self.line, |e, p| {
-                p.parse_args(e, &Params::Host(dynamic), true, true)
+                p.parse_args(e, &Params::Host(dynamic))
             });
         }
         let params = Params::Host(default_user_function_params());
-        self.parse_args(e, &params, true, true)
+        self.parse_args(e, &params)
     }
 
     // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptUtils.cpp:
@@ -2662,7 +2652,7 @@ fn parse_words(w: &[u32]) -> (Params, u32, u32) {
 /// `Cmd_Expression_Parse`.
 pub fn expression_parse(e: &mut Engine, w: &[u32]) -> Ret {
     let (params, line, buf) = parse_words(w);
-    let ok = with_parser(e, buf, line, |e, p| p.parse_args(e, &params, true, true));
+    let ok = with_parser(e, buf, line, |e, p| p.parse_args(e, &params));
     crate::handled(ok)
 }
 
@@ -2671,7 +2661,7 @@ pub fn expression_parse(e: &mut Engine, w: &[u32]) -> Ret {
 /// at run time).
 pub fn let_parse(e: &mut Engine, w: &[u32]) -> Ret {
     let (params, line, buf) = parse_words(w);
-    if !with_parser(e, buf, line, |e, p| p.parse_args(e, &params, true, true)) {
+    if !with_parser(e, buf, line, |e, p| p.parse_args(e, &params)) {
         return crate::handled(false);
     }
     let last_at = data_len(e, line).wrapping_sub(1);
@@ -2709,7 +2699,7 @@ pub fn begin_loop_parse(e: &mut Engine, w: &[u32]) -> Ret {
         .wrapping_add(4);
     state(e).loop_starts.push(at);
     set_data_len(e, line, data_len(e, line).wrapping_add(4));
-    let ok = with_parser(e, buf, line, |e, p| p.parse_args(e, &params, true, true));
+    let ok = with_parser(e, buf, line, |e, p| p.parse_args(e, &params));
     crate::handled(ok)
 }
 

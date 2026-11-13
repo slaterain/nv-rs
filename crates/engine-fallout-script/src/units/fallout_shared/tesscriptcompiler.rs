@@ -4195,4 +4195,149 @@ mod n045_tests {
             ]
         );
     }
+
+    thread_local! {
+        /// Each seam's answer for the next call, and the words each was given.
+        static ANSWERS: std::cell::RefCell<std::collections::HashMap<u32, u32>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+        static SEEN: std::cell::RefCell<Log> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    macro_rules! seam {
+        ($name:ident, $addr:expr) => {
+            fn $name(_: &mut Engine, a: &[u32]) -> Option<u32> {
+                SEEN.with(|s| s.borrow_mut().push(($addr, a.to_vec())));
+                ANSWERS.with(|m| m.borrow().get(&$addr).copied())
+            }
+        };
+    }
+    seam!(begin_seam, 0x005a_ebb1);
+    seam!(references_seam, 0x005a_ed78);
+    seam!(end_seam, 0x005a_eda0);
+    seam!(name_form_seam, 0x005a_fedb);
+    seam!(parentheses_seam, 0x005b_0a3f);
+    seam!(size_seam, 0x005b_0f68);
+    seam!(function_seam, 0x005b_19ba);
+    seam!(end_of_line_seam, 0x005b_3a8d);
+
+    fn answer(addr: u32, v: Option<u32>) {
+        ANSWERS.with(|m| match v {
+            Some(v) => m.borrow_mut().insert(addr, v),
+            None => m.borrow_mut().remove(&addr),
+        });
+    }
+
+    fn seen(addr: u32) -> Vec<Vec<u32>> {
+        SEEN.with(|s| only(&s.borrow(), addr))
+    }
+
+    /// xNVSE's seams in the compiler (its run-time compiler hooks): each translation takes the
+    /// handler's answer in place of the exe's step, and with no answer goes on as the exe.
+    #[test]
+    fn xnvses_seams_take_their_places() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = rig();
+        for (addr, f) in [
+            (0x005a_ebb1, begin_seam as engine_core::extend::SiteFn),
+            (0x005a_ed78, references_seam),
+            (0x005a_eda0, end_seam),
+            (0x005a_fedb, name_form_seam),
+            (0x005b_0a3f, parentheses_seam),
+            (0x005b_0f68, size_seam),
+            (0x005b_19ba, function_seam),
+            (0x005b_3a8d, end_of_line_seam),
+        ] {
+            e.on_site(SiteSlot::new(Owner::Nvse, addr), f);
+        }
+        let s = script(&mut e);
+        let d = data(&mut e);
+        // The start: 0 fails without clearing the flag, 2 succeeds at once; the end sees the
+        // result and its answer is the result.
+        answer(0x005a_ebb1, Some(0));
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x005a_eb90, &[0, s, d]).bool());
+        assert!(only(e.call_log.as_ref().unwrap(), SCRIPT_COMPILED_FLAG).is_empty());
+        assert_eq!(seen(0x005a_ebb1).last(), Some(&vec![s, d]));
+        assert_eq!(seen(0x005a_eda0).last(), Some(&vec![0, d]));
+        answer(0x005a_ebb1, Some(2));
+        assert!(e.call(0x005a_eb90, &[0, s, d]).bool());
+        answer(0x005a_ebb1, Some(1));
+        answer(0x005a_eda0, Some(0));
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x005a_eb90, &[0, s, d]).bool());
+        assert_eq!(
+            only(e.call_log.as_ref().unwrap(), SCRIPT_COMPILED_FLAG),
+            vec![vec![s, 1]],
+            "the start's call is left out, the end's made"
+        );
+        assert_eq!(seen(0x005a_eda0).last(), Some(&vec![1, d]));
+        answer(0x005a_eda0, None);
+        // The referenced objects' check: an answer passes it.
+        let bad = ref_object(&mut e, b"C", 0, 0);
+        push(&mut e, d + 0x44, bad);
+        assert!(!e.call(0x005a_eb90, &[0, s, d]).bool());
+        answer(0x005a_ed78, Some(1));
+        assert!(e.call(0x005a_eb90, &[0, s, d]).bool());
+        answer(0x005a_ed78, None);
+        answer(0x005a_ebb1, None);
+        // GetFunction: 1 found it; another answer leaves only the console commands.
+        command(&mut e, b"set", 0x15);
+        let w = word(&mut e, b"anything");
+        answer(0x005b_19ba, Some(1));
+        assert!(e.call(0x005b_1910, &[w]).bool());
+        assert_eq!(seen(0x005b_19ba).last(), Some(&vec![w]));
+        answer(0x005b_19ba, Some(0));
+        let w = word(&mut e, b"set");
+        assert!(!e.call(0x005b_1910, &[w]).bool());
+        answer(0x005b_19ba, None);
+        assert!(e.call(0x005b_1910, &[w]).bool());
+        // IsValidVariableName: the answer is the form.
+        e.register(FORM_BY_EDITOR_ID, |_, _| ret(0x10));
+        let n = text(&mut e, b"count");
+        answer(0x005a_fedb, Some(0));
+        assert!(e.call(0x005a_feb0, &[n]).bool());
+        answer(0x005a_fedb, None);
+        assert!(!e.call(0x005a_feb0, &[n]).bool());
+        // StandardCompile's end-of-line check.
+        let p = parameters(&mut e, &[(0, 0)]);
+        let l = line(&mut e, 1, 0x1000, b" a b");
+        answer(0x005b_3a8d, Some(1));
+        assert!(e.call(0x005b_1ba0, &[1, p, l, d]).bool());
+        answer(0x005b_3a8d, None);
+        let l = line(&mut e, 1, 0x1000, b" a b");
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x005b_1ba0, &[1, p, l, d]).bool());
+        assert_eq!(errors(&e), vec![TEXT_EXPECTED_END_OF_LINE]);
+        // CompileLine: the size limit (the data near 0x4000 bytes) and an if's parentheses.
+        let v = variable(&mut e, b"x", 3, 0);
+        push(&mut e, d + 0x3c, v);
+        e.register(EXPRESSION_TO_POSTFIX, |e, a| {
+            let p = e.mem.alloc(4);
+            e.mem.write(p, &[1, 2, 3]);
+            e.mem.set_u32(a[2], 3);
+            ret(p)
+        });
+        e.mem.set_u32(d + 0x24, 0x3ff8);
+        let l = line(&mut e, 1, 0x15, b" x to 5");
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x005a_ff40, &[0, 0x9900, d, l]).bool());
+        assert_eq!(errors(&e), vec![TEXT_MAX_SCRIPT_SIZE]);
+        e.mem.set_u32(d + 0x24, 0x3ff8);
+        answer(0x005b_0f68, Some(1));
+        let l = line(&mut e, 1, 0x15, b" x to 5");
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x005a_ff40, &[0, 0x9900, d, l]).bool());
+        assert_eq!(seen(0x005b_0f68).last(), Some(&vec![d, l]));
+        answer(0x005b_0f68, None);
+        let l = line(&mut e, 1, 0x16, b" (x");
+        e.call_log = Some(vec![]);
+        e.call(0x005a_ff40, &[0, 0x9900, d, l]);
+        assert_eq!(errors(&e), vec![TEXT_MISMATCHED_PARENTHESES]);
+        answer(0x005b_0a3f, Some(1));
+        let l = line(&mut e, 1, 0x16, b" (x");
+        e.call_log = Some(vec![]);
+        e.call(0x005a_ff40, &[0, 0x9900, d, l]);
+        assert!(!errors(&e).contains(&TEXT_MISMATCHED_PARENTHESES));
+        assert_eq!(seen(0x005b_0a3f).last(), Some(&vec![]));
+    }
 }
