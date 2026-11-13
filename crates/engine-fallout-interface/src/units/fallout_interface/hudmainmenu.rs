@@ -4376,6 +4376,14 @@ pub fn hud_main_menu_set_info_for_ref(
         return false;
     }
 
+    // The seam at the reference's copy (`0x775B9B`, ADR-0016): JIP LN NVSE's
+    // InteractionDisabled hook answers no reference for one the player may not activate. While
+    // the hook has no user: one load.
+    if e.hook_users(engine_core::extend::Hook::InteractionDisabled) != 0 {
+        if let Some(kept) = e.site(0x0077_5b9b, &[reference.addr()]) {
+            reference = Ptr::new(kept);
+        }
+    }
     if reference.is_null() {
         let player = current_player(e);
         e.call(0x0096_3e00, &args![player, 0xc_u32, 0_u32]);
@@ -5346,6 +5354,13 @@ pub fn hud_main_menu_update_compass(
                     ],
                 );
                 e.call(0x004d_5c60, &args![1_u32]);
+                // The seam at the stat's increment (`0x77955D`, ADR-0016): JIP LN NVSE's
+                // LocationDiscover hook (its own `ModVal(1, 1)` is the same increment) runs the
+                // discover events with the marker. While the hook has no user: one load.
+                if e.hook_users(engine_core::extend::Hook::LocationDiscover) != 0 {
+                    let marker = e.mem.u32(record + 4);
+                    e.site(0x0077_955d, &[marker]);
+                }
                 let level = blink_setting(e, 0x011d_0364);
                 let player = current_player(e);
                 e.vcall(player, 0x488, &args![level]);
@@ -8780,7 +8795,32 @@ mod tests {
 
     #[test]
     fn set_info_for_ref_reuses_or_clears_target_tiles_in_pc_order() {
+        // Twice: without and with a user of JIP LN NVSE's InteractionDisabled hook, whose seam
+        // (`0x775B9B`, before the null test) is asked only with a user, with the reference.
+        for users in [0, 1] {
+            set_info_for_ref_run(users);
+        }
+    }
+
+    thread_local! {
+        static SEEN_ROLLOVER: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static ROLLOVER_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn rollover_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN_ROLLOVER.with(|s| s.borrow_mut().push(a.to_vec()));
+        ROLLOVER_ANSWER.with(std::cell::Cell::get)
+    }
+
+    fn set_info_for_ref_run(users: u32) {
         let mut e = Engine::new();
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Jip, 0x0077_5b9b),
+            rollover_handler,
+        );
+        if users == 1 {
+            e.add_hook_user(engine_core::extend::Hook::InteractionDisabled, true);
+        }
         e.map(0x011d_9000, 0x6000);
         let menu = e.new_object::<HUDMainMenu>();
         let player = 0x8000_u32;
@@ -8869,6 +8909,30 @@ mod tests {
             calls[15],
             (0x0070_0320, args![0x5001_u32, 0xfa3_u32, 1_u32].to_vec())
         );
+        let seen = SEEN_ROLLOVER.with(|s| s.take());
+        if users == 0 {
+            assert!(seen.is_empty(), "no user: not asked");
+        } else {
+            assert_eq!(seen, vec![vec![0]], "the second call's reference");
+            // A reference the handler answers none for: the null-reference path runs (the player's
+            // two actions cleared, the target forgotten, the tiles cleared).
+            ROLLOVER_ANSWER.with(|a| a.set(Some(0)));
+            e.mem.set_u32(menu.addr() + 0x1b8, 0x1234);
+            e.call_log = Some(vec![]);
+            hud_main_menu_set_info_for_ref(&mut e, Ptr::new(0x9999), 0, 0);
+            ROLLOVER_ANSWER.with(|a| a.set(None));
+            assert_eq!(SEEN_ROLLOVER.with(|s| s.take()), vec![vec![0x9999]]);
+            assert_eq!(e.mem.u32(menu.addr() + 0x1b8), 0);
+            let calls = e.call_log.take().unwrap();
+            assert_eq!(
+                calls[0],
+                (0x0096_3e00, args![player, 0xc_u32, 0_u32].to_vec())
+            );
+            assert_eq!(
+                calls[1],
+                (0x0096_3e00, args![player, 0xb_u32, 0_u32].to_vec())
+            );
+        }
     }
 
     #[test]
@@ -12420,10 +12484,34 @@ mod tests {
 
     #[test]
     fn compass_landmark_keeps_location_byte_until_an_unchanged_travel_marker() {
+        // Twice: without and with a user of JIP LN NVSE's LocationDiscover hook, whose seam
+        // (`0x77955D`, after the stat) is asked only with a user, with the marker.
+        for users in [0, 1] {
+            compass_landmark_run(users);
+        }
+    }
+
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn seam_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        None
+    }
+
+    fn compass_landmark_run(users: u32) {
         // State+5 ([EBP-0x8f]) is written only at 00779591 (1, changed) and 007795d6
         // (0, unchanged travel marker); an unchanged non-travel marker hands 00772aa0
         // the previous marker's byte.
         let (mut e, pools) = compass_engine();
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Jip, 0x0077_955d),
+            seam_handler,
+        );
+        if users == 1 {
+            e.add_hook_user(engine_core::extend::Hook::LocationDiscover, true);
+        }
         let marker_position = e.mem.alloc(12);
         let update = e.mem.alloc(0x324);
         let mut reference_slots = [0_u32; 0x7e];
@@ -12537,6 +12625,12 @@ mod tests {
         assert_eq!(e.mem.u32(nodes[2] + 8), references[1]);
         assert_eq!(e.mem.u32(nodes[3] + 8), references[1]);
         assert_eq!(e.mem.u32(0x011d_9af0), references[1]);
+        let seen = SEEN.with(|s| s.take());
+        if users == 0 {
+            assert!(seen.is_empty(), "no user: not asked");
+        } else {
+            assert_eq!(seen, vec![vec![references[0]]]);
+        }
     }
 
     #[test]

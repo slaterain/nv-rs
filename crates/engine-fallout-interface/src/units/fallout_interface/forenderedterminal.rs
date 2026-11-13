@@ -707,7 +707,19 @@ pub fn fo_rendered_terminal_initialize(e: &mut Engine, this: Ptr<FORenderedTermi
     e.with_stack(0x180, |e, frame| {
         let ebp = frame.addr() + 0x180;
         let local = |offset: u32| ebp - offset;
-        let model = if terminal_geometry(e) == 0 {
+        // The seam at the holder's read (`0x7FEF0B`, ADR-0016): JIP LN NVSE's SetTerminalModel
+        // hook releases the held model and picks the terminal's own model path (`011a0bb0`),
+        // answering what the holder then holds. While the hook has no user: one load.
+        let jip_held = if e.hook_users(engine_core::extend::Hook::SetTerminalModel) != 0 {
+            e.site(0x007f_ef0b, &[])
+        } else {
+            None
+        };
+        let held = match jip_held {
+            Some(held) => held,
+            None => terminal_geometry(e),
+        };
+        let model = if held == 0 {
             let path = e.global::<u32>(TERMINAL_MODEL_PATH_011A0BB0);
             let loader = e.global::<u32>(MODEL_LOADER_011C3B3C);
             let model = e
@@ -1457,7 +1469,35 @@ mod n059_tests {
 
     #[test]
     fn initialize_loads_the_model_and_sets_up_the_camera() {
+        // Twice: without and with a user of JIP LN NVSE's SetTerminalModel hook, whose seam
+        // (`0x7FEF0B`, the holder's read) is asked only with a user; its answer (nothing held)
+        // loads the model as the exe does.
+        // A third time with the handler answering a model already held: the loader is not called.
+        for users in [0, 1, 2] {
+            initialize_run(users);
+        }
+    }
+
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static ANSWER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    fn seam_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(ANSWER.with(std::cell::Cell::get))
+    }
+
+    fn initialize_run(users: u32) {
         let mut e = Engine::new();
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Jip, 0x007f_ef0b),
+            seam_handler,
+        );
+        if users >= 1 {
+            e.add_hook_user(engine_core::extend::Hook::SetTerminalModel, true);
+        }
+        ANSWER.with(|a| a.set(0));
         for page in [
             0x011d_b000,
             0x011a_0000,
@@ -1531,6 +1571,10 @@ mod n059_tests {
         answer(&mut e, ADD_ALL_LIGHTS, 1);
         let this = Ptr::new(e.mem.alloc(0xf0));
         e.mem.set_u32(this.addr(), VTABLE);
+        if users == 2 {
+            e.mem.set_u32(HOLDER_011DB63C, model);
+            ANSWER.with(|a| a.set(model));
+        }
         e.call_log = Some(vec![]);
         e.call(0x007f_eeb0, &args![this]);
         assert_eq!(
@@ -1538,7 +1582,12 @@ mod n059_tests {
             vec![vec![this.addr(), 1, 2.0f32.to_bits()]]
         );
         assert_eq!(e.mem.u32(HOLDER_011DB63C), model);
-        assert_eq!(calls_to(&e, SWAP_LANGUAGE_TEXTURES), vec![vec![model]]);
+        if users == 2 {
+            assert!(calls_to(&e, MODEL_LOAD_FILE).is_empty(), "held: not loaded");
+            assert!(calls_to(&e, SWAP_LANGUAGE_TEXTURES).is_empty());
+        } else {
+            assert_eq!(calls_to(&e, SWAP_LANGUAGE_TEXTURES), vec![vec![model]]);
+        }
         assert_eq!(e.mem.u32(this.addr() + 0xe4), named);
         // x scaled by 0.75 (no `00707b50`, no flag), y and z from the settings.
         assert_eq!(
@@ -1567,5 +1616,11 @@ mod n059_tests {
         assert_eq!(calls_to(&e, SET_LOD_MULT_TYPE), vec![vec![model, 8]]);
         assert!(calls_to(&e, MENU_007F7FB0).is_empty());
         assert_eq!(e.get(this, FORenderedTerminal::fLastFadePercent), 1.0);
+        let seen = SEEN.with(|s| s.take());
+        if users == 0 {
+            assert!(seen.is_empty(), "no user: not asked");
+        } else {
+            assert_eq!(seen, vec![Vec::<u32>::new()]);
+        }
     }
 }

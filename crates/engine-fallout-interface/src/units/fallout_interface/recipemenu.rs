@@ -2592,6 +2592,12 @@ pub fn fn_007284f0(e: &mut Engine, count: i32) {
                 e.call(STRING_OBJECT_DESTRUCT, &args![text]);
             });
         }
+        // The seam at the next output (`0x7289FF`, every pass, also with nothing chosen):
+        // JIP LN NVSE's ItemCrafted hook runs the crafting events with the chosen form and
+        // the count made times `count`. While the hook has no user: one load.
+        if e.hook_users(engine_core::extend::Hook::ItemCrafted) != 0 {
+            e.site(0x0072_89ff, &[chosen, made.wrapping_mul(count) as u32]);
+        }
         node = node_next(e, node);
     }
     recipe_menu_close(e);
@@ -4299,7 +4305,31 @@ mod n057_tests {
 
     #[test]
     fn make_takes_inputs_and_gives_outputs() {
+        // Twice: without and with a user of JIP LN NVSE's ItemCrafted hook, whose seam
+        // (`0x7289FF`, each output) is asked only with a user, with the form and the count made.
+        for users in [0, 1] {
+            make_run(users);
+        }
+    }
+
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn seam_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        None
+    }
+
+    fn make_run(users: u32) {
         let mut e = engine();
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Jip, 0x0072_89ff),
+            seam_handler,
+        );
+        if users == 1 {
+            e.add_hook_user(engine_core::extend::Hook::ItemCrafted, true);
+        }
         let menu = recipe_menu(&mut e);
         e.set_global(RECIPE_MENU, menu);
         let crafter = e.mem.alloc(0x200);
@@ -4345,6 +4375,12 @@ mod n057_tests {
         assert_eq!(calls_to(&e, SHOW_MESSAGE_007052F0).len(), 1);
         assert_eq!(calls_to(&e, FORMAT_STRING_OBJECT)[0][1], MANY_ADDED_FORMAT);
         assert_eq!(calls_to(&e, SERVICE_END), vec![vec![0]]);
+        let seen = SEEN.with(|s| s.take());
+        if users == 0 {
+            assert!(seen.is_empty(), "no user: not asked");
+        } else {
+            assert_eq!(seen, vec![vec![form, 3]]);
+        }
     }
 
     #[test]

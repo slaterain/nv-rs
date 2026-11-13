@@ -74,6 +74,10 @@ layout! {
         /// `pActivateRef` (Xbox PDB; JIP's `crosshairRef`, `// 0FC`): the reference under the
         /// crosshair; `InterfaceManager::InterfaceManager`, `0070a130`, zeroes `[edx+0xfc]`
         /// (engine-fallout-interface `interfacemanager.rs`).
+        /// `pOverTileMenu` (Xbox PDB; JIP's `activeMenu`, `// 0D0`): the menu under the pointer,
+        /// which `InterfaceManager::Idle`, `0070c4a0`, sets as the pointer moves
+        /// (engine-fallout-interface `interfacemanager.rs`).
+        0x0D0 pOverTileMenu: u32,
         0x0FC pActivateRef: u32,
         /// `menuStack[10]` (JIP LN NVSE): the open menus' ids, 0 after the last.
         0x114 menuStack: u32,
@@ -215,7 +219,61 @@ layout! {
         /// adds entries through `005EB410`, which works on +0x48).
         0x48 entries: Inline<ListNode>,
     }
+
+    /// A form's flag bytes JIP keeps in `TESForm`'s padding (`jipFormFlags6`, JIP LN NVSE's
+    /// `TESForm`, `// 06`): the exe's `TESForm::TESForm`, `00483370`, writes only the byte at `+4`
+    /// (`cFormType`) of that word, and nothing of the game reads `+5` to `+7`.
+    pub struct JipFormFlags: 0x18 {
+        /// `kHookFormFlag6_*` (`internal/hooks.h` (JIP LN NVSE)).
+        0x06 jipFormFlags6: u8,
+    }
+
+    /// An actor's flag bytes JIP keeps in `Actor`'s padding after `bInCombat` (`+0x104`, a bool:
+    /// engine-fallout-ai `actor.rs`); `Actor::Actor`, `0087d4a0`, writes none of `+0x105` to
+    /// `+0x107` (JIP LN NVSE's `jipActorFlags1..3`, `// 105`).
+    pub struct JipActorFlags: 0x1B4 {
+        /// `kHookActorFlag2_*` (`internal/hooks.h` (JIP LN NVSE)).
+        0x106 jipActorFlags2: u8,
+    }
+
+    /// `Menu` (Xbox PDB), the field JIP reads: the menu's id, which `TileMenu::PostParse`,
+    /// `00a1f160`, stores at `menu + 0x20` and `Menu::~Menu`, `00a1c520`, reads there (engine-bs
+    /// `tilemenu.rs`, `run_00a1c340.rs`).
+    pub struct Menu: 0x28 {
+        /// `iClass` (Xbox PDB; JIP's `id`, `// 20`).
+        0x20 iClass: u32,
+    }
+
+    /// `Tile` (Xbox PDB), 0x38 bytes, the fields JIP's component path reads (engine-bs
+    /// `tile.rs`; `Tile::Tile`, `009ff600`).
+    pub struct Tile: 0x38 {
+        /// `xChildren` (Xbox PDB): an `NiTPointerList<Tile *>` (JIP's `DList<Tile> children`).
+        0x04 xChildren: Inline<NiTPointerList>,
+        /// `xName` (Xbox PDB; JIP's `name`, `// 20`).
+        0x20 xName: Inline<BSStringT>,
+        /// `pParent` (Xbox PDB; JIP's `parent`, `// 28`).
+        0x28 pParent: u32,
+    }
+
+    /// `HackingMenu` (Xbox PDB), the fields JIP's terminal model reads (engine-fallout-interface
+    /// `hackingmenu.rs`).
+    pub struct HackingMenu: 0x1DC {
+        /// `xGuessTiles.m_uiCount` (the list at `+0x174`; JIP tests its low byte, `// 17C`):
+        /// `HackingMenu::MakeGuessBlock`, `0076ad50`, reads the count at `+0x17C`.
+        0x17C guessTileCount: u8,
+        /// `pTerminalRef` (Xbox PDB; JIP's `targetRef`, `// 198`).
+        0x198 pTerminalRef: u32,
+    }
+
+    /// `ComputersMenu` (Xbox PDB), the field JIP's terminal model reads: the terminal's
+    /// reference, which `ComputersMenu::Create`, `00757b70`, stores at `+0xAC`
+    /// (engine-fallout-interface `computersmenu.rs`; JIP's `targetRef`, `// AC`).
+    pub struct ComputersMenu: 0xC4 {
+        0xAC pTerminalRef: u32,
+    }
 }
+
+pub use engine_core::types::{BSStringT, NiTListItem, NiTPointerList};
 
 /// `saveMods[index]`.
 pub const fn save_mod(index: u8) -> u32 {

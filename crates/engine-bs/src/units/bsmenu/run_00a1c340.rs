@@ -70,7 +70,14 @@ pub fn menu_destructor(e: &mut Engine, this: Ptr<Menu>) {
     e.mem.set_u32(this.addr(), MENU_VTABLE);
     let id = e.get(this, Menu::iClass);
     if (1001..=0x43c).contains(&id) {
-        e.mem.set_u8(MENU_OPEN_BYTES.wrapping_add(id as u32), 0);
+        // The seam at the byte's clear (`0xA1C573`, ADR-0016): JIP LN NVSE's MenuState hook,
+        // which clears the byte itself and runs the menu's close events when it was set. While
+        // the hook has no user: one load, then the exe's store.
+        if e.hook_users(engine_core::extend::Hook::MenuState) == 0
+            || e.site(0x00a1_c573, &[id as u32, 0]).is_none()
+        {
+            e.mem.set_u8(MENU_OPEN_BYTES.wrapping_add(id as u32), 0);
+        }
     }
     let modal = e.get(this, Menu::iIsModal);
     if modal != 0 {
@@ -318,6 +325,40 @@ mod tests {
         assert!(calls(&e, TILE_TEMPLATE_DESTRUCTOR).is_empty());
         assert!(calls(&e, QUERY_00A24660).is_empty());
         assert_eq!(calls(&e, MENU_ID_CLOSED_00A1E130), vec![vec![1000, 0]]);
+    }
+
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn seam_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0)
+    }
+
+    /// The seam at the shown byte's clear (`0xA1C573`, JIP LN NVSE's MenuState hook): with a
+    /// handler there and no user of the hook, the handler is not asked and the byte is cleared as
+    /// the exe clears it; with a user, it is asked with the id and 0, and the clear is its own.
+    #[test]
+    fn menu_destructor_menu_state_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = rig();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x00a1_c573), seam_handler);
+        e.mem.set_u32(0x011d_e104, 7);
+        for (users, byte_after) in [(0, 0u8), (1, 1)] {
+            if users == 1 {
+                e.add_hook_user(Hook::MenuState, true);
+            }
+            let this = e.mem.alloc(0x28);
+            for i in (0..0x28).step_by(4) {
+                e.mem.set_u32(this + i, 0);
+            }
+            e.mem.set_u32(this + 0x20, 1001);
+            e.mem.set_u8(MENU_OPEN_BYTES + 1001, 1);
+            e.call(0x00a1_c520, &args![this]);
+            assert_eq!(e.mem.u8(MENU_OPEN_BYTES + 1001), byte_after);
+        }
+        assert_eq!(SEEN.with(|s| s.take()), vec![vec![1001, 0]]);
     }
 }
 

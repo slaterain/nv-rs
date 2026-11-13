@@ -114,6 +114,14 @@ pub fn fn_005b4630(e: &mut Engine, a: ScriptArgs) -> bool {
     if form == 0 {
         return false;
     }
+    // The seam after the message is read (`0x5B46AA`, ADR-0016): JIP LN NVSE's MessageDisabled
+    // hook answers true without showing a message a script disabled. While the hook has no
+    // user: one load.
+    if e.hook_users(engine_core::extend::Hook::MessageDisabled) != 0
+        && e.site(0x005b_46aa, &[form]).is_some()
+    {
+        return true;
+    }
     let string = e.mem.alloc(8);
     e.call(STRING_CONSTRUCT, &args![string]);
     let shown = show_message(e, a, form, string);
@@ -608,6 +616,48 @@ mod tests {
         assert!(!run(&mut e, &s));
         e.register(PARSE_PARAMETERS, |_, _| Ret::default());
         assert!(!run(&mut e, &s));
+    }
+
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Answers that the message is disabled.
+    fn seam_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(1)
+    }
+
+    /// The seam after the message is read (`0x5B46AA`, JIP LN NVSE's MessageDisabled hook):
+    /// with a handler there and no user of the hook, the handler is not asked and the box is
+    /// shown; with a user, it is asked with the form, and its answer is true with nothing shown.
+    #[test]
+    fn the_message_disabled_seam_waits_for_a_user() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        for users in [0, 1] {
+            let mut e = engine();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x005b_46aa), seam_handler);
+            if users == 1 {
+                e.add_hook_user(Hook::MessageDisabled, true);
+            }
+            let form = message_form(&mut e, true);
+            let a = setup(&mut e, form, true, true);
+            e.register(READ_NUMBER, |_, _| Ret::default());
+            set_items(&mut e, form, &[(0x4000, true)]);
+            e.call_log = Some(vec![]);
+            assert!(run(&mut e, &a));
+            let log = e.call_log.take().unwrap();
+            let seen = SEEN.with(|s| s.take());
+            if users == 0 {
+                assert!(seen.is_empty(), "no user: not asked");
+                assert!(log.iter().any(|c| c.0 == SHOW_BOX));
+            } else {
+                assert_eq!(seen, vec![vec![form]]);
+                assert!(log
+                    .iter()
+                    .all(|c| c.0 != SHOW_BOX && c.0 != STRING_CONSTRUCT));
+            }
+        }
     }
 
     #[test]

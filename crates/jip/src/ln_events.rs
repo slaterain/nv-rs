@@ -234,11 +234,11 @@ fn is_reference(e: &Engine, form: u32) -> bool {
 }
 
 /// A handler's lambda variables kept (`LambdaVarContext`'s construction) or given up.
-fn capture(e: &mut Engine, script: u32) {
+pub(crate) fn capture(e: &mut Engine, script: u32) {
     nvse::lambda::save_variables(e, script);
 }
 
-fn release(e: &mut Engine, script: u32) {
+pub(crate) fn release(e: &mut Engine, script: u32) {
     nvse::lambda::unsave_variables(e, script);
 }
 
@@ -247,7 +247,13 @@ fn release(e: &mut Engine, script: u32) {
 /// integer). Removing with a negative key takes the script out of every entry; adding needs a
 /// valid key (`kValidKeyCode`) or a control below 28. An entry left empty is dropped at the next
 /// frame.
-fn set_input_handler(e: &mut Engine, event_mask: u32, script: u32, key: i32, add: bool) -> bool {
+pub(crate) fn set_input_handler(
+    e: &mut Engine,
+    event_mask: u32,
+    script: u32,
+    key: i32,
+    add: bool,
+) -> bool {
     let on_key = event_mask & ON_KEY != 0;
     let on_up = event_mask == mask(id::KEY_UP) || event_mask == mask(id::CONTROL_UP);
     let group = if on_key { ON_KEY } else { ON_CONTROL };

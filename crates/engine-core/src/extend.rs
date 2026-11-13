@@ -116,6 +116,7 @@ pub struct Entry {
 }
 
 const NVSE: &[Owner] = &[Owner::Nvse];
+const JIP: &[Owner] = &[Owner::Jip];
 
 /// Every exe address a built-in may wrap (ADR-0016 §3, "Wrappers"), by address. Each is a
 /// function entry registered by a translation (or a fix row's copy of it) and reached by
@@ -285,6 +286,12 @@ pub const SITES: &[Entry] = &[
         owners: NVSE,
         step: "I-14",
     },
+    // ShowMessage 005b4630: JIP LN NVSE's MessageDisabled (ShowMessageHook).
+    Entry {
+        addr: 0x005b_46aa,
+        owners: JIP,
+        step: "3.5a",
+    },
     // An exit of the game in 005b6c90 (xNVSE's exit message).
     Entry {
         addr: 0x005b_6ca6,
@@ -319,11 +326,23 @@ pub const SITES: &[Entry] = &[
         owners: NVSE,
         step: "I-4",
     },
+    // InterfaceManager::Idle 0070c4a0, the pointer's tile changed: JIP LN NVSE's MenuHandleMouseover.
+    Entry {
+        addr: 0x0070_d642,
+        owners: JIP,
+        step: "3.5a",
+    },
     // The loading screen's present in 00713fb0: the present notification.
     Entry {
         addr: 0x0071_47c4,
         owners: NVSE,
         step: "I-8",
+    },
+    // RecipeMenu's craft 007284f0: JIP LN NVSE's ItemCrafted (OnCrafting).
+    Entry {
+        addr: 0x0072_89ff,
+        owners: JIP,
+        step: "3.5a",
     },
     // BarterMenu::CompleteTransaction 0072fd10: OnSell, an item bought and one sold.
     Entry {
@@ -347,6 +366,21 @@ pub const SITES: &[Entry] = &[
         owners: NVSE,
         step: "I-9",
     },
+    // HUDMainMenu::SetInfoForRef 00775a00: JIP LN NVSE's InteractionDisabled (SetRolloverTextHook).
+    // This hook has TWO sites in JIP: the activation half (PCActivateRefHook, 0x943279 in
+    // PlayerCharacter::Update 0093e860) is still missing (step 3.5c); jip's test
+    // `interaction_disabled_waits_for_its_activation_seam` stops a command adding a user before it.
+    Entry {
+        addr: 0x0077_5b9b,
+        owners: JIP,
+        step: "3.5a",
+    },
+    // HUDMainMenu::UpdateCompass 00779070, a location discovered: JIP LN NVSE's LocationDiscover.
+    Entry {
+        addr: 0x0077_955d,
+        owners: JIP,
+        step: "3.5a",
+    },
     // LockPickMenu::DoIdle 0078eb50 and ::DoClick 00790330: OnLockPickSuccess,
     // OnLockPickBroken, OnLockBroken.
     Entry {
@@ -363,6 +397,12 @@ pub const SITES: &[Entry] = &[
         addr: 0x0079_0461,
         owners: NVSE,
         step: "I-9",
+    },
+    // MapMenu's companion markers 0079ea30: JIP LN NVSE's CreateMapMarkers.
+    Entry {
+        addr: 0x0079_eba1,
+        owners: JIP,
+        step: "3.5a",
     },
     // RepairMenu::DoClick 007b5b40 and RepairServicesMenu::RepairItem 007b7f70: OnRepair.
     Entry {
@@ -391,6 +431,24 @@ pub const SITES: &[Entry] = &[
         addr: 0x007d_33ce,
         owners: NVSE,
         step: "I-10",
+    },
+    // TutorialMenu::Create 007e8890: JIP LN NVSE's MessageDisabled (ShowTutorialHook).
+    Entry {
+        addr: 0x007e_88b6,
+        owners: JIP,
+        step: "3.5a",
+    },
+    // VATSMenu's target list 007f52c0: JIP LN NVSE's AddVATSTarget.
+    Entry {
+        addr: 0x007f_54b1,
+        owners: JIP,
+        step: "3.5a",
+    },
+    // FORenderedTerminal::Initialize 007feeb0: JIP LN NVSE's SetTerminalModel.
+    Entry {
+        addr: 0x007f_ef0b,
+        owners: JIP,
+        step: "3.5a",
     },
     // BGSSaveLoadGame::SaveGame: the co-save written.
     Entry {
@@ -472,6 +530,18 @@ pub const SITES: &[Entry] = &[
         addr: 0x0093_db69,
         owners: NVSE,
         step: "I-10",
+    },
+    // Menu::~Menu 00a1c520 and TileMenu::PostParse 00a1f160, a menu's shown byte: JIP LN NVSE's MenuState.
+    Entry {
+        addr: 0x00a1_c573,
+        owners: JIP,
+        step: "3.5a",
+    },
+    // (The open half of MenuState.)
+    Entry {
+        addr: 0x00a1_f2f9,
+        owners: JIP,
+        step: "3.5a",
     },
 ];
 
@@ -742,6 +812,118 @@ pub(crate) struct ExtendState {
     /// thread's engine shares it). The translated functions xNVSE patches read it with one load
     /// ([`Engine::controls_alt`]) and with 0 run the exe's path; `nvse` writes it.
     pub(crate) controls_alt: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    /// JIP LN NVSE's hooks' user counts ([`Hook`]), one table every engine of a game shares.
+    pub(crate) hooks: std::sync::Arc<HookUsers>,
+}
+
+/// JIP LN NVSE's on-demand hooks (`kHook_*`, `internal/hooks.h` (JIP LN NVSE)), in JIP's order.
+/// JIP patches a hook's sites in when its first user arrives (`HookInfo::ModUsers`) and puts the
+/// exe's bytes back when the last one goes; the port keeps each hook's user count as a native
+/// word that the translations read at the hook's seams before anything else
+/// ([`Engine::hook_users`]): while it is 0 the seam costs that one load and the translation goes
+/// on as the exe's code. JIP's optional `[GamePatches]` hooks (`CalculateHitDamage`, `FO3Repair`,
+/// `UpdateTimeGlobals`, `QuantitySelect`, `VoiceModulationFix`, `LoadScreenFix`) are fix rows,
+/// not listed here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Hook {
+    GetDescription,
+    PCFastTravel,
+    PCCellChange,
+    TextInputClose,
+    StartCombat,
+    SetCombatTarget,
+    NoHealthReset,
+    RemoveAmmo,
+    ActivateDoor,
+    TeleportWithPC,
+    LockEquipment,
+    MessageDisabled,
+    MenuState,
+    SetAnimAction,
+    SetAnimGroup,
+    DamageActorValue,
+    UpdateWeather,
+    MenuHandleMouseover,
+    GetDetectionValue,
+    SetPCTarget,
+    /// Two sites in JIP: the HUD's rollover (`0x775B9B`, a seam here) and the player's activation
+    /// (`PCActivateRefHook`, `0x943279` in `PlayerCharacter::Update`, `0093e860`), which has NO
+    /// seam yet (step 3.5c). No command may add a user before it has one (jip's test
+    /// `interaction_disabled_waits_for_its_activation_seam`).
+    InteractionDisabled,
+    MergeEventMask,
+    MarkScriptEvent,
+    DoActivate,
+    CreateMapMarkers,
+    GetRefName,
+    SetQuestStage,
+    RunResultScript,
+    ScriptWait,
+    SetTerminalModel,
+    AddVATSTarget,
+    LocationDiscover,
+    ItemCrafted,
+    MakeObjLODPath,
+    OnHitEvent,
+    CheckUniqueItem,
+    ProjectileImpact,
+    AddNote,
+    EquipAidItem,
+    ReloadWeapon,
+    OnRagdoll,
+    PlayerMinHealth,
+    ApplyActorVelocity,
+    GetModelPath,
+}
+
+impl Hook {
+    /// How many hooks [`Hook`] lists.
+    pub const COUNT: usize = Hook::GetModelPath as usize + 1;
+}
+
+/// The hooks' user counts: one word each, shared by every engine of a game (a real thread's
+/// engine sees a count a script changed on the main thread, as every thread sees JIP's patched
+/// bytes).
+#[derive(Debug)]
+pub(crate) struct HookUsers([std::sync::atomic::AtomicU32; Hook::COUNT]);
+
+impl Default for HookUsers {
+    fn default() -> Self {
+        HookUsers(std::array::from_fn(|_| {
+            std::sync::atomic::AtomicU32::new(0)
+        }))
+    }
+}
+
+impl Engine {
+    /// How many users `hook` has (JIP's `HookInfo` count): 0 while JIP is not installed, or no
+    /// command or event of JIP's needs the hook. One load; the translations read it at the hook's
+    /// seams before calling [`Engine::site`].
+    #[inline]
+    pub fn hook_users(&self, hook: Hook) -> u32 {
+        self.extend.hooks.0[hook as usize].load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// One user more (`add`) or less for `hook` (JIP's `HookInfo::ModUsers`: never below 0).
+    /// Answers the new count. Users are added and removed by script commands on the main thread.
+    pub fn add_hook_user(&self, hook: Hook, add: bool) -> u32 {
+        use std::sync::atomic::Ordering::Relaxed;
+        let count = &self.extend.hooks.0[hook as usize];
+        // One atomic step: a change from another thread is never lost.
+        let mut old = count.load(Relaxed);
+        loop {
+            let new = if add {
+                old.saturating_add(1)
+            } else {
+                old.saturating_sub(1)
+            };
+            match count.compare_exchange_weak(old, new, Relaxed, Relaxed) {
+                Ok(_) => return new,
+                Err(now) => old = now,
+            }
+        }
+    }
 }
 
 impl Default for ExtendState {
@@ -761,6 +943,7 @@ impl ExtendState {
             sites: Default::default(),
             tables: ScriptTables::default(),
             controls_alt: Default::default(),
+            hooks: Default::default(),
         }
     }
 
@@ -785,6 +968,7 @@ impl ExtendState {
             sites: self.sites.clone(),
             tables: self.tables,
             controls_alt: self.controls_alt.clone(),
+            hooks: self.hooks.clone(),
         }
     }
 }
@@ -1745,6 +1929,30 @@ mod tests {
         e.on_site(TICK, nvse_site);
     }
 
+    /// A hook's user count: 0 on a new engine, up and down by one, never below 0, one word per
+    /// hook, and the same table on a real thread's engine.
+    #[test]
+    fn hook_users_count_and_are_shared() {
+        let e = engine();
+        assert_eq!(Hook::COUNT, 44);
+        assert_eq!(e.hook_users(Hook::MenuState), 0);
+        assert_eq!(e.add_hook_user(Hook::MenuState, false), 0, "never below 0");
+        assert_eq!(e.add_hook_user(Hook::MenuState, true), 1);
+        assert_eq!(e.add_hook_user(Hook::MenuState, true), 2);
+        assert_eq!(
+            e.hook_users(Hook::MenuHandleMouseover),
+            0,
+            "one word per hook"
+        );
+        let mut t = engine();
+        t.extend = e.extend.for_thread();
+        assert_eq!(t.hook_users(Hook::MenuState), 2);
+        assert_eq!(e.add_hook_user(Hook::MenuState, false), 1);
+        assert_eq!(t.hook_users(Hook::MenuState), 1, "a later change is seen");
+        assert_eq!(t.add_hook_user(Hook::GetModelPath, true), 1);
+        assert_eq!(e.hook_users(Hook::GetModelPath), 1);
+    }
+
     /// The real seam table names the sites of ADR-0016 §12 for `nvse`.
     #[test]
     fn the_seam_table_lists_the_extender_core_sites() {
@@ -1758,7 +1966,24 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 46);
+        assert_eq!(SITES.len(), 57);
+        // JIP LN NVSE's UI hooks (step 3.5a), JIP's alone.
+        for a in [
+            0x005b_46aa,
+            0x0070_d642,
+            0x0072_89ff,
+            0x0077_5b9b,
+            0x0077_955d,
+            0x0079_eba1,
+            0x007e_88b6,
+            0x007f_54b1,
+            0x007f_ef0b,
+            0x00a1_c573,
+            0x00a1_f2f9,
+        ] {
+            assert!(find(SITES, Owner::Jip, a).is_some(), "{a:08x}");
+            assert!(find(SITES, Owner::Nvse, a).is_none(), "{a:08x}");
+        }
     }
 
     /// The tables' order rules, checked at build time, also reject a bad table here.

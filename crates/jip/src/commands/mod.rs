@@ -521,19 +521,8 @@ mod tests {
             }
         }
         assert_eq!(ALL.len(), files.len());
-        // README's script-extender row carries the count: later batches change only README, and a
-        // mismatch fails here.
-        let readme = include_str!("../../../../README.md");
-        let at = readme
-            .find("JIP LN: ")
-            .expect("README names the JIP LN count")
-            + "JIP LN: ".len();
-        let count: usize = readme[at..]
-            .split(" of 1,118")
-            .next()
-            .and_then(|n| n.parse().ok())
-            .expect("JIP LN: N of 1,118");
-        assert_eq!(built(), count, "README's JIP LN count");
+        // README's JIP LN count is checked in one place, against the table's every handled JIP
+        // opcode: `ui_hooks::tests::the_readme_counts_the_built_commands`.
     }
 
     /// Answering "installed", a built command has its execute and its name in its record; an

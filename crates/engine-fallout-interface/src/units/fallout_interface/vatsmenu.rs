@@ -6348,6 +6348,18 @@ fn beyond_sneak_distance(e: &mut Engine, interior: bool, distance: f32) -> bool 
     }
 }
 
+/// The seam at the line-of-sight call of [`fn_007f52c0`] (`0x7F54B1`, ADR-0016): JIP LN NVSE's
+/// AddVATSTarget hook leaves out an actor a script made not targetable, when the line of sight
+/// held. While the hook has no user: one load, and the line of sight's answer.
+#[inline]
+fn vats_target_seam(e: &mut Engine, reference: u32, seen: bool) -> bool {
+    if seen && e.hook_users(engine_core::extend::Hook::AddVATSTarget) != 0 {
+        !matches!(e.site(0x007f_54b1, &[reference]), Some(0))
+    } else {
+        seen
+    }
+}
+
 // Translated from 007f52c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// cdecl: builds the target list (`011db150`) when it is empty; answers
 /// true at once when it is not, else whether a target can be seen.
@@ -6446,11 +6458,13 @@ pub fn fn_007f52c0(e: &mut Engine) -> bool {
                 && {
                     let player = e.global::<u32>(PLAYER);
                     let reference = e.mem.u32(entry);
-                    e.call(
-                        LINE_OF_SIGHT,
-                        &args![player, 1u32, reference, 1u32, 0u32, 1u32],
-                    )
-                    .bool()
+                    let seen = e
+                        .call(
+                            LINE_OF_SIGHT,
+                            &args![player, 1u32, reference, 1u32, 0u32, 1u32],
+                        )
+                        .bool();
+                    vats_target_seam(e, reference, seen)
                 };
             if !in_range {
                 node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
@@ -9710,6 +9724,85 @@ mod tests {
         assert_eq!(calls(&e, RAY_COLLECTOR_CONSTRUCT).len(), 1);
         assert_eq!(calls(&e, RAY_COLLECTOR_DESTRUCT).len(), 1);
         assert_eq!(calls(&e, CELL_GATHER)[0][5], GATHER_CALLBACK);
+    }
+
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Answers that the actor is left out.
+    fn seam_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0)
+    }
+
+    /// The seam after the line of sight (`0x7F54B1`, JIP LN NVSE's AddVATSTarget hook): with a
+    /// handler there and no user of the hook, the line of sight's answer, the handler not asked;
+    /// with a user, asked with the reference only when the line of sight held, its answer taken.
+    #[test]
+    fn the_vats_target_seam_waits_for_a_user() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x007f_54b1), seam_handler);
+        assert!(vats_target_seam(&mut e, 0x4000, true));
+        assert!(!vats_target_seam(&mut e, 0x4000, false));
+        assert!(SEEN.with(|s| s.take()).is_empty(), "no user: not asked");
+        e.add_hook_user(Hook::AddVATSTarget, true);
+        assert!(!vats_target_seam(&mut e, 0x4000, false));
+        assert!(
+            SEEN.with(|s| s.take()).is_empty(),
+            "no line of sight: not asked"
+        );
+        assert!(!vats_target_seam(&mut e, 0x4000, true));
+        assert_eq!(SEEN.with(|s| s.take()), vec![vec![0x4000]]);
+    }
+
+    /// The same seam inside the target list (`007f52c0`): one actor in range; without a line of
+    /// sight the handler is not asked (with or without a user); with one and a user it is asked
+    /// with exactly that reference, and its "left out" keeps the actor from the list (its
+    /// position never asked for).
+    #[test]
+    fn the_vats_target_seam_in_the_target_list() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        for (users, sight) in [(0, 0u32), (1, 0), (1, 1)] {
+            let mut e = engine();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x007f_54b1), seam_handler);
+            if users == 1 {
+                e.add_hook_user(Hook::AddVATSTarget, true);
+            }
+            player(&mut e);
+            e.register(0x0150_0070, |_, _| word(0x9000));
+            let reference = object(&mut e, &[(0x1d0, 0x0150_0070)]);
+            let entry = e.mem.alloc(8);
+            e.mem.set_u32(entry, reference);
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, entry);
+            e.mem.set_u32(node + 4, 0);
+            e.register_double(PLAYER_TARGET_LIST, move |_, _| word(node));
+            let destruction = e.mem.alloc(8);
+            e.mem.set_u32(destruction + 4, 0);
+            e.register_double(GET_DESTRUCTION_FORM, move |_, _| word(destruction));
+            e.register_double(GET_DISTANCE_FROM_REFERENCE, |_, _| float(10.0));
+            e.set_global(SETTING_VATS_MAX_ENGAGE_DISTANCE + 4, 100.0f32);
+            e.register_double(LINE_OF_SIGHT, move |_, _| word(sight));
+            e.call_log = Some(vec![]);
+            fn_007f52c0(&mut e);
+            let seen = SEEN.with(|s| s.take());
+            if sight == 1 {
+                assert_eq!(seen, vec![vec![reference]]);
+            } else {
+                assert!(seen.is_empty(), "no line of sight: not asked");
+            }
+            assert_eq!(
+                calls(&e, LINE_OF_SIGHT).len(),
+                1,
+                "the actor reached the test"
+            );
+            assert!(
+                !calls(&e, OBJECT_WORLD_POSITION).contains(&vec![0x9000]),
+                "the actor left out: its scene's position not asked for"
+            );
+        }
     }
 
     #[test]

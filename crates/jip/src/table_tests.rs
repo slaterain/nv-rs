@@ -235,9 +235,11 @@ fn installed_records(installed: bool) {
             && (built
                 || o == 0x2200
                 || o == 0x2210
-                || o == crate::main_loop::SET_GAME_MAIN_LOOP_CALLBACK)
+                || o == crate::main_loop::SET_GAME_MAIN_LOOP_CALLBACK
+                || crate::ui_hooks::COMMANDS.contains(&o))
         {
-            // The built commands, the identity and SetGameMainLoopCallback, once installed.
+            // The built commands, the identity, SetGameMainLoopCallback and the UI hooks' event
+            // commands, once installed.
             nvse::table::execute_address(o)
         } else {
             0

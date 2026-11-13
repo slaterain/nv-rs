@@ -2754,6 +2754,12 @@ fn idle_enter_leave(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut Idl
         let menu = e.get(this, InterfaceManager::pOverTileMenu);
         e.call(DO_ENTER, &args![this, menu, id, tile]);
     }
+    // The seam before the motion test (`0x70D642`, ADR-0016): JIP LN NVSE's
+    // MenuHandleMouseover hook runs the mouseover events of the menu under the pointer. While
+    // the hook has no user: one load.
+    if e.hook_users(engine_core::extend::Hook::MenuHandleMouseover) != 0 {
+        e.site(0x0070_d642, &[this.addr()]);
+    }
     if e.get(this, InterfaceManager::bMouseInMotion) != 0 {
         e.call(CLEAR_MOUSE_OVER_TARGET, &args![this]);
     }
@@ -12788,6 +12794,45 @@ mod tests {
         returns(&mut e, FTOL, 9);
         returns(&mut e, TILE_GET_MENU, 0x7000);
         (e, m)
+    }
+
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn seam_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        None
+    }
+
+    /// The seam before the motion test (`0x70D642`, JIP LN NVSE's MenuHandleMouseover hook):
+    /// with a handler there and no user of the hook, the handler is not asked and the pointer's
+    /// tile change runs as the exe's (the motion test clears the target); with a user, it is
+    /// asked with the interface manager, then the same.
+    #[test]
+    fn the_mouseover_seam_waits_for_a_user() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        for users in [0, 1] {
+            let (mut e, m) = focus_world();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0070_d642), seam_handler);
+            if users == 1 {
+                e.add_hook_user(Hook::MenuHandleMouseover, true);
+            }
+            returns(&mut e, HAS_360_CONTROLLER_GETTER, 0);
+            e.set(m, InterfaceManager::bMouseInMotion, 1);
+            let mut state = IdleState {
+                picked_tile: 0x400,
+                ..IdleState::default()
+            };
+            idle_enter_leave(&mut e, m, &mut state);
+            assert_eq!(calls(&e, CLEAR_MOUSE_OVER_TARGET), vec![vec![m.addr()]]);
+            let seen = SEEN.with(|s| s.take());
+            if users == 0 {
+                assert!(seen.is_empty(), "no user: not asked");
+            } else {
+                assert_eq!(seen, vec![vec![m.addr()]]);
+            }
+        }
     }
 
     #[test]
