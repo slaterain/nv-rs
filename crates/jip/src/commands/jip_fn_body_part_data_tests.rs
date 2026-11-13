@@ -233,3 +233,13 @@ fn the_flags() {
     call(&mut e, 0x26ba, &[r(1), n(0), n(1), n(1)]);
     assert_eq!(e.mem.u8(PART + 0x60), 0x90, "no part 0");
 }
+
+/// A byte trait past the `int` range: `bodyPart->actorValue = val` converts the float with
+/// `cvttss2si` (`INT_MIN`), whose low byte is 0 (a saturating conversion would give 0xFF).
+#[test]
+fn a_byte_trait_past_the_int_range() {
+    let mut e = setup();
+    e.mem.set_u8(PART + 0x63, 17);
+    call(&mut e, 0x26b2, &[r(1), n(1), n(0), z(3e9)]);
+    assert_eq!(e.mem.u8(PART + 0x63), 0);
+}

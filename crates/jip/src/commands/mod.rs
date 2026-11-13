@@ -4,9 +4,9 @@
 //! game's heap. [`install`] gives each listed command its handler in JIP's table; a JIP command
 //! that is not listed keeps its record with no handler (a call fails, as without the DLL).
 //!
-//! Built commands work whatever [`crate::ANSWERS_INSTALLED`] says: a mod checking for JIP is told
-//! "not installed" until step 3.10, so only tests (and a script that calls them anyway) reach
-//! them today.
+//! Handlers and names exist only while JIP answers "installed" ([`crate::ANSWERS_INSTALLED`], off
+//! until step 3.10): until then every JIP opcode, built or not, is as without the DLL, and only
+//! tests (on an engine installed with the flag on) reach the commands built here.
 
 pub mod forms;
 pub mod jip_fn_body_part_data;

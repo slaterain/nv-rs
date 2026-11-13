@@ -166,11 +166,18 @@ fn stages(e: &Engine) -> Vec<u32> {
 #[test]
 fn a_stage_added() {
     let mut e = setup();
-    // In the middle: a new array one longer, the old freed.
+    // In the middle: a new array one longer (3 pointers: 12 bytes), the old freed.
     let (_, res) = call(&mut e, 0x26f3, &[r(1), n(1), n(60), n(258)]);
     assert_eq!(res, 1.0);
+    assert_eq!(alloc_sizes(), vec![0x18, 12], "the stage, then 4 * (count + 1)");
     let now = stages(&e);
     assert_eq!(now.len(), 3);
+    let array = e.mem.u32(DATA + 8);
+    assert_eq!(
+        e.mem.u32(array + 12),
+        0xcdcd_cdcd,
+        "nothing written past the 12-byte block (its padding keeps the heap's fill)"
+    );
     assert_eq!((now[0], now[2]), (STAGE0, STAGE1));
     let new = now[1];
     assert_eq!(e.mem.u8(new + 1), 60);
@@ -182,9 +189,16 @@ fn a_stage_added() {
         0x0100_0000,
         "marked destructible"
     );
-    // A negative index: the end.
+    // A negative index: the end. The array (16 bytes) comes right after the 0x18-byte stage; a
+    // sentinel just past it must survive.
+    CALLS.with(|c| c.borrow_mut().clear());
+    let past = heap_next(&e) + 0x18 + 16;
+    e.mem.set_u32(past, 0x5e47_1e15);
     let (_, res) = call(&mut e, 0x26f3, &[r(1), n(-1), n(1), n(1)]);
     assert_eq!(res, 3.0);
+    assert_eq!(alloc_sizes(), vec![0x18, 16]);
+    assert_eq!(e.mem.u32(DATA + 8) + 16, past);
+    assert_eq!(e.mem.u32(past), 0x5e47_1e15, "the sentinel past the new array");
     assert_eq!(stages(&e).len(), 4);
     // Past the count: nothing, -1.
     let (_, res) = call(&mut e, 0x26f3, &[r(1), n(5), n(1), n(1)]);
@@ -260,4 +274,13 @@ fn a_later_stage_removed() {
     // Count but no array: -1.
     e.mem.set_u32(DATA + 8, 0);
     assert_eq!(call(&mut e, 0x26f4, &[r(1), n(0)]).1, -1.0);
+}
+
+/// The sizes the commands asked the game's heap for, in order.
+fn alloc_sizes() -> Vec<u32> {
+    calls()
+        .iter()
+        .filter(|c| c.0 == 0x00aa_3e40)
+        .map(|c| c.1[1])
+        .collect()
 }

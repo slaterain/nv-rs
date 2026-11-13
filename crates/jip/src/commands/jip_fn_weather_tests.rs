@@ -251,3 +251,14 @@ fn the_clouds() {
         vec![(0x0063_4110, vec![CLOUDS_OBJECT, SKY_OBJECT, 0])]
     );
 }
+
+/// Trait 13 past the `int` range: `(int)value` is `cvttsd2si`'s `INT_MIN` (0x80000000), which is
+/// a power of two by JIP's test, so the classification byte becomes its low byte, 0 (a
+/// saturating conversion would give 0x7FFFFFFF and write nothing).
+#[test]
+fn a_classification_past_the_int_range() {
+    let mut e = setup();
+    e.mem.set_u8(WEATHER + 0xeb, 8);
+    call(&mut e, 0x265a, &[r(1), n(13), z(3e9)]);
+    assert_eq!(e.mem.u8(WEATHER + 0xeb), 0);
+}

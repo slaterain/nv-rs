@@ -1,6 +1,6 @@
 //! `functions_jip/jip_fn_weather.h` (JIP LN NVSE): a weather's image space modifiers, cloud
 //! textures, precipitation model, numbers and colours, and the sky's current weather, wind,
-//! lightning and clouds. 15 of its 18 commands.
+//! lightning and clouds. 16 of its 18 commands.
 //!
 //! Not built (they only set a value one of JIP's hooks reads; hook sites, steps 3.5/3.9):
 //! `SetWeatherTransitionTimeOverride` (`0x27A6`, JIP's `UpdateWeather` hook and
