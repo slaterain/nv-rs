@@ -59,6 +59,7 @@ pub static FIXES: &[Fix] = &[
     VATS_LAG,
     ACTOR_CAUSE_WITNESSES,
     RADIO_LENGTHS,
+    FACIAL_HAIR_BY_RACE_FOLDER,
     crate::patch_data::STRIP_LOD_WATER,
     crate::direct_files::FIX,
 ];
@@ -175,6 +176,47 @@ fn install_radio_lengths(e: &mut Engine) {
     let (at, f) = engine::entry!(
         0x0083_0b30,
         fallout_audio_media_thread_proc_radio_row(Ptr) -> u32
+    );
+    e.register(at, f);
+}
+
+/// The character menu's facial hair list offers every playable head part to every race
+/// (`005e7a60` tests only the playable bit), so a plugin's own race cannot keep its refitted beards
+/// to itself. With the row a race whose head model (for the chosen sex) lies in a directory of its
+/// own with playable head parts under it is offered only those parts, and every other race all
+/// parts but those (`engine::units::fallout_interface::racesexmenu::FacialHairFilter`): `_Create`
+/// (`007acb60`) builds the list so, and a click that changes the race or sex (`007adce0`) builds it
+/// again when the offered parts change, which the original never does. A worn playable part the
+/// choice is not offered is taken off there and after a face preset's copy (`SliderRelease`,
+/// `007b4b50`). For the game's own data nothing changes. Vanilla offers every part to every race.
+pub const FACIAL_HAIR_BY_RACE_FOLDER: Fix = Fix {
+    name: "facial hair by race folder",
+    env: "NV_FACIAL_HAIR_RACE",
+    addresses: &[0x007a_cb60, 0x007a_dce0, 0x007b_4b50],
+    summary:
+        "facial hair made for one race's head is offered only to that race in the character menu",
+    install: install_facial_hair_by_race_folder,
+};
+
+fn install_facial_hair_by_race_folder(e: &mut Engine) {
+    use engine::units::fallout_interface::racesexmenu::{
+        race_sex_menu_create_contents_facial_hair_by_race,
+        race_sex_menu_do_click_facial_hair_by_race,
+        race_sex_menu_slider_release_facial_hair_by_race, RaceSexMenu,
+    };
+    let (at, f) = engine::entry!(
+        0x007a_cb60,
+        race_sex_menu_create_contents_facial_hair_by_race(Ptr<RaceSexMenu>, i32)
+    );
+    e.register(at, f);
+    let (at, f) = engine::entry!(
+        0x007a_dce0,
+        race_sex_menu_do_click_facial_hair_by_race(Ptr<RaceSexMenu>, i32, u32)
+    );
+    e.register(at, f);
+    let (at, f) = engine::entry!(
+        0x007b_4b50,
+        race_sex_menu_slider_release_facial_hair_by_race(Ptr<RaceSexMenu>)
     );
     e.register(at, f);
 }
