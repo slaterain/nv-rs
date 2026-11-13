@@ -8,6 +8,7 @@
 //! until step 3.10): until then every JIP opcode, built or not, is as without the DLL, and only
 //! tests (on an engine installed with the flag on) reach the commands built here.
 
+pub mod arrays;
 pub mod forms;
 pub mod jip_fn_ammo;
 pub mod jip_fn_ammo_effect;
