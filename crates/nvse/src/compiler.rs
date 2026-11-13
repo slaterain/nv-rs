@@ -25,7 +25,7 @@
 //! `ExpressionParser::ParseParentheses` (the GECK's inline expressions; editor only).
 
 use crate::expr::{can_convert, op, op_symbol, operand_count, Ty};
-use crate::table::{guest_text, opcode_by_name, record_of, return_type, Returns};
+use crate::table::{guest_text, name_map, opcode_by_name, record_of, return_type, Returns};
 use crate::Nvse;
 use engine_core::prelude::*;
 use std::collections::HashMap;
@@ -142,7 +142,6 @@ pub(crate) mod tt {
     pub const ARRAY_ELEMENT: Code = 7;
     pub const SLICE: Code = 8;
     pub const COMMAND: Code = 9;
-    pub const VARIABLE: Code = 10;
     pub const NUMERIC_VAR: Code = 11;
     pub const REF_VAR: Code = 12;
     pub const STRING_VAR: Code = 13;
@@ -467,10 +466,29 @@ pub struct State {
     pub(crate) skip_ref_check: bool,
     /// `g_currentScriptRestorePoundChar`: the `#version` tags made comments, per open compile.
     pub(crate) pound_restores: Vec<Vec<u32>>,
+    /// The command names' map while a script compiles ([`command_by_name`]).
+    pub(crate) names: Option<HashMap<u32, Option<u32>>>,
 }
 
 pub(crate) fn state(e: &mut Engine) -> &mut State {
     &mut e.ext::<Nvse>().compiler
+}
+
+/// `g_scriptCommands.GetByName`: while a script compiles, through the name map made at the
+/// compile's first lookup (dropped when it ends); otherwise the table's own walk.
+pub(crate) fn command_by_name(e: &mut Engine, name: &[u8]) -> Option<u32> {
+    if state(e).scripts.is_empty() {
+        return opcode_by_name(e, name);
+    }
+    if state(e).names.is_none() {
+        let map = name_map(e);
+        state(e).names = Some(map);
+    }
+    let hash = crate::events::hash_name(name);
+    state(e)
+        .names
+        .as_ref()
+        .and_then(|m| m.get(&hash).copied().flatten())
 }
 
 // ---- guest helpers ----
@@ -1654,7 +1672,7 @@ impl Parser {
             }
         }
         if !want_string_var {
-            if let Some(opcode) = opcode_by_name(e, &token) {
+            if let Some(opcode) = command_by_name(e, &token) {
                 let record = record_of(e, opcode);
                 let quest = e.mem.u16(self.buf + sb::TYPE) == QUEST_SCRIPT;
                 if quest && e.mem.u16(record + 0x10) != 0 && ref_var == 0 && !from_stack {
@@ -2006,11 +2024,7 @@ impl Parser {
     /// parameter (xNVSE's types: every run-time caller passes them), after a count byte; the
     /// cursor is left past the arguments (the whole line's parse: no run-time caller asks for
     /// less).
-    pub(crate) fn parse_args(
-        &mut self,
-        e: &mut Engine,
-        params: &Params,
-    ) -> bool {
+    pub(crate) fn parse_args(&mut self, e: &mut Engine, params: &Params) -> bool {
         let count_at = data_len(e, self.line);
         set_data_len(e, self.line, count_at.wrapping_add(1));
         let num_params = params.count();
@@ -2491,7 +2505,7 @@ pub(crate) fn create_variable(
         compiler_error(e, line, &m);
         return 0;
     }
-    if opcode_by_name(e, name).is_some() {
+    if command_by_name(e, name).is_some() {
         let mut m = b"Invalid variable name ".to_vec();
         m.extend_from_slice(name);
         m.extend_from_slice(b": Command with that name already exists.");

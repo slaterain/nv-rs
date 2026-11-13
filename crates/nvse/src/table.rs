@@ -394,6 +394,35 @@ pub fn opcode_by_name(e: &Engine, name: &[u8]) -> Option<u32> {
         .find(|&opcode| names(tables.record(opcode)).into_iter().any(matches))
 }
 
+/// [`opcode_by_name`]'s answers all at once, as xNVSE's `g_cmdTableCache` holds them: each name's
+/// hash and the record that brought it first (`None` for a console command's), for a compile's
+/// many lookups (the table does not change while a script compiles).
+pub fn name_map(e: &Engine) -> HashMap<u32, Option<u32>> {
+    let mut map = HashMap::new();
+    let hash = |ptr: u32| {
+        let text = if ptr == 0 {
+            Vec::new()
+        } else {
+            guest_text(e, ptr)
+        };
+        crate::events::hash_name(&text)
+    };
+    for i in 0..CONSOLE_COUNT {
+        let at = CONSOLE_TABLE + i * RECORD;
+        for ptr in [e.mem.u32(at), e.mem.u32(at + 4)] {
+            map.entry(hash(ptr)).or_insert(None);
+        }
+    }
+    let tables = e.script_tables();
+    for opcode in ScriptTables::FIRST_OPCODE..tables.max_opcode {
+        let at = tables.record(opcode);
+        for ptr in [e.mem.u32(at), e.mem.u32(at + 4)] {
+            map.entry(hash(ptr)).or_insert(Some(opcode));
+        }
+    }
+    map
+}
+
 /// The execute address of built command `opcode` of xNVSE's range.
 pub fn execute_address(opcode: u32) -> u32 {
     EXECUTE_BASE + 4 * (opcode - FIRST_OPCODE)

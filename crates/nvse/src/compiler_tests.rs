@@ -959,8 +959,7 @@ fn declared_types_come_from_the_text() {
 #[test]
 fn the_script_tokenizer_leaves_comments_out() {
     use crate::compile_hooks::ScriptTokenizer;
-    let text =
-        b"  a b;c
+    let text = b"  a b;c
 
 /* x
  y */ d \"e f\"
@@ -1212,9 +1211,7 @@ fn the_players_xnvse_lines_compile_to_their_bytes() {
                     continue;
                 }
                 let record = record_of(&e, *op);
-                let (first, rest) = text
-                    .split_once([' ', '\t'])
-                    .unwrap_or((text.as_str(), ""));
+                let (first, rest) = text.split_once([' ', '\t']).unwrap_or((text.as_str(), ""));
                 if *on_ref || crate::table::opcode_by_name(&e, first.as_bytes()) != Some(*op) {
                     passed_over += 1;
                     continue;
@@ -1222,8 +1219,7 @@ fn the_players_xnvse_lines_compile_to_their_bytes() {
                 e.mem.write(line, &[0; ln::STRUCT as usize]);
                 e.mem.set_u32(line + ln::NUMBER, number as u32 + 1);
                 let rest = rest.as_bytes();
-                e.mem
-                    .write(line + ln::TEXT, &rest[..rest.len().min(0x1ff)]);
+                e.mem.write(line + ln::TEXT, &rest[..rest.len().min(0x1ff)]);
                 e.mem.set_u32(line + ln::OPCODE, *op);
                 NEEDS_GAME_PARSER.with(|n| n.set(false));
                 let parse = e.mem.u32(record + 0x1c);
@@ -1321,7 +1317,10 @@ fn a_reference_that_is_not_persistent_is_a_string() {
     );
     assert_eq!(printed().len(), 1);
     e.mem.set_u32(LOOSE_REF + 8, 0x400);
-    assert_eq!(compiled(&mut e, EVAL, "LooseRef"), args_of(&[arg(&[b"R\x04\x00"])]));
+    assert_eq!(
+        compiled(&mut e, EVAL, "LooseRef"),
+        args_of(&[arg(&[b"R\x04\x00"])])
+    );
 }
 
 /// The dot syntax on a command's result: the right-hand command takes its calling reference
@@ -1341,4 +1340,29 @@ fn a_dot_after_a_result_calls_on_the_stack() {
         args_of(&[arg(&[&first, &second, &[op::DOT]])])
     );
     assert!(printed().is_empty());
+}
+
+/// While a script compiles the command names come from one map, made as xNVSE's name map is
+/// (the first record to bring a name keeps it): the table walk's answers, a short name that
+/// another record has as its long name included; the map goes when the compile ends.
+#[test]
+fn a_compile_finds_names_through_one_map() {
+    let mut e = installed();
+    let short = AREA + 0x7c0;
+    e.mem.write(short, b"Let\0");
+    let two = record_of(&e, TWO);
+    e.mem.set_u32(two + 4, short);
+    set_buf_text(&mut e, "int i\r\n");
+    assert_eq!(e.site(0x005a_ebb1, &[SCRIPT, BUF]), Some(1));
+    for name in ["Let", "TwoArgs", "eval", "nothing"] {
+        assert_eq!(
+            command_by_name(&mut e, name.as_bytes()),
+            crate::table::opcode_by_name(&e, name.as_bytes()),
+            "{name}"
+        );
+    }
+    assert_eq!(command_by_name(&mut e, b"let"), Some(TWO));
+    assert!(state(&mut e).names.is_some());
+    e.site(0x005a_eda0, &[1, BUF]);
+    assert!(state(&mut e).names.is_none());
 }

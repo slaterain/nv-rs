@@ -30,10 +30,8 @@
 //! 0x400-byte string buffer at `00593DB6`), which are fixes of the game's `set`/`if` compiler
 //! rather than xNVSE's compiler.
 
-use crate::compiler::{
-    self, is_space, ln, opt_text, sb, sc, show_error, state, str_equal, vt,
-};
-use crate::table::opcode_by_name;
+use crate::compiler::{self, is_space, ln, opt_text, sb, sc, show_error, state, str_equal, vt};
+
 use engine_core::extend::{Owner, SiteSlot};
 use engine_core::prelude::*;
 
@@ -77,7 +75,7 @@ pub fn install(e: &mut Engine) {
 fn get_function(e: &mut Engine, w: &[u32]) -> Option<u32> {
     let word = w.first().copied().unwrap_or(0);
     let name = crate::table::guest_text(e, word);
-    match opcode_by_name(e, &name) {
+    match compiler::command_by_name(e, &name) {
         Some(opcode) => {
             e.mem.set_u8(word + 0x204, b'X');
             e.mem.set_u32(word + 0x208, opcode);
@@ -197,6 +195,7 @@ fn end_compile(e: &mut Engine, w: &[u32]) -> Option<u32> {
         let empty = s.scripts.is_empty();
         if empty {
             s.var_types.clear();
+            s.names = None;
         }
         let text = e.mem.u32(script + sc::TEXT);
         if text != 0 {
