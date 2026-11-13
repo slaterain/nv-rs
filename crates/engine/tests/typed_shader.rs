@@ -47,8 +47,42 @@ fn ret(eax: u32) -> Ret {
     }
 }
 
-fn slot_answer<const S: u32>(e: &mut Engine, _: &[u32]) -> Ret {
+fn slot_answer<const S: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+    if ACCEPTANCE_READING.with(std::cell::Cell::get) {
+        // The acceptance check: what the slot is handed past `this` read and folded into a mark.
+        // One mark a slot (`RETS + 0xc00 + slot`), so a POISON difference names the slot.
+        acceptance_read_args(e, a.get(1..).unwrap_or_default(), 0xc00 + S);
+    }
     ret(e.mem.u32(RETS + S))
+}
+
+thread_local! {
+    /// While set (the acceptance check's worlds, [`acceptance_world`]), the stand-ins [`marked`] and [`slot_answer`]
+    /// read what each pointer they are handed points to, so a live read through them is a census hit and a POISON
+    /// difference.
+    static ACCEPTANCE_READING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The acceptance check's reading of a stand-in's arguments: each word that points into mapped memory (past the
+/// zero page) is replaced by the word it points to (read, so the census sees it), each other word kept; all folded
+/// into the mark at `RETS + mark`. A pointer's own value (a stack local, a packet image or main's object) is left
+/// out, so the mark compares what was handed, not where.
+fn acceptance_read_args(e: &mut Engine, args: &[u32], mark: u32) {
+    let mut h = e
+        .mem
+        .u32(RETS + mark)
+        .wrapping_mul(31)
+        .wrapping_add(args.len() as u32);
+    for w in args {
+        let mut word = [0u8; 4];
+        let v = if *w >= 0x1000 && e.mem.is_mapped(*w) && e.mem.try_read(*w, &mut word).is_ok() {
+            u32::from_le_bytes(word) ^ 0x5bd1_e995
+        } else {
+            *w
+        };
+        h = h.wrapping_mul(17).wrapping_add(v);
+    }
+    e.mem.set_u32(RETS + mark, h);
 }
 
 macro_rules! slots {
@@ -320,8 +354,17 @@ fn world_named(e: &mut Engine, render: bool, dispatch: bool) -> W {
     world_all(e, render, dispatch, true)
 }
 
+thread_local! {
+    /// The world the acceptance check builds its set-up passes in: while set, [`world_all`] answers it instead of
+    /// building another (the set-up tests' worlds then add to the whole draw's, [`acceptance_world`]).
+    static REUSED_WORLD: std::cell::Cell<Option<W>> = const { std::cell::Cell::new(None) };
+}
+
 /// [`world_named`] with the draw family's members stood in or not ([`stand_ins_all`]).
 fn world_all(e: &mut Engine, render: bool, dispatch: bool, draw: bool) -> W {
+    if let Some(w) = REUSED_WORLD.with(std::cell::Cell::get) {
+        return w;
+    }
     stand_ins_all(e, render, dispatch, draw);
     // The two constant switch objects the first pass begin sets (`011febf0`, `011fec38`).
     for at in [0x011f_ebf0u32, 0x011f_ec38] {
@@ -6263,6 +6306,10 @@ const DRAW_COUNTERS: &[u32] = &[
 
 /// A stand-in that folds its words into a mark (`RETS + 0x780`), so the calls' order and words show.
 fn marked(e: &mut Engine, a: &[u32]) -> Ret {
+    if ACCEPTANCE_READING.with(std::cell::Cell::get) {
+        acceptance_read_args(e, a, 0x780);
+        return ret(0);
+    }
     let mut h = e
         .mem
         .u32(RETS + 0x780)
@@ -12196,4 +12243,1624 @@ fn leaf_setup_constants_with_the_leaf_class() {
     })
     .run()
     .assert_same();
+}
+
+// ---- The whole-frame acceptance check (the drawing thread's piece 8 entry condition) ----
+//
+// The whole world draw runs twice in the test world, with the touch census (`Mem::enable_touch`) on the ranges main
+// owns (what the frame's tail may change): once with the switch off, once with it on (the packet filled at the cut,
+// the own state taken). With the switch on every read of a range the packet or the own state holds is served from
+// the packet, so a census hit on such a range during the draw is a read or write that escaped them: the census
+// names the function (each typed call goes by address while a diagnostic is on), the object kind, the offset and
+// whether it wrote. Hits on main-owned fields the cut does not copy are listed too, for their owners to class as
+// set at load (read in place) or changed by the tail (to copy). The two runs must also leave the same memory.
+
+use engine_core::mem::{TouchHit, TouchSpec};
+use engine_core::typed::diff::memory_differences_beside_stack;
+
+/// The kinds of main-owned range the check tags, with the ranges of each the cut or the own state copies (offsets
+/// in the object; the cut's `take_*` rules and the own blocks).
+const ACCEPTANCE_KINDS: &[(&str, &[(u32, u32)])] = &[
+    ("geometry", &[(0x68, 0x9c)]),
+    ("bound", &[(0, 0x10)]),
+    ("shader property", &[(0x24, 0x38)]),
+    ("camera", &[(0x68, 0x114)]),
+    ("accumulator", &[(8, 0xc), (0x38, 0x39), (0x3a, 0x3b)]),
+    ("pass", &[(9, 0xa), (0xc, 0x10)]),
+    ("light array", &[(0, 0x40)]),
+    (
+        "pass light",
+        &[
+            (0x10, 0x50),
+            (0xd0, 0xd8),
+            (0xed, 0xee),
+            (0xf4, 0xfc),
+            (0x144, 0x1a4),
+        ],
+    ),
+    ("light", &[(0x68, 0x9c), (0xc4, 0xec), (0xf0, 0xfc)]),
+    ("own global", &[(0, u32::MAX)]),
+    ("render state cache", &[(4, 0x1114)]),
+    ("frame value", &[(0, u32::MAX)]),
+    ("fog property", &[(0x20, 0x34), (0x60, 0x64)]),
+    ("main object", &[]),
+];
+
+/// What the acceptance world tags: (kind index, address, length), for the passes `passes` (their geometries,
+/// bounds, shader properties, light arrays, pass lights and lights) and the frame (camera, accumulator, own
+/// blocks, render state cache, frame values).
+fn acceptance_objects(e: &Engine, d: &DrawW, passes: &[u32]) -> Vec<(u16, u32, u32)> {
+    let mut v = Vec::new();
+    let mut passes = passes.to_vec();
+    passes.sort_unstable();
+    passes.dedup();
+    let mut geometries: Vec<u32> = passes.iter().map(|p| e.mem.u32(*p)).collect();
+    geometries.sort_unstable();
+    geometries.dedup();
+    for g in geometries.into_iter().filter(|g| *g != 0) {
+        v.push((0, g, 0xc4));
+        let bound = e.mem.u32(g + 0x20);
+        if bound != 0 {
+            v.push((1, bound, 0x10));
+        }
+        let property = e.mem.u32(g + 0xa8);
+        if property != 0 {
+            // The whole block: each class reads its own fields past the base property's.
+            let len = e.mem.block_size(property).unwrap_or(0x80).min(0x400);
+            v.push((2, property, len));
+        }
+    }
+    v.push((3, e.mem.u32(d.w.acc + 8), 0x114));
+    v.push((4, d.w.acc, 0x1ac));
+    let mut seen = Vec::new();
+    for p in passes.into_iter().filter(|p| *p != 0) {
+        v.push((5, p, 0x10));
+        let count = u32::from(e.mem.u8(p + 9));
+        let lights = e.mem.u32(p + 0xc);
+        if lights == 0 || seen.contains(&lights) {
+            continue;
+        }
+        seen.push(lights);
+        v.push((6, lights, 4 * count.max(1)));
+        for i in 0..count {
+            let shadow = e.mem.u32(lights + 4 * i);
+            if shadow == 0 || seen.contains(&shadow) {
+                continue;
+            }
+            seen.push(shadow);
+            v.push((7, shadow, 0x1a4));
+            let mut word = [0u8; 4];
+            if e.mem.try_read(shadow + 0xf8, &mut word).is_err() {
+                continue;
+            }
+            let light = u32::from_le_bytes(word);
+            if light != 0 && !seen.contains(&light) {
+                seen.push(light);
+                v.push((8, light, 0xfc));
+            }
+        }
+    }
+    for (from, to) in statics::GLOBAL_BLOCKS {
+        v.push((9, from, to - from));
+    }
+    v.push((10, d.w.cache, 0x1114));
+    for (at, len) in [
+        (0x011f_940cu32, 0x10u32),
+        (0x011f_94ac, 4),
+        (0x011f_91c4, 1),
+    ] {
+        v.push((11, at, len));
+    }
+    // The fog index's scene node's fog property (the cut takes its values).
+    let node = e
+        .mem
+        .u32(0x011f_91c8 + 4 * u32::from(e.mem.u8(0x011f_91c4)));
+    if node != 0 && e.mem.u32(node + 0x134) != 0 {
+        let fog = e.mem.u32(node + 0x134);
+        v.push((12, fog, e.mem.block_size(fog).unwrap_or(0x80).min(0x400)));
+    }
+    // Main's other objects the draw can reach: every heap block reached from the tagged objects' pointer words,
+    // from the accumulators' +0x194 and from the globals the set-ups read (the held and shader accumulators, the
+    // scene camera, the shadow scene nodes), in up to two steps, that is not tagged yet: a "main object" named by
+    // its path (`ACCEPTANCE_NAMES`). No rule says what the cut copies of them; the POISON run's probe does.
+    let mut names = std::collections::HashMap::new();
+    let mut tagged: std::collections::HashSet<u32> = v.iter().map(|(_, a, _)| *a).collect();
+    let mut found = Vec::new();
+    let roots: Vec<(String, u32, u32)> = {
+        let mut r = Vec::new();
+        for (kind, addr, _) in &v {
+            let name = ACCEPTANCE_KINDS[*kind as usize].0;
+            if matches!(*kind, 0 | 2 | 3 | 7 | 8 | 12) {
+                r.push((name.to_string(), *addr, 2));
+            }
+        }
+        for (name, at) in [
+            ("scene camera", 0x011f_95d8u32),
+            ("shadow scene node", 0x011f_91c8),
+        ] {
+            r.push((name.to_string(), e.mem.u32(at), 2));
+        }
+        r
+    };
+    fn walk(
+        e: &Engine,
+        name: String,
+        addr: u32,
+        depth: u32,
+        root: bool,
+        tagged: &mut std::collections::HashSet<u32>,
+        found: &mut Vec<(String, u32, u32)>,
+    ) {
+        let Some(size) = e.mem.block_size(addr) else {
+            return;
+        };
+        if !root {
+            if !tagged.insert(addr) {
+                return;
+            }
+            found.push((name.clone(), addr, size.min(0x400)));
+        }
+        if depth == 0 {
+            return;
+        }
+        for off in (4..size.min(0x400)).step_by(4) {
+            let p = e.mem.u32(addr + off);
+            if p != addr && e.mem.block_size(p).is_some() {
+                walk(
+                    e,
+                    format!("{name} +{off:#x}"),
+                    p,
+                    depth - 1,
+                    false,
+                    tagged,
+                    found,
+                );
+            }
+        }
+    }
+    for (name, addr, depth) in roots {
+        let root = tagged.contains(&addr);
+        walk(e, name, addr, depth, root, &mut tagged, &mut found);
+    }
+    // The accumulators the set-ups ask for (held 011f95f0, the shader manager's 011f95ec): another than the drawn
+    // one is tagged whole as a main object (its lists are not drawn: not walked); each one's +0x194 (its light
+    // camera, with the light list at +0xe0) is walked.
+    for (name, at) in [
+        ("held accumulator", 0x011f_95f0u32),
+        ("shader accumulator", 0x011f_95ec),
+    ] {
+        let acc = e.mem.u32(at);
+        if acc != 0 && acc != d.w.acc && !tagged.contains(&acc) {
+            if let Some(size) = e.mem.block_size(acc) {
+                tagged.insert(acc);
+                found.push((name.to_string(), acc, size.min(0x400)));
+            }
+        }
+    }
+    // The drawn accumulator's batch renderers and their pass groups (filled by main's accumulation, emptied by
+    // the draw).
+    for br in d.renderers() {
+        for (name, obj) in [("batch renderer", br), ("pass groups", e.mem.u32(br + 8))] {
+            if obj != 0 && tagged.insert(obj) {
+                let size = e.mem.block_size(obj).unwrap_or(0x98).min(0x400);
+                found.push((name.to_string(), obj, size));
+            }
+        }
+    }
+    for acc in [d.w.acc, e.mem.u32(0x011f_95f0), e.mem.u32(0x011f_95ec)] {
+        if acc != 0 && e.mem.block_size(acc).is_some() {
+            let p = e.mem.u32(acc + 0x194);
+            walk(
+                e,
+                "accumulator +0x194".to_string(),
+                p,
+                2,
+                false,
+                &mut tagged,
+                &mut found,
+            );
+        }
+    }
+    for (name, addr, len) in found {
+        names.insert(addr, name);
+        v.push((MAIN_OBJECT, addr, len));
+    }
+    ACCEPTANCE_NAMES.with(|n| *n.borrow_mut() = names);
+    v
+}
+
+/// The kind of [`acceptance_objects`]' "main objects" (named by path in [`ACCEPTANCE_NAMES`]).
+const MAIN_OBJECT: u16 = 13;
+
+thread_local! {
+    /// The paths of the main objects the last [`acceptance_objects`] on this thread tagged, by address.
+    static ACCEPTANCE_NAMES: std::cell::RefCell<std::collections::HashMap<u32, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The shader set-ups the acceptance world can add a pass for, each on its own shader class (its slot 0x7c the
+/// real set-up), its data made by the set-up's own test world.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AcceptanceSetup {
+    ShadowLight,
+    Sky,
+    TallGrass,
+    NoLighting,
+    Water,
+    Leaves,
+    Lighting30,
+    /// Not a shader set-up: a particle geometry (its slot 0xe0 the particles' immediate draw, `00a9b1f0`) on the
+    /// world's shader.
+    Particles,
+}
+
+const ACCEPTANCE_SETUPS: &[AcceptanceSetup] = &[
+    AcceptanceSetup::ShadowLight,
+    AcceptanceSetup::Sky,
+    AcceptanceSetup::TallGrass,
+    AcceptanceSetup::NoLighting,
+    AcceptanceSetup::Water,
+    AcceptanceSetup::Leaves,
+    AcceptanceSetup::Lighting30,
+    AcceptanceSetup::Particles,
+];
+
+/// A particle geometry's pass in the acceptance world: the world geometry's words, its slot 0xe0 the particles'
+/// immediate draw, its model data a particle data block (the count slot 0x90 the particles' `00a923a0`, two
+/// particles with positions, sizes and scales), a bound of its own; a pass like the first pass.
+fn acceptance_particle_pass(e: &mut Engine, d: &DrawW) -> u32 {
+    let vt = vtable(e, &[(0xe0, 0x00a9_b1f0)]);
+    let geometry = obj(e, 0xc4, vt);
+    for off in (4..0xc4).step_by(4) {
+        let word = e.mem.u32(d.w.geometry + off);
+        set(e, geometry + off, word);
+    }
+    set(e, geometry + 4, 1);
+    let bound = e.mem.alloc(0x10);
+    let from = e.mem.u32(d.w.geometry + 0x20);
+    for k in 0..4 {
+        let word = e.mem.u32(from + 4 * k);
+        set(e, bound + 4 * k, word);
+    }
+    set(e, geometry + 0x20, bound);
+    let data_vt = vtable(e, &[(0x90, 0x00a9_23a0)]);
+    let data = obj(e, 0x70, data_vt);
+    e.mem.set_u16(data + 0xe, 0xabcd);
+    e.mem.set_u16(data + 0x50, 2);
+    e.mem.set_u16(data + 8, 4);
+    for (off, n) in [(0x20u32, 12u32), (0x4c, 4), (0x54, 4)] {
+        let array = e.mem.alloc(4 * n);
+        for i in 0..n {
+            set(e, array + 4 * i, ONE + (i << 16));
+        }
+        set(e, data + off, array);
+    }
+    set(e, geometry + 0xb8, data);
+    let pass = e.mem.alloc(0x10);
+    for k in 0..4 {
+        let word = e.mem.u32(d.w.passes[0] + 4 * k);
+        set(e, pass + 4 * k, word);
+    }
+    set(e, pass, geometry);
+    pass
+}
+
+/// A pass for set-up `which` in the acceptance world: the set-up test's world made on the whole draw's (its
+/// shader, state block, geometry and rendered pass), then a geometry of the draw's size with that geometry's
+/// words, the state block at its +0x9c, no skin, the shader with the set-up at its slot 0x7c (+0xc0), and a pass
+/// of the set-up's pass type with the rendered pass's lights.
+fn acceptance_setup_pass(e: &mut Engine, d: &DrawW, which: AcceptanceSetup) -> u32 {
+    if which == AcceptanceSetup::Particles {
+        return acceptance_particle_pass(e, d);
+    }
+    REUSED_WORLD.with(|r| r.set(Some(d.w)));
+    let (words, slot, state_words) = match which {
+        AcceptanceSetup::ShadowLight => {
+            let g = geometry_shape(e, &Shape::plain());
+            (vec![g.shader, g.block], 0x00b7_dab0, 5)
+        }
+        AcceptanceSetup::Sky => {
+            let c = &cases_of(
+                SKY_CONSTANTS,
+                &[&[
+                    1,
+                    0,
+                    5,
+                    3,
+                    1,
+                    ONE,
+                    0x4500_0000,
+                    0x4396_0000,
+                    0,
+                    1,
+                    0x4580_0000,
+                    0x4480_0000,
+                ]],
+            )[0];
+            (sky_constants_words(e, c), 0x00b8_9d80, 5)
+        }
+        AcceptanceSetup::TallGrass => {
+            let c = &cases_of(
+                TALL_GRASS_CONSTANTS,
+                &[&[
+                    1,
+                    0,
+                    1,
+                    0x4561_2340,
+                    0x4040_0000,
+                    1,
+                    1,
+                    2,
+                    0,
+                    0x3fc0_0000,
+                    0,
+                ]],
+            )[0];
+            (tall_grass_constants_words(e, c), 0x00ba_c9c0, 4)
+        }
+        AcceptanceSetup::NoLighting => {
+            let c = &cases_of(NO_LIGHTING_CONSTANTS, &[&[0, 0x42, 0x40, 1, 1, 1, 0]])[0];
+            (no_lighting_constants_words(e, c), 0x00bc_9a50, 5)
+        }
+        AcceptanceSetup::Water => {
+            let c = &cases_of(
+                WATER_CONSTANTS,
+                &[&[0x30, 1, 1, ONE, 0x4500_0000, 0x3f40_0000, 1, 3, 0]],
+            )[0];
+            (water_constants_words(e, c), 0x00b8_64d0, 5)
+        }
+        AcceptanceSetup::Leaves => {
+            let c = &cases_of(LEAF_CONSTANTS, &[&[1, 0, 1, 9, ONE, 0]])[0];
+            (leaf_constants_words(e, c), 0x00bb_2760, 5)
+        }
+        AcceptanceSetup::Lighting30 => {
+            let c = Case(vec![
+                Value::Word(0x30),
+                Value::Word(0),
+                Value::Word(u32::MAX),
+                Value::Word(0),
+                Value::Word(0),
+                Value::Word(0),
+                Value::F32(0x4561_2340),
+                Value::Word(3),
+                Value::Word(0),
+            ]);
+            (lighting30_constants_words(e, &c), 0x00bb_ef90, 5)
+        }
+        AcceptanceSetup::Particles => unreachable!("made by acceptance_particle_pass"),
+    };
+    REUSED_WORLD.with(|r| r.set(None));
+    let (shader, block) = (words[0], words[1]);
+    let record = e.mem.u32(0x011f_91e0);
+    let from = e.mem.u32(record);
+    let geometry = e.mem.alloc(0xc4);
+    for k in 0..0xc0 / 4 {
+        let word = e.mem.u32(from + 4 * k);
+        set(e, geometry + 4 * k, word);
+    }
+    if e.mem.u32(geometry) == 0 {
+        let vt = vtable(e, &[]);
+        set(e, geometry, vt);
+    }
+    set(e, geometry + 4, 1);
+    for k in 0..state_words {
+        let word = e.mem.u32(block + 4 * k);
+        set(e, geometry + 0x9c + 4 * k, word);
+    }
+    set(e, geometry + 0xbc, 0);
+    if e.mem.u32(geometry + 0xb8) == 0 {
+        set(e, geometry + 0xb8, d.w.data);
+    }
+    // The shader's class: its own slots, the set-up at 0x7c.
+    let old = e.mem.u32(shader);
+    let vt = e.mem.alloc(0x200);
+    for k in 0..0x200 / 4 {
+        let word = e.mem.u32(old + 4 * k);
+        set(e, vt + 4 * k, word);
+    }
+    set(e, vt + 0x7c, slot);
+    set(e, shader, vt);
+    // The classes the cut knows by their vtables (it copies their Group C arrays): the vtable at the class's own
+    // address; and the SpeedTree leaf property's class with its real slots 0x100 and 0xfc over its leaf data.
+    let class = match which {
+        AcceptanceSetup::TallGrass => 0x010b_8980,
+        AcceptanceSetup::NoLighting => 0x010b_b230,
+        AcceptanceSetup::Leaves => 0x010b_9190,
+        _ => 0,
+    };
+    if class != 0 {
+        if !e.mem.is_mapped(0x010b_8000) {
+            e.map(0x010b_8000, 0x4000);
+        }
+        for k in 0..0x200 / 4 {
+            let word = e.mem.u32(vt + 4 * k);
+            set(e, class + 4 * k, word);
+        }
+        set(e, shader, class);
+    }
+    if which == AcceptanceSetup::Leaves {
+        // A leaf property of the class's size (the world's is 0x80 bytes; the class keeps its leaf data at +0x88).
+        let small = e.mem.u32(block + 0xc);
+        let property = e.mem.alloc(0x90);
+        for k in 0..0x80 / 4 {
+            let word = e.mem.u32(small + 4 * k);
+            set(e, property + 4 * k, word);
+        }
+        set(e, block + 0xc, property);
+        set(e, geometry + 0xa8, property);
+        let old = e.mem.u32(property);
+        for k in 0..0x200 / 4 {
+            let word = e.mem.u32(old + 4 * k);
+            set(e, 0x010b_9700 + 4 * k, word);
+        }
+        set(e, 0x010b_9700 + 0x100, 0x00bb_3c90);
+        set(e, 0x010b_9700 + 0xfc, 0x00bb_3c80);
+        set(e, property, 0x010b_9700);
+        let leaf_data = e.mem.u32(RETS + 0xfc);
+        let leaves = e.mem.u32(RETS + 0x100);
+        set(e, property + 0x88, leaf_data);
+        set(e, leaf_data + 8, leaves);
+    }
+    set(e, geometry + 0xc0, shader);
+    let pass = e.mem.alloc(0x10);
+    for k in 0..4 {
+        let word = e.mem.u32(d.w.passes[0] + 4 * k);
+        set(e, pass + 4 * k, word);
+    }
+    // The first pass's type, kind and flag (it joins that pass's list), with this geometry and the lights.
+    set(e, pass, geometry);
+    e.mem.set_u8(pass + 9, e.mem.u8(record + 9));
+    let lights = e.mem.u32(record + 0xc);
+    set(e, pass + 0xc, lights);
+    pass
+}
+
+/// The acceptance world: the whole draw's world with both renderers drawn, the water reflection copied, the
+/// active lists' pass types and every alpha list filled (each sorted group and grouped alpha with a geometry of
+/// its own); two passes of their own in renderer 0's first alpha holder (so the alpha sort compares them); and a
+/// pass for each set-up in `setups` in renderer 0's list of the first pass's type. Answers the draw's world, the
+/// halves' words and every pass whose objects the census tags.
+/// The acceptance world's stand-ins that read what they are handed (so a live pointer handed to one is a census
+/// hit, and what it read lands in memory the POISON run compares): [`marked`] and [`slot_answer`] read each
+/// pointer argument's first word ([`ACCEPTANCE_READING`]); the D3DX imports read their inputs whole and write a
+/// result made from them (as [`geometry_stand_ins`]' do, `D3DXMatrixMultiplyTranspose` too); the device's
+/// constant uploads (slots 0x178, 0x1b4 and the bool constants 0x188) copy what they are handed.
+fn acceptance_reading_stand_ins(e: &mut Engine) {
+    ACCEPTANCE_READING.with(|r| r.set(true));
+    // (out, a, b) with a and b matrices: out = a with b's low bytes mixed in.
+    for addr in [0x00fd_f410u32, 0x00fd_f424] {
+        e.register(addr, |e, a| {
+            let (m, n) = (words_at(e, a[1], 16), words_at(e, a[2], 16));
+            for k in 0..16u32 {
+                let word = m[k as usize] ^ (n[((5 * k + 3) % 16) as usize] & 0xff);
+                e.mem.set_u32(a[0] + 4 * k, word);
+            }
+            ret(a[0])
+        });
+    }
+    // (out, v, ..) vector functions: three floats rotated by one, and the matrix's words folded in when given.
+    for addr in [0x00fd_f414u32, 0x00fd_f420, 0x00fd_f41c] {
+        e.register(addr, |e, a| {
+            let v = words_at(e, a[1], 3);
+            let m = if a.len() > 2 && a[2] != 0 {
+                words_at(e, a[2], 16)
+            } else {
+                vec![0; 16]
+            };
+            let fold = m.iter().fold(0u32, |h, w| h.rotate_left(5) ^ w) & 0xff;
+            for k in 0..3u32 {
+                e.mem
+                    .set_u32(a[0] + 4 * k, v[((k + 1) % 3) as usize] ^ fold);
+            }
+            ret(a[0])
+        });
+    }
+    e.register(0x00fd_f430, |e, a| {
+        let v = words_at(e, a[1], 4);
+        for k in 0..4u32 {
+            e.mem.set_u32(a[0] + 4 * k, v[k as usize]);
+        }
+        ret(a[0])
+    });
+    e.register(0x00fd_f418, |e, a| {
+        let (v, m) = (words_at(e, a[1], 4), words_at(e, a[2], 16));
+        let fold = m.iter().fold(0u32, |h, w| h.rotate_left(5) ^ w) & 0xff;
+        for k in 0..4u32 {
+            e.mem
+                .set_u32(a[0] + 4 * k, v[((k + 1) % 4) as usize] ^ fold);
+        }
+        ret(a[0])
+    });
+    e.register(0x00fd_f42c, |e, a| {
+        let m = words_at(e, a[1], 16);
+        for k in 0..16u32 {
+            e.mem
+                .set_u32(a[0] + 4 * k, m[(4 * (k % 4) + k / 4) as usize]);
+        }
+        ret(a[0])
+    });
+    e.register(0x00fd_f428, |e, a| {
+        let m = words_at(e, a[2], 16);
+        for k in 0..16u32 {
+            e.mem.set_u32(a[0] + 4 * k, m[(15 - k) as usize]);
+        }
+        ret(a[0])
+    });
+    if !e.mem.is_mapped(CONSTANT_UPLOAD_COPY) {
+        e.map(CONSTANT_UPLOAD_COPY, 0x3000);
+    }
+    e.register(VT_FN + 0x178, constants_upload_answer::<0x178>);
+    e.register(VT_FN + 0x1b4, constants_upload_answer::<0x1b4>);
+    // `SetVertexShaderConstantB(device, register, data, count)`: the bools copied after the float rows.
+    e.register(VT_FN + 0x188, |e, a| {
+        let (register, data, count) = (a[1], a[2], a[3].min(16));
+        let mut bytes = vec![0u8; 4 * count as usize];
+        if register < 0x100 && e.mem.try_read(data, &mut bytes).is_ok() {
+            e.mem
+                .write(CONSTANT_UPLOAD_COPY + 0x2000 + 4 * register, &bytes);
+        }
+        slot_answer::<0x188>(e, a)
+    });
+}
+
+fn acceptance_world(e: &mut Engine, setups: &[AcceptanceSetup]) -> (DrawW, Vec<u32>, Vec<u32>) {
+    let d = draw_world(e);
+    let mut passes: Vec<u32> = d.w.passes.to_vec();
+    passes.push(d.w.skin_pass);
+    acc_slots(e, d.w.acc, true);
+    set(e, d.w.acc + 0x19c, 0);
+    held(e, d.w.acc, 1);
+    for g in [d.w.geometry, d.w.skinned] {
+        set(e, g + 4, 1);
+    }
+    e.mem.set_u8(d.w.acc + 0x38, 1);
+    set(e, d.w.acc + 0x18c, 2);
+    active_lists(e, &d, 2);
+    let mut extra = Vec::new();
+    for which in setups {
+        extra.push(acceptance_setup_pass(e, &d, *which));
+    }
+    // The fog property a set-up's world gave the fog getter's stand-in (`00b55520`, RETS + 0x504) made the scene
+    // node's, as the real getter (`BSShaderManager::GetFogProperty`) reads it: the fog index's shadow scene node's
+    // +0x134 (where the cut takes it).
+    let fog = e.mem.u32(RETS + 0x504);
+    if fog != 0 {
+        let index = u32::from(e.mem.u8(0x011f_91c4));
+        let mut node = e.mem.u32(0x011f_91c8 + 4 * index);
+        if node == 0 {
+            node = e.mem.alloc(0x140);
+            set(e, 0x011f_91c8 + 4 * index, node);
+        }
+        set(e, node + 0x134, fog);
+    }
+    // The current pass (`0126f74c`) the last set-up's world left: with a vertex shader holding the device (+0x5c,
+    // its +0x20), as the shadow light shader's world constants need (a set-up world without one leaves +0x5c 0).
+    let current = e.mem.u32(0x0126_f74c);
+    if current != 0 && e.mem.u32(current + 0x5c) == 0 {
+        let vertex_shader = e.mem.alloc(0x40);
+        set(e, vertex_shader + 0x20, d.w.device);
+        set(e, current + 0x5c, vertex_shader);
+    }
+    acceptance_reading_stand_ins(e);
+    passes.extend_from_slice(&extra);
+    // Renderer 0's list of type 0x10 draws them after the skinned pass: the test world's pass map puts key k in
+    // group k & 3, so type 0x10 is group 0 (group 1, where passes[0] and [1] sit, is drawn for type 0x11, and
+    // render_pass leaves a pass of another type undrawn).
+    let groups = e.mem.u32(d.w.br + 8);
+    let mut list = vec![d.w.skin_pass];
+    list.extend_from_slice(&extra);
+    list_at(e, groups, &list);
+    set(e, groups + 0x64, list.len() as u32);
+    for group in 0..2 {
+        alpha_state(e, &d, group, 3, 0xf, HALF);
+        for br in d.renderers() {
+            let mut node = e.mem.u32(br + 0x78 + 0xc * group);
+            while node != 0 {
+                let g = e.mem.u32(node + 8);
+                e.mem.set_u8(g, 1);
+                e.mem.set_u16(g + 2, 1);
+                set(e, g + 4, 4);
+                let pass = own_geometry_pass(e, &d);
+                passes.push(pass);
+                list_at(e, g + 0xc, &[pass]);
+                node = e.mem.u32(node);
+            }
+            let h = e.mem.alloc(0x20);
+            e.mem.set_u16(h + 2, 1);
+            set(e, h + 4, 4);
+            set(e, h + 8, br);
+            let pass = own_geometry_pass(e, &d);
+            passes.push(pass);
+            list_at(e, h + 0xc, &[pass]);
+            set(e, br + 0x90 + 4 * group, h);
+        }
+    }
+    // Two alpha passes of their own in renderer 0's first alpha holder: the sort compares their depths.
+    let (a, b) = (own_geometry_pass(e, &d), own_geometry_pass(e, &d));
+    let bound = e.mem.u32(e.mem.u32(b) + 0x20);
+    set(e, bound + 8, 0x4120_0000);
+    list_at(e, d.alpha_holders[0][0] + 0xc, &[a, b]);
+    passes.extend_from_slice(&[a, b]);
+    set(e, 0x011f_9438, 0x4242);
+    set(e, 0x011f_943c, 0x4343);
+    let camera = full_camera(e, &d.w);
+    e.with_stack(4, |_, _| ());
+    let words = vec![camera, d.w.acc, 1];
+    (d, words, passes)
+}
+
+/// What one census run gives: the census's hits during the draw, the calls made by address (with their arguments),
+/// the ranges it tagged, and (switch on) the packet's report.
+struct CensusRun {
+    /// The main objects' paths, by address.
+    names: std::collections::HashMap<u32, String>,
+    /// The run's stop, with the last calls made, if it stopped.
+    stop: Option<String>,
+    hits: Vec<(TouchHit, u64)>,
+    log: Vec<(u32, Vec<u32>)>,
+    objects: Vec<(u16, u32, u32)>,
+    report: capture::Report,
+}
+
+/// One whole draw of the acceptance world (with the set-up passes `setups`) with the census on what main owns;
+/// `on`: the switch on (the packet, the own state taken).
+fn acceptance_run(on: bool, setups: &[AcceptanceSetup]) -> CensusRun {
+    let first = entry!(0x00b6_ba20, drivers::world_draw_first(u32, Ptr<_>, u32)).1;
+    let second = entry!(0x00b6_b930, drivers::world_draw_second(u32, Ptr<_>, u32)).1;
+    let mut e = Engine::new();
+    let (d, words, passes) = acceptance_world(&mut e, setups);
+    let mut spec = TouchSpec::default();
+    for (name, _) in ACCEPTANCE_KINDS {
+        spec.tag(name);
+    }
+    e.mem.enable_touch(spec);
+    let objects = acceptance_objects(&e, &d, &passes);
+    // `NV_ACCEPTANCE_WHO=20009100`: the heap words that point at that address, before the draw (a look-up for a
+    // miss's object).
+    if let Some(who) = std::env::var("NV_ACCEPTANCE_WHO")
+        .ok()
+        .and_then(|s| u32::from_str_radix(&s, 16).ok())
+    {
+        let ranges = [
+            (0x2000_0000u32, 0x2008_0000u32),
+            (RETS, RETS + 0x1000),
+            (0x011f_0000, 0x0121_0000),
+            (0x0126_f000, 0x0127_0000),
+        ];
+        for at in ranges.iter().flat_map(|(lo, hi)| (*lo..*hi).step_by(4)) {
+            let mut word = [0u8; 4];
+            if e.mem.try_read(at, &mut word).is_ok() && u32::from_le_bytes(word) == who {
+                eprintln!(
+                    "acceptance: {at:08x} ({}) points at {who:08x}",
+                    acceptance_name(&objects, &[], at)
+                );
+            }
+        }
+    }
+    for (kind, addr, len) in &objects {
+        e.mem.touch_tag_range(*addr, *len, *kind, *addr);
+    }
+    e.call_log = Some(Vec::new());
+    if on {
+        statics::set_forced(true);
+        capture::set_thread_mode(Some(capture::Mode::On));
+    } else {
+        capture::set_thread_mode(Some(capture::Mode::Off));
+    }
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        (first(&mut e, &words), second(&mut e, &words))
+    }));
+    capture::set_thread_mode(None);
+    statics::set_forced(false);
+    let stop = run.err().map(|stop| {
+        format!(
+            "{}; the last calls: {}",
+            stop_message(&*stop),
+            calls_tail(e.call_log.as_deref().unwrap_or_default(), 40)
+        )
+    });
+    CensusRun {
+        stop,
+        names: ACCEPTANCE_NAMES.with(|n| n.borrow().clone()),
+        hits: e.mem.touch_hits(),
+        log: e.call_log.take().unwrap_or_default(),
+        objects,
+        report: if on {
+            cut::last_report().unwrap_or_default()
+        } else {
+            capture::Report::default()
+        },
+    }
+}
+
+/// Whether `[offset, offset + len)` of an object of kind `kind` lies in what the cut or the own state copies by
+/// the cut's rules ([`ACCEPTANCE_KINDS`]).
+fn acceptance_copied(kind: u16, offset: u32, len: u8) -> bool {
+    let end = offset.saturating_add(u32::from(len.max(1)));
+    ACCEPTANCE_KINDS[kind as usize]
+        .1
+        .iter()
+        .any(|(from, to)| offset < *to && end > *from)
+}
+
+/// The bytes the packet or the own state held in a POISON run, by object: its kind and, per byte, whether the cut
+/// scribbled it ([`held_probe`]).
+type Held = std::collections::HashMap<u32, (u16, Vec<bool>)>;
+
+/// The tagged ranges with their bytes before the cut: (kind, address, bytes).
+type HeldBefore = Vec<(u16, u32, Vec<u8>)>;
+
+thread_local! {
+    /// The tagged ranges and their bytes before the cut, until [`held_probe`] runs inside the draw.
+    static HELD_PROBE: std::cell::RefCell<Option<HeldBefore>> =
+        const { std::cell::RefCell::new(None) };
+    /// What [`held_probe`] found.
+    static HELD_FOUND: std::cell::RefCell<Held> = std::cell::RefCell::new(Held::new());
+    /// The scribble [`held_probe`] found.
+    static HELD_SCRIBBLE: std::cell::Cell<Option<u8>> = const { std::cell::Cell::new(None) };
+}
+
+/// The shader's draw slot (0x6c) in the acceptance world's POISON run: the first time it runs with the packet open
+/// (after the cut scribbled what the packet and the own state hold), each tagged byte that changed to a scribble is
+/// noted as held. Then the slot's stand-in answer.
+fn held_probe(e: &mut Engine, a: &[u32]) -> Ret {
+    if capture::is_open(e) {
+        if let Some(objects) = HELD_PROBE.with(|p| p.borrow_mut().take()) {
+            let mut found = Held::new();
+            // The scribble: the first own block's first byte (always owned).
+            let scribble = e.mem.u8(statics::GLOBAL_BLOCKS[0].0);
+            HELD_SCRIBBLE.with(|s| s.set(Some(scribble)));
+            for (kind, addr, old) in objects {
+                let mut now = vec![0u8; old.len()];
+                if e.mem.try_read(addr, &mut now).is_err() {
+                    continue;
+                }
+                let held: Vec<bool> = now
+                    .iter()
+                    .zip(&old)
+                    .map(|(n, o)| n != o && *n == scribble)
+                    .collect();
+                if held.contains(&true) {
+                    found.insert(addr, (kind, held));
+                }
+            }
+            HELD_FOUND.with(|f| *f.borrow_mut() = found);
+        }
+    }
+    slot_answer::<0x6c>(e, a)
+}
+
+/// Whether the census hit on `[offset, offset + len)` of `object` (of kind `kind`) touched bytes the packet or the
+/// own state holds: by the cut's rules, or as the POISON run's probe found them.
+fn acceptance_held(kind: u16, object: u32, offset: u32, len: u8, held: &Held) -> bool {
+    acceptance_copied(kind, offset, len)
+        || held.get(&object).is_some_and(|(_, bytes)| {
+            (offset..offset + u32::from(len.max(1)))
+                .any(|i| bytes.get(i as usize).copied().unwrap_or(false))
+        })
+}
+
+/// What a frame's POISON run found.
+struct PoisonRun {
+    /// The scribble the cut used (as the probe found it).
+    scribble: Option<u8>,
+    /// The run's stop (a panic's message), if it stopped.
+    stop: Option<String>,
+    answers_alike: bool,
+    /// The differing bytes against the switch off (beside the stack), named by tagged range where they lie.
+    differ: Vec<String>,
+    report: capture::Report,
+    held: Held,
+}
+
+/// `addr` named by the tagged range it lies in (`kind+offset`), or as an address.
+fn acceptance_name(objects: &[(u16, u32, u32)], others: &[(&str, u32, u32)], addr: u32) -> String {
+    objects
+        .iter()
+        .find(|(_, a, l)| (*a..a + l).contains(&addr))
+        .map_or_else(
+            || {
+                others
+                    .iter()
+                    .find(|(_, a, l)| (*a..a + l).contains(&addr))
+                    .map_or_else(
+                        || format!("{addr:08x}"),
+                        |(name, a, _)| format!("{name}+{:#x} ({addr:08x})", addr - a),
+                    )
+            },
+            |(k, a, _)| {
+                let name = if *k == MAIN_OBJECT {
+                    ACCEPTANCE_NAMES
+                        .with(|n| n.borrow().get(a).cloned())
+                        .unwrap_or_else(|| "main object".to_string())
+                } else {
+                    ACCEPTANCE_KINDS[*k as usize].0.to_string()
+                };
+                format!("{name}+{:#x} ({addr:08x})", addr - a)
+            },
+        )
+}
+
+/// The last `n` calls of a call log, oldest first: `function(arguments)`.
+fn calls_tail(log: &[(u32, Vec<u32>)], n: usize) -> String {
+    log[log.len().saturating_sub(n)..]
+        .iter()
+        .map(|(a, args)| {
+            let args: Vec<String> = args.iter().map(|w| format!("{w:x}")).collect();
+            format!("{a:08x}({})", args.join(","))
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Addresses (lowest first) as runs of consecutive bytes: (first, length), a gap of up to three bytes joined.
+fn byte_runs(addrs: &[u32]) -> Vec<(u32, u32)> {
+    let mut runs: Vec<(u32, u32)> = Vec::new();
+    for &a in addrs {
+        match runs.last_mut() {
+            Some((from, n)) if a >= *from + *n && a <= *from + *n + 3 => *n = a - *from + 1,
+            _ => runs.push((a, 1)),
+        }
+    }
+    runs
+}
+
+/// The POISON run of a frame made again on a thread of its own with the call log on, for the calls that led to its
+/// stop.
+fn poison_trail(setups: Vec<AcceptanceSetup>) -> String {
+    std::thread::spawn(move || {
+        let first = entry!(0x00b6_ba20, drivers::world_draw_first(u32, Ptr<_>, u32)).1;
+        let second = entry!(0x00b6_b930, drivers::world_draw_second(u32, Ptr<_>, u32)).1;
+        let mut e = Engine::new();
+        let (_, words, _) = acceptance_world(&mut e, &setups);
+        e.call_log = Some(Vec::new());
+        statics::set_forced(true);
+        capture::set_thread_mode(Some(capture::Mode::Poison));
+        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            (first(&mut e, &words), second(&mut e, &words))
+        }));
+        capture::set_thread_mode(None);
+        statics::set_forced(false);
+        match run {
+            Err(_) => calls_tail(e.call_log.as_deref().unwrap_or_default(), 40),
+            Ok(_) => "(no stop with the call log on)".to_string(),
+        }
+    })
+    .join()
+    .unwrap_or_default()
+}
+
+/// A panic's message.
+fn stop_message(stop: &(dyn std::any::Any + Send)) -> String {
+    stop.downcast_ref::<String>()
+        .cloned()
+        .or_else(|| stop.downcast_ref::<&str>().map(|s| (*s).to_string()))
+        .unwrap_or_default()
+}
+
+/// The whole draw of the acceptance world (with `setups`) run twice without the census: with the switch off, and
+/// with `NV_DRAW_THREAD=poison` (the own state taken): what the packet and the own state hold scribbled in guest
+/// memory from the cut to the join, so a read of it in place reads the scribble. Compares the answers and the
+/// memory each leaves, and notes which tagged bytes the cut scribbled ([`held_probe`]).
+fn acceptance_poison(setups: &[AcceptanceSetup]) -> PoisonRun {
+    let first = entry!(0x00b6_ba20, drivers::world_draw_first(u32, Ptr<_>, u32)).1;
+    let second = entry!(0x00b6_b930, drivers::world_draw_second(u32, Ptr<_>, u32)).1;
+    let mut plain = Engine::new();
+    let (_, words, _) = acceptance_world(&mut plain, setups);
+    capture::set_thread_mode(Some(capture::Mode::Off));
+    let answer = (first(&mut plain, &words), second(&mut plain, &words));
+    capture::set_thread_mode(None);
+    let mut poisoned = Engine::new();
+    let (d, words, passes) = acceptance_world(&mut poisoned, setups);
+    let objects = acceptance_objects(&poisoned, &d, &passes);
+    let others = [
+        ("renderer (not tagged)", d.w.renderer, 0xa40),
+        ("device (not tagged)", d.w.device, 0x10),
+        ("stage cache (not tagged)", d.w.stage_cache, 0xb8),
+    ];
+    let before = objects
+        .iter()
+        .map(|&(k, a, l)| {
+            let mut bytes = vec![0u8; l as usize];
+            let _ = poisoned.mem.try_read(a, &mut bytes);
+            (k, a, bytes)
+        })
+        .collect();
+    HELD_PROBE.with(|p| *p.borrow_mut() = Some(before));
+    HELD_FOUND.with(|f| f.borrow_mut().clear());
+    HELD_SCRIBBLE.with(|s| s.set(None));
+    poisoned.register(VT_FN + 0x6c, held_probe);
+    statics::set_forced(true);
+    capture::set_thread_mode(Some(capture::Mode::Poison));
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        (first(&mut poisoned, &words), second(&mut poisoned, &words))
+    }));
+    capture::set_thread_mode(None);
+    statics::set_forced(false);
+    let report = cut::last_report().unwrap_or_default();
+    let held = HELD_FOUND.with(|f| std::mem::take(&mut *f.borrow_mut()));
+    let scribble = HELD_SCRIBBLE.with(std::cell::Cell::take);
+    match run {
+        Err(stop) => PoisonRun {
+            scribble,
+            stop: Some(format!(
+                "{}; the last calls: {}",
+                stop_message(&*stop),
+                poison_trail(setups.to_vec())
+            )),
+            answers_alike: false,
+            differ: Vec::new(),
+            report,
+            held,
+        },
+        Ok(poisoned_answer) => PoisonRun {
+            scribble,
+            stop: None,
+            answers_alike: answer == poisoned_answer,
+            // The stand-ins' marks (`RETS + 0x780`, `+0x784`, `+0xc00 + slot`) fold in what each pointer they were handed
+            // points to, not the pointer: a packet image and main's object with the same bytes mark alike.
+            differ: byte_runs(&memory_differences_beside_stack(&plain, &poisoned, 4096))
+                .into_iter()
+                .map(|(a, n)| format!("{} x{n}", acceptance_name(&objects, &others, a)))
+                .collect(),
+            report,
+            held,
+        },
+    }
+}
+
+/// The typed draw paths the acceptance world should reach, by the function that enters each.
+const ACCEPTANCE_PATHS: &[(u32, &str)] = &[
+    (0x00b9_8b20, "the alpha sort's comparison"),
+    (0x00b9_9a10, "the alpha sort"),
+    (
+        0x00b7_dab0,
+        "SetupGeometryConstants (the shadow light shader)",
+    ),
+    (0x00b7_0820, "the per-light set-up"),
+    (0x00b7_be00, "the simple shadow clip planes"),
+    (0x00b7_dde0, "the geometry pass"),
+    (0x00b8_9d80, "the sky"),
+    (0x00ba_c9c0, "tall grass"),
+    (0x00bc_9a50, "no-lighting"),
+    (0x00b8_64d0, "water"),
+    (0x00bb_2760, "SpeedTree leaves"),
+    (0x00bb_ef90, "lighting 3.0"),
+    (0x00a9_b1f0, "particles (NiParticles::RenderImmediate)"),
+    (0x00e7_0140, "the points draw (particles drawn)"),
+];
+
+/// The paths a frame with `setups` must reach: the alpha sort and its comparison in every frame, and each set-up's
+/// own entry.
+fn acceptance_required(setups: &[AcceptanceSetup]) -> Vec<u32> {
+    let mut v = vec![0x00b9_9a10, 0x00b9_8b20];
+    for s in setups {
+        v.extend_from_slice(match s {
+            AcceptanceSetup::ShadowLight => &[0x00b7_dab0, 0x00b7_0820][..],
+            AcceptanceSetup::Sky => &[0x00b8_9d80],
+            AcceptanceSetup::TallGrass => &[0x00ba_c9c0],
+            AcceptanceSetup::NoLighting => &[0x00bc_9a50],
+            AcceptanceSetup::Water => &[0x00b8_64d0],
+            AcceptanceSetup::Leaves => &[0x00bb_2760],
+            AcceptanceSetup::Lighting30 => &[0x00bb_ef90],
+            AcceptanceSetup::Particles => &[0x00a9_b1f0],
+        });
+    }
+    v
+}
+
+/// Escapes known on main and assigned to an open piece of work: `(function, kind, from, to, owner)`, a census hit
+/// by `function` on `[from, to)` of an object of `kind` while the packet or the own state holds those bytes. The
+/// check passes while each is seen, fails on any escape not listed here, and fails when a listed one is no longer
+/// seen (fixed: take it off the list).
+const EXPECTED_ESCAPES: &[(u32, &str, u32, u32, &str)] = &[
+    // render_skinned (00b99110) hands the shader's partition set-up (slot 0x64; in the test world its stand-in at
+    // VT_FN + 0x64 reads what it is handed) the geometry's live world bound and world transform, not the packet's.
+    (
+        0x00ff_2064,
+        "bound",
+        0,
+        0x10,
+        "draw family's next agent: render_skinned hands slot 0x64 the live world bound",
+    ),
+    (
+        0x00ff_2064,
+        "geometry",
+        0x68,
+        0x9c,
+        "draw family's next agent: render_skinned hands slot 0x64 the live world transform",
+    ),
+    // The light row 011fa1f0 (the colour table's row 0x13, a directional light's): `own::light_row` by address
+    // (only when the leaf family is not direct; the census makes every typed call go by address) saves the guest
+    // words, lets the leaf store write them, takes them into the own state and puts guest memory back.
+    (
+        0x004e_20c0,
+        "own global",
+        0x1f0,
+        0x200,
+        "drawing agent: own::light_row's by-address fallback writes main's colour table for the length of the call",
+    ),
+    (
+        0x00b7_0820,
+        "own global",
+        0x1f0,
+        0x200,
+        "drawing agent: own::light_row's by-address fallback reads and puts back main's colour table",
+    ),
+];
+
+/// Main-owned fields the draw reads in place by design, reviewed: `(name, kind, from, to, writes too, reason)`.
+/// Each is set before the cut and never written by main's tail or by the draw while the draw runs (or, with
+/// `writes too`, changed only in a way both threads may share). A census hit on a main-owned byte the packet does
+/// not hold must fall in one of these or in [`OPEN_IN_PLACE`], or the check fails.
+const READ_IN_PLACE: &[(&str, &str, u32, u32, bool, &str)] = &[
+    (
+        "geometry vtable",
+        "geometry",
+        0,
+        4,
+        false,
+        "set when the object is made",
+    ),
+    (
+        "geometry reference count",
+        "geometry",
+        4,
+        8,
+        true,
+        "changed only by interlocked increments and decrements (the cut's hold, the join's release), safe from both threads",
+    ),
+    (
+        "accumulator reference count",
+        "accumulator",
+        4,
+        8,
+        true,
+        "changed only by interlocked increments and decrements (the cut's hold, the join's release), safe from both threads",
+    ),
+    (
+        "geometry controller list",
+        "geometry",
+        0xc,
+        0x10,
+        false,
+        "the list head, set at load; NiGeometry::RenderImmediate (00a80610) walks it (empty in the test world)",
+    ),
+    (
+        "geometry bound pointer",
+        "geometry",
+        0x20,
+        0x24,
+        false,
+        "set when the object is made; the bound's values are in the packet",
+    ),
+    (
+        "geometry property state",
+        "geometry",
+        0x9c,
+        0xb4,
+        false,
+        "the property pointers (+0xa8 the shader property), set when the object is attached; the other properties' own fields are tagged as main objects (geometry +0x9c...) and classed there",
+    ),
+    (
+        "geometry model data, skin and shader",
+        "geometry",
+        0xb8,
+        0xc4,
+        false,
+        "set when the object is made or accumulated",
+    ),
+    (
+        "pass",
+        "pass",
+        0,
+        9,
+        false,
+        "made at accumulation before the cut and freed after the draw: geometry, type, register kind, sort byte, +8",
+    ),
+    (
+        "render state cache vtable",
+        "render state cache",
+        0,
+        4,
+        false,
+        "set once; the own state holds the cache from +4",
+    ),
+    (
+        "shader property vtable",
+        "shader property",
+        0,
+        4,
+        false,
+        "its class, set when the property is made",
+    ),
+    (
+        "held accumulator reference count",
+        "held accumulator",
+        4,
+        8,
+        true,
+        "changed only by interlocked increments and decrements (the cut's hold, the join's release), safe from both threads",
+    ),
+    (
+        "fog property vtable",
+        "fog property",
+        0,
+        4,
+        false,
+        "its class, set when made",
+    ),
+    (
+        "pass light vtable",
+        "pass light",
+        0,
+        4,
+        false,
+        "its class, set when made",
+    ),
+    (
+        "model data vtable",
+        "geometry +0xb8",
+        0,
+        4,
+        false,
+        "its class, set when made",
+    ),
+    (
+        "skin instance vtable",
+        "geometry +0xbc",
+        0,
+        4,
+        false,
+        "its class, set when made",
+    ),
+    (
+        "renderer vtable",
+        "geometry +0xc0 +0x18",
+        0,
+        4,
+        false,
+        "its class, set when made",
+    ),
+    (
+        "shader vtable",
+        "geometry +0xc0",
+        0,
+        4,
+        false,
+        "its class, set when made",
+    ),
+];
+
+/// An open field: `(kind or main object's path, from, to, writes too, the functions seen reading it, owner)`.
+type OpenField = (&'static str, u32, u32, bool, &'static [u32], &'static str);
+
+/// Main-owned fields the draw reads (or writes) in place whose class is still open, each with the functions seen
+/// and its owner (generated from the census into `acceptance_open.in`, then reviewed). A hit matches only from a
+/// listed function. Passes while seen; fails when one is no longer seen (copied or proved: take it off, or move it
+/// to [`READ_IN_PLACE`] with its reason).
+const OPEN_IN_PLACE: &[OpenField] = &include!("acceptance_open.in");
+
+/// Frames whose POISON run is expected to stop or differ on main today: `(frame, text in its result, owner)`.
+const EXPECTED_POISON: &[(&str, &str, &str)] = &[
+    (
+        "ShadowLight",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+    (
+        "Sky",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+    (
+        "TallGrass",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+    (
+        "NoLighting",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+    (
+        "Water",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+    (
+        "Leaves",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+    (
+        "Lighting30",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+    (
+        "Particles",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+    (
+        "all",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+];
+
+/// One frame's result: its printout, its failures, and which listed escapes, open fields and POISON results it saw.
+struct FrameResult {
+    text: String,
+    failures: Vec<String>,
+    escapes_seen: Vec<usize>,
+    open_seen: Vec<usize>,
+    poison_seen: Vec<usize>,
+}
+
+/// One line of a frame's table.
+fn acceptance_line(
+    key: &(u32, u32, u16, u32, u32, u8, bool),
+    n: u64,
+    mark: &str,
+    name: &str,
+) -> String {
+    let (function, caller, kind, object, offset, len, write) = *key;
+    let place = if kind == 9 || kind == 11 {
+        // A global kind (own global, frame value): name the address.
+        format!("{name}+{offset:#x} ({:08x})", object + offset)
+    } else {
+        format!("{name}+{offset:#x}")
+    };
+    format!(
+        "  {mark} {function:08x} {caller:08x} {place} {len} {} x{n}\n",
+        if write { "w" } else { "r" },
+    )
+}
+
+/// One frame of the acceptance check (the set-up passes `setups`): the census with the switch off and on, and the
+/// POISON run against the switch off, each on a thread of its own (a stop in it is the frame's result). Every census
+/// hit from inside the draw on main-owned state is classed: on bytes the packet or the own state holds it is an
+/// escape (listed in [`EXPECTED_ESCAPES`] or a failure); else it must be a reviewed field read in place
+/// ([`READ_IN_PLACE`]). The halves' own bodies (function 0: the cut, the join and the walk over the lists) are left
+/// to the POISON run. The POISON run must answer alike, leave the same memory, miss nothing and find nothing
+/// scribbled written, unless listed in [`EXPECTED_POISON`]; every required path must be reached.
+fn acceptance_frame(name: &str, setups: &'static [AcceptanceSetup]) -> FrameResult {
+    let census = std::thread::spawn(move || {
+        let off = acceptance_run(false, setups);
+        let on = acceptance_run(true, setups);
+        (off, on)
+    })
+    .join();
+    // The POISON run until it has run with both scribbles (they take turns cut by cut, process-wide, so a test
+    // running beside this one can take a turn): at most four runs; a stop ends them.
+    let mut poisons = Vec::new();
+    let mut scribbles = std::collections::BTreeSet::new();
+    for _ in 0..4 {
+        let p = std::thread::spawn(move || acceptance_poison(setups)).join();
+        if let Ok(Some(s)) = p.as_ref().map(|run| run.scribble) {
+            scribbles.insert(s);
+        }
+        let stopped = !matches!(&p, Ok(run) if run.stop.is_none());
+        poisons.push(p);
+        if scribbles.len() == 2 || stopped {
+            break;
+        }
+    }
+    let mut r = FrameResult {
+        text: format!("== frame {name}: set-up passes {setups:?}\n"),
+        failures: Vec::new(),
+        escapes_seen: Vec::new(),
+        open_seen: Vec::new(),
+        poison_seen: Vec::new(),
+    };
+    let fail = |r: &mut FrameResult, what: String| {
+        r.text.push_str(&format!("  FAIL {what}\n"));
+        r.failures.push(format!("frame {name}: {what}"));
+    };
+    let all_ran = poisons
+        .iter()
+        .all(|p| matches!(p, Ok(run) if run.stop.is_none()));
+    if scribbles.len() < 2 && all_ran {
+        fail(
+            &mut r,
+            format!("the POISON runs used one scribble only ({scribbles:x?})"),
+        );
+    }
+    // The POISON runs.
+    let mut held = Held::new();
+    let mut helds: Vec<Held> = Vec::new();
+    for poison in poisons {
+        let p = match poison {
+            Ok(p) => p,
+            Err(stop) => {
+                fail(
+                    &mut r,
+                    format!("POISON thread stopped: {}", stop_message(&*stop)),
+                );
+                continue;
+            }
+        };
+        let summary = match &p.stop {
+            Some(stop) => format!("POISON run STOPPED: {stop}"),
+            None => format!(
+                "POISON (scribble {:x?}) against off: answers {}, memory {}; packet {:?}",
+                p.scribble,
+                if p.answers_alike { "alike" } else { "DIFFER" },
+                if p.differ.is_empty() {
+                    "the same".to_string()
+                } else {
+                    format!("DIFFERS at {}", p.differ.join(", "))
+                },
+                p.report
+            ),
+        };
+        r.text.push_str(&format!("{summary}\n"));
+        let bad = p.stop.is_some()
+            || !p.answers_alike
+            || !p.differ.is_empty()
+            || p.report.misses != 0
+            || p.report.written != 0;
+        if bad {
+            let listed = EXPECTED_POISON
+                .iter()
+                .position(|(f, text, _)| *f == name && summary.contains(text));
+            match listed {
+                Some(i) => {
+                    r.poison_seen.push(i);
+                    r.text
+                        .push_str(&format!("  expected (owner: {})\n", EXPECTED_POISON[i].2));
+                }
+                None => fail(&mut r, format!("NEW POISON result: {summary}")),
+            }
+        }
+        helds.push(p.held);
+    }
+    // Held: scribbled in every run (a byte the draw itself writes equal to one scribble is not the other).
+    if let Some((first, rest)) = helds.split_first() {
+        for (object, (kind, bytes)) in first {
+            let mut bytes = bytes.clone();
+            for other in rest {
+                let theirs = other
+                    .get(object)
+                    .map(|(_, b)| b.as_slice())
+                    .unwrap_or_default();
+                for (i, b) in bytes.iter_mut().enumerate() {
+                    *b &= theirs.get(i).copied().unwrap_or(false);
+                }
+            }
+            if bytes.contains(&true) {
+                held.insert(*object, (*kind, bytes));
+            }
+        }
+    }
+    let mut by_kind = std::collections::BTreeMap::new();
+    for (kind, bytes) in held.values() {
+        let e = by_kind
+            .entry(ACCEPTANCE_KINDS[*kind as usize].0)
+            .or_insert((0, 0));
+        e.0 += 1;
+        e.1 += bytes.iter().filter(|b| **b).count();
+    }
+    r.text.push_str(&format!(
+        "held (the POISON runs' probe: objects, bytes): {by_kind:?}\n"
+    ));
+    let (off, on) = match census {
+        Ok(c) => c,
+        Err(stop) => {
+            fail(
+                &mut r,
+                format!("census run STOPPED: {}", stop_message(&*stop)),
+            );
+            return r;
+        }
+    };
+    for (run, side) in [(&off, "switch off"), (&on, "switch on")] {
+        if let Some(stop) = &run.stop {
+            fail(&mut r, format!("census run ({side}) STOPPED: {stop}"));
+        }
+    }
+    if on.objects != off.objects {
+        fail(
+            &mut r,
+            "the census runs tagged different ranges".to_string(),
+        );
+    }
+    r.text
+        .push_str(&format!("census (switch on) packet {:?}\n", on.report));
+    if std::env::var("NV_ACCEPTANCE_OBJECTS").is_ok() {
+        for (kind, addr, len) in &on.objects {
+            r.text.push_str(&format!(
+                "  tagged {} {addr:08x}+{len:#x}\n",
+                ACCEPTANCE_KINDS[*kind as usize].0
+            ));
+        }
+    }
+    if on.report.misses != 0 {
+        fail(
+            &mut r,
+            format!("the census run's packet missed {} reads", on.report.misses),
+        );
+    }
+    let mut called: Vec<u32> = on.log.iter().map(|(a, _)| *a).collect();
+    called.sort_unstable();
+    called.dedup();
+    let required = acceptance_required(setups);
+    r.text.push_str("paths reached (switch on):\n");
+    for (addr, path) in ACCEPTANCE_PATHS {
+        let reached = called.binary_search(addr).is_ok();
+        r.text.push_str(&format!(
+            "  {} {addr:08x} {path}\n",
+            if reached { "yes" } else { "NO " }
+        ));
+        if !reached && required.contains(addr) {
+            fail(&mut r, format!("path {addr:08x} ({path}) not reached"));
+        }
+    }
+    let off_kinds: std::collections::BTreeSet<_> = off
+        .hits
+        .iter()
+        .map(|(h, _)| (h.function, h.tag, h.offset))
+        .collect();
+    r.text.push_str(&format!(
+        "switch off: {} kinds of access to main-owned ranges\n",
+        off_kinds.len()
+    ));
+    // The switch-on census, summed by (function, caller, kind, object, offset, length, write).
+    let mut table = std::collections::BTreeMap::new();
+    for (h, n) in &on.hits {
+        *table
+            .entry((
+                h.function, h.caller, h.tag, h.class, h.offset, h.len, h.write,
+            ))
+            .or_insert(0u64) += n;
+    }
+    r.text
+        .push_str("switch on (function caller kind+offset len r/w count):\n");
+    let mut seen_lines = std::collections::BTreeSet::new();
+    for (key, n) in table {
+        let (function, _, kind, object, offset, len, write) = key;
+        if function == 0 {
+            continue;
+        }
+        let kind_name: &str = if kind == MAIN_OBJECT {
+            on.names.get(&object).map_or("main object", String::as_str)
+        } else {
+            ACCEPTANCE_KINDS[kind as usize].0
+        };
+        let end = offset + u32::from(len.max(1));
+        let mark = if acceptance_held(kind, object, offset, len, &held) {
+            match EXPECTED_ESCAPES.iter().position(|(f, k, from, to, _)| {
+                *f == function && *k == kind_name && offset < *to && end > *from
+            }) {
+                Some(i) => {
+                    r.escapes_seen.push(i);
+                    format!("ESCAPE (known: {})", EXPECTED_ESCAPES[i].4)
+                }
+                None => {
+                    let line = format!(
+                        "NEW escape: {function:08x} {kind_name}+{offset:#x} {len} {}",
+                        if write { "write" } else { "read" }
+                    );
+                    if seen_lines.insert(line.clone()) {
+                        fail(&mut r, line);
+                    }
+                    "ESCAPE NEW".to_string()
+                }
+            }
+        } else {
+            match READ_IN_PLACE.iter().find(|(_, k, from, to, writes, _)| {
+                *k == kind_name && offset >= *from && end <= *to && (*writes || !write)
+            }) {
+                Some((field, ..)) => format!("in place: {field}"),
+                None => {
+                    match OPEN_IN_PLACE
+                        .iter()
+                        .position(|(k, from, to, writes, functions, _)| {
+                            *k == kind_name
+                                && offset >= *from
+                                && end <= *to
+                                && (*writes || !write)
+                                && (functions.is_empty() || functions.contains(&function))
+                        }) {
+                        Some(i) => {
+                            r.open_seen.push(i);
+                            format!("in place, OPEN ({})", OPEN_IN_PLACE[i].5)
+                        }
+                        None => {
+                            let line = format!(
+                        "unclassified access to main-owned state: {function:08x} {kind_name}+{offset:#x} {len} {}",
+                        if write { "write" } else { "read" }
+                    );
+                            if seen_lines.insert(line.clone()) {
+                                fail(&mut r, line);
+                            }
+                            "UNCLASSIFIED".to_string()
+                        }
+                    }
+                }
+            }
+        };
+        r.text.push_str(&acceptance_line(&key, n, &mark, kind_name));
+    }
+    r.text.push('\n');
+    r
+}
+
+/// The acceptance check, frame by frame: the whole draw with each set-up's pass alone, then with all of them
+/// ([`acceptance_frame`]). Fails on a new escape, a main-owned access not on the reviewed list, a POISON result not
+/// expected, a path not reached, or a listed escape or POISON result no longer seen (take it off its list).
+/// `NV_ACCEPTANCE_FRAME=NAME` runs one frame (`ShadowLight`, ..., `all`; the lists' "no longer seen" left out);
+/// `NV_ACCEPTANCE_OUT=FILE` writes the tables to FILE; `NV_ACCEPTANCE_REPORT=1` prints without failing.
+#[test]
+fn whole_frame_acceptance() {
+    let only = std::env::var("NV_ACCEPTANCE_FRAME").ok();
+    let mut frames: Vec<(String, &'static [AcceptanceSetup])> = ACCEPTANCE_SETUPS
+        .iter()
+        .map(|w| (format!("{w:?}"), std::slice::from_ref(w)))
+        .collect();
+    frames.push(("all".to_string(), ACCEPTANCE_SETUPS));
+    // `NV_ACCEPTANCE_SET=Sky,Water`: one frame of those set-ups only (for finding which two disagree).
+    if let Ok(set) = std::env::var("NV_ACCEPTANCE_SET") {
+        let picked: Vec<AcceptanceSetup> = ACCEPTANCE_SETUPS
+            .iter()
+            .copied()
+            .filter(|s| set.split(',').any(|n| n == format!("{s:?}")))
+            .collect();
+        frames = vec![(format!("set {set}"), Vec::leak(picked))];
+    }
+    let mut out = String::new();
+    let mut failures = Vec::new();
+    let (mut escapes_seen, mut open_seen, mut poison_seen) = (Vec::new(), Vec::new(), Vec::new());
+    let mut run = 0;
+    for (name, setups) in &frames {
+        if only.as_ref().is_some_and(|o| o != name) {
+            continue;
+        }
+        run += 1;
+        let r = acceptance_frame(name, setups);
+        out.push_str(&r.text);
+        failures.extend(r.failures);
+        escapes_seen.extend(r.escapes_seen);
+        open_seen.extend(r.open_seen);
+        poison_seen.extend(r.poison_seen);
+    }
+    if run == 0 {
+        failures.push(format!("no frame matched NV_ACCEPTANCE_FRAME={only:?}"));
+    }
+    if only.is_none() && std::env::var("NV_ACCEPTANCE_SET").is_err() {
+        for (i, (f, k, from, to, owner)) in EXPECTED_ESCAPES.iter().enumerate() {
+            if !escapes_seen.contains(&i) {
+                failures.push(format!(
+                    "listed escape no longer seen (fixed? take it off EXPECTED_ESCAPES): {f:08x} {k}+{from:#x}..{to:#x} ({owner})"
+                ));
+            }
+        }
+        for (i, (k, from, to, _, _, owner)) in OPEN_IN_PLACE.iter().enumerate() {
+            if !open_seen.contains(&i) {
+                failures.push(format!(
+                    "listed open field no longer seen (take it off OPEN_IN_PLACE): {k}+{from:#x}..{to:#x} ({owner})"
+                ));
+            }
+        }
+        for (i, (frame, text, owner)) in EXPECTED_POISON.iter().enumerate() {
+            if !poison_seen.contains(&i) {
+                failures.push(format!(
+                    "listed POISON result no longer seen (fixed? take it off EXPECTED_POISON): {frame}: {text} ({owner})"
+                ));
+            }
+        }
+    }
+    out.push_str(&format!("failures: {}\n", failures.len()));
+    for f in &failures {
+        out.push_str(&format!("  {f}\n"));
+    }
+    println!("{out}");
+    if let Ok(path) = std::env::var("NV_ACCEPTANCE_OUT") {
+        std::fs::write(path, &out).expect("the acceptance table written");
+    }
+    if std::env::var("NV_ACCEPTANCE_REPORT").is_err() {
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
 }

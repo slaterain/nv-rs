@@ -1524,6 +1524,44 @@ pub fn memory_digest_beside_stack(e: &Engine) -> u64 {
     memory_hash(e, e.guest_stack_region(), false, true)
 }
 
+/// Where two engines' memories differ as [`memory_digest_beside_stack`] compares them: the differing addresses,
+/// lowest first, at most `limit` (a page mapped in one engine only counts as its first address). For a check that
+/// must name what differs (the drawing thread's whole-frame acceptance check).
+pub fn memory_differences_beside_stack(a: &Engine, b: &Engine, limit: usize) -> Vec<u32> {
+    let mut pages = a.mem.mapped_pages();
+    pages.extend(b.mem.mapped_pages());
+    pages.sort_unstable();
+    pages.dedup();
+    let side = |e: &Engine, page: u32| {
+        e.mem.is_mapped(page).then(|| {
+            comparable_page(
+                page,
+                &e.mem.page_bytes(page),
+                e.guest_stack_region(),
+                false,
+                true,
+            )
+        })
+    };
+    let mut out = Vec::new();
+    for page in pages {
+        if out.len() >= limit {
+            break;
+        }
+        match (side(a, page), side(b, page)) {
+            (Some(x), Some(y)) => {
+                for (i, (p, q)) in x.iter().zip(&y).enumerate() {
+                    if p != q && out.len() < limit {
+                        out.push(page + i as u32);
+                    }
+                }
+            }
+            _ => out.push(page),
+        }
+    }
+    out
+}
+
 fn memory_hash(e: &Engine, stack: Option<(u32, u32)>, nan_payloads: bool, loose: bool) -> u64 {
     let mut hash = 0;
     let on_stack = |a: u32| stack.is_some_and(|(lo, hi)| (lo..hi).contains(&a));
