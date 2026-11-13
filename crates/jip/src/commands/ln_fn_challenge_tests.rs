@@ -57,8 +57,8 @@ fn the_16_bit_values() {
         e.mem.set_u16(CHAL + off as u32, 0xffff);
         assert_eq!(call(&mut e, get, &[r(1)]).1, 65535.0, "{get:04x}: unsigned");
         let mut want = e.mem.bytes(CHAL, 0x7c);
-        call(&mut e, set, &[r(1), n(0x0001_0002)]);
-        want[off..off + 2].copy_from_slice(&2u16.to_le_bytes());
+        call(&mut e, set, &[r(1), n(0x0001_0302)]);
+        want[off..off + 2].copy_from_slice(&0x0302u16.to_le_bytes());
         assert_eq!(
             e.mem.bytes(CHAL, 0x7c),
             want,
