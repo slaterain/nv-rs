@@ -33,9 +33,9 @@
 
 use super::arrays::{create_array, Element, TempElements};
 use super::forms::{
-    form_type_b8, ActiveEffect, AlchemyItem, EffectItem, EffectSetting, EnchantmentItem,
-    ListNode, MagicItem, ProcessManager, SpellItem, TESActorBase, TESEnchantableForm,
-    ACTOR_MAGIC_TARGET, MAGIC_ITEM_IN_FORM, MAGIC_ITEM_IN_OBJECT, TES_OBJECT_ARMO_VTBL,
+    form_type_b8, ActiveEffect, AlchemyItem, EffectItem, EffectSetting, EnchantmentItem, ListNode,
+    MagicItem, ProcessManager, SpellItem, TESActorBase, TESEnchantableForm, ACTOR_MAGIC_TARGET,
+    MAGIC_ITEM_IN_FORM, MAGIC_ITEM_IN_OBJECT, TES_OBJECT_ARMO_VTBL,
 };
 use super::{
     heap_alloc, is_actor, is_type, list_count, list_prepend, list_unlink, nth_item,
@@ -209,7 +209,11 @@ fn update_active_effects(e: &mut Engine, actor: u32, magic_item: u32, item: u32,
         let caster = e.get(active(old), A::caster);
         let object = e.get(active(old), A::enchantObject);
         let fresh = e
-            .vcall(caster, CREATE_ACTIVE_EFFECT, &args![magic_item, item, object])
+            .vcall(
+                caster,
+                CREATE_ACTIVE_EFFECT,
+                &args![magic_item, item, object],
+            )
             .u32();
         if fresh != 0 {
             let target = e.get(active(old), A::target);
@@ -658,7 +662,10 @@ fn set_actor_unarmed_effect(e: &mut Engine, w: &[u32]) -> Ret {
     let effect = read.form(0);
     let fits = match type_of(e, effect) {
         form_type_b8::ENCHANTMENT_ITEM => {
-            e.get(Ptr::<EnchantmentItem>::new(effect), EnchantmentItem::enchType) == 2
+            e.get(
+                Ptr::<EnchantmentItem>::new(effect),
+                EnchantmentItem::enchType,
+            ) == 2
         }
         form_type_b8::SPELL_ITEM => e.get(Ptr::<SpellItem>::new(effect), SpellItem::spellType) == 0,
         _ => false,
@@ -765,7 +772,13 @@ fn get_active_effects(e: &mut Engine, w: &[u32]) -> Ret {
     let Some(r) = actor(e, a.this_obj).filter(|_| read.ok) else {
         return handled(true);
     };
-    let pick = |bit: u32, kind: u8| if filter & bit != 0 { u32::from(kind) } else { 63 };
+    let pick = |bit: u32, kind: u8| {
+        if filter & bit != 0 {
+            u32::from(kind)
+        } else {
+            63
+        }
+    };
     let filter = pick(1, form_type_b8::ENCHANTMENT_ITEM)
         & pick(2, form_type_b8::SPELL_ITEM)
         & pick(4, form_type_b8::ALCHEMY_ITEM);
@@ -931,7 +944,10 @@ fn get_effect_flag(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let read = Read::of(e, &a);
     let flag = read.int(1, 0);
-    if let Some(at) = arg(&read, 0).filter(|_| flag <= 7).and_then(|f| flags_byte(e, f)) {
+    if let Some(at) = arg(&read, 0)
+        .filter(|_| flag <= 7)
+        .and_then(|f| flags_byte(e, f))
+    {
         if e.mem.u8(at) & (1 << flag) != 0 {
             a.set_result(e, 1.0);
         }
@@ -945,10 +961,17 @@ fn set_effect_flag(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let read = Read::of(e, &a);
     let flag = read.int(1, 0);
-    if let Some(at) = arg(&read, 0).filter(|_| flag <= 7).and_then(|f| flags_byte(e, f)) {
+    if let Some(at) = arg(&read, 0)
+        .filter(|_| flag <= 7)
+        .and_then(|f| flags_byte(e, f))
+    {
         let bit = 1u8 << flag;
         let b = e.mem.u8(at);
-        let b = if read.int(2, 0) != 0 { b | bit } else { b & !bit };
+        let b = if read.int(2, 0) != 0 {
+            b | bit
+        } else {
+            b & !bit
+        };
         e.mem.set_u8(at, b);
     }
     handled(true)
