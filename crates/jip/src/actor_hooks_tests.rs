@@ -208,7 +208,9 @@ fn every_command_hook_has_all_its_seams() {
         let built = e.mem.u32(e.script_tables().record(op) + 0x18) != 0;
         for &addr in sites {
             assert!(
-                !built || (jip_row(addr) && e.site_owners(addr) == [Owner::Jip]),
+                !built
+                    || (jip_row(addr)
+                        && (!SITES.contains(&addr) || e.site_owners(addr) == [Owner::Jip])),
                 "{op:04x} is built but {addr:08x} has no JIP seam"
             );
         }
@@ -276,9 +278,11 @@ fn anim_action_events() {
     assert_eq!(site(&mut e, 0x008a_7551, &[ACTOR, 2, 0x78]), Some(0));
     assert_eq!(e.mem.u32(PROCESS + 0x2f0), 0x78, "the sequence always");
     assert!(calls().is_empty(), "the same action");
+    set_animation_event(&mut e, SCRIPT_FORM, true, empty, u32::MAX, true);
     assert_eq!(site(&mut e, 0x008a_7551, &[OTHER, u32::MAX, 0]), Some(0));
     assert_eq!(e.mem.u16(PROCESS + 0x2ec), 0xffff, "stored");
     assert!(calls().is_empty(), "a negative action");
+    set_animation_event(&mut e, SCRIPT_FORM, false, empty, u32::MAX, true);
     assert_eq!(site(&mut e, 0x008a_7551, &[OTHER, 5, 0]), Some(0));
     assert!(
         calls().is_empty(),
@@ -346,6 +350,10 @@ fn play_group_events() {
     calls();
     assert_eq!(site(&mut e, 0x0049_4e19, &[anim, 0x31, 0x11, ACTOR]), None);
     assert_eq!(calls(), [(SCRIPT_FORM, ACTOR, vec![0x11])]);
+    e.mem.set_u8(ACTOR + 0x107, 0);
+    site(&mut e, 0x0049_4e19, &[anim, 0x31, 0x11, ACTOR]);
+    assert!(calls().is_empty(), "the actor's flag clear");
+    e.mem.set_u8(ACTOR + 0x107, 2);
     assert_eq!(site(&mut e, 0x0049_4e19, &[anim, 0xff, 0x11, ACTOR]), None);
     assert!(calls().is_empty(), "group 0xFF");
     assert_eq!(site(&mut e, 0x0049_4e19, &[anim, 0x31, 0x12, ACTOR]), None);
@@ -496,9 +504,10 @@ fn fire_weapon_events_and_the_ammo_answer() {
             (SCRIPT_TWO, ACTOR, vec![WEAPON])
         ]
     );
-    site(&mut e, 0x008a_86b0, &[1]);
+    let mark = e.mark_caller(Hook::RemoveAmmo, 0x008a_86b0);
     site(&mut e, 0x008a_8dd0, &[ACTOR, WEAPON]);
-    site(&mut e, 0x008a_86b0, &[0]);
+    assert!(!e.caller_marked(0x008a_86b0), "taken at the first check");
+    drop(mark);
     assert!(calls().is_empty(), "the reload's call");
     site(&mut e, 0x008a_8dd0, &[OTHER, WEAPON]);
     assert_eq!(calls(), [(SCRIPT_FORM, OTHER, vec![WEAPON])], "unmarked");
@@ -544,9 +553,10 @@ fn hit_events() {
     site(&mut e, 0x005a_c78a, &[0, list, 0x80, 1]);
     assert!(calls().is_empty(), "not an actor's vtable");
     e.mem.set_u32(actor, 0x0108_7808);
-    site(&mut e, 0x008c_49b7, &[1]);
+    let mark = e.mark_caller(Hook::OnHitEvent, 0x008c_49b7);
     site(&mut e, 0x005a_c78a, &[0, list, 0x80, 1]);
-    site(&mut e, 0x008c_49b7, &[0]);
+    assert!(!e.caller_marked(0x008c_49b7), "taken");
+    drop(mark);
     assert!(calls().is_empty(), "the magic target's call");
     site(&mut e, 0x005a_c78a, &[0, list, 0x80, 1]);
     assert_eq!(calls().len(), 1, "unmarked again");
@@ -579,6 +589,9 @@ fn reload_and_ragdoll_events() {
     assert_eq!(calls(), [(SCRIPT_FORM, ACTOR, vec![WEAPON])]);
     site(&mut e, 0x008a_7549, &[ACTOR, 0x111, 0]);
     assert_eq!(calls().len(), 1, "a reload loop (its low byte)");
+    e.mem.set_u16(PROCESS + 0x2ec, 9);
+    site(&mut e, 0x008a_7549, &[ACTOR, 9, 0]);
+    e.mem.set_u16(PROCESS + 0x2ec, 3);
     site(&mut e, 0x008a_7549, &[ACTOR, 3, 0]);
     site(&mut e, 0x008a_7549, &[ACTOR, 8, 0]);
     assert!(calls().is_empty(), "the same action, or no reload");
@@ -619,6 +632,10 @@ fn aid_item_and_projectile_events() {
     calls();
     assert_eq!(site(&mut e, 0x0088_c74e, &[ITEM, ACTOR]), None);
     assert_eq!(calls(), [(SCRIPT_FORM, ACTOR, vec![ITEM])]);
+    e.mem.set_u8(ITEM + 6, 0);
+    site(&mut e, 0x0088_c74e, &[ITEM, ACTOR]);
+    assert!(calls().is_empty(), "the item's flag clear");
+    e.mem.set_u8(ITEM + 6, 1);
     run(
         &mut e,
         SET_ON_USE_AID_ITEM,

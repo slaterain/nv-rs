@@ -2085,15 +2085,10 @@ pub fn fn_008a8420(e: &mut Engine, this: Ptr<Actor>, weapon: u32, mode: i32, fla
     let result = if initial_count != 0 && item != 0 && change != 0 {
         // The seam around this call (`0x8A86B0`, ADR-0016): JIP LN NVSE's RemoveAmmo hook fires no
         // weapon events for the call made here (its hook reads the return address `0x8A86B5`),
-        // so it is told before (1) and after (0). While the hook has no user: one load.
-        let marked = e.hook_users(engine_core::extend::Hook::RemoveAmmo) != 0;
-        if marked {
-            e.site(0x008a_86b0, &[1]);
-        }
+        // so the call is marked (a guard). While the hook has no user: one load.
+        let mark = e.mark_caller(engine_core::extend::Hook::RemoveAmmo, 0x008a_86b0);
         let should = actor_should_use_ammo(e, this, weapon);
-        if marked {
-            e.site(0x008a_86b0, &[0]);
-        }
+        drop(mark);
         let uses_ammo = should || e.call(0x004c_0bf0, &args![weapon]).bool();
         let mut take_rounds = !uses_ammo;
         if uses_ammo {
@@ -9745,22 +9740,23 @@ mod tests {
         assert!(!e.call(0x008a_8dd0, &args![actor, weapon]).bool());
     }
 
-    /// The seam around the reload's `ShouldUseAmmo` call (`0x8A86B0`, JIP LN NVSE's RemoveAmmo):
-    /// with handlers and no user, neither is asked (the clip gets 10 rounds); with a user, the
-    /// call is told 1 before and 0 after, `ShouldUseAmmo`'s own seam asked between them, and its
-    /// answer is used (true: the clip keeps the 5 held rounds).
+    /// The ammo seam's handler, also noting whether the reload marked the call (`0x8A86B0`).
+    fn marked_ammo_handler(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        let mut seen = a.to_vec();
+        seen.push(u32::from(e.caller_marked(0x008a_86b0)));
+        JIP_SEEN.with(|s| s.borrow_mut().push((0x008a_8dd0, seen)));
+        JIP_ANSWER.with(|c| c.get())
+    }
+
+    /// The mark around the reload's `ShouldUseAmmo` call (`0x8A86B0`, JIP LN NVSE's RemoveAmmo):
+    /// no user, no mark and the seam not asked (the clip gets 10 rounds); a user, the seam asked
+    /// during the marked call, its answer used (true: the clip keeps the 5 held rounds), the mark
+    /// gone after the call, also when the call throws and is caught outside.
     #[test]
     fn reload_marks_its_should_use_ammo_call() {
         use engine_core::extend::{Hook, Owner, SiteSlot};
         let mut w = reload_world(5, 3);
-        w.e.on_site(
-            SiteSlot::new(Owner::Jip, 0x008a_86b0),
-            jip_handler::<0x008a_86b0>,
-        );
-        w.e.on_site(
-            SiteSlot::new(Owner::Jip, 0x008a_8dd0),
-            jip_handler::<0x008a_8dd0>,
-        );
+        w.e.on_site(SiteSlot::new(Owner::Jip, 0x008a_8dd0), marked_ammo_handler);
         JIP_ANSWER.with(|c| c.set(Some(1)));
         w.e.call_log = Some(vec![]);
         assert!(w
@@ -9779,12 +9775,17 @@ mod tests {
         assert_eq!(clip(&mut w.e), vec![vec![w.change.addr(), 5]]);
         assert_eq!(
             JIP_SEEN.with(|s| s.take()),
-            [
-                (0x008a_86b0, vec![1]),
-                (0x008a_8dd0, vec![w.actor.addr(), w.weapon.addr()]),
-                (0x008a_86b0, vec![0]),
-            ]
+            [(0x008a_8dd0, vec![w.actor.addr(), w.weapon.addr(), 1])]
         );
+        assert!(!w.e.caller_marked(0x008a_86b0), "gone after the call");
+        w.e.register(0x0047_bcf0, |_, _| panic!("a guest exception"));
+        JIP_ANSWER.with(|c| c.set(None));
+        let (actor, weapon) = (w.actor, w.weapon);
+        let thrown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            w.e.call(0x008a_8420, &args![actor, weapon, 0i32, 0u8])
+        }));
+        assert!(thrown.is_err());
+        assert!(!w.e.caller_marked(0x008a_86b0), "gone with the unwinding");
     }
 
     #[test]

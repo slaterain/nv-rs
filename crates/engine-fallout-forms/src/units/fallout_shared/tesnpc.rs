@@ -3084,12 +3084,12 @@ pub fn fn_006062e0(e: &mut Engine, _this: Ptr<TESNPC>, actor: Ptr, node: Ptr) {
 ///
 /// Two seams (ADR-0016) for JIP LN NVSE's LockEquipment hook, which re-equips differently when
 /// `fn_006047c0` is called from here while this call came from the `SetCombatStyle` command (its
-/// hook reads the return addresses): at the entry (`0x606540`, answered when the command's call
-/// at `0x5CD736` is this one), and, for such a call only, around the call of `fn_006047c0`
-/// (`0x60678F`, told 1 before and 0 after). While the hook has no user: one load.
+/// hook reads the return addresses): at the entry (`0x606540`, the command's mark at `0x5CD736`
+/// taken: this call is the one it made), and, for such a call only, around the call of
+/// `fn_006047c0` (`0x60678F`, marked by a guard). While the hook has no user: one load.
 pub fn fn_00606540(e: &mut Engine, this: Ptr<TESNPC>, actor: Ptr, biped: Ptr, force: u8) {
     let from_combat_style = e.hook_users(engine_core::extend::Hook::LockEquipment) != 0
-        && e.site(0x0060_6540, &[]).is_some();
+        && e.take_caller_mark(0x005c_d736);
     if !biped.is_null() {
         if force == 0 {
             for index in 0..0x14u32 {
@@ -3160,13 +3160,13 @@ pub fn fn_00606540(e: &mut Engine, this: Ptr<TESNPC>, actor: Ptr, biped: Ptr, fo
             if package != 0 && e.call(0x0044_1b00, &args![package]).bool() {
                 weapon_out = false;
             }
-            if from_combat_style {
-                e.site(0x0060_678f, &[1]);
-            }
+            let mark = if from_combat_style {
+                Some(e.mark_caller(engine_core::extend::Hook::LockEquipment, 0x0060_678f))
+            } else {
+                None
+            };
             fn_006047c0(e, this, actor, 1, weapon_out, 0, false);
-            if from_combat_style {
-                e.site(0x0060_678f, &[0]);
-            }
+            drop(mark);
         }
     }
     if e.call(0x004a_bfa0, &args![]).u8() == 0 {
@@ -9924,30 +9924,25 @@ mod tests {
     }
 
     thread_local! {
-        static REBUILD_SEEN: std::cell::RefCell<Vec<(u32, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
-        static FROM_COMBAT_STYLE: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+        static REBUILD_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static REBUILD_THROWS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
 
-    fn rebuild_entry_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        REBUILD_SEEN.with(|s| s.borrow_mut().push((0x0060_6540, a.to_vec())));
-        FROM_COMBAT_STYLE.with(|c| c.get())
-    }
-
-    fn rebuild_call_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        REBUILD_SEEN.with(|s| s.borrow_mut().push((0x0060_678f, a.to_vec())));
+    /// Answers at `fn_006047c0`'s entry (so it returns at once), noting its words and whether the
+    /// call is marked at `0x60678F`; throws when told to.
+    fn rebuild_re_equip_handler(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        let mut seen = a.to_vec();
+        seen.push(u32::from(e.caller_marked(0x0060_678f)));
+        REBUILD_SEEN.with(|s| s.borrow_mut().push(seen));
+        assert!(!REBUILD_THROWS.with(|t| t.get()), "a guest exception");
         Some(0)
     }
 
-    /// Answers at `fn_006047c0`'s entry, so it returns at once.
-    fn rebuild_re_equip_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        REBUILD_SEEN.with(|s| s.borrow_mut().push((0x0060_47c0, a.to_vec())));
-        Some(0)
-    }
-
-    /// The two seams of `00606540` (JIP LN NVSE's LockEquipment): with no user, none is asked;
-    /// with a user, the entry (`0x606540`) is asked first; when it answers (the call came from
-    /// the `SetCombatStyle` command), the call of `fn_006047c0` is told 1 before and 0 after
-    /// (`0x60678F`); when it does not, `fn_006047c0` is called without them.
+    /// The marks of `00606540` (JIP LN NVSE's LockEquipment): with a user, its entry takes the
+    /// `SetCombatStyle` command's mark (`0x5CD736`, gone after: a call nested in this one is not
+    /// that command's), and only then its call of `fn_006047c0` runs marked (`0x60678F`); without
+    /// the command's mark, unmarked; the mark is gone after the call, also when it throws and is
+    /// caught outside; with no user, no seam is asked.
     #[test]
     fn rebuilding_a_model_marks_the_re_equip_for_lock_equipment() {
         use engine_core::extend::{Hook, Owner, SiteSlot};
@@ -9958,39 +9953,37 @@ mod tests {
         let player = e.mem.alloc(0x100);
         e.set_global(PLAYER_SINGLETON, player);
         e.on_site(
-            SiteSlot::new(Owner::Jip, 0x0060_6540),
-            rebuild_entry_handler,
-        );
-        e.on_site(SiteSlot::new(Owner::Jip, 0x0060_678f), rebuild_call_handler);
-        e.on_site(
             SiteSlot::new(Owner::Jip, 0x0060_47c0),
             rebuild_re_equip_handler,
         );
-        FROM_COMBAT_STYLE.with(|c| c.set(Some(1)));
         started(&mut e);
         e.call(0x0060_6540, &args![this, actor, biped, 1u32]);
         assert!(REBUILD_SEEN.with(|s| s.borrow().is_empty()), "no user");
         assert_eq!(calls(&mut e, 0x005f_1590).len(), 1);
         e.add_hook_user(Hook::LockEquipment, true);
+        let command = e.mark_caller(Hook::LockEquipment, 0x005c_d736);
         e.call(0x0060_6540, &args![this, actor, biped, 1u32]);
         assert_eq!(
             REBUILD_SEEN.with(|s| s.take()),
-            [
-                (0x0060_6540, vec![]),
-                (0x0060_678f, vec![1]),
-                (0x0060_47c0, vec![this.addr(), actor]),
-                (0x0060_678f, vec![0]),
-            ]
+            [vec![this.addr(), actor, 1]]
         );
-        FROM_COMBAT_STYLE.with(|c| c.set(None));
+        assert!(!e.caller_marked(0x005c_d736), "taken at the entry");
+        assert!(!e.caller_marked(0x0060_678f), "gone after the call");
+        drop(command);
         e.call(0x0060_6540, &args![this, actor, biped, 1u32]);
         assert_eq!(
             REBUILD_SEEN.with(|s| s.take()),
-            [
-                (0x0060_6540, vec![]),
-                (0x0060_47c0, vec![this.addr(), actor]),
-            ]
+            [vec![this.addr(), actor, 0]],
+            "not from the command"
         );
+        let _command = e.mark_caller(Hook::LockEquipment, 0x005c_d736);
+        REBUILD_THROWS.with(|t| t.set(true));
+        let thrown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.call(0x0060_6540, &args![this, actor, biped, 1u32])
+        }));
+        REBUILD_THROWS.with(|t| t.set(false));
+        assert!(thrown.is_err());
+        assert!(!e.caller_marked(0x0060_678f), "gone with the unwinding");
     }
 
     #[test]

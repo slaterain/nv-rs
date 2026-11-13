@@ -52,16 +52,14 @@ pub const COMMANDS: [u32; 11] = [
 ];
 
 /// The seams whose handlers are here (engine-core `SITES`, owner JIP, step 3.5b).
-pub const SITES: [u32; 11] = [
+pub const SITES: [u32; 9] = [
     0x0049_4e19,
     0x005a_c78a,
     0x0066_ee72,
     0x0088_c74e,
     0x008a_7549,
     0x008a_7551,
-    0x008a_86b0,
     0x008a_8dd0,
-    0x008c_49b7,
     0x009c_20bf,
     0x00c7_c151,
 ];
@@ -142,9 +140,11 @@ const AV_OWNER_OFFSET: u32 = 0xa4;
 /// position (`+0x30`) and its impact data (`+0x88`; a position at `+4`).
 const BEAM: u16 = 2;
 
-/// Caller marks (a hook that reads a return address, step 3.5b's first half), one bit each.
-const MARK_RELOAD_AMMO: u8 = 1;
-const MARK_MAGIC_HIT: u8 = 2;
+/// The calls marked for the hooks that read their caller's return address (`Engine::mark_caller`
+/// in their callers' translations): the reload's `ShouldUseAmmo` call and the magic target's
+/// action flag. A missing mark means "not from that caller".
+const RELOAD_AMMO_CALL: u32 = 0x008a_86b0;
+const MAGIC_HIT_CALL: u32 = 0x008c_49b7;
 
 /// A critical hit's event (`CriticalHitEventData`): filters (0 for any) and the script.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -161,8 +161,6 @@ pub type ScriptsBy = BTreeMap<u32, BTreeSet<u32>>;
 /// JIP's actor hook state.
 #[derive(Clone, Debug, Default)]
 pub struct State {
-    /// The caller marks, per game thread (a return address is each thread's own).
-    pub marks: BTreeMap<u32, u8>,
     /// `s_animActionEventMap`, `s_playGroupEventMap`: by action or group type.
     pub anim_action: ScriptsBy,
     pub play_group: ScriptsBy,
@@ -207,9 +205,7 @@ pub fn install(e: &mut Engine, answers_installed: bool) {
     e.on_site(SiteSlot::new(Owner::Jip, 0x0088_c74e), equip_aid_item_site);
     e.on_site(SiteSlot::new(Owner::Jip, 0x008a_7549), reload_weapon_site);
     e.on_site(SiteSlot::new(Owner::Jip, 0x008a_7551), set_anim_action_site);
-    e.on_site(SiteSlot::new(Owner::Jip, 0x008a_86b0), reload_ammo_mark);
     e.on_site(SiteSlot::new(Owner::Jip, 0x008a_8dd0), remove_ammo_site);
-    e.on_site(SiteSlot::new(Owner::Jip, 0x008c_49b7), magic_hit_mark);
     e.on_site(
         SiteSlot::new(Owner::Jip, 0x009c_20bf),
         projectile_impact_site,
@@ -321,31 +317,6 @@ fn scripts_of(map: &ScriptsBy, key: u32) -> Option<BTreeSet<u32>> {
     map.get(&key).cloned()
 }
 
-/// This game thread's caller marks.
-fn marks(e: &mut Engine) -> &mut u8 {
-    let thread = engine_core::thread_host::current_id(e);
-    state(e).marks.entry(thread).or_default()
-}
-
-/// A caller mark set (1) or cleared (0) by its caller's seam.
-fn set_mark(e: &mut Engine, mark: u8, on: bool) {
-    let m = marks(e);
-    if on {
-        *m |= mark;
-    } else {
-        *m &= !mark;
-    }
-}
-
-/// Whether the call this handler runs for was marked by its caller; the mark goes (a call made
-/// inside this one has another return address).
-fn take_mark(e: &mut Engine, mark: u8) -> bool {
-    let m = marks(e);
-    let had = *m & mark != 0;
-    *m &= !mark;
-    had
-}
-
 // ---- the seams ----
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: SetAnimGroupHook.
@@ -392,7 +363,7 @@ fn set_anim_group_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
 /// each called on the actor.
 fn on_hit_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let (list, flags) = (a[1], a[2]);
-    let from_magic = take_mark(e, MARK_MAGIC_HIT);
+    let from_magic = e.take_caller_mark(MAGIC_HIT_CALL);
     if flags & ON_HIT_EVENT == 0 || from_magic || list == 0 {
         return None;
     }
@@ -409,12 +380,6 @@ fn on_hit_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
             invoke(e, &scripts, actor, &[]);
         }
     }
-    None
-}
-
-/// The magic target's call of `Script::SetActionFlag` (`0x8C49B7`): marked (1) and cleared (0).
-fn magic_hit_mark(e: &mut Engine, a: &[u32]) -> Option<u32> {
-    set_mark(e, MARK_MAGIC_HIT, a[0] != 0);
     None
 }
 
@@ -551,12 +516,6 @@ fn set_anim_action_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     Some(0)
 }
 
-/// The reload's call of `Actor::ShouldUseAmmo` (`0x8A86B0`): marked (1) and cleared (0).
-fn reload_ammo_mark(e: &mut Engine, a: &[u32]) -> Option<u32> {
-    set_mark(e, MARK_RELOAD_AMMO, a[0] != 0);
-    None
-}
-
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: RemoveAmmoHook.
 /// `Actor::ShouldUseAmmo` replaced (`0x8A8DD0`: the actor, the weapon): unless the reload asks
 /// (`0x8A86B5`), the fire-weapon scripts for every actor, then those for this actor (with its
@@ -565,7 +524,7 @@ fn reload_ammo_mark(e: &mut Engine, a: &[u32]) -> Option<u32> {
 /// false for one with bit 7 at `+0x100`; else the actor's teammate byte.
 fn remove_ammo_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let (actor, weapon) = (a[0], a[1]);
-    if !take_mark(e, MARK_RELOAD_AMMO) {
+    if !e.take_caller_mark(RELOAD_AMMO_CALL) {
         if !state(e).fire_weapon_scripts.is_empty() {
             let scripts = state(e).fire_weapon_scripts.clone();
             invoke(e, &scripts, actor, &[weapon]);

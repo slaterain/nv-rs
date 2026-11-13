@@ -2991,16 +2991,11 @@ pub fn fn_005cd650(e: &mut Engine, a: ScriptArgs) -> bool {
         let value = e.vcall(actor, 0x1e8, &args![]).u32();
         // The seam around this call (`0x5CD736`, ADR-0016): JIP LN NVSE's LockEquipment hook
         // re-equips differently when `TESNPC::ReEquipAll` runs for this command (its hook reads the
-        // return address `0x5CD73B`), so it is told before (1) and after (0) the call. While the
+        // return address `0x5CD73B`), so the call is marked (a guard). While the
         // hook has no user: one load.
-        let marked = e.hook_users(engine_core::extend::Hook::LockEquipment) != 0;
-        if marked {
-            e.site(0x005c_d736, &[1]);
-        }
+        let mark = e.mark_caller(engine_core::extend::Hook::LockEquipment, 0x005c_d736);
         e.call(NPC_FN_00606540, &args![form, actor, value, 1u32]);
-        if marked {
-            e.site(0x005c_d736, &[0]);
-        }
+        drop(mark);
     }
     true
 }
@@ -7142,22 +7137,18 @@ mod tests {
         static COMBAT_STYLE_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
     }
 
-    fn combat_style_marker(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        COMBAT_STYLE_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
-        Some(0)
-    }
-
-    /// The seam around the worn items' renewal (`0x5CD736`, JIP LN NVSE's LockEquipment): with a
-    /// handler and no user, it is not asked; with a user, it is told 1 right before the call of
-    /// `00606540` and 0 right after (the call between them, made once as before); the creature's
-    /// path never reaches it.
+    /// The mark around the worn items' renewal (`0x5CD736`, JIP LN NVSE's LockEquipment): no
+    /// user, no mark during the call of `00606540`; a user, the call (once, as before) runs
+    /// marked and the mark is gone after it, also when it throws and is caught outside; the
+    /// creature's path makes no such call.
     #[test]
     fn the_005cd650_command_marks_the_renewal_for_lock_equipment() {
-        use engine_core::extend::{Hook, Owner, SiteSlot};
+        use engine_core::extend::Hook;
         let (mut e, actor, form) = worn_engine();
-        e.on_site(SiteSlot::new(Owner::Jip, 0x005c_d736), combat_style_marker);
-        e.register(NPC_FN_00606540, |_, a| {
-            COMBAT_STYLE_SEEN.with(|s| s.borrow_mut().push(a[..4].to_vec()));
+        e.register(NPC_FN_00606540, |e, a| {
+            let mut seen = a[..4].to_vec();
+            seen.push(u32::from(e.caller_marked(0x005c_d736)));
+            COMBAT_STYLE_SEEN.with(|s| s.borrow_mut().push(seen));
             Ret::default()
         });
         e.mem.set_u8(actor + 0xfc, 1);
@@ -7166,15 +7157,22 @@ mod tests {
         assert!(run(&mut e, 0x005c_d650, a));
         assert_eq!(
             COMBAT_STYLE_SEEN.with(|s| s.take()),
-            [vec![form, actor, 0x0ccc, 1]],
-            "no user: not asked"
+            [vec![form, actor, 0x0ccc, 1, 0]],
+            "no user: no mark"
         );
         e.add_hook_user(Hook::LockEquipment, true);
         assert!(run(&mut e, 0x005c_d650, a));
         assert_eq!(
             COMBAT_STYLE_SEEN.with(|s| s.take()),
-            [vec![1], vec![form, actor, 0x0ccc, 1], vec![0]]
+            [vec![form, actor, 0x0ccc, 1, 1]]
         );
+        assert!(!e.caller_marked(0x005c_d736), "gone after the call");
+        e.register(NPC_FN_00606540, |_, _| panic!("a guest exception"));
+        let thrown =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&mut e, 0x005c_d650, a)));
+        assert!(thrown.is_err());
+        assert!(!e.caller_marked(0x005c_d736), "gone with the unwinding");
+        e.register(NPC_FN_00606540, |_, _| Ret::default());
         e.mem.set_u8(actor + 0xfd, 1);
         assert!(run(&mut e, 0x005c_d650, a));
         assert!(
