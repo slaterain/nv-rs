@@ -1204,8 +1204,10 @@ impl Parser {
         let o = self.offset(e);
         self.set_offset(e, o.wrapping_add(n));
     }
-    /// `Peek(idx)`: the text's byte, 0 at or past the length.
+    /// `Peek(idx)`: the text's byte, 0 at or past the length; index `u32::MAX` is `Peek`'s
+    /// default argument (-1), the cursor's byte (where the argument-end trim steps below 0).
     fn peek_at(&self, e: &Engine, idx: u32) -> u8 {
+        let idx = if idx == u32::MAX { self.offset(e) } else { idx };
         if idx < self.len {
             e.mem.u8(self.line + ln::TEXT + idx)
         } else {

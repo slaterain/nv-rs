@@ -1444,3 +1444,49 @@ fn vanilla_names_through_xnvses_lookup() {
         assert_eq!(e.mem.u32(word + 0x208), want.unwrap_or(0), "{name}");
     }
 }
+
+/// `OptArgs` (0x1004): an expression-parsed command with two optional numbers.
+fn optional_args_record(e: &mut Engine) -> u32 {
+    let record = record_of(e, 0x1004);
+    let at = AREA + 0x7e0;
+    let names = AREA + 0x7f8;
+    e.mem.write(names, b"OptArgs\0");
+    for i in 0..2u32 {
+        let p = at + 12 * i;
+        e.mem.set_u32(p, names);
+        e.mem.set_u32(p + 4, NVSE_NUMBER);
+        e.mem.set_u32(p + 8, 1);
+    }
+    e.mem.set_u32(record, names);
+    e.mem.set_u32(record + 8, 0x1004);
+    e.mem.set_u16(record + 0x12, 2);
+    e.mem.set_u32(record + 0x14, at);
+    e.mem.set_u32(record + 0x1c, crate::table::EXPRESSION_PARSE);
+    record
+}
+
+/// `Peek(-1)` in the argument-end trim. `eval OptArgs == 0`: the nested command's text is
+/// " == 0"; its comparison scan puts the end at 0, the trim steps over the blank to -1, where
+/// `Peek` reads the cursor's byte (the blank again) and steps to -2. The arguments end, empty,
+/// and the cursor is left at -2 + 1 = -1, which the outer line's offset (7) brings back to 6:
+/// the outer argument stops at the `s` of `OptArgs`, which is left over, so the line is refused.
+#[test]
+fn the_argument_end_trim_reads_peeks_default_index() {
+    let mut e = engine();
+    optional_args_record(&mut e);
+    let (ok, _) = compile(&mut e, EVAL, "OptArgs == 0");
+    assert!(!ok);
+    assert_eq!(
+        printed(),
+        ["Error line 7\n\nMore args provided than expected by function or command."]
+    );
+    // With a word before the comparison the trim stops on it, and the line compiles.
+    let mut opt = vec![b'X', 0, 0, 4, 0x10];
+    let inner = args_of(&[arg(&[b"B\x01"])]);
+    opt.extend_from_slice(&(inner.len() as u16 + 2).to_le_bytes());
+    opt.extend(inner);
+    assert_eq!(
+        compiled(&mut e, EVAL, "(OptArgs 1) == 0"),
+        args_of(&[arg(&[&opt, b"B\x00", &[op::EQUALS]])])
+    );
+}
