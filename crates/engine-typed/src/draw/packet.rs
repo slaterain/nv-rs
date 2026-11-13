@@ -47,13 +47,13 @@ pub(crate) fn camera(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> u32 {
 /// The render mode (`eRenderMode`).
 #[inline(always)]
 pub(crate) fn render_mode(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> u32 {
-    e.get(acc, BSShaderAccumulator::eRenderMode)
+    capture::word(e, acc.addr(), BSShaderAccumulator::eRenderMode.off)
 }
 
 /// How many batch renderers the accumulator has (one per drawing thread of the exe).
 #[inline(always)]
 pub(crate) fn renderer_count(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> u32 {
-    e.get(acc, BSShaderAccumulator::uiBatchRendererCount)
+    capture::word(e, acc.addr(), BSShaderAccumulator::uiBatchRendererCount.off)
 }
 
 /// Batch renderer `index`.
@@ -63,18 +63,19 @@ pub(crate) fn renderer(
     acc: Ptr<BSShaderAccumulator>,
     index: u32,
 ) -> Ptr<BSBatchRenderer> {
-    Ptr::new(e.global::<u32>(elem_addr(
-        acc,
-        BSShaderAccumulator::pBatchRenderer,
-        index,
-        4,
-    )))
+    Ptr::new(capture::word(
+        e,
+        acc.addr(),
+        BSShaderAccumulator::pBatchRenderer
+            .off
+            .wrapping_add(index.wrapping_mul(4)),
+    ))
 }
 
 /// Whether the alpha distances take the radius off (+0x31), as the byte the exe passes.
 #[inline(always)]
 pub(crate) fn subtract_radius(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> u8 {
-    e.get(acc, BSShaderAccumulator::ucSubtractRadius)
+    capture::byte(e, acc.addr(), BSShaderAccumulator::ucSubtractRadius.off)
 }
 
 /// Whether the second half copies the water reflection first (+0x38; main clears it after the draw: the
@@ -88,40 +89,40 @@ pub(crate) fn copy_reflection(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool
 /// (+0x164).
 #[inline(always)]
 pub(crate) fn split_clip(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
-    e.get(acc, BSShaderAccumulator::ucSkipType13) != 0
+    capture::byte(e, acc.addr(), BSShaderAccumulator::ucSkipType13.off) != 0
 }
 
 /// Whether shadow pass types are drawn through the group-clearing draw (+0x164 or +0x165).
 #[inline(always)]
 pub(crate) fn shadow_groups(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
-    e.get(acc, BSShaderAccumulator::ucSkipType13) != 0
-        || e.get(acc, BSShaderAccumulator::ucShadowGroups) != 0
+    capture::byte(e, acc.addr(), BSShaderAccumulator::ucSkipType13.off) != 0
+        || capture::byte(e, acc.addr(), BSShaderAccumulator::ucShadowGroups.off) != 0
 }
 
 /// Whether the second half draws alpha group 1 (+0x167); the first half draws the other.
 #[inline(always)]
 pub(crate) fn late_alpha_group(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
-    e.get(acc, BSShaderAccumulator::ucAlphaGroupLate) != 0
+    capture::byte(e, acc.addr(), BSShaderAccumulator::ucAlphaGroupLate.off) != 0
 }
 
 /// Whether decals are drawn (`bRenderDecals`).
 #[inline(always)]
 pub(crate) fn render_decals(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
-    e.get(acc, BSShaderAccumulator::bRenderDecals) != 0
+    capture::byte(e, acc.addr(), BSShaderAccumulator::bRenderDecals.off) != 0
 }
 
 /// The accumulator's +0x164 alone (`ucSkipType13`): what `RenderBatches` reads first, from its own getter call, to
 /// tell a shadow pass that only has its group cleared.
 #[inline(always)]
 pub(crate) fn skip_type_13(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
-    e.get(acc, BSShaderAccumulator::ucSkipType13) != 0
+    capture::byte(e, acc.addr(), BSShaderAccumulator::ucSkipType13.off) != 0
 }
 
 /// The accumulator's +0x165 alone (`ucShadowGroups`): what `RenderBatches` reads, from a second getter call, when
 /// +0x164 is clear.
 #[inline(always)]
 pub(crate) fn shadow_groups_set(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
-    e.get(acc, BSShaderAccumulator::ucShadowGroups) != 0
+    capture::byte(e, acc.addr(), BSShaderAccumulator::ucShadowGroups.off) != 0
 }
 
 /// The fog-coloured ambient flag of the lighting shaders (`011f94a6`).

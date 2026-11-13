@@ -44,6 +44,13 @@ pub(crate) const CAMERA: (u32, u32) = (0x68, 0x114);
 /// passes (+0x3a).
 pub(crate) const ACC_REFLECTION: (u32, u32) = (0x38, 0x39);
 pub(crate) const ACC_DEPTH_PASSES: (u32, u32) = (0x3a, 0x3b);
+/// The accumulator's draw-time settings the draw reads and never writes (set before the cut by whoever set the
+/// accumulator up; copied so that main may change them meanwhile): the radius byte (+0x31), the split, shadow-group
+/// and late-alpha bytes and the decal flag (+0x164 to +0x16c), the batch renderers, the cursor arrays' pointers and
+/// the renderer count (+0x174 to +0x18c), the render mode (+0x19c). The cursor arrays themselves (what +0x17c to
+/// +0x188 point to) are written and read by the world draw alone: they stay in guest memory (the depth-of-field
+/// re-render `00875e40`, their only other user, waits for the draw: piece 8).
+pub(crate) const ACC_SETTINGS: [(u32, u32); 4] = [(0x31, 0x32), (0x164, 0x16d), (0x174, 0x190), (0x19c, 0x1a0)];
 /// `NiAVObject`'s empty bound (`011f4288`).
 const NULL_BOUND: u32 = 0x011f_4288;
 /// The fog index byte (`011f91c4`), the shadow scene nodes (`011f91c8`) and a node's fog property (+0x134);
@@ -111,6 +118,9 @@ pub fn take_frame(e: &Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) {
     capture::take(e, camera, CAMERA.0, CAMERA.1);
     capture::take(e, acc.addr(), ACC_REFLECTION.0, ACC_REFLECTION.1);
     capture::take(e, acc.addr(), ACC_DEPTH_PASSES.0, ACC_DEPTH_PASSES.1);
+    for (from, to) in ACC_SETTINGS {
+        capture::take(e, acc.addr(), from, to);
+    }
     capture::take(e, NULL_BOUND, BOUND.0, BOUND.1);
     capture::take(e, FOG_INDEX, 0, 1);
     let index = u32::from(e.global::<u8>(FOG_INDEX));
