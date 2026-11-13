@@ -9,13 +9,21 @@
 //! tests (on an engine installed with the flag on) reach the commands built here.
 
 pub mod forms;
+pub mod jip_fn_ammo;
+pub mod jip_fn_ammo_effect;
 pub mod jip_fn_body_part_data;
+pub mod jip_fn_class;
 pub mod jip_fn_climate;
 pub mod jip_fn_destruction_data;
+pub mod jip_fn_grass;
+pub mod jip_fn_light;
+pub mod jip_fn_texture_set;
+pub mod jip_fn_water;
 pub mod jip_fn_weather;
 
 use engine_core::prelude::*;
-use forms::{BSStringT, TESForm, BASE_COMPONENT_OFFSETS};
+use engine_core::ptr::Layout;
+use forms::{BSStringT, ListNode, TESForm, BASE_COMPONENT_OFFSETS};
 use nvse::args::Arg;
 use nvse::commands::array::{fix_on, LIST_GUARD};
 use nvse::commands::Read;
@@ -26,9 +34,16 @@ pub type Handlers = &'static [(u32, AbiFn)];
 
 /// Every module's list, one line per JIP source file.
 pub const ALL: &[Handlers] = &[
+    jip_fn_ammo::COMMANDS,
+    jip_fn_ammo_effect::COMMANDS,
     jip_fn_body_part_data::COMMANDS,
+    jip_fn_class::COMMANDS,
     jip_fn_climate::COMMANDS,
     jip_fn_destruction_data::COMMANDS,
+    jip_fn_grass::COMMANDS,
+    jip_fn_light::COMMANDS,
+    jip_fn_texture_set::COMMANDS,
+    jip_fn_water::COMMANDS,
     jip_fn_weather::COMMANDS,
 ];
 
@@ -86,6 +101,116 @@ fn component(e: &Engine, form: u32, which: u32) -> u32 {
 /// The form's `BGSDestructibleObjectForm`, 0 for a form type without one.
 pub fn destructible_form(e: &Engine, form: u32) -> u32 {
     component(e, form, 2)
+}
+
+/// `IS_TYPE(form, Class)` (JIP LN NVSE): the form's vtable is the class's own.
+pub fn is_type(e: &Engine, form: u32, vtbl: u32) -> bool {
+    e.get(Ptr::<forms::Object>::new(form), forms::Object::vtbl) == vtbl
+}
+
+// ---- the game's lists (`tList`, nvse/GameTypes.h (JIP LN NVSE)), first node inline ----
+
+/// `tList::Count`: 0 for an empty first node, else every node.
+pub fn list_count(e: &Engine, head: Ptr<ListNode>) -> u32 {
+    if e.get(head, ListNode::data) == 0 {
+        return 0;
+    }
+    let mut count = 1;
+    let mut node = e.get(head, ListNode::next);
+    while node != 0 {
+        count += 1;
+        node = e.get(Ptr::<ListNode>::new(node), ListNode::next);
+    }
+    count
+}
+
+/// `tList::GetNthItem`: the item of node `index` (a negative index none), 0 past the end.
+pub fn nth_item(e: &Engine, head: Ptr<ListNode>, index: i32) -> u32 {
+    if index < 0 {
+        return 0;
+    }
+    let mut node = head;
+    for _ in 0..index {
+        node = Ptr::new(e.get(node, ListNode::next));
+        if node.is_null() {
+            return 0;
+        }
+    }
+    e.get(node, ListNode::data)
+}
+
+/// `tList::IsInList`: some node holds `item` (an empty first node holds 0).
+pub fn list_contains(e: &Engine, head: Ptr<ListNode>, item: u32) -> bool {
+    let mut node = head;
+    loop {
+        if e.get(node, ListNode::data) == item {
+            return true;
+        }
+        node = Ptr::new(e.get(node, ListNode::next));
+        if node.is_null() {
+            return false;
+        }
+    }
+}
+
+/// `tList::Prepend`: a non-null item into an empty first node, else first (`ListNode::Insert`:
+/// the first item moves to a new 8-byte node of the game's heap after the first).
+pub fn list_prepend(e: &mut Engine, head: Ptr<ListNode>, item: u32) {
+    if item == 0 {
+        return;
+    }
+    let first = e.get(head, ListNode::data);
+    if first == 0 {
+        e.set(head, ListNode::data, item);
+        return;
+    }
+    let added = Ptr::<ListNode>::new(heap_alloc(e, ListNode::SIZE));
+    let next = e.get(head, ListNode::next);
+    e.set(added, ListNode::data, first);
+    e.set(head, ListNode::data, item);
+    e.set(added, ListNode::next, next);
+    e.set(head, ListNode::next, added.addr());
+}
+
+/// `ListNode::RemoveMe` on the first node or `RemoveNext` on the one before: a later node
+/// unlinked and freed; the first node takes the next node's item and link (that node freed), or
+/// is only emptied when alone.
+pub fn list_unlink(e: &mut Engine, node: Ptr<ListNode>, prev: Ptr<ListNode>) {
+    if !prev.is_null() {
+        let gone = e.get(prev, ListNode::next);
+        let after = e.get(Ptr::<ListNode>::new(gone), ListNode::next);
+        e.set(prev, ListNode::next, after);
+        heap_free(e, gone);
+        return;
+    }
+    let next = e.get(node, ListNode::next);
+    if next == 0 {
+        e.set(node, ListNode::data, 0);
+        return;
+    }
+    let next_node = Ptr::<ListNode>::new(next);
+    let item = e.get(next_node, ListNode::data);
+    let after = e.get(next_node, ListNode::next);
+    e.set(node, ListNode::data, item);
+    e.set(node, ListNode::next, after);
+    heap_free(e, next);
+}
+
+/// `tList::Remove`: the first node holding `item` taken out ([`list_unlink`]); whether there was
+/// one.
+pub fn list_remove(e: &mut Engine, head: Ptr<ListNode>, item: u32) -> bool {
+    let (mut node, mut prev) = (head, Ptr::<ListNode>::NULL);
+    loop {
+        if e.get(node, ListNode::data) == item {
+            list_unlink(e, node, prev);
+            return true;
+        }
+        prev = node;
+        node = Ptr::new(e.get(node, ListNode::next));
+        if node.is_null() {
+            return false;
+        }
+    }
 }
 
 // ---- the game's heap ----
@@ -275,13 +400,20 @@ mod tests {
     }
 
     /// Each module lists only commands of its own JIP source file, once each, and the count is
-    /// README's ("JIP LN: 63 of 1,118").
+    /// README's ("JIP LN: 95 of 1,118").
     #[test]
     fn each_module_holds_its_own_file() {
         let files = [
+            "jip_fn_ammo",
+            "jip_fn_ammo_effect",
             "jip_fn_body_part_data",
+            "jip_fn_class",
             "jip_fn_climate",
             "jip_fn_destruction_data",
+            "jip_fn_grass",
+            "jip_fn_light",
+            "jip_fn_texture_set",
+            "jip_fn_water",
             "jip_fn_weather",
         ];
         let mut seen = std::collections::HashSet::new();
@@ -293,7 +425,7 @@ mod tests {
             }
         }
         assert_eq!(ALL.len(), files.len());
-        assert_eq!(built(), 63);
+        assert_eq!(built(), 95);
     }
 
     /// Answering "installed", a built command has its execute and its name in its record; an
