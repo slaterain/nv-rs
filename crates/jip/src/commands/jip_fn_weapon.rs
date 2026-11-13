@@ -129,7 +129,11 @@ fn set_weapon_sound(e: &mut Engine, w: &[u32]) -> Ret {
 fn mod_slot(e: &Engine, read: &Read) -> Option<(Ptr<TESObjectWEAP>, u32)> {
     let slot = read.int(1, 0);
     let wp = weapon_arg(e, read)?;
-    (slot != 0 && slot <= 3).then_some((wp, slot - 1))
+    if slot != 0 && slot <= 3 {
+        Some((wp, slot - 1))
+    } else {
+        None
+    }
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_weapon.h:
