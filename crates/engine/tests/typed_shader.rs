@@ -11683,7 +11683,19 @@ fn tall_grass_setup_constants_reads_the_packet() {
         &cases_of(
             TALL_GRASS_CONSTANTS,
             &[
-                &[1, 0, 1, 0x4561_2340, 0x4040_0000, 1, 1, 2, 0, 0x3fc0_0000, 2],
+                &[
+                    1,
+                    0,
+                    1,
+                    0x4561_2340,
+                    0x4040_0000,
+                    1,
+                    1,
+                    2,
+                    0,
+                    0x3fc0_0000,
+                    2,
+                ],
                 &[0, 1, 1, HALF, 0x4040_0000, 0, 0, 3, 3, HALF, 1],
             ],
         ),
