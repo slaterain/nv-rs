@@ -2663,6 +2663,7 @@ pub fn fn_0086e630(e: &mut Engine, value: u32) {
 /// player, the controls, the process lists, the cells, the menus, the renderer and the audio, in
 /// the order the game does, and counts the frames. `this` is the `Main` object.
 pub fn fn_0086e650(e: &mut Engine, this: Ptr) {
+    engine_core::draw_thread::idle(e);
     let frame_budget = e.global::<u32>(0x011a_3010);
     fn_0086a830(e, this.addr(), frame_budget);
     // Alt+Tab: skip the whole update.

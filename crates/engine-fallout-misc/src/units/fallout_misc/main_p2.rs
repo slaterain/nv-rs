@@ -2440,7 +2440,8 @@ pub fn fn_00873200(
         }
         let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
         let root_child = e.call(GET_ROOT_CHILD, &args![root]).u32();
-        e.call(0x00b6_ba20, &args![root_child, accumulator, 1u32]);
+        // `00b6ba20`; with the drawing thread on, posted to it (`engine_core::draw_thread`).
+        engine_core::draw_thread::first_half(e, root_child, accumulator, 1, overlay);
         if overlay != 0 {
             e.call(0x00b9_8380, &args![0u32, 1u32]);
             let interface = e.call(GET_INTERFACE_OBJECT, &args![]).u32();
@@ -2452,7 +2453,8 @@ pub fn fn_00873200(
         }
         let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
         let root_child = e.call(GET_ROOT_CHILD, &args![root]).u32();
-        e.call(0x00b6_b930, &args![root_child, accumulator, 1u32]);
+        // `00b6b930`; skipped when the drawing thread's job took it.
+        engine_core::draw_thread::second_half(e, root_child, accumulator, 1);
         if e.global::<u8>(0x011f_94b4) != 0 {
             let indexed = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
             e.call(0x00a8_9af0, &args![indexed, target]);
@@ -2623,6 +2625,7 @@ pub fn fn_008746c0(e: &mut Engine) {
 /// borrowed render target is made current first (and released at the end).
 /// One stack word is not read.
 pub fn fn_008746d0(e: &mut Engine, this: Ptr, _unused_0: u32) {
+    engine_core::draw_thread::finish(e);
     let water = e.call(GET_GLOBAL_011F91AC, &args![]).u32();
     let decal = e.call(GET_GLOBAL_011F9508, &args![]).u32();
     let node = player_node(e, 1);
@@ -2696,6 +2699,7 @@ pub fn fn_00874900(e: &mut Engine, this: Ptr) -> f32 {
 /// root's child into `accumulator` (`00b64570`, with `target`). `this` is
 /// not read.
 pub fn fn_00874920(e: &mut Engine, _this: Ptr, accumulator: u32, target: u32) {
+    engine_core::draw_thread::finish(e);
     with_profile_scope(e, 0x27, 0x20d5, |e| {
         let root = e.call(GET_ROOT, &args![]).u32();
         let child = e.call(GET_ROOT_CHILD, &args![root]).u32();
@@ -3404,6 +3408,7 @@ pub fn fn_00875bf0(e: &mut Engine, this: Ptr) {
 /// destroys the object that child's vtable slot `0x48` returned (its slot
 /// 0 with 1). `this` is not read.
 pub fn fn_00875e40(e: &mut Engine, _this: Ptr, accumulator: u32, last: u32) {
+    engine_core::draw_thread::finish(e);
     let root = e.call(GET_ROOT, &args![]).u32();
     if typed_call!(
         leaf::FAMILY,

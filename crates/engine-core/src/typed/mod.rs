@@ -447,6 +447,15 @@ impl Engine {
         self.typed.dual != 0
     }
 
+    /// Whether `family`'s typed calls are Rust calls now (its direct bit): false while the switch
+    /// sends it by address, and once a fix row or a wrap is registered over any of its members
+    /// (`State::replaced`). The drawing thread draws serially unless every family the draw
+    /// needs is direct (`crate::draw_thread`).
+    #[inline]
+    pub fn typed_family_direct(&self, family: FamilyId) -> bool {
+        self.typed.direct & family.bit() != 0
+    }
+
     /// What the switch says about `family` on this engine.
     pub fn typed_mode(&self, family: FamilyId) -> Mode {
         let bit = family.bit();

@@ -2988,6 +2988,22 @@ pub fn post_draw(e: &mut Engine, job: DrawJob) -> bool {
     true
 }
 
+/// Whether [`post_draw`] would take a job from `e` now: false where it would refuse (on a helper,
+/// while a typed family runs dual, while a per-call diagnostic is on, while a job is posted, or
+/// when the memory cannot be shared). Posts nothing and changes nothing, so a poster can ask
+/// before it makes what the job needs (the drawing thread's cut, `crate::draw_thread`).
+pub fn draw_post_ready(e: &Engine) -> bool {
+    if HELPER.with(Cell::get)
+        || on_draw_helper()
+        || e.typed_any_dual()
+        || diagnostic_on(e).is_some()
+        || draw_posted()
+    {
+        return false;
+    }
+    e.real.is_some() || e.mem.is_shared() || e.mem.can_share()
+}
+
 /// Whether a job is posted to the drawing helper and not joined yet.
 pub fn draw_posted() -> bool {
     DRAW.get().is_some_and(|d| guard(&d.state).posted)

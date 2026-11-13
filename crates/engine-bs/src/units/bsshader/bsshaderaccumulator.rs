@@ -962,6 +962,7 @@ fn group_count(e: &Engine, renderer: u32, offset: u32) -> u32 {
 /// group at +0x54 of every batch renderer (the exe adds them two at a
 /// time, then the odd one).
 pub fn fn_00b63a90(e: &mut Engine, this: Ptr<BSShaderAccumulator>) -> u32 {
+    engine_core::draw_thread::finish(e);
     let base = this.addr();
     let count = batch_count(e, base);
     let mut even = 0u32;

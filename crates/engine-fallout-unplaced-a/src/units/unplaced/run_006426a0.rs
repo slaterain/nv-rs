@@ -38,6 +38,7 @@ pub fn fn_006427a0(e: &mut Engine, this: Ptr, value: f32) {
 /// multiplied back by 25 after it (each result stored as a float through `fn_006427a0`).
 // Translation incomplete: 006426a0 - SEH exception unwinding is unsupported.
 pub fn fn_006426a0(e: &mut Engine, this: Ptr, first: u32, accumulator: Ptr, third: u32) {
+    engine_core::draw_thread::finish(e);
     e.with_stack(4, |e, timer| {
         e.call(
             TIMER_SCOPE_CONSTRUCT,
