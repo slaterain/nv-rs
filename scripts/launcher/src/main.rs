@@ -1924,7 +1924,9 @@ mod tests {
             assert_eq!(get("nv-rs General", "sPreset").as_deref(), Some("fixes"));
             assert_eq!(get("nv-rs Threads", "bRenderThread").as_deref(), Some("1"));
             assert!(ini.contains("\r\n\r\n[nv-rs Fixes]\r\n; Each fix follows sPreset."));
-            assert!(ini.ends_with(";bNVSEListGuard=1\r\n"));
+            // The block's last line, whichever key that is.
+            let last = game_ini::SECTIONS.trim_end().lines().last().unwrap();
+            assert!(ini.ends_with(&format!("{last}\r\n")), "{last}");
             assert!(files.prefs(profile).contains("bFull Screen=0"));
         }
         assert!(files.log().contains("nv-rs's own sections completed in"));

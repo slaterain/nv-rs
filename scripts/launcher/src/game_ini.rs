@@ -777,7 +777,12 @@ mod tests {
         assert!(!seeded.added.contains(&"bSteppedThreads") && !seeded.added.contains(&"sPreset"));
         assert_eq!(ini_value(out, "nv-rs General", "sPreset"), Some("vanilla"));
         assert_eq!(ini_value(out, "nv-rs Threads", "bSteppedThreads"), None);
-        assert!(out.ends_with(";bNVSEListGuard=1\n"));
+        // The block's last line, whichever key that is (a new key at its end must not break this).
+        let last = SECTIONS.trim_end().lines().last().unwrap();
+        assert!(
+            last.starts_with(';') && out.ends_with(&format!("{last}\n")),
+            "{last}"
+        );
         assert_eq!(with_sections(out).unwrap().text, *out);
     }
 
