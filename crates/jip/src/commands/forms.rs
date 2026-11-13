@@ -543,3 +543,81 @@ layout! {
 /// More vtables `IS_TYPE` compares (`kVtbl_*` (JIP LN NVSE)).
 pub const TES_OBJECT_ARMO_VTBL: u32 = 0x0102_a62c;
 pub const TES_OBJECT_ARMA_VTBL: u32 = 0x0102_a31c;
+
+layout! {
+    /// `TESCasino` (JIP LN NVSE), 0x228 bytes, checked in the casino loader (`005048D0`: `DATA`,
+    /// 0x38 bytes, at +0x1E8).
+    pub struct TESCasino: 0x228 {
+        0x1E8 shufflePercent: f32,
+        0x1EC blackjackPayout: f32,
+        /// `reelStops[7]` (JIP LN NVSE).
+        0x1F0 reelStops: u32,
+        0x20C numDecks: u32,
+        0x210 maxWinnings: u32,
+        0x21C casinoFlags: u32,
+    }
+
+    /// `TESObjectWEAP` (JIP LN NVSE), the fields the LN weapon commands use, checked in the
+    /// weapon loader (`0051F630`: `DNAM` at +0xF4, `CRDT` at +0x1C0, `VATS` at +0x370).
+    pub struct TESObjectWEAP: 0x388 {
+        0x1A8 killImpulse: f32,
+        0x1B8 impulseDist: f32,
+        0x1C8 critDamageFlags: u8,
+        0x370 VATSEffect: u32,
+    }
+
+    /// `TESRace` (JIP LN NVSE), checked in the race loader (`00610CD0`: the voices through
+    /// `00610C70`, `ONAM` +0x504, `YNAM` +0x508).
+    pub struct TESRace: 0x510 {
+        /// `voiceTypes[2]` (JIP LN NVSE): male, female.
+        0x4FC voiceTypes: u32,
+        /// `ageRace[2]` (JIP LN NVSE): older, younger.
+        0x504 ageRace: u32,
+    }
+
+    /// `TESNPC` (JIP LN NVSE), the race (`race.race`): the NPC loader (`00602190`) stores `RNAM`
+    /// through `006ECD40` (which writes `[ecx+4]`) on the race component at +0x10C.
+    pub struct TESNPC: 0x1FC {
+        0x110 race: u32,
+    }
+}
+
+layout! {
+    /// `TESChallenge` (JIP LN NVSE), 0x7C bytes, checked in the challenge loader (`005F51A0`:
+    /// `DATA`, 0x18 bytes, at +0x54); `SNAM`/`XNAM` as JIP's header gives them.
+    pub struct TESChallenge: 0x7C {
+        /// `data.type` (JIP LN NVSE).
+        0x54 kind: u32,
+        0x58 threshold: u32,
+        0x5C flags: u32,
+        0x60 interval: u32,
+        0x64 value1: u16,
+        0x66 value2: u16,
+        0x68 value3: u32,
+        0x74 SNAM: u32,
+        0x78 XNAM: u32,
+    }
+}
+
+layout! {
+    /// `ExtraMapMarker::MarkerData` (JIP LN NVSE), checked in `MapMarkerData::Load` (`00438CA0`:
+    /// `FNAM` at +0xC, `FULL` into the name at +0, `TNAM` (16 bits) at +0xE, `WMI1` after it).
+    pub struct MapMarkerData: 0x14 {
+        /// `fullName.name` (JIP LN NVSE).
+        0x04 name: Inline<BSStringT>,
+        0x0C flags: u8,
+        /// `type` (JIP LN NVSE).
+        0x0E kind: u16,
+        0x10 reputation: u32,
+    }
+}
+
+/// Form types of the LN commands (`kFormType_*` (JIP LN NVSE)).
+pub mod form_type_ln {
+    pub const TES_RACE: u8 = 0x0c;
+    pub const TES_OBJECT_WEAP: u8 = 0x28;
+    pub const TES_NPC: u8 = 0x2a;
+    pub const BGS_VOICE_TYPE: u8 = 0x5d;
+    pub const TES_REPUTATION: u8 = 0x68;
+    pub const TES_CASINO: u8 = 0x6d;
+}

@@ -236,3 +236,12 @@ pub fn string_result(e: &Engine, result: f64) -> Vec<u8> {
 pub fn form_result(e: &Engine) -> u32 {
     e.mem.u32(RESULT)
 }
+
+/// A call on reference `this` (the handler's `thisObj` word), as a script's `ref.Command` makes.
+pub fn call_on(e: &mut Engine, opcode: u32, this: u32, args: &[Vec<u8>]) -> (u32, f64) {
+    let mut words = crate::test_support::line(e, opcode, args);
+    words[2] = this;
+    let execute = crate::test_support::execute_of(e, opcode);
+    let ok = e.call(execute, &words).eax & 0xff;
+    (ok, e.mem.f64(RESULT))
+}

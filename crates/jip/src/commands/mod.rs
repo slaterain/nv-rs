@@ -31,6 +31,11 @@ pub mod jip_fn_texture_set;
 pub mod jip_fn_water;
 pub mod jip_fn_weather;
 pub mod jip_fn_worldspace;
+pub mod ln_fn_casino;
+pub mod ln_fn_challenge;
+pub mod ln_fn_map_marker;
+pub mod ln_fn_race;
+pub mod ln_fn_weapon;
 
 use engine_core::prelude::*;
 use engine_core::ptr::Layout;
@@ -67,6 +72,11 @@ pub const ALL: &[Handlers] = &[
     jip_fn_water::COMMANDS,
     jip_fn_weather::COMMANDS,
     jip_fn_worldspace::COMMANDS,
+    ln_fn_casino::COMMANDS,
+    ln_fn_challenge::COMMANDS,
+    ln_fn_map_marker::COMMANDS,
+    ln_fn_race::COMMANDS,
+    ln_fn_weapon::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -453,7 +463,7 @@ mod tests {
     }
 
     /// Each module lists only commands of its own JIP source file, once each, and the count is
-    /// README's ("JIP LN: 153 of 1,118").
+    /// README's ("JIP LN: 207 of 1,118").
     #[test]
     fn each_module_holds_its_own_file() {
         let files = [
@@ -479,6 +489,11 @@ mod tests {
             "jip_fn_water",
             "jip_fn_weather",
             "jip_fn_worldspace",
+            "ln_fn_casino",
+            "ln_fn_challenge",
+            "ln_fn_map_marker",
+            "ln_fn_race",
+            "ln_fn_weapon",
         ];
         let mut seen = std::collections::HashSet::new();
         for (list, file) in ALL.iter().zip(files) {
@@ -489,7 +504,7 @@ mod tests {
             }
         }
         assert_eq!(ALL.len(), files.len());
-        assert_eq!(built(), 153);
+        assert_eq!(built(), 207);
     }
 
     /// Answering "installed", a built command has its execute and its name in its record; an
