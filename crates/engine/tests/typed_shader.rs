@@ -47,8 +47,41 @@ fn ret(eax: u32) -> Ret {
     }
 }
 
-fn slot_answer<const S: u32>(e: &mut Engine, _: &[u32]) -> Ret {
+fn slot_answer<const S: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+    if ACCEPTANCE_READING.with(std::cell::Cell::get) {
+        // The acceptance check: what the slot is handed past `this` read and folded into a mark.
+        acceptance_read_args(e, a.get(1..).unwrap_or_default(), 0x788);
+    }
     ret(e.mem.u32(RETS + S))
+}
+
+thread_local! {
+    /// While set (the acceptance check's worlds, [`acceptance_world`]), the stand-ins [`marked`] and [`slot_answer`]
+    /// read what each pointer they are handed points to, so a live read through them is a census hit and a POISON
+    /// difference.
+    static ACCEPTANCE_READING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The acceptance check's reading of a stand-in's arguments: each word that points into mapped memory (past the
+/// zero page) is replaced by the word it points to (read, so the census sees it), each other word kept; all folded
+/// into the mark at `RETS + mark`. A pointer's own value (a stack local, a packet image or main's object) is left
+/// out, so the mark compares what was handed, not where.
+fn acceptance_read_args(e: &mut Engine, args: &[u32], mark: u32) {
+    let mut h = e
+        .mem
+        .u32(RETS + mark)
+        .wrapping_mul(31)
+        .wrapping_add(args.len() as u32);
+    for w in args {
+        let mut word = [0u8; 4];
+        let v = if *w >= 0x1000 && e.mem.is_mapped(*w) && e.mem.try_read(*w, &mut word).is_ok() {
+            u32::from_le_bytes(word) ^ 0x5bd1_e995
+        } else {
+            *w
+        };
+        h = h.wrapping_mul(17).wrapping_add(v);
+    }
+    e.mem.set_u32(RETS + mark, h);
 }
 
 macro_rules! slots {
@@ -6272,6 +6305,10 @@ const DRAW_COUNTERS: &[u32] = &[
 
 /// A stand-in that folds its words into a mark (`RETS + 0x780`), so the calls' order and words show.
 fn marked(e: &mut Engine, a: &[u32]) -> Ret {
+    if ACCEPTANCE_READING.with(std::cell::Cell::get) {
+        acceptance_read_args(e, a, 0x780);
+        return ret(0);
+    }
     let mut h = e
         .mem
         .u32(RETS + 0x780)
@@ -12245,6 +12282,7 @@ const ACCEPTANCE_KINDS: &[(&str, &[(u32, u32)])] = &[
     ("render state cache", &[(4, 0x1114)]),
     ("frame value", &[(0, u32::MAX)]),
     ("fog property", &[(0x20, 0x34), (0x60, 0x64)]),
+    ("main object", &[]),
 ];
 
 /// What the acceptance world tags: (kind index, address, length), for the passes `passes` (their geometries,
@@ -12266,7 +12304,9 @@ fn acceptance_objects(e: &Engine, d: &DrawW, passes: &[u32]) -> Vec<(u16, u32, u
         }
         let property = e.mem.u32(g + 0xa8);
         if property != 0 {
-            v.push((2, property, 0x80));
+            // The whole block: each class reads its own fields past the base property's.
+            let len = e.mem.block_size(property).unwrap_or(0x80).min(0x400);
+            v.push((2, property, len));
         }
     }
     v.push((3, e.mem.u32(d.w.acc + 8), 0x114));
@@ -12315,9 +12355,103 @@ fn acceptance_objects(e: &Engine, d: &DrawW, passes: &[u32]) -> Vec<(u16, u32, u
         .mem
         .u32(0x011f_91c8 + 4 * u32::from(e.mem.u8(0x011f_91c4)));
     if node != 0 && e.mem.u32(node + 0x134) != 0 {
-        v.push((12, e.mem.u32(node + 0x134), 0x80));
+        let fog = e.mem.u32(node + 0x134);
+        v.push((12, fog, e.mem.block_size(fog).unwrap_or(0x80).min(0x400)));
     }
+    // Main's other objects the draw can reach: every heap block reached from the tagged objects' pointer words,
+    // from the accumulators' +0x194 and from the globals the set-ups read (the held and shader accumulators, the
+    // scene camera, the shadow scene nodes), in up to two steps, that is not tagged yet: a "main object" named by
+    // its path (`ACCEPTANCE_NAMES`). No rule says what the cut copies of them; the POISON run's probe does.
+    let mut names = std::collections::HashMap::new();
+    let mut tagged: std::collections::HashSet<u32> = v.iter().map(|(_, a, _)| *a).collect();
+    let mut found = Vec::new();
+    let roots: Vec<(String, u32, u32)> = {
+        let mut r = Vec::new();
+        for (kind, addr, _) in &v {
+            let name = ACCEPTANCE_KINDS[*kind as usize].0;
+            if matches!(*kind, 0 | 2 | 3 | 7 | 8 | 12) {
+                r.push((name.to_string(), *addr, 2));
+            }
+        }
+        for (name, at) in [
+            ("held accumulator", 0x011f_95f0u32),
+            ("shader accumulator", 0x011f_95ec),
+            ("scene camera", 0x011f_95d8),
+            ("shadow scene node", 0x011f_91c8),
+        ] {
+            r.push((name.to_string(), e.mem.u32(at), 2));
+        }
+        r
+    };
+    fn walk(
+        e: &Engine,
+        name: String,
+        addr: u32,
+        depth: u32,
+        root: bool,
+        tagged: &mut std::collections::HashSet<u32>,
+        found: &mut Vec<(String, u32, u32)>,
+    ) {
+        let Some(size) = e.mem.block_size(addr) else {
+            return;
+        };
+        if !root {
+            if !tagged.insert(addr) {
+                return;
+            }
+            found.push((name.clone(), addr, size.min(0x400)));
+        }
+        if depth == 0 {
+            return;
+        }
+        for off in (4..size.min(0x400)).step_by(4) {
+            let p = e.mem.u32(addr + off);
+            if p != addr && e.mem.block_size(p).is_some() {
+                walk(
+                    e,
+                    format!("{name} +{off:#x}"),
+                    p,
+                    depth - 1,
+                    false,
+                    tagged,
+                    found,
+                );
+            }
+        }
+    }
+    for (name, addr, depth) in roots {
+        let root = tagged.contains(&addr);
+        walk(e, name, addr, depth, root, &mut tagged, &mut found);
+    }
+    for acc in [d.w.acc, e.mem.u32(0x011f_95f0), e.mem.u32(0x011f_95ec)] {
+        if acc != 0 && e.mem.block_size(acc).is_some() {
+            let p = e.mem.u32(acc + 0x194);
+            walk(
+                e,
+                "accumulator +0x194".to_string(),
+                p,
+                2,
+                false,
+                &mut tagged,
+                &mut found,
+            );
+        }
+    }
+    for (name, addr, len) in found {
+        names.insert(addr, name);
+        v.push((MAIN_OBJECT, addr, len));
+    }
+    ACCEPTANCE_NAMES.with(|n| *n.borrow_mut() = names);
     v
+}
+
+/// The kind of [`acceptance_objects`]' "main objects" (named by path in [`ACCEPTANCE_NAMES`]).
+const MAIN_OBJECT: u16 = 13;
+
+thread_local! {
+    /// The paths of the main objects the last [`acceptance_objects`] on this thread tagged, by address.
+    static ACCEPTANCE_NAMES: std::cell::RefCell<std::collections::HashMap<u32, String>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 /// The shader set-ups the acceptance world can add a pass for, each on its own shader class (its slot 0x7c the
@@ -12521,7 +12655,15 @@ fn acceptance_setup_pass(e: &mut Engine, d: &DrawW, which: AcceptanceSetup) -> u
         set(e, shader, class);
     }
     if which == AcceptanceSetup::Leaves {
-        let property = e.mem.u32(block + 0xc);
+        // A leaf property of the class's size (the world's is 0x80 bytes; the class keeps its leaf data at +0x88).
+        let small = e.mem.u32(block + 0xc);
+        let property = e.mem.alloc(0x90);
+        for k in 0..0x80 / 4 {
+            let word = e.mem.u32(small + 4 * k);
+            set(e, property + 4 * k, word);
+        }
+        set(e, block + 0xc, property);
+        set(e, geometry + 0xa8, property);
         let old = e.mem.u32(property);
         for k in 0..0x200 / 4 {
             let word = e.mem.u32(old + 4 * k);
@@ -12554,6 +12696,89 @@ fn acceptance_setup_pass(e: &mut Engine, d: &DrawW, which: AcceptanceSetup) -> u
 /// its own); two passes of their own in renderer 0's first alpha holder (so the alpha sort compares them); and a
 /// pass for each set-up in `setups` in renderer 0's list of the first pass's type. Answers the draw's world, the
 /// halves' words and every pass whose objects the census tags.
+/// The acceptance world's stand-ins that read what they are handed (so a live pointer handed to one is a census
+/// hit, and what it read lands in memory the POISON run compares): [`marked`] and [`slot_answer`] read each
+/// pointer argument's first word ([`ACCEPTANCE_READING`]); the D3DX imports read their inputs whole and write a
+/// result made from them (as [`geometry_stand_ins`]' do, `D3DXMatrixMultiplyTranspose` too); the device's
+/// constant uploads (slots 0x178, 0x1b4 and the bool constants 0x188) copy what they are handed.
+fn acceptance_reading_stand_ins(e: &mut Engine) {
+    ACCEPTANCE_READING.with(|r| r.set(true));
+    // (out, a, b) with a and b matrices: out = a with b's low bytes mixed in.
+    for addr in [0x00fd_f410u32, 0x00fd_f424] {
+        e.register(addr, |e, a| {
+            let (m, n) = (words_at(e, a[1], 16), words_at(e, a[2], 16));
+            for k in 0..16u32 {
+                let word = m[k as usize] ^ (n[((5 * k + 3) % 16) as usize] & 0xff);
+                e.mem.set_u32(a[0] + 4 * k, word);
+            }
+            ret(a[0])
+        });
+    }
+    // (out, v, ..) vector functions: three floats rotated by one, and the matrix's words folded in when given.
+    for addr in [0x00fd_f414u32, 0x00fd_f420, 0x00fd_f41c] {
+        e.register(addr, |e, a| {
+            let v = words_at(e, a[1], 3);
+            let m = if a.len() > 2 && a[2] != 0 {
+                words_at(e, a[2], 16)
+            } else {
+                vec![0; 16]
+            };
+            let fold = m.iter().fold(0u32, |h, w| h.rotate_left(5) ^ w) & 0xff;
+            for k in 0..3u32 {
+                e.mem
+                    .set_u32(a[0] + 4 * k, v[((k + 1) % 3) as usize] ^ fold);
+            }
+            ret(a[0])
+        });
+    }
+    e.register(0x00fd_f430, |e, a| {
+        let v = words_at(e, a[1], 4);
+        for k in 0..4u32 {
+            e.mem.set_u32(a[0] + 4 * k, v[k as usize]);
+        }
+        ret(a[0])
+    });
+    e.register(0x00fd_f418, |e, a| {
+        let (v, m) = (words_at(e, a[1], 4), words_at(e, a[2], 16));
+        let fold = m.iter().fold(0u32, |h, w| h.rotate_left(5) ^ w) & 0xff;
+        for k in 0..4u32 {
+            e.mem
+                .set_u32(a[0] + 4 * k, v[((k + 1) % 4) as usize] ^ fold);
+        }
+        ret(a[0])
+    });
+    e.register(0x00fd_f42c, |e, a| {
+        let m = words_at(e, a[1], 16);
+        for k in 0..16u32 {
+            e.mem
+                .set_u32(a[0] + 4 * k, m[(4 * (k % 4) + k / 4) as usize]);
+        }
+        ret(a[0])
+    });
+    e.register(0x00fd_f428, |e, a| {
+        let m = words_at(e, a[2], 16);
+        for k in 0..16u32 {
+            e.mem.set_u32(a[0] + 4 * k, m[(15 - k) as usize]);
+        }
+        ret(a[0])
+    });
+    if !e.mem.is_mapped(CONSTANT_UPLOAD_COPY) {
+        e.map(CONSTANT_UPLOAD_COPY, 0x3000);
+    }
+    e.register(VT_FN + 0x178, constants_upload_answer::<0x178>);
+    e.register(VT_FN + 0x1b4, constants_upload_answer::<0x1b4>);
+    // `SetVertexShaderConstantB(device, register, data, count)`: the bools copied after the float rows.
+    e.register(VT_FN + 0x188, |e, a| {
+        let (register, data, count) = (a[1], a[2], a[3].min(16));
+        let mut bytes = vec![0u8; 4 * count as usize];
+        if register < 0x100 && e.mem.try_read(data, &mut bytes).is_ok() {
+            e.mem
+                .write(CONSTANT_UPLOAD_COPY + 0x2000 + 4 * register, &bytes);
+        }
+        slot_answer::<0x188>(e, a)
+    });
+}
+
 fn acceptance_world(e: &mut Engine, setups: &[AcceptanceSetup]) -> (DrawW, Vec<u32>, Vec<u32>) {
     let d = draw_world(e);
     let mut passes: Vec<u32> = d.w.passes.to_vec();
@@ -12592,6 +12817,7 @@ fn acceptance_world(e: &mut Engine, setups: &[AcceptanceSetup]) -> (DrawW, Vec<u
         set(e, vertex_shader + 0x20, d.w.device);
         set(e, current + 0x5c, vertex_shader);
     }
+    acceptance_reading_stand_ins(e);
     passes.extend_from_slice(&extra);
     // Renderer 0's list of type 0x10 draws them after the skinned pass: the test world's pass map puts key k in
     // group k & 3, so type 0x10 is group 0 (group 1, where passes[0] and [1] sit, is drawn for type 0x11, and
@@ -12642,6 +12868,8 @@ fn acceptance_world(e: &mut Engine, setups: &[AcceptanceSetup]) -> (DrawW, Vec<u
 /// What one census run gives: the census's hits during the draw, the calls made by address (with their arguments),
 /// the ranges it tagged, and (switch on) the packet's report.
 struct CensusRun {
+    /// The main objects' paths, by address.
+    names: std::collections::HashMap<u32, String>,
     /// The run's stop, with the last calls made, if it stopped.
     stop: Option<String>,
     hits: Vec<(TouchHit, u64)>,
@@ -12692,14 +12920,14 @@ fn acceptance_run(on: bool, setups: &[AcceptanceSetup]) -> CensusRun {
     if on {
         statics::set_forced(true);
         capture::set_thread_mode(Some(capture::Mode::On));
+    } else {
+        capture::set_thread_mode(Some(capture::Mode::Off));
     }
     let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         (first(&mut e, &words), second(&mut e, &words))
     }));
-    if on {
-        capture::set_thread_mode(None);
-        statics::set_forced(false);
-    }
+    capture::set_thread_mode(None);
+    statics::set_forced(false);
     let stop = run.err().map(|stop| {
         format!(
             "{}; the last calls: {}",
@@ -12709,6 +12937,7 @@ fn acceptance_run(on: bool, setups: &[AcceptanceSetup]) -> CensusRun {
     });
     CensusRun {
         stop,
+        names: ACCEPTANCE_NAMES.with(|n| n.borrow().clone()),
         hits: e.mem.touch_hits(),
         log: e.call_log.take().unwrap_or_default(),
         objects,
@@ -12743,6 +12972,8 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     /// What [`held_probe`] found.
     static HELD_FOUND: std::cell::RefCell<Held> = std::cell::RefCell::new(Held::new());
+    /// The scribble [`held_probe`] found.
+    static HELD_SCRIBBLE: std::cell::Cell<Option<u8>> = const { std::cell::Cell::new(None) };
 }
 
 /// The shader's draw slot (0x6c) in the acceptance world's POISON run: the first time it runs with the packet open
@@ -12764,7 +12995,8 @@ fn held_probe(e: &mut Engine, a: &[u32]) -> Ret {
                         n != o && (*n == capture::SCRIBBLE || *n == capture::SCRIBBLE_OTHER)
                     })
                     .collect();
-                if held.contains(&true) {
+                if let Some(i) = held.iter().position(|h| *h) {
+                    HELD_SCRIBBLE.with(|s| s.set(Some(now[i])));
                     found.insert(addr, (kind, held));
                 }
             }
@@ -12786,6 +13018,8 @@ fn acceptance_held(kind: u16, object: u32, offset: u32, len: u8, held: &Held) ->
 
 /// What a frame's POISON run found.
 struct PoisonRun {
+    /// The scribble the cut used (as the probe found it).
+    scribble: Option<u8>,
     /// The run's stop (a panic's message), if it stopped.
     stop: Option<String>,
     answers_alike: bool,
@@ -12811,11 +13045,14 @@ fn acceptance_name(objects: &[(u16, u32, u32)], others: &[(&str, u32, u32)], add
                     )
             },
             |(k, a, _)| {
-                format!(
-                    "{}+{:#x} ({addr:08x})",
-                    ACCEPTANCE_KINDS[*k as usize].0,
-                    addr - a
-                )
+                let name = if *k == MAIN_OBJECT {
+                    ACCEPTANCE_NAMES
+                        .with(|n| n.borrow().get(a).cloned())
+                        .unwrap_or_else(|| "main object".to_string())
+                } else {
+                    ACCEPTANCE_KINDS[*k as usize].0.to_string()
+                };
+                format!("{name}+{:#x} ({addr:08x})", addr - a)
             },
         )
 }
@@ -12886,7 +13123,9 @@ fn acceptance_poison(setups: &[AcceptanceSetup]) -> PoisonRun {
     let second = entry!(0x00b6_b930, drivers::world_draw_second(u32, Ptr<_>, u32)).1;
     let mut plain = Engine::new();
     let (_, words, _) = acceptance_world(&mut plain, setups);
+    capture::set_thread_mode(Some(capture::Mode::Off));
     let answer = (first(&mut plain, &words), second(&mut plain, &words));
+    capture::set_thread_mode(None);
     let mut poisoned = Engine::new();
     let (d, words, passes) = acceptance_world(&mut poisoned, setups);
     let objects = acceptance_objects(&poisoned, &d, &passes);
@@ -12905,6 +13144,7 @@ fn acceptance_poison(setups: &[AcceptanceSetup]) -> PoisonRun {
         .collect();
     HELD_PROBE.with(|p| *p.borrow_mut() = Some(before));
     HELD_FOUND.with(|f| f.borrow_mut().clear());
+    HELD_SCRIBBLE.with(|s| s.set(None));
     poisoned.register(VT_FN + 0x6c, held_probe);
     statics::set_forced(true);
     capture::set_thread_mode(Some(capture::Mode::Poison));
@@ -12915,8 +13155,10 @@ fn acceptance_poison(setups: &[AcceptanceSetup]) -> PoisonRun {
     statics::set_forced(false);
     let report = cut::last_report().unwrap_or_default();
     let held = HELD_FOUND.with(|f| std::mem::take(&mut *f.borrow_mut()));
+    let scribble = HELD_SCRIBBLE.with(std::cell::Cell::take);
     match run {
         Err(stop) => PoisonRun {
+            scribble,
             stop: Some(format!(
                 "{}; the last calls: {}",
                 stop_message(&*stop),
@@ -12928,19 +13170,15 @@ fn acceptance_poison(setups: &[AcceptanceSetup]) -> PoisonRun {
             held,
         },
         Ok(poisoned_answer) => PoisonRun {
+            scribble,
             stop: None,
             answers_alike: answer == poisoned_answer,
-            // The marked stand-ins' mark (`RETS + 0x780`) hashes their argument words, and a packet image hands a
-            // stand-in the copy's address where the switch off hands the object's: not a difference of state.
-            differ: byte_runs(
-                &memory_differences_beside_stack(&plain, &poisoned, 4096)
-                    .into_iter()
-                    .filter(|a| !(RETS + 0x780..RETS + 0x784).contains(a))
-                    .collect::<Vec<_>>(),
-            )
-            .into_iter()
-            .map(|(a, n)| format!("{} x{n}", acceptance_name(&objects, &others, a)))
-            .collect(),
+            // The stand-ins' marks (`RETS + 0x780`, `+0x784`, `+0x788`) fold in what each pointer they were handed
+            // points to, not the pointer: a packet image and main's object with the same bytes mark alike.
+            differ: byte_runs(&memory_differences_beside_stack(&plain, &poisoned, 4096))
+                .into_iter()
+                .map(|(a, n)| format!("{} x{n}", acceptance_name(&objects, &others, a)))
+                .collect(),
             report,
             held,
         },
@@ -13169,11 +13407,9 @@ fn acceptance_line(
     key: &(u32, u32, u16, u32, u32, u8, bool),
     n: u64,
     mark: &str,
-    objects: &[(u16, u32, u32)],
+    name: &str,
 ) -> String {
     let (function, caller, kind, object, offset, len, write) = *key;
-    let name = ACCEPTANCE_KINDS[kind as usize].0;
-    let _ = objects;
     let place = if kind == 9 || kind == 11 {
         // A global kind (own global, frame value): name the address.
         format!("{name}+{offset:#x} ({:08x})", object + offset)
@@ -13200,7 +13436,21 @@ fn acceptance_frame(name: &str, setups: &'static [AcceptanceSetup]) -> FrameResu
         (off, on)
     })
     .join();
-    let poison = std::thread::spawn(move || acceptance_poison(setups)).join();
+    // The POISON run until it has run with both scribbles (they take turns cut by cut, process-wide, so a test
+    // running beside this one can take a turn): at most four runs; a stop ends them.
+    let mut poisons = Vec::new();
+    let mut scribbles = std::collections::BTreeSet::new();
+    for _ in 0..4 {
+        let p = std::thread::spawn(move || acceptance_poison(setups)).join();
+        if let Ok(Some(s)) = p.as_ref().map(|run| run.scribble) {
+            scribbles.insert(s);
+        }
+        let stopped = !matches!(&p, Ok(run) if run.stop.is_none());
+        poisons.push(p);
+        if scribbles.len() == 2 || stopped {
+            break;
+        }
+    }
     let mut r = FrameResult {
         text: format!("== frame {name}: set-up passes {setups:?}\n"),
         failures: Vec::new(),
@@ -13212,62 +13462,81 @@ fn acceptance_frame(name: &str, setups: &'static [AcceptanceSetup]) -> FrameResu
         r.text.push_str(&format!("  FAIL {what}\n"));
         r.failures.push(format!("frame {name}: {what}"));
     };
-    // The POISON run.
-    let held = match poison {
-        Ok(p) => {
-            let summary = match &p.stop {
-                Some(stop) => format!("POISON run STOPPED: {stop}"),
-                None => format!(
-                    "POISON against off: answers {}, memory {}; packet {:?}",
-                    if p.answers_alike { "alike" } else { "DIFFER" },
-                    if p.differ.is_empty() {
-                        "the same".to_string()
-                    } else {
-                        format!("DIFFERS at {}", p.differ.join(", "))
-                    },
-                    p.report
-                ),
-            };
-            r.text.push_str(&format!("{summary}\n"));
-            let bad = p.stop.is_some()
-                || !p.answers_alike
-                || !p.differ.is_empty()
-                || p.report.misses != 0
-                || p.report.written != 0;
-            if bad {
-                let listed = EXPECTED_POISON
-                    .iter()
-                    .position(|(f, text, _)| *f == name && summary.contains(text));
-                match listed {
-                    Some(i) => {
-                        r.poison_seen.push(i);
-                        r.text
-                            .push_str(&format!("  expected (owner: {})\n", EXPECTED_POISON[i].2));
-                    }
-                    None => fail(&mut r, format!("NEW POISON result: {summary}")),
+    let all_ran = poisons
+        .iter()
+        .all(|p| matches!(p, Ok(run) if run.stop.is_none()));
+    if scribbles.len() < 2 && all_ran {
+        fail(
+            &mut r,
+            format!("the POISON runs used one scribble only ({scribbles:x?})"),
+        );
+    }
+    // The POISON runs.
+    let mut held = Held::new();
+    for poison in poisons {
+        let p = match poison {
+            Ok(p) => p,
+            Err(stop) => {
+                fail(
+                    &mut r,
+                    format!("POISON thread stopped: {}", stop_message(&*stop)),
+                );
+                continue;
+            }
+        };
+        let summary = match &p.stop {
+            Some(stop) => format!("POISON run STOPPED: {stop}"),
+            None => format!(
+                "POISON (scribble {:x?}) against off: answers {}, memory {}; packet {:?}",
+                p.scribble,
+                if p.answers_alike { "alike" } else { "DIFFER" },
+                if p.differ.is_empty() {
+                    "the same".to_string()
+                } else {
+                    format!("DIFFERS at {}", p.differ.join(", "))
+                },
+                p.report
+            ),
+        };
+        r.text.push_str(&format!("{summary}\n"));
+        let bad = p.stop.is_some()
+            || !p.answers_alike
+            || !p.differ.is_empty()
+            || p.report.misses != 0
+            || p.report.written != 0;
+        if bad {
+            let listed = EXPECTED_POISON
+                .iter()
+                .position(|(f, text, _)| *f == name && summary.contains(text));
+            match listed {
+                Some(i) => {
+                    r.poison_seen.push(i);
+                    r.text
+                        .push_str(&format!("  expected (owner: {})\n", EXPECTED_POISON[i].2));
                 }
+                None => fail(&mut r, format!("NEW POISON result: {summary}")),
             }
-            let mut by_kind = std::collections::BTreeMap::new();
-            for (kind, bytes) in p.held.values() {
-                let e = by_kind
-                    .entry(ACCEPTANCE_KINDS[*kind as usize].0)
-                    .or_insert((0, 0));
-                e.0 += 1;
-                e.1 += bytes.iter().filter(|b| **b).count();
+        }
+        for (object, (kind, bytes)) in p.held {
+            let entry = held
+                .entry(object)
+                .or_insert((kind, vec![false; bytes.len()]));
+            for (b, m) in entry.1.iter_mut().zip(bytes) {
+                *b |= m;
             }
-            r.text.push_str(&format!(
-                "held (the POISON run's probe: objects, bytes): {by_kind:?}\n"
-            ));
-            p.held
         }
-        Err(stop) => {
-            fail(
-                &mut r,
-                format!("POISON thread stopped: {}", stop_message(&*stop)),
-            );
-            Held::new()
-        }
-    };
+    }
+    let mut by_kind = std::collections::BTreeMap::new();
+    for (kind, bytes) in held.values() {
+        let e = by_kind
+            .entry(ACCEPTANCE_KINDS[*kind as usize].0)
+            .or_insert((0, 0));
+        e.0 += 1;
+        e.1 += bytes.iter().filter(|b| **b).count();
+    }
+    r.text.push_str(&format!(
+        "held (the POISON runs' probe: objects, bytes): {by_kind:?}\n"
+    ));
     let (off, on) = match census {
         Ok(c) => c,
         Err(stop) => {
@@ -13346,7 +13615,11 @@ fn acceptance_frame(name: &str, setups: &'static [AcceptanceSetup]) -> FrameResu
         if function == 0 {
             continue;
         }
-        let kind_name = ACCEPTANCE_KINDS[kind as usize].0;
+        let kind_name: &str = if kind == MAIN_OBJECT {
+            on.names.get(&object).map_or("main object", String::as_str)
+        } else {
+            ACCEPTANCE_KINDS[kind as usize].0
+        };
         let end = offset + u32::from(len.max(1));
         let mark = if acceptance_held(kind, object, offset, len, &held) {
             match EXPECTED_ESCAPES.iter().position(|(f, k, from, to, _)| {
@@ -13392,8 +13665,7 @@ fn acceptance_frame(name: &str, setups: &'static [AcceptanceSetup]) -> FrameResu
                 },
             }
         };
-        r.text
-            .push_str(&acceptance_line(&key, n, &mark, &on.objects));
+        r.text.push_str(&acceptance_line(&key, n, &mark, kind_name));
     }
     r.text.push('\n');
     r
@@ -13424,10 +13696,12 @@ fn whole_frame_acceptance() {
     let mut out = String::new();
     let mut failures = Vec::new();
     let (mut escapes_seen, mut open_seen, mut poison_seen) = (Vec::new(), Vec::new(), Vec::new());
+    let mut run = 0;
     for (name, setups) in &frames {
         if only.as_ref().is_some_and(|o| o != name) {
             continue;
         }
+        run += 1;
         let r = acceptance_frame(name, setups);
         out.push_str(&r.text);
         failures.extend(r.failures);
@@ -13435,7 +13709,10 @@ fn whole_frame_acceptance() {
         open_seen.extend(r.open_seen);
         poison_seen.extend(r.poison_seen);
     }
-    if only.is_none() {
+    if run == 0 {
+        failures.push(format!("no frame matched NV_ACCEPTANCE_FRAME={only:?}"));
+    }
+    if only.is_none() && std::env::var("NV_ACCEPTANCE_SET").is_err() {
         for (i, (f, k, from, to, owner)) in EXPECTED_ESCAPES.iter().enumerate() {
             if !escapes_seen.contains(&i) {
                 failures.push(format!(
