@@ -609,7 +609,8 @@ fn adding_effects() {
     for f in [SPEL2, ALCH2, ENCH, ENCH2] {
         list(&mut e, effects_head(f), &[]);
     }
-    e.mem.set_u32(MGEF + 0x58, 0x70);
+    // Self, touch, target, and 0x80 (so a range of 3 would find its flag).
+    e.mem.set_u32(MGEF + 0x58, 0xf0);
     e.mem.set_u32(MGEF + 0x9c, 0x1111_1177);
     e.mem.set_u32(MGEF2 + 0x58, 0x30);
     // The player's first effect of SPEL is terminated: adding still replaces it.
@@ -1347,7 +1348,8 @@ fn is_spell_target_list() {
     e.mem.set_u8(ench_off + 0x10, 0);
     let ench_ended = effect(&mut e, 3, ENCH + 0x18, i0, ACT2);
     e.mem.set_u8(ench_ended + 0x13, 1);
-    let misc = effect(&mut e, 4, MISC + 0x18, i0, ACT3);
+    // Where MISC (type 0x1F) would hold a magic item were it one: +0x30.
+    let misc = effect(&mut e, 4, MISC + 0x30, i0, ACT3);
     effects_of(&mut e, PC, &[0, spel]);
     effects_of(&mut e, ACT1, &[alch]);
     effects_of(&mut e, ACT2, &[ench_off, ench_ended]);
