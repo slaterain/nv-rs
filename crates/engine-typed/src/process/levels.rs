@@ -140,7 +140,8 @@ fn remove_collected(e: &mut Engine, this: Ptr, list: u32, level: u32, use_slot_2
 /// The update of an actor whose process says it may run (`process` vtable slot `0x1ec`): the
 /// actor's vtable slot `0x25c` with `time` (through the x87, which quiets a signalling NaN), its
 /// script (`TESObjectREFR::RunScript`, `00565870`) when `Script::GetProcessScripts` (`005ac740`) is
-/// true, and `004f8960` on the actor when its vtable slot `0x100` is true.
+/// true, and its vtable slot `0x100` asked. When that is true the exe reads the character's word
+/// +0x108 (`004f8960`, the dispatch family's plain getter) into a flag it never reads: left out.
 fn run_actor_update(e: &mut Engine, actor: u32, process: u32, time: f32) {
     if !e.vcall(process, 0x1ec, &args![]).bool() {
         return;
@@ -149,9 +150,18 @@ fn run_actor_update(e: &mut Engine, actor: u32, process: u32, time: f32) {
     if e.call(0x005a_c740, &args![]).bool() {
         e.call(0x0056_5870, &args![actor]);
     }
-    if actor != 0 && e.vcall(actor, 0x100, &args![]).bool() {
-        e.call(0x004f_8960, &args![actor]);
+    if actor != 0 {
+        e.vcall(actor, 0x100, &args![]);
     }
+}
+
+/// `LowProcess::ComputeLastTimeProcessed` (`00907650`, the dispatch family's) on a process.
+fn compute_last_time_processed(e: &mut Engine, process: u32) {
+    typed_call!(
+        dispatch::FAMILY,
+        0x0090_7650,
+        dispatch::refs::compute_last_time_processed(e, Ptr::new(process))
+    );
 }
 
 /// The actor at `index` of the process array (the lists' +4; `00968670`, the dispatch family's
@@ -251,7 +261,7 @@ fn low_actor(e: &mut Engine, actor: u32, actor_slot: u32, list: u32, hour: f32, 
         return;
     }
     if typed_call!(leaf::FAMILY, 0x0043_7bb0, leaf::byte_at_87(e, actor)) == 0 {
-        e.call(0x0090_7650, &args![process]);
+        compute_last_time_processed(e, process);
         return;
     }
     let last = typed_call!(
@@ -260,7 +270,7 @@ fn low_actor(e: &mut Engine, actor: u32, actor_slot: u32, list: u32, hour: f32, 
         hour_last_processed(e, Ptr::new(process))
     );
     if f64::from(last) == -1.0 {
-        e.call(0x0090_7650, &args![process]);
+        compute_last_time_processed(e, process);
         return;
     }
     // `FSUB` at the main thread's 24-bit precision, stored as a float; `FCOMP` with the doubles.

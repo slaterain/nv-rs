@@ -128,6 +128,7 @@ fn stand_ins(e: &mut Engine) {
         0x0101_a000,
         0x0102_9000,
         0x0107_0000,
+        0x011a_3000,
         0x011d_e000,
         0x011e_0000,
         0x011f_1000,
@@ -139,6 +140,11 @@ fn stand_ins(e: &mut Engine) {
     e.mem.set_u64(0x0102_90d0, 0.3f64.to_bits());
     e.mem.set_u64(0x0107_0c80, 0.15f64.to_bits());
     e.mem.set_u64(0x0101_a6b0, (-1.0f64).to_bits());
+    // The game's hour and date, which `LowProcess::ComputeLastTimeProcessed` copies.
+    e.mem.set_f32(0x011e_0358, 13.5);
+    e.mem.set_u32(0x011a_39c4, 4);
+    e.mem.set_u8(0x011e_0360, 19);
+    e.mem.set_u32(0x011e_035c, 2281);
     // The lock's imports: the interlocked compare-exchange and the thread id.
     e.register(0x00fd_f1bc, |e, a| {
         let old = e.mem.u32(a[0]);
@@ -172,11 +178,9 @@ fn stand_ins(e: &mut Engine) {
         ret(e.mem.alloc(a[0].max(4)))
     });
     e.register(0x0040_1030, logged::<0x08>);
-    e.register(0x0090_7650, logged::<0x01>);
     e.register(0x0092_f190, logged::<0x02>);
     e.register(0x005a_c740, logged::<0x03>);
     e.register(0x0056_5870, logged::<0x04>);
-    e.register(0x004f_8960, logged::<0x05>);
     e.register(0x0049_3bb0, logged::<0x06>);
     e.register(0x0040_7800, logged::<0x07>);
     slots(e);
