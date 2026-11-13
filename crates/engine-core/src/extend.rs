@@ -304,9 +304,52 @@ pub const SITES: &[Entry] = &[
         owners: NVSE,
         step: "I-4",
     },
+    // ScriptCompiler::Compile 005aeb90: the start of a compile (in place of the call clearing
+    // the compiled flag), the check of the referenced objects (passed while a lambda compiles),
+    // and the epilogue every exit passes (the end of a compile).
+    Entry {
+        addr: 0x005a_ebb1,
+        owners: NVSE,
+        step: "I-14",
+    },
+    Entry {
+        addr: 0x005a_ed78,
+        owners: NVSE,
+        step: "I-14",
+    },
+    Entry {
+        addr: 0x005a_eda0,
+        owners: NVSE,
+        step: "I-14",
+    },
+    // ScriptCompiler::IsValidVariableName 005afeb0: the form lookup (none with xNVSE).
+    Entry {
+        addr: 0x005a_fedb,
+        owners: NVSE,
+        step: "I-14",
+    },
+    // ScriptCompiler::CompileLine 005aff40: an if's parentheses check (passed over), and the
+    // 0x4000-byte limit of a script's data (the data grows instead).
+    Entry {
+        addr: 0x005b_0a3f,
+        owners: NVSE,
+        step: "I-14",
+    },
+    Entry {
+        addr: 0x005b_0f68,
+        owners: NVSE,
+        step: "I-14",
+    },
     // ScriptCompiler::GetFunction: the hashed name lookup over the extended table.
     Entry {
         addr: 0x005b_19ba,
+        owners: NVSE,
+        step: "I-14",
+    },
+    // ScriptCompiler::StandardCompile 005b1ba0: the end-of-line check (off while a command inside
+    // an expression parses).
+    Entry {
+        addr: 0x005b_3a8d,
         owners: NVSE,
         step: "I-14",
     },

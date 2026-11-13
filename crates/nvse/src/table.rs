@@ -46,12 +46,11 @@ const EXE_DEFAULT_PARSE: u32 = 0x005b_1ba0;
 /// xNVSE's other parse routines, the parse words of its expression-format commands:
 /// `Cmd_Expression_Parse`, `Cmd_Let_Parse`, `Cmd_BeginLoop_Parse` (`while`, `ForEach`,
 /// `ForEachAlt`), `Cmd_Loop_Parse`, `Cmd_Null_Parse`, `Cmd_Function_Parse` and `Cmd_Call_Parse`
-/// (`CommandTable.h`, `Commands_Scripting.cpp` (xNVSE)). Only the script compiler calls a parser,
-/// and xNVSE's run-time compiler is not built in yet (plan step 3.8): until it is, each of these
-/// does what the default one does, so a line compiles as it did before. The words themselves are
-/// read by the decompiler ([`crate::decompile`]), which tells an expression-format command's
-/// argument bytes from the game's by them, as xNVSE's `ScriptAnalyzer` does. (`Cmd_CallAfter_Parse`
-/// is the parse word of no command.)
+/// (`CommandTable.h`, `Commands_Scripting.cpp` (xNVSE)), built in [`crate::compiler`]: the game's
+/// script compiler calls them through a record's parse word. The words are also read by the
+/// decompiler ([`crate::decompile`]), which tells an expression-format command's argument bytes
+/// from the game's by them, as xNVSE's `ScriptAnalyzer` does. (`Cmd_CallAfter_Parse` is the
+/// parse word of no command.)
 pub const EXPRESSION_PARSE: u32 = ROUTINE_BASE + 0x20;
 pub const LET_PARSE: u32 = ROUTINE_BASE + 0x24;
 pub const BEGIN_LOOP_PARSE: u32 = ROUTINE_BASE + 0x28;
@@ -59,14 +58,14 @@ pub const LOOP_PARSE: u32 = ROUTINE_BASE + 0x2c;
 pub const NULL_PARSE: u32 = ROUTINE_BASE + 0x30;
 pub const FUNCTION_PARSE: u32 = ROUTINE_BASE + 0x34;
 pub const CALL_PARSE: u32 = ROUTINE_BASE + 0x38;
-const PARSE_ROUTINES: [u32; 7] = [
-    EXPRESSION_PARSE,
-    LET_PARSE,
-    BEGIN_LOOP_PARSE,
-    LOOP_PARSE,
-    NULL_PARSE,
-    FUNCTION_PARSE,
-    CALL_PARSE,
+const PARSE_ROUTINES: [(u32, AbiFn); 7] = [
+    (EXPRESSION_PARSE, crate::compiler::expression_parse),
+    (LET_PARSE, crate::compiler::let_parse),
+    (BEGIN_LOOP_PARSE, crate::compiler::begin_loop_parse),
+    (LOOP_PARSE, crate::compiler::loop_parse),
+    (NULL_PARSE, crate::compiler::null_parse),
+    (FUNCTION_PARSE, crate::compiler::function_parse),
+    (CALL_PARSE, crate::compiler::call_parse),
 ];
 /// `Cmd_Expression_Plugin_Parse` (xNVSE `CommandTable.h`): the value a plugin puts in its record's
 /// parse word to ask for xNVSE's expression parser, which `PluginManager::RegisterCommand` turns
@@ -410,8 +409,8 @@ pub fn eval_address(opcode: u32) -> u32 {
 pub fn install(e: &mut Engine) {
     e.register(DEFAULT_EXECUTE, default_execute);
     e.register(DEFAULT_PARSE, default_parse);
-    for routine in PARSE_ROUTINES {
-        e.register(routine, default_parse);
+    for (routine, f) in PARSE_ROUTINES {
+        e.register(routine, f);
     }
     let exe = ScriptTables::EXE;
     let vanilla = (exe.max_opcode - ScriptTables::FIRST_OPCODE) as usize;
@@ -593,8 +592,8 @@ pub struct PluginRecord<'a> {
     pub eval: u32,
     pub flags: u32,
     /// The plugin asks for xNVSE's expression parser (`Cmd_Expression_Plugin_Parse`), which
-    /// xNVSE gives as `Cmd_Expression_Parse`: the record gets [`EXPRESSION_PARSE`], which until the
-    /// run-time compiler is built in (ADR-0016's I-14) compiles as the default parser does.
+    /// xNVSE gives as `Cmd_Expression_Parse`: the record gets [`EXPRESSION_PARSE`], the parse word of
+    /// xNVSE's expression compiler ([`crate::compiler`]).
     pub expression: bool,
     pub returns: Returns,
 }
@@ -772,7 +771,7 @@ pub(crate) mod tests {
         }
         let kinds = |w: u32| PARSE_WORDS.iter().filter(|p| p.1 == w).count();
         assert_eq!(
-            PARSE_ROUTINES.map(kinds),
+            PARSE_ROUTINES.map(|(w, _)| kinds(w)),
             [98, 1, 3, 1, 4, 1, 1],
             "expression, let, begin loop, loop, null, function, call"
         );
@@ -803,15 +802,20 @@ pub(crate) mod tests {
         }
     }
 
-    /// Until the run-time compiler is built in, a command of each of the seven kinds compiles as
-    /// before: its parse word calls the exe's default parser with the same four words and answers
-    /// what it answers.
+    /// The default parse word calls the exe's default parser with the same four words and
+    /// answers what it answers; each of the seven other kinds names its compiler routine (the
+    /// compiler's own tests run them): `continue`'s takes nothing and writes nothing.
     #[test]
-    fn each_parse_word_compiles_as_the_default_parser_does() {
+    fn the_parse_words_name_the_default_parser_and_the_compiler() {
         let mut e = engine_with_exe_tables();
         e.register(EXE_DEFAULT_PARSE, exe_parse);
         install(&mut e);
         let t = e.script_tables();
+        let words = [3, 0x0100_2000, 0x0100_3000, 0x0100_4000];
+        assert_eq!(e.call(DEFAULT_PARSE, &words).eax, 0x5b);
+        for (i, w) in words.iter().enumerate() {
+            assert_eq!(e.mem.u32(0x0100_f000 + 4 * i as u32), *w);
+        }
         // eval, Let, while, loop, Function, Call, then continue.
         for (opcode, word) in [
             (0x153a, EXPRESSION_PARSE),
@@ -826,15 +830,11 @@ pub(crate) mod tests {
             0x1400 + NAMES.iter().position(|n| n.0 == "continue").unwrap() as u32,
             NULL_PARSE,
         ))) {
-            let r = Record::read(&e, t.record(opcode));
-            assert_eq!(r.parse, word, "{opcode:04x}");
-            e.mem.write(0x0100_f000, &[0; 16]);
-            let words = [3, 0x0100_2000, 0x0100_3000, 0x0100_4000];
-            assert_eq!(e.call(r.parse, &words).eax, 0x5b, "{opcode:04x}");
-            for (i, w) in words.iter().enumerate() {
-                assert_eq!(e.mem.u32(0x0100_f000 + 4 * i as u32), *w, "{opcode:04x}");
-            }
+            assert_eq!(Record::read(&e, t.record(opcode)).parse, word, "{opcode:04x}");
         }
+        e.mem.write(0x0100_f000, &[0; 16]);
+        assert_eq!(e.call(NULL_PARSE, &words).eax, 1);
+        assert_eq!(e.mem.bytes(0x0100_f000, 16), [0; 16]);
     }
 
     /// Every xNVSE opcode has its names; a console re-export copies the console record with the

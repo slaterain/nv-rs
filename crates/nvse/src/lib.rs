@@ -43,6 +43,10 @@
 //! - I-11 [`input`], [`commands::input`]: xNVSE's DirectInput hook (the game's keyboard and mouse
 //!   behind its `DIHookControl`, put in front of the platform's DirectInput at the
 //!   `DirectInput8Create` import slot) and its input commands.
+//! - I-14 [`compiler`], [`compile_hooks`]: xNVSE's run-time expression compiler (the old syntax:
+//!   `Let`, `eval`, `while`/`ForEach`, `Call`, `Begin Function`, lambdas, every expression
+//!   argument) as the parse routines the game's compiler calls, and its hooks in that compiler (the
+//!   command names, the preprocessor, `#version` tags, the growing script data).
 //! - [`commands`]: the commands built so far, by xNVSE's `Commands_*.cpp` file.
 //!
 //! [`install`] runs once per engine, after the fix rows (`host::Host::start_with`); the engine
@@ -52,6 +56,8 @@ pub mod args;
 pub mod call_sites;
 pub mod cnum;
 pub mod commands;
+pub mod compile_hooks;
+pub mod compiler;
 pub mod context;
 pub mod cosave;
 pub mod decompile;
@@ -238,6 +244,8 @@ pub struct Nvse {
     pub mod_data: commands::mod_data::State,
     /// The controls each mod disabled (`DisablePlayerControlsAlt`).
     pub controls: commands::controls::State,
+    /// The run-time compiler's state between calls (I-14).
+    pub compiler: compiler::State,
     /// The DirectInput hook's keys and the input commands' controls (I-11).
     pub input: input::State,
     /// The first frame recorded the main thread (`s_recordedMainThreadID`): xNVSE prints to the
@@ -276,6 +284,7 @@ pub fn install(e: &mut Engine) {
     call_sites::install(e);
     commands::game::install(e);
     commands::controls::install(e);
+    compile_hooks::install(e);
     e.ext::<Nvse>().installed = true;
     // The extender's state is the game's, not one engine's: real threads' engines share it
     // (engine-core's shared slot, one lock), so an event raised or a variable used on another
@@ -348,6 +357,14 @@ mod tests {
             0x0088_cb97,
             0x0088_cd11,
             0x005a_cb9d,
+            0x005a_ebb1,
+            0x005a_ed78,
+            0x005a_eda0,
+            0x005a_fedb,
+            0x005b_0a3f,
+            0x005b_0f68,
+            0x005b_19ba,
+            0x005b_3a8d,
             0x005b_6ca6,
             0x005e_16c3,
             0x005e_2329,

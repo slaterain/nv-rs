@@ -516,12 +516,34 @@ fn report(e: &mut Engine, data: Ptr, format: u32) {
 /// (`CompileLine`) with its number as the last line number; the data size takes the output
 /// offset, and when the referenced objects verify the script is initialised (`Script::Init`)
 /// and marked compiled (`007f7c90` with 1): true.
+///
+/// Seams (xNVSE's run-time compiler hooks): `005AEBB1` in place of the call clearing the
+/// compiled flag (words: the script, the compile data; an answer of 0 fails, 2 succeeds at once,
+/// another goes on without the call), `005AED78` before the check of the referenced objects
+/// (an answer passes it) and `005AEDA0`, the epilogue every exit passes (words: the result, the
+/// compile data; an answer is the result).
 pub fn script_compiler_compile(e: &mut Engine, this: Ptr, script: u32, data: Ptr) -> bool {
+    let compiled = compile_body(e, this, script, data);
+    match e.site(0x005a_eda0, &[u32::from(compiled), data.addr()]) {
+        Some(result) => result != 0,
+        None => compiled,
+    }
+}
+
+/// `ScriptCompiler::Compile` up to its epilogue.
+fn compile_body(e: &mut Engine, this: Ptr, script: u32, data: Ptr) -> bool {
     let base = data.addr();
     if script == 0 || base == 0 {
         return false;
     }
-    e.call(SCRIPT_COMPILED_FLAG, &args![script, 0u32]);
+    match e.site(0x005a_ebb1, &[script, base]) {
+        None => {
+            e.call(SCRIPT_COMPILED_FLAG, &args![script, 0u32]);
+        }
+        Some(0) => return false,
+        Some(2) => return true,
+        Some(_) => {}
+    }
     let header = e.call(SCRIPT_HEADER_OF, &args![script]).u32();
     let quest = e.mem.u8(header.wrapping_add(0x10));
     e.mem.set_u8(base.wrapping_add(0x38), quest);
@@ -570,7 +592,9 @@ pub fn script_compiler_compile(e: &mut Engine, this: Ptr, script: u32, data: Ptr
     }
     let size = word_at(e, base, 0x24);
     e.mem.set_u32(base.wrapping_add(0x30), size);
-    if !script_compile_data_verify_referenced_object_list(e, data) {
+    if e.site(0x005a_ed78, &[base]).is_none()
+        && !script_compile_data_verify_referenced_object_list(e, data)
+    {
         return false;
     }
     e.call(SCRIPT_INIT, &args![script, data]);
@@ -1202,12 +1226,17 @@ pub fn script_compile_data_get_referenced_object_ov2(e: &mut Engine, this: Ptr, 
 // Translation incomplete: 005afeb0 - the /GS stack cookie check (00ec408c) is not translated.
 /// `ScriptCompiler::IsValidVariableName` (Xbox PDB), `cdecl` (a name): false for a null or
 /// empty name, an editor id of a form, or a function name (`GetFunction` on a word holding
-/// it); true otherwise. The stack cookie check is not translated.
+/// it); true otherwise. The stack cookie check is not translated. Seam `005AFEDB` (words: the
+/// name): in place of the form lookup, its answer is the form (xNVSE answers none).
 pub fn script_compiler_is_valid_variable_name(e: &mut Engine, name: u32) -> bool {
     if name == 0 || e.mem.i8(name) == 0 {
         return false;
     }
-    if e.call(FORM_BY_EDITOR_ID, &args![name]).u32() != 0 {
+    let form = match e.site(0x005a_fedb, &[name]) {
+        Some(form) => form,
+        None => e.call(FORM_BY_EDITOR_ID, &args![name]).u32(),
+    };
+    if form != 0 {
         return false;
     }
     e.with_stack(0x214, |e, word| {
@@ -1545,10 +1574,21 @@ fn find_in_table(e: &mut Engine, word: u32, table: u32, count: i32, name_first: 
 /// script command table (`01190910`, 0x280 entries) and the console command table
 /// (`0118e8e0`, 0xCD entries); a match makes it a command (kind `'X'`, the entry's opcode):
 /// true.
+///
+/// Seam `005B19BA` (words: the word), the script table's loop: an answer of 1 found the word
+/// (xNVSE's name map), another goes on to the console commands.
 pub fn script_compiler_get_function(e: &mut Engine, word: u32) -> bool {
-    find_in_table(e, word, BLOCK_TABLE, 0x10, true)
-        || find_in_table(e, word, SCRIPT_COMMANDS, 0x280, false)
-        || find_in_table(e, word, CONSOLE_COMMANDS, 0xcd, false)
+    if find_in_table(e, word, BLOCK_TABLE, 0x10, true) {
+        return true;
+    }
+    match e.site(0x005b_19ba, &[word]) {
+        Some(1) => true,
+        Some(_) => find_in_table(e, word, CONSOLE_COMMANDS, 0xcd, false),
+        None => {
+            find_in_table(e, word, SCRIPT_COMMANDS, 0x280, false)
+                || find_in_table(e, word, CONSOLE_COMMANDS, 0xcd, false)
+        }
+    }
 }
 
 // Translated from 005b1a90 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1968,9 +2008,12 @@ pub fn script_compiler_compile_line(
             }
             0x6 | 0x8 => {
                 e.mem.set_u32(position, 0);
-                let start = e.mem.u32(position);
-                if !fn_005b1a90(e, text, start) {
-                    return fail_with(e, TEXT_MISMATCHED_PARENTHESES);
+                // Seam 005B0A3F: an answer passes over the parentheses check (to 005B0A91).
+                if e.site(0x005b_0a3f, &[]).is_none() {
+                    let start = e.mem.u32(position);
+                    if !fn_005b1a90(e, text, start) {
+                        return fail_with(e, TEXT_MISMATCHED_PARENTHESES);
+                    }
                 }
                 fn_005b1b60(e, text, position);
                 let start = e.mem.u32(position);
@@ -2062,11 +2105,15 @@ pub fn script_compiler_compile_line(
         let opcode = e.mem.i32(line.wrapping_add(0x410));
         let declaration = opcode >= 0x12 && (opcode <= 0x14 || opcode == 0x1f);
         if !declaration {
-            let end = word_at(e, base, 0x24)
-                .wrapping_add(word_at(e, line, 0x40c))
-                .wrapping_add(0xa);
-            if end >= MAX_SCRIPT_SIZE {
-                return fail_with(e, TEXT_MAX_SCRIPT_SIZE);
+            // Seam 005B0F68 (words: the compile data, the line): an answer replaces the size
+            // check (xNVSE grows the data instead).
+            if e.site(0x005b_0f68, &[base, line]).is_none() {
+                let end = word_at(e, base, 0x24)
+                    .wrapping_add(word_at(e, line, 0x40c))
+                    .wrapping_add(0xa);
+                if end >= MAX_SCRIPT_SIZE {
+                    return fail_with(e, TEXT_MAX_SCRIPT_SIZE);
+                }
             }
             let put = |e: &mut Engine, value: u16| {
                 let at = word_at(e, base, 0x20).wrapping_add(word_at(e, base, 0x24));
@@ -2665,7 +2712,11 @@ pub fn script_compiler_standard_compile(
         loop {
             let entry = parameters.wrapping_add((index as i32 as u32).wrapping_mul(0xc));
             if i32::from(index) >= i32::from(count) {
-                if word_at(e, line, 0x208) < word_at(e, line, 0x204) {
+                // Seam 005B3A8D: an answer passes over the end-of-line check (xNVSE, while a
+                // command inside an expression parses).
+                if word_at(e, line, 0x208) < word_at(e, line, 0x204)
+                    && e.site(0x005b_3a8d, &[]).is_none()
+                {
                     let name = e.mem.u32(entry);
                     script_compiler_script_error(e, data, TEXT_EXPECTED_END_OF_LINE, &[name]);
                     return false;

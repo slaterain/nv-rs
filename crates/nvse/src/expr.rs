@@ -62,7 +62,7 @@ pub enum Ty {
 }
 
 /// `CanConvertOperand` with the `kConversions_*` lists (xNVSE `ScriptTokens.cpp`).
-fn can_convert(from: Ty, to: Ty) -> bool {
+pub(crate) fn can_convert(from: Ty, to: Ty) -> bool {
     use Ty::*;
     if from == to {
         return true;
