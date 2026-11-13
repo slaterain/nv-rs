@@ -72,6 +72,9 @@ const DESTROY_FN: u32 = 0x0050_1050;
 const REMOVE_FN: u32 = 0x0080_4210;
 const MT_REMOVE_FN: u32 = 0x0082_51c0;
 const DELETE_FN: u32 = 0x0040_59d0;
+/// Not a game address: the tag of the "deleted" entries the `MagicTarget::RemoveEffect` stand-in
+/// records, one per effect it deletes.
+const DELETED: u32 = 0xdead_0000;
 const RTTI_TES_FORM: u32 = 0x0118_3028;
 const RTTI_MAGIC_ITEM: u32 = 0x0118_3140;
 const RTTI_ENCHANTABLE: u32 = 0x0118_39b4;
@@ -351,10 +354,39 @@ fn setup() -> Engine {
         record(REMOVE_FN, w);
         eax(0)
     });
+    // The game's `MagicTarget::RemoveEffect(effect, true)`: the unlink `00905330` does (the first
+    // node holding the effect; the first node takes the next node's item and link; the removed
+    // node's link and item cleared before it is freed), then the effect's delete, recorded.
     e.register(MT_REMOVE_FN, |e, w| {
         record(MT_REMOVE_FN, w);
         let head = e.mem.u32(w[0] + 0x700);
-        crate::commands::list_remove(e, Ptr::new(head), w[1]);
+        let (mut node, mut prev) = (head, 0);
+        while node != 0 && e.mem.u32(node) != w[1] {
+            prev = node;
+            node = e.mem.u32(node + 4);
+        }
+        if node != 0 {
+            let gone = if prev == 0 {
+                let next = e.mem.u32(head + 4);
+                if next == 0 {
+                    e.mem.set_u32(head, 0);
+                    0
+                } else {
+                    e.mem.set_u32(head, e.mem.u32(next));
+                    e.mem.set_u32(head + 4, e.mem.u32(next + 4));
+                    next
+                }
+            } else {
+                e.mem.set_u32(prev + 4, e.mem.u32(node + 4));
+                node
+            };
+            if gone != 0 {
+                e.mem.set_u32(gone, 0);
+                e.mem.set_u32(gone + 4, 0);
+                crate::commands::heap_free(e, gone);
+            }
+        }
+        record(DELETED, &[w[1]]);
         eax(0)
     });
     e.register(DELETE_FN, |_, w| {
@@ -742,11 +774,25 @@ fn removing_effects() {
     let g = effect(&mut e, 5, mi, i1, NONACT);
     let nonact = effects_of(&mut e, NONACT, &[g]);
     let act3 = effects_of(&mut e, ACT3, &[g]);
+    // ACT2 (middle-high): a match after the first node, another effect, then a match.
+    let c2 = effect(&mut e, 6, mi, i0, ACT2);
+    let a2 = effect(&mut e, 7, mi, i1, ACT2);
+    let x2 = effect(&mut e, 8, mi, i2, ACT2);
+    let b2 = effect(&mut e, 9, mi, i1, ACT2);
+    let act2 = effects_of(&mut e, ACT2, &[c2, a2, x2, b2]);
+    let qnodes = nodes_of(&e, act2);
     e.mem.set_u32(NONACT_VT + 0x100, SAYS_ACTOR_FN);
     assert_eq!(call(&mut e, 0x26f8, &[r(R_SPEL), n(1)]).1, 2.0);
     assert_eq!(
         calls_to(REMOVE_FN),
-        vec![vec![a, 1], vec![b, 1], vec![d, 1], vec![f, 1]]
+        vec![
+            vec![a, 1],
+            vec![b, 1],
+            vec![d, 1],
+            vec![f, 1],
+            vec![a2, 1],
+            vec![b2, 1]
+        ]
     );
     assert_eq!(
         calls_to(MT_REMOVE_FN),
@@ -755,8 +801,20 @@ fn removing_effects() {
             vec![PC + 0x94, b, 1],
             vec![PC + 0x94, d, 1],
             vec![ACT1 + 0x94, f, 1],
+            vec![ACT2 + 0x94, a2, 1],
+            vec![ACT2 + 0x94, b2, 1],
         ]
     );
+    assert_eq!(
+        calls_to(DELETED),
+        vec![vec![a], vec![b], vec![d], vec![f], vec![a2], vec![b2]],
+        "each removed effect deleted once, by the game"
+    );
+    assert!(
+        calls_to(DESTROY_FN).is_empty(),
+        "the port deletes no active effect itself"
+    );
+    assert_eq!(items(&e, act2), vec![c2, x2]);
     assert_eq!(items(&e, head), vec![c]);
     assert_eq!(items(&e, act1), vec![0]);
     assert_eq!(items(&e, nonact), vec![g]);
@@ -765,7 +823,7 @@ fn removing_effects() {
     assert_eq!(calls_to(DELETE_FN), vec![vec![i1, 1]]);
     assert_eq!(
         freed(),
-        vec![pnodes[1], pnodes[2], pnodes[3], snodes[0]],
+        vec![pnodes[1], pnodes[2], pnodes[3], qnodes[1], qnodes[3], snodes[0]],
         "the game's removals, then the effect's node"
     );
     assert!(allocations().is_empty());
@@ -776,15 +834,61 @@ fn removing_effects() {
     assert_eq!(calls_to(DELETE_FN), vec![vec![i0, 1]]);
     assert_eq!(
         freed(),
-        vec![snodes[1]],
-        "the second node, its item moved up"
+        vec![qnodes[2], snodes[1]],
+        "ACT2's second node (c2 removed from the first), then the effect's second node"
     );
-    assert_eq!(calls_to(REMOVE_FN), vec![vec![c, 1]]);
+    assert_eq!(calls_to(REMOVE_FN), vec![vec![c, 1], vec![c2, 1]]);
+    assert_eq!(calls_to(DELETED), vec![vec![c], vec![c2]]);
+    assert_eq!(items(&e, act2), vec![x2]);
     // One left: nothing.
     clear_calls();
     assert_eq!(call(&mut e, 0x26f8, &[r(R_SPEL), n(0)]).1, -1.0);
     assert_eq!(items(&e, effects_head(SPEL)), vec![i2]);
     assert!(calls().is_empty(), "no call at all");
+}
+
+/// Removing an effect item while the player's target is inside its own update (its byte +5
+/// set, as `UpdateTarget` leaves it during its walk): JIP's own unlink for each active effect of
+/// the item, no call to the game's `MagicTarget::RemoveEffect` and no delete of the effect
+/// (JIP's leak, kept in this case); an actor not in its update gets the game's removal.
+#[test]
+fn removing_effects_while_the_target_updates() {
+    let mut e = setup();
+    let i0 = item(&mut e, 0, MGEF, 1, 2, 3, 0);
+    let i1 = item(&mut e, 1, MGEF, 11, 12, 13, 2);
+    let snodes = list(&mut e, effects_head(SPEL), &[i0, i1]);
+    let mi = SPEL + 0x18;
+    let a = effect(&mut e, 0, mi, i1, PC);
+    let c = effect(&mut e, 1, mi, i0, PC);
+    let b = effect(&mut e, 2, mi, i1, PC);
+    let head = effects_of(&mut e, PC, &[a, c, b]);
+    let pnodes = nodes_of(&e, head);
+    let f = effect(&mut e, 3, mi, i1, ACT1);
+    effects_of(&mut e, ACT1, &[f]);
+    e.mem.set_u8(PC + 0x94 + 5, 1);
+    assert_eq!(call(&mut e, 0x26f8, &[r(R_SPEL), n(1)]).1, 1.0);
+    assert_eq!(
+        calls_to(REMOVE_FN),
+        vec![vec![a, 1], vec![b, 1], vec![f, 1]]
+    );
+    assert_eq!(
+        calls_to(MT_REMOVE_FN),
+        vec![vec![ACT1 + 0x94, f, 1]],
+        "none for the updating player"
+    );
+    assert_eq!(
+        calls_to(DELETED),
+        vec![vec![f]],
+        "the player's effects not deleted"
+    );
+    assert!(calls_to(DESTROY_FN).is_empty());
+    assert_eq!(items(&e, head), vec![c], "both unlinked");
+    assert_eq!(
+        freed(),
+        vec![pnodes[1], pnodes[2], snodes[0]],
+        "the player's nodes as JIP frees them (never an effect), then the item's node"
+    );
+    assert_eq!(calls_to(DELETE_FN), vec![vec![i1, 1]]);
 }
 
 #[test]

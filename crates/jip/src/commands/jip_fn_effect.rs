@@ -23,10 +23,17 @@
 //!   stay allocated.
 //! - Taking the removed item's active effects off an actor (JIP's `MagicTarget::RemoveEffect`):
 //!   after the same `ActiveEffect::Remove(true)` (`00804210`), the port takes each effect out
-//!   with the game's own `MagicTarget::RemoveEffect(effect, true)` (`008251c0`), which unlinks
-//!   its node, reports the removal to the target and deletes the effect (through the task
-//!   queue while other threads may hold it). JIP unlinks the node itself and never deletes the
-//!   effect, and the game cannot reach it again to delete it.
+//!   with the game's own `MagicTarget::RemoveEffect(effect, true)` (`008251c0`): the same
+//!   unlink as JIP's (`00905330`), the `EffectRemoved` notification (which does nothing on an
+//!   actor, `0040df90`), and the effect's delete (through the task queue while other threads
+//!   may hold it). What scripts see is JIP's; the only other change is that the removed
+//!   effect's hit shaders, models and sound end, where JIP leaves them on the actor with the
+//!   effect it never deletes and the game can no longer reach.
+//!   Not while the target is inside its own update (`MagicTarget` +5, set by `UpdateTarget`,
+//!   `00823c40`, for its whole walk): a script effect removing its own effect item runs there,
+//!   and the game goes on using that effect after the script returns. Then the port does
+//!   exactly what JIP does: it unlinks the node and does not delete the effect (JIP's leak, in
+//!   this case only).
 //!
 //! Where JIP would read through a null reference on ordinary input the port does nothing: the
 //! reference commands and the conditions with no reference (`thisObj` 0).
@@ -108,6 +115,10 @@ const CASTER_GET_ACTOR: u32 = 0x2c;
 const CREATE_ACTIVE_EFFECT: u32 = 0x4c;
 const DESTROY: u32 = 0x00;
 const IS_MAGIC_ITEM: u32 = 0xec;
+/// `MagicTarget` +5: set by the target's `UpdateTarget` (`00823c40`) for the whole walk of its
+/// effects and cleared after it (`MOV byte ptr [EAX + 0x5], 1` at `00823cf7`, `0` at
+/// `00824037`); the game's `MagicTarget::Dispel` queues instead of dispelling while it is set.
+const TARGET_UPDATING: u32 = 5;
 
 type E = EffectItem;
 type A = ActiveEffect;
@@ -258,8 +269,9 @@ fn update_effects_all_actors(e: &mut Engine, magic_item: u32, item: u32, add_new
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: MagicTarget::RemoveEffect.
 /// Every active effect of `item` on the actor removed now (`ActiveEffect::Remove(true)`) and
-/// taken out of the list, by the game's `MagicTarget::RemoveEffect(effect, true)` (the port's
-/// difference: see the module's doc).
+/// taken out of the list: by the game's `MagicTarget::RemoveEffect(effect, true)` (the port's
+/// difference: see the module's doc), or, while the target is inside its own update (+5), by
+/// JIP's own unlink with the effect left alone.
 fn remove_effect(e: &mut Engine, actor: u32, item: u32) {
     let target = actor + ACTOR_MAGIC_TARGET;
     let mut node = effect_list(e, actor);
@@ -268,7 +280,12 @@ fn remove_effect(e: &mut Engine, actor: u32, item: u32) {
         let effect = e.get(node, ListNode::data);
         if effect != 0 && e.get(active(effect), A::effectItem) == item {
             e.call(ACTIVE_EFFECT_REMOVE, &args![effect, 1u32]);
-            e.call(MAGIC_TARGET_REMOVE_EFFECT, &args![target, effect, 1u32]);
+            if e.mem.u8(target + TARGET_UPDATING) != 0 {
+                // Inside the target's own update: JIP's unlink, the effect left alone.
+                list_unlink(e, node, prev);
+            } else {
+                e.call(MAGIC_TARGET_REMOVE_EFFECT, &args![target, effect, 1u32]);
+            }
             if !prev.is_null() {
                 node = next(e, prev);
             }

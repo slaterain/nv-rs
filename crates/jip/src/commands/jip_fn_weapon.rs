@@ -248,11 +248,9 @@ fn set_embedded_weapon_av(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let read = Read::of(e, &a);
     if let Some(wp) = weapon_arg(e, &read) {
-        // `kParamType_ActorValue` is read as a 16-bit code into JIP's `UInt32`.
-        let code = match read.args.get(1) {
-            Some(nvse::args::Arg::Short(v)) => *v,
-            _ => 0,
-        };
+        // `kParamType_ActorValue` is read as a 16-bit code into JIP's `UInt32`: from the
+        // compiled data or, for a parenthesised argument, from the expression evaluator.
+        let code = read.short(1, 0);
         e.set(wp, TESObjectWEAP::embedWeaponAV, code as u8);
     }
     handled(true)
