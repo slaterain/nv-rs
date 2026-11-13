@@ -261,14 +261,23 @@ fn take_geometry(e: &mut Engine, geometry: u32, nodes: &mut AddrSet<u32>) {
 }
 
 /// The tall grass shader (`010b8980`), the no-lighting shader (`010bb230`) and the SpeedTree leaf shader
-/// (`010b9190`), by vtable (a geometry's shader +0xc0); the SpeedTree leaf property's vtable (`010b9700`, made by
-/// `00bb3ba0`).
+/// (`010b9190`), by vtable (a geometry's shader +0xc0); the SpeedTree leaf property (`010b9700`, made by `00bb3ba0`) is
+/// told by its slots ([`leaf_slots`]).
 const TALL_GRASS_SHADER: u32 = 0x010b_8980;
 const NO_LIGHTING_SHADER: u32 = 0x010b_b230;
 const LEAF_SHADER: u32 = 0x010b_9190;
-const LEAF_PROPERTY: u32 = 0x010b_9700;
 /// A geometry's shader.
 const GEOMETRY_SHADER: u32 = 0xc0;
+
+/// Whether `property`'s slots 0xfc and 0x100 are the SpeedTree leaf property's (`00bb3c80`, `00bb3c90`: its leaf data
+/// and the leaves `[[+0x88]+8]`), as the reader tests them: an override in those slots is respected.
+fn leaf_slots(e: &Engine, property: u32) -> bool {
+    let Some(vtable) = peek(e, property) else {
+        return false;
+    };
+    peek(e, vtable.wrapping_add(0xfc)) == Some(0x00bb_3c80)
+        && peek(e, vtable.wrapping_add(0x100)) == Some(0x00bb_3c90)
+}
 
 /// The arrays Group C's set-ups copy into their constants whole (`_memcpy`), by the geometry's shader:
 /// - tall grass (`00baaf40`): the property's instance data (+0x7c): its counts (`u16` +0x10, +0x12), its array
@@ -313,7 +322,7 @@ fn take_group_c_arrays(e: &Engine, geometry: u32, property: u32, data: u32) {
             };
             capture::take(e, array, 0, u32::from(count) << 4);
         }
-        Some(LEAF_SHADER) if property != 0 && peek(e, property) == Some(LEAF_PROPERTY) => {
+        Some(LEAF_SHADER) if property != 0 && leaf_slots(e, property) => {
             capture::take(e, property, 0x88, 0x8c);
             let Some(leaf_data) = peek(e, property.wrapping_add(0x88)) else {
                 return;
@@ -725,7 +734,10 @@ mod tests {
         let (geometry, property, _) = group_c_geometry(&mut e, LEAF_SHADER);
         let leaf_data = e.mem.alloc(0x10);
         let leaves = words(&mut e, 0xc0);
-        e.mem.set_u32(property, LEAF_PROPERTY);
+        let vtable = e.mem.alloc(0x104);
+        e.mem.set_u32(vtable + 0xfc, 0x00bb_3c80);
+        e.mem.set_u32(vtable + 0x100, 0x00bb_3c90);
+        e.mem.set_u32(property, vtable);
         e.mem.set_u32(property + 0x88, leaf_data);
         e.mem.set_u32(leaf_data + 8, leaves);
         assert!(capture::begin(&e));
