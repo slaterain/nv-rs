@@ -188,3 +188,24 @@ fn alternate_textures_cleared() {
     call(&mut e, 0x28ba, &[r(4)]);
     assert_eq!(e.mem.u32(MISC + 0x7c + 0x18), 7);
 }
+
+/// A misc item passes the reader's inventory-object check and is refused by `IS_TYPE`: every
+/// command leaves its bytes.
+#[test]
+fn another_inventory_form_is_left_alone() {
+    let mut e = setup();
+    e.mem.set_u32(MISC + 0x78, 0x88);
+    e.mem.set_u32(MISC + 0x188, TEMPLATE);
+    e.mem.set_u8(TEMPLATE + 0x18c, 1);
+    let before = e.mem.bytes(MISC, 0x190);
+    call(&mut e, 0x281f, &[r(4)]);
+    assert_eq!(form_result(&e), 0);
+    call(&mut e, 0x2820, &[r(4), r(2)]);
+    call(&mut e, 0x2820, &[r(4)]);
+    call(&mut e, 0x2896, &[r(4), n(2)]);
+    call(&mut e, 0x2808, &[r(4), n(0), s(b"m.nif")]);
+    // As the template: a misc item is no armour.
+    call(&mut e, 0x2820, &[r(1), r(4)]);
+    assert_eq!(e.mem.u32(ARMOR + 0x188), 0);
+    assert_eq!(e.mem.bytes(MISC, 0x190), before);
+}

@@ -94,3 +94,66 @@ fn the_grasses() {
     assert_eq!(count(&mut e), 1.0);
     assert_eq!(call(&mut e, 0x2661, &[r(5)]).1, 0.0, "not a land texture");
 }
+
+/// Every list edit's blocks, exactly: an add into the empty inline node allocates nothing; an add
+/// before it allocates one 8-byte node for the old first item; removing the first item frees that
+/// node (the next one's item moves in), removing a later one frees it (not the one before), and
+/// the inline node is only emptied.
+#[test]
+fn grass_list_blocks_exactly() {
+    let mut e = setup();
+    call(&mut e, 0x2663, &[r(1), r(3)]);
+    assert!(allocations().is_empty(), "into the inline node");
+    let added = heap_next(&e);
+    call(&mut e, 0x2663, &[r(1), r(4)]);
+    assert_eq!(allocations(), vec![8]);
+    assert_eq!(e.mem.u32(LTEX + 0x24), added);
+    assert_eq!((e.mem.u32(added), e.mem.u32(added + 4)), (GRASS1, 0));
+    call(&mut e, 0x2664, &[r(1), r(4)]);
+    assert_eq!(freed(), vec![added], "the node after the inline one");
+    assert_eq!(
+        (e.mem.u32(LTEX + 0x20), e.mem.u32(LTEX + 0x24)),
+        (GRASS1, 0)
+    );
+    let added2 = heap_next(&e);
+    call(&mut e, 0x2663, &[r(1), r(4)]);
+    assert_eq!(allocations(), vec![8, 8]);
+    call(&mut e, 0x2664, &[r(1), r(3)]);
+    assert_eq!(
+        freed(),
+        vec![added, added2],
+        "the removed node, not the one before"
+    );
+    assert_eq!(
+        (e.mem.u32(LTEX + 0x20), e.mem.u32(LTEX + 0x24)),
+        (GRASS2, 0)
+    );
+    call(&mut e, 0x2664, &[r(1), r(4)]);
+    assert_eq!(freed(), vec![added, added2], "the inline node never freed");
+    assert_eq!(e.mem.u32(LTEX + 0x20), 0);
+}
+
+/// The land texture is read as any form: a misc item with the same words answers 0 and keeps
+/// its bytes through every command.
+#[test]
+fn another_form_type_is_left_alone() {
+    let mut e = setup();
+    e.mem.set_u32(MISC + 0x18, TXST);
+    e.mem.set_u32(MISC + 0x1c, 0x0403_0201);
+    e.mem.set_u32(MISC + 0x20, GRASS1);
+    let before = e.mem.bytes(MISC, 0x28);
+    call(&mut e, 0x265d, &[r(5)]);
+    assert_eq!(form_result(&e), 0);
+    for t in 0..4 {
+        assert_eq!(call(&mut e, 0x265f, &[r(5), n(t)]).1, 0.0, "trait {t}");
+        call(&mut e, 0x2660, &[r(5), n(t), n(9)]);
+    }
+    assert_eq!(call(&mut e, 0x2661, &[r(5)]).1, 0.0);
+    call(&mut e, 0x2662, &[r(5), n(0)]);
+    assert_eq!(form_result(&e), 0);
+    call(&mut e, 0x265e, &[r(5), r(2)]);
+    assert_eq!(call(&mut e, 0x2663, &[r(5), r(4)]).1, 0.0);
+    assert_eq!(call(&mut e, 0x2664, &[r(5), r(3)]).1, 0.0);
+    assert_eq!(e.mem.bytes(MISC, 0x28), before);
+    assert!(allocations().is_empty() && freed().is_empty());
+}

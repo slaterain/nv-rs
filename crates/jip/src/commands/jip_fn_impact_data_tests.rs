@@ -198,3 +198,33 @@ fn the_set_per_material() {
     call(&mut e, 0x2887, &[r(1), n(0), r(1)]);
     assert_eq!(e.mem.bytes(IPCT, 0x78), before, "an impact data is no set");
 }
+
+/// Both forms are read as any form: a misc item, and each form type where the other is wanted,
+/// answer 0 and keep their bytes.
+#[test]
+fn other_form_types_are_left_alone() {
+    let mut e = setup();
+    for off in (0x1c..0x78).step_by(4) {
+        e.mem.set_u32(MISC + off, SOUND);
+    }
+    e.mem.set_u32(IPDS + 0x1c, IPCT);
+    let misc = e.mem.bytes(MISC, 0x78);
+    let set_before = e.mem.bytes(IPDS, 0x4c);
+    for t in 0..18 {
+        assert_eq!(call(&mut e, 0x2792, &[r(5), n(t)]).1, 0.0, "get {t}");
+        assert_eq!(form_result(&e), 0, "get {t}");
+    }
+    for t in 0..15 {
+        call(&mut e, 0x2793, &[r(5), n(t), z(1.0)]);
+        call(&mut e, 0x2793, &[r(2), n(t), z(1.0)]);
+    }
+    for t in 0..3 {
+        call(&mut e, 0x2794, &[r(5), n(t), r(4)]);
+        call(&mut e, 0x2794, &[r(2), n(t)]);
+    }
+    call(&mut e, 0x2886, &[r(1), n(0)]);
+    assert_eq!(form_result(&e), 0, "an impact data is no set");
+    call(&mut e, 0x2887, &[r(5), n(0), r(1)]);
+    assert_eq!(e.mem.bytes(MISC, 0x78), misc);
+    assert_eq!(e.mem.bytes(IPDS, 0x4c), set_before);
+}

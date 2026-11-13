@@ -160,3 +160,29 @@ fn the_flags() {
     set(&mut e, 32, 1);
     assert_eq!(e.mem.u32(EXPL + 0x88), 0x13, "flag 32: nothing");
 }
+
+/// The explosion is read as any form (the setters) or bound object (the getters): a misc item with
+/// the same words answers 0 and keeps its bytes.
+#[test]
+fn another_form_type_is_left_alone() {
+    let mut e = setup();
+    for off in (0x58..0xa8).step_by(4) {
+        e.mem.set_u32(MISC + off, LIGHT);
+    }
+    let before = e.mem.bytes(MISC, 0xa8);
+    for t in 0..8 {
+        assert_eq!(call(&mut e, 0x261b, &[r(7), n(t)]).1, 0.0, "number {t}");
+        call(&mut e, 0x261c, &[r(7), n(t), z(1.0)]);
+    }
+    for t in 0..7 {
+        call(&mut e, 0x261d, &[r(7), n(t)]);
+        assert_eq!(form_result(&e), 0, "form {t}");
+        call(&mut e, 0x261e, &[r(7), n(t), r(2)]);
+        call(&mut e, 0x261e, &[r(7), n(t)]);
+    }
+    for f in 1..32 {
+        call(&mut e, 0x2620, &[r(7), n(f), n(0)]);
+    }
+    assert_eq!(call(&mut e, 0x261f, &[r(7), n(1)]).1, 0.0);
+    assert_eq!(e.mem.bytes(MISC, 0xa8), before);
+}
