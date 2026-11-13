@@ -85,13 +85,18 @@ fn new_actor_list(e: &mut Engine) -> u32 {
 }
 
 /// The actor of a list node, when the node is not null and holds one (`006815c0` gives the node's
-/// element).
+/// element; the exe asks it twice, for the test and for the actor, and so does this: the leaf is
+/// inline).
 fn node_actor(e: &mut Engine, node: u32) -> Option<u32> {
     if node == 0 {
         return None;
     }
     let element = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
-    Some(e.mem.u32(element)).filter(|&actor| actor != 0)
+    if e.mem.u32(element) == 0 {
+        return None;
+    }
+    let element = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
+    Some(e.mem.u32(element))
 }
 
 /// Under the process lock, deletes the actor's process object (its vtable slot 0 with 1) and clears

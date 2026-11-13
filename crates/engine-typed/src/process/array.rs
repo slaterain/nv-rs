@@ -138,7 +138,7 @@ pub fn find(e: &mut Engine, this: Ptr, actor: u32, level: i32) -> u32 {
 /// `index` unless `index` is that last slot, clears the last slot and corrects the cursors.
 pub fn remove_at(e: &mut Engine, this: Ptr, index: u32) {
     let a = this.addr();
-    let level = typed_call!(FAMILY, 0x0096_ab20, level_of(e, this, index));
+    let level = level_of(e, this, index);
     if level == -1 {
         return;
     }
@@ -159,7 +159,7 @@ pub fn remove_at(e: &mut Engine, this: Ptr, index: u32) {
     e.with_stack(4, |e, zero| {
         typed_call!(FAMILY, 0x0096_ae90, set_element(e, this, last, zero));
     });
-    typed_call!(FAMILY, 0x0096_ac30, correct_cursors(e, this));
+    correct_cursors(e, this);
 }
 
 // Typed from 0096ac30
@@ -180,6 +180,6 @@ pub fn correct_cursors(e: &mut Engine, this: Ptr) {
 /// `ProcessArray::RemoveActor` (Xbox PDB; `thiscall(array, actor, level)`): finds `actor` from the
 /// start of process level `level` ([`find`]) and removes the element found ([`remove_at`]).
 pub fn remove_actor(e: &mut Engine, this: Ptr, actor: u32, level: i32) {
-    let index = typed_call!(FAMILY, 0x0096_abc0, find(e, this, actor, level));
-    typed_call!(FAMILY, 0x0096_aa40, remove_at(e, this, index));
+    let index = find(e, this, actor, level);
+    remove_at(e, this, index);
 }

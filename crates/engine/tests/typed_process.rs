@@ -199,6 +199,9 @@ impl Common for Diff {
             // The translation's 64-bit multiply and divide of the time budget, which the typed pass
             // computes natively.
             .ignore_calls(&[0x00ec_c300, 0x00ec_c250])
+            // The element address the exe asks for each element its search reads; the typed search
+            // reads the element block a page at a time.
+            .ignore_calls(&[0x0087_7a30])
             .max_calls(MAX_CALLS)
     }
 }
@@ -468,7 +471,8 @@ fn actor(e: &mut Engine, kind: u32, level: u32, last: u32) -> u32 {
     e.mem.set_u8(a + 0x87, (bits & 1) as u8);
     let own_level = if kind == 4 { level ^ 1 } else { level };
     e.mem.set_u32(a + 0xf0, own_level);
-    if bits & 8 == 0 || kind < 5 {
+    // Only the low process has actors without a process object (the middle ones always have one).
+    if bits & 8 == 0 || kind < 5 || level != 3 {
         let p = object(e, 0x40, (bits >> 2) & 1);
         e.mem.set_u32(p + 0x28, own_level);
         e.mem.set_u32(p + 0x20, last);
