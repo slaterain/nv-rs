@@ -81,6 +81,21 @@ fn a_path_longer_than_jips_buffer_stops_without_the_list_guard() {
 }
 
 #[test]
+fn a_formatted_path_fills_jips_buffer_up_to_0x7f_bytes() {
+    let mut e = setup();
+    // 0x7F bytes and the 0 fit JIP's 0x80-byte buffer.
+    let fits = vec![b'b'; 0x7f];
+    call(&mut e, 0x2808, &[r(1), n(0), s(&fits)]);
+    assert_eq!(text_at(&e, ARMOR + 0x7c + 4), fits);
+    // 0x80 bytes run past it: the port stops (without the list guard row).
+    let long = vec![b'c'; 0x80];
+    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        call(&mut e, 0x2808, &[r(1), n(0), s(&long)]);
+    }));
+    assert!(stopped.is_err());
+}
+
+#[test]
 fn the_audio_template() {
     let mut e = setup();
     e.mem.set_u32(ARMOR + 0x188, TEMPLATE);

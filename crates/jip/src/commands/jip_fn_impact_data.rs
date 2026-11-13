@@ -127,10 +127,11 @@ fn set_impact_data_trait_numeric(e: &mut Engine, w: &[u32]) -> Ret {
     let Some(d) = impact_data_arg(e, &read) else {
         return handled(true);
     };
-    let value = match read.args.get(2).and_then(nvse::args::Arg::double) {
-        Some(v) => v,
-        None => 0.0,
-    };
+    let value = read
+        .args
+        .get(2)
+        .and_then(nvse::args::Arg::double)
+        .unwrap_or(0.0);
     let int_val = cvtd2ul(value);
     let t = read.int(1, 0);
     match t {
