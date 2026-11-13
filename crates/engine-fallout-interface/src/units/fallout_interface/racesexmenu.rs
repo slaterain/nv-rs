@@ -1246,7 +1246,8 @@ pub fn race_sex_menu_create(e: &mut Engine, mode: u32) -> u32 {
             }
         }
     }
-    race_sex_menu_create_contents(e, Ptr::new(menu), mode as i32);
+    // By address: the fixes preset's facial hair row registers over it (overridable.tsv).
+    e.call(0x007a_cb60, &args![menu, mode as i32]);
     let setting = e
         .call(RENDERED_MENU_SETTING, &args![RENDERED_MENU_SETTING_OBJECT])
         .u32();
@@ -1335,6 +1336,21 @@ pub fn fn_007ac9f0(e: &mut Engine, this: Ptr<FORenderedMenuRaceSex>) -> Ptr<FORe
 /// The compiler's exception-unwinding frame is not translated.
 // Translation incomplete: 007acb60 - the C++ exception-unwinding frame (FS:[0]) that destroys the temporary strings when a callee throws is not translated
 pub fn race_sex_menu_create_contents(e: &mut Engine, this: Ptr<RaceSexMenu>, mode: i32) {
+    create_contents(e, this, mode, false);
+}
+
+/// [`race_sex_menu_create_contents`] whose facial hair list offers only the parts made for the
+/// race the player has (the fixes preset's facial hair row, `crates/host`; see
+/// [`FacialHairFilter`]). Everything else is the translation's.
+pub fn race_sex_menu_create_contents_facial_hair_by_race(
+    e: &mut Engine,
+    this: Ptr<RaceSexMenu>,
+    mode: i32,
+) {
+    create_contents(e, this, mode, true);
+}
+
+fn create_contents(e: &mut Engine, this: Ptr<RaceSexMenu>, mode: i32, by_race: bool) {
     let base = this.addr();
     let tile = e.mem.u32(base + 4);
     let kind = e
@@ -1535,30 +1551,9 @@ pub fn race_sex_menu_create_contents(e: &mut Engine, this: Ptr<RaceSexMenu>, mod
             );
         }
 
-        // Entries for the second marker list (id 0x1c, list at +0x44).
-        let owner: u32 = e.global(MARKER_OWNER);
-        let mut node = e.call(MARKER_LIST_HEAD_2, &args![owner]).u32();
-        while node != 0 {
-            let item_slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
-            if e.mem.u32(item_slot) == 0 {
-                break;
-            }
-            let item_slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
-            let item = e.mem.u32(item_slot);
-            if e.call(MARKER_CHECK_2, &args![item]).u8() != 0 {
-                let item_slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
-                let item = e.mem.u32(item_slot);
-                let item_slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
-                let named = e.mem.u32(item_slot);
-                let name = e.call(MARKER_NAME, &args![named + 0x18]).u32();
-                let list = e.mem.u32(base + 0x44);
-                let option = e
-                    .call(OPTION_LIST_ADD_OPTION, &args![list, name, 0x1cu32])
-                    .u32();
-                e.call(OPTION_SET_DATA, &args![option, item]);
-            }
-            node = word_at_four(e, node);
-        }
+        // Entries for the second marker list (id 0x1c, list at +0x44): the facial hair.
+        let filter = by_race.then(|| FacialHairFilter::for_menu(e, base));
+        add_facial_hair_options(e, base, filter.as_ref());
 
         // The sub-lists 10 to 18 hang below the list at +0x4c, captioned like
         // the lists themselves.
@@ -1904,6 +1899,24 @@ fn show_confirmation(e: &mut Engine, text: PopupText, callback: u32, flag: u32) 
 /// to `0044edb0`'s list, the tile's parent option starts a slider drag
 /// and the buttons 2 and 3 scroll the list by one.
 pub fn race_sex_menu_do_click(e: &mut Engine, this: Ptr<RaceSexMenu>, button: i32, tile: u32) {
+    do_click(e, this, button, tile, false);
+}
+
+/// [`race_sex_menu_do_click`] that, after a click changes the race or the sex, builds the facial
+/// hair list again for the new choice (the fixes preset's facial hair row, `crates/host`; see
+/// [`FacialHairFilter`]). The original builds that list once, in `_Create`
+/// ([`race_sex_menu_create_contents`]); the hair and eye lists it does build again (flags 0 and
+/// 1, [`fn_007b1ca0`]), the facial hair list never.
+pub fn race_sex_menu_do_click_facial_hair_by_race(
+    e: &mut Engine,
+    this: Ptr<RaceSexMenu>,
+    button: i32,
+    tile: u32,
+) {
+    do_click(e, this, button, tile, true);
+}
+
+fn do_click(e: &mut Engine, this: Ptr<RaceSexMenu>, button: i32, tile: u32, by_race: bool) {
     let base = this.addr();
     let mut tile = tile;
     if tile == 0 && button < 6 {
@@ -1956,6 +1969,9 @@ pub fn race_sex_menu_do_click(e: &mut Engine, this: Ptr<RaceSexMenu>, button: i3
                 e.call(CHOOSE_DEFAULT_PRESET, &args![this]);
                 fn_007b25a0(e, this);
                 fn_007b1ca0(e, this);
+                if by_race {
+                    rebuild_facial_hair_list(e, this);
+                }
                 changed = true;
                 if sex_changed {
                     let player: u32 = e.global(PLAYER);
@@ -5591,6 +5607,244 @@ pub fn race_sex_menu_randomize(e: &mut Engine) {
     race_sex_menu_set_flag(e, me, 8, false);
     let me = Ptr::new(e.global::<u32>(RACE_SEX_MENU_ME));
     race_sex_menu_set_flag(e, me, 9, false);
+}
+
+// The fixes preset's facial hair row (`bFacialHairByRaceFolder`, docs/FIXES.md). In the original
+// the facial hair list offers every playable head part (`005e7a60`, the playable bit) to every
+// race, so a plugin cannot give its own race beards only that race sees. The row reads which race
+// a part was made for from where its model lies: a race whose head model is in a folder of
+// `meshes\characters\` that is not one of the game's own owns that folder, and the parts whose
+// models lie in it are made for that race. Nothing new is needed in a plugin.
+
+layout! {
+    /// `BGSHeadPart` (form type 9, 0x50 bytes: `CreateFormOfType`, `00465110`, allocates 0x50),
+    /// the fields the facial hair row reads. Its load (`005e7530`) reads `MODL` into the model at
+    /// +0x24, whose path is a `BSStringT` at the model's +4 (the text pointer here), `DATA` into
+    /// the flags at +0x44 (`005e7a60` tests bit 0, playable), and each `HNAM` into the extra-part
+    /// list at +0x48 (`005e7790`, `00624700`), a `BSSimpleList` whose first node is inline:
+    /// `+0` the part, `+4` the next node. `BGSHeadPart::InitItem` (`005e77b0`) turns the ids into
+    /// the parts.
+    pub struct HeadPart: 0x50 {
+        /// The model path's text (`TESModel::cModel`, Xbox PDB, at +0x24 + 4).
+        0x28 modelPath: u32,
+        /// The extra-part list's first part (0 for an empty list).
+        0x48 extraPart: u32,
+        /// The extra-part list's next node.
+        0x4C extraPartNext: u32,
+    }
+
+    /// `TESRace` (form type 12, 0x524 bytes: `00465110` allocates 0x524), the two head models:
+    /// head part 0 of each sex (`00613970`: `+0xb0 + 0xc0 * sex + 0x18 * part`, a `TESModel`,
+    /// loaded from `INDX` 0 under `MNAM`/`FNAM` and `NAM0` by the race's load, `00610cd0`), the
+    /// text of each model's path (`+4`).
+    pub struct RaceHeads: 0x524 {
+        /// The male head model's path text.
+        0xB4 maleHeadPath: u32,
+        /// The female head model's path text.
+        0x174 femaleHeadPath: u32,
+    }
+}
+
+/// The folders of `meshes\characters\` the game's own models use: FalloutNV.esm, its DLCs and
+/// the add-on packs put every race's head in `characters\head\`, every head part and hair in
+/// `characters\hair\`, and the bodies in `characters\_male\` (read from their `RACE`, `HDPT`
+/// and `HAIR` records' `MODL` paths). A model in one of them belongs to no race.
+const STOCK_CHARACTER_FOLDERS: [&[u8]; 3] = [b"head", b"hair", b"_male"];
+
+/// How deep a part with no model of its own is followed into the parts it combines (a mix of
+/// mixes); a deeper chain, or a loop, belongs to no folder.
+const MIX_DEPTH: u32 = 4;
+
+/// The folder of `meshes\characters\` that a model path lies in, lower case, when it is not one
+/// of the game's own ([`STOCK_CHARACTER_FOLDERS`]): `Characters\AlexsCan\Head.nif` and
+/// `characters/alexscan/facialhair/beardfull.nif` both give `alexscan`. Model paths are relative
+/// to `meshes\`; a leading `meshes\` is allowed too. Upper and lower case and both slashes are
+/// the same, as the game's file lookup treats them. A path outside `characters\`, or a file
+/// directly in it, has no folder.
+fn character_folder(path: &[u8]) -> Option<Vec<u8>> {
+    let lower: Vec<u8> = path
+        .iter()
+        .map(|c| match c {
+            b'/' => b'\\',
+            c => c.to_ascii_lowercase(),
+        })
+        .collect();
+    let mut parts = lower.split(|c| *c == b'\\').filter(|part| !part.is_empty());
+    let mut first = parts.next()?;
+    if first == b"meshes" {
+        first = parts.next()?;
+    }
+    if first != b"characters" {
+        return None;
+    }
+    let folder = parts.next()?;
+    // The folder must hold the file (or a folder of its own).
+    parts.next()?;
+    if STOCK_CHARACTER_FOLDERS.contains(&folder) {
+        return None;
+    }
+    Some(folder.to_vec())
+}
+
+/// The text a path pointer points at; nothing for a null pointer (a model never set).
+fn path_text(e: &Engine, pointer: u32) -> Vec<u8> {
+    if pointer == 0 {
+        Vec::new()
+    } else {
+        e.mem.cstr(pointer)
+    }
+}
+
+/// The folder a race's head model for `sex` (0 male, 1 female) lies in ([`character_folder`]).
+fn race_head_folder(e: &Engine, race: u32, sex: u32) -> Option<Vec<u8>> {
+    let race = Ptr::<RaceHeads>::new(race);
+    let pointer = if sex == 0 {
+        e.get(race, RaceHeads::maleHeadPath)
+    } else {
+        e.get(race, RaceHeads::femaleHeadPath)
+    };
+    character_folder(&path_text(e, pointer))
+}
+
+/// The head folder a race owns for `sex`: its head model's for that sex, else the other sex's
+/// (a race may change only one of its heads). None for no race.
+fn race_folder(e: &Engine, race: u32, sex: u32) -> Option<Vec<u8>> {
+    if race == 0 {
+        return None;
+    }
+    let sex = u32::from(sex != 0);
+    race_head_folder(e, race, sex).or_else(|| race_head_folder(e, race, 1 - sex))
+}
+
+/// The folder a head part's model lies in ([`character_folder`]). A part with no model (the
+/// game's `BeardMix` parts, which are made of the parts named in their `HNAM` chunks) belongs to
+/// the folder of the parts it combines when every one of them belongs to the same folder, and
+/// to none otherwise (or when it combines none).
+fn part_folder(e: &Engine, part: u32, depth: u32) -> Option<Vec<u8>> {
+    let head_part = Ptr::<HeadPart>::new(part);
+    let path = path_text(e, e.get(head_part, HeadPart::modelPath));
+    if !path.is_empty() {
+        return character_folder(&path);
+    }
+    if depth >= MIX_DEPTH {
+        return None;
+    }
+    let mut folder: Option<Vec<u8>> = None;
+    let mut component = e.get(head_part, HeadPart::extraPart);
+    let mut next = e.get(head_part, HeadPart::extraPartNext);
+    while component != 0 {
+        let own = part_folder(e, component, depth + 1)?;
+        match &folder {
+            Some(seen) if *seen != own => return None,
+            _ => folder = Some(own),
+        }
+        if next == 0 {
+            break;
+        }
+        // A node of the list: `+0` the part, `+4` the next node.
+        component = e.mem.u32(next);
+        next = e.mem.u32(next + 4);
+    }
+    folder
+}
+
+/// Which playable head parts the facial hair list offers with the row on, for the race and sex
+/// the menu's player base form has. A race that owns a head folder ([`race_folder`]) gets only the
+/// parts that belong to it ([`part_folder`]); any other race gets every part except those that
+/// belong to a folder some race owns. So for the game's own data (no race and no part outside the
+/// game's folders) the list is the original's, and a part in a folder of its own that no race
+/// owns (a beard plugin's) stays for every race without one.
+pub struct FacialHairFilter {
+    /// The folder the chosen race owns, if any.
+    own: Option<Vec<u8>>,
+    /// Every folder a race owns, by either head: the data handler's races (`004ea950`, +0x60).
+    owned: Vec<Vec<u8>>,
+}
+
+impl FacialHairFilter {
+    /// For the menu at `base`: its player base form's race (`004ac110`) and sex (`005f0cc0`), and
+    /// the folders of every race in the data handler's list (the list the race options come from).
+    pub fn for_menu(e: &mut Engine, base: u32) -> FacialHairFilter {
+        let player_base = e.mem.u32(base + 0xd8);
+        let race = e.call(BASE_VALUE_4AC110, &args![player_base]).u32();
+        let player_base = e.mem.u32(base + 0xd8);
+        let sex = e.call(GET_SEX, &args![player_base]).u32();
+        let own = race_folder(e, race, sex);
+        let mut owned: Vec<Vec<u8>> = own.iter().cloned().collect();
+        let owner: u32 = e.global(MARKER_OWNER);
+        let mut node = e.call(MARKER_LIST_HEAD, &args![owner]).u32();
+        while node != 0 {
+            let item = e.mem.u32(node);
+            if item == 0 {
+                break;
+            }
+            for sex in 0..2 {
+                if let Some(folder) = race_head_folder(e, item, sex) {
+                    if !owned.contains(&folder) {
+                        owned.push(folder);
+                    }
+                }
+            }
+            node = e.mem.u32(node + 4);
+        }
+        FacialHairFilter { own, owned }
+    }
+
+    /// Whether the list offers `part` (already found playable).
+    pub fn offers(&self, e: &Engine, part: u32) -> bool {
+        let folder = part_folder(e, part, 0);
+        match &self.own {
+            Some(own) => folder.as_ref() == Some(own),
+            None => folder.is_none_or(|folder| !self.owned.contains(&folder)),
+        }
+    }
+}
+
+/// `_Create`'s facial hair entries (id `0x1c`, the list at `+0x44`): an option, named by
+/// `00408da0` of the part's name (+0x18), for every node of the data handler's head part list
+/// (`00624700`) whose part is playable (`005e7a60`), and, with `filter` (the row), that the
+/// filter offers.
+fn add_facial_hair_options(e: &mut Engine, base: u32, filter: Option<&FacialHairFilter>) {
+    let owner: u32 = e.global(MARKER_OWNER);
+    let mut node = e.call(MARKER_LIST_HEAD_2, &args![owner]).u32();
+    while node != 0 {
+        let item_slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
+        if e.mem.u32(item_slot) == 0 {
+            break;
+        }
+        let item_slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
+        let item = e.mem.u32(item_slot);
+        if e.call(MARKER_CHECK_2, &args![item]).u8() != 0
+            && filter.is_none_or(|filter| filter.offers(e, item))
+        {
+            let item_slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
+            let item = e.mem.u32(item_slot);
+            let item_slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
+            let named = e.mem.u32(item_slot);
+            let name = e.call(MARKER_NAME, &args![named + 0x18]).u32();
+            let list = e.mem.u32(base + 0x44);
+            let option = e
+                .call(OPTION_LIST_ADD_OPTION, &args![list, name, 0x1cu32])
+                .u32();
+            e.call(OPTION_SET_DATA, &args![option, item]);
+        }
+        node = word_at_four(e, node);
+    }
+}
+
+/// The row's rebuild after a race or sex change: empties the facial hair list (`007b45b0`), adds
+/// the entries for the new race and sex, and marks the worn part's entry (`007b40d0`, with the
+/// list's check `007ad9c0`). The worn part itself is the race's first preset's by then: the
+/// change applied it (`ChooseDefaultPreset`, `00603790` empties the head part list and copies
+/// the preset's), as in the original.
+fn rebuild_facial_hair_list(e: &mut Engine, this: Ptr<RaceSexMenu>) {
+    let base = this.addr();
+    let list = e.mem.u32(base + 0x44);
+    e.call(OPTION_LIST_CLEAR, &args![list]);
+    let filter = FacialHairFilter::for_menu(e, base);
+    add_facial_hair_options(e, base, Some(&filter));
+    let list = e.mem.u32(base + 0x44);
+    e.call(OPTION_LIST_UPDATE_CURRENT_SELECTION, &args![list]);
 }
 
 /// This unit's translated functions, by exe address.
@@ -10043,5 +10297,382 @@ mod tests {
             .find(|(address, _)| *address == 0x007b_4210)
             .unwrap();
         assert_eq!(find(&mut e, &[list.addr(), 2]).u32(), second);
+    }
+
+    // The fixes preset's facial hair row.
+
+    /// The game's own head and beard paths, as FalloutNV.esm's records give them.
+    const HUMAN_HEAD: &str = "Characters\\Head\\HeadHuman.NIF";
+    const HUMAN_FEMALE_HEAD: &str = "Characters\\Head\\HeadFemale.NIF";
+    const GHOUL_HEAD: &str = "Characters\\Head\\HeadGhoul.nif";
+    const STOCK_BEARD: &str = "Characters\\Hair\\BeardGoatee.nif";
+    const STOCK_BEARD_2: &str = "Characters\\Hair\\BeardChinStrip.NIF";
+
+    /// A NUL-terminated text in memory.
+    fn text(e: &mut Engine, value: &str) -> u32 {
+        let address = e.mem.alloc(value.len() as u32 + 1);
+        for (index, byte) in value.bytes().enumerate() {
+            e.mem.set_u8(address + index as u32, byte);
+        }
+        e.mem.set_u8(address + value.len() as u32, 0);
+        address
+    }
+
+    /// A race (0x524 bytes) with these head models: head part 0 of each sex at `+0xb0 + 0xc0 *
+    /// sex` (`00613970`), the path's text pointer at the model's +4.
+    fn race_with_heads(e: &mut Engine, male: &str, female: &str) -> u32 {
+        let race = e.mem.alloc(0x524);
+        let male = text(e, male);
+        e.mem.set_u32(race + 0xb4, male);
+        let female = text(e, female);
+        e.mem.set_u32(race + 0x174, female);
+        race
+    }
+
+    /// A head part (0x50 bytes): the model path's text at +0x28 (the model at +0x24,
+    /// `005e7530`), the playable bit at +0x44, the parts it combines in the list at +0x48 (first
+    /// node inline, then nodes of `+0` part, `+4` next).
+    fn head_part(e: &mut Engine, model: Option<&str>, playable: bool, combines: &[u32]) -> u32 {
+        let part = e.mem.alloc(0x50);
+        if let Some(model) = model {
+            let model = text(e, model);
+            e.mem.set_u32(part + 0x28, model);
+        }
+        e.mem.set_u8(part + 0x44, u8::from(playable));
+        if let Some((first, rest)) = combines.split_first() {
+            e.mem.set_u32(part + 0x48, *first);
+            let next = chain(e, rest);
+            e.mem.set_u32(part + 0x4c, next);
+        }
+        part
+    }
+
+    /// Gives the menu world the data handler's races (`004ea950`) and head parts (`00624700`),
+    /// the player's race and sex, the playable test (`005e7a60`, the real one's bit) and a name
+    /// double that answers the part's name field (part + 0x18). `SetRace` changes the race the
+    /// player base form answers. Returns the word holding the race.
+    fn facial_hair_scene(e: &mut Engine, races: &[u32], parts: &[u32], race: u32, sex: u32) -> u32 {
+        let races = chain(e, races);
+        let parts = chain(e, parts);
+        e.register_double(MARKER_LIST_HEAD, move |_, _| word(races));
+        e.register_double(MARKER_LIST_HEAD_2, move |_, _| word(parts));
+        e.register(MARKER_CHECK_2, |e, a| {
+            word(u32::from(e.mem.u8(a[0] + 0x44) & 1))
+        });
+        e.register(MARKER_NAME, |_, a| word(a[0]));
+        let current = e.mem.alloc(4);
+        e.mem.set_u32(current, race);
+        e.register_double(BASE_VALUE_4AC110, move |e, _| word(e.mem.u32(current)));
+        e.register_double(GET_SEX, move |_, _| word(sex));
+        e.register_double(SET_RACE, move |e, a| {
+            e.mem.set_u32(current, a[1]);
+            Ret::default()
+        });
+        current
+    }
+
+    /// The parts added to the facial hair list (id 0x1c, list at +0x44) since the call log was
+    /// emptied, in order.
+    fn facial_hair_entries(e: &Engine, menu: Ptr<RaceSexMenu>) -> Vec<u32> {
+        let list = list_of(e, menu, 7);
+        calls(e, OPTION_LIST_ADD_OPTION)
+            .iter()
+            .filter(|call| call[0] == list && call[2] == 0x1c)
+            .map(|call| call[1] - 0x18)
+            .collect()
+    }
+
+    /// The facial hair list `_Create` builds, with the row or without.
+    fn created(e: &mut Engine, menu: Ptr<RaceSexMenu>, by_race: bool) -> Vec<u32> {
+        e.call_log = Some(vec![]);
+        if by_race {
+            race_sex_menu_create_contents_facial_hair_by_race(e, menu, 0);
+        } else {
+            race_sex_menu_create_contents(e, menu, 0);
+        }
+        facial_hair_entries(e, menu)
+    }
+
+    #[test]
+    fn a_model_path_names_its_folder_of_characters() {
+        let folder = |path: &str| character_folder(path.as_bytes()).map(|f| String::from_utf8(f).unwrap());
+        // The game's own folders belong to no race.
+        for path in [
+            HUMAN_HEAD,
+            GHOUL_HEAD,
+            STOCK_BEARD,
+            "Characters\\_Male\\UpperBodyHumanMale.nif",
+            "characters/hair/mymod/beard.nif",
+        ] {
+            assert_eq!(folder(path), None, "{path}");
+        }
+        assert_eq!(folder("Characters\\AlexsCan\\Head.nif"), Some("alexscan".into()));
+        assert_eq!(
+            folder("characters/alexscan/facialhair/beardfull.nif"),
+            Some("alexscan".into())
+        );
+        assert_eq!(folder("Meshes\\Characters\\AlexsCan\\Head.nif"), Some("alexscan".into()));
+        assert_eq!(folder("\\characters\\\\AlexsCan\\head.nif"), Some("alexscan".into()));
+        // Outside characters, a file directly in it, nothing.
+        assert_eq!(folder("Creatures\\AlexsCan\\Head.nif"), None);
+        assert_eq!(folder("Characters\\Head.nif"), None);
+        assert_eq!(folder("AlexsCan\\Characters\\X\\Head.nif"), None);
+        assert_eq!(folder(""), None);
+    }
+
+    /// The game's own data: every race's head and every part in the game's folders. The row's list
+    /// is the original's, entry for entry, for each race and sex.
+    #[test]
+    fn the_games_own_data_keeps_the_original_list() {
+        let (mut e, menu) = world();
+        let human = race_with_heads(&mut e, HUMAN_HEAD, HUMAN_FEMALE_HEAD);
+        let ghoul = race_with_heads(&mut e, GHOUL_HEAD, "Characters\\Head\\HeadGhoulFemale.nif");
+        let goatee = head_part(&mut e, Some(STOCK_BEARD), true, &[]);
+        let strip = head_part(&mut e, Some(STOCK_BEARD_2), true, &[]);
+        let eyebrow = head_part(&mut e, Some("Characters\\Hair\\EyebrowM.NIF"), false, &[]);
+        let mix = head_part(&mut e, None, true, &[goatee, strip]);
+        let parts = [goatee, eyebrow, mix, strip];
+        for (race, sex) in [(human, 0), (human, 1), (ghoul, 0), (ghoul, 1)] {
+            facial_hair_scene(&mut e, &[human, ghoul], &parts, race, sex);
+            let original = created(&mut e, menu, false);
+            assert_eq!(original, vec![goatee, mix, strip]);
+            assert_eq!(created(&mut e, menu, true), original);
+        }
+    }
+
+    /// The modded race and parts: its own folder, another race's folder, a beard plugin's folder
+    /// no race owns, and the game's beards.
+    struct ModdedParts {
+        human: u32,
+        alex: u32,
+        other: u32,
+        stock: u32,
+        alex_beard: u32,
+        alex_mix: u32,
+        other_beard: u32,
+        plugin_beard: u32,
+        alex_npc_only: u32,
+        stock_mix: u32,
+    }
+
+    fn modded(e: &mut Engine) -> ModdedParts {
+        let human = race_with_heads(e, HUMAN_HEAD, HUMAN_FEMALE_HEAD);
+        let alex = race_with_heads(
+            e,
+            "Characters\\AlexsCan\\Head.nif",
+            "Characters\\AlexsCan\\HeadFemale.nif",
+        );
+        let other = race_with_heads(e, "characters/otherrace/head.nif", HUMAN_FEMALE_HEAD);
+        let stock = head_part(e, Some(STOCK_BEARD), true, &[]);
+        let alex_beard = head_part(
+            e,
+            Some("characters\\alexscan\\facialhair\\beardfull.nif"),
+            true,
+            &[],
+        );
+        let alex_stubble = head_part(e, Some("Characters\\AlexsCan\\Stubble.nif"), false, &[]);
+        let alex_mix = head_part(e, None, true, &[alex_beard, alex_stubble]);
+        let other_beard = head_part(e, Some("Characters\\OtherRace\\Beard.nif"), true, &[]);
+        let plugin_beard = head_part(e, Some("Characters\\MyBeards\\Beard.nif"), true, &[]);
+        let alex_npc_only = head_part(e, Some("Characters\\AlexsCan\\Scar.nif"), false, &[]);
+        let stock_2 = head_part(e, Some(STOCK_BEARD_2), false, &[]);
+        let stock_mix = head_part(e, None, true, &[stock, stock_2]);
+        ModdedParts {
+            human,
+            alex,
+            other,
+            stock,
+            alex_beard,
+            alex_mix,
+            other_beard,
+            plugin_beard,
+            alex_npc_only,
+            stock_mix,
+        }
+    }
+
+    impl ModdedParts {
+        fn races(&self) -> [u32; 3] {
+            [self.human, self.alex, self.other]
+        }
+
+        fn parts(&self) -> [u32; 7] {
+            [
+                self.stock,
+                self.alex_beard,
+                self.alex_mix,
+                self.other_beard,
+                self.plugin_beard,
+                self.alex_npc_only,
+                self.stock_mix,
+            ]
+        }
+
+        /// Every playable part: the original's list for any race.
+        fn playable(&self) -> Vec<u32> {
+            vec![
+                self.stock,
+                self.alex_beard,
+                self.alex_mix,
+                self.other_beard,
+                self.plugin_beard,
+                self.stock_mix,
+            ]
+        }
+    }
+
+    #[test]
+    fn a_race_with_its_own_folder_is_offered_only_its_parts() {
+        let (mut e, menu) = world();
+        let m = modded(&mut e);
+        for sex in [0, 1] {
+            facial_hair_scene(&mut e, &m.races(), &m.parts(), m.alex, sex);
+            assert_eq!(created(&mut e, menu, true), vec![m.alex_beard, m.alex_mix]);
+            assert_eq!(created(&mut e, menu, false), m.playable());
+        }
+        facial_hair_scene(&mut e, &m.races(), &m.parts(), m.other, 0);
+        assert_eq!(created(&mut e, menu, true), vec![m.other_beard]);
+    }
+
+    #[test]
+    fn a_game_race_no_longer_sees_another_races_parts() {
+        let (mut e, menu) = world();
+        let m = modded(&mut e);
+        facial_hair_scene(&mut e, &m.races(), &m.parts(), m.human, 0);
+        // The game's parts and the plugin's beards in a folder no race owns stay.
+        assert_eq!(
+            created(&mut e, menu, true),
+            vec![m.stock, m.plugin_beard, m.stock_mix]
+        );
+        // Without the row, every playable part, as the original.
+        assert_eq!(created(&mut e, menu, false), m.playable());
+        // The other race's head is its male one only: its female head is the game's, so its
+        // female characters own the folder through the male head.
+        facial_hair_scene(&mut e, &m.races(), &m.parts(), m.other, 1);
+        assert_eq!(created(&mut e, menu, true), vec![m.other_beard]);
+    }
+
+    #[test]
+    fn a_part_with_no_model_follows_the_parts_it_combines() {
+        let mut e = engine();
+        let m = modded(&mut e);
+        let folder = |e: &Engine, part| part_folder(e, part, 0).map(|f| String::from_utf8(f).unwrap());
+        assert_eq!(folder(&e, m.alex_mix), Some("alexscan".into()));
+        assert_eq!(folder(&e, m.stock_mix), None);
+        // Mixed folders, no parts, an empty path: no folder.
+        let across = head_part(&mut e, None, true, &[m.alex_beard, m.other_beard]);
+        assert_eq!(folder(&e, across), None);
+        let with_stock = head_part(&mut e, None, true, &[m.alex_beard, m.stock]);
+        assert_eq!(folder(&e, with_stock), None);
+        let empty = head_part(&mut e, None, true, &[]);
+        assert_eq!(folder(&e, empty), None);
+        let blank = head_part(&mut e, Some(""), true, &[m.alex_beard]);
+        assert_eq!(folder(&e, blank), Some("alexscan".into()));
+        // A mix of mixes, and a loop.
+        let mix_of_mixes = head_part(&mut e, None, true, &[m.alex_mix, m.alex_beard]);
+        assert_eq!(folder(&e, mix_of_mixes), Some("alexscan".into()));
+        let looped = head_part(&mut e, None, true, &[]);
+        e.mem.set_u32(looped + 0x48, looped);
+        assert_eq!(folder(&e, looped), None);
+        // The list follows it: a stock race gets the mixed one, the race its own mix only.
+        let (mut e, menu) = world();
+        let m = modded(&mut e);
+        let across = head_part(&mut e, None, true, &[m.alex_beard, m.stock]);
+        let parts = [m.alex_mix, across];
+        facial_hair_scene(&mut e, &m.races(), &parts, m.alex, 0);
+        assert_eq!(created(&mut e, menu, true), vec![m.alex_mix]);
+        facial_hair_scene(&mut e, &m.races(), &parts, m.human, 0);
+        assert_eq!(created(&mut e, menu, true), vec![across]);
+    }
+
+    /// A race whose two heads lie in two folders of their own: each sex gets its folder's parts.
+    #[test]
+    fn the_female_head_chooses_the_folder_for_female_characters() {
+        let (mut e, menu) = world();
+        let human = race_with_heads(&mut e, HUMAN_HEAD, HUMAN_FEMALE_HEAD);
+        let split = race_with_heads(
+            &mut e,
+            "Characters\\SplitM\\Head.nif",
+            "Characters\\SplitF\\Head.nif",
+        );
+        let male = head_part(&mut e, Some("Characters\\SplitM\\Beard.nif"), true, &[]);
+        let female = head_part(&mut e, Some("Characters\\SplitF\\Brows.nif"), true, &[]);
+        let stock = head_part(&mut e, Some(STOCK_BEARD), true, &[]);
+        let parts = [male, female, stock];
+        facial_hair_scene(&mut e, &[human, split], &parts, split, 1);
+        assert_eq!(created(&mut e, menu, true), vec![female]);
+        facial_hair_scene(&mut e, &[human, split], &parts, split, 0);
+        assert_eq!(created(&mut e, menu, true), vec![male]);
+        facial_hair_scene(&mut e, &[human, split], &parts, human, 1);
+        assert_eq!(created(&mut e, menu, true), vec![stock]);
+    }
+
+    #[test]
+    fn a_part_that_is_not_playable_is_never_offered() {
+        let (mut e, menu) = world();
+        let m = modded(&mut e);
+        facial_hair_scene(&mut e, &m.races(), &m.parts(), m.alex, 0);
+        for by_race in [false, true] {
+            assert!(!created(&mut e, menu, by_race).contains(&m.alex_npc_only));
+        }
+        // The filter alone would offer it: the playable test decides first.
+        let filter = FacialHairFilter::for_menu(&mut e, menu.addr());
+        assert!(filter.offers(&e, m.alex_npc_only));
+    }
+
+    /// A click on another race (or sex) builds the facial hair list again with the row, for the
+    /// race the click chose; the original leaves the list as `_Create` built it.
+    #[test]
+    fn a_race_change_builds_the_list_again() {
+        for by_race in [false, true] {
+            let (mut e, menu) = world();
+            e.set_global(SELECTED_VALUE, 2.0f64);
+            let m = modded(&mut e);
+            let current = facial_hair_scene(&mut e, &m.races(), &m.parts(), m.human, 0);
+            let option = make_option(&mut e, 0x55, 0x17, m.alex);
+            option_for_every_tile(&mut e, option);
+            e.call_log = Some(vec![]);
+            if by_race {
+                race_sex_menu_do_click_facial_hair_by_race(&mut e, menu, 1, 0x55);
+            } else {
+                race_sex_menu_do_click(&mut e, menu, 1, 0x55);
+            }
+            assert_eq!(e.mem.u32(current), m.alex);
+            let list = list_of(&e, menu, 7);
+            let cleared = calls(&e, OPTION_LIST_CLEAR).contains(&vec![list]);
+            let selected = calls(&e, OPTION_LIST_UPDATE_CURRENT_SELECTION).contains(&vec![list]);
+            if by_race {
+                assert!(cleared && selected);
+                assert_eq!(facial_hair_entries(&e, menu), vec![m.alex_beard, m.alex_mix]);
+                // Emptied before the new entries, marked after them.
+                let log = e.call_log.as_ref().unwrap();
+                let at = |addr: u32| log.iter().position(|(a, w)| *a == addr && w[0] == list);
+                assert!(at(OPTION_LIST_CLEAR) < at(OPTION_LIST_ADD_OPTION));
+                assert!(at(OPTION_LIST_ADD_OPTION) < at(OPTION_LIST_UPDATE_CURRENT_SELECTION));
+            } else {
+                assert!(!cleared && !selected);
+                assert!(facial_hair_entries(&e, menu).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn a_sex_change_builds_the_list_again() {
+        let (mut e, menu) = world();
+        e.set_global(SELECTED_VALUE, 2.0f64);
+        let m = modded(&mut e);
+        facial_hair_scene(&mut e, &m.races(), &m.parts(), m.alex, 1);
+        let option = make_option(&mut e, 0x55, 0x16, 0);
+        option_for_every_tile(&mut e, option);
+        e.call_log = Some(vec![]);
+        race_sex_menu_do_click_facial_hair_by_race(&mut e, menu, 1, 0x55);
+        assert_eq!(facial_hair_entries(&e, menu), vec![m.alex_beard, m.alex_mix]);
+        // A click that changes neither (an option that opens list 4) leaves the list.
+        let opens = make_option(&mut e, 0x55, 4, 0);
+        option_for_every_tile(&mut e, opens);
+        e.call_log = Some(vec![]);
+        race_sex_menu_do_click_facial_hair_by_race(&mut e, menu, 1, 0x55);
+        assert!(facial_hair_entries(&e, menu).is_empty());
+        assert!(!calls(&e, OPTION_LIST_CLEAR).contains(&vec![list_of(&e, menu, 7)]));
     }
 }

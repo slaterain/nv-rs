@@ -162,6 +162,7 @@ Each also has a `[nv-rs Fixes]` key in `Fallout.ini` (`bUncap` ... `bNVSEListGua
 | `NV_VATS_LAG` | V.A.T.S. waits only for the camera | `host/fixes.rs` |
 | `NV_ACTOR_CAUSE` | Causes keep no witness lists | `host/fixes.rs` |
 | `NV_RADIO_LENGTHS` | Radio song lengths | `host/fixes.rs` |
+| `NV_FACIAL_HAIR_RACE` | Facial hair by race folder | `host/fixes.rs` |
 | `NV_STRIP_LOD_WATER` | No distant water under the Strip (patch data) | `host/patch_data.rs` |
 | `NV_DIRECT_FILES` | Direct file access | `host/direct_files.rs` |
 | `NV_COSAVE_KEEP` | Co-save keeps other plugins | `host/fixes.rs` (flag read by `nvse`) |

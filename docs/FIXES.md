@@ -117,6 +117,7 @@ The game's own `iFPSClamp` ignores `FrameLimit`: a clamp is a fixed step with no
 | V.A.T.S. waits only for the camera | `007f3e00` | `NV_VATS_LAG` | V.A.T.S. measures a target's body parts one by one as the camera turns to it; the parts it has not measured get the average of the measured ones only after a fixed timer: 2000 ms since the scan began (`007f4058`). With the row they also get it as soon as the camera's heading is reached (the menu's `bHeadingReached`), once at least one part is measured, so the chances show when the camera arrives instead of up to 2 seconds later. The measured parts keep their own chances; a part on screen that the scan has not measured yet when the heading is reached (the camera arrived within a few frames) gets the measured parts' average instead of the chance the original would measure for it in the following frames. lStewieAl's VATS Lag Fix, except that it does not end the wait before a part is measured (its average would be 0/0: no chance at all on the other parts). Below |
 | Causes keep no witness lists | `0066e010`, `0066e440` | `NV_ACTOR_CAUSE` | An actor's projectile or explosion carries a cause (`ActorCause`), which copied the actor's whole detection list when it was made; every saved cause wrote all of it (one 42-byte record per actor detected), so saves grew with the shots fired in company. With the row the cause copies nothing (its constructor no longer asks the actor's process for the copy) and a save's records are read and dropped, so they are not written again. Nothing in the game reads the list but the cause's own functions (freeing it, removing an actor from it, saving and loading it), and a cause made for an actor without a full process never had one. Saves stay readable both ways. lStewieAl's ActorCause Save Bloat Fix. Below |
 | Radio song lengths | `008300c0`, `00830b30` | `NV_RADIO_LENGTHS` | Two bugs of the music and radio channels, from Psycho. A file opened on a channel left that channel's last duration in place until the new file's thread ran, and a radio station asks for the new song's duration at once and keeps a positive answer: a song opened while the channel's last song still faded out (a quick change of station) got that song's length, so it was cut short or followed by silence. With the row the duration is cleared when the file opens, and a channel's thread writes its file's duration only while the channel is still that file's (the fading thread wrote its length back once more before it noticed the new song). And the music thread brings the time since a station's start into the song's length by taking the length off while it is longer: a length of 0 never ends that loop, and the music thread spins for good (silence, one core busy). With the row a length of 0 skips that seek, and the rest gets the loop's own answer in one step. Below |
+| Facial hair by race folder | `007acb60`, `007adce0` | `NV_FACIAL_HAIR_RACE` | The character menu (character creation, the barber, the plastic surgeon) offers every playable head part in its facial hair list to every race: the game has no way to say a part is for one race only, so a plugin's race with its own refitted beards shows them on every other race's head too, and the game's beards on its own. With the row a race whose head model lies in a folder of `meshes\characters\` of its own (not the game's `head`, `hair` or `_male`) is offered only the parts whose models lie in that folder, and every other race is offered every part except those. A part with no model of its own (the game's `BeardMix` parts, made of other parts) goes with the parts it combines. The list is built again when the race or sex changes in the menu, which the original never does. Nothing is needed in the plugin. For the game's own data the list is the original's. In the original game the plugin's parts still appear for every race. Below |
 | No distant water under the Strip | `00583560` | `NV_STRIP_LOD_WATER` | Patch data (below): The Strip's world space (`TheStripWorldNew`) gets the "No LOD Water" flag as it loads. Its distant water lies under the Strip's ground and is never seen, but the game makes it and turns its water system on for it. YUP, UPNVSE Plus and Tale of Two Wastelands 3.3.3b set the same flag; Aqua Performa's author reported about 20 frames a second on the Strip from it (not measured in nv-rs). Below |
 | Direct file access | `00aa14d0`, `00aa15f0`, `00aa16d0`, `00aa85c0`, `00aa8610`, `00aa8660`, `00aa7eb0`, `00aa81d0`, `00ec9907`, `00aff300`, `00b004e0`, `00afb2a0`, `00afa550`, `00afa750`, `00afb190`, `00afac20`, `00afac90`, `00afad00`, `0043c3b0`, `00c3d0e0`, `00c3d440` | `NV_DIRECT_FILES` | The game's files are opened, read and written by the thread that asks, as Mod Limit Fix 7 and Cell Offset Generator have them: no IO thread that every read waits for, no limit of 512 open files (about 140 plugins), and files and archives up to 4 GB: seeks and sizes past 2 GB, and an archive's files stored past 2 GB found and read, as with JohnnyGuitar NVSE (the original stops at 2 GB, where TTW's and VNV's generated LOD archives go on). Below |
 
@@ -679,6 +680,50 @@ thread publishes its own 20 s), `bring_into_length_is_the_loops_answer` (against
 `the_bounded_sync_plays_as_the_original_within_the_length` (the same calls as the original's thread
 proc on the play test) and `the_bounded_sync_skips_the_seek_without_a_length` (a length of 0 ends the
 run with no seek, where the original's never ends).
+
+### Facial hair by race folder
+
+Asked for by the maintainer for a plugin that adds a playable race with its own refitted beards.
+
+**What the original does.** The character menu (`RaceSexMenu`) builds its facial hair list once, in
+`_Create` (`007acb60`): an entry for every head part in the data handler's list whose playable bit is set
+(`005e7a60` tests only that bit). Nothing in a head part names a race, so every race is offered every
+playable part, and a plugin cannot change that. A change of race or sex in the menu (`DoClick`,
+`007adce0`) applies the race's first face preset (`ChooseDefaultPreset`; `00603790` empties the player's
+head parts and copies the preset's) and marks the hair and eye lists to be built again (`007b1ca0`), but
+never the facial hair list. The list has no "none" entry: clicking the worn part again takes it off.
+
+**What the row does.** A race owns a head folder when its head model (head part 0 of the race, for the
+chosen sex, else the other sex's) lies in a folder of `meshes\characters\` that is not one of the game's
+own: `characters\head\` (every race's head in FalloutNV.esm, its DLCs and the add-on packs),
+`characters\hair\` (every head part and hair) and `characters\_male\` (the bodies). For example a head
+at `Characters\AlexsCan\Head.nif` owns `alexscan`. A head part belongs to that folder when its model lies
+in it (`characters\alexscan\facialhair\beardfull.nif`); a part with no model of its own (the game's
+`BeardMix` parts, made of the parts their `HNAM` chunks name) belongs to the folder of the parts it
+combines when all of them belong to the same one. Paths compare without case and with either slash, and
+a leading `meshes\` is allowed. Then:
+
+- a race that owns a folder is offered only the playable parts of that folder;
+- every other race is offered every playable part except those of a folder some race owns (any race of
+  the data handler's list, by either head). A beard plugin's own folder that no race owns stays for
+  everyone.
+
+`_Create` builds the list so (`race_sex_menu_create_contents_facial_hair_by_race`), and a click that
+changes the race or sex builds it again for the new choice (`race_sex_menu_do_click_facial_hair_by_race`:
+the list emptied with `007b45b0`, the entries added, the worn part marked with `007b40d0`). The worn part
+is by then the new race's preset's, as in the original. `Create` (`007ac730`) calls `_Create` by address
+now, so the row applies there.
+
+For the game's own data no race and no part lies outside the game's folders, and the list is the
+original's, entry for entry. In the original game a plugin's parts still appear for every race: this is
+an nv-rs fix, not something the plugin can do there.
+
+Tested in `racesexmenu.rs`: `the_games_own_data_keeps_the_original_list` (each race and sex, row on and
+off, the same entries), `a_race_with_its_own_folder_is_offered_only_its_parts`,
+`a_game_race_no_longer_sees_another_races_parts` (and still sees them without the row),
+`a_part_with_no_model_follows_the_parts_it_combines`, `the_female_head_chooses_the_folder_for_female_characters`,
+`a_part_that_is_not_playable_is_never_offered`, `a_race_change_builds_the_list_again`,
+`a_sex_change_builds_the_list_again` and `a_model_path_names_its_folder_of_characters`.
 
 ### Patch data
 
