@@ -48,6 +48,69 @@ pub fn str_begins_ci(left: &[u8], right: &[u8]) -> u8 {
     }
 }
 
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: StrCompareCS.
+/// [`str_compare_ci`] with case: the first byte that differs, compared as signed bytes.
+pub fn str_compare_cs(left: &[u8], right: &[u8]) -> (i8, usize) {
+    let mut i = 0;
+    loop {
+        let (l, r) = (at(left, i), at(right, i));
+        if l != r {
+            return (if l as i8 > r as i8 { 1 } else { -1 }, i);
+        }
+        if l == 0 {
+            return (0, i);
+        }
+        i += 1;
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: StrBeginsCS.
+/// [`str_begins_ci`] with case: 2 when equal, 1 when `left` goes on past `right`, else 0.
+pub fn str_begins_cs(left: &[u8], right: &[u8]) -> u8 {
+    match str_compare_cs(left, right) {
+        (0, _) => 2,
+        (c, _) if c < 0 => 0,
+        (_, i) => u8::from(at(right, i) == 0),
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: StrToCase (to lower case,
+// `StrToLower`).
+/// A text in lower case as JIP makes it: `A`-`Z` and 0xC1-0xDA get bit 5 set ([`fold`]'s range,
+/// in which bit 5 is clear); every other byte stays.
+pub fn str_to_lower(text: &mut [u8]) {
+    for b in text {
+        *b = fold(*b);
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: StrToInt.
+/// A decimal integer at the start of `text`: an optional minus sign, then digits up to the
+/// first other byte; when a digit makes the value fall (signed) below the one before, the answer
+/// is `i32::MAX`, or `i32::MIN` with the sign.
+pub fn str_to_int(text: &[u8]) -> i32 {
+    let negative = at(text, 0) == b'-';
+    let mut i = usize::from(negative);
+    let (mut value, mut last) = (0i32, 0i32);
+    loop {
+        let digit = at(text, i).wrapping_sub(b'0');
+        if digit > 9 {
+            break;
+        }
+        value = value.wrapping_mul(10).wrapping_add(i32::from(digit));
+        if value < last {
+            return (0x7fff_ffff_u32 + u32::from(negative)) as i32;
+        }
+        last = value;
+        i += 1;
+    }
+    if negative {
+        value.wrapping_neg()
+    } else {
+        value
+    }
+}
+
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: IntToStr.
 /// A signed integer in decimal: a minus sign, then the digits of its magnitude (`-2147483648` too).
 pub fn int_to_str(num: i32) -> Vec<u8> {

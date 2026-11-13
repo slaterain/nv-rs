@@ -23,6 +23,9 @@
 //! - [`console`], [`utility`]: JIP's console echo of a command's result and the text helpers it
 //!   uses.
 //! - [`commands`]: JIP's script commands built so far (step 3.6), one module per JIP source file.
+//! - [`ui_hooks`]: JIP's UI hooks at their seams (step 3.5a: menu open, close, mouseover and
+//!   click events, location and crafting events, and the hooks behind its interface commands) and
+//!   the twelve commands that set the events.
 //!
 //! [`install`] runs once per engine, after `nvse::install` (JIP is xNVSE's plugin): in
 //! `host::Host::start_with`, never in the engine crates' own tests.
@@ -45,6 +48,7 @@ mod saveload_tests;
 pub mod table;
 #[cfg(test)]
 mod test_support;
+pub mod ui_hooks;
 pub mod utility;
 
 use engine_core::prelude::*;
@@ -82,6 +86,8 @@ pub struct Jip {
     pub main_loop: main_loop::State,
     /// JIP's LN events.
     pub ln_events: ln_events::State,
+    /// JIP's UI hooks and their events.
+    pub ui_hooks: ui_hooks::State,
 }
 
 /// JIP as xNVSE knows it once loaded (`NVSEPlugin_Query`, `NVSEPlugin_Load`): its DLL, name,
@@ -129,6 +135,7 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
     input::install(e, answers_installed);
     ln_events::install(e, answers_installed);
     main_loop::install(e);
+    ui_hooks::install(e, answers_installed);
     nvse::plugins::register(e, plugin(answers_installed));
     // `MainGameLoop` only once JIP answers "installed": until then a frame does no JIP work.
     if answers_installed {

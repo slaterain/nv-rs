@@ -229,7 +229,15 @@ pub fn tile_menu_post_parse(
         let menu = e.get(this, TileMenu::pMenu);
         let id = menu_id(e, menu);
         if (FIRST_MENU_ID..=LAST_MENU_ID).contains(&id) {
-            e.mem.set_u8(MENU_ID_BYTES.wrapping_add(id as u32), shown);
+            // The seam at the byte's store (`0xA1F2F9`, ADR-0016): JIP LN NVSE's MenuState hook,
+            // which stores the byte itself and runs the menu's open or close events when it
+            // changes. While the hook has no user: one load, then the exe's store.
+            if e.hook_users(engine_core::extend::Hook::MenuState) == 0
+                || e.site(0x00a1_f2f9, &[id as u32, u32::from(shown)])
+                    .is_none()
+            {
+                e.mem.set_u8(MENU_ID_BYTES.wrapping_add(id as u32), shown);
+            }
         }
     }
     Ptr::NULL
@@ -527,6 +535,38 @@ mod tests {
         e.call(0x00a1_f160, &args![this, 0xfa3u32, 1.0f32, 0u32]);
         assert!(calls_to(&e, MENU_GET_ID).is_empty());
         assert!(calls_to(&e, MENU_USER_TRAIT).is_empty());
+    }
+
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// A handler at the seam that records its words and stores nothing (answers it did).
+    fn seam_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0)
+    }
+
+    /// The seam at the shown byte (`0xA1F2F9`, JIP LN NVSE's MenuState hook): with a handler
+    /// there and no user of the hook, the handler is not asked and the byte is stored as the exe
+    /// stores it; with a user, it is asked with the id and the value, and its answer leaves the
+    /// store to it.
+    #[test]
+    fn tile_menu_post_parse_menu_state_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = post_parse_engine(0.0);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x00a1_f2f9), seam_handler);
+        let menu = menu(&mut e, 0x43c);
+        let this = e.new_object::<TileMenu>();
+        e.set(this, TileMenu::pMenu, menu);
+        let byte = 0x011f_308f + 0x43c;
+        e.call(0x00a1_f160, &args![this, 0xfa3u32, 1.0f32, 0u32]);
+        assert_eq!(e.mem.u8(byte), 1);
+        assert!(SEEN.with(|s| s.borrow().is_empty()), "no user: not asked");
+        e.add_hook_user(Hook::MenuState, true);
+        e.call(0x00a1_f160, &args![this, 0xfa3u32, 0.0f32, 0u32]);
+        assert_eq!(e.mem.u8(byte), 1, "the handler stores it");
+        assert_eq!(SEEN.with(|s| s.take()), vec![vec![0x43c, 0]]);
     }
 }
 

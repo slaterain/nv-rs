@@ -7899,7 +7899,18 @@ pub fn map_menu_add_companion_markers(e: &mut Engine, this: Ptr<MapMenu>) {
     remove_map_children(e, this, 0x25);
     remove_map_children(e, this, 0x26);
     let player = e.mem.u32(PLAYER_011DEA3C);
-    let mut node = e.call(PLAYER_COMPANIONS_005EB7E0, &args![player]).u32();
+    // The seam at the companions' call (`0x79EBA1`, ADR-0016): JIP LN NVSE's CreateMapMarkers
+    // hook answers its own list of references with map markers instead. While the hook has no
+    // user: one load, then the exe's call.
+    let jip_list = if e.hook_users(engine_core::extend::Hook::CreateMapMarkers) != 0 {
+        e.site(0x0079_eba1, &[player])
+    } else {
+        None
+    };
+    let mut node = match jip_list {
+        Some(list) => list,
+        None => e.call(PLAYER_COMPANIONS_005EB7E0, &args![player]).u32(),
+    };
     while node != 0 {
         let companion = node_item(e, node);
         e.with_stack(0x38, |e, path| {
@@ -13810,6 +13821,54 @@ mod n056_tests {
             1
         ]));
         let _ = companion;
+    }
+
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Answers an empty list of its own (JIP's list with nothing in it).
+    fn seam_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0)
+    }
+
+    /// The seam at the companions' call (`0x79EBA1`, JIP LN NVSE's CreateMapMarkers hook): with
+    /// a handler there and no user of the hook, the handler is not asked and the companions are
+    /// the player's (a marker built); with a user, it is asked with the player, and its list
+    /// (empty here) replaces them: the player's are not asked for, nothing is built.
+    #[test]
+    fn add_companion_markers_seam_waits_for_a_user() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        for users in [0, 1] {
+            let mut e = engine();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0079_eba1), seam_handler);
+            if users == 1 {
+                e.add_hook_user(Hook::CreateMapMarkers, true);
+            }
+            let menu = menu_with_rectangle(&mut e);
+            e.set(menu, MapMenu::pMapTile, 0x104);
+            e.set(menu, MapMenu::iCurrentPage, 0x20);
+            companion_setup(&mut e);
+            returns(&mut e, MENU_RENDER_TEMPLATE, 0x700);
+            let label = with_vtable(&mut e, 0x40, &[(4, 0x0010_0004)]);
+            returns(&mut e, TILE_BUILD_TILE, label);
+            e.register(0x0010_0004, |_, _| Ret::default());
+            returns(&mut e, STATION_NAME_0055D520, 0x6000);
+            e.call_log = Some(vec![]);
+            e.call(0x0079_ea30, &args![menu]);
+            let player = e.mem.u32(PLAYER_011DEA3C);
+            let seen = SEEN.with(|s| s.take());
+            if users == 0 {
+                assert!(seen.is_empty(), "no user: not asked");
+                assert_eq!(calls_to(&e, PLAYER_COMPANIONS_005EB7E0), vec![vec![player]]);
+                assert_eq!(calls_to(&e, TILE_BUILD_TILE), vec![vec![0x387]]);
+            } else {
+                assert_eq!(seen, vec![vec![player]]);
+                assert!(calls_to(&e, PLAYER_COMPANIONS_005EB7E0).is_empty());
+                assert!(calls_to(&e, TILE_BUILD_TILE).is_empty());
+            }
+        }
     }
 
     #[test]

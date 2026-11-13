@@ -405,6 +405,15 @@ pub fn tutorial_menu_set_title_and_text(e: &mut Engine, this: Ptr<TutorialMenu>,
 /// page; a missing start message prints a warning and deletes the menu.
 // Translation incomplete: 007e8890 - the C++ exception-unwinding frame (FS:[0]) that destroys the temporary string is not translated
 pub fn tutorial_menu_create(e: &mut Engine, mut start_message: u32, with_buttons: bool) -> bool {
+    // The seam at the start (`0x7E88B6`, ADR-0016): JIP LN NVSE's MessageDisabled hook answers
+    // true without a menu for a start message a script disabled. While the hook has no user:
+    // one load.
+    if e.hook_users(engine_core::extend::Hook::MessageDisabled) != 0
+        && start_message != 0
+        && e.site(0x007e_88b6, &[start_message]).is_some()
+    {
+        return true;
+    }
     let class = e.call(MENU_CLASS, &args![]).u32();
     let old = e.call(TILE_GET_MENU_BY_CLASS, &args![class]).u32();
     if old != 0 {
@@ -1142,6 +1151,44 @@ mod tests {
             calls(e, MENU_SET_MENU_TILE),
             vec![vec![menu.addr(), ROOT, 0]]
         );
+    }
+
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Answers that the message is disabled.
+    fn seam_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(1)
+    }
+
+    /// The seam at the start (`0x7E88B6`, JIP LN NVSE's MessageDisabled hook): with a handler
+    /// there and no user of the hook, the handler is not asked and the menu is made; with a user,
+    /// it is asked with the start message (not for none), and its answer is true with no menu.
+    #[test]
+    fn create_message_disabled_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        for users in [0, 1] {
+            let mut w = world(3);
+            w.e.on_site(SiteSlot::new(Owner::Jip, 0x007e_88b6), seam_handler);
+            if users == 1 {
+                w.e.add_hook_user(Hook::MessageDisabled, true);
+            }
+            let start = w.items[1];
+            assert!(w.e.call(0x007e_8890, &args![start, true]).bool());
+            let seen = SEEN.with(|s| s.take());
+            if users == 0 {
+                assert!(seen.is_empty(), "no user: not asked");
+                assert_eq!(calls(&w.e, TILE_READER), vec![vec![0x5000]]);
+            } else {
+                assert_eq!(seen, vec![vec![start]]);
+                assert!(calls(&w.e, TILE_READER).is_empty(), "no menu");
+                // No start message: not asked.
+                w.e.call(0x007e_8890, &args![0u32, true]);
+                assert!(SEEN.with(|s| s.take()).is_empty());
+            }
+        }
     }
 
     #[test]
