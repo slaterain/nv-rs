@@ -203,12 +203,17 @@ layout! {
         /// `data.isTrait` (JIP LN NVSE): the perk loader `005EADA0` reads `DATA`'s
         /// five bytes from +0x38 (trait, minimum level, ranks, playable, hidden).
         0x38 isTrait: u8,
+        /// `data.minLevel` (JIP LN NVSE).
+        0x39 minLevel: u8,
         /// `data.cNumRanks` (Xbox PDB).
         0x3A cNumRanks: u8,
         /// `data.isPlayable` (JIP LN NVSE).
         0x3B isPlayable: u8,
         /// `data.isHidden` (JIP LN NVSE).
         0x3C isHidden: u8,
+        /// `entries` (JIP LN NVSE): a `tList<BGSPerkEntry>`, its first node inline (the perk loader
+        /// adds entries through `005EB410`, which works on +0x48).
+        0x48 entries: Inline<ListNode>,
     }
 }
 

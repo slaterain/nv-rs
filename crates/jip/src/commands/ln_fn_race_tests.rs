@@ -110,12 +110,12 @@ fn another_form_type_is_left_alone() {
     for off in [0x4fc, 0x500, 0x504, 0x508] {
         e.mem.set_u32(MISC + off, OLD);
     }
-    let before = e.mem.bytes(MISC, 0x510);
+    let before = e.mem.bytes(MISC, 0x524);
     for get in [0x2286, 0x2288] {
         call(&mut e, get, &[r(5), n(0)]);
         assert_eq!(form_result(&e), 0, "{get:04x}");
     }
     call(&mut e, 0x2287, &[r(5), n(0), r(3)]);
     call(&mut e, 0x2289, &[r(5), n(0), r(1)]);
-    assert_eq!(e.mem.bytes(MISC, 0x510), before);
+    assert_eq!(e.mem.bytes(MISC, 0x524), before);
 }

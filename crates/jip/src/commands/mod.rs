@@ -29,11 +29,14 @@ pub mod jip_fn_package;
 pub mod jip_fn_perk;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_water;
+pub mod jip_fn_weapon;
 pub mod jip_fn_weather;
 pub mod jip_fn_worldspace;
+pub mod ln_fn_activator;
 pub mod ln_fn_casino;
 pub mod ln_fn_challenge;
 pub mod ln_fn_map_marker;
+pub mod ln_fn_perk;
 pub mod ln_fn_race;
 pub mod ln_fn_weapon;
 
@@ -70,11 +73,14 @@ pub const ALL: &[Handlers] = &[
     jip_fn_perk::COMMANDS,
     jip_fn_texture_set::COMMANDS,
     jip_fn_water::COMMANDS,
+    jip_fn_weapon::COMMANDS,
     jip_fn_weather::COMMANDS,
     jip_fn_worldspace::COMMANDS,
+    ln_fn_activator::COMMANDS,
     ln_fn_casino::COMMANDS,
     ln_fn_challenge::COMMANDS,
     ln_fn_map_marker::COMMANDS,
+    ln_fn_perk::COMMANDS,
     ln_fn_race::COMMANDS,
     ln_fn_weapon::COMMANDS,
 ];
@@ -133,6 +139,14 @@ fn component(e: &Engine, form: u32, which: u32) -> u32 {
 /// The form's `BGSDestructibleObjectForm`, 0 for a form type without one.
 pub fn destructible_form(e: &Engine, form: u32) -> u32 {
     component(e, form, 2)
+}
+
+/// `IS_ACTOR(form)` (JIP LN NVSE): the form's vtable answers true (`008D0360`) at +0x100.
+pub fn is_actor(e: &Engine, form: u32) -> bool {
+    form != 0
+        && e.mem
+            .u32(e.get(Ptr::<forms::Object>::new(form), forms::Object::vtbl) + 0x100)
+            == 0x008d_0360
 }
 
 /// `IS_TYPE(form, Class)` (JIP LN NVSE): the form's vtable is the class's own.
@@ -463,7 +477,7 @@ mod tests {
     }
 
     /// Each module lists only commands of its own JIP source file, once each, and the count is
-    /// README's ("JIP LN: 207 of 1,118").
+    /// README's ("JIP LN: N of 1,118", read from README.md).
     #[test]
     fn each_module_holds_its_own_file() {
         let files = [
@@ -487,11 +501,14 @@ mod tests {
             "jip_fn_perk",
             "jip_fn_texture_set",
             "jip_fn_water",
+            "jip_fn_weapon",
             "jip_fn_weather",
             "jip_fn_worldspace",
+            "ln_fn_activator",
             "ln_fn_casino",
             "ln_fn_challenge",
             "ln_fn_map_marker",
+            "ln_fn_perk",
             "ln_fn_race",
             "ln_fn_weapon",
         ];
@@ -504,7 +521,19 @@ mod tests {
             }
         }
         assert_eq!(ALL.len(), files.len());
-        assert_eq!(built(), 207);
+        // README's script-extender row carries the count: later batches change only README, and a
+        // mismatch fails here.
+        let readme = include_str!("../../../../README.md");
+        let at = readme
+            .find("JIP LN: ")
+            .expect("README names the JIP LN count")
+            + "JIP LN: ".len();
+        let count: usize = readme[at..]
+            .split(" of 1,118")
+            .next()
+            .and_then(|n| n.parse().ok())
+            .expect("JIP LN: N of 1,118");
+        assert_eq!(built(), count, "README's JIP LN count");
     }
 
     /// Answering "installed", a built command has its execute and its name in its record; an
