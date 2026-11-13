@@ -248,8 +248,10 @@ fn lights_bound_within_frustum() {
 
 #[test]
 fn lights_bound_within_radius() {
-    // The RTTI (radius-free or not); the `NiLight` given or null (the light's own); the scale; the
-    // radius; floats for the light's position and the bound.
+    // The RTTI (radius-free or not); the `NiLight` given (one other than the light's own, at another
+    // place with another radius) or null (the light's own); the scale; the radius; the bound's radius
+    // (a half, or 4.0, where the scale moves the edge by 2); floats for the light's position and the
+    // bound.
     Diff::new(entry!(
         0x00b9_dae0,
         walk::bound_within_radius(Ptr<_>, Ptr<_>, u32, f32) -> u8
@@ -260,7 +262,8 @@ fn lights_bound_within_radius() {
             Input::Flag,
             Input::Flag,
             Input::Of(&[ONE, HALF]),
-            Input::Of(&[0x4120_0000, ONE, 0x7fc0_0000]),
+            Input::Of(&[0x4120_0000, ONE, 0x40a0_0000, 0x7fc0_0000]),
+            Input::Of(&[HALF, 0x4080_0000]),
         ],
         &F3,
         &F3,
@@ -273,15 +276,17 @@ fn lights_bound_within_radius() {
         } else {
             OTHER_RTTI
         };
-        let ni = ni_light(e, case, 4, case.word(3), rtti);
-        let p = planes(case, 4);
-        let l = light(e, &p, 0, ni, 0, 0);
+        let own = ni_light(e, case, 5, 0x4040_0000, OTHER_RTTI);
+        let ni = ni_light(e, case, 5, case.word(3), rtti);
+        words(e, ni + 0x8c, &[bits(case, 6), MINUS_ONE, ONE]);
+        let p = planes(case, 5);
+        let given = if case.word(1) != 0 { ni } else { 0 };
+        let l = light(e, &p, 0, if given != 0 { own } else { ni }, 0, 0);
         let bound = block(
             e,
             0x10,
-            &[bits(case, 6), bits(case, 7), bits(case, 5), HALF],
+            &[bits(case, 7), bits(case, 8), bits(case, 5), case.word(4)],
         );
-        let given = if case.word(1) != 0 { ni } else { 0 };
         vec![l, bound, given, case.word(2)]
     })
     .run()
@@ -352,7 +357,7 @@ fn lights_add_tri_geom() {
 }
 
 /// An object tree from `k`: a root node with five children: a geometry, a culled geometry (flag 1),
-/// a null child, a node with two geometries (one without a bound, one with flag 0x800), and a
+/// a null child, a node with two geometries (one without a bound, one with flag 0x800 and no bound), and a
 /// geometry with a zero radius; the bounds' centres from the case's floats at `f`.
 fn tree(e: &mut Engine, case: &Case, k: u32, f: usize) -> u32 {
     let bound =
@@ -379,8 +384,8 @@ fn tree(e: &mut Engine, case: &Case, k: u32, f: usize) -> u32 {
     let b2 = bound(e, TWO, HALF);
     let g2 = leaf(e, 1, b2);
     let g3 = leaf(e, 0, 0);
-    let b4 = bound(e, MINUS_ONE, ONE);
-    let g4 = leaf(e, 0x800, b4);
+    // Flag 0x800 with no bound: the walks take it without a bound test.
+    let g4 = leaf(e, 0x800, 0);
     let b5 = bound(e, HALF, ONE);
     let inner = node(e, &[g3, g4], (k & 4) << 9, b5);
     let b6 = bound(e, 0x4120_0000, 0);
