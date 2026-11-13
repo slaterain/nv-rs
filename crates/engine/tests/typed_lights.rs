@@ -561,11 +561,7 @@ fn lights_add_object_target() {
     Diff::new(entry!(0x00ba_0110, walk::add_object(Ptr<_>, u32)))
         .common()
         .inputs(&inputs(&[
-            &[
-                Input::Of(&[0, 1, 2]),
-                Input::Of(&[0, 1, 2, 3]),
-                Input::Flag,
-            ],
+            &[Input::Of(&[0, 1, 2]), Input::Of(&[0, 1, 2, 3]), Input::Flag],
             &F3,
         ]))
         .max_cases(256)
