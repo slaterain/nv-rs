@@ -125,6 +125,7 @@ fn stand_ins(e: &mut Engine) {
     e.map(LOG, 0x4000);
     for page in [
         0x0101_2000,
+        0x0101_a000,
         0x0102_9000,
         0x0107_0000,
         0x011d_e000,
@@ -165,6 +166,12 @@ fn stand_ins(e: &mut Engine) {
         log(e, 0x1850, a[0]);
         ret(e.mem.u32(a[0] + 0xf0))
     });
+    // `operator new` and `operator delete` (the actor list's nodes).
+    e.register(0x0040_1000, |e, a| {
+        log(e, 0x1000, a[0]);
+        ret(e.mem.alloc(a[0].max(4)))
+    });
+    e.register(0x0040_1030, logged::<0x08>);
     e.register(0x0090_7650, logged::<0x01>);
     e.register(0x0092_f190, logged::<0x02>);
     e.register(0x005a_c740, logged::<0x03>);
@@ -260,24 +267,24 @@ fn array_world(e: &mut Engine, pattern: u32, k: u32, cursors: u32) -> u32 {
 #[test]
 fn process_array_getters() {
     // A level's head and tail, each level and one past (which reads the next table's word).
-    let head_or_tail = |d: Diff| {
-        d.common()
-            .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(&[0, 1, 2, 3, 4])])
-            .setup(|e, case| {
-                stand_ins(e);
-                vec![array_world(e, case.word(0), 1, 1), case.word(1)]
-            })
-            .run()
-            .assert_same();
-    };
-    head_or_tail(Diff::new(entry!(
-        0x005d_e0f0,
-        array::level_head(Ptr<_>, u32) -> u32
-    )));
-    head_or_tail(Diff::new(entry!(
-        0x005b_e5c0,
-        array::level_tail(Ptr<_>, u32) -> u32
-    )));
+    Diff::new(entry!(0x005d_e0f0, array::level_head(Ptr<_>, u32) -> u32))
+        .common()
+        .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(&[0, 1, 2, 3, 4])])
+        .setup(|e, case| {
+            stand_ins(e);
+            vec![array_world(e, case.word(0), 1, 1), case.word(1)]
+        })
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x005b_e5c0, array::level_tail(Ptr<_>, u32) -> u32))
+        .common()
+        .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(&[0, 1, 2, 3, 4])])
+        .setup(|e, case| {
+            stand_ins(e);
+            vec![array_world(e, case.word(0), 1, 1), case.word(1)]
+        })
+        .run()
+        .assert_same();
     // The element store: below the count over a null or non-null element, at and past the count; a
     // null or non-null value.
     Diff::new(entry!(0x0096_ae90, array::set_element(Ptr<_>, u32, Ptr<_>)))

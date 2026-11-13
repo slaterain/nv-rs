@@ -51,7 +51,6 @@ pub fn level_tail(e: &mut Engine, this: Ptr, level: u32) -> u32 {
     )
 }
 
-
 // Typed from 0096ae90
 /// `thiscall(array, index, value)`: stores the pointer `*value` at `index`. An index at or past the
 /// count raises the count to `index + 1` (as a word) and counts a non-null pointer in; below the
