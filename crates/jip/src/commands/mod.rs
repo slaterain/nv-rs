@@ -18,6 +18,7 @@ pub mod jip_fn_class;
 pub mod jip_fn_climate;
 pub mod jip_fn_combat_style;
 pub mod jip_fn_destruction_data;
+pub mod jip_fn_effect;
 pub mod jip_fn_explosion;
 pub mod jip_fn_faction;
 pub mod jip_fn_global_var;
@@ -53,8 +54,15 @@ use nvse::commands::array::{fix_on, LIST_GUARD};
 use nvse::commands::Read;
 use nvse::CommandArgs;
 
-/// A module's commands: each opcode with its execute (all of them plain commands so far).
+/// A module's plain commands: each opcode with its execute.
 pub type Handlers = &'static [(u32, AbiFn)];
+
+/// A module's conditions (`DEFINE_CMD_COND_PLUGIN` (JIP LN NVSE)): each opcode with its execute
+/// and its eval (`COMMAND_ARGS_EVAL`: the reference, the condition's two parameters, the result).
+pub type Conditions = &'static [(u32, AbiFn, AbiFn)];
+
+/// Every module's conditions, one line per JIP source file that has any.
+pub const ALL_CONDITIONS: &[Conditions] = &[jip_fn_effect::CONDITIONS];
 
 /// Every module's list, one line per JIP source file.
 pub const ALL: &[Handlers] = &[
@@ -66,6 +74,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_climate::COMMANDS,
     jip_fn_combat_style::COMMANDS,
     jip_fn_destruction_data::COMMANDS,
+    jip_fn_effect::COMMANDS,
     jip_fn_explosion::COMMANDS,
     jip_fn_faction::COMMANDS,
     jip_fn_global_var::COMMANDS,
@@ -96,20 +105,29 @@ pub const ALL: &[Handlers] = &[
 
 /// How many of JIP's commands have a handler.
 pub fn built() -> usize {
-    ALL.iter().map(|list| list.len()).sum()
+    ALL.iter().map(|list| list.len()).sum::<usize>()
+        + ALL_CONDITIONS.iter().map(|list| list.len()).sum::<usize>()
 }
 
 /// Whether `opcode` is a built command.
 pub fn is_built(opcode: u32) -> bool {
     ALL.iter()
         .any(|list| list.iter().any(|&(o, _)| o == opcode))
+        || ALL_CONDITIONS
+            .iter()
+            .any(|list| list.iter().any(|&(o, _, _)| o == opcode))
 }
 
-/// Gives every built command its handler.
+/// Gives every built command its handler (a condition its eval too).
 pub fn install(e: &mut Engine) {
     for list in ALL {
         for &(opcode, execute) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), None);
+        }
+    }
+    for list in ALL_CONDITIONS {
+        for &(opcode, execute, eval) in list.iter() {
+            crate::table::set_handlers(e, opcode, Some(execute), Some(eval));
         }
     }
 }
@@ -570,6 +588,7 @@ mod tests {
             "jip_fn_climate",
             "jip_fn_combat_style",
             "jip_fn_destruction_data",
+            "jip_fn_effect",
             "jip_fn_explosion",
             "jip_fn_faction",
             "jip_fn_global_var",
@@ -606,6 +625,15 @@ mod tests {
             }
         }
         assert_eq!(ALL.len(), files.len());
+        for (list, file) in ALL_CONDITIONS.iter().zip(["jip_fn_effect"]) {
+            for &(opcode, _, _) in list.iter() {
+                let slot = crate::table::slot(opcode).expect("a JIP slot");
+                assert!(slot.file.ends_with(file), "{opcode:04x} {}", slot.name);
+                assert!(slot.kind == crate::table::Kind::Condition, "{opcode:04x}");
+                assert!(seen.insert(opcode), "{opcode:04x} listed twice");
+            }
+        }
+        assert_eq!(ALL_CONDITIONS.len(), 1);
         // README's JIP LN count is checked in one place, against the table's every handled JIP
         // opcode: `ui_hooks::tests::the_readme_counts_the_built_commands`.
     }
@@ -639,8 +667,16 @@ mod tests {
             let at = nvse::table::record_of(e, op);
             (0..10).map(|i| e.mem.u32(at + 4 * i)).collect()
         };
-        for list in ALL {
-            for &(op, _) in list.iter() {
+        let conditions = ALL_CONDITIONS
+            .iter()
+            .flat_map(|list| list.iter().map(|&(op, _, _)| op));
+        let opcodes: Vec<u32> = ALL
+            .iter()
+            .flat_map(|list| list.iter().map(|&(op, _)| op))
+            .chain(conditions)
+            .collect();
+        {
+            for op in opcodes {
                 let w = words(&e, op);
                 assert_eq!(w, words(&plain, op), "{op:04x}");
                 assert_eq!((w[6], w[8]), (0, 0), "{op:04x}: no execute, no eval");
