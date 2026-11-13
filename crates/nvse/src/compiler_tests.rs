@@ -1532,3 +1532,114 @@ fn the_outputs_last_bytes() {
         ]
     );
 }
+
+/// Precedence by xNVSE's operator table (`s_operators`: `||` 5, `&&` 7, comparisons 15, `|` 16,
+/// `&` 17, shifts 18, `+` 19, `[` and `->` 90, `::` 3, the compound assignments 2), checked on
+/// the bytes, since the decompiler reads the same table and a round trip cannot see it wrong.
+#[test]
+fn precedence_follows_xnvses_operator_table() {
+    let mut e = engine();
+    let rows: [(&str, Vec<&[u8]>); 5] = [
+        (
+            "x > 1 && i < 2",
+            vec![&v(0, 1), b"B\x01", &[op::GREATER_THAN], &v(1, 2), b"B\x02", &[op::LESS_THAN], &[op::LOGICAL_AND]],
+        ),
+        (
+            "x || i && 1",
+            vec![&v(0, 1), &v(1, 2), b"B\x01", &[op::LOGICAL_AND], &[op::LOGICAL_OR]],
+        ),
+        (
+            "1 | 2 & 3",
+            vec![b"B\x01", b"B\x02", b"B\x03", &[op::BITWISE_AND], &[op::BITWISE_OR]],
+        ),
+        (
+            "1 << 2 + 3",
+            vec![b"B\x01", b"B\x02", b"B\x03", &[op::ADD], &[op::LEFT_SHIFT]],
+        ),
+        (
+            "arr[1]->k",
+            vec![&v(3, 5), b"B\x01", &[op::LEFT_BRACKET], b"S\x01\x00k", &[op::MEMBER_ACCESS]],
+        ),
+    ];
+    for (text, tokens) in rows {
+        assert_eq!(compiled(&mut e, EVAL, text), args_of(&[arg(&tokens)]), "{text}");
+    }
+    // `::` (an unchecked argument takes the pair).
+    assert_eq!(
+        compiled(&mut e, CALL, "rx 1::2"),
+        [
+            &[1u8][..],
+            &arg(&[&v(4, 3)]),
+            &args_of(&[arg(&[b"B\x01", b"B\x02", &[op::MAKE_PAIR]])]),
+        ]
+        .concat()
+    );
+    // `|=` is not right-associative (only `:=` and `+=` to `-=` are): `i |= 1 |= 2` applies the
+    // first before the second, whose left side is then a number, refused.
+    let (ok, bytes) = compile(&mut e, LET, "i |= 1 |= 2");
+    assert!(!ok);
+    assert_eq!(
+        bytes[3..],
+        [&v(1, 2)[..], b"B\x01", &[op::BITWISE_OR_EQUALS], b"B\x02"].concat()[..]
+    );
+    assert_eq!(printed(), ["Error line 7\n\nInvalid operands for operator |="]);
+}
+
+/// Deep nesting on the test thread's stack: a 0x1FF-byte line of 255 nested parentheses
+/// compiles to its one number; a lambda in a lambda in a lambda compiles (the stand-in compiler
+/// compiles each lambda's body with the parse routines again), each inner one's token inside
+/// the outer one's data.
+#[test]
+fn deep_nesting_compiles() {
+    let mut e = engine();
+    let text = format!("{}1{}", "(".repeat(255), ")".repeat(255));
+    assert_eq!(text.len(), 0x1ff);
+    assert_eq!(compiled(&mut e, EVAL, &text), args_of(&[arg(&[b"B\x01"])]));
+    fn compile_stand_in(e: &mut Engine, a: &[u32]) -> Ret {
+        let (script, buf) = (a[1], a[2]);
+        let text = guest_text(e, e.mem.u32(buf + sb::TEXT));
+        let text = String::from_utf8(text).unwrap();
+        let body = text
+            .strip_prefix("begin function {} SetFunctionValue ")
+            .and_then(|t| t.strip_suffix(" end"))
+            .unwrap()
+            .to_string();
+        // The body compiled as `rx := body` on a line of its own.
+        let line = heap(e, &[ln::STRUCT]).eax;
+        e.mem.write(line, &[0; ln::STRUCT as usize]);
+        e.mem.write(line + ln::TEXT, format!("rx := {body}").as_bytes());
+        e.mem.set_u32(line + ln::OPCODE, LET);
+        let record = record_of(e, LET);
+        let params = e.mem.u32(record + 0x14);
+        let ok = e.call(crate::table::LET_PARSE, &[1, params, line, buf]).bool();
+        let len = e.mem.u32(line + ln::DATA_LEN);
+        e.mem.set_u32(script + sc::DATA, line + ln::DATA);
+        e.mem.set_u32(script + sc::DATA_LEN, len);
+        Ret {
+            eax: u32::from(ok),
+            ..Ret::default()
+        }
+    }
+    e.register(0x005a_e490, |e, a| {
+        let data = heap(e, &[0x4000]).eax;
+        e.mem.set_u32(a[0] + sb::DATA, data);
+        Ret::default()
+    });
+    e.register(0x005a_e5c0, nothing);
+    e.register(0x005a_eb90, compile_stand_in);
+    e.register(0x005a_a1a0, nothing);
+    let lambda = |body: &str| format!("begin function {{}} SetFunctionValue {body} end");
+    let three = lambda(&lambda(&lambda("5")));
+    let bytes = compiled(&mut e, LET, &format!("rx := {three}"));
+    // Each level: `F`, its length, and the data `rx := <inner>` compiled (count, length, rx,
+    // the inner token, :=), down to `rx := 5`.
+    let mut inner = args_of(&[arg(&[&v(4, 3), b"B\x05", &[op::ASSIGNMENT]])]);
+    for _ in 0..3 {
+        let mut f = vec![b'F'];
+        f.extend_from_slice(&(inner.len() as u32).to_le_bytes());
+        f.extend(inner);
+        inner = args_of(&[arg(&[&v(4, 3), &f, &[op::ASSIGNMENT]])]);
+    }
+    assert_eq!(bytes, inner);
+    assert!(state(&mut e).lambda_parents.is_empty());
+}
