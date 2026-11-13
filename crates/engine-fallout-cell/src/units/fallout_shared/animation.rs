@@ -4262,6 +4262,12 @@ pub fn animation_start_group_ov2(
     e.mem.set_u16(group_at(this, slot_index), group);
     e.mem
         .set_u32(current_sequence_at(this, slot_index), sequence);
+    // The seam after the slot's stores (`0x494E19`, ADR-0016): JIP LN NVSE's SetAnimGroup hook,
+    // which makes the same two stores and then runs the play-group events, with the animation,
+    // the group, its type and the actor. While the hook has no user: one load.
+    if e.hook_users(engine_core::extend::Hook::SetAnimGroup) != 0 {
+        e.site(0x0049_4e19, &[a, u32::from(group), kind, reference]);
+    }
 
     // Whether the new sequence can be morphed from the old one.
     if !root_is_first_person_in_menu(e, a, player) && sequence != 0 && current != 0 {
@@ -12053,6 +12059,48 @@ mod tests {
         f.e.mem.set_u32(f.this.addr() + 4, ACTOR);
         assert_eq!(f.start(), 0);
         assert_eq!(f.e.mem.u32(f.this.addr() + 0xe0 + 4), old);
+    }
+
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// A handler at the SetAnimGroup seam: records its words and the slot's group and sequence
+    /// as stored when it is asked; its answer is not used.
+    fn set_anim_group_handler(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        let mut seen = a.to_vec();
+        seen.push(u32::from(e.mem.u16(a[0] + 0x4c + 2)));
+        seen.push(e.mem.u32(a[0] + 0xe0 + 4));
+        SEEN.with(|s| s.borrow_mut().push(seen));
+        Some(0)
+    }
+
+    /// The seam after the slot's stores (`0x494E19`, JIP LN NVSE's SetAnimGroup hook): with a
+    /// handler and no user of the hook, it is not asked and the group starts as before; with a
+    /// user, it is asked once with the animation, the group, its type and the actor (`+4`), after
+    /// the group (`+0x4C`) and sequence (`+0xE0`) are stored, and the start goes on.
+    #[test]
+    fn starting_a_group_tells_the_set_anim_group_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut f = start_fixture();
+        f.e.on_site(
+            SiteSlot::new(Owner::Jip, 0x0049_4e19),
+            set_anim_group_handler,
+        );
+        f.e.mem.set_u32(f.this.addr() + 4, ACTOR);
+        assert_eq!(f.start(), f.sequence);
+        assert!(SEEN.with(|s| s.borrow().is_empty()), "no user: not asked");
+        f.e.mem.set_u32(f.this.addr() + 0xe0 + 4, 0);
+        f.e.mem.set_u16(f.this.addr() + 0x4c + 2, 0);
+        f.e.add_hook_user(Hook::SetAnimGroup, true);
+        start_log(&mut f.e);
+        assert_eq!(f.start(), f.sequence);
+        let log = end_log(&mut f.e);
+        assert_eq!(
+            SEEN.with(|s| s.take()),
+            [vec![f.this.addr(), 1, 1, ACTOR, 1, f.sequence]]
+        );
+        assert_eq!(arguments_of(&log, MANAGER_BLEND_IN).len(), 1, "goes on");
     }
 
     #[test]

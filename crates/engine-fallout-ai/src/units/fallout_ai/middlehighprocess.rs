@@ -1732,6 +1732,14 @@ pub fn middle_high_process_resolve_equipment_queue(
                 let (object, count, extra) = (word(e, item, 0), word(e, item, 8), word(e, item, 4));
                 let (now, force, sounds) =
                     (byte(e, item, 0xd), byte(e, item, 0xe), byte(e, item, 0xf));
+                // The seam around this call (`0x91559D`, ADR-0016): JIP LN NVSE's LockEquipment
+                // hook lets the equipment queue equip a locked actor's weapon (its hook reads the
+                // return address `0x9155A2`), so it is told before (1) and after (0). While the
+                // hook has no user: one load.
+                let marked = e.hook_users(engine_core::extend::Hook::LockEquipment) != 0;
+                if marked {
+                    e.site(0x0091_559d, &[1]);
+                }
                 e.call(
                     ACTOR_EQUIP_OBJECT,
                     &args![
@@ -1744,6 +1752,9 @@ pub fn middle_high_process_resolve_equipment_queue(
                         u32::from(sounds)
                     ],
                 );
+                if marked {
+                    e.site(0x0091_559d, &[0]);
+                }
                 let object = word(e, item, 0);
                 if e.call(FORM_TYPE, &args![object]).u32() == 0x28 {
                     let weapon = word(e, item, 0);
@@ -12763,6 +12774,44 @@ mod tests {
         assert_eq!(calls(&e, FREE), vec![vec![item]]);
         assert_eq!(count(&e, LIST_DELETE), 1);
         assert_eq!(e.mem.u32(p.addr() + 0x230), 0);
+    }
+
+    thread_local! {
+        static QUEUE_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn queue_marker(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        QUEUE_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0)
+    }
+
+    /// The seam around the queue's equip (`0x91559D`, JIP LN NVSE's LockEquipment): with a
+    /// handler and no user, it is not asked; with a user, it is told 1 right before
+    /// `Actor::EquipObject` and 0 right after (the call between them, once, with the same words).
+    #[test]
+    fn resolve_equipment_queue_marks_its_equip_for_lock_equipment() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine();
+        let p = process(&mut e);
+        let a = actor(&mut e);
+        let weapon = e.mem.alloc(8);
+        e.register(LIST_REMOVE_HEAD, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            Ret::default()
+        });
+        e.register(ACTOR_EQUIP_OBJECT, |_, a| {
+            QUEUE_SEEN.with(|s| s.borrow_mut().push(a[..7].to_vec()));
+            Ret::default()
+        });
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0091_559d), queue_marker);
+        let equip = vec![a, weapon, 1, 0, 0, 0, 0];
+        queue_one(&mut e, p, weapon, 1);
+        middle_high_process_resolve_equipment_queue(&mut e, p, a);
+        assert_eq!(QUEUE_SEEN.with(|s| s.take()), [equip.clone()], "no user");
+        e.add_hook_user(Hook::LockEquipment, true);
+        queue_one(&mut e, p, weapon, 1);
+        middle_high_process_resolve_equipment_queue(&mut e, p, a);
+        assert_eq!(QUEUE_SEEN.with(|s| s.take()), [vec![1], equip, vec![0]]);
     }
 
     #[test]

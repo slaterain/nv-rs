@@ -2893,12 +2893,44 @@ pub fn script_get_process_scripts(e: &mut Engine) -> u8 {
 /// `Script::SetActionFlag` (Xbox PDB): for a non-null `extra_list` that has
 /// `ScriptLocals`, sets `flags` on the action of `form` there
 /// (`ScriptLocals::SetActionFlag`) and answers its result; otherwise false.
+///
+/// Three seams (ADR-0016) for JIP LN NVSE, each one load while its hook has no user: before the
+/// locals are read (`0x5AC763`, MarkScriptEvent: an answer is the result, no flag set), at the
+/// locals' call (`0x5AC782`, MergeEventMask: an answer is the result, no call), and before the
+/// result is returned on every path (`0x5AC78A`, OnHitEvent: the hit events; its answer is not
+/// used).
 pub fn script_set_action_flag(e: &mut Engine, form: u32, extra_list: Ptr, flags: u32) -> bool {
+    use engine_core::extend::Hook;
     let mut result = false;
-    if !extra_list.is_null() && e.call(EXTRA_LIST_SCRIPT_LOCALS, &args![extra_list]).u32() != 0 {
-        let locals =
-            Ptr::<ScriptLocals>::new(e.call(EXTRA_LIST_SCRIPT_LOCALS, &args![extra_list]).u32());
-        result = script_locals_set_action_flag(e, locals, form, flags);
+    'body: {
+        if extra_list.is_null() {
+            break 'body;
+        }
+        if e.hook_users(Hook::MarkScriptEvent) != 0 {
+            if let Some(answer) = e.site(0x005a_c763, &[form, extra_list.addr(), flags]) {
+                result = answer != 0;
+                break 'body;
+            }
+        }
+        if e.call(EXTRA_LIST_SCRIPT_LOCALS, &args![extra_list]).u32() != 0 {
+            let locals =
+                Ptr::<ScriptLocals>::new(e.call(EXTRA_LIST_SCRIPT_LOCALS, &args![extra_list]).u32());
+            let merged = if e.hook_users(Hook::MergeEventMask) != 0 {
+                e.site(0x005a_c782, &[locals.addr(), form, flags])
+            } else {
+                None
+            };
+            result = match merged {
+                Some(answer) => answer != 0,
+                None => script_locals_set_action_flag(e, locals, form, flags),
+            };
+        }
+    }
+    if e.hook_users(Hook::OnHitEvent) != 0 {
+        e.site(
+            0x005a_c78a,
+            &[form, extra_list.addr(), flags, u32::from(result)],
+        );
     }
     result
 }
@@ -7028,6 +7060,141 @@ mod tests {
         assert!(!e
             .call(0x005a_c750, &args![0x10u32, extra, 0x1000u32])
             .bool());
+    }
+
+    thread_local! {
+        /// Each seam handler's address and words, in the order asked.
+        static SEEN: std::cell::RefCell<Vec<(u32, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
+        /// The answers of the MarkScriptEvent and MergeEventMask handlers.
+        static ANSWER: std::cell::Cell<[Option<u32>; 2]> = const { std::cell::Cell::new([None, None]) };
+    }
+
+    fn mark_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push((0x005a_c763, a.to_vec())));
+        ANSWER.with(|c| c.get()[0])
+    }
+
+    fn merge_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push((0x005a_c782, a.to_vec())));
+        ANSWER.with(|c| c.get()[1])
+    }
+
+    /// The hit seam's answer is not used: it answers one anyway.
+    fn hit_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push((0x005a_c78a, a.to_vec())));
+        Some(0)
+    }
+
+    /// `Script::SetActionFlag` with handlers at its three JIP seams (`0x5AC763`, `0x5AC782`,
+    /// `0x5AC78A`), the locals' action list holding entries for 0x10 and 0.
+    fn action_flag_seams() -> (Engine, Ptr<ScriptLocals>, u32) {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = tail_engine();
+        let locals = locals(&mut e);
+        set_actions(&mut e, locals, &[(0x10, 0), (0, 0)]);
+        e.register_double(EXTRA_LIST_SCRIPT_LOCALS, move |_, _| ret(locals.addr()));
+        e.on_site(SiteSlot::new(Owner::Jip, 0x005a_c763), mark_handler);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x005a_c782), merge_handler);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x005a_c78a), hit_handler);
+        let extra = e.mem.alloc(0x20);
+        (e, locals, extra)
+    }
+
+    /// No user of the three hooks: no handler is asked and the flags are set as before.
+    #[test]
+    fn set_action_flag_seams_wait_for_their_users() {
+        let (mut e, locals, extra) = action_flag_seams();
+        ANSWER.with(|c| c.set([Some(0), Some(0)]));
+        assert!(e
+            .call(0x005a_c750, &args![0x10u32, extra, 0x1000u32])
+            .bool());
+        assert!(!e.call(0x005a_c750, &args![0x10u32, 0u32, 0x1000u32]).bool());
+        assert_eq!(action_list(&e, locals), vec![(0x10, 0x1000), (0, 0x1000)]);
+        assert!(SEEN.with(|s| s.borrow().is_empty()));
+    }
+
+    /// MarkScriptEvent (`0x5AC763`): asked with the form, the list and the flags, only for a
+    /// list; an answer is the result and no flag is set (here false, where the exe answers
+    /// true); no answer leaves the exe's path.
+    #[test]
+    fn set_action_flag_mark_script_event_seam() {
+        use engine_core::extend::Hook;
+        let (mut e, locals, extra) = action_flag_seams();
+        e.add_hook_user(Hook::MarkScriptEvent, true);
+        ANSWER.with(|c| c.set([Some(0), None]));
+        assert!(!e
+            .call(0x005a_c750, &args![0x10u32, extra, 0x1000u32])
+            .bool());
+        assert_eq!(action_list(&e, locals), vec![(0x10, 0), (0, 0)]);
+        assert!(!e.call(0x005a_c750, &args![0x10u32, 0u32, 0x1000u32]).bool());
+        assert_eq!(
+            SEEN.with(|s| s.take()),
+            [(0x005a_c763, vec![0x10, extra, 0x1000])],
+            "not asked without a list"
+        );
+        ANSWER.with(|c| c.set([None, None]));
+        assert!(e
+            .call(0x005a_c750, &args![0x10u32, extra, 0x1000u32])
+            .bool());
+        assert_eq!(action_list(&e, locals), vec![(0x10, 0x1000), (0, 0x1000)]);
+        assert_eq!(SEEN.with(|s| s.take().len()), 1);
+    }
+
+    /// MergeEventMask (`0x5AC782`): asked with the locals, the form and the flags, only when the
+    /// list has locals; an answer is the result and the locals' call is not made.
+    #[test]
+    fn set_action_flag_merge_event_mask_seam() {
+        use engine_core::extend::Hook;
+        let (mut e, locals, extra) = action_flag_seams();
+        e.add_hook_user(Hook::MergeEventMask, true);
+        ANSWER.with(|c| c.set([None, Some(0)]));
+        assert!(!e
+            .call(0x005a_c750, &args![0x10u32, extra, 0x1000u32])
+            .bool());
+        assert_eq!(action_list(&e, locals), vec![(0x10, 0), (0, 0)]);
+        assert_eq!(
+            SEEN.with(|s| s.take()),
+            [(0x005a_c782, vec![locals.addr(), 0x10, 0x1000])]
+        );
+        ANSWER.with(|c| c.set([None, None]));
+        assert!(e
+            .call(0x005a_c750, &args![0x10u32, extra, 0x1000u32])
+            .bool());
+        assert_eq!(action_list(&e, locals), vec![(0x10, 0x1000), (0, 0x1000)]);
+        e.register(EXTRA_LIST_SCRIPT_LOCALS, |_, _| ret(0));
+        SEEN.with(|s| s.take());
+        assert!(!e
+            .call(0x005a_c750, &args![0x10u32, extra, 0x1000u32])
+            .bool());
+        assert!(SEEN.with(|s| s.borrow().is_empty()), "no locals: not asked");
+    }
+
+    /// OnHitEvent (`0x5AC78A`): asked on every path with the form, the list, the flags and the
+    /// result (also after MarkScriptEvent answered); its answer does not change the result.
+    #[test]
+    fn set_action_flag_on_hit_event_seam() {
+        use engine_core::extend::Hook;
+        let (mut e, _, extra) = action_flag_seams();
+        e.add_hook_user(Hook::OnHitEvent, true);
+        assert!(e
+            .call(0x005a_c750, &args![0x10u32, extra, 0x80u32])
+            .bool());
+        assert!(!e.call(0x005a_c750, &args![0x10u32, 0u32, 0x80u32]).bool());
+        e.add_hook_user(Hook::MarkScriptEvent, true);
+        ANSWER.with(|c| c.set([Some(1), None]));
+        e.register(EXTRA_LIST_SCRIPT_LOCALS, |_, _| ret(0));
+        assert!(e
+            .call(0x005a_c750, &args![0x10u32, extra, 0x80u32])
+            .bool());
+        assert_eq!(
+            SEEN.with(|s| s.take()),
+            [
+                (0x005a_c78a, vec![0x10, extra, 0x80, 1]),
+                (0x005a_c78a, vec![0x10, 0, 0x80, 0]),
+                (0x005a_c763, vec![0x10, extra, 0x80]),
+                (0x005a_c78a, vec![0x10, extra, 0x80, 1]),
+            ]
+        );
     }
 
     #[test]

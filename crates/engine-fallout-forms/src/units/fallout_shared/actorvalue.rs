@@ -311,6 +311,11 @@ pub fn fn_0066ee10(e: &mut Engine, index: u32) -> bool {
 /// Runs the actor value's modified callback (+0x54) when it has one
 /// (`cdecl`: owner, actor value, old value, delta, one more word passed on;
 /// no Xbox PDB name).
+///
+/// The seam before the callback (`0x66EE72`, ADR-0016): JIP LN NVSE's DamageActorValue hook, asked
+/// with the owner, the actor value, both values' bits and the last word; it runs the health and
+/// crippled-limb events and then makes the call itself, passing the values' bits as they are (no
+/// x87 load): an answer does that. While the hook has no user: one load.
 pub fn fn_0066ee50(e: &mut Engine, owner: u32, index: u32, old: f32, delta: f32, extra: u32) {
     let info = info_of(e, index);
     if info == 0 {
@@ -321,6 +326,15 @@ pub fn fn_0066ee50(e: &mut Engine, owner: u32, index: u32, old: f32, delta: f32,
         return;
     }
     let callback = e.get(info, ActorValueInfo::pModifiedCallback);
+    if e.hook_users(engine_core::extend::Hook::DamageActorValue) != 0 {
+        let (old, delta) = (old.to_bits(), delta.to_bits());
+        if e.site(0x0066_ee72, &[owner, index, old, delta, extra])
+            .is_some()
+        {
+            e.call(callback, &args![owner, index, old, delta, extra]);
+            return;
+        }
+    }
     let old = x87_quiet_bits(old.to_bits());
     let delta = x87_quiet_bits(delta.to_bits());
     e.call(callback, &args![owner, index, old, delta, extra]);
@@ -1511,6 +1525,63 @@ mod b019_tests {
         assert_eq!(
             calls(&e, 0x00ab_0054),
             vec![vec![1, 6, 1.0f32.to_bits(), 2.0f32.to_bits(), 9]]
+        );
+    }
+
+    thread_local! {
+        static DAMAGE_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static DAMAGE_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn damage_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        DAMAGE_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        DAMAGE_ANSWER.with(|c| c.get())
+    }
+
+    /// The seam before the callback (`0x66EE72`, JIP LN NVSE's DamageActorValue): with a handler
+    /// and no user, it is not asked and the callback gets the x87-loaded values; with a user, it
+    /// is asked with the owner, the actor value, the values' bits and the last word; an answer
+    /// calls the callback once with the bits as they are (a signalling NaN stays one), none as
+    /// the exe; no callback, no question.
+    #[test]
+    fn the_modified_callback_damage_actor_value_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine();
+        let i = info(&mut e, 6);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0066_ee72), damage_handler);
+        e.add_hook_user(Hook::DamageActorValue, true);
+        e.call(0x0066_ee50, &args![1u32, 6u32, 1.0f32, 2.0f32, 9u32]);
+        assert!(DAMAGE_SEEN.with(|s| s.borrow().is_empty()), "no callback");
+        e.mem.set_u32(i + 0x54, 0x00ab_0054);
+        e.register(0x00ab_0054, |_, _| Ret::default());
+        e.add_hook_user(Hook::DamageActorValue, false);
+        let snan = f32::from_bits(0x7f80_0001);
+        let quiet = 0x7fc0_0001u32;
+        DAMAGE_ANSWER.with(|c| c.set(Some(0)));
+        e.call_log = Some(vec![]);
+        e.call(0x0066_ee50, &args![1u32, 6u32, snan, 2.0f32, 9u32]);
+        assert_eq!(
+            calls(&e, 0x00ab_0054),
+            vec![vec![1, 6, quiet, 2.0f32.to_bits(), 9]]
+        );
+        assert!(DAMAGE_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::DamageActorValue, true);
+        e.call_log = Some(vec![]);
+        e.call(0x0066_ee50, &args![1u32, 6u32, snan, 2.0f32, 9u32]);
+        assert_eq!(
+            DAMAGE_SEEN.with(|s| s.take()),
+            [vec![1, 6, 0x7f80_0001, 2.0f32.to_bits(), 9]]
+        );
+        assert_eq!(
+            calls(&e, 0x00ab_0054),
+            vec![vec![1, 6, 0x7f80_0001, 2.0f32.to_bits(), 9]]
+        );
+        DAMAGE_ANSWER.with(|c| c.set(None));
+        e.call_log = Some(vec![]);
+        e.call(0x0066_ee50, &args![1u32, 6u32, snan, 2.0f32, 9u32]);
+        assert_eq!(
+            calls(&e, 0x00ab_0054),
+            vec![vec![1, 6, quiet, 2.0f32.to_bits(), 9]]
         );
     }
 

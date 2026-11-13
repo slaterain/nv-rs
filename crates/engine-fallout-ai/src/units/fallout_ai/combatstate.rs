@@ -1818,6 +1818,15 @@ fn rate_weapons(e: &mut Engine, this: Ptr<CombatState>, frame: Ptr, context: Wea
     let mut best_out_of_range_weapon = 0u32;
     let mut best_in_range = 0.0f32;
     let mut index = 0u32;
+    // The seam before the loop (`0x999857`, ADR-0016): JIP LN NVSE's LockEquipment hook, asked
+    // with the attacker, the acquired item and the list; for an attacker whose equipment a
+    // script locked it keeps only the held weapon (it cuts the list's count itself) and answers
+    // the index the loop starts at. While the hook has no user: one load.
+    if e.hook_users(engine_core::extend::Hook::LockEquipment) != 0 {
+        if let Some(start) = e.site(0x0099_9857, &[attacker, acquired, weapons]) {
+            index = start;
+        }
+    }
     while index < typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, weapons)) {
         let entry = e.call(0x006d_ad90, &args![weapons, index]).u32();
         let weapon = e.mem.u32(entry);
@@ -8928,6 +8937,52 @@ mod tests {
             [0x2b, 1, SOURCE_FILE_NAME, 0x346]
         );
         assert_eq!(calls(&log, 0x0040_4ee0).len(), 1);
+    }
+
+    thread_local! {
+        static SWITCH_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static SWITCH_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// Records its words; when it answers, it first sets the list's count (`+8`) to 1, as JIP's
+    /// hook cuts it.
+    fn weapon_switch_handler(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        SWITCH_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        let answer = SWITCH_ANSWER.with(|c| c.get());
+        if answer.is_some() {
+            e.mem.set_u32(a[2] + 8, 1);
+        }
+        answer
+    }
+
+    /// The seam before the weapon loop (`0x999857`, JIP LN NVSE's LockEquipment): with a handler
+    /// and no user, it is not asked; with a user, it is asked with the attacker, the acquired
+    /// item (none) and the local list; its answer is the index the loop starts at (1 with a
+    /// count of 1: no entry read), none starts at 0.
+    #[test]
+    fn inventory_update_lock_equipment_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine();
+        let f = fixture(&mut e, false);
+        stub_st0(&mut e, 0x0064_6060, 3.0);
+        e.register(0x0040_4010, |_, a| {
+            st0(f32::from_bits(a[0]).max(f32::from_bits(a[1])) as f64)
+        });
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0099_9857), weapon_switch_handler);
+        SWITCH_ANSWER.with(|c| c.set(Some(1)));
+        fn_009993c0(&mut e, f.state);
+        assert!(SWITCH_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::LockEquipment, true);
+        let log = logged(&mut e, |e| fn_009993c0(e, f.state));
+        let seen = SWITCH_SEEN.with(|s| s.take());
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0][..2], [f.attacker, 0]);
+        assert_ne!(seen[0][2], 0);
+        assert!(calls(&log, 0x006d_ad90).is_empty(), "starts past the entry");
+        assert_eq!(e.get(f.state, CombatState::fUnarmedDPS), 3.0);
+        SWITCH_ANSWER.with(|c| c.set(None));
+        fn_009993c0(&mut e, f.state);
+        assert_eq!(SWITCH_SEEN.with(|s| s.take().len()), 1);
     }
 
     #[test]

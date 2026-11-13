@@ -1890,7 +1890,18 @@ pub fn fn_008c48d0(
                 let own_value = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, actor));
                 if caster_value != own_value {
                     let list = e.call(REFERENCE_EXTRA_LIST, &args![actor]).u32();
+                    // The seam around this call (`0x8C49B7`, ADR-0016): JIP LN NVSE's OnHitEvent
+                    // hook runs no hit events for it (its hook reads the return address
+                    // `0x8C49BC`), so it is told before (1) and after (0). While the hook has no
+                    // user: one load.
+                    let marked = e.hook_users(engine_core::extend::Hook::OnHitEvent) != 0;
+                    if marked {
+                        e.site(0x008c_49b7, &[1]);
+                    }
                     e.call(SET_ACTION_FLAG, &args![caster_actor, list, 0x80u32]);
+                    if marked {
+                        e.site(0x008c_49b7, &[0]);
+                    }
                     let mut apply = true;
                     if e.vcall(magic_item.addr(), FORM_SLOT_0X18, &[]).i32() == 6 {
                         let enchantment = dynamic_cast(
@@ -3931,6 +3942,56 @@ mod tests {
         start_log(&mut e);
         apply(&mut e, true);
         assert!(calls(&e, SET_ACTION_FLAG).is_empty());
+    }
+
+    thread_local! {
+        static HIT_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn hit_marker(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        HIT_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0)
+    }
+
+    /// The seam around the caster's action flag (`0x8C49B7`, JIP LN NVSE's OnHitEvent): with a
+    /// handler and no user, it is not asked; with a user, it is told 1 right before the flag's
+    /// call and 0 right after it (the call between them, once, with the same words).
+    #[test]
+    fn fn_008c48d0_marks_its_action_flag_for_on_hit_event() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let (mut e, w) = setup();
+        let this = Ptr::new(w.target);
+        let magic_item = object(&mut e);
+        e.mem.set_u32(magic_item + 0x18, 5);
+        e.mem.set_u32(magic_item + 0x70, 2);
+        let effect = e.mem.alloc(0x100);
+        let other_actor = e.mem.alloc(0x100);
+        e.register_double(RT_DYNAMIC_CAST, move |_, a| {
+            (if a[3] == TYPE_ACTOR { other_actor } else { a[0] }).into_ret()
+        });
+        e.register(FN_008ACE90, |_, _| Ret::default());
+        e.register(FN_008230F0, |_, _| 1u32.into_ret());
+        e.register(SET_ACTION_FLAG, |_, a| {
+            HIT_SEEN.with(|s| s.borrow_mut().push(a[..3].to_vec()));
+            Ret::default()
+        });
+        e.on_site(SiteSlot::new(Owner::Jip, 0x008c_49b7), hit_marker);
+        let apply = |e: &mut Engine| {
+            fn_008c48d0(
+                e,
+                this,
+                Ptr::new(0x6002),
+                Ptr::new(magic_item),
+                Ptr::new(effect),
+                false,
+            )
+        };
+        let flag = vec![other_actor, w.actor + 0x44, 0x80];
+        assert!(apply(&mut e));
+        assert_eq!(HIT_SEEN.with(|s| s.take()), [flag.clone()], "no user");
+        e.add_hook_user(Hook::OnHitEvent, true);
+        assert!(apply(&mut e));
+        assert_eq!(HIT_SEEN.with(|s| s.take()), [vec![1], flag, vec![0]]);
     }
 
     #[test]

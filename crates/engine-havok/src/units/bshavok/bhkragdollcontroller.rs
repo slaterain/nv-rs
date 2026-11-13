@@ -4951,7 +4951,14 @@ pub fn fn_00c7c030(e: &mut Engine, this: Ptr) {
 /// and bytes at `+0x1b8`, `+0x1bc`, `+0x1e8`, `+0x1ec`, `+0x221`, `+0x290` (1.0),
 /// `+0x228`, `+0x28f` and `+0x294`; and when `add_to_world` is set adds the unheld constraints to the
 /// world.
+///
+/// The seam at its entry (`0xC7C151`, ADR-0016): JIP LN NVSE's OnRagdoll hook, asked with the
+/// controller (it runs the ragdoll events of its actor); its answer is not used. While the hook
+/// has no user: one load.
 pub fn bhk_ragdoll_controller_disable_ragdoll_anim(e: &mut Engine, this: Ptr, add_to_world: u8) {
+    if e.hook_users(engine_core::extend::Hook::OnRagdoll) != 0 {
+        e.site(0x00c7_c151, &[this.addr()]);
+    }
     let base = this.addr();
     if e.mem.u8(base + 0x42) == 0 {
         return;
@@ -11452,6 +11459,43 @@ mod tests {
         e.call(0x00c7c150, &args![this, 1u32]);
         assert!(log.borrow().is_empty());
         assert_eq!(e.mem.u8(this + 0x222), 1);
+    }
+
+    thread_local! {
+        static RAGDOLL_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Records its words and the byte `+0x41` as it is when asked; its answer is not used.
+    fn ragdoll_handler(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        let byte = u32::from(e.mem.u8(a[0] + 0x41));
+        RAGDOLL_SEEN.with(|s| s.borrow_mut().push(vec![a[0], byte]));
+        Some(1)
+    }
+
+    /// The seam at the entry (`0xC7C151`, JIP LN NVSE's OnRagdoll): with a handler and no user, it
+    /// is not asked; with a user, it is asked with the controller before anything changes (`+0x41`
+    /// still set), the state is reset as before, and it is asked also when `+0x42` is clear.
+    #[test]
+    fn disable_ragdoll_anim_on_ragdoll_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine();
+        let this = e.mem.alloc(0x300);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x00c7_c151), ragdoll_handler);
+        e.mem.set_u8(this + 0x41, 1);
+        e.call(0x00c7c150, &args![this, 0u32]);
+        assert!(RAGDOLL_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::OnRagdoll, true);
+        e.call(0x00c7c150, &args![this, 0u32]);
+        assert_eq!(RAGDOLL_SEEN.with(|s| s.take()), [vec![this, 1]]);
+        e.mem.set_u8(this + 0x42, 1);
+        e.mem.set_u32(this + 0xa4, e.mem.alloc(0x10));
+        let skeleton = e.mem.alloc(0x40);
+        let owner = e.mem.alloc(0x40);
+        e.mem.set_u32(owner + 0xc, skeleton);
+        e.mem.set_u32(this + 0x2a4, owner);
+        e.call(0x00c7c150, &args![this, 0u32]);
+        assert_eq!(RAGDOLL_SEEN.with(|s| s.take()), [vec![this, 1]]);
+        assert_eq!(e.mem.u8(this + 0x41), 0, "reset as before");
     }
 
     /// The doubles under `ni2hk_ov2`: the quaternion conversion and the normalisation do

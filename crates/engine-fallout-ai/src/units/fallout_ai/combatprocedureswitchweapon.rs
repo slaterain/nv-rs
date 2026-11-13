@@ -120,7 +120,12 @@ pub fn combat_procedure_switch_weapon_update(e: &mut Engine, this: Ptr) {
                 0x0088_c650,
                 &args![attacker, weapon, count, 0u32, 1u32, 0u32, 1u32],
             );
-        } else {
+        } else if e.hook_users(engine_core::extend::Hook::LockEquipment) == 0
+            || e.site(0x009d_a8e3, &[attacker]).is_none()
+        {
+            // The seam before the unequip (`0x9DA8E3`, ADR-0016): JIP LN NVSE's LockEquipment
+            // hook, asked with the attacker; an answer leaves the weapon on (an attacker whose
+            // equipment a script locked). While the hook has no user: one load.
             let extra = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, entry));
             e.call(
                 0x0088_c790,
@@ -384,6 +389,58 @@ mod n025_tests {
         });
         assert_eq!(calls(&log, ACTOR_SET_008A6840), vec![vec![attacker, 0]]);
         assert_eq!(e.mem.u8(this + 0x14), 0);
+    }
+
+    thread_local! {
+        static UNEQUIP_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static UNEQUIP_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn unequip_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        UNEQUIP_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        UNEQUIP_ANSWER.with(|c| c.get())
+    }
+
+    /// The seam before the unequip (`0x9DA8E3`, JIP LN NVSE's LockEquipment): with a handler and
+    /// no user, it is not asked and the weapon is unequipped; with a user, it is asked with the
+    /// attacker; an answer leaves the weapon on (the equip still marked queued), none unequips;
+    /// queueing a weapon never asks it.
+    #[test]
+    fn update_unequip_lock_equipment_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine();
+        let this = e.mem.alloc(0x18);
+        e.mem.set_u32(this + 4, 0x700);
+        let attacker = 0x800u32;
+        stub(&mut e, GET_ATTACKER, attacker);
+        stub(&mut e, 0x008a_7570, u32::MAX);
+        let process = e.mem.alloc(8);
+        e.mem.set_u32(process, VTABLE);
+        stub(&mut e, ACTOR_PROCESS, process);
+        stub(&mut e, SLOTS + 0x148, 0x900);
+        stub(&mut e, 0x0044_ddc0, 0x55);
+        stub(&mut e, 0x0072_6070, 0x77);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x009d_a8e3), unequip_handler);
+        UNEQUIP_ANSWER.with(|c| c.set(Some(0)));
+        let run = |e: &mut Engine| {
+            e.mem.set_u8(this + 0x14, 0);
+            let log = logged(e, |e| {
+                e.call(0x009d_a7c0, &args![this]);
+            });
+            assert_eq!(e.mem.u8(this + 0x14), 1, "marked queued");
+            calls(&log, 0x0088_c790).len()
+        };
+        assert_eq!(run(&mut e), 1);
+        assert!(UNEQUIP_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::LockEquipment, true);
+        assert_eq!(run(&mut e), 0, "answered: left on");
+        assert_eq!(UNEQUIP_SEEN.with(|s| s.take()), [vec![attacker]]);
+        UNEQUIP_ANSWER.with(|c| c.set(None));
+        assert_eq!(run(&mut e), 1, "no answer: unequipped");
+        UNEQUIP_SEEN.with(|s| s.take());
+        e.mem.set_u32(this + 0x10, 0x66);
+        assert_eq!(run(&mut e), 0);
+        assert!(UNEQUIP_SEEN.with(|s| s.borrow().is_empty()), "a weapon queued");
     }
 
     #[test]

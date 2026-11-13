@@ -1194,12 +1194,21 @@ pub fn fn_00c6d4b0(e: &mut Engine, this: Ptr<Ctl>, height: f32) {
 /// by the inverse scale and by `1 / time`; when that is longer than `VelocityMod` (squared
 /// lengths, single precision; NaN never), it becomes `VelocityMod` and `time`
 /// `fVelocityTime`.
+///
+/// The seam at its entry (`0xC6D4E4`, ADR-0016): JIP LN NVSE's ApplyActorVelocity hook, asked with
+/// the controller; an answer returns with nothing changed (a velocity a script set still runs).
+/// While the hook has no user: one load.
 pub fn bhk_character_controller_set_velocity_modifier(
     e: &mut Engine,
     this: Ptr<Ctl>,
     velocity: Ptr,
     time: f32,
 ) {
+    if e.hook_users(engine_core::extend::Hook::ApplyActorVelocity) != 0
+        && e.site(0x00c6_d4e4, &[this.addr()]).is_some()
+    {
+        return;
+    }
     let scale = e.global::<f32>(INVERSE_SCALE) as f64;
     let v = load4(e, velocity.addr());
     let scaled = [
@@ -7259,6 +7268,43 @@ mod tests {
         bhk_character_controller_set_velocity_modifier(&mut e, c, Ptr::new(velocity), f32::NAN);
         assert_eq!(load4(&e, c.addr() + 0x500), [4.0, 8.0, 12.0, 0.0]);
         assert_eq!(e.get(c, Ctl::fVelocityTime), 0.5);
+    }
+
+    thread_local! {
+        static VELOCITY_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static VELOCITY_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn velocity_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        VELOCITY_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        VELOCITY_ANSWER.with(|c| c.get())
+    }
+
+    /// The seam at the entry (`0xC6D4E4`, JIP LN NVSE's ApplyActorVelocity): with a handler and no
+    /// user, it is not asked and the modifier is set; with a user, it is asked with the
+    /// controller; an answer leaves `VelocityMod` (`+0x500`) and `fVelocityTime` (`+0x524`) as
+    /// they were, none sets them.
+    #[test]
+    fn velocity_modifier_apply_actor_velocity_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine();
+        e.set_global(INVERSE_SCALE, 2.0f32);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x00c6_d4e4), velocity_handler);
+        VELOCITY_ANSWER.with(|c| c.set(Some(0)));
+        let c = controller(&mut e);
+        let velocity = vec_at(&mut e, [1.0, 2.0, 3.0, 9.0]);
+        bhk_character_controller_set_velocity_modifier(&mut e, c, Ptr::new(velocity), 0.5);
+        assert_eq!(e.mem.f32(c.addr() + 0x524), 0.5);
+        assert!(VELOCITY_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::ApplyActorVelocity, true);
+        let c = controller(&mut e);
+        bhk_character_controller_set_velocity_modifier(&mut e, c, Ptr::new(velocity), 0.5);
+        assert_eq!(load4(&e, c.addr() + 0x500), [0.0; 4], "answered: unchanged");
+        assert_eq!(e.mem.f32(c.addr() + 0x524), 0.0);
+        assert_eq!(VELOCITY_SEEN.with(|s| s.take()), [vec![c.addr()]]);
+        VELOCITY_ANSWER.with(|v| v.set(None));
+        bhk_character_controller_set_velocity_modifier(&mut e, c, Ptr::new(velocity), 0.5);
+        assert_eq!(load4(&e, c.addr() + 0x500), [4.0, 8.0, 12.0, 0.0]);
     }
 
     #[test]

@@ -1783,6 +1783,14 @@ pub fn fn_00986c60(e: &mut Engine, this: Ptr<CombatGroup>, actor: Ptr) -> Ptr {
     {
         return Ptr::NULL;
     }
+    // The seam after the empty test (`0x986C79`, ADR-0016): JIP LN NVSE's SetCombatTarget hook,
+    // asked with the actor; an answer is the target returned (one a script forced the actor to
+    // fight, while they are in combat). While the hook has no user: one load.
+    if e.hook_users(engine_core::extend::Hook::SetCombatTarget) != 0 {
+        if let Some(target) = e.site(0x0098_6c79, &[actor.addr()]) {
+            return Ptr::new(target);
+        }
+    }
     // The game's locals, in one block: +0x00 the fallback time stamp,
     // +0x04 the stamp from the detection call, +0x08 its level, +0x0c / +0x0d
     // its two flags, +0x10 the actor's location, +0x20 the target's
@@ -8064,6 +8072,50 @@ mod tests {
 
     fn choose(s: &mut Scene) -> Ptr {
         fn_00986c60(&mut s.e, s.group, s.actor)
+    }
+
+    thread_local! {
+        static TARGET_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static TARGET_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn combat_target_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        TARGET_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        TARGET_ANSWER.with(|c| c.get())
+    }
+
+    /// The seam after the empty test (`0x986C79`, JIP LN NVSE's SetCombatTarget): with a handler
+    /// and no user, it is not asked and the scored target wins; with a user, it is asked with the
+    /// actor; an answer is returned (here the second target, where the scores pick the first)
+    /// before the process is asked; none scores as before; no targets, no question.
+    #[test]
+    fn choose_target_set_combat_target_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut s = scene(2);
+        s.e.mem.set_u8(s.targets[0].addr() + 0x2d, 1);
+        s.e.on_site(
+            SiteSlot::new(Owner::Jip, 0x0098_6c79),
+            combat_target_handler,
+        );
+        TARGET_ANSWER.with(|c| c.set(Some(s.targets[1].addr())));
+        assert_eq!(choose(&mut s), s.targets[0]);
+        assert!(TARGET_SEEN.with(|t| t.borrow().is_empty()), "no user");
+        s.e.add_hook_user(Hook::SetCombatTarget, true);
+        s.e.call_log = Some(vec![]);
+        assert_eq!(choose(&mut s), s.targets[1]);
+        assert!(calls(&s.e, fake(0x428)).is_empty(), "nothing else asked");
+        assert_eq!(TARGET_SEEN.with(|t| t.take()), [vec![s.actor.addr()]]);
+        TARGET_ANSWER.with(|c| c.set(None));
+        assert_eq!(choose(&mut s), s.targets[0]);
+        let mut s = scene(0);
+        s.e.on_site(
+            SiteSlot::new(Owner::Jip, 0x0098_6c79),
+            combat_target_handler,
+        );
+        s.e.add_hook_user(Hook::SetCombatTarget, true);
+        TARGET_SEEN.with(|t| t.take());
+        assert!(choose(&mut s).is_null());
+        assert!(TARGET_SEEN.with(|t| t.borrow().is_empty()), "no targets");
     }
 
     #[test]
