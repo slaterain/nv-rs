@@ -31,7 +31,7 @@ nv-rs Fixes	bCellOffsets	NV_CELL_OFFSETS	1	Cell offsets for every plugin: a cell
 nv-rs Fixes	bVatsLag	NV_VATS_LAG	1	V.A.T.S. waits only for the camera: a target's hit chances show as soon as the camera reaches it, not after a fixed 2 seconds.
 nv-rs Fixes	bActorCause	NV_ACTOR_CAUSE	1	Causes keep no witness lists: projectiles and explosions no longer copy their actor's detection list, which every save wrote out (save bloat).
 nv-rs Fixes	bRadioLengths	NV_RADIO_LENGTHS	1	Radio song lengths: a radio song never takes the length of the song before it on its channel, and a song with no length no longer hangs the music thread.
-nv-rs Fixes	bFacialHairByRaceFolder	NV_FACIAL_HAIR_RACE	1	Facial hair by race folder: facial hair made for one race's head is offered only to that race in the character menu.
+nv-rs Fixes	bFacialHairByRaceFolder	NV_FACIAL_HAIR_RACE	1	Facial hair by race folder: a race that brought its own facial hair (under its head's own folder) is offered only those parts in the character menu, and other races no longer see them.
 nv-rs Fixes	bStripLodWater	NV_STRIP_LOD_WATER	1	No distant water under the Strip: The Strip gets "No LOD Water" as it loads, so the distant water under its ground, never seen, is never made.
 nv-rs Fixes	bDirectFiles	NV_DIRECT_FILES	1	Direct file access: the game's files are opened, read and written by the thread that asks, without the file thread, the limit of 512 open files (about 140 plugins) or the 2 GB limit on a file or an archive.
 nv-rs Fixes	bCosaveKeep	NV_COSAVE_KEEP	1	Co-save keeps other plugins: a co-save's parts from plugins not built in (JohnnyGuitar's, ShowOff's and the others not built in yet) are written back while the same files are loaded.

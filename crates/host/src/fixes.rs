@@ -182,12 +182,13 @@ fn install_radio_lengths(e: &mut Engine) {
 
 /// The character menu's facial hair list offers every playable head part to every race
 /// (`005e7a60` tests only the playable bit), so a plugin's own race cannot keep its refitted beards
-/// to itself. With the row a race whose head model lies in a folder of `meshes\characters\` of its
-/// own is offered only the parts whose models lie in that folder, and every other race all parts
-/// but those (`engine::units::fallout_interface::racesexmenu::FacialHairFilter`): `_Create`
+/// to itself. With the row a race whose head model (for the chosen sex) lies in a directory of its
+/// own with playable head parts under it is offered only those parts, and every other race all
+/// parts but those (`engine::units::fallout_interface::racesexmenu::FacialHairFilter`): `_Create`
 /// (`007acb60`) builds the list so, and a click that changes the race or sex (`007adce0`) builds it
-/// again, which the original never does. For the game's own data the list is the original's.
-/// Vanilla offers every part to every race.
+/// again when the offered parts change, which the original never does; a worn part the choice is
+/// not offered is taken off. For the game's own data nothing changes. Vanilla offers every part to
+/// every race.
 pub const FACIAL_HAIR_BY_RACE_FOLDER: Fix = Fix {
     name: "facial hair by race folder",
     env: "NV_FACIAL_HAIR_RACE",
