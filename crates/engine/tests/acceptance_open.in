@@ -1,7 +1,5 @@
 [
-    ("accumulator", 0x31, 0x32, false, &[0x00b6_3a50, 0x00b6_50c0], "drawing agent, piece 4 step 1: the accumulator's draw-time fields"),
-    ("accumulator", 0x164, 0x16d, false, &[0x00b6_4e30, 0x00b6_5ae0, 0x00b6_5c60, 0x00b8_9d80], "drawing agent, piece 4 step 1: the accumulator's draw-time fields"),
-    ("accumulator", 0x174, 0x1a0, false, &[0x00b6_3120, 0x00b6_3770, 0x00b6_39e0, 0x00b6_3a50, 0x00b6_50c0, 0x00b6_5ae0, 0x00b6_6520, 0x00b6_6570, 0x00b7_dab0], "drawing agent, piece 4 step 1: the accumulator's draw-time fields"),
+    ("accumulator", 0x194, 0x198, false, &[0x00b7_dab0], "drawing agent, piece 4: the accumulator's +0x194 the shadow light set-up reads (not in the cut's settings copy)"),
     ("batch renderer", 0x8, 0x18, false, &[0x00b9_8ae0, 0x00b9_9bc0, 0x00b9_a090, 0x00b9_a120, 0x00ff_2800], "drawing agent (piece 8): the batch renderers and pass lists main's accumulation fills before the cut and the draw empties; main's tail must not accumulate into them before the join"),
     ("batch renderer", 0x20, 0x34, false, &[0x00b9_8970, 0x00b9_9730, 0x00b9_9900], "drawing agent (piece 8): the batch renderers and pass lists main's accumulation fills before the cut and the draw empties; main's tail must not accumulate into them before the join"),
     ("batch renderer", 0x3c, 0x44, false, &[0x00b6_3770, 0x00b6_39e0], "drawing agent (piece 8): the batch renderers and pass lists main's accumulation fills before the cut and the draw empties; main's tail must not accumulate into them before the join"),
@@ -48,7 +46,7 @@
     ("pass groups", 0x94, 0xa4, true, &[0x00b9_a120], "drawing agent (piece 8): the batch renderers and pass lists main's accumulation fills before the cut and the draw empties; main's tail must not accumulate into them before the join"),
     ("pass groups", 0xcc, 0xd0, true, &[0x00b9_9bc0, 0x00b9_a120], "drawing agent (piece 8): the batch renderers and pass lists main's accumulation fills before the cut and the draw empties; main's tail must not accumulate into them before the join"),
     ("pass groups", 0x134, 0x138, true, &[0x00b9_9bc0], "drawing agent (piece 8): the batch renderers and pass lists main's accumulation fills before the cut and the draw empties; main's tail must not accumulate into them before the join"),
-    ("shader accumulator", 0x194, 0x198, false, &[0x00b7_dab0], "drawing agent, piece 4 step 1: the accumulator's draw-time fields"),
+    ("shader accumulator", 0x194, 0x198, false, &[0x00b7_dab0], "drawing agent, piece 4: the accumulator's +0x194 the shadow light set-up reads (not in the cut's settings copy)"),
     ("shader property", 0x1c, 0x24, false, &[0x00b7_0820, 0x00b7_dab0, 0x00b9_af60, 0x00ba_ac10, 0x00bb_25d0, 0x00bb_c050, 0x00bc_9a50], "draw family's next agent: the shader classes' own property fields and what they point to (water light list, grass instance data, leaf data)"),
     ("shader property", 0x60, 0xc8, false, &[0x00b7_dab0, 0x00b8_64d0, 0x00b8_9d80, 0x00bb_2760, 0x00bb_bda0, 0x00bb_c050, 0x00bb_ecd0, 0x00bc_9a50], "draw family's next agent: the shader classes' own property fields and what they point to (water light list, grass instance data, leaf data)"),
     ("shader property", 0xd0, 0x108, false, &[0x00b7_dab0, 0x00b8_64d0, 0x00bb_bdf0, 0x00bb_ef90], "draw family's next agent: the shader classes' own property fields and what they point to (water light list, grass instance data, leaf data)"),

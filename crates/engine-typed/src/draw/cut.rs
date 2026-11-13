@@ -250,7 +250,9 @@ fn take_geometry(e: &mut Engine, geometry: u32, nodes: &mut AddrSet<u32>) {
     take_skin(e, packet::skin_instance(e, geometry), nodes);
     let property = packet::shader_property(e, geometry);
     capture::take(e, property, PROPERTY.0, PROPERTY.1);
-    take_light_list(e, property, nodes);
+    if lighting_property(e, geometry) {
+        take_light_list(e, property, nodes);
+    }
     let data = packet::model_data(e, geometry);
     if data != 0
         && crate::slot_target(e, geometry, SLOT_RENDER_IMMEDIATE) == PARTICLES_RENDER_IMMEDIATE
@@ -437,6 +439,22 @@ fn take_light(e: &Engine, shadow: u32, nodes: &mut AddrSet<u32>) {
         // whatever its kind.
         capture::take(e, light, LIGHT_DIRECTION.0, LIGHT_DIRECTION.1);
     }
+}
+
+/// The geometry set-ups (a shader's slot 0x7c) of the sky (`00b89d80`, vtable `010afe18`) and the water
+/// (`00b864d0`, vtable `010af9e0`): their properties are not lighting properties, and +0x60 is a value of theirs
+/// the set-up reads in place (the sky's into `011ff910`, the water's into `011ff5cc`), not a light list.
+const NOT_LIGHTING_SETUPS: [u32; 2] = [0x00b8_9d80, 0x00b8_64d0];
+const SLOT_SETUP_GEOMETRY: u32 = 0x7c;
+
+/// Whether `geometry`'s shader property holds a light list at +0x60: every drawn shader's but the sky's and the
+/// water's, told by the shader's geometry set-up (as the draw calls it), so the cut does not take a value of theirs.
+fn lighting_property(e: &Engine, geometry: u32) -> bool {
+    let setup = peek(e, geometry.wrapping_add(GEOMETRY_SHADER))
+        .filter(|&s| s != 0)
+        .and_then(|s| peek(e, s))
+        .and_then(|vtable| peek(e, vtable.wrapping_add(SLOT_SETUP_GEOMETRY)));
+    !setup.is_some_and(|s| NOT_LIGHTING_SETUPS.contains(&s))
 }
 
 /// The most nodes of a lighting property's light list the cut walks (a list is a handful of lights).
