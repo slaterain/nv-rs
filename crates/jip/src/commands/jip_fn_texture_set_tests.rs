@@ -58,7 +58,11 @@ fn the_decal_numbers() {
     set(&mut e, 8, 255_000_001.0);
     assert_eq!(e.mem.u32(DECAL + 0x20), 0x0001_00ff);
     set(&mut e, 8, 3e10);
-    assert_eq!(e.mem.u32(DECAL + 0x20), 0x0001_00ff, "low word 4230196224: too big");
+    assert_eq!(
+        e.mem.u32(DECAL + 0x20),
+        0x0001_00ff,
+        "low word 4230196224: too big"
+    );
 }
 
 #[test]

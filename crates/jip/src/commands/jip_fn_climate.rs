@@ -11,11 +11,11 @@
 //! writes the climate only.
 
 use super::forms::{form_type, Sky, TESClimate, TESTexture, WeatherEntry, SKY};
-use super::{list_count, nth_item};
 use super::{
     assign_string, buffer_arg, heap_alloc, heap_free, model_path, set_form_result, set_model_path,
     string_set, string_text, type_of, Handlers,
 };
+use super::{list_count, nth_item};
 use crate::console::print_form;
 use crate::game::ListNode;
 use engine_core::prelude::*;

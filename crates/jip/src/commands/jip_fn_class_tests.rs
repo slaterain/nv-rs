@@ -28,7 +28,14 @@ fn tag_skills_and_attributes() {
     let set = |e: &mut Engine, t: i32, v: i32| {
         call(e, 0x263f, &[r(1), n(t), n(v)]);
     };
-    for (v, kept) in [(32, true), (33, false), (31, false), (46, false), (-1, true), (44, true)] {
+    for (v, kept) in [
+        (32, true),
+        (33, false),
+        (31, false),
+        (46, false),
+        (-1, true),
+        (44, true),
+    ] {
         e.mem.set_u32(CLASS + 0x44, 7);
         set(&mut e, 0, v);
         let want = if kept { v as u32 } else { 7 };

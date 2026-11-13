@@ -33,7 +33,11 @@ fn set_list(e: &mut Engine, items: &[u32]) {
     e.mem.set_u32(AMMO + 0xd8, 0);
     let mut prev = AMMO + 0xd4;
     for (i, &item) in items.iter().enumerate() {
-        let node = if i == 0 { AMMO + 0xd4 } else { NODES + 8 * i as u32 };
+        let node = if i == 0 {
+            AMMO + 0xd4
+        } else {
+            NODES + 8 * i as u32
+        };
         e.mem.set_u32(node, item);
         e.mem.set_u32(node + 4, 0);
         if i > 0 {
@@ -96,7 +100,10 @@ fn the_effect_numbers() {
     e.mem.set_u32(FX_A + 0x28, 0xffff_ffff);
     e.mem.set_f32(FX_A + 0x2c, 0.5);
     let get = |e: &mut Engine, t: i32| call(e, 0x2613, &[r(2), n(t)]).1;
-    assert_eq!((get(&mut e, 0), get(&mut e, 1), get(&mut e, 2)), (3.0, -1.0, 0.5));
+    assert_eq!(
+        (get(&mut e, 0), get(&mut e, 1), get(&mut e, 2)),
+        (3.0, -1.0, 0.5)
+    );
     assert_eq!(get(&mut e, 3), 0.0);
     let set = |e: &mut Engine, t: i32, v: f64| {
         call(e, 0x2614, &[r(2), n(t), z(v)]);

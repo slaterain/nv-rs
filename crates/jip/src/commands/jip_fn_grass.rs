@@ -11,9 +11,7 @@
 //! `int`. The four ranges take the float.
 
 use super::forms::{form_type_more, TESGrass};
-use super::{
-    assign_string, buffer_arg, cvttss2si, model_path, set_model_path, type_of, Handlers,
-};
+use super::{assign_string, buffer_arg, cvttss2si, model_path, set_model_path, type_of, Handlers};
 use engine_core::prelude::*;
 use nvse::commands::Read;
 use nvse::{handled, CommandArgs};
@@ -78,13 +76,21 @@ fn set_grass_trait_numeric(e: &mut Engine, w: &[u32]) -> Ret {
         0 => e.set(g, TESGrass::density, i_val.min(100) as u8),
         1 => {
             let max = e.get(g, TESGrass::maxSlope);
-            let min = if i32::from(max) < i_val { max } else { i_val as u8 };
+            let min = if i32::from(max) < i_val {
+                max
+            } else {
+                i_val as u8
+            };
             e.set(g, TESGrass::minSlope, min);
         }
         2 => {
             let min = e.get(g, TESGrass::minSlope);
             let capped = i_val.min(90);
-            let max = if i32::from(min) > capped { min } else { capped as u8 };
+            let max = if i32::from(min) > capped {
+                min
+            } else {
+                capped as u8
+            };
             e.set(g, TESGrass::maxSlope, max);
         }
         3 => e.set(g, TESGrass::unitFromWaterAmount, i_val.min(0xffff) as u16),

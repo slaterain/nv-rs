@@ -54,7 +54,11 @@ fn the_numeric_traits_set_with_jips_casts() {
     set(&mut e, 1, -2.7);
     assert_eq!(e.mem.u32(AMMO + 0xb0), (-2i32) as u32);
     set(&mut e, 1, 3e9);
-    assert_eq!(e.mem.u32(AMMO + 0xb0), 0x8000_0000, "past the range: INT_MIN");
+    assert_eq!(
+        e.mem.u32(AMMO + 0xb0),
+        0x8000_0000,
+        "past the range: INT_MIN"
+    );
     set(&mut e, 2, 0.75);
     assert_eq!(e.mem.f32(AMMO + 0xc0), 0.75);
     // clipRounds (a byte) = val: (int) then the low byte.
@@ -90,7 +94,11 @@ fn the_casing() {
     call(&mut e, 0x2939, &[r(1), r(3)]);
     assert_eq!(e.mem.u32(AMMO + 0xbc), MISC);
     call(&mut e, 0x2939, &[r(1), r(4)]);
-    assert_eq!(e.mem.u32(AMMO + 0xbc), MISC, "a climate is no inventory item");
+    assert_eq!(
+        e.mem.u32(AMMO + 0xbc),
+        MISC,
+        "a climate is no inventory item"
+    );
     call(&mut e, 0x2939, &[r(1)]);
     assert_eq!(e.mem.u32(AMMO + 0xbc), 0);
     call(&mut e, 0x2939, &[r(4), r(3)]);

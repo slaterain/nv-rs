@@ -42,6 +42,10 @@ fn the_numbers_and_flags() {
 fn the_setters_are_not_built() {
     let e = setup();
     for opcode in [0x2643, 0x2645] {
-        assert_eq!(crate::test_support::execute_of(&e, opcode), 0, "{opcode:04x}");
+        assert_eq!(
+            crate::test_support::execute_of(&e, opcode),
+            0,
+            "{opcode:04x}"
+        );
     }
 }

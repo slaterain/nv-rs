@@ -50,9 +50,17 @@ fn the_numbers_set_with_jips_casts() {
     set(&mut e, 0, 42.9);
     assert_eq!(e.mem.u8(GRASS + 0x48), 42);
     set(&mut e, 0, 3e9);
-    assert_eq!(e.mem.u8(GRASS + 0x48), 0, "INT_MIN is below 100: its low byte");
+    assert_eq!(
+        e.mem.u8(GRASS + 0x48),
+        0,
+        "INT_MIN is below 100: its low byte"
+    );
     set(&mut e, 0, f64::NAN);
-    assert_eq!(e.mem.u8(GRASS + 0x48), 0, "NaN passes fVal < 0, then INT_MIN");
+    assert_eq!(
+        e.mem.u8(GRASS + 0x48),
+        0,
+        "NaN passes fVal < 0, then INT_MIN"
+    );
     e.mem.set_u8(GRASS + 0x48, 9);
     set(&mut e, 0, -1.0);
     assert_eq!(e.mem.u8(GRASS + 0x48), 9, "a negative value: nothing");

@@ -2,7 +2,9 @@
 //! sound. All 5 of its commands. Nothing is narrowed (paths and forms only).
 
 use super::forms::{form_type_more, TESTexture, TESWaterForm};
-use super::{assign_string, buffer_arg, set_form_result, string_set, string_text, type_of, Handlers};
+use super::{
+    assign_string, buffer_arg, set_form_result, string_set, string_text, type_of, Handlers,
+};
 use engine_core::prelude::*;
 use nvse::commands::Read;
 use nvse::{handled, CommandArgs};
