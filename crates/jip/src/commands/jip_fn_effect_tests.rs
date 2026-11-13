@@ -536,7 +536,9 @@ fn the_actors_get_the_changed_effect() {
     e.mem.set_f32(old + 4, 2.5);
     e.mem.set_u8(old + 0x10, 0);
     e.mem.set_u32(old + 0x18, 0x505);
-    effects_of(&mut e, PC, &[other, first, old]);
+    // A second match after the first: only the first is replaced.
+    let twin = effect(&mut e, 9, mi, i1, PC);
+    effects_of(&mut e, PC, &[other, first, old, twin]);
     let fresh = effect(&mut e, 3, 0, 0, PC);
     e.mem.set_f32(fresh + 0x20, 4.0);
     e.mem.set_u32(fresh + 0x24, 0);
@@ -615,7 +617,8 @@ fn adding_effects() {
     let other = effect(&mut e, 0, ALCH + 0x30, i0, PC);
     let first = effect(&mut e, 1, mi, i1, PC);
     e.mem.set_u8(first + 0x13, 1);
-    effects_of(&mut e, PC, &[other, first]);
+    let twin = effect(&mut e, 9, mi, i2, PC);
+    effects_of(&mut e, PC, &[other, first, twin]);
     let fresh = effect(&mut e, 2, 0, 0, PC);
     e.mem.set_u32(PC + 0x88 + 0x704, fresh);
     let act1 = effect(&mut e, 3, mi, i0, ACT1);
@@ -1114,7 +1117,7 @@ fn timed_effect_values_and_ties() {
     form(&mut e, s2, 0x10, 0x9001);
     e.mem.set_u32(s2 + 0x58, 0xffff_fffd);
     e.mem.set_u32(s2 + 0x98, 0);
-    let big = item(&mut e, 0, s, 16_777_217, 0, 1, 0);
+    let big = item(&mut e, 0, s, 0xfeff_ffff, 0, 1, 0);
     let plain = item(&mut e, 1, s2, 7, 0, 1, 0);
     let a = effect(&mut e, 0, SPEL + 0x18, big, PC);
     let b = effect(&mut e, 1, ENCH + 0x18, plain, PC);
@@ -1151,8 +1154,8 @@ fn timed_effect_values_and_ties() {
     );
     assert_eq!(
         inner[1][2],
-        Data::Number(16_777_216.0),
-        "the int made a float"
+        Data::Number(-16_777_216.0),
+        "the word as an int (-16777217), made a float"
     );
     assert_eq!(inner[1][4], Data::Form(0xff00_0001), "the caster's actor");
     assert_eq!(inner[2][0], Data::Form(0x0613));
