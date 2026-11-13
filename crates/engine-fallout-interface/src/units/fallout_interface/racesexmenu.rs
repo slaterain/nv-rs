@@ -5795,7 +5795,7 @@ impl FacialHairFilter {
         let folder = part_folder(e, part, 0);
         match &self.own {
             Some(own) => folder.as_ref() == Some(own),
-            None => folder.is_none_or(|folder| !self.owned.contains(&folder)),
+            None => folder.map_or(true, |folder| !self.owned.contains(&folder)),
         }
     }
 }
@@ -5815,7 +5815,7 @@ fn add_facial_hair_options(e: &mut Engine, base: u32, filter: Option<&FacialHair
         let item_slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
         let item = e.mem.u32(item_slot);
         if e.call(MARKER_CHECK_2, &args![item]).u8() != 0
-            && filter.is_none_or(|filter| filter.offers(e, item))
+            && filter.map_or(true, |filter| filter.offers(e, item))
         {
             let item_slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
             let item = e.mem.u32(item_slot);
@@ -10395,7 +10395,8 @@ mod tests {
 
     #[test]
     fn a_model_path_names_its_folder_of_characters() {
-        let folder = |path: &str| character_folder(path.as_bytes()).map(|f| String::from_utf8(f).unwrap());
+        let folder =
+            |path: &str| character_folder(path.as_bytes()).map(|f| String::from_utf8(f).unwrap());
         // The game's own folders belong to no race.
         for path in [
             HUMAN_HEAD,
@@ -10406,13 +10407,22 @@ mod tests {
         ] {
             assert_eq!(folder(path), None, "{path}");
         }
-        assert_eq!(folder("Characters\\AlexsCan\\Head.nif"), Some("alexscan".into()));
+        assert_eq!(
+            folder("Characters\\AlexsCan\\Head.nif"),
+            Some("alexscan".into())
+        );
         assert_eq!(
             folder("characters/alexscan/facialhair/beardfull.nif"),
             Some("alexscan".into())
         );
-        assert_eq!(folder("Meshes\\Characters\\AlexsCan\\Head.nif"), Some("alexscan".into()));
-        assert_eq!(folder("\\characters\\\\AlexsCan\\head.nif"), Some("alexscan".into()));
+        assert_eq!(
+            folder("Meshes\\Characters\\AlexsCan\\Head.nif"),
+            Some("alexscan".into())
+        );
+        assert_eq!(
+            folder("\\characters\\\\AlexsCan\\head.nif"),
+            Some("alexscan".into())
+        );
         // Outside characters, a file directly in it, nothing.
         assert_eq!(folder("Creatures\\AlexsCan\\Head.nif"), None);
         assert_eq!(folder("Characters\\Head.nif"), None);
@@ -10556,7 +10566,8 @@ mod tests {
     fn a_part_with_no_model_follows_the_parts_it_combines() {
         let mut e = engine();
         let m = modded(&mut e);
-        let folder = |e: &Engine, part| part_folder(e, part, 0).map(|f| String::from_utf8(f).unwrap());
+        let folder =
+            |e: &Engine, part| part_folder(e, part, 0).map(|f| String::from_utf8(f).unwrap());
         assert_eq!(folder(&e, m.alex_mix), Some("alexscan".into()));
         assert_eq!(folder(&e, m.stock_mix), None);
         // Mixed folders, no parts, an empty path: no folder.
@@ -10643,7 +10654,10 @@ mod tests {
             let selected = calls(&e, OPTION_LIST_UPDATE_CURRENT_SELECTION).contains(&vec![list]);
             if by_race {
                 assert!(cleared && selected);
-                assert_eq!(facial_hair_entries(&e, menu), vec![m.alex_beard, m.alex_mix]);
+                assert_eq!(
+                    facial_hair_entries(&e, menu),
+                    vec![m.alex_beard, m.alex_mix]
+                );
                 // Emptied before the new entries, marked after them.
                 let log = e.call_log.as_ref().unwrap();
                 let at = |addr: u32| log.iter().position(|(a, w)| *a == addr && w[0] == list);
@@ -10666,7 +10680,10 @@ mod tests {
         option_for_every_tile(&mut e, option);
         e.call_log = Some(vec![]);
         race_sex_menu_do_click_facial_hair_by_race(&mut e, menu, 1, 0x55);
-        assert_eq!(facial_hair_entries(&e, menu), vec![m.alex_beard, m.alex_mix]);
+        assert_eq!(
+            facial_hair_entries(&e, menu),
+            vec![m.alex_beard, m.alex_mix]
+        );
         // A click that changes neither (an option that opens list 4) leaves the list.
         let opens = make_option(&mut e, 0x55, 4, 0);
         option_for_every_tile(&mut e, opens);

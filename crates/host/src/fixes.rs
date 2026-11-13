@@ -192,7 +192,8 @@ pub const FACIAL_HAIR_BY_RACE_FOLDER: Fix = Fix {
     name: "facial hair by race folder",
     env: "NV_FACIAL_HAIR_RACE",
     addresses: &[0x007a_cb60, 0x007a_dce0],
-    summary: "facial hair made for one race's head is offered only to that race in the character menu",
+    summary:
+        "facial hair made for one race's head is offered only to that race in the character menu",
     install: install_facial_hair_by_race_folder,
 };
 
