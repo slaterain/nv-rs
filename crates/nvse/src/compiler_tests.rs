@@ -1526,6 +1526,8 @@ fn the_outputs_last_bytes() {
     assert_eq!(
         printed(),
         [
+            // The dropped `+`, then the `1`'s code byte and its value (each write refused).
+            "Line data buffer overflow! To fix this make the line shorter in length.",
             "Line data buffer overflow! To fix this make the line shorter in length.",
             "Line data buffer overflow! To fix this make the line shorter in length.",
             "Error on line 7\n\nFailed to compile token."
@@ -1539,14 +1541,15 @@ fn the_outputs_last_bytes() {
 #[test]
 fn precedence_follows_xnvses_operator_table() {
     let mut e = engine();
+    let (vx, vi, varr) = (v(0, 1), v(1, 2), v(3, 5));
     let rows: [(&str, Vec<&[u8]>); 5] = [
         (
             "x > 1 && i < 2",
-            vec![&v(0, 1), b"B\x01", &[op::GREATER_THAN], &v(1, 2), b"B\x02", &[op::LESS_THAN], &[op::LOGICAL_AND]],
+            vec![&vx, b"B\x01", &[op::GREATER_THAN], &vi, b"B\x02", &[op::LESS_THAN], &[op::LOGICAL_AND]],
         ),
         (
             "x || i && 1",
-            vec![&v(0, 1), &v(1, 2), b"B\x01", &[op::LOGICAL_AND], &[op::LOGICAL_OR]],
+            vec![&vx, &vi, b"B\x01", &[op::LOGICAL_AND], &[op::LOGICAL_OR]],
         ),
         (
             "1 | 2 & 3",
@@ -1558,7 +1561,7 @@ fn precedence_follows_xnvses_operator_table() {
         ),
         (
             "arr[1]->k",
-            vec![&v(3, 5), b"B\x01", &[op::LEFT_BRACKET], b"S\x01\x00k", &[op::MEMBER_ACCESS]],
+            vec![&varr, b"B\x01", &[op::LEFT_BRACKET], b"S\x01\x00k", &[op::MEMBER_ACCESS]],
         ),
     ];
     for (text, tokens) in rows {
