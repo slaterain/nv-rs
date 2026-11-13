@@ -830,7 +830,6 @@ pub fn simple_shadow_clip_planes(e: &mut Engine, this: Ptr, pass_type: u32) {
 /// HDR light scale (`011f9184`) and the colour rows `SetupGeometryConstants_Lights` writes
 /// (`011fa0d0`).
 const SHADER_MODE: u32 = 0x011f_91b8;
-const GET_FIRST_ACTIVE_LIGHT: u32 = 0x00b7_0590;
 const LIGHT_POSITIONS: u32 = 0x011f_a170;
 const LIGHT_DIRECTIONS: u32 = 0x011f_a1f0;
 const HALF: u32 = 0x0101_6248;
@@ -1027,7 +1026,7 @@ pub fn lights(
     e.with_stack(4, |e, slot| {
         let light: u32 = typed_call!(
             crate::draw::FAMILY,
-            GET_FIRST_ACTIVE_LIGHT,
+            0x00b7_0590,
             crate::draw::lights::first_active_light(e, Ptr::new(property), slot)
         );
         if light != 0 && packet::pass_light_byte(e, light, 0xf4) != 0 {
@@ -1064,7 +1063,6 @@ const ACCUMULATE_LIGHT_COLOR: u32 = 0x00c0_3010;
 const LIGHT_COUNT: u32 = 0x011f_d95c;
 const LIGHT_COUNT_CONSTANT: u32 = 0x011f_a27c;
 const WHITE_AMBIENT: u32 = 0x011f_91a7;
-const GET_FIRST_ACTIVE_NON_SHADOW_LIGHT: u32 = 0x00b7_0600;
 const WEIGHT_SECOND: u32 = 0x010a_e8c0;
 const WEIGHT_FIRST: u32 = 0x010a_e8b8;
 const WEIGHT_THIRD: u32 = 0x010a_e8b0;
@@ -1147,7 +1145,7 @@ pub fn ambient_emittance(
             let scaled = frame + 0x10;
             let light: u32 = typed_call!(
                 crate::draw::FAMILY,
-                GET_FIRST_ACTIVE_NON_SHADOW_LIGHT,
+                0x00b7_0600,
                 crate::draw::lights::first_active_non_shadow_light(
                     e,
                     Ptr::new(property),

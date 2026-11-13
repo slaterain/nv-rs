@@ -10067,6 +10067,27 @@ fn ambient_emittance_reads_the_lights_through_the_packet() {
     );
 }
 
+/// The light direction (`00b7c7b0`) reads the pass's first light, its light and that light's direction through
+/// the packet (a point light's too: the cut takes every light's direction).
+#[test]
+fn light_direction_reads_the_pass_lights_through_the_packet() {
+    packet_same(
+        "set_light_direction",
+        entry!(0x00b7_c7b0, acc::set_light_direction(u32)).1,
+        &product(&[&[0, 1], &[0, 1, 2]]),
+        |e, c| {
+            let g = light_check_world(e, c.word(0), 0x30, 0);
+            set(e, g.rendering + 8, c.word(1) << 8);
+            let matrix = e.mem.alloc(0x40);
+            for k in 0..16u32 {
+                set(e, matrix + 4 * k, if k % 5 == 0 { ONE } else { 0 });
+            }
+            (vec![matrix], vec![g.rendering])
+        },
+        |e, w| cut::take_pass_lights(e, w[0]),
+    );
+}
+
 /// The shadow lights' geometry world: two lights, the pass type, the light's byte +0xed and its made clip planes
 /// as the case says.
 fn shadow_check_world(e: &mut Engine, pass_type: u32, bits: u32) -> Geo {

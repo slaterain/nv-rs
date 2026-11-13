@@ -412,20 +412,16 @@ fn take_light(e: &Engine, shadow: u32, nodes: &mut AddrSet<u32>) {
     capture::take(e, shadow, SHADOW_LIGHT_ED.0, SHADOW_LIGHT_ED.1);
     capture::take(e, shadow, SHADOW_LIGHT_PLANES.0, SHADOW_LIGHT_PLANES.1);
     capture::take(e, shadow, SHADOW_LIGHT_INDEX.0, SHADOW_LIGHT_INDEX.1);
-    let (Some(light), Some(point)) = (
-        peek(e, shadow.wrapping_add(0xf8)),
-        peek_u8(e, shadow.wrapping_add(0xf4)),
-    ) else {
+    let Some(light) = peek(e, shadow.wrapping_add(0xf8)) else {
         return;
     };
     if light != 0 && nodes.insert(light) {
         capture::take(e, light, WORLD.0, WORLD.1);
         capture::take(e, light, LIGHT_VALUES.0, LIGHT_VALUES.1);
         capture::take(e, light, LIGHT_FLAGS.0, LIGHT_FLAGS.1);
-        // A direction only for a light that is not a point light (the flag +0xf4), as the set-up reads it.
-        if point == 0 {
-            capture::take(e, light, LIGHT_DIRECTION.0, LIGHT_DIRECTION.1);
-        }
+        // Its direction too, a point light's included: the light direction (`00b7c7b0`) reads the pass's first light
+        // whatever its kind.
+        capture::take(e, light, LIGHT_DIRECTION.0, LIGHT_DIRECTION.1);
     }
 }
 

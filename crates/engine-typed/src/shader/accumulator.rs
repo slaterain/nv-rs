@@ -19,7 +19,7 @@ use super::state;
 use super::{elem_addr, low8, FAMILY};
 use crate::anim_keys::{narrow, wide};
 use crate::culling::layout::{NiMatrix3, NiPoint3, NiTransform};
-use crate::draw::capture;
+use crate::draw::{capture, packet};
 use engine_core::ptr::Ptr;
 use engine_core::{args, typed_call, Engine};
 
@@ -650,13 +650,17 @@ pub fn set_world_view_constants(e: &mut Engine, this: u32, _unused: u32, transfo
 /// constant's fourth float its last word (in the exe the word above its 0x20-byte frame).
 pub fn set_light_direction(e: &mut Engine, matrix: u32) {
     let rendering = capture::own_at::<u32>(e, RENDERING_PASS);
-    let holder = e.global::<u32>(rendering.wrapping_add(0xc));
-    let object = e.global::<u32>(holder);
-    let vector = e.global::<u32>(object.wrapping_add(0xf8));
+    // The pass's first light (even with no light counted, as the exe reads it), its light and that light's direction
+    // (+0xf0): the packet's.
+    let holder = packet::rendering_pass_lights(e, rendering);
+    let object = packet::pass_light_at(e, holder, 0);
+    let vector = packet::pass_light_word(e, object, 0xf8);
+    let direction =
+        |e: &Engine, offset: u32| f32::from_bits(packet::light_value_word(e, vector, offset));
     let minus_one = e.global::<f64>(MINUS_ONE);
-    let y = mul_d(e.global::<f32>(vector.wrapping_add(0xf4)), minus_one);
-    let z = mul_d(e.global::<f32>(vector.wrapping_add(0xf8)), minus_one);
-    let x = mul_d(e.global::<f32>(vector.wrapping_add(0xf0)), minus_one);
+    let y = mul_d(direction(e, 0xf4), minus_one);
+    let z = mul_d(direction(e, 0xf8), minus_one);
+    let x = mul_d(direction(e, 0xf0), minus_one);
     e.with_stack(0x24, |e, frame| {
         let frame = frame.addr();
         e.set_global(frame, y);
