@@ -1490,3 +1490,45 @@ fn the_argument_end_trim_reads_peeks_default_index() {
         args_of(&[arg(&[&opt, b"B\x00", &[op::EQUALS]])])
     );
 }
+
+/// The output's edge, as xNVSE's `ScriptLineBuffer::Write` has it (a write may not reach 0x200
+/// bytes): `eval` lines of `x` and `1` terms joined by `+` (3 bytes of count and length, 6 per
+/// `x`, 2 per `1`, 1 per `+`). 0x1FE and 0x1FF bytes compile whole. A line whose last `+`
+/// would be the 0x200th byte compiles without it (xNVSE writes operators without checking:
+/// kept, and pinned here; the evaluator reads no further than the length word says). One more
+/// term is refused.
+#[test]
+fn the_outputs_last_bytes() {
+    let mut e = engine();
+    let line_of = |xs: usize, ones: usize| {
+        let mut terms = vec!["x"; xs];
+        terms.extend(vec!["1"; ones]);
+        terms.join("+")
+    };
+    for (xs, ones, total) in [(1, 167, 0x1fe), (2, 165, 0x1ff)] {
+        let bytes = compiled(&mut e, EVAL, &line_of(xs, ones));
+        assert_eq!(bytes.len(), total, "{xs} {ones}");
+        assert_eq!(bytes[bytes.len() - 1], op::ADD);
+        assert_eq!(u16::from_le_bytes([bytes[1], bytes[2]]) as usize, total - 1);
+        assert!(printed().is_empty());
+    }
+    let bytes = compiled(&mut e, EVAL, &line_of(0, 170));
+    assert_eq!(bytes.len(), 0x1ff);
+    assert_eq!(bytes[0x1fd..], [b'B', 1], "the last + is left out");
+    assert_eq!(u16::from_le_bytes([bytes[1], bytes[2]]), 0x1fe);
+    assert_eq!(
+        printed(),
+        ["Line data buffer overflow! To fix this make the line shorter in length."]
+    );
+    let (ok, bytes) = compile(&mut e, EVAL, &line_of(0, 171));
+    assert!(!ok);
+    assert_eq!(bytes.len(), 0x1ff);
+    assert_eq!(
+        printed(),
+        [
+            "Line data buffer overflow! To fix this make the line shorter in length.",
+            "Line data buffer overflow! To fix this make the line shorter in length.",
+            "Error on line 7\n\nFailed to compile token."
+        ]
+    );
+}
