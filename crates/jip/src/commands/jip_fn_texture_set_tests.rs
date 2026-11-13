@@ -21,8 +21,11 @@ fn the_textures() {
     string(&mut e, SET + 0x38 + 0xc * 5 + 4, Some(b"t5.dds"));
     let (_, res) = call(&mut e, 0x2665, &[r(1), n(5)]);
     assert_eq!(string_result(&e, res), b"t5.dds");
+    // A text where a seventh map would lie (+0x84), so reading map 6 would show it.
+    string(&mut e, SET + 0x38 + 0xc * 6 + 4, Some(b"t6.dds"));
     let (_, res) = call(&mut e, 0x2665, &[r(1), n(6)]);
     assert_eq!(string_result(&e, res), b"", "map 6");
+    e.mem.set_u32(SET + 0x38 + 0xc * 6 + 4, 0);
     call(&mut e, 0x2666, &[r(1), n(0), s(b"t0.dds")]);
     assert_eq!(text_at(&e, SET + 0x3c), b"t0.dds");
     call(&mut e, 0x2666, &[r(1), n(6), s(b"x")]);
