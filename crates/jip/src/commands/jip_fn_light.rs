@@ -1,10 +1,12 @@
 //! `functions_jip/jip_fn_light.h` (JIP LN NVSE): a light's numbers and flags. 2 of its 4
 //! commands: the getters.
 //!
-//! Not built: `SetLightTraitNumeric` (`0x2643`) and `SetLightFlag` (`0x2645`). Both end with
-//! JIP's `MarkLightModified`, which marks the lights made from the form in `s_activePtLights`,
-//! the list JIP's point light hooks keep (`internal/hooks.h`; hook sites, steps 3.5/3.9). Without
-//! that list a set would change the form but not the lights already in the world.
+//! Not built: `SetLightTraitNumeric` (`0x2643`) and `SetLightFlag` (`0x2645`). `SetLightFlag` and
+//! `SetLightTraitNumeric`'s radius, colour and fade traits (0-3, 6) end with JIP's
+//! `MarkLightModified`, which marks the lights made from the form in `s_activePtLights`, the list
+//! JIP's point light hooks keep (`internal/hooks.h`; hook sites, steps 3.5/3.9); its falloff and
+//! field of view traits (4, 5) only write the form. The command waits whole for that list: without
+//! it a set would change the form but not the lights already in the world.
 
 use super::forms::{form_type_more, TESObjectLIGH};
 use super::{type_of, Handlers};

@@ -75,6 +75,15 @@ fn free(_: &mut Engine, w: &[u32]) -> Ret {
     eax(0)
 }
 
+/// The sizes asked of the game's heap so far, in order.
+pub fn allocations() -> Vec<u32> {
+    calls()
+        .into_iter()
+        .filter(|c| c.0 == HEAP_ALLOCATE)
+        .map(|c| c.1[1])
+        .collect()
+}
+
 /// The blocks freed so far.
 pub fn freed() -> Vec<u32> {
     calls()

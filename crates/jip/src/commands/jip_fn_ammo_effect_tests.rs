@@ -76,21 +76,41 @@ fn effects_added_and_removed() {
     let mut e = setup();
     set_list(&mut e, &[FX_A, FX_B]);
     assert_eq!(call(&mut e, 0x2611, &[r(1), r(2)]).1, 0.0, "already there");
+    assert!(allocations().is_empty(), "nothing allocated");
+    let added = heap_next(&e);
     assert_eq!(call(&mut e, 0x2611, &[r(1), r(4)]).1, 1.0);
     assert_eq!(items(&e), vec![FX_C, FX_A, FX_B], "put first");
+    assert_eq!(allocations(), vec![8], "one 8-byte node of the game's heap");
+    // The first item moved to the new node, linked after the inline first node.
+    assert_eq!(e.mem.u32(AMMO + 0xd8), added);
+    assert_eq!((e.mem.u32(added), e.mem.u32(added + 4)), (FX_A, NODES + 8));
     assert_eq!(call(&mut e, 0x2611, &[r(1), r(5)]).1, 0.0, "not an effect");
-    // Removed: the first (the next node's item moves in), a later one, then the last one.
+    assert_eq!(allocations(), vec![8]);
+    // Removed: the first (the next node's item and link move into the inline node, that node is
+    // freed), a later one (unlinked and freed), then the last one (the inline node emptied,
+    // nothing freed: it lives inside the form).
     assert_eq!(call(&mut e, 0x2612, &[r(1), r(4)]).1, 1.0);
     assert_eq!(items(&e), vec![FX_A, FX_B]);
+    assert_eq!(freed(), vec![added], "the node after the inline one");
     assert_eq!(call(&mut e, 0x2612, &[r(1), r(3)]).1, 1.0);
     assert_eq!(items(&e), vec![FX_A]);
+    assert_eq!(
+        freed(),
+        vec![added, NODES + 8],
+        "the removed node, not the one before"
+    );
     assert_eq!(call(&mut e, 0x2612, &[r(1), r(3)]).1, 0.0, "not there");
     assert_eq!(call(&mut e, 0x2612, &[r(1), r(2)]).1, 1.0);
     assert_eq!(items(&e), vec![0], "the first node emptied");
-    assert_eq!(freed().len(), 2, "the two nodes taken out");
-    // Into an empty list: the first node.
+    assert_eq!(
+        freed(),
+        vec![added, NODES + 8],
+        "the inline node never freed"
+    );
+    // Into an empty list: the first node, nothing allocated.
     assert_eq!(call(&mut e, 0x2611, &[r(1), r(2)]).1, 1.0);
     assert_eq!(items(&e), vec![FX_A]);
+    assert_eq!(allocations(), vec![8]);
 }
 
 #[test]
@@ -125,4 +145,22 @@ fn the_effect_numbers() {
     // 3e9 is not below 0; (int)3e9 is INT_MIN, as UInt32 0x80000000: not below 6.
     set(&mut e, 0, 3e9);
     assert_eq!(e.mem.u32(FX_A + 0x24), 5);
+}
+
+/// The effect is read as any form; only the command's type check (an ammo effect, 0x72) guards
+/// the fields, so a form of another type answers 0 and keeps its bytes.
+#[test]
+fn the_effect_numbers_only_on_an_effect() {
+    let mut e = setup();
+    e.mem.set_u32(AMMO + 0x24, 3);
+    e.mem.set_u32(AMMO + 0x28, 1);
+    e.mem.set_f32(AMMO + 0x2c, 0.5);
+    for t in 0..3 {
+        assert_eq!(call(&mut e, 0x2613, &[r(1), n(t)]).1, 0.0, "trait {t}");
+    }
+    let before = e.mem.bytes(AMMO + 0x24, 0xc);
+    for (t, v) in [(0, 2.0), (1, 1.0), (2, 4.0)] {
+        call(&mut e, 0x2614, &[r(1), n(t), z(v)]);
+        assert_eq!(e.mem.bytes(AMMO + 0x24, 0xc), before, "trait {t}");
+    }
 }

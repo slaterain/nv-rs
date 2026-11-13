@@ -101,3 +101,17 @@ fn the_model() {
     let (_, res) = call(&mut e, 0x2726, &[r(2)]);
     assert_eq!(string_result(&e, res), b"");
 }
+
+/// Traits 5-8 (the three ranges and the wave period), each a distinct value: each lands in its
+/// own float and nothing else of the form changes.
+#[test]
+fn the_ranges_each_in_place() {
+    let mut e = setup();
+    let mut want = e.mem.bytes(GRASS, 0x68);
+    for (t, off) in [(5, 0x54usize), (6, 0x58), (7, 0x5c), (8, 0x60)] {
+        let v = 0.25 + f64::from(t);
+        call(&mut e, 0x2725, &[r(1), n(t), z(v)]);
+        want[off..off + 4].copy_from_slice(&(v as f32).to_le_bytes());
+        assert_eq!(e.mem.bytes(GRASS, 0x68), want, "trait {t}");
+    }
+}

@@ -93,3 +93,59 @@ fn the_flags() {
     set(&mut e, 4, 1);
     assert_eq!(e.mem.u8(DECAL + 0x1d), 1, "flag 4: nothing");
 }
+
+/// The texture set is read as any form; only the commands' type check (a texture set, 0x04)
+/// guards the fields. A climate with a word at +0x80 and a string at +0x3C: the getters answer
+/// ""/0 and the setters leave its bytes, and the block its word points to, as they were.
+#[test]
+fn another_form_type_is_left_alone() {
+    let mut e = setup();
+    const OTHER: u32 = FORMS + 0x3000;
+    const BLOCK: u32 = FORMS + 0x4000;
+    form(&mut e, OTHER, 0x36, 0x0000_0036);
+    set_ref(&mut e, 2, OTHER);
+    string(&mut e, OTHER + 0x3c, Some(b"t0.dds"));
+    e.mem.set_u32(OTHER + 0x80, BLOCK);
+    e.mem.set_u16(OTHER + 0x84, 0xffff);
+    for i in 0..0x24 {
+        e.mem.set_u8(BLOCK + i, 0x40 + i as u8);
+    }
+    let (_, res) = call(&mut e, 0x2665, &[r(2), n(0)]);
+    assert_eq!(string_result(&e, res), b"");
+    for t in 0..=8 {
+        assert_eq!(call(&mut e, 0x2667, &[r(2), n(t)]).1, 0.0, "trait {t}");
+    }
+    for f in 0..=3 {
+        assert_eq!(call(&mut e, 0x2669, &[r(2), n(f)]).1, 0.0, "flag {f}");
+    }
+    let before = (e.mem.bytes(OTHER, 0xa0), e.mem.bytes(BLOCK, 0x24));
+    let path_before = text_at(&e, OTHER + 0x3c);
+    call(&mut e, 0x2666, &[r(2), n(0), s(b"x.dds")]);
+    for t in 0..=8 {
+        call(&mut e, 0x2668, &[r(2), n(t), z(3.0)]);
+    }
+    for f in 0..=3 {
+        call(&mut e, 0x266a, &[r(2), n(f), n(0)]);
+    }
+    assert_eq!((e.mem.bytes(OTHER, 0xa0), e.mem.bytes(BLOCK, 0x24)), before);
+    assert_eq!(text_at(&e, OTHER + 0x3c), path_before);
+}
+
+/// Decal traits 0-6, each a distinct value: each lands in its own float and nothing else of the
+/// decal changes.
+#[test]
+fn the_decal_floats_each_in_place() {
+    let mut e = setup();
+    e.mem.set_u32(SET + 0x80, DECAL);
+    for i in 0..0x24 {
+        e.mem.set_u8(DECAL + i, 0x5a);
+    }
+    let mut want = e.mem.bytes(DECAL, 0x24);
+    for t in 0..7u32 {
+        let v = 1.5 + f64::from(t);
+        call(&mut e, 0x2668, &[r(1), n(t as i32), z(v)]);
+        let at = 4 * t as usize;
+        want[at..at + 4].copy_from_slice(&(v as f32).to_le_bytes());
+        assert_eq!(e.mem.bytes(DECAL, 0x24), want, "trait {t}");
+    }
+}
