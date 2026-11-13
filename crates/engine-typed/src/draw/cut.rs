@@ -50,7 +50,8 @@ pub(crate) const ACC_DEPTH_PASSES: (u32, u32) = (0x3a, 0x3b);
 /// the renderer count (+0x174 to +0x18c), the render mode (+0x19c). The cursor arrays themselves (what +0x17c to
 /// +0x188 point to) are written and read by the world draw alone: they stay in guest memory (the depth-of-field
 /// re-render `00875e40`, their only other user, waits for the draw: piece 8).
-pub(crate) const ACC_SETTINGS: [(u32, u32); 4] = [(0x31, 0x32), (0x164, 0x16d), (0x174, 0x190), (0x19c, 0x1a0)];
+pub(crate) const ACC_SETTINGS: [(u32, u32); 4] =
+    [(0x31, 0x32), (0x164, 0x16d), (0x174, 0x190), (0x19c, 0x1a0)];
 /// `NiAVObject`'s empty bound (`011f4288`).
 const NULL_BOUND: u32 = 0x011f_4288;
 /// The fog index byte (`011f91c4`), the shadow scene nodes (`011f91c8`) and a node's fog property (+0x134);

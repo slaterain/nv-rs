@@ -11271,7 +11271,8 @@ fn decal_pass_keeps_the_draws_own_state() {
             set(e, 0x011f_f9e4, c.word(4) + 1);
             (vec![d.w.acc], d.w.acc)
         },
-        |_, _, _| {},
+        // The accumulator's settings (the decal flag, the render mode) as the cut copies them.
+        |e, acc, _| cut::take_frame(e, 0, Ptr::new(acc)),
     );
 }
 

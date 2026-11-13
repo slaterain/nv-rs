@@ -102,13 +102,11 @@ pub(crate) fn cursor_bucket_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index:
 }
 #[inline(always)]
 pub(crate) fn cursor_first_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
-    capture::word(e, acc.addr(), BSShaderAccumulator::pbcurrentFirstPassA.off)
-        .wrapping_add(index)
+    capture::word(e, acc.addr(), BSShaderAccumulator::pbcurrentFirstPassA.off).wrapping_add(index)
 }
 #[inline(always)]
 fn cursor_active_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
-    capture::word(e, acc.addr(), BSShaderAccumulator::pbcurrentActiveA.off)
-        .wrapping_add(index)
+    capture::word(e, acc.addr(), BSShaderAccumulator::pbcurrentActiveA.off).wrapping_add(index)
 }
 
 /// Renderer `index`'s cursor: its pass type, its bucket, its first-pass byte, its active byte.
