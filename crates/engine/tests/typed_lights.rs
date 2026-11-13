@@ -342,7 +342,7 @@ fn lights_add_tri_geom() {
                 3 => items.push(g),
                 _ => {}
             }
-            let p = planes(case, 0);
+            let p = [[0; 4]; 6];
             let l = light(e, &p, 0, 0, 0, 0);
             geometry_list(e, l, &items, case.word(4) as usize);
             vec![l, g]
