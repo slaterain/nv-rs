@@ -252,9 +252,15 @@ fn installed_records(installed: bool) {
         } else {
             DEFAULT_PARSE
         };
+        // A built condition's record has its eval too.
+        let eval = if installed && built && slot.kind == Kind::Condition {
+            nvse::table::eval_address(o)
+        } else {
+            0
+        };
         assert_eq!(
             (r.execute, r.parse, r.eval, r.flags),
-            (execute, parse, 0, slot.kind.flags()),
+            (execute, parse, eval, slot.kind.flags()),
             "{o:04x}"
         );
         assert_eq!(r.params == 0, slot.params.list.is_empty(), "{o:04x}");

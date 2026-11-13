@@ -885,3 +885,123 @@ layout! {
         0x20 materialType: u32,
     }
 }
+
+/// Form types of batch 8 (`kFormType_*` (JIP LN NVSE)).
+pub mod form_type_b8 {
+    pub const EFFECT_SETTING: u8 = 0x10;
+    pub const SCRIPT: u8 = 0x11;
+    pub const ENCHANTMENT_ITEM: u8 = 0x13;
+    pub const SPELL_ITEM: u8 = 0x14;
+    pub const ALCHEMY_ITEM: u8 = 0x2f;
+}
+
+/// Where a magic item form holds its `MagicItem` (JIP LN NVSE): a spell's or an enchantment's
+/// (`MagicItemForm`) at +0x18, an ingestible's (`MagicItemObject`) at +0x30, as
+/// `TESForm::GetMagicItem` picks it and the exe's constructors build it (`00402c90` on +0x30 of
+/// an `AlchemyItem`, engine-fallout-magic `alchemyitem.rs`).
+pub const MAGIC_ITEM_IN_FORM: u32 = 0x18;
+pub const MAGIC_ITEM_IN_OBJECT: u32 = 0x30;
+/// `Actor::magicTarget` (JIP LN NVSE), +0x94 (the exe's `SUB reg, 0x94` from a target to its
+/// actor, engine-fallout-magic `magictarget.rs`).
+pub const ACTOR_MAGIC_TARGET: u32 = 0x94;
+
+layout! {
+    /// `MagicItem` (JIP LN NVSE), 0x1C bytes, the part of a magic item form JIP's arguments
+    /// point to: its name (`TESFullName`) and its `EffectItemList` at +0xC, whose list (a
+    /// `tList<EffectItem>`, its first node inline) is at +0x10 (engine-fallout-magic
+    /// `effectitemlist.rs`: the list's vtable, then the list at +4).
+    pub struct MagicItem: 0x1C {
+        0x10 list: Inline<ListNode>,
+    }
+
+    /// `EffectItem` (JIP LN NVSE), 0x24 bytes (the exe's size and fields: engine-fallout-magic
+    /// `effectitem.rs`, checked at 004043bc-004045c1; its destructor `00403d50` empties the
+    /// condition list at +0x1C).
+    pub struct EffectItem: 0x24 {
+        0x00 magnitude: u32,
+        0x04 area: u32,
+        0x08 duration: u32,
+        0x0C range: u32,
+        0x10 actorValueOrOther: u32,
+        0x14 setting: u32,
+        0x18 cost: f32,
+        0x1C conditions: Inline<ListNode>,
+    }
+
+    /// `SpellItem` (JIP LN NVSE), 0x44 bytes: the type +0x34 and the flags byte +0x40, as the
+    /// exe's constructor clears them (engine-fallout-magic `spellitem.rs`).
+    pub struct SpellItem: 0x44 {
+        0x34 spellType: u32,
+        0x40 spellFlags: u8,
+    }
+
+    /// `EnchantmentItem` (JIP LN NVSE), 0x44 bytes: the type +0x34 (2 weapon, 3 apparel) and
+    /// the flags byte +0x40 (engine-fallout-magic `enchantmentitem.rs`: the constructor sets
+    /// +0x34 to 2 and clears +0x40).
+    pub struct EnchantmentItem: 0x44 {
+        0x34 enchType: u32,
+        0x40 enchFlags: u8,
+    }
+
+    /// `AlchemyItem` (JIP LN NVSE), 0xD8 bytes: its `ENIT` data (0x14 bytes at +0xB8, the
+    /// exe's `00402820` and save, engine-fallout-magic `alchemyitem.rs`): the flags byte +0xBC,
+    /// the addiction spell +0xC0, the addiction chance +0xC4.
+    pub struct AlchemyItem: 0xD8 {
+        0xBC alchFlags: u8,
+        0xC0 withdrawalEffect: u32,
+        0xC4 addictionChance: f32,
+    }
+
+    /// `EffectSetting` (JIP LN NVSE), 0xB0 bytes: its `DATA` (0x48 bytes at +0x58,
+    /// engine-fallout-magic `effectsetting.rs`): the flags +0x58, the associated item (a
+    /// script effect's script) +0x60, the archetype +0x98 and the actor value +0x9C (JIP reads
+    /// the low byte of each of these two words).
+    pub struct EffectSetting: 0xB0 {
+        0x58 effectFlags: u32,
+        0x60 associatedItem: u32,
+        0x98 archtype: u8,
+        0x9C actorVal: u8,
+    }
+
+    /// `TESActorBase` (JIP LN NVSE), 0x10C bytes, two of its components (their copies in the
+    /// creature copy `005f9820`: `BGSTouchSpellForm` +0x70, `TESSpellList` +0x7C): the unarmed
+    /// effect (+4 of the first, `0047bdd0`) and the spells (`TESSpellList` +4, `00717e50`).
+    pub struct TESActorBase: 0x10C {
+        0x74 unarmedEffect: u32,
+        0x80 spellList: Inline<ListNode>,
+    }
+
+    /// `TESEnchantableForm` (JIP LN NVSE), 0x10 bytes: the enchantment +4
+    /// (`TESEnchantableForm::InitItem` and `Save`, engine-fallout-forms `tesenchantableform.rs`).
+    pub struct TESEnchantableForm: 0x10 {
+        0x04 enchantItem: u32,
+    }
+
+    /// `ActiveEffect` (JIP LN NVSE), 0x48 bytes (engine-fallout-magic `activeeffect.rs`): the
+    /// time elapsed +4, the magic item +8, the effect item +0xC, active +0x10, terminated
+    /// +0x13, flags +0x18, magnitude +0x1C, duration +0x20, target +0x24, caster +0x28, the
+    /// object responsible +0x3C.
+    pub struct ActiveEffect: 0x48 {
+        0x04 timeElapsed: f32,
+        0x08 magicItem: u32,
+        0x0C effectItem: u32,
+        0x10 bActive: u8,
+        0x13 bTerminated: u8,
+        0x18 flags: u32,
+        0x1C magnitude: f32,
+        0x20 duration: f32,
+        0x24 target: u32,
+        0x28 caster: u32,
+        0x3C enchantObject: u32,
+    }
+
+    /// `ProcessManager` (JIP LN NVSE; the exe's `ProcessLists`, `011E0E80`): its array of
+    /// mobile objects (`NiTArray` at +4, the data at +8) and the first and past-the-last index
+    /// of each process level (+0x14 and +0x24, four each), as the exe's accessors read them
+    /// (`00877a30` on +4 reads +4; `005de0f0` and `005be5c0` read +0x10 and +0x20 of +4).
+    pub struct ProcessManager: 0x103CC {
+        0x08 objects: u32,
+        0x14 beginOffsets: u32,
+        0x24 endOffsets: u32,
+    }
+}

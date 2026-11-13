@@ -121,6 +121,16 @@ fn the_reload_animation_and_embedded_value() {
         0x2baa_aaaa,
         "the embedded actor value byte"
     );
+    // A parenthesised argument: the evaluator's value (`(44)`, a byte token in an expression).
+    let mut arg = vec![0xff, 0xff];
+    arg.extend_from_slice(&4u16.to_le_bytes());
+    arg.extend_from_slice(&[b'B', 0x2c]);
+    call(&mut e, 0x277f, &[r(1), arg]);
+    assert_eq!(
+        e.mem.u32(WEAP + 0x11c),
+        0x2caa_aaaa,
+        "through the expression evaluator"
+    );
 }
 
 #[test]
