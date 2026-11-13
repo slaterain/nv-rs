@@ -837,3 +837,51 @@ layout! {
         0x08 health: f32,
     }
 }
+
+/// More form types of batch 7.
+pub mod form_type_b7p {
+    pub const BGS_PROJECTILE: u8 = 0x33;
+    pub const GRENADE_PROJECTILE: u8 = 0x3e;
+    pub const BGS_EXPLOSION: u8 = 0x51;
+    pub const TES_OBJECT_LIGH: u8 = 0x1e;
+    pub const TES_OBJECT_WEAP: u8 = 0x28;
+}
+
+layout! {
+    /// `BGSProjectile` (JIP LN NVSE), checked in its loader (`004FD6F0`): `DATA` (0x54 bytes) at
+    /// +0x60: the flags (16 bits) +0x60, the type (16 bits) +0x62, the floats JIP's traits index,
+    /// the light +0x70 and the explosion +0x84; `NAM1` into the muzzle flash model (a `TESModel`)
+    /// at +0xB4; `VNAM` at +0xCC as a word, of which JIP uses the low byte.
+    pub struct BGSProjectile: 0xD0 {
+        0x60 projFlags: u16,
+        0x62 projType: u16,
+        0x70 lightProjectile: u32,
+        0x84 explosion: u32,
+        0xB4 muzzleFlash: Inline<TESModel>,
+        0xCC soundLevel: u8,
+    }
+
+    /// `Projectile` (JIP LN NVSE), a fired projectile, checked in its constructor (`009BBCA8`:
+    /// speed +0xD0, life +0xD8, damage +0xDC, detonation timer +0xE4, weapon +0xF8, source +0xFC,
+    /// distance +0x110, the impact byte +0x90). From its header only, only read: the impacts (a
+    /// `tList`) +0x88 and its own flags +0xC8.
+    pub struct Projectile: 0x150 {
+        0x88 impactDataList: Inline<ListNode>,
+        0x90 hasImpacted: u8,
+        0xC8 projFlags: u32,
+        0xD0 speedMult: f32,
+        0xD8 lifeTime: f32,
+        0xDC hitDamage: f32,
+        0xE4 detonationTime: f32,
+        0xF8 sourceWeap: u32,
+        0xFC sourceRef: u32,
+        0x110 distTravelled: f32,
+    }
+
+    /// `Projectile::ImpactData` (JIP LN NVSE, from its header only, only read): the reference hit
+    /// +0, the material +0x20.
+    pub struct ImpactData: 0x30 {
+        0x00 refr: u32,
+        0x20 materialType: u32,
+    }
+}
