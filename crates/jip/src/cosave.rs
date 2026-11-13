@@ -1286,13 +1286,15 @@ fn message_text(e: &Engine, m: &Message) -> Vec<u8> {
 // DoPreLoadGameHousekeeping (the parts built so far: the player's appearance undo goes, the
 // main-loop callbacks set to go at a load are marked (`CleanMLCallbacks`), the LN events' first
 // frame after the load reports no change, and the actor hooks' part: the fire-weapon hook's
-// count, the ragdoll events gone).
+// count, the ragdoll events gone; and the AI hooks' part: the combat, teleport and equipment hooks
+// off, the forced targets and detection values gone).
 fn pre_load_housekeeping(e: &mut Engine) {
     let npc = player_base(e);
     saved(e).appearance_undo.erase(&npc);
     crate::main_loop::clean(e);
     crate::ln_events::pre_load(e);
     crate::actor_hooks::pre_load(e);
+    crate::ai_hooks::pre_load(e);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), jip_nvse.cpp: NVSEMessageHandler (the save,

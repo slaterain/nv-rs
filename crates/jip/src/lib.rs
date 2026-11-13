@@ -29,11 +29,15 @@
 //! - [`actor_hooks`]: JIP's actor event hooks at their seams (step 3.5b: animations, damage, weapons
 //!   fired and reloaded, hits, ragdolls, aid items, projectile impacts), its hit-data routines in the
 //!   processes' vtables, and the eleven commands that set the events.
+//! - [`ai_hooks`]: JIP's actor AI hooks at their seams (step 3.5b: combat disabled or a forced target,
+//!   teammates' health resets, follow and wait orders, locked equipment, forced detection values,
+//!   a push's velocity, disabled scripts' events) and the ten commands that switch them.
 //!
 //! [`install`] runs once per engine, after `nvse::install` (JIP is xNVSE's plugin): in
 //! `host::Host::start_with`, never in the engine crates' own tests.
 
 pub mod actor_hooks;
+pub mod ai_hooks;
 pub mod commands;
 pub mod console;
 pub mod containers;
@@ -96,6 +100,8 @@ pub struct Jip {
     pub quest: commands::jip_fn_quest::State,
     /// JIP's actor hooks and their events.
     pub actor_hooks: actor_hooks::State,
+    /// JIP's actor AI hooks' maps and values.
+    pub ai_hooks: ai_hooks::State,
 }
 
 /// JIP as xNVSE knows it once loaded (`NVSEPlugin_Query`, `NVSEPlugin_Load`): its DLL, name,
@@ -145,6 +151,7 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
     main_loop::install(e);
     ui_hooks::install(e, answers_installed);
     actor_hooks::install(e, answers_installed);
+    ai_hooks::install(e, answers_installed);
     nvse::plugins::register(e, plugin(answers_installed));
     // `MainGameLoop` only once JIP answers "installed": until then a frame does no JIP work.
     if answers_installed {
