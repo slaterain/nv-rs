@@ -11,15 +11,26 @@
 pub mod forms;
 pub mod jip_fn_ammo;
 pub mod jip_fn_ammo_effect;
+pub mod jip_fn_armor;
 pub mod jip_fn_body_part_data;
 pub mod jip_fn_class;
 pub mod jip_fn_climate;
+pub mod jip_fn_combat_style;
 pub mod jip_fn_destruction_data;
+pub mod jip_fn_explosion;
+pub mod jip_fn_faction;
+pub mod jip_fn_global_var;
 pub mod jip_fn_grass;
+pub mod jip_fn_imagespace;
+pub mod jip_fn_impact_data;
+pub mod jip_fn_land_texture;
 pub mod jip_fn_light;
+pub mod jip_fn_package;
+pub mod jip_fn_perk;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_water;
 pub mod jip_fn_weather;
+pub mod jip_fn_worldspace;
 
 use engine_core::prelude::*;
 use engine_core::ptr::Layout;
@@ -36,15 +47,26 @@ pub type Handlers = &'static [(u32, AbiFn)];
 pub const ALL: &[Handlers] = &[
     jip_fn_ammo::COMMANDS,
     jip_fn_ammo_effect::COMMANDS,
+    jip_fn_armor::COMMANDS,
     jip_fn_body_part_data::COMMANDS,
     jip_fn_class::COMMANDS,
     jip_fn_climate::COMMANDS,
+    jip_fn_combat_style::COMMANDS,
     jip_fn_destruction_data::COMMANDS,
+    jip_fn_explosion::COMMANDS,
+    jip_fn_faction::COMMANDS,
+    jip_fn_global_var::COMMANDS,
     jip_fn_grass::COMMANDS,
+    jip_fn_imagespace::COMMANDS,
+    jip_fn_impact_data::COMMANDS,
+    jip_fn_land_texture::COMMANDS,
     jip_fn_light::COMMANDS,
+    jip_fn_package::COMMANDS,
+    jip_fn_perk::COMMANDS,
     jip_fn_texture_set::COMMANDS,
     jip_fn_water::COMMANDS,
     jip_fn_weather::COMMANDS,
+    jip_fn_worldspace::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -196,6 +218,22 @@ pub fn list_unlink(e: &mut Engine, node: Ptr<ListNode>, prev: Ptr<ListNode>) {
     heap_free(e, next);
 }
 
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameTypes.h: tList::RemoveAll.
+/// `tList::RemoveAll`: every node after the first unlinked and freed, the first emptied (the
+/// items themselves are left alone).
+pub fn list_remove_all(e: &mut Engine, head: Ptr<ListNode>) {
+    loop {
+        let next = e.get(head, ListNode::next);
+        if next == 0 {
+            break;
+        }
+        let after = e.get(Ptr::<ListNode>::new(next), ListNode::next);
+        e.set(head, ListNode::next, after);
+        heap_free(e, next);
+    }
+    e.set(head, ListNode::data, 0);
+}
+
 /// `tList::Remove`: the first node holding `item` taken out ([`list_unlink`]); whether there was
 /// one.
 pub fn list_remove(e: &mut Engine, head: Ptr<ListNode>, item: u32) -> bool {
@@ -293,6 +331,21 @@ pub fn buffer_arg(e: &Engine, read: &Read, i: usize, size: usize, command: &str)
         );
     }
     let text = read.text(i);
+    let end = text.iter().position(|&b| b == 0).unwrap_or(text.len());
+    text[..end].to_vec()
+}
+
+/// A formatted text (xNVSE's `ExtractFormatStringArgs`) as JIP's `size`-byte buffer holds it:
+/// xNVSE copies the whole text and its 0 into the buffer, so a text of `size` bytes or more runs
+/// into JIP's frame: [`buffer_arg`]'s rule (whole with the list guard row, else the port stops).
+pub fn formatted_in_buffer(e: &Engine, text: &[u8], size: usize, command: &str) -> Vec<u8> {
+    if text.len() >= size && !fix_on(e, LIST_GUARD) {
+        panic!(
+            "{command}: a formatted text of {} bytes runs past JIP's {size}-byte buffer into its \
+             frame: the port stops here (NV_NVSE_LIST_GUARD reads it whole)",
+            text.len()
+        );
+    }
     let end = text.iter().position(|&b| b == 0).unwrap_or(text.len());
     text[..end].to_vec()
 }
@@ -400,21 +453,32 @@ mod tests {
     }
 
     /// Each module lists only commands of its own JIP source file, once each, and the count is
-    /// README's ("JIP LN: 95 of 1,118").
+    /// README's ("JIP LN: 153 of 1,118").
     #[test]
     fn each_module_holds_its_own_file() {
         let files = [
             "jip_fn_ammo",
             "jip_fn_ammo_effect",
+            "jip_fn_armor",
             "jip_fn_body_part_data",
             "jip_fn_class",
             "jip_fn_climate",
+            "jip_fn_combat_style",
             "jip_fn_destruction_data",
+            "jip_fn_explosion",
+            "jip_fn_faction",
+            "jip_fn_global_var",
             "jip_fn_grass",
+            "jip_fn_imagespace",
+            "jip_fn_impact_data",
+            "jip_fn_land_texture",
             "jip_fn_light",
+            "jip_fn_package",
+            "jip_fn_perk",
             "jip_fn_texture_set",
             "jip_fn_water",
             "jip_fn_weather",
+            "jip_fn_worldspace",
         ];
         let mut seen = std::collections::HashSet::new();
         for (list, file) in ALL.iter().zip(files) {
@@ -425,7 +489,7 @@ mod tests {
             }
         }
         assert_eq!(ALL.len(), files.len());
-        assert_eq!(built(), 95);
+        assert_eq!(built(), 153);
     }
 
     /// Answering "installed", a built command has its execute and its name in its record; an

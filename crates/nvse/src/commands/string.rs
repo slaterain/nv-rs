@@ -1098,12 +1098,12 @@ fn formatted_string(e: &mut Engine, args: &mut FmtArgs, format: &[u8]) -> Option
 
 /// What `ExtractFormatStringArgs` gave: whether it succeeded, the formatted text (empty when the
 /// format failed) and the parameters after the format string that it read.
-pub(crate) struct Formatted {
-    pub(crate) ok: bool,
-    pub(crate) text: Vec<u8>,
+pub struct Formatted {
+    pub ok: bool,
+    pub text: Vec<u8>,
     args: Vec<Arg>,
     /// The parameters before the format string ([`format_string_args_at`]'s `fmt_pos`).
-    pub(crate) leading: Vec<Arg>,
+    pub leading: Vec<Arg>,
 }
 
 impl Formatted {
@@ -1128,7 +1128,7 @@ pub(crate) fn format_string_args(e: &mut Engine, a: &CommandArgs, max_params: u3
 /// The format string at parameter `fmt_pos`: the parameters before it read first (into
 /// [`Formatted::leading`]), then the format string and its arguments, then any normal parameters
 /// after the format string's 20.
-pub(crate) fn format_string_args_at(
+pub fn format_string_args_at(
     e: &mut Engine,
     a: &CommandArgs,
     fmt_pos: u32,

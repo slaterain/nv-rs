@@ -200,8 +200,15 @@ layout! {
 
     /// `BGSPerk` (Xbox PDB), the fields JIP reads.
     pub struct BGSPerk: 0x50 {
+        /// `data.isTrait` (JIP LN NVSE): the perk loader `005EADA0` reads `DATA`'s
+        /// five bytes from +0x38 (trait, minimum level, ranks, playable, hidden).
+        0x38 isTrait: u8,
         /// `data.cNumRanks` (Xbox PDB).
         0x3A cNumRanks: u8,
+        /// `data.isPlayable` (JIP LN NVSE).
+        0x3B isPlayable: u8,
+        /// `data.isHidden` (JIP LN NVSE).
+        0x3C isHidden: u8,
     }
 }
 
