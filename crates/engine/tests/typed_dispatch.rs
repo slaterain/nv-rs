@@ -2487,9 +2487,40 @@ fn word_map(e: &mut Engine, vt: u32, buckets: u32, keys: &[u32]) -> u32 {
 
 const MAP_KEYS: &[u32] = &[0, 1, 5, 36, 37, 38, 74, 111, 0xffff_ffff];
 
-/// The save's references map: slots 4 and 8 hold the word map's hash and compare (`006c6a60`,
-/// `006b81d0`), both called directly; found or not, at the head, inside or at the end of a chain,
-/// one bucket or 37.
+/// The word map's inputs: the bucket count, the key looked up, how many of [`MAP_KEYS`] the map holds.
+fn word_map_inputs() -> Vec<Input> {
+    vec![
+        Input::Of(&[1, 5, 37]),
+        Input::Of(&[0, 1, 37, 74, 111, 2, 0xffff_ffff]),
+        Input::Of(&[0, 4, 9]),
+    ]
+}
+
+/// The word map's words: slots 4 and 8 hold the word map's hash and compare (`006c6a60`,
+/// `006b81d0`).
+fn word_map_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    stand_ins(e);
+    let vt = vtable(e);
+    e.mem.set_u32(vt + 4, 0x006c_6a60);
+    e.mem.set_u32(vt + 8, 0x006b_81d0);
+    let n = case.word(2) as usize;
+    let map = word_map(e, vt, case.word(0), &MAP_KEYS[..n]);
+    vec![map, case.word(1), block(e, 4, &[0x1234_5678])]
+}
+
+/// Any other map's words: the stand-ins' hash and compare in the slots (bucket 0, and "equal" by the
+/// map's word at +0x40), with 0, 1 or 3 nodes in the bucket.
+fn other_map_words(e: &mut Engine, case: &Case) -> Vec<u32> {
+    stand_ins(e);
+    let vt = vtable(e);
+    let keys: Vec<u32> = (0..case.word(0)).map(|i| 7 * i).collect();
+    let map = word_map(e, vt, 1, &keys);
+    e.mem.set_u32(map + 0x40, case.word(1));
+    vec![map, case.word(2), block(e, 4, &[0x1234_5678])]
+}
+
+/// The save's references map: the word map's hash and compare, both called directly; found or not,
+/// at the head, inside or at the end of a chain, one bucket or 37.
 #[test]
 fn map_lookup_word_map() {
     Diff::new(entry!(
@@ -2497,26 +2528,13 @@ fn map_lookup_word_map() {
         refs::map_lookup(Ptr<_>, u32, Ptr<u32>) -> u8
     ))
     .common(0x0085_3130)
-    .inputs(&[
-        Input::Of(&[1, 5, 37]),
-        Input::Of(&[0, 1, 37, 74, 111, 2, 0xffff_ffff]),
-        Input::Of(&[0, 4, 9]),
-    ])
-    .setup(|e, case| {
-        stand_ins(e);
-        let vt = vtable(e);
-        e.mem.set_u32(vt + 4, 0x006c_6a60);
-        e.mem.set_u32(vt + 8, 0x006b_81d0);
-        let n = case.word(2) as usize;
-        let map = word_map(e, vt, case.word(0), &MAP_KEYS[..n]);
-        vec![map, case.word(1), block(e, 4, &[0x1234_5678])]
-    })
+    .inputs(&word_map_inputs())
+    .setup(word_map_words)
     .run()
     .assert_same();
 }
 
-/// Any other map: the hash and the compare by address through the vtable (the stand-ins answer
-/// bucket 0, and "equal" by the map's word at +0x40), in the exe's order.
+/// Any other map: the hash and the compare by address through the vtable, in the exe's order.
 #[test]
 fn map_lookup_other_slots() {
     Diff::new(entry!(
@@ -2525,14 +2543,37 @@ fn map_lookup_other_slots() {
     ))
     .common(0x0085_3130)
     .inputs(&[Input::Of(&[0, 1, 3]), Input::Flag, Input::Word])
-    .setup(|e, case| {
-        stand_ins(e);
-        let vt = vtable(e);
-        let keys: Vec<u32> = (0..case.word(0)).map(|i| 7 * i).collect();
-        let map = word_map(e, vt, 1, &keys);
-        e.mem.set_u32(map + 0x40, case.word(1));
-        vec![map, case.word(2), block(e, 4, &[0x1234_5678])]
-    })
+    .setup(other_map_words)
+    .run()
+    .assert_same();
+}
+
+/// The exe's second copy of the lookup (`00a1e380`: the menus' maps, the sound manager's, the
+/// threads' scrap heaps), instruction for instruction the same body: the same typed function against
+/// that address's own translation, on the word map.
+#[test]
+fn map_lookup_second_copy_word_map() {
+    Diff::new(entry!(
+        0x00a1_e380,
+        refs::map_lookup(Ptr<_>, u32, Ptr<u32>) -> u8
+    ))
+    .common(0x00a1_e380)
+    .inputs(&word_map_inputs())
+    .setup(word_map_words)
+    .run()
+    .assert_same();
+}
+
+/// The second copy on any other map: the hash and the compare by address, in the exe's order.
+#[test]
+fn map_lookup_second_copy_other_slots() {
+    Diff::new(entry!(
+        0x00a1_e380,
+        refs::map_lookup(Ptr<_>, u32, Ptr<u32>) -> u8
+    ))
+    .common(0x00a1_e380)
+    .inputs(&[Input::Of(&[0, 1, 3]), Input::Flag, Input::Word])
+    .setup(other_map_words)
     .run()
     .assert_same();
 }
