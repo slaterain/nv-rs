@@ -1350,7 +1350,8 @@ fn a_dot_after_a_result_calls_on_the_stack() {
 
 /// While a script compiles the command names come from one map, made as xNVSE's name map is
 /// (the first record to bring a name keeps it): the table walk's answers, a short name that
-/// another record has as its long name included; the map goes when the compile ends.
+/// another record has as its long name included; the map is kept, and made again only after
+/// records are written in.
 #[test]
 fn a_compile_finds_names_through_one_map() {
     let mut e = installed();
@@ -1368,9 +1369,16 @@ fn a_compile_finds_names_through_one_map() {
         );
     }
     assert_eq!(command_by_name(&mut e, b"let"), Some(TWO));
-    assert!(state(&mut e).names.is_some());
+    assert!(e.ext::<Nvse>().table.names.is_some());
     e.site(0x005a_eda0, &[1, BUF]);
-    assert!(state(&mut e).names.is_none());
+    // The map stays for the next compile, and is made again once records are written in.
+    assert!(e.ext::<Nvse>().table.names.is_some());
+    e.mem.set_u32(two + 4, 0);
+    assert_eq!(e.site(0x005a_ebb1, &[SCRIPT, BUF]), Some(1));
+    assert_eq!(command_by_name(&mut e, b"let"), Some(TWO), "the same map");
+    e.ext::<Nvse>().table.registrations += 1;
+    assert_eq!(command_by_name(&mut e, b"let"), Some(0x1539), "made again");
+    e.site(0x005a_eda0, &[1, BUF]);
 }
 
 /// A loop open while the script's data grows (xNVSE's size seam moves it to a new block): the

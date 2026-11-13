@@ -28,7 +28,7 @@
 //! `ExpressionParser::ParseParentheses` (the GECK's inline expressions; editor only).
 
 use crate::expr::{can_convert, op, op_symbol, operand_count, Ty};
-use crate::table::{guest_text, name_map, opcode_by_name, record_of, return_type, Returns};
+use crate::table::{guest_text, opcode_by_name, record_of, return_type, Returns};
 use crate::Nvse;
 use engine_core::prelude::*;
 use std::collections::HashMap;
@@ -470,29 +470,19 @@ pub struct State {
     pub(crate) skip_ref_check: bool,
     /// `g_currentScriptRestorePoundChar`: the `#version` tags made comments, per open compile.
     pub(crate) pound_restores: Vec<Vec<u32>>,
-    /// The command names' map while a script compiles ([`command_by_name`]).
-    pub(crate) names: Option<HashMap<u32, Option<u32>>>,
 }
 
 pub(crate) fn state(e: &mut Engine) -> &mut State {
     &mut e.ext::<Nvse>().compiler
 }
 
-/// `g_scriptCommands.GetByName`: while a script compiles, through the name map made at the
-/// compile's first lookup (dropped when it ends); otherwise the table's own walk.
+/// `g_scriptCommands.GetByName`: while a script compiles, through the table's name map
+/// ([`crate::table::opcode_by_name_mapped`], made once); otherwise the table's own walk.
 pub(crate) fn command_by_name(e: &mut Engine, name: &[u8]) -> Option<u32> {
     if state(e).scripts.is_empty() {
         return opcode_by_name(e, name);
     }
-    if state(e).names.is_none() {
-        let map = name_map(e);
-        state(e).names = Some(map);
-    }
-    let hash = crate::events::hash_name(name);
-    state(e)
-        .names
-        .as_ref()
-        .and_then(|m| m.get(&hash).copied().flatten())
+    crate::table::opcode_by_name_mapped(e, name)
 }
 
 // ---- guest helpers ----

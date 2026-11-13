@@ -206,6 +206,11 @@ pub struct State {
     strings: HashMap<Vec<u8>, u32>,
     /// Return types by opcode, from `0x1000`.
     pub returns: Vec<Returns>,
+    /// How many times records were written in (install, a plugin's growth or record): the name
+    /// map is made again when it changes.
+    pub registrations: u32,
+    /// [`name_map`] and the registration count it was made at.
+    pub names: Option<(u32, HashMap<u32, Option<u32>>)>,
 }
 
 /// Vanilla commands xNVSE records as returning forms (`AddCommandsV1`, `CommandTable.cpp`
@@ -423,6 +428,22 @@ pub fn name_map(e: &Engine) -> HashMap<u32, Option<u32>> {
     map
 }
 
+/// [`opcode_by_name`] through [`name_map`], made once and again only when records were written in
+/// since (xNVSE fills its map as commands register).
+pub fn opcode_by_name_mapped(e: &mut Engine, name: &[u8]) -> Option<u32> {
+    let registrations = e.ext::<Nvse>().table.registrations;
+    if e.ext::<Nvse>().table.names.as_ref().map(|n| n.0) != Some(registrations) {
+        let map = name_map(e);
+        e.ext::<Nvse>().table.names = Some((registrations, map));
+    }
+    let hash = crate::events::hash_name(name);
+    e.ext::<Nvse>()
+        .table
+        .names
+        .as_ref()
+        .and_then(|(_, m)| m.get(&hash).copied().flatten())
+}
+
 /// The execute address of built command `opcode` of xNVSE's range.
 pub fn execute_address(opcode: u32) -> u32 {
     EXECUTE_BASE + 4 * (opcode - FIRST_OPCODE)
@@ -541,6 +562,7 @@ pub fn install(e: &mut Engine) {
     }
     .write(e, TABLE_AT + count * RECORD);
     e.ext::<Nvse>().table.returns = returns;
+    e.ext::<Nvse>().table.registrations += 1;
     e.set_script_tables(ScriptTables {
         start: TABLE_AT,
         end: TABLE_AT + count * RECORD,
@@ -595,6 +617,7 @@ pub fn grow_to(e: &mut Engine, max_opcode: u32) {
         .table
         .returns
         .resize(count as usize, Returns::Default);
+    e.ext::<Nvse>().table.registrations += 1;
     e.set_script_tables(ScriptTables {
         start: TABLE_AT,
         end: TABLE_AT + count * RECORD,
@@ -661,7 +684,9 @@ pub fn add_plugin_record(e: &mut Engine, opcode: u32, r: &PluginRecord) {
         flags: r.flags,
     }
     .write(e, t.record(opcode));
-    e.ext::<Nvse>().table.returns[(opcode - ScriptTables::FIRST_OPCODE) as usize] = r.returns;
+    let state = &mut e.ext::<Nvse>().table;
+    state.returns[(opcode - ScriptTables::FIRST_OPCODE) as usize] = r.returns;
+    state.registrations += 1;
 }
 
 /// The return type of `opcode` (xNVSE's `GetReturnType`): `Default` outside the table.

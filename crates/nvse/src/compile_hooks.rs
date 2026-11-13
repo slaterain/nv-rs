@@ -208,7 +208,6 @@ fn end_compile(e: &mut Engine, w: &[u32]) -> Option<u32> {
         let empty = s.scripts.is_empty();
         if empty {
             s.var_types.clear();
-            s.names = None;
         }
         let text = e.mem.u32(script + sc::TEXT);
         if text != 0 {
