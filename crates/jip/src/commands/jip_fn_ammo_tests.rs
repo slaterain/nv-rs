@@ -106,7 +106,11 @@ fn the_casing() {
     form(&mut e, STAT, 0x20, 0x0000_0020);
     set_ref(&mut e, 5, STAT);
     call(&mut e, 0x2939, &[r(1), r(5)]);
-    assert_eq!(e.mem.u32(AMMO + 0xbc), MISC, "a static is no inventory item");
+    assert_eq!(
+        e.mem.u32(AMMO + 0xbc),
+        MISC,
+        "a static is no inventory item"
+    );
     call(&mut e, 0x2939, &[r(1)]);
     assert_eq!(e.mem.u32(AMMO + 0xbc), 0);
     call(&mut e, 0x2939, &[r(4), r(3)]);
