@@ -645,8 +645,8 @@ pub(crate) mod tests {
         opcodes.dedup();
         assert_eq!(opcodes.len(), built.len(), "two commands at one opcode");
         let console = NAMES.iter().filter(|(n, _)| n.starts_with("con_")).count();
-        assert_eq!((built.len(), console), (622, 20));
-        assert_eq!(built.len() + console, 642);
+        assert_eq!((built.len(), console), (625, 20));
+        assert_eq!(built.len() + console, 645);
     }
 
     /// Every xNVSE opcode has its names; a console re-export copies the console record with the
