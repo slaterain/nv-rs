@@ -8,7 +8,7 @@ use super::layout::{
     NiFrustum, NiFrustumPlanes, NiGeometry, NiPlane, NiPoint3, NiTransform,
 };
 use super::{bound, radius_not_zero, FAMILY};
-use crate::dispatch;
+use crate::anim_keys::narrow;
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
 use engine_core::{args, typed_call, Engine};
@@ -54,6 +54,8 @@ const APPEND_FAILED_FORMAT: u32 = 0x0109_c2e0;
 const EMPTY_TEXT: u32 = 0x0101_f7a8;
 /// The `double` zero the box test compares its third half extent with.
 const ZERO_DOUBLE: u32 = 0x0101_2060;
+/// The unit axes the box's corners are made from (`NiPoint3::UNIT_X`, `UNIT_Y`, `UNIT_Z`).
+const UNIT_AXES: [u32; 3] = [0x011a_946c, 0x011a_9478, 0x011a_9484];
 
 /// Plane `index` of a set of frustum planes.
 #[inline(always)]
@@ -409,43 +411,64 @@ pub fn fade_culler_process(e: &mut Engine, this: Ptr<NiCullingProcess>, referenc
 /// eight corners (`00c39270`, into a local) against each active plane (`0049da80`); outside (false)
 /// once every corner tested is behind one plane. A box whose third half extent is zero (compared
 /// with the `double` zero; a NaN isn't zero) tests its odd corners only.
+///
+/// Native, with no calls and no local in guest memory: both callees' work is done in place.
+/// `GetVertices` (`00c39270`) scales the three unit axes (`011a946c`, read from the exe's data) by
+/// the half extents (`0045bb20`, each product stored), then makes corner `k` as
+/// `((centre ± x) ± y) ± z`, each sum or difference stored to a float (`00439e90`, `00439ef0`; bit
+/// `2 - a` of `k` set subtracts axis `a`): a single operation on two floats each, so plain `f32`, the
+/// exe's float on both threads' precision. The plane test (`0049da80`) sums `(nx px + ny py) + nz pz`,
+/// subtracts the constant and stores the distance to a float: an `f64` sum rounded at that store (the
+/// family's float rule), bit for bit on the other threads' precision; on the main thread's the exe
+/// rounds each step to 24 bits, so a corner within a rounding of a plane may land on the other side
+/// there. Behind is a distance below the `double` zero (a NaN is not behind).
 pub fn within_frustum(
     e: &mut Engine,
     this: Ptr<BSMultiBoundAABB>,
     planes: Ptr<NiFrustumPlanes>,
 ) -> bool {
     let zero: f64 = e.global(ZERO_DOUBLE);
+    let center = this.at(BSMultiBoundAABB::Center);
     let half_extents = this.at(BSMultiBoundAABB::HalfExtents);
     let flat = f64::from(e.get(half_extents, NiPoint3::z)) == zero;
-    // Eight points of 12 bytes, a local `00c39270` writes.
-    e.with_stack(96, |e, corners| {
-        typed_call!(
-            dispatch::FAMILY,
-            0x00c3_9270,
-            dispatch::math::box_corners(e, this.cast(), corners)
-        );
-        for index in 0..6u32 {
-            if (1u32 << index) & e.get(planes, NiFrustumPlanes::m_uiActivePlanes) == 0 {
-                continue;
-            }
-            let mut all_behind = true;
-            for corner in 0..8u32 {
-                if flat && corner & 1 == 0 {
-                    continue;
-                }
-                let side = typed_call!(
-                    leaf::FAMILY,
-                    0x0049_da80,
-                    leaf::plane_side(e, plane(planes, index), corners.byte_add(12 * corner))
-                );
-                if side != 2 {
-                    all_behind = false;
-                }
-            }
-            if all_behind {
-                return false;
+    let fields = [NiPoint3::x, NiPoint3::y, NiPoint3::z];
+    // The axis points: unit axis `a` times half extent `a`.
+    let axes: [[f32; 3]; 3] = std::array::from_fn(|a| {
+        let extent = e.get(half_extents, fields[a]);
+        let unit = Ptr::<NiPoint3>::new(UNIT_AXES[a]);
+        fields.map(|f| extent * e.get(unit, f))
+    });
+    let start = fields.map(|f| e.get(center, f));
+    let corners: [[f32; 3]; 8] = std::array::from_fn(|corner| {
+        let mut point = start;
+        for (a, axis) in axes.iter().enumerate() {
+            let subtract = corner >> (2 - a) & 1 != 0;
+            for (p, q) in point.iter_mut().zip(axis) {
+                *p = if subtract { *p - *q } else { *p + *q };
             }
         }
-        true
-    })
+        point
+    });
+    for index in 0..6u32 {
+        if (1u32 << index) & e.get(planes, NiFrustumPlanes::m_uiActivePlanes) == 0 {
+            continue;
+        }
+        let at = plane(planes, index);
+        let normal = at.at(NiPlane::m_kNormal);
+        let n = fields.map(|f| f64::from(e.get(normal, f)));
+        let constant = f64::from(e.get(at, NiPlane::m_fConstant));
+        let all_behind = corners
+            .iter()
+            .enumerate()
+            .filter(|(corner, _)| !flat || corner & 1 != 0)
+            .all(|(_, p)| {
+                let dot =
+                    (n[0] * f64::from(p[0]) + n[1] * f64::from(p[1])) + n[2] * f64::from(p[2]);
+                f64::from(narrow(dot - constant)) < zero
+            });
+        if all_behind {
+            return false;
+        }
+    }
+    true
 }

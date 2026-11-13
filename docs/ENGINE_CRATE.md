@@ -456,7 +456,8 @@ lock-free maps, their interfaces, iterators and holder, stage 1 (objects stay in
 differential tests are `crates/engine/tests/typed_lockfree.rs`. And `culling` (same crate): the culling
 walk, stage 1, its float maths native since 2026-11-11 (the bounds' and planes' sums of products and the merge in
 `f64` rounded at the stores, a single operation on two floats in plain `f32`, the main-thread-only fade-node culler in
-`f32`); its tests are `crates/engine/tests/typed_culling.rs`. And `pathing` (same crate): what the AI's pathfinding threads
+`f32`; since 2026-11-13 the multi-bound box test makes its corners and plane distances in place, with no calls,
+and the multi-bound node calls it directly); its tests are `crates/engine/tests/typed_culling.rs`. And `pathing` (same crate): what the AI's pathfinding threads
 run most (navmesh getters, matching edges, the triangle under a point, the search's keys, goal test and
 arrays, the point-of-view geometry, pathing locations, the point helpers), stage 1, its float maths native since
 2026-11-12 (sums of products, cross products and the barycentric height at the running thread's precision over
@@ -469,7 +470,8 @@ And `dispatch` (same crate, id 9): a speed batch picked by calls by address a fr
 make those calls, so they become Rust calls (the transforms' and matrices' arithmetic, the scene graph's
 controller and children walks and getters, counted references, the recursive spin lock, the AI's and the
 inventory's getters; since 2026-11-10 also the word map's lookup `00853130`, which a quicksave makes about
-230,000 times in its frame through the save's 37-bucket references map), stage 1 (its calls into `leaves`,
+230,000 times in its frame through the save's 37-bucket references map, and since 2026-11-13 at `00a1e380` too, the
+exe's second, identical copy of that body, which the menus' maps and every thread's scrap-heap map use), stage 1 (its calls into `leaves`,
 `culling` and `pathing` go direct only when those are on), its float maths native since 2026-11-11 (the matrix and
 vector products' sums in `f64` rounded at the stores, a single operation on two floats in plain `f32`, which rounds
 to the same float; no x87 helper left); its tests are `crates/engine/tests/typed_dispatch.rs`. And `shader` (same crate, id 17): the shader

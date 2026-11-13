@@ -992,6 +992,349 @@ fn aabb(e: &mut Engine, s: &Scene, cx: u32, hz: u32, result: u32, answer: u32) -
     b
 }
 
+/// The box test's callees, whose work the typed version does in place: the corners (`00c39270`) and
+/// a point's side of a plane (`0049da80`).
+const BOX_CALLEES: &[u32] = &[0x00c3_9270, 0x0049_da80];
+
+/// A real multi-bound box (`WithinFrustum` the exe's, `00c387f0`): centre `(cx, cy, 0)`, half extents
+/// `(hx, 1, hz)`, last verdict `result`.
+fn real_aabb(e: &mut Engine, cx: u32, cy: u32, hx: u32, hz: u32, result: u32) -> u32 {
+    let vt = vtable(e, &[(0x9c, 0x00c3_87f0)]);
+    let b = e.mem.alloc(0x24);
+    for (i, w) in [vt, 1, result, cx, cy, 0, hx, ONE, hz].iter().enumerate() {
+        e.mem.set_u32(b + 4 * i as u32, *w);
+    }
+    b
+}
+
+/// The box against the planes at `|x| = 10` at the edge: a corner exactly on a plane (centre 9 or
+/// 11 with half extent 1: inside, a distance of zero is not behind), a float either side of it (11's
+/// neighbours: the far corner just in or just out), centres far out, at a plane, NaN and infinite,
+/// half extents zero, negative zero, NaN and infinite (the third one zero tests the odd corners only),
+/// with every plane, one plane, two or none active.
+#[test]
+fn within_frustum_near_planes() {
+    const CENTRES: &[u32] = &[
+        0x4110_0000, // 9
+        0x4130_0000, // 11
+        0x4130_0001, // just above 11: the near corner just past 10
+        0x412f_ffff, // just below 11
+        0xc130_0001, // just below -11
+        0x41a0_0000, // 20: out
+        0x4120_0000, // 10: the centre on the plane
+        0,
+        0x7fc0_0000,
+        0x7f80_0000,
+        0xff80_0000,
+    ];
+    const EXTENTS: &[u32] = &[ONE, 0, 0x8000_0000, 0x7fc0_0000, 0x7f80_0000, 0x3f80_0001];
+    Diff::new(entry!(
+        0x00c3_87f0,
+        process::within_frustum(Ptr<_>, Ptr<_>) -> bool
+    ))
+    .common()
+    .ignore_calls(BOX_CALLEES)
+    .inputs(&[
+        Input::Of(CENTRES),
+        Input::Of(&[0, 0x4130_0000, 0x7fc0_0000]),
+        Input::Of(EXTENTS),
+        Input::Of(EXTENTS),
+        Input::Of(&[0x3f, 0x2, 0x3, 0x1, 0]),
+    ])
+    .max_cases(512)
+    .setup(|e, case| {
+        let s = scene(e);
+        let b = real_aabb(e, case.word(0), case.word(1), case.word(2), case.word(3), 0);
+        e.mem.set_u32(s.process + 0x8c, case.word(4));
+        vec![b, s.process + 0x2c]
+    })
+    .run()
+    .assert_same();
+}
+
+/// One plane of the box test set by hand (plane 0 alone active: normal `(nx, 0, 0)`, constant `c`)
+/// against a box at `(cx, 0, 0)` with half extents `(hx, 1, 1)`: a distance below the float's range
+/// (2^-80 times -2^-80) is stored as a negative zero, which is not behind; a distance of exactly zero
+/// either way; a NaN or infinite normal.
+#[test]
+fn within_frustum_distance_stored() {
+    Diff::new(entry!(
+        0x00c3_87f0,
+        process::within_frustum(Ptr<_>, Ptr<_>) -> bool
+    ))
+    .common()
+    .ignore_calls(BOX_CALLEES)
+    .inputs(&[
+        Input::Of(&[0x1780_0000, ONE, 0xbf80_0000, 0x7fc0_0000, 0x7f80_0000]),
+        Input::Of(&[0, 0x8000_0000, MINUS_TEN, 0x0000_0001]),
+        Input::Of(&[0x9780_0000, 0, 0x1780_0000, 0xc120_0000]),
+        Input::Of(&[0, ONE]),
+    ])
+    .max_cases(256)
+    .setup(|e, case| {
+        let s = scene(e);
+        let planes = s.process + 0x2c;
+        e.mem.set_u32(planes, case.word(0));
+        e.mem.set_u32(planes + 0xc, case.word(1));
+        e.mem.set_u32(planes + 0x60, 1);
+        let b = real_aabb(e, case.word(2), 0, case.word(3), ONE, 0);
+        vec![b, planes]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The flat box (third half extent zero or negative zero: the odd corners only) against boxes
+/// whose odd corners alone are behind a plane: a centre at -11 with half extent 1 has its corners
+/// that subtract x behind `x = -10` and those that add x on it; a third half extent of 20 has its
+/// odd corners behind `z = -10` and its even ones behind `z = 10`; a second half extent of zero
+/// with a third that isn't (only the third one makes a box flat). Every combination.
+#[test]
+fn within_frustum_flat() {
+    Diff::new(entry!(
+        0x00c3_87f0,
+        process::within_frustum(Ptr<_>, Ptr<_>) -> bool
+    ))
+    .common()
+    .ignore_calls(BOX_CALLEES)
+    .inputs(&[
+        Input::Of(&[0xc130_0000, 0x4130_0000, 0, 0x4110_0000]),
+        Input::Of(&[ONE, 0]),
+        Input::Of(&[0, 0x8000_0000, 0x41a0_0000, ONE]),
+    ])
+    .setup(|e, case| {
+        let s = scene(e);
+        let b = real_aabb(e, case.word(0), 0, ONE, case.word(2), 0);
+        e.mem.set_u32(b + 0x1c, case.word(1));
+        vec![b, s.process + 0x2c]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The float next to `x`, up or down the number line.
+fn next_float(x: f32, up: bool) -> f32 {
+    if x == 0.0 {
+        let tiny = f32::from_bits(1);
+        return if up { tiny } else { -tiny };
+    }
+    let b = x.to_bits();
+    f32::from_bits(if (x > 0.0) == up { b + 1 } else { b - 1 })
+}
+
+/// `x` moved `k` floats along the number line.
+fn float_steps(x: f32, k: i32) -> f32 {
+    (0..k.abs()).fold(x, |v, _| next_float(v, k > 0))
+}
+
+/// `n . p` as the exe's 53-bit code sums it: `(n0 p0 + n1 p1) + n2 p2` in `f64`.
+fn dot_f64(n: [f32; 3], p: [f32; 3]) -> f64 {
+    (f64::from(n[0]) * f64::from(p[0]) + f64::from(n[1]) * f64::from(p[1]))
+        + f64::from(n[2]) * f64::from(p[2])
+}
+
+/// Tilted plane normals, normalised in `f64` and stored as floats: in the plane `z = 0`, a general
+/// direction, and one with a z component of 1e-4.
+fn tilted_normals() -> [[f32; 3]; 3] {
+    [[0.6, 0.8, 0.0], [0.267, 0.535, 0.802], [0.6, 0.8, 1e-4]].map(|n: [f64; 3]| {
+        let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        #[allow(clippy::cast_possible_truncation)]
+        n.map(|v| (v / length) as f32)
+    })
+}
+
+/// The box test against one tilted plane (plane 0 alone active) through a point: the box's half
+/// extents are 1e-30, so its eight corners round to its centre and the answer is the side of that one
+/// point. The plane's constant is the centre's `f64` distance stored as a float, moved -3 to +3
+/// floats, so the 53-bit distance lands within a few ulps of zero on either side (and at exactly the
+/// rounding of the stored constant). The last two points make the first two products cancel exactly
+/// (`(n1 1024, -n0 1024, 2^-30)` and `(n1 4096, -n0 4096, -3 2^-31)`) beside a third one whose low
+/// bits lie below the second product's last bit, so the other summation order rounds them away. Under the other threads' control word, bit for bit with the translation.
+#[test]
+fn within_frustum_tilted_planes() {
+    Diff::new(entry!(
+        0x00c3_87f0,
+        process::within_frustum(Ptr<_>, Ptr<_>) -> bool
+    ))
+    .common()
+    .ignore_calls(BOX_CALLEES)
+    .other_threads()
+    .inputs(&[
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6]),
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6]),
+        Input::Flag,
+    ])
+    .setup(|e, case| {
+        let s = scene(e);
+        let n0 = tilted_normals()[case.word(0) as usize];
+        let sign = if case.word(3) != 0 { -1.0 } else { 1.0 };
+        let n = n0.map(|v| v * sign);
+        let points: [[f32; 3]; 5] = [
+            [1234.567, -876.5432, 100.25],
+            [-32_500.0, 17_000.3, -2_500.7],
+            [0.1234, 0.5678, -0.9012],
+            [96_000.5, -48_000.25, 4_096.125],
+            [7.0, -11.0, 13.0],
+        ];
+        let p = match case.word(1) as usize {
+            5 => [n[1] * 1024.0, -n[0] * 1024.0, 2f32.powi(-30)],
+            6 => [n[1] * 4096.0, -n[0] * 4096.0, -3.0 * 2f32.powi(-31)],
+            i => points[i],
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let at = dot_f64(n, p) as f32;
+        let constant = float_steps(at, case.word(2) as i32 - 3);
+        let planes = s.process + 0x2c;
+        for (i, v) in n.iter().enumerate() {
+            e.mem.set_u32(planes + 4 * i as u32, v.to_bits());
+        }
+        e.mem.set_u32(planes + 0xc, constant.to_bits());
+        e.mem.set_u32(planes + 0x60, 1);
+        let tiny = 1e-30f32.to_bits();
+        let b = real_aabb(e, p[0].to_bits(), p[1].to_bits(), tiny, tiny, 0);
+        e.mem.set_u32(b + 0x14, p[2].to_bits());
+        e.mem.set_u32(b + 0x1c, tiny);
+        vec![b, planes]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A tiny pseudo-random sequence (xorshift), so the census repeats.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+    /// Uniform in `[lo, hi)`.
+    #[allow(clippy::cast_precision_loss)]
+    fn range(&mut self, lo: f64, hi: f64) -> f64 {
+        lo + (hi - lo) * ((self.next() >> 11) as f64 / (1u64 << 53) as f64)
+    }
+}
+
+/// How far from a plane a corner may be where the main thread's exe and the native box test may
+/// answer differently: the exe rounds each product, sum and the difference to 24 bits, at most
+/// `2^-24` of each partial result, so within four times `2^-24` of the sum of the terms' sizes.
+fn main_thread_margin(n: [f32; 3], p: [f32; 3], constant: f32) -> f64 {
+    let size: f64 = (0..3)
+        .map(|i| (f64::from(n[i]) * f64::from(p[i])).abs())
+        .sum::<f64>()
+        + f64::from(constant).abs();
+    4.0 * size / f64::from(1u32 << 24)
+}
+
+/// The main thread's difference, measured: 4,000 random boxes and planes in game sizes (centres
+/// within 100,000 units, half extents 1 to 2,000, a tenth of them flat, planes in any direction)
+/// under the main thread's control word, the translation (the exe's 24-bit arithmetic) against the
+/// native box test. Half the planes pass through the box's corner farthest in front, moved -2 to +2
+/// floats, where the two may part; the rest lie anywhere. Every case where they answer differently
+/// must have its deciding corner within [`main_thread_margin`] of the plane: that is the only kind of
+/// difference. The count and the largest such distance in game units are printed (`--nocapture`).
+#[test]
+fn within_frustum_main_thread_differences() {
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let (mut differences, mut largest, mut largest_at) = (0u32, 0.0f64, 0.0f64);
+    for i in 0..4_000 {
+        let mut e = Engine::new_untyped_for_test();
+        let s = scene(&mut e);
+        #[allow(clippy::cast_possible_truncation)]
+        let f = |v: f64| v as f32;
+        let raw = [0; 3].map(|_| rng.range(-1.0, 1.0));
+        let length = raw.iter().map(|v| v * v).sum::<f64>().sqrt().max(1e-9);
+        let n = raw.map(|v| f(v / length));
+        let centre = [0; 3].map(|_| f(rng.range(-100_000.0, 100_000.0)));
+        let mut half = [0; 3].map(|_| f(rng.range(1.0, 2_000.0)));
+        if i % 10 == 0 {
+            half[2] = 0.0;
+        }
+        // The corners as the exe makes them (each step one float operation).
+        let corners: Vec<[f32; 3]> = (0..8)
+            .filter(|k| half[2] != 0.0 || k & 1 != 0)
+            .map(|k| {
+                std::array::from_fn(|a| {
+                    let mut v = centre[a];
+                    for (axis, h) in half.iter().enumerate() {
+                        if axis == a {
+                            v = if k >> (2 - axis) & 1 != 0 {
+                                v - h
+                            } else {
+                                v + h
+                            };
+                        } else {
+                            // The other axes' points add or subtract zero.
+                            v = if k >> (2 - axis) & 1 != 0 {
+                                v - 0.0
+                            } else {
+                                v + 0.0
+                            };
+                        }
+                    }
+                    v
+                })
+            })
+            .collect();
+        let front = *corners
+            .iter()
+            .max_by(|a, b| dot_f64(n, **a).total_cmp(&dot_f64(n, **b)))
+            .expect("corners");
+        #[allow(clippy::cast_possible_truncation)]
+        let constant = if i % 2 == 0 {
+            float_steps(dot_f64(n, front) as f32, (rng.next() % 5) as i32 - 2)
+        } else {
+            f(rng.range(-150_000.0, 150_000.0))
+        };
+        let planes = s.process + 0x2c;
+        for (a, v) in n.iter().enumerate() {
+            e.mem.set_u32(planes + 4 * a as u32, v.to_bits());
+        }
+        e.mem.set_u32(planes + 0xc, constant.to_bits());
+        e.mem.set_u32(planes + 0x60, 1);
+        let b = real_aabb(
+            &mut e,
+            centre[0].to_bits(),
+            centre[1].to_bits(),
+            half[0].to_bits(),
+            half[2].to_bits(),
+            0,
+        );
+        e.mem.set_u32(b + 0x14, centre[2].to_bits());
+        e.mem.set_u32(b + 0x1c, half[1].to_bits());
+        let exe = under(&mut e, MAIN_THREAD, |e| {
+            e.call(0x00c3_87f0, &engine_core::args![b, planes]).eax & 0xff
+        });
+        let native = under(&mut e, MAIN_THREAD, |e| {
+            u32::from(process::within_frustum(e, Ptr::new(b), Ptr::new(planes)))
+        });
+        if exe != native {
+            differences += 1;
+            let distance = (dot_f64(n, front) - f64::from(constant)).abs();
+            let margin = main_thread_margin(n, front, constant);
+            assert!(
+                distance <= margin,
+                "case {i}: answers differ with the deciding corner {distance} from the plane, past {margin}"
+            );
+            if distance > largest {
+                largest = distance;
+                largest_at = front.iter().map(|v| f64::from(v.abs())).fold(0.0, f64::max);
+            }
+        }
+    }
+    println!(
+        "main thread: {differences} of 4000 boxes answered differently; the deciding corner at most \
+         {largest} units from the plane (coordinates there up to {largest_at})"
+    );
+    assert!(
+        differences > 0,
+        "the census should find the main thread's rounding cases"
+    );
+}
+
 #[test]
 fn within_frustum() {
     // The box's centre x, its third half extent, the active planes.
@@ -1000,6 +1343,7 @@ fn within_frustum() {
         process::within_frustum(Ptr<_>, Ptr<_>) -> bool
     ))
     .common()
+    .ignore_calls(BOX_CALLEES)
     .inputs(&[Input::F32, Input::F32, Input::Of(&[0x3f, 0x2, 0])])
     .max_cases(192)
     .setup(|e, case| {
@@ -1091,18 +1435,23 @@ fn geometry_on_visible() {
 
 #[test]
 fn multibound_node_on_visible() {
-    // Process mode; non-null children; a multi-bound; the shape's last verdict; its answer.
+    // Process mode; non-null children; a multi-bound; the shape's last verdict; its answer; the shape:
+    // a stand-in, or the real box (its test typed, called directly) inside, outside or with a NaN
+    // centre; the last child a multi-bound node of its own (nested) with a real box, inside or outside.
     Diff::new(entry!(
         0x00c4_6f60,
         visible::multibound_node_on_visible(Ptr<_>, Ptr<_>)
     ))
     .common()
+    .ignore_calls(BOX_CALLEES)
     .inputs(&[
         Input::Of(&[0, 1, 3, 4, 5]),
         Input::Flag,
         Input::Flag,
         Input::Of(&[0, 1, 2, 7]),
         Input::Flag,
+        Input::Of(&[0, 1, 2, 3]),
+        Input::Of(&[0, 1, 2]),
     ])
     .setup(|e, case| {
         let s = scene(e);
@@ -1113,12 +1462,42 @@ fn multibound_node_on_visible() {
         }
         e.mem
             .set_u16(node + 0xa8, if case.word(1) != 0 { 3 } else { 0 });
-        let shape = aabb(e, &s, 0, ONE, case.word(3), case.word(4));
+        let shape = match case.word(5) {
+            0 => aabb(e, &s, 0, ONE, case.word(3), case.word(4)),
+            1 => real_aabb(e, 0, 0, ONE, ONE, case.word(3)),
+            2 => real_aabb(e, 0x41a0_0000, 0, ONE, ONE, case.word(3)),
+            _ => real_aabb(e, 0x7fc0_0000, 0, ONE, ONE, case.word(3)),
+        };
         let multibound = e.mem.alloc(0x10);
         e.mem.set_u32(multibound + 0xc, shape);
         e.mem
             .set_u32(node + 0xac, if case.word(2) != 0 { multibound } else { 0 });
         e.mem.set_u32(node + 0xb0, 2);
+        if case.word(6) != 0 {
+            // A multi-bound node of its own as the last child (its `OnVisible` the exe's), with one
+            // geometry, a real box in or out and mode 0; the outer node culls its children in mode 4.
+            let vt = vtable(e, &[(0xd4, 0x00c4_6f60)]);
+            let bound = bound_of(e, 0, 0, 0, TWO);
+            let nested = object(e, 0xb4, vt, bound, 0);
+            let slots = e.mem.alloc(4);
+            e.mem.set_u32(slots, s.children[0]);
+            e.mem.set_u32(nested + 0xa0, slots);
+            e.mem.set_u16(nested + 0xa4, 1);
+            e.mem.set_u16(nested + 0xa6, 1);
+            e.mem.set_u16(nested + 0xa8, 1);
+            let cx = if case.word(6) == 1 { 0 } else { 0x41a0_0000 };
+            let inner_shape = real_aabb(e, cx, 0, ONE, ONE, 0);
+            let inner_bound = e.mem.alloc(0x10);
+            e.mem.set_u32(inner_bound + 0xc, inner_shape);
+            e.mem.set_u32(nested + 0xac, inner_bound);
+            e.mem.set_u32(nested + 0xb0, 0);
+            let outer_slots = e.mem.alloc(0x10);
+            for (i, c) in [s.children[0], s.children[1], 0, nested].iter().enumerate() {
+                e.mem.set_u32(outer_slots + 4 * i as u32, *c);
+            }
+            e.mem.set_u32(node + 0xa0, outer_slots);
+            e.mem.set_u32(node + 0xb0, 4);
+        }
         e.mem.set_u32(s.process + 0x90, case.word(0));
         vec![node, s.process]
     })
@@ -1738,6 +2117,7 @@ fn within_frustum_with_dispatch() {
         process::within_frustum(Ptr<_>, Ptr<_>) -> bool
     ))
     .with_dispatch()
+    .ignore_calls(BOX_CALLEES)
     .allow_nan_payloads()
     .inputs(&[Input::F32, Input::F32, Input::Of(&[0x3f, 0x2, 0])])
     .max_cases(192)

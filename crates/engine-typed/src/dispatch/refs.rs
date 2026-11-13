@@ -563,6 +563,7 @@ const WORD_MAP_HASH: u32 = 0x006c_6a60;
 const WORD_MAP_EQUAL: u32 = 0x006b_81d0;
 
 // Typed from 00853130
+// Typed from 00a1e380
 /// A map's lookup (`thiscall(this, key, out)`, `NiTMapBase::GetAt`): the key's bucket from the map's
 /// hash (vtable `+4`), then the bucket's chain (the table at `+8`; a node is the next node, its key
 /// and its value), each node's key compared with the map's compare (vtable `+8`); the value of the
@@ -571,6 +572,11 @@ const WORD_MAP_EQUAL: u32 = 0x006b_81d0;
 /// lookups over about 2.8 million nodes, all on the main thread in the save's one frame, so the hash
 /// and the compare are called directly when the slots hold the word map's own (above) and by address
 /// otherwise; the chain is read after each compare, as in the exe.
+///
+/// The exe holds this body twice, instruction for instruction the same (the same frame, vtable
+/// slots, table offset, node layout and `RET 8`): at `00853130` and at `00a1e380`, which the menus'
+/// tile and text maps, the sound manager's maps and every thread's scrap-heap map use (the top
+/// function of the start-up load in a profile of 2026-11-11). Both addresses hold this function.
 pub fn map_lookup(e: &mut Engine, this: Ptr, key: u32, out: Ptr<u32>) -> u8 {
     let t = this.addr();
     let hash = if crate::slot_target(e, t, 4) == WORD_MAP_HASH {

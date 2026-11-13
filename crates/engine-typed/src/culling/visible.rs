@@ -27,6 +27,22 @@ const RESULT_UNKNOWN: u32 = 0;
 const RESULT_INSIDE: u32 = 1;
 const RESULT_OUTSIDE: u32 = 2;
 
+/// The shape's `WithinFrustum` (slot 0x9c) on the process's planes, as its answer's low byte:
+/// directly when the slot holds `BSMultiBoundAABB`'s (`00c387f0`, typed), else through the vtable.
+#[inline(always)]
+fn within_frustum(e: &mut Engine, shape: Ptr<BSMultiBoundShape>, planes: u32) -> u8 {
+    if crate::slot_target(e, shape.addr(), SLOT_WITHIN_FRUSTUM) == 0x00c3_87f0 {
+        u8::from(typed_call!(
+            FAMILY,
+            0x00c3_87f0,
+            super::process::within_frustum(e, shape.cast(), Ptr::new(planes))
+        ))
+    } else {
+        e.vcall(shape.addr(), SLOT_WITHIN_FRUSTUM, &args![planes])
+            .u8()
+    }
+}
+
 /// Child `index` of a node (null for an empty slot).
 #[inline(always)]
 fn child(e: &Engine, node: Ptr<NiNode>, index: u32) -> Ptr<NiAVObject> {
@@ -97,7 +113,8 @@ pub fn geometry_on_visible(e: &mut Engine, this: Ptr<NiGeometry>, process: Ptr<N
 // Typed from 00c46f60
 /// `BSMultiBoundNode::OnVisible` (Xbox PDB, `thiscall(node, process)`): nothing without non-null
 /// children (`m_usESize`). Unless the process's mode is 1 or 3, a multi-bound's shape decides: its
-/// last verdict, or in mode 4 a new one (`WithinFrustum`, slot 0x9c, on the process's planes:
+/// last verdict, or in mode 4 a new one (`WithinFrustum`, slot 0x9c, on the process's planes, a Rust
+/// call when the slot holds the box's:
 /// inside or outside). A shape with no verdict yet is asked, and keeps the answer. Inside is
 /// visible, outside or anything else not. When visible, the process's mode becomes the node's
 /// (unless it was 3), each child (the count read at each step) is culled, and the mode is put back.
@@ -123,9 +140,7 @@ pub fn multibound_node_on_visible(
         let planes = process.addr().wrapping_add(0x2c);
         let mut result = e.get(shape(e), BSMultiBoundShape::kCullResult);
         if e.get(process, BSCullingProcess::kCullMode) == MODE_ASK_SHAPES {
-            let inside = e
-                .vcall(shape(e).addr(), SLOT_WITHIN_FRUSTUM, &args![planes])
-                .u8();
+            let inside = within_frustum(e, shape(e), planes);
             result = if inside != 0 {
                 RESULT_INSIDE
             } else {
@@ -134,9 +149,7 @@ pub fn multibound_node_on_visible(
         }
         match result {
             RESULT_UNKNOWN => {
-                let inside = e
-                    .vcall(shape(e).addr(), SLOT_WITHIN_FRUSTUM, &args![planes])
-                    .u8();
+                let inside = within_frustum(e, shape(e), planes);
                 visible = inside != 0;
                 let verdict = if inside != 0 {
                     RESULT_INSIDE

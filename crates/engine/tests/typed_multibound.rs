@@ -115,9 +115,9 @@ fn list_iterate(e: &mut Engine, a: &[u32]) -> Ret {
 /// The exe's data and the stand-ins.
 fn stand_ins(e: &mut Engine) {
     e.map(LOG, 0x4000);
-    // The pages of the double 0.0 the frustum test compares with (01012060), the box corners' constants
-    // (011a9470: 0, 0, 0, 1.0, as in the exe), the marker, the grid setting, the scene node table and
-    // the zero word.
+    // The pages of the double 0.0 the frustum test compares with (01012060), the box corners' unit axes
+    // (011a946c: x, y and z, nine floats, as in the exe), the marker, the grid setting, the scene node
+    // table and the zero word.
     for page in [
         0x0101_2000,
         0x011a_9000,
@@ -128,7 +128,7 @@ fn stand_ins(e: &mut Engine) {
     ] {
         e.map(page, 0x1000);
     }
-    words(e, 0x011a_9470, &[0, 0, 0, ONE]);
+    words(e, 0x011a_946c, &[ONE, 0, 0, 0, ONE, 0, 0, 0, ONE]);
     // The reference counts' interlocked imports.
     e.register(0x00fd_f1c0, |e, a| {
         let n = e.mem.u32(a[0]).wrapping_add(1);
@@ -486,6 +486,8 @@ fn multibound_add_object() {
         occlusion::add_object(Ptr<_>, u32, u32, u32, u32, u32)
     ))
     .common()
+    // The culling family's box test, reached directly, makes its corners and plane distances in place.
+    .ignore_calls(&[0x00c3_9270, 0x0049_da80])
     .inputs(&[
         Input::Of(&[0, 1, 2, 3]),
         Input::Of(&[0, 1, 2]),

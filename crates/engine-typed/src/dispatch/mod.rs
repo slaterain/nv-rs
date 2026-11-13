@@ -14,7 +14,8 @@
 //! - [`refs`]: the counted references, the recursive spin lock, lists, arrays and the small getters
 //!   the AI, the inventory, the HUD's compass and the process levels call on every actor; and the
 //!   word map's lookup (`00853130`), which a quicksave makes about 230,000 times in its one frame
-//!   (2026-11-10: about 30 ms of the 120 ms save frame by address).
+//!   (2026-11-10: about 30 ms of the 120 ms save frame by address), registered too at `00a1e380`,
+//!   the exe's second copy of the same body (the menus' maps and the threads' scrap heaps).
 //!
 //! Stage 1: the objects stay in guest memory where the game made them. Each function stays
 //! registered at its exe address; a call inside the family, or into another family, is a
@@ -171,5 +172,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0069_af10, refs::info_array_drop(Ptr) -> Ptr),
         entry!(0x004f_1540, refs::extra_kind(Ptr) -> u8),
         entry!(0x0085_3130, refs::map_lookup(Ptr, u32, Ptr<u32>) -> u8),
+        // The same function at a second address: instruction for instruction the same body.
+        entry!(0x00a1_e380, refs::map_lookup(Ptr, u32, Ptr<u32>) -> u8),
     ]
 }
