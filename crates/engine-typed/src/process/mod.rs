@@ -17,10 +17,15 @@
 //! `Calendar::GetHour`, the actor list container, the process objects' slots and the clock import.
 //!
 //! Stage 1: the objects stay in guest memory where the game made them; each function stays
-//! registered at its exe address. **Floats.** Only hours, on the main thread
-//! ([`Threads::Main`]: `UpdateProcessLists` runs from the main loop only): the hours read as
-//! floats, their difference one `f32` subtraction (the main thread's 24-bit precision), compared
-//! with the exe's double constants exactly.
+//! registered at its exe address. **Threads and floats.** The three passes run on the main thread
+//! only (`UpdateProcessLists` runs from the main loop), and they hold the family's only float
+//! maths: the hours read as floats, their difference one `f32` subtraction (the main thread's
+//! 24-bit precision), compared with the exe's double constants exactly. The array's level head and
+//! tail, its element store and the last-hour getter are shared code that the loading, AI and Havok
+//! threads reach too; they are integer or bit-exact (the getter's one float is moved, quieted as the
+//! x87 moves it, never computed), so they are the same on any thread. The row says
+//! [`Threads::Main`] because that is where its float maths runs, and the tests compare under the
+//! main thread's control word.
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};

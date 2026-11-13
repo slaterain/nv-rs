@@ -369,19 +369,21 @@ fn process_array_find() {
         .assert_same();
     // A long array whose element block crosses page ends (the typed search reads a page at a time):
     // the actor before, at and after the first page end, at the end, not there, and the block running
-    // into an unmapped page with no match (both stop there).
+    // into an unmapped page with no match (both stop there), or with a match in its last mapped page:
+    // at index 2,000 and at index 2,049, the last mapped word (0x0500_2ffc).
     Diff::new(entry!(0x0096_abc0, array::find(Ptr<_>, u32, i32) -> u32))
         .common()
-        .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5])])
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7])])
         .expect_stops(|case| case.word(0) == 5)
         .setup(|e, case| {
             stand_ins(e);
             e.map(0x0500_0000, 0x3000);
             let a = object(e, 0x40, 0);
-            // 1,100 elements from 0x0500_0ff8: indexes 0 and 1 in the first page, 2.. in the next two.
+            // Elements from 0x0500_0ff8 to the end of the mapping (2,050 of them): indexes 0 and 1 in
+            // the first page, 2.. in the next two; the array 1,100 long, or 4,000 (past the mapping).
             let elements = 0x0500_0ff8;
-            let n = if case.word(0) == 5 { 4_000 } else { 1_100 };
-            for i in 0..1_100u32.min((0x0500_3000 - elements) / 4) {
+            let n = if case.word(0) >= 5 { 4_000 } else { 1_100 };
+            for i in 0..(0x0500_3000 - elements) / 4 {
                 e.mem.set_u32(elements + 4 * i, 0x0600_0000 + i);
             }
             words(e, a + 0x10, &[0, 0, 0, 0, 0, 0, 0, n]);
@@ -391,6 +393,8 @@ fn process_array_find() {
                 1 => 0x0600_0002,
                 2 => 0x0600_0003,
                 3 => 0x0600_0000 + 1_099,
+                6 => 0x0600_0000 + 2_000,
+                7 => 0x0600_0000 + 2_049,
                 _ => 0x0700_0000,
             };
             vec![a, actor, 3]
@@ -458,12 +462,19 @@ fn process_hour_last_processed() {
 ///   process); 3: form flag 0x20 (collected); 4: another level (collected); 5..: an actor of the
 ///   level: (kind - 5) bit 0 the byte at +0x87, bit 1 its slots answer true, bit 2 its process's
 ///   slots answer true, bit 3 no process object.
-fn actor(e: &mut Engine, kind: u32, level: u32, last: u32) -> u32 {
+fn actor(e: &mut Engine, kind: u32, level: u32, last: u32, collected_answer: u32) -> u32 {
     if kind == 0 {
         return 0;
     }
     let bits = kind.saturating_sub(5);
-    let a = object(e, 0x100, (bits >> 1) & 1);
+    // A collected actor's slots (0x2ec among them, which the middle-high removal asks) answer
+    // `collected_answer`.
+    let answer = if (2..5).contains(&kind) {
+        collected_answer
+    } else {
+        (bits >> 1) & 1
+    };
+    let a = object(e, 0x100, answer);
     let flags = match kind {
         1 => 0x0020_0000,
         2 => 0x800,
@@ -495,10 +506,11 @@ fn lists_world(e: &mut Engine, level: u32, n: u32, k: u32, lasts: &[u32]) -> u32
                 kind,
                 level,
                 lasts[(i as usize + k as usize) % lasts.len()],
+                i % 2,
             )
         })
         .collect();
-    let others: Vec<u32> = (0..2).map(|i| actor(e, 5 + i, level ^ 2, ONE)).collect();
+    let others: Vec<u32> = (0..2).map(|i| actor(e, 5 + i, level ^ 2, ONE, 0)).collect();
     let mut levels: [&[u32]; 4] = [&others, &[], &[], &[]];
     levels[level as usize] = &actors;
     let a = process_array(e, levels, 4, [0; 4]);
@@ -508,27 +520,32 @@ fn lists_world(e: &mut Engine, level: u32, n: u32, k: u32, lasts: &[u32]) -> u32
     lists
 }
 
-/// The game hour and last hours the pass cases try: the hour; then the last hours (-1, the hour
-/// itself, an hour before, more than an interval before, after it).
+/// The game hour and last hours the pass cases try: the hour (12.0, 1.0, NaN); then the last hours
+/// (-1; with the hour 12.0: an hour before, half an hour, more than an hour, after it, the hour
+/// itself, 0.2 before (between the middle passes' 0.15 and 0.3) and 0.1 before (below both)).
 const HOURS: [u32; 3] = [0x4140_0000, 0x3f80_0000, 0x7fc0_0000];
-const LASTS: [u32; 5] = [
+const LASTS: [u32; 8] = [
     MINUS_ONE,
     0x4130_0000,
     0x4138_0000,
     0x4100_0000,
     0x4150_0000,
+    0x4140_0000,
+    0x413c_cccd,
+    0x413e_6666,
 ];
 
 #[test]
 fn process_update_low() {
-    // The actors' kinds pattern; the saved index (0, inside, past the end); `all`; updates disabled;
+    // The actors' kinds pattern; the saved index (0, below the level's head, inside, past the end);
+    // `all` (0, 1, and 0x100: only its low byte counts); updates disabled;
     // the hour; `time` (0, 1, NaN); the counter's step (no budget, or one that ends the walk early).
     Diff::new(entry!(0x0096_b050, levels::update_low(Ptr<_>, f32, u32)))
         .common()
         .inputs(&[
             Input::Of(&[0, 3, 7]),
-            Input::Of(&[0, 5, 40]),
-            Input::Flag,
+            Input::Of(&[0, 1, 5, 40]),
+            Input::Of(&[0, 1, 0x100]),
             Input::Flag,
             Input::Of(&HOURS),
             Input::Of(&[0, ONE, 0x7fc0_0000]),
@@ -541,6 +558,8 @@ fn process_update_low() {
             let begin = e.mem.u32(lists + 4 + 0x1c);
             let saved = match case.word(1) {
                 0 => 0,
+                // Below level 3's head (the level-0 actors before it): kept, as in the exe.
+                1 => 1,
                 5 => begin + 5,
                 _ => 40,
             };
@@ -632,7 +651,7 @@ fn process_hour_rounding() {
             .setup(move |e, _| {
                 stand_ins(e);
                 // An actor of the level with the byte at +0x87, its process's slots true.
-                let a = actor(e, 5 + 1 + 4, level, last);
+                let a = actor(e, 5 + 1 + 4, level, last, 0);
                 let lists = block(e, 0x100, &[]);
                 let one = [a];
                 let arr = process_array(
