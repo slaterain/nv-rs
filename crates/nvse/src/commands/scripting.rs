@@ -134,7 +134,70 @@ pub static COMMANDS: &[Command] = &[
         FOREACH_ALT,
         foreach_alt_execute,
     ),
+    cmd(0x167f, "Jmp_If_True", "", JMP_IF, jmp_if_true),
+    cmd(0x1680, "Jmp_If_False", "", JMP_IF, jmp_if_false),
+    cmd(0x1681, "Jmp", "", ONE_REQUIRED_INT, jmp_execute),
 ];
+
+/// `kNVSEParams_Jmp_If_True` (a boolean, then a number: `kNVSEParamType_Number`) and
+/// `kParams_OneInt` (a required integer).
+const JMP_IF: &[Param] = &[p("", BOOLEAN), p("", 0x8001)];
+const ONE_REQUIRED_INT: &[Param] = &[p("int", 0x01)];
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Script.cpp: ScriptJMP.
+/// The runner goes to `offset` of the script's data: the running line's length word becomes
+/// `offset - start`, `start` the offset word as the command began. Outside a running line
+/// (nothing to move) nothing happens.
+fn script_jmp(e: &mut Engine, start: u32, offset: i32) {
+    if let Some((_, length)) = runner_and_length(e) {
+        e.mem
+            .set_u32(length, offset.wrapping_sub(start as i32) as u32);
+    }
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Script.cpp:
+// Cmd_Jmp_If_True_Execute and Cmd_Jmp_If_False_Execute.
+/// The jumps xNVSE's compiler writes: when the first argument's truth is `want`, to the second
+/// (truncated to an integer); the result 1 when it jumps, else 0.
+fn jmp_if(e: &mut Engine, w: &[u32], want: bool) -> Ret {
+    let a = CommandArgs::new(w);
+    a.set_result(e, 0.0);
+    let start = e.mem.u32(a.opcode_offset);
+    let (toks, ev) = evaluate_args(e, &a, false);
+    if let Some(toks) = toks {
+        if let (Some(cond), Some(to)) = (toks.first(), toks.get(1)) {
+            if ev.get_bool(e, cond) == want {
+                let to = crate::args::f64_to_i32(ev.get_number(e, to));
+                script_jmp(e, start, to);
+                a.set_result(e, 1.0);
+            }
+        }
+    }
+    handled(true)
+}
+
+fn jmp_if_true(e: &mut Engine, w: &[u32]) -> Ret {
+    jmp_if(e, w, true)
+}
+
+fn jmp_if_false(e: &mut Engine, w: &[u32]) -> Ret {
+    jmp_if(e, w, false)
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Script.cpp: Cmd_Jmp_Execute.
+/// Always to the argument; the result 1 when the argument was read.
+fn jmp_execute(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let start = e.mem.u32(a.opcode_offset);
+    a.set_result(e, 0.0);
+    let (toks, ev) = evaluate_args(e, &a, false);
+    if let Some(to) = toks.as_ref().and_then(|t| t.first()) {
+        let to = crate::args::f64_to_i32(ev.get_number(e, to));
+        script_jmp(e, start, to);
+        a.set_result(e, 1.0);
+    }
+    handled(true)
+}
 
 /// Runs the evaluator over a command's arguments (`ExpressionEvaluator(PASS_COMMAND_ARGS)` and
 /// `ExtractArgs`), reporting its errors when it ends.

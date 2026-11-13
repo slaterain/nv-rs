@@ -453,3 +453,50 @@ fn foreach_alt_takes_no_reference_to_an_inner_array() {
     assert_eq!(e.mem.f64(value + 8), 0.0);
     assert_eq!(vars::array(&e, inner).unwrap().refs, refs_before);
 }
+
+/// The result `run_line` left.
+fn line_result(e: &Engine) -> f64 {
+    e.mem.f64(RESULT)
+}
+
+/// `Jmp 0x30` (xNVSE's compiler's jump): the running line's length becomes the target less the
+/// offset the command began at (4), and the result is 1.
+#[test]
+fn jmp_moves_the_runner_to_its_target() {
+    let mut e = line_engine();
+    e.mem.set_u32(LENGTH, 100);
+    let mut bytes = vec![1u8];
+    bytes.extend(expression(&[byte(0x30)]));
+    run_line(&mut e, 0x1681, &bytes);
+    assert_eq!(e.mem.u32(LENGTH), 0x30 - 4);
+    assert_eq!(line_result(&e), 1.0);
+    // A target before the start: the length word wraps as xNVSE's signed subtraction.
+    e.mem.set_u32(LENGTH, 100);
+    let mut bytes = vec![1u8];
+    bytes.extend(expression(&[byte(2)]));
+    run_line(&mut e, 0x1681, &bytes);
+    assert_eq!(e.mem.u32(LENGTH) as i32, 2 - 4);
+}
+
+/// `Jmp_If_True cond 0x30` jumps only when the condition holds and `Jmp_If_False` only when it
+/// does not; the result says whether it jumped. A fractional target is truncated.
+#[test]
+fn conditional_jumps_follow_their_condition() {
+    let cases = [
+        (0x167f, 1u8, true),
+        (0x167f, 0, false),
+        (0x1680, 0, true),
+        (0x1680, 1, false),
+    ];
+    for (opcode, cond, jumps) in cases {
+        let mut e = line_engine();
+        e.mem.set_u32(LENGTH, 100);
+        let mut bytes = vec![2u8];
+        bytes.extend(expression(&[byte(cond)]));
+        bytes.extend(expression(&[num(48.75)]));
+        run_line(&mut e, opcode, &bytes);
+        let (length, result) = if jumps { (48 - 4, 1.0) } else { (100, 0.0) };
+        assert_eq!(e.mem.u32(LENGTH), length, "{opcode:x} {cond}");
+        assert_eq!(line_result(&e), result, "{opcode:x} {cond}");
+    }
+}
