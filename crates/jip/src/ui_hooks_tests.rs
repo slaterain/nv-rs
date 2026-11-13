@@ -679,9 +679,14 @@ fn the_readme_counts_the_built_commands() {
             e.mem.u32(record + 0x18) != 0 || e.mem.u32(record + 0x20) != 0
         })
         .count();
+    // The count in the system table's own JIP LN row (xNVSE's has a row of its own).
     let readme = include_str!("../../../README.md");
-    let at = readme.find("(JIP LN: ").expect("the README's JIP count") + "(JIP LN: ".len();
-    let stated: usize = readme[at..]
+    let row = readme
+        .lines()
+        .find(|l| l.starts_with("| ") && l.contains("**Built-in script extender: JIP LN:**"))
+        .expect("the README's JIP LN row");
+    let at = row.find("(JIP LN: ").expect("the row's JIP count") + "(JIP LN: ".len();
+    let stated: usize = row[at..]
         .split(' ')
         .next()
         .and_then(|n| n.parse().ok())
