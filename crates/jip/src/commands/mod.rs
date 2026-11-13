@@ -13,6 +13,7 @@ pub mod forms;
 pub mod jip_fn_ammo;
 pub mod jip_fn_ammo_effect;
 pub mod jip_fn_armor;
+pub mod jip_fn_aux_variable;
 pub mod jip_fn_body_part_data;
 pub mod jip_fn_class;
 pub mod jip_fn_climate;
@@ -31,6 +32,7 @@ pub mod jip_fn_package;
 pub mod jip_fn_perk;
 pub mod jip_fn_projectile;
 pub mod jip_fn_quest;
+pub mod jip_fn_ref_map;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_water;
 pub mod jip_fn_weapon;
@@ -64,9 +66,17 @@ pub type Conditions = &'static [(u32, AbiFn, AbiFn)];
 /// Every module's conditions, one line per JIP source file that has any.
 pub const ALL_CONDITIONS: &[Conditions] = &[jip_fn_effect::CONDITIONS];
 
+/// A module's condition-only commands (`DEFINE_CMD_COND_ONLY` (JIP LN NVSE)): each opcode with its
+/// eval; no execute.
+pub type ConditionsOnly = &'static [(u32, AbiFn)];
+
+/// Every module's condition-only commands.
+pub const ALL_CONDITIONS_ONLY: &[ConditionsOnly] = &[jip_fn_aux_variable::CONDITIONS_ONLY];
+
 /// Every module's list, one line per JIP source file.
 pub const ALL: &[Handlers] = &[
     jip_fn_ammo::COMMANDS,
+    jip_fn_aux_variable::COMMANDS,
     jip_fn_ammo_effect::COMMANDS,
     jip_fn_armor::COMMANDS,
     jip_fn_body_part_data::COMMANDS,
@@ -87,6 +97,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_perk::COMMANDS,
     jip_fn_projectile::COMMANDS,
     jip_fn_quest::COMMANDS,
+    jip_fn_ref_map::COMMANDS,
     jip_fn_texture_set::COMMANDS,
     jip_fn_water::COMMANDS,
     jip_fn_weapon::COMMANDS,
@@ -107,6 +118,10 @@ pub const ALL: &[Handlers] = &[
 pub fn built() -> usize {
     ALL.iter().map(|list| list.len()).sum::<usize>()
         + ALL_CONDITIONS.iter().map(|list| list.len()).sum::<usize>()
+        + ALL_CONDITIONS_ONLY
+            .iter()
+            .map(|list| list.len())
+            .sum::<usize>()
 }
 
 /// Whether `opcode` is a built command.
@@ -116,6 +131,9 @@ pub fn is_built(opcode: u32) -> bool {
         || ALL_CONDITIONS
             .iter()
             .any(|list| list.iter().any(|&(o, _, _)| o == opcode))
+        || ALL_CONDITIONS_ONLY
+            .iter()
+            .any(|list| list.iter().any(|&(o, _)| o == opcode))
 }
 
 /// Gives every built command its handler (a condition its eval too).
@@ -128,6 +146,11 @@ pub fn install(e: &mut Engine) {
     for list in ALL_CONDITIONS {
         for &(opcode, execute, eval) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), Some(eval));
+        }
+    }
+    for list in ALL_CONDITIONS_ONLY {
+        for &(opcode, eval) in list.iter() {
+            crate::table::set_handlers(e, opcode, None, Some(eval));
         }
     }
 }
@@ -581,6 +604,7 @@ mod tests {
     fn each_module_holds_its_own_file() {
         let files = [
             "jip_fn_ammo",
+            "jip_fn_aux_variable",
             "jip_fn_ammo_effect",
             "jip_fn_armor",
             "jip_fn_body_part_data",
@@ -601,6 +625,7 @@ mod tests {
             "jip_fn_perk",
             "jip_fn_projectile",
             "jip_fn_quest",
+            "jip_fn_ref_map",
             "jip_fn_texture_set",
             "jip_fn_water",
             "jip_fn_weapon",
@@ -634,6 +659,18 @@ mod tests {
             }
         }
         assert_eq!(ALL_CONDITIONS.len(), 1);
+        for (list, file) in ALL_CONDITIONS_ONLY.iter().zip(["jip_fn_aux_variable"]) {
+            for &(opcode, _) in list.iter() {
+                let slot = crate::table::slot(opcode).expect("a JIP slot");
+                assert!(slot.file.ends_with(file), "{opcode:04x} {}", slot.name);
+                assert!(
+                    slot.kind == crate::table::Kind::ConditionOnly,
+                    "{opcode:04x}"
+                );
+                assert!(seen.insert(opcode), "{opcode:04x} listed twice");
+            }
+        }
+        assert_eq!(ALL_CONDITIONS_ONLY.len(), 1);
         // README's JIP LN count is checked in one place, against the table's every handled JIP
         // opcode: `ui_hooks::tests::the_readme_counts_the_built_commands`.
     }
@@ -674,6 +711,11 @@ mod tests {
             .iter()
             .flat_map(|list| list.iter().map(|&(op, _)| op))
             .chain(conditions)
+            .chain(
+                ALL_CONDITIONS_ONLY
+                    .iter()
+                    .flat_map(|list| list.iter().map(|&(op, _)| op)),
+            )
             .collect();
         {
             for op in opcodes {

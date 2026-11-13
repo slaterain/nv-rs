@@ -149,6 +149,14 @@ pub fn append_element(e: &mut Engine, id: u32, element: &Element) {
     vars::set_element(e, id, &Key::Number(len as f64), v);
 }
 
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ArrayVar.cpp: ArrayAPI::SetElement.
+/// `SetElement(arr, key, value)`: the element at `key` of array `id` set, as `vars::set_element`
+/// takes it (a form as its id).
+pub fn set_element(e: &mut Engine, id: u32, key: &Key, element: &Element) {
+    let v = value(e, element);
+    vars::set_element(e, id, key, v);
+}
+
 #[cfg(test)]
 #[path = "arrays_tests.rs"]
 mod tests;
