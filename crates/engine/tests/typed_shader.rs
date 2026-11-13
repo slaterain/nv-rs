@@ -11839,6 +11839,10 @@ fn lighting30_setup_constants_reads_the_packet() {
             cut::take_geometry_values(e, w[1]);
             cut::take_pass_lights(e, w[0]);
             capture::take(e, 0x011f_940c, 0, 0x10);
+            // The shader and held accumulators' settings (+0x164, +0x165 among them) as the cut copies them.
+            for at in [0x011f_95ecu32, 0x011f_95f0] {
+                cut::take_frame(e, 0, Ptr::new(e.mem.u32(at)));
+            }
             capture::take(e, 0x011f_94ac, 0, 4);
         },
     );

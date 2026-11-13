@@ -1151,10 +1151,8 @@ pub(crate) fn sky_hdr_value(e: &Engine) -> u32 {
 /// one: the sky then moved to the accumulator's camera.
 #[inline(always)]
 pub(crate) fn skips_type13(e: &Engine, acc: u32) -> u8 {
-    e.get(
-        Ptr::<BSShaderAccumulator>::new(acc),
-        BSShaderAccumulator::ucSkipType13,
-    )
+    // The accumulator's settings are the packet's (`cut::ACC_SETTINGS`), as `skip_type_13` reads them.
+    capture::byte(e, acc, BSShaderAccumulator::ucSkipType13.off)
 }
 
 /// The scene camera (`011f95d8`).
