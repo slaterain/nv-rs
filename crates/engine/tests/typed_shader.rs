@@ -187,17 +187,13 @@ fn stand_ins_all(e: &mut Engine, render: bool, dispatch: bool, draw: bool) {
     if !render {
         e.register(0x00b7_dde0, |_, _| ret(0));
     }
-    for addr in [
-        0x00bb_96d0,
-        0x00b7_a870,
-        0x00b6_3320,
-        0x00b9_8070,
-        0x00ec_658f,
-    ] {
+    for addr in [0x00b7_a870, 0x00b6_3320, 0x00b9_8070, 0x00ec_658f] {
         e.register(addr, |_, _| ret(0));
     }
     if draw {
         for addr in [
+            // The pass end's flags (the draw family's: real where a test names it).
+            0x00bb_96d0,
             0x00e6_d310,
             0x00b7_ded0,
             0x00b7_dfe0,
@@ -9559,4 +9555,1082 @@ fn setup_pass_constants_reads_the_fog_through_the_packet() {
         },
         |e, w| cut::take_frame(e, w[0], Ptr::new(w[1])),
     );
+}
+
+// ---- Group C: the lighting 3.0 shader (the draw family's `lighting30`) ----
+
+/// The lighting 3.0 shader's constant entries (`01201080` to `012010e8`, the pointers made at load):
+/// each an entry whose switch (+8) is `on` (a pattern of the case), its count word +0x20 marked.
+fn lighting30_entries(e: &mut Engine, on: u32) {
+    e.map(0x0120_0000, 0x2000);
+    for k in 0..27u32 {
+        let entry = e.mem.alloc(0x30);
+        e.mem.set_u8(entry + 8, u8::from(on & (1 << (k % 32)) != 0));
+        set(e, entry + 0x20, 0x77);
+        set(e, 0x0120_1080 + 4 * k, entry);
+    }
+}
+
+/// A lighting property for these tests: its words +0x6c to +0xec marked (floats), its flags +0x20 and
+/// +0x24 the given ones, its alpha +0x28 and +0x30.
+fn lighting30_property(e: &mut Engine, flags_20: u32, flags_24: u32, alpha: u32) -> u32 {
+    let vt = vtable(e, &[]);
+    let property = obj(e, 0x100, vt);
+    for at in (0x6cu32..0xf0).step_by(4) {
+        set(e, property + at, 0x3d00_0000 + 0x1000 * at);
+    }
+    set(e, property + 0x20, flags_20);
+    set(e, property + 0x24, flags_24);
+    set(e, property + 0x28, alpha);
+    set(e, property + 0x30, 0x3f40_0000);
+    property
+}
+
+/// The lighting 3.0 shader's slot 0x78 (`00bbe650`): each pass type that returns early and others; its
+/// slots 0x13c, 0x140 and 0x10c stood in. No floats; the main thread's word.
+#[test]
+fn lighting30_setup_textures() {
+    Diff::new(entry!(
+        0x00bb_e650,
+        engine_typed::draw::lighting30::setup_textures(Ptr<_>, Ptr<_>)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(&[Input::Of(&[0x1e0, 0x1e1, 0xe, 0xf, 0x10, 0x1c4])])
+    .setup(|e, c| {
+        let _ = world(e);
+        for slot in [0x13cu32, 0x140, 0x10c] {
+            e.register(VT_FN + slot, marked);
+        }
+        set(e, 0x011f_91e4, c.word(0));
+        let vt = vtable(e, &[]);
+        let this = obj(e, 0xa4, vt);
+        let property = lighting30_property(e, 0, 0, HALF);
+        let state = e.mem.alloc(0x18);
+        set(e, state + 0xc, property);
+        vec![this, state]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The lighting 3.0 helpers' inputs: the entries' switches (all on, all off, a pattern); the
+/// property's bit 0x10 of +0x24; the slot 0xf4's answer.
+const LIGHTING30_SMALL: &[Input] = &[
+    Input::Of(&[0, u32::MAX, 0x0555_5555]),
+    Input::Of(&[0, 0x10]),
+    Input::Of(&[0, 0x7e57_0000]),
+];
+
+/// The small lighting 3.0 helpers' words: the entries, a property, the exe's glow scale, the slot 0xf4
+/// stood in (its answer the case's).
+fn lighting30_small_words(e: &mut Engine, c: &Case) -> (u32, u32) {
+    let _ = world(e);
+    lighting30_entries(e, c.word(0));
+    set(e, 0x0101_77e8, 0x3fa0_0000);
+    set(e, RETS + 0xf4, c.word(2));
+    let vt = vtable(e, &[]);
+    let this = obj(e, 0xa4, vt);
+    let property = lighting30_property(e, 0, c.word(1), HALF);
+    (this, property)
+}
+
+/// The emittance (`00bbbda0`): no floats; the main thread's word.
+#[test]
+fn lighting30_emittance() {
+    Diff::new(entry!(
+        0x00bb_bda0,
+        engine_typed::draw::lighting30::emittance(Ptr<_>, Ptr<_>)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(LIGHTING30_SMALL)
+    .setup(|e, c| {
+        let (this, property) = lighting30_small_words(e, c);
+        vec![this, property]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The glow (`00bbbdf0`): no arithmetic; the main thread's word.
+#[test]
+fn lighting30_glow() {
+    Diff::new(entry!(
+        0x00bb_bdf0,
+        engine_typed::draw::lighting30::glow(Ptr<_>, Ptr<_>)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(LIGHTING30_SMALL)
+    .setup(|e, c| {
+        let (this, property) = lighting30_small_words(e, c);
+        vec![this, property]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The alpha (`00bbbe30`): no arithmetic; the main thread's word.
+#[test]
+fn lighting30_alpha() {
+    Diff::new(entry!(
+        0x00bb_be30,
+        engine_typed::draw::lighting30::alpha(Ptr<_>)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(LIGHTING30_SMALL)
+    .setup(|e, c| {
+        let (_, property) = lighting30_small_words(e, c);
+        vec![property]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The scene camera's position for these tests (the shadow scene node 0's +0x1e4, three floats: the
+/// case's x, play's).
+fn scene_camera_at(e: &mut Engine, x: u32) {
+    let node = e.mem.alloc(0x200);
+    for (k, v) in (0u32..).zip([x, 0xc480_0000, 0x4300_0000]) {
+        set(e, node + 0x1e4 + 4 * k, v);
+    }
+    set(e, 0x011f_91c8, node);
+}
+
+/// The lighting 3.0 position helpers' inputs: the entries' switches; the camera's x, the origin's x, the
+/// sun's x (play's floats); the flag word (the world matrix's).
+const LIGHTING30_POSITIONS: &[Input] = &[
+    Input::Of(&[0, u32::MAX, 0x0555_5555]),
+    Input::F32,
+    Input::F32Swept(0x4500_0000),
+    Input::F32Swept(0x4600_0000),
+    Input::Flag,
+];
+
+/// The position helpers' words: the entries, the scene camera, the origin, the sun, a transform of play's
+/// floats (a small rotation, a translation, scale 2), a bound.
+fn lighting30_position_words(e: &mut Engine, c: &Case) -> (u32, u32, u32) {
+    let _ = world(e);
+    lighting30_entries(e, c.word(0));
+    scene_camera_at(e, play_bits(c, 1));
+    for (k, v) in (0u32..).zip([play_bits(c, 2), 0x4300_0000, 0x4200_0000]) {
+        set(e, 0x011f_474c + 4 * k, v);
+    }
+    for (k, v) in (0u32..).zip([play_bits(c, 3), 0x4680_0000, 0x4600_0000]) {
+        set(e, 0x011f_a2a0 + 4 * k, v);
+    }
+    for k in 0..8u32 {
+        set(e, 0x011f_d874 + 4 * k, 0x3c00_0000 + k);
+    }
+    let vt = vtable(e, &[]);
+    let this = obj(e, 0xa4, vt);
+    let transform = e.mem.alloc(0x34);
+    for (i, v) in (0u32..).zip([
+        0x3f7e_8a6e,
+        0xbdcc_6c67,
+        0,
+        0x3dcc_6c67,
+        0x3f7e_8a6e,
+        0,
+        0,
+        0,
+        ONE,
+        0x4580_0000,
+        0xc520_0000,
+        0x4400_0000,
+        TWO,
+    ]) {
+        set(e, transform + 4 * i, v);
+    }
+    (this, transform, transform + 0x24)
+}
+
+/// The eye position (`00bbbcf0`): main-thread code (`f32`) on the main thread's word, bit for bit (NaN
+/// payloads aside), with play's floats.
+#[test]
+fn lighting30_eye_position() {
+    Diff::new(entry!(
+        0x00bb_bcf0,
+        engine_typed::draw::lighting30::eye_position(Ptr<_>, Ptr<_>)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(LIGHTING30_POSITIONS)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(|e, c| {
+        let (this, _, position) = lighting30_position_words(e, c);
+        vec![this, position]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The world matrix (`00bbba00`): main-thread code (`f32`) on the main thread's word, bit for bit (NaN
+/// payloads aside), with play's floats; the flag word clear or set.
+#[test]
+fn lighting30_world_matrix() {
+    Diff::new(entry!(
+        0x00bb_ba00,
+        engine_typed::draw::lighting30::world_matrix(Ptr<_>, u32, Ptr<_>)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(LIGHTING30_POSITIONS)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(|e, c| {
+        let (this, transform, _) = lighting30_position_words(e, c);
+        vec![this, c.word(4), transform]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The light position (`00bbb890`, the matrix by value): main-thread code (`f32`) on the main thread's
+/// word, bit for bit (NaN payloads aside), with play's floats; `D3DXVec3TransformCoord`'s import stood in.
+#[test]
+fn lighting30_light_position() {
+    Diff::new(entry!(
+        0x00bb_b890,
+        engine_typed::draw::lighting30::light_position(Ptr<_>, [u32; 16], Ptr<_>)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(LIGHTING30_POSITIONS)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(|e, c| {
+        let (this, transform, _) = lighting30_position_words(e, c);
+        // `D3DXVec3TransformCoord` (out, in, matrix): the input's words turned and marked with the
+        // matrix's first word in their mantissas (a float stays a float, so no NaN is made that
+        // only one side would quiet), so the input, the matrix and where the output goes all show.
+        e.register(0x00fd_f414, |e, a| {
+            let mark = e.mem.u32(a[2]);
+            for k in 0..3u32 {
+                let word = e.mem.u32(a[1] + 4 * ((k + 1) % 3));
+                e.mem.set_u32(a[0] + 4 * k, word ^ (mark >> 9));
+            }
+            ret(a[0])
+        });
+        let mut words = vec![this];
+        words.extend((0..16u32).map(|k| 0x3e00_0000 + 0x0010_0000 * k));
+        words.push(transform);
+        words
+    })
+    .run()
+    .assert_same();
+}
+
+/// The lighting 3.0 fog (`00bbbe80`): main-thread code (`f32`, the dot product in the exe's order) on
+/// the main thread's word, bit for bit (NaN payloads aside), with play's floats; the far and near
+/// distances both 0.0 or the case's.
+#[test]
+fn lighting30_fog() {
+    Diff::new(entry!(
+        0x00bb_be80,
+        engine_typed::draw::lighting30::fog(Ptr<_>)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(&[
+        Input::Of(&[u32::MAX, 0]),
+        Input::F32,
+        Input::F32Swept(0x3f00_0000),
+        Input::F32Swept(0x4120_0000),
+        // The fog distances: both 0.0, both set, only the far one, only the near one.
+        Input::Of(&[0, 1, 2, 3]),
+        Input::F32Swept(0x4680_0000),
+        Input::F32Swept(0x4500_0000),
+    ])
+    .float_sweep(FLOAT_SWEEP)
+    .setup(|e, c| {
+        let _ = world(e);
+        lighting30_entries(e, c.word(0));
+        scene_camera_at(e, play_bits(c, 1));
+        for (k, v) in (0u32..).zip([play_bits(c, 2), 0x4600_0000, 0x4680_0000]) {
+            set(e, 0x011f_a2a0 + 4 * k, v);
+        }
+        for (k, v) in (0u32..).zip([0x3f00_0000, play_bits(c, 3), 0xbf40_0000]) {
+            set(e, 0x011f_9604 + 4 * k, v);
+        }
+        set(e, 0x011f_9610, 0x4400_0000);
+        if c.word(4) == 1 || c.word(4) == 2 {
+            set(e, 0x011f_9618, play_bits(c, 5));
+        }
+        if c.word(4) == 1 || c.word(4) == 3 {
+            set(e, 0x011f_9614, play_bits(c, 6));
+        }
+        set(e, 0x0101_2054, 0xbf80_0000);
+        let vt = vtable(e, &[]);
+        let this = obj(e, 0xa4, vt);
+        vec![this]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The lighting 3.0 shader's slot 0xfc (`00bbe120`): every pass type of its index tables and others;
+/// the masks' patterns; the fog and eye entries on or off (with the switches); a fog property or none,
+/// its distances both 0.0 or the case's. Main-thread code (`f32`) on the main thread's word, bit for bit
+/// (NaN payloads aside), with play's floats. The fog property's getter (the draw family's) runs by
+/// address.
+#[test]
+fn lighting30_setup_switches() {
+    Diff::new(entry!(
+        0x00bb_e120,
+        engine_typed::draw::lighting30::setup_switches(Ptr<_>, u32)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(&[
+        Input::Of(&[
+            0x1e0, 0x1e1, 10, 15, 0x1d3, 0x1d6, 0x1da, 0x2da, 0x2db, 0x2dc, 0x2e0, 0x2e7, 0x2ed,
+            0x1c4,
+        ]),
+        Input::Of(&[0, u32::MAX, 0x0555_5555]),
+        Input::Of(&[0, 1, 2]),
+        Input::F32,
+        Input::F32Swept(0x4120_0000),
+    ])
+    .max_cases(200)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(|e, c| {
+        let _ = world(e);
+        lighting30_entries(e, c.word(1));
+        if c.word(1) == 0x0555_5555 {
+            // A null entry pointer in each table (the switches skip it, the flag bytes still set).
+            set(e, 0x0120_1088, 0);
+            set(e, 0x0120_10cc, 0);
+        }
+        for k in 0..0x80u32 {
+            set(
+                e,
+                0x0120_0a28 + 4 * k,
+                0x5a5a_5a5a ^ k.wrapping_mul(0x01f3_c1d5),
+            );
+            set(
+                e,
+                0x0120_0868 + 4 * k,
+                0xa5a5_a5a5 ^ k.wrapping_mul(0x0326_9e1b),
+            );
+        }
+        let vt = vtable(e, &[]);
+        let this = obj(e, 0xa4, vt);
+        for at in [0x30u32, 0x34] {
+            let map = obj(e, 0x40, vt);
+            set(e, this + at, map);
+        }
+        e.register(VT_FN + 0x24, marked);
+        let fog = if c.word(2) != 0 {
+            let fog = e.mem.alloc(0x80);
+            for (k, v) in (0u32..).zip([0x3e00_0000, 0x3e80_0000, 0x3f00_0000]) {
+                set(e, fog + 0x20 + 4 * k, v);
+            }
+            set(e, fog + 0x60, 0x4040_0000);
+            if c.word(2) == 2 {
+                set(e, fog + 0x30, play_bits(c, 3));
+                set(e, fog + 0x2c, play_bits(c, 4));
+            }
+            fog
+        } else {
+            0
+        };
+        let node = e.mem.alloc(0x140);
+        set(e, node + 0x134, fog);
+        set(e, 0x011f_91c8 + 8, node);
+        e.mem.set_u8(0x011f_91c4, 2);
+        e.map(0x010a_d000, 0x1000);
+        set(e, 0x010a_d6e0, 0x48f4_2400);
+        for k in 0..4u32 {
+            set(e, 0x011a_9bd0 + 4 * k, 0x3d00_0000 + k);
+        }
+        for (k, v) in (0u32..).zip([0x4600_0000, 0x4680_0000, 0x4500_0000]) {
+            set(e, 0x011f_a2a0 + 4 * k, v);
+            set(e, 0x011f_474c + 4 * k, v ^ 0x0040_0000);
+        }
+        vec![this, c.word(0)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The lighting 3.0 material's inputs: the shader mode (8, 10, another); the pass type (the light-scaled
+/// range and another); the property's alpha (play's float) and its flags +0x24 (bits 0x20000, 0x8000);
+/// the alpha property (none in mode 8 only, its flags 0, 9, field 2); the old ambient fog byte; the
+/// light-scaled path's alpha test answer and first active light (none, one).
+const LIGHTING30_MATERIAL: &[Input] = &[
+    Input::Of(&[3, 8, 10]),
+    Input::Of(&[0x1bd, 0x1c3, 0x1c4]),
+    Input::F32,
+    Input::Of(&[0x8000, 0, 0x2_0000]),
+    Input::Of(&[0, 1, 2, 3, 4]),
+    Input::Flag,
+    Input::Of(&[0, 1]),
+    Input::Of(&[1, 0]),
+];
+
+/// The material's words: the entries, the defaults (`011a9be0`), the exe's 255.0; the property (its
+/// alpha the case's, its slot 0x110's factor in `ST0`), the alpha property (flags and reference); the
+/// light-scaled path's callees stood in (the alpha test, the first active light, the lengths and
+/// clamps answering in `ST0`, the transforms marking their words), the sun's colour, a light's data.
+fn lighting30_material_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let _ = world(e);
+    lighting30_entries(e, 0x0555_5555);
+    e.mem.set_u64(0x0101_e568, 255.0f64.to_bits());
+    for k in 0..4u32 {
+        set(e, 0x011a_9be0 + 4 * k, 0x3e00_0000 + k);
+    }
+    set(e, 0x011f_91b8, c.word(0));
+    e.mem.set_u8(0x0120_0bf5, c.word(5) as u8);
+    let alpha_test = c.word(6);
+    set(e, RETS + 0x3f0, alpha_test);
+    e.register(0x004a_2020, |e, _| ret(e.mem.u32(RETS + 0x3f0)));
+    let light = if c.word(7) != 0 {
+        let data = e.mem.alloc(0x100);
+        for (k, v) in (0u32..).zip([0x4120_0000, 0x4100_0000, 0x40c0_0000]) {
+            set(e, data + 0xd4 + 4 * k, v);
+        }
+        set(e, data + 0xc4, 0x3f00_0000);
+        set(e, data + 0xe0, 0x4220_0000);
+        let light = e.mem.alloc(0x100);
+        set(e, light + 0xf8, data);
+        light
+    } else {
+        0
+    };
+    set(e, RETS + 0x3f4, light);
+    e.register(0x00b7_0600, |e, _| ret(e.mem.u32(RETS + 0x3f4)));
+    // The lengths and the clamps answer in `ST0`: from their words, so a wrong word shows.
+    for addr in [0x00b7_19e0u32, 0x0045_7990] {
+        e.register(addr, |e, a| Ret {
+            st0: f64::from(f32::from_bits(e.mem.u32(a[0]))) + 1.5,
+            ..Ret::default()
+        });
+    }
+    e.register(0x0068_b050, |_, a| Ret {
+        st0: f64::from(f32::from_bits(a[2]))
+            .max(f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32))),
+        ..Ret::default()
+    });
+    e.register(0x00b7_19c0, |_, a| {
+        let first = f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32));
+        let second = f64::from_bits(u64::from(a[2]) | (u64::from(a[3]) << 32));
+        Ret {
+            st0: first.min(second),
+            ..Ret::default()
+        }
+    });
+    e.register(0x0043_9ef0, marked);
+    // A point times a scalar (`00633b40`: the point, the result, the scale): the result written, so the
+    // light's colour length (scaled by its fade) can exceed the sun's and be the one chosen.
+    e.register(0x0063_3b40, |e, a| {
+        let scale = f32::from_bits(a[2]);
+        for k in 0..3u32 {
+            let value = f32::from_bits(e.mem.u32(a[0] + 4 * k)) * scale;
+            e.mem.set_u32(a[1] + 4 * k, value.to_bits());
+        }
+        ret(a[1])
+    });
+    let node = e.mem.alloc(0x200);
+    let list = e.mem.alloc(0x100);
+    let sun = e.mem.alloc(0x100);
+    for (k, v) in (0u32..).zip([0x3f00_0000, 0x3e80_0000, 0x3fc0_0000]) {
+        set(e, sun + 0xd4 + 4 * k, v);
+    }
+    set(e, list + 0xf8, sun);
+    set(e, node + 0xe0, list);
+    set(e, 0x011f_91c8, node);
+    let vt = vtable(e, &[]);
+    e.register(VT_FN + 0x110, |_, _| Ret {
+        st0: 0.75,
+        ..Ret::default()
+    });
+    let this = obj(e, 0xa4, vt);
+    let property = lighting30_property(e, 0, c.word(3), play_bits(c, 2));
+    let state = e.mem.alloc(0x18);
+    if c.word(4) != 0 || c.word(0) != 8 {
+        let alpha = obj(e, 0x20, vt);
+        let flags: u16 = match c.word(4) {
+            1 => 1,
+            2 => 1 << 9,
+            4 => 1 << 5,
+            _ => 2 << 5,
+        };
+        e.mem.set_u16(alpha + 0x18, flags);
+        e.mem.set_u8(alpha + 0x1a, 0x80);
+        set(e, state, alpha);
+    }
+    let bound = e.mem.alloc(0x10);
+    vec![this, bound, property, state, c.word(1)]
+}
+
+/// The lighting 3.0 material constants (`00bbe9c0`) with the light-scaled alpha: main-thread code
+/// (`f32`; a callee's `double` in `ST0` in `f64`, rounded once) on the main thread's word, bit for bit
+/// (NaN payloads aside), with play's floats.
+#[test]
+fn lighting30_material() {
+    Diff::new(entry!(
+        0x00bb_e9c0,
+        engine_typed::draw::lighting30::material(Ptr<_>, u32, Ptr<_>, Ptr<_>, u32)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(LIGHTING30_MATERIAL)
+    .max_cases(200)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(lighting30_material_words)
+    .run()
+    .assert_same();
+}
+
+/// The lighting 3.0 colour (`00bbecd0`): the material's colour through its pointer or its own; equal to
+/// the neutral colour or not; the property with lights or none; HDR on or off. Main-thread code (`f32`)
+/// on the main thread's word, bit for bit (NaN payloads aside), with play's floats.
+#[test]
+fn lighting30_colour() {
+    Diff::new(entry!(
+        0x00bb_ecd0,
+        engine_typed::draw::lighting30::colour(Ptr<_>, Ptr<_>, Ptr<_>)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(&[
+        Input::Flag,
+        Input::Flag,
+        Input::Flag,
+        Input::Flag,
+        Input::F32,
+        Input::F32Swept(0x4000_0000),
+    ])
+    .float_sweep(FLOAT_SWEEP)
+    .setup(|e, c| {
+        let _ = world(e);
+        lighting30_entries(e, 0x0555_5555);
+        let material = e.mem.alloc(0x48);
+        let colour = [play_bits(c, 4), 0x3f00_0000, 0x3e80_0000];
+        let at = if c.word(0) != 0 {
+            let own = e.mem.alloc(0x10);
+            set(e, material + 0x34, own);
+            own
+        } else {
+            material + 0x28
+        };
+        for (k, v) in (0u32..).zip(colour) {
+            set(e, at + 4 * k, v);
+            let neutral = if c.word(1) != 0 { v } else { v ^ 1 };
+            set(e, 0x011f_4998 + 4 * k, neutral);
+        }
+        set(e, material + 0x40, play_bits(c, 5));
+        let property = lighting30_property(e, 0, 0, HALF);
+        let list = e.mem.alloc(8);
+        set(e, list, if c.word(2) != 0 { 0x1170_0000 } else { 0 });
+        set(e, property + 0xb4, list);
+        e.mem.set_u8(0x011f_941e, c.word(3) as u8);
+        let data = e.mem.alloc(0x10);
+        set(e, data + 0xc, 0x3fc0_0000);
+        let effect = e.mem.alloc(0x70);
+        set(e, effect + 0x6c, data);
+        let effects = e.mem.alloc(8);
+        set(e, effects + 4, effect);
+        let manager = e.mem.alloc(0x10);
+        set(e, manager + 8, effects);
+        set(e, 0x011f_91ac, manager);
+        for k in 0..4u32 {
+            set(e, 0x0120_1b30 + 4 * k, 0x3e00_0000 + 0x0080_0000 * k);
+        }
+        let vt = vtable(e, &[]);
+        let this = obj(e, 0xa4, vt);
+        vec![this, material, property]
+    })
+    .run()
+    .assert_same();
+}
+
+/// A rendered pass for the lighting 3.0 tests: its type `pass_type`, `count` lights (each with a matrix
+/// at +0x10 of a pattern and its byte +0xed set for the first when `marked`), its light-selected byte.
+fn lighting30_pass(e: &mut Engine, pass_type: u32, count: u32, marked: bool) -> u32 {
+    let pass = e.mem.alloc(0x10);
+    e.mem.set_u16(pass + 4, pass_type as u16);
+    e.mem.set_u8(pass + 9, count as u8);
+    if count != 0 {
+        let lights = e.mem.alloc(4 * count);
+        for k in 0..count {
+            let light = e.mem.alloc(0x220);
+            for i in 0..16u32 {
+                set(e, light + 0x10 + 4 * i, 0x3e00_0000 + 0x0010_0000 * i + k);
+            }
+            e.mem.set_u8(light + 0xed, u8::from(marked && k == 0));
+            set(e, lights + 4 * k, light);
+        }
+        set(e, pass + 0xc, lights);
+    }
+    pass
+}
+
+/// The lighting 3.0 view matrix (`00bbe6b0`): its entry on or off; the pass's lights (none, two, the
+/// first marked); the pass type (the copied ranges, the first light's, another); the flag word; the
+/// projection's entry. No arithmetic but the origin's sums (`f32`); the D3DX imports and `GetD3DFromNi`
+/// stood in; the main thread's word.
+#[test]
+fn lighting30_view_matrix() {
+    Diff::new(entry!(
+        0x00bb_e6b0,
+        engine_typed::draw::lighting30::view_matrix(Ptr<_>, Ptr<_>, u32, u32, Ptr<_>)
+    ))
+    .common()
+    .goes_by_address(&[0x00ec_44d0])
+    .main_thread(0)
+    .inputs(&[
+        Input::Of(&[0, u32::MAX, 0x0000_0040]),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0x1bd, 0x2d8, 0x1c4, 0x30, 0x1c3, 0x2ef, 0x1c7, 0x1c8]),
+        Input::Flag,
+        Input::F32,
+    ])
+    .float_sweep(FLOAT_SWEEP)
+    .setup(|e, c| {
+        let w = world(e);
+        lighting30_entries(e, c.word(0));
+        matrix_inverse_stand_in(e);
+        for addr in [0x00fd_f424u32, 0x00fd_f42c] {
+            e.register(addr, |e, a| {
+                for k in 0..16u32 {
+                    let word = e.mem.u32(a[1] + 4 * ((5 * k + 3) % 16));
+                    e.mem.set_u32(a[0] + 4 * k, word ^ 1);
+                }
+                ret(a[0])
+            });
+        }
+        e.register(0x00b7_99a0, |e, a| {
+            for k in 0..16u32 {
+                e.mem.set_u32(a[0] + 4 * k, 0x3f00_0000 + k);
+            }
+            ret(a[0])
+        });
+        for k in 0..3u32 {
+            set(
+                e,
+                0x011f_474c + 4 * k,
+                if k == 0 { play_bits(c, 4) } else { 0x4300_0000 },
+            );
+        }
+        let renderer = w.renderer;
+        for k in 0..16u32 {
+            set(e, renderer + 0x940 + 4 * k, 0x3c00_0000 + k);
+        }
+        let vt = vtable(e, &[]);
+        let this = obj(e, 0xa4, vt);
+        set(e, this + 0x18, renderer);
+        let pass = match c.word(1) {
+            0 => lighting30_pass(e, 0x30, 0, false),
+            1 => lighting30_pass(e, 0x30, 2, false),
+            _ => lighting30_pass(e, 0x30, 2, true),
+        };
+        let transform = e.mem.alloc(0x34);
+        vec![this, pass, c.word(2), c.word(3), transform]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The lighting 3.0 lights' inputs: the shader mode (0xf, 10, another); the pass type (below 0x1bd,
+/// 0x1c3, 0x1c4, 0x1c6, another); the pass's type and light count (two, none, a shadow type); HDR with
+/// the property's bit 0x400, full bright; the active lights; the light data's counts (play's floats:
+/// whole numbers below 3 and others); the flag word; the transform's scale (play's float).
+const LIGHTING30_LIGHTS: &[Input] = &[
+    Input::Of(&[0xf, 0xa, 3]),
+    Input::Of(&[0x30, 0x1c3, 0x1c4, 0x1c5, 0x1c6, 0x1d0]),
+    // The pass: two lights, none, a shadow type with two, one, as many as the limit (4), more (6).
+    Input::Of(&[0, 1, 2, 3, 4, 5]),
+    Input::Of(&[0, 1, 2, 3]),
+    Input::Flag,
+    Input::Of(&[0, 0x3f80_0000, 0x4000_0000, 0x3fc0_0000]),
+    Input::Flag,
+    Input::F32,
+    // The exe's limit on the light count: 4, or 1 (below the pass's lights).
+    Input::Of(&[4, 1]),
+    // The property's bit 0x400 (+0x20), apart from HDR, so all four combinations run.
+    Input::Flag,
+];
+
+/// The lights' words: the entries, the setters stood in (each writing its index into the light colour
+/// row and an entry, so the colour and the entries depend on the lights), the light scale, the fog
+/// colour, the limit, the 0.5, the held accumulator with an ambient colour, the camera position, the
+/// D3DX imports and the unitize stood in.
+fn lighting30_lights_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let _ = world(e);
+    lighting30_entries(e, 0x0555_5555);
+    scene_camera_at(e, 0x4500_0000);
+    set(e, 0x011f_91b8, c.word(0));
+    for addr in [0x00b7_0de0u32, 0x00b7_1130] {
+        e.register(addr, |e, a| {
+            for k in 0..4u32 {
+                e.mem
+                    .set_u32(0x011f_a0d0 + 4 * k, 0x3e80_0000 + 0x0010_0000 * (a[0] + k));
+            }
+            let entry = 0x0120_1c90 + 0x20 * (a[0] & 7);
+            for k in 0..4u32 {
+                e.mem
+                    .set_u32(entry + 4 * k, 0x3f00_0000 + 0x0008_0000 * (a[0] + k));
+            }
+            ret(0)
+        });
+    }
+    let hdr = c.word(3) & 1;
+    e.mem.set_u8(0x011f_941e, hdr as u8);
+    e.mem.set_u8(0x011f_91a7, (c.word(3) >> 1) as u8);
+    set(e, 0x011f_9184, 0x3fc0_0000);
+    for k in 0..4u32 {
+        set(e, 0x011a_9bd0 + 4 * k, 0x3d00_0000 + k);
+        set(e, 0x0120_1b30 + 4 * k, 0x3d80_0000 + k);
+    }
+    set(e, 0x011a_e60c, c.word(8));
+    set(e, 0x0101_6248, HALF);
+    let active = c.word(4);
+    set(e, RETS + 0x3f8, active * 2);
+    e.register(0x00b7_0790, |e, _| ret(e.mem.u32(RETS + 0x3f8)));
+    let held = e.mem.alloc(0x1ac);
+    for k in 0..4u32 {
+        set(e, held + 0x154 + 4 * k, 0x3e00_0000 + k);
+    }
+    set(e, 0x011f_95f0, held);
+    for addr in [0x00fd_f420u32, 0x00fd_f41c, 0x00fd_f414] {
+        e.register(addr, |e, a| {
+            for k in 0..3u32 {
+                let word = e.mem.u32(a[1] + 4 * ((k + 1) % 3));
+                e.mem.set_u32(a[0] + 4 * k, word);
+            }
+            ret(a[0])
+        });
+    }
+    e.register(0x004a_0c10, |_, _| ret(0));
+    let (kind, count) = match c.word(2) {
+        0 => (0x30, 2),
+        1 => (0x30, 0),
+        2 => (0x1c5, 2),
+        3 => (0x30, 1),
+        4 => (0x30, 4),
+        _ => (0x30, 6),
+    };
+    let pass = lighting30_pass(e, kind, count, false);
+    let property = lighting30_property(e, if c.word(9) != 0 { 0x400 } else { 0 }, 0, HALF);
+    let material = e.mem.alloc(0x48);
+    set(e, material + 0x38, 0x3f30_0000);
+    let matrix = e.mem.alloc(0x40);
+    let transform = e.mem.alloc(0x34);
+    set(e, transform + 0x30, play_bits(c, 7));
+    // The light data's counts as the setters leave them: the case's, for the passes that read them as set.
+    set(e, 0x0120_1c70, c.word(5));
+    set(e, 0x0120_1c74, c.word(5));
+    let vt = vtable(e, &[]);
+    let this = obj(e, 0xa4, vt);
+    vec![
+        this,
+        property,
+        pass,
+        c.word(1),
+        material,
+        matrix,
+        c.word(6),
+        transform,
+    ]
+}
+
+/// The lighting 3.0 lights (`00bbc050` with the set-up `00bbc0a4` it jumps to): main-thread code
+/// (`f32`) on the main thread's word, bit for bit (NaN payloads aside), with play's floats. The CRT's
+/// `_ftol2` and the dispatch family's unitize run by address (their own tests).
+#[test]
+fn lighting30_lights() {
+    Diff::new(entry!(
+        0x00bb_c050,
+        engine_typed::draw::lighting30::lights(
+            Ptr<_>,
+            Ptr<_>,
+            Ptr<_>,
+            u32,
+            Ptr<_>,
+            u32,
+            u32,
+            Ptr<_>,
+        )
+    ))
+    .common()
+    .goes_by_address(&[0x00ec_62c0, 0x004a_0c10])
+    // The held accumulator's getter is a read of `011f95f0`, done in place (`packet::held_accumulator`).
+    .ignore_calls(&[0x00b4_f5d0])
+    .main_thread(0)
+    .inputs(LIGHTING30_LIGHTS)
+    .max_cases(400)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(lighting30_lights_words)
+    .run()
+    .assert_same();
+}
+
+/// The lighting 3.0 geometry set-up's plain callees in the translation (its helpers, typed above with
+/// their own tests): the light position, the lights, the view and world matrices, the eye position, the
+/// emittance, the material, the colour, the glow, the alpha, the fog.
+const LIGHTING30_HELPERS: &[u32] = &[
+    0x00bb_b890,
+    0x00bb_c050,
+    0x00bb_e6b0,
+    0x00bb_ba00,
+    0x00bb_bcf0,
+    0x00bb_bda0,
+    0x00bb_e9c0,
+    0x00bb_ecd0,
+    0x00bb_bdf0,
+    0x00bb_be30,
+    0x00bb_be80,
+];
+
+/// The geometry set-up's inputs: the pass type (the z-write range, the special set-ups', the shadow
+/// clip planes' range, another); the alpha property's flag 0; the refraction and parallax entries; the
+/// light refusing the computed planes, the held accumulator refusing them (its +0x164, +0x165); the
+/// constant maps (none, stand-ins); the state's fifth property (none, flag 0 clear or set); the game time
+/// (play's float).
+const LIGHTING30_CONSTANTS: &[Input] = &[
+    Input::Of(&[
+        0x1d4, 0x1e0, 0xe, 0x1c4, 0x1c7, 0x30, 0x1e1, 0xf, 0x1d3, 0x1d6,
+    ]),
+    Input::Flag,
+    Input::Of(&[u32::MAX, 0]),
+    Input::Of(&[0, 1, 2, 3]),
+    Input::Flag,
+    Input::Of(&[0, 1, 2]),
+    Input::F32,
+    // The refraction count (+0xe4, an integer): small, one past a float's 24 bits, negative.
+    Input::Of(&[3, 0x0100_0001, 0xffff_fffd]),
+    // Skinned or not (the geometry's skin instance +0xbc: the flag the helpers take).
+    Input::Flag,
+];
+
+/// The geometry set-up's words: the world's renderer as the shader's (its light matrices at +0x980 and
+/// +0x9c0), the rendered pass (two lights, the first's planes +0x144 and +0x1a8 and its refusing byte
+/// +0x208), its geometry (a transform, a bound, a skin word, its data's buffers), the state's properties;
+/// the special set-ups, the camera position, the plane store and the D3DX imports stood in; the helpers
+/// run by address (their translations both sides).
+fn lighting30_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let w = world(e);
+    lighting30_entries(e, c.word(2));
+    matrix_inverse_stand_in(e);
+    for addr in [
+        0x00bb_dda0u32,
+        0x00bb_dcd0,
+        0x00bb_de20,
+        0x00b7_1b40,
+        0x00b7_1ad0,
+        0x00fd_f424,
+        0x00fd_f42c,
+        0x00fd_f430,
+        0x00fd_f418,
+        0x00fd_f414,
+        0x00fd_f420,
+        0x00fd_f41c,
+        // The lights' setters, the active light count and `GetD3DFromNi` (the helpers' callees; the
+        // helpers' own tests cover what they do with them).
+        0x00b7_0de0,
+        0x00b7_1130,
+        0x00b7_0790,
+        0x00b7_99a0,
+    ] {
+        e.register(addr, marked);
+    }
+    e.mem.set_u64(0x0101_2640, 3600.0f64.to_bits());
+    e.map(0x0104_e000, 0x1000);
+    e.mem.set_u64(0x0104_eea0, 0x4019_21fa_0000_0000);
+    set(e, 0x011f_940c, play_bits(c, 6));
+    scene_camera_at(e, 0x4500_0000);
+    let renderer = w.renderer;
+    for k in 0..32u32 {
+        set(e, renderer + 0x980 + 4 * k, 0x3c00_0000 + 0x0004_0000 * k);
+    }
+    let held = e.mem.alloc(0x1ac);
+    e.mem.set_u8(held + 0x164, u8::from(c.word(3) & 2 != 0));
+    e.mem.set_u8(held + 0x165, u8::from(c.word(3) == 3));
+    set(e, 0x011f_95ec, held);
+    let vt = vtable(e, &[]);
+    let this = obj(e, 0xa4, vt);
+    set(e, this + 0x18, renderer);
+    let target = obj(e, 0x10, vt);
+    set(e, this + 0x1c, target);
+    let pass_type = c.word(0);
+    let pass = lighting30_pass(e, pass_type, 2, false);
+    let first = e.mem.u32(e.mem.u32(pass + 0xc));
+    for k in 0..24u32 {
+        set(e, first + 0x144 + 4 * k, 0x3e00_0000 + 0x0002_0000 * k);
+        set(e, first + 0x1a8 + 4 * k, 0x3f00_0000 + k);
+    }
+    e.mem.set_u8(first + 0x208, u8::from(c.word(3) == 1));
+    let geometry = e.mem.alloc(0xc0);
+    for (i, v) in (0u32..).zip([
+        ONE,
+        0,
+        0,
+        0,
+        ONE,
+        0,
+        0,
+        0,
+        ONE,
+        0x4580_0000,
+        0xc520_0000,
+        0x4400_0000,
+        ONE,
+    ]) {
+        set(e, geometry + 0x68 + 4 * i, v);
+    }
+    let bound = e.mem.alloc(0x10);
+    set(e, geometry + 0x20, bound);
+    let data = e.mem.alloc(0x40);
+    set(e, data + 0x34, 0x0bbf_0000);
+    set(e, geometry + 0xb8, data);
+    if c.word(8) != 0 {
+        // A skin instance (only its being there is read: the helpers take it as their flag).
+        set(e, geometry + 0xbc, 0x5c1d_0000);
+    }
+    set(e, pass, geometry);
+    set(e, 0x011f_91e0, pass);
+    set(e, 0x011f_91e4, pass_type);
+    let property = lighting30_property(e, 0, 0, HALF);
+    set(e, property + 0xe4, c.word(7));
+    // No lights on the property (its light list empty), and the exe's limit on the light count.
+    let list = e.mem.alloc(8);
+    set(e, property + 0xb4, list);
+    set(e, 0x011a_e60c, 4);
+    let material = e.mem.alloc(0x48);
+    let state = e.mem.alloc(0x18);
+    let alpha = obj(e, 0x20, vt);
+    e.mem.set_u16(alpha + 0x18, c.word(1) as u16);
+    set(e, state, alpha);
+    set(e, state + 8, material);
+    set(e, state + 0xc, property);
+    if c.word(5) != 0 {
+        let other = obj(e, 0x20, vt);
+        e.mem.set_u16(other + 0x18, (c.word(5) - 1) as u16);
+        set(e, state + 0x10, other);
+    }
+    let current = e.mem.alloc(0x60);
+    set(e, 0x0126_f74c, current);
+    if c.word(4) != 0 {
+        set(e, current + 0x44, 0x0b0b_0044);
+        set(e, current + 0x5c, 0x0b0b_005c);
+        for at in [0x34u32, 0x48] {
+            let map = obj(e, 0x40, vt);
+            set(e, current + at, map);
+        }
+        for at in [0x30u32, 0x34] {
+            set(e, this + at, 0x0a0a_0000 + at);
+        }
+    }
+    vec![this, state]
+}
+
+/// The lighting 3.0 shader's slot 0x7c (`00bbef90`): main-thread code (`f32`; the refraction's steps
+/// with the exe's `double`s, which have 24 significant bits or fewer, in `f64` rounded once) on the main
+/// thread's word, bit for bit (NaN payloads aside), with play's floats. Its helpers (their own tests
+/// above) are plain calls in the translation and run by address here, and so do the shader, dispatch and
+/// render families' functions it calls ([`Common::shader_translated`]).
+#[test]
+fn lighting30_setup_constants() {
+    Diff::new(entry!(
+        0x00bb_ef90,
+        engine_typed::draw::lighting30::setup_constants(Ptr<_>, Ptr<_>)
+    ))
+    .shader_translated()
+    .goes_by_address(LIGHTING30_HELPERS)
+    .goes_by_address(&[0x00c4_c2d0])
+    // The shader accumulator's getter is a read of `011f95ec`, done in place (`packet::shader_accumulator`).
+    .ignore_calls(&[0x00b4_f5c0])
+    .translation_calls_plainly(LIGHTING30_HELPERS)
+    .main_thread(0)
+    .inputs(LIGHTING30_CONSTANTS)
+    .max_cases(320)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(lighting30_constants_words)
+    .run()
+    .assert_same();
+}
+
+/// The `010bb980` shader's slot 0x78 (`00bd02e0`): each of the exe's lists by its pass types and the
+/// base set-up (the shader family's) outside them. The stage set-ups are the shader family's
+/// (`00b7c0a0`, `00b7c0e0`) or by address (`00b7c1f0`, stood in); the main thread's word.
+#[test]
+fn lighting30_stage_textures() {
+    Diff::new(entry!(
+        0x00bd_02e0,
+        engine_typed::draw::lighting30::setup_stage_textures(Ptr<_>, Ptr<_>)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(&[Input::Of(&[
+        0xc5, 0xc6, 0xdb, 0x128, 0x130, 0x142, 0x143, 0x30,
+    ])])
+    .setup(|e, c| {
+        let w = world(e);
+        e.register(0x00b7_c1f0, marked);
+        e.register(VT_FN + 0x108, marked);
+        set(e, 0x011f_91e4, c.word(0));
+        let vt = vtable(e, &[]);
+        let this = obj(e, 0xa4, vt);
+        let property = lighting30_property(e, 0, 0, HALF);
+        let textures = e.mem.alloc(0x20);
+        for k in 0..8u32 {
+            set(e, textures + 4 * k, 0x7e57_0000 + k);
+        }
+        set(e, property + 0xac, textures);
+        set(e, property + 0xb0, textures);
+        let state = e.mem.alloc(0x18);
+        set(e, state + 0xc, property);
+        let pass = e.mem.alloc(0x60);
+        let stages = e.mem.alloc(0x20);
+        for k in 0..8u32 {
+            let stage = if k == 0 { w.stage } else { second_stage(e, &w) };
+            set(e, stages + 4 * k, stage);
+        }
+        set(e, pass + 0x24, stages);
+        set(e, 0x0126_f74c, pass);
+        vec![this, state]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The light table entry (`00bb95e0`): entry 0 or 3, eight words. No floats; the main thread's word.
+#[test]
+fn set_light_entry() {
+    Diff::new(entry!(
+        0x00bb_95e0,
+        group_c::set_light_entry(u32, u32, u32, u32, u32, u32, u32, u32, u32)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(&[Input::Of(&[0, 3])])
+    .setup(|e, c| {
+        let _ = world(e);
+        e.map(0x0120_1000, 0x1000);
+        let mut words = vec![c.word(0)];
+        words.extend((0..8u32).map(|k| 0x3c00_0000 + k));
+        words
+    })
+    .run()
+    .assert_same();
+}
+
+/// The pass end's flags (`00bb96d0`): the entry at `012010bc` switched on or off before. No floats; the
+/// main thread's word.
+#[test]
+fn pass_end_flags() {
+    Diff::new(entry!(0x00bb_96d0, group_c::pass_end_flags(Ptr<_>, u32)))
+        .common()
+        .main_thread(0)
+        .inputs(&[Input::Flag])
+        // No world: its stand-ins hold this address (the tests that don't name the draw family stand it in).
+        .setup(|e, c| {
+            lighting30_entries(e, if c.word(0) != 0 { u32::MAX } else { 0 });
+            e.mem.set_u8(0x0120_0863, 1);
+            vec![0x0bad_0004, 0x0bad_0005]
+        })
+        .run()
+        .assert_same();
 }

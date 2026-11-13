@@ -1160,3 +1160,114 @@ pub(crate) fn hdr_effect_scale(e: &Engine) -> u32 {
     let data = e.global::<u32>(effect.wrapping_add(0x6c));
     e.global::<u32>(data.wrapping_add(0xc))
 }
+
+/// A lighting property's word at `offset`: its alpha (+0x30), light value (+0x6c), emittance (+0x84 to
+/// +0x90), glow (+0xe0), refraction count (+0xe4) and parallax (+0xe8, +0xec).
+#[inline(always)]
+pub(crate) fn lighting_word(e: &Engine, property: u32, offset: u32) -> u32 {
+    e.global::<u32>(property.wrapping_add(offset))
+}
+
+/// Whether a lighting property has lights (the first word of its light list, +0xb4).
+#[inline(always)]
+pub(crate) fn lighting_has_lights(e: &Engine, property: u32) -> bool {
+    let list = e.global::<u32>(property.wrapping_add(0xb4));
+    e.global::<u32>(list) != 0
+}
+
+/// A material's word at `offset` (+0x38, the light data's third word).
+#[inline(always)]
+pub(crate) fn material_word(e: &Engine, material: u32, offset: u32) -> u32 {
+    e.global::<u32>(material.wrapping_add(offset))
+}
+
+/// The material constants' defaults (`011a9be0`, word `index`).
+#[inline(always)]
+pub(crate) fn material_default_word(e: &Engine, index: u32) -> u32 {
+    e.global::<u32>(0x011a_9be0 + 4 * index)
+}
+
+/// The scene's shadow node 0 (`011f91c8`), its camera position (+0x1e4, word `index`) and its sun's
+/// colour (its light list +0xe0, the list's light +0xf8, the light's colour +0xd4, word `index`).
+#[inline(always)]
+pub(crate) fn scene_shadow_node(e: &Engine) -> u32 {
+    e.global::<u32>(0x011f_91c8)
+}
+#[inline(always)]
+pub(crate) fn scene_camera_position(e: &Engine, index: u32) -> u32 {
+    e.global::<u32>(scene_shadow_node(e).wrapping_add(0x1e4 + 4 * index))
+}
+#[inline(always)]
+pub(crate) fn sun_light_colour_word(e: &Engine, index: u32) -> u32 {
+    let list = e.global::<u32>(scene_shadow_node(e).wrapping_add(0xe0));
+    let light = e.global::<u32>(list.wrapping_add(0xf8));
+    e.global::<u32>(light.wrapping_add(0xd4 + 4 * index))
+}
+
+/// A light's data (+0xf8) and a light's byte at `offset` (+0xed, +0x208).
+#[inline(always)]
+pub(crate) fn light_data(e: &Engine, light: u32) -> u32 {
+    e.global::<u32>(light.wrapping_add(0xf8))
+}
+#[inline(always)]
+pub(crate) fn light_byte(e: &Engine, light: u32, offset: u32) -> u8 {
+    e.global::<u8>(light.wrapping_add(offset))
+}
+
+/// A pass's lights (+0xc) and a word list's word `index`.
+#[inline(always)]
+pub(crate) fn pass_lights(e: &Engine, pass: u32) -> u32 {
+    e.global::<u32>(pass.wrapping_add(0xc))
+}
+#[inline(always)]
+pub(crate) fn list_word(e: &Engine, list: u32, index: u32) -> u32 {
+    e.global::<u32>(list.wrapping_add(index.wrapping_mul(4)))
+}
+
+/// A renderer's view and light matrices' word at `offset` (+0x940, +0x980, +0x9c0, sixteen words each).
+#[inline(always)]
+pub(crate) fn renderer_view_word(e: &Engine, renderer: u32, offset: u32) -> u32 {
+    e.global::<u32>(renderer.wrapping_add(offset))
+}
+
+/// The light colour's scale (`011f9184`) and the shadow's eight words (`011fd874`, word `index`).
+#[inline(always)]
+pub(crate) fn light_scale(e: &Engine) -> u32 {
+    e.global::<u32>(0x011f_9184)
+}
+#[inline(always)]
+pub(crate) fn shadow_extra_word(e: &Engine, index: u32) -> u32 {
+    e.global::<u32>(0x011f_d874 + 4 * index)
+}
+
+/// An accumulator's ambient colour (+0x154, word `index`), as shader mode 0xf reads the held one.
+#[inline(always)]
+pub(crate) fn accumulator_ambient_word(e: &Engine, acc: u32, index: u32) -> u32 {
+    e.global::<u32>(acc.wrapping_add(0x154 + 4 * index))
+}
+
+/// The fog's near distance (`011f9614`).
+#[inline(always)]
+pub(crate) fn fog_near(e: &Engine) -> u32 {
+    e.global::<u32>(0x011f_9614)
+}
+
+/// The scene renderer's Direct3D device (the renderer `011f4748`, its +0x288), read at each use as the
+/// exe reads it.
+#[inline(always)]
+pub(crate) fn scene_renderer_device(e: &Engine) -> u32 {
+    renderer_device(e, scene_renderer(e))
+}
+
+/// The held accumulator (`011f95f0`, what the exe's getter `00b4f5d0` answers).
+#[inline(always)]
+pub(crate) fn held_accumulator(e: &Engine) -> u32 {
+    e.global::<u32>(0x011f_95f0)
+}
+
+/// The shader manager's accumulator (`011f95ec`, what `BSShaderManager::GetAccumulator` `00b4f5c0`
+/// answers).
+#[inline(always)]
+pub(crate) fn shader_accumulator(e: &Engine) -> u32 {
+    e.global::<u32>(0x011f_95ec)
+}

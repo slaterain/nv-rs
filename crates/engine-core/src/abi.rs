@@ -184,6 +184,23 @@ impl Arg for u64 {
     }
 }
 
+/// A 4x4 matrix passed by value: its sixteen words on the stack, in order.
+impl Arg for [u32; 16] {
+    const WORDS: usize = 16;
+    fn take(words: &[u32], i: &mut usize) -> Self {
+        core::array::from_fn(|_| word(words, i))
+    }
+    fn put(self, out: &mut Vec<u32>) {
+        out.extend_from_slice(&self);
+    }
+    #[inline]
+    fn put_words(self, out: &mut Words) {
+        for w in self {
+            out.push(w);
+        }
+    }
+}
+
 impl Arg for f64 {
     const WORDS: usize = 2;
     fn take(words: &[u32], i: &mut usize) -> Self {
