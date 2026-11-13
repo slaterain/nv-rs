@@ -232,7 +232,7 @@ fn installed_records(installed: bool) {
         let execute = if installed && slot.kind == Kind::Empty {
             EMPTY_EXECUTE
         } else if installed
-            && (built
+            && ((built && slot.kind != Kind::ConditionOnly)
                 || o == 0x2200
                 || o == 0x2210
                 || o == crate::main_loop::SET_GAME_MAIN_LOOP_CALLBACK
@@ -253,12 +253,13 @@ fn installed_records(installed: bool) {
         } else {
             DEFAULT_PARSE
         };
-        // A built condition's record has its eval too.
-        let eval = if installed && built && slot.kind == Kind::Condition {
-            nvse::table::eval_address(o)
-        } else {
-            0
-        };
+        // A built condition's record has its eval too (a condition-only one its eval alone).
+        let eval =
+            if installed && built && matches!(slot.kind, Kind::Condition | Kind::ConditionOnly) {
+                nvse::table::eval_address(o)
+            } else {
+                0
+            };
         assert_eq!(
             (r.execute, r.parse, r.eval, r.flags),
             (execute, parse, eval, slot.kind.flags()),
