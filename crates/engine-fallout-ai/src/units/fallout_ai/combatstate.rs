@@ -8972,6 +8972,10 @@ mod tests {
             SiteSlot::new(Owner::Jip, 0x0099_9857),
             weapon_switch_handler,
         );
+        // The list's count is its word `+8`; an entry is a zeroed 0x14-byte block.
+        e.register_double(ARRAY_SIZE, |e, a| ret(e.mem.u32(a[0] + 8)));
+        let entry = e.mem.alloc(0x14);
+        e.register_double(0x006d_ad90, move |_, _| ret(entry));
         SWITCH_ANSWER.with(|c| c.set(Some(1)));
         fn_009993c0(&mut e, f.state);
         assert!(SWITCH_SEEN.with(|s| s.borrow().is_empty()), "no user");
@@ -8981,11 +8985,18 @@ mod tests {
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0][..2], [f.attacker, 0]);
         assert_ne!(seen[0][2], 0);
-        assert!(calls(&log, 0x006d_ad90).is_empty(), "starts past the entry");
+        assert!(
+            calls(&log, 0x0052_5980).is_empty(),
+            "starts past the one entry: its ammunition not asked"
+        );
         assert_eq!(e.get(f.state, CombatState::fUnarmedDPS), 3.0);
+        // Starting at 0 instead reads that entry.
+        SWITCH_ANSWER.with(|c| c.set(Some(0)));
+        let log = logged(&mut e, |e| fn_009993c0(e, f.state));
+        assert!(!calls(&log, 0x0052_5980).is_empty(), "the entry read");
         SWITCH_ANSWER.with(|c| c.set(None));
         fn_009993c0(&mut e, f.state);
-        assert_eq!(SWITCH_SEEN.with(|s| s.take().len()), 1);
+        assert_eq!(SWITCH_SEEN.with(|s| s.take().len()), 2);
     }
 
     #[test]

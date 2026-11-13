@@ -12533,6 +12533,30 @@ mod tests {
         assert_eq!(run(&mut e), (0, 0), "wait: left");
         JIP_ANSWER.with(|c| c.set(None));
         assert_eq!(run(&mut e), (1, 1), "no answer: the exe's test");
+        // A follower is asked with its own word (both left here).
+        let follower = group_member(&mut e);
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, follower.addr());
+        let followers = e.mem.alloc(0x10);
+        e.mem.set_u32(followers + 0xc, node);
+        let leader_extra = leader.addr() + 0x10;
+        e.register_double(0x0042_2700, move |_, a| {
+            if a[0] == leader_extra {
+                followers.into_ret()
+            } else {
+                Ret::default()
+            }
+        });
+        JIP_SEEN.with(|s| s.take());
+        JIP_ANSWER.with(|c| c.set(Some(1)));
+        assert_eq!(run(&mut e).0, 0);
+        assert_eq!(
+            JIP_SEEN.with(|s| s.take()),
+            [
+                (0x008a_d471, vec![leader.addr()]),
+                (0x008a_d471, vec![follower.addr()])
+            ]
+        );
     }
 
     #[test]
