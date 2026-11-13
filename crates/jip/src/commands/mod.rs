@@ -463,7 +463,7 @@ mod tests {
     }
 
     /// Each module lists only commands of its own JIP source file, once each, and the count is
-    /// README's ("JIP LN: 207 of 1,118").
+    /// README's ("JIP LN: N of 1,118", read from README.md).
     #[test]
     fn each_module_holds_its_own_file() {
         let files = [
@@ -504,7 +504,16 @@ mod tests {
             }
         }
         assert_eq!(ALL.len(), files.len());
-        assert_eq!(built(), 207);
+        // README's script-extender row carries the count: later batches change only README, and a
+        // mismatch fails here.
+        let readme = include_str!("../../../../README.md");
+        let at = readme.find("JIP LN: ").expect("README names the JIP LN count") + "JIP LN: ".len();
+        let count: usize = readme[at..]
+            .split(" of 1,118")
+            .next()
+            .and_then(|n| n.parse().ok())
+            .expect("JIP LN: N of 1,118");
+        assert_eq!(built(), count, "README's JIP LN count");
     }
 
     /// Answering "installed", a built command has its execute and its name in its record; an

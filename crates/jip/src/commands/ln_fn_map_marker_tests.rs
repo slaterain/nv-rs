@@ -61,6 +61,21 @@ fn the_name() {
     assert_eq!(string_result(&e, res), b"", "no buffer");
     call_on(&mut e, 0x2230, REFR, &[s(b"Goodsprings")]);
     assert_eq!(text_at(&e, DATA + 4), b"Goodsprings");
+    // JIP's `String::Set`: no buffer yet, so one of the text's length and its 0, nothing freed.
+    assert_eq!(allocations(), vec![12]);
+    assert!(freed().is_empty());
+    let first = e.mem.u32(DATA + 4);
+    // A longer name: the old buffer freed, one of the new length and its 0.
+    call_on(&mut e, 0x2230, REFR, &[s(b"Goodsprings Town")]);
+    assert_eq!(allocations(), vec![12, 17]);
+    assert_eq!(freed(), vec![first]);
+    let second = e.mem.u32(DATA + 4);
+    // A shorter one: written into the same buffer, nothing allocated or freed.
+    call_on(&mut e, 0x2230, REFR, &[s(b"Sloan")]);
+    assert_eq!((allocations(), freed()), (vec![12, 17], vec![first]));
+    assert_eq!(e.mem.u32(DATA + 4), second);
+    assert_eq!(text_at(&e, DATA + 4), b"Sloan");
+    call_on(&mut e, 0x2230, REFR, &[s(b"Goodsprings")]);
     let (_, res) = call_on(&mut e, 0x222f, REFR, &[]);
     assert_eq!(string_result(&e, res), b"Goodsprings");
     // No marker extra: nothing read or written.

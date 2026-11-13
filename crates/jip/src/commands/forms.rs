@@ -568,7 +568,7 @@ layout! {
 
     /// `TESRace` (JIP LN NVSE), checked in the race loader (`00610CD0`: the voices through
     /// `00610C70`, `ONAM` +0x504, `YNAM` +0x508).
-    pub struct TESRace: 0x510 {
+    pub struct TESRace: 0x524 {
         /// `voiceTypes[2]` (JIP LN NVSE): male, female.
         0x4FC voiceTypes: u32,
         /// `ageRace[2]` (JIP LN NVSE): older, younger.
@@ -577,7 +577,7 @@ layout! {
 
     /// `TESNPC` (JIP LN NVSE), the race (`race.race`): the NPC loader (`00602190`) stores `RNAM`
     /// through `006ECD40` (which writes `[ecx+4]`) on the race component at +0x10C.
-    pub struct TESNPC: 0x1FC {
+    pub struct TESNPC: 0x20C {
         0x110 race: u32,
     }
 }
