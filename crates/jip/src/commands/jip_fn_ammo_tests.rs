@@ -100,17 +100,10 @@ fn the_casing() {
         MISC,
         "a climate is no bound object: the reader refuses it"
     );
-    // A bound object that is no inventory item (a static, type 0x20) passes the reader's
-    // kParamType_ObjectID check (its `IsBoundObject`) and is refused by `kInventoryType`.
+    // A bound object that is no inventory item (a static, type 0x20): `kParamType_ObjectID` is
+    // 0x03, which xNVSE's reader checks against the same `kInventoryType` table as JIP's own
+    // test, so the reader already refuses it (JIP's test cannot be reached from a script).
     form(&mut e, STAT, 0x20, 0x0000_0020);
-    let vtbl = FORMS + 0x6000;
-    e.mem.set_u32(STAT, vtbl);
-    e.mem
-        .set_u32(vtbl + nvse::vtable::IS_BOUND_OBJECT, 0x0050_1000);
-    e.register(0x0050_1000, |_, _| Ret {
-        eax: 1,
-        ..Ret::default()
-    });
     set_ref(&mut e, 5, STAT);
     call(&mut e, 0x2939, &[r(1), r(5)]);
     assert_eq!(e.mem.u32(AMMO + 0xbc), MISC, "a static is no inventory item");
