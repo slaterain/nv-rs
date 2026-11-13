@@ -14,7 +14,9 @@
 use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
+use engine_core::typed::{MAIN_THREAD, OTHER_THREADS};
 use engine_typed::pathing::{self, location, navmesh, point, pov, search};
+use std::cell::Cell;
 
 /// Where the test's virtual functions are registered: past `.text`, one per vtable slot.
 const VT_FN: u32 = 0x00ff_2000;
@@ -52,8 +54,45 @@ fn log(e: &mut Engine, tag: u32, word: u32) {
     e.mem.set_u32(LOG, n + 1);
 }
 
+thread_local! {
+    /// Whether the comparison being run feeds its floats as play has them ([`play`]): set by
+    /// [`BY_THREAD`]'s main thread run, cleared by every other ([`Common::common`] clears it first).
+    /// Each comparison is built and run on one thread, one after the other, so the setup it runs
+    /// reads the setting its own chain made.
+    static AS_PLAY: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The case's float `i`, as the comparison feeds it: a NaN is the quiet NaN 0x7fc00000 (the exe quiets
+/// a signalling NaN it moves through the x87 stack where native code copies it as it is, and two NaNs
+/// meeting keep the larger payload on the x87 and the first on native code: the float rule accepts
+/// both, and a NaN in a stack word or local compares by its bits), and under [`AS_PLAY`] the float as
+/// play has it ([`play`]).
 fn bits(case: &Case, i: usize) -> u32 {
-    case.f32(i).to_bits()
+    let b = case.f32(i).to_bits();
+    if AS_PLAY.with(Cell::get) {
+        play(b)
+    } else if f32::from_bits(b).is_nan() {
+        0x7fc0_0000
+    } else {
+        b
+    }
+}
+
+/// A float as play has it, as the shader family's tests take it: its magnitude folded into 2^-12 to
+/// 2^12, its sign and mantissa kept; zeros and infinities as they come; a NaN the quiet NaN
+/// 0x7fc00000. On the main thread the native maths is plain `f32`, which rounds as the exe's 24-bit
+/// x87 code does while every step stays inside the float range, where the x87 keeps a wider exponent
+/// (a product overflowing a float, or a result rounded twice into a denormal, would part): from these
+/// values no step of the family leaves it.
+fn play(bits: u32) -> u32 {
+    let exponent = (bits >> 23) & 0xff;
+    if exponent == 0xff && bits & 0x007f_ffff != 0 {
+        return 0x7fc0_0000;
+    }
+    if exponent == 0xff || bits & 0x7fff_ffff == 0 || (115..139).contains(&exponent) {
+        return bits;
+    }
+    (bits & 0x807f_ffff) | ((115 + exponent % 24) << 23)
 }
 
 /// The exe's constants these functions read, and the stand-ins.
@@ -398,9 +437,29 @@ fn world(e: &mut Engine) -> World {
 }
 
 /// Functions whose translations compute in plain `f64` (the other threads' rounding), so they differ from
-/// the exe under the main thread's 24-bit word: compared under the other threads' word only. The typed
-/// versions round as the exe does under both (translation bugs, listed in the batch notes).
-const MAIN_WORD_DIFFERS: &[u32] = &[0x006b_9e90, 0x0069_8060, 0x0069_8620, 0x006a_0660];
+/// the exe under the main thread's 24-bit word: compared under the other threads' word only, and checked
+/// on the main thread against hand-worked bits (`*_main_thread` tests). The typed versions round as the
+/// exe does under both. Translation bugs, each checkable in the exe's x87 code, which rounds every
+/// step to the thread's precision:
+/// - the crossing test `006b9e90`: the side tests' FSUB/FMULP/FSUBP and FSTP float (006b9e9e..006b9ec8,
+///   006b9ed3..006b9efd, 006b9f1f..006b9f49), the sum FADD/FSUB (006b9f4f, 006b9f52) and the fraction
+///   FSUB/FDIVR (006b9fbf, 006b9fc2), where the translation takes each in `f64` and rounds once;
+/// - the triangle edge test `00698060`: through the crossing test;
+/// - the relative direction `00698620`: FMUL, FMUL, FADDP and FSTP float (00698639..00698649), likewise
+///   the second (00698655..00698664);
+/// - `Arc::Contains` `006a0660`: through the relative direction;
+/// - the goal test `006a79c0`: FMUL float (006a7a37), FMUL double 0.25 (006a7a4b) and FMUL double
+///   (006a7a62) before the FCOMPP (006a7a68);
+/// - the crossed edge `00698320`: the side tests' FSUB/FMULP/FSUBP and FSTP float (00698409..00698440,
+///   00698450..00698487), found by `crossed_edge_rounding`.
+const MAIN_WORD_DIFFERS: &[u32] = &[
+    0x006b_9e90,
+    0x0069_8060,
+    0x0069_8620,
+    0x006a_0660,
+    0x006a_79c0,
+    0x0069_8320,
+];
 
 /// Functions whose translations pick another NaN than the exe's x87 (a signalling one passed on
 /// unquieted, the sign of a NaN): translation bugs, listed in the batch notes.
@@ -605,12 +664,60 @@ const PLAIN: &[(u32, &[u32])] = &[
 trait Common {
     fn common(self) -> Diff;
     fn plain(self, function: u32) -> Diff;
+    /// One of [`BY_THREAD`]'s settings, kept in the comparison's own chain.
+    fn by(self, run: fn(Diff) -> Diff) -> Diff;
+}
+
+/// Each comparison of a function with floats runs twice, split by thread as the dispatch and particles
+/// families' tests (ADR-0014): under the other threads' control word bit for bit (NaN payloads aside:
+/// the family copies floats plain where the exe moved them through the x87, and native operations pick
+/// another NaN than the x87 where two meet), and under the main thread's within one ulp: plain `f32`
+/// rounds each step to 24 bits as the exe's code does there, but the x87's wider exponent can part in
+/// the last bit (a double rounding into a denormal). A function in [`MAIN_WORD_DIFFERS`] keeps its one
+/// word ([`Common::plain`] sets it after this).
+const BY_THREAD: [fn(Diff) -> Diff; 2] = [other_threads, main_thread];
+
+/// [`BY_THREAD`]'s run under the other threads' control word.
+fn other_threads(d: Diff) -> Diff {
+    AS_PLAY.with(|p| p.set(false));
+    d.control_words(&[OTHER_THREADS]).allow_nan_payloads()
+}
+
+/// [`BY_THREAD`]'s run under the main thread's control word, with the floats as play has them
+/// ([`AS_PLAY`]).
+fn main_thread(d: Diff) -> Diff {
+    AS_PLAY.with(|p| p.set(true));
+    d.control_words(&[MAIN_THREAD]).float_ulps(1)
+}
+
+/// The fixed rounding checks run under both control words bit for bit, without the float sweep:
+/// each input is one where rounding every step to a float (the main thread's 24 bits) and rounding
+/// once (the other threads' 53) part, so maths in the wrong precision for the thread fails there,
+/// where [`BY_THREAD`]'s main thread run would let its last bit through.
+const ROUNDING_BY_THREAD: [fn(Diff) -> Diff; 2] = [other_threads_fixed, main_thread_exact];
+
+/// [`ROUNDING_BY_THREAD`]'s run under the other threads' control word.
+fn other_threads_fixed(d: Diff) -> Diff {
+    other_threads(d).float_sweep(0)
+}
+
+/// [`ROUNDING_BY_THREAD`]'s run under the main thread's control word, bit for bit.
+fn main_thread_exact(d: Diff) -> Diff {
+    AS_PLAY.with(|p| p.set(false));
+    d.control_words(&[MAIN_THREAD]).float_sweep(0)
 }
 
 impl Common for Diff {
+    fn by(self, run: fn(Diff) -> Diff) -> Diff {
+        run(self)
+    }
+
     fn common(self) -> Diff {
+        AS_PLAY.with(|p| p.set(false));
         self.family(&pathing::PATHING)
             .family(&leaf::LEAVES)
+            // The native square root takes `FSQRT` where the translation calls the C runtime's `sqrt`.
+            .ignore_calls(&[0x00ec_6054])
             .max_calls(MAX_CALLS)
     }
 
@@ -652,260 +759,305 @@ fn inputs(parts: &[&[Input]]) -> Vec<Input> {
 
 #[test]
 fn subtract() {
-    Diff::new(entry!(
-        0x0043_9ef0,
-        point::subtract(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
-    ))
-    .common()
-    .plain(0x0043_9ef0)
-    .inputs(&inputs(&[&P3, &P3]))
-    .max_cases(128)
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        stand_ins(e);
-        let (a, b, out) = (
-            case_point(e, case, 0),
-            case_point(e, case, 3),
-            e.mem.alloc(0xc),
-        );
-        vec![a, out, b]
-    })
-    .run()
-    .assert_same();
-}
-
-#[test]
-fn add() {
-    Diff::new(entry!(
-        0x0043_9e90,
-        point::add(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
-    ))
-    .common()
-    .plain(0x0043_9e90)
-    .inputs(&inputs(&[&P3, &P3]))
-    .max_cases(128)
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        stand_ins(e);
-        let (a, b, out) = (
-            case_point(e, case, 0),
-            case_point(e, case, 3),
-            e.mem.alloc(0xc),
-        );
-        vec![a, out, b]
-    })
-    .run()
-    .assert_same();
-}
-
-#[test]
-fn scaled() {
-    Diff::new(entry!(
-        0x004a_3760,
-        point::scaled(Ptr<_>, f32, Ptr<_>) -> Ptr<_>
-    ))
-    .common()
-    .plain(0x004a_3760)
-    .inputs(&inputs(&[&[Input::F32], &P3]))
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        stand_ins(e);
-        let (p, out) = (case_point(e, case, 1), e.mem.alloc(0xc));
-        vec![out, bits(case, 0), p]
-    })
-    .run()
-    .assert_same();
-}
-
-#[test]
-fn scale_by() {
-    Diff::new(entry!(0x0043_9180, point::scale_by(Ptr<_>, f32) -> Ptr<_>))
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x0043_9ef0,
+            point::subtract(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
+        ))
         .common()
-        .plain(0x0043_9180)
-        .inputs(&inputs(&[&[Input::F32], &P3]))
-        .float_sweep(FLOAT_SWEEP)
-        .setup(|e, case| {
-            stand_ins(e);
-            vec![case_point(e, case, 1), bits(case, 0)]
-        })
-        .run()
-        .assert_same();
-}
-
-#[test]
-fn add_to() {
-    Diff::new(entry!(0x0063_c8a0, point::add_to(Ptr<_>, Ptr<_>) -> Ptr<_>))
-        .common()
-        .plain(0x0063_c8a0)
-        .inputs(&inputs(&[&P3, &P3, &[Input::Flag]]))
+        .by(base)
+        .plain(0x0043_9ef0)
+        .inputs(&inputs(&[&P3, &P3]))
         .max_cases(128)
         .float_sweep(FLOAT_SWEEP)
         .setup(|e, case| {
             stand_ins(e);
-            let a = case_point(e, case, 0);
-            // Also onto itself.
-            let b = if case.word(6) == 1 {
-                a
-            } else {
-                case_point(e, case, 3)
-            };
-            vec![a, b]
+            let (a, b, out) = (
+                case_point(e, case, 0),
+                case_point(e, case, 3),
+                e.mem.alloc(0xc),
+            );
+            vec![a, out, b]
         })
         .run()
         .assert_same();
+    }
+}
+
+#[test]
+fn add() {
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x0043_9e90,
+            point::add(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
+        ))
+        .common()
+        .by(base)
+        .plain(0x0043_9e90)
+        .inputs(&inputs(&[&P3, &P3]))
+        .max_cases(128)
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            stand_ins(e);
+            let (a, b, out) = (
+                case_point(e, case, 0),
+                case_point(e, case, 3),
+                e.mem.alloc(0xc),
+            );
+            vec![a, out, b]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn scaled() {
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x004a_3760,
+            point::scaled(Ptr<_>, f32, Ptr<_>) -> Ptr<_>
+        ))
+        .common()
+        .by(base)
+        .plain(0x004a_3760)
+        .inputs(&inputs(&[&[Input::F32], &P3]))
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            stand_ins(e);
+            let (p, out) = (case_point(e, case, 1), e.mem.alloc(0xc));
+            vec![out, bits(case, 0), p]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn scale_by() {
+    for base in BY_THREAD {
+        Diff::new(entry!(0x0043_9180, point::scale_by(Ptr<_>, f32) -> Ptr<_>))
+            .common()
+            .by(base)
+            .plain(0x0043_9180)
+            .inputs(&inputs(&[&[Input::F32], &P3]))
+            .float_sweep(FLOAT_SWEEP)
+            .setup(|e, case| {
+                stand_ins(e);
+                vec![case_point(e, case, 1), bits(case, 0)]
+            })
+            .run()
+            .assert_same();
+    }
+}
+
+#[test]
+fn add_to() {
+    for base in BY_THREAD {
+        Diff::new(entry!(0x0063_c8a0, point::add_to(Ptr<_>, Ptr<_>) -> Ptr<_>))
+            .common()
+            .by(base)
+            .plain(0x0063_c8a0)
+            .inputs(&inputs(&[&P3, &P3, &[Input::Flag]]))
+            .max_cases(128)
+            .float_sweep(FLOAT_SWEEP)
+            .setup(|e, case| {
+                stand_ins(e);
+                let a = case_point(e, case, 0);
+                // Also onto itself.
+                let b = if case.word(6) == 1 {
+                    a
+                } else {
+                    case_point(e, case, 3)
+                };
+                vec![a, b]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
 fn length_xy_squared() {
-    Diff::new(entry!(0x0059_5c80, point::length_xy_squared(Ptr<_>) -> f32))
-        .common()
-        .plain(0x0059_5c80)
-        .inputs(&P3)
-        .float_sweep(FLOAT_SWEEP)
-        .setup(|e, case| {
-            stand_ins(e);
-            vec![case_point(e, case, 0)]
-        })
-        .run()
-        .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(0x0059_5c80, point::length_xy_squared(Ptr<_>) -> f32))
+            .common()
+            .by(base)
+            .plain(0x0059_5c80)
+            .inputs(&P3)
+            .float_sweep(FLOAT_SWEEP)
+            .setup(|e, case| {
+                stand_ins(e);
+                vec![case_point(e, case, 0)]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
 fn length_squared() {
-    Diff::new(entry!(0x004a_7290, point::length_squared(Ptr<_>) -> f32))
-        .common()
-        .plain(0x004a_7290)
-        .inputs(&P3)
-        .float_sweep(FLOAT_SWEEP)
-        .setup(|e, case| {
-            stand_ins(e);
-            vec![case_point(e, case, 0)]
-        })
-        .run()
-        .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(0x004a_7290, point::length_squared(Ptr<_>) -> f32))
+            .common()
+            .by(base)
+            .plain(0x004a_7290)
+            .inputs(&P3)
+            .float_sweep(FLOAT_SWEEP)
+            .setup(|e, case| {
+                stand_ins(e);
+                vec![case_point(e, case, 0)]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
 fn length() {
-    Diff::new(entry!(0x0045_7990, point::length(Ptr<_>) -> f32))
-        .common()
-        .plain(0x0045_7990)
-        .inputs(&P3)
-        .float_sweep(FLOAT_SWEEP)
-        .setup(|e, case| {
-            stand_ins(e);
-            vec![case_point(e, case, 0)]
-        })
-        .run()
-        .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(0x0045_7990, point::length(Ptr<_>) -> f32))
+            .common()
+            .by(base)
+            .plain(0x0045_7990)
+            .inputs(&P3)
+            .float_sweep(FLOAT_SWEEP)
+            .setup(|e, case| {
+                stand_ins(e);
+                vec![case_point(e, case, 0)]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
 fn length_2d() {
-    Diff::new(entry!(0x0058_9850, point::length_2d(Ptr<_>) -> f32))
-        .common()
-        .plain(0x0058_9850)
-        .inputs(&P3)
-        .float_sweep(FLOAT_SWEEP)
-        .setup(|e, case| {
-            stand_ins(e);
-            vec![case_point(e, case, 0)]
-        })
-        .run()
-        .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(0x0058_9850, point::length_2d(Ptr<_>) -> f32))
+            .common()
+            .by(base)
+            .plain(0x0058_9850)
+            .inputs(&P3)
+            .float_sweep(FLOAT_SWEEP)
+            .setup(|e, case| {
+                stand_ins(e);
+                vec![case_point(e, case, 0)]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
 fn abs() {
-    Diff::new(entry!(0x0040_8840, point::abs(f32) -> f32))
-        .common()
-        .plain(0x0040_8840)
-        .inputs(&[Input::F32])
-        .setup(|e, case| {
-            stand_ins(e);
-            vec![bits(case, 0)]
-        })
-        .run()
-        .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(0x0040_8840, point::abs(f32) -> f32))
+            .common()
+            .by(base)
+            .plain(0x0040_8840)
+            .inputs(&[Input::F32])
+            .setup(|e, case| {
+                stand_ins(e);
+                vec![bits(case, 0)]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
 fn root() {
-    Diff::new(entry!(0x0040_19b0, point::root(f32) -> f32))
-        .common()
-        .plain(0x0040_19b0)
-        .inputs(&[Input::F32])
-        .setup(|e, case| {
-            stand_ins(e);
-            vec![bits(case, 0)]
-        })
-        .run()
-        .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(0x0040_19b0, point::root(f32) -> f32))
+            .common()
+            .by(base)
+            .plain(0x0040_19b0)
+            .inputs(&[Input::F32])
+            .setup(|e, case| {
+                stand_ins(e);
+                vec![bits(case, 0)]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
 fn root_of() {
-    Diff::new(entry!(0x0045_79e0, point::root_of(f32) -> f32))
-        .common()
-        .plain(0x0045_79e0)
-        .inputs(&[Input::F32])
-        .setup(|e, case| {
-            stand_ins(e);
-            vec![bits(case, 0)]
-        })
-        .run()
-        .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(0x0045_79e0, point::root_of(f32) -> f32))
+            .common()
+            .by(base)
+            .plain(0x0045_79e0)
+            .inputs(&[Input::F32])
+            .setup(|e, case| {
+                stand_ins(e);
+                vec![bits(case, 0)]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
 fn root_rounded() {
-    Diff::new(entry!(0x0040_19d0, point::root_rounded(f32) -> f32))
-        .common()
-        .plain(0x0040_19d0)
-        .inputs(&[Input::F32])
-        .setup(|e, case| {
-            stand_ins(e);
-            vec![bits(case, 0)]
-        })
-        .run()
-        .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(0x0040_19d0, point::root_rounded(f32) -> f32))
+            .common()
+            .by(base)
+            .plain(0x0040_19d0)
+            .inputs(&[Input::F32])
+            .setup(|e, case| {
+                stand_ins(e);
+                vec![bits(case, 0)]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
 fn negated() {
-    Diff::new(entry!(
-        0x004a_0bd0,
-        point::negated(Ptr<_>, Ptr<_>) -> Ptr<_>
-    ))
-    .common()
-    .plain(0x004a_0bd0)
-    .inputs(&P3)
-    .setup(|e, case| {
-        stand_ins(e);
-        let out = e.mem.alloc(0xc);
-        vec![case_point(e, case, 0), out]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x004a_0bd0,
+            point::negated(Ptr<_>, Ptr<_>) -> Ptr<_>
+        ))
+        .common()
+        .by(base)
+        .plain(0x004a_0bd0)
+        .inputs(&P3)
+        .setup(|e, case| {
+            stand_ins(e);
+            let out = e.mem.alloc(0xc);
+            vec![case_point(e, case, 0), out]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn on_circle() {
-    Diff::new(entry!(
-        0x0069_e0c0,
-        point::on_circle(Ptr<_>, Ptr<_>, f32) -> Ptr<_>
-    ))
-    .common()
-    .plain(0x0069_e0c0)
-    .inputs(&inputs(&[&[Input::F32], &P3]))
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        stand_ins(e);
-        let (d, out) = (case_point(e, case, 1), e.mem.alloc(0xc));
-        vec![d, out, bits(case, 0)]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x0069_e0c0,
+            point::on_circle(Ptr<_>, Ptr<_>, f32) -> Ptr<_>
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_e0c0)
+        .inputs(&inputs(&[&[Input::F32], &P3]))
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            stand_ins(e);
+            let (d, out) = (case_point(e, case, 1), e.mem.alloc(0xc));
+            vec![d, out, bits(case, 0)]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 // ---- The navmesh ----
@@ -982,22 +1134,25 @@ fn vertex_from(e: &mut Engine, mesh: u32, v: u32, case: &Case, i: usize) {
 
 #[test]
 fn center() {
-    Diff::new(entry!(
-        0x0055_8220,
-        navmesh::center(Ptr<_>, Ptr<_>, u16) -> Ptr<_>
-    ))
-    .common()
-    .plain(0x0055_8220)
-    .inputs(&inputs(&[&P3, &[Input::Of(TRIANGLES)]]))
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        let w = world(e);
-        vertex_from(e, w.mesh, 1, case, 0);
-        let out = e.mem.alloc(0xc);
-        vec![w.mesh, out, case.word(3)]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x0055_8220,
+            navmesh::center(Ptr<_>, Ptr<_>, u16) -> Ptr<_>
+        ))
+        .common()
+        .by(base)
+        .plain(0x0055_8220)
+        .inputs(&inputs(&[&P3, &[Input::Of(TRIANGLES)]]))
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            let w = world(e);
+            vertex_from(e, w.mesh, 1, case, 0);
+            let out = e.mem.alloc(0xc);
+            vec![w.mesh, out, case.word(3)]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
@@ -1331,146 +1486,164 @@ fn height_inputs() -> Vec<Input> {
 
 #[test]
 fn triangle_z() {
-    Diff::new(entry!(
-        0x0069_7980,
-        navmesh::triangle_z(Ptr<_>, u16, Ptr<_>, f32, f32, Ptr) -> bool
-    ))
-    .common()
-    .plain(0x0069_7980)
-    .inputs(&height_inputs())
-    .max_cases(256)
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        let w = world(e);
-        vertex_from(e, w.mesh, 1, case, 5);
-        let p = case_point(e, case, 0);
-        let out = e.mem.alloc(4);
-        vec![w.mesh, 0, p, bits(case, 3), bits(case, 4), out]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x0069_7980,
+            navmesh::triangle_z(Ptr<_>, u16, Ptr<_>, f32, f32, Ptr) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_7980)
+        .inputs(&height_inputs())
+        .max_cases(256)
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            let w = world(e);
+            vertex_from(e, w.mesh, 1, case, 5);
+            let p = case_point(e, case, 0);
+            let out = e.mem.alloc(4);
+            vec![w.mesh, 0, p, bits(case, 3), bits(case, 4), out]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn crossed_edge() {
-    Diff::new(entry!(
-        0x0069_8320,
-        navmesh::crossed_edge(Ptr<_>, u16, i32, Ptr<_>, Ptr<_>) -> i32
-    ))
-    .common()
-    .plain(0x0069_8320)
-    .inputs(&inputs(&[
-        &P3,
-        &[Input::F32Swept(0x40a0_0000), Input::F32Swept(0xc0a0_0000)],
-        &[Input::Of(&[0, 1, 0xffff_ffff])],
-    ]))
-    .max_cases(256)
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        let w = world(e);
-        let a = point(e, [bits(case, 0), bits(case, 1), 0]);
-        let b = point(e, [bits(case, 3), bits(case, 4), 0]);
-        vertex_from(e, w.mesh, 2, case, 1);
-        vec![w.mesh, 0, case.word(5), a, b]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x0069_8320,
+            navmesh::crossed_edge(Ptr<_>, u16, i32, Ptr<_>, Ptr<_>) -> i32
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_8320)
+        .inputs(&inputs(&[
+            &P3,
+            &[Input::F32Swept(0x40a0_0000), Input::F32Swept(0xc0a0_0000)],
+            &[Input::Of(&[0, 1, 0xffff_ffff])],
+        ]))
+        .max_cases(256)
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            let w = world(e);
+            let a = point(e, [bits(case, 0), bits(case, 1), 0]);
+            let b = point(e, [bits(case, 3), bits(case, 4), 0]);
+            vertex_from(e, w.mesh, 2, case, 1);
+            vec![w.mesh, 0, case.word(5), a, b]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn triangle_edge() {
-    Diff::new(entry!(
-        0x0069_8060,
-        navmesh::triangle_edge(Ptr<_>, u16, i32, Ptr<_>, Ptr<_>, Ptr<_>) -> i32
-    ))
-    .common()
-    .plain(0x0069_8060)
-    .inputs(&inputs(&[
-        &P3,
-        &[Input::F32Swept(0x40a0_0000), Input::F32Swept(0xc0a0_0000)],
-        &[Input::Of(&[0, 1, 0xffff_ffff])],
-    ]))
-    .max_cases(256)
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        let w = world(e);
-        let a = point(e, [bits(case, 0), bits(case, 1), 0]);
-        let b = point(e, [bits(case, 3), bits(case, 4), 0]);
-        vertex_from(e, w.mesh, 2, case, 1);
-        let out = e.mem.alloc(8);
-        vec![w.mesh, 0, case.word(5), a, b, out]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x0069_8060,
+            navmesh::triangle_edge(Ptr<_>, u16, i32, Ptr<_>, Ptr<_>, Ptr<_>) -> i32
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_8060)
+        .inputs(&inputs(&[
+            &P3,
+            &[Input::F32Swept(0x40a0_0000), Input::F32Swept(0xc0a0_0000)],
+            &[Input::Of(&[0, 1, 0xffff_ffff])],
+        ]))
+        .max_cases(256)
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            let w = world(e);
+            let a = point(e, [bits(case, 0), bits(case, 1), 0]);
+            let b = point(e, [bits(case, 3), bits(case, 4), 0]);
+            vertex_from(e, w.mesh, 2, case, 1);
+            let out = e.mem.alloc(8);
+            vec![w.mesh, 0, case.word(5), a, b, out]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn triangle_for() {
-    Diff::new(entry!(
-        0x0069_6a50,
-        navmesh::triangle_for(Ptr<_>, Ptr<_>, u32) -> u16
-    ))
-    .common()
-    .plain(0x0069_6a50)
-    .inputs(&inputs(&[&P3, &[Input::Flag]]))
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        let w = world(e);
-        if case.word(3) == 0 {
-            e.mem.set_u32(w.mesh + 0x24, 0);
-        } else {
-            e.mem.set_u32(w.mesh + 0x24, w.info);
-        }
-        let p = case_point(e, case, 0);
-        vec![w.mesh, p, 0x1234]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x0069_6a50,
+            navmesh::triangle_for(Ptr<_>, Ptr<_>, u32) -> u16
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_6a50)
+        .inputs(&inputs(&[&P3, &[Input::Flag]]))
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            let w = world(e);
+            if case.word(3) == 0 {
+                e.mem.set_u32(w.mesh + 0x24, 0);
+            } else {
+                e.mem.set_u32(w.mesh + 0x24, w.info);
+            }
+            let p = case_point(e, case, 0);
+            vec![w.mesh, p, 0x1234]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn closest_triangle() {
-    Diff::new(entry!(
-        0x0069_6cf0,
-        navmesh::closest_triangle(Ptr<_>, Ptr<_>, Ptr, Ptr) -> bool
-    ))
-    .common()
-    .plain(0x0069_6cf0)
-    .inputs(&inputs(&[&P3, &[Input::Flag]]))
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        let w = world(e);
-        let p = case_point(e, case, 0);
-        if case.word(3) == 0 {
-            // No grid cell: every triangle.
-            e.mem.set_u32(w.mesh + 0xa8 + 0x18, 0);
-        }
-        let o = outs(e);
-        vec![w.mesh, p, o, o + 4]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x0069_6cf0,
+            navmesh::closest_triangle(Ptr<_>, Ptr<_>, Ptr, Ptr) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_6cf0)
+        .inputs(&inputs(&[&P3, &[Input::Flag]]))
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            let w = world(e);
+            let p = case_point(e, case, 0);
+            if case.word(3) == 0 {
+                // No grid cell: every triangle.
+                e.mem.set_u32(w.mesh + 0xa8 + 0x18, 0);
+            }
+            let o = outs(e);
+            vec![w.mesh, p, o, o + 4]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn grid_range() {
-    Diff::new(entry!(
-        0x0069_69e0,
-        navmesh::grid_range(Ptr<_>, Ptr, Ptr) -> bool
-    ))
-    .common()
-    .plain(0x0069_69e0)
-    .inputs(&P3)
-    .setup(|e, case| {
-        let w = world(e);
-        let a = point(e, [0, 0, 0]);
-        let b = case_point(e, case, 0);
-        let out_list = e.mem.alloc(0x40);
-        let _ = out_list;
-        vec![w.mesh, a, b]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x0069_69e0,
+            navmesh::grid_range(Ptr<_>, Ptr, Ptr) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_69e0)
+        .inputs(&P3)
+        .setup(|e, case| {
+            let w = world(e);
+            let a = point(e, [0, 0, 0]);
+            let b = case_point(e, case, 0);
+            let out_list = e.mem.alloc(0x40);
+            let _ = out_list;
+            vec![w.mesh, a, b]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
@@ -1489,45 +1662,51 @@ fn grid_cell() {
 
 #[test]
 fn grid_cell_at() {
-    Diff::new(entry!(
-        0x0069_d370,
-        navmesh::grid_cell_at(Ptr<_>, Ptr<_>, Ptr)
-    ))
-    .common()
-    .plain(0x0069_d370)
-    .inputs(&inputs(&[
-        &[Input::F32, Input::F32Swept(0x40a0_0000)],
-        &[Input::F32Swept(0)],
-    ]))
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        let w = world(e);
-        let p = case_point(e, case, 0);
-        let out = outs(e);
-        vec![w.mesh + 0xa8, p, out]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x0069_d370,
+            navmesh::grid_cell_at(Ptr<_>, Ptr<_>, Ptr)
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_d370)
+        .inputs(&inputs(&[
+            &[Input::F32, Input::F32Swept(0x40a0_0000)],
+            &[Input::F32Swept(0)],
+        ]))
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            let w = world(e);
+            let p = case_point(e, case, 0);
+            let out = outs(e);
+            vec![w.mesh + 0xa8, p, out]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn plane_normal() {
-    Diff::new(entry!(
-        0x0069_71e0,
-        navmesh::plane_normal(Ptr<_>, Ptr<_>, u16) -> Ptr<_>
-    ))
-    .common()
-    .plain(0x0069_71e0)
-    .inputs(&inputs(&[&P3, &[Input::Of(TRIANGLES)]]))
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        let w = world(e);
-        vertex_from(e, w.mesh, 3, case, 0);
-        let out = e.mem.alloc(0xc);
-        vec![w.mesh, out, case.word(3)]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x0069_71e0,
+            navmesh::plane_normal(Ptr<_>, Ptr<_>, u16) -> Ptr<_>
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_71e0)
+        .inputs(&inputs(&[&P3, &[Input::Of(TRIANGLES)]]))
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            let w = world(e);
+            vertex_from(e, w.mesh, 3, case, 0);
+            let out = e.mem.alloc(0xc);
+            vec![w.mesh, out, case.word(3)]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
@@ -1808,61 +1987,73 @@ const F2: [Input; 2] = [Input::F32, Input::F32Swept(HALF)];
 
 #[test]
 fn sort_key() {
-    Diff::new(entry!(0x006b_9710, search::sort_key(Ptr<_>) -> f32))
-        .common()
-        .plain(0x006b_9710)
-        .inputs(&[Input::F32, Input::F32])
-        .float_sweep(FLOAT_SWEEP)
-        .setup(|e, case| {
-            stand_ins(e);
-            vec![pair(e, case, 0)]
-        })
-        .run()
-        .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(0x006b_9710, search::sort_key(Ptr<_>) -> f32))
+            .common()
+            .by(base)
+            .plain(0x006b_9710)
+            .inputs(&[Input::F32, Input::F32])
+            .float_sweep(FLOAT_SWEEP)
+            .setup(|e, case| {
+                stand_ins(e);
+                vec![pair(e, case, 0)]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
 fn second_float() {
-    Diff::new(entry!(0x006b_9130, search::second_float(Ptr<_>) -> f64))
-        .common()
-        .plain(0x006b_9130)
-        .inputs(&[Input::F32Swept(ONE), Input::F32])
-        .setup(|e, case| {
-            stand_ins(e);
-            vec![pair(e, case, 0)]
-        })
-        .run()
-        .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(0x006b_9130, search::second_float(Ptr<_>) -> f64))
+            .common()
+            .by(base)
+            .plain(0x006b_9130)
+            .inputs(&[Input::F32Swept(ONE), Input::F32])
+            .setup(|e, case| {
+                stand_ins(e);
+                vec![pair(e, case, 0)]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
 fn first_float() {
-    Diff::new(entry!(0x006a_7f50, search::first_float(Ptr<_>) -> f64))
-        .common()
-        .plain(0x006a_7f50)
-        .inputs(&F2)
-        .setup(|e, case| {
-            stand_ins(e);
-            vec![pair(e, case, 0)]
-        })
-        .run()
-        .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(0x006a_7f50, search::first_float(Ptr<_>) -> f64))
+            .common()
+            .by(base)
+            .plain(0x006a_7f50)
+            .inputs(&F2)
+            .setup(|e, case| {
+                stand_ins(e);
+                vec![pair(e, case, 0)]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
 fn request_radius() {
-    Diff::new(entry!(0x0069_ef80, search::request_radius(Ptr) -> f64))
-        .common()
-        .plain(0x0069_ef80)
-        .inputs(&[Input::F32])
-        .setup(|e, case| {
-            stand_ins(e);
-            let r = e.mem.alloc(0x80);
-            e.mem.set_u32(r + 0x68, bits(case, 0));
-            vec![r]
-        })
-        .run()
-        .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(0x0069_ef80, search::request_radius(Ptr) -> f64))
+            .common()
+            .by(base)
+            .plain(0x0069_ef80)
+            .inputs(&[Input::F32])
+            .setup(|e, case| {
+                stand_ins(e);
+                let r = e.mem.alloc(0x80);
+                e.mem.set_u32(r + 0x68, bits(case, 0));
+                vec![r]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
@@ -1953,19 +2144,22 @@ fn first_word_at_94() {
 
 #[test]
 fn scaled_cost() {
-    Diff::new(entry!(0x006f_4790, search::scaled_cost(Ptr, Ptr<_>) -> u32))
-        .common()
-        .plain(0x006f_4790)
-        .inputs(&[Input::F32, Input::F32, Input::F32Swept(ONE)])
-        .float_sweep(FLOAT_SWEEP)
-        .setup(|e, case| {
-            stand_ins(e);
-            let s = e.mem.alloc(4);
-            e.mem.set_u32(s, bits(case, 0));
-            vec![s, pair(e, case, 1)]
-        })
-        .run()
-        .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(0x006f_4790, search::scaled_cost(Ptr, Ptr<_>) -> u32))
+            .common()
+            .by(base)
+            .plain(0x006f_4790)
+            .inputs(&[Input::F32, Input::F32, Input::F32Swept(ONE)])
+            .float_sweep(FLOAT_SWEEP)
+            .setup(|e, case| {
+                stand_ins(e);
+                let s = e.mem.alloc(4);
+                e.mem.set_u32(s, bits(case, 0));
+                vec![s, pair(e, case, 1)]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
@@ -1984,34 +2178,37 @@ fn scrap_new() {
 
 #[test]
 fn is_goal() {
-    Diff::new(entry!(0x006a_79c0, search::is_goal(Ptr<_>, Ptr) -> bool))
-        .common()
-        .plain(0x006a_79c0)
-        .inputs(&inputs(&[
-            &P3,
-            &[Input::F32Swept(0x4348_0000)],
-            &[Input::Of(&[0, 1, 2])],
-        ]))
-        .max_cases(256)
-        .float_sweep(FLOAT_SWEEP)
-        .setup(|e, case| {
-            let w = world(e);
-            point_at(
-                e,
-                w.node + 0x10,
-                [bits(case, 0), bits(case, 1), bits(case, 2)],
-            );
-            let request = e.mem.u32(w.search + 0x2058);
-            e.mem.set_u32(request + 0x68, bits(case, 3));
-            match case.word(4) {
-                0 => e.mem.set_u32(w.search + 0x2058, 0),
-                1 => e.mem.set_u16(w.node + 0xc, 1),
-                _ => {}
-            }
-            vec![w.search, w.node]
-        })
-        .run()
-        .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(0x006a_79c0, search::is_goal(Ptr<_>, Ptr) -> bool))
+            .common()
+            .by(base)
+            .plain(0x006a_79c0)
+            .inputs(&inputs(&[
+                &P3,
+                &[Input::F32Swept(0x4348_0000)],
+                &[Input::Of(&[0, 1, 2])],
+            ]))
+            .max_cases(256)
+            .float_sweep(FLOAT_SWEEP)
+            .setup(|e, case| {
+                let w = world(e);
+                point_at(
+                    e,
+                    w.node + 0x10,
+                    [bits(case, 0), bits(case, 1), bits(case, 2)],
+                );
+                let request = e.mem.u32(w.search + 0x2058);
+                e.mem.set_u32(request + 0x68, bits(case, 3));
+                match case.word(4) {
+                    0 => e.mem.set_u32(w.search + 0x2058, 0),
+                    1 => e.mem.set_u16(w.node + 0xc, 1),
+                    _ => {}
+                }
+                vec![w.search, w.node]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
@@ -2034,22 +2231,25 @@ fn info_is_goal() {
 
 #[test]
 fn location_center() {
-    Diff::new(entry!(
-        0x006a_6eb0,
-        search::location_center(Ptr<_>, Ptr<_>) -> Ptr<_>
-    ))
-    .common()
-    .plain(0x006a_6eb0)
-    .inputs(&P3)
-    .setup(|e, case| {
-        stand_ins(e);
-        let l = e.mem.alloc(0x14);
-        point_at(e, l + 8, [bits(case, 0), bits(case, 1), bits(case, 2)]);
-        let out = e.mem.alloc(0xc);
-        vec![l, out]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x006a_6eb0,
+            search::location_center(Ptr<_>, Ptr<_>) -> Ptr<_>
+        ))
+        .common()
+        .by(base)
+        .plain(0x006a_6eb0)
+        .inputs(&P3)
+        .setup(|e, case| {
+            stand_ins(e);
+            let l = e.mem.alloc(0x14);
+            point_at(e, l + 8, [bits(case, 0), bits(case, 1), bits(case, 2)]);
+            let out = e.mem.alloc(0xc);
+            vec![l, out]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
@@ -2418,20 +2618,23 @@ fn slots_new() {
 
 #[test]
 fn queue_new() {
-    Diff::new(entry!(0x006b_9470, search::queue_new(Ptr<_>) -> Ptr<_>))
-        .common()
-        .plain(0x006b_9470)
-        .inputs(&[Input::Flag])
-        .setup(|e, _| {
-            stand_ins(e);
-            let q = e.mem.alloc(0x54);
-            for i in 0..0x15 {
-                e.mem.set_u32(q + 4 * i, 0x6b6b_6b6b);
-            }
-            vec![q]
-        })
-        .run()
-        .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(0x006b_9470, search::queue_new(Ptr<_>) -> Ptr<_>))
+            .common()
+            .by(base)
+            .plain(0x006b_9470)
+            .inputs(&[Input::Flag])
+            .setup(|e, _| {
+                stand_ins(e);
+                let q = e.mem.alloc(0x54);
+                for i in 0..0x15 {
+                    e.mem.set_u32(q + 4 * i, 0x6b6b_6b6b);
+                }
+                vec![q]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
@@ -2587,111 +2790,129 @@ fn copy_pair() {
 
 #[test]
 fn relative() {
-    Diff::new(entry!(
-        0x0069_8620,
-        pov::relative(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
-    ))
-    .common()
-    .plain(0x0069_8620)
-    .inputs(&inputs(&[&F2, &F2]))
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        stand_ins(e);
-        let out = e.mem.alloc(8);
-        vec![pair(e, case, 0), out, pair(e, case, 2)]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x0069_8620,
+            pov::relative(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_8620)
+        .inputs(&inputs(&[&F2, &F2]))
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            stand_ins(e);
+            let out = e.mem.alloc(8);
+            vec![pair(e, case, 0), out, pair(e, case, 2)]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn rotated() {
-    Diff::new(entry!(
-        0x006a_0e90,
-        pov::rotated(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
-    ))
-    .common()
-    .plain(0x006a_0e90)
-    .inputs(&inputs(&[&F2, &F2]))
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        stand_ins(e);
-        let out = e.mem.alloc(8);
-        vec![pair(e, case, 0), out, pair(e, case, 2)]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x006a_0e90,
+            pov::rotated(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
+        ))
+        .common()
+        .by(base)
+        .plain(0x006a_0e90)
+        .inputs(&inputs(&[&F2, &F2]))
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            stand_ins(e);
+            let out = e.mem.alloc(8);
+            vec![pair(e, case, 0), out, pair(e, case, 2)]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn quadrant() {
-    Diff::new(entry!(0x0069_8680, pov::quadrant(Ptr<_>) -> u32))
-        .common()
-        .plain(0x0069_8680)
-        .inputs(&[Input::F32, Input::F32])
-        .setup(|e, case| {
-            stand_ins(e);
-            vec![pair(e, case, 0)]
-        })
-        .run()
-        .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(0x0069_8680, pov::quadrant(Ptr<_>) -> u32))
+            .common()
+            .by(base)
+            .plain(0x0069_8680)
+            .inputs(&[Input::F32, Input::F32])
+            .setup(|e, case| {
+                stand_ins(e);
+                vec![pair(e, case, 0)]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
 fn arc_contains() {
-    Diff::new(entry!(
-        0x006a_0660,
-        pov::arc_contains(Ptr<_>, Ptr<_>) -> bool
-    ))
-    .common()
-    .plain(0x006a_0660)
-    .inputs(&inputs(&[&F2, &[Input::Flag]]))
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        stand_ins(e);
-        let arc = e.mem.alloc(0x14);
-        point_at(e, arc, [ONE, 0, 0]);
-        e.mem.set_u32(arc + 8, 0x3f35_04f3);
-        e.mem.set_u32(arc + 0xc, 0x3f35_04f3);
-        e.mem.set_u32(arc + 0x10, case.word(2));
-        vec![arc, pair(e, case, 0)]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x006a_0660,
+            pov::arc_contains(Ptr<_>, Ptr<_>) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x006a_0660)
+        .inputs(&inputs(&[&F2, &[Input::Flag]]))
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            stand_ins(e);
+            let arc = e.mem.alloc(0x14);
+            point_at(e, arc, [ONE, 0, 0]);
+            e.mem.set_u32(arc + 8, 0x3f35_04f3);
+            e.mem.set_u32(arc + 0xc, 0x3f35_04f3);
+            e.mem.set_u32(arc + 0x10, case.word(2));
+            vec![arc, pair(e, case, 0)]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn sphere_new() {
-    Diff::new(entry!(
-        0x006a_04b0,
-        pov::sphere_new(Ptr<_>, Ptr<_>, f32) -> Ptr<_>
-    ))
-    .common()
-    .plain(0x006a_04b0)
-    .inputs(&[Input::F32, Input::F32])
-    .setup(|e, case| {
-        stand_ins(e);
-        let s = e.mem.alloc(0x10);
-        let c = point(e, [bits(case, 1), ONE, TWO]);
-        vec![s, c, bits(case, 0)]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x006a_04b0,
+            pov::sphere_new(Ptr<_>, Ptr<_>, f32) -> Ptr<_>
+        ))
+        .common()
+        .by(base)
+        .plain(0x006a_04b0)
+        .inputs(&[Input::F32, Input::F32])
+        .setup(|e, case| {
+            stand_ins(e);
+            let s = e.mem.alloc(0x10);
+            let c = point(e, [bits(case, 1), ONE, TWO]);
+            vec![s, c, bits(case, 0)]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn angle_new() {
-    Diff::new(entry!(0x006a_04e0, pov::angle_new(Ptr<_>, f32) -> Ptr<_>))
-        .common()
-        .plain(0x006a_04e0)
-        .inputs(&[Input::F32])
-        .setup(|e, case| {
-            stand_ins(e);
-            let a = e.mem.alloc(8);
-            vec![a, bits(case, 0)]
-        })
-        .run()
-        .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(0x006a_04e0, pov::angle_new(Ptr<_>, f32) -> Ptr<_>))
+            .common()
+            .by(base)
+            .plain(0x006a_04e0)
+            .inputs(&[Input::F32])
+            .setup(|e, case| {
+                stand_ins(e);
+                let a = e.mem.alloc(8);
+                vec![a, bits(case, 0)]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 #[test]
@@ -2887,201 +3108,225 @@ fn edge_pair_copy() {
 
 #[test]
 fn edge_location_new() {
-    Diff::new(entry!(
-        0x006a_0c10,
-        pov::edge_location_new(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
-    ))
-    .common()
-    .plain(0x006a_0c10)
-    .inputs(&inputs(&[&[Input::Word], &P3]))
-    .setup(|e, case| {
-        stand_ins(e);
-        let out = e.mem.alloc(0x18);
-        vec![out, mesh_edge(e, case), case_point(e, case, 1)]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x006a_0c10,
+            pov::edge_location_new(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
+        ))
+        .common()
+        .by(base)
+        .plain(0x006a_0c10)
+        .inputs(&inputs(&[&[Input::Word], &P3]))
+        .setup(|e, case| {
+            stand_ins(e);
+            let out = e.mem.alloc(0x18);
+            vec![out, mesh_edge(e, case), case_point(e, case, 1)]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn edge_location_copy() {
-    Diff::new(entry!(
-        0x006a_0e50,
-        pov::edge_location_copy(Ptr<_>, Ptr<_>) -> Ptr<_>
-    ))
-    .common()
-    .plain(0x006a_0e50)
-    .inputs(&inputs(&[&[Input::Word], &P3]))
-    .setup(|e, case| {
-        stand_ins(e);
-        let (out, from) = (e.mem.alloc(0x18), e.mem.alloc(0x18));
-        let m = mesh_edge(e, case);
-        for i in 0..3 {
-            let w = e.mem.u32(m + 4 * i);
-            e.mem.set_u32(from + 4 * i, w);
-        }
-        point_at(e, from + 0xc, [bits(case, 1), bits(case, 2), bits(case, 3)]);
-        vec![out, from]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x006a_0e50,
+            pov::edge_location_copy(Ptr<_>, Ptr<_>) -> Ptr<_>
+        ))
+        .common()
+        .by(base)
+        .plain(0x006a_0e50)
+        .inputs(&inputs(&[&[Input::Word], &P3]))
+        .setup(|e, case| {
+            stand_ins(e);
+            let (out, from) = (e.mem.alloc(0x18), e.mem.alloc(0x18));
+            let m = mesh_edge(e, case);
+            for i in 0..3 {
+                let w = e.mem.u32(m + 4 * i);
+                e.mem.set_u32(from + 4 * i, w);
+            }
+            point_at(e, from + 0xc, [bits(case, 1), bits(case, 2), bits(case, 3)]);
+            vec![out, from]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn distance_to_segment() {
-    Diff::new(entry!(
-        0x006b_9b10,
-        pov::distance_to_segment(Ptr<_>, Ptr<_>, Ptr<_>, Ptr) -> f32
-    ))
-    .common()
-    .plain(0x006b_9b10)
-    .inputs(&inputs(&[
-        &P3,
-        &[Input::F32Swept(TEN), Input::F32Swept(ONE)],
-        &[Input::Flag],
-    ]))
-    .max_cases(256)
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        stand_ins(e);
-        let p = case_point(e, case, 0);
-        let s = point(e, [0, 0, 0]);
-        let end = point(e, [bits(case, 3), bits(case, 4), ONE]);
-        let inside = if case.word(5) == 1 { e.mem.alloc(4) } else { 0 };
-        vec![p, s, end, inside]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x006b_9b10,
+            pov::distance_to_segment(Ptr<_>, Ptr<_>, Ptr<_>, Ptr) -> f32
+        ))
+        .common()
+        .by(base)
+        .plain(0x006b_9b10)
+        .inputs(&inputs(&[
+            &P3,
+            &[Input::F32Swept(TEN), Input::F32Swept(ONE)],
+            &[Input::Flag],
+        ]))
+        .max_cases(256)
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            stand_ins(e);
+            let p = case_point(e, case, 0);
+            let s = point(e, [0, 0, 0]);
+            let end = point(e, [bits(case, 3), bits(case, 4), ONE]);
+            let inside = if case.word(5) == 1 { e.mem.alloc(4) } else { 0 };
+            vec![p, s, end, inside]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn intersection() {
-    Diff::new(entry!(
-        0x006b_a240,
-        pov::intersection(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> bool
-    ))
-    .common()
-    .plain(0x006b_a240)
-    .inputs(&inputs(&[
-        &P3,
-        &[Input::F32Swept(TEN), Input::F32Swept(0xc120_0000)],
-    ]))
-    .max_cases(256)
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        stand_ins(e);
-        let a = point(e, [0, 0, 0]);
-        let b = case_point(e, case, 0);
-        let c = point(e, [bits(case, 3), bits(case, 4), ONE]);
-        let d = point(e, [0xc120_0000, TEN, ONE]);
-        let out = e.mem.alloc(0xc);
-        vec![a, b, c, d, out]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x006b_a240,
+            pov::intersection(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x006b_a240)
+        .inputs(&inputs(&[
+            &P3,
+            &[Input::F32Swept(TEN), Input::F32Swept(0xc120_0000)],
+        ]))
+        .max_cases(256)
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            stand_ins(e);
+            let a = point(e, [0, 0, 0]);
+            let b = case_point(e, case, 0);
+            let c = point(e, [bits(case, 3), bits(case, 4), ONE]);
+            let d = point(e, [0xc120_0000, TEN, ONE]);
+            let out = e.mem.alloc(0xc);
+            vec![a, b, c, d, out]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn crossing() {
-    Diff::new(entry!(
-        0x006b_9e90,
-        pov::crossing(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> bool
-    ))
-    .common()
-    .plain(0x006b_9e90)
-    .inputs(&inputs(&[
-        &P3,
-        &[Input::F32Swept(TEN), Input::F32Swept(0xc120_0000)],
-    ]))
-    .max_cases(256)
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        stand_ins(e);
-        let p1 = point(e, [0, 0, 0]);
-        let p2 = case_point(e, case, 0);
-        let p3 = point(e, [bits(case, 3), bits(case, 4), 0]);
-        let p4 = point(e, [0xc120_0000, TEN, 0]);
-        let out = e.mem.alloc(8);
-        vec![p1, p2, p3, p4, out]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x006b_9e90,
+            pov::crossing(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x006b_9e90)
+        .inputs(&inputs(&[
+            &P3,
+            &[Input::F32Swept(TEN), Input::F32Swept(0xc120_0000)],
+        ]))
+        .max_cases(256)
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            stand_ins(e);
+            let p1 = point(e, [0, 0, 0]);
+            let p2 = case_point(e, case, 0);
+            let p3 = point(e, [bits(case, 3), bits(case, 4), 0]);
+            let p4 = point(e, [0xc120_0000, TEN, 0]);
+            let out = e.mem.alloc(8);
+            vec![p1, p2, p3, p4, out]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn height_in() {
-    Diff::new(entry!(
-        0x006b_9cf0,
-        pov::height_in(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr, f32, f32) -> bool
-    ))
-    .common()
-    .plain(0x006b_9cf0)
-    .inputs(&height_inputs())
-    .max_cases(256)
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        stand_ins(e);
-        let p1 = point(e, [0, 0, 0]);
-        let p2 = case_point(e, case, 5);
-        let p3 = point(e, [0, TEN, TWO]);
-        let p = case_point(e, case, 0);
-        let out = e.mem.alloc(4);
-        vec![p1, p2, p3, p, out, bits(case, 3), bits(case, 4)]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x006b_9cf0,
+            pov::height_in(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr, f32, f32) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x006b_9cf0)
+        .inputs(&height_inputs())
+        .max_cases(256)
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            stand_ins(e);
+            let p1 = point(e, [0, 0, 0]);
+            let p2 = case_point(e, case, 5);
+            let p3 = point(e, [0, TEN, TWO]);
+            let p = case_point(e, case, 0);
+            let out = e.mem.alloc(4);
+            vec![p1, p2, p3, p, out, bits(case, 3), bits(case, 4)]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn segment_within() {
-    Diff::new(entry!(
-        0x006b_ab00,
-        pov::segment_within(Ptr<_>, f32, Ptr<_>, Ptr<_>) -> bool
-    ))
-    .common()
-    .plain(0x006b_ab00)
-    .inputs(&inputs(&[&P3, &[Input::F32Swept(TWO)]]))
-    .max_cases(256)
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        stand_ins(e);
-        let c = case_point(e, case, 0);
-        let a = point(e, [0, 0, 0]);
-        let b = point(e, [TEN, ONE, 0]);
-        vec![c, bits(case, 3), a, b]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x006b_ab00,
+            pov::segment_within(Ptr<_>, f32, Ptr<_>, Ptr<_>) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x006b_ab00)
+        .inputs(&inputs(&[&P3, &[Input::F32Swept(TWO)]]))
+        .max_cases(256)
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            stand_ins(e);
+            let c = case_point(e, case, 0);
+            let a = point(e, [0, 0, 0]);
+            let b = point(e, [TEN, ONE, 0]);
+            vec![c, bits(case, 3), a, b]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn sphere_tangents() {
-    Diff::new(entry!(
-        0x006b_b570,
-        pov::sphere_tangents(Ptr<_>, Ptr<_>, u32, Ptr) -> u32
-    ))
-    .common()
-    .plain(0x006b_b570)
-    .inputs(&inputs(&[
-        &P3,
-        &[Input::F32Swept(ONE), Input::F32Swept(HALF)],
-        &[Input::Flag],
-    ]))
-    .max_cases(256)
-    .float_sweep(FLOAT_SWEEP)
-    .setup(|e, case| {
-        stand_ins(e);
-        let a = e.mem.alloc(0x10);
-        point_at(e, a, [0, 0, 0]);
-        e.mem.set_u32(a + 0xc, bits(case, 3));
-        let b = e.mem.alloc(0x10);
-        point_at(e, b, [bits(case, 0), bits(case, 1), bits(case, 2)]);
-        e.mem.set_u32(b + 0xc, bits(case, 4));
-        let out = e.mem.alloc(0x40);
-        vec![a, b, case.word(5), out]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x006b_b570,
+            pov::sphere_tangents(Ptr<_>, Ptr<_>, u32, Ptr) -> u32
+        ))
+        .common()
+        .by(base)
+        .plain(0x006b_b570)
+        .inputs(&inputs(&[
+            &P3,
+            &[Input::F32Swept(ONE), Input::F32Swept(HALF)],
+            &[Input::Flag],
+        ]))
+        .max_cases(256)
+        .float_sweep(FLOAT_SWEEP)
+        .setup(|e, case| {
+            stand_ins(e);
+            let a = e.mem.alloc(0x10);
+            point_at(e, a, [0, 0, 0]);
+            e.mem.set_u32(a + 0xc, bits(case, 3));
+            let b = e.mem.alloc(0x10);
+            point_at(e, b, [bits(case, 0), bits(case, 1), bits(case, 2)]);
+            e.mem.set_u32(b + 0xc, bits(case, 4));
+            let out = e.mem.alloc(0x40);
+            vec![a, b, case.word(5), out]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 // ---- Pathing locations ----
@@ -3234,69 +3479,78 @@ fn location_new_at() {
 
 #[test]
 fn location_new_in() {
-    Diff::new(entry!(
-        0x006d_cf20,
-        location::new_in(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
-    ))
-    .common()
-    .plain(0x006d_cf20)
-    .inputs(&inputs(&[&P3, &[Input::Flag]]))
-    .setup(|e, case| {
-        let w = world(e);
-        let p = case_point(e, case, 0);
-        let info = if case.word(3) == 1 {
-            w.info
-        } else {
-            w.other_info
-        };
-        vec![raw_location(e), p, info]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x006d_cf20,
+            location::new_in(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
+        ))
+        .common()
+        .by(base)
+        .plain(0x006d_cf20)
+        .inputs(&inputs(&[&P3, &[Input::Flag]]))
+        .setup(|e, case| {
+            let w = world(e);
+            let p = case_point(e, case, 0);
+            let info = if case.word(3) == 1 {
+                w.info
+            } else {
+                w.other_info
+            };
+            vec![raw_location(e), p, info]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn location_copy() {
-    Diff::new(entry!(
-        0x006d_cc40,
-        location::copy(Ptr<_>, Ptr<_>) -> Ptr<_>
-    ))
-    .common()
-    .plain(0x006d_cc40)
-    .inputs(&P3)
-    .setup(|e, case| {
-        let w = world(e);
-        point_at(
-            e,
-            w.location + 4,
-            [bits(case, 0), bits(case, 1), bits(case, 2)],
-        );
-        vec![raw_location(e), w.location]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x006d_cc40,
+            location::copy(Ptr<_>, Ptr<_>) -> Ptr<_>
+        ))
+        .common()
+        .by(base)
+        .plain(0x006d_cc40)
+        .inputs(&P3)
+        .setup(|e, case| {
+            let w = world(e);
+            point_at(
+                e,
+                w.location + 4,
+                [bits(case, 0), bits(case, 1), bits(case, 2)],
+            );
+            vec![raw_location(e), w.location]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
 fn location_assign() {
-    Diff::new(entry!(
-        0x006d_cce0,
-        location::assign(Ptr<_>, Ptr<_>) -> Ptr<_>
-    ))
-    .common()
-    .plain(0x006d_cce0)
-    .inputs(&P3)
-    .setup(|e, case| {
-        let w = world(e);
-        point_at(
-            e,
-            w.location + 4,
-            [bits(case, 0), bits(case, 1), bits(case, 2)],
-        );
-        vec![raw_location(e), w.location]
-    })
-    .run()
-    .assert_same();
+    for base in BY_THREAD {
+        Diff::new(entry!(
+            0x006d_cce0,
+            location::assign(Ptr<_>, Ptr<_>) -> Ptr<_>
+        ))
+        .common()
+        .by(base)
+        .plain(0x006d_cce0)
+        .inputs(&P3)
+        .setup(|e, case| {
+            let w = world(e);
+            point_at(
+                e,
+                w.location + 4,
+                [bits(case, 0), bits(case, 1), bits(case, 2)],
+            );
+            vec![raw_location(e), w.location]
+        })
+        .run()
+        .assert_same();
+    }
 }
 
 #[test]
@@ -3311,4 +3565,751 @@ fn world_location_new() {
         })
         .run()
         .assert_same();
+}
+
+// ---- Fixed rounding checks ----
+//
+// Each runs one input under both control words bit for bit ([`ROUNDING_BY_THREAD`]): an input where
+// rounding every step to a float (the main thread) and rounding once (the other threads) part, found
+// beforehand with a float emulation, so a function computed in the wrong precision for its thread
+// fails. Each precision choice of the family has one.
+
+/// The fixed checks' one case: the setups place their own floats.
+const FIXED: [Input; 1] = [Input::F32Swept(ONE)];
+
+#[test]
+fn rounding_length_xy_squared() {
+    // 1.533 squared plus 1.888 squared: 0x40bd398a rounded each step, 0x40bd3989 once.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(0x0059_5c80, point::length_xy_squared(Ptr<_>) -> f32))
+            .common()
+            .by(base)
+            .plain(0x0059_5c80)
+            .inputs(&FIXED)
+            .setup(|e, _| {
+                stand_ins(e);
+                vec![point(e, [0x3fc4_318a, 0x3ff1_a486, 0])]
+            })
+            .run()
+            .assert_same();
+    }
+}
+
+#[test]
+fn rounding_length_squared() {
+    // The x and y part agrees at either precision; adding z squared parts: 0x40d5df04 against
+    // 0x40d5df05.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(0x004a_7290, point::length_squared(Ptr<_>) -> f32))
+            .common()
+            .by(base)
+            .plain(0x004a_7290)
+            .inputs(&FIXED)
+            .setup(|e, _| {
+                stand_ins(e);
+                vec![point(e, [0x3fd5_a0d5, 0x3f8e_fe57, 0x3fd0_5e9a])]
+            })
+            .run()
+            .assert_same();
+    }
+}
+
+#[test]
+fn rounding_rotated() {
+    // Both components part: (0x3da186e0, 0x40b0060e) rounded each step, (0x3da186d9, 0x40b0060d)
+    // once. The same pair parts in both of the relative direction's components too (the shared body).
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x006a_0e90,
+            pov::rotated(Ptr<_>, Ptr<_>, Ptr<_>) -> Ptr<_>
+        ))
+        .common()
+        .by(base)
+        .plain(0x006a_0e90)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            stand_ins(e);
+            let a = e.mem.alloc(8);
+            e.mem.set_u32(a, 0x3fd2_2d47);
+            e.mem.set_u32(a + 4, 0x3ff3_0ccc);
+            let b = e.mem.alloc(8);
+            e.mem.set_u32(b, 0x3fd6_c980);
+            e.mem.set_u32(b + 4, 0x3fb4_6b82);
+            let out = e.mem.alloc(8);
+            vec![a, out, b]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn rounding_segment_within() {
+    // A segment of one point at the origin, the centre at (r, 0, 0) and the radius r = 0x3fb500ff:
+    // the squared distance is r * r stored, 0x3ffff4d1, and the radius squared unstored is that float
+    // on the main thread (not above it: outside) and the exact product on the others (above: within).
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x006b_ab00,
+            pov::segment_within(Ptr<_>, f32, Ptr<_>, Ptr<_>) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x006b_ab00)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            stand_ins(e);
+            let c = point(e, [0x3fb5_00ff, 0, 0]);
+            let a = point(e, [0, 0, 0]);
+            let b = point(e, [0, 0, 0]);
+            vec![c, 0x3fb5_00ff, a, b]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn rounding_scaled_cost() {
+    // The key 0x3fd53d52 times 19 over the scale 0x3fee5398: 17 when the product rounds to a float
+    // first, 16 (16.9999...) when the quotient rounds once.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(0x006f_4790, search::scaled_cost(Ptr, Ptr<_>) -> u32))
+            .common()
+            .by(base)
+            .plain(0x006f_4790)
+            .inputs(&FIXED)
+            .setup(|e, _| {
+                stand_ins(e);
+                let s = e.mem.alloc(4);
+                e.mem.set_u32(s, 0x3fee_5398);
+                let node = e.mem.alloc(8);
+                e.mem.set_u32(node, 0x3fd5_3d52);
+                e.mem.set_u32(node + 4, 0);
+                vec![s, node]
+            })
+            .run()
+            .assert_same();
+    }
+}
+
+#[test]
+fn rounding_intersection() {
+    // Four points whose side tests and crossing fraction each part between the precisions: either
+    // swapped alone moves the crossing point on both words.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x006b_a240,
+            pov::intersection(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x006b_a240)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            stand_ins(e);
+            let a = point(e, [0x40c9_66e0, 0xc058_d9c0, ONE]);
+            let b = point(e, [0x408f_f60a, 0x4179_a51e, ONE]);
+            let c = point(e, [0xbfdd_d014, 0x40a4_fc26, ONE]);
+            let d = point(e, [0x4159_daf2, 0x4093_e441, ONE]);
+            let out = e.mem.alloc(0xc);
+            vec![a, b, c, d, out]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn rounding_height_in() {
+    // A triangle with full-mantissa corners and a point inside it: the barycentric height is
+    // 0x40b80a01 rounded each step and 0x40b80a02 once (the limits wide, so it passes either way).
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x006b_9cf0,
+            pov::height_in(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr, f32, f32) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x006b_9cf0)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            stand_ins(e);
+            let p1 = point(e, [0, 0, 0x40d8_a203]);
+            let p2 = point(e, [0x413d_b3e7, 0, 0x40b3_0129]);
+            let p3 = point(e, [0, 0x4135_1928, 0x4083_a809]);
+            let p = point(e, [0x405b_e8b6, 0x4038_e393, 0]);
+            let out = e.mem.alloc(4);
+            vec![p1, p2, p3, p, out, 0x42c8_0000, 0x42c8_0000]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn rounding_sphere_tangents() {
+    // Two spheres of radius 0 (no division) whose centres differ by (0x3f83778e, 0x3fb97894): the
+    // outer tangent's first direction is 0x3f50da81 rounded each step and 0x3f50da82 once.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x006b_b570,
+            pov::sphere_tangents(Ptr<_>, Ptr<_>, u32, Ptr) -> u32
+        ))
+        .common()
+        .by(base)
+        .plain(0x006b_b570)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            stand_ins(e);
+            let a = e.mem.alloc(0x10);
+            point_at(e, a, [0, 0, 0]);
+            let b = e.mem.alloc(0x10);
+            point_at(e, b, [0x3f83_778e, 0x3fb9_7894, 0]);
+            let out = e.mem.alloc(0x40);
+            vec![a, b, 0, out]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn rounding_is_goal() {
+    // The request's radius t = 0x4317a791 (above 100) and a node t / 2 from the goal in x on another
+    // triangle: its squared distance is (t / 2)^2 stored, and the limit t * (t * 0.25) is that float
+    // on the main thread (not below it: no goal) and the exact product on the others (below: the
+    // goal).
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(0x006a_79c0, search::is_goal(Ptr<_>, Ptr) -> bool))
+            .common()
+            .by(base)
+            .plain(0x006a_79c0)
+            .inputs(&FIXED)
+            .setup(|e, _| {
+                let w = world(e);
+                let half = f32::from_bits(0x4317_a791) / 2.0;
+                point_at(e, w.node + 0x10, [(1.0 - half).to_bits(), ONE, ONE]);
+                e.mem.set_u16(w.node + 0xc, 1);
+                let request = e.mem.u32(w.search + 0x2058);
+                e.mem.set_u32(request + 0x68, 0x4317_a791);
+                e.mem.set_u32(request + 0x74, 0x4317_a791);
+                vec![w.search, w.node]
+            })
+            .run()
+            .assert_same();
+    }
+}
+
+/// Four directions' points for the crossing test: `(x, y)` pairs.
+fn crossing_points(e: &mut Engine, p: [[u32; 2]; 4]) -> [u32; 4] {
+    p.map(|[x, y]| {
+        let a = e.mem.alloc(8);
+        e.mem.set_u32(a, x);
+        e.mem.set_u32(a + 4, y);
+        a
+    })
+}
+
+#[test]
+fn rounding_crossing() {
+    // The other threads' word ([`MAIN_WORD_DIFFERS`] keeps the crossing test there): four points
+    // where the sum `s1 + s3 - s4` rounded each step moves the crossing's y by one ulp (0x40899c66
+    // against 0x40899c67).
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x006b_9e90,
+            pov::crossing(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x006b_9e90)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            stand_ins(e);
+            let [p1, p2, p3, p4] = crossing_points(
+                e,
+                [
+                    [0x40f7_a5b3, 0xbe11_a480],
+                    [0x40db_6219, 0x417c_368d],
+                    [0xbf38_e610, 0x408f_b46d],
+                    [0x4151_d1aa, 0x4085_70d6],
+                ],
+            );
+            let out = e.mem.alloc(8);
+            vec![p1, p2, p3, p4, out]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn rounding_crossing_main_thread() {
+    // The crossing test's translation computes in doubles under the main thread's word too (a
+    // translation bug, [`MAIN_WORD_DIFFERS`]), so there is no comparison there: the typed version is
+    // checked against the exe's arithmetic worked out by hand instead (each step rounded to a float,
+    // found with a float emulation). With the sum `s1 + s3 - s4` in doubles the crossing's y would be
+    // 0x4090236c.
+    let mut e = Engine::new_untyped_for_test();
+    stand_ins(&mut e);
+    let [p1, p2, p3, p4] = crossing_points(
+        &mut e,
+        [
+            [0x40ea_5d07, 0xbd22_a280],
+            [0x40e5_99f6, 0x4177_44ee],
+            [0xbf52_63a0, 0x40ab_6c23],
+            [0x4140_2d0e, 0x4080_350d],
+        ],
+    );
+    let out = e.mem.alloc(8);
+    // The engine's copy of the word too: `fabs` (the absolute value) saves and restores it.
+    engine_core::units::crt::set_x87_control_word(&mut e, MAIN_THREAD);
+    let hit = pov::crossing(
+        &mut e,
+        Ptr::new(p1),
+        Ptr::new(p2),
+        Ptr::new(p3),
+        Ptr::new(p4),
+        Ptr::new(out),
+    );
+    engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
+    assert!(hit);
+    assert_eq!(
+        [e.mem.u32(out), e.mem.u32(out + 4)],
+        [0x40e8_f781, 0x4090_236d]
+    );
+}
+
+#[test]
+fn rounding_is_goal_main_thread() {
+    // The goal test's translation computes in doubles under the main thread's word too (a translation
+    // bug, [`MAIN_WORD_DIFFERS`]), so there is no comparison there: [`rounding_is_goal`]'s node checked
+    // against the exe's arithmetic worked out by hand instead. Rounded to a float, the limit
+    // t * (t * 0.25) is the node's squared distance itself, which is not below it: no goal (the node is
+    // on another triangle). With the limit in doubles it would be the goal.
+    let mut e = Engine::new_untyped_for_test();
+    let w = world(&mut e);
+    let half = f32::from_bits(0x4317_a791) / 2.0;
+    point_at(&mut e, w.node + 0x10, [(1.0 - half).to_bits(), ONE, ONE]);
+    e.mem.set_u16(w.node + 0xc, 1);
+    let request = e.mem.u32(w.search + 0x2058);
+    e.mem.set_u32(request + 0x68, 0x4317_a791);
+    e.mem.set_u32(request + 0x74, 0x4317_a791);
+    engine_core::units::crt::set_x87_control_word(&mut e, MAIN_THREAD);
+    let goal = search::is_goal(&mut e, Ptr::new(w.search), Ptr::new(w.node));
+    engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
+    assert!(!goal);
+}
+
+// ---- Branches the swept cases do not reach ----
+//
+// Each a fixed input, bit for bit under both control words ([`ROUNDING_BY_THREAD`]: the values are
+// exact or rounded alike at either precision), reaching one branch of the family's logic.
+
+#[test]
+fn closest_triangle_by_centre() {
+    // No triangle's height is found, so the search falls back to the nearest centre: the point (14.5,
+    // 6.5) lies in grid cell (1, 0), whose list holds triangles 0 to 2 (1 skipped, flagged), and
+    // triangle 2's centre (13.3, 3.3) is nearer than triangle 0's.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x0069_6cf0,
+            navmesh::closest_triangle(Ptr<_>, Ptr<_>, Ptr, Ptr) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_6cf0)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            let w = world(e);
+            e.register(0x0069_7730, |_, _| ret(0));
+            let p = point(e, [0x4168_0000, 0x40d0_0000, 0]);
+            let o = outs(e);
+            vec![w.mesh, p, o, o + 4]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn triangle_for_under_water() {
+    // A mesh with water (its height 10, so the limit is 60) and the point at height 0, under it: the
+    // only found height, triangle 0's -190 (below -180), counts there; above the water it would not.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x0069_6a50,
+            navmesh::triangle_for(Ptr<_>, Ptr<_>, u32) -> u16
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_6a50)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            let w = world(e);
+            e.mem.set_u32(w.mesh + 0x24, w.info);
+            e.register(0x0069_7810, |e, a| {
+                if a[1] & 0xffff == 0 {
+                    e.mem.set_u32(a[3], 0xc33e_0000);
+                    ret(1)
+                } else {
+                    ret(0)
+                }
+            });
+            let p = point(e, [TWO, TWO, 0]);
+            vec![w.mesh, p, 0x1234]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn intersection_far_end_on_line() {
+    // b = (0, 5) lies exactly on the line through c = (10, 0) and d = (-10, 10) (its side test is an
+    // exact zero) while a = (0, 0) does not: no intersection.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x006b_a240,
+            pov::intersection(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x006b_a240)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            stand_ins(e);
+            let a = point(e, [0, 0, 0]);
+            let b = point(e, [0, 0x40a0_0000, 0]);
+            let c = point(e, [TEN, 0, ONE]);
+            let d = point(e, [0xc120_0000, TEN, ONE]);
+            let out = e.mem.alloc(0xc);
+            vec![a, b, c, d, out]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn crossing_measured_again() {
+    // p2 = (5, -5) lies exactly on the line through p3 = (-10, 10) and p4 = (10, -10): the sum of the
+    // other side tests comes out a little off zero, below 0.001, so the side is measured again, an
+    // exact zero, and there is no crossing (with the sum kept it would cross at p2). Under the other
+    // threads' word ([`MAIN_WORD_DIFFERS`]).
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x006b_9e90,
+            pov::crossing(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x006b_9e90)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            stand_ins(e);
+            let [p1, p2, p3, p4] = crossing_points(
+                e,
+                [
+                    [0x4168_c03f, 0xc0f1_0369],
+                    [0x40a0_0000, 0xc0a0_0000],
+                    [0xc120_0000, TEN],
+                    [TEN, 0xc120_0000],
+                ],
+            );
+            let out = e.mem.alloc(8);
+            vec![p1, p2, p3, p4, out]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn triangle_z_one_sided() {
+    // Triangle 0 (heights 0, 1 and 2 at its corners) under the point (2, 2, 5.6): the point is about 5
+    // above it, inside 10 above and 1 below; the other way round it would be 5 below, outside.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x0069_7980,
+            navmesh::triangle_z(Ptr<_>, u16, Ptr<_>, f32, f32, Ptr) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_7980)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            let w = world(e);
+            let p = point(e, [TWO, TWO, 0x40b3_3333]);
+            let out = e.mem.alloc(4);
+            vec![w.mesh, 0, p, TEN, ONE, out]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn crossed_edge_end_on_corner() {
+    // The segment from (10, -5) to (10, 5) passes through triangle 0's corner (10, 0): on the first
+    // edge that corner lies exactly on the segment's line, so it is not the crossed edge; the second
+    // edge is.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x0069_8320,
+            navmesh::crossed_edge(Ptr<_>, u16, i32, Ptr<_>, Ptr<_>) -> i32
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_8320)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            let w = world(e);
+            let a = point(e, [TEN, 0xc0a0_0000, 0]);
+            let b = point(e, [TEN, 0x40a0_0000, 0]);
+            vec![w.mesh, 0, 0xffff_ffff, a, b]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+// ---- The review's cases (#521): more main-thread checks, and game sizes ----
+
+/// The crossing test run directly under the main thread's control word (both copies of it): whether
+/// it crosses, and the point it writes. Its translation computes in doubles there ([`MAIN_WORD_DIFFERS`]),
+/// so these cases check the typed version against the exe's arithmetic worked out by hand (each step
+/// rounded to a float, found with a float emulation).
+fn crossing_on_main(points: [[u32; 2]; 4]) -> (bool, [u32; 2]) {
+    let mut e = Engine::new_untyped_for_test();
+    stand_ins(&mut e);
+    let [p1, p2, p3, p4] = crossing_points(&mut e, points);
+    let out = e.mem.alloc(8);
+    engine_core::units::crt::set_x87_control_word(&mut e, MAIN_THREAD);
+    let hit = pov::crossing(
+        &mut e,
+        Ptr::new(p1),
+        Ptr::new(p2),
+        Ptr::new(p3),
+        Ptr::new(p4),
+        Ptr::new(out),
+    );
+    engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
+    (hit, [e.mem.u32(out), e.mem.u32(out + 4)])
+}
+
+#[test]
+fn rounding_crossing_fraction_main_thread() {
+    // Four points whose crossing fraction alone, taken as a double and rounded once, would move the
+    // crossing's y by one ulp (0x4088b83e): rounded each step it is 0x4088b83f.
+    let (hit, at) = crossing_on_main([
+        [0x40ce_5cd2, 0xc03e_724c],
+        [0x4084_a8fd, 0x417b_eadb],
+        [0xc014_78c0, 0x4084_32fa],
+        [0x4178_1583, 0x408e_6dd0],
+    ]);
+    assert!(hit);
+    assert_eq!(at, [0x40b1_d396, 0x4088_b83f]);
+}
+
+#[test]
+fn crossing_measured_again_main_thread() {
+    // p2 = (3, -3) exactly on the line through p3 = (-10, 10) and p4 = (10, -10): on the main thread
+    // the sum of the other side tests comes out a little off zero, below 0.001, so the side is measured
+    // again, an exact zero: no crossing (kept, the sum would cross at p2).
+    let (hit, _) = crossing_on_main([
+        [0x402e_c163, 0xc18f_f364],
+        [0x4040_0000, 0xc040_0000],
+        [0xc120_0000, TEN],
+        [TEN, 0xc120_0000],
+    ]);
+    assert!(!hit);
+}
+
+#[test]
+fn crossed_edge_rounding() {
+    // A segment past triangle 0's corner (10, 0) where a side test rounds differently step by step
+    // than once: on the other threads' word no edge is crossed (-1), against the translation; on the
+    // main thread's the second edge, checked by hand in [`crossed_edge_rounding_main_thread`] (the
+    // translation is plain `f64` there: [`MAIN_WORD_DIFFERS`]).
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x0069_8320,
+            navmesh::crossed_edge(Ptr<_>, u16, i32, Ptr<_>, Ptr<_>) -> i32
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_8320)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            let w = world(e);
+            let a = point(e, [0x4115_90a8, 0xc09c_14de, 0]);
+            let b = point(e, [0x412b_cd2c, 0x40b0_8574, 0]);
+            vec![w.mesh, 0, 0xffff_ffff, a, b]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+/// Coordinates of the size the game's navmeshes have (about 1e5, with fractional parts).
+const FAR_X: f32 = 100_001.37;
+const FAR_Y: f32 = 50_003.81;
+
+#[test]
+fn triangle_for_game_size() {
+    // The grid moved out to (99990.5, 49990.25) and the point at (100001.37, 50003.81): its offsets and
+    // cell indices at that size, under both words bit for bit.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x0069_6a50,
+            navmesh::triangle_for(Ptr<_>, Ptr<_>, u32) -> u16
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_6a50)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            let w = world(e);
+            let g = w.mesh + 0xa8;
+            let (min_x, min_y) = (99_990.5f32, 49_990.25f32);
+            point_at(e, g + 0x10, [min_x.to_bits(), min_y.to_bits(), 0]);
+            point_at(
+                e,
+                g + 0x18,
+                [(min_x + 20.0).to_bits(), (min_y + 20.0).to_bits(), TEN],
+            );
+            e.mem.set_u32(w.mesh + 0x24, w.info);
+            let p = point(e, [FAR_X.to_bits(), FAR_Y.to_bits(), 0x3e99_999a]);
+            vec![w.mesh, p, 0x1234]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+#[test]
+fn closest_triangle_game_size() {
+    // The point at (100001.37, 50003.81, 5.5), outside the grid, so every triangle; no height found, so
+    // the nearest centre by squared distances of about 1e10, under both words bit for bit.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x0069_6cf0,
+            navmesh::closest_triangle(Ptr<_>, Ptr<_>, Ptr, Ptr) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x0069_6cf0)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            let w = world(e);
+            e.register(0x0069_7730, |_, _| ret(0));
+            let p = point(e, [FAR_X.to_bits(), FAR_Y.to_bits(), 0x40b0_0000]);
+            let o = outs(e);
+            vec![w.mesh, p, o, o + 4]
+        })
+        .run()
+        .assert_same();
+    }
+}
+
+/// The crossing case at game size: two segments crossing near (100005, 50003).
+const FAR_CROSSING: [[u32; 2]; 4] = [
+    [0x47c3_4d90, 0x4743_4b60],
+    [0x47c3_52d0, 0x4743_54e0],
+    [0x47c3_4b40, 0x4743_5a40],
+    [0x47c3_5560, 0x4743_4680],
+];
+
+#[test]
+fn crossing_game_size() {
+    // Under the other threads' word against the translation ([`MAIN_WORD_DIFFERS`]); under the main
+    // thread's against the exe's arithmetic by hand: (0x47c35052, 0x4743505d) on both.
+    for base in ROUNDING_BY_THREAD {
+        Diff::new(entry!(
+            0x006b_9e90,
+            pov::crossing(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>) -> bool
+        ))
+        .common()
+        .by(base)
+        .plain(0x006b_9e90)
+        .inputs(&FIXED)
+        .setup(|e, _| {
+            stand_ins(e);
+            let [p1, p2, p3, p4] = crossing_points(e, FAR_CROSSING);
+            let out = e.mem.alloc(8);
+            vec![p1, p2, p3, p4, out]
+        })
+        .run()
+        .assert_same();
+    }
+    assert_eq!(
+        crossing_on_main(FAR_CROSSING),
+        (true, [0x47c3_5052, 0x4743_505d])
+    );
+}
+
+/// The goal test with the node about 1e5 from the goal in x (on another triangle) and the request's
+/// radius `t`: whether it is the goal under `word`, run directly.
+fn far_goal_on(word: u16, t: u32) -> bool {
+    let mut e = Engine::new_untyped_for_test();
+    let w = world(&mut e);
+    far_goal_setup(&mut e, &w, t);
+    engine_core::units::crt::set_x87_control_word(&mut e, word);
+    let goal = search::is_goal(&mut e, Ptr::new(w.search), Ptr::new(w.node));
+    engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
+    goal
+}
+
+/// [`far_goal_on`]'s node and request: the node at x = 1 - 100000.37 (the goal at 1), y 1.5.
+fn far_goal_setup(e: &mut Engine, w: &World, t: u32) {
+    point_at(e, w.node + 0x10, [0xc7c3_4faf, 0x3fc0_0000, ONE]);
+    e.mem.set_u16(w.node + 0xc, 1);
+    let request = e.mem.u32(w.search + 0x2058);
+    e.mem.set_u32(request + 0x68, t);
+    e.mem.set_u32(request + 0x74, t);
+}
+
+#[test]
+fn is_goal_game_size() {
+    // The squared distance is about 1e10 (0x50150341). With t = 200000.75 the limit t * (t * 0.25) is
+    // above it on both words (the goal); with t = 2 * 100000.37 rounded down, the limit rounds onto it
+    // on the main thread (not below: no goal), and is not above it on the others either. Under the
+    // other threads' word against the translation, under the main thread's by hand.
+    for t in [0x4843_5030u32, 0x4843_502f] {
+        for base in ROUNDING_BY_THREAD {
+            Diff::new(entry!(0x006a_79c0, search::is_goal(Ptr<_>, Ptr) -> bool))
+                .common()
+                .by(base)
+                .plain(0x006a_79c0)
+                .inputs(&FIXED)
+                .setup(move |e, _| {
+                    let w = world(e);
+                    far_goal_setup(e, &w, t);
+                    vec![w.search, w.node]
+                })
+                .run()
+                .assert_same();
+        }
+    }
+    assert!(far_goal_on(MAIN_THREAD, 0x4843_5030));
+    assert!(!far_goal_on(MAIN_THREAD, 0x4843_502f));
+}
+
+#[test]
+fn crossed_edge_rounding_main_thread() {
+    // [`crossed_edge_rounding`]'s segment under the main thread's word, run directly: the crossed edge's
+    // translation computes its side tests in doubles there too ([`MAIN_WORD_DIFFERS`]: one rounding
+    // where the exe's FSUB/FMULP/FSUBP at 00698409..00698440 round each step to 24 bits), so the
+    // typed version is checked against the exe's arithmetic worked out by hand: the second edge (1),
+    // where the translation's doubles say none.
+    let mut e = Engine::new_untyped_for_test();
+    let w = world(&mut e);
+    let a = point(&mut e, [0x4115_90a8, 0xc09c_14de, 0]);
+    let b = point(&mut e, [0x412b_cd2c, 0x40b0_8574, 0]);
+    engine_core::units::crt::set_x87_control_word(&mut e, MAIN_THREAD);
+    let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
+    engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
+    assert_eq!(edge, 1);
 }

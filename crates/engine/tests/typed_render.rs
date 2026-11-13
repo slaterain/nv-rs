@@ -306,6 +306,9 @@ impl Common for Diff {
             .family(&dispatch::DISPATCH)
             // What dispatch calls in turn (the 4x4 inverse's helpers are pathing's).
             .family(&pathing::PATHING)
+            // The pathing family's square root takes `FSQRT` where the translation calls the C
+            // runtime's `sqrt`.
+            .ignore_calls(&[0x00ec_6054])
             .family(&culling::CULLING)
             .family(&crt::CRT)
             // The draw family's skinned packer and strip lists, which the packing calls: stood in here, run

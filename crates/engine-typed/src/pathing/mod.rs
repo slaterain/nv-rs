@@ -10,18 +10,26 @@
 //! is a `typed_call!`.
 //!
 //! **Floats.** Every function here runs on the main thread and on other threads, so the family's row
-//! is [`Threads::Both`] and its x87 code keeps the exact helpers ([`engine_core::x87`]), as the
-//! culling family does: every load, operation and store is the exe's, in its order, with a memory
-//! operand kept a memory operand. A comparison reads the status word the exe's `FCOM` sets
-//! ([`fcom`]) and branches as its `TEST AH,mask` and jump do ([`parity_even`]), so unordered
-//! operands take the exe's branch.
+//! is [`Threads::Both`] and its maths is native (ADR-0014's float rule), without the x87 helpers: a
+//! function whose float results are each one operation on two floats (a difference, a sum, a scale,
+//! a quotient, a root), stored, computes in plain `f32` on every thread, which is the same float the
+//! exe stores at either precision. A function with longer chains (a sum of products, a product
+//! compared before it is stored) is written once over [`Real`](crate::native::Real) and runs as `f32`
+//! on the main thread (its 24-bit precision rounds every step to a float, as the exe's code does
+//! there) or as `f64` on the AI threads (53 bits: each step a double, only the exe's float stores
+//! rounding to a float), chosen once per call from the thread's control word. The operations keep
+//! the exe's order. A comparison is written as the branch the exe's `FCOM` and flag test take, so
+//! unordered operands (a NaN) take the exe's branch; a comparison with one of the exe's doubles
+//! compares the value as a double, as `FCOM m64` does. Floats the exe only moves through the x87
+//! stack are copied plain (a signalling NaN is not quieted on the way: the game can't see it).
+//! Integers and logic are exact.
 
 use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn, Engine};
 
 use crate::culling::layout::NiPoint3;
-pub(crate) use crate::culling::{fld, fld_local, fstp, m32, m32_local};
-use engine_core::ptr::Ptr;
+use crate::native::Real;
+use engine_core::ptr::{Field, Ptr};
 use layout::{
     AStarQueue, AStarSearch, Arc, Counter, EdgeLocation, EdgePair, MeshEdge, NavMesh, NavMeshGrid,
     NavMeshInfo, NavMeshTriangle, PathingLocation, Point2, SearchLocation, SimpleArray, SortNode,
@@ -51,31 +59,8 @@ pub static PATHING: Family = Family {
     funcs,
 };
 
-/// The `double` 0.0 at `01012060`, the operand of the zero tests.
-pub(crate) const ZERO_DOUBLE: u32 = 0x0101_2060;
 /// The float `FLT_MAX` at `01016970`.
 pub(crate) const FLOAT_MAX: u32 = 0x0101_6970;
-
-/// `FCOM`/`FCOMP`/`FCOMPP` of `ST0` against `source`: the condition bits in `AH` (`C0` 0x01, `C2`
-/// 0x04, `C3` 0x40): none when greater, `C0` when less, `C3` when equal, all three when unordered.
-#[inline(always)]
-pub(crate) fn fcom(st0: f64, source: f64) -> u8 {
-    if st0.is_nan() || source.is_nan() {
-        0x45
-    } else if st0 < source {
-        0x01
-    } else if st0 == source {
-        0x40
-    } else {
-        0
-    }
-}
-
-/// `TEST AH,mask` then `JP`: taken when the tested bits hold an even number of ones.
-#[inline(always)]
-pub(crate) fn parity_even(status: u8, mask: u8) -> bool {
-    (status & mask).count_ones() % 2 == 0
-}
 
 /// The low word of a 64-bit integer (what the exe reads back after `FISTP qword`).
 #[inline(always)]
@@ -84,22 +69,34 @@ pub(crate) fn low_word(v: i64) -> u32 {
     u32::from_le_bytes([b[0], b[1], b[2], b[3]])
 }
 
-/// `FLD dword` of a float in the exe's data.
+/// A float in the exe's data.
 #[inline(always)]
-pub(crate) fn fld_global(e: &Engine, addr: u32) -> f64 {
-    engine_core::x87::x87_load32(e.global::<u32>(addr))
+pub(crate) fn float_global(e: &Engine, addr: u32) -> f32 {
+    f32::from_bits(e.global::<u32>(addr))
 }
 
-/// A `double` in the exe's data as the memory operand of an x87 instruction.
+/// A `double` in the exe's data.
 #[inline(always)]
-pub(crate) fn m64_global(e: &Engine, addr: u32) -> f64 {
+pub(crate) fn double_global(e: &Engine, addr: u32) -> f64 {
     f64::from_bits(e.global::<u64>(addr))
 }
 
-/// `FLD dword; FSTP dword`: a float passed on through the x87 stack (a signalling NaN quieted).
+/// A float field loaded as `R` (`FLD dword`, or a memory operand).
 #[inline(always)]
-pub(crate) fn through(value: f32) -> f32 {
-    fstp(fld_local(value))
+pub(crate) fn get<R: Real, S>(e: &Engine, p: Ptr<S>, f: Field<S, f32>) -> R {
+    R::load(e.get(p, f).to_bits())
+}
+
+/// A float as `R`.
+#[inline(always)]
+pub(crate) fn real<R: Real>(v: f32) -> R {
+    R::load(v.to_bits())
+}
+
+/// `FSTP dword`: `R` rounded to a float.
+#[inline(always)]
+pub(crate) fn float<R: Real>(v: R) -> f32 {
+    f32::from_bits(v.store())
 }
 
 /// Copies a point's three floats as words (`MOV`, never through the x87 stack).

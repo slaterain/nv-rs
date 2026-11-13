@@ -7,13 +7,14 @@ use super::layout::{
 };
 use super::point::{abs, length_squared, subtract};
 use super::{
-    copy_point, fcom, fld, fld_global, fld_local, fstp, low_word, m32, m32_local, m64_global,
-    parity_even, pov, search, through, FAMILY, FLOAT_MAX, ZERO_DOUBLE,
+    copy_point, double_global, float, float_global, get, low_word, pov, real, search, FAMILY,
+    FLOAT_MAX,
 };
 use crate::culling::layout::NiPoint3;
+use crate::native::{float_precision, to_float, Real};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
-use engine_core::x87::{fistp_chop64, x87_add, x87_div, x87_mul, x87_sub};
+use engine_core::x87::fistp_chop64;
 use engine_core::{args, typed_call, Engine};
 
 /// The float 1/3 the centre scales by (`0102f200`).
@@ -119,7 +120,7 @@ pub fn center(e: &mut Engine, this: Ptr<NavMesh>, out: Ptr<NiPoint3>, index: u16
             let p = corner(e, this, t, i);
             typed_call!(FAMILY, 0x0063_c8a0, super::point::add_to(e, sum, p));
         }
-        let third = fstp(fld_global(e, ONE_THIRD));
+        let third = float_global(e, ONE_THIRD);
         typed_call!(FAMILY, 0x0043_9180, super::point::scale_by(e, sum, third));
         copy_point(e, sum, out);
     });
@@ -433,49 +434,52 @@ pub fn edge_vertices(e: &mut Engine, this: Ptr<NavMesh>, out: Ptr, index: u16, w
     out
 }
 
-/// `(a - o) x (b - o)` in x and y, each factor's second term a memory operand: `(a.x - o.x) * (b.y -
-/// o.y) - (a.y - o.y) * (b.x - o.x)` (`FLD a.x; FSUB o.x; FLD b.y; FSUB o.y; FMULP; FLD a.y; FSUB o.y;
-/// FLD b.x; FSUB o.x; FMULP; FSUBP`).
+/// `(a - o) x (b - o)` in x and y: `(a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)`
+/// (`FLD a.x; FSUB o.x; FLD b.y; FSUB o.y; FMULP; FLD a.y; FSUB o.y; FLD b.x; FSUB o.x; FMULP;
+/// FSUBP`), in `R`.
 #[inline(always)]
-pub(crate) fn cross_2d(a: [f64; 2], b: [f64; 2], o: [f64; 2]) -> f64 {
-    let first = x87_mul(x87_sub(a[0], o[0]), x87_sub(b[1], o[1]));
-    let second = x87_mul(x87_sub(a[1], o[1]), x87_sub(b[0], o[0]));
-    x87_sub(first, second)
+pub(crate) fn cross_2d<R: Real>(a: [R; 2], b: [R; 2], o: [R; 2]) -> R {
+    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
 }
 
-/// A point's x and y: the first loaded (`FLD`), the second as a memory operand.
+/// A point's x and y as `R`.
 #[inline(always)]
-pub(crate) fn xy_loaded(e: &Engine, p: Ptr<NiPoint3>) -> [f64; 2] {
-    [fld(e, p, NiPoint3::x), fld(e, p, NiPoint3::y)]
+pub(crate) fn xy<R: Real>(e: &Engine, p: Ptr<NiPoint3>) -> [R; 2] {
+    [get(e, p, NiPoint3::x), get(e, p, NiPoint3::y)]
 }
 
-/// A point's x and y as memory operands.
+/// [`cross_2d`] of three points at the running thread's precision ([`Real`]), stored to a float.
 #[inline(always)]
-pub(crate) fn xy_operand(e: &Engine, p: Ptr<NiPoint3>) -> [f64; 2] {
-    [m32(e, p, NiPoint3::x), m32(e, p, NiPoint3::y)]
+pub(crate) fn side(e: &Engine, a: Ptr<NiPoint3>, b: Ptr<NiPoint3>, o: Ptr<NiPoint3>) -> f32 {
+    if float_precision() {
+        cross_2d::<f32>(xy(e, a), xy(e, b), xy(e, o))
+    } else {
+        float(cross_2d::<f64>(xy(e, a), xy(e, b), xy(e, o)))
+    }
 }
 
-/// The same with the second product's factors the other way round, `(b.x - o.x) * (a.y - o.y)`, as the
-/// barycentric tests load them.
+/// `FLD p; FMUL q; FCOMP 0.0`: whether the product of two floats is not above zero (false for a NaN).
+/// The product of two floats is exact in a `double`, and its sign and whether it is zero survive
+/// the exe's rounding at either precision (the x87's exponent never underflows it), so the test
+/// takes it in `f64` on every thread.
 #[inline(always)]
-fn cross_2d_swapped(a: [f64; 2], b: [f64; 2], o: [f64; 2]) -> f64 {
-    let first = x87_mul(x87_sub(a[0], o[0]), x87_sub(b[1], o[1]));
-    let second = x87_mul(x87_sub(b[0], o[0]), x87_sub(a[1], o[1]));
-    x87_sub(first, second)
+pub(crate) fn product_not_above_zero(p: f32, q: f32) -> bool {
+    f64::from(p) * f64::from(q) <= 0.0
 }
 
-/// `(a - o) x (b - o)` with `a` and `b` loaded and `o` the memory operand.
+/// The same with the product below zero (false for a NaN).
 #[inline(always)]
-fn cross_at(e: &Engine, a: Ptr<NiPoint3>, b: Ptr<NiPoint3>, o: Ptr<NiPoint3>) -> f64 {
-    let (a, b, o) = (xy_loaded(e, a), xy_loaded(e, b), xy_operand(e, o));
-    cross_2d(a, b, o)
+pub(crate) fn product_below_zero(p: f32, q: f32) -> bool {
+    f64::from(p) * f64::from(q) < 0.0
 }
 
 /// The barycentric height test the triangle height and `006b9cf0` share: with the corners `a`, `b`,
 /// `c` and the point `p`, false when the triangle is flat in x and y (an ordered zero) or a weight is
-/// below zero; else the height `w0 * a.z + w1 * b.z + w2 * c.z` (each product a memory operand) goes
-/// to `store`, which returns the difference to test, and that has to lie in `[-below, above]` (a NaN
-/// passes).
+/// below zero; else the height `w0 * a.z + w1 * b.z + w2 * c.z` goes to `store`, which returns the
+/// difference to test, and that has to lie in `[-below, above]` (a NaN passes). The determinant,
+/// weights and height in `R` (the running thread's precision, [`Real`]); the differences and the
+/// inverse, one operation each, in plain `f32`.
+#[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN-aware as the exe: an unordered comparison takes its branch.
 pub(crate) fn barycentric(
     e: &mut Engine,
     corners: [Ptr<NiPoint3>; 3],
@@ -484,55 +488,68 @@ pub(crate) fn barycentric(
     below: f32,
     store: impl FnOnce(&mut Engine, f32) -> f32,
 ) -> bool {
-    let [a, b, c] = corners;
-    let det = fstp(cross_2d_swapped(
-        xy_loaded(e, b),
-        xy_loaded(e, c),
-        xy_operand(e, a),
-    ));
-    if !parity_even(fcom(fld_local(det), m64_global(e, ZERO_DOUBLE)), 0x44) {
-        return false;
-    }
-    let sub = |e: &Engine, q: Ptr<NiPoint3>, f| fstp(x87_sub(fld(e, q, f), m32(e, p, f)));
-    let bx = sub(e, b, NiPoint3::x);
-    let cx = sub(e, c, NiPoint3::x);
-    let by = sub(e, b, NiPoint3::y);
-    let cy = sub(e, c, NiPoint3::y);
-    let inverse = fstp(x87_div(1.0, fld_local(det)));
-    let weight = |u: f32, v: f32, s: f32, t: f32| {
-        let d = x87_sub(
-            x87_mul(fld_local(u), m32_local(v)),
-            x87_mul(fld_local(s), m32_local(t)),
-        );
-        fstp(x87_mul(d, m32_local(inverse)))
+    let height = if float_precision() {
+        barycentric_height::<f32>(e, corners, p)
+    } else {
+        barycentric_height::<f64>(e, corners, p)
     };
-    let zero = m64_global(e, ZERO_DOUBLE);
-    let negative = |w: f32| !parity_even(fcom(fld_local(w), zero), 0x05);
-    let w0 = weight(bx, cy, cx, by);
-    if negative(w0) {
+    let Some(height) = height else {
+        return false;
+    };
+    let difference = store(e, height);
+    // FLD difference; FLD above; FCOMPP; TEST AH,5; JP: on when above is below the difference.
+    if above < difference {
         return false;
     }
-    let ax = sub(e, a, NiPoint3::x);
-    let ay = sub(e, a, NiPoint3::y);
+    // FLD below; FCHS; FLD difference; FCOMPP: off when the difference is below -below.
+    !(difference < -below)
+}
+
+/// [`barycentric`]'s height in `R`, stored to a float; `None` for a flat triangle or a negative
+/// weight.
+#[inline(always)]
+fn barycentric_height<R: Real>(
+    e: &Engine,
+    corners: [Ptr<NiPoint3>; 3],
+    p: Ptr<NiPoint3>,
+) -> Option<f32> {
+    let [a, b, c] = corners;
+    // `(b - a) x (c - a)` with the second product's factors the other way round, `(c.x - a.x) *
+    // (b.y - a.y)`, as the exe loads them.
+    let (pb, pc, pa) = (xy::<R>(e, b), xy::<R>(e, c), xy::<R>(e, a));
+    let det = float((pb[0] - pa[0]) * (pc[1] - pa[1]) - (pc[0] - pa[0]) * (pb[1] - pa[1]));
+    // FCOMP 0.0; TEST AH,0x44; JP: off on an ordered zero.
+    if det == 0.0 {
+        return None;
+    }
+    let sub = |q: Ptr<NiPoint3>, f| e.get(q, f) - e.get(p, f);
+    let bx = sub(b, NiPoint3::x);
+    let cx = sub(c, NiPoint3::x);
+    let by = sub(b, NiPoint3::y);
+    let cy = sub(c, NiPoint3::y);
+    let inverse: R = real(1.0 / det);
+    let weight = |u: f32, v: f32, s: f32, t: f32| {
+        float((real::<R>(u) * real(v) - real::<R>(s) * real(t)) * inverse)
+    };
+    // FCOMP 0.0; TEST AH,5; JP: off when below zero.
+    let w0 = weight(bx, cy, cx, by);
+    if w0 < 0.0 {
+        return None;
+    }
+    let ax = sub(a, NiPoint3::x);
+    let ay = sub(a, NiPoint3::y);
     let w1 = weight(cx, ay, ax, cy);
-    if negative(w1) {
-        return false;
+    if w1 < 0.0 {
+        return None;
     }
     let w2 = weight(ax, by, bx, ay);
-    if negative(w2) {
-        return false;
+    if w2 < 0.0 {
+        return None;
     }
-    let z0 = x87_mul(fld_local(w0), m32(e, a, NiPoint3::z));
-    let z1 = x87_mul(fld_local(w1), m32(e, b, NiPoint3::z));
-    let z2 = x87_mul(fld_local(w2), m32(e, c, NiPoint3::z));
-    let height = fstp(x87_add(x87_add(z0, z1), z2));
-    let difference = fld_local(store(e, height));
-    // FLD difference; FLD above; FCOMPP: taken on above >= difference or unordered.
-    if !parity_even(fcom(fld_local(above), difference), 0x05) {
-        return false;
-    }
-    // FLD below; FCHS; FLD difference; FCOMPP.
-    parity_even(fcom(difference, -fld_local(below)), 0x05)
+    let z0 = real::<R>(w0) * get(e, a, NiPoint3::z);
+    let z1 = real::<R>(w1) * get(e, b, NiPoint3::z);
+    let z2 = real::<R>(w2) * get(e, c, NiPoint3::z);
+    Some(float(z0 + z1 + z2))
 }
 
 // Typed from 00697980
@@ -557,17 +574,17 @@ pub fn triangle_z(
     let out = out.cast::<Point2>();
     barycentric(e, corners, point, above, below, |e, height| {
         e.set(out, Point2::x, height);
-        fstp(x87_sub(fld(e, point, NiPoint3::z), m32(e, out, Point2::x)))
+        e.get(point, NiPoint3::z) - e.get(out, Point2::x)
     })
 }
 
-/// Copies the first two floats of a point through the x87 stack (`FLD`/`FSTP`), as the vertex arrays
-/// of the edge searches hold them.
+/// Copies the first two floats of a point (the exe passes them through the x87 stack, `FLD`/`FSTP`),
+/// as the vertex arrays of the edge searches hold them.
 #[inline(always)]
 fn store_xy(e: &mut Engine, from: Ptr<NiPoint3>, to: Ptr<Point2>) {
-    let x = fstp(fld(e, from, NiPoint3::x));
+    let x = e.get(from, NiPoint3::x);
     e.set(to, Point2::x, x);
-    let y = fstp(fld(e, from, NiPoint3::y));
+    let y = e.get(from, NiPoint3::y);
     e.set(to, Point2::y, y);
 }
 
@@ -630,7 +647,6 @@ pub fn crossed_edge(
             let p = corner(e, this, t, i);
             copy_point(e, p, corners.index(i, 0xc));
         }
-        let zero = m64_global(e, ZERO_DOUBLE);
         let (start, end) = (start.cast::<NiPoint3>(), end.cast::<NiPoint3>());
         for i in 0..3i32 {
             if i == skip {
@@ -639,33 +655,20 @@ pub fn crossed_edge(
             let k = if i + 1 == 3 { 0 } else { i + 1 };
             let vi = corners.index(i as u32, 0xc);
             let vk = corners.index(k as u32, 0xc);
-            let side_end = fstp(cross_at(e, vi, vk, end));
-            let side_start = fstp(cross_at(e, vi, vk, start));
+            let side_end = side(e, vi, vk, end);
+            let side_start = side(e, vi, vk, start);
             // (start - vi) x (end - vi) and (start - vk) x (end - vk): the corner is the operand.
-            let across_i = fstp(cross_2d(
-                xy_loaded(e, start),
-                xy_loaded(e, end),
-                xy_operand(e, vi),
-            ));
-            let across_k = fstp(cross_2d(
-                xy_loaded(e, start),
-                xy_loaded(e, end),
-                xy_operand(e, vk),
-            ));
-            // Taken (next edge) when the product is above zero or unordered.
-            let product = x87_mul(fld_local(side_end), m32_local(side_start));
-            if parity_even(fcom(product, zero), 0x41) {
+            let across_i = side(e, start, end, vi);
+            let across_k = side(e, start, end, vk);
+            // FCOMP 0.0; TEST AH,0x41; JP: the next edge when a product is above zero or unordered.
+            if !product_not_above_zero(side_end, side_start) {
                 continue;
             }
-            let product = x87_mul(fld_local(across_i), m32_local(across_k));
-            if parity_even(fcom(product, zero), 0x41) {
+            if !product_not_above_zero(across_i, across_k) {
                 continue;
             }
             // An ordered zero on either side: the next edge.
-            if !parity_even(fcom(fld_local(side_end), zero), 0x44) {
-                continue;
-            }
-            if !parity_even(fcom(fld_local(across_k), zero), 0x44) {
+            if side_end == 0.0 || across_k == 0.0 {
                 continue;
             }
             return i;
@@ -685,6 +688,7 @@ fn local_float(e: &Engine, slot: Ptr) -> f32 {
 /// triangles of the point's grid cell, not flagged 0x20, whose height `00697810` finds: a height
 /// difference below 40 at once, else the smallest one; differences below -180 count only when the point
 /// is under the water's height plus 50 (`00547250`), and those above 64 never. `0xffff` for none.
+#[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN-aware as the exe: an unordered comparison takes its branch.
 pub fn triangle_for(
     e: &mut Engine,
     this: Ptr<NavMesh>,
@@ -709,19 +713,18 @@ pub fn triangle_for(
             0x0044_ddc0,
             leaf::word_at_8(e, Ptr::<()>::new(list))
         );
-        let mut smallest = fstp(fld_global(e, FLOAT_MAX));
-        let lowest = fstp(fld_global(e, FLOAT_LOWEST));
+        let mut smallest = float_global(e, FLOAT_MAX);
+        let lowest = float_global(e, FLOAT_LOWEST);
         e.set(water.cast::<Point2>(), Point2::x, lowest);
         let mesh_water = e.get(this, NavMesh::water);
         if mesh_water != 0 {
             e.call(WATER_HEIGHT, &args![mesh_water, point, water]);
         }
-        let limit = fstp(x87_add(
-            fld_local(local_float(e, water)),
-            m64_global(e, ABOVE_WATER),
-        ));
+        // The water's height plus the double 50, stored: one operation, so the sum taken as a double
+        // and rounded once is the exe's float on every thread.
+        let limit = to_float(f64::from(local_float(e, water)) + double_global(e, ABOVE_WATER));
         // FLD limit; FLD point.z; FCOMPP: set when z is below the limit.
-        let under = !parity_even(fcom(fld(e, point, NiPoint3::z), fld_local(limit)), 0x05);
+        let under = e.get(point, NiPoint3::z) < limit;
         let mut i = 0u32;
         while i < count {
             let entry = typed_call!(
@@ -748,33 +751,27 @@ pub fn triangle_for(
             {
                 continue;
             }
-            let d = fld_local(local_float(e, height));
-            if !under && !parity_even(fcom(d, m64_global(e, LOWEST_HEIGHT)), 0x05) {
+            // FCOMP m64; TEST AH,5: below -180 (only above the water); FCOMP m64; TEST AH,0x41:
+            // above 64.
+            let d = f64::from(local_float(e, height));
+            if !under && d < double_global(e, LOWEST_HEIGHT) {
                 continue;
             }
-            if fcom(
-                fld_local(local_float(e, height)),
-                m64_global(e, HIGHEST_HEIGHT),
-            ) & 0x41
-                == 0
-            {
+            if f64::from(local_float(e, height)) > double_global(e, HIGHEST_HEIGHT) {
                 continue;
             }
             let h = local_float(e, height);
-            let a = fstp(fld_local(typed_call!(
-                FAMILY,
-                0x0040_8840,
-                abs(e, through(h))
-            )));
+            let a = typed_call!(FAMILY, 0x0040_8840, abs(e, h));
             e.set(height.cast::<Point2>(), Point2::x, a);
-            if fcom(fld_local(smallest), fld_local(a)) & 0x41 != 0 {
+            // FLD a; FLD smallest; FCOMPP; TEST AH,0x41; JNZ: on only when the smallest is above.
+            if !(smallest > a) {
                 continue;
             }
-            if !parity_even(fcom(fld_local(a), m64_global(e, CLOSE_HEIGHT)), 0x05) {
+            if f64::from(a) < double_global(e, CLOSE_HEIGHT) {
                 return t_index;
             }
             best = t_index;
-            smallest = fstp(fld_local(a));
+            smallest = a;
         }
         best
     })
@@ -793,7 +790,7 @@ pub fn closest_triangle(
     out_exact: Ptr,
 ) -> bool {
     e.with_stack(4, |e, list_slot| {
-        let mut nearest = fstp(fld_global(e, FLOAT_MAX));
+        let mut nearest = float_global(e, FLOAT_MAX);
         let mut nearest_index = NO_TRIANGLE;
         let mut found = NO_TRIANGLE;
         e.mem.set_u32(list_slot.addr(), 0);
@@ -803,7 +800,7 @@ pub fn closest_triangle(
             grid_cell_at(e, this.at(NavMesh::grid), point, list_slot)
         );
         let list = e.mem.u32(list_slot.addr());
-        let close = m64_global(e, CLOSE_HEIGHT);
+        let close = double_global(e, CLOSE_HEIGHT);
         // One candidate: 0 to go on, 1 when the search ends with it exact.
         let mut candidate = |e: &mut Engine, t_index: u16, smallest: &mut f32| -> bool {
             // Each candidate's height, difference and centre in a frame of their own (as the
@@ -812,8 +809,8 @@ pub fn closest_triangle(
                 let height = scratch;
                 let difference = scratch.byte_add(4).cast::<NiPoint3>();
                 let center_out = scratch.byte_add(0x10).cast::<NiPoint3>();
-                let below = fstp(fld_global(e, BELOW_PASSED));
-                let above = fstp(fld_global(e, ABOVE_PASSED));
+                let below = float_global(e, BELOW_PASSED);
+                let above = float_global(e, ABOVE_PASSED);
                 let hit = e
                     .call(
                         HEIGHT_NEAR_TRIANGLE,
@@ -823,28 +820,25 @@ pub fn closest_triangle(
                     != 0;
                 if hit {
                     let h = local_float(e, height);
-                    let a = fstp(fld_local(typed_call!(
-                        FAMILY,
-                        0x0040_8840,
-                        abs(e, through(h))
-                    )));
+                    let a = typed_call!(FAMILY, 0x0040_8840, abs(e, h));
                     e.set(height.cast::<Point2>(), Point2::x, a);
-                    if fcom(fld_local(*smallest), fld_local(a)) & 0x41 == 0 {
-                        if !parity_even(fcom(fld_local(a), close), 0x05) {
+                    // FCOMPP; TEST AH,0x41: on when the smallest is above.
+                    if *smallest > a {
+                        if f64::from(a) < close {
                             e.mem.set_u16(out_triangle.addr(), t_index);
                             e.mem.set_u8(out_exact.addr(), 1);
                             return true;
                         }
                         found = t_index;
-                        *smallest = fstp(fld_local(a));
+                        *smallest = a;
                     }
                 } else {
                     let c = typed_call!(FAMILY, 0x0055_8220, center(e, this, center_out, t_index));
                     let d = typed_call!(FAMILY, 0x0043_9ef0, subtract(e, c, difference, point));
                     let squared = typed_call!(FAMILY, 0x004a_7290, length_squared(e, d));
-                    if fcom(fld_local(nearest), fld_local(squared)) & 0x41 == 0 {
+                    if nearest > squared {
                         nearest_index = t_index;
-                        nearest = fstp(fld_local(squared));
+                        nearest = squared;
                     }
                 }
                 false
@@ -856,7 +850,7 @@ pub fn closest_triangle(
                 0x0044_ddc0,
                 leaf::word_at_8(e, Ptr::<()>::new(list))
             );
-            let mut smallest = fstp(fld_global(e, FLOAT_MAX));
+            let mut smallest = float_global(e, FLOAT_MAX);
             for i in 0..count {
                 let entry = typed_call!(
                     FAMILY,
@@ -882,7 +876,7 @@ pub fn closest_triangle(
                 0x0044_ddc0,
                 leaf::word_at_8(e, this.at(NavMesh::triangles))
             );
-            let mut smallest = fstp(fld_global(e, FLOAT_MAX));
+            let mut smallest = float_global(e, FLOAT_MAX);
             for i in 0..count {
                 #[allow(clippy::cast_possible_truncation)]
                 let t_index = i as u16;
@@ -918,31 +912,36 @@ pub fn grid_cell(e: &mut Engine, this: Ptr<NavMeshGrid>, x: u32, y: u32) -> u32 
     (cell << 4).wrapping_add(e.get(this, NavMeshGrid::cells))
 }
 
-/// `00406ce0` (the float rounded down, in `ST0`) and `FISTP qword` under truncation: the low word.
+/// `00406ce0` (the C runtime's `floor` of the float, stored to a float, in `ST0`) and `FISTP qword`
+/// under truncation: the low word. Kept a call: the C runtime's `floor` saves and restores the x87
+/// control word, the engine's copy of it too, and the grid lookup makes two a search.
 fn floor_word(e: &mut Engine, value: f32) -> u32 {
-    let down = e.call(FLOOR, &args![through(value)]).f64();
+    let down = e.call(FLOOR, &args![value]).f64();
     low_word(fistp_chop64(down))
 }
 
 // Typed from 0069d370
 /// `NavMeshGridView::GetTriListAtPosition` (`thiscall(grid, point, out)`): null when the point is
 /// outside the grid's box in x or y (a NaN coordinate is inside), else the cell its offset from the
-/// box's corner falls in, each index rounded down (`00406ce0`) and kept below the side.
+/// box's corner falls in, each index rounded down (`00406ce0`) and kept below the side. The offsets
+/// and the quotients are one operation each: plain `f32`.
 pub fn grid_cell_at(e: &mut Engine, this: Ptr<NavMeshGrid>, point: Ptr<NiPoint3>, out: Ptr) {
-    let px = fld(e, point, NiPoint3::x);
-    let py = fld(e, point, NiPoint3::y);
-    let outside = fcom(fld(e, this, NavMeshGrid::min_x), px) & 0x41 == 0
-        || !parity_even(fcom(fld(e, this, NavMeshGrid::max_x), px), 0x05)
-        || fcom(fld(e, this, NavMeshGrid::min_y), py) & 0x41 == 0
-        || !parity_even(fcom(fld(e, this, NavMeshGrid::max_y), py), 0x05);
+    let px = e.get(point, NiPoint3::x);
+    let py = e.get(point, NiPoint3::y);
+    // FLD p; FLD min; FCOMPP; TEST AH,0x41; JNZ: outside when the minimum is above; FLD max: outside
+    // when the maximum is below.
+    let outside = e.get(this, NavMeshGrid::min_x) > px
+        || e.get(this, NavMeshGrid::max_x) < px
+        || e.get(this, NavMeshGrid::min_y) > py
+        || e.get(this, NavMeshGrid::max_y) < py;
     if outside {
         e.mem.set_u32(out.addr(), 0);
         return;
     }
-    let dx = fstp(x87_sub(px, m32(e, this, NavMeshGrid::min_x)));
-    let dy = fstp(x87_sub(py, m32(e, this, NavMeshGrid::min_y)));
-    let fx = fstp(x87_div(fld_local(dx), m32(e, this, NavMeshGrid::cell_x)));
-    let fy = fstp(x87_div(fld_local(dy), m32(e, this, NavMeshGrid::cell_y)));
+    let dx = px - e.get(this, NavMeshGrid::min_x);
+    let dy = py - e.get(this, NavMeshGrid::min_y);
+    let fx = dx / e.get(this, NavMeshGrid::cell_x);
+    let fy = dy / e.get(this, NavMeshGrid::cell_y);
     let mut ix = floor_word(e, fx);
     let mut iy = floor_word(e, fy);
     let side = e.get(this, NavMeshGrid::side);

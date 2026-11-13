@@ -6,13 +6,12 @@ use super::layout::{
     Scale, SearchLocation, SimpleArray, SmootherNode, SortNode,
 };
 use super::point::{length_xy_squared, subtract};
-use super::{
-    fcom, fld, fld_global, fld_local, fstp, low_word, m32, m64_global, parity_even, FAMILY,
-};
+use super::{double_global, float_global, low_word, real, FAMILY};
 use crate::culling::layout::NiPoint3;
+use crate::native::{float_precision, Real};
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
-use engine_core::x87::{fistp_chop64, x87_add, x87_div, x87_mul};
+use engine_core::x87::fistp_chop64;
 use engine_core::{args, typed_call, Engine};
 
 /// The `double` 19 the scaled cost multiplies by (`010356e8`).
@@ -61,30 +60,28 @@ const SLOT_ALLOCATE: u32 = 0x4;
 const SLOT_FREE: u32 = 0x8;
 
 // Typed from 006b9710
-/// `SortNode::GetKey` (`thiscall(node)`): cost plus estimate, stored to a float.
+/// `SortNode::GetKey` (`thiscall(node)`): cost plus estimate, stored to a float (one operation:
+/// plain `f32`).
 pub fn sort_key(e: &mut Engine, this: Ptr<SortNode>) -> f32 {
-    fstp(x87_add(
-        fld(e, this, SortNode::cost),
-        m32(e, this, SortNode::estimate),
-    ))
+    e.get(this, SortNode::cost) + e.get(this, SortNode::estimate)
 }
 
 // Typed from 006b9130
 /// The second float (`thiscall(this)`), as `FLD` leaves it.
 pub fn second_float(e: &mut Engine, this: Ptr<SortNode>) -> f64 {
-    fld(e, this, SortNode::estimate)
+    f64::from(e.get(this, SortNode::estimate))
 }
 
 // Typed from 0069ef80
 /// `PathingRequest::GetRadius` (`thiscall(request)`), as `FLD` leaves it.
 pub fn request_radius(e: &mut Engine, this: Ptr) -> f64 {
-    fld(e, this.cast::<PathingRequest>(), PathingRequest::radius)
+    f64::from(e.get(this.cast::<PathingRequest>(), PathingRequest::radius))
 }
 
 // Typed from 006a7f50
 /// The first float (`thiscall(this)`), as `FLD` leaves it.
 pub fn first_float(e: &mut Engine, this: Ptr<SortNode>) -> f64 {
-    fld(e, this, SortNode::cost)
+    f64::from(e.get(this, SortNode::cost))
 }
 
 // Typed from 006b81d0
@@ -129,20 +126,30 @@ pub fn first_word_at_94(e: &mut Engine, this: Ptr) -> u32 {
     )
 }
 
+/// `key * nineteen / scale` in `R` (the double 19 an exact float), as a double.
+#[inline(always)]
+fn scaled_key<R: Real>(key: f32, nineteen: f64, scale: f32) -> f64 {
+    (real::<R>(key) * R::narrow(nineteen) / real::<R>(scale)).wide()
+}
+
 // Typed from 006f4790
 /// A node's cost scaled (`thiscall(scale, node)`): 0x13 when the scale is at most the node's key
-/// ([`sort_key`]); else `key * 19 / scale` truncated to a 64-bit integer, its low word.
+/// ([`sort_key`]); else `key * 19 / scale` truncated to a 64-bit integer, its low word. The product
+/// and quotient are not stored between, so they run at the thread's precision ([`Real`]).
 pub fn scaled_cost(e: &mut Engine, this: Ptr, node: Ptr<SortNode>) -> u32 {
     let this = this.cast::<Scale>();
     let key = typed_call!(FAMILY, 0x006b_9710, sort_key(e, node));
     // FLD key; FLD scale; FCOMPP; TEST AH,0x41; JP: on when the scale is above or unordered.
-    if !parity_even(fcom(fld(e, this, Scale::value), fld_local(key)), 0x41) {
+    if e.get(this, Scale::value) <= key {
         return 0x13;
     }
-    let v = x87_div(
-        x87_mul(fld_local(key), m64_global(e, NINETEEN)),
-        m32(e, this, Scale::value),
-    );
+    let nineteen = double_global(e, NINETEEN);
+    let scale = e.get(this, Scale::value);
+    let v = if float_precision() {
+        scaled_key::<f32>(key, nineteen, scale)
+    } else {
+        scaled_key::<f64>(key, nineteen, scale)
+    };
     low_word(fistp_chop64(v))
 }
 
@@ -153,16 +160,24 @@ pub fn scrap_new(e: &mut Engine, size: u32, heap: Ptr) -> u32 {
     e.call(SCRAP_ALLOCATE, &args![heap, size, alignment]).u32()
 }
 
+/// Whether `xy` is below `t2 * (t * quarter)` in `R` (the products unstored).
+#[inline(always)]
+fn within_radius<R: Real>(xy: f32, t: f64, quarter: f64, t2: f64) -> bool {
+    let limit = R::narrow(t2) * (R::narrow(t) * R::narrow(quarter));
+    real::<R>(xy) < limit
+}
+
 // Typed from 006a79c0
 /// `NavMeshSearch::IsGoalNode` (Xbox PDB, `thiscall(search, node)`): with a request whose radius is
 /// above 100, a node whose centre is within half the request's radius of the goal's in x and y
-/// (squared against `r * (r * 0.25)`, `009b0bd0` read twice) and farther in x and y than in z; else the
-/// node on the goal's mesh and triangle.
+/// (squared against `r * (r * 0.25)`, `009b0bd0` read twice, at the thread's precision) and farther
+/// in x and y than in z; else the node on the goal's mesh and triangle.
 pub fn is_goal(e: &mut Engine, this: Ptr<AStarSearch>, node: Ptr) -> bool {
     let request = e.get(this, AStarSearch::request);
     if request != 0 {
         let r = typed_call!(FAMILY, 0x0069_ef80, request_radius(e, Ptr::new(request)));
-        if fcom(r, m64_global(e, HUNDRED)) & 0x41 == 0 {
+        // FCOMP m64; TEST AH,0x41: on when above 100.
+        if r > double_global(e, HUNDRED) {
             let near = e.with_stack(0x24, |e, locals| {
                 let node_center = locals.cast::<NiPoint3>();
                 let goal_center = locals.byte_add(0xc).cast::<NiPoint3>();
@@ -177,21 +192,22 @@ pub fn is_goal(e: &mut Engine, this: Ptr<AStarSearch>, node: Ptr) -> bool {
                 let c2 = typed_call!(FAMILY, 0x006a_6eb0, location_center(e, goal, goal_center));
                 typed_call!(FAMILY, 0x0043_9ef0, subtract(e, c2, difference, c1));
                 let xy = typed_call!(FAMILY, 0x0059_5c80, length_xy_squared(e, difference));
-                let xy = fstp(fld_local(xy));
-                let zz = fstp(x87_mul(
-                    fld(e, difference, NiPoint3::z),
-                    m32(e, difference, NiPoint3::z),
-                ));
+                // One operation on two floats: plain `f32`.
+                let zz = e.get(difference, NiPoint3::z) * e.get(difference, NiPoint3::z);
                 let t = e.call(REQUEST_RADIUS, &args![request]).f64();
-                let quarter = x87_mul(t, m64_global(e, QUARTER));
+                let quarter = double_global(e, QUARTER);
                 let t2 = e.call(REQUEST_RADIUS, &args![request]).f64();
-                let limit = x87_mul(t2, quarter);
                 // FLD xy; FCOMPP against the limit: on when below.
-                if parity_even(fcom(fld_local(xy), limit), 0x05) {
+                let below = if float_precision() {
+                    within_radius::<f32>(xy, t, quarter, t2)
+                } else {
+                    within_radius::<f64>(xy, t, quarter, t2)
+                };
+                if !below {
                     return false;
                 }
                 // FLD zz; FLD xy; FCOMPP: on when xy is above zz.
-                fcom(fld_local(xy), fld_local(zz)) & 0x41 == 0
+                xy > zz
             });
             if near {
                 return true;
@@ -216,16 +232,17 @@ pub fn info_is_goal(e: &mut Engine, this: Ptr, node: Ptr) -> u32 {
 }
 
 // Typed from 006a6eb0
-/// A search location's point as a new point (`thiscall(location, out)`), each float passed on.
+/// A search location's point as a new point (`thiscall(location, out)`), each float passed on (through
+/// the x87 stack in the exe).
 pub fn location_center(
     e: &mut Engine,
     this: Ptr<SearchLocation>,
     out: Ptr<NiPoint3>,
 ) -> Ptr<NiPoint3> {
     let p = this.at(SearchLocation::point);
-    let z = fstp(fld(e, p, NiPoint3::z));
-    let y = fstp(fld(e, p, NiPoint3::y));
-    let x = fstp(fld(e, p, NiPoint3::x));
+    let z = e.get(p, NiPoint3::z);
+    let y = e.get(p, NiPoint3::y);
+    let x = e.get(p, NiPoint3::x);
     typed_call!(leaf::FAMILY, 0x0041_6870, leaf::point3_new(e, out, x, y, z));
     out
 }
@@ -479,7 +496,7 @@ pub fn slots_new(e: &mut Engine, this: Ptr) -> Ptr {
 // Typed from 006b9470
 /// `AStarQueue::AStarQueue` (`thiscall(queue)`): the best cost -1, the slots cleared.
 pub fn queue_new(e: &mut Engine, this: Ptr<AStarQueue>) -> Ptr<AStarQueue> {
-    let best = fstp(fld_global(e, MINUS_ONE));
+    let best = float_global(e, MINUS_ONE);
     e.set(this, AStarQueue::best, best);
     e.call(MEMSET, &args![this.byte_add(4), 0u32, 0x50u32]);
     this
