@@ -1310,3 +1310,23 @@ mod n013_tests {
         assert_eq!(calls(&e, MAP_BASE_DESTRUCT_00B580A0).len(), 2);
     }
 }
+
+/// The drawing thread (`engine_core::draw_thread`): the world accumulator's list test and the light processing that rebuilds a light's object lists join a posted world draw before anything else they do.
+#[cfg(test)]
+mod draw_thread_joins {
+    #[test]
+    fn these_entries_join_the_drawing_thread_first() {
+        let mut e = engine_core::Engine::new();
+        let mut funcs = Vec::new();
+        crate::units::funcs(&mut funcs);
+        for (addr, f) in funcs {
+            e.register(addr, f);
+        }
+        for addr in [0x00b6_3a90u32, 0x00b5_fd60, 0x00b5_d300] {
+            assert!(
+                engine_core::draw_thread::testing::joins_first(&mut e, addr, &[0; 8]),
+                "{addr:08x} does not join first"
+            );
+        }
+    }
+}

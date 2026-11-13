@@ -61,12 +61,14 @@
 pub mod units;
 
 pub use engine_core::{
-    abi, census, cxx_exception, exe, mem, prelude, ptr, real_threads, sse, static_exit,
-    static_init, thread_host, typed, types, x87,
+    abi, census, cxx_exception, draw_thread, exe, mem, prelude, ptr, real_threads, sse,
+    static_exit, static_init, thread_host, typed, types, x87,
 };
 pub use engine_core::{args, entry, layout};
 pub use engine_core::{AbiFn, Engine, Field, Inline, Layout, Mem, OpenHandler, Ptr, Ret, Scalar};
 pub use engine_fallout_cell::{extra_data, reference};
+/// The typed families (their family ids and exports: the drawing thread's wiring in the host reads them).
+pub use engine_typed;
 
 #[cfg(test)]
 mod tests {

@@ -120,6 +120,7 @@ The game's own `iFPSClamp` ignores `FrameLimit`: a clamp is a fixed step with no
 | Facial hair by race folder | `007acb60`, `007adce0`, `007b4b50` | `NV_FACIAL_HAIR_RACE` | The character menu (character creation, the barber, the plastic surgeon) offers every playable head part in its facial hair list to every race. The game has no way to say a part is for one race only, so a plugin's race with its own refitted beards shows them on every other race's head too. With the row, a race that brought its own facial hair is offered only those parts, and every other race is offered every part except those. Such a race is one whose head model, for the chosen sex, lies in a directory of its own with playable head parts under it. A part with no model of its own (the game's `BeardMix` parts) goes with the parts it combines. The list is built again when the race or sex changes in the menu, which the original never does. A worn part the new choice (or a face preset) is not offered is taken off. A race's parts are kept to it only when they sit under its head's own directory; a race that brought none keeps the original list. For the game's own data nothing changes. In the original game the plugin's parts still appear for every race. Below |
 | No distant water under the Strip | `00583560` | `NV_STRIP_LOD_WATER` | Patch data (below): The Strip's world space (`TheStripWorldNew`) gets the "No LOD Water" flag as it loads. Its distant water lies under the Strip's ground and is never seen, but the game makes it and turns its water system on for it. YUP, UPNVSE Plus and Tale of Two Wastelands 3.3.3b set the same flag; Aqua Performa's author reported about 20 frames a second on the Strip from it (not measured in nv-rs). Below |
 | Direct file access | `00aa14d0`, `00aa15f0`, `00aa16d0`, `00aa85c0`, `00aa8610`, `00aa8660`, `00aa7eb0`, `00aa81d0`, `00ec9907`, `00aff300`, `00b004e0`, `00afb2a0`, `00afa550`, `00afa750`, `00afb190`, `00afac20`, `00afac90`, `00afad00`, `0043c3b0`, `00c3d0e0`, `00c3d440` | `NV_DIRECT_FILES` | The game's files are opened, read and written by the thread that asks, as Mod Limit Fix 7 and Cell Offset Generator have them: no IO thread that every read waits for, no limit of 512 open files (about 140 plugins), and files and archives up to 4 GB: seeks and sizes past 2 GB, and an archive's files stored past 2 GB found and read, as with JohnnyGuitar NVSE (the original stops at 2 GB, where TTW's and VNV's generated LOD archives go on). Below |
+| World drawn on a second thread (experimental) | none (the world pass calls `engine::draw_thread`) | `NV_DRAW_THREAD` | **Experimental, off in every preset** (`bWorldDrawThread`, written as 0; vanilla and fixes both leave it off). The world draw (`00b6ba20`, `00b6b930`) runs on a thread of its own beside the end of the frame, joined before the next frame reads the controls. Nothing a player sees changes yet: until the draw family's packet hand-off is in, every frame still draws on main. Below |
 
 ### What high frame rates do to the original's code
 
@@ -967,3 +968,31 @@ translated from them in these fixes.
 - **Psycho** (acidpointer): the editor-marker pass's lock and the radio's two music fixes.
 - **Aqua Performa**'s author, **YUP** (Yukichigai Unofficial Patch), **UPNVSE Plus** and **Tale of Two
   Wastelands**: "No LOD Water" on the Strip, as patch data.
+
+### World drawn on a second thread (experimental)
+
+Step 2 of the plan (`measure/scope-1111/PLAN.md`, piece 8). **Experimental and off in every preset**: `fixes` and
+`vanilla` both leave it off (`fixes::OFF_IN_EVERY_PRESET`); only `NV_DRAW_THREAD=1` or `Fallout.ini`'s
+`[nv-rs Fixes] bWorldDrawThread=1` turns it on. Settings.cmd has no line for it (its "Drawing thread" is the render
+thread, `bRenderThread`). `NV_DRAW_THREAD=poison` is a spelling of the variable only (the `Fallout.ini` line takes 0
+or 1, like every row): the thread with the value packet's POISON check, for tests and the gate.
+
+- **What it does.** The world pass (`00873200`) cuts at the world draw's first half: the draw family copies what the
+  draw reads into its value packet on main, the device's command stream is cut (`engine_platform::d3d9draw`), and
+  both halves are posted to the `nv-draw` helper (`engine::real_threads::post_draw`). Main goes on with the rest of
+  the frame and joins the job at the next `Main::OnIdle` (`0086e650`), before the controls are read; the device then
+  replays the drawing side's commands at the cut, in the serial order.
+- **Early joins**, at the entries of: `008746d0`, `00874920`, `00b63a90`, `00875e40`, `006426a0` (the world
+  accumulator's later users); a save (`008503b0`) and a load (`00847df0`); `MemoryLevelManager::FreeReleasedObjects`
+  (`00878250`: `PurgeCellBuffers` from a script or the console, fast travel, cell clearing), `00453dc0`,
+  `PositionPlayer` (`0093c200`), `FastTravel` (`0093cdf0`), `ClearCellsIfTargetNotLoaded` (`0093d500`), and the light
+  processing (`00b5fd60`, `00b5d300`) that rebuilds a light's object lists. A device reset joins in the platform.
+- **The world is drawn on main** (as today) in V.A.T.S., when the interface is drawn between the halves, while the
+  navmesh is drawn (`ToggleNavMesh`), while the loading menu is up, from a save's or a load's start to the next frame,
+  when a family the draw runs in is not direct, when an extender hooks a function the draw calls, with POISON on real
+  threads (a log line), and whenever the helper takes no job.
+- **Needs** real threads with the render thread (`bRenderThread=1`) in play; with real threads and no render thread
+  it stays off with a log line. Stepped threads (`NV_THREADS=stepped`) are its check form: the job runs when main
+  waits for it, after the frame's tail, so a stepped run with it on must give the serial command stream byte for
+  byte (the late gate, `measure/draw-thread/late-gate.sh`).
+- **Off**, the world pass's two calls and each join point cost one load and a branch; nothing is registered.

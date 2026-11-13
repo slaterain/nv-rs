@@ -248,7 +248,8 @@ fn finish_posted(e: &mut Engine) {
         return;
     };
     POSTED.fetch_sub(1, Relaxed);
-    let joined = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (hooks.device_finish)(e)));
+    let joined =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (hooks.device_finish)(e)));
     let back = lock_slot(&slot).back.take();
     match joined {
         Ok(()) => {
@@ -267,7 +268,9 @@ fn lock_slot(slot: &SharedSlot) -> MutexGuard<'_, Slot> {
 /// The word at `addr`, 0 where nothing is mapped (the serial tests read exe globals a test world may not map).
 fn peek_u32(e: &Engine, addr: u32) -> u32 {
     let mut b = [0u8; 4];
-    e.mem.try_read(addr, &mut b).map_or(0, |()| u32::from_le_bytes(b))
+    e.mem
+        .try_read(addr, &mut b)
+        .map_or(0, |()| u32::from_le_bytes(b))
 }
 
 fn peek_u8(e: &Engine, addr: u32) -> u8 {
@@ -306,13 +309,22 @@ fn device(e: &Engine) -> u32 {
 }
 
 /// Notes `reason` in the log once a run, and counts a serial frame.
-fn serial(e: &mut Engine, id: usize, reason: Option<&'static str>, camera: u32, accumulator: u32, third: u32) {
+fn serial(
+    e: &mut Engine,
+    id: usize,
+    reason: Option<&'static str>,
+    camera: u32,
+    accumulator: u32,
+    third: u32,
+) {
     with_run(id, |r| {
         r.counts.serial += 1;
         if let Some(reason) = reason {
             if !r.noted.contains(&reason) {
                 r.noted.push(reason);
-                eprintln!("NV_DRAW_THREAD: the world drawn on main (first time this run): {reason}");
+                eprintln!(
+                    "NV_DRAW_THREAD: the world drawn on main (first time this run): {reason}"
+                );
             }
         }
     });
@@ -337,7 +349,14 @@ fn first_half_on(e: &mut Engine, camera: u32, accumulator: u32, third: u32, over
         return serial(e, id, Some(reason), camera, accumulator, third);
     }
     if !real_threads::draw_post_ready(e) {
-        return serial(e, id, Some("the drawing helper takes no job now"), camera, accumulator, third);
+        return serial(
+            e,
+            id,
+            Some("the drawing helper takes no job now"),
+            camera,
+            accumulator,
+            third,
+        );
     }
     let stepped = e.real.is_none();
     let Some(packet) = (hooks.cut)(e, camera, accumulator, stepped) else {
@@ -414,3 +433,9 @@ fn draw_on_main(
         r.counts.on_main += 1;
     });
 }
+
+#[doc(hidden)]
+pub mod testing;
+
+#[cfg(test)]
+mod tests;

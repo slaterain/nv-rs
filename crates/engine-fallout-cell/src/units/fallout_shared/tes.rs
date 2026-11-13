@@ -12379,3 +12379,23 @@ mod tests {
         }
     }
 }
+
+/// The drawing thread (`engine_core::draw_thread`): the cell work of TestAllCells, PositionPlayer and the start cell (00453dc0) join a posted world draw before anything else they do.
+#[cfg(test)]
+mod draw_thread_joins {
+    #[test]
+    fn these_entries_join_the_drawing_thread_first() {
+        let mut e = engine_core::Engine::new();
+        let mut funcs = Vec::new();
+        crate::units::funcs(&mut funcs);
+        for (addr, f) in funcs {
+            e.register(addr, f);
+        }
+        for addr in [0x0045_3dc0u32] {
+            assert!(
+                engine_core::draw_thread::testing::joins_first(&mut e, addr, &[0; 8]),
+                "{addr:08x} does not join first"
+            );
+        }
+    }
+}

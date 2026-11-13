@@ -147,3 +147,23 @@ mod tests {
         assert_eq!(calls_at(&e, TIMER_SCOPE_DESTROY).len(), 3);
     }
 }
+
+/// The drawing thread (`engine_core::draw_thread`): the sun's occlusion query on the world accumulator (006426a0) join a posted world draw before anything else they do.
+#[cfg(test)]
+mod draw_thread_joins {
+    #[test]
+    fn these_entries_join_the_drawing_thread_first() {
+        let mut e = engine_core::Engine::new();
+        let mut funcs = Vec::new();
+        crate::units::funcs(&mut funcs);
+        for (addr, f) in funcs {
+            e.register(addr, f);
+        }
+        for addr in [0x0064_26a0u32] {
+            assert!(
+                engine_core::draw_thread::testing::joins_first(&mut e, addr, &[0; 8]),
+                "{addr:08x} does not join first"
+            );
+        }
+    }
+}

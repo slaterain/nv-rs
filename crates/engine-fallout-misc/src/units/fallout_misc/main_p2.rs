@@ -9225,6 +9225,39 @@ mod tests_second {
         );
     }
 
+    /// With the drawing thread on for the run, the world pass goes through its seam (counted), and a frame the
+    /// seam keeps on main (here: the call log is a per-call diagnostic, and the overlay) makes the same calls with
+    /// the same words as with it off, the interface between the halves.
+    #[test]
+    fn world_pass_through_the_drawing_threads_seam() {
+        use engine_core::draw_thread;
+        fn never(_: &mut Engine) {
+            panic!("nothing is posted in a serial frame");
+        }
+        for overlay in [0u32, 1] {
+            let (mut r, this) = scene_rig();
+            let interface = r.object(0x100);
+            r.set(GET_INTERFACE_OBJECT, &[interface]);
+            draw_thread::turn_on(&r.e, draw_thread::testing::hooks_finishing_with(never));
+            let (_, log) = r.run(0x0087_3200, &args![this, 0u32, 0u32, 0u32, overlay]);
+            assert_eq!(draw_thread::counts(&r.e).serial, 1, "overlay {overlay}");
+            let order: Vec<u32> = log
+                .iter()
+                .map(|(a, _)| *a)
+                .filter(|a| [0x00b6_ba20, DRAW_TARGET_TO_TEXTURE, 0x00b6_b930].contains(a))
+                .collect();
+            let expected: &[u32] = if overlay != 0 {
+                &[0x00b6_ba20, DRAW_TARGET_TO_TEXTURE, 0x00b6_b930]
+            } else {
+                &[0x00b6_ba20, 0x00b6_b930]
+            };
+            assert_eq!(order, expected, "overlay {overlay}");
+            assert_eq!(calls_to(&log, 0x00b6_ba20), vec![vec![0x6000, 0x8800, 1]]);
+            assert_eq!(calls_to(&log, 0x00b6_b930), vec![vec![0x6000, 0x8800, 1]]);
+            draw_thread::turn_off(&mut r.e);
+        }
+    }
+
     #[test]
     fn world_pass_skip_flag_clears_the_accumulator_bytes() {
         let (mut r, this) = scene_rig();
@@ -10683,5 +10716,33 @@ mod tests_third {
         );
         let (_, log) = r.run(0x0087_7f90, &args![0x5000u32, 0u32]);
         assert_eq!(log, vec![(0x0087_7fc0, vec![0x5000])]);
+    }
+}
+
+/// The drawing thread (`engine_core::draw_thread`): the next frame's start, the world accumulator's later users, a save, a load and the purge join a posted world draw before anything else they do.
+#[cfg(test)]
+mod draw_thread_joins {
+    #[test]
+    fn these_entries_join_the_drawing_thread_first() {
+        let mut e = engine_core::Engine::new();
+        let mut funcs = Vec::new();
+        crate::units::funcs(&mut funcs);
+        for (addr, f) in funcs {
+            e.register(addr, f);
+        }
+        for addr in [
+            0x0086_e650u32,
+            0x0087_46d0,
+            0x0087_4920,
+            0x0087_5e40,
+            0x0085_03b0,
+            0x0084_7df0,
+            0x0087_8250,
+        ] {
+            assert!(
+                engine_core::draw_thread::testing::joins_first(&mut e, addr, &[0; 8]),
+                "{addr:08x} does not join first"
+            );
+        }
     }
 }
