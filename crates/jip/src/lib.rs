@@ -22,10 +22,12 @@
 //! - [`game`]: the game's classes JIP reads, as layouts.
 //! - [`console`], [`utility`]: JIP's console echo of a command's result and the text helpers it
 //!   uses.
+//! - [`commands`]: JIP's script commands built so far (step 3.6), one module per JIP source file.
 //!
 //! [`install`] runs once per engine, after `nvse::install` (JIP is xNVSE's plugin): in
 //! `host::Host::start_with`, never in the engine crates' own tests.
 
+pub mod commands;
 pub mod console;
 pub mod containers;
 pub mod cosave;
@@ -109,6 +111,11 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
     table::install(e, answers_installed);
     identity::install(e, answers_installed);
     overrides::install(e, answers_installed);
+    // Built commands answer only while JIP answers "installed": until then every JIP opcode is as
+    // without the DLL (no handler, no name).
+    if answers_installed {
+        commands::install(e);
+    }
     nvse::plugins::register(e, plugin(answers_installed));
     let jip = e.ext::<Jip>();
     jip.installed = true;

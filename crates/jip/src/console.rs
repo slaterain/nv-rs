@@ -38,6 +38,12 @@ pub fn print_result(e: &mut Engine, a: &CommandArgs) {
     let mut line = nvse::table::guest_text(e, e.mem.u32(record));
     line.extend_from_slice(b" >> ");
     line.extend(flt_to_str(e.mem.f64(a.result)));
+    console_print_line(e, &line);
+}
+
+/// The console's print with `line` as its format (it holds no `%` JIP would expand: JIP passes
+/// its buffer as both the format and the argument).
+fn console_print_line(e: &mut Engine, line: &[u8]) {
     let console = e.call(CONSOLE_INSTANCE, &args![1u32]).u32();
     if console == 0 {
         return;
@@ -50,4 +56,37 @@ pub fn print_result(e: &mut Engine, a: &CommandArgs) {
         e.mem.set_u8(text.addr() + line.len() as u32, 0);
         e.call(CONSOLE_PRINT, &args![console, text, text]);
     });
+}
+
+/// `UIntToHex` (JIP LN NVSE, `internal/utility.cpp`): a number in upper-case hexadecimal without
+/// leading zeros, `0` for zero.
+pub fn uint_to_hex(num: u32) -> Vec<u8> {
+    format!("{num:X}").into_bytes()
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: DoConsolePrint (the one
+// for a form result).
+/// As [`print_result`], with the form instead of a number: its id in hexadecimal, then its
+/// editor ID in quotes when the form answers a non-empty one; `0` for no form.
+pub fn print_form(e: &mut Engine, a: &CommandArgs, form: u32) {
+    if !nvse::commands::is_console_mode(e) || !called_by_evaluate_line(e) {
+        return;
+    }
+    let record = nvse::table::record_of(e, a.opcode(e));
+    let mut line = nvse::table::guest_text(e, e.mem.u32(record));
+    line.extend_from_slice(b" >> ");
+    if form == 0 {
+        line.push(b'0');
+    } else {
+        line.extend(uint_to_hex(crate::commands::ref_id(e, form)));
+        let edid = e
+            .vcall(form, crate::commands::forms::GET_EDITOR_ID, &[])
+            .u32();
+        if edid != 0 && e.mem.u8(edid) != 0 {
+            line.extend_from_slice(b" \"");
+            line.extend(nvse::table::guest_text(e, edid));
+            line.push(b'"');
+        }
+    }
+    console_print_line(e, &line);
 }

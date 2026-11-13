@@ -212,6 +212,7 @@ fn installed_records(installed: bool) {
     for slot in SLOTS.iter() {
         let at = record_of(&e, slot.opcode);
         let r = Record::read(&e, at);
+        let built = crate::commands::is_built(slot.opcode);
         let (name, alias) = if !installed {
             ("", "")
         } else if slot.opcode == 0x22c0 {
@@ -230,7 +231,7 @@ fn installed_records(installed: bool) {
         );
         let execute = if installed && slot.kind == Kind::Empty {
             EMPTY_EXECUTE
-        } else if installed && (o == 0x2200 || o == 0x2210) {
+        } else if installed && (built || o == 0x2200 || o == 0x2210) {
             nvse::table::execute_address(o)
         } else {
             0
