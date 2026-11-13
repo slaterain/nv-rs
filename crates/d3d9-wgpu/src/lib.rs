@@ -21,6 +21,7 @@ pub mod device;
 #[cfg(test)]
 mod fingerprint;
 pub mod format;
+pub mod frame_rate;
 mod fxhash;
 pub mod loading;
 mod prepare;

@@ -194,6 +194,11 @@ impl Host {
         if let Some(on) = choice.borderless {
             engine_platform::d3d9real::want_borderless(on);
         }
+        // The frame-rate counter from the start (`fixes::Choice::show_frame_rate`: `NV_SHOW_FPS`; else,
+        // in a launcher's play run, Fallout.ini's `[nv-rs Display] bShowFrameRate`; off by default).
+        // F11 in the game shows or hides it either way.
+        #[cfg(windows)]
+        engine_platform::d3d9real::want_frame_rate(choice.show_frame_rate);
         // Who draws (`fixes::Choice::renderer`: in a launcher's play run, Fallout.ini's
         // `[nv-rs Display] sRenderer`, Vulkan by default); `NV_D3D9`, when it names a backend,
         // decides instead. A test or script without `NV_D3D9` makes no choice: nothing draws.

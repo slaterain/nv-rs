@@ -1396,7 +1396,7 @@ fn play(
 
 /// The game's variables for the player's options on its command ([`game_ini::switches`]).
 ///
-/// In play the seven that would beat the profile's `Fallout.ini` are taken out, not even one left
+/// In play the eight that would beat the profile's `Fallout.ini` are taken out, not even one left
 /// from Play.exe's own environment. When a variable set before the start makes the run a test,
 /// which never reads the file, nothing is taken out and the file's choices are passed on, so the
 /// run plays like the player's game; the line for the log says which variable did it, what was
@@ -2268,17 +2268,18 @@ mod tests {
     }
 
     /// The variables on the game's own command (`pass_switches` on a `Command`, as `play` makes
-    /// it). In play the seven are taken out and nothing else is said; with a test variable set
+    /// it). In play the eight are taken out and nothing else is said; with a test variable set
     /// before Play.exe, the file's choices are set on the command, nothing is taken out, the one
     /// set before is left to come through as it was, and the log line names all of it.
     #[test]
     fn the_games_command_gets_the_files_choices_only_in_a_test() {
-        let seven = [
+        let eight = [
             "NV_PRESET",
             "NV_BORDERLESS",
             "NV_D3D9",
             "NV_FRAME_LIMIT",
             "NV_MENU_FRAME_LIMIT",
+            "NV_SHOW_FPS",
             "NV_THREADS",
             "NV_RENDER_THREAD",
         ];
@@ -2302,7 +2303,7 @@ mod tests {
         let line = pass_switches(&mut play, &game_ini::switches(&ini, None, |_| false));
         assert_eq!(line, None);
         let mut want: Vec<(String, Option<String>)> =
-            seven.iter().map(|name| (name.to_string(), None)).collect();
+            eight.iter().map(|name| (name.to_string(), None)).collect();
         want.push(("NV_SETTINGS".into(), Some("settings.ini".into())));
         want.sort();
         let mut got = envs(&play);
@@ -2320,6 +2321,7 @@ mod tests {
             ("NV_D3D9", "wgpu"),
             ("NV_FRAME_LIMIT", "90"),
             ("NV_MENU_FRAME_LIMIT", "120"),
+            ("NV_SHOW_FPS", "0"),
             ("NV_RENDER_THREAD", "1"),
             ("NV_GRAB_PUSH", "0"),
         ]
@@ -2571,6 +2573,7 @@ mod tests {
             ("NV_D3D9", "wgpu"),
             ("NV_FRAME_LIMIT", "60"),
             ("NV_MENU_FRAME_LIMIT", "120"),
+            ("NV_SHOW_FPS", "0"),
             ("NV_THREADS", "stepped"),
             ("NV_RENDER_THREAD", "1"),
         ]
@@ -2749,7 +2752,7 @@ mod tests {
     #[test]
     fn settings_cmd_before_the_first_start_writes_settings_ini_for_play_exe_to_move() {
         let files = Files::new("settings-first", None);
-        settings_window(&files, "Preset=vanilla;FrameLimit=60;NV_RENDER_THREAD=0");
+        settings_window(&files, "Preset=vanilla;FrameLimit=60;NV_RENDER_THREAD=0;NV_SHOW_FPS=1");
         let written = std::fs::read_to_string(&files.package.settings).unwrap();
         assert!(
             written.contains("\r\nPreset=vanilla\r\n") && written.contains("\r\nFrameLimit=60\r\n")
@@ -2767,6 +2770,10 @@ mod tests {
         assert_eq!(
             settings::ini_value(&ini, "nv-rs Threads", "bRenderThread"),
             Some("0")
+        );
+        assert_eq!(
+            settings::ini_value(&ini, "nv-rs Display", "bShowFrameRate"),
+            Some("1")
         );
         assert!(!files.package.settings.exists());
     }
@@ -2790,7 +2797,7 @@ mod tests {
         std::fs::set_permissions(mods.fallout_ini(), p).unwrap();
         settings_window(
             &files,
-            "Borderless=0;Preset=vanilla;FrameLimit=144;VSync=Off;Resolution=1280x720;AntiAliasing=Off;NV_THREADS=stepped",
+            "Borderless=0;Preset=vanilla;FrameLimit=144;VSync=Off;Resolution=1280x720;AntiAliasing=Off;NV_SHOW_FPS=1;NV_THREADS=stepped",
         );
         for (profile, (ini, prefs)) in before.iter().enumerate() {
             // The same lines as Play.exe's own set_key makes, everything else as it was.
@@ -2800,6 +2807,7 @@ mod tests {
                 ("Display", "iPresentInterval", "0"),
                 ("nv-rs General", "sPreset", "vanilla"),
                 ("nv-rs Display", "iFrameLimit", "144"),
+                ("nv-rs Display", "bShowFrameRate", "1"),
                 ("nv-rs Threads", "bSteppedThreads", "1"),
             ] {
                 want = game_ini::set_key(&want, section, key, value);

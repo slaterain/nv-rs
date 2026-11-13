@@ -102,6 +102,8 @@ pub struct Keys {
     pub renderer: Option<Renderer>,
     pub frame_limit: Option<u32>,
     pub menu_frame_limit: Option<u32>,
+    /// `bShowFrameRate`: the frame-rate counter shown from the start (`d3d9_wgpu::frame_rate`).
+    pub show_frame_rate: Option<bool>,
     pub stepped_threads: Option<bool>,
     pub render_thread: Option<bool>,
     /// The fix rows the file turns on or off, by `crate::fixes::Fix::env`.
@@ -142,6 +144,10 @@ impl Keys {
                 "iMenuFrameLimit" => {
                     keys.menu_frame_limit = raw.parse().ok();
                     keys.menu_frame_limit.is_some()
+                }
+                "bShowFrameRate" => {
+                    keys.show_frame_rate = flag(raw);
+                    keys.show_frame_rate.is_some()
                 }
                 "bSteppedThreads" => {
                     keys.stepped_threads = flag(raw);
@@ -288,6 +294,7 @@ mod tests {
                 "sRenderer",
                 "iFrameLimit",
                 "iMenuFrameLimit",
+                "bShowFrameRate",
                 "bSteppedThreads",
                 "bRenderThread"
             ]
@@ -312,6 +319,7 @@ mod tests {
             Some(crate::fixes::PLAY_THREADS == "stepped")
         );
         assert_eq!(keys.render_thread, Some(crate::fixes::PLAY_RENDER_THREAD));
+        assert_eq!(keys.show_frame_rate, Some(crate::fixes::PLAY_SHOW_FRAME_RATE));
         // The fix lines are commented out: the preset decides.
         assert!(keys.fixes.is_empty());
         assert!(keys.bad.is_empty(), "{:?}", keys.bad);
