@@ -8,7 +8,8 @@
 //!   sky and flag constants; the constant entry lists and the pass type tables; the render states' lock counters
 //!   and their state indices, the coverage counter, the current shader and pass type of the batch draw);
 //! - the current shader pass (`0126f74c`), the group zero flag (`011a9608`), the last light's point flag
-//!   (`011f91a6`) and the terrain fade flag (`011f94aa`);
+//!   (`011f91a6`), the terrain fade flag (`011f94aa`), the shader mode (`011f91b8`) and the two function words
+//!   it selects (`011f9f38`, `011f9f3c`);
 //! - the renderer's render-state cache (`NiDX9RenderState`, the renderer's +0x8b8: 0x1114 bytes);
 //! - the accumulator's camera (+8).
 //!
@@ -43,13 +44,17 @@ pub(crate) const GROUP_ZERO_FLAG: (u32, u32) = (0x011a_9608, 0x011a_960c);
 /// clears (`011f94aa`; game logic reads it after the draw).
 pub(crate) const LIGHT_FLAG: (u32, u32) = (0x011f_91a6, 0x011f_91a7);
 pub(crate) const FADE_FLAG: (u32, u32) = (0x011f_94aa, 0x011f_94ab);
+/// The shader manager's mode (`011f91b8`) and the two function words it selects (`011f9f38`, `011f9f3c`): the draw
+/// sets them for its render mode (`own::select_shader_mode`, `00b4f450`), main's tail for its own.
+pub(crate) const SHADER_MODE: (u32, u32) = (0x011f_91b8, 0x011f_91bc);
+pub(crate) const MODE_FUNCTIONS: (u32, u32) = (0x011f_9f38, 0x011f_9f40);
 /// The renderer's render-state cache (`NiDX9RenderState`) and its size.
 pub(crate) const RENDER_STATE_SIZE: u32 = 0x1114;
 /// The accumulator's camera (+8).
 pub(crate) const ACC_CAMERA: (u32, u32) = (8, 0xc);
 
 /// The global blocks, in one list (what [`take`] owns besides the render-state cache and the camera).
-pub const GLOBAL_BLOCKS: [(u32, u32); 8] = [
+pub const GLOBAL_BLOCKS: [(u32, u32); 10] = [
     RENDERING_PASS,
     ACCUMULATORS,
     SHADER_STATICS,
@@ -58,6 +63,8 @@ pub const GLOBAL_BLOCKS: [(u32, u32); 8] = [
     GROUP_ZERO_FLAG,
     LIGHT_FLAG,
     FADE_FLAG,
+    SHADER_MODE,
+    MODE_FUNCTIONS,
 ];
 
 /// Whether `addr` lies in one of the own blocks of globals (for the checks).
@@ -313,11 +320,16 @@ mod tests {
             };
             if full.contains(name) {
                 let lines: Vec<&str> = code.lines().collect();
+                // Per function: the names that hold an address built from an own-block constant, and the names of
+                // stack locals (a `with_stack` frame and what is made from it).
+                let mut own_vars: Vec<String> = Vec::new();
+                let mut locals: Vec<String> = Vec::new();
                 for (n, line) in lines.iter().copied().enumerate() {
                     let body = line.split("//").next().unwrap_or(line);
                     if body.trim_start().starts_with("use ") {
                         continue;
                     }
+                    track_names(body, &names_own, &mut own_vars, &mut locals);
                     let marked = line.contains("// own:")
                         || lines
                             .get(n + 1)
@@ -327,11 +339,28 @@ mod tests {
                         || body.contains("e.mem.");
                     let cache = body.contains("NiDX9RenderState::")
                         && (body.contains("e.get(") || body.contains("e.set("));
-                    let own_call = calls(body, "own_at") || calls(body, "set_own_at");
-                    let other_global = others.iter().any(|c| has_word(body, c));
+                    // Each own accessor's address (its second argument) must be built from an own-block constant or a
+                    // stack local; the generic float helpers count as accessors (their callers are checked). What this
+                    // catches and what it does not: a name counts as built from an own constant (or a local) when its
+                    // `let`/`for` binding's right-hand side merely MENTIONS one (`let x = ROWS + y` and `let x = f(ROWS)`
+                    // alike), names are followed per function by text, not by type, and an address handed in as a
+                    // parameter is unknown (marked). It flags an own accessor on a plain heap address (`light + 0x208`);
+                    // it cannot prove the address is in an own block. The real net is the whole-frame POISON run.
+                    let definition = ["fn ", "pub fn ", "pub(crate) fn "]
+                        .iter()
+                        .any(|p| body.trim_start().starts_with(p));
+                    let unrouted = ["own_at", "set_own_at", "copy_float", "float_at"]
+                        .iter()
+                        .filter(|a| calls(body, a))
+                        .filter_map(|a| address_argument(&lines, n, a))
+                        .any(|address| {
+                            !names_own(&address)
+                                && !own_vars.iter().any(|v| has_word(&address, v))
+                                && !locals.iter().any(|v| has_word(&address, v))
+                        });
                     if (raw && (!marked || names_own(body)))
                         || cache
-                        || (own_call && other_global && !names_own(body) && !marked)
+                        || (unrouted && !marked && !definition)
                     {
                         findings.push(format!("{name}:{}: raw access in `{}`", n + 1, line.trim()));
                     }
@@ -388,6 +417,48 @@ mod tests {
                 }
             }
         }
+        // The engine's own typed helpers the draw reaches by `typed_call!` write guest memory: one that writes an own
+        // block (an own literal in its body) may not be called from the draw-time files. It sees only calls written
+        // `leaf::NAME(` (not an imported `NAME(` or a by-address call to the helper's address), and only engine-core's
+        // leaf.rs among the helpers outside this crate.
+        let leaf = include_str!("../../../engine-core/src/typed/leaf.rs");
+        let mut writers = Vec::new();
+        let mut current: Option<(String, bool)> = None;
+        for line in leaf.lines() {
+            if let Some(rest) = line.strip_prefix("pub fn ") {
+                if let Some((name, true)) = current.take() {
+                    writers.push(name);
+                }
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                current = Some((name, false));
+            } else if let Some((_, writes)) = current.as_mut() {
+                *writes |= !own_literals(line).is_empty();
+            }
+        }
+        if let Some((name, true)) = current {
+            writers.push(name);
+        }
+        assert!(
+            writers.iter().any(|w| w == "store_colour"),
+            "the leaf scan no longer sees store_colour writing the shader statics"
+        );
+        for (name, text) in sources {
+            for (n, line) in code_of(text).lines().enumerate() {
+                let body = line.split("//").next().unwrap_or(line);
+                for w in &writers {
+                    if calls(body, &format!("leaf::{w}")) && !line.contains("// own:") {
+                        findings.push(format!(
+                            "{name}:{}: `leaf::{w}` writes own state past the packet in `{}`",
+                            n + 1,
+                            line.trim()
+                        ));
+                    }
+                }
+            }
+        }
         assert!(
             findings.is_empty(),
             "own state read or written past the packet:\n{}",
@@ -417,6 +488,93 @@ mod tests {
                 .and_then(|rest| rest.split_once(':'))
                 .is_some_and(|(n, value)| n.trim() == name && own_literals(value).is_empty())
         })
+    }
+
+    /// Follows a function's names through `body`: a new function starts both lists afresh; a `with_stack` closure's
+    /// frame is a local; a `let` or `for` binding made from an own-block constant (or a name holding one) holds an
+    /// own address, one made from a local is a local.
+    fn track_names(
+        body: &str,
+        names_own: &dyn Fn(&str) -> bool,
+        own_vars: &mut Vec<String>,
+        locals: &mut Vec<String>,
+    ) {
+        let t = body.trim_start();
+        if ["fn ", "pub fn ", "pub(crate) fn "]
+            .iter()
+            .any(|p| t.starts_with(p))
+        {
+            own_vars.clear();
+            locals.clear();
+        }
+        if let Some(at) = body.find("with_stack(") {
+            if let Some(bar) = body[at..].find("|e, ") {
+                let name: String = body[at + bar + 4..]
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !name.is_empty() {
+                    locals.push(name);
+                }
+            }
+        }
+        let binding = t
+            .strip_prefix("let ")
+            .map(|rest| rest.strip_prefix("mut ").unwrap_or(rest))
+            .and_then(|rest| rest.split_once('='))
+            .or_else(|| {
+                t.strip_prefix("for ")
+                    .and_then(|rest| rest.split_once(" in "))
+            });
+        let Some((lhs, rhs)) = binding else {
+            return;
+        };
+        let name = lhs.split(':').next().unwrap_or(lhs).trim();
+        if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return;
+        }
+        if names_own(rhs) || own_vars.iter().any(|v| has_word(rhs, v)) {
+            own_vars.push(name.to_string());
+        } else if locals.iter().any(|v| has_word(rhs, v)) {
+            locals.push(name.to_string());
+        }
+    }
+
+    /// The second argument of the call of `name` that starts on line `n` (the address of an own accessor, after
+    /// `e`), read on across lines until its parenthesis closes.
+    fn address_argument(lines: &[&str], n: usize, name: &str) -> Option<String> {
+        let line = lines[n].split("//").next().unwrap_or(lines[n]);
+        let at = line.match_indices(name).find_map(|(at, _)| {
+            let before = line[..at].chars().next_back();
+            let after = &line[at + name.len()..];
+            (!before.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                && (after.starts_with('(') || after.starts_with("::<")))
+            .then_some(at + name.len())
+        })?;
+        let mut text = line[at..].to_string();
+        for next in lines.iter().skip(n + 1).take(8) {
+            text.push(' ');
+            text.push_str(next.split("//").next().unwrap_or(next));
+        }
+        let open = text.find('(')?;
+        let (mut depth, mut args, mut current) = (0i32, Vec::new(), String::new());
+        for c in text[open + 1..].chars() {
+            match c {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' if depth == 0 => {
+                    args.push(std::mem::take(&mut current));
+                    break;
+                }
+                ')' | ']' | '}' => depth -= 1,
+                ',' if depth == 0 => {
+                    args.push(std::mem::take(&mut current));
+                    continue;
+                }
+                _ => {}
+            }
+            current.push(c);
+        }
+        args.get(1).map(|a| a.trim().to_string())
     }
 
     /// Whether `line` calls `name` (a whole identifier followed by `(` or `::<`).

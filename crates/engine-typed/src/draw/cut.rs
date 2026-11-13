@@ -64,6 +64,11 @@ const PARTICLES_RENDER_IMMEDIATE: u32 = 0x00a9_b1f0;
 /// set-up `00b70820` reads all of these) and its direction (+0xf0).
 const SHADOW_LIGHT: (u32, u32) = (0xd0, 0xd8);
 const SHADOW_LIGHT_FLAGS: (u32, u32) = (0xf4, 0xfc);
+/// A pass light's matrix (+0x10, the cube projection `00b7b730` multiplies by), its byte +0xed and its six clip
+/// planes (+0x144, which `00b7be00` transforms); its clip-plane cache (+0x1a8, made +0x208) is draw-written: piece 4.
+const SHADOW_LIGHT_MATRIX: (u32, u32) = (0x10, 0x50);
+const SHADOW_LIGHT_ED: (u32, u32) = (0xed, 0xee);
+const SHADOW_LIGHT_PLANES: (u32, u32) = (0x144, 0x1a4);
 const LIGHT_VALUES: (u32, u32) = (0xc4, 0xec);
 const LIGHT_DIRECTION: (u32, u32) = (0xf0, 0xfc);
 
@@ -215,6 +220,77 @@ fn take_geometry(e: &mut Engine, geometry: u32, nodes: &mut AddrSet<u32>) {
     {
         take_particles(e, data);
     }
+    take_group_c_arrays(e, geometry, property, data);
+}
+
+/// The tall grass shader (`010b8980`), the no-lighting shader (`010bb230`) and the SpeedTree leaf shader
+/// (`010b9190`), by vtable (a geometry's shader +0xc0); the SpeedTree leaf property's vtable (`010b9700`, made by
+/// `00bb3ba0`).
+const TALL_GRASS_SHADER: u32 = 0x010b_8980;
+const NO_LIGHTING_SHADER: u32 = 0x010b_b230;
+const LEAF_SHADER: u32 = 0x010b_9190;
+const LEAF_PROPERTY: u32 = 0x010b_9700;
+/// A geometry's shader.
+const GEOMETRY_SHADER: u32 = 0xc0;
+
+/// The arrays Group C's set-ups copy into their constants whole (`_memcpy`), by the geometry's shader:
+/// - tall grass (`00baaf40`): the property's instance data (+0x7c): its counts (`u16` +0x10, +0x12), its array
+///   (+0x14) and that array's count x 0x10 bytes;
+/// - no-lighting (`00bc6fa0`): the model data's sub-texture array (+0x68) and count (`u8` +0x6c), count x 0x10 bytes;
+/// - SpeedTree leaves (`00bb2760`): the leaf property's slot 0x100 answer (`00bb3c90`: its leaf data +0x88, then
+///   that data's +8, null without data), 0x300 bytes; read here without the call, for that class only.
+///
+/// Read without a stop at an unmapped word, as the light walk.
+fn take_group_c_arrays(e: &Engine, geometry: u32, property: u32, data: u32) {
+    let Some(shader) = peek(e, geometry.wrapping_add(GEOMETRY_SHADER)) else {
+        return;
+    };
+    if shader == 0 {
+        return;
+    }
+    match peek(e, shader) {
+        Some(TALL_GRASS_SHADER) if property != 0 => {
+            capture::take(e, property, 0x7c, 0x80);
+            let Some(instances) = peek(e, property.wrapping_add(0x7c)) else {
+                return;
+            };
+            if instances == 0 {
+                return;
+            }
+            capture::take(e, instances, 0x10, 0x18);
+            let (Some(counts), Some(array)) = (
+                peek(e, instances.wrapping_add(0x10)),
+                peek(e, instances.wrapping_add(0x14)),
+            ) else {
+                return;
+            };
+            capture::take(e, array, 0, (counts & 0xffff) << 4);
+        }
+        Some(NO_LIGHTING_SHADER) if data != 0 => {
+            capture::take(e, data, 0x68, 0x6d);
+            let (Some(array), Some(count)) = (
+                peek(e, data.wrapping_add(0x68)),
+                peek_u8(e, data.wrapping_add(0x6c)),
+            ) else {
+                return;
+            };
+            capture::take(e, array, 0, u32::from(count) << 4);
+        }
+        Some(LEAF_SHADER) if property != 0 && peek(e, property) == Some(LEAF_PROPERTY) => {
+            capture::take(e, property, 0x88, 0x8c);
+            let Some(leaf_data) = peek(e, property.wrapping_add(0x88)) else {
+                return;
+            };
+            if leaf_data == 0 {
+                return;
+            }
+            capture::take(e, leaf_data, 8, 0xc);
+            if let Some(leaves) = peek(e, leaf_data.wrapping_add(8)) {
+                capture::take(e, leaves, 0, 0x300);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// A skin instance's root's (+0x10) and bones' world transforms (the bone list +0x14, as many as its data +8
@@ -268,7 +344,8 @@ fn take_particles(e: &mut Engine, data: u32) {
     }
 }
 
-/// A pass's lights: their count (+9) and array (+0xc), and each light's values, once a light.
+/// A pass's lights: their count (+9) and array (+0xc), and each light's values, once a light. At least two entries:
+/// the light direction (`00b7c7b0`) reads the first light when the count is 0, and lighting 3.0 the second when it is 1.
 fn take_lights(e: &Engine, pass: u32, nodes: &mut AddrSet<u32>) {
     capture::take(e, pass, 9, 0xa);
     capture::take(e, pass, 0xc, 0x10);
@@ -282,8 +359,9 @@ fn take_lights(e: &Engine, pass: u32, nodes: &mut AddrSet<u32>) {
     if lights == 0 {
         return;
     }
-    capture::take(e, lights, 0, u32::from(count).wrapping_mul(4));
-    for i in 0..u32::from(count) {
+    let listed = u32::from(count).max(2);
+    capture::take(e, lights, 0, listed.wrapping_mul(4));
+    for i in 0..listed {
         let Some(shadow) = peek(e, lights.wrapping_add(i * 4)) else {
             return;
         };
@@ -292,6 +370,9 @@ fn take_lights(e: &Engine, pass: u32, nodes: &mut AddrSet<u32>) {
         }
         capture::take(e, shadow, SHADOW_LIGHT.0, SHADOW_LIGHT.1);
         capture::take(e, shadow, SHADOW_LIGHT_FLAGS.0, SHADOW_LIGHT_FLAGS.1);
+        capture::take(e, shadow, SHADOW_LIGHT_MATRIX.0, SHADOW_LIGHT_MATRIX.1);
+        capture::take(e, shadow, SHADOW_LIGHT_ED.0, SHADOW_LIGHT_ED.1);
+        capture::take(e, shadow, SHADOW_LIGHT_PLANES.0, SHADOW_LIGHT_PLANES.1);
         let (Some(light), Some(point)) = (
             peek(e, shadow.wrapping_add(0xf8)),
             peek_u8(e, shadow.wrapping_add(0xf4)),
@@ -428,6 +509,44 @@ pub fn totals() -> capture::Report {
 mod tests {
     use super::*;
 
+    /// A pass whose light count is 0 still has its first two lights copied (the light direction reads the first,
+    /// lighting 3.0 the second): their +0xd4, matrix, planes and byte +0xed, and the array's two words.
+    #[test]
+    fn a_pass_without_lights_still_gives_its_first_two() {
+        let mut e = Engine::new();
+        let pass = e.mem.alloc(0x10);
+        let lights = e.mem.alloc(8);
+        let shadows = [e.mem.alloc(0x200), e.mem.alloc(0x200)];
+        e.mem.set_u32(pass + 0xc, lights);
+        for (k, shadow) in (0u32..).zip(shadows) {
+            e.mem.set_u32(lights + 4 * k, shadow);
+            e.mem.set_u32(shadow + 0xd4, 0x40 + k);
+            e.mem.set_u32(shadow + 0x10, 0x50 + k);
+            e.mem.set_u32(shadow + 0x144, 0x60 + k);
+            e.mem.set_u8(shadow + 0xed, 1);
+        }
+        assert!(capture::begin(&e));
+        take_pass_lights(&e, pass);
+        let read: Vec<u32> = shadows
+            .iter()
+            .flat_map(|&s| {
+                [
+                    capture::word(&e, s, 0xd4),
+                    capture::word(&e, s, 0x10),
+                    capture::word(&e, s, 0x144),
+                    u32::from(capture::byte(&e, s, 0xed)),
+                ]
+            })
+            .chain([capture::word(&e, lights, 0), capture::word(&e, lights, 4)])
+            .collect();
+        let report = capture::end(&mut e);
+        assert_eq!(
+            read,
+            [0x40, 0x50, 0x60, 1, 0x41, 0x51, 0x61, 1, shadows[0], shadows[1]]
+        );
+        assert_eq!(report.misses, 0);
+    }
+
     /// The light set-up (`00b70820`) reads a pass light's +0xd4 and its light's +0xe4 and +0xe8: the cut copies
     /// them, so a read of them from the packet misses nothing.
     #[test]
@@ -461,5 +580,102 @@ mod tests {
         let report = capture::end(&mut e);
         assert_eq!(read, [0, 0x11, 0, 0x22, 0x33]);
         assert_eq!(report.misses, 0);
+    }
+
+    /// A geometry (with a vtable, a bound, its shader property and model data) whose shader has `vtable`:
+    /// (geometry, property, model data).
+    fn group_c_geometry(e: &mut Engine, vtable: u32) -> (u32, u32, u32) {
+        let geometry = e.mem.alloc(0x100);
+        let geometry_vtable = e.mem.alloc(0x100);
+        let shader = e.mem.alloc(0x10);
+        let property = e.mem.alloc(0x100);
+        let data = e.mem.alloc(0x100);
+        e.mem.set_u32(geometry, geometry_vtable);
+        let bound = e.mem.alloc(0x10);
+        e.mem.set_u32(geometry + 0x20, bound);
+        e.mem.set_u32(geometry + 0xa8, property);
+        e.mem.set_u32(geometry + 0xb8, data);
+        e.mem.set_u32(geometry + GEOMETRY_SHADER, shader);
+        e.mem.set_u32(shader, vtable);
+        (geometry, property, data)
+    }
+
+    /// An array of `words` words holding 0x100, 0x101, ..
+    fn words(e: &mut Engine, words: u32) -> u32 {
+        let at = e.mem.alloc(4 * words);
+        for i in 0..words {
+            e.mem.set_u32(at + 4 * i, 0x100 + i);
+        }
+        at
+    }
+
+    /// The words of `[at, at + 4 * n)` read from the open packet after main cleared them in guest memory, and
+    /// the packet's misses.
+    fn read_after_clear(e: &mut Engine, at: u32, n: u32) -> (Vec<u32>, u64) {
+        for i in 0..n {
+            e.mem.set_u32(at + 4 * i, 0);
+        }
+        let read = (0..n).map(|i| capture::word(e, at, 4 * i)).collect();
+        (read, capture::end(e).misses)
+    }
+
+    /// The tall grass's instance copy (`00baaf40`) reads the instance data's counts and array and the array's
+    /// count x 0x10 bytes: the cut copies them all.
+    #[test]
+    fn the_grass_instances_are_copied() {
+        let mut e = Engine::new();
+        let (geometry, property, _) = group_c_geometry(&mut e, TALL_GRASS_SHADER);
+        let instances = e.mem.alloc(0x40);
+        let array = words(&mut e, 12);
+        e.mem.set_u32(property + 0x7c, instances);
+        e.mem.set_u32(instances + 0x10, 0x0002_0003);
+        e.mem.set_u32(instances + 0x14, array);
+        assert!(capture::begin(&e));
+        take_geometry_values(&mut e, geometry);
+        e.mem.set_u32(instances + 0x10, 0);
+        let counts = capture::word(&e, instances, 0x10);
+        let (read, misses) = read_after_clear(&mut e, array, 12);
+        assert_eq!(counts, 0x0002_0003);
+        assert_eq!(read, (0x100..0x10c).collect::<Vec<u32>>());
+        assert_eq!(misses, 0);
+    }
+
+    /// The no-lighting shader's sub-texture copy (`00bc6fa0`): the model data's array and count, count x 0x10.
+    #[test]
+    fn the_no_lighting_subtextures_are_copied() {
+        let mut e = Engine::new();
+        let (geometry, _, data) = group_c_geometry(&mut e, NO_LIGHTING_SHADER);
+        let array = words(&mut e, 8);
+        e.mem.set_u32(data + 0x68, array);
+        e.mem.set_u8(data + 0x6c, 2);
+        assert!(capture::begin(&e));
+        take_geometry_values(&mut e, geometry);
+        let (read, misses) = read_after_clear(&mut e, array, 8);
+        assert_eq!(read, (0x100..0x108).collect::<Vec<u32>>());
+        assert_eq!(misses, 0);
+    }
+
+    /// The SpeedTree leaves (`00bb2760`): the leaf property's slot 0x100 answer, its leaf data's +8, 0x300 bytes.
+    #[test]
+    fn the_speedtree_leaves_are_copied() {
+        let mut e = Engine::new();
+        let (geometry, property, _) = group_c_geometry(&mut e, LEAF_SHADER);
+        let leaf_data = e.mem.alloc(0x10);
+        let leaves = words(&mut e, 0xc0);
+        e.mem.set_u32(property, LEAF_PROPERTY);
+        e.mem.set_u32(property + 0x88, leaf_data);
+        e.mem.set_u32(leaf_data + 8, leaves);
+        assert!(capture::begin(&e));
+        take_geometry_values(&mut e, geometry);
+        let (read, misses) = read_after_clear(&mut e, leaves, 0xc0);
+        assert_eq!(read, (0x100..0x1c0).collect::<Vec<u32>>());
+        assert_eq!(misses, 0);
+        // Another property class: its slot 0x100 is not read without the call, so nothing is taken.
+        let (geometry, property, _) = group_c_geometry(&mut e, LEAF_SHADER);
+        e.mem.set_u32(property + 0x88, leaf_data);
+        assert!(capture::begin(&e));
+        take_geometry_values(&mut e, geometry);
+        let _ = capture::word(&e, leaves, 0);
+        assert_eq!(capture::end(&mut e).misses, 1);
     }
 }
