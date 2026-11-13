@@ -8,7 +8,6 @@ use super::{body, FAMILY};
 use crate::{culling, dispatch, slot_target};
 use engine_core::ptr::Ptr;
 use engine_core::sse::{addps, mulps, subps};
-use engine_core::x87::{x87_quiet, x87_quiet_bits};
 use engine_core::{args, typed_call, Engine};
 
 /// The update state word of the thread block (`TLS + 0x2c0`): 1, 2 or 3 skip parts of the update.
@@ -122,7 +121,7 @@ pub fn update_world_data(e: &mut Engine, this: Ptr, _unused: u32) {
 /// After a change, an owner whose word +0x18 is 0 gets the motion notification.
 pub fn hk_to_ni(e: &mut Engine, this: Ptr) {
     let me = this.addr();
-    let source = x87_quiet(e.global::<f32>(RECIPROCAL_SOURCE));
+    let source = e.global::<f32>(RECIPROCAL_SOURCE);
     let node = e.mem.u32(me + 8);
     let flag = e.mem.u8(me + 0xd) & 1 != 0;
     let hk = e.mem.u32(me + 0x10);
@@ -195,20 +194,20 @@ fn set_lanes(e: &mut Engine, at: u32, value: [f32; 4]) {
     }
 }
 
-/// The reciprocal `FLD1; FDIVRP` makes in double precision, stored as a float; 1.0 for a zero source.
-#[allow(clippy::cast_possible_truncation)]
+/// The reciprocal `FLD1; FDIVRP` makes, stored as a float; 1.0 for a zero source. Native maths
+/// (ADR-0014): one division of floats stored at once, so plain `f32` gives the exe's float on either
+/// thread's word (a double quotient rounded to a float is the correctly rounded float quotient).
 fn reciprocal(source: f32) -> f32 {
     if source == 0.0 {
         1.0
     } else {
-        (1.0f64 / f64::from(source)) as f32
+        1.0 / source
     }
 }
 
-/// The scaled position's lane: a double product rounded to a float.
-#[allow(clippy::cast_possible_truncation)]
+/// The scaled position's lane: one product of floats stored as a float, plain `f32` on either word.
 fn scaled_lane(value: f32, scale: f32) -> f32 {
-    (f64::from(value) * f64::from(scale)) as f32
+    value * scale
 }
 
 /// Blend mode 0 of [`hk_to_ni`]: the node's world data refreshed; the node's translation scaled
@@ -222,7 +221,7 @@ fn blend_into_node(e: &mut Engine, this: u32, node: u32, hk: u32, flag: bool, so
     refresh(e, node);
     let transform = node + 0x68;
     let translation = transform + 0x24;
-    let scale = x87_quiet(e.global::<f32>(POSITION_SCALE));
+    let scale = e.global::<f32>(POSITION_SCALE);
     let state_word = e.tls() + TLS_UPDATE_STATE;
     e.with_stack(0xd0, |e, frame| {
         let f = frame.addr();
@@ -235,7 +234,7 @@ fn blend_into_node(e: &mut Engine, this: u32, node: u32, hk: u32, flag: bool, so
         let record = f + 0x60;
         let buffer = f + 0xa0;
         for lane in 0..3u32 {
-            let value = x87_quiet(e.mem.f32(translation + 4 * lane));
+            let value = e.mem.f32(translation + 4 * lane);
             e.mem.set_f32(scaled + 4 * lane, scaled_lane(value, scale));
         }
         e.mem.set_f32(scaled + 0xc, 0.0);
@@ -243,7 +242,7 @@ fn blend_into_node(e: &mut Engine, this: u32, node: u32, hk: u32, flag: bool, so
         e.call(QUATERNION_SET, &args![node_quaternion, buffer]);
         e.vcall(hk, 0xd4, &args![havok_position]);
         e.vcall(hk, 0xd8, &args![havok_quaternion]);
-        let blend = x87_quiet(e.mem.f32(this + 0x18));
+        let blend = e.mem.f32(this + 0x18);
         let ones = lanes(e, ONES_VECTOR);
         let position = lanes(e, havok_position);
         let own = lanes(e, scaled);
@@ -255,7 +254,7 @@ fn blend_into_node(e: &mut Engine, this: u32, node: u32, hk: u32, flag: bool, so
         let havok_side = mulps(subps(ones, splat), position);
         let mixed = addps(havok_side, mulps(own, splat));
         set_lanes(e, blended_position, mixed);
-        let blend_bits = x87_quiet_bits(e.mem.u32(this + 0x18));
+        let blend_bits = e.mem.u32(this + 0x18);
         e.call(
             QUATERNION_SET_SLERP,
             &args![
@@ -281,7 +280,7 @@ fn blend_into_node(e: &mut Engine, this: u32, node: u32, hk: u32, flag: bool, so
         let second = if flag {
             1.0f32
         } else {
-            x87_quiet(e.mem.f32(this + 0x1c))
+            e.mem.f32(this + 0x1c)
         };
         e.call(
             UPDATE_FROM_BLEND,

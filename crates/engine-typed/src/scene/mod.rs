@@ -13,10 +13,10 @@
 //! function the game's classes put there ([`crate::slot_target`]).
 //!
 //! **Floats.** The pass runs on the main thread and, for the actors' animated scenes, on the AI
-//! threads, so the family's row is [`Threads::Both`] and its x87 code keeps the exact helpers
-//! ([`engine_core::x87`]), each load, operation and store the exe's, in its order; the one exception
-//! is the transform inverse's reciprocal, one division in `f64` rounded once to a float, as its
-//! translation computes it.
+//! threads, so the family's row is [`Threads::Both`]. Its x87 code is native maths (ADR-0014's float
+//! rule) with no emulation left: the skinned bound's per-axis sums and the transform inverse's
+//! reciprocal are each one operation of floats stored at once, so plain `f32` gives the exe's float
+//! on either thread's word; floats the exe only moves through the x87 are copied plain.
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};

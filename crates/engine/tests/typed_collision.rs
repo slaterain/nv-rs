@@ -314,6 +314,10 @@ impl Common for Diff {
             .translation_calls_plainly(&[0x0040_19d0, 0x0040_8860, 0x004a_3e90, 0x0056_0e50])
             .max_calls(MAX_CALLS)
             .float_sweep(FLOAT_SWEEP)
+            // The family copies plain the floats the exe only moves through the x87 (the body's
+            // quaternion words, the blend amounts, the scale and the reciprocal's source), where the
+            // x87 quiets a signalling NaN: payloads only, which the game can't see (ADR-0014).
+            .allow_nan_payloads()
     }
 }
 
@@ -586,6 +590,31 @@ fn collision_hk_to_ni() {
                 e.mem.set_u32(owner + 0x18, case.word(6) - 1);
                 e.mem.set_u32(c + 0x24, owner);
             }
+            vec![c]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn collision_hk_to_ni_reciprocal_source() {
+    // Blend mode 0 (a half amount outside update state 2, a Havok object) with the reciprocal's source
+    // zero (the 1.0 the exe passes then) or not, and with the position flag set or not (the second
+    // amount passed or 1.0); floats.
+    Diff::new(entry!(0x00c8_1e30, blend::hk_to_ni(Ptr<_>)))
+        .common()
+        .inputs(&inputs(&[&[Input::Of(&[0, TWO, THIRD]), Input::Flag], &P3]))
+        .setup(|e, case| {
+            stand_ins(e, 0);
+            e.mem.set_u32(0x011a_fe64, case.word(0));
+            let c = object(e, 0x28);
+            let n = node(e, case, 0, 3);
+            e.mem.set_u32(c + 8, n);
+            e.mem.set_u8(c + 0xd, case.word(1) as u8);
+            let h = havok_body(e, 1, 0, [bits(case, 3), bits(case, 4), ONE, 0]);
+            set_answers(e, h, 0, [bits(case, 3), bits(case, 4), ONE, HALF]);
+            e.mem.set_u32(c + 0x10, h);
+            words(e, c + 0x18, &[HALF, THIRD, 1]);
             vec![c]
         })
         .run()

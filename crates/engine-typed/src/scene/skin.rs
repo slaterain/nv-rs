@@ -128,11 +128,10 @@ pub fn skin_bound(e: &mut Engine, this: Ptr, bound: Ptr) {
     });
 }
 
-/// The reciprocal of `scale` as the translation computes it: in `f64`, rounded once to a float
-/// (a quotient rounded through `f64` first is still the correctly rounded float).
-#[allow(clippy::cast_possible_truncation)]
+/// The reciprocal of `scale`: one division of floats stored at once, plain `f32` on every thread
+/// (ADR-0014; the translation's `f64` quotient rounded to a float is the same correctly rounded float).
 fn reciprocal(scale: f32) -> f32 {
-    (1.0 / f64::from(scale)) as f32
+    1.0 / scale
 }
 
 // Typed from 008b42e0
