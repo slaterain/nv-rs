@@ -3524,6 +3524,26 @@ impl Shape {
     }
 }
 
+/// A lighting property's light list (+0x60) as the first active light's getters walk it (nodes of three words:
+/// the next node, a word they do not read, the light): `active` 0 no list; 1 the lights `first`, `second` with the
+/// first active; 2 the first inactive (its index +0x110 0xff) so the second is the answer. A light's own light
+/// (+0xf8) keeps its flags byte +0x30 clear (not app-culled).
+fn light_list(e: &mut Engine, property: u32, active: u32, first: u32, second: u32) {
+    if active == 0 {
+        set(e, property + 0x60, 0);
+        return;
+    }
+    let second_node = e.mem.alloc(0xc);
+    let first_node = e.mem.alloc(0xc);
+    set(e, second_node + 8, second);
+    set(e, first_node, second_node);
+    set(e, first_node + 8, first);
+    set(e, property + 0x60, first_node);
+    if active == 2 {
+        e.mem.set_u16(first + 0x110, 0xff);
+    }
+}
+
 /// A light for the set-up tests: its matrix (+0x10), scale (+0xd0) and fourth colour word (+0xd4), the
 /// bytes at +0xed, +0xf4 (a point light) and +0xf5, its shadow map (+0x10c, a rendered texture whose
 /// texture is at +0x30), six clip planes (+0x144) and the made ones (+0x1a8) with their byte (+0x208),
@@ -3669,8 +3689,6 @@ fn geometry_stand_ins(e: &mut Engine) {
         });
     }
     e.register(0x00b5_5520, |e, _| ret(e.mem.u32(RETS + 0x504)));
-    e.register(0x00b7_0590, |e, _| ret(e.mem.u32(RETS + 0x508)));
-    e.register(0x00b7_0600, |e, _| ret(e.mem.u32(RETS + 0x508)));
     e.register(FLOAT_SLOT, |e, _| Ret {
         st0: f64::from(f32::from_bits(e.mem.u32(RETS + 0x110))),
         ..Ret::default()
@@ -3905,7 +3923,6 @@ fn geometry_shape(e: &mut Engine, s: &Shape) -> Geo {
     set(e, fog + 0x2c, if s.misc & 1 != 0 { ONE } else { 0 });
     set(e, fog + 0x30, if s.misc & 2 != 0 { 0x4500_0000 } else { 0 });
     set(e, RETS + 0x504, fog);
-    set(e, RETS + 0x508, [0, first, second][s.active as usize]);
     set(e, RETS + 0xf4, s.misc & 1);
     e.mem.set_u8(0x011f_941e, u8::from(s.hdr));
     set(e, 0x011f_91b8, s.mode);
@@ -3967,6 +3984,9 @@ fn geometry_shape(e: &mut Engine, s: &Shape) -> Geo {
     {
         set(e, w.property + offset, seed(F_PROPERTY, k as u32));
     }
+    // The property's light list (+0x60; nodes: next, -, light) for the first active light's getters (typed in the draw
+    // family): no list, the first light active, or the first not (its index 0xff) and the second active.
+    light_list(e, w.property, s.active, first, second);
     e.mem.set_u16(w.alpha + 0x18, s.alpha_flags);
     e.mem.set_u8(w.alpha + 0x1a, s.alpha_byte);
     let other = obj(e, 0x1c, vt);
@@ -4151,6 +4171,8 @@ impl Geometry for Diff {
                 0x00ee_6dce,
                 0x00ee_6dc8,
             ])
+            // The first active light's getters (the draw family's, their own tests).
+            .goes_by_address(&[0x00b7_0590, 0x00b7_0600])
             .goes_by_address(DRAW_F_HELPERS)
             .max_calls(MAX_CALLS)
             .max_cases(160)
@@ -6004,6 +6026,117 @@ fn decal_pass() {
         })
         .run()
         .assert_same();
+}
+
+/// A lighting property with a light list for the first active light's getters: `shape` 0 no list; 1..=6 a list of
+/// three lights where light 0 is (1) active, (2) of index 0xff, (3) app-culled (its light's +0x30 bit 0), (4) of
+/// byte +0xec 1 (skipped by the non-shadow form only), (5) a node without a light, (6) all three inactive; `ec`
+/// marks light 1's +0xec too. Answers the property and an iterator word.
+fn active_light_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let _ = draw_world(e);
+    let (shape, ec) = (c.word(0), c.word(1));
+    let property = e.mem.alloc(0x100);
+    let iterator = e.mem.alloc(4);
+    set(e, iterator, 0x5a5a_5a5a);
+    if shape == 0 {
+        return vec![property, iterator];
+    }
+    let mut next = 0u32;
+    let mut lights = [0u32; 3];
+    for k in (0..3u32).rev() {
+        let data = e.mem.alloc(0x40);
+        let light = e.mem.alloc(0x120);
+        set(e, light + 0xf8, data);
+        lights[k as usize] = light;
+        let node = e.mem.alloc(0xc);
+        set(e, node, next);
+        set(e, node + 4, 0x7777);
+        set(e, node + 8, light);
+        next = node;
+    }
+    set(e, property + 0x60, next);
+    let [first, second, third] = lights;
+    match shape {
+        2 => e.mem.set_u16(first + 0x110, 0xff),
+        3 => e.mem.set_u8(e.mem.u32(first + 0xf8) + 0x30, 1),
+        4 => e.mem.set_u8(first + 0xec, 1),
+        5 => set(e, next + 8, 0),
+        6 => {
+            for light in lights {
+                e.mem.set_u16(light + 0x110, 0xff);
+            }
+        }
+        _ => {}
+    }
+    if ec != 0 {
+        e.mem.set_u8(second + 0xec, 1);
+        e.mem.set_u8(third + 0x30, 0);
+    }
+    vec![property, iterator]
+}
+
+/// `GetFirstActiveLight` (`00b70590`, typed: on every caller's path): every list shape, the iterator left as the
+/// exe leaves it.
+#[test]
+fn first_active_light() {
+    Diff::new(entry!(
+        0x00b7_0590,
+        engine_typed::draw::lights::first_active_light(Ptr<_>, Ptr<_>)
+    ))
+    .draw_common_at(0x00b7_0590)
+    .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5, 6]), Input::Of(TWO_WAYS)])
+    .setup(active_light_words)
+    .run()
+    .assert_same();
+}
+
+/// `GetFirstActiveNonShadowLight` (`00b70600`, typed): every list shape, a light of byte +0xec 1 skipped.
+#[test]
+fn first_active_non_shadow_light() {
+    Diff::new(entry!(
+        0x00b7_0600,
+        engine_typed::draw::lights::first_active_non_shadow_light(Ptr<_>, Ptr<_>)
+    ))
+    .draw_common_at(0x00b7_0600)
+    .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5, 6]), Input::Of(TWO_WAYS)])
+    .setup(active_light_words)
+    .run()
+    .assert_same();
+}
+
+/// The two getters read the property's light list and its lights through the packet the cut fills
+/// (`cut::take_property_lights`).
+#[test]
+fn active_lights_read_the_list_through_the_packet() {
+    for (name, f) in [
+        (
+            "first_active_light",
+            entry!(
+                0x00b7_0590,
+                engine_typed::draw::lights::first_active_light(Ptr<_>, Ptr<_>)
+            )
+            .1,
+        ),
+        (
+            "first_active_non_shadow_light",
+            entry!(
+                0x00b7_0600,
+                engine_typed::draw::lights::first_active_non_shadow_light(Ptr<_>, Ptr<_>)
+            )
+            .1,
+        ),
+    ] {
+        packet_same(
+            name,
+            f,
+            &product(&[&[0, 1, 2, 3, 4, 5, 6], TWO_WAYS]),
+            |e, c| {
+                let words = active_light_words(e, c);
+                (words.clone(), vec![words[0]])
+            },
+            |e, w| cut::take_property_lights(e, w[0]),
+        );
+    }
 }
 
 /// The shader manager's mode (`00b4f450`, typed: on every caller's path): every mode of the tables and past them,
@@ -9873,6 +10006,67 @@ fn vertex_entries_read_the_times_through_the_packet() {
     }
 }
 
+/// The geometry's lights (`00b78a90`) for pass type 0x24b look for the property's first active light (typed:
+/// `draw::lights`) and read its point flag through the packet; with none, or not a point light, the mode-10 path.
+#[test]
+fn lights_read_the_first_active_light_through_the_packet() {
+    packet_same(
+        "lights",
+        geometry::lights_words as AbiFn,
+        &product(&[&[0, 1, 2], &[0, 1], &[0, 10]]),
+        |e, c| {
+            let mut s = Shape::plain();
+            s.lights = 2;
+            s.pass_type = 0x24b;
+            s.active = c.word(0);
+            s.points = c.word(1);
+            s.mode = c.word(2);
+            let g = geometry_shape(e, &s);
+            let mut words = vec![g.property, g.rendering];
+            words.extend(matrix_words(&g));
+            words.extend([g.transform(), g.pass_type, g.skin]);
+            (words, vec![g.rendering, g.property])
+        },
+        |e, w| {
+            cut::take_pass_lights(e, w[0]);
+            cut::take_property_lights(e, w[1]);
+        },
+    );
+}
+
+/// The ambient emittance (`00b7ba70`) takes the camera light's colour (the first scene node's light) and the
+/// property's first active non-shadow light (typed), its position and colour handed by pointer, all from the
+/// packet.
+#[test]
+fn ambient_emittance_reads_the_lights_through_the_packet() {
+    packet_same(
+        "ambient_emittance",
+        entry!(
+            0x00b7_ba70,
+            geometry::ambient_emittance(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, u32)
+        )
+        .1,
+        &product(&[&[0, 1, 2], &[0x244, 0x24b, 0x30]]),
+        |e, c| {
+            let mut s = Shape::plain();
+            s.lights = 2;
+            s.active = c.word(0);
+            s.kind = c.word(1) as u16;
+            s.flags_24 |= 0x8000;
+            let g = geometry_shape(e, &s);
+            let acc = e.mem.alloc(0x200);
+            (
+                vec![g.shader, g.property, g.rendering, g.geometry, g.fog],
+                vec![g.property, acc],
+            )
+        },
+        |e, w| {
+            cut::take_property_lights(e, w[0]);
+            cut::take_frame(e, 0, Ptr::new(w[1]));
+        },
+    );
+}
+
 /// The shadow lights' geometry world: two lights, the pass type, the light's byte +0xed and its made clip planes
 /// as the case says.
 fn shadow_check_world(e: &mut Engine, pass_type: u32, bits: u32) -> Geo {
@@ -10364,14 +10558,12 @@ fn lighting30_material_words(e: &mut Engine, c: &Case) -> Vec<u32> {
         }
         set(e, data + 0xc4, 0x3f00_0000);
         set(e, data + 0xe0, 0x4220_0000);
-        let light = e.mem.alloc(0x100);
+        let light = e.mem.alloc(0x120);
         set(e, light + 0xf8, data);
         light
     } else {
         0
     };
-    set(e, RETS + 0x3f4, light);
-    e.register(0x00b7_0600, |e, _| ret(e.mem.u32(RETS + 0x3f4)));
     // The lengths and the clamps answer in `ST0`: from their words, so a wrong word shows.
     for addr in [0x00b7_19e0u32, 0x0045_7990] {
         e.register(addr, |e, a| Ret {
@@ -10419,6 +10611,8 @@ fn lighting30_material_words(e: &mut Engine, c: &Case) -> Vec<u32> {
     });
     let this = obj(e, 0xa4, vt);
     let property = lighting30_property(e, 0, c.word(3), play_bits(c, 2));
+    // The property's light list: the light (when there is one) the first active non-shadow light's getter finds.
+    light_list(e, property, u32::from(light != 0), light, 0);
     let state = e.mem.alloc(0x18);
     if c.word(4) != 0 || c.word(0) != 8 {
         let alpha = obj(e, 0x20, vt);

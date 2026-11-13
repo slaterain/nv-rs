@@ -75,8 +75,13 @@ const SHADOW_LIGHT_FLAGS: (u32, u32) = (0xf4, 0xfc);
 /// A pass light's matrix (+0x10, the cube projection `00b7b730` multiplies by), its byte +0xed and its six clip
 /// planes (+0x144, which `00b7be00` transforms); its clip-plane cache (+0x1a8, made +0x208) is draw-written: piece 4.
 const SHADOW_LIGHT_MATRIX: (u32, u32) = (0x10, 0x50);
-const SHADOW_LIGHT_ED: (u32, u32) = (0xed, 0xee);
+const SHADOW_LIGHT_ED: (u32, u32) = (0xec, 0xee);
 const SHADOW_LIGHT_PLANES: (u32, u32) = (0x144, 0x1a4);
+/// A pass light's index (`u16` +0x110: 0xff for none) and its bytes +0xec and +0xed (the first active light's getters read
+/// +0x110 and +0xec), its light's flags byte (+0x30: bit 0 app-culled), a lighting property's light list (+0x60).
+const SHADOW_LIGHT_INDEX: (u32, u32) = (0x110, 0x112);
+const LIGHT_FLAGS: (u32, u32) = (0x30, 0x31);
+const PROPERTY_LIGHTS: (u32, u32) = (0x60, 0x64);
 const LIGHT_VALUES: (u32, u32) = (0xc4, 0xec);
 const LIGHT_DIRECTION: (u32, u32) = (0xf0, 0xfc);
 
@@ -124,6 +129,14 @@ pub fn take_frame(e: &Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) {
     }
     capture::take(e, NULL_BOUND, BOUND.0, BOUND.1);
     capture::take(e, FOG_INDEX, 0, 1);
+    // The first scene node's light (+0xe0), the camera light the set-ups read (the node itself, the scene's, is set at
+    // load: read in place).
+    if let Some(scene) = peek(e, SHADOW_SCENE_NODES).filter(|&n| n != 0) {
+        capture::take(e, scene, 0xe0, 0xe4);
+        if let Some(light) = peek(e, scene.wrapping_add(0xe0)) {
+            take_light(e, light, &mut AddrSet::default());
+        }
+    }
     let index = u32::from(e.global::<u8>(FOG_INDEX));
     let node = e.global::<u32>(SHADOW_SCENE_NODES.wrapping_add(index.wrapping_mul(4)));
     if node != 0 {
@@ -148,6 +161,13 @@ pub fn take_geometry_values(e: &mut Engine, geometry: u32) {
 /// What the cut takes for one pass's lights ([`take_lights`]): for the checks of the paths that set them.
 pub fn take_pass_lights(e: &Engine, pass: u32) {
     take_lights(e, pass, &mut AddrSet::default());
+}
+
+/// What the cut takes for one lighting property's light list ([`take_light_list`]) and its shader values: for the
+/// checks of the paths that look for its first active light.
+pub fn take_property_lights(e: &Engine, property: u32) {
+    capture::take(e, property, PROPERTY.0, PROPERTY.1);
+    take_light_list(e, property, &mut AddrSet::default());
 }
 
 /// Every pass in batch renderer `renderer`'s lists and in its holders' and sorted groups' lists, into `passes`
@@ -225,6 +245,7 @@ fn take_geometry(e: &mut Engine, geometry: u32, nodes: &mut AddrSet<u32>) {
     take_skin(e, packet::skin_instance(e, geometry), nodes);
     let property = packet::shader_property(e, geometry);
     capture::take(e, property, PROPERTY.0, PROPERTY.1);
+    take_light_list(e, property, nodes);
     let data = packet::model_data(e, geometry);
     if data != 0
         && crate::slot_target(e, geometry, SLOT_RENDER_IMMEDIATE) == PARTICLES_RENDER_IMMEDIATE
@@ -376,28 +397,58 @@ fn take_lights(e: &Engine, pass: u32, nodes: &mut AddrSet<u32>) {
         let Some(shadow) = peek(e, lights.wrapping_add(i * 4)) else {
             return;
         };
-        if shadow == 0 || !nodes.insert(shadow) {
-            continue;
+        take_light(e, shadow, nodes);
+    }
+}
+
+/// A pass light's (`ShadowSceneLight`) values and its light's, once a light (a null light takes nothing).
+fn take_light(e: &Engine, shadow: u32, nodes: &mut AddrSet<u32>) {
+    if shadow == 0 || !nodes.insert(shadow) {
+        return;
+    }
+    capture::take(e, shadow, SHADOW_LIGHT.0, SHADOW_LIGHT.1);
+    capture::take(e, shadow, SHADOW_LIGHT_FLAGS.0, SHADOW_LIGHT_FLAGS.1);
+    capture::take(e, shadow, SHADOW_LIGHT_MATRIX.0, SHADOW_LIGHT_MATRIX.1);
+    capture::take(e, shadow, SHADOW_LIGHT_ED.0, SHADOW_LIGHT_ED.1);
+    capture::take(e, shadow, SHADOW_LIGHT_PLANES.0, SHADOW_LIGHT_PLANES.1);
+    capture::take(e, shadow, SHADOW_LIGHT_INDEX.0, SHADOW_LIGHT_INDEX.1);
+    let (Some(light), Some(point)) = (
+        peek(e, shadow.wrapping_add(0xf8)),
+        peek_u8(e, shadow.wrapping_add(0xf4)),
+    ) else {
+        return;
+    };
+    if light != 0 && nodes.insert(light) {
+        capture::take(e, light, WORLD.0, WORLD.1);
+        capture::take(e, light, LIGHT_VALUES.0, LIGHT_VALUES.1);
+        capture::take(e, light, LIGHT_FLAGS.0, LIGHT_FLAGS.1);
+        // A direction only for a light that is not a point light (the flag +0xf4), as the set-up reads it.
+        if point == 0 {
+            capture::take(e, light, LIGHT_DIRECTION.0, LIGHT_DIRECTION.1);
         }
-        capture::take(e, shadow, SHADOW_LIGHT.0, SHADOW_LIGHT.1);
-        capture::take(e, shadow, SHADOW_LIGHT_FLAGS.0, SHADOW_LIGHT_FLAGS.1);
-        capture::take(e, shadow, SHADOW_LIGHT_MATRIX.0, SHADOW_LIGHT_MATRIX.1);
-        capture::take(e, shadow, SHADOW_LIGHT_ED.0, SHADOW_LIGHT_ED.1);
-        capture::take(e, shadow, SHADOW_LIGHT_PLANES.0, SHADOW_LIGHT_PLANES.1);
-        let (Some(light), Some(point)) = (
-            peek(e, shadow.wrapping_add(0xf8)),
-            peek_u8(e, shadow.wrapping_add(0xf4)),
-        ) else {
-            continue;
-        };
-        if light != 0 && nodes.insert(light) {
-            capture::take(e, light, WORLD.0, WORLD.1);
-            capture::take(e, light, LIGHT_VALUES.0, LIGHT_VALUES.1);
-            // A direction only for a light that is not a point light (the flag +0xf4), as the set-up reads it.
-            if point == 0 {
-                capture::take(e, light, LIGHT_DIRECTION.0, LIGHT_DIRECTION.1);
-            }
+    }
+}
+
+/// The most nodes of a lighting property's light list the cut walks (a list is a handful of lights).
+const LIGHT_LIST_LIMIT: u32 = 64;
+
+/// A lighting property's light list (+0x60): its head, each node's next and light words (+0, +8) and each light's
+/// values, as the first active light's getters (`draw::lights`) and the set-ups after them read them.
+fn take_light_list(e: &Engine, property: u32, nodes: &mut AddrSet<u32>) {
+    if property == 0 {
+        return;
+    }
+    capture::take(e, property, PROPERTY_LIGHTS.0, PROPERTY_LIGHTS.1);
+    let mut node = peek(e, property.wrapping_add(PROPERTY_LIGHTS.0)).unwrap_or(0);
+    for _ in 0..LIGHT_LIST_LIMIT {
+        if node == 0 {
+            return;
         }
+        capture::take(e, node, 0, 0xc);
+        if let Some(light) = peek(e, node.wrapping_add(8)) {
+            take_light(e, light, nodes);
+        }
+        node = peek(e, node).unwrap_or(0);
     }
 }
 

@@ -818,6 +818,39 @@ pub(crate) fn start_time(e: &Engine) -> u32 {
     capture::word(e, START_TIME, 0)
 }
 
+// ---- The lighting property's light list (`draw::lights`) and the scene's camera light: what the cut copies for each
+// drawn geometry's property (+0x60, its nodes, their lights) and for the first scene node's light (+0xe0). ----
+
+/// A lighting property's light list (+0x60, its first node), the packet's.
+#[inline(always)]
+pub(crate) fn property_light_list(e: &Engine, property: u32) -> u32 {
+    capture::word(e, property, 0x60)
+}
+
+/// A light list node's word at `offset` (+0 the next node, +8 its light), the packet's.
+#[inline(always)]
+pub(crate) fn light_node_word(e: &Engine, node: u32, offset: u32) -> u32 {
+    capture::word(e, node, offset)
+}
+
+/// A pass light's 16-bit half at `offset` (+0x110, its index: 0xff when it has none), the packet's.
+#[inline(always)]
+pub(crate) fn pass_light_half(e: &Engine, light: u32, offset: u32) -> u16 {
+    capture::half(e, light, offset)
+}
+
+/// A pass light's light's byte at `offset` (+0x30, its flags: bit 0 app-culled), the packet's.
+#[inline(always)]
+pub(crate) fn light_value_byte(e: &Engine, data: u32, offset: u32) -> u8 {
+    capture::byte(e, data, offset)
+}
+
+/// A scene node's light (+0xe0), the packet's.
+#[inline(always)]
+pub(crate) fn scene_node_light(e: &Engine, node: u32) -> u32 {
+    capture::word(e, node, 0xe0)
+}
+
 // ---- Group C: the reads of the shader set-ups the world draw reached as translations. ----
 //
 // Each reads guest memory today; the drawing thread's piece 2 backs them with the frame's captured

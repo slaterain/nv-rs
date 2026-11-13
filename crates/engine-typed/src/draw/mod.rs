@@ -79,6 +79,7 @@ pub mod drivers;
 pub mod group_c;
 pub mod layout;
 pub mod lighting30;
+pub mod lights;
 pub mod lists;
 pub mod no_lighting;
 pub mod own;
@@ -144,6 +145,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         // The decal pass and the fog-coloured ambient.
         entry!(0x00b6_4e30, drivers::decal_pass(Ptr<_>)),
         entry!(0x00b4_f450, own::select_shader_mode(u32)),
+        entry!(0x00b7_0590, lights::first_active_light(Ptr<_>, Ptr<_>)),
+        entry!(0x00b7_0600, lights::first_active_non_shadow_light(Ptr<_>, Ptr<_>)),
         entry!(0x00bb_b840, own::fog_ambient()),
         // The camera handed to the scene renderer, with the camera getters it reads (game-wide).
         entry!(0x004e_9bb0, packet::hand_camera(u32, u32)),
