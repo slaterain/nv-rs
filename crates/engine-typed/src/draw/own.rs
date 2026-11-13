@@ -800,6 +800,55 @@ pub(crate) fn copy_constants(e: &mut Engine, to: u32, from: u32, size: u32) {
     });
 }
 
+/// The 16-byte colour table (`011fa0c0`, in the shader statics: the light positions `011fa170` and directions
+/// `011fa1f0` are its rows 0xb and 0x13 on).
+const COLOUR_TABLE: u32 = 0x011f_a0c0;
+
+/// Four words into row `index` of the colour table (`004e20c0`'s store, made here so that it goes through the
+/// packet: the leaf family's `store_colour` writes guest memory). The per-light set-up calls it in that store's
+/// place, by the same address (condition 2).
+pub(crate) fn store_light_row(
+    e: &mut Engine,
+    index: u32,
+    red: u32,
+    green: u32,
+    blue: u32,
+    alpha: f32,
+) {
+    let row = index.wrapping_shl(4).wrapping_add(COLOUR_TABLE); // own: an address, written through set_own_at
+    for (k, word) in (0u32..).zip([red, green, blue, alpha.to_bits()]) {
+        capture::set_own_at(e, row.wrapping_add(4 * k), word);
+    }
+}
+
+/// The shader manager's mode (`011f91b8`) and the two function words it selects (`011f9f3c` from the table at
+/// `011f9f80`, `011f9f38` from the table at `011f9f40`; each table's first word when the mode's is null). The
+/// draw sets them for its render mode and main's tail for its own: own state.
+const SHADER_MODE: u32 = 0x011f_91b8;
+const MODE_FUNCTION_A: u32 = 0x011f_9f38;
+const MODE_FUNCTION_B: u32 = 0x011f_9f3c;
+const MODE_TABLE_A: u32 = 0x011f_9f40;
+const MODE_TABLE_B: u32 = 0x011f_9f80;
+
+// Typed from 00b4f450
+/// The shader manager's mode set to `index` (`cdecl`, one word), with its two function words: the entry `index`
+/// of each table, or the table's first entry when that is null (the tables are made at load) (condition 2).
+pub fn select_shader_mode(e: &mut Engine, index: u32) {
+    let mut second = e.global::<u32>(MODE_TABLE_B.wrapping_add(index.wrapping_mul(4)));
+    capture::set_own_at(e, MODE_FUNCTION_B, second);
+    capture::set_own_at(e, SHADER_MODE, index);
+    if second == 0 {
+        second = e.global::<u32>(MODE_TABLE_B);
+        capture::set_own_at(e, MODE_FUNCTION_B, second);
+    }
+    let mut first = e.global::<u32>(MODE_TABLE_A.wrapping_add(index.wrapping_mul(4)));
+    capture::set_own_at(e, MODE_FUNCTION_A, first);
+    if first == 0 {
+        first = e.global::<u32>(MODE_TABLE_A);
+        capture::set_own_at(e, MODE_FUNCTION_A, first);
+    }
+}
+
 // ---- Group C: the render states' lock counters (condition 2). ----
 //
 // The passes' state restore gives back the locks a set-up took on a render state, then sets the state

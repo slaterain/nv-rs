@@ -228,11 +228,11 @@ pub(crate) fn property_flags(e: &Engine, property: u32) -> u32 {
     e.global::<u32>(property.wrapping_add(0x20))
 }
 
-/// The shader mode word (`011f91b8`; 9 skips two property kinds in the alpha pass).
+/// The shader mode word (`011f91b8`; 9 skips two property kinds in the alpha pass): own state (`own::select_shader_mode`).
 const SHADER_MODE: u32 = 0x011f_91b8;
 #[inline(always)]
 pub(crate) fn shader_mode(e: &Engine) -> u32 {
-    e.global::<u32>(SHADER_MODE)
+    capture::own_at::<u32>(e, SHADER_MODE)
 }
 
 /// Whether the render pass tree is asked for (`011f9fc1`).
@@ -754,6 +754,13 @@ pub(crate) fn property_flags_24(e: &Engine, property: u32) -> u32 {
 #[inline(always)]
 pub(crate) fn property_distance(e: &Engine, property: u32) -> u32 {
     capture::word(e, property, 0x34)
+}
+
+/// A shader property's word at `offset` in the range the cut copies (+0x24 to +0x38: its second flags word, alpha,
+/// fade and distance), the packet's.
+#[inline(always)]
+pub(crate) fn property_word(e: &Engine, property: u32, offset: u32) -> u32 {
+    capture::word(e, property, offset)
 }
 
 // ---- The per-light set-up (`00b70820`) and the passes' lights: what the cut copies for each pass light. ----

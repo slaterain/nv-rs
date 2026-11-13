@@ -64,6 +64,11 @@ const PARTICLES_RENDER_IMMEDIATE: u32 = 0x00a9_b1f0;
 /// set-up `00b70820` reads all of these) and its direction (+0xf0).
 const SHADOW_LIGHT: (u32, u32) = (0xd0, 0xd8);
 const SHADOW_LIGHT_FLAGS: (u32, u32) = (0xf4, 0xfc);
+/// A pass light's matrix (+0x10, the cube projection `00b7b730` multiplies by), its byte +0xed and its six clip
+/// planes (+0x144, which `00b7be00` transforms); its clip-plane cache (+0x1a8, made +0x208) is draw-written: piece 4.
+const SHADOW_LIGHT_MATRIX: (u32, u32) = (0x10, 0x50);
+const SHADOW_LIGHT_ED: (u32, u32) = (0xed, 0xee);
+const SHADOW_LIGHT_PLANES: (u32, u32) = (0x144, 0x1a4);
 const LIGHT_VALUES: (u32, u32) = (0xc4, 0xec);
 const LIGHT_DIRECTION: (u32, u32) = (0xf0, 0xfc);
 
@@ -268,7 +273,8 @@ fn take_particles(e: &mut Engine, data: u32) {
     }
 }
 
-/// A pass's lights: their count (+9) and array (+0xc), and each light's values, once a light.
+/// A pass's lights: their count (+9) and array (+0xc), and each light's values, once a light. At least two entries:
+/// the light direction (`00b7c7b0`) reads the first light when the count is 0, and lighting 3.0 the second when it is 1.
 fn take_lights(e: &Engine, pass: u32, nodes: &mut AddrSet<u32>) {
     capture::take(e, pass, 9, 0xa);
     capture::take(e, pass, 0xc, 0x10);
@@ -282,8 +288,9 @@ fn take_lights(e: &Engine, pass: u32, nodes: &mut AddrSet<u32>) {
     if lights == 0 {
         return;
     }
-    capture::take(e, lights, 0, u32::from(count).wrapping_mul(4));
-    for i in 0..u32::from(count) {
+    let listed = u32::from(count).max(2);
+    capture::take(e, lights, 0, listed.wrapping_mul(4));
+    for i in 0..listed {
         let Some(shadow) = peek(e, lights.wrapping_add(i * 4)) else {
             return;
         };
@@ -292,6 +299,9 @@ fn take_lights(e: &Engine, pass: u32, nodes: &mut AddrSet<u32>) {
         }
         capture::take(e, shadow, SHADOW_LIGHT.0, SHADOW_LIGHT.1);
         capture::take(e, shadow, SHADOW_LIGHT_FLAGS.0, SHADOW_LIGHT_FLAGS.1);
+        capture::take(e, shadow, SHADOW_LIGHT_MATRIX.0, SHADOW_LIGHT_MATRIX.1);
+        capture::take(e, shadow, SHADOW_LIGHT_ED.0, SHADOW_LIGHT_ED.1);
+        capture::take(e, shadow, SHADOW_LIGHT_PLANES.0, SHADOW_LIGHT_PLANES.1);
         let (Some(light), Some(point)) = (
             peek(e, shadow.wrapping_add(0xf8)),
             peek_u8(e, shadow.wrapping_add(0xf4)),
@@ -427,6 +437,44 @@ pub fn totals() -> capture::Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A pass whose light count is 0 still has its first two lights copied (the light direction reads the first,
+    /// lighting 3.0 the second): their +0xd4, matrix, planes and byte +0xed, and the array's two words.
+    #[test]
+    fn a_pass_without_lights_still_gives_its_first_two() {
+        let mut e = Engine::new();
+        let pass = e.mem.alloc(0x10);
+        let lights = e.mem.alloc(8);
+        let shadows = [e.mem.alloc(0x200), e.mem.alloc(0x200)];
+        e.mem.set_u32(pass + 0xc, lights);
+        for (k, shadow) in (0u32..).zip(shadows) {
+            e.mem.set_u32(lights + 4 * k, shadow);
+            e.mem.set_u32(shadow + 0xd4, 0x40 + k);
+            e.mem.set_u32(shadow + 0x10, 0x50 + k);
+            e.mem.set_u32(shadow + 0x144, 0x60 + k);
+            e.mem.set_u8(shadow + 0xed, 1);
+        }
+        assert!(capture::begin(&e));
+        take_pass_lights(&e, pass);
+        let read: Vec<u32> = shadows
+            .iter()
+            .flat_map(|&s| {
+                [
+                    capture::word(&e, s, 0xd4),
+                    capture::word(&e, s, 0x10),
+                    capture::word(&e, s, 0x144),
+                    u32::from(capture::byte(&e, s, 0xed)),
+                ]
+            })
+            .chain([capture::word(&e, lights, 0), capture::word(&e, lights, 4)])
+            .collect();
+        let report = capture::end(&mut e);
+        assert_eq!(
+            read,
+            [0x40, 0x50, 0x60, 1, 0x41, 0x51, 0x61, 1, shadows[0], shadows[1]]
+        );
+        assert_eq!(report.misses, 0);
+    }
 
     /// The light set-up (`00b70820`) reads a pass light's +0xd4 and its light's +0xe4 and +0xe8: the cut copies
     /// them, so a read of them from the packet misses nothing.

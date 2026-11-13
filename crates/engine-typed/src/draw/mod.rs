@@ -143,6 +143,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b9_9e20, lists::render_batches(Ptr<_>, u32, u32, u32)),
         // The decal pass and the fog-coloured ambient.
         entry!(0x00b6_4e30, drivers::decal_pass(Ptr<_>)),
+        entry!(0x00b4_f450, own::select_shader_mode(u32)),
         entry!(0x00bb_b840, own::fog_ambient()),
         // The camera handed to the scene renderer, with the camera getters it reads (game-wide).
         entry!(0x004e_9bb0, packet::hand_camera(u32, u32)),

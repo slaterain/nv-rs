@@ -4084,6 +4084,9 @@ impl Geometry for Diff {
             // The pathing family's square root takes `FSQRT` where the translation calls the C
             // runtime's `sqrt`.
             .ignore_calls(&[0x00ec_6054])
+            // The held accumulator's getter (`00b4f5d0`) is a read of `011f95f0` (own state), done in place
+            // through the packet (`packet::held_accumulator`).
+            .ignore_calls(&[0x00b4_f5d0])
             .family(&render::RENDER)
             .goes_by_address(SET_UP_DISPATCH)
             .translation_calls_plainly(SET_UP_PLAIN)
@@ -5111,7 +5114,6 @@ use engine_typed::draw::{self, alpha as dalpha, drivers, own, packet};
 /// Callees of the draw outside the families, stood in.
 fn draw_stand_ins(e: &mut Engine) {
     for addr in [
-        0x00b4_f450u32,
         0x0066_b0d0,
         0x00b6_b790,
         0x00b9_7550,
@@ -9744,6 +9746,59 @@ fn vertex_entries_read_the_times_through_the_packet() {
     }
 }
 
+/// The shadow lights' geometry world: two lights, the pass type, the light's byte +0xed and its made clip planes
+/// as the case says.
+fn shadow_check_world(e: &mut Engine, pass_type: u32, bits: u32) -> Geo {
+    let mut s = Shape::plain();
+    s.lights = 2;
+    s.pass_type = pass_type;
+    s.bits |= bits;
+    geometry_shape(e, &s)
+}
+
+/// The cube projection (`00b7b730`) reads the pass's light array and first light, the light's byte +0xed and its
+/// matrix (+0x10) through the packet the cut fills (`cut::take_pass_lights`).
+#[test]
+fn obj_to_cube_reads_the_pass_lights_through_the_packet() {
+    packet_same(
+        "obj_to_cube",
+        entry!(
+            0x00b7_b730,
+            geometry::obj_to_cube(Ptr<_>, Ptr<_>, u32, u32, u32)
+        )
+        .1,
+        &product(&[&[0, 0x30, 0x244, 0xfe], &[0, LIGHT_ED], &[0, 1]]),
+        |e, c| {
+            let g = shadow_check_world(e, c.word(0), c.word(1));
+            (
+                vec![g.shader, g.rendering, g.pass_type, c.word(2), g.transform()],
+                vec![g.rendering],
+            )
+        },
+        |e, w| cut::take_pass_lights(e, w[0]),
+    );
+}
+
+/// The simple shadow's clip planes (`00b7be00`) read the pass's first light and its six planes (+0x144) through
+/// the packet; the light's clip-plane cache (+0x1a8, made +0x208) is left in place (piece 4).
+#[test]
+fn simple_shadow_clip_planes_read_the_pass_lights_through_the_packet() {
+    packet_same(
+        "simple_shadow_clip_planes",
+        entry!(
+            0x00b7_be00,
+            geometry::simple_shadow_clip_planes(Ptr<_>, u32)
+        )
+        .1,
+        &product(&[&[0x231, 0x234, 0x230], &[0, CLIP_CACHED]]),
+        |e, c| {
+            let g = shadow_check_world(e, c.word(0), c.word(1));
+            (vec![g.shader, g.pass_type], vec![g.rendering])
+        },
+        |e, w| cut::take_pass_lights(e, w[0]),
+    );
+}
+
 // ---- Group C: the lighting 3.0 shader (the draw family's `lighting30`) ----
 
 /// The lighting 3.0 shader's constant entries (`01201080` to `012010e8`, the pointers made at load):
@@ -10837,7 +10892,7 @@ use engine_typed::draw::statics;
 const GROUP_C_PAGES: (u32, u32) = (0x0120_0000, 0x3000);
 
 /// The names of `statics::GLOBAL_BLOCKS`, in its order.
-const GLOBAL_BLOCK_NAMES: [&str; 8] = [
+const GLOBAL_BLOCK_NAMES: [&str; 10] = [
     "the rendering pass and type",
     "the shader and held accumulators",
     "the shader statics",
@@ -10846,6 +10901,8 @@ const GLOBAL_BLOCK_NAMES: [&str; 8] = [
     "the group zero flag",
     "the last light's point flag",
     "the terrain fade flag",
+    "the shader mode",
+    "the shader mode's function words",
 ];
 
 /// `f` run, for each case and both scribbles, on two engines `setup` makes alike (it answers the call's words and
@@ -11086,6 +11143,64 @@ fn decal_pass_keeps_the_draws_own_state() {
             set(e, 0x011f_f9dc, c.word(4) + 1);
             set(e, 0x011f_f9e4, c.word(4) + 1);
             (vec![d.w.acc], d.w.acc)
+        },
+        |_, _, _| {},
+    );
+}
+
+/// The per-light set-up (`00b70820`) writes the light colour rows, a point light's position (`011fa170` on) and
+/// a directional light's direction (`011fa1f0` on, the colour table's rows through `own::store_light_row`) into
+/// the packet, after the cut took the pass lights.
+#[test]
+fn light_setup_writes_the_draws_own_constants() {
+    own_state_same(
+        "light_setup",
+        entry!(0x00b7_0820, lighting::light_setup(u32, Ptr<_>, f32)).1,
+        &product(&[&[0, 3], &[0, 1], &[0, 1, 9], &[0x154, 0x30]]),
+        |e, c| {
+            let g = light_check_world(e, c.word(1), c.word(3), c.word(2));
+            let acc = e.mem.alloc(0x200);
+            (vec![c.word(0), g.light, HALF], acc)
+        },
+        |e, _, _| cut::take_pass_lights(e, e.mem.u32(0x011f_91e0)),
+    );
+}
+
+/// The geometry's lights (`00b78a90`) set each pass light up and read the rows back from the packet; the shader
+/// mode (`011f91b8`, own state) 0xf takes the held accumulator's ambient instead.
+#[test]
+fn lights_write_the_draws_own_constants() {
+    own_state_same(
+        "lights",
+        geometry::lights_words as AbiFn,
+        &product(&[&[0, 1, 3], &[0, 0x10, 0x30], &[0, 1], &[0, 0xf]]),
+        |e, c| {
+            let g = light_check_world(e, c.word(0), c.word(1), c.word(2));
+            set(e, 0x011f_91b8, c.word(3));
+            let mut words = vec![g.property, g.rendering];
+            words.extend(matrix_words(&g));
+            words.extend([g.transform(), g.pass_type, g.skin]);
+            (words, e.mem.alloc(0x200))
+        },
+        |e, _, _| cut::take_pass_lights(e, e.mem.u32(0x011f_91e0)),
+    );
+}
+
+/// The shader manager's mode (`00b4f450`, typed: `own::select_shader_mode`) sets the mode and its two function
+/// words in the packet: a mode with entries in both tables, one without (the tables' first entries), past them.
+#[test]
+fn select_shader_mode_keeps_the_draws_own_state() {
+    own_state_same(
+        "select_shader_mode",
+        entry!(0x00b4_f450, own::select_shader_mode(u32)).1,
+        &product(&[&[0, 3, 9, 0xf]]),
+        |e, c| {
+            let _ = world(e);
+            for k in 0..16u32 {
+                set(e, 0x011f_9f40 + 4 * k, if k == 9 { 0 } else { 0x4400 + k });
+                set(e, 0x011f_9f80 + 4 * k, if k == 9 { 0 } else { 0x8800 + k });
+            }
+            (vec![c.word(0)], e.mem.alloc(0x200))
         },
         |_, _, _| {},
     );

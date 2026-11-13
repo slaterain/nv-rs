@@ -24,9 +24,10 @@
 //! set-ups in [`geometry`] and [`lighting`], the alpha sort's [`batch::compare_by_depth`], the light
 //! direction, colour and alpha in [`accumulator`]) in plain `f32`, the exe's own rounding at the main
 //! thread's 24-bit precision while the values stay inside the float range (the x87 keeps a wider
-//! exponent), with a step that has a `double` operand done by [`mul_d`] and its kin. No x87 helper is
-//! left in the family; a float the exe copies through the x87 stack is copied as it is (a signalling
-//! NaN keeps its payload).
+//! exponent), with a step that has a `double` operand done by [`mul_d`] and its kin. A float the exe copies
+//! through the x87 stack is copied as it is (a signalling NaN keeps its payload), but for the depth bias
+//! (`00b98320`), which the exe reloads through the x87 so that a signalling NaN comes out quiet
+//! (`x87_quiet_bits`, the one x87 helper left in the family).
 
 use engine_core::ptr::{Field, Ptr};
 use engine_core::typed::{Family, FamilyId, Threads};

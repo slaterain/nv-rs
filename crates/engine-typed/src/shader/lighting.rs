@@ -154,7 +154,7 @@ pub fn light_setup(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
             typed_call!(
                 leaf::FAMILY,
                 0x004e_20c0,
-                leaf::store_colour(
+                crate::draw::own::store_light_row(
                     e,
                     index + 0xb,
                     position[0],
@@ -191,7 +191,14 @@ pub fn light_setup(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
             typed_call!(
                 leaf::FAMILY,
                 0x004e_20c0,
-                leaf::store_colour(e, index + 0x13, direction[0], direction[1], direction[2], w)
+                crate::draw::own::store_light_row(
+                    e,
+                    index + 0x13,
+                    direction[0],
+                    direction[1],
+                    direction[2],
+                    w
+                )
             );
         }
         let skipped = e.global::<u8>(SKIP_AMBIENT) != 0 && ambient_allowed == 0; // own: main's frame value, value packet B
