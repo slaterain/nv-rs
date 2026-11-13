@@ -157,8 +157,16 @@ fn the_hook_changes_the_games_copy() {
     state(&mut e).mods.trigger_mods = 0x33;
     set_forward(0, pad_bytes(0, 0x40, 0x40, 0, 0, 0, 0));
     read_game(&mut e);
-    assert_eq!(e.mem.u8(GAME_PAD_STATE + 6), 0xff, "left disabled and tapped");
-    assert_eq!(e.mem.u8(GAME_PAD_STATE + 7), 0xff, "right disabled and tapped");
+    assert_eq!(
+        e.mem.u8(GAME_PAD_STATE + 6),
+        0xff,
+        "left disabled and tapped"
+    );
+    assert_eq!(
+        e.mem.u8(GAME_PAD_STATE + 7),
+        0xff,
+        "right disabled and tapped"
+    );
     assert_eq!(state(&mut e).mods.trigger_mods, 0x03);
     // Not ready: the byte set, or the forwarding failing: no change, the state not kept.
     e.mem.set_u8(CONTROLLER_OFF, 1);
