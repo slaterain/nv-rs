@@ -29,6 +29,7 @@ pub mod multibound;
 pub(crate) mod native;
 pub mod particles;
 pub mod pathing;
+pub mod process;
 pub mod render;
 pub mod scene;
 pub mod shader;
@@ -109,6 +110,7 @@ pub mod units {
         engine_core::typed::provide(&crate::animation::ANIMATION);
         engine_core::typed::provide(&crate::draw_f::DRAW_F);
         engine_core::typed::provide(&crate::anim_keys::ANIM_KEYS);
+        engine_core::typed::provide(&crate::process::PROCESS);
         crate::render::stream::note_head_check();
     }
 }
@@ -122,7 +124,7 @@ mod tests {
     use engine_core::typed::{parse_switch, Family, Mode};
 
     /// This crate's families, in the order `units::funcs` provides them.
-    fn families() -> [&'static Family; 16] {
+    fn families() -> [&'static Family; 17] {
         [
             &crate::lockfree::LOCKFREE,
             &crate::culling::CULLING,
@@ -140,6 +142,7 @@ mod tests {
             &crate::animation::ANIMATION,
             &crate::draw_f::DRAW_F,
             &crate::anim_keys::ANIM_KEYS,
+            &crate::process::PROCESS,
         ]
     }
 
@@ -147,7 +150,7 @@ mod tests {
     /// family (on only when `NV_TYPED` names it until its gate), the first six since their speed gate
     /// together (2026-11-08), render since its own (2026-11-09), draw, scene, particles, collision and
     /// multibound since their recorded-run gates (2026-11-10), animation, draw_f and anim_keys on their
-    /// tests and reviews (2026-11-11: no comparison runs for native code);
+    /// tests and reviews (2026-11-11: no comparison runs for native code), process on its own (2026-11-13);
     /// `NV_TYPED=off` or `<family>:off` turns one off.
     #[test]
     fn families_past_their_gate_are_on_by_default() {
@@ -174,7 +177,8 @@ mod tests {
                 "multibound",
                 "animation",
                 "draw_f",
-                "anim_keys"
+                "anim_keys",
+                "process"
             ]
         );
         let defaults = parse_switch(None, &families).unwrap();
@@ -185,7 +189,7 @@ mod tests {
         assert!(off.iter().all(|m| *m == Mode::Off));
         let one_off = parse_switch(Some("shader:off"), &families).unwrap();
         assert_eq!(one_off[3], Mode::Off);
-        assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 14);
+        assert!(one_off.iter().filter(|m| **m == Mode::On).count() == 15);
     }
 
     /// No two of this crate's families (with the core's) hold the same address, past their gate or not:
