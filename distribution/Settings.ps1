@@ -181,7 +181,7 @@ if ($seeded) {
     $cur['Preset'] = Get-IniValue $ini 'nv-rs General' 'sPreset'
     $cur['FrameLimit'] = Get-IniValue $ini 'nv-rs Display' 'iFrameLimit'
     $cur['MenuFrameLimit'] = Get-IniValue $ini 'nv-rs Display' 'iMenuFrameLimit'
-    $cur['NV_SHOW_FPS'] = if ((Get-IniValue $ini 'nv-rs Display' 'bShowFrameRate') -eq '1') { '1' } else { '' }
+    $cur['NV_SHOW_FPS'] = Get-IniValue $ini 'nv-rs Display' 'bShowFrameRate'
     $cur['NV_THREADS'] = if ((Get-IniValue $ini 'nv-rs Threads' 'bSteppedThreads') -eq '1') { 'stepped' } else { '' }
     $cur['NV_RENDER_THREAD'] = if ((Get-IniValue $ini 'nv-rs Threads' 'bRenderThread') -eq '0') { '0' } else { '' }
     foreach ($name in @($cur.Keys)) { if ($null -eq $cur[$name]) { $cur.Remove($name) } }
@@ -273,10 +273,12 @@ if ($menuLimit -eq '') { $menuLimit = '120' }
 $ml = New-Combo @('No limit', '30', '60', '90', '120', '144', '165', '240') $(if ($menuLimit -eq '0') { 'No limit' } else { $menuLimit })
 Add-Row 'Frame rate limit in menus' $ml
 # The frame-rate counter in the top-right corner from the start, or hidden (the default); F11 in the
-# game shows or hides it either way (Vulkan only). Hidden is the host table's default for bShowFrameRate.
+# game shows or hides it either way (Vulkan only). This '0' is the host table's default for bShowFrameRate
+# (crates/host/data/game_ini.tsv): scripts/launcher's test settings_cmd_shows_the_tables_frame_rate_default
+# compares the two.
 $fpsHidden = 'Hidden (F11 shows it)'
 $fpsShown = 'Shown (F11 hides it)'
-$fps = New-Combo @($fpsHidden, $fpsShown) $(if ((Get-Setting 'NV_SHOW_FPS' '').Trim() -eq '1') { $fpsShown } else { $fpsHidden })
+$fps = New-Combo @($fpsHidden, $fpsShown) $(if ((Get-Setting 'NV_SHOW_FPS' '0').Trim() -eq '1') { $fpsShown } else { $fpsHidden })
 Add-Row 'Frame rate counter' $fps
 # The game's threads side by side on their own cores (the default) or one at a time, slower: the
 # fallback if a game misbehaves with them side by side.
@@ -322,7 +324,7 @@ function Get-Choices {
         Preset           = $(if ($pr.SelectedIndex -eq 1) { 'vanilla' } else { 'fixes' })
         FrameLimit       = $(if ($fl.SelectedIndex -eq 0) { '0' } else { "$($fl.SelectedItem)" })
         MenuFrameLimit   = $(if ($ml.SelectedIndex -eq 0) { '0' } else { "$($ml.SelectedItem)" })
-        NV_SHOW_FPS      = $(if ($fps.SelectedIndex -eq 1) { '1' } else { '' })
+        NV_SHOW_FPS      = $(if ($fps.SelectedIndex -eq 1) { '1' } else { '0' })
         NV_THREADS       = $(if ($th.SelectedIndex -eq 1) { 'stepped' } else { '' })
         NV_RENDER_THREAD = $(if ($rt.SelectedIndex -eq 1) { '0' } else { '' })
     }

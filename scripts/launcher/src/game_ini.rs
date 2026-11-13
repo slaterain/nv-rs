@@ -989,6 +989,24 @@ mod tests {
         assert_eq!(shown, [table], "Settings.ps1's default for the renderer");
     }
 
+    /// Settings.ps1 shows a file whose `bShowFrameRate` says nothing as the game's default: its one
+    /// literal for that (`Get-Setting 'NV_SHOW_FPS' '0'`) must be the host table's default.
+    #[test]
+    fn settings_cmd_shows_the_tables_frame_rate_default() {
+        let script = include_str!("../../../distribution/Settings.ps1");
+        let shown: Vec<&str> = script
+            .split("Get-Setting 'NV_SHOW_FPS' '")
+            .skip(1)
+            .map(|rest| rest.split('\'').next().unwrap_or(""))
+            .collect();
+        let table = rows().find(|row| row.1 == "bShowFrameRate").unwrap().3;
+        assert_eq!(
+            shown,
+            [table],
+            "Settings.ps1's default for the frame rate counter"
+        );
+    }
+
     /// The borderless window as the game decides it in a play run: the file's line, else the
     /// default, which is the host's table's and what the generated sections say.
     #[test]

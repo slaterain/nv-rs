@@ -19,7 +19,7 @@
 //! each present takes one timestamp under an uncontended lock and draws one instanced quad list
 //! from buffers made once; the text and its quads are made again about four times a second.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 /// Whether the counter shows ([`show`], [`window_key`]).
@@ -36,6 +36,42 @@ pub fn shown() -> bool {
     SHOWN.load(Ordering::Relaxed)
 }
 
+/// Whether a wgpu device draws the game's window, so the counter can show: set by the device that
+/// owns the window ([`window_device`]). Without one (the real Direct3D 9 fallback, offscreen
+/// runs) F11 is the game's like any key ([`window_key`]).
+static WINDOW_DEVICES: AtomicUsize = AtomicUsize::new(0);
+
+/// A wgpu device on the game's window was made (`true`) or dropped (`false`): counted, as a
+/// device made again (a new device before the old one is dropped) keeps the counter.
+pub(crate) fn window_device(made: bool) {
+    if made {
+        WINDOW_DEVICES.fetch_add(1, Ordering::Relaxed);
+    } else if WINDOW_DEVICES.load(Ordering::Relaxed) > 0 {
+        // Devices are made and dropped on the render thread, one at a time.
+        WINDOW_DEVICES.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// As if a wgpu device drew the game's window (`true`) or none did (tests).
+#[doc(hidden)]
+pub fn set_window_device(on: bool) {
+    WINDOW_DEVICES.store(usize::from(on), Ordering::Relaxed);
+}
+
+/// The window was activated, the display changed or the machine woke (`crate::window_changed`):
+/// the time until the next frame is no frame's, as after a minimised window gave none
+/// ([`Meter::no_frame`]).
+static GAP: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn gap() {
+    GAP.store(true, Ordering::Relaxed);
+}
+
+/// Whether a gap ([`gap`]) came since the last call.
+pub(crate) fn take_gap() -> bool {
+    GAP.swap(false, Ordering::Relaxed)
+}
+
 /// `VK_F11`: the counter's key. The game has no default use for it (its quick save and load are
 /// F5 and F9, the Pip-Boy's pages F1 to F3), and Windows does not take it as it takes F10.
 pub const KEY: usize = 0x7a;
@@ -47,8 +83,13 @@ const KEY_MESSAGES: [u32; 4] = [0x100, 0x101, 0x104, 0x105];
 /// gets them): true when it is the counter's key, which then goes no further (the game never
 /// sees it go down or up). Its first press toggles the counter; the repeats Windows sends while
 /// it is held (bit 30 of `lparam`, the key was already down) and its release change nothing.
+/// While no wgpu device draws the game's window ([`window_device`]: the real Direct3D 9
+/// fallback has no counter) F11 is not taken: false, and it reaches the game.
 pub fn window_key(message: u32, wparam: usize, lparam: isize) -> bool {
-    if wparam != KEY || !KEY_MESSAGES.contains(&message) {
+    if wparam != KEY
+        || !KEY_MESSAGES.contains(&message)
+        || WINDOW_DEVICES.load(Ordering::Relaxed) == 0
+    {
         return false;
     }
     let down = message == 0x100 || message == 0x104;
@@ -92,11 +133,14 @@ pub struct Meter {
     readout: Option<Readout>,
     /// Counts the readouts made: the drawing makes its text again when this changes.
     generation: u64,
+    /// Counts the presents timed, kept through a reset (tests: none while the counter is off).
+    presents: u64,
 }
 
 impl Meter {
     /// A frame reached the swap chain at `now`.
     pub fn presented(&mut self, now: Instant) {
+        self.presents += 1;
         if let Some(last) = self.last {
             self.frame(now.saturating_duration_since(last));
         }
@@ -137,8 +181,21 @@ impl Meter {
         let generation = self.generation + 1;
         *self = Meter {
             generation,
+            presents: self.presents,
             ..Meter::default()
         };
+    }
+
+    /// The window took no frame (minimised, sized to nothing, lost) or was away ([`gap`]): the
+    /// next present only starts the clock, so the time away is not shown as a slow frame. A frame
+    /// the game itself was slow to give (a load, a stall) still counts in full: the player saw it.
+    pub fn no_frame(&mut self) {
+        self.last = None;
+    }
+
+    /// The presents timed so far (tests).
+    pub fn presents(&self) -> u64 {
+        self.presents
     }
 
     /// The numbers to show (none until the first period ends) and their generation.
@@ -595,6 +652,37 @@ mod tests {
         assert!(g2 > g + 1);
     }
 
+    /// A window that took no frame (minimised) or was away (Alt-Tab): the time until the next
+    /// present is not shown as a slow frame; a slow frame the game itself gave still is.
+    #[test]
+    fn time_away_is_no_frame_but_a_slow_frame_is() {
+        let t0 = Instant::now();
+        let run = |away: bool| {
+            let mut m = Meter::default();
+            let mut t = t0;
+            for _ in 0..=10 {
+                m.presented(t);
+                t += ms(10);
+            }
+            // 8 s without a frame, then 10 ms frames until a period ends.
+            if away {
+                m.no_frame();
+            }
+            t += Duration::from_secs(8);
+            for _ in 0..=30 {
+                m.presented(t);
+                t += ms(10);
+            }
+            m.readout().0.map(|r| r.slowest_tenths_ms)
+        };
+        assert_eq!(run(true), Some(100), "away: the slowest is a 10 ms frame");
+        assert_eq!(
+            run(false),
+            Some(80_100),
+            "a stall the player saw shows in full"
+        );
+    }
+
     /// F11 toggles once per press: its repeats while held and its release change nothing, and
     /// every F11 message is taken (the game never sees it); other keys pass and change nothing.
     #[test]
@@ -602,6 +690,12 @@ mod tests {
         show(false);
         let (down, up, sys_down) = (0x100, 0x101, 0x104);
         let repeat = 1 << 30;
+        // No wgpu device on the game's window (the real Direct3D 9 draws): F11 is the game's.
+        set_window_device(false);
+        assert!(!window_key(down, KEY, 0x0057_0001));
+        assert!(!window_key(up, KEY, 0x0057_0001 | repeat | (1 << 31)));
+        assert!(!shown(), "no counter to show");
+        set_window_device(true);
         assert!(window_key(down, KEY, 0x0057_0001));
         assert!(shown());
         for _ in 0..20 {
@@ -619,6 +713,7 @@ mod tests {
         // Not a key message.
         assert!(!window_key(0x102, KEY, 0));
         assert!(!shown());
+        set_window_device(false);
     }
 
     /// The quads: a plate in the top-right corner, then each character right-aligned on its line,

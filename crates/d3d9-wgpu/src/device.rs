@@ -1204,6 +1204,10 @@ impl Device {
             awaiting: Vec::new(),
         };
         d.surface = shown_in;
+        // The frame-rate counter can show (F11 is taken) while a device draws the game's window.
+        if d.surface.is_some() {
+            frame_rate::window_device(true);
+        }
         assert!(
             FAIL_FOR_TESTS.load(Ordering::Relaxed) & PANIC_FOR_TESTS == 0,
             "a device made to panic (tests)"
@@ -5944,6 +5948,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             (Some(w), Some(_)) => w.frame(&self.device).map(|t| (t, w.config.usage)),
             _ => None,
         };
+        // The counter on: no frame taken (minimised, no area, lost) or the window away since the last
+        // (activated, display changed, woke) makes the next present only start its clock.
+        if fps && (taken.is_none() || frame_rate::take_gap()) {
+            if let Ok(mut m) = self.fps_meter.lock() {
+                m.no_frame();
+            }
+        }
         if let (Some((t, usage)), Some(b)) = (taken, &back) {
             // The frame's own size and format, as the swap chain gave it.
             let (format, cw, ch) = (t.texture.format(), t.texture.width(), t.texture.height());
@@ -6180,6 +6191,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.fps_overlay
             .as_ref()
             .map_or((false, 0), |o| (true, o.drawn))
+    }
+
+    /// The frame-rate counter's presents timed so far and its numbers now, once the queue thread
+    /// has run everything handed to it (tests: off, no present is timed).
+    pub fn frame_rate_meter(&self) -> (u64, Option<frame_rate::Readout>) {
+        self.sync();
+        self.fps_meter
+            .lock()
+            .map_or((0, None), |m| (m.presents(), m.readout().0))
     }
 
     /// The frame-rate counter showing `readout` drawn over a `width` by `height` frame of
@@ -7878,6 +7898,9 @@ impl Drop for Device {
     fn drop(&mut self) {
         // The queue thread's work done and the thread ended first (it submits and presents).
         drop(self.submitter.take());
+        if self.surface.is_some() {
+            frame_rate::window_device(false);
+        }
         self.report_made();
         if let Some(c) = &mut self.pipeline_cache {
             c.save_if_due(self.presents, true);
