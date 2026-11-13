@@ -689,7 +689,7 @@ fn script_arg(e: &Engine, read: &Read) -> Option<u32> {
 
 /// `tList<TESForm> tempList(form)`, or the form list's own list for a list form: the items of
 /// its nodes from the first (the first one's even when empty, as JIP's `do ... while` walks).
-fn form_or_list(e: &Engine, form: u32) -> Vec<u32> {
+pub(crate) fn form_or_list(e: &Engine, form: u32) -> Vec<u32> {
     if form != 0 && form_type(e, form) == LIST_FORM {
         let mut items = Vec::new();
         let mut node = Ptr::<crate::game::BGSListForm>::new(form)

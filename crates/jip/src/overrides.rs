@@ -557,7 +557,7 @@ fn base_container(e: &Engine, base: u32) -> u32 {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp:
 // TESObjectREFR::GetContainerChangesList.
-fn changes_list(e: &mut Engine, refr: u32) -> u32 {
+pub(crate) fn changes_list(e: &mut Engine, refr: u32) -> u32 {
     let extra = get_by_type(e, refr, EXTRA_CONTAINER_CHANGES);
     if extra == 0 {
         return 0;
