@@ -10,6 +10,14 @@ fn setup() -> Engine {
     let mut e = engine();
     form(&mut e, LIGHT, 0x1e, 0x0000_0119);
     set_ref(&mut e, 1, LIGHT);
+    // `kParamType_BoundObject`: xNVSE's reader asks the form's `IsBoundObject` virtual.
+    let vtbl = FORMS + 0x6000;
+    e.mem.set_u32(LIGHT, vtbl);
+    e.mem.set_u32(vtbl + nvse::vtable::IS_BOUND_OBJECT, 0x0050_1000);
+    e.register(0x0050_1000, |_, _| Ret {
+        eax: 1,
+        ..Ret::default()
+    });
     e
 }
 
