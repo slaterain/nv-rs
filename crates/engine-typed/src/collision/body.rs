@@ -5,12 +5,9 @@
 //! (+8), 5 without one.
 
 use super::FAMILY;
+use crate::native::{float_precision, Real};
 use crate::{culling, dispatch};
 use engine_core::ptr::Ptr;
-use engine_core::x87::x87_sub;
-use engine_core::x87::{
-    x87_add, x87_div, x87_load32, x87_m32, x87_mul, x87_quiet_bits, x87_store32,
-};
 use engine_core::{args, typed_call, Engine};
 
 /// The Havok world of a body (`00c87a40`), the object test (`0047b470`) and the motion type test
@@ -62,8 +59,8 @@ fn release_lock(e: &mut Engine) {
 
 /// Moves the body to the node: the position (`004a3e00` on the node's translation), the rotation as
 /// the quaternion `(x, y, z, w)` of the `NiQuaternion` `(w, x, y, z)` at `quaternion` (each word
-/// through `FLD`/`FSTP`), normalised (`005611c0`), then, under the Havok lock (released in line), the
-/// body's slot +0xe8 with both.
+/// through `FLD`/`FSTP` in the exe, copied plain), normalised (`005611c0`), then, under the Havok
+/// lock (released in line), the body's slot +0xe8 with both.
 fn move_body(e: &mut Engine, body: u32, translation: u32, quaternion: u32) {
     e.with_stack(0x20, |e, vectors| {
         let position = vectors.addr();
@@ -74,7 +71,7 @@ fn move_body(e: &mut Engine, body: u32, translation: u32, quaternion: u32) {
             dispatch::math::havok_vector(e, Ptr::new(position), Ptr::new(translation))
         );
         for (target, source) in [(0, 4), (4, 8), (8, 0xc), (0xc, 0)] {
-            let bits = x87_quiet_bits(e.mem.u32(quaternion + source));
+            let bits = e.mem.u32(quaternion + source);
             e.mem.set_u32(rotation + target, bits);
         }
         e.call(NORMALIZE_QUATERNION, &args![rotation]);
@@ -192,33 +189,22 @@ pub fn ni_to_hk(e: &mut Engine, this: Ptr) {
     });
 }
 
-/// `FLD dword [a]`.
-fn ld(e: &Engine, a: u32) -> f64 {
-    x87_load32(e.mem.u32(a))
-}
-
-/// A float memory operand at `a`.
-fn m32(e: &Engine, a: u32) -> f64 {
-    x87_m32(e.mem.u32(a))
+/// A float at `a` as `R` (`FLD dword`, or a memory operand).
+#[inline(always)]
+fn ld<R: Real>(e: &Engine, a: u32) -> R {
+    R::load(e.mem.u32(a))
 }
 
 /// `FSTP dword [a]`.
-fn fst(e: &mut Engine, a: u32, v: f64) {
-    e.mem.set_u32(a, x87_store32(v));
+#[inline(always)]
+fn fst<R: Real>(e: &mut Engine, a: u32, v: R) {
+    e.mem.set_u32(a, v.store());
 }
 
 /// `FSTP dword tmp; FLD dword tmp`: the value rounded to a float and loaded back.
-fn spill(v: f64) -> f64 {
-    x87_load32(x87_store32(v))
-}
-
-/// The square root (`00ec6040`, the crt family's) of `x`.
-fn root(e: &mut Engine, x: f64) -> f64 {
-    typed_call!(
-        crate::crt::FAMILY,
-        0x00ec_6040,
-        crate::crt::math::ci_sqrt(e, x)
-    )
+#[inline(always)]
+fn spill<R: Real>(v: R) -> R {
+    R::load(v.store())
 }
 
 // Typed from 00a6df40
@@ -226,42 +212,52 @@ fn root(e: &mut Engine, x: f64) -> f64 {
 /// the root is `sqrt(trace + 1)`; otherwise the largest diagonal element `i` (with `j` and `k` from the
 /// exe's next-index table) gives the root `sqrt(m_ii - m_jj - m_kk + 1)`, and the vector components
 /// are written through a local table of pointers to `x`, `y`, `z`, indexed as the exe indexes it.
+///
+/// Native float maths at the running thread's precision ([`Real`], ADR-0014): each step and each
+/// float store the exe's, in its order; the square roots `FSQRT` at that precision in place of the
+/// CRT's `_CIsqrt` (`00ec6040`), whose result the exe stores to a float at once: one correctly rounded
+/// root on either word.
 pub fn quaternion_from_rotation(e: &mut Engine, this: Ptr, matrix: Ptr) {
-    let q = this.addr();
-    let m = matrix.addr();
+    if float_precision() {
+        quaternion_in::<f32>(e, this.addr(), matrix.addr());
+    } else {
+        quaternion_in::<f64>(e, this.addr(), matrix.addr());
+    }
+}
+
+/// [`quaternion_from_rotation`] in `R`.
+fn quaternion_in<R: Real>(e: &mut Engine, q: u32, m: u32) {
     let at = |n: u32| m.wrapping_add(n.wrapping_mul(4));
-    let s1 = x87_add(ld(e, at(0)), m32(e, at(4)));
-    let trace = spill(x87_add(s1, m32(e, at(8))));
+    let one = R::narrow(e.mem.f64(ONE_DOUBLE));
+    let h = R::narrow(e.mem.f64(HALF_DOUBLE));
+    let trace = spill(ld::<R>(e, at(0)) + ld(e, at(4)) + ld(e, at(8)));
     // FCOM against 0; TEST AH,0x41: below, equal or unordered take the other branch.
-    if trace > 0.0 {
-        let x = spill(x87_add(trace, e.mem.f64(ONE_DOUBLE)));
-        let r = spill(spill(root(e, x)));
-        let h = e.mem.f64(HALF_DOUBLE);
-        fst(e, q, x87_mul(r, h));
-        let k = spill(x87_div(h, r));
-        let d1 = x87_sub(ld(e, at(7)), m32(e, at(5)));
-        fst(e, q + 4, x87_mul(d1, k));
-        let d2 = x87_sub(ld(e, at(2)), m32(e, at(6)));
-        fst(e, q + 8, x87_mul(d2, k));
-        let d3 = x87_sub(ld(e, at(3)), m32(e, at(1)));
-        fst(e, q + 0xc, x87_mul(k, d3));
+    if trace > R::ZERO {
+        let x = spill(trace + one);
+        let r = spill(x.sqrt());
+        fst(e, q, r * h);
+        let k = spill(h / r);
+        let d1 = ld::<R>(e, at(7)) - ld(e, at(5));
+        fst(e, q + 4, d1 * k);
+        let d2 = ld::<R>(e, at(2)) - ld(e, at(6));
+        fst(e, q + 8, d2 * k);
+        let d3 = ld::<R>(e, at(3)) - ld(e, at(1));
+        fst(e, q + 0xc, k * d3);
         return;
     }
     // FCOMPP; TEST AH,0x5; JP: only "below" picks the other element.
     let mut i = 0u32;
-    if ld(e, at(0)) < ld(e, at(4)) {
+    if e.mem.f32(at(0)) < e.mem.f32(at(4)) {
         i = 1;
     }
     let diag = |n: u32| m.wrapping_add(n << 4);
-    if ld(e, diag(i)) < ld(e, at(8)) {
+    if e.mem.f32(diag(i)) < e.mem.f32(at(8)) {
         i = 2;
     }
     let j = e.mem.u32(NEXT_INDEX.wrapping_add(i.wrapping_mul(4)));
     let k = e.mem.u32(NEXT_INDEX.wrapping_add(j.wrapping_mul(4)));
-    let a = x87_sub(ld(e, diag(i)), m32(e, diag(j)));
-    let b = x87_sub(a, m32(e, diag(k)));
-    let x = spill(x87_add(b, e.mem.f64(ONE_DOUBLE)));
-    let r = spill(spill(root(e, x)));
+    let x = spill(ld::<R>(e, diag(i)) - ld(e, diag(j)) - ld(e, diag(k)) + one);
+    let r = spill(x.sqrt());
     let index = |row: u32, column: u32| at(row.wrapping_mul(3).wrapping_add(column));
     e.with_stack(12, |e, slots| {
         let slots = slots.addr();
@@ -269,19 +265,17 @@ pub fn quaternion_from_rotation(e: &mut Engine, this: Ptr, matrix: Ptr) {
         e.mem.set_u32(slots + 4, q + 8);
         e.mem.set_u32(slots + 8, q + 0xc);
         let slot = |n: u32| slots.wrapping_add(n.wrapping_mul(4));
-        let h = e.mem.f64(HALF_DOUBLE);
         let qi = e.mem.u32(slot(i));
-        let half_root = spill(x87_mul(r, h));
-        fst(e, qi, half_root);
-        let kf = spill(x87_div(h, r));
-        let wd = x87_sub(ld(e, index(k, j)), m32(e, index(j, k)));
-        fst(e, q, x87_mul(wd, kf));
-        let sj = x87_add(ld(e, index(i, j)), m32(e, index(j, i)));
+        fst(e, qi, r * h);
+        let kf = spill(h / r);
+        let wd = ld::<R>(e, index(k, j)) - ld(e, index(j, k));
+        fst(e, q, wd * kf);
+        let sj = ld::<R>(e, index(i, j)) + ld(e, index(j, i));
         let qj = e.mem.u32(slot(j));
-        fst(e, qj, spill(x87_mul(sj, kf)));
-        let sk = x87_add(ld(e, index(i, k)), m32(e, index(k, i)));
+        fst(e, qj, sj * kf);
+        let sk = ld::<R>(e, index(i, k)) + ld(e, index(k, i));
         let qk = e.mem.u32(slot(k));
-        fst(e, qk, spill(x87_mul(kf, sk)));
+        fst(e, qk, kf * sk);
     });
 }
 

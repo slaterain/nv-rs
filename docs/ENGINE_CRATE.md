@@ -613,8 +613,10 @@ one operation on two floats, plain `f32` on every thread: one operation rounds t
 bit for bit (NaN payloads aside) on the other threads' and within one ulp on the main thread's (the dispatch and
 culling functions it calls by address there); and for the rotation, grow-fade, simple colour and bound update
 modifiers and the update controller's emitter test, bit for bit under both at a fixed input where rounding every step
-and rounding once part. `scene` and `collision` keep the exact x87 helpers until their turn, so that byte identity
-with the translations holds where the main thread rounds at every step.
+and rounding once part. `scene` and `collision` are native the same way (2026-11-12): the quaternion of a rotation over
+`native::Real` with `FSQRT` roots, and the skinned bound's sums, the transform inverse's and the blend's reciprocals
+and the blend's scaled position (one float operation each) plain `f32` on every thread; their tests split the
+quaternion's comparisons by thread and check it bit for bit under both words at a fixed rounding input.
 And `multibound` (same crate, id 22), the update half's fourth group: the two passes main runs over the loaded world
 once a frame that keep the multibound culling current. The reset pass (`0045bc80`) takes every object's multibound
 shape back to "not tested"; the visibility pass (`0045b070`) tests each again from the camera through the shadow
