@@ -233,8 +233,10 @@ pub fn install(e: &mut Engine, answers_installed: bool) {
     }
 }
 
-/// Gives a built JIP command its handlers, written into its record with its names (a built
-/// command answers whatever JIP does): its execute at its place in the extenders' code
+/// Gives a built JIP command its handlers and names, written into its record, once JIP answers
+/// "installed": until then every JIP opcode stays as without the DLL, built or not (no name, no
+/// handler), so a script that calls JIP commands without checking for JIP stops at the first one
+/// as it does without the DLL, not half-way at the first unbuilt one: its execute at its place in the extenders' code
 /// ([`execute_address`], as xNVSE's commands have theirs) and, for a command a condition can use,
 /// its eval ([`nvse::table::eval_address`]). A condition-only command has no execute.
 pub fn set_handlers(e: &mut Engine, opcode: u32, execute: Option<AbiFn>, eval: Option<AbiFn>) {
@@ -246,6 +248,9 @@ pub fn set_handlers(e: &mut Engine, opcode: u32, execute: Option<AbiFn>, eval: O
         Kind::Empty => false,
     };
     assert!(fits, "{opcode:04x}: handlers that do not match its kind");
+    if !e.ext::<Jip>().answers_installed {
+        return;
+    }
     let mut words = (0, 0);
     if let Some(f) = execute {
         e.register(execute_address(opcode), f);

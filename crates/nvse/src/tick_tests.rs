@@ -341,3 +341,67 @@ fn a_call_while_added_by_a_call_while_runs_in_the_same_frame() {
         "both go on while C holds"
     );
 }
+
+// ---- the plugins' messages ----
+
+thread_local! {
+    /// What the stand-in built-in heard: the message, whether a temporary inventory reference was
+    /// still there, the game seconds summed so far.
+    static HEARD: std::cell::RefCell<Vec<(u32, bool, f32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn heard_one(e: &mut Engine, m: &crate::plugins::Message) {
+    let held = crate::invref::any(e);
+    let seconds = state(e).game_seconds;
+    HEARD.with(|h| h.borrow_mut().push((m.kind, held, seconds)));
+}
+
+fn heard() -> Vec<(u32, bool, f32)> {
+    HEARD.with(|h| std::mem::take(&mut *h.borrow_mut()))
+}
+
+fn listening(e: &mut Engine) {
+    crate::plugins::register(
+        e,
+        crate::plugins::BuiltIn {
+            file: "stand_in.dll",
+            name: "Stand-in",
+            version: 1,
+            opcode_base: 0x3000,
+            listed: false,
+            listener: Some(heard_one),
+            save: None,
+            load: None,
+            pre_load: None,
+            new_game: None,
+        },
+    );
+}
+
+/// As xNVSE's `HandleMainLoopHook`: `DeferredInit` once, at the end of the first frame; then
+/// `MainGameLoop` every frame, before the temporary inventory references go and before the
+/// frame's seconds are added (the rest of the tick). Without a built-in that asks for
+/// `MainGameLoop`, no frame sends it.
+#[test]
+fn the_plugins_messages_each_frame() {
+    use crate::plugins::msg::{DEFERRED_INIT, MAIN_GAME_LOOP};
+    heard();
+    let mut e = setup();
+    listening(&mut e);
+    crate::plugins::listen_per_frame(&mut e);
+    crate::invref::tests_plant(&mut e, 0xff00_0001);
+    frame(&mut e, 1.0);
+    assert_eq!(
+        heard(),
+        [(DEFERRED_INIT, true, 0.0), (MAIN_GAME_LOOP, true, 0.0)]
+    );
+    assert!(!crate::invref::any(&mut e), "cleared after the message");
+    frame(&mut e, 1.0);
+    assert_eq!(heard(), [(MAIN_GAME_LOOP, false, 1.0)]);
+    // Nobody asked: the first frame's DeferredInit only.
+    let mut e = setup();
+    listening(&mut e);
+    frame(&mut e, 1.0);
+    frame(&mut e, 1.0);
+    assert_eq!(heard(), [(DEFERRED_INIT, false, 0.0)]);
+}

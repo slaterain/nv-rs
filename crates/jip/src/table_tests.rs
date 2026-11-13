@@ -231,7 +231,13 @@ fn installed_records(installed: bool) {
         );
         let execute = if installed && slot.kind == Kind::Empty {
             EMPTY_EXECUTE
-        } else if installed && (built || o == 0x2200 || o == 0x2210) {
+        } else if installed
+            && (built
+                || o == 0x2200
+                || o == 0x2210
+                || o == crate::main_loop::SET_GAME_MAIN_LOOP_CALLBACK)
+        {
+            // The built commands, the identity and SetGameMainLoopCallback, once installed.
             nvse::table::execute_address(o)
         } else {
             0
@@ -358,16 +364,32 @@ fn empty_slots_run_as_jips_once_installed() {
     }
 }
 
-/// A built command's handlers go to its record, at the extenders' places for its opcode, and
-/// its names with them (a built command answers whatever JIP does); handlers that do not match
-/// its kind are refused.
+/// A built command's handlers and names go to its record, at the extenders' places for its
+/// opcode, once JIP answers "installed"; until then the record stays as without the DLL (no
+/// handler, no name); handlers that do not match its kind are refused either way.
 #[test]
 fn handlers_match_the_kind() {
     fn ok(_: &mut Engine, _: &[u32]) -> Ret {
         nvse::handled(true)
     }
+    let mut off = engine();
+    crate::install_as(&mut off, false);
+    let before = Record::read(&off, record_of(&off, 0x2204));
+    set_handlers(&mut off, 0x2204, Some(ok), Some(ok));
+    let r = Record::read(&off, record_of(&off, 0x2204));
+    assert_eq!(
+        (r.execute, r.eval, r.long_name, r.short_name),
+        (
+            before.execute,
+            before.eval,
+            before.long_name,
+            before.short_name
+        ),
+        "not installed: as without the DLL"
+    );
+    assert_eq!((r.execute, guest_text(&off, r.long_name)), (0, Vec::new()));
     let mut e = engine();
-    crate::install_as(&mut e, false);
+    crate::install_as(&mut e, true);
     set_handlers(&mut e, 0x2204, Some(ok), Some(ok));
     let r = Record::read(&e, record_of(&e, 0x2204));
     assert_eq!(

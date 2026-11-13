@@ -33,7 +33,11 @@ pub mod containers;
 pub mod cosave;
 pub mod game;
 pub mod identity;
+pub mod input;
+pub mod ln_events;
+pub mod main_loop;
 pub mod overrides;
+pub mod script_call;
 #[rustfmt::skip]
 pub mod slots;
 #[cfg(test)]
@@ -72,6 +76,12 @@ pub struct Jip {
     pub saved: cosave::Saved,
     /// JIP's versions of xNVSE's and the game's commands.
     pub overrides: overrides::State,
+    /// JIP's gamepad state and its changes to what the game reads.
+    pub input: input::State,
+    /// JIP's main-loop callbacks.
+    pub main_loop: main_loop::State,
+    /// JIP's LN events.
+    pub ln_events: ln_events::State,
 }
 
 /// JIP as xNVSE knows it once loaded (`NVSEPlugin_Query`, `NVSEPlugin_Load`): its DLL, name,
@@ -108,18 +118,23 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
         nvse::table::TABLE_AT,
         "xNVSE is installed before JIP, its plugin"
     );
+    // First: a built command's record is named only when JIP answers "installed".
+    e.ext::<Jip>().answers_installed = answers_installed;
     table::install(e, answers_installed);
     identity::install(e, answers_installed);
     overrides::install(e, answers_installed);
-    // Built commands answer only while JIP answers "installed": until then every JIP opcode is as
-    // without the DLL (no handler, no name).
-    if answers_installed {
-        commands::install(e);
-    }
+    // Built commands answer only while JIP answers "installed": `table::set_handlers` writes
+    // nothing until then, so every JIP opcode is as without the DLL (no handler, no name).
+    commands::install(e);
+    input::install(e, answers_installed);
+    ln_events::install(e, answers_installed);
+    main_loop::install(e);
     nvse::plugins::register(e, plugin(answers_installed));
-    let jip = e.ext::<Jip>();
-    jip.installed = true;
-    jip.answers_installed = answers_installed;
+    // `MainGameLoop` only once JIP answers "installed": until then a frame does no JIP work.
+    if answers_installed {
+        nvse::plugins::listen_per_frame(e);
+    }
+    e.ext::<Jip>().installed = true;
     // The game's state, not one engine's: real threads' engines share it.
     e.share_ext::<Jip>();
 }

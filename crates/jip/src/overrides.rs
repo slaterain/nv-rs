@@ -25,6 +25,7 @@ use crate::game::{
     LoadedRefData, NiAVObject, NiNode, NiTMapItem, Setting, TESContainer, TESForm, TESObjectREFR,
 };
 use crate::identity;
+use crate::input;
 use crate::table::Params;
 use crate::Jip;
 use engine_core::prelude::*;
@@ -47,6 +48,36 @@ struct Override {
 
 /// The ones at xNVSE's opcodes (in every preset, once JIP answers "installed").
 const XNVSE: &[Override] = &[
+    Override {
+        opcode: 0x1453,
+        execute: is_key_pressed_cmd,
+        eval: Some(is_key_pressed_eval),
+    },
+    Override {
+        opcode: 0x1462,
+        execute: disable_control,
+        eval: None,
+    },
+    Override {
+        opcode: 0x1463,
+        execute: enable_control,
+        eval: None,
+    },
+    Override {
+        opcode: 0x1464,
+        execute: tap_control,
+        eval: None,
+    },
+    Override {
+        opcode: 0x146a,
+        execute: is_control_disabled,
+        eval: None,
+    },
+    Override {
+        opcode: 0x146b,
+        execute: is_control_pressed_cmd,
+        eval: Some(is_control_pressed_eval),
+    },
     Override {
         opcode: 0x149a,
         execute: get_numeric_setting,
@@ -310,7 +341,7 @@ fn get_by_type(e: &mut Engine, refr: u32, kind: u32) -> u32 {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: TESObjectREFR::GetBaseForm.
 /// A reference's base form: a placeable water's water, a temporary actor's leveled base, else
 /// its base form.
-fn ref_base_form(e: &mut Engine, refr: u32) -> u32 {
+pub(crate) fn ref_base_form(e: &mut Engine, refr: u32) -> u32 {
     let base = base_form(e, refr);
     if base == 0 || form_id(e, base) >> 24 != 0xff {
         return base;
@@ -947,6 +978,133 @@ fn set_numeric_setting(e: &mut Engine, w: &[u32]) -> Ret {
                 None => print_line(e, "SETTING NOT FOUND", &[]),
             }
         }
+    }
+    handled(true)
+}
+
+// ---- the input commands (0x1453, 0x1462..0x1464, 0x146A, 0x146B) ----
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_cmd.h: Hook_IsKeyPressed_Execute.
+/// Whether the key is down in the sources the flags name (default 1: the game's state), as JIP
+/// reads xNVSE's key record ([`input::is_key_pressed`]); written 0 or 1.
+fn is_key_pressed_cmd(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if read.ok {
+        let down = input::is_key_pressed(e, read.int(0, 0), read.int(1, 1));
+        a.set_result(e, f64::from(u8::from(down)));
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_cmd.h: Hook_IsKeyPressed_Eval.
+fn is_key_pressed_eval(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = EvalArgs::new(w);
+    if input::is_key_pressed(e, a.arg1, a.arg2) {
+        e.mem.set_f64(a.result, 1.0);
+    }
+    handled(true)
+}
+
+/// A control's id from the line, when it is one of the game's 28 actions.
+fn control_arg(e: &mut Engine, a: &CommandArgs) -> Option<(u32, Read)> {
+    let read = Read::of(e, a);
+    let control = read.int(0, 0);
+    (read.ok && control < input::MAX_CONTROL_BIND).then_some((control, read))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_cmd.h: Hook_DisableControl_Execute.
+/// The control disabled ([`input::set_control_disabled`]); xNVSE's mask argument is read and not
+/// used.
+fn disable_control(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if let Some((control, _)) = control_arg(e, &a) {
+        input::set_control_disabled(e, control, true);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_cmd.h: Hook_EnableControl_Execute.
+fn enable_control(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if let Some((control, _)) = control_arg(e, &a) {
+        input::set_control_disabled(e, control, false);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_cmd.h: Hook_TapControl_Execute.
+/// Without a ready controller, the control's keyboard key tapped, or else its mouse button (1);
+/// with one, its controller binding (1 for a button or a trigger).
+fn tap_control(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if let Some((control, _)) = control_arg(e, &a) {
+        let tapped = if !input::controller_ready(e) {
+            let (key, button) = input::binds(e, control);
+            if key != 0xff {
+                input::tap_key(e, u32::from(key));
+                true
+            } else if button != 0xff {
+                input::tap_key(e, u32::from(button) + 0x100);
+                true
+            } else {
+                false
+            }
+        } else {
+            input::tap_xi_control(e, control)
+        };
+        if tapped {
+            a.set_result(e, 1.0);
+        }
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_cmd.h:
+// Hook_IsControlDisabled_Execute.
+/// Without a ready controller: 1 when the control's key is disabled and its mouse button too (or
+/// it has none), or, with no key, when its mouse button is; with one, JIP's answer for its
+/// controller binding ([`input::xi_control_disabled`]).
+fn is_control_disabled(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if let Some((control, _)) = control_arg(e, &a) {
+        let disabled = if !input::controller_ready(e) {
+            let (key, button) = input::binds(e, control);
+            let button_off = |e: &mut Engine| input::is_key_disabled(e, u32::from(button) + 0x100);
+            if key != 0xff {
+                input::is_key_disabled(e, u32::from(key)) && (button == 0xff || button_off(e))
+            } else {
+                button != 0xff && button_off(e)
+            }
+        } else {
+            input::xi_control_disabled(e, control)
+        };
+        if disabled {
+            a.set_result(e, 1.0);
+        }
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_cmd.h:
+// Hook_IsControlPressed_Execute.
+/// 1 when the control is down ([`input::is_control_pressed`], flags default 1).
+fn is_control_pressed_cmd(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if let Some((control, read)) = control_arg(e, &a) {
+        if input::is_control_pressed(e, control, read.int(1, 1)) {
+            a.set_result(e, 1.0);
+        }
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_cmd.h:
+// Hook_IsControlPressed_Eval.
+fn is_control_pressed_eval(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = EvalArgs::new(w);
+    if a.arg1 < input::MAX_CONTROL_BIND && input::is_control_pressed(e, a.arg1, a.arg2) {
+        e.mem.set_f64(a.result, 1.0);
     }
     handled(true)
 }

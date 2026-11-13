@@ -1283,10 +1283,14 @@ fn message_text(e: &Engine, m: &Message) -> Vec<u8> {
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h:
-// DoPreLoadGameHousekeeping (its saved data's part: the player's appearance undo goes).
+// DoPreLoadGameHousekeeping (the parts built so far: the player's appearance undo goes, the
+// main-loop callbacks set to go at a load are marked (`CleanMLCallbacks`), the LN events' first
+// frame after the load reports no change).
 fn pre_load_housekeeping(e: &mut Engine) {
     let npc = player_base(e);
     saved(e).appearance_undo.erase(&npc);
+    crate::main_loop::clean(e);
+    crate::ln_events::pre_load(e);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), jip_nvse.cpp: NVSEMessageHandler (the save,
@@ -1328,6 +1332,25 @@ pub fn listen(e: &mut Engine, m: &Message) {
             s.carried.clear();
             s.serialized_tail.clear();
             s.had_section = false;
+        }
+        msg::MAIN_GAME_LOOP => {
+            // The callbacks, then the LN events when any has a handler: one look at JIP's state
+            // when there is nothing to do. Sent only once JIP answers "installed" (it asks for it,
+            // `nvse::plugins::listen_per_frame`); the check keeps it so if another built-in asks.
+            // (JIP's HUD cursor and item list box parts come with their UI commands.)
+            let jip = e.ext::<Jip>();
+            if !jip.answers_installed {
+                return;
+            }
+            let callbacks = !jip.main_loop.callbacks.is_empty();
+            let events = jip.ln_events.flags != 0;
+            if callbacks {
+                crate::main_loop::cycle(e);
+                // A callback may have set an LN handler: the events see it this frame.
+                crate::ln_events::process(e);
+            } else if events {
+                crate::ln_events::process(e);
+            }
         }
         _ => {}
     }

@@ -1158,3 +1158,128 @@ fn dump_event_handlers_filters_and_filter_text() {
     );
     assert_eq!(lines()[2..], [line_a]);
 }
+
+// ---- JIP LN NVSE's LN events, asked first ----
+
+/// One call of the stand-in LN events: (mask, script, add, form, number).
+type LnCall = (u32, u32, bool, u32, u32);
+
+thread_local! {
+    /// What the stand-in LN events were handed.
+    static LN_CALLS: RefCell<Vec<LnCall>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A stand-in of JIP's `GetLNEventMask`: `OnKeyDown` is `1 << 8`, nothing else is an LN event.
+fn ln_mask(_: &mut Engine, name: &[u8]) -> u32 {
+    if name.eq_ignore_ascii_case(b"OnKeyDown") {
+        0x100
+    } else {
+        0
+    }
+}
+
+/// A stand-in of JIP's `ProcessLNEventHandler`: records and answers true.
+fn ln_handler(_: &mut Engine, mask: u32, script: u32, add: bool, form: u32, number: u32) -> bool {
+    LN_CALLS.with(|c| c.borrow_mut().push((mask, script, add, form, number)));
+    true
+}
+
+fn ln_calls() -> Vec<LnCall> {
+    LN_CALLS.with(|c| std::mem::take(&mut *c.borrow_mut()))
+}
+
+/// With JIP's LN events given, `SetEventHandler` and `RemoveEventHandler` ask them first: the
+/// name up to a colon, the number after it as `atoi` reads it (none: 0), the `"first"` filter
+/// (or, for a removal, filter 1) as the form; JIP's answer is the command's. Adding takes only
+/// the default priority and not `SetEventHandlerAlt`. Any other name goes to xNVSE's own events;
+/// without JIP's LN events every name does.
+#[test]
+fn ln_events_are_asked_first() {
+    let mut e = setup();
+    scripts(&mut e, &[(1, 4)]);
+    set_script_ref(&mut e, 1, FN_A);
+    set_script_ref(&mut e, 2, REF_1);
+    ln_calls();
+    // Without them: an ordinary (user-defined) event.
+    assert_eq!(
+        run(&mut e, SET_EVENT_HANDLER, &[text("OnKeyDown"), form(1)]),
+        1.0
+    );
+    assert!(ln_calls().is_empty());
+    crate::plugins::set_ln_events(
+        &mut e,
+        crate::plugins::LnEvents {
+            mask: ln_mask,
+            handler: ln_handler,
+        },
+    );
+    assert_eq!(
+        run(
+            &mut e,
+            SET_EVENT_HANDLER,
+            &[text("onkeydown: 30x"), form(1)]
+        ),
+        1.0
+    );
+    assert_eq!(
+        run(&mut e, SET_EVENT_HANDLER, &[text("OnKeyDown"), form(1)]),
+        1.0
+    );
+    assert_eq!(
+        run(
+            &mut e,
+            SET_EVENT_HANDLER,
+            &[text("OnKeyDown:-7"), form(1), pair(text("first"), form(2))]
+        ),
+        1.0
+    );
+    assert_eq!(
+        ln_calls(),
+        [
+            (0x100, FN_A, true, 0, 30),
+            (0x100, FN_A, true, 0, 0),
+            (0x100, FN_A, true, REF_1, (-7i32) as u32),
+        ]
+    );
+    // Refused before JIP is asked: another priority, the Alt form.
+    let refused = run(
+        &mut e,
+        SET_EVENT_HANDLER,
+        &[text("OnKeyDown"), form(1), pair(text("priority"), num(5.0))],
+    );
+    assert_eq!(refused, 0.0);
+    assert_eq!(
+        run(&mut e, SET_EVENT_HANDLER_ALT, &[text("OnKeyDown"), form(1)]),
+        0.0
+    );
+    assert!(ln_calls().is_empty());
+    // A removal: filter 1 as the form; no priority is allowed too.
+    assert_eq!(
+        run(
+            &mut e,
+            REMOVE_EVENT_HANDLER,
+            &[text("OnKeyDown:5"), form(1), pair(num(1.0), form(2))]
+        ),
+        1.0
+    );
+    assert_eq!(ln_calls(), [(0x100, FN_A, false, REF_1, 5)]);
+    // Another name: xNVSE's own.
+    assert_eq!(
+        run(&mut e, SET_EVENT_HANDLER, &[text("OnHit"), form(1)]),
+        1.0
+    );
+    assert!(ln_calls().is_empty());
+}
+
+/// `atoi` as the C runtime reads it: white space, a sign, digits up to another byte; the ends of
+/// an `int` past its range.
+#[test]
+fn atoi_as_the_c_runtime() {
+    use crate::event_commands::tests_atoi as atoi;
+    assert_eq!(atoi(b"  42abc"), 42);
+    assert_eq!(atoi(b"-17"), -17);
+    assert_eq!(atoi(b"+3"), 3);
+    assert_eq!(atoi(b"x1"), 0);
+    assert_eq!(atoi(b"99999999999"), i32::MAX);
+    assert_eq!(atoi(b"-99999999999"), i32::MIN);
+}

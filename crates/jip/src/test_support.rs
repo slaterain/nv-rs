@@ -23,6 +23,12 @@ pub fn engine() -> Engine {
     e.map(CONSOLE_OPEN & !0xfff, 0x1000);
     e.map(DATA, 0x1_0000);
     nvse::table::install(&mut e);
+    // The platform's XInputGetState at its import slot, as the host registers it (no controller:
+    // ERROR_DEVICE_NOT_CONNECTED), for JIP's wrap there.
+    e.register(0x00fd_f394, |_, _| Ret {
+        eax: 0x48f,
+        ..Ret::default()
+    });
     e
 }
 
@@ -114,4 +120,39 @@ pub fn unhex(lines: &[&str]) -> Vec<u8> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
         .collect()
+}
+
+/// Script reference `index` (from 1) is `form`: the reference list at the script's `+0x44`, each
+/// entry's form at `+8` (as `nvse::args` reads an `r` argument).
+pub fn script_ref(e: &mut Engine, index: u16, form: u32) {
+    let i = u32::from(index);
+    let ref_var = 0x0300_a000 + i * 0x10;
+    e.mem.set_u32(ref_var + 8, form);
+    e.mem.set_u32(ref_var + 0xc, 0);
+    let mut node = SCRIPT + 0x44;
+    for at in 1..i {
+        let next = e.mem.u32(node + 4);
+        node = if next == 0 {
+            let made = 0x0300_b000 + (at + 1) * 8;
+            e.mem.set_u32(node + 4, made);
+            made
+        } else {
+            next
+        };
+    }
+    e.mem.set_u32(node, ref_var);
+}
+
+/// A form argument: script reference `index` (`r`).
+pub fn form_arg(index: u16) -> Vec<u8> {
+    let mut b = vec![b'r'];
+    b.extend_from_slice(&index.to_le_bytes());
+    b
+}
+
+/// An integer argument (`n`).
+pub fn int_arg(v: i32) -> Vec<u8> {
+    let mut b = vec![b'n'];
+    b.extend_from_slice(&v.to_le_bytes());
+    b
 }

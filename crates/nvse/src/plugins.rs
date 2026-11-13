@@ -125,6 +125,39 @@ pub struct BuiltIn {
 #[derive(Default)]
 pub struct State {
     pub built_ins: Vec<BuiltIn>,
+    /// JIP LN NVSE's LN events, once it answers "installed" ([`set_ln_events`]).
+    pub ln_events: Option<LnEvents>,
+    /// A built-in listens to `MainGameLoop` ([`listen_per_frame`]): only then does a frame send
+    /// it (nv-rs's own: a frame with no built-in that wants it costs one flag read, as before
+    /// the message existed).
+    pub per_frame: bool,
+}
+
+/// A built-in's listener wants `MainGameLoop` every frame (JIP's start, when it answers
+/// "installed"). xNVSE sends the message to every listener; the built-ins that want it say so.
+pub fn listen_per_frame(e: &mut Engine) {
+    e.ext::<Nvse>().plugins.per_frame = true;
+}
+
+/// JIP LN NVSE's LN events as xNVSE reaches them (`GetLNEventMask`, `ProcessLNEventHandler`:
+/// xNVSE takes them from JIP's DLL by ordinals 10 and 11, `PluginManager.cpp` (xNVSE), and
+/// `SetEventHandler` and `RemoveEventHandler` ask them first, `Commands_Script.cpp`'s
+/// `ProcessEventHandler`): an event's mask by name (0 for none), and a handler set or removed
+/// (the mask, the script, whether to add, the source form, the number after the name's colon).
+#[derive(Clone, Copy)]
+pub struct LnEvents {
+    pub mask: fn(&mut Engine, &[u8]) -> u32,
+    pub handler: fn(&mut Engine, u32, u32, bool, u32, u32) -> bool,
+}
+
+/// Gives xNVSE JIP's LN events (JIP's start, when it answers "installed").
+pub fn set_ln_events(e: &mut Engine, ln: LnEvents) {
+    e.ext::<Nvse>().plugins.ln_events = Some(ln);
+}
+
+/// JIP's LN events, when JIP gave them.
+pub fn ln_events(e: &Engine) -> Option<LnEvents> {
+    e.ext_get::<Nvse>().and_then(|n| n.plugins.ln_events)
 }
 
 /// Registers a built-in, in xNVSE's order of plugins (`InstallPlugins` after `std::sort` of the
@@ -172,13 +205,19 @@ pub fn listed(e: &Engine, name: &[u8]) -> Option<(&'static str, u32)> {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), PluginManager.cpp:
 // PluginManager::Dispatch_Message (to the plugins' listeners; the callers tell the events first).
-/// Sends a message to every built-in's listener, in their order.
+/// Sends a message to every built-in's listener, in their order. The list is walked by index (a
+/// listener takes the engine), with no copy of it.
 pub fn dispatch(e: &mut Engine, kind: u32, data: u32, len: u32) {
     let message = Message { kind, data, len };
-    for p in built_ins(e) {
-        if let Some(listen) = p.listener {
+    let mut i = 0;
+    while let Some(p) = e
+        .ext_get::<Nvse>()
+        .and_then(|n| n.plugins.built_ins.get(i).map(|p| p.listener))
+    {
+        if let Some(listen) = p {
             listen(e, &message);
         }
+        i += 1;
     }
 }
 

@@ -159,6 +159,14 @@ pub const WRAPS: &[Entry] = &[
         owners: NVSE,
         step: "I-11",
     },
+    // XINPUT1_3 XInputGetState, its import slot, which the game's thunk 009f996e (every game
+    // read of the pad) jumps through: JIP LN NVSE's gamepad state and its changes to the game's
+    // copy (`HookXInput` jumps from that thunk, the slot's only use).
+    Entry {
+        addr: 0x00fd_f394,
+        owners: &[Owner::Jip],
+        step: "I-13",
+    },
 ];
 
 /// Every seam: an instruction inside a translated function where a built-in (or a fix row whose

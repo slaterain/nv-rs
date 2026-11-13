@@ -28,6 +28,10 @@ layout! {
     pub struct TESObjectREFR: 0x68 {
         /// `data.pObjectReference` (Xbox PDB): the base form.
         0x20 pObjectReference: u32,
+        /// `pParentCell` (Xbox PDB; JIP's `parentCell`, `// 40`): the exe's
+        /// `TESObjectREFR::GetParentCell`, `008d6f30`, returns `[ecx+0x40]` (engine-fallout-cell
+        /// `tesobjectrefr.rs`).
+        0x40 pParentCell: u32,
         /// `ExtraData` (Xbox PDB): the reference's extra data list.
         0x44 ExtraData: Inline<BaseExtraList>,
         /// `jipRefFlags5F` (JIP LN NVSE): JIP's flags (`kHookRefFlag5F_*`, `internal/hooks.h`) in
@@ -67,10 +71,37 @@ layout! {
     pub struct InterfaceManager: 0x580 {
         /// `iCurrentMode` (JIP's `currentMode`): 1 in game mode, 2 in menu mode.
         0x00C currentMode: u32,
+        /// `pActivateRef` (Xbox PDB; JIP's `crosshairRef`, `// 0FC`): the reference under the
+        /// crosshair; `InterfaceManager::InterfaceManager`, `0070a130`, zeroes `[edx+0xfc]`
+        /// (engine-fallout-interface `interfacemanager.rs`).
+        0x0FC pActivateRef: u32,
         /// `menuStack[10]` (JIP LN NVSE): the open menus' ids, 0 after the last.
         0x114 menuStack: u32,
         /// `pipBoyMode` (JIP LN NVSE): 3 while the Pip-Boy is up.
         0x4BC pipBoyMode: u32,
+    }
+
+    /// `PlayerCharacter` (Xbox PDB), 0xE50 bytes (`PlayerCharacter::PlayerCharacter`, `00938180`,
+    /// engine-fallout-ai `playercharacter.rs`), the field JIP reads.
+    pub struct PlayerCharacter: 0xE50 {
+        /// `pGrabbedObject` (Xbox PDB; JIP's `grabbedRef`, `// 638`): the reference the player
+        /// holds; the constructor `00938180` clears it.
+        0x638 pGrabbedObject: u32,
+    }
+
+    /// `OSInputGlobals` (JIP LN NVSE; the exe's `Controls`, `*0x011F35CC`), 0x1C04 bytes: the
+    /// button bound to each of the 28 controls, one byte each, 0xFF for none, per device. The
+    /// exe's action clear `00a25410` reads `[this + 0x1b94 + device * 0x1c + action]` for devices
+    /// 0 to 3 (engine-bs `xcontrols.rs`). Each field is a binding array's first byte.
+    pub struct OSInputGlobals: 0x1C04 {
+        /// `keyBinds[28]` (JIP LN NVSE, `// 1B94`): device 0, the keyboard.
+        0x1B94 keyBinds: u8,
+        /// `mouseBinds[28]` (`// 1BB0`): device 1.
+        0x1BB0 mouseBinds: u8,
+        /// `joystickBinds[28]` (`// 1BCC`): device 2.
+        0x1BCC joystickBinds: u8,
+        /// `controllerBinds[28]` (`// 1BE8`): device 3, the XInput pad.
+        0x1BE8 controllerBinds: u8,
     }
 
     /// `BGSListForm` (Xbox PDB): `ListOfForms`, a `BSSimpleList<TESForm *>` with its first node
