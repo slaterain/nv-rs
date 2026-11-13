@@ -178,6 +178,7 @@ pub fn install(e: &mut Engine) {
 // NewGameHook (their `s_gameLoadedInformedScripts.Clear()`).
 /// A game was loaded or started: every script is told of it once more.
 pub fn game_loaded(e: &mut Engine) {
+    super::controls::reset_on_load(e);
     e.ext::<Nvse>().game.loaded_informed.clear();
 }
 

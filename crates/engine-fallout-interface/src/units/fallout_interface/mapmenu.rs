@@ -1561,6 +1561,13 @@ fn do_click_marker(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32) {
         if not_dragged {
             let tile_11 = map_tile(e, base, 11);
             if e.call(TILE_IS_TRUE, &args![tile_11, 0xfafu32]).bool() {
+                // xNVSE's `MaybePreventFastTravel` (a jump at 00798020, before the player's check):
+                // with the mods' fast travel disabled, DoClick ends there (00798348): no travel,
+                // no message.
+                let alt = e.controls_alt();
+                if alt != 0 && alt & engine_core::extend::controls_alt::FAST_TRAVEL != 0 {
+                    return;
+                }
                 let player = e.mem.u32(PLAYER_011DEA3C);
                 if e.call(PLAYER_FLAG_0093D660, &args![player]).bool() {
                     offer_fast_travel(e, this, id, tile);
@@ -10534,6 +10541,20 @@ mod map_menu_tests {
         returns(&mut e, MARKER_GET_TRAVEL_LOC, 0);
         e.call(0x0079_6fd0, &args![menu, 0x1ai32, 0x7400u32]);
         assert_eq!(e.get(menu, MapMenu::pFastTravelMarker), 0);
+        // xNVSE's `MaybePreventFastTravel` (00798020): with the mods' fast travel disabled DoClick
+        // ends before the player's check: no marker, no box, no message.
+        returns(&mut e, MARKER_GET_TRAVEL_LOC, 1);
+        e.set(menu, MapMenu::pFastTravelMarker, 0);
+        e.set_controls_alt(1 << 14);
+        e.call_log = Some(vec![]);
+        e.call(0x0079_6fd0, &args![menu, 0x1ai32, 0x7400u32]);
+        assert_eq!(e.get(menu, MapMenu::pFastTravelMarker), 0);
+        assert!(calls_to(&e, PLAYER_FLAG_0093D660).is_empty());
+        assert!(calls_to(&e, SHOW_MESSAGE_BOX).is_empty());
+        // Another flag: the offer as before.
+        e.set_controls_alt(1 << 12);
+        e.call(0x0079_6fd0, &args![menu, 0x1ai32, 0x7400u32]);
+        assert_eq!(e.get(menu, MapMenu::pFastTravelMarker), 0x3200);
     }
 
     #[test]

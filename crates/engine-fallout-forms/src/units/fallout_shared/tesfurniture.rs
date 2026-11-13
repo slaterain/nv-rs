@@ -549,6 +549,12 @@ pub fn tes_furniture_activate(
         e.call(INITIATE_SIT_SLEEP_PACKAGE, &args![player_character, target]);
         return true;
     }
+    // xNVSE's `SleepFromFurniture::MaybePreventSleeping` (a jump at 00509660, the sleep marker's
+    // first instruction): with the mods' sleeping disabled, false at once (00509880), no message.
+    let alt = e.controls_alt();
+    if alt != 0 && alt & engine_core::extend::controls_alt::SLEEP != 0 {
+        return false;
+    }
     let owner = e.call(GET_OWNER, &args![target]).u32();
     let is_player = player_character == e.global::<u32>(PLAYER);
     if owner != 0
@@ -1269,6 +1275,8 @@ mod tests {
         interior_blocked: bool,
         sleep_state: bool,
         player_state: bool,
+        /// The mods' disabled controls (`Engine::controls_alt`).
+        alt: u32,
     }
 
     impl Scene {
@@ -1285,6 +1293,7 @@ mod tests {
                 interior_blocked: false,
                 sleep_state: false,
                 player_state: false,
+                alt: 0,
             }
         }
     }
@@ -1347,6 +1356,7 @@ mod tests {
                 ..Ret::default()
             }
         });
+        e.set_controls_alt(scene.alt);
         e.call_log = Some(vec![]);
         let result = e
             .call(0x0050_95b0, &args![f, target, player, 11u32, 22u32, 33u32])
@@ -1425,6 +1435,35 @@ mod tests {
         assert_eq!(calls_to(&e, GET_OWNER), [[target.addr()]]);
         // The interior byte reaches the sleep-state test.
         assert_eq!(calls_to(&e, SLEEP_STATE_TEST), [[SLEEP_STATE, 1]]);
+    }
+
+    #[test]
+    fn activate_with_sleeping_disabled() {
+        // xNVSE's `MaybePreventSleeping` (00509660): a sleep marker answers false at once, no owner
+        // asked, no message, no menu.
+        let (result, e, _, _) = activate(Scene {
+            alt: 1 << 12,
+            ..Scene::sleeping_allowed()
+        });
+        assert!(!result);
+        assert!(calls_to(&e, CREATE_SLEEP_MENU).is_empty());
+        assert!(calls_to(&e, GET_OWNER).is_empty());
+        assert!(messages(&e).is_empty());
+        // Another flag: the bed as without it.
+        let (result, e, _, _) = activate(Scene {
+            alt: 1 << 13,
+            ..Scene::sleeping_allowed()
+        });
+        assert!(result);
+        assert_eq!(calls_to(&e, CREATE_SLEEP_MENU), [[1]]);
+        // A sit marker is never stopped.
+        let (result, e, player, _) = activate(Scene {
+            alt: 1 << 12,
+            marker_type: 12,
+            ..Scene::sleeping_allowed()
+        });
+        assert!(result);
+        assert_eq!(calls_to(&e, FORCE_TEMP_THIRD_PERSON), [[player.addr(), 1]]);
     }
 
     #[test]

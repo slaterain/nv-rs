@@ -2802,6 +2802,17 @@ pub fn script_show_sleep_wait_menu(e: &mut Engine, a: ScriptArgs) -> bool {
         return false;
     };
     if second == 1 {
+        // xNVSE's `Cmd_ShowSleepWaitMenu::CheckPreconditions_Hook` (the call at 005e00e0): the
+        // checked menu not opened while the mods disabled sleeping (the first argument 1) or
+        // waiting (else), so none of the game's precondition messages shows.
+        let alt = e.controls_alt();
+        if alt != 0 {
+            use engine_core::extend::controls_alt::{SLEEP, WAIT};
+            let flag = if first != 0 { SLEEP } else { WAIT };
+            if alt & flag != 0 {
+                return true;
+            }
+        }
         let player = e.global::<u32>(PLAYER);
         e.call(PLAYER_SLEEP_WAIT, &args![player]);
     } else {
@@ -6594,6 +6605,38 @@ mod tests {
         start_log(&mut e);
         assert!(!e.call(0x005e_0090, &args![a]).bool());
         assert_eq!(call_order(&e).len(), 2);
+    }
+
+    /// xNVSE's `CheckPreconditions_Hook` (005e00e0): the checked menu is not opened while the mods
+    /// disabled sleeping (first 1) or waiting (first 0); the other flag, or none, opens it. The
+    /// interface's menu (second not 1) is never stopped.
+    #[test]
+    fn show_sleep_wait_menu_waits_for_the_mods_flags() {
+        let mut e = engine();
+        let player = set_player(&mut e);
+        nothing(&mut e, PLAYER_SLEEP_WAIT);
+        nothing(&mut e, CREATE_SLEEP_MENU);
+        let a = command(&mut e, 0);
+        let (sleep, wait) = (1u32 << 12, 1u32 << 13);
+        for (alt, first, opens) in [
+            (sleep, 1u32, false),
+            (sleep, 0, true),
+            (wait, 0, false),
+            (wait, 1, true),
+            (0, 1, true),
+        ] {
+            e.set_controls_alt(alt);
+            parse_gives(&mut e, true, &[first, 1]);
+            start_log(&mut e);
+            assert!(e.call(0x005e_0090, &args![a]).bool());
+            let want = if opens { vec![vec![player]] } else { vec![] };
+            assert_eq!(calls(&e, PLAYER_SLEEP_WAIT), want, "{alt:x} {first}");
+        }
+        e.set_controls_alt(sleep | wait);
+        parse_gives(&mut e, true, &[1, 0]);
+        start_log(&mut e);
+        assert!(e.call(0x005e_0090, &args![a]).bool());
+        assert_eq!(calls(&e, CREATE_SLEEP_MENU), vec![vec![1]]);
     }
 
     #[test]

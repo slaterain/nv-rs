@@ -36,6 +36,31 @@ const _: () = assert!(
         && ROUTINE_BASE < crate::mem::EXTENDER_CODE.end
 );
 
+/// xNVSE's `TogglePlayerControlsAlt::DisabledControlsFlags` (`PluginAPI.h`): the bits of
+/// [`Engine::controls_alt`].
+pub mod controls_alt {
+    pub const MOVEMENT: u32 = 1 << 0;
+    pub const LOOKING: u32 = 1 << 1;
+    pub const PIPBOY: u32 = 1 << 2;
+    pub const FIGHTING: u32 = 1 << 3;
+    pub const POV: u32 = 1 << 4;
+    pub const ROLLOVER_TEXT: u32 = 1 << 5;
+    pub const SNEAKING: u32 = 1 << 6;
+    /// `kVanillaFlags`: the seven controls the game's own byte (`PlayerCharacter +0x680`) has.
+    pub const VANILLA: u32 = 0x7f;
+    pub const ATTACKING: u32 = 1 << 7;
+    pub const ENTER_VATS: u32 = 1 << 8;
+    pub const JUMPING: u32 = 1 << 9;
+    pub const AIMING_OR_BLOCKING: u32 = 1 << 10;
+    pub const RUNNING: u32 = 1 << 11;
+    pub const SLEEP: u32 = 1 << 12;
+    pub const WAIT: u32 = 1 << 13;
+    pub const FAST_TRAVEL: u32 = 1 << 14;
+    pub const RELOAD: u32 = 1 << 15;
+    /// `kAllFlags`.
+    pub const ALL: u32 = 0xffff;
+}
+
 /// Who may own a wrap or a seam handler, in the order they run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Owner {
@@ -149,6 +174,14 @@ pub const WRAPS: &[Entry] = &[
     // writes a `ret` at its entry), a command batch after I-4.
     Entry {
         addr: 0x0070_52f0,
+        owners: NVSE,
+        step: "I-4",
+    },
+    // PlayerCharacter::Reload 0095d3f0, the function the player's vtable slot 0108ae28 holds
+    // (xNVSE's `MaybePreventReload` writes the slot; the exe reaches the function only through
+    // it): a reload refused while the mods disabled reloading (DisablePlayerControlsAlt).
+    Entry {
+        addr: 0x0095_d3f0,
         owners: NVSE,
         step: "I-4",
     },
@@ -704,6 +737,11 @@ pub(crate) struct ExtendState {
     pub(crate) active: std::collections::HashMap<u32, Vec<Active>>,
     pub(crate) sites: crate::engine::AddrMap<u32, SiteHandlers>,
     pub(crate) tables: ScriptTables,
+    /// xNVSE's `TogglePlayerControlsAlt::g_disabledControls` (`Hooks_Gameplay.cpp`): the controls
+    /// the mods disabled with `DisablePlayerControlsAlt`, one word for the whole game (every real
+    /// thread's engine shares it). The translated functions xNVSE patches read it with one load
+    /// ([`Engine::controls_alt`]) and with 0 run the exe's path; `nvse` writes it.
+    pub(crate) controls_alt: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl Default for ExtendState {
@@ -722,6 +760,7 @@ impl ExtendState {
             active: std::collections::HashMap::new(),
             sites: Default::default(),
             tables: ScriptTables::default(),
+            controls_alt: Default::default(),
         }
     }
 
@@ -745,6 +784,7 @@ impl ExtendState {
             active: std::collections::HashMap::new(),
             sites: self.sites.clone(),
             tables: self.tables,
+            controls_alt: self.controls_alt.clone(),
         }
     }
 }
@@ -1185,6 +1225,24 @@ impl Engine {
             }
         }
         None
+    }
+
+    /// xNVSE's `g_disabledControls` ([`ExtendState`]): the player controls the mods disabled with
+    /// `DisablePlayerControlsAlt` (xNVSE's `TogglePlayerControlsAlt` flags), 0 when none. The
+    /// translated functions xNVSE patches for them read it here, one load, and with 0 run the
+    /// exe's path untouched.
+    #[inline]
+    pub fn controls_alt(&self) -> u32 {
+        self.extend
+            .controls_alt
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Sets [`Engine::controls_alt`] (the built-in xNVSE's commands).
+    pub fn set_controls_alt(&self, flags: u32) {
+        self.extend
+            .controls_alt
+            .store(flags, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// The owners with a handler at the seam `addr`, in the order they run.
