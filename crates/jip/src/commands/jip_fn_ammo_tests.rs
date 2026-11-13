@@ -10,6 +10,7 @@ const AMMO: u32 = FORMS + 0x1000;
 const PROJ: u32 = FORMS + 0x2000;
 const MISC: u32 = FORMS + 0x2100;
 const CLIMATE: u32 = FORMS + 0x2200;
+const STAT: u32 = FORMS + 0x2300;
 
 fn setup() -> Engine {
     let mut e = engine();
@@ -97,8 +98,22 @@ fn the_casing() {
     assert_eq!(
         e.mem.u32(AMMO + 0xbc),
         MISC,
-        "a climate is no inventory item"
+        "a climate is no bound object: the reader refuses it"
     );
+    // A bound object that is no inventory item (a static, type 0x20) passes the reader's
+    // kParamType_ObjectID check (its `IsBoundObject`) and is refused by `kInventoryType`.
+    form(&mut e, STAT, 0x20, 0x0000_0020);
+    let vtbl = FORMS + 0x6000;
+    e.mem.set_u32(STAT, vtbl);
+    e.mem
+        .set_u32(vtbl + nvse::vtable::IS_BOUND_OBJECT, 0x0050_1000);
+    e.register(0x0050_1000, |_, _| Ret {
+        eax: 1,
+        ..Ret::default()
+    });
+    set_ref(&mut e, 5, STAT);
+    call(&mut e, 0x2939, &[r(1), r(5)]);
+    assert_eq!(e.mem.u32(AMMO + 0xbc), MISC, "a static is no inventory item");
     call(&mut e, 0x2939, &[r(1)]);
     assert_eq!(e.mem.u32(AMMO + 0xbc), 0);
     call(&mut e, 0x2939, &[r(4), r(3)]);
