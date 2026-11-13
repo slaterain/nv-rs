@@ -46,9 +46,9 @@ static WINDOW_DEVICES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) fn window_device(made: bool) {
     if made {
         WINDOW_DEVICES.fetch_add(1, Ordering::Relaxed);
-    } else {
-        let _ =
-            WINDOW_DEVICES.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1));
+    } else if WINDOW_DEVICES.load(Ordering::Relaxed) > 0 {
+        // Devices are made and dropped on the render thread, one at a time.
+        WINDOW_DEVICES.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
