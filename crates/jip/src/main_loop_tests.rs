@@ -4,7 +4,9 @@
 //! ([`crate::script_call`]). Layouts: a form's type `+4` and id `+0xC` (`TESForm`); the
 //! interface manager's `cMenuMode` `+0xC` (engine-fallout-interface `interfacemanager.rs`); the
 //! game's form map (`NiTPointerMap` at `*0x011C54C0`: hash size `+4`, buckets `+8`, an item next,
-//! key, value: engine-core `types.rs`, as `cosave` reads it).
+//! key, value: engine-core `types.rs`, as `cosave` reads it). Written out, not the code's
+//! constants: `g_thePlayer` `*0x011DEA3C`, `g_interfaceManager` `*0x011D8A80`, a script's form
+//! type 0x11, the player's id 0x14.
 
 use super::*;
 use crate::script_call::calls;
@@ -23,13 +25,13 @@ fn world() -> Engine {
     e.map(AREA, 0x1_0000);
     e.map(0x011d_8000, 0x1000);
     e.map(0x011c_5000, 0x1000);
-    e.mem.set_u8(SCRIPT_FORM + 4, SCRIPT);
+    e.mem.set_u8(SCRIPT_FORM + 4, 0x11);
     e.mem.set_u32(SCRIPT_FORM + 0xc, 0x0100_0900);
-    e.mem.set_u32(PLAYER_REF + 0xc, PLAYER_ID);
+    e.mem.set_u32(PLAYER_REF + 0xc, 0x14);
     e.mem.set_u32(OTHER_REF + 0xc, 0x0100_0001);
-    e.mem.set_u32(PLAYER, PLAYER_REF);
-    e.mem.set_u32(INTERFACE_MANAGER, MANAGER);
-    e.mem.set_u32(MANAGER + CURRENT_MODE, 1);
+    e.mem.set_u32(0x011d_ea3c, PLAYER_REF);
+    e.mem.set_u32(0x011d_8a80, MANAGER);
+    e.mem.set_u32(MANAGER + 0xc, 1);
     // The form map: one bucket, OTHER_REF under its id.
     e.mem.set_u32(0x011c_54c0, FORM_MAP);
     e.mem.set_u32(FORM_MAP + 4, 1);
@@ -76,7 +78,7 @@ fn a_callback_through_the_command() {
             flags: 1,
             call_delay: 2,
             cycle_count: 2,
-            ref_id: PLAYER_ID,
+            ref_id: 0x14,
         }]
     );
     assert_eq!(sgmlc(&mut e, 0, &[]), 1.0, "one argument: the query");
@@ -86,7 +88,7 @@ fn a_callback_through_the_command() {
     assert_eq!(calls(), [(SCRIPT_FORM, PLAYER_REF, vec![])]);
     assert_eq!(callbacks(&mut e)[0].cycle_count, 2, "set back to the delay");
     // Menu mode: not counted for flags 1.
-    e.mem.set_u32(MANAGER + CURRENT_MODE, 2);
+    e.mem.set_u32(MANAGER + 0xc, 2);
     cycle(&mut e);
     cycle(&mut e);
     assert!(calls().is_empty());
@@ -162,4 +164,82 @@ fn not_installed_the_record_is_502s() {
             .u32(off.script_tables().record(SET_GAME_MAIN_LOOP_CALLBACK) + 0x18),
         0
     );
+}
+
+/// The wiring through xNVSE's messages, not through `cycle`/`process` themselves: installed, JIP
+/// asks for `MainGameLoop`; each one runs the callbacks and then the LN events (a key handler
+/// here), the events alone once no callback is left; `PreLoadGame` takes the callbacks with mode
+/// bit 8 (`CleanMLCallbacks`) and makes the LN events' next frame the first after a load.
+#[test]
+fn the_messages_drive_them() {
+    use nvse::plugins::{dispatch, dispatch_text, msg};
+    let mut e = world();
+    assert!(e.ext::<nvse::Nvse>().plugins.per_frame, "asked for");
+    // A parent cell (`+0x40`): the LN events' frame checks run to the end.
+    e.mem.set_u32(PLAYER_REF + 0x40, AREA + 0x500);
+    sgmlc(&mut e, 0, &[1, 1]);
+    let key_down = crate::ln_events::mask(crate::ln_events::id::KEY_DOWN);
+    assert!(crate::ln_events::process_ln_event_handler(
+        &mut e,
+        key_down,
+        SCRIPT_FORM,
+        true,
+        0,
+        0x11
+    ));
+    e.ext::<nvse::Nvse>().input.keys[0x11].raw_state = true;
+    dispatch(&mut e, msg::MAIN_GAME_LOOP, 0, 0);
+    assert_eq!(
+        calls(),
+        [
+            (SCRIPT_FORM, PLAYER_REF, vec![]),
+            (SCRIPT_FORM, 0, vec![0x11])
+        ]
+    );
+    assert!(!e.ext::<Jip>().ln_events.game_loaded);
+    // The callback kept with mode 9 (bit 8): a load takes it.
+    sgmlc(&mut e, 0, &[1, 1, 9]);
+    dispatch_text(&mut e, msg::PRE_LOAD_GAME, b"Save 1.fos");
+    assert!(callbacks(&mut e)[0].remove, "CleanMLCallbacks");
+    assert!(
+        e.ext::<Jip>().ln_events.game_loaded,
+        "the LN events' first frame"
+    );
+    // The key goes up: the next frame removes the callback (not called: marked) and the events
+    // run on their own.
+    let key_up = crate::ln_events::mask(crate::ln_events::id::KEY_UP);
+    crate::ln_events::process_ln_event_handler(&mut e, key_up, SCRIPT_FORM, true, 0, 0x11);
+    e.ext::<nvse::Nvse>().input.keys[0x11].raw_state = false;
+    dispatch(&mut e, msg::MAIN_GAME_LOOP, 0, 0);
+    assert_eq!(calls(), [(SCRIPT_FORM, 0, vec![0x11])]);
+    assert!(callbacks(&mut e).is_empty());
+    e.ext::<nvse::Nvse>().input.keys[0x11].raw_state = true;
+    dispatch(&mut e, msg::MAIN_GAME_LOOP, 0, 0);
+    assert_eq!(
+        calls(),
+        [(SCRIPT_FORM, 0, vec![0x11])],
+        "no callbacks: the events alone"
+    );
+}
+
+/// Not installed: JIP does not ask for `MainGameLoop` (a frame sends nothing), and the message, if
+/// another built-in asked for it, does nothing of JIP's even with a callback in its state.
+#[test]
+fn not_installed_no_frame_work() {
+    calls();
+    let mut e = engine();
+    crate::install_as(&mut e, false);
+    assert!(!e.ext::<nvse::Nvse>().plugins.per_frame);
+    e.ext::<Jip>().main_loop.callbacks.push(Callback {
+        script: SCRIPT_FORM,
+        this_obj: PLAYER_REF,
+        remove: false,
+        flags: 0xb,
+        call_delay: 1,
+        cycle_count: 1,
+        ref_id: 0x14,
+    });
+    nvse::plugins::dispatch(&mut e, nvse::plugins::msg::MAIN_GAME_LOOP, 0, 0);
+    assert!(calls().is_empty());
+    assert_eq!(callbacks(&mut e)[0].cycle_count, 1, "not counted");
 }

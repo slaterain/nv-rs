@@ -1334,12 +1334,23 @@ pub fn listen(e: &mut Engine, m: &Message) {
             s.had_section = false;
         }
         msg::MAIN_GAME_LOOP => {
-            // The callbacks, then the LN events when any has a handler. (JIP's HUD cursor and
-            // item list box parts come with their UI commands.)
-            if !e.ext::<Jip>().main_loop.callbacks.is_empty() {
-                crate::main_loop::cycle(e);
+            // The callbacks, then the LN events when any has a handler: one look at JIP's state
+            // when there is nothing to do. Sent only once JIP answers "installed" (it asks for it,
+            // `nvse::plugins::listen_per_frame`); the check keeps it so if another built-in asks.
+            // (JIP's HUD cursor and item list box parts come with their UI commands.)
+            let jip = e.ext::<Jip>();
+            if !jip.answers_installed {
+                return;
             }
-            crate::ln_events::process(e);
+            let callbacks = !jip.main_loop.callbacks.is_empty();
+            let events = jip.ln_events.flags != 0;
+            if callbacks {
+                crate::main_loop::cycle(e);
+                // A callback may have set an LN handler: the events see it this frame.
+                crate::ln_events::process(e);
+            } else if events {
+                crate::ln_events::process(e);
+            }
         }
         _ => {}
     }

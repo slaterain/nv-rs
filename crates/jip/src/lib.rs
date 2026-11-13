@@ -123,15 +123,17 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
     table::install(e, answers_installed);
     identity::install(e, answers_installed);
     overrides::install(e, answers_installed);
-    // Built commands answer only while JIP answers "installed": until then every JIP opcode is as
-    // without the DLL (no handler, no name).
-    if answers_installed {
-        commands::install(e);
-    }
+    // Built commands answer only while JIP answers "installed": `table::set_handlers` writes
+    // nothing until then, so every JIP opcode is as without the DLL (no handler, no name).
+    commands::install(e);
     input::install(e, answers_installed);
     ln_events::install(e, answers_installed);
     main_loop::install(e);
     nvse::plugins::register(e, plugin(answers_installed));
+    // `MainGameLoop` only once JIP answers "installed": until then a frame does no JIP work.
+    if answers_installed {
+        nvse::plugins::listen_per_frame(e);
+    }
     e.ext::<Jip>().installed = true;
     // The game's state, not one engine's: real threads' engines share it.
     e.share_ext::<Jip>();

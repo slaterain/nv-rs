@@ -6,6 +6,9 @@
 //! crosshair reference `pActivateRef` `+0xFC` (engine-fallout-interface `interfacemanager.rs`),
 //! a form list's forms inline at `+0x18` (`bgslistform.rs`), the bindings at `+0x1B94` of the
 //! `Controls` object (`xcontrols.rs`), the form map at `*0x011C54C0` (engine-core `types.rs`).
+//! Written out, not the code's constants: `g_thePlayer` `*0x011DEA3C`, `g_interfaceManager`
+//! `*0x011D8A80`, the cell and form list types 0x39 and 0x55, a reference's vtable slot `+0xF0`
+//! (`IsReference`) holding the exe's "return true" `008d0360`.
 
 use super::*;
 use crate::script_call::calls;
@@ -33,12 +36,12 @@ fn world(installed: bool) -> Engine {
         e.map(page, 0x1000);
     }
     let reference_vt = VTABLES;
-    e.mem.set_u32(reference_vt + VT_IS_REFERENCE, RETURN_TRUE);
+    e.mem.set_u32(reference_vt + 0xf0, 0x008d_0360);
     for (form, kind, id) in [
-        (CELL_A, CELL, 0x0100_0010),
-        (CELL_B, CELL, 0x0100_0011),
+        (CELL_A, 0x39, 0x0100_0010),
+        (CELL_B, 0x39, 0x0100_0011),
         (BASE_A, 0x28, 0x0100_0012),
-        (LIST, LIST_FORM, 0x0100_0013),
+        (LIST, 0x55, 0x0100_0013),
         (S1, 0x11, 0x0100_0014),
         (S2, 0x11, 0x0100_0015),
     ] {
@@ -51,8 +54,8 @@ fn world(installed: bool) -> Engine {
     e.mem.set_u32(REF_A + 0xc, 0x0100_0020);
     e.mem.set_u32(REF_A + 0x20, BASE_A);
     e.mem.set_u32(PLAYER_REF + 0xc, 0x14);
-    e.mem.set_u32(PLAYER, PLAYER_REF);
-    e.mem.set_u32(INTERFACE_MANAGER, MANAGER);
+    e.mem.set_u32(0x011d_ea3c, PLAYER_REF);
+    e.mem.set_u32(0x011d_8a80, MANAGER);
     e.mem.set_u32(MANAGER + 0xc, 1);
     // The form map: REF_A under its id.
     e.mem.set_u32(0x011c_54c0, FORM_MAP);
@@ -156,6 +159,62 @@ fn list_handlers() {
     assert!(handler(&mut e, id::CROSSHAIR_OFF, S2, true, 0, 0));
     assert!(handler(&mut e, id::CROSSHAIR_OFF, S2, false, REF_A, 0));
     assert!(state(&mut e).events[usize::from(id::CROSSHAIR_OFF)].is_empty());
+    // One script with an unfiltered and a filtered handler on one event, removed with the filter:
+    // both go (`Vector::Remove(Matcher)` takes every match, from the end); another script's stays,
+    // and the flag with it until that one goes too.
+    assert!(handler(&mut e, id::CROSSHAIR_OFF, S1, true, 0, 0));
+    assert!(handler(&mut e, id::CROSSHAIR_OFF, S2, true, REF_A, 0));
+    assert!(handler(&mut e, id::CROSSHAIR_OFF, S1, true, REF_A, 0));
+    assert!(handler(&mut e, id::CROSSHAIR_OFF, S1, false, REF_A, 0));
+    let left: Vec<u32> = state(&mut e).events[usize::from(id::CROSSHAIR_OFF)]
+        .iter()
+        .map(|h| h.script)
+        .collect();
+    assert_eq!(left, [S2]);
+    assert_ne!(state(&mut e).flags & mask(id::CROSSHAIR_OFF), 0);
+    assert!(
+        !handler(&mut e, id::CROSSHAIR_OFF, S1, false, REF_A, 0),
+        "none of S1's left"
+    );
+    assert!(handler(&mut e, id::CROSSHAIR_OFF, S2, false, REF_A, 0));
+    assert_eq!(state(&mut e).flags & mask(id::CROSSHAIR_OFF), 0);
+}
+
+/// The controls' events run after the menu-mode and parent-cell checks: a control that goes down
+/// in menu mode, or while the player has no cell, calls nothing; back in game mode with a cell it
+/// calls its down handler once; going up in menu mode waits the same way.
+#[test]
+fn controls_wait_for_game_mode_and_a_cell() {
+    let mut e = world(true);
+    handler(&mut e, id::CONTROL_DOWN, S1, true, 0, 4);
+    handler(&mut e, id::CONTROL_UP, S2, true, 0, 4);
+    e.mem.set_u32(PLAYER_REF + 0x40, CELL_A);
+    process(&mut e);
+    assert!(calls().is_empty());
+    // Menu mode (`cMenuMode` 2): control 4's key goes down, nothing.
+    e.mem.set_u32(MANAGER + 0xc, 2);
+    key(&mut e, 0x11).raw_state = true;
+    process(&mut e);
+    assert!(calls().is_empty(), "menu mode");
+    // Game mode, no parent cell: nothing.
+    e.mem.set_u32(MANAGER + 0xc, 1);
+    e.mem.set_u32(PLAYER_REF + 0x40, 0);
+    process(&mut e);
+    assert!(calls().is_empty(), "no cell");
+    // A cell: the down handler once.
+    e.mem.set_u32(PLAYER_REF + 0x40, CELL_A);
+    process(&mut e);
+    assert_eq!(calls(), [(S1, 0, vec![4])]);
+    process(&mut e);
+    assert!(calls().is_empty(), "once");
+    // Up in menu mode: waits for game mode.
+    e.mem.set_u32(MANAGER + 0xc, 2);
+    key(&mut e, 0x11).raw_state = false;
+    process(&mut e);
+    assert!(calls().is_empty());
+    e.mem.set_u32(MANAGER + 0xc, 1);
+    process(&mut e);
+    assert_eq!(calls(), [(S2, 0, vec![4])]);
 }
 
 /// The keys' and controls' handlers: a valid key (`kValidKeyCode`), a control below 28; a

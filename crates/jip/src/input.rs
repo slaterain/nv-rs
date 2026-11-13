@@ -17,9 +17,11 @@
 //! Only while JIP answers "installed" ([`crate::ANSWERS_INSTALLED`]): until then nothing wraps the
 //! slot and the game reads the pad as without the DLL.
 
+use crate::game::OSInputGlobals;
 use crate::Jip;
 use engine_core::extend::{Owner, WrapSlot};
 use engine_core::prelude::*;
+use engine_core::ptr::Field;
 
 /// The import slot of `XInputGetState` (`00fdf394`), which the game's thunk `009f996e` jumps
 /// through (`jmp [00fdf394]`, its only use): JIP's hook site, as the port registers the
@@ -34,12 +36,9 @@ const CONTROLLER_OFF: u32 = 0x011d_8c50;
 /// `ERROR_DEVICE_NOT_CONNECTED`: JIP's last answer before the first read.
 const NOT_CONNECTED: u32 = 0x48f;
 
-/// The game's `Controls` object (`OSInputGlobals`, `*0x011F35CC`) and its action bindings
-/// (`+0x1B94`, 0x1C bytes a device: keyboard, mouse, joystick, controller; one byte an action,
-/// 0xFF for none: engine-bs `xcontrols.rs`).
-const CONTROLS: u32 = 0x011f_35cc;
-const BINDINGS: u32 = 0x1b94;
-const BINDINGS_STRIDE: u32 = 0x1c;
+/// `g_inputGlobals` (JIP LN NVSE, `OSInputGlobals::GetSingleton`): the game's `Controls` object
+/// is at `*0x011F35CC`; its bindings through [`OSInputGlobals`]'s layout.
+const INPUT_GLOBALS: u32 = 0x011f_35cc;
 /// `MAX_CONTROL_BIND`: the game's 28 actions.
 pub const MAX_CONTROL_BIND: u32 = 28;
 /// `kMaxMacros` (`internal/dinput.h`): 256 keys, 8 mouse buttons, the wheel's 2.
@@ -265,24 +264,23 @@ fn apply_mods(e: &mut Engine, at: u32) {
 
 // ---- the game's bindings ----
 
-/// The button a device binds to `control` (0 keyboard, 1 mouse, 3 controller), 0xFF for none
-/// (`KEYBOARD_BIND`, `MOUSE_BIND`, `CONTROLLER_BIND`).
-fn bind(e: &Engine, device: u32, control: u32) -> u8 {
-    let controls = e.mem.u32(CONTROLS);
-    e.mem
-        .u8(controls + BINDINGS + BINDINGS_STRIDE * device + control)
+/// The button a device binds to `control`, 0xFF for none (`KEYBOARD_BIND`, `MOUSE_BIND`,
+/// `CONTROLLER_BIND`): byte `control` of the device's array in `OSInputGlobals`.
+fn bind(e: &Engine, array: Field<OSInputGlobals, u8>, control: u32) -> u8 {
+    let globals = Ptr::<OSInputGlobals>::new(e.mem.u32(INPUT_GLOBALS));
+    e.mem.u8(globals.addr() + array.off + control)
 }
 
 fn keyboard_bind(e: &Engine, control: u32) -> u8 {
-    bind(e, 0, control)
+    bind(e, OSInputGlobals::keyBinds, control)
 }
 
 fn mouse_bind(e: &Engine, control: u32) -> u8 {
-    bind(e, 1, control)
+    bind(e, OSInputGlobals::mouseBinds, control)
 }
 
 fn controller_bind(e: &Engine, control: u32) -> u8 {
-    bind(e, 3, control)
+    bind(e, OSInputGlobals::controllerBinds, control)
 }
 
 // ---- xNVSE's keyboard and mouse hook, as JIP reads it ----

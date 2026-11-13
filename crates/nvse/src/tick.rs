@@ -126,10 +126,17 @@ fn state(e: &mut Engine) -> &mut State {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Gameplay.cpp: HandleMainLoopHook.
 fn tick(e: &mut Engine, _: &[u32]) -> Option<u32> {
-    if !e.ext::<Nvse>().main_thread_recorded {
+    let (first, per_frame) = {
+        let n = e.ext::<Nvse>();
+        (!n.main_thread_recorded, n.plugins.per_frame)
+    };
+    if first {
         first_frame(e);
     }
-    crate::plugins::dispatch(e, crate::plugins::msg::MAIN_GAME_LOOP, 0, 0);
+    // `MainGameLoop`, only when a built-in listens to it (no other work in a frame otherwise).
+    if per_frame {
+        crate::plugins::dispatch(e, crate::plugins::msg::MAIN_GAME_LOOP, 0, 0);
+    }
     // Any temporary inventory references go (their deferred actions run).
     if crate::invref::any(e) {
         crate::invref::clear(e);

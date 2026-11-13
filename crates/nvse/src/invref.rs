@@ -1137,6 +1137,29 @@ pub fn any(e: &mut Engine) -> bool {
     !state(e).refs.is_empty()
 }
 
+/// A bare temporary inventory reference under `id` (no reference, entry or item: its clear only
+/// forgets it), for the tick's tests of what runs before the clear.
+#[cfg(test)]
+pub(crate) fn tests_plant(e: &mut Engine, id: u32) {
+    let s = state(e);
+    s.refs.insert(
+        id,
+        InvRef {
+            data: Data {
+                item: 0,
+                entry: 0,
+                xdata: 0,
+            },
+            container: 0,
+            temp_ref: 0,
+            deferred: Vec::new(),
+            temp_entry: 0,
+            validate: false,
+            removed: false,
+        },
+    );
+    s.order.insert(id);
+}
 #[cfg(test)]
 #[path = "invref_tests.rs"]
 mod tests;

@@ -13,7 +13,7 @@
 //!
 //! A handler keeps its script's lambda variables while it is set (`LambdaVarContext`), as in JIP.
 
-use crate::game::{InterfaceManager, TESForm, TESObjectREFR};
+use crate::game::{InterfaceManager, PlayerCharacter, TESForm, TESObjectREFR};
 use crate::Jip;
 use engine_core::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
@@ -108,18 +108,13 @@ const CARAVAN_MONEY: u32 = 0x74;
 /// `kMaxMacros`, `MAX_CONTROL_BIND`.
 const MAX_MACROS: usize = 266;
 const MAX_CONTROLS: usize = 28;
-/// `g_thePlayer`, `g_interfaceManager`; the player's grabbed reference (`pGrabbedObject`,
-/// `+0x638`: engine-fallout-ai `playercharacter.rs`); the interface manager's crosshair
-/// reference (`pActivateRef`, `+0xFC`: engine-fallout-interface `interfacemanager.rs`).
+/// `g_thePlayer`, `g_interfaceManager` (their fields through [`PlayerCharacter`],
+/// [`InterfaceManager`] and [`TESObjectREFR`]'s layouts).
 const PLAYER: u32 = 0x011d_ea3c;
 const INTERFACE_MANAGER: u32 = 0x011d_8a80;
-const GRABBED: u32 = 0x638;
-const CROSSHAIR: u32 = 0xfc;
 /// The vtable entry that answers true and `IS_REFERENCE`'s slot.
 const RETURN_TRUE: u32 = 0x008d_0360;
 const VT_IS_REFERENCE: u32 = 0xf0;
-/// A reference's parent cell (`pParentCell`, `+0x40`: engine-fallout-cell `tesobjectrefr.rs`).
-const PARENT_CELL: u32 = 0x40;
 
 /// One handler of a list event (`LNEventData`): its event, filter kind (0 none, 1 a reference, 2
 /// a base form or cell, 3 a form list, 4 a form type or button mask), script and filter (the form,
@@ -435,14 +430,22 @@ pub fn process_ln_event_handler(
         s.events[list].push(h);
         s.flags |= event_mask;
     } else {
-        let Some(at) = state(e).events[list]
-            .iter()
-            .position(|s| finds(&h, true, s))
-        else {
+        // `Vector::Remove(Matcher)` (JIP's `containers.h`): from the end, EVERY match goes (a
+        // stored handler without a filter and the one with this filter both), each one's lambda
+        // variables given up as it is destroyed; false only when none matched.
+        let mut removed = 0;
+        let mut at = state(e).events[list].len();
+        while at > 0 {
+            at -= 1;
+            if finds(&h, true, &state(e).events[list][at]) {
+                state(e).events[list].remove(at);
+                release(e, script);
+                removed += 1;
+            }
+        }
+        if removed == 0 {
             return false;
-        };
-        state(e).events[list].remove(at);
-        release(e, script);
+        }
         let s = state(e);
         if s.events[list].is_empty() {
             s.flags &= !event_mask;
@@ -606,7 +609,10 @@ pub fn process(e: &mut Engine) {
         return;
     }
     let player = e.mem.u32(PLAYER);
-    let cell = e.mem.u32(player + PARENT_CELL);
+    let cell = e.get(
+        Ptr::<TESObjectREFR>::new(player),
+        TESObjectREFR::pParentCell,
+    );
     if cell == 0 {
         return;
     }
@@ -623,7 +629,10 @@ pub fn process(e: &mut Engine) {
         }
         state(e).last_cell = cell;
     }
-    let grabbed = e.mem.u32(player + GRABBED);
+    let grabbed = e.get(
+        Ptr::<PlayerCharacter>::new(player),
+        PlayerCharacter::pGrabbedObject,
+    );
     let (last, last_id) = (state(e).last_grabbed, state(e).last_grab_id);
     if last != grabbed {
         if !loaded {
@@ -645,7 +654,7 @@ pub fn process(e: &mut Engine) {
             state(e).last_grab_id = id;
         }
     }
-    let crosshair = e.mem.u32(manager.addr() + CROSSHAIR);
+    let crosshair = e.get(manager, InterfaceManager::pActivateRef);
     let (last, last_id) = (state(e).last_crosshair, state(e).last_crosshair_id);
     if last != crosshair {
         if !loaded {

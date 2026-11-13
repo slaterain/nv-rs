@@ -11,6 +11,16 @@ use std::cell::RefCell;
 
 const CONTROLS_AT: u32 = 0x0500_0000;
 const OTHER_STATE: u32 = 0x0500_2000;
+/// The exe's addresses and offsets, written out (not the code's constants): the pad state the game
+/// reads, the controller-off byte, `ERROR_DEVICE_NOT_CONNECTED`, the `XInputGetState` import slot;
+/// `OSInputGlobals`' four binding arrays (`keyBinds` `+0x1B94`, `mouseBinds` `+0x1BB0`,
+/// `joystickBinds` `+0x1BCC`, `controllerBinds` `+0x1BE8`: JIP's `GameOSDepend.h`; the exe's
+/// `00a25410` reads `+0x1b94 + device * 0x1c`).
+const PAD_STATE: u32 = 0x011f_35a8;
+const OFF_BYTE: u32 = 0x011d_8c50;
+const NOT_CONN: u32 = 0x48f;
+const SLOT: u32 = 0x00fd_f394;
+const BIND_ARRAYS: [u32; 4] = [0x1b94, 0x1bb0, 0x1bcc, 0x1be8];
 
 thread_local! {
     static FORWARD: RefCell<(u32, [u8; 16])> = const { RefCell::new((0, [0; 16])) };
@@ -51,20 +61,16 @@ fn world(installed: bool) -> Engine {
     e.map(0x011f_3000, 0x1000);
     e.map(0x011d_8000, 0x1000);
     e.map(CONTROLS_AT, 0x1_0000);
-    e.mem.set_u32(CONTROLS, CONTROLS_AT);
+    e.mem.set_u32(0x011f_35cc, CONTROLS_AT);
     for device in 0..4 {
         for control in 0..28 {
-            e.mem.set_u8(
-                CONTROLS_AT + BINDINGS + BINDINGS_STRIDE * device + control,
-                0xff,
-            );
+            e.mem
+                .set_u8(CONTROLS_AT + BIND_ARRAYS[device as usize] + control, 0xff);
         }
     }
     let set = |e: &mut Engine, device: u32, control: u32, v: u8| {
-        e.mem.set_u8(
-            CONTROLS_AT + BINDINGS + BINDINGS_STRIDE * device + control,
-            v,
-        );
+        e.mem
+            .set_u8(CONTROLS_AT + BIND_ARRAYS[device as usize] + control, v);
     };
     set(&mut e, 0, 4, 0x11);
     set(&mut e, 1, 4, 1);
@@ -73,14 +79,13 @@ fn world(installed: bool) -> Engine {
     set(&mut e, 3, 5, ctrl::LT);
     set(&mut e, 0, 6, 0x12);
     set(&mut e, 3, 6, ctrl::LS_UP);
-    e.register(XINPUT_SLOT.addr(), forward);
+    e.register(SLOT, forward);
     crate::install_as(&mut e, installed);
     e
 }
 
 fn read_game(e: &mut Engine) -> u32 {
-    e.call(XINPUT_SLOT.addr(), &args![0u32, GAME_PAD_STATE])
-        .u32()
+    e.call(SLOT, &args![0u32, PAD_STATE]).u32()
 }
 
 /// Not installed: nothing in front of the forwarding.
@@ -90,7 +95,7 @@ fn no_hook_when_not_installed() {
     set_forward(0, pad_bytes(mask::BUTTON_A, 0, 0, 0, 0, 0, 0));
     state(&mut e).mods.button_skip = 0;
     assert_eq!(read_game(&mut e), 0);
-    assert_eq!(e.mem.u16(GAME_PAD_STATE + 4), mask::BUTTON_A, "untouched");
+    assert_eq!(e.mem.u16(PAD_STATE + 4), mask::BUTTON_A, "untouched");
     assert!(!state(&mut e).ready);
 }
 
@@ -113,29 +118,17 @@ fn the_hook_changes_the_games_copy() {
     assert_eq!(read_game(&mut e), 0);
     assert!(state(&mut e).ready);
     assert_eq!(state(&mut e).pad, pad_of(&raw));
-    let g = |e: &Engine, at: u32| e.mem.u16(GAME_PAD_STATE + at);
+    let g = |e: &Engine, at: u32| e.mem.u16(PAD_STATE + at);
     assert_eq!(
         g(&e, 4),
         mask::BUTTON_A | mask::BUTTON_X | mask::START,
         "held added, disabled out, tapped added"
     );
-    assert_eq!(e.mem.u8(GAME_PAD_STATE + 6), 0, "left trigger disabled");
-    assert_eq!(e.mem.u8(GAME_PAD_STATE + 7), 0xff, "right trigger tapped");
-    assert_eq!(
-        e.mem.i16(GAME_PAD_STATE + 0xa),
-        0,
-        "down disabled: y centred"
-    );
-    assert_eq!(
-        e.mem.i16(GAME_PAD_STATE + 8),
-        0,
-        "right disabled: x centred"
-    );
-    assert_eq!(
-        e.mem.u32(GAME_PAD_STATE + 0xc),
-        0,
-        "the right stick centred"
-    );
+    assert_eq!(e.mem.u8(PAD_STATE + 6), 0, "left trigger disabled");
+    assert_eq!(e.mem.u8(PAD_STATE + 7), 0xff, "right trigger tapped");
+    assert_eq!(e.mem.i16(PAD_STATE + 0xa), 0, "down disabled: y centred");
+    assert_eq!(e.mem.i16(PAD_STATE + 8), 0, "right disabled: x centred");
+    assert_eq!(e.mem.u32(PAD_STATE + 0xc), 0, "the right stick centred");
     let m = state(&mut e).mods;
     assert_eq!(
         (m.button_tap, m.trigger_mods),
@@ -151,44 +144,33 @@ fn the_hook_changes_the_games_copy() {
     state(&mut e).mods.stick_skip = 0x01;
     read_game(&mut e);
     assert_eq!(g(&e, 4), mask::BUTTON_X, "the guide: only the held button");
-    assert_eq!(e.mem.u8(GAME_PAD_STATE + 6), 0xff, "held");
-    assert_eq!(e.mem.i16(GAME_PAD_STATE + 0xa), 0, "up disabled: y centred");
+    assert_eq!(e.mem.u8(PAD_STATE + 6), 0xff, "held");
+    assert_eq!(e.mem.i16(PAD_STATE + 0xa), 0, "up disabled: y centred");
     // A trigger disabled and tapped: the tap wins (fully down), the disable kept.
     state(&mut e).mods.trigger_mods = 0x33;
     set_forward(0, pad_bytes(0, 0x40, 0x40, 0, 0, 0, 0));
     read_game(&mut e);
-    assert_eq!(
-        e.mem.u8(GAME_PAD_STATE + 6),
-        0xff,
-        "left disabled and tapped"
-    );
-    assert_eq!(
-        e.mem.u8(GAME_PAD_STATE + 7),
-        0xff,
-        "right disabled and tapped"
-    );
+    assert_eq!(e.mem.u8(PAD_STATE + 6), 0xff, "left disabled and tapped");
+    assert_eq!(e.mem.u8(PAD_STATE + 7), 0xff, "right disabled and tapped");
     assert_eq!(state(&mut e).mods.trigger_mods, 0x03);
     // Not ready: the byte set, or the forwarding failing: no change, the state not kept.
-    e.mem.set_u8(CONTROLLER_OFF, 1);
+    e.mem.set_u8(OFF_BYTE, 1);
     set_forward(0, pad_bytes(mask::BUTTON_B, 0, 0, 0, 0, 0, 0));
     assert_eq!(read_game(&mut e), 0);
     assert!(!state(&mut e).ready);
     assert_eq!(g(&e, 4), mask::BUTTON_B, "untouched");
-    e.mem.set_u8(CONTROLLER_OFF, 0);
-    set_forward(NOT_CONNECTED, pad_bytes(mask::BUTTON_Y, 0, 0, 0, 0, 0, 0));
-    assert_eq!(read_game(&mut e), NOT_CONNECTED);
+    e.mem.set_u8(OFF_BYTE, 0);
+    set_forward(NOT_CONN, pad_bytes(mask::BUTTON_Y, 0, 0, 0, 0, 0, 0));
+    assert_eq!(read_game(&mut e), NOT_CONN);
     assert!(!state(&mut e).ready);
     // Another buffer: the game's copy and the last answer, the forwarding not asked (it would
     // answer 0 and button A now).
     set_forward(0, pad_bytes(mask::BUTTON_A, 0, 0, 0, 0, 0, 0));
-    let answer = e.call(XINPUT_SLOT.addr(), &args![0u32, OTHER_STATE]).u32();
-    assert_eq!(answer, NOT_CONNECTED);
+    let answer = e.call(SLOT, &args![0u32, OTHER_STATE]).u32();
+    assert_eq!(answer, NOT_CONN);
     assert_eq!(e.mem.u16(OTHER_STATE + 4), mask::BUTTON_Y);
     assert!(!state(&mut e).ready, "the game's state not touched");
-    assert_eq!(
-        e.mem.bytes(OTHER_STATE, 16),
-        e.mem.bytes(GAME_PAD_STATE, 16)
-    );
+    assert_eq!(e.mem.bytes(OTHER_STATE, 16), e.mem.bytes(PAD_STATE, 16));
 }
 
 /// The pad state of raw bytes.
@@ -265,7 +247,7 @@ fn controls_by_device() {
     assert!(!is_key_disabled(&mut e, 0x11));
     // A ready controller: A down in the game's copy, not in the pad's own.
     state(&mut e).ready = true;
-    e.mem.set_u16(GAME_PAD_STATE + 4, mask::BUTTON_A);
+    e.mem.set_u16(PAD_STATE + 4, mask::BUTTON_A);
     assert!(is_control_pressed(&mut e, 4, 1));
     assert!(!is_control_pressed(&mut e, 4, 2), "the pad's own state");
     state(&mut e).pad.left_trigger = 1;
@@ -325,7 +307,7 @@ fn input_commands() {
     assert_eq!(run(&mut e, 0x146b, &[4]), (1, 1.0));
     // Control 28's keyboard byte would be the mouse's first: bound to the pressed key here, so
     // only the refusal answers 0.
-    e.mem.set_u8(CONTROLS_AT + BINDINGS + 28, 0x11);
+    e.mem.set_u8(CONTROLS_AT + 0x1b94 + 28, 0x11);
     assert_eq!(run(&mut e, 0x146b, &[28]), (1, 0.0), "past the 28");
     assert_eq!(run(&mut e, 0x1462, &[4, 0]).0, 1);
     assert!(is_key_disabled(&mut e, 0x11) && is_key_disabled(&mut e, 0x101));

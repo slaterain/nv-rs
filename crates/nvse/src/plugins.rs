@@ -127,6 +127,16 @@ pub struct State {
     pub built_ins: Vec<BuiltIn>,
     /// JIP LN NVSE's LN events, once it answers "installed" ([`set_ln_events`]).
     pub ln_events: Option<LnEvents>,
+    /// A built-in listens to `MainGameLoop` ([`listen_per_frame`]): only then does a frame send
+    /// it (nv-rs's own: a frame with no built-in that wants it costs one flag read, as before
+    /// the message existed).
+    pub per_frame: bool,
+}
+
+/// A built-in's listener wants `MainGameLoop` every frame (JIP's start, when it answers
+/// "installed"). xNVSE sends the message to every listener; the built-ins that want it say so.
+pub fn listen_per_frame(e: &mut Engine) {
+    e.ext::<Nvse>().plugins.per_frame = true;
 }
 
 /// JIP LN NVSE's LN events as xNVSE reaches them (`GetLNEventMask`, `ProcessLNEventHandler`:
@@ -195,13 +205,19 @@ pub fn listed(e: &Engine, name: &[u8]) -> Option<(&'static str, u32)> {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), PluginManager.cpp:
 // PluginManager::Dispatch_Message (to the plugins' listeners; the callers tell the events first).
-/// Sends a message to every built-in's listener, in their order.
+/// Sends a message to every built-in's listener, in their order. The list is walked by index (a
+/// listener takes the engine), with no copy of it.
 pub fn dispatch(e: &mut Engine, kind: u32, data: u32, len: u32) {
     let message = Message { kind, data, len };
-    for p in built_ins(e) {
-        if let Some(listen) = p.listener {
+    let mut i = 0;
+    while let Some(p) = e
+        .ext_get::<Nvse>()
+        .and_then(|n| n.plugins.built_ins.get(i).map(|p| p.listener))
+    {
+        if let Some(listen) = p {
             listen(e, &message);
         }
+        i += 1;
     }
 }
 
