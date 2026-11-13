@@ -1598,12 +1598,15 @@ fn deep_nesting_compiles() {
     fn compile_stand_in(e: &mut Engine, a: &[u32]) -> Ret {
         let (script, buf) = (a[1], a[2]);
         let text = guest_text(e, e.mem.u32(buf + sb::TEXT));
-        let text = String::from_utf8(text).unwrap();
+        // An inner lambda's text has the byte after its `end` too (xNVSE copies it).
+        let text = String::from_utf8(text).unwrap().trim_end().to_string();
         let body = text
             .strip_prefix("begin function {} SetFunctionValue ")
             .and_then(|t| t.strip_suffix(" end"))
             .unwrap()
             .to_string();
+        // The lambda is the script being compiled (xNVSE's begin hook puts it on the stack).
+        e.mem.set_u32(buf + sb::CURRENT_SCRIPT, script);
         // The body compiled as `rx := body` on a line of its own.
         let line = heap(e, &[ln::STRUCT]).eax;
         e.mem.write(line, &[0; ln::STRUCT as usize]);
@@ -1629,6 +1632,8 @@ fn deep_nesting_compiles() {
     e.register(0x005a_eb90, compile_stand_in);
     e.register(0x005a_a1a0, nothing);
     let lambda = |body: &str| format!("begin function {{}} SetFunctionValue {body} end");
+    // The lambdas' variables are their parents': the outermost parent's text declares them.
+    e.mem.set_u32(SCRIPT + sc::TEXT, BUF_TEXT);
     let three = lambda(&lambda(&lambda("5")));
     let bytes = compiled(&mut e, LET, &format!("rx := {three}"));
     // Each level: `F`, its length, and the data `rx := <inner>` compiled (count, length, rx,
