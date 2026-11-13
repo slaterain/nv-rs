@@ -1408,3 +1408,39 @@ fn a_loop_over_the_datas_growth_writes_the_new_block() {
     assert_eq!(e.mem.u32(new + 0x14), 0x1c);
     assert_eq!(e.mem.bytes(old, 0x20), before, "the old block is untouched");
 }
+
+/// The game's own names through xNVSE's name lookup: a script command's long and short names
+/// find it; a name a console command brought first (the console table comes in first) finds
+/// nothing, so `GetFunction` goes on to the console loop; a record with no short name adds only
+/// the empty name. The map, the table walk and the seam agree.
+#[test]
+fn vanilla_names_through_xnvses_lookup() {
+    let mut e = installed();
+    let console = 0x0118_e8e0;
+    let texts = AREA + 0x7d0;
+    e.mem.write(texts, b"GetV\0tgm\0gv\0");
+    // Console record 0 shares GetV's long name; console record 1 has no short name.
+    e.mem.set_u32(console, texts);
+    e.mem.set_u32(console + 0x28, texts + 5);
+    e.mem.set_u32(console + 0x28 + 8, 0x105);
+    let get_v = record_of(&e, GET_V);
+    e.mem.set_u32(get_v + 4, texts + 9);
+    let word = AREA + 0x2_8000;
+    for (name, want) in [("GetV", None), ("gv", Some(GET_V)), ("tgm", None), ("Let", Some(0x1539))] {
+        assert_eq!(crate::table::opcode_by_name(&e, name.as_bytes()), want, "{name}");
+        e.ext::<Nvse>().table.registrations += 1;
+        assert_eq!(
+            crate::table::opcode_by_name_mapped(&mut e, name.as_bytes()),
+            want,
+            "{name}"
+        );
+        e.mem.write(word, &[0; 0x214]);
+        e.mem.write(word, name.as_bytes());
+        set_buf_text(&mut e, "");
+        assert_eq!(e.site(0x005a_ebb1, &[SCRIPT, BUF]), Some(1));
+        let answer = e.site(0x005b_19ba, &[word]);
+        e.site(0x005a_eda0, &[1, BUF]);
+        assert_eq!(answer, Some(u32::from(want.is_some())), "{name}");
+        assert_eq!(e.mem.u32(word + 0x208), want.unwrap_or(0), "{name}");
+    }
+}

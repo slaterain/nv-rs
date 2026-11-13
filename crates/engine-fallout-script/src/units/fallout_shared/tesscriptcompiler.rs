@@ -4288,6 +4288,15 @@ mod n045_tests {
         assert!(e.call(0x005a_eb90, &[0, s, d]).bool());
         answer(0x005a_ed78, None);
         answer(0x005a_ebb1, None);
+        // A block type's name is found in the block table before the seam is reached.
+        let block = text(&mut e, b"GameMode");
+        e.mem.set_u32(BLOCK_TABLE + 4, block);
+        let w = word(&mut e, b"gamemode");
+        let before = seen(0x005b_19ba).len();
+        answer(0x005b_19ba, Some(0));
+        assert!(e.call(0x005b_1910, &[w]).bool());
+        assert_eq!(seen(0x005b_19ba).len(), before);
+        answer(0x005b_19ba, None);
         // GetFunction: 1 found it; another answer leaves only the console commands.
         command(&mut e, b"set", 0x15);
         let w = word(&mut e, b"anything");
@@ -4389,5 +4398,49 @@ mod n045_tests {
             only(e.call_log.as_ref().unwrap(), SCRIPT_LOG),
             vec![vec![TEXT_TYPE_UNIMPLEMENTED, 0x2c]]
         );
+    }
+
+    /// The game's own lines compile to the same bytes, and an unknown command fails with the same
+    /// error, with xNVSE's compiler hooks installed (the `nvse` crate's) as without them.
+    #[test]
+    fn vanilla_lines_compile_the_same_with_xnvses_hooks() {
+        type Run = Vec<(bool, Vec<u8>, Vec<u32>, u32)>;
+        fn run(hooks: bool) -> Run {
+            let mut e = rig();
+            e.register(0x00aa_44c0, |_, _| ret(0x4000));
+            if hooks {
+                nvse::compile_hooks::install(&mut e);
+            }
+            script(&mut e);
+            let s = e.mem.alloc(0x60);
+            command(&mut e, b"GetV", 0x1000);
+            let p = parameters(&mut e, &[(1, 1)]);
+            e.mem.set_u16(SCRIPT_COMMANDS + 0x12, 1);
+            e.mem.set_u32(SCRIPT_COMMANDS + 0x14, p);
+            e.mem.set_u32(SCRIPT_COMMANDS + 0x1c, 0x005b_1ba0);
+            e.mem.set_u8(PARAMETER_TYPES + 8, 1);
+            e.register(IS_AN_INTEGER, |_, _| ret(1));
+            e.register(TEXT_TO_INTEGER, |_, _| ret(7));
+            let mut out = Vec::new();
+            for input in [&b"GetV 7\r\nGetV\r\n"[..], b"zzz\r\n"] {
+                let d = data(&mut e);
+                e.mem.set_u8(d + 0x18, 1);
+                let t = text(&mut e, input);
+                e.mem.set_u32(d, t);
+                e.call_log = Some(vec![]);
+                let ok = e.call(0x005a_eb90, &[0, s, d]).bool();
+                let bytes = e.mem.bytes(e.mem.u32(d + 0x20), e.mem.u32(d + 0x24));
+                out.push((ok, bytes, errors(&e), e.mem.u32(d + 0x14)));
+            }
+            if hooks {
+                assert!(nvse::compile_hooks::compiling(&mut e).is_empty());
+            }
+            out
+        }
+        let plain = run(false);
+        assert!(plain[0].0, "{plain:?}");
+        assert!(!plain[1].0);
+        assert_eq!(plain[1].2, vec![TEXT_COMMAND_NOT_FOUND]);
+        assert_eq!(run(true), plain);
     }
 }
