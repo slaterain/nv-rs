@@ -21,7 +21,7 @@ use super::jip_fn_aux_variable::{
     Temp, STR_BUFFER_SIZE,
 };
 use super::{assign_string, buffer_arg, Handlers};
-use crate::containers::{mixed_hash, str_hash_ci, Name, UnorderedMap};
+use crate::containers::{str_hash_ci, Name, UnorderedMap};
 use crate::cosave::{changed, lookup_form, Value};
 use crate::Jip;
 use engine_core::prelude::*;
@@ -173,75 +173,71 @@ fn ref_map_get_value(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
-/// The bucket an id falls in with `count` buckets.
-fn bucket_of(id: u32, count: u32) -> u32 {
-    mixed_hash(id) & (count - 1)
+/// The first entry from bucket `from` on (`FindNonEmpty`): its id, bucket and the bucket count.
+fn first_from(ids: &UnorderedMap<u32, Value>, from: u32) -> Option<(u32, u32, u32)> {
+    let count = ids.bucket_count();
+    (from..count).find_map(|b| ids.bucket(b).next().map(|(k, _)| (*k, b, count)))
 }
 
-/// The entry after `id` in the map's walking order, with its bucket.
-fn after(ids: &UnorderedMap<u32, Value>, id: Option<u32>) -> Option<(u32, u32, u32)> {
-    let count = ids.bucket_count();
-    let mut keys = ids.iter().map(|(k, _)| *k);
-    let next = match id {
-        None => keys.next(),
-        Some(id) => {
-            let mut keys = keys.skip_while(|&k| k != id);
-            keys.next();
-            keys.next()
-        }
-    }?;
-    Some((next, bucket_of(next, count), count))
+/// The entry after `id` in bucket `bucket`'s chain, else the first of a later bucket
+/// (`Iterator::operator++`).
+fn successor(ids: &UnorderedMap<u32, Value>, id: u32, bucket: u32) -> Option<(u32, u32, u32)> {
+    let mut chain = ids.bucket(bucket).map(|(k, _)| *k).skip_while(|&k| k != id);
+    chain.next();
+    match chain.next() {
+        Some(k) => Some((k, bucket, ids.bucket_count())),
+        None => first_from(ids, bucket + 1),
+    }
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ref_map.h:
 // RefMapArrayIterator.
 /// The walk's next entry as an array of the form (looked up by its id) and the value; 0 at the
-/// end or for no map.
+/// end or for no map. Only the entry returned is copied: the walk keeps its place (the next
+/// entry, its bucket and the bucket count) and steps on from there, as JIP's iterator.
 fn walk(e: &mut Engine, a: &CommandArgs, name: &[u8], first: bool) -> u32 {
     if name.is_empty() {
         return 0;
     }
     let (temp, m) = name_scope(e, a.script, name);
-    let key = Name(name.to_vec());
-    let Some(ids) = maps(e, temp)
-        .get(&m)
-        .and_then(|names| names.get(&key))
-        .cloned()
-    else {
-        return 0;
-    };
-    let mut state = e.ext::<Temp>().ref_map_walk.clone();
+    let state = e.ext::<Temp>().ref_map_walk.clone();
     let same = state.as_ref().is_some_and(|w| {
         w.temp == temp && w.mod_index == m && str_hash_ci(&w.name.0) == str_hash_ci(name)
     });
-    if first || !same {
-        state = Some(Walk {
-            temp,
-            mod_index: m,
-            name: key,
-            next: after(&ids, None),
-        });
-    } else if let Some(w) = state.as_mut() {
-        // `IsValid`: the entry is still in the bucket it was found in.
-        let valid = w.next.is_some_and(|(id, bucket, count)| {
-            ids.get(&id).is_some()
-                && ids.bucket_count() == count
-                && bucket_of(id, ids.bucket_count()) == bucket
-        });
-        if !valid {
-            w.next = None;
-        }
-    }
-    let Some(w) = state.as_mut() else {
+    let key = Name(name.to_vec());
+    let found = {
+        let Some(ids) = maps(e, temp).get(&m).and_then(|names| names.get(&key)) else {
+            return 0;
+        };
+        let next = if first || !same {
+            first_from(ids, 0)
+        } else {
+            // `IsValid`: the entry is still in the bucket it was found in.
+            state
+                .as_ref()
+                .and_then(|w| w.next)
+                .filter(|&(id, bucket, count)| {
+                    ids.bucket_count() == count && ids.bucket(bucket).any(|(k, _)| *k == id)
+                })
+        };
+        next.map(|(id, bucket, _)| {
+            let value = ids.get(&id).cloned().unwrap_or(Value::Number(0.0));
+            (id, value, successor(ids, id, bucket))
+        })
+    };
+    let (result, next) = match found {
+        Some((id, value, after)) => (Some((id, value)), after),
+        None => (None, None),
+    };
+    e.ext::<Temp>().ref_map_walk = Some(Walk {
+        temp,
+        mod_index: m,
+        name: key,
+        next,
+    });
+    let Some((id, value)) = result else {
         return 0;
     };
-    let Some((id, _, _)) = w.next else {
-        e.ext::<Temp>().ref_map_walk = state;
-        return 0;
-    };
-    let value = ids.get(&id).cloned().unwrap_or(Value::Number(0.0));
-    w.next = after(&ids, Some(id));
-    e.ext::<Temp>().ref_map_walk = state;
     let elements = [Element::Form(lookup_form(e, id)), value_element(e, &value)];
     create_array(e, a.script, &elements)
 }

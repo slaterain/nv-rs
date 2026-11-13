@@ -203,12 +203,15 @@ pub fn value_ref(v: &Value) -> u32 {
     }
 }
 
-/// `operator=(const char*)`: a text of type 4, cut at 0x1FFF bytes.
+/// `operator=(const char*)`: a text of type 4, its length (up to its first 0) kept in JIP's 16-bit
+/// `length` (`length = StrLen(value)`: the low 16 bits), then cut at 0x1FFF bytes; a length of
+/// 0 so made is an empty text.
 pub fn text_value(text: &[u8]) -> Value {
     let end = text.iter().position(|&b| b == 0).unwrap_or(text.len());
+    let len = (end & 0xffff).min(TEXT_CAP);
     Value::Text {
         kind: 4,
-        bytes: text[..end.min(TEXT_CAP)].to_vec(),
+        bytes: text[..len].to_vec(),
     }
 }
 

@@ -252,6 +252,18 @@ impl<K: Key, V> UnorderedMap<K, V> {
         }
     }
 
+    /// The entries of bucket `index`, its chain from the newest (nothing for a bucket past the
+    /// count or before the buckets are made): for a walk that keeps its place
+    /// (`Iterator::IsValid`, `operator++`).
+    pub fn bucket(&self, index: u32) -> impl Iterator<Item = (&K, &V)> {
+        self.buckets
+            .as_ref()
+            .and_then(|b| b.get(index as usize))
+            .into_iter()
+            .flatten()
+            .map(|(_, k, v)| (k, v))
+    }
+
     /// The entries in JIP's walking order (`Begin`, `++`).
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.buckets

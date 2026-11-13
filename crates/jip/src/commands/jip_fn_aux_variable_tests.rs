@@ -303,6 +303,9 @@ fn values_by_index() {
     let long = vec![b'x'; 0x2100];
     assert_eq!(text_value(&long), text(&long[..0x1fff]));
     assert_eq!(text_value(&[b'a', b'b', 0, b'c']), text(b"ab"));
+    // JIP keeps the length in 16 bits before its cap: 0x10005 bytes are 5, 0x10000 an empty text.
+    assert_eq!(text_value(&vec![b'z'; 0x1_0005]), text(b"zzzzz"));
+    assert_eq!(text_value(&vec![b'z'; 0x1_0000]), text(b""));
     call_on(&mut e, 0x2698, REF, &[s(b"t"), s(b"long")]);
     assert_eq!(
         vals(&mut e, false, 7, 0xff00_0001, b"t"),
@@ -630,5 +633,82 @@ fn the_maps_and_the_record() {
     assert!(
         r.chunks.iter().all(|c| c.kind != kind::REF_MAPS),
         "no ref maps: no record"
+    );
+}
+
+/// Every command's owner argument, with no calling reference: REF (script reference 1) stands for
+/// its base BASE, as BASE itself (reference 2) does.
+#[test]
+fn the_owner_argument() {
+    let mut e = setup();
+    const BASE_ID: u32 = 0x0100_0b00;
+    // The setters.
+    assert_eq!(
+        call_on(&mut e, 0x2696, 0, &[s(b"r"), r(3), n(0), r(1)]).1,
+        1.0
+    );
+    assert_eq!(first(&mut e, 7, BASE_ID, b"r"), Value::Form(0x0200_0333));
+    assert_eq!(
+        call_on(&mut e, 0x2698, 0, &[s(b"t"), s(b"txt"), n(0), r(2)]).1,
+        1.0
+    );
+    assert_eq!(first(&mut e, 7, BASE_ID, b"t"), text(b"txt"));
+    let arr = vars::create_array(&mut e, KEY_NUMBER, true, 6);
+    vars::set_element(&mut e, arr, &Key::Number(0.0), VarValue::Number(3.0));
+    vars::set_element(&mut e, arr, &Key::Number(1.0), VarValue::Number(4.0));
+    assert_eq!(
+        call_on(&mut e, 0x26be, 0, &[s(b"a"), n(arr as i32), r(1)]).1,
+        2.0
+    );
+    assert_eq!(
+        vals(&mut e, false, 7, BASE_ID, b"a"),
+        Some(vec![Value::Number(3.0), Value::Number(4.0)])
+    );
+    assert!(
+        saved(&mut e)
+            .aux_vars
+            .get(&7)
+            .unwrap()
+            .get(&0xff00_0001)
+            .is_none(),
+        "not REF's"
+    );
+    // The getters.
+    assert_eq!(
+        call_on(&mut e, 0x2691, 0, &[s(b"a"), r(2)]).1,
+        2.0,
+        "GetSize"
+    );
+    assert_eq!(
+        call_on(&mut e, 0x2692, 0, &[s(b"r"), n(0), r(1)]).1,
+        2.0,
+        "GetType"
+    );
+    call_on(&mut e, 0x2695, 0, &[s(b"r"), n(0), r(2)]);
+    assert_eq!(form_result(&e), 0x0200_0333, "GetRef");
+    let t = call_on(&mut e, 0x2697, 0, &[s(b"t"), n(0), r(1)]).1;
+    assert_eq!(string_result(&e, t), b"txt", "GetString");
+    let v = call_on(&mut e, 0x26bd, 0, &[s(b"a"), r(2)]).1 as u32;
+    assert_eq!(
+        array_values(&e, v),
+        Some(vec![Data::Number(3.0), Data::Number(4.0)]),
+        "GetAsArray"
+    );
+    let all = call_on(&mut e, 0x2699, 0, &[n(0), r(1)]).1 as u32;
+    assert_eq!(vars::array(&e, all).unwrap().len(), 3, "GetAll: r, t, a");
+    // Erasing.
+    assert_eq!(
+        call_on(&mut e, 0x269a, 0, &[s(b"a"), n(0), r(2)]).1,
+        1.0,
+        "Erase"
+    );
+    assert_eq!(
+        vals(&mut e, false, 7, BASE_ID, b"a"),
+        Some(vec![Value::Number(4.0)])
+    );
+    call_on(&mut e, 0x269b, 0, &[n(0), r(1)]);
+    assert!(
+        saved(&mut e).aux_vars.get(&7).is_none(),
+        "EraseAll: BASE's all gone"
     );
 }

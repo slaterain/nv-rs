@@ -434,3 +434,217 @@ fn the_maps_and_the_record() {
     want.extend_from_slice(&[4, 2, 0, b'h', b'i']);
     assert_eq!(chunk.data, want, "the first spelling, the last value");
 }
+
+/// The ref map setters' key argument, with no calling reference: REF (reference 1) stands for its
+/// base BASE, as BASE (reference 2) does.
+#[test]
+fn the_key_argument_of_the_setters() {
+    let mut e = setup();
+    call_on(&mut e, 0x26a7, 0, &[s(b"m"), r(3), r(1)]);
+    assert_eq!(
+        ids(&mut e, false, 7, b"m").unwrap().get(&BASE_ID),
+        Some(&Value::Form(OTHER_ID))
+    );
+    call_on(&mut e, 0x26a9, 0, &[s(b"n"), s(b"t"), r(2)]);
+    assert_eq!(
+        ids(&mut e, false, 7, b"n").unwrap().get(&BASE_ID),
+        Some(&text(b"t"))
+    );
+    let arr = vars::create_array(&mut e, KEY_NUMBER, true, 6);
+    vars::set_element(&mut e, arr, &Key::Number(0.0), VarValue::Number(5.0));
+    call_on(&mut e, 0x2765, 0, &[s(b"o"), n(arr as i32), r(1)]);
+    assert_eq!(
+        ids(&mut e, false, 7, b"o").unwrap().get(&BASE_ID),
+        Some(&Value::Number(5.0))
+    );
+    for name in [b"m", b"n", b"o"] {
+        assert_eq!(ids(&mut e, false, 7, name).unwrap().len(), 1, "only BASE");
+    }
+}
+
+/// Walk rules: the same name in another mod is another map (`GetNext` starts it again); erasing
+/// the entry just returned or adding a key to a later bucket leaves the walk going.
+#[test]
+fn walk_rules() {
+    let mut e = setup();
+    // The three keys fall in buckets 0 (BASE), 1 (REF) and 3 (OTHER) of 4: mixed hash
+    // `(k * 13) ^ (k >> 15)`, its low two bits.
+    let order = three(&mut e);
+    assert_eq!(order, vec![BASE_ID, REF_ID, OTHER_ID], "worked by hand");
+    let step = |e: &mut Engine, op: u32| {
+        let v = call_on(e, op, 0, &[s(b"w")]).1;
+        elements(e, v)
+    };
+    let pair = |id: u32| Some(vec![Data::Form(id), Data::Number(value_of(id))]);
+    assert_eq!(step(&mut e, 0x269e), pair(BASE_ID));
+    // The entry just returned erased: the walk goes on.
+    call_on(&mut e, 0x26a2, 0, &[s(b"w"), r(2)]);
+    // A key added to bucket 2 (key 2: `2 * 13 = 26`, low bits 10), after the place of the walk.
+    maps(&mut e, false)
+        .get_mut(&7)
+        .unwrap()
+        .get_mut(&Name(b"w".to_vec()))
+        .unwrap()
+        .emplace_with(2, || Value::Number(7.0));
+    assert_eq!(step(&mut e, 0x269f), pair(REF_ID));
+    assert_eq!(
+        step(&mut e, 0x269f),
+        Some(vec![Data::Form(0), Data::Number(7.0)]),
+        "the new key"
+    );
+    assert_eq!(step(&mut e, 0x269f), pair(OTHER_ID));
+    assert_eq!(step(&mut e, 0x269f), None);
+    // The same name in mod 3: GetNext starts that map.
+    assert_eq!(step(&mut e, 0x269e), pair(REF_ID), "w now: REF first");
+    e.mem.set_u32(SCRIPT + 0x14, 0);
+    set_flt(&mut e, 0, b"w", 8.0, Some(3));
+    assert_eq!(
+        step(&mut e, 0x269f),
+        Some(vec![Data::Form(OTHER_ID), Data::Number(8.0)]),
+        "mod 3's map, from its first"
+    );
+    assert_eq!(step(&mut e, 0x269f), None, "its only entry");
+}
+
+/// A walk over 64 entries (the map resized on the way) gives every entry once, in the map's own
+/// walking order (the order the co-save writes).
+#[test]
+fn a_long_walk() {
+    let mut e = setup();
+    let ids_map = maps(&mut e, false)
+        .emplace_with(7, || UnorderedMap::new(4))
+        .0
+        .emplace_with(Name(b"big".to_vec()), || UnorderedMap::new(4))
+        .0;
+    for i in 0..64u32 {
+        ids_map.emplace_with(0x0100_0000 + i * 0x101, || Value::Number(f64::from(i)));
+    }
+    let want: Vec<f64> = ids(&mut e, false, 7, b"big")
+        .unwrap()
+        .iter()
+        .map(|(_, v)| value_float(v))
+        .collect();
+    let mut got = Vec::new();
+    let mut op = 0x269e;
+    loop {
+        let v = call_on(&mut e, op, 0, &[s(b"big")]).1;
+        op = 0x269f;
+        let Some(pair) = elements(&e, v) else {
+            break;
+        };
+        let Data::Number(n) = pair[1] else {
+            panic!("a number")
+        };
+        got.push(n);
+    }
+    assert_eq!(got.len(), 64);
+    assert_eq!(got, want);
+}
+
+/// A co-save written by hand in JIP's layout (`JPAV`, `JPRM`: mod 7, owners REF and BASE, names in
+/// mixed case, the three value types and a text of type 3) loads into what the commands see.
+#[test]
+fn a_loaded_co_save() {
+    let mut e = setup();
+    let sl = e.mem.u32(0x011d_df38);
+    for i in 0..0xffu32 {
+        e.mem.set_u8(sl + crate::game::save_mod(i as u8), i as u8);
+    }
+    // The save's changes map: empty.
+    let chg = FORMS + 0x8000;
+    e.mem.set_u32(chg + 4, 16);
+    e.mem.set_u32(chg + 8, chg + 0x100);
+    e.mem.set_u32(sl, chg);
+    saved(&mut e).changed = 0x1f;
+    let mut av = vec![1, 0, 7, 2, 0];
+    av.extend_from_slice(&REF_ID.to_le_bytes());
+    av.extend_from_slice(&[1, 0, 5]);
+    av.extend_from_slice(b"MiXed");
+    av.extend_from_slice(&[3, 0, 1]);
+    av.extend_from_slice(&2.5f64.to_le_bytes());
+    av.push(2);
+    av.extend_from_slice(&OTHER_ID.to_le_bytes());
+    av.extend_from_slice(&[3, 2, 0, b'a', b'b']);
+    av.extend_from_slice(&BASE_ID.to_le_bytes());
+    av.extend_from_slice(&[1, 0, 5]);
+    av.extend_from_slice(b"Other");
+    av.extend_from_slice(&[1, 0, 4, 2, 0, b'h', b'i']);
+    let mut rm = vec![1, 0, 7, 1, 0, 4];
+    rm.extend_from_slice(b"RmAp");
+    rm.extend_from_slice(&[3, 0]);
+    rm.extend_from_slice(&OTHER_ID.to_le_bytes());
+    rm.push(1);
+    rm.extend_from_slice(&3.0f64.to_le_bytes());
+    rm.extend_from_slice(&REF_ID.to_le_bytes());
+    rm.extend_from_slice(&[4, 1, 0, b'x']);
+    rm.extend_from_slice(&BASE_ID.to_le_bytes());
+    rm.push(2);
+    rm.extend_from_slice(&REF_ID.to_le_bytes());
+    let chunks = vec![
+        nvse::cosave::Chunk {
+            kind: kind::AUX_VARS,
+            version: 10,
+            data: av,
+        },
+        nvse::cosave::Chunk {
+            kind: kind::REF_MAPS,
+            version: 10,
+            data: rm,
+        },
+    ];
+    let file = nvse::cosave::write(&[nvse::cosave::Plugin {
+        opcode_base: 0x2200,
+        chunks,
+    }]);
+    let mut reader = nvse::cosave::Reader::open(&file).unwrap();
+    reader.next_plugin().unwrap().unwrap();
+    crate::cosave::load(&mut e, &mut reader).unwrap();
+    // The aux variables, through the commands.
+    assert_eq!(call_on(&mut e, 0x2693, REF, &[s(b"mixed")]).1, 2.5);
+    call_on(&mut e, 0x2695, REF, &[s(b"MIXED"), n(1)]);
+    assert_eq!(form_result(&e), OTHER_ID);
+    assert_eq!(
+        call_on(&mut e, 0x2692, REF, &[s(b"mixed"), n(2)]).1,
+        3.0,
+        "type 3 kept"
+    );
+    let t = call_on(&mut e, 0x2697, REF, &[s(b"mixed"), n(2)]).1;
+    assert_eq!(string_result(&e, t), b"ab");
+    let a = call_on(&mut e, 0x26bd, REF, &[s(b"mixed")]).1 as u32;
+    assert_eq!(
+        array_values(&e, a),
+        Some(vec![
+            Data::Number(2.5),
+            Data::Form(OTHER_ID),
+            Data::Number(0.0)
+        ]),
+        "a text of type 3: 0"
+    );
+    let all = call_on(&mut e, 0x2699, REF, &[n(0)]).1 as u32;
+    let names: Vec<Vec<u8>> = match &vars::array(&e, all).unwrap().elements {
+        Container::StrMap(entries) => entries.iter().map(|(k, _)| k.clone()).collect(),
+        _ => panic!("a map by text"),
+    };
+    assert_eq!(names, vec![b"MiXed".to_vec()], "the file's spelling");
+    let t = call_on(&mut e, 0x2697, 0, &[s(b"other"), n(0), r(2)]).1;
+    assert_eq!(string_result(&e, t), b"hi");
+    // The ref map, walked in its buckets' order: BASE (0), REF (1), OTHER (3).
+    let step = |e: &mut Engine, op: u32| {
+        let v = call_on(e, op, 0, &[s(b"rmap")]).1;
+        elements(e, v)
+    };
+    assert_eq!(
+        step(&mut e, 0x269e),
+        Some(vec![Data::Form(BASE_ID), Data::Form(REF_ID)])
+    );
+    assert_eq!(
+        step(&mut e, 0x269f),
+        Some(vec![Data::Form(REF_ID), Data::Str(b"x".to_vec())])
+    );
+    assert_eq!(
+        step(&mut e, 0x269f),
+        Some(vec![Data::Form(OTHER_ID), Data::Number(3.0)])
+    );
+    assert_eq!(step(&mut e, 0x269f), None);
+    assert_eq!(call_on(&mut e, 0x269c, 0, &[s(b"RMAP")]).1, 3.0);
+}
