@@ -551,3 +551,89 @@ fn lights_bound_radius_scale() {
     .run()
     .assert_same();
 }
+
+#[test]
+fn lights_add_object_target() {
+    // What `AddObject` is handed: the tree's root, or one of its geometries (the direct add at the
+    // end) with a lighting property that passes (type 1) or not (type 13); the root's bound: its own,
+    // none, a zero radius, a NaN radius (which still parses: `FLDZ; FCOMP`); the light casts shadows
+    // or not.
+    Diff::new(entry!(0x00ba_0110, walk::add_object(Ptr<_>, u32)))
+        .common()
+        .inputs(&inputs(&[
+            &[
+                Input::Of(&[0, 1, 2]),
+                Input::Of(&[0, 1, 2, 3]),
+                Input::Flag,
+            ],
+            &F3,
+        ]))
+        .max_cases(256)
+        .setup(|e, case| {
+            let (l, root) = walk_world(e, case, [1, case.word(2), 0, 0, 0x3f, 0x4248_0000], 3);
+            match case.word(1) {
+                1 => e.mem.set_u32(root + 0x20, 0),
+                2 => {
+                    let b = block(e, 0x10, &[0, 0, 0, 0]);
+                    e.mem.set_u32(root + 0x20, b);
+                }
+                3 => {
+                    let b = block(e, 0x10, &[0, 0, 0, 0x7fc0_0000]);
+                    e.mem.set_u32(root + 0x20, b);
+                }
+                _ => {}
+            }
+            let object = match case.word(0) {
+                0 => root,
+                k => {
+                    let g = geometry(e, true, if k == 1 { 1 } else { 13 }, true);
+                    e.mem.set_u32(g + 0x30, 0);
+                    g
+                }
+            };
+            vec![l, object]
+        })
+        .run()
+        .assert_same();
+}
+
+#[test]
+fn lights_frustum_mask_inherited() {
+    // Planes 0 (x > 0) and 1 (y > 0) active. The root at (5, 0, 0), radius 1, is wholly inside plane
+    // 0, which its walk drops; its first child at (-5, 5, 0) is outside plane 0 but inside plane 1
+    // (the exe adds it, with plane 0 dropped, and drops plane 1 for its own walk); its second child
+    // at (0, -5, 0) is outside plane 1, which only the first child was wholly inside: with the mask
+    // restored after the first child the exe leaves it out.
+    Diff::new(entry!(0x00b9_f5b0, walk::parse_frustum(Ptr<_>, u32)))
+        .common()
+        .float_sweep(0)
+        .inputs(&[Input::Of(&[0])])
+        .setup(|e, _| {
+            stand_ins(e);
+            let five = 0x40a0_0000;
+            let minus_five = 0xc0a0_0000;
+            let leaf = |e: &mut Engine, x: u32, y: u32| {
+                let g = geometry(e, true, 1, false);
+                let b = block(e, 0x10, &[x, y, 0, ONE]);
+                e.mem.set_u32(g + 0x20, b);
+                g
+            };
+            let a = leaf(e, minus_five, five);
+            let b = leaf(e, 0, minus_five);
+            let root = object(e, 0xb0, 0, 0, OTHER_RTTI);
+            let vt = e.mem.u32(root);
+            e.mem.set_u32(vt + VT_SLOTS, root);
+            let children = block(e, 8, &[a, b]);
+            e.mem.set_u32(root + 0xa0, children);
+            e.mem.set_u16(root + 0xa6, 2);
+            let rb = block(e, 0x10, &[five, 0, 0, ONE]);
+            e.mem.set_u32(root + 0x20, rb);
+            let mut p = [[0; 4]; 6];
+            p[0] = [ONE, 0, 0, 0];
+            p[1] = [0, ONE, 0, 0];
+            let l = light(e, &p, 3, 0, 0, 1);
+            vec![l, root]
+        })
+        .run()
+        .assert_same();
+}
