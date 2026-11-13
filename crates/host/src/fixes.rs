@@ -186,13 +186,13 @@ fn install_radio_lengths(e: &mut Engine) {
 /// own with playable head parts under it is offered only those parts, and every other race all
 /// parts but those (`engine::units::fallout_interface::racesexmenu::FacialHairFilter`): `_Create`
 /// (`007acb60`) builds the list so, and a click that changes the race or sex (`007adce0`) builds it
-/// again when the offered parts change, which the original never does; a worn part the choice is
-/// not offered is taken off. For the game's own data nothing changes. Vanilla offers every part to
-/// every race.
+/// again when the offered parts change, which the original never does. A worn playable part the
+/// choice is not offered is taken off there and after a face preset's copy (`SliderRelease`,
+/// `007b4b50`). For the game's own data nothing changes. Vanilla offers every part to every race.
 pub const FACIAL_HAIR_BY_RACE_FOLDER: Fix = Fix {
     name: "facial hair by race folder",
     env: "NV_FACIAL_HAIR_RACE",
-    addresses: &[0x007a_cb60, 0x007a_dce0],
+    addresses: &[0x007a_cb60, 0x007a_dce0, 0x007b_4b50],
     summary:
         "facial hair made for one race's head is offered only to that race in the character menu",
     install: install_facial_hair_by_race_folder,
@@ -201,7 +201,8 @@ pub const FACIAL_HAIR_BY_RACE_FOLDER: Fix = Fix {
 fn install_facial_hair_by_race_folder(e: &mut Engine) {
     use engine::units::fallout_interface::racesexmenu::{
         race_sex_menu_create_contents_facial_hair_by_race,
-        race_sex_menu_do_click_facial_hair_by_race, RaceSexMenu,
+        race_sex_menu_do_click_facial_hair_by_race,
+        race_sex_menu_slider_release_facial_hair_by_race, RaceSexMenu,
     };
     let (at, f) = engine::entry!(
         0x007a_cb60,
@@ -211,6 +212,11 @@ fn install_facial_hair_by_race_folder(e: &mut Engine) {
     let (at, f) = engine::entry!(
         0x007a_dce0,
         race_sex_menu_do_click_facial_hair_by_race(Ptr<RaceSexMenu>, i32, u32)
+    );
+    e.register(at, f);
+    let (at, f) = engine::entry!(
+        0x007b_4b50,
+        race_sex_menu_slider_release_facial_hair_by_race(Ptr<RaceSexMenu>)
     );
     e.register(at, f);
 }

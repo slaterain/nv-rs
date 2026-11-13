@@ -5360,7 +5360,8 @@ pub fn fn_007b4930(e: &mut Engine, this: Ptr<RaceSexMenu>) {
         }
     }
     if changed {
-        race_sex_menu_slider_release(e, this);
+        // By address: the fixes preset's facial hair row registers over it (overridable.tsv).
+        e.call(SLIDER_RELEASE, &args![this]);
         let tile = e.mem.u32(base + 0xc0);
         e.call(PLAY_TILE_SOUND, &args![tile, 0xfcbu32]);
     }
@@ -5493,6 +5494,19 @@ fn slider_release_face_value(e: &mut Engine, base: u32, shape: i32) {
 /// The compiler's exception-unwinding frame is not translated.
 // Translation incomplete: 007b4b50 - the C++ exception-unwinding frame (FS:[0]) that destroys the two face coordinate arrays is not translated
 pub fn race_sex_menu_slider_release(e: &mut Engine, this: Ptr<RaceSexMenu>) {
+    slider_release(e, this, false);
+}
+
+/// [`race_sex_menu_slider_release`] whose face preset (option `0x18`) takes off, right after the
+/// preset's head parts are copied (`00603790`), a playable part the race and sex are not offered
+/// (the fixes preset's facial hair row, `crates/host`; see [`FacialHairFilter`]): a preset of a
+/// race with its own parts may wear the game's beards. The branch's own redraw (`007b1e70(1, 1,
+/// 0)`) and list marks follow as in the translation.
+pub fn race_sex_menu_slider_release_facial_hair_by_race(e: &mut Engine, this: Ptr<RaceSexMenu>) {
+    slider_release(e, this, true);
+}
+
+fn slider_release(e: &mut Engine, this: Ptr<RaceSexMenu>, by_race: bool) {
     let base = this.addr();
     let option = e.mem.u32(base + 0xc4);
     if e.call(CURRENT_LIST_INDEX, &args![this]).u32() == 6 {
@@ -5521,6 +5535,10 @@ pub fn race_sex_menu_slider_release(e: &mut Engine, this: Ptr<RaceSexMenu>) {
         let preset = e.mem.u32(entry);
         let player_base = e.mem.u32(base + 0xd8);
         e.call(NPC_METHOD_603790, &args![player_base, preset]);
+        if by_race {
+            let filter = FacialHairFilter::for_menu(e, base);
+            take_off_parts_not_offered(e, base, &filter);
+        }
         for index in 0..0x14u32 {
             let list = e.mem.u32(base + 0x28 + 4 * index);
             menu_option_list_update_current_selection(e, Ptr::new(list));
@@ -5857,7 +5875,10 @@ impl FacialHairFilter {
                 Some(index) => PartOwner::Race(index),
                 None => PartOwner::Unowned,
             };
-            return (owner, under_stock(&directory));
+            // The game's own only when no race owns it (a race's directory may lie below one of
+            // the game's, `characters\head\myrace\`).
+            let stock = owner == PartOwner::Unowned && under_stock(&directory);
+            return (owner, stock);
         }
         if depth >= MIX_DEPTH {
             return (PartOwner::Unowned, true);
@@ -5987,16 +6008,17 @@ fn take_off_parts_not_offered(e: &mut Engine, base: u32, filter: &FacialHairFilt
     let list = e.call(HEAD_PART_LIST, &args![player_base]).u32();
     let mut kept = Vec::new();
     let mut took_off = false;
+    // Walked as `00603790` walks a preset's list: to the end or a node with no part and no next
+    // (`008256d0`), a node with no part passed over.
     let mut node = list;
-    while node != 0 {
+    while node != 0 && !(e.mem.u32(node) == 0 && e.mem.u32(node + 4) == 0) {
         let part = e.mem.u32(node);
-        if part == 0 {
-            break;
-        }
-        if e.call(MARKER_CHECK_2, &args![part]).u8() != 0 && !filter.offers(e, part) {
-            took_off = true;
-        } else {
-            kept.push(part);
+        if part != 0 {
+            if e.call(MARKER_CHECK_2, &args![part]).u8() != 0 && !filter.offers(e, part) {
+                took_off = true;
+            } else {
+                kept.push(part);
+            }
         }
         node = e.mem.u32(node + 4);
     }
@@ -11248,6 +11270,126 @@ mod tests {
             } else {
                 assert_eq!(worn(&e, &scene), vec![m.other_beard, m.alex_beard]);
             }
+        }
+    }
+
+    /// A face preset applied with the preset slider (option 0x18, `SliderRelease`): the preset's
+    /// copy (`00603790`) puts `preset` on the player in place of what it wore. With or without
+    /// the row.
+    fn release_preset(
+        e: &mut Engine,
+        menu: Ptr<RaceSexMenu>,
+        scene: &Scene,
+        preset: &[u32],
+        by_race: bool,
+    ) {
+        walk_chains(e);
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, 0x7777);
+        e.register_double(ARRAY_ENTRY, move |_, _| word(slot));
+        e.register(GET_FLOAT_TRAIT, |_, a| {
+            float(if a[1] == 0x1005 { 2.0 } else { 0.0 })
+        });
+        let worn_list = scene.worn;
+        let parts = preset.to_vec();
+        e.register_double(NPC_METHOD_603790, move |e, _| {
+            e.mem.set_u32(worn_list, 0);
+            e.mem.set_u32(worn_list + 4, 0);
+            for part in &parts {
+                let slot = e.mem.alloc(4);
+                e.mem.set_u32(slot, *part);
+                e.call(HEAD_PART_LIST_APPEND, &args![worn_list, slot]);
+            }
+            Ret::default()
+        });
+        let option = make_option(e, 0x55, 0x18, 0);
+        e.mem.set_u32(menu.addr() + 0xc4, option);
+        e.call_log = Some(vec![]);
+        if by_race {
+            race_sex_menu_slider_release_facial_hair_by_race(e, menu);
+        } else {
+            race_sex_menu_slider_release(e, menu);
+        }
+    }
+
+    /// The preset slider on a race with its own parts whose second preset wears the game's
+    /// beard: with the row the beard is taken off right after the copy, before the branch's own
+    /// redraw and marks (no second redraw); without it the beard stays.
+    #[test]
+    fn a_face_preset_takes_off_a_part_the_race_is_not_offered() {
+        for by_race in [false, true] {
+            let (mut e, menu) = world();
+            let m = modded(&mut e);
+            let eyebrow = head_part(&mut e, Some("Characters/Hair/EyebrowM.NIF"), false, &[]);
+            let scene = facial_hair_scene(&mut e, &m.races(), &m.parts(), m.alex, 0);
+            wear(&mut e, &scene, &[m.alex_beard]);
+            release_preset(
+                &mut e,
+                menu,
+                &scene,
+                &[m.stock, eyebrow, m.alex_beard],
+                by_race,
+            );
+            assert_eq!(calls(&e, NPC_METHOD_603790).len(), 1);
+            if by_race {
+                assert_eq!(worn(&e, &scene), vec![eyebrow, m.alex_beard]);
+                let log = e.call_log.as_ref().unwrap();
+                let at = |addr: u32| log.iter().position(|(a, _)| *a == addr);
+                assert!(at(NPC_METHOD_603790) < at(HEAD_PART_LIST_CLEAR));
+                assert!(at(HEAD_PART_LIST_CLEAR) < at(HAIR_COLOR_GETTER));
+                assert!(calls(&e, 0x007b_1e70).is_empty());
+            } else {
+                assert_eq!(worn(&e, &scene), vec![m.stock, eyebrow, m.alex_beard]);
+            }
+        }
+        // The game's own data with the row: the preset's parts stay, the list is not touched.
+        let (mut e, menu) = world();
+        let human = race_with_heads(&mut e, HUMAN_HEAD, HUMAN_FEMALE_HEAD);
+        let goatee = head_part(&mut e, Some(STOCK_BEARD), true, &[]);
+        let scene = facial_hair_scene(&mut e, &[human], &[goatee], human, 0);
+        release_preset(&mut e, menu, &scene, &[goatee], true);
+        assert_eq!(worn(&e, &scene), vec![goatee]);
+        assert!(calls(&e, HEAD_PART_LIST_CLEAR).is_empty());
+    }
+
+    /// The worn list walked as the game walks it: a node with no part in the middle is passed
+    /// over, and every part after it is looked at and kept or taken off.
+    #[test]
+    fn the_worn_list_is_walked_past_a_node_with_no_part() {
+        let (mut e, menu) = world();
+        let m = modded(&mut e);
+        let eyebrow = head_part(&mut e, Some("Characters/Hair/EyebrowM.NIF"), false, &[]);
+        let scene = facial_hair_scene(&mut e, &m.races(), &m.parts(), m.alex, 0);
+        let rest = chain(&mut e, &[0, m.other_beard, eyebrow]);
+        e.mem.set_u32(scene.worn, m.alex_beard);
+        e.mem.set_u32(scene.worn + 4, rest);
+        created(&mut e, menu, true);
+        assert_eq!(worn(&e, &scene), vec![m.alex_beard, eyebrow]);
+    }
+
+    /// A mix of two races' parts where one race's directory lies below one of the game's
+    /// (`characters\head\deep\`) is nobody's, in either order of its parts.
+    #[test]
+    fn a_mix_with_a_race_below_a_game_directory_is_nobodys() {
+        let (mut e, menu) = world();
+        let m = modded(&mut e);
+        let deep = race_with_heads(
+            &mut e,
+            "Characters/Head/Deep/Head.nif",
+            "Characters/Head/Deep/Head.nif",
+        );
+        let deep_beard = head_part(&mut e, Some("Characters/Head/Deep/Beard.nif"), true, &[]);
+        let alex_first = head_part(&mut e, None, true, &[m.alex_beard, deep_beard]);
+        let deep_first = head_part(&mut e, None, true, &[deep_beard, m.alex_beard]);
+        let races = [m.human, m.alex, deep];
+        let parts = [m.alex_beard, deep_beard, alex_first, deep_first, m.stock];
+        for (race, wanted) in [
+            (m.alex, vec![m.alex_beard]),
+            (deep, vec![deep_beard]),
+            (m.human, vec![m.stock]),
+        ] {
+            facial_hair_scene(&mut e, &races, &parts, race, 0);
+            assert_eq!(created(&mut e, menu, true), wanted);
         }
     }
 }
