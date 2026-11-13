@@ -11591,7 +11591,9 @@ fn water_setup_constants_reads_the_packet() {
 
 /// `SetupGeometryConstants` (`00b7dab0`) with its set-ups: the transform through the packet's image (the model
 /// matrix, the world-view constants and every set-up handed it), the lights and the time values through the
-/// packet, the refraction pass type's geometry translation (vertex entry 21) too.
+/// packet, the refraction pass type's geometry translation (vertex entry 21) too. The cut's geometry values take the
+/// world transform, so the shadow projection, the eye position (pass type 0x244) and the object-to-cube's
+/// `GetD3DFromNi` must read the image they are handed.
 #[test]
 fn setup_geometry_constants_reads_the_packet() {
     let mut cases = Vec::new();
