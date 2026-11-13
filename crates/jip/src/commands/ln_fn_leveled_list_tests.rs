@@ -205,7 +205,7 @@ fn adding_a_form() {
     // Level 1, equal to entry 0's: first, entry 0 moved after it.
     CALLS.with(|c| c.borrow_mut().clear());
     let block = heap_next(&e);
-    call(&mut e, 0x221e, &[r(1), r(7), n(1), n(1), z(-2.0)]);
+    call(&mut e, 0x221e, &[r(1), r(7), n(1), n(1), z(-0.5)]);
     assert_eq!(e.mem.u32(LVLI + 0x34), block);
     assert_eq!(e.mem.f32(block + 0x10 + 8), 0.0, "below 0: 0");
     // Above every level: nothing inserted, both blocks freed.
