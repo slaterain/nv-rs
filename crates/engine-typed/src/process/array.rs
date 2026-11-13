@@ -31,7 +31,9 @@ fn tail(e: &Engine, this: u32, level: i32) -> u32 {
 /// The address of element `index` (`00877a30`, the leaf the exe calls for it: the element block at +4
 /// plus `index` words), computed in line.
 fn element_address(e: &Engine, this: u32, index: u32) -> u32 {
-    e.mem.u32(this.wrapping_add(4)).wrapping_add(index.wrapping_mul(4))
+    e.mem
+        .u32(this.wrapping_add(4))
+        .wrapping_add(index.wrapping_mul(4))
 }
 
 // Typed from 005de0f0
