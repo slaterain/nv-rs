@@ -4229,7 +4229,10 @@ fn crossing_game_size() {
         .run()
         .assert_same();
     }
-    assert_eq!(crossing_on_main(FAR_CROSSING), (true, [0x47c3_5052, 0x4743_505d]));
+    assert_eq!(
+        crossing_on_main(FAR_CROSSING),
+        (true, [0x47c3_5052, 0x4743_505d])
+    );
 }
 
 /// The goal test with the node about 1e5 from the goal in x (on another triangle) and the request's
