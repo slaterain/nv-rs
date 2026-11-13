@@ -2659,6 +2659,78 @@ fn the_loading_screen_shows_the_logo_the_text_and_the_bar() {
     }
 }
 
+/// The frame-rate counter over a game's frame: readable on a dark frame (light glyphs) and on a
+/// bright one (its dark plate), only in the top-right corner, every other pixel the frame's own
+/// (it is drawn over the frame already there, not instead of it). Windows only: GDI draws its
+/// glyphs. `NV_FPS_PICTURE=<file.bmp>`: the counter at 1920 by 1080 over a mid-grey frame, to
+/// look at.
+#[cfg(windows)]
+#[test]
+fn the_frame_rate_counter_sits_over_the_frame_in_its_top_right_corner() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    let (w, h) = (640u32, 360u32);
+    let readout = d3d9_wgpu::frame_rate::Readout {
+        fps: 144,
+        slowest_tenths_ms: 93,
+    };
+    let d = g.b.device().expect("the device");
+    let dark = d.frame_rate_pixels(w, h, [0.1, 0.1, 0.1, 1.0], readout);
+    let bright = d.frame_rate_pixels(w, h, [1.0, 1.0, 1.0, 1.0], readout);
+    assert_eq!(dark.len(), (w * h * 4) as usize);
+    let at = |px: &[u8], x: u32, y: u32| {
+        let i = ((y * w + x) * 4) as usize;
+        [px[i], px[i + 1], px[i + 2]]
+    };
+    let corner = |x: u32, y: u32| x >= w - 160 && y < 60;
+    let (bg_dark, bg_bright) = (at(&dark, 0, h - 1), at(&bright, 0, h - 1));
+    assert!(bg_dark.iter().all(|&c| c < 40), "{bg_dark:?}");
+    assert_eq!(bg_bright, [255, 255, 255]);
+    let mut light_in_dark = 0;
+    let mut dark_in_bright = 0;
+    for y in 0..h {
+        for x in 0..w {
+            let (a, b) = (at(&dark, x, y), at(&bright, x, y));
+            if !corner(x, y) {
+                assert_eq!(
+                    (a, b),
+                    (bg_dark, bg_bright),
+                    "outside the corner at {x},{y}"
+                );
+                continue;
+            }
+            light_in_dark += usize::from(a.iter().all(|&c| c > 200));
+            dark_in_bright += usize::from(b.iter().all(|&c| c < 140));
+        }
+    }
+    assert!(
+        light_in_dark > 40,
+        "{light_in_dark} light glyph pixels on the dark frame"
+    );
+    assert!(
+        dark_in_bright > 1000,
+        "{dark_in_bright} plate pixels on the bright frame"
+    );
+    // Another readout changes the glyphs.
+    let other = d.frame_rate_pixels(
+        w,
+        h,
+        [0.1, 0.1, 0.1, 1.0],
+        d3d9_wgpu::frame_rate::Readout {
+            fps: 37,
+            slowest_tenths_ms: 412,
+        },
+    );
+    assert!(dark
+        .chunks_exact(4)
+        .zip(other.chunks_exact(4))
+        .any(|(a, b)| a != b));
+    if let Some(file) = std::env::var_os("NV_FPS_PICTURE") {
+        let (w, h) = (1920u32, 1080u32);
+        let px = d.frame_rate_pixels(w, h, [0.45, 0.5, 0.55, 1.0], readout);
+        std::fs::write(file, d3d9_wgpu::shot::bmp(w, h, &px)).expect("the picture");
+    }
+}
+
 /// The pipelines a run made are listed in the cache folder; the next run makes them at the first
 /// `Present` after their shaders exist, so its draws make none (and draw the same pixels). A
 /// damaged list is skipped line by line, never a failed start.

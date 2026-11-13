@@ -405,6 +405,12 @@ pub const PLAY_BORDERLESS: bool = true;
 /// to it by a test. Only a launcher's play run that is no test takes it ([`is_play_run`]).
 pub const PLAY_RENDERER: Renderer = Renderer::Vulkan;
 
+/// Whether the frame-rate counter (`d3d9_wgpu::frame_rate`, F11 in the game) shows from the start
+/// when neither `NV_SHOW_FPS` nor `Fallout.ini`'s `bShowFrameRate` says ([`Choice::show_frame_rate`]):
+/// off, in every preset. `crates/host/data/game_ini.tsv`'s `bShowFrameRate` row is held to it by a
+/// test.
+pub const PLAY_SHOW_FRAME_RATE: bool = false;
+
 /// Who draws the game ([`Choice::renderer`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Renderer {
@@ -497,6 +503,11 @@ pub struct Choice {
     /// the file doesn't say. `None` in every other run: a test or script without `NV_D3D9` draws
     /// nothing, whatever the play default is.
     pub renderer: Option<Renderer>,
+    /// Whether the frame-rate counter shows from the start (`d3d9_wgpu::frame_rate`; F11 in the
+    /// game shows or hides it whatever this says): `NV_SHOW_FPS` when set (`1` on, else off);
+    /// else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display] bShowFrameRate`; else
+    /// [`PLAY_SHOW_FRAME_RATE`], off. Not part of any preset.
+    pub show_frame_rate: bool,
     /// The one log line naming `Fallout.ini` values that could not be used
     /// ([`crate::game_ini::Keys::bad_line`]): the default stood for each.
     pub ini_note: Option<String>,
@@ -515,6 +526,7 @@ impl Choice {
             render_thread: false,
             borderless: None,
             renderer: None,
+            show_frame_rate: PLAY_SHOW_FRAME_RATE,
             ini_note: None,
         }
     }
@@ -666,6 +678,7 @@ impl Choice {
             borderless: ini.borderless.or(play.then_some(PLAY_BORDERLESS)),
             // The same: play's renderer, the file's choice over it; none for any other run.
             renderer: ini.renderer.or(play.then_some(PLAY_RENDERER)),
+            show_frame_rate: ini.show_frame_rate.unwrap_or(PLAY_SHOW_FRAME_RATE),
             ini_note: ini.bad_line(),
         };
         for line in settings.unwrap_or("").lines() {
@@ -725,6 +738,9 @@ impl Choice {
         choice.overrides.extend(ini.fixes);
         if let Some(value) = env("NV_BORDERLESS").filter(|v| !v.trim().is_empty()) {
             choice.borderless = Some(value.trim() == "1");
+        }
+        if let Some(value) = env("NV_SHOW_FPS").filter(|v| !v.trim().is_empty()) {
+            choice.show_frame_rate = value.trim() == "1";
         }
         if test {
             choice.preset = Preset::Vanilla;
@@ -1490,6 +1506,29 @@ mod tests {
         );
         let real = with_ini(None, "[nv-rs Threads]\nbSteppedThreads=0\n", &[]);
         assert_eq!(real.threads, PLAY_THREADS);
+    }
+
+    /// The frame-rate counter is off from the start in every run and preset unless asked for:
+    /// `bShowFrameRate=1` in a launcher's play run, or `NV_SHOW_FPS=1` anywhere, which wins.
+    #[test]
+    fn the_frame_rate_counter_is_off_unless_asked_for() {
+        assert!(!Choice::vanilla().show_frame_rate);
+        for preset in ["fixes", "vanilla"] {
+            let file = format!("[nv-rs General]\nsPreset={preset}\n");
+            assert!(!with_ini(None, &file, &[]).show_frame_rate, "{preset}");
+        }
+        assert!(!Choice::from_parts(None, no_env).unwrap().show_frame_rate);
+        let on = "[nv-rs Display]\nbShowFrameRate=1\n";
+        assert!(with_ini(None, on, &[]).show_frame_rate);
+        assert!(!with_ini(None, "[nv-rs Display]\nbShowFrameRate=0\n", &[]).show_frame_rate);
+        let bad = with_ini(None, "[nv-rs Display]\nbShowFrameRate=yes\n", &[]);
+        assert!(!bad.show_frame_rate);
+        assert!(bad.ini_note.unwrap().ends_with("bShowFrameRate=yes"));
+        // A test never reads the file; the variable decides there and over the file.
+        assert!(!with_ini(None, on, &[("NV_SHOT", "x")]).show_frame_rate);
+        assert!(!with_ini(None, on, &[("NV_SHOW_FPS", "0")]).show_frame_rate);
+        let asked = Choice::from_parts(None, env_of(&[("NV_SHOW_FPS", "1")])).unwrap();
+        assert!(asked.show_frame_rate);
     }
 
     /// Lowest to highest: default, preset, settings.ini (the fallback), Fallout.ini, environment.

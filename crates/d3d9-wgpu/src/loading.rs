@@ -154,7 +154,7 @@ fn logos() -> Vec<(u32, u32, Vec<u8>)> {
 }
 
 /// A GDI font: its face and weight.
-type Font = (&'static str, i32);
+pub(crate) type Font = (&'static str, i32);
 const BANNER_FONT: Font = ("Arial Black", 900);
 const STATUS_FONT: Font = ("Arial", 700);
 const LOG_FONT: Font = ("Consolas", 400);
@@ -162,7 +162,11 @@ const LOG_FONT: Font = ("Consolas", 400);
 /// `text`'s lines (split at '\n') drawn white on transparent at `height` pixels a line, B, G, R,
 /// A rows top first (Windows' GDI); None elsewhere or when GDI fails.
 #[cfg(windows)]
-fn text_image(text: &str, height: u32, (face, weight): Font) -> Option<(u32, u32, Vec<u8>)> {
+pub(crate) fn text_image(
+    text: &str,
+    height: u32,
+    (face, weight): Font,
+) -> Option<(u32, u32, Vec<u8>)> {
     use std::ffi::c_void;
     #[repr(C)]
     struct BitmapInfoHeader {
@@ -304,7 +308,7 @@ fn text_image(text: &str, height: u32, (face, weight): Font) -> Option<(u32, u32
 }
 
 #[cfg(not(windows))]
-fn text_image(_text: &str, _height: u32, _font: Font) -> Option<(u32, u32, Vec<u8>)> {
+pub(crate) fn text_image(_text: &str, _height: u32, _font: Font) -> Option<(u32, u32, Vec<u8>)> {
     None
 }
 
@@ -677,7 +681,7 @@ pub(crate) struct Screen {
     ungated: wgpu::Buffer,
 }
 
-fn texture(
+pub(crate) fn texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     (w, h, px): (u32, u32, &[u8]),

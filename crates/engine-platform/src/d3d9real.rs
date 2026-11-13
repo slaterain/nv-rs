@@ -727,6 +727,11 @@ fn window_input(_window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) {
     let button = |i: &mut Input, b: usize, down: bool| i.buttons[b] = down;
     match message {
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP => {
+            // F11: the port's frame-rate counter on or off (its first press; `d3d9_wgpu::frame_rate`).
+            // The key is the port's, so the game never sees it go down or up.
+            if d3d9_wgpu::frame_rate::window_key(message, wparam.0, lparam.0) {
+                return;
+            }
             // F12 (the first press, not its repeats): a report for the player to send
             // ([`shot::report_at_present`]). The key still reaches the game, as every key does.
             if message == WM_KEYDOWN && wparam.0 == 0x7b && lparam.0 & (1 << 30) == 0 {
@@ -845,6 +850,13 @@ static BORDERLESS_CHOICE: std::sync::atomic::AtomicU8 = std::sync::atomic::Atomi
 /// `Fallout.ini`'s `[nv-rs Display] bBorderless`), made before the game opens its window.
 pub fn want_borderless(on: bool) {
     BORDERLESS_CHOICE.store(if on { 1 } else { 2 }, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Shows the wgpu backend's frame-rate counter from the start or not (`d3d9_wgpu::frame_rate`; the
+/// run's choice, `host::fixes::Choice::show_frame_rate`). F11 on the game's window shows or hides it
+/// afterwards ([`window_input`]). The real Direct3D 9 backend has no counter.
+pub fn want_frame_rate(on: bool) {
+    d3d9_wgpu::frame_rate::show(on);
 }
 
 /// The borderless window ([`borderless`]), which keeps the monitor's size when the game moves or
@@ -3632,6 +3644,40 @@ pub(crate) fn real_texture(e: &mut Engine, texture: u32) -> Option<IDirect3DBase
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// F11 is the port's frame-rate counter key: its press toggles the counter once, its repeats
+    /// and release change nothing, and the game's keyboard never holds it (DIK_F11, 0x57), in the
+    /// game's menus, Pip-Boy and console alike (they all read these keys). Another key still
+    /// reaches the game.
+    #[test]
+    fn f11_toggles_the_frame_rate_counter_and_never_reaches_the_game() {
+        let window = HWND(std::ptr::null_mut());
+        // Scan code 0x57 (F11) and 0x1e (A) in bits 16..23; bit 30 set on a repeat.
+        let (f11, a, repeat) = (0x0057_0001isize, 0x001e_0001isize, 1isize << 30);
+        let send = |message: u32, vk: usize, lparam: isize| {
+            window_input(window, message, WPARAM(vk), LPARAM(lparam))
+        };
+        d3d9_wgpu::frame_rate::show(false);
+        send(WM_KEYDOWN, 0x7a, f11);
+        assert!(d3d9_wgpu::frame_rate::shown(), "pressed: on");
+        assert!(!held_keys()[0x57], "the game does not see F11 down");
+        for _ in 0..10 {
+            send(WM_KEYDOWN, 0x7a, f11 | repeat);
+        }
+        assert!(d3d9_wgpu::frame_rate::shown(), "held: still on");
+        assert!(!held_keys()[0x57]);
+        send(WM_KEYUP, 0x7a, f11 | repeat | (1 << 31));
+        assert!(d3d9_wgpu::frame_rate::shown(), "released: still on");
+        send(WM_KEYDOWN, 0x7a, f11);
+        send(WM_KEYUP, 0x7a, f11 | repeat | (1 << 31));
+        assert!(!d3d9_wgpu::frame_rate::shown(), "pressed again: off");
+        assert!(!held_keys()[0x57]);
+        send(WM_KEYDOWN, 0x41, a);
+        assert!(held_keys()[0x1e], "A reaches the game");
+        send(WM_KEYUP, 0x41, a | repeat | (1 << 31));
+        assert!(!held_keys()[0x1e]);
+        assert!(!d3d9_wgpu::frame_rate::shown());
+    }
 
     /// With real threads, a kernel-locked function that reaches the device's state takes the device
     /// lock first: `SetWindowPos` (an import, run under the kernel lock) moves the real window

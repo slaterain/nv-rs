@@ -507,18 +507,18 @@ pub struct Switches {
 /// The game's variables for the player's options (host `fixes.rs` reads them over the file).
 /// `inherited` says whether a variable is set in Play.exe's own environment.
 ///
-/// In play, all seven are taken out, so the profile's `Fallout.ini` decides. When a variable that
+/// In play, all eight are taken out, so the profile's `Fallout.ini` decides. When a variable that
 /// was set before makes the run a test ([`TEST_SWITCHES`], or a fix's own), the game ignores the
 /// file and would run the original's behaviour with a test's defaults. So that a diagnostic run
 /// plays like the player's game, the file's choices are passed on then: its value for each of
-/// the seven, or the value a play run has when the file does not say, and each fix line that is
+/// the eight, or the value a play run has when the file does not say, and each fix line that is
 /// not commented out. A variable set before the start stays as it was set: nothing is taken out.
 ///
 /// When the played profile's file has none of our sections (Play.exe leaves a UTF-16 file
 /// alone, and makes none when there is nothing to make it from), the game can't find the
 /// player's options in it, and a `settings.ini` stays: the choices then come from `settings`
 /// (that file, when there is one) over the play defaults, as they would be in the file once
-/// moved in. In play the seven are passed from there, each one set (over an inherited one too);
+/// moved in. In play the eight are passed from there, each one set (over an inherited one too);
 /// the fix lines are not, since a fix's own variable would make the run a test.
 pub fn switches(
     fallout_ini: &str,
@@ -606,6 +606,7 @@ pub fn switches(
                 .to_string(),
             ),
             "bRenderThread" => Some(flag.unwrap_or(default).to_string()),
+            "bShowFrameRate" => Some(flag.unwrap_or(default).to_string()),
             // A fix line: only one that is there and not commented out.
             _ => flag.map(str::to_string),
         };
@@ -733,10 +734,11 @@ mod tests {
         // The section's own missing keys under it, each with its note, then the other sections
         // as the block has them, an empty line before each.
         let display_rest = format!(
-            "{}{}{}",
+            "{}{}{}{}",
             with_note("bBorderless"),
             with_note("sRenderer"),
-            with_note("iMenuFrameLimit")
+            with_note("iMenuFrameLimit"),
+            with_note("bShowFrameRate")
         );
         assert!(
             display_rest.starts_with("; 1 = the game's window")
@@ -1020,7 +1022,7 @@ mod tests {
     }
 
     /// The played profile's file has none of our sections (UTF-16, or none could be made): in
-    /// play the seven are passed from settings.ini over the play defaults, each one set, no fix
+    /// play the eight are passed from settings.ini over the play defaults, each one set, no fix
     /// line; in a test the same choices, what was set before kept.
     #[test]
     fn a_file_without_the_sections_gets_the_choices_as_variables() {
@@ -1043,6 +1045,7 @@ mod tests {
                     ("NV_D3D9", "wgpu"),
                     ("NV_FRAME_LIMIT", "60"),
                     ("NV_MENU_FRAME_LIMIT", "120"),
+                    ("NV_SHOW_FPS", "0"),
                     ("NV_THREADS", "stepped"),
                     ("NV_RENDER_THREAD", "1"),
                 ]),
@@ -1059,6 +1062,7 @@ mod tests {
                 ("NV_D3D9", "wgpu"),
                 ("NV_FRAME_LIMIT", "0"),
                 ("NV_MENU_FRAME_LIMIT", "120"),
+                ("NV_SHOW_FPS", "0"),
                 ("NV_THREADS", "real"),
                 ("NV_RENDER_THREAD", "1"),
             ])
@@ -1104,21 +1108,22 @@ mod tests {
         assert_eq!(moved("Renderer=opengl\n").as_deref(), Some("vulkan"));
     }
 
-    /// In play Play.exe takes the seven variables out; in a test, which never reads the file, it
+    /// In play Play.exe takes the eight variables out; in a test, which never reads the file, it
     /// passes the file's choices on and leaves what was set before as it is.
     #[test]
     fn the_games_variables_follow_the_file_only_in_a_test() {
         let ini = "[nv-rs General]\nsPreset=vanilla\n[nv-rs Display]\nbBorderless=0\niFrameLimit=90\niMenuFrameLimit=bad\n[nv-rs Threads]\nbSteppedThreads=1\n[nv-rs Fixes]\n;bUncap=1\nbGrabPush=0\nbTopicIndex=2\n";
-        let seven = [
+        let eight = [
             "NV_PRESET",
             "NV_BORDERLESS",
             "NV_D3D9",
             "NV_FRAME_LIMIT",
             "NV_MENU_FRAME_LIMIT",
+            "NV_SHOW_FPS",
             "NV_THREADS",
             "NV_RENDER_THREAD",
         ];
-        // Play: nothing passed, all seven out, whatever else is set.
+        // Play: nothing passed, all eight out, whatever else is set.
         let sets: [&[&str]; 3] = [
             &[],
             &["NV_PRESET", "NV_THREADS"],
@@ -1129,7 +1134,7 @@ mod tests {
             assert_eq!(
                 play,
                 Switches {
-                    removed: seven.to_vec(),
+                    removed: eight.to_vec(),
                     ..Switches::default()
                 },
                 "{set:?}"
@@ -1151,6 +1156,7 @@ mod tests {
                 ("NV_D3D9", "wgpu"),
                 ("NV_FRAME_LIMIT", "90"),
                 ("NV_MENU_FRAME_LIMIT", "120"),
+                ("NV_SHOW_FPS", "0"),
                 ("NV_THREADS", "stepped"),
                 ("NV_RENDER_THREAD", "1"),
                 ("NV_GRAB_PUSH", "0"),
@@ -1166,6 +1172,7 @@ mod tests {
                 ("NV_D3D9", "wgpu"),
                 ("NV_FRAME_LIMIT", "0"),
                 ("NV_MENU_FRAME_LIMIT", "120"),
+                ("NV_SHOW_FPS", "0"),
                 ("NV_THREADS", "real"),
                 ("NV_RENDER_THREAD", "1"),
             ])
@@ -1184,6 +1191,7 @@ mod tests {
                 ("NV_D3D9", "wgpu"),
                 ("NV_FRAME_LIMIT", "90"),
                 ("NV_MENU_FRAME_LIMIT", "120"),
+                ("NV_SHOW_FPS", "0"),
                 ("NV_RENDER_THREAD", "1"),
             ])
         );

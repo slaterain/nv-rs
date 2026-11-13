@@ -858,3 +858,74 @@ fn every_frame_is_shown_while_the_queue_thread_is_behind() {
     assert_eq!(d.wgpu_errors(), 0, "wgpu reported no error");
     assert_eq!(d.frames_shown(), 12, "every frame shown");
 }
+
+/// The frame-rate counter on the game's window. Off (the default), nothing of it is made or
+/// drawn. On, it is drawn into the window's frames (once a quarter second of presents has given
+/// it numbers), and still no capture holds it: neither the back buffer's (what an F12 report and
+/// the comparison tools read) nor the window's own, taken before it is drawn; each is the frame's
+/// one colour.
+#[test]
+fn the_frame_rate_counter_is_drawn_into_the_window_and_never_captured() {
+    let Some(mut g) = Rig::new((640, 360), (320, 180)) else {
+        return;
+    };
+    struct Off;
+    impl Drop for Off {
+        fn drop(&mut self) {
+            d3d9_wgpu::frame_rate::show(false);
+        }
+    }
+    let _off = Off;
+    d3d9_wgpu::frame_rate::show(false);
+    for frame in 1..=3 {
+        g.show(frame, 0xFF20_4060);
+    }
+    assert_eq!(
+        g.b.device().expect("the device").frame_rate_drawn(),
+        (false, 0),
+        "off: nothing made"
+    );
+    d3d9_wgpu::frame_rate::show(true);
+    let colour = 0xFFFF_FFFF;
+    let mut frame = 4;
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        g.show(frame, colour);
+        frame += 1;
+        let (made, drawn) = g.b.device().expect("the device").frame_rate_drawn();
+        assert!(made, "on: made at its first present");
+        if drawn >= 3 || std::time::Instant::now() > until {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let (_, drawn) = g.b.device().expect("the device").frame_rate_drawn();
+    assert!(drawn >= 3, "drawn into {drawn} frames of {}", frame - 4);
+    // Every frame since it was turned on, as both captures have it: the one colour only (the
+    // counter's dark plate would show on white).
+    for f in 4..frame.min(100) {
+        assert_eq!(
+            g.window_frame(f),
+            Some((640, 360, vec![bgra(colour)])),
+            "the window's capture of frame {f}"
+        );
+        let (_, _, back) = g
+            .capture("wgpu-frame", f)
+            .expect("the back buffer's capture");
+        assert!(
+            back.chunks_exact(4).all(|p| p[..3] == bgra(colour)[..3]),
+            "the back buffer's capture of frame {f}"
+        );
+    }
+    assert_eq!(
+        g.b.device().expect("the device").wgpu_errors(),
+        0,
+        "wgpu reported no error"
+    );
+    // Off again: no more drawing.
+    d3d9_wgpu::frame_rate::show(false);
+    g.show(frame, colour);
+    g.show(frame + 1, colour);
+    let (_, after) = g.b.device().expect("the device").frame_rate_drawn();
+    assert_eq!(after, drawn, "off again: not drawn");
+}

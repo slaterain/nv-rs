@@ -58,6 +58,11 @@ instead, choose Window under Display mode in Settings.cmd. That is bBorderless=0
 [nv-rs Display] section (Bug fixes, below, says where the file is). With 1, or with no such line,
 the window is borderless.
 
+Press F11 in the game to show or hide a frame-rate counter in the top-right corner: frames a second
+and, under it, the slowest frame of the last second in milliseconds (a stutter shows there). It is off
+at the start unless you choose "Shown" under Frame rate counter in Settings.cmd (bShowFrameRate=1 in
+the same section). It shows with the Vulkan renderer only.
+
 
 Bug fixes
 ---------
