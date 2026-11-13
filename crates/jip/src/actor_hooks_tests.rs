@@ -44,7 +44,6 @@ fn world_as(installed: bool) -> Engine {
     calls();
     let mut e = engine();
     e.map(AREA, 0x1_0000);
-    e.map(0x0108_7000, 0x3000);
     for slot in COPY_HIT_DATA_SLOTS {
         e.mem.set_u32(slot, EXE_COPY);
     }
@@ -60,6 +59,7 @@ fn world_as(installed: bool) -> Engine {
         (LIST_FORM, 0x55),
     ] {
         e.mem.set_u8(form + 4, kind);
+        e.mem.set_u32(form, AREA + 0x900);
     }
     e.mem.set_u32(SCRIPT_FORM + 0xc, 0x0100_0900);
     e.mem.set_u32(SCRIPT_TWO + 0xc, 0x0100_0901);

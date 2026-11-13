@@ -433,7 +433,9 @@ fn damage_actor_value_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let actor = owner.wrapping_sub(AV_OWNER_OFFSET);
     let low = code as u8;
     if low == HEALTH {
-        if actor_flags3(e, actor) & ON_HEALTH_DAMAGE == 0 || !(0.0 > f32::from_bits(delta)) {
+        if actor_flags3(e, actor) & ON_HEALTH_DAMAGE == 0
+            || f32::from_bits(delta).partial_cmp(&0.0) != Some(std::cmp::Ordering::Less)
+        {
             return Some(0);
         }
         if let Some(scripts) = scripts_of(&state(e).health_damage, actor) {
@@ -622,7 +624,7 @@ fn projectile_impact_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     );
     let impact = e.get(p, crate::game::Projectile::impactDataList);
     if kind != BEAM && impact != 0 {
-        let position = p.at(crate::game::Projectile::position).addr();
+        let position = projectile + crate::game::Projectile::position.off;
         for i in 0..3 {
             let word = e.mem.u32(impact + 4 + 4 * i);
             e.mem.set_u32(position + 4 * i, word);
@@ -761,6 +763,16 @@ fn erase(e: &mut Engine, set: impl Fn(&mut State) -> &mut BTreeSet<u32>, script:
     removed
 }
 
+/// `Insert(key, &value)`: an empty entry made for `key` when it has none; whether it was made.
+fn made<V: Default>(map: &mut BTreeMap<u32, V>, key: u32) -> bool {
+    if let std::collections::btree_map::Entry::Vacant(v) = map.entry(key) {
+        v.insert(V::default());
+        true
+    } else {
+        false
+    }
+}
+
 /// The animation commands' maps: the action ones or the play-group ones.
 fn anim_maps(s: &mut State, action: bool) -> (&mut ScriptsBy, &mut BTreeMap<u32, ScriptsBy>) {
     if action {
@@ -798,9 +810,7 @@ fn set_animation_event(e: &mut Engine, script: u32, add: bool, target: u32, id: 
     if items[0] == 0 {
         // `tempList.Empty()`: the list's first node holds nothing.
         if add {
-            let new = !anim_maps(state(e), action).0.contains_key(&id);
-            if new {
-                anim_maps(state(e), action).0.insert(id, BTreeSet::new());
+            if made(anim_maps(state(e), action).0, id) {
                 e.add_hook_user(hook, true);
             }
             insert(
@@ -829,10 +839,7 @@ fn set_animation_event(e: &mut Engine, script: u32, add: bool, target: u32, id: 
             if !crate::commands::is_actor(e, actor) {
                 continue;
             }
-            if !anim_maps(state(e), action).1.contains_key(&actor) {
-                anim_maps(state(e), action)
-                    .1
-                    .insert(actor, ScriptsBy::new());
+            if made(anim_maps(state(e), action).1, actor) {
                 let flags = actor_flags3(e, actor);
                 set_actor_flags3(e, actor, flags | flag);
                 e.add_hook_user(hook, true);
@@ -968,8 +975,7 @@ fn set_actor_event(e: &mut Engine, w: &[u32], event: ActorEvent) -> Ret {
             if !crate::commands::is_actor(e, actor) {
                 continue;
             }
-            if !event.filtered(state(e)).contains_key(&actor) {
-                event.filtered(state(e)).insert(actor, BTreeSet::new());
+            if made(event.filtered(state(e)), actor) {
                 e.add_hook_user(hook, true);
             }
             insert(
@@ -1070,8 +1076,7 @@ fn set_on_form_event(
             continue;
         }
         if add {
-            if !map(state(e)).contains_key(&form) {
-                map(state(e)).insert(form, BTreeSet::new());
+            if made(map(state(e)), form) {
                 e.add_hook_user(hook, true);
             }
             insert(
