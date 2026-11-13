@@ -11055,46 +11055,8 @@ fn own_state_same_floats(
                 (0, 0, 0),
                 "{name} {words:x?} {scribble:#x}: {report:?}"
             );
-/// The lighting 3.0 shader's geometry set-up (`00bbef90`) with its typed helpers reads the geometry's world
-/// transform (through the packet's image of it), its bound, its pass's lights and the game time through the packet:
-/// with the cut's copies scribbled in guest memory (POISON), it answers and writes as without the packet. A plain
-/// pass type, a shadow pass type (the clip planes) and the 0xe set-up; every constant entry on.
-#[test]
-fn lighting30_setup_constants_reads_the_packet() {
-    packet_same_cases(
-        "lighting30_setup_constants",
-        entry!(
-            0x00bb_ef90,
-            engine_typed::draw::lighting30::setup_constants(Ptr<_>, Ptr<_>)
-        )
-        .1,
-        &word_cases(&product(&[&[0x30, 0x1c4, 0xe], &[3, 0x0100_0001]])),
-        true,
-        |e, c| {
-            let case = Case(vec![
-                Value::Word(c.word(0)),
-                Value::Word(0),
-                Value::Word(u32::MAX),
-                Value::Word(0),
-                Value::Word(1),
-                Value::Word(0),
-                Value::F32(0x4561_2340),
-                Value::Word(c.word(1)),
-                Value::Word(0),
-            ]);
-            let words = lighting30_constants_words(e, &case);
-            let pass = e.mem.u32(0x011f_91e0);
-            let geometry = e.mem.u32(pass);
-            as_drawn(e, geometry, words[1]);
-            (words, vec![pass, geometry])
-        },
-        |e, w| {
-            cut::take_geometry_values(e, w[1]);
-            cut::take_pass_lights(e, w[0]);
-            capture::take(e, 0x011f_940c, 0, 0x10);
-            capture::take(e, 0x011f_94ac, 0, 4);
-        },
-    );
+        }
+    }
 }
 
 /// The lock-counted render-state setters keep their counters and the render-state cache in the packet: with
@@ -11389,6 +11351,205 @@ fn lighting30_switches_keep_the_draws_own_state() {
 fn no_lighting_subtextures_go_to_the_draws_own_constants() {
     own_state_same(
         "no_lighting::copy_subtextures",
+        entry!(
+            0x00bc_6fa0,
+            engine_typed::draw::no_lighting::copy_subtextures(Ptr<_>, Ptr<_>, u32)
+        )
+        .1,
+        &product(&[&[0, 1, 5]]),
+        with_acc(no_lighting_subtexture_words),
+        |_, _, _| {},
+    );
+}
+
+/// The pass constants with vertex entry 8 on write the fog constants and the fog colour's copies into the draw's
+/// own shader statics (the fog read through the packet the frame's values fill).
+#[test]
+fn setup_pass_constants_writes_the_draws_own_constants() {
+    own_state_same(
+        "setup_pass_constants",
+        entry!(0x00b7_b450, setups::setup_pass_constants(Ptr<_>, u32)).1,
+        &product(&[
+            &[0x10, 0x2f0],
+            &[0x0000_0200, 0xffff_ffff],
+            &[1, 2, 3],
+            TWO_WAYS,
+        ]),
+        |e, c| {
+            let p = pass_world(e, &[], 0, 0);
+            for addr in SETUP_CALLEES {
+                e.register(*addr, marked);
+            }
+            entries(e);
+            let pass_type = c.word(0);
+            set(e, 0x011f_cc80 + 4 * pass_type, c.word(1));
+            set(e, 0x011f_c0a0 + 4 * pass_type, c.word(1).rotate_left(3));
+            e.map(0x010a_d000, 0x1000);
+            set(e, 0x010a_d6e0, 0x48f4_2400);
+            e.mem.set_u8(0x011f_91c4, 1);
+            let node = e.mem.alloc(0x140);
+            set(e, 0x011f_91c8 + 4, node);
+            let fog = e.mem.alloc(0x64);
+            for (k, word) in [ONE, HALF, 0x3e80_0000].iter().enumerate() {
+                set(e, fog + 0x20 + 4 * k as u32, *word);
+            }
+            match c.word(2) {
+                2 => {
+                    set(e, fog + 0x2c, 0x3f40_0000);
+                    set(e, fog + 0x30, TWO);
+                    set(e, fog + 0x60, 0x3f40_0000);
+                }
+                3 => set(e, fog + 0x2c, ONE),
+                _ => {}
+            }
+            set(e, node + 0x134, fog);
+            let geometry = e.mem.u32(e.mem.u32(0x011f_91e0));
+            let skin = if c.word(3) != 0 { p.d.w.skin } else { 0 };
+            set(e, geometry + 0xbc, skin);
+            set(e, p.d.w.shader + 0x18, p.d.w.renderer);
+            set(e, RETS + 0x7f8, p.d.w.camera);
+            (vec![p.d.w.shader, pass_type], p.d.w.acc)
+        },
+        |e, acc, _| {
+            let camera = e.mem.u32(RETS + 0x7f8);
+            cut::take_frame(e, camera, Ptr::new(acc));
+        },
+    );
+}
+
+/// The device's `SetRenderState` (slot 0xe4), `(device, state, value)`: counted at [`CONSTANT_UPLOAD_COPY`] + 0x1f00, the
+/// state and value kept after it; then the slot's answer.
+fn set_render_state_answer(e: &mut Engine, a: &[u32]) -> Ret {
+    let at = CONSTANT_UPLOAD_COPY + 0x1f00;
+    let n = e.mem.u32(at);
+    e.mem.set_u32(at, n + 1);
+    e.mem.set_u32(at + 4, a[1]);
+    e.mem.set_u32(at + 8, a[2]);
+    slot_answer::<0xe4>(e, a)
+}
+
+/// Where [`constants_upload_answer`] copies what the device is handed (one 0x10-byte row a register).
+const CONSTANT_UPLOAD_COPY: u32 = 0x0121_0000;
+
+/// The device's `SetVertexShaderConstantF` / `SetPixelShaderConstantF` (slots 0x178, 0x1b4), `(device, register,
+/// data, count)`: the rows the data points to copied to [`CONSTANT_UPLOAD_COPY`] at the register's row (the
+/// vertex rows, then the pixel rows 0x100 on), so the digest compares what was uploaded; then the slot's answer.
+fn constants_upload_answer<const S: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+    let (register, data, count) = (a[1], a[2], a[3].min(4));
+    let base = CONSTANT_UPLOAD_COPY + if S == 0x1b4 { 0x1000 } else { 0 };
+    let mut bytes = vec![0u8; 16 * count as usize];
+    if register < 0x100 && e.mem.try_read(data, &mut bytes).is_ok() {
+        e.mem.write(base + 16 * register, &bytes);
+    }
+    slot_answer::<S>(e, a)
+}
+
+/// The constant map's uploads (`00e826d0`) hand the device the draw's own constants: with the entries' data in
+/// the shader statics (scribbled in guest memory), the device gets the rows the draw holds (an image of the
+/// packet's copy).
+#[test]
+fn set_shader_constants_uploads_the_draws_own_constants() {
+    own_state_same(
+        "set_shader_constants",
+        entry!(
+            0x00e8_26d0,
+            constants::set_shader_constants(
+                Ptr<_>,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+            ) -> bool
+        )
+        .1,
+        &product(&[&[0, 1, 3, 6], &[0, 1, 2, 3], &[0, 1]]),
+        |e, c| {
+            stand_ins(e, false);
+            slots!(e; 0x90, 0x94, 0x98, 0x9c);
+            e.register(VT_FN + 0x178, constants_upload_answer::<0x178>);
+            e.register(VT_FN + 0x1b4, constants_upload_answer::<0x1b4>);
+            e.map(CONSTANT_UPLOAD_COPY, 0x2000);
+            for slot in [0x8c, 0x90, 0x94, 0x98, 0x9c, 0xa4] {
+                set(e, RETS + slot, 1);
+            }
+            let vt = vtable(e, &[]);
+            let device = obj(e, 0x10, vt);
+            let map = obj(e, 0x44, vt);
+            let entries = constant_entries(e, c.word(0), c.word(1), c.word(2), false);
+            let defined = constant_entries(e, c.word(0) + 1, c.word(1) + 1, c.word(2) + 2, false);
+            // Each entry's data in the shader statics' constant rows, the rows filled.
+            for (list, base) in [(entries, 0x011f_a0c0u32), (defined, 0x011f_d868)] {
+                for i in 0..10u32 {
+                    let entry = e.mem.u32(list + 4 * i);
+                    set(e, entry + 0x30, base + 0x30 * i);
+                }
+            }
+            for k in 0..0x100u32 {
+                set(e, 0x011f_a0c0 + 4 * k, 0x3f80_0000 + 0x101 * k);
+                set(e, 0x011f_d868 + 4 * k, 0x4000_0000 + 0x303 * k);
+            }
+            set(e, map + 0x10, entries);
+            e.mem.set_u16(map + 0x16, 10);
+            set(e, map + 0x20, defined);
+            e.mem.set_u16(map + 0x26, 10);
+            set(e, map + 0x38, device);
+            let mut words = vec![map];
+            words.extend((0..11).map(|i| 0x0700_0000 + 0x100 * i));
+            (words, 0)
+        },
+        |_, _, _| {},
+    );
+}
+
+/// The lighting 3.0 shader's geometry set-up (`00bbef90`) with its typed helpers reads the geometry's world
+/// transform (through the packet's image of it), its bound, its pass's lights and the game time through the packet:
+/// with the cut's copies scribbled in guest memory (POISON), it answers and writes as without the packet. A plain
+/// pass type, a shadow pass type (the clip planes) and the 0xe set-up; every constant entry on.
+#[test]
+fn lighting30_setup_constants_reads_the_packet() {
+    packet_same_cases(
+        "lighting30_setup_constants",
+        entry!(
+            0x00bb_ef90,
+            engine_typed::draw::lighting30::setup_constants(Ptr<_>, Ptr<_>)
+        )
+        .1,
+        &word_cases(&product(&[&[0x30, 0x1c4, 0xe], &[3, 0x0100_0001]])),
+        true,
+        |e, c| {
+            let case = Case(vec![
+                Value::Word(c.word(0)),
+                Value::Word(0),
+                Value::Word(u32::MAX),
+                Value::Word(0),
+                Value::Word(1),
+                Value::Word(0),
+                Value::F32(0x4561_2340),
+                Value::Word(c.word(1)),
+                Value::Word(0),
+            ]);
+            let words = lighting30_constants_words(e, &case);
+            let pass = e.mem.u32(0x011f_91e0);
+            let geometry = e.mem.u32(pass);
+            as_drawn(e, geometry, words[1]);
+            (words, vec![pass, geometry])
+        },
+        |e, w| {
+            cut::take_geometry_values(e, w[1]);
+            cut::take_pass_lights(e, w[0]);
+            capture::take(e, 0x011f_940c, 0, 0x10);
+            capture::take(e, 0x011f_94ac, 0, 4);
+        },
+    );
+}
+
 /// The geometry as the world draw has it: a vtable (the cut asks its immediate draw), and its shader property
 /// (+0xa8) the state's (`block`'s +0xc), when the setup left them out.
 fn as_drawn(e: &mut Engine, geometry: u32, block: u32) {
@@ -11697,171 +11858,6 @@ fn tall_grass_setup_textures_reads_the_packet() {
             (words, vec![record])
         },
         |e, w| cut::take_pass_lights(e, w[0]),
-    );
-}
-
-/// The pass constants with vertex entry 8 on write the fog constants and the fog colour's copies into the draw's
-/// own shader statics (the fog read through the packet the frame's values fill).
-#[test]
-fn setup_pass_constants_writes_the_draws_own_constants() {
-    own_state_same(
-        "setup_pass_constants",
-        entry!(0x00b7_b450, setups::setup_pass_constants(Ptr<_>, u32)).1,
-        &product(&[
-            &[0x10, 0x2f0],
-            &[0x0000_0200, 0xffff_ffff],
-            &[1, 2, 3],
-            TWO_WAYS,
-        ]),
-        |e, c| {
-            let p = pass_world(e, &[], 0, 0);
-            for addr in SETUP_CALLEES {
-                e.register(*addr, marked);
-            }
-            entries(e);
-            let pass_type = c.word(0);
-            set(e, 0x011f_cc80 + 4 * pass_type, c.word(1));
-            set(e, 0x011f_c0a0 + 4 * pass_type, c.word(1).rotate_left(3));
-            e.map(0x010a_d000, 0x1000);
-            set(e, 0x010a_d6e0, 0x48f4_2400);
-            e.mem.set_u8(0x011f_91c4, 1);
-            let node = e.mem.alloc(0x140);
-            set(e, 0x011f_91c8 + 4, node);
-            let fog = e.mem.alloc(0x64);
-            for (k, word) in [ONE, HALF, 0x3e80_0000].iter().enumerate() {
-                set(e, fog + 0x20 + 4 * k as u32, *word);
-            }
-            match c.word(2) {
-                2 => {
-                    set(e, fog + 0x2c, 0x3f40_0000);
-                    set(e, fog + 0x30, TWO);
-                    set(e, fog + 0x60, 0x3f40_0000);
-                }
-                3 => set(e, fog + 0x2c, ONE),
-                _ => {}
-            }
-            set(e, node + 0x134, fog);
-            let geometry = e.mem.u32(e.mem.u32(0x011f_91e0));
-            let skin = if c.word(3) != 0 { p.d.w.skin } else { 0 };
-            set(e, geometry + 0xbc, skin);
-            set(e, p.d.w.shader + 0x18, p.d.w.renderer);
-            set(e, RETS + 0x7f8, p.d.w.camera);
-            (vec![p.d.w.shader, pass_type], p.d.w.acc)
-        },
-        |e, acc, _| {
-            let camera = e.mem.u32(RETS + 0x7f8);
-            cut::take_frame(e, camera, Ptr::new(acc));
-        },
-    );
-}
-
-/// The device's `SetRenderState` (slot 0xe4), `(device, state, value)`: counted at [`CONSTANT_UPLOAD_COPY`] + 0x1f00, the
-/// state and value kept after it; then the slot's answer.
-fn set_render_state_answer(e: &mut Engine, a: &[u32]) -> Ret {
-    let at = CONSTANT_UPLOAD_COPY + 0x1f00;
-    let n = e.mem.u32(at);
-    e.mem.set_u32(at, n + 1);
-    e.mem.set_u32(at + 4, a[1]);
-    e.mem.set_u32(at + 8, a[2]);
-    slot_answer::<0xe4>(e, a)
-}
-
-/// Where [`constants_upload_answer`] copies what the device is handed (one 0x10-byte row a register).
-const CONSTANT_UPLOAD_COPY: u32 = 0x0121_0000;
-
-/// The device's `SetVertexShaderConstantF` / `SetPixelShaderConstantF` (slots 0x178, 0x1b4), `(device, register,
-/// data, count)`: the rows the data points to copied to [`CONSTANT_UPLOAD_COPY`] at the register's row (the
-/// vertex rows, then the pixel rows 0x100 on), so the digest compares what was uploaded; then the slot's answer.
-fn constants_upload_answer<const S: u32>(e: &mut Engine, a: &[u32]) -> Ret {
-    let (register, data, count) = (a[1], a[2], a[3].min(4));
-    let base = CONSTANT_UPLOAD_COPY + if S == 0x1b4 { 0x1000 } else { 0 };
-    let mut bytes = vec![0u8; 16 * count as usize];
-    if register < 0x100 && e.mem.try_read(data, &mut bytes).is_ok() {
-        e.mem.write(base + 16 * register, &bytes);
-    }
-    slot_answer::<S>(e, a)
-}
-
-/// The constant map's uploads (`00e826d0`) hand the device the draw's own constants: with the entries' data in
-/// the shader statics (scribbled in guest memory), the device gets the rows the draw holds (an image of the
-/// packet's copy).
-#[test]
-fn set_shader_constants_uploads_the_draws_own_constants() {
-    own_state_same(
-        "set_shader_constants",
-        entry!(
-            0x00e8_26d0,
-            constants::set_shader_constants(
-                Ptr<_>,
-                u32,
-                u32,
-                u32,
-                u32,
-                u32,
-                u32,
-                u32,
-                u32,
-                u32,
-                u32,
-                u32,
-            ) -> bool
-        )
-        .1,
-        &product(&[&[0, 1, 3, 6], &[0, 1, 2, 3], &[0, 1]]),
-        |e, c| {
-            stand_ins(e, false);
-            slots!(e; 0x90, 0x94, 0x98, 0x9c);
-            e.register(VT_FN + 0x178, constants_upload_answer::<0x178>);
-            e.register(VT_FN + 0x1b4, constants_upload_answer::<0x1b4>);
-            e.map(CONSTANT_UPLOAD_COPY, 0x2000);
-            for slot in [0x8c, 0x90, 0x94, 0x98, 0x9c, 0xa4] {
-                set(e, RETS + slot, 1);
-            }
-            let vt = vtable(e, &[]);
-            let device = obj(e, 0x10, vt);
-            let map = obj(e, 0x44, vt);
-            let entries = constant_entries(e, c.word(0), c.word(1), c.word(2), false);
-            let defined = constant_entries(e, c.word(0) + 1, c.word(1) + 1, c.word(2) + 2, false);
-            // Each entry's data in the shader statics' constant rows, the rows filled.
-            for (list, base) in [(entries, 0x011f_a0c0u32), (defined, 0x011f_d868)] {
-                for i in 0..10u32 {
-                    let entry = e.mem.u32(list + 4 * i);
-                    set(e, entry + 0x30, base + 0x30 * i);
-                }
-            }
-            for k in 0..0x100u32 {
-                set(e, 0x011f_a0c0 + 4 * k, 0x3f80_0000 + 0x101 * k);
-                set(e, 0x011f_d868 + 4 * k, 0x4000_0000 + 0x303 * k);
-            }
-            set(e, map + 0x10, entries);
-            e.mem.set_u16(map + 0x16, 10);
-            set(e, map + 0x20, defined);
-            e.mem.set_u16(map + 0x26, 10);
-            set(e, map + 0x38, device);
-            let mut words = vec![map];
-            words.extend((0..11).map(|i| 0x0700_0000 + 0x100 * i));
-            (words, 0)
-        },
-        |_, _, _| {},
-        &word_cases(&[vec![1], vec![5]]),
-        true,
-        |e, c| {
-            let w = world(e);
-            e.map(0x0120_2000, 0x1000);
-            let shader = no_lighting_shader(e, &w);
-            let count = c.word(0);
-            let entries = e.mem.alloc(0x50);
-            for i in 0..0x14u32 {
-                set(e, entries + 4 * i, 0x5b00_0000 + i);
-            }
-            let data = e.mem.alloc(0x70);
-            set(e, data + 0x68, entries);
-            e.mem.set_u8(data + 0x6c, count as u8);
-            let geometry = e.mem.alloc(0xc0);
-            set(e, geometry + 0xb8, data);
-            (vec![shader, geometry, 0x0bad_0002], vec![entries, count])
-        },
-        |e, w| capture::take(e, w[0], 0, w[1] * 0x10),
     );
 }
 
