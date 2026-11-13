@@ -277,11 +277,7 @@ fn blend_into_node(e: &mut Engine, this: u32, node: u32, hk: u32, flag: bool, so
             e.vcall(this, SLOT_NODE_TRANSFORM, &args![transform]);
         }
         let inverse = reciprocal(source);
-        let second = if flag {
-            1.0f32
-        } else {
-            e.mem.f32(this + 0x1c)
-        };
+        let second = if flag { 1.0f32 } else { e.mem.f32(this + 0x1c) };
         e.call(
             UPDATE_FROM_BLEND,
             &args![
