@@ -5802,10 +5802,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         (format, width, height): (wgpu::TextureFormat, u32, u32),
     ) {
         self.end_pass();
-        let readout = self
-            .fps_meter
-            .lock()
-            .map_or((None, 0), |m| m.readout());
+        let readout = self.fps_meter.lock().map_or((None, 0), |m| m.readout());
         let mut overlay = match self.fps_overlay.take() {
             Some(o) if o.format == format => o,
             _ => frame_rate::Overlay::new(&self.device, format),

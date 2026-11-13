@@ -115,7 +115,8 @@ impl Meter {
         self.done[self.at] = std::mem::take(&mut self.open);
         self.at = (self.at + 1) % KEPT;
         self.filled = (self.filled + 1).min(KEPT);
-        let newest = |n: usize| (1..=n.min(self.filled)).map(|i| self.done[(self.at + KEPT - i) % KEPT]);
+        let newest =
+            |n: usize| (1..=n.min(self.filled)).map(|i| self.done[(self.at + KEPT - i) % KEPT]);
         let (frames, nanos) = newest(AVERAGED).fold((0u128, 0u128), |(f, t), p| {
             (f + u128::from(p.frames), t + p.time.as_nanos())
         });
@@ -212,7 +213,14 @@ fn layout(
         widest * cw + 2.0 * pad,
         2.0 * ch + 2.0 * pad,
     ];
-    let clip = |[x, y, w, h]: [f32; 4]| [x / fw * 2.0 - 1.0, 1.0 - (y + h) / fh * 2.0, w / fw * 2.0, h / fh * 2.0];
+    let clip = |[x, y, w, h]: [f32; 4]| {
+        [
+            x / fw * 2.0 - 1.0,
+            1.0 - (y + h) / fh * 2.0,
+            w / fw * 2.0,
+            h / fh * 2.0,
+        ]
+    };
     let mut n = 0;
     let mut push = |rect: [f32; 4], uv: [f32; 4], colour: [f32; 4]| {
         let mut q = [0.0; QUAD_FLOATS];
@@ -634,7 +642,10 @@ mod tests {
             )
         };
         // The plate: 10 characters wide plus 8 pixels each side, 12 pixels from the edges.
-        assert_eq!(px(&out[0]), (1920.0 - 12.0 - 120.0 - 16.0, 12.0, 136.0, 64.0));
+        assert_eq!(
+            px(&out[0]),
+            (1920.0 - 12.0 - 120.0 - 16.0, 12.0, 136.0, 64.0)
+        );
         assert!(out[0][4] < 0.0, "the plate takes no glyph");
         // The last character of each line ends 8 pixels inside the plate's right edge.
         assert_eq!(px(&out[6]), (1920.0 - 20.0 - 12.0, 20.0, 12.0, 24.0));

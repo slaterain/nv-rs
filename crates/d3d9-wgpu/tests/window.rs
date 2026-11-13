@@ -909,7 +909,9 @@ fn the_frame_rate_counter_is_drawn_into_the_window_and_never_captured() {
             Some((640, 360, vec![bgra(colour)])),
             "the window's capture of frame {f}"
         );
-        let (_, _, back) = g.capture("wgpu-frame", f).expect("the back buffer's capture");
+        let (_, _, back) = g
+            .capture("wgpu-frame", f)
+            .expect("the back buffer's capture");
         assert!(
             back.chunks_exact(4).all(|p| p[..3] == bgra(colour)[..3]),
             "the back buffer's capture of frame {f}"

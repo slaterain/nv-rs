@@ -2752,7 +2752,10 @@ mod tests {
     #[test]
     fn settings_cmd_before_the_first_start_writes_settings_ini_for_play_exe_to_move() {
         let files = Files::new("settings-first", None);
-        settings_window(&files, "Preset=vanilla;FrameLimit=60;NV_RENDER_THREAD=0;NV_SHOW_FPS=1");
+        settings_window(
+            &files,
+            "Preset=vanilla;FrameLimit=60;NV_RENDER_THREAD=0;NV_SHOW_FPS=1",
+        );
         let written = std::fs::read_to_string(&files.package.settings).unwrap();
         assert!(
             written.contains("\r\nPreset=vanilla\r\n") && written.contains("\r\nFrameLimit=60\r\n")

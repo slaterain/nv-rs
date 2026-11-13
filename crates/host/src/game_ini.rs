@@ -319,7 +319,10 @@ mod tests {
             Some(crate::fixes::PLAY_THREADS == "stepped")
         );
         assert_eq!(keys.render_thread, Some(crate::fixes::PLAY_RENDER_THREAD));
-        assert_eq!(keys.show_frame_rate, Some(crate::fixes::PLAY_SHOW_FRAME_RATE));
+        assert_eq!(
+            keys.show_frame_rate,
+            Some(crate::fixes::PLAY_SHOW_FRAME_RATE)
+        );
         // The fix lines are commented out: the preset decides.
         assert!(keys.fixes.is_empty());
         assert!(keys.bad.is_empty(), "{:?}", keys.bad);

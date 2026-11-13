@@ -162,7 +162,11 @@ const LOG_FONT: Font = ("Consolas", 400);
 /// `text`'s lines (split at '\n') drawn white on transparent at `height` pixels a line, B, G, R,
 /// A rows top first (Windows' GDI); None elsewhere or when GDI fails.
 #[cfg(windows)]
-pub(crate) fn text_image(text: &str, height: u32, (face, weight): Font) -> Option<(u32, u32, Vec<u8>)> {
+pub(crate) fn text_image(
+    text: &str,
+    height: u32,
+    (face, weight): Font,
+) -> Option<(u32, u32, Vec<u8>)> {
     use std::ffi::c_void;
     #[repr(C)]
     struct BitmapInfoHeader {
