@@ -346,8 +346,14 @@ pub const SITES: &[Entry] = &[
         owners: NVSE,
         step: "I-14",
     },
-    // ScriptCompiler::StandardCompile 005b1ba0: the end-of-line check (off while a command inside
-    // an expression parses).
+    // ScriptCompiler::StandardCompile 005b1ba0: the byte map's read for a value parameter (xNVSE
+    // maps the double type to the integer and float case), and the end-of-line check (off while
+    // a command inside an expression parses).
+    Entry {
+        addr: 0x005b_2fa2,
+        owners: NVSE,
+        step: "I-14",
+    },
     Entry {
         addr: 0x005b_3a8d,
         owners: NVSE,
@@ -2239,7 +2245,7 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 93);
+        assert_eq!(SITES.len(), 94);
         // The run-time compiler's (I-14), xNVSE's.
         for a in [
             0x005a_ebb1,
@@ -2249,6 +2255,7 @@ mod tests {
             0x005b_0a3f,
             0x005b_0f68,
             0x005b_19ba,
+            0x005b_2fa2,
             0x005b_3a8d,
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");

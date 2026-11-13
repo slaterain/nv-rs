@@ -898,6 +898,9 @@ fn the_compilers_seams_answer_as_xnvses_hooks() {
     assert_eq!(e.site(0x005b_3a8d, &[]), Some(1));
     assert_eq!(e.site(0x005a_fedb, &[word]), Some(0));
     assert_eq!(e.site(0x005b_0a3f, &[]), Some(1));
+    // The double type: the float case, and its type table entry made a variable's.
+    assert_eq!(e.site(0x005b_2fa2, &[]), Some(1));
+    assert_eq!(e.mem.u16(0x0118_cf34), 1);
     assert_eq!(e.site(0x005a_ed78, &[BUF]), None);
     state(&mut e).skip_ref_check = true;
     assert_eq!(e.site(0x005a_ed78, &[BUF]), Some(1));
@@ -1368,4 +1371,32 @@ fn a_compile_finds_names_through_one_map() {
     assert!(state(&mut e).names.is_some());
     e.site(0x005a_eda0, &[1, BUF]);
     assert!(state(&mut e).names.is_none());
+}
+
+/// A loop open while the script's data grows (xNVSE's size seam moves it to a new block): the
+/// `loop` writes its jump word in the new block, at the offset the `while` left room at, and
+/// the old block is not written (xNVSE would write the old block; see `begin_loop_parse`).
+#[test]
+fn a_loop_over_the_datas_growth_writes_the_new_block() {
+    let mut e = installed();
+    e.register(0x00aa_44c0, |_, _| Ret {
+        eax: 0x20,
+        ..Ret::default()
+    });
+    let old = AREA + 0x2_0000;
+    e.mem.write(old, &[7; 0x20]);
+    e.mem.set_u32(BUF + sb::DATA, old);
+    e.mem.set_u32(BUF + sb::DATA_OFFSET, 0x10);
+    compiled(&mut e, WHILE, "x < 3");
+    // The while line goes into the data (as the game's compiler copies it), then the data grows.
+    e.mem.write(old + 0x14, &[0; 4]);
+    e.mem.set_u32(LINE + ln::DATA_LEN, 6);
+    assert_eq!(e.site(0x005b_0f68, &[BUF, LINE]), Some(1));
+    let new = e.mem.u32(BUF + sb::DATA);
+    assert_ne!(new, old);
+    let before = e.mem.bytes(old, 0x20);
+    e.mem.set_u32(BUF + sb::DATA_OFFSET, 0x18);
+    compiled(&mut e, LOOP, "");
+    assert_eq!(e.mem.u32(new + 0x14), 0x1c);
+    assert_eq!(e.mem.bytes(old, 0x20), before, "the old block is untouched");
 }

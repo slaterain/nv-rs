@@ -2516,6 +2516,14 @@ fn compile_value_parameter(
 ) -> Option<bool> {
     let p = parameter;
     let word = p.word;
+    // Seam 005B2FA2, the read of the byte map: xNVSE writes the double type's (0x2C) entry
+    // (005B3C30) as the integer and float types' case, so with an answer a double compiles
+    // through that case's float path (any type there but 1 and 0x17 is a float).
+    let kind = if kind == 0x2c && e.site(0x005b_2fa2, &[]).is_some() {
+        2
+    } else {
+        kind
+    };
     match kind {
         0 => {
             line_put_u16(e, line, length as u16);
@@ -4339,5 +4347,47 @@ mod n045_tests {
         e.call(0x005a_ff40, &[0, 0x9900, d, l]);
         assert!(!errors(&e).contains(&TEXT_MISMATCHED_PARENTHESES));
         assert_eq!(seen(0x005b_0a3f).last(), Some(&vec![]));
+    }
+
+    seam!(double_seam, 0x005b_2fa2);
+
+    /// xNVSE's double type (0x2C): with its type table entry (a variable allowed, no object) and
+    /// the seam's answer, a double parameter compiles through the float case: `z` and the double
+    /// for a number, the variable's kind and id for a local; with no answer it is unimplemented.
+    #[test]
+    fn a_double_parameter_compiles_as_a_float_with_xnvse() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = rig();
+        e.on_site(SiteSlot::new(Owner::Nvse, 0x005b_2fa2), double_seam);
+        let d = data(&mut e);
+        e.mem.set_u16(PARAMETER_TYPES + 0x2c * 8, 1);
+        e.register(IS_A_FLOAT, |_, _| ret(1));
+        e.register(ATOF, |_, _| Ret {
+            st0: 2.5,
+            ..Ret::default()
+        });
+        let p = parameters(&mut e, &[(0x2c, 0)]);
+        answer(0x005b_2fa2, Some(1));
+        let l = line(&mut e, 1, 0x1000, b" 2.5");
+        assert!(e.call(0x005b_1ba0, &[1, p, l, d]).bool());
+        let mut want = vec![1, 0, b'z'];
+        want.extend_from_slice(&2.5f64.to_le_bytes());
+        assert_eq!(e.mem.bytes(l + 0x20c, e.mem.u32(l + 0x40c)), want);
+        let v = variable(&mut e, b"x", 3, 0);
+        push(&mut e, d + 0x3c, v);
+        let l = line(&mut e, 1, 0x1000, b" x");
+        assert!(e.call(0x005b_1ba0, &[1, p, l, d]).bool());
+        assert_eq!(
+            e.mem.bytes(l + 0x20c, e.mem.u32(l + 0x40c)),
+            vec![1, 0, 0x66, 3, 0]
+        );
+        answer(0x005b_2fa2, None);
+        let l = line(&mut e, 1, 0x1000, b" 2.5");
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x005b_1ba0, &[1, p, l, d]).bool());
+        assert_eq!(
+            only(e.call_log.as_ref().unwrap(), SCRIPT_LOG),
+            vec![vec![TEXT_TYPE_UNIMPLEMENTED, 0x2c]]
+        );
     }
 }

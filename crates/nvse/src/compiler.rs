@@ -20,6 +20,9 @@
 //! stops at the buffer's end instead. Errors are printed to the console as xNVSE prints them at
 //! run time (`ShowError`, `ShowCompilerError`); their text is printed as it is, where xNVSE hands
 //! it to `Console_Print` as a format (a `%` in a script's name or text is printed, not expanded).
+//! One deliberate difference: an open loop's jump word is kept by its offset in the script's
+//! data, not its address, so a loop over the data's growth gets the bytes xNVSE meant to write
+//! ([`begin_loop_parse`]).
 //!
 //! Not here: the new script language (`Compiler/`, scripts starting with `name`; deferred), and
 //! `ExpressionParser::ParseParentheses` (the GECK's inline expressions; editor only).
@@ -457,7 +460,8 @@ pub struct State {
     pub(crate) scripts: Vec<u32>,
     /// `g_variableDefinitionsMap`: a variable's type by script and name (the name as written).
     pub(crate) var_types: HashMap<(u32, Vec<u8>), u8>,
-    /// `s_loopStartOffsets`: where the open loops' jump words are.
+    /// `s_loopStartOffsets`: the open loops' jump words, by their offset in the script's data
+    /// (xNVSE keeps their addresses; see [`begin_loop_parse`]).
     loop_starts: Vec<u32>,
     /// `g_patchedEol`: the game's end-of-line check is off while a nested command parses.
     pub(crate) eol_check_off: bool,
@@ -2703,12 +2707,16 @@ pub fn let_parse(e: &mut Engine, w: &[u32]) -> Ret {
 // Cmd_BeginLoop_Parse; Hooks_Script.cpp: RegisterLoopStart.
 /// `Cmd_BeginLoop_Parse` (`while`, `ForEach`): room for the jump past the loop (where the
 /// script's data will hold it is remembered for its `loop`), then the condition.
+///
+/// A deliberate difference: xNVSE remembers the jump word's address, which the script data's
+/// growth (xNVSE's own size hook, 005B0F68) frees while the loop is open, so its `loop` writes
+/// into freed memory and the copy keeps a jump of 0. The port remembers the word's offset in the
+/// data and writes at the data's current place: the bytes xNVSE meant to write.
 pub fn begin_loop_parse(e: &mut Engine, w: &[u32]) -> Ret {
     let (params, line, buf) = parse_words(w);
     let at = e
         .mem
-        .u32(buf + sb::DATA)
-        .wrapping_add(e.mem.u32(buf + sb::DATA_OFFSET))
+        .u32(buf + sb::DATA_OFFSET)
         .wrapping_add(data_len(e, line))
         .wrapping_add(4);
     state(e).loop_starts.push(at);
@@ -2719,8 +2727,9 @@ pub fn begin_loop_parse(e: &mut Engine, w: &[u32]) -> Ret {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Scripting.cpp: Cmd_Loop_Parse;
 // Hooks_Script.cpp: HandleLoopEnd.
-/// `Cmd_Loop_Parse`: the open loop's jump word gets the offset of the instruction after this
-/// `loop`; false with no open loop (no message at run time).
+/// `Cmd_Loop_Parse`: the open loop's jump word (at its offset in the script's data as it is
+/// now; see [`begin_loop_parse`]) gets the offset of the instruction after this `loop`; false
+/// with no open loop (no message at run time).
 pub fn loop_parse(e: &mut Engine, w: &[u32]) -> Ret {
     let (_, line, buf) = parse_words(w);
     let offset = e
@@ -2731,7 +2740,8 @@ pub fn loop_parse(e: &mut Engine, w: &[u32]) -> Ret {
     let Some(at) = state(e).loop_starts.pop() else {
         return crate::handled(false);
     };
-    e.mem.set_u32(at, offset);
+    let data = e.mem.u32(buf + sb::DATA);
+    e.mem.set_u32(data.wrapping_add(at), offset);
     crate::handled(true)
 }
 

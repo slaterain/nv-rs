@@ -22,6 +22,9 @@
 //! - `005B0A3F` (`CompileLine`'s parentheses check of an `if`/`elseif`): passed over.
 //! - `005B0F68` (`CompileLine`'s 0x4000-byte limit of a script): the data grows instead.
 //! - `005B19BA` (`GetFunction`'s script command loop): xNVSE's name map.
+//! - `005B2FA2` (`StandardCompile`'s byte map read for a value parameter): the double type takes
+//!   the integer and float case (xNVSE's `SafeWrite8(0x5B3C30, 1)`), and at install the type
+//!   table lets a double parameter be a variable.
 //! - `005B3A8D` (`StandardCompile`'s end-of-line check): off while a nested command parses.
 //!
 //! Not here: xNVSE's compiled script cache on disk (`ScriptDataCache`, a file of compiled data
@@ -42,7 +45,11 @@ const VARIABLE_NAME_FORM: SiteSlot = SiteSlot::new(Owner::Nvse, 0x005a_fedb);
 const IF_PARENTHESES: SiteSlot = SiteSlot::new(Owner::Nvse, 0x005b_0a3f);
 const SCRIPT_SIZE_LIMIT: SiteSlot = SiteSlot::new(Owner::Nvse, 0x005b_0f68);
 const GET_FUNCTION: SiteSlot = SiteSlot::new(Owner::Nvse, 0x005b_19ba);
+const DOUBLE_PARAMETER: SiteSlot = SiteSlot::new(Owner::Nvse, 0x005b_2fa2);
 const END_OF_LINE: SiteSlot = SiteSlot::new(Owner::Nvse, 0x005b_3a8d);
+/// The script parameter type table's entry for the double type (`0118cdd4 + 0x2C * 8`): whether
+/// the parameter may be a variable, whether it names an object.
+const DOUBLE_PARAMETER_TYPE: u32 = 0x0118_cf34;
 
 /// `Heap_MemorySize` (`00aa44c0` on the game's heap manager `011f6238`).
 const HEAP_MEMORY_SIZE: u32 = 0x00aa_44c0;
@@ -64,6 +71,12 @@ pub fn install(e: &mut Engine) {
     e.on_site(SCRIPT_SIZE_LIMIT, script_size_limit);
     e.on_site(GET_FUNCTION, get_function);
     e.on_site(END_OF_LINE, |e, _| state(e).eol_check_off.then_some(1));
+    e.on_site(DOUBLE_PARAMETER, |_, _| Some(1));
+    // `Hook_Script_Init`: the double type may be a variable and names no object (`*(UInt16 *)
+    // 0x118CF34 = 1`; the exe holds 0x0100 there). Unit tests' stand-in engines map no such page.
+    if e.mem.is_mapped(DOUBLE_PARAMETER_TYPE) {
+        e.mem.set_u16(DOUBLE_PARAMETER_TYPE, 1);
+    }
 }
 
 // ---- the seams ----

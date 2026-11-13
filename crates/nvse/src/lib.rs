@@ -364,6 +364,7 @@ mod tests {
             0x005b_0a3f,
             0x005b_0f68,
             0x005b_19ba,
+            0x005b_2fa2,
             0x005b_3a8d,
             0x005b_6ca6,
             0x005e_16c3,
