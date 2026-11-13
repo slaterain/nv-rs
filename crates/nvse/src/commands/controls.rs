@@ -116,11 +116,11 @@ const MOVE_SNEAK: u32 = 0x400;
 
 /// `PlayerCharacter::Reload` (`0095d3f0`, the function the player's vtable slot `0108ae28`
 /// holds), wrapped for the reload flag; the V.A.T.S. camera's data (`011f2250`) and its mode
-/// (`+4`, 4 the playback).
+/// (`+8`, 4 the playback: the shipped DLL's hook compares the word at `011F2258` with 4).
 pub const RELOAD_FN: u32 = 0x0095_d3f0;
 pub const RELOAD_ENTRY: WrapSlot = WrapSlot::new(Owner::Nvse, RELOAD_FN);
 const VATS_CAMERA: u32 = 0x011f_2250;
-const VATS_MODE: u32 = 4;
+const VATS_MODE: u32 = 8;
 const VATS_PLAYBACK: u32 = 4;
 
 /// The disabled controls of each mod (`g_disabledFlagsPerMod`), by the mod name's
@@ -247,8 +247,11 @@ pub fn enable(e: &mut Engine, flags: u32, key: u32) {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Gameplay.cpp:
 // TogglePlayerControlsAlt::ResetOnLoad.
-/// A game loaded or started: no mod's controls disabled any more, the enabling effects for all
-/// (told after the word is cleared, as xNVSE does, so they find nothing to take back).
+/// A new game, or a save with a co-save loaded: no mod's controls disabled any more, the
+/// enabling effects for all (told after the word is cleared, as xNVSE does, so they find nothing
+/// to take back). As in xNVSE, it runs from the new-game hook and xNVSE's own co-save pre-load
+/// callback (`Core_PreLoadCallback`) only: loading a save without a co-save keeps the mods' set
+/// controls.
 pub fn reset_on_load(e: &mut Engine) {
     state(e).per_mod.clear();
     e.set_controls_alt(0);

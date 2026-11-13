@@ -618,6 +618,7 @@ fn core_pre_load(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
     vars::forget_collected(e);
     tick::clear_delayed_calls(e);
     events::clear_flush_on_load(e);
+    crate::commands::controls::reset_on_load(e);
     // Any temporary inventory references go (I-12).
     if crate::invref::any(e) {
         crate::invref::clear(e);
@@ -918,11 +919,13 @@ fn handle_new_game(e: &mut Engine) {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_SaveLoad.cpp: NewGameHook.
 /// A new game: the scripts told of a loaded game forget it (`GetGameLoaded`), the delayed calls
-/// dropped, the handlers that go on a load, then `HandleNewGame`.
+/// dropped, the handlers that go on a load, the mods' disabled player controls, then
+/// `HandleNewGame`.
 pub fn new_game(e: &mut Engine) {
     crate::commands::game::game_loaded(e);
     tick::clear_delayed_calls(e);
     events::clear_flush_on_load(e);
+    crate::commands::controls::reset_on_load(e);
     handle_new_game(e);
 }
 

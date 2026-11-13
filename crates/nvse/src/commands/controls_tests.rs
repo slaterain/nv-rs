@@ -141,7 +141,8 @@ fn asking_what_is_disabled() {
     assert_eq!(got, 1.0);
 }
 
-/// A new game (and a load, which runs the same reset) forgets every mod's controls: the word is
+/// A new game (and a load with a co-save, which runs the same reset; a vanilla save's load does
+/// not, as in xNVSE: `saveload`'s tests) forgets every mod's controls: the word is
 /// 0 again and the next mod starts from nothing. As in xNVSE's `ResetOnLoad`, the word is
 /// cleared before the enabling effects are told, so they find nothing of the mods' to take back
 /// and the HUD is not told (the game's own load sets the HUD up again).
@@ -165,7 +166,8 @@ fn a_new_game_resets_them() {
 
 /// `PlayerCharacter::Reload` through the wrap: with reloading disabled, an animated reload
 /// (types 1 and 2) outside V.A.T.S. playback answers 0 and the game's function does not run;
-/// type 0 (equipping a loaded weapon), V.A.T.S. playback, or nothing disabled reach it.
+/// type 0 (equipping a loaded weapon), V.A.T.S. playback (the mode at `+8`), nothing disabled or
+/// only other controls disabled reach it.
 #[test]
 fn reload_is_refused_while_disabled() {
     let mut e = setup();
@@ -181,14 +183,24 @@ fn reload_is_refused_while_disabled() {
     };
     assert_eq!(reload(&mut e, 1), 1);
     assert_eq!(calls().len(), 1);
+    // Every control but reloading: the reload goes on.
+    e.set_controls_alt(ALL & !RELOAD);
+    assert_eq!(reload(&mut e, 1), 1);
+    assert_eq!(reload(&mut e, 2), 1);
+    assert_eq!(calls().len(), 2);
+    e.set_controls_alt(0);
     call(&mut e, 0x1664, 0, &[n(RELOAD as i32)]);
     calls();
     assert_eq!(reload(&mut e, 1), 0);
     assert_eq!(reload(&mut e, 2), 0);
     assert!(calls().is_empty());
+    // The word before the mode (`+4`) holding 4 is not playback: still refused.
+    e.mem.set_u32(VATS_CAMERA + 4, VATS_PLAYBACK);
+    assert_eq!(reload(&mut e, 1), 0);
+    assert!(calls().is_empty());
     assert_eq!(reload(&mut e, 0), 1);
     assert_eq!(calls().len(), 1);
-    e.mem.set_u32(VATS_CAMERA + VATS_MODE, VATS_PLAYBACK);
+    e.mem.set_u32(VATS_CAMERA + 8, VATS_PLAYBACK);
     assert_eq!(reload(&mut e, 1), 1);
     assert_eq!(calls().len(), 1);
     assert_eq!(e.wraps_at(RELOAD_FN), [Owner::Nvse]);

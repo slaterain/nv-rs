@@ -7,8 +7,7 @@
 //! executes `10025250` to `10025D63`; the records found by name: names, parameters, help texts).
 //! `OutputLocalMapPicturesOverride` writes the loop count of `005d4580` (the byte at `005D45A5`)
 //! around its call: here the routine with that count is run instead of the game's, through its two
-//! callees. A load and a new game first forget the per-mod player controls
-//! ([`super::controls::reset_on_load`], xNVSE's `TogglePlayerControlsAlt::ResetOnLoad`).
+//! callees.
 
 use super::string::{
     format_string_args, game_setting, ini_setting, numeric_ini_setting, separator, setting_number,
@@ -176,7 +175,6 @@ pub fn install(e: &mut Engine) {
 // NewGameHook (their `s_gameLoadedInformedScripts.Clear()`).
 /// A game was loaded or started: every script is told of it once more.
 pub fn game_loaded(e: &mut Engine) {
-    super::controls::reset_on_load(e);
     e.ext::<Nvse>().game.loaded_informed.clear();
 }
 

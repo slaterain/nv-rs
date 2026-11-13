@@ -550,11 +550,10 @@ pub fn tes_furniture_activate(
         return true;
     }
     // xNVSE's `SleepFromFurniture::MaybePreventSleeping` (a jump at 00509660, the sleep marker's
-    // first instruction): with the mods' sleeping disabled, false at once (00509880), no message.
-    let alt = e.controls_alt();
-    if alt != 0 && alt & engine_core::extend::controls_alt::SLEEP != 0 {
-        return false;
-    }
+    // first instruction) is meant to answer false at once (00509880) with the mods' sleeping
+    // disabled; the shipped 6.4.9 DLL reads the flag word as a byte (`movzx eax, byte`, then
+    // `and eax, 1000h`), so it never does and the bed still works. The shipped DLL is matched:
+    // nothing here (the intended blocking is a candidate fixes row).
     let owner = e.call(GET_OWNER, &args![target]).u32();
     let is_player = player_character == e.global::<u32>(PLAYER);
     if owner != 0
@@ -1439,31 +1438,25 @@ mod tests {
 
     #[test]
     fn activate_with_sleeping_disabled() {
-        // xNVSE's `MaybePreventSleeping` (00509660): a sleep marker answers false at once, no owner
-        // asked, no message, no menu.
-        let (result, e, _, _) = activate(Scene {
-            alt: 1 << 12,
-            ..Scene::sleeping_allowed()
-        });
-        assert!(!result);
-        assert!(calls_to(&e, CREATE_SLEEP_MENU).is_empty());
-        assert!(calls_to(&e, GET_OWNER).is_empty());
-        assert!(messages(&e).is_empty());
-        // Another flag: the bed as without it.
-        let (result, e, _, _) = activate(Scene {
-            alt: 1 << 13,
-            ..Scene::sleeping_allowed()
-        });
-        assert!(result);
-        assert_eq!(calls_to(&e, CREATE_SLEEP_MENU), [[1]]);
-        // A sit marker is never stopped.
-        let (result, e, player, _) = activate(Scene {
-            alt: 1 << 12,
-            marker_type: 12,
-            ..Scene::sleeping_allowed()
-        });
-        assert!(result);
-        assert_eq!(calls_to(&e, FORCE_TEMP_THIRD_PERSON), [[player.addr(), 1]]);
+        // xNVSE's `MaybePreventSleeping` (00509660) never fires in the shipped 6.4.9 DLL (it tests
+        // the flag word as a byte): with the mods' sleeping disabled, or every control, the bed
+        // opens its menu as with nothing set; a sit marker is not stopped either.
+        for alt in [1u32 << 12, 0xffff] {
+            let (result, e, _, _) = activate(Scene {
+                alt,
+                ..Scene::sleeping_allowed()
+            });
+            assert!(result, "{alt:x}");
+            assert_eq!(calls_to(&e, CREATE_SLEEP_MENU), [[1]]);
+            assert!(!calls_to(&e, GET_OWNER).is_empty());
+            let (result, e, player, _) = activate(Scene {
+                alt,
+                marker_type: 12,
+                ..Scene::sleeping_allowed()
+            });
+            assert!(result);
+            assert_eq!(calls_to(&e, FORCE_TEMP_THIRD_PERSON), [[player.addr(), 1]]);
+        }
     }
 
     #[test]
