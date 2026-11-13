@@ -892,13 +892,12 @@ fn depth(e: &Engine, item: u32, d: [f32; 3], subtract: bool) -> f32 {
     if bound.is_null() {
         bound = Ptr::new(NULL_BOUND);
     }
-    let centre = bound.addr();
-    let x = e.global::<f32>(centre);
-    let y = e.global::<f32>(centre.wrapping_add(4));
-    let z = e.global::<f32>(centre.wrapping_add(8));
+    // The bound's centre and radius as the value packet holds them (value packet B).
+    let word = |index: u32| f32::from_bits(crate::draw::packet::bound_word(e, bound.addr(), index));
+    let (x, y, z) = (word(0), word(1), word(2));
     let sum = (x * d[0] + y * d[1]) + z * d[2];
     if subtract {
-        sum - e.get(bound, NiBound::m_fRadius)
+        sum - word(3)
     } else {
         sum
     }
@@ -911,7 +910,8 @@ fn depth(e: &Engine, item: u32, d: [f32; 3], subtract: bool) -> f32 {
 pub fn compare_by_depth(e: &mut Engine, first: u32, second: u32) -> i32 {
     let subtract = capture::own_at::<u8>(e, SORT_SUBTRACT_RADIUS) != 0;
     let camera = capture::own_at::<u32>(e, SORT_CAMERA);
-    let direction = |off: u32| e.global::<f32>(camera.wrapping_add(off));
+    // The camera's direction as the value packet holds it (value packet B).
+    let direction = |off: u32| f32::from_bits(capture::word(e, camera, off));
     let d = [direction(0x68), direction(0x74), direction(0x80)];
     let a = depth(e, first, d, subtract);
     let b = depth(e, second, d, subtract);

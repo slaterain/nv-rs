@@ -169,8 +169,9 @@ pub fn vertex_entry_17(e: &mut Engine, _this: Ptr, object: Ptr) {
     let mut values = [0f32; 3];
     for (index, value) in values.iter_mut().enumerate() {
         let offset = 4 * idx(index);
-        *value = float_at(e, position + offset) - e.global::<f32>(CAMERA + offset);
-        // own: main's frame value, value packet B
+        // The bound's centre through the packet (value packet B).
+        let centre = f32::from_bits(crate::draw::packet::bound_word(e, position, idx(index)));
+        *value = centre - e.global::<f32>(CAMERA + offset);
     }
     for (index, value) in values.iter().enumerate() {
         capture::set_own_at(e, OFFSET + 4 * idx(index), *value);
@@ -229,10 +230,10 @@ pub fn vertex_entry_21(e: &mut Engine, _this: Ptr, pass_type: u32, first: Ptr, s
                 e.global::<f32>(DURATION), // own: main's frame value, value packet B
                 e.global::<f64>(FIVE),     // own: a constant of the exe
             );
-            let x_offset = e.global::<f32>(second + 0x8c); // own: main's object read in place (value packet B, piece 4)
-            let y_offset = e.global::<f32>(second + 0x90); // own: main's object read in place (value packet B, piece 4)
-                                                           // The exe also reads +0x94 into a stack slot nothing reads.
-            let _unread = e.global::<u32>(second + 0x94); // own: main's object read in place (value packet B, piece 4)
+            // The geometry's translation (its world transform, the packet's: value packet B).
+            let x_offset = f32::from_bits(crate::draw::packet::world_word(e, second, 0x8c));
+            let y_offset = f32::from_bits(crate::draw::packet::world_word(e, second, 0x90));
+            // The exe also reads +0x94 into a stack slot nothing reads (not read here).
             let ratio = elapsed / scale;
             // The larger of 0 and the ratio (`00404010`), then the smaller of 1 and that (`0040ebd0`):
             // `cdecl(a, b)`, each answering in ST0.
@@ -550,7 +551,7 @@ pub fn eye_pos(e: &mut Engine, pass_type: u32, object: Ptr, matrix: [u32; 16]) {
         e.with_stack(0xc, |e, point| {
             let point = point.addr();
             for (index, eye) in (0u32..).zip(eye) {
-                let value = eye - e.global::<f32>(object + 0x24 + 4 * index); // own: main's object read in place (value packet B, piece 4)
+                let value = eye - e.global::<f32>(object + 0x24 + 4 * index); // own: the transform handed: the packet's image while it is open (value packet B, packet::with_drawn)
                 capture::set_own_at::<f32>(e, point + 4 * index, value);
             }
             e.call(POINT_UNITIZE, &args![point]);
@@ -588,7 +589,7 @@ pub fn eye_pos(e: &mut Engine, pass_type: u32, object: Ptr, matrix: [u32; 16]) {
             capture::set_own_at(e, EYE_VECTOR + 4 * index, value);
         }
     });
-    let value = e.global::<u32>(object + 0x30); // own: main's object read in place (value packet B, piece 4)
+    let value = e.global::<u32>(object + 0x30); // own: the transform handed: the packet's image while it is open (value packet B, packet::with_drawn)
     capture::set_own_at(e, EYE_VECTOR + 0xc, value);
 }
 
@@ -629,9 +630,9 @@ pub fn shadow_proj(e: &mut Engine, _this: Ptr, block: Ptr, flag: u32, transform:
         let transform = transform.addr();
         let sources = [0u32, 1, 2, 9, 3, 4, 5, 10, 6, 7, 8, 11];
         for (index, source) in sources.iter().enumerate() {
-            matrix[index] = e.global::<u32>(transform + 4 * source); // own: the geometry's world transform (cut-taken), read in place: value packet B (#542)
+            matrix[index] = e.global::<u32>(transform + 4 * source); // own: the transform handed: the packet's image while it is open (value packet B, packet::with_drawn)
         }
-        matrix[15] = e.global::<u32>(transform + 0x30); // own: the geometry's world transform (cut-taken), read in place: value packet B (#542)
+        matrix[15] = e.global::<u32>(transform + 0x30); // own: the transform handed: the packet's image while it is open (value packet B, packet::with_drawn)
     } else {
         let one = 1.0f32.to_bits();
         for index in [0usize, 5, 10, 15] {
@@ -710,7 +711,7 @@ pub fn obj_to_cube(
                 capture::set_own_at::<u32>(e, matrix + 4 * index, value.to_bits());
             }
         }
-        // GetD3DFromNi reads the geometry's world transform (cut-taken) in place: value packet B (#542).
+        // GetD3DFromNi reads the transform handed: the packet's image while it is open (value packet B, packet::with_drawn).
         if flag == 0 {
             e.call(GET_D3D_FROM_NI, &args![first, transform]);
         }
@@ -1247,15 +1248,22 @@ const SET_SHADER_CONSTANTS: u32 = 0x00e8_26d0;
 /// vtable +0x78) for the pass's pixel (+0x44) and vertex (+0x5c) program; with the block's +0x10
 /// property's bit 0, the shader's +0x1c gets it through its vtable +0x24.
 pub fn setup_geometry_constants(e: &mut Engine, this: Ptr, block: Ptr) {
+    let geometry = e.mem.u32(e.global::<u32>(RENDERING_PASS));
+    // The geometry's world transform and bound as the value packet holds them (value packet B): the helpers
+    // handed them read the packet's images while the packet is open, the geometry's own otherwise.
+    crate::draw::packet::with_drawn(e, geometry, |e, transform, position| {
+        geometry_constants_with(e, this, block, transform, position);
+    });
+}
+
+/// [`setup_geometry_constants`] with the transform and the bound (`transform`: the geometry's +0x68, `position`: its
+/// bound; or the packet's images of them).
+fn geometry_constants_with(e: &mut Engine, this: Ptr, block: Ptr, transform: u32, position: u32) {
     let base = this.addr();
     let block = block.addr();
     let rendering = capture::own_at::<u32>(e, RENDERING_PASS);
     let geometry = capture::own_at::<u32>(e, rendering);
     let pass_type = capture::own_at::<u32>(e, RENDERING_PASS_TYPE);
-    let mut position = capture::own_at::<u32>(e, geometry + 0x20);
-    if position == 0 {
-        position = DEFAULT_POSITION;
-    }
     let data = capture::own_at::<u32>(e, geometry + 0xb8);
     let geometry_data = capture::own_at::<u32>(e, data + 0x34);
     let fog_word = e.global::<u32>(block + 8); // own: main's object read in place (value packet B, piece 4)
@@ -1270,7 +1278,6 @@ pub fn setup_geometry_constants(e: &mut Engine, this: Ptr, block: Ptr) {
         typed_call!(FAMILY, 0x00b9_7e30, state::set_z_write_enable(e, 0u8, 1u32));
         typed_call!(FAMILY, 0x00b9_8380, state::set_color_write(e, 0u32, 1u32));
     }
-    let transform = geometry + 0x68;
     e.with_stack(0x40, |e, matrix| {
         let matrix_addr = matrix.addr();
         typed_call!(

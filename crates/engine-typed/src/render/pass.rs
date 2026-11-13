@@ -99,17 +99,20 @@ pub fn geometry_pass(e: &mut Engine, this: Ptr, pass: Ptr) {
         let local = frame.addr();
         let holder = capture::own_at::<u32>(e, VIEW_HOLDER);
         let object = e.mem.u32(holder);
-        let matrix = object.wrapping_add(0x68);
-        typed_call!(
-            crate::dispatch::FAMILY,
-            0x00c4_c2d0,
-            crate::dispatch::math::inverse_4x4(e, Ptr::new(matrix), 0u32, Ptr::new(local))
-        );
-        typed_call!(
-            crate::shader::FAMILY,
-            0x00b7_c750,
-            accumulator::set_world_view_constants(e, this, object, matrix)
-        );
+        // The object's world transform as the value packet holds it (value packet B): its image while the
+        // packet is open, its own (+0x68) otherwise.
+        crate::draw::packet::with_world(e, object, |e, matrix| {
+            typed_call!(
+                crate::dispatch::FAMILY,
+                0x00c4_c2d0,
+                crate::dispatch::math::inverse_4x4(e, Ptr::new(matrix), 0u32, Ptr::new(local))
+            );
+            typed_call!(
+                crate::shader::FAMILY,
+                0x00b7_c750,
+                accumulator::set_world_view_constants(e, this, object, matrix)
+            );
+        });
         typed_call!(
             crate::shader::FAMILY,
             0x00b7_c7b0,

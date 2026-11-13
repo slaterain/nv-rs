@@ -113,11 +113,8 @@ pub fn setup_geometry(
         if property == 0 || packet::property_kind(e, property) != 4 {
             return;
         }
-        let accumulator: u32 = typed_call!(
-            crate::render::FAMILY,
-            0x00b4_f5c0,
-            crate::render::passes::shader_accumulator(e)
-        );
+        // `BSShaderManager::GetAccumulator` (`00b4f5c0`): a read of `011f95ec`.
+        let accumulator = packet::shader_accumulator(e);
         let light = packet::first_light(e, packet::accumulator_lights(e, accumulator));
         if light != 0 {
             let direction = frame + 0x28;
@@ -204,10 +201,9 @@ pub fn setup_textures(e: &mut Engine, this: Ptr, state: Ptr) {
 pub fn copy_instances(e: &mut Engine, this: Ptr, _unused: u32, property: Ptr) {
     let base = this.addr();
     let data = packet::grass_instances(e, property.addr());
-    let source = packet::grass_instance_array(e, data);
     let count = packet::grass_instance_count(e, data);
     let target = e.global::<u32>(base.wrapping_add(0x1a4));
-    own::copy_constants(e, target, source, u32::from(count) << 4);
+    packet::copy_grass_instances(e, target, data, count);
     let active = packet::grass_active_instances(e, data);
     let model = packet::model_data(e, packet::grass_geometry(e, data));
     let triangles = if active == count {
@@ -255,14 +251,28 @@ const CYCLE: u32 = 0x0104_eea0;
 /// maps' constants ([`group_c::set_map_constants`]). Main thread only: `f32` maths (the steps with a
 /// `double` constant in `f64`, rounded once, as [`div_d`]/[`mul_d`]).
 pub fn setup_constants(e: &mut Engine, this: Ptr, state: Ptr) {
+    let geometry = packet::rendering_geometry(e);
+    // The geometry's world transform as the value packet holds it (value packet B).
+    packet::with_drawn(e, geometry, |e, transform, bound| {
+        constants_with(e, this, state, geometry, transform, bound);
+    });
+}
+
+/// [`setup_constants`] with the transform and the bound (`transform`: the geometry's +0x68, `bound`: its bound; or the
+/// packet's images of them).
+fn constants_with(
+    e: &mut Engine,
+    this: Ptr,
+    state: Ptr,
+    geometry: u32,
+    transform: u32,
+    bound: u32,
+) {
     let base = this.addr();
     let state = state.addr();
-    let geometry = packet::rendering_geometry(e);
-    let bound = packet::bound_of(e, geometry);
     let buffers = packet::buffer_data(e, packet::model_data(e, geometry));
     let skin = packet::skin_instance(e, geometry);
     let property = packet::state_property(e, state, 3);
-    let transform = geometry.wrapping_add(0x68);
     if crate::slot_target(e, base, SLOT_SETUP_GEOMETRY) == SETUP_GEOMETRY {
         let _: u32 = typed_call!(
             super::FAMILY,

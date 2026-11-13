@@ -19,11 +19,9 @@ const LIGHT_SETUP: u32 = 0x00bb_1960;
 const CAMERA_ROWS: u32 = 0x00bb_1a90;
 const SCENE_LIGHT: u32 = 0x00b7_1360;
 /// The shader's `SetupGeometry` slot (+0x60, [`setup_geometry`] in the exe's vtable); a leaf
-/// property's leaves (+0x100, 0x300 bytes) and data (+0xfc).
+/// property's data (slot 0xfc) and leaves (slot 0x100) through [`packet::leaf_data`] and [`packet::copy_leaves`].
 const SLOT_SETUP_GEOMETRY: u32 = 0x60;
 const SETUP_GEOMETRY: u32 = 0x00bb_25d0;
-const SLOT_LEAVES: u32 = 0x100;
-const SLOT_LEAF_DATA: u32 = 0xfc;
 
 /// The rotation's entries and where the frame keeps each scaled one (the first entry is stored first).
 const SCALED_ENTRIES: [(u32, u32); 8] = [
@@ -124,11 +122,26 @@ const MODE_9_WORD: u32 = 0x0102_31a8;
 /// and +0x10, four zeros and its +0xc into the tree's second word; last the vertex and then the pixel
 /// constant maps' constants.
 pub fn setup_constants(e: &mut Engine, this: Ptr, state: Ptr) {
+    let geometry = packet::rendering_geometry(e);
+    // The geometry's world transform as the value packet holds it (value packet B).
+    packet::with_drawn(e, geometry, |e, transform, bound| {
+        constants_with(e, this, state, geometry, transform, bound);
+    });
+}
+
+/// [`setup_constants`] with the transform and the bound (`transform`: the geometry's +0x68, `bound`: its bound; or the
+/// packet's images of them).
+fn constants_with(
+    e: &mut Engine,
+    this: Ptr,
+    state: Ptr,
+    geometry: u32,
+    transform: u32,
+    bound: u32,
+) {
     let base = this.addr();
     let block = state.addr();
     let record = packet::rendering_pass(e);
-    let geometry = packet::rendering_geometry(e);
-    let bound = packet::bound_of(e, geometry);
     let buffers = packet::buffer_data(e, packet::model_data(e, geometry));
     let skin = packet::skin_instance(e, geometry);
     let property = packet::state_property(e, block, 3);
@@ -139,7 +152,6 @@ pub fn setup_constants(e: &mut Engine, this: Ptr, state: Ptr) {
         e.call(SCENE_LIGHT, &args![u32::from(index), light, light_value]);
         index = index.wrapping_add(1);
     }
-    let transform = geometry.wrapping_add(0x68);
     if crate::slot_target(e, base, SLOT_SETUP_GEOMETRY) == SETUP_GEOMETRY {
         let _: u32 = typed_call!(
             super::FAMILY,
@@ -169,26 +181,25 @@ pub fn setup_constants(e: &mut Engine, this: Ptr, state: Ptr) {
             }
         }
     }
-    let leaves = e.vcall(property, SLOT_LEAVES, &[]).u32();
-    own::copy_constants(e, base.wrapping_add(0x6c), leaves, 0x300);
-    let data = e.vcall(property, SLOT_LEAF_DATA, &[]).u32();
+    packet::copy_leaves(e, base.wrapping_add(0x6c), property);
+    let data = packet::leaf_data(e, property);
     let x = f32::from_bits(packet::leaf_data_word(e, data, 0x18))
         * f32::from_bits(packet::leaf_scale_word(e, 0));
     own::set_constant_word(e, LEAF_X, x.to_bits());
-    let data = e.vcall(property, SLOT_LEAF_DATA, &[]).u32();
+    let data = packet::leaf_data(e, property);
     let y = f32::from_bits(packet::leaf_data_word(e, data, 0x1c))
         * f32::from_bits(packet::leaf_scale_word(e, 1));
     own::set_constant_word(e, LEAF_Y, y.to_bits());
-    let data = e.vcall(property, SLOT_LEAF_DATA, &[]).u32();
+    let data = packet::leaf_data(e, property);
     let word = packet::leaf_data_word(e, data, 0x14);
     own::set_constant_word(e, LEAF_Z, word);
-    let data = e.vcall(property, SLOT_LEAF_DATA, &[]).u32();
+    let data = packet::leaf_data(e, property);
     let word = packet::leaf_data_word(e, data, 0x10);
     own::set_constant_word(e, LEAF_W, word);
     for k in 0..4u32 {
         own::set_constant_word(e, TREE + 4 * k, 0);
     }
-    let data = e.vcall(property, SLOT_LEAF_DATA, &[]).u32();
+    let data = packet::leaf_data(e, property);
     let word = packet::leaf_data_word(e, data, 0xc);
     own::set_constant_word(e, TREE + 4, word);
     let words = [geometry, skin, 0, buffers, block, 0, transform, bound, 0, 1];
