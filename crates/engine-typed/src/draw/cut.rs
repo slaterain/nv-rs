@@ -163,6 +163,11 @@ pub fn take_pass_lights(e: &Engine, pass: u32) {
     take_lights(e, pass, &mut AddrSet::default());
 }
 
+/// What the cut takes for one pass light ([`take_light`]): for the checks of the paths that read a pass's first light.
+pub fn take_one_light(e: &Engine, shadow: u32) {
+    take_light(e, shadow, &mut AddrSet::default());
+}
+
 /// What the cut takes for one lighting property's light list ([`take_light_list`]) and its shader values: for the
 /// checks of the paths that look for its first active light.
 pub fn take_property_lights(e: &Engine, property: u32) {

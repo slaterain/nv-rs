@@ -9590,7 +9590,13 @@ fn pass_setups_read_the_packet() {
                 (vec![p.d.w.shader, state], vec![rendering, geometry])
             },
             |e, w| {
+                // The pass's light count and array, the array's first two words and its first light (the light direction
+                // reads it whatever the count, 0xff included): not the whole counted array, which runs past its block here.
                 capture::take(e, w[0], 9, 0xa);
+                capture::take(e, w[0], 0xc, 0x10);
+                let lights = e.mem.u32(w[0] + 0xc);
+                capture::take(e, lights, 0, 8);
+                cut::take_one_light(e, e.mem.u32(lights));
                 cut::take_geometry_values(e, w[1]);
             },
         );
@@ -10078,6 +10084,9 @@ fn light_direction_reads_the_pass_lights_through_the_packet() {
         |e, c| {
             let g = light_check_world(e, c.word(0), 0x30, 0);
             set(e, g.rendering + 8, c.word(1) << 8);
+            // The device keeps the constants it is sent, so the direction shows in memory.
+            e.map(CONSTANT_UPLOAD_COPY, 0x2000);
+            e.register(VT_FN + 0x178, constants_upload_answer::<0x178>);
             let matrix = e.mem.alloc(0x40);
             for k in 0..16u32 {
                 set(e, matrix + 4 * k, if k % 5 == 0 { ONE } else { 0 });
