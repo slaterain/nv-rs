@@ -99,7 +99,7 @@ fn set_worldspace_climate(e: &mut Engine, w: &[u32]) -> Ret {
     if sky.is_null() {
         return handled(true);
     }
-    let cell = e.get(player, TESObjectREFR::parentCell);
+    let cell = e.get(player, TESObjectREFR::pParentCell);
     if cell == 0 {
         return handled(true);
     }

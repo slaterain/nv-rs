@@ -1,7 +1,6 @@
 //! Tests of the faction commands, at the raw offset of the faction loader (`005FCB70`: the
 //! reputation +0x38).
 
-use super::*;
 use crate::commands::test_support::*;
 
 const FACT: u32 = FORMS + 0x1000;
