@@ -54,10 +54,13 @@ fn every_trait_at_jips_offset() {
             assert_eq!(e.mem.f32(CSTY + off), -3.25, "trait {t} written");
         }
     }
-    let before = e.mem.bytes(CSTY, 0x108);
+    // Trait 64 would be `float[2 + 64]`, the word just past the form (+0x108): a value there,
+    // and the bytes compared up to and including it.
+    e.mem.set_f32(CSTY + 0x108, 7.5);
+    let before = e.mem.bytes(CSTY, 0x10c);
     assert_eq!(call(&mut e, 0x2630, &[r(1), n(64)]).1, 0.0, "trait 64");
     call(&mut e, 0x2631, &[r(1), n(64), z(1.0)]);
-    assert_eq!(e.mem.bytes(CSTY, 0x108), before, "trait 64: nothing");
+    assert_eq!(e.mem.bytes(CSTY, 0x10c), before, "trait 64: nothing");
 }
 
 #[test]
