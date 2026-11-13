@@ -456,7 +456,8 @@ lock-free maps, their interfaces, iterators and holder, stage 1 (objects stay in
 differential tests are `crates/engine/tests/typed_lockfree.rs`. And `culling` (same crate): the culling
 walk, stage 1, its float maths native since 2026-11-11 (the bounds' and planes' sums of products and the merge in
 `f64` rounded at the stores, a single operation on two floats in plain `f32`, the main-thread-only fade-node culler in
-`f32`); its tests are `crates/engine/tests/typed_culling.rs`. And `pathing` (same crate): what the AI's pathfinding threads
+`f32`; since 2026-11-13 the multi-bound box test makes its corners and plane distances in place, with no calls,
+and the multi-bound node calls it directly); its tests are `crates/engine/tests/typed_culling.rs`. And `pathing` (same crate): what the AI's pathfinding threads
 run most (navmesh getters, matching edges, the triangle under a point, the search's keys, goal test and
 arrays, the point-of-view geometry, pathing locations, the point helpers), stage 1, its float maths native since
 2026-11-12 (sums of products, cross products and the barycentric height at the running thread's precision over
