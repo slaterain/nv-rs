@@ -7,6 +7,7 @@
 //! `NV_TYPED=render:off`, as the stream set-up's notes do.
 
 use super::FAMILY;
+use crate::draw::capture;
 use engine_core::ptr::Ptr;
 use engine_core::x87::x87_quiet_bits;
 use engine_core::{args, typed_call, Engine};
@@ -32,7 +33,7 @@ const PASS_IS_SET: u32 = 0x00e8_0580;
 /// Unnamed in the engine map (a shader's vtable +0x90; `this` is not read): 1 when the current pass
 /// (`0126f74c`) is set, else 0.
 pub fn pass_is_set(e: &mut Engine, _this: u32) -> u32 {
-    u32::from(e.global::<u32>(CURRENT_PASS) != 0)
+    u32::from(capture::own_at::<u32>(e, CURRENT_PASS) != 0)
 }
 
 // Typed from 00e72c20

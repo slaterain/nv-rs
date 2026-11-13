@@ -13,6 +13,7 @@ use super::layout::{
 };
 use super::{elem_addr, low8, FAMILY};
 use crate::anim_keys::narrow;
+use crate::draw::capture;
 use engine_core::ptr::{Field, Ptr};
 use engine_core::typed::leaf;
 use engine_core::{args, typed_call, Engine};
@@ -32,6 +33,9 @@ const INDEX_ALPHA_REFERENCE: u32 = 0x011f_fa90;
 const INDEX_ALPHA_FUNCTION: u32 = 0x011f_fa94;
 const INDEX_ALPHA_BLEND: u32 = 0x011f_fa9c;
 const INDEX_COLOR_WRITE: u32 = 0x011f_fcd0;
+const INDEX_STENCIL_ENABLE: u32 = 0x011f_fb00;
+const INDEX_CLIP_PLANES: u32 = 0x011f_fc90;
+const INDEX_DEPTH_BIAS: u32 = 0x011f_fd3c;
 /// The counter index of each render state (`011ffa30`, by state).
 const INDEX_BY_STATE: u32 = 0x011f_fa30;
 /// The comparison functions (`011ad888`) and blend factors (`011ad8a8`) by Bethesda's enum.
@@ -205,13 +209,13 @@ pub(crate) fn render_state(e: &Engine) -> Ptr<NiDX9RenderState> {
 /// `index_at`'s index is 0; the counter then moves by `lock` either way.
 #[inline(always)]
 fn counted(e: &mut Engine, index_at: u32, state: u32, value: u32, lock: u32) {
-    let counter = LOCK_COUNTERS.wrapping_add(e.global::<u32>(index_at).wrapping_mul(4));
-    if e.global::<u32>(counter) == 0 {
+    let counter = LOCK_COUNTERS.wrapping_add(capture::own_at::<u32>(e, index_at).wrapping_mul(4));
+    if capture::own_at::<u32>(e, counter) == 0 {
         let cache = render_state(e);
         cache_render_state(e, cache.addr(), state, value, 0, 0);
     }
-    let count = e.global::<u32>(counter).wrapping_add(lock);
-    e.set_global(counter, count);
+    let count = capture::own_at::<u32>(e, counter).wrapping_add(lock);
+    capture::set_own_at(e, counter, count);
 }
 
 // Typed from 00b97de0
@@ -246,10 +250,46 @@ pub fn set_color_write(e: &mut Engine, mask: u32, lock: u32) {
     counted(e, INDEX_COLOR_WRITE, 0xa8, mask, lock);
 }
 
+// Typed from 00b98070
+/// `cdecl(enable, lock)`: `D3DRS_STENCILENABLE` (0x34).
+pub fn set_stencil_enable(e: &mut Engine, enable: u8, lock: u32) {
+    counted(e, INDEX_STENCIL_ENABLE, 0x34, u32::from(enable), lock);
+}
+
+// Typed from 00b98280
+/// `cdecl(plane0, .., plane5, lock)`: `D3DRS_CLIPPLANEENABLE` (0x98), bit `n` set for each plane byte that is
+/// not 0.
+#[allow(clippy::too_many_arguments)]
+pub fn set_clip_planes(
+    e: &mut Engine,
+    plane0: u8,
+    plane1: u8,
+    plane2: u8,
+    plane3: u8,
+    plane4: u8,
+    plane5: u8,
+    lock: u32,
+) {
+    let bits = [plane0, plane1, plane2, plane3, plane4, plane5]
+        .iter()
+        .enumerate()
+        .filter(|(_, plane)| **plane != 0)
+        .fold(0u32, |bits, (bit, _)| bits | 1 << bit);
+    counted(e, INDEX_CLIP_PLANES, 0x98, bits, lock);
+}
+
+// Typed from 00b98320
+/// `BSRenderState::SetDepthBias` (Xbox PDB), `cdecl(bias, lock)`: `D3DRS_DEPTHBIAS` (0xc3) with the bias's bits
+/// (reloaded through x87 by the exe, so a signalling NaN comes out quiet).
+pub fn set_depth_bias(e: &mut Engine, bias: u32, lock: u32) {
+    let bias = engine_core::x87::x87_quiet_bits(bias);
+    counted(e, INDEX_DEPTH_BIAS, 0xc3, bias, lock);
+}
+
 // Typed from 00b97e80
 /// `cdecl(function, lock)`: `D3DRS_ZFUNC` (0x17), Bethesda's function enum through the table.
 pub fn set_z_function(e: &mut Engine, function: u32, lock: u32) {
-    let value = e.global::<u32>(COMPARE_FUNCTIONS.wrapping_add(function.wrapping_mul(4)));
+    let value = capture::own_at::<u32>(e, COMPARE_FUNCTIONS.wrapping_add(function.wrapping_mul(4)));
     counted(e, INDEX_Z_FUNCTION, 0x17, value, lock);
 }
 
@@ -257,7 +297,7 @@ pub fn set_z_function(e: &mut Engine, function: u32, lock: u32) {
 /// `cdecl(function, reference, lock)`: `D3DRS_ALPHAFUNC` (0x19, through the table), then
 /// `D3DRS_ALPHAREF` (0x18); each counter moves by `lock`.
 pub fn set_alpha_function(e: &mut Engine, function: u32, reference: u32, lock: u32) {
-    let value = e.global::<u32>(COMPARE_FUNCTIONS.wrapping_add(function.wrapping_mul(4)));
+    let value = capture::own_at::<u32>(e, COMPARE_FUNCTIONS.wrapping_add(function.wrapping_mul(4)));
     counted(e, INDEX_ALPHA_FUNCTION, 0x19, value, lock);
     counted(e, INDEX_ALPHA_REFERENCE, 0x18, reference, lock);
 }
@@ -266,16 +306,16 @@ pub fn set_alpha_function(e: &mut Engine, function: u32, reference: u32, lock: u
 /// `cdecl(source, destination, lock)`: `D3DRS_SRCBLEND` (0x13) and `D3DRS_DESTBLEND` (0x14), both
 /// through the blend table.
 pub fn set_blend(e: &mut Engine, source: u32, destination: u32, lock: u32) {
-    let value = e.global::<u32>(BLEND_FACTORS.wrapping_add(source.wrapping_mul(4)));
+    let value = capture::own_at::<u32>(e, BLEND_FACTORS.wrapping_add(source.wrapping_mul(4)));
     counted(e, INDEX_SOURCE_BLEND, 0x13, value, lock);
-    let value = e.global::<u32>(BLEND_FACTORS.wrapping_add(destination.wrapping_mul(4)));
+    let value = capture::own_at::<u32>(e, BLEND_FACTORS.wrapping_add(destination.wrapping_mul(4)));
     counted(e, INDEX_DESTINATION_BLEND, 0x14, value, lock);
 }
 
 // Typed from 00b97d90
 /// `cdecl(state, value, lock)`: any render state, its counter index from the table by state.
 pub fn set_state(e: &mut Engine, state: u32, value: u32, lock: u32) {
-    let index_at = INDEX_BY_STATE.wrapping_add(state.wrapping_mul(4));
+    let index_at = INDEX_BY_STATE.wrapping_add(state.wrapping_mul(4)); // own: read in counted
     counted(e, index_at, state, value, lock);
 }
 
@@ -284,9 +324,9 @@ pub fn set_state(e: &mut Engine, state: u32, value: u32, lock: u32) {
 /// is 0, and only for a card that has one (kind 1: state 0xb5 takes `ATOC` or 0.0; kind 2: state 0x9a
 /// takes `A2M1` or `A2M0`); the counter moves by `lock` either way.
 pub fn set_alpha_to_coverage(e: &mut Engine, enable: u8, lock: u32) {
-    let count = e.global::<u32>(COVERAGE_COUNTER);
+    let count = capture::own_at::<u32>(e, COVERAGE_COUNTER);
     if count == 0 {
-        let kind = e.global::<u32>(COVERAGE_KIND);
+        let kind = capture::own_at::<u32>(e, COVERAGE_KIND);
         let call = match kind {
             // `FLDZ; FSTP`: positive zero under any control word.
             1 => Some((0xb5u32, if enable != 0 { 0x434f_5441 } else { 0 })),
@@ -299,12 +339,12 @@ pub fn set_alpha_to_coverage(e: &mut Engine, enable: u8, lock: u32) {
         if let Some((state, value)) = call {
             let cache = render_state(e);
             cache_render_state(e, cache.addr(), state, value, 0, 0);
-            let count = e.global::<u32>(COVERAGE_COUNTER).wrapping_add(lock);
-            e.set_global(COVERAGE_COUNTER, count);
+            let count = capture::own_at::<u32>(e, COVERAGE_COUNTER).wrapping_add(lock);
+            capture::set_own_at(e, COVERAGE_COUNTER, count);
             return;
         }
     }
-    e.set_global(COVERAGE_COUNTER, count.wrapping_add(lock));
+    capture::set_own_at(e, COVERAGE_COUNTER, count.wrapping_add(lock));
 }
 
 // Typed from 00b984d0
@@ -318,13 +358,16 @@ pub fn set_cull_mode_of_renderer(e: &mut Engine, index: u32, _unused: u32) {
 /// `thiscall(cache, index, lock)`: `D3DRS_CULLMODE` (0x16) through the cache's own `SetRenderState`,
 /// the mode `index` of the pair the cull side (+0xf4) picks.
 pub fn set_cull_mode(e: &mut Engine, this: Ptr<NiDX9RenderState>, index: u32, lock: u32) {
-    let side = e.get(this, NiDX9RenderState::uiCullSide);
-    let value = e.global::<u32>(elem_addr(
-        this,
-        NiDX9RenderState::auiCullModes,
-        side.wrapping_add(index.wrapping_mul(2)),
-        4,
-    ));
+    let side = capture::own_get(e, this, NiDX9RenderState::uiCullSide);
+    let value = capture::own_at::<u32>(
+        e,
+        elem_addr(
+            this,
+            NiDX9RenderState::auiCullModes,
+            side.wrapping_add(index.wrapping_mul(2)),
+            4,
+        ),
+    );
     cache_render_state(e, this.addr(), 0x16, value, 0, lock);
 }
 
@@ -341,22 +384,22 @@ pub fn set_render_state(
     lock: u8,
 ) {
     let locked = elem_addr(this, NiDX9RenderState::abLocked, state, 1);
-    if e.global::<u8>(locked) != 0 {
+    if capture::own_at::<u8>(e, locked) != 0 {
         return;
     }
-    e.set_global(locked, lock);
+    capture::set_own_at(e, locked, lock);
     let cached = elem_addr(this, NiDX9RenderState::auiRenderStates, state, 8);
-    if e.global::<u32>(cached) != value {
-        let device = e.get(this, NiDX9RenderState::m_pkD3DDevice9);
+    if capture::own_at::<u32>(e, cached) != value {
+        let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
         e.vcall(device, DEVICE_SET_RENDER_STATE, &args![state, value]);
-        e.set_global(cached, value);
+        capture::set_own_at(e, cached, value);
     }
 }
 
 /// Slot `table[state]` (16-bit) when it is below `slots`.
 #[inline(always)]
 fn slot_of(e: &Engine, table: u32, state: u32, slots: u16) -> Option<u32> {
-    let slot = e.global::<u16>(table.wrapping_add(state.wrapping_mul(2)));
+    let slot = capture::own_at::<u16>(e, table.wrapping_add(state.wrapping_mul(2)));
     (slot < slots).then_some(u32::from(slot))
 }
 
@@ -380,11 +423,11 @@ pub fn set_stage_state(
         slot.wrapping_add(stage.wrapping_mul(8)),
         8,
     );
-    if e.global::<u32>(cached) != value {
-        let device = e.get(this, NiDX9RenderState::m_pkD3DDevice9);
+    if capture::own_at::<u32>(e, cached) != value {
+        let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
         e.vcall(device, DEVICE_SET_STAGE_STATE, &args![stage, state, value]);
     }
-    e.set_global(cached, value);
+    capture::set_own_at(e, cached, value);
 }
 
 // Typed from 00e910a0
@@ -407,11 +450,11 @@ pub fn set_sampler_state(
         stage.wrapping_mul(5).wrapping_add(slot),
         8,
     );
-    if e.global::<u32>(cached) == value {
+    if capture::own_at::<u32>(e, cached) == value {
         return;
     }
-    e.set_global(cached, value);
-    let device = e.get(this, NiDX9RenderState::m_pkD3DDevice9);
+    capture::set_own_at(e, cached, value);
+    let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
     e.vcall(
         device,
         DEVICE_SET_SAMPLER_STATE,
@@ -424,11 +467,11 @@ pub fn set_sampler_state(
 /// differs.
 pub fn set_texture(e: &mut Engine, this: Ptr<NiDX9RenderState>, stage: u32, texture: u32) {
     let cached = elem_addr(this, NiDX9RenderState::apTextures, stage, 4);
-    if e.global::<u32>(cached) == texture {
+    if capture::own_at::<u32>(e, cached) == texture {
         return;
     }
-    e.set_global(cached, texture);
-    let device = e.get(this, NiDX9RenderState::m_pkD3DDevice9);
+    capture::set_own_at(e, cached, texture);
+    let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
     e.vcall(device, DEVICE_SET_TEXTURE, &args![stage, texture]);
 }
 
@@ -445,14 +488,14 @@ fn set_cached(
     keep: u8,
 ) {
     if keep != 0 {
-        let now = e.get(this, current);
-        e.set(this, saved, now);
+        let now = capture::own_get(e, this, current);
+        capture::own_set(e, this, saved, now);
     }
-    if e.get(this, current) == value {
+    if capture::own_get(e, this, current) == value {
         return;
     }
-    e.set(this, current, value);
-    let device = e.get(this, NiDX9RenderState::m_pkD3DDevice9);
+    capture::own_set(e, this, current, value);
+    let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
     e.vcall(device, slot, &args![value]);
 }
 
@@ -492,18 +535,18 @@ pub fn set_declaration(e: &mut Engine, this: Ptr<NiDX9RenderState>, declaration:
     if declaration == 0 {
         return;
     }
-    if e.get(this, NiDX9RenderState::ucDeclarationSet) != 0
-        && e.get(this, NiDX9RenderState::pDeclaration) == declaration
+    if capture::own_get(e, this, NiDX9RenderState::ucDeclarationSet) != 0
+        && capture::own_get(e, this, NiDX9RenderState::pDeclaration) == declaration
     {
         return;
     }
-    e.set(this, NiDX9RenderState::ucDeclarationSet, 1);
+    capture::own_set(e, this, NiDX9RenderState::ucDeclarationSet, 1);
     if keep != 0 {
-        let now = e.get(this, NiDX9RenderState::pDeclaration);
-        e.set(this, NiDX9RenderState::pSavedDeclaration, now);
+        let now = capture::own_get(e, this, NiDX9RenderState::pDeclaration);
+        capture::own_set(e, this, NiDX9RenderState::pSavedDeclaration, now);
     }
-    e.set(this, NiDX9RenderState::pDeclaration, declaration);
-    let device = e.get(this, NiDX9RenderState::m_pkD3DDevice9);
+    capture::own_set(e, this, NiDX9RenderState::pDeclaration, declaration);
+    let device = capture::own_get(e, this, NiDX9RenderState::m_pkD3DDevice9);
     e.vcall(device, DEVICE_SET_DECLARATION, &args![declaration]);
 }
 
@@ -513,13 +556,13 @@ pub fn set_declaration(e: &mut Engine, this: Ptr<NiDX9RenderState>, declaration:
 /// bounds (both ordered) and neither force byte is set; on otherwise. Comparisons are exact under any
 /// control word.
 pub fn set_alpha_test_of(e: &mut Engine, this: Ptr<NiDX9RenderState>, object: u32) {
-    let alpha = f64::from(e.global::<f32>(object.wrapping_add(0x30)));
-    let low = e.global::<f64>(ALPHA_LOW);
-    let high = f64::from(e.global::<f32>(ALPHA_HIGH));
+    let alpha = f64::from(capture::own_at::<f32>(e, object.wrapping_add(0x30)));
+    let low = capture::own_at::<f64>(e, ALPHA_LOW);
+    let high = f64::from(capture::own_at::<f32>(e, ALPHA_HIGH));
     let off = alpha >= low
         && high >= alpha
-        && e.get(this, NiDX9RenderState::ucForceAlphaTestB) == 0
-        && e.get(this, NiDX9RenderState::ucForceAlphaTestA) == 0;
+        && capture::own_get(e, this, NiDX9RenderState::ucForceAlphaTestB) == 0
+        && capture::own_get(e, this, NiDX9RenderState::ucForceAlphaTestA) == 0;
     cache_render_state(e, this.addr(), 0x8f, u32::from(!off), 0, 0);
 }
 
@@ -527,16 +570,16 @@ pub fn set_alpha_test_of(e: &mut Engine, this: Ptr<NiDX9RenderState>, object: u3
 /// `thiscall(cache, first, second)`: both floats stored, and second minus first (`f64`, rounded where
 /// the exe stores it: this also runs on another game thread).
 pub fn set_range(e: &mut Engine, this: Ptr<NiDX9RenderState>, first: f32, second: f32) {
-    e.set(this, NiDX9RenderState::fRangeFirst, first);
-    e.set(this, NiDX9RenderState::fRangeSecond, second);
+    capture::own_set(e, this, NiDX9RenderState::fRangeFirst, first);
+    capture::own_set(e, this, NiDX9RenderState::fRangeSecond, second);
     let difference = narrow(f64::from(second) - f64::from(first));
-    e.set(this, NiDX9RenderState::fRangeDifference, difference);
+    capture::own_set(e, this, NiDX9RenderState::fRangeDifference, difference);
 }
 
 // Typed from 00e88750
 /// `thiscall(cache)`: whether the cull side (+0xf4) is set.
 pub fn cull_side_set(e: &mut Engine, this: Ptr<NiDX9RenderState>) -> bool {
-    e.get(this, NiDX9RenderState::uiCullSide) != 0
+    capture::own_get(e, this, NiDX9RenderState::uiCullSide) != 0
 }
 
 // Typed from 00e89060

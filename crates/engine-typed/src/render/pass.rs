@@ -5,6 +5,7 @@
 
 use super::stage;
 use super::FAMILY;
+use crate::draw::capture;
 use crate::shader::{accumulator, state};
 use engine_core::ptr::Ptr;
 use engine_core::{typed_call, Engine};
@@ -21,7 +22,7 @@ const CLAMP_MODE: u32 = 0x00b6_71c0;
 /// `cdecl`, no arguments: each stage of the current pass, up to the first null one, whose byte +0x64
 /// and texture are set is bound ([`stage::bind`], not forced). The count is read once.
 pub fn bind_pass_stages(e: &mut Engine) {
-    let pass = e.global::<u32>(CURRENT_PASS);
+    let pass = capture::own_at::<u32>(e, CURRENT_PASS);
     let count = e.mem.u32(pass.wrapping_add(0x18));
     let mut index = 0u32;
     while index < count {
@@ -40,7 +41,7 @@ pub fn bind_pass_stages(e: &mut Engine) {
 /// The current pass's stage `index` (read afresh each time, as the exe does).
 #[inline(always)]
 fn pass_stage(e: &Engine, index: u32) -> u32 {
-    let pass = e.global::<u32>(CURRENT_PASS);
+    let pass = capture::own_at::<u32>(e, CURRENT_PASS);
     let stages = e.mem.u32(pass.wrapping_add(0x24));
     e.mem.u32(stages.wrapping_add(index.wrapping_mul(4)))
 }
@@ -96,7 +97,7 @@ pub fn geometry_pass(e: &mut Engine, this: Ptr, pass: Ptr) {
     }
     e.with_stack(0x40, |e, frame| {
         let local = frame.addr();
-        let holder = e.global::<u32>(VIEW_HOLDER);
+        let holder = capture::own_at::<u32>(e, VIEW_HOLDER);
         let object = e.mem.u32(holder);
         let matrix = object.wrapping_add(0x68);
         typed_call!(

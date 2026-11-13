@@ -224,7 +224,7 @@ pub fn setup_constants(e: &mut Engine, this: Ptr, state: Ptr) {
     let count = packet::water_word(e, property, 0x130) as f32;
     own::set_constant_word(e, LIGHT_COUNT, count.to_bits());
     let mut node = packet::water_lights(e, property);
-    let mut cursor = LIGHT_COLOURS;
+    let mut cursor = LIGHT_COLOURS; // own: written through set_constant_word
     while node != 0 {
         let light = packet::light_node_light(e, node);
         node = packet::light_node_next(e, node);

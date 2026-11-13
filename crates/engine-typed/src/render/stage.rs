@@ -9,6 +9,7 @@
 
 use super::layout::TextureStage;
 use super::FAMILY;
+use crate::draw::capture;
 use crate::shader::state;
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
@@ -172,7 +173,7 @@ pub fn apply(e: &mut Engine, this: Ptr<TextureStage>) {
         if e.get(this, TextureStage::m_eFilterMode) == 6 {
             let device = e.global::<u32>(DEVICE);
             let stage_now = e.get(this, TextureStage::m_uiStage);
-            let value = e.global::<u32>(MAX_ANISOTROPY);
+            let value = capture::own_at::<u32>(e, MAX_ANISOTROPY);
             e.vcall(
                 device,
                 DEVICE_SET_SAMPLER_STATE,

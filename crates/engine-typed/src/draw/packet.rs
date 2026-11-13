@@ -37,10 +37,11 @@ pub(crate) fn render_mode_draw(e: &Engine, mode: u32) -> u32 {
     e.global::<u32>(RENDER_MODE_DRAWS.wrapping_add(mode.wrapping_mul(4)))
 }
 
-/// The accumulator's camera (`m_pkCamera`, +8): nothing is drawn without one.
+/// The accumulator's camera (`m_pkCamera`, +8): nothing is drawn without one. The draw's own state (step 2,
+/// piece 3: written as the draw starts and cleared as it ends).
 #[inline(always)]
 pub(crate) fn camera(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> u32 {
-    e.get(acc, BSShaderAccumulator::m_pkCamera)
+    capture::own_word(e, acc.addr(), BSShaderAccumulator::m_pkCamera.off)
 }
 
 /// The render mode (`eRenderMode`).
@@ -316,13 +317,13 @@ pub(crate) fn clear_scene_word(e: &mut Engine) {
 // Typed from 00d47a40
 /// `thiscall(accumulator, camera)`, the accumulator's slot 0x8c: the camera into `m_pkCamera` (+8).
 pub fn set_camera(e: &mut Engine, this: Ptr<BSShaderAccumulator>, camera: u32) {
-    e.set(this, BSShaderAccumulator::m_pkCamera, camera);
+    capture::set_word(e, this.addr(), BSShaderAccumulator::m_pkCamera.off, camera);
 }
 
 // Typed from 00aa0fe0
 /// `NiAccumulator::FinishAccumulating` (Xbox PDB), `thiscall(accumulator)`: the camera cleared.
 pub fn finish_accumulating(e: &mut Engine, this: Ptr<BSShaderAccumulator>) {
-    e.set(this, BSShaderAccumulator::m_pkCamera, 0);
+    capture::set_word(e, this.addr(), BSShaderAccumulator::m_pkCamera.off, 0);
 }
 
 /// The camera direction's words as the exe keeps them in locals (each through `FLD`/`FSTP`, so quieted).
@@ -636,7 +637,7 @@ const RENDERING_PASS_TYPE: u32 = 0x011f_91e4;
 /// The current shader pass.
 #[inline(always)]
 pub(crate) fn current_pass(e: &Engine) -> u32 {
-    e.global::<u32>(CURRENT_PASS)
+    capture::own_word(e, CURRENT_PASS, 0)
 }
 
 /// The current pass's constants holder (+0x5c).
@@ -654,7 +655,7 @@ pub(crate) fn pass_device(e: &Engine) -> u32 {
 /// The pass being rendered.
 #[inline(always)]
 pub(crate) fn rendering_pass(e: &Engine) -> u32 {
-    e.global::<u32>(RENDERING_PASS)
+    capture::own_word(e, RENDERING_PASS, 0)
 }
 
 /// The pass being rendered's geometry (its first word).
@@ -666,7 +667,7 @@ pub(crate) fn rendering_geometry(e: &Engine) -> u32 {
 /// The type of the pass being rendered.
 #[inline(always)]
 pub(crate) fn rendering_pass_type(e: &Engine) -> u32 {
-    e.global::<u32>(RENDERING_PASS_TYPE)
+    capture::own_word(e, RENDERING_PASS_TYPE, 0)
 }
 
 /// The renderer's render-state cache (+0x8b8).
@@ -678,11 +679,7 @@ pub(crate) fn render_state_cache(e: &Engine, renderer: u32) -> u32 {
 /// The render-state cache's stored value of `state` (+0x124 + 8 · state).
 #[inline(always)]
 pub(crate) fn stored_render_state(e: &Engine, cache: u32, state: u32) -> u32 {
-    e.global::<u32>(
-        cache
-            .wrapping_add(state.wrapping_mul(8))
-            .wrapping_add(0x124),
-    )
+    capture::own_word(e, cache, state.wrapping_mul(8).wrapping_add(0x124))
 }
 
 /// The shadow scene nodes (`011f91c8`, a word an index).
@@ -757,6 +754,60 @@ pub(crate) fn property_flags_24(e: &Engine, property: u32) -> u32 {
 #[inline(always)]
 pub(crate) fn property_distance(e: &Engine, property: u32) -> u32 {
     capture::word(e, property, 0x34)
+}
+
+// ---- The per-light set-up (`00b70820`) and the passes' lights: what the cut copies for each pass light. ----
+//
+// A pass's light count (+9) and array (+0xc) and the array's entries; a pass light (`ShadowSceneLight`): its weight
+// +0xd0, its +0xd4, its flags +0xf4/+0xf5 and its light +0xf8; that light (`NiLight`): its world block (+0x68 to
+// +0x9c, the position +0x8c), its values +0xc4 to +0xec (strength, colours, radius) and, for a light that is not a
+// point light, its direction +0xf0 (`cut::take_lights`).
+
+/// A pass's light array (+0xc), the packet's.
+#[inline(always)]
+pub(crate) fn rendering_pass_lights(e: &Engine, pass: u32) -> u32 {
+    capture::word(e, pass, 0xc)
+}
+
+/// Entry `index` of a pass's light array, the packet's.
+#[inline(always)]
+pub(crate) fn pass_light_at(e: &Engine, lights: u32, index: u32) -> u32 {
+    capture::word(e, lights, index.wrapping_mul(4))
+}
+
+/// A pass light's word at `offset` (+0xd0, +0xd4, +0xf8), the packet's.
+#[inline(always)]
+pub(crate) fn pass_light_word(e: &Engine, light: u32, offset: u32) -> u32 {
+    capture::word(e, light, offset)
+}
+
+/// A pass light's flag byte at `offset` (+0xf4 a point light, +0xf5 ambient allowed), the packet's.
+#[inline(always)]
+pub(crate) fn pass_light_byte(e: &Engine, light: u32, offset: u32) -> u8 {
+    capture::byte(e, light, offset)
+}
+
+/// A pass light's light's word at `offset` (its position +0x8c, values +0xc4..+0xec, direction +0xf0), the
+/// packet's.
+#[inline(always)]
+pub(crate) fn light_value_word(e: &Engine, data: u32, offset: u32) -> u32 {
+    capture::word(e, data, offset)
+}
+
+/// The shaders' time values (`011f940c`, four floats) and their start time (`011f94ac`), the packet's.
+const GAME_TIMES: u32 = 0x011f_940c;
+const START_TIME: u32 = 0x011f_94ac;
+
+/// Word `index` of the shaders' time values, the packet's.
+#[inline(always)]
+pub(crate) fn time_value(e: &Engine, index: u32) -> u32 {
+    capture::word(e, GAME_TIMES, index.wrapping_mul(4))
+}
+
+/// The shaders' start time, the packet's.
+#[inline(always)]
+pub(crate) fn start_time(e: &Engine) -> u32 {
+    capture::word(e, START_TIME, 0)
 }
 
 // ---- Group C: the reads of the shader set-ups the world draw reached as translations. ----
@@ -901,12 +952,12 @@ pub(crate) fn shader_flags_byte(e: &Engine) -> u8 {
 }
 #[inline(always)]
 pub(crate) fn shadow_fade(e: &Engine) -> u32 {
-    e.global::<u32>(0x011f_d890)
+    capture::own_at::<u32>(e, 0x011f_d890)
 }
 const SHADOW_WORDS: [u32; 4] = [0x011f_d874, 0x011f_d878, 0x011a_dce0, 0x011f_d880];
 #[inline(always)]
 pub(crate) fn shadow_word(e: &Engine, index: u32) -> u32 {
-    e.global::<u32>(SHADOW_WORDS[index as usize])
+    capture::own_at::<u32>(e, SHADOW_WORDS[index as usize])
 }
 
 /// A geometry data's sub-textures: their count (a byte, +0x6c) and their 0x10-byte entries (+0x68).
@@ -963,7 +1014,7 @@ pub(crate) fn replacement_colour_word(e: &Engine, index: u32) -> u32 {
 /// the sky's eye position less the origin.
 #[inline(always)]
 pub(crate) fn sun_word(e: &Engine, index: u32) -> u32 {
-    e.global::<u32>(0x011f_a2a0 + 4 * index)
+    capture::own_at::<u32>(e, 0x011f_a2a0 + 4 * index)
 }
 /// The fog plane (`011f9604`, word `index`), its offset (`011f9610`), and the fog's far distance
 /// (`011f9618`).
@@ -1040,15 +1091,15 @@ pub(crate) fn sky_colour_word(e: &Engine, property: u32, index: u32) -> u32 {
 /// `index` (`011ff8e0`, twelve) and HDR value (`011ad87c`).
 #[inline(always)]
 pub(crate) fn sky_height(e: &Engine) -> u32 {
-    e.global::<u32>(0x011f_f8a8)
+    capture::own_at::<u32>(e, 0x011f_f8a8)
 }
 #[inline(always)]
 pub(crate) fn sky_blend_value(e: &Engine, index: u32) -> u32 {
-    e.global::<u32>(0x011f_f8b4u32.wrapping_add(index.wrapping_mul(4)))
+    capture::own_at::<u32>(e, 0x011f_f8b4u32.wrapping_add(index.wrapping_mul(4)))
 }
 #[inline(always)]
 pub(crate) fn sky_colours_word(e: &Engine, index: u32) -> u32 {
-    e.global::<u32>(0x011f_f8e0 + 4 * index)
+    capture::own_at::<u32>(e, 0x011f_f8e0 + 4 * index)
 }
 #[inline(always)]
 pub(crate) fn sky_hdr_value(e: &Engine) -> u32 {
@@ -1118,11 +1169,11 @@ pub(crate) fn water_rendered_texture(e: &Engine) -> u32 {
 }
 #[inline(always)]
 pub(crate) fn water_value(e: &Engine) -> u32 {
-    e.global::<u32>(0x011f_f108)
+    capture::own_at::<u32>(e, 0x011f_f108)
 }
 #[inline(always)]
 pub(crate) fn water_extra_word(e: &Engine, index: u32) -> u32 {
-    e.global::<u32>(0x011f_f398 + 4 * index)
+    capture::own_at::<u32>(e, 0x011f_f398 + 4 * index)
 }
 
 /// The pass being rendered's scene light `index` (its lights, +0xc, a word each).
@@ -1147,7 +1198,7 @@ pub(crate) fn leaf_data_word(e: &Engine, data: u32, offset: u32) -> u32 {
 /// The leaf scales (`01200608`, `0120060c`: word `index`).
 #[inline(always)]
 pub(crate) fn leaf_scale_word(e: &Engine, index: u32) -> u32 {
-    e.global::<u32>(0x0120_0608 + 4 * index)
+    capture::own_at::<u32>(e, 0x0120_0608 + 4 * index)
 }
 
 /// The HDR scale of the image space (`011f91ac`): its effect 1's (the second of its list, +8) data
@@ -1237,7 +1288,7 @@ pub(crate) fn light_scale(e: &Engine) -> u32 {
 }
 #[inline(always)]
 pub(crate) fn shadow_extra_word(e: &Engine, index: u32) -> u32 {
-    e.global::<u32>(0x011f_d874 + 4 * index)
+    capture::own_at::<u32>(e, 0x011f_d874 + 4 * index)
 }
 
 /// An accumulator's ambient colour (+0x154, word `index`), as shader mode 0xf reads the held one.
@@ -1262,12 +1313,12 @@ pub(crate) fn scene_renderer_device(e: &Engine) -> u32 {
 /// The held accumulator (`011f95f0`, what the exe's getter `00b4f5d0` answers).
 #[inline(always)]
 pub(crate) fn held_accumulator(e: &Engine) -> u32 {
-    e.global::<u32>(0x011f_95f0)
+    capture::own_at::<u32>(e, 0x011f_95f0)
 }
 
 /// The shader manager's accumulator (`011f95ec`, what `BSShaderManager::GetAccumulator` `00b4f5c0`
 /// answers).
 #[inline(always)]
 pub(crate) fn shader_accumulator(e: &Engine) -> u32 {
-    e.global::<u32>(0x011f_95ec)
+    capture::own_at::<u32>(e, 0x011f_95ec)
 }

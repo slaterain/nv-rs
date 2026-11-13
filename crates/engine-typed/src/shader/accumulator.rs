@@ -19,6 +19,7 @@ use super::state;
 use super::{elem_addr, low8, FAMILY};
 use crate::anim_keys::{narrow, wide};
 use crate::culling::layout::{NiMatrix3, NiPoint3, NiTransform};
+use crate::draw::capture;
 use engine_core::ptr::Ptr;
 use engine_core::{args, typed_call, Engine};
 
@@ -608,14 +609,16 @@ const MINUS_ONE: u32 = 0x0101_a6b0;
 
 #[inline(always)]
 fn set_vertex_constants(e: &mut Engine, register: u32, data: u32, count: u32) {
-    let pass = e.global::<u32>(CURRENT_PASS);
+    let pass = capture::own_at::<u32>(e, CURRENT_PASS);
     let shader = e.global::<u32>(pass.wrapping_add(0x5c));
     let device = e.global::<u32>(shader.wrapping_add(0x20));
-    e.vcall(
-        device,
-        DEVICE_SET_VERTEX_CONSTANTS,
-        &args![register, data, count],
-    );
+    capture::own_image(e, data, count.wrapping_mul(16), |e, data| {
+        e.vcall(
+            device,
+            DEVICE_SET_VERTEX_CONSTANTS,
+            &args![register, data, count],
+        );
+    });
 }
 
 // Typed from 00b7c750
@@ -646,7 +649,7 @@ pub fn set_world_view_constants(e: &mut Engine, this: u32, _unused: u32, transfo
 /// a normal, normalized, goes to vertex constant 0x19. The frame is the translation's: 0x24 bytes, the
 /// constant's fourth float its last word (in the exe the word above its 0x20-byte frame).
 pub fn set_light_direction(e: &mut Engine, matrix: u32) {
-    let rendering = e.global::<u32>(RENDERING_PASS);
+    let rendering = capture::own_at::<u32>(e, RENDERING_PASS);
     let holder = e.global::<u32>(rendering.wrapping_add(0xc));
     let object = e.global::<u32>(holder);
     let vector = e.global::<u32>(object.wrapping_add(0xf8));
@@ -724,10 +727,10 @@ pub fn accumulate_light_color(e: &mut Engine, light: Ptr<ShaderLight>) {
         Some(scale) => (red * scale, green * scale, blue * scale),
         None => (red, green, blue),
     };
-    let alpha = e.global::<u32>(AMBIENT + 0xc);
+    let alpha = capture::own_at::<u32>(e, AMBIENT + 0xc);
     let mut sums = [0f32; 3];
     for ((i, value), sum) in (0u32..).zip([red, green, blue]).zip(sums.iter_mut()) {
-        *sum = value + e.global::<f32>(AMBIENT + 4 * i);
+        *sum = value + capture::own_at::<f32>(e, AMBIENT + 4 * i);
     }
     if !hdr {
         for sum in &mut sums {
@@ -737,9 +740,9 @@ pub fn accumulate_light_color(e: &mut Engine, light: Ptr<ShaderLight>) {
         }
     }
     for (i, sum) in (0u32..).zip(sums) {
-        e.set_global(AMBIENT + 4 * i, sum);
+        capture::set_own_at(e, AMBIENT + 4 * i, sum);
     }
-    e.set_global(AMBIENT + 0xc, alpha);
+    capture::set_own_at(e, AMBIENT + 0xc, alpha);
 }
 
 /// The default colour (`011a9bd0`, four floats), the default blue (`01018f5c`) and the colour set
@@ -768,10 +771,10 @@ pub fn set_tint(e: &mut Engine, _this: u32, owner: Ptr<NiGeometry>, green: u32, 
     } else {
         e.global::<u32>(DEFAULT_BLUE)
     };
-    e.set_global(COLOR + 4, green);
-    e.set_global(COLOR, red);
-    e.set_global(COLOR + 8, blue);
-    e.set_global(COLOR + 0xc, alpha);
+    capture::set_own_at(e, COLOR + 4, green);
+    capture::set_own_at(e, COLOR, red);
+    capture::set_own_at(e, COLOR + 8, blue);
+    capture::set_own_at(e, COLOR + 0xc, alpha);
 }
 
 /// The render pass array: the memory manager's allocation and its constructor (`thiscall(array,
@@ -855,7 +858,7 @@ pub fn set_pair_textures(e: &mut Engine, _this: u32, pass_type: u32) {
     };
     for (i, texture) in (0u32..).zip(PAIR_TEXTURES) {
         let texture = e.global::<u32>(texture);
-        let pass = e.global::<u32>(CURRENT_PASS);
+        let pass = capture::own_at::<u32>(e, CURRENT_PASS);
         let stages = e.global::<u32>(pass.wrapping_add(0x24));
         let stage = e.global::<u32>(stages.wrapping_add((first + i).wrapping_mul(4)));
         e.set_global(stage.wrapping_add(8), texture);
@@ -873,7 +876,7 @@ const LOCK_COUNTER_COLOR_MASK: u32 = 0x011f_fa18;
 /// a blending alpha property (+0x10) puts `00b98070` back; types 6 and 8 with bit 18 of the property's
 /// flags release the two counters and put depth writes and the colour mask (7) back.
 pub fn restore_states(e: &mut Engine, _this: u32, block: u32) {
-    let pass_type = e.global::<u32>(RENDERING_PASS_TYPE);
+    let pass_type = capture::own_at::<u32>(e, RENDERING_PASS_TYPE);
     if pass_type == 0x250 || pass_type == 0x251 {
         typed_call!(FAMILY, 0x00b9_7e80, state::set_z_function(e, 3u32, 0u32));
     }
@@ -885,11 +888,11 @@ pub fn restore_states(e: &mut Engine, _this: u32, block: u32) {
     if (pass_type == 6 || pass_type == 8)
         && e.get(property, BSShaderProperty::ulFlags) & 0x40000 != 0
     {
-        let count = e.global::<u32>(LOCK_COUNTER_DEPTH_WRITE).wrapping_sub(1);
-        e.set_global(LOCK_COUNTER_DEPTH_WRITE, count);
+        let count = capture::own_at::<u32>(e, LOCK_COUNTER_DEPTH_WRITE).wrapping_sub(1);
+        capture::set_own_at(e, LOCK_COUNTER_DEPTH_WRITE, count);
         typed_call!(FAMILY, 0x00b9_7e30, state::set_z_write_enable(e, 1u8, 0u32));
-        let count = e.global::<u32>(LOCK_COUNTER_COLOR_MASK).wrapping_sub(1);
-        e.set_global(LOCK_COUNTER_COLOR_MASK, count);
+        let count = capture::own_at::<u32>(e, LOCK_COUNTER_COLOR_MASK).wrapping_sub(1);
+        capture::set_own_at(e, LOCK_COUNTER_COLOR_MASK, count);
         typed_call!(FAMILY, 0x00b9_8380, state::set_color_write(e, 7u32, 0u32));
     }
 }

@@ -131,6 +131,7 @@ pub fn setup_geometry(
                 crate::dispatch::math::normalize(e, Ptr::new(direction))
             );
             for (source, target) in [(0xc8u32, LIGHT_COLOUR), (0xd4, LIGHT_AMBIENT)] {
+                // own: the targets are written through set_shader_global
                 for k in 0..3u32 {
                     let value = packet::light_word(e, light, source + 4 * k);
                     own::set_shader_global(e, target + 4 * k, value);

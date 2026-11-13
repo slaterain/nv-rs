@@ -6,6 +6,7 @@
 //! load, operation and store the exe's, under either control word.
 
 use super::FAMILY;
+use crate::draw::capture;
 use crate::shader::{accumulator, layout::BSShaderProperty};
 use engine_core::ptr::Ptr;
 use engine_core::x87::{x87_load32, x87_m32, x87_mul, x87_quiet_bits, x87_store32, x87_sub};
@@ -53,7 +54,7 @@ fn low8(word: u32) -> u8 {
 // Typed from 00b4f5c0
 /// `BSShaderManager::GetAccumulator` (Xbox PDB): the word at `011f95ec`.
 pub fn shader_accumulator(e: &mut Engine) -> u32 {
-    e.global::<u32>(ACCUMULATOR)
+    capture::own_at::<u32>(e, ACCUMULATOR)
 }
 
 // Typed from 004a2020
