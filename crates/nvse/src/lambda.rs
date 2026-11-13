@@ -443,3 +443,30 @@ pub fn is_saved(e: &Engine, list: u32) -> bool {
     e.ext_get::<Nvse>()
         .is_some_and(|n| n.lambdas.saved.contains_key(&list))
 }
+
+/// How many holders keep the lambda's variables (its count on the list kept for it; 0 when
+/// none): other crates' tests of [`save_variables`] and [`unsave_variables`].
+#[cfg(any(test, feature = "test-support"))]
+pub fn saved_count(e: &Engine, lambda: u32) -> usize {
+    e.ext_get::<Nvse>().map_or(0, |n| {
+        n.lambdas
+            .saved
+            .values()
+            .filter_map(|v| v.lambdas.get(&lambda))
+            .sum()
+    })
+}
+
+/// Makes `script` a lambda evaluated on `parent_list`, with no lambdas of its own: other crates'
+/// tests of [`save_variables`] and [`unsave_variables`].
+#[cfg(any(test, feature = "test-support"))]
+pub fn insert_for_tests(e: &mut Engine, script: u32, parent_list: u32) {
+    state(e).lambdas.insert(
+        script,
+        Context {
+            parent_list,
+            captured: Some(Vec::new()),
+            ..Context::default()
+        },
+    );
+}

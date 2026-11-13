@@ -438,9 +438,7 @@ pub(crate) mod tests {
         static PROBING: Cell<bool> = const { Cell::new(false) };
     }
 
-    /// Whether a panic on this thread reaches the counting hook now (another test's
-    /// `static_init::run` swaps the hook out for a while, and can put back the one from before
-    /// this hook was installed).
+    /// Whether a panic on this thread reaches the counting hook now.
     fn probe_reaches_the_hook() -> bool {
         let before = HOOK_CALLS.with(Cell::get);
         PROBING.with(|probing| probing.set(true));
@@ -449,29 +447,27 @@ pub(crate) mod tests {
         HOOK_CALLS.with(Cell::get) > before
     }
 
-    /// The panic hook calls `action` makes on this thread, whichever tests run beside it: the
-    /// count stands only when a panic reached the hook on both sides of `action`.
+    /// The panic hook calls `action` makes on this thread. The panic-hook lock is held
+    /// throughout, so no other test (`static_init::run`) swaps the hook out meanwhile; the
+    /// counting hook is put in when a probe does not reach it, and the count stands only when
+    /// a panic reached the hook on both sides of `action`.
     fn hook_calls_during(mut action: impl FnMut()) -> u32 {
-        for _ in 0..10_000 {
-            if probe_reaches_the_hook() {
-                let before = HOOK_CALLS.with(Cell::get);
-                action();
-                let during = HOOK_CALLS.with(Cell::get) - before;
-                if probe_reaches_the_hook() {
-                    return during;
+        let _serial = crate::test_panic_hook_lock();
+        if !probe_reaches_the_hook() {
+            let before = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                HOOK_CALLS.with(|calls| calls.set(calls.get() + 1));
+                if !PROBING.with(Cell::get) {
+                    before(info);
                 }
-            } else {
-                let before = std::panic::take_hook();
-                std::panic::set_hook(Box::new(move |info| {
-                    HOOK_CALLS.with(|calls| calls.set(calls.get() + 1));
-                    if !PROBING.with(Cell::get) {
-                        before(info);
-                    }
-                }));
-            }
-            std::thread::yield_now();
+            }));
+            assert!(probe_reaches_the_hook(), "the counting hook is in");
         }
-        panic!("the counting panic hook never stayed in place");
+        let before = HOOK_CALLS.with(Cell::get);
+        action();
+        let during = HOOK_CALLS.with(Cell::get) - before;
+        assert!(probe_reaches_the_hook(), "the counting hook stayed in");
+        during
     }
 
     fn stop_text(payload: Box<dyn Any + Send>) -> String {

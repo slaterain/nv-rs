@@ -1053,6 +1053,9 @@ pub(crate) struct ExtendState {
     pub(crate) controls_alt: std::sync::Arc<std::sync::atomic::AtomicU32>,
     /// JIP LN NVSE's hooks' user counts ([`Hook`]), one table every engine of a game shares.
     pub(crate) hooks: std::sync::Arc<HookUsers>,
+    /// The caller marks set around the calls whose hooks read their return address
+    /// ([`Engine::mark_caller`]), shared like the counts.
+    pub(crate) marks: std::sync::Arc<CallerMarks>,
 }
 
 /// JIP LN NVSE's on-demand hooks (`kHook_*`, `internal/hooks.h` (JIP LN NVSE)), in JIP's order.
@@ -1183,6 +1186,78 @@ impl Engine {
     pub fn set_hook_users(&self, hook: Hook, users: u32) {
         self.extend.hooks.0[hook as usize].store(users, std::sync::atomic::Ordering::Relaxed);
     }
+
+    /// Marks the call made at `site` (a call whose callee's hook reads its return address) on this
+    /// game thread, while `hook` has users; the mark goes when the guard is dropped, also when a
+    /// guest exception unwinds through the call. With no user: one load, nothing marked. A
+    /// callee's handler takes the mark at its first check ([`Engine::take_caller_mark`]); a
+    /// missing mark means "not from that caller" (the count read here and the callee's seam's
+    /// read are separate, as JIP's patch and its check are).
+    ///
+    /// Inlined at each marker site, so with no user the site costs the count's load, a branch
+    /// and, at the guard's end, a test of the empty guard; the marking itself is out of line.
+    #[must_use]
+    #[inline]
+    pub fn mark_caller(&self, hook: Hook, site: u32) -> CallerMark {
+        if self.hook_users(hook) == 0 {
+            return CallerMark(None);
+        }
+        self.mark_caller_now(site)
+    }
+
+    /// [`Engine::mark_caller`]'s marking, with a user: this game thread's mark put in.
+    #[cold]
+    #[inline(never)]
+    fn mark_caller_now(&self, site: u32) -> CallerMark {
+        let key = (crate::thread_host::current_id(self), site);
+        self.extend.marks.lock().insert(key);
+        CallerMark(Some((self.extend.marks.clone(), key)))
+    }
+
+    /// Whether the call running on this game thread was marked at `site`; the mark goes (a call
+    /// made inside it has another return address).
+    pub fn take_caller_mark(&self, site: u32) -> bool {
+        let key = (crate::thread_host::current_id(self), site);
+        self.extend.marks.lock().remove(&key)
+    }
+
+    /// Whether this game thread's call is marked at `site` (the mark kept).
+    pub fn caller_marked(&self, site: u32) -> bool {
+        let key = (crate::thread_host::current_id(self), site);
+        self.extend.marks.lock().contains(&key)
+    }
+}
+
+/// The caller marks: (game thread, call site) pairs.
+#[derive(Debug, Default)]
+pub(crate) struct CallerMarks(std::sync::Mutex<std::collections::HashSet<(u32, u32)>>);
+
+impl CallerMarks {
+    fn lock(&self) -> std::sync::MutexGuard<'_, std::collections::HashSet<(u32, u32)>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// A caller mark's guard ([`Engine::mark_caller`]): drops the mark, if it is still there.
+#[derive(Debug)]
+pub struct CallerMark(Option<(std::sync::Arc<CallerMarks>, (u32, u32))>);
+
+impl Drop for CallerMark {
+    /// Inlined: an empty guard's drop is the test of its pointer; a mark is dropped out of line.
+    #[inline]
+    fn drop(&mut self) {
+        if let Some((marks, key)) = self.0.take() {
+            drop_mark(marks, key);
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn drop_mark(marks: std::sync::Arc<CallerMarks>, key: (u32, u32)) {
+    marks.lock().remove(&key);
 }
 
 impl Default for ExtendState {
@@ -1203,6 +1278,7 @@ impl ExtendState {
             tables: ScriptTables::default(),
             controls_alt: Default::default(),
             hooks: Default::default(),
+            marks: Default::default(),
         }
     }
 
@@ -1228,6 +1304,7 @@ impl ExtendState {
             tables: self.tables,
             controls_alt: self.controls_alt.clone(),
             hooks: self.hooks.clone(),
+            marks: self.marks.clone(),
         }
     }
 }
@@ -2210,6 +2287,30 @@ mod tests {
         assert_eq!(t.hook_users(Hook::MenuState), 1, "a later change is seen");
         assert_eq!(t.add_hook_user(Hook::GetModelPath, true), 1);
         assert_eq!(e.hook_users(Hook::GetModelPath), 1);
+    }
+
+    /// A caller mark: none without a user; with one, set until its guard drops (also on an
+    /// unwinding panic, as a guest exception unwinds), per game thread and site; taken once.
+    #[test]
+    fn caller_marks_follow_their_guards() {
+        let e = engine();
+        let guard = e.mark_caller(Hook::RemoveAmmo, 0x0100);
+        assert!(!e.caller_marked(0x0100), "no user");
+        drop(guard);
+        e.add_hook_user(Hook::RemoveAmmo, true);
+        let guard = e.mark_caller(Hook::RemoveAmmo, 0x0100);
+        assert!(e.caller_marked(0x0100));
+        assert!(!e.caller_marked(0x0200), "another site");
+        assert!(e.take_caller_mark(0x0100));
+        assert!(!e.take_caller_mark(0x0100), "taken");
+        drop(guard);
+        let thrown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = e.mark_caller(Hook::RemoveAmmo, 0x0100);
+            assert!(e.caller_marked(0x0100));
+            panic!("a guest exception");
+        }));
+        assert!(thrown.is_err());
+        assert!(!e.caller_marked(0x0100), "gone with the unwinding");
     }
 
     /// `HOOK_SET`: on makes an off hook's count 1 and leaves an on one's; off makes any count 0.

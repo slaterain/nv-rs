@@ -6995,7 +6995,10 @@ pub fn fn_00891be0(e: &mut Engine, this: Ptr<Actor>, item: Ptr) -> u32 {
 ///
 /// The seam at its entry (`0x891C86`, ADR-0016): JIP LN NVSE's LockEquipment hook, asked with the
 /// actor and the item; an answer is returned at once (no preferred weapon for an actor whose
-/// equipment a script locked). While the hook has no user: one load.
+/// equipment a script locked). While the hook has no user: one load. JIP's hook lets a call made
+/// from the plugin's own code through (`[ebp+7]`, its return address's high byte, not 0): JIP's
+/// handler is told so by a mark its own call (the ReEquipAll handler's, `SetCombatStyle` path)
+/// sets, so that call is not locked out.
 pub fn fn_00891c80(e: &mut Engine, this: Ptr<Actor>, item: Ptr) -> u32 {
     if e.hook_users(engine_core::extend::Hook::LockEquipment) != 0 {
         if let Some(answer) = e.site(0x0089_1c86, &[this.addr(), item.addr()]) {

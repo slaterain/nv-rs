@@ -1734,12 +1734,9 @@ pub fn middle_high_process_resolve_equipment_queue(
                     (byte(e, item, 0xd), byte(e, item, 0xe), byte(e, item, 0xf));
                 // The seam around this call (`0x91559D`, ADR-0016): JIP LN NVSE's LockEquipment
                 // hook lets the equipment queue equip a locked actor's weapon (its hook reads the
-                // return address `0x9155A2`), so it is told before (1) and after (0). While the
+                // return address `0x9155A2`), so the call is marked (a guard). While the
                 // hook has no user: one load.
-                let marked = e.hook_users(engine_core::extend::Hook::LockEquipment) != 0;
-                if marked {
-                    e.site(0x0091_559d, &[1]);
-                }
+                let mark = e.mark_caller(engine_core::extend::Hook::LockEquipment, 0x0091_559d);
                 e.call(
                     ACTOR_EQUIP_OBJECT,
                     &args![
@@ -1752,9 +1749,7 @@ pub fn middle_high_process_resolve_equipment_queue(
                         u32::from(sounds)
                     ],
                 );
-                if marked {
-                    e.site(0x0091_559d, &[0]);
-                }
+                drop(mark);
                 let object = word(e, item, 0);
                 if e.call(FORM_TYPE, &args![object]).u32() == 0x28 {
                     let weapon = word(e, item, 0);
@@ -12780,17 +12775,12 @@ mod tests {
         static QUEUE_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
     }
 
-    fn queue_marker(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        QUEUE_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
-        Some(0)
-    }
-
-    /// The seam around the queue's equip (`0x91559D`, JIP LN NVSE's LockEquipment): with a
-    /// handler and no user, it is not asked; with a user, it is told 1 right before
-    /// `Actor::EquipObject` and 0 right after (the call between them, once, with the same words).
+    /// The mark around the queue's equip (`0x91559D`, JIP LN NVSE's LockEquipment): no user, no
+    /// mark during `Actor::EquipObject`; a user, the call (once, same words) runs marked and the
+    /// mark is gone after it, also when the call throws and is caught outside.
     #[test]
     fn resolve_equipment_queue_marks_its_equip_for_lock_equipment() {
-        use engine_core::extend::{Hook, Owner, SiteSlot};
+        use engine_core::extend::Hook;
         let mut e = engine();
         let p = process(&mut e);
         let a = actor(&mut e);
@@ -12799,23 +12789,32 @@ mod tests {
             e.mem.set_u32(a[0], 0);
             Ret::default()
         });
-        e.register(ACTOR_EQUIP_OBJECT, |_, a| {
-            QUEUE_SEEN.with(|s| s.borrow_mut().push(a[..7].to_vec()));
+        e.register(ACTOR_EQUIP_OBJECT, |e, a| {
+            let mut seen = a[..7].to_vec();
+            seen.push(u32::from(e.caller_marked(0x0091_559d)));
+            QUEUE_SEEN.with(|s| s.borrow_mut().push(seen));
             Ret::default()
         });
-        e.on_site(SiteSlot::new(Owner::Jip, 0x0091_559d), queue_marker);
-        let equip = vec![a, weapon, 1, 0, 0, 0, 0];
+        let equip = [a, weapon, 1, 0, 0, 0, 0];
         queue_one(&mut e, p, weapon, 1);
         middle_high_process_resolve_equipment_queue(&mut e, p, a);
         assert_eq!(
             QUEUE_SEEN.with(|s| s.take()),
-            std::slice::from_ref(&equip),
+            [[&equip[..], &[0]].concat()],
             "no user"
         );
         e.add_hook_user(Hook::LockEquipment, true);
         queue_one(&mut e, p, weapon, 1);
         middle_high_process_resolve_equipment_queue(&mut e, p, a);
-        assert_eq!(QUEUE_SEEN.with(|s| s.take()), [vec![1], equip, vec![0]]);
+        assert_eq!(QUEUE_SEEN.with(|s| s.take()), [[&equip[..], &[1]].concat()]);
+        assert!(!e.caller_marked(0x0091_559d), "gone after the call");
+        e.register(ACTOR_EQUIP_OBJECT, |_, _| panic!("a guest exception"));
+        queue_one(&mut e, p, weapon, 1);
+        let thrown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            middle_high_process_resolve_equipment_queue(&mut e, p, a)
+        }));
+        assert!(thrown.is_err());
+        assert!(!e.caller_marked(0x0091_559d), "gone with the unwinding");
     }
 
     #[test]

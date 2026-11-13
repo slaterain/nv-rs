@@ -1892,16 +1892,11 @@ pub fn fn_008c48d0(
                     let list = e.call(REFERENCE_EXTRA_LIST, &args![actor]).u32();
                     // The seam around this call (`0x8C49B7`, ADR-0016): JIP LN NVSE's OnHitEvent
                     // hook runs no hit events for it (its hook reads the return address
-                    // `0x8C49BC`), so it is told before (1) and after (0). While the hook has no
+                    // `0x8C49BC`), so the call is marked (a guard). While the hook has no
                     // user: one load.
-                    let marked = e.hook_users(engine_core::extend::Hook::OnHitEvent) != 0;
-                    if marked {
-                        e.site(0x008c_49b7, &[1]);
-                    }
+                    let mark = e.mark_caller(engine_core::extend::Hook::OnHitEvent, 0x008c_49b7);
                     e.call(SET_ACTION_FLAG, &args![caster_actor, list, 0x80u32]);
-                    if marked {
-                        e.site(0x008c_49b7, &[0]);
-                    }
+                    drop(mark);
                     let mut apply = true;
                     if e.vcall(magic_item.addr(), FORM_SLOT_0X18, &[]).i32() == 6 {
                         let enchantment = dynamic_cast(
@@ -3948,17 +3943,12 @@ mod tests {
         static HIT_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
     }
 
-    fn hit_marker(_: &mut Engine, a: &[u32]) -> Option<u32> {
-        HIT_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
-        Some(0)
-    }
-
-    /// The seam around the caster's action flag (`0x8C49B7`, JIP LN NVSE's OnHitEvent): with a
-    /// handler and no user, it is not asked; with a user, it is told 1 right before the flag's
-    /// call and 0 right after it (the call between them, once, with the same words).
+    /// The mark around the caster's action flag (`0x8C49B7`, JIP LN NVSE's OnHitEvent): no user,
+    /// no mark during the call; a user, the call (once, with the same words) runs marked and the
+    /// mark is gone after it, also when the call throws and the exception is caught outside.
     #[test]
     fn fn_008c48d0_marks_its_action_flag_for_on_hit_event() {
-        use engine_core::extend::{Hook, Owner, SiteSlot};
+        use engine_core::extend::Hook;
         let (mut e, w) = setup();
         let this = Ptr::new(w.target);
         let magic_item = object(&mut e);
@@ -3976,11 +3966,12 @@ mod tests {
         });
         e.register(FN_008ACE90, |_, _| Ret::default());
         e.register(FN_008230F0, |_, _| 1u32.into_ret());
-        e.register(SET_ACTION_FLAG, |_, a| {
-            HIT_SEEN.with(|s| s.borrow_mut().push(a[..3].to_vec()));
+        e.register(SET_ACTION_FLAG, |e, a| {
+            let mut seen = a[..3].to_vec();
+            seen.push(u32::from(e.caller_marked(0x008c_49b7)));
+            HIT_SEEN.with(|s| s.borrow_mut().push(seen));
             Ret::default()
         });
-        e.on_site(SiteSlot::new(Owner::Jip, 0x008c_49b7), hit_marker);
         let apply = |e: &mut Engine| {
             fn_008c48d0(
                 e,
@@ -3991,16 +3982,21 @@ mod tests {
                 false,
             )
         };
-        let flag = vec![other_actor, w.actor + 0x44, 0x80];
+        let flag = [other_actor, w.actor + 0x44, 0x80];
         assert!(apply(&mut e));
         assert_eq!(
             HIT_SEEN.with(|s| s.take()),
-            std::slice::from_ref(&flag),
+            [[&flag[..], &[0]].concat()],
             "no user"
         );
         e.add_hook_user(Hook::OnHitEvent, true);
         assert!(apply(&mut e));
-        assert_eq!(HIT_SEEN.with(|s| s.take()), [vec![1], flag, vec![0]]);
+        assert_eq!(HIT_SEEN.with(|s| s.take()), [[&flag[..], &[1]].concat()]);
+        assert!(!e.caller_marked(0x008c_49b7), "gone after the call");
+        e.register(SET_ACTION_FLAG, |_, _| panic!("a guest exception"));
+        let thrown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| apply(&mut e)));
+        assert!(thrown.is_err());
+        assert!(!e.caller_marked(0x008c_49b7), "gone with the unwinding");
     }
 
     #[test]

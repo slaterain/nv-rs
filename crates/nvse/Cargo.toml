@@ -12,3 +12,8 @@ engine-core = { path = "../engine-core" }
 [dev-dependencies]
 # The opt-in test of the decompiler on the player's FalloutNV.esm scripts.
 esm = { path = "../esm" }
+
+[features]
+# For other crates' tests: commands' argument reads checked against what the reader stored
+# (`Read`'s accessors panic on a read that cannot receive it), and the lambda test helpers.
+test-support = []

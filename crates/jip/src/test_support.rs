@@ -22,6 +22,9 @@ pub fn engine() -> Engine {
     e.map(0x0118_e000, 0x9000);
     e.map(CONSOLE_OPEN & !0xfff, 0x1000);
     e.map(DATA, 0x1_0000);
+    // The processes' vtables (HighProcess 0x01087864, MiddleHighProcess 0x0108904C), where JIP
+    // writes its hit-data routines once installed.
+    e.map(0x0108_7000, 0x3000);
     nvse::table::install(&mut e);
     // The platform's XInputGetState at its import slot, as the host registers it (no controller:
     // ERROR_DEVICE_NOT_CONNECTED), for JIP's wrap there.
@@ -155,4 +158,10 @@ pub fn int_arg(v: i32) -> Vec<u8> {
     let mut b = vec![b'n'];
     b.extend_from_slice(&v.to_le_bytes());
     b
+}
+
+/// A 16-bit code argument (actor value, animation group, ...) as the compiler writes it: the
+/// two bytes alone, no type byte.
+pub fn short_arg(v: u16) -> Vec<u8> {
+    v.to_le_bytes().to_vec()
 }

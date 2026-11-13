@@ -91,12 +91,75 @@ layout! {
         /// `pGrabbedObject` (Xbox PDB; JIP's `grabbedRef`, `// 638`): the reference the player
         /// holds; the constructor `00938180` clears it.
         0x638 pGrabbedObject: u32,
+        /// `p1stPersonAnimation` (engine-fallout-ai `playercharacter.rs`; JIP's
+        /// `animData1stPerson`, `// 690`): `PlayerCharacter::GetAnimation`, `00950a60`, answers
+        /// `[ecx+0x690]` for the first person.
+        0x690 animData1stPerson: u32,
         /// `activeQuest`, `questObjectiveList` and `questTargetList` (JIP LN NVSE, `// 6B8`,
         /// `6BC`, `6C4`): `GetCurrentQuestObjectiveTargets` (`00952BA0`) reads the quest at
         /// +0x6B8 and the objectives at +0x6BC and answers the target list at +0x6C4.
         0x6B8 activeQuest: u32,
         0x6BC questObjectiveList: Inline<ListNode>,
         0x6C4 questTargetList: Inline<ListNode>,
+    }
+
+    /// `Animation` (Xbox PDB; JIP's `AnimData`), 0x13C bytes (engine-fallout-cell
+    /// `animation.rs`): `Animation::StartGroup_ov2`, `004949a0`, reads its actor at `+4`.
+    pub struct Animation: 0x13C {
+        /// `pActorRef` (Xbox PDB).
+        0x04 pActorRef: u32,
+    }
+
+    /// `MiddleHighProcess` (Xbox PDB), 0x25C bytes (engine-fallout-ai `middlehighprocess.rs`),
+    /// and the two `HighProcess` fields JIP's action hook writes (HighProcess is 0x46C bytes).
+    pub struct MiddleHighProcess: 0x46C {
+        /// JIP's `weaponInfo` (`// 114`): the held weapon's `ItemChange`, which the exe's process
+        /// slot `+0x148` answers (engine-fallout-ai `middlehighprocess.rs`).
+        0x114 weaponInfo: u32,
+        /// JIP's `lastHitData` (`// 240`): `MiddleHighProcess::SetLastHitData`, `0092c400`, makes
+        /// the `HitData` there (engine-fallout-ai `middlehighprocess_p2.rs`).
+        0x240 lastHitData: u32,
+        /// `sAnimAction` (engine-fallout-ai `highprocess.rs`; JIP's `currentAction`, `// 2EC`).
+        0x2EC currentAction: i16,
+        /// `pAnimSeq` (engine-fallout-ai `highprocess.rs`; JIP's `currentSequence`, `// 2F0`).
+        0x2F0 currentSequence: u32,
+    }
+
+    /// `BSFadeNode` (Xbox PDB), 0xE4 bytes (engine-bs `bsfadenode.rs`), the field JIP reads.
+    pub struct BSFadeNode: 0xE4 {
+        /// JIP's `linkedObj` (`// CC`): the node's reference.
+        0xCC linkedObj: u32,
+    }
+
+    /// `bhkRagdollController` (Xbox PDB), 0x2C0 bytes (JIP LN NVSE's `internal/havok.h`), the field
+    /// JIP's ragdoll hook reads.
+    pub struct BhkRagdollController: 0x2C0 {
+        /// JIP's `bip01Node` (`// 058`).
+        0x58 bip01Node: u32,
+    }
+
+    /// `TESObjectWEAP` (Xbox PDB), the flag words JIP's ammo hook reads (engine-fallout-forms
+    /// `tesobjectweap.rs`: `data.cFlags` at `+0x100`, the second flags at `+0x12C`).
+    pub struct TESObjectWEAP: 0x388 {
+        /// JIP's `weaponFlags1` (`// 100`).
+        0x100 weaponFlags1: u8,
+        /// JIP's `weaponFlags2` (`// 12C`).
+        0x12C weaponFlags2: u32,
+    }
+
+    /// `BGSProjectile` (Xbox PDB), 0xD0 bytes (engine-fallout-forms `bgsprojectile.rs`): its type.
+    pub struct BGSProjectile: 0xD0 {
+        /// JIP's `projFlags` type word (`// 62`; 2 is a beam).
+        0x62 projectileType: u16,
+    }
+
+    /// `Projectile` (Xbox PDB), 0x150 bytes (engine-fallout-ai `projectile.rs`).
+    pub struct Projectile: 0x150 {
+        /// `TESObjectREFR::data.Location` (Xbox PDB; JIP's `position`, `// 30`).
+        0x30 position: u32,
+        /// `ImpactList` (Xbox PDB): a `BSSimpleList` with its first node inline; JIP reads the
+        /// first node's item (an `ImpactData`, its position at `+4`).
+        0x88 impactDataList: u32,
     }
 
     /// `OSInputGlobals` (JIP LN NVSE; the exe's `Controls`, `*0x011F35CC`), 0x1C04 bytes: the
@@ -161,9 +224,19 @@ layout! {
 
     /// `HitData` (Xbox PDB; JIP's `ActorHitData`), 0x64 bytes (engine-fallout-ai `hitdata.rs`).
     pub struct ActorHitData: 0x64 {
+        /// `pAggressor` (Xbox PDB; JIP's `source`).
+        0x00 pAggressor: u32,
+        /// `pTarget` (Xbox PDB).
+        0x04 pTarget: u32,
+        /// `eDamageLimb` (Xbox PDB; JIP's `hitLocation`, `// 10`).
+        0x10 eDamageLimb: u32,
+        /// `pWeapon` (Xbox PDB).
+        0x30 pWeapon: u32,
+        /// `uiFlags` (Xbox PDB; `kFlag_IsCritical` is 4).
+        0x58 uiFlags: u32,
         /// `iRefCount` in the Xbox PDB; JIP calls it unused (`unk60`) and its `CopyHitDataHook`
-        /// (step 3.5) writes the hit location there. Until that hook exists this is the game's
-        /// own word, not a location.
+        /// (`actor_hooks`, in the processes' vtables once JIP answers "installed") writes the hit
+        /// location there. Until then this is the game's own word, not a location.
         0x60 hitLocation: i32,
     }
 
@@ -246,8 +319,12 @@ layout! {
     /// engine-fallout-ai `actor.rs`); `Actor::Actor`, `0087d4a0`, writes none of `+0x105` to
     /// `+0x107` (JIP LN NVSE's `jipActorFlags1..3`, `// 105`).
     pub struct JipActorFlags: 0x1B4 {
-        /// `kHookActorFlag2_*` (`internal/hooks.h` (JIP LN NVSE)).
+        /// `kHookActorFlag1_*` (`internal/hooks.h` (JIP LN NVSE)).
+        0x105 jipActorFlags1: u8,
+        /// `kHookActorFlag2_*`.
         0x106 jipActorFlags2: u8,
+        /// `kHookActorFlag3_*`: the actor's own events (`SetOn...EventHandler` with an actor).
+        0x107 jipActorFlags3: u8,
     }
 
     /// `Menu` (Xbox PDB), the field JIP reads: the menu's id, which `TileMenu::PostParse`,
