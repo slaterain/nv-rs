@@ -11488,7 +11488,8 @@ mod tests {
         e.call(0x00c7c150, &args![this, 0u32]);
         assert_eq!(RAGDOLL_SEEN.with(|s| s.take()), [vec![this, 1]]);
         e.mem.set_u8(this + 0x42, 1);
-        e.mem.set_u32(this + 0xa4, e.mem.alloc(0x10));
+        let bones = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xa4, bones);
         let skeleton = e.mem.alloc(0x40);
         let owner = e.mem.alloc(0x40);
         e.mem.set_u32(owner + 0xc, skeleton);

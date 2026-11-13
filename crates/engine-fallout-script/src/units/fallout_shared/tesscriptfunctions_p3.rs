@@ -5644,7 +5644,10 @@ mod tests {
         NO_RESET_SEEN.with(|s| s.take());
         let a = script(&mut e, actor);
         assert!(e.call(0x005c_6b60, &args![a]).bool());
-        assert!(NO_RESET_SEEN.with(|s| s.borrow().is_empty()), "not an actor");
+        assert!(
+            NO_RESET_SEEN.with(|s| s.borrow().is_empty()),
+            "not an actor"
+        );
     }
 
     /// The engine of the NPC-copy command: the reference `0x40` is an actor

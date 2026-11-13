@@ -20237,7 +20237,10 @@ mod tests {
         e.add_hook_user(Hook::NoHealthReset, true);
         e.call_log = Some(vec![]);
         actor_restore_full_health_and_conditions(&mut e, actor);
-        assert!(e.call_log.as_ref().is_some_and(|l| l.is_empty()), "answered");
+        assert!(
+            e.call_log.as_ref().is_some_and(|l| l.is_empty()),
+            "answered"
+        );
         assert_eq!(RESTORE_SEEN.with(|s| s.take()), [vec![actor.addr()]]);
         RESTORE_ANSWER.with(|c| c.set(None));
         actor_restore_full_health_and_conditions(&mut e, actor);
@@ -20607,8 +20610,6 @@ mod tests {
             Ptr::new(seen),
             9,
             0,
-            0,
-            Ptr::new(seen_line),
             0,
             Ptr::new(seen_line),
         )

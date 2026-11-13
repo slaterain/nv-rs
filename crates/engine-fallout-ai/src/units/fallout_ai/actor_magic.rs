@@ -3967,7 +3967,12 @@ mod tests {
         let effect = e.mem.alloc(0x100);
         let other_actor = e.mem.alloc(0x100);
         e.register_double(RT_DYNAMIC_CAST, move |_, a| {
-            (if a[3] == TYPE_ACTOR { other_actor } else { a[0] }).into_ret()
+            (if a[3] == TYPE_ACTOR {
+                other_actor
+            } else {
+                a[0]
+            })
+            .into_ret()
         });
         e.register(FN_008ACE90, |_, _| Ret::default());
         e.register(FN_008230F0, |_, _| 1u32.into_ret());
@@ -3988,7 +3993,11 @@ mod tests {
         };
         let flag = vec![other_actor, w.actor + 0x44, 0x80];
         assert!(apply(&mut e));
-        assert_eq!(HIT_SEEN.with(|s| s.take()), [flag.clone()], "no user");
+        assert_eq!(
+            HIT_SEEN.with(|s| s.take()),
+            std::slice::from_ref(&flag),
+            "no user"
+        );
         e.add_hook_user(Hook::OnHitEvent, true);
         assert!(apply(&mut e));
         assert_eq!(HIT_SEEN.with(|s| s.take()), [vec![1], flag, vec![0]]);

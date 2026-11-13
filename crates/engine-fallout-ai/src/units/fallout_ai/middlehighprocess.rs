@@ -12807,7 +12807,11 @@ mod tests {
         let equip = vec![a, weapon, 1, 0, 0, 0, 0];
         queue_one(&mut e, p, weapon, 1);
         middle_high_process_resolve_equipment_queue(&mut e, p, a);
-        assert_eq!(QUEUE_SEEN.with(|s| s.take()), [equip.clone()], "no user");
+        assert_eq!(
+            QUEUE_SEEN.with(|s| s.take()),
+            std::slice::from_ref(&equip),
+            "no user"
+        );
         e.add_hook_user(Hook::LockEquipment, true);
         queue_one(&mut e, p, weapon, 1);
         middle_high_process_resolve_equipment_queue(&mut e, p, a);

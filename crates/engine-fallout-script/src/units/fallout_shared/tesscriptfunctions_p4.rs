@@ -7177,7 +7177,10 @@ mod tests {
         );
         e.mem.set_u8(actor + 0xfd, 1);
         assert!(run(&mut e, 0x005c_d650, a));
-        assert!(COMBAT_STYLE_SEEN.with(|s| s.take()).is_empty(), "a creature");
+        assert!(
+            COMBAT_STYLE_SEEN.with(|s| s.take()).is_empty(),
+            "a creature"
+        );
     }
 
     #[test]

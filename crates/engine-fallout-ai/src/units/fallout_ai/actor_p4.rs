@@ -8094,6 +8094,8 @@ mod tests {
         e.call(0x008a_73e0, &args![actor, 3i32, 9u32]);
         assert_eq!(told(&mut e), 1, "no answer: told");
         JIP_SEEN.with(|s| s.take());
+        // No animation and no process: neither seam.
+        e.register(GET_ANIMATION, |_, _| Ret::default());
         let bare = new_actor(&mut e);
         e.call(0x008a_73e0, &args![bare, 3i32, 0u32]);
         assert!(JIP_SEEN.with(|s| s.borrow().is_empty()), "no process");

@@ -440,7 +440,10 @@ mod n025_tests {
         UNEQUIP_SEEN.with(|s| s.take());
         e.mem.set_u32(this + 0x10, 0x66);
         assert_eq!(run(&mut e), 0);
-        assert!(UNEQUIP_SEEN.with(|s| s.borrow().is_empty()), "a weapon queued");
+        assert!(
+            UNEQUIP_SEEN.with(|s| s.borrow().is_empty()),
+            "a weapon queued"
+        );
     }
 
     #[test]

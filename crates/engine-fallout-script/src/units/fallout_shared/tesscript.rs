@@ -2913,8 +2913,9 @@ pub fn script_set_action_flag(e: &mut Engine, form: u32, extra_list: Ptr, flags:
             }
         }
         if e.call(EXTRA_LIST_SCRIPT_LOCALS, &args![extra_list]).u32() != 0 {
-            let locals =
-                Ptr::<ScriptLocals>::new(e.call(EXTRA_LIST_SCRIPT_LOCALS, &args![extra_list]).u32());
+            let locals = Ptr::<ScriptLocals>::new(
+                e.call(EXTRA_LIST_SCRIPT_LOCALS, &args![extra_list]).u32(),
+            );
             let merged = if e.hook_users(Hook::MergeEventMask) != 0 {
                 e.site(0x005a_c782, &[locals.addr(), form, flags])
             } else {
@@ -7176,16 +7177,12 @@ mod tests {
         use engine_core::extend::Hook;
         let (mut e, _, extra) = action_flag_seams();
         e.add_hook_user(Hook::OnHitEvent, true);
-        assert!(e
-            .call(0x005a_c750, &args![0x10u32, extra, 0x80u32])
-            .bool());
+        assert!(e.call(0x005a_c750, &args![0x10u32, extra, 0x80u32]).bool());
         assert!(!e.call(0x005a_c750, &args![0x10u32, 0u32, 0x80u32]).bool());
         e.add_hook_user(Hook::MarkScriptEvent, true);
         ANSWER.with(|c| c.set([Some(1), None]));
         e.register(EXTRA_LIST_SCRIPT_LOCALS, |_, _| ret(0));
-        assert!(e
-            .call(0x005a_c750, &args![0x10u32, extra, 0x80u32])
-            .bool());
+        assert!(e.call(0x005a_c750, &args![0x10u32, extra, 0x80u32]).bool());
         assert_eq!(
             SEEN.with(|s| s.take()),
             [

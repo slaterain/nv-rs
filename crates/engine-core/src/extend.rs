@@ -1114,6 +1114,26 @@ impl Engine {
             }
         }
     }
+
+    /// `hook` on or off as JIP's `HookInfo::Set` (`HOOK_SET`) does: the count becomes 1 (`on`) or
+    /// 0 when the hook's state changes, and stays as it is when it is already on (any count
+    /// above 0) or off.
+    pub fn set_hook(&self, hook: Hook, on: bool) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let count = &self.extend.hooks.0[hook as usize];
+        let mut old = count.load(Relaxed);
+        while (old != 0) != on {
+            match count.compare_exchange_weak(old, u32::from(on), Relaxed, Relaxed) {
+                Ok(_) => return,
+                Err(now) => old = now,
+            }
+        }
+    }
+
+    /// `hook`'s count set to `users` (JIP's `HookInfo::SetCount`, without patching anything).
+    pub fn set_hook_users(&self, hook: Hook, users: u32) {
+        self.extend.hooks.0[hook as usize].store(users, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 impl Default for ExtendState {
@@ -2141,6 +2161,26 @@ mod tests {
         assert_eq!(t.hook_users(Hook::MenuState), 1, "a later change is seen");
         assert_eq!(t.add_hook_user(Hook::GetModelPath, true), 1);
         assert_eq!(e.hook_users(Hook::GetModelPath), 1);
+    }
+
+    /// `HOOK_SET`: on makes an off hook's count 1 and leaves an on one's; off makes any count 0.
+    /// `SetCount` stores the count.
+    #[test]
+    fn hooks_set_on_and_off_and_counts_set() {
+        let e = engine();
+        e.set_hook(Hook::RemoveAmmo, true);
+        assert_eq!(e.hook_users(Hook::RemoveAmmo), 1);
+        e.add_hook_user(Hook::RemoveAmmo, true);
+        e.add_hook_user(Hook::RemoveAmmo, true);
+        e.set_hook(Hook::RemoveAmmo, true);
+        assert_eq!(e.hook_users(Hook::RemoveAmmo), 3, "already on: kept");
+        e.set_hook(Hook::RemoveAmmo, false);
+        assert_eq!(e.hook_users(Hook::RemoveAmmo), 0);
+        e.set_hook(Hook::RemoveAmmo, false);
+        assert_eq!(e.hook_users(Hook::RemoveAmmo), 0);
+        e.set_hook_users(Hook::OnRagdoll, 5);
+        assert_eq!(e.hook_users(Hook::OnRagdoll), 5);
+        assert_eq!(e.hook_users(Hook::RemoveAmmo), 0, "one word per hook");
     }
 
     /// The real seam table names the sites of ADR-0016 §12 for `nvse`.

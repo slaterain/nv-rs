@@ -13510,7 +13510,11 @@ mod tests {
             Ret::default()
         });
         actor_queue_equip_object(&mut e, actor, item, 1, Ptr::new(0), 0, 0, 0);
-        assert_eq!(JIP_SEEN.with(|s| s.take()), [(ACTOR_EAT, vec![])], "no user");
+        assert_eq!(
+            JIP_SEEN.with(|s| s.take()),
+            [(ACTOR_EAT, vec![])],
+            "no user"
+        );
         e.add_hook_user(Hook::EquipAidItem, true);
         actor_queue_equip_object(&mut e, actor, item, 1, Ptr::new(0), 0, 0, 0);
         assert_eq!(

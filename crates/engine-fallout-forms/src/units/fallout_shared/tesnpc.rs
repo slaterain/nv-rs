@@ -9957,7 +9957,10 @@ mod tests {
         let biped = e.mem.alloc(0x400);
         let player = e.mem.alloc(0x100);
         e.set_global(PLAYER_SINGLETON, player);
-        e.on_site(SiteSlot::new(Owner::Jip, 0x0060_6540), rebuild_entry_handler);
+        e.on_site(
+            SiteSlot::new(Owner::Jip, 0x0060_6540),
+            rebuild_entry_handler,
+        );
         e.on_site(SiteSlot::new(Owner::Jip, 0x0060_678f), rebuild_call_handler);
         e.on_site(
             SiteSlot::new(Owner::Jip, 0x0060_47c0),

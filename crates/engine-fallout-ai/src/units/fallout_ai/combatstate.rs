@@ -8968,7 +8968,10 @@ mod tests {
         e.register(0x0040_4010, |_, a| {
             st0(f32::from_bits(a[0]).max(f32::from_bits(a[1])) as f64)
         });
-        e.on_site(SiteSlot::new(Owner::Jip, 0x0099_9857), weapon_switch_handler);
+        e.on_site(
+            SiteSlot::new(Owner::Jip, 0x0099_9857),
+            weapon_switch_handler,
+        );
         SWITCH_ANSWER.with(|c| c.set(Some(1)));
         fn_009993c0(&mut e, f.state);
         assert!(SWITCH_SEEN.with(|s| s.borrow().is_empty()), "no user");
