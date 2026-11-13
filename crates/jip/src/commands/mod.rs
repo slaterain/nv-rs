@@ -28,6 +28,7 @@ pub mod jip_fn_land_texture;
 pub mod jip_fn_light;
 pub mod jip_fn_package;
 pub mod jip_fn_perk;
+pub mod jip_fn_quest;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_water;
 pub mod jip_fn_weapon;
@@ -73,6 +74,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_light::COMMANDS,
     jip_fn_package::COMMANDS,
     jip_fn_perk::COMMANDS,
+    jip_fn_quest::COMMANDS,
     jip_fn_texture_set::COMMANDS,
     jip_fn_water::COMMANDS,
     jip_fn_weapon::COMMANDS,
@@ -541,6 +543,7 @@ mod tests {
             "jip_fn_light",
             "jip_fn_package",
             "jip_fn_perk",
+            "jip_fn_quest",
             "jip_fn_texture_set",
             "jip_fn_water",
             "jip_fn_weapon",
@@ -552,6 +555,7 @@ mod tests {
             "ln_fn_map_marker",
             "ln_fn_perk",
             "ln_fn_race",
+            "ln_fn_recipe",
             "ln_fn_weapon",
         ];
         let mut seen = std::collections::HashSet::new();

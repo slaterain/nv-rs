@@ -767,9 +767,14 @@ layout! {
     pub struct ObjectiveTarget: 0x48 {
         0x04 conditions: Inline<ListNode>,
         0x0C target: u32,
-        0x10 data: u32,
-        0x24 linksData: u32,
-        0x28 linksSize: u32,
+        0x10 data: Inline<ObjectiveTargetData>,
+    }
+
+    /// `BGSQuestObjective::Target::Data` (JIP LN NVSE), 0x38 bytes: its teleport links, a
+    /// `BSSimpleArray` at +0x10 (data +0x14, size +0x18).
+    pub struct ObjectiveTargetData: 0x38 {
+        0x14 linksData: u32,
+        0x18 linksSize: u32,
     }
 
     /// `ImageSpaceModifierInstance(Form)` (JIP LN NVSE, from its header only: only read here):
