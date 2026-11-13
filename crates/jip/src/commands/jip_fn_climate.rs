@@ -15,6 +15,7 @@ use super::{
     assign_string, buffer_arg, heap_alloc, heap_free, model_path, set_form_result, set_model_path,
     string_set, string_text, type_of, Handlers,
 };
+use super::{list_count, nth_item};
 use crate::console::print_form;
 use crate::game::ListNode;
 use engine_core::prelude::*;
@@ -202,36 +203,6 @@ fn set_climate_trait_numeric(e: &mut Engine, w: &[u32]) -> Ret {
         }
     }
     handled(true)
-}
-
-/// `tList::Count` (JIP LN NVSE): 0 for an empty first node, else every node.
-fn list_count(e: &Engine, head: Ptr<ListNode>) -> u32 {
-    if e.get(head, ListNode::data) == 0 {
-        return 0;
-    }
-    let mut count = 1;
-    let mut node = e.get(head, ListNode::next);
-    while node != 0 {
-        count += 1;
-        node = e.get(Ptr::<ListNode>::new(node), ListNode::next);
-    }
-    count
-}
-
-/// `tList::GetNthItem` (JIP LN NVSE): the item of node `index` (a negative index none), 0 past
-/// the end.
-fn nth_item(e: &Engine, head: Ptr<ListNode>, index: i32) -> u32 {
-    if index < 0 {
-        return 0;
-    }
-    let mut node = head;
-    for _ in 0..index {
-        node = Ptr::new(e.get(node, ListNode::next));
-        if node.is_null() {
-            return 0;
-        }
-    }
-    e.get(node, ListNode::data)
 }
 
 fn weathers(c: Ptr<TESClimate>) -> Ptr<ListNode> {

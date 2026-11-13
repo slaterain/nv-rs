@@ -218,3 +218,130 @@ pub const BASE_COMPONENT_OFFSETS: [u32; 121] = [
     0x00000006, 0x00000B06, 0x00000006, 0x0F00200C, 0x0F00000C, 0x00000006, 0x00000000, 0x00000000,
     0x00000000,
 ];
+
+layout! {
+    /// Any game object with a vtable: its vtable word (JIP's `IS_TYPE` compares it).
+    pub struct Object: 0x04 {
+        0x00 vtbl: u32,
+    }
+
+    /// `TESAmmo` (JIP LN NVSE), checked in its loader (`00502CD0`): `DATA` (8 bytes) at +0xA8,
+    /// `DAT2` (0x14 bytes: projectiles per shot, projectile, weight, casing, casing chance) at
+    /// +0xB0; the clip rounds component at +0x80 (its count at +4).
+    pub struct TESAmmo: 0xDC {
+        0xA8 speed: f32,
+        /// `clipRounds.clipRounds` (JIP LN NVSE).
+        0x84 clipRounds: u8,
+        0xB0 projPerShot: u32,
+        0xB4 projectile: u32,
+        0xBC casingItem: u32,
+        0xC0 casingChance: f32,
+        /// `effectList` (JIP LN NVSE): a `tList<TESAmmoEffect>`, its first node inline.
+        0xD4 effectList: Inline<ListNode>,
+    }
+
+    /// `TESAmmoEffect` (JIP LN NVSE), 0x30 bytes.
+    pub struct TESAmmoEffect: 0x30 {
+        0x24 effectType: u32,
+        0x28 operation: u32,
+        0x2C value: f32,
+    }
+
+    /// `TESClass` (JIP LN NVSE), checked in its loader (`005F6930`: `DATA`, 0x1C bytes, at
+    /// +0x44: the four tag skills, the flags +0x54, the services +0x58, +0x5C, +0x5D);
+    /// `TESAttributes` at +0x38, its seven bytes from +4.
+    pub struct TESClass: 0x60 {
+        /// `attributes.attributes[7]` (JIP LN NVSE).
+        0x3C attributes: u8,
+        /// `tagSkills[4]` (JIP LN NVSE).
+        0x44 tagSkills: u32,
+        0x54 classFlags: u32,
+        0x58 services: u32,
+    }
+
+    /// `TESGrass` (JIP LN NVSE), checked in its loader (`00509F80`): `MODL` at +0x30, `DATA`
+    /// (0x20 bytes) at +0x48.
+    pub struct TESGrass: 0x68 {
+        0x30 model: Inline<TESModel>,
+        0x48 density: u8,
+        0x49 minSlope: u8,
+        0x4A maxSlope: u8,
+        0x4C unitFromWaterAmount: u16,
+        0x50 unitFromWaterType: u8,
+        0x54 positionRange: f32,
+        0x58 heightRange: f32,
+        0x5C colorRange: f32,
+        0x60 wavePeriod: f32,
+        0x64 grassFlags: u8,
+    }
+
+    /// `TESObjectLIGH` (JIP LN NVSE), checked in its loader (`0050CAF0`): `DATA` (0x18 bytes:
+    /// time, radius, colour, flags, falloff, field of view) at +0x9C, `FNAM` (fade) at +0xB4.
+    pub struct TESObjectLIGH: 0xC8 {
+        0xA0 radius: u32,
+        0xA4 red: u8,
+        0xA5 green: u8,
+        0xA6 blue: u8,
+        0xA8 lightFlags: u32,
+        0xAC falloffExp: f32,
+        0xB0 fov: f32,
+        0xB4 fadeValue: f32,
+    }
+
+    /// `TESWaterForm` (JIP LN NVSE), checked in its loader (`0057EF80`: the noise texture
+    /// `NNAM` at +0x64, `FNAM` at +0x71); the sound and drink effect as JIP's header gives them.
+    pub struct TESWaterForm: 0x194 {
+        0x064 noiseMap: Inline<TESTexture>,
+        0x07C sound: u32,
+        0x178 drinkEffect: u32,
+    }
+
+    /// `BGSTextureSet` (JIP LN NVSE), checked in its loader (`005928A0`: `TX00`-`TX05` at
+    /// +0x38 in 0xC steps, `DNAM` at +0x84); the decal data (`DODT`) pointed to from +0x80.
+    pub struct BGSTextureSet: 0xA0 {
+        /// `textures[6]` (JIP LN NVSE).
+        0x38 textures: Inline<TESTexture>,
+        0x80 decalInfo: u32,
+        0x84 texFlags: u16,
+    }
+
+    /// `DecalInfo` (JIP LN NVSE): seven floats (widths, heights, depth, shininess, parallax
+    /// scale), the parallax passes, the flags and the colour.
+    pub struct DecalInfo: 0x24 {
+        0x00 minWidth: f32,
+        0x1C parallaxPasses: u8,
+        0x1D flags: u8,
+        0x20 color: u32,
+    }
+}
+
+/// Vtables JIP's `IS_TYPE` compares (`kVtbl_*` (JIP LN NVSE), `internal/class_vtbls.h`).
+pub const TES_AMMO_VTBL: u32 = 0x0102_6064;
+
+/// More form types (`kFormType_*` (JIP LN NVSE)).
+pub mod form_type_more {
+    pub const BGS_TEXTURE_SET: u8 = 0x04;
+    pub const TES_SOUND: u8 = 0x0d;
+    pub const SPELL_ITEM: u8 = 0x14;
+    pub const TES_OBJECT_LIGH: u8 = 0x1e;
+    pub const TES_GRASS: u8 = 0x24;
+    pub const BGS_PROJECTILE: u8 = 0x33;
+    pub const TES_WATER_FORM: u8 = 0x4e;
+    pub const TES_AMMO_EFFECT: u8 = 0x72;
+}
+
+/// `kInventoryType` (JIP LN NVSE, `internal/jip_core.cpp`): per form type, whether it is an
+/// item that can be in an inventory.
+pub const INVENTORY_TYPE: [bool; 121] = {
+    let mut t = [false; 121];
+    let items = [
+        0x18, 0x19, 0x1a, 0x1d, 0x1e, 0x1f, 0x28, 0x29, 0x2e, 0x2f, 0x31, 0x32, 0x34, 0x67, 0x6c,
+        0x73, 0x74,
+    ];
+    let mut i = 0;
+    while i < items.len() {
+        t[items[i]] = true;
+        i += 1;
+    }
+    t
+};
