@@ -410,6 +410,13 @@ trait Common {
     /// from the exe in the last bits (the culling family's own tests compare it there, within their
     /// tolerance). The scene family's maths, compared on that word, runs it translated.
     fn culling_translated(self, function: u32) -> Diff;
+    /// [`Common::culling_translated`] with this family's functions the scene family calls by address too
+    /// ([`SCENE_DISPATCH_CALLED`]), so the scene family's own work compares bit for bit on the main
+    /// thread's word: this family's native rotate (004b4500) and transform product round a sum of
+    /// products once where the exe's 24-bit code rounds each step (their own tests compare them there).
+    /// Found when the Diff harness began seeding the control word's thread-block copy: before, a C
+    /// runtime call drifted these runs to 53 bits.
+    fn scene_alone(self, function: u32) -> Diff;
 }
 
 impl Common for Diff {
@@ -420,17 +427,43 @@ impl Common for Diff {
     fn culling_translated(self, function: u32) -> Diff {
         families(self.goes_by_address(CULLING_CALLED), function)
     }
+
+    fn scene_alone(self, function: u32) -> Diff {
+        scene_families(
+            self.goes_by_address(CULLING_CALLED)
+                .goes_by_address(SCENE_DISPATCH_CALLED),
+            function,
+        )
+    }
 }
+
+/// This family's functions the scene family calls: the spin lock, the controller and children walks'
+/// getters, the rotate and the transform product, and the rest of its calls into this family.
+const SCENE_DISPATCH_CALLED: &[u32] = &[
+    0x0040_fba0,
+    0x0040_fbf0,
+    0x0043_b480,
+    0x0043_b4a0,
+    0x0045_cec0,
+    0x004b_4500,
+    0x004e_ff50,
+    0x0062_c250,
+    0x00a5_dd70,
+];
 
 /// [`Common`]'s families but culling, the plain callees of `function`'s translation, and the rest.
 fn families(d: Diff, function: u32) -> Diff {
+    scene_families(d.family(&dispatch::DISPATCH), function)
+}
+
+/// [`families`] but this one.
+fn scene_families(d: Diff, function: u32) -> Diff {
     let mut callees = vec![0x0040_19d0, 0x0040_8860];
     if let Some((_, more)) = PLAIN.iter().find(|(f, _)| *f == function) {
         callees.extend_from_slice(more);
     }
     callees.retain(|c| *c != function);
-    d.family(&dispatch::DISPATCH)
-        .family(&engine_typed::scene::SCENE)
+    d.family(&engine_typed::scene::SCENE)
         .family(&pathing::PATHING)
         .family(&leaf::LEAVES)
         .translation_calls_plainly(&callees)
@@ -2801,10 +2834,10 @@ fn scene_skin_bound() {
         0x00a8_6530,
         engine_typed::scene::skin::skin_bound(Ptr<_>, Ptr<_>)
     ))
-    .culling_translated(0x00a8_6530)
-    .control_words(&[MAIN_THREAD])
+    // This family's rotate (004b4500) and transform product by address too ([`Common::scene_alone`]).
+    .scene_alone(0x00a8_6530)
     // The transform product copies the scale as it is (a signalling NaN radius's scale keeps its payload).
-    .allow_nan_payloads()
+    .main_thread(0)
     .inputs(&inputs(&[
         &[
             Input::Of(&[0, 1, 2, 3]),
@@ -2857,15 +2890,16 @@ fn scene_skin_bound_from_culling() {
     })
     .run()
     .assert_same();
-    // Under the main thread's with the culling family's other functions by address
-    // ([`Common::culling_translated`]): the bound moved by the world transform and the skin's merges run
-    // translated (their native sums part from the exe in the last bits there, which their own tests
-    // compare); this function's own work, bit for bit.
+    // Under the main thread's with the culling family's other functions and this family's rotate
+    // (004b4500) and transform product by address ([`Common::scene_alone`]): the bound moved by the world
+    // transform, the skin's merges and the transform inverse's rotate run translated (their native sums
+    // part from the exe in the last bits there, which their own tests compare); this function's own work,
+    // bit for bit.
     let report = Diff::new(entry!(
         0x00a8_0710,
         culling::update::geometry_update_world_bound(Ptr<_>)
     ))
-    .culling_translated(0x00a8_0710)
+    .scene_alone(0x00a8_0710)
     .main_thread(0)
     .inputs(&inputs(&[
         &[
@@ -2891,11 +2925,33 @@ fn scene_skin_bound_from_culling() {
 
 #[test]
 fn scene_transform_inverse() {
+    // Under the other threads' control word bit for bit, NaN payloads aside.
     Diff::new(entry!(
         0x008b_42e0,
         engine_typed::scene::skin::transform_inverse(Ptr<_>, Ptr<_>)
     ))
     .common(0x008b_42e0)
+    .other_threads()
+    .inputs(&inputs(&[&P3, &[Input::F32Swept(TWO)]]))
+    .max_cases(128)
+    .setup(|e, case| {
+        stand_ins(e);
+        let t = transform(e, case, 0);
+        e.mem.set_u32(t + 0x28, bits(case, 2));
+        e.mem.set_u32(t + 0x2c, bits(case, 3));
+        vec![t, e.mem.alloc(0x34)]
+    })
+    .run()
+    .assert_same();
+    // Under the main thread's with this family's rotate (004b4500) by address ([`Common::scene_alone`]):
+    // its sum of products rounds once where the exe rounds each step to 24 bits (its own tests compare it
+    // there); the scene family's own work, bit for bit (NaN payloads aside).
+    Diff::new(entry!(
+        0x008b_42e0,
+        engine_typed::scene::skin::transform_inverse(Ptr<_>, Ptr<_>)
+    ))
+    .scene_alone(0x008b_42e0)
+    .main_thread(0)
     .inputs(&inputs(&[&P3, &[Input::F32Swept(TWO)]]))
     .max_cases(128)
     .setup(|e, case| {

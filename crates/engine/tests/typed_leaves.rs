@@ -401,6 +401,7 @@ fn plane_side_each_way() {
 fn ctrlfp() {
     Diff::new(entry!(0x00ed_5abb, leaf::ctrlfp(u32, u32) -> i32))
         .family(&leaf::LEAVES)
+        .sets_control_word()
         .inputs(&[
             Input::Of(&[0, 0x7f, 0x27f, 0xc7f, 0x1f7f, 0x0001_8000, u32::MAX]),
             Input::Of(&[0, 0x300, 0xc00, 0xffff, u32::MAX]),
@@ -414,6 +415,7 @@ fn ctrlfp() {
 fn ctrlfp_sign_extends_the_old_word() {
     Diff::new(entry!(0x00ed_5abb, leaf::ctrlfp(u32, u32) -> i32))
         .family(&leaf::LEAVES)
+        .sets_control_word()
         .inputs(&[Input::Of(&[0x7f, 0x27f])])
         .setup(|e, case| {
             // The word in the thread block (`x87_control_word`): marked as set, with bit 15 up, which a
@@ -430,6 +432,7 @@ fn ctrlfp_sign_extends_the_old_word() {
 fn load_math_control_word() {
     Diff::new(entry!(0x00ed_2795, leaf::load_math_control_word(u32)))
         .family(&leaf::LEAVES)
+        .sets_control_word()
         .inputs(&[Input::Of(&[
             0,
             0x7f,

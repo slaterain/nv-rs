@@ -410,6 +410,8 @@ pub struct Diff {
     by_address: Vec<u32>,
     local_words: Vec<LocalWord>,
     control_words: Option<Vec<u16>>,
+    /// [`Diff::sets_control_word`]: the function under test changes the control word on purpose.
+    sets_control_word: bool,
     max_cases: usize,
     stop_cases: Option<StopCases>,
     stack_bytes: u32,
@@ -435,6 +437,7 @@ impl Diff {
             by_address: Vec::new(),
             local_words: Vec::new(),
             control_words: None,
+            sets_control_word: false,
             max_cases: 512,
             stop_cases: None,
             stack_bytes: 64,
@@ -554,6 +557,14 @@ impl Diff {
     /// [`MAIN_THREAD`].
     pub fn control_words(mut self, words: &[u16]) -> Diff {
         self.control_words = Some(words.to_vec());
+        self
+    }
+
+    /// The function under test sets the x87 control word on purpose (the C runtime's `_ctrlfp`, its
+    /// math bodies' word load and exit): its word after the call need not be the case's. The two
+    /// sides' words after the call still compare.
+    pub fn sets_control_word(mut self) -> Diff {
+        self.sets_control_word = true;
         self
     }
 
@@ -728,6 +739,22 @@ impl Diff {
             Branch::ByAddress,
             report,
         );
+        // The case's word holds through the call on both sides, or the comparison ran another precision
+        // than the one it names.
+        let held = (word & 0x1f3f) | 0x40;
+        if !self.sets_control_word
+            && translation.stop.is_none()
+            && typed.stop.is_none()
+            && (translation.control_word != held || typed.control_word != held)
+        {
+            let (translation, typed) = (translation.control_word, typed.control_word);
+            report.note(
+                case,
+                word,
+                Branch::ByAddress,
+                Found::WordChanged { translation, typed },
+            );
+        }
         // Each `typed_call!`'s direct branch, against the same function by address. Only where debug
         // assertions make the macro note its calls, so the logs can match.
         if cfg!(debug_assertions) {
@@ -830,6 +857,10 @@ impl Diff {
         // blocks after it: a typed version with native locals may never make them.
         e.with_stack(8, |_, _| ());
         e.tls();
+        // The case's word in the thread block's copy too, which `FSTCW` reads and a callee that saves
+        // and restores the word (the C runtime's `fabs`, `floor`, `sqrt`) restores; before the setup, so
+        // a setup can still place another word there on purpose.
+        crate::units::crt::set_x87_control_word(&mut e, word);
         // What a setup can't replace: see `translation_calls_plainly` and `family`.
         let mut watched = self.plain_callees.clone();
         for family in &self.families {
@@ -1540,7 +1571,9 @@ fn comparable_page(
 
 /// Every word that reads as an `f32` NaN becomes one NaN; one that reads as the high word of an
 /// `f64` NaN also clears the word below it. An `f64` infinity (high word 0x7ff00000, low word 0)
-/// is left alone, so it still differs from a NaN.
+/// is left alone, so it still differs from a NaN. Each word is read with the float's quiet bit set,
+/// so a signalling NaN on one side and its quieted copy on the other (the x87 quiets what it moves,
+/// native code copies it as it is) decide alike: 0x7fb00000 and 0x7ff00000 both clear the word below.
 fn canonical_nans(words: &mut [u32]) {
     for i in 0..words.len() {
         let word = words[i];
@@ -1548,10 +1581,12 @@ fn canonical_nans(words: &mut [u32]) {
         if magnitude <= 0x7f80_0000 {
             continue;
         }
-        if magnitude == 0x7ff0_0000 && i > 0 && words[i - 1] == 0 {
+        let quiet = magnitude | 0x0040_0000;
+        if quiet == 0x7ff0_0000 && i > 0 && words[i - 1] == 0 {
+            words[i] = word | 0x0040_0000;
             continue;
         }
-        if magnitude >= 0x7ff0_0000 && i > 0 {
+        if quiet >= 0x7ff0_0000 && i > 0 {
             words[i - 1] = 0;
         }
         words[i] = 0x7fc0_0000;
@@ -1832,6 +1867,8 @@ pub enum Found {
     },
     /// The control word after the call.
     ControlWord { translation: u16, typed: u16 },
+    /// A side's control word after the call is not the case's.
+    WordChanged { translation: u16, typed: u16 },
     /// The clock after the call, milliseconds and microseconds.
     Clock {
         translation: (u32, u32),
@@ -1929,6 +1966,10 @@ impl fmt::Display for Difference {
             Found::ControlWord { translation, typed } => write!(
                 f,
                 "control word after: translation {translation:04x}, typed {typed:04x}"
+            ),
+            Found::WordChanged { translation, typed } => write!(
+                f,
+                "control word after differs from the case's: translation {translation:04x}, typed {typed:04x}"
             ),
             Found::Clock { translation, typed } => write!(
                 f,
@@ -2575,7 +2616,7 @@ mod tests {
         );
     }
 
-    /// A control word left changed.
+    /// A control word left changed: the sides differ, and the typed side's word is not the case's.
     #[test]
     fn a_changed_control_word_is_caught() {
         fn leaves_it(_: &mut Engine) {}
@@ -2586,7 +2627,7 @@ mod tests {
             .translation(crate::entry!(0x0040_2000, leaves_it()).1)
             .control_words(&[OTHER_THREADS])
             .run();
-        assert_eq!(report.found, 1, "{report}");
+        assert_eq!(report.found, 2, "{report}");
         assert_eq!(
             report.first[0].what,
             Found::ControlWord {
@@ -2594,6 +2635,57 @@ mod tests {
                 typed: MAIN_THREAD,
             }
         );
+        assert_eq!(
+            report.first[1].what,
+            Found::WordChanged {
+                translation: OTHER_THREADS,
+                typed: MAIN_THREAD,
+            }
+        );
+    }
+
+    /// Both sides changing the word alike still fail: the comparison ran at another precision than
+    /// the case's from that point on.
+    #[test]
+    fn a_word_changed_alike_is_caught() {
+        fn changes_it(_: &mut Engine) {
+            crate::x87::set_control_word(OTHER_THREADS);
+        }
+        fn changes_it_too(_: &mut Engine) {
+            crate::x87::set_control_word(OTHER_THREADS);
+        }
+        let report = Diff::new(crate::entry!(0x0040_2000, changes_it()))
+            .translation(crate::entry!(0x0040_2000, changes_it_too()).1)
+            .control_words(&[MAIN_THREAD])
+            .run();
+        assert_eq!(report.found, 1, "{report}");
+        assert_eq!(
+            report.first[0].what,
+            Found::WordChanged {
+                translation: OTHER_THREADS,
+                typed: OTHER_THREADS,
+            }
+        );
+    }
+
+    /// The thread block's copy of the word (what `FSTCW` reads) holds the case's word, so a callee
+    /// that saves and restores it (the C runtime's `fabs`, through `_ctrlfp`) restores the case's.
+    #[test]
+    fn the_thread_blocks_copy_holds_the_cases_word() {
+        fn saves_and_restores(e: &mut Engine) -> u32 {
+            let saved = crate::units::crt::ctrlfp(e, 0x133f, 0xffff);
+            crate::units::crt::ctrlfp(e, u32::from_ne_bytes(saved.to_ne_bytes()), 0xffff);
+            u32::from(crate::units::crt::x87_control_word(e))
+        }
+        fn reads_it(e: &mut Engine) -> u32 {
+            u32::from(crate::units::crt::x87_control_word(e))
+        }
+        let report = Diff::new(crate::entry!(0x0040_2000, saves_and_restores() -> u32))
+            .translation(crate::entry!(0x0040_2000, reads_it() -> u32).1)
+            .control_words(&[MAIN_THREAD, OTHER_THREADS])
+            .run();
+        assert_eq!(report.found, 0, "{report}");
+        assert_eq!(report.runs, 2);
     }
 
     #[test]
@@ -3454,6 +3546,38 @@ mod tests {
     }
     fn write_payload_nan(e: &mut Engine, p: Ptr) {
         e.mem.set_u32(p.addr(), 0xffc1_2345);
+    }
+    fn write_signalling_after_word(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr(), 0x1234_5678);
+        e.mem.set_u32(p.addr() + 4, 0x7fb0_0000);
+    }
+    fn write_quieted_after_word(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr(), 0x1234_5678);
+        e.mem.set_u32(p.addr() + 4, 0x7ff0_0000);
+    }
+    fn write_signalling_after_zero(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr() + 4, 0x7fb0_0000);
+    }
+    fn write_quieted_after_zero(e: &mut Engine, p: Ptr) {
+        e.mem.set_u32(p.addr() + 4, 0x7ff0_0000);
+    }
+
+    /// A signalling `f32` NaN that one side copies and the other quiets (0x7fb00000, 0x7ff00000) is
+    /// the same NaN under `allow_nan_payloads`, whatever the word below it holds: both sides read it
+    /// alike, so the word below is handled alike.
+    #[test]
+    fn a_quieted_nan_is_read_alike_on_both_sides() {
+        let same = |a: (u32, AbiFn), b: (u32, AbiFn)| {
+            float_diff(b, a).allow_nan_payloads().run().is_same()
+        };
+        assert!(same(
+            crate::entry!(0x0040_2000, write_signalling_after_word(Ptr)),
+            crate::entry!(0x0040_2000, write_quieted_after_word(Ptr))
+        ));
+        assert!(same(
+            crate::entry!(0x0040_2000, write_signalling_after_zero(Ptr)),
+            crate::entry!(0x0040_2000, write_quieted_after_zero(Ptr))
+        ));
     }
 
     /// Under `float_ulps`, integers and pointers still compare exactly: a small integer one apart (a
