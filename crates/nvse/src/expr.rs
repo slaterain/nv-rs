@@ -274,7 +274,7 @@ pub struct Eval {
     /// The address of the offset word.
     pub offset_ptr: u32,
     /// Read position (an address in the script data).
-    at: u32,
+    pub(crate) at: u32,
     /// Errors reported (`errorMessages`).
     pub errors: Vec<String>,
     pub suppress_errors: bool,
@@ -1974,7 +1974,6 @@ pub fn inline_argument(
     script: u32,
     event_list: u32,
 ) -> Option<crate::args::Arg> {
-    use crate::args::Arg;
     let this_obj = crate::context::current(e).map_or(0, |c| c.owner_ref);
     let start = *at + 2;
     let (tok, ev, end) = e.with_stack(16, |e, frame| {
@@ -2004,6 +2003,25 @@ pub fn inline_argument(
     report(e, &ev);
     *at = end;
     let tok = tok?;
+    convert_default_arg(e, &ev, kind, &tok, script, true)
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptUtils.cpp:
+// ExpressionEvaluator::ConvertDefaultArg.
+/// An evaluated argument converted to a parameter of `kind`. With `convert_forms`
+/// (`bConvertTESForms`) a form must be a non-null form of the parameter's kind (and a cast pointer
+/// where xNVSE casts); without, any form token's form is passed as it is (null included).
+/// `None` when the value does not fit the parameter.
+pub fn convert_default_arg(
+    e: &mut Engine,
+    ev: &Eval,
+    kind: u32,
+    tok: &Tok,
+    script: u32,
+    convert_forms: bool,
+) -> Option<crate::args::Arg> {
+    use crate::args::Arg;
+    let tok = tok.clone();
     let modi = script_mod(e, script);
     // `handlePrimitiveStringVar`: a string variable gives its id, a string a new temporary id.
     let string_as_number = |e: &mut Engine, ev: &Eval, tok: &Tok| -> Option<f64> {
@@ -2025,7 +2043,7 @@ pub fn inline_argument(
     };
     Some(match kind {
         0x01 => {
-            if let Some(id) = string_as_number(e, &ev, &tok) {
+            if let Some(id) = string_as_number(e, ev, &tok) {
                 Arg::Int(to_u32(id) as i32)
             } else if ev.can_convert(e, &tok, Ty::Number) {
                 Arg::Int(to_u32(ev.get_number(e, &tok)) as i32)
@@ -2040,7 +2058,7 @@ pub fn inline_argument(
             Arg::Int(to_u32(ev.get_number(e, &tok)) as i32)
         }
         0x02 => {
-            if let Some(id) = string_as_number(e, &ev, &tok) {
+            if let Some(id) = string_as_number(e, ev, &tok) {
                 Arg::Float(id as f32)
             } else if ev.can_convert(e, &tok, Ty::Number) {
                 Arg::Float(ev.get_number(e, &tok) as f32)
@@ -2049,7 +2067,7 @@ pub fn inline_argument(
             }
         }
         0x2c => {
-            if let Some(id) = string_as_number(e, &ev, &tok) {
+            if let Some(id) = string_as_number(e, ev, &tok) {
                 Arg::Double(id)
             } else if ev.can_convert(e, &tok, Ty::Number) {
                 Arg::Double(ev.get_number(e, &tok))
@@ -2087,6 +2105,9 @@ pub fn inline_argument(
                 return None;
             }
             let form = ev.get_form(e, &tok);
+            if !convert_forms {
+                return Some(Arg::Form(form));
+            }
             if form == 0 {
                 return None;
             }

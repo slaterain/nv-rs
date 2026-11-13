@@ -16,9 +16,10 @@
 //!   (JIP LN NVSE)) and xNVSE's evaluator does (`cmdResult = 0`); for vanilla opcodes that is
 //!   JIP's planned fix row (not built yet).
 //!
-//! A `$name` string argument reads the local string variable `name` (I-5). Not here yet: an
-//! inline expression (a parameter starting `0xFFFF`) and the override path (an argument count
-//! above `0x7FFF`) need xNVSE's expression evaluator (I-6); until then they fail the read.
+//! A `$name` string argument reads the local string variable `name` (I-5). An inline expression
+//! (a parameter starting `0xFFFF`) goes through [`crate::expr::inline_argument`], and a line with
+//! an argument count above `0x7FFF` (the GECK's compiler override) through
+//! [`crate::override_args`].
 
 use crate::context;
 use crate::table::record_of;
@@ -647,10 +648,24 @@ pub fn v_extract_args_ex(
     let record = record_of(e, opcode);
     context::set_command(e, record);
     let read = if count > 0x7fff {
-        // The override path (`ExtractArgsOverride`): commands compiled with xNVSE's expression
-        // parser; it needs the evaluator (I-6). The offset word moves past the count first.
+        // The override path (`ExtractArgsOverride`, [`crate::override_args`]): a line the GECK
+        // compiled with xNVSE's compiler override. The offset word moves past the count word,
+        // then past each expression as the evaluator reads it, whether or not `increment`.
         e.mem.set_u32(offset_ptr, offset.wrapping_add(2));
-        return Extracted::default();
+        let read = crate::override_args::arguments(
+            e,
+            params,
+            data,
+            offset_ptr,
+            script,
+            event_list,
+            count as u16,
+            false,
+        );
+        return match read {
+            Some(args) => Extracted { ok: true, args },
+            None => Extracted::default(),
+        };
     } else {
         read_args(e, count, params, &mut at, data, script, event_list)
     };
@@ -740,11 +755,16 @@ fn opcode_of_call(e: &Engine, data: u32, offset: u32) -> u32 {
 /// `Script::ParseParameters` (`005accb0`; `cdecl`: parameters, data, offset pointer, reference,
 /// container, script, event list, then the outputs), wrapped: an extender opcode is read by
 /// xNVSE's reader (`OverrideWithExtractArgsEx`, the offset moving past the arguments); a vanilla
-/// opcode goes on to the next link.
+/// opcode goes on to the next link, unless its argument count word is negative: a line the GECK
+/// compiled with xNVSE's compiler override, which only xNVSE's reader reads (its patch of the
+/// exe's reader at `005ACCD4` tests the count's sign; with its entry jump every opcode reaches
+/// `vExtractArgsEx` anyway). Vanilla content never writes a negative count, so this is extender
+/// behaviour in every preset; an ordinary count costs that one sign test.
 fn parse_parameters(e: &mut Engine, w: &[u32]) -> Ret {
     let (params, data, offset_ptr) = (w[0], w[1], w[2]);
-    let opcode = opcode_of_call(e, data, e.mem.u32(offset_ptr));
-    if opcode < FIRST_EXTENDER_OPCODE {
+    let offset = e.mem.u32(offset_ptr);
+    let opcode = opcode_of_call(e, data, offset);
+    if opcode < FIRST_EXTENDER_OPCODE && e.mem.u16(data.wrapping_add(offset)) & 0x8000 == 0 {
         return e.call_next(PARSE_PARAMETERS.addr(), w);
     }
     let (script, event_list) = (w[5], w[6]);

@@ -874,6 +874,47 @@ impl FmtArgs {
     }
 }
 
+/// Where a format string's arguments come from (`FormatStringArgs` (xNVSE)): the script's data
+/// ([`FmtArgs`], `ScriptFormatStringArgs`) or the evaluated arguments of a line compiled with the
+/// compiler override ([`crate::override_args::TokenArgs`], `OverriddenScriptFormatStringArgs`).
+trait FmtSource {
+    fn float(&mut self, e: &mut Engine) -> Option<f64>;
+    fn form(&mut self, e: &mut Engine) -> Option<u32>;
+    fn skip(&mut self, e: &Engine, count: u32);
+    /// `HasMoreArgs`.
+    fn has_more(&self) -> bool;
+}
+
+impl FmtSource for FmtArgs {
+    fn float(&mut self, e: &mut Engine) -> Option<f64> {
+        FmtArgs::float(self, e)
+    }
+    fn form(&mut self, e: &mut Engine) -> Option<u32> {
+        FmtArgs::form(self, e)
+    }
+    fn skip(&mut self, e: &Engine, count: u32) {
+        FmtArgs::skip(self, e, count);
+    }
+    fn has_more(&self) -> bool {
+        self.num_args != 0
+    }
+}
+
+impl FmtSource for crate::override_args::TokenArgs<'_> {
+    fn float(&mut self, e: &mut Engine) -> Option<f64> {
+        crate::override_args::TokenArgs::float(self, e)
+    }
+    fn form(&mut self, e: &mut Engine) -> Option<u32> {
+        crate::override_args::TokenArgs::form(self, e)
+    }
+    fn skip(&mut self, _: &Engine, count: u32) {
+        crate::override_args::TokenArgs::skip(self, count);
+    }
+    fn has_more(&self) -> bool {
+        crate::override_args::TokenArgs::has_more(self)
+    }
+}
+
 /// `ConvertLiteralPercents`: every `%` of text copied in is doubled.
 fn literal_percents(text: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(text.len());
@@ -914,7 +955,7 @@ fn dtoul3(v: f64) -> u64 {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameAPI.cpp: ExtractFormattedString.
 /// The text a format string makes; `None` when an argument it asks for is missing or unreadable.
-fn formatted_string(e: &mut Engine, args: &mut FmtArgs, format: &[u8]) -> Option<Vec<u8>> {
+fn formatted_string(e: &mut Engine, args: &mut impl FmtSource, format: &[u8]) -> Option<Vec<u8>> {
     let mut fmt = c_str(format).to_vec();
     let mut f = [0u64; 20];
     let mut arg_idx = 0usize;
@@ -1033,7 +1074,7 @@ fn formatted_string(e: &mut Engine, args: &mut FmtArgs, format: &[u8]) -> Option
                         let mut pos = at + 1;
                         while let Some(rel) = fmt[pos..].iter().position(|&b| b == b'%') {
                             let sp = pos + rel;
-                            if sp >= close || args.num_args == 0 {
+                            if sp >= close || !args.has_more() {
                                 break;
                             }
                             let spec = fmt.get(sp + 1).copied().unwrap_or(0);
@@ -1143,7 +1184,26 @@ pub fn format_string_args_at(
     let start = a.data.wrapping_add(e.mem.u32(a.opcode_offset));
     let count = e.mem.u16(start) as i16;
     if count < 0 {
-        return fail;
+        // A line the GECK compiled with xNVSE's compiler override ([`crate::override_args`]).
+        let made = crate::override_args::formatted(
+            e,
+            a.params,
+            a.data,
+            a.opcode_offset,
+            a.script,
+            a.event_list,
+            fmt_pos,
+            |e, fmt, args| formatted_string(e, args, fmt),
+        );
+        return match made {
+            Some(m) => Formatted {
+                ok: true,
+                text: m.text,
+                args: m.trailing,
+                leading: m.leading,
+            },
+            None => fail,
+        };
     }
     let mut at = start + 2;
     let mut leading = Vec::new();

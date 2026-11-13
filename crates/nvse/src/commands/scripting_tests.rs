@@ -500,3 +500,297 @@ fn conditional_jumps_follow_their_condition() {
         assert_eq!(line_result(&e), result, "{opcode:x} {cond}");
     }
 }
+
+// ---- The override argument path (`ExtractArgsOverride`, `override_args.rs`) ----
+//
+// The bytes below follow xNVSE's compiler override (`CompilerOverride`, `Hooks_Script.cpp`, and
+// `ExpressionParser::ParseArgs`, `ScriptUtils.cpp`): no plugin here was compiled with it, so they
+// are built from those rules, not taken from a real script. A line inside a `Begin _Block`: the
+// argument count word `0xFFFF` (`kOverride_Command`; `0xFFFE` for a block type's parameters),
+// the count byte, then one expression per argument (its length word counting itself, then its
+// tokens).
+
+use crate::args::{v_extract_args_ex, Arg};
+use crate::override_args::{self, OVERRIDE_BLOCK_TYPE, OVERRIDE_COMMAND};
+
+const PARAMS: u32 = 0x0300_c000;
+const OUT: u32 = 0x0300_c800;
+/// `MessageBoxA` through the exe's import, as `g_ErrOut.Show` calls it.
+const MESSAGE_BOX: u32 = 0x00fd_f2f4;
+
+thread_local! {
+    static BOXES: std::cell::RefCell<Vec<Vec<u8>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn message_box(e: &mut Engine, a: &[u32]) -> Ret {
+    let mut text = Vec::new();
+    let mut at = a[1];
+    while e.mem.u8(at) != 0 {
+        text.push(e.mem.u8(at));
+        at += 1;
+    }
+    BOXES.with(|b| b.borrow_mut().push(text));
+    Ret::default()
+}
+
+fn boxes() -> Vec<String> {
+    BOXES.with(|b| {
+        std::mem::take(&mut *b.borrow_mut())
+            .into_iter()
+            .map(|t| String::from_utf8_lossy(&t).into_owned())
+            .collect()
+    })
+}
+
+/// [`setup`] with the error box recorded.
+fn override_engine() -> Engine {
+    BOXES.with(|b| b.borrow_mut().clear());
+    let mut e = setup();
+    e.register(MESSAGE_BOX, message_box);
+    e
+}
+
+/// Parameters of the given types at PARAMS (`ParamInfo`: name, type, optional).
+fn param_types(e: &mut Engine, kinds: &[u32]) {
+    for (i, k) in kinds.iter().enumerate() {
+        e.mem.set_u32(PARAMS + 12 * i as u32 + 4, *k);
+        e.mem.set_u32(PARAMS + 12 * i as u32 + 8, 0);
+    }
+}
+
+/// A compiled line at DATA: `opcode`, its length word, then `mode` and the expressions; the
+/// offset word at the count word (4). The expressions' total length, for the offset checks.
+fn override_line(e: &mut Engine, opcode: u16, mode: u16, exprs: &[Vec<u8>]) -> u32 {
+    let mut body = mode.to_le_bytes().to_vec();
+    body.push(exprs.len() as u8);
+    let mut lengths = 0;
+    for x in exprs {
+        lengths += x.len() as u32;
+        body.extend_from_slice(x);
+    }
+    e.mem.set_u16(DATA, opcode);
+    e.mem.set_u16(DATA + 2, body.len() as u16);
+    e.mem.write(DATA + 4, &body);
+    e.mem.set_u32(OFFSET, 4);
+    lengths
+}
+
+/// `@PushExecutionContext` or `@PopExecutionContext` as the compiler writes them (no arguments)
+/// on `this_obj` in `container`: the handler's answer.
+fn context_command(e: &mut Engine, opcode: u32, this_obj: u32, container: u32) -> u32 {
+    e.mem.set_u16(DATA, opcode as u16);
+    e.mem.set_u16(DATA + 2, 2);
+    e.mem.set_u16(DATA + 4, 0);
+    e.mem.set_u32(OFFSET, 4);
+    let record = crate::table::record_of(e, opcode);
+    let execute = e.mem.u32(record + 0x18);
+    e.call(
+        execute,
+        &[0, DATA, this_obj, container, SCRIPT, LIST, RESULT, OFFSET],
+    )
+    .eax & 0xff
+}
+
+/// The compiler's `@PushExecutionContext` after a `Begin`: the calling reference, its container
+/// and the pushing command's opcode kept for this thread; `@PopExecutionContext` before the `End`
+/// removes the innermost, and fails the line when there is none. Pushes and pops balance.
+#[test]
+fn execution_contexts_push_and_pop_in_balance() {
+    let mut e = override_engine();
+    assert_eq!(context_command(&mut e, 0x154d, 0x0500_0001, 0x0500_0002), 1);
+    assert_eq!(context_command(&mut e, 0x154d, 0x0500_0003, 0), 1);
+    assert_eq!(override_args::depth(&mut e), 2);
+    let top = override_args::current_context(&mut e).unwrap();
+    assert_eq!(
+        (top.calling_ref, top.container_ref, top.opcode),
+        (0x0500_0003, 0, 0x154d)
+    );
+    assert_eq!(context_command(&mut e, 0x154e, 0, 0), 1);
+    let top = override_args::current_context(&mut e).unwrap();
+    assert_eq!(
+        (top.calling_ref, top.container_ref),
+        (0x0500_0001, 0x0500_0002)
+    );
+    assert_eq!(context_command(&mut e, 0x154e, 0, 0), 1);
+    assert_eq!(override_args::depth(&mut e), 0);
+    assert_eq!(context_command(&mut e, 0x154e, 0, 0), 0, "nothing to pop");
+    assert_eq!(override_args::depth(&mut e), 0);
+}
+
+/// A command line in a `_` block (`0xFFFF`): every argument evaluated, then each converted to its
+/// own parameter's type (an integer, a float, a string, a double); the offset word passes the
+/// count word and each expression, not the count byte (xNVSE's `ReadByte` moves only the read
+/// position).
+#[test]
+fn an_override_line_converts_each_argument_to_its_parameter() {
+    let mut e = override_engine();
+    context_command(&mut e, 0x154d, 0x0500_0001, 0);
+    param_types(&mut e, &[0x01, 0x02, 0x00, 0x2c]);
+    let lengths = override_line(
+        &mut e,
+        0x1500,
+        OVERRIDE_COMMAND,
+        &[
+            expression(&[num(7.9)]),
+            expression(&[byte(2), byte(3), op(14)]),
+            expression(&[text("abc")]),
+            expression(&[num(0.25)]),
+        ],
+    );
+    let read = v_extract_args_ex(&mut e, PARAMS, DATA, OFFSET, SCRIPT, LIST, false);
+    assert!(read.ok);
+    assert_eq!(
+        read.args,
+        [
+            Arg::Int(7),
+            Arg::Float(5.0),
+            Arg::Str {
+                raw: b"abc".to_vec(),
+                text: b"abc".to_vec()
+            },
+            Arg::Double(0.25),
+        ]
+    );
+    assert_eq!(e.mem.u32(OFFSET), 4 + 2 + lengths);
+    assert!(boxes().is_empty());
+    // A value that does not fit its parameter (a string for a form; a string for a number is
+    // xNVSE's new temporary string id instead) fails the whole read.
+    param_types(&mut e, &[0x0e]);
+    override_line(
+        &mut e,
+        0x1500,
+        OVERRIDE_COMMAND,
+        &[expression(&[text("x")])],
+    );
+    assert!(!v_extract_args_ex(&mut e, PARAMS, DATA, OFFSET, SCRIPT, LIST, false).ok);
+}
+
+/// `0xFFFF` needs the context `@PushExecutionContext` keeps: without one, xNVSE's error box and a
+/// failed read. A block type's parameters (`0xFFFE`) read without one.
+#[test]
+fn a_command_needs_a_context_and_a_block_type_does_not() {
+    let mut e = override_engine();
+    param_types(&mut e, &[0x01]);
+    override_line(&mut e, 0x1500, OVERRIDE_COMMAND, &[expression(&[byte(4)])]);
+    let read = v_extract_args_ex(&mut e, PARAMS, DATA, OFFSET, SCRIPT, LIST, false);
+    assert!(!read.ok);
+    assert_eq!(
+        boxes(),
+        ["ERROR: Could not get execution context in ExtractArgsOverride::ExtractArgs"]
+    );
+    override_line(
+        &mut e,
+        0x1500,
+        OVERRIDE_BLOCK_TYPE,
+        &[expression(&[byte(4)])],
+    );
+    let read = v_extract_args_ex(&mut e, PARAMS, DATA, OFFSET, SCRIPT, LIST, false);
+    assert!(read.ok);
+    assert_eq!(read.args, [Arg::Int(4)]);
+    assert!(boxes().is_empty());
+}
+
+/// The exe's own reader as a stand-in: counts its calls at `OUT + 0x100` and writes 99 to the
+/// first output.
+fn exe_reader(e: &mut Engine, a: &[u32]) -> Ret {
+    e.mem.set_u32(OUT + 0x100, e.mem.u32(OUT + 0x100) + 1);
+    e.mem.set_u32(a[7], 99);
+    Ret {
+        eax: 1,
+        ..Ret::default()
+    }
+}
+
+/// The exe's reader (`005accb0`) as the game calls it for a vanilla opcode: an ordinary count goes
+/// on to the game's reader untouched; a negative count (a `_` block line) is read by xNVSE's, in
+/// every preset, as xNVSE's patch of the exe's reader does.
+#[test]
+fn a_vanilla_opcode_takes_the_override_reader_only_with_a_negative_count() {
+    let mut e = override_engine();
+    e.register(crate::args::PARSE_PARAMETERS.addr(), exe_reader);
+    crate::args::install(&mut e);
+    param_types(&mut e, &[0x01]);
+    let call = |e: &mut Engine| {
+        e.call(
+            crate::args::PARSE_PARAMETERS.addr(),
+            &[PARAMS, DATA, OFFSET, 0, 0, SCRIPT, LIST, OUT],
+        )
+        .eax & 0xff
+    };
+    // `0x1010` with an ordinary count word (1): the game's reader.
+    e.mem.set_u16(DATA, 0x1010);
+    e.mem.set_u16(DATA + 4, 1);
+    e.mem.set_u32(OFFSET, 4);
+    assert_eq!(call(&mut e), 1);
+    assert_eq!(e.mem.u32(OUT), 99);
+    assert_eq!(e.mem.u32(OUT + 0x100), 1);
+    assert_eq!(
+        e.mem.u32(OFFSET),
+        4,
+        "the game's reader is handed it as it was"
+    );
+    // The same opcode compiled in a `_` block: xNVSE's reader; the game's is not reached.
+    context_command(&mut e, 0x154d, 0x0500_0001, 0);
+    override_line(&mut e, 0x1010, OVERRIDE_COMMAND, &[expression(&[byte(6)])]);
+    assert_eq!(call(&mut e), 1);
+    assert_eq!(e.mem.u32(OUT), 6);
+    assert_eq!(e.mem.u32(OUT + 0x100), 1);
+}
+
+/// A format string in a `_` block (`sv_Construct`): the format and its arguments are the evaluated
+/// arguments (`OverriddenScriptFormatStringArgs`); without a context, xNVSE's error box and no
+/// text.
+#[test]
+fn a_format_string_takes_its_arguments_from_the_evaluated_ones() {
+    let mut e = override_engine();
+    context_command(&mut e, 0x154d, 0x0500_0001, 0);
+    let mut bytes = OVERRIDE_COMMAND.to_le_bytes().to_vec();
+    bytes.push(3);
+    bytes.extend(expression(&[text("%g items, %g left")]));
+    bytes.extend(expression(&[byte(3)]));
+    bytes.extend(expression(&[num(1.5)]));
+    let (ok, id) = run_raw(&mut e, 0x156b, &bytes);
+    assert_eq!(ok, 1);
+    assert_eq!(
+        vars::string(&e, id as u32).as_deref(),
+        Some(&b"3 items, 1.5 left"[..])
+    );
+    context_command(&mut e, 0x154e, 0, 0);
+    let (_, id) = run_raw(&mut e, 0x156b, &bytes);
+    assert_eq!(
+        boxes(),
+        ["ERROR: Could not get execution context in ExtractFormattedString()"]
+    );
+    assert_eq!(vars::string(&e, id as u32).as_deref(), Some(&b""[..]));
+}
+
+/// The form at `0x0200_7000` for id `0x0123_4567`; no other id finds one.
+fn lookup_one_form(_: &mut Engine, a: &[u32]) -> Ret {
+    Ret {
+        eax: if a[0] == 0x0123_4567 { 0x0200_7000 } else { 0 },
+        ..Ret::default()
+    }
+}
+
+/// A form argument read through xNVSE's command reader (`vExtractArgsEx`, `bConvertTESForms`
+/// false): the form is passed as it is, whatever its kind; a quest parameter given an NPC still
+/// reads, where a cast would refuse it.
+#[test]
+fn an_override_form_argument_is_passed_unconverted() {
+    let mut e = override_engine();
+    e.register(0x0048_39c0, lookup_one_form);
+    e.mem.set_u8(0x0200_7000 + 4, 0x2a);
+    e.mem.set_u32(0x0200_7000 + 0xc, 0x0123_4567);
+    set_script_ref(&mut e, 1, 0x0200_7000);
+    context_command(&mut e, 0x154d, 0x0500_0001, 0);
+    param_types(&mut e, &[0x0e]);
+    override_line(
+        &mut e,
+        0x1500,
+        OVERRIDE_COMMAND,
+        &[expression(&[vec![b'R', 1, 0]])],
+    );
+    let read = v_extract_args_ex(&mut e, PARAMS, DATA, OFFSET, SCRIPT, LIST, false);
+    assert!(read.ok);
+    assert_eq!(read.args, [Arg::Form(0x0200_7000)]);
+}

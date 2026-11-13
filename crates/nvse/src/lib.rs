@@ -64,6 +64,7 @@ pub mod invref;
 pub mod lambda;
 pub mod mt19937;
 pub mod names;
+pub mod override_args;
 pub mod plugins;
 pub mod saveload;
 pub mod table;
