@@ -36,6 +36,7 @@ fn the_voices() {
     );
     call(&mut e, 0x2287, &[r(1), n(-5), r(3)]);
     assert_eq!(e.mem.u32(RACE + 0x500), VOICE, "any non-zero is female");
+    e.mem.set_u32(RACE + 0x4fc, 0);
     call(&mut e, 0x2286, &[r(1), n(2)]);
     assert_eq!(form_result(&e), 0x0c0e, "2 is female too (`gender != 0`)");
     e.mem.set_u32(RACE + 0x500, 0);
