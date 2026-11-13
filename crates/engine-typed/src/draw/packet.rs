@@ -47,13 +47,13 @@ pub(crate) fn camera(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> u32 {
 /// The render mode (`eRenderMode`).
 #[inline(always)]
 pub(crate) fn render_mode(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> u32 {
-    e.get(acc, BSShaderAccumulator::eRenderMode)
+    capture::word(e, acc.addr(), BSShaderAccumulator::eRenderMode.off)
 }
 
 /// How many batch renderers the accumulator has (one per drawing thread of the exe).
 #[inline(always)]
 pub(crate) fn renderer_count(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> u32 {
-    e.get(acc, BSShaderAccumulator::uiBatchRendererCount)
+    capture::word(e, acc.addr(), BSShaderAccumulator::uiBatchRendererCount.off)
 }
 
 /// Batch renderer `index`.
@@ -63,18 +63,19 @@ pub(crate) fn renderer(
     acc: Ptr<BSShaderAccumulator>,
     index: u32,
 ) -> Ptr<BSBatchRenderer> {
-    Ptr::new(e.global::<u32>(elem_addr(
-        acc,
-        BSShaderAccumulator::pBatchRenderer,
-        index,
-        4,
-    )))
+    Ptr::new(capture::word(
+        e,
+        acc.addr(),
+        BSShaderAccumulator::pBatchRenderer
+            .off
+            .wrapping_add(index.wrapping_mul(4)),
+    ))
 }
 
 /// Whether the alpha distances take the radius off (+0x31), as the byte the exe passes.
 #[inline(always)]
 pub(crate) fn subtract_radius(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> u8 {
-    e.get(acc, BSShaderAccumulator::ucSubtractRadius)
+    capture::byte(e, acc.addr(), BSShaderAccumulator::ucSubtractRadius.off)
 }
 
 /// Whether the second half copies the water reflection first (+0x38; main clears it after the draw: the
@@ -88,40 +89,40 @@ pub(crate) fn copy_reflection(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool
 /// (+0x164).
 #[inline(always)]
 pub(crate) fn split_clip(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
-    e.get(acc, BSShaderAccumulator::ucSkipType13) != 0
+    capture::byte(e, acc.addr(), BSShaderAccumulator::ucSkipType13.off) != 0
 }
 
 /// Whether shadow pass types are drawn through the group-clearing draw (+0x164 or +0x165).
 #[inline(always)]
 pub(crate) fn shadow_groups(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
-    e.get(acc, BSShaderAccumulator::ucSkipType13) != 0
-        || e.get(acc, BSShaderAccumulator::ucShadowGroups) != 0
+    capture::byte(e, acc.addr(), BSShaderAccumulator::ucSkipType13.off) != 0
+        || capture::byte(e, acc.addr(), BSShaderAccumulator::ucShadowGroups.off) != 0
 }
 
 /// Whether the second half draws alpha group 1 (+0x167); the first half draws the other.
 #[inline(always)]
 pub(crate) fn late_alpha_group(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
-    e.get(acc, BSShaderAccumulator::ucAlphaGroupLate) != 0
+    capture::byte(e, acc.addr(), BSShaderAccumulator::ucAlphaGroupLate.off) != 0
 }
 
 /// Whether decals are drawn (`bRenderDecals`).
 #[inline(always)]
 pub(crate) fn render_decals(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
-    e.get(acc, BSShaderAccumulator::bRenderDecals) != 0
+    capture::byte(e, acc.addr(), BSShaderAccumulator::bRenderDecals.off) != 0
 }
 
 /// The accumulator's +0x164 alone (`ucSkipType13`): what `RenderBatches` reads first, from its own getter call, to
 /// tell a shadow pass that only has its group cleared.
 #[inline(always)]
 pub(crate) fn skip_type_13(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
-    e.get(acc, BSShaderAccumulator::ucSkipType13) != 0
+    capture::byte(e, acc.addr(), BSShaderAccumulator::ucSkipType13.off) != 0
 }
 
 /// The accumulator's +0x165 alone (`ucShadowGroups`): what `RenderBatches` reads, from a second getter call, when
 /// +0x164 is clear.
 #[inline(always)]
 pub(crate) fn shadow_groups_set(e: &Engine, acc: Ptr<BSShaderAccumulator>) -> bool {
-    e.get(acc, BSShaderAccumulator::ucShadowGroups) != 0
+    capture::byte(e, acc.addr(), BSShaderAccumulator::ucShadowGroups.off) != 0
 }
 
 /// The fog-coloured ambient flag of the lighting shaders (`011f94a6`).
@@ -817,6 +818,39 @@ pub(crate) fn start_time(e: &Engine) -> u32 {
     capture::word(e, START_TIME, 0)
 }
 
+// ---- The lighting property's light list (`draw::lights`) and the scene's camera light: what the cut copies for each
+// drawn geometry's property (+0x60, its nodes, their lights) and for the first scene node's light (+0xe0). ----
+
+/// A lighting property's light list (+0x60, its first node), the packet's.
+#[inline(always)]
+pub(crate) fn property_light_list(e: &Engine, property: u32) -> u32 {
+    capture::word(e, property, 0x60)
+}
+
+/// A light list node's word at `offset` (+0 the next node, +8 its light), the packet's.
+#[inline(always)]
+pub(crate) fn light_node_word(e: &Engine, node: u32, offset: u32) -> u32 {
+    capture::word(e, node, offset)
+}
+
+/// A pass light's 16-bit half at `offset` (+0x110, its index: 0xff when it has none), the packet's.
+#[inline(always)]
+pub(crate) fn pass_light_half(e: &Engine, light: u32, offset: u32) -> u16 {
+    capture::half(e, light, offset)
+}
+
+/// A pass light's light's byte at `offset` (+0x30, its flags: bit 0 app-culled), the packet's.
+#[inline(always)]
+pub(crate) fn light_value_byte(e: &Engine, data: u32, offset: u32) -> u8 {
+    capture::byte(e, data, offset)
+}
+
+/// A scene node's light (+0xe0), the packet's.
+#[inline(always)]
+pub(crate) fn scene_node_light(e: &Engine, node: u32) -> u32 {
+    capture::word(e, node, 0xe0)
+}
+
 // ---- Group C: the reads of the shader set-ups the world draw reached as translations. ----
 //
 // Each reads guest memory today; the drawing thread's piece 2 backs them with the frame's captured
@@ -830,17 +864,18 @@ pub(crate) fn transform_word(e: &Engine, transform: u32, offset: u32) -> u32 {
     e.global::<u32>(transform.wrapping_add(offset))
 }
 
-/// The scene's light list of an accumulator: its camera's (+0x194) word +0xe0.
+/// The light of an accumulator's shadow scene node (+0x194, read in place: open, piece 4): the node's +0xe0, the
+/// packet's (the cut copies the scene's node 0's).
 #[inline(always)]
 pub(crate) fn accumulator_lights(e: &Engine, accumulator: u32) -> u32 {
-    let camera = e.global::<u32>(accumulator.wrapping_add(0x194));
-    e.global::<u32>(camera.wrapping_add(0xe0))
+    let node = e.global::<u32>(accumulator.wrapping_add(0x194));
+    scene_node_light(e, node)
 }
 
-/// A light list's first light (+0xf8), none when 0.
+/// A shadow scene light's light (+0xf8), none when 0, the packet's.
 #[inline(always)]
 pub(crate) fn first_light(e: &Engine, lights: u32) -> u32 {
-    e.global::<u32>(lights.wrapping_add(0xf8))
+    pass_light_word(e, lights, 0xf8)
 }
 
 /// A light's word at `offset` (+0xc8 and +0xd4 its two colours, +0xf0 to +0xf8 its direction).
@@ -1117,10 +1152,8 @@ pub(crate) fn sky_hdr_value(e: &Engine) -> u32 {
 /// one: the sky then moved to the accumulator's camera.
 #[inline(always)]
 pub(crate) fn skips_type13(e: &Engine, acc: u32) -> u8 {
-    e.get(
-        Ptr::<BSShaderAccumulator>::new(acc),
-        BSShaderAccumulator::ucSkipType13,
-    )
+    // The accumulator's settings are the packet's (`cut::ACC_SETTINGS`), as `skip_type_13` reads them.
+    capture::byte(e, acc, BSShaderAccumulator::ucSkipType13.off)
 }
 
 /// The scene camera (`011f95d8`).
@@ -1254,7 +1287,8 @@ pub(crate) fn material_default_word(e: &Engine, index: u32) -> u32 {
 }
 
 /// The scene's shadow node 0 (`011f91c8`), its camera position (+0x1e4, word `index`) and its sun's
-/// colour (its light list +0xe0, the list's light +0xf8, the light's colour +0xd4, word `index`).
+/// colour (its light +0xe0, that light's light +0xf8, the light's colour +0xd4, word `index`: the cut copies the
+/// three, so they are the packet's; the node itself, the scene's, is set at load and read in place).
 #[inline(always)]
 pub(crate) fn scene_shadow_node(e: &Engine) -> u32 {
     e.global::<u32>(0x011f_91c8)
@@ -1265,16 +1299,12 @@ pub(crate) fn scene_camera_position(e: &Engine, index: u32) -> u32 {
 }
 #[inline(always)]
 pub(crate) fn sun_light_colour_word(e: &Engine, index: u32) -> u32 {
-    let list = e.global::<u32>(scene_shadow_node(e).wrapping_add(0xe0));
-    let light = e.global::<u32>(list.wrapping_add(0xf8));
-    e.global::<u32>(light.wrapping_add(0xd4 + 4 * index))
+    let shadow = scene_node_light(e, scene_shadow_node(e));
+    let light = pass_light_word(e, shadow, 0xf8);
+    light_value_word(e, light, 0xd4 + 4 * index)
 }
 
-/// A light's data (+0xf8) and a light's byte at `offset` (+0x208, the clip-plane cache's: piece 4's, in place).
-#[inline(always)]
-pub(crate) fn light_data(e: &Engine, light: u32) -> u32 {
-    e.global::<u32>(light.wrapping_add(0xf8))
-}
+/// A light's byte at `offset` (+0x208, the clip-plane cache's: piece 4's, in place).
 #[inline(always)]
 pub(crate) fn light_byte(e: &Engine, light: u32, offset: u32) -> u8 {
     e.global::<u8>(light.wrapping_add(offset))

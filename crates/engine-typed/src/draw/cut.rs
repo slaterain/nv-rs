@@ -44,6 +44,14 @@ pub(crate) const CAMERA: (u32, u32) = (0x68, 0x114);
 /// passes (+0x3a).
 pub(crate) const ACC_REFLECTION: (u32, u32) = (0x38, 0x39);
 pub(crate) const ACC_DEPTH_PASSES: (u32, u32) = (0x3a, 0x3b);
+/// The accumulator's draw-time settings the draw reads and never writes (set before the cut by whoever set the
+/// accumulator up; copied so that main may change them meanwhile): the radius byte (+0x31), the split, shadow-group
+/// and late-alpha bytes and the decal flag (+0x164 to +0x16c), the batch renderers, the cursor arrays' pointers and
+/// the renderer count (+0x174 to +0x18c), the render mode (+0x19c). The cursor arrays themselves (what +0x17c to
+/// +0x188 point to) are written and read by the world draw alone: they stay in guest memory (the depth-of-field
+/// re-render `00875e40`, their only other user, waits for the draw: piece 8).
+pub(crate) const ACC_SETTINGS: [(u32, u32); 4] =
+    [(0x31, 0x32), (0x164, 0x16d), (0x174, 0x190), (0x19c, 0x1a0)];
 /// `NiAVObject`'s empty bound (`011f4288`).
 const NULL_BOUND: u32 = 0x011f_4288;
 /// The fog index byte (`011f91c4`), the shadow scene nodes (`011f91c8`) and a node's fog property (+0x134);
@@ -67,8 +75,13 @@ const SHADOW_LIGHT_FLAGS: (u32, u32) = (0xf4, 0xfc);
 /// A pass light's matrix (+0x10, the cube projection `00b7b730` multiplies by), its byte +0xed and its six clip
 /// planes (+0x144, which `00b7be00` transforms); its clip-plane cache (+0x1a8, made +0x208) is draw-written: piece 4.
 const SHADOW_LIGHT_MATRIX: (u32, u32) = (0x10, 0x50);
-const SHADOW_LIGHT_ED: (u32, u32) = (0xed, 0xee);
+const SHADOW_LIGHT_ED: (u32, u32) = (0xec, 0xee);
 const SHADOW_LIGHT_PLANES: (u32, u32) = (0x144, 0x1a4);
+/// A pass light's index (`u16` +0x110: 0xff for none) and its bytes +0xec and +0xed (the first active light's getters read
+/// +0x110 and +0xec), its light's flags byte (+0x30: bit 0 app-culled), a lighting property's light list (+0x60).
+const SHADOW_LIGHT_INDEX: (u32, u32) = (0x110, 0x112);
+const LIGHT_FLAGS: (u32, u32) = (0x30, 0x31);
+const PROPERTY_LIGHTS: (u32, u32) = (0x60, 0x64);
 const LIGHT_VALUES: (u32, u32) = (0xc4, 0xec);
 const LIGHT_DIRECTION: (u32, u32) = (0xf0, 0xfc);
 
@@ -111,8 +124,19 @@ pub fn take_frame(e: &Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) {
     capture::take(e, camera, CAMERA.0, CAMERA.1);
     capture::take(e, acc.addr(), ACC_REFLECTION.0, ACC_REFLECTION.1);
     capture::take(e, acc.addr(), ACC_DEPTH_PASSES.0, ACC_DEPTH_PASSES.1);
+    for (from, to) in ACC_SETTINGS {
+        capture::take(e, acc.addr(), from, to);
+    }
     capture::take(e, NULL_BOUND, BOUND.0, BOUND.1);
     capture::take(e, FOG_INDEX, 0, 1);
+    // The first scene node's light (+0xe0), the camera light the set-ups read (the node itself, the scene's, is set at
+    // load: read in place).
+    if let Some(scene) = peek(e, SHADOW_SCENE_NODES).filter(|&n| n != 0) {
+        capture::take(e, scene, 0xe0, 0xe4);
+        if let Some(light) = peek(e, scene.wrapping_add(0xe0)) {
+            take_light(e, light, &mut AddrSet::default());
+        }
+    }
     let index = u32::from(e.global::<u8>(FOG_INDEX));
     let node = e.global::<u32>(SHADOW_SCENE_NODES.wrapping_add(index.wrapping_mul(4)));
     if node != 0 {
@@ -137,6 +161,18 @@ pub fn take_geometry_values(e: &mut Engine, geometry: u32) {
 /// What the cut takes for one pass's lights ([`take_lights`]): for the checks of the paths that set them.
 pub fn take_pass_lights(e: &Engine, pass: u32) {
     take_lights(e, pass, &mut AddrSet::default());
+}
+
+/// What the cut takes for one pass light ([`take_light`]): for the checks of the paths that read a pass's first light.
+pub fn take_one_light(e: &Engine, shadow: u32) {
+    take_light(e, shadow, &mut AddrSet::default());
+}
+
+/// What the cut takes for one lighting property's light list ([`take_light_list`]) and its shader values: for the
+/// checks of the paths that look for its first active light.
+pub fn take_property_lights(e: &Engine, property: u32) {
+    capture::take(e, property, PROPERTY.0, PROPERTY.1);
+    take_light_list(e, property, &mut AddrSet::default());
 }
 
 /// Every pass in batch renderer `renderer`'s lists and in its holders' and sorted groups' lists, into `passes`
@@ -214,6 +250,9 @@ fn take_geometry(e: &mut Engine, geometry: u32, nodes: &mut AddrSet<u32>) {
     take_skin(e, packet::skin_instance(e, geometry), nodes);
     let property = packet::shader_property(e, geometry);
     capture::take(e, property, PROPERTY.0, PROPERTY.1);
+    if lighting_property(e, property) {
+        take_light_list(e, property, nodes);
+    }
     let data = packet::model_data(e, geometry);
     if data != 0
         && crate::slot_target(e, geometry, SLOT_RENDER_IMMEDIATE) == PARTICLES_RENDER_IMMEDIATE
@@ -224,14 +263,23 @@ fn take_geometry(e: &mut Engine, geometry: u32, nodes: &mut AddrSet<u32>) {
 }
 
 /// The tall grass shader (`010b8980`), the no-lighting shader (`010bb230`) and the SpeedTree leaf shader
-/// (`010b9190`), by vtable (a geometry's shader +0xc0); the SpeedTree leaf property's vtable (`010b9700`, made by
-/// `00bb3ba0`).
+/// (`010b9190`), by vtable (a geometry's shader +0xc0); the SpeedTree leaf property (`010b9700`, made by `00bb3ba0`) is
+/// told by its slots ([`leaf_slots`]).
 const TALL_GRASS_SHADER: u32 = 0x010b_8980;
 const NO_LIGHTING_SHADER: u32 = 0x010b_b230;
 const LEAF_SHADER: u32 = 0x010b_9190;
-const LEAF_PROPERTY: u32 = 0x010b_9700;
 /// A geometry's shader.
 const GEOMETRY_SHADER: u32 = 0xc0;
+
+/// Whether `property`'s slots 0xfc and 0x100 are the SpeedTree leaf property's (`00bb3c80`, `00bb3c90`: its leaf data
+/// and the leaves `[[+0x88]+8]`), as the reader tests them: an override in those slots is respected.
+fn leaf_slots(e: &Engine, property: u32) -> bool {
+    let Some(vtable) = peek(e, property) else {
+        return false;
+    };
+    peek(e, vtable.wrapping_add(0xfc)) == Some(0x00bb_3c80)
+        && peek(e, vtable.wrapping_add(0x100)) == Some(0x00bb_3c90)
+}
 
 /// The arrays Group C's set-ups copy into their constants whole (`_memcpy`), by the geometry's shader:
 /// - tall grass (`00baaf40`): the property's instance data (+0x7c): its counts (`u16` +0x10, +0x12), its array
@@ -276,7 +324,7 @@ fn take_group_c_arrays(e: &Engine, geometry: u32, property: u32, data: u32) {
             };
             capture::take(e, array, 0, u32::from(count) << 4);
         }
-        Some(LEAF_SHADER) if property != 0 && peek(e, property) == Some(LEAF_PROPERTY) => {
+        Some(LEAF_SHADER) if property != 0 && leaf_slots(e, property) => {
             capture::take(e, property, 0x88, 0x8c);
             let Some(leaf_data) = peek(e, property.wrapping_add(0x88)) else {
                 return;
@@ -365,28 +413,84 @@ fn take_lights(e: &Engine, pass: u32, nodes: &mut AddrSet<u32>) {
         let Some(shadow) = peek(e, lights.wrapping_add(i * 4)) else {
             return;
         };
-        if shadow == 0 || !nodes.insert(shadow) {
-            continue;
+        take_light(e, shadow, nodes);
+    }
+}
+
+/// A pass light's (`ShadowSceneLight`) values and its light's, once a light (a null light takes nothing).
+fn take_light(e: &Engine, shadow: u32, nodes: &mut AddrSet<u32>) {
+    if shadow == 0 || !nodes.insert(shadow) {
+        return;
+    }
+    capture::take(e, shadow, SHADOW_LIGHT.0, SHADOW_LIGHT.1);
+    capture::take(e, shadow, SHADOW_LIGHT_FLAGS.0, SHADOW_LIGHT_FLAGS.1);
+    capture::take(e, shadow, SHADOW_LIGHT_MATRIX.0, SHADOW_LIGHT_MATRIX.1);
+    capture::take(e, shadow, SHADOW_LIGHT_ED.0, SHADOW_LIGHT_ED.1);
+    capture::take(e, shadow, SHADOW_LIGHT_PLANES.0, SHADOW_LIGHT_PLANES.1);
+    capture::take(e, shadow, SHADOW_LIGHT_INDEX.0, SHADOW_LIGHT_INDEX.1);
+    let Some(light) = peek(e, shadow.wrapping_add(0xf8)) else {
+        return;
+    };
+    if light != 0 && nodes.insert(light) {
+        capture::take(e, light, WORLD.0, WORLD.1);
+        capture::take(e, light, LIGHT_VALUES.0, LIGHT_VALUES.1);
+        capture::take(e, light, LIGHT_FLAGS.0, LIGHT_FLAGS.1);
+        // Its direction too, a point light's included: the light direction (`00b7c7b0`) reads the pass's first light
+        // whatever its kind.
+        capture::take(e, light, LIGHT_DIRECTION.0, LIGHT_DIRECTION.1);
+    }
+}
+
+/// The vtables of the lighting property (`010ae7b0`, stored by its constructor `00b71720`) and of every class built
+/// on it, found from the exe by the constructors that call it and theirs: `010ae0d0` (`00b66f50`), `010adea8`
+/// (`00b60cb0`), `010adad0` (`00b57f90`), `010b95c0` (`00bb3660`), `010b9828` (`00bb4080`); on `00b66f50`:
+/// `010b8330` (`00ba8630`), `010b9490` (`00bb3500`), `010b9910` (`00bb4520`), `010babf8` (`00bc3bb0`); on
+/// `00bb3660`: `010b9700` (the SpeedTree leaf property, `00bb3ba0`); on `00bb3500`: `010b9338` (`00bb3070`); on
+/// `00bb4520`: `010bcb60` (`00c05880`). Only these keep a light list at +0x60: the other shader properties keep
+/// something else there (the no-lighting property its base texture, the sky and water values their set-ups read,
+/// the particle and bolt properties their instance and segment data).
+const LIGHTING_PROPERTY_VTABLES: [u32; 13] = [
+    0x010a_e7b0,
+    0x010a_e0d0,
+    0x010a_dea8,
+    0x010a_dad0,
+    0x010b_95c0,
+    0x010b_9828,
+    0x010b_8330,
+    0x010b_9490,
+    0x010b_9910,
+    0x010b_abf8,
+    0x010b_9700,
+    0x010b_9338,
+    0x010b_cb60,
+];
+
+/// Whether `property` is a lighting property (its vtable one of [`LIGHTING_PROPERTY_VTABLES`]), the only kind
+/// whose +0x60 is a light list.
+fn lighting_property(e: &Engine, property: u32) -> bool {
+    property != 0 && peek(e, property).is_some_and(|v| LIGHTING_PROPERTY_VTABLES.contains(&v))
+}
+
+/// The most nodes of a lighting property's light list the cut walks (a list is a handful of lights).
+const LIGHT_LIST_LIMIT: u32 = 64;
+
+/// A lighting property's light list (+0x60): its head, each node's next and light words (+0, +8) and each light's
+/// values, as the first active light's getters (`draw::lights`) and the set-ups after them read them.
+fn take_light_list(e: &Engine, property: u32, nodes: &mut AddrSet<u32>) {
+    if property == 0 {
+        return;
+    }
+    capture::take(e, property, PROPERTY_LIGHTS.0, PROPERTY_LIGHTS.1);
+    let mut node = peek(e, property.wrapping_add(PROPERTY_LIGHTS.0)).unwrap_or(0);
+    for _ in 0..LIGHT_LIST_LIMIT {
+        if node == 0 {
+            return;
         }
-        capture::take(e, shadow, SHADOW_LIGHT.0, SHADOW_LIGHT.1);
-        capture::take(e, shadow, SHADOW_LIGHT_FLAGS.0, SHADOW_LIGHT_FLAGS.1);
-        capture::take(e, shadow, SHADOW_LIGHT_MATRIX.0, SHADOW_LIGHT_MATRIX.1);
-        capture::take(e, shadow, SHADOW_LIGHT_ED.0, SHADOW_LIGHT_ED.1);
-        capture::take(e, shadow, SHADOW_LIGHT_PLANES.0, SHADOW_LIGHT_PLANES.1);
-        let (Some(light), Some(point)) = (
-            peek(e, shadow.wrapping_add(0xf8)),
-            peek_u8(e, shadow.wrapping_add(0xf4)),
-        ) else {
-            continue;
-        };
-        if light != 0 && nodes.insert(light) {
-            capture::take(e, light, WORLD.0, WORLD.1);
-            capture::take(e, light, LIGHT_VALUES.0, LIGHT_VALUES.1);
-            // A direction only for a light that is not a point light (the flag +0xf4), as the set-up reads it.
-            if point == 0 {
-                capture::take(e, light, LIGHT_DIRECTION.0, LIGHT_DIRECTION.1);
-            }
+        capture::take(e, node, 0, 0xc);
+        if let Some(light) = peek(e, node.wrapping_add(8)) {
+            take_light(e, light, nodes);
         }
+        node = peek(e, node).unwrap_or(0);
     }
 }
 
@@ -655,6 +759,47 @@ mod tests {
         assert_eq!(misses, 0);
     }
 
+    /// A lighting property's light list (+0x60) is copied with its nodes and lights; another property's +0x60 (the
+    /// no-lighting property's base texture here) is left alone: nothing of it, or of what it points to, is taken.
+    #[test]
+    fn only_a_lighting_propertys_light_list_is_copied() {
+        let mut e = Engine::new();
+        let (geometry, property, _) = group_c_geometry(&mut e, 0);
+        let node = e.mem.alloc(0xc);
+        let shadow = e.mem.alloc(0x200);
+        let light = e.mem.alloc(0x100);
+        e.mem.set_u32(property, 0x010a_e0d0);
+        e.mem.set_u32(property + 0x60, node);
+        e.mem.set_u32(node + 8, shadow);
+        e.mem.set_u32(shadow + 0xf8, light);
+        e.mem.set_u16(shadow + 0x110, 2);
+        e.mem.set_u8(light + 0x30, 1);
+        assert!(capture::begin(&e));
+        take_geometry_values(&mut e, geometry);
+        e.mem.set_u32(property + 0x60, 0);
+        let read = [
+            capture::word(&e, property, 0x60),
+            capture::word(&e, node, 8),
+            capture::word(&e, shadow, 0xf8),
+            u32::from(capture::byte(&e, light, 0x30)),
+        ];
+        assert_eq!(read, [node, shadow, light, 1]);
+        assert_eq!(capture::end(&mut e).misses, 0);
+        // The no-lighting property (its vtable not a lighting property's): +0x60 holds a texture.
+        let (geometry, property, _) = group_c_geometry(&mut e, NO_LIGHTING_SHADER);
+        let texture = e.mem.alloc(0x40);
+        let texture_vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(property, 0x010b_b2b0);
+        e.mem.set_u32(property + 0x60, texture);
+        e.mem.set_u32(texture, texture_vtable);
+        e.mem.set_u32(texture + 8, light);
+        assert!(capture::begin(&e));
+        take_geometry_values(&mut e, geometry);
+        let _ = capture::word(&e, property, 0x60);
+        let _ = capture::word(&e, texture, 0);
+        assert_eq!(capture::end(&mut e).misses, 2);
+    }
+
     /// The SpeedTree leaves (`00bb2760`): the leaf property's slot 0x100 answer, its leaf data's +8, 0x300 bytes.
     #[test]
     fn the_speedtree_leaves_are_copied() {
@@ -662,7 +807,10 @@ mod tests {
         let (geometry, property, _) = group_c_geometry(&mut e, LEAF_SHADER);
         let leaf_data = e.mem.alloc(0x10);
         let leaves = words(&mut e, 0xc0);
-        e.mem.set_u32(property, LEAF_PROPERTY);
+        let vtable = e.mem.alloc(0x104);
+        e.mem.set_u32(vtable + 0xfc, 0x00bb_3c80);
+        e.mem.set_u32(vtable + 0x100, 0x00bb_3c90);
+        e.mem.set_u32(property, vtable);
         e.mem.set_u32(property + 0x88, leaf_data);
         e.mem.set_u32(leaf_data + 8, leaves);
         assert!(capture::begin(&e));

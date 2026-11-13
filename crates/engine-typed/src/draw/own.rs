@@ -92,23 +92,21 @@ pub(crate) fn set_pass_range(e: &mut Engine, renderer: u32, low: u32, high: u32)
 /// lists): the address of renderer `index`'s entry, each array read afresh as the exe reads it.
 #[inline(always)]
 pub(crate) fn cursor_pass_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
-    e.get(acc, BSShaderAccumulator::puicurrentPassA)
+    capture::word(e, acc.addr(), BSShaderAccumulator::puicurrentPassA.off)
         .wrapping_add(index.wrapping_mul(4))
 }
 #[inline(always)]
 pub(crate) fn cursor_bucket_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
-    e.get(acc, BSShaderAccumulator::picurrentBucketA)
+    capture::word(e, acc.addr(), BSShaderAccumulator::picurrentBucketA.off)
         .wrapping_add(index.wrapping_mul(4))
 }
 #[inline(always)]
 pub(crate) fn cursor_first_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
-    e.get(acc, BSShaderAccumulator::pbcurrentFirstPassA)
-        .wrapping_add(index)
+    capture::word(e, acc.addr(), BSShaderAccumulator::pbcurrentFirstPassA.off).wrapping_add(index)
 }
 #[inline(always)]
 fn cursor_active_at(e: &Engine, acc: Ptr<BSShaderAccumulator>, index: u32) -> u32 {
-    e.get(acc, BSShaderAccumulator::pbcurrentActiveA)
-        .wrapping_add(index)
+    capture::word(e, acc.addr(), BSShaderAccumulator::pbcurrentActiveA.off).wrapping_add(index)
 }
 
 /// Renderer `index`'s cursor: its pass type, its bucket, its first-pass byte, its active byte.

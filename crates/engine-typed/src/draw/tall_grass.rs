@@ -115,11 +115,13 @@ pub fn setup_geometry(
         }
         // `BSShaderManager::GetAccumulator` (`00b4f5c0`): a read of `011f95ec`.
         let accumulator = packet::shader_accumulator(e);
+        // The accumulator's shadow scene node (+0x194, read in place: open, piece 4), its light (+0xe0), that light's
+        // light (+0xf8) and its direction and colours: the cut copies the last three for the scene's node 0.
         let light = packet::first_light(e, packet::accumulator_lights(e, accumulator));
         if light != 0 {
             let direction = frame + 0x28;
             for (k, at) in [(2u32, 0xf8u32), (0, 0xf0), (1, 0xf4)] {
-                let word = packet::light_word(e, light, at);
+                let word = packet::light_value_word(e, light, at);
                 e.set_global(direction + 4 * k, word);
             }
             typed_call!(
@@ -130,7 +132,7 @@ pub fn setup_geometry(
             for (source, target) in [(0xc8u32, LIGHT_COLOUR), (0xd4, LIGHT_AMBIENT)] {
                 // own: the targets are written through set_shader_global
                 for k in 0..3u32 {
-                    let value = packet::light_word(e, light, source + 4 * k);
+                    let value = packet::light_value_word(e, light, source + 4 * k);
                     own::set_shader_global(e, target + 4 * k, value);
                 }
                 own::set_shader_global(e, target + 0xc, ONE);

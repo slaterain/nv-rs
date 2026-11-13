@@ -1434,10 +1434,11 @@ fn geometry_pass_reads_the_packet() {
         set(e, VIEW_HOLDER, rendering);
         (vec![shader, pass], rendering, view)
     };
-    // The view object's world transform as the cut takes it. Not the pass's lights: the light direction (`00b7c7b0`)
-    // still reads them in place on main, and routing it is the drawing agent's (its piece 4).
-    let fill = |e: &mut Engine, _rendering: u32, view: u32| {
+    // The view object's world transform and the pass's lights as the cut takes them (the light direction `00b7c7b0`
+    // reads the pass's first light through the packet).
+    let fill = |e: &mut Engine, rendering: u32, view: u32| {
         capture::take(e, view, 0x68, 0x9c);
+        engine_typed::draw::cut::take_pass_lights(e, rendering);
     };
     for scribble in [capture::SCRIBBLE, capture::SCRIBBLE_OTHER] {
         let mut plain = Engine::new();

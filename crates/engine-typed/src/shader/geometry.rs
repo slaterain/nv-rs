@@ -830,7 +830,6 @@ pub fn simple_shadow_clip_planes(e: &mut Engine, this: Ptr, pass_type: u32) {
 /// HDR light scale (`011f9184`) and the colour rows `SetupGeometryConstants_Lights` writes
 /// (`011fa0d0`).
 const SHADER_MODE: u32 = 0x011f_91b8;
-const GET_FIRST_ACTIVE_LIGHT: u32 = 0x00b7_0590;
 const LIGHT_POSITIONS: u32 = 0x011f_a170;
 const LIGHT_DIRECTIONS: u32 = 0x011f_a1f0;
 const HALF: u32 = 0x0101_6248;
@@ -1025,9 +1024,12 @@ pub fn lights(
     }
     let mode = capture::own_at::<u32>(e, SHADER_MODE);
     e.with_stack(4, |e, slot| {
-        let light = e.call(GET_FIRST_ACTIVE_LIGHT, &args![property, slot]).u32();
-        if light != 0 && e.global::<u8>(light + 0xf4) != 0 {
-            // own: the first active light, read in place: an open packet route (the drawing agent's next PR)
+        let light: u32 = typed_call!(
+            crate::draw::FAMILY,
+            0x00b7_0590,
+            crate::draw::lights::first_active_light(e, Ptr::new(property), slot)
+        );
+        if light != 0 && packet::pass_light_byte(e, light, 0xf4) != 0 {
             return;
         }
         if mode == 10 {
@@ -1061,7 +1063,6 @@ const ACCUMULATE_LIGHT_COLOR: u32 = 0x00c0_3010;
 const LIGHT_COUNT: u32 = 0x011f_d95c;
 const LIGHT_COUNT_CONSTANT: u32 = 0x011f_a27c;
 const WHITE_AMBIENT: u32 = 0x011f_91a7;
-const GET_FIRST_ACTIVE_NON_SHADOW_LIGHT: u32 = 0x00b7_0600;
 const WEIGHT_SECOND: u32 = 0x010a_e8c0;
 const WEIGHT_FIRST: u32 = 0x010a_e8b8;
 const WEIGHT_THIRD: u32 = 0x010a_e8b0;
@@ -1142,24 +1143,30 @@ pub fn ambient_emittance(
             let slot = frame;
             let difference = frame + 4;
             let scaled = frame + 0x10;
-            let light = e
-                .call(GET_FIRST_ACTIVE_NON_SHADOW_LIGHT, &args![property, slot])
-                .u32();
-            let camera = e.global::<u32>(CAMERA_OBJECT); // own: main's frame value, value packet B
-            let camera_light = e.global::<u32>(camera + 0xe0); // own: main's object read in place (value packet B, piece 4)
-            let values = e.global::<u32>(camera_light + 0xf8); // own: the first active (or camera) light, read in place: an open packet route (the drawing agent's next PR)
+            let light: u32 = typed_call!(
+                crate::draw::FAMILY,
+                0x00b7_0600,
+                crate::draw::lights::first_active_non_shadow_light(
+                    e,
+                    Ptr::new(property),
+                    Ptr::new(slot)
+                )
+            );
+            let camera = e.global::<u32>(CAMERA_OBJECT); // own: the scene node, set at load
+            let camera_light = packet::scene_node_light(e, camera);
+            let values = packet::pass_light_word(e, camera_light, 0xf8);
             let second = mul_d(
-                e.global::<f32>(values + 0xd8), // own: the first active (or camera) light, read in place: an open packet route (the drawing agent's next PR)
+                f32::from_bits(packet::light_value_word(e, values, 0xd8)),
                 e.global::<f64>(WEIGHT_SECOND), // own: a constant of the exe
             );
             let first = mul_d(
-                e.global::<f32>(values + 0xd4), // own: the first active (or camera) light, read in place: an open packet route (the drawing agent's next PR)
-                e.global::<f64>(WEIGHT_FIRST),  // own: a constant of the exe
+                f32::from_bits(packet::light_value_word(e, values, 0xd4)),
+                e.global::<f64>(WEIGHT_FIRST), // own: a constant of the exe
             );
             let sum = second + first;
             let third = mul_d(
-                e.global::<f32>(values + 0xdc), // own: the first active (or camera) light, read in place: an open packet route (the drawing agent's next PR)
-                e.global::<f64>(WEIGHT_THIRD),  // own: a constant of the exe
+                f32::from_bits(packet::light_value_word(e, values, 0xdc)),
+                e.global::<f64>(WEIGHT_THIRD), // own: a constant of the exe
             );
             let luminance = sum + third;
             let mut light_part = 0.0f32;
@@ -1170,15 +1177,18 @@ pub fn ambient_emittance(
                 if position == 0 {
                     position = DEFAULT_POSITION;
                 }
-                let values = e.global::<u32>(light + 0xf8); // own: the first active (or camera) light, read in place: an open packet route (the drawing agent's next PR)
-                e.call(
-                    POINT_DIFFERENCE,
-                    &args![values + 0x8c, difference, position],
-                );
-                let strength = e.global::<u32>(values + 0xc4); // own: the first active (or camera) light, read in place: an open packet route (the drawing agent's next PR)
-                e.call(COLOUR_SCALE, &args![values + 0xd4, scaled, strength]);
+                let values = packet::pass_light_word(e, light, 0xf8);
+                // The light's position (+0x8c) and colour (+0xd4), handed by pointer: the packet's copies.
+                capture::image(e, values, 0x8c, 0x98, |e, base| {
+                    e.call(POINT_DIFFERENCE, &args![base + 0x8c, difference, position]);
+                });
+                let strength = packet::light_value_word(e, values, 0xc4);
+                capture::image(e, values, 0xd4, 0xe0, |e, base| {
+                    e.call(COLOUR_SCALE, &args![base + 0xd4, scaled, strength]);
+                });
                 let length = e.call(POINT_LENGTH, &args![difference]).f64();
-                let ratio = narrow(length / f64::from(e.global::<f32>(values + 0xe0))); // own: the first active (or camera) light, read in place: an open packet route (the drawing agent's next PR)
+                let radius = f32::from_bits(packet::light_value_word(e, values, 0xe0));
+                let ratio = narrow(length / f64::from(radius));
                 let raised = e.call(FLOAT_HELPER, &args![0.0f64, ratio.to_bits()]).f64();
                 let limited = e.call(DOUBLE_HELPER, &args![1.0f64, raised]).f64();
                 let falloff = 1.0 - narrow(limited);
