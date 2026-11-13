@@ -1335,6 +1335,12 @@ pub(crate) fn shader_accumulator(e: &Engine) -> u32 {
 // the Group C bulk copies read the packet's image of their block. The pass lights' and the time values' accessors
 // are the shared ones above (the per-light set-up's section).
 
+/// The cut's camera's world translation word `index` (+0x8c), the packet's (the cut copies the camera from +0x68).
+#[inline(always)]
+pub(crate) fn camera_translation_word(e: &Engine, camera: u32, index: u32) -> u32 {
+    capture::word(e, camera, 0x8c + 4 * index)
+}
+
 /// Hands `f` the address of `object`'s world transform (`m_kWorld`, +0x68, 13 words: a drawn geometry's, which the
 /// cut copies), for the set-ups that pass the transform to helpers by pointer: while the packet is open, the
 /// transform of a guest-stack image of the packet's copy; else the object's own (`object + 0x68`). Off, one relaxed

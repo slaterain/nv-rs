@@ -86,17 +86,24 @@ fn constants_with(e: &mut Engine, this: Ptr, state: Ptr, geometry: u32, world: u
         e.with_stack(0x34, |e, copy| {
             let copy = copy.addr();
             packet::copy_world_transform(e, geometry, copy);
+            // The held accumulator's camera is the cut's: its translation is the packet's (value packet B), and the
+            // scene camera's too when it is that camera (another camera read in place).
             let camera = packet::scene_camera(e);
+            let held = packet::held_accumulator(e);
+            let object = packet::camera(e, Ptr::new(held));
             let mut moved = [0f32; 3];
             for (k, value) in (0u32..).zip(moved.iter_mut()) {
                 let own = f32::from_bits(e.global::<u32>(copy + 0x24 + 4 * k));
-                *value = own - f32::from_bits(packet::world_translation_word(e, camera, k));
+                let translation = if camera == object {
+                    packet::camera_translation_word(e, camera, k)
+                } else {
+                    packet::world_translation_word(e, camera, k)
+                };
+                *value = own - f32::from_bits(translation);
             }
-            let held = packet::held_accumulator(e);
-            let object = packet::camera(e, Ptr::new(held));
             if object != 0 {
                 for (k, value) in (0u32..).zip(moved.iter_mut()) {
-                    *value += f32::from_bits(packet::world_translation_word(e, object, k));
+                    *value += f32::from_bits(packet::camera_translation_word(e, object, k));
                 }
             }
             for (k, value) in (0u32..).zip(moved) {

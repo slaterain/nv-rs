@@ -1,3 +1,4 @@
+sky case: see below
 //! The differential test of every typed function of the shader family (`engine_typed::shader`)
 //! against its translation. One world serves every test: a renderer with its state cache and device,
 //! a texture stage with its cache, a shader, plain and skinned geometry with their properties, passes,
@@ -11643,10 +11644,17 @@ fn take_drawn(e: &mut Engine, w: &[u32]) {
     capture::take(e, property, 0x24, 0x38);
     cut::take_pass_lights(e, w[0]);
     cut::take_frame(e, 0, Ptr::new(0));
+    // The held accumulator's camera's translation (the cut takes the camera from +0x68).
+    let held = e.mem.u32(0x011f_95f0);
+    if held != 0 {
+        let camera = e.mem.u32(held + 8);
+        capture::take(e, camera, 0x8c, 0x98);
+    }
 }
 
 /// The sky's slot 0x7c reads the geometry's world transform through the packet's image (the renderer's world
-/// transform from it) and its copy when the held accumulator skips type 13.
+/// transform from it) and its copy when the held accumulator skips type 13, moved by the held accumulator's camera's
+/// translation (non-zero, the packet's).
 #[test]
 fn sky_setup_constants_reads_the_packet() {
     set_up_reads_the_packet(
@@ -11660,7 +11668,7 @@ fn sky_setup_constants_reads_the_packet() {
         &[
             &[
                 1,
-                0,
+                1,
                 5,
                 3,
                 1,
