@@ -169,7 +169,11 @@ fn a_stage_added() {
     // In the middle: a new array one longer (3 pointers: 12 bytes), the old freed.
     let (_, res) = call(&mut e, 0x26f3, &[r(1), n(1), n(60), n(258)]);
     assert_eq!(res, 1.0);
-    assert_eq!(alloc_sizes(), vec![0x18, 12], "the stage, then 4 * (count + 1)");
+    assert_eq!(
+        alloc_sizes(),
+        vec![0x18, 12],
+        "the stage, then 4 * (count + 1)"
+    );
     let now = stages(&e);
     assert_eq!(now.len(), 3);
     let array = e.mem.u32(DATA + 8);
@@ -198,7 +202,11 @@ fn a_stage_added() {
     assert_eq!(res, 3.0);
     assert_eq!(alloc_sizes(), vec![0x18, 16]);
     assert_eq!(e.mem.u32(DATA + 8) + 16, past);
-    assert_eq!(e.mem.u32(past), 0x5e47_1e15, "the sentinel past the new array");
+    assert_eq!(
+        e.mem.u32(past),
+        0x5e47_1e15,
+        "the sentinel past the new array"
+    );
     assert_eq!(stages(&e).len(), 4);
     // Past the count: nothing, -1.
     let (_, res) = call(&mut e, 0x26f3, &[r(1), n(5), n(1), n(1)]);
