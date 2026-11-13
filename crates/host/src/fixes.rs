@@ -1136,16 +1136,20 @@ mod tests {
     /// spelling for checks); the Fallout.ini line takes 0 or 1 only.
     #[test]
     fn the_drawing_thread_is_off_in_every_preset() {
-        for preset in ["fixes", "vanilla"] {
-            let choice = Choice::from_parts(None, env_of(&[("NV_PRESET", preset)])).unwrap();
-            assert!(!choice.is_on(&DRAW_THREAD), "{preset}");
+        let presets: [&'static [(&str, &str)]; 2] =
+            [&[("NV_PRESET", "fixes")], &[("NV_PRESET", "vanilla")]];
+        for preset in presets {
+            let choice = Choice::from_parts(None, env_of(preset)).unwrap();
+            assert!(!choice.is_on(&DRAW_THREAD), "{preset:?}");
         }
         assert!(!Choice::from_parts(None, no_env)
             .unwrap()
             .is_on(&DRAW_THREAD));
-        for on in ["1", "poison"] {
-            let choice = Choice::from_parts(None, env_of(&[("NV_DRAW_THREAD", on)])).unwrap();
-            assert!(choice.is_on(&DRAW_THREAD), "{on}");
+        let ons: [&'static [(&str, &str)]; 2] =
+            [&[("NV_DRAW_THREAD", "1")], &[("NV_DRAW_THREAD", "poison")]];
+        for on in ons {
+            let choice = Choice::from_parts(None, env_of(on)).unwrap();
+            assert!(choice.is_on(&DRAW_THREAD), "{on:?}");
         }
         let off = Choice::from_parts(None, env_of(&[("NV_DRAW_THREAD", "0")])).unwrap();
         assert!(!off.is_on(&DRAW_THREAD));

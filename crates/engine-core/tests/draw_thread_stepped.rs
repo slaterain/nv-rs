@@ -181,6 +181,24 @@ fn the_world_draw_runs_after_the_tail_from_the_packet_cut_before_it() {
     );
     take_joined();
 
+    // A world pass while a job is still posted (no join point between): the first job is joined first, then the
+    // second posted; one cut at a time.
+    e.mem.set_u32(VALUE, 21);
+    draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
+    draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
+    e.mem.set_u32(VALUE, 22);
+    draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
+    assert_eq!(
+        take_drawn(),
+        [(1, true, 21), (2, true, 21)],
+        "the first job joined at the second cut"
+    );
+    assert!(draw_thread::posted(&e), "the second posted");
+    draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
+    draw_thread::idle(&mut e);
+    assert_eq!(take_drawn(), [(1, true, 22), (2, true, 22)]);
+    assert_eq!(take_joined(), [21, 22]);
+
     // A join point reached on the drawing side does nothing (it would wait for itself).
     e.mem.set_u32(JOIN_INSIDE, 1);
     e.mem.set_u32(VALUE, 30);

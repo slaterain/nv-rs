@@ -12391,9 +12391,10 @@ mod draw_thread_joins {
         for (addr, f) in funcs {
             e.register(addr, f);
         }
-        for addr in [0x0045_3dc0u32] {
+        {
+            let addr = 0x0045_3dc0u32;
             assert!(
-                engine_core::draw_thread::testing::joins_first(&mut e, addr, &[0; 8]),
+                engine_core::draw_thread::testing::joins_first(&mut e, addr, &[0; 16]),
                 "{addr:08x} does not join first"
             );
         }

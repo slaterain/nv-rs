@@ -9225,6 +9225,47 @@ mod tests_second {
         );
     }
 
+    /// With the drawing thread on and a cut made but no device cut, both halves are drawn at the first half's call
+    /// (on main, with the packet) and the world pass's own call of the second half is skipped: each half once.
+    #[test]
+    fn world_pass_skips_the_second_half_the_drawing_thread_took() {
+        use engine_core::draw_thread::{self, testing, Hooks, Packet};
+        use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
+        static FIRST: AtomicU32 = AtomicU32::new(0);
+        static SECOND: AtomicU32 = AtomicU32::new(0);
+        fn never(_: &mut Engine) {
+            panic!("nothing is posted without a device cut");
+        }
+        fn cut(_: &mut Engine, _: u32, _: u32, _: bool) -> Option<Packet> {
+            Some(Box::new(()))
+        }
+        fn adopt(_: &mut Engine, _: Packet) -> Result<(), Packet> {
+            Ok(())
+        }
+        let (mut r, this) = scene_rig();
+        r.e.register_double(0x00b6_ba20, |_, _| {
+            FIRST.fetch_add(1, SeqCst);
+            Ret::default()
+        });
+        r.e.register_double(0x00b6_b930, |_, _| {
+            SECOND.fetch_add(1, SeqCst);
+            Ret::default()
+        });
+        r.e.call_log = None;
+        draw_thread::turn_on(
+            &r.e,
+            Hooks {
+                cut,
+                adopt,
+                ..testing::hooks_finishing_with(never)
+            },
+        );
+        r.e.call(0x0087_3200, &args![this, 0u32, 0u32, 0u32, 0u32]);
+        assert_eq!(draw_thread::counts(&r.e).on_main, 1);
+        assert_eq!((FIRST.load(SeqCst), SECOND.load(SeqCst)), (1, 1));
+        draw_thread::turn_off(&mut r.e);
+    }
+
     /// With the drawing thread on for the run, the world pass goes through its seam (counted), and a frame the
     /// seam keeps on main (here: the call log is a per-call diagnostic, and the overlay) makes the same calls with
     /// the same words as with it off, the interface between the halves.
@@ -10740,7 +10781,7 @@ mod draw_thread_joins {
             0x0087_8250,
         ] {
             assert!(
-                engine_core::draw_thread::testing::joins_first(&mut e, addr, &[0; 8]),
+                engine_core::draw_thread::testing::joins_first(&mut e, addr, &[0; 16]),
                 "{addr:08x} does not join first"
             );
         }

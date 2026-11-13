@@ -1324,7 +1324,7 @@ mod draw_thread_joins {
         }
         for addr in [0x00b6_3a90u32, 0x00b5_fd60, 0x00b5_d300] {
             assert!(
-                engine_core::draw_thread::testing::joins_first(&mut e, addr, &[0; 8]),
+                engine_core::draw_thread::testing::joins_first(&mut e, addr, &[0; 16]),
                 "{addr:08x} does not join first"
             );
         }

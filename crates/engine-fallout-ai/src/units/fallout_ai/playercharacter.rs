@@ -19422,7 +19422,7 @@ mod draw_thread_joins {
         }
         for addr in [0x0093_c200u32, 0x0093_cdf0, 0x0093_d500] {
             assert!(
-                engine_core::draw_thread::testing::joins_first(&mut e, addr, &[0; 8]),
+                engine_core::draw_thread::testing::joins_first(&mut e, addr, &[0; 16]),
                 "{addr:08x} does not join first"
             );
         }

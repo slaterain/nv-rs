@@ -67,9 +67,9 @@ pub fn hooks() -> Hooks {
         adopt: hand_off_adopt,
         hand_back: hand_off_back,
         join: hand_off_join,
-        device_cut: device_cut,
-        device_close: device_close,
-        device_finish: device_finish,
+        device_cut,
+        device_close,
+        device_finish,
     }
 }
 

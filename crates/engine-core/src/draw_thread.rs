@@ -339,10 +339,6 @@ fn first_half_on(e: &mut Engine, camera: u32, accumulator: u32, third: u32, over
         e.call(WORLD_DRAW_FIRST, &args![camera, accumulator, third]);
         return;
     };
-    if real_threads::on_draw_helper() {
-        e.call(WORLD_DRAW_FIRST, &args![camera, accumulator, third]);
-        return;
-    }
     // A job still posted (a world pass twice in one frame): joined first, so one cut is open at a time.
     finish(e);
     if let Some(reason) = serial_reason(e, save_or_load, overlay).or_else(|| (hooks.serial)(e)) {
