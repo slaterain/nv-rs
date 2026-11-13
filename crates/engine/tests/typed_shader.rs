@@ -11673,31 +11673,39 @@ fn sky_setup_constants_reads_the_packet() {
 /// game time and the property's second flags through the packet.
 #[test]
 fn tall_grass_setup_constants_reads_the_packet() {
-    set_up_reads_the_packet(
+    packet_same_cases(
         "tall_grass_setup_constants",
         entry!(
             0x00ba_c9c0,
             engine_typed::draw::tall_grass::setup_constants(Ptr<_>, Ptr<_>)
         )
         .1,
-        TALL_GRASS_CONSTANTS,
-        &[
+        &cases_of(
+            TALL_GRASS_CONSTANTS,
             &[
-                1,
-                0,
-                1,
-                0x4561_2340,
-                0x4040_0000,
-                1,
-                1,
-                2,
-                0,
-                0x3fc0_0000,
-                2,
+                &[1, 0, 1, 0x4561_2340, 0x4040_0000, 1, 1, 2, 0, 0x3fc0_0000, 2],
+                &[0, 1, 1, HALF, 0x4040_0000, 0, 0, 3, 3, HALF, 1],
             ],
-            &[0, 1, 1, HALF, 0x4040_0000, 0, 0, 3, 3, HALF, 1],
-        ],
-        tall_grass_constants_words,
+        ),
+        true,
+        |e, case| {
+            let words = tall_grass_constants_words(e, case);
+            let pass = e.mem.u32(0x011f_91e0);
+            let geometry = e.mem.u32(pass);
+            as_drawn(e, geometry, words[1]);
+            (words, vec![pass, geometry])
+        },
+        |e, w| {
+            take_drawn(e, w);
+            // The tall grass arrays as the cut takes them for a geometry of the tall grass shader (its property's
+            // instance data, the data's counts and array, the array).
+            let property = e.mem.u32(w[1] + 0xa8);
+            capture::take(e, property, 0x7c, 0x80);
+            let instances = e.mem.u32(property + 0x7c);
+            capture::take(e, instances, 0x10, 0x18);
+            let count = u32::from(e.mem.u16(instances + 0x10));
+            capture::take(e, e.mem.u32(instances + 0x14), 0, count << 4);
+        },
     );
 }
 
@@ -11951,7 +11959,10 @@ fn leaf_setup_constants_reads_the_leaves_through_the_packet() {
             engine_typed::draw::speedtree::setup_constants(Ptr<_>, Ptr<_>)
         )
         .1,
-        &cases_of(LEAF_CONSTANTS, &[&[1, 0, 1, 9, ONE, 0], &[0, 0, 0, 8, HALF, 0]]),
+        &cases_of(
+            LEAF_CONSTANTS,
+            &[&[1, 0, 1, 9, ONE, 0], &[0, 0, 0, 8, HALF, 0]],
+        ),
         true,
         |e, case| {
             let words = leaf_constants_words(e, case);

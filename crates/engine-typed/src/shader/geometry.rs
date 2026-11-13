@@ -439,8 +439,8 @@ pub fn pixel_entry_16(e: &mut Engine, _this: Ptr, object: Ptr) {
     let object = object.addr();
     let value = e.global::<u32>(object + 0xe0); // own: main's object read in place (value packet B, piece 4)
     capture::set_own_at(e, VALUE_FIRST, value);
-    let value = if e.global::<u8>(object + 0x24) & 0x10 != 0 {
-        // own: main's object read in place (value packet B, piece 4)
+    // The property's second flags through the packet (value packet B: the cut copies +0x24).
+    let value = if packet::property_word(e, object, 0x24) & 0x10 != 0 {
         e.global::<u32>(VALUE_CONSTANT) // own: a constant of the exe
     } else {
         1.0f32.to_bits()
