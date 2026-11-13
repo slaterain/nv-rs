@@ -1248,7 +1248,8 @@ const SET_SHADER_CONSTANTS: u32 = 0x00e8_26d0;
 /// vtable +0x78) for the pass's pixel (+0x44) and vertex (+0x5c) program; with the block's +0x10
 /// property's bit 0, the shader's +0x1c gets it through its vtable +0x24.
 pub fn setup_geometry_constants(e: &mut Engine, this: Ptr, block: Ptr) {
-    let geometry = e.mem.u32(e.global::<u32>(RENDERING_PASS));
+    let rendering = capture::own_at::<u32>(e, RENDERING_PASS);
+    let geometry = capture::own_at::<u32>(e, rendering);
     // The geometry's world transform and bound as the value packet holds them (value packet B): the helpers
     // handed them read the packet's images while the packet is open, the geometry's own otherwise.
     crate::draw::packet::with_drawn(e, geometry, |e, transform, position| {

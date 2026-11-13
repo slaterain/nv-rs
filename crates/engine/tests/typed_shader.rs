@@ -11550,6 +11550,15 @@ fn lighting30_setup_constants_reads_the_packet() {
             let geometry = e.mem.u32(pass);
             as_drawn(e, geometry, words[1]);
             d3dx_content_stand_ins(e);
+            // The device's clip planes (its slot 0xdc) noted by what they hold.
+            e.register(VT_FN + 0xdc, |e, a| {
+                let mut h = e.mem.u32(RETS + 0x7c8).wrapping_mul(31).wrapping_add(a[1]);
+                for k in 0..4u32 {
+                    h = h.wrapping_mul(17).wrapping_add(e.mem.u32(a[2] + 4 * k));
+                }
+                e.mem.set_u32(RETS + 0x7c8, h);
+                ret(0)
+            });
             (words, vec![pass, geometry])
         },
         |e, w| {
@@ -12034,8 +12043,10 @@ fn d3dx_content_stand_ins(e: &mut Engine) {
         let v = words_at(e, a[1], 4);
         let m = words_at(e, a[2], 16);
         for k in 0..4u32 {
-            e.mem
-                .set_u32(a[0] + 4 * k, v[((k + 1) % 4) as usize] ^ (m[k as usize] & 0xff));
+            e.mem.set_u32(
+                a[0] + 4 * k,
+                v[((k + 1) % 4) as usize] ^ (m[k as usize] & 0xff),
+            );
         }
         ret(a[0])
     });

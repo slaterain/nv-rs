@@ -1374,7 +1374,12 @@ pub(crate) fn copy_grass_instances(e: &mut Engine, to: u32, data: u32, count: u1
 /// Hands `f` a geometry data's `count` 0x10-byte sub-textures (+0x68) and their size: the packet's image while
 /// it is open, the array itself otherwise (the caller copies them into its own constants).
 #[inline(always)]
-pub(crate) fn with_subtextures(e: &mut Engine, data: u32, count: u8, f: impl FnOnce(&mut Engine, u32, u32)) {
+pub(crate) fn with_subtextures(
+    e: &mut Engine,
+    data: u32,
+    count: u8,
+    f: impl FnOnce(&mut Engine, u32, u32),
+) {
     let source = subtextures(e, data);
     let size = u32::from(count) << 4;
     capture::image(e, source, 0, size, |e, image| f(e, image, size));
