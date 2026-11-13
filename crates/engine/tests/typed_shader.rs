@@ -12001,20 +12001,7 @@ fn leaf_setup_constants_reads_the_leaves_through_the_packet() {
         true,
         |e, case| {
             let words = leaf_constants_words(e, case);
-            // The leaf property of its class (a block large enough for its +0x88), its leaf data (the slot 0xfc
-            // answer) holding the leaves (slot 0x100's).
-            let old = e.mem.u32(words[1] + 0xc);
-            let property = e.mem.alloc(0x90);
-            for k in 0..0x80 / 4 {
-                let word = e.mem.u32(old + 4 * k);
-                set(e, property + 4 * k, word);
-            }
-            set(e, words[1] + 0xc, property);
-            let leaf_data = e.mem.u32(RETS + 0xfc);
-            let leaves = e.mem.u32(RETS + 0x100);
-            set(e, leaf_data + 8, leaves);
-            set(e, property + 0x88, leaf_data);
-            set(e, property, 0x010b_9700);
+            let property = leaf_class_property(e, words[1], true);
             let record = e.mem.u32(0x011f_91e0);
             let from = e.mem.u32(record);
             let geometry = group_c_geometry(e, from, property, 0x010b_9190);
@@ -12133,4 +12120,67 @@ fn distance_fade() {
         })
         .run()
         .assert_same();
+}
+
+/// The leaf shader's state block `block`'s property (+0xc) made one of the leaf property's class: its vtable the
+/// exe's (`010b9700`, mapped here: its slots 0xfc and 0x100 the exe's `00bb3c80` and `00bb3c90`, the others
+/// stand-ins), a block large enough for its leaf data (+0x88: the slot 0xfc answer of the leaf world, holding the
+/// slot 0x100 answer, its leaves, at +8; none without `with_data`). Answers the property.
+fn leaf_class_property(e: &mut Engine, block: u32, with_data: bool) -> u32 {
+    e.map(0x010b_9000, 0x1000);
+    for slot in (0..0x200u32).step_by(4) {
+        let target = match slot {
+            0xfc => 0x00bb_3c80,
+            0x100 => 0x00bb_3c90,
+            _ => VT_FN + slot,
+        };
+        set(e, 0x010b_9700 + slot, target);
+    }
+    let old = e.mem.u32(block + 0xc);
+    let property = e.mem.alloc(0x90);
+    for k in 0..0x80 / 4 {
+        let word = e.mem.u32(old + 4 * k);
+        set(e, property + 4 * k, word);
+    }
+    set(e, block + 0xc, property);
+    let leaf_data = e.mem.u32(RETS + 0xfc);
+    let leaves = e.mem.u32(RETS + 0x100);
+    set(e, leaf_data + 8, leaves);
+    set(e, property + 0x88, if with_data { leaf_data } else { 0 });
+    set(e, property, 0x010b_9700);
+    property
+}
+
+/// The leaf shader's slot 0x7c with the switch off and a leaf property of its class (`010b9700`, its slots the
+/// exe's): the leaf data (slot 0xfc) and leaves (slot 0x100) read without the calls, against the translation, which
+/// calls the slots (`00bb3c80`, `00bb3c90`, translated); leaf data there or none (then no leaves, and the copy and
+/// the data's words come from the zero page). The main thread's word, bit for bit.
+#[test]
+fn leaf_setup_constants_with_the_leaf_class() {
+    Diff::new(entry!(
+        0x00bb_2760,
+        engine_typed::draw::speedtree::setup_constants(Ptr<_>, Ptr<_>)
+    ))
+    .shader_translated()
+    .goes_by_address(&[0x00bb_25d0, 0x00ec_44d0])
+    // The slots' targets run by address on the translation's side only: the typed set-up reads their fields.
+    .ignore_calls(&[0x00bb_3c80, 0x00bb_3c90])
+    .main_thread(0)
+    .inputs(&[
+        Input::Flag,
+        Input::Of(&[0, 2]),
+        Input::Flag,
+        Input::Of(&[9, 8]),
+        Input::F32Swept(ONE),
+        Input::Of(&[0]),
+        Input::Flag,
+    ])
+    .setup(|e, c| {
+        let words = leaf_constants_words(e, c);
+        e.map(0, 0x1000);
+        leaf_class_property(e, words[1], c.word(6) != 0);
+        words
+    })
+    .run()
+    .assert_same();
 }

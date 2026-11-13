@@ -1385,26 +1385,29 @@ pub(crate) fn with_subtextures(
     capture::image(e, source, 0, size, |e, image| f(e, image, size));
 }
 
-/// The SpeedTree leaf property's class (`010b9700`): its slots 0x100 (`00bb3c90`) and 0xfc (`00bb3c80`) answer its
-/// leaf data (+0x88) and that data's leaves (+8) without a call, as the cut reads them.
-const LEAF_PROPERTY: u32 = 0x010b_9700;
+/// The SpeedTree leaf property's slots 0xfc (`00bb3c80`: its leaf data +0x88) and 0x100 (`00bb3c90`: that data's
+/// leaves +8, null without data), read here without the calls where the slots hold the exe's.
+const SLOT_LEAF_DATA: u32 = 0xfc;
+const LEAF_DATA: u32 = 0x00bb_3c80;
+const SLOT_LEAVES: u32 = 0x100;
+const LEAVES: u32 = 0x00bb_3c90;
 
-/// A leaf property's leaf data (its slot 0xfc): for the leaf property's class its +0x88, the packet's; another
-/// class through its vtable.
+/// A leaf property's leaf data (its slot 0xfc): where the slot holds the exe's (`00bb3c80`) its +0x88, the packet's;
+/// another target through the vtable.
 #[inline(always)]
 pub(crate) fn leaf_data(e: &mut Engine, property: u32) -> u32 {
-    if e.global::<u32>(property) == LEAF_PROPERTY {
+    if crate::slot_target(e, property, SLOT_LEAF_DATA) == LEAF_DATA {
         capture::word(e, property, 0x88)
     } else {
-        e.vcall(property, 0xfc, &[]).u32()
+        e.vcall(property, SLOT_LEAF_DATA, &[]).u32()
     }
 }
 
-/// A leaf property's leaves (its slot 0x100: for the leaf property's class its leaf data's +8, the packet's, null
-/// without data; another class through its vtable), 0x300 bytes copied to `to` (`_memcpy`).
+/// A leaf property's leaves (its slot 0x100: where the slot holds the exe's (`00bb3c90`) its leaf data's +8, the
+/// packet's, null without data; another target through the vtable), 0x300 bytes copied to `to` (`_memcpy`).
 #[inline(always)]
 pub(crate) fn copy_leaves(e: &mut Engine, to: u32, property: u32) {
-    let source = if e.global::<u32>(property) == LEAF_PROPERTY {
+    let source = if crate::slot_target(e, property, SLOT_LEAVES) == LEAVES {
         let data = capture::word(e, property, 0x88);
         if data == 0 {
             0
@@ -1412,7 +1415,7 @@ pub(crate) fn copy_leaves(e: &mut Engine, to: u32, property: u32) {
             capture::word(e, data, 8)
         }
     } else {
-        e.vcall(property, 0x100, &[]).u32()
+        e.vcall(property, SLOT_LEAVES, &[]).u32()
     };
     capture::image(e, source, 0, 0x300, |e, image| {
         super::own::copy_constants(e, to, image, 0x300);
