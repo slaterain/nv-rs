@@ -1,10 +1,10 @@
 //! `functions_ln/ln_fn_perk.h` (JIP LN NVSE): a perk's entries, trait flag and level, and an
-//! actor's rank in a perk. 16 of its 17 commands.
+//! actor's rank in a perk. All 17 of its commands.
 //!
-//! Not built: `SetPerkRank` (`0x223B`). JIP's command is asm that builds the game's own
-//! `Cmd_AddPerk_Execute` frame and jumps into its body (`0x5D4E42`, or `0x5D4EBC` when the rank does
-//! not change), so JohnnyGuitar NVSE's OnAddPerk event sees it; it comes alone, once that body is
-//! read in the exe.
+//! `SetPerkRank` is asm in JIP: it builds the game's own `Cmd_AddPerk_Execute` frame (`005D4D90`)
+//! and jumps into its body (`0x5D4E42`, or `0x5D4EBC` when the rank does not change) so that a hook
+//! on that body (JohnnyGuitar NVSE's OnAddPerk) sees it. The port runs what that body does from
+//! there, read in the exe (see `set_perk_rank`).
 //!
 //! The perk loader (`005EADA0`) adds each entry through `005EB410` to the list at +0x48 (a
 //! `tList`, its first node inline). Entries are told apart by their vtables (JIP's `IS_TYPE`): a
@@ -33,6 +33,7 @@ use nvse::{handled, CommandArgs};
 #[rustfmt::skip]
 pub static COMMANDS: Handlers = &[
     (0x221b, has_perk_rank),
+    (0x223b, set_perk_rank),
     (0x2267, get_perk_entry_count),
     (0x2268, get_nth_perk_entry_type),
     (0x2269, get_nth_perk_entry_function),
@@ -60,6 +61,18 @@ const LEVELED_LIST: u32 = 0x0104_6320;
 const ACTIVATE_CHOICE: u32 = 0x0104_6340;
 /// `Actor::GetPerkRank` (the actor's virtual at +0x4A0: the perk, whether for teammates).
 const GET_PERK_RANK: u32 = 0x4a0;
+/// `Actor::SetPerkRank` (the actor's virtual at +0x498: the perk, the rank, whether for
+/// teammates), as the game's `AddPerk` body calls it at `005D4E5B`.
+const SET_PERK_RANK: u32 = 0x498;
+/// The game's console print (`00703C00`, `cdecl`) and `AddPerk`'s text (`0103C5A4`, "Added Perk
+/// %s to %s with rank %i"); the perk's name through its `TESFullName` (+0x18, `00408DA0`) and the
+/// actor's (`0055D520`).
+const CONSOLE_PRINT: u32 = 0x0070_3c00;
+const ADDED_PERK_TEXT: u32 = 0x0103_c5a4;
+const FULL_NAME_TEXT: u32 = 0x0040_8da0;
+const ACTOR_NAME: u32 = 0x0055_d520;
+/// The running thread's console-line flag (`TLS + 0x268`), as `005D4E73` reads it.
+const TLS_CONSOLE_LINE: u32 = 0x268;
 /// JIP's label buffer (`char labelStr[0x80]`).
 const LABEL_BUFFER: usize = 0x80;
 
@@ -95,6 +108,55 @@ fn has_perk_rank(e: &mut Engine, w: &[u32]) -> Ret {
         }
     }
     crate::console::print_result(e, &a);
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_perk.h: Cmd_SetPerkRank_Execute
+// (asm), with the game's Cmd_AddPerk_Execute body (005D4E42-005D4ECB) it jumps into.
+/// For a calling actor (vtable +0x100 true) and a perk (type 0x56): the rank (0: nothing) capped
+/// at the perk's number of ranks (unsigned); the actor's current rank asked (`GetPerkRank`, the
+/// alt argument passed as the whole word JIP read). The same rank (its byte): the result is the
+/// rank less one (JIP's frame holds `rank - 1` where the game keeps the current rank). Otherwise,
+/// as the game's body: `SetPerkRank` with the rank and the alt argument's low byte, the console
+/// line "Added Perk ... with rank ..." on a console thread, and the rank as the result.
+fn set_perk_rank(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let actor = a.this_obj;
+    if !super::is_actor(e, actor) {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    let perk = read.form(0);
+    if !read.ok || type_of(e, perk) != form_type_more::BGS_PERK {
+        return handled(true);
+    }
+    let mut rank = read.int(1, 0);
+    if rank == 0 {
+        return handled(true);
+    }
+    rank = rank.min(u32::from(
+        e.get(Ptr::<BGSPerk>::new(perk), BGSPerk::cNumRanks),
+    ));
+    // `[ebp-0xD] = rank - 1` (a byte), `[ebp-5] = useAlt`'s low byte.
+    let less_one = (rank as u8).wrapping_sub(1);
+    let alt = read.int(2, 0);
+    let current = e.vcall(actor, GET_PERK_RANK, &[perk, alt]).u32() as u8;
+    if current == rank as u8 {
+        a.set_result(e, f64::from(less_one));
+        return handled(true);
+    }
+    let new_rank = u32::from(less_one) + 1;
+    e.vcall(actor, SET_PERK_RANK, &[perk, new_rank, alt & 0xff]);
+    let tls = e.tls();
+    if tls != 0 && e.mem.u8(tls + TLS_CONSOLE_LINE) != 0 {
+        let actor_name = e.call(ACTOR_NAME, &args![actor]).u32();
+        let perk_name = e.call(FULL_NAME_TEXT, &args![perk + 0x18]).u32();
+        e.call(
+            CONSOLE_PRINT,
+            &args![ADDED_PERK_TEXT, perk_name, actor_name, new_rank],
+        );
+    }
+    a.set_result(e, f64::from(new_rank));
     handled(true)
 }
 
