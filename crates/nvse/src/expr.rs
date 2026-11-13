@@ -243,8 +243,67 @@ pub mod op {
     pub const MAX: u8 = 45;
 }
 
+/// `Operator::precedence` and `symbol` (`s_operators`, `ScriptUtils.cpp` (xNVSE)), by `kOpType_*`.
+const OPERATORS: [(u8, &str); op::MAX as usize] = [
+    (2, ":="),
+    (5, "||"),
+    (7, "&&"),
+    (9, ":"),
+    (13, "=="),
+    (13, "!="),
+    (15, ">"),
+    (15, "<"),
+    (15, ">="),
+    (15, "<="),
+    (16, "|"),
+    (17, "&"),
+    (18, "<<"),
+    (18, ">>"),
+    (19, "+"),
+    (19, "-"),
+    (21, "*"),
+    (21, "/"),
+    (21, "%"),
+    (23, "^"),
+    (25, "-"),
+    (27, "!"),
+    (80, "("),
+    (80, ")"),
+    (90, "["),
+    (90, "]"),
+    (2, "<-"),
+    (25, "$"),
+    (2, "+="),
+    (2, "*="),
+    (2, "/="),
+    (2, "^="),
+    (2, "-="),
+    (25, "#"),
+    (25, "*"),
+    (90, "->"),
+    (3, "::"),
+    (25, "&"),
+    (91, "{"),
+    (91, "}"),
+    (90, "."),
+    (2, "|="),
+    (2, "&="),
+    (2, "%="),
+    (27, "~"),
+];
+
+/// An operator's precedence (`Operator::precedence`).
+pub(crate) fn op_precedence(o: u8) -> u8 {
+    OPERATORS[o as usize].0
+}
+
+/// An operator's symbol (`Operator::symbol`).
+pub(crate) fn op_symbol(o: u8) -> &'static str {
+    OPERATORS[o as usize].1
+}
+
 /// `Operator::numOperands` (`s_operators`).
-fn operand_count(o: u8) -> usize {
+pub(crate) fn operand_count(o: u8) -> usize {
     match o {
         op::NEGATION
         | op::LOGICAL_NOT
@@ -283,6 +342,17 @@ pub struct Eval {
     pub base_offset: Option<u32>,
     /// `m_inline`: a parenthesised parameter, no command named in its errors.
     pub inline: bool,
+    /// Where the script data ends: no read goes past it (`u32::MAX`: no bound). xNVSE has no such
+    /// bound; the port refuses data that runs past it rather than reading on (a corrupt script).
+    pub(crate) limit: u32,
+    /// The end of the expression being read (`u32::MAX` outside one): a string or a lambda
+    /// token longer than what is left of its expression is refused.
+    pub(crate) expr_end: u32,
+    /// A read ran past [`Eval::limit`] or [`Eval::expr_end`].
+    pub(crate) overrun: bool,
+    /// The variables the evaluation resolved (reference index, variable id): kept only when asked
+    /// (`Assert`), so an ordinary evaluation records nothing and allocates nothing.
+    pub(crate) resolved_vars: Option<Vec<(u16, u16)>>,
 }
 
 /// The per-thread stack of running evaluators' expected return types (`ExpectReturnType`,
@@ -440,6 +510,10 @@ impl Eval {
             suppress_errors: false,
             base_offset: Some(offset.wrapping_sub(4)),
             inline: false,
+            limit: u32::MAX,
+            expr_end: u32::MAX,
+            overrun: false,
+            resolved_vars: None,
         }
     }
 
@@ -473,21 +547,41 @@ impl Eval {
         self.read_token(e)
     }
 
+    /// Whether `n` more bytes lie before the data's end and the expression's; when not, the
+    /// read is refused ([`Eval::overrun`]).
+    fn room(&mut self, n: u32) -> bool {
+        let end = u64::from(self.at) + u64::from(n);
+        let ok = end <= u64::from(self.limit.min(self.expr_end));
+        if !ok {
+            self.overrun = true;
+        }
+        ok
+    }
+
     fn read8(&mut self, e: &Engine) -> u8 {
+        if !self.room(1) {
+            return 0;
+        }
         let v = e.mem.u8(self.at);
-        self.at += 1;
+        self.at = self.at.wrapping_add(1);
         v
     }
 
     fn read16(&mut self, e: &Engine) -> u16 {
+        if !self.room(2) {
+            return 0;
+        }
         let v = e.mem.u16(self.at);
-        self.at += 2;
+        self.at = self.at.wrapping_add(2);
         v
     }
 
     fn read32(&mut self, e: &Engine) -> u32 {
+        if !self.room(4) {
+            return 0;
+        }
         let v = e.mem.u32(self.at);
-        self.at += 4;
+        self.at = self.at.wrapping_add(4);
         v
     }
 
@@ -500,14 +594,22 @@ impl Eval {
             b'I' | b'i' => Tok::number(f64::from(self.read16(e))),
             b'L' | b'l' => Tok::number(f64::from(self.read32(e))),
             b'Z' => {
+                if !self.room(8) {
+                    return None;
+                }
                 let v = e.mem.f64(self.at);
-                self.at += 8;
+                self.at = self.at.wrapping_add(8);
                 Tok::number(v)
             }
             b'S' => {
                 let len = u32::from(self.read16(e));
+                // A length past the expression's end: refused (a corrupt script).
+                if self.overrun || !self.room(len) {
+                    self.error("A string runs past the end of its expression");
+                    return None;
+                }
                 let s = e.mem.bytes(self.at, len);
-                self.at += len;
+                self.at = self.at.wrapping_add(len);
                 Tok::Str(s)
             }
             b'R' => {
@@ -553,6 +655,11 @@ impl Eval {
                     return None;
                 }
                 let args_len = u32::from(self.read16(e));
+                // Arguments past the expression's end: refused (a corrupt script).
+                if self.overrun || args_len < 2 || !self.room(args_len - 2) {
+                    self.error(format!("Failed to resolve command with opcode {opcode:X}"));
+                    return None;
+                }
                 let offset = self.at.wrapping_sub(self.data);
                 self.at = self.at.wrapping_add(args_len).wrapping_sub(2);
                 Tok::Command {
@@ -589,8 +696,13 @@ impl Eval {
                 // A lambda's script data, copied once (xNVSE copies it when it caches the
                 // expression's tokens).
                 let len = self.read32(e);
+                // A length past the expression's end: refused (a corrupt script), not copied.
+                if self.overrun || !self.room(len) {
+                    self.error("A lambda runs past the end of its expression");
+                    return None;
+                }
                 let data = crate::lambda::token_data(e, self.at, len);
-                self.at += len;
+                self.at = self.at.wrapping_add(len);
                 Tok::LambdaData { data, len }
             }
             b'K' => Tok::OptionalEmpty,
@@ -606,11 +718,27 @@ impl Eval {
     // ExpressionEvaluator::ParseBytecode, ParseShortCircuit, GetOperatorParent.
     fn parse(&mut self, e: &mut Engine) -> Option<Vec<Entry>> {
         let before = self.at;
+        self.overrun = false;
         let len = u32::from(self.read16(e));
         let end = self.at.wrapping_add(len).wrapping_sub(2);
+        // An expression running past the data's end is refused (a corrupt script); within it, no
+        // token reads past its end.
+        if self.overrun
+            || (len >= 2 && u64::from(self.at) + u64::from(len) - 2 > u64::from(self.limit))
+        {
+            return None;
+        }
+        let saved_end = self.expr_end;
+        if len >= 2 {
+            self.expr_end = end;
+        }
         let mut out = Vec::new();
         while self.at < end {
-            let tok = self.read_token(e)?;
+            let tok = self.read_token(e);
+            let Some(tok) = tok.filter(|_| !self.overrun) else {
+                self.expr_end = saved_end;
+                return None;
+            };
             out.push(Entry {
                 tok,
                 sc_parent: None,
@@ -618,7 +746,8 @@ impl Eval {
                 sc_offset: 0,
             });
         }
-        let increment = self.at - before;
+        self.expr_end = saved_end;
+        let increment = self.at.wrapping_sub(before);
         let now = e.mem.u32(self.offset_ptr);
         e.mem.set_u32(self.offset_ptr, now.wrapping_add(increment));
         let parent = |list: &[Entry], from: usize| -> usize {
@@ -669,6 +798,19 @@ impl Eval {
             }
         }
         Some(out)
+    }
+
+    /// `GetTokens`: the next expression's tokens as they are stored (variables not resolved, no
+    /// command run), the read position and the offset word past it; `None` when a token does not
+    /// read.
+    pub(crate) fn tokens(&mut self, e: &mut Engine) -> Option<Vec<Tok>> {
+        Some(self.parse(e)?.into_iter().map(|entry| entry.tok).collect())
+    }
+
+    /// `ScriptToken::ResolveVariable` of one stored token: a variable with its local, as the
+    /// evaluation resolves it; `None` when it does not resolve.
+    pub(crate) fn resolved(&mut self, e: &mut Engine, tok: &Tok) -> Option<Tok> {
+        self.resolve_variable(e, tok.clone())
     }
 
     // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptUtils.cpp:
@@ -816,6 +958,9 @@ impl Eval {
         if local == 0 {
             self.error("Failed to resolve variable");
             return None;
+        }
+        if let Some(v) = &mut self.resolved_vars {
+            v.push((ref_idx, var_idx));
         }
         if (ty == Ty::ArrayVar || ty == Ty::StringVar) && ref_idx == 0 {
             let kind = if ty == Ty::StringVar {
@@ -1995,6 +2140,10 @@ pub fn inline_argument(
             suppress_errors: false,
             base_offset: Some(start.wrapping_sub(data).wrapping_sub(4)),
             inline: true,
+            limit: u32::MAX,
+            expr_end: u32::MAX,
+            overrun: false,
+            resolved_vars: None,
         };
         let tok = with_evaluator(e, |e| ev.evaluate(e));
         let end = data.wrapping_add(e.mem.u32(off));

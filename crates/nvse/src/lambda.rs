@@ -162,7 +162,7 @@ pub fn create(
 
 /// A `Script` made at run time (no form id assigned while it is built), on `data`, with the
 /// parent's variables, references, counts and files.
-fn new_script(e: &mut Engine, data: u32, len: u32, parent: u32) -> u32 {
+pub(crate) fn new_script(e: &mut Engine, data: u32, len: u32, parent: u32) -> u32 {
     let handler = e.mem.u32(DATA_HANDLER);
     e.call(DISABLE_ASSIGN_FORM_IDS, &args![handler, 1u32]);
     let memory = e.call(FORM_HEAP_ALLOCATE, &args![SCRIPT_SIZE]).u32();

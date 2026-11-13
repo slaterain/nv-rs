@@ -5,6 +5,7 @@ pub mod algohol;
 pub mod array;
 pub mod console;
 pub mod controls;
+pub mod decompiler;
 pub mod extender;
 pub mod factions;
 pub mod game;
@@ -73,6 +74,7 @@ pub fn all() -> Vec<&'static Command> {
         .chain(script_vars::COMMANDS)
         .chain(mod_data::COMMANDS)
         .chain(controls::COMMANDS)
+        .chain(decompiler::COMMANDS)
         .chain(crate::functions::COMMANDS)
         .chain(crate::tick::COMMANDS)
         .chain(crate::event_commands::COMMANDS)
@@ -243,6 +245,7 @@ pub mod rtti {
     pub const EFFECT_SETTING: u32 = 0x0118_37c4;
     pub const TES_QUEST: u32 = 0x0118_6500;
     pub const EXTRA_SCRIPT: u32 = 0x0118_4514;
+    pub const TES_GLOBAL: u32 = 0x0118_3ad4;
 }
 
 /// `DYNAMIC_CAST(obj, from, to)` (xNVSE): the exe's `__RTDynamicCast`; 0 for a null object or
@@ -377,6 +380,7 @@ pub(crate) mod test_support {
             rtti::EFFECT_SETTING => (1 << 46, 0),
             rtti::TES_QUEST => (1 << 47, 0),
             rtti::EXTRA_SCRIPT => (1 << 48, 0),
+            rtti::TES_GLOBAL => (1 << 49, 0),
             _ => (0, 0),
         }
     }

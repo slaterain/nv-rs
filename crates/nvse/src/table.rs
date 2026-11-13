@@ -43,6 +43,104 @@ pub const DEFAULT_PARSE: u32 = ROUTINE_BASE + 4;
 /// The exe's default parse routine.
 const EXE_DEFAULT_PARSE: u32 = 0x005b_1ba0;
 
+/// xNVSE's other parse routines, the parse words of its expression-format commands:
+/// `Cmd_Expression_Parse`, `Cmd_Let_Parse`, `Cmd_BeginLoop_Parse` (`while`, `ForEach`,
+/// `ForEachAlt`), `Cmd_Loop_Parse`, `Cmd_Null_Parse`, `Cmd_Function_Parse` and `Cmd_Call_Parse`
+/// (`CommandTable.h`, `Commands_Scripting.cpp` (xNVSE)). Only the script compiler calls a parser,
+/// and xNVSE's run-time compiler is not built in yet (plan step 3.8): until it is, each of these
+/// does what the default one does, so a line compiles as it did before. The words themselves are
+/// read by the decompiler ([`crate::decompile`]), which tells an expression-format command's
+/// argument bytes from the game's by them, as xNVSE's `ScriptAnalyzer` does. (`Cmd_CallAfter_Parse`
+/// is the parse word of no command.)
+pub const EXPRESSION_PARSE: u32 = ROUTINE_BASE + 0x20;
+pub const LET_PARSE: u32 = ROUTINE_BASE + 0x24;
+pub const BEGIN_LOOP_PARSE: u32 = ROUTINE_BASE + 0x28;
+pub const LOOP_PARSE: u32 = ROUTINE_BASE + 0x2c;
+pub const NULL_PARSE: u32 = ROUTINE_BASE + 0x30;
+pub const FUNCTION_PARSE: u32 = ROUTINE_BASE + 0x34;
+pub const CALL_PARSE: u32 = ROUTINE_BASE + 0x38;
+const PARSE_ROUTINES: [u32; 7] = [
+    EXPRESSION_PARSE,
+    LET_PARSE,
+    BEGIN_LOOP_PARSE,
+    LOOP_PARSE,
+    NULL_PARSE,
+    FUNCTION_PARSE,
+    CALL_PARSE,
+];
+/// `Cmd_Expression_Plugin_Parse` (xNVSE `CommandTable.h`): the value a plugin puts in its record's
+/// parse word to ask for xNVSE's expression parser, which `PluginManager::RegisterCommand` turns
+/// into `Cmd_Expression_Parse`. A plugin record that asks for it gets [`EXPRESSION_PARSE`]
+/// ([`PluginRecord::expression`]); nothing reads this value itself yet.
+pub const PLUGIN_EXPRESSION_PARSE: u32 = 0x0800_0000;
+
+/// Every xNVSE command whose parse word is not `Cmd_Default_Parse`, from xNVSE 6.4.9's source:
+/// the commands defined with `DEFINE_CMD_ALT_EXP`, `DEFINE_COMMAND_EXP` (and their `_VER` forms)
+/// that `CommandTable::AddCommandsV*` registers, and the `CommandInfo` literals of
+/// `Commands_Scripting.cpp`.
+#[rustfmt::skip]
+pub static PARSE_WORDS: &[(&str, u32)] = &[
+    ("Let", LET_PARSE),
+    ("while", BEGIN_LOOP_PARSE), ("ForEach", BEGIN_LOOP_PARSE), ("ForEachAlt", BEGIN_LOOP_PARSE),
+    ("loop", LOOP_PARSE),
+    ("continue", NULL_PARSE), ("break", NULL_PARSE),
+    ("@PushExecutionContext", NULL_PARSE), ("@PopExecutionContext", NULL_PARSE),
+    ("Function", FUNCTION_PARSE),
+    ("Call", CALL_PARSE),
+    ("eval", EXPRESSION_PARSE), ("testexpr", EXPRESSION_PARSE), ("ToString", EXPRESSION_PARSE),
+    ("TypeOf", EXPRESSION_PARSE), ("Print", EXPRESSION_PARSE), ("PrintDebug", EXPRESSION_PARSE),
+    ("PrintF", EXPRESSION_PARSE), ("PrintDebugF", EXPRESSION_PARSE),
+    ("SetFunctionValue", EXPRESSION_PARSE), ("SetModLocalData", EXPRESSION_PARSE),
+    ("GetModLocalData", EXPRESSION_PARSE), ("ModLocalDataExists", EXPRESSION_PARSE),
+    ("RemoveModLocalData", EXPRESSION_PARSE),
+    ("Assert", EXPRESSION_PARSE), ("CallAfterFrames", EXPRESSION_PARSE),
+    ("CallAfterSeconds", EXPRESSION_PARSE), ("CallForSeconds", EXPRESSION_PARSE),
+    ("CallWhen", EXPRESSION_PARSE), ("CallWhile", EXPRESSION_PARSE),
+    ("CallWhilePerSeconds", EXPRESSION_PARSE), ("CompileScript", EXPRESSION_PARSE),
+    ("CreateFormList", EXPRESSION_PARSE), ("DebugPrintVar", EXPRESSION_PARSE),
+    ("DispatchEvent", EXPRESSION_PARSE), ("DispatchEventAlt", EXPRESSION_PARSE),
+    ("DumpEventHandlers", EXPRESSION_PARSE), ("FireChallenge", EXPRESSION_PARSE),
+    ("GetDoorSound", EXPRESSION_PARSE), ("GetEventHandlers", EXPRESSION_PARSE),
+    ("GetFalloutDirectory", EXPRESSION_PARSE), ("GetHigherPriorityEventHandlers", EXPRESSION_PARSE),
+    ("GetLowerPriorityEventHandlers", EXPRESSION_PARSE), ("GetRawFormIDString", EXPRESSION_PARSE),
+    ("GetSelfAlt_OLD", EXPRESSION_PARSE), ("IsEventHandlerFirst", EXPRESSION_PARSE),
+    ("IsEventHandlerLast", EXPRESSION_PARSE), ("Jmp", EXPRESSION_PARSE),
+    ("Jmp_If_False", EXPRESSION_PARSE), ("Jmp_If_True", EXPRESSION_PARSE),
+    ("MatchesAnyOf", EXPRESSION_PARSE), ("PluginVersion", EXPRESSION_PARSE),
+    ("PrintVar", EXPRESSION_PARSE), ("RemoveEventHandler", EXPRESSION_PARSE),
+    ("SetEventHandler", EXPRESSION_PARSE), ("SetEventHandlerAlt", EXPRESSION_PARSE),
+    ("SetModelPath", EXPRESSION_PARSE), ("SetTexturePath", EXPRESSION_PARSE),
+    ("Ternary", EXPRESSION_PARSE), ("TernaryUDF", EXPRESSION_PARSE),
+    ("ToNumber", EXPRESSION_PARSE), ("ValidateRegex", EXPRESSION_PARSE),
+    ("ar_All", EXPRESSION_PARSE), ("ar_Any", EXPRESSION_PARSE), ("ar_Append", EXPRESSION_PARSE),
+    ("ar_BadNumericIndex", EXPRESSION_PARSE), ("ar_BadStringIndex", EXPRESSION_PARSE),
+    ("ar_Cat", EXPRESSION_PARSE), ("ar_Copy", EXPRESSION_PARSE), ("ar_Count", EXPRESSION_PARSE),
+    ("ar_CountWhere", EXPRESSION_PARSE), ("ar_CustomSort", EXPRESSION_PARSE),
+    ("ar_DeepCopy", EXPRESSION_PARSE), ("ar_DeepEquals", EXPRESSION_PARSE),
+    ("ar_Dump", EXPRESSION_PARSE), ("ar_DumpF", EXPRESSION_PARSE), ("ar_Erase", EXPRESSION_PARSE),
+    ("ar_Exists", EXPRESSION_PARSE), ("ar_Filter", EXPRESSION_PARSE), ("ar_Find", EXPRESSION_PARSE),
+    ("ar_FindWhere", EXPRESSION_PARSE), ("ar_First", EXPRESSION_PARSE),
+    ("ar_ForEach", EXPRESSION_PARSE), ("ar_Generate", EXPRESSION_PARSE),
+    ("ar_GetNth", EXPRESSION_PARSE), ("ar_HasKey", EXPRESSION_PARSE), ("ar_Init", EXPRESSION_PARSE),
+    ("ar_Insert", EXPRESSION_PARSE), ("ar_InsertRange", EXPRESSION_PARSE),
+    ("ar_Keys", EXPRESSION_PARSE), ("ar_Last", EXPRESSION_PARSE), ("ar_List", EXPRESSION_PARSE),
+    ("ar_Map", EXPRESSION_PARSE), ("ar_MapTo", EXPRESSION_PARSE), ("ar_Next", EXPRESSION_PARSE),
+    ("ar_Packed", EXPRESSION_PARSE), ("ar_Prev", EXPRESSION_PARSE), ("ar_Range", EXPRESSION_PARSE),
+    ("ar_Resize", EXPRESSION_PARSE), ("ar_Size", EXPRESSION_PARSE), ("ar_Sort", EXPRESSION_PARSE),
+    ("ar_SortAlpha", EXPRESSION_PARSE), ("ar_Unique", EXPRESSION_PARSE),
+    ("sv_Destruct", EXPRESSION_PARSE), ("sv_Percentify", EXPRESSION_PARSE),
+    ("sv_Split", EXPRESSION_PARSE), ("sv_ToLower", EXPRESSION_PARSE),
+    ("sv_ToUpper", EXPRESSION_PARSE), ("sv_Trim", EXPRESSION_PARSE),
+];
+
+/// A command's parse word by its long name: its entry of [`PARSE_WORDS`], else the default.
+pub fn parse_word(name: &str) -> u32 {
+    PARSE_WORDS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map_or(DEFAULT_PARSE, |&(_, w)| w)
+}
+
 /// The console command table (`0x0118e8e0`, opcodes `0x100..0x1cc`): xNVSE re-exports 20 of
 /// its records as script commands.
 const CONSOLE_TABLE: u32 = 0x0118_e8e0;
@@ -312,6 +410,9 @@ pub fn eval_address(opcode: u32) -> u32 {
 pub fn install(e: &mut Engine) {
     e.register(DEFAULT_EXECUTE, default_execute);
     e.register(DEFAULT_PARSE, default_parse);
+    for routine in PARSE_ROUTINES {
+        e.register(routine, default_parse);
+    }
     let exe = ScriptTables::EXE;
     let vanilla = (exe.max_opcode - ScriptTables::FIRST_OPCODE) as usize;
     let max_opcode = FIRST_OPCODE + NAMES.len() as u32;
@@ -376,7 +477,7 @@ pub fn install(e: &mut Engine) {
                 param_count: cmd.params.len() as u16,
                 params: guest_params(e, cmd.params),
                 execute: execute_address(opcode),
-                parse: DEFAULT_PARSE,
+                parse: parse_word(name),
                 eval,
                 // `DEFINE_CMD_ALT_COND_ANY` (xNVSE) marks a condition-capable command with 1.
                 flags: u32::from(cmd.eval.is_some()),
@@ -399,7 +500,7 @@ pub fn install(e: &mut Engine) {
                 short_name: guest_str(e, short.as_bytes()),
                 opcode,
                 help: empty,
-                parse: DEFAULT_PARSE,
+                parse: parse_word(name),
                 ..Record::default()
             }
         };
@@ -492,8 +593,8 @@ pub struct PluginRecord<'a> {
     pub eval: u32,
     pub flags: u32,
     /// The plugin asks for xNVSE's expression parser (`Cmd_Expression_Plugin_Parse`), which
-    /// xNVSE gives as `Cmd_Expression_Parse`. Only the script compiler calls a parser; until the
-    /// run-time compiler is built in (ADR-0016's I-14) the record has the default one.
+    /// xNVSE gives as `Cmd_Expression_Parse`: the record gets [`EXPRESSION_PARSE`], which until the
+    /// run-time compiler is built in (ADR-0016's I-14) compiles as the default parser does.
     pub expression: bool,
     pub returns: Returns,
 }
@@ -523,7 +624,11 @@ pub fn add_plugin_record(e: &mut Engine, opcode: u32, r: &PluginRecord) {
         param_count: r.param_count,
         params: r.params,
         execute: r.execute,
-        parse: DEFAULT_PARSE,
+        parse: if r.expression {
+            EXPRESSION_PARSE
+        } else {
+            DEFAULT_PARSE
+        },
         eval: r.eval,
         flags: r.flags,
     }
@@ -645,8 +750,91 @@ pub(crate) mod tests {
         opcodes.dedup();
         assert_eq!(opcodes.len(), built.len(), "two commands at one opcode");
         let console = NAMES.iter().filter(|(n, _)| n.starts_with("con_")).count();
-        assert_eq!((built.len(), console), (627, 20));
-        assert_eq!(built.len() + console, 647);
+        assert_eq!((built.len(), console), (630, 20));
+        assert_eq!(built.len() + console, 650);
+    }
+
+    /// Every record of xNVSE's range carries xNVSE's parse word: each of the 109 commands of
+    /// [`PARSE_WORDS`] its own, every other command (built or not, console copies aside) the
+    /// default one. Each listed name is one of xNVSE's commands, once.
+    #[test]
+    fn every_record_has_xnvses_parse_word() {
+        let mut e = engine_with_exe_tables();
+        install(&mut e);
+        let t = e.script_tables();
+        assert_eq!(PARSE_WORDS.len(), 109);
+        for (name, _) in PARSE_WORDS {
+            assert_eq!(
+                NAMES.iter().filter(|(n, _)| n == name).count(),
+                1,
+                "{name} is not one of xNVSE's commands"
+            );
+        }
+        let kinds = |w: u32| PARSE_WORDS.iter().filter(|p| p.1 == w).count();
+        assert_eq!(
+            PARSE_ROUTINES.map(kinds),
+            [98, 1, 3, 1, 4, 1, 1],
+            "expression, let, begin loop, loop, null, function, call"
+        );
+        for (i, (name, _)) in NAMES.iter().enumerate() {
+            if name.starts_with("con_") {
+                continue;
+            }
+            let r = Record::read(&e, t.record(0x1400 + i as u32));
+            let want = PARSE_WORDS
+                .iter()
+                .find(|p| p.0 == *name)
+                .map_or(DEFAULT_PARSE, |p| p.1);
+            assert_eq!(r.parse, want, "{name}");
+        }
+        assert_eq!(Record::read(&e, t.record(0x1539)).parse, LET_PARSE);
+        assert_eq!(Record::read(&e, t.record(0x1646)).parse, EXPRESSION_PARSE);
+        assert_eq!(Record::read(&e, t.record(0x1670)).parse, BEGIN_LOOP_PARSE);
+    }
+
+    fn exe_parse(e: &mut Engine, a: &[u32]) -> Ret {
+        e.mem.set_u32(0x0100_f000, a[0]);
+        e.mem.set_u32(0x0100_f004, a[1]);
+        e.mem.set_u32(0x0100_f008, a[2]);
+        e.mem.set_u32(0x0100_f00c, a[3]);
+        Ret {
+            eax: 0x5b,
+            ..Ret::default()
+        }
+    }
+
+    /// Until the run-time compiler is built in, a command of each of the seven kinds compiles as
+    /// before: its parse word calls the exe's default parser with the same four words and answers
+    /// what it answers.
+    #[test]
+    fn each_parse_word_compiles_as_the_default_parser_does() {
+        let mut e = engine_with_exe_tables();
+        e.register(EXE_DEFAULT_PARSE, exe_parse);
+        install(&mut e);
+        let t = e.script_tables();
+        // eval, Let, while, loop, Function, Call, then continue.
+        for (opcode, word) in [
+            (0x153a, EXPRESSION_PARSE),
+            (0x1539, LET_PARSE),
+            (0x153b, BEGIN_LOOP_PARSE),
+            (0x153c, LOOP_PARSE),
+            (0x1544, FUNCTION_PARSE),
+            (0x1545, CALL_PARSE),
+        ]
+        .into_iter()
+        .chain(std::iter::once((
+            0x1400 + NAMES.iter().position(|n| n.0 == "continue").unwrap() as u32,
+            NULL_PARSE,
+        ))) {
+            let r = Record::read(&e, t.record(opcode));
+            assert_eq!(r.parse, word, "{opcode:04x}");
+            e.mem.write(0x0100_f000, &[0; 16]);
+            let words = [3, 0x0100_2000, 0x0100_3000, 0x0100_4000];
+            assert_eq!(e.call(r.parse, &words).eax, 0x5b, "{opcode:04x}");
+            for (i, w) in words.iter().enumerate() {
+                assert_eq!(e.mem.u32(0x0100_f000 + 4 * i as u32), *w, "{opcode:04x}");
+            }
+        }
     }
 
     /// Every xNVSE opcode has its names; a console re-export copies the console record with the

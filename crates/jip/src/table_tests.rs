@@ -4,7 +4,7 @@
 use super::*;
 use crate::slots::SLOTS;
 use crate::test_support::*;
-use nvse::table::{guest_text, record_of, return_type, Record, DEFAULT_PARSE};
+use nvse::table::{guest_text, record_of, return_type, Record, DEFAULT_PARSE, EXPRESSION_PARSE};
 
 /// The rows of a committed list: tab-separated, after its `#` lines and its header.
 fn rows(text: &str) -> Vec<Vec<&str>> {
@@ -244,9 +244,16 @@ fn installed_records(installed: bool) {
         } else {
             0
         };
+        // An expression-format command asks for xNVSE's expression parser
+        // (`Cmd_Expression_Plugin_Parse`), which its record gets as `Cmd_Expression_Parse`.
+        let parse = if slot.kind == Kind::Expression {
+            EXPRESSION_PARSE
+        } else {
+            DEFAULT_PARSE
+        };
         assert_eq!(
             (r.execute, r.parse, r.eval, r.flags),
-            (execute, DEFAULT_PARSE, 0, slot.kind.flags()),
+            (execute, parse, 0, slot.kind.flags()),
             "{o:04x}"
         );
         assert_eq!(r.params == 0, slot.params.list.is_empty(), "{o:04x}");

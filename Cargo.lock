@@ -770,6 +770,7 @@ name = "nvse"
 version = "0.1.0"
 dependencies = [
  "engine-core",
+ "esm",
 ]
 
 [[package]]
