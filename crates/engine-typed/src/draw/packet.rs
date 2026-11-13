@@ -1441,3 +1441,51 @@ pub(crate) fn with_drawn<R>(
 pub(crate) fn handed_word(e: &Engine, at: u32, offset: u32) -> u32 {
     e.global::<u32>(at.wrapping_add(offset))
 }
+
+#[cfg(test)]
+mod value_packet_b_tests {
+    use super::*;
+
+    /// The words at `at`, `n` of them.
+    fn words_at(e: &Engine, at: u32, n: u32) -> Vec<u32> {
+        (0..n).map(|k| e.mem.u32(at + 4 * k)).collect()
+    }
+
+    /// `with_world` and `with_drawn` hand the object's own transform and bound with no packet open, and with one
+    /// open the images of the packet's copies: the words the cut took, whatever guest memory holds since.
+    #[test]
+    fn the_images_handed_hold_the_packets_copies() {
+        let mut e = Engine::new();
+        let geometry = e.mem.alloc(0xc4);
+        let bound = e.mem.alloc(0x10);
+        for k in 0..13u32 {
+            e.mem.set_u32(geometry + 0x68 + 4 * k, 0x1000 + k);
+        }
+        for k in 0..4u32 {
+            e.mem.set_u32(bound + 4 * k, 0x2000 + k);
+        }
+        e.mem.set_u32(geometry + 0x20, bound);
+        let handed = with_drawn(&mut e, geometry, |_, t, b| (t, b));
+        assert_eq!(handed, (geometry + 0x68, bound));
+        assert_eq!(with_world(&mut e, geometry, |_, t| t), geometry + 0x68);
+        assert!(capture::begin(&e));
+        capture::take(&e, geometry, 0x68, 0x9c);
+        capture::take(&e, bound, 0, 0x10);
+        for k in 0..13u32 {
+            e.mem.set_u32(geometry + 0x68 + 4 * k, 0xdead_0000 + k);
+        }
+        for k in 0..4u32 {
+            e.mem.set_u32(bound + 4 * k, 0xbeef_0000 + k);
+        }
+        let (transform, bound_words, at) = with_drawn(&mut e, geometry, |e, t, b| {
+            (words_at(e, t, 13), words_at(e, b, 4), t)
+        });
+        assert_eq!(transform, (0..13).map(|k| 0x1000 + k).collect::<Vec<u32>>());
+        assert_eq!(bound_words, (0..4).map(|k| 0x2000 + k).collect::<Vec<u32>>());
+        assert_ne!(at, geometry + 0x68);
+        let transform = with_world(&mut e, geometry, |e, t| words_at(e, t, 13));
+        assert_eq!(transform, (0..13).map(|k| 0x1000 + k).collect::<Vec<u32>>());
+        let report = capture::end(&mut e);
+        assert_eq!(report.misses, 0);
+    }
+}
