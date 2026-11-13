@@ -151,17 +151,13 @@ pub fn light_setup(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
         if data != 0 {
             let position: [u32; 3] =
                 std::array::from_fn(|i| packet::light_value_word(e, data, 0x8c + 4 * idx(i)));
-            typed_call!(
-                leaf::FAMILY,
-                0x004e_20c0,
-                crate::draw::own::store_light_row(
-                    e,
-                    index + 0xb,
-                    position[0],
-                    position[1],
-                    position[2],
-                    1.0f32
-                )
+            crate::draw::own::light_row(
+                e,
+                index + 0xb,
+                position[0],
+                position[1],
+                position[2],
+                1.0f32,
             );
         }
     } else {
@@ -188,17 +184,13 @@ pub fn light_setup(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
             } else {
                 1.0
             };
-            typed_call!(
-                leaf::FAMILY,
-                0x004e_20c0,
-                crate::draw::own::store_light_row(
-                    e,
-                    index + 0x13,
-                    direction[0],
-                    direction[1],
-                    direction[2],
-                    w
-                )
+            crate::draw::own::light_row(
+                e,
+                index + 0x13,
+                direction[0],
+                direction[1],
+                direction[2],
+                w,
             );
         }
         let skipped = e.global::<u8>(SKIP_AMBIENT) != 0 && ambient_allowed == 0; // own: main's frame value, value packet B

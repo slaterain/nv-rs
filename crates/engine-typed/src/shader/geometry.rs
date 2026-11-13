@@ -292,7 +292,7 @@ pub fn pixel_entry_2(e: &mut Engine, _this: Ptr, pass_type: u32, object: Ptr) {
         }
         first_row = 2;
         second_row = 3;
-        let mut count = u32::from(e.global::<u8>(object + 9)) + 2; // own: main's object read in place (value packet B, piece 4)
+        let mut count = u32::from(packet::rendering_pass_byte9(e, object)) + 2;
         if (count as i32) <= 3 {
             count = 3;
         }
@@ -629,9 +629,9 @@ pub fn shadow_proj(e: &mut Engine, _this: Ptr, block: Ptr, flag: u32, transform:
         let transform = transform.addr();
         let sources = [0u32, 1, 2, 9, 3, 4, 5, 10, 6, 7, 8, 11];
         for (index, source) in sources.iter().enumerate() {
-            matrix[index] = e.global::<u32>(transform + 4 * source); // own: main's object read in place (value packet B, piece 4)
+            matrix[index] = e.global::<u32>(transform + 4 * source); // own: the geometry's world transform (cut-taken), read in place: value packet B (#542)
         }
-        matrix[15] = e.global::<u32>(transform + 0x30); // own: main's object read in place (value packet B, piece 4)
+        matrix[15] = e.global::<u32>(transform + 0x30); // own: the geometry's world transform (cut-taken), read in place: value packet B (#542)
     } else {
         let one = 1.0f32.to_bits();
         for index in [0usize, 5, 10, 15] {
@@ -710,6 +710,7 @@ pub fn obj_to_cube(
                 capture::set_own_at::<u32>(e, matrix + 4 * index, value.to_bits());
             }
         }
+        // GetD3DFromNi reads the geometry's world transform (cut-taken) in place: value packet B (#542).
         if flag == 0 {
             e.call(GET_D3D_FROM_NI, &args![first, transform]);
         }
@@ -1024,7 +1025,8 @@ pub fn lights(
     let mode = capture::own_at::<u32>(e, SHADER_MODE);
     e.with_stack(4, |e, slot| {
         let light = e.call(GET_FIRST_ACTIVE_LIGHT, &args![property, slot]).u32();
-        if light != 0 && capture::own_at::<u8>(e, light + 0xf4) != 0 {
+        if light != 0 && e.global::<u8>(light + 0xf4) != 0 {
+            // own: the first active light, read in place: an open packet route (the drawing agent's next PR)
             return;
         }
         if mode == 10 {
@@ -1144,18 +1146,18 @@ pub fn ambient_emittance(
                 .u32();
             let camera = e.global::<u32>(CAMERA_OBJECT); // own: main's frame value, value packet B
             let camera_light = e.global::<u32>(camera + 0xe0); // own: main's object read in place (value packet B, piece 4)
-            let values = e.global::<u32>(camera_light + 0xf8); // own: main's object read in place (value packet B, piece 4)
+            let values = e.global::<u32>(camera_light + 0xf8); // own: the first active (or camera) light, read in place: an open packet route (the drawing agent's next PR)
             let second = mul_d(
-                e.global::<f32>(values + 0xd8), // own: main's object read in place (value packet B, piece 4)
+                e.global::<f32>(values + 0xd8), // own: the first active (or camera) light, read in place: an open packet route (the drawing agent's next PR)
                 e.global::<f64>(WEIGHT_SECOND), // own: a constant of the exe
             );
             let first = mul_d(
-                e.global::<f32>(values + 0xd4), // own: main's object read in place (value packet B, piece 4)
+                e.global::<f32>(values + 0xd4), // own: the first active (or camera) light, read in place: an open packet route (the drawing agent's next PR)
                 e.global::<f64>(WEIGHT_FIRST),  // own: a constant of the exe
             );
             let sum = second + first;
             let third = mul_d(
-                e.global::<f32>(values + 0xdc), // own: main's object read in place (value packet B, piece 4)
+                e.global::<f32>(values + 0xdc), // own: the first active (or camera) light, read in place: an open packet route (the drawing agent's next PR)
                 e.global::<f64>(WEIGHT_THIRD),  // own: a constant of the exe
             );
             let luminance = sum + third;
@@ -1167,15 +1169,15 @@ pub fn ambient_emittance(
                 if position == 0 {
                     position = DEFAULT_POSITION;
                 }
-                let values = e.global::<u32>(light + 0xf8); // own: main's object read in place (value packet B, piece 4)
+                let values = e.global::<u32>(light + 0xf8); // own: the first active (or camera) light, read in place: an open packet route (the drawing agent's next PR)
                 e.call(
                     POINT_DIFFERENCE,
                     &args![values + 0x8c, difference, position],
                 );
-                let strength = e.global::<u32>(values + 0xc4); // own: main's object read in place (value packet B, piece 4)
+                let strength = e.global::<u32>(values + 0xc4); // own: the first active (or camera) light, read in place: an open packet route (the drawing agent's next PR)
                 e.call(COLOUR_SCALE, &args![values + 0xd4, scaled, strength]);
                 let length = e.call(POINT_LENGTH, &args![difference]).f64();
-                let ratio = narrow(length / f64::from(e.global::<f32>(values + 0xe0))); // own: main's object read in place (value packet B, piece 4)
+                let ratio = narrow(length / f64::from(e.global::<f32>(values + 0xe0))); // own: the first active (or camera) light, read in place: an open packet route (the drawing agent's next PR)
                 let raised = e.call(FLOAT_HELPER, &args![0.0f64, ratio.to_bits()]).f64();
                 let limited = e.call(DOUBLE_HELPER, &args![1.0f64, raised]).f64();
                 let falloff = 1.0 - narrow(limited);

@@ -5963,6 +5963,48 @@ fn decal_pass() {
         .assert_same();
 }
 
+/// The shader manager's mode (`00b4f450`, typed: on every caller's path): every mode of the tables and past them,
+/// each table's entry there set or null (then its first entry, itself set or null), every write (the mode and
+/// both function words).
+#[test]
+fn select_shader_mode() {
+    Diff::new(entry!(0x00b4_f450, own::select_shader_mode(u32)))
+        .draw_common_at(0x00b4_f450)
+        .inputs(&[
+            Input::Of(&[0, 1, 3, 8, 9, 10, 0xf, 0x10, 0x11]),
+            Input::Of(&[0, 1, 2, 3]),
+            Input::Of(TWO_WAYS),
+        ])
+        .setup(|e, c| {
+            let _ = draw_world(e);
+            let (mode, nulls, first_null) = (c.word(0), c.word(1), c.word(2));
+            for k in 0..0x12u32 {
+                let a = if k == mode && nulls & 1 != 0 {
+                    0
+                } else {
+                    0x4400 + k
+                };
+                let b = if k == mode && nulls & 2 != 0 {
+                    0
+                } else {
+                    0x8800 + k
+                };
+                set(e, 0x011f_9f40 + 4 * k, a);
+                set(e, 0x011f_9f80 + 4 * k, b);
+            }
+            if first_null != 0 {
+                set(e, 0x011f_9f40, 0);
+                set(e, 0x011f_9f80, 0);
+            }
+            set(e, 0x011f_91b8, 0x5555);
+            set(e, 0x011f_9f38, 0x6666);
+            set(e, 0x011f_9f3c, 0x7777);
+            vec![mode]
+        })
+        .run()
+        .assert_same();
+}
+
 #[test]
 fn fog_ambient() {
     Diff::new(entry!(0x00bb_b840, own::fog_ambient()))

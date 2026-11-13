@@ -340,7 +340,12 @@ mod tests {
                     let cache = body.contains("NiDX9RenderState::")
                         && (body.contains("e.get(") || body.contains("e.set("));
                     // Each own accessor's address (its second argument) must be built from an own-block constant or a
-                    // stack local; the generic float helpers count as accessors (their callers are checked).
+                    // stack local; the generic float helpers count as accessors (their callers are checked). What this
+                    // catches and what it does not: a name counts as built from an own constant (or a local) when its
+                    // `let`/`for` binding's right-hand side merely MENTIONS one (`let x = ROWS + y` and `let x = f(ROWS)`
+                    // alike), names are followed per function by text, not by type, and an address handed in as a
+                    // parameter is unknown (marked). It flags an own accessor on a plain heap address (`light + 0x208`);
+                    // it cannot prove the address is in an own block. The real net is the whole-frame POISON run.
                     let definition = ["fn ", "pub fn ", "pub(crate) fn "]
                         .iter()
                         .any(|p| body.trim_start().starts_with(p));
@@ -413,7 +418,9 @@ mod tests {
             }
         }
         // The engine's own typed helpers the draw reaches by `typed_call!` write guest memory: one that writes an own
-        // block (an own literal in its body) may not be called from the draw-time files.
+        // block (an own literal in its body) may not be called from the draw-time files. It sees only calls written
+        // `leaf::NAME(` (not an imported `NAME(` or a by-address call to the helper's address), and only engine-core's
+        // leaf.rs among the helpers outside this crate.
         let leaf = include_str!("../../../engine-core/src/typed/leaf.rs");
         let mut writers = Vec::new();
         let mut current: Option<(String, bool)> = None;

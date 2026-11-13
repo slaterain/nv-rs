@@ -804,9 +804,38 @@ pub(crate) fn copy_constants(e: &mut Engine, to: u32, from: u32, size: u32) {
 /// `011fa1f0` are its rows 0xb and 0x13 on).
 const COLOUR_TABLE: u32 = 0x011f_a0c0;
 
+/// The colour table's store (`004e20c0`, the leaf family's `store_colour`), `cdecl(index, red, green, blue, alpha)`,
+/// as the per-light set-up calls it, with the row landing in the draw's own state either way: with the leaf family
+/// direct, [`store_light_row`] in the typed store's place (the call noted for the checks as `typed_call!` notes
+/// it); by address, the call made and the four words it wrote carried into the packet, guest memory given back
+/// its words (condition 2).
+pub(crate) fn light_row(e: &mut Engine, index: u32, red: u32, green: u32, blue: u32, alpha: f32) {
+    const STORE_COLOUR: u32 = 0x004e_20c0;
+    let words = args![index, red, green, blue, alpha];
+    if e.typed_direct(engine_core::typed::leaf::FAMILY, STORE_COLOUR) {
+        if cfg!(debug_assertions) && e.typed_noting_direct() {
+            e.typed_note_direct(STORE_COLOUR, &words);
+        }
+        e.typed_slice_step(STORE_COLOUR);
+        store_light_row(e, index, red, green, blue, alpha);
+        return;
+    }
+    if !capture::active() {
+        e.call(STORE_COLOUR, &words);
+        return;
+    }
+    let row = index.wrapping_shl(4).wrapping_add(COLOUR_TABLE); // own: an address, carried through set_own_at
+    let before = [0u32, 1, 2, 3].map(|k| e.global::<u32>(row.wrapping_add(4 * k))); // own: guest memory's words, given back
+    e.call(STORE_COLOUR, &words);
+    for (k, old) in (0u32..).zip(before) {
+        let new = e.global::<u32>(row.wrapping_add(4 * k)); // own: the words the call wrote
+        e.set_global(row.wrapping_add(4 * k), old); // own: guest memory given back its word
+        capture::set_own_at(e, row.wrapping_add(4 * k), new);
+    }
+}
+
 /// Four words into row `index` of the colour table (`004e20c0`'s store, made here so that it goes through the
-/// packet: the leaf family's `store_colour` writes guest memory). The per-light set-up calls it in that store's
-/// place, by the same address (condition 2).
+/// packet: the leaf family's `store_colour` writes guest memory) (condition 2).
 pub(crate) fn store_light_row(
     e: &mut Engine,
     index: u32,
@@ -945,4 +974,41 @@ pub(crate) fn set_entry_word(e: &mut Engine, entry: u32, offset: u32, value: u32
 #[inline(always)]
 pub(crate) fn device_clip_plane(e: &mut Engine, device: u32, index: u32, plane: u32) {
     e.vcall(device, 0xdc, &args![index, plane]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The light row by address (the leaf family not direct): the store at `004e20c0` writes guest memory, and
+    /// [`light_row`] carries its four words into the packet's own copy and gives guest memory its words back.
+    #[test]
+    fn a_light_row_by_address_lands_in_the_draws_own_state() {
+        let mut e = Engine::new();
+        e.map(0x011f_a000, 0x1000);
+        e.register(0x004e_20c0, |e, a| {
+            let row = (a[0] << 4).wrapping_add(COLOUR_TABLE);
+            for k in 0..4u32 {
+                e.mem.set_u32(row + 4 * k, a[1 + k as usize]);
+            }
+            engine_core::abi::Ret::default()
+        });
+        // What is registered over a member sends its family by address.
+        assert!(!e.typed_direct(engine_core::typed::leaf::FAMILY, 0x004e_20c0));
+        let row = COLOUR_TABLE + 0xb0;
+        for k in 0..4u32 {
+            e.mem.set_u32(row + 4 * k, 0x70 + k);
+        }
+        assert!(capture::begin(&e));
+        capture::own(&e, COLOUR_TABLE, 0, 0x200);
+        light_row(&mut e, 0xb, 1, 2, 3, 1.0);
+        let own: Vec<u32> = (0..4u32)
+            .map(|k| capture::own_at::<u32>(&e, row + 4 * k))
+            .collect();
+        let guest: Vec<u32> = (0..4u32).map(|k| e.mem.u32(row + 4 * k)).collect();
+        let _ = capture::end(&mut e);
+        assert_eq!(own, [1, 2, 3, 1.0f32.to_bits()]);
+        assert_eq!(guest, [0x70, 0x71, 0x72, 0x73]);
+        assert_eq!(e.mem.u32(row), 1, "the join puts the draw's row back");
+    }
 }
