@@ -202,6 +202,9 @@ impl Common for Diff {
             // The element address the exe asks for each element its search reads; the typed search
             // reads the element block a page at a time.
             .ignore_calls(&[0x0087_7a30])
+            // The character's word +0x108 the exe reads into a flag it never reads, which the typed
+            // actor update leaves out.
+            .ignore_calls(&[0x004f_8960])
             .max_calls(MAX_CALLS)
     }
 }

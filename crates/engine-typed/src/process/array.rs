@@ -7,7 +7,6 @@
 
 use super::FAMILY;
 use engine_core::ptr::Ptr;
-use engine_core::typed::leaf;
 use engine_core::{typed_call, Engine};
 
 /// The three tables of four words: the levels' heads, tails and update cursors.
@@ -27,6 +26,12 @@ fn head(e: &Engine, this: u32, level: i32) -> u32 {
 
 fn tail(e: &Engine, this: u32, level: i32) -> u32 {
     e.mem.u32(slot(this, TAILS, level))
+}
+
+/// The address of element `index` (`00877a30`, the leaf the exe calls for it: the element block at +4
+/// plus `index` words), computed in line.
+fn element_address(e: &Engine, this: u32, index: u32) -> u32 {
+    e.mem.u32(this.wrapping_add(4)).wrapping_add(index.wrapping_mul(4))
 }
 
 // Typed from 005de0f0
@@ -114,7 +119,7 @@ pub fn find(e: &mut Engine, this: Ptr, actor: u32, level: i32) -> u32 {
     let wanted = actor.to_le_bytes();
     let mut bytes = [0u8; PAGE as usize];
     while index < end {
-        let first = typed_call!(leaf::FAMILY, 0x0087_7a30, leaf::array_element(e, a, index));
+        let first = element_address(e, a, index);
         // The words from `first` to the page's end (at least one: an element straddling the page
         // end is read whole), no more than the indexes left.
         let in_page = (PAGE - (first & (PAGE - 1))) / 4;
@@ -148,7 +153,7 @@ pub fn remove_at(e: &mut Engine, this: Ptr, index: u32) {
     }
     if index != tail(e, a, level) {
         let last = tail(e, a, level);
-        let element = typed_call!(leaf::FAMILY, 0x0087_7a30, leaf::array_element(e, a, last));
+        let element = element_address(e, a, last);
         typed_call!(
             FAMILY,
             0x0096_ae90,
