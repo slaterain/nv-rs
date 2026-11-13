@@ -64,6 +64,7 @@ pub mod invref;
 pub mod lambda;
 pub mod mt19937;
 pub mod names;
+pub mod override_args;
 pub mod plugins;
 pub mod saveload;
 pub mod table;
@@ -270,6 +271,7 @@ pub fn install(e: &mut Engine) {
     tick::install(e);
     saveload::install(e);
     events::install(e);
+    override_args::install(e);
     call_sites::install(e);
     commands::game::install(e);
     commands::controls::install(e);

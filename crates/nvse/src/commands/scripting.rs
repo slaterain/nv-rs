@@ -134,6 +134,20 @@ pub static COMMANDS: &[Command] = &[
         FOREACH_ALT,
         foreach_alt_execute,
     ),
+    cmd(
+        0x154d,
+        "@PushExecutionContext",
+        "internal command - pushes execution context for current script for use with ExtractArgsOverride",
+        &[],
+        push_execution_context,
+    ),
+    cmd(
+        0x154e,
+        "@PopExecutionContext",
+        "internal command - pops execution context for current script for use with ExtractArgsOverride",
+        &[],
+        pop_execution_context,
+    ),
     cmd(0x167f, "Jmp_If_True", "", JMP_IF, jmp_if_true),
     cmd(0x1680, "Jmp_If_False", "", JMP_IF, jmp_if_false),
     cmd(0x1681, "Jmp", "", ONE_REQUIRED_INT, jmp_execute),
@@ -143,6 +157,24 @@ pub static COMMANDS: &[Command] = &[
 /// `kParams_OneInt` (a required integer).
 const JMP_IF: &[Param] = &[p("", BOOLEAN), p("", 0x8001)];
 const ONE_REQUIRED_INT: &[Param] = &[p("int", 0x01)];
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Scripting.cpp:
+// Cmd_Internal_PushExecutionContext_Execute.
+/// Written by the GECK's compiler override after a `Begin` line: the calling reference and its
+/// container kept for the block's commands ([`crate::override_args::push_context`]).
+fn push_execution_context(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    crate::override_args::push_context(e, a.this_obj, a.containing_obj, a.data, a.opcode_offset);
+    handled(true)
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Scripting.cpp:
+// Cmd_Internal_PopExecutionContext_Execute.
+/// Written before the `End` line: this thread's innermost context removed; false (the line
+/// fails) when there is none.
+fn pop_execution_context(e: &mut Engine, _: &[u32]) -> Ret {
+    handled(crate::override_args::pop_context(e))
+}
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Commands_Script.cpp: ScriptJMP.
 /// The runner goes to `offset` of the script's data: the running line's length word becomes
