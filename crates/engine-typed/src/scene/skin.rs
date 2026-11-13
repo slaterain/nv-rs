@@ -5,6 +5,7 @@ use super::FAMILY;
 use crate::culling::layout::{NiBound, NiMatrix3, NiPoint3, NiTransform};
 use crate::{culling, dispatch, pathing};
 use engine_core::ptr::Ptr;
+use engine_core::x87::x87_quiet_bits;
 use engine_core::{args, typed_call, Engine};
 
 /// `NiSkinInstance`: the skin data (+8), the root parent (+0x10), the bones (+0x14).
@@ -56,8 +57,10 @@ pub fn skin_bound(e: &mut Engine, this: Ptr, bound: Ptr) {
         while index < count {
             let bone = e.mem.u32(e.mem.u32(base + BONES).wrapping_add(4 * index));
             if e.mem.f32(bone.wrapping_add(WORLD_SCALE)) == 1.0 {
-                // The radius passes through the x87 stack in the exe: copied plain.
-                let radius = e.mem.u32(source + 0xc);
+                // The radius passes through the x87 stack in the exe (`FLD`/`FSTP`), which quiets a
+                // signalling NaN: one bit, kept, because the bound goes on to the merge's call, whose
+                // stack bytes compare exactly.
+                let radius = x87_quiet_bits(e.mem.u32(source + 0xc));
                 e.mem.set_u32(local + 0xc, radius);
                 for axis in 0..3 {
                     let value = e.mem.u32(source + 4 * axis);

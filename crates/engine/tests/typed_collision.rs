@@ -379,7 +379,10 @@ fn collision_quaternion_from_rotation() {
 fn collision_quaternion_rounding() {
     // The diagonal (0x3f1f4b68, 0x3f3e2695, 0x3f76f2d6): its trace rounded each step and rounded once
     // part, and so does w (0x3f6990f7 against 0x3f6990f8), so the quaternion computed in the wrong
-    // precision for the thread fails.
+    // precision for the thread fails. And the diagonal (0.75, 3 * 2^-25, -2^-50): the trace's double
+    // sum is 0.75 + 3 * 2^-25 - 2^-50, which the exe's store rounds to 0.75 + 2^-24 before adding 1.0
+    // (giving 1.75 at the tie); added unrounded it gives 1.75 + 2^-23, so on the other threads a trace
+    // not rounded to a float at its store fails.
     for base in ROUNDING_BY_THREAD {
         Diff::new(entry!(
             0x00a6_df40,
@@ -387,14 +390,14 @@ fn collision_quaternion_rounding() {
         ))
         .common()
         .by(base)
-        .inputs(&[Input::F32Swept(ONE)])
-        .setup(|e, _| {
+        .inputs(&[Input::Of(&[0, 1])])
+        .setup(|e, case| {
             stand_ins(e, 0);
-            let m = block(
-                e,
-                0x24,
-                &[0x3f1f_4b68, 0, 0, 0, 0x3f3e_2695, 0, 0, 0, 0x3f76_f2d6],
-            );
+            let d = [
+                [0x3f1f_4b68, 0x3f3e_2695, 0x3f76_f2d6],
+                [0x3f40_0000, 0x33c0_0000, 0xa680_0000],
+            ][case.word(0) as usize];
+            let m = block(e, 0x24, &[d[0], 0, 0, 0, d[1], 0, 0, 0, d[2]]);
             let q = e.mem.alloc(0x10);
             vec![q, m]
         })

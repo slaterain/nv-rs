@@ -16,7 +16,8 @@
 //! threads, so the family's row is [`Threads::Both`]. Its x87 code is native maths (ADR-0014's float
 //! rule) with no emulation left: the skinned bound's per-axis sums and the transform inverse's
 //! reciprocal are each one operation of floats stored at once, so plain `f32` gives the exe's float
-//! on either thread's word; floats the exe only moves through the x87 are copied plain.
+//! on either thread's word; the bound's radius, which the exe moves through the x87, is copied with
+//! a signalling NaN quieted as the x87 does (one bit).
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::{Family, FamilyId, Threads};
