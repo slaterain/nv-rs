@@ -390,3 +390,15 @@ fn another_form_type_is_left_alone() {
     assert!(LINES.with(|l| l.borrow().is_empty()), "no dump");
     console(&mut e, false);
 }
+
+/// RemoveNthLevItem 0: the first node takes the next one's entry, that node freed.
+#[test]
+fn removing_the_first() {
+    let mut e = setup();
+    call(&mut e, 0x2228, &[r(1), n(0)]);
+    assert_eq!(freed(), vec![node(0)]);
+    assert_eq!(
+        (e.mem.u32(LVLI + 0x34), e.mem.u32(LVLI + 0x38)),
+        (entry(1), node(1))
+    );
+}
