@@ -437,14 +437,28 @@ fn world(e: &mut Engine) -> World {
 }
 
 /// Functions whose translations compute in plain `f64` (the other threads' rounding), so they differ from
-/// the exe under the main thread's 24-bit word: compared under the other threads' word only. The typed
-/// versions round as the exe does under both (translation bugs, listed in the batch notes).
+/// the exe under the main thread's 24-bit word: compared under the other threads' word only, and checked
+/// on the main thread against hand-worked bits (`*_main_thread` tests). The typed versions round as the
+/// exe does under both. Translation bugs, each checkable in the exe's x87 code, which rounds every
+/// step to the thread's precision:
+/// - the crossing test `006b9e90`: the side tests' FSUB/FMULP/FSUBP and FSTP float (006b9e9e..006b9ec8,
+///   006b9ed3..006b9efd, 006b9f1f..006b9f49), the sum FADD/FSUB (006b9f4f, 006b9f52) and the fraction
+///   FSUB/FDIVR (006b9fbf, 006b9fc2), where the translation takes each in `f64` and rounds once;
+/// - the triangle edge test `00698060`: through the crossing test;
+/// - the relative direction `00698620`: FMUL, FMUL, FADDP and FSTP float (00698639..00698649), likewise
+///   the second (00698655..00698664);
+/// - `Arc::Contains` `006a0660`: through the relative direction;
+/// - the goal test `006a79c0`: FMUL float (006a7a37), FMUL double 0.25 (006a7a4b) and FMUL double
+///   (006a7a62) before the FCOMPP (006a7a68);
+/// - the crossed edge `00698320`: the side tests' FSUB/FMULP/FSUBP and FSTP float (00698409..00698440,
+///   00698450..00698487), found by `crossed_edge_rounding`.
 const MAIN_WORD_DIFFERS: &[u32] = &[
     0x006b_9e90,
     0x0069_8060,
     0x0069_8620,
     0x006a_0660,
     0x006a_79c0,
+    0x0069_8320,
 ];
 
 /// Functions whose translations pick another NaN than the exe's x87 (a signalling one passed on
@@ -4116,8 +4130,9 @@ fn crossing_measured_again_main_thread() {
 #[test]
 fn crossed_edge_rounding() {
     // A segment past triangle 0's corner (10, 0) where a side test rounds differently step by step
-    // than once: on the main thread's word the second edge is crossed, on the other threads' none
-    // (-1), and each matches the exe on its word.
+    // than once: on the other threads' word no edge is crossed (-1), against the translation; on the
+    // main thread's the second edge, checked by hand in [`crossed_edge_rounding_main_thread`] (the
+    // translation is plain `f64` there: [`MAIN_WORD_DIFFERS`]).
     for base in ROUNDING_BY_THREAD {
         Diff::new(entry!(
             0x0069_8320,
@@ -4280,4 +4295,21 @@ fn is_goal_game_size() {
     }
     assert!(far_goal_on(MAIN_THREAD, 0x4843_5030));
     assert!(!far_goal_on(MAIN_THREAD, 0x4843_502f));
+}
+
+#[test]
+fn crossed_edge_rounding_main_thread() {
+    // [`crossed_edge_rounding`]'s segment under the main thread's word, run directly: the crossed edge's
+    // translation computes its side tests in doubles there too ([`MAIN_WORD_DIFFERS`]: one rounding
+    // where the exe's FSUB/FMULP/FSUBP at 00698409..00698440 round each step to 24 bits), so the
+    // typed version is checked against the exe's arithmetic worked out by hand: the second edge (1),
+    // where the translation's doubles say none.
+    let mut e = Engine::new_untyped_for_test();
+    let w = world(&mut e);
+    let a = point(&mut e, [0x4115_90a8, 0xc09c_14de, 0]);
+    let b = point(&mut e, [0x412b_cd2c, 0x40b0_8574, 0]);
+    engine_core::units::crt::set_x87_control_word(&mut e, MAIN_THREAD);
+    let edge = navmesh::crossed_edge(&mut e, Ptr::new(w.mesh), 0, -1, Ptr::new(a), Ptr::new(b));
+    engine_core::units::crt::set_x87_control_word(&mut e, OTHER_THREADS);
+    assert_eq!(edge, 1);
 }
