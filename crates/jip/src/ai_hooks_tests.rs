@@ -324,8 +324,12 @@ fn no_health_reset() {
     e.mem.set_u8(ACTOR + 0x18d, 1);
     assert_eq!(site(&mut e, 0x005c_6b8b, &[ACTOR, list]), Some(1));
     assert_eq!(site(&mut e, 0x005c_6b8b, &[ACTOR, 0]), None, "no list");
+    // Another list (not the script's), whose event would skip the reset.
+    let (other_list, other_node) = (AREA + 0x6700, AREA + 0x6780);
+    e.mem.set_u32(other_list + 8, other_node);
+    e.mem.set_u32(other_node, event);
     assert_eq!(
-        site(&mut e, 0x005c_6b8b, &[ACTOR, list + 4]),
+        site(&mut e, 0x005c_6b8b, &[ACTOR, other_list]),
         None,
         "another list"
     );
@@ -680,6 +684,8 @@ fn forced_detection_values() {
     state(&mut e).force_detection_value.clear();
     assert_eq!(site(&mut e, 0x008a_152d, &[ACTOR]), Some(0), "missing: 0");
     state(&mut e).force_detection_value.insert(ACTOR, 30);
+    run(&mut e, FORCE_ACTOR_DETECTION_VALUE, OTHER, &[int_arg(2)]);
+    assert_eq!(e.hook_users(Hook::GetDetectionValue), 2);
     run(&mut e, FORCE_ACTOR_DETECTION_VALUE, ACTOR, &[int_arg(0)]);
     run(&mut e, FORCE_ACTOR_DETECTION_VALUE, ACTOR, &[int_arg(0)]);
     assert_eq!(
@@ -687,8 +693,12 @@ fn forced_detection_values() {
             e.mem.u8(ACTOR + 0x106),
             e.hook_users(Hook::GetDetectionValue)
         ),
-        (0, 0)
+        (0, 1)
     );
+    e.mem.set_u8(ACTOR + 0x106, 1);
+    run(&mut e, FORCE_ACTOR_DETECTION_VALUE, ACTOR, &[int_arg(0)]);
+    assert_eq!(e.mem.u8(ACTOR + 0x106), 1, "not set: the flag untouched");
+    e.mem.set_u8(ACTOR + 0x106, 0);
     assert_eq!(site(&mut e, 0x008a_152d, &[ACTOR]), None);
 }
 
