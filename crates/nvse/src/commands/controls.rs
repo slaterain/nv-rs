@@ -247,7 +247,8 @@ pub fn enable(e: &mut Engine, flags: u32, key: u32) {
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Gameplay.cpp:
 // TogglePlayerControlsAlt::ResetOnLoad.
-/// A game loaded or started: no mod's controls disabled any more, the enabling effects for all.
+/// A game loaded or started: no mod's controls disabled any more, the enabling effects for all
+/// (told after the word is cleared, as xNVSE does, so they find nothing to take back).
 pub fn reset_on_load(e: &mut Engine) {
     state(e).per_mod.clear();
     e.set_controls_alt(0);
@@ -260,10 +261,7 @@ pub fn reset_on_load(e: &mut Engine) {
 /// game's own byte (2), by the game only (3); false for another way.
 fn disabled(e: &mut Engine, how: u32, flags: u32, key: u32) -> bool {
     match how {
-        0 => state(e)
-            .per_mod
-            .get(&key)
-            .is_some_and(|f| f & flags != 0),
+        0 => state(e).per_mod.get(&key).is_some_and(|f| f & flags != 0),
         1 => e.controls_alt() & flags != 0,
         2 => (e.controls_alt() | vanilla_flags(e)) & flags != 0,
         3 => vanilla_flags(e) & flags != 0,

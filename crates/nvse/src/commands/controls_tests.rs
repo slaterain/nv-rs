@@ -38,26 +38,25 @@ fn setup() -> Engine {
     e.mem.set_u32(MOVER, MOVER + 0x400);
     e.mem.set_u32(MOVER + 0x400 + MOVER_GET_FLAGS, 0x0060_1000);
     e.register(0x0060_1000, |_, _| eax(0x401));
-    for addr in [
-        UPDATE_HUD_STATE,
-        SET_WANTS_WEAPON_OUT,
-        UPDATE_CAMERA,
-        SET_MOVE_FLAGS,
-        AIM_WEAPON,
-        SET_BLOCKING,
-    ] {
-        e.register(addr, move |_, a| {
-            let mut v = a.to_vec();
-            v.resize(3, 0);
-            CALLS.with(|c| c.borrow_mut().push((addr, v[..3].to_vec())));
-            eax(0)
-        });
-    }
+    e.register(UPDATE_HUD_STATE, record::<UPDATE_HUD_STATE>);
+    e.register(SET_WANTS_WEAPON_OUT, record::<SET_WANTS_WEAPON_OUT>);
+    e.register(UPDATE_CAMERA, record::<UPDATE_CAMERA>);
+    e.register(SET_MOVE_FLAGS, record::<SET_MOVE_FLAGS>);
+    e.register(AIM_WEAPON, record::<AIM_WEAPON>);
+    e.register(SET_BLOCKING, record::<SET_BLOCKING>);
     // The calling script's first file is "ModA.esp".
     let file = 0x0200_3000;
     e.mem.write(file + 0x20, b"ModA.esp\0");
     e.mem.set_u32(SCRIPT + 0x10, file);
     e
+}
+
+/// A game function the effects call: its first three words recorded under its address.
+fn record<const ADDR: u32>(_: &mut Engine, a: &[u32]) -> Ret {
+    let mut v = a.to_vec();
+    v.resize(3, 0);
+    CALLS.with(|c| c.borrow_mut().push((ADDR, v[..3].to_vec())));
+    eax(0)
 }
 
 fn as_mod(e: &mut Engine, name: &str) {
@@ -79,7 +78,10 @@ fn per_mod_sets_and_their_union() {
     let made = calls();
     // Movement: the HUD's disabled-controls state; fighting: the weapon put away; POV: first
     // person and the camera (no player node: the zoom height 0).
-    assert_eq!(made[0], (UPDATE_HUD_STATE, vec![HUD_PLAYER_DISABLED_CONTROLS, 0, 0]));
+    assert_eq!(
+        made[0],
+        (UPDATE_HUD_STATE, vec![HUD_PLAYER_DISABLED_CONTROLS, 0, 0])
+    );
     assert_eq!(made[1], (SET_WANTS_WEAPON_OUT, vec![PC, 0, 0]));
     assert_eq!(made.len(), 2);
     // Again: nothing new, no effects.
@@ -99,7 +101,12 @@ fn per_mod_sets_and_their_union() {
     // Mod A enables movement only (the seven arguments, enable defaults 1 for the last three).
     as_mod(&mut e, "ModA.esp");
     calls();
-    call(&mut e, 0x1662, 0, &[n(1), n(0), n(0), n(0), n(0), n(0), n(0)]);
+    call(
+        &mut e,
+        0x1662,
+        0,
+        &[n(1), n(0), n(0), n(0), n(0), n(0), n(0)],
+    );
     assert_eq!(e.controls_alt(), PIPBOY | FIGHTING | POV);
     // The enabling effect is told mod A's whole set as it was: movement comes back.
     assert_eq!(calls(), [(UPDATE_HUD_STATE, vec![HUD_RECALCULATE, 0, 0])]);
@@ -112,9 +119,8 @@ fn asking_what_is_disabled() {
     let mut e = setup();
     call(&mut e, 0x1664, 0, &[n(JUMPING as i32)]);
     e.mem.set_u8(PC + PLAYER_DISABLED, MOVEMENT as u8);
-    let ask = |e: &mut Engine, how: i32, flags: u32| {
-        call(e, 0x1666, 0, &[n(how), n(flags as i32)]).1
-    };
+    let ask =
+        |e: &mut Engine, how: i32, flags: u32| call(e, 0x1666, 0, &[n(how), n(flags as i32)]).1;
     assert_eq!(ask(&mut e, 0, JUMPING), 1.0);
     assert_eq!(ask(&mut e, 1, JUMPING), 1.0);
     assert_eq!(ask(&mut e, 1, MOVEMENT), 0.0);
@@ -125,12 +131,20 @@ fn asking_what_is_disabled() {
     as_mod(&mut e, "Other.esp");
     assert_eq!(ask(&mut e, 0, JUMPING), 0.0);
     // The seven-argument form: movement only asked of any mod or the game.
-    let got = call(&mut e, 0x1663, 0, &[n(2), n(1), n(0), n(0), n(0), n(0), n(0), n(0)]).1;
+    let got = call(
+        &mut e,
+        0x1663,
+        0,
+        &[n(2), n(1), n(0), n(0), n(0), n(0), n(0), n(0)],
+    )
+    .1;
     assert_eq!(got, 1.0);
 }
 
 /// A new game (and a load, which runs the same reset) forgets every mod's controls: the word is
-/// 0 again and the HUD is told movement is back.
+/// 0 again and the next mod starts from nothing. As in xNVSE's `ResetOnLoad`, the word is
+/// cleared before the enabling effects are told, so they find nothing of the mods' to take back
+/// and the HUD is not told (the game's own load sets the HUD up again).
 #[test]
 fn a_new_game_resets_them() {
     let mut e = setup();
@@ -139,10 +153,14 @@ fn a_new_game_resets_them() {
     crate::saveload::new_game(&mut e);
     assert_eq!(e.controls_alt(), 0);
     assert!(state(&mut e).per_mod.is_empty());
-    assert_eq!(calls(), [(UPDATE_HUD_STATE, vec![HUD_RECALCULATE, 0, 0])]);
-    // Nothing disabled: the reset reads nothing and calls nothing.
-    crate::saveload::new_game(&mut e);
     assert!(calls().is_empty());
+    // Disabling movement again is a change once more: its effect runs.
+    call(&mut e, 0x1664, 0, &[n(MOVEMENT as i32)]);
+    assert_eq!(e.controls_alt(), MOVEMENT);
+    assert_eq!(
+        calls(),
+        [(UPDATE_HUD_STATE, vec![HUD_PLAYER_DISABLED_CONTROLS, 0, 0])]
+    );
 }
 
 /// `PlayerCharacter::Reload` through the wrap: with reloading disabled, an animated reload
@@ -157,7 +175,9 @@ fn reload_is_refused_while_disabled() {
     });
     install(&mut e);
     let reload = |e: &mut Engine, kind: u32| {
-        e.call(RELOAD_FN, &args![PC, 0x0200_4000u32, kind, 0u32, 0u32]).u32() & 0xff
+        e.call(RELOAD_FN, &args![PC, 0x0200_4000u32, kind, 0u32, 0u32])
+            .u32()
+            & 0xff
     };
     assert_eq!(reload(&mut e, 1), 1);
     assert_eq!(calls().len(), 1);

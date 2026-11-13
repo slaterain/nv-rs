@@ -309,13 +309,14 @@ mod tests {
             0x005a_c750,
             0x0045_12a0,
             0x0070_52f0,
+            0x0095_d3f0,
             0x00fd_f02c,
         ] {
             e.register(addr, base);
         }
         install(&mut e);
         assert!(e.unlisted_wraps().is_empty());
-        assert_eq!(e.wrapped().len(), 10);
+        assert_eq!(e.wrapped().len(), 11);
         for site in [
             0x0048_3669,
             0x004c_0032,

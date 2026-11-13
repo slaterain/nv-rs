@@ -7,10 +7,8 @@
 //! executes `10025250` to `10025D63`; the records found by name: names, parameters, help texts).
 //! `OutputLocalMapPicturesOverride` writes the loop count of `005d4580` (the byte at `005D45A5`)
 //! around its call: here the routine with that count is run instead of the game's, through its two
-//! callees. Not here yet, for want of seams in the translation (xNVSE writes into the game's
-//! code): the six per-mod player controls commands (`DisablePlayerControlsAlt`,
-//! `EnablePlayerControlsAlt`, `GetPlayerControlsDisabledAlt` and their `Ex` forms: `TogglePlayerControlsAlt` in `Hooks_Gameplay.cpp` patches fourteen places of
-//! the game's code to read its flags).
+//! callees. A load and a new game first forget the per-mod player controls
+//! ([`super::controls::reset_on_load`], xNVSE's `TogglePlayerControlsAlt::ResetOnLoad`).
 
 use super::string::{
     format_string_args, game_setting, ini_setting, numeric_ini_setting, separator, setting_number,

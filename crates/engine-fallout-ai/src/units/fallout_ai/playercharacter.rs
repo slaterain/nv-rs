@@ -5021,8 +5021,8 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             }
         }
         let mut wait_menu = false; // -0x2c8
-        // xNVSE's `WaitMenuControlPress::GetPCControlFlags_Hook` (the call at 0094239c): the
-        // flags read, then 1 with the mods' waiting disabled.
+                                   // xNVSE's `WaitMenuControlPress::GetPCControlFlags_Hook` (the call at 0094239c): the
+                                   // flags read, then 1 with the mods' waiting disabled.
         if e.call(0x00a2_4660, &args![main_state, 0x0fu32, 1u32]).u32() != 0
             && !(e.call(0x005a_03d0, &args![this]).bool()
                 || alt_blocked(e, engine_core::extend::controls_alt::WAIT))
@@ -10172,7 +10172,10 @@ pub fn fn_00948310(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
         // mods' attacking disabled and the weapon out, straight to 00949676, the release handling,
         // so no press or hold is remembered.
         let alt = e.controls_alt();
-        if alt != 0 && alt & engine_core::extend::controls_alt::ATTACKING != 0 && process_flag(e, this, 0x454) {
+        if alt != 0
+            && alt & engine_core::extend::controls_alt::ATTACKING != 0
+            && process_flag(e, this, 0x454)
+        {
             released_attack(e, this, input, anim0, weapon, &mut ready);
             break 'select;
         }
@@ -16405,6 +16408,109 @@ mod tests {
         assert!(reads.len() >= 2, "{reads:?}");
     }
 
+    /// The mover's flags setter (its slot 0xc) in [`update_pressing`].
+    const MOVER_SET_FLAGS: u32 = 0x00b2_0000;
+
+    /// `Update` in [`update_world`] with the control button `key` pressed (both states), the
+    /// mods' disabled controls `alt`, a gamepad in use or not, and a mover whose flags setter
+    /// is recorded.
+    fn update_pressing(key: u32, alt: u32, controller: bool) -> (Engine, Ptr<PlayerCharacter>) {
+        let mut e = engine();
+        let this = update_world(&mut e);
+        let slots: Vec<(u32, u32)> = (0..0x200).map(|i| (i * 4, 0x00b0_0000)).collect();
+        let mover = object(&mut e, 0x0204_0000, &slots);
+        e.mem.set_u32(0x0204_000c, MOVER_SET_FLAGS);
+        e.register(MOVER_SET_FLAGS, |_, _| Ret::default());
+        e.mem.set_u32(this.addr() + 0x190, mover.addr());
+        e.register_double(0x00a2_4660, move |_, a| int(u32::from(a[1] == key)));
+        if controller {
+            // A gamepad in use and its stick pushed all the way.
+            e.register(0x004b_71d0, |_, _| int(1));
+            e.register(0x0045_7990, |_, _| float(1.0));
+        }
+        e.set_controls_alt(alt);
+        player_character_update(&mut e, this, 0.5);
+        (e, this)
+    }
+
+    /// The move flags `Update` hands the mover.
+    fn move_flags(e: &Engine) -> u32 {
+        let set = called(e, MOVER_SET_FLAGS);
+        assert_eq!(set.len(), 1, "{set:?}");
+        set[0][1]
+    }
+
+    /// The disabled controls other than `flag`: none of them changes what pressing that button
+    /// does.
+    fn all_but(flag: u32) -> u32 {
+        engine_core::extend::controls_alt::ALL & !flag
+    }
+
+    /// xNVSE's jumping hook (the call at 0094215f): the jump button reads as not pressed with the
+    /// mods' jumping disabled, so the jump (`0095f6a0`) is not started; nothing set, or only
+    /// other controls set, the jump starts as before.
+    #[test]
+    fn jumping_disabled_starts_no_jump() {
+        use engine_core::extend::controls_alt::JUMPING;
+        let (free, this) = update_pressing(0x0c, 0, false);
+        assert_eq!(called(&free, 0x0095_f6a0), vec![vec![this.addr()]]);
+        let (others, _) = update_pressing(0x0c, all_but(JUMPING), false);
+        assert_eq!(called(&others, 0x0095_f6a0), vec![vec![this.addr()]]);
+        let (blocked, _) = update_pressing(0x0c, JUMPING, false);
+        assert!(called(&blocked, 0x0095_f6a0).is_empty());
+    }
+
+    /// xNVSE's wait hook (the call at 0094239c): with the mods' waiting disabled the wait button
+    /// is treated as if the game's own controls were disabled, so none of the wait checks run.
+    #[test]
+    fn waiting_disabled_opens_no_wait_menu() {
+        use engine_core::extend::controls_alt::WAIT;
+        let (free, this) = update_pressing(0x0f, 0, false);
+        assert_eq!(called(&free, 0x0095_3c80), vec![vec![this.addr()]]);
+        let (others, _) = update_pressing(0x0f, all_but(WAIT), false);
+        assert_eq!(called(&others, 0x0095_3c80).len(), 1);
+        let (blocked, _) = update_pressing(0x0f, WAIT, false);
+        assert!(called(&blocked, 0x0095_3c80).is_empty());
+        // The game's own flags were still read first.
+        assert!(!called(&blocked, 0x005a_03d0).is_empty());
+    }
+
+    /// xNVSE's V.A.T.S. hook (the call at 00942884): the V.A.T.S. button reads as not pressed with
+    /// the mods' V.A.T.S. disabled, so V.A.T.S. is not entered (`007f52c0` not asked).
+    #[test]
+    fn vats_disabled_enters_no_vats() {
+        use engine_core::extend::controls_alt::ENTER_VATS;
+        let (free, _) = update_pressing(0x10, 0, false);
+        assert_eq!(called(&free, 0x007f_52c0).len(), 1);
+        let (others, _) = update_pressing(0x10, all_but(ENTER_VATS), false);
+        assert_eq!(called(&others, 0x007f_52c0).len(), 1);
+        let (blocked, _) = update_pressing(0x10, ENTER_VATS, false);
+        assert!(called(&blocked, 0x007f_52c0).is_empty());
+    }
+
+    /// xNVSE's running hooks: on the keyboard (the call at 00941b60) the run bit 0x200 is
+    /// cleared from the move flags; on a gamepad (the jump at 00941702) the run block is skipped
+    /// for the walk flag 0x100. Nothing set, the run bit reaches the mover as before.
+    #[test]
+    fn running_disabled_walks() {
+        use engine_core::extend::controls_alt::RUNNING;
+        for controller in [false, true] {
+            let (free, _) = update_pressing(9, 0, controller);
+            let free_flags = move_flags(&free);
+            assert_eq!(free_flags & 0x200, 0x200, "controller {controller}");
+            let (others, _) = update_pressing(9, all_but(RUNNING), controller);
+            assert_eq!(move_flags(&others) & 0x300, free_flags & 0x300);
+            let (blocked, _) = update_pressing(9, RUNNING, controller);
+            let flags = move_flags(&blocked);
+            assert_eq!(flags & 0x200, 0, "controller {controller}");
+            if controller {
+                assert_eq!(flags & 0x100, 0x100);
+            } else {
+                assert_eq!(flags, free_flags & !0x200);
+            }
+        }
+    }
+
     // ---- tests of 00944300 .. 0094c460 (the third batch of this file) ----
 
     /// Maps the parts of the exe's data the translations of this batch read
@@ -17354,7 +17460,10 @@ mod tests {
         e.set_controls_alt(1 << 7);
         e.call(0x0094_8310, &args![this]);
         assert!(called(&e, 0x0089_3a40).is_empty());
-        assert!(called(&e, 0x0098_39b0).is_empty(), "no combat dialogue either");
+        assert!(
+            called(&e, 0x0098_39b0).is_empty(),
+            "no combat dialogue either"
+        );
         assert_eq!(e.global::<u32>(ATTACK_QUEUED), 0);
     }
 
