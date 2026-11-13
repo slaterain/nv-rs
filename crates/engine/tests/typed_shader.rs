@@ -50,7 +50,8 @@ fn ret(eax: u32) -> Ret {
 fn slot_answer<const S: u32>(e: &mut Engine, a: &[u32]) -> Ret {
     if ACCEPTANCE_READING.with(std::cell::Cell::get) {
         // The acceptance check: what the slot is handed past `this` read and folded into a mark.
-        acceptance_read_args(e, a.get(1..).unwrap_or_default(), 0x788);
+        // One mark a slot (`RETS + 0xc00 + slot`), so a POISON difference names the slot.
+        acceptance_read_args(e, a.get(1..).unwrap_or_default(), 0xc00 + S);
     }
     ret(e.mem.u32(RETS + S))
 }
@@ -12374,9 +12375,7 @@ fn acceptance_objects(e: &Engine, d: &DrawW, passes: &[u32]) -> Vec<(u16, u32, u
             }
         }
         for (name, at) in [
-            ("held accumulator", 0x011f_95f0u32),
-            ("shader accumulator", 0x011f_95ec),
-            ("scene camera", 0x011f_95d8),
+            ("scene camera", 0x011f_95d8u32),
             ("shadow scene node", 0x011f_91c8),
         ] {
             r.push((name.to_string(), e.mem.u32(at), 2));
@@ -12422,6 +12421,31 @@ fn acceptance_objects(e: &Engine, d: &DrawW, passes: &[u32]) -> Vec<(u16, u32, u
     for (name, addr, depth) in roots {
         let root = tagged.contains(&addr);
         walk(e, name, addr, depth, root, &mut tagged, &mut found);
+    }
+    // The accumulators the set-ups ask for (held 011f95f0, the shader manager's 011f95ec): another than the drawn
+    // one is tagged whole as a main object (its lists are not drawn: not walked); each one's +0x194 (its light
+    // camera, with the light list at +0xe0) is walked.
+    for (name, at) in [
+        ("held accumulator", 0x011f_95f0u32),
+        ("shader accumulator", 0x011f_95ec),
+    ] {
+        let acc = e.mem.u32(at);
+        if acc != 0 && acc != d.w.acc && !tagged.contains(&acc) {
+            if let Some(size) = e.mem.block_size(acc) {
+                tagged.insert(acc);
+                found.push((name.to_string(), acc, size.min(0x400)));
+            }
+        }
+    }
+    // The drawn accumulator's batch renderers and their pass groups (filled by main's accumulation, emptied by
+    // the draw).
+    for br in d.renderers() {
+        for (name, obj) in [("batch renderer", br), ("pass groups", e.mem.u32(br + 8))] {
+            if obj != 0 && tagged.insert(obj) {
+                let size = e.mem.block_size(obj).unwrap_or(0x98).min(0x400);
+                found.push((name.to_string(), obj, size));
+            }
+        }
     }
     for acc in [d.w.acc, e.mem.u32(0x011f_95f0), e.mem.u32(0x011f_95ec)] {
         if acc != 0 && e.mem.block_size(acc).is_some() {
@@ -12983,6 +13007,9 @@ fn held_probe(e: &mut Engine, a: &[u32]) -> Ret {
     if capture::is_open(e) {
         if let Some(objects) = HELD_PROBE.with(|p| p.borrow_mut().take()) {
             let mut found = Held::new();
+            // The scribble: the first own block's first byte (always owned).
+            let scribble = e.mem.u8(statics::GLOBAL_BLOCKS[0].0);
+            HELD_SCRIBBLE.with(|s| s.set(Some(scribble)));
             for (kind, addr, old) in objects {
                 let mut now = vec![0u8; old.len()];
                 if e.mem.try_read(addr, &mut now).is_err() {
@@ -12991,12 +13018,9 @@ fn held_probe(e: &mut Engine, a: &[u32]) -> Ret {
                 let held: Vec<bool> = now
                     .iter()
                     .zip(&old)
-                    .map(|(n, o)| {
-                        n != o && (*n == capture::SCRIBBLE || *n == capture::SCRIBBLE_OTHER)
-                    })
+                    .map(|(n, o)| n != o && *n == scribble)
                     .collect();
-                if let Some(i) = held.iter().position(|h| *h) {
-                    HELD_SCRIBBLE.with(|s| s.set(Some(now[i])));
+                if held.contains(&true) {
                     found.insert(addr, (kind, held));
                 }
             }
@@ -13173,7 +13197,7 @@ fn acceptance_poison(setups: &[AcceptanceSetup]) -> PoisonRun {
             scribble,
             stop: None,
             answers_alike: answer == poisoned_answer,
-            // The stand-ins' marks (`RETS + 0x780`, `+0x784`, `+0x788`) fold in what each pointer they were handed
+            // The stand-ins' marks (`RETS + 0x780`, `+0x784`, `+0xc00 + slot`) fold in what each pointer they were handed
             // points to, not the pointer: a packet image and main's object with the same bytes mark alike.
             differ: byte_runs(&memory_differences_beside_stack(&plain, &poisoned, 4096))
                 .into_iter()
@@ -13230,6 +13254,22 @@ fn acceptance_required(setups: &[AcceptanceSetup]) -> Vec<u32> {
 /// check passes while each is seen, fails on any escape not listed here, and fails when a listed one is no longer
 /// seen (fixed: take it off the list).
 const EXPECTED_ESCAPES: &[(u32, &str, u32, u32, &str)] = &[
+    // render_skinned (00b99110) hands the shader's partition set-up (slot 0x64; in the test world its stand-in at
+    // VT_FN + 0x64 reads what it is handed) the geometry's live world bound and world transform, not the packet's.
+    (
+        0x00ff_2064,
+        "bound",
+        0,
+        0x10,
+        "draw family's next agent: render_skinned hands slot 0x64 the live world bound",
+    ),
+    (
+        0x00ff_2064,
+        "geometry",
+        0x68,
+        0x9c,
+        "draw family's next agent: render_skinned hands slot 0x64 the live world transform",
+    ),
     // The light row 011fa1f0 (the colour table's row 0x13, a directional light's): `own::light_row` by address
     // (only when the leaf family is not direct; the census makes every typed call go by address) saves the guest
     // words, lets the leaf store write them, takes them into the own state and puts guest memory back.
@@ -13300,7 +13340,7 @@ const READ_IN_PLACE: &[(&str, &str, u32, u32, bool, &str)] = &[
         0x9c,
         0xb4,
         false,
-        "the property pointers (+0xa8 the shader property), set when the object is attached; their values the draw reads are in the packet",
+        "the property pointers (+0xa8 the shader property), set when the object is attached; the other properties' own fields are tagged as main objects (geometry +0x9c...) and classed there",
     ),
     (
         "geometry model data, skin and shader",
@@ -13334,64 +13374,121 @@ const READ_IN_PLACE: &[(&str, &str, u32, u32, bool, &str)] = &[
         false,
         "its class, set when the property is made",
     ),
+    (
+        "held accumulator reference count",
+        "held accumulator",
+        4,
+        8,
+        true,
+        "changed only by interlocked increments and decrements (the cut's hold, the join's release), safe from both threads",
+    ),
+    (
+        "fog property vtable",
+        "fog property",
+        0,
+        4,
+        false,
+        "its class, set when made",
+    ),
+    (
+        "pass light vtable",
+        "pass light",
+        0,
+        4,
+        false,
+        "its class, set when made",
+    ),
+    (
+        "model data vtable",
+        "geometry +0xb8",
+        0,
+        4,
+        false,
+        "its class, set when made",
+    ),
+    (
+        "skin instance vtable",
+        "geometry +0xbc",
+        0,
+        4,
+        false,
+        "its class, set when made",
+    ),
+    (
+        "renderer vtable",
+        "geometry +0xc0 +0x18",
+        0,
+        4,
+        false,
+        "its class, set when made",
+    ),
+    (
+        "shader vtable",
+        "geometry +0xc0",
+        0,
+        4,
+        false,
+        "its class, set when made",
+    ),
 ];
 
-/// Main-owned fields the draw reads in place whose class is still open, each with its owner: `(kind, from, to,
-/// owner)`. Passes while seen; fails when one is no longer seen (copied or proved: take it off, or move it to
-/// [`READ_IN_PLACE`] with its reason).
-const OPEN_IN_PLACE: &[(&str, u32, u32, &str)] = &[
-    (
-        "accumulator",
-        0x31,
-        0x32,
-        "drawing agent, piece 4 step 1: the accumulator's draw-time fields",
-    ),
-    (
-        "accumulator",
-        0x164,
-        0x168,
-        "drawing agent, piece 4 step 1: the accumulator's draw-time fields",
-    ),
-    (
-        "accumulator",
-        0x16c,
-        0x16d,
-        "drawing agent, piece 4 step 1: the accumulator's draw-time fields",
-    ),
-    (
-        "accumulator",
-        0x174,
-        0x190,
-        "drawing agent, piece 4 step 1: the accumulator's draw-time fields (batch renderers, cursors, count)",
-    ),
-    (
-        "accumulator",
-        0x194,
-        0x198,
-        "drawing agent, piece 4: read by shadow_proj (00b7b930, from 00b7dab0)",
-    ),
-    (
-        "accumulator",
-        0x19c,
-        0x1a0,
-        "drawing agent, piece 4 step 1: the render mode",
-    ),
-    (
-        "shader property",
-        0x1c,
-        0x24,
-        "drawing agent, piece 4: the property's +0x1c and flags +0x20 (00b70820, 00b7dab0, 00b9af60, 00baac10, 00bb25d0, 00bbc050, 00bc9a50)",
-    ),
-    (
-        "shader property",
-        0x60,
-        0x80,
-        "drawing agent, piece 4: the shader classes' own property fields (sky, water, no-lighting, leaves, lighting 3.0, shadow light +0x6c)",
-    ),
-];
+/// An open field: `(kind or main object's path, from, to, writes too, the functions seen reading it, owner)`.
+type OpenField = (&'static str, u32, u32, bool, &'static [u32], &'static str);
+
+/// Main-owned fields the draw reads (or writes) in place whose class is still open, each with the functions seen
+/// and its owner (generated from the census into `acceptance_open.in`, then reviewed). A hit matches only from a
+/// listed function. Passes while seen; fails when one is no longer seen (copied or proved: take it off, or move it
+/// to [`READ_IN_PLACE`] with its reason).
+const OPEN_IN_PLACE: &[OpenField] = &include!("acceptance_open.in");
 
 /// Frames whose POISON run is expected to stop or differ on main today: `(frame, text in its result, owner)`.
-const EXPECTED_POISON: &[(&str, &str, &str)] = &[];
+const EXPECTED_POISON: &[(&str, &str, &str)] = &[
+    (
+        "ShadowLight",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+    (
+        "Sky",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+    (
+        "TallGrass",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+    (
+        "NoLighting",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+    (
+        "Water",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+    (
+        "Leaves",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+    (
+        "Lighting30",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+    (
+        "Particles",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+    (
+        "all",
+        "DIFFERS at 03000c64 x4;",
+        "draw family's next agent: render_skinned hands slot 0x64 the live bound and transform (its mark)",
+    ),
+];
 
 /// One frame's result: its printout, its failures, and which listed escapes, open fields and POISON results it saw.
 struct FrameResult {
@@ -13473,6 +13570,7 @@ fn acceptance_frame(name: &str, setups: &'static [AcceptanceSetup]) -> FrameResu
     }
     // The POISON runs.
     let mut held = Held::new();
+    let mut helds: Vec<Held> = Vec::new();
     for poison in poisons {
         let p = match poison {
             Ok(p) => p,
@@ -13517,12 +13615,23 @@ fn acceptance_frame(name: &str, setups: &'static [AcceptanceSetup]) -> FrameResu
                 None => fail(&mut r, format!("NEW POISON result: {summary}")),
             }
         }
-        for (object, (kind, bytes)) in p.held {
-            let entry = held
-                .entry(object)
-                .or_insert((kind, vec![false; bytes.len()]));
-            for (b, m) in entry.1.iter_mut().zip(bytes) {
-                *b |= m;
+        helds.push(p.held);
+    }
+    // Held: scribbled in every run (a byte the draw itself writes equal to one scribble is not the other).
+    if let Some((first, rest)) = helds.split_first() {
+        for (object, (kind, bytes)) in first {
+            let mut bytes = bytes.clone();
+            for other in rest {
+                let theirs = other
+                    .get(object)
+                    .map(|(_, b)| b.as_slice())
+                    .unwrap_or_default();
+                for (i, b) in bytes.iter_mut().enumerate() {
+                    *b &= theirs.get(i).copied().unwrap_or(false);
+                }
+            }
+            if bytes.contains(&true) {
+                held.insert(*object, (*kind, bytes));
             }
         }
     }
@@ -13645,24 +13754,32 @@ fn acceptance_frame(name: &str, setups: &'static [AcceptanceSetup]) -> FrameResu
                 *k == kind_name && offset >= *from && end <= *to && (*writes || !write)
             }) {
                 Some((field, ..)) => format!("in place: {field}"),
-                None => match OPEN_IN_PLACE.iter().position(|(k, from, to, _)| {
-                    *k == kind_name && offset >= *from && end <= *to && !write
-                }) {
-                    Some(i) => {
-                        r.open_seen.push(i);
-                        format!("in place, OPEN ({})", OPEN_IN_PLACE[i].3)
-                    }
-                    None => {
-                        let line = format!(
+                None => {
+                    match OPEN_IN_PLACE
+                        .iter()
+                        .position(|(k, from, to, writes, functions, _)| {
+                            *k == kind_name
+                                && offset >= *from
+                                && end <= *to
+                                && (*writes || !write)
+                                && (functions.is_empty() || functions.contains(&function))
+                        }) {
+                        Some(i) => {
+                            r.open_seen.push(i);
+                            format!("in place, OPEN ({})", OPEN_IN_PLACE[i].5)
+                        }
+                        None => {
+                            let line = format!(
                         "unclassified access to main-owned state: {function:08x} {kind_name}+{offset:#x} {len} {}",
                         if write { "write" } else { "read" }
                     );
-                        if seen_lines.insert(line.clone()) {
-                            fail(&mut r, line);
+                            if seen_lines.insert(line.clone()) {
+                                fail(&mut r, line);
+                            }
+                            "UNCLASSIFIED".to_string()
                         }
-                        "UNCLASSIFIED".to_string()
                     }
-                },
+                }
             }
         };
         r.text.push_str(&acceptance_line(&key, n, &mark, kind_name));
@@ -13720,7 +13837,7 @@ fn whole_frame_acceptance() {
                 ));
             }
         }
-        for (i, (k, from, to, owner)) in OPEN_IN_PLACE.iter().enumerate() {
+        for (i, (k, from, to, _, _, owner)) in OPEN_IN_PLACE.iter().enumerate() {
             if !open_seen.contains(&i) {
                 failures.push(format!(
                     "listed open field no longer seen (take it off OPEN_IN_PLACE): {k}+{from:#x}..{to:#x} ({owner})"
