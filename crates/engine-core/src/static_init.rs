@@ -657,6 +657,8 @@ pub fn run(e: &mut Engine, stand_ins: &[StandIn]) -> Report {
     let mut report = Report::default();
     // A stop in an untranslated callee is recorded, not printed: the panic
     // hook is silenced for the run and put back after.
+    #[cfg(test)]
+    let _serial = crate::test_panic_hook_lock();
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     run_tables(e, &rows, stand_ins, &mut report);

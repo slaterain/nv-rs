@@ -18,7 +18,7 @@
 
 use super::*;
 use crate::script_call::calls;
-use crate::test_support::{engine, form_arg, int_arg, line, script_ref, RESULT};
+use crate::test_support::{engine, form_arg, int_arg, line, script_ref, short_arg, RESULT};
 
 const AREA: u32 = 0x0500_0000;
 const SCRIPT_FORM: u32 = AREA;
@@ -333,6 +333,75 @@ fn anim_action_events() {
     );
     assert_eq!(e.hook_users(Hook::SetAnimAction), 0);
     assert!(e.ext::<Jip>().actor_hooks.anim_action.is_empty());
+}
+
+/// The play-group command through its record, its fourth argument a `kParamType_AnimationGroup`
+/// as the compiler writes it (two bytes, no type byte): the script is filed under that group,
+/// for one actor and for every actor; the seam calls it for that type only; removing with the
+/// same group gives the hook users back.
+#[test]
+fn play_group_command_files_under_its_group() {
+    let mut e = world();
+    let empty = AREA + 0x6000;
+    e.mem.set_u8(empty + 4, 0x55);
+    script_ref(&mut e, 10, empty);
+    run(
+        &mut e,
+        SET_ON_PLAY_GROUP,
+        &[form_arg(S1), int_arg(1), form_arg(A1), short_arg(0xc3)],
+    );
+    run(
+        &mut e,
+        SET_ON_PLAY_GROUP,
+        &[form_arg(S2), int_arg(1), form_arg(10), short_arg(0x11)],
+    );
+    assert_eq!(e.hook_users(Hook::SetAnimGroup), 2);
+    assert_eq!(flags3(&e, ACTOR), 2);
+    {
+        let s = &e.ext::<Jip>().actor_hooks;
+        assert_eq!(s.play_group.keys().copied().collect::<Vec<_>>(), [0x11]);
+        assert_eq!(
+            s.play_group_actors[&ACTOR]
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            [0xc3]
+        );
+    }
+    let anim = AREA + 0x6100;
+    e.mem.set_u32(anim + 4, ACTOR);
+    calls();
+    site(&mut e, 0x0049_4e19, &[anim, 0x31, 0xc3, ACTOR]);
+    assert_eq!(calls(), [(SCRIPT_FORM, ACTOR, vec![0xc3])]);
+    site(&mut e, 0x0049_4e19, &[anim, 0x31, 0x11, ACTOR]);
+    assert_eq!(calls(), [(SCRIPT_TWO, ACTOR, vec![0x11])]);
+    for other in [0, 0x12, 0xc4] {
+        site(&mut e, 0x0049_4e19, &[anim, 0x31, other, ACTOR]);
+        assert!(calls().is_empty(), "type {other:#x}");
+    }
+    // Another group gives nothing back; the same group gives each user back.
+    run(
+        &mut e,
+        SET_ON_PLAY_GROUP,
+        &[form_arg(S1), int_arg(0), form_arg(A1), short_arg(0x11)],
+    );
+    assert_eq!(e.hook_users(Hook::SetAnimGroup), 2);
+    run(
+        &mut e,
+        SET_ON_PLAY_GROUP,
+        &[form_arg(S1), int_arg(0), form_arg(A1), short_arg(0xc3)],
+    );
+    assert_eq!(
+        (e.hook_users(Hook::SetAnimGroup), flags3(&e, ACTOR)),
+        (1, 0)
+    );
+    run(
+        &mut e,
+        SET_ON_PLAY_GROUP,
+        &[form_arg(S2), int_arg(0), form_arg(10), short_arg(0x11)],
+    );
+    assert_eq!(e.hook_users(Hook::SetAnimGroup), 0);
+    assert!(e.ext::<Jip>().actor_hooks.play_group.is_empty());
 }
 
 /// The play-group events (the shared code, with the group hook and flag): a list of actors
@@ -793,4 +862,35 @@ fn pre_load_housekeeping() {
     e.add_hook_user(Hook::RemoveAmmo, true);
     pre_load(&mut e);
     assert_eq!(e.hook_users(Hook::RemoveAmmo), 0);
+}
+
+/// Handler scripts that are lambdas keep their variables while they are held (JIP's
+/// `LambdaVarContext`): a first add keeps them once and a duplicate add not again, a removal gives
+/// them up, a critical-hit event replaced by one whose filters cover it gives up the old hold and
+/// takes the new one, and the pre-load clearing of the ragdoll scripts gives them up.
+#[test]
+fn lambda_handlers_keep_their_variables_while_held() {
+    let mut e = world();
+    let (list_one, list_two) = (AREA + 0x7000, AREA + 0x7100);
+    nvse::lambda::insert_for_tests(&mut e, SCRIPT_FORM, list_one);
+    nvse::lambda::insert_for_tests(&mut e, SCRIPT_TWO, list_two);
+    let kept = |e: &Engine, script| nvse::lambda::saved_count(e, script);
+    run(&mut e, SET_ON_RELOAD_WEAPON, &[form_arg(S1), int_arg(1)]);
+    run(&mut e, SET_ON_RELOAD_WEAPON, &[form_arg(S1), int_arg(1)]);
+    assert_eq!(kept(&e, SCRIPT_FORM), 1, "a first add and a duplicate add");
+    run(&mut e, SET_ON_RELOAD_WEAPON, &[form_arg(S1), int_arg(0)]);
+    assert_eq!(kept(&e, SCRIPT_FORM), 0, "removed");
+    run(
+        &mut e,
+        SET_ON_CRITICAL_HIT,
+        &[form_arg(S1), int_arg(1), form_arg(A1)],
+    );
+    run(&mut e, SET_ON_CRITICAL_HIT, &[form_arg(S1), int_arg(1)]);
+    assert_eq!(e.ext::<Jip>().actor_hooks.critical_hit.len(), 1);
+    assert_eq!(kept(&e, SCRIPT_FORM), 1, "replaced by a covering filter");
+    run(&mut e, SET_ON_RAGDOLL, &[form_arg(S2), int_arg(1)]);
+    assert_eq!(kept(&e, SCRIPT_TWO), 1);
+    pre_load(&mut e);
+    assert_eq!(kept(&e, SCRIPT_TWO), 0, "the ragdoll scripts cleared");
+    assert_eq!(kept(&e, SCRIPT_FORM), 1, "the critical hit's hold stays");
 }

@@ -486,12 +486,13 @@ fn get_set_ui_value(e: &mut Engine, w: &[u32], action: Action) -> Ret {
         (f.ok, arg_text(&f.leading, 0), 0.0, f.text)
     } else {
         let read = Read::of(e, &a);
-        let text = if action == Action::SetString {
-            read.text(1)
+        // The second argument is a string for SetUIString, a float for the others.
+        let (num, text) = if action == Action::SetString {
+            (0.0, read.text(1))
         } else {
-            Vec::new()
+            (read.float(1, 0.0), Vec::new())
         };
-        (read.ok, read.text(0), read.float(1, 0.0), text)
+        (read.ok, read.text(0), num, text)
     };
     if !ok {
         return handled(true);

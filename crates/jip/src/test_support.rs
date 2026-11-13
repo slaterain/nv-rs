@@ -159,3 +159,9 @@ pub fn int_arg(v: i32) -> Vec<u8> {
     b.extend_from_slice(&v.to_le_bytes());
     b
 }
+
+/// A 16-bit code argument (actor value, animation group, ...) as the compiler writes it: the
+/// two bytes alone, no type byte.
+pub fn short_arg(v: u16) -> Vec<u8> {
+    v.to_le_bytes().to_vec()
+}

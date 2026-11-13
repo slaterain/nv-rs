@@ -107,3 +107,12 @@ pub mod prelude {
     pub use crate::Engine;
     pub use crate::{args, entry, layout, typed_call};
 }
+
+/// One lock for the tests that swap the process-wide panic hook (`static_init::run` silences it
+/// for its run; the exception tests count the panics that reach it): held by each for as long
+/// as it has the hook swapped or counted, so one never sees the other's hook.
+#[cfg(test)]
+pub(crate) fn test_panic_hook_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}

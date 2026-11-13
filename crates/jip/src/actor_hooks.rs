@@ -753,7 +753,14 @@ fn set_on_animation(e: &mut Engine, w: &[u32], action: bool) -> Ret {
         return handled(true);
     };
     let add = read.int(1, 0) != 0;
-    set_animation_event(e, script, add, read.form(2), read.int(3, 0), action);
+    // The action command's type is `kParamType_Integer`; the play-group command's is
+    // `kParamType_AnimationGroup`, a 16-bit code xNVSE writes to JIP's `UInt32 animID`.
+    let id = if action {
+        read.int(3, 0)
+    } else {
+        read.short(3, 0)
+    };
+    set_animation_event(e, script, add, read.form(2), id, action);
     handled(true)
 }
 

@@ -1193,11 +1193,22 @@ impl Engine {
     /// callee's handler takes the mark at its first check ([`Engine::take_caller_mark`]); a
     /// missing mark means "not from that caller" (the count read here and the callee's seam's
     /// read are separate, as JIP's patch and its check are).
+    ///
+    /// Inlined at each marker site, so with no user the site costs the count's load, a branch
+    /// and, at the guard's end, a test of the empty guard; the marking itself is out of line.
     #[must_use]
+    #[inline]
     pub fn mark_caller(&self, hook: Hook, site: u32) -> CallerMark {
         if self.hook_users(hook) == 0 {
             return CallerMark(None);
         }
+        self.mark_caller_now(site)
+    }
+
+    /// [`Engine::mark_caller`]'s marking, with a user: this game thread's mark put in.
+    #[cold]
+    #[inline(never)]
+    fn mark_caller_now(&self, site: u32) -> CallerMark {
         let key = (crate::thread_host::current_id(self), site);
         self.extend.marks.lock().insert(key);
         CallerMark(Some((self.extend.marks.clone(), key)))
@@ -1234,11 +1245,19 @@ impl CallerMarks {
 pub struct CallerMark(Option<(std::sync::Arc<CallerMarks>, (u32, u32))>);
 
 impl Drop for CallerMark {
+    /// Inlined: an empty guard's drop is the test of its pointer; a mark is dropped out of line.
+    #[inline]
     fn drop(&mut self) {
         if let Some((marks, key)) = self.0.take() {
-            marks.lock().remove(&key);
+            drop_mark(marks, key);
         }
     }
+}
+
+#[cold]
+#[inline(never)]
+fn drop_mark(marks: std::sync::Arc<CallerMarks>, key: (u32, u32)) {
+    marks.lock().remove(&key);
 }
 
 impl Default for ExtendState {

@@ -96,23 +96,56 @@ impl Read {
             args: r.args,
         }
     }
+    /// The strict-reads check (nvse's tests; the `test-support` feature, on in jip's tests): an
+    /// argument the reader stored must be read by an accessor that receives what it stored. A
+    /// read that does not match its parameter's type would otherwise give the default silently,
+    /// where xNVSE's output variable receives the value.
+    #[cfg(any(test, feature = "test-support"))]
+    fn check(&self, i: usize, accepts: fn(&Arg) -> bool, accessor: &str) {
+        if let Some(arg) = self.args.get(i) {
+            assert!(
+                accepts(arg),
+                "argument {i} read with Read::{accessor}, but the reader stored {arg:?}"
+            );
+        }
+    }
+    #[cfg(not(any(test, feature = "test-support")))]
+    #[inline(always)]
+    fn check(&self, _: usize, _: fn(&Arg) -> bool, _: &str) {}
+
     /// Argument `i` as a `float` output (`default` when it was not read).
     pub fn float(&self, i: usize, default: f32) -> f32 {
+        self.check(i, |a| matches!(a, Arg::Float(_)), "float");
         self.args.get(i).and_then(Arg::float).unwrap_or(default)
     }
     /// Argument `i` as an integer output (`UInt32`/`SInt32`, the same bits).
     pub fn int(&self, i: usize, default: u32) -> u32 {
+        self.check(i, |a| matches!(a, Arg::Int(_)), "int");
         self.args
             .get(i)
             .and_then(Arg::int)
             .map_or(default, |v| v as u32)
     }
+    /// Argument `i` of a 16-bit parameter type (actor value, animation group, sex, crime type,
+    /// misc stat, alignment, equip type, critical stage) as the `UInt32` output xNVSE writes it
+    /// to: the compiled data's 16 bits (`Arg::Short`), or the expression evaluator's value
+    /// (`Arg::Int`, `ExtractArgsEx` with an NVSE expression); `default` when it was not read.
+    pub fn short(&self, i: usize, default: u32) -> u32 {
+        self.check(i, |a| matches!(a, Arg::Short(_) | Arg::Int(_)), "short");
+        match self.args.get(i) {
+            Some(Arg::Short(v)) => *v,
+            Some(Arg::Int(v)) => *v as u32,
+            _ => default,
+        }
+    }
     /// Argument `i` as a form output (0 when it was not read).
     pub fn form(&self, i: usize) -> u32 {
+        self.check(i, |a| matches!(a, Arg::Form(_)), "form");
         self.args.get(i).and_then(Arg::form).unwrap_or(0)
     }
     /// Argument `i` as a `ScriptLocal *` output (0 when it was not read).
     pub fn local(&self, i: usize) -> u32 {
+        self.check(i, |a| matches!(a, Arg::Var(_)), "local");
         match self.args.get(i) {
             Some(Arg::Var(v)) => *v,
             _ => 0,
@@ -120,6 +153,7 @@ impl Read {
     }
     /// Argument `i` as a string output.
     pub fn text(&self, i: usize) -> Vec<u8> {
+        self.check(i, |a| matches!(a, Arg::Str { .. }), "text");
         self.args
             .get(i)
             .and_then(Arg::text)
@@ -608,5 +642,36 @@ pub(crate) mod test_support {
     /// A value the real game printed times 2^40 (`real-results`): the value itself.
     pub fn scaled(v: f64) -> f64 {
         v / 1_099_511_627_776.0
+    }
+}
+
+#[cfg(test)]
+mod read_tests {
+    use super::Read;
+    use crate::args::Arg;
+
+    fn read(args: Vec<Arg>) -> Read {
+        Read { ok: true, args }
+    }
+
+    /// A 16-bit parameter's argument: the compiled read's `Short`, the expression evaluator's
+    /// `Int`, or the default when it was not read.
+    #[test]
+    fn a_short_read_takes_both_stores() {
+        assert_eq!(read(vec![Arg::Short(0xc3)]).short(0, 7), 0xc3);
+        assert_eq!(read(vec![Arg::Int(0x11)]).short(0, 7), 0x11);
+        assert_eq!(read(vec![]).short(0, 7), 7);
+    }
+
+    /// The strict-reads check: a read that cannot receive what the reader stored stops the test.
+    #[test]
+    #[should_panic(expected = "argument 0 read with Read::int, but the reader stored Short(195)")]
+    fn an_int_read_of_a_short_argument_is_caught() {
+        read(vec![Arg::Short(0xc3)]).int(0, 0);
+    }
+
+    #[test]
+    fn a_read_past_the_arguments_is_not_checked() {
+        assert_eq!(read(vec![Arg::Short(1)]).float(1, 2.5), 2.5);
     }
 }
