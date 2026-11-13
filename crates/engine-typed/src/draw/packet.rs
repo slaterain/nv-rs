@@ -1371,14 +1371,13 @@ pub(crate) fn copy_grass_instances(e: &mut Engine, to: u32, data: u32, count: u1
     });
 }
 
-/// A geometry data's `count` 0x10-byte sub-textures (+0x68) copied to `to` (`_memcpy`).
+/// Hands `f` a geometry data's `count` 0x10-byte sub-textures (+0x68) and their size: the packet's image while
+/// it is open, the array itself otherwise (the caller copies them into its own constants).
 #[inline(always)]
-pub(crate) fn copy_subtextures(e: &mut Engine, to: u32, data: u32, count: u8) {
+pub(crate) fn with_subtextures(e: &mut Engine, data: u32, count: u8, f: impl FnOnce(&mut Engine, u32, u32)) {
     let source = subtextures(e, data);
     let size = u32::from(count) << 4;
-    capture::image(e, source, 0, size, |e, image| {
-        super::own::copy_constants(e, to, image, size);
-    });
+    capture::image(e, source, 0, size, |e, image| f(e, image, size));
 }
 
 /// The SpeedTree leaf property's class (`010b9700`): its slots 0x100 (`00bb3c90`) and 0xfc (`00bb3c80`) answer its

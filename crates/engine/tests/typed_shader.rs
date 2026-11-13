@@ -9815,9 +9815,13 @@ fn vertex_entries_read_the_times_through_the_packet() {
                 };
                 let camera = e.mem.alloc(0x120);
                 let acc = e.mem.alloc(0x40);
-                (words, vec![camera, acc])
+                (words, vec![camera, acc, g.geometry])
             },
-            |e, w| cut::take_frame(e, w[0], Ptr::new(w[1])),
+            |e, w| {
+                cut::take_frame(e, w[0], Ptr::new(w[1]));
+                // The geometry's values (vertex entry 21 reads its translation through the packet: value packet B).
+                cut::take_geometry_values(e, w[2]);
+            },
         );
     }
 }
@@ -11314,9 +11318,8 @@ fn lighting30_view_matrix_writes_the_draws_own_constants() {
         &[4],
         with_acc(lighting30_view_matrix_words),
         |e, acc, w| {
-            // The pass's light count only: lighting 3.0 still reads its light array and lights in place (its
-            // accessors move to the packet with value packet B), so they stay unscribbled.
-            capture::take(e, w[1], 9, 0xa);
+            // The pass's lights as the cut takes them (lighting 3.0 reads them through the packet: value packet B).
+            cut::take_pass_lights(e, w[1]);
             cut::take_frame(e, 0, Ptr::new(acc));
         },
     );
@@ -11358,7 +11361,14 @@ fn no_lighting_subtextures_go_to_the_draws_own_constants() {
         .1,
         &product(&[&[0, 1, 5]]),
         with_acc(no_lighting_subtexture_words),
-        |_, _, _| {},
+        |e, _, w| {
+            // The sub-textures as the cut takes them for a no-lighting geometry: the copy reads them through the
+            // packet (value packet B).
+            let data = e.mem.u32(w[1] + 0xb8);
+            capture::take(e, data, 0x68, 0x6d);
+            let count = u32::from(e.mem.u8(data + 0x6c));
+            capture::take(e, e.mem.u32(data + 0x68), 0, count << 4);
+        },
     );
 }
 
@@ -11539,6 +11549,7 @@ fn lighting30_setup_constants_reads_the_packet() {
             let pass = e.mem.u32(0x011f_91e0);
             let geometry = e.mem.u32(pass);
             as_drawn(e, geometry, words[1]);
+            d3dx_content_stand_ins(e);
             (words, vec![pass, geometry])
         },
         |e, w| {
@@ -11973,7 +11984,7 @@ fn leaf_setup_constants_reads_the_leaves_through_the_packet() {
         .1,
         &cases_of(
             LEAF_CONSTANTS,
-            &[&[1, 0, 1, 9, ONE, 0], &[0, 0, 0, 8, HALF, 0]],
+            &[&[1, 2, 1, 9, ONE, 0], &[0, 0, 0, 8, HALF, 0]],
         ),
         true,
         |e, case| {
@@ -12004,4 +12015,51 @@ fn leaf_setup_constants_reads_the_leaves_through_the_packet() {
             cut::take_frame(e, 0, Ptr::new(0));
         },
     );
+}
+
+/// The D3DX imports the lighting 3.0 helpers call, each answering from what its inputs hold (as
+/// [`geometry_stand_ins`] does) rather than marking the call by its words: for the packet tests, where a helper
+/// handed the packet's image and one handed guest memory get the same words but must read the same values. The
+/// plane normalize (`00fdf430`) and transform (`00fdf418`), the transpose (`00fdf42c`), the multiply (`00fdf424`)
+/// and the inverse (`00fdf428`).
+fn d3dx_content_stand_ins(e: &mut Engine) {
+    e.register(0x00fd_f430, |e, a| {
+        let v = words_at(e, a[1], 4);
+        for k in 0..4u32 {
+            e.mem.set_u32(a[0] + 4 * k, v[k as usize]);
+        }
+        ret(a[0])
+    });
+    e.register(0x00fd_f418, |e, a| {
+        let v = words_at(e, a[1], 4);
+        let m = words_at(e, a[2], 16);
+        for k in 0..4u32 {
+            e.mem
+                .set_u32(a[0] + 4 * k, v[((k + 1) % 4) as usize] ^ (m[k as usize] & 0xff));
+        }
+        ret(a[0])
+    });
+    e.register(0x00fd_f42c, |e, a| {
+        let m = words_at(e, a[1], 16);
+        for k in 0..16u32 {
+            e.mem
+                .set_u32(a[0] + 4 * k, m[(4 * (k % 4) + k / 4) as usize]);
+        }
+        ret(a[0])
+    });
+    e.register(0x00fd_f424, |e, a| {
+        let (m, n) = (words_at(e, a[1], 16), words_at(e, a[2], 16));
+        for k in 0..16u32 {
+            let word = m[k as usize] ^ (n[((5 * k + 3) % 16) as usize] & 0xff);
+            e.mem.set_u32(a[0] + 4 * k, word);
+        }
+        ret(a[0])
+    });
+    e.register(0x00fd_f428, |e, a| {
+        let m = words_at(e, a[2], 16);
+        for k in 0..16u32 {
+            e.mem.set_u32(a[0] + 4 * k, m[(15 - k) as usize]);
+        }
+        ret(a[0])
+    });
 }

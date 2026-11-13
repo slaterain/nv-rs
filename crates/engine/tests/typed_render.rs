@@ -1356,13 +1356,12 @@ fn draw_packed_typed_vertex_count() {
 }
 
 /// The geometry pass (`00b7dde0`), value packet B: the inverse and the world-view constants take the packet's
-/// image of the rendered object's world transform, and the light direction reads the pass's first light through
-/// the packet. With those copies scribbled in guest memory (POISON) it answers and writes as with the packet open
-/// and unscribbled (both engines lay out their stacks alike); every read through the packet found its copy.
+/// image of the rendered object's world transform. With that copy scribbled in guest memory (POISON) it answers and
+/// writes as with the packet open and unscribbled (both engines lay out their stacks alike); every read through the packet found its copy.
 #[test]
 fn geometry_pass_reads_the_packet() {
     use engine_core::typed::diff::memory_digest_beside_stack;
-    use engine_typed::draw::{capture, cut};
+    use engine_typed::draw::capture;
     let f = entry!(0x00b7_dde0, pass::geometry_pass(Ptr, Ptr)).1;
     let setup = |e: &mut Engine| {
         // The real shader family (its world-view constants and light direction, which read what the
@@ -1435,9 +1434,10 @@ fn geometry_pass_reads_the_packet() {
         set(e, VIEW_HOLDER, rendering);
         (vec![shader, pass], rendering, view)
     };
-    let fill = |e: &mut Engine, rendering: u32, view: u32| {
+    // The view object's world transform as the cut takes it. Not the pass's lights: the light direction (`00b7c7b0`)
+    // still reads them in place on main, and routing it is the drawing agent's (its piece 4).
+    let fill = |e: &mut Engine, _rendering: u32, view: u32| {
         capture::take(e, view, 0x68, 0x9c);
-        cut::take_pass_lights(e, rendering);
     };
     for scribble in [capture::SCRIBBLE, capture::SCRIBBLE_OTHER] {
         let mut plain = Engine::new();

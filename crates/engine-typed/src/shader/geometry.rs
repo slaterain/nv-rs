@@ -171,7 +171,7 @@ pub fn vertex_entry_17(e: &mut Engine, _this: Ptr, object: Ptr) {
         let offset = 4 * idx(index);
         // The bound's centre through the packet (value packet B).
         let centre = f32::from_bits(crate::draw::packet::bound_word(e, position, idx(index)));
-        *value = centre - e.global::<f32>(CAMERA + offset);
+        *value = centre - e.global::<f32>(CAMERA + offset); // own: main's frame value, value packet B
     }
     for (index, value) in values.iter().enumerate() {
         capture::set_own_at(e, OFFSET + 4 * idx(index), *value);

@@ -131,7 +131,9 @@ pub fn copy_subtextures(e: &mut Engine, this: Ptr, geometry: Ptr, _unused: u32) 
     let data = packet::model_data(e, geometry.addr());
     let count = packet::subtexture_count(e, data);
     if count != 0 {
-        packet::copy_subtextures(e, SUBTEXTURES, data, count);
+        packet::with_subtextures(e, data, count, |e, source, size| {
+            own::copy_constants(e, SUBTEXTURES, source, size);
+        });
         let entry = e.global::<u32>(this.addr().wrapping_add(0x170));
         own::set_shader_global(e, entry.wrapping_add(0x20), u32::from(count));
     }
