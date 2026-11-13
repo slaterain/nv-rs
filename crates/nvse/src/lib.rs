@@ -271,6 +271,7 @@ pub fn install(e: &mut Engine) {
     tick::install(e);
     saveload::install(e);
     events::install(e);
+    override_args::install(e);
     call_sites::install(e);
     commands::game::install(e);
     commands::controls::install(e);

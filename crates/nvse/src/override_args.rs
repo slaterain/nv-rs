@@ -25,11 +25,6 @@ pub const OVERRIDE_COMMAND: u16 = 0xffff;
 /// `CompilerOverride::kOverride_BlockType`: a block type (`GameMode`'s parameters).
 pub const OVERRIDE_BLOCK_TYPE: u16 = 0xfffe;
 
-/// `MessageBoxA` through the exe's import (`ShowError` (xNVSE): `MB_ICONEXCLAMATION`, caption
-/// `"NVSE"`).
-const API_MESSAGE_BOX: u32 = 0x00fd_f2f4;
-const MB_ICONEXCLAMATION: u32 = 0x30;
-
 /// One entry of the stack (`ExecutingScriptContext` (xNVSE)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExecContext {
@@ -46,6 +41,12 @@ pub struct ExecContext {
 #[derive(Default)]
 pub struct State {
     stack: std::sync::Mutex<Vec<ExecContext>>,
+}
+
+/// Makes the stack's slot at the extender's install, before the game's threads start, so every
+/// thread's engine shares the one stack (as [`crate::events::install`] does its lock-free state).
+pub fn install(e: &mut Engine) {
+    e.ext_free::<State>();
 }
 
 fn stack(e: &mut Engine) -> std::sync::MutexGuard<'_, Vec<ExecContext>> {
@@ -99,28 +100,19 @@ pub fn depth(e: &mut Engine) -> usize {
     stack(e).len()
 }
 
-// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptUtils.cpp: ShowError (run time).
-/// `g_ErrOut.Show`: a Windows message box with the text, caption "NVSE".
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptUtils.cpp: ShowError (the
+// `RUNTIME` one; the message box is the editor build's).
+/// `g_ErrOut.Show`: `Console_Print(msg)`, the text being the format, and the game carries on.
+/// xNVSE also writes it to `nvse.log` (`_MESSAGE`); the port keeps no such log, as for every other
+/// error it prints ([`crate::errors::show`]).
 fn show_error(e: &mut Engine, text: &str) {
-    let caption = guest_text(e, b"NVSE");
-    let body = guest_text(e, text.as_bytes());
-    e.call(
-        API_MESSAGE_BOX,
-        &args![0u32, body, caption, MB_ICONEXCLAMATION],
-    );
-    e.mem.free(body);
-    e.mem.free(caption);
-}
-
-fn guest_text(e: &mut Engine, text: &[u8]) -> u32 {
-    let at = e.mem.alloc(text.len() as u32 + 1);
-    e.mem.write(at, text);
-    e.mem.set_u8(at + text.len() as u32, 0);
-    at
+    if crate::Nvse::prints(e) {
+        crate::commands::console_print(e, text, &[]);
+    }
 }
 
 /// The calling reference and container a reader in `mode` gets: the current context's for a
-/// command ([`OVERRIDE_COMMAND`]), none for a block type; `None` (after xNVSE's error box) when a
+/// command ([`OVERRIDE_COMMAND`]), none for a block type; `None` (after xNVSE's console error) when a
 /// command has no context.
 fn references(e: &mut Engine, mode: u16, what: &str) -> Option<(u32, u32)> {
     if mode != OVERRIDE_COMMAND {
@@ -298,10 +290,9 @@ pub fn formatted(
             return None;
         }
         let leading = convert_all(e, &ev, params, 0, &toks[..fmt_pos as usize], script, false)?;
+        // A missing format token: xNVSE reads through a null there. Any other token gives its
+        // `GetString`, empty for one that is no string.
         let fmt_tok = toks.get(fmt_pos as usize)?;
-        if !ev.can_convert(e, fmt_tok, expr::Ty::String) {
-            return None;
-        }
         let fmt = ev.get_string(e, fmt_tok);
         let mut args = TokenArgs {
             ev: &ev,

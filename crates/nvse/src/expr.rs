@@ -2090,9 +2090,14 @@ pub fn convert_default_arg(
                 text: s,
             }
         }
-        // Axis, actor value, animation group, sex, magic effect: the token's names for them
-        // come later (a magic effect always fails in xNVSE too).
-        0x05 | 0x08 | 0x0a | 0x12 | 0x1f => return None,
+        // `kParamType_Array`: `GetArrayID` (0 for a token that is no array).
+        0x100 => Arg::Int(ev.get_array_id(e, &tok) as i32),
+        0x08 => Arg::Byte(token_axis(e, ev, &tok)?),
+        0x05 => Arg::Int(token_actor_value(e, ev, &tok)? as i32),
+        0x0a => Arg::Int(token_anim_group(e, ev, &tok)? as i32),
+        0x12 => Arg::Int(token_sex(e, ev, &tok)? as i32),
+        // `kParamType_MagicEffect`: never converts in xNVSE.
+        0x1f => return None,
         _ => {
             let number_form = matches!(
                 tok,
@@ -2114,6 +2119,83 @@ pub fn convert_default_arg(
             Arg::Form(convert_form(e, kind, form)?)
         }
     })
+}
+
+/// `g_actorValues` (`ActorValueInfo *` by code, `infoName` at `+0x38`) and how many of them xNVSE
+/// knows by name (`eActorVal_FalloutMax`, 76: the name search stops before it, a number may be it).
+const ACTOR_VALUES: u32 = 0x011d_61c8;
+const ACTOR_VALUE_MAX: i32 = 76;
+/// `g_animGroups`: 245 `AnimGroupInfo`s of `0x24` bytes, the name first (`kAnimGroup_Max`).
+const ANIM_GROUPS: u32 = 0x0119_77d8;
+const ANIM_GROUP_MAX: u32 = 245;
+
+/// `_stricmp(a, b) == 0` in the C locale.
+fn equal_ci(a: &[u8], b: &[u8]) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptTokens.cpp: ScriptToken::GetAxis.
+/// `X`, `Y` or `Z` for a one-letter string of either case; `None` (`-1`) for anything else.
+fn token_axis(e: &mut Engine, ev: &Eval, tok: &Tok) -> Option<u8> {
+    match ev.get_string(e, tok).as_slice() {
+        [b'x' | b'X'] => Some(b'X'),
+        [b'y' | b'Y'] => Some(b'Y'),
+        [b'z' | b'Z'] => Some(b'Z'),
+        _ => None,
+    }
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptTokens.cpp:
+// ScriptToken::GetActorValue, and GameAPI.cpp: GetActorValueForString.
+/// A number from 0 to 76, or an actor value's name (any case); `None`
+/// (`eActorVal_NoActorValue`) for anything else.
+fn token_actor_value(e: &mut Engine, ev: &Eval, tok: &Tok) -> Option<u32> {
+    if ev.can_convert(e, tok, Ty::Number) {
+        let n = f64_to_i32(ev.get_number(e, tok));
+        return (0..=ACTOR_VALUE_MAX).contains(&n).then_some(n as u32);
+    }
+    let name = ev.get_string(e, tok);
+    (0..ACTOR_VALUE_MAX as u32).find(|&i| {
+        let info = e.mem.u32(ACTOR_VALUES + 4 * i);
+        info != 0 && {
+            let text = e.mem.u32(info + 0x38);
+            text != 0 && equal_ci(&crate::table::guest_text(e, text), &name)
+        }
+    })
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptTokens.cpp:
+// ScriptToken::GetAnimationGroup, and NiNodes.cpp: TESAnimGroup::AnimGroupForString.
+/// A number as a `UInt32` (any but 245), or a group's name (any case); `None`
+/// (`kAnimGroup_Max`) for anything else.
+fn token_anim_group(e: &mut Engine, ev: &Eval, tok: &Tok) -> Option<u32> {
+    let group = if ev.can_convert(e, tok, Ty::Number) {
+        to_u32(ev.get_number(e, tok))
+    } else if ev.can_convert(e, tok, Ty::String) {
+        let name = ev.get_string(e, tok);
+        (0..ANIM_GROUP_MAX)
+            .find(|&i| {
+                let text = e.mem.u32(ANIM_GROUPS + 0x24 * i);
+                text != 0 && equal_ci(&crate::table::guest_text(e, text), &name)
+            })
+            .unwrap_or(ANIM_GROUP_MAX)
+    } else {
+        ANIM_GROUP_MAX
+    };
+    (group != ANIM_GROUP_MAX).then_some(group)
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptTokens.cpp: ScriptToken::GetSex.
+/// 0 for "male", 1 for "female" (any case); `None` (`-1`) for anything else.
+fn token_sex(e: &mut Engine, ev: &Eval, tok: &Tok) -> Option<u32> {
+    let s = ev.get_string(e, tok);
+    if equal_ci(&s, b"male") {
+        Some(0)
+    } else if equal_ci(&s, b"female") {
+        Some(1)
+    } else {
+        None
+    }
 }
 
 /// `ConvertDefaultArg`'s form checks: the form (or the cast pointer) a parameter of `kind` takes.
