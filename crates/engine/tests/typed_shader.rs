@@ -11918,9 +11918,10 @@ fn take_drawn(e: &mut Engine, w: &[u32]) {
     let property = e.mem.u32(geometry + 0xa8);
     capture::take(e, property, 0x24, 0x38);
     cut::take_pass_lights(e, w[0]);
-    cut::take_frame(e, 0, Ptr::new(0));
-    // The held accumulator's camera's translation (the cut takes the camera from +0x68).
+    // The frame's values with the held accumulator's settings (the world accumulator the cut takes them from), and
+    // that accumulator's camera's translation (the cut takes the camera from +0x68).
     let held = e.mem.u32(0x011f_95f0);
+    cut::take_frame(e, 0, Ptr::new(held));
     if held != 0 {
         let camera = e.mem.u32(held + 8);
         capture::take(e, camera, 0x8c, 0x98);
