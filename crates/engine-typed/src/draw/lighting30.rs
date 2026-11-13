@@ -299,13 +299,21 @@ fn light_alpha(e: &mut Engine, fallback: u32, property: u32) {
         }
         let length = narrow(e.call(VECTOR_LENGTH, &args![vector]).f64());
         if light != 0 {
-            let data = packet::light_data(e, light);
-            e.call(TRANSFORM_POINT, &args![data + 0x8c, vector, fallback]);
-            let radius = packet::light_word(e, data, 0xc4);
-            e.call(POINT_TIMES_SCALAR, &args![data + 0xd4, other, radius]);
+            // The property list's light (the cut copies it, its light and their values): its light (+0xf8), that
+            // light's position (+0x8c) and colour (+0xd4) handed by pointer, strength +0xc4 and radius +0xe0, all
+            // the packet's.
+            let data = packet::pass_light_word(e, light, 0xf8);
+            capture::image(e, data, 0x8c, 0x98, |e, base| {
+                e.call(TRANSFORM_POINT, &args![base + 0x8c, vector, fallback]);
+            });
+            let radius = packet::light_value_word(e, data, 0xc4);
+            capture::image(e, data, 0xd4, 0xe0, |e, base| {
+                e.call(POINT_TIMES_SCALAR, &args![base + 0xd4, other, radius]);
+            });
             let distance = e.call(LENGTH, &args![vector]).f64();
-            let ratio =
-                narrow(distance / f64::from(f32::from_bits(packet::light_word(e, data, 0xe0))));
+            let ratio = narrow(
+                distance / f64::from(f32::from_bits(packet::light_value_word(e, data, 0xe0))),
+            );
             let low = e.call(CLAMP_LOW, &args![0.0f64, ratio.to_bits()]).f64();
             let clamped = narrow(e.call(CLAMP_HIGH, &args![1.0f64, low]).f64());
             let rest = 1.0 - clamped;

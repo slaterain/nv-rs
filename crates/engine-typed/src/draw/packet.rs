@@ -864,17 +864,18 @@ pub(crate) fn transform_word(e: &Engine, transform: u32, offset: u32) -> u32 {
     e.global::<u32>(transform.wrapping_add(offset))
 }
 
-/// The scene's light list of an accumulator: its camera's (+0x194) word +0xe0.
+/// The light of an accumulator's shadow scene node (+0x194, read in place: open, piece 4): the node's +0xe0, the
+/// packet's (the cut copies the scene's node 0's).
 #[inline(always)]
 pub(crate) fn accumulator_lights(e: &Engine, accumulator: u32) -> u32 {
-    let camera = e.global::<u32>(accumulator.wrapping_add(0x194));
-    e.global::<u32>(camera.wrapping_add(0xe0))
+    let node = e.global::<u32>(accumulator.wrapping_add(0x194));
+    scene_node_light(e, node)
 }
 
-/// A light list's first light (+0xf8), none when 0.
+/// A shadow scene light's light (+0xf8), none when 0, the packet's.
 #[inline(always)]
 pub(crate) fn first_light(e: &Engine, lights: u32) -> u32 {
-    e.global::<u32>(lights.wrapping_add(0xf8))
+    pass_light_word(e, lights, 0xf8)
 }
 
 /// A light's word at `offset` (+0xc8 and +0xd4 its two colours, +0xf0 to +0xf8 its direction).
@@ -1286,7 +1287,8 @@ pub(crate) fn material_default_word(e: &Engine, index: u32) -> u32 {
 }
 
 /// The scene's shadow node 0 (`011f91c8`), its camera position (+0x1e4, word `index`) and its sun's
-/// colour (its light list +0xe0, the list's light +0xf8, the light's colour +0xd4, word `index`).
+/// colour (its light +0xe0, that light's light +0xf8, the light's colour +0xd4, word `index`: the cut copies the
+/// three, so they are the packet's; the node itself, the scene's, is set at load and read in place).
 #[inline(always)]
 pub(crate) fn scene_shadow_node(e: &Engine) -> u32 {
     e.global::<u32>(0x011f_91c8)
@@ -1297,16 +1299,12 @@ pub(crate) fn scene_camera_position(e: &Engine, index: u32) -> u32 {
 }
 #[inline(always)]
 pub(crate) fn sun_light_colour_word(e: &Engine, index: u32) -> u32 {
-    let list = e.global::<u32>(scene_shadow_node(e).wrapping_add(0xe0));
-    let light = e.global::<u32>(list.wrapping_add(0xf8));
-    e.global::<u32>(light.wrapping_add(0xd4 + 4 * index))
+    let shadow = scene_node_light(e, scene_shadow_node(e));
+    let light = pass_light_word(e, shadow, 0xf8);
+    light_value_word(e, light, 0xd4 + 4 * index)
 }
 
-/// A light's data (+0xf8) and a light's byte at `offset` (+0x208, the clip-plane cache's: piece 4's, in place).
-#[inline(always)]
-pub(crate) fn light_data(e: &Engine, light: u32) -> u32 {
-    e.global::<u32>(light.wrapping_add(0xf8))
-}
+/// A light's byte at `offset` (+0x208, the clip-plane cache's: piece 4's, in place).
 #[inline(always)]
 pub(crate) fn light_byte(e: &Engine, light: u32, offset: u32) -> u8 {
     e.global::<u8>(light.wrapping_add(offset))

@@ -6028,10 +6028,11 @@ fn decal_pass() {
         .assert_same();
 }
 
-/// A lighting property with a light list for the first active light's getters: `shape` 0 no list; 1..=6 a list of
+/// A lighting property with a light list for the first active light's getters: `shape` 0 no list; 1..=8 a list of
 /// three lights where light 0 is (1) active, (2) of index 0xff, (3) app-culled (its light's +0x30 bit 0), (4) of
-/// byte +0xec 1 (skipped by the non-shadow form only), (5) a node without a light, (6) all three inactive; `ec`
-/// marks light 1's +0xec too. Answers the property and an iterator word.
+/// byte +0xec 1 (skipped by the non-shadow form only), (5) a node without a light, (6) all three inactive; lights 0
+/// and 1 of index 0xff and the last one, checked after the loop, (7) app-culled or (8) of byte +0xec 1; `ec` marks
+/// light 1's +0xec too. Answers the property and an iterator word.
 fn active_light_words(e: &mut Engine, c: &Case) -> Vec<u32> {
     let _ = draw_world(e);
     let (shape, ec) = (c.word(0), c.word(1));
@@ -6066,11 +6067,19 @@ fn active_light_words(e: &mut Engine, c: &Case) -> Vec<u32> {
                 e.mem.set_u16(light + 0x110, 0xff);
             }
         }
+        7 | 8 => {
+            e.mem.set_u16(first + 0x110, 0xff);
+            e.mem.set_u16(second + 0x110, 0xff);
+            if shape == 7 {
+                e.mem.set_u8(e.mem.u32(third + 0xf8) + 0x30, 1);
+            } else {
+                e.mem.set_u8(third + 0xec, 1);
+            }
+        }
         _ => {}
     }
     if ec != 0 {
         e.mem.set_u8(second + 0xec, 1);
-        e.mem.set_u8(third + 0x30, 0);
     }
     vec![property, iterator]
 }
@@ -6084,7 +6093,7 @@ fn first_active_light() {
         engine_typed::draw::lights::first_active_light(Ptr<_>, Ptr<_>)
     ))
     .draw_common_at(0x00b7_0590)
-    .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5, 6]), Input::Of(TWO_WAYS)])
+    .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8]), Input::Of(TWO_WAYS)])
     .setup(active_light_words)
     .run()
     .assert_same();
@@ -6098,7 +6107,7 @@ fn first_active_non_shadow_light() {
         engine_typed::draw::lights::first_active_non_shadow_light(Ptr<_>, Ptr<_>)
     ))
     .draw_common_at(0x00b7_0600)
-    .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5, 6]), Input::Of(TWO_WAYS)])
+    .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8]), Input::Of(TWO_WAYS)])
     .setup(active_light_words)
     .run()
     .assert_same();
@@ -10679,6 +10688,82 @@ fn lighting30_material() {
     .assert_same();
 }
 
+/// The material's light-scaled alpha (pass types 0x1bd and 0x1c3, the property's bit 0x8000, the alpha test
+/// passing; a first active light or none) reads the property's light list, the light it finds, that light's
+/// position, colour, strength and radius, and the scene's sun light and its colour through the packet: with the
+/// cut's copies scribbled in guest memory (POISON), it writes as without the packet.
+#[test]
+fn lighting30_material_reads_the_lights_through_the_packet() {
+    packet_same_cases(
+        "lighting30_material",
+        entry!(
+            0x00bb_e9c0,
+            engine_typed::draw::lighting30::material(Ptr<_>, u32, Ptr<_>, Ptr<_>, u32)
+        )
+        .1,
+        &cases_of(
+            LIGHTING30_MATERIAL,
+            &[
+                &[3, 0x1bd, 0x3f00_0000, 0x8000, 0, 0, 0, 1],
+                &[3, 0x1c3, 0x3f40_0000, 0x8000, 1, 1, 0, 1],
+                &[8, 0x1bd, 0x3f00_0000, 0x8000, 0, 0, 0, 0],
+            ],
+        ),
+        true,
+        |e, case| {
+            let words = lighting30_material_words(e, case);
+            let node = e.mem.u32(0x011f_91c8);
+            (words.clone(), vec![words[2], node])
+        },
+        |e, w| {
+            // The property's values and light list (its lights and their lights), and the scene node's light, as
+            // the cut takes them.
+            cut::take_property_lights(e, w[0]);
+            capture::take(e, w[1], 0xe0, 0xe4);
+            cut::take_one_light(e, e.mem.u32(w[1] + 0xe0));
+        },
+    );
+}
+
+/// The tall grass's `SetupGeometry` with a property of kind 4 reads the accumulator's shadow scene node's light,
+/// that light's light and its direction and colours through the packet (the cut copies them for the scene's node):
+/// with them scribbled in guest memory (POISON), it answers and writes as without the packet.
+#[test]
+fn tall_grass_setup_geometry_reads_the_light_through_the_packet() {
+    packet_same_cases(
+        "tall_grass_setup_geometry",
+        entry!(
+            0x00ba_ac10,
+            engine_typed::draw::tall_grass::setup_geometry(
+                Ptr<_>,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+            ) -> u32
+        )
+        .1,
+        &cases_of(
+            TALL_GRASS,
+            &[&[ONE, ONE, 4, 1, 0, 0, 0], &[HALF, ONE, 4, 1, 1, 1, 2]],
+        ),
+        false,
+        |e, case| {
+            let words = tall_grass_words(e, case);
+            let node = e.mem.u32(e.mem.u32(0x011f_95ec) + 0x194);
+            (words, vec![node])
+        },
+        |e, w| {
+            capture::take(e, w[0], 0xe0, 0xe4);
+            cut::take_one_light(e, e.mem.u32(w[0] + 0xe0));
+        },
+    );
+}
+
 /// The lighting 3.0 colour (`00bbecd0`): the material's colour through its pointer or its own; equal to
 /// the neutral colour or not; the property with lights or none; HDR on or off. Main-thread code (`f32`)
 /// on the main thread's word, bit for bit (NaN payloads aside), with play's floats.
@@ -12766,6 +12851,8 @@ fn acceptance_particle_pass(e: &mut Engine, d: &DrawW) -> u32 {
         set(e, data + off, array);
     }
     set(e, geometry + 0xb8, data);
+    // The particle property keeps its instance data at +0x60, not a light list.
+    acceptance_other_property(e, geometry);
     let pass = e.mem.alloc(0x10);
     for k in 0..4 {
         let word = e.mem.u32(d.w.passes[0] + 4 * k);
@@ -12773,6 +12860,25 @@ fn acceptance_particle_pass(e: &mut Engine, d: &DrawW) -> u32 {
     }
     set(e, pass, geometry);
     pass
+}
+
+/// A property of a class that is not a lighting property for `geometry` (a copy of its property, not shared with the
+/// other frames), with a real pointer at +0x60 (the no-lighting property's base texture, the particle property's
+/// instance data): an object with a vtable, a count and a word at +8. The cut must not walk it as a light list.
+fn acceptance_other_property(e: &mut Engine, geometry: u32) {
+    let old = e.mem.u32(geometry + 0xa8);
+    let property = e.mem.alloc(0x90);
+    for k in 0..if old == 0 { 0 } else { 0x80 / 4 } {
+        let word = e.mem.u32(old + 4 * k);
+        set(e, property + 4 * k, word);
+    }
+    let vt = vtable(e, &[]);
+    let object = obj(e, 0x40, vt);
+    set(e, object + 4, 1);
+    let inner = e.mem.alloc(0x200);
+    set(e, object + 8, inner);
+    set(e, property + 0x60, object);
+    set(e, geometry + 0xa8, property);
 }
 
 /// A pass for set-up `which` in the acceptance world: the set-up test's world made on the whole draw's (its
@@ -12930,6 +13036,10 @@ fn acceptance_setup_pass(e: &mut Engine, d: &DrawW, which: AcceptanceSetup) -> u
         let leaves = e.mem.u32(RETS + 0x100);
         set(e, property + 0x88, leaf_data);
         set(e, leaf_data + 8, leaves);
+    }
+    if which == AcceptanceSetup::NoLighting {
+        // The no-lighting property keeps its base texture at +0x60, not a light list.
+        acceptance_other_property(e, geometry);
     }
     set(e, geometry + 0xc0, shader);
     let pass = e.mem.alloc(0x10);

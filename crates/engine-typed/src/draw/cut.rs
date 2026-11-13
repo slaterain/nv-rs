@@ -250,7 +250,7 @@ fn take_geometry(e: &mut Engine, geometry: u32, nodes: &mut AddrSet<u32>) {
     take_skin(e, packet::skin_instance(e, geometry), nodes);
     let property = packet::shader_property(e, geometry);
     capture::take(e, property, PROPERTY.0, PROPERTY.1);
-    if lighting_property(e, geometry) {
+    if lighting_property(e, property) {
         take_light_list(e, property, nodes);
     }
     let data = packet::model_data(e, geometry);
@@ -441,20 +441,34 @@ fn take_light(e: &Engine, shadow: u32, nodes: &mut AddrSet<u32>) {
     }
 }
 
-/// The geometry set-ups (a shader's slot 0x7c) of the sky (`00b89d80`, vtable `010afe18`) and the water
-/// (`00b864d0`, vtable `010af9e0`): their properties are not lighting properties, and +0x60 is a value of theirs
-/// the set-up reads in place (the sky's into `011ff910`, the water's into `011ff5cc`), not a light list.
-const NOT_LIGHTING_SETUPS: [u32; 2] = [0x00b8_9d80, 0x00b8_64d0];
-const SLOT_SETUP_GEOMETRY: u32 = 0x7c;
+/// The vtables of the lighting property (`010ae7b0`, stored by its constructor `00b71720`) and of every class built
+/// on it, found from the exe by the constructors that call it and theirs: `010ae0d0` (`00b66f50`), `010adea8`
+/// (`00b60cb0`), `010adad0` (`00b57f90`), `010b95c0` (`00bb3660`), `010b9828` (`00bb4080`); on `00b66f50`:
+/// `010b8330` (`00ba8630`), `010b9490` (`00bb3500`), `010b9910` (`00bb4520`), `010babf8` (`00bc3bb0`); on
+/// `00bb3660`: `010b9700` (the SpeedTree leaf property, `00bb3ba0`); on `00bb3500`: `010b9338` (`00bb3070`); on
+/// `00bb4520`: `010bcb60` (`00c05880`). Only these keep a light list at +0x60: the other shader properties keep
+/// something else there (the no-lighting property its base texture, the sky and water values their set-ups read,
+/// the particle and bolt properties their instance and segment data).
+const LIGHTING_PROPERTY_VTABLES: [u32; 13] = [
+    0x010a_e7b0,
+    0x010a_e0d0,
+    0x010a_dea8,
+    0x010a_dad0,
+    0x010b_95c0,
+    0x010b_9828,
+    0x010b_8330,
+    0x010b_9490,
+    0x010b_9910,
+    0x010b_abf8,
+    0x010b_9700,
+    0x010b_9338,
+    0x010b_cb60,
+];
 
-/// Whether `geometry`'s shader property holds a light list at +0x60: every drawn shader's but the sky's and the
-/// water's, told by the shader's geometry set-up (as the draw calls it), so the cut does not take a value of theirs.
-fn lighting_property(e: &Engine, geometry: u32) -> bool {
-    let setup = peek(e, geometry.wrapping_add(GEOMETRY_SHADER))
-        .filter(|&s| s != 0)
-        .and_then(|s| peek(e, s))
-        .and_then(|vtable| peek(e, vtable.wrapping_add(SLOT_SETUP_GEOMETRY)));
-    !setup.is_some_and(|s| NOT_LIGHTING_SETUPS.contains(&s))
+/// Whether `property` is a lighting property (its vtable one of [`LIGHTING_PROPERTY_VTABLES`]), the only kind
+/// whose +0x60 is a light list.
+fn lighting_property(e: &Engine, property: u32) -> bool {
+    property != 0 && peek(e, property).is_some_and(|v| LIGHTING_PROPERTY_VTABLES.contains(&v))
 }
 
 /// The most nodes of a lighting property's light list the cut walks (a list is a handful of lights).
@@ -743,6 +757,47 @@ mod tests {
         let (read, misses) = read_after_clear(&mut e, array, 8);
         assert_eq!(read, (0x100..0x108).collect::<Vec<u32>>());
         assert_eq!(misses, 0);
+    }
+
+    /// A lighting property's light list (+0x60) is copied with its nodes and lights; another property's +0x60 (the
+    /// no-lighting property's base texture here) is left alone: nothing of it, or of what it points to, is taken.
+    #[test]
+    fn only_a_lighting_propertys_light_list_is_copied() {
+        let mut e = Engine::new();
+        let (geometry, property, _) = group_c_geometry(&mut e, 0);
+        let node = e.mem.alloc(0xc);
+        let shadow = e.mem.alloc(0x200);
+        let light = e.mem.alloc(0x100);
+        e.mem.set_u32(property, 0x010a_e0d0);
+        e.mem.set_u32(property + 0x60, node);
+        e.mem.set_u32(node + 8, shadow);
+        e.mem.set_u32(shadow + 0xf8, light);
+        e.mem.set_u16(shadow + 0x110, 2);
+        e.mem.set_u8(light + 0x30, 1);
+        assert!(capture::begin(&e));
+        take_geometry_values(&mut e, geometry);
+        e.mem.set_u32(property + 0x60, 0);
+        let read = [
+            capture::word(&e, property, 0x60),
+            capture::word(&e, node, 8),
+            capture::word(&e, shadow, 0xf8),
+            u32::from(capture::byte(&e, light, 0x30)),
+        ];
+        assert_eq!(read, [node, shadow, light, 1]);
+        assert_eq!(capture::end(&mut e).misses, 0);
+        // The no-lighting property (its vtable not a lighting property's): +0x60 holds a texture.
+        let (geometry, property, _) = group_c_geometry(&mut e, NO_LIGHTING_SHADER);
+        let texture = e.mem.alloc(0x40);
+        let texture_vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(property, 0x010b_b2b0);
+        e.mem.set_u32(property + 0x60, texture);
+        e.mem.set_u32(texture, texture_vtable);
+        e.mem.set_u32(texture + 8, light);
+        assert!(capture::begin(&e));
+        take_geometry_values(&mut e, geometry);
+        let _ = capture::word(&e, property, 0x60);
+        let _ = capture::word(&e, texture, 0);
+        assert_eq!(capture::end(&mut e).misses, 2);
     }
 
     /// The SpeedTree leaves (`00bb2760`): the leaf property's slot 0x100 answer, its leaf data's +8, 0x300 bytes.
