@@ -432,7 +432,7 @@ speed gate passed (G1, 2026-11-06: Goodsprings +7.1%, Doc's room +3.0%). It is n
 `leaves`, `topic_search`, `topic_order` and, since their speed gate (2026-11-08), `lockfree`, `culling`,
 `pathing`, `shader`, `crt` and `dispatch` are on, and since their gates `render` (2026-11-09), `draw`, `scene`,
 `particles`, `collision` and `multibound` (2026-11-10), and on their tests and reviews `animation`, `draw_f` and
-`anim_keys` (2026-11-11: no comparison runs for native code) and `process` (2026-11-13) (below); `NV_TYPED=off` turns every family off, and
+`anim_keys` (2026-11-11: no comparison runs for native code) and `process` and `lights` (2026-11-13) (below); `NV_TYPED=off` turns every family off, and
 `<family>:off` one. A family merged off (`geometry`, below) stays off until its gate, and `NV_TYPED=<family>` turns it
 on. A run compared call for call with the original's record (nv-trace's `NV_TRACE_OUT`,
 `NV_TRACE_LIST`) has every family off unless `NV_TYPED` says otherwise (`typed::switch_for`).
@@ -643,6 +643,12 @@ profile of 2026-11-11). The search reads the element block a page at a time in a
 and a search that runs into an unmapped page stops at the same element). Floats: the hours only, `f32` on the main
 thread ([`Threads::Main`]), compared with the exe's doubles exactly. Its tests are `crates/engine/tests/typed_process.rs`.
 On by the native-code rule (differential tests, planted mutants, review).
+And `lights` (same crate, id 30): the walk each shadow scene light makes over its objects every frame, before the draw's
+cut, to find the geometry it lights: `ShadowSceneLight::AddObject` (`00ba0110`), the walks by the light's frustum
+(`00b9f5b0`) and by its radius (`00b9f6a0`), the add of a lit geometry to the light's list (`00b9f480`) and the two bound
+tests (`00b9bbb0`, `00b9dae0`). Main thread only ([`Threads::Main`]); the bound tests' distances are native `f32` in the
+exe's order, the square root `f32::sqrt` in place of the CRT's. About 0.2 ms a frame in the lit, crowded street (the
+profile of 2026-11-11). Its tests are `crates/engine/tests/typed_lights.rs`. On by the native-code rule.
 And `geometry` (same crate, id 23): the code that reads and writes `NiGeometryData`'s arrays (positions, normals
 with the binormals and tangents after them, colours, texture coordinates), typed so that stage 2 can keep those
 arrays outside the 32-bit space (about 23 to 40 MB of the guest heap on the census route, and what mesh mods grow).
