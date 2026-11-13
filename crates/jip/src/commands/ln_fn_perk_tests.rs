@@ -151,6 +151,14 @@ fn entry_values() {
     let before = e.mem.bytes(DATA + 0x80, 0x20);
     call(&mut e, 0x226e, &[r(1), n(4), z(1.0)]);
     assert_eq!(e.mem.bytes(DATA + 0x80, 0x20), before, "leveled list data");
+    let before = (e.mem.bytes(ENTRIES + 0x20, 0x20), e.mem.bytes(DATA, 0xe0));
+    call(&mut e, 0x226e, &[r(1), n(1), z(7.0)]);
+    call(&mut e, 0x226e, &[r(1), n(6), z(7.0)]);
+    assert_eq!(
+        (e.mem.bytes(ENTRIES + 0x20, 0x20), e.mem.bytes(DATA, 0xe0)),
+        before,
+        "an ability entry and base-class data: nothing"
+    );
     // The stage: a float into a byte, (int) then its low byte.
     call(&mut e, 0x226e, &[r(1), n(0), z(300.9)]);
     assert_eq!(e.mem.u8(ENTRIES + 0xc), 44);
@@ -179,6 +187,15 @@ fn the_label() {
         allocations().is_empty() && freed().is_empty(),
         "shorter: the same buffer"
     );
+    let old = e.mem.u32(DATA + 0xa0 + 4);
+    let next = heap_next(&e);
+    call(&mut e, 0x2272, &[r(1), n(5), s(b"Choose one")]);
+    assert_eq!(text_at(&e, DATA + 0xa0 + 4), b"Choose one");
+    assert_eq!(allocations(), vec![11], "longer: its length plus one");
+    assert_eq!(freed(), vec![old], "the old buffer freed");
+    assert_eq!(e.mem.u32(DATA + 0xa0 + 4), next, "the new buffer");
+    assert_eq!(e.mem.u16(DATA + 0xa0 + 8), 10, "the length");
+    assert_eq!(e.mem.u16(DATA + 0xa0 + 10), 10, "the buffer's size");
 }
 
 #[test]
@@ -219,6 +236,19 @@ fn an_actors_rank() {
         .map(|c| c.1)
         .collect();
     assert_eq!(asked, vec![vec![ACTOR, PERK, 1]]);
+    CALLS.with(|c| c.borrow_mut().clear());
+    call_on(&mut e, 0x221b, ACTOR, &[r(1), n(0)]);
+    call_on(&mut e, 0x221b, ACTOR, &[r(1)]);
+    let asked: Vec<_> = calls()
+        .into_iter()
+        .filter(|c| c.0 == 0x0050_2000)
+        .map(|c| c.1)
+        .collect();
+    assert_eq!(
+        asked,
+        vec![vec![ACTOR, PERK, 0], vec![ACTOR, PERK, 0]],
+        "alt 0, and alt left out"
+    );
     assert_eq!(
         call_on(&mut e, 0x221b, ACTOR, &[r(5)]).1,
         0.0,
@@ -241,6 +271,9 @@ fn another_form_type_is_left_alone() {
     e.mem.write(MISC + 0x48, &list);
     e.mem.set_u8(MISC + 0x38, 1);
     e.mem.set_u8(MISC + 0x39, 7);
+    // Empty form slots, so a setter that let the misc item through would show its write.
+    e.mem.set_u32(ENTRIES + 8, 0);
+    e.mem.set_u32(ENTRIES + 0x28, 0);
     let snap = |e: &Engine| {
         (
             e.mem.bytes(MISC, 0x50),
@@ -261,6 +294,7 @@ fn another_form_type_is_left_alone() {
         assert_eq!(string_result(&e, res), b"", "label {i}");
         call(&mut e, 0x226a, &[r(5), n(i), n(1)]);
         call(&mut e, 0x226c, &[r(5), n(i), r(2)]);
+        call(&mut e, 0x226c, &[r(5), n(i), r(3)]);
         call(&mut e, 0x226e, &[r(5), n(i), z(1.0)]);
         call(&mut e, 0x2270, &[r(5), n(i), z(1.0)]);
         call(&mut e, 0x2272, &[r(5), n(i), s(b"x")]);

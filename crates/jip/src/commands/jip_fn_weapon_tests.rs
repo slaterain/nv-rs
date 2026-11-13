@@ -144,6 +144,12 @@ fn on_hit_and_delays() {
     call(&mut e, 0x289c, &[r(1), n(7), z(0.75)]);
     assert_eq!(e.mem.f32(WEAP + 0x178), 0.75);
     assert_eq!(e.mem.f32(WEAP + 0x174), 0.1, "the minimum untouched");
+    let want = with_word(&e, 0x174, 0.25f32.to_bits());
+    call(&mut e, 0x289c, &[r(1), n(0), z(0.25)]);
+    assert_eq!(e.mem.bytes(WEAP, SIZE), want, "index 0: only the minimum");
+    let want = with_word(&e, 0x178, 1.25f32.to_bits());
+    call(&mut e, 0x289c, &[r(1), n(2), z(1.25)]);
+    assert_eq!(e.mem.bytes(WEAP, SIZE), want, "index 2: only the maximum");
 }
 
 #[test]
@@ -152,8 +158,10 @@ fn the_models_and_node_name() {
     model(&mut e, WEAP + 0x1d0, Some(b"casing.nif"));
     let (_, res) = call(&mut e, 0x26f5, &[r(1)]);
     assert_eq!(string_result(&e, res), b"casing.nif");
+    CALLS.with(|c| c.borrow_mut().clear());
     call(&mut e, 0x26f6, &[r(1), s(b"other.nif")]);
     assert_eq!(text_at(&e, WEAP + 0x1d4), b"other.nif");
+    assert_eq!(allocations(), vec![10], "the game's setter, once");
     // Mod flags 0-7: the own model, then the mod models with 3 and 4 swapped.
     model(&mut e, WEAP + 0x3c, Some(b"own.nif"));
     for i in 0..7u32 {
@@ -170,7 +178,9 @@ fn the_models_and_node_name() {
     }
     let (_, res) = call(&mut e, 0x28a9, &[r(1), n(8)]);
     assert_eq!(string_result(&e, res), b"", "flags 8");
+    CALLS.with(|c| c.borrow_mut().clear());
     call(&mut e, 0x28aa, &[r(1), n(4), s(b"new.nif")]);
+    assert_eq!(allocations(), vec![8], "the game's setter, once");
     assert_eq!(
         text_at(&e, WEAP + 0x270 + 0x40 + 4),
         b"new.nif",
@@ -179,8 +189,23 @@ fn the_models_and_node_name() {
     let before = e.mem.bytes(WEAP, SIZE);
     call(&mut e, 0x28aa, &[r(1), n(8), s(b"x.nif")]);
     assert_eq!(e.mem.bytes(WEAP, SIZE), before, "flags 8: nothing");
+    CALLS.with(|c| c.borrow_mut().clear());
+    let first = heap_next(&e);
     call(&mut e, 0x277e, &[r(1), s(b"Bip01 Head")]);
     assert_eq!(text_at(&e, WEAP + 0x35c), b"Bip01 Head");
+    assert_eq!(
+        allocations(),
+        vec![11],
+        "no buffer before: its length plus one"
+    );
+    assert!(freed().is_empty(), "nothing to free");
+    assert_eq!(e.mem.u32(WEAP + 0x35c), first);
+    let second = heap_next(&e);
+    call(&mut e, 0x277e, &[r(1), s(b"Bip01 R Hand2")]);
+    assert_eq!(text_at(&e, WEAP + 0x35c), b"Bip01 R Hand2");
+    assert_eq!(allocations(), vec![11, 14], "longer: a new buffer");
+    assert_eq!(freed(), vec![first], "the first buffer freed");
+    assert_eq!(e.mem.u32(WEAP + 0x35c), second);
     let long = vec![b'n'; 0x40];
     let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         call(&mut e, 0x277e, &[r(1), s(&long)]);
@@ -192,12 +217,13 @@ fn the_models_and_node_name() {
 }
 
 /// Another inventory form (a misc item: the reader passes it for `kParamType_ObjectID`, `IS_ID`
-/// refuses it) holding the same words answers 0 (-1 for on-hit) and keeps them.
+/// refuses it) filled with a non-zero pattern answers 0 (-1 for on-hit) and keeps its bytes;
+/// every setter writes a value that differs from the fill.
 #[test]
 fn another_form_type_is_left_alone() {
     let mut e = setup();
-    for off in (0x3c..SIZE).step_by(4) {
-        e.mem.set_u32(MISC + off, 1);
+    for off in 0x3c..SIZE {
+        e.mem.set_u8(MISC + off, 0xa5);
     }
     let before = e.mem.bytes(MISC, SIZE);
     assert_eq!(call(&mut e, 0x264a, &[r(4)]).1, 0.0);
@@ -212,12 +238,12 @@ fn another_form_type_is_left_alone() {
     call(&mut e, 0x264b, &[r(4), n(0)]);
     call(&mut e, 0x264f, &[r(4), n(0), r(2)]);
     call(&mut e, 0x2650, &[r(4), n(1), r(3)]);
-    call(&mut e, 0x2651, &[r(4), n(1), n(1)]);
+    call(&mut e, 0x2651, &[r(4), n(1), n(3)]);
     call(&mut e, 0x2652, &[r(4), n(1), z(2.0)]);
-    call(&mut e, 0x26bc, &[r(4), n(0)]);
+    call(&mut e, 0x26bc, &[r(4), n(7)]);
     call(&mut e, 0x26f6, &[r(4), s(b"x.nif")]);
     call(&mut e, 0x277e, &[r(4), s(b"x")]);
-    call(&mut e, 0x277f, &[r(4), vec![0, 0]]);
+    call(&mut e, 0x277f, &[r(4), vec![0x12, 0]]);
     call(&mut e, 0x289a, &[r(4), n(0)]);
     call(&mut e, 0x289c, &[r(4), n(0), z(2.0)]);
     call(&mut e, 0x28aa, &[r(4), n(0), s(b"x.nif")]);
