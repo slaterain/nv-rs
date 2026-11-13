@@ -516,12 +516,34 @@ fn report(e: &mut Engine, data: Ptr, format: u32) {
 /// (`CompileLine`) with its number as the last line number; the data size takes the output
 /// offset, and when the referenced objects verify the script is initialised (`Script::Init`)
 /// and marked compiled (`007f7c90` with 1): true.
+///
+/// Seams (xNVSE's run-time compiler hooks): `005AEBB1` in place of the call clearing the
+/// compiled flag (words: the script, the compile data; an answer of 0 fails, 2 succeeds at once,
+/// another goes on without the call), `005AED78` before the check of the referenced objects
+/// (an answer passes it) and `005AEDA0`, the epilogue every exit passes (words: the result, the
+/// compile data; an answer is the result).
 pub fn script_compiler_compile(e: &mut Engine, this: Ptr, script: u32, data: Ptr) -> bool {
+    let compiled = compile_body(e, this, script, data);
+    match e.site(0x005a_eda0, &[u32::from(compiled), data.addr()]) {
+        Some(result) => result != 0,
+        None => compiled,
+    }
+}
+
+/// `ScriptCompiler::Compile` up to its epilogue.
+fn compile_body(e: &mut Engine, this: Ptr, script: u32, data: Ptr) -> bool {
     let base = data.addr();
     if script == 0 || base == 0 {
         return false;
     }
-    e.call(SCRIPT_COMPILED_FLAG, &args![script, 0u32]);
+    match e.site(0x005a_ebb1, &[script, base]) {
+        None => {
+            e.call(SCRIPT_COMPILED_FLAG, &args![script, 0u32]);
+        }
+        Some(0) => return false,
+        Some(2) => return true,
+        Some(_) => {}
+    }
     let header = e.call(SCRIPT_HEADER_OF, &args![script]).u32();
     let quest = e.mem.u8(header.wrapping_add(0x10));
     e.mem.set_u8(base.wrapping_add(0x38), quest);
@@ -570,7 +592,9 @@ pub fn script_compiler_compile(e: &mut Engine, this: Ptr, script: u32, data: Ptr
     }
     let size = word_at(e, base, 0x24);
     e.mem.set_u32(base.wrapping_add(0x30), size);
-    if !script_compile_data_verify_referenced_object_list(e, data) {
+    if e.site(0x005a_ed78, &[base]).is_none()
+        && !script_compile_data_verify_referenced_object_list(e, data)
+    {
         return false;
     }
     e.call(SCRIPT_INIT, &args![script, data]);
@@ -1202,12 +1226,17 @@ pub fn script_compile_data_get_referenced_object_ov2(e: &mut Engine, this: Ptr, 
 // Translation incomplete: 005afeb0 - the /GS stack cookie check (00ec408c) is not translated.
 /// `ScriptCompiler::IsValidVariableName` (Xbox PDB), `cdecl` (a name): false for a null or
 /// empty name, an editor id of a form, or a function name (`GetFunction` on a word holding
-/// it); true otherwise. The stack cookie check is not translated.
+/// it); true otherwise. The stack cookie check is not translated. Seam `005AFEDB` (words: the
+/// name): in place of the form lookup, its answer is the form (xNVSE answers none).
 pub fn script_compiler_is_valid_variable_name(e: &mut Engine, name: u32) -> bool {
     if name == 0 || e.mem.i8(name) == 0 {
         return false;
     }
-    if e.call(FORM_BY_EDITOR_ID, &args![name]).u32() != 0 {
+    let form = match e.site(0x005a_fedb, &[name]) {
+        Some(form) => form,
+        None => e.call(FORM_BY_EDITOR_ID, &args![name]).u32(),
+    };
+    if form != 0 {
         return false;
     }
     e.with_stack(0x214, |e, word| {
@@ -1545,10 +1574,21 @@ fn find_in_table(e: &mut Engine, word: u32, table: u32, count: i32, name_first: 
 /// script command table (`01190910`, 0x280 entries) and the console command table
 /// (`0118e8e0`, 0xCD entries); a match makes it a command (kind `'X'`, the entry's opcode):
 /// true.
+///
+/// Seam `005B19BA` (words: the word), the script table's loop: an answer of 1 found the word
+/// (xNVSE's name map), another goes on to the console commands.
 pub fn script_compiler_get_function(e: &mut Engine, word: u32) -> bool {
-    find_in_table(e, word, BLOCK_TABLE, 0x10, true)
-        || find_in_table(e, word, SCRIPT_COMMANDS, 0x280, false)
-        || find_in_table(e, word, CONSOLE_COMMANDS, 0xcd, false)
+    if find_in_table(e, word, BLOCK_TABLE, 0x10, true) {
+        return true;
+    }
+    match e.site(0x005b_19ba, &[word]) {
+        Some(1) => true,
+        Some(_) => find_in_table(e, word, CONSOLE_COMMANDS, 0xcd, false),
+        None => {
+            find_in_table(e, word, SCRIPT_COMMANDS, 0x280, false)
+                || find_in_table(e, word, CONSOLE_COMMANDS, 0xcd, false)
+        }
+    }
 }
 
 // Translated from 005b1a90 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1968,9 +2008,12 @@ pub fn script_compiler_compile_line(
             }
             0x6 | 0x8 => {
                 e.mem.set_u32(position, 0);
-                let start = e.mem.u32(position);
-                if !fn_005b1a90(e, text, start) {
-                    return fail_with(e, TEXT_MISMATCHED_PARENTHESES);
+                // Seam 005B0A3F: an answer passes over the parentheses check (to 005B0A91).
+                if e.site(0x005b_0a3f, &[]).is_none() {
+                    let start = e.mem.u32(position);
+                    if !fn_005b1a90(e, text, start) {
+                        return fail_with(e, TEXT_MISMATCHED_PARENTHESES);
+                    }
                 }
                 fn_005b1b60(e, text, position);
                 let start = e.mem.u32(position);
@@ -2062,11 +2105,15 @@ pub fn script_compiler_compile_line(
         let opcode = e.mem.i32(line.wrapping_add(0x410));
         let declaration = opcode >= 0x12 && (opcode <= 0x14 || opcode == 0x1f);
         if !declaration {
-            let end = word_at(e, base, 0x24)
-                .wrapping_add(word_at(e, line, 0x40c))
-                .wrapping_add(0xa);
-            if end >= MAX_SCRIPT_SIZE {
-                return fail_with(e, TEXT_MAX_SCRIPT_SIZE);
+            // Seam 005B0F68 (words: the compile data, the line): an answer replaces the size
+            // check (xNVSE grows the data instead).
+            if e.site(0x005b_0f68, &[base, line]).is_none() {
+                let end = word_at(e, base, 0x24)
+                    .wrapping_add(word_at(e, line, 0x40c))
+                    .wrapping_add(0xa);
+                if end >= MAX_SCRIPT_SIZE {
+                    return fail_with(e, TEXT_MAX_SCRIPT_SIZE);
+                }
             }
             let put = |e: &mut Engine, value: u16| {
                 let at = word_at(e, base, 0x20).wrapping_add(word_at(e, base, 0x24));
@@ -2469,6 +2516,14 @@ fn compile_value_parameter(
 ) -> Option<bool> {
     let p = parameter;
     let word = p.word;
+    // Seam 005B2FA2, the read of the byte map: xNVSE writes the double type's (0x2C) entry
+    // (005B3C30) as the integer and float types' case, so with an answer a double compiles
+    // through that case's float path (any type there but 1 and 0x17 is a float).
+    let kind = if kind == 0x2c && e.site(0x005b_2fa2, &[]).is_some() {
+        2
+    } else {
+        kind
+    };
     match kind {
         0 => {
             line_put_u16(e, line, length as u16);
@@ -2665,7 +2720,11 @@ pub fn script_compiler_standard_compile(
         loop {
             let entry = parameters.wrapping_add((index as i32 as u32).wrapping_mul(0xc));
             if i32::from(index) >= i32::from(count) {
-                if word_at(e, line, 0x208) < word_at(e, line, 0x204) {
+                // Seam 005B3A8D: an answer passes over the end-of-line check (xNVSE, while a
+                // command inside an expression parses).
+                if word_at(e, line, 0x208) < word_at(e, line, 0x204)
+                    && e.site(0x005b_3a8d, &[]).is_none()
+                {
                     let name = e.mem.u32(entry);
                     script_compiler_script_error(e, data, TEXT_EXPECTED_END_OF_LINE, &[name]);
                     return false;
@@ -4143,5 +4202,245 @@ mod n045_tests {
                 1, 0, 0x72, 1, 0, 0, 0, 2, 0, 1, 0, 3, 0, b'Y', b'e', b's', 1, 0, 2, 0, b'N', b'o'
             ]
         );
+    }
+
+    thread_local! {
+        /// Each seam's answer for the next call, and the words each was given.
+        static ANSWERS: std::cell::RefCell<std::collections::HashMap<u32, u32>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+        static SEEN: std::cell::RefCell<Log> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    macro_rules! seam {
+        ($name:ident, $addr:expr) => {
+            fn $name(_: &mut Engine, a: &[u32]) -> Option<u32> {
+                SEEN.with(|s| s.borrow_mut().push(($addr, a.to_vec())));
+                ANSWERS.with(|m| m.borrow().get(&$addr).copied())
+            }
+        };
+    }
+    seam!(begin_seam, 0x005a_ebb1);
+    seam!(references_seam, 0x005a_ed78);
+    seam!(end_seam, 0x005a_eda0);
+    seam!(name_form_seam, 0x005a_fedb);
+    seam!(parentheses_seam, 0x005b_0a3f);
+    seam!(size_seam, 0x005b_0f68);
+    seam!(function_seam, 0x005b_19ba);
+    seam!(end_of_line_seam, 0x005b_3a8d);
+
+    fn answer(addr: u32, v: Option<u32>) {
+        ANSWERS.with(|m| match v {
+            Some(v) => m.borrow_mut().insert(addr, v),
+            None => m.borrow_mut().remove(&addr),
+        });
+    }
+
+    fn seen(addr: u32) -> Vec<Vec<u32>> {
+        SEEN.with(|s| only(&s.borrow(), addr))
+    }
+
+    /// xNVSE's seams in the compiler (its run-time compiler hooks): each translation takes the
+    /// handler's answer in place of the exe's step, and with no answer goes on as the exe.
+    #[test]
+    fn xnvses_seams_take_their_places() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = rig();
+        for (addr, f) in [
+            (0x005a_ebb1, begin_seam as engine_core::extend::SiteFn),
+            (0x005a_ed78, references_seam),
+            (0x005a_eda0, end_seam),
+            (0x005a_fedb, name_form_seam),
+            (0x005b_0a3f, parentheses_seam),
+            (0x005b_0f68, size_seam),
+            (0x005b_19ba, function_seam),
+            (0x005b_3a8d, end_of_line_seam),
+        ] {
+            e.on_site(SiteSlot::new(Owner::Nvse, addr), f);
+        }
+        let s = script(&mut e);
+        let d = data(&mut e);
+        // The start: 0 fails without clearing the flag, 2 succeeds at once; the end sees the
+        // result and its answer is the result.
+        answer(0x005a_ebb1, Some(0));
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x005a_eb90, &[0, s, d]).bool());
+        assert!(only(e.call_log.as_ref().unwrap(), SCRIPT_COMPILED_FLAG).is_empty());
+        assert_eq!(seen(0x005a_ebb1).last(), Some(&vec![s, d]));
+        assert_eq!(seen(0x005a_eda0).last(), Some(&vec![0, d]));
+        answer(0x005a_ebb1, Some(2));
+        assert!(e.call(0x005a_eb90, &[0, s, d]).bool());
+        answer(0x005a_ebb1, Some(1));
+        answer(0x005a_eda0, Some(0));
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x005a_eb90, &[0, s, d]).bool());
+        assert_eq!(
+            only(e.call_log.as_ref().unwrap(), SCRIPT_COMPILED_FLAG),
+            vec![vec![s, 1]],
+            "the start's call is left out, the end's made"
+        );
+        assert_eq!(seen(0x005a_eda0).last(), Some(&vec![1, d]));
+        answer(0x005a_eda0, None);
+        // The referenced objects' check: an answer passes it.
+        let bad = ref_object(&mut e, b"C", 0, 0);
+        push(&mut e, d + 0x44, bad);
+        assert!(!e.call(0x005a_eb90, &[0, s, d]).bool());
+        answer(0x005a_ed78, Some(1));
+        assert!(e.call(0x005a_eb90, &[0, s, d]).bool());
+        answer(0x005a_ed78, None);
+        answer(0x005a_ebb1, None);
+        // A block type's name is found in the block table before the seam is reached.
+        let block = text(&mut e, b"GameMode");
+        e.mem.set_u32(BLOCK_TABLE + 4, block);
+        let w = word(&mut e, b"gamemode");
+        let before = seen(0x005b_19ba).len();
+        answer(0x005b_19ba, Some(0));
+        assert!(e.call(0x005b_1910, &[w]).bool());
+        assert_eq!(seen(0x005b_19ba).len(), before);
+        answer(0x005b_19ba, None);
+        // GetFunction: 1 found it; another answer leaves only the console commands.
+        command(&mut e, b"set", 0x15);
+        let w = word(&mut e, b"anything");
+        answer(0x005b_19ba, Some(1));
+        assert!(e.call(0x005b_1910, &[w]).bool());
+        assert_eq!(seen(0x005b_19ba).last(), Some(&vec![w]));
+        answer(0x005b_19ba, Some(0));
+        let w = word(&mut e, b"set");
+        assert!(!e.call(0x005b_1910, &[w]).bool());
+        answer(0x005b_19ba, None);
+        assert!(e.call(0x005b_1910, &[w]).bool());
+        // IsValidVariableName: the answer is the form.
+        e.register(FORM_BY_EDITOR_ID, |_, _| ret(0x10));
+        let n = text(&mut e, b"count");
+        answer(0x005a_fedb, Some(0));
+        assert!(e.call(0x005a_feb0, &[n]).bool());
+        answer(0x005a_fedb, None);
+        assert!(!e.call(0x005a_feb0, &[n]).bool());
+        // StandardCompile's end-of-line check.
+        let p = parameters(&mut e, &[(0, 0)]);
+        let l = line(&mut e, 1, 0x1000, b" a b");
+        answer(0x005b_3a8d, Some(1));
+        assert!(e.call(0x005b_1ba0, &[1, p, l, d]).bool());
+        answer(0x005b_3a8d, None);
+        let l = line(&mut e, 1, 0x1000, b" a b");
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x005b_1ba0, &[1, p, l, d]).bool());
+        assert_eq!(errors(&e), vec![TEXT_EXPECTED_END_OF_LINE]);
+        // CompileLine: the size limit (the data near 0x4000 bytes) and an if's parentheses.
+        let v = variable(&mut e, b"x", 3, 0);
+        push(&mut e, d + 0x3c, v);
+        e.register(EXPRESSION_TO_POSTFIX, |e, a| {
+            let p = e.mem.alloc(4);
+            e.mem.write(p, &[1, 2, 3]);
+            e.mem.set_u32(a[2], 3);
+            ret(p)
+        });
+        e.mem.set_u32(d + 0x24, 0x3ff8);
+        let l = line(&mut e, 1, 0x15, b" x to 5");
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x005a_ff40, &[0, 0x9900, d, l]).bool());
+        assert_eq!(errors(&e), vec![TEXT_MAX_SCRIPT_SIZE]);
+        e.mem.set_u32(d + 0x24, 0x3ff8);
+        answer(0x005b_0f68, Some(1));
+        let l = line(&mut e, 1, 0x15, b" x to 5");
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x005a_ff40, &[0, 0x9900, d, l]).bool());
+        assert_eq!(seen(0x005b_0f68).last(), Some(&vec![d, l]));
+        answer(0x005b_0f68, None);
+        let l = line(&mut e, 1, 0x16, b" (x");
+        e.call_log = Some(vec![]);
+        e.call(0x005a_ff40, &[0, 0x9900, d, l]);
+        assert_eq!(errors(&e), vec![TEXT_MISMATCHED_PARENTHESES]);
+        answer(0x005b_0a3f, Some(1));
+        let l = line(&mut e, 1, 0x16, b" (x");
+        e.call_log = Some(vec![]);
+        e.call(0x005a_ff40, &[0, 0x9900, d, l]);
+        assert!(!errors(&e).contains(&TEXT_MISMATCHED_PARENTHESES));
+        assert_eq!(seen(0x005b_0a3f).last(), Some(&vec![]));
+    }
+
+    seam!(double_seam, 0x005b_2fa2);
+
+    /// xNVSE's double type (0x2C): with its type table entry (a variable allowed, no object) and
+    /// the seam's answer, a double parameter compiles through the float case: `z` and the double
+    /// for a number, the variable's kind and id for a local; with no answer it is unimplemented.
+    #[test]
+    fn a_double_parameter_compiles_as_a_float_with_xnvse() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = rig();
+        e.on_site(SiteSlot::new(Owner::Nvse, 0x005b_2fa2), double_seam);
+        let d = data(&mut e);
+        e.mem.set_u16(PARAMETER_TYPES + 0x2c * 8, 1);
+        e.register(IS_A_FLOAT, |_, _| ret(1));
+        e.register(ATOF, |_, _| Ret {
+            st0: 2.5,
+            ..Ret::default()
+        });
+        let p = parameters(&mut e, &[(0x2c, 0)]);
+        answer(0x005b_2fa2, Some(1));
+        let l = line(&mut e, 1, 0x1000, b" 2.5");
+        assert!(e.call(0x005b_1ba0, &[1, p, l, d]).bool());
+        let mut want = vec![1, 0, b'z'];
+        want.extend_from_slice(&2.5f64.to_le_bytes());
+        assert_eq!(e.mem.bytes(l + 0x20c, e.mem.u32(l + 0x40c)), want);
+        let v = variable(&mut e, b"x", 3, 0);
+        push(&mut e, d + 0x3c, v);
+        let l = line(&mut e, 1, 0x1000, b" x");
+        assert!(e.call(0x005b_1ba0, &[1, p, l, d]).bool());
+        assert_eq!(
+            e.mem.bytes(l + 0x20c, e.mem.u32(l + 0x40c)),
+            vec![1, 0, 0x66, 3, 0]
+        );
+        answer(0x005b_2fa2, None);
+        let l = line(&mut e, 1, 0x1000, b" 2.5");
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x005b_1ba0, &[1, p, l, d]).bool());
+        assert_eq!(
+            only(e.call_log.as_ref().unwrap(), SCRIPT_LOG),
+            vec![vec![TEXT_TYPE_UNIMPLEMENTED, 0x2c]]
+        );
+    }
+
+    /// The game's own lines compile to the same bytes, and an unknown command fails with the same
+    /// error, with xNVSE's compiler hooks installed (the `nvse` crate's) as without them.
+    #[test]
+    fn vanilla_lines_compile_the_same_with_xnvses_hooks() {
+        type Run = Vec<(bool, Vec<u8>, Vec<u32>, u32)>;
+        fn run(hooks: bool) -> Run {
+            let mut e = rig();
+            e.register(0x00aa_44c0, |_, _| ret(0x4000));
+            if hooks {
+                nvse::compile_hooks::install(&mut e);
+            }
+            script(&mut e);
+            let s = e.mem.alloc(0x60);
+            command(&mut e, b"GetV", 0x1000);
+            let p = parameters(&mut e, &[(1, 1)]);
+            e.mem.set_u16(SCRIPT_COMMANDS + 0x12, 1);
+            e.mem.set_u32(SCRIPT_COMMANDS + 0x14, p);
+            e.mem.set_u32(SCRIPT_COMMANDS + 0x1c, 0x005b_1ba0);
+            e.mem.set_u8(PARAMETER_TYPES + 8, 1);
+            e.register(IS_AN_INTEGER, |_, _| ret(1));
+            e.register(TEXT_TO_INTEGER, |_, _| ret(7));
+            let mut out = Vec::new();
+            for input in [&b"GetV 7\r\nGetV\r\n"[..], b"zzz\r\n"] {
+                let d = data(&mut e);
+                e.mem.set_u8(d + 0x18, 1);
+                let t = text(&mut e, input);
+                e.mem.set_u32(d, t);
+                e.call_log = Some(vec![]);
+                let ok = e.call(0x005a_eb90, &[0, s, d]).bool();
+                let bytes = e.mem.bytes(e.mem.u32(d + 0x20), e.mem.u32(d + 0x24));
+                out.push((ok, bytes, errors(&e), e.mem.u32(d + 0x14)));
+            }
+            if hooks {
+                assert!(nvse::compile_hooks::compiling(&mut e).is_empty());
+            }
+            out
+        }
+        let plain = run(false);
+        assert!(plain[0].0, "{plain:?}");
+        assert!(!plain[1].0);
+        assert_eq!(plain[1].2, vec![TEXT_COMMAND_NOT_FOUND]);
+        assert_eq!(run(true), plain);
     }
 }

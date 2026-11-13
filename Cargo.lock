@@ -433,6 +433,7 @@ dependencies = [
  "engine-gamebryo",
  "engine-havok",
  "engine-speedtree",
+ "nvse",
 ]
 
 [[package]]

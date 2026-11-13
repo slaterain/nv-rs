@@ -37,6 +37,7 @@ pub mod msg {
     pub const DEFERRED_INIT: u32 = 18;
     pub const CLEAR_SCRIPT_DATA_CACHE: u32 = 19;
     pub const MAIN_GAME_LOOP: u32 = 20;
+    pub const SCRIPT_COMPILE: u32 = 21;
 }
 
 /// A message as a listener gets it (`NVSEMessagingInterface::Message`): its type, its data (a

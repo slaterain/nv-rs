@@ -66,9 +66,10 @@ addresses each infrastructure step touches, checked in Ghidra, and the build ord
   `engine_core::extend::ScriptTables { start, end, max_opcode }`, whose values are the exe's until an
   extender moves the table. The code is unchanged and only the numbers move; a test pins every read
   to the exe's immediate with nothing installed. `GetFunction` (`005b1910`) and `HelpFunction`
-  (`005bc950`) keep their two immediates (`005B19A3`, `005BCBE3`) until their seams exist (I-14):
-  xNVSE jumps out of both before their table loops, and until then the console takes vanilla
-  commands only.
+  (`005bc950`) keep their two immediates (`005B19A3`, `005BCBE3`): xNVSE jumps out of both before
+  their table loops. `GetFunction`'s seam (`005B19BA`, xNVSE's name map) came with the run-time
+  compiler (I-14), so the game's compiler and the console find every built-in command by name;
+  `HelpFunction`'s listing seam (`005BCBC2`) is not used yet, so `help` lists vanilla commands only.
 - Records live in the built-ins' data range (section 4). Return types are kept outside the
   record, by opcode, as xNVSE keeps them.
 

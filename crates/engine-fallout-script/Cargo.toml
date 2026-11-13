@@ -30,3 +30,6 @@ engine-fallout-ai = { path = "../engine-fallout-ai" }
 engine-fallout-unplaced-a = { path = "../engine-fallout-unplaced-a" }
 engine-fallout-unplaced-b = { path = "../engine-fallout-unplaced-b" }
 engine-fallout-misc = { path = "../engine-fallout-misc" }
+# xNVSE built in (its compiler hooks), for the test that the game's own lines compile the same
+# with them.
+nvse = { path = "../nvse" }

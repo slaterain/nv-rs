@@ -46,12 +46,11 @@ const EXE_DEFAULT_PARSE: u32 = 0x005b_1ba0;
 /// xNVSE's other parse routines, the parse words of its expression-format commands:
 /// `Cmd_Expression_Parse`, `Cmd_Let_Parse`, `Cmd_BeginLoop_Parse` (`while`, `ForEach`,
 /// `ForEachAlt`), `Cmd_Loop_Parse`, `Cmd_Null_Parse`, `Cmd_Function_Parse` and `Cmd_Call_Parse`
-/// (`CommandTable.h`, `Commands_Scripting.cpp` (xNVSE)). Only the script compiler calls a parser,
-/// and xNVSE's run-time compiler is not built in yet (plan step 3.8): until it is, each of these
-/// does what the default one does, so a line compiles as it did before. The words themselves are
-/// read by the decompiler ([`crate::decompile`]), which tells an expression-format command's
-/// argument bytes from the game's by them, as xNVSE's `ScriptAnalyzer` does. (`Cmd_CallAfter_Parse`
-/// is the parse word of no command.)
+/// (`CommandTable.h`, `Commands_Scripting.cpp` (xNVSE)), built in [`crate::compiler`]: the game's
+/// script compiler calls them through a record's parse word. The words are also read by the
+/// decompiler ([`crate::decompile`]), which tells an expression-format command's argument bytes
+/// from the game's by them, as xNVSE's `ScriptAnalyzer` does. (`Cmd_CallAfter_Parse` is the
+/// parse word of no command.)
 pub const EXPRESSION_PARSE: u32 = ROUTINE_BASE + 0x20;
 pub const LET_PARSE: u32 = ROUTINE_BASE + 0x24;
 pub const BEGIN_LOOP_PARSE: u32 = ROUTINE_BASE + 0x28;
@@ -59,14 +58,14 @@ pub const LOOP_PARSE: u32 = ROUTINE_BASE + 0x2c;
 pub const NULL_PARSE: u32 = ROUTINE_BASE + 0x30;
 pub const FUNCTION_PARSE: u32 = ROUTINE_BASE + 0x34;
 pub const CALL_PARSE: u32 = ROUTINE_BASE + 0x38;
-const PARSE_ROUTINES: [u32; 7] = [
-    EXPRESSION_PARSE,
-    LET_PARSE,
-    BEGIN_LOOP_PARSE,
-    LOOP_PARSE,
-    NULL_PARSE,
-    FUNCTION_PARSE,
-    CALL_PARSE,
+const PARSE_ROUTINES: [(u32, AbiFn); 7] = [
+    (EXPRESSION_PARSE, crate::compiler::expression_parse),
+    (LET_PARSE, crate::compiler::let_parse),
+    (BEGIN_LOOP_PARSE, crate::compiler::begin_loop_parse),
+    (LOOP_PARSE, crate::compiler::loop_parse),
+    (NULL_PARSE, crate::compiler::null_parse),
+    (FUNCTION_PARSE, crate::compiler::function_parse),
+    (CALL_PARSE, crate::compiler::call_parse),
 ];
 /// `Cmd_Expression_Plugin_Parse` (xNVSE `CommandTable.h`): the value a plugin puts in its record's
 /// parse word to ask for xNVSE's expression parser, which `PluginManager::RegisterCommand` turns
@@ -207,6 +206,11 @@ pub struct State {
     strings: HashMap<Vec<u8>, u32>,
     /// Return types by opcode, from `0x1000`.
     pub returns: Vec<Returns>,
+    /// How many times records were written in (install, a plugin's growth or record): the name
+    /// map is made again when it changes.
+    pub registrations: u32,
+    /// [`name_map`] and the registration count it was made at.
+    pub names: Option<(u32, HashMap<u32, Option<u32>>)>,
 }
 
 /// Vanilla commands xNVSE records as returning forms (`AddCommandsV1`, `CommandTable.cpp`
@@ -395,6 +399,51 @@ pub fn opcode_by_name(e: &Engine, name: &[u8]) -> Option<u32> {
         .find(|&opcode| names(tables.record(opcode)).into_iter().any(matches))
 }
 
+/// [`opcode_by_name`]'s answers all at once, as xNVSE's `g_cmdTableCache` holds them: each name's
+/// hash and the record that brought it first (`None` for a console command's), for a compile's
+/// many lookups (the table does not change while a script compiles).
+pub fn name_map(e: &Engine) -> HashMap<u32, Option<u32>> {
+    let mut map = HashMap::new();
+    let hash = |ptr: u32| {
+        let text = if ptr == 0 {
+            Vec::new()
+        } else {
+            guest_text(e, ptr)
+        };
+        crate::events::hash_name(&text)
+    };
+    for i in 0..CONSOLE_COUNT {
+        let at = CONSOLE_TABLE + i * RECORD;
+        for ptr in [e.mem.u32(at), e.mem.u32(at + 4)] {
+            map.entry(hash(ptr)).or_insert(None);
+        }
+    }
+    let tables = e.script_tables();
+    for opcode in ScriptTables::FIRST_OPCODE..tables.max_opcode {
+        let at = tables.record(opcode);
+        for ptr in [e.mem.u32(at), e.mem.u32(at + 4)] {
+            map.entry(hash(ptr)).or_insert(Some(opcode));
+        }
+    }
+    map
+}
+
+/// [`opcode_by_name`] through [`name_map`], made once and again only when records were written in
+/// since (xNVSE fills its map as commands register).
+pub fn opcode_by_name_mapped(e: &mut Engine, name: &[u8]) -> Option<u32> {
+    let registrations = e.ext::<Nvse>().table.registrations;
+    if e.ext::<Nvse>().table.names.as_ref().map(|n| n.0) != Some(registrations) {
+        let map = name_map(e);
+        e.ext::<Nvse>().table.names = Some((registrations, map));
+    }
+    let hash = crate::events::hash_name(name);
+    e.ext::<Nvse>()
+        .table
+        .names
+        .as_ref()
+        .and_then(|(_, m)| m.get(&hash).copied().flatten())
+}
+
 /// The execute address of built command `opcode` of xNVSE's range.
 pub fn execute_address(opcode: u32) -> u32 {
     EXECUTE_BASE + 4 * (opcode - FIRST_OPCODE)
@@ -410,8 +459,8 @@ pub fn eval_address(opcode: u32) -> u32 {
 pub fn install(e: &mut Engine) {
     e.register(DEFAULT_EXECUTE, default_execute);
     e.register(DEFAULT_PARSE, default_parse);
-    for routine in PARSE_ROUTINES {
-        e.register(routine, default_parse);
+    for (routine, f) in PARSE_ROUTINES {
+        e.register(routine, f);
     }
     let exe = ScriptTables::EXE;
     let vanilla = (exe.max_opcode - ScriptTables::FIRST_OPCODE) as usize;
@@ -513,6 +562,7 @@ pub fn install(e: &mut Engine) {
     }
     .write(e, TABLE_AT + count * RECORD);
     e.ext::<Nvse>().table.returns = returns;
+    e.ext::<Nvse>().table.registrations += 1;
     e.set_script_tables(ScriptTables {
         start: TABLE_AT,
         end: TABLE_AT + count * RECORD,
@@ -567,6 +617,7 @@ pub fn grow_to(e: &mut Engine, max_opcode: u32) {
         .table
         .returns
         .resize(count as usize, Returns::Default);
+    e.ext::<Nvse>().table.registrations += 1;
     e.set_script_tables(ScriptTables {
         start: TABLE_AT,
         end: TABLE_AT + count * RECORD,
@@ -593,8 +644,8 @@ pub struct PluginRecord<'a> {
     pub eval: u32,
     pub flags: u32,
     /// The plugin asks for xNVSE's expression parser (`Cmd_Expression_Plugin_Parse`), which
-    /// xNVSE gives as `Cmd_Expression_Parse`: the record gets [`EXPRESSION_PARSE`], which until the
-    /// run-time compiler is built in (ADR-0016's I-14) compiles as the default parser does.
+    /// xNVSE gives as `Cmd_Expression_Parse`: the record gets [`EXPRESSION_PARSE`], the parse word of
+    /// xNVSE's expression compiler ([`crate::compiler`]).
     pub expression: bool,
     pub returns: Returns,
 }
@@ -633,7 +684,9 @@ pub fn add_plugin_record(e: &mut Engine, opcode: u32, r: &PluginRecord) {
         flags: r.flags,
     }
     .write(e, t.record(opcode));
-    e.ext::<Nvse>().table.returns[(opcode - ScriptTables::FIRST_OPCODE) as usize] = r.returns;
+    let state = &mut e.ext::<Nvse>().table;
+    state.returns[(opcode - ScriptTables::FIRST_OPCODE) as usize] = r.returns;
+    state.registrations += 1;
 }
 
 /// The return type of `opcode` (xNVSE's `GetReturnType`): `Default` outside the table.
@@ -772,7 +825,7 @@ pub(crate) mod tests {
         }
         let kinds = |w: u32| PARSE_WORDS.iter().filter(|p| p.1 == w).count();
         assert_eq!(
-            PARSE_ROUTINES.map(kinds),
+            PARSE_ROUTINES.map(|(w, _)| kinds(w)),
             [98, 1, 3, 1, 4, 1, 1],
             "expression, let, begin loop, loop, null, function, call"
         );
@@ -803,15 +856,20 @@ pub(crate) mod tests {
         }
     }
 
-    /// Until the run-time compiler is built in, a command of each of the seven kinds compiles as
-    /// before: its parse word calls the exe's default parser with the same four words and answers
-    /// what it answers.
+    /// The default parse word calls the exe's default parser with the same four words and
+    /// answers what it answers; each of the seven other kinds names its compiler routine (the
+    /// compiler's own tests run them): `continue`'s takes nothing and writes nothing.
     #[test]
-    fn each_parse_word_compiles_as_the_default_parser_does() {
+    fn the_parse_words_name_the_default_parser_and_the_compiler() {
         let mut e = engine_with_exe_tables();
         e.register(EXE_DEFAULT_PARSE, exe_parse);
         install(&mut e);
         let t = e.script_tables();
+        let words = [3, 0x0100_2000, 0x0100_3000, 0x0100_4000];
+        assert_eq!(e.call(DEFAULT_PARSE, &words).eax, 0x5b);
+        for (i, w) in words.iter().enumerate() {
+            assert_eq!(e.mem.u32(0x0100_f000 + 4 * i as u32), *w);
+        }
         // eval, Let, while, loop, Function, Call, then continue.
         for (opcode, word) in [
             (0x153a, EXPRESSION_PARSE),
@@ -826,15 +884,15 @@ pub(crate) mod tests {
             0x1400 + NAMES.iter().position(|n| n.0 == "continue").unwrap() as u32,
             NULL_PARSE,
         ))) {
-            let r = Record::read(&e, t.record(opcode));
-            assert_eq!(r.parse, word, "{opcode:04x}");
-            e.mem.write(0x0100_f000, &[0; 16]);
-            let words = [3, 0x0100_2000, 0x0100_3000, 0x0100_4000];
-            assert_eq!(e.call(r.parse, &words).eax, 0x5b, "{opcode:04x}");
-            for (i, w) in words.iter().enumerate() {
-                assert_eq!(e.mem.u32(0x0100_f000 + 4 * i as u32), *w, "{opcode:04x}");
-            }
+            assert_eq!(
+                Record::read(&e, t.record(opcode)).parse,
+                word,
+                "{opcode:04x}"
+            );
         }
+        e.mem.write(0x0100_f000, &[0; 16]);
+        assert_eq!(e.call(NULL_PARSE, &words).eax, 1);
+        assert_eq!(e.mem.bytes(0x0100_f000, 16), [0; 16]);
     }
 
     /// Every xNVSE opcode has its names; a console re-export copies the console record with the
