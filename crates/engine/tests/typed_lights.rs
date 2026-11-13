@@ -525,3 +525,29 @@ fn lights_bound_rounding() {
     .run()
     .assert_same();
 }
+
+#[test]
+fn lights_bound_radius_scale() {
+    // The light 3.0 from the bound's centre (its position (2.5, 1, 0) moved by the offset (0.5, -1,
+    // 0)), the bound's radius 4.0 scaled by 0.5 (2.0): the gap 1.0 is past the light's radius 0.5,
+    // while the unscaled radius would bring the bound in.
+    Diff::new(entry!(
+        0x00b9_dae0,
+        walk::bound_within_radius(Ptr<_>, Ptr<_>, u32, f32) -> u8
+    ))
+    .common()
+    .float_sweep(0)
+    .inputs(&[Input::Of(&[HALF, ONE])])
+    .setup(|e, case| {
+        stand_ins(e);
+        let ni = object(e, 0x100, 0, 0, OTHER_RTTI);
+        words(e, ni + 0x8c, &[0x4020_0000, ONE, 0]);
+        e.mem.set_u32(ni + 0xe0, HALF);
+        let p = [[0; 4]; 6];
+        let l = light(e, &p, 0, ni, 0, 0);
+        let bound = block(e, 0x10, &[0, 0, 0, 0x4080_0000]);
+        vec![l, bound, 0, case.word(0)]
+    })
+    .run()
+    .assert_same();
+}
