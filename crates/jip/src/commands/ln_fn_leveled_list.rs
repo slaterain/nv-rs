@@ -10,10 +10,14 @@
 //! (`RemoveNth`, `RemoveAll`) or free the entry but not its extra (`RemoveItem`); the port does
 //! the same, as the entries' memory is the game's.
 //!
-//! One change from JIP: `AddItem` puts the new entry before the first entry whose level is at
-//! least the new one; when every entry is lower, JIP's `tList::Insert` at index == count finds no
-//! node and inserts nothing, leaving the two blocks it allocated. The port inserts nothing too
-//! (scripts see JIP's answer) but frees those two blocks.
+//! Two deliberate differences from JIP, neither visible to a script that works in JIP:
+//! - `AddItem` puts the new entry before the first entry whose level is at least the new one;
+//!   when every entry is lower, JIP's `tList::Insert` at index == count finds no node and inserts
+//!   nothing, leaving the two blocks it allocated. The port inserts nothing too (scripts see JIP's
+//!   answer) but frees those two blocks.
+//! - `Dump` on a list that holds itself (directly or through nested lists) recurses in JIP until
+//!   the stack runs out and the game crashes. The port prints the line of a list already on the
+//!   current path and does not go into it again; every list without such a loop prints as in JIP.
 
 use super::forms::{
     form_type_b7, ContainerExtra, LeveledListData, ListNode, TESLeveledList, LEVELED_LIST_COMPONENT,
@@ -98,7 +102,9 @@ fn nth(e: &Engine, l: Ptr<L>, index: u32) -> u32 {
 // Cmd_LeveledListAddForm_Execute and nvse/GameForms.cpp: TESLeveledList::AddItem.
 /// A new entry for the form (level and count as 16 bits; health below 0 taken as 0, above 1 as
 /// a percentage, `* 0.01F`) with a new extra (no owner, no global, the health), put before the
-/// first entry that is empty or whose level is at least the new one (`tList::Insert`: at index
+/// first entry that is empty or whose level is at least the new one (the stored level a signed
+/// 16-bit number, the new one the argument's low 16 bits unsigned, both compared as `int`s, as
+/// JIP's `SInt16` against its `UInt16` parameter) (`tList::Insert`: at index
 /// 0 into an empty first node or before the first item; later, into that node, its item moved to
 /// a new node after it). With no such entry nothing is inserted (JIP's answer); the port frees
 /// the entry and extra JIP would leave allocated.
@@ -118,7 +124,7 @@ fn leveled_list_add_form(e: &mut Engine, w: &[u32]) -> Ret {
     let items = list_items(e, entries(l));
     let index = items
         .iter()
-        .position(|&d| d == 0 || e.get(data(d), D::level) as u16 >= level)
+        .position(|&d| d == 0 || i32::from(e.get(data(d), D::level)) >= i32::from(level))
         .unwrap_or(items.len());
     let entry = data(heap_alloc(e, D::SIZE));
     let extra = Ptr::<ContainerExtra>::new(heap_alloc(e, ContainerExtra::SIZE));
@@ -498,10 +504,13 @@ const INDENT: usize = 60;
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameForms.cpp: TESLeveledList::Dump.
 /// One console line per entry (empty entries skipped): the indent, "(LeveledList)" for a nested
 /// list or the form's name, its id, level, count and its extra's health (0 without one); a
-/// nested list's entries follow, three spaces further in. JIP's indent runs out after 20 levels
-/// (its pointer then reads before the spaces); the port prints no indent there, and a list that
-/// holds itself recurses until the stack ends, as in JIP.
-fn dump(e: &mut Engine, l: Ptr<L>, indent: usize) {
+/// nested list's entries follow, three spaces further in. A nested list already on the current
+/// path (`path`: the lists being printed, outermost first) gets its line but is not gone into
+/// again (JIP recurses until the stack runs out). JIP's indent pointer starts 60 spaces before the
+/// end of its 60 spaces and moves back 3 per level: at 20 levels it is the whole 60, deeper it
+/// starts before the spaces, on bytes of JIP's own data followed by the 60 spaces; the port prints
+/// the 60 spaces there.
+fn dump(e: &mut Engine, l: Ptr<L>, indent: usize, path: &mut Vec<u32>) {
     for d in list_items(e, entries(l)) {
         if d == 0 {
             continue;
@@ -536,7 +545,11 @@ fn dump(e: &mut Engine, l: Ptr<L>, indent: usize) {
             &[text, id, level, count, lo, hi],
         );
         if let Some(inner) = inner {
-            dump(e, inner, indent + 3);
+            if !path.contains(&form) {
+                path.push(form);
+                dump(e, inner, indent + 3, path);
+                path.pop();
+            }
         }
     }
 }
@@ -554,7 +567,7 @@ fn dump_lev_list(e: &mut Engine, w: &[u32]) -> Ret {
     if let Some(l) = lvl_list(e, form) {
         let id = ref_id(e, form);
         nvse::commands::console_print(e, "Dumping LeveledList [%08X]", &[id]);
-        dump(e, l, 0);
+        dump(e, l, 0, &mut vec![form]);
     }
     handled(true)
 }

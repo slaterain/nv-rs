@@ -402,3 +402,67 @@ fn removing_the_first() {
         (entry(1), node(1))
     );
 }
+
+/// The stored level is a signed 16-bit number, the new one unsigned 16 bits, compared as ints:
+/// a stored 0xFFFF is -1, below every new level; a new 0x8000 is 32768, above every stored one.
+#[test]
+fn levels_compare_as_jip_compares_them() {
+    let mut e = setup();
+    e.mem.set_u16(entry(0) + 6, 0xffff);
+    // Level 3: past entry 0 (-1), before entry 1 (5).
+    let block = heap_next(&e);
+    call(&mut e, 0x221e, &[r(1), r(7), n(3), n(1), z(1.0)]);
+    assert_eq!(e.mem.u32(LVLI + 0x34), entry(0), "-1 stays first");
+    assert_eq!(e.mem.u32(node(0)), block, "the new entry where entry 1 was");
+    // Level 0x8000: above -1, 3, 5 and 10: nothing inserted, both blocks freed.
+    CALLS.with(|c| c.borrow_mut().clear());
+    let list = e.mem.bytes(LVLI, SIZE);
+    let nodes = e.mem.bytes(NODES, 0x20);
+    let (block, extra) = (heap_next(&e), heap_next(&e) + 0x10);
+    call(&mut e, 0x221e, &[r(1), r(7), n(0x8000), n(1), z(1.0)]);
+    assert_eq!(freed(), vec![block, extra]);
+    assert_eq!(
+        (e.mem.bytes(LVLI, SIZE), e.mem.bytes(NODES, 0x20)),
+        (list, nodes)
+    );
+}
+
+/// A leveled character list (0x2D) is a list too.
+#[test]
+fn a_leveled_character_list() {
+    let mut e = setup();
+    const LVLN: u32 = FORMS + 0x1800;
+    form(&mut e, LVLN, 0x2d, 0x0000_0c03);
+    set_ref(&mut e, 8, LVLN);
+    e.mem.set_u32(entry(5), AMMO);
+    e.mem.set_u16(entry(5) + 4, 2);
+    e.mem.set_u16(entry(5) + 6, 4);
+    e.mem.set_u32(LVLN + 0x34, entry(5));
+    e.mem.set_u8(LVLN + 0x3c, 30);
+    assert_eq!(call(&mut e, 0x2224, &[r(8)]).1, 1.0);
+    assert_eq!(call(&mut e, 0x2222, &[r(8)]).1, 30.0);
+    call(&mut e, 0x2313, &[r(8), n(0), n(6)]);
+    assert_eq!(e.mem.u16(entry(5) + 4), 6);
+}
+
+/// LVLI holds LVLC, which holds LVLI again: LVLI's line inside LVLC is printed, and the dump
+/// does not go into it again (JIP would recurse until the stack runs out).
+#[test]
+fn the_dump_of_a_loop() {
+    let mut e = setup();
+    for f in [MISC, AMMO, WEAP] {
+        e.mem.set_u32(f, FORMS + 0x7800);
+    }
+    console(&mut e, true);
+    call(&mut e, 0x222a, &[r(1)]);
+    let lines = LINES.with(|l| l.borrow().clone());
+    let text = |w: u32| String::from_utf8(nvse::table::guest_text(&e, w)).unwrap();
+    let ids: Vec<u32> = lines[1..].iter().map(|l| l.1[1]).collect();
+    assert_eq!(ids, vec![0x0999, 0x0a33, 0x0c02, 0x0e44, 0x0c01]);
+    assert_eq!(
+        text(lines[5].1[0]),
+        "   (LeveledList)",
+        "LVLI's line, not gone into"
+    );
+    console(&mut e, false);
+}
