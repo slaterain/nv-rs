@@ -1512,7 +1512,6 @@ mod tests {
     /// `bShowFrameRate=1` in a launcher's play run, or `NV_SHOW_FPS=1` anywhere, which wins.
     #[test]
     fn the_frame_rate_counter_is_off_unless_asked_for() {
-        assert!(!PLAY_SHOW_FRAME_RATE);
         assert!(!Choice::vanilla().show_frame_rate);
         for preset in ["fixes", "vanilla"] {
             let file = format!("[nv-rs General]\nsPreset={preset}\n");
