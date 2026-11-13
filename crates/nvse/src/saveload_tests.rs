@@ -329,6 +329,27 @@ fn a_save_with_nothing_in_it_still_resets_the_game_before() {
     assert!(vars::string(&e, temp).is_none());
 }
 
+/// xNVSE's `TogglePlayerControlsAlt::ResetOnLoad` runs from its co-save pre-load callback and
+/// the new-game hook only: loading a save with a co-save forgets the mods' disabled player
+/// controls, a vanilla save (no co-save) keeps them, a new game forgets them.
+#[test]
+fn only_a_co_save_load_or_a_new_game_resets_the_player_controls() {
+    use engine_core::extend::controls_alt::{JUMPING, RELOAD};
+    let mut e = engine();
+    set_files(&mut e, &["FalloutNV.esm"]);
+    save_game(&mut e, NAME);
+    e.set_controls_alt(JUMPING);
+    pre_load(&mut e, NAME);
+    assert_eq!(e.controls_alt(), 0, "a save with a co-save");
+    FILES.with(|f| f.borrow_mut().remove(CO_SAVE.as_bytes()));
+    e.set_controls_alt(RELOAD);
+    pre_load(&mut e, NAME);
+    load(&mut e, NAME);
+    assert_eq!(e.controls_alt(), RELOAD, "a vanilla save");
+    new_game(&mut e);
+    assert_eq!(e.controls_alt(), 0, "a new game");
+}
+
 /// Arrays read out of id order: xNVSE marks the ids below each one it reads free from the last
 /// one read, so a lower id read after a higher leaves a gap unmarked.
 #[test]

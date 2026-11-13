@@ -3873,7 +3873,15 @@ pub fn fn_005a03d0(e: &mut Engine, this: Ptr) -> u8 {
 /// True when the player's disabled-controls byte (`this + 0x680`) has any
 /// bit of `mask` (a full `u32`, as the code ands it).
 pub fn fn_005a03f0(e: &mut Engine, this: Ptr, mask: u32) -> bool {
-    e.mem.u8(this.addr() + PLAYER_DISABLED_CONTROLS_OFFSET) as u32 & mask != 0
+    let flags = e.mem.u8(this.addr() + PLAYER_DISABLED_CONTROLS_OFFSET) as u32;
+    let alt = e.controls_alt();
+    if alt != 0 {
+        // xNVSE's `TogglePlayerControlsAlt::ModifyPlayerControlFlags` (a jump at 005a03f7, back at
+        // 005a0401): the mods' disabled controls ORed in, only the seven vanilla bits
+        // (`kVanillaFlags`).
+        return (flags | (alt & engine_core::extend::controls_alt::VANILLA)) & mask != 0;
+    }
+    flags & mask != 0
 }
 
 // Translated from 005a0410 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -8207,6 +8215,22 @@ mod tests {
         assert!(e.call(0x005a_03f0, &args![player, 0x80u32]).bool());
         // The mask is a full word: bits above the byte never match.
         assert!(!e.call(0x005a_03f0, &args![player, 0x100u32]).bool());
+        assert!(!e.call(0x005a_03f0, &args![player, 0x01u32]).bool());
+    }
+
+    /// xNVSE's `ModifyPlayerControlFlags` (005a03f7): with the mods' word set, its seven vanilla
+    /// bits are ORed into the byte; its other bits never are; with the word 0 the byte alone.
+    #[test]
+    fn the_mods_disabled_controls_join_the_byte() {
+        let mut e = engine();
+        let player = e.mem.alloc(0x700);
+        e.mem.set_u8(player + 0x680, 0x80);
+        e.set_controls_alt(0x01 | 0x200);
+        assert!(e.call(0x005a_03f0, &args![player, 0x01u32]).bool());
+        assert!(e.call(0x005a_03f0, &args![player, 0x80u32]).bool());
+        assert!(!e.call(0x005a_03f0, &args![player, 0x200u32]).bool());
+        assert!(!e.call(0x005a_03f0, &args![player, 0x02u32]).bool());
+        e.set_controls_alt(0);
         assert!(!e.call(0x005a_03f0, &args![player, 0x01u32]).bool());
     }
 

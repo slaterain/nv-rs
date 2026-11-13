@@ -4,6 +4,7 @@
 pub mod algohol;
 pub mod array;
 pub mod console;
+pub mod controls;
 pub mod extender;
 pub mod factions;
 pub mod game;
@@ -71,6 +72,7 @@ pub fn all() -> Vec<&'static Command> {
         .chain(packages::COMMANDS)
         .chain(script_vars::COMMANDS)
         .chain(mod_data::COMMANDS)
+        .chain(controls::COMMANDS)
         .chain(crate::functions::COMMANDS)
         .chain(crate::tick::COMMANDS)
         .chain(crate::event_commands::COMMANDS)

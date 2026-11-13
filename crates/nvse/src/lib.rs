@@ -234,6 +234,8 @@ pub struct Nvse {
     pub console: commands::console::State,
     /// The data mods keep in memory across loaded saves (`SetModLocalData`).
     pub mod_data: commands::mod_data::State,
+    /// The controls each mod disabled (`DisablePlayerControlsAlt`).
+    pub controls: commands::controls::State,
     /// The DirectInput hook's keys and the input commands' controls (I-11).
     pub input: input::State,
     /// The first frame recorded the main thread (`s_recordedMainThreadID`): xNVSE prints to the
@@ -270,6 +272,7 @@ pub fn install(e: &mut Engine) {
     events::install(e);
     call_sites::install(e);
     commands::game::install(e);
+    commands::controls::install(e);
     e.ext::<Nvse>().installed = true;
     // The extender's state is the game's, not one engine's: real threads' engines share it
     // (engine-core's shared slot, one lock), so an event raised or a variable used on another
@@ -306,13 +309,14 @@ mod tests {
             0x005a_c750,
             0x0045_12a0,
             0x0070_52f0,
+            0x0095_d3f0,
             0x00fd_f02c,
         ] {
             e.register(addr, base);
         }
         install(&mut e);
         assert!(e.unlisted_wraps().is_empty());
-        assert_eq!(e.wrapped().len(), 10);
+        assert_eq!(e.wrapped().len(), 11);
         for site in [
             0x0048_3669,
             0x004c_0032,

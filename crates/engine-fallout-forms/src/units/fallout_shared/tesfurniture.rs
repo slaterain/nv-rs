@@ -549,6 +549,11 @@ pub fn tes_furniture_activate(
         e.call(INITIATE_SIT_SLEEP_PACKAGE, &args![player_character, target]);
         return true;
     }
+    // xNVSE's `SleepFromFurniture::MaybePreventSleeping` (a jump at 00509660, the sleep marker's
+    // first instruction) is meant to answer false at once (00509880) with the mods' sleeping
+    // disabled; the shipped 6.4.9 DLL reads the flag word as a byte (`movzx eax, byte`, then
+    // `and eax, 1000h`), so it never does and the bed still works. The shipped DLL is matched:
+    // nothing here (the intended blocking is a candidate fixes row).
     let owner = e.call(GET_OWNER, &args![target]).u32();
     let is_player = player_character == e.global::<u32>(PLAYER);
     if owner != 0
@@ -1269,6 +1274,8 @@ mod tests {
         interior_blocked: bool,
         sleep_state: bool,
         player_state: bool,
+        /// The mods' disabled controls (`Engine::controls_alt`).
+        alt: u32,
     }
 
     impl Scene {
@@ -1285,6 +1292,7 @@ mod tests {
                 interior_blocked: false,
                 sleep_state: false,
                 player_state: false,
+                alt: 0,
             }
         }
     }
@@ -1347,6 +1355,7 @@ mod tests {
                 ..Ret::default()
             }
         });
+        e.set_controls_alt(scene.alt);
         e.call_log = Some(vec![]);
         let result = e
             .call(0x0050_95b0, &args![f, target, player, 11u32, 22u32, 33u32])
@@ -1425,6 +1434,29 @@ mod tests {
         assert_eq!(calls_to(&e, GET_OWNER), [[target.addr()]]);
         // The interior byte reaches the sleep-state test.
         assert_eq!(calls_to(&e, SLEEP_STATE_TEST), [[SLEEP_STATE, 1]]);
+    }
+
+    #[test]
+    fn activate_with_sleeping_disabled() {
+        // xNVSE's `MaybePreventSleeping` (00509660) never fires in the shipped 6.4.9 DLL (it tests
+        // the flag word as a byte): with the mods' sleeping disabled, or every control, the bed
+        // opens its menu as with nothing set; a sit marker is not stopped either.
+        for alt in [1u32 << 12, 0xffff] {
+            let (result, e, _, _) = activate(Scene {
+                alt,
+                ..Scene::sleeping_allowed()
+            });
+            assert!(result, "{alt:x}");
+            assert_eq!(calls_to(&e, CREATE_SLEEP_MENU), [[1]]);
+            assert!(!calls_to(&e, GET_OWNER).is_empty());
+            let (result, e, player, _) = activate(Scene {
+                alt,
+                marker_type: 12,
+                ..Scene::sleeping_allowed()
+            });
+            assert!(result);
+            assert_eq!(calls_to(&e, FORCE_TEMP_THIRD_PERSON), [[player.addr(), 1]]);
+        }
     }
 
     #[test]

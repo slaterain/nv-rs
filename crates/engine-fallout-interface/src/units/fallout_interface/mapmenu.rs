@@ -1561,6 +1561,11 @@ fn do_click_marker(e: &mut Engine, this: Ptr<MapMenu>, id: i32, tile: u32) {
         if not_dragged {
             let tile_11 = map_tile(e, base, 11);
             if e.call(TILE_IS_TRUE, &args![tile_11, 0xfafu32]).bool() {
+                // xNVSE's `MaybePreventFastTravel` (a jump at 00798020, before the player's check)
+                // is meant to end DoClick there (00798348) with the mods' fast travel disabled;
+                // the shipped 6.4.9 DLL reads the flag word as a byte (`movzx eax, byte`, then
+                // `and eax, 4000h`), so it never does and the click still travels. The shipped
+                // DLL is matched: nothing here (the intended blocking is a candidate fixes row).
                 let player = e.mem.u32(PLAYER_011DEA3C);
                 if e.call(PLAYER_FLAG_0093D660, &args![player]).bool() {
                     offer_fast_travel(e, this, id, tile);
@@ -10534,6 +10539,19 @@ mod map_menu_tests {
         returns(&mut e, MARKER_GET_TRAVEL_LOC, 0);
         e.call(0x0079_6fd0, &args![menu, 0x1ai32, 0x7400u32]);
         assert_eq!(e.get(menu, MapMenu::pFastTravelMarker), 0);
+        // xNVSE's `MaybePreventFastTravel` (00798020) never fires in the shipped 6.4.9 DLL (it
+        // tests the flag word as a byte): with the mods' fast travel disabled, or every control,
+        // the click still offers the travel.
+        for alt in [1u32 << 14, 0xffff] {
+            returns(&mut e, MARKER_GET_TRAVEL_LOC, 1);
+            e.set(menu, MapMenu::pFastTravelMarker, 0);
+            e.set_controls_alt(alt);
+            e.call_log = Some(vec![]);
+            e.call(0x0079_6fd0, &args![menu, 0x1ai32, 0x7400u32]);
+            assert_eq!(e.get(menu, MapMenu::pFastTravelMarker), 0x3200, "{alt:x}");
+            assert_eq!(calls_to(&e, PLAYER_FLAG_0093D660).len(), 1);
+            assert_eq!(calls_to(&e, SHOW_MESSAGE_BOX).len(), 1);
+        }
     }
 
     #[test]

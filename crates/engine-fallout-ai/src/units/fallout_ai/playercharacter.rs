@@ -4663,10 +4663,16 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             }
             let stick_length = e.call(0x0045_7990, &args![stick]).f64();
             if stick_length > zero {
-                if e.call(0x00a2_4660, &args![main_state, 9u32, 1u32]).u32() != 0
+                let run_asked = e.call(0x00a2_4660, &args![main_state, 9u32, 1u32]).u32() != 0
                     || e.call(0x00a2_4660, &args![main_state, 9u32, 0u32]).u32() != 0
-                    || full_speed
-                {
+                    || full_speed;
+                // xNVSE's `MaybePreventRunningForControllers` (a jump at 00941702, the run block's
+                // first instruction) is meant to skip to 00941792 (the walk flag) with the mods'
+                // running disabled; the shipped 6.4.9 DLL reads the flag word as a byte
+                // (`movzx eax, byte`, then `and eax, 800h`), so it never does and the gamepad
+                // still runs. The shipped DLL is matched: nothing here (the intended blocking is
+                // a candidate fixes row).
+                if run_asked {
                     let process = process_of(e, this);
                     let mut run = e.vcall(process, 0x3e4, &args![]).u32() != 7
                         && !e.vcall(this.addr(), 0x358, &args![]).bool()
@@ -4782,6 +4788,12 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             if (limit as f64) < weight as f64 {
                 and_word(e, word_slot, 0xfdff);
             }
+            // xNVSE's `MaybePreventRunningForNonController` (the call at 00941b60): with the mods'
+            // running disabled, the run bit (0x200) of the move flags at EBP-0x6C cleared first.
+            let alt = e.controls_alt();
+            if alt != 0 && alt & engine_core::extend::controls_alt::RUNNING != 0 {
+                and_word(e, word_slot, 0xfdff);
+            }
             let speed = e.call(0x008a_0b10, &args![this]).f32();
             let move_speed: f32 = e.global(MOVE_SPEED_011A3B3C);
             let step = (speed as f64 * move_speed as f64) as f32;
@@ -4884,8 +4896,14 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                 e.set_global(HOLD_VALUE_011E07AC, 0u32);
                 e.set_global(HOLD_VALUE_011E07B0, 0.0f32);
             } else {
-                if e.call(0x00a2_4660, &args![main_state, 6u32, 1u32]).u32() != 0
-                    || e.call(0x00a2_4660, &args![main_state, 6u32, 0u32]).u32() != 0
+                // xNVSE's `GetControlState_Aiming_IsPressedHook` and `_IsHeldHook` (the calls at
+                // 00941f4f and 00941f5f): each read is made, and answers 0 with the mods' aiming
+                // disabled.
+                let aim = engine_core::extend::controls_alt::AIMING_OR_BLOCKING;
+                if (e.call(0x00a2_4660, &args![main_state, 6u32, 1u32]).u32() != 0
+                    && !alt_blocked(e, aim))
+                    || (e.call(0x00a2_4660, &args![main_state, 6u32, 0u32]).u32() != 0
+                        && !alt_blocked(e, aim))
                 {
                     let process = process_of(e, this);
                     if e.vcall(process, 0x3e4, &args![]).u32() != 7
@@ -4946,7 +4964,10 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
         }
         if !busy
             && !e.call(0x005a_03f0, &args![this, 1u32]).bool()
+            // xNVSE's `GetControlState_JumpingHook` (the call at 0094215f): 0 with the mods'
+            // jumping disabled.
             && e.call(0x00a2_4660, &args![main_state, 0x0cu32, 1u32]).u32() != 0
+            && !alt_blocked(e, engine_core::extend::controls_alt::JUMPING)
             && !e.vcall(this.addr(), 0x358, &args![]).bool()
         {
             let node = e.vcall(this.addr(), 0x1e4, &args![]).u32();
@@ -5002,8 +5023,11 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             }
         }
         let mut wait_menu = false; // -0x2c8
+                                   // xNVSE's `WaitMenuControlPress::GetPCControlFlags_Hook` (the call at 0094239c): the
+                                   // flags read, then 1 with the mods' waiting disabled.
         if e.call(0x00a2_4660, &args![main_state, 0x0fu32, 1u32]).u32() != 0
-            && !e.call(0x005a_03d0, &args![this]).bool()
+            && !(e.call(0x005a_03d0, &args![this]).bool()
+                || alt_blocked(e, engine_core::extend::controls_alt::WAIT))
         {
             let _ = &mut wait_menu;
             let icon = FAST_TRAVEL_ICON;
@@ -5148,7 +5172,10 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             let reactor = e.global::<u32>(FAST_TRAVEL_REACTOR);
             e.call(0x0085_09f0, &args![reactor]);
         }
-        let quick_slot = e.call(0x00a2_4660, &args![main_state, 0x10u32, 1u32]).i32() > 0; // -0x309
+        // xNVSE's `GetControlState_VATSHook` (the call at 00942884): 0 with the mods' V.A.T.S.
+        // disabled.
+        let quick_slot = e.call(0x00a2_4660, &args![main_state, 0x10u32, 1u32]).i32() > 0 // -0x309
+            && !alt_blocked(e, engine_core::extend::controls_alt::ENTER_VATS);
         let mut run_body = e.global::<u8>(QUICK_STATE_011E0780) != 0;
         if !run_body && quick_slot {
             run_body = !(e.call(0x005a_03f0, &args![this, 8u32]).bool()
@@ -9392,6 +9419,14 @@ const COMBAT_DIALOGUE_MANAGER: u32 = 0x011f_1708;
 
 /// Whether the `slot` of the player's process (`pCurrentProcess`) reports
 /// true (its low byte).
+/// Whether the mods disabled `flag` with xNVSE's `DisablePlayerControlsAlt`
+/// ([`Engine::controls_alt`]): one load, false when nothing is disabled.
+#[inline]
+fn alt_blocked(e: &Engine, flag: u32) -> bool {
+    let alt = e.controls_alt();
+    alt != 0 && alt & flag != 0
+}
+
 fn process_flag(e: &mut Engine, this: Ptr<PlayerCharacter>, slot: u32) -> bool {
     let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
     e.vcall(process, slot, &args![]).u8() != 0
@@ -10135,6 +10170,17 @@ pub fn fn_00948310(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
             group = queued_attack_group(e, this, anim0, weapon, group);
             break 'select;
         }
+        // xNVSE's `PreventRememberingAttackInputs` (a jump at 009489fb, the press check): with the
+        // mods' attacking disabled and the weapon out, straight to 00949676, the release handling,
+        // so no press or hold is remembered.
+        let alt = e.controls_alt();
+        if alt != 0
+            && alt & engine_core::extend::controls_alt::ATTACKING != 0
+            && process_flag(e, this, 0x454)
+        {
+            released_attack(e, this, input, anim0, weapon, &mut ready);
+            break 'select;
+        }
         if button_state(e, input, 4, 1) && e.mem.u8(ATTACK_BUTTON_LATCH) == 0 {
             if !process_flag(e, this, 0x454) {
                 let bits = e.call(0x0088_46e0, &args![this]).u32();
@@ -10250,7 +10296,14 @@ pub fn fn_00948310(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
                 group = 0xa9;
             }
         }
-        let started = e.call(0x0089_3a40, &args![this, group]).u8() != 0;
+        // xNVSE's `PreventFiring` (the call at 00949cf1): with the mods' attacking disabled the
+        // attack does not start.
+        let alt = e.controls_alt();
+        let started = if alt != 0 && alt & engine_core::extend::controls_alt::ATTACKING != 0 {
+            false
+        } else {
+            e.call(0x0089_3a40, &args![this, group]).u8() != 0
+        };
         if started
             && weapon != 0
             && (e.call(0x0052_4b40, &args![weapon]).u8() != 0 || e.mem.u32(at(this, 0x1a0)) != 0)
@@ -16329,6 +16382,151 @@ mod tests {
         }
     }
 
+    /// xNVSE's aiming hooks (00941f4f, 00941f5f): with the mods' aiming disabled both reads of
+    /// the aim button answer 0, so a drawn gun is neither raised nor blocked with.
+    #[test]
+    fn aiming_disabled_raises_and_blocks_nothing() {
+        let aim = |alt: u32| {
+            let mut e = engine();
+            let this = update_world(&mut e);
+            let process = e.mem.u32(this.addr() + 0x68);
+            let vtable = e.mem.u32(process);
+            e.mem.set_u32(vtable + 0x148, 0x00b1_0000);
+            e.register_double(0x00b1_0000, |_, _| int(0x5100));
+            e.mem.set_u32(vtable + 0x3f8, 0x00b1_0010);
+            e.register(0x00b1_0010, |_, _| int(1));
+            e.register(0x0044_ddc0, |_, _| int(0x6000));
+            e.register_double(0x0064_50c0, |_, _| int(0));
+            e.register(0x008a_16d0, |_, _| int(1));
+            e.register(0x00a2_4660, |_, a| int(u32::from(a[1] == 6 && a[2] < 2)));
+            e.set_controls_alt(alt);
+            player_character_update(&mut e, this, 0.5);
+            (e, this)
+        };
+        // The word 0, or every control but aiming: the gun's sights are raised as before.
+        for alt in [0, all_but(1 << 10)] {
+            let (e, this) = aim(alt);
+            assert!(
+                called(&e, 0x008b_b650).contains(&vec![this.addr(), 1, 0, 0]),
+                "{alt:x}"
+            );
+        }
+        let (e, this) = aim(1 << 10);
+        assert!(!called(&e, 0x008b_b650).contains(&vec![this.addr(), 1, 0, 0]));
+        assert!(!called(&e, 0x0089_4cc0).contains(&vec![this.addr(), 1]));
+        // Both reads were still made (xNVSE's detours call the game's first).
+        let reads: Vec<Vec<u32>> = called(&e, 0x00a2_4660)
+            .into_iter()
+            .filter(|a| a[1] == 6 && a[2] < 2)
+            .collect();
+        assert!(reads.len() >= 2, "{reads:?}");
+    }
+
+    /// The mover's flags setter (its slot 0xc) in [`update_pressing`].
+    const MOVER_SET_FLAGS: u32 = 0x00b2_0000;
+
+    /// `Update` in [`update_world`] with the control button `key` pressed (both states), the
+    /// mods' disabled controls `alt`, a gamepad in use or not, and a mover whose flags setter
+    /// is recorded.
+    fn update_pressing(key: u32, alt: u32, controller: bool) -> (Engine, Ptr<PlayerCharacter>) {
+        let mut e = engine();
+        let this = update_world(&mut e);
+        let slots: Vec<(u32, u32)> = (0..0x200).map(|i| (i * 4, 0x00b0_0000)).collect();
+        let mover = object(&mut e, 0x0204_0000, &slots);
+        e.mem.set_u32(0x0204_000c, MOVER_SET_FLAGS);
+        e.register(MOVER_SET_FLAGS, |_, _| Ret::default());
+        e.mem.set_u32(this.addr() + 0x190, mover.addr());
+        e.register_double(0x00a2_4660, move |_, a| int(u32::from(a[1] == key)));
+        if controller {
+            // A gamepad in use and its stick pushed all the way.
+            e.register(0x004b_71d0, |_, _| int(1));
+            e.register(0x0045_7990, |_, _| float(1.0));
+        }
+        e.set_controls_alt(alt);
+        player_character_update(&mut e, this, 0.5);
+        (e, this)
+    }
+
+    /// The move flags `Update` hands the mover.
+    fn move_flags(e: &Engine) -> u32 {
+        let set = called(e, MOVER_SET_FLAGS);
+        assert_eq!(set.len(), 1, "{set:?}");
+        set[0][1]
+    }
+
+    /// The disabled controls other than `flag`: none of them changes what pressing that button
+    /// does.
+    fn all_but(flag: u32) -> u32 {
+        engine_core::extend::controls_alt::ALL & !flag
+    }
+
+    /// xNVSE's jumping hook (the call at 0094215f): the jump button reads as not pressed with the
+    /// mods' jumping disabled, so the jump (`0095f6a0`) is not started; nothing set, or only
+    /// other controls set, the jump starts as before.
+    #[test]
+    fn jumping_disabled_starts_no_jump() {
+        use engine_core::extend::controls_alt::JUMPING;
+        let (free, this) = update_pressing(0x0c, 0, false);
+        assert_eq!(called(&free, 0x0095_f6a0), vec![vec![this.addr()]]);
+        let (others, _) = update_pressing(0x0c, all_but(JUMPING), false);
+        assert_eq!(called(&others, 0x0095_f6a0), vec![vec![this.addr()]]);
+        let (blocked, _) = update_pressing(0x0c, JUMPING, false);
+        assert!(called(&blocked, 0x0095_f6a0).is_empty());
+    }
+
+    /// xNVSE's wait hook (the call at 0094239c): with the mods' waiting disabled the wait button
+    /// is treated as if the game's own controls were disabled, so none of the wait checks run.
+    #[test]
+    fn waiting_disabled_opens_no_wait_menu() {
+        use engine_core::extend::controls_alt::WAIT;
+        let (free, this) = update_pressing(0x0f, 0, false);
+        assert_eq!(called(&free, 0x0095_3c80), vec![vec![this.addr()]]);
+        let (others, _) = update_pressing(0x0f, all_but(WAIT), false);
+        assert_eq!(called(&others, 0x0095_3c80).len(), 1);
+        let (blocked, _) = update_pressing(0x0f, WAIT, false);
+        assert!(called(&blocked, 0x0095_3c80).is_empty());
+        // The game's own flags were still read first.
+        assert!(!called(&blocked, 0x005a_03d0).is_empty());
+    }
+
+    /// xNVSE's V.A.T.S. hook (the call at 00942884): the V.A.T.S. button reads as not pressed with
+    /// the mods' V.A.T.S. disabled, so V.A.T.S. is not entered (`007f52c0` not asked).
+    #[test]
+    fn vats_disabled_enters_no_vats() {
+        use engine_core::extend::controls_alt::ENTER_VATS;
+        let (free, _) = update_pressing(0x10, 0, false);
+        assert_eq!(called(&free, 0x007f_52c0).len(), 1);
+        let (others, _) = update_pressing(0x10, all_but(ENTER_VATS), false);
+        assert_eq!(called(&others, 0x007f_52c0).len(), 1);
+        let (blocked, _) = update_pressing(0x10, ENTER_VATS, false);
+        assert!(called(&blocked, 0x007f_52c0).is_empty());
+    }
+
+    /// xNVSE's running hooks: on the keyboard (the call at 00941b60) the run bit 0x200 is
+    /// cleared from the move flags. On a gamepad the jump at 00941702 never fires in the shipped
+    /// 6.4.9 DLL (it tests the flag word as a byte), so the stick still runs. Nothing set, the
+    /// run bit reaches the mover as before.
+    #[test]
+    fn running_disabled_walks_on_the_keyboard_only() {
+        use engine_core::extend::controls_alt::{ALL, RUNNING};
+        for controller in [false, true] {
+            let (free, _) = update_pressing(9, 0, controller);
+            let free_flags = move_flags(&free);
+            assert_eq!(free_flags & 0x200, 0x200, "controller {controller}");
+            let (others, _) = update_pressing(9, all_but(RUNNING), controller);
+            assert_eq!(move_flags(&others) & 0x300, free_flags & 0x300);
+            for alt in [RUNNING, ALL] {
+                let (blocked, _) = update_pressing(9, alt, controller);
+                let flags = move_flags(&blocked);
+                if controller {
+                    assert_eq!(flags & 0x300, free_flags & 0x300, "{alt:x}");
+                } else {
+                    assert_eq!(flags, free_flags & !0x200, "{alt:x}");
+                }
+            }
+        }
+    }
+
     // ---- tests of 00944300 .. 0094c460 (the third batch of this file) ----
 
     /// Maps the parts of the exe's data the translations of this batch read
@@ -17168,6 +17366,38 @@ mod tests {
         assert_eq!(e.global::<f32>(ATTACK_HOLD_TIMER), 0.0);
     }
 
+    /// xNVSE's `PreventRememberingAttackInputs` (009489fb): with the mods' attacking disabled
+    /// and the weapon out (process slot 0x454), a new press goes straight to the release
+    /// handling; with the weapon away, or the word 0, the press is handled as before.
+    #[test]
+    fn attacking_disabled_forgets_a_press_with_the_weapon_out() {
+        let mut e = engine();
+        let this = attack_world(&mut e, 0x0265_0000, &[(0x454, 1), (0x14c, 0x5200)]);
+        only_button(&mut e, 4, 1);
+        e.register(0x008a_7570, |_, _| int(0x11));
+        e.set_controls_alt(1 << 7);
+        assert!(!e.call(0x0094_8310, &args![this]).bool());
+        assert!(called(&e, 0x0072_6070).is_empty(), "no reload attack");
+        // The word 0, or every control but attacking: the press is handled (the reload path, as
+        // in the test below).
+        for alt in [0, all_but(1 << 7)] {
+            let mut e = engine();
+            let this = attack_world(&mut e, 0x0265_0000, &[(0x454, 1), (0x14c, 0x5200)]);
+            only_button(&mut e, 4, 1);
+            e.register(0x008a_7570, |_, _| int(0x11));
+            e.set_controls_alt(alt);
+            assert!(!e.call(0x0094_8310, &args![this]).bool());
+            assert_eq!(called(&e, 0x0072_6070), vec![vec![0x5200]], "{alt:x}");
+        }
+        // The weapon away: the press draws it, as without the flag.
+        let mut e = engine();
+        let this = attack_world(&mut e, 0x0265_0000, &[]);
+        only_button(&mut e, 4, 1);
+        e.set_controls_alt(1 << 7);
+        assert!(e.call(0x0094_8310, &args![this]).bool());
+        assert_eq!(called(&e, 0x008a_6840), vec![vec![this.addr(), 1]]);
+    }
+
     #[test]
     fn a_new_press_while_reloading_with_an_empty_magazine_stops_early() {
         let mut e = engine();
@@ -17230,6 +17460,38 @@ mod tests {
         );
         e.register_double(0x00b0_000c, move |_, _| float(value));
         put_vtable(e, this.addr() + 0xa4, 0x0267_0000, &[(0xc, 0x00b0_000c)]);
+    }
+
+    /// xNVSE's `PreventFiring` (00949cf1): with the mods' attacking disabled the chosen attack
+    /// is not started (`Actor::StartAttack` not called) and the queue is still cleared; with
+    /// every control but attacking disabled, it starts as with nothing set.
+    #[test]
+    fn attacking_disabled_starts_no_attack() {
+        let queued = |alt: u32| {
+            let mut e = engine();
+            let this = attack_world(&mut e, 0x0265_0000, &[]);
+            player_slots(&mut e, this, 5.0);
+            e.set_global(ATTACK_QUEUED, 2u32);
+            e.register(0x0088_46e0, |_, _| int(1));
+            e.register(0x005e_58f0, |e, a| {
+                e.mem.set_f32(a[2], 1.0);
+                Ret::default()
+            });
+            e.register(0x0089_3a40, |_, _| int(1));
+            e.register(0x004d_ff00, |_, _| int(1));
+            e.set_controls_alt(alt);
+            e.call(0x0094_8310, &args![this]);
+            (e, this)
+        };
+        let (e, _) = queued(1 << 7);
+        assert!(called(&e, 0x0089_3a40).is_empty());
+        assert!(
+            called(&e, 0x0098_39b0).is_empty(),
+            "no combat dialogue either"
+        );
+        assert_eq!(e.global::<u32>(ATTACK_QUEUED), 0);
+        let (e, this) = queued(all_but(1 << 7));
+        assert_eq!(called(&e, 0x0089_3a40), vec![vec![this.addr(), 0x61]]);
     }
 
     #[test]
