@@ -192,3 +192,58 @@ fn other_form_types_are_left_alone() {
     assert_eq!(e.mem.bytes(IMGS, 0xb0), imgs);
     assert_eq!(e.mem.bytes(IMAD, 0x730), imad);
 }
+
+/// GetActiveIMODs: the TES (`*0x011DEA10`) and its running modifiers (+0x6C): form instances
+/// (vtable `0102D12C`) not hidden (+8), their modifier at +0x1C; another instance kind, a hidden
+/// one and one without a modifier are left out.
+#[test]
+fn the_running_modifiers() {
+    use nvse::vars::{Container, Data};
+    let mut e = setup();
+    e.map(0x011d_e000, 0x1000);
+    const TES: u32 = FORMS + 0x8000;
+    const INST: u32 = FORMS + 0x9000;
+    const NODES: u32 = FORMS + 0xa000;
+    const IMAD2: u32 = FORMS + 0x3000;
+    form(&mut e, IMAD2, 0x54, 0x0000_2354);
+    e.mem.set_u32(SCRIPT + 0xc, 0x0400_0001);
+    assert_eq!(call(&mut e, 0x28a0, &[]).1, 0.0, "no TES: none");
+    e.mem.set_u32(0x011d_ea10, TES);
+    assert_eq!(call(&mut e, 0x28a0, &[]).1, 0.0, "an empty list: no array");
+    // Instances 0-4: IMAD2, hidden IMAD, a temporary instance with IMAD, no modifier, IMAD.
+    let inst = |i: u32| INST + 0x40 * i;
+    for (i, (vtbl, hidden, imod)) in [
+        (0x0102_d12c, 0u8, IMAD2),
+        (0x0102_d12c, 1, IMAD),
+        (0x0102_d000, 0, IMAD),
+        (0x0102_d12c, 0, 0),
+        (0x0102_d12c, 0, IMAD),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let at = inst(i as u32);
+        e.mem.set_u32(at, *vtbl);
+        e.mem.set_u8(at + 8, *hidden);
+        e.mem.set_u32(at + 0x1c, *imod);
+    }
+    e.mem.set_u32(TES + 0x6c, inst(0));
+    e.mem.set_u32(TES + 0x70, NODES);
+    for i in 1..5u32 {
+        let node = NODES + 8 * (i - 1);
+        e.mem.set_u32(node, inst(i));
+        e.mem.set_u32(node + 4, if i < 4 { node + 8 } else { 0 });
+    }
+    let (_, res) = call(&mut e, 0x28a0, &[]);
+    let a = nvse::vars::array(&e, res as u32).expect("an array");
+    assert_eq!((a.packed, a.owning_mod), (true, 4));
+    let Container::Array(v) = &a.elements else {
+        panic!("a packed array")
+    };
+    let got: Vec<Data> = v.iter().map(|el| el.data.clone()).collect();
+    assert_eq!(
+        got,
+        vec![Data::Form(0x2354), Data::Form(0x1354)],
+        "in order"
+    );
+}

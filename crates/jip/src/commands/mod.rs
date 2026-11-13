@@ -8,6 +8,7 @@
 //! until step 3.10): until then every JIP opcode, built or not, is as without the DLL, and only
 //! tests (on an engine installed with the flag on) reach the commands built here.
 
+pub mod arrays;
 pub mod forms;
 pub mod jip_fn_ammo;
 pub mod jip_fn_ammo_effect;
@@ -27,6 +28,7 @@ pub mod jip_fn_land_texture;
 pub mod jip_fn_light;
 pub mod jip_fn_package;
 pub mod jip_fn_perk;
+pub mod jip_fn_quest;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_water;
 pub mod jip_fn_weapon;
@@ -38,6 +40,7 @@ pub mod ln_fn_challenge;
 pub mod ln_fn_map_marker;
 pub mod ln_fn_perk;
 pub mod ln_fn_race;
+pub mod ln_fn_recipe;
 pub mod ln_fn_weapon;
 
 use engine_core::prelude::*;
@@ -71,6 +74,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_light::COMMANDS,
     jip_fn_package::COMMANDS,
     jip_fn_perk::COMMANDS,
+    jip_fn_quest::COMMANDS,
     jip_fn_texture_set::COMMANDS,
     jip_fn_water::COMMANDS,
     jip_fn_weapon::COMMANDS,
@@ -82,6 +86,7 @@ pub const ALL: &[Handlers] = &[
     ln_fn_map_marker::COMMANDS,
     ln_fn_perk::COMMANDS,
     ln_fn_race::COMMANDS,
+    ln_fn_recipe::COMMANDS,
     ln_fn_weapon::COMMANDS,
 ];
 
@@ -271,6 +276,45 @@ pub fn list_remove(e: &mut Engine, head: Ptr<ListNode>, item: u32) -> bool {
         node = Ptr::new(e.get(node, ListNode::next));
         if node.is_null() {
             return false;
+        }
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameTypes.h: tList::Append.
+/// `tList::Append`: a non-null item into the last node when that node is empty, else into a new
+/// 8-byte node of the game's heap after it (`Node::Append`).
+pub fn list_append(e: &mut Engine, head: Ptr<ListNode>, item: u32) {
+    if item == 0 {
+        return;
+    }
+    let mut last = head;
+    loop {
+        let next = e.get(last, ListNode::next);
+        if next == 0 {
+            break;
+        }
+        last = Ptr::new(next);
+    }
+    if e.get(last, ListNode::data) == 0 {
+        e.set(last, ListNode::data, item);
+        return;
+    }
+    let added = Ptr::<ListNode>::new(heap_alloc(e, ListNode::SIZE));
+    e.set(added, ListNode::data, item);
+    e.set(added, ListNode::next, 0);
+    e.set(last, ListNode::next, added.addr());
+}
+
+/// The items of a list from its first node, in order, empty items included (`tList::Head`
+/// walked with `do ... while (iter = iter->next)`).
+pub fn list_items(e: &Engine, head: Ptr<ListNode>) -> Vec<u32> {
+    let mut items = Vec::new();
+    let mut node = head;
+    loop {
+        items.push(e.get(node, ListNode::data));
+        node = Ptr::new(e.get(node, ListNode::next));
+        if node.is_null() {
+            return items;
         }
     }
 }
@@ -499,6 +543,7 @@ mod tests {
             "jip_fn_light",
             "jip_fn_package",
             "jip_fn_perk",
+            "jip_fn_quest",
             "jip_fn_texture_set",
             "jip_fn_water",
             "jip_fn_weapon",
@@ -510,6 +555,7 @@ mod tests {
             "ln_fn_map_marker",
             "ln_fn_perk",
             "ln_fn_race",
+            "ln_fn_recipe",
             "ln_fn_weapon",
         ];
         let mut seen = std::collections::HashSet::new();

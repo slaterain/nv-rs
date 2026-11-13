@@ -701,3 +701,98 @@ impl EntryPointData {
     pub const label: engine_core::ptr::Field<EntryPointData, Inline<BSStringT>> =
         engine_core::ptr::Field::new(0x04);
 }
+
+/// Form types of batch 6 (`kFormType_*` (JIP LN NVSE)).
+pub mod form_type_b6 {
+    pub const TES_RECIPE: u8 = 0x6a;
+    pub const TES_RECIPE_CATEGORY: u8 = 0x6b;
+}
+
+/// `kVtbl_BGSQuestObjective` (JIP LN NVSE; the objective constructor `005EC090` stores it) and
+/// `kVtbl_ImageSpaceModifierInstanceForm` (JIP LN NVSE).
+pub const BGS_QUEST_OBJECTIVE_VTBL: u32 = 0x0104_7088;
+pub const IMOD_INSTANCE_FORM_VTBL: u32 = 0x0102_d12c;
+
+layout! {
+    /// `TESRecipe` (JIP LN NVSE), 0x5C bytes, checked in its loader (`005A8110`: `DATA`, 0x10
+    /// bytes, at +0x24; `CTDA` into the condition list +0x34; `RCIL` components appended to +0x3C,
+    /// `RCOD` to +0x44) and its save (`005A8490`: the category +0x54, the subcategory +0x58).
+    pub struct TESRecipe: 0x5C {
+        0x24 reqSkill: u32,
+        0x28 reqSkillLevel: u32,
+        0x2C categoryID: u32,
+        0x30 subCategoryID: u32,
+        0x34 conditions: Inline<ListNode>,
+        0x3C inputs: Inline<ListNode>,
+        0x44 outputs: Inline<ListNode>,
+        0x54 category: u32,
+        0x58 subCategory: u32,
+    }
+
+    /// `RecipeComponent` (JIP LN NVSE), 8 bytes: the loader's `RCQY` sets +0 (`00537E90`), the
+    /// item +4 (`006ECD40`).
+    pub struct RecipeComponent: 0x08 {
+        0x00 quantity: u32,
+        0x04 item: u32,
+    }
+
+    /// `Condition` (JIP LN NVSE; the exe's `TESConditionItem`), 0x1C bytes: the condition loader
+    /// (`00680960`) allocates 0x1C and `00681950` reads the `CTDA` record into it whole (type,
+    /// comparison value, function, two parameters, run on, reference).
+    pub struct Condition: 0x1C {
+        0x00 cType: u8,
+        0x04 comparisonValue: f32,
+        0x08 opcode: u32,
+        0x0C parameter1: u32,
+        0x10 parameter2: u32,
+        0x14 runOnType: u32,
+        0x18 reference: u32,
+    }
+
+    /// `BGSQuestObjective` (JIP LN NVSE), 0x24 bytes, checked in its constructor (`005EC090`,
+    /// 0x24 allocated by the quest loader `0060CEB0`): the id +4, the text (a game string) +8,
+    /// the quest +0x10, the targets (a `tList`) +0x14, the status +0x20.
+    pub struct BGSQuestObjective: 0x24 {
+        0x04 objectiveId: u32,
+        0x08 displayText: Inline<BSStringT>,
+        0x10 quest: u32,
+        0x14 targets: Inline<ListNode>,
+        0x20 status: u32,
+    }
+
+    /// `BGSQuestObjective::Target` (JIP LN NVSE), 0x48 bytes, checked in its constructor
+    /// (`0060FF70`, 0x48 allocated by the quest loader): the conditions (a `tList`) +4, the
+    /// target +0xC, the path data +0x10 whose teleport links (`BSSimpleArray`: data +4, size +8,
+    /// 0x10-byte links, the door at +0) are at +0x20 (as `00952BA0`'s callers read them).
+    pub struct ObjectiveTarget: 0x48 {
+        0x04 conditions: Inline<ListNode>,
+        0x0C target: u32,
+        0x10 data: Inline<ObjectiveTargetData>,
+    }
+
+    /// `BGSQuestObjective::Target::Data` (JIP LN NVSE), 0x38 bytes: its teleport links, a
+    /// `BSSimpleArray` at +0x10 (data +0x14, size +0x18).
+    pub struct ObjectiveTargetData: 0x38 {
+        0x14 linksData: u32,
+        0x18 linksSize: u32,
+    }
+
+    /// `ImageSpaceModifierInstance(Form)` (JIP LN NVSE, from its header only: only read here):
+    /// hidden +8; a form instance's modifier +0x1C.
+    pub struct ImageSpaceModifierInstanceForm: 0x30 {
+        0x08 hidden: u8,
+        0x1C imageSpaceMod: u32,
+    }
+
+    /// `TES` (JIP LN NVSE, from its header only: only read here), `*0x011DEA10`: the active
+    /// image space modifiers (a `tList`) +0x6C.
+    pub struct Tes: 0xC4 {
+        0x6C activeIMODs: Inline<ListNode>,
+    }
+
+    /// `DataHandler` (JIP LN NVSE, from its header only: only read here), `*0x011C3F2C`: the
+    /// recipes (a `tList`) +0xA0.
+    pub struct DataHandler: 0x63C {
+        0xA0 recipeList: Inline<ListNode>,
+    }
+}

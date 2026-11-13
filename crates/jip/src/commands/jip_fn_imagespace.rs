@@ -1,6 +1,5 @@
 //! `functions_jip/jip_fn_imagespace.h` (JIP LN NVSE): an image space's 33 values and an image
-//! space modifier's values. 4 of its 5 commands (`GetActiveIMODs` waits: it builds an NVSE array
-//! from the game's list of running modifiers). The forms are read as `kParamType_ImageSpace` and
+//! space modifier's values, and the running modifiers. All 5 of its commands. The forms are read as `kParamType_ImageSpace` and
 //! `kParamType_ImageSpaceModifier`, whose type checks xNVSE's reader makes.
 //!
 //! An image space's values are 33 floats from +0x18 (`traitValues`; the image space loader
@@ -20,8 +19,12 @@
 //! Cast of the script's float into those bytes, from JIP's source: `UInt8(value) & 3`
 //! (`cvttss2si`, its low byte, then the low two bits).
 
-use super::forms::{ColorKey, FloatKey, TESImageSpace, TESImageSpaceModifier};
-use super::{cvttss2si, Handlers};
+use super::arrays::{create_array, Element, TempElements};
+use super::forms::{
+    ColorKey, FloatKey, ImageSpaceModifierInstanceForm, TESImageSpace, TESImageSpaceModifier, Tes,
+    IMOD_INSTANCE_FORM_VTBL,
+};
+use super::{cvttss2si, is_type, list_items, Handlers};
 use engine_core::prelude::*;
 use nvse::commands::Read;
 use nvse::{handled, CommandArgs};
@@ -32,6 +35,7 @@ pub static COMMANDS: Handlers = &[
     (0x27cd, set_image_space_trait),
     (0x27ce, get_image_space_mod_trait),
     (0x27cf, set_image_space_mod_trait),
+    (0x28a0, get_active_imods),
 ];
 
 /// The size of a float interpolator and of a colour interpolator.
@@ -179,6 +183,42 @@ fn set_image_space_mod_trait(e: &mut Engine, w: &[u32]) -> Ret {
         e.set(m.index(i, FLOAT_INTERPOLATOR), M::fltIntrpl2Value, value);
         let key = float_key(e, m, M::data70C, i);
         e.set(key, FloatKey::value, value);
+    }
+    handled(true)
+}
+
+/// `TES::GetSingleton` (`*0x011DEA10`).
+const TES: u32 = 0x011d_ea10;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_imagespace.h:
+// Cmd_GetActiveIMODs_Execute.
+/// An array of the modifiers of the running form instances (vtable
+/// `ImageSpaceModifierInstanceForm`) that are not hidden, in the list's order, a null modifier
+/// skipped; no array when there are none. Without the `TES` (before the game makes it) JIP would
+/// read through null; the port answers none.
+fn get_active_imods(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let tes = e.mem.u32(TES);
+    if tes == 0 {
+        return handled(true);
+    }
+    let mut tmp = TempElements::new();
+    for i in list_items(e, Ptr::<Tes>::new(tes).at(Tes::activeIMODs)) {
+        if i == 0 || !is_type(e, i, IMOD_INSTANCE_FORM_VTBL) {
+            continue;
+        }
+        let inst = Ptr::<ImageSpaceModifierInstanceForm>::new(i);
+        if e.get(inst, ImageSpaceModifierInstanceForm::hidden) != 0 {
+            continue;
+        }
+        let imod = e.get(inst, ImageSpaceModifierInstanceForm::imageSpaceMod);
+        if imod != 0 {
+            tmp.append(Element::Form(imod));
+        }
+    }
+    if !tmp.is_empty() {
+        let id = create_array(e, a.script, &tmp.0);
+        a.set_result(e, f64::from(id));
     }
     handled(true)
 }

@@ -88,6 +88,8 @@ pub struct Jip {
     pub ln_events: ln_events::State,
     /// JIP's UI hooks and their events.
     pub ui_hooks: ui_hooks::State,
+    /// What JIP's quest commands keep between calls.
+    pub quest: commands::jip_fn_quest::State,
 }
 
 /// JIP as xNVSE knows it once loaded (`NVSEPlugin_Query`, `NVSEPlugin_Load`): its DLL, name,
