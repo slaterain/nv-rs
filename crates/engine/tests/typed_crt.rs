@@ -247,6 +247,7 @@ fn sqrt_body() {
         math::sqrt_body(bool, f64, u32, u32) -> f64
     ))
     .common()
+    .sets_control_word()
     .inputs(&[Input::F64, Input::Of(CONTROL_WORDS), Input::Of(GLOBALS)])
     .float_sweep(FLOAT_SWEEP)
     .setup(with(|e, case| {
