@@ -191,7 +191,8 @@ fn geometry_list(e: &mut Engine, l: u32, items: &[u32], fence: usize) {
     }
     nodes.reverse();
     e.mem.set_u32(l + 0xe0, next);
-    e.mem.set_u32(l + 0x138, nodes.get(fence).copied().unwrap_or(0));
+    e.mem
+        .set_u32(l + 0x138, nodes.get(fence).copied().unwrap_or(0));
 }
 
 /// Six planes from the case's floats at `f`..: normals (`f`, `f + 1`, 1.0) etc., distances spread.
@@ -234,7 +235,11 @@ fn lights_bound_within_frustum() {
         stand_ins(e);
         let p = planes(case, 2);
         let l = light(e, &p, case.word(0), 0, 0, 1);
-        let bound = block(e, 0x10, &[bits(case, 5), bits(case, 6), bits(case, 7), case.word(1)]);
+        let bound = block(
+            e,
+            0x10,
+            &[bits(case, 5), bits(case, 6), bits(case, 7), case.word(1)],
+        );
         vec![l, bound]
     })
     .run()
@@ -271,7 +276,11 @@ fn lights_bound_within_radius() {
         let ni = ni_light(e, case, 4, case.word(3), rtti);
         let p = planes(case, 4);
         let l = light(e, &p, 0, ni, 0, 0);
-        let bound = block(e, 0x10, &[bits(case, 6), bits(case, 7), bits(case, 5), HALF]);
+        let bound = block(
+            e,
+            0x10,
+            &[bits(case, 6), bits(case, 7), bits(case, 5), HALF],
+        );
         let given = if case.word(1) != 0 { ni } else { 0 };
         vec![l, bound, given, case.word(2)]
     })
@@ -307,49 +316,47 @@ fn lights_add_tri_geom() {
     // The guard set or not; a +0xc0 object or none and the geometry test's answer; the property's
     // kind (none, 0 is none, 1, 4, 12, 13); where the geometry is in the list (absent, before the
     // fence, at it, after it) and the fence (none, item 1); the property test's answer; a bound.
-    Diff::new(entry!(
-        0x00b9_f480,
-        walk::add_tri_geom(Ptr<_>, u32)
-    ))
-    .common()
-    .inputs(&[
-        Input::Flag,
-        Input::Of(&[0, 1, 2]),
-        Input::Of(&[0, 1, 4, 12, 13]),
-        Input::Of(&[0, 1, 2, 3]),
-        Input::Of(&[1, 9]),
-        Input::Flag,
-        Input::Flag,
-    ])
-    .max_cases(256)
-    .setup(|e, case| {
-        stand_ins(e);
-        e.mem.set_u32(ADD_GUARD, case.word(0));
-        set_logged_answer(e, 0x02, u32::from(case.word(1) != 2));
-        set_logged_answer(e, 0x03, case.word(5));
-        let g = geometry(e, case.word(1) != 0, case.word(2), case.word(6) != 0);
-        let others: Vec<u32> = (0..3).map(|_| geometry(e, true, 1, true)).collect();
-        let mut items = others.clone();
-        match case.word(3) {
-            1 => items.insert(0, g),
-            2 => items.insert(1, g),
-            3 => items.push(g),
-            _ => {}
-        }
-        let p = planes(case, 0);
-        let l = light(e, &p, 0, 0, 0, 0);
-        geometry_list(e, l, &items, case.word(4) as usize);
-        vec![l, g]
-    })
-    .run()
-    .assert_same();
+    Diff::new(entry!(0x00b9_f480, walk::add_tri_geom(Ptr<_>, u32)))
+        .common()
+        .inputs(&[
+            Input::Flag,
+            Input::Of(&[0, 1, 2]),
+            Input::Of(&[0, 1, 4, 12, 13]),
+            Input::Of(&[0, 1, 2, 3]),
+            Input::Of(&[1, 9]),
+            Input::Flag,
+            Input::Flag,
+        ])
+        .max_cases(256)
+        .setup(|e, case| {
+            stand_ins(e);
+            e.mem.set_u32(ADD_GUARD, case.word(0));
+            set_logged_answer(e, 0x02, u32::from(case.word(1) != 2));
+            set_logged_answer(e, 0x03, case.word(5));
+            let g = geometry(e, case.word(1) != 0, case.word(2), case.word(6) != 0);
+            let others: Vec<u32> = (0..3).map(|_| geometry(e, true, 1, true)).collect();
+            let mut items = others.clone();
+            match case.word(3) {
+                1 => items.insert(0, g),
+                2 => items.insert(1, g),
+                3 => items.push(g),
+                _ => {}
+            }
+            let p = planes(case, 0);
+            let l = light(e, &p, 0, 0, 0, 0);
+            geometry_list(e, l, &items, case.word(4) as usize);
+            vec![l, g]
+        })
+        .run()
+        .assert_same();
 }
 
 /// An object tree from `k`: a root node with five children: a geometry, a culled geometry (flag 1),
 /// a null child, a node with two geometries (one without a bound, one with flag 0x800), and a
 /// geometry with a zero radius; the bounds' centres from the case's floats at `f`.
 fn tree(e: &mut Engine, case: &Case, k: u32, f: usize) -> u32 {
-    let bound = |e: &mut Engine, x: u32, r: u32| block(e, 0x10, &[x, bits(case, f), bits(case, f + 1), r]);
+    let bound =
+        |e: &mut Engine, x: u32, r: u32| block(e, 0x10, &[x, bits(case, f), bits(case, f + 1), r]);
     let leaf = |e: &mut Engine, flags: u32, b: u32| {
         let g = geometry(e, true, 1 + (k % 2) * 3, false);
         e.mem.set_u32(g + 0x30, flags);
@@ -479,7 +486,11 @@ fn lights_bound_rounding() {
         e.mem.set_u32(ni + 0xe0, 0x4133_35fe);
         let p = [[0; 4]; 6];
         let l = light(e, &p, 0, ni, 0, 0);
-        let bound = block(e, 0x10, &[0xc000_ddde, 0x4045_b340, 0x3f7e_fb10, 0x3f2d_8a3c]);
+        let bound = block(
+            e,
+            0x10,
+            &[0xc000_ddde, 0x4045_b340, 0x3f7e_fb10, 0x3f2d_8a3c],
+        );
         vec![l, bound, 0, ONE]
     })
     .run()
@@ -499,7 +510,11 @@ fn lights_bound_rounding() {
         let mut p = [[0; 4]; 6];
         p[0] = [0x3e85_bb48, 0x3f5b_c6c8, 0xbe60_7317, 0x3f87_95ec];
         let l = light(e, &p, 1, 0, 0, 1);
-        let bound = block(e, 0x10, &[0x40de_380f, 0x4086_59b8, 0xc082_c0fd, 0x40a8_255b]);
+        let bound = block(
+            e,
+            0x10,
+            &[0x40de_380f, 0x4086_59b8, 0xc082_c0fd, 0x40a8_255b],
+        );
         vec![l, bound]
     })
     .run()

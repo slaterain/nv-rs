@@ -133,8 +133,7 @@ pub fn bound_within_radius(
     let node = e.global::<u32>(SCENE_NODE);
     let b = bound.addr();
     let moved: [f32; 3] = [0u32, 1, 2].map(|i| {
-        let delta =
-            f(e, light.wrapping_add(WORLD_TRANSLATE + 4 * i)) - f(e, b.wrapping_add(4 * i));
+        let delta = f(e, light.wrapping_add(WORLD_TRANSLATE + 4 * i)) - f(e, b.wrapping_add(4 * i));
         f(e, node.wrapping_add(LIGHTING_OFFSET + 4 * i)) + delta
     });
     let squared = squared_length(moved[0], moved[1], moved[2]);
@@ -159,7 +158,11 @@ pub fn add_tri_geom(e: &mut Engine, this: Ptr<ShadowSceneLight>, geometry: u32) 
         e.call(ATEXIT, &args![ADD_STATIC_DESTRUCT]);
     }
     let object = e.mem.u32(geometry.wrapping_add(0xc0));
-    if object == 0 || e.call(GEOMETRY_TEST, &args![object, GEOMETRY_TEST_RECORD]).u32() == 0 {
+    if object == 0
+        || e.call(GEOMETRY_TEST, &args![object, GEOMETRY_TEST_RECORD])
+            .u32()
+            == 0
+    {
         return;
     }
     if geometry.wrapping_add(0x9c) == 0 {
