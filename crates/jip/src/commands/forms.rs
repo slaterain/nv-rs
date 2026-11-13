@@ -328,6 +328,8 @@ pub mod form_type_more {
     pub const BGS_PROJECTILE: u8 = 0x33;
     pub const TES_WATER_FORM: u8 = 0x4e;
     pub const TES_AMMO_EFFECT: u8 = 0x72;
+    pub const TES_QUEST: u8 = 0x47;
+    pub const BGS_PERK: u8 = 0x56;
     pub const TES_LAND_TEXTURE: u8 = 0x12;
     pub const ENCHANTMENT_ITEM: u8 = 0x13;
     pub const TES_WORLD_SPACE: u8 = 0x41;
@@ -560,9 +562,32 @@ layout! {
     /// `TESObjectWEAP` (JIP LN NVSE), the fields the LN weapon commands use, checked in the
     /// weapon loader (`0051F630`: `DNAM` at +0xF4, `CRDT` at +0x1C0, `VATS` at +0x370).
     pub struct TESObjectWEAP: 0x388 {
+        /// `textureSwap` (JIP LN NVSE): the weapon's own model.
+        0x03C textureSwap: Inline<TESModelTextureSwap>,
+        /// `pickupPutdownSounds` (+0xE8, JIP LN NVSE): its pickup and putdown sounds.
+        0x0EC pickupSound: u32,
+        0x0F0 putdownSound: u32,
+        0x11F embedWeaponAV: u8,
+        0x128 onHit: u32,
+        /// `semiAutoFireDelay[2]` (JIP LN NVSE): minimum, maximum (the loader's defaults 0.1, 0.5).
+        0x174 semiAutoFireDelay: f32,
+        /// `effectMods[3]` (JIP LN NVSE).
+        0x180 effectMods: u32,
+        /// `value1Mod[3]` (JIP LN NVSE).
+        0x18C value1Mod: f32,
+        0x1A1 modReloadAnim: u8,
         0x1A8 killImpulse: f32,
         0x1B8 impulseDist: f32,
         0x1C8 critDamageFlags: u8,
+        0x1D0 shellCasingModel: Inline<TESModel>,
+        /// `sounds[12]` (JIP LN NVSE).
+        0x21C sounds: u32,
+        /// `modModels[7]` (JIP LN NVSE).
+        0x270 modModels: Inline<TESModelTextureSwap>,
+        /// `itemMod[3]` (JIP LN NVSE).
+        0x350 itemMod: u32,
+        0x35C embeddedNodeName: Inline<BSStringT>,
+        0x364 soundLevel: u32,
         0x370 VATSEffect: u32,
     }
 
@@ -620,4 +645,59 @@ pub mod form_type_ln {
     pub const BGS_VOICE_TYPE: u8 = 0x5d;
     pub const TES_REPUTATION: u8 = 0x68;
     pub const TES_CASINO: u8 = 0x6d;
+    pub const TES_OBJECT_ACTI: u8 = 0x15;
+    pub const BGS_TALKING_ACTIVATOR: u8 = 0x16;
+    pub const BGS_PLACEABLE_WATER: u8 = 0x23;
+    pub const TES_OBJECT_IMOD: u8 = 0x67;
+}
+
+layout! {
+    /// `TESObjectACTI` (JIP LN NVSE), checked in the activator loader (`00510A90`: `SNAM` +0x74,
+    /// `VNAM` +0x78, `WNAM` +0x80, `RNAM` +0x84 through their setters; `XATO` into the prompt).
+    pub struct TESObjectACTI: 0x90 {
+        0x74 loopingSound: u32,
+        0x78 activationSound: u32,
+        0x80 waterType: u32,
+        0x84 radioStation: u32,
+        0x88 activationPrompt: Inline<BSStringT>,
+    }
+
+    /// `BGSPlaceableWater` (JIP LN NVSE), the water (+0x4C).
+    pub struct BGSPlaceableWater: 0x50 {
+        0x4C water: u32,
+    }
+
+    /// A perk entry of the quest or ability kind (JIP LN NVSE): its form (the quest or the spell,
+    /// +8) and a quest entry's stage (+0xC); the loaders `005E9B00`/`005E9E20` read `DATA` at +8.
+    pub struct BGSQuestPerkEntry: 0x10 {
+        /// `quest` / `ability` (JIP LN NVSE).
+        0x08 form: u32,
+        0x0C stage: u8,
+    }
+
+    /// `BGSEntryPointPerkEntry` (JIP LN NVSE), checked in its loader (`005EA790`: `DATA`, 3 bytes,
+    /// at +8; the function data at +0xC).
+    pub struct BGSEntryPointPerkEntry: 0x14 {
+        0x08 entryPoint: u8,
+        0x0C data: u32,
+    }
+
+    /// An entry point's function data (JIP LN NVSE): one or two floats from +4, a leveled list at
+    /// +4, or an activation choice's label at +4, by its vtable.
+    pub struct EntryPointData: 0x14 {
+        /// `value` / `value[0]` (JIP LN NVSE).
+        0x04 value: f32,
+        /// `value[1]` (JIP LN NVSE).
+        0x08 value2: f32,
+    }
+}
+
+#[allow(non_upper_case_globals)]
+impl EntryPointData {
+    /// `leveledList` (JIP LN NVSE): the word at +4 of leveled list data.
+    pub const word: engine_core::ptr::Field<EntryPointData, u32> =
+        engine_core::ptr::Field::new(0x04);
+    /// `label` (JIP LN NVSE): the game string at +4 of activation choice data.
+    pub const label: engine_core::ptr::Field<EntryPointData, Inline<BSStringT>> =
+        engine_core::ptr::Field::new(0x04);
 }
