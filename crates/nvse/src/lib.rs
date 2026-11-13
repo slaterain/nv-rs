@@ -54,6 +54,7 @@ pub mod cnum;
 pub mod commands;
 pub mod context;
 pub mod cosave;
+pub mod decompile;
 pub mod errors;
 pub mod event_commands;
 pub mod events;

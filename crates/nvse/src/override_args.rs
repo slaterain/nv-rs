@@ -156,6 +156,10 @@ fn evaluator(
         suppress_errors: false,
         base_offset: Some(offset.wrapping_sub(4)),
         inline: false,
+        limit: u32::MAX,
+        expr_end: u32::MAX,
+        overrun: false,
+        resolved_vars: None,
     }
 }
 
