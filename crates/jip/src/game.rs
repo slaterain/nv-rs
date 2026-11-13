@@ -91,6 +91,12 @@ layout! {
         /// `pGrabbedObject` (Xbox PDB; JIP's `grabbedRef`, `// 638`): the reference the player
         /// holds; the constructor `00938180` clears it.
         0x638 pGrabbedObject: u32,
+        /// `activeQuest`, `questObjectiveList` and `questTargetList` (JIP LN NVSE, `// 6B8`,
+        /// `6BC`, `6C4`): `GetCurrentQuestObjectiveTargets` (`00952BA0`) reads the quest at
+        /// +0x6B8 and the objectives at +0x6BC and answers the target list at +0x6C4.
+        0x6B8 activeQuest: u32,
+        0x6BC questObjectiveList: Inline<ListNode>,
+        0x6C4 questTargetList: Inline<ListNode>,
     }
 
     /// `OSInputGlobals` (JIP LN NVSE; the exe's `Controls`, `*0x011F35CC`), 0x1C04 bytes: the
@@ -198,8 +204,16 @@ layout! {
     pub struct TESQuest: 0x6C {
         /// `TESScriptableForm::pFormScript` (Xbox PDB).
         0x1C pFormScript: u32,
+        /// `questFlags` (JIP LN NVSE): the quest loader (`0060CEB0`) reads `DATA` (8 bytes) at
+        /// +0x3C, the flags its first byte.
+        0x3C questFlags: u8,
+        /// `lVarOrObjectives` (JIP LN NVSE): objectives and variables, a `tList`.
+        0x4C lVarOrObjectives: Inline<ListNode>,
         /// `pScriptLocals` (Xbox PDB): the event list.
         0x5C pScriptLocals: u32,
+        /// `currentStage` (JIP LN NVSE): `TESQuest::SetStage` (`0060D510`) writes the byte at
+        /// +0x60.
+        0x60 currentStage: u8,
     }
 
     /// `BGSPerk` (Xbox PDB), the fields JIP reads.
