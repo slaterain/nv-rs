@@ -6,7 +6,7 @@
 //! byte `FNAM` at +0x20); JIP's `GetGlobalRef`/`SetGlobalRef` keep a form id in the same word and
 //! mark it with bit 0x200 of the form's flags (a bit the game leaves alone in globals), so the id
 //! is mapped to today's load order once, the first time it is read after a load
-//! (`GetResolvedRefID`: an id of a file no longer loaded stays as it was).
+//! (`GetResolvedRefID`: an id of a file no longer loaded becomes 0, in the global too).
 
 use super::forms::{TESForm, TESGlobal};
 use super::{ref_id, Handlers};
@@ -67,13 +67,11 @@ fn get_global_ref(e: &mut Engine, w: &[u32]) -> Ret {
         let flags = e.get(form_flags(g), TESForm::iFormFlags);
         if flags & REF_RESOLVED == 0 {
             e.set(form_flags(g), TESForm::iFormFlags, flags | REF_RESOLVED);
-            // `GetResolvedRefID(&uRefID)` rewrites the id's top byte only when its file is
-            // still loaded; otherwise the word stays.
+            // `GetResolvedRefID(&uRefID)` writes its answer through the pointer: the id with
+            // today's file index, 0 for a file no longer loaded (0 and ids of file 0xFF stay).
             let id = e.get(g, TESGlobal::data);
             let now = crate::cosave::resolved_ref_id(e, id);
-            if now != 0 {
-                e.set(g, TESGlobal::data, now);
-            }
+            e.set(g, TESGlobal::data, now);
         }
         let id = e.get(g, TESGlobal::data);
         a.set_form_result(e, id);

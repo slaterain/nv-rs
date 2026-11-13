@@ -43,9 +43,14 @@ fn the_value() {
 #[test]
 fn a_ref_set_and_read() {
     let mut e = setup();
+    e.mem.set_u32(GLOB + 8, 0x8000_0041);
     call(&mut e, 0x27d6, &[r(1), r(2)]);
     assert_eq!(e.mem.u32(GLOB + 0x24), 0x0700_0999);
-    assert_eq!(e.mem.u32(GLOB + 8) & 0x200, 0x200, "marked");
+    assert_eq!(
+        e.mem.u32(GLOB + 8),
+        0x8000_0241,
+        "marked, the other flags kept"
+    );
     call(&mut e, 0x27d5, &[r(1)]);
     assert_eq!(form_result(&e), 0x0700_0999, "marked: read as it is");
     call(&mut e, 0x27d6, &[r(1)]);
@@ -69,11 +74,12 @@ fn a_ref_from_a_save_is_mapped_once() {
 }
 
 #[test]
-fn a_ref_of_a_file_no_longer_loaded_stays() {
+fn a_ref_of_a_file_no_longer_loaded_becomes_0() {
     let mut e = setup();
     e.mem.set_u32(GLOB + 0x24, 0x0500_1234);
     call(&mut e, 0x27d5, &[r(1)]);
-    assert_eq!(form_result(&e), 0x0500_1234, "the word as it was");
+    assert_eq!(form_result(&e), 0, "0 answered");
+    assert_eq!(e.mem.u32(GLOB + 0x24), 0, "and written into the global");
     assert_eq!(e.mem.u32(GLOB + 8), 0x200);
     // An id made in the game (file 0xFF) and 0 stay too.
     e.mem.set_u32(GLOB + 8, 0);
@@ -84,4 +90,20 @@ fn a_ref_of_a_file_no_longer_loaded_stays() {
     e.mem.set_u32(GLOB + 0x24, 0);
     call(&mut e, 0x27d5, &[r(1)]);
     assert_eq!(form_result(&e), 0);
+}
+
+/// The global is read as `kParamType_Global`: a misc item holding the same bytes is refused by
+/// xNVSE's reader, so every command answers 0 and leaves its bytes.
+#[test]
+fn another_form_type_is_left_alone() {
+    let mut e = setup();
+    e.mem.set_u32(MISC + 8, 0x40);
+    e.mem.set_u32(MISC + 0x24, 0x0700_1234);
+    let before = e.mem.bytes(MISC, 0x28);
+    assert_eq!(call(&mut e, 0x2626, &[r(2)]).1, 0.0);
+    call(&mut e, 0x2627, &[r(2), z(5.0)]);
+    call(&mut e, 0x27d5, &[r(2)]);
+    assert_eq!(form_result(&e), 0);
+    call(&mut e, 0x27d6, &[r(2), r(1)]);
+    assert_eq!(e.mem.bytes(MISC, 0x28), before);
 }

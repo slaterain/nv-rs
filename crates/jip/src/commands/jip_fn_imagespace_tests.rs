@@ -152,3 +152,43 @@ fn modifier_animated_values() {
         );
     }
 }
+
+/// Both forms are read by type (`kParamType_ImageSpace`, `kParamType_ImageSpaceModifier`): a
+/// misc item holding the same bytes, and each form where the other is wanted, are refused by
+/// xNVSE's reader, so every command answers 0 and leaves the bytes.
+#[test]
+fn other_form_types_are_left_alone() {
+    let mut e = setup();
+    const MISC: u32 = FORMS + 0x8000;
+    let bytes = e.mem.bytes(IMAD, 0x730);
+    e.mem.write(MISC, &bytes);
+    form(&mut e, MISC, 0x1f, 0x0000_0999);
+    e.mem.set_f32(MISC + 0x24, 1.0);
+    set_ref(&mut e, 3, MISC);
+    let misc = e.mem.bytes(MISC, 0x730);
+    let keys = e.mem.bytes(KEYS, 0x600);
+    let imgs = e.mem.bytes(IMGS, 0xb0);
+    let imad = e.mem.bytes(IMAD, 0x730);
+    for (who, other) in [(3u16, 3u16), (2, 1)] {
+        for t in [0, 21, 32] {
+            assert_eq!(
+                call(&mut e, 0x27cc, &[r(who), n(t)]).1,
+                0.0,
+                "image space {t}"
+            );
+            call(&mut e, 0x27cd, &[r(who), n(t), z(5.0)]);
+        }
+        for t in [0, 3, 47, 55, 64] {
+            assert_eq!(
+                call(&mut e, 0x27ce, &[r(other), n(t)]).1,
+                0.0,
+                "modifier {t}"
+            );
+            call(&mut e, 0x27cf, &[r(other), n(t), z(5.0)]);
+        }
+    }
+    assert_eq!(e.mem.bytes(MISC, 0x730), misc);
+    assert_eq!(e.mem.bytes(KEYS, 0x600), keys);
+    assert_eq!(e.mem.bytes(IMGS, 0xb0), imgs);
+    assert_eq!(e.mem.bytes(IMAD, 0x730), imad);
+}

@@ -31,3 +31,22 @@ fn the_flags() {
     set(&mut e, 3, 1);
     assert_eq!(e.mem.bytes(PERK, 0x50), before, "flag 3: nothing");
 }
+
+/// The perk is read as `kParamType_Perk`: a misc item holding set bytes is refused by xNVSE's
+/// reader, so both commands answer 0 and leave its bytes.
+#[test]
+fn another_form_type_is_left_alone() {
+    let mut e = engine();
+    const MISC: u32 = FORMS + 0x2000;
+    form(&mut e, MISC, 0x1f, 0x0000_0999);
+    set_ref(&mut e, 1, MISC);
+    for off in [0x38, 0x3b, 0x3c] {
+        e.mem.set_u8(MISC + off, 1);
+    }
+    let before = e.mem.bytes(MISC, 0x50);
+    for f in 0..3 {
+        assert_eq!(call(&mut e, 0x27be, &[r(1), n(f)]).1, 0.0, "flag {f}");
+        call(&mut e, 0x27bf, &[r(1), n(f), n(0)]);
+    }
+    assert_eq!(e.mem.bytes(MISC, 0x50), before);
+}

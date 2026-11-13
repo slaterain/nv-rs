@@ -28,3 +28,21 @@ fn the_reputation() {
     call(&mut e, 0x2629, &[r(1)]);
     assert_eq!(e.mem.u32(FACT + 0x38), 0, "cleared");
 }
+
+/// The faction is read as `kParamType_Faction`: a misc item with a word at +0x38 is refused by
+/// xNVSE's reader, so both commands answer 0 and leave its bytes.
+#[test]
+fn another_form_type_is_left_alone() {
+    let mut e = engine();
+    form(&mut e, REPU, 0x68, 0x0000_4e90);
+    form(&mut e, MISC, 0x1f, 0x0000_0999);
+    set_ref(&mut e, 1, MISC);
+    set_ref(&mut e, 2, REPU);
+    e.mem.set_u32(MISC + 0x38, REPU);
+    let before = e.mem.bytes(MISC, 0x4c);
+    call(&mut e, 0x2628, &[r(1)]);
+    assert_eq!(form_result(&e), 0);
+    call(&mut e, 0x2629, &[r(1), r(2)]);
+    call(&mut e, 0x2629, &[r(1)]);
+    assert_eq!(e.mem.bytes(MISC, 0x4c), before);
+}

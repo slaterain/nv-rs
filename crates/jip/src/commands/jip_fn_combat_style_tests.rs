@@ -115,3 +115,28 @@ fn the_flags() {
     set(&mut e, 16, 0);
     assert_eq!(e.mem.u32(CSTY + 0xa8), 0xffff_0009, "flag 16: nothing");
 }
+
+/// The style is read as `kParamType_CombatStyle`: a misc item holding the same bytes is refused
+/// by xNVSE's reader, so every command answers 0 and leaves its bytes.
+#[test]
+fn another_form_type_is_left_alone() {
+    let mut e = setup();
+    const MISC: u32 = FORMS + 0x3000;
+    let bytes = e.mem.bytes(CSTY, 0x108);
+    e.mem.write(MISC, &bytes);
+    form(&mut e, MISC, 0x1f, 0x0000_0999);
+    for i in 0x18..0x108 {
+        e.mem.set_u8(MISC + i, 0x01);
+    }
+    set_ref(&mut e, 2, MISC);
+    let before = e.mem.bytes(MISC, 0x108);
+    for t in 0..64 {
+        assert_eq!(call(&mut e, 0x2630, &[r(2), n(t)]).1, 0.0, "get {t}");
+        call(&mut e, 0x2631, &[r(2), n(t), z(2.0)]);
+    }
+    for f in 0..16 {
+        assert_eq!(call(&mut e, 0x2632, &[r(2), n(f)]).1, 0.0, "flag {f}");
+        call(&mut e, 0x2633, &[r(2), n(f), n(0)]);
+    }
+    assert_eq!(e.mem.bytes(MISC, 0x108), before);
+}

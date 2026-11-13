@@ -168,3 +168,96 @@ fn the_forms() {
     call(&mut e, 0x292b, &[r(1)]);
     assert_eq!(form_result(&e), 0x0f11);
 }
+
+thread_local! {
+    static LINES: std::cell::RefCell<Vec<Vec<u8>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The console echo of `GetWorldspaceClimate`: the climate used (the parent's when the flag is
+/// on), `0` with none; nothing outside the console.
+#[test]
+fn the_climate_echoed() {
+    const CONSOLE: u32 = 0x0200_f000;
+    const NAME: u32 = FORMS + 0x5800;
+    let mut e = setup();
+    LINES.with(|l| l.borrow_mut().clear());
+    e.register(0x0071_b160, |_, _| Ret {
+        eax: CONSOLE,
+        ..Ret::default()
+    });
+    e.register(0x0071_d0a0, |e, a| {
+        LINES.with(|l| l.borrow_mut().push(nvse::table::guest_text(e, a[1])));
+        Ret::default()
+    });
+    e.register(0x005e_1550, |e, w| e.call(w[0], &w[1..9]));
+    let vtbl = FORMS + 0x6000;
+    e.mem.set_u32(CLIMATE, vtbl);
+    e.mem.set_u32(vtbl + 0x130, 0x0050_0000);
+    e.register(0x0050_0000, |_, _| Ret {
+        eax: NAME,
+        ..Ret::default()
+    });
+    e.mem.write(NAME, b"Mojave\0");
+    e.mem.set_u32(ROOT + 0x40, CLIMATE);
+    e.mem.set_u32(CHILD + 0x70, ROOT);
+    console(&mut e, true);
+    let run = |e: &mut Engine| {
+        let words = crate::test_support::line(e, 0x26d3, &[r(2)]);
+        let execute = crate::test_support::execute_of(e, 0x26d3);
+        let mut all = vec![execute];
+        all.extend_from_slice(&words);
+        e.call(0x005e_1550, &all);
+    };
+    run(&mut e);
+    e.mem.set_u16(CHILD + 0x4e, 0x10);
+    run(&mut e);
+    console(&mut e, false);
+    run(&mut e);
+    let lines: Vec<String> = LINES
+        .with(|l| l.borrow().clone())
+        .into_iter()
+        .map(|l| String::from_utf8(l).unwrap())
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            "GetWorldspaceClimate >> 0",
+            "GetWorldspaceClimate >> C11 \"Mojave\"",
+        ]
+    );
+}
+
+/// The flag "use the parent's climate" is cleared only when there is a parent.
+#[test]
+fn the_flag_stays_without_a_parent() {
+    let mut e = setup();
+    e.mem.set_u16(ROOT + 0x4e, 0x10);
+    call(&mut e, 0x26d4, &[r(1), r(3)]);
+    assert_eq!(e.mem.u32(ROOT + 0x40), CLIMATE);
+    assert_eq!(e.mem.u16(ROOT + 0x4e), 0x10, "no parent: the flag stays");
+}
+
+/// The worldspace is read as `kParamType_WorldSpace` (any form for the noise texture's setter,
+/// tested above): a misc item holding the same words is refused by xNVSE's reader, so every
+/// command answers 0 or "" and leaves its bytes.
+#[test]
+fn another_form_type_is_left_alone() {
+    let mut e = setup();
+    for off in (0x34..0xec).step_by(4) {
+        e.mem.set_u32(MISC + off, CLIMATE);
+    }
+    e.mem.set_u16(MISC + 0x4e, 0x10);
+    let before = e.mem.bytes(MISC, 0xec);
+    for get in [0x26d3, 0x27d9, 0x27db, 0x292b] {
+        call(&mut e, get, &[r(7)]);
+        assert_eq!(form_result(&e), 0, "{get:04x}");
+    }
+    let (_, res) = call(&mut e, 0x27d7, &[r(7)]);
+    assert_eq!(string_result(&e, res), b"");
+    assert_eq!(call(&mut e, 0x26e7, &[r(7), n(0)]).1, 0.0);
+    call(&mut e, 0x26e8, &[r(7), n(0), n(0)]);
+    call(&mut e, 0x26d4, &[r(7), r(3)]);
+    call(&mut e, 0x27da, &[r(7), r(4)]);
+    call(&mut e, 0x27dc, &[r(7), r(5)]);
+    assert_eq!(e.mem.bytes(MISC, 0xec), before);
+}
