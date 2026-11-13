@@ -153,6 +153,13 @@ fn the_hook_changes_the_games_copy() {
     assert_eq!(g(&e, 4), mask::BUTTON_X, "the guide: only the held button");
     assert_eq!(e.mem.u8(GAME_PAD_STATE + 6), 0xff, "held");
     assert_eq!(e.mem.i16(GAME_PAD_STATE + 0xa), 0, "up disabled: y centred");
+    // A trigger disabled and tapped: the tap wins (fully down), the disable kept.
+    state(&mut e).mods.trigger_mods = 0x33;
+    set_forward(0, pad_bytes(0, 0x40, 0x40, 0, 0, 0, 0));
+    read_game(&mut e);
+    assert_eq!(e.mem.u8(GAME_PAD_STATE + 6), 0xff, "left disabled and tapped");
+    assert_eq!(e.mem.u8(GAME_PAD_STATE + 7), 0xff, "right disabled and tapped");
+    assert_eq!(state(&mut e).mods.trigger_mods, 0x03);
     // Not ready: the byte set, or the forwarding failing: no change, the state not kept.
     e.mem.set_u8(CONTROLLER_OFF, 1);
     set_forward(0, pad_bytes(mask::BUTTON_B, 0, 0, 0, 0, 0, 0));
@@ -163,9 +170,13 @@ fn the_hook_changes_the_games_copy() {
     set_forward(NOT_CONNECTED, pad_bytes(mask::BUTTON_Y, 0, 0, 0, 0, 0, 0));
     assert_eq!(read_game(&mut e), NOT_CONNECTED);
     assert!(!state(&mut e).ready);
-    // Another buffer: the game's copy and the last answer.
+    // Another buffer: the game's copy and the last answer, the forwarding not asked (it would
+    // answer 0 and button A now).
+    set_forward(0, pad_bytes(mask::BUTTON_A, 0, 0, 0, 0, 0, 0));
     let answer = e.call(XINPUT_SLOT.addr(), &args![0u32, OTHER_STATE]).u32();
     assert_eq!(answer, NOT_CONNECTED);
+    assert_eq!(e.mem.u16(OTHER_STATE + 4), mask::BUTTON_Y);
+    assert!(!state(&mut e).ready, "the game's state not touched");
     assert_eq!(
         e.mem.bytes(OTHER_STATE, 16),
         e.mem.bytes(GAME_PAD_STATE, 16)
@@ -304,6 +315,9 @@ fn input_commands() {
     assert_eq!(run(&mut e, 0x1453, &[0x11]), (1, 1.0));
     assert_eq!(run(&mut e, 0x1453, &[0x11, 2]), (1, 0.0), "the raw state");
     assert_eq!(run(&mut e, 0x146b, &[4]), (1, 1.0));
+    // Control 28's keyboard byte would be the mouse's first: bound to the pressed key here, so
+    // only the refusal answers 0.
+    e.mem.set_u8(CONTROLS_AT + BINDINGS + 28, 0x11);
     assert_eq!(run(&mut e, 0x146b, &[28]), (1, 0.0), "past the 28");
     assert_eq!(run(&mut e, 0x1462, &[4, 0]).0, 1);
     assert!(is_key_disabled(&mut e, 0x11) && is_key_disabled(&mut e, 0x101));
