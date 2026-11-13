@@ -3220,7 +3220,7 @@ pub(crate) fn loaded_square_cells(e: &mut Engine, this: Ptr<TES>) -> u32 {
 ///
 /// Not translated: the compiler's exception-unwinding frame.
 pub fn fn_00453dc0(e: &mut Engine, this: Ptr<TES>, cell: Ptr, pos: Ptr) {
-    engine_core::draw_thread::finish(e);
+    engine_core::draw_thread::finish_at(e, 0x0045_3dc0);
     let script_context: u32 = e.global(SCRIPT_CONTEXT);
     if !fn_00451530(e, this) {
         let main: u32 = e.global(MAIN_OBJECT);

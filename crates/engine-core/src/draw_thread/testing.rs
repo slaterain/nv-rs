@@ -88,3 +88,58 @@ pub fn joins_first(e: &mut Engine, addr: u32, args: &[u32]) -> bool {
             .is_some_and(|s| s == JOINED),
     }
 }
+
+/// Whether `e`'s run is in a save's or a load's serial frames (`None`: the run is off).
+pub fn save_or_load_state(e: &Engine) -> Option<bool> {
+    with_run(e.kernel.id(), |r| r.save_or_load)
+}
+
+/// Sets `e`'s run's save-or-load state (the run must be on).
+pub fn set_save_or_load_state(e: &Engine, on: bool) {
+    with_run(e.kernel.id(), |r| r.save_or_load = on);
+}
+
+/// [`joins_first`] for a save's or a load's entry: it joins first, and the run is left in its save-or-load state.
+pub fn joins_first_into_save_or_load(e: &mut Engine, addr: u32, args: &[u32]) -> bool {
+    joins_first_then(
+        e,
+        addr,
+        args,
+        |e| save_or_load_state(e) == Some(true),
+        |_| {},
+    )
+}
+
+/// [`joins_first`] for OnIdle's entry: it joins first, and a save's or a load's serial frames end there.
+pub fn joins_first_ending_save_or_load(e: &mut Engine, addr: u32, args: &[u32]) -> bool {
+    joins_first_then(
+        e,
+        addr,
+        args,
+        |e| save_or_load_state(e) == Some(false),
+        |e| set_save_or_load_state(e, true),
+    )
+}
+
+/// [`joins_first`], then the call again with a join that does not stop (whatever the function does after it may
+/// stop: caught), `prepare` run on the turned-on run first, and `check` asked of the run after.
+fn joins_first_then(
+    e: &mut Engine,
+    addr: u32,
+    args: &[u32],
+    check: impl FnOnce(&Engine) -> bool,
+    prepare: impl FnOnce(&Engine),
+) -> bool {
+    if !joins_first(e, addr, args) {
+        return false;
+    }
+    turn_on(e, hooks_finishing_with(nothing));
+    prepare(e);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        e.call(addr, args);
+    }));
+    e.call_stack.clear();
+    let held = check(e);
+    turn_off(e);
+    held
+}

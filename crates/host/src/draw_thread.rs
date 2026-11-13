@@ -32,7 +32,9 @@ pub const HOOKED_DRAW_SET: &[u32] = &[0x00b5_4090];
 /// Whether the run may turn the thread on, and why not: it needs real threads with the render thread for play;
 /// stepped threads are the check form (the late gate), accepted.
 pub fn refusal(choice: &Choice) -> Option<&'static str> {
-    let stepped = choice.threads.trim() != crate::fixes::PLAY_THREADS;
+    // The scheme the host will run (any spelling of real threads counts as real).
+    let stepped =
+        engine::thread_host::Scheme::from_name(Some(&choice.threads)).map_or(true, |s| !s.real);
     if !stepped && !choice.render_thread {
         return Some("it needs the render thread with real threads (bRenderThread=1)");
     }
@@ -50,12 +52,13 @@ pub fn refusal(choice: &Choice) -> Option<&'static str> {
 /// not.
 pub fn install(e: &mut Engine, choice: &Choice) {
     if let Some(why) = refusal(choice) {
-        eprintln!("NV_DRAW_THREAD: off: {why}");
+        eprintln!("NV_DRAW_THREAD: refused, off: {why}");
         return;
     }
     engine::draw_thread::turn_on(e, hooks());
     eprintln!(
-        "NV_DRAW_THREAD: on (experimental): the world drawn on a thread of its own where it can be"
+        "NV_DRAW_THREAD: on (experimental): the seam is on, but every frame still draws on main until the \
+         draw family's packet hand-off is in"
     );
 }
 
@@ -88,21 +91,31 @@ const HAND_OFF_BUILT: bool = false;
 
 /// The families and hooks part of [`serial`] (the tests reach it directly).
 pub fn serial_families_and_hooks(e: &Engine) -> Option<&'static str> {
-    if draw_families()
+    families_reason(|f| e.typed_family_direct(f))
+        .or_else(|| hooks_reason(|a| !e.wraps_at(a).is_empty()))
+        .or_else(|| poison_reason(e.real.is_some(), engine_typed::draw::capture::mode()))
+}
+
+/// A family the draw runs in that is not direct (`direct` answers for each).
+pub fn families_reason(direct: impl Fn(FamilyId) -> bool) -> Option<&'static str> {
+    draw_families()
         .iter()
-        .any(|&(_, f)| !e.typed_family_direct(f))
-    {
-        return Some("a family the world draw runs in is not direct (switched off, or a hook or a fix row on it)");
-    }
-    if HOOKED_DRAW_SET.iter().any(|&a| !e.wraps_at(a).is_empty()) {
-        return Some("an extender hooks a function the world draw calls");
-    }
-    if e.real.is_some()
-        && engine_typed::draw::capture::mode() == engine_typed::draw::capture::Mode::Poison
-    {
-        return Some("NV_DRAW_THREAD=poison is a check for stepped threads only");
-    }
-    None
+        .any(|&(_, f)| !direct(f))
+        .then_some("a family the world draw runs in is not direct (switched off, or a hook or a fix row on it)")
+}
+
+/// A wrap on the hooked drawing set (`wrapped` answers for each address).
+pub fn hooks_reason(wrapped: impl Fn(u32) -> bool) -> Option<&'static str> {
+    HOOKED_DRAW_SET
+        .iter()
+        .any(|&a| wrapped(a))
+        .then_some("an extender hooks a function the world draw calls")
+}
+
+/// POISON with real threads: refused (the scribble would be read by the other threads).
+pub fn poison_reason(real: bool, mode: engine_typed::draw::capture::Mode) -> Option<&'static str> {
+    (real && mode == engine_typed::draw::capture::Mode::Poison)
+        .then_some("NV_DRAW_THREAD=poison is a check for stepped threads only")
 }
 
 fn hand_off_cut(_: &mut Engine, _camera: u32, _accumulator: u32, _stepped: bool) -> Option<Packet> {
@@ -152,13 +165,21 @@ mod tests {
         fn stand_in(_: &mut Engine, _: &[u32]) -> Ret {
             Ret::default()
         }
-        let mut e = Engine::new();
-        let all_direct = draw_families()
-            .iter()
-            .all(|&(_, f)| e.typed_family_direct(f));
-        if all_direct {
-            assert_eq!(serial_families_and_hooks(&e), None);
-        }
+        // The eight families applied, geometry turned on (it is off by default: until it is, the draw stays on
+        // main).
+        let mut e = Engine::new_untyped_for_test();
+        let families: Vec<&engine::typed::Family> = vec![
+            &engine_typed::draw::DRAW,
+            &engine_typed::draw_f::DRAW_F,
+            &engine_typed::shader::SHADER,
+            &engine_typed::render::RENDER,
+            &engine_typed::dispatch::DISPATCH,
+            &engine_typed::crt::CRT,
+            &engine_typed::pathing::PATHING,
+            &engine_typed::geometry::GEOMETRY,
+        ];
+        e.typed_apply_for_test(&families, "all,geometry");
+        assert_eq!(serial_families_and_hooks(&e), None);
         e.register(engine::draw_thread::WORLD_DRAW_FIRST, stand_in);
         assert!(!e.typed_family_direct(engine_typed::draw::FAMILY));
         assert_eq!(
@@ -175,5 +196,78 @@ mod tests {
                 assert!(!HOOKED_DRAW_SET.contains(a), "{}: {a:08x}", fix.name);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod serial_tests {
+    use super::*;
+    use engine_typed::draw::capture::Mode;
+
+    /// With the default switch the geometry family is off, so the draw stays on main until it is on.
+    #[test]
+    fn the_geometry_family_off_keeps_the_draw_on_main() {
+        let mut e = Engine::new_untyped_for_test();
+        let families: Vec<&engine::typed::Family> = vec![
+            &engine_typed::draw::DRAW,
+            &engine_typed::draw_f::DRAW_F,
+            &engine_typed::shader::SHADER,
+            &engine_typed::render::RENDER,
+            &engine_typed::dispatch::DISPATCH,
+            &engine_typed::crt::CRT,
+            &engine_typed::pathing::PATHING,
+            &engine_typed::geometry::GEOMETRY,
+        ];
+        e.typed_apply_for_test(&families, "all");
+        assert!(!e.typed_family_direct(engine_typed::geometry::FAMILY));
+        assert!(serial_families_and_hooks(&e).is_some());
+    }
+
+    /// A wrap on the hooked drawing set, and only there, keeps the draw on main.
+    #[test]
+    fn a_wrap_on_the_hooked_drawing_set_keeps_the_draw_on_main() {
+        assert_eq!(hooks_reason(|_| false), None);
+        assert!(hooks_reason(|a| a == 0x00b5_4090).is_some());
+        assert_eq!(hooks_reason(|a| a == 0x0040_1000), None);
+    }
+
+    /// POISON is refused with real threads only.
+    #[test]
+    fn poison_is_refused_with_real_threads() {
+        assert!(poison_reason(true, Mode::Poison).is_some());
+        assert_eq!(poison_reason(false, Mode::Poison), None);
+        assert_eq!(poison_reason(true, Mode::On), None);
+        assert_eq!(poison_reason(true, Mode::Off), None);
+    }
+
+    /// Any spelling of real threads without the render thread is refused.
+    #[test]
+    fn real_threads_named_any_way_need_the_render_thread() {
+        let choice = crate::fixes::Choice::from_parts(None, |n: &str| match n {
+            "NV_DRAW_THREAD" => Some("1".into()),
+            "NV_THREADS" => Some("real,notimeout".into()),
+            "NV_RENDER_THREAD" => Some("0".into()),
+            _ => None,
+        })
+        .unwrap();
+        assert!(refusal(&choice).is_some());
+    }
+
+    /// The host's choice must decide the draw family's capture mode (export E5, PR B): today the draw family reads
+    /// NV_DRAW_THREAD itself, so NV_DRAW_THREAD=poison with real threads still scribbles on main, a refused row still
+    /// captures, and the Fallout.ini line never turns capture on. PR B turns this test on.
+    #[test]
+    #[ignore = "needs the draw family's capture::set_mode (E5, PR B)"]
+    fn the_hosts_choice_decides_the_capture_mode() {
+        let poison_real = crate::fixes::Choice::from_parts(None, |n: &str| match n {
+            "NV_DRAW_THREAD" => Some("poison".into()),
+            "NV_THREADS" => Some("real".into()),
+            "NV_RENDER_THREAD" => Some("1".into()),
+            _ => None,
+        })
+        .unwrap();
+        let mut e = Engine::new();
+        install(&mut e, &poison_real);
+        assert_ne!(engine_typed::draw::capture::mode(), Mode::Poison);
     }
 }

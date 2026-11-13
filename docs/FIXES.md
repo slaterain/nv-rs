@@ -986,7 +986,10 @@ or 1, like every row): the thread with the value packet's POISON check, for test
   accumulator's later users); a save (`008503b0`) and a load (`00847df0`); `MemoryLevelManager::FreeReleasedObjects`
   (`00878250`: `PurgeCellBuffers` from a script or the console, fast travel, cell clearing), `00453dc0`,
   `PositionPlayer` (`0093c200`), `FastTravel` (`0093cdf0`), `ClearCellsIfTargetNotLoaded` (`0093d500`), and the light
-  processing (`00b5fd60`, `00b5d300`) that rebuilds a light's object lists. A device reset joins in the platform.
+  processing (`00b5fd60`, `00b5d300`) that rebuilds a light's object lists; a second draw sequence (the dispatcher
+  `008706b0`, `Main::RenderMenuBackground` `00871dc0`: queued menu opens in the frame's tail, the save's screenshot);
+  and the draw sequence's wind-down `00876850`, which resets the world accumulator's lists. A device reset joins in
+  the platform.
 - **The world is drawn on main** (as today) in V.A.T.S., when the interface is drawn between the halves, while the
   navmesh is drawn (`ToggleNavMesh`), while the loading menu is up, from a save's or a load's start to the next frame,
   when a family the draw runs in is not direct, when an extender hooks a function the draw calls, with POISON on real
@@ -996,3 +999,13 @@ or 1, like every row): the thread with the value packet's POISON check, for test
   waits for it, after the frame's tail, so a stepped run with it on must give the serial command stream byte for
   byte (the late gate, `measure/draw-thread/late-gate.sh`).
 - **Off**, the world pass's two calls and each join point cost one load and a branch; nothing is registered.
+- **For now every frame still draws on main**: the draw family's packet hand-off is not in yet. And the draw family
+  reads `NV_DRAW_THREAD` itself for its value packet (`capture::mode`): the variable turns that packet on (and
+  `poison` its scribble) whatever this row, its refusal or the threads say, and the `Fallout.ini` line does not; the
+  host's choice decides it once the draw family's `capture::set_mode` is in.
+- **What it could gain as built: little.** The same draw sequence uses the world accumulator after the world draw
+  (the sun's occlusion query `006426a0` in every exterior with a sky, the scope pass, shadows, the water redraw) and
+  resets it at its end, so the join is never later than the end of the draw sequence and, outdoors, falls inside the
+  world pass: about nothing outdoors, up to the end of the draw sequence indoors. Every 600 posts the log prints the
+  posts, the joins by join point and the joins inside the same world pass. The corrected plan (the rest of the draw
+  sequence on the drawing side) is `measure/draw-thread/PLAN-B.md`.

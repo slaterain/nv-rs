@@ -32,7 +32,7 @@ const TES_CLEAN_UP_UNUSED_TEXTURES: u32 = 0x0045_2490;
 /// `00651f40`); then `00448620(1)` on the model loader and
 /// `TES::CleanUpUnusedTextures(0)`.
 pub fn memory_level_manager_free_released_objects(e: &mut Engine, face_gen: u8) {
-    engine_core::draw_thread::finish(e);
+    engine_core::draw_thread::finish_at(e, 0x0087_8250);
     e.call(GARBAGE_COLLECTOR_CLEAR_ALL, &args![1u32]);
     let object = e.call(TES_OBJECT_00450B80, &args![0u32]).u32();
     e.call(SHADER_FREE_00B5FD60, &args![object]);

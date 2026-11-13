@@ -31,6 +31,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 pub const WORLD_DRAW_FIRST: u32 = 0x00b6_ba20;
 /// The world draw's second half (`00b6b930`, the same words).
 pub const WORLD_DRAW_SECOND: u32 = 0x00b6_b930;
+/// The world pass (`00873200`), which calls both halves.
+pub const WORLD_PASS: u32 = 0x0087_3200;
 
 /// The VATS singleton (`011f2250`) and its mode word (+8, what `VATS::GetMode` `0044ddc0` answers): 0 outside
 /// V.A.T.S.
@@ -95,6 +97,10 @@ struct Run {
     second_taken: bool,
     /// A save or a load started: serial until the next OnIdle.
     save_or_load: bool,
+    /// A job was posted in the world pass that is still running on main (until [`world_pass_end`]).
+    in_pass: bool,
+    /// Joins of posted jobs by the join point that made them (its exe address; 0 for none named).
+    by_point: Vec<(u32, u64)>,
     /// The reasons already noted in the log (each once a run).
     noted: Vec<&'static str>,
     /// What happened, for the tests: posts, frames drawn on main with a handed-off packet, joins.
@@ -112,6 +118,8 @@ pub struct Counts {
     pub serial: u64,
     /// Joins of a posted job.
     pub joined: u64,
+    /// Of those, joins made before the world pass that posted the job returned: no overlap with the frame's tail.
+    pub same_pass: u64,
 }
 
 static RUNS: Mutex<Vec<Run>> = Mutex::new(Vec::new());
@@ -143,6 +151,8 @@ pub fn turn_on(e: &Engine, hooks: Hooks) {
         pending: None,
         second_taken: false,
         save_or_load: false,
+        in_pass: false,
+        by_point: Vec::new(),
         noted: Vec::new(),
         counts: Counts::default(),
     });
@@ -205,11 +215,20 @@ pub fn second_half(e: &mut Engine, camera: u32, accumulator: u32, third: u32) {
 /// the device's join.
 #[inline]
 pub fn finish(e: &mut Engine) {
+    finish_at(e, 0);
+}
+
+/// [`finish`] at the entry of the exe function `at` (counted by join point: [`joins_by_point`]).
+#[inline]
+pub fn finish_at(e: &mut Engine, at: u32) {
     if POSTED.load(Relaxed) == 0 {
         return;
     }
-    finish_posted(e);
+    finish_posted(e, at);
 }
+
+/// `Main::OnIdle`'s entry.
+pub const ON_IDLE: u32 = 0x0086_e650;
 
 /// `Main::OnIdle`'s entry (`0086e650`): [`finish`], and a save's or a load's serial frames end.
 #[inline]
@@ -217,24 +236,41 @@ pub fn idle(e: &mut Engine) {
     if ON.load(Relaxed) == 0 {
         return;
     }
-    finish(e);
+    finish_at(e, ON_IDLE);
     with_run(e.kernel.id(), |r| r.save_or_load = false);
 }
 
-/// A save's or a load's entry: [`finish`], and the world pass draws on main until the next OnIdle (a save's
+/// A save's or a load's entry (`at`): [`finish`], and the world pass draws on main until the next OnIdle (a save's
 /// screenshot and a load's frames run the draw sequence inside it).
 #[inline]
-pub fn save_or_load(e: &mut Engine) {
+pub fn save_or_load(e: &mut Engine, at: u32) {
     if ON.load(Relaxed) == 0 {
         return;
     }
-    finish(e);
+    finish_at(e, at);
     with_run(e.kernel.id(), |r| r.save_or_load = true);
 }
 
+/// The world pass's end (`00873200` returning): a join after this one overlapped the frame's tail.
+#[inline]
+pub fn world_pass_end(e: &mut Engine) {
+    if ON.load(Relaxed) == 0 {
+        return;
+    }
+    with_run(e.kernel.id(), |r| r.in_pass = false);
+}
+
+/// The run's joins of posted jobs by join point (exe address, count), in the order first seen.
+pub fn joins_by_point(e: &Engine) -> Vec<(u32, u64)> {
+    with_run(e.kernel.id(), |r| r.by_point.clone()).unwrap_or_default()
+}
+
+/// How often (in posts) the run's overlap counts are printed.
+const COUNTS_EVERY: u64 = 600;
+
 #[cold]
 #[inline(never)]
-fn finish_posted(e: &mut Engine) {
+fn finish_posted(e: &mut Engine, at: u32) {
     if real_threads::on_draw_helper() {
         return;
     }
@@ -242,6 +278,13 @@ fn finish_posted(e: &mut Engine) {
     let Some((slot, hooks)) = with_run(id, |r| {
         let slot = r.pending.take()?;
         r.counts.joined += 1;
+        if std::mem::take(&mut r.in_pass) {
+            r.counts.same_pass += 1;
+        }
+        match r.by_point.iter_mut().find(|(a, _)| *a == at) {
+            Some((_, n)) => *n += 1,
+            None => r.by_point.push((at, 1)),
+        }
         Some((slot, r.hooks))
     })
     .flatten() else {
@@ -340,7 +383,7 @@ fn first_half_on(e: &mut Engine, camera: u32, accumulator: u32, third: u32, over
         return;
     };
     // A job still posted (a world pass twice in one frame): joined first, so one cut is open at a time.
-    finish(e);
+    finish_at(e, WORLD_PASS);
     if let Some(reason) = serial_reason(e, save_or_load, overlay).or_else(|| (hooks.serial)(e)) {
         return serial(e, id, Some(reason), camera, accumulator, third);
     }
@@ -397,12 +440,28 @@ fn first_half_on(e: &mut Engine, camera: u32, accumulator: u32, third: u32, over
             .expect("a refused job never ran");
         return draw_on_main(e, id, hooks, packet, camera, accumulator, third);
     }
-    with_run(id, |r| {
+    let print = with_run(id, |r| {
         r.pending = Some(slot);
         r.second_taken = true;
+        r.in_pass = true;
         r.counts.posted += 1;
-    });
+        (r.counts.posted % COUNTS_EVERY == 1).then(|| (r.counts, r.by_point.clone()))
+    })
+    .flatten();
     POSTED.fetch_add(1, Relaxed);
+    if let Some((c, by)) = print {
+        // The overlap achieved so far: joins inside the posting world pass overlapped nothing of the tail.
+        let points: Vec<String> = by.iter().map(|(a, n)| format!("{a:08x}:{n}")).collect();
+        eprintln!(
+            "NV_DRAW_THREAD: posted {}, joined {} ({} inside the same world pass), drawn on main {} serial {}; joins by point {}",
+            c.posted,
+            c.joined,
+            c.same_pass,
+            c.on_main,
+            c.serial,
+            points.join(" ")
+        );
+    }
 }
 
 /// Both halves on main with a packet main cut for a thread (the device's cut or the post refused): adopted here,

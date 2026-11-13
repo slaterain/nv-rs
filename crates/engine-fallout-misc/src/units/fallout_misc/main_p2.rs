@@ -338,6 +338,7 @@ pub fn fn_00870680(e: &mut Engine, this: Ptr) {
 /// `menu_background` is set and menu `0x3f5` is not visible, otherwise
 /// the frame `00870bd0` (byte clear) or `00870a00` (byte set).
 pub fn fn_008706b0(e: &mut Engine, this: Ptr, target: u32, menu_background: u8, flag: u8) {
+    engine_core::draw_thread::finish_at(e, 0x0087_06b0);
     let first = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
     let byte_131 = fn_00870770(e, Ptr::new(first));
     let root = e.call(GET_ROOT, &args![]).u32();
@@ -1170,6 +1171,7 @@ pub fn fn_00871d10(e: &mut Engine, this: Ptr, x: i32, y: i32) -> bool {
 /// menu `0x40c` is visible and `004a4040` holds, accumulates the rendered
 /// menu's scene (`00b6bee0`, `00b6c0d0`); and restores the state.
 pub fn main_render_menu_background(e: &mut Engine, this: Ptr) {
+    engine_core::draw_thread::finish_at(e, 0x0087_1dc0);
     with_profile_scope(e, 0xd, 0x1c19, |e| {
         let player = e.mem.u32(PLAYER_OBJECT);
         if e.call(0x008d_6f30, &args![player]).u32() == 0
@@ -2485,6 +2487,8 @@ pub fn fn_00873200(
         e.call(SET_NODE_FLAG, &args![node, saved_flag as u32]);
         e.call(PROFILE_SCOPE_DTOR, &args![guard]);
     });
+    // A join after this one overlapped the frame's tail (`engine_core::draw_thread`'s counts).
+    engine_core::draw_thread::world_pass_end(e);
 }
 
 // Translated from 00874460 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2625,7 +2629,7 @@ pub fn fn_008746c0(e: &mut Engine) {
 /// borrowed render target is made current first (and released at the end).
 /// One stack word is not read.
 pub fn fn_008746d0(e: &mut Engine, this: Ptr, _unused_0: u32) {
-    engine_core::draw_thread::finish(e);
+    engine_core::draw_thread::finish_at(e, 0x0087_46d0);
     let water = e.call(GET_GLOBAL_011F91AC, &args![]).u32();
     let decal = e.call(GET_GLOBAL_011F9508, &args![]).u32();
     let node = player_node(e, 1);
@@ -2699,7 +2703,7 @@ pub fn fn_00874900(e: &mut Engine, this: Ptr) -> f32 {
 /// root's child into `accumulator` (`00b64570`, with `target`). `this` is
 /// not read.
 pub fn fn_00874920(e: &mut Engine, _this: Ptr, accumulator: u32, target: u32) {
-    engine_core::draw_thread::finish(e);
+    engine_core::draw_thread::finish_at(e, 0x0087_4920);
     with_profile_scope(e, 0x27, 0x20d5, |e| {
         let root = e.call(GET_ROOT, &args![]).u32();
         let child = e.call(GET_ROOT_CHILD, &args![root]).u32();
@@ -3408,7 +3412,7 @@ pub fn fn_00875bf0(e: &mut Engine, this: Ptr) {
 /// destroys the object that child's vtable slot `0x48` returned (its slot
 /// 0 with 1). `this` is not read.
 pub fn fn_00875e40(e: &mut Engine, _this: Ptr, accumulator: u32, last: u32) {
-    engine_core::draw_thread::finish(e);
+    engine_core::draw_thread::finish_at(e, 0x0087_5e40);
     let root = e.call(GET_ROOT, &args![]).u32();
     if typed_call!(
         leaf::FAMILY,
@@ -3788,6 +3792,7 @@ pub fn fn_00876850(
     _unused_2: u32,
     object: u32,
 ) {
+    engine_core::draw_thread::finish_at(e, 0x0087_6850);
     let this_addr = this.addr();
     let root = e.call(GET_ROOT, &args![]).u32();
     e.call(GET_SCENE_TARGET, &args![root]);
@@ -9263,6 +9268,19 @@ mod tests_second {
         r.e.call(0x0087_3200, &args![this, 0u32, 0u32, 0u32, 0u32]);
         assert_eq!(draw_thread::counts(&r.e).on_main, 1);
         assert_eq!((FIRST.load(SeqCst), SECOND.load(SeqCst)), (1, 1));
+        // With the interface between the halves (the world pass's last word) the seam keeps the frame serial: no
+        // cut, each half at its own place.
+        let interface = r.object(0x100);
+        r.set(GET_INTERFACE_OBJECT, &[interface]);
+        r.e.call_log = None;
+        r.e.call(0x0087_3200, &args![this, 0u32, 0u32, 0u32, 1u32]);
+        assert_eq!(
+            draw_thread::counts(&r.e).on_main,
+            1,
+            "no cut with the overlay"
+        );
+        assert_eq!(draw_thread::counts(&r.e).serial, 1);
+        assert_eq!((FIRST.load(SeqCst), SECOND.load(SeqCst)), (2, 2));
         draw_thread::turn_off(&mut r.e);
     }
 
@@ -10779,11 +10797,29 @@ mod draw_thread_joins {
             0x0085_03b0,
             0x0084_7df0,
             0x0087_8250,
+            // A second draw sequence in the tail (queued menu opens, the save screenshot) and the wind-down that
+            // resets the world accumulator's lists.
+            0x0087_06b0,
+            0x0087_1dc0,
+            0x0087_6850,
         ] {
             assert!(
                 engine_core::draw_thread::testing::joins_first(&mut e, addr, &[0; 16]),
                 "{addr:08x} does not join first"
             );
         }
+        use engine_core::draw_thread::testing;
+        // A save and a load leave the run in its serial frames; OnIdle ends them.
+        for addr in [0x0085_03b0u32, 0x0084_7df0] {
+            assert!(
+                testing::joins_first_into_save_or_load(&mut e, addr, &[0; 16]),
+                "{addr:08x}"
+            );
+        }
+        assert!(testing::joins_first_ending_save_or_load(
+            &mut e,
+            0x0086_e650,
+            &[0; 16]
+        ));
     }
 }

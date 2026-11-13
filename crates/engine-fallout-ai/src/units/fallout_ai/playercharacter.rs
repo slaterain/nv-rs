@@ -1964,7 +1964,7 @@ pub fn player_character_position_player(
     cell: Ptr,
     reset_weather: bool,
 ) {
-    engine_core::draw_thread::finish(e);
+    engine_core::draw_thread::finish_at(e, 0x0093_c200);
     // The arguments live on the game's stack: position at +0x0, rotation at
     // +0xC, with the locals behind them.
     e.with_stack(0x180, |e, frame| {
@@ -2455,7 +2455,7 @@ const HOUR_BRACKET_OBJECT: u32 = 0x011f_11a0;
 /// space, position and rotation) and the beds, chairs and actors are set up
 /// for the new place. The SEH frame is not translated.
 pub fn player_character_fast_travel(e: &mut Engine, this: Ptr<PlayerCharacter>, destination: Ptr) {
-    engine_core::draw_thread::finish(e);
+    engine_core::draw_thread::finish_at(e, 0x0093_cdf0);
     let zero: f64 = e.global(ZERO_DOUBLE);
     let delay = e.with_stack(4, |e, slot| {
         e.mem.set_f32(slot.addr(), 0.0);
@@ -2674,7 +2674,7 @@ pub fn player_character_clear_cells_if_target_not_loaded(
     cell: Ptr,
     world_space: Ptr,
 ) {
-    engine_core::draw_thread::finish(e);
+    engine_core::draw_thread::finish_at(e, 0x0093_d500);
     let tes = e.global::<u32>(TES_SINGLETON);
     if !cell.is_null() && e.call(0x0045_11e0, &args![tes, cell, 0u32]).bool() {
         return;

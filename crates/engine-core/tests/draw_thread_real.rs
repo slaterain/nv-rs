@@ -32,6 +32,9 @@ fn first(e: &mut Engine, _: &[u32]) -> Ret {
     while !TAIL_STARTED.load(SeqCst) {
         std::thread::yield_now();
     }
+    // A join point reached on the drawing side while main has not joined yet: nothing (it would wait for itself).
+    draw_thread::finish(e);
+    draw_thread::idle(e);
     let v = read_value(e);
     DRAWN.lock().unwrap().push((1, on_draw_helper(), v));
     Ret::default()

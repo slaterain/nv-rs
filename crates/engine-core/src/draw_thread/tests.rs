@@ -67,7 +67,7 @@ fn off_the_halves_are_the_plain_calls() {
     first_half(&mut e, 0x6000, 0x8800, 1, 0);
     finish(&mut e);
     idle(&mut e);
-    save_or_load(&mut e);
+    save_or_load(&mut e, 0x0085_03b0);
     second_half(&mut e, 0x6000, 0x8800, 1);
     assert_eq!(
         log(&e),
@@ -97,7 +97,7 @@ fn each_serial_condition_keeps_the_draw_on_main() {
             0,
         ),
         ("loading", |e| e.mem.set_u32(LOADING_MENU, 0x1234), 0),
-        ("save", save_or_load, 0),
+        ("save", |e| save_or_load(e, 0x0085_03b0), 0),
     ];
     for (name, set, overlay) in cases {
         let mut e = world();
@@ -134,7 +134,7 @@ fn a_save_is_serial_until_the_next_idle() {
     let mut e = world();
     turn_on(&e, hooks_finishing_with(never_finish));
     let flag = |e: &Engine| with_run(e.kernel.id(), |r| r.save_or_load).unwrap();
-    save_or_load(&mut e);
+    save_or_load(&mut e, 0x0085_03b0);
     assert!(flag(&e));
     assert_eq!(
         serial_reason(&e, flag(&e), 0),
@@ -268,7 +268,10 @@ fn every_join_point_joins_a_posted_job_once() {
         FINISHED.with(|f| f.set(f.get() + 1));
     }
     type Join = fn(&mut Engine);
-    for join in [finish as Join, idle, save_or_load] {
+    fn save(e: &mut Engine) {
+        save_or_load(e, 0x0085_03b0);
+    }
+    for join in [finish as Join, idle, save] {
         let mut e = world();
         turn_on(&e, hooks_finishing_with(count));
         testing::mark_posted(&e);
@@ -333,4 +336,43 @@ fn the_device_is_the_renderers() {
     e.mem.set_u32(renderer + RENDERER_DEVICE, 0xd3d9);
     e.mem.set_u32(RENDERER, renderer);
     assert_eq!(device(&e), 0xd3d9);
+}
+
+/// A family in its dual run keeps the draw on main: the helper takes no job (`draw_post_ready`, as `post_draw`).
+#[test]
+fn a_dual_family_keeps_the_draw_on_main() {
+    use crate::typed::{Family, FamilyId, Threads};
+    fn member(_: &mut Engine, _: &[u32]) -> Ret {
+        Ret::default()
+    }
+    fn funcs() -> Vec<(u32, crate::AbiFn)> {
+        vec![(0x0040_5000, member as crate::AbiFn)]
+    }
+    static DUAL: Family = Family {
+        name: "draw_thread_dual_test",
+        id: FamilyId::new(31),
+        past_gate: true,
+        threads: Threads::Main,
+        stage2: true,
+        funcs,
+    };
+    let mut e = Engine::new_untyped_for_test();
+    e.typed_apply_for_test(&[&DUAL], "draw_thread_dual_test:dual");
+    assert!(e.typed_any_dual());
+    assert!(!real_threads::draw_post_ready(&e));
+    e.map(LOG, 0x1000);
+    e.register(WORLD_DRAW_FIRST, first);
+    e.register(WORLD_DRAW_SECOND, second);
+    turn_on(
+        &e,
+        Hooks {
+            cut: stop_cut,
+            ..hooks_finishing_with(never_finish)
+        },
+    );
+    first_half(&mut e, 0x6000, 0x8800, 1, 0);
+    second_half(&mut e, 0x6000, 0x8800, 1);
+    assert_eq!(log(&e).len(), 2);
+    assert_eq!(counts(&e).serial, 1);
+    turn_off(&mut e);
 }

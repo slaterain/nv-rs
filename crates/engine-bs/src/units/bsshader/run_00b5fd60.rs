@@ -118,7 +118,7 @@ fn near_flag(e: &mut Engine, object: u32) -> u32 {
 /// at zero; the object lock first).
 // Translation incomplete: 00b5fd60 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 for the local NiPointers) is not translated.
 pub fn fn_00b5fd60(e: &mut Engine, this: Ptr) {
-    engine_core::draw_thread::finish(e);
+    engine_core::draw_thread::finish_at(e, 0x00b5_fd60);
     let node = this.addr();
     e.call(LOCK_ENTER, &args![LIGHT_LOCK_011F9EA0, 0u32]);
     let mut item = e.mem.u32(node + 0xe4);

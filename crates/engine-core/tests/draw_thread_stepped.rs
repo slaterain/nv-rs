@@ -164,7 +164,9 @@ fn the_world_draw_runs_after_the_tail_from_the_packet_cut_before_it() {
             posted: 3,
             on_main: 0,
             serial: 0,
-            joined: 3
+            joined: 3,
+            // No world_pass_end between the post and the join here: each counts as inside the pass.
+            same_pass: 3
         }
     );
 
@@ -252,6 +254,29 @@ fn the_world_draw_runs_after_the_tail_from_the_packet_cut_before_it() {
     assert!(take_drawn().is_empty(), "dropped unrun");
     assert!(take_joined().is_empty());
     assert!(!draw_thread::posted(&e));
+
+    // The overlap counters: a join before the posting world pass ended overlapped nothing of the tail.
+    let before = draw_thread::counts(&e);
+    draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
+    draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
+    draw_thread::finish_at(&mut e, 0x0064_26a0);
+    draw_thread::world_pass_end(&mut e);
+    draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
+    draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
+    draw_thread::world_pass_end(&mut e);
+    draw_thread::idle(&mut e);
+    let after = draw_thread::counts(&e);
+    assert_eq!(after.joined - before.joined, 2);
+    assert_eq!(
+        after.same_pass - before.same_pass,
+        1,
+        "only the join inside the pass"
+    );
+    let by = draw_thread::joins_by_point(&e);
+    assert!(by.contains(&(0x0064_26a0, 1)), "{by:x?}");
+    assert!(by.iter().any(|&(a, _)| a == draw_thread::ON_IDLE));
+    take_drawn();
+    take_joined();
 
     // Turned off: the plain calls again, on main.
     draw_thread::turn_off(&mut e);

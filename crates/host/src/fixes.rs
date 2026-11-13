@@ -405,7 +405,7 @@ pub const DRAW_THREAD: Fix = Fix {
     name: "world drawn on a second thread (experimental)",
     env: "NV_DRAW_THREAD",
     addresses: &[],
-    summary: "experimental, off in every preset: the world's draw runs on a thread of its own beside the end of the frame",
+    summary: "experimental, off in every preset: the world's draw on a thread of its own beside the end of the frame; for now every frame still draws on main (the draw family's hand-off is not in), and the draw family reads NV_DRAW_THREAD itself for its packet, so the variable also turns its packet on whatever this row says",
     install: install_nothing,
 };
 
@@ -861,10 +861,15 @@ impl Choice {
     /// measured: the preset, the fixes on, the limits and the threads asked for ([`Choice::threads`];
     /// the host's own `threads:` line says how they ran).
     pub fn describe(&self) -> String {
+        let draw_refused = crate::draw_thread::refusal(self)
+            .map(|why| format!("{} (refused: {why})", DRAW_THREAD.name));
         let on: Vec<&str> = FIXES
             .iter()
             .filter(|f| self.is_on(f))
-            .map(|f| f.name)
+            .map(|f| match (&draw_refused, f.env == DRAW_THREAD.env) {
+                (Some(refused), true) => refused.as_str(),
+                _ => f.name,
+            })
             .collect();
         let uncapped = on.contains(&crate::uncap::FIX.name);
         let menu = match self.bound_menu_frame_limit() {
@@ -1174,6 +1179,11 @@ mod tests {
             ("NV_RENDER_THREAD", "0"),
         ]);
         assert!(crate::draw_thread::refusal(&real_no_render).is_some());
+        assert!(
+            real_no_render.describe().contains("(refused: "),
+            "{}",
+            real_no_render.describe()
+        );
         let real_render = with(&[
             ("NV_DRAW_THREAD", "1"),
             ("NV_THREADS", "real"),
