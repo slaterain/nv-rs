@@ -15,6 +15,7 @@ use super::layout::{
 use super::state::{self, DEVICE_SET_SAMPLER_STATE};
 use super::{accumulator, elem_addr, geometry, low8, textures, FAMILY};
 use crate::culling::layout::NiBound;
+use crate::draw::capture;
 use engine_core::abi::OneWord;
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
@@ -398,14 +399,15 @@ pub fn render_group(
         }
     }
     for counter in GROUP_COUNTERS {
-        let count = e.global::<u32>(counter);
+        // own: read and written below through own_at/set_own_at
+        let count = capture::own_at::<u32>(e, counter);
         if count != 0 {
-            e.set_global(counter, count - 1);
+            capture::set_own_at(e, counter, count - 1);
         }
     }
     if e.global::<u8>(COVERAGE_AVAILABLE) != 0 {
-        let count = e.global::<u32>(state::COVERAGE_COUNTER).wrapping_sub(1);
-        e.set_global(state::COVERAGE_COUNTER, count);
+        let count = capture::own_at::<u32>(e, state::COVERAGE_COUNTER).wrapping_sub(1);
+        capture::set_own_at(e, state::COVERAGE_COUNTER, count);
         typed_call!(
             FAMILY,
             0x00b9_8540,
@@ -444,14 +446,14 @@ pub fn render_pass(
     if u32::from(e.get(pass, RenderPass::usPassEnum)) != pass_type {
         return;
     }
-    e.set_global(RENDERING_PASS_TYPE, pass_type);
-    e.set_global(RENDERING_PASS, pass.addr());
+    capture::set_own_at(e, RENDERING_PASS_TYPE, pass_type);
+    capture::set_own_at(e, RENDERING_PASS, pass.addr());
     let geometry = e.get(pass, RenderPass::pGeometry);
     let shader = e.get(geometry, NiGeometry::m_spShader);
     let mut begun = false;
-    if e.global::<u32>(CURRENT_PASS_TYPE) != pass_type
+    if capture::own_at::<u32>(e, CURRENT_PASS_TYPE) != pass_type
         || pass_type == 0x2f6
-        || shader != e.global::<u32>(CURRENT_SHADER)
+        || shader != capture::own_at::<u32>(e, CURRENT_SHADER)
     {
         begun = true;
         typed_call!(FAMILY, 0x00b9_9390, begin_pass(e, pass_type, shader));
@@ -503,7 +505,7 @@ pub fn render_pass(
         }
     }
     if begun {
-        let shader = e.global::<u32>(CURRENT_SHADER);
+        let shader = capture::own_at::<u32>(e, CURRENT_SHADER);
         if shader != 0 {
             #[allow(clippy::cast_possible_wrap)]
             let kind = e.global::<u32>(shader.wrapping_add(0x68)) as i32;
@@ -823,8 +825,8 @@ pub fn begin_pass(e: &mut Engine, pass_type: u32, shader: u32) {
     } else {
         e.vcall(shader, slot::BEGIN_DONE, &args![pass_type]);
     }
-    e.set_global(CURRENT_PASS_TYPE, pass_type);
-    e.set_global(CURRENT_SHADER, shader);
+    capture::set_own_at(e, CURRENT_PASS_TYPE, pass_type);
+    capture::set_own_at(e, CURRENT_SHADER, shader);
     e.set_global(RESTORE_OWED, 1u8);
 }
 
@@ -834,9 +836,9 @@ pub fn begin_pass(e: &mut Engine, pass_type: u32, shader: u32) {
 /// set sampler 7's, and 0x230 sampler 2's, address mode back (state 8 to 0) on the device. The current
 /// type and shader clear.
 pub fn end_pass(e: &mut Engine) {
-    let shader = e.global::<u32>(CURRENT_SHADER);
+    let shader = capture::own_at::<u32>(e, CURRENT_SHADER);
     if shader != 0 {
-        let pass_type = e.global::<u32>(CURRENT_PASS_TYPE);
+        let pass_type = capture::own_at::<u32>(e, CURRENT_PASS_TYPE);
         if crate::slot_target(e, shader, slot::END) == 0x00be_0ee0 {
             typed_call!(
                 crate::draw::FAMILY,
@@ -847,7 +849,7 @@ pub fn end_pass(e: &mut Engine) {
             e.vcall(shader, slot::END, &args![pass_type]);
         }
         if e.global::<u8>(RESTORE_OWED) == 0 {
-            let shader = e.global::<u32>(CURRENT_SHADER);
+            let shader = capture::own_at::<u32>(e, CURRENT_SHADER);
             if crate::slot_target(e, shader, slot::END_RESTORE) == 0x00be_0e90 {
                 typed_call!(
                     crate::draw::FAMILY,
@@ -858,7 +860,7 @@ pub fn end_pass(e: &mut Engine) {
                 e.vcall(shader, slot::END_RESTORE, &[]);
             }
         }
-        let sampler = match e.global::<u32>(CURRENT_PASS_TYPE) {
+        let sampler = match capture::own_at::<u32>(e, CURRENT_PASS_TYPE) {
             0xfe | 0x10b => Some(7u32),
             0x230 => Some(2),
             _ => None,
@@ -874,8 +876,8 @@ pub fn end_pass(e: &mut Engine) {
             );
         }
     }
-    e.set_global(CURRENT_PASS_TYPE, 0u32);
-    e.set_global(CURRENT_SHADER, 0u32);
+    capture::set_own_at(e, CURRENT_PASS_TYPE, 0u32);
+    capture::set_own_at(e, CURRENT_SHADER, 0u32);
 }
 
 /// The distance of a pass's world bound along the camera's direction (as the exe sums it: x and y,
@@ -907,8 +909,8 @@ fn depth(e: &Engine, item: u32, d: [f32; 3], subtract: bool) -> f32 {
 /// pass's depth along the camera's direction (+0x68, +0x74, +0x80), less its radius when asked
 /// (`011ffe35`). 0 when equal, 1 when the second is deeper, -1 otherwise (a NaN included).
 pub fn compare_by_depth(e: &mut Engine, first: u32, second: u32) -> i32 {
-    let subtract = e.global::<u8>(SORT_SUBTRACT_RADIUS) != 0;
-    let camera = e.global::<u32>(SORT_CAMERA);
+    let subtract = capture::own_at::<u8>(e, SORT_SUBTRACT_RADIUS) != 0;
+    let camera = capture::own_at::<u32>(e, SORT_CAMERA);
     let direction = |off: u32| e.global::<f32>(camera.wrapping_add(off));
     let d = [direction(0x68), direction(0x74), direction(0x80)];
     let a = depth(e, first, d, subtract);
@@ -926,8 +928,8 @@ pub fn compare_by_depth(e: &mut Engine, first: u32, second: u32) -> i32 {
 /// `thiscall(renderer, camera, subtract)`: sorts the two alpha holders' lists (+0x70, +0x74) back to
 /// front by [`compare_by_depth`] for the camera.
 pub fn sort_alphas(e: &mut Engine, this: Ptr<BSBatchRenderer>, camera: u32, subtract: u8) {
-    e.set_global(SORT_SUBTRACT_RADIUS, subtract);
-    e.set_global(SORT_CAMERA, camera);
+    capture::set_own_at(e, SORT_SUBTRACT_RADIUS, subtract);
+    capture::set_own_at(e, SORT_CAMERA, camera);
     for index in 0..2 {
         let holder = e.global::<u32>(elem_addr(this, BSBatchRenderer::pAlphaGroups, index, 4));
         let list = Ptr::<PassHolder>::new(holder).at(PassHolder::kList);

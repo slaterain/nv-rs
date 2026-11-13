@@ -19,6 +19,7 @@
 use super::{accumulator, constants, lighting, state, FAMILY};
 use super::{div_d, mul_d, sub_d};
 use crate::anim_keys::narrow;
+use crate::draw::{capture, packet};
 use engine_core::prelude::*;
 
 /// The rendering object and its pass type (`011f91e0`, `011f91e4`), the current pass (`0126f74c`) and
@@ -36,9 +37,9 @@ fn idx(i: usize) -> u32 {
 
 /// The first word of the rendering pass's (`011f91e0`) +0xc: its first light.
 fn rendering_object(e: &Engine) -> u32 {
-    let rendering = e.global::<u32>(RENDERING_PASS);
-    let holder = e.mem.u32(rendering + 0xc);
-    e.mem.u32(holder)
+    let rendering = capture::own_at::<u32>(e, RENDERING_PASS);
+    let holder = capture::own_at::<u32>(e, rendering + 0xc);
+    capture::own_at::<u32>(e, holder)
 }
 
 /// The renderer (`011f4748`), the HDR switch (`011f941e`) and the colour row the lights scale (`011fa0d0`);
@@ -55,20 +56,20 @@ pub(crate) const PIXEL_ENTRIES: u32 = 0x011f_ec30;
 
 /// Whether the constant-map entry the pointer at `slot` holds is enabled (`m_bEnabled`, +8).
 pub(crate) fn entry_enabled(e: &Engine, slot: u32) -> bool {
-    let entry = e.mem.u32(slot);
-    e.mem.u8(entry.wrapping_add(8)) != 0
+    let entry = capture::own_at::<u32>(e, slot);
+    capture::own_at::<u8>(e, entry.wrapping_add(8)) != 0
 }
 
 /// A float the exe copies through the x87 stack (`FLD dword`, `FSTP dword`): its bits, as they are.
 #[inline(always)]
 fn copy_float(e: &Engine, addr: u32) -> u32 {
-    e.mem.u32(addr)
+    capture::own_at::<u32>(e, addr)
 }
 
 /// The float at `addr`.
 #[inline(always)]
 fn float_at(e: &Engine, addr: u32) -> f32 {
-    e.mem.f32(addr)
+    capture::own_at::<f32>(e, addr)
 }
 
 /// CRT `_memcpy` (`00ec44d0`, `cdecl`).
@@ -89,15 +90,16 @@ pub fn vertex_entry_12(e: &mut Engine, _this: Ptr, object: u32) {
         let matrix = matrix.addr();
         for index in 0..16u32 {
             let value = if index % 5 == 0 { 1.0f32 } else { 0.0 };
-            e.mem.set_u32(matrix + 4 * index, value.to_bits());
+            capture::set_own_at::<u32>(e, matrix + 4 * index, value.to_bits());
         }
-        e.call(MEMCPY, &args![MATRIX, matrix, 0x40u32]);
+        capture::own_image(e, MATRIX, 0x40, |e, at| {
+            e.call(MEMCPY, &args![at, matrix, 0x40u32]);
+        });
     });
 }
 
-/// The game time the shaders animate with (`011f940c`), `3600.0` (`double`, `01012640`), the
+/// The game time the shaders animate with (`011f940c`, the packet's: `packet::time_value`), `3600.0` (`double`, `01012640`), the
 /// `double` `6.28318` (`0104eea0`) and the angle `00b790d0` stores (`011fd868`).
-const GAME_TIME: u32 = 0x011f_940c;
 const SECONDS_PER_HOUR: u32 = 0x0101_2640;
 const TWO_PI: u32 = 0x0104_eea0;
 const ANGLE: u32 = 0x011f_d868;
@@ -111,12 +113,12 @@ pub fn vertex_entry_15(e: &mut Engine, _this: Ptr, object: Ptr) {
     if !entry_enabled(e, VERTEX_ENTRIES + 4 * 15) {
         return;
     }
-    let time = e.global::<f32>(GAME_TIME);
-    let value = div_d(time, e.global::<f64>(SECONDS_PER_HOUR));
-    let value = mul_d(value, e.global::<f64>(TWO_PI));
-    let count = e.mem.u32(object.addr() + 0xe4) as i32;
+    let time = f32::from_bits(packet::time_value(e, 0));
+    let value = div_d(time, e.global::<f64>(SECONDS_PER_HOUR)); // own: a constant of the exe
+    let value = mul_d(value, e.global::<f64>(TWO_PI)); // own: a constant of the exe
+    let count = capture::own_at::<u32>(e, object.addr() + 0xe4) as i32;
     let value = mul_d(value, f64::from(count));
-    e.set_global(ANGLE, value);
+    capture::set_own_at(e, ANGLE, value);
 }
 
 /// The camera position the shaders subtract (`011f474c`, three floats), the `double` 15.0
@@ -136,15 +138,15 @@ pub fn vertex_entry_16(e: &mut Engine, _this: Ptr, _unused_0: u32) {
         return;
     }
     for index in 0..2u32 {
-        let source = e.global::<f32>(SOURCE + 4 * index);
-        let camera = e.global::<f32>(CAMERA + 4 * index);
-        e.set_global(TARGET + 4 * index, source - camera);
+        let source = e.global::<f32>(SOURCE + 4 * index); // own: main's frame value, value packet B
+        let camera = e.global::<f32>(CAMERA + 4 * index); // own: main's frame value, value packet B
+        capture::set_own_at(e, TARGET + 4 * index, source - camera);
     }
-    let third = e.global::<f32>(SOURCE + 8);
-    let fifteen = e.global::<f64>(FIFTEEN);
-    e.set_global(TARGET + 8, sub_d(third, fifteen));
-    let fourth = e.global::<f32>(SOURCE + 0xc);
-    e.set_global(TARGET + 0xc, sub_d(fourth, fifteen));
+    let third = e.global::<f32>(SOURCE + 8); // own: main's frame value, value packet B
+    let fifteen = e.global::<f64>(FIFTEEN); // own: a constant of the exe
+    capture::set_own_at(e, TARGET + 8, sub_d(third, fifteen));
+    let fourth = e.global::<f32>(SOURCE + 0xc); // own: main's frame value, value packet B
+    capture::set_own_at(e, TARGET + 0xc, sub_d(fourth, fifteen));
 }
 
 /// The three floats `00b79180` writes (`011fd8b4`).
@@ -160,7 +162,7 @@ pub fn vertex_entry_17(e: &mut Engine, _this: Ptr, object: Ptr) {
     if !entry_enabled(e, VERTEX_ENTRIES + 4 * 17) {
         return;
     }
-    let mut position = e.mem.u32(object.addr() + 0x20);
+    let mut position = capture::own_at::<u32>(e, object.addr() + 0x20);
     if position == 0 {
         position = DEFAULT_POSITION;
     }
@@ -168,9 +170,10 @@ pub fn vertex_entry_17(e: &mut Engine, _this: Ptr, object: Ptr) {
     for (index, value) in values.iter_mut().enumerate() {
         let offset = 4 * idx(index);
         *value = float_at(e, position + offset) - e.global::<f32>(CAMERA + offset);
+        // own: main's frame value, value packet B
     }
     for (index, value) in values.iter().enumerate() {
-        e.set_global(OFFSET + 4 * idx(index), *value);
+        capture::set_own_at(e, OFFSET + 4 * idx(index), *value);
     }
 }
 
@@ -181,7 +184,6 @@ pub fn vertex_entry_17(e: &mut Engine, _this: Ptr, object: Ptr) {
 /// float max / min helpers (`00404010`, `0040ebd0`; `cdecl`, two floats, the result in ST0).
 const VECTOR: u32 = 0x011f_a0b0;
 const VALUE_DEFAULT: u32 = 0x011a_d808;
-const START_TIME: u32 = 0x011f_94ac;
 const DURATION: u32 = 0x011a_d838;
 const FIVE: u32 = 0x0102_0998;
 const TO_X: u32 = 0x011f_962c;
@@ -208,25 +210,29 @@ pub fn vertex_entry_21(e: &mut Engine, _this: Ptr, pass_type: u32, first: Ptr, s
     match pass_type {
         0xfe => {
             let x = copy_float(e, first + 0x80);
-            e.set_global(VECTOR, x);
+            capture::set_own_at(e, VECTOR, x);
             let y = copy_float(e, VALUE_DEFAULT);
-            e.set_global(VECTOR + 4, y);
-            e.set_global(VECTOR + 8, 0u32);
-            e.set_global(VECTOR + 0xc, 0u32);
+            capture::set_own_at(e, VECTOR + 4, y);
+            capture::set_own_at(e, VECTOR + 8, 0u32);
+            capture::set_own_at(e, VECTOR + 0xc, 0u32);
         }
         0x61 => {
-            e.set_global(VECTOR, 1.0f32.to_bits());
+            capture::set_own_at(e, VECTOR, 1.0f32.to_bits());
             for offset in [4u32, 8, 0xc] {
-                e.set_global(VECTOR + offset, 0u32);
+                capture::set_own_at(e, VECTOR + offset, 0u32);
             }
         }
         0x230 => {
-            let elapsed = e.global::<f32>(GAME_TIME) - e.global::<f32>(START_TIME);
-            let scale = mul_d(e.global::<f32>(DURATION), e.global::<f64>(FIVE));
+            let elapsed =
+                f32::from_bits(packet::time_value(e, 0)) - f32::from_bits(packet::start_time(e));
+            let scale = mul_d(
+                e.global::<f32>(DURATION), // own: main's frame value, value packet B
+                e.global::<f64>(FIVE),     // own: a constant of the exe
+            );
             let x_offset = float_at(e, second + 0x8c);
             let y_offset = float_at(e, second + 0x90);
             // The exe also reads +0x94 into a stack slot nothing reads.
-            let _unread = e.mem.u32(second + 0x94);
+            let _unread = capture::own_at::<u32>(e, second + 0x94);
             let ratio = elapsed / scale;
             // The larger of 0 and the ratio (`00404010`), then the smaller of 1 and that (`0040ebd0`):
             // `cdecl(a, b)`, each answering in ST0.
@@ -240,21 +246,21 @@ pub fn vertex_entry_21(e: &mut Engine, _this: Ptr, pass_type: u32, first: Ptr, s
                 0x0040_ebd0,
                 crate::draw_f::helpers::float_min(e, 1.0, raised)
             );
-            let span_x = e.global::<f32>(TO_X) - e.global::<f32>(FROM_X);
-            let span_y = e.global::<f32>(TO_Y) - e.global::<f32>(FROM_Y);
+            let span_x = e.global::<f32>(TO_X) - e.global::<f32>(FROM_X); // own: main's frame value, value packet B
+            let span_y = e.global::<f32>(TO_Y) - e.global::<f32>(FROM_Y); // own: main's frame value, value packet B
             let scaled_x = span_x * factor;
             let scaled_y = span_y * factor;
-            let lerp_x = scaled_x + e.global::<f32>(FROM_X);
-            let lerp_y = scaled_y + e.global::<f32>(FROM_Y);
+            let lerp_x = scaled_x + e.global::<f32>(FROM_X); // own: main's frame value, value packet B
+            let lerp_y = scaled_y + e.global::<f32>(FROM_Y); // own: main's frame value, value packet B
             if factor == 1.0 {
-                e.set_global(RUNNING, 0u8);
+                capture::set_own_at(e, RUNNING, 0u8);
             }
             for (index, offset) in [0x94u32, 0x98, 0x9c, 0xa0].iter().enumerate() {
-                let word = e.mem.u32(first + offset);
-                e.set_global(VECTOR + 4 * idx(index), word);
+                let word = capture::own_at::<u32>(e, first + offset);
+                capture::set_own_at(e, VECTOR + 4 * idx(index), word);
             }
-            e.set_global(VECTOR + 8, lerp_x - x_offset);
-            e.set_global(VECTOR + 0xc, lerp_y - y_offset);
+            capture::set_own_at(e, VECTOR + 8, lerp_x - x_offset);
+            capture::set_own_at(e, VECTOR + 0xc, lerp_y - y_offset);
         }
         _ => {}
     }
@@ -286,14 +292,14 @@ pub fn pixel_entry_2(e: &mut Engine, _this: Ptr, pass_type: u32, object: Ptr) {
         }
         first_row = 2;
         second_row = 3;
-        let mut count = u32::from(e.mem.u8(object + 9)) + 2;
+        let mut count = u32::from(capture::own_at::<u8>(e, object + 9)) + 2;
         if (count as i32) <= 3 {
             count = 3;
         }
-        let entry = e.global::<u32>(PIXEL_ENTRIES + 4 * 2);
-        e.mem.set_u32(entry + 0x20, count);
+        let entry = capture::own_at::<u32>(e, PIXEL_ENTRIES + 4 * 2);
+        capture::set_own_at::<u32>(e, entry + 0x20, count);
     }
-    let selector = u32::from(e.mem.u8(object + 0xb));
+    let selector = u32::from(capture::own_at::<u8>(e, object + 0xb));
     let flag = |wanted: u32| {
         if selector == wanted {
             1.0f32.to_bits()
@@ -303,11 +309,11 @@ pub fn pixel_entry_2(e: &mut Engine, _this: Ptr, pass_type: u32, object: Ptr) {
     };
     let first = ROWS + first_row * 0x10;
     for (index, wanted) in [1u32, 2, 3, 4].iter().enumerate() {
-        e.mem.set_u32(first + 4 * idx(index), flag(*wanted));
+        capture::set_own_at::<u32>(e, first + 4 * idx(index), flag(*wanted));
     }
     let second = ROWS.wrapping_add(second_row * 0x10);
     for (index, wanted) in [5u32, 6, 7, 8].iter().enumerate() {
-        e.mem.set_u32(second + 4 * idx(index), flag(*wanted));
+        capture::set_own_at::<u32>(e, second + 4 * idx(index), flag(*wanted));
     }
 }
 
@@ -317,7 +323,6 @@ pub fn pixel_entry_2(e: &mut Engine, _this: Ptr, pass_type: u32, object: Ptr) {
 /// (`double`, `01012070`, `0101e568`) and the float it uses for bit 0 (`010af2f0`). The land toggles
 /// (`00c02c30`) and the fog property (`00b55520`) are the draw family's.
 const UPDATE_TOGGLES: u32 = 0x00c0_2d90;
-const FOG_INDEX: u32 = 0x011f_91c4;
 const TOGGLE_FIRST: u32 = 0x011f_a2d4;
 const TOGGLE_SECOND: u32 = 0x011f_a2d8;
 const TOGGLE_THIRD: u32 = 0x011f_a2dc;
@@ -359,14 +364,14 @@ pub fn toggles(
             crate::draw::setups::land_toggles(e, Ptr::new(base), geometry, 0u32, property, 0u32)
         );
     } else {
-        let vtable = e.mem.u32(base);
-        let index = u32::from(e.global::<u8>(FOG_INDEX));
+        let vtable = capture::own_at::<u32>(e, base);
+        let index = u32::from(packet::fog_index(e));
         let fog_property: u32 = typed_call!(
             crate::draw::FAMILY,
             0x00b5_5520,
             crate::draw::passes::fog_property(e, index)
         );
-        let target = e.mem.u32(vtable + 0x154);
+        let target = capture::own_at::<u32>(e, vtable + 0x154);
         if target == UPDATE_TOGGLES {
             typed_call!(
                 FAMILY,
@@ -377,24 +382,29 @@ pub fn toggles(
             e.call(target, &args![base, geometry, fog_property, fog]);
         }
     }
-    if object != 0 && e.mem.u8(object + 8) == 0 {
-        e.set_global(TOGGLE_FIRST, 0u32);
+    if object != 0 && capture::own_at::<u8>(e, object + 8) == 0 {
+        capture::set_own_at(e, TOGGLE_FIRST, 0u32);
     }
-    let land = e.mem.u32(property + 0x20) & 0x4000 != 0;
+    let land = capture::own_at::<u32>(e, property + 0x20) & 0x4000 != 0;
     if !land && !(0x248..=0x24b).contains(&pass_type) {
         let flags_property = flags_property.addr();
-        let flags = e.mem.u16(flags_property + 0x18);
+        let flags = capture::own_at::<u16>(e, flags_property + 0x18);
         if (flags >> 9) & 1 != 0 {
-            let mut value = f32::from(e.mem.u8(flags_property + 0x1a));
+            let mut value = f32::from(capture::own_at::<u8>(e, flags_property + 0x1a));
             if f64::from(value) < e.global::<f64>(ONE) {
+                // own: a constant of the exe
                 value = 1.0;
             }
-            e.set_global(TOGGLE_THIRD, div_d(value, e.global::<f64>(BYTE_SCALE)));
-        } else if e.mem.u8(flags_property + 0x18) & 1 != 0 {
+            capture::set_own_at(
+                e,
+                TOGGLE_THIRD,
+                div_d(value, e.global::<f64>(BYTE_SCALE)), // own: a constant of the exe
+            );
+        } else if capture::own_at::<u8>(e, flags_property + 0x18) & 1 != 0 {
             let value = copy_float(e, TOGGLE_VALUE);
-            e.set_global(TOGGLE_THIRD, value);
+            capture::set_own_at(e, TOGGLE_THIRD, value);
         } else {
-            e.set_global(TOGGLE_THIRD, 0u32);
+            capture::set_own_at(e, TOGGLE_THIRD, 0u32);
         }
         return;
     }
@@ -403,9 +413,9 @@ pub fn toggles(
     }
     let lit = e.vcall(property, 0xf4, &args![5u32, 0u32]).u32();
     let value = if lit != 0 { 1.0f32.to_bits() } else { 0 };
-    e.set_global(TOGGLE_THIRD, value);
+    capture::set_own_at(e, TOGGLE_THIRD, value);
     let word = copy_float(e, property + 0x30);
-    e.set_global(TOGGLE_SECOND, word);
+    capture::set_own_at(e, TOGGLE_SECOND, word);
 }
 
 /// The two floats `00b796f0` writes (`011fd944`, `011fd948`) and its float for bit 4
@@ -425,13 +435,13 @@ pub fn pixel_entry_16(e: &mut Engine, _this: Ptr, object: Ptr) {
     }
     let object = object.addr();
     let value = copy_float(e, object + 0xe0);
-    e.set_global(VALUE_FIRST, value);
-    let value = if e.mem.u8(object + 0x24) & 0x10 != 0 {
+    capture::set_own_at(e, VALUE_FIRST, value);
+    let value = if capture::own_at::<u8>(e, object + 0x24) & 0x10 != 0 {
         copy_float(e, VALUE_CONSTANT)
     } else {
         1.0f32.to_bits()
     };
-    e.set_global(VALUE_SECOND, value);
+    capture::set_own_at(e, VALUE_SECOND, value);
 }
 
 /// The plane `00b79730` reads (`011f9604`, four floats), the vector it dots it with
@@ -456,32 +466,32 @@ pub fn pixel_entry_19(e: &mut Engine) {
         return;
     }
     let vector: [f32; 3] = std::array::from_fn(|index| float_at(e, EYE_POSITION + 4 * idx(index)));
-    let plane: [u32; 4] = std::array::from_fn(|index| e.global::<u32>(PLANE + 4 * idx(index)));
+    let plane: [u32; 4] = std::array::from_fn(|index| e.global::<u32>(PLANE + 4 * idx(index))); // own: main's frame value, value packet B
     let y = f32::from_bits(plane[1]) * vector[1];
     let x = f32::from_bits(plane[0]) * vector[0];
     for (index, word) in plane.iter().take(3).enumerate() {
-        e.set_global(PLANE_CONSTANT + 4 * idx(index), *word);
+        capture::set_own_at(e, PLANE_CONSTANT + 4 * idx(index), *word);
     }
     let sum = y + x;
     let z = f32::from_bits(plane[2]) * vector[2];
     let dot = sum + z;
-    e.set_global(PLANE_CONSTANT + 0xc, dot - f32::from_bits(plane[3]));
+    capture::set_own_at(e, PLANE_CONSTANT + 0xc, dot - f32::from_bits(plane[3]));
     let far = copy_float(e, FAR);
     let near = copy_float(e, NEAR);
     let far_value = f32::from_bits(far);
     let near_value = f32::from_bits(near);
     if far_value == 0.0 && near_value == 0.0 {
-        e.set_global(RANGE, 0u32);
-        e.set_global(RANGE + 4, 0u32);
+        capture::set_own_at(e, RANGE, 0u32);
+        capture::set_own_at(e, RANGE + 4, 0u32);
         let minus_one = copy_float(e, MINUS_ONE);
-        e.set_global(RANGE + 8, minus_one);
-        e.set_global(RANGE + 0xc, 0u32);
+        capture::set_own_at(e, RANGE + 8, minus_one);
+        capture::set_own_at(e, RANGE + 0xc, 0u32);
         return;
     }
-    e.set_global(RANGE, far);
-    e.set_global(RANGE + 4, far_value - near_value);
-    e.set_global(RANGE + 8, 1.0f32.to_bits());
-    e.set_global(RANGE + 0xc, 1.0f32.to_bits());
+    capture::set_own_at(e, RANGE, far);
+    capture::set_own_at(e, RANGE + 4, far_value - near_value);
+    capture::set_own_at(e, RANGE + 8, 1.0f32.to_bits());
+    capture::set_own_at(e, RANGE + 0xc, 1.0f32.to_bits());
 }
 
 /// The four floats `00b798c0` writes (`011fa300`).
@@ -499,7 +509,7 @@ pub fn pixel_entry_20(e: &mut Engine, _this: Ptr, object: Ptr) {
     let object = object.addr();
     for (index, offset) in [0xf0u32, 0xf4, 0xfc, 0xf8].iter().enumerate() {
         let value = copy_float(e, object + offset);
-        e.set_global(VECTOR_LAST + 4 * idx(index), value);
+        capture::set_own_at(e, VECTOR_LAST + 4 * idx(index), value);
     }
 }
 
@@ -538,23 +548,23 @@ pub fn eye_pos(e: &mut Engine, pass_type: u32, object: Ptr, matrix: [u32; 16]) {
             let point = point.addr();
             for (index, eye) in (0u32..).zip(eye) {
                 let value = eye - float_at(e, object + 0x24 + 4 * index);
-                e.mem.set_f32(point + 4 * index, value);
+                capture::set_own_at::<f32>(e, point + 4 * index, value);
             }
             e.call(POINT_UNITIZE, &args![point]);
             for index in 0..3u32 {
                 let value = copy_float(e, point + 4 * index);
-                e.set_global(EYE_DIRECTION + 4 * index, value);
+                capture::set_own_at(e, EYE_DIRECTION + 4 * index, value);
             }
         });
-        e.set_global(EYE_DIRECTION + 0xc, 0u32);
+        capture::set_own_at(e, EYE_DIRECTION + 0xc, 0u32);
         let mut shifted = [0f32; 3];
         for (index, value) in shifted.iter_mut().enumerate() {
-            *value = eye[index] - e.global::<f32>(CAMERA + 4 * idx(index));
+            *value = eye[index] - e.global::<f32>(CAMERA + 4 * idx(index)); // own: main's frame value, value packet B
         }
         for (index, value) in shifted.iter().enumerate() {
-            e.set_global(EYE_VECTOR + 4 * idx(index), *value);
+            capture::set_own_at(e, EYE_VECTOR + 4 * idx(index), *value);
         }
-        e.set_global(EYE_VECTOR + 0xc, 1.0f32.to_bits());
+        capture::set_own_at(e, EYE_VECTOR + 0xc, 1.0f32.to_bits());
         return;
     }
     e.with_stack(0x58, |e, frame| {
@@ -563,20 +573,20 @@ pub fn eye_pos(e: &mut Engine, pass_type: u32, object: Ptr, matrix: [u32; 16]) {
         let transformed = frame + 0xc;
         let by_value = frame + 0x18;
         for (index, word) in matrix.iter().enumerate() {
-            e.mem.set_u32(by_value + 4 * idx(index), *word);
+            capture::set_own_at::<u32>(e, by_value + 4 * idx(index), *word);
         }
         for index in 0..3u32 {
             let value = copy_float(e, EYE + 4 * index);
-            e.mem.set_u32(vector + 4 * index, value);
+            capture::set_own_at::<u32>(e, vector + 4 * index, value);
         }
         crate::draw::thunks::call_vec3_transform_coord(e, transformed, vector, by_value);
         for index in 0..3u32 {
             let value = copy_float(e, transformed + 4 * index);
-            e.set_global(EYE_VECTOR + 4 * index, value);
+            capture::set_own_at(e, EYE_VECTOR + 4 * index, value);
         }
     });
     let value = copy_float(e, object + 0x30);
-    e.set_global(EYE_VECTOR + 0xc, value);
+    capture::set_own_at(e, EYE_VECTOR + 0xc, value);
 }
 
 /// The matrix `SetupGeometryConstants_ShadowProj` writes (`011fd968`, 16 floats).
@@ -597,8 +607,8 @@ pub fn shadow_proj(e: &mut Engine, _this: Ptr, block: Ptr, flag: u32, transform:
     if !entry_enabled(e, VERTEX_ENTRIES + 4 * 3) {
         return;
     }
-    let object = e.mem.u32(block.addr() + 0xc);
-    if object == 0 || e.mem.u32(object + 0x1c) == 0xffff_ffff {
+    let object = capture::own_at::<u32>(e, block.addr() + 0xc);
+    if object == 0 || capture::own_at::<u32>(e, object + 0x1c) == 0xffff_ffff {
         return;
     }
     let accumulator: u32 = typed_call!(
@@ -606,7 +616,7 @@ pub fn shadow_proj(e: &mut Engine, _this: Ptr, block: Ptr, flag: u32, transform:
         0x00b4_f5c0,
         crate::render::passes::shader_accumulator(e)
     );
-    if e.mem.u32(accumulator + 0x194) == 0 {
+    if capture::own_at::<u32>(e, accumulator + 0x194) == 0 {
         return;
     }
     let mut matrix = [0u32; 16];
@@ -627,7 +637,7 @@ pub fn shadow_proj(e: &mut Engine, _this: Ptr, block: Ptr, flag: u32, transform:
         }
     }
     for (index, word) in matrix.iter().enumerate() {
-        e.set_global(SHADOW_PROJECTION + 4 * idx(index), *word);
+        capture::set_own_at(e, SHADOW_PROJECTION + 4 * idx(index), *word);
     }
 }
 
@@ -658,12 +668,12 @@ pub fn obj_to_cube(
         return;
     }
     let block = block.addr();
-    let object = e.mem.u32(block + 0xc);
-    let byte = e.mem.u8(block + 9);
+    let object = capture::own_at::<u32>(e, block + 0xc);
+    let byte = capture::own_at::<u8>(e, block + 9);
     let mut direct = object == 0;
-    if !direct && byte != 0 && e.mem.u32(object) != 0 {
-        let first = e.mem.u32(object);
-        direct = e.mem.u8(first + 0xed) != 0;
+    if !direct && byte != 0 && capture::own_at::<u32>(e, object) != 0 {
+        let first = capture::own_at::<u32>(e, object);
+        direct = capture::own_at::<u8>(e, first + 0xed) != 0;
     }
     if !direct {
         direct = (0x244..=0x24b).contains(&pass_type)
@@ -677,20 +687,22 @@ pub fn obj_to_cube(
         let second = frame + 0x40;
         let product = frame + 0x80;
         if direct {
-            let renderer = e.mem.u32(this.addr() + 0x18);
-            let bytes = e.mem.bytes(renderer + 0x940, 0x40);
-            e.mem.write(product, &bytes);
-            crate::draw::thunks::call_matrix_transpose(e, OBJECT_TO_CUBE, product);
+            let renderer = capture::own_at::<u32>(e, this.addr() + 0x18);
+            let bytes = e.mem.bytes(renderer + 0x940, 0x40); // own: the renderer's matrix (piece 4) into a local
+            e.mem.write(product, &bytes); // own: a local
+            capture::own_image(e, OBJECT_TO_CUBE, 0x40, |e, at| {
+                crate::draw::thunks::call_matrix_transpose(e, at, product);
+            });
             return;
         }
-        let rendering = e.global::<u32>(RENDERING_PASS);
-        if e.mem.u32(rendering + 0xc) == 0 || byte == 0 {
+        let rendering = capture::own_at::<u32>(e, RENDERING_PASS);
+        if capture::own_at::<u32>(e, rendering + 0xc) == 0 || byte == 0 {
             return;
         }
         for matrix in [first, second] {
             for index in 0..16u32 {
                 let value = if index % 5 == 0 { 1.0f32 } else { 0.0 };
-                e.mem.set_u32(matrix + 4 * index, value.to_bits());
+                capture::set_own_at::<u32>(e, matrix + 4 * index, value.to_bits());
             }
         }
         if flag == 0 {
@@ -698,16 +710,18 @@ pub fn obj_to_cube(
         }
         for index in 0..3u32 {
             let slot = first + 0x30 + 4 * index;
-            let value = e.global::<f32>(CAMERA + 4 * index) + float_at(e, slot);
-            e.mem.set_f32(slot, value);
+            let value = e.global::<f32>(CAMERA + 4 * index) + float_at(e, slot); // own: main's frame value, value packet B
+            capture::set_own_at::<f32>(e, slot, value);
         }
-        let lights = e.mem.u32(rendering + 0xc);
-        let light = e.mem.u32(lights);
+        let lights = capture::own_at::<u32>(e, rendering + 0xc);
+        let light = capture::own_at::<u32>(e, lights);
         crate::draw::thunks::call_matrix_multiply(e, product, first, light + 0x10);
-        let bytes = e.mem.bytes(product, 0x40);
-        e.mem.write(second, &bytes);
+        let bytes = e.mem.bytes(product, 0x40); // own: a local
+        e.mem.write(second, &bytes); // own: a local
         crate::draw::thunks::call_matrix_transpose(e, second, second);
-        e.call(MEMCPY, &args![OBJECT_TO_CUBE, second, 0x40u32]);
+        capture::own_image(e, OBJECT_TO_CUBE, 0x40, |e, at| {
+            e.call(MEMCPY, &args![at, second, 0x40u32]);
+        });
     });
 }
 
@@ -720,8 +734,8 @@ const LIGHT_VECTORS: u32 = 0x011f_d9a8;
 /// its vtable +0xdc with the index and the plane).
 fn set_clip_planes(e: &mut Engine, planes: u32) {
     for index in 0..6u32 {
-        let renderer = e.global::<u32>(RENDERER);
-        let device = e.mem.u32(renderer + 0x288);
+        let renderer = e.global::<u32>(RENDERER); // own: main's frame value, value packet B
+        let device = capture::own_at::<u32>(e, renderer + 0x288);
         e.vcall(device, 0xdc, &args![index, planes + 0x10 * index]);
     }
 }
@@ -741,11 +755,11 @@ pub fn simple_shadow_clip_planes(e: &mut Engine, this: Ptr, pass_type: u32) {
         return;
     }
     let light = rendering_object(e);
-    if e.mem.u8(light + 0x208) != 0 {
+    if capture::own_at::<u8>(e, light + 0x208) != 0 {
         set_clip_planes(e, light + 0x1a8);
         return;
     }
-    let renderer = e.mem.u32(this.addr() + 0x18);
+    let renderer = capture::own_at::<u32>(e, this.addr() + 0x18);
     e.with_stack(0x1a0, |e, frame| {
         let frame = frame.addr();
         let view = frame;
@@ -754,23 +768,23 @@ pub fn simple_shadow_clip_planes(e: &mut Engine, this: Ptr, pass_type: u32) {
         let planes = frame + 0xc0;
         let plane = frame + 0x120;
         let moved = frame + 0x130;
-        let bytes = e.mem.bytes(renderer + 0x980, 0x40);
-        e.mem.write(view, &bytes);
+        let bytes = e.mem.bytes(renderer + 0x980, 0x40); // own: the renderer's matrix (piece 4) into a local
+        e.mem.write(view, &bytes); // own: a local
         let m = |e: &Engine, index: u32| float_at(e, view + 4 * index);
-        let x = e.global::<f32>(CAMERA);
-        let y = e.global::<f32>(CAMERA + 4);
-        let z = e.global::<f32>(CAMERA + 8);
+        let x = e.global::<f32>(CAMERA); // own: main's frame value, value packet B
+        let y = e.global::<f32>(CAMERA + 4); // own: main's frame value, value packet B
+        let z = e.global::<f32>(CAMERA + 8); // own: main's frame value, value packet B
         let first = y * m(e, 4) + x * m(e, 0);
         let first = first + z * m(e, 8);
-        e.mem.set_f32(view + 0x30, -first);
+        capture::set_own_at::<f32>(e, view + 0x30, -first);
         let second = y * m(e, 5) + x * m(e, 1);
         let second = second + z * m(e, 9);
-        e.mem.set_f32(view + 0x34, -second);
+        capture::set_own_at::<f32>(e, view + 0x34, -second);
         let third = y * m(e, 6) + x * m(e, 2);
         let third = third + z * m(e, 10);
-        e.mem.set_f32(view + 0x38, -third);
-        let bytes = e.mem.bytes(renderer + 0x9c0, 0x40);
-        e.mem.write(moved, &bytes);
+        capture::set_own_at::<f32>(e, view + 0x38, -third);
+        let bytes = e.mem.bytes(renderer + 0x9c0, 0x40); // own: the renderer's matrix (piece 4) into a local
+        e.mem.write(moved, &bytes); // own: a local
         crate::draw::thunks::call_matrix_multiply(e, product, view, moved);
         crate::draw::thunks::call_matrix_inverse(e, inverse, 0u32, product);
         crate::draw::thunks::call_matrix_transpose(e, product, inverse);
@@ -778,21 +792,21 @@ pub fn simple_shadow_clip_planes(e: &mut Engine, this: Ptr, pass_type: u32) {
             let source = light + 0x144 + 0x10 * index;
             for word in 0..3u32 {
                 let value = copy_float(e, source + 4 * word);
-                e.mem.set_u32(plane + 4 * word, value);
+                capture::set_own_at::<u32>(e, plane + 4 * word, value);
             }
-            e.mem.set_f32(plane + 0xc, -float_at(e, source + 0xc));
+            capture::set_own_at::<f32>(e, plane + 0xc, -float_at(e, source + 0xc));
             crate::draw::thunks::call_plane_normalize(e, plane, plane);
             let out = frame + 0x170;
             crate::draw::thunks::call_plane_transform(e, out, plane, product);
             for word in 0..4u32 {
                 let value = copy_float(e, out + 4 * word);
-                e.mem.set_u32(planes + 0x10 * index + 4 * word, value);
+                capture::set_own_at::<u32>(e, planes + 0x10 * index + 4 * word, value);
             }
         }
         set_clip_planes(e, planes);
         e.call(MEMCPY, &args![light + 0x1a8, planes, 0x60u32]);
     });
-    e.mem.set_u8(light + 0x208, 1);
+    capture::set_own_at::<u8>(e, light + 0x208, 1);
 }
 
 /// The shader mode the shaders switch on (`011f91b8`), the shader manager's object `00b4f5d0`
@@ -858,49 +872,50 @@ pub fn lights(
     let rendering = rendering.addr();
     let light_float = copy_float(e, property + 0x6c);
     if e.global::<u32>(SHADER_MODE) == 0xf {
+        // own: main's frame value, value packet B
         let object = e.call(MANAGER_OBJECT, &args![]).u32();
         for index in 0..4u32 {
-            let word = e.mem.u32(object + 0x154 + 4 * index);
-            e.set_global(ROWS + 4 * index, word);
+            let word = capture::own_at::<u32>(e, object + 0x154 + 4 * index);
+            capture::set_own_at(e, ROWS + 4 * index, word);
         }
         return;
     }
-    let count = u32::from(e.mem.u8(rendering + 9));
-    let kind = e.mem.u16(rendering + 4);
-    let entry = e.global::<u32>(VERTEX_ENTRIES + 4 * 6);
-    if e.mem.u8(entry + 8) != 0 {
+    let count = u32::from(packet::rendering_pass_byte9(e, rendering));
+    let kind = capture::own_at::<u16>(e, rendering + 4);
+    let entry = capture::own_at::<u32>(e, VERTEX_ENTRIES + 4 * 6);
+    if capture::own_at::<u8>(e, entry + 8) != 0 {
         let registers = if (0x10..=0x13).contains(&kind) {
             1
         } else {
             count
         };
-        e.mem.set_u32(entry + 0x20, registers);
+        capture::set_own_at::<u32>(e, entry + 0x20, registers);
     }
-    let entry = e.global::<u32>(PIXEL_ENTRIES + 4 * 2);
-    if e.mem.u8(entry + 8) != 0 {
-        e.mem.set_u32(entry + 0x20, count);
+    let entry = capture::own_at::<u32>(e, PIXEL_ENTRIES + 4 * 2);
+    if capture::own_at::<u8>(e, entry + 8) != 0 {
+        capture::set_own_at::<u32>(e, entry + 0x20, count);
     }
-    let entry = e.global::<u32>(PIXEL_ENTRIES + 4 * 7);
-    if e.mem.u8(entry + 8) != 0 {
-        e.mem.set_u32(entry + 0x20, count.wrapping_sub(1));
+    let entry = capture::own_at::<u32>(e, PIXEL_ENTRIES + 4 * 7);
+    if capture::own_at::<u8>(e, entry + 8) != 0 {
+        capture::set_own_at::<u32>(e, entry + 0x20, count.wrapping_sub(1));
     }
     let mut index: u8 = 0;
-    if e.mem.u8(rendering + 9) > 0 {
+    if packet::rendering_pass_byte9(e, rendering) > 0 {
         e.with_stack(0x80, |e, frame| {
             let frame = frame.addr();
             let by_value = frame;
             let vector = frame + 0x40;
             let out = frame + 0x50;
             for (word, value) in matrix.iter().enumerate() {
-                e.mem.set_u32(by_value + 4 * idx(word), *value);
+                capture::set_own_at::<u32>(e, by_value + 4 * idx(word), *value);
             }
             loop {
                 if index >= 10 {
                     break;
                 }
                 let i = u32::from(index);
-                let lights = e.mem.u32(rendering + 0xc);
-                let light = e.mem.u32(lights.wrapping_add(i * 4));
+                let lights = packet::rendering_pass_lights(e, rendering);
+                let light = packet::pass_light_at(e, lights, i);
                 typed_call!(
                     FAMILY,
                     0x00b7_0820,
@@ -909,37 +924,37 @@ pub fn lights(
                 let row = LIGHT_VECTORS + 0x10 * i;
                 let position = LIGHT_POSITIONS + 0x10 * i;
                 let direction = LIGHT_DIRECTIONS + 0x10 * i;
-                let kind = e.mem.u16(rendering + 4);
+                let kind = capture::own_at::<u16>(e, rendering + 4);
                 if (0x10..=0x13).contains(&kind) {
                     for word in 0..4u32 {
-                        let value = e.mem.u32(position + 4 * word);
-                        e.mem.set_u32(row + 4 * word, value);
+                        let value = capture::own_at::<u32>(e, position + 4 * word);
+                        capture::set_own_at::<u32>(e, row + 4 * word, value);
                     }
                     let fourth = copy_float(e, direction);
-                    e.mem.set_u32(row + 0xc, fourth);
+                    capture::set_own_at::<u32>(e, row + 0xc, fourth);
                 } else if light != 0 {
-                    if e.mem.u8(light + 0xf4) != 0 {
+                    if packet::pass_light_byte(e, light, 0xf4) != 0 {
                         for word in 0..3u32 {
                             let value = copy_float(e, position + 4 * word);
-                            e.mem.set_u32(vector + 4 * word, value);
+                            capture::set_own_at::<u32>(e, vector + 4 * word, value);
                         }
-                        let camera = e.global::<u32>(CAMERA_OBJECT);
+                        let camera = e.global::<u32>(CAMERA_OBJECT); // own: main's frame value, value packet B
                         for word in 0..3u32 {
                             let offset = float_at(e, camera + 0x1e4 + 4 * word);
                             let value = offset + float_at(e, vector + 4 * word);
-                            e.mem.set_f32(vector + 4 * word, value);
+                            capture::set_own_at::<f32>(e, vector + 4 * word, value);
                         }
                         crate::draw::thunks::call_vec3_transform_coord(e, out, vector, by_value);
                         let mut fourth = copy_float(e, direction);
                         if flag == 0 {
                             let scale_object = scale_object.addr();
-                            let kind = e.mem.u16(rendering + 4);
+                            let kind = capture::own_at::<u16>(e, rendering + 4);
                             if (0x231..=0x233).contains(&kind) {
                                 let scale = float_at(e, scale_object + 0x30);
                                 for word in 0..3u32 {
                                     let slot = out + 4 * word;
                                     let value = scale * float_at(e, slot);
-                                    e.mem.set_f32(slot, value);
+                                    capture::set_own_at::<f32>(e, slot, value);
                                 }
                             } else {
                                 let value =
@@ -949,69 +964,69 @@ pub fn lights(
                         }
                         for word in 0..3u32 {
                             let value = copy_float(e, out + 4 * word);
-                            e.mem.set_u32(row + 4 * word, value);
+                            capture::set_own_at::<u32>(e, row + 4 * word, value);
                         }
-                        e.mem.set_u32(row + 0xc, fourth);
+                        capture::set_own_at::<u32>(e, row + 0xc, fourth);
                     } else {
                         for word in 0..3u32 {
                             let value = float_at(e, direction + 4 * word);
-                            e.mem.set_f32(vector + 4 * word, -value);
+                            capture::set_own_at::<f32>(e, vector + 4 * word, -value);
                         }
                         crate::draw::thunks::call_vec3_transform_normal(e, out, vector, by_value);
                         crate::draw::thunks::call_vec3_normalize(e, vector, out);
                         for word in 0..3u32 {
                             let value = copy_float(e, vector + 4 * word);
-                            e.mem.set_u32(row + 4 * word, value);
+                            capture::set_own_at::<u32>(e, row + 4 * word, value);
                         }
                         let fourth = copy_float(e, direction + 0xc);
-                        e.mem.set_u32(row + 0xc, fourth);
+                        capture::set_own_at::<u32>(e, row + 0xc, fourth);
                     }
                 }
                 index = index.wrapping_add(1);
-                if index >= e.mem.u8(rendering + 9) {
+                if index >= packet::rendering_pass_byte9(e, rendering) {
                     break;
                 }
             }
         });
     }
-    let mut scale_colour = e.global::<u8>(HDR) != 0
-        && e.mem.u32(property + 0x20) & 0x400 != 0
-        && e.mem.u8(rendering + 9) != 0;
+    let mut scale_colour = e.global::<u8>(HDR) != 0 // own: main's frame value, value packet B
+        && capture::own_at::<u32>(e, property + 0x20) & 0x400 != 0
+        && packet::rendering_pass_byte9(e, rendering) != 0;
     if scale_colour {
-        let lights = e.mem.u32(rendering + 0xc);
-        let first = e.mem.u32(lights);
-        scale_colour = e.mem.u8(first + 0xf4) == 0;
+        let lights = packet::rendering_pass_lights(e, rendering);
+        let first = packet::pass_light_at(e, lights, 0);
+        scale_colour = packet::pass_light_byte(e, first, 0xf4) == 0;
     }
     if scale_colour {
-        let scale = e.global::<f32>(HDR_LIGHT_SCALE);
-        let red = e.global::<f32>(COLOUR);
-        let green = e.global::<f32>(COLOUR + 4);
-        let blue = e.global::<f32>(COLOUR + 8);
-        let alpha = e.global::<f32>(COLOUR + 0xc);
-        e.set_global(COLOUR, red * scale);
-        e.set_global(COLOUR + 4, green * scale);
-        e.set_global(COLOUR + 8, blue * scale);
-        e.set_global(COLOUR + 0xc, scale * alpha);
+        let scale = e.global::<f32>(HDR_LIGHT_SCALE); // own: main's frame value, value packet B
+        let red = capture::own_at::<f32>(e, COLOUR);
+        let green = capture::own_at::<f32>(e, COLOUR + 4);
+        let blue = capture::own_at::<f32>(e, COLOUR + 8);
+        let alpha = capture::own_at::<f32>(e, COLOUR + 0xc);
+        capture::set_own_at(e, COLOUR, red * scale);
+        capture::set_own_at(e, COLOUR + 4, green * scale);
+        capture::set_own_at(e, COLOUR + 8, blue * scale);
+        capture::set_own_at(e, COLOUR + 0xc, scale * alpha);
     }
     if pass_type != 0x24b {
         return;
     }
-    let mode = e.global::<u32>(SHADER_MODE);
+    let mode = e.global::<u32>(SHADER_MODE); // own: main's frame value, value packet B
     e.with_stack(4, |e, slot| {
         let light = e.call(GET_FIRST_ACTIVE_LIGHT, &args![property, slot]).u32();
-        if light != 0 && e.mem.u8(light + 0xf4) != 0 {
+        if light != 0 && capture::own_at::<u8>(e, light + 0xf4) != 0 {
             return;
         }
         if mode == 10 {
             let half = copy_float(e, HALF);
             for offset in [0u32, 4, 8] {
-                e.set_global(COLOUR + offset, half);
+                capture::set_own_at(e, COLOUR + offset, half);
             }
-            e.set_global(COLOUR + 0xc, 1.0f32.to_bits());
+            capture::set_own_at(e, COLOUR + 0xc, 1.0f32.to_bits());
         } else {
             for offset in [0u32, 4, 8, 0xc] {
-                let word = e.global::<u32>(ROWS + offset);
-                e.set_global(COLOUR + offset, word);
+                let word = capture::own_at::<u32>(e, ROWS + offset);
+                capture::set_own_at(e, COLOUR + offset, word);
             }
         }
     });
@@ -1069,14 +1084,14 @@ pub fn ambient_emittance(
 ) {
     let property = property.addr();
     let rendering = rendering.addr();
-    let current = e.global::<u32>(RENDERING_PASS);
+    let current = capture::own_at::<u32>(e, RENDERING_PASS);
     let colour: [u32; 3] = std::array::from_fn(|index| copy_float(e, ROWS + 4 * idx(index)));
     let alpha = copy_float(e, property + 0x28);
     for (index, value) in colour.iter().enumerate() {
-        e.set_global(ROWS + 4 * idx(index), *value);
+        capture::set_own_at(e, ROWS + 4 * idx(index), *value);
     }
-    e.set_global(ROWS + 0xc, alpha);
-    let kind = e.mem.u16(rendering + 4);
+    capture::set_own_at(e, ROWS + 0xc, alpha);
+    let kind = capture::own_at::<u16>(e, rendering + 4);
     let helper = if entry_enabled(e, PIXEL_ENTRIES + 4 * 3) && !(0xc3..=0xd6).contains(&kind) {
         AMBIENT_SET_UP
     } else {
@@ -1091,21 +1106,22 @@ pub fn ambient_emittance(
     } else {
         e.call(helper, &args![word]);
     }
-    let kind = e.mem.u16(rendering + 4);
+    let kind = capture::own_at::<u16>(e, rendering + 4);
     if (0xc3..=0xd6).contains(&kind) {
-        let count = f32::from(e.mem.u8(rendering + 9));
-        e.set_global(LIGHT_COUNT, count);
-        let count = f32::from(e.mem.u8(rendering + 9));
-        e.set_global(LIGHT_COUNT_CONSTANT, count);
+        let count = f32::from(packet::rendering_pass_byte9(e, rendering));
+        capture::set_own_at(e, LIGHT_COUNT, count);
+        let count = f32::from(packet::rendering_pass_byte9(e, rendering));
+        capture::set_own_at(e, LIGHT_COUNT_CONSTANT, count);
     }
     if e.global::<u8>(WHITE_AMBIENT) != 0 {
+        // own: main's frame value, value packet B
         for offset in [0u32, 4, 8, 0xc] {
-            e.set_global(ROWS + offset, 1.0f32.to_bits());
+            capture::set_own_at(e, ROWS + offset, 1.0f32.to_bits());
         }
     }
-    let current_kind = e.mem.u16(current + 4);
-    if e.mem.u32(property + 0x24) & 0x8000 != 0
-        && e.mem.u32(property + 0x20) & 0x20000 == 0
+    let current_kind = capture::own_at::<u16>(e, current + 4);
+    if capture::own_at::<u32>(e, property + 0x24) & 0x8000 != 0
+        && capture::own_at::<u32>(e, property + 0x20) & 0x20000 == 0
         && (0x244..=0x24b).contains(&current_kind)
     {
         e.with_stack(0x24, |e, frame| {
@@ -1116,23 +1132,32 @@ pub fn ambient_emittance(
             let light = e
                 .call(GET_FIRST_ACTIVE_NON_SHADOW_LIGHT, &args![property, slot])
                 .u32();
-            let camera = e.global::<u32>(CAMERA_OBJECT);
-            let camera_light = e.mem.u32(camera + 0xe0);
-            let values = e.mem.u32(camera_light + 0xf8);
-            let second = mul_d(float_at(e, values + 0xd8), e.global::<f64>(WEIGHT_SECOND));
-            let first = mul_d(float_at(e, values + 0xd4), e.global::<f64>(WEIGHT_FIRST));
+            let camera = e.global::<u32>(CAMERA_OBJECT); // own: main's frame value, value packet B
+            let camera_light = capture::own_at::<u32>(e, camera + 0xe0);
+            let values = capture::own_at::<u32>(e, camera_light + 0xf8);
+            let second = mul_d(
+                float_at(e, values + 0xd8),
+                e.global::<f64>(WEIGHT_SECOND), // own: a constant of the exe
+            );
+            let first = mul_d(
+                float_at(e, values + 0xd4),
+                e.global::<f64>(WEIGHT_FIRST), // own: a constant of the exe
+            );
             let sum = second + first;
-            let third = mul_d(float_at(e, values + 0xdc), e.global::<f64>(WEIGHT_THIRD));
+            let third = mul_d(
+                float_at(e, values + 0xdc),
+                e.global::<f64>(WEIGHT_THIRD), // own: a constant of the exe
+            );
             let luminance = sum + third;
             let mut light_part = 0.0f32;
             if light != 0 {
-                let current = e.global::<u32>(RENDERING_PASS);
-                let first_word = e.mem.u32(current);
-                let mut position = e.mem.u32(first_word + 0x20);
+                let current = capture::own_at::<u32>(e, RENDERING_PASS);
+                let first_word = capture::own_at::<u32>(e, current);
+                let mut position = capture::own_at::<u32>(e, first_word + 0x20);
                 if position == 0 {
                     position = DEFAULT_POSITION;
                 }
-                let values = e.mem.u32(light + 0xf8);
+                let values = capture::own_at::<u32>(e, light + 0xf8);
                 e.call(
                     POINT_DIFFERENCE,
                     &args![values + 0x8c, difference, position],
@@ -1152,37 +1177,37 @@ pub fn ambient_emittance(
             } else {
                 luminance
             };
-            let fourth = e.global::<f32>(ROWS + 0xc);
-            e.set_global(ROWS + 0xc, chosen * fourth);
+            let fourth = capture::own_at::<f32>(e, ROWS + 0xc);
+            capture::set_own_at(e, ROWS + 0xc, chosen * fourth);
         });
     }
-    let mode = e.global::<u32>(SHADER_MODE);
+    let mode = e.global::<u32>(SHADER_MODE); // own: main's frame value, value packet B
     if mode == 8 {
         let one = 1.0f32.to_bits();
-        let alpha = if e.mem.u32(property + 0x24) & 0x20000 != 0 {
+        let alpha = if capture::own_at::<u32>(e, property + 0x24) & 0x20000 != 0 {
             0
         } else {
             one
         };
-        let flags_property = e.mem.u32(block.addr() + 0x9c);
-        let flags = e.mem.u16(flags_property + 0x18);
+        let flags_property = capture::own_at::<u32>(e, block.addr() + 0x9c);
+        let flags = capture::own_at::<u16>(e, flags_property + 0x18);
         let blue = if flags & 1 != 0 || (flags >> 9) & 1 != 0 {
             0
         } else {
             one
         };
-        e.set_global(ROWS, 0u32);
-        e.set_global(ROWS + 4, 0u32);
-        e.set_global(ROWS + 8, blue);
-        e.set_global(ROWS + 0xc, alpha);
+        capture::set_own_at(e, ROWS, 0u32);
+        capture::set_own_at(e, ROWS + 4, 0u32);
+        capture::set_own_at(e, ROWS + 8, blue);
+        capture::set_own_at(e, ROWS + 0xc, alpha);
     }
-    let pass_type = e.global::<u32>(RENDERING_PASS_TYPE);
+    let pass_type = capture::own_at::<u32>(e, RENDERING_PASS_TYPE);
     if pass_type.wrapping_sub(0x244) > 7 || mode == 10 {
         return;
     }
     let factor = e.vcall(property, 0x110, &args![]).f64();
-    let fourth = e.global::<f32>(ROWS + 0xc);
-    e.set_global(ROWS + 0xc, mul_d(fourth, factor));
+    let fourth = capture::own_at::<f32>(e, ROWS + 0xc);
+    capture::set_own_at(e, ROWS + 0xc, mul_d(fourth, factor));
 }
 
 /// The two pass set-ups `SetupGeometryConstants` runs for types 4 and 5 (`00b7ad00`) and 0x250 and
@@ -1212,22 +1237,22 @@ const SET_SHADER_CONSTANTS: u32 = 0x00e8_26d0;
 pub fn setup_geometry_constants(e: &mut Engine, this: Ptr, block: Ptr) {
     let base = this.addr();
     let block = block.addr();
-    let rendering = e.global::<u32>(RENDERING_PASS);
-    let geometry = e.mem.u32(rendering);
-    let pass_type = e.global::<u32>(RENDERING_PASS_TYPE);
-    let mut position = e.mem.u32(geometry + 0x20);
+    let rendering = capture::own_at::<u32>(e, RENDERING_PASS);
+    let geometry = capture::own_at::<u32>(e, rendering);
+    let pass_type = capture::own_at::<u32>(e, RENDERING_PASS_TYPE);
+    let mut position = capture::own_at::<u32>(e, geometry + 0x20);
     if position == 0 {
         position = DEFAULT_POSITION;
     }
-    let data = e.mem.u32(geometry + 0xb8);
-    let geometry_data = e.mem.u32(data + 0x34);
-    let fog_word = e.mem.u32(block + 8);
-    let skin = e.mem.u32(geometry + 0xbc);
-    let property = e.mem.u32(block + 0xc);
-    let first_property = e.mem.u32(block);
+    let data = capture::own_at::<u32>(e, geometry + 0xb8);
+    let geometry_data = capture::own_at::<u32>(e, data + 0x34);
+    let fog_word = capture::own_at::<u32>(e, block + 8);
+    let skin = capture::own_at::<u32>(e, geometry + 0xbc);
+    let property = capture::own_at::<u32>(e, block + 0xc);
+    let first_property = capture::own_at::<u32>(e, block);
     if (pass_type == 6 || pass_type == 8)
-        && e.mem.u32(property + 0x20) & 0x40000 != 0
-        && e.mem.u8(first_property + 0x18) & 1 != 0
+        && capture::own_at::<u32>(e, property + 0x20) & 0x40000 != 0
+        && capture::own_at::<u8>(e, first_property + 0x18) & 1 != 0
     {
         typed_call!(FAMILY, 0x00b9_7e30, state::set_z_write_enable(e, 0u8, 1u32));
         typed_call!(FAMILY, 0x00b9_8380, state::set_color_write(e, 0u32, 1u32));
@@ -1249,7 +1274,7 @@ pub fn setup_geometry_constants(e: &mut Engine, this: Ptr, block: Ptr) {
         }
         let mut words = [0u32; 16];
         for (index, word) in words.iter_mut().enumerate() {
-            *word = e.mem.u32(matrix_addr + 4 * idx(index));
+            *word = capture::own_at::<u32>(e, matrix_addr + 4 * idx(index));
         }
         if pass_type == 0x250 || pass_type == 0x251 {
             e.call(
@@ -1292,12 +1317,12 @@ pub fn setup_geometry_constants(e: &mut Engine, this: Ptr, block: Ptr) {
         }
     });
     for (map_offset, program_offset) in [(0x30u32, 0x44u32), (0x34, 0x5c)] {
-        let map = e.mem.u32(base + map_offset);
+        let map = capture::own_at::<u32>(e, base + map_offset);
         if map == 0 {
             continue;
         }
-        let pass = e.global::<u32>(CURRENT_PASS);
-        let program = e.mem.u32(pass + program_offset);
+        let pass = capture::own_at::<u32>(e, CURRENT_PASS);
+        let program = capture::own_at::<u32>(e, pass + program_offset);
         if program == 0 {
             continue;
         }
@@ -1338,9 +1363,9 @@ pub fn setup_geometry_constants(e: &mut Engine, this: Ptr, block: Ptr) {
             e.vcall(map, SLOT_SET_SHADER_CONSTANTS, &words);
         }
     }
-    let other = e.mem.u32(block + 0x10);
-    if other != 0 && e.mem.u8(other + 0x18) & 1 != 0 {
-        let object = e.mem.u32(base + 0x1c);
+    let other = capture::own_at::<u32>(e, block + 0x10);
+    if other != 0 && capture::own_at::<u8>(e, other + 0x18) & 1 != 0 {
+        let object = capture::own_at::<u32>(e, base + 0x1c);
         e.vcall(object, 0x24, &args![other]);
     }
 }

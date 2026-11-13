@@ -187,7 +187,7 @@ fn stand_ins_all(e: &mut Engine, render: bool, dispatch: bool, draw: bool) {
     if !render {
         e.register(0x00b7_dde0, |_, _| ret(0));
     }
-    for addr in [0x00b7_a870, 0x00b6_3320, 0x00b9_8070, 0x00ec_658f] {
+    for addr in [0x00b7_a870, 0x00b6_3320, 0x00ec_658f] {
         e.register(addr, |_, _| ret(0));
     }
     if draw {
@@ -855,6 +855,75 @@ fn color_write() {
         .setup(|e, c| {
             let _w = world(e);
             counter(e, 0, c.word(2));
+            vec![c.word(0), c.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The stencil enable (`00b98070`): its counter index is state 0x34's (4 in the world).
+#[test]
+fn stencil_enable() {
+    Diff::new(entry!(0x00b9_8070, state::set_stencil_enable(u8, u32)))
+        .common()
+        .inputs(&[Input::Of(BYTES), Input::Of(LOCKS), Input::Of(TWO_WAYS)])
+        .translation_calls_plainly(&[])
+        .float_sweep(0)
+        .setup(|e, c| {
+            let _w = world(e);
+            counter(e, 4, c.word(2));
+            vec![c.word(0), c.word(1)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The clip planes (`00b98280`): each plane byte 0 or not, the lock, the counter (state 0x98's index 0).
+#[test]
+fn clip_planes() {
+    Diff::new(entry!(
+        0x00b9_8280,
+        state::set_clip_planes(u8, u8, u8, u8, u8, u8, u32)
+    ))
+    .common()
+    .inputs(&[
+        Input::Of(&[0, 1, 0x80]),
+        Input::Of(&[0, 2]),
+        Input::Of(&[0, 0xff]),
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 3]),
+        Input::Of(&[0, 1]),
+        Input::Of(LOCKS),
+        Input::Of(TWO_WAYS),
+    ])
+    .translation_calls_plainly(&[])
+    .float_sweep(0)
+    .setup(|e, c| {
+        let _w = world(e);
+        counter(e, 0, c.word(7));
+        (0..7).map(|k| c.word(k)).collect()
+    })
+    .run()
+    .assert_same();
+}
+
+/// The depth bias (`00b98320`): plain floats and NaNs (a signalling one comes out quiet), the lock, the
+/// counter (its index word set to 5).
+#[test]
+fn depth_bias() {
+    Diff::new(entry!(0x00b9_8320, state::set_depth_bias(u32, u32)))
+        .common()
+        .inputs(&[
+            Input::Of(&[0, ONE, 0x7f80_0001, 0x7fc0_0000, 0xff80_0000]),
+            Input::Of(LOCKS),
+            Input::Of(TWO_WAYS),
+        ])
+        .translation_calls_plainly(&[])
+        .float_sweep(0)
+        .setup(|e, c| {
+            let _w = world(e);
+            set(e, 0x011f_fd3c, 5);
+            counter(e, 5, c.word(2));
             vec![c.word(0), c.word(1)]
         })
         .run()
@@ -5033,7 +5102,7 @@ fn render_skinned_typed_setups() {
 // The same world, with what the draw adds: the accumulator's per-renderer arrays, its camera (the world's
 // camera object), a second batch renderer, alpha holders and sorted alpha groups, and stand-ins for what
 // the draw calls outside the two families (the scene renderer's camera hand-over, the render mode
-// preparation and table, the fog ambient set-up, the clip planes, the render pass tree, the reflection
+// preparation and table, the fog ambient set-up, the render pass tree, the reflection
 // copy's renderer calls, the decal pass, a holder's own list draw, a sorted group's
 // destructor and the list's `RemoveAll`).
 
@@ -5043,8 +5112,6 @@ use engine_typed::draw::{self, alpha as dalpha, drivers, own, packet};
 fn draw_stand_ins(e: &mut Engine) {
     for addr in [
         0x00b4_f450u32,
-        0x00b9_8280,
-        0x00b9_8320,
         0x0066_b0d0,
         0x00b6_b790,
         0x00b9_7550,
@@ -5058,11 +5125,12 @@ fn draw_stand_ins(e: &mut Engine) {
     e.register(VT_FN + 0x90, slot_answer::<0x90>);
     // The render object's camera data slot (copying what its pointers point to, so the digest compares the
     // camera the draw hands over), and its check for the "SetCameraData" extra: present.
+    e.map(CAMERA_DATA_COPY, 0x1000);
     e.register(VT_FN + 0x18c, camera_data_answer);
     e.register(0x004a_0e10, |e, _| ret(e.mem.u32(RETS + 0x7f0)));
     set(e, RETS + 0x7f0, 1);
     // The fog-coloured ambient's targets and its enable object.
-    e.map(0x0120_0000, 0x2000);
+    e.map(0x0120_0000, 0x3000);
     let enable = e.mem.alloc(0x10);
     set(e, 0x0120_10c4, enable);
     e.register(0x00b6_3420, |_, _| ret(0x0bad_7ee0));
@@ -5082,8 +5150,8 @@ fn draw_stand_ins(e: &mut Engine) {
     set(e, 0x011f_9f40 + 12, 0x00ff_2904);
 }
 
-/// Where [`camera_data_answer`] copies the camera data it is handed (in the block `draw_stand_ins` maps).
-const CAMERA_DATA_COPY: u32 = 0x0120_1800;
+/// Where [`camera_data_answer`] copies the camera data it is handed (a block `draw_stand_ins` maps).
+const CAMERA_DATA_COPY: u32 = 0x0121_4000;
 
 /// The render object's slot 0x18c, `thiscall(object, translate, column 0, column 1, column 2, port, frustum)`:
 /// the bytes each pointer points to (a point and three columns of 0xc bytes, the port's 0x10, the frustum's
@@ -8021,24 +8089,27 @@ fn no_lighting_copy_subtextures() {
     .goes_by_address(&[0x00ec_44d0])
     .main_thread(0)
     .inputs(&[Input::Of(&[0, 1, 5])])
-    .setup(|e, c| {
-        let w = world(e);
-        e.map(0x0120_2000, 0x1000);
-        let shader = no_lighting_shader(e, &w);
-        let count = c.word(0);
-        let entries = e.mem.alloc(0x50);
-        for i in 0..0x14u32 {
-            set(e, entries + 4 * i, 0x5b00_0000 + i);
-        }
-        let data = e.mem.alloc(0x70);
-        set(e, data + 0x68, entries);
-        e.mem.set_u8(data + 0x6c, count as u8);
-        let geometry = e.mem.alloc(0xc0);
-        set(e, geometry + 0xb8, data);
-        vec![shader, geometry, 0x0bad_0002]
-    })
+    .setup(no_lighting_subtexture_words)
     .run()
     .assert_same();
+}
+
+/// The words of `no_lighting_copy_subtextures`'s cases (also its own-state check's).
+fn no_lighting_subtexture_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let w = world(e);
+    e.map(0x0120_2000, 0x1000);
+    let shader = no_lighting_shader(e, &w);
+    let count = c.word(0);
+    let entries = e.mem.alloc(0x50);
+    for i in 0..0x14u32 {
+        set(e, entries + 4 * i, 0x5b00_0000 + i);
+    }
+    let data = e.mem.alloc(0x70);
+    set(e, data + 0x68, entries);
+    e.mem.set_u8(data + 0x6c, count as u8);
+    let geometry = e.mem.alloc(0xc0);
+    set(e, geometry + 0xb8, data);
+    vec![shader, geometry, 0x0bad_0002]
 }
 
 /// The material constants' inputs: the property's alpha; the material's colour through its pointer or
@@ -9381,7 +9452,14 @@ fn the_whole_draw_reads_the_packet_the_cut_fills() {
     let first = entry!(0x00b6_ba20, drivers::world_draw_first(u32, Ptr<_>, u32)).1;
     let second = entry!(0x00b6_b930, drivers::world_draw_second(u32, Ptr<_>, u32)).1;
     let mut reads = 0;
-    for case in product(&[TWO_WAYS, &[1, 2], &[0, 1, 2], &[0, 5, 0xf]]) {
+    // Each case twice: the own state kept in guest memory (the test world's shader classes are not listed
+    // clean), and taken (`statics::set_forced`): then the draw's render states, shader statics and camera live in
+    // the packet, scribbled in guest memory, and go back at the join.
+    let cases = product(&[TWO_WAYS, &[1, 2], &[0, 1, 2], &[0, 5, 0xf]]);
+    for (case, forced) in cases
+        .into_iter()
+        .flat_map(|c| [(c.clone(), false), (c, true)])
+    {
         let setup = |e: &mut Engine| {
             let d = draw_world(e);
             let mut own = Vec::new();
@@ -9439,6 +9517,7 @@ fn the_whole_draw_reads_the_packet_the_cut_fills() {
         let answer = (first(&mut plain, &a), second(&mut plain, &a));
         let mut poisoned = Engine::new();
         let (b, own) = setup(&mut poisoned);
+        statics::set_forced(forced);
         capture::set_thread_mode(Some(capture::Mode::Poison));
         let poisoned_first = first(&mut poisoned, &b);
         // Between the halves the packet holds every listed geometry: the sorted groups' and the grouped alphas'
@@ -9452,6 +9531,7 @@ fn the_whole_draw_reads_the_packet_the_cut_fills() {
         }
         let poisoned_answer = (poisoned_first, second(&mut poisoned, &b));
         capture::set_thread_mode(None);
+        statics::set_forced(false);
         let report = cut::last_report().expect("the cut opened a packet and the join closed it");
         assert!(
             !capture::is_open(&poisoned),
@@ -9468,6 +9548,12 @@ fn the_whole_draw_reads_the_packet_the_cut_fills() {
             (0, 0),
             "{case:x?}: {report:?}"
         );
+        assert_eq!(
+            report.owned > 0,
+            forced,
+            "{case:x?} forced {forced}: {report:?}"
+        );
+        assert_eq!(report.kept_main, 0, "{case:x?} forced {forced}: {report:?}");
         assert!(report.held > 0, "{case:x?}: no geometry held: {report:?}");
         reads += report.reads;
     }
@@ -9562,12 +9648,108 @@ fn setup_pass_constants_reads_the_fog_through_the_packet() {
     );
 }
 
+/// The geometry world of the light checks: two lights (the first a point light with `points` 1), the pass type,
+/// the switches of the light set-up (HDR, skip-ambient, no-extra-scale, the light's ambient byte).
+fn light_check_world(e: &mut Engine, points: u32, pass_type: u32, switches: u32) -> Geo {
+    let mut s = Shape::plain();
+    s.lights = 2;
+    s.points = points;
+    s.pass_type = pass_type;
+    s.hdr = switches & 1 != 0;
+    if switches & 2 != 0 {
+        s.bits |= SKIP_AMBIENT;
+    }
+    if switches & 4 != 0 {
+        s.bits |= NO_EXTRA_SCALE;
+    }
+    if switches & 8 != 0 {
+        s.bits |= LIGHT_AMBIENT;
+    }
+    geometry_shape(e, &s)
+}
+
+/// The per-light set-up (`00b70820`) reads the pass light (+0xd0, +0xd4, +0xf4, +0xf5, +0xf8) and its light
+/// (position, values to +0xe8, direction) through the packet the cut fills (`cut::take_pass_lights`): with
+/// them scribbled in guest memory it sets what it sets without a packet.
+#[test]
+fn light_setup_reads_the_pass_lights_through_the_packet() {
+    packet_same(
+        "light_setup",
+        entry!(0x00b7_0820, lighting::light_setup(u32, Ptr<_>, f32)).1,
+        &product(&[&[0, 1, 7], &[0, 1], &[0, 1, 2, 9], &[0x154, 0x30]]),
+        |e, c| {
+            let g = light_check_world(e, c.word(1), c.word(3), c.word(2));
+            (vec![c.word(0), g.light, HALF], vec![g.rendering])
+        },
+        |e, w| cut::take_pass_lights(e, w[0]),
+    );
+}
+
+/// The geometry's lights (`00b78a90`, which runs the per-light set-up for each pass light) read the pass's
+/// light count, array and lights through the packet.
+#[test]
+fn lights_read_the_pass_lights_through_the_packet() {
+    packet_same(
+        "lights",
+        geometry::lights_words as AbiFn,
+        &product(&[&[0, 1, 3], &[0, 0x10, 0x30], &[0, 1]]),
+        |e, c| {
+            let g = light_check_world(e, c.word(0), c.word(1), c.word(2));
+            let mut words = vec![g.property, g.rendering];
+            words.extend(matrix_words(&g));
+            words.extend([g.transform(), g.pass_type, g.skin]);
+            (words, vec![g.rendering])
+        },
+        |e, w| cut::take_pass_lights(e, w[0]),
+    );
+}
+
+/// Vertex entries 15 and 21 (`00b790d0`, `00b791f0`, the fade of pass type 0x230) read the shaders' game time
+/// and start time through the packet the cut's frame values fill.
+#[test]
+fn vertex_entries_read_the_times_through_the_packet() {
+    for (name, f) in [
+        (
+            "vertex_entry_15",
+            entry!(0x00b7_90d0, geometry::vertex_entry_15(Ptr<_>, Ptr<_>)).1,
+        ),
+        (
+            "vertex_entry_21",
+            entry!(
+                0x00b7_91f0,
+                geometry::vertex_entry_21(Ptr<_>, u32, Ptr<_>, Ptr<_>)
+            )
+            .1,
+        ),
+    ] {
+        packet_same(
+            name,
+            f,
+            &product(&[&[0x230, 0xfe], &[ONE, 0x4120_0000]]),
+            |e, c| {
+                let g = light_check_world(e, 0, c.word(0), 0);
+                set(e, 0x011f_940c, c.word(1));
+                set(e, 0x011f_94ac, HALF);
+                let words = if name == "vertex_entry_15" {
+                    vec![g.shader, g.property]
+                } else {
+                    vec![g.shader, g.pass_type, g.property, g.geometry]
+                };
+                let camera = e.mem.alloc(0x120);
+                let acc = e.mem.alloc(0x40);
+                (words, vec![camera, acc])
+            },
+            |e, w| cut::take_frame(e, w[0], Ptr::new(w[1])),
+        );
+    }
+}
+
 // ---- Group C: the lighting 3.0 shader (the draw family's `lighting30`) ----
 
 /// The lighting 3.0 shader's constant entries (`01201080` to `012010e8`, the pointers made at load):
 /// each an entry whose switch (+8) is `on` (a pattern of the case), its count word +0x20 marked.
 fn lighting30_entries(e: &mut Engine, on: u32) {
-    e.map(0x0120_0000, 0x2000);
+    e.map(0x0120_0000, 0x3000);
     for k in 0..27u32 {
         let entry = e.mem.alloc(0x30);
         e.mem.set_u8(entry + 8, u8::from(on & (1 << (k % 32)) != 0));
@@ -9899,64 +10081,67 @@ fn lighting30_setup_switches() {
     ])
     .max_cases(200)
     .float_sweep(FLOAT_SWEEP)
-    .setup(|e, c| {
-        let _ = world(e);
-        lighting30_entries(e, c.word(1));
-        if c.word(1) == 0x0555_5555 {
-            // A null entry pointer in each table (the switches skip it, the flag bytes still set).
-            set(e, 0x0120_1088, 0);
-            set(e, 0x0120_10cc, 0);
-        }
-        for k in 0..0x80u32 {
-            set(
-                e,
-                0x0120_0a28 + 4 * k,
-                0x5a5a_5a5a ^ k.wrapping_mul(0x01f3_c1d5),
-            );
-            set(
-                e,
-                0x0120_0868 + 4 * k,
-                0xa5a5_a5a5 ^ k.wrapping_mul(0x0326_9e1b),
-            );
-        }
-        let vt = vtable(e, &[]);
-        let this = obj(e, 0xa4, vt);
-        for at in [0x30u32, 0x34] {
-            let map = obj(e, 0x40, vt);
-            set(e, this + at, map);
-        }
-        e.register(VT_FN + 0x24, marked);
-        let fog = if c.word(2) != 0 {
-            let fog = e.mem.alloc(0x80);
-            for (k, v) in (0u32..).zip([0x3e00_0000, 0x3e80_0000, 0x3f00_0000]) {
-                set(e, fog + 0x20 + 4 * k, v);
-            }
-            set(e, fog + 0x60, 0x4040_0000);
-            if c.word(2) == 2 {
-                set(e, fog + 0x30, play_bits(c, 3));
-                set(e, fog + 0x2c, play_bits(c, 4));
-            }
-            fog
-        } else {
-            0
-        };
-        let node = e.mem.alloc(0x140);
-        set(e, node + 0x134, fog);
-        set(e, 0x011f_91c8 + 8, node);
-        e.mem.set_u8(0x011f_91c4, 2);
-        e.map(0x010a_d000, 0x1000);
-        set(e, 0x010a_d6e0, 0x48f4_2400);
-        for k in 0..4u32 {
-            set(e, 0x011a_9bd0 + 4 * k, 0x3d00_0000 + k);
-        }
-        for (k, v) in (0u32..).zip([0x4600_0000, 0x4680_0000, 0x4500_0000]) {
-            set(e, 0x011f_a2a0 + 4 * k, v);
-            set(e, 0x011f_474c + 4 * k, v ^ 0x0040_0000);
-        }
-        vec![this, c.word(0)]
-    })
+    .setup(lighting30_switches_words)
     .run()
     .assert_same();
+}
+
+/// The words of `lighting30_setup_switches`'s cases (also its own-state check's).
+fn lighting30_switches_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let _ = world(e);
+    lighting30_entries(e, c.word(1));
+    if c.word(1) == 0x0555_5555 {
+        // A null entry pointer in each table (the switches skip it, the flag bytes still set).
+        set(e, 0x0120_1088, 0);
+        set(e, 0x0120_10cc, 0);
+    }
+    for k in 0..0x80u32 {
+        set(
+            e,
+            0x0120_0a28 + 4 * k,
+            0x5a5a_5a5a ^ k.wrapping_mul(0x01f3_c1d5),
+        );
+        set(
+            e,
+            0x0120_0868 + 4 * k,
+            0xa5a5_a5a5 ^ k.wrapping_mul(0x0326_9e1b),
+        );
+    }
+    let vt = vtable(e, &[]);
+    let this = obj(e, 0xa4, vt);
+    for at in [0x30u32, 0x34] {
+        let map = obj(e, 0x40, vt);
+        set(e, this + at, map);
+    }
+    e.register(VT_FN + 0x24, marked);
+    let fog = if c.word(2) != 0 {
+        let fog = e.mem.alloc(0x80);
+        for (k, v) in (0u32..).zip([0x3e00_0000, 0x3e80_0000, 0x3f00_0000]) {
+            set(e, fog + 0x20 + 4 * k, v);
+        }
+        set(e, fog + 0x60, 0x4040_0000);
+        if c.word(2) == 2 {
+            set(e, fog + 0x30, play_bits(c, 3));
+            set(e, fog + 0x2c, play_bits(c, 4));
+        }
+        fog
+    } else {
+        0
+    };
+    let node = e.mem.alloc(0x140);
+    set(e, node + 0x134, fog);
+    set(e, 0x011f_91c8 + 8, node);
+    e.mem.set_u8(0x011f_91c4, 2);
+    e.map(0x010a_d000, 0x1000);
+    set(e, 0x010a_d6e0, 0x48f4_2400);
+    for k in 0..4u32 {
+        set(e, 0x011a_9bd0 + 4 * k, 0x3d00_0000 + k);
+    }
+    for (k, v) in (0u32..).zip([0x4600_0000, 0x4680_0000, 0x4500_0000]) {
+        set(e, 0x011f_a2a0 + 4 * k, v);
+        set(e, 0x011f_474c + 4 * k, v ^ 0x0040_0000);
+    }
+    vec![this, c.word(0)]
 }
 
 /// The lighting 3.0 material's inputs: the shader mode (8, 10, another); the pass type (the light-scaled
@@ -10193,49 +10378,52 @@ fn lighting30_view_matrix() {
         Input::F32,
     ])
     .float_sweep(FLOAT_SWEEP)
-    .setup(|e, c| {
-        let w = world(e);
-        lighting30_entries(e, c.word(0));
-        matrix_inverse_stand_in(e);
-        for addr in [0x00fd_f424u32, 0x00fd_f42c] {
-            e.register(addr, |e, a| {
-                for k in 0..16u32 {
-                    let word = e.mem.u32(a[1] + 4 * ((5 * k + 3) % 16));
-                    e.mem.set_u32(a[0] + 4 * k, word ^ 1);
-                }
-                ret(a[0])
-            });
-        }
-        e.register(0x00b7_99a0, |e, a| {
+    .setup(lighting30_view_matrix_words)
+    .run()
+    .assert_same();
+}
+
+/// The words of `lighting30_view_matrix`'s cases (also its own-state check's).
+fn lighting30_view_matrix_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let w = world(e);
+    lighting30_entries(e, c.word(0));
+    matrix_inverse_stand_in(e);
+    for addr in [0x00fd_f424u32, 0x00fd_f42c] {
+        e.register(addr, |e, a| {
             for k in 0..16u32 {
-                e.mem.set_u32(a[0] + 4 * k, 0x3f00_0000 + k);
+                let word = e.mem.u32(a[1] + 4 * ((5 * k + 3) % 16));
+                e.mem.set_u32(a[0] + 4 * k, word ^ 1);
             }
             ret(a[0])
         });
-        for k in 0..3u32 {
-            set(
-                e,
-                0x011f_474c + 4 * k,
-                if k == 0 { play_bits(c, 4) } else { 0x4300_0000 },
-            );
-        }
-        let renderer = w.renderer;
+    }
+    e.register(0x00b7_99a0, |e, a| {
         for k in 0..16u32 {
-            set(e, renderer + 0x940 + 4 * k, 0x3c00_0000 + k);
+            e.mem.set_u32(a[0] + 4 * k, 0x3f00_0000 + k);
         }
-        let vt = vtable(e, &[]);
-        let this = obj(e, 0xa4, vt);
-        set(e, this + 0x18, renderer);
-        let pass = match c.word(1) {
-            0 => lighting30_pass(e, 0x30, 0, false),
-            1 => lighting30_pass(e, 0x30, 2, false),
-            _ => lighting30_pass(e, 0x30, 2, true),
-        };
-        let transform = e.mem.alloc(0x34);
-        vec![this, pass, c.word(2), c.word(3), transform]
-    })
-    .run()
-    .assert_same();
+        ret(a[0])
+    });
+    for k in 0..3u32 {
+        set(
+            e,
+            0x011f_474c + 4 * k,
+            if k == 0 { play_bits(c, 4) } else { 0x4300_0000 },
+        );
+    }
+    let renderer = w.renderer;
+    for k in 0..16u32 {
+        set(e, renderer + 0x940 + 4 * k, 0x3c00_0000 + k);
+    }
+    let vt = vtable(e, &[]);
+    let this = obj(e, 0xa4, vt);
+    set(e, this + 0x18, renderer);
+    let pass = match c.word(1) {
+        0 => lighting30_pass(e, 0x30, 0, false),
+        1 => lighting30_pass(e, 0x30, 2, false),
+        _ => lighting30_pass(e, 0x30, 2, true),
+    };
+    let transform = e.mem.alloc(0x34);
+    vec![this, pass, c.word(2), c.word(3), transform]
 }
 
 /// The lighting 3.0 lights' inputs: the shader mode (0xf, 10, another); the pass type (below 0x1bd,
@@ -10638,4 +10826,493 @@ fn pass_end_flags() {
         })
         .run()
         .assert_same();
+}
+
+// ---- The draw's own state (the drawing thread's step 2, piece 3: `draw::statics`) ----
+
+use engine_typed::draw::statics;
+
+/// The pages that hold Group C's statics block (`01200450..01202150`), mapped in every own-state world so the cut can
+/// take the block.
+const GROUP_C_PAGES: (u32, u32) = (0x0120_0000, 0x3000);
+
+/// The names of `statics::GLOBAL_BLOCKS`, in its order.
+const GLOBAL_BLOCK_NAMES: [&str; 8] = [
+    "the rendering pass and type",
+    "the shader and held accumulators",
+    "the shader statics",
+    "Group C's statics",
+    "the current pass",
+    "the group zero flag",
+    "the last light's point flag",
+    "the terrain fade flag",
+];
+
+/// `f` run, for each case and both scribbles, on two engines `setup` makes alike (it answers the call's words and
+/// the accumulator): one plain, one with the value packet open around the call holding the draw's own state
+/// (`statics::take`: the shader statics, the render-state cache, the accumulator's camera), scribbled (POISON).
+/// Both must answer the same and leave the same memory beside the stack for locals once the join has put the own
+/// state back; nothing scribbled may be written past the packet, and in this serial order the join keeps no
+/// byte of main's.
+fn own_state_same(
+    name: &str,
+    f: AbiFn,
+    cases: &[Vec<u32>],
+    setup: impl Fn(&mut Engine, &Case) -> (Vec<u32>, u32),
+    fill: impl Fn(&mut Engine, u32, &[u32]),
+) {
+    own_state_same_floats(name, f, cases, &[], setup, fill);
+}
+
+/// [`own_state_same`] with the case words at `floats` given as floats (for setups that read them so).
+fn own_state_same_floats(
+    name: &str,
+    f: AbiFn,
+    cases: &[Vec<u32>],
+    floats: &[usize],
+    setup: impl Fn(&mut Engine, &Case) -> (Vec<u32>, u32),
+    fill: impl Fn(&mut Engine, u32, &[u32]),
+) {
+    for words in cases {
+        for scribble in [capture::SCRIBBLE, capture::SCRIBBLE_OTHER] {
+            let case = Case(
+                (0..)
+                    .zip(words)
+                    .map(|(i, w)| {
+                        if floats.contains(&i) {
+                            Value::F32(*w)
+                        } else {
+                            Value::Word(*w)
+                        }
+                    })
+                    .collect(),
+            );
+            let mut plain = Engine::new();
+            plain.map(GROUP_C_PAGES.0, GROUP_C_PAGES.1);
+            let (a, _) = setup(&mut plain, &case);
+            plain.with_stack(4, |_, _| ());
+            let answer = f(&mut plain, &a);
+            let mut owned = Engine::new();
+            owned.map(GROUP_C_PAGES.0, GROUP_C_PAGES.1);
+            let (b, acc) = setup(&mut owned, &case);
+            owned.with_stack(4, |_, _| ());
+            assert!(capture::begin(&owned), "{name}: a packet was left open");
+            statics::take(&owned, Ptr::new(acc));
+            for (block, (lo, hi)) in GLOBAL_BLOCK_NAMES.iter().zip(statics::GLOBAL_BLOCKS) {
+                assert!(
+                    capture::owns(&owned, lo, hi - lo),
+                    "{name}: the cut did not take {block} ({lo:08x}..{hi:08x})"
+                );
+            }
+            fill(&mut owned, acc, &b);
+            capture::poison(&mut owned, scribble);
+            let owned_answer = f(&mut owned, &b);
+            let report = capture::end(&mut owned);
+            assert_eq!(
+                answer, owned_answer,
+                "{name} {words:x?} {scribble:#x}: the answers differ"
+            );
+            assert_eq!(
+                memory_digest_beside_stack(&plain),
+                memory_digest_beside_stack(&owned),
+                "{name} {words:x?} {scribble:#x}: the memory differs"
+            );
+            assert_eq!(
+                (report.misses, report.written, report.kept_main),
+                (0, 0, 0),
+                "{name} {words:x?} {scribble:#x}: {report:?}"
+            );
+        }
+    }
+}
+
+/// The lock-counted render-state setters keep their counters and the render-state cache in the packet: with
+/// the counters and cached values scribbled in guest memory, they set what they set with the switch off.
+#[test]
+fn render_state_setters_keep_the_draws_own_state() {
+    for (name, f, counter_index, state) in [
+        (
+            "set_z_enable",
+            entry!(0x00b9_7de0, state::set_z_enable(u8, u32)).1,
+            7u32,
+            7u32,
+        ),
+        (
+            "set_z_write_enable",
+            entry!(0x00b9_7e30, state::set_z_write_enable(u8, u32)).1,
+            6,
+            0xe,
+        ),
+        (
+            "set_alpha_test_enable",
+            entry!(0x00b9_7ed0, state::set_alpha_test_enable(u8, u32)).1,
+            7,
+            0xf,
+        ),
+        (
+            "set_alpha_blend_enable",
+            entry!(0x00b9_7fa0, state::set_alpha_blend_enable(u8, u32)).1,
+            3,
+            0x1b,
+        ),
+        (
+            "set_stencil_enable",
+            entry!(0x00b9_8070, state::set_stencil_enable(u8, u32)).1,
+            4,
+            0x34,
+        ),
+        (
+            "set_depth_bias",
+            entry!(0x00b9_8320, state::set_depth_bias(u32, u32)).1,
+            0,
+            0xc3,
+        ),
+    ] {
+        own_state_same(
+            name,
+            f,
+            &product(&[BYTES, LOCKS, TWO_WAYS, TWO_WAYS]),
+            |e, c| {
+                let w = world(e);
+                // The device's SetRenderState counted and its last state and value kept, so a cache compared in
+                // place (a set sent or skipped wrongly) shows.
+                e.map(CONSTANT_UPLOAD_COPY, 0x2000);
+                e.register(VT_FN + 0xe4, set_render_state_answer);
+                counter(e, counter_index, c.word(2));
+                cached_state(e, &w, state, c.word(3), 1);
+                (vec![c.word(0), c.word(1)], w.acc)
+            },
+            |_, _, _| {},
+        );
+    }
+}
+
+/// The clip planes' setter (`00b98280`) keeps its counter and the cached state in the packet.
+#[test]
+fn clip_planes_keep_the_draws_own_state() {
+    own_state_same(
+        "set_clip_planes",
+        entry!(
+            0x00b9_8280,
+            state::set_clip_planes(u8, u8, u8, u8, u8, u8, u32)
+        )
+        .1,
+        &product(&[&[0, 1], &[0, 4], LOCKS, TWO_WAYS, TWO_WAYS]),
+        |e, c| {
+            let w = world(e);
+            e.map(CONSTANT_UPLOAD_COPY, 0x2000);
+            e.register(VT_FN + 0xe4, set_render_state_answer);
+            counter(e, 0, c.word(3));
+            cached_state(e, &w, 0x98, c.word(4), 1);
+            (
+                vec![c.word(0), 1, c.word(1), 0, 1, c.word(0), c.word(2)],
+                w.acc,
+            )
+        },
+        |_, _, _| {},
+    );
+}
+
+/// Group C's lock releases (`00714a40` and its neighbours) give their locks back in the packet and set their
+/// state through it: the counter the release lowers is the one the setter then reads.
+#[test]
+fn lock_releases_keep_the_draws_own_state() {
+    for (name, f, at, state) in [
+        (
+            "release_z_enable",
+            entry!(0x0071_4a40, group_c::release_z_enable(u32)).1,
+            0x011f_f9d8u32,
+            7u32,
+        ),
+        (
+            "release_z_write",
+            entry!(0x0071_4a60, group_c::release_z_write(u32)).1,
+            0x011f_f9dc,
+            0xe,
+        ),
+        (
+            "release_alpha_test",
+            entry!(0x0071_4aa0, group_c::release_alpha_test(u32)).1,
+            0x011f_f9e8,
+            0xf,
+        ),
+        (
+            "release_alpha_blend",
+            entry!(0x0071_4ae0, group_c::release_alpha_blend(u32)).1,
+            0x011f_f9f0,
+            0x1b,
+        ),
+        (
+            "release_color_write",
+            entry!(0x004e_ced0, group_c::release_color_write(u32)).1,
+            0x011f_fa18,
+            0xa8,
+        ),
+    ] {
+        own_state_same(
+            name,
+            f,
+            &product(&[&[0, 1, 3], &[0, 1, 2, 5], TWO_WAYS, TWO_WAYS]),
+            |e, c| {
+                let w = world(e);
+                e.map(CONSTANT_UPLOAD_COPY, 0x2000);
+                e.register(VT_FN + 0xe4, set_render_state_answer);
+                set(e, at, c.word(1));
+                cached_state(e, &w, state, c.word(2), c.word(3));
+                (vec![c.word(0)], w.acc)
+            },
+            |_, _, _| {},
+        );
+    }
+}
+
+/// The decal pass (`00b64e30`) takes and gives back the z-write and depth-bias locks in the packet, both by the
+/// typed setters and by hand (`011ff9dc`, `011ff9e4`), and reads the decal depth bias (`01200458`, Group C's
+/// block) from it.
+#[test]
+fn decal_pass_keeps_the_draws_own_state() {
+    own_state_same(
+        "decal_pass",
+        entry!(0x00b6_4e30, drivers::decal_pass(Ptr<_>)).1,
+        &product(&[&[1], &[0, 8], TWO_WAYS, &[0, ONE, 0x7f80_0001], &[0, 1, 2]]),
+        |e, c| {
+            let d = draw_world(e);
+            e.map(CONSTANT_UPLOAD_COPY, 0x2000);
+            e.register(VT_FN + 0xe4, set_render_state_answer);
+            e.mem.set_u8(d.w.acc + 0x16c, c.word(0) as u8);
+            set(e, d.w.acc + 0x19c, c.word(1));
+            e.mem.set_u8(0x011a_d80f, c.word(2) as u8);
+            set(e, 0x0120_0458, c.word(3));
+            set(e, 0x011f_f9dc, c.word(4) + 1);
+            set(e, 0x011f_f9e4, c.word(4) + 1);
+            (vec![d.w.acc], d.w.acc)
+        },
+        |_, _, _| {},
+    );
+}
+
+/// `setup` with an accumulator of its own (the Group C set-ups take none): the own-state check's form.
+fn with_acc(
+    setup: fn(&mut Engine, &Case) -> Vec<u32>,
+) -> impl Fn(&mut Engine, &Case) -> (Vec<u32>, u32) {
+    move |e, c| {
+        let words = setup(e, c);
+        (words, e.mem.alloc(0x200))
+    }
+}
+
+/// The lighting 3.0 view matrix (`00bbe6b0`) copies the view and the projection (`own::copy_constants`, both
+/// branches: the view's entry on, the projection's entry on with the flag) into Group C's block in the packet,
+/// and reads its entries' slots from it.
+#[test]
+fn lighting30_view_matrix_writes_the_draws_own_constants() {
+    own_state_same_floats(
+        "lighting30::view_matrix",
+        entry!(
+            0x00bb_e6b0,
+            engine_typed::draw::lighting30::view_matrix(Ptr<_>, Ptr<_>, u32, u32, Ptr<_>)
+        )
+        .1,
+        &product(&[
+            &[0, u32::MAX, 0x0000_0040],
+            &[0, 2],
+            &[0x1bd, 0x2d8, 0x1c4],
+            TWO_WAYS,
+            &[ONE],
+        ]),
+        &[4],
+        with_acc(lighting30_view_matrix_words),
+        |e, acc, w| {
+            // The pass's light count only: lighting 3.0 still reads its light array and lights in place (its
+            // accessors move to the packet with value packet B), so they stay unscribbled.
+            capture::take(e, w[1], 9, 0xa);
+            cut::take_frame(e, 0, Ptr::new(acc));
+        },
+    );
+}
+
+/// The lighting 3.0 switches (`00bbe120`) read the pass masks and the entries' slots from Group C's block in
+/// the packet and write its flag bytes there.
+#[test]
+fn lighting30_switches_keep_the_draws_own_state() {
+    own_state_same_floats(
+        "lighting30::setup_switches",
+        entry!(
+            0x00bb_e120,
+            engine_typed::draw::lighting30::setup_switches(Ptr<_>, u32)
+        )
+        .1,
+        &product(&[
+            &[0x1e0, 10, 0x1d3, 0x2da, 0x2e7, 0x1c4],
+            &[0, u32::MAX, 0x0555_5555],
+            &[0, 2],
+            &[ONE],
+            &[0x4120_0000],
+        ]),
+        &[3, 4],
+        with_acc(lighting30_switches_words),
+        |e, acc, _| cut::take_frame(e, 0, Ptr::new(acc)),
+    );
+}
+
+/// The no-lighting shader's sub-texture copy (`00bc6fa0`) copies into Group C's block in the packet.
+#[test]
+fn no_lighting_subtextures_go_to_the_draws_own_constants() {
+    own_state_same(
+        "no_lighting::copy_subtextures",
+        entry!(
+            0x00bc_6fa0,
+            engine_typed::draw::no_lighting::copy_subtextures(Ptr<_>, Ptr<_>, u32)
+        )
+        .1,
+        &product(&[&[0, 1, 5]]),
+        with_acc(no_lighting_subtexture_words),
+        |_, _, _| {},
+    );
+}
+
+/// The pass constants with vertex entry 8 on write the fog constants and the fog colour's copies into the draw's
+/// own shader statics (the fog read through the packet the frame's values fill).
+#[test]
+fn setup_pass_constants_writes_the_draws_own_constants() {
+    own_state_same(
+        "setup_pass_constants",
+        entry!(0x00b7_b450, setups::setup_pass_constants(Ptr<_>, u32)).1,
+        &product(&[
+            &[0x10, 0x2f0],
+            &[0x0000_0200, 0xffff_ffff],
+            &[1, 2, 3],
+            TWO_WAYS,
+        ]),
+        |e, c| {
+            let p = pass_world(e, &[], 0, 0);
+            for addr in SETUP_CALLEES {
+                e.register(*addr, marked);
+            }
+            entries(e);
+            let pass_type = c.word(0);
+            set(e, 0x011f_cc80 + 4 * pass_type, c.word(1));
+            set(e, 0x011f_c0a0 + 4 * pass_type, c.word(1).rotate_left(3));
+            e.map(0x010a_d000, 0x1000);
+            set(e, 0x010a_d6e0, 0x48f4_2400);
+            e.mem.set_u8(0x011f_91c4, 1);
+            let node = e.mem.alloc(0x140);
+            set(e, 0x011f_91c8 + 4, node);
+            let fog = e.mem.alloc(0x64);
+            for (k, word) in [ONE, HALF, 0x3e80_0000].iter().enumerate() {
+                set(e, fog + 0x20 + 4 * k as u32, *word);
+            }
+            match c.word(2) {
+                2 => {
+                    set(e, fog + 0x2c, 0x3f40_0000);
+                    set(e, fog + 0x30, TWO);
+                    set(e, fog + 0x60, 0x3f40_0000);
+                }
+                3 => set(e, fog + 0x2c, ONE),
+                _ => {}
+            }
+            set(e, node + 0x134, fog);
+            let geometry = e.mem.u32(e.mem.u32(0x011f_91e0));
+            let skin = if c.word(3) != 0 { p.d.w.skin } else { 0 };
+            set(e, geometry + 0xbc, skin);
+            set(e, p.d.w.shader + 0x18, p.d.w.renderer);
+            set(e, RETS + 0x7f8, p.d.w.camera);
+            (vec![p.d.w.shader, pass_type], p.d.w.acc)
+        },
+        |e, acc, _| {
+            let camera = e.mem.u32(RETS + 0x7f8);
+            cut::take_frame(e, camera, Ptr::new(acc));
+        },
+    );
+}
+
+/// The device's `SetRenderState` (slot 0xe4), `(device, state, value)`: counted at [`CONSTANT_UPLOAD_COPY`] + 0x1f00, the
+/// state and value kept after it; then the slot's answer.
+fn set_render_state_answer(e: &mut Engine, a: &[u32]) -> Ret {
+    let at = CONSTANT_UPLOAD_COPY + 0x1f00;
+    let n = e.mem.u32(at);
+    e.mem.set_u32(at, n + 1);
+    e.mem.set_u32(at + 4, a[1]);
+    e.mem.set_u32(at + 8, a[2]);
+    slot_answer::<0xe4>(e, a)
+}
+
+/// Where [`constants_upload_answer`] copies what the device is handed (one 0x10-byte row a register).
+const CONSTANT_UPLOAD_COPY: u32 = 0x0121_0000;
+
+/// The device's `SetVertexShaderConstantF` / `SetPixelShaderConstantF` (slots 0x178, 0x1b4), `(device, register,
+/// data, count)`: the rows the data points to copied to [`CONSTANT_UPLOAD_COPY`] at the register's row (the
+/// vertex rows, then the pixel rows 0x100 on), so the digest compares what was uploaded; then the slot's answer.
+fn constants_upload_answer<const S: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+    let (register, data, count) = (a[1], a[2], a[3].min(4));
+    let base = CONSTANT_UPLOAD_COPY + if S == 0x1b4 { 0x1000 } else { 0 };
+    let mut bytes = vec![0u8; 16 * count as usize];
+    if register < 0x100 && e.mem.try_read(data, &mut bytes).is_ok() {
+        e.mem.write(base + 16 * register, &bytes);
+    }
+    slot_answer::<S>(e, a)
+}
+
+/// The constant map's uploads (`00e826d0`) hand the device the draw's own constants: with the entries' data in
+/// the shader statics (scribbled in guest memory), the device gets the rows the draw holds (an image of the
+/// packet's copy).
+#[test]
+fn set_shader_constants_uploads_the_draws_own_constants() {
+    own_state_same(
+        "set_shader_constants",
+        entry!(
+            0x00e8_26d0,
+            constants::set_shader_constants(
+                Ptr<_>,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+            ) -> bool
+        )
+        .1,
+        &product(&[&[0, 1, 3, 6], &[0, 1, 2, 3], &[0, 1]]),
+        |e, c| {
+            stand_ins(e, false);
+            slots!(e; 0x90, 0x94, 0x98, 0x9c);
+            e.register(VT_FN + 0x178, constants_upload_answer::<0x178>);
+            e.register(VT_FN + 0x1b4, constants_upload_answer::<0x1b4>);
+            e.map(CONSTANT_UPLOAD_COPY, 0x2000);
+            for slot in [0x8c, 0x90, 0x94, 0x98, 0x9c, 0xa4] {
+                set(e, RETS + slot, 1);
+            }
+            let vt = vtable(e, &[]);
+            let device = obj(e, 0x10, vt);
+            let map = obj(e, 0x44, vt);
+            let entries = constant_entries(e, c.word(0), c.word(1), c.word(2), false);
+            let defined = constant_entries(e, c.word(0) + 1, c.word(1) + 1, c.word(2) + 2, false);
+            // Each entry's data in the shader statics' constant rows, the rows filled.
+            for (list, base) in [(entries, 0x011f_a0c0u32), (defined, 0x011f_d868)] {
+                for i in 0..10u32 {
+                    let entry = e.mem.u32(list + 4 * i);
+                    set(e, entry + 0x30, base + 0x30 * i);
+                }
+            }
+            for k in 0..0x100u32 {
+                set(e, 0x011f_a0c0 + 4 * k, 0x3f80_0000 + 0x101 * k);
+                set(e, 0x011f_d868 + 4 * k, 0x4000_0000 + 0x303 * k);
+            }
+            set(e, map + 0x10, entries);
+            e.mem.set_u16(map + 0x16, 10);
+            set(e, map + 0x20, defined);
+            e.mem.set_u16(map + 0x26, 10);
+            set(e, map + 0x38, device);
+            let mut words = vec![map];
+            words.extend((0..11).map(|i| 0x0700_0000 + 0x100 * i));
+            (words, 0)
+        },
+        |_, _, _| {},
+    );
 }

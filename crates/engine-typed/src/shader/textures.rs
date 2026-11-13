@@ -11,6 +11,7 @@
 //! per body, in the table's order of first use, and was checked against the exe's table type by type.
 
 use super::{accumulator, state, FAMILY};
+use crate::draw::capture;
 use crate::render;
 use engine_core::prelude::*;
 
@@ -22,7 +23,7 @@ const RENDERING_PASS: u32 = 0x011f_91e0;
 /// The current pass's stage `index` (the pass and its stages read afresh each time, as the exe does).
 #[inline(always)]
 fn pass_stage(e: &Engine, index: u32) -> u32 {
-    let pass = e.global::<u32>(CURRENT_PASS);
+    let pass = capture::own_at::<u32>(e, CURRENT_PASS);
     let stages = e.mem.u32(pass.wrapping_add(0x24));
     e.mem.u32(stages.wrapping_add(index.wrapping_mul(4)))
 }
@@ -85,7 +86,7 @@ const RENDERED_TEXTURE_GET_TEXTURE: u32 = 0x004b_c320;
 /// +0xc).
 pub fn stage_light_texture(e: &mut Engine, stage: u32) {
     let stage = pass_stage(e, stage);
-    let rendering = e.global::<u32>(RENDERING_PASS);
+    let rendering = capture::own_at::<u32>(e, RENDERING_PASS);
     let lights = e.mem.u32(rendering.wrapping_add(0xc));
     let light = e.mem.u32(lights);
     let rendered = e.mem.u32(light.wrapping_add(0x10c));
@@ -213,10 +214,10 @@ const BIND_PASS_STAGES: u32 = 0x00be_2170;
 /// +0x108 binds the pass's stages. Types outside the table do nothing.
 pub fn setup_geometry_textures(e: &mut Engine, this: Ptr, block: Ptr) {
     let base = this.addr();
-    let rendering = e.global::<u32>(RENDERING_PASS);
+    let rendering = capture::own_at::<u32>(e, RENDERING_PASS);
     let kind = u32::from(e.mem.u16(rendering.wrapping_add(4)));
     let property = e.mem.u32(block.addr().wrapping_add(0xc));
-    let pass = e.global::<u32>(CURRENT_PASS);
+    let pass = capture::own_at::<u32>(e, CURRENT_PASS);
     let second_set = e.mem.u32(property.wrapping_add(0x24)) & 0x100000 == 0;
     let p = Ptr::new(property);
     let body = match kind {
@@ -341,7 +342,7 @@ pub fn setup_geometry_textures(e: &mut Engine, this: Ptr, block: Ptr) {
         }
         2 => {
             stage_texture(e, p, 0, 0);
-            let pass = e.global::<u32>(CURRENT_PASS);
+            let pass = capture::own_at::<u32>(e, CURRENT_PASS);
             let stages = e.mem.u32(pass.wrapping_add(0x24));
             first_texture_or_fallback(e, stages, 1, property);
         }
@@ -386,7 +387,7 @@ pub fn setup_geometry_textures(e: &mut Engine, this: Ptr, block: Ptr) {
         11 | 12 => {
             stage_texture(e, p, 0, 0);
             stage_second_texture(e, p, 1, 0);
-            let pass = e.global::<u32>(CURRENT_PASS);
+            let pass = capture::own_at::<u32>(e, CURRENT_PASS);
             let stages = e.mem.u32(pass.wrapping_add(0x24));
             let index = if body == 11 { 4 } else { 3 };
             first_texture_or_fallback(e, stages, index, property);

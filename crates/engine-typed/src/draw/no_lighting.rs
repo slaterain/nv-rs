@@ -235,7 +235,7 @@ pub fn texture_matrix(e: &mut Engine, _this: Ptr, state: Ptr) {
         }
     }
     for (k, word) in (0u32..).zip(matrix) {
-        let at = TEXTURE_MATRIX + 0x10 * (k / 3) + 4 * (k % 3);
+        let at = TEXTURE_MATRIX + 0x10 * (k / 3) + 4 * (k % 3); // own: an address, written through set_constant_word
         own::set_constant_word(e, at, word);
     }
 }

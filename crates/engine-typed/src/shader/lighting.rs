@@ -9,6 +9,7 @@
 
 use super::{add_d, mul_d};
 use crate::anim_keys::narrow;
+use crate::draw::{capture, packet};
 use engine_core::prelude::*;
 
 /// The zero colour (4 words, `011a9bd0`).
@@ -42,20 +43,21 @@ const LAST_LIGHT_FLAG: u32 = 0x011f_91a6;
 /// The neutral colour a point light gets below full `scale` (3 words, `011f4998`).
 const DIMMED_COLOUR: u32 = 0x011f_4998;
 
+/// A float of a pass light's light (its values, the packet's).
 #[inline(always)]
-fn float_word(e: &Engine, address: u32) -> f32 {
-    e.mem.f32(address)
+fn light_value(e: &Engine, data: u32, offset: u32) -> f32 {
+    f32::from_bits(packet::light_value_word(e, data, offset))
 }
 
 /// The rendering geometry's shader property (`[[011f91e0]] + 0xa8`) when its word at +0x1c is 8 to 12
 /// (signed), else null.
 fn shader_object(e: &Engine) -> u32 {
-    let geometry = e.mem.u32(e.global::<u32>(RENDERING_PASS));
-    let object = e.mem.u32(geometry.wrapping_add(0xa8));
+    let geometry = packet::pass_geometry(e, capture::own_at::<u32>(e, RENDERING_PASS));
+    let object = packet::shader_property(e, geometry);
     if object == 0 {
         return 0;
     }
-    let kind = e.mem.u32(object.wrapping_add(0x1c)) as i32;
+    let kind = packet::property_kind(e, object) as i32;
     if (8..=12).contains(&kind) {
         object
     } else {
@@ -73,8 +75,8 @@ fn brighten(e: &Engine, colour: [f32; 3], threshold: f32) -> Option<[f32; 3]> {
         return None;
     }
     let [x, y, z] = colour;
-    let green = mul_d(y, e.global::<f64>(GREEN_WEIGHT));
-    let red_weight = e.global::<f64>(RED_WEIGHT);
+    let green = mul_d(y, e.global::<f64>(GREEN_WEIGHT)); // own: a constant of the exe
+    let red_weight = e.global::<f64>(RED_WEIGHT); // own: a constant of the exe
     let red = mul_d(x, red_weight);
     let sum = (red + green) + z;
     let luminance = add_d(sum, red_weight);
@@ -86,7 +88,7 @@ fn brighten(e: &Engine, colour: [f32; 3], threshold: f32) -> Option<[f32; 3]> {
     } else {
         threshold / luminance
     };
-    let offset = e.global::<f64>(BRIGHTNESS_OFFSET);
+    let offset = e.global::<f64>(BRIGHTNESS_OFFSET); // own: a constant of the exe
     let red = add_d(x, offset) * ratio;
     let green = add_d(y, offset) * ratio;
     let blue = ratio * add_d(z, offset);
@@ -96,8 +98,9 @@ fn brighten(e: &Engine, colour: [f32; 3], threshold: f32) -> Option<[f32; 3]> {
 /// The light's strength (the float at +0xc4 of its data), made 1.0 when above 1.0 unless the HDR
 /// switch is set.
 fn capped_strength(e: &Engine, data: u32) -> f32 {
-    let strength = float_word(e, data.wrapping_add(0xc4));
+    let strength = light_value(e, data, 0xc4);
     if e.global::<u8>(HDR) == 0 && f64::from(strength) > e.global::<f64>(ONE) {
+        // own: main's frame value, value packet B
         1.0
     } else {
         strength
@@ -135,19 +138,19 @@ pub fn light_setup(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
     let row = LIGHT_COLOURS.wrapping_add(index << 4);
     if light == 0 {
         for i in 0..4u32 {
-            let value = e.global::<u32>(ZERO_COLOUR + 4 * i);
-            e.set_global(row + 4 * i, value);
+            let value = e.global::<u32>(ZERO_COLOUR + 4 * i); // own: a constant of the exe
+            capture::set_own_at(e, row + 4 * i, value);
         }
         return;
     }
-    let ambient_allowed = e.mem.u8(light.wrapping_add(0xf5));
-    let data = e.mem.u32(light.wrapping_add(0xf8));
-    let is_point = e.mem.u8(light.wrapping_add(0xf4));
+    let ambient_allowed = packet::pass_light_byte(e, light, 0xf5);
+    let data = packet::pass_light_word(e, light, 0xf8);
+    let is_point = packet::pass_light_byte(e, light, 0xf4);
     let object = shader_object(e);
     if is_point != 0 {
         if data != 0 {
             let position: [u32; 3] =
-                std::array::from_fn(|i| e.mem.u32(data.wrapping_add(0x8c + 4 * idx(i))));
+                std::array::from_fn(|i| packet::light_value_word(e, data, 0x8c + 4 * idx(i)));
             typed_call!(
                 leaf::FAMILY,
                 0x004e_20c0,
@@ -166,15 +169,19 @@ pub fn light_setup(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
             let direction = e.with_stack(0xc, |e, point| {
                 let point = point.addr();
                 for i in 0..3u32 {
-                    let value = e.mem.u32(data.wrapping_add(0xf0 + 4 * i));
-                    e.mem.set_u32(point + 4 * i, value);
+                    let value = packet::light_value_word(e, data, 0xf0 + 4 * i);
+                    capture::set_own_at::<u32>(e, point + 4 * i, value);
                 }
                 typed_call!(
                     crate::dispatch::FAMILY,
                     0x004a_0c10,
                     crate::dispatch::math::normalize(e, Ptr::new(point))
                 );
-                [e.mem.u32(point), e.mem.u32(point + 4), e.mem.u32(point + 8)]
+                [
+                    capture::own_at::<u32>(e, point),
+                    capture::own_at::<u32>(e, point + 4),
+                    capture::own_at::<u32>(e, point + 8),
+                ]
             });
             let w = if object != 0 {
                 narrow(e.vcall(object, 0x10c, &args![]).f64())
@@ -187,10 +194,11 @@ pub fn light_setup(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
                 leaf::store_colour(e, index + 0x13, direction[0], direction[1], direction[2], w)
             );
         }
-        let skipped = e.global::<u8>(SKIP_AMBIENT) != 0 && ambient_allowed == 0;
+        let skipped = e.global::<u8>(SKIP_AMBIENT) != 0 && ambient_allowed == 0; // own: main's frame value, value packet B
         if !skipped {
-            let mut strength = float_word(e, data.wrapping_add(0xc4));
+            let mut strength = light_value(e, data, 0xc4);
             if e.global::<u8>(HDR) == 0 {
+                // own: main's frame value, value packet B
                 // The smaller of 1 and the strength (`0040ebd0`, `cdecl(a, b)`, answering in ST0).
                 strength = typed_call!(
                     crate::draw_f::FAMILY,
@@ -198,77 +206,78 @@ pub fn light_setup(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
                     crate::draw_f::helpers::float_min(e, 1.0, strength)
                 );
             }
-            let base: [f32; 3] =
-                std::array::from_fn(|i| float_word(e, data.wrapping_add(0xc8 + 4 * idx(i))));
+            let base: [f32; 3] = std::array::from_fn(|i| light_value(e, data, 0xc8 + 4 * idx(i)));
             let mut colour = [
                 base[0] * strength,
                 base[1] * strength,
-                strength * float_word(e, data.wrapping_add(0xd0)),
+                strength * light_value(e, data, 0xd0),
             ];
-            let threshold = e.global::<f32>(THRESHOLD);
+            let threshold = e.global::<f32>(THRESHOLD); // own: main's frame value, value packet B
             if let Some(bright) = brighten(e, colour, threshold) {
                 colour = bright;
             }
             for (i, component) in colour.iter().enumerate() {
-                e.set_global(AMBIENT_COLOUR + 4 * idx(i), *component * scale);
+                capture::set_own_at(e, AMBIENT_COLOUR + 4 * idx(i), *component * scale);
             }
-            e.set_global(AMBIENT_COLOUR + 0xc, 1.0f32.to_bits());
+            capture::set_own_at(e, AMBIENT_COLOUR + 0xc, 1.0f32.to_bits());
         }
     }
     let strength = capped_strength(e, data);
-    let weight = float_word(e, light.wrapping_add(0xd0));
-    let base: [f32; 3] =
-        std::array::from_fn(|i| float_word(e, data.wrapping_add(0xd4 + 4 * idx(i))));
+    let weight = f32::from_bits(packet::pass_light_word(e, light, 0xd0));
+    let base: [f32; 3] = std::array::from_fn(|i| light_value(e, data, 0xd4 + 4 * idx(i)));
     let colour = [
         base[0] * strength,
         base[1] * strength,
-        strength * float_word(e, data.wrapping_add(0xdc)),
+        strength * light_value(e, data, 0xdc),
     ];
     let scaled = colour.map(|component| component * scale);
     e.with_stack(0xc, |e, point| {
         let point = point.addr();
         let products = [scaled[0] * weight, weight * scaled[1], weight * scaled[2]];
         for (i, value) in products.iter().enumerate() {
-            e.mem.set_f32(point + 4 * idx(i), *value);
+            capture::set_own_at::<f32>(e, point + 4 * idx(i), *value);
         }
         if is_point != 0 {
             if scale < 1.0 {
                 for i in 0..3u32 {
-                    let value = e.global::<u32>(DIMMED_COLOUR + 4 * i);
-                    e.mem.set_u32(point + 4 * i, value);
+                    let value = e.global::<u32>(DIMMED_COLOUR + 4 * i); // own: a constant of the exe
+                    capture::set_own_at::<u32>(e, point + 4 * i, value);
                 }
             }
-        } else if e.global::<u8>(HDR) != 0 && e.global::<u8>(NO_EXTRA_SCALE) == 0 {
-            let extra = e.global::<u32>(EXTRA_SCALE);
+        } else if e.global::<u8>(HDR) != 0 // own: main's frame value, value packet B
+            && e.global::<u8>(NO_EXTRA_SCALE) == 0
+        // own: main's frame value, value packet B
+        {
+            let extra = e.global::<u32>(EXTRA_SCALE); // own: main's frame value, value packet B
             scale_point(e, point, extra);
         }
-        let pass = e.global::<u16>(PASS_TYPE).wrapping_sub(0x154);
-        let alpha = e.mem.u32(light.wrapping_add(0xd4));
+        let pass = capture::own_at::<u16>(e, PASS_TYPE).wrapping_sub(0x154);
+        let alpha = packet::pass_light_word(e, light, 0xd4);
         if pass <= 0x23 && object != 0 {
             let factor = narrow(e.vcall(object, 0x10c, &args![]).f64());
             scale_point(e, point, factor.to_bits());
         }
         for i in 0..3u32 {
-            let value = e.mem.u32(point + 4 * i);
-            e.set_global(row + 4 * i, value);
+            let value = capture::own_at::<u32>(e, point + 4 * i);
+            capture::set_own_at(e, row + 4 * i, value);
         }
-        e.set_global(row + 0xc, alpha);
+        capture::set_own_at(e, row + 0xc, alpha);
     });
     if is_point != 0 {
         let direction = LIGHT_DIRECTIONS.wrapping_add(index << 4);
-        let first = e.mem.u32(data.wrapping_add(0xe0));
+        let first = packet::light_value_word(e, data, 0xe0);
         // The exe also reads +0xe4 and +0xe8 and overwrites them with 0.0.
         let _ = (
-            e.mem.u32(data.wrapping_add(0xe4)),
-            e.mem.u32(data.wrapping_add(0xe8)),
+            packet::light_value_word(e, data, 0xe4),
+            packet::light_value_word(e, data, 0xe8),
         );
-        e.set_global(direction, first);
-        e.set_global(direction + 4, 0u32);
-        e.set_global(direction + 8, 0u32);
-        e.set_global(direction + 0xc, 1.0f32.to_bits());
+        capture::set_own_at(e, direction, first);
+        capture::set_own_at(e, direction + 4, 0u32);
+        capture::set_own_at(e, direction + 8, 0u32);
+        capture::set_own_at(e, direction + 0xc, 1.0f32.to_bits());
     }
-    e.set_global(LAST_LIGHT_FLAG, is_point);
-    e.set_global(LIGHT_KINDS + 4 * index, u32::from(is_point != 0) + 1);
+    capture::set_own_at(e, LAST_LIGHT_FLAG, is_point);
+    capture::set_own_at(e, LIGHT_KINDS + 4 * index, u32::from(is_point != 0) + 1);
 }
 
 /// A loop's small index as a word.

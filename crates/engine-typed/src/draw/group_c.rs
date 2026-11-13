@@ -4,6 +4,7 @@
 //! `004eced0`): each gives back `count` locks on its state
 //! (through [`super::own`], the draw's own writes) and sets the state (the shader family's setters).
 
+use super::capture;
 use super::{own, packet};
 use crate::shader::{self, state};
 use engine_core::ptr::Ptr;
@@ -184,7 +185,7 @@ const FLAG_ENTRIES: u32 = 0x011f_f4a0;
 
 /// Bit `bit` of pass type `pass_type`'s word in `table`.
 fn table_bit(e: &Engine, table: u32, pass_type: u32, bit: u32) -> u8 {
-    let word = e.global::<u32>(table.wrapping_add(pass_type.wrapping_mul(4)));
+    let word = capture::own_at::<u32>(e, table.wrapping_add(pass_type.wrapping_mul(4)));
     u8::from((word >> bit) & 1 != 0)
 }
 
@@ -196,14 +197,14 @@ fn table_bit(e: &Engine, table: u32, pass_type: u32, bit: u32) -> u8 {
 /// again, as the exe does.
 pub fn pass_flags(e: &mut Engine, pass_type: u32) {
     for (index, bit) in [(0u32, 1u32), (1, 2), (2, 3)] {
-        let entry = e.global::<u32>(FLAG_ENTRIES + 4 * index);
+        let entry = capture::own_at::<u32>(e, FLAG_ENTRIES + 4 * index);
         if entry != 0 {
             own::set_entry_enabled(e, entry, true);
         }
         let value = table_bit(e, PASS_FLAGS_FIRST, pass_type, bit);
         own::set_constant_byte(e, FIRST_FLAG_BYTES + index, value);
     }
-    let entry = e.global::<u32>(FLAG_ENTRIES + 4 * 3);
+    let entry = capture::own_at::<u32>(e, FLAG_ENTRIES + 4 * 3);
     if entry != 0 {
         let on = table_bit(e, PASS_FLAGS_SECOND, pass_type, 1) != 0;
         own::set_entry_enabled(e, entry, on);
@@ -212,7 +213,7 @@ pub fn pass_flags(e: &mut Engine, pass_type: u32) {
         let value = table_bit(e, PASS_FLAGS_SECOND, pass_type, index + 1);
         own::set_constant_byte(e, SECOND_FLAG_BYTES + index, value);
         if index < 5 {
-            let entry = e.global::<u32>(FLAG_ENTRIES + 4 * (4 + index));
+            let entry = capture::own_at::<u32>(e, FLAG_ENTRIES + 4 * (4 + index));
             if entry != 0 {
                 let on = table_bit(e, PASS_FLAGS_SECOND, pass_type, index + 2) != 0;
                 own::set_entry_enabled(e, entry, on);
@@ -265,7 +266,7 @@ pub fn set_light_entry(
     second_2: u32,
     second_3: u32,
 ) {
-    let entry = LIGHT_TABLE.wrapping_add(index.wrapping_shl(5));
+    let entry = LIGHT_TABLE.wrapping_add(index.wrapping_shl(5)); // own: an address, written through set_constant_word
     for (offset, word) in [
         (0x10u32, first_0),
         (0x14, first_1),
@@ -289,7 +290,7 @@ const PASS_END_ENTRY: u32 = 0x0120_10bc;
 /// After a pass, `thiscall(shader, unread word)` (neither read): the entry at `012010bc` switched off
 /// and the flag byte `01200863` cleared.
 pub fn pass_end_flags(e: &mut Engine, _this: Ptr, _unused: u32) {
-    let entry = e.global::<u32>(PASS_END_ENTRY);
+    let entry = capture::own_at::<u32>(e, PASS_END_ENTRY);
     own::set_constant_byte(e, PASS_END_FLAG, 0);
     own::set_entry_enabled(e, entry, false);
 }

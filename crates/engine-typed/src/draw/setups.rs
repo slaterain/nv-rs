@@ -5,6 +5,7 @@
 //! the render family's. Each fills the current pass's stages from the geometry's property and sets the
 //! world-view constants.
 
+use super::capture;
 use super::{own, packet, passes, FAMILY};
 use crate::render::pass::property_clamp_mode;
 use crate::shader::{self, accumulator, state};
@@ -143,9 +144,9 @@ pub fn begin_types_fc(e: &mut Engine, this: Ptr) {
     let shader = this.addr();
     bind_stage(e, 5);
     e.call(FOG_CONSTANTS, &args![shader]);
-    let first = e.global::<u32>(SWITCH_A);
+    let first = capture::own_at::<u32>(e, SWITCH_A);
     own::set_switch_word(e, first, 1);
-    let second = e.global::<u32>(SWITCH_B);
+    let second = capture::own_at::<u32>(e, SWITCH_B);
     own::set_switch_word(e, second, 1);
     e.call(SETUP_C510, &args![shader]);
     e.call(SETUP_C580, &args![shader]);
@@ -211,7 +212,9 @@ pub fn setup_type_d1(e: &mut Engine, this: Ptr, state: Ptr) {
         let w = x87_store32(x87_sub(f64::from(byte), one));
         e.set_global(frame, w);
         let vector = frame + 4;
-        crate::draw::thunks::call_vec3_transform_coord(e, vector, ORIGIN_POINT, local);
+        capture::own_image(e, ORIGIN_POINT, 0xc, |e, origin| {
+            crate::draw::thunks::call_vec3_transform_coord(e, vector, origin, local);
+        });
         let w = x87_quiet_bits(e.global::<u32>(frame));
         e.set_global(frame + 0x10, w);
         light_constant(e, vector);
@@ -249,7 +252,9 @@ pub fn setup_type_102(e: &mut Engine, this: Ptr, state: Ptr) {
         );
         // The float is kept in the dead argument slot over the call.
         let w = x87_quiet_bits(packet::bone_scale(e, object));
-        crate::draw::thunks::call_vec3_transform_coord(e, frame, ORIGIN_POINT, local);
+        capture::own_image(e, ORIGIN_POINT, 0xc, |e, origin| {
+            crate::draw::thunks::call_vec3_transform_coord(e, frame, origin, local);
+        });
         e.set_global(frame + 0xc, w);
         light_constant(e, frame);
     });
@@ -268,15 +273,15 @@ fn apply_mask(e: &mut Engine, mask: u32, from: u32, to: u32) {
     let mut bit: u32 = 1;
     let mut at = from + 4;
     while at < to {
-        let first = e.global::<u32>(at - 4);
+        let first = capture::own_at::<u32>(e, at - 4);
         if first != 0 && own::entry_is_enabled(e, first) {
-            let on = e.global::<u32>(mask) & bit.rotate_left(1) == 0;
+            let on = capture::own_at::<u32>(e, mask) & bit.rotate_left(1) == 0;
             own::set_entry_enabled(e, first, on);
         }
-        let second = e.global::<u32>(at);
+        let second = capture::own_at::<u32>(e, at);
         bit = bit.rotate_left(1);
         if second != 0 && own::entry_is_enabled(e, second) {
-            let on = e.global::<u32>(mask) & bit.rotate_left(1) == 0;
+            let on = capture::own_at::<u32>(e, mask) & bit.rotate_left(1) == 0;
             own::set_entry_enabled(e, second, on);
         }
         at += 8;
@@ -289,14 +294,14 @@ fn apply_mask(e: &mut Engine, mask: u32, from: u32, to: u32) {
 /// pass, the first switch list follows it and the vertex constant map (+0x34) is sorted (its slot 0x24);
 /// with a second-mask word, the second list and the pixel constant map (+0x30).
 pub fn tail_kinds_1_to_5(e: &mut Engine, this: Ptr, pass: u32) {
-    let first = MASKS_FIRST.wrapping_add(pass.wrapping_mul(4));
-    if e.global::<u32>(first) != 0 {
+    let first = MASKS_FIRST.wrapping_add(pass.wrapping_mul(4)); // own: read through own_at
+    if capture::own_at::<u32>(e, first) != 0 {
         apply_mask(e, first, FIRST_LIST.0, FIRST_LIST.1);
         let map = own::constant_map(e, this.addr(), 0x34);
         e.vcall(map, 0x24, &args![]);
     }
-    let second = MASKS_SECOND.wrapping_add(pass.wrapping_mul(4));
-    if e.global::<u32>(second) != 0 {
+    let second = MASKS_SECOND.wrapping_add(pass.wrapping_mul(4)); // own: read through own_at
+    if capture::own_at::<u32>(e, second) != 0 {
         apply_mask(e, second, SECOND_LIST.0, SECOND_LIST.1);
         let map = own::constant_map(e, this.addr(), 0x30);
         e.vcall(map, 0x24, &args![]);
@@ -320,9 +325,9 @@ const FOG_COLOURS: u32 = 0x011f_d9b8;
 fn enable_entries(e: &mut Engine, entries: u32, flags: u32, pass_type: u32) {
     let mut mask = 1u32;
     for index in 0..22u32 {
-        let entry = e.global::<u32>(entries + 4 * index);
+        let entry = capture::own_at::<u32>(e, entries + 4 * index);
         if entry != 0 {
-            let word = e.global::<u32>(flags.wrapping_add(pass_type.wrapping_mul(4)));
+            let word = capture::own_at::<u32>(e, flags.wrapping_add(pass_type.wrapping_mul(4)));
             let enabled = word & mask.rotate_left(1) != 0;
             own::set_entry_enabled(e, entry, enabled);
         }
@@ -333,7 +338,7 @@ fn enable_entries(e: &mut Engine, entries: u32, flags: u32, pass_type: u32) {
 /// Whether the entry the pointer at `slot` holds is enabled (+8).
 #[inline(always)]
 fn entry_enabled(e: &Engine, slot: u32) -> bool {
-    let entry = e.global::<u32>(slot);
+    let entry = capture::own_at::<u32>(e, slot);
     own::entry_is_enabled(e, entry)
 }
 
@@ -498,7 +503,7 @@ fn first_source(pass_type: u32) -> Option<u32> {
 /// source read again for the store), for every other type from +0x84 and +0x88 through `00c663d0`.
 pub fn select_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
     let shader = this.addr();
-    let pass = e.global::<u32>(PASSES.wrapping_add(pass_type.wrapping_mul(4)));
+    let pass = capture::own_at::<u32>(e, PASSES.wrapping_add(pass_type.wrapping_mul(4)));
     own::set_current_pass(e, pass);
     match first_source(pass_type) {
         None => own::assign_counted(e, shader + 0x28, shader + 0x70, false),

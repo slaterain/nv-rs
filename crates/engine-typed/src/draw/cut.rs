@@ -59,11 +59,12 @@ const START_TIME: u32 = 0x011f_94ac;
 /// particle classes' vtables) reaches the points draw, which builds quads from the particle arrays.
 const SLOT_RENDER_IMMEDIATE: u32 = 0xe0;
 const PARTICLES_RENDER_IMMEDIATE: u32 = 0x00a9_b1f0;
-/// A light (`ShadowSceneLight`): its weight (+0xd0) and flags (+0xf4, +0xf5; its light +0xf8 is set once); the
-/// light's dimmer, ambient and diffuse colours and radius (+0xc4 to +0xe4) and its direction (+0xf0).
-const SHADOW_LIGHT: (u32, u32) = (0xd0, 0xd4);
-const SHADOW_LIGHT_FLAGS: (u32, u32) = (0xf4, 0xf6);
-const LIGHT_VALUES: (u32, u32) = (0xc4, 0xe4);
+/// A light (`ShadowSceneLight`): its weight (+0xd0) and +0xd4, its flags (+0xf4, +0xf5) and its light (+0xf8, set
+/// once); the light's dimmer, ambient and diffuse colours and radius (+0xc4 to +0xe4), +0xe4 and +0xe8 (the light
+/// set-up `00b70820` reads all of these) and its direction (+0xf0).
+const SHADOW_LIGHT: (u32, u32) = (0xd0, 0xd8);
+const SHADOW_LIGHT_FLAGS: (u32, u32) = (0xf4, 0xfc);
+const LIGHT_VALUES: (u32, u32) = (0xc4, 0xec);
 const LIGHT_DIRECTION: (u32, u32) = (0xf0, 0xfc);
 
 /// Fills the open packet for the world draw of `acc` with `camera`: the frame's values ([`take_frame`]), then each
@@ -80,6 +81,12 @@ pub fn fill(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) {
             &mut renderers,
             &mut passes,
         );
+    }
+    // The draw's own state (piece 3), when no listed pass's shader class may reach a translation that touches it.
+    let reason = super::statics::decide(e, &passes);
+    super::statics::count(reason);
+    if reason.is_none() {
+        super::statics::take(e, acc);
     }
     let mut geometries = AddrSet::default();
     let mut nodes = AddrSet::default();
@@ -325,6 +332,8 @@ static TOTALS: std::sync::Mutex<capture::Report> = std::sync::Mutex::new(capture
     ranges: 0,
     bytes: 0,
     held: 0,
+    owned: 0,
+    kept_main: 0,
 });
 
 /// The cut, as the world draw's first half starts with a scene renderer and a camera: with `NV_DRAW_THREAD` set
@@ -376,19 +385,27 @@ pub fn join(e: &mut Engine) {
     totals.ranges += report.ranges;
     totals.bytes += report.bytes;
     totals.held += report.held;
+    totals.owned += report.owned;
+    totals.kept_main += report.kept_main;
     let joins = JOINS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if joins % TOTALS_EVERY == 0 {
         // With the switch on, the run's coverage: a miss is a read the cut left out (the first few are printed
         // as they happen).
         eprintln!(
-            "nv-draw packet: {} joins: misses {}, reads {}, written {}, ranges {}, bytes {}, held {}",
+            "nv-draw packet: {} joins: misses {}, reads {}, written {}, ranges {}, bytes {}, held {}, owned {}, kept main {}",
             joins + 1,
             totals.misses,
             totals.reads,
             totals.written,
             totals.ranges,
             totals.bytes,
-            totals.held
+            totals.held,
+            totals.owned,
+            totals.kept_main
+        );
+        let (owned, kept, reason) = super::statics::report();
+        eprintln!(
+            "nv-draw own state: {owned} cuts took it, {kept} kept it in guest memory (first reason {reason:#010x})"
         );
     }
 }
@@ -405,4 +422,44 @@ pub fn last_report() -> Option<capture::Report> {
 /// The reports of every packet closed so far, added up.
 pub fn totals() -> capture::Report {
     *TOTALS.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The light set-up (`00b70820`) reads a pass light's +0xd4 and its light's +0xe4 and +0xe8: the cut copies
+    /// them, so a read of them from the packet misses nothing.
+    #[test]
+    fn a_pass_lights_values_the_set_up_reads_are_copied() {
+        let mut e = Engine::new();
+        let pass = e.mem.alloc(0x10);
+        let lights = e.mem.alloc(4);
+        let shadow = e.mem.alloc(0x100);
+        let light = e.mem.alloc(0x100);
+        e.mem.set_u8(pass + 9, 1);
+        e.mem.set_u32(pass + 0xc, lights);
+        e.mem.set_u32(lights, shadow);
+        e.mem.set_u32(shadow + 0xf8, light);
+        e.mem.set_u8(shadow + 0xf4, 1);
+        e.mem.set_u32(shadow + 0xd4, 0x11);
+        e.mem.set_u32(light + 0xe4, 0x22);
+        e.mem.set_u32(light + 0xe8, 0x33);
+        assert!(capture::begin(&e));
+        take_pass_lights(&e, pass);
+        // Main changes them after the cut: the draw still reads the cut's values.
+        e.mem.set_u32(shadow + 0xd4, 0);
+        e.mem.set_u32(light + 0xe4, 0);
+        e.mem.set_u32(light + 0xe8, 0);
+        let read = [
+            capture::word(&e, shadow, 0xd0),
+            capture::word(&e, shadow, 0xd4),
+            capture::word(&e, light, 0xe0),
+            capture::word(&e, light, 0xe4),
+            capture::word(&e, light, 0xe8),
+        ];
+        let report = capture::end(&mut e);
+        assert_eq!(read, [0, 0x11, 0, 0x22, 0x33]);
+        assert_eq!(report.misses, 0);
+    }
 }

@@ -5,6 +5,7 @@
 //! place, not routed: the shader's own words, its constant entries (the pointers at `01201080` to
 //! `012010e8`, made at load), the passes' contents and the exe's constants.
 
+use super::capture;
 use super::{group_c, own, packet};
 use crate::anim_keys::narrow;
 use crate::shader::{self, accumulator, div_d, mul_d};
@@ -17,7 +18,7 @@ const ONE: u32 = 0x3f80_0000;
 /// Whether the constant entry whose pointer is at `slot` is switched on (its byte +8; the draw's own
 /// switches, read back).
 fn entry_on(e: &Engine, slot: u32) -> bool {
-    let entry = e.global::<u32>(slot);
+    let entry = capture::own_at::<u32>(e, slot);
     own::entry_is_enabled(e, entry)
 }
 
@@ -381,7 +382,7 @@ pub fn material(
     let alpha = f32::from_bits(own::constant_word(e, MATERIAL));
     let below = u8::from(1.0 > alpha);
     own::set_constant_byte(e, AMBIENT_FOG, below);
-    let entry = e.global::<u32>(ALPHA_TEST_ENTRY);
+    let entry = capture::own_at::<u32>(e, ALPHA_TEST_ENTRY);
     own::set_entry_enabled(e, entry, !(old == 0 && below == 0));
 }
 
@@ -428,7 +429,7 @@ pub fn colour(e: &mut Engine, _this: Ptr, material: Ptr, property: Ptr) {
             own::set_constant_word(e, AMBIENT + 4 * k, value.to_bits());
         }
         own::set_constant_word(e, AMBIENT + 0xc, ambient[3]);
-        let entry = e.global::<u32>(AMBIENT_ENTRY);
+        let entry = capture::own_at::<u32>(e, AMBIENT_ENTRY);
         own::set_entry_enabled(e, entry, true);
         own::set_constant_byte(e, AMBIENT_SET, 1);
         return;
@@ -642,7 +643,7 @@ fn light_set_up(
             own::set_constant_word(e, LIGHT_COLOUR_ROW + 4 * k, word);
         }
     }
-    let entry = e.global::<u32>(LIGHT_DATA_ENTRY);
+    let entry = capture::own_at::<u32>(e, LIGHT_DATA_ENTRY);
     if pass_type < 0x1bd {
         // The lights less one, its low half (the exe's 16-bit register): the count held to the
         // exe's limit (signed).
@@ -682,7 +683,7 @@ fn light_set_up(
                 }
             }
         }
-        let entry = e.global::<u32>(LIGHT_DATA_ENTRY);
+        let entry = capture::own_at::<u32>(e, LIGHT_DATA_ENTRY);
         own::set_entry_word(e, entry, 0x20, 2);
     } else {
         own::set_entry_word(e, entry, 0x20, 3);
@@ -707,7 +708,7 @@ fn light_set_up(
         if !(0x1c4..=0x1c7).contains(&pass_type) && some_directional {
             done = directional;
             for index in 0..directional {
-                let entry = LIGHT_ENTRIES + 0x20 * index;
+                let entry = LIGHT_ENTRIES + 0x20 * index; // own: an address, used through the accessors
                 for k in 0..3u32 {
                     let value = f32::from_bits(own::constant_word(e, entry + 4 * k));
                     e.set_global(input + 4 * k, (-value).to_bits());
@@ -733,7 +734,7 @@ fn light_set_up(
         let some_points = (points as i32) > 0;
         if some_points {
             for index in 0..points {
-                let entry = LIGHT_ENTRIES + 0x20 * (done + index);
+                let entry = LIGHT_ENTRIES + 0x20 * (done + index); // own: an address, used through the accessors
                 let words = [0u32, 1, 2, 3].map(|k| own::constant_word(e, entry + 4 * k));
                 let position =
                     [0u32, 1, 2].map(|k| f32::from_bits(packet::scene_camera_position(e, k)));
@@ -1120,26 +1121,26 @@ pub fn setup_switches(e: &mut Engine, this: Ptr, pass_type: u32) {
         return;
     }
     let index = pass_index(pass_type);
-    let mask_a = MASKS_A.wrapping_add(index.wrapping_mul(4));
+    let mask_a = MASKS_A.wrapping_add(index.wrapping_mul(4)); // own: an address, read through own_at
     let mut bit = 1u32;
     for i in 0..0x11u32 {
-        let entry = e.global::<u32>(ENTRIES_A + 4 * i);
+        let entry = capture::own_at::<u32>(e, ENTRIES_A + 4 * i);
         if entry != 0 {
-            let mask = e.global::<u32>(mask_a);
+            let mask = capture::own_at::<u32>(e, mask_a);
             own::set_entry_enabled(e, entry, mask & bit.rotate_left(1) != 0);
         }
         bit = bit.rotate_left(1);
-        let mask = e.global::<u32>(mask_a);
+        let mask = capture::own_at::<u32>(e, mask_a);
         own::set_constant_byte(e, FLAGS_A + i, u8::from(mask & bit != 0));
     }
-    let mask_b = MASKS_B.wrapping_add(index.wrapping_mul(4));
+    let mask_b = MASKS_B.wrapping_add(index.wrapping_mul(4)); // own: an address, read through own_at
     for j in 1..=10u32 {
-        let entry = e.global::<u32>(ENTRIES_B + 4 * (j - 1));
+        let entry = capture::own_at::<u32>(e, ENTRIES_B + 4 * (j - 1));
         if entry != 0 {
-            let mask = e.global::<u32>(mask_b);
+            let mask = capture::own_at::<u32>(e, mask_b);
             own::set_entry_enabled(e, entry, (mask >> j) & 1 != 0);
         }
-        let mask = e.global::<u32>(mask_b);
+        let mask = capture::own_at::<u32>(e, mask_b);
         own::set_constant_byte(e, FLAGS_B + (j - 1), u8::from((mask >> j) & 1 != 0));
     }
     let base = this.addr();

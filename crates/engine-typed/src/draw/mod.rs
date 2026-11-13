@@ -47,8 +47,10 @@
 //!   1.0 at `01012070`).
 //!   A later step can feed the draw from a copied packet and give a drawing thread its own state by
 //!   changing those two files. Step 1 of that ([`detach`], `NV_DRAW_DETACH=1`, a check that is slower and
-//!   not for play) takes the pass lists' words out of guest memory while the world draw runs; nothing else
-//!   is copied, deferred or moved yet.
+//!   not for play) takes the pass lists' words out of guest memory while the world draw runs. Step 2
+//!   (`NV_DRAW_THREAD`, off) copies what the draw reads that the tail changes into a value packet at the cut
+//!   ([`cut`], [`capture`]) and holds the draw's own state there ([`statics`]: the shader statics and the
+//!   render-state cache), put back at the join by the device model's rule.
 //!
 //! The drawing itself (the batch renderer's lists, passes and state setters) is the shader family's,
 //! reached by `typed_call!`s that go direct while both families are on.
@@ -89,6 +91,7 @@ pub mod shapes;
 pub mod skin;
 pub mod sky;
 pub mod speedtree;
+pub mod statics;
 pub mod tall_grass;
 pub mod thunks;
 pub mod water;
