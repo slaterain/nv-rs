@@ -796,3 +796,44 @@ layout! {
         0xA0 recipeList: Inline<ListNode>,
     }
 }
+
+/// Form types of batch 7 (`kFormType_*` (JIP LN NVSE)).
+pub mod form_type_b7 {
+    pub const TES_GLOBAL: u8 = 0x06;
+    pub const TES_LEV_CREATURE: u8 = 0x2c;
+    pub const TES_LEV_CHARACTER: u8 = 0x2d;
+    pub const TES_LEV_ITEM: u8 = 0x34;
+}
+
+/// `GetLvlList` (JIP LN NVSE): a leveled form's `TESLeveledList` component is at +0x30.
+pub const LEVELED_LIST_COMPONENT: u32 = 0x30;
+
+layout! {
+    /// `TESLeveledList` (JIP LN NVSE), the component at +0x30 of a leveled form, checked in the
+    /// leveled item loader (`0050B560`: `LVLD` into +0xC through `0042E680`, `LVLF` into +0xD,
+    /// `LVLG` into +0x10, all of the form at +0x30) and the game's `AddItem` (`00487A60`, the
+    /// entries' list at +4).
+    pub struct TESLeveledList: 0x1C {
+        0x04 list: Inline<ListNode>,
+        0x0C chanceNone: u8,
+        0x0D flags: u8,
+        0x10 global: u32,
+    }
+
+    /// `TESLeveledList::ListData` (JIP LN NVSE), 0xC bytes, as the game's `AddItem` (`00487A60`)
+    /// fills one: the form +0, the count +4, the level +6 (16 bits each), the extra +8.
+    pub struct LeveledListData: 0x0C {
+        0x00 form: u32,
+        0x04 count: i16,
+        0x06 level: i16,
+        0x08 extra: u32,
+    }
+
+    /// `ContainerExtra` (JIP LN NVSE; the exe's `ContainerItemExtra`), 0xC bytes: its
+    /// constructor (`0040E690`) clears the owner +0 and the global +4 and sets the health +8.
+    pub struct ContainerExtra: 0x0C {
+        0x00 ownerFaction: u32,
+        0x04 globalVar: u32,
+        0x08 health: f32,
+    }
+}

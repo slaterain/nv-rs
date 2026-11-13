@@ -37,6 +37,7 @@ pub mod jip_fn_worldspace;
 pub mod ln_fn_activator;
 pub mod ln_fn_casino;
 pub mod ln_fn_challenge;
+pub mod ln_fn_leveled_list;
 pub mod ln_fn_map_marker;
 pub mod ln_fn_perk;
 pub mod ln_fn_race;
@@ -83,6 +84,7 @@ pub const ALL: &[Handlers] = &[
     ln_fn_activator::COMMANDS,
     ln_fn_casino::COMMANDS,
     ln_fn_challenge::COMMANDS,
+    ln_fn_leveled_list::COMMANDS,
     ln_fn_map_marker::COMMANDS,
     ln_fn_perk::COMMANDS,
     ln_fn_race::COMMANDS,
@@ -144,6 +146,39 @@ fn component(e: &Engine, form: u32, which: u32) -> u32 {
 /// The form's `BGSDestructibleObjectForm`, 0 for a form type without one.
 pub fn destructible_form(e: &Engine, form: u32) -> u32 {
     component(e, form, 2)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameForms.cpp: TESForm::GetFullName (asm).
+/// The form's `TESFullName`: a reference's (its vtable answers true, `008D0360`, at +0xF0) is
+/// its base form's (+0x20); a cell's (type 0x39) is its own at +0x18 unless that is empty, then
+/// its worldspace's (+0xC0, at +0x18); else `kBaseComponentOffsets`' byte 0. 0 for none.
+pub fn full_name(e: &Engine, form: u32) -> u32 {
+    let vtbl = e.get(Ptr::<forms::Object>::new(form), forms::Object::vtbl);
+    let form = if e.mem.u32(vtbl + 0xf0) == 0x008d_0360 {
+        e.mem.u32(form + 0x20)
+    } else {
+        form
+    };
+    if type_of(e, form) == 0x39 {
+        let own = form + 0x18;
+        if e.mem.u16(own + 8) as i16 > 0 {
+            return own;
+        }
+        let ws = e.mem.u32(form + 0xc0);
+        return if ws == 0 { 0 } else { ws + 0x18 };
+    }
+    component(e, form, 0)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameForms.cpp: TESForm::GetTheName (asm).
+/// The form's name: its full name's text when that has a length above 0 (signed 16 bits), else
+/// `""`.
+pub fn the_name(e: &Engine, form: u32) -> Vec<u8> {
+    let name = full_name(e, form);
+    if name == 0 || e.mem.u16(name + 8) as i16 <= 0 {
+        return Vec::new();
+    }
+    nvse::table::guest_text(e, e.mem.u32(name + 4))
 }
 
 /// `IS_ACTOR(form)` (JIP LN NVSE): the form's vtable answers true (`008D0360`) at +0x100.
@@ -552,6 +587,7 @@ mod tests {
             "ln_fn_activator",
             "ln_fn_casino",
             "ln_fn_challenge",
+            "ln_fn_leveled_list",
             "ln_fn_map_marker",
             "ln_fn_perk",
             "ln_fn_race",
