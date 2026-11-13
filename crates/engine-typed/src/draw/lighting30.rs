@@ -272,7 +272,8 @@ const CLAMP_HIGH: u32 = 0x00b7_19c0;
 /// length of the light's colour scaled by its fade (the distance to the light over its radius clamped to
 /// 0 and 1, less from 1), times the alpha. A step with a callee's `double` (`ST0`) in `f64`, rounded once.
 fn light_alpha(e: &mut Engine, fallback: u32, property: u32) {
-    let factor = narrow(e.vcall(property, 0x110, &[]).f64());
+    // The property's distance fade (slot 0x110: the exe's 00b66c40 typed, reading the packet).
+    let factor = narrow(super::group_c::property_distance_fade(e, property));
     let alpha = f32::from_bits(packet::property_alpha(e, property)) * factor;
     let value = if alpha < 1.0 { alpha.to_bits() } else { ONE };
     own::set_constant_word(e, MATERIAL, value);

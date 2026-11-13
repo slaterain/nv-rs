@@ -11531,7 +11531,7 @@ fn lighting30_setup_constants_reads_the_packet() {
             engine_typed::draw::lighting30::setup_constants(Ptr<_>, Ptr<_>)
         )
         .1,
-        &word_cases(&product(&[&[0x30, 0x1c4, 0xe], &[3, 0x0100_0001]])),
+        &word_cases(&product(&[&[0x30, 0x1c4, 0xe, 0x1bd], &[3, 0x0100_0001]])),
         true,
         |e, c| {
             let case = Case(vec![
@@ -11549,6 +11549,8 @@ fn lighting30_setup_constants_reads_the_packet() {
             let pass = e.mem.u32(0x011f_91e0);
             let geometry = e.mem.u32(pass);
             as_drawn(e, geometry, words[1]);
+            let property = e.mem.u32(words[1] + 0xc);
+            with_distance_fade(e, property);
             d3dx_content_stand_ins(e);
             // The device's clip planes (its slot 0xdc) noted by what they hold.
             e.register(VT_FN + 0xdc, |e, a| {
@@ -11819,6 +11821,7 @@ fn setup_geometry_constants_reads_the_packet() {
             s.steps = c.word(1);
             let g = geometry_shape(e, &s);
             as_drawn(e, g.geometry, g.block);
+            with_distance_fade(e, g.property);
             (vec![g.shader, g.block], vec![g.rendering, g.geometry])
         },
         |e, w| {
@@ -12073,4 +12076,61 @@ fn d3dx_content_stand_ins(e: &mut Engine) {
         }
         ret(a[0])
     });
+}
+
+/// A lighting property given the exe's distance fade at its slot 0x110 (`00b66c40`, on a copy of its vtable), the
+/// second fade's flag (+0x20 bit 0x80) and a camera distance (+0x34, 150.0) between the second fade's near (100.0,
+/// `011f945c`) and far (400.0, `011f9460`) distances: so a set-up asking the factor reaches the typed fade, which
+/// reads the property's +0x24 and +0x34 through the packet.
+fn with_distance_fade(e: &mut Engine, property: u32) {
+    let old = e.mem.u32(property);
+    let vt = e.mem.alloc(0x200);
+    for k in 0..0x200 / 4 {
+        let word = e.mem.u32(old + 4 * k);
+        set(e, vt + 4 * k, word);
+    }
+    set(e, vt + 0x110, 0x00b6_6c40);
+    set(e, property, vt);
+    let flags = e.mem.u32(property + 0x20);
+    set(e, property + 0x20, flags | 0x80);
+    set(e, property + 0x34, 0x4316_0000);
+    set(e, 0x011f_945c, 0x42c8_0000);
+    set(e, 0x011f_9460, 0x43c8_0000);
+}
+
+/// A lighting property's distance fade (slot 0x110, `00b66c40`): main-thread code (`f32`) on the main thread's
+/// word, bit for bit. The flags (none, the second fade's bit 0x80, the first's 0x20000, both), the lock bit
+/// 0x800000 of +0x24, the distance (below both near distances, between them, past both far ones, between the first
+/// fade's), and the far distances above 0 or 0.
+#[test]
+fn distance_fade() {
+    Diff::new(entry!(0x00b6_6c40, group_c::distance_fade(Ptr<_>) -> f32))
+        .common()
+        .main_thread(0)
+        .inputs(&[
+            Input::Of(&[0, 0x80, 0x0002_0000, 0x0002_0080]),
+            Input::Of(&[0, 0x0080_0000]),
+            Input::Of(&[0x4220_0000, 0x4316_0000, 0x43fa_0000, 0x4348_0000, 0x4396_0000]),
+            Input::Flag,
+        ])
+        .setup(|e, c| {
+            let _ = world(e);
+            let vt = vtable(e, &[]);
+            let property = obj(e, 0x80, vt);
+            set(e, property + 0x20, c.word(0));
+            set(e, property + 0x24, c.word(1));
+            set(e, property + 0x34, c.word(2));
+            let (far, first_far) = if c.word(3) != 0 {
+                (0x43c8_0000, 0x4396_0000)
+            } else {
+                (0, 0)
+            };
+            set(e, 0x011f_945c, 0x42c8_0000);
+            set(e, 0x011f_9460, far);
+            set(e, 0x011f_9464, 0x4248_0000);
+            set(e, 0x011f_9468, first_far);
+            vec![property]
+        })
+        .run()
+        .assert_same();
 }

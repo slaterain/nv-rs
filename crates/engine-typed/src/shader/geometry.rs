@@ -1218,7 +1218,8 @@ pub fn ambient_emittance(
     if pass_type.wrapping_sub(0x244) > 7 || mode == 10 {
         return;
     }
-    let factor = e.vcall(property, 0x110, &args![]).f64();
+    // The property's distance fade (slot 0x110: the exe's 00b66c40 typed, reading the packet; value packet B).
+    let factor = crate::draw::group_c::property_distance_fade(e, property);
     let fourth = capture::own_at::<f32>(e, ROWS + 0xc);
     capture::set_own_at(e, ROWS + 0xc, mul_d(fourth, factor));
 }
