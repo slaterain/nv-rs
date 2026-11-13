@@ -936,7 +936,7 @@ fn the_script_data_grows_past_its_block() {
 #[test]
 fn declared_types_come_from_the_text() {
     let mut e = engine();
-    let text = b"scn A\nshort a, b ; comment\nbegin function {ref r, c}\nstring_var d\n";
+    let text = b"scn A\nshort a, b ; comment\nbegin function {ref r, c}\nstring_var d\nfloat p q\n";
     let t =
         |e: &mut Engine, n: &[u8]| crate::compile_hooks::declared_variable_type(e, n, text, 0x77);
     assert_eq!(t(&mut e, b"b"), vt::INTEGER);
@@ -944,6 +944,9 @@ fn declared_types_come_from_the_text() {
     assert_eq!(t(&mut e, b"c"), vt::INVALID);
     assert_eq!(t(&mut e, b"comment"), vt::INVALID);
     assert_eq!(t(&mut e, b"D"), vt::STRING);
+    // Only a comma goes on to the next name.
+    assert_eq!(t(&mut e, b"p"), vt::FLOAT);
+    assert_eq!(t(&mut e, b"q"), vt::INVALID);
     // A lambda's variable from its parent's text.
     let parent_text = AREA + 0x2_9000;
     e.mem.write(parent_text, b"float pv\n\0");
