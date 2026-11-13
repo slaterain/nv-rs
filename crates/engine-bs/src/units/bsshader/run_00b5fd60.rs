@@ -118,6 +118,7 @@ fn near_flag(e: &mut Engine, object: u32) -> u32 {
 /// at zero; the object lock first).
 // Translation incomplete: 00b5fd60 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 for the local NiPointers) is not translated.
 pub fn fn_00b5fd60(e: &mut Engine, this: Ptr) {
+    engine_core::draw_thread::finish_at(e, 0x00b5_fd60);
     let node = this.addr();
     e.call(LOCK_ENTER, &args![LIGHT_LOCK_011F9EA0, 0u32]);
     let mut item = e.mem.u32(node + 0xe4);
@@ -1307,5 +1308,25 @@ mod n013_tests {
             vec![vec![MEMORY_MANAGER, this]]
         );
         assert_eq!(calls(&e, MAP_BASE_DESTRUCT_00B580A0).len(), 2);
+    }
+}
+
+/// The drawing thread (`engine_core::draw_thread`): the world accumulator's list test and the light processing that rebuilds a light's object lists join a posted world draw before anything else they do.
+#[cfg(test)]
+mod draw_thread_joins {
+    #[test]
+    fn these_entries_join_the_drawing_thread_first() {
+        let mut e = engine_core::Engine::new();
+        let mut funcs = Vec::new();
+        crate::units::funcs(&mut funcs);
+        for (addr, f) in funcs {
+            e.register(addr, f);
+        }
+        for addr in [0x00b6_3a90u32, 0x00b5_fd60, 0x00b5_d300] {
+            assert!(
+                engine_core::draw_thread::testing::joins_first(&mut e, addr, &[0; 16]),
+                "{addr:08x} does not join first"
+            );
+        }
     }
 }

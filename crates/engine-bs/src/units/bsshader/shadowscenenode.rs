@@ -2579,6 +2579,7 @@ fn add_child_node(e: &mut Engine, light: u32, child: u32) {
 /// at `011f91c8`) and, with a graph, its always-rendered objects without a parent. Both paths
 /// end with `00ba02b0`.
 pub fn fn_00b5d300(e: &mut Engine, this: Ptr<ShadowSceneNode>, light: u32) {
+    engine_core::draw_thread::finish_at(e, 0x00b5_d300);
     light_check::before(e, this.addr(), light);
     let ni_light = e.mem.u32(light.wrapping_add(LIGHT_SP_LIGHT));
     if e.mem.u32(ni_light.wrapping_add(AV_FLAGS)) & 1 != 0 {

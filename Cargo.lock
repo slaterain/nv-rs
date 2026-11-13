@@ -623,6 +623,7 @@ version = "0.1.0"
 dependencies = [
  "bsa",
  "engine",
+ "engine-core",
  "engine-platform",
  "esm",
  "jip",

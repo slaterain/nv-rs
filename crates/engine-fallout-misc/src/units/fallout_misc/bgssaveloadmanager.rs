@@ -589,6 +589,7 @@ pub fn bgssaveloadmanager_save_game(
     device_id: u32,
     dump_statistics: bool,
 ) -> bool {
+    engine_core::draw_thread::save_or_load(e, 0x0085_03b0);
     let is_autosave = fn_00851a20(e, this, name);
     let is_quicksave = fn_00851a60(e, this, name);
     let is_system_save = fn_00851b00(e, this, name);

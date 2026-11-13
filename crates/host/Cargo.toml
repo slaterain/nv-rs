@@ -24,5 +24,7 @@ esm = { path = "../esm" }
 zlib-rs = "0.6"
 
 [dev-dependencies]
+# Tests that apply the typed families themselves (`Engine::new_untyped_for_test`, the drawing thread's row).
+engine-core = { path = "../engine-core", features = ["test-support"] }
 # The BSA reader the host inflate's comparison with the exe's zlib reads the archives with.
 bsa = { path = "../bsa" }

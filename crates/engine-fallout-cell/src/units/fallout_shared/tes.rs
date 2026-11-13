@@ -3220,6 +3220,7 @@ pub(crate) fn loaded_square_cells(e: &mut Engine, this: Ptr<TES>) -> u32 {
 ///
 /// Not translated: the compiler's exception-unwinding frame.
 pub fn fn_00453dc0(e: &mut Engine, this: Ptr<TES>, cell: Ptr, pos: Ptr) {
+    engine_core::draw_thread::finish_at(e, 0x0045_3dc0);
     let script_context: u32 = e.global(SCRIPT_CONTEXT);
     if !fn_00451530(e, this) {
         let main: u32 = e.global(MAIN_OBJECT);
@@ -12375,6 +12376,27 @@ mod tests {
             };
             follows(model, &s, &model_callees(&log), &[])
                 .unwrap_or_else(|why| panic!("{s:?}: {why}"));
+        }
+    }
+}
+
+/// The drawing thread (`engine_core::draw_thread`): the cell work of TestAllCells, PositionPlayer and the start cell (00453dc0) join a posted world draw before anything else they do.
+#[cfg(test)]
+mod draw_thread_joins {
+    #[test]
+    fn these_entries_join_the_drawing_thread_first() {
+        let mut e = engine_core::Engine::new();
+        let mut funcs = Vec::new();
+        crate::units::funcs(&mut funcs);
+        for (addr, f) in funcs {
+            e.register(addr, f);
+        }
+        {
+            let addr = 0x0045_3dc0u32;
+            assert!(
+                engine_core::draw_thread::testing::joins_first(&mut e, addr, &[0; 16]),
+                "{addr:08x} does not join first"
+            );
         }
     }
 }

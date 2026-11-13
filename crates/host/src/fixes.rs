@@ -62,6 +62,7 @@ pub static FIXES: &[Fix] = &[
     FACIAL_HAIR_BY_RACE_FOLDER,
     crate::patch_data::STRIP_LOD_WATER,
     crate::direct_files::FIX,
+    DRAW_THREAD,
 ];
 
 /// The IO manager's wait for queued loads (`00c3dfa0`: main at a cell border, a load, a save) sleeps
@@ -394,6 +395,27 @@ fn install_script_ui_sort_paths(e: &mut Engine) {
     nvse::commands::array::set_fix(e, nvse::commands::array::UI_SORT_PATHS, true);
 }
 
+/// The world's draw on a thread of its own (step 2; EXPERIMENTAL, off in every preset, [`OFF_IN_EVERY_PRESET`]):
+/// the world pass posts the world draw (`00b6ba20` and `00b6b930`) to a drawing thread and joins it at the next
+/// frame's start, before the controls are read, or earlier where the frame's tail reaches what the draw uses
+/// (`engine::draw_thread`, [`crate::draw_thread`]). It needs real threads with the render thread; stepped threads
+/// are its check form. `NV_DRAW_THREAD=poison` (the environment only, for checks) is on with the packet's
+/// POISON check. Until the draw family's packet hand-off is in, every frame still draws on main.
+pub const DRAW_THREAD: Fix = Fix {
+    name: "world drawn on a second thread (experimental)",
+    env: "NV_DRAW_THREAD",
+    addresses: &[],
+    summary: "experimental, off in every preset: the world's draw on a thread of its own beside the end of the frame; for now every frame still draws on main (the draw family's hand-off is not in), and the draw family reads NV_DRAW_THREAD itself for its packet, so the variable also turns its packet on whatever this row says",
+    install: install_nothing,
+};
+
+/// A row whose binding [`install`] makes itself, with the choice.
+fn install_nothing(_: &mut Engine) {}
+
+/// Rows that are off in every preset until the maintainer turns them on: only their own variable or `Fallout.ini`
+/// line turns them on.
+pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env];
+
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
 /// the extender's rows set flags `crates/nvse` reads.
 #[cfg(test)]
@@ -411,6 +433,7 @@ const NO_ADDRESS: &[&str] = &[
     SCRIPT_UI_SORT_PATHS.name,
     SCRIPT_LIST_GUARD.name,
     SHADER_WARM.name,
+    DRAW_THREAD.name,
 ];
 
 /// Menus' frames a second at most when nothing says otherwise (the maintainer, 2026-11-07).
@@ -689,6 +712,8 @@ impl Choice {
             match env(fix.env).as_deref().map(str::trim) {
                 None => {}
                 Some("1") => overrides.push((fix.env, true)),
+                // The drawing thread with the packet's POISON check: a spelling of the variable only, for checks.
+                Some("poison") if fix.env == DRAW_THREAD.env => overrides.push((fix.env, true)),
                 Some("0") => overrides.push((fix.env, false)),
                 Some(other) => return Err(format!("{}={other}: use 0 or 1", fix.env)),
             }
@@ -826,17 +851,25 @@ impl Choice {
         self.overrides
             .iter()
             .find(|(env, _)| *env == fix.env)
-            .map_or(self.preset == Preset::Fixes, |(_, on)| *on)
+            .map_or(
+                self.preset == Preset::Fixes && !OFF_IN_EVERY_PRESET.contains(&fix.env),
+                |(_, on)| *on,
+            )
     }
 
     /// The start-up line: what this run is, so a log (and an F12 report) says which game it
     /// measured: the preset, the fixes on, the limits and the threads asked for ([`Choice::threads`];
     /// the host's own `threads:` line says how they ran).
     pub fn describe(&self) -> String {
+        let draw_refused = crate::draw_thread::refusal(self)
+            .map(|why| format!("{} (refused: {why})", DRAW_THREAD.name));
         let on: Vec<&str> = FIXES
             .iter()
             .filter(|f| self.is_on(f))
-            .map(|f| f.name)
+            .map(|f| match (&draw_refused, f.env == DRAW_THREAD.env) {
+                (Some(refused), true) => refused.as_str(),
+                _ => f.name,
+            })
             .collect();
         let uncapped = on.contains(&crate::uncap::FIX.name);
         let menu = match self.bound_menu_frame_limit() {
@@ -963,6 +996,9 @@ pub fn install(e: &mut Engine, choice: &Choice) {
     for fix in FIXES.iter().filter(|f| choice.is_on(f)) {
         (fix.install)(e);
     }
+    if choice.is_on(&DRAW_THREAD) {
+        crate::draw_thread::install(e, choice);
+    }
     // Two rows replace `TESWorldSpace::Load` (00583560), each over the translation: with both on,
     // one function does both, or the later row's would drop the cell offsets' tables.
     if choice.is_on(&crate::cell_offsets::FIX) && choice.is_on(&crate::patch_data::STRIP_LOD_WATER)
@@ -1041,7 +1077,9 @@ mod tests {
         let choice = Choice::from_parts(None, no_env).unwrap();
         assert_eq!(choice.preset, Preset::Fixes);
         assert_eq!(choice.frame_limit, 0);
-        assert!(FIXES.iter().all(|f| choice.is_on(f)));
+        assert!(FIXES
+            .iter()
+            .all(|f| choice.is_on(f) != OFF_IN_EVERY_PRESET.contains(&f.env)));
     }
 
     #[test]
@@ -1097,6 +1135,64 @@ mod tests {
             Choice::from_parts(None, env_of(&[("NV_PRESET", "fixes"), ("NV_UNCAP", "0")])).unwrap();
         assert!(!choice.is_on(&crate::uncap::FIX));
         assert!(choice.is_on(&crate::uncap::PHYSICS_FIX));
+    }
+
+    /// The drawing thread is off in both presets; its variable turns it on (`poison` too, the variable's own
+    /// spelling for checks); the Fallout.ini line takes 0 or 1 only.
+    #[test]
+    fn the_drawing_thread_is_off_in_every_preset() {
+        let presets: [&'static [(&str, &str)]; 2] =
+            [&[("NV_PRESET", "fixes")], &[("NV_PRESET", "vanilla")]];
+        for preset in presets {
+            let choice = Choice::from_parts(None, env_of(preset)).unwrap();
+            assert!(!choice.is_on(&DRAW_THREAD), "{preset:?}");
+        }
+        assert!(!Choice::from_parts(None, no_env)
+            .unwrap()
+            .is_on(&DRAW_THREAD));
+        let ons: [&'static [(&str, &str)]; 2] =
+            [&[("NV_DRAW_THREAD", "1")], &[("NV_DRAW_THREAD", "poison")]];
+        for on in ons {
+            let choice = Choice::from_parts(None, env_of(on)).unwrap();
+            assert!(choice.is_on(&DRAW_THREAD), "{on:?}");
+        }
+        let off = Choice::from_parts(None, env_of(&[("NV_DRAW_THREAD", "0")])).unwrap();
+        assert!(!off.is_on(&DRAW_THREAD));
+        assert!(Choice::from_parts(None, env_of(&[("NV_DRAW_THREAD", "on")])).is_err());
+        assert!(Choice::from_parts(None, env_of(&[("NV_UNCAP", "poison")])).is_err());
+        let line = with_ini(None, "[nv-rs Fixes]\nbWorldDrawThread=1\n", &[]);
+        assert!(line.is_on(&DRAW_THREAD));
+        let poison = with_ini(None, "[nv-rs Fixes]\nbWorldDrawThread=poison\n", &[]);
+        assert!(!poison.is_on(&DRAW_THREAD), "the line takes 0 or 1");
+        assert!(poison.ini_note.is_some());
+    }
+
+    /// It needs the render thread with real threads; stepped threads are its check form.
+    #[test]
+    fn the_drawing_thread_needs_the_render_thread_with_real_threads() {
+        let with = |pairs: &'static [(&'static str, &'static str)]| {
+            Choice::from_parts(None, env_of(pairs)).unwrap()
+        };
+        let real_no_render = with(&[
+            ("NV_DRAW_THREAD", "1"),
+            ("NV_THREADS", "real"),
+            ("NV_RENDER_THREAD", "0"),
+        ]);
+        assert!(crate::draw_thread::refusal(&real_no_render).is_some());
+        assert!(
+            real_no_render.describe().contains("(refused: "),
+            "{}",
+            real_no_render.describe()
+        );
+        let real_render = with(&[
+            ("NV_DRAW_THREAD", "1"),
+            ("NV_THREADS", "real"),
+            ("NV_RENDER_THREAD", "1"),
+        ]);
+        assert_eq!(crate::draw_thread::refusal(&real_render), None);
+        let stepped = with(&[("NV_DRAW_THREAD", "1")]);
+        assert_eq!(stepped.threads, "stepped");
+        assert_eq!(crate::draw_thread::refusal(&stepped), None);
     }
 
     /// A script that records and was never told about the preset still measures the original; to
@@ -1764,7 +1860,9 @@ mod tests {
     fn a_fix_line_overrides_its_row_only_when_uncommented() {
         let commented = "[nv-rs Fixes]\n;bGrabPush=0\n;bUncap=1\n";
         let choice = with_ini(None, commented, &[]);
-        assert!(FIXES.iter().all(|f| choice.is_on(f)));
+        assert!(FIXES
+            .iter()
+            .all(|f| choice.is_on(f) != OFF_IN_EVERY_PRESET.contains(&f.env)));
         let vanilla = format!("[nv-rs General]\nsPreset=vanilla\n{commented}");
         let choice = with_ini(None, &vanilla, &[]);
         assert!(FIXES.iter().all(|f| !choice.is_on(f)));
