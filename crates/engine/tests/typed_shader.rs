@@ -1,4 +1,3 @@
-sky case: see below
 //! The differential test of every typed function of the shader family (`engine_typed::shader`)
 //! against its translation. One world serves every test: a renderer with its state cache and device,
 //! a texture stage with its cache, a shader, plain and skinned geometry with their properties, passes,

@@ -1490,7 +1490,10 @@ mod value_packet_b_tests {
             (words_at(e, t, 13), words_at(e, b, 4), t)
         });
         assert_eq!(transform, (0..13).map(|k| 0x1000 + k).collect::<Vec<u32>>());
-        assert_eq!(bound_words, (0..4).map(|k| 0x2000 + k).collect::<Vec<u32>>());
+        assert_eq!(
+            bound_words,
+            (0..4).map(|k| 0x2000 + k).collect::<Vec<u32>>()
+        );
         assert_ne!(at, geometry + 0x68);
         let transform = with_world(&mut e, geometry, |e, t| words_at(e, t, 13));
         assert_eq!(transform, (0..13).map(|k| 0x1000 + k).collect::<Vec<u32>>());
