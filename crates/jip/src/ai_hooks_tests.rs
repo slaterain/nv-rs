@@ -224,6 +224,11 @@ fn combat_disabled_and_forced_targets() {
     );
     assert_eq!(flags1(&e, ACTOR), 2);
     assert_eq!(
+        run(&mut e, GET_COMBAT_DISABLED, ACTOR, &[]),
+        1.0,
+        "a forced target alone"
+    );
+    assert_eq!(
         (
             e.hook_users(Hook::StartCombat),
             e.hook_users(Hook::SetCombatTarget)
@@ -385,9 +390,12 @@ fn no_health_reset() {
             ..Ret::default()
         }
     });
-    e.register_double(0x00de_000c, |_, _| Ret {
-        st0: 10.0,
-        ..Ret::default()
+    e.register_double(0x00de_000c, |_, w| {
+        assert_eq!(w[1], 0x10);
+        Ret {
+            st0: 10.0,
+            ..Ret::default()
+        }
     });
     calls();
     assert_eq!(site(&mut e, 0x008a_0963, &[ACTOR]), Some(1));
@@ -484,6 +492,11 @@ fn locked_equipment() {
             "JIP's own call"
         );
     }
+    {
+        let _mark = e.mark_caller(Hook::LockEquipment, JIP_PREFERED_WEAPON_CALL);
+        assert_eq!(site(&mut e, 0x0089_1c86, &[OTHER, 6]), None);
+        assert!(!e.caller_marked(JIP_PREFERED_WEAPON_CALL), "taken first");
+    }
     // The weapon rating: only the acquired weapon, when its ammo is there.
     e.mem.set_u32(ENTRY + 8, WEAPON);
     e.mem.set_u32(WEAPONS + 4, WEAPONS + 0x10);
@@ -518,6 +531,32 @@ fn locked_equipment() {
         "no ammo"
     );
     assert_eq!(e.mem.u32(WEAPONS + 8), 3);
+    // With the ammo: a base with a container (its vtable +0xF8 answers true; its list at +0x68
+    // empty) and a changes entry counting 3 of it.
+    let (base, base_vt, xcc, ccd, cnode, centry) = (
+        AREA + 0x9000,
+        AREA + 0x9100,
+        AREA + 0x9200,
+        AREA + 0x9300,
+        AREA + 0x9400,
+        AREA + 0x9500,
+    );
+    e.mem.set_u32(base, base_vt);
+    e.mem.set_u32(base_vt + 0xf8, 0x008d_0360);
+    e.mem.set_u32(ACTOR + 0x20, base);
+    set_extra(&mut e, ACTOR, 0x15, xcc);
+    e.mem.set_u32(xcc + 0xc, ccd);
+    e.mem.set_u32(ccd, cnode);
+    e.mem.set_u32(cnode, centry);
+    e.mem.set_u32(centry + 8, AMMO);
+    e.mem.set_u32(centry + 4, 3);
+    assert_eq!(e.mem.u32(WEAPON + 0xa8), AMMO);
+    assert_eq!(
+        site(&mut e, 0x0099_9857, &[ACTOR, ENTRY, WEAPONS]),
+        Some(1),
+        "has the ammo"
+    );
+    assert_eq!(e.mem.u32(WEAPONS + 8), 2);
     run(&mut e, LOCK_EQUIPMENT, ACTOR, &[int_arg(0)]);
     run(&mut e, LOCK_EQUIPMENT, ACTOR, &[int_arg(0)]);
     assert_eq!(
@@ -534,6 +573,11 @@ fn locked_re_equip_all() {
     let mut e = world();
     run(&mut e, LOCK_EQUIPMENT, ACTOR, &[int_arg(1)]);
     assert_eq!(site(&mut e, 0x0060_47c0, &[0, OTHER]), None, "not locked");
+    {
+        let _mark = e.mark_caller(Hook::LockEquipment, 0x0060_678f);
+        assert_eq!(site(&mut e, 0x0060_47c0, &[0, OTHER]), None);
+        assert!(!e.caller_marked(0x0060_678f), "taken first");
+    }
     // Not from SetCombatStyle: enchantments on the worn armour.
     let (extra_cc, data, node, entry, lists, worn) = (
         AREA + 0x7100,
@@ -564,6 +608,43 @@ fn locked_re_equip_all() {
         calls(),
         [(0x00de_0014, vec![ACTOR + 0x88, AREA + 0x7818, ARMOR, 0])]
     );
+    // A worn armour with no enchantment: nothing cast.
+    let (plain, second) = (AREA + 0x9600, AREA + 0x9700);
+    for armor in [plain, second] {
+        e.mem.set_u8(armor + 4, 0x18);
+    }
+    e.mem.set_u32(second + 0x4c, AREA + 0x7880);
+    let (n1, n2, n3, n4, e1, e4) = (
+        AREA + 0x9800,
+        AREA + 0x9810,
+        AREA + 0x9820,
+        AREA + 0x9830,
+        AREA + 0x9900,
+        AREA + 0x9a00,
+    );
+    for (en, form) in [(e1, plain), (e4, second)] {
+        e.mem.set_u32(en + 8, form);
+        e.mem.set_u32(en, lists);
+    }
+    e.mem.set_u32(n1, e1);
+    e.mem.set_u32(data, n1);
+    site(&mut e, 0x0060_47c0, &[0, ACTOR]);
+    assert!(calls().is_empty(), "no enchantment");
+    // Then a null entry, the enchanted armour and a second one: two casts, in order.
+    e.mem.set_u32(n1 + 4, n2);
+    e.mem.set_u32(n2 + 4, n3);
+    e.mem.set_u32(n3, entry);
+    e.mem.set_u32(n3 + 4, n4);
+    e.mem.set_u32(n4, e4);
+    site(&mut e, 0x0060_47c0, &[0, ACTOR]);
+    assert_eq!(
+        calls(),
+        [
+            (0x00de_0014, vec![ACTOR + 0x88, AREA + 0x7818, ARMOR, 0]),
+            (0x00de_0014, vec![ACTOR + 0x88, AREA + 0x7898, second, 0]),
+        ]
+    );
+    e.mem.set_u32(data, node);
     e.mem.set_u8(worn + 0xa, 0);
     site(&mut e, 0x0060_47c0, &[0, ACTOR]);
     assert!(calls().is_empty(), "not worn");
@@ -622,6 +703,10 @@ fn locked_re_equip_all() {
     e.mem.set_u32(pref + 4, 1);
     from_style(&mut e);
     assert_eq!(calls()[1].1[2], 1, "a count of 1");
+    e.mem.set_u32(pref + 4, 5);
+    e.mem.set_u8(WEAPON + 0xf4, 9);
+    from_style(&mut e);
+    assert_eq!(calls()[1].1[2], 1, "type 9: one");
     // A held weapon that suits the style (melee restriction 1, a melee type): nothing.
     let (held, cs_extra, style) = (AREA + 0x7b00, AREA + 0x7c00, AREA + 0x7d00);
     e.mem.set_u8(PROCESS + 0x28, 1);
@@ -751,6 +836,14 @@ fn disabled_scripts() {
 fn pushed_actor_velocity() {
     let mut e = world();
     assert_eq!(site(&mut e, 0x00c6_d4e4, &[CONTROLLER]), None);
+    e.mem.set_u8(CONTROLLER + 0x417, 0x01);
+    e.mem.set_f32(CONTROLLER + 0x524, 0.5);
+    assert_eq!(
+        site(&mut e, 0x00c6_d4e4, &[CONTROLLER]),
+        None,
+        "bit 7 clear"
+    );
+    assert_eq!(e.mem.u8(CONTROLLER + 0x417), 0x01);
     e.mem.set_u8(CONTROLLER + 0x417, 0x81);
     e.mem.set_f32(CONTROLLER + 0x524, 0.5);
     assert_eq!(site(&mut e, 0x00c6_d4e4, &[CONTROLLER]), Some(1));

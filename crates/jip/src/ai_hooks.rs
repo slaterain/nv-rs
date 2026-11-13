@@ -112,7 +112,7 @@ const VTBL_CHARACTER: u32 = 0x0108_6a6c;
 /// actor, item, count, extra list, 1, 0, 1), `ContChangesEntry`'s deleting destructor
 /// (`thiscall`: entry, 1); and the vtable entries:
 /// `Actor::GetPreferedWeapon` (`+0x3BC`, `00891c80`), `Actor::GetCombatController` (`+0x428`,
-/// `008a02d0`), `MagicTarget`'s `+0x14` (an enchantment applied), `ActorValueOwner`'s
+/// `008a02d0`), `MagicCaster::CastWornEnchantment` (the actor's caster at `+0x88`, its `+0x14`: `00815820`, which takes its first argument as a `MagicItem`), `ActorValueOwner`'s
 /// `GetBaseActorValue` (`+4`) and `GetActorValue` (`+0xC`), both floats.
 const GET_BY_TYPE: u32 = 0x0041_0220;
 const RESTORE_ACTOR_VALUE: u32 = 0x0088_b740;
@@ -120,7 +120,7 @@ const EQUIP_ITEM: u32 = 0x0088_c650;
 const DELETE_ENTRY: u32 = 0x0044_59e0;
 const GET_PREFERED_WEAPON: u32 = 0x3bc;
 const GET_COMBAT_CONTROLLER: u32 = 0x428;
-const MAGIC_TARGET_APPLY: u32 = 0x14;
+const CAST_WORN_ENCHANTMENT: u32 = 0x14;
 const AV_BASE: u32 = 0x4;
 const AV_CURRENT: u32 = 0xc;
 /// The console's open byte (`0x11DEA2E`): JIP's `ResetHPCommandHook` lets the reset run while it is
@@ -498,8 +498,14 @@ fn re_equip_all_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     if process == 0 {
         return Some(0);
     }
-    let held = e.mem.u32(process + 0x114);
-    if e.mem.u8(process + 0x28) <= 1 && held != 0 {
+    // The held weapon (`+0x114`) exists only in a middle-high or high process: read after the
+    // level test, as JIP does.
+    let held = if e.mem.u8(process + 0x28) <= 1 {
+        e.mem.u32(process + 0x114)
+    } else {
+        0
+    };
+    if held != 0 {
         let extra = extra_of(e, actor, EXTRA_COMBAT_STYLE);
         if extra == 0 {
             return Some(0);
@@ -539,7 +545,8 @@ fn re_equip_all_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
 }
 
 /// `ReApplyEnchantments`: for each worn armour of the actor's inventory changes with an
-/// enchantment, the enchantment applied to the actor's magic target again.
+/// enchantment, the enchantment cast again by the actor's magic caster (`+0x88`, its enchantment
+/// part at `+0x18` passed as the `MagicItem`).
 fn re_apply_enchantments(e: &mut Engine, actor: u32) {
     let mut node = crate::overrides::changes_list(e, actor);
     while node != 0 {
@@ -558,7 +565,7 @@ fn re_apply_enchantments(e: &mut Engine, actor: u32) {
         }
         e.vcall(
             actor + 0x88,
-            MAGIC_TARGET_APPLY,
+            CAST_WORN_ENCHANTMENT,
             &args![enchantment + 0x18, form, 0u32],
         );
     }
