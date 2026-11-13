@@ -6,8 +6,8 @@
 //! level (about 14 a frame, over 1,000 elements each): by the profile of 2026-11-11 a spike of about
 //! 1 ms (quiet machine) on the frames the pass runs.
 //!
-//! - [`array`]: the process array (`ProcessArray`): the levels' starts and ends, the actor at an
-//!   index, the element store, the search (a plain loop over the element block), the removal and
+//! - [`array`]: the process array (`ProcessArray`): the levels' starts and ends, the element
+//!   store, the search (a plain loop over the element block), the removal and
 //!   the cursors' correction;
 //! - [`levels`]: the three level passes (`0096b050`, `0096b470`, `0096b810`) with the hour test,
 //!   the actor update and the removal of the actors that left a level.
@@ -49,7 +49,6 @@ fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x005d_e0f0, array::level_head(Ptr, u32) -> u32),
         entry!(0x005b_e5c0, array::level_tail(Ptr, u32) -> u32),
-        entry!(0x0096_8670, array::actor_at(Ptr, u32) -> u32),
         entry!(0x0096_ae90, array::set_element(Ptr, u32, Ptr)),
         entry!(0x0096_ab20, array::level_of(Ptr, u32) -> i32),
         entry!(0x0096_abc0, array::find(Ptr, u32, i32) -> u32),

@@ -154,10 +154,15 @@ fn run_actor_update(e: &mut Engine, actor: u32, process: u32, time: f32) {
     }
 }
 
-/// The actor at `index` of the process array (the lists' +4).
+/// The actor at `index` of the process array (the lists' +4; `00968670`, the dispatch family's
+/// array item).
 fn actor_at(e: &mut Engine, this: Ptr, index: u32) -> u32 {
     let array_at = Ptr::new(this.addr().wrapping_add(4));
-    typed_call!(FAMILY, 0x0096_8670, array::actor_at(e, array_at, index))
+    typed_call!(
+        dispatch::FAMILY,
+        0x0096_8670,
+        dispatch::refs::array_item(e, array_at, index)
+    )
 }
 
 /// A level's first and end indexes.

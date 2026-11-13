@@ -51,17 +51,6 @@ pub fn level_tail(e: &mut Engine, this: Ptr, level: u32) -> u32 {
     )
 }
 
-// Typed from 00968670
-/// `thiscall(array, index)`: the pointer at `index` of a pointer array (`00877a30`'s element
-/// address), 0 for an empty slot. Identical code serves the combat groups' array.
-pub fn actor_at(e: &mut Engine, this: Ptr, index: u32) -> u32 {
-    let element = typed_call!(
-        leaf::FAMILY,
-        0x0087_7a30,
-        leaf::array_element(e, this.addr(), index)
-    );
-    e.mem.u32(element)
-}
 
 // Typed from 0096ae90
 /// `thiscall(array, index, value)`: stores the pointer `*value` at `index`. An index at or past the
@@ -133,7 +122,10 @@ pub fn find(e: &mut Engine, this: Ptr, actor: u32, level: i32) -> u32 {
         let n = in_page.clamp(1, end - index);
         let chunk = &mut bytes[..4 * n as usize];
         e.mem.read(first, chunk);
-        if let Some((k, _)) = (0u32..).zip(chunk.chunks_exact(4)).find(|(_, w)| *w == wanted) {
+        if let Some((k, _)) = (0u32..)
+            .zip(chunk.chunks_exact(4))
+            .find(|(_, w)| *w == wanted)
+        {
             return index.wrapping_add(k);
         }
         index += n;

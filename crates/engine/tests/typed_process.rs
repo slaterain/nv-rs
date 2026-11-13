@@ -278,16 +278,6 @@ fn process_array_getters() {
         0x005b_e5c0,
         array::level_tail(Ptr<_>, u32) -> u32
     )));
-    // The actor at each index, an empty slot among them.
-    Diff::new(entry!(0x0096_8670, array::actor_at(Ptr<_>, u32) -> u32))
-        .common()
-        .inputs(&[Input::Of(&[0, 1, 2]), Input::Of(&[0, 1, 3, 5, 13])])
-        .setup(|e, case| {
-            stand_ins(e);
-            vec![array_world(e, case.word(0), 2, 0), case.word(1)]
-        })
-        .run()
-        .assert_same();
     // The element store: below the count over a null or non-null element, at and past the count; a
     // null or non-null value.
     Diff::new(entry!(0x0096_ae90, array::set_element(Ptr<_>, u32, Ptr<_>)))
@@ -626,12 +616,13 @@ fn process_hour_rounding() {
                 // An actor of the level with the byte at +0x87, its process's slots true.
                 let a = actor(e, 5 + 1 + 4, level, last);
                 let lists = block(e, 0x100, &[]);
+                let one = [a];
                 let arr = process_array(
                     e,
                     match level {
-                        3 => [&[], &[], &[], &[a]],
-                        2 => [&[], &[], &[a], &[]],
-                        _ => [&[], &[a], &[], &[]],
+                        3 => [&[], &[], &[], &one],
+                        2 => [&[], &[], &one, &[]],
+                        _ => [&[], &one, &[], &[]],
                     },
                     1,
                     [0; 4],
