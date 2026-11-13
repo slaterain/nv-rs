@@ -885,6 +885,11 @@ fn the_frame_rate_counter_is_drawn_into_the_window_and_never_captured() {
         (false, 0),
         "off: nothing made"
     );
+    assert_eq!(
+        g.b.device().expect("the device").frame_rate_meter(),
+        (0, None),
+        "off: no present timed"
+    );
     d3d9_wgpu::frame_rate::show(true);
     let colour = 0xFFFF_FFFF;
     let mut frame = 4;
@@ -926,6 +931,34 @@ fn the_frame_rate_counter_is_drawn_into_the_window_and_never_captured() {
     d3d9_wgpu::frame_rate::show(false);
     g.show(frame, colour);
     g.show(frame + 1, colour);
+    let (timed, _) = g.b.device().expect("the device").frame_rate_meter();
+    assert!(timed > 0, "on: presents timed");
     let (_, after) = g.b.device().expect("the device").frame_rate_drawn();
     assert_eq!(after, drawn, "off again: not drawn");
+    g.show(frame + 2, colour);
+    assert_eq!(
+        g.b.device().expect("the device").frame_rate_meter().0,
+        timed,
+        "off again: no present timed"
+    );
+    // On again after a pause longer than any frame here: the meter starts again, so the slowest
+    // frame is about the frames' own spacing, not the time it was off.
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    d3d9_wgpu::frame_rate::show(true);
+    let mut frame = frame + 3;
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let readout = loop {
+        g.show(frame, colour);
+        frame += 1;
+        let (_, readout) = g.b.device().expect("the device").frame_rate_meter();
+        if readout.is_some() || std::time::Instant::now() > until {
+            break readout;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let slowest = readout.expect("numbers again").slowest_tenths_ms;
+    assert!(
+        slowest < 5_000,
+        "the slowest frame {slowest} tenths of a ms, not the 700 ms off"
+    );
 }

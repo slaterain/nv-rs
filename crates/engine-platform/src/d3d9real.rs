@@ -728,7 +728,8 @@ fn window_input(_window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) {
     match message {
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP => {
             // F11: the port's frame-rate counter on or off (its first press; `d3d9_wgpu::frame_rate`).
-            // The key is the port's, so the game never sees it go down or up.
+            // While wgpu draws the window the key is the port's, so the game never sees it go down
+            // or up; on the real Direct3D 9 (no counter) it is the game's.
             if d3d9_wgpu::frame_rate::window_key(message, wparam.0, lparam.0) {
                 return;
             }
@@ -3649,6 +3650,7 @@ mod tests {
     /// and release change nothing, and the game's keyboard never holds it (DIK_F11, 0x57), in the
     /// game's menus, Pip-Boy and console alike (they all read these keys). Another key still
     /// reaches the game.
+    /// On the real Direct3D 9, which has no counter, F11 is the game's like any key.
     #[test]
     fn f11_toggles_the_frame_rate_counter_and_never_reaches_the_game() {
         let window = HWND(std::ptr::null_mut());
@@ -3657,6 +3659,16 @@ mod tests {
         let send = |message: u32, vk: usize, lparam: isize| {
             window_input(window, message, WPARAM(vk), LPARAM(lparam))
         };
+        // The real Direct3D 9 draws (no wgpu device on the window, no counter): F11 is the game's.
+        d3d9_wgpu::frame_rate::set_window_device(false);
+        d3d9_wgpu::frame_rate::show(false);
+        send(WM_KEYDOWN, 0x7a, f11);
+        assert!(held_keys()[0x57], "Direct3D 9: the game sees F11 down");
+        assert!(!d3d9_wgpu::frame_rate::shown());
+        send(WM_KEYUP, 0x7a, f11 | repeat | (1 << 31));
+        assert!(!held_keys()[0x57]);
+        // wgpu on the window: F11 is the counter's.
+        d3d9_wgpu::frame_rate::set_window_device(true);
         d3d9_wgpu::frame_rate::show(false);
         send(WM_KEYDOWN, 0x7a, f11);
         assert!(d3d9_wgpu::frame_rate::shown(), "pressed: on");
@@ -3677,6 +3689,7 @@ mod tests {
         send(WM_KEYUP, 0x41, a | repeat | (1 << 31));
         assert!(!held_keys()[0x1e]);
         assert!(!d3d9_wgpu::frame_rate::shown());
+        d3d9_wgpu::frame_rate::set_window_device(false);
     }
 
     /// With real threads, a kernel-locked function that reaches the device's state takes the device
