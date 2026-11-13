@@ -2802,9 +2802,13 @@ fn scene_skin_bound() {
         engine_typed::scene::skin::skin_bound(Ptr<_>, Ptr<_>)
     ))
     .culling_translated(0x00a8_6530)
-    .control_words(&[MAIN_THREAD])
-    // The transform product copies the scale as it is (a signalling NaN radius's scale keeps its payload).
-    .allow_nan_payloads()
+    // Within one ulp on the main thread's word: the transform inverse calls the dispatch family's native
+    // rotate (004b4500), whose sum of products rounds once where the exe rounds each step to 24 bits
+    // (found when the Diff harness began seeding the control word's thread-block copy; before, a C runtime
+    // call drifted these runs to 53 bits). The rotate is a member of the dispatch family, which this test
+    // names, so it cannot go by address here; its own tests compare it. NaNs of any payload are equal
+    // within the tolerance (the transform product copies the scale as it is).
+    .main_thread(1)
     .inputs(&inputs(&[
         &[
             Input::Of(&[0, 1, 2, 3]),
@@ -2860,13 +2864,17 @@ fn scene_skin_bound_from_culling() {
     // Under the main thread's with the culling family's other functions by address
     // ([`Common::culling_translated`]): the bound moved by the world transform and the skin's merges run
     // translated (their native sums part from the exe in the last bits there, which their own tests
-    // compare); this function's own work, bit for bit.
+    // compare); this function's own work within one ulp: the skin bound's transform inverse calls the
+    // dispatch family's native rotate (004b4500), whose sum of products rounds once where the exe rounds
+    // each step to 24 bits (found when the Diff harness began seeding the control word's thread-block
+    // copy; before, a C runtime call drifted these runs to 53 bits). The rotate is a member of the
+    // dispatch family, which this test names, so it cannot go by address here; its own tests compare it.
     let report = Diff::new(entry!(
         0x00a8_0710,
         culling::update::geometry_update_world_bound(Ptr<_>)
     ))
     .culling_translated(0x00a8_0710)
-    .main_thread(0)
+    .main_thread(1)
     .inputs(&inputs(&[
         &[
             Input::Of(&[1, 2, 3]),
@@ -2891,11 +2899,35 @@ fn scene_skin_bound_from_culling() {
 
 #[test]
 fn scene_transform_inverse() {
+    // Under the other threads' control word bit for bit, NaN payloads aside.
     Diff::new(entry!(
         0x008b_42e0,
         engine_typed::scene::skin::transform_inverse(Ptr<_>, Ptr<_>)
     ))
     .common(0x008b_42e0)
+    .other_threads()
+    .inputs(&inputs(&[&P3, &[Input::F32Swept(TWO)]]))
+    .max_cases(128)
+    .setup(|e, case| {
+        stand_ins(e);
+        let t = transform(e, case, 0);
+        e.mem.set_u32(t + 0x28, bits(case, 2));
+        e.mem.set_u32(t + 0x2c, bits(case, 3));
+        vec![t, e.mem.alloc(0x34)]
+    })
+    .run()
+    .assert_same();
+    // Within one ulp on the main thread's word: the dispatch family's native rotate (004b4500) rounds its
+    // sum of products once where the exe rounds each step to 24 bits (found when the Diff harness began
+    // seeding the control word's thread-block copy; before, the matrix inverse's C runtime call drifted
+    // these runs to 53 bits). The rotate is a member of the dispatch family, which this test names, so it
+    // cannot go by address here; its own tests compare it on both words.
+    Diff::new(entry!(
+        0x008b_42e0,
+        engine_typed::scene::skin::transform_inverse(Ptr<_>, Ptr<_>)
+    ))
+    .common(0x008b_42e0)
+    .main_thread(1)
     .inputs(&inputs(&[&P3, &[Input::F32Swept(TWO)]]))
     .max_cases(128)
     .setup(|e, case| {
