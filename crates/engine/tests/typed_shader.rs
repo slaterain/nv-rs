@@ -12734,9 +12734,12 @@ fn acceptance_copied(kind: u16, offset: u32, len: u8) -> bool {
 /// scribbled it ([`held_probe`]).
 type Held = std::collections::HashMap<u32, (u16, Vec<bool>)>;
 
+/// The tagged ranges with their bytes before the cut: (kind, address, bytes).
+type HeldBefore = Vec<(u16, u32, Vec<u8>)>;
+
 thread_local! {
     /// The tagged ranges and their bytes before the cut, until [`held_probe`] runs inside the draw.
-    static HELD_PROBE: std::cell::RefCell<Option<Vec<(u16, u32, Vec<u8>)>>> =
+    static HELD_PROBE: std::cell::RefCell<Option<HeldBefore>> =
         const { std::cell::RefCell::new(None) };
     /// What [`held_probe`] found.
     static HELD_FOUND: std::cell::RefCell<Held> = std::cell::RefCell::new(Held::new());
