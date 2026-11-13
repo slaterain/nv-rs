@@ -688,4 +688,4 @@ fn aux_get_flt_cond_eval(e: &mut Engine, w: &[u32]) -> Ret {
 
 #[cfg(test)]
 #[path = "jip_fn_aux_variable_tests.rs"]
-mod tests;
+pub(crate) mod tests;
