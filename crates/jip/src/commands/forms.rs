@@ -328,6 +328,12 @@ pub mod form_type_more {
     pub const BGS_PROJECTILE: u8 = 0x33;
     pub const TES_WATER_FORM: u8 = 0x4e;
     pub const TES_AMMO_EFFECT: u8 = 0x72;
+    pub const TES_LAND_TEXTURE: u8 = 0x12;
+    pub const ENCHANTMENT_ITEM: u8 = 0x13;
+    pub const TES_WORLD_SPACE: u8 = 0x41;
+    pub const TES_IMAGE_SPACE: u8 = 0x53;
+    pub const TES_IMAGE_SPACE_MODIFIER: u8 = 0x54;
+    pub const BGS_IMPACT_DATA: u8 = 0x5e;
 }
 
 /// `kInventoryType` (JIP LN NVSE, `internal/jip_core.cpp`): per form type, whether it is an
@@ -345,3 +351,195 @@ pub const INVENTORY_TYPE: [bool; 121] = {
     }
     t
 };
+
+layout! {
+    /// `TESModelTextureSwap` (JIP LN NVSE), 0x20 bytes: a `TESModel` and its list of alternate
+    /// textures.
+    pub struct TESModelTextureSwap: 0x20 {
+        0x04 nifPath: Inline<BSStringT>,
+        /// `textureList` (JIP LN NVSE): a `tList<Texture>`, its first node inline.
+        0x18 textureList: Inline<ListNode>,
+    }
+
+    /// `TESObjectARMO` (JIP LN NVSE), 0x190 bytes, checked in the armour loader (`00512FD0`):
+    /// `BMDT` (part mask, flags) at +0x74/+0x78; `MODL`/`MODS` into +0x7C, `MOD3`/`MO3S` +0x9C,
+    /// `MOD2`/`MO2S` +0xBC, `MOD4`/`MO4S` +0xDC (the four models in a row, 0x20 bytes each);
+    /// `BMCT` set through the virtual `SetModelPath` of the model at +0x134; the override-sounds
+    /// byte at +0x18C deciding whether `TNAM` (the template) or the sound list is the word at
+    /// +0x188.
+    pub struct TESObjectARMO: 0x190 {
+        /// `bipedModel.bipedFlags` (JIP LN NVSE).
+        0x078 bipedFlags: u32,
+        /// `bipedModel.bipedModel[0]` (JIP LN NVSE): the first of the four models.
+        0x07C bipedModels: Inline<TESModelTextureSwap>,
+        /// `bipedModel.modelRDT.nifPath` (JIP LN NVSE).
+        0x138 modelRDTPath: Inline<BSStringT>,
+        /// `audioTemplate` (JIP LN NVSE), or the movement sounds' list when the armour overrides
+        /// its sounds.
+        0x188 audioTemplate: u32,
+        0x18C overrideSounds: u8,
+    }
+
+    /// `BGSExplosion` (JIP LN NVSE), 0xA8 bytes, checked in the explosion loader (`004FB0D0`,
+    /// engine-fallout-forms `bgsexplosion.rs`): the enchantable component at +0x54, the image
+    /// space modifiable one at +0x68, the placed object at +0x70, `DATA` (0x34 bytes) at +0x74.
+    pub struct BGSExplosion: 0xA8 {
+        /// `enchantable.enchantItem` (JIP LN NVSE).
+        0x58 enchantItem: u32,
+        /// `imageSpaceModForm.imod` (JIP LN NVSE).
+        0x6C imod: u32,
+        0x70 placedObj: u32,
+        0x74 force: f32,
+        0x78 damage: f32,
+        0x7C radius: f32,
+        0x80 light: u32,
+        0x84 sound1: u32,
+        0x88 explFlags: u32,
+        0x8C ISradius: f32,
+        0x90 impactDataSet: u32,
+        0x94 sound2: u32,
+        0x98 RADlevel: f32,
+        0x9C dissipationTime: f32,
+        0xA0 RADradius: f32,
+        /// `soundLevel` (JIP LN NVSE): a `UInt8` in JIP (the game's word, read as its low byte).
+        0xA4 soundLevel: u8,
+    }
+
+    /// `BGSImpactData` (JIP LN NVSE), 0x78 bytes, checked in the impact data loader (`0058DEA0`:
+    /// `MODL` at +0x18, `DATA` (0x18 bytes) at +0x30, `DODT` read into the decal from +0x54).
+    pub struct BGSImpactData: 0x78 {
+        0x18 model: Inline<TESModel>,
+        0x30 effectDuration: f32,
+        0x34 effectOrientation: u8,
+        0x38 angleThreshold: f32,
+        0x40 soundLevel: u8,
+        0x44 noDecalData: u8,
+        /// `textureSet` (JIP LN NVSE), then `sound1` and `sound2` at +0x4C and +0x50.
+        0x48 textureSet: u32,
+        0x54 decalInfo: Inline<DecalInfo>,
+    }
+
+    /// `BGSImpactDataSet` (JIP LN NVSE), 0x4C bytes, checked in its loader (`0058EC00`: `DATA`,
+    /// 0x30 bytes, at +0x1C).
+    pub struct BGSImpactDataSet: 0x4C {
+        /// `impactDatas[12]` (JIP LN NVSE), one per material.
+        0x1C impactDatas: u32,
+    }
+
+    /// `TESLandTexture` (JIP LN NVSE), 0x28 bytes, checked in the land texture loader
+    /// (`005412A0`: `TNAM` at +0x18, `HNAM` (3 bytes) at +0x1C, `SNAM` at +0x1F).
+    pub struct TESLandTexture: 0x28 {
+        0x18 textureSet: u32,
+        0x1C materialType: u8,
+        0x1D friction: u8,
+        0x1E restitution: u8,
+        0x1F specularExponent: u8,
+        /// `grasses` (JIP LN NVSE): a `tList<TESGrass>`, its first node inline.
+        0x20 grasses: Inline<ListNode>,
+    }
+
+    /// `TESCombatStyle` (JIP LN NVSE), 0x108 bytes, checked in the combat style loader
+    /// (`00505180`: `CSSD` at +0x18, `CSTD` at +0x58, `CSAD` at +0xB4). Each field below is the
+    /// first of a run JIP indexes (`jip_fn_combat_style`).
+    pub struct TESCombatStyle: 0x108 {
+        0x18 coverSearchRadius: f32,
+        0x40 weaponRestrictions: u8,
+        0x44 rangedWeapRangeMultMax: f32,
+        0x58 dodgeChance: u8,
+        0x5C dodgeLRTimerMin: f32,
+        0x7C blockChance: u8,
+        0x80 staggerBonusToAttack: f32,
+        0x8C powerAttackChance: u8,
+        0x90 staggerBonusToPower: f32,
+        0x98 powerAttackN: u8,
+        0xA0 holdTimerMin: f32,
+        0xA8 csFlags: u16,
+        0xAC acrobaticDodgeChance: u8,
+        0xB0 rushAttackDistMult: f32,
+    }
+
+    /// `TESGlobal` (JIP LN NVSE), 0x28 bytes, checked in the global loader (`005A64B0`: `FNAM`
+    /// at +0x20, `FLTV` at +0x24).
+    pub struct TESGlobal: 0x28 {
+        /// JIP's union of `float data` and `UInt32 uRefID` (a form id, for JIP's global refs):
+        /// the word, its float read and written through its bits.
+        0x24 data: u32,
+    }
+
+    /// `TESFaction` (JIP LN NVSE), checked in the faction loader (`005FCB70`: the reputation id
+    /// stored at +0x38).
+    pub struct TESFaction: 0x4C {
+        0x38 reputation: u32,
+    }
+
+    /// `TESPackage` (JIP LN NVSE), checked in the package loader (`00673A40`: `PKDT`'s first word
+    /// at +0x1C).
+    pub struct TESPackage: 0x80 {
+        0x1C packageFlags: u32,
+    }
+
+    /// `TESWorldSpace` (JIP LN NVSE), 0xEC bytes, checked in the worldspace loader (`00583560`:
+    /// `DATA` (a byte) at +0x4C, `PNAM` at +0x4E); the other fields as JIP's header gives them.
+    pub struct TESWorldSpace: 0xEC {
+        /// `cell` (JIP LN NVSE): the persistent cell.
+        0x34 cell: u32,
+        0x40 climate: u32,
+        0x44 imageSpace: u32,
+        0x4C worldFlags: u8,
+        0x4E parentFlags: u16,
+        0x70 parent: u32,
+        0x74 waterFormFirst: u32,
+        0xE0 waterNoiseTexture: Inline<TESTexture>,
+    }
+
+    /// `TESObjectCELL` (JIP LN NVSE), the field the worldspace commands read (`worldSpace`
+    /// +0xC0, as xNVSE's cell commands read it).
+    pub struct TESObjectCELL: 0xE0 {
+        0xC0 worldSpace: u32,
+    }
+
+    /// `TESImageSpace` (JIP LN NVSE), checked in the image space loader (`0052B440`).
+    pub struct TESImageSpace: 0xB0 {
+        /// `traitValues[33]` (JIP LN NVSE).
+        0x18 traitValues: f32,
+    }
+
+    /// `TESImageSpaceModifier` (JIP LN NVSE), checked in the modifier loader (`0052D510`: the key
+    /// arrays at +0x654, +0x704, +0x70C). The interpolator values are the first interpolator's
+    /// (`value`, +0xC in each).
+    pub struct TESImageSpaceModifier: 0x730 {
+        0x020 animable: u8,
+        0x024 duration: f32,
+        0x0E8 radBlurUseTarget: u8,
+        0x0EC radialBlurCentreX: f32,
+        0x0F0 radialBlurCentreY: f32,
+        0x100 DoFUseTarget: u8,
+        0x101 DoFMode: u8,
+        /// `fltIntrpl1[0].value` (JIP LN NVSE); 0x18 bytes per interpolator.
+        0x120 fltIntrpl1Value: f32,
+        /// `clrIntrpl[0].value[0]` (JIP LN NVSE); 0x24 bytes per interpolator.
+        0x540 clrIntrplValue: f32,
+        /// `fltIntrpl2[0].value` (JIP LN NVSE).
+        0x588 fltIntrpl2Value: f32,
+        /// `data654[44]` (JIP LN NVSE): `InterpKey<float>*`.
+        0x654 data654: u32,
+        /// `data704[2]` (JIP LN NVSE): `InterpKey<NiColorAlpha>*`.
+        0x704 data704: u32,
+        /// `data70C[9]` (JIP LN NVSE): `InterpKey<float>*`.
+        0x70C data70C: u32,
+    }
+
+    /// `InterpKey<float>` (JIP LN NVSE): a time and a value.
+    pub struct FloatKey: 0x08 {
+        0x04 value: f32,
+    }
+
+    /// `InterpKey<NiColorAlpha>` (JIP LN NVSE): a time and four values.
+    pub struct ColorKey: 0x14 {
+        0x04 value: f32,
+    }
+}
+
+/// More vtables `IS_TYPE` compares (`kVtbl_*` (JIP LN NVSE)).
+pub const TES_OBJECT_ARMO_VTBL: u32 = 0x0102_a62c;
+pub const TES_OBJECT_ARMA_VTBL: u32 = 0x0102_a31c;
