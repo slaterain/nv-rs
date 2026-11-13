@@ -281,6 +281,11 @@ fn the_outputs_of_a_form() {
     assert_eq!(ids(&e, res), Some(vec![0x0a33, 0x0e44]));
     let (_, res) = call(&mut e, 0x2261, &[r(5), r(4)]);
     assert_eq!(ids(&e, res), Some(vec![0x0a33, 0x0e44]), "recipe 2 alone");
+    // By address, not by id: the weapon (the higher address) gets the lower id.
+    e.mem.set_u32(WEAP + 0xc, 0x0100);
+    let (_, res) = call(&mut e, 0x2261, &[r(5)]);
+    assert_eq!(ids(&e, res), Some(vec![0x0a33, 0x0100]));
+    e.mem.set_u32(WEAP + 0xc, 0x0e44);
     e.mem.set_u32(RCPE + 0x58, CAT);
     let (_, res) = call(&mut e, 0x2261, &[r(5), r(3)]);
     assert_eq!(ids(&e, res), Some(vec![0x0e44]), "recipe 1 alone");

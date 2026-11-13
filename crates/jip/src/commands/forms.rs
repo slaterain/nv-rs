@@ -796,3 +796,92 @@ layout! {
         0xA0 recipeList: Inline<ListNode>,
     }
 }
+
+/// Form types of batch 7 (`kFormType_*` (JIP LN NVSE)).
+pub mod form_type_b7 {
+    pub const TES_GLOBAL: u8 = 0x06;
+    pub const TES_LEV_CREATURE: u8 = 0x2c;
+    pub const TES_LEV_CHARACTER: u8 = 0x2d;
+    pub const TES_LEV_ITEM: u8 = 0x34;
+}
+
+/// `GetLvlList` (JIP LN NVSE): a leveled form's `TESLeveledList` component is at +0x30.
+pub const LEVELED_LIST_COMPONENT: u32 = 0x30;
+
+layout! {
+    /// `TESLeveledList` (JIP LN NVSE), the component at +0x30 of a leveled form, checked in the
+    /// leveled item loader (`0050B560`: `LVLD` into +0xC through `0042E680`, `LVLF` into +0xD,
+    /// `LVLG` into +0x10, all of the form at +0x30) and the game's `AddItem` (`00487A60`, the
+    /// entries' list at +4).
+    pub struct TESLeveledList: 0x1C {
+        0x04 list: Inline<ListNode>,
+        0x0C chanceNone: u8,
+        0x0D flags: u8,
+        0x10 global: u32,
+    }
+
+    /// `TESLeveledList::ListData` (JIP LN NVSE), 0xC bytes, as the game's `AddItem` (`00487A60`)
+    /// fills one: the form +0, the count +4, the level +6 (16 bits each), the extra +8.
+    pub struct LeveledListData: 0x0C {
+        0x00 form: u32,
+        0x04 count: i16,
+        0x06 level: i16,
+        0x08 extra: u32,
+    }
+
+    /// `ContainerExtra` (JIP LN NVSE; the exe's `ContainerItemExtra`), 0xC bytes: its
+    /// constructor (`0040E690`) clears the owner +0 and the global +4 and sets the health +8.
+    pub struct ContainerExtra: 0x0C {
+        0x00 ownerFaction: u32,
+        0x04 globalVar: u32,
+        0x08 health: f32,
+    }
+}
+
+/// More form types of batch 7.
+pub mod form_type_b7p {
+    pub const BGS_PROJECTILE: u8 = 0x33;
+    pub const GRENADE_PROJECTILE: u8 = 0x3e;
+    pub const BGS_EXPLOSION: u8 = 0x51;
+    pub const TES_OBJECT_LIGH: u8 = 0x1e;
+    pub const TES_OBJECT_WEAP: u8 = 0x28;
+}
+
+layout! {
+    /// `BGSProjectile` (JIP LN NVSE), checked in its loader (`004FD6F0`): `DATA` (0x54 bytes) at
+    /// +0x60: the flags (16 bits) +0x60, the type (16 bits) +0x62, the floats JIP's traits index,
+    /// the light +0x70 and the explosion +0x84; `NAM1` into the muzzle flash model (a `TESModel`)
+    /// at +0xB4; `VNAM` at +0xCC as a word, of which JIP uses the low byte.
+    pub struct BGSProjectile: 0xD0 {
+        0x60 projFlags: u16,
+        0x62 projType: u16,
+        0x70 lightProjectile: u32,
+        0x84 explosion: u32,
+        0xB4 muzzleFlash: Inline<TESModel>,
+        0xCC soundLevel: u8,
+    }
+
+    /// `Projectile` (JIP LN NVSE), a fired projectile, checked in its constructor (`009BBCA8`:
+    /// speed +0xD0, life +0xD8, damage +0xDC, detonation timer +0xE4, weapon +0xF8, source +0xFC,
+    /// distance +0x110, the impact byte +0x90). From its header only, only read: the impacts (a
+    /// `tList`) +0x88 and its own flags +0xC8.
+    pub struct Projectile: 0x150 {
+        0x88 impactDataList: Inline<ListNode>,
+        0x90 hasImpacted: u8,
+        0xC8 projFlags: u32,
+        0xD0 speedMult: f32,
+        0xD8 lifeTime: f32,
+        0xDC hitDamage: f32,
+        0xE4 detonationTime: f32,
+        0xF8 sourceWeap: u32,
+        0xFC sourceRef: u32,
+        0x110 distTravelled: f32,
+    }
+
+    /// `Projectile::ImpactData` (JIP LN NVSE, from its header only, only read): the reference hit
+    /// +0, the material +0x20.
+    pub struct ImpactData: 0x30 {
+        0x00 refr: u32,
+        0x20 materialType: u32,
+    }
+}

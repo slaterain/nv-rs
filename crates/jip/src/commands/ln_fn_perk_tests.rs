@@ -304,3 +304,85 @@ fn another_form_type_is_left_alone() {
     call(&mut e, 0x28ae, &[r(5), n(3)]);
     assert_eq!(snap(&e), before);
 }
+
+/// SetPerkRank: an actor (vtable +0x100 true) with GetPerkRank (+0x4A0) answering 3 and
+/// SetPerkRank (+0x498) recorded; the perk has 5 ranks.
+#[test]
+fn setting_an_actors_rank() {
+    let mut e = setup();
+    const SET_FN: u32 = 0x0050_2100;
+    const NAME_FN: u32 = 0x0055_d520;
+    const PRINT_FN: u32 = 0x0070_3c00;
+    const ACTOR_NAME: u32 = FORMS + 0x7800;
+    const PERK_NAME: u32 = FORMS + 0x7900;
+    e.mem.set_u32(ACTOR, ACTOR_VTBL);
+    e.mem.set_u32(ACTOR_VTBL + 0x100, 0x008d_0360);
+    e.mem.set_u32(ACTOR_VTBL + 0x4a0, 0x0050_2000);
+    e.mem.set_u32(ACTOR_VTBL + 0x498, SET_FN);
+    e.register(0x0050_2000, |_, w| {
+        CALLS.with(|c| c.borrow_mut().push((0x0050_2000, w.to_vec())));
+        Ret {
+            eax: 0xffff_ff03,
+            ..Ret::default()
+        }
+    });
+    e.register(SET_FN, |_, w| {
+        CALLS.with(|c| c.borrow_mut().push((SET_FN, w.to_vec())));
+        Ret::default()
+    });
+    e.register(NAME_FN, |_, w| {
+        CALLS.with(|c| c.borrow_mut().push((NAME_FN, w.to_vec())));
+        Ret {
+            eax: ACTOR_NAME,
+            ..Ret::default()
+        }
+    });
+    e.register(PRINT_FN, |_, w| {
+        CALLS.with(|c| c.borrow_mut().push((PRINT_FN, w.to_vec())));
+        Ret::default()
+    });
+    e.mem.set_u8(PERK + 0x3a, 5);
+    e.mem.set_u32(PERK + 0x18 + 4, PERK_NAME);
+    let to = |addr: u32| -> Vec<Vec<u32>> {
+        calls()
+            .into_iter()
+            .filter(|c| c.0 == addr)
+            .map(|c| c.1)
+            .collect()
+    };
+    // Capped at 5 ranks; the alt word whole to GetPerkRank, its low byte to SetPerkRank.
+    assert_eq!(
+        call_on(&mut e, 0x223b, ACTOR, &[r(1), n(9), n(0x102)]).1,
+        5.0
+    );
+    assert_eq!(to(0x0050_2000), vec![vec![ACTOR, PERK, 0x102]]);
+    assert_eq!(to(SET_FN), vec![vec![ACTOR, PERK, 5, 2]]);
+    assert!(to(PRINT_FN).is_empty(), "not a console line");
+    // The same rank as now: rank - 1, nothing set.
+    CALLS.with(|c| c.borrow_mut().clear());
+    assert_eq!(call_on(&mut e, 0x223b, ACTOR, &[r(1), n(3)]).1, 2.0);
+    assert_eq!(
+        to(0x0050_2000),
+        vec![vec![ACTOR, PERK, 0]],
+        "alt left out: 0"
+    );
+    assert!(to(SET_FN).is_empty());
+    // On a console line: the game's own line with the perk's and the actor's names.
+    console(&mut e, true);
+    CALLS.with(|c| c.borrow_mut().clear());
+    assert_eq!(call_on(&mut e, 0x223b, ACTOR, &[r(1), n(1), n(1)]).1, 1.0);
+    assert_eq!(to(SET_FN), vec![vec![ACTOR, PERK, 1, 1]]);
+    assert_eq!(to(NAME_FN), vec![vec![ACTOR]]);
+    assert_eq!(
+        to(PRINT_FN),
+        vec![vec![0x0103_c5a4, PERK_NAME, ACTOR_NAME, 1]]
+    );
+    console(&mut e, false);
+    // Rank 0, a misc item, not an actor: nothing at all.
+    CALLS.with(|c| c.borrow_mut().clear());
+    assert_eq!(call_on(&mut e, 0x223b, ACTOR, &[r(1), n(0)]).1, 0.0);
+    assert_eq!(call_on(&mut e, 0x223b, ACTOR, &[r(5), n(2)]).1, 0.0);
+    e.mem.set_u32(ACTOR_VTBL + 0x100, 0);
+    assert_eq!(call_on(&mut e, 0x223b, ACTOR, &[r(1), n(2)]).1, 0.0);
+    assert!(to(0x0050_2000).is_empty() && to(SET_FN).is_empty());
+}
