@@ -267,7 +267,11 @@ trait Common {
 /// The quaternion's comparisons run twice, split by thread (ADR-0014): under the other threads' control
 /// word bit for bit (NaN payloads aside: the family copies floats plain where the exe moved them
 /// through the x87), and under the main thread's within one ulp (plain `f32` rounds each step to 24
-/// bits as the exe's code does there; the x87's wider exponent can part in the last bit).
+/// bits as the exe's code does there; the x87's wider exponent can part in the last bit). Two
+/// main-thread differences outside float range are accepted by ADR-0014's tolerance and left
+/// untested: a trace sum that overflows (`f32` gives infinity where the x87's 15-bit exponent stays
+/// finite until the store, e.g. the diagonal (2^127, 2^127, -2^127)), and a denormal result (one
+/// rounding in `f32` against the x87's two, at 24 bits and again at the store).
 const BY_THREAD: [fn(Diff) -> Diff; 2] = [other_threads, main_thread];
 
 /// [`BY_THREAD`]'s run under the other threads' control word.
@@ -325,7 +329,11 @@ impl Common for Diff {
 fn collision_quaternion_from_rotation() {
     // The diagonal: positive trace, each element the largest, NaN, two elements tied for the largest (a
     // 180-degree turn about (1, 1, 0) has the diagonal (0, 0, -1)), where the exe's strict "below"
-    // picks the index; the rest from the case.
+    // picks the index; infinities of both signs whose trace is NaN (the other branch, which the exe's
+    // test sends a NaN trace to, then gives numbers: an infinite root, a zero factor), one row for each
+    // largest index; the rest from the case.
+    const INF: u32 = 0x7f80_0000;
+    const NEG_INF: u32 = 0xff80_0000;
     for base in BY_THREAD {
         Diff::new(entry!(
             0x00a6_df40,
@@ -334,14 +342,14 @@ fn collision_quaternion_from_rotation() {
         .common()
         .by(base)
         .inputs(&inputs(&[
-            &[Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7])],
+            &[Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])],
             &P3,
             &[Input::F32Swept(HALF), Input::F32Swept(THIRD)],
         ]))
         .max_cases(256)
         .setup(|e, case| {
             stand_ins(e, 0);
-            let diagonals: [[u32; 3]; 8] = [
+            let diagonals: [[u32; 3]; 11] = [
                 [ONE, ONE, ONE],
                 [TWO, MINUS_ONE, MINUS_ONE],
                 [MINUS_ONE, TWO, MINUS_ONE],
@@ -350,6 +358,9 @@ fn collision_quaternion_from_rotation() {
                 [0, 0, MINUS_ONE],
                 [MINUS_ONE, 0, 0],
                 [0, MINUS_ONE, 0],
+                [INF, NEG_INF, 0],
+                [0, INF, NEG_INF],
+                [NEG_INF, 0, INF],
             ];
             let d = diagonals[case.word(0) as usize];
             let m = block(
@@ -383,6 +394,16 @@ fn collision_quaternion_rounding() {
     // sum is 0.75 + 3 * 2^-25 - 2^-50, which the exe's store rounds to 0.75 + 2^-24 before adding 1.0
     // (giving 1.75 at the tie); added unrounded it gives 1.75 + 2^-23, so on the other threads a trace
     // not rounded to a float at its store fails.
+    //
+    // Then the other branch (trace <= 0), one row for each largest index i (j and k the exe's next
+    // indices: i = 0 reads (d_i, d_j, d_k) at diagonal places (0, 1, 2), i = 1 at (1, 2, 0), i = 2 at
+    // (2, 0, 1)), where the radicand d_i - d_j - d_k + 1 rounded at every step (the main thread) and
+    // rounded once at its store (the other threads) give different floats with different roots:
+    // - i = 0, (0x3f0452ba, 0xa5b5baea, 0xbf3a73a0): once 0x400fb197, each step 0x400fb196; also
+    //   d_i - d_j rounded early (0x400fb196) and the sum taken as (d_i + 1) - d_j - d_k (0x400fb196).
+    // - i = 1, (0x3f9c1880, 0xa63d9423, 0xc000b40d): once 0x40876027, each step, early and that
+    //   order all 0x40876026.
+    // - i = 2, (0x3fb67004, 0xaed83069, 0xc03d17d3): once 0x40ac27eb, each step and early 0x40ac27ea.
     for base in ROUNDING_BY_THREAD {
         Diff::new(entry!(
             0x00a6_df40,
@@ -390,12 +411,15 @@ fn collision_quaternion_rounding() {
         ))
         .common()
         .by(base)
-        .inputs(&[Input::Of(&[0, 1])])
+        .inputs(&[Input::Of(&[0, 1, 2, 3, 4])])
         .setup(|e, case| {
             stand_ins(e, 0);
             let d = [
                 [0x3f1f_4b68, 0x3f3e_2695, 0x3f76_f2d6],
                 [0x3f40_0000, 0x33c0_0000, 0xa680_0000],
+                [0x3f04_52ba, 0xa5b5_baea, 0xbf3a_73a0],
+                [0xc000_b40d, 0x3f9c_1880, 0xa63d_9423],
+                [0xaed8_3069, 0xc03d_17d3, 0x3fb6_7004],
             ][case.word(0) as usize];
             let m = block(e, 0x24, &[d[0], 0, 0, 0, d[1], 0, 0, 0, d[2]]);
             let q = e.mem.alloc(0x10);
