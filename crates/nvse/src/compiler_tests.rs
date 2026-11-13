@@ -1426,8 +1426,17 @@ fn vanilla_names_through_xnvses_lookup() {
     let get_v = record_of(&e, GET_V);
     e.mem.set_u32(get_v + 4, texts + 9);
     let word = AREA + 0x2_8000;
-    for (name, want) in [("GetV", None), ("gv", Some(GET_V)), ("tgm", None), ("Let", Some(0x1539))] {
-        assert_eq!(crate::table::opcode_by_name(&e, name.as_bytes()), want, "{name}");
+    for (name, want) in [
+        ("GetV", None),
+        ("gv", Some(GET_V)),
+        ("tgm", None),
+        ("Let", Some(0x1539)),
+    ] {
+        assert_eq!(
+            crate::table::opcode_by_name(&e, name.as_bytes()),
+            want,
+            "{name}"
+        );
         e.ext::<Nvse>().table.registrations += 1;
         assert_eq!(
             crate::table::opcode_by_name_mapped(&mut e, name.as_bytes()),
@@ -1545,7 +1554,15 @@ fn precedence_follows_xnvses_operator_table() {
     let rows: [(&str, Vec<&[u8]>); 5] = [
         (
             "x > 1 && i < 2",
-            vec![&vx, b"B\x01", &[op::GREATER_THAN], &vi, b"B\x02", &[op::LESS_THAN], &[op::LOGICAL_AND]],
+            vec![
+                &vx,
+                b"B\x01",
+                &[op::GREATER_THAN],
+                &vi,
+                b"B\x02",
+                &[op::LESS_THAN],
+                &[op::LOGICAL_AND],
+            ],
         ),
         (
             "x || i && 1",
@@ -1553,7 +1570,13 @@ fn precedence_follows_xnvses_operator_table() {
         ),
         (
             "1 | 2 & 3",
-            vec![b"B\x01", b"B\x02", b"B\x03", &[op::BITWISE_AND], &[op::BITWISE_OR]],
+            vec![
+                b"B\x01",
+                b"B\x02",
+                b"B\x03",
+                &[op::BITWISE_AND],
+                &[op::BITWISE_OR],
+            ],
         ),
         (
             "1 << 2 + 3",
@@ -1561,11 +1584,21 @@ fn precedence_follows_xnvses_operator_table() {
         ),
         (
             "arr[1]->k",
-            vec![&varr, b"B\x01", &[op::LEFT_BRACKET], b"S\x01\x00k", &[op::MEMBER_ACCESS]],
+            vec![
+                &varr,
+                b"B\x01",
+                &[op::LEFT_BRACKET],
+                b"S\x01\x00k",
+                &[op::MEMBER_ACCESS],
+            ],
         ),
     ];
     for (text, tokens) in rows {
-        assert_eq!(compiled(&mut e, EVAL, text), args_of(&[arg(&tokens)]), "{text}");
+        assert_eq!(
+            compiled(&mut e, EVAL, text),
+            args_of(&[arg(&tokens)]),
+            "{text}"
+        );
     }
     // `::` (an unchecked argument takes the pair).
     assert_eq!(
@@ -1585,7 +1618,10 @@ fn precedence_follows_xnvses_operator_table() {
         bytes[3..],
         [&v(1, 2)[..], b"B\x01", &[op::BITWISE_OR_EQUALS], b"B\x02"].concat()[..]
     );
-    assert_eq!(printed(), ["Error line 7\n\nInvalid operands for operator |="]);
+    assert_eq!(
+        printed(),
+        ["Error line 7\n\nInvalid operands for operator |="]
+    );
 }
 
 /// Deep nesting on the test thread's stack: a 0x1FF-byte line of 255 nested parentheses
@@ -1613,11 +1649,14 @@ fn deep_nesting_compiles() {
         // The body compiled as `rx := body` on a line of its own.
         let line = heap(e, &[ln::STRUCT]).eax;
         e.mem.write(line, &[0; ln::STRUCT as usize]);
-        e.mem.write(line + ln::TEXT, format!("rx := {body}").as_bytes());
+        e.mem
+            .write(line + ln::TEXT, format!("rx := {body}").as_bytes());
         e.mem.set_u32(line + ln::OPCODE, LET);
         let record = record_of(e, LET);
         let params = e.mem.u32(record + 0x14);
-        let ok = e.call(crate::table::LET_PARSE, &[1, params, line, buf]).bool();
+        let ok = e
+            .call(crate::table::LET_PARSE, &[1, params, line, buf])
+            .bool();
         let len = e.mem.u32(line + ln::DATA_LEN);
         e.mem.set_u32(script + sc::DATA, line + ln::DATA);
         e.mem.set_u32(script + sc::DATA_LEN, len);
