@@ -1439,6 +1439,19 @@ pub fn actor_set_anim_action(e: &mut Engine, this: Ptr<Actor>, action: i32, sequ
     }
     let proc = process(e, this);
     if !proc.is_null() {
+        // Two seams before the process is told (ADR-0016), each one load while its hook has no
+        // user: JIP LN NVSE's ReloadWeapon hook (`0x8A7549`: the reload events; its answer is
+        // not used), then its SetAnimAction hook (`0x8A7551`), which stores the action into the
+        // process itself and runs the action events: an answer skips the virtual call. Both are
+        // asked with the actor, the action and the sequence.
+        use engine_core::extend::Hook;
+        let words = [this.addr(), action as u32, sequence];
+        if e.hook_users(Hook::ReloadWeapon) != 0 {
+            e.site(0x008a_7549, &words);
+        }
+        if e.hook_users(Hook::SetAnimAction) != 0 && e.site(0x008a_7551, &words).is_some() {
+            return;
+        }
         let proc = process(e, this);
         e.vcall(proc.addr(), 0x3ec, &args![action, sequence]);
     }
@@ -2070,8 +2083,18 @@ pub fn fn_008a8420(e: &mut Engine, this: Ptr<Actor>, weapon: u32, mode: i32, fla
         }
     }
     let result = if initial_count != 0 && item != 0 && change != 0 {
-        let uses_ammo =
-            actor_should_use_ammo(e, this, weapon) || e.call(0x004c_0bf0, &args![weapon]).bool();
+        // The seam around this call (`0x8A86B0`, ADR-0016): JIP LN NVSE's RemoveAmmo hook fires no
+        // weapon events for the call made here (its hook reads the return address `0x8A86B5`),
+        // so it is told before (1) and after (0). While the hook has no user: one load.
+        let marked = e.hook_users(engine_core::extend::Hook::RemoveAmmo) != 0;
+        if marked {
+            e.site(0x008a_86b0, &[1]);
+        }
+        let should = actor_should_use_ammo(e, this, weapon);
+        if marked {
+            e.site(0x008a_86b0, &[0]);
+        }
+        let uses_ammo = should || e.call(0x004c_0bf0, &args![weapon]).bool();
         let mut take_rounds = !uses_ammo;
         if uses_ammo {
             let rounds = e
@@ -2192,7 +2215,17 @@ pub fn actor_get_current_ammo_clip_percent(e: &mut Engine, this: Ptr<Actor>) -> 
 /// `weapon` form, true when its flag test `008a8e30` holds, or when
 /// `0047bcf0` holds and the actor's `MiddleHighProcess::GetForceNextUpdate`
 /// (`00566950`) does.
+///
+/// The seam at its entry (`0x8A8DD0`, ADR-0016): JIP LN NVSE's RemoveAmmo hook replaces the whole
+/// function (it runs the fire-weapon events and answers with its own test, which knows the
+/// actors a script gave infinite ammo); asked with the actor and the weapon, its answer is
+/// returned. While the hook has no user: one load.
 pub fn actor_should_use_ammo(e: &mut Engine, this: Ptr<Actor>, weapon: u32) -> bool {
+    if e.hook_users(engine_core::extend::Hook::RemoveAmmo) != 0 {
+        if let Some(answer) = e.site(0x008a_8dd0, &[this.addr(), weapon]) {
+            return answer != 0;
+        }
+    }
     if this.addr() == e.global::<u32>(PLAYER_CHARACTER) {
         return true;
     }
@@ -4571,7 +4604,21 @@ pub fn fn_008ad1c0(
                 node = next(e, node);
                 continue;
             }
-            if e.call(0x0056_6950, &args![actor]).bool() {
+            // The seam at the waiting test (`0x8AD471`, ADR-0016): JIP LN NVSE's TeleportWithPC
+            // hook, asked with the actor: 0 moves it (a teammate a script told to follow), another
+            // answer leaves it (told to wait), none keeps the exe's test. While the hook has no
+            // user: one load.
+            let told = if e.hook_users(engine_core::extend::Hook::TeleportWithPC) != 0 {
+                e.site(0x008a_d471, &[actor])
+            } else {
+                None
+            };
+            if let Some(answer) = told {
+                if answer != 0 {
+                    node = next(e, node);
+                    continue;
+                }
+            } else if e.call(0x0056_6950, &args![actor]).bool() {
                 let waiting = e.call(0x008c_1740, &args![actor, WAITING]).f64();
                 let one: f64 = e.global(ONE);
                 if waiting == one {
@@ -7988,6 +8035,73 @@ mod tests {
         assert!(called(&calls(&mut e), 0x0049_6080).is_empty());
     }
 
+    thread_local! {
+        /// Each JIP seam handler's address and words, in the order asked.
+        static JIP_SEEN: std::cell::RefCell<Vec<(u32, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
+        static JIP_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn jip_handler<const AT: u32>(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_SEEN.with(|s| s.borrow_mut().push((AT, a.to_vec())));
+        JIP_ANSWER.with(|c| c.get())
+    }
+
+    /// The two seams before the process is told (JIP LN NVSE's ReloadWeapon `0x8A7549` and
+    /// SetAnimAction `0x8A7551`): with handlers and no users, neither is asked and the process
+    /// is told; with users, ReloadWeapon then SetAnimAction are asked with the actor, the action
+    /// and the sequence; ReloadWeapon's answer changes nothing, SetAnimAction's skips the virtual
+    /// call; without a process neither is asked.
+    #[test]
+    fn anim_action_reload_and_set_anim_action_seams() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let (mut e, actor, proc) = anim_action_engine();
+        e.set_global(ANIM_GROUP_TABLE + 9 * 0x24, 1u32);
+        e.on_site(
+            SiteSlot::new(Owner::Jip, 0x008a_7549),
+            jip_handler::<0x008a_7549>,
+        );
+        e.on_site(
+            SiteSlot::new(Owner::Jip, 0x008a_7551),
+            jip_handler::<0x008a_7551>,
+        );
+        JIP_ANSWER.with(|c| c.set(Some(1)));
+        let told = |e: &mut Engine| called(&calls(e), target(PROCESS_VT, 0x3ec)).len();
+        e.call_log = Some(vec![]);
+        e.call(0x008a_73e0, &args![actor, 3i32, 9u32]);
+        assert_eq!(told(&mut e), 1);
+        assert!(JIP_SEEN.with(|s| s.borrow().is_empty()), "no users");
+        e.add_hook_user(Hook::ReloadWeapon, true);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_73e0, &args![actor, 3i32, 9u32]);
+        assert_eq!(told(&mut e), 1, "the reload answer changes nothing");
+        assert_eq!(
+            JIP_SEEN.with(|s| s.take()),
+            [(0x008a_7549, vec![actor.addr(), 3, 9])]
+        );
+        e.add_hook_user(Hook::SetAnimAction, true);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_73e0, &args![actor, -1i32, 9u32]);
+        assert_eq!(told(&mut e), 0, "answered: not told");
+        assert_eq!(
+            JIP_SEEN.with(|s| s.take()),
+            [
+                (0x008a_7549, vec![actor.addr(), u32::MAX, 9]),
+                (0x008a_7551, vec![actor.addr(), u32::MAX, 9])
+            ]
+        );
+        JIP_ANSWER.with(|c| c.set(None));
+        e.call_log = Some(vec![]);
+        e.call(0x008a_73e0, &args![actor, 3i32, 9u32]);
+        assert_eq!(told(&mut e), 1, "no answer: told");
+        JIP_SEEN.with(|s| s.take());
+        // No animation and no process: neither seam.
+        e.register(GET_ANIMATION, |_, _| Ret::default());
+        let bare = new_actor(&mut e);
+        e.call(0x008a_73e0, &args![bare, 3i32, 0u32]);
+        assert!(JIP_SEEN.with(|s| s.borrow().is_empty()), "no process");
+        let _ = proc;
+    }
+
     #[test]
     fn anim_action_blocked_cases_still_tell_the_process() {
         // The current action is 4.
@@ -9592,6 +9706,85 @@ mod tests {
         e.register(0x0047_bcf0, |_, _| 0.into_ret());
         e.register(0x0056_6950, |_, _| panic!("not asked"));
         assert!(!e.call(0x008a_8dd0, &args![actor, weapon]).bool());
+    }
+
+    /// The seam at `ShouldUseAmmo`'s entry (`0x8A8DD0`, JIP LN NVSE's RemoveAmmo): with a handler
+    /// and no user, it is not asked (the player: true); with a user, it is asked with the actor
+    /// and the weapon and its answer is the result (here false for the player, true for a
+    /// weapon the exe says no to), nothing else read; no answer keeps the exe's test.
+    #[test]
+    fn using_ammo_remove_ammo_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine2();
+        let (actor, _) = actor2(&mut e);
+        let weapon = Ptr::<()>::new(e.mem.alloc(0x200));
+        e.register(0x0047_bcf0, |_, _| 0.into_ret());
+        e.on_site(
+            SiteSlot::new(Owner::Jip, 0x008a_8dd0),
+            jip_handler::<0x008a_8dd0>,
+        );
+        JIP_ANSWER.with(|c| c.set(Some(0)));
+        e.set_global(PLAYER_CHARACTER, actor.addr());
+        assert!(e.call(0x008a_8dd0, &args![actor, 0u32]).bool());
+        assert!(JIP_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::RemoveAmmo, true);
+        assert!(!e.call(0x008a_8dd0, &args![actor, 0u32]).bool());
+        e.set_global(PLAYER_CHARACTER, 0u32);
+        JIP_ANSWER.with(|c| c.set(Some(1)));
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x008a_8dd0, &args![actor, weapon]).bool());
+        assert!(called(&calls(&mut e), 0x0047_bcf0).is_empty(), "not tested");
+        assert_eq!(
+            JIP_SEEN.with(|s| s.take()),
+            [
+                (0x008a_8dd0, vec![actor.addr(), 0]),
+                (0x008a_8dd0, vec![actor.addr(), weapon.addr()])
+            ]
+        );
+        JIP_ANSWER.with(|c| c.set(None));
+        assert!(!e.call(0x008a_8dd0, &args![actor, weapon]).bool());
+    }
+
+    /// The seam around the reload's `ShouldUseAmmo` call (`0x8A86B0`, JIP LN NVSE's RemoveAmmo):
+    /// with handlers and no user, neither is asked (the clip gets 10 rounds); with a user, the
+    /// call is told 1 before and 0 after, `ShouldUseAmmo`'s own seam asked between them, and its
+    /// answer is used (true: the clip keeps the 5 held rounds).
+    #[test]
+    fn reload_marks_its_should_use_ammo_call() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut w = reload_world(5, 3);
+        w.e.on_site(
+            SiteSlot::new(Owner::Jip, 0x008a_86b0),
+            jip_handler::<0x008a_86b0>,
+        );
+        w.e.on_site(
+            SiteSlot::new(Owner::Jip, 0x008a_8dd0),
+            jip_handler::<0x008a_8dd0>,
+        );
+        JIP_ANSWER.with(|c| c.set(Some(1)));
+        w.e.call_log = Some(vec![]);
+        assert!(w
+            .e
+            .call(0x008a_8420, &args![w.actor, w.weapon, 0i32, 0u8])
+            .bool());
+        let clip = |e: &mut Engine| called(&calls(e), 0x006e_cd40);
+        assert_eq!(clip(&mut w.e), vec![vec![w.change.addr(), 10]]);
+        assert!(JIP_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        w.e.add_hook_user(Hook::RemoveAmmo, true);
+        w.e.call_log = Some(vec![]);
+        assert!(w
+            .e
+            .call(0x008a_8420, &args![w.actor, w.weapon, 0i32, 0u8])
+            .bool());
+        assert_eq!(clip(&mut w.e), vec![vec![w.change.addr(), 5]]);
+        assert_eq!(
+            JIP_SEEN.with(|s| s.take()),
+            [
+                (0x008a_86b0, vec![1]),
+                (0x008a_8dd0, vec![w.actor.addr(), w.weapon.addr()]),
+                (0x008a_86b0, vec![0]),
+            ]
+        );
     }
 
     #[test]
@@ -12292,6 +12485,78 @@ mod tests {
             &args![leader, position, 0.0f32, 0u32, 0u32, 0u32, 0u32],
         );
         assert_eq!(called(&calls(&mut e), 0x0057_3800).len(), 1);
+    }
+
+    /// The seam at the waiting test (`0x8AD471`, JIP LN NVSE's TeleportWithPC): with a handler and
+    /// no user, it is not asked and the waiting leader is skipped; with a user, it is asked with
+    /// the actor: 0 moves it (the waiting test not made), another answer leaves it even where
+    /// the exe would move it, none keeps the exe's test.
+    #[test]
+    fn group_move_teleport_with_pc_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine();
+        list_doubles(&mut e);
+        let player = e.mem.alloc(0x300);
+        e.set_global(PLAYER_CHARACTER, player);
+        e.set_global(ONE, 1.0f64);
+        let leader = group_member(&mut e);
+        let position: Ptr = Ptr::new(e.mem.alloc(0x10));
+        e.register_double(0x0056_6950, |_, _| 1.into_ret());
+        e.register_double(0x008c_1740, |_, _| 1.0f64.into_ret());
+        e.on_site(
+            SiteSlot::new(Owner::Jip, 0x008a_d471),
+            jip_handler::<0x008a_d471>,
+        );
+        let run = |e: &mut Engine| {
+            e.call_log = Some(vec![]);
+            e.call(
+                0x008a_d1c0,
+                &args![leader, position, 0.0f32, 0u32, 0u32, 0u32, 0u32],
+            );
+            let log = calls(e);
+            (
+                called(&log, 0x0057_3800).len(),
+                called(&log, 0x0056_6950).len(),
+            )
+        };
+        JIP_ANSWER.with(|c| c.set(Some(0)));
+        assert_eq!(run(&mut e), (0, 1), "no user: waiting, skipped");
+        assert!(JIP_SEEN.with(|s| s.borrow().is_empty()));
+        e.add_hook_user(Hook::TeleportWithPC, true);
+        assert_eq!(run(&mut e), (1, 0), "follow: moved, not tested");
+        assert_eq!(
+            JIP_SEEN.with(|s| s.take()),
+            [(0x008a_d471, vec![leader.addr()])]
+        );
+        e.register_double(0x0056_6950, |_, _| 0.into_ret());
+        JIP_ANSWER.with(|c| c.set(Some(1)));
+        assert_eq!(run(&mut e), (0, 0), "wait: left");
+        JIP_ANSWER.with(|c| c.set(None));
+        assert_eq!(run(&mut e), (1, 1), "no answer: the exe's test");
+        // A follower is asked with its own word (both left here).
+        let follower = group_member(&mut e);
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, follower.addr());
+        let followers = e.mem.alloc(0x10);
+        e.mem.set_u32(followers + 0xc, node);
+        let leader_extra = leader.addr() + 0x10;
+        e.register_double(0x0042_2700, move |_, a| {
+            if a[0] == leader_extra {
+                followers.into_ret()
+            } else {
+                Ret::default()
+            }
+        });
+        JIP_SEEN.with(|s| s.take());
+        JIP_ANSWER.with(|c| c.set(Some(1)));
+        assert_eq!(run(&mut e).0, 0);
+        assert_eq!(
+            JIP_SEEN.with(|s| s.take()),
+            [
+                (0x008a_d471, vec![leader.addr()]),
+                (0x008a_d471, vec![follower.addr()])
+            ]
+        );
     }
 
     #[test]

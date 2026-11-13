@@ -2989,7 +2989,18 @@ pub fn fn_005cd650(e: &mut Engine, a: ScriptArgs) -> bool {
     } else {
         let form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, actor));
         let value = e.vcall(actor, 0x1e8, &args![]).u32();
+        // The seam around this call (`0x5CD736`, ADR-0016): JIP LN NVSE's LockEquipment hook
+        // re-equips differently when `TESNPC::ReEquipAll` runs for this command (its hook reads the
+        // return address `0x5CD73B`), so it is told before (1) and after (0) the call. While the
+        // hook has no user: one load.
+        let marked = e.hook_users(engine_core::extend::Hook::LockEquipment) != 0;
+        if marked {
+            e.site(0x005c_d736, &[1]);
+        }
         e.call(NPC_FN_00606540, &args![form, actor, value, 1u32]);
+        if marked {
+            e.site(0x005c_d736, &[0]);
+        }
     }
     true
 }
@@ -7125,6 +7136,51 @@ mod tests {
             vec![vec![form, actor, 0x0ccc, 1]]
         );
         assert!(calls(&e, INIT_DEFAULT_WORN).is_empty());
+    }
+
+    thread_local! {
+        static COMBAT_STYLE_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn combat_style_marker(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        COMBAT_STYLE_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0)
+    }
+
+    /// The seam around the worn items' renewal (`0x5CD736`, JIP LN NVSE's LockEquipment): with a
+    /// handler and no user, it is not asked; with a user, it is told 1 right before the call of
+    /// `00606540` and 0 right after (the call between them, made once as before); the creature's
+    /// path never reaches it.
+    #[test]
+    fn the_005cd650_command_marks_the_renewal_for_lock_equipment() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let (mut e, actor, form) = worn_engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x005c_d736), combat_style_marker);
+        e.register(NPC_FN_00606540, |_, a| {
+            COMBAT_STYLE_SEEN.with(|s| s.borrow_mut().push(a[..4].to_vec()));
+            Ret::default()
+        });
+        e.mem.set_u8(actor + 0xfc, 1);
+        parse_gives(&mut e, true, &[9]);
+        let a = script(&mut e, actor);
+        assert!(run(&mut e, 0x005c_d650, a));
+        assert_eq!(
+            COMBAT_STYLE_SEEN.with(|s| s.take()),
+            [vec![form, actor, 0x0ccc, 1]],
+            "no user: not asked"
+        );
+        e.add_hook_user(Hook::LockEquipment, true);
+        assert!(run(&mut e, 0x005c_d650, a));
+        assert_eq!(
+            COMBAT_STYLE_SEEN.with(|s| s.take()),
+            [vec![1], vec![form, actor, 0x0ccc, 1], vec![0]]
+        );
+        e.mem.set_u8(actor + 0xfd, 1);
+        assert!(run(&mut e, 0x005c_d650, a));
+        assert!(
+            COMBAT_STYLE_SEEN.with(|s| s.take()).is_empty(),
+            "a creature"
+        );
     }
 
     #[test]

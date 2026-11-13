@@ -5012,6 +5012,12 @@ pub fn projectile_process_impacts(e: &mut Engine, this: Ptr<Projectile>) -> bool
         }
     }
     e.set(this, Projectile::bImpactProcessed, true);
+    // The seam after that store (`0x9C20BF`, ADR-0016): JIP LN NVSE's ProjectileImpact hook,
+    // which makes the same store and runs the projectile's impact events, with the projectile;
+    // its answer is not used. While the hook has no user: one load.
+    if e.hook_users(engine_core::extend::Hook::ProjectileImpact) != 0 {
+        e.site(0x009c_20bf, &[this.addr()]);
+    }
     processed
 }
 
@@ -7560,6 +7566,49 @@ mod tests {
             vec![vec![this.addr() + IMPACT_LIST]]
         );
         assert!(!projectile_process_impacts(&mut e, this));
+    }
+
+    thread_local! {
+        static IMPACT_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Records its words and the processed byte (`+0x90`) as it is when asked; its answer is not
+    /// used.
+    fn impact_handler(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        let byte = u32::from(e.mem.u8(a[0] + 0x90));
+        IMPACT_SEEN.with(|s| s.borrow_mut().push(vec![a[0], byte]));
+        Some(0)
+    }
+
+    /// The seam after the processed store (`0x9C20BF`, JIP LN NVSE's ProjectileImpact): with a
+    /// handler and no user, it is not asked; with a user, it is asked once with the projectile,
+    /// after `+0x90` is set, and the result stays; a projectile already processed returns before
+    /// it.
+    #[test]
+    fn process_impacts_projectile_impact_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let setup = || {
+            let mut e = engine();
+            let this = projectile(&mut e);
+            let impact = e.mem.alloc(0x30);
+            let item = e.mem.alloc(4);
+            e.mem.set_u32(item, impact);
+            stub(&mut e, 0x0068_15c0, item);
+            stub(&mut e, 0x0052_5420, 1);
+            let vector = e.mem.alloc(0xC);
+            stub(&mut e, 0x009b_7010, vector);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x009c_20bf), impact_handler);
+            (e, this)
+        };
+        let (mut e, this) = setup();
+        assert!(projectile_process_impacts(&mut e, this));
+        assert!(IMPACT_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        let (mut e, this) = setup();
+        e.add_hook_user(Hook::ProjectileImpact, true);
+        assert!(projectile_process_impacts(&mut e, this));
+        assert_eq!(IMPACT_SEEN.with(|s| s.take()), [vec![this.addr(), 1]]);
+        assert!(!projectile_process_impacts(&mut e, this));
+        assert!(IMPACT_SEEN.with(|s| s.borrow().is_empty()), "processed");
     }
 
     #[test]

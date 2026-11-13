@@ -5766,6 +5766,12 @@ pub fn actor_queue_equip_object(
         }
         FORM_TYPE_BOOK | FORM_TYPE_FOOD | FORM_TYPE_POTION => {
             actor_equip_object(e, this, item, count, extra, flag_a, flag_b, flag_c);
+            // The seam after this call (`0x88C74E`, ADR-0016): JIP LN NVSE's EquipAidItem hook,
+            // which makes the same call and then runs the item's use events, with the item and
+            // the actor. While the hook has no user: one load.
+            if e.hook_users(engine_core::extend::Hook::EquipAidItem) != 0 {
+                e.site(0x0088_c74e, &[item.addr(), this.addr()]);
+            }
         }
         _ => {}
     }
@@ -5886,6 +5892,14 @@ pub fn actor_equip_object(
     let mut action_flag_pending = true;
     let mut notify_flag = 0u32;
     fn_00884f80(e, this);
+    // The seam at the first type test (`0x88C87A`, ADR-0016): JIP LN NVSE's LockEquipment hook,
+    // asked with the item and the actor; an answer returns at once (a weapon an actor with locked
+    // equipment may not equip). While the hook has no user: one load.
+    if e.hook_users(engine_core::extend::Hook::LockEquipment) != 0
+        && e.site(0x0088_c87a, &[item.addr(), this.addr()]).is_some()
+    {
+        return;
+    }
     if e.call(FORM_TYPE, &args![item]).u32() == FORM_TYPE_AMMO
         && e.vcall(item.addr(), FORM_VSLOT_0X94, &args![]).bool()
     {
@@ -6978,7 +6992,16 @@ pub fn fn_00891be0(e: &mut Engine, this: Ptr<Actor>, item: Ptr) -> u32 {
 // Translated from 00891c80 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Asks the actor's container changes (`004c7400`) about `item`, with the
 /// actor's base form; 0 without changes. The map has no name for it.
+///
+/// The seam at its entry (`0x891C86`, ADR-0016): JIP LN NVSE's LockEquipment hook, asked with the
+/// actor and the item; an answer is returned at once (no preferred weapon for an actor whose
+/// equipment a script locked). While the hook has no user: one load.
 pub fn fn_00891c80(e: &mut Engine, this: Ptr<Actor>, item: Ptr) -> u32 {
+    if e.hook_users(engine_core::extend::Hook::LockEquipment) != 0 {
+        if let Some(answer) = e.site(0x0089_1c86, &[this.addr(), item.addr()]) {
+            return answer;
+        }
+    }
     let list = e.call(GET_EXTRA_DATA_LIST_ADDRESS, &args![this]).u32();
     let changes = e.call(EXTRA_LIST_GET_CONTAINER_CHANGES, &args![list]).u32();
     if changes == 0 {
@@ -13448,6 +13471,114 @@ mod tests {
         actor_queue_equip_object(&mut e, actor, item, 1, Ptr::new(0), 0, 0, 0);
         assert!(queued.borrow().is_empty());
         assert_eq!(eaten.borrow().len(), 1);
+    }
+
+    thread_local! {
+        /// Each JIP seam handler's address and words, in the order asked.
+        static JIP_SEEN: std::cell::RefCell<Vec<(u32, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
+        static JIP_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn aid_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_SEEN.with(|s| s.borrow_mut().push((0x0088_c74e, a.to_vec())));
+        Some(0)
+    }
+
+    fn lock_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_SEEN.with(|s| s.borrow_mut().push((0x0088_c87a, a.to_vec())));
+        JIP_ANSWER.with(|c| c.get())
+    }
+
+    fn preferred_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_SEEN.with(|s| s.borrow_mut().push((0x0089_1c86, a.to_vec())));
+        JIP_ANSWER.with(|c| c.get())
+    }
+
+    /// The seam after the aid item's equip (`0x88C74E`, JIP LN NVSE's EquipAidItem): with a
+    /// handler and no user, it is not asked; with a user, it is asked once after the item was
+    /// used, with the item and the actor; a weapon equipped at once (the other call of
+    /// `EquipObject`) never asks it.
+    #[test]
+    fn queued_equips_of_aid_items_tell_the_equip_aid_item_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine3();
+        let (actor, item) = equip_world(&mut e, 0x1d);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0088_c74e), aid_handler);
+        // The eat double goes into the same list, so the order shows.
+        e.register(ACTOR_EAT, |_, _| {
+            JIP_SEEN.with(|s| s.borrow_mut().push((ACTOR_EAT, vec![])));
+            Ret::default()
+        });
+        actor_queue_equip_object(&mut e, actor, item, 1, Ptr::new(0), 0, 0, 0);
+        assert_eq!(
+            JIP_SEEN.with(|s| s.take()),
+            [(ACTOR_EAT, vec![])],
+            "no user"
+        );
+        e.add_hook_user(Hook::EquipAidItem, true);
+        actor_queue_equip_object(&mut e, actor, item, 1, Ptr::new(0), 0, 0, 0);
+        assert_eq!(
+            JIP_SEEN.with(|s| s.take()),
+            [
+                (ACTOR_EAT, vec![]),
+                (0x0088_c74e, vec![item.addr(), actor.addr()])
+            ]
+        );
+        let (actor, weapon) = equip_world(&mut e, 0x28);
+        record(&mut e, INVENTORY_APPLY_EQUIP, Ret::default());
+        actor_queue_equip_object(&mut e, actor, weapon, 1, Ptr::new(0x1234), 1, 0, 1);
+        assert!(JIP_SEEN.with(|s| s.borrow().is_empty()), "not an aid item");
+    }
+
+    /// The seam at `EquipObject`'s first type test (`0x88C87A`, JIP LN NVSE's LockEquipment):
+    /// with a handler and no user, it is not asked and the weapon is equipped; with a user, it is
+    /// asked with the item and the actor; an answer returns with nothing equipped, none equips.
+    #[test]
+    fn equipping_asks_the_lock_equipment_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine3();
+        let (actor, item) = equip_world(&mut e, 0x28);
+        let applied = record(&mut e, INVENTORY_APPLY_EQUIP, Ret::default());
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0088_c87a), lock_handler);
+        JIP_ANSWER.with(|c| c.set(Some(1)));
+        equip(&mut e, actor, item, 1, 0x1234, [1, 0, 1]);
+        assert_eq!(applied.borrow().len(), 1);
+        assert!(JIP_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::LockEquipment, true);
+        equip(&mut e, actor, item, 1, 0x1234, [1, 0, 1]);
+        assert_eq!(applied.borrow().len(), 1, "answered: nothing equipped");
+        assert_eq!(
+            JIP_SEEN.with(|s| s.take()),
+            [(0x0088_c87a, vec![item.addr(), actor.addr()])]
+        );
+        JIP_ANSWER.with(|c| c.set(None));
+        equip(&mut e, actor, item, 1, 0x1234, [1, 0, 1]);
+        assert_eq!(applied.borrow().len(), 2, "no answer: equipped");
+    }
+
+    /// The seam at `00891c80`'s entry (`0x891C86`, JIP LN NVSE's LockEquipment): with a handler and
+    /// no user, it is not asked; with a user, it is asked with the actor and the item; an answer
+    /// is returned (here 0 where the inventory answers 0x9191) without asking the inventory, none
+    /// asks it.
+    #[test]
+    fn inventory_query_lock_equipment_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine3();
+        let actor = container_world(&mut e);
+        let item = record(&mut e, INVENTORY_QUERY_ITEM, eax(0x9191));
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0089_1c86), preferred_handler);
+        JIP_ANSWER.with(|c| c.set(Some(0)));
+        assert_eq!(fn_00891c80(&mut e, actor, Ptr::new(0x3030)), 0x9191);
+        assert!(JIP_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::LockEquipment, true);
+        assert_eq!(fn_00891c80(&mut e, actor, Ptr::new(0x3030)), 0);
+        assert_eq!(item.borrow().len(), 1, "not asked again");
+        assert_eq!(
+            JIP_SEEN.with(|s| s.take()),
+            [(0x0089_1c86, vec![actor.addr(), 0x3030])]
+        );
+        JIP_ANSWER.with(|c| c.set(None));
+        assert_eq!(fn_00891c80(&mut e, actor, Ptr::new(0x3030)), 0x9191);
     }
 
     #[test]

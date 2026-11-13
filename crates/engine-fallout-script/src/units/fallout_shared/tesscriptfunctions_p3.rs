@@ -2329,8 +2329,18 @@ pub fn fn_005c6b40(e: &mut Engine, this: Ptr, value: u8) {
 /// slot `0x0c`, both asked for `0x10`), then actor values `0x1d, 0x1e, 0x1b,
 /// 0x1c, 0x19, 0x1a, 0x1f` by 999.0 each (`Actor::RestoreActorValue`).
 /// Always returns true.
+///
+/// The seam after the actor test (`0x5C6B8B`, ADR-0016): JIP LN NVSE's NoHealthReset hook, asked
+/// with the reference and the event list; an answer returns true with nothing restored. While
+/// the hook has no user: one load.
 pub fn fn_005c6b60(e: &mut Engine, a: ScriptArgs) -> bool {
     if a.this_obj.is_null() || !e.vcall(a.this_obj.addr(), 0x100, &args![]).bool() {
+        return true;
+    }
+    if e.hook_users(engine_core::extend::Hook::NoHealthReset) != 0
+        && e.site(0x005c_6b8b, &[a.this_obj.addr(), a.event_list])
+            .is_some()
+    {
         return true;
     }
     let actor = a.this_obj;
@@ -5592,6 +5602,52 @@ mod tests {
         let a = script(&mut e, 0);
         assert!(e.call(0x005c_6b60, &args![a]).bool());
         assert!(calls(&e, RESTORE_ACTOR_VALUE).is_empty());
+    }
+
+    thread_local! {
+        static NO_RESET_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static NO_RESET_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn no_reset_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        NO_RESET_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        NO_RESET_ANSWER.with(|c| c.get())
+    }
+
+    /// The seam after the actor test (`0x5C6B8B`, JIP LN NVSE's NoHealthReset): with a handler
+    /// and no user, it is not asked and the values are restored; with a user, it is asked with
+    /// the reference and the event list (`[ebp+0x1C]`); an answer returns true with nothing
+    /// restored, none restores as before; a non-actor never reaches it.
+    #[test]
+    fn restore_command_no_health_reset_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let (mut e, actor) = restore_engine(V_TRUE);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x005c_6b8b), no_reset_handler);
+        NO_RESET_ANSWER.with(|c| c.set(Some(1)));
+        let a = script(&mut e, actor);
+        start_log(&mut e);
+        assert!(e.call(0x005c_6b60, &args![a]).bool());
+        assert_eq!(calls(&e, RESTORE_ACTOR_VALUE).len(), 8);
+        assert!(NO_RESET_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::NoHealthReset, true);
+        start_log(&mut e);
+        assert!(e.call(0x005c_6b60, &args![a]).bool());
+        assert!(calls(&e, RESTORE_ACTOR_VALUE).is_empty(), "answered");
+        assert_eq!(NO_RESET_SEEN.with(|s| s.take()), [vec![actor, 6]]);
+        NO_RESET_ANSWER.with(|c| c.set(None));
+        start_log(&mut e);
+        assert!(e.call(0x005c_6b60, &args![a]).bool());
+        assert_eq!(calls(&e, RESTORE_ACTOR_VALUE).len(), 8, "no answer");
+        let (mut e, actor) = restore_engine(V_FALSE);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x005c_6b8b), no_reset_handler);
+        e.add_hook_user(Hook::NoHealthReset, true);
+        NO_RESET_SEEN.with(|s| s.take());
+        let a = script(&mut e, actor);
+        assert!(e.call(0x005c_6b60, &args![a]).bool());
+        assert!(
+            NO_RESET_SEEN.with(|s| s.borrow().is_empty()),
+            "not an actor"
+        );
     }
 
     /// The engine of the NPC-copy command: the reference `0x40` is an actor

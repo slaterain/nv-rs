@@ -6532,6 +6532,14 @@ pub fn high_process_enter_combat(
     flag_11: u8,
     word_12: u32,
 ) -> bool {
+    // The seam at its entry (`0x9001C6`, ADR-0016): JIP LN NVSE's StartCombat hook, asked with the
+    // actor; an answer returns false (an actor a script disabled combat for). While the hook has
+    // no user: one load.
+    if e.hook_users(engine_core::extend::Hook::StartCombat) != 0
+        && e.site(0x0090_01c6, &[actor]).is_some()
+    {
+        return false;
+    }
     let base = this.addr();
     let run_once = e
         .vcall(base, PROCESS_SLOT_GET_RUN_ONCE_PACKAGE, &args![])
@@ -12014,6 +12022,41 @@ mod tests {
         e.call_log = Some(vec![]);
         assert!(e.call(0x0090_01c0, &arguments_for(process)).bool());
         assert!(calls_to(&e, 0x00aa_e030).is_empty());
+        assert_eq!(calls_to(&e, 0x0091_6880).len(), 1);
+    }
+
+    thread_local! {
+        static START_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static START_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn start_combat_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        START_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        START_ANSWER.with(|c| c.get())
+    }
+
+    /// The seam at the entry (`0x9001C6`, JIP LN NVSE's StartCombat): with a handler and no user,
+    /// it is not asked and combat starts; with a user, it is asked with the actor (the first
+    /// word); an answer returns false before any slot is asked, none starts combat as before.
+    #[test]
+    fn test_high_process_enter_combat_start_combat_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = Engine::new();
+        let process = enter_combat_scene(&mut e, 0, 0, 0);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0090_01c6), start_combat_handler);
+        START_ANSWER.with(|c| c.set(Some(0)));
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0090_01c0, &arguments_for(process)).bool());
+        assert!(START_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::StartCombat, true);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0090_01c0, &arguments_for(process)).bool());
+        assert!(calls_to(&e, 0x00aa_e000).is_empty(), "nothing asked");
+        assert!(calls_to(&e, 0x0091_6880).is_empty());
+        assert_eq!(START_SEEN.with(|s| s.take()), [vec![1]]);
+        START_ANSWER.with(|c| c.set(None));
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0090_01c0, &arguments_for(process)).bool());
         assert_eq!(calls_to(&e, 0x0091_6880).len(), 1);
     }
 

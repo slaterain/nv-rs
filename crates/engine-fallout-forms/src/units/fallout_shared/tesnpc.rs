@@ -1408,6 +1408,10 @@ fn component_of(source: u32, offset: u32) -> u32 {
 /// cast (`008c26e0`).
 ///
 /// `_unused_1` and `_unused_2` are words the exe never reads.
+///
+/// The seam at its entry (`0x6047C0`, ADR-0016): JIP LN NVSE's LockEquipment hook replaces the
+/// whole function for an actor whose equipment a script locked; it is asked with the NPC and the
+/// actor, and an answer returns at once. While the hook has no user: one load.
 pub fn fn_006047c0(
     e: &mut Engine,
     this: Ptr<TESNPC>,
@@ -1417,6 +1421,11 @@ pub fn fn_006047c0(
     _unused_2: u32,
     keep_flag: bool,
 ) {
+    if e.hook_users(engine_core::extend::Hook::LockEquipment) != 0
+        && e.site(0x0060_47c0, &[this.addr(), actor.addr()]).is_some()
+    {
+        return;
+    }
     let mut saved_flag: u8 = 1;
     let flag_object = e.global::<u32>(FLAG_OBJECT);
     if !keep_flag {
@@ -3073,7 +3082,14 @@ pub fn fn_006062e0(e: &mut Engine, _this: Ptr<TESNPC>, actor: Ptr, node: Ptr) {
 /// equips the inventory; and `fn_006062e0` runs unless the biped is the player's
 /// first-person one (`00950b00(player, 1)`).
 ///
+/// Two seams (ADR-0016) for JIP LN NVSE's LockEquipment hook, which re-equips differently when
+/// `fn_006047c0` is called from here while this call came from the `SetCombatStyle` command (its
+/// hook reads the return addresses): at the entry (`0x606540`, answered when the command's call
+/// at `0x5CD736` is this one), and, for such a call only, around the call of `fn_006047c0`
+/// (`0x60678F`, told 1 before and 0 after). While the hook has no user: one load.
 pub fn fn_00606540(e: &mut Engine, this: Ptr<TESNPC>, actor: Ptr, biped: Ptr, force: u8) {
+    let from_combat_style = e.hook_users(engine_core::extend::Hook::LockEquipment) != 0
+        && e.site(0x0060_6540, &[]).is_some();
     if !biped.is_null() {
         if force == 0 {
             for index in 0..0x14u32 {
@@ -3144,7 +3160,13 @@ pub fn fn_00606540(e: &mut Engine, this: Ptr<TESNPC>, actor: Ptr, biped: Ptr, fo
             if package != 0 && e.call(0x0044_1b00, &args![package]).bool() {
                 weapon_out = false;
             }
+            if from_combat_style {
+                e.site(0x0060_678f, &[1]);
+            }
             fn_006047c0(e, this, actor, 1, weapon_out, 0, false);
+            if from_combat_style {
+                e.site(0x0060_678f, &[0]);
+            }
         }
     }
     if e.call(0x004a_bfa0, &args![]).u8() == 0 {
@@ -8287,6 +8309,49 @@ mod tests {
         assert_eq!(calls(&mut e, 0x008c_26e0), vec![vec![actor, 1]]);
     }
 
+    thread_local! {
+        static LOCK_SEEN: std::cell::RefCell<Vec<(u32, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
+        static LOCK_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn re_equip_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        LOCK_SEEN.with(|s| s.borrow_mut().push((0x0060_47c0, a.to_vec())));
+        LOCK_ANSWER.with(|c| c.get())
+    }
+
+    /// The seam at the entry (`0x6047C0`, JIP LN NVSE's LockEquipment): with a handler and no
+    /// user, it is not asked and the worn objects are equipped; with a user, it is asked with
+    /// the NPC and the actor first; an answer returns before anything (no flag object, no drop,
+    /// no equip), none equips as before.
+    #[test]
+    fn worn_objects_lock_equipment_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let (mut e, this, actor, _) = worn_world(&[(0, 0xf0)]);
+        e.register_double(0x004623f0, |_, _| ret(1));
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0060_47c0), re_equip_handler);
+        LOCK_ANSWER.with(|c| c.set(Some(0)));
+        started(&mut e);
+        e.call(0x0060_47c0, &args![this, actor, 0u32, false, 0u32, false]);
+        assert_eq!(calls(&mut e, 0x0bc1_0001).len(), 1, "equipped");
+        assert!(LOCK_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::LockEquipment, true);
+        started(&mut e);
+        e.call(0x0060_47c0, &args![this, actor, 0u32, false, 0u32, false]);
+        assert_eq!(
+            LOCK_SEEN.with(|s| s.take()),
+            [(0x0060_47c0, vec![this.addr(), actor])]
+        );
+        assert!(calls(&mut e, 0x004623f0).is_empty());
+        assert!(calls(&mut e, 0x0057_1b50).is_empty());
+        assert!(calls(&mut e, 0x0bc1_0001).is_empty());
+        assert!(calls(&mut e, 0x008c_26e0).is_empty());
+        LOCK_ANSWER.with(|c| c.set(None));
+        started(&mut e);
+        e.call(0x0060_47c0, &args![this, actor, 0u32, false, 0u32, false]);
+        assert_eq!(calls(&mut e, 0x0bc1_0001).len(), 1, "no answer: equipped");
+        assert_eq!(LOCK_SEEN.with(|s| s.take().len()), 1);
+    }
+
     #[test]
     fn worn_objects_skip_slots_covered_by_the_body_slot_model() {
         let (mut e, this, actor, _) = worn_world(&[(2, 0xf2), (7, 0xf7), (9, 0xf9)]);
@@ -9856,6 +9921,76 @@ mod tests {
         // The default worn items are equipped (fn_006047c0 asks the
         // actor's virtual 0x100) when 005f1590 or force say so.
         assert_eq!(calls(&mut e, 0x005f_1590), vec![vec![this.addr(), actor]]);
+    }
+
+    thread_local! {
+        static REBUILD_SEEN: std::cell::RefCell<Vec<(u32, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
+        static FROM_COMBAT_STYLE: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn rebuild_entry_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        REBUILD_SEEN.with(|s| s.borrow_mut().push((0x0060_6540, a.to_vec())));
+        FROM_COMBAT_STYLE.with(|c| c.get())
+    }
+
+    fn rebuild_call_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        REBUILD_SEEN.with(|s| s.borrow_mut().push((0x0060_678f, a.to_vec())));
+        Some(0)
+    }
+
+    /// Answers at `fn_006047c0`'s entry, so it returns at once.
+    fn rebuild_re_equip_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        REBUILD_SEEN.with(|s| s.borrow_mut().push((0x0060_47c0, a.to_vec())));
+        Some(0)
+    }
+
+    /// The two seams of `00606540` (JIP LN NVSE's LockEquipment): with no user, none is asked;
+    /// with a user, the entry (`0x606540`) is asked first; when it answers (the call came from
+    /// the `SetCombatStyle` command), the call of `fn_006047c0` is told 1 before and 0 after
+    /// (`0x60678F`); when it does not, `fn_006047c0` is called without them.
+    #[test]
+    fn rebuilding_a_model_marks_the_re_equip_for_lock_equipment() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = world();
+        let this = new_npc(&mut e);
+        let actor = object_with(&mut e, 0x0c00_0000, &[(0x100, 0), (0x22c, 1)]);
+        let biped = e.mem.alloc(0x400);
+        let player = e.mem.alloc(0x100);
+        e.set_global(PLAYER_SINGLETON, player);
+        e.on_site(
+            SiteSlot::new(Owner::Jip, 0x0060_6540),
+            rebuild_entry_handler,
+        );
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0060_678f), rebuild_call_handler);
+        e.on_site(
+            SiteSlot::new(Owner::Jip, 0x0060_47c0),
+            rebuild_re_equip_handler,
+        );
+        FROM_COMBAT_STYLE.with(|c| c.set(Some(1)));
+        started(&mut e);
+        e.call(0x0060_6540, &args![this, actor, biped, 1u32]);
+        assert!(REBUILD_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        assert_eq!(calls(&mut e, 0x005f_1590).len(), 1);
+        e.add_hook_user(Hook::LockEquipment, true);
+        e.call(0x0060_6540, &args![this, actor, biped, 1u32]);
+        assert_eq!(
+            REBUILD_SEEN.with(|s| s.take()),
+            [
+                (0x0060_6540, vec![]),
+                (0x0060_678f, vec![1]),
+                (0x0060_47c0, vec![this.addr(), actor]),
+                (0x0060_678f, vec![0]),
+            ]
+        );
+        FROM_COMBAT_STYLE.with(|c| c.set(None));
+        e.call(0x0060_6540, &args![this, actor, biped, 1u32]);
+        assert_eq!(
+            REBUILD_SEEN.with(|s| s.take()),
+            [
+                (0x0060_6540, vec![]),
+                (0x0060_47c0, vec![this.addr(), actor]),
+            ]
+        );
     }
 
     #[test]

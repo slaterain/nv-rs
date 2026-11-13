@@ -9072,7 +9072,16 @@ pub fn actor_clear_in_combat(e: &mut Engine, this: Ptr<Actor>, restore: u8) {
 /// values of actor values `0x10` and `0x16` back to 1 when they are below 0,
 /// then restores `1000.0` of each of the values `0x1f`, `0x1d`, `0x1e`,
 /// `0x1b`, `0x1c`, `0x1a` and `0x19`.
+///
+/// The seam at its entry (`0x8A0963`, ADR-0016): JIP LN NVSE's NoHealthReset hook, asked with the
+/// actor; an answer returns at once (JIP restored the teammate's health its own way). While the
+/// hook has no user: one load.
 pub fn actor_restore_full_health_and_conditions(e: &mut Engine, this: Ptr<Actor>) {
+    if e.hook_users(engine_core::extend::Hook::NoHealthReset) != 0
+        && e.site(0x008a_0963, &[this.addr()]).is_some()
+    {
+        return;
+    }
     for actor_value in [0x10u32, 0x16] {
         let current = e.vcall(this.addr() + 0xa4, 0x14, &args![actor_value]).f32();
         if (current as f64) < e.global::<f64>(ZERO_DOUBLE) {
@@ -9592,8 +9601,17 @@ fn detection_level_against_actor(
         other_moving = 0;
     }
     let package_int = e.call(FTOL, &args![package_bonus as f64]).u32();
-    result = e
-        .call(
+    // The seam at the formula's call (`0x8A152D`, ADR-0016): JIP LN NVSE's GetDetectionValue
+    // hook, asked with `other`; an answer is JIP's forced value for it: bit 16 set adds its low
+    // half (signed) to the formula's result, clear replaces the result (the formula is not
+    // called). While the hook has no user: one load.
+    let forced = if e.hook_users(engine_core::extend::Hook::GetDetectionValue) != 0 {
+        e.site(0x008a_152d, &[other.addr()])
+    } else {
+        None
+    };
+    let formula = |e: &mut Engine| {
+        e.call(
             DETECTION_FORMULA,
             &args![
                 own_perception as u32,
@@ -9623,7 +9641,19 @@ fn detection_level_against_actor(
                 armor_bonus as u32
             ],
         )
-        .i32();
+        .i32()
+    };
+    result = match forced {
+        None => formula(e),
+        Some(raw) => {
+            let value = i32::from(raw as u16 as i16);
+            if raw & 0x1_0000 != 0 {
+                formula(e).wrapping_add(value)
+            } else {
+                value
+            }
+        }
+    };
 
     if use_line == 0 || report_always != 0 || this.addr() == player_addr {
         let mut level = 0u32;
@@ -20176,6 +20206,47 @@ mod tests {
         assert_eq!(call_count(&e, ACTOR_RESTORE_ACTOR_VALUE), 7);
     }
 
+    thread_local! {
+        static RESTORE_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static RESTORE_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn restore_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        RESTORE_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        RESTORE_ANSWER.with(|c| c.get())
+    }
+
+    /// The seam at the entry (`0x8A0963`, JIP LN NVSE's NoHealthReset): with a handler and no
+    /// user, it is not asked and the nine values are restored; with a user, it is asked with the
+    /// actor; an answer returns before anything is read or restored, none restores as before.
+    #[test]
+    fn actor_restore_full_health_no_health_reset_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine();
+        let actor = actor_with(&mut e, &[], None);
+        embedded_table(&mut e, actor.addr() + 0xa4, &[(0x14, float_ret(-3.0))]);
+        double_global(&mut e, ZERO_DOUBLE, 0.0);
+        double_global(&mut e, ONE_DOUBLE, 1.0);
+        e.map(RESTORE_AMOUNT, 4);
+        e.set_global(RESTORE_AMOUNT, 1000.0f32);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x008a_0963), restore_handler);
+        RESTORE_ANSWER.with(|c| c.set(Some(0)));
+        actor_restore_full_health_and_conditions(&mut e, actor);
+        assert_eq!(call_count(&e, ACTOR_RESTORE_ACTOR_VALUE), 9);
+        assert!(RESTORE_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::NoHealthReset, true);
+        e.call_log = Some(vec![]);
+        actor_restore_full_health_and_conditions(&mut e, actor);
+        assert!(
+            e.call_log.as_ref().is_some_and(|l| l.is_empty()),
+            "answered"
+        );
+        assert_eq!(RESTORE_SEEN.with(|s| s.take()), [vec![actor.addr()]]);
+        RESTORE_ANSWER.with(|c| c.set(None));
+        actor_restore_full_health_and_conditions(&mut e, actor);
+        assert_eq!(call_count(&e, ACTOR_RESTORE_ACTOR_VALUE), 9);
+    }
+
     #[test]
     fn value_table_callbacks_call_the_actor_slots() {
         let mut e = engine();
@@ -20456,8 +20527,9 @@ mod tests {
         assert_eq!(level, -100);
     }
 
-    #[test]
-    fn detection_level_uses_the_formula_and_reports_it() {
+    /// The scene of the formula's detection: the player detects `other` (the formula answers 55);
+    /// returns the engine, both actors, the shared acquire object and the two outputs.
+    fn formula_world() -> (Engine, Ptr<Actor>, Ptr<Actor>, Ptr, u32, u32) {
         let mut e = engine();
         double_global(&mut e, ZERO_DOUBLE, 0.0);
         // The detecting actor is the player, so the result is reported.
@@ -20519,6 +20591,70 @@ mod tests {
         stub(&mut e, ACTOR_FLAG_4938E0, 1);
         let seen = e.mem.alloc(4);
         let seen_line = e.mem.alloc(4);
+        (e, actor, other, acquire, seen, seen_line)
+    }
+
+    /// The level `actor` gets for `other` in [`formula_world`].
+    fn formula_level(
+        e: &mut Engine,
+        actor: Ptr<Actor>,
+        other: Ptr<Actor>,
+        seen: u32,
+        seen_line: u32,
+    ) -> i32 {
+        actor_get_detection_level_against_actor(
+            e,
+            actor,
+            1,
+            other,
+            Ptr::new(seen),
+            9,
+            0,
+            0,
+            Ptr::new(seen_line),
+        )
+    }
+
+    thread_local! {
+        static DETECTION_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static DETECTION_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn detection_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        DETECTION_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        DETECTION_ANSWER.with(|c| c.get())
+    }
+
+    /// The seam at the formula's call (`0x8A152D`, JIP LN NVSE's GetDetectionValue): with a
+    /// handler and no user, it is not asked and the formula's 55 is the level; with a user, it is
+    /// asked with `other`; no answer keeps the formula; an answer without bit 16 replaces the
+    /// level by its low half, signed (the formula not called); with bit 16 it adds that to the
+    /// formula's result.
+    #[test]
+    fn detection_level_get_detection_value_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let (mut e, actor, other, _, seen, seen_line) = formula_world();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x008a_152d), detection_handler);
+        DETECTION_ANSWER.with(|c| c.set(Some(7)));
+        assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), 55);
+        assert!(DETECTION_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::GetDetectionValue, true);
+        DETECTION_ANSWER.with(|c| c.set(None));
+        assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), 55);
+        assert_eq!(DETECTION_SEEN.with(|s| s.take()), [vec![other.addr()]]);
+        DETECTION_ANSWER.with(|c| c.set(Some(0x0000_fff6)));
+        e.call_log = Some(vec![]);
+        assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), -10);
+        assert!(calls_to(&e, DETECTION_FORMULA).is_empty(), "replaced");
+        DETECTION_ANSWER.with(|c| c.set(Some(0x0001_fff6)));
+        e.call_log = Some(vec![]);
+        assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), 45);
+        assert_eq!(calls_to(&e, DETECTION_FORMULA).len(), 1, "added");
+    }
+
+    #[test]
+    fn detection_level_uses_the_formula_and_reports_it() {
+        let (mut e, actor, other, acquire, seen, seen_line) = formula_world();
         let level = actor_get_detection_level_against_actor(
             &mut e,
             actor,
