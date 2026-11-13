@@ -24,6 +24,7 @@ const VAR: u32 = FORMS + 0x2400;
 const T1: u32 = FORMS + 0x3000;
 const T2: u32 = FORMS + 0x3100;
 const T3: u32 = FORMS + 0x3200;
+const T4: u32 = FORMS + 0x3300;
 const LINKS: u32 = FORMS + 0x3800;
 const NODES: u32 = FORMS + 0x4000;
 const PC: u32 = FORMS + 0x8000;
@@ -249,22 +250,34 @@ fn the_player_quests() {
     e.mem.set_u32(O4 + 0x20, 2);
     let (_, res) = call(&mut e, 0x286d, &[n(1)]);
     assert_eq!(res, 0.0, "not displayed: none, no array");
-    // Two quests come out by address.
+    // Two quests come out by address, not by id: QUEST2 (the higher address) gets the lower id.
+    e.mem.set_u32(QUEST2 + 0xc, 0x0100);
     e.mem.set_u8(QUEST2 + 0x3c, 0);
     e.mem.set_u32(O4 + 0x20, 1);
     e.mem.set_u32(PC + 0x6bc, O4);
     e.mem.set_u32(node(6), O1);
     let (_, res) = call(&mut e, 0x286d, &[]);
-    assert_eq!(elements(&e, res), forms(&[0x0a11, 0x0a22]));
+    assert_eq!(elements(&e, res), forms(&[0x0a11, 0x0100]));
 }
 
 #[test]
 fn the_objectives() {
     let mut e = setup();
+    // The variable ahead of the objectives is displayed with an id of its own: no objective.
+    e.mem.set_u32(VAR + 4, 77);
+    e.mem.set_u32(VAR + 0x20, 1);
     let (_, res) = call(&mut e, 0x286e, &[r(1), n(0)]);
     assert_eq!(elements(&e, res), numbers(&[10.0]), "displayed");
     let (_, res) = call(&mut e, 0x286e, &[r(1), n(1)]);
     assert_eq!(elements(&e, res), numbers(&[20.0]), "completed");
+    e.mem.set_u32(VAR + 0x20, 3);
+    let (_, res) = call(&mut e, 0x286e, &[r(1), n(1)]);
+    assert_eq!(
+        elements(&e, res),
+        numbers(&[20.0]),
+        "completed, the variable left out"
+    );
+    e.mem.set_u32(VAR + 0x20, 1);
     e.mem.set_u32(O2 + 4, 0xffff_fffe);
     e.mem.set_u32(O3 + 0x20, 3);
     let (_, res) = call(&mut e, 0x286e, &[r(1), n(5)]);
@@ -297,7 +310,22 @@ fn the_targets() {
         "the conditions, the reference, no second form"
     );
     assert_eq!(evaluated[0][4], 0, "the last argument");
-    assert_eq!(call(&mut e, 0x2818, &[r(1), n(20)]).1, 0.0, "completed");
+    // A live target on objectives not displayed or completed (status 3, 0, 2): no array.
+    e.mem.set_u32(T4 + 0xc, DOOR1);
+    for o in [O2, O3] {
+        e.mem.set_u32(o + 0x14, T4);
+    }
+    assert_eq!(
+        call(&mut e, 0x2818, &[r(1), n(20)]).1,
+        0.0,
+        "completed (status 3)"
+    );
+    assert_eq!(call(&mut e, 0x2818, &[r(1), n(30)]).1, 0.0, "status 0");
+    e.mem.set_u32(O3 + 0x20, 2);
+    assert_eq!(call(&mut e, 0x2818, &[r(1), n(30)]).1, 0.0, "status 2");
+    e.mem.set_u32(O3 + 0x20, 1);
+    let (_, res) = call(&mut e, 0x2818, &[r(1), n(30)]);
+    assert_eq!(elements(&e, res), forms(&[0x0e04]), "status 1: its target");
     assert_eq!(
         call(&mut e, 0x2818, &[r(1), n(11)]).1,
         0.0,
@@ -421,6 +449,16 @@ fn removing_a_target() {
     CALLS.with(|c| c.borrow_mut().clear());
     call(&mut e, 0x281c, &[r(1), n(10), r(5)]);
     assert!(calls().is_empty(), "not a target: nothing");
+    // Another quest than the active one: destroyed, the player's targets not worked out.
+    e.mem.set_u32(T4 + 0xc, REF3);
+    e.mem.set_u32(O4 + 0x14, T4);
+    call(&mut e, 0x281c, &[r(2), n(5), r(5)]);
+    assert_eq!(calls_to(DESTROY_FN), vec![vec![T4, 1]]);
+    assert!(
+        calls_to(REFRESH_TARGETS_FN).is_empty(),
+        "not the active quest"
+    );
+    assert_eq!(e.mem.u32(O4 + 0x14), 0);
 }
 
 #[test]
@@ -458,6 +496,21 @@ fn targets_changed() {
     e.mem.set_u32(T2 + 0xc, REF3);
     assert_eq!(call(&mut e, 0x272f, &[]).1, 1.0);
     assert_eq!(e.ext::<crate::Jip>().quest.last_targets, vec![REF1, REF3]);
+    // A completed objective (status 3) of a quest not completed does not count, a displayed one
+    // does.
+    e.mem.set_u32(T4 + 0xc, DOOR1);
+    e.mem.set_u32(O2 + 0x14, T4);
+    assert_eq!(
+        call(&mut e, 0x272f, &[]).1,
+        0.0,
+        "O2 completed: the same set"
+    );
+    e.mem.set_u32(O2 + 0x20, 1);
+    assert_eq!(call(&mut e, 0x272f, &[]).1, 1.0);
+    assert_eq!(
+        e.ext::<crate::Jip>().quest.last_targets,
+        vec![REF1, REF3, DOOR1]
+    );
     // A completed quest's objectives do not count.
     e.mem.set_u8(QUEST + 0x3c, 2);
     assert_eq!(call(&mut e, 0x272f, &[]).1, 1.0);
