@@ -222,6 +222,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ee_6dce, thunks::plane_normalize(Ptr<()>, Ptr<()>) -> Ptr<()>),
         entry!(0x00ee_6dc8, thunks::plane_transform(Ptr<()>, Ptr<()>, Ptr<()>) -> Ptr<()>),
         // Group C: the render states' lock counters.
+        entry!(0x00b6_6c40, group_c::distance_fade(Ptr<_>) -> f32),
         entry!(0x0071_4a40, group_c::release_z_enable(u32)),
         entry!(0x0071_4a60, group_c::release_z_write(u32)),
         entry!(0x0071_4aa0, group_c::release_alpha_test(u32)),

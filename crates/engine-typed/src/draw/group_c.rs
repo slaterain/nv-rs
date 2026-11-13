@@ -294,3 +294,85 @@ pub fn pass_end_flags(e: &mut Engine, _this: Ptr, _unused: u32) {
     own::set_constant_byte(e, PASS_END_FLAG, 0);
     own::set_entry_enabled(e, entry, false);
 }
+
+/// The distance fades of a lighting property's slot 0x110 (`00b66c40`): the second fade's near (`011f945c`) and far
+/// (`011f9460`) distances, the first's (`011f9464`, `011f9468`).
+const SECOND_FADE_NEAR: u32 = 0x011f_945c;
+const SECOND_FADE_FAR: u32 = 0x011f_9460;
+const FIRST_FADE_NEAR: u32 = 0x011f_9464;
+const FIRST_FADE_FAR: u32 = 0x011f_9468;
+/// A lighting property's slot 0x110 and the exe's target there on every lighting property class.
+pub(crate) const SLOT_DISTANCE_FADE: u32 = 0x110;
+pub(crate) const DISTANCE_FADE: u32 = 0x00b6_6c40;
+
+/// The fade at `distance` between `near` and `far` (main-thread `f32`): 1.0 when `near` is above the distance
+/// (ordered), 0.0 when the distance is at least `far`, else `1 - min(ratio, 1)` with `ratio = (distance - near) /
+/// (far - near)` stored as a float.
+fn distance_fade_between(distance: f32, near: f32, far: f32) -> f32 {
+    if near > distance {
+        return 1.0;
+    }
+    if distance >= far {
+        return 0.0;
+    }
+    let ratio = (distance - near) / (far - near);
+    if 1.0 < ratio {
+        return 0.0;
+    }
+    1.0 - ratio
+}
+
+// Typed from 00b66c40
+/// A lighting property's distance fade (its vtable's slot 0x110, unnamed in the engine map), `thiscall(property)`,
+/// a float in `ST0`. With bit 0x800000 of its second flags (+0x24) clear: when its flags (+0x20) have bit 0x20000
+/// and the first far distance (`011f9468`) is above 0, the fade between `011f9464` and `011f9468` at its camera
+/// distance (+0x34); otherwise when they have bit 0x80 and the second far distance (`011f9460`) is above 0, 1.0
+/// when `011f945c` is above the distance, 0.0 at `011f9460` or past it, else 1.0 less the smaller of 1.0 and the
+/// ratio (`0040ebd0`, the draw helpers'); otherwise 1.0. The second flags and the distance are the packet's (value
+/// packet B: the cut copies +0x24..+0x37); main-thread `f32`.
+pub fn distance_fade(e: &mut Engine, this: Ptr) -> f32 {
+    let base = this.addr();
+    let flags = packet::property_flags(e, base);
+    let unlocked = |e: &Engine| packet::property_flags_24(e, base) & 0x0080_0000 == 0;
+    let second_far = f32::from_bits(e.global::<u32>(SECOND_FADE_FAR));
+    let second = flags & 0x80 != 0 && unlocked(e) && 0.0 < second_far;
+    let first_far = f32::from_bits(e.global::<u32>(FIRST_FADE_FAR));
+    let first = flags & 0x0002_0000 != 0 && unlocked(e) && first_far > 0.0;
+    let distance = f32::from_bits(packet::property_distance(e, base));
+    if first {
+        let near = f32::from_bits(e.global::<u32>(FIRST_FADE_NEAR));
+        return distance_fade_between(distance, near, first_far);
+    }
+    if !second {
+        return 1.0;
+    }
+    let near = f32::from_bits(e.global::<u32>(SECOND_FADE_NEAR));
+    if near > distance {
+        return 1.0;
+    }
+    if distance >= second_far {
+        return 0.0;
+    }
+    let ratio = (distance - near) / (second_far - near);
+    let picked: f32 = typed_call!(
+        crate::draw_f::FAMILY,
+        0x0040_ebd0,
+        crate::draw_f::helpers::float_min(e, 1.0, ratio)
+    );
+    1.0 - picked
+}
+
+/// A lighting property's slot 0x110 factor: [`distance_fade`] directly when the slot holds the exe's
+/// (`00b66c40`, every lighting property class), else through the vtable.
+pub(crate) fn property_distance_fade(e: &mut Engine, property: u32) -> f64 {
+    if crate::slot_target(e, property, SLOT_DISTANCE_FADE) == DISTANCE_FADE {
+        let fade: f32 = typed_call!(
+            super::FAMILY,
+            0x00b6_6c40,
+            distance_fade(e, Ptr::new(property))
+        );
+        f64::from(fade)
+    } else {
+        e.vcall(property, SLOT_DISTANCE_FADE, &[]).f64()
+    }
+}

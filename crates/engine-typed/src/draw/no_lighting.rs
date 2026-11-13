@@ -131,8 +131,9 @@ pub fn copy_subtextures(e: &mut Engine, this: Ptr, geometry: Ptr, _unused: u32) 
     let data = packet::model_data(e, geometry.addr());
     let count = packet::subtexture_count(e, data);
     if count != 0 {
-        let source = packet::subtextures(e, data);
-        own::copy_constants(e, SUBTEXTURES, source, u32::from(count) << 4);
+        packet::with_subtextures(e, data, count, |e, source, size| {
+            own::copy_constants(e, SUBTEXTURES, source, size);
+        });
         let entry = e.global::<u32>(this.addr().wrapping_add(0x170));
         own::set_shader_global(e, entry.wrapping_add(0x20), u32::from(count));
     }
@@ -274,11 +275,19 @@ const MAKE_IDENTITY: u32 = 0x00a8_6bf0;
 /// property's bit 0 of +0x24 and the z test off without bit 31 of +0x20 (the shader family's); last,
 /// with the state's fifth property's flag 0, the shader's +0x1c object's slot 0x24 with it.
 pub fn setup_constants(e: &mut Engine, this: Ptr, state: Ptr) {
+    let geometry = packet::rendering_geometry(e);
+    // The geometry's world transform as the value packet holds it (value packet B).
+    packet::with_drawn(e, geometry, |e, world, bound| {
+        constants_with(e, this, state, geometry, world, bound);
+    });
+}
+
+/// [`setup_constants`] with the transform and the bound (`world`: the geometry's +0x68, `bound`: its bound; or the
+/// packet's images of them).
+fn constants_with(e: &mut Engine, this: Ptr, state: Ptr, geometry: u32, world: u32, bound: u32) {
     let base = this.addr();
     let block = state.addr();
     let pass_type = packet::rendering_pass_type(e);
-    let geometry = packet::rendering_geometry(e);
-    let bound = packet::bound_of(e, geometry);
     let buffers = packet::buffer_data(e, packet::model_data(e, geometry));
     let property = packet::state_property(e, block, 3);
     let skin = packet::skin_instance(e, geometry);
@@ -293,7 +302,7 @@ pub fn setup_constants(e: &mut Engine, this: Ptr, state: Ptr) {
             }
             frame
         } else {
-            geometry.wrapping_add(0x68)
+            world
         };
         let renderer = e.global::<u32>(base.wrapping_add(0x18));
         typed_call!(
@@ -306,7 +315,7 @@ pub fn setup_constants(e: &mut Engine, this: Ptr, state: Ptr) {
         typed_call!(
             super::FAMILY,
             0x00bc_6fa0,
-            copy_subtextures(e, this, Ptr::new(geometry), geometry.wrapping_add(0x68))
+            copy_subtextures(e, this, Ptr::new(geometry), world)
         );
     }
     typed_call!(super::FAMILY, 0x00bc_8e00, texture_matrix(e, this, state));
@@ -325,18 +334,7 @@ pub fn setup_constants(e: &mut Engine, this: Ptr, state: Ptr) {
     for (k, word) in (0u32..).zip(falloff) {
         own::set_constant_word(e, FALLOFF + 4 * k, word);
     }
-    let words = [
-        geometry,
-        skin,
-        0,
-        buffers,
-        block,
-        0,
-        geometry.wrapping_add(0x68),
-        bound,
-        0,
-        1,
-    ];
+    let words = [geometry, skin, 0, buffers, block, 0, world, bound, 0, 1];
     group_c::map_constants(e, base, 0x34, 0x5c, words);
     own::set_constant_word(e, ALPHA_FLAGS, 0);
     own::set_constant_word(e, ALPHA_FLAGS + 4, 0);

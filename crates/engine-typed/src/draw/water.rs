@@ -108,12 +108,19 @@ const STENCIL_WRITE_MASK: u32 = 0x00b9_8230;
 /// times; its light count as a float; for each light of its list the position and +0xe0, and the colour
 /// times the light's +0xc4 and the property's +0xd4 with 1.0; last the constant maps' constants.
 pub fn setup_constants(e: &mut Engine, this: Ptr, state: Ptr) {
+    let geometry = packet::rendering_geometry(e);
+    // The geometry's world transform as the value packet holds it (value packet B).
+    packet::with_drawn(e, geometry, |e, world, bound| {
+        constants_with(e, this, state, geometry, world, bound);
+    });
+}
+
+/// [`setup_constants`] with the transform and the bound (`world`: the geometry's +0x68, `bound`: its bound; or the
+/// packet's images of them).
+fn constants_with(e: &mut Engine, this: Ptr, state: Ptr, geometry: u32, world: u32, bound: u32) {
     let base = this.addr();
     let block = state.addr();
     let pass_type = packet::rendering_pass_type(e);
-    let geometry = packet::rendering_geometry(e);
-    let bound = packet::bound_of(e, geometry);
-    let world = geometry.wrapping_add(0x68);
     let buffers = packet::buffer_data(e, packet::model_data(e, geometry));
     let skin = packet::skin_instance(e, geometry);
     let renderer = e.global::<u32>(base.wrapping_add(0x18));

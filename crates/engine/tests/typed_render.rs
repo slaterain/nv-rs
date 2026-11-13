@@ -1354,3 +1354,128 @@ fn draw_packed_typed_vertex_count() {
         .run()
         .assert_same();
 }
+
+/// The geometry pass (`00b7dde0`), value packet B: the inverse and the world-view constants take the packet's
+/// image of the rendered object's world transform. With that copy scribbled in guest memory (POISON) it answers and
+/// writes as with the packet open and unscribbled (both engines lay out their stacks alike); every read through the packet found its copy.
+#[test]
+fn geometry_pass_reads_the_packet() {
+    use engine_core::typed::diff::memory_digest_beside_stack;
+    use engine_typed::draw::capture;
+    let f = entry!(0x00b7_dde0, pass::geometry_pass(Ptr, Ptr)).1;
+    let setup = |e: &mut Engine| {
+        // The real shader family (its world-view constants and light direction, which read what the
+        // geometry pass hands them).
+        let w = world(e, true);
+        note_vertex_constants(e);
+        // The D3DX imports the shader family reaches: each output mixed from what its inputs hold.
+        e.register(0x00fd_f410, |e, a| {
+            for k in 0..16u32 {
+                let m = e.mem.u32(a[1] + 4 * k);
+                let n = e.mem.u32(a[2] + 4 * ((5 * k + 3) % 16));
+                e.mem.set_u32(a[0] + 4 * k, m ^ (n & 0xff));
+            }
+            ret(a[0])
+        });
+        for addr in [0x00fd_f414u32, 0x00fd_f420, 0x00fd_f41c] {
+            e.register(addr, |e, a| {
+                let v: Vec<u32> = (0..3u32).map(|k| e.mem.u32(a[1] + 4 * k)).collect();
+                for k in 0..3u32 {
+                    e.mem.set_u32(a[0] + 4 * k, v[((k + 1) % 3) as usize]);
+                }
+                ret(a[0])
+            });
+        }
+        // The current pass with a vertex program whose device is the world's (the constants' way out).
+        let old = e.mem.u32(CURRENT_PASS);
+        let current = e.mem.alloc(0x60);
+        for k in 0..0x10u32 {
+            let word = e.mem.u32(old + 4 * k);
+            set(e, current + 4 * k, word);
+        }
+        let program = e.mem.alloc(0x24);
+        let device = e.mem.u32(DEVICE);
+        set(e, program + 0x20, device);
+        set(e, current + 0x5c, program);
+        set(e, CURRENT_PASS, current);
+        set(e, RETS + 0xe0, 3);
+        set(e, TEXTURE_ANSWER, w.texture);
+        set(e, APPLY_STATES_ANSWER, 1);
+        let shader = e.mem.alloc(0x40);
+        // The shader's renderer (its +0x18: the world-view constants set its world transform, +0x940, and
+        // tell its render state, +0x8b8): the world's, whole.
+        let renderer = e.mem.alloc(0xa00);
+        for k in 0..0x900 / 4 {
+            let word = e.mem.u32(w.renderer + 4 * k);
+            set(e, renderer + 4 * k, word);
+        }
+        set(e, renderer + 0x8b8, w.cache);
+        set(e, shader + 0x18, renderer);
+        let pass = e.mem.alloc(0x10);
+        set(e, pass + 0xc, w.property);
+        // The property's textures (its +0xb0, which the real texture getter reads).
+        let textures = e.mem.alloc(0x10);
+        set(e, textures, w.texture);
+        set(e, w.property + 0xb0, textures);
+        // The rendered pass: the view object and one directional light (its light's direction +0xf0).
+        let view = e.mem.u32(e.mem.u32(VIEW_HOLDER));
+        let light = e.mem.alloc(0x100);
+        for (k, v) in (0u32..).zip([0x3f00_0000u32, 0xbf00_0000, 0x3f35_04f3]) {
+            set(e, light + 0xf0 + 4 * k, v);
+        }
+        let shadow = e.mem.alloc(0x100);
+        set(e, shadow + 0xf8, light);
+        let lights = e.mem.alloc(4);
+        set(e, lights, shadow);
+        let rendering = e.mem.alloc(0x10);
+        set(e, rendering, view);
+        e.mem.set_u8(rendering + 9, 1);
+        set(e, rendering + 0xc, lights);
+        set(e, VIEW_HOLDER, rendering);
+        (vec![shader, pass], rendering, view)
+    };
+    // The view object's world transform as the cut takes it. Not the pass's lights: the light direction (`00b7c7b0`)
+    // still reads them in place on main, and routing it is the drawing agent's (its piece 4).
+    let fill = |e: &mut Engine, _rendering: u32, view: u32| {
+        capture::take(e, view, 0x68, 0x9c);
+    };
+    for scribble in [capture::SCRIBBLE, capture::SCRIBBLE_OTHER] {
+        let mut plain = Engine::new();
+        let (a, rendering, view) = setup(&mut plain);
+        plain.with_stack(4, |_, _| ());
+        assert!(capture::begin(&plain));
+        fill(&mut plain, rendering, view);
+        let answer = f(&mut plain, &a);
+        assert_eq!(capture::end(&mut plain).misses, 0);
+        let mut poisoned = Engine::new();
+        let (b, rendering, view) = setup(&mut poisoned);
+        poisoned.with_stack(4, |_, _| ());
+        assert_eq!(a, b);
+        assert!(capture::begin(&poisoned));
+        fill(&mut poisoned, rendering, view);
+        capture::poison(&mut poisoned, scribble);
+        let poisoned_answer = f(&mut poisoned, &b);
+        let report = capture::end(&mut poisoned);
+        assert_eq!(answer, poisoned_answer, "{scribble:#x}: the answers differ");
+        assert_eq!(
+            memory_digest_beside_stack(&plain),
+            memory_digest_beside_stack(&poisoned),
+            "{scribble:#x}: the memory differs"
+        );
+        assert_eq!((report.misses, report.written), (0, 0), "{report:?}");
+        assert!(report.reads > 0, "no read through the packet");
+    }
+}
+
+/// The device's vertex constants (its slot 0x178, `SetVertexShaderConstantF(register, data, count)`) noted by what
+/// they hold rather than where it is: for the packet test, whose constants go only to the device.
+fn note_vertex_constants(e: &mut Engine) {
+    e.register(VT_FN + 0x178, |e, a| {
+        let mut h = e.mem.u32(RETS + 0x7c4).wrapping_mul(31).wrapping_add(a[1]);
+        for k in 0..a[3].wrapping_mul(4).min(0x400) {
+            h = h.wrapping_mul(17).wrapping_add(e.mem.u32(a[2] + 4 * k));
+        }
+        e.mem.set_u32(RETS + 0x7c4, h);
+        ret(0)
+    });
+}

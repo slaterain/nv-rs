@@ -109,7 +109,8 @@ pub fn eye_position(e: &mut Engine, _this: Ptr, position: Ptr) {
         return;
     }
     for k in 0..3u32 {
-        let value = f32::from_bits(packet::bound_word(e, position.addr(), k));
+        // The bound as handed (the packet's image of it while the packet is open: `packet::with_drawn`).
+        let value = f32::from_bits(packet::handed_word(e, position.addr(), 4 * k));
         let first = value - f32::from_bits(packet::origin_word(e, k));
         let second = first - f32::from_bits(packet::scene_camera_position(e, k));
         own::set_constant_word(e, EYE + 4 * k, second.to_bits());
@@ -271,7 +272,8 @@ const CLAMP_HIGH: u32 = 0x00b7_19c0;
 /// length of the light's colour scaled by its fade (the distance to the light over its radius clamped to
 /// 0 and 1, less from 1), times the alpha. A step with a callee's `double` (`ST0`) in `f64`, rounded once.
 fn light_alpha(e: &mut Engine, fallback: u32, property: u32) {
-    let factor = narrow(e.vcall(property, 0x110, &[]).f64());
+    // The property's distance fade (slot 0x110: the exe's 00b66c40 typed, reading the packet).
+    let factor = narrow(super::group_c::property_distance_fade(e, property));
     let alpha = f32::from_bits(packet::property_alpha(e, property)) * factor;
     let value = if alpha < 1.0 { alpha.to_bits() } else { ONE };
     own::set_constant_word(e, MATERIAL, value);
@@ -479,11 +481,13 @@ pub fn view_matrix(
         let result = frame + 0x90;
         if entry_on(e, VIEW_ENTRY) {
             let pass = pass.addr();
-            let lights = packet::pass_lights(e, pass);
+            // The pass's lights, the first one's byte +0xed and the chosen one's matrix (+0x10) through the
+            // packet (value packet B).
+            let lights = packet::rendering_pass_lights(e, pass);
             let selected = packet::rendering_pass_byte9(e, pass);
             let copy = lights == 0
                 || (selected != 0
-                    && packet::light_byte(e, packet::list_word(e, lights, 0), 0xed) != 0)
+                    && packet::pass_light_byte(e, packet::pass_light_at(e, lights, 0), 0xed) != 0)
                 || (0x1bd..=0x1c3).contains(&pass_type)
                 || (0x2d8..=0x2ef).contains(&pass_type);
             if copy {
@@ -511,11 +515,13 @@ pub fn view_matrix(
                     e.set_global(local + 0x30 + 4 * k, (origin + word).to_bits());
                 }
                 let light = if pass_type.wrapping_sub(0x1c4) <= 3 {
-                    packet::list_word(e, lights, 0)
+                    packet::pass_light_at(e, lights, 0)
                 } else {
-                    packet::list_word(e, lights, 1)
+                    packet::pass_light_at(e, lights, 1)
                 };
-                super::thunks::call_matrix_multiply(e, result, local, light.wrapping_add(0x10));
+                super::capture::image(e, light, 0x10, 0x50, |e, image| {
+                    super::thunks::call_matrix_multiply(e, result, local, image.wrapping_add(0x10));
+                });
                 for k in 0..16u32 {
                     let word = e.global::<u32>(result + 4 * k);
                     e.set_global(matrix + 4 * k, word);
@@ -852,10 +858,11 @@ fn shadow_clip_planes(e: &mut Engine, shader: u32, light: u32) {
         for index in 0..6u32 {
             let source = 0x144 + 0x10 * index;
             for k in 0..3u32 {
-                let word = packet::light_word(e, light, source + 4 * k);
+                // The pass light's planes through the packet (value packet B).
+                let word = packet::pass_light_word(e, light, source + 4 * k);
                 e.set_global(point + 4 * k, word);
             }
-            let distance = f32::from_bits(packet::light_word(e, light, source + 0xc));
+            let distance = f32::from_bits(packet::pass_light_word(e, light, source + 0xc));
             e.set_global(point + 0xc, (-distance).to_bits());
             super::thunks::call_plane_normalize(e, point, point);
             super::thunks::call_plane_transform(e, column, point, product);
@@ -896,13 +903,28 @@ fn stored_clip_planes(e: &mut Engine, light: u32) {
 /// program +0x44 / +0x5c), and the shader's +0x1c object's slot 0x24 with the state's fifth property when
 /// its flag 0 is set.
 pub fn setup_constants(e: &mut Engine, this: Ptr, state: Ptr) {
+    let geometry = packet::rendering_geometry(e);
+    // The geometry's world transform as the value packet holds it (value packet B): every helper handed the
+    // transform reads the packet's image of it while the packet is open, the geometry itself otherwise.
+    packet::with_drawn(e, geometry, |e, transform, bound| {
+        constants_with(e, this, state, geometry, transform, bound);
+    });
+}
+
+/// [`setup_constants`] with the transform and the bound (`transform`: the geometry's +0x68, `bound`: its bound; or the
+/// packet's images of them).
+fn constants_with(
+    e: &mut Engine,
+    this: Ptr,
+    state: Ptr,
+    geometry: u32,
+    transform: u32,
+    bound: u32,
+) {
     let base = this.addr();
     let block = state.addr();
     let pass = packet::rendering_pass(e);
-    let geometry = packet::rendering_geometry(e);
     let pass_type = packet::rendering_pass_type(e);
-    let bound = packet::bound_of(e, geometry);
-    let transform = geometry.wrapping_add(0x68);
     let buffers = packet::buffer_data(e, packet::model_data(e, geometry));
     let skin = packet::skin_instance(e, geometry);
     let property = packet::state_property(e, block, 3);
@@ -1036,6 +1058,7 @@ pub fn setup_constants(e: &mut Engine, this: Ptr, state: Ptr) {
         typed_call!(super::FAMILY, 0x00bb_be80, fog(e, this));
         if pass_type.wrapping_sub(0x1c4) <= 3 {
             let light = packet::rendering_light(e, packet::rendering_pass(e), 0);
+            // own: the pass light's clip-plane cache byte (+0x208, written by the draw), piece 4; in place.
             let refused = packet::light_byte(e, light, 0x208) != 0 || {
                 let held = packet::shader_accumulator(e);
                 packet::skips_type13(e, held) != 0 || {
