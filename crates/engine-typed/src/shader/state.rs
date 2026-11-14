@@ -325,13 +325,8 @@ pub fn set_color_writes(e: &mut Engine, first: u32, second: u32, third: u32, loc
 // Typed from 00b98480
 /// `cdecl(wireframe, lock)`: `D3DRS_FILLMODE` (8): wireframe (2) when the byte is set, else solid (3).
 pub fn set_fill_mode(e: &mut Engine, wireframe: u8, lock: u32) {
-    counted(
-        e,
-        INDEX_FILL_MODE,
-        8,
-        if wireframe == 0 { 3 } else { 2 },
-        lock,
-    );
+    let mode = if wireframe == 0 { 3 } else { 2 };
+    counted(e, INDEX_FILL_MODE, 8, mode, lock);
 }
 
 // Typed from 00b98280

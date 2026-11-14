@@ -12693,12 +12693,11 @@ use engine_typed::draw::statics;
 const GROUP_C_PAGES: (u32, u32) = (0x0120_0000, 0x3000);
 
 /// The names of `statics::GLOBAL_BLOCKS`, in its order.
-const GLOBAL_BLOCK_NAMES: [&str; 11] = [
+const GLOBAL_BLOCK_NAMES: [&str; 10] = [
     "the rendering pass and type",
     "the shader and held accumulators",
     "the shader statics",
     "Group C's statics",
-    "Group C's statics after lighting 3.0's pass table",
     "the current pass",
     "the group zero flag",
     "the last light's point flag",
@@ -17470,6 +17469,41 @@ fn constant_setters_read_the_device_through_the_packet() {
             e.mem.set_u16(indices, 2);
             let acc = e.mem.alloc(0x200);
             (vec![shader, entry, data, 1, 4, indices], acc)
+        },
+        |_, _, _| {},
+    );
+}
+
+/// Lighting 3.0's pass for a pass type (`00c0abd0`): every pass type to 0x2f0 (both jump tables, 0x178 and the
+/// passes read after the assignment among them), the counted pointer +0x28 against the type's field each way.
+#[test]
+fn lighting30_pass_for_type() {
+    Diff::new(entry!(0x00c0_abd0, l30::pass_for_type(Ptr<_>, u32) -> u32))
+        .pass_common()
+        .inputs(&[Input::Of(&EVERY_PASS_TYPE), Input::Of(&[0, 3])])
+        .max_cases(0x2f0 * 2)
+        .setup(|e, c| {
+            let shader = pass_choice_world(e, 0xa0, (0x0120_0ec0, 0x0120_1080));
+            counted_pair(e, shader + 0x28, shader + 0x7c, c.word(1));
+            vec![shader, c.word(0)]
+        })
+        .run()
+        .assert_same();
+}
+
+/// Lighting 3.0's pass table is the draw's own state (Group C's statics): with it scribbled in guest memory, the pass
+/// for a type answers what it answers without.
+#[test]
+fn lighting30_pass_for_type_reads_the_draws_own_state() {
+    own_state_same(
+        "lighting30_pass_for_type",
+        entry!(0x00c0_abd0, l30::pass_for_type(Ptr<_>, u32) -> u32).1,
+        &product(&[&[0xa, 0x178, 0x1c8, 0x1cd, 0x2ed, 0x300], &[0, 3]]),
+        |e, c| {
+            let shader = pass_choice_world(e, 0xa0, (0x0120_0ec0, 0x0120_1080));
+            counted_pair(e, shader + 0x28, shader + 0x7c, c.word(1));
+            let acc = e.mem.alloc(0x200);
+            (vec![shader, c.word(0)], acc)
         },
         |_, _, _| {},
     );

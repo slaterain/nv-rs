@@ -572,7 +572,7 @@ first subclass `00bce500`; slot 0xf8: the tall grass `00bac8d0`, the subclasses 
 setters they reach `00b7c150`, `00b7c170`, `00b7c1f0`, `00b7c230`), the partitions (slot 0x64: no-lighting `00bc8f20`,
 lighting 3.0 `00bbd000`), the blending (slot 0x80: no-lighting `00bc8ed0`, lighting 3.0 `00bbc5c0`), the geometry ends
 (slot 0x8c: no-lighting `00bc8d90`, sky `00b8a1a0`, water `00b86b80`, lighting 3.0 `00bbeef0`), the water's pass constants
-(`00b81d60`), lighting 3.0's stage slots (`00c0cd80`, `00c0cf10`, `00c0bc90`), the leaves' lights `00bb1960`, camera rows
+(`00b81d60`), lighting 3.0's stage slots (`00c0cd80`, `00c0cf10`, `00c0bc90`) and its pass for a pass type (`00c0abd0`), the leaves' lights `00bb1960`, camera rows
 `00bb1a90` and scene lights `00b71360`, a shader's slot 0x94 (`00e80590`), the other lock releases the passes' restore
 calls (`00714a80`, `00714ac0`, `00714b00`, `00714b20`, `00714b50`, `00714b80`, `00714bf0`, `004eb510`, `004ecb40`,
 `00b985f0`) and the setters they reach (fill mode `00b98480`, stencil operations `00b980c0`, function `00b98180` and write

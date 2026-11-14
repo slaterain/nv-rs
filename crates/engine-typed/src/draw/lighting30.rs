@@ -1331,21 +1331,16 @@ pub fn setup_stage_textures(e: &mut Engine, this: Ptr, state: Ptr) {
     e.vcall(base, 0x108, &[]);
 }
 
-/// What lighting 3.0's pass choice asks for a pass type's pass (`00c0abd0`, `thiscall(shader, pass type)`: the
-/// shader's declaration for the type into its counted pointer +0x28 and the type's pass word answered; it reads no
-/// own state, so by address).
-const PASS_FOR_TYPE: u32 = 0x00c0_abd0;
-
 // Typed from 00bbe020
 /// Lighting 3.0's pass choice (slot 0xf0), `thiscall(shader, pass type)` (not a Ghidra function: typed from its
-/// bytes): the pass `00c0abd0` answers for the type becomes the current pass; the fog-coloured ambient
+/// bytes): the pass [`pass_for_type`] (`00c0abd0`) answers for the type becomes the current pass; the fog-coloured ambient
 /// ([`own::fog_ambient`], which the exe has inlined here); then for the types 0x1e0 and 0x1e1 the counted pointers
 /// +0x30 and +0x34 take the shader's maps +0x6c and +0x70 (the exe's inlined assignment, the new one read again
 /// after the old one's count went down), for every other type `00c663d0` copies +0x74 into +0x30 and +0x78 into
 /// +0x34.
 pub fn select_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
     let base = this.addr();
-    let pass = e.call(PASS_FOR_TYPE, &args![base, pass_type]).u32();
+    let pass: u32 = typed_call!(super::FAMILY, 0x00c0_abd0, pass_for_type(e, this, pass_type));
     own::set_current_pass(e, pass);
     own::fog_ambient_inline(e);
     if pass_type == 0x1e0 || pass_type == 0x1e1 {
@@ -1746,4 +1741,155 @@ pub fn emittance_stage(e: &mut Engine, this: Ptr, pass: u32, property: u32) {
     e.call(STAGE_SETUP, &args![this.addr(), stage, property]);
     let value = engine_core::x87::x87_quiet_bits(capture::word(e, property, 0x30));
     own::set_constant_word(e, EMITTANCE_VALUE, value);
+}
+
+/// Lighting 3.0's pass table (`01200ec0` on, a pass a word, in Group C's statics: the draw's own state, read through
+/// the packet).
+const PASS_TABLE: u32 = 0x0120_0ec0;
+
+/// What [`pass_for_type`] does for a pass type (the exe's switch: `0xa` to `0xf` through the table `00c0b7a8`, 0x178
+/// its own case, `0x17f` to `0x2ed` through the bytes `00c0b970` into the table `00c0b7c0`; decoded from the exe):
+/// the shader's field whose word goes into its counted pointer +0x28, the pass's place in the pass table, and
+/// whether the pass is read after the assignment rather than before it.
+fn pass_case(pass_type: u32) -> Option<(u32, u32, bool)> {
+    Some(match pass_type {
+        0xa => (0x7c, 0x4, false),
+        0xb => (0x8c, 0x8, false),
+        0xc => (0x84, 0xc, false),
+        0xd => (0x94, 0x10, false),
+        0xe => (0x7c, 0x14, false),
+        0xf => (0x8c, 0x18, false),
+        0x178 => (0x7c, 0x0, false),
+        0x17f => (0x7c, 0x1c, false),
+        0x180 => (0x8c, 0x20, false),
+        0x181 => (0x84, 0x24, false),
+        0x182 => (0x7c, 0x28, false),
+        0x183 => (0x7c, 0x2c, false),
+        0x184 => (0x7c, 0x30, false),
+        0x185 => (0x8c, 0x34, false),
+        0x186 => (0x7c, 0x38, false),
+        0x187 => (0x8c, 0x3c, false),
+        0x188 => (0x84, 0x40, false),
+        0x189 => (0x8c, 0x44, false),
+        0x18a => (0x84, 0x48, false),
+        0x18b => (0x84, 0x4c, false),
+        0x18c => (0x84, 0x50, false),
+        0x18d => (0x94, 0x54, false),
+        0x18e => (0x7c, 0x58, false),
+        0x18f => (0x8c, 0x5c, false),
+        0x190 => (0x84, 0x60, false),
+        0x191 => (0x7c, 0x64, false),
+        0x192 => (0x7c, 0x68, false),
+        0x193 => (0x7c, 0x6c, false),
+        0x194 => (0x8c, 0x70, false),
+        0x195 => (0x7c, 0x74, false),
+        0x196 => (0x8c, 0x78, false),
+        0x197 => (0x84, 0x7c, false),
+        0x198 => (0x94, 0x80, false),
+        0x199 => (0x84, 0x84, false),
+        0x19a => (0x84, 0x88, false),
+        0x19b => (0x84, 0x8c, false),
+        0x19c => (0x94, 0x90, false),
+        0x19d => (0x7c, 0x94, false),
+        0x19e => (0x8c, 0x98, false),
+        0x19f => (0x84, 0x9c, false),
+        0x1a0 => (0x7c, 0xa0, false),
+        0x1a1 => (0x7c, 0xa4, false),
+        0x1a2 => (0x7c, 0xa8, false),
+        0x1a3 => (0x8c, 0xac, false),
+        0x1a4 => (0x7c, 0xb0, false),
+        0x1a5 => (0x8c, 0xb4, false),
+        0x1a6 => (0x84, 0xb8, false),
+        0x1a7 => (0x94, 0xbc, false),
+        0x1a8 => (0x84, 0xc0, false),
+        0x1a9 => (0x84, 0xc4, false),
+        0x1aa => (0x84, 0xc8, false),
+        0x1ab => (0x94, 0xcc, false),
+        0x1ac => (0x7c, 0xd0, false),
+        0x1ad => (0x8c, 0xd4, false),
+        0x1ae => (0x84, 0xd8, false),
+        0x1af => (0x7c, 0xdc, false),
+        0x1b0 => (0x7c, 0xe0, false),
+        0x1b1 => (0x7c, 0xe4, false),
+        0x1b2 => (0x8c, 0xe8, false),
+        0x1b3 => (0x7c, 0xec, false),
+        0x1b4 => (0x8c, 0xf0, false),
+        0x1b5 => (0x84, 0xf4, false),
+        0x1b6 => (0x94, 0xf8, false),
+        0x1b7 => (0x84, 0xfc, false),
+        0x1b8 => (0x84, 0x100, false),
+        0x1b9 => (0x84, 0x104, false),
+        0x1ba => (0x94, 0x108, false),
+        0x1bb => (0x7c, 0x10c, false),
+        0x1bc => (0x84, 0x110, false),
+        0x1bd => (0x7c, 0x114, false),
+        0x1be => (0x7c, 0x118, false),
+        0x1bf => (0x84, 0x11c, false),
+        0x1c0 => (0x84, 0x120, false),
+        0x1c1 => (0x8c, 0x124, false),
+        0x1c2 => (0x94, 0x128, false),
+        0x1c3 => (0x7c, 0x12c, false),
+        0x1c4 => (0x7c, 0x130, false),
+        0x1c5 => (0x84, 0x134, false),
+        0x1c6 => (0x8c, 0x138, false),
+        0x1c7 => (0x8c, 0x13c, false),
+        0x1c8 => (0x7c, 0x140, true),
+        0x1c9 => (0x84, 0x144, true),
+        0x1ca => (0x8c, 0x148, false),
+        0x1cb => (0x94, 0x14c, false),
+        0x1cc => (0x7c, 0x150, true),
+        0x1cd => (0x84, 0x150, true),
+        0x1ce => (0x8c, 0x154, false),
+        0x1cf => (0x8c, 0x154, false),
+        0x1d0 => (0x7c, 0x158, true),
+        0x1d1 => (0x7c, 0x15c, true),
+        0x1d2 => (0x8c, 0x160, false),
+        0x1d3 => (0x7c, 0x164, false),
+        0x1d4 => (0x84, 0x168, false),
+        0x1d5 => (0x8c, 0x16c, false),
+        0x1d6 => (0x94, 0x170, false),
+        0x1d7 => (0x7c, 0x174, true),
+        0x1d8 => (0x84, 0x178, true),
+        0x1d9 => (0x8c, 0x17c, false),
+        0x1da => (0x94, 0x180, false),
+        0x1db => (0x7c, 0x184, false),
+        0x1dc => (0x8c, 0x188, false),
+        0x1dd => (0x7c, 0x18c, true),
+        0x1de => (0x8c, 0x190, false),
+        0x1df => (0x7c, 0x194, true),
+        0x1e0 => (0x7c, 0x198, false),
+        0x1e1 => (0x8c, 0x19c, false),
+        0x2da => (0x7c, 0x1a0, false),
+        0x2db => (0x8c, 0x1a4, false),
+        0x2e0 => (0x7c, 0x1a8, false),
+        0x2e1 => (0x8c, 0x1ac, false),
+        0x2e6 => (0x84, 0x1b0, false),
+        0x2e7 => (0x94, 0x1b4, false),
+        0x2ec => (0x84, 0x1b8, false),
+        0x2ed => (0x94, 0x1bc, false),
+        _ => return None,
+    })
+}
+
+// Typed from 00c0abd0
+/// Lighting 3.0's pass for a pass type, `thiscall(shader, pass type)`: for a type of its switch ([`pass_case`]) the
+/// shader's field goes into its counted pointer +0x28 (`00a5f860`) and the type's pass word is answered (read before
+/// or after the assignment, as the exe reads it); 0 for any other type.
+pub fn pass_for_type(e: &mut Engine, this: Ptr, pass_type: u32) -> u32 {
+    let Some((field, place, after)) = pass_case(pass_type) else {
+        return 0;
+    };
+    let base = this.addr();
+    let word = e.global::<u32>(base.wrapping_add(field));
+    let before = if after {
+        0
+    } else {
+        capture::own_at::<u32>(e, PASS_TABLE + place)
+    };
+    own::set_counted(e, base.wrapping_add(0x28), word);
+    if after {
+        capture::own_at::<u32>(e, PASS_TABLE + place)
+    } else {
+        before
+    }
 }
