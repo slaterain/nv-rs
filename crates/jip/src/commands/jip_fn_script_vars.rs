@@ -242,8 +242,7 @@ pub fn refresh_saved_values(e: &mut Engine) {
     }
     for (owner, name, var) in vars {
         let mut bytes = [0u8; 8];
-        if e
-            .mem
+        if e.mem
             .try_read(var.wrapping_add(SCRIPT_VAR_VALUE), &mut bytes)
             .is_err()
         {

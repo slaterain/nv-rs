@@ -334,7 +334,8 @@ fn script_variables() {
 
 /// The script's variable list (`+0x4C`) and the event list's (`+0xC`): each item's id (a
 /// `VariableInfo`'s name too), from the first node.
-fn script_items(e: &Engine) -> (Vec<(u32, Vec<u8>)>, Vec<(u32, u64)>) {
+type ScriptItems = (Vec<(u32, Vec<u8>)>, Vec<(u32, u64)>);
+fn script_items(e: &Engine) -> ScriptItems {
     let walk = |mut node: u32| {
         let mut items = Vec::new();
         while node != 0 {
@@ -347,7 +348,12 @@ fn script_items(e: &Engine) -> (Vec<(u32, Vec<u8>)>, Vec<(u32, u64)>) {
     };
     let infos = walk(SCRIPTS + 0x4c)
         .into_iter()
-        .map(|i| (e.mem.u32(i), nvse::table::guest_text(e, e.mem.u32(i + 0x18))))
+        .map(|i| {
+            (
+                e.mem.u32(i),
+                nvse::table::guest_text(e, e.mem.u32(i + 0x18)),
+            )
+        })
         .collect();
     let vars = walk(e.mem.u32(SCRIPTS + 0x10c))
         .into_iter()
@@ -385,7 +391,11 @@ fn script_variables_are_made_in_the_script_and_saved_live() {
     let (infos, vars) = script_items(&w.e);
     assert_eq!(
         infos,
-        [(9, b"Bar".to_vec()), (8, b"*tmp".to_vec()), (7, b"Foo".to_vec())]
+        [
+            (9, b"Bar".to_vec()),
+            (8, b"*tmp".to_vec()),
+            (7, b"Foo".to_vec())
+        ]
     );
     assert_eq!(w.e.mem.u32(SCRIPTS + 0x24), 9);
     assert_eq!(vars, [(9, 0x0300_0123), (8, 1), (7, 2.5f64.to_bits())]);

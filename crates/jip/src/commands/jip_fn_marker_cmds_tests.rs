@@ -48,7 +48,11 @@ fn engine() -> Engine {
 
 fn place(e: &mut Engine, where_: u32, count: i32, pos: [f64; 3]) -> (u32, f64) {
     set_ref(e, 2, where_);
-    ts::call(e, 0x285d, &[r(1), n(count), r(2), z(pos[0]), z(pos[1]), z(pos[2])])
+    ts::call(
+        e,
+        0x285d,
+        &[r(1), n(count), r(2), z(pos[0]), z(pos[1]), z(pos[2])],
+    )
 }
 
 fn position(e: &Engine) -> [f32; 3] {
@@ -66,7 +70,11 @@ fn place_at_cell_places_through_the_marker() {
         calls_to(PLACE_AT_ME),
         [vec![MARKER, ITEM, 3, 0, 0, 1.0f32.to_bits()]]
     );
-    assert_eq!(ts::form_result(&e), 0xff00_0801, "the placed reference's id");
+    assert_eq!(
+        ts::form_result(&e),
+        0xff00_0801,
+        "the placed reference's id"
+    );
 }
 
 #[test]

@@ -89,7 +89,12 @@ fn items(e: &Engine, mut node: u32) -> Vec<u32> {
 fn infos(e: &Engine) -> Vec<(u32, Vec<u8>)> {
     items(e, SCRIPT_A + 0x4c)
         .into_iter()
-        .map(|i| (e.mem.u32(i), nvse::table::guest_text(e, e.mem.u32(i + 0x18))))
+        .map(|i| {
+            (
+                e.mem.u32(i),
+                nvse::table::guest_text(e, e.mem.u32(i + 0x18)),
+            )
+        })
         .collect()
 }
 
@@ -299,7 +304,11 @@ fn remove_script_variable_takes_the_saved_entry_out() {
         "the emptied owner"
     );
     assert_eq!(on(&mut e, REMOVE, 0, &[s(b"Count"), r(2)]), 0.0, "no owner");
-    assert_eq!(on(&mut e, REMOVE, 0, &[s(b"Count")]), 0.0, "no form or reference");
+    assert_eq!(
+        on(&mut e, REMOVE, 0, &[s(b"Count")]),
+        0.0,
+        "no form or reference"
+    );
     // Remove needs no script: an owner with none.
     e.ext::<Jip>()
         .saved
