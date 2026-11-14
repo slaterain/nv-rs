@@ -198,6 +198,15 @@ fn operators() {
             String::new()
         ]
     );
+    // A span starting where a unary operand left no place (column 0) and ending in a token's:
+    // either column 0 prints the BUG line.
+    assert_eq!(
+        block_errors("  int i = -1 + \"a\";"),
+        [
+            bug("Invalid types 'Number' and 'String' for operator + (+)."),
+            String::new()
+        ]
+    );
     assert_eq!(
         block_errors("  string s;\n  s++;"),
         [
