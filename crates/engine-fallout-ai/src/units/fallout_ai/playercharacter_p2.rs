@@ -981,8 +981,14 @@ fn region_data_priority(e: &mut Engine, data: u32) -> u8 {
 pub fn fn_0094cae0(e: &mut Engine, this: Ptr<PlayerCharacter>, cell: Ptr) {
     let player = this.addr();
     let cell = cell.addr();
-    if cell == e.call(PARENT_CELL_OF, &args![player]).u32() {
+    let parent = e.call(PARENT_CELL_OF, &args![player]).u32();
+    if cell == parent {
         return;
+    }
+    // The seam at `0x0094CB35` (JIP LN NVSE's PCCellChange), before the water flag's read:
+    // words the cell the player leaves; the answer is not used.
+    if e.hook_users(engine_core::extend::Hook::PCCellChange) != 0 {
+        e.site(0x0094_cb35, &[parent]);
     }
     if fn_0094dba0(e) == 0 {
         let water = if cell != 0 && e.call(0x0045_18e0, &args![cell]).bool() {
@@ -8854,6 +8860,39 @@ mod tests {
         let log = e.call_log.clone().unwrap();
         let addresses: Vec<u32> = log.iter().map(|(address, _)| *address).collect();
         assert_eq!(addresses, vec![PARENT_CELL_OF]);
+    }
+
+    thread_local! {
+        static CELL_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn cell_change_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        CELL_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(1)
+    }
+
+    /// JIP LN NVSE's PCCellChange seam (`0x0094CB35`): no user, not asked; with one, asked with
+    /// the cell the player leaves (not when the cell does not change), and the change goes on.
+    #[test]
+    fn the_cell_change_pc_cell_change_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        for users in [0, 1] {
+            let mut e = engine();
+            let (player, _) = cell_environment(&mut e, 0x1111);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0094_cb35), cell_change_handler);
+            e.set_hook_users(Hook::PCCellChange, users);
+            fn_0094cae0(&mut e, player, Ptr::new(0x1111));
+            assert!(CELL_SEEN.with(|s| s.borrow().is_empty()), "the same cell");
+            start_log(&mut e);
+            fn_0094cae0(&mut e, player, Ptr::NULL);
+            let seen = CELL_SEEN.with(|s| s.take());
+            if users == 0 {
+                assert!(seen.is_empty(), "no user");
+            } else {
+                assert_eq!(seen, vec![vec![0x1111]]);
+            }
+            assert_eq!(calls_to(&e, 0x0093_0700), vec![vec![player.addr(), 0]]);
+        }
     }
 
     #[test]

@@ -1577,6 +1577,11 @@ pub fn tes_topic_info_run_result(e: &mut Engine, this: Ptr, index: u32, referenc
     if reference.is_null() {
         return;
     }
+    // The seam at `0x0061F184` (JIP LN NVSE's RunResultScript: the dialogue topic events); the
+    // answer is not used.
+    if e.hook_users(engine_core::extend::Hook::RunResultScript) != 0 {
+        e.site(0x0061_f184, &[this.addr(), index, reference.addr()]);
+    }
     let script = tes_topic_info_get_result_script(e, this, index);
     if e.call(PROCESS_SCRIPTS, &[]).bool() && script != 0 {
         let header = e.call(AT_0X18, &args![script]).u32();
@@ -3629,5 +3634,51 @@ mod n045_tests {
         e.mem.set_u32(this + 0x40, other);
         e.call(0x0061_e330, &[this, this]);
         assert_eq!(e.mem.u32(this + 0x40), other);
+    }
+}
+
+#[cfg(test)]
+mod run_result_seam_tests {
+    use super::*;
+    use engine_core::extend::{Hook, Owner, SiteSlot};
+
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn topic_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(1)
+    }
+
+    /// JIP LN NVSE's RunResultScript seam (`0x0061F184`): no user, not asked; with one, asked
+    /// with the info, the index and the reference after the reference test (not for a null
+    /// reference), and the result script's code runs on as before whatever it answers.
+    #[test]
+    fn run_result_dialogue_topic_seam() {
+        let mut e = Engine::new();
+        e.map(0x011c_b000, 0x2000);
+        for addr in [PROCESS_SCRIPTS, INFO_0061F220, INFO_0061AEF0] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0061_f184), topic_handler);
+        let info = e.mem.alloc(0x60);
+        e.mem.set_u32(RESULT_SCRIPTS_INFO, info);
+        let reference = e.mem.alloc(0x68);
+        let run = |e: &mut Engine, r: u32| {
+            e.call_log = Some(vec![]);
+            e.call(0x0061_f170, &args![info, 0u32, r]);
+            e.call_log.take().unwrap()
+        };
+        let log = run(&mut e, reference);
+        assert!(SEEN.with(|s| s.borrow().is_empty()), "no user");
+        assert!(log.iter().any(|c| c.0 == INFO_0061F220));
+        e.add_hook_user(Hook::RunResultScript, true);
+        run(&mut e, 0);
+        assert!(SEEN.with(|s| s.borrow().is_empty()), "no reference");
+        let log = run(&mut e, reference);
+        assert_eq!(SEEN.with(|s| s.take()), vec![vec![info, 0, reference]]);
+        assert!(log.iter().any(|c| c.0 == PROCESS_SCRIPTS), "goes on");
+        assert!(log.iter().any(|c| c.0 == INFO_0061F220));
     }
 }

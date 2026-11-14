@@ -193,7 +193,17 @@ const STRING_SIZE: u32 = 0x14;
 /// `011c90ac` grows. Without a result, `ModelLoader::LoadFile(path, LOD
 /// multiplier, 1, 0, 0, 0)`.
 pub fn fn_0050fe50(e: &mut Engine, this: Ptr, reference: Ptr) -> u32 {
-    let path = e.call(OBJECT_MODEL_PATH, &args![this, reference]).u32();
+    // The seam at `0x0050FE8B` (JIP LN NVSE's GetModelPath), in place of the model path call: an
+    // answer is the reference's own path.
+    let answer = if e.hook_users(engine_core::extend::Hook::GetModelPath) != 0 {
+        e.site(0x0050_fe8b, &[this.addr(), reference.addr()])
+    } else {
+        None
+    };
+    let path = match answer {
+        Some(p) => p,
+        None => e.call(OBJECT_MODEL_PATH, &args![this, reference]).u32(),
+    };
     let mut result = 0u32;
     if !reference.is_null() && e.call(REFERENCE_TEST_444ED0, &args![reference]).bool() {
         let form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
@@ -626,6 +636,46 @@ mod b016_tests {
             );
             assert!(calls(&log, GET_SCALED_MODEL_FILE_NAME).is_empty());
         }
+    }
+
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn path_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        ANSWER.with(|c| c.get())
+    }
+
+    /// JIP LN NVSE's GetModelPath seam (`0x0050FE8B`): no user, not asked; with one, asked with
+    /// the base form and the reference in place of the model path call; an answer is the path
+    /// loaded (no model path call), none the exe's call.
+    #[test]
+    fn model_get_model_path_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = model_engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0050_fe8b), path_handler);
+        ANSWER.with(|c| c.set(Some(0x0abc_0000)));
+        let this = e.mem.alloc(0x90);
+        e.call_log = Some(vec![]);
+        e.call(0x0050_fe50, &args![this, REFERENCE]);
+        let log = e.call_log.take().unwrap();
+        assert!(SEEN.with(|s| s.borrow().is_empty()), "no user");
+        assert_eq!(calls(&log, MODEL_LOADER_LOAD_FILE)[0][1], 0x0bad_0000);
+        e.add_hook_user(Hook::GetModelPath, true);
+        e.call_log = Some(vec![]);
+        e.call(0x0050_fe50, &args![this, REFERENCE]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(SEEN.with(|s| s.take()), vec![vec![this, REFERENCE]]);
+        assert!(calls(&log, OBJECT_MODEL_PATH).is_empty());
+        assert_eq!(calls(&log, MODEL_LOADER_LOAD_FILE)[0][1], 0x0abc_0000);
+        ANSWER.with(|c| c.set(None));
+        e.call_log = Some(vec![]);
+        e.call(0x0050_fe50, &args![this, REFERENCE]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls(&log, OBJECT_MODEL_PATH).len(), 1);
+        assert_eq!(calls(&log, MODEL_LOADER_LOAD_FILE)[0][1], 0x0bad_0000);
     }
 
     #[test]

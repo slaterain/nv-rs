@@ -29,10 +29,23 @@ const ITEM_SET_DONE: u32 = 0x0060_fb60;
 /// byte (+1) and runs `0060fb60` with `force` on every non-null item of the
 /// stage's item list. The walk stops at a null node (no empty-node test).
 pub fn fn_0060f4a0(e: &mut Engine, this: Ptr<TESQuestStage>, quest: Ptr<TESQuest>, force: u8) {
-    if e.call(READ_BYTE_1, &args![this]).bool()
-        && (quest == Ptr::NULL || !e.call(QUEST_FLAG_BIT_3, &args![quest]).bool())
-    {
-        return;
+    // The seam at `0x0060F4A9` (JIP LN NVSE's SetQuestStage), in place of the done tests: an
+    // answer of 0 stops, any other answer goes on.
+    let answer = if e.hook_users(engine_core::extend::Hook::SetQuestStage) != 0 {
+        e.site(0x0060_f4a9, &[this.addr(), quest.addr()])
+    } else {
+        None
+    };
+    match answer {
+        Some(0) => return,
+        Some(_) => {}
+        None => {
+            if e.call(READ_BYTE_1, &args![this]).bool()
+                && (quest == Ptr::NULL || !e.call(QUEST_FLAG_BIT_3, &args![quest]).bool())
+            {
+                return;
+            }
+        }
     }
     e.set(this, TESQuestStage::bIsDone, 1);
     let mut node = e.call(STAGE_ITEM_LIST, &args![this]).u32();
@@ -126,5 +139,46 @@ mod tests {
         let (mut e, stage) = world(1, true, &[0x100]);
         fn_0060f4a0(&mut e, stage, Ptr::new(0x9000), 0);
         assert_eq!(set_done_calls(&e), vec![vec![0x100, 0]]);
+    }
+
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn stage_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        ANSWER.with(|c| c.get())
+    }
+
+    /// JIP LN NVSE's SetQuestStage seam (`0x0060F4A9`): no user, not asked; with one, asked with
+    /// the stage and the quest in place of the done tests: 0 stops (a stage not done stays so),
+    /// another answer goes on (a done stage runs again), none makes the exe's tests.
+    #[test]
+    fn set_quest_stage_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let (mut e, stage) = world(1, false, &[0x100]);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0060_f4a9), stage_handler);
+        ANSWER.with(|c| c.set(Some(1)));
+        fn_0060f4a0(&mut e, stage, Ptr::new(0x9000), 0);
+        assert!(SEEN.with(|s| s.borrow().is_empty()), "no user");
+        assert!(set_done_calls(&e).is_empty());
+        e.add_hook_user(Hook::SetQuestStage, true);
+        e.call_log = Some(vec![]);
+        fn_0060f4a0(&mut e, stage, Ptr::new(0x9000), 0);
+        assert_eq!(SEEN.with(|s| s.take()), vec![vec![stage.addr(), 0x9000]]);
+        assert_eq!(set_done_calls(&e), vec![vec![0x100, 0]], "answered: goes on");
+        let (mut e, stage) = world(0, false, &[0x100]);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0060_f4a9), stage_handler);
+        e.add_hook_user(Hook::SetQuestStage, true);
+        ANSWER.with(|c| c.set(Some(0)));
+        fn_0060f4a0(&mut e, stage, Ptr::new(0x9000), 0);
+        assert!(set_done_calls(&e).is_empty(), "answered 0: stops");
+        assert_eq!(e.get(stage, TESQuestStage::bIsDone), 0);
+        ANSWER.with(|c| c.set(None));
+        e.call_log = Some(vec![]);
+        fn_0060f4a0(&mut e, stage, Ptr::new(0x9000), 0);
+        assert_eq!(SEEN.with(|s| s.take()).len(), 2);
+        assert_eq!(set_done_calls(&e), vec![vec![0x100, 0]], "no answer: the exe's");
     }
 }

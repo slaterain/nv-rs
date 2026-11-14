@@ -903,7 +903,30 @@ pub fn bgs_distant_object_block_load_task_construct(
         let world_space = e.mem.u32(base + TASK_WORLD_SPACE);
         let (x16, y16) = (x as u16 as i16, y as u16 as i16);
         let words = (u32::from(x as u16), u32::from(y as u16));
-        if stinger == 0 {
+        // The seam at `0x006F6DF1` (JIP LN NVSE's MakeObjLODPath), when the name is not a
+        // high-priority one: words the world space, the level, x, y (whole words) and the name
+        // buffer; an answer means the handler wrote its own name there, which is used only when
+        // that file exists (else the plain name, as for the `PA` name).
+        let swapped = stinger == 0
+            && high_priority == 0
+            && e.hook_users(engine_core::extend::Hook::MakeObjLODPath) != 0
+            && e.site(0x006f_6df1, &[world_space, level, x, y, name]).is_some();
+        if swapped {
+            if e.call(FILE_EXISTS, &args![name, 0u32, 0u32, 0xffff_ffffu32])
+                .u32()
+                == 0
+            {
+                let world_space = e.mem.u32(base + TASK_WORLD_SPACE);
+                bgs_distant_object_block_build_block_file_name(
+                    e,
+                    name,
+                    world_space,
+                    level,
+                    x16,
+                    y16,
+                );
+            }
+        } else if stinger == 0 {
             let other = flag != 0 || {
                 let player: u32 = e.global(PLAYER);
                 fn_006f6520(e, Ptr::new(player)) != 0
@@ -2024,6 +2047,68 @@ mod tests {
         );
         construct(&mut e, 0, 0, 1);
         assert_eq!(calls(&e, BUILD_STINGER_BLOCK_FILE_NAME).len(), 1);
+    }
+
+    thread_local! {
+        static LOD_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static LOD_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn lod_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        LOD_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        LOD_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP LN NVSE's MakeObjLODPath seam (`0x006F6DF1`): no user, not asked; with one, asked for
+    /// a name that is neither high-priority nor a stinger one, with the world space, level, x, y
+    /// and the buffer; an answer keeps the handler's name when its file exists (else the plain
+    /// name), none takes the exe's choice.
+    #[test]
+    fn construct_make_obj_lod_path_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine();
+        construct_doubles(&mut e);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x006f_6df1), lod_handler);
+        LOD_ANSWER.with(|c| c.set(Some(1)));
+        let world_space = world_space(&mut e);
+        let task = e.mem.alloc(0x58);
+        let construct = |e: &mut Engine, high: u32, stinger: u32| {
+            e.call_log = Some(vec![]);
+            let words = args![
+                task,
+                0x500u32,
+                world_space,
+                0x1_0005u32,
+                6u32,
+                7u32,
+                1u32,
+                high,
+                stinger
+            ];
+            e.call(0x006f_6d10, &words);
+        };
+        construct(&mut e, 0, 0);
+        assert!(LOD_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::MakeObjLODPath, true);
+        construct(&mut e, 1, 0);
+        construct(&mut e, 0, 1);
+        assert!(LOD_SEEN.with(|s| s.borrow().is_empty()), "high priority, stinger");
+        construct(&mut e, 0, 0);
+        let seen = LOD_SEEN.with(|s| s.take());
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0][..4], [world_space, 7, 0x1_0005, 6]);
+        let name = calls(&e, QUEUED_FILE_SET_NAME)[0][1];
+        assert_eq!(name, seen[0][4] + 5);
+        assert!(calls(&e, BUILD_BLOCK_FILE_NAME_PA).is_empty());
+        // The handler's file is missing: the plain name.
+        assert_eq!(calls(&e, FILE_EXISTS)[0][0], seen[0][4]);
+        assert_eq!(calls(&e, PRINT_FORMATTED)[0][2], BLOCK_FILE_FORMAT);
+        e.register(FILE_EXISTS, |_, _| ret(1));
+        construct(&mut e, 0, 0);
+        assert!(calls(&e, PRINT_FORMATTED).is_empty(), "the handler's file exists");
+        LOD_ANSWER.with(|c| c.set(None));
+        construct(&mut e, 0, 0);
+        assert_eq!(calls(&e, BUILD_BLOCK_FILE_NAME_PA).len(), 1, "no answer: the exe");
     }
 
     #[test]

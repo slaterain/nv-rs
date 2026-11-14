@@ -627,9 +627,17 @@ pub fn actor_eat(e: &mut Engine, this: Ptr, item: Ptr, extra: Ptr, consume_now: 
     }
     let singleton: u32 = e.global(OBJECT_011DE45C);
     if !e.call(FN_0047C850, &args![singleton]).bool() {
-        e.call(SET_ACTION_FLAG, &args![this, extra, 2u32]);
+        {
+            // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+            let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+            e.call(SET_ACTION_FLAG, &args![this, extra, 2u32]);
+        }
         let actor_flags = e.call(REFERENCE_EXTRA_LIST, &args![this]).u32();
-        e.call(SET_ACTION_FLAG, &args![item, actor_flags, 2u32]);
+        {
+            // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+            let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+            e.call(SET_ACTION_FLAG, &args![item, actor_flags, 2u32]);
+        }
     }
     let mut effects = 0u32;
     if e.vcall(item.addr(), FORM_SLOT_0XEC, &[]).bool() {

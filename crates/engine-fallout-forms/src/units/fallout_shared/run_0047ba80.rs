@@ -128,7 +128,18 @@ pub fn fn_0047bb50(e: &mut Engine, form: u32, other: u32) -> bool {
         return false;
     }
     let other_type = e.call(FORM_TYPE, &args![other]).u32();
-    if other_type != e.call(FORM_TYPE, &args![form]).u32() {
+    // The seam at `0x0047BBEC` (JIP LN NVSE's CheckUniqueItem), in place of `form`'s type call:
+    // an answer is the type to compare.
+    let answer = if e.hook_users(engine_core::extend::Hook::CheckUniqueItem) != 0 {
+        e.site(0x0047_bbec, &[form, other_type])
+    } else {
+        None
+    };
+    let form_type = match answer {
+        Some(t) => t,
+        None => e.call(FORM_TYPE, &args![form]).u32(),
+    };
+    if other_type != form_type {
         return false;
     }
     if e.vcall(form, 0x94, &args![]).bool() {
@@ -358,5 +369,44 @@ mod n038_tests {
         e.mem.set_u32(v + 8, 0);
         e.mem.set_u8(w + 0x100, 0x80);
         assert!(!run(&mut e, w, v));
+    }
+
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn unique_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        ANSWER.with(|c| c.get())
+    }
+
+    /// JIP LN NVSE's CheckUniqueItem seam (`0x0047BBEC`): no user, not asked; with one, asked
+    /// with the form and the other's type in place of the form's type call; an answer is the
+    /// type compared (0: no match), none the exe's call.
+    #[test]
+    fn at_0047bb50_check_unique_item_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0047_bbec), unique_handler);
+        let w = form(&mut e, 0x28);
+        let v = form(&mut e, 0x28);
+        e.mem.set_u32(SCRATCH + 4, 1.0f32.to_bits());
+        ANSWER.with(|c| c.set(Some(0)));
+        assert!(e.call(0x0047_bb50, &args![w, v]).bool());
+        assert!(SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::CheckUniqueItem, true);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0047_bb50, &args![w, v]).bool(), "answered 0");
+        assert_eq!(SEEN.with(|s| s.take()), vec![vec![w, 0x28]]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            log.iter().filter(|c| c.0 == FORM_TYPE).count(),
+            1,
+            "only the other's type call"
+        );
+        ANSWER.with(|c| c.set(None));
+        assert!(e.call(0x0047_bb50, &args![w, v]).bool(), "no answer: the exe");
+        assert_eq!(SEEN.with(|s| s.take()).len(), 1);
     }
 }

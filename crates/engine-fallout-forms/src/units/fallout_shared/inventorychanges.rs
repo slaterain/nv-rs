@@ -5150,7 +5150,11 @@ pub fn fn_004c37d0(
                                     e.call(EXTRA_GET_COUNT, &args![extra_item]).u16() as i16 as i32;
                                 set_entry_number(e, entry, held.wrapping_mul(-1));
                             }
-                            e.call(SET_ACTION_FLAG, &args![actor, split, 4u32]);
+                            {
+                                // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+                                let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, actor);
+                                e.call(SET_ACTION_FLAG, &args![actor, split, 4u32]);
+                            }
                             item_count = count;
                             count -= count;
                         } else {
@@ -5184,7 +5188,11 @@ pub fn fn_004c37d0(
                                 );
                             }
                             extra_item = 0;
-                            e.call(SET_ACTION_FLAG, &args![actor, split, 4u32]);
+                            {
+                                // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+                                let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, actor);
+                                e.call(SET_ACTION_FLAG, &args![actor, split, 4u32]);
+                            }
                             if fn_004bca60(e, Ptr::new(split)) {
                                 delete_object(e, split);
                                 split = 0;

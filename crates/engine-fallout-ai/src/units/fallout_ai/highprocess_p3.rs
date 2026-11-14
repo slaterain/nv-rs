@@ -4135,10 +4135,14 @@ pub fn high_process_process_buy_object(e: &mut Engine, this: Ptr<HighProcess>, a
             e.call(EXTRA_SET_BASE_FORM, &args![reference_extra, base]);
             let entry = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
             let flag = e.mem.u32(entry + ACQUIRE_ACTION_FLAG);
-            e.call(
+            {
+                // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+                let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, a);
+                e.call(
                 SCRIPT_SET_ACTION_FLAG,
                 &args![seller, flag, ACTION_FLAG_BUY],
             );
+            }
             let entry = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
             let form = e.mem.u32(entry + 4);
             let reference = e.mem.u32(entry);
@@ -4150,10 +4154,14 @@ pub fn high_process_process_buy_object(e: &mut Engine, this: Ptr<HighProcess>, a
             seller = e.mem.u32(process + LOW_TARGET);
             let entry = e.mem.u32(process + LOW_ACQUIRE_OBJECT);
             let flag = e.mem.u32(entry + ACQUIRE_ACTION_FLAG);
-            e.call(
+            {
+                // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+                let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, a);
+                e.call(
                 SCRIPT_SET_ACTION_FLAG,
                 &args![seller, flag, ACTION_FLAG_BUY],
             );
+            }
             let form = e.mem.u32(entry + 4);
             e.vcall(
                 seller,

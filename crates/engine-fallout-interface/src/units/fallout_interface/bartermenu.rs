@@ -2516,7 +2516,13 @@ fn complete_transaction_body(e: &mut Engine, this: Ptr<BarterMenu>, base: u32) {
         let extra = first_extra(e, item);
         if extra != 0 {
             let vendor = e.get(this, BarterMenu::pVendorRef);
-            e.call(SET_ACTION_FLAG, &args![vendor, extra, 0x4000u32]);
+            {
+                // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word. This function
+                // takes none (`thiscall`, no stack words): JIP reads `DoClick`'s saved ESI there, a word with
+                // no meaning, so 0 (JIP's "no item" path) is handed on.
+                let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, 0);
+                e.call(SET_ACTION_FLAG, &args![vendor, extra, 0x4000u32]);
+            }
         }
         let vendor = e.get(this, BarterMenu::pVendorRef);
         // The seam at the count's read (`0x0072FE3E`, ADR-0016): the script extender's OnSell,
@@ -2539,7 +2545,13 @@ fn complete_transaction_body(e: &mut Engine, this: Ptr<BarterMenu>, base: u32) {
         let extra = first_extra(e, item);
         if extra != 0 {
             let player = e.global::<u32>(PLAYER);
-            e.call(SET_ACTION_FLAG, &args![player, extra, 0x4000u32]);
+            {
+                // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word. This function
+                // takes none (`thiscall`, no stack words): JIP reads `DoClick`'s saved ESI there, a word with
+                // no meaning, so 0 (JIP's "no item" path) is handed on.
+                let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, 0);
+                e.call(SET_ACTION_FLAG, &args![player, extra, 0x4000u32]);
+            }
         }
         // The seam at the count's read (`0x0072FF20`, ADR-0016): the script extender's OnSell,
         // the player selling the entry's item.

@@ -127,6 +127,11 @@ pub fn runner_run(
                 } else {
                     e.mem.set_u32(this.addr() + 8, locals.addr());
                 }
+                // The seam at `0x005E0EC9` (JIP LN NVSE's ScriptWait: which wait this run is),
+                // before the header read; the answer is not used.
+                if e.hook_users(engine_core::extend::Hook::ScriptWait) != 0 {
+                    e.site(0x005e_0ec9, &[script.addr(), reference.addr()]);
+                }
                 let header = e.call(0x0050_0940, &args![script]).u32();
                 if e.mem.u8(header + 0x11) != 0 {
                     // ScriptLocals::m_pScriptEffectData (Xbox PDB) +0x10.
@@ -695,6 +700,27 @@ pub fn runner_evaluate_line(
             let name = e.vcall(script.addr(), 0x130, &args![]).u32();
             e.call(0x005b_5e40, &args![0x0103_d848u32, name, line, failed_at]);
             return false;
+        }
+        // The seam at `0x005E1716` (JIP LN NVSE's ScriptWait: a waiting script resumes in its
+        // block), in place of the block test: words the runner, the block type, the cursor, the
+        // result's high word, `action_list`, the length word's address and the block's span; an
+        // answer means the handler made the test (and the length word's change) itself.
+        if e.hook_users(engine_core::extend::Hook::ScriptWait) != 0
+            && e.site(
+                0x005e_1716,
+                &[
+                    this.addr(),
+                    kind as u32,
+                    e.mem.u32(cursor.addr()),
+                    e.mem.u32(result.addr() + 4),
+                    u32::from(action_list),
+                    length.addr(),
+                    span,
+                ],
+            )
+            .is_some()
+        {
+            return true;
         }
         if e.mem.f64(result.addr()) == 0.0 || action_list {
             e.mem
@@ -2182,6 +2208,90 @@ mod tests {
                 );
             }
         }
+    }
+
+    thread_local! {
+        static WAIT_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static WAIT_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn wait_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        WAIT_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        WAIT_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP LN NVSE's ScriptWait seam in the block test (`0x005E1716`): no user, not asked; with
+    /// one, asked after the handler with the runner, the type, the cursor, the result's high
+    /// word, `action_list`, the length word and the span; an answer returns true with the length
+    /// as the handler left it, none makes the exe's test.
+    #[test]
+    fn evaluator_begin_script_wait_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = Engine::new();
+        let (runner, script, length) = begin_fixture(&mut e, 3, 173);
+        e.register_double(0x12340001, |e, a| {
+            e.mem.set_f64(a[6], 0.0);
+            e.mem.set_u32(a[7], 9);
+            1u32.into_ret()
+        });
+        e.on_site(SiteSlot::new(Owner::Jip, 0x005e_1716), wait_handler);
+        WAIT_ANSWER.with(|c| c.set(Some(1)));
+        let go = |e: &mut Engine| {
+            e.mem.set_u32(length.addr(), 11);
+            runner_evaluate_line(
+                e,
+                runner,
+                script,
+                16,
+                Ptr::new(0x3333),
+                length,
+                0,
+                Ptr::NULL,
+                2,
+                false,
+                true,
+            )
+        };
+        assert!(go(&mut e));
+        assert!(WAIT_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        assert_eq!(e.mem.u32(length.addr()), 11 + 173);
+        e.add_hook_user(Hook::ScriptWait, true);
+        assert!(go(&mut e));
+        assert_eq!(
+            WAIT_SEEN.with(|s| s.take()),
+            vec![vec![runner.addr(), 3, 9, 0, 1, length.addr(), 173]]
+        );
+        assert_eq!(e.mem.u32(length.addr()), 11, "the handler's test");
+        WAIT_ANSWER.with(|c| c.set(None));
+        assert!(go(&mut e));
+        assert_eq!(e.mem.u32(length.addr()), 11 + 173, "no answer: the exe's");
+    }
+
+    /// JIP LN NVSE's ScriptWait seam in the run (`0x005E0EC9`): no user, not asked; with one,
+    /// asked once with the script and the reference before the header read; the run goes on.
+    #[test]
+    fn run_script_wait_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = Engine::new();
+        let (runner, script, _) = run_fixture(&mut e, &[0x11, 0, 0, 0], false);
+        e.register_double(0x005e1550, |_, _| 1u32.into_ret());
+        e.on_site(SiteSlot::new(Owner::Jip, 0x005e_0ec9), wait_handler);
+        WAIT_ANSWER.with(|c| c.set(Some(1)));
+        let go = |e: &mut Engine| {
+            e.call_log = Some(Vec::new());
+            e.call(
+                0x005e0d20,
+                &args![runner, script, 0x3333u32, 0x5555u32, 0u32, false, 0u8, 0u8, 0.0f32],
+            );
+            e.call_log.take().unwrap()
+        };
+        go(&mut e);
+        assert!(WAIT_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::ScriptWait, true);
+        let log = go(&mut e);
+        assert_eq!(WAIT_SEEN.with(|s| s.take()), vec![vec![script.addr(), 0x3333]]);
+        assert!(log.iter().any(|c| c.0 == 0x00500940), "the header is read");
+        assert!(log.iter().any(|c| c.0 == 0x005e1550), "the run goes on");
     }
 
     #[test]
