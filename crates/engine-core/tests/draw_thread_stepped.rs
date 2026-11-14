@@ -6,6 +6,7 @@
 
 use engine_core::draw_thread::{self, testing, Counts, Hooks, Packet};
 use engine_core::real_threads::{self, on_draw_helper};
+use engine_core::stage_time;
 use engine_core::{Engine, Ret};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::SeqCst};
@@ -19,6 +20,8 @@ const VALUE: u32 = 0x0300_0000;
 const STOP: u32 = 0x0300_0004;
 /// Set: the first half calls a join point (one reached from the drawing side).
 const JOIN_INSIDE: u32 = 0x0300_0008;
+/// Set: the first half takes this many milliseconds (the job's own time).
+const SLOW_MS: u32 = 0x0300_000c;
 
 /// What the halves did: (half, on the drawing helper, the value it read).
 static DRAWN: Mutex<Vec<(u32, bool, u32)>> = Mutex::new(Vec::new());
@@ -44,6 +47,10 @@ fn first(e: &mut Engine, _: &[u32]) -> Ret {
     if e.mem.u32(JOIN_INSIDE) != 0 {
         draw_thread::finish(e);
         draw_thread::idle(e);
+    }
+    let slow = e.mem.u32(SLOW_MS);
+    if slow != 0 {
+        std::thread::sleep(std::time::Duration::from_millis(u64::from(slow)));
     }
     let v = read_value(e);
     DRAWN.lock().unwrap().push((1, on_draw_helper(), v));
@@ -275,6 +282,51 @@ fn the_world_draw_runs_after_the_tail_from_the_packet_cut_before_it() {
     let by = draw_thread::joins_by_point(&e);
     assert!(by.contains(&(0x0064_26a0, 1)), "{by:x?}");
     assert!(by.iter().any(|&(a, _)| a == draw_thread::ON_IDLE));
+    take_drawn();
+    take_joined();
+
+    // Main's wait at each join point and the job's own time: a 20 ms first half joined at 00875110's entry (stepped,
+    // the job runs inside the join, so the wait holds the whole job); `NV_STAGE_TIME`'s columns get the same.
+    stage_time::set_on(true);
+    let _ = stage_time::take();
+    let jobs_before = draw_thread::job_times(&e);
+    let closes_before = draw_thread::close_times(&e);
+    e.mem.set_u32(SLOW_MS, 20);
+    draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
+    draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
+    draw_thread::world_pass_end(&mut e);
+    draw_thread::finish_at(&mut e, 0x0087_5110);
+    e.mem.set_u32(SLOW_MS, 0);
+    let waits = draw_thread::join_waits(&e);
+    let at = waits
+        .iter()
+        .find(|j| j.at == 0x0087_5110)
+        .expect("its join counted");
+    assert_eq!(at.waits.count, 1);
+    assert!(at.waits.total_ns >= 20_000_000, "{at:?}");
+    assert_eq!(at.waits.max_ns, at.waits.total_ns);
+    let jobs = draw_thread::job_times(&e);
+    assert_eq!(jobs.count, jobs_before.count + 1);
+    let job_ns = jobs.total_ns - jobs_before.total_ns;
+    assert!(job_ns >= 20_000_000);
+    assert!(job_ns <= at.waits.total_ns, "the job inside the wait");
+    assert_eq!(draw_thread::close_times(&e).count, closes_before.count + 1);
+    let v = stage_time::take();
+    stage_time::set_on(false);
+    let col = |name: &str| v[stage_time::NAMES.iter().position(|n| *n == name).unwrap()];
+    assert_eq!(col("join_00875110").1, 1);
+    assert!(col("join_00875110").0 >= 20_000.0);
+    assert_eq!(col("join_wait").1, 1);
+    assert_eq!(col("job").1, 1);
+    assert!(col("job").0 >= 20_000.0);
+    assert_eq!(
+        col("world_draw_00b6ba20").1,
+        1,
+        "the half timed on the helper"
+    );
+    assert_eq!(col("world_draw_00b6b930").1, 1);
+    let line = draw_thread::times_line(&waits, jobs, draw_thread::close_times(&e));
+    assert!(line.contains("00875110 1/"), "{line}");
     take_drawn();
     take_joined();
 

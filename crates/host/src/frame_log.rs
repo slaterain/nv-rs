@@ -10,6 +10,8 @@
 //! the 95th percentile since the last such line.
 //! It reads guest memory between frames, so unlike a trace it sends no call down the slow path and
 //! the frame rate stays the player's. Off, nothing runs.
+//! With `NV_STAGE_TIME` on too, each line ends with the frame's stage, step and join times
+//! (`engine::stage_time::NAMES`, each as `NAME_us` and `NAME_n`).
 
 use engine::Engine;
 use std::collections::VecDeque;
@@ -134,7 +136,8 @@ impl FrameLog {
         let _ = writeln!(
             out,
             "frame\tus\tm_fdelta\thk_count\thk_time\tpx\tpy\tpz\tscreen\tqpc\tpoll_qpc\tpresent\tshown\t\
-             shown_qpc\tinput_to_present_us"
+             shown_qpc\tinput_to_present_us{}",
+            stage_titles()
         );
         Some(FrameLog {
             out,
@@ -163,7 +166,7 @@ impl FrameLog {
         let qpc = |t: Option<Instant>| t.map_or(0, |t| qpc_at(t, now, counter));
         let _ = writeln!(
             self.out,
-            "{}\t{us}\t{delta}\t{count}\t{time}\t{}\t{}\t{}\t{}\t{}\t{}\t{present}\t{}\t{}\t{}",
+            "{}\t{us}\t{delta}\t{count}\t{time}\t{}\t{}\t{}\t{}\t{}\t{}\t{present}\t{}\t{}\t{}{}",
             self.frame,
             at[0],
             at[1],
@@ -174,6 +177,7 @@ impl FrameLog {
             shown.map_or(0, |s| s.0),
             qpc(shown.map(|s| s.1)),
             delay.map_or(String::new(), |d| d.to_string()),
+            stage_values(),
         );
         self.frame += 1;
         if self.frame % SUMMARY_EVERY == 0 {
@@ -190,6 +194,28 @@ impl FrameLog {
             let _ = self.out.flush();
         }
     }
+}
+
+/// The stage columns' titles (`NV_STAGE_TIME` on), each after a tab; empty off.
+fn stage_titles() -> String {
+    if !engine::stage_time::on() {
+        return String::new();
+    }
+    engine::stage_time::NAMES
+        .iter()
+        .map(|n| format!("\t{n}_us\t{n}_n"))
+        .collect()
+}
+
+/// The stage columns' values since the last line (`NV_STAGE_TIME` on), each after a tab; empty off.
+fn stage_values() -> String {
+    if !engine::stage_time::on() {
+        return String::new();
+    }
+    engine::stage_time::take()
+        .iter()
+        .map(|(us, n)| format!("\t{us:.1}\t{n}"))
+        .collect()
 }
 
 /// The Presents submitted so far (this frame's number) and the last one the backend carried out.

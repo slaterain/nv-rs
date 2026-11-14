@@ -234,6 +234,7 @@ None of these is for players.
 | **Frames, sound and logs** | | |
 | `NV_SHOT=DIR[,every_ms]`*, `NV_SHOT_FRAMES=FROM-TO`, `NV_SHOT_LIST`, `NV_SHOT_WGPU=DIR` | Screenshots of the game's frames to DIR; only those presents; a list of presents; the wgpu backend's own folder (on wgpu alone in a window, the frame the window got is captured too, as `wgpu-window-*.bmp`) | off |
 | `NV_FRAME_LOG=FILE`* | One line per main frame (clock, step, player position), with no per-call cost | off |
+| `NV_STAGE_TIME=1`* | With `NV_FRAME_LOG`: each line also gives the frame's stages on main, the drawing steps after the world pass, the world draw's halves, and the drawing thread's job and waits by join (`crates/engine-core/src/stage_time.rs`) | off |
 | `NV_LOCK_STATS=FILE`*, `NV_REAL_DUMP`* | Real threads: a line per main frame on the game clock and the waits; a dump of thread-local-storage misuse | off |
 | `NV_PHYS_BLEND_LOG=FILE`* | What the smooth physics drawing did each frame | off |
 | `NV_SOUND_RECORD=FILE.wav`* | What goes to the sound device, recorded, with a log (the device's underruns named in it too) | off |

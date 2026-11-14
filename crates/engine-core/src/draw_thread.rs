@@ -11,8 +11,14 @@
 //! `measure/draw-thread/NOTES.md` lists (the world accumulator's later users, a save or a load, the paths that
 //! rebuild a light's object lists). On the helper and with nothing posted a join does nothing.
 //!
-//! **Off** (no run turned on): [`first_half`] and [`second_half`] are one relaxed load and the call they replace;
-//! every join point is one relaxed load. No lock, no allocation, nothing registered.
+//! **Counters** (with the thread on): main's wait at each join point by its exe address ([`join_waits`]), the
+//! job's own run time ([`job_times`]) and the packet's close at the join ([`close_times`]), printed with the
+//! overlap counts every 600 posts. `NV_STAGE_TIME` (`crate::stage_time`) gives them per frame too, with the world
+//! draw's halves timed wherever they run.
+//!
+//! **Off** (no run turned on): [`first_half`] and [`second_half`] are one relaxed load and the call they replace
+//! (plus `NV_STAGE_TIME`'s one load); every join point is one relaxed load. No lock, no allocation, nothing
+//! registered.
 //!
 //! **Serial frames:** the draw stays on main (the plain calls) when the interface is drawn between the halves,
 //! in V.A.T.S., while the navmesh is drawn, while the loading menu is up, between a save's or a load's start and the
@@ -22,10 +28,12 @@
 //! the packet it cut ([`first_half`]).
 
 use crate::real_threads;
+use crate::stage_time::{self, Column};
 use crate::{args, Engine};
 use std::any::Any;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Instant;
 
 /// The world draw's first half (`00b6ba20`, `cdecl(camera, accumulator, third)`).
 pub const WORLD_DRAW_FIRST: u32 = 0x00b6_ba20;
@@ -82,6 +90,8 @@ pub struct Hooks {
 struct Slot {
     packet: Option<Packet>,
     back: Option<Packet>,
+    /// The job's own run time (nanoseconds, on the helper), set at its end.
+    job_ns: u64,
 }
 
 type SharedSlot = Arc<Mutex<Slot>>;
@@ -99,8 +109,14 @@ struct Run {
     save_or_load: bool,
     /// A job was posted in the world pass that is still running on main (until [`world_pass_end`]).
     in_pass: bool,
-    /// Joins of posted jobs by the join point that made them (its exe address; 0 for none named).
-    by_point: Vec<(u32, u64)>,
+    /// Joins of posted jobs by the join point that made them (its exe address; 0 for none named), with main's
+    /// waits there.
+    by_point: Vec<JoinWait>,
+    /// The joined jobs' own run times.
+    jobs: Times,
+    /// Main's time closing the packet at the joins (the own state's merge, the holds given back), part of the
+    /// waits.
+    closes: Times,
     /// The reasons already noted in the log (each once a run).
     noted: Vec<&'static str>,
     /// What happened, for the tests: posts, frames drawn on main with a handed-off packet, joins.
@@ -120,6 +136,30 @@ pub struct Counts {
     pub joined: u64,
     /// Of those, joins made before the world pass that posted the job returned: no overlap with the frame's tail.
     pub same_pass: u64,
+}
+
+/// Times of one kind: how many, their sum and the longest (nanoseconds).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Times {
+    pub count: u64,
+    pub total_ns: u64,
+    pub max_ns: u64,
+}
+
+impl Times {
+    fn add(&mut self, ns: u64) {
+        self.count += 1;
+        self.total_ns += ns;
+        self.max_ns = self.max_ns.max(ns);
+    }
+}
+
+/// Main's waits at one join point ([`join_waits`]): its exe address (0 for none named) and the waits, each from the
+/// join's start to the packet closed (the job finished, the device joined, the packet closed on main).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct JoinWait {
+    pub at: u32,
+    pub waits: Times,
 }
 
 static RUNS: Mutex<Vec<Run>> = Mutex::new(Vec::new());
@@ -153,6 +193,8 @@ pub fn turn_on(e: &Engine, hooks: Hooks) {
         save_or_load: false,
         in_pass: false,
         by_point: Vec::new(),
+        jobs: Times::default(),
+        closes: Times::default(),
         noted: Vec::new(),
         counts: Counts::default(),
     });
@@ -191,7 +233,7 @@ pub fn posted(e: &Engine) -> bool {
 #[inline]
 pub fn first_half(e: &mut Engine, camera: u32, accumulator: u32, third: u32, overlay: u8) {
     if ON.load(Relaxed) == 0 {
-        e.call(WORLD_DRAW_FIRST, &args![camera, accumulator, third]);
+        call_first(e, camera, accumulator, third);
         return;
     }
     first_half_on(e, camera, accumulator, third, overlay);
@@ -207,6 +249,20 @@ pub fn second_half(e: &mut Engine, camera: u32, accumulator: u32, third: u32) {
             return;
         }
     }
+    call_second(e, camera, accumulator, third);
+}
+
+/// The world draw's first half called on `e`'s thread, timed (`NV_STAGE_TIME`).
+#[inline]
+fn call_first(e: &mut Engine, camera: u32, accumulator: u32, third: u32) {
+    let _time = stage_time::scope(Column::WorldDrawFirst);
+    e.call(WORLD_DRAW_FIRST, &args![camera, accumulator, third]);
+}
+
+/// The world draw's second half called on `e`'s thread, timed (`NV_STAGE_TIME`).
+#[inline]
+fn call_second(e: &mut Engine, camera: u32, accumulator: u32, third: u32) {
+    let _time = stage_time::scope(Column::WorldDrawSecond);
     e.call(WORLD_DRAW_SECOND, &args![camera, accumulator, third]);
 }
 
@@ -262,7 +318,25 @@ pub fn world_pass_end(e: &mut Engine) {
 
 /// The run's joins of posted jobs by join point (exe address, count), in the order first seen.
 pub fn joins_by_point(e: &Engine) -> Vec<(u32, u64)> {
+    with_run(e.kernel.id(), |r| {
+        r.by_point.iter().map(|j| (j.at, j.waits.count)).collect()
+    })
+    .unwrap_or_default()
+}
+
+/// The run's waits at each join point, in the order first seen.
+pub fn join_waits(e: &Engine) -> Vec<JoinWait> {
     with_run(e.kernel.id(), |r| r.by_point.clone()).unwrap_or_default()
+}
+
+/// The run's joined jobs' own run times (on the helper).
+pub fn job_times(e: &Engine) -> Times {
+    with_run(e.kernel.id(), |r| r.jobs).unwrap_or_default()
+}
+
+/// The run's times closing the packet at the joins (part of [`join_waits`]).
+pub fn close_times(e: &Engine) -> Times {
+    with_run(e.kernel.id(), |r| r.closes).unwrap_or_default()
 }
 
 /// How often (in posts) the run's overlap counts are printed.
@@ -281,26 +355,48 @@ fn finish_posted(e: &mut Engine, at: u32) {
         if std::mem::take(&mut r.in_pass) {
             r.counts.same_pass += 1;
         }
-        match r.by_point.iter_mut().find(|(a, _)| *a == at) {
-            Some((_, n)) => *n += 1,
-            None => r.by_point.push((at, 1)),
-        }
         Some((slot, r.hooks))
     })
     .flatten() else {
         return;
     };
     POSTED.fetch_sub(1, Relaxed);
+    let start = Instant::now();
     let joined =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (hooks.device_finish)(e)));
-    let back = lock_slot(&slot).back.take();
-    match joined {
-        Ok(()) => {
-            if let Some(packet) = back {
-                (hooks.join)(e, packet);
+    let (back, job_ns) = {
+        let mut s = lock_slot(&slot);
+        (s.back.take(), s.job_ns)
+    };
+    let mut close_ns = None;
+    if joined.is_ok() {
+        if let Some(packet) = back {
+            let closing = Instant::now();
+            (hooks.join)(e, packet);
+            close_ns = Some(closing.elapsed().as_nanos() as u64);
+        }
+    }
+    let wait_ns = start.elapsed().as_nanos() as u64;
+    with_run(id, |r| {
+        match r.by_point.iter_mut().find(|j| j.at == at) {
+            Some(j) => j.waits.add(wait_ns),
+            None => {
+                let mut j = JoinWait {
+                    at,
+                    ..JoinWait::default()
+                };
+                j.waits.add(wait_ns);
+                r.by_point.push(j);
             }
         }
-        Err(payload) => std::panic::resume_unwind(payload),
+        r.jobs.add(job_ns);
+        if let Some(ns) = close_ns {
+            r.closes.add(ns);
+        }
+    });
+    stage_time::join_wait(at, wait_ns);
+    if let Err(payload) = joined {
+        std::panic::resume_unwind(payload);
     }
 }
 
@@ -371,7 +467,7 @@ fn serial(
             }
         }
     });
-    e.call(WORLD_DRAW_FIRST, &args![camera, accumulator, third]);
+    call_first(e, camera, accumulator, third);
 }
 
 #[cold]
@@ -379,7 +475,7 @@ fn serial(
 fn first_half_on(e: &mut Engine, camera: u32, accumulator: u32, third: u32, overlay: u8) {
     let id = e.kernel.id();
     let Some((hooks, save_or_load)) = with_run(id, |r| (r.hooks, r.save_or_load)) else {
-        e.call(WORLD_DRAW_FIRST, &args![camera, accumulator, third]);
+        call_first(e, camera, accumulator, third);
         return;
     };
     // A job still posted (a world pass twice in one frame): joined first, so one cut is open at a time.
@@ -408,9 +504,11 @@ fn first_half_on(e: &mut Engine, camera: u32, accumulator: u32, third: u32, over
     let slot: SharedSlot = Arc::new(Mutex::new(Slot {
         packet: Some(packet),
         back: None,
+        job_ns: 0,
     }));
     let job_slot = slot.clone();
     let job: real_threads::DrawJob = Box::new(move |w: &mut Engine| {
+        let start = Instant::now();
         let Some(packet) = lock_slot(&job_slot).packet.take() else {
             (hooks.device_close)(w);
             return;
@@ -420,11 +518,18 @@ fn first_half_on(e: &mut Engine, camera: u32, accumulator: u32, third: u32, over
             panic!("NV_DRAW_THREAD: the drawing helper already held a packet at a new job");
         }
         let drawn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            w.call(WORLD_DRAW_FIRST, &args![camera, accumulator, third]);
-            w.call(WORLD_DRAW_SECOND, &args![camera, accumulator, third]);
+            call_first(w, camera, accumulator, third);
+            call_second(w, camera, accumulator, third);
         }));
         let back = (hooks.hand_back)(w);
-        lock_slot(&job_slot).back = back;
+        // The run time is in the slot before the device's close lets main's join through.
+        let ns = start.elapsed().as_nanos() as u64;
+        {
+            let mut s = lock_slot(&job_slot);
+            s.back = back;
+            s.job_ns = ns;
+        }
+        stage_time::job(ns);
         (hooks.device_close)(w);
         if let Err(payload) = drawn {
             std::panic::resume_unwind(payload);
@@ -445,13 +550,17 @@ fn first_half_on(e: &mut Engine, camera: u32, accumulator: u32, third: u32, over
         r.second_taken = true;
         r.in_pass = true;
         r.counts.posted += 1;
-        (r.counts.posted % COUNTS_EVERY == 1).then(|| (r.counts, r.by_point.clone()))
+        (r.counts.posted % COUNTS_EVERY == 1)
+            .then(|| (r.counts, r.by_point.clone(), r.jobs, r.closes))
     })
     .flatten();
     POSTED.fetch_add(1, Relaxed);
-    if let Some((c, by)) = print {
+    if let Some((c, by, jobs, closes)) = print {
         // The overlap achieved so far: joins inside the posting world pass overlapped nothing of the tail.
-        let points: Vec<String> = by.iter().map(|(a, n)| format!("{a:08x}:{n}")).collect();
+        let points: Vec<String> = by
+            .iter()
+            .map(|j| format!("{:08x}:{}", j.at, j.waits.count))
+            .collect();
         eprintln!(
             "NV_DRAW_THREAD: posted {}, joined {} ({} inside the same world pass), drawn on main {} serial {}; joins by point {}",
             c.posted,
@@ -461,6 +570,7 @@ fn first_half_on(e: &mut Engine, camera: u32, accumulator: u32, third: u32, over
             c.serial,
             points.join(" ")
         );
+        eprintln!("NV_DRAW_THREAD: {}", times_line(&by, jobs, closes));
     }
 }
 
@@ -478,8 +588,8 @@ fn draw_on_main(
     if (hooks.adopt)(e, packet).is_err() {
         panic!("NV_DRAW_THREAD: main already held a packet at a cut");
     }
-    e.call(WORLD_DRAW_FIRST, &args![camera, accumulator, third]);
-    e.call(WORLD_DRAW_SECOND, &args![camera, accumulator, third]);
+    call_first(e, camera, accumulator, third);
+    call_second(e, camera, accumulator, third);
     if let Some(back) = (hooks.hand_back)(e) {
         (hooks.join)(e, back);
     }
@@ -487,6 +597,29 @@ fn draw_on_main(
         r.second_taken = true;
         r.counts.on_main += 1;
     });
+}
+
+/// The waits by point, the jobs and the closes in milliseconds (the periodic log line):
+/// `waits (count/total ms/longest ms) 0086e650 n/t/l ...; job n/t/l; close n/t/l`.
+pub fn times_line(by: &[JoinWait], jobs: Times, closes: Times) -> String {
+    let ms = |t: &Times| {
+        format!(
+            "{}/{:.3}/{:.3}",
+            t.count,
+            t.total_ns as f64 / 1e6,
+            t.max_ns as f64 / 1e6
+        )
+    };
+    let points: Vec<String> = by
+        .iter()
+        .map(|j| format!("{:08x} {}", j.at, ms(&j.waits)))
+        .collect();
+    format!(
+        "waits (count/total ms/longest ms) {}; job {}; close {}",
+        points.join(" "),
+        ms(&jobs),
+        ms(&closes)
+    )
 }
 
 #[doc(hidden)]

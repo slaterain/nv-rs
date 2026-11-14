@@ -38,6 +38,7 @@ use super::main::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::types::NiTArray;
+use engine_core::stage_time::{self, Column, Point};
 
 // ---------------------------------------------------------------------------
 // Callees outside this file, by exe address.
@@ -252,6 +253,12 @@ fn with_profile_scope<R>(
     })
 }
 
+/// `body` timed into the step `column` (`NV_STAGE_TIME`, `measure/draw-thread/P0-MEASURE.md`; off, one load).
+fn timed<R>(column: Column, body: impl FnOnce() -> R) -> R {
+    let _time = stage_time::scope(column);
+    body()
+}
+
 /// Builds a four-float value at `at` with `00414430`.
 fn color_ctor(e: &mut Engine, at: u32, a: f32, b: f32, c: f32, d: f32) {
     e.call(COLOR_CTOR, &args![at, a, b, c, d]);
@@ -338,6 +345,7 @@ pub fn fn_00870680(e: &mut Engine, this: Ptr) {
 /// `menu_background` is set and menu `0x3f5` is not visible, otherwise
 /// the frame `00870bd0` (byte clear) or `00870a00` (byte set).
 pub fn fn_008706b0(e: &mut Engine, this: Ptr, target: u32, menu_background: u8, flag: u8) {
+    stage_time::point(Point::DrawIn);
     engine_core::draw_thread::finish_at(e, 0x0087_06b0);
     let first = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
     let byte_131 = fn_00870770(e, Ptr::new(first));
@@ -358,6 +366,7 @@ pub fn fn_008706b0(e: &mut Engine, this: Ptr, target: u32, menu_background: u8, 
     } else {
         fn_00870a00(e, this, target, flag);
     }
+    stage_time::point(Point::DrawOut);
 }
 
 // Translated from 00870770 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -420,25 +429,35 @@ pub fn fn_008707c0(e: &mut Engine, this: Ptr, target: u32, flag: u8) {
         e.call(0x0041_fd00, &args![conversation_target, sky]);
         let indexed = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
         e.call(0x00b5_e870, &args![indexed, conversation_target]);
-        e.call(0x0087_4c10, &args![this]);
-        e.call(0x0087_5110, &args![this, renderer, rendered, 0u32, frame]);
+        timed(Column::FirstPersonSetup, || {
+            e.call(0x0087_4c10, &args![this])
+        });
+        timed(Column::DrawRest, || {
+            e.call(0x0087_5110, &args![this, renderer, rendered, 0u32, frame])
+        });
     }
-    e.call(0x0087_5bf0, &args![this]);
+    timed(Column::MenuPass, || e.call(0x0087_5bf0, &args![this]));
     if fn_008709f0(e) != 0 && flag == 0 {
-        e.call(
-            0x0087_5fd0,
-            &args![this, byte_flag, frame, renderer, target],
-        );
+        timed(Column::Interface, || {
+            e.call(
+                0x0087_5fd0,
+                &args![this, byte_flag, frame, renderer, target],
+            )
+        });
         if rendered != 0 {
             e.call(0x0087_61e0, &args![this, rendered, renderer]);
         }
     } else if target != 0 {
-        e.call(0x0087_6830, &args![this, byte_flag, target]);
+        timed(Column::InterfaceTarget, || {
+            e.call(0x0087_6830, &args![this, byte_flag, target])
+        });
     }
-    e.call(
-        0x0087_6850,
-        &args![this, frame, global_91ac, renderer, 0u32],
-    );
+    timed(Column::WindDown, || {
+        e.call(
+            0x0087_6850,
+            &args![this, frame, global_91ac, renderer, 0u32],
+        )
+    });
 }
 
 // Translated from 008709f0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -487,31 +506,45 @@ pub fn fn_00870a00(e: &mut Engine, this: Ptr, target: u32, skip_world: u8) {
         &args![this, accumulator, draw_world as u32, 1u32, accumulator_flag],
     );
     if draw_world {
-        e.call(0x0087_4c10, &args![this]);
-        e.call(0x0087_4b50, &args![this, frame, byte_flag, 0u32]);
-        e.call(
-            0x0087_5110,
-            &args![this, renderer, 0u32, accumulator, frame],
-        );
+        timed(Column::FirstPersonSetup, || {
+            e.call(0x0087_4c10, &args![this])
+        });
+        timed(Column::Targets, || {
+            e.call(0x0087_4b50, &args![this, frame, byte_flag, 0u32])
+        });
+        timed(Column::DrawRest, || {
+            e.call(
+                0x0087_5110,
+                &args![this, renderer, 0u32, accumulator, frame],
+            )
+        });
     } else {
         mt_both_threads(e, 0x16);
     }
     if target != 0 {
-        e.call(0x0087_6830, &args![this, byte_flag, target]);
+        timed(Column::InterfaceTarget, || {
+            e.call(0x0087_6830, &args![this, byte_flag, target])
+        });
     }
-    e.call(0x0071_4c20, &args![1u32]);
+    timed(Column::LightUpdate, || e.call(0x0071_4c20, &args![1u32]));
     if fn_008709f0(e) != 0 {
-        e.call(
-            0x0087_5fd0,
-            &args![this, byte_flag, frame, renderer, target],
-        );
+        timed(Column::Interface, || {
+            e.call(
+                0x0087_5fd0,
+                &args![this, byte_flag, frame, renderer, target],
+            )
+        });
     } else if target != 0 {
-        e.call(0x0087_6830, &args![this, byte_flag, target]);
+        timed(Column::InterfaceTarget, || {
+            e.call(0x0087_6830, &args![this, byte_flag, target])
+        });
     }
-    e.call(
-        0x0087_6850,
-        &args![this, frame, global_91ac, renderer, 0u32],
-    );
+    timed(Column::WindDown, || {
+        e.call(
+            0x0087_6850,
+            &args![this, frame, global_91ac, renderer, 0u32],
+        )
+    });
 }
 
 // Translated from 00870bd0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -598,57 +631,81 @@ pub fn fn_00870bd0(e: &mut Engine, this: Ptr, target: u32, skip_world: u8) {
     let mut water_drawn = false;
     if water_active && draw_world {
         water_drawn = true;
-        e.call(0x0087_46d0, &args![this, frame]);
-        e.call(0x0087_4b50, &args![this, frame, byte_flag, 0u32]);
+        timed(Column::FirstPersonNode, || {
+            e.call(0x0087_46d0, &args![this, frame])
+        });
+        timed(Column::Targets, || {
+            e.call(0x0087_4b50, &args![this, frame, byte_flag, 0u32])
+        });
     }
     if e.call(0x005b_9b00, &args![]).bool() {
         let accumulator_slot = pointer_get(e, this.addr() + MAIN_WORLD_ACCUM);
-        if e.call(0x00b6_3a90, &args![accumulator_slot]).u32() != 0 {
+        let check = timed(Column::AccumulatorCheck, || {
+            e.call(0x00b6_3a90, &args![accumulator_slot]).u32()
+        });
+        if check != 0 {
             let accumulator_slot = pointer_get(e, this.addr() + MAIN_WORLD_ACCUM);
-            e.call(0x0087_4920, &args![this, accumulator_slot, frame]);
+            timed(Column::RefractionNormals, || {
+                e.call(0x0087_4920, &args![this, accumulator_slot, frame])
+            });
         }
     }
 
     if draw_world {
-        e.call(0x0087_4c10, &args![this]);
-        e.call(0x0087_4b50, &args![this, frame, byte_flag, 0u32]);
+        timed(Column::FirstPersonSetup, || {
+            e.call(0x0087_4c10, &args![this])
+        });
+        timed(Column::Targets, || {
+            e.call(0x0087_4b50, &args![this, frame, byte_flag, 0u32])
+        });
         if !water_drawn {
             mt_advance_stage(e, 1, 0x16);
         }
-        e.call(
-            0x0087_5110,
-            &args![this, renderer, 0u32, accumulator, frame],
-        );
+        timed(Column::DrawRest, || {
+            e.call(
+                0x0087_5110,
+                &args![this, renderer, 0u32, accumulator, frame],
+            )
+        });
     } else {
         mt_both_threads(e, 0x16);
     }
 
     if water_active {
         let accumulator_slot = pointer_get(e, this.addr() + MAIN_WORLD_ACCUM);
-        e.call(0x0087_5e40, &args![this, accumulator_slot, frame]);
+        timed(Column::WaterPass, || {
+            e.call(0x0087_5e40, &args![this, accumulator_slot, frame])
+        });
     }
 
     if reference_marker {
         let world = e.mem.u32(WORLD_OBJECT);
         if e.call(0x005f_36f0, &args![world]).u32() == 0 {
-            screen_position_of_reference(e);
+            timed(Column::TargetMarker, || screen_position_of_reference(e));
         }
     }
 
     if fn_008709f0(e) != 0 {
-        e.call(
-            0x0087_5fd0,
-            &args![this, byte_flag, frame, renderer, target],
-        );
+        timed(Column::Interface, || {
+            e.call(
+                0x0087_5fd0,
+                &args![this, byte_flag, frame, renderer, target],
+            )
+        });
         if (fn_00871260(e) || e.call(0x005b_ac20, &args![]).bool())
             && !e.call(IS_IN_PIPBOY_MENU, &args![]).bool()
         {
-            e.call(0x0087_6a20, &args![this, renderer]);
+            timed(Column::InterfaceEnd, || {
+                e.call(0x0087_6a20, &args![this, renderer])
+            });
         }
     } else if target != 0 {
-        e.call(0x0087_6830, &args![this, byte_flag, target]);
+        timed(Column::InterfaceTarget, || {
+            e.call(0x0087_6830, &args![this, byte_flag, target])
+        });
     }
 
+    let margins_time = (margins_wanted != 0).then(|| stage_time::scope(Column::Margins));
     if margins_wanted != 0 {
         if margins_enabled {
             e.call(0x00b5_40d0, &args![]);
@@ -676,10 +733,13 @@ pub fn fn_00870bd0(e: &mut Engine, this: Ptr, target: u32, skip_world: u8) {
             });
         }
     }
-    e.call(
-        0x0087_6850,
-        &args![this, frame, global_91ac, renderer, accumulator],
-    );
+    drop(margins_time);
+    timed(Column::WindDown, || {
+        e.call(
+            0x0087_6850,
+            &args![this, frame, global_91ac, renderer, accumulator],
+        )
+    });
 }
 
 /// The block of `00870bd0` that projects the position of the reference in
@@ -2400,6 +2460,7 @@ pub fn fn_00873200(
     skip_pass: u8,
     overlay: u8,
 ) {
+    let _time = stage_time::scope(Column::WorldPass);
     let this_addr = this.addr();
     let root = e.call(GET_ROOT, &args![]).u32();
     let target = e.call(GET_SCENE_TARGET, &args![root]).u32();
@@ -2443,6 +2504,7 @@ pub fn fn_00873200(
         let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
         let root_child = e.call(GET_ROOT_CHILD, &args![root]).u32();
         // `00b6ba20`; with the drawing thread on, posted to it (`engine_core::draw_thread`).
+        stage_time::point(Point::Cut);
         engine_core::draw_thread::first_half(e, root_child, accumulator, 1, overlay);
         if overlay != 0 {
             e.call(0x00b9_8380, &args![0u32, 1u32]);
@@ -2457,6 +2519,7 @@ pub fn fn_00873200(
         let root_child = e.call(GET_ROOT_CHILD, &args![root]).u32();
         // `00b6b930`; skipped when the drawing thread's job took it.
         engine_core::draw_thread::second_half(e, root_child, accumulator, 1);
+        stage_time::point(Point::DrawEnd);
         if e.global::<u8>(0x011f_94b4) != 0 {
             let indexed = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
             e.call(0x00a8_9af0, &args![indexed, target]);
@@ -2467,26 +2530,33 @@ pub fn fn_00873200(
         e.mem.set_u8(accumulator + 0x38, 0);
         let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
         e.mem.set_u8(accumulator + 0x3a, 0);
-        extra_pass(e, this_addr, target, false);
-        extra_pass(e, this_addr, target, true);
+        timed(Column::ExtraPass1, || {
+            extra_pass(e, this_addr, target, false)
+        });
+        timed(Column::ExtraPass2, || {
+            extra_pass(e, this_addr, target, true)
+        });
         if setting_dword(e, SETTING_THREADS) > 1 {
             e.call(0x008c_80e0, &args![0u32]);
         }
         if e.global::<u8>(0x011f_94a9) != 0 {
             let root_child = e.call(GET_ROOT_CHILD, &args![root]).u32();
-            fn_008744a0(e, root_child);
+            timed(Column::CameraMotion, || fn_008744a0(e, root_child));
         }
         if object != 0 {
             let root_pointer = pointer_get(e, ROOT_POINTER);
             let root_child = e.call(GET_ROOT_CHILD, &args![root_pointer]).u32();
             let accumulator = pointer_get(e, this_addr + MAIN_WORLD_ACCUM);
-            e.call(0x0064_26a0, &args![object, 1u32, accumulator, root_child]);
+            timed(Column::SunQueryInPass, || {
+                e.call(0x0064_26a0, &args![object, 1u32, accumulator, root_child])
+            });
         }
         fn_00872dd0(e, 0, 0);
         let node = player_node(e, 1);
         e.call(SET_NODE_FLAG, &args![node, saved_flag as u32]);
         e.call(PROFILE_SCOPE_DTOR, &args![guard]);
     });
+    stage_time::point(Point::PassEnd);
     // A join after this one overlapped the frame's tail (`engine_core::draw_thread`'s counts).
     engine_core::draw_thread::world_pass_end(e);
 }
@@ -3028,6 +3098,11 @@ pub fn fn_00875110(
     overlay_node: u32,
     target_texture: u32,
 ) {
+    // The drawing thread's job may still walk the world accumulator (+0x88): the screens' and the overlay's blocks
+    // below accumulate into it. No earlier join covers every frame: the sun query's (`006426a0`) needs a sky, the
+    // water pass's (`008746d0`, `00875e40`) water, and the refraction normals' (`00b63a90`, `00874920`) `005b9b00`
+    // (`measure/draw-thread/PLAN-C.md`, "Latent race in #551"). Off, or with nothing posted, one load.
+    engine_core::draw_thread::finish_at(e, 0x0087_5110);
     let this_addr = this.addr();
     let root = e.call(GET_ROOT, &args![]).u32();
     let target = e.call(GET_SCENE_TARGET, &args![root]).u32();

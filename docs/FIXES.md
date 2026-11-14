@@ -77,6 +77,14 @@ carried out (`shown`, `shown_qpc`), and that frame's time from its poll to its P
 (`input_to_present_us`); every 1000 frames a `# input to present` line gives the median and the 95th
 percentile since the last one.
 
+`NV_STAGE_TIME=1` with `NV_FRAME_LOG` adds columns to each line (`crates/engine-core/src/stage_time.rs`, a
+measuring aid for the drawing thread): the frame's stages on main (`st_u` to `st_p2`, between OnIdle's entry,
+`Main::Swap` around the frame's draw, the world draw's cut and end, and `WaitForThreads`; `st_cut_to_idle` and
+`st_draw_end_to_idle`), each step of the drawing sequence after the world pass by its exe function, the world
+draw's two halves wherever they run, and with the drawing thread on its job's own time and main's wait at each
+join by the join's exe function. Microseconds and calls per column; the stages that end at the next OnIdle land in
+the next frame's line. Off, each mark is one load.
+
 `NV_PHYS_BLEND_LOG=FILE`, with the smooth physics drawing on (say `NV_PRESET=fixes`: the variable pins
 vanilla otherwise), writes per drawn frame each free body's node as the original draws it and as the
 fix draws it, with the drawing time and the world's last step end; `NV_SHOT_FRAMES=FROM-TO` limits
