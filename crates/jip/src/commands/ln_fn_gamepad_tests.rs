@@ -114,7 +114,11 @@ fn sticks_past_their_dead_zones() {
         let r = asm_stick(v, 8689);
         for (op, want) in [(0x2205, l), (0x2206, l), (0x2207, r), (0x2208, r)] {
             assert_eq!(run(&mut e, op, &[]).to_bits(), want.to_bits(), "{op:x} {v}");
-            assert_eq!(eval(&mut e, op, 0).to_bits(), want.to_bits(), "{op:x} eval {v}");
+            assert_eq!(
+                eval(&mut e, op, 0).to_bits(),
+                want.to_bits(),
+                "{op:x} eval {v}"
+            );
         }
     }
     // The cases the asm's edges decide.
@@ -173,10 +177,18 @@ fn button_mods() {
     assert_eq!(input(&mut e).mods.button_skip, 0xebff, "DisableButton");
     assert_eq!(run(&mut e, 0x2296, &[n(0x1000)]), 1.0);
     assert_eq!(run(&mut e, 0x2296, &[n(0x1001)]), 0.0, "one still passes");
-    assert_eq!(run(&mut e, 0x2296, &[n(0x1_0000)]), 1.0, "no bit in 16 passes");
+    assert_eq!(
+        run(&mut e, 0x2296, &[n(0x1_0000)]),
+        1.0,
+        "no bit in 16 passes"
+    );
     assert_eq!(eval(&mut e, 0x2296, 0x1000), 1.0);
     assert_eq!(eval(&mut e, 0x2296, 0x0001), 0.0);
-    assert_eq!(eval(&mut e, 0x2296, 0x1_0000), 1.0, "(UInt16) 0: nothing passes");
+    assert_eq!(
+        eval(&mut e, 0x2296, 0x1_0000),
+        1.0,
+        "(UInt16) 0: nothing passes"
+    );
     run(&mut e, 0x2294, &[n(0x1_1400)]);
     assert_eq!(input(&mut e).mods.button_skip, 0xffff, "EnableButton");
     run(&mut e, 0x2297, &[n(0x1_0003)]);
@@ -245,46 +257,4 @@ fn stick_mods() {
     assert_eq!(run(&mut e, 0x289d, &[n(0)]), 1.0, "one direction is enough");
     run(&mut e, 0x289e, &[n(1), n(0)]);
     assert_eq!(input(&mut e).mods.stick_skip, 0x04, "the right's bits only");
-}
-
-/// Trigger handlers: only a Script form while the controller is ready; down/up by the opcode,
-/// the trigger by the third argument's low bit; the flag set on an add and cleared when neither
-/// trigger has a handler of that kind left; the lambda's variables kept while set.
-#[test]
-fn trigger_handlers() {
-    let mut e = setup();
-    let ev = |e: &mut Engine| e.ext::<Jip>().ln_events.triggers.clone();
-    let flags = |e: &mut Engine| e.ext::<Jip>().ln_events.flags;
-    let down = crate::ln_events::mask(crate::ln_events::id::TRIGGER_DOWN);
-    let up = crate::ln_events::mask(crate::ln_events::id::TRIGGER_UP);
-    run(&mut e, 0x27ff, &[r(1), n(1), n(0)]);
-    assert!(ev(&mut e).iter().all(|s| s.is_empty()), "not ready: nothing");
-    input(&mut e).ready = true;
-    run(&mut e, 0x27ff, &[r(3), n(1), n(0)]);
-    assert!(ev(&mut e).iter().all(|s| s.is_empty()), "not a script");
-    nvse::lambda::insert_for_tests(&mut e, SCRIPT_FORM, FORMS + 0x8000);
-    run(&mut e, 0x27ff, &[r(1), n(1), n(0)]);
-    run(&mut e, 0x27ff, &[r(1), n(1), n(0)]);
-    assert_eq!(nvse::lambda::saved_count(&e, SCRIPT_FORM), 1, "kept once");
-    run(&mut e, 0x27ff, &[r(2), n(1), n(3)]);
-    run(&mut e, 0x2800, &[r(2), n(1), n(2)]);
-    let s = ev(&mut e);
-    assert_eq!(
-        s.iter()
-            .map(|x| x.iter().copied().collect::<Vec<_>>())
-            .collect::<Vec<_>>(),
-        vec![vec![SCRIPT_TWO], vec![SCRIPT_FORM], vec![], vec![SCRIPT_TWO]],
-        "left up, left down, right up, right down"
-    );
-    assert_eq!(flags(&mut e), down | up);
-    run(&mut e, 0x27ff, &[r(1), n(0), n(0)]);
-    assert_eq!(nvse::lambda::saved_count(&e, SCRIPT_FORM), 0, "given up");
-    assert_eq!(flags(&mut e), down | up, "the right trigger still has one");
-    run(&mut e, 0x27ff, &[r(2), n(0), n(1)]);
-    assert_eq!(flags(&mut e), up, "no down handler left");
-    run(&mut e, 0x2800, &[r(1), n(0), n(0)]);
-    assert_eq!(flags(&mut e), up, "not there: nothing");
-    run(&mut e, 0x2800, &[r(2), n(0), n(0)]);
-    assert_eq!(flags(&mut e), 0);
-    assert!(ev(&mut e).iter().all(|s| s.is_empty()));
 }

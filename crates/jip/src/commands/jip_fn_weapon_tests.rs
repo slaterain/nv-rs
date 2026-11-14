@@ -375,7 +375,10 @@ mod equipped {
         e.mem.set_u32(X1 + 0xc, 5);
         assert_eq!(both(&mut e), (2.0, 2.0));
         assert_eq!(
-            (run(&mut e, 0x264c, PLAIN, &[]), eval(&mut e, 0x264c, PLAIN, 0)),
+            (
+                run(&mut e, 0x264c, PLAIN, &[]),
+                eval(&mut e, 0x264c, PLAIN, 0)
+            ),
             (0.0, -5.0),
             "not an actor: untouched"
         );
@@ -393,11 +396,19 @@ mod equipped {
         slot(&mut e, 2, 11);
         put_extra(&mut e, XDL, X1, 0x8d, 1);
         put_extra(&mut e, XDL, X2, 0x39, DROPPER);
-        assert_eq!(run(&mut e, 0x264c, ACTOR, &[]), 0.0, "the dropper has no flags");
+        assert_eq!(
+            run(&mut e, 0x264c, ACTOR, &[]),
+            0.0,
+            "the dropper has no flags"
+        );
         put_extra(&mut e, DROPPER + 0x44, X3, 0x8d, 4);
         assert_eq!(run(&mut e, 0x264c, ACTOR, &[]), 2.0, "the dropper's slot 3");
         e.mem.set_u32(X2 + 0xc, 0);
-        assert_eq!(run(&mut e, 0x264c, ACTOR, &[]), 0.0, "own flags: slot 1 only");
+        assert_eq!(
+            run(&mut e, 0x264c, ACTOR, &[]),
+            0.0,
+            "own flags: slot 1 only"
+        );
         e.mem.set_u32(X1 + 0xc, 4);
         assert_eq!(run(&mut e, 0x264c, ACTOR, &[]), 2.0);
         // Not a weapon in the entry: no flags at all.
@@ -458,12 +469,28 @@ mod equipped {
         assert_eq!(run(&mut e, 0x2924, 0, &[r(1), n(5)]), 0.0, "no item mods");
         e.mem.set_u32(WEAP + 0x350 + 4, MISC);
         e.mem.set_u32(WEAP + 0x350 + 8, MISC);
-        assert_eq!(run(&mut e, 0x2924, 0, &[r(1), n(5)]), 2.0, "slot 1 has no item mod");
-        assert_eq!(run(&mut e, 0x2924, 0, &[r(1), n(0x105)]), 0.0, "the whole word");
+        assert_eq!(
+            run(&mut e, 0x2924, 0, &[r(1), n(5)]),
+            2.0,
+            "slot 1 has no item mod"
+        );
+        assert_eq!(
+            run(&mut e, 0x2924, 0, &[r(1), n(0x105)]),
+            0.0,
+            "the whole word"
+        );
         slot(&mut e, 1, 6);
         assert_eq!(run(&mut e, 0x2924, 0, &[r(1), n(5)]), 3.0);
-        assert_eq!(run(&mut e, 0x2924, 0, &[r(3), n(5)]), 3.0, "the reference's base");
-        assert_eq!(run(&mut e, 0x2924, 0, &[r(2), n(5)]), 0.0, "not a weapon: 0 written");
+        assert_eq!(
+            run(&mut e, 0x2924, 0, &[r(3), n(5)]),
+            3.0,
+            "the reference's base"
+        );
+        assert_eq!(
+            run(&mut e, 0x2924, 0, &[r(2), n(5)]),
+            0.0,
+            "not a weapon: 0 written"
+        );
     }
 
     #[test]
@@ -502,14 +529,22 @@ mod equipped {
         assert_eq!(run(&mut e, 0x2940, ACTOR, &[r(1)]), auto, "no anim data");
         e.mem.set_u32(ANIM + 0x100, ANIM);
         e.mem.set_u32(ANIM + 0x104, 0xab21);
-        assert_eq!(run(&mut e, 0x2940, ACTOR, &[r(1)]), 0.0, "another animation");
+        assert_eq!(
+            run(&mut e, 0x2940, ACTOR, &[r(1)]),
+            0.0,
+            "another animation"
+        );
         assert_eq!(
             calls_to(PICK_BEST_ANIMATION),
             vec![vec![ANIM, (4 << 8) | 0x20, 0]]
         );
         e.mem.set_u32(ANIM + 0x104, 0xffff_0420);
         assert_eq!(run(&mut e, 0x2940, ACTOR, &[r(1)]), 0.0, "no group");
-        assert_eq!(calls_to(GET_ANIM_GROUP), vec![vec![ANIM, 0x0420]], "16 bits");
+        assert_eq!(
+            calls_to(GET_ANIM_GROUP),
+            vec![vec![ANIM, 0x0420]],
+            "16 bits"
+        );
         e.mem.set_u32(ANIM + 0x108, GROUP);
         e.mem.set_u32(GROUP + 0x14, 1);
         e.mem.set_u32(GROUP + 0x18, TIMES);
@@ -562,7 +597,11 @@ mod equipped {
         e.mem.set_f32(WEAP + 0x190, 0.5);
         let m = 1.25f32 + 0.5f32;
         let want = f64::from(m * m * 3.0f32 * 0.8f32);
-        assert_eq!(run(&mut e, 0x2940, ACTOR, &[r(4)]), want, "slot 2: slot 1 has no mod");
+        assert_eq!(
+            run(&mut e, 0x2940, ACTOR, &[r(4)]),
+            want,
+            "slot 2: slot 1 has no mod"
+        );
         slot(&mut e, 1, 0x108);
         let plain = f64::from(1.25f32 * 1.25f32 * 3.0f32 * 0.8f32);
         assert_eq!(run(&mut e, 0x2940, ACTOR, &[r(4)]), plain, "the whole word");

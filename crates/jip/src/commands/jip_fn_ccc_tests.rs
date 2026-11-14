@@ -91,7 +91,10 @@ fn setup() -> Engine {
     e.mem.set_u32(ACTOR2 + 0x20, NPC2);
     e.mem.set_u32(PLAIN + 0x20, NPC);
     e.mem.set_u32(0x011d_ea3c, PLAYER_AT);
-    for (i, f) in [ACTOR, FACTION, FACTION2, PACKAGE, TOPIC].iter().enumerate() {
+    for (i, f) in [ACTOR, FACTION, FACTION2, PACKAGE, TOPIC]
+        .iter()
+        .enumerate()
+    {
         set_ref(&mut e, i as u16 + 1, *f);
     }
     e.register(MAX_CARRY_WEIGHT, |e, w| {
@@ -169,9 +172,17 @@ fn distance() {
     let want = super::super::ln_fn_math::point2_distance([1.5, -2.0, 100.25], [-1.5, 2.0, -0.5]);
     assert_eq!(run(&mut e, 0x2701, ACTOR, &[r(6)]), f64::from(want));
     assert_eq!(run(&mut e, 0x2701, ACTOR, &[r(6), n(3)]), f64::from(want));
-    assert_eq!(run(&mut e, 0x2701, ACTOR, &[r(6), n(0)]), f64::from(want), "any axis but 4");
+    assert_eq!(
+        run(&mut e, 0x2701, ACTOR, &[r(6), n(0)]),
+        f64::from(want),
+        "any axis but 4"
+    );
     assert_eq!(run(&mut e, 0x2701, ACTOR, &[r(6), n(4)]), 100.75);
-    assert_eq!(run(&mut e, 0x2701, ACTOR2, &[r(1), n(4)]), 100.75, "absolute");
+    assert_eq!(
+        run(&mut e, 0x2701, ACTOR2, &[r(1), n(4)]),
+        100.75,
+        "absolute"
+    );
     assert_eq!(run(&mut e, 0x2701, ACTOR, &[r(6), n(5)]), f64::from(want));
 }
 
@@ -202,7 +213,11 @@ fn in_faction() {
     e.mem.set_u8(DATA + 0xc, 0xff);
     e.mem.set_u32(DATA + 0x10, FACTION2);
     e.mem.set_u8(DATA + 0x14, 3);
-    assert_eq!(ask(&mut e, ACTOR, &[r(3)]), 0.0, "the first entry's -1 decides");
+    assert_eq!(
+        ask(&mut e, ACTOR, &[r(3)]),
+        0.0,
+        "the first entry's -1 decides"
+    );
     e.mem.set_u8(DATA + 0xc, 2);
     assert_eq!(ask(&mut e, ACTOR, &[r(3)]), 1.0);
     assert_eq!(ask(&mut e, ACTOR, &[r(3), n(1)]), 1.0, "or");
@@ -244,7 +259,11 @@ fn nccs() {
     assert_eq!(e.mem.u8(NPC + 6) & 0x08, 0);
     assert_eq!(e.hook_users(Hook::DoActivate), 1);
     run(&mut e, 0x2705, ACTOR, &[n(0)]);
-    assert_eq!(e.hook_users(Hook::MergeEventMask), 1, "not in the set: nothing");
+    assert_eq!(
+        e.hook_users(Hook::MergeEventMask),
+        1,
+        "not in the set: nothing"
+    );
     run(&mut e, 0x2705, ACTOR, &[n(1)]);
     run(&mut e, 0x2707, 0, &[]);
     assert_eq!(e.mem.u32(SCRIPT + 0x20), 18);
@@ -256,7 +275,15 @@ fn nccs() {
     e.mem.set_u32(NPC + 0xf8, 0);
     run(&mut e, 0x2705, ACTOR, &[]);
     run(&mut e, 0x2705, PLAIN, &[]);
-    assert_eq!(e.ext::<Jip>().ccc.nccs_actors.iter().copied().collect::<Vec<_>>(), vec![NPC]);
+    assert_eq!(
+        e.ext::<Jip>()
+            .ccc
+            .nccs_actors
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![NPC]
+    );
     assert_eq!(e.hook_users(Hook::DoActivate), 0);
 }
 
@@ -279,7 +306,11 @@ fn encumbrance() {
     let want = 100.0 * 37.5 / 300.0;
     assert_eq!(run(&mut e, 0x2706, ACTOR, &[]), want);
     assert_eq!(eval(&mut e, 0x2706, ACTOR), want);
-    assert_eq!(e.mem.u32(CHANGES + 8), 0xbf80_0000, "the cached weight reset");
+    assert_eq!(
+        e.mem.u32(CHANGES + 8),
+        0xbf80_0000,
+        "the cached weight reset"
+    );
     assert_eq!(calls_to(MAX_CARRY_WEIGHT)[0], vec![ACTOR]);
     e.mem.set_f32(ACTOR + 0x64, 7.0);
     e.mem.set_f32(CHANGES + 0x20, 1.0);
@@ -381,7 +412,11 @@ fn position_text() {
     assert_eq!(pos(&mut e, PLAIN), b"1001000 -12 4095 6");
     e.mem.set_u32(CELL + 0xc0, WORLD);
     place(&mut e, PLAIN, 0.5, -0.5, -1.5);
-    assert_eq!(pos(&mut e, PLAIN), b"1001300 0 0 0", "the worldspace's id; z+1 after the cut");
+    assert_eq!(
+        pos(&mut e, PLAIN),
+        b"1001300 0 0 0",
+        "the worldspace's id; z+1 after the cut"
+    );
     // The persistent cell's extra when the reference has no parent cell.
     e.mem.set_u32(PLAIN + 0x40, 0);
     put_extra(&mut e, PLAIN + 0x44, X1, 0x0c, CELL2);
@@ -399,12 +434,31 @@ fn task_package_flags() {
         e.mem.u32(PACKAGE + 0x1c)
     };
     let all = base | 0x3fff_fffe;
-    let (run_, sneak, drawn, idle, cont, alert, walk) =
-        (1 << 13, 1 << 17, 1 << 23, 1 << 24, 1 << 26, 1 << 27, 1 << 29);
-    assert_eq!(set(&mut e, 1, 1, 0), (all | idle | alert | walk) & !(run_ | drawn | cont) & !sneak);
-    assert_eq!(set(&mut e, 2, 0, 1), (all | run_ | idle | alert) & !(drawn | cont | walk) | sneak);
-    assert_eq!(set(&mut e, 0, 3, 0), (all | run_ | drawn | cont) & !(idle | alert | walk) & !sneak);
-    assert_eq!(set(&mut e, 0, 0, -1), (all | run_ | drawn) & !(idle | cont | alert | walk) | sneak);
+    let (run_, sneak, drawn, idle, cont, alert, walk) = (
+        1 << 13,
+        1 << 17,
+        1 << 23,
+        1 << 24,
+        1 << 26,
+        1 << 27,
+        1 << 29,
+    );
+    assert_eq!(
+        set(&mut e, 1, 1, 0),
+        (all | idle | alert | walk) & !(run_ | drawn | cont) & !sneak
+    );
+    assert_eq!(
+        set(&mut e, 2, 0, 1),
+        (all | run_ | idle | alert) & !(drawn | cont | walk) | sneak
+    );
+    assert_eq!(
+        set(&mut e, 0, 3, 0),
+        (all | run_ | drawn | cont) & !(idle | alert | walk) & !sneak
+    );
+    assert_eq!(
+        set(&mut e, 0, 0, -1),
+        (all | run_ | drawn) & !(idle | cont | alert | walk) | sneak
+    );
     // From all clear, each case's set bits.
     e.mem.set_u32(PACKAGE + 0x1c, 0);
     run(&mut e, 0x2702, 0, &[r(4), n(0), n(0), n(0)]);
@@ -451,9 +505,17 @@ fn location_names() {
     place(&mut e, M2, 9000.0, 100.0, 0.0);
     place(&mut e, M3, 50.0, 50.0, 0.0);
     place(&mut e, PLAIN, 10.0, 10.0, 0.0);
-    assert_eq!(name(&mut e), b"at Goodsprings", "same grid cell, within 4096");
+    assert_eq!(
+        name(&mut e),
+        b"at Goodsprings",
+        "same grid cell, within 4096"
+    );
     let grid = e.ext::<Jip>().ccc.marker_grids[&WORLD].clone();
-    assert_eq!(grid.len(), 2, "the unnamed marker and the plain reference left out");
+    assert_eq!(
+        grid.len(),
+        2,
+        "the unnamed marker and the plain reference left out"
+    );
     assert_eq!(grid[&grid_cell(100.0, 100.0)], M1);
     assert_eq!(grid[&grid_cell(9000.0, 100.0)], M2);
     // Two cells east of Primm's: the ring at radius 2 finds it, east.
@@ -464,7 +526,10 @@ fn location_names() {
     assert_eq!(name(&mut e), b"at Goodsprings");
     place(&mut e, PLAIN, 9000.0 - 4500.0, 100.0 + 4500.0 * 3.0, 0.0);
     let n = name(&mut e);
-    assert!(n.ends_with(b"of Goodsprings") || n.ends_with(b"of Primm"), "{n:?}");
+    assert!(
+        n.ends_with(b"of Goodsprings") || n.ends_with(b"of Primm"),
+        "{n:?}"
+    );
     // The grid is kept: a marker added later is not seen.
     e.mem.set_u32(NODES + 0x14, NODES + 0x18);
     node(&mut e, NODES + 0x18, M3, 0);
@@ -522,7 +587,15 @@ fn grid_cells() {
     assert_eq!(grid_cell(0.0, 0.0), 0);
     assert_eq!(grid_cell(4095.9, 4096.0), 1);
     assert_eq!(grid_cell(4096.0, 0.0), 0x0001_0000);
-    assert_eq!(grid_cell(-0.5, -1.0), 0x0000_ffff, "-0.5 truncates to 0; -1 >> 12 is -1");
+    assert_eq!(
+        grid_cell(-0.5, -1.0),
+        0x0000_ffff,
+        "-0.5 truncates to 0; -1 >> 12 is -1"
+    );
     assert_eq!(grid_cell(-4096.0, -4097.0), 0xffff_fffe);
-    assert_eq!(grid_cell(f32::NAN, 1e10), 0, "the indefinite >> 12: 0xFFF80000, low 16 bits 0");
+    assert_eq!(
+        grid_cell(f32::NAN, 1e10),
+        0,
+        "the indefinite >> 12: 0xFFF80000, low 16 bits 0"
+    );
 }

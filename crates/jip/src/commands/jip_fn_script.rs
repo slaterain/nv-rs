@@ -153,8 +153,7 @@ fn get_script_event_disabled(e: &mut Engine, w: &[u32]) -> Ret {
         let flags = flags6(e, form);
         let disabled = if mask != 0 {
             flags & EVENT_DISABLED != 0
-                && e
-                    .ext::<Jip>()
+                && e.ext::<Jip>()
                     .world_hooks
                     .disabled_events
                     .get(&form)
@@ -204,9 +203,7 @@ fn fake_script_event(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     }
     let events = e.mem.u32(xscript + XSCRIPT_EVENTS);
-    if events != 0
-        && e.call(SET_ACTION_FLAG, &args![events, filter, mask]).u32() & 0xff != 0
-    {
+    if events != 0 && e.call(SET_ACTION_FLAG, &args![events, filter, mask]).u32() & 0xff != 0 {
         a.set_result(e, 1.0);
     }
     handled(true)

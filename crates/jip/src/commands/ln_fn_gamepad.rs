@@ -1,11 +1,11 @@
 //! `functions_ln/ln_fn_gamepad.h` (JIP LN NVSE): the XInput pad as JIP sees it and the changes
-//! scripts make to what the game reads. 29 of its 31 commands, over the core track's pad state
+//! scripts make to what the game reads. 27 of its 31 commands (the core track built
+//! `SetOnTriggerDownEventHandler` and `SetOnTriggerUpEventHandler`, `ui_hooks.rs`), over its pad state
 //! (`crate::input`: `s_controllerReady`, `s_gamePad` (the pad's own state before JIP's changes),
-//! `s_XIStateMods`, the dead zones) and its LN events (`crate::ln_events`: the triggers' handlers,
-//! which JIP's main-loop check calls).
+//! `s_XIStateMods`, the dead zones).
 //!
 //! Left for later: `SetDeadZoneLS` and `SetDeadZoneRS` write the new dead zone into the game's own
-//! code (`SafeWrite32` at thirteen and eighteen immediates of `PlayerControls` and the interface,
+//! code (`SafeWrite32` at thirteen and eighteen immediates in the game's code,
 //! `0x717B90` ... `0xA23E9C`): the translated functions hold those numbers as constants, so each
 //! site needs a seam first. Until then the dead zones keep JIP's first values (7849 and 8689),
 //! which the getters here read.
@@ -33,8 +33,6 @@ pub static COMMANDS: Handlers = &[
     (0x22a8, release_trigger),
     (0x27fd, tap_button),
     (0x27fe, tap_trigger),
-    (0x27ff, set_on_trigger_down_event_handler),
-    (0x2800, set_on_trigger_up_event_handler),
     (0x289e, set_stick_disabled),
 ];
 
@@ -53,9 +51,6 @@ pub static CONDITIONS: super::Conditions = &[
     (0x22a9, is_trigger_held, is_trigger_held_eval),
     (0x289d, is_stick_disabled, is_stick_disabled_eval),
 ];
-
-/// `kFormType_Script`.
-const SCRIPT: u8 = 0x11;
 
 fn ready(e: &mut Engine) -> bool {
     e.ext::<Jip>().input.ready
@@ -442,50 +437,6 @@ fn set_stick_disabled(e: &mut Engine, w: &[u32]) -> Ret {
         }
     }
     handled(true)
-}
-
-// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_gamepad.h:
-// SetOnTriggerEventHandler_Execute.
-/// A script (a form of type Script) added to or removed from the handlers of a trigger going
-/// down (`down`) or up, only while the controller is ready: the trigger is the third
-/// argument's low bit (1 the right). Adding sets the event's flag; removing clears it when
-/// neither trigger has a handler of that kind left. A handler keeps its script's lambda
-/// variables while it is set.
-fn set_on_trigger_event_handler(e: &mut Engine, w: &[u32], down: bool) -> Ret {
-    let a = CommandArgs::new(w);
-    let read = Read::of(e, &a);
-    let script = read.form(0);
-    if !read.ok || script == 0 || super::type_of(e, script) != SCRIPT || !ready(e) {
-        return handled(true);
-    }
-    let event = usize::from(down);
-    let index = (((read.int(2, 0) & 1) << 1) as usize) + event;
-    let mask = if down {
-        crate::ln_events::mask(crate::ln_events::id::TRIGGER_DOWN)
-    } else {
-        crate::ln_events::mask(crate::ln_events::id::TRIGGER_UP)
-    };
-    if read.int(1, 0) != 0 {
-        if e.ext::<Jip>().ln_events.triggers[index].insert(script) {
-            crate::ln_events::capture(e, script);
-            e.ext::<Jip>().ln_events.flags |= mask;
-        }
-    } else if e.ext::<Jip>().ln_events.triggers[index].remove(&script) {
-        crate::ln_events::release(e, script);
-        let s = &mut e.ext::<Jip>().ln_events;
-        if s.triggers[event].is_empty() && s.triggers[event + 2].is_empty() {
-            s.flags &= !mask;
-        }
-    }
-    handled(true)
-}
-
-fn set_on_trigger_down_event_handler(e: &mut Engine, w: &[u32]) -> Ret {
-    set_on_trigger_event_handler(e, w, true)
-}
-
-fn set_on_trigger_up_event_handler(e: &mut Engine, w: &[u32]) -> Ret {
-    set_on_trigger_event_handler(e, w, false)
 }
 
 #[cfg(test)]

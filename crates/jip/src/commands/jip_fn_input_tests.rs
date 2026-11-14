@@ -49,7 +49,11 @@ fn controls_held_by_keys() {
     call(&mut e, 0x2805, &[n(4)]);
     assert_eq!(held(&mut e), vec![0x11, 0x101]);
     call(&mut e, 0x2805, &[n(5)]);
-    assert_eq!(held(&mut e), vec![0x11, 0x101, 0x102], "no key: the button alone");
+    assert_eq!(
+        held(&mut e),
+        vec![0x11, 0x101, 0x102],
+        "no key: the button alone"
+    );
     call(&mut e, 0x2805, &[n(27)]);
     assert_eq!(held(&mut e), vec![0x11, 0x20, 0x101, 0x102]);
     call(&mut e, 0x2806, &[n(4)]);
@@ -74,7 +78,10 @@ fn controls_held_on_the_pad() {
     call(&mut e, 0x2805, &[n(6)]);
     let mods = e.ext::<Jip>().input.mods;
     assert_eq!(mods.button_hold, 0x1000, "A");
-    assert_eq!(mods.trigger_mods, 0x0f, "both triggers held, the disabled bits kept");
+    assert_eq!(
+        mods.trigger_mods, 0x0f,
+        "both triggers held, the disabled bits kept"
+    );
     assert!(held(&mut e).is_empty());
     call(&mut e, 0x2806, &[n(5)]);
     call(&mut e, 0x2806, &[n(4)]);

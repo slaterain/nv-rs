@@ -102,11 +102,19 @@ fn quest_delay() {
     e.mem.set_u32(QUEST + 0x1c, SCRIPT_A);
     assert_eq!(run(&mut e, 0x2622, 0, &[r(1)]), 2.5);
     e.mem.set_f32(SCRIPT_A + 0x38, 0.1);
-    assert_eq!(run(&mut e, 0x2622, 0, &[r(1)]), f64::from(0.1f32), "a float");
+    assert_eq!(
+        run(&mut e, 0x2622, 0, &[r(1)]),
+        f64::from(0.1f32),
+        "a float"
+    );
     run(&mut e, 0x2623, 0, &[r(1), z(-3.25)]);
     assert_eq!(e.mem.f32(SCRIPT_A + 0x38), -3.25);
     run(&mut e, 0x2623, 0, &[r(1), z(1e40)]);
-    assert_eq!(e.mem.f32(SCRIPT_A + 0x38), f32::INFINITY, "(float) of a huge double");
+    assert_eq!(
+        e.mem.f32(SCRIPT_A + 0x38),
+        f32::INFINITY,
+        "(float) of a huge double"
+    );
     // Another quest has no script: nothing written anywhere.
     e.mem.set_f32(SCRIPT_A + 0x38, 7.0);
     run(&mut e, 0x2623, 0, &[r(6), z(1.0)]);
@@ -139,7 +147,11 @@ fn script_event_disabled() {
     assert_eq!(ask(&mut e, b"Nothing"), 0.0);
     e.mem.set_u8(ACTI + 6, 0x08);
     assert_eq!(ask(&mut e, b"OnActivate"), 1.0);
-    assert_eq!(ask(&mut e, b"OnAdd"), 0.0, "bit 3 alone does not do for a mask");
+    assert_eq!(
+        ask(&mut e, b"OnAdd"),
+        0.0,
+        "bit 3 alone does not do for a mask"
+    );
     disabled_events(&mut e).clear();
     e.mem.set_u8(ACTI + 6, 0x04);
     assert_eq!(ask(&mut e, b"OnAdd"), 0.0, "flag without an entry");
@@ -176,10 +188,7 @@ fn fake_script_event() {
     assert_eq!(ev(&mut e, b"OnAdd", None), (0.0, vec![]), "no event list");
     e.mem.set_u32(XSCRIPT + 0x10, EVENTS);
     e.mem.set_u32(EVENTS + 0x40, 1);
-    assert_eq!(
-        ev(&mut e, b"OnAdd", None),
-        (1.0, vec![vec![EVENTS, 0, 1]])
-    );
+    assert_eq!(ev(&mut e, b"OnAdd", None), (1.0, vec![vec![EVENTS, 0, 1]]));
     assert_eq!(
         ev(&mut e, b"ondrop", Some(3)),
         (1.0, vec![vec![EVENTS, ACTI, 4]])
@@ -249,7 +258,11 @@ fn waiting_scripts() {
     assert_eq!(run(&mut e, 0x2811, 0, &[r(1)]), 1.0);
     e.mem.set_u8(QUEST + 6, 0x08);
     e.mem.set_u8(QUEST + 5, 0);
-    assert_eq!(run(&mut e, 0x2811, 0, &[r(1)]), 0.0, "byte 6 is not the flag");
+    assert_eq!(
+        run(&mut e, 0x2811, 0, &[r(1)]),
+        0.0,
+        "byte 6 is not the flag"
+    );
     // StopScriptWaiting: the wait cut to one block, only with the flag.
     let wait = ScriptWait {
         owner: REFR,
@@ -257,7 +270,14 @@ fn waiting_scripts() {
         ..ScriptWait::default()
     };
     waits(&mut e).insert(REFR, wait);
-    waits(&mut e).insert(QUEST, ScriptWait { owner: QUEST, iterations: 5, ..wait });
+    waits(&mut e).insert(
+        QUEST,
+        ScriptWait {
+            owner: QUEST,
+            iterations: 5,
+            ..wait
+        },
+    );
     run(&mut e, 0x2812, REFR, &[]);
     assert_eq!(waits(&mut e)[&REFR].iterations, 1);
     run(&mut e, 0x2812, REFR, &[r(1)]);
@@ -317,8 +337,14 @@ fn script_blocks_disabled() {
     assert_eq!(
         blocks(&mut e, SCRIPT_A),
         vec![
-            DisabledBlock { block_type: 0, type_at: at[0] },
-            DisabledBlock { block_type: 0, type_at: at[2] },
+            DisabledBlock {
+                block_type: 0,
+                type_at: at[0]
+            },
+            DisabledBlock {
+                block_type: 0,
+                type_at: at[2]
+            },
         ]
     );
     assert_eq!(get(&mut e, 0), 1.0);
@@ -333,7 +359,10 @@ fn script_blocks_disabled() {
     assert_eq!(types(&e), [0, 0x0e, 0]);
     assert_eq!(
         blocks(&mut e, SCRIPT_A),
-        vec![DisabledBlock { block_type: 2, type_at: at[1] }]
+        vec![DisabledBlock {
+            block_type: 2,
+            type_at: at[1]
+        }]
     );
     // A type with none disabled: nothing.
     set(&mut e, 0, Some(5));
@@ -341,10 +370,18 @@ fn script_blocks_disabled() {
     // The last one goes: the entry goes.
     set(&mut e, 0, Some(2));
     assert_eq!(types(&e), [0, 2, 0]);
-    assert!(!e.ext::<Jip>().script.disabled_blocks.contains_key(&SCRIPT_A));
+    assert!(!e
+        .ext::<Jip>()
+        .script
+        .disabled_blocks
+        .contains_key(&SCRIPT_A));
     // A type the script has no block of: no entry made.
     set(&mut e, 1, Some(7));
-    assert!(!e.ext::<Jip>().script.disabled_blocks.contains_key(&SCRIPT_A));
+    assert!(!e
+        .ext::<Jip>()
+        .script
+        .disabled_blocks
+        .contains_key(&SCRIPT_A));
     // Negative: disabling does nothing; enabling gives every block back and drops the entry.
     set(&mut e, 1, None);
     set(&mut e, 1, Some(-5));
@@ -353,7 +390,11 @@ fn script_blocks_disabled() {
     set(&mut e, 1, Some(0));
     set(&mut e, 0, None);
     assert_eq!(types(&e), [0, 2, 0]);
-    assert!(!e.ext::<Jip>().script.disabled_blocks.contains_key(&SCRIPT_A));
+    assert!(!e
+        .ext::<Jip>()
+        .script
+        .disabled_blocks
+        .contains_key(&SCRIPT_A));
     // Enabling all of a script with none disabled (JIP's `Remove` on an iterator that found
     // nothing): nothing changes.
     set(&mut e, 0, None);
@@ -386,8 +427,14 @@ fn script_blocks_edges() {
     assert_eq!(
         blocks(&mut e, SCRIPT_A),
         vec![
-            DisabledBlock { block_type: 0x25, type_at: at[0] },
-            DisabledBlock { block_type: 0x0e, type_at: at[0] },
+            DisabledBlock {
+                block_type: 0x25,
+                type_at: at[0]
+            },
+            DisabledBlock {
+                block_type: 0x0e,
+                type_at: at[0]
+            },
         ]
     );
     run(&mut e, 0x2815, 0, &[r(2), n(0), n(0x25)]);
@@ -409,9 +456,16 @@ fn script_blocks_walk() {
     );
     give_script(&mut e, SCRIPT_A, DATA_A, len);
     let has = |e: &mut Engine, kind: i32| run(e, 0x2828, 0, &[n(kind), r(2)]);
-    assert_eq!((has(&mut e, 3), has(&mut e, 4), has(&mut e, 5)), (1.0, 1.0, 0.0));
+    assert_eq!(
+        (has(&mut e, 3), has(&mut e, 4), has(&mut e, 5)),
+        (1.0, 1.0, 0.0)
+    );
     e.mem.set_u32(SCRIPT_A + 0x20, 18 + 4);
-    assert_eq!(has(&mut e, 4), 0.0, "the length ends the walk after the first");
+    assert_eq!(
+        has(&mut e, 4),
+        0.0,
+        "the length ends the walk after the first"
+    );
     assert_eq!(has(&mut e, 3), 1.0);
     e.mem.set_u32(SCRIPT_A + 0x20, len);
     e.mem.set_u32(DATA_A + 4 + 18 + 18 - 4, 0x12);
@@ -433,7 +487,11 @@ fn has_script_block() {
     let has = |e: &mut Engine, this: u32, a: &[Vec<u8>]| run(e, 0x2828, this, a);
     assert_eq!(has(&mut e, 0, &[n(0x25), r(4)]), 1.0);
     assert_eq!(has(&mut e, 0, &[n(0x26), r(4)]), 0.0, "past 0x25");
-    assert_eq!(has(&mut e, 0, &[n(0x25), r(3)]), 0.0, "the activator has no script");
+    assert_eq!(
+        has(&mut e, 0, &[n(0x25), r(3)]),
+        0.0,
+        "the activator has no script"
+    );
     e.mem.set_u32(ACTI + 0x5c + 4, SCRIPT_B);
     assert_eq!(has(&mut e, 0, &[n(0x25), r(3)]), 1.0);
     assert_eq!(has(&mut e, REFR, &[n(0x25)]), 1.0, "the reference's base");
@@ -489,7 +547,11 @@ fn scripted_activate() {
     want[42..44].copy_from_slice(&0x2215u16.to_le_bytes());
     assert_eq!(e.mem.bytes(DATA_A, len), want);
     run(&mut e, 0x282b, REFR, &[n(1)]);
-    assert_eq!(e.mem.bytes(DATA_A, len), want, "already disabled: nothing more");
+    assert_eq!(
+        e.mem.bytes(DATA_A, len),
+        want,
+        "already disabled: nothing more"
+    );
     run(&mut e, 0x282b, REFR, &[n(0)]);
     assert_eq!(e.mem.bytes(DATA_A, len), before);
 }
@@ -508,5 +570,8 @@ fn execute_script() {
     assert!(calls_to(SCRIPT_RUN).is_empty());
     e.mem.set_u32(XSCRIPT + 0x10, EVENTS);
     run(&mut e, 0x283a, REFR, &[]);
-    assert_eq!(calls_to(SCRIPT_RUN), vec![vec![SCRIPT_A, REFR, EVENTS, 0, 0]]);
+    assert_eq!(
+        calls_to(SCRIPT_RUN),
+        vec![vec![SCRIPT_A, REFR, EVENTS, 0, 0]]
+    );
 }

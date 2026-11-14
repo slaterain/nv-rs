@@ -299,8 +299,7 @@ fn marker_grid(e: &mut Engine, world: u32) -> HashMap<u32, u32> {
     }
     let mut grid = HashMap::new();
     let cell = e.mem.u32(world + WS_CELL);
-    if cell != 0 && (e.mem.u16(world + WS_MAP_PATH_LEN) != 0 || e.mem.u32(world + WS_PARENT) != 0)
-    {
+    if cell != 0 && (e.mem.u16(world + WS_MAP_PATH_LEN) != 0 || e.mem.u32(world + WS_PARENT) != 0) {
         let head = Ptr::<super::forms::ListNode>::new(cell + CELL_OBJECTS);
         for refr in super::list_items(e, head) {
             if refr == 0 {
