@@ -330,3 +330,192 @@ fn an_actor_base_container_offset() {
     e.mem.set_u32(FC1 + 4, WEAP);
     assert_eq!(call(&mut e, 0x22f7, &[r(1), r(6)]).1, 6.0);
 }
+
+const L4: u32 = FORMS + 0x5400;
+const L5: u32 = FORMS + 0x5500;
+const L6: u32 = FORMS + 0x5600;
+const XH4: u32 = FORMS + 0x6400;
+const XHK3: u32 = FORMS + 0x6500;
+const XH6: u32 = FORMS + 0x6600;
+const E_M: u32 = FORMS + 0x4300;
+const FC2: u32 = FORMS + 0x7100;
+const FC3: u32 = FORMS + 0x7200;
+
+/// SetHotkey 5 on the armour with health 0.5: its only list L3 (hotkey 5, no health) does not
+/// match, so it loses the index and is left empty; `CleanEmpty` frees it, and as the first node
+/// with nothing after it, that node is emptied (`RemoveMe`). Nobody gets the hotkey.
+#[test]
+fn the_items_first_list_left_empty_alone() {
+    let mut e = setup();
+    call(&mut e, 0x2319, &[n(5), r(2), z(0.5)]);
+    assert_eq!(calls_to(REMOVE_BY_TYPE_FN), vec![vec![L3, 0x4a]]);
+    assert_eq!(freed(), vec![L3]);
+    assert_eq!((e.mem.u32(NODES + 0x30), e.mem.u32(NODES + 0x34)), (0, 0));
+    assert!(allocations().is_empty());
+}
+
+/// The same with a second list L4 (health 0.5) after L3: L4 gets the hotkey (a new 0x10-byte
+/// extra), L3 is freed, the first node takes L4 and the second node is freed.
+#[test]
+fn the_items_first_list_left_empty_with_one_after() {
+    let mut e = setup();
+    node(&mut e, NODES + 0x30, L3, NODES + 0x50);
+    node(&mut e, NODES + 0x50, L4, 0);
+    put_extra(&mut e, L4, XH4, 0x25, 0.5f32.to_bits());
+    let block = heap_next(&e);
+    call(&mut e, 0x2319, &[n(5), r(2), z(0.5)]);
+    assert_eq!(allocations(), vec![0x10]);
+    assert_eq!(e.mem.u32(block), 0x0101_592c);
+    assert_eq!(hotkey_of(&e, L4), Some(4));
+    assert_eq!(freed(), vec![L3, NODES + 0x50]);
+    assert_eq!((e.mem.u32(NODES + 0x30), e.mem.u32(NODES + 0x34)), (L4, 0));
+}
+
+/// Two lists both left empty (each held only a hotkey 5): `CleanEmpty` frees L3, the first node
+/// takes L4 (its node freed) and is looked at again: L4, empty too, is freed and the first node
+/// emptied.
+#[test]
+fn the_items_first_two_lists_left_empty() {
+    let mut e = setup();
+    node(&mut e, NODES + 0x30, L3, NODES + 0x50);
+    node(&mut e, NODES + 0x50, L4, 0);
+    put_extra(&mut e, L4, XH4, 0x4a, 4);
+    call(&mut e, 0x2319, &[n(5), r(2), z(0.5)]);
+    assert_eq!(freed(), vec![L3, NODES + 0x50, L4]);
+    assert_eq!(
+        (e.mem.u32(NODES + 0x30), e.mem.u32(NODES + 0x34)),
+        (0, 0)
+    );
+    assert!(allocations().is_empty());
+}
+
+/// RestoreHotkeys with an inner array whose form is none: `SetHotkey` with no form clears the
+/// index (`ClearHotkey`): the first list with hotkey 5 (the armour's L3) loses it, and left
+/// empty, is taken out and freed. The inner arrays that are not three long are passed over.
+#[test]
+fn a_hotkey_with_no_form_cleared() {
+    let mut e = setup();
+    let mut vals = Vec::new();
+    for i in 0..8 {
+        let inner = if i == 4 {
+            array_of(&mut e, vec![V::Form(0), V::Number(0.0), V::Number(0.0)])
+        } else {
+            array_of(&mut e, vec![V::Number(0.0)])
+        };
+        vals.push(V::Array(inner));
+    }
+    let id = array_of(&mut e, vals);
+    call(&mut e, 0x2217, &[n(id as i32)]);
+    assert_eq!(calls_to(REMOVE_BY_TYPE_FN), vec![vec![L3, 0x4a]]);
+    assert_eq!(freed(), vec![L3]);
+    assert_eq!(e.mem.u32(NODES + 0x30), 0);
+    assert!(allocations().is_empty());
+}
+
+/// A misc item's list with hotkey 5 is not one of the three types: SetHotkey 5 on the weapon
+/// takes the index from the armour only, ClearAllHotkeys passes it over, and SetHotkey on the
+/// misc item itself changes nothing.
+#[test]
+fn another_types_hotkey_left_alone() {
+    let mut e = setup();
+    node(&mut e, NODES + 0x10, E_L, NODES + 0x18);
+    node(&mut e, NODES + 0x18, E_M, 0);
+    e.mem.set_u32(E_M, NODES + 0x58);
+    e.mem.set_u32(E_M + 8, MISC);
+    node(&mut e, NODES + 0x58, L5, 0);
+    put_extra(&mut e, L5, XHK3, 0x4a, 4);
+    call(&mut e, 0x2319, &[n(5), r(1), z(0.5), n(3)]);
+    assert_eq!(freed(), vec![L3]);
+    assert_eq!(hotkey_of(&e, L5), Some(4));
+    call(&mut e, 0x222c, &[]);
+    assert_eq!(hotkey_of(&e, L5), Some(4));
+    call(&mut e, 0x2319, &[n(2), r(4)]);
+    assert_eq!(hotkey_of(&e, L5), Some(4));
+    assert_eq!(e.mem.u32(NODES + 0x58), L5);
+    assert_eq!(allocations(), vec![0x10], "only the weapon's hotkey");
+}
+
+/// An aid item's lists all match (health and flags are not compared): its list with health 0.5
+/// takes hotkey 2 asked with health 1.0 and flags 0.
+#[test]
+fn an_aid_items_list_matches_any_health() {
+    let mut e = setup();
+    e.mem.set_u32(E_L, NODES + 0x60);
+    node(&mut e, NODES + 0x60, L6, 0);
+    put_extra(&mut e, L6, XH6, 0x25, 0.5f32.to_bits());
+    call(&mut e, 0x2319, &[n(2), r(3), z(1.0), n(0)]);
+    assert_eq!(hotkey_of(&e, L6), Some(1));
+    assert_eq!(allocations(), vec![0x10]);
+}
+
+/// An entry whose list of lists is there but empty (its first node holds none): a plain hotkey
+/// makes a new list (0x20, then its hotkey 0x10) that goes into that first node, no node made;
+/// a hotkey with a health asked makes nothing.
+#[test]
+fn a_new_list_into_an_empty_first_node() {
+    let mut e = setup();
+    e.mem.set_u32(E_L, NODES + 0x60);
+    node(&mut e, NODES + 0x60, 0, 0);
+    call(&mut e, 0x2319, &[n(3), r(3), z(0.5)]);
+    assert!(allocations().is_empty(), "a health asked");
+    assert_eq!(e.mem.u32(NODES + 0x60), 0);
+    let first = heap_next(&e);
+    call(&mut e, 0x2319, &[n(3), r(3)]);
+    assert_eq!(allocations(), vec![0x20, 0x10]);
+    assert_eq!(
+        (e.mem.u32(NODES + 0x60), e.mem.u32(NODES + 0x64)),
+        (first, 0)
+    );
+    assert_eq!(e.mem.u32(first), 0x0101_43e8);
+    assert_eq!(hotkey_of(&e, first), Some(2));
+}
+
+/// The container with WEAP, ARMO (and MISC with `three`), one each, in that order.
+fn items(e: &mut Engine, three: bool) {
+    node(e, CONT + 0x34, FC1, NODES + 0x70);
+    node(e, NODES + 0x70, FC2, if three { NODES + 0x78 } else { 0 });
+    node(e, NODES + 0x78, FC3, 0);
+    for (fc, f) in [(FC1, WEAP), (FC2, ARMO), (FC3, MISC)] {
+        e.mem.set_u32(fc, 1);
+        e.mem.set_u32(fc + 4, f);
+    }
+}
+
+/// BaseRemoveItem taking the last item out: its node freed and unlinked; then the first, now
+/// alone: the first node emptied, nothing freed (the items themselves are never freed).
+#[test]
+fn base_items_removed_at_the_end() {
+    let mut e = setup();
+    items(&mut e, false);
+    call(&mut e, 0x22f9, &[r(2), n(1), r(5)]);
+    assert_eq!(freed(), vec![NODES + 0x70]);
+    assert_eq!((e.mem.u32(CONT + 0x34), e.mem.u32(CONT + 0x38)), (FC1, 0));
+    call(&mut e, 0x22f9, &[r(1), n(1), r(5)]);
+    assert_eq!(freed(), vec![NODES + 0x70]);
+    assert_eq!((e.mem.u32(CONT + 0x34), e.mem.u32(CONT + 0x38)), (0, 0));
+}
+
+/// The first item with one after it: the first node takes the second's item and next, the
+/// second node is freed.
+#[test]
+fn base_items_removed_at_the_head() {
+    let mut e = setup();
+    items(&mut e, false);
+    call(&mut e, 0x22f9, &[r(1), n(1), r(5)]);
+    assert_eq!(freed(), vec![NODES + 0x70]);
+    assert_eq!((e.mem.u32(CONT + 0x34), e.mem.u32(CONT + 0x38)), (FC2, 0));
+}
+
+/// The middle of three: its node freed, the first linked to the third.
+#[test]
+fn base_items_removed_in_the_middle() {
+    let mut e = setup();
+    items(&mut e, true);
+    call(&mut e, 0x22f9, &[r(2), n(1), r(5)]);
+    assert_eq!(freed(), vec![NODES + 0x70]);
+    assert_eq!(
+        (e.mem.u32(CONT + 0x34), e.mem.u32(CONT + 0x38)),
+        (FC1, NODES + 0x78)
+    );
+    assert_eq!(call(&mut e, 0x22f7, &[r(4), r(5)]).1, 1.0);
+}

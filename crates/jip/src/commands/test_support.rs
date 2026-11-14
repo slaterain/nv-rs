@@ -373,3 +373,53 @@ pub fn array_of(e: &mut Engine, values: Vec<nvse::vars::Value>) -> u32 {
 pub fn array_data(e: &Engine, id: f64) -> Vec<nvse::vars::Data> {
     crate::commands::jip_fn_aux_variable::array_values(e, id as u32).expect("an array")
 }
+
+/// Takes all that is left of xNVSE's built-ins data (a script that could take from it would
+/// fill it so), and checks nothing more fits.
+pub fn fill_builtins(e: &mut Engine) {
+    let mut size = engine_core::mem::BUILTIN_DATA.end - engine_core::mem::BUILTIN_DATA.start;
+    while size >= 4 {
+        if nvse::table::try_alloc(e, size).is_none() {
+            size /= 2;
+        }
+    }
+    assert_eq!(nvse::table::try_alloc(e, 4), None, "full");
+}
+
+thread_local! {
+    /// The lines the console printed under [`echoed`].
+    static ECHOES: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+}
+
+const ECHO_CONSOLE: u32 = FORMS + 0xf_e000;
+const CONSOLE_INSTANCE_FN: u32 = 0x0071_b160;
+const CONSOLE_PRINT_FN: u32 = 0x0071_d0a0;
+const EVALUATE_LINE_FN: u32 = 0x005e_1550;
+
+/// Runs `opcode` on `this` as a line typed in the open console: the console's instance and
+/// print and the game's `EvaluateLine` (`005E1550`, which calls the handler) as stand-ins. The
+/// result and the lines printed (JIP's echo passes each line as its own format).
+pub fn echoed(e: &mut Engine, opcode: u32, this: u32, args: &[Vec<u8>]) -> (f64, Vec<Vec<u8>>) {
+    ECHOES.with(|l| l.borrow_mut().clear());
+    e.register(CONSOLE_INSTANCE_FN, |_, _| eax(ECHO_CONSOLE));
+    e.register(CONSOLE_PRINT_FN, |e, a| {
+        assert_eq!(
+            (a[0], a[1]),
+            (ECHO_CONSOLE, a[2]),
+            "the line is its own format"
+        );
+        let line = nvse::table::guest_text(e, a[1]);
+        ECHOES.with(|l| l.borrow_mut().push(line));
+        eax(0)
+    });
+    e.register(EVALUATE_LINE_FN, |e, w| e.call(w[0], &w[1..9]));
+    crate::test_support::console(e, true);
+    let mut words = crate::test_support::line(e, opcode, args);
+    words[2] = this;
+    let mut w = vec![crate::test_support::execute_of(e, opcode)];
+    w.extend_from_slice(&words);
+    e.call(EVALUATE_LINE_FN, &w);
+    crate::test_support::console(e, false);
+    let lines = ECHOES.with(|l| std::mem::take(&mut *l.borrow_mut()));
+    (e.mem.f64(crate::test_support::RESULT), lines)
+}

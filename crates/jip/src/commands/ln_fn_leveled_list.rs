@@ -532,18 +532,19 @@ fn dump(e: &mut Engine, l: Ptr<L>, indent: usize, path: &mut Vec<u32>) {
             f64::from(e.get(Ptr::<ContainerExtra>::new(extra), ContainerExtra::health))
         };
         let pad = " ".repeat(indent.min(INDENT));
-        let text = nvse::table::guest_str(e, &[pad.as_bytes(), &name].concat());
         let [lo, hi] = nvse::commands::double_words(health);
         let (level, count) = (
             i32::from(e.get(data(d), D::level)) as u32,
             i32::from(e.get(data(d), D::count)) as u32,
         );
         let id = ref_id(e, form);
-        nvse::commands::console_print(
-            e,
-            "%s [%08X] Level: %d Count: %d Health: %.2f",
-            &[text, id, level, count, lo, hi],
-        );
+        super::with_guest_text(e, &[pad.as_bytes(), &name].concat(), |e, text| {
+            nvse::commands::console_print(
+                e,
+                "%s [%08X] Level: %d Count: %d Health: %.2f",
+                &[text, id, level, count, lo, hi],
+            );
+        });
         if let Some(inner) = inner {
             if !path.contains(&form) {
                 path.push(form);

@@ -411,3 +411,251 @@ fn faction_rank_zero_kept() {
     assert_eq!(call(&mut e, 0x2314, &[r(3), r(1)]).1, 0.0);
     assert!(freed().is_empty());
 }
+
+const FACTION3: u32 = FORMS + 0x3100;
+const MGEF2: u32 = FORMS + 0x3200;
+const ACTOR3: u32 = FORMS + 0x3300;
+
+/// The setup with a third faction (ref 10), a second base effect (ref 11) and an actor whose base
+/// form is null.
+fn setup_more() -> Engine {
+    let mut e = setup();
+    form(&mut e, FACTION3, 0x08, 0x0000_0110);
+    form(&mut e, MGEF2, 0x10, 0x0000_0111);
+    form(&mut e, ACTOR3, 0x3b, 0x0000_0203);
+    e.mem.set_u32(ACTOR3, ACTOR_VT);
+    set_ref(&mut e, 10, FACTION3);
+    set_ref(&mut e, 11, MGEF2);
+    e
+}
+
+/// The faction list at +0x5C: its first node's entry and next.
+fn factions(e: &Engine, base: u32) -> (u32, u32) {
+    (e.mem.u32(base + 0x5c), e.mem.u32(base + 0x60))
+}
+
+/// JIP's `SetFactionRank` on a list built from empty: a new entry with rank 0 goes into the
+/// empty first node (no node made); the next new entry is put first: a new node takes the old
+/// first entry and the old next, the first node the new entry (`tList::Insert`). Removing the
+/// first entry while one follows frees its 8 bytes, the first node takes the next node's entry and
+/// next, and that node is freed (`RemoveMe`); removing it alone frees only its entry and empties
+/// the first node.
+#[test]
+fn faction_entries_added_and_removed_at_the_head() {
+    let mut e = setup_more();
+    let d1 = heap_next(&e);
+    call(&mut e, 0x2315, &[r(3), n(0), r(1)]);
+    assert_eq!(allocations(), vec![8], "rank 0 is a rank: a new entry");
+    assert_eq!(factions(&e, NPC), (d1, 0));
+    assert_eq!((e.mem.u32(d1), e.mem.u8(d1 + 4)), (FACTION, 0));
+    assert_eq!(call(&mut e, 0x2314, &[r(3), r(1)]).1, 0.0);
+    let (d2, n2) = (d1 + 8, d1 + 0x10);
+    call(&mut e, 0x2315, &[r(4), n(3), r(1)]);
+    assert_eq!(allocations(), vec![8, 8, 8], "the entry, then the node");
+    assert_eq!(factions(&e, NPC), (d2, n2), "the new entry first");
+    assert_eq!((e.mem.u32(d2), e.mem.u8(d2 + 4)), (FACTION2, 3));
+    assert_eq!(
+        (e.mem.u32(n2), e.mem.u32(n2 + 4)),
+        (d1, 0),
+        "the old entry after"
+    );
+    // The first entry with one after it.
+    call(&mut e, 0x2315, &[r(4), n(-1), r(1)]);
+    assert_eq!(freed(), vec![d2, n2]);
+    assert_eq!(factions(&e, NPC), (d1, 0));
+    assert_eq!(call(&mut e, 0x2314, &[r(4), r(1)]).1, -1.0);
+    assert_eq!(call(&mut e, 0x2314, &[r(3), r(1)]).1, 0.0);
+    // The first entry alone.
+    call(&mut e, 0x2315, &[r(3), n(-1), r(1)]);
+    assert_eq!(freed(), vec![d2, n2, d1]);
+    assert_eq!(factions(&e, NPC), (0, 0));
+    assert_eq!(allocations().len(), 3);
+}
+
+/// Three entries (FACTION3, FACTION2, FACTION in that order): the middle one removed frees its
+/// entry and its node and links the first node to the last; then the last one the same.
+#[test]
+fn faction_entries_removed_in_the_middle_and_at_the_end() {
+    let mut e = setup_more();
+    let d1 = heap_next(&e);
+    for (f, rank) in [(3u16, 1), (4, 2), (10, 3)] {
+        call(&mut e, 0x2315, &[r(f), n(rank), r(1)]);
+    }
+    // FACTION in d1, FACTION2 in d2 (its node na got d1), FACTION3 in d3 (its node nb got d2).
+    let (d2, na, d3, nb) = (d1 + 8, d1 + 0x10, d1 + 0x18, d1 + 0x20);
+    assert_eq!(factions(&e, NPC), (d3, nb));
+    assert_eq!((e.mem.u32(nb), e.mem.u32(nb + 4)), (d2, na));
+    assert_eq!((e.mem.u32(na), e.mem.u32(na + 4)), (d1, 0));
+    call(&mut e, 0x2315, &[r(4), n(-1), r(1)]);
+    assert_eq!(freed(), vec![d2, nb]);
+    assert_eq!(factions(&e, NPC), (d3, na));
+    call(&mut e, 0x2315, &[r(3), n(-1), r(1)]);
+    assert_eq!(freed(), vec![d2, nb, d1, na]);
+    assert_eq!(factions(&e, NPC), (d3, 0));
+    assert_eq!(call(&mut e, 0x2314, &[r(10), r(1)]).1, 3.0);
+}
+
+/// An actor whose base form is null: JIP's `thisObj->baseForm` test fails, so neither command
+/// reads or writes anything (-1 stays the get's answer).
+#[test]
+fn faction_ranks_of_an_actor_with_no_base() {
+    let mut e = setup_more();
+    assert_eq!(call_on(&mut e, 0x2314, ACTOR3, &[r(3)]).1, -1.0);
+    call_on(&mut e, 0x2315, ACTOR3, &[r(3), n(2)]);
+    assert!(allocations().is_empty() && freed().is_empty());
+}
+
+/// A leveled actor (its base of file 0xFF, an `ExtraLeveledCreature` holding CREA at +0x10): the
+/// commands JIP runs through `GetActorBase` read and write CREA; the faction ranks use the raw
+/// base form (LVL_BASE), and so does `GetCombatStyle`'s fallback.
+#[test]
+fn commands_on_a_leveled_actor() {
+    let mut e = setup_more();
+    e.mem.set_u32(LVL_BASE + 0xc, 0xff00_0102);
+    put_extra(&mut e, ACTOR2 + 0x44, X1, 0x2e, 0);
+    e.mem.set_u32(X1 + 0x10, CREA);
+    call_on(&mut e, 0x2320, ACTOR2, &[n(-30)]);
+    assert_eq!(
+        (e.mem.f32(CREA + 0x44), e.mem.f32(LVL_BASE + 0x44)),
+        (-30.0, 0.0)
+    );
+    assert_eq!(call_on(&mut e, 0x231f, ACTOR2, &[]).1, -30.0);
+    call_on(&mut e, 0x2248, ACTOR2, &[n(77)]);
+    assert_eq!((e.mem.u8(CREA + 0xa3), e.mem.u32(CREA + 0xa4)), (1, 77));
+    assert_eq!(e.mem.u32(LVL_BASE + 0xa4), 0);
+    assert_eq!(call_on(&mut e, 0x2247, ACTOR2, &[]).1, 77.0);
+    e.mem.set_u8(CREA + 0x12c, 5);
+    assert_eq!(call_on(&mut e, 0x224d, ACTOR2, &[]).1, 5.0, "CREA's type");
+    call_on(&mut e, 0x22f6, ACTOR2, &[n(4), n(1)]);
+    assert_eq!((e.mem.u16(CREA + 0x4a), e.mem.u16(LVL_BASE + 0x4a)), (4, 0));
+    assert_eq!(call_on(&mut e, 0x22f5, ACTOR2, &[n(4)]).1, 1.0);
+    call_on(&mut e, 0x22fa, ACTOR2, &[r(1)]);
+    assert_eq!(
+        (e.mem.u32(CREA + 0x54), e.mem.u32(LVL_BASE + 0x54)),
+        (NPC, 0)
+    );
+    // Faction ranks: the raw base.
+    let d = heap_next(&e);
+    call_on(&mut e, 0x2315, ACTOR2, &[r(3), n(2)]);
+    assert_eq!(factions(&e, LVL_BASE), (d, 0));
+    assert_eq!(factions(&e, CREA), (0, 0));
+    assert_eq!(call_on(&mut e, 0x2314, ACTOR2, &[r(3)]).1, 2.0);
+    // The combat style's fallback: the raw base's virtual function.
+    e.register(CALL_CSTY, |_, w| Ret {
+        eax: match w[0] {
+            LVL_BASE => CSTY2,
+            CREA => CSTY,
+            _ => 0,
+        },
+        ..Ret::default()
+    });
+    call_on(&mut e, 0x2214, ACTOR2, &[]);
+    assert_eq!(form_result(&e), 0x108);
+}
+
+/// The radius is a signed 32-bit number.
+#[test]
+fn a_negative_aggro_radius() {
+    let mut e = setup();
+    e.mem.set_u8(NPC + 0xa3, 1);
+    e.mem.set_u32(NPC + 0xa4, (-100i32) as u32);
+    assert_eq!(call(&mut e, 0x2247, &[r(1)]).1, -100.0);
+}
+
+/// The actor's magic target answering the effect list at NODES+0x10: one effect of MGEF, active,
+/// not terminated, with a magic item.
+fn one_effect(e: &mut Engine) {
+    e.mem.set_u32(ACTOR + 0x94, TARGET_VT);
+    e.mem.set_u32(TARGET_VT + 8, CALL_EFFECTS);
+    e.register(CALL_EFFECTS, |_, _| Ret {
+        eax: NODES + 0x10,
+        ..Ret::default()
+    });
+    node(e, NODES + 0x10, FX, 0);
+    e.mem.set_u32(FX + 0xc, FX_ITEM);
+    e.mem.set_u32(FX_ITEM + 0x14, MGEF);
+    e.mem.set_u32(FX + 8, MISC);
+    e.mem.set_u8(FX + 0x10, 1);
+}
+
+/// An effect of another base effect does not count, for the command and the condition; a null
+/// effect list (`GetEffectList` answering 0) is no effect.
+#[test]
+fn an_effect_of_another_base_effect() {
+    let mut e = setup_more();
+    one_effect(&mut e);
+    assert_eq!(call_on(&mut e, 0x2321, ACTOR, &[r(11)]).1, 0.0);
+    assert_eq!(eval(&mut e, 0x2321, ACTOR, MGEF2), 0.0);
+    e.mem.set_u32(FX_ITEM + 0x14, MGEF2);
+    assert_eq!(call_on(&mut e, 0x2321, ACTOR, &[r(8)]).1, 0.0);
+    assert_eq!(eval(&mut e, 0x2321, ACTOR, MGEF), 0.0);
+    assert_eq!(call_on(&mut e, 0x2321, ACTOR, &[r(11)]).1, 1.0);
+    assert_eq!(eval(&mut e, 0x2321, ACTOR, MGEF2), 1.0);
+    e.register(CALL_EFFECTS, |_, _| Ret::default());
+    assert_eq!(call_on(&mut e, 0x2321, ACTOR, &[r(11)]).1, 0.0);
+    assert_eq!(eval(&mut e, 0x2321, ACTOR, MGEF2), 0.0);
+}
+
+/// `MaskForSlot`: slot 19 is bit 19; 20 and above every bit (the first worn item: the weapon).
+#[test]
+fn the_slot_boundary() {
+    let mut e = setup();
+    inventory(&mut e);
+    e.mem.set_u32(ARMO + 0x74, 1 << 19);
+    let (_, res) = call_on(&mut e, 0x2323, ACTOR, &[n(19)]);
+    assert_eq!(
+        array_data(&e, res)[0],
+        Data::Form(0x10c),
+        "the armour's bit"
+    );
+    let (_, res) = call_on(&mut e, 0x2323, ACTOR, &[n(20)]);
+    assert_eq!(array_data(&e, res)[0], Data::Form(0x10b), "every bit");
+}
+
+/// A character with no race: a list whose first node is empty does not match it.
+#[test]
+fn a_null_race() {
+    let mut e = setup();
+    node(&mut e, LIST + 0x18, 0, NODES);
+    node(&mut e, NODES, RACE, 0);
+    e.mem.set_u32(NPC + 0x110, 0);
+    assert_eq!(call_on(&mut e, 0x2265, ACTOR, &[r(5)]).1, 0.0);
+    assert_eq!(eval(&mut e, 0x2265, ACTOR, LIST), 0.0);
+    e.mem.set_u32(NPC + 0x110, RACE);
+    assert_eq!(
+        eval(&mut e, 0x2265, ACTOR, LIST),
+        1.0,
+        "the race in the second node"
+    );
+}
+
+/// A null answer is not a result: the body part data's virtual function answering 0, a merchant
+/// extra holding no container.
+#[test]
+fn null_answers_leave_the_result() {
+    let mut e = setup();
+    e.register(CALL_BPD, |_, _| Ret::default());
+    call(&mut e, 0x2333, &[r(1)]);
+    assert_eq!(e.mem.f64(RESULT), 0.0);
+    put_extra(&mut e, ACTOR + 0x44, X3, 0x3c, 0);
+    call_on(&mut e, 0x223c, ACTOR, &[]);
+    assert_eq!(e.mem.f64(RESULT), 0.0);
+}
+
+/// The console echoes (JIP's `DoConsolePrint`): `GetCreatureType` only when it found a creature;
+/// `ActorHasEffect`'s command always, 0 too.
+#[test]
+fn the_console_echoes() {
+    let mut e = setup();
+    e.mem.set_u8(CREA + 0x12c, 3);
+    let (res, lines) = echoed(&mut e, 0x224d, 0, &[r(2)]);
+    assert_eq!((res, lines), (3.0, vec![b"GetCreatureType >> 3".to_vec()]));
+    let (res, lines) = echoed(&mut e, 0x224d, 0, &[r(1)]);
+    assert_eq!((res, lines), (-1.0, vec![]), "an NPC: no echo");
+    one_effect(&mut e);
+    let (res, lines) = echoed(&mut e, 0x2321, ACTOR, &[r(8)]);
+    assert_eq!((res, lines), (1.0, vec![b"ActorHasEffect >> 1".to_vec()]));
+    e.mem.set_u8(FX + 0x10, 0);
+    let (res, lines) = echoed(&mut e, 0x2321, ACTOR, &[r(8)]);
+    assert_eq!((res, lines), (0.0, vec![b"ActorHasEffect >> 0".to_vec()]));
+}

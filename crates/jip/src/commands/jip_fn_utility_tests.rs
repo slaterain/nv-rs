@@ -365,4 +365,7 @@ fn shared_ref_maps_cleared() {
 fn large_address_aware() {
     let mut e = setup();
     assert_eq!(call(&mut e, 0x2892, &[]).1, 2.0);
+    // Typed in the console: echoed (JIP's DoConsolePrint).
+    let (res, lines) = echoed(&mut e, 0x2892, 0, &[]);
+    assert_eq!((res, lines), (2.0, vec![b"GetIsLAA >> 2".to_vec()]));
 }

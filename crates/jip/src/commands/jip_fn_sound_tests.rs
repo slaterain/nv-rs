@@ -164,3 +164,58 @@ fn the_volumes() {
     call(&mut e, 0x288d, &[n(6), n(10)]);
     assert_eq!(e.mem.f32(am + 24), 0.0);
 }
+
+/// The last volume type (5) is read and set; a level of exactly 100 sets 1.0.
+#[test]
+fn the_volume_boundaries() {
+    let mut e = setup();
+    let am = 0x011f_6ef0 + 0x140;
+    call(&mut e, 0x288d, &[n(5), n(100)]);
+    assert_eq!(e.mem.f32(am + 20), 100.0f32 * 0.01);
+    assert_eq!(e.mem.f32(am + 20), 1.0);
+    assert_eq!(call(&mut e, 0x288c, &[n(5)]).1, f64::from(1.0f32 * 100.0));
+    call(&mut e, 0x288d, &[n(0), n(0)]);
+    assert_eq!(e.mem.f32(am), 0.0);
+}
+
+/// A music type whose path the playing track's does not begin with: 0. With track 1 active, its
+/// path (at +0) is the one compared, not track 2's.
+#[test]
+fn the_music_types_path() {
+    let mut e = setup();
+    let text = FORMS + 0x3100;
+    e.mem.write(text, b"data\\music\\explore\0");
+    e.mem.set_u32(MUSIC + 0x1c, text);
+    e.mem.set_u16(MUSIC + 0x20, 18);
+    e.mem.set_u8(PM + 0x221, 0x10);
+    e.mem.write(PM + 0x108, b"Data\\Music\\Dungeon\\a.mp3\0");
+    assert_eq!(call(&mut e, 0x2862, &[r(2)]).1, 0.0, "another path");
+    e.mem.set_u32(PM + 0x27c, 1);
+    e.mem.set_u8(PM + 0x220, 0x10);
+    e.mem.write(PM, b"Data\\Music\\Explore\\b.mp3\0");
+    assert_eq!(call(&mut e, 0x2862, &[r(2)]).1, 2.0, "track 1's path");
+    e.mem.write(PM, b"Data\\Music\\Battle\\c.mp3\0");
+    e.mem.write(PM + 0x108, b"Data\\Music\\Explore\\b.mp3\0");
+    assert_eq!(call(&mut e, 0x2862, &[r(2)]).1, 0.0, "not track 2's");
+}
+
+/// A path of 128 bytes or more runs past JIP's 128-byte buffer: the port stops there, unless the
+/// list guard row is on, which sets it whole.
+#[test]
+#[should_panic(expected = "runs past JIP's 128-byte buffer")]
+fn a_path_longer_than_the_buffer_stops() {
+    let mut e = setup();
+    call(&mut e, 0x26c0, &[r(1), s(&[b'a'; 128])]);
+}
+
+#[test]
+fn a_long_path_with_the_list_guard() {
+    let mut e = setup();
+    nvse::commands::array::set_fix(&mut e, nvse::commands::array::LIST_GUARD, true);
+    call(&mut e, 0x26c0, &[r(1), s(&[b'a'; 128])]);
+    assert_eq!(text_at(&e, SOUND + 0x34), vec![b'a'; 128]);
+    let path = [b'b'; 127];
+    nvse::commands::array::set_fix(&mut e, nvse::commands::array::LIST_GUARD, false);
+    call(&mut e, 0x26c0, &[r(1), s(&path)]);
+    assert_eq!(text_at(&e, SOUND + 0x34), path.to_vec(), "127 fits");
+}

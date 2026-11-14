@@ -493,6 +493,19 @@ pub fn assign_string(e: &mut Engine, a: &CommandArgs, text: Option<Vec<u8>>) {
     nvse::commands::string::assign_to_string_var(e, a, &text);
 }
 
+/// `text` with its 0 in a frame of the stack while `f` runs, which gets its address. For a text a
+/// script decides (a form's name in a console line): xNVSE's built-ins data
+/// (`nvse::table::guest_str`) is never freed and stops the port when full, so such texts never go
+/// there.
+pub fn with_guest_text<R>(e: &mut Engine, text: &[u8], f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    let size = (text.len() as u32 + 1).next_multiple_of(4);
+    e.with_stack(size, |e, at| {
+        e.mem.write(at.addr(), text);
+        e.mem.set_u8(at.addr() + text.len() as u32, 0);
+        f(e, at.addr())
+    })
+}
+
 /// String argument `i` as JIP's `size`-byte buffer on its stack holds it: its text up to the
 /// first 0. A text of `size` bytes or more runs past the buffer into JIP's frame: the rule
 /// xNVSE's buffers have (`nvse::commands::arg_in_buffer`; the identity's name buffer too): with

@@ -356,30 +356,63 @@ fn search_setup(e: &mut Engine) {
         for i in 0..4 {
             words.push(e.mem.u32(w[2] + 4 * i));
         }
+        // The name is passed in a stack frame: its text kept as it is at the print.
+        let name = nvse::table::guest_text(e, words[5]);
+        NAMES.with(|n| n.borrow_mut().push(name));
         CALLS.with(|c| c.borrow_mut().push((PRINT_FN, words)));
         Ret::default()
     });
     console(e, true);
 }
 
-/// The printed lines: id, signature text, editor ID text, name text.
+thread_local! {
+    /// The name text of each printed line, as it was at the print.
+    static NAMES: std::cell::RefCell<Vec<Vec<u8>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// A printed line: id, signature, editor ID, name.
 type Line = (u32, Vec<u8>, Vec<u8>, Vec<u8>);
 
+/// The printed lines (since the last clear of `CALLS`).
 fn printed(e: &Engine) -> Vec<Line> {
-    calls_to(PRINT_FN)
+    let calls = calls_to(PRINT_FN);
+    let names = NAMES.with(|n| n.borrow().clone());
+    let names = &names[names.len() - calls.len()..];
+    calls
         .into_iter()
-        .map(|w| {
+        .zip(names)
+        .map(|(w, name)| {
             assert_eq!(nvse::table::guest_text(e, w[1]), b"[%08X]  %s  %s  %s");
             let sig = e.mem.bytes(w[3], 4);
-            (
-                w[2],
-                sig,
-                nvse::table::guest_text(e, w[4]),
-                nvse::table::guest_text(e, w[5]),
-            )
+            (w[2], sig, nvse::table::guest_text(e, w[4]), name.clone())
         })
         .collect()
+}
+
+/// The search's names are a form's, which a script decides: passed in a stack frame, never in
+/// xNVSE's built-ins data. With that data full a search still prints (its format was stored by
+/// the first search) and nothing stops.
+#[test]
+fn search_with_the_built_ins_data_full() {
+    let mut e = setup();
+    search_setup(&mut e);
+    call(&mut e, 0x2246, &[s(b"varmint")]);
+    fill_builtins(&mut e);
+    CALLS.with(|c| c.borrow_mut().clear());
+    e.mem.write(TEXTS + 0x40, b"Varmint Rifle Mk II\0");
+    e.mem.set_u32(WEAP1 + 0x34, TEXTS + 0x40);
+    e.mem.set_u16(WEAP1 + 0x38, 19);
+    call(&mut e, 0x2246, &[s(b"varmint")]);
+    assert_eq!(
+        printed(&e),
+        vec![(
+            2,
+            b"WEAP".to_vec(),
+            b"".to_vec(),
+            b"Varmint Rifle Mk II".to_vec()
+        )]
+    );
+    assert_eq!(nvse::table::try_alloc(&mut e, 4), None, "nothing taken");
 }
 
 #[test]

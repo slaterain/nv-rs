@@ -342,9 +342,14 @@ fn search(e: &mut Engine, w: &[u32]) -> Ret {
         if sub_str_ci(&name, &find) || sub_str_ci(&edid, &find) {
             let t = u32::from(type_of(e, form));
             let sig = TYPE_SIGNATURES + 8 * (120u32.wrapping_sub(t));
-            let name_at = nvse::table::guest_str(e, &name);
             let id = ref_id(e, form);
-            nvse::commands::console_print(e, "[%08X]  %s  %s  %s", &[id, sig, edid_at, name_at]);
+            super::with_guest_text(e, &name, |e, name_at| {
+                nvse::commands::console_print(
+                    e,
+                    "[%08X]  %s  %s  %s",
+                    &[id, sig, edid_at, name_at],
+                );
+            });
         }
     }
     handled(true)

@@ -3,7 +3,8 @@
 //!
 //! The player's inventory changes (`ExtraContainerChanges` 0x15, its data at +0xC, the entry list
 //! `objList` at +0 of that): each entry with its extra data lists (`extendData`, a `tList*` at +0)
-//! and its form (+8). A hotkey is an `ExtraHotkey` (type 0x4A, its index the byte at +0xC, made by
+//! and its form (+8) (the exe: `ExtraDataList::GetContainerChanges` `00418520` reads the extra's
+//! +0xC, `InventoryChanges::GetWornItem` `004C8C10` walks the entries so). A hotkey is an `ExtraHotkey` (type 0x4A, its index the byte at +0xC, made by
 //! JIP's `Create` with the exe's vtable `0101592C`) on one of an armour's (0x18), weapon's (0x28)
 //! or aid item's (0x2F) extra data lists; a list made for it is JIP's `ExtraDataList::Create`
 //! (0x20 zeroed bytes with the vtable `010143E8`). The health (`ExtraHealth` 0x25, a float) and mod

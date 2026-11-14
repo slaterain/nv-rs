@@ -13,7 +13,8 @@
 //! `tList` of 8-byte `{faction, rank (signed byte)}`), `ai` at +0x90 (services +0x9C, aggro
 //! behaviour +0xA3, aggro radius +0xA4); its virtual functions `GetBodyPartData` (+0x180) and
 //! `GetCombatStyle` (+0x188). A creature (form type 0x2B): its type +0x12C, its body part data
-//! +0x144. An NPC's race: +0x110.
+//! +0x144. An NPC's race: +0x110 (its `TESRaceForm` at +0x10C, the race at +4 of that: the
+//! exe's `TESRaceForm::CopyComponent` `0048B870` copies the word at +4).
 
 use super::arrays::{create_array, Element};
 use super::extra::{self, kind};
@@ -85,7 +86,10 @@ const TES_OBJECT_WEAP: u8 = 0x28;
 const TES_CREATURE: u8 = 0x2b;
 const BGS_BODY_PART_DATA: u8 = 0x57;
 /// More extra data types: `ExtraHealth` 0x25 (a float at +0xC), `ExtraLeveledCreature` 0x2E (the
-/// actor base at +0x10), `ExtraMerchantContainer` 0x3C (+0xC), `ExtraCombatStyle` 0x69 (+0xC),
+/// actor base at +0x10: in the exe its setter `00421750` stores the reference's original leveled
+/// base at +0xC, which `GetLevCreaOriginalBase` `004216F0` reads, and the chosen actor base at
+/// +0x10, read by `00421720` for kills and hits), `ExtraMerchantContainer` 0x3C (+0xC),
+/// `ExtraCombatStyle` 0x69 (+0xC),
 /// `ExtraWeaponModFlags` 0x8D (a byte at +0xC); `ExtraWorn` 0x16 is the presence bit JIP's
 /// `GetEquippedExtra` tests (byte +0xA of a list, bit 0x40).
 const EXTRA_HEALTH: u32 = 0x25;
@@ -94,10 +98,16 @@ const EXTRA_MERCHANT_CONTAINER: u32 = 0x3c;
 const EXTRA_COMBAT_STYLE: u32 = 0x69;
 const EXTRA_WEAPON_MOD_FLAGS: u32 = 0x8d;
 const EXTRA_WORN: u32 = 0x16;
-/// A container changes entry: its extra data lists (`extendData`, a `tList*`) +0, its form +8.
+/// A container changes entry: its extra data lists (`extendData`, a `tList*`) +0, its form +8;
+/// the extra's data at +0xC, its entry list at +0 of that. In the exe: `ExtraDataList::
+/// GetContainerChanges` `00418520` answers the extra's +0xC; `InventoryChanges::GetWornItem`
+/// `004C8C10` walks the list at +0 of it, each 0xC-byte entry's lists from +0 and its form at +8
+/// (`0044DDC0`).
 const ENTRY_EXTEND: u32 = 0x0;
 const ENTRY_TYPE: u32 = 0x8;
-/// An armour's part mask (`bipedModel.partMask`, +0x74) and `eSlot_Weapon`.
+/// An armour's part mask (`bipedModel.partMask`, +0x74: `TESBipedModelForm::GetFormAsBipedModel`
+/// `00480DB0` answers an armour's +0x70, `FillsBipedSlot` `00480AF0` tests the mask at +4 of it)
+/// and `eSlot_Weapon`.
 const ARMO_PART_MASK: u32 = 0x74;
 const SLOT_WEAPON: u32 = 1 << 5;
 
@@ -343,12 +353,15 @@ fn ln_set_actor_template(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
-/// The actor base argument, else the calling actor's base form itself (not its leveled base).
+/// The actor base argument, else the calling actor's base form itself (not its leveled base):
+/// JIP's `actorBase || (thisObj && IS_ACTOR(thisObj) && (actorBase = thisObj->baseForm))`, so an
+/// actor with no base form gives none.
 fn base_or_this_base(e: &Engine, form: u32, this: u32) -> Option<u32> {
     if form != 0 {
         Some(form)
     } else if this != 0 && is_actor(e, this) {
-        Some(e.mem.u32(this + BASE))
+        let b = e.mem.u32(this + BASE);
+        (b != 0).then_some(b)
     } else {
         None
     }
