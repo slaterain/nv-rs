@@ -74,7 +74,8 @@ its run-time compiler for the old script syntax and its new script language (scr
 compiled to the same bytes as xNVSE writes them (byte tests from its source's rules, read back by its decompiler),
 `CompileScript` and the function files, the documentation dumps and the console's help listing; its
 compiled-script cache file is left out as a speed cache only. JIP LN NVSE's commands are in progress (README's
-system table has the counts).
+system table has the counts; batch 10 of 2026-11-14 adds the maths, utility, load screen, terminal, cell,
+radio, reference and game data commands).
 
 An interim Windows preview (maintainer, 2026-11-06) can be built with `scripts/package-playtest.ps1`:
 a ZIP a player can run with no build, labelled a preview, wgpu remaining the big release. It has only

@@ -245,3 +245,131 @@ pub fn call_on(e: &mut Engine, opcode: u32, this: u32, args: &[Vec<u8>]) -> (u32
     let ok = e.call(execute, &words).eax & 0xff;
     (ok, e.mem.f64(RESULT))
 }
+
+/// `BaseExtraList::GetByType` (`00410220`), `AddExtra` (`0040FF60`), `RemoveByType` (`00410140`)
+/// and `BGSSaveLoadGame::AddChange` (`0084A690`) as stand-ins written from the exe's functions:
+/// the walk from the list's +4 (each extra's type at +4, next at +8), the append at the chain's
+/// end with the presence bit set (+8 bits), the unlink of the first extra of the type with its
+/// bit cleared (its delete through the vtable left out: recorded instead), and the change call
+/// recorded. `g_BGSSaveLoadGame` points at [`SAVE_LOAD`].
+pub const GET_BY_TYPE_FN: u32 = 0x0041_0220;
+pub const ADD_EXTRA_FN: u32 = 0x0040_ff60;
+pub const REMOVE_BY_TYPE_FN: u32 = 0x0041_0140;
+pub const ADD_CHANGE_FN: u32 = 0x0084_a690;
+pub const SAVE_LOAD: u32 = FORMS + 0xf_f000;
+
+pub fn extra_stand_ins(e: &mut Engine) {
+    e.map(0x011d_d000, 0x1000);
+    e.mem.set_u32(0x011d_df38, SAVE_LOAD);
+    e.register(GET_BY_TYPE_FN, |e, w| {
+        let mut x = e.mem.u32(w[0] + 4);
+        while x != 0 && u32::from(e.mem.u8(x + 4)) != w[1] {
+            x = e.mem.u32(x + 8);
+        }
+        eax(x)
+    });
+    e.register(ADD_EXTRA_FN, |e, w| {
+        record(ADD_EXTRA_FN, w);
+        let (list, extra) = (w[0], w[1]);
+        let mut at = list + 4;
+        while e.mem.u32(at) != 0 {
+            at = e.mem.u32(at) + 8;
+        }
+        e.mem.set_u32(at, extra);
+        let kind = u32::from(e.mem.u8(extra + 4));
+        let bits = list + 8 + (kind >> 3);
+        e.mem.set_u8(bits, e.mem.u8(bits) | (1 << (kind & 7)));
+        eax(extra)
+    });
+    e.register(REMOVE_BY_TYPE_FN, |e, w| {
+        record(REMOVE_BY_TYPE_FN, w);
+        let (list, kind) = (w[0], w[1]);
+        let mut at = list + 4;
+        loop {
+            let x = e.mem.u32(at);
+            if x == 0 {
+                break;
+            }
+            if u32::from(e.mem.u8(x + 4)) == kind {
+                e.mem.set_u32(at, e.mem.u32(x + 8));
+                break;
+            }
+            at = x + 8;
+        }
+        let bits = list + 8 + (kind >> 3);
+        e.mem.set_u8(bits, e.mem.u8(bits) & !(1 << (kind & 7)));
+        eax(0)
+    });
+    e.register(ADD_CHANGE_FN, |_, w| {
+        record(ADD_CHANGE_FN, w);
+        eax(0)
+    });
+}
+
+/// An extra of `kind` at `at` holding `word` at +0xC, put first in the list at `list` (presence
+/// bit set).
+pub fn put_extra(e: &mut Engine, list: u32, at: u32, kind: u32, word: u32) {
+    e.mem.set_u8(at + 4, kind as u8);
+    e.mem.set_u32(at + 8, e.mem.u32(list + 4));
+    e.mem.set_u32(at + 0xc, word);
+    e.mem.set_u32(list + 4, at);
+    let bits = list + 8 + (kind >> 3);
+    e.mem.set_u8(bits, e.mem.u8(bits) | (1 << (kind & 7)));
+}
+
+/// The calls made to `addr`, their words.
+pub fn calls_to(addr: u32) -> Vec<Vec<u32>> {
+    calls()
+        .into_iter()
+        .filter(|c| c.0 == addr)
+        .map(|c| c.1)
+        .collect()
+}
+
+/// The game's form map (`*011C54C0`: 16 buckets at +0x100, entries from +0x400) and the data
+/// handler (`*011C3F2C`) in test memory; the page of both globals mapped.
+pub const FORM_MAP: u32 = FORMS + 0xf_0000;
+pub const DATA_HANDLER_AT: u32 = FORMS + 0xf_8000;
+
+pub fn game_globals(e: &mut Engine) {
+    e.map(0x011c_3000, 0x3000);
+    e.mem.set_u32(0x011c_54c0, FORM_MAP);
+    e.mem.set_u32(FORM_MAP + 4, 16);
+    e.mem.set_u32(FORM_MAP + 8, FORM_MAP + 0x100);
+    e.mem.set_u32(0x011c_3f2c, DATA_HANDLER_AT);
+}
+
+/// Puts `form` in the form map under `id` (entry `n`, first in its bucket).
+pub fn in_form_map(e: &mut Engine, form: u32, id: u32, n: u32) {
+    let item = FORM_MAP + 0x400 + 0x10 * n;
+    let bucket = FORM_MAP + 0x100 + 4 * (id % 16);
+    e.mem.set_u32(item, e.mem.u32(bucket));
+    e.mem.set_u32(item + 4, id);
+    e.mem.set_u32(item + 8, form);
+    e.mem.set_u32(bucket, item);
+}
+
+/// A loaded file `info` at `index` of the data handler's slots (+0x21C), named `name` (+0x20),
+/// its own index at +0x40C; the loaded count (+0x218) raised to cover it.
+pub fn loaded_mod(e: &mut Engine, index: u32, info: u32, name: &[u8]) {
+    e.mem.set_u32(DATA_HANDLER_AT + 0x21c + 4 * index, info);
+    e.mem.write(info + 0x20, name);
+    e.mem.set_u8(info + 0x20 + name.len() as u32, 0);
+    e.mem.set_u8(info + 0x40c, index as u8);
+    let count = e.mem.u32(DATA_HANDLER_AT + 0x218).max(index + 1);
+    e.mem.set_u32(DATA_HANDLER_AT + 0x218, count);
+}
+
+/// A packed xNVSE array of `values`, owned by mod 0; its id.
+pub fn array_of(e: &mut Engine, values: Vec<nvse::vars::Value>) -> u32 {
+    let id = nvse::vars::create_array(e, nvse::vars::KEY_NUMBER, true, 0);
+    for (i, v) in values.into_iter().enumerate() {
+        nvse::vars::set_element(e, id, &nvse::vars::Key::Number(i as f64), v);
+    }
+    id
+}
+
+/// The values of array `id` in order.
+pub fn array_data(e: &Engine, id: f64) -> Vec<nvse::vars::Data> {
+    crate::commands::jip_fn_aux_variable::array_values(e, id as u32).expect("an array")
+}
