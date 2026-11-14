@@ -48,11 +48,13 @@ struct Log {
     /// The fake folder: files by path (lower case, `\`), and the names a search answers in each
     /// folder, in order, with their attributes.
     files: BTreeMap<String, Vec<u8>>,
-    listings: BTreeMap<String, Vec<(String, u32)>>,
+    listings: BTreeMap<String, Vec<(String, u32, u32)>>,
     /// Open handles: their path and read position; open searches: what is left to answer.
     handles: BTreeMap<u32, (String, usize)>,
-    searches: BTreeMap<u32, Vec<(String, u32)>>,
+    searches: BTreeMap<u32, Vec<(String, u32, u32)>>,
     next_handle: u32,
+    /// Form ids given so far (each script a new one, from [`NEXT_ID`]).
+    ids: u32,
     /// Bytes written to files (`nvse.log`).
     written: BTreeMap<String, Vec<u8>>,
 }
@@ -154,7 +156,10 @@ fn engine() -> Engine {
     });
     e.register(NEXT_FREE_FORM_ID, |_, a| {
         assert_eq!(a[0], HANDLER);
-        eax(NEXT_ID)
+        eax(with_log(|l| {
+            l.ids += 1;
+            NEXT_ID + l.ids - 1
+        }))
     });
     e.register(SET_REF_ID_FN, |e, a| {
         e.mem.set_u32(a[0] + 0xc, a[1]);
@@ -239,8 +244,8 @@ fn file_calls(e: &mut Engine) {
         let Some(mut entries) = with_log(|l| l.listings.get(&dir).cloned()) else {
             return eax(INVALID_HANDLE_VALUE);
         };
-        entries.insert(0, ("..".into(), FILE_ATTRIBUTE_DIRECTORY));
-        entries.insert(0, (".".into(), FILE_ATTRIBUTE_DIRECTORY));
+        entries.insert(0, ("..".into(), FILE_ATTRIBUTE_DIRECTORY, 0));
+        entries.insert(0, (".".into(), FILE_ATTRIBUTE_DIRECTORY, 0));
         let first = entries.remove(0);
         write_found(e, a[1], &first);
         with_log(|l| {
@@ -269,8 +274,9 @@ fn file_calls(e: &mut Engine) {
     });
 }
 
-fn write_found(e: &mut Engine, data: u32, (name, attributes): &(String, u32)) {
+fn write_found(e: &mut Engine, data: u32, (name, attributes, tag): &(String, u32, u32)) {
     e.mem.set_u32(data, *attributes);
+    e.mem.set_u32(data + FIND_DATA_RESERVED0, *tag);
     e.mem.write(data + FIND_DATA_NAME, name.as_bytes());
     e.mem.set_u8(data + FIND_DATA_NAME + name.len() as u32, 0);
 }
@@ -278,11 +284,11 @@ fn write_found(e: &mut Engine, data: u32, (name, attributes): &(String, u32)) {
 /// Puts a file (or, with `None`, a folder) at `path` below the game's folder (no separator at
 /// its end), listed in its folder after the ones put there before when that folder was put.
 fn put(path: &str, bytes: Option<&[u8]>) {
-    put_as(path, bytes, 0);
+    put_as(path, bytes, 0, 0);
 }
 
-/// [`put`] with more attributes (a link: `FILE_ATTRIBUTE_REPARSE_POINT`).
-fn put_as(path: &str, bytes: Option<&[u8]>, more: u32) {
+/// [`put`] with more attributes (a reparse point: `FILE_ATTRIBUTE_REPARSE_POINT`) and a reparse tag.
+fn put_as(path: &str, bytes: Option<&[u8]>, more: u32, tag: u32) {
     let attributes = more
         | if bytes.is_none() {
             FILE_ATTRIBUTE_DIRECTORY
@@ -294,7 +300,7 @@ fn put_as(path: &str, bytes: Option<&[u8]>, more: u32) {
     let (dir, name) = (k[..at].to_string(), path[at..].to_string());
     with_log(|l| {
         if let Some(listing) = l.listings.get_mut(&dir) {
-            listing.push((name, attributes));
+            listing.push((name, attributes, tag));
         }
         match bytes {
             Some(b) => {
@@ -619,22 +625,26 @@ fn compile_script_finds_or_compiles_the_file() {
     assert!(compiles().is_empty(), "the cached script");
     // A file made after the first frame: compiled now, under the path as given.
     put(&format!("{base}late.txt"), Some(b"late"));
-    assert_eq!(run(&mut e, &[string_token("late.txt")]), NEXT_ID);
+    assert_eq!(run(&mut e, &[string_token("late.txt")]), NEXT_ID + 1);
     let seen = compiles();
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].name, "nvseRuntimeScript1late");
-    assert_ne!(cached(&mut e, b"late.txt"), 0);
-    // Recompiled: compiled again even though cached.
+    let old = cached(&mut e, b"late.txt");
+    assert_ne!(old, 0);
+    // Recompiled: compiled again even though cached; the new script replaces the old one.
     assert_eq!(
         run(&mut e, &[string_token("late.txt"), number_token(1.0)]),
-        NEXT_ID
+        NEXT_ID + 2
     );
+    let new = cached(&mut e, b"late.txt");
+    assert_ne!(new, old);
+    assert_eq!(e.mem.u32(new + 0xc), NEXT_ID + 2);
     assert_eq!(compiles()[0].name, "nvseRuntimeScript2late");
     assert_eq!(e.ext::<Nvse>().compile_script.cached.len(), 2);
-    // Recompile false: the cache.
+    // Recompile false: the cache, now the new script.
     assert_eq!(
         run(&mut e, &[string_token("late.txt"), number_token(0.0)]),
-        NEXT_ID
+        NEXT_ID + 2
     );
     assert!(compiles().is_empty());
     // Missing, no extension, empty, failing.
@@ -684,26 +694,53 @@ fn run_script_line_runs_a_temporary_script() {
     assert!(calls().is_empty());
 }
 
-/// Links in the folder, as `recursive_directory_iterator` and `is_regular_file` take them: a
-/// link to a folder is not entered and is no file; a link to a file is a file.
+/// Lists an entry in its folder with no file or folder behind it (a link whose target is gone).
+fn put_entry(path: &str, attributes: u32, tag: u32) {
+    let k = key(path.as_bytes());
+    let at = k.rfind('\').map_or(0, |at| at + 1);
+    let (dir, name) = (k[..at].to_string(), path[at..].to_string());
+    with_log(|l| l.listings.get_mut(&dir).unwrap().push((name, attributes, tag)));
+}
+
+/// Reparse points as MSVC's `recursive_directory_iterator` and `is_regular_file` take them: a
+/// junction (mount point tag) and a folder symbolic link are not entered and are no files; a
+/// folder with another tag (a cloud placeholder) is entered; a file symbolic link is a file when
+/// its target opens, and is passed over without a word when its target is gone; a file with
+/// another tag is a file.
 #[test]
-fn links_in_the_function_folder() {
+fn reparse_points_in_the_function_folder() {
     let mut e = engine();
     put(BASE, None);
-    put_as(
-        &format!("{BASE}/Linked"),
-        None,
-        FILE_ATTRIBUTE_REPARSE_POINT,
-    );
-    put(&format!("{BASE}/Linked/inside.txt"), Some(b"inside"));
-    put_as(
-        &format!("{BASE}/link.txt"),
-        Some(b"link"),
-        FILE_ATTRIBUTE_REPARSE_POINT,
-    );
+    let reparse = FILE_ATTRIBUTE_REPARSE_POINT;
+    put_as(&format!("{BASE}/Junction"), None, reparse, IO_REPARSE_TAG_MOUNT_POINT);
+    put(&format!("{BASE}/Junction/a.txt"), Some(b"a"));
+    put_as(&format!("{BASE}/DirLink"), None, reparse, IO_REPARSE_TAG_SYMLINK);
+    put(&format!("{BASE}/DirLink/b.txt"), Some(b"b"));
+    put_as(&format!("{BASE}/Cloud"), None, reparse, 0x9000_001a);
+    put(&format!("{BASE}/Cloud/c.txt"), Some(b"c"));
+    put_as(&format!("{BASE}/link.txt"), Some(b"link"), reparse, IO_REPARSE_TAG_SYMLINK);
+    put_entry(&format!("{BASE}/broken.txt"), 0x20 | reparse, IO_REPARSE_TAG_SYMLINK);
+    put_as(&format!("{BASE}/dedup.txt"), Some(b"dedup"), reparse, 0x8000_0013);
     cache_all_scripts(&mut e);
     let names: Vec<String> = compiles().into_iter().map(|s| s.name).collect();
-    assert_eq!(names, ["nvseRuntimeScript0link"]);
+    assert_eq!(
+        names,
+        ["nvseRuntimeScript0c", "nvseRuntimeScript1link", "nvseRuntimeScript2dedup"]
+    );
+    assert!(console().is_empty(), "no line for the broken link");
+}
+
+/// A failing file's name with a `%` is printed as it is (xNVSE passes the line as a format).
+#[test]
+fn a_percent_in_a_failing_files_name_is_printed() {
+    let mut e = engine();
+    put(BASE, None);
+    put(&format!("{BASE}/100%s bad.txt"), Some(b"bad"));
+    cache_all_scripts(&mut e);
+    assert_eq!(
+        console(),
+        ["xNVSE: Failed to precompile script file at data/nvse/user_defined_functions/100%s bad.txt"]
+    );
 }
 
 /// xNVSE's buffer for the game's expression code is made at install (0x500 zeroed bytes),

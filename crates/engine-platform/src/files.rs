@@ -312,8 +312,119 @@ pub fn full_path(e: &Engine, name: &[u8]) -> Vec<u8> {
     path
 }
 
+/// The host path of a path as the game's ANSI calls carry it. On Windows each part between
+/// separators that reads as UTF-8 is taken as it is (the install folder's name, which the host
+/// gives as UTF-8, and every ASCII name), and any other part as bytes of the ANSI code page,
+/// turned to Unicode as Windows' `...A` calls turn it (`MultiByteToWideChar(CP_ACP)`: a name
+/// `FindFirstFileA` answered in that code page, such as `E9 74 E9 2E 74 78 74` for `été.txt`,
+/// opens; measured, `measure/xnvse-rest/findfile-ansi-2026-11-14.txt`). A part that is both
+/// valid UTF-8 and meant as code page bytes is read as UTF-8. Elsewhere the bytes are read as
+/// UTF-8 (lossy).
 fn real_path(path: &[u8]) -> std::path::PathBuf {
-    std::path::PathBuf::from(String::from_utf8_lossy(path).into_owned())
+    #[cfg(windows)]
+    {
+        if path.is_ascii() {
+            return std::path::PathBuf::from(String::from_utf8_lossy(path).into_owned());
+        }
+        use std::os::windows::ffi::OsStringExt;
+        let mut wide: Vec<u16> = Vec::with_capacity(path.len());
+        for part in path.split_inclusive(|&b| b == b'\\' || b == b'/') {
+            match std::str::from_utf8(part) {
+                Ok(text) => wide.extend(text.encode_utf16()),
+                Err(_) => wide.extend(ansi_to_wide(part)),
+            }
+        }
+        std::path::PathBuf::from(std::ffi::OsString::from_wide(&wide))
+    }
+    #[cfg(not(windows))]
+    {
+        std::path::PathBuf::from(String::from_utf8_lossy(path).into_owned())
+    }
+}
+
+/// A name of the ANSI calls held as text: one character per byte (U+0000 to U+00FF), so an
+/// ASCII name is itself and a byte above 0x7F keeps its value ([`ansi_bytes`] gives the bytes
+/// back). Entry names ([`Entry::name`], [`Found`]) are held so.
+fn ansi_text(bytes: &[u8]) -> String {
+    bytes.iter().map(|&b| char::from(b)).collect()
+}
+
+/// The bytes of a name held by [`ansi_text`].
+fn ansi_bytes(text: &str) -> Vec<u8> {
+    text.chars().map(|c| u32::from(c).min(0xff) as u8).collect()
+}
+
+/// Bytes of the ANSI code page as UTF-16 (`MultiByteToWideChar(CP_ACP, 0, ...)`).
+#[cfg(windows)]
+fn ansi_to_wide(bytes: &[u8]) -> Vec<u16> {
+    extern "system" {
+        fn MultiByteToWideChar(
+            page: u32,
+            flags: u32,
+            text: *const u8,
+            len: i32,
+            out: *mut u16,
+            cap: i32,
+        ) -> i32;
+    }
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![0u16; bytes.len() * 2];
+    // SAFETY: `bytes` is read for its length; `out` has room for `cap` units (a code page byte
+    // is at most one UTF-16 unit, two for the double-byte pages' pairs).
+    let n = unsafe {
+        MultiByteToWideChar(
+            0,
+            0,
+            bytes.as_ptr(),
+            bytes.len() as i32,
+            out.as_mut_ptr(),
+            out.len() as i32,
+        )
+    };
+    out.truncate(n.max(0) as usize);
+    out
+}
+
+/// UTF-16 as the ANSI code page's bytes, as Windows' `...A` calls hand a name back
+/// (`WideCharToMultiByte(CP_ACP, 0, ...)`: best fit where the page has a near character, `?`
+/// where it has none; measured: `łodz.txt` is `lodz.txt`, `Жuk.txt` `?uk.txt`, `日本.txt`
+/// `??.txt` on code page 1252), held as [`ansi_text`].
+#[cfg(windows)]
+fn wide_to_ansi(units: &[u16]) -> String {
+    extern "system" {
+        fn WideCharToMultiByte(
+            page: u32,
+            flags: u32,
+            text: *const u16,
+            len: i32,
+            out: *mut u8,
+            cap: i32,
+            default: *const u8,
+            used: *mut i32,
+        ) -> i32;
+    }
+    if units.is_empty() {
+        return String::new();
+    }
+    let mut out = vec![0u8; units.len() * 4];
+    // SAFETY: `units` is read for its length; `out` has room for `cap` bytes (a UTF-16 unit is
+    // at most two code page bytes); no default character or flag is passed.
+    let n = unsafe {
+        WideCharToMultiByte(
+            0,
+            0,
+            units.as_ptr(),
+            units.len() as i32,
+            out.as_mut_ptr(),
+            out.len() as i32,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+        )
+    };
+    out.truncate(n.max(0) as usize);
+    ansi_text(&out)
 }
 
 /// The bytes of the file at the full path `path`: as the game made it in this run, else the
@@ -627,8 +738,10 @@ fn directory_exists(e: &Engine, path: &[u8]) -> bool {
 /// directory, `...\Data` and `...\Data\`, with the buffer filled with 0xAA first): as above;
 /// the last error stayed what it was (203) on success. Not provided here: `cAlternateFileName`
 /// of the player's entries (Windows wrote the 8.3 name `FALLOU~1.BSA` for the archive, nothing
-/// for `Data`) is left empty (one zero byte); directories the game made in this run, a
-/// trailing separator on a missing name, and non-ASCII names stop the run.
+/// for `Data`) is left empty (one zero byte); directories the game made in this run and a
+/// trailing separator on a missing name stop the run. On Windows the entry is described by the
+/// host's own search of the name: a link as the link (its own attributes and reparse tag; one
+/// whose target is gone is found), a name outside ASCII in the ANSI code page ([`wide_to_ansi`]).
 ///
 /// A file the game made or changed in this run is described by its [`Entry`] (the name in the
 /// case it was made or renamed in, its short name, attributes, size and times; [`write_entry`]),
@@ -663,15 +776,18 @@ pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
     }
     let real = real_path(&path);
     let trailing = path.ends_with(b"\\") || path.ends_with(b"/");
-    let meta = match std::fs::metadata(&real) {
+    // The entry's own metadata: a link whose target is gone is still an entry of its folder.
+    let own = std::fs::symlink_metadata(&real);
+    match std::fs::metadata(&real) {
         Ok(meta) if trailing && meta.is_dir() => return fail(e, ERROR_FILE_NOT_FOUND),
         Ok(_) if trailing => {
             panic!("FindFirstFileA(\"{shown}\"): a trailing separator is not provided")
         }
-        Ok(meta) => meta,
+        Ok(_) => {}
         Err(_) if trailing => {
             panic!("FindFirstFileA(\"{shown}\"): a trailing separator is not provided")
         }
+        Err(_) if own.is_ok() => {}
         Err(_) => {
             let parent_exists = real.parent().is_some_and(|p| p.is_dir());
             return fail(
@@ -683,10 +799,27 @@ pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
                 },
             );
         }
+    }
+    // On Windows the host's own search of the name describes the entry itself (a link with its
+    // own attributes and reparse tag, the name in the ANSI code page); the 8.3 name is left
+    // empty, as documented above.
+    #[cfg(windows)]
+    if let Some(mut entry) = host_search(&real, &shown)
+        .ok()
+        .and_then(|found| found.into_iter().next())
+    {
+        entry.short = String::new();
+        write_host_entry(e, data, &entry);
+        return e
+            .kernel
+            .insert(KernelObject::FindFile(Opaque::new(Search::default())));
+    }
+    let Ok(meta) = own else {
+        return fail(e, ERROR_FILE_NOT_FOUND);
     };
     let wanted = real
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
+        .map(|n| host_name_text(&n.to_string_lossy()))
         .unwrap_or_default();
     let stored = real
         .parent()
@@ -694,17 +827,22 @@ pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
         .and_then(|entries| {
             entries
                 .filter_map(Result::ok)
-                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .map(|entry| host_name_text(&entry.file_name().to_string_lossy()))
                 .find(|n| n.eq_ignore_ascii_case(&wanted))
         })
         .unwrap_or(wanted);
-    assert!(
-        stored.is_ascii(),
-        "FindFirstFileA(\"{shown}\"): a non-ASCII name is not provided"
-    );
     write_find_data(e, data, &meta, &stored, &shown);
     e.kernel
         .insert(KernelObject::FindFile(Opaque::new(Search::default())))
+}
+
+/// A host name as an entry name where no code page conversion is at hand (elsewhere than on
+/// Windows): each character outside ASCII becomes `?`, as an ANSI call answers a character its
+/// code page cannot hold.
+fn host_name_text(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii() { c } else { '?' })
+        .collect()
 }
 
 /// Writes the `WIN32_FIND_DATAA` at `data` for an entry: attributes, creation, last-access and
@@ -740,7 +878,8 @@ fn write_find_data(e: &mut Engine, data: Ptr, meta: &std::fs::Metadata, stored: 
     e.mem.set_u32(d + 0x20, size as u32);
     e.mem.set_u32(d + 0x24, 0);
     e.mem.set_u32(d + 0x28, 0);
-    e.mem.write(d + 0x2c, stored.as_bytes());
+    let stored = ansi_bytes(stored);
+    e.mem.write(d + 0x2c, &stored);
     e.mem.set_u8(d + 0x2c + stored.len() as u32, 0);
     e.mem.set_u8(d + 0x130, 0);
 }
@@ -772,9 +911,11 @@ fn write_entry(e: &mut Engine, data: Ptr, entry: &Entry, shown: &str) {
     e.mem.set_u32(d + 0x20, entry.size as u32);
     e.mem.set_u32(d + 0x24, 0);
     e.mem.set_u32(d + 0x28, 0);
-    e.mem.write(d + 0x2c, entry.name.as_bytes());
-    e.mem.set_u8(d + 0x2c + entry.name.len() as u32, 0);
-    e.mem.write(d + 0x130, short.as_bytes());
+    let name = ansi_bytes(&entry.name);
+    e.mem.write(d + 0x2c, &name);
+    e.mem.set_u8(d + 0x2c + name.len() as u32, 0);
+    let short = ansi_bytes(short);
+    e.mem.write(d + 0x130, &short);
     e.mem.set_u8(d + 0x130 + short.len() as u32, 0);
 }
 
@@ -838,19 +979,14 @@ fn changed_keys<'a>(disk: &'a Disk, folder: &'a [u8], below: bool) -> Vec<&'a Ve
         .collect()
 }
 
-/// The last part of the full path `path` (after its last separator), as text (ASCII; another
-/// character stops the run).
+/// The last part of the full path `path` (after its last separator), held as [`ansi_text`] (the
+/// game's bytes, a code page character each).
 fn last_part(path: &[u8]) -> String {
     let at = path
         .iter()
         .rposition(|&b| b == b'\\' || b == b'/')
         .map_or(0, |i| i + 1);
-    let name = String::from_utf8_lossy(&path[at..]).into_owned();
-    assert!(
-        name.is_ascii(),
-        "the non-ASCII file name \"{name}\" is not provided"
-    );
-    name
+    ansi_text(&path[at..])
 }
 
 /// The [`Entry`] of the file at key `k`, made or changed in this run; a file of the run without
@@ -964,7 +1100,7 @@ fn short_extension(name: &str) -> Option<String> {
 /// rest may be a hash Windows makes: `D6104~1`). A pattern the known parts cannot decide stops the
 /// run as not provided.
 fn search_finds(pattern: &[u8], name: &str, shown: &str) -> bool {
-    if wild_match(pattern, name.as_bytes()) {
+    if wild_match(pattern, &ansi_bytes(name)) {
         return true;
     }
     if name == "." || name == ".." {
@@ -1056,7 +1192,7 @@ fn find_first_wild(e: &mut Engine, text: &[u8], data: Ptr) -> u32 {
         else {
             unreachable!("a listing answers the player's entries")
         };
-        let k = key(&[folder.as_slice(), b"\\", name.as_bytes()].concat());
+        let k = key(&[folder.as_slice(), b"\\", &ansi_bytes(name)].concat());
         let why = match name.as_str() {
             "." if changed_here => {
                 Some("\".\" of a directory the game changed in this run (its times)".to_string())
@@ -1096,8 +1232,8 @@ fn find_first_wild(e: &mut Engine, text: &[u8], data: Ptr) -> u32 {
         let entry = run_entry(e, k, &shown);
         let finds = match &entry.short {
             Some(short) => {
-                wild_match(pattern, entry.name.as_bytes())
-                    || (!short.is_empty() && wild_match(pattern, short.as_bytes()))
+                wild_match(pattern, &ansi_bytes(&entry.name))
+                    || (!short.is_empty() && wild_match(pattern, &ansi_bytes(short)))
             }
             None => search_finds(pattern, &entry.name, &shown),
         };
@@ -1130,17 +1266,32 @@ fn find_first_wild(e: &mut Engine, text: &[u8], data: Ptr) -> u32 {
 /// One entry a search found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Found {
-    /// An entry of the player's directory: its full path, its name and its 8.3 short name as
-    /// the directory stores them (the short name empty when it has none), and whether it is a
-    /// directory; described from the disk when it is answered.
+    /// An entry of the player's directory: its full path (the host's own name), its name and
+    /// its 8.3 short name as the ANSI calls answer them (held as [`ansi_text`]; the short name
+    /// empty when it has none), whether it is a directory (followed, a link to one too), and on
+    /// Windows the entry as the directory lists it ([`Listed`]).
     Disk {
         path: std::path::PathBuf,
         name: String,
         short: String,
         directory: bool,
+        listed: Option<Listed>,
     },
     /// A file of this run, as its [`Entry`] was when the search began.
     Run(Entry),
+}
+
+/// A player's entry as the host's search listed it: its own attributes (a link's, with
+/// `FILE_ATTRIBUTE_REPARSE_POINT`, not its target's), size, times and reparse tag
+/// (`dwReserved0`, 0 for an entry that is no reparse point).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listed {
+    pub attributes: u32,
+    pub size: u64,
+    pub created: u64,
+    pub accessed: u64,
+    pub written: u64,
+    pub tag: u32,
 }
 
 impl Found {
@@ -1153,41 +1304,95 @@ impl Found {
     }
 }
 
+/// `FILE_ATTRIBUTE_REPARSE_POINT`.
+pub const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
+/// Writes a listed entry's `WIN32_FIND_DATAA` at `data`: its own attributes, times and size,
+/// `dwReserved0` its reparse tag for a reparse point (measured: a junction's is `A0000003`,
+/// another entry's 0; `measure/xnvse-rest/findfile-ansi-2026-11-14.txt`), `dwReserved1` 0, its
+/// name and its 8.3 name in the ANSI code page, each followed by one zero byte; the rest of the
+/// buffer as it was.
+fn write_listed(e: &mut Engine, data: Ptr, listed: &Listed, name: &str, short: &str) {
+    let d = data.addr();
+    e.mem.set_u32(d, listed.attributes);
+    for (offset, time) in [
+        (4u32, listed.created),
+        (0xc, listed.accessed),
+        (0x14, listed.written),
+    ] {
+        e.mem.set_u32(d + offset, time as u32);
+        e.mem.set_u32(d + offset + 4, (time >> 32) as u32);
+    }
+    e.mem.set_u32(d + 0x1c, (listed.size >> 32) as u32);
+    e.mem.set_u32(d + 0x20, listed.size as u32);
+    let tag = if listed.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        listed.tag
+    } else {
+        0
+    };
+    e.mem.set_u32(d + 0x24, tag);
+    e.mem.set_u32(d + 0x28, 0);
+    let name = ansi_bytes(name);
+    e.mem.write(d + 0x2c, &name);
+    e.mem.set_u8(d + 0x2c + name.len() as u32, 0);
+    let short = ansi_bytes(short);
+    e.mem.write(d + 0x130, &short);
+    e.mem.set_u8(d + 0x130 + short.len() as u32, 0);
+}
+
 /// Writes a found entry as `FindFirstFileA` does, `cAlternateFileName` (+0x130, 14 bytes) its
-/// short name and a zero byte.
+/// short name and a zero byte. A player's entry is written as the directory listed it (no look
+/// at the file behind it: a link whose target is gone is described as the link it is);
+/// elsewhere than on Windows from its own metadata (`symlink_metadata`), which stops the run
+/// there for the times ([`write_find_data`]).
 fn write_found(e: &mut Engine, data: Ptr, found: &Found, shown: &str) {
     match found {
         Found::Disk {
+            listed: Some(listed),
+            name,
+            short,
+            ..
+        } => write_listed(e, data, listed, name, short),
+        Found::Disk {
             path, name, short, ..
         } => {
-            let meta = std::fs::metadata(path).expect("the found entry's metadata");
+            let Ok(meta) = std::fs::symlink_metadata(path) else {
+                panic!("FindFirstFileA(\"{shown}\"): \"{name}\" went away during the search");
+            };
             write_find_data(e, data, &meta, name, shown);
             let alternate = data.addr() + 0x130;
-            e.mem.write(alternate, short.as_bytes());
+            let short = ansi_bytes(short);
+            e.mem.write(alternate, &short);
             e.mem.set_u8(alternate + short.len() as u32, 0);
         }
         Found::Run(entry) => write_entry(e, data, entry, shown),
     }
 }
 
-/// One entry of the host's own search of a directory on Windows (`WIN32_FIND_DATAW`).
+/// One entry of the host's own search of a directory on Windows (`WIN32_FIND_DATAW`): its name
+/// and 8.3 name as the ANSI calls answer them ([`wide_to_ansi`]), its host name, and what the
+/// directory lists for it.
 #[cfg(windows)]
 struct HostEntry {
     name: String,
     short: String,
-    attributes: u32,
-    size: u64,
-    created: u64,
-    accessed: u64,
-    written: u64,
+    real: std::ffi::OsString,
+    listed: Listed,
+}
+
+/// Writes a host entry as `FindFirstFileA` describes it ([`write_listed`]).
+#[cfg(windows)]
+fn write_host_entry(e: &mut Engine, data: Ptr, h: &HostEntry) {
+    write_listed(e, data, &h.listed, &h.name, &h.short);
 }
 
 /// The host's own `FindFirstFileW` / `FindNextFileW` of `query` (a directory and a pattern, or
 /// a full name), read only: every entry in the order they answer, or the error of a search that
 /// finds nothing. It opens nothing for writing and changes no attribute (a search handle only
-/// lists, as `std::fs::read_dir` does).
+/// lists, as `std::fs::read_dir` does). Each entry is what the directory holds for it: a link's
+/// own attributes and reparse tag; its names in the ANSI code page as `FindFirstFileA` gives them.
 #[cfg(windows)]
-fn host_search(query: &std::path::Path, shown: &str) -> Result<Vec<HostEntry>, u32> {
+fn host_search(query: &std::path::Path, _shown: &str) -> Result<Vec<HostEntry>, u32> {
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
     #[repr(C)]
     struct FindDataW {
@@ -1203,16 +1408,9 @@ fn host_search(query: &std::path::Path, shown: &str) -> Result<Vec<HostEntry>, u
         fn FindNextFileW(handle: isize, data: *mut FindDataW) -> i32;
         fn FindClose(handle: isize) -> i32;
     }
-    let text = |units: &[u16]| {
+    let units = |units: &[u16]| {
         let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
-        let name = std::ffi::OsString::from_wide(&units[..end])
-            .to_string_lossy()
-            .into_owned();
-        assert!(
-            name.is_ascii(),
-            "FindFirstFileA(\"{shown}\"): a non-ASCII name is not provided"
-        );
-        name
+        units[..end].to_vec()
     };
     let mut wide: Vec<u16> = query.as_os_str().encode_wide().collect();
     wide.push(0);
@@ -1226,14 +1424,19 @@ fn host_search(query: &std::path::Path, shown: &str) -> Result<Vec<HostEntry>, u
     let time = |t: &[u32]| u64::from(t[0]) | (u64::from(t[1]) << 32);
     let mut found = Vec::new();
     loop {
+        let name = units(&data.name);
         found.push(HostEntry {
-            name: text(&data.name),
-            short: text(&data.alternate),
-            attributes: data.attributes,
-            size: (u64::from(data.size[0]) << 32) | u64::from(data.size[1]),
-            created: time(&data.times[0..2]),
-            accessed: time(&data.times[2..4]),
-            written: time(&data.times[4..6]),
+            name: wide_to_ansi(&name),
+            short: wide_to_ansi(&units(&data.alternate)),
+            real: std::ffi::OsString::from_wide(&name),
+            listed: Listed {
+                attributes: data.attributes,
+                size: (u64::from(data.size[0]) << 32) | u64::from(data.size[1]),
+                created: time(&data.times[0..2]),
+                accessed: time(&data.times[2..4]),
+                written: time(&data.times[4..6]),
+                tag: data.reserved[0],
+            },
         });
         if unsafe { FindNextFileW(handle, &mut data) } == 0 {
             break;
@@ -1253,20 +1456,28 @@ fn host_search(query: &std::path::Path, shown: &str) -> Result<Vec<HostEntry>, u
 /// on short names it cannot decide.
 #[cfg(windows)]
 fn listing(directory: &std::path::Path, pattern: &[u8], shown: &str) -> Result<Vec<Found>, u32> {
-    let query = directory.join(String::from_utf8_lossy(pattern).as_ref());
+    let query = directory.join(real_path(pattern));
     Ok(host_search(&query, shown)?
         .into_iter()
-        .map(|h| Found::Disk {
-            path: directory.join(&h.name),
-            directory: h.attributes & FILE_ATTRIBUTE_DIRECTORY != 0,
-            name: h.name,
-            short: h.short,
+        .map(|h| {
+            let path = directory.join(&h.real);
+            // A link to a directory counts as one for the run's checks (its contents are the
+            // target's), as a reparse point's own attributes say for a junction.
+            let directory = h.listed.attributes & FILE_ATTRIBUTE_DIRECTORY != 0;
+            Found::Disk {
+                path,
+                directory,
+                name: h.name,
+                short: h.short,
+                listed: Some(h.listed),
+            }
         })
         .collect())
 }
 
 /// The entries of `directory` that `pattern` finds, elsewhere than on Windows: matched with
-/// [`search_finds`] and ordered by upper-case name as measured; no short names.
+/// [`search_finds`] and ordered by upper-case name as measured; no short names; a name's
+/// characters outside ASCII answered as `?` ([`host_name_text`]).
 #[cfg(not(windows))]
 fn listing(directory: &std::path::Path, pattern: &[u8], shown: &str) -> Result<Vec<Found>, u32> {
     let Ok(entries) = std::fs::read_dir(directory) else {
@@ -1284,21 +1495,19 @@ fn listing(directory: &std::path::Path, pattern: &[u8], shown: &str) -> Result<V
                 name: special.to_string(),
                 short: String::new(),
                 directory: true,
+                listed: None,
             });
         }
     }
     for entry in entries.filter_map(Result::ok) {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        assert!(
-            name.is_ascii(),
-            "FindFirstFileA(\"{shown}\"): a non-ASCII name is not provided"
-        );
+        let name = host_name_text(&entry.file_name().to_string_lossy());
         if search_finds(pattern, &name, shown) {
             found.push(Found::Disk {
                 path: entry.path(),
                 directory: entry.file_type().is_ok_and(|t| t.is_dir()),
                 name,
                 short: String::new(),
+                listed: None,
             });
         }
     }
@@ -1323,11 +1532,11 @@ fn player_entry(path: &[u8]) -> Option<Entry> {
         Some(Entry {
             name: h.name,
             short: Some(h.short),
-            attributes: h.attributes,
-            size: h.size,
-            created: h.created,
-            accessed: h.accessed,
-            written: h.written,
+            attributes: h.listed.attributes,
+            size: h.listed.size,
+            created: h.listed.created,
+            accessed: h.listed.accessed,
+            written: h.listed.written,
         })
     }
     #[cfg(not(windows))]
@@ -1388,7 +1597,7 @@ fn names_in(e: &Engine, directory: &[u8]) -> std::collections::HashSet<String> {
         }
     };
     for h in host_search(&real_path(directory).join("*"), &shown).unwrap_or_default() {
-        let k = key(&[folder.as_slice(), b"\\", h.name.as_bytes()].concat());
+        let k = key(&[folder.as_slice(), b"\\", &ansi_bytes(&h.name)].concat());
         if !disk.deleted.contains(&k) && !disk.files.contains_key(&k) {
             add(&h.name, &h.short);
         }
@@ -1921,8 +2130,8 @@ pub fn read_file(
 /// `build43-scratch/measure/platform5`): for an existing file, a missing one and one in a
 /// missing directory, each of the four accesses (read, write, both, none) and the
 /// dispositions 0..=6, `CreateFileW` and `CreateFileA` gave the same answer, the same last
-/// error and the same file afterwards (84 cases). A path with a character outside ASCII is not
-/// provided (the files are kept by their ANSI names; stops the run).
+/// error and the same file afterwards (84 cases). A path with a character outside ASCII goes as its
+/// ANSI code page form (the files are kept by their ANSI names).
 #[allow(clippy::too_many_arguments)]
 pub fn create_file_w(
     e: &mut Engine,
@@ -1934,20 +2143,30 @@ pub fn create_file_w(
     attributes: u32,
     template: u32,
 ) -> u32 {
-    let mut name = Vec::new();
+    let mut units = Vec::new();
     let mut at = path.addr();
     loop {
         let unit = e.mem.u16(at);
         if unit == 0 {
             break;
         }
-        assert!(
-            unit < 0x80,
-            "CreateFileW: the non-ASCII character {unit:#x} in a path is not provided"
-        );
-        name.push(unit as u8);
+        units.push(unit);
         at = at.wrapping_add(2);
     }
+    // The files are kept by their ANSI names: a path outside ASCII goes as the ANSI code page's
+    // form of it (best fit, `?` for a character the page cannot hold, which then opens nothing
+    // where `CreateFileW` could open the Unicode name).
+    #[cfg(windows)]
+    let name = if units.iter().all(|&u| u < 0x80) {
+        units.iter().map(|&u| u as u8).collect::<Vec<u8>>()
+    } else {
+        ansi_bytes(&wide_to_ansi(&units))
+    };
+    #[cfg(not(windows))]
+    let name: Vec<u8> = units
+        .iter()
+        .map(|&u| if u < 0x80 { u as u8 } else { b'?' })
+        .collect();
     let narrow = e.mem.alloc(name.len() as u32 + 1);
     e.mem.set_cstr(narrow, &name);
     let handle = create_file_a(
@@ -3277,10 +3496,10 @@ mod tests_changed_directories {
         let h = &host_search(std::path::Path::new(path), path).unwrap()[0];
         (
             h.short.clone(),
-            h.attributes,
-            h.created,
-            h.accessed,
-            h.written,
+            h.listed.attributes,
+            h.listed.created,
+            h.listed.accessed,
+            h.listed.written,
         )
     }
 

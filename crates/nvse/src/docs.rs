@@ -102,9 +102,26 @@ fn info(e: &Engine, opcode: u32) -> Info {
     }
 }
 
+/// One past the last record of xNVSE's own table (`m_commands`' end): past the highest opcode a
+/// built-in that answers "installed" registered (a named record of its range, or one of its
+/// empty commands, which carry an execute), else past xNVSE's own commands. nv-rs grows its
+/// table for a built-in that does not answer "installed" too (JIP LN today), with nameless
+/// records xNVSE's table would not have, since xNVSE loads no such plugin.
+fn table_end(e: &Engine) -> u32 {
+    let t = e.script_tables();
+    (PLUGIN_OPCODES.max(nvse_end())..t.max_opcode)
+        .rev()
+        .find(|&op| {
+            let r = Record::read(e, t.record(op));
+            (r.long_name != 0 && e.mem.u8(r.long_name) != 0 || r.execute != 0)
+                && plugin_of(e, op).is_some()
+        })
+        .map_or(nvse_end().min(t.max_opcode), |op| op + 1)
+}
+
 /// Every record of the table, in opcode order (`m_commands`).
 fn all(e: &Engine) -> Vec<Info> {
-    (ScriptTables::FIRST_OPCODE..e.script_tables().max_opcode)
+    (ScriptTables::FIRST_OPCODE..table_end(e))
         .map(|op| info(e, op))
         .collect()
 }
@@ -651,7 +668,7 @@ pub fn dump_all_wiki_docs(e: &mut Engine) {
 /// the table, starts below it or is longer than the table.
 fn opcode_range(e: &Engine, start: u32, stop: u32) -> Vec<u32> {
     let base = ScriptTables::FIRST_OPCODE;
-    let size = e.script_tables().max_opcode - base;
+    let size = table_end(e) - base;
     let last = stop.wrapping_sub(base);
     if last >= size || start > stop {
         return Vec::new();

@@ -92,6 +92,11 @@ const INVALID_HANDLE_VALUE: u32 = 0xffff_ffff;
 /// `WIN32_FIND_DATAA`: its size and where `cFileName` is.
 const FIND_DATA_SIZE: u32 = 0x140;
 const FIND_DATA_NAME: u32 = 0x2c;
+/// `dwReserved0`: a reparse point's tag; the tags of a symbolic link and a mount point (a
+/// junction).
+const FIND_DATA_RESERVED0: u32 = 0x24;
+const IO_REPARSE_TAG_SYMLINK: u32 = 0xa000_000c;
+const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xa000_0003;
 
 /// The compile entry's state: `g_partialScriptCount` and `cachedFileUDFs`.
 #[derive(Default)]
@@ -435,10 +440,11 @@ pub fn compile_and_cache(e: &mut Engine, rel_path: &[u8]) -> u32 {
     compile_and_cache_path(e, &full, Some(rel_path))
 }
 
-/// One entry of a folder search: its name and its attributes.
+/// One entry of a folder search: its name, its attributes and its reparse tag (`dwReserved0`).
 struct Found {
     name: Vec<u8>,
     attributes: u32,
+    tag: u32,
 }
 
 /// The entries of the folder `dir` (a path ending in a separator), as a search of `dir*` lists
@@ -462,6 +468,7 @@ fn list_folder(e: &mut Engine, dir: &[u8]) -> Vec<Found> {
                 out.push(Found {
                     name,
                     attributes: e.mem.u32(data),
+                    tag: e.mem.u32(data + FIND_DATA_RESERVED0),
                 });
             }
             if e.call(FIND_NEXT_FILE_A, &args![handle, data]).u32() == 0 {
@@ -473,22 +480,55 @@ fn list_folder(e: &mut Engine, dir: &[u8]) -> Vec<Found> {
     out
 }
 
+/// Whether the file at `path` opens for reading through the game's `CreateFileA` (which follows
+/// a link): a link whose target is gone, or is a folder, does not.
+fn opens(e: &mut Engine, path: &[u8]) -> bool {
+    let handle = crate::events::with_guest_text(e, path, |e, p| {
+        e.call(
+            CREATE_FILE_A,
+            &args![
+                p,
+                GENERIC_READ,
+                SHARE_READ_WRITE,
+                0u32,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                0u32
+            ],
+        )
+        .u32()
+    });
+    if handle == INVALID_HANDLE_VALUE {
+        return false;
+    }
+    e.call(CLOSE_HANDLE, &args![handle]);
+    true
+}
+
+// Translated from MSVC's <filesystem> (the C++ library xNVSE is built with):
+// recursive_directory_iterator's increment and directory_entry::is_regular_file.
 /// The files below `dir` in `std::filesystem::recursive_directory_iterator`'s order: each
 /// folder's entries in the order the search answers them, a sub-folder's entries right after the
-/// sub-folder. A link to a folder (a folder entry that is a reparse point) is neither entered
-/// (the iterator's default options do not follow directory links) nor a file; a link to a file
-/// is a file, as `is_regular_file` follows it (one whose target is gone is still listed, and
-/// then fails to read, where xNVSE would pass it over). A file's path is the folder's and its
-/// name (a sub-folder's children after a `\`).
+/// sub-folder. A link is an entry with the reparse bit and a symbolic link's or a mount point's
+/// tag (`IO_REPARSE_TAG_SYMLINK`, `IO_REPARSE_TAG_MOUNT_POINT`, as MSVC's library tells a link):
+/// a link to a folder (a junction) is not entered (the iterator's default options follow no
+/// directory link) and is no file; a link to a file is a file when its target opens as one
+/// (`is_regular_file` follows it), and passed over when the target is gone. Another reparse point
+/// (a cloud placeholder, say) is what its attributes say: a folder entered, a file. A file's path
+/// is the folder's and its name (a sub-folder's children after a `\`).
 fn walk(e: &mut Engine, dir: &[u8], files: &mut Vec<Vec<u8>>) {
     for found in list_folder(e, dir) {
         let mut path = dir.to_vec();
         path.extend_from_slice(&found.name);
-        if found.attributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+        let link = found.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            && matches!(found.tag, IO_REPARSE_TAG_SYMLINK | IO_REPARSE_TAG_MOUNT_POINT);
+        if found.attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+            if !link {
+                path.push(b'\');
+                walk(e, &path, files);
+            }
+        } else if !link || opens(e, &path) {
             files.push(path);
-        } else if found.attributes & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
-            path.push(b'\\');
-            walk(e, &path, files);
         }
     }
 }
@@ -496,6 +536,9 @@ fn walk(e: &mut Engine, dir: &[u8], files: &mut Vec<Vec<u8>>) {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), CachedScripts.cpp: CacheAllScriptsInPath.
 /// Compiles and caches every function file below [`SCRIPT_FILES_PATH`] that has an extension;
 /// one that fails is named on the console and in `nvse.log`, one that compiles in `nvse.log`.
+/// The path is printed as it is, where xNVSE hands the whole line to `Console_Print` and
+/// `_ERROR` as a format: a `%` in a file's name is shown, not read as a format (which could read
+/// arguments that are not there).
 pub fn cache_all_scripts(e: &mut Engine) {
     let mut files = Vec::new();
     walk(e, SCRIPT_FILES_PATH, &mut files);
@@ -504,14 +547,15 @@ pub fn cache_all_scripts(e: &mut Engine) {
         if extension.is_empty() {
             continue;
         }
-        let shown = String::from_utf8_lossy(&path).into_owned();
         if compile_and_cache_path(e, &path, None) == 0 {
-            let message = format!("xNVSE: Failed to precompile script file at {shown}");
-            crate::errors::print_long(e, message.as_bytes());
-            crate::log::message(e, message.as_bytes());
+            let mut message = b"xNVSE: Failed to precompile script file at ".to_vec();
+            message.extend_from_slice(&path);
+            crate::errors::print_long(e, &message);
+            crate::log::message(e, &message);
         } else {
-            let message = format!("xNVSE: script file successfully precompiled at {shown}");
-            crate::log::message(e, message.as_bytes());
+            let mut message = b"xNVSE: script file successfully precompiled at ".to_vec();
+            message.extend_from_slice(&path);
+            crate::log::message(e, &message);
         }
     }
 }

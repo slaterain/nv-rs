@@ -1259,6 +1259,30 @@ mod tests {
         assert_eq!(e.get(this, CExpression::m_ExpressionError), 0);
         // Eval's token buffer is its own frame's, not the conversion's buffer.
         assert!(e.mem.bytes(alt, 0x500).iter().all(|&b| b == 0));
+        // A token as long as the bytes allow (0x1FF bytes of a 0x200-byte expression) is
+        // pushed too, and the token buffer lies exactly 0x4FC bytes before the copy (its
+        // operand slot is 0x208 bytes after the copy): xNVSE's token buffer at EBP-0x74C
+        // against the copy at EBP-0x250.
+        thread_local! {
+            static SEEN: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((0, 0)) };
+        }
+        let mut bytes = vec![b' ', b'X', 0x00, 0x10, 0xfa, 0x01];
+        bytes.extend([7u8; 0x1fa]);
+        assert_eq!(bytes.len(), 0x200);
+        let data = e.mem.alloc(bytes.len() as u32);
+        e.mem.write(data, &bytes);
+        e.register_double(0x005ac7a0, |e, a| {
+            SEEN.with(|s| s.set((a[0], a[1])));
+            e.mem.set_f64(a[0], 4.5);
+            1u32.into_ret()
+        });
+        let words = args![this, data, 0u32, 0u32, 0u32, 1u32, bytes.len() as i32, 0u8];
+        assert_eq!(e.call(0x00593db0, &words).f64(), 4.5);
+        assert_eq!(e.get(this, CExpression::m_ExpressionError), 0);
+        let (operand, token) = SEEN.with(std::cell::Cell::get);
+        let copy = operand - 8 - 0x208;
+        assert_eq!(copy - token, 0x4fc);
+        assert_eq!(e.mem.bytes(token, 6), bytes[1..7]);
     }
 
     /// The infix-to-postfix conversion with xNVSE's buffer reads its tokens into that buffer:
