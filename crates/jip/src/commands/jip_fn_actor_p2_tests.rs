@@ -242,6 +242,8 @@ fn the_last_hit_values() {
     // Level 1 still reads; level 2 does not (a 32-bit compare).
     e.mem.set_u32(PROCESS + 0x28, 1);
     assert_eq!(call_on(&mut e, 0x2803, ACTOR, &[]).1, 7.75);
+    e.mem.set_u32(PROCESS + 0x28, 2);
+    assert_eq!(call_on(&mut e, 0x2803, ACTOR, &[]).1, 0.0, "level 2");
     e.mem.set_u32(PROCESS + 0x28, 0x100);
     assert_eq!(call_on(&mut e, 0x2803, ACTOR, &[]).1, 0.0, "32-bit level");
     e.mem.set_u32(PROCESS + 0x28, 0);
