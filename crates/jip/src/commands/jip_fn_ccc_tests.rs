@@ -463,6 +463,10 @@ fn task_package_flags() {
     e.mem.set_u32(PACKAGE + 0x1c, 0);
     run(&mut e, 0x2702, 0, &[r(4), n(0), n(0), n(0)]);
     assert_eq!(e.mem.u32(PACKAGE + 0x1c), run_ | drawn);
+    // The second variable sets AlwaysSneak where it was clear.
+    e.mem.set_u32(PACKAGE + 0x1c, 0);
+    run(&mut e, 0x2702, 0, &[r(4), n(0), n(0), n(1)]);
+    assert_eq!(e.mem.u32(PACKAGE + 0x1c), run_ | drawn | sneak);
 }
 
 /// Interior cells, no cell, the worldspace fallback, and the map marker search: the grid built
@@ -597,5 +601,44 @@ fn grid_cells() {
         grid_cell(f32::NAN, 1e10),
         0,
         "the indefinite >> 12: 0xFFF80000, low 16 bits 0"
+    );
+}
+
+/// A leveled actor (its base made in the game, mod index 0xFF, with an `ExtraLeveledCreature`
+/// naming another base): JIP's CC&C commands read the raw `baseForm`, not `GetActorBase`.
+#[test]
+fn a_leveled_actor_uses_its_raw_base() {
+    let mut e = setup();
+    form(&mut e, NPC, 0x2a, 0xff00_0400);
+    put_extra(&mut e, ACTOR + 0x44, X4, 0x2e, NPC2);
+    e.mem.set_u32(X4 + 0x10, NPC2);
+    assert_eq!(super::super::ln_fn_actor::actor_base(&mut e, ACTOR), NPC2);
+    node(&mut e, NPC + 0x5c, DATA, 0);
+    e.mem.set_u32(DATA, FACTION);
+    e.mem.set_u8(DATA + 4, 1);
+    assert_eq!(
+        run(&mut e, 0x2704, ACTOR, &[r(2), n(1)]),
+        1.0,
+        "the raw base's faction"
+    );
+    e.mem.set_u32(FACTION + 0x38, REP);
+    run(&mut e, 0x270a, ACTOR, &[]);
+    assert_eq!(form_result(&e), 0x0100_0900, "the raw base's reputation");
+    script_with_data(&mut e, SCRIPT, SDATA);
+    e.mem.set_u32(NPC + 0xf8, SCRIPT);
+    run(&mut e, 0x2705, ACTOR, &[]);
+    assert_eq!(
+        e.ext::<Jip>()
+            .ccc
+            .nccs_actors
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![NPC]
+    );
+    assert_eq!(
+        e.mem.u32(SCRIPT + 0x20),
+        0,
+        "the raw base's script disabled"
     );
 }
