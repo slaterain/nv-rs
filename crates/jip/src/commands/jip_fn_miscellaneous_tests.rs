@@ -184,6 +184,9 @@ fn idle_loop_times() {
     assert_eq!((e.mem.u8(IDLE + 0x39), e.mem.u8(IDLE + 0x3a)), (255, 255));
     call(&mut e, 0x2770, &[r(R_IDLE), n(-1), n(0)]);
     assert_eq!((e.mem.u8(IDLE + 0x39), e.mem.u8(IDLE + 0x3a)), (255, 255));
+    // -2 compared as signed would stay -2 (bytes 0xFE): unsigned, it is capped at 255.
+    call(&mut e, 0x2770, &[r(R_IDLE), n(-2), n(0)]);
+    assert_eq!((e.mem.u8(IDLE + 0x39), e.mem.u8(IDLE + 0x3a)), (255, 255));
     // A maximum above 255 keeps its low byte (the UInt8 store); the max equal to the min stays.
     call(&mut e, 0x2770, &[r(R_IDLE), n(5), n(0x105)]);
     assert_eq!((e.mem.u8(IDLE + 0x39), e.mem.u8(IDLE + 0x3a)), (5, 5));

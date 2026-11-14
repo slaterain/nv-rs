@@ -384,7 +384,8 @@ fn set_container_respawns(e: &mut Engine, w: &[u32]) -> Ret {
 // Cmd_GetExteriorCell_Execute; internal/Ni_types.h: NiTPtrMap::Lookup (asm); internal/utility.h:
 // Coordinate.
 /// The worldspace's cell at grid (x, y): its cell map looked up by the coordinate word (x in the
-/// high 16 bits, y in the low), bucket `key % count`, the bucket's chain walked to the key.
+/// high 16 bits, y in the low), bucket `key % count`, the bucket's chain walked to the key (with
+/// the game-list bound, `nvse::invref::list_step`).
 fn get_exterior_cell(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let read = Read::of(e, &a);
@@ -403,7 +404,8 @@ fn get_exterior_cell(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     }
     let mut entry = e.mem.u32(e.mem.u32(map + 8) + 4 * (key % count));
-    while entry != 0 {
+    let mut walked = 0usize;
+    while entry != 0 && nvse::invref::list_step(e, &mut walked) {
         if e.mem.u32(entry + 4) == key {
             let cell = e.mem.u32(entry + 8);
             if cell != 0 {
