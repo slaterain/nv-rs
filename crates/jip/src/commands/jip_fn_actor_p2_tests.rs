@@ -248,7 +248,11 @@ fn the_last_hit_values() {
     e.mem.set_u32(PROCESS + 0x240, 0);
     assert_eq!(call_on(&mut e, 0x2803, ACTOR, &[]).1, 0.0, "no hit data");
     e.mem.set_u32(PROCESS + 0x240, HIT);
-    assert_eq!(call_on(&mut e, 0x2803, PLAIN_REF, &[]).1, 0.0, "not an actor");
+    assert_eq!(
+        call_on(&mut e, 0x2803, PLAIN_REF, &[]).1,
+        0.0,
+        "not an actor"
+    );
     assert_eq!(call_on(&mut e, 0x2803, 0, &[]).1, 0.0, "no reference");
     e.mem.set_u32(ACTOR + 0x68, 0);
     assert_eq!(call_on(&mut e, 0x2803, ACTOR, &[]).1, 0.0, "no process");
@@ -266,9 +270,17 @@ fn hit_flags_by_the_table() {
         assert_eq!(call_on(&mut e, 0x28ee, ACTOR, &[n(i as i32)]).1, 0.0, "{i}");
     }
     e.mem.set_u32(HIT + 0x58, 0x200);
-    assert_eq!(call_on(&mut e, 0x28ee, ACTOR, &[n(6)]).1, 1.0, "either break bit");
+    assert_eq!(
+        call_on(&mut e, 0x28ee, ACTOR, &[n(6)]).1,
+        1.0,
+        "either break bit"
+    );
     e.mem.set_u32(HIT + 0x58, u32::MAX);
-    assert_eq!(call_on(&mut e, 0x28ee, ACTOR, &[n(9)]).1, 0.0, "past the table");
+    assert_eq!(
+        call_on(&mut e, 0x28ee, ACTOR, &[n(9)]).1,
+        0.0,
+        "past the table"
+    );
     assert_eq!(call_on(&mut e, 0x28ee, ACTOR, &[n(-1)]).1, 0.0, "unsigned");
     // The virtual function's answer, not the field.
     e.mem.set_u32(A_HIT, 0);
@@ -326,7 +338,10 @@ fn base_spell_list() {
     put_extra(&mut e, ACTOR2 + 0x44, X1, 0x2e, 0);
     e.mem.set_u32(X1 + 0x10, CREA2);
     call_on(&mut e, 0x2823, ACTOR2, &[r(5)]);
-    assert_eq!((e.mem.u32(CREA + 0x80), e.mem.u32(CREA2 + 0x80)), (SPELL, 0));
+    assert_eq!(
+        (e.mem.u32(CREA + 0x80), e.mem.u32(CREA2 + 0x80)),
+        (SPELL, 0)
+    );
 }
 
 #[test]
@@ -531,7 +546,11 @@ fn factions_and_faction_lists() {
     assert_eq!(eval(&mut e, 0x28d9, ACTOR, LIST), 1.0);
     assert_eq!(eval(&mut e, 0x28d9, ACTOR, 0), 0.0, "no list");
     assert_eq!(eval(&mut e, 0x28d9, PLAIN_REF, LIST), 0.0);
-    assert_eq!(call_on(&mut e, 0x28d9, ACTOR2, &[r(4)]).1, 0.0, "no factions");
+    assert_eq!(
+        call_on(&mut e, 0x28d9, ACTOR2, &[r(4)]).1,
+        0.0,
+        "no factions"
+    );
 }
 
 #[test]
@@ -695,7 +714,11 @@ fn water_immersion() {
     });
     e.mem.set_f32(ACTOR + 0x38, 12.0);
     e.mem.set_u32(ACTOR + 0x40, X3);
-    assert_eq!(call_on(&mut e, 0x2830, ACTOR, &[]).1, 0.0, "byte 0x14C clear");
+    assert_eq!(
+        call_on(&mut e, 0x2830, ACTOR, &[]).1,
+        0.0,
+        "byte 0x14C clear"
+    );
     e.mem.set_u8(ACTOR + 0x14c, 1);
     assert_eq!(call_on(&mut e, 0x2830, ACTOR, &[]).1, 0.625);
     assert_eq!(called(0x885560), vec![vec![ACTOR, 12f32.to_bits(), X3]]);
@@ -734,7 +757,11 @@ fn fleeing_by_package() {
     assert_eq!(called(0x981990).len(), 2);
     e.mem.set_u32(A_FLEE, 0x201);
     e.mem.set_u8(PACKAGE + 0x20, 0x12);
-    assert_eq!(eval(&mut e, 0x283c, ACTOR, 0), 1.0, "the combat controller says so");
+    assert_eq!(
+        eval(&mut e, 0x283c, ACTOR, 0),
+        1.0,
+        "the combat controller says so"
+    );
     assert_eq!(called(0x981990)[2], vec![PACKAGE]);
     e.mem.set_u32(A_FLEE, 0x200);
     assert_eq!(eval(&mut e, 0x283c, ACTOR, 0), 0.0, "al only");
@@ -779,13 +806,20 @@ fn unreachable_targets_and_movement_flags() {
     assert_eq!(eval(&mut e, 0x2849, PLAIN_REF, 0), 0.0);
     e.mem.set_u32(MOVER + 0x20, 0);
     let (res, lines) = echoed(&mut e, 0x2849, ACTOR, &[]);
-    assert_eq!((res, lines), (1.0, vec![b"GetTargetUnreachable >> 1".to_vec()]));
+    assert_eq!(
+        (res, lines),
+        (1.0, vec![b"GetTargetUnreachable >> 1".to_vec()])
+    );
     // Movement flags.
     e.mem.set_u32(A_MOVE, 0x880);
     assert_eq!(call_on(&mut e, 0x2908, ACTOR, &[]).1, 2176.0);
     assert_eq!(called(CALL_MOVE_FLAGS), vec![vec![MOVER]]);
     e.mem.set_u32(A_MOVE, 0x8000_0000);
-    assert_eq!(call_on(&mut e, 0x2908, ACTOR, &[]).1, -2_147_483_648.0, "(int)");
+    assert_eq!(
+        call_on(&mut e, 0x2908, ACTOR, &[]).1,
+        -2_147_483_648.0,
+        "(int)"
+    );
     let (_, lines) = echoed(&mut e, 0x2908, PLAIN_REF, &[]);
     assert_eq!(lines, vec![b"GetActorMovementFlags >> 0".to_vec()]);
     e.mem.set_u32(ACTOR + 0x190, 0);
@@ -836,7 +870,11 @@ fn equipped_slots_against_an_armour() {
     assert_eq!(call_on(&mut e, 0x2898, ACTOR, &[r(9)]).1, 0.0, "no biped");
     e.mem.set_u32(A_BIPED, BIPED);
     e.mem.set_u32(BIPED + 0x2c + 0x10 * 19, ARMO2);
-    assert_eq!(call_on(&mut e, 0x2898, ACTOR, &[r(9)]).1, 0.0, "no shared bit");
+    assert_eq!(
+        call_on(&mut e, 0x2898, ACTOR, &[r(9)]).1,
+        0.0,
+        "no shared bit"
+    );
     e.mem.set_u32(ARMO2 + 0x74, 0b1100);
     assert_eq!(call_on(&mut e, 0x2898, ACTOR, &[r(9)]).1, 1.0, "slot 19");
     e.mem.set_u32(BIPED + 0x2c + 0x10 * 19, 0);
@@ -844,11 +882,23 @@ fn equipped_slots_against_an_armour() {
     assert_eq!(call_on(&mut e, 0x2898, ACTOR, &[r(9)]).1, 0.0, "20 slots");
     e.mem.set_u32(BIPED + 0x2c, WEAP);
     e.mem.set_u32(WEAP + 0x74, u32::MAX);
-    assert_eq!(call_on(&mut e, 0x2898, ACTOR, &[r(9)]).1, 0.0, "not an armour");
-    assert_eq!(call_on(&mut e, 0x2898, ACTOR, &[r(8)]).1, 0.0, "given no armour");
+    assert_eq!(
+        call_on(&mut e, 0x2898, ACTOR, &[r(9)]).1,
+        0.0,
+        "not an armour"
+    );
+    assert_eq!(
+        call_on(&mut e, 0x2898, ACTOR, &[r(8)]).1,
+        0.0,
+        "given no armour"
+    );
     e.mem.set_u32(BIPED + 0x2c, ARMO);
     e.mem.set_u32(A_ANIM + 0x100, 0x100);
-    assert_eq!(call_on(&mut e, 0x2898, ACTOR, &[r(9)]).1, 0.0, "not a character (al)");
+    assert_eq!(
+        call_on(&mut e, 0x2898, ACTOR, &[r(9)]).1,
+        0.0,
+        "not a character (al)"
+    );
     assert_eq!(call_on(&mut e, 0x2898, PLAIN_REF, &[r(9)]).1, 0.0);
     e.mem.set_u32(A_ANIM + 0x100, 1);
     assert_eq!(call_on(&mut e, 0x2898, ACTOR, &[r(9)]).1, 1.0);
@@ -874,7 +924,10 @@ fn eaten_marks() {
     assert_eq!(called(0x430200), vec![vec![block]]);
     assert_eq!(e.mem.u8(block + 0x1c), 1);
     assert_eq!(calls_to(ADD_EXTRA_FN), vec![vec![ACTOR + 0x44, block]]);
-    assert_eq!(calls_to(ADD_CHANGE_FN), vec![vec![SAVE_LOAD, ACTOR, 0x2_0000, 0]]);
+    assert_eq!(
+        calls_to(ADD_CHANGE_FN),
+        vec![vec![SAVE_LOAD, ACTOR, 0x2_0000, 0]]
+    );
     call_on(&mut e, 0x2895, ACTOR, &[n(1)]);
     assert_eq!(calls_to(ADD_CHANGE_FN).len(), 1, "already set");
     // Cleared with a limb gone: the mark only.

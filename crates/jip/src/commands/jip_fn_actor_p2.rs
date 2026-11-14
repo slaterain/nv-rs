@@ -765,7 +765,11 @@ fn cripple_limb(e: &mut Engine, w: &[u32]) -> Ret {
         e.vcall(
             a.this_obj,
             ACTOR_DAMAGE_ACTOR_VALUE,
-            &[AV_PERCEPTION_CONDITION + limb, (-100f32).to_bits(), attacker],
+            &[
+                AV_PERCEPTION_CONDITION + limb,
+                (-100f32).to_bits(),
+                attacker,
+            ],
         );
     }
     handled(true)

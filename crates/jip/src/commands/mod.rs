@@ -679,6 +679,7 @@ mod tests {
     #[test]
     fn each_module_holds_its_own_file() {
         let files = [
+            "jip_fn_actor",
             "jip_fn_ammo",
             "jip_fn_aux_variable",
             "jip_fn_ammo_effect",
@@ -746,6 +747,7 @@ mod tests {
         }
         assert_eq!(ALL.len(), files.len());
         for (list, file) in ALL_CONDITIONS.iter().zip([
+            "jip_fn_actor",
             "jip_fn_effect",
             "ln_fn_math",
             "ln_fn_misc_ref",
